@@ -207,6 +207,9 @@ test('канонизатор специальностей общий: стары
   assert.equal(specialtyGroupName('кардиолог'), 'Кардиолог');
   assert.equal(specialtyGroupName('лор'), 'Отоларинголог (ЛОР)');
   assert.equal(specialtyGroupName('Мой особый'), 'Мой особый');
+  // JOURNALS_V1_SPECIALTIES (владелец, 2026-10-02) — новые специальности списка — одной группой в любом регистре.
+  assert.equal(specialtyGroupName('нейрофизиолог'), 'Нейрофизиолог');
+  assert.equal(specialtyGroupName(' ИГЛОТЕРАПЕВТ '), 'Иглотерапевт');
   assert.equal(specialtyGroupName(''), '');
   assert.equal(specialtyGroupName(null), '');
 });

@@ -137,6 +137,17 @@ test('обычный врач (не админ) сохраняет специа�
     .map((r) => [r.specialty_slug, r.is_primary]), [['kardiolog', 1]]);
 });
 
+// JOURNALS_V1_SPECIALTIES (владелец, 2026-10-02) — «иглотерапевт» и «нейрофизиолог»
+// приняты каноном: слаг узнаётся, имена — из списка, а не от клиента.
+test('специальности владельца 02.10: Иглотерапевт и Нейрофизиолог сохраняются по слагу канона', () => {
+  const db = seed();
+  const out = updateMyDoctorProfile(db, { p: {}, specialties: ['neyrofiziolog', 'igloterapevt'] }, doc);
+  assert.deepEqual(out.specialties, ['neyrofiziolog', 'igloterapevt']);
+  const rows = db.prepare('SELECT specialty_slug, name_ru, name_uz, is_primary FROM user_specialties WHERE user_id = 2 ORDER BY id').all();
+  assert.deepEqual(rows.map((r) => [r.specialty_slug, r.name_ru, r.name_uz, r.is_primary]),
+    [['neyrofiziolog', 'Нейрофизиолог', 'Neyrofiziolog', 1], ['igloterapevt', 'Иглотерапевт', 'Ignaterapevt', 0]]);
+});
+
 test('специальности: чужой набор не трогается, неизвестный слаг и больше 4 — отказ без записи', () => {
   const db = seed();
   db.prepare("INSERT INTO user_specialties (user_id, specialty_slug, name_ru, is_primary) VALUES (3, 'onkolog', 'Онколог', 1)").run();

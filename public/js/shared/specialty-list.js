@@ -10,6 +10,9 @@
 // Not fetched from medcore — owner: «it should be only cloned to the
 // easymed». Order = the sheet's. The stored value is still the Russian
 // label (see admin/specialties.js); uz / en come from the dictionary at display time.
+// JOURNALS_V1_SPECIALTIES (2026-10-02) — two added at the owner's request: «in
+// the employees, we need to add 2 specialties, "иглотерапевт" and
+// "нейрофизиолог"» — in the sheet's alphabetical places (53 in all).
 export const SPECIALTY_ROWS = [
     { slug: 'akusher-ginekolog', ru: 'Акушер-гинеколог', uz: 'Akusher-ginekolog', en: 'Obstetrician-Gynecologist' },
     { slug: 'allergolog-immunolog', ru: 'Аллерголог-иммунолог', uz: 'Allergolog-immunolog', en: 'Allergist-Immunologist' },
@@ -27,6 +30,7 @@ export const SPECIALTY_ROWS = [
     { slug: 'detskiy-stomatolog', ru: 'Детский стоматолог', uz: 'Bolalar stomatologi', en: 'Pediatric Dentist' },
     { slug: 'detskiy-hirurg', ru: 'Детский хирург', uz: 'Bolalar jarrohi', en: 'Pediatric Surgeon' },
     { slug: 'dietolog', ru: 'Диетолог', uz: 'Dietolog', en: 'Dietitian' },
+    { slug: 'igloterapevt', ru: 'Иглотерапевт', uz: 'Ignaterapevt', en: 'Acupuncturist' },   // JOURNALS_V1_SPECIALTIES — владелец, 02.10
     { slug: 'infeksionist', ru: 'Инфекционист', uz: 'Infeksionist', en: 'Infectious Disease Specialist' },
     { slug: 'kardiolog', ru: 'Кардиолог', uz: 'Kardiolog', en: 'Cardiologist' },
     { slug: 'kardiohirurg', ru: 'Кардиохирург', uz: 'Kardiojarroh', en: 'Cardiac Surgeon' },
@@ -34,6 +38,7 @@ export const SPECIALTY_ROWS = [
     { slug: 'mammolog', ru: 'Маммолог', uz: 'Mammolog', en: 'Mammologist' },
     { slug: 'narkolog', ru: 'Нарколог', uz: 'Narkolog', en: 'Narcologist' },
     { slug: 'nevrolog', ru: 'Невролог', uz: 'Nevrolog', en: 'Neurologist' },
+    { slug: 'neyrofiziolog', ru: 'Нейрофизиолог', uz: 'Neyrofiziolog', en: 'Neurophysiologist' },   // JOURNALS_V1_SPECIALTIES — владелец, 02.10
     { slug: 'neyrohirurg', ru: 'Нейрохирург', uz: 'Neyrojarroh', en: 'Neurosurgeon' },
     { slug: 'nefrolog', ru: 'Нефролог', uz: 'Nefrolog', en: 'Nephrologist' },
     { slug: 'onkolog', ru: 'Онколог', uz: 'Onkolog', en: 'Oncologist' },

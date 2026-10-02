@@ -4352,6 +4352,8 @@ export const STRINGS = {
   "Гинеколог": {"en":"Gynaecologist","ru":"Гинеколог","uz":"Ginekolog"},
   "Дерматовенеролог": {"en":"Dermatovenerologist","ru":"Дерматовенеролог","uz":"Dermatovenerolog"},
   "Диетолог": {"en":"Dietitian","ru":"Диетолог","uz":"Dietolog"},
+  // JOURNALS_V1_SPECIALTIES (владелец, 2026-10-02) — новая специальность списка (shared/specialty-list.js)
+  "Иглотерапевт": {"en":"Acupuncturist","ru":"Иглотерапевт","uz":"Ignaterapevt"},
   "Инфекционист": {"en":"Infectious disease specialist","ru":"Инфекционист","uz":"Infeksionist"},
   "Кардиолог": {"en":"Cardiologist","ru":"Кардиолог","uz":"Kardiolog"},
   "Косметолог": {"en":"Cosmetologist","ru":"Косметолог","uz":"Kosmetolog"},
@@ -4360,6 +4362,8 @@ export const STRINGS = {
   "Мануальный терапевт": {"en":"Manual therapist","ru":"Мануальный терапевт","uz":"Manual terapevt"},
   "Нарколог": {"en":"Addiction specialist","ru":"Нарколог","uz":"Narkolog"},
   "Невролог": {"en":"Neurologist","ru":"Невролог","uz":"Nevrolog"},
+  // JOURNALS_V1_SPECIALTIES (владелец, 2026-10-02) — новая специальность списка (shared/specialty-list.js)
+  "Нейрофизиолог": {"en":"Neurophysiologist","ru":"Нейрофизиолог","uz":"Neyrofiziolog"},
   "Нейрохирург": {"en":"Neurosurgeon","ru":"Нейрохирург","uz":"Neyroxirurg"},
   "Нефролог": {"en":"Nephrologist","ru":"Нефролог","uz":"Nefrolog"},
   "Онколог": {"en":"Oncologist","ru":"Онколог","uz":"Onkolog"},
