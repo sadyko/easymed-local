@@ -240,6 +240,34 @@ test('п. 4: от одной чужой вкладки остаётся один
     assert.equal(drafts(79).pop().tab, 'tab-ME', 'свой черновик без метки вкладки');
 });
 
+test('п. 4: чужой черновик, который вкладка уже знает, — при новом отказе (заметка медсестры) без слов о «версии из другого окна»', async () => {
+    const a = await opened(83, notesOf({ chief_complaint: 'Исходно' }));
+    otherWindowWrites(83, 'ЧУЖОЙ');
+    put(a, 'chief_complaint', 'МОЙ-1');
+    assert.equal(await WS.saveDraft(a, { silent: true }), false);   // узнала о чужом черновике
+    assert.ok(await WS.saveDraft(a, { silent: true }));
+    const o = JSON.parse(NOTES.get(83)); o.nurseNote = 'в/в'; NOTES.set(83, JSON.stringify(o));
+    put(a, 'chief_complaint', 'МОЙ-2');
+    TOASTS.length = 0;
+    assert.equal(await WS.saveDraft(a, { silent: true }), false);
+    assert.ok(!TOASTS.some((t) => /Версия из другого окна/.test(t)), 'знакомый чужой черновик назван новым: ' + TOASTS.join(' | '));
+    assert.ok(await WS.saveDraft(a, { silent: true }));
+    assert.deepEqual(draftTexts(83), ['ЧУЖОЙ', 'МОЙ-2']);
+});
+
+test('п. 4: черновик вкладки 3.15.0 (без метки), пришедший во время работы, — как в ревью 6: «из другого окна», следующее «Сохранить» его не стирает', async () => {
+    const a = await opened(84, notesOf({ chief_complaint: 'Исходно' }));
+    const o = JSON.parse(NOTES.get(84));
+    o.history = [{ kind: 'draft', savedAt: new Date().toISOString(), fields: { chief_complaint: 'СТАРАЯ-ВКЛАДКА' } }];
+    NOTES.set(84, JSON.stringify(o));
+    put(a, 'chief_complaint', 'МОЙ');
+    TOASTS.length = 0;
+    assert.equal(await WS.saveDraft(a, { silent: true }), false);
+    assert.ok(TOASTS.some((t) => /Версия из другого окна сохранена в истории/.test(t)), TOASTS.join(' | '));
+    assert.ok(await WS.saveDraft(a, { silent: true }));
+    assert.deepEqual(draftTexts(84), ['СТАРАЯ-ВКЛАДКА', 'МОЙ'], 'черновик вкладки 3.15.0 стёрт');
+});
+
 // ─── п. 5: «Возобновить» спрашивает про несохранённое ────────────────────────
 test('п. 5: «Возобновить» при несохранённом тексте — спрашивает; «Нет» — текст на экране цел', async () => {
     const D = { kind: 'draft', savedAt: '2026-10-03T07:00:00.000Z', fields: { chief_complaint: 'ИЗ ЧЕРНОВИКА' }, tab: 'tab-ME' };
