@@ -19,6 +19,7 @@ import { pulseFade, revealOn, HIDDEN_CLASS, SHOWN_CLASS } from './admin/motion.j
 import {
     isModuleAllowed, isRouteAllowed, actorRoleCodes,   // actorRoleCodes — ROLE_HOME_V1
     setFullAccess, setEffectiveFromRole, setEffectiveFromRoles, currentRoleLabel, setOwnCustomGrants,
+    setActorRoleGrants,   // JOURNALS_V1_RJ3 — права каждой роли в силе (и дополнительных у администратора)
     scopedProviderId, ownDepartmentId, PERSONAL_VIEWS,   // ownDepartmentId / PERSONAL_VIEWS — MY_STOCK_V1
     canSeeAllLeads,   // CRM_HEAD_MERGE_TAGS_V1 — счётчик задач всей команды руководителю колл-центра
 } from './admin/permissions.js';
@@ -2220,6 +2221,28 @@ async function applyActorPermissions(actor) {
                 setOwnCustomGrants(p && p.grants);
             } catch (_) { /* строки нет — работает как администратор */ }
         }
+        // JOURNALS_V1_RJ3 — «Журналы» открывает ЯВНАЯ выдача роли, и у
+        // администратора тоже: его дополнительные роли (надстройка «Главный
+        // врач») сервер считает (report-access.js canSeeJournals), оболочка
+        // обязана считать так же. Прежде дополнительные роли администратора здесь
+        // не читались вовсе — и журналы, открытые сервером, на экране прятались.
+        try {
+            const { data: u } = await supabase.from('users').select('extra_roles').eq('id', actor.id).maybeSingle();
+            let e = u && u.extra_roles;
+            if (typeof e === 'string') { try { e = JSON.parse(e); } catch (_) { e = []; } }
+            const extra = Array.isArray(e) ? e.filter(Boolean) : [];
+            const names = [own, actor.role, ...extra].filter((r, i, a) => r && a.indexOf(r) === i);
+            const { data } = await supabase.from('role_permissions').select('role, permissions').in('role', names);
+            const grantsOfRow = (rn) => {
+                const d = (data || []).find((x) => x.role === rn);
+                let p = d && d.permissions;
+                if (typeof p === 'string') { try { p = JSON.parse(p); } catch (_) { p = null; } }
+                return (p && p.grants && typeof p.grants === 'object') ? p.grants : {};
+            };
+            const ownRow = !!(own && (data || []).some((x) => x.role === own));
+            const inForce = [ownRow ? own : actor.role, ...extra].filter((r, i, a) => r && a.indexOf(r) === i);
+            setActorRoleGrants(inForce.map(grantsOfRow), ownRow ? grantsOfRow(own) : null);
+        } catch (_) { /* роли не прочитались — журналы по правилу администратора */ }
         return;
     }
     // LOCAL_ROLES_V1 — this local app has no dynamic roles table; access for the
@@ -2277,7 +2300,18 @@ async function applyActorPermissions(actor) {
                     if (typeof p === 'string') { try { p = JSON.parse(p); } catch (_) { p = null; } }
                     return (p && Array.isArray(p.sections)) ? { name: (rn === customCode && customName) ? customName : rn, permissions: p } : null;
                 }).filter(Boolean);
-                if (rows.length) { setEffectiveFromRoles(rows); return; }
+                if (rows.length) {
+                    setEffectiveFromRoles(rows);
+                    // JOURNALS_V1_RJ3 — своя роль клиники для «Журналов»
+                    // администратора-врача (`admin` дополнительной ролью): её
+                    // «Нет» закрывает журналы ему, как и на сервере.
+                    const ownD = hasCustom ? data.find((x) => x.role === customCode) : null;
+                    let ownP = ownD && ownD.permissions;
+                    if (typeof ownP === 'string') { try { ownP = JSON.parse(ownP); } catch (_) { ownP = null; } }
+                    setActorRoleGrants(rows.map((r) => (r.permissions && r.permissions.grants) || {}),
+                        hasCustom ? ((ownP && ownP.grants) || {}) : null);
+                    return;
+                }
             }
         } catch (_) { /* table absent pre-migration 013 → fail-closed fallback below */ }
     }

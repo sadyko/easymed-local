@@ -1,6 +1,8 @@
 // JOURNALS_V1_ACCESS — группа отчётов «Журналы» (reports.journals): журнал услуг
-// и реестр стационарных пациентов. Ненастроенная роль — прежнее правило групп
-// (администратор и раздел «Отчёты»), настроенная — по своему ключу.
+// и реестр стационарных пациентов.
+// JOURNALS_V1_RJ3 — доступ ЯВНЫЙ: администратор и роли, которым в «Ролях»
+// выдано «Журналы: Просмотр»; по умолчанию — ни у кого (прежнего правила групп
+// у «Журналов» нет). Прочие группы — как были.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
@@ -49,14 +51,17 @@ test('оба вида журналов — группа «Журналы», ст
   assert.equal(row.enforced, 'rpc:run_report');
 });
 
-test('ненастроенная роль: «Отчёты» выданы — «Журналы» видны, не выданы — нет; администратор — всегда', () => {
+test('JOURNALS_V1_RJ3 — ключ не выдан: «Нет» и с разделом «Отчёты», и без; экран «Роли» — «Нет»; администратор — всегда', () => {
   const db = seed();
   try {
-    assert.equal(canSeeReportKey(db, as('with_reports'), 'reports.journals'), true);
+    assert.equal(canSeeReportKey(db, as('with_reports'), 'reports.journals'), false, 'раздел «Отчёты» журналов не открывает');
     assert.equal(canSeeReportKey(db, as('no_reports'), 'reports.journals'), false);
     assert.equal(canSeeReportKey(db, { id: 1, role: 'admin', extra_roles: [] }, 'reports.journals'), true);
-    assert.equal(fallbackLevel(db, { id: 0, role: 'registrar', extra_roles: [], custom_role_code: 'with_reports' }, 'reports.journals', 'all'), 'view');
+    assert.equal(canSeeReportKey(db, as('with_reports'), 'reports.revenue'), true, 'прочие группы — прежнее правило');
+    assert.equal(fallbackLevel(db, { id: 0, role: 'registrar', extra_roles: [], custom_role_code: 'with_reports' }, 'reports.journals', 'all'), 'none');
     assert.equal(fallbackLevel(db, { id: 0, role: 'registrar', extra_roles: [], custom_role_code: 'no_reports' }, 'reports.journals', 'all'), 'none');
+    assert.equal(fallbackLevel(db, { id: 0, role: 'admin', extra_roles: [] }, 'reports.journals', 'all'), 'view');
+    assert.equal(effectiveGrantsOf(db, 'with_reports')['reports.journals'], 'none');
   } finally { db.close(); }
 });
 
@@ -115,9 +120,9 @@ test('F1: устаревшее сохранение «Ролей» без клю
     assert.equal(canSeeReportKey(db, as('stale_save'), 'reports.services'), true, 'прочие группы без ключа — прежнее правило, как сегодня');
     assert.equal(fallbackLevel(db, { id: 0, role: 'registrar', extra_roles: [], custom_role_code: 'stale_save' }, 'reports.journals', 'all'), 'none');
     assert.equal(effectiveGrantsOf(db, 'stale_save')['reports.journals'], 'none', 'экран «Роли» нарисовал бы «Просмотр» и записал его при сохранении');
-    // Ненастроенная роль (ни одного ключа «reports.…») — прежнее правило.
-    assert.equal(canSeeReportKey(db, as('with_reports'), 'reports.journals'), true);
-    assert.equal(effectiveGrantsOf(db, 'with_reports')['reports.journals'], 'view');
+    // JOURNALS_V1_RJ3 — и ненастроенная роль (ни одного ключа «reports.…») — «Нет»: доступ только явный.
+    assert.equal(canSeeReportKey(db, as('with_reports'), 'reports.journals'), false);
+    assert.equal(effectiveGrantsOf(db, 'with_reports')['reports.journals'], 'none');
   } finally { db.close(); }
 });
 
@@ -192,5 +197,101 @@ test('F3: «Отчёты» закрыты врачу, главному врач�
     head.grants = { ...head.grants, reports: 'none' };
     db.prepare("UPDATE role_permissions SET permissions = ? WHERE role = 'head_doctor'").run(JSON.stringify(head));
     assert.equal(canSeeReportKey(db, HEAD, 'reports.journals'), false, 'закрытый ЭТОЙ ролью раздел закрывает и её журналы');
+  } finally { db.close(); }
+});
+
+// ── JOURNALS_V1_RJ3 — ЯВНЫЙ ДОСТУП (проверка доступа на c68e837) ─────────────────
+// Эвристика «роль настроена» давала дыры на каждом краю: копии кассира и склада,
+// сделанные до миграции 179 (custom-roles.js копирует строку основы, а 179
+// правила только штатные), — ни одного ключа «reports.…», «ненастроены» —
+// открывали оба журнала; то же — справочник главной клиники ниже 179 на новом
+// филиале. Правило «Журналов» теперь — только явная выдача.
+test('RJ3: копии кассира и склада, сделанные до миграции 179, после обновления журналов не видят (оба журнала — 403)', () => {
+  const db = migratedBefore(179);
+  try {
+    for (const [code, base] of [['kassa_old', 'cashier'], ['sklad_old', 'inventory']]) {
+      db.prepare('INSERT INTO custom_roles (code, name, base_role) VALUES (?, ?, ?)').run(code, code, base);
+      db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(code,
+        db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(base).permissions);
+    }
+    migrate(db);
+    for (const [code, base] of [['kassa_old', 'cashier'], ['sklad_old', 'inventory']]) {
+      const u = { id: 83, role: base, extra_roles: [], custom_role_code: code };
+      assert.ok(!db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(code).permissions.includes('"reports.'), 'стенд не тот: у копии есть ключи «reports.…»');
+      assert.equal(canSeeReportKey(db, u, 'reports.journals'), false, code);
+      for (const kind of ['service_journal', 'inpatient_register']) assert.throws(() => requireReportKind(db, u, kind), (e) => e.status === 403, code + ' / ' + kind);
+      assert.equal(effectiveGrantsOf(db, code)['reports.journals'], 'none', code + ': экран «Роли»');
+    }
+  } finally { db.close(); }
+});
+
+test('RJ3: справочник главной клиники ниже 179 на новом филиале — кассир, склад и их копии журналов не видят', () => {
+  const main = migratedBefore(179);
+  const branch = openDb(':memory:');
+  try {
+    migrate(branch);
+    becomeSecondary(branch, { letter: 'C', name: 'Чиланзар' });
+    for (const [code, base] of [['kassa_copy', 'cashier'], ['sklad_copy', 'inventory']]) {
+      main.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(code,
+        main.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(base).permissions);
+      for (const db of [main, branch]) db.prepare('INSERT INTO custom_roles (code, name, base_role) VALUES (?, ?, ?)').run(code, code, base);
+      branch.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(code,
+        branch.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(base).permissions);
+    }
+    branch.transaction(() => applyCatalogue(branch, exportCatalogue(main)))();
+    assert.ok(!branch.prepare("SELECT permissions FROM role_permissions WHERE role = 'cashier'").get().permissions.includes('"reports.'),
+      'стенд не тот: справочник главной ниже 179 не затёр группы кассира');
+    const U = (role, code = null) => ({ id: 84, role, extra_roles: [], custom_role_code: code });
+    for (const u of [U('cashier'), U('inventory'), U('cashier', 'kassa_copy'), U('inventory', 'sklad_copy')]) {
+      assert.equal(canSeeReportKey(branch, u, 'reports.journals'), false, u.custom_role_code || u.role);
+      for (const kind of ['service_journal', 'inpatient_register']) assert.throws(() => requireReportKind(branch, u, kind), (e) => e.status === 403);
+    }
+    assert.equal(canSeeReportKey(branch, U('cashier'), 'reports.cashier'), true, 'касса кассира — прежнее правило');
+  } finally { main.close(); branch.close(); }
+});
+
+test('RJ3: «Отчёты» есть, сохранили другую группу — «Журналы» как были «Нет», и сервер, и экран «Роли»', () => {
+  const db = seed();
+  try {
+    const before = [canSeeReportKey(db, as('with_reports'), 'reports.journals'), effectiveGrantsOf(db, 'with_reports')['reports.journals']];
+    const p = { sections: ['reports-hub'], levels: { 'reports-hub': 'viewer' }, grants: { 'reports.cashier': 'view' } };   // «Роли»: выдали «Кассу»
+    db.prepare("UPDATE role_permissions SET permissions = ? WHERE role = 'with_reports'").run(JSON.stringify(p));
+    const after = [canSeeReportKey(db, as('with_reports'), 'reports.journals'), effectiveGrantsOf(db, 'with_reports')['reports.journals']];
+    assert.deepEqual(before, [false, 'none']);
+    assert.deepEqual(after, before, 'сохранение другой группы перевернуло «Журналы»');
+  } finally { db.close(); }
+});
+
+test('RJ3: явное «Журналы: Просмотр» своей роли — видно; главный врач (надстройка) — видно; врач без неё — нет', () => {
+  const db = seed();
+  try {
+    assert.equal(canSeeReportKey(db, as('journals_only'), 'reports.journals'), true);
+    assert.equal(canSeeReportKey(db, { id: 85, role: 'doctor', extra_roles: ['head_doctor'] }, 'reports.journals'), true);
+    assert.equal(canSeeReportKey(db, { id: 86, role: 'doctor', extra_roles: [] }, 'reports.journals'), false);
+  } finally { db.close(); }
+});
+
+// Администратор: «Журналы» видны, пока СВОЯ роль клиники на основе администратора
+// их не закрыла (ключом или разделом «Отчёты»). Дополнительная роль, явно
+// выдавшая «Журналы», — прибавка: открывает и тогда.
+test('RJ3: администратор — видит; своя роль на основе администратора закрыла — нет; + «Главный врач» — видит', () => {
+  const db = seed();
+  try {
+    const addDeputy = (code, grants) => {
+      db.prepare('INSERT INTO custom_roles (code, name, base_role) VALUES (?, ?, ?)').run(code, code, 'admin');
+      db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(code, JSON.stringify({ sections: ['reports-hub'], levels: {}, grants }));
+    };
+    addDeputy('dep_j_none', { 'reports.journals': 'none' });
+    addDeputy('dep_r_none', { reports: 'none' });
+    addDeputy('dep_rev_none', { 'reports.revenue': 'none' });
+    const A = (code, extra = []) => ({ id: 87, role: 'admin', extra_roles: extra, custom_role_code: code });
+    assert.equal(canSeeReportKey(db, A(null), 'reports.journals'), true);
+    assert.equal(canSeeReportKey(db, { id: 88, role: 'doctor', extra_roles: ['admin'] }, 'reports.journals'), true, 'администратор-врач');
+    assert.equal(canSeeReportKey(db, A('dep_j_none'), 'reports.journals'), false);
+    assert.equal(canSeeReportKey(db, A('dep_r_none'), 'reports.journals'), false);
+    assert.equal(canSeeReportKey(db, A('dep_rev_none'), 'reports.journals'), true, 'закрыта другая группа — журналы видны');
+    assert.equal(canSeeReportKey(db, A('dep_j_none', ['head_doctor']), 'reports.journals'), true, 'надстройка «Главный врач» — прибавка');
+    assert.equal(canSeeReportKey(db, A('dep_r_none', ['head_doctor']), 'reports.journals'), true);
+    assert.equal(canSeeReportKey(db, A(null, ['cashier']), 'reports.journals'), true, '«Нет» чужой (дополнительной) роли администратору не закрывает');
   } finally { db.close(); }
 });

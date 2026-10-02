@@ -145,10 +145,11 @@ test('врач с ролью «Главный врач» после миграц
   } finally { perms.setFullAccess('Admin'); }
 });
 
-test('ненастроенная роль: «Отчёты» выданы — все плитки (кроме Telegram), не выданы — ни одной и нет пункта меню', () => {
+test('ненастроенная роль: «Отчёты» выданы — все плитки (кроме Telegram и журналов), не выданы — ни одной и нет пункта меню', () => {
   perms.setEffectiveFromRole({ name: 'Кассир', permissions: CASHIER });
   try {
-    assert.deepStrictEqual(visibleReports(), REPORT_DEFS.map((r) => r.kind).filter((k) => k !== 'telegram'));
+    // JOURNALS_V1_RJ3 — «Журналы» только по явной выдаче: раздел «Отчёты» их не открывает.
+    assert.deepStrictEqual(visibleReports(), REPORT_DEFS.map((r) => r.kind).filter((k) => k !== 'telegram' && k !== 'service_journal' && k !== 'inpatient_register'));   // JOURNALS_V1_RJ3
     assert.equal(perms.isRouteAllowed('reports'), true);
     assert.equal(perms.isRouteAllowed('report:orders_salary_report'), true);
   } finally { perms.setFullAccess('Admin'); }

@@ -85,8 +85,10 @@ test('235: свои роли клиники — копия кассира, «т�
     }
     assert.equal(grantsOf(db, 'kassa_only')['reports.cashier'], 'view', 'чужие ключи роли целы');
     assert.ok(!('reports.journals' in grantsOf(db, 'reports_plain')), 'ненастроенная роль — без ключа');
-    for (const kind of KINDS) assert.doesNotThrow(() => requireReportKind(db, as('reports_plain'), kind), 'ненастроенная — прежнее правило: ' + kind);
+    // JOURNALS_V1_RJ3 — прежнего правила у «Журналов» больше нет: без явной выдачи — 403 и ненастроенной роли.
+    for (const kind of KINDS) assert.throws(() => requireReportKind(db, as('reports_plain'), kind), (e) => e.status === 403, 'ненастроенная — без явной выдачи: ' + kind);
     assert.equal(grantsOf(db, 'journals_set')['reports.journals'], 'view', 'записанный ключ не перезаписан');
+    for (const kind of KINDS) assert.doesNotThrow(() => requireReportKind(db, as('journals_set'), kind), 'явная выдача: ' + kind);   // JOURNALS_V1_RJ3
   } finally { db.close(); }
 });
 

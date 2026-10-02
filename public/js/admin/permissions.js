@@ -128,6 +128,7 @@ let _patientTabs  = {};     // { tabId: 'none'|'view'|'edit' } — absent key = 
 let _grants       = {};     // GRANTS_V1 — { 'inpatient.vitals': 'edit', … } по справочнику прав
 let _ownCustom    = null;   // ROLE_REPORTS_SETTINGS_V1 (ревью I1) — записи своей роли администратора; см. setOwnCustomGrants
 let _roleGrants   = [];     // JOURNALS_V1_RJ2 (F3) — права по справочнику КАЖДОЙ роли в силе, без слияния (reportGroupAllowed)
+let _ownRole      = null;   // JOURNALS_V1_RJ3 — права СВОЕЙ роли клиники (и у администратора-врача), см. setActorRoleGrants
 let _roleLabel    = null;   // human label of the role currently in force
 let _actorRoles   = [];     // INPATIENT_ROLE_GATE_V1 — role CODES currently in force
 
@@ -322,6 +323,7 @@ export function hasRestriction()   { return _effective instanceof Set; }
 export function setFullAccess(label = null) {
     _grants = {};   // GRANTS_V1 — полному доступу окна не закрывают
     _roleGrants = [];   // JOURNALS_V1_RJ2 (F3)
+    _ownRole = null;   // JOURNALS_V1_RJ3
     _ownCustom = null;   // ROLE_REPORTS_SETTINGS_V1 (ревью I1) — задаёт setOwnCustomGrants после
     _effective = null;
     _levels    = {};
@@ -365,6 +367,7 @@ export function setEffectiveFromRole(roleRow) {
     const sections = perms && Array.isArray(perms.sections) ? perms.sections : null;
     _grants = { ...(grantsOf(perms) || {}) };
     _roleGrants = [{ ..._grants }];   // JOURNALS_V1_RJ2 (F3)
+    _ownRole = null;   // JOURNALS_V1_RJ3 — свою роль называет admin.js (setActorRoleGrants)
     _levels = (perms && perms.levels && typeof perms.levels === 'object') ? { ...perms.levels } : {};
     _patientTabs = (perms && perms.patient_tabs && typeof perms.patient_tabs === 'object') ? { ...perms.patient_tabs } : {};
     // SERVICES_TAB_V1 shim — the Услуги tab split out of Визиты; role configs saved
@@ -438,6 +441,7 @@ export function setEffectiveFromRoles(roleRows) {
     _patientTabs = tabs;
     _grants      = grants;
     _roleGrants  = rows.map((r) => ({ ...(grantsOf(r && r.permissions) || {}) }));   // JOURNALS_V1_RJ2 (F3)
+    _ownRole     = null;   // JOURNALS_V1_RJ3 — свою роль называет admin.js (setActorRoleGrants)
     _roleLabel   = (rows[0] && rows[0].name) || 'Roles';
     rememberRoles(rows.map((r) => r && r.name));
 }
@@ -475,7 +479,8 @@ export function previewRole(roleRow, fn, opts = {}) {
     // предпросмотр оставлял вошедшему сотруднику права ЧУЖОЙ роли, а плитки
     // отчётов и настроек отвечали за читателя, а не за роль.
     const saved = { eff: _effective, levels: _levels, tabs: _patientTabs, grants: _grants, own: _ownCustom, label: _roleLabel, roles: _actorRoles, preview: _preview,
-        roleGrants: _roleGrants };   // JOURNALS_V1_RJ2 (F3)
+        roleGrants: _roleGrants,   // JOURNALS_V1_RJ2 (F3)
+        ownRole: _ownRole };   // JOURNALS_V1_RJ3
     try {
         setEffectiveFromRole(roleRow);
         _ownCustom = null;   // ревью I1 — записи своей роли читающего к предпросматриваемой роли не относятся
@@ -486,6 +491,7 @@ export function previewRole(roleRow, fn, opts = {}) {
         _effective = saved.eff; _levels = saved.levels; _patientTabs = saved.tabs; _grants = saved.grants; _ownCustom = saved.own;
         _roleLabel = saved.label; _actorRoles = saved.roles; _preview = saved.preview;
         _roleGrants = saved.roleGrants;   // JOURNALS_V1_RJ2 (F3)
+        _ownRole = saved.ownRole;   // JOURNALS_V1_RJ3
     }
 }
 
@@ -781,37 +787,54 @@ const LEGACY_REPORT_GROUP = {
 
 /** Видна ли группа отчётов ('reports.cashier' …) — плитки хаба и прежнего экрана. */
 export function reportGroupAllowed(key) {
+    // JOURNALS_V1_RJ3 — у «Журналов» доступ только явный (см. journalsAllowed).
+    if (key === JOURNALS_KEY) return journalsAllowed();
     // Ревью C1/I1 — администратор (и администратор-врач, у которого `admin`
     // дополнительной ролью) видит всё, кроме закрытого ЕГО СОБСТВЕННОЙ ролью.
     if (_effective == null || actorIsAdmin()) {
         const own = ownLevel(key, 'reports');
         return own === null ? true : own !== 'none';
     }
-    // JOURNALS_V1_RJ2 (F3) — роль, которая САМА выдала «Журналы» и сама «Отчёты»
-    // не закрыла, открывает журналы (и только их), даже если раздел закрыт
-    // другой ролью человека (врач + надстройка «Главный врач»). Как сервер.
-    if (key === JOURNALS_KEY && journalsGrantedByRole()) return true;
     if (grantLevel('reports') === 'none') return false;   // закрытый раздел закрывает все группы
     const lvl = key ? grantLevel(key) : null;
     if (lvl !== null) return lvl !== 'none';
     // ADMIN_ROWS_GRANTABLE_V1 — группа с правилом «только администратор»
     // (охват Telegram-бота) у ненастроенной роли закрыта, как вчера.
     if (key && isAdminDefault(key)) return false;
-    // JOURNALS_V1_RJ2 (F1) — «Журналы» у роли с настроенными группами отчётов
-    // (есть ключ «reports.…») — «Нет», даже если ключ «Журналов» стёрт
-    // (справочник старой главной клиники, устаревшая вкладка «Роли»). То же
-    // правило, что у сервера (report-access.js canSeeReportKey).
-    if (key === JOURNALS_KEY && reportsConfigured()) return false;
     return _effective.has('reports-hub');
 }
-// JOURNALS_V1_RJ2 (F1) — ключ «Журналов» и признак «группы отчётов настроены».
+// JOURNALS_V1_RJ3 (2026-10-02) — «ЖУРНАЛЫ»: ДОСТУП ТОЛЬКО ЯВНЫЙ, то же правило,
+// что у сервера (server/services/report-access.js canSeeJournals):
+//   • роль, которой ЯВНО выдано «Журналы: Просмотр» и которая сама не закрыла
+//     «Отчёты», — видит (раздел у других ролей человека не мешает);
+//   • администратор (полный доступ или `admin` среди ролей) — видит, пока СВОЯ
+//     роль клиники не закрыла их ключом «Журналы» или разделом «Отчёты»;
+//   • все остальные — «Нет»; прежнего правила («есть раздел „Отчёты“») нет.
 const JOURNALS_KEY = 'reports.journals';
-function reportsConfigured() {
-    return Object.keys(_grants).some((k) => k.startsWith('reports.'));
-}
-// JOURNALS_V1_RJ2 (F3) — «Журналы: Просмотр» записаны ролью, у которой «Отчёты» не «Нет».
 function journalsGrantedByRole() {
     return _roleGrants.some((g) => g && (_GRANT_RANK[g[JOURNALS_KEY]] || 0) >= _GRANT_RANK.view && g.reports !== 'none');
+}
+function journalsAllowed() {
+    if (journalsGrantedByRole()) return true;
+    if (!(_effective == null || actorIsAdmin())) return false;
+    const own = _ownRole || _ownCustom;
+    if (!own) return true;
+    if (own.reports === 'none') return false;
+    return !Object.prototype.hasOwnProperty.call(own, JOURNALS_KEY) || (_GRANT_RANK[own[JOURNALS_KEY]] || 0) >= _GRANT_RANK.view;
+}
+
+/**
+ * JOURNALS_V1_RJ3 — права КАЖДОЙ роли в силе и права СВОЕЙ роли клиники, как
+ * их видит сервер (grants.js roleGrantsOf / ownCustomGrants). admin.js зовёт
+ * после раскладки ролей: у администратора (полный доступ) это единственный
+ * путь, которым до оболочки доезжают его дополнительные роли — надстройка
+ * «Главный врач» открывает журналы и ему.
+ * @param {object[]} list — словари grants ролей в силе (своя роль вместо основы, затем дополнительные)
+ * @param {object|null} own — словарь grants своей роли клиники или null
+ */
+export function setActorRoleGrants(list, own = null) {
+    _roleGrants = (list || []).map((g) => ({ ...(g && typeof g === 'object' ? g : {}) }));
+    _ownRole = own && typeof own === 'object' ? { ...own } : null;
 }
 
 /** Видна ли плитка отчёта по виду (REPORT_GROUP); вид без группы — только полному доступу. */

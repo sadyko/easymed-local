@@ -95,7 +95,7 @@ function sectionOf(key) {
 }
 
 /** Словарь СВОЕЙ роли клиники (CUSTOM_ROLES_V1), если такая роль настроена. */
-function ownCustomGrants(db, user) {
+export function ownCustomGrants(db, user) {   // export: JOURNALS_V1_RJ3 — «Журналы» администратора (report-access.js)
   const custom = user && typeof user.custom_role_code === 'string' ? user.custom_role_code.trim() : '';
   return custom ? grantsOfRole(db, custom) : null;
 }
