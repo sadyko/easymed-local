@@ -4545,7 +4545,7 @@ function journalFacts(db, lines, { from, to, idsJson }) {
   // документ строки визита (diag — заключение исследования, protocol — приём).
   const conclusions = new Map();
   for (const d of db.prepare(`
-    SELECT d.visit_service_id AS vs_id,
+    SELECT d.visit_service_id AS vs_id, d.doc_type,   -- CABINET_FIX_V1_R3 (F2) — у исследования заключение — conclusion
            ${DOC_TEXT_SQL('d.body', '$.conclusion')} AS conclusion,           -- JOURNALS_V1_RJ1 — только текст
            ${DOC_TEXT_SQL('d.body', '$.conclusionText')} AS conclusionText,   -- JOURNALS_V1_RJ1
            ${DOC_TEXT_SQL('d.body', '$.dx')} AS dx,                           -- JOURNALS_V1_RJ1

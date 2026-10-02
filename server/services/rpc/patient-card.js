@@ -664,7 +664,9 @@ const DOC_HEAD_KEYS = Object.freeze(new Set(['patientName', 'mrn', 'phone', 'dob
   'activeFields', 'sectionOrder', 'meta', 'docNo', 'dateIn', 'dateOut', 'study', 'referrals', 'type', 'typeLabel', 'id']));
 function docHasContent(body, depth = 0) {
   if (body == null || depth > 8) return false;
-  if (typeof body === 'string') return body.replace(/<(?!img\b)[^>]*>/gi, '').replace(/&nbsp;/g, ' ').trim() !== '';
+  // CABINET_FIX_V1_R3 (F6) — [^<>]*, а не [^>]*: тег не тянется через следующий «<»,
+  // и разбор линеен (100 000 «<» без «>» были секундами, 2 МБ — минутами простоя сервера).
+  if (typeof body === 'string') return body.replace(/<(?!img\b)[^<>]*>/gi, '').replace(/&nbsp;/g, ' ').trim() !== '';
   if (Array.isArray(body)) return body.some((x) => docHasContent(x, depth + 1));
   if (typeof body === 'object') return Object.keys(body).some((k) => !DOC_HEAD_KEYS.has(k) && docHasContent(body[k], depth + 1));
   return false;

@@ -106,3 +106,17 @@ test('ревью 2, п. 7: шапка (пациент, врач, порядок 
   sign(db, 'protocol', { ...head, issueDate: '03.10.2026' });
   assert.equal(active(db).length, 1, 'документ из одной шапки не заменился следующей подписью');
 });
+
+// CABINET_FIX_V1_R3 (F6) — разбор разметки в docHasContent был квадратичным:
+// 100 000 «<» без «>» — секунды, 2 МБ — минуты, и весь сервер стоял. Тело
+// подписи приходит от браузера (до 2 МБ на RPC) — разбор обязан быть линейным.
+test('ревью 3, F6: тело из сотен тысяч «<» разбирается за доли секунды, а не минуты', () => {
+  const db = seed();
+  sign(db, 'protocol', PROTOCOL);
+  for (const junk of ['<'.repeat(200000), '<img'.repeat(50000), '<a'.repeat(100000) + 'x']) {
+    const t0 = Date.now();
+    sign(db, 'protocol', { patientName: 'Азизов Бахтиёр', complaint: junk });
+    const ms = Date.now() - t0;
+    assert.ok(ms < 1500, 'подпись с «' + junk.slice(0, 6) + '…» заняла ' + ms + ' мс');
+  }
+});

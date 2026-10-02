@@ -568,3 +568,20 @@ test('заключение анализа: выдан — «Результаты
       'позиция шаблона — в колонках этого журнала');
   } finally { db.close(); }
 });
+
+// CABINET_FIX_V1_R3 (F2) — заключение исследования (diag) в журнале — с кодом
+// МКБ-10: снимок ревью 2 клал текст врача без кода в conclusionText, и журнал
+// печатал «Эхопризнаков патологии нет» без «E71.0 — …». Старый снимок — как прежде.
+test('заключение исследования: снимок ревью 2 и старый снимок — код МКБ строкой и текст врача', () => {
+  const db = clinic();
+  try {
+    const doc = db.prepare(`INSERT INTO visit_documents (visit_service_id, visit_id, patient_id, doc_type, body, created_by, created_at)
+                            VALUES (?, ?, ?, 'diag', ?, 1, ?)`);
+    doc.run(2, 2, 1, JSON.stringify({ description: 'Печень обычных размеров', conclusion: 'E71.0 — Болезнь "кленового сиропа"\nЭхопризнаков патологии нет',
+      conclusionAuto: 'E71.0 — Болезнь "кленового сиропа"', conclusionText: 'Эхопризнаков патологии нет' }), at('2026-03-10'));
+    doc.run(3, 3, 1, JSON.stringify({ description: 'Ритм синусовый', conclusion: 'N28.9 — Болезнь почки\nНорма' }), at('2026-03-12'));
+    const c = col(journal(db), 'Заключение').map(String);
+    assert.ok(c.some((t) => t.startsWith('E71.0 — Болезнь "кленового сиропа"') && t.includes('Эхопризнаков патологии нет')), 'снимок ревью 2 без кода: ' + c.join(' | '));
+    assert.ok(c.some((t) => t.startsWith('N28.9 — Болезнь почки') && t.includes('Норма')), 'старый снимок читается не как прежде: ' + c.join(' | '));
+  } finally { db.close(); }
+});

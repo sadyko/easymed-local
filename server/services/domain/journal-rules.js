@@ -217,8 +217,12 @@ export function referralDiagnosis(line, adm, ref, docs) {
 // «Диагноз» (основной «код — название», иначе dx). Описание исследования —
 // находки, а не заключение: его не берём.
 const CONCLUSION_FIELDS = ['conclusionText', 'conclusion'];
+// CABINET_FIX_V1_R3 (F2) — у заключения ИССЛЕДОВАНИЯ (doc_type 'diag') — только
+// conclusion: код МКБ-10 строкой + текст врача. conclusionText — ключ протокола
+// приёма; снимки диагностики ревью 2 клали туда текст врача без кода.
+const DIAG_CONCLUSION_FIELDS = ['conclusion'];
 export function conclusionOfDoc(doc) {
-  for (const k of CONCLUSION_FIELDS) {
+  for (const k of (doc && doc.doc_type === 'diag' ? DIAG_CONCLUSION_FIELDS : CONCLUSION_FIELDS)) {   // CABINET_FIX_V1_R3 (F2)
     const v = doc ? doc[k] : null;
     const s = String(v == null ? '' : v).trim();
     if (s) return s;
