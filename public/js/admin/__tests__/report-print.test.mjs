@@ -3,7 +3,7 @@
 // итог; альбомная, если колонок больше 8; данные экранированы.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reportPrintHtml, dmy, PRINT_PORTRAIT_MAX_COLS } from '../views/report-print.js';
+import { reportPrintHtml, dmy, PRINT_PORTRAIT_MAX_COLS, PRINT_ROW_CAP } from '../views/report-print.js';
 
 const DICT = { 'Итого': 'Итого', 'Период: {from} — {to}': 'Период: {from} — {to}', 'Здания: {list}': 'Здания: {list}', 'Филиалы: {list}': 'Филиалы: {list}' };
 const tx = { tr: (s) => DICT[s] || s, trf: (t, p) => String(DICT[t] || t).replace(/\{(\w+)\}/g, (_, k) => String(p[k])), lang: 'ru', monthName: () => '' };
@@ -76,4 +76,30 @@ test('печать: слова в узких колонках не рвутся 
   const html = reportPrintHtml({ columns: ['ФИО', 'Заключение'], rows: [['Каримов Алишер', 'Х '.repeat(300)]] }, { title: 'Т', from: '2026-10-01', to: '2026-10-01' }, tx);
   assert.doesNotMatch(html, /overflow-wrap:\s*anywhere/);
   assert.match(html, /\.rp-tbl td \{[^}]*overflow-wrap: break-word;/);
+});
+
+// JOURNALS_V1_RJ2C (ревью F8) — журнал на 60 000 строк открывал окно печати
+// такого же размера. Печатаются первые 5000 строк и строка-предупреждение
+// наверху; Excel — без предела. Итог — по ВСЕМ строкам ответа (его считает
+// reportSheets по ответу целиком), а не по напечатанным.
+test('печать: больше 5000 строк — первые 5000 и предупреждение; итог — по всем строкам ответа', () => {
+  assert.equal(PRINT_ROW_CAP, 5000);
+  const r = { columns: ['Пациент', 'Сумма оплаты'], rows: many(5003), summable_columns: ['Сумма оплаты'] };
+  const html = reportPrintHtml(r, { title: 'Реестр стационарных пациентов', from: '2026-10-01', to: '2026-10-02' }, tx);
+  assert.equal((html.match(/<tr>/g) || []).length, 1 + 5000 + 1, 'шапка + 5000 строк + итог');
+  assert.ok(html.includes('<td>Пациент 5000</td>') && !html.includes('<td>Пациент 5001</td>'));
+  const flat = html.replace(/[\s ]/g, '');
+  assert.ok(flat.includes('Напечатаныпервые5000строкиз5003—полныйотчётвыгрузитевExcel.'), 'нет строки-предупреждения');
+  assert.ok(html.includes('<p class="rp-cap">') && html.indexOf('<p class="rp-cap">') < html.indexOf('<table'), 'предупреждение — над таблицей');
+  const all = 5003 * 5004 / 2 * 1000;
+  const shown = 5000 * 5001 / 2 * 1000;
+  assert.ok(html.includes(all.toLocaleString('ru-RU')), 'итог не по всем строкам ответа');
+  assert.ok(!html.includes(shown.toLocaleString('ru-RU')), 'итог посчитан по напечатанным строкам');
+});
+
+test('печать: 5000 строк и меньше — все, без предупреждения', () => {
+  const html = reportPrintHtml({ columns: ['Пациент', 'Сумма'], rows: many(5000) }, { title: 'Т', from: '2026-10-01', to: '2026-10-01' }, tx);
+  assert.equal((html.match(/<tbody>/g) || []).length, 1);
+  assert.ok(!html.includes('<p class="rp-cap">'));
+  assert.ok(html.includes('<td>Пациент 5000</td>'));
 });

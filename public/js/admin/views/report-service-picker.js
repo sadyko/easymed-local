@@ -17,7 +17,25 @@ import { filterServicePool } from './service-search.js';
 export const JOURNAL_SERVICE_MAX = 2000;
 /** Сколько строк рисует список; «Выбрать все найденные» отмечает все найденные. */
 export const PICKER_LIST_CAP = 500;
-const KEY = (kind) => 'easymed_report_services_' + kind;
+// JOURNALS_V1_RJ2C (ревью F7) — выбор помнится у каждого СОТРУДНИКА свой: на
+// общем компьютере регистратуры следующий сотрудник не видит выбор предыдущего.
+// Прежний общий ключ (без сотрудника) не читается — неизвестно, чей он, — и
+// убирается при первом обращении.
+const LEGACY_KEY = (kind) => 'easymed_report_services_' + kind;
+const validUserId = (uid) => { const n = Number(uid); return uid != null && uid !== '' && Number.isSafeInteger(n) && n > 0 ? n : null; };
+/** Ключ запомненного выбора: вид отчёта + сотрудник; сотрудник неизвестен — null (не помним). */
+export function rememberKey(kind, userId) {
+    const uid = validUserId(userId);
+    return uid == null ? null : 'easymed_report_services_' + kind + '_u' + uid;
+}
+/** Сотрудник этой сессии (оболочка кладёт его в window.easymed.state.user) или null. */
+export function currentUserId() {
+    try {
+        const w = globalThis.window;
+        return validUserId(w && w.easymed && w.easymed.state && w.easymed.state.user && w.easymed.state.user.id);
+    } catch { return null; }
+}
+const tooManyText = () => trf('Не больше {max} услуг в одном журнале — уточните поиск.', { max: JOURNAL_SERVICE_MAX });
 
 /** Целые > 0, без повторов, в порядке выбора. */
 export function cleanServiceIds(ids) {
@@ -35,18 +53,36 @@ export function browserStorage() {
     try { return globalThis.localStorage || null; } catch { return null; }
 }
 
-export function loadRememberedServices(storage, kind) {
+function dropLegacy(storage, kind) {
+    try { if (storage && storage.removeItem) storage.removeItem(LEGACY_KEY(kind)); } catch { /* не убралось — всё равно не читается */ }
+}
+
+// Выбор больше предела (записан старой версией или руками) не обрезается
+// молча до 2000: такой выбор не наш — пусто, человек выберет снова.
+export function loadRememberedServices(storage, kind, userId) {
     try {
         if (!storage) return [];
-        const v = JSON.parse(storage.getItem(KEY(kind)) || '[]');
-        return Array.isArray(v) ? cleanServiceIds(v).slice(0, JOURNAL_SERVICE_MAX) : [];
+        dropLegacy(storage, kind);
+        const key = rememberKey(kind, userId);
+        if (!key) return [];
+        const v = JSON.parse(storage.getItem(key) || '[]');
+        if (!Array.isArray(v)) return [];
+        const ids = cleanServiceIds(v);
+        return ids.length > JOURNAL_SERVICE_MAX ? [] : ids;
     } catch { return []; }
 }
 
-export function rememberServices(storage, kind, ids) {
+/** Записать выбор; больше предела или без сотрудника — не пишется. true — записано. */
+export function rememberServices(storage, kind, ids, userId) {
     try {
-        if (storage) storage.setItem(KEY(kind), JSON.stringify(cleanServiceIds(ids)));
-    } catch { /* удобство, не данные: не записалось — выберут снова */ }
+        if (!storage) return false;
+        dropLegacy(storage, kind);
+        const key = rememberKey(kind, userId);
+        const clean = cleanServiceIds(ids);
+        if (!key || clean.length > JOURNAL_SERVICE_MAX) return false;
+        storage.setItem(key, JSON.stringify(clean));
+        return true;
+    } catch { return false; /* удобство, не данные: не записалось — выберут снова */ }
 }
 
 export function findServices(catalog, query) {
@@ -99,7 +135,16 @@ export function openReportServicePicker({ selected = [], onApply, loadCatalog })
         const cb = h('input', {
             type: 'checkbox', checked: chosen.has(id),
             onchange: (e) => {
-                if ((e.target || e.currentTarget).checked) chosen.add(id); else chosen.delete(id);
+                const box = e.target || e.currentTarget;
+                if (box.checked) {
+                    // JOURNALS_V1_RJ2C (ревью F7) — предел и у отдельной галочки.
+                    if (!chosen.has(id) && chosen.size >= JOURNAL_SERVICE_MAX) {
+                        box.checked = false;
+                        toast(tooManyText(), 'fail');
+                        return;
+                    }
+                    chosen.add(id);
+                } else chosen.delete(id);
                 paintCount();
             },
         });
@@ -123,7 +168,7 @@ export function openReportServicePicker({ selected = [], onApply, loadCatalog })
         onclick: () => {
             const next = selectAllFound([...chosen], findServices(catalog, query));
             if (next.length > JOURNAL_SERVICE_MAX) {
-                toast(trf('Не больше {max} услуг в одном журнале — уточните поиск.', { max: JOURNAL_SERVICE_MAX }), 'fail');
+                toast(tooManyText(), 'fail');
                 return;
             }
             chosen = new Set(next);
@@ -133,7 +178,13 @@ export function openReportServicePicker({ selected = [], onApply, loadCatalog })
     const noneBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => { chosen = new Set(); paintList(); } }, tr('Снять все'));
     const applyBtn = h('button', {
         class: 'btn btn-primary btn-sm', type: 'button',
-        onclick: () => { if (onApply) onApply([...chosen]); close(); },
+        onclick: () => {
+            // JOURNALS_V1_RJ2C (ревью F7) — выбор больше предела (пришёл снаружи)
+            // не уходит: сервер ответил бы 400. Окно остаётся — снимите лишнее.
+            if (chosen.size > JOURNAL_SERVICE_MAX) { toast(tooManyText(), 'fail'); return; }
+            if (onApply) onApply([...chosen]);
+            close();
+        },
     }, tr('Готово'));
     overlay.appendChild(h('div', {
         class: 'modal-card', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Выбор услуг',

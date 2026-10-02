@@ -62,17 +62,65 @@ test('чистые правила: выбор без мусора и повто�
   assert.equal(P.servicesButtonText(0), 'Выбрать услуги (0)');
 });
 
-test('запомненный выбор: свой на каждый вид; битое, чужое и недоступное хранилище — пусто, без ошибки', () => {
+test('запомненный выбор: свой на каждый вид и каждого сотрудника; битое, чужое и недоступное хранилище — пусто, без ошибки', () => {
   const s = memoryStorage();
-  P.rememberServices(s, 'service_journal', [5, '6', 5, 'мусор']);
-  assert.deepEqual(P.loadRememberedServices(s, 'service_journal'), [5, 6]);
-  assert.deepEqual(P.loadRememberedServices(s, 'other_kind'), []);
-  s.setItem('easymed_report_services_service_journal', '{битое');
-  assert.deepEqual(P.loadRememberedServices(s, 'service_journal'), []);
-  const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
-  assert.deepEqual(P.loadRememberedServices(broken, 'service_journal'), []);
-  assert.doesNotThrow(() => P.rememberServices(broken, 'service_journal', [1]));
-  assert.deepEqual(P.loadRememberedServices(null, 'service_journal'), []);
+  P.rememberServices(s, 'service_journal', [5, '6', 5, 'мусор'], 7);
+  assert.deepEqual(P.loadRememberedServices(s, 'service_journal', 7), [5, 6]);
+  assert.deepEqual(P.loadRememberedServices(s, 'other_kind', 7), []);
+  s.setItem(P.rememberKey('service_journal', 7), '{битое');
+  assert.deepEqual(P.loadRememberedServices(s, 'service_journal', 7), []);
+  const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
+  assert.deepEqual(P.loadRememberedServices(broken, 'service_journal', 7), []);
+  assert.doesNotThrow(() => P.rememberServices(broken, 'service_journal', [1], 7));
+  assert.deepEqual(P.loadRememberedServices(null, 'service_journal', 7), []);
+});
+
+// JOURNALS_V1_RJ2C (ревью F7) — общий компьютер регистратуры: выбор одного
+// сотрудника не должен открываться следующему. Ключ — вид отчёта + id сотрудника;
+// прежний общий ключ (без сотрудника) не читается — неизвестно, чей он, — и
+// убирается при первом обращении.
+test('запомненный выбор — у каждого сотрудника свой; прежний общий ключ не читается и убирается; без сотрудника — не помнится', () => {
+  const s = memoryStorage();
+  assert.notEqual(P.rememberKey('service_journal', 7), P.rememberKey('service_journal', 8));
+  assert.notEqual(P.rememberKey('service_journal', 7), P.rememberKey('inpatient_register', 7));
+  P.rememberServices(s, 'service_journal', [1, 2], 7);
+  assert.deepEqual(P.loadRememberedServices(s, 'service_journal', 8), [], 'выбор сотрудника 7 открылся сотруднику 8');
+  assert.deepEqual(P.loadRememberedServices(s, 'service_journal', 7), [1, 2]);
+  s.setItem('easymed_report_services_service_journal', '[3,4]');   // ключ до RJ2C — чей, неизвестно
+  assert.deepEqual(P.loadRememberedServices(s, 'service_journal', 9), []);
+  assert.equal(s.getItem('easymed_report_services_service_journal'), null, 'прежний общий ключ остался');
+  // Сотрудник неизвестен — ни чтения, ни записи.
+  assert.equal(P.rememberServices(s, 'service_journal', [5], null), false);
+  assert.deepEqual(P.loadRememberedServices(s, 'service_journal', null), []);
+  assert.deepEqual(P.loadRememberedServices(s, 'service_journal', undefined), []);
+  // id сотрудника — из сессии оболочки (window.easymed.state.user).
+  const saved = globalThis.window.easymed;
+  try {
+    globalThis.window.easymed = { state: { user: { id: 42 } } };
+    assert.equal(P.currentUserId(), 42);
+    globalThis.window.easymed = undefined;
+    assert.equal(P.currentUserId(), null);
+  } finally { globalThis.window.easymed = saved; }
+});
+
+test('запомненный выбор: больше 2000 не записывается и не обрезается молча при чтении; хранилище, которое бросает, — без ошибки', () => {
+  const s = memoryStorage();
+  const over = Array.from({ length: 2001 }, (_, i) => i + 1);
+  assert.equal(P.rememberServices(s, 'service_journal', over, 7), false);
+  assert.equal(s.getItem(P.rememberKey('service_journal', 7)), null, 'выбор больше предела записан');
+  assert.equal(P.rememberServices(s, 'service_journal', over.slice(0, 2000), 7), true);
+  assert.equal(P.loadRememberedServices(s, 'service_journal', 7).length, 2000);
+  s.setItem(P.rememberKey('service_journal', 7), JSON.stringify(over));   // записано старой версией
+  assert.deepEqual(P.loadRememberedServices(s, 'service_journal', 7), [], 'выбор больше предела молча обрезан до 2000');
+  const throwing = { getItem() { throw new Error('quota'); }, setItem() { throw new Error('quota'); }, removeItem() { throw new Error('quota'); } };
+  assert.doesNotThrow(() => P.loadRememberedServices(throwing, 'service_journal', 7));
+  assert.equal(P.rememberServices(throwing, 'service_journal', [1], 7), false);
+  // Доступ к самому localStorage бросает (запрет в настройках браузера).
+  const desc = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  try {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('SecurityError'); } });
+    assert.equal(P.browserStorage(), null);
+  } finally { Object.defineProperty(globalThis, 'localStorage', desc); }
 });
 
 test('окно: набрал «узи», «Выбрать все найденные», «Готово» — найденные плюс прежний выбор; отключённая услуга подписана', async () => {
@@ -120,6 +168,60 @@ test('окно: больше 2000 найденных — отказ словам
   assert.ok(textOf(document.body).includes('Не больше 2000 услуг в одном журнале'));
   button(overlay, 'Готово').click();
   assert.deepEqual(applied, [7]);
+});
+
+// JOURNALS_V1_RJ2C (ревью F7) — предел проверяла только «Выбрать все найденные»:
+// отдельные галочки и «Готово» пропускали 2001-ю услугу, сервер отвечал 400, а
+// выбор запоминался. Теперь 2001-я галочка не ставится, «Готово» с выбором больше
+// предела не закрывает окно — тем же сообщением.
+// Стенд не находит #toast (getElementById → null), и каждое сообщение — новый
+// узел в body: перед действием прежние убираем, читаем последний.
+const isToast = (n) => n.attrs && n.attrs.id === 'toast';
+const clearToasts = () => { document.body.children = document.body.children.filter((n) => !isToast(n)); };
+const toastText = () => { const t = document.body.children.filter(isToast).pop(); return t ? t._x : ''; };
+const BIG = Array.from({ length: 2001 }, (_, i) => ({ id: i + 1, name: 'Услуга ' + (i + 1), active: 1 }));
+
+test('окно: 2001-я галочка не ставится — сообщение, выбор остаётся 2000', async () => {
+  let applied = null;
+  const two = Array.from({ length: 2000 }, (_, i) => i + 2);   // 2..2001 — галочка у первой строки свободна
+  const { overlay } = P.openReportServicePicker({ selected: two, onApply: (ids) => { applied = ids; }, loadCatalog: async () => BIG });
+  await tick();
+  assert.ok(textOf(overlay).includes('Выбрано: 2000'));
+  const first = boxes(overlay)[0];
+  assert.ok(!('checked' in first.attrs), 'стенд не тот: первая строка уже отмечена');
+  clearToasts();
+  first.checked = true;
+  first.dispatchEvent({ type: 'change', target: first, currentTarget: first });
+  assert.equal(first.checked, false, 'галочка сверх предела осталась стоять');
+  assert.ok(toastText().includes('Не больше 2000 услуг в одном журнале'), 'нет сообщения о пределе');
+  assert.ok(textOf(overlay).includes('Выбрано: 2000'));
+  // Снять одну и поставить эту — можно: предел — число, а не запрет.
+  const second = boxes(overlay)[1];
+  second.checked = false;
+  second.dispatchEvent({ type: 'change', target: second, currentTarget: second });
+  first.checked = true;
+  first.dispatchEvent({ type: 'change', target: first, currentTarget: first });
+  assert.equal(first.checked, true);
+  button(overlay, 'Готово').click();
+  assert.equal(applied.length, 2000);
+  assert.ok(applied.includes(1) && !applied.includes(2));
+});
+
+test('окно: «Готово» с выбором больше 2000 не применяет и не закрывает — сообщение; «Снять все» — применяется', async () => {
+  keyListeners.length = 0;
+  let applied = null;
+  const over = BIG.map((s) => s.id);   // 2001 — пришло снаружи (старый запомненный выбор)
+  const { overlay } = P.openReportServicePicker({ selected: over, onApply: (ids) => { applied = ids; }, loadCatalog: async () => BIG });
+  await tick();
+  clearToasts();
+  button(overlay, 'Готово').click();
+  assert.equal(applied, null, '«Готово» отправило 2001 услугу');
+  assert.equal(keyListeners.length, 1, 'окно закрылось, выбор потерян без объяснения');
+  assert.ok(toastText().includes('Не больше 2000 услуг в одном журнале'));
+  button(overlay, 'Снять все').click();
+  button(overlay, 'Готово').click();
+  assert.deepEqual(applied, []);
+  assert.equal(keyListeners.length, 0);
 });
 
 // Окно лежит над конструктором отчёта, а тот закрывается по Esc своим

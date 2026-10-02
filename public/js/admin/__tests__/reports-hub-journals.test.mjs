@@ -78,13 +78,14 @@ test('сервер знает оба вида и отвечает колонка
 });
 
 test('выбор услуг помнится в браузере и открывает окно выбора; новый выбор сбрасывает результат', () => {
-  assert.match(hub, /import \{ openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText \} from '\.\/report-service-picker\.js\?v=jrn2';/);
-  assert.match(hub, /if \(o\.type === 'services'\) st\.opts\[o\.arg\] = loadRememberedServices\(browserStorage\(\), rep\.kind\);/);
+  // JOURNALS_V1_RJ2C (ревью F7) — выбор помнится у каждого сотрудника свой.
+  assert.match(hub, /import \{ openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText, currentUserId \} from '\.\/report-service-picker\.js\?v=jrn3';/);
+  assert.match(hub, /if \(o\.type === 'services'\) st\.opts\[o\.arg\] = loadRememberedServices\(browserStorage\(\), rep\.kind, currentUserId\(\)\);/);
   const fn = hub.slice(hub.indexOf('function servicesOption(o)'), hub.indexOf('function resetResult()'));
   assert.ok(fn.length > 100, 'нет servicesOption');
   assert.match(fn, /openReportServicePicker\(\{/);
   assert.match(fn, /loadCatalog: loadServiceCatalog/);
-  assert.match(fn, /rememberServices\(browserStorage\(\), rep\.kind, next\);/);
+  assert.match(fn, /rememberServices\(browserStorage\(\), rep\.kind, next, currentUserId\(\)\);/);
   assert.match(fn, /paintChoices\(\); resetResult\(\);/);
   assert.match(hub, /if \(o\.type === 'services'\) \{ choiceRow\.appendChild\(servicesOption\(o\)\); continue; \}/);
   assert.match(hub, /supabase\.from\('services'\)\.select\('id, name, active'\)/);
@@ -98,7 +99,7 @@ test('предпросмотр обрезает длинный текст до 3
 });
 
 test('«Печать» рядом со «Скачать Excel»: страница из уже полученного ответа, без второго запроса', () => {
-  assert.match(hub, /import \{ reportPrintHtml \} from '\.\/report-print\.js\?v=jrn2';/);
+  assert.match(hub, /import \{ reportPrintHtml \} from '\.\/report-print\.js\?v=jrn3';/);
   const btn = hub.slice(hub.indexOf('const printBtn = h('), hub.indexOf('const generateBtn = h('));
   assert.ok(btn.length > 100, 'нет кнопки «Печать»');
   assert.match(btn, /reportPrintHtml\(r, \{ title: printTitle\(\), \.\.\.\(st\.resultMeta \|\| \{ from: st\.from, to: st\.to \}\) \}, reportTx\(\)\)/);
@@ -131,5 +132,5 @@ test('«Скачать Excel»: кнопка берётся до await и сно
 // с прежним адресом браузер взял бы из своего кэша модулей.
 test('штамп reports-hub.js в admin.js — последний в серии журналов', () => {
   const admin = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin.js'), 'utf8');
-  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn6';/);
+  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn7';/);
 });

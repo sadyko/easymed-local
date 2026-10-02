@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // JOURNALS_V1_RJ2C (2026-10-02, ревью F8) — предел строк на печати (report-print.js PRINT_ROW_CAP)
+  "Напечатаны первые {n} строк из {total} — полный отчёт выгрузите в Excel.": {"en":"The first {n} rows of {total} are printed — download the full report to Excel.","ru":"Напечатаны первые {n} строк из {total} — полный отчёт выгрузите в Excel.","uz":"{total} ta qatordan birinchi {n} tasi chop etildi — to'liq hisobotni Excel'ga yuklab oling."},
   // JOURNALS_V1_PRINT (2026-10-02) — печатная страница отчёта (report-print.js); «Период: {from} — {to}», «Печать», «Итого» уже есть
   "Здания: {list}": {"en":"Buildings: {list}","ru":"Здания: {list}","uz":"Binolar: {list}"},
   "Филиалы: {list}": {"en":"Branches: {list}","ru":"Филиалы: {list}","uz":"Filiallar: {list}"},

@@ -14,6 +14,13 @@ import { PRINT_FONT_FACE_CSS, PRINT_FONT_STACK } from '../../shared/print-fonts.
 
 /** Колонок больше — лист альбомный. */
 export const PRINT_PORTRAIT_MAX_COLS = 8;
+/**
+ * JOURNALS_V1_RJ2C (ревью F8) — строк на печати не больше: журнал на 60 000
+ * строк открывал окно печати такого же размера. Сверх предела печатаются первые
+ * строки и предупреждение наверху; Excel — без предела. «Итого» — по ВСЕМ
+ * строкам ответа: его считает reportSheets по ответу целиком.
+ */
+export const PRINT_ROW_CAP = 5000;
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -32,6 +39,7 @@ const PRINT_CSS = `
 body { font-family: ${PRINT_FONT_STACK}; color: #111; margin: 0; }
 h1 { font-size: 14pt; margin: 0 0 3pt; }
 .rp-sub { font-size: 9pt; color: #444; margin: 0 0 8pt; }
+.rp-cap { font-size: 9pt; font-weight: 700; margin: 0 0 8pt; padding: 4pt 6pt; border: 0.8pt solid #333; }
 .rp-tbl { width: 100%; border-collapse: collapse; font-size: 8pt; }
 .rp-tbl th { text-align: left; border-bottom: 1.2pt solid #333; padding: 3pt 4pt; font-weight: 700; vertical-align: bottom; }
 .rp-tbl td { border-bottom: 0.5pt solid #ccc; padding: 3pt 4pt; vertical-align: top; overflow-wrap: break-word; }
@@ -55,8 +63,15 @@ export function reportPrintHtml(r, meta, tx) {
     // Заголовки, слова-перечисления, шаблоны ячеек и строка «Итого» — те же,
     // что у Excel: одна функция на обе выгрузки.
     const [head, ...rest] = reportSheets(res, tx).report;
-    const body = rest.slice(0, rows.length);
+    // JOURNALS_V1_RJ2C — печатаются первые PRINT_ROW_CAP строк; итог — из
+    // reportSheets, то есть по всем строкам ответа, а не по напечатанным.
+    const capped = rows.length > PRINT_ROW_CAP;
+    const body = rest.slice(0, Math.min(rows.length, PRINT_ROW_CAP));
     const totals = rest.length > rows.length ? rest[rows.length] : null;
+    const capLine = capped
+        ? tx.trf('Напечатаны первые {n} строк из {total} — полный отчёт выгрузите в Excel.', {
+            n: PRINT_ROW_CAP.toLocaleString('ru-RU'), total: rows.length.toLocaleString('ru-RU') })
+        : '';
     const isNum = head.map((_, ci) => {
         const probe = rows.find((x) => x[ci] != null && x[ci] !== '');
         return typeof (probe && probe[ci]) === 'number';
@@ -81,6 +96,7 @@ ${PRINT_CSS}
 </style></head><body>
 <h1>${esc(m.title || '')}</h1>
 <p class="rp-sub">${esc(period)}${places ? ' · ' + esc(places) : ''}</p>
+${capLine ? `<p class="rp-cap">${esc(capLine)}</p>` : ''}
 <table class="rp-tbl">
 <thead><tr>${head.map((c, ci) => `<th${isNum[ci] ? ' class="num"' : ''}>${esc(c)}</th>`).join('')}</tr></thead>
 <tbody>${body.map((row) => `<tr>${row.map(td).join('')}</tr>`).join('\n')}</tbody>
