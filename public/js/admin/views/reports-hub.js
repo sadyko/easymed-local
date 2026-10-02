@@ -45,6 +45,7 @@ import { CATEGORY_LABEL } from './inventory-shared.js';
 import { reportKindAllowed } from '../permissions.js';
 // JOURNALS_V1_SERVICE — окно выбора услуг журнала и запомненный выбор.
 import { openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText } from './report-service-picker.js?v=jrn1';
+import { reportPrintHtml } from './report-print.js?v=jrn1';   // JOURNALS_V1_PRINT — печатная страница отчёта
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
 // проверить тестом — страница целиком без DOM не поднимается.
@@ -527,6 +528,7 @@ async function openReportBuilder(rep) {
         branches: [], branchIds: new Set(),
         buildings: [], buildingKeys: new Set(),
         result: null,        // {columns, rows} — or the owner charts object
+        resultMeta: null,    // JOURNALS_V1_PRINT — период и здания запроса, чей ответ в result
         generating: false,
         kind: reportKinds(rep)[0],          // REPORTS_V2 — выбранный вид
         opts: defaultReportOptions(rep),    // REPORTS_V2 — выбранные фильтры
@@ -776,6 +778,37 @@ async function openReportBuilder(rep) {
     }, Icon('Download', { size: 14 }), ' Скачать Excel');
     // Кнопку прячем только у отчётов, которым нечего выгружать (отчёт владельца).
     if (rep.mode === 'charts' && !rep.exports) downloadBtn.style.display = 'none';
+    // JOURNALS_V1_PRINT — заголовок печати: отчёт и вид, если видов несколько.
+    function printTitle() {
+        const v = Array.isArray(rep.views) && rep.views.length > 1 ? rep.views.find((x) => x.kind === st.kind) : null;
+        return v ? tr(rep.title) + ' · ' + tr(v.label) : tr(rep.title);
+    }
+    // JOURNALS_V1_PRINT — здания или филиалы на печати: только если выбрано
+    // собственное подмножество (все или ни одного — фильтра нет).
+    function chosenPlaces() {
+        if (byBuildings()) {
+            if (!st.buildingKeys.size || st.buildingKeys.size >= st.buildings.length) return { kind: 'buildings', list: [] };
+            return { kind: 'buildings', list: st.buildings.filter((b) => st.buildingKeys.has(b.key)).map((b) => b.label) };
+        }
+        if (!st.branchIds.size || st.branchIds.size >= st.branches.length) return { kind: 'branches', list: [] };
+        return { kind: 'branches', list: st.branches.filter((b) => st.branchIds.has(b.id)).map((b) => b.name) };
+    }
+    // JOURNALS_V1_PRINT — «Печать» любого табличного отчёта: страница строится
+    // из уже полученного ответа (все строки, итог), второго запроса нет.
+    const printBtn = h('button', {
+        class: 'btn', disabled: true,
+        onclick: () => {
+            const r = st.result;
+            if (!r || !Array.isArray(r.rows) || !r.rows.length) return;
+            const html = reportPrintHtml(r, { title: printTitle(), ...(st.resultMeta || { from: st.from, to: st.to }) }, reportTx());
+            const w = window.open('', '_blank');
+            if (!w) { toast(tr('Разрешите всплывающие окна для печати.'), 'fail'); return; }
+            w.document.open();
+            w.document.write(html);
+            w.document.close();
+        },
+    }, Icon('Print', { size: 14 }), ' Печать');
+    if (rep.mode === 'charts' && !rep.exports) printBtn.style.display = 'none';
 
     const generateBtn = h('button', {
         class: 'btn btn-primary',
@@ -816,6 +849,7 @@ async function openReportBuilder(rep) {
                 args.buildings = (st.buildingKeys.size && st.buildingKeys.size < st.buildings.length)
                     ? [...st.buildingKeys] : [];
             }
+            const places = chosenPlaces();   // JOURNALS_V1_PRINT — что выбрано в момент запроса
             // CALLCENTER_REPORT_V1 — режим «графики» больше не привязан к отчёту
             // владельца: определение отчёта само называет свой RPC и рисовалку.
             const { data, error } = rep.mode === 'charts'
@@ -824,9 +858,11 @@ async function openReportBuilder(rep) {
             if (token !== st.reqSeq || st.kind !== reqKind) return;   // устаревший ответ
             if (error) throw new Error(error.message || String(error));
             st.result = data;
+            st.resultMeta = { from: args.from, to: args.to, places };   // JOURNALS_V1_PRINT
             // Отчёт с графиками МОЖЕТ отдавать и плоские строки (колл-центр отдаёт
             // по строке на заявку) — тогда выгрузка работает как у табличных.
             downloadBtn.disabled = !data || !Array.isArray(data.rows) || data.rows.length === 0;
+            printBtn.disabled = downloadBtn.disabled;   // JOURNALS_V1_PRINT
             paintPreview();
         } catch (e) {
             if (token !== st.reqSeq) return;
@@ -860,6 +896,7 @@ async function openReportBuilder(rep) {
         h('div', { class: 'row', style: { gap: '8px', flex: '0 0 auto' } },
             generateBtn,
             downloadBtn,
+            printBtn,   // JOURNALS_V1_PRINT
         ),
     ));
 
@@ -938,6 +975,8 @@ async function openReportBuilder(rep) {
         st.reqSeq++;   // ревью M1 — ответ, который ещё в пути, уже не наш
         st.result = null;
         downloadBtn.disabled = true;
+        printBtn.disabled = true;   // JOURNALS_V1_PRINT
+        st.resultMeta = null;   // JOURNALS_V1_PRINT
         paintPreviewEmpty();
     }
     function paintChoices() {

@@ -97,9 +97,26 @@ test('предпросмотр обрезает длинный текст до 3
   assert.match(cells, /whiteSpace: long \? 'normal' : 'nowrap'/);
 });
 
+test('«Печать» рядом со «Скачать Excel»: страница из уже полученного ответа, без второго запроса', () => {
+  assert.match(hub, /import \{ reportPrintHtml \} from '\.\/report-print\.js\?v=jrn1';/);
+  const btn = hub.slice(hub.indexOf('const printBtn = h('), hub.indexOf('const generateBtn = h('));
+  assert.ok(btn.length > 100, 'нет кнопки «Печать»');
+  assert.match(btn, /reportPrintHtml\(r, \{ title: printTitle\(\), \.\.\.\(st\.resultMeta \|\| \{ from: st\.from, to: st\.to \}\) \}, reportTx\(\)\)/);
+  assert.match(btn, /window\.open\('', '_blank'\)/);
+  assert.doesNotMatch(btn, /supabase\.rpc/);
+  assert.match(btn, /if \(rep\.mode === 'charts' && !rep\.exports\) printBtn\.style\.display = 'none';/);
+  assert.match(hub, /downloadBtn,\s*printBtn,/);
+  assert.match(hub, /printBtn\.disabled = downloadBtn\.disabled;/);
+  assert.match(hub, /downloadBtn\.disabled = true;\s*printBtn\.disabled = true;/);
+  assert.match(hub, /st\.resultMeta = \{ from: args\.from, to: args\.to, places \};/);
+  // report-print.js и конструктор читают ОДИН модуль report-totals.js (тот же адрес).
+  const printSrc = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin', 'views', 'report-print.js'), 'utf8');
+  assert.match(printSrc, /from '\.\/report-totals\.js\?v=rt3';/);
+});
+
 // Каждая задача, менявшая reports-hub.js, меняет и его штамп в admin.js: модуль
 // с прежним адресом браузер взял бы из своего кэша модулей.
 test('штамп reports-hub.js в admin.js — последний в серии журналов', () => {
   const admin = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin.js'), 'utf8');
-  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn3';/);
+  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn4';/);
 });

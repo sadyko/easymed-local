@@ -3,6 +3,9 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // JOURNALS_V1_PRINT (2026-10-02) — печатная страница отчёта (report-print.js); «Период: {from} — {to}», «Печать», «Итого» уже есть
+  "Здания: {list}": {"en":"Buildings: {list}","ru":"Здания: {list}","uz":"Binolar: {list}"},
+  "Филиалы: {list}": {"en":"Branches: {list}","ru":"Филиалы: {list}","uz":"Filiallar: {list}"},
   // JOURNALS_V1_WARD_CLASS (2026-10-02) — класс палаты в окне палаты (rooms-setup.js); «Люкс» и «Обычная» в словаре уже есть
   "Класс палаты": {"en":"Ward class","ru":"Класс палаты","uz":"Palata toifasi"},
   "— не задан —": {"en":"— not set —","ru":"— не задан —","uz":"— belgilanmagan —"},
