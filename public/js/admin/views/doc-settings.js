@@ -21,7 +21,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1
 // и открытие окна печати. Реэкспорт ниже сохраняет прежний публичный API.
 import { buildSheetHtml, esc, INPATIENT_DOC_DEFAULT_TEXT } from '../../shared/doc-render.js';   // INPATIENT_DOCS_V1
 // PRINT_AUTO_V1 — «Печать» сразу открывает окно принтера: скрипт печати — одним помощником.
-import { ensureAutoPrint } from '../../shared/print-auto.js';
+import { ensureAutoPrint, viewOnlySheet } from '../../shared/print-auto.js';
 
 const KEY = 'easymed:doc-settings:v1';
 let _cache = null;   // DB/localStorage-hydrated branding (clinic-global)
@@ -194,16 +194,24 @@ export { buildSheetHtml, esc };
 // врача, лаборатория, счёт, чек и квитанция кассы — receipt-print.js тоже
 // печатает отсюда) открывались страницей без печати. Теперь окно получает
 // скрипт печати общим помощником ensureAutoPrint — только если своего нет.
+//
+// autoPrint: false — «Открыть» (архив документов, ссылка в списке документов
+// карты, результат в истории болезни): окно только показывает документ —
+// печать сама не открывается (свой скрипт обёртки тоже убран), в углу окна
+// кнопка «Печать» — одно нажатие. «Печать» по умолчанию печатает сразу.
 // ---------------------------------------------------------------------------
-export function printableSheet({ type = 'invoice', title = null, idLine = null, data = null, bodyHtml = null, settings = null, head = null } = {}) {
+export function printableSheet({ type = 'invoice', title = null, idLine = null, data = null, bodyHtml = null, settings = null, head = null, autoPrint = true } = {}) {
     const s = settings || loadDocSettings();
-    const html = ensureAutoPrint(buildSheetHtml({ type, s, data, idLine, title, bodyHtml, head }));   // PRINT_AUTO_V1
+    const sheet = buildSheetHtml({ type, s, data, idLine, title, bodyHtml, head });
+    const html = autoPrint ? ensureAutoPrint(sheet)   // PRINT_AUTO_V1
+        : viewOnlySheet(sheet, { printLabel: tr('Печать'), accent: s.accent });
     const w = window.open('', '_blank', 'width=900,height=1100');
     if (w) { w.document.open(); w.document.write(html); w.document.close(); return; }
-    openInlinePrintPreview(html);
+    // У предпросмотра своя «Печать» — кнопка окна «Открыть» ему не нужна.
+    openInlinePrintPreview(autoPrint ? html : sheet, { autoPrint });
 }
 
-function openInlinePrintPreview(html) {
+function openInlinePrintPreview(html, { autoPrint = true } = {}) {
     const overlay = document.createElement('div');
     overlay.className = 'modal';
     overlay.style.zIndex = '160';
@@ -232,9 +240,9 @@ function openInlinePrintPreview(html) {
     if (doc) { doc.open(); doc.write(stripped); doc.close(); }
     // PRINT_AUTO_V1 — окно заблокировано, а шагов не больше: окно принтера
     // открывается и здесь само (после загрузки бланка и шрифтов), «Печать» —
-    // в фокусе: Enter или одно нажатие печатает ещё раз.
+    // в фокусе: Enter или одно нажатие печатает ещё раз. «Открыть» — только показ.
     try { printBtn.focus(); } catch (e) { /* фокус — удобство */ }
-    autoPrintFrame(iframe, doc, printFrame);
+    if (autoPrint) autoPrintFrame(iframe, doc, printFrame);
 }
 
 // PRINT_AUTO_V1 — печать бланка в iframe после его загрузки и шрифтов, один раз.

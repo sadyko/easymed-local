@@ -34,7 +34,8 @@ async function openDoc(d) {
     }
     if (d.body) {
         const type = _DOC_TEMPLATE[d.doc_type] || 'conclusion';
-        try { printableSheet({ type, data: d.body, title: d.title || 'Документ', settings: loadDocSettings() }); return; }
+        // PRINT_AUTO_V1 — «Открыть»: окно показывает документ, печать — его кнопкой «Печать».
+        try { printableSheet({ type, data: d.body, title: d.title || 'Документ', settings: loadDocSettings(), autoPrint: false }); return; }
         catch (e) { console.warn('[docs-archive] render', e && e.message); }
     }
     toast(d.title || 'Документ', 'info');

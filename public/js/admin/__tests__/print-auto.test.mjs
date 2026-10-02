@@ -53,7 +53,7 @@ globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalT
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ data: null }), headers: { getSetCookie: () => [] } });
 
-const { ensureAutoPrint, hasAutoPrint, AUTO_PRINT_SCRIPT } = await import('../../shared/print-auto.js');
+const { ensureAutoPrint, hasAutoPrint, AUTO_PRINT_SCRIPT, withoutAutoPrint, viewOnlySheet } = await import('../../shared/print-auto.js');
 const { printableSheet } = await import('../views/doc-settings.js?v=noqr1');
 const { buildSheetHtml } = await import('../../shared/doc-render.js');
 const { printInvoiceCheck, printInvoiceSheetById, printSlip } = await import('../views/receipt-print.js?v=rp1');
@@ -234,4 +234,101 @@ test('окно заблокировано: предпросмотр без ск�
     printBtn.onclick();
     assert.equal(frame.printed, 2, '«Печать» — одно нажатие');
   } finally { popupBlocked = false; }
+});
+
+// ---------------------------------------------------------------------------
+// PRINT_AUTO_V1 (координатор, 02.10) — «Открыть» НЕ печатает: окно только
+// показывает документ (без скрипта печати — ни помощника, ни своего у
+// обёртки), а «Печать» в углу окна печатает одним нажатием и на бумагу не
+// попадает. «Печать» кабинета и касса — по-прежнему сразу.
+// ---------------------------------------------------------------------------
+test('withoutAutoPrint / viewOnlySheet: скрипты печати убраны, прочие скрипты целы; кнопка «Печать» одна, на бумаге скрыта, подпись экранирована', () => {
+  const other = '<script>var x = 1;</script>';
+  const html = '<html><body><p>Бланк</p>' + other + '<script>window.onload=function(){window.print();};</script></body></html>';
+  assert.equal(withoutAutoPrint(html), '<html><body><p>Бланк</p>' + other + '</body></html>');
+  assert.equal(withoutAutoPrint(ensureAutoPrint('<body>x</body>')), '<body>x</body>', 'скрипт помощника — тоже');
+  const view = viewOnlySheet(html, { printLabel: 'Печать <b>', accent: '#0a7d6e' });
+  assert.equal(scripts(view), 1, 'остался только не-печатный скрипт');
+  assert.ok(view.includes(other));
+  assert.equal((view.match(/class="pa-view-print"/g) || []).length, 1, 'одна кнопка');
+  assert.match(view, /<button type="button" class="pa-view-print" onclick="window\.print\(\)">Печать &lt;b&gt;<\/button>/);
+  assert.match(view, /@media print\s*\{\s*\.pa-view-print\s*\{\s*display:\s*none\s*!important;?\s*\}\s*\}/, 'на бумаге кнопки нет');
+  assert.match(view, /#0a7d6e/, 'цвет клиники');
+  assert.ok(view.indexOf('pa-view-print') < view.lastIndexOf('</body>'));
+  assert.doesNotMatch(viewOnlySheet('<body>x</body>', { accent: 'red;}</style><script>alert(1)</script>' }), /alert/, 'цвет — только #rrggbb');
+  assert.equal(viewOnlySheet(viewOnlySheet('<body>x</body>')), viewOnlySheet('<body>x</body>'), 'вторую кнопку не добавляет');
+});
+
+test('«Открыть» (autoPrint: false): документ без скрипта печати — и оформленный бланк, и обёртка со своим скриптом; «Печать» — с ним', () => {
+  const CASES = [
+    ['conclusion', { data: { patientName: 'Азизов Б.', __editor: true } }],
+    ['diag', { data: { patientName: 'Азизов Б.', service: 'УЗИ', description: 'x', conclusion: 'Норма', __editor: true } }],
+    ['lab', { data: null }],
+    ['conclusion', { title: 'Заключение врача', bodyHtml: '<h3>Заключение врача</h3><p>Азизов Б.</p>' }],   // обёртка doc-render.js
+  ];
+  for (const [type, extra] of CASES) {
+    opened.length = 0;
+    printableSheet({ type, settings: S, autoPrint: false, ...extra });
+    assert.equal(opened.length, 1, type + ': окно открыто');
+    assert.equal(scripts(opened[0]), 0, type + ': ни одного скрипта — окно печати не откроется само');
+    assert.ok(!opened[0].includes('PRINT_AUTO_V1'), type + ': без помощника');
+    assert.equal((opened[0].match(/class="pa-view-print"/g) || []).length, 1, type + ': «Печать» в окне — одна кнопка');
+    assert.match(opened[0], /onclick="window\.print\(\)">Печать<\/button>/, type + ': кнопка печатает одним нажатием');
+    opened.length = 0;
+    printableSheet({ type, settings: S, ...extra });
+    assert.equal(prints(opened[0]), 1, type + ': «Печать» — печать сразу, один вызов');
+    assert.equal(scripts(opened[0]), 1);
+    assert.ok(!opened[0].includes('pa-view-print'), type + ': у «Печать» кнопки в окне нет — печать уже идёт');
+  }
+});
+
+test('«Открыть» при заблокированном окне: предпросмотр не печатает сам; «Печать» предпросмотра — одно нажатие', async () => {
+  popupBlocked = true;
+  try {
+    overlays.length = 0;
+    printableSheet({ type: 'diag', data: { patientName: 'Азизов Б.', service: 'УЗИ', conclusion: 'Норма', __editor: true }, settings: S, autoPrint: false });
+    assert.equal(overlays.length, 1);
+    const { iframe: frame, '.btn-primary': printBtn } = overlays[0].parts;
+    assert.match(frame.written, /Азизов Б\./);
+    assert.ok(!frame.written.includes('pa-view-print'), 'у предпросмотра своя «Печать» — вторая не нужна');
+    frame.contentDocument.readyState = 'complete';
+    if (frame.onload) frame.onload();
+    await tick(400);
+    assert.equal(frame.printed, 0, 'окно печати само не открылось');
+    printBtn.onclick();
+    assert.equal(frame.printed, 1);
+  } finally { popupBlocked = false; }
+});
+
+// Кто «Открыть», а кто «Печать» — по месту в исходнике (экраны без DOM не поднимаются).
+const sliceFn = (text, start, end) => {
+  const a = text.indexOf(start);
+  assert.ok(a >= 0, 'нет ' + start);
+  const b = text.indexOf(end, a + start.length);
+  return text.slice(a, b < 0 ? undefined : b);
+};
+test('«Открыть» — без печати: архив документов, ссылка в списке документов карты, результат в истории болезни', () => {
+  const archive = sliceFn(src('public/js/admin/views/docs-archive.js'), 'async function openDoc(d)', 'async function loadDocs()');
+  assert.match(archive, /printableSheet\(\{ type, data: d\.body, title: d\.title \|\| 'Документ', settings: loadDocSettings\(\), autoPrint: false \}\)/);
+  const tabs = sliceFn(src('public/js/admin/views/case-file-tabs.js'), 'async function openResultDoc(', '\n}\n');
+  assert.equal((tabs.match(/printableSheet\(\{/g) || []).length, 2);
+  assert.equal((tabs.match(/autoPrint: false/g) || []).length, 2, 'и анализ, и заключение диагностики');
+  const card = src('public/js/admin/views/patient-card.js');
+  // Ссылка-название документа — «Открыть»; кнопка «Печать» той же строки — печать сразу.
+  assert.match(card, /onclick: \(ev\) => \{ ev\.preventDefault\(\); openRow\(d, VIEW_ONLY\); \}/);
+  assert.match(card, /title: 'Печать',\s*onclick: \(\) => openRow\(d\),/);
+  assert.match(card, /const openRow = \(d, view\) => d\._lab \? printLabDay\(d, view\) : \(d\._ws \? printWsDoc\(d, view\) : openDoc\(d, view\)\);/);
+  assert.match(card, /const VIEW_ONLY = \{ autoPrint: false \};/);
+  for (const fn of ['async function openDoc(d, view = null)', 'async function printLabDay(doc, view = null)', 'function printWsDoc(d, view = null)']) {
+    const body = sliceFn(card, fn, '\n        }\n');
+    assert.match(body, /printableSheet\(\{[\s\S]*?\.\.\.view/, fn + ': вид окна — от вызывающего');
+  }
+});
+
+test('«Печать» — печать сразу: кабинет врача и касса не просят «только показать»', () => {
+  for (const rel of ['public/js/admin/views/service-workspace.js', 'public/js/admin/views/receipt-print.js', 'public/js/admin/views/cashier-desk.js', 'public/js/admin/views/laboratory.js']) {
+    assert.doesNotMatch(src(rel), /autoPrint:\s*false/, rel);
+  }
+  const ds = src('public/js/admin/views/doc-settings.js');
+  assert.match(ds, /autoPrint = true/, 'по умолчанию printableSheet печатает');
 });

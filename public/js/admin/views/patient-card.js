@@ -1499,7 +1499,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // диагностики и результаты анализов открывались не своим бланком, а
         // старой обёрткой .sheet, которая не умеет делиться на страницы.
         const SHEET_TYPE = { protocol: 'conclusion', diag: 'diag', lab: 'lab' };
-        async function openDoc(d) {
+        async function openDoc(d, view = null) {   // PRINT_AUTO_V1 — view: { autoPrint: false } у «Открыть»
             // PATIENT_FILE_ATTACH_V1 — отозванный документ не открывается, и
             // экран говорит об этом ЗАРАНЕЕ, вместо того чтобы получить 410 в
             // новой пустой вкладке.
@@ -1526,7 +1526,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 return;
             }
             if (d.body && typeof d.body === 'object') {
-                printableSheet({ type: SHEET_TYPE[d.doc_type] || 'conclusion', title: d.title || null, data: d.body });
+                printableSheet({ type: SHEET_TYPE[d.doc_type] || 'conclusion', title: d.title || null, data: d.body, ...view });   // PRINT_AUTO_V1
                 return;
             }
             toast('У записи нет содержимого.', 'info');
@@ -1618,7 +1618,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // страницы печатались обрубленными. Теперь — шаблон из «Настройки →
         // Документы» (type:'lab'), тот же, что в лаборатории: один бланк, один
         // вид, куда бы пациент за ним ни пришёл.
-        async function printLabDay(doc) {
+        async function printLabDay(doc, view = null) {   // PRINT_AUTO_V1
             // LAB_DOC_ONE_PER_VISIT_V1 — каждая панель визита своей группой:
             // сплошной таблицей не видно, где кончается ОАК и начинается ТОРЧ.
             const byPanel = new Map();
@@ -1685,6 +1685,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             printableSheet({
                 type: 'lab',
                 title: 'Результаты анализов',
+                ...view,   // PRINT_AUTO_V1
                 data: {
                     requestNo: vsIds.length === 1 ? labAccession(vsIds[0]) : '',
                     dateIn,
@@ -1709,7 +1710,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         };
         /* i18n-exempt-start: печать «Заключения врача» — печатный документ, намеренно русский */
         /* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
-        function printWsDoc(d) {
+        function printWsDoc(d, view = null) {   // PRINT_AUTO_V1
             const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
             const blocks = Object.entries(d.fields || {})
                 .filter(([, v]) => String(v || '').replace(/<[^>]*>/g, '').trim())
@@ -1720,7 +1721,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 ${blocks || '<div style="color:#889;font-size:13px">Документ подписан без заполненных разделов.</div>'}`;
             /* type-scale-exempt-end */
             /* i18n-exempt-end */
-            printableSheet({ type: 'conclusion', title: d.title, bodyHtml });
+            printableSheet({ type: 'conclusion', title: d.title, bodyHtml, ...view });   // PRINT_AUTO_V1
         }
         // PATIENT_TAB_ACCESS_V1 — список документов приезжает вместе с картой
         // (rpc patient_card), через дверь вкладки «Документы»; отдельного
@@ -1773,13 +1774,16 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 || (d.body && typeof d.body === 'object' && (d.body.doctorName || (d.body.meta && d.body.meta.signedBy)))
                 || d.created_by_name
                 || '';
-            const openRow = (d) => d._lab ? printLabDay(d) : (d._ws ? printWsDoc(d) : openDoc(d));
+            // PRINT_AUTO_V1 — название документа — «Открыть» (только показ, печать — кнопкой окна),
+            // кнопка «Печать» строки — печать сразу.
+            const VIEW_ONLY = { autoPrint: false };
+            const openRow = (d, view) => d._lab ? printLabDay(d, view) : (d._ws ? printWsDoc(d, view) : openDoc(d, view));
             const tbody = h('tbody');
             for (const d of docs) {
                 tbody.appendChild(h('tr', null,
                     h('td', null, h('a', {
                         href: '#', style: { fontWeight: 600 },
-                        onclick: (ev) => { ev.preventDefault(); openRow(d); },
+                        onclick: (ev) => { ev.preventDefault(); openRow(d, VIEW_ONLY); },   // PRINT_AUTO_V1
                     }, d.title || d.file_name || trf('Документ #{id}', { id: d.id })),
                         h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '3px' } },
                             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, DOC_TYPE_RU[d.doc_type] || d.doc_type || ''),

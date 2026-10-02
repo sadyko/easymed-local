@@ -147,6 +147,7 @@ async function openResultDoc(it, kind, patient) {
         printableSheet({
             type: 'lab', title: tr('Результаты анализов'),
             data: Object.assign({}, head, { dateOut: it.at ? dateNumeric(it.at) : '', groups: [{ title: it.name || '', tests }] }),
+            autoPrint: false,   // PRINT_AUTO_V1 — «Открыть»: только показ, печать — кнопкой окна
         });
         return;
     }
@@ -155,6 +156,7 @@ async function openResultDoc(it, kind, patient) {
     printableSheet({
         type: 'diag', title: tr('Заключение диагностики'),
         data: Object.assign({}, head, { issueDate: it.at ? dateNumeric(it.at) : '', conclusion: text }),
+        autoPrint: false,   // PRINT_AUTO_V1 — «Открыть»: только показ, печать — кнопкой окна
     });
 }
 

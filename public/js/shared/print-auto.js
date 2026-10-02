@@ -36,10 +36,50 @@ export function hasAutoPrint(html) {
     return PRINT_CALL_RE.test(String(html == null ? '' : html));
 }
 
+/** Вставка перед последним </body> (нет его — в конец). */
+function beforeBodyEnd(s, chunk) {
+    const at = s.toLowerCase().lastIndexOf('</body>');
+    return at < 0 ? s + chunk : s.slice(0, at) + chunk + s.slice(at);
+}
+
 /** HTML окна печати → тот же HTML, который печатается сам; печать уже есть — без изменений. */
 export function ensureAutoPrint(html) {
     const s = String(html == null ? '' : html);
     if (hasAutoPrint(s)) return s;
-    const at = s.toLowerCase().lastIndexOf('</body>');
-    return at < 0 ? s + AUTO_PRINT_SCRIPT : s.slice(0, at) + AUTO_PRINT_SCRIPT + s.slice(at);
+    return beforeBodyEnd(s, AUTO_PRINT_SCRIPT);
+}
+
+// ---------------------------------------------------------------------------
+// «Открыть» — окно, которое только ПОКАЗЫВАЕТ документ (координатор, 02.10):
+// архив документов, ссылка-название в списке документов карты, результат в
+// истории болезни. Окно печати само не открывается: убирается и скрипт
+// помощника, и свой скрипт запасной обёртки doc-render.js. Печать — кнопкой
+// «Печать» в углу окна: одно нажатие, на бумагу кнопка не попадает.
+// ---------------------------------------------------------------------------
+
+/** HTML без скриптов, которые зовут window.print(); прочие скрипты остаются. */
+export function withoutAutoPrint(html) {
+    return String(html == null ? '' : html)
+        .replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gi, (m, body) => (PRINT_CALL_RE.test(body) ? '' : m));
+}
+
+const VIEW_PRINT_CLASS = 'pa-view-print';
+const escText = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/**
+ * Окно «Открыть»: документ без печати при открытии и с кнопкой «Печать».
+ * printLabel — подпись на языке экрана (переводит вызывающий); accent — цвет
+ * клиники (#rgb / #rrggbb, иначе свой).
+ */
+export function viewOnlySheet(html, { printLabel = 'Печать', accent = '' } = {}) {
+    const s = withoutAutoPrint(html);
+    if (s.includes('class="' + VIEW_PRINT_CLASS + '"')) return s;
+    const color = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(String(accent || '')) ? accent : '#167873';
+    const chunk = '<style>.' + VIEW_PRINT_CLASS + '{position:fixed;top:16px;right:16px;z-index:10;'
+        + 'padding:9px 18px;border:0;border-radius:10px;background:' + color + ';color:#fff;'
+        + 'font:600 13.5px/1.2 system-ui,-apple-system,"Segoe UI",sans-serif;cursor:pointer;'
+        + 'box-shadow:0 2px 10px rgba(0,0,0,.18)}'
+        + '@media print { .' + VIEW_PRINT_CLASS + ' { display: none !important; } }</style>'
+        + '<button type="button" class="' + VIEW_PRINT_CLASS + '" onclick="window.print()">' + escText(printLabel) + '</button>';
+    return beforeBodyEnd(s, chunk);
 }
