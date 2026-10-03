@@ -3082,25 +3082,12 @@ boot().catch(e => {
 if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
     try { window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); }); } catch (e) {}
 }
-// PWA_INSTALL_FAB_V1 — a prominent, pulsating install button (the native address-bar icon is easy to miss).
-if (typeof window !== 'undefined') {
-    let __emInstallPrompt = null;
-    const __emStandalone = () => !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
-    const __emDlSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-    function __emShowInstall() {
-        if (__emStandalone() || document.getElementById('em-install-btn')) return;
-        const btn = document.createElement('button');
-        btn.id = 'em-install-btn'; btn.type = 'button'; btn.className = 'em-install-fab';
-        btn.title = 'Установить EasyMed как приложение';
-        btn.innerHTML = __emDlSvg + '<span>Установить приложение</span>';
-        btn.addEventListener('click', async () => {
-            if (!__emInstallPrompt) return;
-            btn.disabled = true;
-            try { __emInstallPrompt.prompt(); await __emInstallPrompt.userChoice; } catch (e) {}
-            __emInstallPrompt = null; btn.remove();
-        });
-        (document.body || document.documentElement).appendChild(btn);
-    }
-    window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); __emInstallPrompt = e; __emShowInstall(); });
-    window.addEventListener('appinstalled', () => { const b = document.getElementById('em-install-btn'); if (b) b.remove(); __emInstallPrompt = null; });
-}
+// PWA_ADDRESS_BAR_ONLY_V1 — УСТАНОВКА ТОЛЬКО ЗНАЧКОМ В АДРЕСНОЙ СТРОКЕ.
+// Здесь была своя мигающая кнопка «Установить приложение» (PWA_INSTALL_FAB_V1).
+// Она перехватывала событие «можно установить» и звала preventDefault() — то
+// есть глушила собственное предложение Chrome ради своей кнопки. Владелец хочет
+// как у YouTube: значок «Установить» справа в адресной строке, без кнопок на
+// странице. Поэтому перехвата больше нет: Chrome сам показывает и значок, и
+// своё предложение. На других компьютерах клиники (http://10.x.x.x:8000 — не
+// «защищённый» адрес) значок появляется после public/setup/EasyMed-ustanovka.cmd
+// (PC_SETUP_INSTALL_V1). Страж — __tests__/pwa-install.test.mjs.

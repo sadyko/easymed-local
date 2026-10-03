@@ -3934,29 +3934,10 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    .modal-grouped поля и так тянутся по ячейке. Правила без единого носителя
    в разметке — мёртвый CSS, поэтому они удалены вместе со страницей. */
 
-/* ── PWA_INSTALL_FAB_V1 ─────────────────────────────────────────────────────
-   Prominent, pulsating «install app» button. White halo keeps it visible on a
-   dark background; teal gradient keeps it visible on a light one. */
-#em-install-btn.em-install-fab {
-    position: fixed; right: 20px; bottom: 20px; z-index: 99999;
-    display: inline-flex; align-items: center; gap: 9px;
-    padding: 12px 18px; border: 0; border-radius: 999px;
-    background: linear-gradient(135deg, #167873 0%, #0ea5a0 100%);
-    color: #ffffff; font-family: inherit; font-size: 13.5px; font-weight: 800; letter-spacing: .01em; line-height: 1;
-    cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
-    box-shadow: 0 8px 24px rgba(22,120,115,.5), 0 0 0 3px rgba(255,255,255,.9), 0 0 0 0 rgba(14,165,160,.6);
-    animation: em-install-pulse 1.7s cubic-bezier(.4,0,.2,1) infinite;
-}
-#em-install-btn.em-install-fab:hover  { filter: brightness(1.07); transform: translateY(-1px); }
-#em-install-btn.em-install-fab:active { transform: translateY(0); }
-#em-install-btn.em-install-fab svg    { flex: 0 0 auto; }
-@keyframes em-install-pulse {
-    0%   { box-shadow: 0 8px 24px rgba(22,120,115,.5), 0 0 0 3px rgba(255,255,255,.9), 0 0 0 0 rgba(14,165,160,.6); }
-    70%  { box-shadow: 0 8px 24px rgba(22,120,115,.5), 0 0 0 3px rgba(255,255,255,.9), 0 0 0 18px rgba(14,165,160,0); }
-    100% { box-shadow: 0 8px 24px rgba(22,120,115,.5), 0 0 0 3px rgba(255,255,255,.9), 0 0 0 0 rgba(14,165,160,0); }
-}
-@media (prefers-reduced-motion: reduce) { #em-install-btn.em-install-fab { animation: none; } }
-@media (max-width: 600px) { #em-install-btn.em-install-fab { right: 12px; bottom: 12px; font-size: 13.5px; padding: 11px 15px; } }
+/* ── PWA_ADDRESS_BAR_ONLY_V1 ────────────────────────────────────────────────
+   Здесь были стили мигающей кнопки «Установить приложение»
+   (PWA_INSTALL_FAB_V1). Кнопки больше нет — устанавливают значком Chrome
+   в адресной строке (см. public/js/admin.js, тот же маркер). */
 
 /* ============================ SETTINGS_HUB_V4 — «Настройки» landing ============================
    The hub used to be built from ad-hoc inline styles with a `minmax(640px, 1fr)`
