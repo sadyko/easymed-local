@@ -752,7 +752,7 @@ function setVariant(type, key) {
 // (динамический import — разрешённый способ позвать соседний экран).
 async function openDocTemplatesModal() {
     try {
-        const { openTemplateLibraryModal } = await import('./service-workspace.js?v=cabr8');   // CABINET_FIX_V1_TPL — тот же штамп, что в admin.js · RX_TEMPLATES_V1 · CABINET_FIX_V1_R1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3 · CABINET_FIX_V1_R4 — cabr4 · CABINET_FIX_V1_R5 — cabr5 · CABINET_FIX_V1_R6 — cabr6 · cabr6b (п. 2, свои черновики) · cabr6c (ключ записи) · CABINET_FIX_V1_R7 — cabr7 · cabr7b · cabr7c · CABINET_FIX_V1_R8 — cabr8
+        const { openTemplateLibraryModal } = await import('./service-workspace.js?v=cabr8d');   // CABINET_FIX_V1_TPL — тот же штамп, что в admin.js · RX_TEMPLATES_V1 · CABINET_FIX_V1_R1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3 · CABINET_FIX_V1_R4 — cabr4 · CABINET_FIX_V1_R5 — cabr5 · CABINET_FIX_V1_R6 — cabr6 · cabr6b (п. 2, свои черновики) · cabr6c (ключ записи) · CABINET_FIX_V1_R7 — cabr7 · cabr7b · cabr7c · CABINET_FIX_V1_R8 — cabr8 · CABINET_DX_KEEP_CONDITIONS_V1 — cabr8d
         openTemplateLibraryModal(null, { manage: true });
     } catch (e) {
         toast(trf('Не удалось открыть шаблоны: {msg}', { msg: (e && e.message) || '' }), 'fail');

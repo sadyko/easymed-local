@@ -299,7 +299,8 @@ test('7: архив подписи не записался — вопрос «П
 });
 
 // ─── 8. «×» у «Диагноза» с кодами — через удаление диагнозов, с ожиданием записи ─
-test('8: «×» у «Диагноза» с кодами — коды уходят и из карты пациента (patient_conditions); отказ записи — экран и записи не расходятся', async () => {
+// CABINET_DX_KEEP_CONDITIONS_V1 — решение владельца: коды уходят только из документа приёма, список состояний пациента не трогается.
+test('8: «×» у «Диагноза» с кодами — коды уходят из документа (список состояний пациента не трогается); отказ записи — экран и записи не расходятся', async () => {
     LOG.length = 0;
     const ctx = await opened(12, notesOf({ primary_diagnosis: 'Текст' }, { diagnoses: [MSUD, { code: 'K29.7', name: 'Гастрит', type: 'concomitant' }], dxSplit: 1 }));
     answerConfirm(true);
@@ -310,7 +311,7 @@ test('8: «×» у «Диагноза» с кодами — коды уходя�
     assert.equal((await WS.currentPayload(ctx)).diagnoses.length, 2, 'отказ записи — а коды убраны с экрана');
     assert.equal(await WS.wsRemoveSection(ctx, 'diagnosis'), true);
     assert.deepEqual(parsed(12).diagnoses, []);
-    assert.deepEqual(LOG.filter((e) => e.kind === 'cond-del').map((e) => e.code).sort(), ['E71.0', 'K29.7'], 'коды остались в карте пациента');
+    assert.deepEqual(LOG.filter((e) => e.kind === 'cond-del'), [], 'снятые коды убраны и из списка состояний пациента');   // CABINET_DX_KEEP_CONDITIONS_V1
     assert.equal(field(ctx, 'primary_diagnosis').innerHTML, '');
 });
 

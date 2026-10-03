@@ -3950,9 +3950,10 @@ export function wsRemoveSection(ctx, sec) {
             return false;
         }
         // CABINET_FIX_V1_R4 (п. 8) — коды уходят как у «Убрать» в МКБ-10 (removeDiagnosis):
-        // и из записей строки, и из карты пациента (patient_conditions). Сначала —
-        // запись; отказ (подпись «в пути», сбой) — ничего не меняется ни на экране,
-        // ни в состоянии строки. Возвращает Promise<boolean>.
+        // из записей строки. CABINET_DX_KEEP_CONDITIONS_V1 — список состояний пациента
+        // (patient_conditions) не трогается (решение владельца). Сначала — запись; отказ
+        // (подпись «в пути», сбой) — ничего не меняется ни на экране, ни в состоянии
+        // строки. Возвращает Promise<boolean>.
         if (dxList.length) {
             return removeAllDiagnoses(ctx).then((ok) => {
                 if (!ok) return false;
@@ -3989,15 +3990,9 @@ async function removeAllDiagnoses(ctx) {
     if (!await writePayload(ctx, next, {}, { reapply })) return false;
     if (wsState.ctx === ctx) { try { paintDiagnoses(ctx); } catch (e) { /* бланк перерисуется позже */ } }
     else ctx.__wsDirty = true;
-    if (ctx.patient && ctx.patient.id) {
-        for (const d of removed) {
-            if (!d || !d.code) continue;
-            try {
-                await supabase.from('patient_conditions').delete()
-                    .eq('patient_id', ctx.patient.id).eq('code', d.code).eq('status', 'active');
-            } catch (e) { /* диагноз снят с приёма; карта пациента — при следующей правке */ }
-        }
-    }
+    // CABINET_DX_KEEP_CONDITIONS_V1 — решение владельца: снятый код меняет только документ
+    // этого приёма; список состояний пациента (patient_conditions) не трогается —
+    // ошибочное состояние убирают руками в карте пациента.
     return true;
 }
 // WS_EXAM_AND_FREE_V1 — СВОЙ РАЗДЕЛ ПРИЁМА.
@@ -4324,13 +4319,10 @@ async function removeDiagnosis(ctx, idx) {
     };
     if (!await writePayload(ctx, payload, {}, { reapply })) return;
     paintDiagnoses(ctx);
-    // AURORA_DX_SYNC_V1 — drop the matching active condition from the patient card.
-    if (removed && removed.code && ctx.patient?.id) {
-        try {
-            await supabase.from('patient_conditions').delete()
-                .eq('patient_id', ctx.patient.id).eq('code', removed.code).eq('status', 'active');
-        } catch (e) {}
-    }
+    // CABINET_DX_KEEP_CONDITIONS_V1 — решение владельца: снятый код меняет только документ
+    // этого приёма; список состояний пациента (patient_conditions) не трогается (раньше
+    // здесь удалялось активное состояние с тем же кодом — AURORA_DX_SYNC_V1). Ошибочное
+    // состояние убирают руками в карте пациента.
 }
 
 // МКБ-10 picker modal.
