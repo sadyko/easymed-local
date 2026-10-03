@@ -110,7 +110,10 @@ export function answerConfirm(v) { confirmAnswer = v; }
 
 export function installFakeDom() {
     globalThis.Node = El;
-    globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {}, clear() {} };
+    // TEST_LOCALE_RU_V1 — язык экрана задан явно, как у клиники: иначе i18n берёт его из
+    // navigator.language машины (ru-RU здесь, en-US на Ubuntu CI) и проверки текстов
+    // зависят от того, где их запустили (выпуск 3.16.0: 40 «падений» только в CI).
+    globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
     const toastEl = new El('div');
     Object.defineProperty(toastEl, 'textContent', { get() { return ''; }, set(v) { TOASTS.push(String(v)); }, configurable: true });
     globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, innerWidth: 1440, innerHeight: 900, addEventListener() {}, open: () => null };
