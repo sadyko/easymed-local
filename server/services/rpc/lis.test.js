@@ -1156,3 +1156,39 @@ test('D10: код с U+FFFD (кириллица в «Код на ЛИС» не �
   db.close();
 });
 
+// ── LIS_VENDOR_EXACT_V1 — D14: кто подключён к порту приёма (listenerStatus().peers) ──
+// Прибор, который подключился и шлёт не то (ASTM, формат Autobio, Unicode),
+// раньше выглядел так же, как «никто не подключался». Слушатель запоминает
+// соединения (server/lis/index.js — другая часть работы), а lis_listeners
+// обязан донести их до экрана как есть: только данные, без сокетов и функций.
+// Ответ слушателя здесь подставлен руками: тест про RPC, а не про слушатель.
+test('D14: lis_listeners отдаёт peers слушателя — поля как есть, без сокетов; нет списка — пустой', async () => {
+  const mod = await import('./lis.js');
+  assert.equal(typeof mod.listenersReply, 'function', 'чистая сборка ответа lis_listeners');
+  const now = new Date('2026-10-06T08:00:00Z');
+  const status = {
+    listening: [2575], failed: [], dialing: [],
+    peers: [
+      { ip: '192.168.1.33', port: 2575, connectedAt: '2026-10-06T07:58:00Z', lastRxAt: '2026-10-06T07:59:30Z',
+        frames: 0, noiseBytes: 412, noiseHint: 'astm', open: true, socket: { destroy() {} }, onData() {} },
+      { ip: '192.168.1.40', port: 2575, connectedAt: '2026-10-06T07:00:00Z', lastRxAt: null,
+        frames: 0, noiseBytes: 0, noiseHint: null, open: true },
+    ],
+  };
+  const out = mod.listenersReply(status, now);
+  assert.equal(out.now, '2026-10-06T08:00:00.000Z');
+  assert.deepEqual(out.listening, [2575]);
+  assert.deepEqual(out.peers, [
+    { ip: '192.168.1.33', port: 2575, connectedAt: '2026-10-06T07:58:00Z', lastRxAt: '2026-10-06T07:59:30Z',
+      frames: 0, noiseBytes: 412, noiseHint: 'astm', open: true },
+    { ip: '192.168.1.40', port: 2575, connectedAt: '2026-10-06T07:00:00Z', lastRxAt: null,
+      frames: 0, noiseBytes: 0, noiseHint: null, open: true },
+  ], 'сокет и функции не уходят в ответ');
+  assert.ok(JSON.stringify(out), 'ответ сериализуется');
+  // Слушатель старее (peers ещё нет) — пустой список, а не undefined.
+  assert.deepEqual(mod.listenersReply({ listening: [], failed: [], dialing: [] }, now).peers, []);
+  // Живой вызов: peers — всегда список.
+  const db = fresh();
+  assert.ok(Array.isArray(lisListeners(db, {}, LAB).peers));
+  db.close();
+});

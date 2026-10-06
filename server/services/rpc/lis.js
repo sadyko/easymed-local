@@ -413,7 +413,35 @@ function notGarbled(s) { const v = String(s == null ? '' : s); return v.includes
  */
 export function lisListeners(db, args, user) {
   guard(user);
-  return { ...listenerStatus(), now: new Date().toISOString() };   // LIS_REAL_ANALYZERS_V1 (экран) — часы сервера
+  return listenersReply(listenerStatus());   // LIS_VENDOR_EXACT_V1 — D14: и peers; часы сервера — как прежде
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 — D14: ответ lis_listeners из состояния слушателей.
+ *
+ * peers — соединения, которые приборы держат с портом приёма (server/lis/index.js
+ * listenerStatus): { ip, port, connectedAt, lastRxAt, frames, noiseBytes,
+ * noiseHint, open }. По ним экран говорит «прибор подключён и ждёт первую
+ * пробу» или «приходят данные, которые Easy-Med не понимает (похоже на ASTM)»:
+ * раньше и то и другое выглядело как «никто не подключался». Уходят только
+ * данные (строки, числа, да/нет, пусто) — сокет и функции в ответ не попадают;
+ * слушатель без peers (старее) — пустой список.
+ * @param {object} status  listenerStatus()
+ * @param {Date} [now]     «сейчас» сервера
+ */
+export function listenersReply(status, now = new Date()) {
+  const s = status || {};
+  const peers = Array.isArray(s.peers) ? s.peers.filter((p) => p && typeof p === 'object').map(plainPeer) : [];
+  return { ...s, peers, now: now.toISOString() };   // LIS_REAL_ANALYZERS_V1 (экран) — часы сервера
+}
+
+/** LIS_VENDOR_EXACT_V1 — D14: соединение — только его данные, без объектов и функций. */
+function plainPeer(p) {
+  const out = {};
+  for (const [k, v] of Object.entries(p)) {
+    if (v === null || ['string', 'number', 'boolean'].includes(typeof v)) out[k] = v;
+  }
+  return out;
 }
 
 /**
