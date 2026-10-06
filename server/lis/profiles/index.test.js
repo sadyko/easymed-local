@@ -196,6 +196,44 @@ test('BC-5300: псевдонимы BC-5300, BC5300, BC-5380, BC5380 — при�
   assert.equal(guessProfile({ app: 'BC-5390', facility: 'Mindray' }), null, 'BC-5390 (DMU) — другая модель, по имени не угадывается');
 });
 
+// LIS_VENDOR_EXACT_V1 — BC-20 — TCP-СЕРВЕР: адреса LIS у него нет (OM20, с. 9-5),
+// он ждёт звонка на своём порту 5100 (рабочий драйвер BC-20 bc20.js звонит на
+// :5100; REPORT B1). Экран «Добавить по адресу» берёт из lis_profiles connect и
+// defaultPort — раньше там было 'listen' и 2575, и форма не ставила «Easy-Med
+// подключается к прибору сам» и не предлагала 5100 (acceptance mindray-bc-20,
+// T3; clinic-boot C20).
+test('BC-20: Easy-Med звонит прибору сам (connect «dial»), порт прибора по умолчанию — 5100', () => {
+  const p = getProfile('mindray-bc-20');
+  assert.deepEqual([p.connect, p.defaultPort], ['dial', 5100]);
+  // Прочие модели клиники звонят в Easy-Med сами — их порт по-прежнему 2575.
+  for (const key of ['mindray-bc-5300', 'mindray-bs-200', 'mindray-bs-240', 'mindray-cl-900i', 'autobio-autolumo-a1000']) {
+    assert.equal(getProfile(key).defaultPort, 2575, key);
+    assert.notEqual(getProfile(key).connect, 'dial', key);
+  }
+  const allowed = ['listen', 'dial', 'unknown', undefined];
+  for (const q of listProfiles()) assert.ok(allowed.includes(q.connect), q.key + ': connect=' + q.connect);
+});
+
+// LIS_VENDOR_EXACT_V1 — «Типовые для модели» BC-20 — имена, которые прибор
+// пишет в OBX-3.2: GRA#/GRA% он не шлёт никогда, на проводе GRAN#/GRAN%
+// («10028^GRAN#^99MRC», «10030^GRAN%^99MRC» — таблица кодов семейства, BC-3600
+// OM с. D-32/D-33; так же BC-5150 и BC-30s; analyzers\mindray-bc-20.md, M6).
+// Подтверждённая из типовых GRA# оставляла строку бланка пустой на КАЖДОЙ пробе
+// («не пришли: … (GRA#)»). RDW-SD и P-LCR — из 20 параметров BC-20 (OM20, с. B-1).
+test('BC-20: типовые коды — как пишет прибор: GRAN#/GRAN% вместо GRA#/GRA%, RDW-SD и PLCR', () => {
+  const codes = getProfile('mindray-bc-20').channels.map((c) => c.code);
+  for (const never of ['GRA#', 'GRA%']) assert.ok(!codes.includes(never), never + ' BC-20 не шлёт');
+  assert.deepEqual([...codes].sort(), ['GRAN#', 'GRAN%', 'HCT', 'HGB', 'LYM#', 'LYM%', 'MCH', 'MCHC', 'MCV', 'MID#', 'MID%',
+    'MPV', 'PCT', 'PDW', 'PLCR', 'PLT', 'RBC', 'RDW-CV', 'RDW-SD', 'WBC'], 'двадцать параметров BC-20 — именами провода');
+  // Каждое имя — то, что match.js сравнивает с OBX-3.2 (компонент 2) настоящей строки.
+  const wire = ['6690-2^WBC^LN', '731-0^LYM#^LN', '736-9^LYM%^LN', '789-8^RBC^LN', '718-7^HGB^LN', '787-2^MCV^LN', '785-6^MCH^LN',
+    '786-4^MCHC^LN', '788-0^RDW-CV^LN', '21000-5^RDW-SD^LN', '4544-3^HCT^LN', '777-3^PLT^LN', '32623-1^MPV^LN', '32207-3^PDW^LN',
+    '10002^PCT^99MRC', '10027^MID#^99MRC', '10029^MID%^99MRC', '10028^GRAN#^99MRC', '10030^GRAN%^99MRC', '10014^PLCR^99MRC'];
+  assert.deepEqual(wire.map((x) => x.split('^')[1]).sort(), [...codes].sort());
+  assert.equal(findChannel('mindray-bc-20', 'gran#').code, 'GRAN#');
+  assert.equal(findChannel('mindray-bc-20', 'GRA#'), null);
+});
+
 // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 1: у BS-200 номер теста задаёт клиника
 // на каждом приборе (ItemID.ini) — «2» у двух BS-200 бывает разным тестом.
 // Подмены «та же модель» у такого профиля нет. У A1000 код позиции — код
