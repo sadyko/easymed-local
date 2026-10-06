@@ -806,6 +806,15 @@ export const STRINGS = {
   "Коды появятся, когда анализатор пришлёт первую пробу; номер теста — как в настройках тестов прибора. Пока код можно вписать руками.": {"en":"Codes will appear when the analyzer sends its first sample; the test number is as in the device test settings. For now you can type the code by hand.","ru":"Коды появятся, когда анализатор пришлёт первую пробу; номер теста — как в настройках тестов прибора. Пока код можно вписать руками.","uz":"Kodlar analizator birinchi namunani yuborganda paydo bo‘ladi; test raqami — qurilma test sozlamalaridagidek. Hozircha kodni qo‘lda yozish mumkin."},
   "Типовые для модели — по документам соседних моделей": {"en":"Typical for this model — from documents for related models","ru":"Типовые для модели — по документам соседних моделей","uz":"Model uchun odatiy — qo‘shni modellar hujjatlari bo‘yicha"},
   // LIS_REAL_ANALYZERS_V1 (экран) — END
+  // LIS_VENDOR_EXACT_V1 (2026-10-06) — «Анализаторы»: соединения с портом приёма (D14) — BEGIN
+  "С адреса {ip} приходят данные, которые Easy-Med не понимает ({hint}). Проверьте на анализаторе протокол HL7.": {"en":"Data that Easy-Med does not understand is arriving from {ip} ({hint}). Check on the analyzer that the protocol is HL7.","ru":"С адреса {ip} приходят данные, которые Easy-Med не понимает ({hint}). Проверьте на анализаторе протокол HL7.","uz":"{ip} manzilidan Easy-Med tushunmaydigan ma’lumotlar kelmoqda ({hint}). Analizatorda protokol HL7 ekanini tekshiring."},   // LIS_VENDOR_EXACT_V1
+  "Прибор {ip} подключён и ждёт первую пробу": {"en":"Device {ip} is connected and waiting for the first sample","ru":"Прибор {ip} подключён и ждёт первую пробу","uz":"{ip} qurilmasi ulangan va birinchi namunani kutmoqda"},   // LIS_VENDOR_EXACT_V1
+  "похоже на ASTM": {"en":"looks like ASTM","ru":"похоже на ASTM","uz":"ASTM ga o‘xshaydi"},   // LIS_VENDOR_EXACT_V1
+  "похоже на собственный формат Autobio — выберите HL7": {"en":"looks like Autobio’s own format — choose HL7","ru":"похоже на собственный формат Autobio — выберите HL7","uz":"Autobio’ning o‘z formatiga o‘xshaydi — HL7 ni tanlang"},   // LIS_VENDOR_EXACT_V1
+  "кодировка Unicode — выберите UTF-8": {"en":"Unicode encoding — choose UTF-8","ru":"кодировка Unicode — выберите UTF-8","uz":"Unicode kodlash — UTF-8 ni tanlang"},   // LIS_VENDOR_EXACT_V1
+  "HL7 без рамки MLLP": {"en":"HL7 without MLLP framing","ru":"HL7 без рамки MLLP","uz":"MLLP ramkasiz HL7"},   // LIS_VENDOR_EXACT_V1
+  "неизвестный формат": {"en":"unknown format","ru":"неизвестный формат","uz":"noma’lum format"},   // LIS_VENDOR_EXACT_V1
+  // LIS_VENDOR_EXACT_V1 — END
   // LIS_ANALYZER_LIST_V1 (ревью 2026-09-29, I1) — находок нет, но приборы в клинике есть
   "Новых анализаторов пока нет.": {"en":"No new analyzers yet.","ru":"Новых анализаторов пока нет.","uz":"Hozircha yangi analizatorlar yo‘q."},
   // LIS_ANALYZER_LIST_V1 (ревью 2026-09-29, M2) — инструкция: находка ждёт в «Добавить прибор»; экраны — их подписями на en/uz

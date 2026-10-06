@@ -215,3 +215,55 @@ test('колонка «Подключение»: кто кому звонит', 
   assert.deepEqual(connectionOf({ transport: 'mllp', host: '', port: null, dial: 1 }).params, { host: '—', port: '—' });
   assert.equal(connectionOf({ transport: 'serial' }), null, 'кабель COM — подписью транспорта, как прежде');
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D14: соединения с портом приёма (lis_listeners.peers) ──
+// Прибор подключился и шлёт не то (ASTM, формат Autobio, Unicode) — раньше это
+// выглядело так же, как «никто не подключался». Теперь — строкой с адресом и
+// подсказкой, что поправить на приборе; подключился и молчит — «ждёт первую пробу».
+test('D14: соединения — непонятные данные с подсказкой; подключён и молчит — ждёт первую пробу', async () => {
+  const { peerNotes, NOISE_HINT, PEER_NOISE_WINDOW_MIN } = await import('./lab-devices-lists.js');
+  assert.equal(typeof peerNotes, 'function');
+  const NOW = Date.parse('2026-10-06T08:00:00Z');
+  const ago = (min) => new Date(NOW - min * 60000).toISOString();
+  const peer = (over) => ({ ip: '192.168.1.33', port: 2575, connectedAt: ago(5), lastRxAt: ago(1), frames: 0, noiseBytes: 0, noiseHint: null, open: true, ...over });
+
+  // Непонятное — по подсказке слушателя; неизвестная подсказка — «неизвестный формат».
+  assert.deepEqual(NOISE_HINT, {
+    astm: 'похоже на ASTM',
+    autobio: 'похоже на собственный формат Autobio — выберите HL7',
+    utf16: 'кодировка Unicode — выберите UTF-8',
+    'hl7-unframed': 'HL7 без рамки MLLP',
+    other: 'неизвестный формат',
+  });
+  const NOISE = 'С адреса {ip} приходят данные, которые Easy-Med не понимает ({hint}). Проверьте на анализаторе протокол HL7.';
+  for (const [hint, key] of [['astm', NOISE_HINT.astm], ['autobio', NOISE_HINT.autobio], ['utf16', NOISE_HINT.utf16],
+    ['hl7-unframed', NOISE_HINT['hl7-unframed']], ['other', NOISE_HINT.other], [null, NOISE_HINT.other], ['что-то новое', NOISE_HINT.other]]) {
+    assert.deepEqual(peerNotes([peer({ noiseBytes: 412, noiseHint: hint })], [], NOW),
+      [{ ip: '192.168.1.33', kind: 'warn', key: NOISE, params: { ip: '192.168.1.33' }, hintKey: key }], String(hint));
+  }
+  // Подключён, ничего не прислал — ждёт первую пробу.
+  const WAIT = 'Прибор {ip} подключён и ждёт первую пробу';
+  assert.deepEqual(peerNotes([peer({ ip: '::ffff:192.168.1.40', lastRxAt: null })], [], NOW),
+    [{ ip: '192.168.1.40', kind: '', key: WAIT, params: { ip: '192.168.1.40' }, hintKey: null }], 'адрес IPv4 — без «::ffff:»');
+  // Кадры идут — прибор работает, строки нет (даже если между кадрами был мусор).
+  assert.deepEqual(peerNotes([peer({ frames: 3 }), peer({ frames: 2, noiseBytes: 4, noiseHint: 'other' })], [], NOW), []);
+  // Прибор с этого адреса уже присылал пробы (в таблице) — переподключился и ждёт: не «первую пробу».
+  assert.deepEqual(peerNotes([peer({})], [{ host: '192.168.1.33', last_seen_at: ago(600) }], NOW), []);
+  // Строка прибора есть, но он ни разу не присылал — подсказка нужна.
+  assert.equal(peerNotes([peer({})], [{ host: '192.168.1.33', last_seen_at: null }], NOW).length, 1);
+  // Соединение закрыто: непонятное — пока свежее; ожидание — нет (соединения уже нет).
+  assert.equal(peerNotes([peer({ open: false, noiseBytes: 20, noiseHint: 'astm', lastRxAt: ago(PEER_NOISE_WINDOW_MIN - 1) })], [], NOW).length, 1);
+  assert.deepEqual(peerNotes([peer({ open: false, noiseBytes: 20, noiseHint: 'astm', lastRxAt: ago(PEER_NOISE_WINDOW_MIN + 1) })], [], NOW), []);
+  assert.deepEqual(peerNotes([peer({ open: false })], [], NOW), []);
+  // Один адрес — одна строка; непонятное важнее ожидания; сначала беды, потом ожидание.
+  const many = peerNotes([
+    peer({ ip: '192.168.1.50' }),
+    peer({ ip: '192.168.1.33', noiseBytes: 10, noiseHint: 'astm' }),
+    peer({ ip: '192.168.1.33' }),
+    peer({ ip: '192.168.1.33', noiseBytes: 30, noiseHint: 'astm' }),
+  ], [], NOW);
+  assert.deepEqual(many.map((n) => [n.ip, n.kind]), [['192.168.1.33', 'warn'], ['192.168.1.50', '']]);
+  // Нет ответа сервера или списка — строк нет.
+  assert.deepEqual(peerNotes(undefined, [], NOW), []);
+  assert.deepEqual(peerNotes([null, 'мусор', { open: true }], [], NOW), [], 'без адреса строки нет');
+});

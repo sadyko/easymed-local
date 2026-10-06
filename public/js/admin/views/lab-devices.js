@@ -20,6 +20,8 @@ import { splitDevices, portState, isTruncatedMessage } from './lab-devices-lists
 // проверка адреса, строка состояния), служебные за сегодня, подпись модели.
 import { splitTray, groupReceiving, staleSeriesRest, seriesPendingRest, isLocalIp, isIpAddress, dialLine, dialSig,
     serviceSummary, modelNote, connectionOf } from './lab-devices-lists.js?v=lists4';
+// LIS_VENDOR_EXACT_V1 — D14: кто подключён к порту приёма и что прислал (lis_listeners.peers).
+import { peerNotes } from './lab-devices-lists.js?v=lists4';
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
 const TRANSPORTS = [
@@ -242,6 +244,42 @@ export async function mountLabDevices(container) {
             Array.isArray(l.dialing) ? l.dialing.map((x) => [x.device_id, dialSig(x)]) : null]);
     }
 
+    // ---------- соединения с портом приёма (LIS_VENDOR_EXACT_V1, D14) ----------
+    //
+    // Прибор подключился и шлёт не то (ASTM, собственный формат Autobio,
+    // Unicode) — раньше это выглядело так же, как «никто не подключался».
+    // Правило — у чистой функции (peerNotes), здесь — перевод и разметка.
+    // Беда видна и в карточке «Анализаторы»; «подключён и ждёт первую пробу» —
+    // только в окне «Добавить прибор»: это не беда, а подсказка, где искать.
+
+    /** Строки о соединениях; onlyWarn — только беды. */
+    function peerNotesNow(onlyWarn = false) {
+        const peers = state.listeners && Array.isArray(state.listeners.peers) ? state.listeners.peers : [];
+        const notes = peerNotes(peers, state.devices, serverNow());
+        return onlyWarn ? notes.filter((n) => n.kind === 'warn') : notes;
+    }
+
+    /** Подпись строк о соединениях для решения «перерисовать»: без времени. */
+    const peerNotesSig = (notes) => notes.map((n) => [n.ip, n.kind, n.key, n.hintKey]);
+
+    /** Перевод СНАЧАЛА, подстановка ПОТОМ: подсказка — тоже ключ словаря. */
+    function peerNoteText(n) {
+        return trf(n.key, { ...n.params, hint: n.hintKey ? tr(n.hintKey) : '' });
+    }
+
+    function peerNotesBlock(notes) {
+        const box = h('div', { style: { display: 'grid', gap: '6px', padding: '4px 14px 10px' } });
+        for (const n of notes) {
+            const warn = n.kind === 'warn';
+            box.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', lineHeight: '1.45',
+                padding: '6px 10px', borderLeft: '3px solid ' + (warn ? 'var(--warn-500, #d99a00)' : 'var(--ink-200, #d5dbe1)') } },
+                h('span', { style: { color: warn ? 'var(--warn-600, #b98200)' : 'var(--ink-500, #6b7785)', flex: '0 0 14px', marginTop: '1px' } },
+                    Icon(warn ? 'Warning' : 'Info', { size: 13 })),
+                h('span', { class: warn ? '' : 'muted' }, peerNoteText(n))));
+        }
+        return box;
+    }
+
     // ---------- список приборов ----------
 
     // LIS_DISCOVERY_FIX_V1 (экран) — всё, что видно в карточке «Анализаторы»:
@@ -259,6 +297,7 @@ export async function mountLabDevices(container) {
                 d.dial, dialSig(dialEntry(d)), countsOf(d)]),
             state.profiles.map((p) => [p.key, p.vendor, p.model, p.channelsSource, p.wireSource]),
             !!(state.listeners && Array.isArray(state.listeners.dialing)),
+            peerNotesSig(peerNotesNow(true)),   // LIS_VENDOR_EXACT_V1 — D14: беды соединений
         ]);
     }
 
@@ -273,6 +312,11 @@ export async function mountLabDevices(container) {
             h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: openAddWindow },
                 Icon('Plus', { size: 13 }), ' ',
                 split.found.length ? trf('Добавить прибор · найдено {n}', { n: split.found.length }) : tr('Добавить прибор'))));
+
+        // LIS_VENDOR_EXACT_V1 — D14: прибор подключился и шлёт непонятное — сразу
+        // под заголовком, и при пустой таблице тоже: такой прибор строки не заводит.
+        const noisy = peerNotesNow(true);
+        if (noisy.length) devicesCard.appendChild(peerNotesBlock(noisy));
 
         if (state.loadError) {
             devicesCard.appendChild(h('div', { class: 'empty', style: { padding: '26px' } },
@@ -726,6 +770,7 @@ export async function mountLabDevices(container) {
             // ради него не перестраивается.
             listenersSig(),
             state.profiles.map((p) => p.key),
+            peerNotesSig(peerNotesNow()),   // LIS_VENDOR_EXACT_V1 — D14: соединения без времени
         ]);
     }
 
@@ -741,6 +786,10 @@ export async function mountLabDevices(container) {
 
         // LD_LAYOUT_V1 — подзаголовки окна стояли вплотную к краю карточки.
         formCard.appendChild(h('div', { class: 'ld-subhead' }, tr('Найдены в сети')));
+        // LIS_VENDOR_EXACT_V1 — D14: кто подключён к порту, но анализатором ещё
+        // не стал: шлёт непонятное или ждёт первую пробу.
+        const peerLines = peerNotesNow();
+        if (peerLines.length) formCard.appendChild(peerNotesBlock(peerLines));
         if (state.loadError) {
             // Ревью I1: список не прочитался — так и сказать. Пустой список
             // здесь значит «не знаем», а не «никого нет».

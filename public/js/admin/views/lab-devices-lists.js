@@ -315,3 +315,77 @@ export function connectionOf(d) {
     if (Number(d.dial) === 1) return P('сеть · Easy-Med звонит {host}:{port}', { host: d.host || '—', port: d.port || '—' });
     return P('сеть · прибор звонит на {port}', { port: d.port || 2575 });
 }
+
+// ── LIS_VENDOR_EXACT_V1 — D14: соединения с портом приёма (lis_listeners.peers) ──
+//
+// Слушатель помнит, кто подключён к порту приёма и что прислал (server/lis/index.js
+// listenerStatus().peers: { ip, port, connectedAt, lastRxAt, frames, noiseBytes,
+// noiseHint, open }). Раньше прибор, который подключился и шлёт не то (ASTM,
+// собственный формат Autobio, Unicode), выглядел так же, как «никто не
+// подключался»: Easy-Med выбрасывал непонятное молча, и неверная настройка
+// прибора была неотличима от выдернутого кабеля.
+
+/** На что похоже непонятное (noiseHint слушателя) — ключи словаря. */
+export const NOISE_HINT = {
+    astm: 'похоже на ASTM',
+    autobio: 'похоже на собственный формат Autobio — выберите HL7',
+    utf16: 'кодировка Unicode — выберите UTF-8',
+    'hl7-unframed': 'HL7 без рамки MLLP',
+    other: 'неизвестный формат',
+};
+
+/** Сколько минут после закрытия соединения ещё говорить о непонятных данных с него. */
+export const PEER_NOISE_WINDOW_MIN = 60;
+
+const NOISE_NOTE = 'С адреса {ip} приходят данные, которые Easy-Med не понимает ({hint}). Проверьте на анализаторе протокол HL7.';
+const WAIT_NOTE = 'Прибор {ip} подключён и ждёт первую пробу';
+
+/** Адрес соединения для показа и сравнения: IPv4 — без «::ffff:». */
+function peerIp(ip) {
+    const s = String(ip == null ? '' : ip).trim();
+    const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(s);
+    return m ? m[1] : s;
+}
+
+/**
+ * Что сказать о соединениях с портом приёма. Строка — только там, где человеку
+ * есть что сделать:
+ *   — пришло только непонятное (кадров нет) — «приходят данные, которые
+ *     Easy-Med не понимает (похоже на ASTM)»; у закрытого соединения — пока
+ *     данные свежие (PEER_NOISE_WINDOW_MIN);
+ *   — подключён и ничего не прислал — «ждёт первую пробу», если с этого адреса
+ *     пробы ещё не приходили (прибор из таблицы, переподключившийся после
+ *     перезапуска, — не новость).
+ * Кадры идут — прибор работает, строки нет. Один адрес — одна строка;
+ * непонятное важнее ожидания; сначала беды. hintKey — ключ словаря подсказки:
+ * экран переводит его ДО подстановки в {hint}.
+ * @param {Array<object>} peers     lis_listeners.peers
+ * @param {Array<object>} devices   строки lab_devices (host, last_seen_at)
+ * @param {number} now              «сейчас» сервера, мс
+ * @returns {Array<{ip:string, kind:''|'warn', key:string, params:{ip:string}, hintKey:string|null}>}
+ */
+export function peerNotes(peers, devices = [], now = Date.now()) {
+    if (!Array.isArray(peers)) return [];
+    const heard = new Set((devices || []).filter((d) => d && d.last_seen_at && d.host).map((d) => peerIp(d.host)));
+    const noise = new Map();
+    const waiting = new Map();
+    for (const p of peers) {
+        if (!p || typeof p !== 'object') continue;
+        const ip = peerIp(p.ip);
+        if (!ip || Number(p.frames) > 0) continue;
+        const open = p.open === true;
+        if (Number(p.noiseBytes) > 0) {
+            if (!open) {
+                const at = Date.parse(p.lastRxAt || p.connectedAt);
+                if (!Number.isFinite(at) || now - at > PEER_NOISE_WINDOW_MIN * 60000) continue;
+            }
+            const hintKey = Object.prototype.hasOwnProperty.call(NOISE_HINT, p.noiseHint) ? NOISE_HINT[p.noiseHint] : NOISE_HINT.other;
+            if (!noise.has(ip)) noise.set(ip, { ip, kind: 'warn', key: NOISE_NOTE, params: { ip }, hintKey });
+        } else if (open && !heard.has(ip) && !waiting.has(ip)) {
+            waiting.set(ip, { ip, kind: '', key: WAIT_NOTE, params: { ip }, hintKey: null });
+        }
+    }
+    for (const ip of noise.keys()) waiting.delete(ip);
+    const byIp = (a, b) => a.ip.localeCompare(b.ip, 'en', { numeric: true });
+    return [...[...noise.values()].sort(byIp), ...[...waiting.values()].sort(byIp)];
+}
