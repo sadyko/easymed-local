@@ -104,11 +104,40 @@ test('три профиля клиники в списке, у каждого п
 });
 
 test('прежние профили провода не называют — читаются проводом default, как раньше', () => {
-  for (const key of ['mindray-bc-20', 'mindray-bc-5300', 'mindray-bs-240', 'mindray-cl-900i', 'mindray-bc-2800', 'mindray-bc-3000-plus']) {
+  // LIS_VENDOR_EXACT_V1 — BS-240 и CL-900i ушли на mindray-chem (D2, тест ниже).
+  for (const key of ['mindray-bc-20', 'mindray-bc-5300', 'mindray-bc-2800', 'mindray-bc-3000-plus']) {
     const p = getProfile(key);
     assert.equal(p.wire, undefined, key);
     assert.ok(!p.oneTestPerMessage, key + ': серия — только у тех, кто шлёт по тесту');
   }
+});
+
+// LIS_VENDOR_EXACT_V1 — D2: BS-240 и CL-900i — химия и ИХЛА Mindray одного
+// диалекта (руководство BS-360E/BS-240Pro/BS-240E; Host Interface Manual CL):
+// номер пробирки — OBR-2 (штрихкод), OBR-3 — внутренний номер прибора, не
+// читается никогда. Прибор звонит сам. По одному сообщению на пробу со всеми
+// тестами — серии нет. Номер теста у BS-240 НЕ свой у каждого прибора
+// (codesPerInstrument опровергнут при сверке).
+test('D2: BS-240 и CL-900i — провод mindray-chem, псевдонимы, прибор звонит сам, формат документирован', async () => {
+  const { guessProfile } = await import('../discover.js');
+  const bs = getProfile('mindray-bs-240');
+  assert.deepEqual([bs.wire, bs.connect, bs.wireSource], ['mindray-chem', 'listen', 'documented']);
+  assert.deepEqual(bs.aliases, ['BS-240', 'BS-240E', 'BS-240Pro', 'BS-230']);
+  assert.ok(!bs.oneTestPerMessage, 'BS-240 шлёт пробу одним сообщением');
+  assert.ok(!bs.codesPerInstrument, 'опровергнуто при сверке');
+  const cl = getProfile('mindray-cl-900i');
+  assert.deepEqual([cl.wire, cl.connect, cl.wireSource], ['mindray-chem', 'listen', 'documented']);
+  assert.ok(cl.aliases.includes('CL-900i') && cl.aliases.includes('CL-920i') && cl.aliases.includes('CL-980i'));
+  assert.ok(!cl.oneTestPerMessage, 'CL шлёт пробу одним сообщением');
+  assert.ok(!cl.codesPerInstrument);
+  // Как прибор может назвать себя — модель узнаётся (раньше «Mindray|BS-240E» — нет).
+  for (const [app, facility, key] of [['Mindray', 'BS-240E', 'mindray-bs-240'], ['Mindray', 'BS-240Pro', 'mindray-bs-240'],
+    ['Mindray', 'BS-230', 'mindray-bs-240'], ['', 'CL-900', 'mindray-cl-900i'], ['', 'CL-960i', 'mindray-cl-900i']]) {
+    const p = guessProfile({ app, facility });
+    assert.equal(p && p.key, key, app + '|' + facility);
+  }
+  // BS-200 по-прежнему BS-200: псевдонимы BS-240 его не перехватывают.
+  assert.equal(guessProfile({ app: 'Mindray', facility: 'BS-200E' }).key, 'mindray-bs-200');
 });
 
 test('BS-200 и A1000: типового списка нет, коды — от прибора; по одному тесту в сообщении', () => {

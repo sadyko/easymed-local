@@ -1,8 +1,30 @@
 // LIS_INGEST_V1 — Mindray BS-240, биохимия.
 //
-// Транспорт: TCP/IP, HL7 v2.3.1 ЛИБО ASTM E1394-97 («BS-230/BS-240 LIS
-// Interface Manual»; в открытом доступе документа нет). Здесь заявлен только
+// Транспорт: TCP/IP, HL7 v2.3.1 ЛИБО ASTM E1394-97. Здесь заявлен только
 // HL7 — ASTM станет вторым транспортом за тем же приёмом, когда понадобится.
+//
+// LIS_VENDOR_EXACT_V1 — провод 'mindray-chem' по документу семейства:
+// «LIS Interface Manual, Chemistry Analyzer» для BS-360E/BS-240Pro/BS-240E,
+// V1.0 (2014), и две настоящие записи с тем же расположением полей — BS-240
+// (2017) и BS-240E (2026):
+//   — НОМЕР ПРОБИРКИ — OBR-2 («Placer Order Number, used as sample bar code»,
+//     с. 16). OBR-3 — внутренний номер прибора 1, 2, 3…: «Sample ID is for
+//     internal use and must not be analyzed by the server» (с. 32). Прежний
+//     провод default читал OBR-3 — голое «1» ложилось в открытый свежий заказ
+//     № 1 чужого пациента;
+//   — код — OBX-3, Channel No., который лаборатория вводит на приборе («Glu-G»);
+//     OBX-4 — имя теста, только подпись: «functions as a note and must not be
+//     analyzed» (с. 33);
+//   — MSH-16: 0 — проба, 1 — калибровка, 2 — контроль (с. 12): контроль и
+//     калибровка идут мимо бланков и лотка (wire.js readEnvelope);
+//   — по одному сообщению на пробу со всеми тестами (с. 9, 31) — не
+//     oneTestPerMessage;
+//   — MSH-3/4 у настоящих приборов пусты (запись 2017 и 2026): модель
+//     выбирает человек в «Добавить»; псевдонимы — на случай, если прибор
+//     всё же назовёт себя.
+// codesPerInstrument НЕ ставится: на каждом BS-240 клиники вводятся одни и те
+// же Channel No., и код у всех приборов модели один (при сверке с
+// документами «BS-240 нужен codesPerInstrument» опровергнуто).
 //
 // КАНАЛЫ — ТИПОВОЙ НАБОР, НЕ ИЗ ДОКУМЕНТАЦИИ. Mindray протокол не публикует,
 // а у биохимического анализатора набор тестов задаёт сама клиника закупкой
@@ -19,9 +41,13 @@ export default {
   key: 'mindray-bs-240',
   vendor: 'Mindray',
   model: 'BS-240',
+  aliases: ['BS-240', 'BS-240E', 'BS-240Pro', 'BS-230'],   // LIS_VENDOR_EXACT_V1 — семейство одного руководства
   kind: 'chemistry',
   transports: ['mllp'],
   defaultPort: 2575,
+  connect: 'listen',            // LIS_VENDOR_EXACT_V1 — ПК прибора звонит в Easy-Med:2575
+  wire: 'mindray-chem',         // LIS_VENDOR_EXACT_V1 — номер пробирки OBR-2, OBR-3 не читается никогда
+  wireSource: 'documented',     // LIS_VENDOR_EXACT_V1 — руководство BS-360E/BS-240Pro/BS-240E V1.0
   channelsSource: 'conventional',
   channels: [
     // Метаболиты

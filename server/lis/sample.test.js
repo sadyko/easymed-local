@@ -568,7 +568,10 @@ test('R2 п. 12: строка BC-780, а сообщение — от BS-200: в 
   db.close();
 });
 
-test('R2 п. 12: строка прежней модели без провода (BS-240) и сообщение BS-200 — не спор: провод сообщения', () => {
+// LIS_VENDOR_EXACT_V1 — с D2 у строки BS-240 свой провод, тот же mindray-chem,
+// что у BS-200: провода совпадают — не спор (раньше: прежний профиль без
+// провода — провод сообщения).
+test('R2 п. 12: строка BS-240 и сообщение BS-200 — один провод mindray-chem, не спор', () => {
   const db = clinic({ analytes: [['GLU', 'Глюкоза', '2']], profile: 'mindray-bs-240' });
   ingestMessage(db, BS200('LAB-000123', '2'), '10.0.0.40', 1);
   assert.equal(last(db).status, 'applied', last(db).detail);
@@ -600,4 +603,72 @@ test('R7 п. 1: голые цифры к неоплаченному заказу
   assert.equal(results(db).length, 0);
   assert.equal(status(db, 123), 'added');
   db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D2: BS-240 и CL-900i читаются проводом mindray-chem ──
+// Номер пробирки у обоих — OBR-2 (штрихкод), а OBR-3 — внутренний номер
+// прибора («Sample ID is for internal use and must not be analyzed by the
+// server»), маленькое число 1, 2, 10. Провод default читал OBR-3 — и голое «1»
+// ложилось в открытый свежий заказ № 1 чужого пациента.
+//
+// BS-240 — кадр настоящего BS-240E (2026, iammessier/LIS-Machine_Bridge,
+// testdata/hl7/bs240e/glu.hl7; значения синтетические): MSH-3/4 пусты, OBR-2 —
+// штрихкод, OBR-3 — «1», OBX-3 — Channel No. «Glu-G», OBX-4 — имя теста
+// (подпись), OBX-5 — 6 знаков после точки, OBX-13 — то же значение.
+const BS240 = (obr2, obr3, value = '5.123450') => seg(
+  'MSH|^~\&|||||20260528122129||ORU^R01|3|P|2.3.1',
+  'PID|1|||||||O|||||||||||||||||||||||',
+  `OBR|1|${obr2}|${obr3}|^|N|20260528115302|20260528115240|20260528115240||1^1||||20260528115240|Serum`,
+  `OBX|1|NM|Glu-G|Glucose (GOD-POD Method)|${value}|mg/dL|-|N|||F||${value}|20260528122129|||0||`,
+);
+// CL-900i — пример руководства «Chemiluminescence Immunoassay Analyzer Host
+// Interface Manual» (2013-08), с. 1-27 (pdf 35); имя пациента заменено:
+// OBR-2 — штрихкод, OBR-3 — номер пробы прибора «10», OBX-3 — Routine Channel No.
+const CL = (obr2, obr3, obx = 'OBX|1|NM|TSH|TSH|2.350000|uIU/mL|-|N|||F||2.350000|20120405194245||yishen|0|') => seg(
+  'MSH|^~\&|||||20120508094822||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+  'PID|1|1001|||SYN^PAT||19851001095133|M|||keshi|||||||||||||||beizhu|||||',
+  `OBR|1|${obr2}|${obr3}|^|Y|20120405193926|20120405193914|20120405193914|||||linchuangzhenduan|20120405193914|serum|lincyisheng|keshi||||||||3|||||||||||||||||||||||`,
+  obx,
+);
+
+test('D2: BS-240 — номер пробы из OBR-2 (штрихкод), внутренний номер прибора в OBR-3 — приманка, не читается', () => {
+  // Заказ № 1 — открытый свежий заказ ДРУГОГО пациента: ровно то, во что
+  // легло бы «1» из OBR-3.
+  const db = clinic({ orders: [{ id: 123 }, { id: 1 }], analytes: [['GLU', 'Глюкоза', 'Glu-G']], profile: 'mindray-bs-240' });
+  assert.equal(ingestMessage(db, BS240('000123', '1'), '10.0.0.42', 1), 'AA');
+  const m = last(db);
+  assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['applied', 123, '000123'], m.detail);
+  assert.equal(results(db)[0].value, '5.12345', 'mindray-chem: хвостовые нули срезаны, число не округлено');
+  assert.equal(results(db, 1).length, 0, 'заказ № 1 чужого пациента не тронут');
+
+  // Этикетка Easy-Med в OBR-2 и приманка «2» в OBR-3 — проба заказа 123.
+  const db2 = clinic({ orders: [{ id: 123 }, { id: 2 }], analytes: [['GLU', 'Глюкоза', 'Glu-G']], profile: 'mindray-bs-240' });
+  ingestMessage(db2, BS240('LAB-000123', '2'), '10.0.0.42', 1);
+  assert.deepEqual([last(db2).status, last(db2).visit_service_id], ['applied', 123]);
+  assert.equal(results(db2, 2).length, 0);
+  db.close(); db2.close();
+});
+
+test('D2: BS-240 без штрихкода — номера нет, в лоток; «1» из OBR-3 в заказ № 1 не легло', () => {
+  const db = clinic({ orders: [{ id: 123 }, { id: 1 }], analytes: [['GLU', 'Глюкоза', 'Glu-G']], profile: 'mindray-bs-240' });
+  ingestMessage(db, BS240('', '1'), '10.0.0.42', 1);
+  const m = last(db);
+  assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['unmatched', null, '']);
+  assert.equal(results(db, 1).length, 0, 'внутренний номер прибора — не номер пробирки');
+  db.close();
+});
+
+test('D2: CL-900i — номер пробы из OBR-2; номер пробы прибора «10» в OBR-3 не читается', () => {
+  const db = clinic({ orders: [{ id: 123 }, { id: 10 }], analytes: [['TSH', 'ТТГ', 'TSH']], profile: 'mindray-cl-900i' });
+  ingestMessage(db, CL('000123', '10'), '10.0.0.43', 1);
+  const m = last(db);
+  assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['applied', 123, '000123'], m.detail);
+  assert.equal(results(db)[0].value, '2.35');
+  assert.equal(results(db, 10).length, 0, 'заказ № 10 чужого пациента не тронут');
+
+  const db2 = clinic({ orders: [{ id: 123 }, { id: 10 }], analytes: [['TSH', 'ТТГ', 'TSH']], profile: 'mindray-cl-900i' });
+  ingestMessage(db2, CL('', '10'), '10.0.0.43', 1);
+  assert.deepEqual([last(db2).status, last(db2).visit_service_id], ['unmatched', null]);
+  assert.equal(results(db2, 10).length, 0);
+  db.close(); db2.close();
 });

@@ -232,7 +232,11 @@ test('панель без анализатора → unmapped: клиника е
 test('панель кормится анализатором ДРУГОЙ МОДЕЛИ → unmatched, значения не пишутся', () => {
   const db = fresh();
   db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Биохимия','mindray-bs-240')").run();
-  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1', 2);
+  // LIS_VENDOR_EXACT_V1 — BS-240 пишет пробу по-своему (провод mindray-chem):
+  // MSH-3/4 пусты, штрихкод в OBR-2, OBR-3 — его внутренний номер.
+  const bs240 = ['MSH|^~\\&|||||20260528122129||ORU^R01|3|P|2.3.1', 'OBR|1|LAB-000123|1|^|N',
+    'OBX|1|NM|WBC|Leukocytes|6.100000|10*9/L|-|N|||F||6.100000|20260528122129|||0||'].join('\r');
+  ingestMessage(db, bs240, '127.0.0.1', 2);
   assert.equal(message(db).status, 'unmatched');
   assert.match(message(db).detail, /другой модел/i);
   assert.equal(results(db).length, 0);
@@ -1022,8 +1026,11 @@ test('R3 п. 10: A1000 «390.10», потом «390.1» — повторная �
 // значения пишет только прибор панели и только в строки, подтверждённые для
 // него. Прочие профили — как прежде: та же модель кормит панель, отметка не
 // читается.
+// LIS_VENDOR_EXACT_V1 — расположение полей BS-240 (руководство BS-360E/
+// BS-240Pro/BS-240E, с. 16, 32–33): штрихкод в OBR-2, внутренний номер прибора
+// в OBR-3, Channel No. в OBX-3, имя теста в OBX-4.
 const BS240 = (n, value) => ['MSH|^~\\&|BS-240|Mindray|||20261001101500||ORU^R01|42|P|2.3.1',
-  'OBR|1||LAB-000123|x', `OBX|1|NM|${n}^^99MRC||${value}|umol/L|||||F`].join('\r');
+  'OBR|1|LAB-000123|1|^|N', `OBX|1|NM|${n}|test${n}|${value}|umol/L|-|N|||F||${value}|20261001101500|||0||`].join('\r');
 
 test('R4 п. A (дыра a): строку BS-200 панели переименовали в BS-240 — проба другого прибора «BS-240» в её бланк не идёт', () => {
   const db = chem();
