@@ -412,6 +412,20 @@ const IMPORT_CONFIGS = {
             // не-лабораторной услуги отметки не бывает (как в service_save).
             if (!('external_lab' in r)) delete payload.external_lab;
             else payload.external_lab = payload.type === 'lab' ? !!payload.external_lab : false;
+            // CLINIC_API_FIX_V1 — онлайн-запись по правилу окна услуги
+            // (service_save, SERVICE_NAMES_ONLINE_V1): включить её можно только
+            // с узбекским названием — русское (name) обязательно у любой строки.
+            // Раньше флаг ложился в колонку как есть. Строка без узбекского
+            // названия ввозится без онлайн-записи и говорит об этом с номером
+            // строки файла. Заголовка online_booking в листе нет — отметка не
+            // трогается (тот же договор, что у external_lab и ступеней): файл,
+            // выгруженный до онлайн-записи, не выключает её при обновлении.
+            if (!('online_booking' in r)) delete payload.online_booking;
+            else if (payload.online_booking && !String(payload.name_uz || '').trim()) {
+                payload.online_booking = false;
+                if (ctx) ctx.warn(trf('Строка {n}, «{service}»: онлайн-запись не включена: нет названия на узбекском.',
+                    { n: ctx.rowNum, service: String(payload.name || '').trim() }));
+            }
             // DOCTOR_TIER_V1 — КОЛОНКИ, КОТОРОЙ В ФАЙЛЕ НЕТ, В ПАМЯТИ НЕ БЫВАЕТ.
             // Числовые колонки пишутся в payload всегда, даже когда заголовка в
             // листе нет вовсе: обновление услуг файлом, выгруженным ДО ступеней,
@@ -508,9 +522,9 @@ const IMPORT_CONFIGS = {
             // performer share, the room, and the lab block. All optional; a sheet
             // without these columns imports exactly as before.
             { key: 'code',             hint: 'Внутренний код (необязательно)' },
-            // SERVICE_NAMES_ONLINE_V1 — the uz/en names and the online flag; the
-            // importer writes straight to the columns, so an online row without
-            // a uz name is the sheet's responsibility (the dialog refuses it).
+            // SERVICE_NAMES_ONLINE_V1 — the uz/en names and the online flag.
+            // CLINIC_API_FIX_V1 — an online row without a uz name imports with
+            // the flag off and a warning (transform above), as the dialog refuses it.
             { key: 'name_uz',          hint: 'Название на узбекском (обязательно для онлайн-записи)' },
             { key: 'name_en',          hint: 'Название на английском (необязательно)' },
             { key: 'online_booking',   coerce: 'bool', defaultBool: false, hint: 'true / false — доступна для онлайн-записи (нужны названия ru и uz)' },
@@ -1712,7 +1726,7 @@ function buildRow(raw, rowNum, lookups, cfg) {
     // dropping it silently. `r` is the raw row keyed by the sheet's headers —
     // a hook can ask which headers the file actually carried.
     if (typeof cfg.transform === 'function') {
-        const ctx = { notes, lookups, warn(msg) { notes.push(msg); if (status !== 'error') status = 'warn'; } };
+        const ctx = { notes, lookups, rowNum, warn(msg) { notes.push(msg); if (status !== 'error') status = 'warn'; } };   // CLINIC_API_FIX_V1 — rowNum: предупреждение называет строку файла
         try { cfg.transform(payload, r, ctx); }
         catch (e) { console.warn('[section-import] transform failed:', e); }
     }

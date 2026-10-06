@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (2026-10-06) — импорт услуг из Excel: онлайн-запись только с узбекским названием, как в окне услуги (views/section-import-export.js)
+  "Строка {n}, «{service}»: онлайн-запись не включена: нет названия на узбекском.": {"en":"Row {n}, «{service}»: online booking was not turned on: there is no Uzbek name.","ru":"Строка {n}, «{service}»: онлайн-запись не включена: нет названия на узбекском.","uz":"{n}-qator, «{service}»: onlayn yozilish yoqilmadi: o'zbekcha nomi yo'q."},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (2026-10-06) — «Мой профиль» врача шлёт только изменённое; без правок сохранять нечего (views/doctor-profile.js)
   "Нет изменений": {"en":"No changes","ru":"Нет изменений","uz":"O'zgarishlar yo'q"},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью 29ee709) — «Мой профиль»: специальности не загрузились; ошибка фото не прячется за «Профиль сохранён» (views/doctor-profile.js)
