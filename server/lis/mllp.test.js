@@ -513,6 +513,33 @@ test('D4: переросшее — отказ дочитывается, пото
   }, { maxBytes: 1024, onOversize: () => {} });
 });
 
+// LIS_VENDOR_EXACT_V1 — D4, ревью: RST по сокету, у которого FIN уже в пути.
+// Прибор прислал FIN — Node (allowHalfOpen = false) сам зовёт end(), и до конца
+// shutdown libuv отвергает RST (uv_tcp_close_reset → EINVAL): Node выдаёт
+// 'error', теряет дескриптор, не закрыв его, и 'close' не приходит никогда. Тогда
+// слушатель вечно помнит соединение открытым (peers, экран), а звонок
+// (dial.js), которого сторож тишины рвёт в этот миг, не поднимается заново — он
+// ждёт 'close'. Здесь end() зовётся явно: то же состояние, без гонки.
+test('D4: resetSocket сокета, у которого FIN уже в пути (end() вызван), — сокет закрывается: «close» приходит, EINVAL нет', async () => {
+  const { resetSocket } = await import('./mllp.js');
+  const server = net.createServer();
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const accepted = new Promise((r) => server.once('connection', r));
+  const peer = net.createConnection({ port: server.address().port, host: '127.0.0.1' });
+  peer.on('error', () => {});
+  const sock = await accepted;
+  const ev = [];
+  sock.on('error', (e) => ev.push('error:' + e.code));
+  const closed = new Promise((r) => sock.once('close', () => r(true)));
+  sock.end();          // FIN в пути: shutdown ещё не исполнен
+  resetSocket(sock);   // тот же тик
+  const ok = await Promise.race([closed, settle(2000).then(() => false)]);
+  peer.destroy();
+  server.close();
+  assert.equal(ok, true, 'сокет закрылся (close): ' + ev.join(','));
+  assert.deepEqual(ev, [], 'без ошибки EINVAL');
+});
+
 // ── LIS_VENDOR_EXACT_V1 — D10: текст кадра — UTF-8 строго, иначе windows-1251 ──
 // BS-200 и CL-900i пишут однобайтно: «ISO 8859-1 characters (hexadecimal
 // 20-FF)» (HIM v5.0, с. 1), на деле — кодовая страница ПК прибора (у клиники —

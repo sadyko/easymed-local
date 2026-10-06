@@ -48,12 +48,18 @@ const OVERSIZE_GRACE_MS = 2000;
  * процессора; после RST она сразу видит обрыв и переподключается
  * (autobio-autolumo-a1000.settle.md, находка 6). Соединение, которое ещё
  * подключается, просто уничтожается: ему нечего обрывать. Не бросает.
+ * LIS_VENDOR_EXACT_V1 — FIN уже в пути (end() вызван — нами или самим Node после
+ * FIN прибора) или прибор сам закрыл свою сторону: просто destroy. RST в этот
+ * миг libuv отвергает (uv_tcp_close_reset при начатом shutdown — EINVAL), Node
+ * выдаёт 'error', теряет дескриптор, не закрыв его, и 'close' не приходит
+ * никогда: слушатель вечно помнил бы соединение открытым, а звонок (dial.js),
+ * который ждёт 'close', не поднялся бы заново. Обрыв прибор здесь уже видит.
  * @param {import('node:net').Socket|null} sock
  */
 export function resetSocket(sock) {
   if (!sock || sock.destroyed) return;
   try {
-    if (sock.connecting) sock.destroy();
+    if (sock.connecting || sock.writableEnded || sock.readableEnded) sock.destroy();   // LIS_VENDOR_EXACT_V1 — FIN в пути: RST дал бы EINVAL
     else sock.resetAndDestroy();
   } catch {
     sock.destroy();
