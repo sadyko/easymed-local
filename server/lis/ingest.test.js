@@ -745,7 +745,7 @@ test('серия: сообщения второго прибора той же �
   const db = chem({ profile: 'autobio-autolumo-a1000', lines: [['B12', 'Витамин B12', '206'], ['FER', 'Ферритин', '207']] });
   db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'A1000 (2)','autobio-autolumo-a1000')").run();
   const A = (code, v) => ['MSH|^~\\&|A1000|Autolumo|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
-    'PID|||SYN-PAT-1', 'OBR|1|LAB-000123|||', `OBX|1|NM|1^X|${code}|1^${v}|pg/mL|||||F`].join('\r');
+    'PID|||SYN-PAT-1', 'OBR|1|LAB-000123|||', `OBX|1|NM|1^X|${code}|1^${v}|pg/mL|||||F`].join('\r');   // LIS_VENDOR_EXACT_V1 — PID: у пробы пациента он есть (без PID «по тесту» — контроль, wire.js)
   ingestMessage(db, A('206', '390.9'), '10.0.0.40', 1);
   assert.ok(message(db).detail.startsWith(SERIES_PENDING_PREFIX), message(db).detail);
   ingestMessage(db, A('207', '52.1'), '10.0.0.41', 2);
@@ -1018,7 +1018,7 @@ test('R3 п. 6: в пределах суток — по бланку, как в 
 test('R3 п. 10: A1000 «390.10», потом «390.1» — повторная передача, а не повтор; в бланке значение как пришло', () => {
   const db = chem({ profile: 'autobio-autolumo-a1000', lines: [['B12', 'Витамин B12', '206']] });
   const A = (v) => ['MSH|^~\\&|A1000|Autolumo|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
-    'PID|||SYN-PAT-1', 'OBR|1|LAB-000123|||', `OBX|1|NM|1^X|206|1^${v}|pg/mL|||||F`].join('\r');
+    'PID|||SYN-PAT-1', 'OBR|1|LAB-000123|||', `OBX|1|NM|1^X|206|1^${v}|pg/mL|||||F`].join('\r');   // LIS_VENDOR_EXACT_V1 — PID: у пробы пациента он есть (без PID «по тесту» — контроль, wire.js)
   ingestMessage(db, A('390.10'), '10.0.0.41', 1);
   assert.equal(blank(db)['Витамин B12'], '390.10');
   ingestMessage(db, A('390.1'), '10.0.0.41', 1);
@@ -1980,5 +1980,35 @@ test('п. 6: контроль гематологии (BC-5300 X-R, MSH-11 = Q; B
     assert.deepEqual([message(db).kind, message(db).visit_service_id], ['qc', null], n + ': и с номером человека');
   }
   assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_results').get().c, 0, 'значения контроля не легли ни в один бланк');
+  db.close();
+});
+
+test('D3 и D7: заказ пробирки уже выдан — его значение не переписывается, другая услуга визита заполняется; сообщение superseded', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ', 'completed'], [302, 'Т4 свободный']] });
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, verified_at) VALUES (301, 'ТТГ', '2.1', 'analyzer', '2026-10-06T08:00:00Z')").run();
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']]), '10.0.0.43', 1);
+  const m = message(db);
+  assert.equal(m.status, 'superseded', 'новое значение к выданному бланку смотрит человек');
+  assert.equal(m.detail, 'заказ № 301 «ТТГ»: результат уже выдан; новый результат требует подтверждения человеком; заказ № 302 «Т4 свободный»: принято');
+  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.1' }, { 'Т4 свободный': '15.2' }]);
+  // Тест только своей, выданной услуги — как прежде: superseded, без журнала по заказам.
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.400000']], { id: 33 }), '10.0.0.43', 1);
+  assert.deepEqual([message(db).status, message(db).detail], ['superseded', 'результат уже выдан; новый результат требует подтверждения человеком']);
+  db.close();
+});
+
+test('п. 5: A1000 (серия) — проба до настройки закрывается, когда та же проба после настройки легла в бланк (приёмка A1000, находка T5)', () => {
+  const db = a1000Clinic();
+  db.prepare('UPDATE lab_panels SET device_id = NULL WHERE id = 5').run();
+  ingestMessage(db, A1000('4.17', 'CEX'), '10.0.0.41', 1);
+  const pre = message(db);
+  assert.match(pre.detail, /^панель «Биохимия» не привязана к анализатору$/);
+  db.prepare('UPDATE lab_panels SET device_id = 1 WHERE id = 5').run();
+  ingestMessage(db, A1000('4.17', 'CEX'), '10.0.0.41', 1);
+  const done = message(db);
+  assert.equal(done.status, 'applied', done.detail);
+  assert.equal(msgRow(db, pre.id).detail, 'панель «Биохимия» не привязана к анализатору; закрыто: бланк заказа № 123 заполнен сообщением № ' + done.id);
+  assert.ok(msgRow(db, pre.id).resolved_at);
+  assert.deepEqual(tray(db), []);
   db.close();
 });
