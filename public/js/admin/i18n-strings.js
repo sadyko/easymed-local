@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (2026-10-06) — импорт Excel: без списка сохранённых записей импорт не идёт (views/section-import-export.js)
+  "Не удалось прочитать уже сохранённые записи: {msg}. Импорт не выполнен — ничего не записано, попробуйте ещё раз.": {"en":"Could not read the records that are already saved: {msg}. The import was not run — nothing was written, please try again.","ru":"Не удалось прочитать уже сохранённые записи: {msg}. Импорт не выполнен — ничего не записано, попробуйте ещё раз.","uz":"Saqlangan yozuvlarni o'qib bo'lmadi: {msg}. Import bajarilmadi — hech narsa yozilmadi, qayta urinib ko'ring."},   // CLINIC_API_FIX_V1
   // REFERENCE_LISTS_V1 (2026-10-06) — Настройки → «Справочники»: города, районы и специальности с кодами, только просмотр (views/reference-lists.js, плитка в views/settings-hub.js, CRUMBS в admin.js)
   "Справочники": {"en":"Reference lists","ru":"Справочники","uz":"Ma'lumotnomalar"},   // REFERENCE_LISTS_V1
   "Города, районы и специальности: коды и названия на трёх языках": {"en":"Cities, districts and specialties: codes and names in three languages","ru":"Города, районы и специальности: коды и названия на трёх языках","uz":"Shaharlar, tumanlar va mutaxassisliklar: kodlar va uch tildagi nomlar"},   // REFERENCE_LISTS_V1

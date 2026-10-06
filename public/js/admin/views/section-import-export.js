@@ -1307,6 +1307,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             if (!rows) rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
             if (rows.length === 0) throw new Error('Лист пустой — под заголовками нет строк.');
 
+            lookups = null;   // CLINIC_API_FIX_V1 (ревью) — каждый файл — по свежему списку сохранённых
             await ensureLookups();
             rawRows = rows;   // CLINIC_API_FIX_V1 (ревью) — сборка с галочкой «Обновлять существующие»
             buildParsed();
@@ -1358,9 +1359,6 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         const valid = parsedRows.filter(r => r.status !== 'error');
         if (valid.length === 0) { toast('Импортировать нечего — сначала исправьте ошибки в файле.', 'fail'); return; }
 
-        const created = await autoCreatePendingFks(valid);
-        if (created > 0) toast(trf('Создано недостающих справочных записей: {n}.', { n: created }));
-
         // Decide insert vs update per row. When `Update existing` is on (and
         // the section has a matchField), any row whose match value already
         // exists in the target table is sent as an UPDATE so we patch in the
@@ -1371,6 +1369,16 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         // one of the two turns the other kind of file into duplicates.
         const wantUpdate = matchFields.length > 0 && updateExistingInp.checked;
         const existingByField = new Map();   // field -> Map<normalisedValue, id>
+        // CLINIC_API_FIX_V1 (ревью) — без списка уже сохранённых записей импорт
+        // НЕ идёт. Раньше ошибка только писалась в консоль, и каждая строка
+        // вставлялась новой: дубли, а строки, собранные как обновление, ложились
+        // со значениями базы (НДС 0, «нужен врач» снят). То же, если сохранённый
+        // список не прочитался при чтении файла (строки собраны вслепую).
+        // Проверка — ДО создания справочных записей: отказ ничего не пишет.
+        const refuse = (msg) => {
+            toast(trf('Не удалось прочитать уже сохранённые записи: {msg}. Импорт не выполнен — ничего не записано, попробуйте ещё раз.', { msg }), 'fail');
+        };
+        if (wantUpdate && lookups && lookups.__storedFailed) { refuse(lookups.__storedFailed); return; }
         if (wantUpdate) {
             const { data: existing, error } = await supabase
                 .from(cfg.table)
@@ -1378,6 +1386,8 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 .limit(20000);
             if (error) {
                 console.warn('[section-import] existing-row fetch failed:', error.message);
+                refuse(error.message || String(error));
+                return;
             } else {
                 for (const f of matchFields) existingByField.set(f, new Map());
                 for (const r of (existing || [])) {
@@ -1388,6 +1398,13 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 }
             }
         }
+
+        // CLINIC_API_FIX_V1 (ревью) — справочные записи создаются после
+        // проверки списка сохранённых (выше): отказ не оставляет за собой
+        // созданных категорий и отделений.
+        const created = await autoCreatePendingFks(valid);
+        if (created > 0) toast(trf('Создано недостающих справочных записей: {n}.', { n: created }));
+
         const findExistingId = (payload) => {
             for (const f of matchFields) {
                 const v = payload[f];
@@ -1627,7 +1644,12 @@ async function loadLookups(cfg) {
     // просит их для сверки (services.storedColumns).
     if (Array.isArray(cfg.storedColumns) && cfg.storedColumns.length) {
         const { data, error } = await supabase.from(cfg.table).select(['name', ...cfg.storedColumns].join(', ')).limit(20000);
-        if (error) console.warn('[section-import] stored rows:', error.message);
+        if (error) {
+            console.warn('[section-import] stored rows:', error.message);
+            // CLINIC_API_FIX_V1 (ревью) — строки собраны без сохранённого списка
+            // (обновление не отличить от вставки): runImport откажет.
+            out.__storedFailed = error.message || String(error);
+        }
         const m = new Map();
         for (const row of (data || [])) { const k = normKey(row.name); if (k && !m.has(k)) m.set(k, row); }
         out.__stored = m;
