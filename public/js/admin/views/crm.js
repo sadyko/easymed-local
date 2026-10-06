@@ -1695,6 +1695,43 @@ async function paint() {
             && !p.time_touched;
 
         /**
+         * CLINIC_API_FIX_V1 (ревью 385bb51, 39d18e5) — ЗАПИСАННУЮ СТРОКУ В ЖИВУЮ
+         * ОЧЕРЕДЬ НЕ ПЕРЕВОДЯТ МОЛЧА.
+         *
+         * Время держит ВРАЧ ВИЗИТА (booked_at.doctor_id — из самого визита; без
+         * него — врач строки в базе). ensure_visit без book визит дня берёт как
+         * есть и врача ему не меняет, поэтому строка, ради которой визит стоит,
+         * ушедшая в живую очередь, оставила бы врачу его время, а оператор
+         * увидел бы «Записано». Отменять запись отсюда нельзя — это календарь.
+         *
+         * Не отказываем, когда:
+         *   • строка выполнена — её не переписывают и не записывают;
+         *   • день сменили — со старого визита строку снимет saveLines, а о
+         *     старом приёме спросит offerCancelSuperseded;
+         *   • врач визита сам с живой очередью или это тот же врач;
+         *   • врача визита держит другая открытая строка того же дня — визит
+         *     нужен ей (bookDays привязывает к визиту дня все его строки).
+         *
+         * Зовётся из persist(): им сохраняют и окно дат, и «Сохранить» заявки.
+         * @returns {string|null} текст отказа или null
+         */
+        function queueSwitchRefusal() {
+            for (const p of picked) {
+                if (p.status === 'done' || !p.visit_id || !isLiveQueueDoc(p.doctor_id)) continue;
+                if (String(p.date || '') !== String(p.booked_date || '')) continue;
+                const visitDoc = (p.booked_at && p.booked_at.doctor_id) || p.booked_doctor_id;
+                if (!visitDoc || String(visitDoc) === String(p.doctor_id) || isLiveQueueDoc(visitDoc)) continue;
+                if (picked.some((q) => q !== p && q.status !== 'done' && String(q.date || '') === String(p.date || '')
+                    && String(q.doctor_id || '') === String(visitDoc))) continue;
+                const d = docCatalog.find((x) => String(x.id) === String(visitDoc));
+                return d && d.full_name
+                    ? trf('Запись к {doctor} уже стоит — отмените её в календаре, чтобы перевести в живую очередь', { doctor: d.full_name })
+                    : tr('Запись к врачу уже стоит — отмените её в календаре, чтобы перевести в живую очередь');
+            }
+            return null;
+        }
+
+        /**
          * Вопрос «да/нет» тем же окном браузера, что у отмены депозита и
          * удаления шаблона. Окна нет вовсе (печать, встроенный просмотр) —
          * считаем ответом «нет»: молча отменить чужую запись в календаре
@@ -2104,6 +2141,8 @@ async function paint() {
         }
         async function persist() {
             if (crmReadOnly()) { toast(CRM_READ_ONLY_MSG, 'fail'); return null; }   // V3120_FIX
+            const queueRefusal = queueSwitchRefusal();   // CLINIC_API_FIX_V1 — до любой записи в базу
+            if (queueRefusal) { toast(queueRefusal, 'fail'); return null; }
             const name = linkedPatient ? linkedPatient.full_name : nameInp.value.trim();
             if (!name) { toast('Укажите имя.', 'fail'); return null; }
             // Привязанный пациент — телефон берём из ввода или из карты; поле
@@ -2761,20 +2800,7 @@ async function paint() {
                 const noTime = picked.filter(p => p.status !== 'done' && p.doctor_id && !p.start_iso && !keptBooking(p)
                     && !isLiveQueueDoc(p.doctor_id));   // CLINIC_API_FIX_V1 — у живой очереди времени нет
                 if (noTime.length) { toast(trf('Не выбрано время: {names}', { names: noTime.map(p => p.name).join(', ') }), 'fail'); return; }
-                // CLINIC_API_FIX_V1 (ревью 385bb51) — ЗАПИСАННУЮ СТРОКУ В ЖИВУЮ ОЧЕРЕДЬ
-                // НЕ ПЕРЕВОДЯТ МОЛЧА. Строка держит время врача по записи; ensure_visit
-                // без book визит дня берёт как есть и врача ему не меняет — прежний
-                // врач так и держал бы своё время, а оператор видел бы «Записано».
-                // Отменять чужую запись отсюда нельзя: это делают в календаре.
-                const toQueue = picked.find(p => p.status !== 'done' && p.visit_id && p.booked_doctor_id
-                    && isLiveQueueDoc(p.doctor_id) && String(p.booked_doctor_id) !== String(p.doctor_id)
-                    && !isLiveQueueDoc(p.booked_doctor_id));
-                if (toQueue) {
-                    const was = docCatalog.find((d) => String(d.id) === String(toQueue.booked_doctor_id));
-                    toast(trf('Запись к {doctor} уже стоит — отмените её в календаре, чтобы перевести в живую очередь',
-                        { doctor: (was && was.full_name) || '—' }), 'fail');
-                    return;
-                }
+                // CLINIC_API_FIX_V1 — перевод записанной строки в живую очередь проверяет persist() (queueSwitchRefusal).
                 saveAll.disabled = true;
                 const row = await persist();
                 if (!row) { saveAll.disabled = false; return; }
