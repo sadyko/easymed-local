@@ -1119,3 +1119,40 @@ test('R7 п. 1: не оплачен — в лоток; оплатили — «П
   assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 123').get().status, 'resulted');
   db.close();
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D10: код с U+FFFD в «Поле анализатора» не предлагается ──
+// BS-200 отдаёт «Код на ЛИС» в кодировке компьютера (cp1251), а Easy-Med читал
+// кадр как UTF-8: кириллические «ГЛЮ» и «АЛТ» оба становились тремя знаками U+FFFD — одним и
+// тем же кодом, и подтверждённая строка бланка ловила бы чужой тест. Такой код
+// «Присылал этот анализатор» не показывает вовсе; искажённые подпись, имя и
+// единица — пустые (это только показ). Кадр — как в mindray-bs-200.md §3.1
+// (значения синтетические).
+const BS200_FRAME = (id, code, label, unit) => [
+  'MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|' + id + '|P|2.3.1||||0||ASCII|||',
+  'PID|1',
+  'OBR|1|LAB-000123|12|Mindray^BS-200|N||20261005101200',
+  'OBX|1|NM|' + code + '|' + label + '|5.230000|' + unit + '|3.900000-6.100000|N|||F|||20261005101200',
+].join('\r') + '\r';
+
+test('D10: код с U+FFFD (кириллица в «Код на ЛИС» не той кодировкой) не предлагается; искажённые подпись и единица — пустые', () => {
+  const db = fresh();
+  const G = '\uFFFD';
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'BS-200','mindray-bs-200')").run();
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, received_at) VALUES (1,'10.0.0.40',?,'unmapped',?)");
+  ins.run(BS200_FRAME(17, G + G + G, G.repeat(7), 'mmol/L'), '2026-10-05T10:15:00Z');   // «ГЛЮ» / «Глюкоза»
+  ins.run(BS200_FRAME(18, G + G + G, G.repeat(3), 'U/L'), '2026-10-05T10:16:00Z');       // «АЛТ» — те же три U+FFFD
+  ins.run(BS200_FRAME(19, 'GLU' + G, 'Glucose', 'mmol/L'), '2026-10-05T10:17:00Z');      // одна буква не прочиталась
+  ins.run(BS200_FRAME(20, 'UREA', G.repeat(8), G.repeat(6) + '/' + G), '2026-10-05T10:18:00Z');   // код латиницей, имя и единица — кириллицей
+  ins.run(BS200_FRAME(21, 'GLU', 'Glucose', 'mmol/L'), '2026-10-05T10:19:00Z');
+
+  const codes = lisDeviceCodes(db, { device_id: 1 }, LAB);
+  assert.ok(!codes.some((c) => [c.code, c.name, c.label, c.unit, c.system].some((s) => String(s || '').includes(G))),
+    'ни одного U+FFFD в ответе: ' + JSON.stringify(codes));
+  assert.deepEqual(codes.map((c) => c.code).sort(), ['GLU', 'UREA'], 'коды с U+FFFD не предложены, латинские — на месте');
+  const urea = codes.find((c) => c.code === 'UREA');
+  assert.equal(urea.label, '', 'искажённая подпись не показывается');
+  assert.equal(urea.unit, '', 'искажённая единица не показывается');
+  assert.equal(codes.find((c) => c.code === 'GLU').label, 'Glucose');
+  db.close();
+});
+

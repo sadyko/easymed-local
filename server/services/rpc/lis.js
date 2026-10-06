@@ -361,20 +361,39 @@ export function lisDeviceCodes(db, args, user) {
     const { observations } = readResult(head, wireFor({ profile, facility: msh.facility, app: msh.app }));   // app: ревью R1, п. 11
     for (const o of observations) {
       if (o.valueType.toUpperCase() === 'ED') continue;
-      if (!o.code && !o.name) continue;
-      const k = (o.code + '^' + o.name).toUpperCase();
+      // LIS_VENDOR_EXACT_V1 — D10: код с U+FFFD не предлагается вовсе: разные
+      // кириллические коды («ГЛЮ», «АЛТ») прочитаны одной строкой из трёх U+FFFD, и строка бланка,
+      // подтверждённая таким кодом, ловила бы чужой тест. Искажённые имя,
+      // подпись, система и единица — пустые: это только показ.
+      if (garbledCode(o.code)) continue;
+      const name = notGarbled(o.name);
+      if (!o.code && !name) continue;
+      const k = (o.code + '^' + name).toUpperCase();
+      const label = notGarbled(o.label);
+      const unit = notGarbled(o.unit);
       // Строки идут от свежих к старым: первое появление — последний раз.
       // LIS_REAL_ANALYZERS_V1_WIRE — label: подпись строки (BS-200: имя теста
       // из OBX-4, «12 · GLU»), только показ: сохраняется и сравнивается код.
       if (!seen.has(k)) {
-        seen.set(k, { code: o.code, name: o.name, system: o.system, value_type: o.valueType, unit: o.unit, last_at: r.received_at, label: o.label || '' });
-      } else if (!seen.get(k).label && o.label) {
-        seen.get(k).label = o.label;
+        seen.set(k, { code: o.code, name, system: notGarbled(o.system), value_type: o.valueType, unit, last_at: r.received_at, label });
+      } else {
+        const e = seen.get(k);
+        if (!e.label && label) e.label = label;
+        if (!e.unit && unit) e.unit = unit;   // LIS_VENDOR_EXACT_V1 — D10: свежая единица не прочиталась — берём прежнюю
       }
     }
   }
   return [...seen.values()];
 }
+
+// LIS_VENDOR_EXACT_V1 — D10: U+FFFD — знак, которым декодер заменяет байты, не
+// прочитанные в кодировке кадра (кириллица в кодировке компьютера прибора).
+// Что за буквы были, уже не узнать: такой код не предлагается и не принимается.
+const GARBLED = '\uFFFD';
+/** В коде есть непрочитанный знак (U+FFFD). */
+function garbledCode(s) { return String(s == null ? '' : s).includes(GARBLED); }
+/** Строка показа без непрочитанных знаков: искажённая — пустая. */
+function notGarbled(s) { const v = String(s == null ? '' : s); return v.includes(GARBLED) ? '' : v; }
 
 /**
  * LIS_ANALYZER_LIST_V1 — какие порты слушаются прямо сейчас и какие не
