@@ -504,9 +504,14 @@ test('lis_profiles отдаёт aliases, wire, oneTestPerMessage, connect, wireS
   const bc780 = all.find((p) => p.key === 'mindray-bc-780');
   assert.deepEqual([bc780.wire, bc780.oneTestPerMessage, bc780.connect, bc780.wireSource, bc780.channelsSource, bc780.channels.length],
     ['mindray-hematology', false, 'unknown', 'siblings', 'siblings', 27]);
-  const old = all.find((p) => p.key === 'mindray-bc-5300');
+  // LIS_VENDOR_EXACT_V1 — прежний профиль без списка псевдонимов — BC-20; у
+  // BC-5300 список теперь есть: «BC-5300 or BC-5380» в MSH-3 (приложение C, табл. 1).
+  const old = all.find((p) => p.key === 'mindray-bc-20');
   assert.deepEqual({ aliases: old.aliases, wire: old.wire, one: old.oneTestPerMessage, connect: old.connect, src: old.wireSource },
-    { aliases: ['BC-5300'], wire: 'default', one: false, connect: 'listen', src: null });
+    { aliases: ['BC-20'], wire: 'default', one: false, connect: 'listen', src: null });
+  const bc5300 = all.find((p) => p.key === 'mindray-bc-5300');
+  assert.deepEqual({ aliases: bc5300.aliases, wire: bc5300.wire, one: bc5300.oneTestPerMessage, connect: bc5300.connect, src: bc5300.wireSource },
+    { aliases: ['BC-5300', 'BC5300', 'BC-5380', 'BC5380'], wire: 'default', one: false, connect: 'listen', src: null });
   db.close();
 });
 
@@ -1212,8 +1217,12 @@ const BS240_FRAME = [   // mindray-bs-240.md §3.1, настоящий BS-240 (2
   'OBR|2|LAB-000123|1|^|N|20170413114023|20170413113910|20170413113910||1^12||||20170413113910|Serum',
   'OBX|1|NM|GLU|GLUCOSE HUMAN|5.400000|mmol/L|-|N|||F||5.400000|20170413115600|||0|',
 ].join('\r') + '\r';
-const BC5380_FRAME = [   // mindray-bc-5300.md §7 (App. C, BC-5300/5380): модели BC-5380 в списке нет; значения синтетические
-  'MSH|^~\\&|BC-5380|Mindray|||20080419104618||ORU^R01|1|P|2.3.1||||||UNICODE',
+// LIS_VENDOR_EXACT_V1 — было «BC-5380|Mindray»; BC-5380 теперь узнаётся как
+// BC-5300 (одно приложение LIS, табл. 1). Прибор не из списка — гематология
+// эпохи DMU (BC-5390 CRP): MSH-3 пуст, MSH-4 = «Mindray» (mindray-bc-5300.md §2,
+// C90 §2.5.1); поля — как в §7; значения синтетические.
+const BC5380_FRAME = [
+  'MSH|^~\\&||Mindray|||20080419104618||ORU^R01|1|P|2.3.1||||||UNICODE',
   'OBR|1||LAB-000124|00001^Automated Count^99MRC||20071207080000|20071207160000|||Mindray',
   'OBX|6|NM|6690-2^WBC^LN||4.63|10*9/L|11.00-12.00|L|||F||E',
 ].join('\r') + '\r';
@@ -1267,7 +1276,7 @@ test('D2: «Другой анализатор (общий HL7)» — явный 
   const { lisDeviceAdd } = await import('./lis.js');
   const db = fresh();
   const dev = foundFrom(db, BC5380_FRAME, '192.168.1.61');
-  assert.equal(deviceRow(db, dev.id).profile, '', 'BC-5380 по имени не узнаётся');
+  assert.equal(deviceRow(db, dev.id).profile, '', 'BC-5390 (DMU, «|Mindray») по имени не узнаётся');
   lisDeviceAdd(db, { id: dev.id, name: 'Гематология 2', generic: true }, LAB);
   assert.deepEqual(deviceRow(db, dev.id), { name: 'Гематология 2', profile: '', added: 1, model_confirmed: 1 });
   db.close();

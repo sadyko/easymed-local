@@ -39,6 +39,15 @@ function serviceDetail(env) {
 
 /** LIS_VENDOR_EXACT_V1 — гематология: провод mindray-hematology или вид профиля hematology. */
 const isHeme = (p) => !!p && (p.wire === 'mindray-hematology' || p.kind === 'hematology');
+/**
+ * LIS_VENDOR_EXACT_V1 (ревью; mindray-bc-5300.md §2) — гематология Mindray эпохи
+ * DMU называет себя «MSH-3 пуст, MSH-4 = Mindray» (BC-5390 CRP, C90 §2.5.1, p. 7).
+ * Химия и ИХЛА Mindray так не пишут: BS-200 — «Mindray|BS-200», BS-240 и CL-900i
+ * — оба поля пусты. Только когда ни сообщение, ни строка прибора модели не
+ * называют: у строки с моделью решает строка.
+ */
+const dmuHematology = (app, facility) => !String(app == null ? '' : app).trim()
+  && String(facility == null ? '' : facility).trim().toLowerCase() === 'mindray';
 
 /**
  * LIS_VENDOR_EXACT_V1 — каким видом отвечать прибору (hl7.js LAYOUT_*).
@@ -66,7 +75,9 @@ export function replyStyle({ profile = null, app = '', facility = '' } = {}) {
   const { wire } = wireDecision({ profile, facility, app });
   if (wire === 'forwarder') return { layout: LAYOUT_LONG, wire };
   const own = guessProfile({ app, facility });
-  return { layout: isHeme(own || profile) ? LAYOUT_SHORT : LAYOUT_LONG, wire };
+  // LIS_VENDOR_EXACT_V1 (ревью) — и гематология DMU без модели («|Mindray»).
+  const heme = isHeme(own || profile) || (!own && !profile && dmuHematology(app, facility));
+  return { layout: heme ? LAYOUT_SHORT : LAYOUT_LONG, wire };
 }
 
 /**

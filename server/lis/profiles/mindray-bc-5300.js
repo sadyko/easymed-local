@@ -11,6 +11,10 @@ export default {
   key: 'mindray-bc-5300',
   vendor: 'Mindray',
   model: 'BC-5300',
+  // LIS_VENDOR_EXACT_V1 (ревью; analyzer-research, mindray-bc-5300.md M5) — как
+  // прибор называет себя в MSH-3: «BC-5300 or BC-5380» — одно приложение LIS
+  // (руководство BC-5300/5380, приложение C, табл. 1); издание P08 — без дефиса.
+  aliases: ['BC-5300', 'BC5300', 'BC-5380', 'BC5380'],
   kind: 'hematology',
   transports: ['mllp'],
   defaultPort: 2575,

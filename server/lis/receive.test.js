@@ -359,10 +359,42 @@ test('LIS_VENDOR_EXACT_V1: replyStyle — короткий вид только �
     [{ profile: P('mindray-bc-5300'), app: 'BC-5300', facility: 'LabPC' }, 'long'],
     [{ profile: P('mindray-bc-5300'), app: 'Mindray', facility: 'BS-200' }, 'long'],
     [{ profile: P('mindray-bs-200'), app: 'BC-5300', facility: 'Mindray' }, 'short'],
+    // LIS_VENDOR_EXACT_V1 (ревью; mindray-bc-5300.md §2, M5) — BC-5380 (то же
+    // приложение LIS, табл. 1) и гематология эпохи DMU: MSH-3 пуст, MSH-4 =
+    // «Mindray» (BC-5390 CRP, C90 §2.5.1) — гематология и до «Добавить».
+    [{ app: 'BC-5380', facility: 'Mindray' }, 'short'],
+    [{ app: 'BC5380', facility: 'Mindray' }, 'short'],
+    [{ app: '', facility: 'Mindray' }, 'short'],
+    [{ app: '', facility: ' mindray ' }, 'short'],
+    // Химия и ИХЛА Mindray так себя не называют: BS-200 — «Mindray|BS-200»,
+    // BS-240 и CL-900i — оба поля пусты; «Mindray» в MSH-3 без модели — незнакомое.
+    [{ app: 'Mindray', facility: '' }, 'long'],
+    [{ app: '', facility: '' }, 'long'],
+    // Модели сообщение не назвало, а строка прибора — химия/ИХЛА/A1000: решает
+    // строка (короткий ответ CL-900i отверг бы — меньше 19 полей MSH).
+    [{ profile: P('mindray-cl-900i'), app: '', facility: 'Mindray' }, 'long'],
+    [{ profile: P('autobio-autolumo-a1000'), app: '', facility: 'Mindray' }, 'long'],
   ];
   for (const [o, want] of cases) {
     assert.equal(replyStyle(o).layout, want, JSON.stringify({ ...o, profile: o.profile && o.profile.key }));
   }
   assert.equal(replyStyle({ profile: P('mindray-bs-200') }).wire, 'mindray-chem');
   assert.equal(replyStyle({ profile: P('autobio-autolumo-a1000') }).wire, 'autobio-hl7');
+});
+
+// LIS_VENDOR_EXACT_V1 (ревью; mindray-bc-5300.md §2, M5) — BC-5380 и гематология
+// эпохи DMU (MSH-3 пуст, MSH-4 = «Mindray») до «Добавить» (строки прибора ещё
+// нет): ответ — короткий вид гематологии, как у «BC-5300|Mindray». Раньше — вид
+// химии (20 «|» в MSH), принимает ли его гематология, не проверено.
+test('LIS_VENDOR_EXACT_V1: BC-5380 и гематология DMU («|Mindray») без строки прибора — короткий ответ гематологии (17 «|» в MSH)', () => {
+  const db = fresh();
+  for (const [app, fac, id] of [['BC-5380', 'Mindray', '61'], ['', 'Mindray', '62']]) {
+    const raw = seg(`MSH|^~\\&|${app}|${fac}|||20260910143943||ORU^R01|${id}|P|2.3.1||||||UNICODE`,
+      'OBR|1||LAB-000001|00001^Automated Count^99MRC', 'OBX|1|NM|6690-2^WBC^LN||6.1|10*9/L|||||F');
+    const out = receiveMessage(db, raw, { peer: '10.0.0.70' });
+    const [mshLine, msa] = linesOf(out.reply);
+    assert.equal(mshLine.split('|').length, 18, app + '|' + fac + ': ' + mshLine);
+    assert.equal(msa, `MSA|AA|${id}|Message accepted|||0`);
+  }
+  db.close();
 });

@@ -175,9 +175,25 @@ test('BC-780: 27 каналов по документам соседних мо�
 
 test('aliasesOf: у профиля без списка псевдоним — сама модель', async () => {
   const { aliasesOf } = await import('./index.js');
-  assert.deepEqual(aliasesOf(getProfile('mindray-bc-5300')), ['BC-5300']);
+  // LIS_VENDOR_EXACT_V1 — пример «без списка» — BC-20: у BC-5300 список теперь есть (тест ниже).
+  assert.deepEqual(aliasesOf(getProfile('mindray-bc-20')), ['BC-20']);
   assert.deepEqual(aliasesOf(getProfile('mindray-bs-200')), ['BS-200', 'BS-200E']);
   assert.deepEqual(aliasesOf(null), []);
+});
+
+// LIS_VENDOR_EXACT_V1 (ревью; mindray-bc-5300.md M5) — BC-5300 и BC-5380 —
+// одно приложение LIS, и MSH-3 называет любую из двух: «BC-5300 or BC-5380»
+// (руководство BC-5300/5380, приложение C, табл. 1; издание P08 пишет без
+// дефиса — «BC5300», «BC5380»). Раньше «BC-5380|Mindray» не узнавался: строка
+// без модели и ответ не гематологии, а вида химии.
+test('BC-5300: псевдонимы BC-5300, BC5300, BC-5380, BC5380 — прибор узнаётся по любому', async () => {
+  const { guessProfile } = await import('../discover.js');
+  assert.deepEqual(getProfile('mindray-bc-5300').aliases, ['BC-5300', 'BC5300', 'BC-5380', 'BC5380']);
+  for (const app of ['BC-5300', 'BC5300', 'BC-5380', 'BC5380', 'bc-5380']) {
+    assert.equal((guessProfile({ app, facility: 'Mindray' }) || {}).key, 'mindray-bc-5300', app);
+  }
+  assert.equal((guessProfile({ app: 'Mindray', facility: 'BC-5380' }) || {}).key, 'mindray-bc-5300', 'пример C.2.1 меняет поля местами');
+  assert.equal(guessProfile({ app: 'BC-5390', facility: 'Mindray' }), null, 'BC-5390 (DMU) — другая модель, по имени не угадывается');
 });
 
 // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 1: у BS-200 номер теста задаёт клиника
