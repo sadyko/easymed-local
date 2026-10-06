@@ -123,14 +123,26 @@ const VENDOR_KIND_WIRES = new Set(['mindray-chem']);
 const HEMATOLOGY_KIND_WIRES = new Set(['default', 'mindray-hematology']);
 const HEMATOLOGY_QC_PROCESSING = new Set(['Q', 'T', 'D']);
 const HEMATOLOGY_QC_RESULT_TYPE = /^0000[3-8]$/;
+/**
+ * LIS_VENDOR_EXACT_V1 (D7, ревью) — система кодов Mindray. Провод default читает
+ * и чужие приборы (найденный без модели, «Другой анализатор (общий HL7)»,
+ * прежние профили), а «00003»–«00008» — вид результата только у Mindray: в
+ * каждом примере производителя — «00003^LJ QCR^99MRC» (BC-5300, табл. 9;
+ * BC-3600, с. D-32). Без 99MRC такой OBR-4 — чужой код теста, а не контроль.
+ */
+const HEMATOLOGY_QC_SYSTEM = '99MRC';
 
-/** LIS_VENDOR_EXACT_V1 (D7) — контроль гематологии по MSH-11 или OBR-4.1 любого OBR. */
+/** LIS_VENDOR_EXACT_V1 (D7) — контроль гематологии по MSH-11 или OBR-4 любого OBR (вид результата Mindray, 99MRC). */
 function hematologyQc(text, msh) {
   const segs = String(text == null ? '' : text).split(SEG).filter((s) => s.trim() !== '');
-  const comp1 = (v) => String(v == null ? '' : v).split(msh.compSep)[0].trim();
-  const processing = comp1(String(segs[0] || '').split(msh.fieldSep)[10]).toUpperCase();
+  const comps = (v) => String(v == null ? '' : v).split(msh.compSep).map((c) => c.trim());
+  const processing = comps(String(segs[0] || '').split(msh.fieldSep)[10])[0].toUpperCase();
   if (HEMATOLOGY_QC_PROCESSING.has(processing)) return true;
-  return segs.some((s) => s.startsWith('OBR') && HEMATOLOGY_QC_RESULT_TYPE.test(comp1(s.split(msh.fieldSep)[4])));
+  return segs.some((s) => {
+    if (!s.startsWith('OBR')) return false;
+    const c = comps(s.split(msh.fieldSep)[4]);
+    return HEMATOLOGY_QC_RESULT_TYPE.test(c[0]) && String(c[2] || '').toUpperCase() === HEMATOLOGY_QC_SYSTEM;   // LIS_VENDOR_EXACT_V1 — только код Mindray
+  });
 }
 
 // Запросы рабочего списка (раздел 7): Easy-Med заказов не отдаёт, отвечает
@@ -153,7 +165,7 @@ const SEG = /\r\n?|\n/;
  *                   MSH-16 вида не меняет: проба пациента не прячется в служебные.
  *                   LIS_VENDOR_EXACT_V1 (D7) — у гематологии Mindray (провода
  *                   HEMATOLOGY_KIND_WIRES) контроль — MSH-11 = Q/T/D или OBR-4.1 =
- *                   00003–00008;
+ *                   00003–00008 с системой кодов Mindray 99MRC (OBR-4.3);
  *   'query'       — запрос рабочего списка (QRY^Q02, QRY^Q01, ORM^O01);
  *   'unsupported' — разобранный заголовок известного, но не поддержанного типа
  *                   (ADT^A01 …) — ответ AR;

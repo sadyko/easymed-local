@@ -476,6 +476,24 @@ test('D7: гематология — контроль по MSH-11 (Q, T, D) ил
   }
 });
 
+// LIS_VENDOR_EXACT_V1 (D7, ревью) — провод default читает не только гематологию
+// Mindray: найденный прибор без модели, «Другой анализатор (общий HL7)», прежние
+// профили. Вид результата 00003–00008 — код Mindray: в каждом примере
+// производителя он с системой кодов «99MRC» (BC-5300, приложение C, табл. 9 и
+// pdf 486–489; BC-3600, с. D-32 — «00003^LJ QCR^99MRC»). Без неё «00005» в
+// OBR-4 — чужой код теста, и проба пациента остаётся пробой, как в 3.16.0.
+test('D7: OBR-4 00003–00008 — контроль, только если это код Mindray (99MRC); у чужого прибора на проводе default — проба', () => {
+  const generic = (obr4) => seg('MSH|^~\&|XN-350|Sysmex|||20261006101500||ORU^R01|7|P|2.3.1', 'PID|1||P1',
+    `OBR|1||LAB-000123|${obr4}`, 'OBX|1|NM|WBC^WBC||6.10|10*9/L|||||F');
+  for (const obr4 of ['00005^Hemogram', '00003', '00006^X-R^LN', 'CBC^Complete blood count']) {
+    assert.equal(readEnvelope(generic(obr4), 'default').kind, 'result', obr4);
+  }
+  // Код Mindray — контроль, как прежде: и без имени, и в любом регистре системы.
+  for (const obr4 of ['00005^XB QCR^99MRC', '00004^^99MRC', '00003^LJ QCR^99mrc']) {
+    assert.equal(readEnvelope(generic(obr4), 'default').kind, 'qc', obr4);
+  }
+});
+
 // CL-900i и BS-240 — с D2 на mindray-chem: контроль — MSH-16 = 2, сообщение из
 // MSH и OBR, в OBR-2 — НОМЕР КАНАЛА теста («7»), не номер пробирки. Кадр —
 // пример руководства CL (Host Interface Manual, с. 1-28, pdf 36).
