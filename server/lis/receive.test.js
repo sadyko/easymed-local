@@ -382,6 +382,32 @@ test('LIS_VENDOR_EXACT_V1: replyStyle — короткий вид только �
   assert.equal(replyStyle({ profile: P('autobio-autolumo-a1000') }).wire, 'autobio-hl7');
 });
 
+// LIS_VENDOR_EXACT_V1 (ревью) — «Включён — слушать этот прибор» снят. До D4
+// «Сохранить» рвал соединение, и прибор слал дальше в общий порт 2575; теперь
+// соединение живёт — и пробы выключенного прибора писались бы в бланки. Лаборатория,
+// выключившая прибор (сломан, калибруют), этого не ждёт: проба — в лоток с
+// причиной, в бланк не пишется; ответ AA — прибор не повторяет. «Привязать» —
+// по-прежнему руками.
+test('LIS_VENDOR_EXACT_V1 (ревью): прибор выключен в «Анализаторах» — проба в лоток с причиной, в бланк не пишется; ответ AA; включили — пишется', () => {
+  const db = fresh();
+  db.prepare('UPDATE lab_devices SET enabled = 0 WHERE id = 1').run();
+  const out = receiveMessage(db, ORU(), { peer: '10.0.0.9', deviceId: 1 });
+  assert.equal(out.code, 'AA');
+  assert.equal(linesOf(out.reply)[1], 'MSA|AA|42|Message accepted|||0');
+  assert.equal(results(db).length, 0, 'в бланк не легло');
+  assert.equal(orderStatus(db), 'in_progress');
+  const m = last(db);
+  assert.deepEqual([m.status, m.kind, m.resolved_at, m.visit_service_id, m.device_id, m.sample_id], ['unmatched', 'result', null, null, 1, 'LAB-000001']);
+  assert.equal(m.detail, 'прибор выключен в «Анализаторах» — значения не записаны; включите его («Изменить» → «Включён») или нажмите «Привязать»');
+  // Контроль выключенного прибора — служебная строка, как прежде.
+  db.prepare("UPDATE lab_devices SET profile = 'mindray-bs-200' WHERE id = 1").run();
+  assert.equal(receiveMessage(db, BS200_QC(), { peer: '10.0.0.9', deviceId: 1 }).kind, 'qc');
+  db.prepare("UPDATE lab_devices SET profile = 'mindray-bc-5300', enabled = 1 WHERE id = 1").run();
+  receiveMessage(db, ORU(), { peer: '10.0.0.9', deviceId: 1 });
+  assert.equal(results(db)[0].value, '6.1', 'включили — пишется, как прежде');
+  db.close();
+});
+
 // LIS_VENDOR_EXACT_V1 (ревью; mindray-bc-5300.md §2, M5) — BC-5380 и гематология
 // эпохи DMU (MSH-3 пуст, MSH-4 = «Mindray») до «Добавить» (строки прибора ещё
 // нет): ответ — короткий вид гематологии, как у «BC-5300|Mindray». Раньше — вид

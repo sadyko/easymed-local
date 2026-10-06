@@ -21,6 +21,7 @@
 // или короткий вид гематологии (hl7.js LAYOUT_LONG / LAYOUT_SHORT); у A1000 —
 // MSA-4, по которому он отмечает результат «Accepted».
 import { readEnvelope, wireDecision } from './wire.js';   // wireDecision: LIS_VENDOR_EXACT_V1 — провод и для вида ответа
+import { readResult, pickMessageSample } from './wire.js';   // LIS_VENDOR_EXACT_V1 (ревью) — номер пробы выключенного прибора — в лоток
 import { buildAck, buildQueryReply, mshOf } from './hl7.js';
 import { internalAck, internalCode, firstField, LAYOUT_LONG, LAYOUT_SHORT } from './hl7.js';   // LIS_VENDOR_EXACT_V1
 import { guessProfile } from './discover.js';   // LIS_VENDOR_EXACT_V1 — как сообщение назвало себя
@@ -107,7 +108,7 @@ export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
   // контроль по MSH-16 — только у провода, объявившего это соглашение (химия
   // Mindray, Autobio по сети); приём читает тем же проводом.
   // LIS_VENDOR_EXACT_V1 — и вид ответа (replyStyle): провод тот же.
-  const device = deviceId ? db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(deviceId) : null;
+  const device = deviceId ? db.prepare('SELECT profile, enabled FROM lab_devices WHERE id = ?').get(deviceId) : null;   // enabled: LIS_VENDOR_EXACT_V1 (ревью)
   const head = mshOf(text);
   const style = replyStyle({ profile: device ? getProfile(device.profile) : null, facility: head.facility, app: head.app });
   const { wire, layout } = style;
@@ -124,6 +125,22 @@ export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
     if (env.kind !== 'query') return { code: 'AA', kind: env.kind, reply: buildAck(env, 'AA', { layout }) };
     // LIS_VENDOR_EXACT_V1 — ORM^O01 гематологии: ORR^O02 с MSA|AR «заказов нет».
     return { code: env.type === 'ORM^O01' ? 'AR' : 'AA', kind: env.kind, reply: buildQueryReply(env, { layout }) };
+  }
+
+  // LIS_VENDOR_EXACT_V1 (ревью) — прибор выключен («Включён — слушать этот
+  // прибор» снят): проба пациента — в лоток с причиной, в бланк не пишется. До D4
+  // «Сохранить» рвал соединение, теперь оно живёт на общем порту, и пробы
+  // выключенного прибора писались бы, как у включённого. Ответ AA: сообщение
+  // сохранено, повторять незачем; «Привязать» (rpc/lis.js) — руками, как прежде.
+  if (device && Number(device.enabled) === 0 && env.kind === 'result') {
+    recordMessage(db, {
+      deviceId, peer, raw: text, sampleId: pickMessageSample(readResult(text, wire).obrs, wire).sampleId,   // номер — человеку, как у приёма
+      visitServiceId: null, status: 'unmatched',
+      detail: 'прибор выключен в «Анализаторах» — значения не записаны; включите его («Изменить» → «Включён») или нажмите «Привязать»',
+    });
+    touchDevice(db, deviceId);
+    const ref = wire === 'autobio-hl7' ? autobioRef(text, env) : '';
+    return { code: 'AA', kind: 'result', reply: buildAck(env, 'AA', { layout, ref }) };
   }
 
   // Проба пациента, неразобранное и неподдержанное — прежний приём: он пишет
