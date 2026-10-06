@@ -110,6 +110,41 @@ export async function ensureClinicContext(supabase) {
     return clinic || null;
 }
 
+// CLINIC_API_FIX_V1 — «обновить бренд»: название клиники под меню
+// (.brand-sub) и window.CLINIC, по которому печатаются документы
+// (applyCompanyBranding).
+//
+// Раньше строку под меню заполнял только boot(), а до входа /api/rpc
+// отвечает 401 — строка пустая. Вход через форму страницу не перезагружает,
+// и имя появлялось только после F5. После сохранения «Компании» с новым
+// названием ни строка, ни window.CLINIC не менялись — печать брала старое.
+//
+// paintClinicBrand() рисует то, что уже лежит в window.CLINIC: boot() и
+// onAuthed() только что прочитали клинику (initClinicContext /
+// ensureClinicContext), второй такой же запрос до входа дал бы второй 401.
+// refreshClinicBrand() перечитывает get_clinic_by_slug и рисует — после
+// сохранения «Компании». Запасное имя 'Easy-Med Local' приходит от сервера
+// (rpc/clinic.js), когда название в «Компании» пустое.
+export function paintClinicBrand() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    if (typeof document.querySelector !== 'function') return;
+    const sub = document.querySelector('.brand-sub');
+    if (!sub) return;
+    const clinic = window.CLINIC;
+    if (clinic && clinic.name)  sub.textContent = clinic.name;
+    else if (window.CLINIC_SLUG) sub.textContent = window.CLINIC_SLUG;
+}
+
+// Неудачный запрос оставляет window.CLINIC как был: строка не гаснет из-за
+// сбоя сети, и ничего не падает.
+export async function refreshClinicBrand(supabase) {
+    if (typeof window === 'undefined') return null;
+    const clinic = await loadClinicBySlug(supabase, window.CLINIC_SLUG || 'local');
+    if (clinic) window.CLINIC = clinic;
+    paintClinicBrand();
+    return window.CLINIC || null;
+}
+
 // ---------------------------------------------------------------------
 // Trial banner — top-of-page strip shown only while the clinic is on the
 // 'trial' plan. Three states:

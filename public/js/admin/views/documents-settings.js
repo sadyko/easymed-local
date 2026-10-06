@@ -34,6 +34,8 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field } from '../ui.js';
 import { tr } from '../i18n.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
+// CLINIC_API_FIX_V1 — тот же экземпляр модуля, что у admin.js (тот же ?v=).
+import { refreshClinicBrand } from '../clinic-context.js?v=localclinic2';
 
 // SETTINGS_SPLIT_V1 — paper_size/show_watermark/footer_note/legal_note остались
 // в таблице, но не в этом объекте: DEFAULTS описывает то, чем управляет ЭТОТ
@@ -256,6 +258,10 @@ async function save() {
         applyStateToControls();
         renderPreview();
         toast(tr('Сохранено'), 'ok');
+        // CLINIC_API_FIX_V1 — новое название сразу под меню и в window.CLINIC
+        // (по нему печатаются документы), без F5. Сбой перечитывания
+        // сохранение не отменяет: оно уже прошло.
+        await refreshClinicBrand(supabase).catch(() => {});
     } catch (e) {
         toast((e && e.message) || tr('Не удалось сохранить.'), 'fail');
     } finally {

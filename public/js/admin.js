@@ -33,7 +33,7 @@ import { t, tr, trf, getLang, setLang, onLangChange } from './admin/i18n.js?v=pa
 // ACCESS_DENIED_ONE_PLACE_V1 — отказ рисуется одним помощником на всё приложение
 // (его же зовёт окно заведения пациента, у которого своего маршрута нет).
 import { accessDeniedPanel } from './admin/access-denied.js';
-import { initClinicContext, ensureClinicContext } from './admin/clinic-context.js?v=localclinic2';   // CLINIC_AFTER_LOGIN_V1
+import { initClinicContext, ensureClinicContext, paintClinicBrand } from './admin/clinic-context.js?v=localclinic2';   // CLINIC_AFTER_LOGIN_V1; CLINIC_API_FIX_V1 — paintClinicBrand
 import { renderVerificationBanner } from './admin/verify-banner.js?v=vb2';   // MODEL_A_VERIFY_V1
 import { renderSetupChecklist } from './admin/setup-checklist.js?v=nolicense1';     // ONBOARDING_CHECKLIST_V1
 import { renderNotifications } from './admin/notifications.js?v=nolicense1';      // NOTIF_CENTER_V1
@@ -2748,11 +2748,7 @@ async function boot() {
     // Await this so we can gate login on the clinic's verification state.
     const { slug, clinic } = await initClinicContext(supabase);
     loadDocBrandingAsync().catch(() => {});   // clinic-global document branding at boot
-    const sub = document.querySelector('.brand-sub');
-    if (sub) {
-        if (clinic?.name) sub.textContent = clinic.name;
-        else if (slug)    sub.textContent = slug;
-    }
+    paintClinicBrand();   // CLINIC_API_FIX_V1 — имя под меню; то же правило, что после входа и после «Компании»
 
     const userRow = await rehydrateUserFromSession();
     if (!userRow) { showLogin(); return; }
@@ -2813,6 +2809,9 @@ async function onAuthed(userRow, { fresh = false } = {}) {
     // first-login reset, boot-with-session), so it is the only place that can
     // fix all three. No-op when the clinic already resolved.
     await ensureClinicContext(supabase);
+    // CLINIC_API_FIX_V1 — и имя клиники под меню: после входа через форму
+    // boot() уже отработал с пустым window.CLINIC, строка осталась пустой до F5.
+    paintClinicBrand();
     await initBranchContext(supabase, userRow);
     state.user = actorFromUser(userRow);
     await applyActorPermissions(state.user);

@@ -14,7 +14,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { ensureClinicContext } from '../clinic-context.js';
+import { ensureClinicContext, refreshClinicBrand } from '../clinic-context.js';
 
 // Minimal supabase double: .rpc(name, args) resolving to {data, error}.
 function mockSupabase(result) {
@@ -58,4 +58,38 @@ test('tolerates an RPC that still fails', async () => {
 
   assert.strictEqual(out, null);
   assert.strictEqual(window.CLINIC, null);
+});
+
+// CLINIC_API_FIX_V1 — «обновить бренд» перечитывает клинику даже когда она уже
+// известна (после сохранения «Компании» она устарела), а сбой перечитывания не
+// гасит ни window.CLINIC, ни имя под меню.
+function brandDom() {
+  const sub = { textContent: '' };
+  globalThis.document = { querySelector: (sel) => (sel === '.brand-sub' ? sub : null) };
+  return sub;
+}
+
+test('refreshClinicBrand re-reads a resolved clinic and repaints the line under the menu', async () => {
+  const sub = brandDom();
+  globalThis.window = { CLINIC: CLINIC, CLINIC_SLUG: null, location: { hostname: '192.168.100.10' } };
+  const supabase = mockSupabase({ data: { ...CLINIC, name: 'Ann Family Clinic Plus' }, error: null });
+
+  await refreshClinicBrand(supabase);
+
+  assert.strictEqual(supabase.calls.length, 1, 'a saved «Компания» makes the cached clinic stale — must re-read');
+  assert.strictEqual(window.CLINIC.name, 'Ann Family Clinic Plus');
+  assert.strictEqual(sub.textContent, 'Ann Family Clinic Plus');
+});
+
+test('refreshClinicBrand keeps the old clinic and name when the re-read fails', async () => {
+  const sub = brandDom();
+  sub.textContent = 'Ann Family Clinic';
+  globalThis.window = { CLINIC: CLINIC, CLINIC_SLUG: null, location: { hostname: '192.168.100.10' } };
+  const supabase = mockSupabase({ data: null, error: { message: 'offline' } });
+
+  const out = await refreshClinicBrand(supabase);
+
+  assert.strictEqual(out, CLINIC);
+  assert.strictEqual(window.CLINIC, CLINIC);
+  assert.strictEqual(sub.textContent, 'Ann Family Clinic');
 });
