@@ -336,7 +336,8 @@ function autobioNote(nte, fieldSep, repSep) {
  * простое число — NM, флаги ORH/ORL — в abnormal (H/L) и знак «>»/«<» (D9).
  * qualitative (D6) — качественный ответ OBX-9 у mindray-chem: 'positive' |
  * 'negative'; есть только у таких строк. Простое число у mindray-chem — NM
- * (индекс COI качественного теста CL).
+ * (индекс COI качественного теста CL). LIS_VENDOR_EXACT_V1 (D6, ревью) — у
+ * не-числовой строки без ответа в OBX-9 — по тексту OBX-5 («+», «+-», «-» BS-200).
  *
  * obr — первый OBR: { placer: OBR-2, filler: OBR-3 }, компонент 1 без пробелов
  * по краям; null — OBR нет.
@@ -398,7 +399,12 @@ export function readResult(raw, wire = 'default') {
         // LIS_VENDOR_EXACT_V1 (D6) — качественный ответ прибора — OBX-9: у CL-900i
         // OBX-8 «Fixed as N» у КАЖДОГО результата, и положительный HBsAg/HCV/HIV
         // выходил «Норма». Флаг по ответу ставит ingest.js (resultFlag).
-        const q = qualitativeOf(f[9]);
+        // LIS_VENDOR_EXACT_V1 (D6, ревью) — а BS-200 пишет ответ в сам OBX-5:
+        // «test result (concentration, negative(-), positive(+), weak
+        // positive(+-), etc)» (HIM v5.0, с. 18), его OBX-9 — целое «вероятность».
+        // Текст OBX-5 читается только у не-числовой строки (OBX-2 не NM) и
+        // только если OBX-9 ответа не дал; число ответом не бывает (qualitativeOf).
+        const q = qualitativeOf(f[9]) || (o.valueType.toUpperCase() !== 'NM' ? qualitativeOf(o.value) : '');
         if (q) o.qualitative = q;
         // Индекс COI качественного теста (OBX-2 = ST) — число: numeric_value
         // есть, и диапазон клиники работает. Текст («+», «-», «+-») — как был.

@@ -1483,6 +1483,24 @@ test('D6: CL-900i — диапазон клиники для индекса COI 
   db.close(); wide.close();
 });
 
+// LIS_VENDOR_EXACT_V1 (D6, ревью) — BS-200: качественный ответ — в OBX-5
+// («negative(-), positive(+), weak positive(+-)», HIM v5.0, с. 18), OBX-2 = ST.
+// Раньше «+» ложился в бланк с флагом «Норма». Кадр — руководство BS-200 (с. 24).
+const BS200_RF = (value) => ['MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||',
+  'PID|1', 'OBR|1|LAB-000123|12|Mindray^BS-200|N||20261005101200||||||||serum',
+  `OBX|1|ST|7|RF|${value}||-|N|||F|||20261005101200`].join('\r');
+test('D6: BS-200 — «+» и «+-» в OBX-5 — «Отклонение», «-» — «Норма»; значение — текст, как пришло', () => {
+  const db = chem({ lines: [['RF', 'Ревматоидный фактор', '7']] });
+  const rf = () => db.prepare("SELECT value, numeric_value, flag FROM lab_results WHERE visit_service_id = 123 AND parameter = 'Ревматоидный фактор'").get();
+  assert.equal(ingestMessage(db, BS200_RF('+'), '10.0.0.40', 1), 'AA');
+  assert.deepEqual(rf(), { value: '+', numeric_value: null, flag: 'abnormal' }, 'положительный — не «Норма»');
+  ingestMessage(db, BS200_RF('+-'), '10.0.0.40', 1);
+  assert.deepEqual(rf(), { value: '+-', numeric_value: null, flag: 'abnormal' });
+  ingestMessage(db, BS200_RF('-'), '10.0.0.40', 1);
+  assert.deepEqual(rf(), { value: '-', numeric_value: null, flag: 'normal' });
+  db.close();
+});
+
 test('D6: resultFlag — качественный ответ прибора', async () => {
   const { resultFlag } = await import('./ingest.js');
   assert.equal(resultFlag({ num: 5.3, qualitative: 'positive', abnormal: 'N', deviceRange: '-' }), 'abnormal');

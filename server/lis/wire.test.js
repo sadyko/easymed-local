@@ -652,6 +652,31 @@ test('D6: CL-900i — OBX-9 читается: положительно/отри�
   assert.equal(readResult(CL_ORU('OBX|1|ST|HBsAg|HBsAg|5.32|COI|-|N|Positive+||F'), 'default').observations[0].qualitative, undefined);
 });
 
+// LIS_VENDOR_EXACT_V1 (D6, ревью) — BS-200 пишет качественный ответ в OBX-5:
+// «used as test result (concentration, negative(-), positive(+), weak
+// positive(+-), etc)» (Host Interface Manual v5.0, с. 18); OBX-9 у него —
+// целое «вероятность». Кадр — расположение полей руководства (с. 24): BS200.exe
+// называет себя «Mindray|BS-200»; значения синтетические.
+const BS200_Q = (obx2, v, obx9 = '') => seg('MSH|^~\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||',
+  'OBR|1|LAB-000123|12|Mindray^BS-200|N||20261005101200',
+  `OBX|1|${obx2}|RF|RF|${v}||-|N|${obx9}||F|||20261005101200`);
+
+test('D6: BS-200 — качественный ответ в OBX-5 («+», «+-», «-») — qualitative; число и целое OBX-9 — как прежде', () => {
+  const read = (...a) => readResult(BS200_Q(...a), 'mindray-chem').observations[0];
+  const pos = read('ST', '+');
+  assert.deepEqual([pos.value, pos.valueType, pos.qualitative], ['+', 'ST', 'positive'], 'текст в бланк — как пришёл');
+  assert.equal(read('ST', '+-').qualitative, 'positive', 'слабоположительно — тоже отклонение');
+  assert.equal(read('ST', '-').qualitative, 'negative');
+  assert.equal(read('ST', 'negative(-)').qualitative, 'negative');
+  assert.equal(read('ST', '+', '1').qualitative, 'positive', 'целое OBX-9 («вероятность») ответа не перекрывает');
+  // Число — не качественный ответ, и числовая строка (NM) текстом OBX-5 не читается.
+  assert.equal(read('NM', '5.230000', '1').qualitative, undefined);
+  assert.equal(read('ST', '5.32', '1').qualitative, undefined);
+  assert.equal(read('NM', '-').qualitative, undefined);
+  // Ответ в OBX-9 (CL-900i, BS-240) сильнее текста OBX-5.
+  assert.equal(read('ST', '-', 'Positive+').qualitative, 'positive');
+});
+
 test('D6 + D5: CL-900i — «нет результата» в OBX-5: не пишется; OBX-9 показан в причине для сверки', () => {
   const [o] = readResult(CL_ORU('OBX|2|ST|HCV|Anti-HCV|-268435455|COI|-|N|Positive+||F||-268435455|20261005101400||admin|0|'), 'mindray-chem').observations;
   assert.equal(o.hold, 'прибор: нет результата «-268435455», OBX-13 «-268435455», OBX-9 «Positive+» — для сверки, в бланк не пишется');
