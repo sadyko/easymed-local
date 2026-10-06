@@ -1288,3 +1288,41 @@ test('R7 п. 1: анализ пациента в стационаре, отпу�
   assert.equal(order(db).status, 'resulted');
   db.close();
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D5: «нет результата» Mindray не пишется ───────────
+// Кадр BS-240E (2026, расположение полей настоящей записи; значения
+// синтетические): штрихкод в OBR-2, Channel No. в OBX-3, имя в OBX-4, OBX-13 —
+// исходное значение. В сообщении два теста: глюкоза посчитана, мочевина — нет
+// («-268435455.000000»; так BS-240 пишет «нет результата», запись 2017 г.).
+const BS240E = (obx) => ['MSH|^~\&|||||20260528122129||ORU^R01|3|P|2.3.1',
+  'PID|1|||||||O|||||||||||||||||||||||',
+  'OBR|1|LAB-000123|1|^|N|20260528115302|20260528115240|20260528115240||1^1||||20260528115240|Serum',
+  ...obx].join('\r');
+
+test('D5: −268435455 не пишется в бланк и не стирает набранное руками; лоток называет код и показывает OBX-13', () => {
+  const db = chem({ profile: 'mindray-bs-240', lines: [['GLU', 'Глюкоза', 'Glu-G'], ['UREA', 'Мочевина', 'UREA']] });
+  // Лаборант уже набрал мочевину руками (черновик).
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, numeric_value, flag, source) VALUES (123, 'Мочевина', '6.2', 6.2, 'normal', 'manual')").run();
+  assert.equal(ingestMessage(db, BS240E([
+    'OBX|1|NM|Glu-G|Glucose (GOD-POD Method)|5.123400|mmol/L|-|N|||F||5.123400|20260528122129|||0||',
+    'OBX|2|NM|UREA|Urea|-268435455.000000||-|N|||F||0.000000|19000101000000|||0||',
+  ]), '10.0.0.42', 1), 'AA');
+  assert.deepEqual(blank(db), { 'Глюкоза': '5.1234', 'Мочевина': '6.2' }, '«нет результата» не легло и черновик не стёрло');
+  const urea = db.prepare("SELECT * FROM lab_results WHERE parameter = 'Мочевина'").get();
+  assert.deepEqual([urea.numeric_value, urea.source], [6.2, 'manual']);
+  const m = message(db);
+  assert.equal(m.status, 'unmapped', 'в лоток: строка бланка не заполнена прибором');
+  assert.equal(m.detail, 'не пришли: Мочевина (UREA, прибор: нет результата «-268435455.000000», OBX-13 «0.000000» — для сверки, в бланк не пишется)');
+  db.close();
+});
+
+test('D5: −100000000 c числом в OBX-13 — в бланк не идёт ни то, ни другое; качественное «+-» пишется, как прежде', () => {
+  const db = chem({ profile: 'mindray-bs-240', lines: [['ALT', 'АЛТ', 'ALT'], ['HCG', 'ХГЧ', 'HCG']] });
+  ingestMessage(db, BS240E([
+    'OBX|1|NM|ALT|ALT|-100000000.0|U/L|-|N|||F||73.7|20260528122129|||0||',
+    'OBX|2|ST|HCG|hCG|+-||-|N|||F|||20260528122129|||0||',
+  ]), '10.0.0.42', 1);
+  assert.deepEqual(blank(db), { 'ХГЧ': '+-' });
+  assert.match(message(db).detail, /^не пришли: АЛТ \(ALT, прибор: нет результата «-100000000\.0», OBX-13 «73\.7» — для сверки, в бланк не пишется\)$/);
+  db.close();
+});

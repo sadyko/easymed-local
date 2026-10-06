@@ -375,3 +375,23 @@ test('R5 п. 4: «5,10» = «5.1» для сравнения и спора; «5,
     [{ id: 1, name: 'Глюкоза', device_code: '2', device_code_confirmed: 1 }], { before: new Map([['Глюкоза', '5.1']]) });
   assert.deepEqual([s.changed.length, s.resent.length], [0, 1], 'повторная передача, а не спор');
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D5, D9: строка, которую провод велел не писать ─────
+// wire.js ставит obs.hold: «нет результата» Mindray (−268435455, −100000000)
+// или флаги прибора A1000 (ERR, QNS…). Такая строка не значение: в бланк не
+// идёт, строка бланка «не пришла» с причиной провода (лоток), и спором
+// («повтор») с уже записанным значением она не считается.
+test('D5: строка с hold — не значение: строка бланка «не пришла» с причиной провода, спора нет', () => {
+  const held = { ...obs('Glu-G', '-268435455'), hold: 'прибор: нет результата «-268435455.000000», OBX-13 «0.000000» — для сверки, в бланк не пишется' };
+  const p = planObservations([held], [line(1, 'Глюкоза', 'Glu-G')]);
+  assert.equal(p.fills.length, 0);
+  assert.equal(p.missing[0].reason, held.hold);
+  assert.deepEqual(p.unused, [], 'строка отнесена к своей строке бланка, не «лишняя»');
+  assert.deepEqual(outcome(p), { status: 'unmapped',
+    detail: 'не пришли: Глюкоза (Glu-G, прибор: нет результата «-268435455.000000», OBX-13 «0.000000» — для сверки, в бланк не пишется)' });
+  // Рядом окончательное значение той же строки — пишется оно, hold — не «повтор».
+  const both = planObservations([obs('Glu-G', '5.1'), held], [line(1, 'Глюкоза', 'Glu-G')]);
+  assert.equal(both.fills.length, 1);
+  assert.equal(both.fills[0].obs.value, '5.1');
+  assert.deepEqual(both.repeats, []);
+});

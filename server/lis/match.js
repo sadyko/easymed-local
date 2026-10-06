@@ -36,6 +36,13 @@ const noNumber = (obs, value) => key(obs.valueType) === 'NM' && !/\d/.test(value
 // Звёздочка рядом с текстом («*6.1», «Positive*») — по-прежнему значение.
 const onlyStars = (value) => /^\*+$/.test(value);
 
+// LIS_VENDOR_EXACT_V1 (D5, D9) — провод велел строку не писать (wire.js
+// obs.hold: «нет результата» Mindray, флаги прибора A1000). Это не значение:
+// в бланк не идёт и набранное руками не стирает, строка бланка «не пришла» с
+// причиной провода — и проба в лотке. Спором («повтор») с уже записанным
+// значением такая строка не считается.
+const held = (obs) => !!(obs && obs.hold);
+
 /**
  * @param {Array<{code:string,name:string,codeRaw:string,value:string,status:string}>} observations  строки прибора
  * @param {Array<{id:number,name:string,device_code:string,device_code_confirmed:number}>} analytes  строки бланка в порядке бланка
@@ -92,13 +99,15 @@ export function planObservations(observations = [], analytes = []) {
         // Предварительное (P), «не получено» (X), пустое и «без числа» (R11)
         // — не спор: «P, потом F» — законная пара, и такая строка остаётся
         // «не использована». Одни звёздочки (LIS_DISCOVERY_FIX_V1) — тоже.
-        if (status === 'F' && value && !onlyStars(value) && !noNumber(obs, value)) { used.add(i); repeats.push(obs); }
+        if (status === 'F' && value && !onlyStars(value) && !noNumber(obs, value) && !held(obs)) { used.add(i); repeats.push(obs); }
         return;
       }
       used.add(i);
       // Предварительный (P) и неполученный (X) в бланк не идут: лаборант
       // подтвердил бы число, которое прибор ещё сам не считает окончательным.
       if (status !== 'F') { if (!why.has(a)) why.set(a, 'статус ' + status); return; }
+      // LIS_VENDOR_EXACT_V1 (D5, D9) — причина провода.
+      if (held(obs)) { if (!why.has(a)) why.set(a, obs.hold); return; }
       // Пустое значение — не значение: оно не стирает набранное руками.
       if (!value) { if (!why.has(a)) why.set(a, 'пустое значение'); return; }
       // LIS_DISCOVERY_FIX_V1 — звёздочки раньше «нет числа»: у любой строки

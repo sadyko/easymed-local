@@ -204,6 +204,28 @@ function trimZeros(v) {
 }
 
 /**
+ * LIS_VENDOR_EXACT_V1 (D5) — «нет результата» Mindray: число в OBX-5 не больше
+ * −100000000. Руководство CL: «-0x0fffffff means invalid value» (−268435455);
+ * в записях BS-240 (2017) — «-268435455.000000» по каждому непосчитанному
+ * тесту, у BS-300 того же семейства — «-100000000.0». Такого значения не
+ * бывает ни у одного анализа, поэтому правило — на любом проводе. Текст
+ * качественных тестов («-», «+», «+-») не число и правило не задевает.
+ */
+const NO_RESULT_MAX = -100000000;
+function isNoResult(v) {
+  const s = String(v == null ? '' : v).trim().replace(/^(-\d+),(\d+)$/, '$1.$2');
+  return /^-\d+(\.\d+)?$/.test(s) && parseFloat(s) <= NO_RESULT_MAX;
+}
+/**
+ * Причина «не писать» для журнала лотка: что прислал прибор и, для сверки,
+ * OBX-13 — значение ДО правки (руководство BS-200: «used as original
+ * result»). OBX-13 в бланк не пишется никогда.
+ */
+function noResultHold(obx5, obx13) {
+  return 'прибор: нет результата «' + obx5 + '»' + (obx13 ? ', OBX-13 «' + obx13 + '» — для сверки, в бланк не пишется' : '');
+}
+
+/**
  * Строки теста и первый OBR по проводу (раздел 4). Без исключений: мусор даёт
  * пустой результат. Наружу — строки в сегодняшнем виде (valueType, code, name,
  * system, codeRaw, value, unit, range, abnormal, status) и новое поле label.
@@ -221,6 +243,10 @@ function trimZeros(v) {
  * | mindray-hematology | OBX-3.1, затем 3.2   | —                   | OBX-5 целиком                     |
  * Единица — OBX-6.1, референс — OBX-7, флаг — OBX-8 (1-е повторение), статус —
  * OBX-11 (пусто = F решает match.js), у всех одинаково.
+ *
+ * LIS_VENDOR_EXACT_V1 — hold: причина НЕ писать строку (match.js: строка бланка
+ * «не пришла» с этой причиной, лоток). Есть только у таких строк: «нет
+ * результата» Mindray (D5).
  *
  * obr — первый OBR: { placer: OBR-2, filler: OBR-3 }, компонент 1 без пробелов
  * по краям; null — OBR нет.
@@ -290,6 +316,9 @@ export function readResult(raw, wire = 'default') {
         o.label = t(obx3[1]) || t(obx3[0]);
         o.value = t(comp(String(f[5] == null ? '' : f[5]).split(repSep)[0])[1]);
       }
+      // LIS_VENDOR_EXACT_V1 (D5) — «нет результата»: строка помечена hold, и
+      // match.js её не пишет — строка бланка «не пришла» с этой причиной (лоток).
+      if (!o.hold && isNoResult(o.value)) o.hold = noResultHold(t(f[5]), t(f[13]));
       observations.push(o);
     }
   }

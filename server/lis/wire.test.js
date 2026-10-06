@@ -495,3 +495,32 @@ test('D7: CL-900i и BS-240 — контроль (MSH-16 = 2) и калибро�
   // На прежнем проводе default (до D2) тот же контроль читался как проба.
   assert.equal(readEnvelope(CL_QC, 'default').kind, 'result');
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D5: «нет результата» Mindray ──────────────────────
+// Mindray пишет в OBX-5 «нет результата» числом: −268435455 (−0x0FFFFFFF;
+// Host Interface Manual CL, с. 1-20: «-0x0fffffff means invalid value») или
+// −100000000. Кадры: настоящая запись BS-240 (2017, LiveMachine BS240_New.cs —
+// «нет результата» по каждому тесту, OBX-13 «0.000000») и BS-300 того же
+// семейства (OBX-5 «-100000000.0», в OBX-13 — исходное число 73.7). OBX-13 —
+// значение ДО правки, в бланк не пишется никогда: только для сверки в лотке.
+test('D5: OBX-5 ≤ −100000000 — «нет результата»: строка помечена hold, с OBX-13 для сверки; OBX-13 не читается как значение', () => {
+  const bs240 = seg('MSH|^~\&|||||20170413120602||ORU^R01|1|P|2.3.1||||0||ASCII|||', 'OBR|2|LAB-000123|1|^|N',
+    'OBX|1|NM||GLUCOSE HUMAN|-268435455.000000||-|N|||F||0.000000|19000101000000|||0|');
+  const [o] = readResult(bs240, 'mindray-chem').observations;
+  assert.match(o.hold, /^прибор: нет результата «-268435455\.000000», OBX-13 «0\.000000» — для сверки, в бланк не пишется$/);
+  const bs300 = seg('MSH|^~\&|||||20160101101500||ORU^R01|2|P|2.3.1||||0||ASCII|||', 'OBR|1|LAB-000123|2|Mindray^BS-300',
+    'OBX|1|NM|5|ALT|-100000000.0|U/L|-|N|||F||73.7|20160101101400|||0|');
+  const [p] = readResult(bs300, 'mindray-chem').observations;
+  assert.match(p.hold, /нет результата «-100000000\.0», OBX-13 «73\.7»/);
+  assert.notEqual(p.value, '73.7', 'OBX-13 — не значение');
+  // Без OBX-13 — без него; десятичная запятая; на любом проводе (BC-5300 — default).
+  const raw = (v, obx13 = '') => seg('MSH|^~\&|BC-5300|Mindray|||1||ORU^R01|1|P|2.3.1', 'OBR|1||LAB-000123',
+    `OBX|1|NM|6690-2^WBC^LN||${v}|10*9/L|||||F||${obx13}`);
+  assert.equal(readResult(raw('-268435455'), 'default').observations[0].hold, 'прибор: нет результата «-268435455»');
+  assert.ok(readResult(raw('-268435455,000000'), 'default').observations[0].hold);
+  assert.ok(readResult(raw('-100000000'), 'mindray-hematology').observations[0].hold);
+  // Не «нет результата»: обычные отрицательные числа, текст качественных тестов.
+  for (const v of ['-99999999', '-1.25', '0', '5.1', '-', '+', '+-', '<0.01', '***']) {
+    assert.equal(readResult(raw(v), 'default').observations[0].hold, undefined, v);
+  }
+});
