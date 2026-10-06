@@ -411,6 +411,9 @@ const IMPORT_CONFIGS = {
         // category / department FKs get filled in) instead of inserting a
         // duplicate. Match is case-insensitive and whitespace-normalised.
         matchField: 'name',
+        // CLINIC_API_FIX_V1 (ревью) — строка обновит существующую услугу:
+        // колонки с keepIfAbsent, которых нет в листе, её не меняют (buildRow).
+        rowUpdates: function (r, lookups) { return serviceRowUpdates({ name: r.name }, lookups); },
         // LOCAL_BUILD_V1 — the upstream SaaS wrote services through the
         // service-role gateway because RLS blocked custom services. This build
         // has no gateway (`/api/v1` is not mounted — see server/app.js) and no
@@ -553,12 +556,16 @@ const IMPORT_CONFIGS = {
             // invent new groups. Unknown type values warn and fall back to the
             // «Раздел» mirror type via transform; category/department still auto-create.
             { key: 'type',             fk: { source: 'service_types',      keyField: 'name', target: 'type_id' }, hint: 'Тип услуги — только из существующих типов клиники; необязательно. Пусто или неизвестное значение → тип подставляется по «Разделу».' },
-            { key: 'category',         fk: { source: 'service_categories', keyField: 'name', target: 'category_id',   autoCreate: true }, hint: 'Категория/направление (напр. МРТ головного мозга) — необязательно; создаётся автоматически.' },
-            { key: 'department',       fk: { source: 'departments',        keyField: 'name', target: 'department_id', autoCreate: true }, hint: 'Отделение — необязательно; создаётся автоматически.' },
+            // CLINIC_API_FIX_V1 (ревью) — keepIfAbsent: колонки нет в листе —
+            // обновляемая услуга её не меняет (было: стирались категория,
+            // отделение, кабинет; цена, НДС, длительность, доля, «нужен врач» и
+            // «активна» — по умолчанию). Новая услуга получает то же, что и раньше.
+            { key: 'category',         keepIfAbsent: true, fk: { source: 'service_categories', keyField: 'name', target: 'category_id',   autoCreate: true }, hint: 'Категория/направление (напр. МРТ головного мозга) — необязательно; создаётся автоматически.' },
+            { key: 'department',       keepIfAbsent: true, fk: { source: 'departments',        keyField: 'name', target: 'department_id', autoCreate: true }, hint: 'Отделение — необязательно; создаётся автоматически.' },
             // IMPORT_PRICE_OPTIONAL_V1 — price used to be required, which blocked
             // importing price-lists that get priced after upload. Missing price
             // now imports as 0 with a warning instead of an error.
-            { key: 'price',            coerce: 'num',  defaultNum: 0,  warnIfMissing: true, hint: 'Цена, число — напр. 150000 (пусто → 0)' },
+            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  warnIfMissing: true, hint: 'Цена, число — напр. 150000 (пусто → 0)' },
             // FULL_EXPORT_V1 (2026-09-14) — owner: «exporting and importing are not
             // giving all the information». Every field the service editor holds now
             // travels: code, the visit-tier prices (VISIT_TIER_PRICING_V1), the
@@ -577,10 +584,10 @@ const IMPORT_CONFIGS = {
             { key: 'price_repeat',     coerce: 'num', hint: 'Цена повторного визита, третий и далее (0 — бесплатно; пусто — как второй)' },
             { key: 'repeat_days_from', coerce: 'int', hint: 'Повторный визит — не раньше чем через N дней после предыдущего (пусто — как у второго)' },
             { key: 'repeat_days_to',   coerce: 'int', hint: 'и не позже чем через M дней (пусто — как у второго)' },
-            { key: 'tax_rate',         coerce: 'num',  defaultNum: 12, hint: 'НДС % (по умолчанию 12, если пусто)' },
-            { key: 'duration_minutes', coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
-            { key: 'requires_doctor',  coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },
-            { key: 'default_doctor_percent', coerce: 'num', hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
+            { key: 'tax_rate',         keepIfAbsent: true, coerce: 'num',  defaultNum: 12, hint: 'НДС % (по умолчанию 12, если пусто)' },
+            { key: 'duration_minutes', keepIfAbsent: true, coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
+            { key: 'requires_doctor',  keepIfAbsent: true, coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },
+            { key: 'default_doctor_percent', keepIfAbsent: true, coerce: 'num', hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
             { key: 'doctor_tier_from',    coerce: 'num', hint: 'Ступень: порог услуг в месяц — повышенная доля начинается со следующей услуги (0 или пусто — ступени нет)' },
             { key: 'doctor_tier_percent', coerce: 'num', hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
             // DOCTOR_TIER_V2 — ступени 2 и 3: пороги строго растут, заполняются по порядку.
@@ -588,12 +595,12 @@ const IMPORT_CONFIGS = {
             { key: 'doctor_tier_percent_2', coerce: 'num', hint: 'Ступень 2: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
             { key: 'doctor_tier_from_3',    coerce: 'num', hint: 'Ступень 3: порог услуг в месяц — больше порога ступени 2 (0 или пусто — ступени нет)' },
             { key: 'doctor_tier_percent_3', coerce: 'num', hint: 'Ступень 3: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
-            { key: 'room',             fk: { source: 'rooms', keyField: 'name', target: 'room_id' }, hint: 'Кабинет (очередь диагностики) — по названию из справочника; необязательно' },
+            { key: 'room',             keepIfAbsent: true, fk: { source: 'rooms', keyField: 'name', target: 'room_id' }, hint: 'Кабинет (очередь диагностики) — по названию из справочника; необязательно' },
             { key: 'specimen',         hint: 'Лаборатория: материал (кровь, моча…) — необязательно' },
             { key: 'tube_color',       hint: 'Лаборатория: пробирка — light_blue, red, gold, green, lavender, pink, grey, royal_blue, yellow_acd, black, none' },
             // EXTERNAL_LAB_V1 — только подпись; пустая ячейка под заголовком = нет.
             { key: 'external_lab',     coerce: 'bool', defaultBool: false, hint: 'Лаборатория: true / false — внешняя лаборатория (анализ делает другая клиника, результат вносится у нас)' },
-            { key: 'active',           coerce: 'bool', defaultBool: true, hint: 'true / false — активна (по умолчанию true)' },
+            { key: 'active',           keepIfAbsent: true, coerce: 'bool', defaultBool: true, hint: 'true / false — активна (по умолчанию true)' },
         ],
         // SERVICE_IMPORT_TYPE_NO_AUTOCREATE_V1 — sample rows leave `type` blank so
         // the template demonstrates the safe default (group comes from «Раздел»).
@@ -1682,6 +1689,9 @@ function buildRow(raw, rowNum, lookups, cfg) {
     let status  = 'ok';
     const payload = {};
     const captures = {};   // PROCUREMENT_IMPORT_V1 — non-column values for afterImport
+    // CLINIC_API_FIX_V1 (ревью) — строка обновит существующую запись (раздел
+    // знает это сам: cfg.rowUpdates, у услуг — галочка и совпадение по названию).
+    const updating = typeof cfg.rowUpdates === 'function' && !!cfg.rowUpdates(r, lookups);
 
     for (const col of cfg.columns) {
         // PROCUREMENT_IMPORT_V1 — a column may match by its key or any alias
@@ -1693,6 +1703,12 @@ function buildRow(raw, rowNum, lookups, cfg) {
                 if (r[ak] != null) { cellRaw = r[ak]; break; }
             }
         }
+        // CLINIC_API_FIX_V1 (ревью) — КОЛОНКИ, КОТОРОЙ В ЛИСТЕ НЕТ, нет и в
+        // записи, которую строка обновляет: ни значения по умолчанию, ни
+        // предупреждения о нём. Пустая ячейка под своим заголовком — как раньше;
+        // новая запись — как раньше.
+        if (col.keepIfAbsent && updating && !(col.key in r)
+            && !(col.aliases || []).some((a) => String(a).trim().toLowerCase().replace(/\s+/g, '_') in r)) continue;
 
         // Required check.
         if (col.required) {
