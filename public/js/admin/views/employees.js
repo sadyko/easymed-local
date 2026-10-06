@@ -450,6 +450,17 @@ function openEditor(user, root) {
     };
     if (!emp.public_profile) emp.public_profile = {};
     const profilePatch = {};
+    // CLINIC_API_FIX_V1 — профиль, с которым карточка открылась. В PATCH уходят
+    // только поля, ставшие не такими (тексты — без пробелов по краям, как их
+    // хранит сервер): тронутое и возвращённое не откатывает правку, которую
+    // врач тем временем сделал в «Моём профиле». Не пришёл профиль — точка
+    // отсчёта пустая, и пустой раздел ничего не стирает.
+    const profileAtOpen = { ...emp.public_profile };
+    const profileSame = (k, a, b) => {
+        if (k === 'experience_years') { const n = (v) => (v == null || v === '' ? null : Number(v)); return n(a) === n(b); }
+        if (Array.isArray(a) || Array.isArray(b)) return JSON.stringify(a || []) === JSON.stringify(b || []);
+        return String(a == null ? '' : a).trim() === String(b == null ? '' : b).trim();
+    };
     let active = 'personal';
     let dirty = false;
     // EMPLOYEE_CARD_SAVE_V1 — с чем карточка открылась: сохранение существующего
@@ -982,7 +993,10 @@ function openEditor(user, root) {
         // которых карточка не знает, остаются как были.
         if (isEdit && specKey(emp.specialties) === specsAtOpen) { delete payload.specialties; delete payload.specialty; }
         // DOCTOR_PUBLIC_PROFILE_V1 — только изменённые поля профиля.
-        if (Object.keys(profilePatch).length) payload.public_profile = { ...profilePatch };
+        // CLINIC_API_FIX_V1 — «изменённые» — отличные от открытых, а не тронутые.
+        const profileChanged = {};
+        for (const [k, v] of Object.entries(profilePatch)) if (!profileSame(k, v, profileAtOpen[k])) profileChanged[k] = v;
+        if (Object.keys(profileChanged).length) payload.public_profile = profileChanged;
         // ADMIN_ROWS_GRANTABLE_V1 — без «Цены и проценты» деньги не уходят вовсе:
         // экран их не показывал, и сервер отказал бы всей записи.
         if (!acc.money) for (const k of MONEY_KEYS) delete payload[k];

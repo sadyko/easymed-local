@@ -238,6 +238,12 @@ export function updateMyDoctorProfile(db, args, user) {
       const ins = db.prepare('INSERT INTO doctor_conditions (doctor_id, kind, slug, name_ru, name_uz) VALUES (?,?,?,?,?)');
       for (const r of condRows) ins.run(uid, r.kind, r.slug, r.name_ru, r.name_uz);
     }
+    // CLINIC_API_FIX_V1 — экран шлёт только изменённое, и updated_at строки
+    // врача говорит, когда профиль менялся (как PATCH /api/users в карточке
+    // сотрудника). Ничего не прислано — строка не тронута.
+    if (saved.length || specRows || condRows) {
+      db.prepare("UPDATE users SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(uid);
+    }
   })();
   return {
     ok: true, saved, not_stored: notStored,

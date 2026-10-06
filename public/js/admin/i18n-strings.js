@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (2026-10-06) — «Мой профиль» врача шлёт только изменённое; без правок сохранять нечего (views/doctor-profile.js)
+  "Нет изменений": {"en":"No changes","ru":"Нет изменений","uz":"O'zgarishlar yo'q"},   // CLINIC_API_FIX_V1
   // EMPLOYEE_CARD_SAVE_V1 (2026-10-02) — карточка сотрудника: отказ сохранения называет пустые поля; пометки «Личных данных» и «Должности» (views/employees.js)
   "Не заполнено: {list}": {"en":"Not filled in: {list}","ru":"Не заполнено: {list}","uz":"To'ldirilmagan: {list}"},   // EMPLOYEE_CARD_SAVE_V1
   "Фамилия или имя не заполнены. Остальные разделы карточки сохраняются, а ФИО останется прежним, пока не заполните оба поля.": {"en":"The last name or first name is not filled in. The other sections of the card are saved, and the full name stays as it was until you fill in both fields.","ru":"Фамилия или имя не заполнены. Остальные разделы карточки сохраняются, а ФИО останется прежним, пока не заполните оба поля.","uz":"Familiya yoki ism to'ldirilmagan. Kartaning boshqa bo'limlari saqlanadi, ikkala maydonni to'ldirmaguningizcha F.I.Sh. avvalgidek qoladi."},   // EMPLOYEE_CARD_SAVE_V1

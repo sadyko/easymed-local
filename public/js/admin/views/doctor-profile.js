@@ -198,6 +198,17 @@ export async function renderDoctorProfile(container, doctorId) {
     // ----- Card 9: conditions (ported) -----
     root.appendChild(card('Болезни и симптомы, которые я лечу', 'Pulse', conditionsCard()));
 
+    // ----- What the screen shows right after opening -----
+    // CLINIC_API_FIX_V1 (2026-10-06) — СОХРАНЯЕТСЯ ТОЛЬКО ИЗМЕНЁННОЕ. Прежде
+    // каждое «Сохранить профиль» слало ВСЕ поля профиля и целые наборы
+    // специальностей и болезней: правка администратора в карточке сотрудника,
+    // сделанная, пока у врача открыт этот экран, молча откатывалась, а экран,
+    // который не загрузился (запрос к базе отклонён), открывался пустым и
+    // стирал весь профиль. Точка отсчёта — то, что экран собрал бы сразу после
+    // открытия (теми же сборщиками: подставленное ФИО, нормализованные списки),
+    // а после удачного сохранения — сохранённое.
+    let atOpen = collectAll();
+
     // ----- Save bar -----
     const saveBtn = h('button', { class: 'btn btn-primary docprof-save', type: 'button' },
         Icon('Check', { size: 14 }), ' Сохранить профиль');
@@ -213,26 +224,14 @@ export async function renderDoctorProfile(container, doctorId) {
             let photoUrl = '';
             try { photoUrl = await uploadPendingPhoto(); } catch (e) { console.warn('[doctor-profile] photo upload:', e.message || e); }
 
-            // (2) Assemble whitelisted RPC payload. '' clears a field.
+            // (2) Whitelisted RPC payload — CLINIC_API_FIX_V1: only the keys that
+            // differ from atOpen. '' clears a field.
+            const now = collectAll();
             const p = {};
-            for (const lng of LANGS) {
-                const n = nameInputs[lng] || {};
-                p[`full_name_${lng}`] = ['last', 'first', 'middle']
-                    .map((k) => ((n[k] && n[k].value) || '').trim()).filter(Boolean).join(' ');
+            for (const [k, v] of Object.entries(now.p)) {
+                if (JSON.stringify(v) !== JSON.stringify(atOpen.p[k])) p[k] = v;
             }
-            const _deg = academicOpts[parseInt((academicSel && academicSel.value) || '0', 10) || 0] || { ru: '', uz: '', en: '' };
-            for (const lng of LANGS) p[`academic_title_${lng}`] = (_deg[lng] || '').trim();
-            for (const [base] of TRI_TEXT) {
-                for (const lng of LANGS) p[`${base}_${lng}`] = (triInputs[base][lng].value || '').trim();
-            }
-            for (const base of ['education', 'experience', 'certifications', 'prof_dev']) {
-                p[`${base}_entries`] = listCollectors[base] ? listCollectors[base]() : [];
-            }
-            const yrs = scalarInputs.experience_years.value.trim();
-            p.experience_years = yrs === '' ? null : Math.max(0, parseInt(yrs, 10) || 0);
-            p.instagram_url = (contactInputs.instagram_url.value || '').trim();
-            p.telegram_url = (contactInputs.telegram_url.value || '').trim();
-            if (photoUrl) p.photo_url = photoUrl;   // never blank an existing photo by accident
+            if (photoUrl) p.photo_url = photoUrl;   // only a newly chosen photo; never blank an existing one
 
             // (3) RPC — server-side whitelist; only the current doctor's row.
             // RPC_PORT_V1 — специальности (до 4, [0] = основная) и болезни/симптомы
@@ -240,16 +239,24 @@ export async function renderDoctorProfile(container, doctorId) {
             // Напрямую в user_specialties / doctor_conditions экран больше не
             // пишет: реестр пускает туда только admin, и insert с company_id
             // отвергался у всех.
-            const specialties = st.specSlugs.filter(Boolean).slice(0, 4);
-            const conditions = [...st.selectedConds.values()].map((x) => ({
-                kind: x.kind, slug: x.slug, name_ru: x.name_ru || null, name_uz: x.name_uz || null,
-            }));
-            const { data: saveRes, error: rpcErr } = await supabase.rpc('update_my_doctor_profile', { p, specialties, conditions });
+            // CLINIC_API_FIX_V1 — набор уходит, только если он стал другим:
+            // без ключа сервер оставляет строки как были.
+            const args = { p };
+            if (JSON.stringify(now.specialties) !== JSON.stringify(atOpen.specialties)) args.specialties = now.specialties;
+            if (JSON.stringify(now.conditions) !== JSON.stringify(atOpen.conditions)) args.conditions = now.conditions;
+            if (!Object.keys(p).length && !('specialties' in args) && !('conditions' in args)) {
+                // Фото не загрузилось — об этом уже сказал свой тост.
+                if (!st.photoFile) toast('Нет изменений', 'info');
+                return;
+            }
+            const { data: saveRes, error: rpcErr } = await supabase.rpc('update_my_doctor_profile', args);
             if (rpcErr) throw rpcErr;
             const notStored = (saveRes && Array.isArray(saveRes.not_stored)) ? saveRes.not_stored : [];
+            atOpen = now;   // CLINIC_API_FIX_V1 — следующее сохранение считает от сохранённого
 
-            // (6) Reflect the new photo in state so a re-save doesn't re-upload.
-            if (photoUrl) { st.photoUrl = photoUrl; st.photoFile = null; }
+            // (6) Reflect the new photo in state so a re-save doesn't re-upload
+            // (CLINIC_API_FIX_V1 — and doesn't re-send it as "по ссылке").
+            if (photoUrl) { st.photoUrl = photoUrl; st.photoFile = null; st.user.photo_url = photoUrl; }
             // (6b) DOCTOR_SYNC_V1 — публикация в облачный medcore убрана (V3120_FIX):
             // офлайн шлюза нет, и каждое «Сохранить профиль» заканчивалось 404.
             // RPC_PORT_V1 — не говорим «сохранён» о том, что офлайн не хранится.
@@ -259,11 +266,40 @@ export async function renderDoctorProfile(container, doctorId) {
             else toast('Профиль сохранён', 'info');
         } catch (e) {
             toast(trf('Не удалось сохранить: {msg}', { msg: e.message || e }), 'fail');
+        } finally {
+            saveBtn.disabled = false;
+            saveBtn.textContent = '';
+            saveBtn.append(Icon('Check', { size: 14 }), ' Сохранить профиль');
         }
-        saveBtn.disabled = false;
-        saveBtn.textContent = '';
-        saveBtn.append(Icon('Check', { size: 14 }), ' Сохранить профиль');
     };
+
+    // CLINIC_API_FIX_V1 — профиль (без фото: фото уходит, только когда выбрано
+    // новое), специальности и болезни в том виде, в каком их шлёт RPC.
+    function collectAll() {
+        const p = {};
+        for (const lng of LANGS) {
+            const n = nameInputs[lng] || {};
+            p[`full_name_${lng}`] = ['last', 'first', 'middle']
+                .map((k) => ((n[k] && n[k].value) || '').trim()).filter(Boolean).join(' ');
+        }
+        const _deg = academicOpts[parseInt((academicSel && academicSel.value) || '0', 10) || 0] || { ru: '', uz: '', en: '' };
+        for (const lng of LANGS) p[`academic_title_${lng}`] = (_deg[lng] || '').trim();
+        for (const [base] of TRI_TEXT) {
+            for (const lng of LANGS) p[`${base}_${lng}`] = (triInputs[base][lng].value || '').trim();
+        }
+        for (const base of ['education', 'experience', 'certifications', 'prof_dev']) {
+            p[`${base}_entries`] = listCollectors[base] ? listCollectors[base]() : [];
+        }
+        const yrs = scalarInputs.experience_years.value.trim();
+        p.experience_years = yrs === '' ? null : Math.max(0, parseInt(yrs, 10) || 0);
+        p.instagram_url = (contactInputs.instagram_url.value || '').trim();
+        p.telegram_url = (contactInputs.telegram_url.value || '').trim();
+        const specialties = st.specSlugs.filter(Boolean).slice(0, 4);
+        const conditions = [...st.selectedConds.values()].map((x) => ({
+            kind: x.kind, slug: x.slug, name_ru: x.name_ru || null, name_uz: x.name_uz || null,
+        }));
+        return { p, specialties, conditions };
+    }
 
     // =======================================================================
     // Helpers (closures over st / doctorId / companyId / triInputs).

@@ -195,6 +195,44 @@ test('без ключей specialties / conditions наборы не трога�
   assert.equal(db.prepare('SELECT COUNT(*) n FROM doctor_conditions WHERE doctor_id = 2').get().n, 1);
 });
 
+// CLINIC_API_FIX_V1 — «Мой профиль» шлёт только изменённые поля. Присланное
+// пишется, остальное (в том числе правка администратора в карточке, сделанная
+// после того, как врач открыл экран) остаётся; updated_at строки врача
+// показывает, когда профиль менялся.
+test('CLINIC_API_FIX_V1: частичный набор пишет только присланное, правка администратора цела', () => {
+  const db = seed();
+  db.prepare("UPDATE users SET bio_ru = 'Старое', bio_uz = 'Admin yozdi', full_name_ru = 'Иванов Иван' WHERE id = 2").run();
+  const out = updateMyDoctorProfile(db, { p: { bio_ru: 'Новое' } }, doc);
+  assert.deepEqual(out.saved, ['bio_ru']);
+  const row = db.prepare('SELECT bio_ru, bio_uz, full_name_ru FROM users WHERE id = 2').get();
+  assert.deepEqual({ ...row }, { bio_ru: 'Новое', bio_uz: 'Admin yozdi', full_name_ru: 'Иванов Иван' });
+});
+
+test('CLINIC_API_FIX_V1: сохранение профиля обновляет updated_at строки врача', () => {
+  const db = seed();
+  const OLD = '2000-01-01T00:00:00Z';
+  const stamp = (id) => db.prepare('SELECT updated_at FROM users WHERE id = ?').get(id).updated_at;
+  const reset = () => db.prepare('UPDATE users SET updated_at = ? WHERE id IN (2, 3)').run(OLD);
+
+  reset();
+  updateMyDoctorProfile(db, { p: { bio_ru: 'x' } }, doc);
+  assert.notEqual(stamp(2), OLD, 'поля профиля сохранены, а updated_at прежний');
+  assert.match(stamp(2), /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+  assert.equal(stamp(3), OLD, 'чужая строка не трогается');
+
+  reset();
+  updateMyDoctorProfile(db, { p: {}, specialties: ['kardiolog'] }, doc);
+  assert.notEqual(stamp(2), OLD, 'специальности сохранены, а updated_at прежний');
+
+  reset();
+  updateMyDoctorProfile(db, { p: {}, conditions: [{ kind: 'disease', slug: 'a', name_ru: 'A' }] }, doc);
+  assert.notEqual(stamp(2), OLD, 'болезни сохранены, а updated_at прежний');
+
+  reset();
+  updateMyDoctorProfile(db, { p: {} }, doc);
+  assert.equal(stamp(2), OLD, 'ничего не прислано — строка не менялась');
+});
+
 // Ревью M7a — users.specialty (одна строка, которую читают списки врачей,
 // отчёты по специальностям, бланки) обязана совпадать с основной
 // специальностью, как её держит routes/users.js при правке сотрудника.
