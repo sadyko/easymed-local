@@ -74,11 +74,16 @@ export async function loadGeography() {
     return { regions };
 }
 
-let state = { tab: 'geo', region: DEFAULT_REGION, geo: null };
+// REFERENCE_LISTS_V1 (ревью M2) — id вкладок и панели уникальны на каждую отрисовку.
+let seq = 0;
 
 export async function renderReferenceLists(container, ctx = {}) {
     clear(container);
-    state = { tab: 'geo', region: DEFAULT_REGION, geo: null };
+    // REFERENCE_LISTS_V1 (ревью M5) — состояние у каждой отрисовки СВОЁ: общее на
+    // модуль переписала бы медленная прежняя отрисовка, дождавшись ответа сервера.
+    // region — id региона, а не код (ревью M3): регион, заведённый в «Географии»
+    // без кода, выбирается так же; null — «открытый сразу» (DEFAULT_REGION).
+    const state = { tab: 'geo', region: null, geo: null, uid: 'ref-' + (++seq) };
 
     const root = h('div', { class: 'fade-in' });
     container.appendChild(root);
@@ -98,37 +103,50 @@ export async function renderReferenceLists(container, ctx = {}) {
 
     const card = h('section', { class: 'card', style: { overflow: 'hidden' } });
     root.appendChild(card);
-    const body = h('div', { role: 'tabpanel' });
-    const paint = () => paintCard(card, body, paint);
+    const body = h('div', { role: 'tabpanel', id: state.uid + '-panel' });
+    // REFERENCE_LISTS_V1 (ревью M1) — выбор перерисовывает карточку, и узел, на
+    // котором стоял фокус, исчезает. `focus` говорит, куда его вернуть: на
+    // открытую вкладку ('tab') или на выбранную строку региона ('region').
+    // После загрузки фокус не трогаем — человек мог уже уйти в другое место.
+    const paint = (focus = null) => paintCard(state, card, body, paint, focus);
 
     paint();
     state.geo = await loadGeography();
     paint();
 }
 
-function paintCard(card, body, paint) {
+function paintCard(state, card, body, paint, focus) {
     clear(card);
     card.appendChild(h('div', { class: 'card-header' },
         h('h3', null, Icon('Layers', { size: 17 }), 'Общие списки'),
         h('span', { class: 'tag tag-info' }, 'Только просмотр'),
     ));
+    const tabId = (id) => state.uid + '-tab-' + id;
+    let activeTab = null;
     const tab = (id, label, count) => {
         const on = state.tab === id;
-        return h('button', {
-            class: 'tab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false',
-            onclick: () => { if (!on) { state.tab = id; paint(); } },
+        const el = h('button', {
+            class: 'tab' + (on ? ' on' : ''), type: 'button', role: 'tab', id: tabId(id),
+            'aria-selected': on ? 'true' : 'false', 'aria-controls': body.getAttribute('id'),
+            onclick: () => { if (!on) { state.tab = id; paint('tab'); } },
         }, label, count == null ? null : h('span', { class: 'tab-count' }, raw(count)));
+        if (on) activeTab = el;
+        return el;
     };
     const geoCount = state.geo && state.geo.regions ? state.geo.regions.length : null;
     card.appendChild(h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Справочники', style: { padding: '0 12px' } },
         tab('geo', 'Города и районы', geoCount),
         tab('spec', 'Специальности', SPECIALTY_ROWS.length),
     ));
+    body.setAttribute('aria-labelledby', tabId(state.tab));
     card.appendChild(body);
     clear(body);
+    let selRow = null;
     if (state.tab === 'spec') paintSpecialties(body);
     else if (!state.geo) body.appendChild(h('div', { class: 'muted', style: { padding: '24px', textAlign: 'center' } }, 'Загрузка…'));
-    else paintGeography(body, paint);
+    else selRow = paintGeography(state, body, paint);
+    const target = focus === 'tab' ? activeTab : focus === 'region' ? selRow : null;
+    if (target) target.focus();
 }
 
 /** Таблица «Код · RU · UZ · EN» — одна на районы и на специальности. */
@@ -148,25 +166,31 @@ function paintSpecialties(body) {
     body.appendChild(codeTable(SPECIALTY_ROWS.map((s) => ({ code: s.slug, ru: s.ru, uz: s.uz, en: s.en })), 'ref-spec'));
 }
 
-function paintGeography(body, paint) {
+/** Рисует вкладку «Города и районы»; возвращает строку выбранного региона (для фокуса). */
+function paintGeography(state, body, paint) {
     const empty = (text) => h('div', { class: 'empty', style: { padding: '32px 20px' } }, text);
-    if (state.geo.error) { body.appendChild(empty('Не удалось загрузить города и районы — обновите страницу.')); return; }
+    if (state.geo.error) { body.appendChild(empty('Не удалось загрузить города и районы — обновите страницу.')); return null; }
     const regions = state.geo.regions;
-    const sel = regions.find((r) => r.code === state.region) || regions[0];
-    if (!sel) { body.appendChild(empty('Районов нет.')); return; }
+    const sel = regions.find((r) => r.id === state.region)
+        || regions.find((r) => r.code === DEFAULT_REGION) || regions[0];
+    if (!sel) { body.appendChild(empty('Районов нет.')); return null; }
 
-    const pick = (code) => { if (code !== state.region) { state.region = code; paint(); } };
+    // Повторный выбор того же региона ничего не перерисовывает — фокус и так на нём.
+    const pick = (r) => { if (r !== sel) { state.region = r.id; paint('region'); } };
+    let selRow = null;
     const left = h('div', { style: { flex: '1 1 320px', minWidth: 0, borderRight: '1px solid var(--ink-100)' } },
         h('table', { class: 'tbl' },
             h('thead', null, h('tr', null,
                 h('th', null, 'Город / область'), h('th', null, 'Код'), h('th', { style: { textAlign: 'right' } }, 'Районов'))),
             h('tbody', null, ...regions.map((r) => {
                 const on = r === sel;
-                return h('tr', {
-                    class: 'ref-region', 'data-code': r.code, tabindex: '0', 'aria-selected': on ? 'true' : 'false',
+                // Строка таблицы — не вариант списка: выбранную отмечает aria-current
+                // (ревью M2), а не aria-selected.
+                const tr = h('tr', {
+                    class: 'ref-region', 'data-id': r.id, 'data-code': r.code, tabindex: '0', 'aria-current': on ? 'true' : null,
                     style: { cursor: 'pointer', background: on ? 'var(--primary-50)' : null },
-                    onclick: () => pick(r.code),
-                    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(r.code); } },
+                    onclick: () => pick(r),
+                    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(r); } },
                 },
                     h('td', null,
                         h('div', { style: { fontWeight: 600 } }, raw(r.name)),
@@ -175,6 +199,8 @@ function paintGeography(body, paint) {
                     h('td', { class: 'cell-mono' }, raw(r.code)),
                     h('td', { style: { textAlign: 'right' } }, raw(r.districts.length)),
                 );
+                if (on) selRow = tr;
+                return tr;
             }))));
 
     const right = h('div', { style: { flex: '1.6 1 420px', minWidth: 0 } },
@@ -186,4 +212,5 @@ function paintGeography(body, paint) {
             : empty('Районов нет.'));
 
     body.appendChild(h('div', { style: { display: 'flex', flexWrap: 'wrap' } }, left, right));
+    return selRow;
 }

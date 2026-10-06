@@ -29,7 +29,7 @@ class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.c
  addEventListener(t,fn){(this._l[t]||(this._l[t]=[])).push(fn);} removeEventListener(){}
  dispatchEvent(e){for(const fn of this._l[e.type]||[])fn(e);return true;}
  click(){this.dispatchEvent({type:'click',currentTarget:this,preventDefault(){},stopPropagation(){}});}
- focus(){} blur(){} scrollTo(){} remove(){} select(){}
+ focus(){document.activeElement=this;} blur(){} scrollTo(){} remove(){} select(){}
  querySelector(){return null;} querySelectorAll(){return [];}
  get textContent(){return this._t;} set textContent(v){this._t=String(v);this.children.length=0;}
  get classList(){const s=this;return{contains:c=>String(s.className).split(/\s+/).includes(c),add(){},remove(){},toggle(){}};}
@@ -79,11 +79,13 @@ const REGISTRAR = { id: 7, role: 'registrar', extra_roles: [] };
 let sent = [];          // каждый запрос экрана к /api/db
 let refused = [];       // то, что компилятор отверг
 let failDb = false;     // сервер не ответил
+let gate = null;        // REFERENCE_LISTS_V1 (ревью M5) — придержать ответы одной отрисовки
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/db')) {
     sent.push(body);
+    if (gate) await gate;
     if (failDb) return { ok: false, status: 500, json: async () => ({ error: { message: 'server down' } }) };
     let rows;
     try {
@@ -107,7 +109,7 @@ const perms = await import('../permissions.js');
 // Что лежит в базе — тем же SQL, мимо экрана.
 const UZ_REGIONS = db.prepare(`SELECT r.code, r.name, r.name_uz, r.name_en FROM regions r
   JOIN countries c ON c.id = r.country_id WHERE c.code = 'UZ' AND r.active = 1`).all();
-const districtsOf = (regionCode) => db.prepare(`SELECT d.code, d.name, d.name_uz, d.name_en FROM districts d
+const districtsOf = (regionCode) => db.prepare(`SELECT d.code, d.name, d.name_uz, d.name_en, d.kind FROM districts d
   JOIN regions r ON r.id = d.region_id WHERE r.code = ? AND d.active = 1`).all(regionCode);
 
 async function mount() {
@@ -167,7 +169,7 @@ test('«Города и районы»: 14 регионов Узбекистан
 
 test('по умолчанию выбран «город Ташкент»: 12 районов — код, RU, UZ, EN из districts', async () => {
   const root = await mount();
-  const sel = regionRows(root).filter((r) => r.attrs['aria-selected'] === 'true');
+  const sel = regionRows(root).filter((r) => r.attrs['aria-current'] === 'true');
   assert.deepEqual(sel.map((r) => r.attrs['data-code']), ['tashkent-city'], 'выбран не город Ташкент');
   const rows = districtRows(root);
   assert.equal(rows.length, 12, 'районов на экране: ' + rows.length);
@@ -188,13 +190,106 @@ test('выбор другого региона показывает его ра�
   const want = districtsOf('tashkent');
   assert.ok(want.length > 12, 'стенд: у Ташкентской области районов больше, чем у города');
   assert.deepEqual(districtRows(root).map((r) => cellsOf(r)[0]).sort(), want.map((d) => d.code).sort());
-  assert.deepEqual(regionRows(root).filter((r) => r.attrs['aria-selected'] === 'true').map((r) => r.attrs['data-code']), ['tashkent']);
+  assert.deepEqual(regionRows(root).filter((r) => r.attrs['aria-current'] === 'true').map((r) => r.attrs['data-code']), ['tashkent']);
+  // REFERENCE_LISTS_V1 (ревью M4) — внутри региона сначала районы, потом города.
+  const kinds = districtRows(root).map((r) => want.find((d) => d.code === cellsOf(r)[0]).kind);
+  assert.ok(kinds.includes('город') && kinds.includes('район'), 'стенд: в Ташкентской области есть и районы, и города');
+  assert.ok(kinds.lastIndexOf('район') < kinds.indexOf('город'), 'город стоит среди районов: ' + kinds.join(', '));
 
   const sam = regionRows(root).find((r) => r.attrs['data-code'] === 'samarkand');
   sam.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
   await tick();
   assert.deepEqual(districtRows(root).map((r) => cellsOf(r)[0]).sort(), districtsOf('samarkand').map((d) => d.code).sort(),
     'Enter на строке региона не открыл его районы');
+});
+
+// REFERENCE_LISTS_V1 (ревью M1) — выбор перерисовывает карточку; фокус не
+// должен пропадать в никуда: человек с клавиатурой остаётся на своей строке.
+test('фокус после выбора: на выбранной строке региона и на открытой вкладке, а не потерян', async () => {
+  const root = await mount();
+  document.activeElement = null;
+  const sam = regionRows(root).find((r) => r.attrs['data-code'] === 'samarkand');
+  sam.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
+  await tick();
+  const a = document.activeElement;
+  assert.ok(a && walk(root).includes(a), 'фокус ушёл на строку, которой больше нет на экране');
+  assert.equal(a.attrs['data-code'], 'samarkand', 'фокус не на выбранной строке региона');
+
+  regionRows(root).find((r) => r.attrs['data-code'] === 'bukhara').click();
+  await tick();
+  assert.equal(document.activeElement.attrs['data-code'], 'bukhara');
+  assert.ok(walk(root).includes(document.activeElement));
+
+  tabNamed(root, 'Специальности').click();
+  await tick();
+  const t = document.activeElement;
+  assert.ok(t && walk(root).includes(t), 'фокус ушёл на вкладку, которой больше нет на экране');
+  assert.equal(t.attrs.role, 'tab');
+  assert.ok(t.className.split(/\s+/).includes('on') && textOf(t).includes('Специальности'), 'фокус не на открытой вкладке');
+});
+
+// REFERENCE_LISTS_V1 (ревью M2) — подписи для экранного чтения.
+test('экранное чтение: выбранный регион — aria-current, вкладки связаны с панелью', async () => {
+  const root = await mount();
+  const rows = regionRows(root);
+  assert.deepEqual(rows.filter((r) => r.attrs['aria-current'] === 'true').length, 1, 'выбранный регион не отмечен aria-current');
+  assert.ok(rows.every((r) => !('aria-selected' in r.attrs)), 'aria-selected на строке таблицы — не то свойство');
+  const panel = walk(root).find((n) => n.attrs && n.attrs.role === 'tabpanel');
+  assert.ok(panel && panel.attrs.id, 'у панели нет id');
+  const ts = tabs(root);
+  for (const t of ts) {
+    assert.ok(t.attrs.id, 'у вкладки нет id');
+    assert.equal(t.attrs['aria-controls'], panel.attrs.id, 'вкладка не указывает на свою панель');
+  }
+  assert.equal(panel.attrs['aria-labelledby'], ts.find((t) => t.attrs['aria-selected'] === 'true').attrs.id);
+  ts.find((t) => textOf(t).includes('Специальности')).click();
+  await tick();
+  const panel2 = walk(root).find((n) => n.attrs && n.attrs.role === 'tabpanel');
+  assert.equal(panel2.attrs['aria-labelledby'], tabNamed(root, 'Специальности').attrs.id, 'панель подписана прежней вкладкой');
+});
+
+// REFERENCE_LISTS_V1 (ревью M3) — редактор «География» супер-админа заводит
+// регионы без кода; выбор держится за id, а не за код.
+test('регионы без кода выбираются каждый своим: выбор по id, а не по коду', async () => {
+  const uz = db.prepare("SELECT id FROM countries WHERE code = 'UZ'").get().id;
+  const a = db.prepare("INSERT INTO regions (country_id, name) VALUES (?, 'Яя-первый без кода')").run(uz).lastInsertRowid;
+  const b = db.prepare("INSERT INTO regions (country_id, name) VALUES (?, 'Яя-второй без кода')").run(uz).lastInsertRowid;
+  db.prepare("INSERT INTO districts (region_id, name) VALUES (?, 'Район первого')").run(a);
+  db.prepare("INSERT INTO districts (region_id, name) VALUES (?, 'Район второго')").run(b);
+  try {
+    const root = await mount();
+    const second = regionRows(root).find((r) => textOf(r).includes('Яя-второй без кода'));
+    assert.ok(second, 'регион без кода не показан');
+    second.click();
+    await tick();
+    const sel = regionRows(root).filter((r) => r.attrs['aria-current'] === 'true');
+    assert.equal(sel.length, 1);
+    assert.ok(textOf(sel[0]).includes('Яя-второй без кода'), 'выбран не тот регион без кода: ' + textOf(sel[0]));
+    assert.deepEqual(districtRows(root).map((r) => cellsOf(r)[1]), ['Район второго'], 'показаны районы чужого региона');
+  } finally {
+    db.prepare('DELETE FROM districts WHERE region_id IN (?, ?)').run(a, b);
+    db.prepare('DELETE FROM regions WHERE id IN (?, ?)').run(a, b);
+  }
+});
+
+// REFERENCE_LISTS_V1 (ревью M5) — состояние у каждой отрисовки своё: медленная
+// прежняя отрисовка не переписывает новую и не рисует себя её состоянием.
+test('две отрисовки не делят состояние: поздний ответ первой не трогает вторую', async () => {
+  let release;
+  gate = new Promise((r) => { release = r; });
+  const rootA = mk('div');
+  const doneA = renderReferenceLists(rootA, {});
+  gate = null;
+  const rootB = await mount();
+  tabNamed(rootB, 'Специальности').click();
+  await tick();
+  release();
+  await doneA;
+  await tick();
+  assert.ok(tabNamed(rootA, 'Города и районы').className.split(/\s+/).includes('on'), 'первая отрисовка открыла чужую вкладку');
+  assert.equal(regionRows(rootA).length, 14, 'первая отрисовка не показала свои регионы');
+  assert.ok(tabNamed(rootB, 'Специальности').className.split(/\s+/).includes('on'), 'вторая отрисовка потеряла свою вкладку');
+  assert.equal(specRows(rootB).length, SPECIALTY_ROWS.length);
 });
 
 test('«Специальности»: SPECIALTY_ROWS.length (120) строк — код, RU, UZ, EN', async () => {

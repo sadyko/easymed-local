@@ -86,7 +86,9 @@ const visibleReports = () => REPORT_DEFS.filter(reportVisible).map((r) => r.kind
 const visibleTiles = () => GROUPS.flatMap((g) => g.items).filter(tileVisible).map((i) => i.label);
 // REFERENCE_LISTS_V1 — «Справочники» (общие списки с кодами, только просмотр)
 // видит каждый, кому открыт сам хаб: своего права у плитки нет.
-const ALWAYS = ['Система', 'Подписка', 'Данные клиники', 'Справочники'];   // ALWAYS_ALLOWED — у каждой роли, как и было
+// Плитки, которые видит каждый, кому открыт хаб: первые три — ALWAYS_ALLOWED
+// в permissions.js, «Справочники» — по ключу самого хаба (isModuleAllowed('settings')).
+const ALWAYS = ['Система', 'Подписка', 'Данные клиники', 'Справочники'];
 
 // --- Отчёты -----------------------------------------------------------------
 
