@@ -105,6 +105,34 @@ export function wireDecision({ profile = null, facility = '', app = '' } = {}) {
  */
 const VENDOR_KIND_WIRES = new Set(['mindray-chem']);
 
+/**
+ * LIS_VENDOR_EXACT_V1 (D7) — контроль гематологии Mindray. Её диалект читают
+ * провода default (BC-20, BC-5300 — профили без провода) и mindray-hematology
+ * (BC-780). MSH-16 там пуст; контроль — ORU^R01 с
+ *   — MSH-11 = Q («the MSH-11 value of QC message is Q», руководство BC-3600,
+ *     с. D-31; BC-5300, приложение C, табл. 1) или T / D (табл. D-2 того же
+ *     руководства: результат контроля / настройка контроля), ИЛИ
+ *   — OBR-4.1 = 00003–00008 — тип результата: L-J, X, XB, X-R, средние X и X-R
+ *     (BC-5300, табл. 9; BC-3600, табл. D-8). Проба — 00001 (счёт) и 00002
+ *     (микроскопия).
+ * В OBR-3 контроля — номер файла контроля, маленькое голое число («6»):
+ * прочитанный как проба, он ложился в открытый свежий заказ № 6 чужого
+ * пациента. Теперь такое сообщение служебное: мимо бланков и лотка, ответ AA.
+ * T и D у MSH-11 и в стандарте HL7 — не рабочая проба (обучение, отладка).
+ */
+const HEMATOLOGY_KIND_WIRES = new Set(['default', 'mindray-hematology']);
+const HEMATOLOGY_QC_PROCESSING = new Set(['Q', 'T', 'D']);
+const HEMATOLOGY_QC_RESULT_TYPE = /^0000[3-8]$/;
+
+/** LIS_VENDOR_EXACT_V1 (D7) — контроль гематологии по MSH-11 или OBR-4.1 любого OBR. */
+function hematologyQc(text, msh) {
+  const segs = String(text == null ? '' : text).split(SEG).filter((s) => s.trim() !== '');
+  const comp1 = (v) => String(v == null ? '' : v).split(msh.compSep)[0].trim();
+  const processing = comp1(String(segs[0] || '').split(msh.fieldSep)[10]).toUpperCase();
+  if (HEMATOLOGY_QC_PROCESSING.has(processing)) return true;
+  return segs.some((s) => s.startsWith('OBR') && HEMATOLOGY_QC_RESULT_TYPE.test(comp1(s.split(msh.fieldSep)[4])));
+}
+
 // Запросы рабочего списка (раздел 7): Easy-Med заказов не отдаёт, отвечает
 // «заказов нет». QRY^Q02 — BS-200 и химия Mindray, QRY^Q01 — Autobio,
 // ORM^O01 — гематология Mindray.
@@ -122,7 +150,10 @@ const SEG = /\r\n?|\n/;
  *                   LIS_REAL_ANALYZERS_V1 (ревью R1, п. 7) — калибровка и контроль
  *                   по MSH-16 — только у проводов VENDOR_KIND_WIRES (wire —
  *                   второй аргумент; не назван — по MSH-3/4 сообщения). У прочих
- *                   MSH-16 вида не меняет: проба пациента не прячется в служебные;
+ *                   MSH-16 вида не меняет: проба пациента не прячется в служебные.
+ *                   LIS_VENDOR_EXACT_V1 (D7) — у гематологии Mindray (провода
+ *                   HEMATOLOGY_KIND_WIRES) контроль — MSH-11 = Q/T/D или OBR-4.1 =
+ *                   00003–00008;
  *   'query'       — запрос рабочего списка (QRY^Q02, QRY^Q01, ORM^O01);
  *   'unsupported' — разобранный заголовок известного, но не поддержанного типа
  *                   (ADT^A01 …) — ответ AR;
@@ -142,7 +173,9 @@ export function readEnvelope(text, wire) {
     // это соглашение; провод не назван — по тому, как сообщение называет себя.
     const w = wire === undefined ? wireFor({ app: msh.app, facility: msh.facility }) : known(wire);
     const vendor = VENDOR_KIND_WIRES.has(w);
-    env.kind = vendor && msh.ackType === '2' ? 'qc' : vendor && msh.ackType === '1' ? 'calibration' : 'result';
+    env.kind = vendor && msh.ackType === '2' ? 'qc' : vendor && msh.ackType === '1' ? 'calibration'
+      : HEMATOLOGY_KIND_WIRES.has(w) && hematologyQc(text, msh) ? 'qc'   // LIS_VENDOR_EXACT_V1 (D7)
+      : 'result';
   } else if (QUERY_TYPES.has(msh.type)) {
     env.kind = 'query';
     for (const s of String(text).split(SEG)) {

@@ -419,3 +419,79 @@ test('R2 п. 12: wireDecision — спор, когда профиль и соо�
   assert.equal(wireDecision({ profile: { wire: 'mindray-chem', model: 'BS-200' }, app: 'AutoLumo A1000', facility: 'LabPC' }).wire, 'forwarder');
   assert.equal(wireFor({ profile: { wire: 'mindray-hematology' }, ...bs }), 'mindray-chem', 'wireFor — безопасный, как в R1');
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D7: контроль гематологии — не проба пациента ──────
+// BC-5300: контроль — ORU^R01 с MSH-11 = Q и OBR-4 = 00003–00008 (L-J, X, XB,
+// X-R, средние X и X-R; руководство оператора BC-5300, приложение C, табл. 9).
+// В OBR-3 — номер файла контроля, маленькое голое число («6»). Кадр — пример
+// X-R-контроля из того же приложения (pdf 486–489), сокращён: имя оператора
+// заменено, из 109 строк OBX оставлены четыре.
+const BC5300_QC = seg(
+  'MSH|^~\&|BC-5300|Mindray|||20081120171602||ORU^R01|1|Q|2.3.1||||||UNICODE',
+  'PID|1||6666666||||20080807235959',
+  'OBR|1||6|00006^XR QCR^99MRC|||20080807142518|||||||||||||||||HM||||||||Operator',
+  'OBX|1|IS|05001^Qc Level^99MRC||M||||||F',
+  'OBX|4|NM|6690-2^WBC^LN||0.00|10*9/L|||||F',
+  'OBX|23|NM|777-3^PLT^LN||4|10*9/L|||||F',
+  'PID|3||6666666',
+  'OBR|3||6|00008^XR QCR Mean^99MRC||||||||||||||||||||HM',
+  'OBX|83|NM|6690-2^WBC^LN||0.00|10*9/L|||||F',
+);
+// BC-20 — по руководству BC-3600 (то же семейство, приложение D, с. D-30–D-32):
+// контроль L-J — MSH-11 = Q (в табл. D-2 — T или D), OBR-4 = 00003^LJ QCR^99MRC,
+// в OBR-3 — номер файла контроля 1…12, в PID-3 — номер лота.
+const BC20_QC = (msh11 = 'Q', obr4 = '00003^LJ QCR^99MRC') => seg(
+  `MSH|^~\&|||||20101206164344||ORU^R01|1|${msh11}|2.3.1||||||UNICODE`,
+  'PID|1||LOT123^^^^MR',
+  `OBR|1||3|${obr4}||20000102030405|20010203040506`,
+  'OBX|7|NM|6690-2^WBC^LN||7.10|10*9/L|||||F',
+);
+
+test('D7: гематология — контроль по MSH-11 (Q, T, D) или OBR-4 00003–00008 — служебное, не проба', async () => {
+  const { getProfile } = await import('./profiles/index.js');
+  const wireOf = (key, raw) => {
+    const m = readEnvelope(raw);
+    return wireFor({ profile: getProfile(key), facility: m.facility, app: m.app });
+  };
+  // BC-5300 называет себя «BC-5300|Mindray»; BC-20 — не называет (профиль строки).
+  const e = readEnvelope(BC5300_QC, wireOf('mindray-bc-5300', BC5300_QC));
+  assert.deepEqual([e.kind, e.service], ['qc', true]);
+  assert.equal(readEnvelope(BC5300_QC).kind, 'qc', 'провод по имени сообщения — тот же');
+  for (const msh11 of ['Q', 'T', 'D', 'q']) {
+    assert.equal(readEnvelope(BC20_QC(msh11), wireOf('mindray-bc-20', BC20_QC(msh11))).kind, 'qc', 'MSH-11 = ' + msh11);
+  }
+  // OBR-4 сам по себе: тип результата — контроль, даже если MSH-11 = P.
+  for (const code of ['00003', '00004', '00005', '00006', '00007', '00008']) {
+    assert.equal(readEnvelope(BC20_QC('P', code + '^QCR^99MRC'), 'default').kind, 'qc', 'OBR-4 ' + code);
+  }
+  // Проба пациента: MSH-11 = P, OBR-4 = 00001 (счёт) или 00002 (микроскопия).
+  assert.equal(readEnvelope(BC20_QC('P', '00001^Automated Count^99MRC'), 'default').kind, 'result');
+  assert.equal(readEnvelope(BC20_QC('P', '00002^Manual Count^99MRC'), 'default').kind, 'result');
+  assert.equal(readEnvelope(BC780('', 'LAB-000123'), 'mindray-hematology').kind, 'result');
+  // BC-780 (mindray-hematology) — то же семейство, тот же признак.
+  assert.equal(readEnvelope(BC20_QC(), 'mindray-hematology').kind, 'qc');
+  // У прочих проводов MSH-11 и OBR-4 вида не меняют.
+  for (const wire of ['forwarder', 'autobio-hl7', 'mindray-chem']) {
+    assert.equal(readEnvelope(BC20_QC(), wire).kind, 'result', wire);
+  }
+});
+
+// CL-900i и BS-240 — с D2 на mindray-chem: контроль — MSH-16 = 2, сообщение из
+// MSH и OBR, в OBR-2 — НОМЕР КАНАЛА теста («7»), не номер пробирки. Кадр —
+// пример руководства CL (Host Interface Manual, с. 1-28, pdf 36).
+const CL_QC = seg(
+  'MSH|^~\&|||||20120508103014||ORU^R01|1|P|2.3.1||||2||ASCII|||',
+  'OBR|1|7|AST|^|0|20130729160839|20120405141255|20130729161552|||1|2|QUAL2|2222|20300101|0|M|55.000000|5.000000|0.137470|nkat/L|||||||||1||||||||||||||||||',
+);
+
+test('D7: CL-900i и BS-240 — контроль (MSH-16 = 2) и калибровка (1) по проводу профиля — служебные', async () => {
+  const { getProfile } = await import('./profiles/index.js');
+  for (const key of ['mindray-cl-900i', 'mindray-bs-240']) {
+    const w = wireFor({ profile: getProfile(key), facility: '', app: '' });
+    assert.equal(readEnvelope(CL_QC, w).kind, 'qc', key);
+    assert.equal(readEnvelope(CL_QC.replace('||||2||ASCII', '||||1||ASCII'), w).kind, 'calibration', key);
+    assert.equal(readEnvelope(CL_QC.replace('||||2||ASCII', '||||0||ASCII'), w).kind, 'result', key);
+  }
+  // На прежнем проводе default (до D2) тот же контроль читался как проба.
+  assert.equal(readEnvelope(CL_QC, 'default').kind, 'result');
+});

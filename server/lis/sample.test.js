@@ -672,3 +672,30 @@ test('D2: CL-900i — номер пробы из OBR-2; номер пробы п
   assert.equal(results(db2, 10).length, 0);
   db.close(); db2.close();
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D7: контроль гематологии мимо бланков ─────────────
+// Пример X-R-контроля BC-5300 (руководство оператора, приложение C, pdf
+// 486–489; имя оператора заменено, OBX сокращены): MSH-11 = Q, OBR-4 =
+// 00006/00008, в OBR-3 — номер файла контроля «6». Раньше это была «проба» с
+// голым номером 6 — и значения контроля ложились в открытый свежий ОАК
+// заказа № 6 другого пациента.
+const BC5300_QC = seg(
+  'MSH|^~\&|BC-5300|Mindray|||20081120171602||ORU^R01|1|Q|2.3.1||||||UNICODE',
+  'PID|1||6666666||||20080807235959',
+  'OBR|1||6|00006^XR QCR^99MRC|||20080807142518|||||||||||||||||HM||||||||Operator',
+  'OBX|4|NM|6690-2^WBC^LN||0.00|10*9/L|||||F',
+  'PID|3||6666666',
+  'OBR|3||6|00008^XR QCR Mean^99MRC||||||||||||||||||||HM',
+  'OBX|83|NM|6690-2^WBC^LN||0.00|10*9/L|||||F',
+);
+
+test('D7: контроль BC-5300 (MSH-11 = Q, OBR-4 00006) — служебная строка; заказ № 6 не тронут', async () => {
+  const { receiveMessage } = await import('./receive.js');
+  const db = clinic({ orders: [{ id: 123 }, { id: 6 }], analytes: [['WBC', 'Лейкоциты', 'WBC']] });
+  const out = receiveMessage(db, BC5300_QC, { peer: '10.0.0.9', deviceId: 1 });
+  assert.deepEqual([out.code, out.kind], ['AA', 'qc']);
+  const m = last(db);
+  assert.deepEqual([m.kind, m.status, m.visit_service_id, !!m.resolved_at], ['qc', 'unmatched', null, true]);
+  assert.equal(results(db, 6).length, 0, 'контроль не лёг в ОАК заказа № 6');
+  db.close();
+});
