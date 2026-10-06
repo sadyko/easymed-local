@@ -268,7 +268,11 @@ test('окно «Добавить прибор»: опрос с новыми с�
     await tick();
     const btn = findButtonByText(rowNamed(root, 'Второй BC-780'), /Изменить/);
     assert.ok(btn);
-    LISTENERS = { ...baseListeners(), dialing: [connected(), waitingRefused({ retry_at: iso(Date.now() + 12000) })] };
+    // LIS_VENDOR_EXACT_V1 — время соединения (since) — то же, что до опроса: меняются
+    // только секунды повтора. Пересчёт since от часов на границе секунды менял
+    // подпись звонка, окно законно перестраивалось, и тест падал через раз под нагрузкой.
+    const [c0, w0] = LISTENERS.dialing;
+    LISTENERS = { ...baseListeners(), dialing: [connected({ since: c0.since }), waitingRefused({ since: w0.since, retry_at: iso(Date.now() + 12000) })] };
     mock.timers.tick(5000);
     await tick(60);
     assert.ok(walk(root).includes(btn), 'окно не перестроено: кнопка под курсором та же');
