@@ -288,8 +288,11 @@ test('BS-200: запрос — «заказов нет»; контроль и к
 // LabPC, номер — OBR-3, код — OBX-3 («206^^AUTOBIO»), подпись — OBX-4.
 const A_QRY = ['MSH|^~\\&|||||20261001101500||QRY^Q01|3|P|2.3.1',
   'QRD|20261001101500|R|D|7|||RD|LAB-000201|OTH|||T', 'QRF|A1000|20261001000000|20261001101500|||RCT|COR|ALL'].join('\r');
-const A_ORU = (label, value) => ['MSH|^~\\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123',
-  'PID|||SYN-PAT-1', `OBR|1|${label}|7764|SYSID-SYN`, 'NTE|||LOT-SYN~~Vitamin B12~206~~RACK-SYN~1',
+// LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5) — flags: флаги
+// прибора в NTE-3 (2-е повторение). У A1000 клиники 832 из 949 результатов
+// несут CEX (истекла калибровка; realtest\verify\a1000\reports\flags-decoded.txt).
+const A_ORU = (label, value, flags = '') => ['MSH|^~\\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123',
+  'PID|||SYN-PAT-1', `OBR|1|${label}|7764|SYSID-SYN`, `NTE|||LOT-SYN~${flags}~Vitamin B12~206~~RACK-SYN~1`,
   `OBX|10455|CE|206|206|5981666^${value}~||||||F|||2026/10/05 12:00:00`].join('\r');
 const FWD_ORU = (label) => ['MSH|^~\\&|AutoLumo A1000|LabPC|||20261001101600||ORU^R01|5|P|2.3.1',
   `OBR|1||${label}|`, 'OBX|1|NM|206^^AUTOBIO|Vitamin B12|390.946|pg/mL|||||F'].join('\r');
@@ -313,8 +316,10 @@ test('A1000: по сети (HL7, как пишет прибор) и через �
       bindPanel(db, { id: 6, serviceId: 10, deviceId: dev.id, name: 'Витамин B12', lines: [['B12', 'Витамин B12', 'пг/мл', '206']] });
       db.prepare('UPDATE lab_panel_analytes SET ref_low = 187, ref_high = 883 WHERE panel_id = 6').run();
 
-      // Значение с десятичной запятой (Windows прибора с русскими настройками).
-      const ack = await net1.send(A_ORU('LAB-000201', '1250,5'));
+      // Значение с десятичной запятой (Windows прибора с русскими настройками)
+      // и самым частым флагом прибора клиники — CEX (LIS_VENDOR_EXACT_V1, D9:
+      // предупреждение о сроке калибровки запись не останавливает).
+      const ack = await net1.send(A_ORU('LAB-000201', '1250,5', 'CEX'));
       assert.equal(fieldOf(ack, 'MSH', 9), 'ACK^R01');
       assert.match(ack, /\rMSA\|AA\|5\|/, 'MSH-10 = 5 эхом');
       assert.equal(fieldOf(ack, 'MSA', 4), '10455', 'MSA-4 = OBX-1: A1000 отмечает результат «Accepted»');

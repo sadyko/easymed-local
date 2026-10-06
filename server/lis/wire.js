@@ -267,6 +267,31 @@ function qualitativeOf(raw) {
 }
 
 /**
+ * LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5 —
+ * analyzer-research\fix\DECISIONS.md: «предупреждения не мешают») — флаги A1000
+ * по перечню самого прибора: ToolsLib.Flags программы клиники AutoLumo1000 1.0.7,
+ * смысл каждого — её же подписи (en\AutoLumo1000.resources.dll, Data_Item_FLAG*).
+ * Раньше в лоток уходил любой флаг, кроме ORH/ORL, а у A1000 клиники 832 из 949
+ * результатов несут CEX (realtest\verify\a1000\reports\flags-decoded.txt): в
+ * бланк не ложилось почти ничего, а A1000 по MSA-4 отмечал результат «Accepted».
+ *   A1000_IGNORE — предупреждения о сроках и контроле качества: число пишется,
+ *     флаг — по диапазону клиники. CEX «calibration curve or cut-off value is
+ *     expired», PEX «kit is beyond the after-open validate period», LEX «kit is
+ *     beyond the expiry date», EXS «substrate is expired», QEX «quality control
+ *     lot is beyond expiry date», QCF «a quality control violates one or more
+ *     Westgard rules», LQCF «result is obtained after that the QC is out of range».
+ *   A1000_HIGH — ORH «above the upper limit of the measuring range», OVR «above
+ *     the highest calibrator»: «>число» и «Выше»;
+ *   A1000_LOW — ORL «below the lower limit of the measuring range»: «<число» и «Ниже».
+ * Остальное — ошибки измерения (ERR, QNS, QNR, SUC, RLU, CLT, TRI…), флаги,
+ * которых нет в перечне владельца (GRY, CRH, CRL, OVD, DRX, γ…), и незнакомые —
+ * не писать: строка бланка «не пришла», проба в лотке с «флаги прибора: …».
+ */
+const A1000_IGNORE = new Set(['CEX', 'PEX', 'LEX', 'EXS', 'QEX', 'QCF', 'LQCF']);
+const A1000_HIGH = new Set(['ORH', 'OVR']);
+const A1000_LOW = new Set(['ORL']);
+
+/**
  * LIS_VENDOR_EXACT_V1 (D9) — NTE, который A1000 ставит ПЕРЕД каждым OBX
  * (кодировщик программы клиники; лист A1000, §3): NTE-3 — повторения
  * «лот ~ флаги через «-» ~ имя реагента ~ код ~ срок ~ штатив ~ место».
@@ -304,7 +329,9 @@ function autobioNote(nte, fieldSep, repSep) {
  *
  * LIS_VENDOR_EXACT_V1 — hold: причина НЕ писать строку (match.js: строка бланка
  * «не пришла» с этой причиной, лоток). Есть только у таких строк: «нет
- * результата» Mindray (D5), флаги прибора A1000, кроме ORH/ORL (D9).
+ * результата» Mindray (D5), флаги прибора A1000 — ошибка измерения или
+ * незнакомый флаг (D9; предупреждения о сроках и контроле, ORH/OVR/ORL — не
+ * hold: решение владельца 2026-10-06, п. 5).
  * Десятичная запятая у mindray-chem и autobio-hl7 — точка (D0); у A1000
  * простое число — NM, флаги ORH/ORL — в abnormal (H/L) и знак «>»/«<» (D9).
  * qualitative (D6) — качественный ответ OBX-9 у mindray-chem: 'positive' |
@@ -393,15 +420,21 @@ export function readResult(raw, wire = 'default') {
         let v = decimalPoint(t(comp(String(f[5] == null ? '' : f[5]).split(repSep)[0])[1]));
         // LIS_VENDOR_EXACT_V1 (D9) — флаги прибора. За пределом измерения
         // прибор шлёт сам предел простым числом: ORH — «выше» и знак «>»,
-        // ORL — «ниже» и «<» (если знака ещё нет). Любой другой флаг (ERR, QNS,
-        // CEX, PEX…) — не писать: строка бланка «не пришла», проба в лотке.
-        const other = note.flags.filter((x) => x !== 'ORH' && x !== 'ORL');
-        if (other.length || (note.flags.includes('ORH') && note.flags.includes('ORL'))) {
+        // ORL — «ниже» и «<» (если знака ещё нет).
+        // LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5) —
+        // предупреждения о сроках и контроле (A1000_IGNORE: CEX, PEX, LEX…) не
+        // мешают; OVR — как ORH; не писать (строка бланка «не пришла», проба в
+        // лотке) — только ошибку измерения, незнакомый флаг и спор «выше» с «ниже».
+        const rest = note.flags.filter((x) => !A1000_IGNORE.has(x));
+        const high = rest.some((x) => A1000_HIGH.has(x));
+        const low = rest.some((x) => A1000_LOW.has(x));
+        const other = rest.filter((x) => !A1000_HIGH.has(x) && !A1000_LOW.has(x));
+        if (other.length || (high && low)) {
           o.hold = 'флаги прибора: ' + note.flags.join('-');
-        } else if (note.flags.includes('ORH')) {
+        } else if (high) {
           o.abnormal = 'H';
           if (v && !/^[<>]/.test(v)) v = '>' + v;
-        } else if (note.flags.includes('ORL')) {
+        } else if (low) {
           o.abnormal = 'L';
           if (v && !/^[<>]/.test(v)) v = '<' + v;
         }

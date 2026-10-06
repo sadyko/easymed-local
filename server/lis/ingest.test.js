@@ -1367,14 +1367,39 @@ test('D9: A1000 — ORH: «>предел» и «Выше»; ORL: «<» и «Ни
   db.close();
 });
 
-test('D9: A1000 — прочие флаги прибора (QNS, ERR, CEX…) — в бланк не пишется, в лоток «флаги прибора: …»', () => {
+// LIS_VENDOR_EXACT_V1 — было «PEX-CEX» — в лоток. Решение владельца
+// 2026-10-06, п. 5 (analyzer-research\fix\DECISIONS.md): CEX, PEX, LEX —
+// предупреждения о сроках, они не мешают (тест ниже); в лоток — только ошибка
+// измерения. Сочетание — настоящее, из записей A1000 клиники (5 из 949).
+test('D9: A1000 — ошибка измерения (ERR, QNR…) — в бланк не пишется, в лоток «флаги прибора: …»', () => {
   const db = a1000Clinic();
   db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, numeric_value, flag, source) VALUES (123, 'АФП', '3.3', 3.3, 'normal', 'manual')").run();
-  ingestMessage(db, A1000('4.17', 'PEX-CEX'), '10.0.0.41', 1);
+  ingestMessage(db, A1000('4.17', 'ERR-QNR-CEX-ORL'), '10.0.0.41', 1);
   assert.deepEqual(afp(db), { value: '3.3', numeric_value: 3.3, flag: 'normal' }, 'набранное руками не стёрто');
   const m = message(db);
   assert.equal(m.status, 'unmapped');
-  assert.equal(m.detail, 'не пришли: АФП (107, флаги прибора: PEX-CEX)');
+  assert.equal(m.detail, 'не пришли: АФП (107, флаги прибора: ERR-QNR-CEX-ORL)');
+  db.close();
+});
+
+// LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5) — у A1000 клиники
+// 832 из 949 результатов несут CEX («calibration curve … is expired»), многие —
+// ещё PEX/LEX (сроки набора): раньше ни один такой результат в бланк не ложился,
+// а A1000 по MSA-4 отмечал его «Accepted» и не повторял. Сочетания — настоящие
+// (realtest\verify\a1000\reports\flags-decoded.txt).
+test('D9: A1000 — CEX, CEX-PEX, CEX-LEX-PEX пишутся числом с флагом по диапазону клиники; CEX-ORH-OVR-PEX — «>предел» и «Выше»; CEX-LEX-ORL-PEX — «<» и «Ниже»', () => {
+  const db = a1000Clinic();
+  assert.equal(ingestMessage(db, A1000('12,5', 'CEX'), '10.0.0.41', 1), 'AA');
+  assert.deepEqual(afp(db), { value: '12.5', numeric_value: 12.5, flag: 'high' }, 'CEX не мешает: число и «Выше» по диапазону клиники');
+  assert.equal(message(db).status, 'applied');
+  ingestMessage(db, A1000('4.17', 'CEX-PEX'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '4.17', numeric_value: 4.17, flag: 'normal' });
+  ingestMessage(db, A1000('4,2', 'CEX-LEX-PEX'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '4.2', numeric_value: 4.2, flag: 'normal' });
+  ingestMessage(db, A1000('1210', 'CEX-ORH-OVR-PEX'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '>1210', numeric_value: null, flag: 'high' }, 'за пределом измерения — сам предел со знаком');
+  ingestMessage(db, A1000('0,6', 'CEX-LEX-ORL-PEX'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '<0.6', numeric_value: null, flag: 'low' });
   db.close();
 });
 

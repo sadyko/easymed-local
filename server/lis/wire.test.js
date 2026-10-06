@@ -563,7 +563,10 @@ test('D9: A1000 — флаги прибора из NTE перед OBX: ORH → H
   const lo = read({ value: '0,6', flags: 'ORL' });
   assert.deepEqual([lo.value, lo.abnormal, lo.valueType], ['<0.6', 'L', 'CE']);
   assert.equal(read({ value: '>1210', flags: 'ORH' }).value, '>1210', 'знак уже есть — второй не ставится');
-  for (const flags of ['QNS', 'ERR', 'PEX-CEX-ORL', 'ORH-ORL']) {
+  // LIS_VENDOR_EXACT_V1 — «PEX-CEX-ORL» отсюда убран: по решению владельца
+  // 2026-10-06, п. 5 (analyzer-research\fix\DECISIONS.md) предупреждения о
+  // сроках (PEX, CEX) не мешают, и это «<» с «Ниже» — тест ниже.
+  for (const flags of ['QNS', 'ERR', 'ORH-ORL']) {
     assert.equal(read({ flags }).hold, 'флаги прибора: ' + flags, flags);
   }
   // NTE — только к своему OBX: следующий OBX без NTE флагов не наследует.
@@ -571,6 +574,39 @@ test('D9: A1000 — флаги прибора из NTE перед OBX: ORH → H
     'NTE|||LOT~QNS~AFP~107~~R~1', 'OBX|10455|CE|107|107|41765^4.17~||||||F',
     'OBX|10456|CE|112|112|22000^1.23~||||||F'), 'autobio-hl7').observations;
   assert.deepEqual(two.map((x) => [x.code, x.hold || '']), [['107', 'флаги прибора: QNS'], ['112', '']]);
+});
+
+// LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5 —
+// analyzer-research\fix\DECISIONS.md) — флаги прибора по перечню самого A1000:
+// ToolsLib.Flags программы клиники 1.0.7, смысл — её же подписи
+// (en\AutoLumo1000.resources.dll, Data_Item_FLAG*). Сочетания — ровно те, что
+// пришли в клинике (realtest\verify\a1000\reports\flags-decoded.txt: 949
+// результатов, у 832 — CEX); кадр — кодировщика прибора (NTE перед OBX).
+test('D9: A1000 — предупреждения о сроках и контроле (CEX у 88 % результатов) не мешают; ORH/OVR — «>» и H, ORL — «<» и L; ошибка измерения и незнакомый флаг — не писать', () => {
+  const read = (flags, value = '4.17') => readResult(A1000({ value, flags }), 'autobio-hl7').observations[0];
+  // CEX — «calibration curve or cut-off value is expired», PEX/LEX — сроки
+  // набора, EXS — субстрат, QEX — лот контроля, QCF/LQCF — контроль вне правил:
+  // число пишется как есть, флаг — по диапазону клиники.
+  for (const flags of ['CEX', 'CEX-PEX', 'CEX-LEX-PEX', 'EXS', 'QEX', 'QCF', 'LQCF', 'CEX-LQCF']) {
+    const o = read(flags);
+    assert.deepEqual([o.value, o.valueType, o.abnormal, o.hold], ['4.17', 'NM', '', undefined], flags);
+  }
+  // ORH — выше предела измерения, OVR — выше старшего калибратора: «>» и H.
+  for (const flags of ['CEX-ORH-OVR-PEX', 'CEX-OVR', 'ORH-OVR']) {
+    const o = read(flags, '1210');
+    assert.deepEqual([o.value, o.valueType, o.abnormal, o.hold], ['>1210', 'CE', 'H', undefined], flags);
+  }
+  // ORL — ниже предела измерения: «<» и L (запятая — точка).
+  for (const flags of ['CEX-LEX-ORL-PEX', 'CEX-ORL-PEX', 'CEX-ORL', 'PEX-CEX-ORL']) {
+    const o = read(flags, '0,6');
+    assert.deepEqual([o.value, o.valueType, o.abnormal, o.hold], ['<0.6', 'CE', 'L', undefined], flags);
+  }
+  // Ошибка измерения (ERR, QNR — нет реагента, RLU — сигнал за пределом, SUC —
+  // сбой забора, QNS), спор ORH с ORL, флаг, которого нет в перечне владельца
+  // (GRY, CRH), и незнакомый — не писать: строка бланка «не пришла», проба в лотке.
+  for (const flags of ['ERR-QNR-CEX-ORL', 'RLU-CEX-ORH-OVR', 'RLU-CEX-LEX-OVR-PEX', 'CEX-SUC', 'QNS', 'ORH-ORL', 'GRY', 'CRH', 'XYZ', 'CEX-XYZ']) {
+    assert.equal(read(flags).hold, 'флаги прибора: ' + flags, flags);
+  }
 });
 
 test('D9: A1000 «по пробе» — OBX-4 пуст, код берётся из OBX-3', () => {
