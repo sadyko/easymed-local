@@ -91,3 +91,40 @@ test('обновление: заполненные колонки пишутся
     assert.strictEqual(row.payload.default_doctor_percent, 30);
     assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
 });
+
+// CLINIC_API_FIX_V1 (ревью) — ТИП УСЛУГИ. Колонки «type» в листе нет — тип
+// подставлялся по «Разделу» и у обновляемой услуги: правка одних цен
+// сбрасывала тип, выбранный клиникой («Кардиология» → «Консультации»). Теперь
+// обновление без колонки типа тип не трогает — если «Раздел» услуги в файле
+// тот же, что сохранён. Сменился «Раздел» — тип по новому разделу, как раньше.
+const TYPED = ({ wantUpdate = true, type = 'consultation' } = {}) => ({
+    __wantUpdate: wantUpdate,
+    __stored: new Map([['приём кардиолога', { name: 'Приём кардиолога', type, type_id: 77 }]]),
+    type: new Map([['кардиология', 77], ['консультации', 1]]),
+});
+const mirrorOf = (p) => p.type_id && p.type_id.__autoCreate && p.type_id.__autoCreate.value;
+
+test('обновление без колонки типа, «Раздел» прежний — свой тип услуги не сбрасывается', () => {
+    const row = buildImportRow('services', { ...MIN, price: 250000 }, { lookups: TYPED() });
+    assert.ok(!('type_id' in row.payload), 'тип сброшен: ' + JSON.stringify(row.payload.type_id));
+    assert.strictEqual(row.payload.type, 'consultation');
+});
+
+test('обновление без колонки типа, «Раздел» сменился — тип по новому разделу, как раньше', () => {
+    const row = buildImportRow('services', { ...MIN, price: 250000 }, { lookups: TYPED({ type: 'lab' }) });
+    assert.strictEqual(mirrorOf(row.payload), 'Консультации');
+});
+
+test('новая услуга без колонки типа — тип по «Разделу», как раньше', () => {
+    for (const lookups of [TYPED({ wantUpdate: false }), {}]) {
+        const row = buildImportRow('services', { ...MIN, price: 250000 }, { lookups });
+        assert.strictEqual(mirrorOf(row.payload), 'Консультации');
+    }
+});
+
+test('колонка типа есть: значение из справочника — оно; пустая ячейка — по «Разделу», как раньше', () => {
+    const named = buildImportRow('services', { ...MIN, type: 'Кардиология' }, { lookups: TYPED() });
+    assert.strictEqual(named.payload.type_id, 77);
+    const blank = buildImportRow('services', { ...MIN, type: '' }, { lookups: TYPED() });
+    assert.strictEqual(mirrorOf(blank.payload), 'Консультации');
+});

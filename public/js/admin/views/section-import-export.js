@@ -423,7 +423,14 @@ const IMPORT_CONFIGS = {
         // SERVICE_GROUP_ROUTING_V1 — «Раздел» both ROUTES (services.type) and GROUPS
         // (mirrored into a service_type / type_id) so a 7-column sheet is enough.
         transform: function (payload, r, ctx) {
-            if (payload.type && payload.type_id == null) {
+            // CLINIC_API_FIX_V1 (ревью) — колонки «type» в листе нет, а строка
+            // ОБНОВЛЯЕТ услугу с тем же «Разделом» — тип не трогается: правка
+            // одних цен сбрасывала тип, выбранный клиникой, на тип раздела.
+            // Сменился «Раздел» — тип по новому разделу, как раньше.
+            var keepType = !('type' in r) && serviceRowUpdates(payload, ctx && ctx.lookups)
+                && String((ctx.lookups.__stored.get(normKey(payload.name)) || {}).type || '') === String(payload.type || '');
+            if (keepType) delete payload.type_id;
+            else if (payload.type && payload.type_id == null) {
                 var lbl = { consultation: 'Консультации', lab: 'Лаборатория', procedure: 'Процедуры', imaging: 'Диагностика', other: 'Хирургия' }[payload.type];
                 if (lbl) payload.type_id = { __autoCreate: { table: 'service_types', keyField: 'name', value: lbl } };
             }
@@ -539,8 +546,9 @@ const IMPORT_CONFIGS = {
         // DOCTOR_TIER_V2 — сохранённые ступени услуг (по названию) для сверки
         // порядка при обновлении: loadLookups кладёт их в lookups.__stored.
         // CLINIC_API_FIX_V1 (ревью) — и узбекское название: онлайн-запись
-        // при обновлении услуги без name_uz в файле (serviceRowUpdates).
-        storedColumns: ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3', 'name_uz'],
+        // при обновлении услуги без name_uz в файле (serviceRowUpdates); и
+        // «Раздел» с типом: обновление без колонки типа тип не сбрасывает.
+        storedColumns: ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3', 'name_uz', 'type', 'type_id'],
         columns: [
             { key: 'name',             required: true, hint: 'Название услуги (обязательно)' },
             { key: 'group',            target: 'type', map: SERVICE_GROUP_MAP, required: true,
