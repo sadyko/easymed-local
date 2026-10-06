@@ -4,12 +4,12 @@
 // via update_my_doctor_profile RPC, plus user_specialties + doctor_conditions.
 // Surfaces on Symptex via the partner API. DOCTOR_PROFILE_V1
 import { h, clear, toast, Icon } from '../ui.js';
-import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf, getLang } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ; REFERENCE_LISTS_V1 — getLang для порядка
 import { supabase } from '../../supabase.js';
 import { uploadFile } from '../storage.js';
 // RPC_PORT_V1 — офлайн каталог специальностей из медкора (gw) недоступен:
 // выбор идёт из того же канонического списка, по которому сервер проверяет слаг.
-import { SPECIALTY_ROWS, canonicalSpecialty } from '../../shared/specialty-list.js';
+import { SPECIALTY_ROWS, canonicalSpecialty, sortByShownLabel } from '../../shared/specialty-list.js';   // REFERENCE_LISTS_V1 — sortByShownLabel
 // PATIENT_PHOTO_V1 — те же правила и то же уменьшение, что в окне заведения
 // пациента: один набор на оба виджета фото и на сервер.
 import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
@@ -642,7 +642,10 @@ export async function renderDoctorProfile(container, doctorId) {
             });
             clear(ctrlWrap);
             if (st.specSlugs.length < 4) {
-                const avail = st.specCatalog.filter((s) => !st.specSlugs.includes(s.slug));
+                // REFERENCE_LISTS_V1 — по показанной (переведённой) подписи на языке
+                // интерфейса: в uz/en русский порядок выглядел вразнобой.
+                const avail = sortByShownLabel(st.specCatalog.filter((s) => !st.specSlugs.includes(s.slug)),
+                    (s) => tr(nameOf(s)), getLang());
                 const sel = h('select', { class: 'docprof-in', style: { maxWidth: '320px' },
                     onchange: (e) => {
                         const v = e.target.value;

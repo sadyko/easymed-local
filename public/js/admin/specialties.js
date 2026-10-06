@@ -14,13 +14,13 @@
 // Alphabetical: the list is long enough that scan order matters more than any
 // notion of importance.
 
-import { trf } from './i18n.js';   // I18N_COVERAGE_V1 — суффикс опции собирается вокруг значения, перевод до сборки
+import { tr, trf, getLang } from './i18n.js';   // I18N_COVERAGE_V1 — суффикс опции собирается вокруг значения, перевод до сборки; REFERENCE_LISTS_V1 — tr/getLang для порядка
 
 // SPECIALTIES_CLONED_V1 — the list itself (a clone of medcore's Specialties
 // sheet), the aliases and the canonicaliser live in shared/specialty-list.js
 // since DOCTOR_LINES_SPECIALTY_V1: the server groups the «По специальностям»
 // report with the same rules, and must not import this file (it pulls i18n).
-import { SPECIALTY_ROWS, SPECIALTIES, SPECIALTY_ALIASES, canonicalSpecialty } from '../shared/specialty-list.js?v=spl1';
+import { SPECIALTY_ROWS, SPECIALTIES, SPECIALTY_ALIASES, canonicalSpecialty, sortByShownLabel } from '../shared/specialty-list.js?v=spl1';
 export { SPECIALTY_ROWS, SPECIALTIES, SPECIALTY_ALIASES, canonicalSpecialty };
 
 // Option pairs [value, label] for a <select>.
@@ -30,8 +30,11 @@ export { SPECIALTY_ROWS, SPECIALTIES, SPECIALTY_ALIASES, canonicalSpecialty };
 // this, opening an old doctor's card would quietly show «— не указана —» and
 // saving anything else on the card would erase their speciality. The marker
 // tells the admin it is off-list so they can correct it deliberately.
+// REFERENCE_LISTS_V1 — пункты по ПОКАЗАННОЙ подписи (перевод на языке
+// интерфейса): в uz/en русский порядок выглядел вразнобой. Значение — то же
+// русское название.
 export function specialtyOptions(current) {
-    const opts = [['', '— не указана —'], ...SPECIALTIES.map((s) => [s, s])];
+    const opts = [['', '— не указана —'], ...sortByShownLabel(SPECIALTIES, (s) => tr(s), getLang()).map((s) => [s, s])];
     const cur = canonicalSpecialty(current);
     if (cur && !SPECIALTIES.includes(cur)) opts.splice(1, 0, [cur, trf('{name}  (не из списка)', { name: cur })]);
     return opts;

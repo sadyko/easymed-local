@@ -165,3 +165,15 @@ export function specialtyGroupName(v) {
     const low = s.toLowerCase();
     return ALIAS_BY_LOWER.get(low) || LABEL_BY_LOWER.get(low) || s;
 }
+
+// REFERENCE_LISTS_V1 — пункты выбора специальности упорядочены по тому, что
+// видно на экране. SPECIALTY_ROWS — в русском алфавитном порядке, а экран
+// показывает перевод: в узбекском и английском интерфейсе 120 названий шли
+// вразнобой. `shown(item)` — показанная (переведённая) подпись, `lang` — язык
+// интерфейса; перевод делает вызывающий (модуль чистый, без i18n). Сохраняемые
+// значения не меняются — меняется только порядок пунктов.
+export function sortByShownLabel(items, shown, lang) {
+    return items.map((item) => [String(shown(item) ?? ''), item])
+        .sort((a, b) => a[0].localeCompare(b[0], lang || undefined))
+        .map(([, item]) => item);
+}
