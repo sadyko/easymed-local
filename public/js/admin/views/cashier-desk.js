@@ -125,7 +125,7 @@ async function printFiscalCheck(inv, tenders, legacyMethod, opts = {}) {   // CA
         let pkgByItem = {};    // PACKAGES_V1
         if (itemIds.length) {
             const { data: vsRows } = await supabase.from('visit_services')
-                .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role), service_templates(name)')
+                .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role), service_templates(name, discount_percent)')   // CLINIC_API_FIX_V1 — «пакет» на чеке только у пакета со скидкой (packagesByItem)
                 .in('invoice_item_id', itemIds);
             // RECEIPT_DOB_PERFORMER_V1 — тот же запрос отдаёт и исполнителя.
             perfByItem = performersByItem(vsRows);

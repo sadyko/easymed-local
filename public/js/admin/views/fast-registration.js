@@ -76,7 +76,7 @@ import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        /
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    // REFERRAL_SOURCE_CODE_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';                    // WIZ_INVOICE_PRINT_V1 — тот же бланк «Счёт»
-import { packageItemName } from './receipt-print.js?v=rp1';                   // PACKAGES_V1 — пакет и скидка позиции на бланке
+import { packageItemName, packageLabel } from './receipt-print.js?v=rp1';     // PACKAGES_V1 — пакет и скидка позиции на бланке; CLINIC_API_FIX_V1 — packageLabel
 
 /** Разряды тысяч пробелом — так цену читают во всех экранах продукта. */
 function fmtPrice(n) {
@@ -937,7 +937,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 const item = (state.result.items || [])[i];
                 const lineOff = item && Number(item.service_id) === Number(row.service.id) ? item.discount_amount : 0;
                 return {
-                    name: packageItemName((row.service.name || '') + (dn ? ' · ' + dn : ''), row.package ? row.package.name : '', lineOff),
+                    // CLINIC_API_FIX_V1 — «пакет» на счёте только у пакета со скидкой (не у шаблона сметы).
+                    name: packageItemName((row.service.name || '') + (dn ? ' · ' + dn : ''), packageLabel(row.package), lineOff),
                     qty: 1, price: rowPrice(i), _alt: i % 2 === 1,
                 };
             }),

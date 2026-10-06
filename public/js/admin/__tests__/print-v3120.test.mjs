@@ -364,3 +364,101 @@ test('экраны больше не кладут слово «Дата» в з�
     assert.doesNotMatch(t, /status:\s*'(UNPAID|PAID|PARTIAL)'/, f);
   }
 });
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 — «пакет» на бланке только у пакета со скидкой.
+// ---------------------------------------------------------------------------
+// Пакеты и шаблоны сметы живут в одной таблице service_templates (мигр. 154):
+// шаблон — это «пакет» без скидки и без дат. Чек и счёт печатали «пакет
+// «Смета»» и у строки из обычного шаблона, где никакого пакета пациент не брал.
+const { packageLabel, packagesByItem } = await import('../views/receipt-print.js');
+
+// Фальшивая база, которая, как настоящая, отдаёт у вложенного service_templates
+// ТОЛЬКО запрошенные колонки: забытая в select discount_percent иначе прошла
+// бы тест и погасила бы «пакет» у настоящих пакетов со скидкой.
+function projSb(tables) {
+  return {
+    from(t) {
+      const f = [];
+      let embed = null;
+      const project = (r) => {
+        if (!r.service_templates) return r;
+        const { service_templates: st, ...rest } = r;
+        if (!embed) return rest;
+        return { ...rest, service_templates: Object.fromEntries(embed.filter((k) => k in st).map((k) => [k, st[k]])) };
+      };
+      const rows = () => (tables[t] || [])
+        .filter((r) => f.every(([k, v, op]) => (op === 'in' ? v.map(String).includes(String(r[k])) : String(r[k]) === String(v))))
+        .map(project);
+      const q = {
+        select(cols) {
+          const m = /service_templates\(([^)]*)\)/.exec(String(cols || ''));
+          embed = m ? m[1].split(',').map((s) => s.trim()) : null;
+          return q;
+        },
+        order() { return q; }, limit() { return q; },
+        eq(k, v) { f.push([k, v]); return q; }, in(k, v) { f.push([k, v, 'in']); return q; },
+        single() { const r = rows()[0]; return Promise.resolve(r ? { data: r, error: null } : { data: null, error: { message: 'nf' } }); },
+        maybeSingle() { return Promise.resolve({ data: rows()[0] || null, error: null }); },
+        then(res, rej) { return Promise.resolve({ data: rows(), error: null }).then(res, rej); },
+      };
+      return q;
+    },
+    rpc() { return Promise.resolve({ data: [], error: null }); },
+  };
+}
+const PKG_DB = () => ({
+  ...DB(),
+  invoice_items: [
+    { id: 11, invoice_id: 1, description: 'УЗИ брюшной полости', quantity: 1, unit_price: 300000, total: 300000, discount_amount: 0 },
+    { id: 12, invoice_id: 1, description: 'Общий анализ крови', quantity: 1, unit_price: 100000, total: 85000, discount_amount: 15000 },
+  ],
+  visit_services: [
+    { id: 101, invoice_item_id: 11, service_templates: { id: 5, name: 'Смета терапевта', discount_percent: 0 } },
+    { id: 102, invoice_item_id: 12, service_templates: { id: 6, name: 'Осень', discount_percent: 15 } },
+  ],
+});
+
+test('packageLabel: имя пакета — только при скидке пакета (строка базы и пакет окна регистрации)', () => {
+  assert.equal(packageLabel({ name: 'Смета терапевта', discount_percent: 0 }), '');
+  assert.equal(packageLabel({ name: 'Осень', discount_percent: 15 }), 'Осень');
+  assert.equal(packageLabel({ name: 'Смета терапевта', pct: 0 }), '');
+  assert.equal(packageLabel({ name: 'Осень', pct: 15 }), 'Осень');
+  assert.equal(packageLabel({ name: 'Без скидки в выборке' }), '', 'неизвестная скидка — не пакет');
+  assert.equal(packageLabel(null), '');
+  assert.deepEqual(packagesByItem(PKG_DB().visit_services), { 12: 'Осень' });
+});
+
+test('перепечатка чека: «пакет» у строки пакета со скидкой, у строки из шаблона 0 % — нет', async () => {
+  let html = '';
+  const r = await printInvoiceCheck({ supabase: projSb(PKG_DB()), printableSheet: ({ type, s, data }) => { html = buildSheetHtml({ type, s: s || S, data }); }, invoiceId: 1 });
+  assert.deepStrictEqual(r, { ok: true });
+  const t = text(html);
+  assert.match(t, /Общий анализ крови · пакет «Осень», скидка −15 000/);
+  assert.doesNotMatch(t, /Смета терапевта/, 'шаблон без скидки напечатан пакетом');
+  assert.match(t, /УЗИ брюшной полости/);
+});
+
+test('A4-счёт по id: «пакет» только у пакета со скидкой', async () => {
+  let html = '';
+  const r = await printInvoiceSheetById({ supabase: projSb(PKG_DB()), printableSheet: ({ type, data }) => { html = buildSheetHtml({ type, s: S, data }); }, invoiceId: 1 });
+  assert.deepStrictEqual(r, { ok: true });
+  const t = text(html);
+  assert.match(t, /Общий анализ крови · пакет «Осень», скидка −15 000/);
+  assert.doesNotMatch(t, /Смета терапевта/, 'шаблон без скидки напечатан пакетом');
+});
+
+test('касса и окно регистрации подписывают пакет тем же правилом', () => {
+  // Чек кассы после оплаты собирает строки сам (cashier-desk.js): без
+  // discount_percent в выборке «пакет» пропал бы и у настоящих пакетов.
+  const desk = src('cashier-desk.js');
+  const embeds = desk.match(/service_templates\([^)]*\)/g) || [];
+  assert.ok(embeds.length > 0, 'касса больше не читает пакет строки');
+  for (const e of embeds) assert.match(e, /discount_percent/, 'касса: ' + e);
+  const rp = src('receipt-print.js');
+  for (const e of rp.match(/service_templates\([^)]*\)/g) || []) assert.match(e, /discount_percent/, 'receipt-print: ' + e);
+  // Счёт из окна регистрации — пакет строки через packageLabel, не голым именем.
+  const reg = src('fast-registration.js');
+  assert.match(reg, /packageItemName\([^;]*packageLabel\(row\.package\)/);
+  assert.doesNotMatch(reg, /row\.package \? row\.package\.name : ''/);
+});

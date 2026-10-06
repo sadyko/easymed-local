@@ -118,7 +118,7 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
     // очередь: обе подписи живут на visit_services, и второй поход в базу за
     // тем же набором строк был бы лишним.
     const { data: vsRows } = await supabase.from('visit_services')
-        .select('id, invoice_item_id, doctor_id(full_name, specialty, role), service_templates(name)')
+        .select('id, invoice_item_id, doctor_id(full_name, specialty, role), service_templates(name, discount_percent)')   // CLINIC_API_FIX_V1 — скидка: пакет или шаблон
         .in('invoice_item_id', items.map((i) => i.id));
     const byItem = performersByItem(vsRows);
     const pkgByItem = packagesByItem(vsRows);   // PACKAGES_V1
@@ -375,14 +375,28 @@ export function performersByItem(vsRows) {
     return out;
 }
 
+// CLINIC_API_FIX_V1 — имя пакета для бланка: только у пакета СО СКИДКОЙ.
+// Пакеты и шаблоны сметы — одна таблица service_templates (мигр. 154):
+// шаблон — это строка без скидки и без дат, и чек печатал «пакет «Смета
+// терапевта»» у строки, где пакета пациент не брал. Принимает и строку базы
+// ({ name, discount_percent }), и пакет окна регистрации ({ name, pct }).
+// Скидка неизвестна (не пришла в выборке) — не пакет. Временно — до отметки
+// «это пакет» у самой строки service_templates.
+export function packageLabel(pkg) {
+    if (!pkg) return '';
+    const name = pkg.name ? String(pkg.name).trim() : '';
+    const pct = Number(pkg.discount_percent ?? pkg.pct);
+    return name && Number.isFinite(pct) && pct > 0 ? name : '';
+}
+
 // PACKAGES_V1 — из какого пакета позиция: visit_services -> { [invoice_item_id]: имя пакета }.
-// Нужен embed service_templates(name) в выборке строк визита.
+// Нужен embed service_templates(name, discount_percent) в выборке строк визита
+// (CLINIC_API_FIX_V1 — без скидки строка из шаблона, а не из пакета).
 export function packagesByItem(vsRows) {
     const out = {};
     if (!Array.isArray(vsRows)) return out;
     for (const r of vsRows) {
-        const p = r && r.service_templates;
-        const name = p && p.name ? String(p.name).trim() : '';
+        const name = packageLabel(r && r.service_templates);   // CLINIC_API_FIX_V1
         if (name && r.invoice_item_id != null) out[r.invoice_item_id] = name;
     }
     return out;
@@ -415,7 +429,7 @@ export async function loadInvoiceLines(supabase, invoiceId, itemIds = null) {
         }
         if (!ids.length) return { queue: [], byItem: {}, packages: {} };
         const { data: vsRows } = await supabase.from('visit_services')
-            .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role), service_templates(name)')
+            .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role), service_templates(name, discount_percent)')   // CLINIC_API_FIX_V1 — скидка: пакет или шаблон
             .in('invoice_item_id', ids);
         const byItem = performersByItem(vsRows);
         const packages = packagesByItem(vsRows);   // PACKAGES_V1
