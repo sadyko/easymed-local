@@ -9,6 +9,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { updateMyDoctorProfile, PROFILE_KEYS } from './doctor-profile.js';
 import { getRpc } from './index.js';
+import { STRINGS } from '../../../public/js/admin/i18n-strings.js';   // CLINIC_API_FIX_V1 — отказы переводятся
 
 function seed() {
   const db = openDb(':memory:'); migrate(db);
@@ -275,4 +276,49 @@ test('M7b: старая строка без слага с канонически
   updateMyDoctorProfile(db, { p: {}, specialties: ['nevrolog'] }, doc);
   const rows = db.prepare('SELECT specialty_slug, name_ru FROM user_specialties WHERE user_id = 2').all();
   assert.deepEqual(rows.map((r) => [r.specialty_slug, r.name_ru]), [['nevrolog', 'Невролог']]);
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 — «МОЙ ПРОФИЛЬ» ВО ВТОРОМ ЗДАНИИ. Врач, чья строка приехала
+// из главного здания (users.is_local = 0, STAFF_SYNC_V1), сохранял профиль,
+// а ежечасная синхронизация справочника (branch-sync/catalogue.js — колонки
+// публичного профиля едут вместе с сотрудником) молча переписывала правку.
+// Карточка сотрудника такой строке уже отказывает 409 (routes/users.js,
+// mainClinicRow); врач теперь слышит то же — отказ всему сохранению, без записи.
+// ---------------------------------------------------------------------------
+const MANAGED_MSG = 'Профиль врача меняется в главном здании.';
+const managedRefusal = (e) => e.status === 409 && e.code === 'conflict' && e.message === MANAGED_MSG;
+
+test('CLINIC_API_FIX_V1: врач из главного здания — 409 «Профиль врача меняется в главном здании», ничего не записано', () => {
+  const db = seed();
+  const OLD = '2000-01-01T00:00:00Z';
+  db.prepare("UPDATE users SET is_local = 0, bio_ru = 'Старое', specialty = 'Терапевт', updated_at = ? WHERE id = 2").run(OLD);
+  db.prepare("INSERT INTO user_specialties (user_id, specialty_slug, name_ru, is_primary) VALUES (2, 'terapevt', 'Терапевт', 1)").run();
+  const before = { ...db.prepare('SELECT * FROM users WHERE id = 2').get() };
+  assert.throws(() => updateMyDoctorProfile(db, {
+    p: { bio_ru: 'Новое', photo_url: '/api/storage/doctor-photos/doctors/2/a.jpg' },
+    specialties: ['kardiolog'], conditions: [{ kind: 'disease', slug: 'a', name_ru: 'A' }],
+  }, doc), managedRefusal);
+  assert.deepEqual({ ...db.prepare('SELECT * FROM users WHERE id = 2').get() }, before, 'строка врача изменилась');
+  assert.deepEqual(db.prepare('SELECT specialty_slug FROM user_specialties WHERE user_id = 2').all().map((r) => r.specialty_slug), ['terapevt']);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM doctor_conditions WHERE doctor_id = 2').get().n, 0);
+  // Пустой вызов — тот же отказ: экран спрашивает его до загрузки фото, чтобы
+  // не класть в хранилище файл, который сохранение не примет.
+  assert.throws(() => updateMyDoctorProfile(db, { p: {} }, doc), managedRefusal);
+  // Отказ — раньше проверки значений: врач слышит настоящую причину.
+  assert.throws(() => updateMyDoctorProfile(db, { p: { experience_years: -1 } }, doc), managedRefusal);
+  // Через карту RPC — тот же отказ (его отдаёт маршрут /api/rpc).
+  assert.throws(() => getRpc('update_my_doctor_profile')(db, { p: { bio_ru: 'x' } }, doc), managedRefusal);
+  const e = STRINGS[MANAGED_MSG];
+  assert.ok(e && e.ru && e.uz && e.en, 'отказу нужен перевод в i18n-strings.js');
+});
+
+test('CLINIC_API_FIX_V1: свой врач филиала (is_local = 1) сохраняет как раньше, строка соседа из главного здания не мешает', () => {
+  const db = seed();
+  db.prepare('UPDATE users SET is_local = 0 WHERE id = 3').run();
+  assert.equal(db.prepare('SELECT is_local FROM users WHERE id = 2').get().is_local, 1, 'заведён здесь — по умолчанию свой');
+  const out = updateMyDoctorProfile(db, { p: { bio_ru: 'Новое' }, specialties: ['kardiolog'] }, doc);
+  assert.deepEqual(out.saved, ['bio_ru']);
+  assert.equal(db.prepare('SELECT bio_ru FROM users WHERE id = 2').get().bio_ru, 'Новое');
+  assert.deepEqual(db.prepare('SELECT specialty_slug FROM user_specialties WHERE user_id = 2').all().map((r) => r.specialty_slug), ['kardiolog']);
 });

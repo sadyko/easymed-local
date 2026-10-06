@@ -149,10 +149,17 @@ const CONDS = [{ kind: 'disease', slug: 'gipertoniya', name_ru: 'Гиперто�
 
 let scenario = { user: DOC_ROW, specs: SPECS, conds: CONDS, storage: 'ok' };
 const rpcCalls = [];
+// CLINIC_API_FIX_V1 — пустой вызов (p = {}, без наборов) — не сохранение, а
+// вопрос «примет ли сервер сохранение», который экран задаёт ДО загрузки фото.
+// Он записан отдельно; `events` — порядок «проверка → загрузка → сохранение».
+const probes = [];
+const events = [];
+const MANAGED_MSG = 'Профиль врача меняется в главном здании.';
 const reply = (status, body) => ({ ok: status < 400, status, json: async () => body });
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     if (u.startsWith('/api/storage/')) {   // загрузка фото врача
+        events.push('upload');
         if (scenario.storage === 'fail') return reply(500, { error: { message: 'диск заполнен' } });
         return reply(200, {});
     }
@@ -171,7 +178,11 @@ globalThis.fetch = async (url, opts = {}) => {
     }
     if (u === '/api/rpc/update_my_doctor_profile') {
         const body = JSON.parse(opts.body);
-        rpcCalls.push(body);
+        const probe = !Object.keys(body.p || {}).length && !('specialties' in body) && !('conditions' in body);
+        (probe ? probes : rpcCalls).push(body);
+        events.push(probe ? 'probe' : 'save');
+        // Врач из главного здания — сервер отказывает любому вызову (rpc/doctor-profile.js).
+        if (scenario.managed) return reply(409, { error: { code: 'conflict', message: MANAGED_MSG } });
         return reply(200, { data: { ok: true, saved: Object.keys(body.p || {}), not_stored: [] } });
     }
     return reply(200, { data: [] });
@@ -188,6 +199,7 @@ const ticks = async () => { for (let i = 0; i < 8; i += 1) await new Promise((r)
 async function openProfile(sc = {}) {
     scenario = { user: DOC_ROW, specs: SPECS, conds: CONDS, storage: 'ok', ...sc };
     rpcCalls.length = 0;
+    probes.length = 0; events.length = 0;   // CLINIC_API_FIX_V1
     document.body.children.length = 0;
     const container = mk('div');
     await renderDoctorProfile(container, 7);
@@ -370,4 +382,60 @@ test('CLINIC_API_FIX_V1: фото не загрузилось, а другое �
     await s.save();
     assert.equal(rpcCalls.length, 2);
     assert.deepEqual(Object.keys(rpcCalls[1].p), ['photo_url']);
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 — «МОЙ ПРОФИЛЬ» ВО ВТОРОМ ЗДАНИИ. Врачу, чья строка
+// приехала из главного здания (users.is_local = 0), сервер отказывает 409 на
+// любое сохранение (rpc/doctor-profile.js): правку здесь переписала бы
+// ежечасная синхронизация. Экран говорит это словами сервера на языке экрана,
+// не «Профиль сохранён», и не кладёт в хранилище фото, которое сохранение не
+// примет: при новом фото он сначала спрашивает сервер пустым вызовом.
+// ---------------------------------------------------------------------------
+const { setLang } = await import('../i18n.js');
+
+test('CLINIC_API_FIX_V1: врач из главного здания — отказ виден, «Профиль сохранён» нет, правка не считается сохранённой', async () => {
+    const s = await openProfile({ managed: true });
+    s.bio.ru.value = 'Новый текст.';
+    await s.save();
+    assert.equal(rpcCalls.length, 1);
+    assert.equal(toastText(), 'Не удалось сохранить: ' + MANAGED_MSG);
+    assert.equal(probes.length, 0, 'без нового фото спрашивать заранее незачем');
+    // Точка отсчёта не сдвинулась: повтор шлёт ту же правку, а не «Нет изменений».
+    await s.save();
+    assert.equal(rpcCalls.length, 2);
+    assert.deepEqual(rpcCalls[1].p, { bio_ru: 'Новый текст.' });
+});
+
+test('CLINIC_API_FIX_V1: врач из главного здания с новым фото — файл в хранилище не уходит, виден отказ', async () => {
+    const s = await openProfile({ managed: true });
+    await s.pickPhoto('portret.jpg');
+    s.bio.ru.value = 'Новый текст.';
+    await s.save();
+    assert.deepEqual(events, ['probe'], 'фото ушло в хранилище, хотя сохранение откажет: ' + events.join(' → '));
+    assert.equal(rpcCalls.length, 0);
+    assert.equal(toastText(), 'Не удалось сохранить: ' + MANAGED_MSG);
+});
+
+test('CLINIC_API_FIX_V1: свой врач с новым фото — сначала пустая проверка, потом загрузка, потом сохранение', async () => {
+    const s = await openProfile();
+    await s.pickPhoto('portret.jpg');
+    await s.save();
+    assert.deepEqual(events, ['probe', 'upload', 'save']);
+    assert.deepEqual(probes[0], { p: {} }, 'проверка ничего не несёт и ничего не пишет');
+    assert.equal(toastText(), 'Профиль сохранён');
+});
+
+test('CLINIC_API_FIX_V1: отказ главного здания — на языке экрана целиком', async () => {
+    const e = STRINGS[MANAGED_MSG];
+    assert.ok(e && e.ru && e.uz && e.en, 'отказу нужен перевод в i18n-strings.js');
+    setLang('uz');
+    try {
+        const s = await openProfile({ managed: true });
+        s.bio.ru.value = 'Новый текст.';
+        await s.save();
+        assert.equal(toastText(), STRINGS['Не удалось сохранить: {msg}'].uz.split('{msg}').join(e.uz));
+    } finally {
+        setLang('ru');
+    }
 });

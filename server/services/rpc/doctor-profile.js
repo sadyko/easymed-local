@@ -198,9 +198,21 @@ function isEmpty(v) {
 export function updateMyDoctorProfile(db, args, user) {
   const uid = Number(user && user.id);
   if (!Number.isInteger(uid) || uid <= 0) throw new RpcError('Нужно войти в систему.', 401);
-  const me = db.prepare('SELECT id, is_doctor FROM users WHERE id = ?').get(uid);
+  const me = db.prepare('SELECT id, is_doctor, is_local FROM users WHERE id = ?').get(uid);
   if (!me || !(me.is_doctor === 1 || hasAnyRole(user, ['doctor']))) {
     throw new RpcError('Профиль врача редактирует только врач.', 403);
+  }
+  // CLINIC_API_FIX_V1 — ВРАЧ ИЗ ГЛАВНОГО ЗДАНИЯ. Строка приехала синхронизацией
+  // (users.is_local = 0, STAFF_SYNC_V1), и колонки публичного профиля едут с ней
+  // (branch-sync/catalogue.js): правка здесь молча откатилась бы через час.
+  // Та же проверка, что у карточки сотрудника (routes/users.js mainClinicRow),
+  // тот же ответ — 409 conflict — и раньше любой проверки значений: ничего не
+  // пишется, а пустой вызов отвечает тем же отказом (экран спрашивает его до
+  // загрузки фото).
+  if (me.is_local === 0) {
+    const err = new RpcError('Профиль врача меняется в главном здании.', 409);
+    err.code = 'conflict';
+    throw err;
   }
   const p = (args && args.p) || {};
   if (typeof p !== 'object' || Array.isArray(p)) throw new RpcError('Данные профиля переданы неверно.', 400);

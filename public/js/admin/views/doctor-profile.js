@@ -222,6 +222,15 @@ export async function renderDoctorProfile(container, doctorId) {
         saveBtn.disabled = true;
         saveBtn.textContent = tr('Сохранение…');
         try {
+            // (0) CLINIC_API_FIX_V1 — врачу из главного здания сервер откажет во
+            // всём сохранении (409, rpc/doctor-profile.js), и выбранное фото
+            // легло бы в хранилище зря. Пустой вызов ничего не пишет и отвечает
+            // тем же отказом — спрашиваем его ДО загрузки и только при новом
+            // фото: без фото отказ придёт ответом на само сохранение.
+            if (st.photoFile) {
+                const { error: preErr } = await supabase.rpc('update_my_doctor_profile', { p: {} });
+                if (preErr) throw preErr;
+            }
             // (1) Upload pending photo → URL (or external "по ссылке", or '').
             // Сбой загрузки фото не должен отнимать у врача сохранение
             // остального профиля, специальностей и болезней.
@@ -277,7 +286,9 @@ export async function renderDoctorProfile(container, doctorId) {
             else if (notStored.length) toast('Профиль сохранён. Биография, образование, соцсети и фото в офлайн-версии не хранятся.', 'info');
             else toast('Профиль сохранён', 'info');
         } catch (e) {
-            toast(trf('Не удалось сохранить: {msg}', { msg: e.message || e }), 'fail');
+            // CLINIC_API_FIX_V1 — причина отказа (например, «Профиль врача
+            // меняется в главном здании.») — тоже на языке экрана.
+            toast(trf('Не удалось сохранить: {msg}', { msg: tr(String((e && e.message) || e)) }), 'fail');
         } finally {
             saveBtn.disabled = false;
             saveBtn.textContent = '';
