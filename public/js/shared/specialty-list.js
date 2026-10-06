@@ -29,7 +29,7 @@ export const SPECIALTY_ROWS = [
     { slug: 'vertebrolog', ru: 'Вертебролог', uz: 'Vertebrolog', en: 'Vertebrologist' },
     { slug: 'virusolog', ru: 'Вирусолог', uz: 'Virusolog', en: 'Virologist' },
     { slug: 'kt-mrt', ru: 'Врач КТ и МРТ', uz: 'KT va MRT shifokori', en: 'CT and MRI Radiologist' },
-    { slug: 'vrach-lfk', ru: 'Врач ЛФК', uz: 'DJT shifokori', en: 'Exercise Therapy Physician' },
+    { slug: 'vrach-lfk', ru: 'Врач ЛФК', uz: 'DJT (davolash jismoniy tarbiyasi) shifokori', en: 'Exercise Therapy Physician' },   // REFERENCE_LISTS_V1 — вычитка uz
     { slug: 'uzi', ru: 'Врач УЗИ', uz: 'UTT shifokori', en: 'Ultrasound (Sonographer)' },
     { slug: 'funkcionalnaya-diagnostika', ru: 'Врач функциональной диагностики', uz: 'Funksional diagnostika shifokori', en: 'Functional Diagnostics' },
     { slug: 'vrach-laborant', ru: 'Врач-лаборант', uz: 'Laboratoriya shifokori', en: 'Clinical Laboratory Physician' },
@@ -63,7 +63,7 @@ export const SPECIALTY_ROWS = [
     { slug: 'detskiy-urolog-androlog', ru: 'Детский уролог-андролог', uz: 'Bolalar urolog-andrologi', en: 'Pediatric Urologist-Andrologist' },
     { slug: 'detskiy-hirurg', ru: 'Детский хирург', uz: 'Bolalar jarrohi', en: 'Pediatric Surgeon' },
     { slug: 'detskiy-endokrinolog', ru: 'Детский эндокринолог', uz: 'Bolalar endokrinologi', en: 'Pediatric Endocrinologist' },
-    { slug: 'defektolog', ru: 'Дефектолог', uz: 'Defektolog', en: 'Defectologist' },
+    { slug: 'defektolog', ru: 'Дефектолог', uz: 'Defektolog', en: 'Special Education Specialist (Defectologist)' },   // REFERENCE_LISTS_V1 — вычитка
     { slug: 'dietolog', ru: 'Диетолог', uz: 'Dietolog', en: 'Dietitian' },
     { slug: 'igloterapevt', ru: 'Иглотерапевт', uz: 'Ignaterapevt', en: 'Acupuncturist' },   // JOURNALS_V1_SPECIALTIES — владелец, 02.10
     { slug: 'implantolog', ru: 'Имплантолог', uz: 'Implantolog', en: 'Dental Implantologist' },
@@ -99,7 +99,7 @@ export const SPECIALTY_ROWS = [
     { slug: 'pediatr', ru: 'Педиатр', uz: 'Pediatr', en: 'Pediatrician' },
     { slug: 'plasticheskiy-hirurg', ru: 'Пластический хирург', uz: 'Plastik jarroh', en: 'Plastic Surgeon' },
     { slug: 'proktolog', ru: 'Проктолог', uz: 'Proktolog', en: 'Proctologist' },
-    { slug: 'profpatolog', ru: 'Профпатолог', uz: 'Kasb kasalliklari shifokori', en: 'Occupational Medicine Physician' },
+    { slug: 'profpatolog', ru: 'Профпатолог', uz: 'Kasb patologi (profpatolog)', en: 'Occupational Medicine Physician' },   // REFERENCE_LISTS_V1 — вычитка uz
     { slug: 'psihiatr', ru: 'Психиатр', uz: 'Psixiatr', en: 'Psychiatrist' },
     { slug: 'psihoterapevt', ru: 'Психотерапевт', uz: 'Psixoterapevt', en: 'Psychotherapist' },
     { slug: 'pulmonolog', ru: 'Пульмонолог', uz: 'Pulmonolog', en: 'Pulmonologist' },
@@ -129,7 +129,7 @@ export const SPECIALTY_ROWS = [
     { slug: 'flebolog', ru: 'Флеболог', uz: 'Flebolog', en: 'Phlebologist' },
     { slug: 'foniatr', ru: 'Фониатр', uz: 'Foniatr', en: 'Phoniatrist' },
     { slug: 'ftiziatr', ru: 'Фтизиатр', uz: 'Ftiziatr', en: 'Phthisiatrician (TB Specialist)' },
-    { slug: 'himioterapevt', ru: 'Химиотерапевт', uz: 'Ximioterapevt', en: 'Medical Oncologist (Chemotherapy)' },
+    { slug: 'himioterapevt', ru: 'Химиотерапевт', uz: 'Kimyoterapevt', en: 'Medical Oncologist (Chemotherapy)' },   // REFERENCE_LISTS_V1 — вычитка uz
     { slug: 'hirurg', ru: 'Хирург', uz: 'Jarroh', en: 'Surgeon (General)' },
     { slug: 'hirurg-onkolog', ru: 'Хирург-онколог', uz: 'Jarroh-onkolog', en: 'Surgical Oncologist' },
     { slug: 'chelyustno-licevoy-hirurg', ru: 'Челюстно-лицевой хирург', uz: 'Yuz-jag‘ jarrohi', en: 'Maxillofacial Surgeon' },

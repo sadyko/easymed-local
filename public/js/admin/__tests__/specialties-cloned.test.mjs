@@ -22,12 +22,12 @@ const NEW_ROWS = [
     { slug: 'vertebrolog', ru: 'Вертебролог', uz: 'Vertebrolog', en: 'Vertebrologist' },
     { slug: 'virusolog', ru: 'Вирусолог', uz: 'Virusolog', en: 'Virologist' },
     { slug: 'kt-mrt', ru: 'Врач КТ и МРТ', uz: 'KT va MRT shifokori', en: 'CT and MRI Radiologist' },
-    { slug: 'vrach-lfk', ru: 'Врач ЛФК', uz: 'DJT shifokori', en: 'Exercise Therapy Physician' },
+    { slug: 'vrach-lfk', ru: 'Врач ЛФК', uz: 'DJT (davolash jismoniy tarbiyasi) shifokori', en: 'Exercise Therapy Physician' },
     { slug: 'vrach-laborant', ru: 'Врач-лаборант', uz: 'Laboratoriya shifokori', en: 'Clinical Laboratory Physician' },
     { slug: 'gepatolog', ru: 'Гепатолог', uz: 'Gepatolog', en: 'Hepatologist' },
     { slug: 'geriatr', ru: 'Гериатр', uz: 'Geriatr', en: 'Geriatrician' },
     { slug: 'ginekolog-endokrinolog', ru: 'Гинеколог-эндокринолог', uz: 'Ginekolog-endokrinolog', en: 'Gynecologic Endocrinologist' },
-    { slug: 'defektolog', ru: 'Дефектолог', uz: 'Defektolog', en: 'Defectologist' },
+    { slug: 'defektolog', ru: 'Дефектолог', uz: 'Defektolog', en: 'Special Education Specialist (Defectologist)' },
     { slug: 'detskiy-allergolog', ru: 'Детский аллерголог', uz: 'Bolalar allergologi', en: 'Pediatric Allergist' },
     { slug: 'detskiy-gastroenterolog', ru: 'Детский гастроэнтеролог', uz: 'Bolalar gastroenterologi', en: 'Pediatric Gastroenterologist' },
     { slug: 'detskiy-gematolog', ru: 'Детский гематолог', uz: 'Bolalar gematologi', en: 'Pediatric Hematologist' },
@@ -62,7 +62,7 @@ const NEW_ROWS = [
     { slug: 'oftalmohirurg', ru: 'Офтальмохирург', uz: 'Oftalmojarroh', en: 'Ophthalmic Surgeon' },
     { slug: 'parazitolog', ru: 'Паразитолог', uz: 'Parazitolog', en: 'Parasitologist' },
     { slug: 'parodontolog', ru: 'Пародонтолог', uz: 'Parodontolog', en: 'Periodontist' },
-    { slug: 'profpatolog', ru: 'Профпатолог', uz: 'Kasb kasalliklari shifokori', en: 'Occupational Medicine Physician' },
+    { slug: 'profpatolog', ru: 'Профпатолог', uz: 'Kasb patologi (profpatolog)', en: 'Occupational Medicine Physician' },
     { slug: 'radioterapevt', ru: 'Радиотерапевт', uz: 'Radioterapevt', en: 'Radiation Oncologist' },
     { slug: 'seksolog', ru: 'Сексолог', uz: 'Seksolog', en: 'Sexologist' },
     { slug: 'somnolog', ru: 'Сомнолог', uz: 'Somnolog', en: 'Sleep Medicine Specialist' },
@@ -76,7 +76,7 @@ const NEW_ROWS = [
     { slug: 'triholog', ru: 'Трихолог', uz: 'Trixolog', en: 'Trichologist' },
     { slug: 'foniatr', ru: 'Фониатр', uz: 'Foniatr', en: 'Phoniatrist' },
     { slug: 'ftiziatr', ru: 'Фтизиатр', uz: 'Ftiziatr', en: 'Phthisiatrician (TB Specialist)' },
-    { slug: 'himioterapevt', ru: 'Химиотерапевт', uz: 'Ximioterapevt', en: 'Medical Oncologist (Chemotherapy)' },
+    { slug: 'himioterapevt', ru: 'Химиотерапевт', uz: 'Kimyoterapevt', en: 'Medical Oncologist (Chemotherapy)' },
     { slug: 'hirurg-onkolog', ru: 'Хирург-онколог', uz: 'Jarroh-onkolog', en: 'Surgical Oncologist' },
     { slug: 'chelyustno-licevoy-hirurg', ru: 'Челюстно-лицевой хирург', uz: 'Yuz-jag‘ jarrohi', en: 'Maxillofacial Surgeon' },
     { slug: 'embriolog', ru: 'Эмбриолог', uz: 'Embriolog', en: 'Embryologist' },
@@ -162,5 +162,27 @@ test('названия «не из списка» в других тестах �
     // server/routes/users.specialties.test.js, server/services/rpc/reports.doctor-lines.test.js
     for (const name of ['Гирудотерапевт', 'Консультант клиники', 'Эксперт клиники', 'Мой особый']) {
         assert.ok(!SPECIALTIES.some((s) => s.toLowerCase() === name.toLowerCase()), name + ' попал в список');
+    }
+});
+
+// REFERENCE_LISTS_V1 — вычитка узбекского языка (2026-10-06): четыре названия.
+// Экран показывает перевод из словаря (tr), API клиники и «Справочники» —
+// из списка; оба места обязаны совпадать.
+test('вычитка: Химиотерапевт, Врач ЛФК, Профпатолог, Дефектолог — в списке и в словаре одинаково', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    const WANT = {
+        'Химиотерапевт': { uz: 'Kimyoterapevt' },
+        'Врач ЛФК': { uz: 'DJT (davolash jismoniy tarbiyasi) shifokori' },
+        'Профпатолог': { uz: 'Kasb patologi (profpatolog)' },
+        'Дефектолог': { en: 'Special Education Specialist (Defectologist)' },
+    };
+    for (const [ru, want] of Object.entries(WANT)) {
+        const row = SPECIALTY_ROWS.find((r) => r.ru === ru);
+        for (const [lang, text] of Object.entries(want)) {
+            assert.equal(row[lang], text, 'список: ' + ru + ' ' + lang);
+            assert.equal(STRINGS[ru][lang], text, 'словарь: ' + ru + ' ' + lang);
+        }
+        assert.equal(STRINGS[ru].uz, row.uz, 'uz списка и словаря расходятся: ' + ru);
+        assert.equal(STRINGS[ru].en, row.en, 'en списка и словаря расходятся: ' + ru);
     }
 });

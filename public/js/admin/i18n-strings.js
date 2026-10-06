@@ -8949,12 +8949,12 @@ export const STRINGS = {
   "Вертебролог": {"en": "Vertebrologist", "ru": "Вертебролог", "uz": "Vertebrolog"},
   "Вирусолог": {"en": "Virologist", "ru": "Вирусолог", "uz": "Virusolog"},
   "Врач КТ и МРТ": {"en": "CT and MRI Radiologist", "ru": "Врач КТ и МРТ", "uz": "KT va MRT shifokori"},
-  "Врач ЛФК": {"en": "Exercise Therapy Physician", "ru": "Врач ЛФК", "uz": "DJT shifokori"},
+  "Врач ЛФК": {"en": "Exercise Therapy Physician", "ru": "Врач ЛФК", "uz": "DJT (davolash jismoniy tarbiyasi) shifokori"},   // REFERENCE_LISTS_V1 — вычитка узбекского (2026-10-06)
   "Врач-лаборант": {"en": "Clinical Laboratory Physician", "ru": "Врач-лаборант", "uz": "Laboratoriya shifokori"},
   "Гепатолог": {"en": "Hepatologist", "ru": "Гепатолог", "uz": "Gepatolog"},
   "Гериатр": {"en": "Geriatrician", "ru": "Гериатр", "uz": "Geriatr"},
   "Гинеколог-эндокринолог": {"en": "Gynecologic Endocrinologist", "ru": "Гинеколог-эндокринолог", "uz": "Ginekolog-endokrinolog"},
-  "Дефектолог": {"en": "Defectologist", "ru": "Дефектолог", "uz": "Defektolog"},
+  "Дефектолог": {"en": "Special Education Specialist (Defectologist)", "ru": "Дефектолог", "uz": "Defektolog"},   // REFERENCE_LISTS_V1 — вычитка узбекского (2026-10-06)
   "Детский аллерголог": {"en": "Pediatric Allergist", "ru": "Детский аллерголог", "uz": "Bolalar allergologi"},
   "Детский гастроэнтеролог": {"en": "Pediatric Gastroenterologist", "ru": "Детский гастроэнтеролог", "uz": "Bolalar gastroenterologi"},
   "Детский гематолог": {"en": "Pediatric Hematologist", "ru": "Детский гематолог", "uz": "Bolalar gematologi"},
@@ -8987,7 +8987,7 @@ export const STRINGS = {
   "Офтальмохирург": {"en": "Ophthalmic Surgeon", "ru": "Офтальмохирург", "uz": "Oftalmojarroh"},
   "Паразитолог": {"en": "Parasitologist", "ru": "Паразитолог", "uz": "Parazitolog"},
   "Пародонтолог": {"en": "Periodontist", "ru": "Пародонтолог", "uz": "Parodontolog"},
-  "Профпатолог": {"en": "Occupational Medicine Physician", "ru": "Профпатолог", "uz": "Kasb kasalliklari shifokori"},
+  "Профпатолог": {"en": "Occupational Medicine Physician", "ru": "Профпатолог", "uz": "Kasb patologi (profpatolog)"},   // REFERENCE_LISTS_V1 — вычитка узбекского (2026-10-06)
   "Радиотерапевт": {"en": "Radiation Oncologist", "ru": "Радиотерапевт", "uz": "Radioterapevt"},
   "Сексолог": {"en": "Sexologist", "ru": "Сексолог", "uz": "Seksolog"},
   "Сомнолог": {"en": "Sleep Medicine Specialist", "ru": "Сомнолог", "uz": "Somnolog"},
@@ -9001,7 +9001,7 @@ export const STRINGS = {
   "Трихолог": {"en": "Trichologist", "ru": "Трихолог", "uz": "Trixolog"},
   "Фониатр": {"en": "Phoniatrist", "ru": "Фониатр", "uz": "Foniatr"},
   "Фтизиатр": {"en": "Phthisiatrician (TB Specialist)", "ru": "Фтизиатр", "uz": "Ftiziatr"},
-  "Химиотерапевт": {"en": "Medical Oncologist (Chemotherapy)", "ru": "Химиотерапевт", "uz": "Ximioterapevt"},
+  "Химиотерапевт": {"en": "Medical Oncologist (Chemotherapy)", "ru": "Химиотерапевт", "uz": "Kimyoterapevt"},   // REFERENCE_LISTS_V1 — вычитка узбекского (2026-10-06)
   "Хирург-онколог": {"en": "Surgical Oncologist", "ru": "Хирург-онколог", "uz": "Jarroh-onkolog"},
   "Челюстно-лицевой хирург": {"en": "Maxillofacial Surgeon", "ru": "Челюстно-лицевой хирург", "uz": "Yuz-jag‘ jarrohi"},
   "Эмбриолог": {"en": "Embryologist", "ru": "Эмбриолог", "uz": "Embriolog"},
