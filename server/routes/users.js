@@ -32,7 +32,12 @@ const EXTENSION_RE = /^[0-9*#]{1,12}$/;
 // `currentRole` is the row's existing primary role; it's only consulted for
 // extra_roles filtering when `body.role` is absent (PATCH that doesn't touch
 // the primary role) — POST always carries `body.role`.
-export function parseEmployeeFields(body, db, currentRole) {
+// CLINIC_API_FIX_V1 — `ownerId`: whose card this is. With it, public_profile
+// .photo_url is accepted only from that employee's own folder
+// (doctor-photos/doctors/<ownerId>/…, rpc/doctor-profile.js cleanProfileFields).
+// PATCH passes the row's id; POST passes 0 — a new employee has no folder yet,
+// and doctors/0/ never exists (routes/storage.js photoTarget requires id > 0).
+export function parseEmployeeFields(body, db, currentRole, ownerId) {
   const fields = {};
   body = body || {};
 
@@ -114,7 +119,7 @@ export function parseEmployeeFields(body, db, currentRole) {
   // публичный профиль врача: { public_profile: { bio_ru, …, *_entries: [...] } }.
   // Ключи и значения — белый список профиля; присланные ключи и только они.
   if (body.public_profile !== undefined) {
-    try { Object.assign(fields, cleanProfileFields(body.public_profile)); }
+    try { Object.assign(fields, cleanProfileFields(body.public_profile, ownerId)); }   // CLINIC_API_FIX_V1 — фото только из папки владельца
     catch (e) { return { ok: false, message: e.message }; }
   }
 
@@ -636,7 +641,7 @@ export function userRoutes(db) {
     }
     if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(name)) return bad(res, 'Такой логин уже занят.');
 
-    const parsed = parseEmployeeFields(req.body, db);
+    const parsed = parseEmployeeFields(req.body, db, undefined, 0);   // CLINIC_API_FIX_V1 — новому сотруднику фото не ставится
     if (!parsed.ok) return bad(res, parsed.message);
     const ef = parsed.fields;
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
@@ -741,7 +746,7 @@ export function userRoutes(db) {
       return bad(res, 'В клинике должен остаться хотя бы один активный администратор.');
     }
 
-    const parsed = parseEmployeeFields(req.body, db, user.role);
+    const parsed = parseEmployeeFields(req.body, db, user.role, user.id);   // CLINIC_API_FIX_V1 — фото только из папки этого сотрудника
     if (!parsed.ok) return bad(res, parsed.message);
     const ef = parsed.fields;
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1

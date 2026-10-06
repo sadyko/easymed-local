@@ -167,7 +167,11 @@ globalThis.fetch = async (url, opts = {}) => {
         const desc = JSON.parse(opts.body);
         if (desc.table === 'users') {
             if (scenario.user === 'fail') return reply(400, { error: { message: 'unknown column' } });
-            return reply(200, { data: JSON.parse(JSON.stringify(scenario.user)) });
+            // CLINIC_API_FIX_V1 — как сервер: приходят только запрошенные колонки
+            // (is_local экран видит, только если спросил его).
+            const asked = String(desc.columns || '*').split(',').map((c) => c.trim());
+            const row = JSON.parse(JSON.stringify(scenario.user));
+            return reply(200, { data: asked.includes('*') ? row : Object.fromEntries(Object.entries(row).filter(([k]) => asked.includes(k))) });
         }
         if (desc.table === 'user_specialties') {
             if (scenario.specs === 'fail') return reply(500, { error: { message: 'database is locked' } });
@@ -438,4 +442,39 @@ test('CLINIC_API_FIX_V1: отказ главного здания — на яз�
     } finally {
         setLang('ru');
     }
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 (ревью) — врач из главного здания узнаёт это СРАЗУ, а не
+// после «Сохранить профиль»: экран читает users.is_local и, как карточка
+// сотрудника для синхронизированных (views/employees.js managedNote +
+// disableAll), показывает строку-объяснение и не даёт править и сохранять.
+// Отказ сервера (409) остаётся гарантией.
+// ---------------------------------------------------------------------------
+const MANAGED_NOTE = 'Профиль врача меняется в главном здании — здесь его можно только посмотреть.';
+
+test('CLINIC_API_FIX_V1: врач из главного здания — сразу видна строка-объяснение, поля и «Сохранить профиль» выключены', async () => {
+    const s = await openProfile({ user: { ...DOC_ROW, is_local: 0 } });
+    assert.ok(s.container.textContent.includes(MANAGED_NOTE), 'нет строки «Профиль врача меняется в главном здании…»');
+    const saveBtn = byClass(s.container, 'docprof-save')[0];
+    assert.equal(saveBtn.disabled, true, '«Сохранить профиль» включена');
+    assert.ok(s.bio.ru.disabled && s.bio.uz.disabled && s.bio.en.disabled, 'биография правится');
+    const fileInp = tagsOf(s.container, 'input').find((i) => i.attrs.type === 'file');
+    assert.equal(fileInp.disabled, true, 'фото можно выбрать');
+    for (const b of tagsOf(s.container, 'button')) assert.equal(b.disabled, true, 'кнопка включена: ' + b.textContent);
+    // Даже если нажатие дошло (экран — один из клиентов), ни загрузки, ни вызова.
+    await s.save();
+    assert.deepEqual(events, [], 'ушло на сервер: ' + events.join(' → '));
+    const e = STRINGS[MANAGED_NOTE];
+    assert.ok(e && e.ru && e.uz && e.en, 'строке нужен перевод в i18n-strings.js');
+});
+
+test('CLINIC_API_FIX_V1: свой врач (is_local = 1) — строки нет, сохранение включено', async () => {
+    const s = await openProfile({ user: { ...DOC_ROW, is_local: 1 } });
+    assert.ok(!s.container.textContent.includes(MANAGED_NOTE));
+    assert.notEqual(byClass(s.container, 'docprof-save')[0].disabled, true, '«Сохранить профиль» выключена');
+    assert.notEqual(s.bio.ru.disabled, true, 'биография выключена');
+    s.bio.ru.value = 'Новый текст.';
+    await s.save();
+    assert.equal(rpcCalls.length, 1);
 });

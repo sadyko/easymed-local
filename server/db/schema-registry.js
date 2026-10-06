@@ -554,7 +554,13 @@ export const REGISTRY = {
                 'academic_title_ru','academic_title_uz','academic_title_en',
                 'bio_ru','bio_uz','bio_en',
                 'education_entries','experience_entries','certifications_entries','prof_dev_entries',
-                'experience_years','instagram_url','telegram_url','photo_url'],
+                'experience_years','instagram_url','telegram_url','photo_url',
+                // CLINIC_API_FIX_V1 — STAFF_SYNC_V1 (миграция 086): 0 — строка
+                // приехала из главного здания. «Мой профиль» читает её, чтобы
+                // врач сразу видел, что профиль здесь только смотрят (правка
+                // переписалась бы синхронизацией; сервер и так отвечает 409).
+                // Только чтение: write у users пуст, пишут синхронизация и 086.
+                'is_local'],
                 // V3120_FIX (F1) — ДЕНЬГИ СОТРУДНИКА ВИДЯТ НЕ ВСЕ. Раньше любой
                 // вошедший одним запросом к users забирал оклад, процент и
                 // ставки каждого сотрудника. Теперь их видят администратор,

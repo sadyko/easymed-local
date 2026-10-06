@@ -13,7 +13,7 @@ import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
 import { updateMyDoctorProfile } from '../services/rpc/doctor-profile.js';
-import { readableColumns } from '../db/schema-registry.js';
+import { readableColumns, REGISTRY } from '../db/schema-registry.js';
 import { TABLES as CATALOGUE_TABLES } from '../services/branch-sync/catalogue.js';
 
 async function startServer() {
@@ -40,7 +40,8 @@ test('врач сохранил профиль — карточка сотруд
     updateMyDoctorProfile(db, { p: {
       bio_ru: 'Кардиолог', academic_title_ru: 'Кандидат медицинских наук', experience_years: 12,
       education_entries: [{ ru: 'ТашМИ', year_from: '1995', year_to: '2001' }],
-      photo_url: '/api/storage/doctor-photos/doctors/2/a.jpg',
+      // CLINIC_API_FIX_V1 — фото только из папки самого врача: путь строится от его id.
+      photo_url: '/api/storage/doctor-photos/doctors/' + docId + '/a.jpg',
     } }, { id: docId, role: 'doctor' });
     const admin = await loginAdmin(base);
     const list = await (await req(base, 'GET', '/api/users', null, admin)).json();
@@ -48,7 +49,7 @@ test('врач сохранил профиль — карточка сотруд
     assert.equal(card.public_profile.bio_ru, 'Кардиолог');
     assert.equal(card.public_profile.experience_years, 12);
     assert.deepEqual(card.public_profile.education_entries, [{ ru: 'ТашМИ', year_from: '1995', year_to: '2001' }]);
-    assert.equal(card.public_profile.photo_url, '/api/storage/doctor-photos/doctors/2/a.jpg');
+    assert.equal(card.public_profile.photo_url, '/api/storage/doctor-photos/doctors/' + docId + '/a.jpg');
 
     const res = await req(base, 'PATCH', '/api/users/' + docId, { public_profile: { bio_uz: 'Kardiolog', telegram_url: 'https://t.me/doc' } }, admin);
     assert.equal(res.status, 200, await res.clone().text());
@@ -74,4 +75,49 @@ test('реестр читает поля профиля; филиалы полу
   const spec = CATALOGUE_TABLES.find((t) => t.name === 'users');
   assert.ok(spec.columns.includes('bio_ru') && spec.columns.includes('prof_dev_entries'));
   assert.ok(!spec.columns.includes('photo_url'), 'файл фото между зданиями не ездит — ссылка была бы мёртвой');
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 — ФОТО ВРАЧА ТОЛЬКО ИЗ ЕГО ПАПКИ — и в карточке сотрудника.
+// «Мой профиль» это уже требует (rpc/doctor-profile.js); PATCH /api/users/:id
+// принимал любую папку корзины doctor-photos, то есть фото врача Y можно было
+// поставить врачу X. Новому сотруднику (POST) фото не ставится вовсе: папки
+// doctors/0/ не бывает (routes/storage.js photoTarget требует id > 0), а своей
+// папки у него ещё нет.
+// ---------------------------------------------------------------------------
+const OWN_PHOTO_MSG = 'Поставить можно только своё фото — загруженное в «Моём профиле».';
+
+test('CLINIC_API_FIX_V1: карточка сотрудника — фото врача только из его папки; новому сотруднику фото не ставится', async () => {
+  const { db, server, base, docId } = await startServer();
+  try {
+    const otherId = db.prepare("INSERT INTO users (username, password_hash, full_name, role, is_doctor) VALUES ('doc2', 'x', 'Врач Два', 'doctor', 1)").run().lastInsertRowid;
+    const P = '/api/storage/doctor-photos/doctors/';
+    const admin = await loginAdmin(base);
+
+    const foreign = await req(base, 'PATCH', '/api/users/' + docId, { public_profile: { photo_url: P + otherId + '/a.jpg' } }, admin);
+    assert.equal(foreign.status, 400, 'фото другого врача принято');
+    assert.equal((await foreign.json()).error.message, OWN_PHOTO_MSG);
+    assert.equal(db.prepare('SELECT photo_url FROM users WHERE id = ?').get(docId).photo_url, null);
+
+    const own = await req(base, 'PATCH', '/api/users/' + docId, { public_profile: { photo_url: P + docId + '/a.jpg' } }, admin);
+    assert.equal(own.status, 200, await own.clone().text());
+    assert.equal(db.prepare('SELECT photo_url FROM users WHERE id = ?').get(docId).photo_url, P + docId + '/a.jpg');
+
+    const created = await req(base, 'POST', '/api/users', { username: 'newdoc', password: 'password9', full_name: 'Новый врач', role: 'doctor',
+      public_profile: { photo_url: P + docId + '/a.jpg' } }, admin);
+    assert.equal(created.status, 400, 'новому сотруднику поставлено чужое фото');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM users WHERE username = 'newdoc'").get().n, 0);
+    const plain = await req(base, 'POST', '/api/users', { username: 'newdoc', password: 'password9', full_name: 'Новый врач', role: 'doctor',
+      public_profile: { bio_ru: 'Терапевт' } }, admin);
+    assert.equal(plain.status, 201, 'остальной профиль при создании сохраняется: ' + await plain.clone().text());
+  } finally { server.close(); db.close(); }
+});
+
+// CLINIC_API_FIX_V1 — «Мой профиль» читает is_local, чтобы врач из главного
+// здания сразу видел, что здесь профиль только смотрят. Колонка — только для
+// чтения: пишут её синхронизация справочника и миграция 086, не /api/db.
+test('CLINIC_API_FIX_V1: is_local читается через реестр, но не пишется', () => {
+  assert.ok(readableColumns('users').includes('is_local'));
+  const w = REGISTRY.users.write;
+  assert.deepEqual([w.insert.roles, w.update.roles, w.delete.roles], [[], [], []]);
 });

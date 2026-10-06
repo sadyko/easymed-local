@@ -311,6 +311,8 @@ test('CLINIC_API_FIX_V1: врач из главного здания — 409 «�
   assert.throws(() => getRpc('update_my_doctor_profile')(db, { p: { bio_ru: 'x' } }, doc), managedRefusal);
   const e = STRINGS[MANAGED_MSG];
   assert.ok(e && e.ru && e.uz && e.en, 'отказу нужен перевод в i18n-strings.js');
+  // CLINIC_API_FIX_V1 (ревью) — по-английски: «меняется только там».
+  assert.equal(e.en, 'This doctor profile can only be changed in the main building.');
 });
 
 test('CLINIC_API_FIX_V1: свой врач филиала (is_local = 1) сохраняет как раньше, строка соседа из главного здания не мешает', () => {

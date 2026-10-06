@@ -119,7 +119,8 @@ export async function renderDoctorProfile(container, doctorId) {
             .select('id, full_name, phone, specialty, license_number, doctor_category, room_id, '
                 + 'full_name_ru, full_name_uz, full_name_en, academic_title_ru, academic_title_uz, academic_title_en, '
                 + 'bio_ru, bio_uz, bio_en, education_entries, experience_entries, certifications_entries, prof_dev_entries, '
-                + 'experience_years, instagram_url, telegram_url, photo_url')
+                + 'experience_years, instagram_url, telegram_url, photo_url, '
+                + 'is_local')   // CLINIC_API_FIX_V1 — 0: строка из главного здания, здесь только просмотр
             .eq('id', doctorId).single();
         st.user = data || {};
     } catch (e) { st.user = {}; }
@@ -152,6 +153,26 @@ export async function renderDoctorProfile(container, doctorId) {
     } catch (e) {}
 
     status.remove();
+
+    // CLINIC_API_FIX_V1 — ВРАЧ ИЗ ГЛАВНОГО ЗДАНИЯ (users.is_local = 0,
+    // STAFF_SYNC_V1): профиль здесь только смотрят — правку переписала бы
+    // ежечасная синхронизация, и сервер отказывает ей 409 (rpc/doctor-profile.js).
+    // Как карточка сотрудника для синхронизированных (views/employees.js
+    // managedNote + disableAll): строка-объяснение первой, поля и «Сохранить
+    // профиль» выключены. Строка не загрузилась (st.user пуст) — это не «из
+    // главного здания»: тогда отказ, если он нужен, даст сервер.
+    const managed = st.user.is_local === 0;
+    const MANAGED_NOTE = 'Профиль врача меняется в главном здании — здесь его можно только посмотреть.';
+    if (managed) {
+        root.appendChild(h('div', {
+            class: 'docprof-managed', role: 'note',
+            style: {
+                display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px',
+                padding: '9px 12px', borderRadius: '9px', fontSize: '12.5px', lineHeight: 1.5,
+                background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)', color: 'var(--ink-600)',
+            },
+        }, Icon('Building', { size: 15 }), h('span', null, MANAGED_NOTE)));
+    }
 
     // ----- Collectors read by the save flow -----
     const triInputs = {};       // base -> { ru, uz, en } controls
@@ -217,8 +238,12 @@ export async function renderDoctorProfile(container, doctorId) {
     const saveBtn = h('button', { class: 'btn btn-primary docprof-save', type: 'button' },
         Icon('Check', { size: 14 }), ' Сохранить профиль');
     root.appendChild(h('div', { class: 'docprof-savebar' }, saveBtn));
+    if (managed) disableAll(root);   // CLINIC_API_FIX_V1 — только просмотр, вместе с «Сохранить профиль»
 
     saveBtn.onclick = async () => {
+        // CLINIC_API_FIX_V1 — кнопка выключена; нажатие, которое всё же дошло,
+        // не загружает фото и не зовёт сервер.
+        if (managed) { toast(MANAGED_NOTE, 'fail'); return; }
         saveBtn.disabled = true;
         saveBtn.textContent = tr('Сохранение…');
         try {
@@ -322,6 +347,16 @@ export async function renderDoctorProfile(container, doctorId) {
             kind: x.kind, slug: x.slug, name_ru: x.name_ru || null, name_uz: x.name_uz || null,
         }));
         return { p, specialties, conditions };
+    }
+
+    // CLINIC_API_FIX_V1 — то же, что disableAll карточки сотрудника
+    // (views/employees.js): каждое поле и каждая кнопка под узлом выключены.
+    function disableAll(node) {
+        for (const child of node.children || []) {
+            const tag = String(child.tagName || '').toUpperCase();
+            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') child.disabled = true;
+            disableAll(child);
+        }
     }
 
     // =======================================================================
