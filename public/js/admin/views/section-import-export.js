@@ -119,6 +119,13 @@ import { TIER_STEP_COLUMNS, tierStepsProblem, tierStepRangeProblem } from '../se
 import { SECTIONS, FK_LABEL_COLUMN } from '../sections.js?v=noikpu1';
 import { mrnSeriesRefusal } from '../patient-duplicates.js';   // MRN_BEYOND_99999_V1 — номер, исчерпавший бы серию года
 
+// CLINIC_API_FIX_V1 — колонки цен второго/повторного визита и их окон: пусто
+// значит «не задано» (null), а не 0 (см. transform услуг).
+const VISIT_TIER_COLUMNS = [
+    { key: 'price_secondary' }, { key: 'secondary_days_from', int: true }, { key: 'secondary_days_to', int: true },
+    { key: 'price_repeat' },    { key: 'repeat_days_from', int: true },    { key: 'repeat_days_to', int: true },
+];
+
 // EXCEL_SELF_HOST_V1 — served from our own origin (CSP allows 'self'); the
 // SheetJS CDN is NOT in the site CSP, so the external import was blocked and
 // Sample/Import/Export failed. Normalise default/named exports so XLSX.utils
@@ -426,6 +433,21 @@ const IMPORT_CONFIGS = {
                 if (ctx) ctx.warn(trf('Строка {n}, «{service}»: онлайн-запись не включена: нет названия на узбекском.',
                     { n: ctx.rowNum, service: String(payload.name || '').trim() }));
             }
+            // CLINIC_API_FIX_V1 — цены второго и повторного визита и их окна
+            // (VISIT_TIER_PRICING_V1 / REPEAT_WINDOW_V1) ПУСТЫЕ, пока клиника их
+            // не задала: пусто — «как первый визит». Числовая колонка писала 0
+            // и без заголовка в листе, и под пустой ячейкой (выгрузка пишет
+            // пустую ячейку у каждой услуги без ступеней). А 0 для цены визита —
+            // «бесплатно»: visit-tier.js видел у услуги ступени с окном 0…0 дней,
+            // и второй визит в тот же день выставлялся по 0. Теперь: заголовка
+            // нет — не трогается; ячейка пустая или не число («—», «нет») — не
+            // задано (null); число — как есть (0 — осознанное «бесплатно»).
+            VISIT_TIER_COLUMNS.forEach(function (c) {
+                if (!(c.key in r)) { delete payload[c.key]; return; }
+                var raw = String(r[c.key] == null ? '' : r[c.key]).replace(/[\s,]/g, '');
+                var n = raw === '' ? NaN : Number(raw);
+                payload[c.key] = Number.isFinite(n) ? (c.int ? Math.round(n) : n) : null;
+            });
             // DOCTOR_TIER_V1 — КОЛОНКИ, КОТОРОЙ В ФАЙЛЕ НЕТ, В ПАМЯТИ НЕ БЫВАЕТ.
             // Числовые колонки пишутся в payload всегда, даже когда заголовка в
             // листе нет вовсе: обновление услуг файлом, выгруженным ДО ступеней,
