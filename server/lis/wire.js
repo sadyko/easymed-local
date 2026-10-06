@@ -298,10 +298,28 @@ function qualitativeOf(raw) {
  * Остальное — ошибки измерения (ERR, QNS, QNR, SUC, RLU, CLT, TRI…), флаги,
  * которых нет в перечне владельца (GRY, CRH, CRL, OVD, DRX, γ…), и незнакомые —
  * не писать: строка бланка «не пришла», проба в лотке с «флаги прибора: …».
+ *
+ * LIS_VENDOR_EXACT_V1 (D9, доклассификация) — остаток перечня по подписям той же
+ * программы (весь перечень, 62 имени, — wire.test.js A1000_ENUM):
+ *   — OVD «Result from a diluted sample» (прибор сам развёл пробу и пересчитал —
+ *     число окончательное) и DRX «The result is calculated from the derivation
+ *     of formula» (расчётный тест) — не мешают, как сроки: в A1000_IGNORE;
+ *   — A1000_CRITICAL — CRH «above the upper limit of the critical range», CRL
+ *     «below the lower limit of the critical range» (критический диапазон задаёт
+ *     лаборатория на приборе): число пишется, OBX-8 — HH / LL, словарь HL7 для
+ *     «паники»; ingest.js flagFromDevice делает из них 'critical';
+ *   — GRY «For qualitative assays or the QC, result is within the specified gray
+ *     zone» — пограничный ответ: не писать, решает человек; прочие 48 имён
+ *     перечня — ошибки, сбои температуры, «повторите тест», ответы TB-IGRA — тоже;
+ *     имя вне перечня — незнакомое: не писать.
+ * Критический и предел измерения в одну сторону — «>» / «<» и «критический»;
+ * в разные стороны (CRH с ORL, CRL с ORH/OVR, CRH с CRL) — спор: не писать.
  */
-const A1000_IGNORE = new Set(['CEX', 'PEX', 'LEX', 'EXS', 'QEX', 'QCF', 'LQCF']);
+const A1000_IGNORE = new Set(['CEX', 'PEX', 'LEX', 'EXS', 'QEX', 'QCF', 'LQCF', 'OVD', 'DRX']);   // LIS_VENDOR_EXACT_V1 — + OVD, DRX
 const A1000_HIGH = new Set(['ORH', 'OVR']);
 const A1000_LOW = new Set(['ORL']);
+/** LIS_VENDOR_EXACT_V1 (D9) — критический диапазон прибора → OBX-8 HL7 «HH» / «LL». */
+const A1000_CRITICAL = new Map([['CRH', 'HH'], ['CRL', 'LL']]);
 
 /**
  * LIS_VENDOR_EXACT_V1 (D9) — NTE, который A1000 ставит ПЕРЕД каждым OBX
@@ -312,10 +330,15 @@ const A1000_LOW = new Set(['ORL']);
  * не пишет — только здесь.
  */
 function autobioNote(nte, fieldSep, repSep) {
-  if (!nte) return { flags: [], reagent: '' };
+  if (!nte) return { flags: [], sent: [], reagent: '' };
   const reps = String(nte.split(fieldSep)[3] == null ? '' : nte.split(fieldSep)[3]).split(repSep);
+  // LIS_VENDOR_EXACT_V1 — sent: флаги как их прислал прибор — для причины в лотке
+  // (лаборант сверяет с экраном A1000; «γPO+» в верхнем регистре стал бы «ΓPO+»);
+  // flags — те же в верхнем регистре, для классов.
+  const sent = String(reps[1] == null ? '' : reps[1]).split('-').map((x) => x.trim()).filter(Boolean);
   return {
-    flags: String(reps[1] == null ? '' : reps[1]).split('-').map((x) => x.trim().toUpperCase()).filter(Boolean),
+    flags: sent.map((x) => x.toUpperCase()),
+    sent,
     reagent: String(reps[2] == null ? '' : reps[2]).trim(),
   };
 }
@@ -343,7 +366,8 @@ function autobioNote(nte, fieldSep, repSep) {
  * «не пришла» с этой причиной, лоток). Есть только у таких строк: «нет
  * результата» Mindray (D5), флаги прибора A1000 — ошибка измерения или
  * незнакомый флаг (D9; предупреждения о сроках и контроле, ORH/OVR/ORL — не
- * hold: решение владельца 2026-10-06, п. 5).
+ * hold: решение владельца 2026-10-06, п. 5; LIS_VENDOR_EXACT_V1 — и OVD, DRX,
+ * CRH/CRL — не hold, у CRH/CRL abnormal HH/LL; GRY — hold).
  * Десятичная запятая у mindray-chem и autobio-hl7 — точка (D0); у A1000
  * простое число — NM, флаги ORH/ORL — в abnormal (H/L) и знак «>»/«<» (D9).
  * qualitative (D6) — качественный ответ OBX-9 у mindray-chem: 'positive' |
@@ -443,18 +467,27 @@ export function readResult(raw, wire = 'default') {
         // предупреждения о сроках и контроле (A1000_IGNORE: CEX, PEX, LEX…) не
         // мешают; OVR — как ORH; не писать (строка бланка «не пришла», проба в
         // лотке) — только ошибку измерения, незнакомый флаг и спор «выше» с «ниже».
+        // LIS_VENDOR_EXACT_V1 (D9, доклассификация) — и критический диапазон
+        // (CRH/CRL → HH/LL); OVD и DRX — в A1000_IGNORE; спор направлений
+        // (выше и ниже разом, в том числе критического) — не писать.
         const rest = note.flags.filter((x) => !A1000_IGNORE.has(x));
         const high = rest.some((x) => A1000_HIGH.has(x));
         const low = rest.some((x) => A1000_LOW.has(x));
-        const other = rest.filter((x) => !A1000_HIGH.has(x) && !A1000_LOW.has(x));
-        if (other.length || (high && low)) {
-          o.hold = 'флаги прибора: ' + note.flags.join('-');
-        } else if (high) {
-          o.abnormal = 'H';
-          if (v && !/^[<>]/.test(v)) v = '>' + v;
-        } else if (low) {
-          o.abnormal = 'L';
-          if (v && !/^[<>]/.test(v)) v = '<' + v;
+        const critical = [...new Set(rest.filter((x) => A1000_CRITICAL.has(x)).map((x) => A1000_CRITICAL.get(x)))];
+        const up = high || critical.includes('HH');
+        const down = low || critical.includes('LL');
+        const other = rest.filter((x) => !A1000_HIGH.has(x) && !A1000_LOW.has(x) && !A1000_CRITICAL.has(x));
+        if (other.length || (up && down)) {
+          o.hold = 'флаги прибора: ' + note.sent.join('-');   // LIS_VENDOR_EXACT_V1 — как прислал прибор
+        } else {
+          if (high) {
+            o.abnormal = 'H';
+            if (v && !/^[<>]/.test(v)) v = '>' + v;
+          } else if (low) {
+            o.abnormal = 'L';
+            if (v && !/^[<>]/.test(v)) v = '<' + v;
+          }
+          if (critical.length) o.abnormal = critical[0];   // LIS_VENDOR_EXACT_V1 — «критический» сильнее «выше»/«ниже»
         }
         o.value = v;
         // LIS_VENDOR_EXACT_V1 (D0) — простое число — число (NM): без этого у

@@ -620,10 +620,81 @@ test('D9: A1000 — предупреждения о сроках и контро
     assert.deepEqual([o.value, o.valueType, o.abnormal, o.hold], ['<0.6', 'CE', 'L', undefined], flags);
   }
   // Ошибка измерения (ERR, QNR — нет реагента, RLU — сигнал за пределом, SUC —
-  // сбой забора, QNS), спор ORH с ORL, флаг, которого нет в перечне владельца
-  // (GRY, CRH), и незнакомый — не писать: строка бланка «не пришла», проба в лотке.
-  for (const flags of ['ERR-QNR-CEX-ORL', 'RLU-CEX-ORH-OVR', 'RLU-CEX-LEX-OVR-PEX', 'CEX-SUC', 'QNS', 'ORH-ORL', 'GRY', 'CRH', 'XYZ', 'CEX-XYZ']) {
+  // сбой забора, QNS), спор ORH с ORL, серая зона (GRY) и незнакомый флаг — не
+  // писать: строка бланка «не пришла», проба в лотке.
+  // LIS_VENDOR_EXACT_V1 — CRH отсюда убран: критический диапазон — число с
+  // флагом «критический» (весь перечень прибора — тест ниже).
+  for (const flags of ['ERR-QNR-CEX-ORL', 'RLU-CEX-ORH-OVR', 'RLU-CEX-LEX-OVR-PEX', 'CEX-SUC', 'QNS', 'ORH-ORL', 'GRY', 'XYZ', 'CEX-XYZ']) {
     assert.equal(read(flags).hold, 'флаги прибора: ' + flags, flags);
+  }
+});
+
+// LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5) — ВЕСЬ перечень
+// флагов A1000: ToolsLib.Flags программы клиники 1.0.7 — 62 имени (константы
+// *_NAME, ToolsLib.dll, прочитано без запуска), смысл — подписи самой программы
+// (en\AutoLumo1000.resources.dll, Data_Item_FLAG*). Каждое имя — в своём классе:
+//   — не мешают (число пишется, флаг — по диапазону клиники): сроки и контроль —
+//     CEX, PEX, LEX, EXS, QEX, QCF, LQCF; OVD «Result from a diluted sample»
+//     (прибор развёл пробу сам и пересчитал) и DRX «The result is calculated from
+//     the derivation of formula» (расчётный тест);
+//   — предел измерения: ORH, OVR — «>число» и H; ORL — «<число» и L;
+//   — критический диапазон: CRH «above the upper limit of the critical range»,
+//     CRL «below the lower limit of the critical range» — число и OBX-8 HH / LL
+//     (словарь HL7; ingest.js flagFromDevice → 'critical');
+//   — прочие 48 — ошибки, сбои и пограничные ответы: GRY «within the specified
+//     gray zone», HCV, температуры TRI…TRSH, повтор VRT*/MBK, γ-ответы TB-IGRA…
+//     — не писать, в лоток с «флаги прибора: …»; имя вне перечня — тоже.
+const A1000_ENUM = ['CCR', 'CLT', 'IND', 'QNS', 'RLU', 'SYS', 'TRI', 'TRIH', 'TRS', 'TRSH', 'TRR', 'TRRH', 'QSB', 'ERR', 'CEX', 'CRH', 'CRL',
+  'EXS', 'GRY', 'LEX', 'ORH', 'ORL', 'OVR', 'PEX', 'QCF', 'LQCF', 'QEX', 'HCV', 'DRX', 'QWB', 'QNR', 'DRK', 'REJ', 'OVD', 'OLR', 'RTE', 'NNT',
+  'RRT', 'VRTS', 'SNA', 'VRT1', 'VRT3', 'VRT4', 'MBK', 'PVA', 'ASY', 'γNE', 'γPO', 'γNT', 'PLR', 'γPO±', 'γPO+', 'γPO++', 'γPO+++', 'SUC', 'HBF',
+  'HBFH', 'WBF', 'WBFH', 'ABORTE', 'MIXEDTEST', 'NRT'];
+
+test('D9: A1000 — весь перечень флагов прибора (62): OVD и DRX не мешают, CRH/CRL — «критический», GRY и ошибки — в лоток, незнакомый — в лоток', () => {
+  assert.equal(A1000_ENUM.length, 62);
+  const read = (flags, value = '4.17') => readResult(A1000({ value, flags }), 'autobio-hl7').observations[0];
+  const pick = (o) => [o.value, o.valueType, o.abnormal, o.hold];
+  const IGNORE = ['CEX', 'PEX', 'LEX', 'EXS', 'QEX', 'QCF', 'LQCF', 'OVD', 'DRX'];
+  const want = {
+    ...Object.fromEntries(IGNORE.map((f) => [f, ['4.17', 'NM', '', undefined]])),
+    ORH: ['>4.17', 'CE', 'H', undefined], OVR: ['>4.17', 'CE', 'H', undefined], ORL: ['<4.17', 'CE', 'L', undefined],
+    CRH: ['4.17', 'NM', 'HH', undefined], CRL: ['4.17', 'NM', 'LL', undefined],
+  };
+  for (const flag of A1000_ENUM) {
+    assert.deepEqual(pick(read(flag)), want[flag] || ['4.17', 'NM', '', 'флаги прибора: ' + flag], flag);
+  }
+  // Имя вне перечня — незнакомое: не писать, и рядом с «не мешающими» тоже.
+  for (const flags of ['XYZ', 'CRX', 'ORH2', 'CEX-ABC', 'OVD-XYZ']) assert.equal(read(flags).hold, 'флаги прибора: ' + flags, flags);
+});
+
+test('D9: A1000 — сочетания: OVD/DRX рядом с пределом и критическим; критический с «>»; спор направлений — в лоток', () => {
+  const read = (flags, value = '4.17') => readResult(A1000({ value, flags }), 'autobio-hl7').observations[0];
+  const pick = (o) => [o.value, o.valueType, o.abnormal, o.hold];
+  // Разведённая или расчётная проба с пределом измерения — как без них.
+  assert.deepEqual(pick(read('CEX-ORH-OVD', '1210')), ['>1210', 'CE', 'H', undefined]);
+  assert.deepEqual(pick(read('DRX-ORL', '0,6')), ['<0.6', 'CE', 'L', undefined]);
+  assert.deepEqual(pick(read('CEX-OVD-PEX', '35,2')), ['35.2', 'NM', '', undefined], 'разведённая — число с точкой');
+  // Выше предела измерения И выше критического — «>» и «критический».
+  assert.deepEqual(pick(read('CEX-CRH-ORH-OVR', '1210')), ['>1210', 'CE', 'HH', undefined]);
+  assert.deepEqual(pick(read('CRL-ORL', '0,6')), ['<0.6', 'CE', 'LL', undefined]);
+  assert.deepEqual(pick(read('CEX-CRH-PEX', '987')), ['987', 'NM', 'HH', undefined]);
+  // Разные направления — не знает никто: не писать.
+  for (const flags of ['CRH-CRL', 'CRH-ORL', 'CRL-ORH', 'CRL-OVR', 'ORH-ORL', 'CEX-CRH-GRY']) {
+    assert.equal(read(flags).hold, 'флаги прибора: ' + flags, flags);
+  }
+});
+
+test('D9: A1000 — «критический» доходит до флага бланка: OBX-8 HH / LL — «critical» (ingest.js resultFlag без диапазона клиники)', async () => {
+  const { resultFlag } = await import('./ingest.js');
+  for (const [flags, value] of [['CRH', '987'], ['CRL', '0.01'], ['CEX-CRH-ORH-OVR', '1210']]) {
+    const o = readResult(A1000({ value, flags }), 'autobio-hl7').observations[0];
+    const num = o.valueType === 'NM' ? parseFloat(o.value) : null;
+    assert.equal(resultFlag({ num, abnormal: o.abnormal, deviceRange: o.range }), 'critical', flags);
+  }
+});
+
+test('D9: A1000 — флаг в причине — как его прислал прибор (γ ответов TB-IGRA не становится «Γ»)', () => {
+  for (const flags of ['γPO+', 'γNE', 'CEX-γPO±']) {
+    assert.equal(readResult(A1000({ flags }), 'autobio-hl7').observations[0].hold, 'флаги прибора: ' + flags, flags);
   }
 });
 
