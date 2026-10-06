@@ -145,6 +145,40 @@ function hematologyQc(text, msh) {
   });
 }
 
+/**
+ * LIS_VENDOR_EXACT_V1 — контроль A1000 (провод autobio-hl7). Кодировщик
+ * программы клиники (AutoLumo1000.exe 1.0.7) шлёт контроль РОВНО как пробу
+ * пациента, без всякой пометки (autobio-autolumo-a1000.settle.md, находка 2):
+ * MSH-16 пуст, вид пробы в сообщение не идёт. Отличие одно — у контроля пуст
+ * «ID пациента», и сегмента PID нет (HL7-библиотека прибора пустой сегмент не
+ * пишет; у 19 настоящих контролей клиники PID нет ни у одного). Номер контроля
+ * в OBR-2 — маленькое голое число («1», «3») — ложился в открытый свежий заказ
+ * № 3 чужого пациента (acceptance A1000, T7a).
+ *
+ * Но PID нет и у пробы пациента — отсюда границы правила:
+ *   — «по пробе» (MSH-10 = 7) кодировщик PID не пишет никогда (Et4JYjNVXn), а
+ *     контроль «по пробе» не отправляется вовсе (settle, находка 1): только
+ *     «по тесту», MSH-10 = 5 — код команды, не номер сообщения;
+ *   — «по тесту» PID-3 = «ID пациента» (fKQJJMdGWN), вид пробы кодировщику не
+ *     передаётся (wencExhtA): проба с пустым «ID пациента» выглядит как
+ *     контроль. Поэтому без PID — контроль, только если номер не может быть
+ *     пробиркой пациента: не этикетка LAB- (в любом поле OBR, хоть две — спор
+ *     решает приём), не номер с этикетки — LABEL_DIGITS и больше цифр (решение
+ *     владельца 2026-10-06, п. 4), и номер вообще есть (без номера — в лоток).
+ * Остаётся проба без «ID пациента» и с номером, который приём и так не
+ * принимает (номер лаборатории «5», буквы): она станет контролем, а не строкой
+ * «Необработанных» — поэтому в настройке A1000 «ID пациента» заполняют или
+ * сканируют этикетку LAB-.
+ */
+function autobioQc(text, msh) {
+  if (msh.controlId !== '5') return false;
+  const lines = String(text == null ? '' : text).split(SEG);
+  if (lines.some((s) => s === 'PID' || s.startsWith('PID' + msh.fieldSep))) return false;
+  const pick = pickMessageSample(readResult(text, 'autobio-hl7').obrs, 'autobio-hl7');
+  if (pick.lab || pick.conflict || !pick.sampleId) return false;
+  return !(DIGITS.test(pick.value) && pick.value.length >= LABEL_DIGITS);
+}
+
 // Запросы рабочего списка (раздел 7): Easy-Med заказов не отдаёт, отвечает
 // «заказов нет». QRY^Q02 — BS-200 и химия Mindray, QRY^Q01 — Autobio,
 // ORM^O01 — гематология Mindray.
@@ -187,6 +221,7 @@ export function readEnvelope(text, wire) {
     const vendor = VENDOR_KIND_WIRES.has(w);
     env.kind = vendor && msh.ackType === '2' ? 'qc' : vendor && msh.ackType === '1' ? 'calibration'
       : HEMATOLOGY_KIND_WIRES.has(w) && hematologyQc(text, msh) ? 'qc'   // LIS_VENDOR_EXACT_V1 (D7)
+      : w === 'autobio-hl7' && autobioQc(text, msh) ? 'qc'   // LIS_VENDOR_EXACT_V1 — контроль A1000: без PID, не номер пробирки
       : 'result';
   } else if (QUERY_TYPES.has(msh.type)) {
     env.kind = 'query';
@@ -514,7 +549,14 @@ export function readResult(raw, wire = 'default') {
  * считались нашей этикеткой и обходили правило голых цифр (открытый заказ
  * последних 7 дней). Easy-Med так не печатает — это не наше.
  */
-const LAB_RE = /^lab-(\d{6,})$/i;
+/**
+ * LIS_VENDOR_EXACT_V1 — сколько цифр в номере на этикетке: номер заказа,
+ * дополненный нулями до 6 (lab-doc.js labAccession). Та же граница у «номера с
+ * этикетки» без LAB- (решение владельца 2026-10-06, п. 4; ingest.js) и у
+ * контроля A1000 (autobioQc).
+ */
+export const LABEL_DIGITS = 6;
+const LAB_RE = new RegExp('^lab-(\\d{' + LABEL_DIGITS + ',})$', 'i');   // LIS_VENDOR_EXACT_V1 — было /^lab-(\d{6,})$/i
 const labNumber = (v) => { const m = LAB_RE.exec(String(v == null ? '' : v).trim()); return m ? parseInt(m[1], 10) : null; };
 const DIGITS = /^\d+$/;
 

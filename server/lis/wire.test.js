@@ -698,6 +698,75 @@ test('D9: A1000 — флаг в причине — как его прислал 
   }
 });
 
+// ── LIS_VENDOR_EXACT_V1 — контроль A1000: без PID и не номер пробирки ───────
+// Кодировщик программы клиники (AutoLumo1000 1.0.7) шлёт контроль РОВНО как
+// пробу пациента, без пометки (settle, находка 2): у контроля «ID пациента»
+// пуст, и сегмента PID нет — у 19 настоящих контролей клиники PID нет ни у
+// одного. Кадр — вывод самого кодировщика, байт в байт (realtest\verify\a1000\
+// runs\20261006-130904-en-US-ABDE\raw\05-A3-QC-sent.bin), номер контроля «1».
+// Но PID нет и у пробы пациента — это и есть граница правила:
+//   — «по пробе» (MSH-10 = 7) кодировщик PID не пишет НИКОГДА (Et4JYjNVXn), а
+//     контроль «по пробе» не уходит вовсе (settle, находка 1);
+//   — «по тесту» PID-3 — «ID пациента», вид пробы в кодировщик не передаётся
+//     (wencExhtA); пустой — PID не пишется: проба без «ID пациента» выглядит
+//     как контроль.
+// Поэтому контроль — «по тесту» без PID, только если номер в OBR-2 не может
+// быть пробиркой пациента: не этикетка LAB-, не номер с этикетки (6+ цифр —
+// решение владельца 2026-10-06, п. 4) и не пусто.
+const A1000_QC_KIT = seg('MSH|^~\\&|||||20261006130927||ORU^R01|5|P|2.3.1|261006130927616', 'OBR|1|1|7766|Autolumo 1000',
+  'NTE|||SYNLOT1~~AFP~107~~R001~2', 'OBX|10457|CE|107|107|52000^25.1~||||||F|||2026/10/06 13:09:27') + '\r';
+const A1000_BY_TEST = ({ sample = '3', pid = '', msh10 = '5', obr3 = '7766' } = {}) => seg(
+  `MSH|^~\\&|||||20261006130927||ORU^R01|${msh10}|P|2.3.1|261006130927616`,
+  ...(pid === null ? [] : [pid]),
+  `OBR|1|${sample}|${obr3}|Autolumo 1000`,
+  'NTE|||SYNLOT1~CEX~AFP~107~~R001~2',
+  'OBX|10457|CE|107|107|52000^25.1~||||||F|||2026/10/06 13:09:27');
+
+test('A1000: контроль — «по тесту», без PID, номер контроля («1», «3», «QC-AFP-1») — служебное, в бланк и лоток не идёт', () => {
+  const kit = readEnvelope(A1000_QC_KIT, 'autobio-hl7');
+  assert.deepEqual([kit.kind, kit.service], ['qc', true], 'кадр кодировщика прибора, байт в байт');
+  for (const sample of ['1', '3', '42', '12345', 'QC1', 'QC-AFP-1', 'qc-lot2-L', '2^7']) {
+    const e = readEnvelope(A1000_BY_TEST({ sample, pid: null }), 'autobio-hl7');
+    assert.deepEqual([e.kind, e.service], ['qc', true], '«' + sample + '»');
+  }
+});
+
+test('A1000: проба пациента — не контроль: есть PID (и с пустым PID-3), этикетка LAB-, номер с этикетки 6+ цифр, «по пробе», без номера', () => {
+  const kind = (o, wire = 'autobio-hl7') => readEnvelope(A1000_BY_TEST(o), wire).kind;
+  // PID есть — проба пациента, какой бы ни был номер («ID пациента» заполнен).
+  for (const pid of ['PID|||SYNTHETIC', 'PID|||', 'PID|1']) {
+    for (const sample of ['3', 'QC-AFP-1', 'LAB-000123']) assert.equal(kind({ sample, pid }), 'result', pid + ' / ' + sample);
+  }
+  // Без PID (не заполнен «ID пациента») — этикетка Easy-Med или номер с неё.
+  for (const sample of ['LAB-000123', 'lab-0001234', '000123', '1234567', '0000000021', '2^LAB-000123']) {
+    assert.equal(kind({ sample, pid: null }), 'result', '«' + sample + '»');
+  }
+  assert.equal(kind({ sample: '', obr3: 'LAB-000123', pid: null }), 'result', 'этикетка в OBR-3 — тоже');
+  assert.equal(kind({ sample: 'LAB-000123', obr3: 'LAB-000124', pid: null }), 'result', 'две этикетки — спор, решает приём (лоток)');
+  assert.equal(kind({ sample: '', pid: null }), 'result', 'номера нет вовсе — не контроль (у контроля номер есть всегда): в лоток');
+  // «По пробе» (MSH-10 = 7) PID нет никогда — кадр приёмки T12a: проба, а не контроль.
+  const bySample = seg('MSH|^~\\&|||||20261006130515||ORU^R01|7|P|2.3.1|261006130515962', 'OBR|1|LAB-000116|7716|AutoLumo A1000',
+    'OBX||CE|107||41765^4.17||||||F', 'OBX||CE|102||22000^1.23||||||F');
+  assert.equal(readEnvelope(bySample, 'autobio-hl7').kind, 'result');
+  for (const sample of ['3', 'QC1']) assert.equal(kind({ sample, pid: null, msh10: '7' }), 'result', 'по пробе: «' + sample + '»');
+  // Иной MSH-10 (не код команды «по тесту») — правило не применяется.
+  assert.equal(kind({ sample: '3', pid: null, msh10: '1' }), 'result');
+  // Правило — только у провода A1000: у прочих тот же кадр — проба, как прежде.
+  for (const wire of ['default', 'forwarder', 'mindray-chem', 'mindray-hematology']) {
+    assert.equal(readEnvelope(A1000_QC_KIT, wire).kind, 'result', wire);
+  }
+  assert.equal(readEnvelope(A1000_QC_KIT).kind, 'result', 'MSH-3/4 A1000 пусты: без профиля строки — провод default');
+});
+
+test('A1000: граница «номер с этикетки» — та же, что у приёма (решение владельца, п. 4)', async () => {
+  const { LABEL_DIGITS } = await import('./wire.js');
+  assert.equal(LABEL_DIGITS, 6, 'этикетка — LAB- и номер заказа, дополненный до 6 цифр (lab-doc.js labAccession)');
+  const ingest = await import('./ingest.js');
+  if (ingest.PLAIN_NUMBER_MIN_DIGITS !== undefined) assert.equal(ingest.PLAIN_NUMBER_MIN_DIGITS, LABEL_DIGITS, 'одна граница у приёма и у контроля A1000');
+  assert.equal(readEnvelope(A1000_BY_TEST({ sample: '9'.repeat(LABEL_DIGITS - 1), pid: null }), 'autobio-hl7').kind, 'qc');
+  assert.equal(readEnvelope(A1000_BY_TEST({ sample: '9'.repeat(LABEL_DIGITS), pid: null }), 'autobio-hl7').kind, 'result');
+});
+
 test('D9: A1000 «по пробе» — OBX-4 пуст, код берётся из OBX-3', () => {
   // Кодировщик в режиме «по пробе» (команда 7): OBX-1 и OBX-4 пусты, NTE нет
   // (лист A1000, §3, a1000-hl7-probe.ps1).
