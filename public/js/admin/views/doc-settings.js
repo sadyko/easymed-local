@@ -22,29 +22,17 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1
 import { buildSheetHtml, esc, INPATIENT_DOC_DEFAULT_TEXT } from '../../shared/doc-render.js';   // INPATIENT_DOCS_V1
 // PRINT_AUTO_V1 — «Печать» сразу открывает окно принтера: скрипт печати — одним помощником.
 import { ensureAutoPrint, viewOnlySheet } from '../../shared/print-auto.js';
+// CLINIC_API_FIX_V1 — одно правило с PDF для Telegram (server/services/telegram/render.js).
+import { resolveDocSettings, overlayCompanyBranding } from '../../shared/company-branding.js';
 
 const KEY = 'easymed:doc-settings:v1';
 let _cache = null;   // DB/localStorage-hydrated branding (clinic-global)
 
-// V3120_FIX — у клиники без адреса, телефона или почты в «Компании» бланк
-// печатал КОНТАКТЫ ПОСТАВЩИКА: «Tashkent, 12 Amir Temur Ave.», «+998 71 200 12
-// 00», «hello@easy-med.uz». Пациент звонил бы по чужому номеру. Заготовки
-// пустые, а пустое поле бланк не печатает вовсе.
-//
-// Заготовки подвала были английскими и печатались на каждом русском бланке.
-// Теперь подвал — только текст, который клиника вписала сама.
-//
-// saveDocSettings() хранит объект ЦЕЛИКОМ, заготовки тоже, поэтому у клиник,
-// сохранявших «Документы», старые значения лежат в настройках. LEGACY_DEFAULTS
-// ниже вычищает именно их (и только их) при чтении.
-const LEGACY_DEFAULTS = {
-    clinicName: 'Easy-Med Clinic',
-    address:    'Tashkent, 12 Amir Temur Ave., 100000',
-    phone:      '+998 71 200 12 00',
-    email:      'hello@easy-med.uz',
-    footerNote: 'Thank you for choosing our clinic. Please keep this document for your records.',
-    legalNote:  'This document is generated electronically and is valid without a manual signature when sealed with a digital signature.',
-};
+// V3120_FIX — пустые заготовки вместо контактов поставщика; старые значения,
+// сохранённые «Документами» раньше, вычищает при чтении общий модуль.
+// CLINIC_API_FIX_V1 — чистка (LEGACY_DEFAULTS) и правило «реквизиты клиники
+// поверх оформления» переехали в ../../shared/company-branding.js: тем же
+// модулем собирает PDF для Telegram сервер (server/services/telegram/render.js).
 
 export const DEFAULT_DOC_SETTINGS = {
     clinicName: '',
@@ -119,13 +107,14 @@ export function loadDocSettings() {
             s = raw ? { ...DEFAULT_DOC_SETTINGS, ...JSON.parse(raw) } : { ...DEFAULT_DOC_SETTINGS };
         } catch { s = { ...DEFAULT_DOC_SETTINGS }; }
     }
-    if (!s.variant || typeof s.variant !== 'object') s.variant = {};
-    for (const [k, v] of Object.entries(LEGACY_DEFAULTS)) if (s[k] === v) s[k] = '';   // V3120_FIX
-    if (s.language === 'en') s.language = 'ru';
-    const _out = applyCompanyBranding(s);
-    if (_out && _out.tagline === 'Care, clarity, precision') _out.tagline = '';   // legacy default — treat as unset
-    return _out;
+    // CLINIC_API_FIX_V1 — чистка старых заготовок (V3120_FIX: variant, контакты
+    // и подвал поставщика, язык en, прежний подзаголовок) и реквизиты клиники
+    // сверху — общим модулем, тем же, что у PDF для Telegram.
+    return resolveDocSettings(s, currentClinic());
 }
+
+// CLINIC_API_FIX_V1 — запись клиники («Компания»), если она уже определилась.
+function currentClinic() { return (typeof window !== 'undefined' && window.CLINIC) || null; }
 
 // Clinic-global: hydrate the in-memory cache (+ localStorage) from doc_branding so the SYNC
 // loadDocSettings() — used by every Print button — reflects the clinic's saved branding.
@@ -147,27 +136,10 @@ export async function loadDocBrandingAsync() {
 
 // COMPANY_BRANDING_UNIFY: the Company record (window.CLINIC) is the source of truth for identity
 // fields + logo; local doc settings own the styling (accent/watermark/font/tagline) and fill gaps.
+// CLINIC_API_FIX_V1 — the rule itself lives in ../../shared/company-branding.js (one copy for
+// the browser and the Telegram PDF); this keeps the old API for documents.js.
 export function applyCompanyBranding(s) {
-    const c = (typeof window !== 'undefined' && window.CLINIC) || null;
-    // OVERRIDE mode (#documents): saved doc-settings identity wins — don't overlay «Компания»,
-    // and clear the company logo so logoMark() falls back to the uploaded logoDataUrl.
-    if (s.useCompanyIdentity === false) { s.logoUrl = null; return s; }
-    if (!c) return s;
-    if (c.name_ru || c.name) s.clinicName = c.name_ru || c.name;
-    if (c.address)           s.address    = c.address;
-    if (c.phone)             s.phone      = c.phone;
-    if (c.email)             s.email      = c.email;
-    if (c.website)           s.web        = c.website;
-    if (c.tax_id)            s.taxId      = c.tax_id;
-    if (c.license_number)    s.license    = c.license_number;
-    if (c.legal_name)        s.legalName  = c.legal_name;
-    // COMPANY_SECTION_V1 — фирменный цвет тоже принадлежит клинике, а не
-    // отдельному шаблону: выбранный в «Компании» он применяется во всех
-    // печатных формах сразу. Тумблер «Данные клиники из раздела «Компания»»
-    // (выше) по-прежнему позволяет задать свой цвет только для печати.
-    if (c.accent_color)      s.accent     = c.accent_color;
-    s.logoUrl = c.logo_url || null;
-    return s;
+    return overlayCompanyBranding(s, currentClinic());
 }
 export function saveDocSettings(settings) {
     _cache = { ...settings };

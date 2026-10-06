@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildSheetHtml } from '../../../public/js/shared/doc-render.js';
+import { resolveDocSettings } from '../../../public/js/shared/company-branding.js';   // CLINIC_API_FIX_V1 — одно правило с печатью в браузере
 import { getClinicBySlug } from '../rpc/clinic.js';   // CLINIC_API_FIX_V1 — та же запись клиники, что window.CLINIC
 
 const ROOT = path.dirname(path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))));
@@ -58,13 +59,20 @@ export function stripAutoPrint(html) {
   return html.replace(/<script>[\s\S]*?window\.print\(\)[\s\S]*?<\/script>/g, '');
 }
 
+// CLINIC_API_FIX_V1 — заготовки под сохранёнными настройками «Документов»
+// (экспорт — для проверки, что сервер идёт через общий модуль).
+export const SERVER_DOC_BASE = Object.freeze({
+  clinicName: 'Easy-Med',
+  ink: '#0b1418', paperBg: '#ffffff', paperSize: 'A4', language: 'ru',
+});
+
 // Настройки бренда для рендера — серверный аналог loadDocSettings().
 //
 // В браузере настройки живут в localStorage и подтягиваются из doc_branding;
 // у сервера localStorage нет, поэтому собираем то же самое напрямую из таблиц.
 // Оформление (шрифт, плотность, подвал…) — из doc_branding (дизайнер),
-// реквизиты клиники — из «Компании» сверху: тот же порядок, что и в
-// applyCompanyBranding() на клиенте.
+// реквизиты клиники — из «Компании» сверху: то же правило, что и в
+// loadDocSettings() на клиенте.
 export function loadServerDocSettings(db) {
   let brand = {};
   try {
@@ -72,46 +80,13 @@ export function loadServerDocSettings(db) {
     if (row && row.settings) brand = JSON.parse(row.settings) || {};
   } catch { /* нет таблицы или битый JSON — идём с реквизитами клиники */ }
 
-  const s = {
-    clinicName: 'Easy-Med',
-    ink: '#0b1418', paperBg: '#ffffff', paperSize: 'A4', language: 'ru',
-    ...brand,
-  };
-  if (!s.variant || typeof s.variant !== 'object') s.variant = {};
-  // CLINIC_API_FIX_V1 — «Компания» сверху, как в браузере. doc_branding —
-  // копия, снятая при сохранении «Документов»: в ней лежат и название, и
-  // logoUrl, которые «Компания» подставила ТОГДА. Прежний код клал логотип
-  // клиники в logoDataUrl (поле собственного логотипа дизайнера), а logoUrl
-  // из копии оставлял — logoMark() предпочитает logoUrl, и после смены
-  // логотипа в «Компании» Telegram слал документы со старым.
-  // Запись клиники — та же, что видит браузер в window.CLINIC.
-  return overlayCompanyBranding(s, getClinicBySlug(db));
-}
-
-// CLINIC_API_FIX_V1 — серверная копия applyCompanyBranding()
-// (public/js/admin/views/doc-settings.js): то же правило, те же поля. Там
-// функция читает window.CLINIC и не импортируется в Node, поэтому правило
-// повторено здесь, а совпадение держит render-branding.test.js.
-//   • ручной режим «Документов» (useCompanyIdentity === false) — реквизиты
-//     дизайнера главнее, логотип «Компании» снимается, печатается свой;
-//   • иначе заполненные поля «Компании» перекрывают копию, пустые её не
-//     стирают; logoUrl — всегда логотип «Компании» (или ничего), а свой
-//     логотип дизайнера (logoDataUrl) не трогается: он печатается, когда у
-//     «Компании» логотипа нет.
-function overlayCompanyBranding(s, c) {
-  if (s.useCompanyIdentity === false) { s.logoUrl = null; return s; }
-  if (!c) return s;
-  if (c.name_ru || c.name) s.clinicName = c.name_ru || c.name;
-  if (c.address)           s.address    = c.address;
-  if (c.phone)             s.phone      = c.phone;
-  if (c.email)             s.email      = c.email;
-  if (c.website)           s.web        = c.website;
-  if (c.tax_id)            s.taxId      = c.tax_id;
-  if (c.license_number)    s.license    = c.license_number;
-  if (c.legal_name)        s.legalName  = c.legal_name;
-  if (c.accent_color)      s.accent     = c.accent_color;
-  s.logoUrl = c.logo_url || null;
-  return s;
+  // CLINIC_API_FIX_V1 — чистка старых заготовок и «Компания» сверху — тем же
+  // общим модулем, что и печать в браузере (shared/company-branding.js).
+  // doc_branding — копия, снятая при сохранении «Документов»: в ней лежат и
+  // название, и logoUrl, которые «Компания» подставила ТОГДА, и заготовки
+  // поставщика у давно сохранявших клиник. Запись клиники — та же, что видит
+  // браузер в window.CLINIC.
+  return resolveDocSettings({ ...SERVER_DOC_BASE, ...brand }, getClinicBySlug(db));
 }
 
 // Собрать PDF. Возвращает Buffer.
