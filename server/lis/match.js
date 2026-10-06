@@ -135,7 +135,78 @@ export function planObservations(observations = [], analytes = []) {
     .filter((a) => !filled.has(a))
     .map((a) => ({ analyte: a, reason: why.get(a) || '' }));
 
-  return { fills, missing, unconfirmed: unconfirmedHits, repeats, unused };
+  // LIS_VENDOR_EXACT_V1 (D3) — taken: строки прибора, которые взяла подтверждённая
+  // строка бланка (записана, «повтор» или «не пришла» с причиной). Нужно
+  // planTube: что не взял ни один заказ пробирки — «не использованы».
+  const taken = observations.filter((o, i) => used.has(i));
+  return { fills, missing, unconfirmed: unconfirmedHits, repeats, unused, taken };
+}
+
+// ── LIS_VENDOR_EXACT_V1 (D3) — одна пробирка, несколько заказов визита ──────
+// Решение владельца 2026-10-06, п. 2 (analyzer-research\fix\DECISIONS.md):
+// «Заполнить все». Одна пробирка LAB- заполняет каждую лабораторную услугу того
+// же визита: ТТГ, Т4 св. и Т3 св. — три услуги, одна пробирка. Раньше значения
+// других услуг шли в «не использованы», а проба — «принята»: молча не
+// записывалось ничего.
+//
+// Правило (чистое, без базы):
+//   — заказ пробирки (X, первый в списке) берёт всё, что подтверждено в его
+//     панели, — как раньше, и раньше всех;
+//   — строка прибора, которую X не взял, идёт в тот заказ визита, где её код
+//     подтверждён (tier 1 — открытые оплаченные заказы); у двух и больше таких
+//     заказов — «неоднозначно»: не пишется никуда, проба в лотке (угадывать
+//     нельзя);
+//   — не нашлось открытого — заказ, который принять не может (tier 2: не
+//     оплачен или уже выдан), — только чтобы сказать человеку, почему не
+//     записано;
+//   — код у других заказов только не подтверждён — их «не подтверждено» (D4);
+//   — остальное — «не использованы».
+// Совпадение кода — как у planObservations: компонент 1 или 2 поля OBX-3, без
+// учёта регистра.
+
+const codeOf = (a) => key(a.device_code);
+/** У строк бланка есть подтверждённый (или неподтверждённый) код этой строки прибора. */
+const hits = (analytes, obs, confirmed) => analytes.some((a) => !!a.device_code_confirmed === confirmed && codeOf(a)
+  && (codeOf(a) === key(obs.code) || (key(obs.name) !== '' && codeOf(a) === key(obs.name))));
+
+/**
+ * @param {object[]} observations  строки прибора
+ * @param {Array<{analytes:object[], tier?:number}>} orders  первым — заказ пробирки (X),
+ *        дальше — другие заказы визита: tier 1 — открытые, tier 2 — принять не могут
+ * @returns {{plans: object[], routed: object[][], involved: boolean[], ambiguous: Array<{obs:object, orders:number[]}>, unused: object[]}}
+ *   plans[i]    — planObservations для orders[i]: у X — по всем строкам сообщения,
+ *                 у прочих — по доставшимся им;
+ *   routed[i]   — строки прибора, доставшиеся orders[i] (у X — все: X берёт первым);
+ *   involved[i] — заказу досталась хоть одна строка прибора (своя или «не подтверждено»);
+ *   ambiguous   — код подтверждён у двух и больше заказов (не X): номера заказов в списке;
+ *   unused      — строки прибора, которых не взял никто.
+ */
+export function planTube(observations = [], orders = []) {
+  const ambiguous = [];
+  if (!orders.length) return { plans: [], routed: [], involved: [], ambiguous, unused: [...observations] };
+  const x = planObservations(observations, orders[0].analytes || []);
+  const assigned = orders.map(() => []);
+  const unconfirmedX = new Set(x.unconfirmed);
+  for (const obs of observations) {
+    if (hits(orders[0].analytes || [], obs, true)) continue;   // код X — его, взят или нет
+    let placed = false;
+    for (const tier of [1, 2]) {
+      const to = [];
+      orders.forEach((o, i) => { if (i > 0 && (o.tier || 1) === tier && hits(o.analytes || [], obs, true)) to.push(i); });
+      if (to.length === 1) { assigned[to[0]].push(obs); placed = true; break; }
+      if (to.length > 1) { ambiguous.push({ obs, orders: to }); placed = true; break; }
+    }
+    if (placed || unconfirmedX.has(obs)) continue;
+    // Подтверждён нигде, но у другого заказа визита код стоит неподтверждённым:
+    // его «не подтверждено» — посмотреть обязан человек (D4).
+    orders.forEach((o, i) => { if (i > 0 && hits(o.analytes || [], obs, false)) assigned[i].push(obs); });
+  }
+  const plans = orders.map((o, i) => (i === 0 ? x : planObservations(assigned[i], o.analytes || [])));
+  const involved = plans.map((p, i) => (i === 0 ? x.taken.length > 0 || x.unconfirmed.length > 0 : assigned[i].length > 0));
+  const seen = new Set(ambiguous.map((a) => a.obs));
+  for (const p of plans) for (const o of [...p.taken, ...p.unconfirmed]) seen.add(o);
+  const routed = assigned.map((a, i) => (i === 0 ? [...observations] : a));
+  return { plans, routed, involved, ambiguous, unused: observations.filter((o) => !seen.has(o)) };
 }
 
 // Журнал читает человек в лотке: полсотни кодов гистограмм и режимов в одной
@@ -156,15 +227,82 @@ const missingText = (missing) => 'не пришли: ' + list(missing.map(({ ana
   a.name + ' (' + String(a.device_code).trim() + (reason ? ', ' + reason : '') + ')'));
 
 /**
+ * LIS_VENDOR_EXACT_V1 (N1) — повтор у прибора без серии: новое сообщение меняет
+ * значение прибора, уже записанное в черновик заказа. Ничего не пишется — в
+ * лоток; «Привязать» принимает новые значения (приём с номером человека пишет).
+ * @param {Array<{analyte:object, was:string, now:string}>} changes
+ */
+export function heldChangeText(changes) {
+  return 'повтор: значения отличаются от уже записанных (' + list(changes.map((c) => c.analyte.name + ' ' + c.was + ' → ' + c.now))
+    + ') — проверьте пробу; принять новые значения — «Привязать»';
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 (D3) — «неоднозначно»: код подтверждён у нескольких
+ * заказов визита; значение не записано никуда.
+ * @param {Array<{obs:object, orders:number[]}>} items  orders — номера заказов
+ */
+export function ambiguousText(items) {
+  return 'неоднозначно: ' + list(items.map((a) => label(a.obs) + ' — у заказов № ' + a.orders.join(', № ')))
+    + ' — код подтверждён у нескольких услуг визита, значение не записано; «Привязать» к нужному заказу';
+}
+
+/** LIS_VENDOR_EXACT_V1 (D3) — «не использованы» строки прибора, которых не взял ни один заказ пробирки. */
+export function unusedText(items) {
+  return 'не использованы: ' + list(items.map(label));
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 (N1) — то же значение, что уже записано прибором (прибор
+ * не получил ACK и прислал снова): справка, не спор; в бланке не меняется ничего.
+ * @param {Array<{obs:object}>} fills
+ */
+export function resentText(fills) {
+  return 'повторная передача: ' + list(fills.map((f) => label(f.obs)));
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 (D3) — статус и журнал сообщения, которое легло в
+ * несколько заказов визита: по заказу — «заказ № N «услуга»: …», потом
+ * «неоднозначно» и «не использованы» всего сообщения. Заказ один (тест другой
+ * услуги у прибора «по тесту») — его журнал как есть: строка лотка при нём.
+ *   — заказ уже выдан (superseded) — superseded: новое значение к выданному
+ *     бланку смотрит человек (D7);
+ *   — все заказы приняты, неоднозначного нет — applied;
+ *   — иначе unmapped; pending — беда только в том, что серия заказов ещё идёт.
+ * @param {Array<{orderId:number, name:string, status:string, detail:string, pending?:boolean}>} reports
+ * @param {{ambiguous?: Array<{obs:object, orders:number[]}>, unused?: object[]}} [o]
+ * @returns {{status:'applied'|'unmapped'|'superseded', detail:string, pending:boolean}}
+ */
+export function tubeOutcome(reports = [], { ambiguous = [], unused = [] } = {}) {
+  const superseded = reports.some((r) => r.status === 'superseded');
+  const bad = reports.filter((r) => r.status !== 'applied');
+  const clean = reports.length > 0 && !bad.length && !ambiguous.length;
+  const pending = !superseded && !ambiguous.length && bad.length > 0 && bad.every((r) => r.pending);
+  const parts = reports.length === 1 && !ambiguous.length
+    ? (reports[0].detail ? [reports[0].detail] : [])
+    : reports.map((r) => 'заказ № ' + r.orderId + ' «' + r.name + '»: ' + (r.detail || 'принято'));
+  if (ambiguous.length) parts.push(ambiguousText(ambiguous));
+  if (unused.length) parts.push(unusedText(unused));
+  return { status: superseded ? 'superseded' : clean ? 'applied' : 'unmapped', detail: parts.join('; '), pending };
+}
+
+/**
  * Статус сообщения и строка журнала.
+ * LIS_VENDOR_EXACT_V1 — lead: части журнала первыми (N1 «повтор…»), info:
+ * справка перед «не использованы» («повторная передача»). Статус они не меняют
+ * — его решает приём.
+ * @param {object} plan
+ * @param {{lead?: string[], info?: string[]}} [extra]
  * @returns {{status:'applied'|'unmapped', detail:string}}
  */
-export function outcome(plan) {
+export function outcome(plan, { lead = [], info = [] } = {}) {
   const done = plan.fills.length > 0 && !plan.missing.length && !plan.unconfirmed.length && !plan.repeats.length;
-  const parts = [];
+  const parts = [...lead];
   if (plan.missing.length) parts.push(missingText(plan.missing));
   if (plan.unconfirmed.length) parts.push('не подтверждено: ' + list(plan.unconfirmed.map(label)));
   if (plan.repeats.length) parts.push('повтор: ' + list(plan.repeats.map(label)));
+  parts.push(...info);
   if (plan.unused.length) parts.push('не использованы: ' + list(plan.unused.map(label)));
   if (!plan.fills.length && !parts.length) parts.push('в сообщении нет результатов');
   return { status: done ? 'applied' : 'unmapped', detail: parts.join('; ') };

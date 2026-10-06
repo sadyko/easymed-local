@@ -24,6 +24,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { ingestMessage, BARE_ID_MAX_AGE_DAYS } from './ingest.js';
+import { PLAIN_NUMBER_MIN_DIGITS } from './ingest.js';   // LIS_VENDOR_EXACT_V1 — решение владельца 2026-10-06, п. 4
 
 const seg = (...s) => s.join('\r');
 
@@ -97,7 +98,7 @@ test('default: LAB- в OBR-3 — как прежде; LAB- в OBR-2 бьёт г�
 
 test('default: голые цифры OBR-2 не читаются — это может быть номер прогона', () => {
   const db = clinic();
-  ingestMessage(db, HEM('123', ''), '10.0.0.9', 1);
+  ingestMessage(db, HEM('000123', ''), '10.0.0.9', 1);
   assert.equal(last(db).status, 'unmatched');
   assert.equal(last(db).visit_service_id, null);
   assert.equal(results(db).length, 0);
@@ -135,6 +136,7 @@ test('autobio-hl7: номер — OBR-2, код — OBX-4, значение — 
   const db = clinic({ analytes: [['B12', 'Витамин B12', '206']] });
   ingestMessage(db, seg(
     'MSH|^~\\&|A1000|Autolumo|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+    'PID|||SYN-PAT-1',   // LIS_VENDOR_EXACT_V1 — кодировщик A1000 пишет PID у пробы пациента (без PID — контроль)
     'OBR|1|LAB-000123|||',
     'OBX|1|NM|1^Vitamin B12|206|5981666^390.946|pg/mL|||||F',
   ), '10.0.0.41', 1, { wire: 'autobio-hl7' });
@@ -166,7 +168,7 @@ test('mindray-hematology (BC-780): OBR-3, запасное OBR-2; LAB- в OBR-2 
   };
   assert.deepEqual(run('LAB-000123', ''), { vs: 123, sample: 'LAB-000123', n123: 1, n15: 0 }, 'OBR-3 пуст — запасное OBR-2');
   assert.deepEqual(run('LAB-000123', '15'), { vs: 123, sample: 'LAB-000123', n123: 1, n15: 0 }, 'LAB- — в любом поле');
-  assert.deepEqual(run('', '15'), { vs: 15, sample: '15', n123: 0, n15: 1 }, 'голые цифры OBR-3 — для открытого свежего заказа');
+  assert.deepEqual(run('', '000015'), { vs: 15, sample: '000015', n123: 0, n15: 1 }, 'голые цифры OBR-3 — для открытого свежего заказа (номер с этикетки: LIS_VENDOR_EXACT_V1, п. 4)');
 });
 
 test('два разных LAB- в OBR-2 и OBR-3 — unmatched с причиной, оба номера в sample_id, бланки не тронуты', () => {
@@ -191,7 +193,7 @@ test('голые цифры принимаются для открытого з�
   assert.equal(BARE_ID_MAX_AGE_DAYS, 7);
   for (const st of ['queued', 'collected', 'in_progress', 'resulted']) {
     const db = clinic({ orders: [{ id: 123, status: st }] });
-    ingestMessage(db, HEM('', '123'), '10.0.0.9', 1);
+    ingestMessage(db, HEM('', '000123'), '10.0.0.9', 1);   // LIS_VENDOR_EXACT_V1 — номер с этикетки (6 цифр)
     assert.equal(last(db).visit_service_id, 123, st);
     assert.equal(results(db).length, 1, st + ': лаборатория часто не жмёт «Забор пробы» — queued законен');
     db.close();
@@ -202,11 +204,11 @@ test('голые цифры к закрытому заказу (выдан, от
   for (const [st, word] of [['completed', 'выдан'], ['cancelled', 'отменён']]) {
     const db = clinic({ orders: [{ id: 2, status: st }] });
     db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (2, 'Лейкоциты', '5.5')").run();
-    assert.equal(ingestMessage(db, HEM('', '2'), '10.0.0.9', 1), 'AA');
+    assert.equal(ingestMessage(db, HEM('', '000002'), '10.0.0.9', 1), 'AA');
     const m = last(db);
     assert.equal(m.status, 'unmatched', st);
     assert.equal(m.visit_service_id, null, st + ': чужой выданный заказ не показывается рядом с пробой');
-    assert.equal(m.sample_id, '2');
+    assert.equal(m.sample_id, '000002');
     assert.match(m.detail, /без префикса LAB-/, st);
     assert.match(m.detail, new RegExp('закрыт.*' + word), st);
     assert.match(m.detail, /номер места в штативе/, st);
@@ -218,7 +220,7 @@ test('голые цифры к закрытому заказу (выдан, от
 
 test('голые цифры к открытому, но старому заказу (старше 7 дней по местному дню) — unmatched с причиной', () => {
   const db = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(30) }] });
-  ingestMessage(db, HEM('', '2'), '10.0.0.9', 1);
+  ingestMessage(db, HEM('', '000002'), '10.0.0.9', 1);
   const m = last(db);
   assert.equal(m.status, 'unmatched');
   assert.equal(m.visit_service_id, null);
@@ -232,13 +234,13 @@ test('голые цифры к открытому, но старому зака�
 
 test('граница 7 дней — по местному календарному дню: «сегодня − 7» ещё принимается, «сегодня − 8» уже нет', () => {
   const ok = clinic({ orders: [{ id: 2, created: dayStart(7) }] });
-  ingestMessage(ok, HEM('', '2'), '10.0.0.9', 1);
+  ingestMessage(ok, HEM('', '000002'), '10.0.0.9', 1);
   assert.equal(last(ok).visit_service_id, 2, 'первая секунда дня «сегодня − 7»');
   assert.equal(results(ok, 2).length, 1);
   ok.close();
 
   const old = clinic({ orders: [{ id: 2, created: dayEnd(8) }] });
-  ingestMessage(old, HEM('', '2'), '10.0.0.9', 1);
+  ingestMessage(old, HEM('', '000002'), '10.0.0.9', 1);
   assert.equal(last(old).status, 'unmatched', 'последняя секунда дня «сегодня − 8»');
   assert.equal(results(old, 2).length, 0);
   old.close();
@@ -246,7 +248,7 @@ test('граница 7 дней — по местному календарном
 
 test('закрытый и старый сразу — названы обе причины', () => {
   const db = clinic({ orders: [{ id: 2, status: 'completed', created: dayStart(40) }] });
-  ingestMessage(db, HEM('', '2'), '10.0.0.9', 1);
+  ingestMessage(db, HEM('', '000002'), '10.0.0.9', 1);
   assert.match(last(db).detail, /закрыт.*выдан/);
   assert.match(last(db).detail, /старше 7 дней/);
   db.close();
@@ -262,7 +264,7 @@ test('с префиксом LAB- правило голых цифр не дей�
 
 test('отказ голым цифрам — разобранное сообщение: прибор всё равно «на связи»', () => {
   const db = clinic({ orders: [{ id: 2, status: 'completed' }] });
-  ingestMessage(db, HEM('', '2'), '10.0.0.9', 1);
+  ingestMessage(db, HEM('', '000002'), '10.0.0.9', 1);
   assert.ok(db.prepare('SELECT last_seen_at FROM lab_devices WHERE id = 1').get().last_seen_at);
   db.close();
 });
@@ -329,6 +331,7 @@ test('профиль A1000: номер — OBR-2, код — OBX-4, значен
   const db = clinic({ analytes: [['B12', 'Витамин B12', '206']], profile: 'autobio-autolumo-a1000' });
   ingestMessage(db, seg(
     'MSH|^~\&|A1000|Autolumo|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+    'PID|||SYN-PAT-1',   // LIS_VENDOR_EXACT_V1 — кодировщик A1000 пишет PID у пробы пациента (без PID — контроль)
     'OBR|1|LAB-000123|||',
     'OBX|1|NM|1^Vitamin B12|206|5981666^390.946|pg/mL|||||F',
   ), '10.0.0.41', 1);
@@ -351,10 +354,10 @@ test('профиль A1000, сообщение переадресателя (MSH
 
 test('профиль BC-780: OBR-3 пуст — запасное OBR-2 (и голые цифры); голые цифры OBR-3 — для открытого свежего заказа', () => {
   const db = clinic({ orders: [{ id: 123 }, { id: 15 }], profile: 'mindray-bc-780' });
-  ingestMessage(db, HEM('123', ''), '10.0.0.42', 1);
+  ingestMessage(db, HEM('000123', ''), '10.0.0.42', 1);
   assert.equal(last(db).visit_service_id, 123, 'запасное поле — только у провода гематологии; default голые OBR-2 не читает');
   assert.equal(results(db).length, 1);
-  ingestMessage(db, HEM('', '15'), '10.0.0.42', 1);
+  ingestMessage(db, HEM('', '000015'), '10.0.0.42', 1);
   assert.equal(last(db).visit_service_id, 15);
   assert.equal(results(db, 15).length, 1);
   db.close();
@@ -362,7 +365,7 @@ test('профиль BC-780: OBR-3 пуст — запасное OBR-2 (и го�
 
 test('прежний профиль (BC-5300): голые цифры OBR-2 по-прежнему не читаются', () => {
   const db = clinic();
-  ingestMessage(db, HEM('123', ''), '10.0.0.9', 1);
+  ingestMessage(db, HEM('000123', ''), '10.0.0.9', 1);
   assert.equal(last(db).status, 'unmatched');
   db.close();
 });
@@ -438,14 +441,14 @@ test('R1 п. 3: голый номер, отказ «не лабораторна�
   for (const [name, spoil] of Object.entries(cases)) {
     const db = clinic({ orders: [{ id: 2 }] });
     spoil(db);
-    ingestMessage(db, HEM('', '2'), '10.0.0.9', 1);
+    ingestMessage(db, HEM('', '000002'), '10.0.0.9', 1);
     assert.equal(last(db).visit_service_id, null, name);
     assert.notEqual(last(db).status, 'applied', name);
     db.close();
   }
   const db = clinic({ orders: [{ id: 2 }] });
   db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Другой','mindray-bs-240')").run();
-  ingestMessage(db, HEM('', '2'), '10.0.0.9', 2);
+  ingestMessage(db, HEM('', '000002'), '10.0.0.9', 2);
   assert.equal(last(db).status, 'unmatched');
   assert.equal(last(db).visit_service_id, null, 'другая модель');
   assert.equal(results(db, 2).length, 0);
@@ -467,14 +470,14 @@ test('R1 п. 3: с этикеткой LAB- те же отказы, как пре
 test('R1 п. 4: заказ создан 10 дней назад, записан или визит сегодня — голые цифры принимаются', () => {
   const booked = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(10) }] });
   booked.prepare(`UPDATE visit_services SET scheduled_at = ${NOW} WHERE id = 2`).run();
-  ingestMessage(booked, HEM('', '2'), '10.0.0.9', 1);
+  ingestMessage(booked, HEM('', '000002'), '10.0.0.9', 1);
   assert.equal(last(booked).visit_service_id, 2, 'запись на сегодня');
   assert.equal(results(booked, 2).length, 1);
   booked.close();
 
   const visit = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(10) }] });
   visit.prepare(`UPDATE visits SET visit_date = ${NOW} WHERE id = 55`).run();
-  ingestMessage(visit, HEM('', '2'), '10.0.0.9', 1);
+  ingestMessage(visit, HEM('', '000002'), '10.0.0.9', 1);
   assert.equal(last(visit).visit_service_id, 2, 'визит сегодня');
   visit.close();
 });
@@ -483,7 +486,7 @@ test('R1 п. 4: создан, записан и визит — всё старш
   const db = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(30) }] });
   db.prepare(`UPDATE visit_services SET scheduled_at = ${dayStart(20)} WHERE id = 2`).run();
   db.prepare(`UPDATE visits SET visit_date = ${dayStart(25)} WHERE id = 55`).run();
-  ingestMessage(db, HEM('', '2'), '10.0.0.9', 1);
+  ingestMessage(db, HEM('', '000002'), '10.0.0.9', 1);
   const m = last(db);
   assert.equal(m.status, 'unmatched');
   assert.equal(m.visit_service_id, null);
@@ -506,12 +509,28 @@ test('R1 п. 8: не наша этикетка (не «LAB-» и 6+ цифр) �
   }
 });
 
+// LIS_VENDOR_EXACT_V1 (решение владельца 2026-10-06, п. 4) — лишние нули
+// впереди принимает только переадресатор COM (MSH-4 = LabPC; кадр — его
+// buildOru, analyzers\forwarder\hl7-oru.js): старая гематология Mindray
+// дополняет номер нулями до ширины своего поля (8 знаков, mindray-legacy.js).
+// Прибор по сети пишет номер как набрали: «00000123» — не номер с этикетки.
 test('R1 п. 8: голые цифры с ведущими нулями (переадресатор шлёт 8 знаков) — правило голых цифр, как прежде', () => {
   const db = clinic();
-  ingestMessage(db, HEM('', '00000123'), '10.0.0.9', 1);
-  assert.equal(last(db).visit_service_id, 123);
+  ingestMessage(db, seg(
+    'MSH|^~\\&|BC-3000 Plus|LabPC|||20261006120000||ORU^R01|512345|P|2.3.1',
+    'OBR|1||00000123|00001^Automated Count^99MRC|||20261006120000',
+    'OBX|1|NM|WBC^^99MRC||6.1|10*9/L||||F',
+  ), '127.0.0.1', 1);
+  assert.equal(last(db).visit_service_id, 123, last(db).detail);
   assert.equal(results(db).length, 1);
   db.close();
+
+  const net = clinic();
+  ingestMessage(net, HEM('', '00000123'), '10.0.0.9', 1);
+  assert.deepEqual([last(net).status, last(net).visit_service_id], ['unmatched', null], 'прибор по сети: «00000123» — не номер с этикетки');
+  assert.match(last(net).detail, /не номер с этикетки Easy-Med/);
+  assert.equal(results(net).length, 0);
+  net.close();
 });
 
 // П. 11 — у строки BS-200 нет профиля или он чужой: провод — по тому, как
@@ -536,7 +555,7 @@ test('R2 п. 4: запись или визит в будущем не делаю
   const fut = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(10) }] });
   fut.prepare("UPDATE visit_services SET scheduled_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','+3 days') WHERE id = 2").run();
   fut.prepare("UPDATE visits SET visit_date = strftime('%Y-%m-%dT%H:%M:%SZ','now','+5 days') WHERE id = 55").run();
-  ingestMessage(fut, HEM('', '2'), '10.0.0.9', 1);
+  ingestMessage(fut, HEM('', '000002'), '10.0.0.9', 1);
   assert.equal(last(fut).status, 'unmatched');
   assert.equal(last(fut).visit_service_id, null);
   assert.match(last(fut).detail, /старше 7 дней/);
@@ -548,7 +567,7 @@ test('R2 п. 4: scheduled_at без пояса читается, как везд
   const db = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(10) }] });
   // Время без «Z» и без смещения — как его читает остальной код: UTC.
   db.prepare("UPDATE visit_services SET scheduled_at = strftime('%Y-%m-%d %H:%M:%S','now') WHERE id = 2").run();
-  ingestMessage(db, HEM('', '2'), '10.0.0.9', 1);
+  ingestMessage(db, HEM('', '000002'), '10.0.0.9', 1);
   assert.equal(last(db).visit_service_id, 2);
   assert.equal(results(db, 2).length, 1);
   db.close();
@@ -585,7 +604,7 @@ test('R2 п. 12: строка BS-240 и сообщение BS-200 — один �
 test('R2 п. 14: голый номер открытого свежего заказа с выданным бланком — superseded, заказ привязан', () => {
   const db = clinic({ orders: [{ id: 123, status: 'resulted' }] });
   db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, verified_at) VALUES (123,'Лейкоциты','5.5','analyzer','2026-10-01T08:00:00Z')").run();
-  ingestMessage(db, HEM('', '123'), '10.0.0.9', 1);
+  ingestMessage(db, HEM('', '000123'), '10.0.0.9', 1);
   assert.equal(last(db).status, 'superseded');
   assert.equal(last(db).visit_service_id, 123);
   assert.equal(results(db)[0].value, '5.5', 'выданный не переписан');
@@ -595,7 +614,7 @@ test('R2 п. 14: голый номер открытого свежего зак�
 // ── LIS_REAL_ANALYZERS_V1 — ревью R7, п. 1 ─────────────────────────────────
 test('R7 п. 1: голые цифры к неоплаченному заказу — та же причина, что у этикетки; без привязки, ничего не записано', () => {
   const db = clinic({ orders: [{ id: 123, status: 'added' }] });
-  assert.equal(ingestMessage(db, HEM('', '123'), '10.0.0.9', 1), 'AA');
+  assert.equal(ingestMessage(db, HEM('', '000123'), '10.0.0.9', 1), 'AA');
   const m = last(db);
   assert.equal(m.status, 'unmatched');
   assert.equal(m.visit_service_id, null, 'голый номер отказа заказ не привязывает');
@@ -697,5 +716,184 @@ test('D7: контроль BC-5300 (MSH-11 = Q, OBR-4 00006) — служебн�
   const m = last(db);
   assert.deepEqual([m.kind, m.status, m.visit_service_id, !!m.resolved_at], ['qc', 'unmatched', null, true]);
   assert.equal(results(db, 6).length, 0, 'контроль не лёг в ОАК заказа № 6');
+  db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 — решение владельца 2026-10-06, п. 4: «только номер с этикетки» ──
+// analyzer-research\fix\DECISIONS.md, п. 4. Номер пробы без «LAB-» принимается,
+// только если это номер с этикетки Easy-Med, как он напечатан под штрихкодом:
+// цифры, не меньше 6 («000123» — заказ 123). Короче — номер самого прибора
+// (номера лаборатории на A1000, контроль, номер прогона, автоприращение): в
+// «Необработанные», человек привяжет «Привязать». Остальное — прежнее: заказ
+// открыт, оплачен, не старше 7 дней.
+// Приманки — из приёмки 3.16.0 (acceptance\runs\…, T6/T7): открытый оплаченный
+// свежий заказ ДРУГОГО пациента с тем же номером. Ни одна не заполняется.
+
+/** Клиника с приманками: у каждого заказа свой пациент и свой визит (как bench.decoyOrder). */
+function decoys({ ids, profile, analytes }) {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare("INSERT INTO services (id, name, is_lab) VALUES (9,'Анализ',1)").run();
+  for (const id of ids) {
+    db.prepare('INSERT INTO patients (id, full_name) VALUES (?, ?)').run(1000 + id, 'Подставной ' + id);
+    db.prepare(`INSERT INTO visits (id, patient_id, visit_date, status) VALUES (?, ?, ${NOW}, 'scheduled')`).run(1000 + id, 1000 + id);
+    db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (?, ?, 9, 'queued', ${NOW})`).run(id, 1000 + id);
+  }
+  db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port) VALUES (1,'Анализатор',?,'mllp',2575)").run(profile);
+  db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5,'Панель',9,1)").run();
+  analytes.forEach(([code, name, dc], i) => {
+    db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id, device_code_confirmed_epoch)
+                VALUES (5, ?, ?, '', ?, ?, 1, 1, 0)`).run(code, name, i + 1, dc);
+  });
+  return db;
+}
+/** Заказы, которых коснулась проба: значения в бланке или строка лотка, привязанная к заказу. */
+const touched = (db, ids) => ids.filter((id) => results(db, id).length > 0
+  || db.prepare('SELECT COUNT(*) c FROM lab_device_messages WHERE visit_service_id = ?').get(id).c > 0);
+const SHORT = (n) => 'номер пробы «' + n + '» короче 6 цифр — на приборе вводите номер с этикетки Easy-Med (6 цифр, например 000123)'
+  + ' или сканируйте её; эту пробу привяжите кнопкой «Привязать»';
+
+// A1000 — вывод кодировщика программы прибора клиники (AutoLumo1000 1.0.7;
+// realtest\a1000\runs\20261006-123254-en-US-ABDE\raw\01-A1 и 05-A3): «по
+// тесту», MSH-10 = 5, OBR-2 — Sample ID, OBR-3 — внутренний номер, NTE перед
+// OBX. У контроля PID нет, номер — номер контроля («1», «3»).
+const A1000 = (sample, value = '4.17', { pid = true, nte = 'SYNLOT1~CEX~AFP~107~~R001~1' } = {}) => seg(
+  'MSH|^~\\&|||||20261006123256||ORU^R01|5|P|2.3.1|261006123256638',
+  ...(pid ? ['PID|||SYNTHETIC'] : []),
+  `OBR|1|${sample}|7764|Autolumo 1000`,
+  `NTE|||${nte}`,
+  `OBX|10455|CE|107|107|41765^${value}~||||||F|||2026/10/06 12:32:56`,
+);
+// BC-5300 — пример руководства (OM13, прил. C; acceptance\runs\mindray-bc-5300):
+// номер пробы — OBR-3, OBX-3 «LOINC^ИМЯ^LN».
+const BC5300 = (sample, wbc = '6.20') => seg(
+  'MSH|^~\\&|BC-5300|Mindray|||20261006133432||ORU^R01|1|P|2.3.1||||||UNICODE',
+  'PID|1||T0001^^^^MR||Тестов^Анализатор||19900101000000|Мужской',
+  'PV1|1|Амбулаторно|Терапия^^12',
+  `OBR|1||${sample}|00001^Automated Count^99MRC|||20261006133432|||||||||||||||||HM||||||||Лаборант`,
+  'OBX|1|IS|08001^Take Mode^99MRC||O||||||F',
+  `OBX|2|NM|6690-2^WBC^LN||${wbc}|10*9/L||N|||F`,
+);
+// BC-20 — BC-3600 OM, прил. D.7.4 (acceptance\runs\mindray-bc-20): MSH-3/4 пусты.
+const BC20 = (sample, wbc = '6.20') => seg(
+  'MSH|^~\\&|||||20261006133432||ORU^R01|2|P|2.3.1||||||UNICODE',
+  'PID|1||^^^^MR',
+  'PV1|1',
+  `OBR|1||${sample}|00001^Automated Count^99MRC|||20261006133432|||||||||||||||||HM||||||||Admin`,
+  'OBX|1|IS|08001^Take Mode^99MRC||O||||||F',
+  `OBX|2|NM|6690-2^WBC^LN||${wbc}|10*9/L||N|||F`,
+);
+
+test('п. 4: порог — 6 цифр, в одном месте (PLAIN_NUMBER_MIN_DIGITS)', () => {
+  assert.equal(PLAIN_NUMBER_MIN_DIGITS, 6, 'решение владельца 2026-10-06, п. 4: номер, как он напечатан под штрихкодом — 000123');
+  assert.equal(BARE_ID_MAX_AGE_DAYS, 7, 'прочие условия прежние: открыт, оплачен, не старше 7 дней');
+});
+
+test('п. 4: A1000 — номера лаборатории 1…99 в OBR-2 — не номер заказа: ни одна приманка не тронута, в лотке — что делать', () => {
+  const ids = Array.from({ length: 99 }, (_, i) => i + 1);
+  const db = decoys({ ids, profile: 'autobio-autolumo-a1000', analytes: [['AFP', 'АФП', '107']] });
+  for (const n of ids) {
+    assert.equal(ingestMessage(db, A1000(String(n)), '10.0.0.41', 1), 'AA', 'сохранено — повторять незачем');
+    const m = last(db);
+    assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['unmatched', null, String(n)], 'номер ' + n);
+    assert.equal(m.detail, SHORT(n));
+  }
+  assert.deepEqual(touched(db, ids), [], 'чужие бланки не тронуты, и лента не показывает чужого пациента рядом с пробой');
+  // Решение владельца: «человек привязывает её кнопкой «Привязать»» — номер называет человек.
+  const raw = last(db).raw;
+  ingestMessage(db, raw, '10.0.0.41', 1, { touch: false, sampleIdOverride: 42 });
+  assert.deepEqual([last(db).status, results(db, 42).map((r) => r.value)], ['applied', ['4.17']]);
+  db.close();
+});
+
+test('п. 4: A1000 — контроль (без PID, номер «3», приёмка T7a) — приманка № 3 не тронута', () => {
+  const db = decoys({ ids: [1, 3], profile: 'autobio-autolumo-a1000', analytes: [['AFP', 'АФП', '107']] });
+  ingestMessage(db, A1000('3', '25.1', { pid: false, nte: 'SYNLOT1~~AFP~107~~R001~2' }), '10.0.0.41', 1);
+  ingestMessage(db, A1000('1', '25.1', { pid: false, nte: 'SYNLOT1~~AFP~107~~R001~2' }), '10.0.0.41', 1);
+  assert.equal(last(db).visit_service_id, null);
+  assert.deepEqual(touched(db, [1, 3]), [], 'значения контроля не легли в бланк пациента');
+  db.close();
+});
+
+test('п. 4: BS-240 и CL-900i, заведённые «Другой анализатор (общий HL7)», — номер прогона OBR-3 («1», «10») не номер заказа', () => {
+  // Общий провод читает OBR-3 (C1-RESULT, риски: «wrong-patient risk until decision #4 ships»).
+  const bs = decoys({ ids: [1], profile: '', analytes: [['GLU', 'Глюкоза', 'Glu-G']] });
+  ingestMessage(bs, BS240('', '1'), '10.0.0.42', 1);
+  assert.deepEqual([last(bs).status, last(bs).visit_service_id, last(bs).sample_id, last(bs).detail], ['unmatched', null, '1', SHORT('1')]);
+  assert.deepEqual(touched(bs, [1]), []);
+  bs.close();
+
+  const cl = decoys({ ids: [10], profile: '', analytes: [['TSH', 'ТТГ', 'TSH']] });
+  ingestMessage(cl, CL('', '10'), '10.0.0.43', 1);
+  assert.deepEqual([last(cl).status, last(cl).visit_service_id, last(cl).detail], ['unmatched', null, SHORT('10')]);
+  assert.deepEqual(touched(cl, [10]), []);
+  cl.close();
+});
+
+test('п. 4: BC-5300 и BC-20 — автоприращение («1», «2», «7», «812» — приёмка T6) — не номер заказа', () => {
+  const hem = decoys({ ids: [1, 2, 812], profile: 'mindray-bc-5300', analytes: [['WBC', 'Лейкоциты', 'WBC']] });
+  for (const n of ['1', '2', '812']) {
+    ingestMessage(hem, BC5300(n, '14.20'), '10.0.0.9', 1);
+    assert.deepEqual([last(hem).status, last(hem).visit_service_id, last(hem).detail], ['unmatched', null, SHORT(n)], n);
+  }
+  assert.deepEqual(touched(hem, [1, 2, 812]), []);
+  hem.close();
+
+  const bc20 = decoys({ ids: [1, 7], profile: 'mindray-bc-20', analytes: [['WBC', 'Лейкоциты', 'WBC']] });
+  for (const n of ['1', '7']) {
+    ingestMessage(bc20, BC20(n), '10.0.0.12', 1);
+    assert.deepEqual([last(bc20).status, last(bc20).visit_service_id, last(bc20).detail], ['unmatched', null, SHORT(n)], n);
+  }
+  assert.deepEqual(touched(bc20, [1, 7]), []);
+  bc20.close();
+});
+
+test('п. 4: BS-200 — свой цифровой штрихкод пробирки «0000000021» (приёмка T6b) — не номер с этикетки: приманка № 21 не тронута', () => {
+  const db = decoys({ ids: [21], profile: 'mindray-bs-200', analytes: [['GLU', 'Глюкоза', '2']] });
+  ingestMessage(db, BS200('0000000021', '7'), '10.0.0.40', 1);
+  const m = last(db);
+  assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['unmatched', null, '0000000021']);
+  assert.match(m.detail, /^номер пробы «0000000021» — не номер с этикетки Easy-Med/);
+  assert.match(m.detail, /«Привязать»/);
+  assert.deepEqual(touched(db, [21]), [], 'лишние нули впереди — не так, как напечатано под штрихкодом');
+  db.close();
+});
+
+test('п. 4: номер с этикетки (6 цифр, как под штрихкодом) — принимается у каждого прибора; LAB- — как прежде', () => {
+  const cases = [
+    ['autobio-autolumo-a1000', [['AFP', 'АФП', '107']], (s) => A1000(s)],
+    ['mindray-bc-5300', [['WBC', 'Лейкоциты', 'WBC']], (s) => BC5300(s)],
+    ['mindray-bc-20', [['WBC', 'Лейкоциты', 'WBC']], (s) => BC20(s)],
+    ['mindray-bs-200', [['GLU', 'Глюкоза', '2']], (s) => BS200(s, '7')],
+    ['mindray-bs-240', [['GLU', 'Глюкоза', 'Glu-G']], (s) => BS240(s, '1')],
+    ['mindray-cl-900i', [['TSH', 'ТТГ', 'TSH']], (s) => CL(s, '10')],
+  ];
+  for (const [profile, analytes, msg] of cases) {
+    for (const sample of ['000123', 'LAB-000123']) {
+      const db = decoys({ ids: [123, 1, 7, 10], profile, analytes });
+      ingestMessage(db, msg(sample), '10.0.0.9', 1);
+      assert.deepEqual([last(db).status, last(db).visit_service_id], ['applied', 123], profile + ' ' + sample + ': ' + last(db).detail);
+      assert.equal(results(db, 123).length, 1, profile + ' ' + sample);
+      assert.deepEqual(touched(db, [1, 7, 10]), [], profile + ' ' + sample);
+      db.close();
+    }
+  }
+  // Заказ № 1234567 печатается без дополнения — так и принимается; «01234567» — нет.
+  const big = decoys({ ids: [1234567], profile: 'mindray-bc-5300', analytes: [['WBC', 'Лейкоциты', 'WBC']] });
+  ingestMessage(big, BC5300('1234567'), '10.0.0.9', 1);
+  assert.equal(last(big).visit_service_id, 1234567, last(big).detail);
+  ingestMessage(big, BC5300('01234567', '7.1'), '10.0.0.9', 1);
+  assert.deepEqual([last(big).status, last(big).visit_service_id], ['unmatched', null]);
+  big.close();
+});
+
+test('п. 4: прочие условия прежние — номер с этикетки к закрытому или старому заказу — отказ с причиной', () => {
+  const db = decoys({ ids: [123], profile: 'mindray-bc-5300', analytes: [['WBC', 'Лейкоциты', 'WBC']] });
+  db.prepare(`UPDATE visit_services SET created_at = ${dayStart(30)} WHERE id = 123`).run();
+  db.prepare(`UPDATE visits SET visit_date = ${dayStart(30)} WHERE id = 1123`).run();
+  ingestMessage(db, BC5300('000123'), '10.0.0.9', 1);
+  assert.deepEqual([last(db).status, last(db).visit_service_id], ['unmatched', null]);
+  assert.match(last(db).detail, /старше 7 дней/);
+  assert.equal(results(db, 123).length, 0);
   db.close();
 });
