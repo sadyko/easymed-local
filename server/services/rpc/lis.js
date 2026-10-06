@@ -5,6 +5,8 @@
 // живёт только то, чего таблицей не выразить: перечень профилей, перезапуск
 // слушателей, разбор лотка и удаление прибора (сообщения держат его внешним
 // ключом — LIS_ANALYZER_LIST_V1, ревью C2).
+// LIS_VENDOR_EXACT_V1 — D2: и «Добавить» найденный прибор (lis_device_add: без
+// модели — отказ). added через /api/db не пишется вовсе (schema-registry.js).
 import { listProfiles, getProfile, aliasesOf } from '../../lis/profiles/index.js';   // getProfile, aliasesOf: LIS_REAL_ANALYZERS_V1_PROFILES
 import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { startLisListeners, listenerStatus } from '../../lis/index.js';
@@ -174,7 +176,7 @@ export function lisMessageAttach(db, args, user) {
   // мигр. 233 по умолчанию kind = 'result', и старый контроль качества BS-200
   // (MSH-16 = 2) или запрос рабочего списка прошли бы в бланк пациента. Вид —
   // тем же проводом, что у приёма (профиль строки и имя сообщения).
-  const dev = msg.device_id ? db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(msg.device_id) : null;
+  const dev = msg.device_id ? db.prepare('SELECT profile, added FROM lab_devices WHERE id = ?').get(msg.device_id) : null;   // added: LIS_VENDOR_EXACT_V1 — N2
   const head = mshOf(msg.raw);
   const env = readEnvelope(msg.raw, wireFor({ profile: dev ? getProfile(dev.profile) : null, facility: head.facility, app: head.app }));
   if ((msg.kind && msg.kind !== 'result') || env.service) {
@@ -186,6 +188,18 @@ export function lisMessageAttach(db, args, user) {
   // лотке её нет, а прогон записал бы ещё одну строку и снова тронул бланк.
   if (msg.resolved_at || msg.status === 'applied') {
     throw new LisError('Сообщение уже разобрано или принято — привязать его ещё раз нельзя', 409);
+  }
+
+  // LIS_VENDOR_EXACT_V1 — N2: прибор найден в сети, но не добавлен (added = 0):
+  // его модель — догадка по имени, а по модели читаются номер пробы и значения
+  // (wire.js; A1000 без модели — «RLU^значение» вместо числа). Привязка до
+  // «Добавить» прочитала бы пробу догадкой — отказ сразу, словами и с кодом;
+  // строка лотка остаётся. После «Добавить» (lis_device_add) — обычная привязка.
+  // То же правило — у приёма (N2, ingest.js): проба находки в бланк не идёт.
+  if (dev && Number(dev.added) === 0) {
+    const err = new LisError(NOT_ADDED, 409);
+    err.code = 'device_not_added';   // экран показывает отказ его словами
+    throw err;
   }
 
   // LIS_REAL_ANALYZERS_V1_SAMPLE — номер заказа уходит в приём ЯВНО
@@ -564,3 +578,5 @@ export function lisDeviceAdd(db, args, user) {
 
 // LIS_VENDOR_EXACT_V1 — D2: тот же текст показывает экран (lab-devices.js), один ключ словаря.
 const MODEL_REQUIRED = 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».';
+// LIS_VENDOR_EXACT_V1 — N2: «Привязать» до «Добавить». Перевод — ключ словаря (i18n-strings.js): тост экрана переводит его сам.
+const NOT_ADDED = 'Прибор этого сообщения ещё не добавлен — «Добавить прибор» → «Найдены в сети» → «Добавить», затем «Привязать».';

@@ -1320,3 +1320,43 @@ test('D2: прежние строки работают как прежде — �
   assert.deepEqual(deviceRow(db, 7), { name: 'Старый', profile: '', added: 1, model_confirmed: 0 }, 'строку никто не правил');
   db.close();
 });
+
+// ── LIS_VENDOR_EXACT_V1 (раунд 2) — «Привязать» до «Добавить» ────────────────
+// N2 (приём, ingest.js): проба найденного, но не добавленного прибора в бланк не
+// идёт — его модель ещё догадка; «Привязать» до «Добавить» — тоже нет. Без
+// отказа здесь «Привязать» прогонял приём, тот клал в лоток НОВУЮ строку с той
+// же причиной, прежняя разбиралась, а экран говорил «Приём не применил
+// сообщение». Теперь — отказ сразу, словами и с кодом; строка лотка остаётся.
+const NOT_ADDED = 'Прибор этого сообщения ещё не добавлен — «Добавить прибор» → «Найдены в сети» → «Добавить», затем «Привязать».';
+
+test('N2: «Привязать» пробу найденного, но не добавленного прибора — 409 «сначала добавьте», лоток не тронут; после «Добавить» — обычная привязка', async () => {
+  const { lisDeviceAdd } = await import('./lis.js');
+  const db = fresh();
+  const dev = foundFrom(db, BS200_NAMED, '192.168.1.65');
+  assert.equal(deviceRow(db, dev.id).added, 0, 'находка');
+  const msg = db.prepare('SELECT id FROM lab_device_messages WHERE device_id = ? ORDER BY id DESC').get(dev.id);
+  const trayNow = () => db.prepare('SELECT id, status, detail, visit_service_id, resolved_at FROM lab_device_messages ORDER BY id').all();
+  const before = trayNow();
+  assert.throws(() => lisMessageAttach(db, { id: msg.id, visit_service_id: 125 }, LAB), (e) => {
+    assert.equal(e.status, 409);
+    assert.equal(e.code, 'device_not_added', 'экран показывает отказ его словами');
+    assert.equal(e.message, NOT_ADDED);
+    return true;
+  });
+  assert.deepEqual(trayNow(), before, 'лоток не тронут: ни новой строки, ни разобранной');
+
+  lisDeviceAdd(db, { id: dev.id, name: 'BS-200', profile: 'mindray-bs-200' }, LAB);
+  const out = lisMessageAttach(db, { id: msg.id, visit_service_id: 125 }, LAB);
+  assert.equal(out.code, 'AA', 'после «Добавить» — обычная привязка: ' + JSON.stringify(out));
+  assert.ok(db.prepare('SELECT resolved_at FROM lab_device_messages WHERE id = ?').get(msg.id).resolved_at, 'прежняя строка разобрана');
+  db.close();
+});
+
+test('N2: прибор, заведённый человеком (added = 1), и сообщение без прибора — «Привязать» как прежде', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled) VALUES (8,'Химия','mindray-bs-200','mllp','192.168.1.66',2575,1)").run();
+  db.prepare("INSERT INTO lab_device_messages (id, device_id, peer, raw, sample_id, status) VALUES (41, 8, '192.168.1.66', ?, 'LAB-000125', 'unmatched')").run(BS200_NAMED);
+  db.prepare("INSERT INTO lab_device_messages (id, device_id, peer, raw, sample_id, status) VALUES (42, NULL, '192.168.1.67', ?, 'LAB-000125', 'unmatched')").run(BS200_NAMED);
+  for (const id of [41, 42]) assert.equal(lisMessageAttach(db, { id, visit_service_id: 125 }, LAB).code, 'AA', 'сообщение ' + id);
+  db.close();
+});
