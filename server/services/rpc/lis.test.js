@@ -506,9 +506,11 @@ test('lis_profiles отдаёт aliases, wire, oneTestPerMessage, connect, wireS
     ['mindray-hematology', false, 'unknown', 'siblings', 'siblings', 27]);
   // LIS_VENDOR_EXACT_V1 — прежний профиль без списка псевдонимов — BC-20; у
   // BC-5300 список теперь есть: «BC-5300 or BC-5380» в MSH-3 (приложение C, табл. 1).
+  // LIS_VENDOR_EXACT_V1 (раунд 2) — BC-20 — TCP-сервер: connect 'dial', порт прибора 5100
+  // (профиль, 2d08ffc); экран по ним сам ставит флажок звонка и порт (lab-devices.js).
   const old = all.find((p) => p.key === 'mindray-bc-20');
-  assert.deepEqual({ aliases: old.aliases, wire: old.wire, one: old.oneTestPerMessage, connect: old.connect, src: old.wireSource },
-    { aliases: ['BC-20'], wire: 'default', one: false, connect: 'listen', src: null });
+  assert.deepEqual({ aliases: old.aliases, wire: old.wire, one: old.oneTestPerMessage, connect: old.connect, src: old.wireSource, port: old.defaultPort },
+    { aliases: ['BC-20'], wire: 'default', one: false, connect: 'dial', src: null, port: 5100 });
   const bc5300 = all.find((p) => p.key === 'mindray-bc-5300');
   assert.deepEqual({ aliases: bc5300.aliases, wire: bc5300.wire, one: bc5300.oneTestPerMessage, connect: bc5300.connect, src: bc5300.wireSource },
     { aliases: ['BC-5300', 'BC5300', 'BC-5380', 'BC5380'], wire: 'default', one: false, connect: 'listen', src: null });

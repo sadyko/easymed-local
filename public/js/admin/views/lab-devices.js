@@ -569,13 +569,26 @@ export async function mountLabDevices(container) {
         // Easy-Med подключается к нему сам. Нужны IP-адрес локальной сети и порт
         // прибора; сервер другой адрес и так не наберёт (bad_address), но
         // /api/db строку сохранит — поэтому проверка здесь, до записи.
-        const defaultPort = () => (profileOf(profSel.value) || {}).defaultPort || 2575;
+        // LIS_VENDOR_EXACT_V1 (раунд 2) — у модели, которая ждёт звонка (connect
+        // 'dial': BC-20 — TCP-сервер, профиль 2d08ffc), defaultPort — порт ПРИБОРА,
+        // по которому звонит Easy-Med (5100); у остальных — порт приёма Easy-Med.
+        // Раньше порт модели считался только портом приёма, и отметка флажка его
+        // стирала: 5100 у BC-20 пришлось бы набирать заново (приёмка BC-20, T3).
+        const selectedProfile = () => profileOf(profSel.value);
+        const dialModel = () => { const p = selectedProfile(); return !!p && p.connect === 'dial'; };
+        const listenPort = () => { const p = selectedProfile(); return (p && p.connect !== 'dial' && p.defaultPort) || 2575; };
+        const devicePort = () => { const p = selectedProfile(); return p && p.connect === 'dial' && p.defaultPort ? String(p.defaultPort) : ''; };
+        const portNow = () => String(portInp.value == null ? '' : portInp.value).trim();
+        let dialByForm = false;   // LIS_VENDOR_EXACT_V1 — флажок поставила форма по модели, а не человек
         const dialInp = h('input', { type: 'checkbox', checked: dialsNow ? true : null, onchange: () => {
+            dialByForm = false;   // отметил или снял человек — его выбор
+            const p = portNow();
             if (dialInp.checked) {
-                const p = String(portInp.value == null ? '' : portInp.value).trim();
-                if (p === String(defaultPort()) || p === '2575') portInp.value = '';
-            } else if (!String(portInp.value == null ? '' : portInp.value).trim()) {
-                portInp.value = String(defaultPort());
+                if (!p || p === String(listenPort()) || p === '2575') portInp.value = devicePort();
+            } else if (!p || (!device && devicePort() && p === devicePort())) {
+                // Новый прибор: порт прибора BC-20 — не порт приёма. У заведённой
+                // строки порт, как прежде, остаётся (ревью: «порт прибора сохранён»).
+                portInp.value = String(listenPort());
             }
             syncTransport();
         } });
@@ -628,8 +641,21 @@ export async function mountLabDevices(container) {
         // LIS_REAL_ANALYZERS_V1 — слушатель, а не свойство onchange: смена модели
         // ещё и показывает или прячет подсказку про звонок (syncTransport).
         // Порт по умолчанию модели — только новому прибору, который звонит сам.
+        // LIS_VENDOR_EXACT_V1 (раунд 2) — модель ждёт звонка (BC-20): флажок
+        // «Easy-Med подключается к прибору сам» и порт прибора ставятся сами.
+        // Сменили на модель, которая звонит сама, — снимается только флажок,
+        // поставленный формой; отмеченный человеком остаётся.
         profSel.addEventListener('change', () => {
-            if (!device && !dialOn()) portInp.value = String(defaultPort());
+            if (!device) {
+                if (dialModel()) {
+                    if (!dialInp.checked) { dialInp.checked = true; dialByForm = true; }
+                    const p = portNow();
+                    if (!p || p === '2575') portInp.value = devicePort();
+                } else {
+                    if (dialByForm) { dialInp.checked = false; dialByForm = false; }
+                    if (!dialOn()) portInp.value = String(listenPort());
+                }
+            }
             syncTransport();
         });
 

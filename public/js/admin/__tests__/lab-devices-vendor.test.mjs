@@ -90,7 +90,8 @@ const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 // --- fake сервер -----------------------------------------------------------
 const PROFILES = [
-  { key: 'mindray-bc-20', vendor: 'Mindray', model: 'BC-20', channelsSource: 'documented', defaultPort: 2575, channels: [], connect: 'listen', wireSource: null },
+  // LIS_VENDOR_EXACT_V1 (раунд 2) — так lis_profiles отдаёт BC-20 теперь (2d08ffc): TCP-сервер, Easy-Med звонит на его 5100.
+  { key: 'mindray-bc-20', vendor: 'Mindray', model: 'BC-20', channelsSource: 'documented', defaultPort: 5100, channels: [], connect: 'dial', wireSource: null },
   { key: 'mindray-bs-200', vendor: 'Mindray', model: 'BS-200', channelsSource: 'device', wireSource: 'documented', defaultPort: 2575, channels: [], connect: 'listen', oneTestPerMessage: true },
   { key: 'mindray-bs-240', vendor: 'Mindray', model: 'BS-240', channelsSource: 'device', wireSource: 'documented', defaultPort: 2575, channels: [], connect: 'listen' },
   { key: 'autobio-autolumo-a1000', vendor: 'Autobio', model: 'AutoLumo A1000', channelsSource: 'device', wireSource: 'driver', defaultPort: 2575, channels: [], connect: 'listen', oneTestPerMessage: true },
@@ -643,4 +644,63 @@ test('D12 (раунд 2): новые строки — в словаре на uz 
   for (const lang of ['en', 'uz']) assert.ok(!/[Ѐ-ӿ]/.test(STRINGS[ROUND2_GUIDE.firewall][lang]), lang);
   // Подписи экранов анализаторов на uz/en — английские (как в остальной инструкции).
   for (const lang of ['en', 'uz']) assert.ok(STRINGS[MORE_GUIDE.bs240clRetry][lang].includes('«Send Incomplete Samples»'), lang);
+});
+
+// ── LIS_VENDOR_EXACT_V1 (раунд 2) — BC-20 в «Добавить по адресу» ─────────────
+// Приёмка BC-20, T3: «lis_profiles для mindray-bc-20: connect 'listen',
+// defaultPort 2575 — форма не ставит флажок звонка и не предлагает 5100». Профиль
+// теперь говорит connect 'dial', defaultPort 5100 (порт ПРИБОРА; 2d08ffc), и
+// форма обязана это взять: модель BC-20 — флажок «Easy-Med подключается к
+// прибору сам» отмечен сам, порт 5100. Раньше отметка флажка руками ещё и
+// стирала порт, равный порту модели, — 5100 пришлось бы набирать заново.
+const dialBoxIn = (root) => walk(root).find((n) => n.tagName === 'LABEL' && textOf(n).includes('Easy-Med подключается к прибору сам'));
+const dialInputIn = (root) => { const l = dialBoxIn(root); return l && walk(l).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'checkbox'); };
+const portInputIn = (root) => walk(root).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'number');
+const pickModel = (root, key) => { const sel = modelSelectIn(root); sel.value = key; sel.dispatchEvent({ type: 'change', target: sel }); };
+const tickDialIn = (root, on) => { const box = dialInputIn(root); box.checked = on; box.dispatchEvent({ type: 'change', target: box }); };
+
+test('«Добавить по адресу»: модель BC-20 — флажок звонка отмечен сам, порт 5100; запись — dial = 1 и порт прибора', async () => {
+  const root = await newDeviceForm();
+  assert.ok(!dialInputIn(root).checked, 'до выбора модели флажок не отмечен');
+  assert.strictEqual(portInputIn(root).value, '2575');
+  pickModel(root, 'mindray-bc-20');
+  assert.strictEqual(dialInputIn(root).checked, true, 'BC-20 ждёт звонка — Easy-Med подключается сам');
+  assert.strictEqual(portInputIn(root).value, '5100', 'порт BC-20');
+  const note = walk(root).find((n) => n.tagName === 'P' && textOf(n).startsWith('Easy-Med сам подключится'));
+  assert.ok(note && note.style.display !== 'none', 'пояснение про звонок видно');
+
+  inputByPlaceholder(root, 'Например: Гематология').value = 'BC-20';
+  walk(root).find((n) => n.tagName === 'INPUT' && n.attrs.placeholder === 'IP-адрес прибора, например 10.0.0.30').value = '192.168.1.50';
+  formButton(root, /^Сохранить$/).click();
+  await tick(60);
+  const mine = writes.filter((w) => w.table === 'lab_devices');
+  assert.strictEqual(mine.length, 1, JSON.stringify(writes) + ' ' + toastMsg);
+  const v = [].concat(mine[0].values)[0];
+  assert.deepStrictEqual([v.profile, v.host, v.port, v.dial], ['mindray-bc-20', '192.168.1.50', 5100, 1]);
+});
+
+test('«Добавить по адресу»: с BC-20 на модель, которая звонит сама, — флажок, поставленный формой, снимается, порт 2575; флажок человека — остаётся', async () => {
+  const root = await newDeviceForm();
+  pickModel(root, 'mindray-bc-20');
+  pickModel(root, 'mindray-bs-240');
+  assert.strictEqual(dialInputIn(root).checked, false, 'BS-240 звонит сам — флажок, поставленный формой, снят');
+  assert.strictEqual(portInputIn(root).value, '2575');
+  pickModel(root, 'mindray-bc-20');
+  assert.strictEqual(portInputIn(root).value, '5100');
+
+  // Отметил человек — смена модели его выбор не трогает.
+  pickModel(root, 'mindray-bs-240');
+  tickDialIn(root, true);
+  assert.strictEqual(portInputIn(root).value, '', 'у прибора свой порт — 2575 тут ни при чём (как прежде)');
+  pickModel(root, 'autobio-autolumo-a1000');
+  assert.strictEqual(dialInputIn(root).checked, true, 'флажок человека смена модели не снимает');
+});
+
+test('«Добавить по адресу»: у BC-20 флажок сняли и отметили снова — порт 5100 не стирается; сняли — 2575', async () => {
+  const root = await newDeviceForm();
+  pickModel(root, 'mindray-bc-20');
+  tickDialIn(root, false);
+  assert.strictEqual(portInputIn(root).value, '2575', 'Easy-Med слушает — порт приёма');
+  tickDialIn(root, true);
+  assert.strictEqual(portInputIn(root).value, '5100', 'звонит Easy-Med — порт прибора BC-20, а не пусто');
 });
