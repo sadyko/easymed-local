@@ -47,6 +47,7 @@ import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS
 import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
 // OWN_PRICE_TIER_RATIO_V1 — своя цена врача со скидкой яруса: правило одно с сервером.
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';
+import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';   // DISCOUNT_RULES_V1 · CARD_BALANCE_V1
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
@@ -244,13 +245,15 @@ export function openServicePickerModal({
     function consultPriceFor(doctorId, ct) {
         // CONSULT_PER_DOCTOR_V1 — the doctor's own price (0 if free / unset). No clinic default.
         const dc = state.docConsult[doctorId + '|' + ct.id];
-        if (!dc || dc.is_free) return 0;
+        if (!dc || isOn(dc.is_free)) return 0;   // CLINIC_API_FIX_V1
         return dc.price != null ? Number(dc.price) : 0;
     }
     function consultAvailableFor(doctorId, typeId) {
         // CONSULT_PER_DOCTOR_V1 — a type the doctor hasn't configured is not offered.
+        // CLINIC_API_FIX_V1 — available приходит из базы числом: 0 !== false
+        // предлагало приём, который врач не ведёт.
         const dc = state.docConsult[doctorId + '|' + typeId];
-        return !!dc && dc.available !== false;
+        return !!dc && isOn(dc.available);
     }
     // CONSULT_PRICE_RANGE_V1 — a consultation's price varies per doctor. Range across doctors who
     // offer it (non-zero), so the catalog can show «от {min}» instead of the misleading default 0.
@@ -495,14 +498,14 @@ export function openServicePickerModal({
             const _docById = {}; for (const _d of state.doctors) _docById[String(_d.id)] = _d;
             const consultRows = [];
             for (const _k in state.docConsult) {
-                const _dc2 = state.docConsult[_k]; if (!_dc2 || _dc2.available === false) continue;
+                const _dc2 = state.docConsult[_k]; if (!_dc2 || !isOn(_dc2.available)) continue;   // CLINIC_API_FIX_V1 — 0 из базы = «не ведёт»
                 const _bar = _k.indexOf('|'); const _did = _k.slice(0, _bar), _tid = _k.slice(_bar + 1);
                 const _ct2 = _ctById[_tid], _doc = _docById[_did];
                 if (!_ct2 || !_doc) continue;
                 consultRows.push({
                     id: 'c|' + _did + '|' + _tid,
                     name: consultNameFor(_did, _ct2),
-                    price: _dc2.is_free ? 0 : (_dc2.price != null ? Number(_dc2.price) : 0),
+                    price: isOn(_dc2.is_free) ? 0 : (_dc2.price != null ? Number(_dc2.price) : 0),   // CLINIC_API_FIX_V1
                     duration_minutes: 30,   // длительности у вида консультации офлайн нет — приём по умолчанию
                     __consult: true, consultation_type_id: _ct2.id, __ct: _ct2, core_service_id: null,
                     __consultDoctorId: _did, __consultDocName: _doc.full_name || _doc.name || '',

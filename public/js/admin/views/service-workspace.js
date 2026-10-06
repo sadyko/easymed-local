@@ -37,6 +37,7 @@ import { openVitalsDialog } from './patient-card.js?v=labshared1';   // CARD_SPE
 import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — chips must survive a NULL type_id
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
+import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -1430,10 +1431,12 @@ async function openRevisitModal(ctx) {
                 .eq('company_id', cid).eq('doctor_id', doctorId),
         ]);
         for (const r of (dcData || [])) docConsult[r.consultation_type_id] = r;
-        consultTypes = (ctData || []).filter(ct => { const r = docConsult[ct.id]; return r && r.available !== false; });
+        // CLINIC_API_FIX_V1 — available приходит числом: 0 !== false предлагало
+        // повторный приём по виду, который врач не ведёт.
+        consultTypes = (ctData || []).filter(ct => { const r = docConsult[ct.id]; return r && isOn(r.available); });
     }
     const consultLabel = (ct) => { const r = docConsult[ct.id]; return (r && (r.name_ru || r.name_uz)) || ct.name_ru || ct.name_uz || 'Консультация'; };
-    const consultPrice = (ct) => { const r = docConsult[ct.id]; return r ? (r.is_free ? 0 : Number(r.price || 0)) : 0; };
+    const consultPrice = (ct) => { const r = docConsult[ct.id]; return r ? (isOn(r.is_free) ? 0 : Number(r.price || 0)) : 0; };   // CLINIC_API_FIX_V1
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '140' } });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };

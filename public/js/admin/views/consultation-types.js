@@ -17,6 +17,7 @@ import { h, Icon, PageHead, clear, toast, initials, avColor } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
+import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 
 const PAGE = 20;
 
@@ -316,11 +317,14 @@ function openDoctorPricesModal(d, types, priceMap, cid, repaint) {
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
     // Local editable state per type, seeded from priceMap (or pure defaults).
+    // CLINIC_API_FIX_V1 — флаги из базы приходят числами 0/1: `0 !== false`
+    // ставило «Ведёт» снятому, `1 === true` снимало «Бесплатно», и «Save» без
+    // правок записывал это в базу. Читает isOn (shared/flags.js).
     const state = {};
     for (const t of types) {
         const row = priceMap[key(d.id, t.id)];
         state[t.id] = row
-            ? { available: row.available !== false, price: (row.price == null ? '' : String(row.price)), is_free: row.is_free === true,
+            ? { available: isOn(row.available), price: (row.price == null ? '' : String(row.price)), is_free: isOn(row.is_free),   // CLINIC_API_FIX_V1
                 name_ru: row.name_ru || '', name_uz: row.name_uz || '', name_en: row.name_en || '' }
             : { available: true, price: '', is_free: false, name_ru: '', name_uz: '', name_en: '' };
     }
