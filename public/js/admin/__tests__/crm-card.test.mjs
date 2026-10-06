@@ -2221,8 +2221,9 @@ test('записанную строку перевели к врачу с жив
   saveSheet(sheet);
   await tick(150);
 
-  assert.ok(someToast(/Запись к Петров Пётр уже стоит — отмените её в календаре, чтобы перевести в живую очередь/),
+  assert.ok(someToast(/^Визит этого дня записан к Петров Пётр\. Чтобы перевести строку в живую очередь, сначала измените этот визит в календаре\.$/),
     'перевод записанной строки в живую очередь не отказан словами: ' + JSON.stringify(TOASTS));
+  assert.ok(!someToast(/отмените/), 'подсказка велит отменить настоящую запись пациента: ' + JSON.stringify(TOASTS));   // CLINIC_API_FIX_V1 (ревью 8fb4d86)
   assert.strictEqual(rpcOf('ensure_visit').length, 0, 'визит дня тронут, хотя прежняя запись не отменена');
   const writes = CALLS.filter((c) => (c.table === 'crm_requests' || c.table === 'crm_request_services') && c.op !== 'select');
   assert.deepStrictEqual(writes, [], 'заявка или её строки изменены при отказе: ' + JSON.stringify(writes));
@@ -2266,7 +2267,7 @@ test('цена консультации: из двух строк врача —
 // Визит дня один; время держит врач визита, а остальные строки дня лишь
 // привязаны к нему (bookDays). Перевести в живую очередь строку, чей врач
 // визита не держит, — не повод отказывать: визит нужен другой строке.
-const QUEUE_REFUSAL = /Запись к .* уже стоит — отмените её в календаре, чтобы перевести в живую очередь/;
+const QUEUE_REFUSAL = /Визит этого дня записан к .*\. Чтобы перевести строку в живую очередь, сначала измените этот визит в календаре\./;
 const sharedDayLines = () => [
   { id: 901, service_id: DOC_SVC.id, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: DOCTOR.id, visit_id: 555 },
   { id: 902, service_id: DOC_SVC.id, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: DOC_NO_ROW.id, visit_id: 555 },
@@ -2308,7 +2309,7 @@ test('общий день: строку врача визита перевели
   saveSheet(sheet);
   await tick(150);
 
-  assert.ok(someToast(/Запись к Петров Пётр уже стоит/), 'отказ не называет врача визита: ' + JSON.stringify(TOASTS));
+  assert.ok(someToast(/Визит этого дня записан к Петров Пётр[.]/), 'отказ не называет врача визита: ' + JSON.stringify(TOASTS));
   assert.ok(!someToast(/Сидоров/), 'отказ называет врача, у которого записи нет: ' + JSON.stringify(TOASTS));
   assert.deepStrictEqual(requestWrites(), [], 'при отказе заявка или строки изменены');
   assert.strictEqual(rpcOf('ensure_visit').length, 0);
@@ -2349,7 +2350,7 @@ test('карточка: «Отмена» в окне дат и «Сохрани�
   CALLS.length = 0; TOASTS.length = 0; RPC.length = 0;
   await saveRequest(modal);
 
-  assert.ok(someToast(/Запись к Петров Пётр уже стоит/), '«Сохранить» карточки записал врача живой очереди мимо отказа: ' + JSON.stringify(TOASTS));
+  assert.ok(someToast(/Визит этого дня записан к Петров Пётр[.]/), '«Сохранить» карточки записал врача живой очереди мимо отказа: ' + JSON.stringify(TOASTS));
   assert.deepStrictEqual(requestWrites(), [], 'заявка или строки изменены при отказе: ' + JSON.stringify(requestWrites()));
   VISITS = [];
   window.easymed.state.user = null;
@@ -2388,7 +2389,7 @@ test('не отказывается: своя записанная строка 
   window.easymed.state.user = null;
 });
 
-test('врача визита нет в списке врачей — отказ общими словами, без «Запись к —»', async () => {
+test('врача визита нет в списке врачей — отказ общими словами, без пустого имени', async () => {
   VISITS = [Object.assign(bookedVisit('15:00'), { doctor_id: 99, status: 'scheduled' })];
   const { sheet } = await doctorSheet({ doctors: [DOCTOR, LQ_DOCTOR], lines: [
     { id: 901, service_id: DOC_SVC.id, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: 99, visit_id: 555 },
@@ -2400,9 +2401,9 @@ test('врача визита нет в списке врачей — отказ
   saveSheet(sheet);
   await tick(150);
 
-  assert.ok(someToast(/^Запись к врачу уже стоит — отмените её в календаре, чтобы перевести в живую очередь$/),
+  assert.ok(someToast(/^Визит этого дня записан к врачу\. Чтобы перевести строку в живую очередь, сначала измените этот визит в календаре\.$/),
     'нет общего отказа: ' + JSON.stringify(TOASTS));
-  assert.ok(!someToast(/Запись к —/), 'отказ с пустым именем врача: ' + JSON.stringify(TOASTS));
+  assert.ok(!someToast(/записан к —/), 'отказ с пустым именем врача: ' + JSON.stringify(TOASTS));
   assert.deepStrictEqual(requestWrites(), []);
   VISITS = [];
   window.easymed.state.user = null;
@@ -2483,7 +2484,7 @@ test('визиты не загрузились — отказ по врачу с
     saveSheet(sheet);
     await tick(150);
 
-    assert.ok(someToast(/Запись к Петров Пётр уже стоит/), 'без визитов отказ не назвал врача строки: ' + JSON.stringify(TOASTS));
+    assert.ok(someToast(/Визит этого дня записан к Петров Пётр[.]/), 'без визитов отказ не назвал врача строки: ' + JSON.stringify(TOASTS));
     assert.deepStrictEqual(requestWrites(), []);
     assert.strictEqual(rpcOf('ensure_visit').length, 0);
   } finally {
@@ -2519,6 +2520,32 @@ test('частично неудачное сохранение: только ч�
 
   const label = walk(modal).filter((n) => n.attrs && 'data-booked' in n.attrs).map(textOf).join(' | ');
   assert.ok(/Записан: 05\.10\.2026 в 09:30 · Петров Пётр/.test(label), 'записанная строка не называет свой визит: ' + label);
+  VISITS = [];
+  window.easymed.state.user = null;
+});
+
+// CLINIC_API_FIX_V1 (ревью 8fb4d86) — ЖИВАЯ ОЧЕРЕДЬ → ЖИВАЯ ОЧЕРЕДЬ НЕ ОТКАЗЫВАЕТ.
+// Строка живой очереди на сегодня привязана ensure_visit без book к визиту дня
+// пациента, записанному к Петрову. Времени Петрова она не держала никогда, и
+// перевод её к другому врачу живой очереди ничьей записи не оставляет.
+test('строку живой очереди у чужого визита дня перевели к другому врачу живой очереди — сохраняется', async () => {
+  VISITS = [{ id: 558, visit_date: new Date(TODAY + 'T09:00').toISOString(), duration_minutes: 30, doctor_id: DOCTOR.id, status: 'scheduled' }];
+  const { sheet } = await doctorSheet({ doctors: [DOCTOR, LQ_DOCTOR, LQ_DOCTOR_2], lines: [
+    { id: 951, service_id: DOC_SVC.id, scheduled_date: TODAY, status: 'pending', doctor_id: LQ_DOCTOR.id, visit_id: 558 },
+  ] });
+  await tick(60);
+  await switchDoctor(sheet, 0, LQ_DOCTOR_2.id);
+
+  CALLS.length = 0; TOASTS.length = 0; RPC.length = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  assert.ok(!someToast(QUEUE_REFUSAL), 'живая очередь → живая очередь отказана, а подсказка велит трогать запись Петрова: ' + JSON.stringify(TOASTS));
+  assert.ok(someToast(/Записано услуг/), 'сохранение не прошло: ' + JSON.stringify(TOASTS));
+  const ev = rpcOf('ensure_visit');
+  assert.strictEqual(ev.length, 1, JSON.stringify(ev.map((c) => c.body)));
+  assert.ok(!('book' in ev[0].body), 'к врачу живой очереди ушла просьба занять слот: ' + JSON.stringify(ev[0].body));
+  assert.strictEqual(ev[0].body.doctor_id, LQ_DOCTOR_2.id);
   VISITS = [];
   window.easymed.state.user = null;
 });
