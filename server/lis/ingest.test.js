@@ -1414,3 +1414,56 @@ test('D0: без основания — в базе умолчание коло�
   assert.deepEqual(afp(db), { value: '4.17', numeric_value: 4.17, flag: 'normal' });
   db.close();
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D6: CL-900i — флаг из OBX-9, OBX-8 «N» не основание ─
+// Host Interface Manual CL (с. 1-19–1-20): OBX-8 «Fixed as N» у КАЖДОГО
+// результата, качественный ответ — в OBX-9 («Negative-, Positive+, weak
+// positive+-»), OBX-7 «-». Раньше положительный HBsAg (ST, без числа) получал
+// флаг «Норма» по OBX-8. Кадр — расположение полей руководства, значения
+// синтетические.
+const CL_HBS = (value, obx9) => ['MSH|^~\&|||||20261005101500||ORU^R01|3583|P|2.3.1||||0||ASCII|||',
+  'PID|1|P1|||SYN^PAT||19800101|F|||||||||||||||||||||',
+  'OBR|1|LAB-000123|10|^|N|20261005100000|20261005100000|20261005100000|||||||serum||||||||||||||||||||||||||',
+  `OBX|1|ST|HBsAg|HBsAg|${value}|COI|-|N|${obx9}||F||${value}|20261005101400||admin|0|`].join('\r');
+const hbs = (db) => db.prepare("SELECT value, numeric_value, flag, reference_range FROM lab_results WHERE visit_service_id = 123 AND parameter = 'HBsAg'").get();
+const clClinic = (range) => {
+  const db = chem({ profile: 'mindray-cl-900i', lines: [['HBS', 'HBsAg', 'HBsAg']] });
+  if (range) db.prepare('UPDATE lab_panel_analytes SET ref_low = ?, ref_high = ?').run(...range);
+  return db;
+};
+
+test('D6: CL-900i — положительный HBsAg без диапазона клиники — «Отклонение», а не «Норма»', () => {
+  const db = clClinic(null);
+  assert.equal(ingestMessage(db, CL_HBS('5.320000', 'Positive+'), '10.0.0.43', 1), 'AA');
+  assert.deepEqual(hbs(db), { value: '5.32', numeric_value: 5.32, flag: 'abnormal', reference_range: '' },
+    'флаг — из OBX-9; индекс COI — число; OBX-7 «-» — не диапазон');
+  ingestMessage(db, CL_HBS('0.120000', 'weak positive+-'), '10.0.0.43', 1);
+  assert.equal(hbs(db).flag, 'abnormal', 'слабоположительно — тоже отклонение');
+  ingestMessage(db, CL_HBS('0.120000', 'Negative-'), '10.0.0.43', 1);
+  assert.deepEqual(hbs(db), { value: '0.12', numeric_value: 0.12, flag: 'normal', reference_range: '' });
+  db.close();
+});
+
+test('D6: CL-900i — диапазон клиники для индекса COI работает; положительный ответ «нормой» не перекрывается', () => {
+  const db = clClinic([0, 1]);
+  ingestMessage(db, CL_HBS('5.320000', 'Positive+'), '10.0.0.43', 1);
+  assert.equal(hbs(db).flag, 'high', 'диапазон клиники — «Выше»');
+  ingestMessage(db, CL_HBS('0.120000', 'Negative-'), '10.0.0.43', 1);
+  assert.equal(hbs(db).flag, 'normal');
+  // Диапазон клиники говорит «норма», прибор — «положительно»: положительный
+  // результат «Нормой» не печатается.
+  const wide = clClinic([0, 10]);
+  ingestMessage(wide, CL_HBS('5.320000', 'Positive+'), '10.0.0.43', 1);
+  assert.equal(hbs(wide).flag, 'abnormal');
+  db.close(); wide.close();
+});
+
+test('D6: resultFlag — качественный ответ прибора', async () => {
+  const { resultFlag } = await import('./ingest.js');
+  assert.equal(resultFlag({ num: 5.3, qualitative: 'positive', abnormal: 'N', deviceRange: '-' }), 'abnormal');
+  assert.equal(resultFlag({ num: 5.3, refLow: 0, refHigh: 1, qualitative: 'positive' }), 'high');
+  assert.equal(resultFlag({ num: 5.3, refLow: 0, refHigh: 10, qualitative: 'positive' }), 'abnormal', 'клиника «норма» положительное не перекрывает');
+  assert.equal(resultFlag({ num: 0.1, qualitative: 'negative', abnormal: 'N', deviceRange: '-' }), 'normal', 'основание — ответ прибора');
+  assert.equal(resultFlag({ num: 0.9, refLow: 0, refHigh: 0.5, qualitative: 'negative' }), 'high', 'клиника бьёт «отрицательно» (инвариант 3)');
+  assert.equal(resultFlag({ num: 2.35, abnormal: 'N', deviceRange: '-' }), null, 'CL: «N» без диапазона — не основание');
+});

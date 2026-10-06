@@ -234,9 +234,35 @@ function isNoResult(v) {
  * Причина «не писать» для журнала лотка: что прислал прибор и, для сверки,
  * OBX-13 — значение ДО правки (руководство BS-200: «used as original
  * result»). OBX-13 в бланк не пишется никогда.
+ * LIS_VENDOR_EXACT_V1 (D6) — и OBX-9 химии/ИХЛА Mindray: «If the fifth field
+ * is invalid value, please refer to ninth field for the result» (Host
+ * Interface Manual CL, с. 1-20) — человек видит ответ прибора и вносит его
+ * сам; приём «нет результата» не дописывает ничем.
  */
-function noResultHold(obx5, obx13) {
-  return 'прибор: нет результата «' + obx5 + '»' + (obx13 ? ', OBX-13 «' + obx13 + '» — для сверки, в бланк не пишется' : '');
+function noResultHold(obx5, obx13, obx9 = '') {
+  const refs = [obx13 && 'OBX-13 «' + obx13 + '»', obx9 && 'OBX-9 «' + obx9 + '»'].filter(Boolean);
+  return 'прибор: нет результата «' + obx5 + '»' + (refs.length ? ', ' + refs.join(', ') + ' — для сверки, в бланк не пишется' : '');
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 (D6) — качественный ответ в OBX-9 химии и ИХЛА Mindray:
+ * «Negative-, Positive+, weak positive+-» (Host Interface Manual CL,
+ * с. 1-20; руководство BS-360E/BS-240Pro/BS-240E — то же). На экране CL те же
+ * ответы — флаги REAC / NREA («реактивно» / «нереактивно»). Неопределённый
+ * ответ (пограничный, «серая зона») — тоже отклонение: человек обязан
+ * посмотреть. 'positive' | 'negative' | '' — не качественный ответ (пусто,
+ * целое «вероятность» BS-200, «оптимизированный результат» числом).
+ */
+const QUAL_NEGATIVE = /^(negative|neg|non-?reactive|non reactive|nrea|отрицательн\S*)$/;
+const QUAL_POSITIVE = /^(positive|pos|reactive|reac|weak(ly)? positive|weak(ly)? reactive|borderline|equivocal|gr[ae]y ?zone|indeterminate|положительн\S*|слабоположительн\S*|слабо положительн\S*|сомнительн\S*)$/;
+function qualitativeOf(raw) {
+  const s = String(raw == null ? '' : raw).trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!s) return '';
+  const word = s.replace(/[\s+\-±]+$/, '');   // «positive+», «negative-», «weak positive+-»
+  if (!word) return s.startsWith('-') ? 'negative' : 'positive';   // одни знаки: «-», «+», «+-», «±»
+  if (QUAL_NEGATIVE.test(word)) return 'negative';
+  if (QUAL_POSITIVE.test(word)) return 'positive';
+  return '';
 }
 
 /**
@@ -280,6 +306,9 @@ function autobioNote(nte, fieldSep, repSep) {
  * результата» Mindray (D5), флаги прибора A1000, кроме ORH/ORL (D9).
  * Десятичная запятая у mindray-chem и autobio-hl7 — точка (D0); у A1000
  * простое число — NM, флаги ORH/ORL — в abnormal (H/L) и знак «>»/«<» (D9).
+ * qualitative (D6) — качественный ответ OBX-9 у mindray-chem: 'positive' |
+ * 'negative'; есть только у таких строк. Простое число у mindray-chem — NM
+ * (индекс COI качественного теста CL).
  *
  * obr — первый OBR: { placer: OBR-2, filler: OBR-3 }, компонент 1 без пробелов
  * по краям; null — OBR нет.
@@ -338,6 +367,14 @@ export function readResult(raw, wire = 'default') {
         o.name = '';
         o.label = t(f[4]);
         o.value = trimZeros(decimalPoint(o.value));   // LIS_VENDOR_EXACT_V1 (D0) — «5,000000» → «5»
+        // LIS_VENDOR_EXACT_V1 (D6) — качественный ответ прибора — OBX-9: у CL-900i
+        // OBX-8 «Fixed as N» у КАЖДОГО результата, и положительный HBsAg/HCV/HIV
+        // выходил «Норма». Флаг по ответу ставит ingest.js (resultFlag).
+        const q = qualitativeOf(f[9]);
+        if (q) o.qualitative = q;
+        // Индекс COI качественного теста (OBX-2 = ST) — число: numeric_value
+        // есть, и диапазон клиники работает. Текст («+», «-», «+-») — как был.
+        if (PLAIN_NUMBER.test(o.value)) o.valueType = 'NM';
       } else if (w === 'autobio-hl7') {
         // AutoLumoHL7.cs (LiveMachine), строки 129–163: код — OBX-4, значение —
         // компонент 2 OBX-5; компонент 1 — RLU, сигнал прибора.
@@ -375,7 +412,7 @@ export function readResult(raw, wire = 'default') {
       }
       // LIS_VENDOR_EXACT_V1 (D5) — «нет результата»: строка помечена hold, и
       // match.js её не пишет — строка бланка «не пришла» с этой причиной (лоток).
-      if (!o.hold && isNoResult(o.value)) o.hold = noResultHold(t(f[5]), t(f[13]));
+      if (!o.hold && isNoResult(o.value)) o.hold = noResultHold(t(f[5]), t(f[13]), w === 'mindray-chem' ? t(f[9]) : '');
       observations.push(o);
       nte = '';   // LIS_VENDOR_EXACT_V1 (D9) — NTE относится только к своему OBX
     }

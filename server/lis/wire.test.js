@@ -581,3 +581,37 @@ test('D9: A1000 «по пробе» — OBX-4 пуст, код берётся и
   assert.deepEqual(readResult(raw, 'autobio-hl7').observations.map((x) => [x.code, x.codeRaw, x.value, x.valueType]),
     [['107', '107', '4.17', 'NM'], ['112', '112', '1.23', 'NM']]);
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D6: CL-900i — качественный ответ в OBX-9 ──────────
+// Host Interface Manual CL (с. 1-19–1-20): OBX-2 — NM у количественных, ST у
+// качественных тестов; OBX-5 — результат (у качественных — индекс COI);
+// OBX-7 — «Fixed and reserved» («-»); OBX-8 — «Fixed as N»; OBX-9 —
+// «Negative-, Positive+, weak positive+-». Значения синтетические.
+const CL_ORU = (...obx) => seg(
+  'MSH|^~\&|||||20261005101500||ORU^R01|3583|P|2.3.1||||0||ASCII|||',
+  'PID|1|P1|||SYN^PAT||19800101|F|||||||||||||||||||||',
+  'OBR|1|LAB-000123|10|^|N|20261005100000|20261005100000|20261005100000|||||||serum||||||||||||||||||||||||||',
+  ...obx,
+);
+
+test('D6: CL-900i — OBX-9 читается: положительно/отрицательно; индекс COI в ST — число (NM) для диапазона клиники', () => {
+  const read = (obx9, v = '5.320000') => readResult(CL_ORU(`OBX|1|ST|HBsAg|HBsAg|${v}|COI|-|N|${obx9}||F||${v}|20261005101400||admin|0|`), 'mindray-chem').observations[0];
+  const pos = read('Positive+');
+  assert.deepEqual([pos.code, pos.value, pos.valueType, pos.qualitative, pos.abnormal], ['HBsAg', '5.32', 'NM', 'positive', 'N']);
+  for (const [obx9, q] of [['Negative-', 'negative'], ['weak positive+-', 'positive'], ['Reactive', 'positive'], ['Nonreactive', 'negative'],
+    ['Non-Reactive', 'negative'], ['POSITIVE', 'positive'], ['+', 'positive'], ['-', 'negative'], ['+-', 'positive']]) {
+    assert.equal(read(obx9).qualitative, q, obx9);
+  }
+  // Пусто и не качественный ответ (у BS-200 OBX-9 — целое «вероятность») — нет ответа.
+  for (const obx9 of ['', '1', '0.85']) assert.equal(read(obx9).qualitative, undefined, JSON.stringify(obx9));
+  // Количественная строка CL — как была.
+  const [tsh] = readResult(CL_ORU('OBX|1|NM|TSH|TSH|2.350000|uIU/mL|-|N|||F||2.350000|20261005101400||admin|0|'), 'mindray-chem').observations;
+  assert.deepEqual([tsh.value, tsh.valueType, tsh.qualitative], ['2.35', 'NM', undefined]);
+  // OBX-9 читается только у химии/ИХЛА Mindray.
+  assert.equal(readResult(CL_ORU('OBX|1|ST|HBsAg|HBsAg|5.32|COI|-|N|Positive+||F'), 'default').observations[0].qualitative, undefined);
+});
+
+test('D6 + D5: CL-900i — «нет результата» в OBX-5: не пишется; OBX-9 показан в причине для сверки', () => {
+  const [o] = readResult(CL_ORU('OBX|2|ST|HCV|Anti-HCV|-268435455|COI|-|N|Positive+||F||-268435455|20261005101400||admin|0|'), 'mindray-chem').observations;
+  assert.equal(o.hold, 'прибор: нет результата «-268435455», OBX-13 «-268435455», OBX-9 «Positive+» — для сверки, в бланк не пишется');
+});

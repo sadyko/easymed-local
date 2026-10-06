@@ -466,11 +466,20 @@ function flagFromClinic(num, low, high) {
  * (мигр. 006), и запись с NULL сорвалась бы целиком. Приём пишет умолчание
  * колонки — как ручной ввод (rpc/lab.js saveLabResults); печатный бланк
  * (lab-doc.js labFlagFor) и так рисует пустой флаг как «N».
- * @param {{num?:number|null, refLow?:number|null, refHigh?:number|null, abnormal?:string, deviceRange?:string}} o
+ *
+ * LIS_VENDOR_EXACT_V1 (D6) — качественный ответ прибора (OBX-9 CL-900i и химии
+ * Mindray, wire.js qualitative) — основание сильнее OBX-8: «положительно» (и
+ * слабо, и «реактивно») — «Отклонение», и диапазон клиники «нормой» его не
+ * перекрывает (выше/ниже — перекрывает: направление точнее); «отрицательно» —
+ * «Норма», если диапазон клиники не сказал иного (инвариант 3).
+ * @param {{num?:number|null, refLow?:number|null, refHigh?:number|null, abnormal?:string, deviceRange?:string, qualitative?:string}} o
  * @returns {'normal'|'low'|'high'|'abnormal'|'critical'|null}
  */
-export function resultFlag({ num = null, refLow = null, refHigh = null, abnormal = '', deviceRange = '' } = {}) {
-  return flagFromClinic(num, refLow, refHigh) || flagFromDevice(abnormal, deviceRange);
+export function resultFlag({ num = null, refLow = null, refHigh = null, abnormal = '', deviceRange = '', qualitative = '' } = {}) {
+  const clinic = flagFromClinic(num, refLow, refHigh);
+  if (qualitative === 'positive') return clinic && clinic !== 'normal' ? clinic : 'abnormal';
+  if (qualitative === 'negative') return clinic || 'normal';
+  return clinic || flagFromDevice(abnormal, deviceRange);
 }
 
 /**
@@ -778,11 +787,15 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       const num = obs.valueType === 'NM' && /^-?\d+(\.\d+)?$/.test(value) ? parseFloat(value) : null;
       // LIS_VENDOR_EXACT_V1 (D0) — основание флага (resultFlag); без основания
       // — умолчание колонки 'normal': flag NOT NULL (мигр. 006), NULL сорвал бы запись.
-      const flag = resultFlag({ num, refLow: a.ref_low, refHigh: a.ref_high, abnormal: obs.abnormal, deviceRange: obs.range }) || 'normal';
+      const flag = resultFlag({ num, refLow: a.ref_low, refHigh: a.ref_high, abnormal: obs.abnormal, deviceRange: obs.range,
+        qualitative: obs.qualitative }) || 'normal';   // LIS_VENDOR_EXACT_V1 (D6) — ответ OBX-9
       // Инвариант 3 и 4: диапазон, имя и единица — из панели. Диапазон прибора
       // берётся только там, где клиника свой не задала.
+      // LIS_VENDOR_EXACT_V1 (D6) — OBX-7 «-» (Mindray: диапазона нет) — пусто,
+      // а не «-» в графе «Референс» бланка.
       const range = a.ref_text
-        || (a.ref_low != null || a.ref_high != null ? `${a.ref_low == null ? '' : a.ref_low}-${a.ref_high == null ? '' : a.ref_high}` : (obs.range || ''));
+        || (a.ref_low != null || a.ref_high != null ? `${a.ref_low == null ? '' : a.ref_low}-${a.ref_high == null ? '' : a.ref_high}`
+          : (hasDeviceRange(obs.range) ? obs.range : ''));
 
       const existing = db.prepare('SELECT id FROM lab_results WHERE visit_service_id = ? AND parameter = ?').get(order.id, a.name);
       if (existing) {
