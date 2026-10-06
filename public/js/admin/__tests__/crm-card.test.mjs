@@ -2114,6 +2114,7 @@ test('врач с живой очередью: окно дат не спраши
     'у врача с живой очередью спросили свободное время — слотов он не держит');
   assert.strictEqual(timeSelects(sheet).length, 0, 'у врача с живой очередью окно дат предлагает выбрать время');
   assert.ok(/живая очередь/.test(textOf(sheet)), 'окно дат не говорит, что у врача живая очередь');
+  assert.ok(!/в день прихода/.test(textOf(sheet)), 'сегодняшний визит живой очереди заводится сразу — «в день прихода» здесь неправда');
 
   CALLS.length = 0; TOASTS.length = 0;
   saveSheet(sheet);
@@ -2156,6 +2157,18 @@ test('в одном дне врач по записи и врач с живой 
   assert.ok(ev[0].body.book, 'врач по записи остался без слота');
   assert.strictEqual(ev[0].body.book.doctor_id, DOCTOR.id, 'слот занят не у врача по записи');
   assert.strictEqual(ev[0].body.book.service_id, DOC_SVC.id);
+  // CLINIC_API_FIX_V1 (ревью 385bb51) — врач визита — врач слота, а строка живой
+  // очереди того же дня ложится в тот же визит.
+  assert.strictEqual(ev[0].body.doctor_id, DOCTOR.id, 'визит дня заведён не к врачу, который держит слот');
+  const lqLine = CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'insert')
+    .flatMap((c) => [].concat(c.values)).find((v) => v.doctor_id === LQ_DOCTOR.id);
+  assert.ok(lqLine, 'строка живой очереди не записана в заявку');
+  const link = visitLinks();
+  assert.strictEqual(link.length, 1, 'визит не проставлен строкам дня: ' + JSON.stringify(link));
+  assert.strictEqual(link[0].values.visit_id, 555);
+  const covers = (filters, row) => (filters || []).every((f) => f.op === 'eq' && String(row[f.col]) === String(f.val));
+  assert.ok(covers(link[0].filters, lqLine),
+    'строка живой очереди не связана с визитом дня: ' + JSON.stringify({ filters: link[0].filters, line: lqLine }));
   SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
   window.easymed.state.user = null;
 });
@@ -2168,6 +2181,9 @@ test('врач с живой очередью на будущий день: ви
   const { sheet } = await doctorSheet({ doctors: [DOCTOR, LQ_DOCTOR] });
   await fillRow(sheet, 0, FUTURE_DAY, LQ_DOCTOR.id);
   assert.strictEqual(timeSelects(sheet).length, 0, 'у врача с живой очередью окно дат предлагает выбрать время');
+  // CLINIC_API_FIX_V1 (ревью 385bb51) — оператор должен понимать, что визита ещё нет.
+  assert.ok(/живая очередь — в день прихода/.test(textOf(sheet)),
+    'окно дат не говорит, что визит живой очереди заведут в день прихода: ' + textOf(sheet).slice(0, 300));
 
   CALLS.length = 0; TOASTS.length = 0;
   saveSheet(sheet);
@@ -2181,5 +2197,58 @@ test('врач с живой очередью на будущий день: ви
   const ins = CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'insert');
   assert.ok(ins.some((c) => [].concat(c.values).some((v) => v.doctor_id === LQ_DOCTOR.id && v.scheduled_date === FUTURE_DAY)),
     'строка заявки потеряла врача или день: ' + JSON.stringify(ins.map((c) => c.values)));
+  window.easymed.state.user = null;
+});
+
+// CLINIC_API_FIX_V1 (ревью 385bb51) — ЗАПИСАННУЮ СТРОКУ В ЖИВУЮ ОЧЕРЕДЬ МОЛЧА НЕ
+// ПЕРЕВОДЯТ. Строка держит 15:00 у врача по записи; ensure_visit без book визит
+// дня берёт как есть и врача ему не меняет — прежний врач держал бы своё время,
+// а оператор видел бы «Записано». Отменять запись — в календаре, не отсюда.
+test('записанную строку перевели к врачу с живой очередью — сохранение отказывает и ничего не трогает', async () => {
+  VISITS = [Object.assign(bookedVisit('15:00'), { doctor_id: DOCTOR.id, status: 'scheduled' })];
+  const { sheet } = await doctorSheet({ doctors: [DOCTOR, LQ_DOCTOR], lines: [BOOKED_LINE] });
+  await tick(60);
+  const sel = doctorSelects(sheet)[0];
+  assert.ok(sel, 'у записанной строки пропал выбор врача');
+  sel.value = String(LQ_DOCTOR.id); fire(sel);
+  await tick(60);
+
+  CALLS.length = 0; TOASTS.length = 0; RPC.length = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  assert.ok(someToast(/Запись к Петров Пётр уже стоит — отмените её в календаре, чтобы перевести в живую очередь/),
+    'перевод записанной строки в живую очередь не отказан словами: ' + JSON.stringify(TOASTS));
+  assert.strictEqual(rpcOf('ensure_visit').length, 0, 'визит дня тронут, хотя прежняя запись не отменена');
+  const writes = CALLS.filter((c) => (c.table === 'crm_requests' || c.table === 'crm_request_services') && c.op !== 'select');
+  assert.deepStrictEqual(writes, [], 'заявка или её строки изменены при отказе: ' + JSON.stringify(writes));
+  VISITS = [];
+  window.easymed.state.user = null;
+});
+
+// CLINIC_API_FIX_V1 (ревью 80ab4dd) — края правила consultationFor: из двух строк
+// врача берётся последняя (ORDER BY id DESC), пустая цена — 0, а «не ведёт»
+// (available = 0) цену строки не отменяет — касса его не смотрит.
+test('цена консультации: из двух строк врача — последняя, пустая — 0, «не ведёт» цену не отменяет — как в кассе', async () => {
+  VISITS = [];
+  SERVICES = [DOC_SVC];
+  DOCTORS = [DOCTOR, DOC_NO_ROW, DOC_FREE];
+  CONSULTS = [CONSULT_TYPE];
+  CONSULT_PRICES = [
+    { id: 7, doctor_id: 31, consultation_type_id: 5, price: 170000, available: 1, is_free: 0 },
+    { id: 4, doctor_id: 31, consultation_type_id: 5, price: 150000, available: 1, is_free: 0 },
+    { id: 5, doctor_id: 32, consultation_type_id: 5, price: null, available: 1, is_free: 0 },
+    { id: 6, doctor_id: 33, consultation_type_id: 5, price: 130000, available: 0, is_free: 0 },
+  ];
+  REQ_LINES = [consultLine(921, 31), consultLine(922, 32), consultLine(923, 33)];
+  const modal = await openRequest({
+    id: 1, status: 'in_process', service_id: null, scheduled_date: BOOK_DAY,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  await tick(80);
+  assert.deepStrictEqual(priceTexts(modal), ['170000 сум', '0 сум', '130000 сум'],
+    'цена консультации разошлась с кассой: ' + JSON.stringify(priceTexts(modal)));
+  SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
   window.easymed.state.user = null;
 });

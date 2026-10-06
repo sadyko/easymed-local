@@ -2428,7 +2428,8 @@ async function paint() {
                         // CLINIC_API_FIX_V1 — живая очередь: времени нет, спрашивать нечего.
                         if (isLiveQueueDoc(p.doctor_id)) {
                             setLineTime(p, '');
-                            timeCell.appendChild(note('живая очередь'));
+                            // CLINIC_API_FIX_V1 (ревью 385bb51) — не сегодня визита ещё нет: его заведут в день прихода.
+                            timeCell.appendChild(note(p.date && p.date !== localTodayIso() ? 'живая очередь — в день прихода' : 'живая очередь'));
                             return;
                         }
                         if (!p.date) { timeCell.appendChild(note('сначала дата')); return; }
@@ -2760,6 +2761,20 @@ async function paint() {
                 const noTime = picked.filter(p => p.status !== 'done' && p.doctor_id && !p.start_iso && !keptBooking(p)
                     && !isLiveQueueDoc(p.doctor_id));   // CLINIC_API_FIX_V1 — у живой очереди времени нет
                 if (noTime.length) { toast(trf('Не выбрано время: {names}', { names: noTime.map(p => p.name).join(', ') }), 'fail'); return; }
+                // CLINIC_API_FIX_V1 (ревью 385bb51) — ЗАПИСАННУЮ СТРОКУ В ЖИВУЮ ОЧЕРЕДЬ
+                // НЕ ПЕРЕВОДЯТ МОЛЧА. Строка держит время врача по записи; ensure_visit
+                // без book визит дня берёт как есть и врача ему не меняет — прежний
+                // врач так и держал бы своё время, а оператор видел бы «Записано».
+                // Отменять чужую запись отсюда нельзя: это делают в календаре.
+                const toQueue = picked.find(p => p.status !== 'done' && p.visit_id && p.booked_doctor_id
+                    && isLiveQueueDoc(p.doctor_id) && String(p.booked_doctor_id) !== String(p.doctor_id)
+                    && !isLiveQueueDoc(p.booked_doctor_id));
+                if (toQueue) {
+                    const was = docCatalog.find((d) => String(d.id) === String(toQueue.booked_doctor_id));
+                    toast(trf('Запись к {doctor} уже стоит — отмените её в календаре, чтобы перевести в живую очередь',
+                        { doctor: (was && was.full_name) || '—' }), 'fail');
+                    return;
+                }
                 saveAll.disabled = true;
                 const row = await persist();
                 if (!row) { saveAll.disabled = false; return; }

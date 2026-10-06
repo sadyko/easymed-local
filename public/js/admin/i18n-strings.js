@@ -6817,6 +6817,9 @@ export const STRINGS = {
   "добавлено услуг: {n}": {"en":"services added: {n}","ru":"добавлено услуг: {n}","uz":"qo'shilgan xizmatlar: {n}"},
   "добавлять нечего": {"en":"nothing to add","ru":"добавлять нечего","uz":"qo'shadigan narsa yo'q"},
   "живая очередь": {"en":"walk-in queue","ru":"живая очередь","uz":"jonli navbat"},
+  // CLINIC_API_FIX_V1 (ревью 385bb51) — окно «Даты приёма» заявки: живая очередь не на сегодня; перевод записанной строки в живую очередь (views/crm.js)
+  "живая очередь — в день прихода": {"en":"walk-in queue — on the day of arrival","ru":"живая очередь — в день прихода","uz":"jonli navbat — kelgan kunida"},   // CLINIC_API_FIX_V1
+  "Запись к {doctor} уже стоит — отмените её в календаре, чтобы перевести в живую очередь": {"en":"An appointment with {doctor} is already booked — cancel it in the calendar to move the patient to the walk-in queue","ru":"Запись к {doctor} уже стоит — отмените её в календаре, чтобы перевести в живую очередь","uz":"{doctor} qabuliga yozuv allaqachon bor — jonli navbatga o‘tkazish uchun uni kalendarda bekor qiling"},   // CLINIC_API_FIX_V1
   "Живая очередь — приём без записи": {"en":"Walk-in queue — a visit with no booking","ru":"Живая очередь — приём без записи","uz":"Jonli navbat — yozuvsiz qabul"},
   "Заметка (необязательно)": {"en":"Note (optional)","ru":"Заметка (необязательно)","uz":"Izoh (ixtiyoriy)"},
   "Занятость врача не загрузилась: {msg}": {"en":"The doctor's availability did not load: {msg}","ru":"Занятость врача не загрузилась: {msg}","uz":"Shifokor bandligi yuklanmadi: {msg}"},
