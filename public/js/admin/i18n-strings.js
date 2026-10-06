@@ -814,6 +814,12 @@ export const STRINGS = {
   "кодировка Unicode — выберите UTF-8": {"en":"Unicode encoding — choose UTF-8","ru":"кодировка Unicode — выберите UTF-8","uz":"Unicode kodlash — UTF-8 ni tanlang"},   // LIS_VENDOR_EXACT_V1
   "HL7 без рамки MLLP": {"en":"HL7 without MLLP framing","ru":"HL7 без рамки MLLP","uz":"MLLP ramkasiz HL7"},   // LIS_VENDOR_EXACT_V1
   "неизвестный формат": {"en":"unknown format","ru":"неизвестный формат","uz":"noma’lum format"},   // LIS_VENDOR_EXACT_V1
+  // LIS_VENDOR_EXACT_V1 — D2: «Добавить» прибор — только с моделью или «общим HL7» (rpc/lis.js lis_device_add, lab-devices.js)
+  "Другой анализатор (общий HL7)": {"en":"Other analyzer (generic HL7)","ru":"Другой анализатор (общий HL7)","uz":"Boshqa analizator (umumiy HL7)"},   // LIS_VENDOR_EXACT_V1
+  "Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».": {"en":"Choose the analyzer model: without it Easy-Med will read the wrong fields. Not in the list — choose «Other analyzer (generic HL7)».","ru":"Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».","uz":"Analizator modelini tanlang: usiz Easy-Med noto‘g‘ri maydonlarni o‘qiydi. Ro‘yxatda yo‘q bo‘lsa — «Boshqa analizator (umumiy HL7)» ni tanlang."},   // LIS_VENDOR_EXACT_V1
+  "Такой модели нет в списке — обновите страницу и выберите модель снова.": {"en":"This model is not in the list — reload the page and choose the model again.","ru":"Такой модели нет в списке — обновите страницу и выберите модель снова.","uz":"Bunday model ro‘yxatda yo‘q — sahifani yangilang va modelni qayta tanlang."},   // LIS_VENDOR_EXACT_V1
+  "Выберите что-то одно: модель или «Другой анализатор (общий HL7)».": {"en":"Choose one: a model or «Other analyzer (generic HL7)».","ru":"Выберите что-то одно: модель или «Другой анализатор (общий HL7)».","uz":"Bittasini tanlang: model yoki «Boshqa analizator (umumiy HL7)»."},   // LIS_VENDOR_EXACT_V1
+  "Прибор уже добавлен — меняйте его через «Изменить».": {"en":"The device has already been added — change it with «Change».","ru":"Прибор уже добавлен — меняйте его через «Изменить».","uz":"Qurilma allaqachon qo‘shilgan — uni «O'zgartirish» orqali o‘zgartiring."},   // LIS_VENDOR_EXACT_V1
   // LIS_VENDOR_EXACT_V1 — END
   // LIS_ANALYZER_LIST_V1 (ревью 2026-09-29, I1) — находок нет, но приборы в клинике есть
   "Новых анализаторов пока нет.": {"en":"No new analyzers yet.","ru":"Новых анализаторов пока нет.","uz":"Hozircha yangi analizatorlar yo‘q."},

@@ -9,6 +9,10 @@ import { isReadOnlyRpc } from '../control/gate.js';   // LIS_MINDRAY_CODES_V1 (�
 import { ingestMessage } from '../../lis/ingest.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 2
 import { ABANDONED_DETAIL_PREFIX } from '../../lis/inbox.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 10
 import { saveLabResults } from './lab.js';   // LIS_REAL_ANALYZERS_V1 — ревью R6, п. 2: касса не открывается
+// LIS_VENDOR_EXACT_V1 — D2: находка заводится тем же путём, что у слушателя (server/lis/index.js).
+import { ensureDevice } from '../../lis/discover.js';
+import { receiveMessage } from '../../lis/receive.js';
+import { readEnvelope } from '../../lis/wire.js';
 
 function fresh() {
   const db = openDb(':memory:');
@@ -1190,5 +1194,118 @@ test('D14: lis_listeners отдаёт peers слушателя — поля ка
   // Живой вызов: peers — всегда список.
   const db = fresh();
   assert.ok(Array.isArray(lisListeners(db, {}, LAB).peers));
+  db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D2: «Добавить» найденный прибор — только с моделью ──
+// BS-240, CL-900i и A1000 оставляют MSH-3/4 пустыми — модель по имени не
+// узнать, и строка находки заводится без модели. Без модели приём читает
+// общим правилом (номер пробы — OBR-3), а у BS-240 и CL-900i там номер прогона
+// прибора: результат лёг бы не тому пациенту. Поэтому «Добавить» (RPC
+// lis_device_add) — только с выбранной моделью или с явным «Другой анализатор
+// (общий HL7)»; прежние строки (уже добавленные) не трогаются.
+// Находка заводится тем же путём, что у слушателя (index.js: readEnvelope →
+// ensureDevice → receiveMessage), из кадра справочника.
+const BS240_FRAME = [   // mindray-bs-240.md §3.1, настоящий BS-240 (2017): MSH-3/4 пустые; значения синтетические
+  'MSH|^~\\&|||||20170413120602||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+  'PID|2|||||||O|||||||||||||||||||||||',
+  'OBR|2|LAB-000123|1|^|N|20170413114023|20170413113910|20170413113910||1^12||||20170413113910|Serum',
+  'OBX|1|NM|GLU|GLUCOSE HUMAN|5.400000|mmol/L|-|N|||F||5.400000|20170413115600|||0|',
+].join('\r') + '\r';
+const BC5380_FRAME = [   // mindray-bc-5300.md §7 (App. C, BC-5300/5380): модели BC-5380 в списке нет; значения синтетические
+  'MSH|^~\\&|BC-5380|Mindray|||20080419104618||ORU^R01|1|P|2.3.1||||||UNICODE',
+  'OBR|1||LAB-000124|00001^Automated Count^99MRC||20071207080000|20071207160000|||Mindray',
+  'OBX|6|NM|6690-2^WBC^LN||4.63|10*9/L|11.00-12.00|L|||F||E',
+].join('\r') + '\r';
+const BS200_NAMED = [   // mindray-bs-200.md §3.1: BS200.exe называет себя Mindray / BS-200
+  'MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||',
+  'OBR|1|LAB-000125|12|Mindray^BS-200|N||20261005101200',
+  'OBX|1|NM|GLU|Glucose|5.230000|mmol/L|3.900000-6.100000|N|||F|||20261005101200',
+].join('\r') + '\r';
+
+/** Находка — тем же путём, что у слушателя (server/lis/index.js onMessage). */
+function foundFrom(db, raw, ip) {
+  const env = readEnvelope(raw);
+  const found = ensureDevice(db, { sendingApp: env.app, sendingFacility: env.facility, peer: ip, port: 2575, allowCreate: true });
+  receiveMessage(db, raw, { peer: ip, deviceId: found.device.id });
+  return found.device;
+}
+const deviceRow = (db, id) => db.prepare('SELECT name, profile, added, model_confirmed FROM lab_devices WHERE id = ?').get(id);
+
+test('D2: найденный BS-240 не назвал модель — «Добавить» без модели — отказ; с моделью — добавлен, модель подтверждена', async () => {
+  const { lisDeviceAdd } = await import('./lis.js');
+  assert.equal(typeof lisDeviceAdd, 'function', 'RPC lis_device_add');
+  const db = fresh();
+  const dev = foundFrom(db, BS240_FRAME, '192.168.1.60');
+  assert.deepEqual(deviceRow(db, dev.id), { name: dev.name, profile: '', added: 0, model_confirmed: 0 }, 'находка без модели');
+
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'Биохимия' }, LAB), (e) => {
+    assert.equal(e.status, 400);
+    assert.equal(e.code, 'model_required', 'экран узнаёт отказ по коду');
+    assert.equal(e.message, 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».');
+    return true;
+  });
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'Биохимия', profile: 'mindray-bs-9999' }, LAB),
+    (e) => e.status === 400 && e.message === 'Такой модели нет в списке — обновите страницу и выберите модель снова.');
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'Биохимия', profile: 'mindray-bs-240', generic: true }, LAB),
+    (e) => e.status === 400 && e.message === 'Выберите что-то одно: модель или «Другой анализатор (общий HL7)».');
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: '  ', profile: 'mindray-bs-240' }, LAB),
+    (e) => e.status === 400 && e.message === 'Укажите название прибора');
+  assert.deepEqual(deviceRow(db, dev.id), { name: dev.name, profile: '', added: 0, model_confirmed: 0 }, 'отказы ничего не записали');
+
+  const out = lisDeviceAdd(db, { id: dev.id, name: ' Биохимия ', profile: 'mindray-bs-240' }, LAB);
+  assert.equal(out.ok, true);
+  assert.deepEqual(deviceRow(db, dev.id), { name: 'Биохимия', profile: 'mindray-bs-240', added: 1, model_confirmed: 1 });
+  // Повторное «Добавить» (вторая вкладка, двойное нажатие) — отказ словами, строка не тронута.
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'Другое', profile: 'mindray-bs-240' }, LAB),
+    (e) => e.status === 409 && e.code === 'already_added' && e.message === 'Прибор уже добавлен — меняйте его через «Изменить».');
+  assert.equal(deviceRow(db, dev.id).name, 'Биохимия');
+  db.close();
+});
+
+test('D2: «Другой анализатор (общий HL7)» — явный выбор: модель пустая, но подтверждена человеком', async () => {
+  const { lisDeviceAdd } = await import('./lis.js');
+  const db = fresh();
+  const dev = foundFrom(db, BC5380_FRAME, '192.168.1.61');
+  assert.equal(deviceRow(db, dev.id).profile, '', 'BC-5380 по имени не узнаётся');
+  lisDeviceAdd(db, { id: dev.id, name: 'Гематология 2', generic: true }, LAB);
+  assert.deepEqual(deviceRow(db, dev.id), { name: 'Гематология 2', profile: '', added: 1, model_confirmed: 1 });
+  db.close();
+});
+
+test('D2: находка назвала модель — «Добавить» без выбора оставляет догадку (как прежде), пометка «проверьте модель» остаётся', async () => {
+  const { lisDeviceAdd } = await import('./lis.js');
+  const db = fresh();
+  const dev = foundFrom(db, BS200_NAMED, '192.168.1.62');
+  assert.equal(deviceRow(db, dev.id).profile, 'mindray-bs-200');
+  lisDeviceAdd(db, { id: dev.id, name: 'BS-200' }, LAB);
+  assert.deepEqual(deviceRow(db, dev.id), { name: 'BS-200', profile: 'mindray-bs-200', added: 1, model_confirmed: 0 });
+  db.close();
+});
+
+test('D2: lis_device_add — только лаборатория; номер прибора строгий; прибор обязан существовать; заведён в карте RPC, это запись', async () => {
+  const { lisDeviceAdd } = await import('./lis.js');
+  const db = fresh();
+  const dev = foundFrom(db, BS240_FRAME, '192.168.1.63');
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'X', profile: 'mindray-bs-240' }, { role: 'reception' }), (e) => e.status === 403);
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'X', profile: 'mindray-bs-240' }, null), (e) => e.status === 403);
+  for (const bad of [undefined, null, 0, -1, 1.5, 'abc', '0x1', '', true, [1], {}]) {
+    assert.throws(() => lisDeviceAdd(db, { id: bad, name: 'X', profile: 'mindray-bs-240' }, LAB),
+      (e) => e.status === 400 && e.message === 'Нужен номер прибора', 'id=' + String(bad));
+  }
+  assert.throws(() => lisDeviceAdd(db, { id: 999, name: 'X', profile: 'mindray-bs-240' }, LAB), (e) => e.status === 404 && e.message === 'Прибор не найден');
+  assert.equal(typeof RPC.lis_device_add, 'function', 'заведён в карте RPC');
+  assert.equal(isReadOnlyRpc('lis_device_add'), false, 'запись: клиника с просроченной лицензией приборы не добавляет');
+  db.close();
+});
+
+test('D2: прежние строки работают как прежде — заведённый без модели и уже добавленный прибор принимает пробы', () => {
+  const db = fresh();
+  // Строка, заведённая до обновления: добавлена, модели нет, модель не подтверждалась.
+  db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled) VALUES (7,'Старый','','mllp','192.168.1.64',2575,1)").run();
+  const out = receiveMessage(db, BS240_FRAME, { peer: '192.168.1.64', deviceId: 7 });
+  assert.equal(out.kind, 'result');
+  assert.ok(db.prepare('SELECT COUNT(*) AS n FROM lab_device_messages WHERE device_id = 7').get().n >= 1, 'проба принята в лоток прибора');
+  assert.deepEqual(deviceRow(db, 7), { name: 'Старый', profile: '', added: 1, model_confirmed: 0 }, 'строку никто не правил');
   db.close();
 });

@@ -506,3 +506,61 @@ export async function lisDeviceDelete(db, args, user) {
   await startLisListeners(db);
   return { ok: true, detached };
 }
+
+/**
+ * LIS_VENDOR_EXACT_V1 — D2: «Добавить» найденный прибор (окно «Добавить прибор»
+ * → «Найдены в сети»).
+ *
+ * BS-240, CL-900i и A1000 оставляют MSH-3/4 пустыми: модель по имени не узнать,
+ * и находка заводится без модели. Без модели приём читает общим правилом
+ * (номер пробы — OBR-3), а у BS-240 и CL-900i в OBR-3 номер прогона прибора —
+ * результат лёг бы не тому пациенту. Поэтому прибор без узнанной модели
+ * добавляется только с выбранной моделью (profile) или с явным «Другой
+ * анализатор (общий HL7)» (generic: true — модель пустая, model_confirmed = 1:
+ * человек проверил, что модели нет в списке). Приём от этого не меняется: от
+ * пустой модели он читает, как прежде.
+ *
+ * Раньше «Добавить» был голой записью {name, added: 1} в /api/db, и проверка
+ * жила только в экране. Прежние строки (уже добавленные, в том числе без
+ * модели) этот вызов не трогает: им — «Изменить», как прежде.
+ * @returns {{ok:true, id:number, name:string, profile:string, added:1, model_confirmed:0|1}}
+ */
+export function lisDeviceAdd(db, args, user) {
+  guard(user);
+  const a = args || {};
+  const id = deviceIdArg(a.id);
+  if (!id) throw new LisError('Нужен номер прибора');
+  const name = typeof a.name === 'string' ? a.name.trim() : '';
+  if (!name) throw new LisError('Укажите название прибора');
+  const profile = typeof a.profile === 'string' ? a.profile.trim() : '';
+  const generic = a.generic === true;
+  if (profile && generic) throw new LisError('Выберите что-то одно: модель или «Другой анализатор (общий HL7)».');
+  if (profile && !getProfile(profile)) throw new LisError('Такой модели нет в списке — обновите страницу и выберите модель снова.');
+
+  return db.transaction(() => {
+    const dev = db.prepare('SELECT id, profile, added FROM lab_devices WHERE id = ?').get(id);
+    if (!dev) throw new LisError('Прибор не найден', 404);
+    if (Number(dev.added) === 1) {
+      const err = new LisError('Прибор уже добавлен — меняйте его через «Изменить».', 409);
+      err.code = 'already_added';   // вторая вкладка или двойное нажатие: экран перечитает список
+      throw err;
+    }
+    const values = { name, added: 1 };
+    if (profile) Object.assign(values, { profile, model_confirmed: 1 });
+    else if (generic) Object.assign(values, { profile: '', model_confirmed: 1 });
+    else if (!getProfile(dev.profile)) {
+      // Прибор себя не назвал (или его модели больше нет в списке), а человек не выбрал.
+      const err = new LisError(MODEL_REQUIRED);
+      err.code = 'model_required';   // по коду экран показывает свой перевод
+      throw err;
+    }
+    // Догадка сервера без выбора — как прежде: модель остаётся, пометка «проверьте модель» — тоже.
+    const cols = Object.keys(values);
+    db.prepare(`UPDATE lab_devices SET ${cols.map((c) => c + ' = ?').join(', ')} WHERE id = ?`).run(...cols.map((c) => values[c]), id);
+    const row = db.prepare('SELECT id, name, profile, added, model_confirmed FROM lab_devices WHERE id = ?').get(id);
+    return { ok: true, ...row };
+  })();
+}
+
+// LIS_VENDOR_EXACT_V1 — D2: тот же текст показывает экран (lab-devices.js), один ключ словаря.
+const MODEL_REQUIRED = 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».';
