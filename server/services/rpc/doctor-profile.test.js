@@ -322,3 +322,38 @@ test('CLINIC_API_FIX_V1: свой врач филиала (is_local = 1) сох�
   assert.equal(db.prepare('SELECT bio_ru FROM users WHERE id = 2').get().bio_ru, 'Новое');
   assert.deepEqual(db.prepare('SELECT specialty_slug FROM user_specialties WHERE user_id = 2').all().map((r) => r.specialty_slug), ['kardiolog']);
 });
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 — ФОТО ТОЛЬКО ИЗ СВОЕЙ ПАПКИ. Путь фото врача —
+// doctor-photos/doctors/<id врача>/<ключ> (routes/storage.js photoTarget;
+// экран кладёт туда же: views/doctor-profile.js photoPrefix), а проверка
+// принимала любую папку корзины: врач 2 ставил себе фото врача 3 — и партнёрам
+// уходило чужое лицо под его именем.
+// ---------------------------------------------------------------------------
+const OWN_PHOTO_MSG = 'Поставить можно только своё фото — загруженное в «Моём профиле».';
+
+test('CLINIC_API_FIX_V1: photo_url — только из папки самого врача; чужая папка — 400 с переводом', () => {
+  const db = seed();
+  const P = '/api/storage/doctor-photos/doctors/';
+  for (const bad of [P + '3/a.jpg', P + '7/1700000000000-abc123-portret.jpg', P + '22/a.jpg', P + '02/a.jpg']) {
+    assert.throws(() => updateMyDoctorProfile(db, { p: { photo_url: bad } }, doc),
+      (e) => e.status === 400 && e.message === OWN_PHOTO_MSG, bad);
+  }
+  assert.equal(db.prepare('SELECT photo_url FROM users WHERE id = 2').get().photo_url, null, 'чужое фото записано');
+  const e = STRINGS[OWN_PHOTO_MSG];
+  assert.ok(e && e.ru && e.uz && e.en, 'отказу нужен перевод в i18n-strings.js');
+  // своя папка — как её строит экран: doctors/<id>/<время>-<случайное>-<имя файла>
+  const own = P + '2/1700000000000-abc123-portret.jpg';
+  assert.doesNotThrow(() => updateMyDoctorProfile(db, { p: { photo_url: own } }, doc));
+  assert.equal(db.prepare('SELECT photo_url FROM users WHERE id = 2').get().photo_url, own);
+});
+
+test('CLINIC_API_FIX_V1: photo_url — выход из своей папки («..», закодированный %2e%2e, вложенная папка, пустой ключ) — отказ', () => {
+  const db = seed();
+  const P = '/api/storage/doctor-photos/doctors/2/';
+  for (const bad of [P + '../3/a.jpg', P + '..', P + '%2e%2e/3/a.jpg', P + '%2E%2E%2F3%2Fa.jpg', P + '..%2F3%2Fa.jpg',
+    P + 'sub/a.jpg', P, P + '.', P + '%zz.jpg']) {
+    assert.throws(() => updateMyDoctorProfile(db, { p: { photo_url: bad } }, doc), (e) => e.status === 400, bad);
+  }
+  assert.equal(db.prepare('SELECT photo_url FROM users WHERE id = 2').get().photo_url, null);
+});

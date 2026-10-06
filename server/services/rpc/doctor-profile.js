@@ -54,7 +54,9 @@ export const PROFILE_ENTRY_KEYS = Object.freeze([...ENTRY_KEYS]);
 const MAX_TEXT = 5000;
 const MAX_ENTRIES = 50;
 
-function cleanValue(key, v) {
+// CLINIC_API_FIX_V1 — ownerId: чей это профиль (у «Моего профиля» — сам врач).
+// Задан — фото принимается только из папки этого врача (см. photo_url ниже).
+function cleanValue(key, v, ownerId) {
   if (TEXT_KEYS.includes(key)) {
     if (v == null) return '';
     if (typeof v !== 'string') throw new RpcError(key + ' must be text.', 400);
@@ -90,6 +92,23 @@ function cleanValue(key, v) {
     // прошёл бы проверку и раскодировался уже в хранилище.
     if (!/^\/api\/storage\/doctor-photos\/[A-Za-z0-9._~\/-]+$/.test(s) || s.includes('..') || s.length > 500) {
       throw new RpcError('Фото должно быть загружено в хранилище клиники.', 400);
+    }
+    // CLINIC_API_FIX_V1 — ТОЛЬКО ИЗ СВОЕЙ ПАПКИ. Путь фото врача —
+    // doctors/<id врача>/<ключ> (routes/storage.js photoTarget), и экран кладёт
+    // файл туда же (views/doctor-profile.js photoPrefix → getPublicUrl:
+    // /api/storage/doctor-photos/doctors/<id>/<ключ>). Проверка выше принимала
+    // любую папку корзины — врач мог поставить себе фото другого врача, и оно
+    // ушло бы партнёрам под его именем. Теперь: ровно папка владельца (с «/»
+    // на конце — doctors/2 не префикс doctors/22) и один сегмент ключа без
+    // «..» — и в раскодированном виде тоже.
+    if (ownerId !== undefined) {
+      const own = '/api/storage/doctor-photos/doctors/' + ownerId + '/';
+      const rest = s.startsWith(own) ? s.slice(own.length) : null;
+      let decoded = null;
+      try { decoded = decodeURIComponent(s); } catch { decoded = null; }
+      if (rest === null || !/^[A-Za-z0-9_][A-Za-z0-9._~-]*$/.test(rest) || decoded === null || decoded.includes('..')) {
+        throw new RpcError('Поставить можно только своё фото — загруженное в «Моём профиле».', 400);
+      }
     }
     return s;
   }
@@ -162,12 +181,15 @@ function cleanConditions(list) {
 // DOCTOR_PUBLIC_PROFILE_V1 — те же правила для карточки сотрудника
 // (routes/users.js): админ правит профиль врача теми же проверками, что и сам
 // врач. Возвращает { ключ: значение для колонки }; неизвестный ключ — отказ.
-export function cleanProfileFields(p) {
+// CLINIC_API_FIX_V1 — ownerId (необязательный): id врача, чей это профиль;
+// задан — фото только из его папки. Карточка сотрудника (routes/users.js) зовёт
+// без него, как прежде.
+export function cleanProfileFields(p, ownerId) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) throw new RpcError('Публичный профиль передан неверно.', 400);
   const values = {};
   for (const [k, v] of Object.entries(p)) {
     if (!PROFILE_KEYS.includes(k)) throw rpcT(RpcError, 'Поле {field} в профиле менять нельзя.', { field: k }, 400);
-    values[k] = cleanValue(k, v);
+    values[k] = cleanValue(k, v, ownerId);
   }
   return values;
 }
@@ -217,7 +239,7 @@ export function updateMyDoctorProfile(db, args, user) {
   const p = (args && args.p) || {};
   if (typeof p !== 'object' || Array.isArray(p)) throw new RpcError('Данные профиля переданы неверно.', 400);
 
-  const values = cleanProfileFields(p);
+  const values = cleanProfileFields(p, uid);   // CLINIC_API_FIX_V1 — фото только из своей папки
 
   const a = args || {};
   const specRows = a.specialties === undefined ? null : cleanSpecialties(db, uid, a.specialties);
