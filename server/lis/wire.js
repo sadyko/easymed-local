@@ -204,6 +204,20 @@ function trimZeros(v) {
 }
 
 /**
+ * LIS_VENDOR_EXACT_V1 (D0) — одна десятичная запятая между цифрами — точка:
+ * ПК прибора с русскими региональными настройками пишет «4,17» (A1000 —
+ * double.ToString() .NET; BS-200, CL-900i, BC-5300 — тоже Windows). Только
+ * число целиком «цифры,цифры»: «1,2,3», «a,b» и «4,17 mg» не трогаются. В
+ * числе HL7 разделителей тысяч нет — «1,000» тем самым единица (как
+ * match.js valueKey).
+ */
+export function decimalPoint(v) {
+  return String(v == null ? '' : v).replace(/^([-+]?\d+),(\d+)$/, '$1.$2');
+}
+/** LIS_VENDOR_EXACT_V1 (D0) — простое число, как его читает приём (ingest.js). */
+const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
+
+/**
  * LIS_VENDOR_EXACT_V1 (D5) — «нет результата» Mindray: число в OBX-5 не больше
  * −100000000. Руководство CL: «-0x0fffffff means invalid value» (−268435455);
  * в записях BS-240 (2017) — «-268435455.000000» по каждому непосчитанному
@@ -213,7 +227,7 @@ function trimZeros(v) {
  */
 const NO_RESULT_MAX = -100000000;
 function isNoResult(v) {
-  const s = String(v == null ? '' : v).trim().replace(/^(-\d+),(\d+)$/, '$1.$2');
+  const s = decimalPoint(String(v == null ? '' : v).trim());
   return /^-\d+(\.\d+)?$/.test(s) && parseFloat(s) <= NO_RESULT_MAX;
 }
 /**
@@ -223,6 +237,23 @@ function isNoResult(v) {
  */
 function noResultHold(obx5, obx13) {
   return 'прибор: нет результата «' + obx5 + '»' + (obx13 ? ', OBX-13 «' + obx13 + '» — для сверки, в бланк не пишется' : '');
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 (D9) — NTE, который A1000 ставит ПЕРЕД каждым OBX
+ * (кодировщик программы клиники; лист A1000, §3): NTE-3 — повторения
+ * «лот ~ флаги через «-» ~ имя реагента ~ код ~ срок ~ штатив ~ место».
+ * Флаги (ToolsLib.Flags): ORH — выше предела измерения, ORL — ниже; ERR,
+ * QNS, CEX, PEX и прочие — с результатом что-то не так. В OBX-8 A1000 флагов
+ * не пишет — только здесь.
+ */
+function autobioNote(nte, fieldSep, repSep) {
+  if (!nte) return { flags: [], reagent: '' };
+  const reps = String(nte.split(fieldSep)[3] == null ? '' : nte.split(fieldSep)[3]).split(repSep);
+  return {
+    flags: String(reps[1] == null ? '' : reps[1]).split('-').map((x) => x.trim().toUpperCase()).filter(Boolean),
+    reagent: String(reps[2] == null ? '' : reps[2]).trim(),
+  };
 }
 
 /**
@@ -239,14 +270,16 @@ function noResultHold(obx5, obx13) {
  * | default            | OBX-3.1, затем 3.2   | —                   | OBX-5 целиком                     |
  * | forwarder          | OBX-3.1, затем 3.2   | OBX-4               | OBX-5 целиком                     |
  * | mindray-chem       | OBX-3.1 — номер теста| OBX-4 — имя теста   | OBX-5 без хвостовых нулей         |
- * | autobio-hl7        | OBX-4.1 — код позиции| OBX-3.2, иначе 3.1  | OBX-5, 1-е повторение, компонент 2|
+ * | autobio-hl7        | OBX-4.1, иначе 3.1   | NTE-3.3, OBX-3.2/3.1| OBX-5, 1-е повторение, компонент 2|
  * | mindray-hematology | OBX-3.1, затем 3.2   | —                   | OBX-5 целиком                     |
  * Единица — OBX-6.1, референс — OBX-7, флаг — OBX-8 (1-е повторение), статус —
  * OBX-11 (пусто = F решает match.js), у всех одинаково.
  *
  * LIS_VENDOR_EXACT_V1 — hold: причина НЕ писать строку (match.js: строка бланка
  * «не пришла» с этой причиной, лоток). Есть только у таких строк: «нет
- * результата» Mindray (D5).
+ * результата» Mindray (D5), флаги прибора A1000, кроме ORH/ORL (D9).
+ * Десятичная запятая у mindray-chem и autobio-hl7 — точка (D0); у A1000
+ * простое число — NM, флаги ORH/ORL — в abnormal (H/L) и знак «>»/«<» (D9).
  *
  * obr — первый OBR: { placer: OBR-2, filler: OBR-3 }, компонент 1 без пробелов
  * по краям; null — OBR нет.
@@ -272,9 +305,12 @@ export function readResult(raw, wire = 'default') {
   let obr = null;
   const obrs = [];
   const observations = [];
+  let nte = '';   // LIS_VENDOR_EXACT_V1 (D9) — NTE перед очередным OBX (A1000)
   for (const seg of segments.slice(1)) {
     const f = seg.split(fieldSep);
-    if (seg.startsWith('OBR')) {
+    if (seg.startsWith('NTE')) {
+      nte = seg;
+    } else if (seg.startsWith('OBR')) {
       // Первый OBR задаёт пробу, как в parseMessage.
       if (!obr) obr = { placer: comp(f[2])[0].trim(), filler: comp(f[3])[0].trim() };
       obrs.push({ placer: t(f[2]), filler: t(f[3]), compSep });
@@ -301,25 +337,47 @@ export function readResult(raw, wire = 'default') {
         // note and must not be analyzed» (с. 24).
         o.name = '';
         o.label = t(f[4]);
-        o.value = trimZeros(o.value);
+        o.value = trimZeros(decimalPoint(o.value));   // LIS_VENDOR_EXACT_V1 (D0) — «5,000000» → «5»
       } else if (w === 'autobio-hl7') {
         // AutoLumoHL7.cs (LiveMachine), строки 129–163: код — OBX-4, значение —
-        // компонент 2 OBX-5; компонент 1 — RLU, сигнал прибора. OBX-3 у Autobio
-        // может быть номером заявки на тест, своим у каждого прогона, — не
-        // сравнивается. Это ВЕРОЯТНО, а не документ (один драйвер, A2000 Plus):
-        // первая настоящая проба сверяется построчно.
+        // компонент 2 OBX-5; компонент 1 — RLU, сигнал прибора.
+        // LIS_VENDOR_EXACT_V1 — сверено с кодировщиком самой программы клиники
+        // (AutoLumo1000.exe 1.0.7; лист A1000, §3): «по тесту» OBX-3 = OBX-4 =
+        // код теста, OBX-1 — внутренний номер заявки; «по пробе» OBX-4 пуст, и
+        // код — OBX-3.1 (D9). OBX-2 у A1000 всегда CE.
         const obx4 = comp(f[4]);
-        o.code = t(obx4[0]);
+        o.code = t(obx4[0]) || t(obx3[0]);
         o.name = '';
         o.system = '';
-        o.codeRaw = t(f[4]);
-        o.label = t(obx3[1]) || t(obx3[0]);
-        o.value = t(comp(String(f[5] == null ? '' : f[5]).split(repSep)[0])[1]);
+        o.codeRaw = t(f[4]) || t(f[3]);
+        const note = autobioNote(nte, fieldSep, repSep);
+        o.label = note.reagent || t(obx3[1]) || t(obx3[0]);   // LIS_VENDOR_EXACT_V1 — имя реагента из NTE («AFP»)
+        let v = decimalPoint(t(comp(String(f[5] == null ? '' : f[5]).split(repSep)[0])[1]));
+        // LIS_VENDOR_EXACT_V1 (D9) — флаги прибора. За пределом измерения
+        // прибор шлёт сам предел простым числом: ORH — «выше» и знак «>»,
+        // ORL — «ниже» и «<» (если знака ещё нет). Любой другой флаг (ERR, QNS,
+        // CEX, PEX…) — не писать: строка бланка «не пришла», проба в лотке.
+        const other = note.flags.filter((x) => x !== 'ORH' && x !== 'ORL');
+        if (other.length || (note.flags.includes('ORH') && note.flags.includes('ORL'))) {
+          o.hold = 'флаги прибора: ' + note.flags.join('-');
+        } else if (note.flags.includes('ORH')) {
+          o.abnormal = 'H';
+          if (v && !/^[<>]/.test(v)) v = '>' + v;
+        } else if (note.flags.includes('ORL')) {
+          o.abnormal = 'L';
+          if (v && !/^[<>]/.test(v)) v = '<' + v;
+        }
+        o.value = v;
+        // LIS_VENDOR_EXACT_V1 (D0) — простое число — число (NM): без этого у
+        // A1000 не было numeric_value, диапазон клиники не срабатывал, и флаг
+        // выходил «Норма» при любом значении. «>x» и «<x» остаются текстом.
+        if (PLAIN_NUMBER.test(v)) o.valueType = 'NM';
       }
       // LIS_VENDOR_EXACT_V1 (D5) — «нет результата»: строка помечена hold, и
       // match.js её не пишет — строка бланка «не пришла» с этой причиной (лоток).
       if (!o.hold && isNoResult(o.value)) o.hold = noResultHold(t(f[5]), t(f[13]));
       observations.push(o);
+      nte = '';   // LIS_VENDOR_EXACT_V1 (D9) — NTE относится только к своему OBX
     }
   }
   return { obr, obrs, observations };

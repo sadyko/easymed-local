@@ -524,3 +524,60 @@ test('D5: OBX-5 ≤ −100000000 — «нет результата»: строк
     assert.equal(readResult(raw(v), 'default').observations[0].hold, undefined, v);
   }
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D0, D9: AutoLumo A1000 по сети, как пишет прибор ───
+// Кадр — вывод кодировщика самой программы клиники AutoLumo1000.exe 1.0.7
+// (запуск её DLL на синтетических данных; analyzer-research,
+// autobio-autolumo-a1000.settle.md, находка 1; лист A1000, §3): MSH-3/4 пусты,
+// MSH-10 = 5 (код команды «по тесту»), OBR-2 — номер пробирки, OBR-3 —
+// внутренний номер, NTE перед OBX: NTE-3 — лот~ФЛАГИ через «-»~реагент~код~
+// срок~штатив~место; OBX-1 — внутренний номер заявки, OBX-2 всегда CE,
+// OBX-3 = OBX-4 = код теста, OBX-5 = RLU^результат~, OBX-6/7/8 пусты.
+const A1000 = ({ value = '4.17', flags = '', reagent = 'AFP', code = '107', nte = true } = {}) => seg(
+  'MSH|^~\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123',
+  'PID|||SYN-PAT-1',
+  'OBR|1|LAB-000123|7764|SYSID-SYN',
+  ...(nte ? [`NTE|||LOT-SYN~${flags}~${reagent}~${code}~~RACK-SYN~1`] : []),
+  `OBX|10455|CE|${code}|${code}|41765^${value}~||||||F|||2026/10/05 12:00:00`,
+);
+
+test('D0: A1000 — простое число из CE становится NM (число для диапазона клиники); подпись — реагент из NTE', () => {
+  const [o] = readResult(A1000(), 'autobio-hl7').observations;
+  assert.deepEqual([o.code, o.value, o.valueType, o.label, o.abnormal], ['107', '4.17', 'NM', 'AFP', '']);
+  assert.equal(o.hold, undefined);
+  // Десятичная запятая (Windows прибора с русскими настройками) — точка.
+  assert.deepEqual(readResult(A1000({ value: '4,17' }), 'autobio-hl7').observations.map((x) => [x.value, x.valueType]), [['4.17', 'NM']]);
+  assert.deepEqual(readResult(A1000({ value: '1250' }), 'autobio-hl7').observations.map((x) => [x.value, x.valueType]), [['1250', 'NM']]);
+  // «>x» / «<x» (режим «результат строкой») — текст, как пришёл.
+  for (const v of ['>1000', '<0.50']) {
+    const [x] = readResult(A1000({ value: v }), 'autobio-hl7').observations;
+    assert.deepEqual([x.value, x.valueType], [v, 'CE'], v);
+  }
+});
+
+test('D9: A1000 — флаги прибора из NTE перед OBX: ORH → H и «>», ORL → L и «<»; прочие — не писать (hold)', () => {
+  const read = (o) => readResult(A1000(o), 'autobio-hl7').observations[0];
+  // За пределом диапазона измерения прибор шлёт сам предел простым числом.
+  const hi = read({ value: '1210', flags: 'ORH' });
+  assert.deepEqual([hi.value, hi.abnormal, hi.valueType, hi.hold], ['>1210', 'H', 'CE', undefined]);
+  const lo = read({ value: '0,6', flags: 'ORL' });
+  assert.deepEqual([lo.value, lo.abnormal, lo.valueType], ['<0.6', 'L', 'CE']);
+  assert.equal(read({ value: '>1210', flags: 'ORH' }).value, '>1210', 'знак уже есть — второй не ставится');
+  for (const flags of ['QNS', 'ERR', 'PEX-CEX-ORL', 'ORH-ORL']) {
+    assert.equal(read({ flags }).hold, 'флаги прибора: ' + flags, flags);
+  }
+  // NTE — только к своему OBX: следующий OBX без NTE флагов не наследует.
+  const two = readResult(seg('MSH|^~\&|||||20261005120000||ORU^R01|5|P|2.3.1', 'OBR|1|LAB-000123|7764|SYSID-SYN',
+    'NTE|||LOT~QNS~AFP~107~~R~1', 'OBX|10455|CE|107|107|41765^4.17~||||||F',
+    'OBX|10456|CE|112|112|22000^1.23~||||||F'), 'autobio-hl7').observations;
+  assert.deepEqual(two.map((x) => [x.code, x.hold || '']), [['107', 'флаги прибора: QNS'], ['112', '']]);
+});
+
+test('D9: A1000 «по пробе» — OBX-4 пуст, код берётся из OBX-3', () => {
+  // Кодировщик в режиме «по пробе» (команда 7): OBX-1 и OBX-4 пусты, NTE нет
+  // (лист A1000, §3, a1000-hl7-probe.ps1).
+  const raw = seg('MSH|^~\&|||||20261005120000||ORU^R01|7|P|2.3.1|261005120000124', 'OBR|1|LAB-000123|7764|SYSID',
+    'OBX||CE|107||41765^4.17||||||F', 'OBX||CE|112||22000^1.23||||||F');
+  assert.deepEqual(readResult(raw, 'autobio-hl7').observations.map((x) => [x.code, x.codeRaw, x.value, x.valueType]),
+    [['107', '107', '4.17', 'NM'], ['112', '112', '1.23', 'NM']]);
+});

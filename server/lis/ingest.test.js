@@ -1178,10 +1178,14 @@ test('R4 п. D: текст спора в журнале разобранной �
 });
 
 // ── LIS_REAL_ANALYZERS_V1 — ревью R5, п. 4 ─────────────────────────────────
-test('R5 п. 4: «5,10», потом «5.1» — повторная передача, а не спор; в бланке — как пришло', () => {
+// LIS_VENDOR_EXACT_V1 (D0) — в бланке десятичная запятая стала точкой (и у
+// mindray-chem хвостовые нули срезаны): «5,10» — «5.1». Раньше значение
+// ложилось «как пришло», текстом без числа, и окно результатов его не показывало.
+test('R5 п. 4: «5,10», потом «5.1» — повторная передача, а не спор; в бланке — число с точкой', () => {
   const db = chem();
   ingestMessage(db, BS('2', 'test2', '5,10'), '10.0.0.40', 1);
-  assert.equal(blank(db)['Глюкоза'], '5,10', 'значение как пришло');
+  assert.equal(blank(db)['Глюкоза'], '5.1', 'запятая — точка, нули срезаны (D0)');
+  assert.equal(db.prepare("SELECT numeric_value FROM lab_results WHERE parameter = 'Глюкоза'").get().numeric_value, 5.1);
   ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
   assert.ok(!/повтор:/.test(message(db).detail), message(db).detail);
   assert.match(message(db).detail, /повторная передача: 2 \(test2\)/);
@@ -1324,5 +1328,89 @@ test('D5: −100000000 c числом в OBX-13 — в бланк не идёт 
   ]), '10.0.0.42', 1);
   assert.deepEqual(blank(db), { 'ХГЧ': '+-' });
   assert.match(message(db).detail, /^не пришли: АЛТ \(ALT, прибор: нет результата «-100000000\.0», OBX-13 «73\.7» — для сверки, в бланк не пишется\)$/);
+  db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D0, D9: AutoLumo A1000 — число, флаг, флаги прибора ─
+// Кадр — вывод кодировщика программы клиники AutoLumo1000.exe 1.0.7 (лист A1000,
+// §3; settle, находка 1): OBX-2 всегда CE, OBX-3 = OBX-4 = код теста, OBX-5 =
+// RLU^результат~, OBX-6/7/8 пусты, флаги прибора — только в NTE-3 (2-е
+// повторение) перед OBX. Раньше значение писалось текстом без numeric_value, и
+// флаг выходил «Норма» при любом диапазоне клиники: высокий АФП печатался
+// нормой.
+const A1000 = (value, flags = '') => ['MSH|^~\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123',
+  'PID|||SYN-PAT-1', 'OBR|1|LAB-000123|7764|SYSID-SYN', `NTE|||LOT-SYN~${flags}~AFP~107~~RACK-SYN~1`,
+  `OBX|10455|CE|107|107|41765^${value}~||||||F|||2026/10/05 12:00:00`].join('\r');
+const afp = (db) => db.prepare("SELECT value, numeric_value, flag FROM lab_results WHERE visit_service_id = 123 AND parameter = 'АФП'").get();
+function a1000Clinic() {
+  const db = chem({ profile: 'autobio-autolumo-a1000', lines: [['AFP', 'АФП', '107']] });
+  db.prepare('UPDATE lab_panel_analytes SET ref_low = 0, ref_high = 10').run();   // диапазон клиники, нг/мл
+  return db;
+}
+
+test('D0: A1000 — значение пишется числом: numeric_value и флаг по диапазону клиники; запятая — точка', () => {
+  const db = a1000Clinic();
+  assert.equal(ingestMessage(db, A1000('12,5'), '10.0.0.41', 1), 'AA');
+  assert.deepEqual(afp(db), { value: '12.5', numeric_value: 12.5, flag: 'high' }, 'высокий АФП — «Выше», а не «Норма»');
+  assert.equal(message(db).status, 'applied');
+  ingestMessage(db, A1000('4.17'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '4.17', numeric_value: 4.17, flag: 'normal' });
+  db.close();
+});
+
+test('D9: A1000 — ORH: «>предел» и «Выше»; ORL: «<» и «Ниже»; число не выдумывается', () => {
+  const db = a1000Clinic();
+  ingestMessage(db, A1000('1210', 'ORH'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '>1210', numeric_value: null, flag: 'high' });
+  ingestMessage(db, A1000('0,6', 'ORL'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '<0.6', numeric_value: null, flag: 'low' });
+  db.close();
+});
+
+test('D9: A1000 — прочие флаги прибора (QNS, ERR, CEX…) — в бланк не пишется, в лоток «флаги прибора: …»', () => {
+  const db = a1000Clinic();
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, numeric_value, flag, source) VALUES (123, 'АФП', '3.3', 3.3, 'normal', 'manual')").run();
+  ingestMessage(db, A1000('4.17', 'PEX-CEX'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '3.3', numeric_value: 3.3, flag: 'normal' }, 'набранное руками не стёрто');
+  const m = message(db);
+  assert.equal(m.status, 'unmapped');
+  assert.equal(m.detail, 'не пришли: АФП (107, флаги прибора: PEX-CEX)');
+  db.close();
+});
+
+test('D0: десятичная запятая — на любом проводе: в бланке точка и число (BC-5300, провод default)', () => {
+  const db = fresh({ refLow: 4, refHigh: 9 });
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '9,81')]), '127.0.0.1');
+  const r = results(db)[0];
+  assert.deepEqual([r.value, r.numeric_value, r.flag], ['9.81', 9.81, 'high']);
+  db.close();
+});
+
+// D0 — флаг без основания. Пустой флаг прибора и «N» без его диапазона (CL-900i
+// пишет N всегда) — не основание для «Норма»: правило отдаёт null.
+test('D0: resultFlag — основание флага: диапазон клиники, иначе флаг прибора; без основания — null', async () => {
+  const { resultFlag } = await import('./ingest.js');
+  assert.equal(resultFlag({ num: 12, refLow: 0, refHigh: 10 }), 'high', 'диапазон клиники');
+  assert.equal(resultFlag({ num: 5, refLow: 0, refHigh: 10, abnormal: 'H' }), 'normal', 'инвариант 3: клиника бьёт прибор');
+  assert.equal(resultFlag({ num: null, abnormal: '' }), null, 'текст без флага прибора — основания нет');
+  assert.equal(resultFlag({ num: 5, abnormal: '' }), null, 'число без диапазона клиники и без флага — основания нет');
+  assert.equal(resultFlag({ num: null, abnormal: 'N', deviceRange: '-' }), null, '«N» без диапазона прибора — не основание');
+  assert.equal(resultFlag({ num: null, abnormal: 'N', deviceRange: '' }), null);
+  assert.equal(resultFlag({ num: null, abnormal: 'N', deviceRange: '4.00-10.00' }), 'normal', '«N» по своему диапазону');
+  assert.equal(resultFlag({ num: null, abnormal: 'H' }), 'high');
+  assert.equal(resultFlag({ num: null, abnormal: 'L' }), 'low');
+  assert.equal(resultFlag({ num: null, abnormal: 'LL' }), 'critical');
+  assert.equal(resultFlag({ num: null, abnormal: 'A' }), 'abnormal');
+});
+
+// Схема не даёт хранить «нет флага»: lab_results.flag NOT NULL DEFAULT 'normal'
+// CHECK (…) (мигр. 006). Приём пишет умолчание колонки — так же, как ручной
+// ввод (rpc/lab.js saveLabResults). Если флаг станет допускать NULL, этот тест
+// скажет, что запись без основания можно перестать подменять.
+test('D0: без основания — в базе умолчание колонки «normal» (NOT NULL, мигр. 006), запись не срывается', () => {
+  const db = chem({ profile: 'autobio-autolumo-a1000', lines: [['AFP', 'АФП', '107']] });
+  assert.equal(db.prepare("SELECT \"notnull\" AS nn, dflt_value AS d FROM pragma_table_info('lab_results') WHERE name = 'flag'").get().nn, 1);
+  assert.equal(ingestMessage(db, A1000('4.17'), '10.0.0.41', 1), 'AA');
+  assert.deepEqual(afp(db), { value: '4.17', numeric_value: 4.17, flag: 'normal' });
   db.close();
 });

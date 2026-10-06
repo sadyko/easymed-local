@@ -29,6 +29,7 @@ import { crmServiceEvidence } from '../services/crm/visit-status.js';
 // LIS_REAL_ANALYZERS_V1_SAMPLE — провод прибора: номер пробы и строки теста из
 // нужных полей (wire.js); профиль называет провод.
 import { readResult, pickMessageSample, wireFor, wireDecision } from './wire.js';   // pickMessageSample: LIS_REAL_ANALYZERS_V1, ревью R1, п. 1; wireDecision: ревью R2, п. 12
+import { decimalPoint } from './wire.js';   // LIS_VENDOR_EXACT_V1 (D0) — десятичная запятая на любом проводе
 import { getProfile } from './profiles/index.js';
 import { LAB_RESULT_STATUSES } from '../services/visit-status-guard.js';   // LIS_REAL_ANALYZERS_V1 — ревью R7, п. 1: ворота лаборатории, общие с ручным вводом
 import { today, localDate } from '../services/domain/day.js';
@@ -428,16 +429,26 @@ export function parseSampleId(raw) {
 /**
  * Флаг прибора → наш словарь. LL/HH/AA намеренно ведут в 'critical': они
  * кормят существующий счётчик критических результатов на панели отчётов.
+ *
+ * LIS_VENDOR_EXACT_V1 (D0, D6) — null: у флага нет основания. Пустой флаг
+ * прибора — не «норма» (A1000 OBX-8 не пишет вовсе; раньше любой его
+ * результат без диапазона клиники выходил «Норма»). «N» — норма только по
+ * диапазону самого прибора (OBX-7): CL-900i пишет «N» у каждого результата
+ * («Fixed as N»), OBX-7 у него «-» — это не суждение о норме.
  */
-function flagFromDevice(abnormal) {
+function flagFromDevice(abnormal, deviceRange = '') {
   switch (String(abnormal || '').toUpperCase()) {
-    case '': case 'N': return 'normal';
+    case '': return null;
+    case 'N': return hasDeviceRange(deviceRange) ? 'normal' : null;
     case 'L': return 'low';
     case 'H': return 'high';
     case 'LL': case 'HH': case 'AA': return 'critical';
     default: return 'abnormal';
   }
 }
+
+/** LIS_VENDOR_EXACT_V1 — OBX-7 с диапазоном: не пусто и не «-» (Mindray пишет «-», когда диапазона нет). */
+const hasDeviceRange = (r) => !/^-*$/.test(String(r == null ? '' : r).trim());
 
 /** Инвариант 3: диапазон клиники бьёт диапазон прибора. null — клиника молчит. */
 function flagFromClinic(num, low, high) {
@@ -446,6 +457,20 @@ function flagFromClinic(num, low, high) {
   if (low != null && num < low) return 'low';
   if (high != null && num > high) return 'high';
   return 'normal';
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 (D0) — флаг строки бланка и его ОСНОВАНИЕ: диапазон
+ * клиники (инвариант 3), иначе флаг прибора; null — основания нет.
+ * null в базу не пишется: lab_results.flag NOT NULL DEFAULT 'normal' CHECK
+ * (мигр. 006), и запись с NULL сорвалась бы целиком. Приём пишет умолчание
+ * колонки — как ручной ввод (rpc/lab.js saveLabResults); печатный бланк
+ * (lab-doc.js labFlagFor) и так рисует пустой флаг как «N».
+ * @param {{num?:number|null, refLow?:number|null, refHigh?:number|null, abnormal?:string, deviceRange?:string}} o
+ * @returns {'normal'|'low'|'high'|'abnormal'|'critical'|null}
+ */
+export function resultFlag({ num = null, refLow = null, refHigh = null, abnormal = '', deviceRange = '' } = {}) {
+  return flagFromClinic(num, refLow, refHigh) || flagFromDevice(abnormal, deviceRange);
 }
 
 /**
@@ -745,8 +770,15 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
     // записи: против них судится «повтор» — в любом окне.
     const before = seriesOn ? analyzerValues() : null;
     for (const { obs, analyte: a } of plan.fills) {
-      const num = obs.valueType === 'NM' && /^-?\d+(\.\d+)?$/.test(obs.value) ? parseFloat(obs.value) : null;
-      const flag = flagFromClinic(num, a.ref_low, a.ref_high) || flagFromDevice(obs.abnormal);
+      // LIS_VENDOR_EXACT_V1 (D0) — одна десятичная запятая между цифрами у
+      // числовой строки — точка, на любом проводе: в бланке «9.81», окно
+      // результатов (<input type=number>) его показывает, numeric_value есть,
+      // и диапазон клиники ставит флаг. Раньше «9,81» ложилось текстом.
+      const value = obs.valueType === 'NM' ? decimalPoint(obs.value) : obs.value;
+      const num = obs.valueType === 'NM' && /^-?\d+(\.\d+)?$/.test(value) ? parseFloat(value) : null;
+      // LIS_VENDOR_EXACT_V1 (D0) — основание флага (resultFlag); без основания
+      // — умолчание колонки 'normal': flag NOT NULL (мигр. 006), NULL сорвал бы запись.
+      const flag = resultFlag({ num, refLow: a.ref_low, refHigh: a.ref_high, abnormal: obs.abnormal, deviceRange: obs.range }) || 'normal';
       // Инвариант 3 и 4: диапазон, имя и единица — из панели. Диапазон прибора
       // берётся только там, где клиника свой не задала.
       const range = a.ref_text
@@ -759,13 +791,13 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
                       ref_low = ?, ref_high = ?, flag = ?, source = 'analyzer',
                       entered_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
                     WHERE id = ?`)
-          .run(obs.value, num, a.unit || '', range, a.ref_low, a.ref_high, flag, existing.id);
+          .run(value, num, a.unit || '', range, a.ref_low, a.ref_high, flag, existing.id);   // LIS_VENDOR_EXACT_V1 (D0) — value с точкой
         writtenIds.push(existing.id);
       } else {
         writtenIds.push(db.prepare(`INSERT INTO lab_results
                       (visit_service_id, parameter, value, numeric_value, unit, reference_range, ref_low, ref_high, flag, entered_by, source)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'analyzer')`)
-          .run(order.id, a.name, obs.value, num, a.unit || '', range, a.ref_low, a.ref_high, flag).lastInsertRowid);
+          .run(order.id, a.name, value, num, a.unit || '', range, a.ref_low, a.ref_high, flag).lastInsertRowid);   // LIS_VENDOR_EXACT_V1 (D0)
       }
       applied++;
     }

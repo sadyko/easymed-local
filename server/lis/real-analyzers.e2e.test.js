@@ -275,18 +275,26 @@ test('BS-200: запрос — «заказов нет»; контроль и к
 });
 
 // ── Autobio AutoLumo A1000 ─────────────────────────────────────────────────
-// По сети — HL7, собрано по драйверу AutoLumoHL7.cs (строки 129–163): номер —
-// OBR-2, код позиции — OBX-4, концентрация — компонент 2 поля OBX-5 (компонент
-// 1 — RLU). Через переадресатор с COM — договор forwarder/hl7-oru.js: MSH-4 =
+// LIS_VENDOR_EXACT_V1 — по сети HL7 ровно так, как пишет кодировщик программы
+// клиники AutoLumo1000.exe 1.0.7 (запуск её DLL на синтетических данных;
+// analyzer-research: лист A1000, §3; settle, находка 1): MSH-3/4 пусты
+// (параметры базы, на экране их нет), MSH-10 = 5 — код команды «по тесту»,
+// OBR-2 — номер пробирки, OBR-3 — внутренний номер, NTE перед OBX (имя
+// реагента, флаги прибора), OBX-1 — внутренний номер заявки, OBX-2 всегда CE,
+// OBX-3 = OBX-4 = код теста, OBX-5 = RLU^концентрация~, OBX-6/7/8 пусты.
+// Прежняя фикстура (по драйверу A2000 Plus: NM, единица, «A1000|Autolumo»)
+// пряталась от того, что A1000 значения писались текстом с флагом «Норма».
+// Через переадресатор с COM — договор forwarder/hl7-oru.js: MSH-4 =
 // LabPC, номер — OBR-3, код — OBX-3 («206^^AUTOBIO»), подпись — OBX-4.
-const A_QRY = ['MSH|^~\\&|A1000|Autolumo|||20261001101500||QRY^Q01|3|P|2.3.1',
+const A_QRY = ['MSH|^~\\&|||||20261001101500||QRY^Q01|3|P|2.3.1',
   'QRD|20261001101500|R|D|7|||RD|LAB-000201|OTH|||T', 'QRF|A1000|20261001000000|20261001101500|||RCT|COR|ALL'].join('\r');
-const A_ORU = (label) => ['MSH|^~\\&|A1000|Autolumo|||20261001101500||ORU^R01|4|P|2.3.1||||0||ASCII|||',
-  `OBR|1|${label}|||`, 'OBX|1|NM|1^Vitamin B12|206|5981666^390.946|pg/mL||||||F'].join('\r');
+const A_ORU = (label, value) => ['MSH|^~\\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123',
+  'PID|||SYN-PAT-1', `OBR|1|${label}|7764|SYSID-SYN`, 'NTE|||LOT-SYN~~Vitamin B12~206~~RACK-SYN~1',
+  `OBX|10455|CE|206|206|5981666^${value}~||||||F|||2026/10/05 12:00:00`].join('\r');
 const FWD_ORU = (label) => ['MSH|^~\\&|AutoLumo A1000|LabPC|||20261001101600||ORU^R01|5|P|2.3.1',
   `OBR|1||${label}|`, 'OBX|1|NM|206^^AUTOBIO|Vitamin B12|390.946|pg/mL|||||F'].join('\r');
 
-test('A1000: по сети (HL7) и через переадресатор с COM — одна панель, код позиции 206, в бланке концентрация, не RLU; запрос QRY^Q01 — DSR^Q01 «заказов нет»', async () => {
+test('A1000: по сети (HL7, как пишет прибор) и через переадресатор с COM — одна панель, код 206, в бланке концентрация числом, флаг по диапазону клиники; запрос QRY^Q01 — DSR^Q01 «заказов нет»', async () => {
   await withClinic(async (db, lisPort) => {
     await startLisListeners(db, { log: () => {} });
     const net1 = await analyzer(lisPort, '127.0.0.3');
@@ -298,15 +306,22 @@ test('A1000: по сети (HL7) и через переадресатор с COM
       assert.match(dsr, /\rQAK\|SR\|NF/);
       assert.ok(!/\rDSP\|/.test(dsr), 'заказов Easy-Med не отдаёт');
       const dev = db.prepare("SELECT * FROM lab_devices WHERE host = '127.0.0.3'").get();
-      assert.equal(dev.profile, 'autobio-autolumo-a1000', 'модель — по MSH-3 «A1000»');
-      db.prepare('UPDATE lab_devices SET added = 1 WHERE id = ?').run(dev.id);
+      assert.deepEqual([dev.profile, dev.name], ['', 'Анализатор 127.0.0.3'], 'A1000 себя не называет — модели нет');
+      // Лаборатория: «Добавить» — модель «AutoLumo A1000» выбрана вручную
+      // (обязательный шаг настройки A1000); диапазон клиники для B12, пг/мл.
+      db.prepare("UPDATE lab_devices SET added = 1, profile = 'autobio-autolumo-a1000', model_confirmed = 1 WHERE id = ?").run(dev.id);
       bindPanel(db, { id: 6, serviceId: 10, deviceId: dev.id, name: 'Витамин B12', lines: [['B12', 'Витамин B12', 'пг/мл', '206']] });
+      db.prepare('UPDATE lab_panel_analytes SET ref_low = 187, ref_high = 883 WHERE panel_id = 6').run();
 
-      const ack = await net1.send(A_ORU('LAB-000201'));
+      // Значение с десятичной запятой (Windows прибора с русскими настройками).
+      const ack = await net1.send(A_ORU('LAB-000201', '1250,5'));
       assert.equal(fieldOf(ack, 'MSH', 9), 'ACK^R01');
-      assert.match(ack, /\rMSA\|AA\|4\|/);
+      assert.match(ack, /\rMSA\|AA\|5\|/, 'MSH-10 = 5 эхом');
+      assert.equal(fieldOf(ack, 'MSA', 4), '10455', 'MSA-4 = OBX-1: A1000 отмечает результат «Accepted»');
       assert.equal(last(db).status, 'applied');
-      assert.deepEqual(blank(db, 201), { 'Витамин B12': '390.946' }, 'компонент 2 — концентрация, а не «5981666^390.946»');
+      assert.deepEqual(blank(db, 201), { 'Витамин B12': '1250.5' }, 'компонент 2 — концентрация, не «5981666^1250,5»; запятая — точка');
+      const b12 = db.prepare('SELECT numeric_value, flag FROM lab_results WHERE visit_service_id = 201').get();
+      assert.deepEqual(b12, { numeric_value: 1250.5, flag: 'high' }, 'CE — число: диапазон клиники ставит «Выше», а не «Норма»');
       assert.equal(order(db, 201), 'resulted');
       notReleased(db, 201);
 
