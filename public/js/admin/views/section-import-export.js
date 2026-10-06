@@ -136,6 +136,38 @@ function serviceRowUpdates(payload, lookups) {
         && lookups.__stored.has(normKey(payload && payload.name)));
 }
 
+// CLINIC_API_FIX_V1 (ревью) — правила цен второго и повторного визита из окна
+// услуги: server/services/rpc/service-save.js (VISIT_TIER_PRICING_V1 /
+// REPEAT_WINDOW_V1), те же проверки и тем же порядком. `t` — значения, которые
+// окажутся у услуги (null — не задано). Возвращает переведённую причину или null.
+function visitTierProblem(t) {
+    const priceBad = (k) => t[k] !== null && !(Number.isFinite(t[k]) && t[k] >= 0);
+    const daysBad = (k) => t[k] !== null && !(Number.isInteger(t[k]) && t[k] >= 0);
+    const noPrice = t.price_secondary === null && t.price_repeat === null;
+    for (const k of ['price_secondary', 'price_repeat']) {
+        if (priceBad(k)) return trf('{col} — неотрицательное число.', { col: k });
+    }
+    for (const k of ['secondary_days_from', 'secondary_days_to']) {
+        if (daysBad(k)) return trf('{col} — целое неотрицательное число дней.', { col: k });
+    }
+    if (t.secondary_days_from !== null && t.secondary_days_to !== null && t.secondary_days_to < t.secondary_days_from) {
+        return tr('Окно второго визита: «по день» не может быть раньше «со дня».');
+    }
+    if ((t.secondary_days_from !== null || t.secondary_days_to !== null) && noPrice) {
+        return tr('Укажите цену второго визита — иначе окно дней не на что применить.');
+    }
+    for (const k of ['repeat_days_from', 'repeat_days_to']) {
+        if (daysBad(k)) return trf('{col} — целое неотрицательное число дней.', { col: k });
+    }
+    if (t.repeat_days_from !== null && t.repeat_days_to !== null && t.repeat_days_to < t.repeat_days_from) {
+        return tr('Окно повторного визита: «не позже чем через» не может быть раньше «не раньше чем через».');
+    }
+    if ((t.repeat_days_from !== null || t.repeat_days_to !== null) && noPrice) {
+        return tr('Укажите цену повторного визита — иначе окно дней не на что применить.');
+    }
+    return null;
+}
+
 // EXCEL_SELF_HOST_V1 — served from our own origin (CSP allows 'self'); the
 // SheetJS CDN is NOT in the site CSP, so the external import was blocked and
 // Sample/Import/Export failed. Normalise default/named exports so XLSX.utils
@@ -471,12 +503,41 @@ const IMPORT_CONFIGS = {
             // и второй визит в тот же день выставлялся по 0. Теперь: заголовка
             // нет — не трогается; ячейка пустая или не число («—», «нет») — не
             // задано (null); число — как есть (0 — осознанное «бесплатно»).
+            //
+            // CLINIC_API_FIX_V1 (ревью) — не число в непустой ячейке строка
+            // называет (номер строки, колонка, значение). Дни не округляются:
+            // дробный день — нарушение правила ниже, как в окне услуги.
+            var svcName = String(payload.name || '').trim();
             VISIT_TIER_COLUMNS.forEach(function (c) {
                 if (!(c.key in r)) { delete payload[c.key]; return; }
-                var raw = String(r[c.key] == null ? '' : r[c.key]).replace(/[\s,]/g, '');
+                var cell = String(r[c.key] == null ? '' : r[c.key]).trim();
+                var raw = cell.replace(/[\s,]/g, '');
                 var n = raw === '' ? NaN : Number(raw);
-                payload[c.key] = Number.isFinite(n) ? (c.int ? Math.round(n) : n) : null;
+                payload[c.key] = Number.isFinite(n) ? n : null;
+                if (raw !== '' && !Number.isFinite(n) && ctx) {
+                    ctx.warn(trf('Строка {n}, «{service}»: в колонке {col} не число («{v}») — записано как пусто, визит по полной цене.',
+                        { n: ctx.rowNum, service: svcName, col: c.key, v: cell }));
+                }
             });
+            // CLINIC_API_FIX_V1 (ревью) — правила окна услуги (service_save:
+            // цена — неотрицательное число, дни — целые неотрицательные, «по»
+            // не раньше «с», окно без цены не задаётся) — по тому, что окажется
+            // у услуги: файл поверх сохранённого, когда строка её обновляет.
+            // Нарушила — цены второго и повторного визита из этой строки не
+            // пишутся (остаются прежние / не заданы), строка говорит почему.
+            var tierStored = serviceRowUpdates(payload, ctx && ctx.lookups)
+                ? (ctx.lookups.__stored.get(normKey(payload.name)) || {}) : {};
+            var tierEff = {};
+            VISIT_TIER_COLUMNS.forEach(function (c) {
+                var v = (c.key in payload) ? payload[c.key] : tierStored[c.key];
+                tierEff[c.key] = v === undefined || v === null || v === '' ? null : Number(v);
+            });
+            var tierProblem = visitTierProblem(tierEff);
+            if (tierProblem) {
+                VISIT_TIER_COLUMNS.forEach(function (c) { delete payload[c.key]; });
+                if (ctx) ctx.warn(trf('Строка {n}, «{service}»: {problem} Цены второго и повторного визита из этой строки не сохранены.',
+                    { n: ctx.rowNum, service: svcName, problem: tierProblem }));
+            }
             // DOCTOR_TIER_V1 — КОЛОНКИ, КОТОРОЙ В ФАЙЛЕ НЕТ, В ПАМЯТИ НЕ БЫВАЕТ.
             // Числовые колонки пишутся в payload всегда, даже когда заголовка в
             // листе нет вовсе: обновление услуг файлом, выгруженным ДО ступеней,
@@ -547,8 +608,11 @@ const IMPORT_CONFIGS = {
         // порядка при обновлении: loadLookups кладёт их в lookups.__stored.
         // CLINIC_API_FIX_V1 (ревью) — и узбекское название: онлайн-запись
         // при обновлении услуги без name_uz в файле (serviceRowUpdates); и
-        // «Раздел» с типом: обновление без колонки типа тип не сбрасывает.
-        storedColumns: ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3', 'name_uz', 'type', 'type_id'],
+        // «Раздел» с типом: обновление без колонки типа тип не сбрасывает; и
+        // цены второго/повторного визита с окнами — правила окна услуги
+        // проверяются по тому, что окажется у услуги (visitTierProblem).
+        storedColumns: ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3', 'name_uz', 'type', 'type_id',
+            'price_secondary', 'secondary_days_from', 'secondary_days_to', 'price_repeat', 'repeat_days_from', 'repeat_days_to'],
         columns: [
             { key: 'name',             required: true, hint: 'Название услуги (обязательно)' },
             { key: 'group',            target: 'type', map: SERVICE_GROUP_MAP, required: true,

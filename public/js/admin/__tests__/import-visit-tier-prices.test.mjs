@@ -68,3 +68,67 @@ test('не число в ячейке («—», «нет») — «не зада�
     assert.strictEqual(row.payload.secondary_days_to, null);
     assert.strictEqual(sameDaySecond(row.payload).price, 200000);
 });
+
+// CLINIC_API_FIX_V1 (ревью) — ячейка не число: строка ГОВОРИТ об этом (номер
+// строки и колонка), а не молча ставит полную цену.
+test('не число в ячейке цены визита — предупреждение с номером строки и колонкой', () => {
+    const row = buildImportRow('services', { ...BASE, ...EMPTY_TIERS, price_secondary: '—' }, { rowNum: 4 });
+    assert.strictEqual(row.payload.price_secondary, null);
+    assert.strictEqual(row.status, 'warn');
+    const note = row.notes.find((n) => /price_secondary/.test(String(n)));
+    assert.ok(note, JSON.stringify(row.notes));
+    assert.match(String(note), /Строка 4\b/);
+    assert.match(String(note), /не число/);
+});
+
+// CLINIC_API_FIX_V1 (ревью) — правила окна услуги (service_save,
+// VISIT_TIER_PRICING_V1 / REPEAT_WINDOW_V1): цена — неотрицательное число,
+// дни — целые неотрицательные, «по» не раньше «с», окно без цены не задаётся.
+// Строка, нарушившая правило, цен второго и повторного визита из файла не
+// пишет (остаются прежние / не заданы) и говорит почему; остальное ложится.
+const tierDropped = (row) => TIER_KEYS.every((k) => !(k in row.payload));
+const CASES = [
+    ['отрицательная цена', { price_secondary: -5000, secondary_days_from: 1, secondary_days_to: 6 }, /price_secondary — неотрицательное число/],
+    ['дробные дни', { price_secondary: 60000, secondary_days_from: 1.5, secondary_days_to: 6 }, /secondary_days_from — целое неотрицательное число дней/],
+    ['отрицательные дни', { price_repeat: 0, repeat_days_from: -1 }, /repeat_days_from — целое неотрицательное число дней/],
+    ['окно второго визита наоборот', { price_secondary: 60000, secondary_days_from: 6, secondary_days_to: 1 }, /Окно второго визита: «по день» не может быть раньше «со дня»/],
+    ['окно повторного визита наоборот', { price_repeat: 0, repeat_days_from: 10, repeat_days_to: 3 }, /Окно повторного визита: «не позже чем через» не может быть раньше «не раньше чем через»/],
+    ['окно второго визита без цены', { secondary_days_from: 1, secondary_days_to: 6 }, /Укажите цену второго визита/],
+    ['окно повторного визита без цены', { repeat_days_from: 7 }, /Укажите цену повторного визита/],
+];
+for (const [what, cells, re] of CASES) {
+    test('правило окна услуги: ' + what + ' — цены визитов строки не пишутся, предупреждение', () => {
+        const row = buildImportRow('services', { ...BASE, ...EMPTY_TIERS, ...cells, tax_rate: 12 }, { rowNum: 9 });
+        assert.ok(tierDropped(row), 'цены визитов записаны: ' + JSON.stringify(row.payload));
+        assert.strictEqual(row.payload.price, 200000, 'остальная строка ложится');
+        assert.strictEqual(row.status, 'warn');
+        const note = row.notes.find((n) => re.test(String(n)));
+        assert.ok(note, JSON.stringify(row.notes));
+        assert.match(String(note), /Строка 9\b/);
+        assert.ok(String(note).includes('Приём кардиолога'));
+    });
+}
+
+test('обновление: правило проверяется по тому, что окажется у услуги (файл поверх сохранённого)', () => {
+    const stored = (extra) => ({ __wantUpdate: true, __stored: new Map([['приём кардиолога', {
+        name: 'Приём кардиолога', price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6, price_repeat: null, repeat_days_from: null, repeat_days_to: null, ...extra }]]) });
+    // Файл стирает цену второго визита, окно у услуги остаётся — окно без цены: отказ.
+    const bad = buildImportRow('services', { ...BASE, price_secondary: '' }, { rowNum: 3, lookups: stored() });
+    assert.ok(tierDropped(bad), JSON.stringify(bad.payload));
+    assert.ok(bad.notes.some((n) => /Укажите цену второго визита/.test(String(n))), JSON.stringify(bad.notes));
+    // У услуги есть цена повторного визита — окну есть что применять.
+    const ok = buildImportRow('services', { ...BASE, price_secondary: '' }, { rowNum: 3, lookups: stored({ price_repeat: 0 }) });
+    assert.strictEqual(ok.payload.price_secondary, null);
+    assert.strictEqual(ok.status, 'ok', JSON.stringify(ok.notes));
+    // Файл сдвигает «по день» раньше сохранённого «со дня» — отказ.
+    const order = buildImportRow('services', { ...BASE, secondary_days_to: 0 }, { rowNum: 3, lookups: stored({ secondary_days_from: 2 }) });
+    assert.ok(tierDropped(order));
+    assert.ok(order.notes.some((n) => /«по день» не может быть раньше «со дня»/.test(String(n))), JSON.stringify(order.notes));
+});
+
+test('допустимые значения — как раньше, без предупреждений', () => {
+    const row = buildImportRow('services', { ...BASE, ...EMPTY_TIERS, price_secondary: 60000, secondary_days_from: 0, secondary_days_to: 6,
+        price_repeat: 0, repeat_days_from: 7, repeat_days_to: 30 });
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+    assert.deepStrictEqual(TIER_KEYS.map((k) => row.payload[k]), [60000, 0, 6, 0, 7, 30]);
+});
