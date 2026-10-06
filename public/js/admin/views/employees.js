@@ -462,6 +462,13 @@ function openEditor(user, root) {
     // `user` (строка с сервера) решает, вернутся ли нетронутые части имени тем же
     // full_name (namesRoundTrip): иначе они не уходят.
     const was = { last_name: emp.last_name, first_name: emp.first_name, middle_name: emp.middle_name, staff_type: emp.staff_type, phone: emp.phone };
+    // CLINIC_API_FIX_V1 — список специальностей, с которым карточка открылась
+    // (уже приведённый canonicalSpecialty, порядок важен: первая — основная).
+    // save() шлёт specialties / specialty, только когда список стал другим:
+    // сервер переписывает user_specialties целиком, и правка одного оклада не
+    // должна трогать специальности.
+    const specKey = (list) => JSON.stringify((list || []).map((v) => String(v || '').trim()).filter(Boolean));
+    const specsAtOpen = specKey(emp.specialties);
     let refusal = null;
     let statusBox = null;
     const ctrls = {};
@@ -703,7 +710,10 @@ function openEditor(user, root) {
         const MAX_SPEC = 4;
         function specialtiesField() {
             const list = () => { if (!Array.isArray(emp.specialties)) emp.specialties = []; if (!emp.specialties.length) emp.specialties.push(emp.specialty || ''); return emp.specialties; };
-            const commit = () => { emp.specialties = list().map((v) => String(v || '').trim()); emp.specialty = emp.specialties[0] || ''; markDirty({ specialty: emp.specialty, specialties: emp.specialties }); };
+            // CLINIC_API_FIX_V1 — правка НА МЕСТЕ: строки на экране держат этот же
+            // массив (`rows` в paint), и новый массив терял вторую правку того же
+            // списка и «Добавить специальность» после правки.
+            const commit = () => { const rows = list(); rows.forEach((v, i) => { rows[i] = String(v || '').trim(); }); emp.specialty = rows[0] || ''; markDirty({ specialty: emp.specialty, specialties: rows }); };
             const box = h('div', { class: 'spec-list' });
             const paint = () => {
                 clear(box);
@@ -966,6 +976,11 @@ function openEditor(user, root) {
         // имя остаётся ровно таким, каким было, а неполные части не ложатся в
         // колонки.
         if (isEdit && !gaps.sendNames) for (const k of NAME_KEYS) delete payload[k];
+        // CLINIC_API_FIX_V1 — специальности не правили: не уходят ни список, ни
+        // users.specialty. Сервер пишет только присланные ключи (routes/users.js),
+        // так что строки user_specialties с узбекскими названиями и кодами,
+        // которых карточка не знает, остаются как были.
+        if (isEdit && specKey(emp.specialties) === specsAtOpen) { delete payload.specialties; delete payload.specialty; }
         // DOCTOR_PUBLIC_PROFILE_V1 — только изменённые поля профиля.
         if (Object.keys(profilePatch).length) payload.public_profile = { ...profilePatch };
         // ADMIN_ROWS_GRANTABLE_V1 — без «Цены и проценты» деньги не уходят вовсе:

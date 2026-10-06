@@ -7,6 +7,8 @@ import { roleExceedsActor, isAdminRoleCode } from '../services/role-guard.js';  
 // DOCTOR_PUBLIC_PROFILE_V1 — публичный профиль врача: те же проверки, что у
 // «Моего профиля» врача (rpc/doctor-profile.js), и тот же вид для экранов.
 import { cleanProfileFields, publicProfileOf } from '../services/rpc/doctor-profile.js';
+// CLINIC_API_FIX_V1 — канон специальностей (тот же, что у профиля врача и отчётов).
+import { SPECIALTY_ROWS, canonicalSpecialty } from '../../public/js/shared/specialty-list.js';
 
 export { VALID_ROLES, PRIMARY_ROLES };
 
@@ -448,10 +450,33 @@ export function parseSpecialties(raw) {
   if (list.length > MAX_SPECIALTIES) return { ok: false, message: `Не больше ${MAX_SPECIALTIES} специальностей.` };
   return { ok: true, list };
 }
+// CLINIC_API_FIX_V1 (2026-10-06) — строка пишется со слагом, ru И uz. Прежде
+// здесь были только присланный слаг и name_ru: name_uz становился NULL, а у
+// старого написания («Врач УЗД») слага не было. Теперь, как в профиле врача
+// (rpc/doctor-profile.js): название приводится canonicalSpecialty и ищется в
+// SPECIALTY_ROWS — слаг, ru и uz берутся оттуда, а не от клиента. Не из списка —
+// слаг NULL, name_ru как набрано, name_uz NULL; но если у ЭТОГО сотрудника уже
+// есть строка с тем же названием (слаг и uz от прежнего редактора), её слаг и
+// uz сохраняются. Два написания одной специальности после канона — одна строка.
+// users.specialty здесь не трогается (его пишут POST / PATCH ниже).
+const SPEC_BY_RU = new Map(SPECIALTY_ROWS.map((r) => [r.ru, r]));
 export function writeSpecialties(db, userId, list) {
+  const own = new Map(db.prepare('SELECT specialty_slug, name_ru, name_uz FROM user_specialties WHERE user_id = ?').all(userId)
+    .map((r) => [String(r.name_ru || '').trim().toLowerCase(), r]));
   db.prepare('DELETE FROM user_specialties WHERE user_id = ?').run(userId);
-  const ins = db.prepare('INSERT INTO user_specialties (user_id, specialty_slug, name_ru, is_primary) VALUES (?, ?, ?, ?)');
-  list.forEach((sp, i) => ins.run(userId, sp.slug, sp.name, i === 0 ? 1 : 0));
+  const ins = db.prepare('INSERT INTO user_specialties (user_id, specialty_slug, name_ru, name_uz, is_primary) VALUES (?, ?, ?, ?, ?)');
+  const seen = new Set();
+  for (const sp of list) {
+    const name = String(sp.name || '').trim();
+    const canon = SPEC_BY_RU.get(canonicalSpecialty(name));
+    const prev = canon ? null : own.get(name.toLowerCase());
+    const row = canon ? { slug: canon.slug, ru: canon.ru, uz: canon.uz }
+      : { slug: prev ? prev.specialty_slug : null, ru: name, uz: prev ? prev.name_uz : null };
+    const key = row.ru.toLowerCase();
+    if (!key || seen.has(key)) continue;
+    ins.run(userId, row.slug, row.ru, row.uz, seen.size === 0 ? 1 : 0);
+    seen.add(key);
+  }
 }
 export function readSpecialties(db, userId) {
   return db.prepare('SELECT specialty_slug AS slug, name_ru AS name, is_primary FROM user_specialties WHERE user_id = ? ORDER BY is_primary DESC, id').all(userId)
