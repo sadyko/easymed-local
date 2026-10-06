@@ -161,6 +161,16 @@ const NOISE_LOG_MS = 60 * 1000;
 const isoNow = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 /** LIS_VENDOR_EXACT_V1 — D14: сколько последних соединений помнит слушатель (открытые — все). */
 export const PEERS_KEPT = 50;
+/**
+ * LIS_VENDOR_EXACT_V1 — D4, ревью: предел открытых соединений с одного адреса.
+ * Тайм-аут простоя (5 минут) был одним из двух пределов для того, кто не
+ * представился, — порт неаутентифицирован; без него хост мог бы держать
+ * сколько угодно молчащих соединений (keep-alive убирает только мёртвые).
+ * Прибору нужно одно (A1000 держит его часами), переадресателю — по одному на
+ * анализатор своего ПК. Сверх предела рвётся RST старейшее молчащее (кадров не
+ * было), иначе старейшее: из многих соединений одного адреса живое — новое.
+ */
+export const MAX_SOCKETS_PER_IP = 16;
 
 /**
  * LIS_REAL_ANALYZERS_V1_DIAL — читатель кадров одного соединения: общий для
@@ -371,6 +381,7 @@ export function startMllpServer({ port, onMessage, onOversize = null, onAbandone
         peers.splice(i, 1);
       }
     };
+    const recOf = new Map();   // LIS_VENDOR_EXACT_V1 — D4, ревью: сокет → его запись (предел с адреса)
     const server = net.createServer((sock) => {
       socks.add(sock);
       // LIS_VENDOR_EXACT_V1 — D14: соединение — в журнал (адрес и порт прибора)
@@ -382,9 +393,20 @@ export function startMllpServer({ port, onMessage, onOversize = null, onAbandone
       peers.push(rec);
       trimPeers();
       log(`LIS: подключение ${label} к порту ${rec.port}`);
+      // LIS_VENDOR_EXACT_V1 — D4, ревью: не больше MAX_SOCKETS_PER_IP открытых
+      // соединений с одного адреса; лишнее — старейшее молчащее, иначе старейшее
+      // (socks — в порядке подключения), RST.
+      const same = [...socks].filter((s) => s !== sock && !s.destroyed && recOf.has(s) && recOf.get(s).ip === ip);
+      if (same.length >= MAX_SOCKETS_PER_IP) {
+        const victim = same.find((s) => recOf.get(s).frames === 0) || same[0];
+        log(`LIS: с ${ip} открыто больше ${MAX_SOCKETS_PER_IP} соединений (предел) — старое ${ip}:${recOf.get(victim).remotePort} закрыто`);
+        resetSocket(victim);
+      }
+      recOf.set(sock, rec);
       sock.on('data', () => { rec.lastRxAt = isoNow(); });
       sock.on('close', () => {
         socks.delete(sock);
+        recOf.delete(sock);   // LIS_VENDOR_EXACT_V1 — D4, ревью
         rec.open = false;
         rec.closedAt = isoNow();
         trimPeers();

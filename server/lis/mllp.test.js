@@ -540,6 +540,44 @@ test('D4: resetSocket сокета, у которого FIN уже в пути (
   assert.deepEqual(ev, [], 'без ошибки EINVAL');
 });
 
+// LIS_VENDOR_EXACT_V1 — D4, ревью: тайм-аута простоя больше нет, а он был одним
+// из двух пределов для того, кто не представился (порт неаутентифицирован).
+// Новый предел — число открытых соединений с одного адреса: прибору нужно одно
+// (A1000 держит его часами), переадресателю — по одному на анализатор его ПК.
+// Сверх предела рвётся RST старейшее молчащее (кадров не было), иначе старейшее.
+test('D4: с одного адреса — не больше MAX_SOCKETS_PER_IP открытых соединений; лишнее — старейшее молчащее, RST; живой прибор не тронут', async () => {
+  const { MAX_SOCKETS_PER_IP } = await import('./mllp.js');
+  assert.equal(MAX_SOCKETS_PER_IP, 16);
+  const logs = [];
+  const srv = await startMllpServer({ port: 0, onMessage: async () => 'AA', log: (m) => logs.push(m) });
+  const all = [];
+  try {
+    // Первым подключился и прислал пробу настоящий прибор.
+    const live = await connect(srv.port);
+    all.push(live);
+    const liveEv = trackClose(live);
+    const reply = readFrame(live);
+    live.write(frame(MSG('95')));
+    await reply;
+    // Потом тот же адрес открыл ещё MAX_SOCKETS_PER_IP молчащих.
+    const silent = [];
+    for (let i = 0; i < MAX_SOCKETS_PER_IP; i++) {
+      const s = await connect(srv.port);
+      all.push(s);
+      silent.push({ s, localPort: s.localPort, ...trackClose(s) });   // порт — до закрытия: у закрытого его нет
+    }
+    await silent[0].closed;
+    assert.ok(silent[0].ev.includes('ECONNRESET'), 'старейшее молчащее — RST: ' + silent[0].ev.join(','));
+    await until(() => srv.peers().filter((p) => p.open).length === MAX_SOCKETS_PER_IP, 3000, 'открытых — ровно предел');
+    assert.deepEqual(liveEv.ev, [], 'прибор, приславший пробу, на связи');
+    assert.ok(srv.peers().some((p) => p.open && p.remotePort === live.localPort));
+    assert.ok(logs.some((l) => /предел/.test(l) && l.includes('127.0.0.1:' + silent[0].localPort + ' ')), 'в журнал: ' + logs.filter((l) => /предел/.test(l)).join(' | '));
+  } finally {
+    for (const s of all) s.destroy();
+    await srv.close();
+  }
+});
+
 // ── LIS_VENDOR_EXACT_V1 — D10: текст кадра — UTF-8 строго, иначе windows-1251 ──
 // BS-200 и CL-900i пишут однобайтно: «ISO 8859-1 characters (hexadecimal
 // 20-FF)» (HIM v5.0, с. 1), на деле — кодовая страница ПК прибора (у клиники —
