@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildSheetHtml } from '../../../public/js/shared/doc-render.js';
+import { getClinicBySlug } from '../rpc/clinic.js';   // CLINIC_API_FIX_V1 — та же запись клиники, что window.CLINIC
 
 const ROOT = path.dirname(path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))));
 
@@ -61,8 +62,9 @@ export function stripAutoPrint(html) {
 //
 // В браузере настройки живут в localStorage и подтягиваются из doc_branding;
 // у сервера localStorage нет, поэтому собираем то же самое напрямую из таблиц.
-// doc_branding (дизайнер) главнее doc_settings (реквизиты клиники) — тот же
-// порядок, что и в applyCompanyBranding() на клиенте.
+// Оформление (шрифт, плотность, подвал…) — из doc_branding (дизайнер),
+// реквизиты клиники — из «Компании» сверху: тот же порядок, что и в
+// applyCompanyBranding() на клиенте.
 export function loadServerDocSettings(db) {
   let brand = {};
   try {
@@ -70,20 +72,45 @@ export function loadServerDocSettings(db) {
     if (row && row.settings) brand = JSON.parse(row.settings) || {};
   } catch { /* нет таблицы или битый JSON — идём с реквизитами клиники */ }
 
-  const c = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {};
   const s = {
     clinicName: 'Easy-Med',
     ink: '#0b1418', paperBg: '#ffffff', paperSize: 'A4', language: 'ru',
     ...brand,
   };
-  // Реквизиты клиники перекрывают дизайнерские заглушки, но только если реально
-  // заполнены: пустое поле в doc_settings не должно стирать настройку дизайнера.
-  const overlay = {
-    clinicName: c.clinic_name, address: c.address, phone: c.phone, email: c.email,
-    license: c.license, logoDataUrl: c.logo_data_url, accent: c.accent_color,
-  };
-  for (const [k, v] of Object.entries(overlay)) if (v) s[k] = v;
   if (!s.variant || typeof s.variant !== 'object') s.variant = {};
+  // CLINIC_API_FIX_V1 — «Компания» сверху, как в браузере. doc_branding —
+  // копия, снятая при сохранении «Документов»: в ней лежат и название, и
+  // logoUrl, которые «Компания» подставила ТОГДА. Прежний код клал логотип
+  // клиники в logoDataUrl (поле собственного логотипа дизайнера), а logoUrl
+  // из копии оставлял — logoMark() предпочитает logoUrl, и после смены
+  // логотипа в «Компании» Telegram слал документы со старым.
+  // Запись клиники — та же, что видит браузер в window.CLINIC.
+  return overlayCompanyBranding(s, getClinicBySlug(db));
+}
+
+// CLINIC_API_FIX_V1 — серверная копия applyCompanyBranding()
+// (public/js/admin/views/doc-settings.js): то же правило, те же поля. Там
+// функция читает window.CLINIC и не импортируется в Node, поэтому правило
+// повторено здесь, а совпадение держит render-branding.test.js.
+//   • ручной режим «Документов» (useCompanyIdentity === false) — реквизиты
+//     дизайнера главнее, логотип «Компании» снимается, печатается свой;
+//   • иначе заполненные поля «Компании» перекрывают копию, пустые её не
+//     стирают; logoUrl — всегда логотип «Компании» (или ничего), а свой
+//     логотип дизайнера (logoDataUrl) не трогается: он печатается, когда у
+//     «Компании» логотипа нет.
+function overlayCompanyBranding(s, c) {
+  if (s.useCompanyIdentity === false) { s.logoUrl = null; return s; }
+  if (!c) return s;
+  if (c.name_ru || c.name) s.clinicName = c.name_ru || c.name;
+  if (c.address)           s.address    = c.address;
+  if (c.phone)             s.phone      = c.phone;
+  if (c.email)             s.email      = c.email;
+  if (c.website)           s.web        = c.website;
+  if (c.tax_id)            s.taxId      = c.tax_id;
+  if (c.license_number)    s.license    = c.license_number;
+  if (c.legal_name)        s.legalName  = c.legal_name;
+  if (c.accent_color)      s.accent     = c.accent_color;
+  s.logoUrl = c.logo_url || null;
   return s;
 }
 
