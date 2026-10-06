@@ -42,11 +42,13 @@ migrate(DB);
 const addUser = DB.prepare('INSERT INTO users (id, username, password_hash, full_name, role) VALUES (?,?,?,?,?)');
 addUser.run(1, 'boss', hashPassword('password1'), 'Админ Клиники', 'admin');
 addUser.run(10, 'doc', hashPassword('password1'), 'Иванов Иван', 'doctor');
+addUser.run(11, 'doc2', hashPassword('password1'), 'Петров Пётр', 'doctor');
 DB.prepare("INSERT INTO consultation_types (id, name, name_ru, price, sort_order, active) VALUES (5,'Первичный','Первичный приём',80000,1,1)").run();
 DB.prepare("INSERT INTO consultation_types (id, name, name_ru, price, sort_order, active) VALUES (6,'Повторный','Повторный приём',60000,2,1)").run();
 DB.prepare("INSERT INTO patients (id, full_name) VALUES (77,'Пациент Тест')").run();
 
 const DOCTOR = 10;
+const PETROV = 11;    // второй врач: ведёт тот вид, который DOCTOR не ведёт
 const NOT_LED = 5;   // { available: 0, is_free: 1 } — не ведёт; если бы вёл — бесплатно
 const LED = 6;       // { available: 1, is_free: 0 } — ведёт, платно
 function seedPrices() {
@@ -111,7 +113,8 @@ async function openDoctorDialog() {
     document.body.children = [];
     const container = new El('div');
     await renderConsultationTypes(container);
-    const edit = container.querySelectorAll('button').find((b) => /Edit|Редактировать/.test(b.textContent));
+    const card = container.querySelectorAll('.card').find((c) => c.textContent.includes('Иванов Иван'));
+    const edit = card && card.querySelectorAll('button').find((b) => /Edit|Редактировать/.test(b.textContent));
     assert.ok(edit, 'у врача нет кнопки «Edit»');
     edit.onclick();
     const dlg = modals().pop();
@@ -149,14 +152,15 @@ test('«Консультации врачей»: { available: 1, is_free: 0 } �
 test('«Консультации врачей»: открыть и «Сохранить» без правок — флаги в базе те же', async () => {
     seedPrices();
     const before = stored();
-    const idsBefore = DB.prepare('SELECT id FROM doctor_consultation_prices ORDER BY id').all().map((r) => r.id);
+    const ids = () => DB.prepare('SELECT id FROM doctor_consultation_prices WHERE doctor_id = ? ORDER BY id').all(DOCTOR).map((r) => r.id);
+    const idsBefore = ids();
     const { dlg, save } = await openDoctorDialog();
     assert.ok(save, 'кнопки «Save» нет');
     await save.onclick();
     // Сохранение на самом деле прошло (окно переписывает строки врача заново и
     // закрывается), иначе «флаги те же» доказывали бы только отказ записи.
     assert.ok(!modals().includes(dlg), 'окно не закрылось — сохранение не прошло');
-    const idsAfter = DB.prepare('SELECT id FROM doctor_consultation_prices ORDER BY id').all().map((r) => r.id);
+    const idsAfter = ids();
     assert.ok(idsAfter.every((id) => !idsBefore.includes(id)), 'строки врача не переписаны — сохранение не дошло до базы');
     assert.deepEqual(stored(), before, 'сохранение без правок переписало флаги врача');
     assert.deepEqual(stored(), [
@@ -176,6 +180,42 @@ test('окно записи: консультацию, которую врач �
     const text = box.textContent;
     assert.ok(text.includes('Повторный приём'), 'консультации, которую врач ведёт, в окне нет: ' + text.slice(0, 300));
     assert.ok(!text.includes('Первичный приём'), 'окно предлагает консультацию, которую врач не ведёт (available = 0)');
+});
+
+// CLINIC_API_FIX_V1 (ревью) — врач выбран ДО услуги (visitDoctorId). Строки
+// консультаций свои у каждого врача, и строку вида NOT_LED даёт только PETROV.
+// Выбрав её, окно спрашивает consultAvailableFor(DOCTOR, NOT_LED): 0 из базы
+// при сравнении с false оставлял DOCTOR исполнителем — консультация уходила
+// врачу, который её не ведёт, по его «цене».
+test('окно записи, врач выбран заранее: вид, который он не ведёт, на него не записывается; тот, что ведёт, — записывается', async () => {
+    seedPrices();
+    DB.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available, is_free, name_ru) VALUES (?,?,?,?,?,?)')
+        .run(PETROV, NOT_LED, 90000, 1, 0, 'Осмотр у Петрова');
+    const pickWith = async (rowName) => {
+        document.body.children = [];
+        const picks = [];
+        openServicePickerModal({ visitDoctorId: DOCTOR, onPick: (p) => picks.push(p) });
+        const box = await until(() => modals().find((m) => m.textContent.includes(rowName)));
+        assert.ok(box, 'в окне записи нет строки «' + rowName + '»');
+        const rows = box.querySelectorAll('button.sched-col-row');
+        assert.ok(!rows.some((r) => r.textContent.startsWith('Первичный приём')),
+            'окно предлагает строку вида, который выбранный врач не ведёт (available = 0)');
+        rows.find((r) => r.textContent.includes(rowName)).dispatch('click');
+        const done = box.querySelectorAll('button').find((b) => /Готово/.test(b.textContent));
+        assert.ok(done, 'кнопки «Готово» нет');
+        done.dispatch('click');
+        await until(() => picks.length);
+        assert.equal(picks.length, 1, 'выбор не дошёл до экрана');
+        return picks[0];
+    };
+    const led = await pickWith('Повторный приём');
+    assert.equal(led.service.consultation_type_id, LED);
+    assert.equal(led.doctor && led.doctor.id, DOCTOR, 'вид, который врач ведёт, ушёл без него');
+    assert.equal(led.service.price, 120000);
+    const notLed = await pickWith('Осмотр у Петрова');
+    assert.equal(notLed.service.consultation_type_id, NOT_LED);
+    assert.notEqual(notLed.doctor && notLed.doctor.id, DOCTOR,
+        'окно записало на врача консультацию, которую он не ведёт (available = 0)');
 });
 
 // ─── 3. Кабинет врача: «Повторный визит» ────────────────────────────────────

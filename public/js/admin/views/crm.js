@@ -4,6 +4,7 @@
 // желанию до сохранения). Внутри — «Отчёт» (период, конверсия, источники)
 // и выгрузка Excel. Таблица crm_requests (mig 044).
 import { supabase } from '../../supabase.js';
+import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы, одно правило
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { askRecordingUntilReady, recordingMessage, RECORDING_WAITING, RECORDING_GAVE_UP } from '../../shared/call-recording.js?v=crr1';   // CALL_RECORDING_REASONS_V1 — «Прослушать»: причина словами, повтор, пока запись готовится
@@ -1836,7 +1837,7 @@ async function paint() {
                     .then(({ data }) => {
                         const m = new Map();
                         for (const r of (data || [])) {
-                            if (r.available === false || r.available === 0) continue;
+                            if (!isOn(r.available)) continue;   // CLINIC_API_FIX_V1 — одно правило флага на все окна
                             const k = String(r.consultation_type_id);
                             if (!m.has(k)) m.set(k, new Set());
                             m.get(k).add(String(r.doctor_id));

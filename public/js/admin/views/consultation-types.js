@@ -10,6 +10,8 @@
 //   doctor_consultation_prices(id, company_id, doctor_id->users,
 //     consultation_type_id->consultation_types, price numeric NULL,
 //     available bool default true, is_free bool default false,
+//     (CLINIC_API_FIX_V1 — офлайн это INTEGER 0/1: из базы флаги приходят числами
+//      и читаются только через isOn из shared/flags.js, не сравнением с true/false)
 //     UNIQUE(doctor_id, consultation_type_id))
 // No row for a (doctor,type) = defaults: available, not free, price = type default.
 

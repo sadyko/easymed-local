@@ -18,6 +18,7 @@ import { getLang, tr, trf } from '../i18n.js';   // EMP_STAFF_TYPE_V1 + I18N_COV
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — одна правка ставки на обе карточки
 import { employeeNameParts } from '../../shared/employee-name.js';   // EMPLOYEE_CARD_SAVE_V1 — разбор full_name, общий с employees.js
+import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 
 // ROLE_ADMIN_ONLY_V1 — assigning a user's role is the clinic owner's job alone
 // (the DB also enforces it: users.role_id writes require current_user_is_admin()).
@@ -978,8 +979,9 @@ const SECTION_RENDERERS = {
             // Anything missing falls back to the clinic default (available, not free).
             const cur = emp.consultationPrices[t.id] || {};
             const curPrice = (cur.price === '' || cur.price == null) ? '' : cur.price;
-            const curAvail = cur.available !== false;   // default available
-            const curFree  = cur.is_free === true;
+            // CLINIC_API_FIX_V1 — флаги из базы 0/1 (isOn); нет значения — «ведёт», «не бесплатно».
+            const curAvail = cur.available == null || isOn(cur.available);   // default available
+            const curFree  = isOn(cur.is_free);
 
             // Helper: rewrite this type's setting into the consultationPrices map.
             const patch = (over) => {
@@ -1436,8 +1438,8 @@ export async function saveEmployee(emp, row) {
             const rows = [];
             for (const [consultation_type_id, raw] of Object.entries(emp.consultationPrices || {})) {
                 const cell = (raw && typeof raw === 'object') ? raw : { price: raw };   // back-compat with the old {id: price} shape
-                const available = cell.available !== false;
-                const is_free = cell.is_free === true;
+                const available = cell.available == null || isOn(cell.available);   // CLINIC_API_FIX_V1 — 0/1 из базы
+                const is_free = isOn(cell.is_free);
                 const hasPrice = cell.price !== '' && cell.price != null && !Number.isNaN(Number(cell.price));
                 // Skip pure-default cells (no row needed → defaults apply).
                 if (available && !is_free && !hasPrice) continue;
