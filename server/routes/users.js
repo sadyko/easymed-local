@@ -8,7 +8,7 @@ import { roleExceedsActor, isAdminRoleCode } from '../services/role-guard.js';  
 // «Моего профиля» врача (rpc/doctor-profile.js), и тот же вид для экранов.
 import { cleanProfileFields, publicProfileOf } from '../services/rpc/doctor-profile.js';
 // CLINIC_API_FIX_V1 — канон специальностей (тот же, что у профиля врача и отчётов).
-import { SPECIALTY_ROWS, canonicalSpecialty } from '../../public/js/shared/specialty-list.js';
+import { SPECIALTY_ROWS, specialtyGroupName } from '../../public/js/shared/specialty-list.js';
 
 export { VALID_ROLES, PRIMARY_ROLES };
 
@@ -453,26 +453,35 @@ export function parseSpecialties(raw) {
 // CLINIC_API_FIX_V1 (2026-10-06) — строка пишется со слагом, ru И uz. Прежде
 // здесь были только присланный слаг и name_ru: name_uz становился NULL, а у
 // старого написания («Врач УЗД») слага не было. Теперь, как в профиле врача
-// (rpc/doctor-profile.js): название приводится canonicalSpecialty и ищется в
-// SPECIALTY_ROWS — слаг, ru и uz берутся оттуда, а не от клиента. Не из списка —
-// слаг NULL, name_ru как набрано, name_uz NULL; но если у ЭТОГО сотрудника уже
-// есть строка с тем же названием (слаг и uz от прежнего редактора), её слаг и
-// uz сохраняются. Два написания одной специальности после канона — одна строка.
-// users.specialty здесь не трогается (его пишут POST / PATCH ниже).
+// (rpc/doctor-profile.js): название ищется в SPECIALTY_ROWS через
+// specialtyGroupName — старые написания и метки списка в любом регистре и с
+// лишними пробелами («кардиолог», «лор», « Врач  узи »), тем же правилом, что
+// группирует отчёт; слаг, ru и uz берутся оттуда, а не от клиента. Не из
+// списка — слаг NULL, name_ru как набрано, name_uz NULL; но если у ЭТОГО
+// сотрудника уже есть строка с тем же названием и со СТАРЫМ (не из списка)
+// слагом от прежнего редактора, её слаг и uz сохраняются. Канонический слаг
+// при названии не из списка — это слаг, когда-то принятый от клиента
+// (`{ slug: 'kardiolog', name: 'Трихолог' }`): он и его uz не переживают
+// пересохранения. Два написания одной специальности — одна строка.
+// users.specialty здесь не трогается (его пишут POST / PATCH ниже, в одной
+// транзакции с этой записью).
 const SPEC_BY_RU = new Map(SPECIALTY_ROWS.map((r) => [r.ru, r]));
+const CANON_SLUGS = new Set(SPECIALTY_ROWS.map((r) => r.slug));
+const specNameKey = (v) => String(v == null ? '' : v).trim().replace(/\s+/g, ' ').toLowerCase();
 export function writeSpecialties(db, userId, list) {
   const own = new Map(db.prepare('SELECT specialty_slug, name_ru, name_uz FROM user_specialties WHERE user_id = ?').all(userId)
-    .map((r) => [String(r.name_ru || '').trim().toLowerCase(), r]));
+    .map((r) => [specNameKey(r.name_ru), r]));
   db.prepare('DELETE FROM user_specialties WHERE user_id = ?').run(userId);
   const ins = db.prepare('INSERT INTO user_specialties (user_id, specialty_slug, name_ru, name_uz, is_primary) VALUES (?, ?, ?, ?, ?)');
   const seen = new Set();
   for (const sp of list) {
     const name = String(sp.name || '').trim();
-    const canon = SPEC_BY_RU.get(canonicalSpecialty(name));
-    const prev = canon ? null : own.get(name.toLowerCase());
+    const canon = SPEC_BY_RU.get(specialtyGroupName(name));
+    const prev = canon ? null : own.get(specNameKey(name));
+    const legacy = prev && !(prev.specialty_slug && CANON_SLUGS.has(prev.specialty_slug)) ? prev : null;
     const row = canon ? { slug: canon.slug, ru: canon.ru, uz: canon.uz }
-      : { slug: prev ? prev.specialty_slug : null, ru: name, uz: prev ? prev.name_uz : null };
-    const key = row.ru.toLowerCase();
+      : { slug: legacy ? legacy.specialty_slug : null, ru: name, uz: legacy ? legacy.name_uz : null };
+    const key = specNameKey(row.ru);
     if (!key || seen.has(key)) continue;
     ins.run(userId, row.slug, row.ru, row.uz, seen.size === 0 ? 1 : 0);
     seen.add(key);
@@ -641,8 +650,13 @@ export function userRoutes(db) {
     const placeholders = columns.map(() => '?').join(',');
     const values = [name, hashPassword(password), finalFullName, finalRole,
                     ...(cr.code !== undefined ? [cr.code] : []), ...Object.values(ef)];
-    const info = db.prepare(`INSERT INTO users (${columns.join(',')}) VALUES (${placeholders})`).run(...values);
-    if (specs.list) writeSpecialties(db, Number(info.lastInsertRowid), specs.list);
+    // CLINIC_API_FIX_V1 — сотрудник и его специальности — одна транзакция:
+    // сбой вставки специальности не оставляет сотрудника без них.
+    const info = db.transaction(() => {
+      const ins = db.prepare(`INSERT INTO users (${columns.join(',')}) VALUES (${placeholders})`).run(...values);
+      if (specs.list) writeSpecialties(db, Number(ins.lastInsertRowid), specs.list);
+      return ins;
+    })();
     const created = withSpecialties(db, employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid)));
     res.status(201).json({ user: employeeMoneyAllowed(db, req.user) ? created : stripMoney(created) });
   });
@@ -765,8 +779,14 @@ export function userRoutes(db) {
       password !== undefined ? hashPassword(password) : null,
       ...efKeys.map(k => ef[k]),
     ];
-    db.prepare(`UPDATE users SET ${setClauses.join(', ')} WHERE id = ?`).run(...values, user.id);
-    if (specs.list) writeSpecialties(db, user.id, specs.list);
+    // CLINIC_API_FIX_V1 — UPDATE users (с users.specialty) и DELETE + INSERT
+    // специальностей — одна транзакция, как в профиле врача
+    // (rpc/doctor-profile.js): сбой на середине не оставляет ни стёртого списка,
+    // ни новой основной специальности при старом списке.
+    db.transaction(() => {
+      db.prepare(`UPDATE users SET ${setClauses.join(', ')} WHERE id = ?`).run(...values, user.id);
+      if (specs.list) writeSpecialties(db, user.id, specs.list);
+    })();
     // Deactivation OR password reset must end the target's sessions (a reset
     // is the standard response to a suspected compromise). The acting admin's
     // own session survives a self password change.
