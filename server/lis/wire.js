@@ -256,7 +256,8 @@ function noResultHold(obx5, obx13, obx9 = '') {
 const QUAL_NEGATIVE = /^(negative|neg|non-?reactive|non reactive|nrea|отрицательн\S*)$/;
 const QUAL_POSITIVE = /^(positive|pos|reactive|reac|weak(ly)? positive|weak(ly)? reactive|borderline|equivocal|gr[ae]y ?zone|indeterminate|положительн\S*|слабоположительн\S*|слабо положительн\S*|сомнительн\S*)$/;
 function qualitativeOf(raw) {
-  const s = String(raw == null ? '' : raw).trim().toLowerCase().replace(/\s+/g, ' ');
+  // Скобки — как в таблице ASTM того же руководства: «Negative(-)», «Weak positive(+-)».
+  const s = String(raw == null ? '' : raw).toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!s) return '';
   const word = s.replace(/[\s+\-±]+$/, '');   // «positive+», «negative-», «weak positive+-»
   if (!word) return s.startsWith('-') ? 'negative' : 'positive';   // одни знаки: «-», «+», «+-», «±»

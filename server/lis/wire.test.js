@@ -602,6 +602,11 @@ test('D6: CL-900i — OBX-9 читается: положительно/отри�
     ['Non-Reactive', 'negative'], ['POSITIVE', 'positive'], ['+', 'positive'], ['-', 'negative'], ['+-', 'positive']]) {
     assert.equal(read(obx9).qualitative, q, obx9);
   }
+  // LIS_VENDOR_EXACT_V1 — тот же ответ в скобках, как его пишет таблица ASTM
+  // того же руководства (с. 2-20–2-21: «Negative(-), Positive(+), Weak positive(+-)»).
+  for (const [obx9, q] of [['Negative(-)', 'negative'], ['Positive(+)', 'positive'], ['Weak positive(+-)', 'positive'], ['Positive (+)', 'positive']]) {
+    assert.equal(read(obx9).qualitative, q, obx9);
+  }
   // Пусто и не качественный ответ (у BS-200 OBX-9 — целое «вероятность») — нет ответа.
   for (const obx9 of ['', '1', '0.85']) assert.equal(read(obx9).qualitative, undefined, JSON.stringify(obx9));
   // Количественная строка CL — как была.
