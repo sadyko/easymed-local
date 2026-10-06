@@ -147,18 +147,25 @@ const SPECS = [
 ];
 const CONDS = [{ kind: 'disease', slug: 'gipertoniya', name_ru: 'Гипертония', name_uz: 'Gipertoniya' }];
 
-let scenario = { user: DOC_ROW, specs: SPECS, conds: CONDS };
+let scenario = { user: DOC_ROW, specs: SPECS, conds: CONDS, storage: 'ok' };
 const rpcCalls = [];
 const reply = (status, body) => ({ ok: status < 400, status, json: async () => body });
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
+    if (u.startsWith('/api/storage/')) {   // загрузка фото врача
+        if (scenario.storage === 'fail') return reply(500, { error: { message: 'диск заполнен' } });
+        return reply(200, {});
+    }
     if (u === '/api/db') {
         const desc = JSON.parse(opts.body);
         if (desc.table === 'users') {
             if (scenario.user === 'fail') return reply(400, { error: { message: 'unknown column' } });
             return reply(200, { data: JSON.parse(JSON.stringify(scenario.user)) });
         }
-        if (desc.table === 'user_specialties') return reply(200, { data: scenario.specs.map((r) => ({ ...r })) });
+        if (desc.table === 'user_specialties') {
+            if (scenario.specs === 'fail') return reply(500, { error: { message: 'database is locked' } });
+            return reply(200, { data: scenario.specs.map((r) => ({ ...r })) });
+        }
         if (desc.table === 'doctor_conditions') return reply(200, { data: scenario.conds.map((r) => ({ ...r })) });
         return reply(200, { data: [] });
     }
@@ -171,13 +178,15 @@ globalThis.fetch = async (url, opts = {}) => {
 };
 
 const { renderDoctorProfile } = await import('../views/doctor-profile.js');
+const { supabase } = await import('../../supabase.js');   // тот же экземпляр, что у окна
 
 const byClass = (root, c) => walk(root).filter((n) => String(n.className || '').split(/\s+/).includes(c));
 const tagsOf = (root, tag) => walk(root).filter((n) => n.tagName === String(tag).toUpperCase());
 const toastText = () => { const t = document.getElementById('toast'); return t ? t.textContent : ''; };
+const ticks = async () => { for (let i = 0; i < 8; i += 1) await new Promise((r) => setTimeout(r, 0)); };
 
 async function openProfile(sc = {}) {
-    scenario = { user: DOC_ROW, specs: SPECS, conds: CONDS, ...sc };
+    scenario = { user: DOC_ROW, specs: SPECS, conds: CONDS, storage: 'ok', ...sc };
     rpcCalls.length = 0;
     document.body.children.length = 0;
     const container = mk('div');
@@ -191,6 +200,13 @@ async function openProfile(sc = {}) {
         bio: { ru: bio[0], uz: bio[1], en: bio[2] },
         input: (ph) => tagsOf(container, 'input').find((i) => i.attrs.placeholder === ph),
         save: async () => { await saveBtn.onclick(); },
+        // «Загрузить файл с компьютера»: выбор файла в скрытом <input type=file>.
+        pickPhoto: async (name = 'portret.jpg') => {
+            const fileInp = tagsOf(container, 'input').find((i) => i.attrs.type === 'file');
+            assert.ok(fileInp, 'нет поля выбора фото');
+            fileInp.dispatchEvent({ type: 'change', target: { files: [new File(['jpeg-bytes'], name, { type: 'image/jpeg' })] } });
+            await ticks();
+        },
     };
 }
 
@@ -259,4 +275,99 @@ test('CLINIC_API_FIX_V1: после сохранения точка отсчёт
 test('CLINIC_API_FIX_V1: «Нет изменений» переведено', () => {
     const e = STRINGS['Нет изменений'];
     assert.ok(e && e.ru && e.uz && e.en, 'строке «Нет изменений» нужен перевод в i18n-strings.js');
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 (ревью 29ee709) — специальности, которые не загрузились,
+// не меняются: пустой список на экране — не «специальностей нет», и любая
+// правка заменила бы на сервере весь набор врача.
+// ---------------------------------------------------------------------------
+const SPEC_LOAD_FAILED = 'Специальности не загрузились — обновите страницу, чтобы их изменить.';
+
+test('CLINIC_API_FIX_V1: специальности не загрузились — подсказка вместо выбора, в RPC их нет', async () => {
+    const s = await openProfile({ specs: 'fail' });
+    const text = s.container.textContent;
+    assert.ok(text.includes(SPEC_LOAD_FAILED), 'карточка специальностей не говорит, что они не загрузились');
+    const addSelect = tagsOf(s.container, 'select').find((sel) => sel.textContent.includes('+ Добавить специальность'));
+    assert.ok(!addSelect, 'специальности не загрузились, а выбор «Добавить специальность» на экране');
+    assert.equal(byClass(s.container, 'docprof-spec-chip').length, 0);
+    s.bio.ru.value = 'Новый текст.';
+    await s.save();
+    assert.equal(rpcCalls.length, 1);
+    assert.deepEqual(rpcCalls[0].p, { bio_ru: 'Новый текст.' });
+    assert.ok(!('specialties' in rpcCalls[0]), 'не загрузившиеся специальности ушли на сервер');
+    const e = STRINGS[SPEC_LOAD_FAILED];
+    assert.ok(e && e.ru && e.uz && e.en, 'подсказке нужен перевод в i18n-strings.js');
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 (ревью 29ee709) — фото: уходит только новое, и неудача
+// загрузки всегда видна врачу.
+// ---------------------------------------------------------------------------
+test('CLINIC_API_FIX_V1: новое фото — в p только photo_url; повтор без правок — «Нет изменений»', async () => {
+    const s = await openProfile();
+    await s.pickPhoto('portret.jpg');
+    await s.save();
+    assert.equal(rpcCalls.length, 1, 'новое фото не ушло');
+    assert.deepEqual(Object.keys(rpcCalls[0].p), ['photo_url']);
+    assert.match(rpcCalls[0].p.photo_url, /^\/api\/storage\/doctor-photos\/doctors\/7\/.+portret\.jpg$/);
+    assert.ok(!('specialties' in rpcCalls[0]) && !('conditions' in rpcCalls[0]));
+    await s.save();
+    assert.equal(rpcCalls.length, 1, 'сохранённое фото ушло ещё раз');
+    assert.equal(toastText(), 'Нет изменений');
+});
+
+test('CLINIC_API_FIX_V1: фото не загрузилось — RPC нет, «Нет изменений» нет, видна ошибка загрузки', async () => {
+    const s = await openProfile({ storage: 'fail' });
+    await s.pickPhoto();
+    await s.save();
+    assert.equal(rpcCalls.length, 0, 'без фото и без правок ушло: ' + JSON.stringify(rpcCalls[0]));
+    assert.equal(toastText(), 'Не удалось загрузить фото: диск заполнен');
+});
+
+test('CLINIC_API_FIX_V1: хранилище не вернуло адрес фото — врач видит ошибку, а не тишину', async () => {
+    const orig = supabase.storage.from;
+    supabase.storage.from = (bucket) => ({ ...orig(bucket), getPublicUrl: () => ({ data: { publicUrl: '' } }) });
+    try {
+        const s = await openProfile();
+        await s.pickPhoto();
+        await s.save();
+        assert.equal(rpcCalls.length, 0);
+        assert.equal(toastText(), 'Не удалось загрузить фото', 'фото не сохранилось молча');
+    } finally {
+        supabase.storage.from = orig;
+    }
+});
+
+test('CLINIC_API_FIX_V1: сбой до загрузки (файл не собрался) — врач видит ошибку, а не тишину', async () => {
+    const s = await openProfile();
+    await s.pickPhoto();
+    const RealFile = globalThis.File;
+    // Выбранное фото — уже не File этого окна, а собрать новый не выходит.
+    globalThis.File = class { constructor() { throw new Error('файл не собран'); } };
+    try {
+        await s.save();
+    } finally {
+        globalThis.File = RealFile;
+    }
+    assert.equal(rpcCalls.length, 0);
+    assert.equal(toastText(), 'Не удалось загрузить фото: файл не собран', 'фото не сохранилось молча');
+});
+
+test('CLINIC_API_FIX_V1: фото не загрузилось, а другое поле сохранено — «Профиль сохранён» не прячет ошибку фото', async () => {
+    const s = await openProfile({ storage: 'fail' });
+    await s.pickPhoto();
+    s.bio.ru.value = 'Новый текст.';
+    await s.save();
+    assert.equal(rpcCalls.length, 1);
+    assert.deepEqual(rpcCalls[0].p, { bio_ru: 'Новый текст.' });
+    const msg = 'Профиль сохранён, но фото не загрузилось — нажмите «Сохранить профиль» ещё раз.';
+    assert.equal(toastText(), msg);
+    const e = STRINGS[msg];
+    assert.ok(e && e.ru && e.uz && e.en, 'сообщению нужен перевод в i18n-strings.js');
+    // Повтор с работающим хранилищем дошлёт фото.
+    scenario.storage = 'ok';
+    await s.save();
+    assert.equal(rpcCalls.length, 2);
+    assert.deepEqual(Object.keys(rpcCalls[1].p), ['photo_url']);
 });

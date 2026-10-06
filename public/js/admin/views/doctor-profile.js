@@ -66,6 +66,7 @@ export async function renderDoctorProfile(container, doctorId) {
         photoFile: null,          // File/Blob pending upload (file pick OR webcam snapshot)
         photoUrl: '',             // already-a-URL ("по ссылке") OR loaded users.photo_url
         specSlugs: [],            // array of specialty_slug strings (max 4, [0] = primary)
+        specLoadFailed: false,    // CLINIC_API_FIX_V1 — list did not load: no editing, never sent
         selectedConds: new Map(), // "kind:slug" -> { kind, slug, name_ru, name_uz }
         catalog: [],              // conditions catalog from gw
         specCatalog: [],          // specialties catalog from gw
@@ -126,9 +127,12 @@ export async function renderDoctorProfile(container, doctorId) {
     st.photoUrl = st.user.photo_url || '';
 
     try {
-        const { data } = await supabase.from('user_specialties')
+        // CLINIC_API_FIX_V1 — отказ базы — не «специальностей нет»: пустой
+        // список на экране после правки заменил бы на сервере весь набор врача.
+        const { data, error } = await supabase.from('user_specialties')
             .select('specialty_slug, name_ru, is_primary').eq('user_id', doctorId)
             .order('is_primary', { ascending: false });
+        if (error) throw error;
         // Ревью M7b — карточка сотрудника пишет специальность без слага, одним
         // названием. Каноническое название узнаём по списку и показываем как
         // обычную специальность; неканоническое экран не показывает и не шлёт —
@@ -139,7 +143,7 @@ export async function renderDoctorProfile(container, doctorId) {
             return hit ? hit.slug : null;
         };
         st.specSlugs = [...new Set((data || []).map((r) => r.specialty_slug || slugOfName(r.name_ru)).filter(Boolean))];
-    } catch (e) { st.specSlugs = []; }
+    } catch (e) { st.specSlugs = []; st.specLoadFailed = true; }   // CLINIC_API_FIX_V1
 
     try {
         const { data } = await supabase.from('doctor_conditions')
@@ -223,6 +227,9 @@ export async function renderDoctorProfile(container, doctorId) {
             // остального профиля, специальностей и болезней.
             let photoUrl = '';
             try { photoUrl = await uploadPendingPhoto(); } catch (e) { console.warn('[doctor-profile] photo upload:', e.message || e); }
+            // CLINIC_API_FIX_V1 — выбранное фото не загрузилось (свой тост об
+            // этом уже показан): не «Нет изменений» и не голое «Профиль сохранён».
+            const photoFailed = !photoUrl && !!st.photoFile;
 
             // (2) Whitelisted RPC payload — CLINIC_API_FIX_V1: only the keys that
             // differ from atOpen. '' clears a field.
@@ -240,13 +247,14 @@ export async function renderDoctorProfile(container, doctorId) {
             // пишет: реестр пускает туда только admin, и insert с company_id
             // отвергался у всех.
             // CLINIC_API_FIX_V1 — набор уходит, только если он стал другим:
-            // без ключа сервер оставляет строки как были.
+            // без ключа сервер оставляет строки как были. Не загрузившиеся
+            // специальности не уходят никогда.
             const args = { p };
-            if (JSON.stringify(now.specialties) !== JSON.stringify(atOpen.specialties)) args.specialties = now.specialties;
+            if (!st.specLoadFailed && JSON.stringify(now.specialties) !== JSON.stringify(atOpen.specialties)) args.specialties = now.specialties;
             if (JSON.stringify(now.conditions) !== JSON.stringify(atOpen.conditions)) args.conditions = now.conditions;
             if (!Object.keys(p).length && !('specialties' in args) && !('conditions' in args)) {
                 // Фото не загрузилось — об этом уже сказал свой тост.
-                if (!st.photoFile) toast('Нет изменений', 'info');
+                if (!photoFailed) toast('Нет изменений', 'info');
                 return;
             }
             const { data: saveRes, error: rpcErr } = await supabase.rpc('update_my_doctor_profile', args);
@@ -262,7 +270,11 @@ export async function renderDoctorProfile(container, doctorId) {
             // RPC_PORT_V1 — не говорим «сохранён» о том, что офлайн не хранится.
             // DOCTOR_PUBLIC_PROFILE_V1 — после миграции 159 not_stored пуст,
             // и это предупреждение остаётся только для базы до обновления.
-            if (notStored.length) toast('Профиль сохранён. Биография, образование, соцсети и фото в офлайн-версии не хранятся.', 'info');
+            // CLINIC_API_FIX_V1 — один тост на экран: «Профиль сохранён» закрыл бы
+            // ошибку фото, и врач решил бы, что фото тоже сохранено. Фото ждёт
+            // в st.photoFile — повторное «Сохранить профиль» дошлёт его.
+            if (photoFailed) toast('Профиль сохранён, но фото не загрузилось — нажмите «Сохранить профиль» ещё раз.', 'fail');
+            else if (notStored.length) toast('Профиль сохранён. Биография, образование, соцсети и фото в офлайн-версии не хранятся.', 'info');
             else toast('Профиль сохранён', 'info');
         } catch (e) {
             toast(trf('Не удалось сохранить: {msg}', { msg: e.message || e }), 'fail');
@@ -495,16 +507,22 @@ export async function renderDoctorProfile(container, doctorId) {
 
     // Upload pending photo to Storage (NEVER base64). Returns external URL,
     // a Storage public URL, or '' (leave photo unchanged on failure).
+    // CLINIC_API_FIX_V1 — КАЖДАЯ неудача говорит о себе тостом: сборка файла
+    // теперь внутри try, а пустой адрес из хранилища — тоже неудача. Прежде
+    // оба случая возвращали '' молча, и «Сохранить профиль» без других правок
+    // не делало ничего и ничего не говорило.
     async function uploadPendingPhoto() {
         if (st.photoUrl && st.photoUrl !== st.user.photo_url) return st.photoUrl;  // "по ссылке"
         if (!st.photoFile) return '';                                              // nothing new chosen
-        const file = st.photoFile instanceof File
-            ? st.photoFile
-            : new File([st.photoFile], 'photo.jpg', { type: st.photoFile.type || 'image/jpeg' });
         try {
+            const file = st.photoFile instanceof File
+                ? st.photoFile
+                : new File([st.photoFile], 'photo.jpg', { type: st.photoFile.type || 'image/jpeg' });
             const { path } = await uploadFile(PHOTO_BUCKET, file, photoPrefix(doctorId));
             const { data } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
-            return (data && data.publicUrl) || '';
+            const url = (data && data.publicUrl) || '';
+            if (!url) toast('Не удалось загрузить фото', 'fail');
+            return url;
         } catch (e) {
             toast(trf('Не удалось загрузить фото: {msg}', { msg: (e && e.message) || e }), 'fail');
             return '';   // save profile anyway, photo unchanged
@@ -555,6 +573,12 @@ export async function renderDoctorProfile(container, doctorId) {
 
     // ----- Specialties card (adapted from employee-editor specialtyPicker) -----
     function specialtyCard() {
+        // CLINIC_API_FIX_V1 — список не загрузился: ни чипов, ни выбора, только
+        // объяснение. Пустой список здесь значил бы «специальностей нет», и
+        // добавленная заменила бы на сервере весь набор врача.
+        if (st.specLoadFailed) {
+            return h('div', { class: 'docprof-hint' }, 'Специальности не загрузились — обновите страницу, чтобы их изменить.');
+        }
         const nameOf = (s) => (s && (s.name_ru || s.slug)) || '';
         const wrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
         const chips = h('div', { class: 'docprof-spec-chips' });
