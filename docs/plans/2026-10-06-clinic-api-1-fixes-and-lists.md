@@ -229,7 +229,6 @@
 | parodontolog | Пародонтолог | Parodontolog | Periodontist |
 | profpatolog | Профпатолог | Kasb kasalliklari shifokori | Occupational Medicine Physician |
 | radioterapevt | Радиотерапевт | Radioterapevt | Radiation Oncologist |
-| refleksoterapevt | Рефлексотерапевт | Refleksoterapevt | Reflexologist |
 | seksolog | Сексолог | Seksolog | Sexologist |
 | somnolog | Сомнолог | Somnolog | Sleep Medicine Specialist |
 | sportivnyy-vrach | Спортивный врач | Sport shifokori | Sports Medicine Physician |
