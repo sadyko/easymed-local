@@ -508,7 +508,10 @@ export function openServicePickerModal({
                     price: isOn(_dc2.is_free) ? 0 : (_dc2.price != null ? Number(_dc2.price) : 0),   // CLINIC_API_FIX_V1
                     duration_minutes: 30,   // длительности у вида консультации офлайн нет — приём по умолчанию
                     __consult: true, consultation_type_id: _ct2.id, __ct: _ct2, core_service_id: null,
-                    __consultDoctorId: _did, __consultDocName: _doc.full_name || _doc.name || '',
+                    // CLINIC_API_FIX_V1 — номер врача — тот же, что у врача из базы (_doc.id,
+                    // число), а не текст из ключа «10|6»: '10' === 10 — ложь, и строку не
+                    // узнавали ни колонка врача в календаре, ни колонка врачей, ни поиск.
+                    __consultDoctorId: _doc.id, __consultDocName: _doc.full_name || _doc.name || '',
                 });
             }
             consultRows.sort((_a, _b) => (_a.name || '').localeCompare(_b.name || '', 'ru'));

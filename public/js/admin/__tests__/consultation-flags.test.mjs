@@ -184,9 +184,10 @@ test('окно записи: консультацию, которую врач �
 
 // CLINIC_API_FIX_V1 (ревью) — врач выбран ДО услуги (visitDoctorId). Строки
 // консультаций свои у каждого врача, и строку вида NOT_LED даёт только PETROV.
-// Выбрав её, окно спрашивает consultAvailableFor(DOCTOR, NOT_LED): 0 из базы
-// при сравнении с false оставлял DOCTOR исполнителем — консультация уходила
-// врачу, который её не ведёт, по его «цене».
+// Выбрав её, окно не должно оставить исполнителем DOCTOR: до правки 3c (номер
+// врача строки — строкой) это решал consultAvailableFor(DOCTOR, NOT_LED), и 0 из
+// базы при сравнении с false оставлял консультацию врачу, который её не ведёт.
+// Теперь строку сразу забирает её собственный врач (тест ниже).
 test('окно записи, врач выбран заранее: вид, который он не ведёт, на него не записывается; тот, что ведёт, — записывается', async () => {
     seedPrices();
     DB.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available, is_free, name_ru) VALUES (?,?,?,?,?,?)')
@@ -216,6 +217,87 @@ test('окно записи, врач выбран заранее: вид, ко�
     assert.equal(notLed.service.consultation_type_id, NOT_LED);
     assert.notEqual(notLed.doctor && notLed.doctor.id, DOCTOR,
         'окно записало на врача консультацию, которую он не ведёт (available = 0)');
+});
+
+// ─── 2б. Врач строки консультации — тот же врач, что в базе ─────────────────
+// CLINIC_API_FIX_V1 — строка консультации в окне записи привязана к своему
+// врачу (__consultDoctorId). Номер врача вырезался из текстового ключа «10|6» и
+// оставался строкой «10», а врачи из базы приходят числом 10: `'10' === 10` —
+// ложь. Поэтому из колонки врача в календаре его консультаций не было вовсе,
+// выбранная строка консультации уходила без врача, а поиск по фамилии врача
+// его консультаций не находил.
+function seedWithPetrov() {
+    seedPrices();
+    DB.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available, is_free, name_ru) VALUES (?,?,?,?,?,?)')
+        .run(PETROV, NOT_LED, 90000, 1, 0, 'Осмотр у Петрова');
+}
+const catRows = (box) => box.querySelectorAll('.wzc-svc');
+const catRow = (box, name) => catRows(box).find((r) => r.textContent.includes(name));
+
+test('календарь, колонка врача (lockedDoctor): видны консультации, которые он ведёт, по его цене, — и только они', async () => {
+    seedWithPetrov();
+    document.body.children = [];
+    // Ровно как room-calendar.js открывает мастер по щелчку в колонке врача.
+    openServicePickerModal({
+        calculator: true, roomId: null,
+        lockedDoctor: { id: DOCTOR, name: 'Иванов Иван', spec: '' },
+        scheduledISO: new Date(Date.now() + 86400000).toISOString(),
+        onPick: () => {}, onCreatePatient() {},
+    });
+    const box = await until(() => modals().find((m) => catRow(m, 'Повторный приём')), 3000);
+    assert.ok(box, 'в колонке врача нет его консультации «Повторный приём»: ' + (modals().pop() || { textContent: '' }).textContent.slice(0, 300));
+    assert.match(catRow(box, 'Повторный приём').textContent, /120\s000/, 'консультация показана не по цене врача');
+    assert.ok(!catRow(box, 'Первичный приём'), 'в колонке врача вид, который он не ведёт (available = 0)');
+    assert.ok(!catRow(box, 'Осмотр у Петрова'), 'в колонке врача консультация другого врача');
+});
+
+test('окно записи: строка консультации другого врача уходит с ЭТИМ врачом, и колонка врачей показывает его', async () => {
+    seedWithPetrov();
+    document.body.children = [];
+    const picks = [];
+    openServicePickerModal({ onPick: (p) => picks.push(p) });
+    const box = await until(() => modals().find((m) => m.textContent.includes('Осмотр у Петрова')));
+    assert.ok(box, 'в окне записи нет строки «Осмотр у Петрова»');
+    box.querySelectorAll('button.sched-col-row').find((r) => r.textContent.includes('Осмотр у Петрова')).dispatch('click');
+    const doctorRows = box.querySelectorAll('button.sched-col-row').filter((r) => /Иванов Иван|Петров Пётр/.test(r.textContent));
+    assert.deepEqual(doctorRows.map((r) => r.textContent.includes('Петров Пётр')), [true],
+        'колонка врачей для строки Петрова показывает не одного Петрова: ' + doctorRows.map((r) => r.textContent).join(' | '));
+    assert.ok(doctorRows[0].classList.contains('on'), 'Петров в колонке врачей не выбран');
+    box.querySelectorAll('button').find((b) => /Готово/.test(b.textContent)).dispatch('click');
+    await until(() => picks.length);
+    assert.equal(picks.length, 1, 'выбор не дошёл до экрана');
+    assert.equal(picks[0].service.consultation_type_id, NOT_LED);
+    assert.strictEqual(picks[0].doctor && picks[0].doctor.id, PETROV, 'консультация ушла без своего врача (или с чужим)');
+    assert.equal(picks[0].service.price, 90000, 'консультация ушла не по цене своего врача');
+});
+
+test('мастер записи: поиск по фамилии врача находит его консультации', async () => {
+    seedWithPetrov();
+    document.body.children = [];
+    openServicePickerModal({ calculator: true, onPick: () => {}, onCreatePatient() {} });
+    const box = await until(() => modals().find((m) => catRow(m, 'Повторный приём') && catRow(m, 'Осмотр у Петрова')));
+    assert.ok(box, 'мастер записи не показал консультаций');
+    const search = box.querySelector('input.wzc-search');
+    assert.ok(search, 'поля поиска нет');
+    search.value = 'Иванов';
+    search.dispatch('input');
+    const found = await until(() => !catRow(box, 'Осмотр у Петрова') && catRow(box, 'Повторный приём'), 3000);
+    assert.ok(found, 'поиск «Иванов» не нашёл консультацию Иванова: ' + catRows(box).map((r) => r.textContent.slice(0, 40)).join(' | '));
+});
+
+test('мастер записи: добавленная консультация сразу получает своего врача (с его ценой), а не «Врач не найден»', async () => {
+    seedWithPetrov();
+    document.body.children = [];
+    openServicePickerModal({ calculator: true, onPick: () => {}, onCreatePatient() {} });
+    const box = await until(() => modals().find((m) => catRow(m, 'Осмотр у Петрова')));
+    assert.ok(box, 'мастер записи не показал консультацию Петрова');
+    const addBtn = catRow(box, 'Осмотр у Петрова').querySelector('.wzc-add');
+    assert.ok(addBtn, 'у строки нет кнопки «Добавить»');
+    addBtn.dispatch('click');
+    const chosen = await until(() => { const r = catRow(box, 'Осмотр у Петрова'); return r && r.querySelector('.wzc-doc.on'); }, 3000);
+    assert.ok(chosen, 'врач консультации не назначен: ' + (catRow(box, 'Осмотр у Петрова') || { textContent: '' }).textContent.slice(0, 200));
+    assert.match(chosen.textContent, /Петров Пётр/, 'консультации назначен не её врач');
+    assert.match(chosen.textContent, /90\s000/, 'консультация не по цене своего врача');
 });
 
 // ─── 3. Кабинет врача: «Повторный визит» ────────────────────────────────────
