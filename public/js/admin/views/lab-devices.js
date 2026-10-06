@@ -75,6 +75,19 @@ const DIAL_LABEL = 'Easy-Med подключается к прибору сам';
 const DIAL_ADD_HINT = 'Анализатор сам не звонит, а ждёт программу LIS? «Добавить по адресу» — и отметьте «Easy-Med подключается к прибору сам».';
 const CONNECT_UNKNOWN_HINT = 'Если в настройках LIS прибора нет адреса сервера, а есть только «порт прибора», — отметьте «Easy-Med подключается к прибору сам».';
 
+// LIS_VENDOR_EXACT_V1 — D2: модель выбирают явно. BS-240, CL-900i и A1000 не
+// называют себя (MSH-3/4 пустые), и без модели Easy-Med читал бы общим
+// правилом — у BS-240 и CL-900i номер прогона вместо номера пробирки. Для
+// анализатора не из списка — явный пункт «Другой анализатор (общий HL7)»: модель
+// пустая, но выбор сделан человеком (model_confirmed = 1). Значение пункта — не
+// модель, а команда экрана (как TYPE_OWN в lab-device-codes.js).
+const GENERIC_MODEL = '__lis_generic_hl7__';
+const GENERIC_LABEL = 'Другой анализатор (общий HL7)';
+// Тот же текст — у отказа сервера (rpc/lis.js lis_device_add): один ключ словаря.
+const MODEL_REQUIRED = 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».';
+/** Прибор, у которого человек выбрал «Другой анализатор (общий HL7)». */
+const isGenericModel = (d) => !!d && !String(d.profile || '').trim() && Number(d.model_confirmed) === 1;
+
 // Живая лента опрашивает сервер, пока экран открыт. Таймер модульный и гасится
 // при следующем монтировании и при уходе с вкладки (laboratory.js): иначе
 // переход в другой режим оставлял бы за собой работающий опрос, и через десяток
@@ -349,7 +362,8 @@ export async function mountLabDevices(container) {
                 h('td', { style: { fontWeight: 600 } }, d.name),
                 h('td', { class: 'muted' },
                     p ? p.vendor + ' ' + p.model
-                      : (d.profile ? trf('{key} — профиль не найден', { key: d.profile }) : tr('модель не выбрана')),
+                      : (d.profile ? trf('{key} — профиль не найден', { key: d.profile })
+                          : isGenericModel(d) ? tr(GENERIC_LABEL) : tr('модель не выбрана')),   // LIS_VENDOR_EXACT_V1 — D2
                     // Найденный прибор: модель ПОДОБРАНА по тому, как он себя
                     // назвал. Это догадка, и лаборант обязан её увидеть прежде,
                     // чем привяжет прибор к панели. LIS_ANALYZER_LIST_V1 — пока
@@ -496,8 +510,12 @@ export async function mountLabDevices(container) {
         clear(formCard);
         state.dialNodes.add = [];   // LIS_REAL_ANALYZERS_V1 — окно «Добавить прибор» больше не на экране
 
-        const d = device || { name: '', profile: (state.profiles[0] || {}).key || '', transport: 'mllp', host: '', port: 2575, enabled: 1, dial: 0 };
+        // LIS_VENDOR_EXACT_V1 — D2: новый прибор начинает БЕЗ модели (раньше —
+        // с первой модели списка, Mindray BC-20: BS-240, добавленный по адресу
+        // без правки модели, читался бы как гематология). Выбор обязателен — см. save().
+        const d = device || { name: '', profile: '', transport: 'mllp', host: '', port: 2575, enabled: 1, dial: 0 };
         const dialsNow = Number(d.dial) === 1;   // LIS_REAL_ANALYZERS_V1
+        const genericNow = isGenericModel(d);   // LIS_VENDOR_EXACT_V1 — D2
 
         const nameInp = h('input', { type: 'text', value: d.name, placeholder: tr('Например: Гематология') });
         // LIS_ANALYZER_LIST_V1 (ревью I2) — первый пункт «модель не выбрана».
@@ -505,14 +523,19 @@ export async function mountLabDevices(container) {
         // показывал первый (Mindray BC-20), и «Изменить → Сохранить» молча
         // ставил BC-20. Модель, которой нет среди профилей (профиль убрали или
         // lis_profiles не ответил), — своим пунктом: сохранение её не стирает.
-        // Новый прибор по-прежнему начинает с первой модели (d выше).
+        // LIS_VENDOR_EXACT_V1 — D2: у нового прибора первый пункт — «— выберите
+        // модель —»; последний — «Другой анализатор (общий HL7)» (и у прибора,
+        // для которого его уже выбрали, даже если список моделей не пришёл).
         const profSel = h('select', null,
-            h('option', { value: '', selected: !d.profile ? true : null }, tr('модель не выбрана')),
+            h('option', { value: '', selected: !d.profile && !genericNow ? true : null }, device ? tr('модель не выбрана') : tr('— выберите модель —')),
             d.profile && !profileOf(d.profile)
                 ? h('option', { value: d.profile, selected: true }, trf('{key} — профиль не найден', { key: d.profile }))
                 : null,
             ...state.profiles.map((p) =>
-                h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)));
+                h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)),
+            state.profiles.length || genericNow
+                ? h('option', { value: GENERIC_MODEL, selected: genericNow ? true : null }, tr(GENERIC_LABEL))
+                : null);
         // LIS_DISCOVERY_FIX_V1 (экран) — решение владельца 2026-09-29: новый
         // прибор руками — только СЕТЕВОЙ. Анализатор на кабеле COM приходит
         // через переадресатор на лабораторном ПК и появляется в «Найдены в
@@ -640,9 +663,11 @@ export async function mountLabDevices(container) {
 
         async function save() {
             const dial = dialOn();   // LIS_REAL_ANALYZERS_V1
+            const choice = profSel.value;   // LIS_VENDOR_EXACT_V1 — D2
+            const generic = choice === GENERIC_MODEL;
             const payload = {
                 name: nameInp.value.trim(),
-                profile: profSel.value,
+                profile: generic ? '' : choice,   // LIS_VENDOR_EXACT_V1 — D2: «общий HL7» — модель пустая
                 transport: transport(),
                 host: hostInp.value.trim(),
                 port: Number(portInp.value) || 2575,
@@ -650,6 +675,9 @@ export async function mountLabDevices(container) {
                 dial: dial ? 1 : 0,   // LIS_REAL_ANALYZERS_V1 — Easy-Med подключается к прибору сам
             };
             if (!payload.name) { toast(tr('Укажите название прибора'), 'warn'); return; }
+            // LIS_VENDOR_EXACT_V1 — D2: новый прибор — только с выбранной моделью или
+            // «Другой анализатор (общий HL7)». Заведённые строки правятся, как прежде.
+            if (!device && !choice) { toast(tr(MODEL_REQUIRED), 'warn'); profSel.focus(); return; }
             // LIS_DISCOVERY_FIX_V1 (экран) — новый прибор — только с адресом
             // (решение владельца 2026-09-29): по адресу сервер узнаёт прибор, а
             // строка без адреса забирала бы первый попавшийся сетевой прибор на
@@ -679,11 +707,26 @@ export async function mountLabDevices(container) {
             // LIS_ANALYZER_LIST_V1 — сохранение найденного прибора с выбранной
             // моделью и есть проверка модели человеком: пометка «проверьте
             // модель» снимается. Только в правке — у вставки такой колонки нет.
+            // LIS_VENDOR_EXACT_V1 — D2: «Другой анализатор (общий HL7)» — тоже
+            // выбор человека (model_confirmed = 1) у любой строки; сняли его,
+            // выбрав «модель не выбрана», — отметка снимается.
+            const confirm = {};
+            if (device) {
+                if (device.discovered) confirm.model_confirmed = payload.profile || generic ? 1 : 0;
+                else if (generic) confirm.model_confirmed = 1;
+                else if (!payload.profile && Number(device.model_confirmed) === 1) confirm.model_confirmed = 0;
+            }
             const res = device
-                ? await supabase.from('lab_devices').update(
-                    device.discovered ? { ...payload, model_confirmed: payload.profile ? 1 : 0 } : payload).eq('id', device.id)
-                : await supabase.from('lab_devices').insert(payload);
+                ? await supabase.from('lab_devices').update({ ...payload, ...confirm }).eq('id', device.id)
+                : await supabase.from('lab_devices').insert(payload).select('id');   // LIS_VENDOR_EXACT_V1 — D2: номер новой строки
             if (res.error) { toast(trf('Не удалось сохранить прибор: {msg}', { msg: res.error.message || res.error }), 'fail'); return; }
+            // LIS_VENDOR_EXACT_V1 — D2: у вставки колонки model_confirmed нет — выбор
+            // «общего HL7» новой строке отмечается второй записью. Не вышло — прибор
+            // всё равно заведён и принимает пробы; в таблице будет «модель не выбрана».
+            if (!device && generic) {
+                const row = Array.isArray(res.data) ? res.data[0] : res.data;
+                if (row && row.id) await supabase.from('lab_devices').update({ model_confirmed: 1 }).eq('id', row.id);
+            }
 
             // Перезапуск слушателей: без него смена порта требовала бы
             // перезапуска всей клиники ради одного прибора.
@@ -901,9 +944,14 @@ export async function mountLabDevices(container) {
         clear(formCard);
         state.dialNodes.add = [];   // LIS_REAL_ANALYZERS_V1 — окно «Добавить прибор» больше не на экране
         const nameInp = h('input', { type: 'text', value: d.name || '' });
+        // LIS_VENDOR_EXACT_V1 — D2: прибор себя не назвал (BS-240, CL-900i, A1000
+        // оставляют MSH-3/4 пустыми) — модель не подставляется, первый пункт —
+        // «— выберите модель —»; последний — «Другой анализатор (общий HL7)».
+        const guessed = String(d.profile || '').trim();
         const profSel = h('select', null,
-            h('option', { value: '', selected: !d.profile ? true : null }, tr('модель не определена')),
-            ...state.profiles.map((p) => h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)));
+            h('option', { value: '', selected: !guessed ? true : null }, guessed ? tr('модель не определена') : tr('— выберите модель —')),
+            ...state.profiles.map((p) => h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)),
+            state.profiles.length ? h('option', { value: GENERIC_MODEL }, tr(GENERIC_LABEL)) : null);
         formCard.appendChild(h('div', { class: 'card-header' }, h('h3', null, trf('Добавить «{name}»', { name: d.name }))));
         formCard.appendChild(h('div', { class: 'row', style: { gap: '14px', flexWrap: 'wrap', marginBottom: '10px' } },
             field(tr('Название'), nameInp), field(tr('Модель'), profSel)));
@@ -911,22 +959,37 @@ export async function mountLabDevices(container) {
             profileOf(d.profile)
                 ? tr('Модель подобрана по тому, как прибор себя назвал, — проверьте её.')
                 : tr('Модель по имени прибора не определилась — выберите её сами.')));
+        const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save }, tr('Добавить'));
         formCard.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '6px' } },
-            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save }, tr('Добавить')),
+            addBtn,
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: openAddWindow }, tr('Назад'))));
 
         async function save() {
             const name = nameInp.value.trim();
             if (!name) { toast(tr('Укажите название прибора'), 'warn'); return; }
-            // Ревью I2: модель — только выбранная. «модель не определена» ('')
-            // не шлётся вовсе: иначе стиралась бы догадка сервера — и тогда,
-            // когда lis_profiles не ответил и в списке один пустой пункт.
-            const values = { name, added: 1 };
+            // LIS_VENDOR_EXACT_V1 — D2: прибор без модели — только с выбором.
+            // Догадку сервера пустой пункт по-прежнему не стирает (ревью I2):
+            // модель уходит только выбранная, и тогда, когда lis_profiles не
+            // ответил и в списке один пустой пункт, догадка остаётся.
+            const choice = profSel.value;
+            if (!choice && !guessed) { toast(tr(MODEL_REQUIRED), 'warn'); profSel.focus(); return; }
+            // LIS_VENDOR_EXACT_V1 — D2: «Добавить» — RPC lis_device_add: то же
+            // правило проверяет сервер (раньше это была голая запись added = 1).
             // Модель выбрана — её проверил человек: пометка «найден сам —
-            // проверьте модель» в таблице больше не нужна.
-            if (profSel.value) { values.profile = profSel.value; values.model_confirmed = 1; }
-            const { error } = await supabase.from('lab_devices').update(values).eq('id', d.id);
-            if (error) { toast(trf('Не удалось добавить прибор: {msg}', { msg: error.message || error }), 'fail'); return; }
+            // проверьте модель» в таблице больше не нужна (сервер ставит её сам).
+            const args = { id: d.id, name };
+            if (choice === GENERIC_MODEL) args.generic = true;
+            else if (choice) args.profile = choice;
+            addBtn.disabled = true;   // двойное нажатие — один вызов
+            const { error } = await supabase.rpc('lis_device_add', args);
+            addBtn.disabled = false;
+            if (error) {
+                if (error.code === 'model_required') { toast(tr(MODEL_REQUIRED), 'warn'); profSel.focus(); return; }
+                // Прибор уже добавили (вторая вкладка): сказать его словами и показать, где он теперь.
+                if (error.code === 'already_added') { toast(tr(error.message), 'warn'); closeForm(); await reload(); return; }
+                toast(trf('Не удалось добавить прибор: {msg}', { msg: error.message || error }), 'fail');
+                return;
+            }
             toast(trf('Прибор «{name}» добавлен', { name }));
             closeForm();
             await reload();

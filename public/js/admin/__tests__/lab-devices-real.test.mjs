@@ -327,9 +327,16 @@ test('«Добавить по адресу»: флажок «Easy-Med подкл
   assert.ok(inputByPlaceholder(root, ADDR_PH), 'подсказка адреса — прежняя');
 });
 
+// LIS_VENDOR_EXACT_V1 — D2: модель новому прибору выбирают явно (тестовый DOM
+// не выводит value списка из selected-пункта — ставим его сами, ревью M10).
+const chooseModel = (root, key) => {
+  walk(root).find((n) => n.tagName === 'SELECT' && walk(n).some((o) => o.tagName === 'OPTION' && o.value === key)).value = key;
+};
+
 async function dialSave(host, port) {
   const root = await newDeviceForm();
   nameInput(root).value = 'Гематология';
+  chooseModel(root, 'mindray-bc-780');   // LIS_VENDOR_EXACT_V1 — D2
   tickDial(root, true);
   hostInput(root).value = host;
   portInput(root).value = port;
@@ -365,6 +372,7 @@ test('звонок: локальный IP и порт — запись с dial =
 
   const root = await newDeviceForm();
   nameInput(root).value = 'Химия';
+  chooseModel(root, 'mindray-bs-200');   // LIS_VENDOR_EXACT_V1 — D2
   inputByPlaceholder(root, ADDR_PH).value = '10.0.0.40';
   await save(root);
   const v2 = [].concat(writes.find((w) => w.table === 'lab_devices' && w.op === 'insert').values)[0];

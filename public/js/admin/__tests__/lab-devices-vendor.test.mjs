@@ -109,7 +109,12 @@ globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/db')) {
-    if (body && body.op && body.op !== 'select') { writes.push(body); return { ok: true, json: async () => ({ data: [] }) }; }
+    if (body && body.op && body.op !== 'select') {
+      writes.push(body);
+      // Новая строка прибора — номер 77 (вставка с returning, как у сервера).
+      const data = body.table === 'lab_devices' && body.op === 'insert' && body.returning ? [{ id: 77 }] : [];
+      return { ok: true, json: async () => ({ data }) };
+    }
     if (body && body.table === 'lab_devices') return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(DEVICES)) }) };
     if (body && body.table === 'lab_device_messages') {
       return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(MESSAGES.filter((m) => !m.resolved_at && m.status !== 'applied'))) }) };
@@ -245,4 +250,165 @@ test('D14: строки соединений — в словаре на uz и en
       for (const hole of k.match(/\{\w+\}/g) || []) assert.ok(STRINGS[k][lang].includes(hole), lang + ' ' + hole + ': ' + STRINGS[k][lang]);
     }
   }
+});
+
+// ── D2: «Добавить» прибор — только с моделью или «Другой анализатор (общий HL7)» ──
+// BS-240, CL-900i и A1000 оставляют MSH-3/4 пустыми, и находка приходит без
+// модели. Без модели Easy-Med читает общим правилом (номер пробы — OBR-3), а у
+// BS-240 и CL-900i там номер прогона прибора: результат лёг бы не тому пациенту.
+const MODEL_REQUIRED = 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».';
+const GENERIC_LABEL = 'Другой анализатор (общий HL7)';
+const FOUND_BLANK = { id: 9, name: 'Анализатор 192.168.1.60', profile: '', transport: 'mllp', host: '192.168.1.60', port: 2575, enabled: 1,
+  added: 0, discovered: 1, model_confirmed: 0, dial: 0, sending_app: '', last_seen_at: iso(Date.now() - 60000) };
+const rowNamed = (root, name) => walk(root).find((n) => n.tagName === 'TR' && n.children[0] && textOf(n.children[0]) === name);
+const optionsOf = (sel) => walk(sel).filter((n) => n.tagName === 'OPTION');
+const selectedValues = (sel) => optionsOf(sel).filter((o) => 'selected' in o.attrs).map((o) => o.value);
+const modelSelectIn = (root) => walk(root).find((n) => n.tagName === 'SELECT' && optionsOf(n).some((o) => o.value === 'mindray-bs-240' || o.value === ''));
+const adoptCalls = () => rpcCalls.filter((c) => c.name === 'lis_device_add').map((c) => c.args);
+
+async function openAdoptOf(device) {
+  reset();
+  DEVICES = [BS, device];
+  const root = await mount();
+  await openAddWindow(root);
+  findButtonByText(rowNamed(root, device.sending_app || device.name), /Добавить/).click();
+  await tick();
+  return root;
+}
+async function pressAdd(root) {
+  formButton(root, /^Добавить$/).click();
+  await tick(60);
+}
+
+test('D2: находка без модели — в списке есть «Другой анализатор (общий HL7)»; «Добавить» без выбора не уходит на сервер', async () => {
+  const root = await openAdoptOf(FOUND_BLANK);
+  const sel = modelSelectIn(root);
+  assert.ok(sel, 'список моделей в форме');
+  const opts = optionsOf(sel);
+  assert.strictEqual(opts[0].value, '', 'первый пункт — «выберите модель»');
+  assert.deepStrictEqual(selectedValues(sel), [''], 'модель не подставлена сама');
+  const generic = opts[opts.length - 1];
+  assert.strictEqual(textOf(generic), GENERIC_LABEL, 'явный выбор для прибора не из списка — последним');
+  assert.ok(textOf(root).includes('Модель по имени прибора не определилась — выберите её сами.'), textOf(root));
+  sel.value = '';
+  await pressAdd(root);
+  assert.strictEqual(toastMsg, MODEL_REQUIRED);
+  assert.strictEqual(toastEl.dataset.kind, 'warn');
+  assert.deepStrictEqual(adoptCalls(), [], 'на сервер ничего не ушло');
+  assert.ok(!writes.some((w) => w.table === 'lab_devices'), '/api/db не пишется: ' + JSON.stringify(writes));
+  assert.ok(formButton(root, /^Добавить$/), 'форма осталась на экране');
+});
+
+test('D2: выбрана модель — lis_device_add с моделью; «Другой анализатор (общий HL7)» — generic: true; /api/db не пишется', async () => {
+  let root = await openAdoptOf(FOUND_BLANK);
+  modelSelectIn(root).value = 'mindray-bs-240';
+  await pressAdd(root);
+  assert.deepStrictEqual(adoptCalls(), [{ id: 9, name: 'Анализатор 192.168.1.60', profile: 'mindray-bs-240' }]);
+  assert.strictEqual(toastMsg, 'Прибор «Анализатор 192.168.1.60» добавлен');
+  assert.ok(!writes.some((w) => w.table === 'lab_devices'), JSON.stringify(writes));
+
+  root = await openAdoptOf(FOUND_BLANK);
+  const sel = modelSelectIn(root);
+  sel.value = optionsOf(sel).find((o) => textOf(o) === GENERIC_LABEL).value;
+  await pressAdd(root);
+  assert.deepStrictEqual(adoptCalls(), [{ id: 9, name: 'Анализатор 192.168.1.60', generic: true }]);
+});
+
+test('D2: отказ сервера — «нужна модель» своими словами, «уже добавлен» — его словами, список перечитан', async () => {
+  let root = await openAdoptOf(FOUND_BLANK);
+  ADD_REPLY = { code: 'model_required', message: MODEL_REQUIRED };
+  modelSelectIn(root).value = 'mindray-bs-240';
+  await pressAdd(root);
+  assert.strictEqual(toastMsg, MODEL_REQUIRED);
+  assert.strictEqual(toastEl.dataset.kind, 'warn');
+
+  root = await openAdoptOf(FOUND_BLANK);
+  ADD_REPLY = { code: 'already_added', message: 'Прибор уже добавлен — меняйте его через «Изменить».' };
+  modelSelectIn(root).value = 'mindray-bs-240';
+  const reads = () => rpcCalls.filter((c) => c.name === 'lis_profiles').length;
+  const before = reads();
+  await pressAdd(root);
+  assert.strictEqual(toastMsg, 'Прибор уже добавлен — меняйте его через «Изменить».');
+  assert.ok(reads() > before, 'список перечитан');
+});
+
+test('D2: таблица — у добавленного с явным выбором «Другой анализатор (общий HL7)», без пометки «проверьте модель»', async () => {
+  reset();
+  DEVICES = [{ ...FOUND_BLANK, added: 1, model_confirmed: 1 }];
+  const root = await mount();
+  const card = textOf(devicesCard(root));
+  assert.ok(card.includes(GENERIC_LABEL), card);
+  assert.ok(!card.includes('найден сам — проверьте модель'));
+  assert.ok(!card.includes('модель не выбрана'));
+});
+
+// «Добавить по адресу»: раньше новый прибор начинал с первой модели списка
+// (Mindray BC-20) — BS-240, добавленный по адресу без правки модели, читался бы
+// как гематология. Теперь модель выбирают явно.
+async function newDeviceForm() {
+  reset();
+  const root = await mount();
+  await openAddWindow(root);
+  findButtonByText(root, /Добавить по адресу/).click();
+  await tick();
+  return root;
+}
+const inputByPlaceholder = (root, ph) => walk(root).find((n) => n.tagName === 'INPUT' && n.attrs.placeholder === ph);
+
+test('D2: «Добавить по адресу» — модель не подставлена; без выбора — предупреждение, в базу ничего', async () => {
+  const root = await newDeviceForm();
+  const sel = modelSelectIn(root);
+  assert.deepStrictEqual(selectedValues(sel), [''], 'первая модель списка больше не подставляется сама');
+  assert.strictEqual(textOf(optionsOf(sel)[0]), '— выберите модель —');
+  assert.ok(optionsOf(sel).some((o) => textOf(o) === GENERIC_LABEL));
+  inputByPlaceholder(root, 'Например: Гематология').value = 'Биохимия';
+  inputByPlaceholder(root, 'адрес анализатора в сети, например 10.0.0.20').value = '192.168.1.60';
+  sel.value = '';
+  formButton(root, /^Сохранить$/).click();
+  await tick(60);
+  assert.strictEqual(toastMsg, MODEL_REQUIRED);
+  assert.ok(!writes.some((w) => w.table === 'lab_devices'), JSON.stringify(writes));
+});
+
+test('D2: «Добавить по адресу» с «Другой анализатор (общий HL7)» — запись без модели, выбор запомнен', async () => {
+  const root = await newDeviceForm();
+  const sel = modelSelectIn(root);
+  inputByPlaceholder(root, 'Например: Гематология').value = 'Иммунология';
+  inputByPlaceholder(root, 'адрес анализатора в сети, например 10.0.0.20').value = '192.168.1.61';
+  sel.value = optionsOf(sel).find((o) => textOf(o) === GENERIC_LABEL).value;
+  formButton(root, /^Сохранить$/).click();
+  await tick(60);
+  const ins = writes.find((w) => w.table === 'lab_devices' && w.op === 'insert');
+  assert.ok(ins, JSON.stringify(writes) + ' ' + toastMsg);
+  assert.strictEqual([].concat(ins.values)[0].profile, '', 'модель пустая — общий HL7');
+  const upd = writes.find((w) => w.table === 'lab_devices' && w.op === 'update');
+  assert.ok(upd && upd.values.model_confirmed === 1 && JSON.stringify(upd.filters).includes('77'), 'выбор «общего HL7» запомнен у новой строки: ' + JSON.stringify(writes));
+});
+
+test('D2: «Изменить» прибора с «общим HL7» — выбран «Другой анализатор»; сохранение выбор оставляет', async () => {
+  reset();
+  DEVICES = [{ ...FOUND_BLANK, name: 'Иммунология', added: 1, model_confirmed: 1 }];
+  const root = await mount();
+  findButtonByText(rowNamed(root, 'Иммунология'), /Изменить/).click();
+  await tick();
+  const sel = modelSelectIn(root);
+  const generic = optionsOf(sel).find((o) => textOf(o) === GENERIC_LABEL);
+  assert.deepStrictEqual(selectedValues(sel), [generic.value]);
+  sel.value = generic.value;   // тестовый DOM не выводит value списка из selected-пункта (ревью M10)
+  walk(root).find((n) => n.tagName === 'SELECT' && optionsOf(n).some((o) => o.value === 'mllp')).value = 'mllp';
+  formButton(root, /^Сохранить$/).click();
+  await tick(60);
+  const upd = writes.find((w) => w.table === 'lab_devices' && w.op === 'update');
+  assert.ok(upd, JSON.stringify(writes) + ' ' + toastMsg);
+  assert.strictEqual(upd.values.profile, '');
+  assert.strictEqual(upd.values.model_confirmed, 1);
+});
+
+test('D2: строки экрана — в словаре на uz и en', () => {
+  for (const k of [GENERIC_LABEL, MODEL_REQUIRED, '— выберите модель —']) {
+    assert.ok(STRINGS[k], 'в словаре: ' + k);
+    for (const lang of ['en', 'uz']) assert.ok(STRINGS[k][lang] && STRINGS[k][lang] !== k, lang + ': ' + k);
+  }
+  // Подпись выбора цитируется в отказе её же переводом.
+  for (const lang of ['en', 'uz']) assert.ok(STRINGS[MODEL_REQUIRED][lang].includes('«' + STRINGS[GENERIC_LABEL][lang] + '»'), lang);
 });
