@@ -754,3 +754,37 @@ test('R4 п. E: dialPlan — у IPv4 зона отбрасывается и дл
   assert.equal(by[5].code, 'bad_address');
   assert.equal(by[6].code, 'duplicate', '«10.0.0.5%eth0» и «10.0.0.5» — один прибор');
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D14: кто подключался к порту приёма ───────────────
+// Договор с экраном «Анализаторы» (lis_listeners → lab-devices-lists.js
+// peerNotes): listenerStatus().peers — [{ ip, port, connectedAt, lastRxAt,
+// frames, noiseBytes, noiseHint, open }]; port — порт приёма; noiseHint —
+// 'astm' | 'autobio' | 'utf16' | 'hl7-unframed' | 'other' | null.
+test('LIS_VENDOR_EXACT_V1 D14: listenerStatus().peers — соединения с портом приёма по договору с экраном; подключение и байты не в кадре — в журнале', async () => {
+  await withLis(async (db, lisPort) => {
+    const logs = [];
+    await startLisListeners(db, { log: (m) => logs.push(m) });
+    const sock = await connect(lisPort);
+    sock.on('error', () => {});
+    const mine = sock.localPort;
+    try {
+      // A1000 с «Protocol type = ASTM» (autobio-autolumo-a1000.md §2): ENQ.
+      sock.write(Buffer.from([0x05]));
+      await until(() => (listenerStatus().peers || []).some((p) => p.noiseHint === 'astm'), 3000, 'подсказка ASTM');
+      let p = listenerStatus().peers.find((x) => x.remotePort === mine);
+      assert.deepEqual(
+        [p.ip, p.port, p.frames, p.noiseBytes, p.noiseHint, p.open],
+        ['127.0.0.1', lisPort, 0, 1, 'astm', true], JSON.stringify(p));
+      assert.ok(p.connectedAt && p.lastRxAt);
+      assert.ok(logs.some((l) => l.includes('127.0.0.1:' + mine) && /подключ/.test(l)), 'подключение — в журнале: ' + logs.join(' | '));
+      assert.ok(logs.some((l) => /не в кадре/.test(l) && /ASTM/.test(l)), 'байты не в кадре — в журнале с подсказкой');
+      // Потом прибор переключили на HL7 — кадр принят, счёт кадров растёт.
+      const reply = readFrame(sock);
+      sock.write(frameOf(A1000_TEST));
+      await reply;
+      p = listenerStatus().peers.find((x) => x.remotePort === mine);
+      assert.equal(p.frames, 1);
+    } finally { sock.destroy(); }
+    await until(() => listenerStatus().peers.find((x) => x.remotePort === mine).open === false, 3000, 'закрыто');
+  });
+});

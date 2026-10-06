@@ -161,6 +161,7 @@ export function startMllpClient({ host, port, onMessage, onOversize = null, onAb
       onOversize,
       onAbandoned,   // ревью R2, п. 10а
       replyStyle,   // LIS_VENDOR_EXACT_V1 — вид ответа прибора строки
+      label: `${host}:${port}`,   // LIS_VENDOR_EXACT_V1 — D14: байты не в кадре — в журнал с адресом прибора
       onMessage: (text, peer) => { gotFrame = true; return onMessage(text, peer); },
       // Сигнал прибора — байты вне кадра. С первого сигнала прибор обязан
       // говорить хоть что-то: 20 с тишины — соединение мёртвое (кабель, свитч,

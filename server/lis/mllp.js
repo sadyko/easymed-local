@@ -82,6 +82,81 @@ function noiseBytes(buf, from, to) {
 }
 
 /**
+ * LIS_VENDOR_EXACT_V1 — D10: текст кадра. Строго UTF-8 (TextDecoder с fatal), а
+ * если байты — не UTF-8, то windows-1251: BS-200 и CL-900i пишут однобайтно
+ * («ISO 8859-1 characters (hexadecimal 20-FF)», HIM v5.0, с. 1), на деле — в
+ * кодовой странице ПК прибора, у клиники — кириллической; «µ» (0xB5) в
+ * ISO 8859-1 и windows-1251 одинаков. Раньше всё читалось как UTF-8, и такие
+ * байты становились «�» (U+FFFD): «µmol/L» BS-240 — «�mol/L».
+ * o.head — начало переросшего или брошенного кадра (первые 64 КБ): последний
+ * знак UTF-8 там может быть обрезан, и это не повод читать всё как windows-1251.
+ * Сборка Node — с полным ICU (проверено на runtime\node.exe клиники, 24.14.0).
+ * @param {Uint8Array} bytes
+ * @param {{head?:boolean}} [o]
+ */
+export function decodeFrame(bytes, { head = false } = {}) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes, head ? { stream: true } : undefined);
+  } catch {
+    return new TextDecoder('windows-1251').decode(bytes);
+  }
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 — D14: на что похожи байты вне кадра MLLP. Код — для
+ * экрана (index.js listenerStatus().peers[].noiseHint; слова подбирает
+ * lab-devices-lists.js) и журнала:
+ *   'heartbeat'    — только 0x02: сигнал гематологии Mindray раз в 3 с
+ *                    (BC-3600 OM p. D-8; mindray-bc-20.md §1.4) — не беда;
+ *   'utf16'        — каждый второй байт 0x00: прибору выбрана кодировка
+ *                    Unicode (UTF-16) — нужна UTF-8 или ASCII;
+ *   'astm'         — ENQ 0x05, EOT 0x04 или кадр STX + номер 0–7 (E1381):
+ *                    прибор настроен на ASTM, а Easy-Med принимает HL7;
+ *   'autobio'      — «{cmd,err,…}»: собственный формат Autobio (у A1000 он по
+ *                    умолчанию, autobio-autolumo-a1000.md §2);
+ *   'hl7-unframed' — текст HL7 («MSH|») без рамки 0x0B … 0x1C 0x0D;
+ *   'other'        — прочее; null — одни концы строк.
+ * @param {Uint8Array} bytes
+ * @returns {string|null}
+ */
+export function noiseHint(bytes) {
+  const b = Buffer.from(bytes || []);
+  let n = 0;
+  let nul = 0;
+  let stx = 0;
+  for (const x of b) {
+    if (x === CR || x === 0x0a) continue;
+    n++;
+    if (x === 0x00) nul++;
+    if (x === 0x02) stx++;
+  }
+  if (!n) return null;
+  if (n >= 2 && nul * 3 >= b.length) return 'utf16';
+  if (stx === n) return 'heartbeat';
+  const text = b.toString('latin1');
+  if (b.includes(0x05) || b.includes(0x04) || /\x02[0-7]/.test(text)) return 'astm';
+  if (/^[\s]*\{/.test(text)) return 'autobio';
+  if (text.includes('MSH|')) return 'hl7-unframed';
+  return 'other';
+}
+
+/** LIS_VENDOR_EXACT_V1 — D14: подсказка для журнала. */
+const HINT_TEXT = {
+  utf16: 'похоже на текст в кодировке Unicode (UTF-16) — на анализаторе выберите кодировку UTF-8 или ASCII',
+  astm: 'похоже на ASTM (ENQ/STX) — Easy-Med принимает HL7: на анализаторе выберите протокол HL7',
+  autobio: 'похоже на собственный формат Autobio «{…}» — на анализаторе выберите протокол HL7',
+  'hl7-unframed': 'похоже на HL7 без рамки MLLP (нет байта 0x0B) — на анализаторе включите MLLP',
+  other: 'протокол не узнан — на анализаторе проверьте протокол HL7',
+};
+/** LIS_VENDOR_EXACT_V1 — D14: одна строка журнала на вид и соединение — не чаще раза в минуту (ENQ повторяется каждые несколько секунд). */
+const NOISE_LOG_MS = 60 * 1000;
+
+/** LIS_VENDOR_EXACT_V1 — D14: время для экрана — как у звонка (dial.js): ISO без миллисекунд. */
+const isoNow = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+/** LIS_VENDOR_EXACT_V1 — D14: сколько последних соединений помнит слушатель (открытые — все). */
+export const PEERS_KEPT = 50;
+
+/**
  * LIS_REAL_ANALYZERS_V1_DIAL — читатель кадров одного соединения: общий для
  * сервера (каждое входящее соединение, startMllpServer) и клиента, который
  * звонит прибору сам (dial.js). Разбор кадров, последовательная цепочка
@@ -98,7 +173,9 @@ function noiseBytes(buf, from, to) {
  * @param {number} [o.maxBytes]
  * @param {(msg:string)=>void} [o.log]
  * @param {string} [o.peer]       адрес для приёма и журнала (по умолчанию — адрес сокета)
- * @param {(n:number)=>void} [o.onNoise]  отброшено n байт вне кадра (сигнал прибора)
+ * @param {(n:number, hint:string)=>void} [o.onNoise]  отброшено n байт вне кадра (сигнал прибора);
+ *        LIS_VENDOR_EXACT_V1 — hint: на что похожи (noiseHint)
+ * @param {string} [o.label]      LIS_VENDOR_EXACT_V1 — как назвать соединение в журнале («ip:порт»)
  * @param {(o:{peer:string, bytes:number, head:string})=>void} [o.onAbandoned]
  *        LIS_REAL_ANALYZERS_V1 (ревью R2, п. 10а) — прибор бросил кадр и начал
  *        новый (новый VT до FS): здесь — начало брошенного (первые 64 КБ), для
@@ -108,7 +185,7 @@ function noiseBytes(buf, from, to) {
  *        бросил, вернул только код, переросшее): по заголовку входящего
  *        (mshOf). Нет — вид руководства (hl7.js LAYOUT_LONG).
  */
-export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, peer = sock.remoteAddress || '', onNoise = null, onAbandoned = null, replyStyle = null } = {}) {
+export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, peer = sock.remoteAddress || '', onNoise = null, onAbandoned = null, replyStyle = null, label = peer } = {}) {
   let buf = Buffer.alloc(0);
   let overflow = false;
   // LIS_VENDOR_EXACT_V1 — вид ответа вызывающего; его сбой ответа не отменяет.
@@ -120,10 +197,27 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
   // прежде, чем слать второй, и параллельная запись в базу переставила бы
   // ответы местами.
   let chain = Promise.resolve();
+  // LIS_VENDOR_EXACT_V1 — D14: байты вне кадра больше не пропадают молча:
+  // вызывающему (onNoise) — сколько и на что похожи, в журнал — с подсказкой
+  // протокола, одна строка на вид за минуту (с числом пропущенных). Сигнал
+  // 0x02 гематологии — не беда: в журнал не идёт.
+  const loggedAt = new Map();
+  const skipped = new Map();
   const noise = (from, to) => {
-    if (!onNoise) return;
     const n = noiseBytes(buf, from, to);
-    if (n) onNoise(n);
+    if (!n) return;
+    const hint = noiseHint(buf.subarray(from, to));
+    if (onNoise) onNoise(n, hint);
+    if (hint === 'heartbeat') return;
+    const now = Date.now();
+    if (loggedAt.has(hint) && now - loggedAt.get(hint) < NOISE_LOG_MS) {
+      skipped.set(hint, (skipped.get(hint) || 0) + 1);
+      return;
+    }
+    const more = skipped.get(hint) || 0;
+    loggedAt.set(hint, now);
+    skipped.set(hint, 0);
+    log(`LIS: ${label} — ${n} байт не в кадре MLLP: ${HINT_TEXT[hint] || HINT_TEXT.other}${more ? ` (и ещё ${more} таких же за минуту)` : ''}`);
   };
 
   // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28) — сообщение больше потолка.
@@ -137,7 +231,7 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
     overflow = true;
     buf = Buffer.alloc(0);
     const bytes = body.length;
-    const head = body.subarray(0, HEAD_BYTES).toString('utf8');
+    const head = decodeFrame(body.subarray(0, HEAD_BYTES), { head: true });   // LIS_VENDOR_EXACT_V1 — D10
     log(`LIS: сообщение больше ${maxBytes} байт от ${peer} — отказ, соединение закрыто`);
     // В ту же цепочку: ответы на кадры, пришедшие раньше, уходят первыми.
     chain = chain.then(async () => {
@@ -174,7 +268,7 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
       if (next !== -1 && (end === -1 || next < end)) {
         noise(0, start);
         const cut = buf.subarray(start + 1, next);
-        const head = cut.subarray(0, HEAD_BYTES).toString('utf8');
+        const head = decodeFrame(cut.subarray(0, HEAD_BYTES), { head: true });   // LIS_VENDOR_EXACT_V1 — D10: брошенный мог оборваться посреди знака
         log(`LIS: кадр от ${peer} брошен на середине — прибор начал новый`);
         if (onAbandoned) {
           chain = chain.then(async () => {
@@ -190,7 +284,7 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
       if (end - start - 1 > maxBytes) { refuse(buf.subarray(start + 1, end)); return; }
 
       noise(0, start);
-      const text = buf.slice(start + 1, end).toString('utf8');
+      const text = decodeFrame(buf.subarray(start + 1, end));   // LIS_VENDOR_EXACT_V1 — D10: UTF-8, иначе windows-1251
       // За FS обычно идёт CR — съедаем и его, если он там.
       buf = buf.slice(end + 1 < buf.length && buf[end + 1] === CR ? end + 2 : end + 1);
 
@@ -239,7 +333,13 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
  * @param {(msh:object)=>{layout?:string, wire?:string}} [o.replyStyle]
  *        LIS_VENDOR_EXACT_V1 — вид ответов, которые провод строит сам
  *        (attachMllpReader); index.js даёт receive.js replyStyle
- * @returns {Promise<{port:number, close:()=>Promise<void>}>}
+ * @returns {Promise<{port:number, close:()=>Promise<void>, peers:()=>Array<object>}>}
+ *   peers — LIS_VENDOR_EXACT_V1, D14: последние соединения с этим портом, новые
+ *   первыми: { ip, port, remotePort, connectedAt, lastRxAt, frames, noiseBytes,
+ *   noiseHint, open, closedAt }; port — порт приёма (этого слушателя),
+ *   remotePort — порт прибора; noiseBytes/noiseHint — байты не в кадре, кроме
+ *   сигнала 0x02 (noiseHint), — то, по чему экран говорит «приходят данные,
+ *   которые Easy-Med не понимает»; время — ISO без миллисекунд.
  */
 export function startMllpServer({ port, onMessage, onOversize = null, onAbandoned = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, replyStyle = null }) {
   return new Promise((resolve, reject) => {
@@ -253,9 +353,37 @@ export function startMllpServer({ port, onMessage, onOversize = null, onAbandone
     // повторяет никогда (autobio-autolumo-a1000.md §4), поэтому слушатель
     // закрывается, только когда его порт больше не нужен (index.js).
     const socks = new Set();
+    // LIS_VENDOR_EXACT_V1 — D14: кто подключался к порту и что прислал — для
+    // экрана «Анализаторы» (index.js listenerStatus().peers). Раньше прибор,
+    // который подключился и шлёт не HL7, выглядел так же, как «никто не
+    // подключался». Последние PEERS_KEPT соединений, открытые — все.
+    const peers = [];
+    const trimPeers = () => {
+      while (peers.length > PEERS_KEPT) {
+        const i = peers.findIndex((p) => !p.open);
+        if (i === -1) break;
+        peers.splice(i, 1);
+      }
+    };
     const server = net.createServer((sock) => {
       socks.add(sock);
-      sock.on('close', () => socks.delete(sock));
+      // LIS_VENDOR_EXACT_V1 — D14: соединение — в журнал (адрес и порт прибора)
+      // и в список для экрана.
+      const ip = String(sock.remoteAddress || '').replace(/^::ffff:/, '');
+      const rec = { ip, port: sock.localPort || null, remotePort: sock.remotePort || null, connectedAt: isoNow(),
+        lastRxAt: null, frames: 0, noiseBytes: 0, noiseHint: null, open: true, closedAt: null };
+      const label = `${ip}:${rec.remotePort}`;
+      peers.push(rec);
+      trimPeers();
+      log(`LIS: подключение ${label} к порту ${rec.port}`);
+      sock.on('data', () => { rec.lastRxAt = isoNow(); });
+      sock.on('close', () => {
+        socks.delete(sock);
+        rec.open = false;
+        rec.closedAt = isoNow();
+        trimPeers();
+        log(`LIS: соединение ${label} закрыто (кадров: ${rec.frames}${rec.noiseBytes ? ', байт не в кадре: ' + rec.noiseBytes : ''})`);
+      });
       // LIS_VENDOR_EXACT_V1 — D4: простоя нет (прибор молчит часами), TCP
       // keep-alive убирает мёртвых; NoDelay — ответ уходит сразу, два ответа
       // не склеиваются в один сегмент (A1000 вырезает ответ регуляркой
@@ -264,7 +392,13 @@ export function startMllpServer({ port, onMessage, onOversize = null, onAbandone
       sock.setNoDelay(true);
       // LIS_REAL_ANALYZERS_V1_DIAL — разбор кадров вынесен: тот же читатель у
       // клиента, который звонит прибору сам (dial.js).
-      attachMllpReader(sock, { onMessage, onOversize, onAbandoned, maxBytes, log, peer: sock.remoteAddress || '', replyStyle });   // onAbandoned: ревью R2, п. 10а; replyStyle: LIS_VENDOR_EXACT_V1
+      attachMllpReader(sock, {
+        onMessage: (text, peer) => { rec.frames++; return onMessage(text, peer); },   // LIS_VENDOR_EXACT_V1 — D14: счёт кадров
+        // LIS_VENDOR_EXACT_V1 — D14: сигнал 0x02 — не «непонятные данные».
+        onNoise: (n, hint) => { if (hint === 'heartbeat') return; rec.noiseBytes += n; rec.noiseHint = hint; },
+        label,
+        onOversize, onAbandoned, maxBytes, log, peer: sock.remoteAddress || '', replyStyle,   // onAbandoned: ревью R2, п. 10а; replyStyle: LIS_VENDOR_EXACT_V1
+      });
       sock.on('error', () => sock.destroy());
     });
 
@@ -295,6 +429,7 @@ export function startMllpServer({ port, onMessage, onOversize = null, onAbandone
           for (const s of socks) resetSocket(s);   // LIS_VENDOR_EXACT_V1 — D4: RST, не FIN
           server.close(() => r());
         }),
+        peers: () => peers.slice().reverse().map((p) => ({ ...p })),   // LIS_VENDOR_EXACT_V1 — D14: копии, новые первыми
       });
     });
   });

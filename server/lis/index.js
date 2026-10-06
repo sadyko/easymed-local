@@ -17,6 +17,7 @@
 import os from 'node:os';   // LIS_REAL_ANALYZERS_V1_DIAL — свои адреса: нет петли на себя
 import net from 'node:net';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 7: адрес IPv6 к одному виду
 import { startMllpServer } from './mllp.js';
+import { PEERS_KEPT } from './mllp.js';   // LIS_VENDOR_EXACT_V1 — D14: сколько соединений помнить
 import { startMllpClient, isLocalIp } from './dial.js';   // LIS_REAL_ANALYZERS_V1_DIAL — Easy-Med подключается к прибору сам
 import { receiveMessage } from './receive.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — проба или служебное, и ответ прибору
 import { replyStyle } from './receive.js';   // LIS_VENDOR_EXACT_V1 — вид ответа, который провод строит сам
@@ -437,11 +438,28 @@ export function listenerCount() { return running.length; }
  * по номеру строки прибора: { device_id, host, port, state, since, last_rx_at,
  * code, retry_at }. state — connecting / connected / waiting (dial.js) или off
  * (клиент не поднят: code bad_address / self / duplicate).
+ *
+ * LIS_VENDOR_EXACT_V1 — D14: peers — кто подключался к портам приёма, новые
+ * первыми, последние PEERS_KEPT (открытые — все): { ip, port, connectedAt,
+ * lastRxAt, frames, noiseBytes, noiseHint, open } (договор с экраном
+ * «Анализаторы» — rpc/lis.js listenersReply, lab-devices-lists.js peerNotes;
+ * имена полей не менять). port — порт приёма; noiseHint — 'astm' | 'autobio' |
+ * 'utf16' | 'hl7-unframed' | 'other' | null (mllp.js noiseHint; сигнал 0x02 —
+ * не шум). Сверх договора: remotePort — порт прибора, closedAt.
  */
 export function listenerStatus() {
   const dialing = [
     ...[...dialers.entries()].map(([device_id, c]) => ({ device_id, ...c.status() })),
     ...dialRefused.map((r) => ({ ...r })),
   ].sort((a, b) => a.device_id - b.device_id);
-  return { listening: running.map((s) => s.port), failed: failed.map((f) => ({ ...f })), dialing };
+  return { listening: running.map((s) => s.port), failed: failed.map((f) => ({ ...f })), dialing, peers: peersOf(running) };
+}
+
+/** LIS_VENDOR_EXACT_V1 — D14: соединения всех слушателей, новые первыми; открытые — все, закрытые — до PEERS_KEPT. */
+function peersOf(list) {
+  const all = list.flatMap((s) => (typeof s.peers === 'function' ? s.peers() : []))
+    .sort((a, b) => String(b.connectedAt).localeCompare(String(a.connectedAt)));
+  const open = all.filter((p) => p.open).length;
+  let closedRoom = Math.max(0, PEERS_KEPT - open);
+  return all.filter((p) => p.open || closedRoom-- > 0);
 }

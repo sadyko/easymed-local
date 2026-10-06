@@ -256,6 +256,29 @@ test('LIS_VENDOR_EXACT_V1 D4: сторож тишины после сигнал�
   }
 });
 
+// LIS_VENDOR_EXACT_V1 — D14: читатель общий со слушателем: байты не в кадре
+// идут в журнал с подсказкой протокола, но сигнал 0x02 гематологии (раз в 3 с,
+// BC-3600 OM p. D-8) — не беда и журнал не засоряет.
+test('LIS_VENDOR_EXACT_V1 D14: сигнал 0x02 в журнал не идёт; непонятное от прибора — идёт с подсказкой', async () => {
+  const fake = await fakeAnalyzer();
+  const logs = [];
+  const client = startMllpClient({ host: '127.0.0.1', port: fake.port, timing: FAST, onMessage: async () => 'AA', log: (m) => logs.push(m) });
+  try {
+    await until(() => fake.live().length === 1, 3000, 'подключение');
+    const sock = fake.live()[0];
+    for (let i = 0; i < 3; i++) { sock.write(Buffer.from([0x02])); await settle(30); }
+    await settle(100);
+    assert.ok(!logs.some((l) => /не в кадре/.test(l)), 'сигнал — не беда: ' + logs.join(' | '));
+    // BC-20 с протоколом «15ID» вместо HL7 начинает с 0x05 (BC-3600 OM p. D-13; mindray-bc-20.md M16).
+    sock.write(Buffer.from([0x05]));
+    await until(() => logs.some((l) => /не в кадре/.test(l)), 3000, 'строка о непонятном');
+    assert.ok(logs.some((l) => /не в кадре/.test(l) && l.includes('127.0.0.1:' + fake.port)), logs.join(' | '));
+  } finally {
+    client.close();
+    await fake.close();
+  }
+});
+
 test('прибор без сигнала может молчать часами — простоя у клиента нет', async () => {
   const fake = await fakeAnalyzer();
   const client = startMllpClient({ host: '127.0.0.1', port: fake.port, timing: { ...FAST, silenceMs: 150 }, onMessage: async () => 'AA' });
