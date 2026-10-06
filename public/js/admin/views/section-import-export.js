@@ -126,6 +126,16 @@ const VISIT_TIER_COLUMNS = [
     { key: 'price_repeat' },    { key: 'repeat_days_from', int: true },    { key: 'repeat_days_to', int: true },
 ];
 
+// CLINIC_API_FIX_V1 (ревью) — строка услуг ОБНОВИТ существующую услугу, а не
+// ляжет новой: стоит «Обновлять существующие» (lookups.__wantUpdate — окно
+// импорта кладёт галочку туда и пересобирает строки, когда её меняют) и услуга
+// с таким названием есть (lookups.__stored — по normKey названия, так же
+// runImport сопоставляет строки по matchField 'name').
+function serviceRowUpdates(payload, lookups) {
+    return !!(lookups && lookups.__wantUpdate && lookups.__stored
+        && lookups.__stored.has(normKey(payload && payload.name)));
+}
+
 // EXCEL_SELF_HOST_V1 — served from our own origin (CSP allows 'self'); the
 // SheetJS CDN is NOT in the site CSP, so the external import was blocked and
 // Sample/Import/Export failed. Normalise default/named exports so XLSX.utils
@@ -427,8 +437,17 @@ const IMPORT_CONFIGS = {
             // строки файла. Заголовка online_booking в листе нет — отметка не
             // трогается (тот же договор, что у external_lab и ступеней): файл,
             // выгруженный до онлайн-записи, не выключает её при обновлении.
+            //
+            // CLINIC_API_FIX_V1 (ревью) — при ОБНОВЛЕНИИ существующей услуги
+            // узбекское название — то, что у неё окажется: пустая текстовая
+            // ячейка в запись не идёт (сохранённое остаётся), колонки может не
+            // быть вовсе. Сохранённое считается, только если строка правда
+            // обновит услугу (serviceRowUpdates: «Обновлять существующие» и
+            // услуга с этим названием есть); новая услуга его не получит.
+            var storedUz = serviceRowUpdates(payload, ctx && ctx.lookups)
+                ? String((ctx.lookups.__stored.get(normKey(payload.name)) || {}).name_uz || '').trim() : '';
             if (!('online_booking' in r)) delete payload.online_booking;
-            else if (payload.online_booking && !String(payload.name_uz || '').trim()) {
+            else if (payload.online_booking && !String(payload.name_uz || '').trim() && !storedUz) {
                 payload.online_booking = false;
                 if (ctx) ctx.warn(trf('Строка {n}, «{service}»: онлайн-запись не включена: нет названия на узбекском.',
                     { n: ctx.rowNum, service: String(payload.name || '').trim() }));
@@ -516,7 +535,9 @@ const IMPORT_CONFIGS = {
         },
         // DOCTOR_TIER_V2 — сохранённые ступени услуг (по названию) для сверки
         // порядка при обновлении: loadLookups кладёт их в lookups.__stored.
-        storedColumns: ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3'],
+        // CLINIC_API_FIX_V1 (ревью) — и узбекское название: онлайн-запись
+        // при обновлении услуги без name_uz в файле (serviceRowUpdates).
+        storedColumns: ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3', 'name_uz'],
         columns: [
             { key: 'name',             required: true, hint: 'Название услуги (обязательно)' },
             { key: 'group',            target: 'type', map: SERVICE_GROUP_MAP, required: true,
@@ -1218,12 +1239,42 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
 
     let parsedRows = [];
     let lookups    = null;
+    let rawRows    = [];   // CLINIC_API_FIX_V1 (ревью) — строки листа: пересборка, когда меняют галочку
 
     async function ensureLookups() {
         if (lookups) return lookups;
         lookups = await loadLookups(cfg);
         return lookups;
     }
+
+    // CLINIC_API_FIX_V1 (ревью) — обновит ли строка существующую запись, решает
+    // галочка «Обновлять существующие»; строки собираются уже с ней
+    // (lookups.__wantUpdate, см. serviceRowUpdates). Сменили галочку после
+    // выбора файла — строки и предпросмотр собираются заново.
+    const wantUpdateNow = () => matchFields.length > 0 && !!updateExistingInp.checked;
+    function buildParsed() {
+        lookups.__wantUpdate = wantUpdateNow();
+        parsedRows = rawRows.map((raw, i) => buildRow(raw, i + 2, lookups, cfg));
+    }
+    function paintParsed() {
+        const validCount = parsedRows.filter(r => r.status !== 'error').length;
+        clear(status);
+        status.append(
+            document.createTextNode(trf('Строк в файле: {n}', { n: rawRows.length }) + ' — '),
+            h('b', { style: { color: 'var(--ok-700)' } }, String(validCount)),
+            document.createTextNode(' ' + tr('готовы') + ', '),
+            h('b', { style: { color: 'var(--crit-700)' } }, String(rawRows.length - validCount)),
+            document.createTextNode(' ' + tr('с ошибками.')),
+        );
+        paintPreview();
+        if (validCount > 0) confirmBtn.removeAttribute('disabled');
+        else                confirmBtn.setAttribute('disabled', '');
+    }
+    updateExistingInp.addEventListener('change', () => {
+        if (!lookups || !rawRows.length) return;
+        buildParsed();
+        paintParsed();
+    });
 
     async function handleFile(file) {
         if (!file) return;
@@ -1242,21 +1293,12 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             if (rows.length === 0) throw new Error('Лист пустой — под заголовками нет строк.');
 
             await ensureLookups();
-            parsedRows = rows.map((raw, i) => buildRow(raw, i + 2, lookups, cfg));
-            const validCount = parsedRows.filter(r => r.status !== 'error').length;
-            clear(status);
-            status.append(
-                document.createTextNode(trf('Строк в файле: {n}', { n: rows.length }) + ' — '),
-                h('b', { style: { color: 'var(--ok-700)' } }, String(validCount)),
-                document.createTextNode(' ' + tr('готовы') + ', '),
-                h('b', { style: { color: 'var(--crit-700)' } }, String(rows.length - validCount)),
-                document.createTextNode(' ' + tr('с ошибками.')),
-            );
-            paintPreview();
-            if (validCount > 0) confirmBtn.removeAttribute('disabled');
-            else                confirmBtn.setAttribute('disabled', '');
+            rawRows = rows;   // CLINIC_API_FIX_V1 (ревью) — сборка с галочкой «Обновлять существующие»
+            buildParsed();
+            paintParsed();
         } catch (e) {
             console.error('[section-import] parse failed:', e);
+            rawRows = [];   // CLINIC_API_FIX_V1 (ревью) — галочка не вернёт строки прошлого файла
             status.textContent = trf('Не удалось прочитать файл: {msg}', { msg: e.message || e });
             clear(preview);
             confirmBtn.setAttribute('disabled', '');
@@ -1296,6 +1338,8 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
     }
 
     async function runImport() {
+        // CLINIC_API_FIX_V1 (ревью) — строки собраны с той галочкой, с которой импортируются.
+        if (lookups && rawRows.length && lookups.__wantUpdate !== wantUpdateNow()) { buildParsed(); paintParsed(); }
         const valid = parsedRows.filter(r => r.status !== 'error');
         if (valid.length === 0) { toast('Импортировать нечего — сначала исправьте ошибки в файле.', 'fail'); return; }
 
