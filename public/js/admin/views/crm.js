@@ -1706,9 +1706,14 @@ async function paint() {
          *
          * Не отказываем, когда:
          *   • строка выполнена — её не переписывают и не записывают;
+         *   • врача строки в этой правке не меняли (ревью 5c03462) — иначе
+         *     карточку с такой строкой нельзя было бы сохранить вовсе, даже
+         *     ради комментария: живая очередь сегодня привязана к визиту дня
+         *     пациента, у которого врач может быть другой;
          *   • день сменили — со старого визита строку снимет saveLines, а о
          *     старом приёме спросит offerCancelSuperseded;
-         *   • врач визита сам с живой очередью или это тот же врач;
+         *   • у визита нет врача, врач визита сам с живой очередью или это тот
+         *     же врач — ничьего времени перевод не оставляет;
          *   • врача визита держит другая открытая строка того же дня — визит
          *     нужен ей (bookDays привязывает к визиту дня все его строки).
          *
@@ -1717,9 +1722,13 @@ async function paint() {
          */
         function queueSwitchRefusal() {
             for (const p of picked) {
-                if (p.status === 'done' || !p.visit_id || !isLiveQueueDoc(p.doctor_id)) continue;
+                if (p.status === 'done' || !p.visit_id || !isLiveQueueDoc(p.doctor_id)
+                    || String(p.doctor_id) === String(p.booked_doctor_id || '')) continue;   // ревью 5c03462 — врача не меняли
                 if (String(p.date || '') !== String(p.booked_date || '')) continue;
-                const visitDoc = (p.booked_at && p.booked_at.doctor_id) || p.booked_doctor_id;
+                // Визиты загрузились — врач визита (у визита его может не быть: тогда
+                // отказывать не за что). Не загрузились — запасной путь: врач строки
+                // в базе; в общем дне он может назвать не того врача (деградация).
+                const visitDoc = p.booked_at ? p.booked_at.doctor_id : p.booked_doctor_id;
                 if (!visitDoc || String(visitDoc) === String(p.doctor_id) || isLiveQueueDoc(visitDoc)) continue;
                 if (picked.some((q) => q !== p && q.status !== 'done' && String(q.date || '') === String(p.date || '')
                     && String(q.doctor_id || '') === String(visitDoc))) continue;
@@ -2322,6 +2331,9 @@ async function paint() {
                     && String(x.doctor_id || '') === String(p.doctor_id || ''));
                 if (!ln) continue;
                 p.line_id = ln.id || null;
+                // CLINIC_API_FIX_V1 (ревью 5c03462) — визит сменился: прежняя подпись записи
+                // (booked_at) о нём уже неправда; новую подставит prefillBookedTimes.
+                if (String(p.visit_id || '') !== String(ln.visit_id || '')) delete p.booked_at;
                 p.visit_id = ln.visit_id || null;
                 p.status = ln.status || p.status;
                 p.booked_date = ln.scheduled_date || '';
@@ -2709,7 +2721,10 @@ async function paint() {
                             { day: human, msg: linkErr.message || linkErr }), 'fail');
                     }
                 }
-                if (touched) await reloadLines(requestId);
+                if (touched) {
+                    await reloadLines(requestId);
+                    await prefillBookedTimes();   // CLINIC_API_FIX_V1 (ревью 5c03462) — врач и час визита — из нового визита
+                }
                 await offerCancelSuperseded();
                 if (!failedDays.size) return true;
                 toast(trf('Не удалось записать дни: {days}',
