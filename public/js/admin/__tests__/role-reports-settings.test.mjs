@@ -84,7 +84,9 @@ const ONLY_CASHIER = { reports: 'view', 'reports.revenue': 'none', 'reports.cash
 
 const visibleReports = () => REPORT_DEFS.filter(reportVisible).map((r) => r.kind);
 const visibleTiles = () => GROUPS.flatMap((g) => g.items).filter(tileVisible).map((i) => i.label);
-const ALWAYS = ['Система', 'Подписка', 'Данные клиники'];   // ALWAYS_ALLOWED — у каждой роли, как и было
+// REFERENCE_LISTS_V1 — «Справочники» (общие списки с кодами, только просмотр)
+// видит каждый, кому открыт сам хаб: своего права у плитки нет.
+const ALWAYS = ['Система', 'Подписка', 'Данные клиники', 'Справочники'];   // ALWAYS_ALLOWED — у каждой роли, как и было
 
 // --- Отчёты -----------------------------------------------------------------
 

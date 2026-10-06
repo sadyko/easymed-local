@@ -1152,6 +1152,11 @@ export function isRouteAllowed(view) {
     // ещё в ROLE_KEYS_V2 — на него маршрут и падал.
     if (view === 'doctor-room')       return isModuleAllowed('consultation');
     if (view === 'settings')          return isModuleAllowed('settings');
+    // REFERENCE_LISTS_V1 — «Справочники» (города, районы, специальности с
+    // кодами) — только просмотр общих списков, встроенных в программу. Данных
+    // клиники в них нет, а сервер отдаёт эти таблицы на чтение всем сотрудникам,
+    // поэтому своего права у плитки нет: экран открывает тот же ключ, что и хаб.
+    if (view === 'reference-lists')   return isModuleAllowed('settings');
     // ROLE_AUDIT_V1 (fix #4) — each Settings sub-section must be granted
     // explicitly; bare «Settings (home)» no longer unlocks every sub-table
     // (staff accounts, price lists — a disclosure). Bare settings still opens

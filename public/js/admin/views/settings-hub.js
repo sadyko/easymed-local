@@ -231,6 +231,10 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
             { label: 'Категории пациентов', desc: 'Группы пациентов и скидка каждой группы',               icon: 'Layers',   live: true, action: () => openSection('patient_categories'), section: 'patient_categories' },
             // CHRONIC_REF_V1 — список, из которого анкета пациента выбирает хронические заболевания.
             { label: 'Хронические заболевания', desc: 'Список для анкеты пациента: выбирают, а не печатают', icon: 'Heart',  live: true, action: () => openSection('chronic_conditions_ref'), section: 'chronic_conditions_ref' },
+            // REFERENCE_LISTS_V1 — общие списки с кодами для партнёров: города,
+            // районы, специальности. Только просмотр; маршрут открыт тому, кому
+            // открыт сам хаб (permissions.js isRouteAllowed).
+            { label: 'Справочники', desc: 'Города, районы и специальности: коды и названия на трёх языках', icon: 'ListBullet', live: true, action: nav('reference-lists'), route: 'reference-lists' },
             // COMPANY_SECTION_V1 — «Компания» было НЕКУДА открыть.
             //
             // Печатные формы, шапка приложения и window.CLINIC берут название,

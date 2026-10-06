@@ -101,7 +101,8 @@ import { renderPacs }         from './admin/views/pacs.js';
 import { renderInventory }    from './admin/views/inventory.js?v=inv7';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live; inv6 — OWN_SHELF_ONLY_V1 (ревью F5) чип «Только со своих полок»; inv7 — ревью F6 «Не списано со склада»
 import { renderStockLog }     from './admin/views/stock-log.js?v=stocklog1';   // STOCK_LOG_V1 — журнал движений (кто, кому, партия, срок)
 import { renderMyStock }      from './admin/views/my-stock.js?v=mystock1';   // MY_STOCK_V1 — свой подотчёт: что выдали, кто выдал, что списал
-import { renderSettingsHub }  from './admin/views/settings-hub.js?v=rmt1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route · ROLES_SAVE_TRUTH_V1 — «Роли» (штамп) · ROLES_REVIEW_V1
+import { renderSettingsHub }  from './admin/views/settings-hub.js?v=reflist1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route · ROLES_SAVE_TRUTH_V1 — «Роли» (штамп) · ROLES_REVIEW_V1 · REFERENCE_LISTS_V1 — плитка «Справочники»
+import { renderReferenceLists } from './admin/views/reference-lists.js?v=reflist1';   // REFERENCE_LISTS_V1 — «Справочники»: города, районы, специальности с кодами, только просмотр
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
 // CASE_WORKSPACE_V1 — история болезни как рабочий экран: слева шаги, справа документ.
@@ -298,6 +299,7 @@ const CRUMBS = {
     // ALWAYS_ALLOWED in permissions.js, so naming them here grants nothing.
     subscription:  ['Insights', 'Settings', 'Подписка'],
     'clinic-data': ['Insights', 'Settings', 'Данные клиники'],
+    'reference-lists': ['Insights', 'Settings', 'Справочники'],   // REFERENCE_LISTS_V1
 };
 
 // SETTINGS_SPLIT_V1 — the routes that stay open through a full licence
@@ -702,6 +704,7 @@ const PARENT_OF = {
     'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
     'departments': 'settings',   // DEPARTMENTS_V1
     'subscription': 'settings', 'clinic-data': 'settings', 'public-site': 'settings',
+    'reference-lists': 'settings',   // REFERENCE_LISTS_V1
     // Пациенты
     'patient-card': 'patients', 'appointments': 'patients',
     'registration': 'patients', 'docs-archive': 'patients',
@@ -1251,6 +1254,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'updates':       return void await renderUpdates(viewRoot, ctx);   // UPDATE_DELIVERY_V1 — reachable from the banner + Settings; readable by anyone, actions gate themselves inside the view
             case 'subscription':  return void await renderSubscription(viewRoot, ctx);   // SETTINGS_SPLIT_V1 — подписка и модули
             case 'clinic-data':   return void await renderClinicData(viewRoot, ctx);     // SETTINGS_SPLIT_V1 — резервные копии и опасная зона
+            case 'reference-lists': return void await renderReferenceLists(viewRoot, ctx);   // REFERENCE_LISTS_V1 — справочники с кодами, только просмотр
         }
         // Settings drilldown:  settings:<section_key>
         if (state.view.startsWith('settings:')) {

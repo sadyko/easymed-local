@@ -3,6 +3,17 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // REFERENCE_LISTS_V1 (2026-10-06) — Настройки → «Справочники»: города, районы и специальности с кодами, только просмотр (views/reference-lists.js, плитка в views/settings-hub.js, CRUMBS в admin.js)
+  "Справочники": {"en":"Reference lists","ru":"Справочники","uz":"Ma'lumotnomalar"},   // REFERENCE_LISTS_V1
+  "Города, районы и специальности: коды и названия на трёх языках": {"en":"Cities, districts and specialties: codes and names in three languages","ru":"Города, районы и специальности: коды и названия на трёх языках","uz":"Shaharlar, tumanlar va mutaxassisliklar: kodlar va uch tildagi nomlar"},   // REFERENCE_LISTS_V1
+  "Общие списки: одинаковые у всех клиник и партнёров; партнёры получают коды. Списки встроены в программу и обновляются вместе с ней.": {"en":"Shared lists: the same for every clinic and partner; partners receive the codes. The lists are built into the program and are updated together with it.","ru":"Общие списки: одинаковые у всех клиник и партнёров; партнёры получают коды. Списки встроены в программу и обновляются вместе с ней.","uz":"Umumiy ro'yxatlar: barcha klinikalar va hamkorlarda bir xil; hamkorlar kodlarni oladi. Ro'yxatlar dasturga o'rnatilgan va u bilan birga yangilanadi."},   // REFERENCE_LISTS_V1
+  "Общие списки": {"en":"Shared lists","ru":"Общие списки","uz":"Umumiy ro'yxatlar"},   // REFERENCE_LISTS_V1
+  "Города и районы": {"en":"Cities and districts","ru":"Города и районы","uz":"Shaharlar va tumanlar"},   // REFERENCE_LISTS_V1
+  "Город / область": {"en":"City / region","ru":"Город / область","uz":"Shahar / viloyat"},   // REFERENCE_LISTS_V1
+  "Районов": {"en":"Districts","ru":"Районов","uz":"Tumanlar"},   // REFERENCE_LISTS_V1 — шапка колонки «сколько районов»
+  "Районов нет.": {"en":"No districts.","ru":"Районов нет.","uz":"Tumanlar yo'q."},   // REFERENCE_LISTS_V1
+  "Не удалось загрузить города и районы — обновите страницу.": {"en":"The cities and districts could not be loaded — refresh the page.","ru":"Не удалось загрузить города и районы — обновите страницу.","uz":"Shaharlar va tumanlarni yuklab bo'lmadi — sahifani yangilang."},   // REFERENCE_LISTS_V1
+  // /REFERENCE_LISTS_V1
   // CLINIC_API_FIX_V1 (2026-10-06) — импорт услуг из Excel: онлайн-запись только с узбекским названием, как в окне услуги (views/section-import-export.js)
   "Строка {n}, «{service}»: онлайн-запись не включена: нет названия на узбекском.": {"en":"Row {n}, «{service}»: online booking was not turned on: there is no Uzbek name.","ru":"Строка {n}, «{service}»: онлайн-запись не включена: нет названия на узбекском.","uz":"{n}-qator, «{service}»: onlayn yozilish yoqilmadi: o'zbekcha nomi yo'q."},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (2026-10-06) — «Мой профиль» врача шлёт только изменённое; без правок сохранять нечего (views/doctor-profile.js)
