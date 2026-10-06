@@ -788,3 +788,106 @@ test('LIS_VENDOR_EXACT_V1 D14: listenerStatus().peers — соединения �
     await until(() => listenerStatus().peers.find((x) => x.remotePort === mine).open === false, 3000, 'закрыто');
   });
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D1/D9/D13 по настоящему слушателю ─────────────────
+// Сквозная сверка: кадр прибора → находка (discover.js) → приём (receive.js) →
+// ответ → кадр MLLP — байт в байт со строками набора захвата
+// (analyzer-research\notes\capture-kit\tests\run-tests.ps1), кроме MSH-3/4 =
+// EASYMED|CLINIC (наши, HIM v5.0 с. 8), MSH-5/6 гематологии (эхо её MSH-3/4) и
+// MSH-7 (время). Каждый прибор — со своего адреса петли, как в клинике.
+async function kitAnalyzer(port, localAddress) {
+  const sock = net.createConnection({ host: '127.0.0.1', port, localAddress });
+  await new Promise((res, rej) => { sock.once('connect', res); sock.once('error', rej); });
+  sock.on('error', () => {});
+  let buf = Buffer.alloc(0);
+  const frames = [];
+  sock.on('data', (d) => {
+    buf = Buffer.concat([buf, d]);
+    for (;;) {
+      const s = buf.indexOf(VT);
+      const e = buf.indexOf(FS, s + 1);
+      if (s === -1 || e === -1 || buf.length < e + 2) break;
+      frames.push(buf.subarray(s, e + 2));
+      buf = buf.subarray(e + 2);
+    }
+  });
+  return {
+    async send(text) {
+      const n = frames.length;
+      sock.write(frameOf(text));
+      await until(() => frames.length > n, 10000, 'ответ Easy-Med');
+      return frames[n];
+    },
+    close() { sock.destroy(); },
+  };
+}
+const kitSegs = (...s) => s.join('\r') + '\r';
+/** Кадр ответа из строки набора: VT + текст + FS CR; {TS} — MSH-7 ответа; MSH-3/4 — EASYMED|CLINIC. */
+function kitFrame(kit, got, { msh5, msh6, msh10 } = {}) {
+  const text = got.subarray(1, got.length - 2).toString('latin1');
+  const [mshLine, ...rest] = kit.replace('{TS}', text.split('|')[6]).split('\r');
+  const f = mshLine.split('|');
+  f[2] = 'EASYMED';
+  f[3] = 'CLINIC';
+  if (msh5 !== undefined) f[4] = msh5;
+  if (msh6 !== undefined) f[5] = msh6;
+  if (msh10 !== undefined) f[9] = msh10;
+  return Buffer.concat([Buffer.from([VT]), Buffer.from([f.join('|'), ...rest].join('\r'), 'latin1'), Buffer.from([FS, 0x0d])]);
+}
+/** Разрез BS200.exe: кусок n всего ответа (notes\bs200-probes\manual-check-pieces.mjs). */
+const kitPiece = (frame, n) => frame.subarray(1, frame.length - 2).toString('latin1').split('|').slice(0, -1)[n - 1];
+
+test('LIS_VENDOR_EXACT_V1: по настоящему слушателю — ответ каждому прибору клиники байт в байт со строками набора захвата', async () => {
+  await withLis(async (db, lisPort) => {
+    // A1000 — строка с моделью (D2: «Добавить» — только с моделью), его MSH-3/4 пусты.
+    db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, added) VALUES (21, 'ИХЛА', 'autobio-autolumo-a1000', 'mllp', '127.0.0.25', ?, 1, 1)").run(lisPort);
+    await startLisListeners(db, { log: () => {} });
+    const bs = await kitAnalyzer(lisPort, '127.0.0.22');
+    const cl = await kitAnalyzer(lisPort, '127.0.0.23');
+    const bc = await kitAnalyzer(lisPort, '127.0.0.24');
+    const ab = await kitAnalyzer(lisPort, '127.0.0.25');
+    try {
+      // BS-200 — X_BS200_ACK и X_BS200_QCK; куски 10, 27, 32 BS200.exe.
+      let got = await bs.send(kitSegs('MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||', 'PID|1',
+        'OBR|1|LAB-000123|12|Mindray^BS-200|N||20261005101200||||||||serum', 'OBX|1|NM|GLU|Glucose|5.230000|mmol/L|3.900000-6.100000|N|||F|||20261005101200'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||Mindray|BS-200|{TS}||ACK^R01|17|P|2.3.1||||0||ASCII|||\rMSA|AA|17|Message accepted|||0|\r', got));
+      assert.deepEqual([kitPiece(got, 10), kitPiece(got, 27)], ['17', '0']);
+      got = await bs.send(kitSegs('MSH|^~\\&|Mindray|BS-200|||20261005101500||QRY^Q02|8|P|2.3.1||||||ASCII|||', 'QRD|20261005101500|R|D|1|||RD|LAB-000123|OTH|||T|', 'QRF|BS-200|||||RCT|COR|ALL||'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||Mindray|BS-200|{TS}||QCK^Q02|8|P|2.3.1||||||ASCII|||\rMSA|AA|8|Message accepted|||0|\rERR|0|\rQAK|SR|NF|\r', got));
+      assert.deepEqual([kitPiece(got, 10), kitPiece(got, 27), kitPiece(got, 32)], ['8', '0', 'NF']);
+
+      // CL-900i (BS-240 — так же): MSH-3/4 пусты — X_CL_ACK, X_CL_ACK_QC, X_CL_QCK; 19 «|» после «^~\&».
+      got = await cl.send(kitSegs('MSH|^~\\&|||||20120508094822||ORU^R01|1|P|2.3.1||||0||ASCII|||', 'PID|1|TEST-0001|||||||||||||||||||||||||||',
+        'OBR|1|LAB-000125|10|^|Y|20120405193926|20120405193914|20120405193914||||||20120405193914|serum|||||||||3|||||||||||||||||||||||',
+        'OBX|1|NM|2|TBil|100| umol/L |-|N|||F||100|20120405194245||tester|0|'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||||{TS}||ACK^R01|1|P|2.3.1||||0||ASCII|||\rMSA|AA|1|Message accepted|||0|\r', got));
+      const msh = got.subarray(1).toString('latin1').split('\r')[0];
+      assert.equal((msh.slice(msh.indexOf('^~\\&') + 4).match(/\|/g) || []).length, 19, 'CL-900i: «MSH segment field count < 19» — нет');
+      got = await cl.send(kitSegs('MSH|^~\\&|||||20120508103014||ORU^R01|1|P|2.3.1||||2||ASCII|||',
+        'OBR|1|7|AST|^|0|20130729160839|20120405141255|20130729161552|||1|2|QUAL2|2222|20300101|0|M|55.000000|5.000000|0.137470|nkat/L|||||||||1||||||||||||||||||'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||||{TS}||ACK^R01|1|P|2.3.1||||2||ASCII|||\rMSA|AA|1|Message accepted|||0|\r', got));
+      got = await cl.send(kitSegs('MSH|^~\\&|||||20190222102859||QRY^Q02|10|P|2.3.1||||||ASCII|||', 'QRD|20190222102859|R|D|9|||RD|LAB-000126|OTH|||T|', 'QRF||||||RCT|COR|ALL||'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||||{TS}||QCK^Q02|10|P|2.3.1||||||ASCII|||\rMSA|AA|10|Message accepted|||0|\rERR|0|\rQAK|SR|NF|\r', got));
+
+      // BC-5300 — X_HEME_ACK, X_HEME_ACK_QC (MSH-11 = Q), X_HEME_ORR; MSA-3/6 у ACK — как сегодня.
+      got = await bc.send(kitSegs('MSH|^~\\&|BC-5300|Mindray|||20080419104618||ORU^R01|42|P|2.3.1||||||UNICODE', 'PID|1||TEST-0002^^^^MR', 'PV1|1',
+        'OBR|1||LAB-000127|00001^Automated Count^99MRC||20071207080000|20071207160000|||Mindray||||20071207083000||||||||||HM||||||||Mindray',
+        'OBX|6|NM|6690-2^WBC^LN||4.63|10*9/L|11.00-12.00|L|||F||E'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|LIS||||{TS}||ACK^R01|42|P|2.3.1||||||UNICODE\rMSA|AA|42|Message accepted|||0\r', got, { msh5: 'BC-5300', msh6: 'Mindray' }));
+      got = await bc.send(kitSegs('MSH|^~\\&|BC-5300|Mindray|||20081120171602||ORU^R01|1|Q|2.3.1||||||UNICODE', 'PID|1||LOT1234^^^^MR||||20301231',
+        'OBR|1||6|00003^LJ QCR^99MRC||||||||||||||||||||HM', 'OBX|1|NM|6690-2^WBC^LN||7.10|10*9/L|||||F'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|LIS||||{TS}||ACK^R01|1|Q|2.3.1||||||UNICODE\rMSA|AA|1|Message accepted|||0\r', got, { msh5: 'BC-5300', msh6: 'Mindray' }));
+      got = await bc.send(kitSegs('MSH|^~\\&|BC-5300|Mindray|||20081120174836||ORM^O01|9|P|2.3.1||||||UNICODE', 'ORC|RF||SampleID1||IP'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|LIS||||{TS}||ORR^O02|1|P|2.3.1||||||UNICODE\rMSA|AR|9\r', got, { msh5: 'BC-5300', msh6: 'Mindray', msh10: '9' }));
+
+      // A1000 — «Mindray long form» с MSA-4 (settle, табл. c, R1 и R5).
+      got = await ab.send(kitSegs('MSH|^~\\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123', 'OBR|1|LAB-000123|7764|AutoLumo A1000',
+        'NTE|||180323~~AFP~107~20271231~DQ70~1', 'OBX|10455|CE|107|107|41765^4.17~||||||F|||2026/10/05 12:00:00'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||||{TS}||ACK^R01|5|P|2.3.1||||||ASCII|||\rMSA|AA|5|Message accepted|10455||0|\r', got));
+      got = await ab.send(kitSegs('MSH|^~\\&|||||20261005120000||ORU^R01|7|P|2.3.1|261005120000124', 'OBR|1|LAB-000123|7764|AutoLumo A1000',
+        'OBX||CE|107||41765^4.17||||||F', 'OBX||CE|112||22000^1.23||||||F'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||||{TS}||ACK^R01|7|P|2.3.1||||||ASCII|||\rMSA|AA|7|Message accepted|7764||0|\r', got));
+      assert.equal(db.prepare("SELECT COUNT(*) c FROM lab_devices WHERE host = '127.0.0.25'").get().c, 1, 'A1000 — его строка, не находка');
+    } finally { bs.close(); cl.close(); bc.close(); ab.close(); }
+  });
+});
