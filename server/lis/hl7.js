@@ -127,6 +127,19 @@ export const LAYOUT_SHORT = 'short';
 const segments = (list) => list.map((s) => s + '\r').join('');
 
 /**
+ * LIS_VENDOR_EXACT_V1 — MSH-7 ответа: МЕСТНОЕ время ПК, «YYYYMMDDHHMMSS» без
+ * пояса. Так TS понимает HL7 v2.3.1 (время отправителя), и так пишут сами
+ * приборы: A1000 — DateTime.Now (кодировщик программы клиники 1.0.7), BC-20 —
+ * «…123946» в 12:39:46 по часам клиники. Раньше здесь был toISOString — UTC
+ * без пояса: в Ташкенте ответ «отставал» на 5 часов (acceptance mindray-bc-20).
+ */
+const two = (n) => String(n).padStart(2, '0');
+function localStamp(d = new Date()) {
+  return String(d.getFullYear()).padStart(4, '0') + two(d.getMonth() + 1) + two(d.getDate())
+    + two(d.getHours()) + two(d.getMinutes()) + two(d.getSeconds());
+}
+
+/**
  * Заголовок сообщения без исключений.
  * @returns {{ok:boolean, fieldSep:string, compSep:string, app:string, facility:string,
  *   appField:string, facilityField:string, type:string, event:string, controlId:string,
@@ -198,7 +211,7 @@ export function mshOf(text) {
  */
 export function replyMsh(msh, type, { layout = LAYOUT_LONG } = {}) {
   const m = msh || mshOf('');
-  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const stamp = localStamp();   // LIS_VENDOR_EXACT_V1 — местное время ПК, не UTC
   // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 9) — MSH-16 эхом только 0/1/2 — вид
   // результата по руководству BS-200 (с. 8: «0- Sample result; 1- Calibration
   // result; 2- QC result»; эхом в ACK^R01 на с. 25 и 27). Стандартные

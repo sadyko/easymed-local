@@ -1,6 +1,7 @@
 // hl7.test.js — чистый разбор. Ни базы, ни сети, ни времени: всё, что здесь
 // проверяется, это текст на входе и объект на выходе.
 import test from 'node:test';
+import { mock } from 'node:test';   // LIS_VENDOR_EXACT_V1 — часы для MSH-7 ответа
 import assert from 'node:assert/strict';
 import { parseMessage, buildAck, mshOf, ACK_INTERNAL } from './hl7.js';   // mshOf, ACK_INTERNAL: LIS_REAL_ANALYZERS_V1_ACK
 import { buildQueryReply } from './hl7.js';   // LIS_VENDOR_EXACT_V1 — QCK^Q02 и ORR^O02 в виде производителя
@@ -423,4 +424,35 @@ test('mshOf: MSH-11 (processingId) — для эха в ответе', () => {
   assert.equal(mshOf(KIT_BC5300_QC).processingId, 'Q');
   assert.equal(mshOf(KIT_BS200_ORU(1)).processingId, 'P');
   assert.equal(mshOf('это не HL7').processingId, '');
+});
+
+// LIS_VENDOR_EXACT_V1 — MSH-7 ответа — МЕСТНОЕ время ПК, «YYYYMMDDHHMMSS» без
+// пояса: так TS понимает HL7 v2.3.1 (время отправителя), и так пишут сами
+// приборы — кодировщик A1000 ставит DateTime.Now (программа клиники 1.0.7,
+// LisComm HHOqW75QVH), BC-20 в приёмке прислал «20261006123946» в 12:39:46 по
+// часам клиники. Easy-Med отвечал UTC: «20261006073946» в ту же секунду
+// (acceptance mindray-bc-20, new_findings; realtest A1000 — «130927» → «080927»).
+// Вид ответа в остальном — байт в байт прежний (тесты выше берут MSH-7 из ответа).
+test('MSH-7 ответа — местное время ПК без пояса (YYYYMMDDHHMMSS), а не UTC: в любом виде ответа и в «заказов нет»', () => {
+  const tz = process.env.TZ;
+  mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-06T07:39:46.250Z') });
+  try {
+    for (const [zone, want] of [['Asia/Tashkent', '20261006123946'], ['America/New_York', '20261006033946'], ['UTC', '20261006073946']]) {
+      process.env.TZ = zone;
+      for (const layout of ['long', 'short']) {
+        const reply = buildAck(mshOf(KIT_BS200_ORU(1)), 'AA', { layout });
+        assert.equal(reply.split('|')[6], want, zone + ', ' + layout);
+      }
+      assert.equal(buildAck('42', 'AE').split('|')[6], want, zone + ', прежняя форма buildAck');
+      assert.equal(buildQueryReply(mshOf(KIT_BS200_QRY)).split('|')[6], want, zone + ', QCK^Q02');
+      assert.equal(buildQueryReply(mshOf(KIT_ORM(9)), { layout: 'short' }).split('|')[6], want, zone + ', ORR^O02');
+    }
+    // Дата — тоже местная: 21:30 UTC в Ташкенте — уже 02:30 следующего дня.
+    mock.timers.setTime(Date.parse('2026-10-06T21:30:00Z'));
+    process.env.TZ = 'Asia/Tashkent';
+    assert.equal(buildAck('42', 'AA').split('|')[6], '20261007023000');
+  } finally {
+    mock.timers.reset();
+    if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz;
+  }
 });
