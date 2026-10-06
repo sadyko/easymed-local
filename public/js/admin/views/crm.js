@@ -1596,6 +1596,19 @@ async function paint() {
         // Никто не отмечен на услугу — предлагаем всех, чтобы запись не встала.
         // Разбор ревью (M9) — кто ведёт вид приёма (doctor_consultation_prices).
         let consultDoctors = new Map();   // consultation_type_id -> Set(doctor_id)
+        // CLINIC_API_FIX_V1 — ЦЕНА КОНСУЛЬТАЦИИ — ТА, ЧТО ВОЗЬМЁТ КАССА
+        // (pricing.js consultationFor): у врача есть строка по этому виду —
+        // её цена (is_free → 0, пустая → 0; из двух строк — последняя), строки
+        // нет — цена вида приёма. Прежде заявка всегда называла цену вида, и
+        // оператор обещал по телефону не ту сумму, что брали на кассе.
+        let consultTypes = [];               // consultation_types: id, price
+        let consultRows = new Map();         // 'doctor_id|type_id' -> строка doctor_consultation_prices
+        function consultPriceOf(p) {
+            const dc = p && p.doctor_id != null ? consultRows.get(String(p.doctor_id) + '|' + String(p.consultation_type_id)) : null;
+            if (dc) return isOn(dc.is_free) ? 0 : (dc.price != null && Number.isFinite(Number(dc.price)) ? Math.max(0, Number(dc.price)) : 0);
+            const ct = consultTypes.find((c) => String(c.id) === String(p && p.consultation_type_id));
+            return ct && Number.isFinite(Number(ct.price)) ? Math.max(0, Number(ct.price)) : 0;
+        }
         function doctorsForService(svcId, p = null) {
             if (p && p.service_id == null && p.consultation_type_id != null) {
                 const who = consultDoctors.get(String(p.consultation_type_id));
@@ -1833,16 +1846,23 @@ async function paint() {
                 // консультацией (service_id NULL + consultation_type_id, миграция 188).
                 const consultsP = supabase.from('consultation_types').select('id, name, name_ru, price')
                     .then(({ data }) => data || [], () => []);
-                supabase.from('doctor_consultation_prices').select('doctor_id, consultation_type_id, available')
+                // CLINIC_API_FIX_V1 — id, price, is_free: цена строки консультации (consultPriceOf);
+                // строки заявки ждут этот ответ, иначе цена врача не успела бы доехать.
+                const consultPricesP = supabase.from('doctor_consultation_prices').select('id, doctor_id, consultation_type_id, price, available, is_free')
                     .then(({ data }) => {
                         const m = new Map();
+                        const rows = new Map();
                         for (const r of (data || [])) {
+                            const rk = String(r.doctor_id) + '|' + String(r.consultation_type_id);   // CLINIC_API_FIX_V1
+                            const was = rows.get(rk);
+                            if (!was || Number(r.id) > Number(was.id)) rows.set(rk, r);
                             if (!isOn(r.available)) continue;   // CLINIC_API_FIX_V1 — одно правило флага на все окна
                             const k = String(r.consultation_type_id);
                             if (!m.has(k)) m.set(k, new Set());
                             m.get(k).add(String(r.doctor_id));
                         }
                         consultDoctors = m;
+                        consultRows = rows;   // CLINIC_API_FIX_V1
                     }, () => {});
                 supabase.from('crm_request_services')
                     // CRM_REAL_BOOKING_V1 — id и visit_id: строка, которая уже
@@ -1851,6 +1871,8 @@ async function paint() {
                     .eq('request_id', r.id).neq('status', 'cancelled')
                     .then(async ({ data: lines, error }) => {
                         const consults = await consultsP;
+                        consultTypes = consults;   // CLINIC_API_FIX_V1
+                        await consultPricesP;      // CLINIC_API_FIX_V1 — цена врача до первой отрисовки
                         // CRM_LINKS_V1 — ОТКАЗ ЭТО НЕ «УСЛУГ НЕТ». Пустой список
                         // неотличим от несостоявшегося запроса, а saveLines()
                         // переписывает набор строк ЦЕЛИКОМ: приняв отказ за
@@ -1879,7 +1901,8 @@ async function paint() {
                             if (!sv && ln.service_id == null && ln.consultation_type_id != null) {
                                 const ct = consults.find((c) => String(c.id) === String(ln.consultation_type_id));
                                 picked.push({ service_id: null, consultation_type_id: ln.consultation_type_id,
-                                    name: (ct && (ct.name_ru || ct.name)) || 'Консультация', price: (ct && ct.price) || 0,
+                                    name: (ct && (ct.name_ru || ct.name)) || 'Консультация',
+                                    price: consultPriceOf({ consultation_type_id: ln.consultation_type_id, doctor_id: ln.doctor_id }),   // CLINIC_API_FIX_V1 — как в кассе
                                     date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null, status: ln.status || 'pending',
                                     line_id: ln.id || null, visit_id: ln.visit_id || null,
                                     booked_date: ln.scheduled_date || '', booked_doctor_id: ln.doctor_id || null });
@@ -2433,13 +2456,23 @@ async function paint() {
                     // без врача (visibleCart), поэтому без него запись колл-центра
                     // дошла бы до регистратуры невидимой строкой.
                     let docCell = null;
+                    const priceEl = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум');
                     if (needsDoctor(p)) {
                         const pool = doctorsForService(p.service_id, p);
                         const sel = h('select', { style: { width: '210px', flex: '0 0 auto', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', background: 'var(--white,#fff)' } },
                             h('option', { value: '' }, '— выберите врача —'),
                             ...pool.map(d => h('option', { value: String(d.id), selected: String(p.doctor_id || '') === String(d.id) },
                                 d.full_name + (d.specialty ? ' · ' + d.specialty : ''))));
-                        sel.addEventListener('change', () => { p.doctor_id = sel.value ? Number(sel.value) : null; setLineTime(p, ''); busyDays.delete(p.date); paintTime(); });
+                        sel.addEventListener('change', () => {
+                            p.doctor_id = sel.value ? Number(sel.value) : null; setLineTime(p, ''); busyDays.delete(p.date);
+                            // CLINIC_API_FIX_V1 — у консультации цена следует за врачом, как в кассе.
+                            if (p.service_id == null && p.consultation_type_id != null) {
+                                p.price = consultPriceOf(p);
+                                priceEl.textContent = String(p.price || 0) + tr(' сум');
+                                paintPicked();
+                            }
+                            paintTime();
+                        });
                         docCell = sel;
                     } else {
                         docCell = h('span', { class: 'muted', style: { width: '210px', flex: '0 0 auto', fontSize: '12.5px' } }, 'врач не требуется');
@@ -2454,7 +2487,7 @@ async function paint() {
                                 // Не на отказанном дне: там visit_id указывает на
                                 // приём, время которого НЕ то, что выбрал оператор.
                                 p.visit_id && !busyDays.has(p.date) ? Tag('записан', { kind: 'ok' }) : null),
-                            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум'),
+                            priceEl,   // CLINIC_API_FIX_V1 — перерисовывается при смене врача консультации
                             bad ? h('div', { style: { fontSize: '12.5px', color: 'var(--crit-700, #b91c1c)' } }, 'время занять не удалось') : null),
                         docCell, timeCell, inp));
                     paintTime();

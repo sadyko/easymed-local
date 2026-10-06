@@ -2034,3 +2034,61 @@ test('консультация по виду приёма в окне дат т�
   SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
   window.easymed.state.user = null;
 });
+
+// ═══ CLINIC_API_FIX_V1 — ЦЕНА КОНСУЛЬТАЦИИ — ТА, ЧТО ВОЗЬМЁТ КАССА ═════════
+//
+// Заявка показывала у консультации цену ВИДА приёма (consultation_types.price),
+// даже когда у врача строки есть своя цена. Касса берёт цену врача
+// (server/services/domain/pricing.js consultationFor): строка врача по этому
+// виду — её цена (is_free → 0), строки нет — цена вида. Оператор называл
+// пациенту по телефону одну сумму, а на кассе с него брали другую.
+
+const CONSULT_TYPE = { id: 5, name: 'Первичный', name_ru: 'Первичный приём', price: 100000 };
+const DOC_NO_ROW = { id: 32, full_name: 'Сидоров Сидор', specialty: 'хирург', service_rates: null };
+const DOC_FREE = { id: 33, full_name: 'Алиев Али', specialty: 'педиатр', service_rates: null };
+const CONSULT_ROWS = [
+  { id: 1, doctor_id: 31, consultation_type_id: 5, price: 150000, available: 1, is_free: 0 },
+  { id: 2, doctor_id: 33, consultation_type_id: 5, price: 120000, available: 1, is_free: 1 },
+];
+const consultLine = (id, doctorId, day = BOOK_DAY) => ({ id, service_id: null, consultation_type_id: 5,
+  scheduled_date: day, status: 'pending', doctor_id: doctorId, visit_id: null });
+/** Подписи цен строк: «150000 сум» — по порядку строк. */
+const priceTexts = (root) => walk(root).filter((n) => n.tagName === 'DIV' && hasClass(n, 'muted')
+  && /^\s*\d+ сум$/.test(textOf(n))).map((n) => textOf(n).trim());
+
+test('цена консультации в карточке — цена врача, как в кассе: своя строка, без строки — цена вида, «бесплатно» — 0', async () => {
+  VISITS = [];
+  SERVICES = [DOC_SVC];
+  DOCTORS = [DOCTOR, DOC_NO_ROW, DOC_FREE];
+  CONSULTS = [CONSULT_TYPE];
+  CONSULT_PRICES = CONSULT_ROWS;
+  REQ_LINES = [consultLine(911, 31), consultLine(912, 32), consultLine(913, 33)];
+  const modal = await openRequest({
+    id: 1, status: 'in_process', service_id: null, scheduled_date: BOOK_DAY,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  await tick(80);
+  assert.deepStrictEqual(priceTexts(modal), ['150000 сум', '100000 сум', '0 сум'],
+    'цена консультации в заявке не та, что возьмёт касса: ' + JSON.stringify(priceTexts(modal)));
+  SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
+  window.easymed.state.user = null;
+});
+
+test('врача консультации выбрали в окне дат — цена становится ценой этого врача', async () => {
+  VISITS = [];
+  CONSULTS = [CONSULT_TYPE];
+  CONSULT_PRICES = CONSULT_ROWS;
+  const { modal, sheet } = await doctorSheet({ lines: [consultLine(914, null, '')] });
+  await tick(60);
+  assert.deepStrictEqual(priceTexts(sheet), ['100000 сум'], 'без врача — цена вида приёма, как в кассе');
+  const sel = doctorSelects(sheet)[0];
+  assert.ok(sel, 'у консультации нет выбора врача');
+  sel.value = String(DOCTOR.id); fire(sel);
+  await tick(60);
+  assert.deepStrictEqual(priceTexts(sheet), ['150000 сум'],
+    'врача выбрали, а окно дат называет цену вида — касса возьмёт цену врача');
+  assert.deepStrictEqual(priceTexts(modal), ['150000 сум'], 'карточка заявки под окном дат осталась со старой ценой');
+  SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
+  window.easymed.state.user = null;
+});
