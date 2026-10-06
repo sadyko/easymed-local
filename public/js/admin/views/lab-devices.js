@@ -709,7 +709,7 @@ export async function mountLabDevices(container) {
 
             // LIS_ANALYZER_LIST_V1 — сохранение найденного прибора с выбранной
             // моделью и есть проверка модели человеком: пометка «проверьте
-            // модель» снимается. Только в правке — у вставки такой колонки нет.
+            // модель» снимается (в правке; новая строка с моделью — не находка).
             // LIS_VENDOR_EXACT_V1 — D2: «Другой анализатор (общий HL7)» — тоже
             // выбор человека (model_confirmed = 1) у любой строки; сняли его,
             // выбрав «модель не выбрана», — отметка снимается.
@@ -718,18 +718,16 @@ export async function mountLabDevices(container) {
                 if (device.discovered) confirm.model_confirmed = payload.profile || generic ? 1 : 0;
                 else if (generic) confirm.model_confirmed = 1;
                 else if (!payload.profile && Number(device.model_confirmed) === 1) confirm.model_confirmed = 0;
+            } else if (generic) {
+                // LIS_VENDOR_EXACT_V1 — D2 (раунд 2): model_confirmed — колонка вставки
+                // (schema-registry.js), выбор «общего HL7» уходит той же записью. Вставку
+                // без модели и без этого выбора сервер не принимает.
+                confirm.model_confirmed = 1;
             }
             const res = device
                 ? await supabase.from('lab_devices').update({ ...payload, ...confirm }).eq('id', device.id)
-                : await supabase.from('lab_devices').insert(payload).select('id');   // LIS_VENDOR_EXACT_V1 — D2: номер новой строки
+                : await supabase.from('lab_devices').insert({ ...payload, ...confirm });   // LIS_VENDOR_EXACT_V1 — D2: одна запись
             if (res.error) { toast(trf('Не удалось сохранить прибор: {msg}', { msg: res.error.message || res.error }), 'fail'); return; }
-            // LIS_VENDOR_EXACT_V1 — D2: у вставки колонки model_confirmed нет — выбор
-            // «общего HL7» новой строке отмечается второй записью. Не вышло — прибор
-            // всё равно заведён и принимает пробы; в таблице будет «модель не выбрана».
-            if (!device && generic) {
-                const row = Array.isArray(res.data) ? res.data[0] : res.data;
-                if (row && row.id) await supabase.from('lab_devices').update({ model_confirmed: 1 }).eq('id', row.id);
-            }
 
             // Перезапуск слушателей: без него смена порта требовала бы
             // перезапуска всей клиники ради одного прибора.

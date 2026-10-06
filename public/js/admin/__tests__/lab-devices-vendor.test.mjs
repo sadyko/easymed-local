@@ -370,7 +370,11 @@ test('D2: «Добавить по адресу» — модель не подс�
   assert.ok(!writes.some((w) => w.table === 'lab_devices'), JSON.stringify(writes));
 });
 
-test('D2: «Добавить по адресу» с «Другой анализатор (общий HL7)» — запись без модели, выбор запомнен', async () => {
+// LIS_VENDOR_EXACT_V1 — D2 (раунд 2): model_confirmed теперь колонка вставки
+// (schema-registry.js), и выбор «общего HL7» уходит той же записью. Раньше —
+// второй записью по номеру новой строки: не вышла вторая — прибор без модели и
+// без отметки выбора, а вставку без модели сервер теперь не принимает вовсе.
+test('D2: «Добавить по адресу» с «Другой анализатор (общий HL7)» — одна запись: модель пустая, выбор запомнен в ней же', async () => {
   const root = await newDeviceForm();
   const sel = modelSelectIn(root);
   inputByPlaceholder(root, 'Например: Гематология').value = 'Иммунология';
@@ -378,11 +382,28 @@ test('D2: «Добавить по адресу» с «Другой анализ�
   sel.value = optionsOf(sel).find((o) => textOf(o) === GENERIC_LABEL).value;
   formButton(root, /^Сохранить$/).click();
   await tick(60);
-  const ins = writes.find((w) => w.table === 'lab_devices' && w.op === 'insert');
-  assert.ok(ins, JSON.stringify(writes) + ' ' + toastMsg);
-  assert.strictEqual([].concat(ins.values)[0].profile, '', 'модель пустая — общий HL7');
-  const upd = writes.find((w) => w.table === 'lab_devices' && w.op === 'update');
-  assert.ok(upd && upd.values.model_confirmed === 1 && JSON.stringify(upd.filters).includes('77'), 'выбор «общего HL7» запомнен у новой строки: ' + JSON.stringify(writes));
+  const mine = writes.filter((w) => w.table === 'lab_devices');
+  assert.strictEqual(mine.length, 1, 'одна запись: ' + JSON.stringify(writes) + ' ' + toastMsg);
+  assert.strictEqual(mine[0].op, 'insert');
+  const v = [].concat(mine[0].values)[0];
+  assert.strictEqual(v.profile, '', 'модель пустая — общий HL7');
+  assert.strictEqual(v.model_confirmed, 1, 'выбор «общего HL7» — в той же записи');
+  assert.ok(!('added' in v), 'added ставит умолчание базы, экран его не пишет');
+  assert.strictEqual(toastMsg, 'Прибор сохранён');
+});
+
+test('D2: «Добавить по адресу» с моделью — одна запись без отметки выбора (модель и есть выбор)', async () => {
+  const root = await newDeviceForm();
+  const sel = modelSelectIn(root);
+  inputByPlaceholder(root, 'Например: Гематология').value = 'Биохимия';
+  inputByPlaceholder(root, 'адрес анализатора в сети, например 10.0.0.20').value = '192.168.1.62';
+  sel.value = 'mindray-bs-240';
+  formButton(root, /^Сохранить$/).click();
+  await tick(60);
+  const mine = writes.filter((w) => w.table === 'lab_devices');
+  assert.strictEqual(mine.length, 1, JSON.stringify(writes));
+  const v = [].concat(mine[0].values)[0];
+  assert.deepStrictEqual([mine[0].op, v.profile, 'model_confirmed' in v, 'added' in v], ['insert', 'mindray-bs-240', false, false]);
 });
 
 test('D2: «Изменить» прибора с «общим HL7» — выбран «Другой анализатор»; сохранение выбор оставляет', async () => {

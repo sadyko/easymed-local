@@ -1272,12 +1272,25 @@ export const REGISTRY = {
   // не едут, потому что прибор соседнего здания в нашей базе бессмыслен.
   lab_devices: {
     read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered','added','model_confirmed','sending_app','dial','sending_facility','code_epoch'] },   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер; added, model_confirmed: LIS_ANALYZER_LIST_V1 (мигр. 228); sending_app: LIS_DISCOVERY_FIX_V1 (сервер) (мигр. 229) — как прибор назвал себя сам (MSH-3), пишет только сервер, в insert/update её нет; dial, sending_facility: LIS_REAL_ANALYZERS_V1 (мигр. 233) — dial: Easy-Med подключается к прибору сам (пишет человек: «Добавить по адресу», «Изменить»); sending_facility: MSH-4, пишет только сервер, в insert/update её нет; code_epoch (ревью R6): эпоха кодов прибора — пишет только триггер адреса мигр. 233, в insert/update её нет
-    write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','dial'] },   // dial: LIS_REAL_ANALYZERS_V1
+    // LIS_VENDOR_EXACT_V1 — D2: вставка — это «Добавить по адресу». model_confirmed —
+    // выбор «Другой анализатор (общий HL7)» той же записью (раньше — второй).
+    // Новый прибор — только с моделью или с этим выбором (requireAny; onlyValues:
+    // model_confirmed = 0 выбором не считается). added во вставке нет: строка,
+    // заведённая человеком, добавлена сразу (умолчание мигр. 228).
+    write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','dial','model_confirmed'],   // dial: LIS_REAL_ANALYZERS_V1; model_confirmed: LIS_VENDOR_EXACT_V1 — D2
+               requireAny: { columns: ['profile','model_confirmed'],   // LIS_VENDOR_EXACT_V1 — D2: тот же текст, что у экрана и lis_device_add
+                 message: 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».' },
+               onlyValues: { model_confirmed: [1] } },   // LIS_VENDOR_EXACT_V1 — D2
              // LIS_ANALYZER_LIST_V1 (ревью C1) — discovered в update НЕТ: это
              // правило приёма, а не пометка. discover.js не сверяет модель у
              // строки с discovered = 0 («заведён человеком на этот адрес»);
              // «Добавить» писал 0, и всё с того же адреса ложилось в одну строку.
-             update: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','added','model_confirmed','dial'] },   // added: LIS_ANALYZER_LIST_V1 — «Добавить» переводит находку в таблицу; model_confirmed — модель проверил человек (пометка, не правило приёма); dial: LIS_REAL_ANALYZERS_V1 — «Изменить»
+             // LIS_VENDOR_EXACT_V1 — D2: и added в update НЕТ. «Добавить» находку —
+             // только RPC lis_device_add (rpc/lis.js), которая без модели отказывает.
+             // Через /api/db вкладка, открытая до обновления ({name, added: 1}), или
+             // прямой вызов добавляли прибор без модели: BS-240 и CL-900i читались бы
+             // общим правилом, и номер прогона из OBR-3 ложился в чужой заказ.
+             update: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','model_confirmed','dial'] },   // model_confirmed — модель проверил человек (пометка, не правило приёма); dial: LIS_REAL_ANALYZERS_V1 — «Изменить»
              delete: { roles: LAB_SECTION_ROLES } },
     filters: ['id','enabled','transport','profile'],
     embed:   {},
