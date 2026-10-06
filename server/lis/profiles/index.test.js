@@ -29,9 +29,30 @@ test('ключи уникальны — в lab_devices.profile лежит име
 test('BC-5300 несёт все 27 каналов со скриншота владельца', () => {
   const p = getProfile('mindray-bc-5300');
   assert.equal(p.channels.length, 27);
-  for (const code of ['WBC', 'NEU%', 'NEU#', 'RBC', 'HGB', 'PLT', 'PCT', 'RDW-SD', 'ALY%', 'LIC#']) {
+  // LIS_VENDOR_EXACT_V1 — исследовательские — со звёздочкой, как их пишет прибор (тест ниже).
+  for (const code of ['WBC', 'NEU%', 'NEU#', 'RBC', 'HGB', 'PLT', 'PCT', 'RDW-SD', '*ALY%', '*LIC#']) {
     assert.ok(p.channels.some((c) => c.code === code), 'нет канала ' + code);
   }
+});
+
+// LIS_VENDOR_EXACT_V1 — «Типовые для модели» BC-5300 — имена OBX-3.2 таблицы 10
+// руководства BC-5300/5380 (OM13, приложение C, pdf 493–495): исследовательские
+// параметры прибор пишет со звёздочкой — «26477-0^*ALY#^LN», «13046-8^*ALY%^LN»,
+// «10000^*LIC#^99MRC», «10001^*LIC%^99MRC». match.js сравнивает код строки бланка
+// с OBX-3.1 или OBX-3.2 целиком (без учёта регистра), и подтверждённые из
+// типовых «ALY#», «LIC#» не совпадали никогда: строки бланка пустые, каждая проба
+// в «Необработанных» с «не пришли: … (LIC#)» (acceptance mindray-bc-5300, T12d, N3).
+test('BC-5300: типовые коды — имена провода из табл. 10 OM13; исследовательские ALY и LIC — со звёздочкой', () => {
+  const codes = getProfile('mindray-bc-5300').channels.map((c) => c.code);
+  const table10 = ['6690-2^WBC^LN', '704-7^BAS#^LN', '706-2^BAS%^LN', '751-8^NEU#^LN', '770-8^NEU%^LN', '711-2^EOS#^LN', '713-8^EOS%^LN',
+    '731-0^LYM#^LN', '736-9^LYM%^LN', '742-7^MON#^LN', '5905-5^MON%^LN', '26477-0^*ALY#^LN', '13046-8^*ALY%^LN', '10000^*LIC#^99MRC',
+    '10001^*LIC%^99MRC', '789-8^RBC^LN', '718-7^HGB^LN', '787-2^MCV^LN', '785-6^MCH^LN', '786-4^MCHC^LN', '788-0^RDW-CV^LN',
+    '21000-5^RDW-SD^LN', '4544-3^HCT^LN', '777-3^PLT^LN', '32623-1^MPV^LN', '32207-3^PDW^LN', '10002^PCT^99MRC'];
+  assert.deepEqual([...codes].sort(), table10.map((x) => x.split('^')[1]).sort(), 'каждый типовой код — OBX-3.2 таблицы 10');
+  for (const bare of ['ALY#', 'ALY%', 'LIC#', 'LIC%']) assert.equal(findChannel('mindray-bc-5300', bare), null, bare + ' прибор не шлёт');
+  assert.equal(findChannel('mindray-bc-5300', '*aly#').code, '*ALY#');
+  // Подписи — те же, что были: звёздочка — только в коде.
+  assert.equal(findChannel('mindray-bc-5300', '*LIC%').name, 'Крупные незрелые клетки, %');
 });
 
 test('BS-240 и CL-900i несут типовые наборы — заполнены по просьбе владельца 2026-09-11', () => {
@@ -166,7 +187,11 @@ test('BC-780: 27 каналов по документам соседних мо�
   assert.ok(!p.oneTestPerMessage);
   assert.equal(p.channels.length, 27);
   // Тот же набор CBC + 5-diff, что у BC-5300 (снят с экрана Mindray).
-  assert.deepEqual(p.channels.map((c) => c.code).sort(), getProfile('mindray-bc-5300').channels.map((c) => c.code).sort());
+  // LIS_VENDOR_EXACT_V1 — у BC-5300 исследовательские коды теперь со звёздочкой,
+  // как в его табл. 10 (тест выше); документа BC-780 нет — его коды не тронуты,
+  // набор сверяется без звёздочки.
+  const unmarked = (key) => getProfile(key).channels.map((c) => c.code.replace(/^\*/, '')).sort();
+  assert.deepEqual(unmarked('mindray-bc-780'), unmarked('mindray-bc-5300'));
   assert.equal(findChannel('mindray-bc-780', 'WBC').code, 'WBC');
   assert.equal(findChannel('mindray-bc-780', 'WBC').loinc, '6690-2', 'LOINC — подпись, не код: «6690-2^WBC^LN» ловится по имени');
   assert.equal(findChannel('mindray-bc-780', 'HGB').loinc, '718-7');
