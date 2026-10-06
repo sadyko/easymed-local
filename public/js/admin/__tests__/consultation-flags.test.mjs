@@ -215,8 +215,11 @@ test('окно записи, врач выбран заранее: вид, ко�
     assert.equal(led.service.price, 120000);
     const notLed = await pickWith('Осмотр у Петрова');
     assert.equal(notLed.service.consultation_type_id, NOT_LED);
-    assert.notEqual(notLed.doctor && notLed.doctor.id, DOCTOR,
-        'окно записало на врача консультацию, которую он не ведёт (available = 0)');
+    // CLINIC_API_FIX_V1 — строку Петрова забирает Петров (её собственный врач), а
+    // не выбранный заранее врач, который этот вид не ведёт; и по цене Петрова.
+    assert.strictEqual(notLed.doctor && notLed.doctor.id, PETROV,
+        'консультация ушла не со своим врачом (выбранный заранее врач этот вид не ведёт, available = 0)');
+    assert.equal(notLed.service.price, 90000, 'консультация ушла не по цене своего врача');
 });
 
 // ─── 2б. Врач строки консультации — тот же врач, что в базе ─────────────────
@@ -232,6 +235,12 @@ function seedWithPetrov() {
         .run(PETROV, NOT_LED, 90000, 1, 0, 'Осмотр у Петрова');
 }
 const catRows = (box) => box.querySelectorAll('.wzc-svc');
+// Окно из трёх колонок: строки ОДНОЙ колонки, найденной по заголовку («Услуги», «Врачи»).
+const colRows = (box, title) => {
+    const col = box.querySelectorAll('.sched-col').find((c) => { const hd = c.querySelector('.sched-col-head'); return hd && hd.textContent.includes(title); });
+    assert.ok(col, 'колонки «' + title + '» нет');
+    return col.querySelectorAll('button.sched-col-row');
+};
 const catRow = (box, name) => catRows(box).find((r) => r.textContent.includes(name));
 
 test('календарь, колонка врача (lockedDoctor): видны консультации, которые он ведёт, по его цене, — и только они', async () => {
@@ -259,7 +268,7 @@ test('окно записи: строка консультации другог�
     const box = await until(() => modals().find((m) => m.textContent.includes('Осмотр у Петрова')));
     assert.ok(box, 'в окне записи нет строки «Осмотр у Петрова»');
     box.querySelectorAll('button.sched-col-row').find((r) => r.textContent.includes('Осмотр у Петрова')).dispatch('click');
-    const doctorRows = box.querySelectorAll('button.sched-col-row').filter((r) => /Иванов Иван|Петров Пётр/.test(r.textContent));
+    const doctorRows = colRows(box, 'Врачи');
     assert.deepEqual(doctorRows.map((r) => r.textContent.includes('Петров Пётр')), [true],
         'колонка врачей для строки Петрова показывает не одного Петрова: ' + doctorRows.map((r) => r.textContent).join(' | '));
     assert.ok(doctorRows[0].classList.contains('on'), 'Петров в колонке врачей не выбран');
@@ -283,6 +292,30 @@ test('мастер записи: поиск по фамилии врача на�
     search.dispatch('input');
     const found = await until(() => !catRow(box, 'Осмотр у Петрова') && catRow(box, 'Повторный приём'), 3000);
     assert.ok(found, 'поиск «Иванов» не нашёл консультацию Иванова: ' + catRows(box).map((r) => r.textContent.slice(0, 40)).join(' | '));
+});
+
+// CLINIC_API_FIX_V1 — окно из трёх колонок (им пользуется и «Направить» в
+// кабинете врача): у двух врачей один вид приёма — две строки «Повторный
+// приём». Без имени врача их не различить; мастер записи имя уже показывал.
+test('окно из трёх колонок: у строки консультации — имя её врача, у услуги — нет', async () => {
+    seedPrices();
+    DB.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available, is_free) VALUES (?,?,?,?,?)')
+        .run(PETROV, LED, 100000, 1, 0);
+    document.body.children = [];
+    openServicePickerModal({ onPick: () => {} });
+    const box = await until(() => modals().find((m) => m.textContent.includes('Повторный приём')));
+    assert.ok(box, 'окно записи не показало консультаций');
+    const svcRows = colRows(box, 'Услуги');
+    const same = svcRows.filter((r) => r.textContent.includes('Повторный приём'));
+    assert.equal(same.length, 2, 'строк вида «Повторный приём» не две: ' + same.map((r) => r.textContent).join(' | '));
+    const ivanov = same.find((r) => r.textContent.includes('Иванов Иван'));
+    const petrov = same.find((r) => r.textContent.includes('Петров Пётр'));
+    assert.ok(ivanov && petrov, 'строки одного вида у двух врачей не различить: ' + same.map((r) => r.textContent).join(' | '));
+    assert.match(ivanov.textContent, /120\s000/, 'у строки Иванова не его цена');
+    assert.match(petrov.textContent, /100\s000/, 'у строки Петрова не его цена');
+    const plain = svcRows.filter((r) => !r.textContent.includes('Повторный приём') && !/Все типы/.test(r.textContent));
+    assert.ok(plain.length > 0, 'в колонке услуг нет ни одной обычной услуги');
+    assert.ok(plain.every((r) => !/Иванов Иван|Петров Пётр/.test(r.textContent)), 'у обычной услуги появилось имя врача');
 });
 
 test('мастер записи: добавленная консультация сразу получает своего врача (с его ценой), а не «Врач не найден»', async () => {

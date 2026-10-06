@@ -248,25 +248,7 @@ export function openServicePickerModal({
         if (!dc || isOn(dc.is_free)) return 0;   // CLINIC_API_FIX_V1
         return dc.price != null ? Number(dc.price) : 0;
     }
-    function consultAvailableFor(doctorId, typeId) {
-        // CONSULT_PER_DOCTOR_V1 — a type the doctor hasn't configured is not offered.
-        // CLINIC_API_FIX_V1 — available приходит из базы числом: 0 !== false
-        // предлагало приём, который врач не ведёт.
-        const dc = state.docConsult[doctorId + '|' + typeId];
-        return !!dc && isOn(dc.available);
-    }
-    // CONSULT_PRICE_RANGE_V1 — a consultation's price varies per doctor. Range across doctors who
-    // offer it (non-zero), so the catalog can show «от {min}» instead of the misleading default 0.
-    function consultPriceRange(ct) {
-        const vals = [];
-        for (const d of state.doctors) {
-            if (!consultAvailableFor(d.id, ct.id)) continue;
-            const p = consultPriceFor(d.id, ct);
-            if (p > 0) vals.push(p);
-        }
-        if (!vals.length) return null;
-        return { min: Math.min(...vals), max: Math.max(...vals) };
-    }
+    // CLINIC_API_FIX_V1 — consultAvailableFor / consultPriceRange убраны: у строки консультации всегда свой врач, и строится она, только если он этот вид ведёт (isOn ниже).
     // CONSULT_NAME_OVERRIDE_V1 — a doctor's per-type name override (doctor_consultation_prices.name_*),
     // falling back to the clinic-wide consultation type name.
     function consultNameFor(doctorId, ct) {
@@ -824,7 +806,10 @@ export function openServicePickerModal({
             ]);
             for (const r of filtered) {
                 const locked = lockedIds.has(r.id);
-                listEl.appendChild(rowEl(r.name, formatMoney(r.price), state.serviceId === r.id, () => selectAt(1, r.id),
+                // CLINIC_API_FIX_V1 — у строки консультации — имя её врача (как в мастере): у двух
+                // врачей один вид приёма, и в «Направить» строки иначе не различить.
+                const meta = r.__consult && r.__consultDocName ? r.__consultDocName + ' · ' + formatMoney(r.price) : formatMoney(r.price);
+                listEl.appendChild(rowEl(r.name, meta, state.serviceId === r.id, () => selectAt(1, r.id),
                     { disabled: locked, badge: locked ? 'Добавлено' : null }));
             }
         } else if (i === 2) {
@@ -878,7 +863,7 @@ export function openServicePickerModal({
             // Drop the picked doctor if they don't perform it.
             const _curSvc = state.services.find(s => s.id === state.serviceId);
             const _docOk = (_curSvc && _curSvc.__consult)
-                ? consultAvailableFor(state.doctorId, _curSvc.consultation_type_id)
+                ? state.doctorId === _curSvc.__consultDoctorId   // CLINIC_API_FIX_V1 — консультацию ведёт только врач её строки
                 : doctorPerforms(currentDoctor() || {}, state.serviceId);
             if (state.serviceId && state.doctorId && !_docOk) {
                 state.doctorId = null;
@@ -1047,9 +1032,7 @@ export function openServicePickerModal({
         const _selSvc = state.services.find(s => s.id === state.serviceId);
         const pool = !state.serviceId ? state.doctors
             : (_selSvc && _selSvc.__consult)
-                ? (_selSvc.__consultDoctorId
-                    ? state.doctors.filter(d => d.id === _selSvc.__consultDoctorId)   // CONSULT_PER_DOCTOR_ROWS_V1 — only the row's bound doctor
-                    : state.doctors.filter(d => consultAvailableFor(d.id, _selSvc.consultation_type_id)))
+                ? state.doctors.filter(d => d.id === _selSvc.__consultDoctorId)   // CONSULT_PER_DOCTOR_ROWS_V1 — only the row's bound doctor · CLINIC_API_FIX_V1 — врач у строки есть всегда
                 : (_selSvc ? candidatesFor(_selSvc) : performersOf(state.serviceId));   // DOCTOR_FALLBACK_V1
         return pool.filter(d => {
             if (t && !((d.full_name || '').toLowerCase().includes(t)
@@ -1716,10 +1699,7 @@ export function openServicePickerModal({
         return out;
     }
     function svcPerformers(svc) {
-        if (svc.__consult) {
-            if (svc.__consultDoctorId) return state.doctors.filter(d => d.id === svc.__consultDoctorId);   // CONSULT_PER_DOCTOR_ROWS_V1
-            return state.doctors.filter(d => consultAvailableFor(d.id, svc.consultation_type_id || svc.id));
-        }
+        if (svc.__consult) return state.doctors.filter(d => d.id === svc.__consultDoctorId);   // CONSULT_PER_DOCTOR_ROWS_V1 · CLINIC_API_FIX_V1 — врач у строки есть всегда
         return candidatesFor(svc);   // DOCTOR_FALLBACK_V1 — performers, or all doctors for a cabinet-routed service with none
     }
     function svcPrice(svc, docId) {
@@ -1744,7 +1724,7 @@ export function openServicePickerModal({
     function catEligible() {
         if (!lockedDoctor) return state.services;
         return state.services.filter(s => {
-            if (s.__consult) return s.__consultDoctorId ? (s.__consultDoctorId === lockedDoctor.id) : consultAvailableFor(lockedDoctor.id, s.consultation_type_id || s.id);   // CONSULT_PER_DOCTOR_ROWS_V1
+            if (s.__consult) return s.__consultDoctorId === lockedDoctor.id;   // CONSULT_PER_DOCTOR_ROWS_V1 · CLINIC_API_FIX_V1 — врач у строки есть всегда
             return performersOf(s.id).some(d => d.id === lockedDoctor.id);
         });
     }
@@ -2105,11 +2085,7 @@ export function openServicePickerModal({
         const item = state.added.find(x => x.service.id === s.id);
         const perf = lockedDoctor ? [] : svcPerformers(s);
         const price = item ? itemPrice(item) : svcPrice(s, lockedDoctor ? lockedDoctor.id : null);
-        let priceLabel = formatMoney(price);
-        if (s.__consult && !s.__consultDoctorId && !lockedDoctor && !item) {   // CONSULT_PRICE_RANGE_V1 — aggregate only; per-doctor rows show the doctor's own price
-            const rng = consultPriceRange(s.__ct || s);
-            if (rng) priceLabel = (rng.min === rng.max) ? formatMoney(rng.min) : ('\u043e\u0442 ' + formatMoney(rng.min));
-        }
+        const priceLabel = formatMoney(price);   // CLINIC_API_FIX_V1 — у строки консультации цена её врача; «от {min}» по врачам убрано вместе с общими строками
         const dur = Math.max(5, Number(s.duration_minutes || 30));
         // CONSULT_NAME_OVERRIDE_V1 — show the per-doctor name when a doctor is locked or picked.
         const _docCtx = s.__consult ? (lockedDoctor ? lockedDoctor.id : (item && item.doctor ? item.doctor.id : null)) : null;
