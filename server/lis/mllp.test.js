@@ -245,9 +245,77 @@ test('ответ на ORU — ACK^R01 с эхом заголовка и MSA-3/6'
     const f = mshLine.split('|');
     assert.deepEqual([f[2], f[3], f[4], f[5], f[8], f[9], f[15], f[17]],
       ['EASYMED', 'CLINIC', 'Mindray', 'BS-200E', 'ACK^R01', '5', '0', 'ASCII']);
-    assert.equal(msa, 'MSA|AA|5|Message accepted|||0');
+    // LIS_VENDOR_EXACT_V1 — без replyStyle (незнакомый прибор) — вид
+    // руководства BS-200 (HIM v5.0, с. 25): «|» после MSA-6.
+    assert.equal(msa, 'MSA|AA|5|Message accepted|||0|');
     sock.end();
   });
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D1: ответ провода в виде прибора ──────────────────
+/** Ждёт ОДИН кадр ответа и отдаёт его байты целиком, с VT и FS CR. */
+function readFrameBytes(sock) {
+  return new Promise((res, rej) => {
+    let buf = Buffer.alloc(0);
+    const timer = setTimeout(() => rej(new Error('ответ не пришёл за 3 с')), 3000);
+    sock.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      const end = buf.indexOf(FS);
+      if (end !== -1 && buf.length > end + 1) { clearTimeout(timer); res(buf.subarray(0, end + 2)); }
+    });
+  });
+}
+
+test('D1: кадр ответа кончается «|<CR><FS><CR>» — CR после последнего сегмента (HIM v5.0, с. 3, 23: «segments that end with <CR>»)', async () => {
+  const oru = 'MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||\rPID|1\rOBR|1|LAB-000123|12|Mindray^BS-200|N\rOBX|1|NM|GLU|Glucose|5.230000|mmol/L|3.900000-6.100000|N|||F\r';
+  await withServer(async () => 'AA', async (port) => {
+    const sock = await connect(port);
+    const bytes = readFrameBytes(sock);
+    sock.write(frame(oru));
+    const b = await bytes;
+    assert.equal(b[0], VT);
+    assert.deepEqual([...b.subarray(b.length - 4)], [0x7c, CR, FS, CR], '«…0|<CR><FS><CR>», как в примере руководства, с. 25');
+    sock.end();
+  });
+});
+
+test('D1: ответы, которые провод строит сам (приём бросил), — в виде прибора (replyStyle): химия — AR 207 вида руководства, гематология — AE 207 короткий', async () => {
+  const bs = 'MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|31|P|2.3.1||||0||ASCII|||\rPID|1\r';
+  const bc = 'MSH|^~\\&|BC-5300|Mindray|||20080419104618||ORU^R01|32|P|2.3.1||||||UNICODE\rPID|1\r';
+  const styles = {
+    'BS-200': { layout: 'long', wire: 'mindray-chem' },
+    'BC-5300': { layout: 'short', wire: 'default' },
+  };
+  const seen = [];
+  await withServer(async () => { throw new Error('база недоступна'); }, async (port) => {
+    const sock = await connect(port);
+    let reply = readFrame(sock);
+    sock.write(frame(bs));
+    const chem = await reply;
+    sock.removeAllListeners('data');
+    reply = readFrame(sock);
+    sock.write(frame(bc));
+    const heme = await reply;
+    // HIM v5.0, с. 9: AE — только 100–103, AR — 200–207.
+    assert.equal(chem.split('\r')[1], 'MSA|AR|31|Application internal error|||207|');
+    assert.equal(chem.split('\r')[0].split('|').length, 21, 'MSH до MSH-20');
+    assert.equal(heme, heme.split('\r')[0] + '\rMSA|AE|32|Application internal error|||207\r');
+    assert.ok(!heme.split('\r')[0].endsWith('|'), 'короткий заголовок гематологии');
+    sock.end();
+  }, { replyStyle: (msh) => { seen.push(msh.app); return styles[msh.app === 'Mindray' ? msh.facility : msh.app]; } });
+  assert.deepEqual(seen, ['Mindray', 'BC-5300'], 'вид решает вызывающий — по заголовку входящего (mshOf)');
+});
+
+test('D1: переросшее — ответ в виде прибора (replyStyle): химия — AR 207 вида руководства', async () => {
+  await withServer(async () => 'AA', async (port) => {
+    const sock = await connect(port);
+    sock.on('error', () => {});
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from('MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|79|P|2.3.1||||0||ASCII|||\r' + 'C'.repeat(4096), 'utf8')]));
+    assert.equal((await reply).split('\r')[1], 'MSA|AR|79|Application internal error|||207|');
+    await settle(50);
+    sock.destroy();
+  }, { maxBytes: 1024, onOversize: () => {}, replyStyle: () => ({ layout: 'long', wire: 'mindray-chem' }) });
 });
 
 test('приём ответил AR — прибору AR 200 (известный, но не поддержанный тип)', async () => {

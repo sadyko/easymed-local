@@ -196,8 +196,11 @@ test('QRY^Q02 по проводу: ответ QCK^Q02 NF, прибор заве�
     sock.destroy();
     const lines = text.split('\r');
     assert.equal(lines[0].split('|')[8], 'QCK^Q02', text);
-    assert.equal(lines[1], 'MSA|AA|1|Message accepted|||0');
-    assert.equal(lines[3], 'QAK|SR|NF');
+    // LIS_VENDOR_EXACT_V1 — вид руководства (HIM v5.0, с. 27): «|» в конце
+    // MSA, ERR и QAK, CR после последнего сегмента.
+    assert.equal(lines[1], 'MSA|AA|1|Message accepted|||0|');
+    assert.equal(lines[3], 'QAK|SR|NF|');
+    assert.equal(lines[4], '', 'CR после QAK');
 
     const dev = db.prepare('SELECT * FROM lab_devices').all();
     assert.equal(dev.length, 1, 'прибор, который спросил, заведён');
@@ -208,6 +211,39 @@ test('QRY^Q02 по проводу: ответ QCK^Q02 NF, прибор заве�
     assert.equal(m.kind, 'query');
     assert.equal(m.device_id, dev[0].id);
     assert.ok(m.resolved_at, 'в «Необработанных» пусто');
+  } finally {
+    await stopLisListeners();
+    if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;
+    db.close();
+  }
+});
+
+// LIS_VENDOR_EXACT_V1 — приём бросил (здесь — запись в журнал сообщений
+// отказывает): ответ строит сам провод, и он тоже в виде прибора — по тому, как
+// сообщение назвало себя (receive.js replyStyle): BS-200 — вид руководства с
+// AR 207 (AE у химии — только 100–103, HIM v5.0, с. 9), BC-5300 — короткий AE 207.
+test('LIS_VENDOR_EXACT_V1 D1: приём бросил — ответ провода в виде прибора: BS-200 — AR 207 вида руководства, BC-5300 — короткий AE 207', async () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const port = await freePort();
+  const prevPort = process.env.LIS_PORT;
+  process.env.LIS_PORT = String(port);
+  try {
+    await startLisListeners(db, { log: () => {} });
+    db.exec("CREATE TRIGGER no_messages BEFORE INSERT ON lab_device_messages BEGIN SELECT RAISE(ABORT, 'disk full'); END");
+    const sock = await connect(port);
+    let reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from('MSH|^~\\&|Mindray|BS-200|||20261005101500||QRY^Q02|8|P|2.3.1||||||ASCII|||\rQRD|20261005101500|R|D|1|||RD|LAB-000123|OTH|||T|\rQRF|BS-200|||||RCT|COR|ALL||\r', 'utf8'), Buffer.from([FS, 0x0d])]));
+    const chem = await reply;
+    sock.removeAllListeners('data');
+    reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from('MSH|^~\\&|BC-5300|Mindray|||20080419104618||ORU^R01|32|P|2.3.1||||||UNICODE\rOBR|1||LAB-000127|00001^Automated Count^99MRC\r', 'utf8'), Buffer.from([FS, 0x0d])]));
+    const heme = await reply;
+    sock.destroy();
+    assert.equal(chem.split('\r')[0].split('|').length, 21, 'MSH до MSH-20: ' + chem);
+    assert.equal(chem.split('\r')[1], 'MSA|AR|8|Application internal error|||207|');
+    assert.equal(heme.split('\r')[1], 'MSA|AE|32|Application internal error|||207');
+    assert.ok(heme.endsWith('|207\r'), 'CR после последнего сегмента');
   } finally {
     await stopLisListeners();
     if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;

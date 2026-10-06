@@ -97,13 +97,16 @@ const iso = (ms = Date.now()) => new Date(ms).toISOString().replace(/\.\d{3}Z$/,
  * @param {(msg:string)=>void} [o.log]
  * @param {Partial<typeof DIAL_DEFAULTS>} [o.timing]  для тестов: сжатое время
  * @param {(ms:number, code:string)=>void} [o.onWait]  перед каждой паузой: длина и причина
+ * @param {(msh:object)=>{layout?:string, wire?:string}} [o.replyStyle]
+ *        LIS_VENDOR_EXACT_V1 — вид ответов, которые читатель строит сам (mllp.js
+ *        attachMllpReader); index.js даёт его по профилю строки прибора
  * @returns {{close:()=>void, status:()=>{host:string, port:number, state:string, since:string, last_rx_at:string|null, code:string|null, retry_at:string|null}}}
  *   state: 'connecting' | 'connected' | 'waiting' | 'closed';
  *   code (у waiting): 'refused' — порт прибора закрыт, 'timeout' — нет ответа,
  *   'unreachable' — адрес недоступен, 'closed' — соединение закрыл прибор,
  *   'silent' — прибор слал сигнал и замолчал, 'error' — прочее.
  */
-export function startMllpClient({ host, port, onMessage, onOversize = null, onAbandoned = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, timing = {}, onWait = null }) {
+export function startMllpClient({ host, port, onMessage, onOversize = null, onAbandoned = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, timing = {}, onWait = null, replyStyle = null }) {
   const T = { ...DIAL_DEFAULTS, ...timing };
   const st = { host, port, state: 'connecting', since: iso(), last_rx_at: null, code: null, retry_at: null };
   let closed = false;
@@ -153,6 +156,7 @@ export function startMllpClient({ host, port, onMessage, onOversize = null, onAb
       log,
       onOversize,
       onAbandoned,   // ревью R2, п. 10а
+      replyStyle,   // LIS_VENDOR_EXACT_V1 — вид ответа прибора строки
       onMessage: (text, peer) => { gotFrame = true; return onMessage(text, peer); },
       // Сигнал прибора — байты вне кадра. С первого сигнала прибор обязан
       // говорить хоть что-то: 20 с тишины — соединение мёртвое (кабель, свитч,

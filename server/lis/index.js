@@ -19,6 +19,8 @@ import net from 'node:net';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 7:
 import { startMllpServer } from './mllp.js';
 import { startMllpClient, isLocalIp } from './dial.js';   // LIS_REAL_ANALYZERS_V1_DIAL — Easy-Med подключается к прибору сам
 import { receiveMessage } from './receive.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — проба или служебное, и ответ прибору
+import { replyStyle } from './receive.js';   // LIS_VENDOR_EXACT_V1 — вид ответа, который провод строит сам
+import { getProfile } from './profiles/index.js';   // LIS_VENDOR_EXACT_V1 — профиль строки звонка для вида ответа
 import { readEnvelope, readResult, pickMessageSample } from './wire.js';   // LIS_REAL_ANALYZERS_V1_SERVICE / _SAMPLE — вид, имя отправителя, номер пробы
 import { ensureDevice, learnSender } from './discover.js';   // learnSender: LIS_REAL_ANALYZERS_V1_DIAL
 import { recordMessage, OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_MINDRAY_CODES_V1 — переросшее сообщение ложится в лоток
@@ -216,6 +218,13 @@ function startDialers(db, devices, lisPorts, log) {
       host,
       port,
       log,
+      // LIS_VENDOR_EXACT_V1 — ответ, который клиент строит сам (приём бросил,
+      // переросшее), — в виде прибора строки: профиль читается в момент ответа
+      // (модель могли сменить «Сохранить» без перезапуска звонка).
+      replyStyle: (msh) => {
+        const row = db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(deviceId);
+        return replyStyle({ profile: row ? getProfile(row.profile) : null, app: msh.app, facility: msh.facility });
+      },
       onMessage: async (text) => {
         const known = alive();
         const env = readEnvelope(text);
@@ -283,6 +292,10 @@ async function start(db, { log = console.log } = {}) {
       const srv = await startMllpServer({
         port,
         log,
+        // LIS_VENDOR_EXACT_V1 — ответ, который провод строит сам (приём бросил,
+        // переросшее), — в виде прибора по тому, как сообщение назвало себя
+        // (прибор здесь ещё не найден); не назвало — вид руководства.
+        replyStyle: (msh) => replyStyle({ app: msh.app, facility: msh.facility }),
         onMessage: async (text, peer) => {
           const ip = normalizeIp(peer);
 

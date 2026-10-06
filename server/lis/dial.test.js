@@ -82,10 +82,34 @@ test('кадры приходят — ответ ACK^R01 тем же прово�
     await until(() => fake.acks.length === 1, 3000, 'ответ');
     const [msh, msa] = fake.acks[0].split('\r');
     assert.equal(msh.split('|')[8], 'ACK^R01');
-    assert.equal(msa, 'MSA|AA|5|Message accepted|||0');
+    // LIS_VENDOR_EXACT_V1 — вид не назван (replyStyle нет) — вид руководства.
+    assert.equal(msa, 'MSA|AA|5|Message accepted|||0|');
     assert.equal(seen.length, 1);
     assert.equal(seen[0].peer, '127.0.0.1', 'peer — адрес прибора');
     assert.ok(client.status().last_rx_at, 'время последнего байта от прибора');
+  } finally {
+    client.close();
+    await fake.close();
+  }
+});
+
+// LIS_VENDOR_EXACT_V1 — ответ, который клиент строит сам, — в виде прибора
+// строки (replyStyle от index.js): у гематологии (BC-780, BC-20) — короткий,
+// с CR после последнего сегмента и MSH-11 эхом (BC-3600 OM p. D-31: «the value
+// of MSH-11 … in QC response message is Q»).
+test('LIS_VENDOR_EXACT_V1: replyStyle звонка — гематология получает короткий ответ с MSH-11 эхом и CR в конце', async () => {
+  const fake = await fakeAnalyzer();
+  const client = startMllpClient({ host: '127.0.0.1', port: fake.port, timing: FAST, onMessage: async () => 'AA',
+    replyStyle: () => ({ layout: 'short', wire: 'mindray-hematology' }) });
+  try {
+    await until(() => fake.live().length === 1, 3000, 'подключение');
+    fake.live()[0].write(frame(ORU('9').replace('|ORU^R01|9|P|', '|ORU^R01|9|Q|')));
+    await until(() => fake.acks.length === 1, 3000, 'ответ');
+    const ack = fake.acks[0];
+    assert.equal(ack.split('\r')[0].split('|')[10], 'Q', 'MSH-11 эхом');
+    assert.equal(ack.split('\r')[0].split('|').length, 18, 'короткий заголовок, MSH-18 UNICODE эхом');
+    assert.equal(ack.split('\r')[1], 'MSA|AA|9|Message accepted|||0');
+    assert.ok(ack.endsWith('\r'), 'CR после последнего сегмента');
   } finally {
     client.close();
     await fake.close();

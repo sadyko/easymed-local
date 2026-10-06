@@ -8,7 +8,8 @@
 // «Безопасность»). Отсюда потолок размера и тайм-аут простоя: это единственное,
 // чем можно ограничить того, кто не представился.
 import net from 'node:net';
-import { buildAck, mshOf, ACK_INTERNAL } from './hl7.js';   // mshOf, ACK_INTERNAL: LIS_REAL_ANALYZERS_V1_ACK
+import { buildAck, mshOf } from './hl7.js';   // mshOf: LIS_REAL_ANALYZERS_V1_ACK
+import { internalAck } from './hl7.js';   // LIS_VENDOR_EXACT_V1 — отказ по нашей вине в виде прибора
 
 export const VT = 0x0b;
 export const FS = 0x1c;
@@ -29,6 +30,9 @@ const HEAD_BYTES = 64 * 1024;
 // тот, кто продолжает слать, не держит его дольше этого.
 const OVERSIZE_GRACE_MS = 2000;
 
+// LIS_VENDOR_EXACT_V1 — CR после последнего сегмента ставит сам ответ (hl7.js
+// buildAck, buildQueryReply), поэтому кадр кончается «…<CR><FS><CR>», как у
+// производителя (HIM v5.0, с. 25); готовый ответ приёма ({ reply }) уходит как есть.
 const frameOf = (text) => Buffer.concat([Buffer.from([VT]), Buffer.from(text, 'utf8'), Buffer.from([FS, CR])]);
 
 // LIS_REAL_ANALYZERS_V1_ACK — заголовок входящего читает mshOf (hl7.js) без
@@ -36,6 +40,9 @@ const frameOf = (text) => Buffer.concat([Buffer.from([VT]), Buffer.from(text, 'u
 // не удалось, иначе прибор не поймёт, на что пришёл отказ. Ответ — buildAck с
 // эхом заголовка; сорвавшийся приём и переросшее — AE 207 (ACK_INTERNAL), а не
 // «ошибка разбора» 100: сообщение могло быть верным.
+// LIS_VENDOR_EXACT_V1 — и в виде прибора: replyStyle(msh) вызывающего (index.js
+// → receive.js replyStyle) называет вид и провод; у химии Mindray отказ — AR 207
+// (hl7.js internalAck). Без replyStyle — вид руководства, как незнакомому.
 
 /** Байты вне кадра, кроме концов строк: CR после FS может прийти отдельной записью. */
 function noiseBytes(buf, from, to) {
@@ -66,10 +73,19 @@ function noiseBytes(buf, from, to) {
  *        LIS_REAL_ANALYZERS_V1 (ревью R2, п. 10а) — прибор бросил кадр и начал
  *        новый (новый VT до FS): здесь — начало брошенного (первые 64 КБ), для
  *        одной строки лотка. Ответа прибору на брошенный нет — он его не ждёт.
+ * @param {(msh:object)=>{layout?:string, wire?:string}} [o.replyStyle]
+ *        LIS_VENDOR_EXACT_V1 — вид ответа, который читатель строит сам (приём
+ *        бросил, вернул только код, переросшее): по заголовку входящего
+ *        (mshOf). Нет — вид руководства (hl7.js LAYOUT_LONG).
  */
-export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, peer = sock.remoteAddress || '', onNoise = null, onAbandoned = null } = {}) {
+export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, peer = sock.remoteAddress || '', onNoise = null, onAbandoned = null, replyStyle = null } = {}) {
   let buf = Buffer.alloc(0);
   let overflow = false;
+  // LIS_VENDOR_EXACT_V1 — вид ответа вызывающего; его сбой ответа не отменяет.
+  const styleOf = (msh) => {
+    if (!replyStyle) return {};
+    try { return replyStyle(msh) || {}; } catch { return {}; }
+  };
   // Обработка кадров последовательная: прибор ждёт ответа на первый кадр
   // прежде, чем слать второй, и параллельная запись в базу переставила бы
   // ответы местами.
@@ -95,7 +111,8 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
     log(`LIS: сообщение больше ${maxBytes} байт от ${peer} — отказ (AE), соединение закрыто`);
     // В ту же цепочку: ответы на кадры, пришедшие раньше, уходят первыми.
     chain = chain.then(async () => {
-      if (!sock.destroyed) sock.write(frameOf(buildAck(mshOf(head), 'AE', ACK_INTERNAL)));
+      const m = mshOf(head);
+      if (!sock.destroyed) sock.write(frameOf(internalAck(m, styleOf(m))));   // LIS_VENDOR_EXACT_V1 — в виде прибора
       try {
         if (onOversize) await onOversize({ peer, bytes, head, limit: maxBytes });
       } catch (e) {
@@ -152,9 +169,10 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
           const r = await onMessage(text, peer);
           const code = r && typeof r === 'object' ? r.code : r;
           if (r && typeof r === 'object' && typeof r.reply === 'string' && r.reply) ack = r.reply;
-          else ack = code ? buildAck(msh, code) : buildAck(msh, 'AE', ACK_INTERNAL);
+          // LIS_VENDOR_EXACT_V1 — ответ, который строим сами, — в виде прибора.
+          else ack = code ? buildAck(msh, code, { layout: styleOf(msh).layout }) : internalAck(msh, styleOf(msh));
         } catch (e) {
-          ack = buildAck(msh, 'AE', ACK_INTERNAL);
+          ack = internalAck(msh, styleOf(msh));   // LIS_VENDOR_EXACT_V1
           log('LIS: приём отказал — ' + (e && e.message ? e.message : e));
         }
         if (sock.destroyed) return;
@@ -186,9 +204,12 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
  *        сообщение больше потолка: прибору уже ушёл AE, здесь — сколько пришло
  *        к моменту отказа, первые 64 КБ текста и сам потолок (запись в лоток)
  * @param {(msg:string)=>void} [o.log]
+ * @param {(msh:object)=>{layout?:string, wire?:string}} [o.replyStyle]
+ *        LIS_VENDOR_EXACT_V1 — вид ответов, которые провод строит сам
+ *        (attachMllpReader); index.js даёт receive.js replyStyle
  * @returns {Promise<{port:number, close:()=>Promise<void>}>}
  */
-export function startMllpServer({ port, onMessage, onOversize = null, onAbandoned = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {} }) {
+export function startMllpServer({ port, onMessage, onOversize = null, onAbandoned = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, replyStyle = null }) {
   return new Promise((resolve, reject) => {
     // LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — открытые соединения приборов.
     // server.close() перестаёт принимать новые, но отвечает, только когда
@@ -203,7 +224,7 @@ export function startMllpServer({ port, onMessage, onOversize = null, onAbandone
       sock.setTimeout(IDLE_MS, () => sock.destroy());
       // LIS_REAL_ANALYZERS_V1_DIAL — разбор кадров вынесен: тот же читатель у
       // клиента, который звонит прибору сам (dial.js).
-      attachMllpReader(sock, { onMessage, onOversize, onAbandoned, maxBytes, log, peer: sock.remoteAddress || '' });   // onAbandoned: ревью R2, п. 10а
+      attachMllpReader(sock, { onMessage, onOversize, onAbandoned, maxBytes, log, peer: sock.remoteAddress || '', replyStyle });   // onAbandoned: ревью R2, п. 10а; replyStyle: LIS_VENDOR_EXACT_V1
       sock.on('error', () => sock.destroy());
     });
 
