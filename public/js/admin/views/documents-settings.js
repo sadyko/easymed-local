@@ -67,7 +67,7 @@ function mount(onNavigate) {
     // рисовали её каждый по-своему, а тридцать не рисовали вовсе.
 
     refs.saveBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save },
-        Icon('Check', { size: 14 }), ' ', 'Сохранить');
+        ...saveBtnContent());   // CLINIC_API_FIX_V1 — тем же строителем save() возвращает кнопку
 
     const formCard = h('div', { class: 'card' });
     buildForm(formCard);
@@ -233,10 +233,21 @@ async function load() {
     renderPreview();
 }
 
+// CLINIC_API_FIX_V1 — содержимое кнопки «Сохранить»: значок и подпись. Одним
+// строителем кнопку рисует mount() и возвращает save() после записи. Раньше
+// save() возвращал подпись через textContent — значок пропадал до F5.
+function saveBtnContent() {
+    return [Icon('Check', { size: 14 }), document.createTextNode(' '), document.createTextNode(tr('Сохранить'))];
+}
+function paintSaveBtn(btn, busy) {
+    clear(btn);
+    for (const n of busy ? [document.createTextNode(tr('Сохранение…'))] : saveBtnContent()) btn.appendChild(n);
+}
+
 async function save() {
-    refs.saveBtn.disabled = true;
-    const prevLabel = refs.saveBtn.textContent;
-    refs.saveBtn.textContent = tr('Сохранение…');
+    const btn = refs.saveBtn;   // CLINIC_API_FIX_V1 — та же кнопка, что гасили, даже если экран перерисуют
+    btn.disabled = true;
+    paintSaveBtn(btn, true);
     try {
         // SETTINGS_SPLIT_V1 — ровно те поля, которыми управляет этот экран.
         // paper_size / show_watermark / footer_note / legal_note НЕ шлются
@@ -265,8 +276,8 @@ async function save() {
     } catch (e) {
         toast((e && e.message) || tr('Не удалось сохранить.'), 'fail');
     } finally {
-        refs.saveBtn.disabled = false;
-        refs.saveBtn.textContent = prevLabel;
+        btn.disabled = false;
+        paintSaveBtn(btn, false);   // CLINIC_API_FIX_V1 — значок и подпись, как были
     }
 }
 

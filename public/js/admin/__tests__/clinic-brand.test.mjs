@@ -257,6 +257,10 @@ test('вход через форму: название клиники под м�
     assert.equal(BRAND_SUB.textContent, 'Клиника «Шифо»', 'после входа под меню пусто до F5');
 });
 
+// Кнопка «Сохранить» экрана «Компания» — по подписи, как её видит человек.
+const findSaveBtn = () => descendants(VIEW_ROOT).find((n) => n.tagName === 'BUTTON' && labelOf(n) === 'Сохранить') || null;
+const hasIcon = (btn) => descendants(btn).some((n) => n.tagName === 'SVG');
+
 test('сохранили «Компанию» с новым названием — под меню и в window.CLINIC новое', async () => {
     globalThis.window.easymed.navigate('documents-settings');
     await settle(200);
@@ -268,8 +272,9 @@ test('сохранили «Компанию» с новым названием �
     nameInp.dispatchEvent({ type: 'input', target: nameInp, currentTarget: nameInp });
 
     const readsBefore = clinicReads;
-    const saveBtn = descendants(VIEW_ROOT).find((n) => n.tagName === 'BUTTON' && /Сохранить$/.test(labelOf(n)));
+    const saveBtn = findSaveBtn();
     assert.ok(saveBtn, 'нет кнопки «Сохранить»');
+    assert.ok(hasIcon(saveBtn), 'у кнопки «Сохранить» нет значка');
     saveBtn.click();
     await settle(200);
 
@@ -279,12 +284,22 @@ test('сохранили «Компанию» с новым названием �
     assert.equal(BRAND_SUB.textContent, 'Шифо Плюс', 'под меню старое название до F5');
 });
 
+// CLINIC_API_FIX_V1 — после сохранения кнопка возвращается такой, какой была:
+// значок и подпись «Сохранить». Раньше подпись возвращалась через textContent,
+// и значок пропадал до перезагрузки экрана.
+test('после сохранения «Компании» кнопка «Сохранить» — со значком, как была', () => {
+    const saveBtn = findSaveBtn();
+    assert.ok(saveBtn, 'после сохранения кнопки с подписью «Сохранить» нет — подпись испорчена');
+    assert.ok(hasIcon(saveBtn), 'после сохранения у кнопки пропал значок');
+    assert.ok(!saveBtn.hasAttribute('disabled') && !saveBtn.disabled, 'кнопка осталась заблокированной');
+});
+
 test('стёрли название в «Компании» — под меню запасное «Easy-Med Local», а не старое', async () => {
     const nameInp = descendants(VIEW_ROOT).filter((n) => n.tagName === 'INPUT').find((n) => n.value === 'Шифо Плюс');
     assert.ok(nameInp);
     nameInp.value = '';
     nameInp.dispatchEvent({ type: 'input', target: nameInp, currentTarget: nameInp });
-    descendants(VIEW_ROOT).find((n) => n.tagName === 'BUTTON' && /Сохранить$/.test(labelOf(n))).click();
+    findSaveBtn().click();
     await settle(200);
 
     assert.equal(globalThis.window.CLINIC.name, 'Easy-Med Local');
