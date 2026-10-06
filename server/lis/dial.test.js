@@ -210,6 +210,52 @@ test('прибор слал сигнал и замолчал — соедине�
   }
 });
 
+// LIS_VENDOR_EXACT_V1 — D4: закрываем соединение с прибором RST, а не FIN
+// (после FIN A1000 не замечает обрыва, теряет следующий результат и крутит
+// ядро — autobio-autolumo-a1000.settle.md, находка 6). Сторож тишины после
+// сигнала 0x02 — прежний: он нужен гематологии, ждущей звонка.
+function trackClose(sock) {
+  const ev = [];
+  sock.on('end', () => ev.push('end'));
+  sock.on('error', (e) => ev.push(e.code));
+  const closed = new Promise((r) => sock.once('close', r));
+  return { ev, closed };
+}
+
+test('LIS_VENDOR_EXACT_V1 D4: close() рвёт соединение с прибором RST, а не FIN', async () => {
+  const fake = await fakeAnalyzer();
+  const client = startMllpClient({ host: '127.0.0.1', port: fake.port, timing: FAST, onMessage: async () => 'AA' });
+  try {
+    await until(() => fake.live().length === 1, 3000, 'подключение');
+    await until(() => client.status().state === 'connected', 3000, 'connected');
+    const { ev, closed } = trackClose(fake.live()[0]);
+    client.close();
+    await closed;
+    assert.ok(ev.includes('ECONNRESET') && !ev.includes('end'), 'RST, а не FIN: ' + ev.join(','));
+  } finally {
+    client.close();
+    await fake.close();
+  }
+});
+
+test('LIS_VENDOR_EXACT_V1 D4: сторож тишины после сигнала — как прежде, но мёртвое соединение рвётся RST', async () => {
+  const fake = await fakeAnalyzer();
+  const waits = [];
+  const client = startMllpClient({ host: '127.0.0.1', port: fake.port, timing: { ...FAST, silenceMs: 300 }, onMessage: async () => 'AA', onWait: (ms, code) => waits.push(code) });
+  try {
+    await until(() => fake.live().length === 1, 3000, 'подключение');
+    const { ev, closed } = trackClose(fake.live()[0]);
+    fake.live()[0].write(Buffer.from([0x02]));   // сигнал — и тишина
+    await closed;
+    await until(() => waits.length > 0, 3000, 'клиент заметил обрыв');
+    assert.equal(waits[0], 'silent');
+    assert.ok(ev.includes('ECONNRESET') && !ev.includes('end'), 'RST, а не FIN: ' + ev.join(','));
+  } finally {
+    client.close();
+    await fake.close();
+  }
+});
+
 test('прибор без сигнала может молчать часами — простоя у клиента нет', async () => {
   const fake = await fakeAnalyzer();
   const client = startMllpClient({ host: '127.0.0.1', port: fake.port, timing: { ...FAST, silenceMs: 150 }, onMessage: async () => 'AA' });

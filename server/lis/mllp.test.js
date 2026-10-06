@@ -445,3 +445,70 @@ test('R2 п. 10а: новый VT до конца кадра — брошенно
   assert.equal(cut[0].head, MSG('71') + '\rOBX|1|NM|WBC^^99MRC||6.');
   assert.ok(cut[0].peer);
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D4: соединение прибора не рвётся простоем ─────────
+// A1000 и BS-200 подключаются при запуске своей программы и могут молчать
+// часами. A1000 после нашего FIN (end/destroy) не замечает закрытия: следующий
+// результат уходит в мёртвое соединение и теряется, а до того его программа
+// крутит ядро процессора (autobio-autolumo-a1000.settle.md, находка 6; RST —
+// без этого). Поэтому: простоя нет, мёртвых убирает TCP keep-alive (30 с),
+// закрываем — RST (resetAndDestroy), не FIN.
+
+/** Что увидел прибор при закрытии: 'end' — FIN, код ошибки — RST (ECONNRESET). */
+function trackClose(sock) {
+  const ev = [];
+  sock.on('data', () => {});
+  sock.on('end', () => ev.push('end'));
+  sock.on('error', (e) => ev.push(e.code));
+  const closed = new Promise((r) => sock.once('close', r));
+  return { ev, closed };
+}
+
+test('D4: соединению прибора при приёме — keep-alive 30 с и NoDelay; простоя (setTimeout) нет', async () => {
+  const P = net.Socket.prototype;
+  const orig = { setTimeout: P.setTimeout, setKeepAlive: P.setKeepAlive, setNoDelay: P.setNoDelay };
+  const calls = [];
+  for (const k of Object.keys(orig)) P[k] = function (...a) { calls.push({ sock: this, k, a }); return orig[k].apply(this, a); };
+  try {
+    await withServer(async () => 'AA', async (port) => {
+      const sock = await connect(port);
+      const reply = readFrame(sock);
+      sock.write(frame(MSG('61')));
+      await reply;
+      // Серверная сторона этого соединения: её удалённый порт — наш локальный.
+      const mine = calls.filter((c) => c.sock !== sock && c.sock.localPort === port && c.sock.remotePort === sock.localPort);
+      const shown = JSON.stringify(mine.map((c) => [c.k, ...c.a.filter((x) => typeof x !== 'function')]));
+      assert.ok(mine.some((c) => c.k === 'setKeepAlive' && c.a[0] === true && c.a[1] === 30000), 'keep-alive 30 с: ' + shown);
+      assert.ok(mine.some((c) => c.k === 'setNoDelay' && c.a[0] !== false), 'NoDelay — ответы не склеиваются в один сегмент (A1000 M19): ' + shown);
+      assert.ok(!mine.some((c) => c.k === 'setTimeout' && c.a[0] > 0), 'простоя нет: ' + shown);
+      sock.end();
+    });
+  } finally {
+    Object.assign(P, orig);
+  }
+});
+
+test('D4: close() слушателя рвёт соединение прибора RST, а не FIN', async () => {
+  const srv = await startMllpServer({ port: 0, onMessage: async () => 'AA' });
+  const sock = await connect(srv.port);
+  const { ev, closed } = trackClose(sock);
+  const reply = readFrame(sock);
+  sock.write(frame(MSG('62')));
+  await reply;   // соединение принято и живо
+  await srv.close();
+  await closed;
+  assert.ok(ev.includes('ECONNRESET'), 'RST: ' + ev.join(','));
+  assert.ok(!ev.includes('end'), 'FIN не пришёл: ' + ev.join(','));
+});
+
+test('D4: переросшее — отказ дочитывается, потом RST, а не FIN', async () => {
+  await withServer(async () => 'AA', async (port) => {
+    const sock = await connect(port);
+    const { ev, closed } = trackClose(sock);
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(MSG('81') + '\r' + 'D'.repeat(4096), 'utf8')]));
+    assert.match(await reply, /MSA\|AE\|81\|/, 'отказ дошёл до прибора');
+    await closed;
+    assert.ok(ev.includes('ECONNRESET') && !ev.includes('end'), 'RST, а не FIN: ' + ev.join(','));
+  }, { maxBytes: 1024, onOversize: () => {} });
+});

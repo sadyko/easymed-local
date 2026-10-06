@@ -5,8 +5,15 @@
 // пошлёт следующий.
 //
 // Порт неаутентифицирован — анализаторы не умеют логиниться (спецификация,
-// «Безопасность»). Отсюда потолок размера и тайм-аут простоя: это единственное,
-// чем можно ограничить того, кто не представился.
+// «Безопасность»). Отсюда потолок размера: им ограничен тот, кто не
+// представился.
+// LIS_VENDOR_EXACT_V1 — тайм-аута простоя больше нет (D4): A1000 и BS-200
+// подключаются при запуске своей программы и молчат часами, а A1000 после
+// нашего закрытия (FIN) обрыва не замечает — следующий результат уходит в
+// мёртвое соединение и теряется, а до того его программа крутит ядро
+// процессора (analyzer-research, autobio-autolumo-a1000.settle.md, находка 6).
+// Мёртвые соединения убирает TCP keep-alive (30 с); закрываем сами — RST
+// (resetSocket), не FIN.
 import net from 'node:net';
 import { buildAck, mshOf } from './hl7.js';   // mshOf: LIS_REAL_ANALYZERS_V1_ACK
 import { internalAck } from './hl7.js';   // LIS_VENDOR_EXACT_V1 — отказ по нашей вине в виде прибора
@@ -21,7 +28,11 @@ export const CR = 0x0d;
 // не приходили вовсе — соединение рвалось молча. 4 МБ — с запасом на тяжёлые
 // пробы и всё ещё предел для того, кто не представился.
 export const DEFAULT_MAX_BYTES = 4 * 1024 * 1024;
-const IDLE_MS = 5 * 60 * 1000;
+// LIS_VENDOR_EXACT_V1 — D4: вместо простоя в 5 минут — TCP keep-alive, как у
+// звонка (dial.js DIAL_DEFAULTS.keepAliveMs): живой молчащий прибор держит
+// соединение сколько угодно, мёртвое (кабель, выключенный ПК без FIN/RST)
+// закрывает сама система.
+export const KEEPALIVE_MS = 30000;
 // Сколько начала переросшего сообщения отдать вызывающему (в лоток): MSH, PID,
 // OBR и числа идут первыми, картинки — в конце. 64 КБ хватает, чтобы узнать
 // пробу, и не превращают лоток в склад картинок.
@@ -29,6 +40,25 @@ const HEAD_BYTES = 64 * 1024;
 // После отказа прибору дают дочитать ответ, прежде чем оборвать соединение:
 // тот, кто продолжает слать, не держит его дольше этого.
 const OVERSIZE_GRACE_MS = 2000;
+
+/**
+ * LIS_VENDOR_EXACT_V1 — D4: закрыть соединение прибора RST (resetAndDestroy), а
+ * не FIN. После FIN программа A1000 считает себя на связи, шлёт следующий
+ * результат в мёртвое соединение и теряет его, а до того крутит ядро
+ * процессора; после RST она сразу видит обрыв и переподключается
+ * (autobio-autolumo-a1000.settle.md, находка 6). Соединение, которое ещё
+ * подключается, просто уничтожается: ему нечего обрывать. Не бросает.
+ * @param {import('node:net').Socket|null} sock
+ */
+export function resetSocket(sock) {
+  if (!sock || sock.destroyed) return;
+  try {
+    if (sock.connecting) sock.destroy();
+    else sock.resetAndDestroy();
+  } catch {
+    sock.destroy();
+  }
+}
 
 // LIS_VENDOR_EXACT_V1 — CR после последнего сегмента ставит сам ответ (hl7.js
 // buildAck, buildQueryReply), поэтому кадр кончается «…<CR><FS><CR>», как у
@@ -108,7 +138,7 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
     buf = Buffer.alloc(0);
     const bytes = body.length;
     const head = body.subarray(0, HEAD_BYTES).toString('utf8');
-    log(`LIS: сообщение больше ${maxBytes} байт от ${peer} — отказ (AE), соединение закрыто`);
+    log(`LIS: сообщение больше ${maxBytes} байт от ${peer} — отказ, соединение закрыто`);
     // В ту же цепочку: ответы на кадры, пришедшие раньше, уходят первыми.
     chain = chain.then(async () => {
       const m = mshOf(head);
@@ -119,8 +149,10 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
         log('LIS: переросшее сообщение не записано — ' + (e && e.message ? e.message : e));
       }
       if (sock.destroyed) return;
-      sock.end();
-      const t = setTimeout(() => sock.destroy(), OVERSIZE_GRACE_MS);
+      // LIS_VENDOR_EXACT_V1 — D4: без FIN (end): прибор дочитывает отказ за
+      // паузу, потом соединение рвётся RST — после FIN A1000 не заметил бы
+      // обрыва и потерял бы следующий результат.
+      const t = setTimeout(() => resetSocket(sock), OVERSIZE_GRACE_MS);
       if (t.unref) t.unref();
     });
   }
@@ -213,15 +245,23 @@ export function startMllpServer({ port, onMessage, onOversize = null, onAbandone
   return new Promise((resolve, reject) => {
     // LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — открытые соединения приборов.
     // server.close() перестаёт принимать новые, но отвечает, только когда
-    // закроются ВСЕ открытые, а анализатор держит своё часами (простой рвётся
-    // через IDLE_MS). На этом висели lis_restart и lis_device_delete. Поэтому
-    // сокеты помнятся, и закрытие рвёт их само: прибор переподключится к новому
-    // слушателю, а неотвеченный кадр пришлёт снова.
+    // закроются ВСЕ открытые, а анализатор держит своё часами. На этом висели
+    // lis_restart и lis_device_delete. Поэтому сокеты помнятся, и закрытие
+    // рвёт их само.
+    // LIS_VENDOR_EXACT_V1 — D4: рвёт RST (resetSocket). Прибор переподключится
+    // к новому слушателю; неотвеченный кадр пришлёт снова не каждый: A1000 не
+    // повторяет никогда (autobio-autolumo-a1000.md §4), поэтому слушатель
+    // закрывается, только когда его порт больше не нужен (index.js).
     const socks = new Set();
     const server = net.createServer((sock) => {
       socks.add(sock);
       sock.on('close', () => socks.delete(sock));
-      sock.setTimeout(IDLE_MS, () => sock.destroy());
+      // LIS_VENDOR_EXACT_V1 — D4: простоя нет (прибор молчит часами), TCP
+      // keep-alive убирает мёртвых; NoDelay — ответ уходит сразу, два ответа
+      // не склеиваются в один сегмент (A1000 вырезает ответ регуляркой
+      // ^\v…\x1C\r$ — autobio-autolumo-a1000.md M19).
+      sock.setKeepAlive(true, KEEPALIVE_MS);
+      sock.setNoDelay(true);
       // LIS_REAL_ANALYZERS_V1_DIAL — разбор кадров вынесен: тот же читатель у
       // клиента, который звонит прибору сам (dial.js).
       attachMllpReader(sock, { onMessage, onOversize, onAbandoned, maxBytes, log, peer: sock.remoteAddress || '', replyStyle });   // onAbandoned: ревью R2, п. 10а; replyStyle: LIS_VENDOR_EXACT_V1
@@ -252,7 +292,7 @@ export function startMllpServer({ port, onMessage, onOversize = null, onAbandone
       resolve({
         port: server.address().port,
         close: () => new Promise((r) => {
-          for (const s of socks) s.destroy();
+          for (const s of socks) resetSocket(s);   // LIS_VENDOR_EXACT_V1 — D4: RST, не FIN
           server.close(() => r());
         }),
       });

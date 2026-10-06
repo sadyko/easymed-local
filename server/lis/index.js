@@ -202,14 +202,34 @@ export function dialPlan(devices, lisPorts) {
   return out;
 }
 
+/**
+ * LIS_VENDOR_EXACT_V1 — D4: звонки — только по изменившимся строкам. Клиент
+ * строки, у которой адрес и порт прежние, остаётся со своим соединением:
+ * раньше «Сохранить» любого прибора (lis_restart) рвал ВСЕ соединения, и
+ * прибор, ждущий звонка, мог потерять результат, сделанный во время
+ * переподключения. Закрываются (RST — dial.js close) клиенты строк, которых
+ * больше нет в плане (удалена, выключена, больше не dial, отказ по адресу), и
+ * строк, у которых сменились адрес или порт.
+ */
 function startDialers(db, devices, lisPorts, log) {
-  for (const { device: d, host, port, code } of dialPlan(devices, lisPorts)) {
+  const plan = dialPlan(devices, lisPorts);
+  const want = new Map(plan.filter((p) => !p.code).map((p) => [p.device_id, p]));
+  for (const [id, c] of [...dialers]) {
+    const p = want.get(id);
+    const st = c.status();
+    if (p && st.host === p.host && st.port === p.port) continue;   // строка не менялась — соединение не трогаем
+    try { c.close(); } catch { /* уже закрыт */ }
+    dialers.delete(id);
+  }
+  dialRefused = [];
+  for (const { device: d, host, port, code } of plan) {
     if (code) {
       dialRefused.push({ device_id: d.id, host, port, state: 'off',
         since: isoNow(), last_rx_at: null, code, retry_at: null });
       log(`LIS: «${d.name}» — Easy-Med не подключается к ${host || '(адрес пуст)'}:${port == null ? '(порт пуст)' : port} (${code})`);
       continue;
     }
+    if (dialers.has(d.id)) continue;   // LIS_VENDOR_EXACT_V1 — D4: прежний клиент, строка не менялась
     const deviceId = d.id;
     // Строку могли удалить, пока кадр шёл: сообщение всё равно сохраняется
     // (инвариант 2), но без прибора — иначе его не пустил бы внешний ключ.
@@ -266,13 +286,20 @@ export function stopLisListeners() {
   return inTurn(stop);
 }
 
+// LIS_VENDOR_EXACT_V1 — D4: база, с которой подняты слушатели и звонки: их
+// обработчики пишут в неё. Запуск с другой базой (тесты, второй экземпляр) —
+// всё заново, как прежде.
+let currentDb = null;
+
 async function start(db, { log = console.log } = {}) {
-  await stop();
   failed = [];
   if (process.env.LIS_ENABLED === '0') {
+    await stop();
     log('LIS: выключен через LIS_ENABLED=0');
     return [];
   }
+  if (currentDb !== db) await stop();
+  currentDb = db;
 
   const devices = db.prepare("SELECT * FROM lab_devices WHERE enabled = 1 AND transport = 'mllp'").all();
 
@@ -287,7 +314,32 @@ async function start(db, { log = console.log } = {}) {
     byPort.get(port).push(d);
   }
 
+  // LIS_VENDOR_EXACT_V1 — D4: перезапуск — только у слушателей, чей порт
+  // изменился. Раньше каждый «Сохранить» прибора (lis_restart) и удаление
+  // прибора рвали ВСЕ соединения, а A1000 подключается при запуске своей
+  // программы, молчит часами и после нашего закрытия теряет следующий
+  // результат (autobio-autolumo-a1000.settle.md, находка 6). Слушатель нужного
+  // порта остаётся со всеми соединениями; порт, который больше не нужен,
+  // закрывается — его соединения рвутся RST (mllp.js). Соединение прибора,
+  // которого удалили или выключили, на порте, который ещё нужен, не рвётся:
+  // слушатель общий, а прибор переподключился бы и слал дальше — обрыв лишь
+  // потерял бы его результат.
+  const keep = [];
+  for (const s of running) {
+    if (byPort.has(s.port)) {
+      if (s.known) s.known.devices = byPort.get(s.port);
+      keep.push(s);
+      continue;
+    }
+    try { await s.close(); } catch { /* уже закрыт — это не ошибка */ }
+    log(`LIS: порт ${s.port} больше не слушается`);
+  }
+  running = keep;
+
   for (const [port, list] of byPort) {
+    if (running.some((s) => s.port === port)) continue;   // LIS_VENDOR_EXACT_V1 — D4: слушатель жив — не трогаем
+    // Приборы порта — для журнала; перезапуск обновляет список, не слушатель.
+    const known = { devices: list };
     try {
       const srv = await startMllpServer({
         port,
@@ -320,7 +372,7 @@ async function start(db, { log = console.log } = {}) {
           const found = ensureDevice(db, { sendingApp, sendingFacility, peer: ip, port, allowCreate: parsed });
           if (found.created) {
             log(`LIS: обнаружен анализатор «${found.device.name}» (${ip || 'адрес неизвестен'}), порт ${port}`);
-            list.push(found.device);
+            known.devices.push(found.device);
           }
 
           return receiveMessage(db, text, { peer: ip, deviceId: found.device ? found.device.id : null });
@@ -333,6 +385,7 @@ async function start(db, { log = console.log } = {}) {
         // «кадр оборван» в лотке; прибор по началу не заводится, как и выше.
         onAbandoned: ({ peer, head }) => recordAbandoned(db, { deviceId: null, peer: normalizeIp(peer), head }),
       });
+      srv.known = known;   // LIS_VENDOR_EXACT_V1 — D4
       running.push(srv);
       log(list.length
         ? `LIS: порт ${srv.port} слушает (${list.map((d) => d.name).join(', ')})`
@@ -358,6 +411,7 @@ async function stop() {
   // LIS_REAL_ANALYZERS_V1_DIAL — клиенты закрываются сразу и ничего не ждут
   // (dial.js close): урок lis_restart / lis_device_delete — закрытие, ждущее
   // прибора, вешало RPC.
+  currentDb = null;   // LIS_VENDOR_EXACT_V1 — D4: следующий запуск поднимает всё заново
   const oldDialers = dialers;
   dialers = new Map();
   dialRefused = [];

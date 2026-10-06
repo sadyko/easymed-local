@@ -21,12 +21,16 @@
 //   — close() снимает таймер, рвёт сокет и возвращается сразу, ничего не
 //     ожидая: урок lis_restart / lis_device_delete (LIS_DISCOVERY_FIX_V1) —
 //     закрытие, ждущее прибора, вешало RPC.
+// LIS_VENDOR_EXACT_V1 — D4: рвёт — RST (mllp.js resetSocket), не FIN, и
+// close(), и сторож тишины; закрывает index.js только строку, которую
+// удалили, выключили или у которой сменились адрес или порт.
 //
 // Безопасность: исходящее соединение — только на адрес и порт строки прибора
 // (проверку адреса делает index.js по isLocalIp), одно на прибор. Прибору
 // уходят только ответы приёма (ACK, «заказов нет»), больше ничего.
 import net from 'node:net';
 import { attachMllpReader, DEFAULT_MAX_BYTES } from './mllp.js';
+import { resetSocket } from './mllp.js';   // LIS_VENDOR_EXACT_V1 — D4: RST, не FIN
 
 export const DIAL_DEFAULTS = Object.freeze({
   minBackoffMs: 2000,       // первая пауза
@@ -165,7 +169,7 @@ export function startMllpClient({ host, port, onMessage, onOversize = null, onAb
       onNoise: () => {
         if (sawSignal) return;
         sawSignal = true;
-        s.setTimeout(T.silenceMs, () => { reason = 'silent'; s.destroy(); });
+        s.setTimeout(T.silenceMs, () => { reason = 'silent'; resetSocket(s); });   // LIS_VENDOR_EXACT_V1 — RST
       },
     });
     s.on('error', (e) => { if (!reason) reason = codeOf(e); });
@@ -185,7 +189,7 @@ export function startMllpClient({ host, port, onMessage, onOversize = null, onAb
     close() {
       closed = true;
       if (timer) { clearTimeout(timer); timer = null; }
-      if (sock) { sock.destroy(); sock = null; }
+      if (sock) { resetSocket(sock); sock = null; }   // LIS_VENDOR_EXACT_V1 — D4: RST, не FIN; подключающийся — просто уничтожается
       Object.assign(st, { state: 'closed', since: iso(), retry_at: null });
     },
     status() { return { ...st }; },

@@ -454,7 +454,21 @@ test('selfPorts: порты LIS, HTTP и EasyPhone', () => {
   }
 });
 
-test('lis_restart и lis_device_delete рвут соединение и не ждут прибора', async () => {
+/** LIS_VENDOR_EXACT_V1 — что увидела сторона соединения: 'end' — FIN, код ошибки — RST. */
+function trackClose(sock) {
+  const ev = [];
+  sock.on('data', () => {});
+  sock.on('end', () => ev.push('end'));
+  sock.on('error', (e) => ev.push(e.code));
+  sock.on('close', () => ev.push('close'));
+  return ev;
+}
+
+// LIS_VENDOR_EXACT_V1 — D4: lis_restart («Сохранить» любого прибора) больше не
+// рвёт соединение строки, которая не менялась: прибор, ждущий звонка, иначе
+// терял бы результат, сделанный во время переподключения. Удаление прибора —
+// рвёт, и RST, а не FIN.
+test('lis_restart не рвёт соединение неизменённой строки звонка (LIS_VENDOR_EXACT_V1, D4); lis_device_delete рвёт его RST и не ждёт прибора', async () => {
   const fake = await fakeAnalyzer();
   const LAB = { role: 'lab' };
   try {
@@ -463,12 +477,14 @@ test('lis_restart и lis_device_delete рвут соединение и не ж�
       await startLisListeners(db, { log: () => {} });
       await until(() => fake.live().length === 1, 5000, 'подключение');
       const first = fake.live()[0];
+      const ev = trackClose(first);
 
       let t = Date.now();
       await lisRestart(db, {}, LAB);
       assert.ok(Date.now() - t < 2000, 'перезапуск не висит на открытом соединении прибора');
-      await until(() => first.destroyed || first.readableEnded, 3000, 'старое соединение порвано');
-      await until(() => fake.live().length === 1 && fake.conns.length === 2, 5000, 'новый клиент подключился');
+      await sleep(300);
+      assert.deepEqual(ev, [], 'строка не менялась — соединение не тронуто');
+      assert.equal(fake.conns.length, 1, 'нового звонка нет');
       assert.equal(lisListeners(db, {}, LAB).dialing.find((d) => d.device_id === 7).state, 'connected');
 
       t = Date.now();
@@ -476,11 +492,90 @@ test('lis_restart и lis_device_delete рвут соединение и не ж�
       assert.equal(out.ok, true);
       assert.ok(Date.now() - t < 2000, 'удаление не висит на открытом соединении прибора');
       await until(() => fake.live().length === 0, 3000, 'соединение порвано удалением');
+      await until(() => ev.includes('close'), 3000, 'закрыто');
+      assert.ok(ev.includes('ECONNRESET') && !ev.includes('end'), 'RST, а не FIN: ' + ev.join(','));
       await sleep(300);
-      assert.equal(fake.conns.length, 2, 'удалённый прибор больше не звонят');
+      assert.equal(fake.conns.length, 1, 'удалённый прибор больше не звонят');
       assert.equal(dialing(7), undefined);
     });
   } finally { await fake.close(); }
+});
+
+test('LIS_VENDOR_EXACT_V1 D4: у строки звонка сменили порт — старое соединение RST, звонок — на новый порт', async () => {
+  const a = await fakeAnalyzer();
+  const b = await fakeAnalyzer();
+  const LAB = { role: 'lab' };
+  try {
+    await withLis(async (db) => {
+      dialRow(db, { id: 7, port: a.port });
+      await startLisListeners(db, { log: () => {} });
+      await until(() => a.live().length === 1, 5000, 'подключение к старому порту');
+      const ev = trackClose(a.live()[0]);
+      db.prepare('UPDATE lab_devices SET port = ? WHERE id = 7').run(b.port);
+      await lisRestart(db, {}, LAB);
+      await until(() => b.live().length === 1, 5000, 'подключение к новому порту');
+      await until(() => ev.includes('close'), 3000, 'старое закрыто');
+      assert.ok(ev.includes('ECONNRESET') && !ev.includes('end'), 'RST, а не FIN: ' + ev.join(','));
+      assert.equal(dialing(7).port, b.port);
+    });
+  } finally { await a.close(); await b.close(); }
+});
+
+// LIS_VENDOR_EXACT_V1 — D4: слушатель. A1000 подключается при запуске своей
+// программы и может молчать часами; после нашего закрытия он обрыва не
+// замечает и теряет следующий результат (settle, находка 6). Раньше каждый
+// «Сохранить» прибора (lis_restart) рвал ВСЕ соединения слушателей; теперь —
+// только у слушателя, чей порт больше не нужен.
+const A1000_TEST = ['MSH|^~\\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123', 'OBR|1|LAB-000123|7764|AutoLumo A1000',
+  'NTE|||180323~~AFP~107~20271231~DQ70~1', 'OBX|10455|CE|107|107|41765^4.17~||||||F|||2026/10/05 12:00:00'].join('\r') + '\r';
+
+test('LIS_VENDOR_EXACT_V1 D4: lis_restart при неизменном порте не трогает соединение прибора; результат по нему приходит и после', async () => {
+  const LAB = { role: 'lab' };
+  await withLis(async (db, lisPort) => {
+    await startLisListeners(db, { log: () => {} });
+    const sock = await connect(lisPort);
+    const ev = trackClose(sock);
+    try {
+      await sleep(100);
+      await lisRestart(db, {}, LAB);
+      // «Сохранить» прибора на том же порте — тоже lis_restart.
+      db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port, enabled) VALUES (3, 'ИХЛА', 'autobio-autolumo-a1000', 'mllp', ?, 1)").run(lisPort);
+      await lisRestart(db, {}, LAB);
+      await sleep(300);
+      assert.deepEqual(ev, [], 'соединение не тронуто');
+      assert.ok(listenerStatus().listening.includes(lisPort));
+      const reply = readFrame(sock);
+      sock.write(frameOf(A1000_TEST));
+      assert.match(await reply, /\rMSA\|AA\|5\|/, 'результат по тому же соединению принят');
+    } finally { sock.destroy(); }
+  });
+});
+
+test('LIS_VENDOR_EXACT_V1 D4: у прибора сменили порт — закрыт только слушатель старого порта, его соединение — RST, а не FIN; порт по умолчанию не тронут', async () => {
+  const LAB = { role: 'lab' };
+  await withLis(async (db, lisPort) => {
+    const p1 = await freePort();
+    let p2 = await freePort();
+    while (p2 === p1 || p2 === lisPort) p2 = await freePort();
+    db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port, enabled) VALUES (4, 'CL-900i', 'mindray-cl-900i', 'mllp', ?, 1)").run(p1);
+    await startLisListeners(db, { log: () => {} });
+    assert.ok(listenerStatus().listening.includes(p1));
+    const onOld = await connect(p1);
+    const onDefault = await connect(lisPort);
+    const oldEv = trackClose(onOld);
+    const defEv = trackClose(onDefault);
+    try {
+      await sleep(100);
+      db.prepare('UPDATE lab_devices SET port = ? WHERE id = 4').run(p2);
+      await lisRestart(db, {}, LAB);
+      await until(() => oldEv.includes('close'), 3000, 'старое соединение закрыто');
+      assert.ok(oldEv.includes('ECONNRESET') && !oldEv.includes('end'), 'RST, а не FIN: ' + oldEv.join(','));
+      await sleep(200);
+      assert.deepEqual(defEv, [], 'соединение на порте по умолчанию не тронуто');
+      const st = listenerStatus();
+      assert.ok(st.listening.includes(p2) && !st.listening.includes(p1) && st.listening.includes(lisPort), JSON.stringify(st.listening));
+    } finally { onOld.destroy(); onDefault.destroy(); }
+  });
 });
 
 // ── LIS_REAL_ANALYZERS_V1 — ревью R2 ───────────────────────────────────────
