@@ -1628,6 +1628,24 @@ async function paint() {
             const sv = svcCatalog.find(x => String(x.id) === String(p.service_id));
             return !!(sv && sv.requires_doctor);
         };
+        // CLINIC_API_FIX_V1 — ВРАЧ С ЖИВОЙ ОЧЕРЕДЬЮ (users.scheduling_mode) слотов
+        // не держит: окно визита и каталог услуг время у него не спрашивают
+        // (isLiveQueueDoc в visit-wizard.js), и заявка — тоже.
+        const isLiveQueueDoc = (docId) => {
+            const d = docId != null ? docCatalog.find((x) => String(x.id) === String(docId)) : null;
+            return !!(d && d.scheduling_mode === 'live_queue');
+        };
+        // CLINIC_API_FIX_V1 — «сейчас» для визита живой очереди — то же, что у
+        // окна визита (defaultWhen: местное время, вниз до 5 минут).
+        const liveQueueNowIso = () => {
+            const d = new Date();
+            d.setMinutes(d.getMinutes() - (d.getMinutes() % 5), 0, 0);
+            return d.toISOString();
+        };
+        const localTodayIso = () => {
+            const d = new Date();
+            return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+        };
         // CRM_REAL_BOOKING_V1 — ДЛИТЕЛЬНОСТЬ СТРОКИ. Та же, что возьмёт сервер:
         // длительность услуги, а без неё — получас, как в мастере визита
         // (lineDuration в visit-wizard.js). Считай мы иначе — оператору
@@ -1827,7 +1845,7 @@ async function paint() {
         // CRM_LINE_DOCTOR_V1 — `requires_doctor` решает, нужен ли строке врач;
         // список врачей нужен тут же, чтобы колл-центр выбирал из тех, кто эту
         // услугу реально оказывает (Сотрудники → «Услуги и ставки»).
-        supabase.from('users').select('id, full_name, specialty, service_rates')
+        supabase.from('users').select('id, full_name, specialty, service_rates, scheduling_mode')   // CLINIC_API_FIX_V1 — живая очередь
             .eq('role', 'doctor').eq('is_active', true).order('full_name')
             .then(({ data }) => { docCatalog = data || []; });
         // CRM_SERVICE_FILTER_V1 — рейка категорий: сами категории и колонки, по
@@ -2407,6 +2425,12 @@ async function paint() {
                             timeCell.appendChild(note('без времени'));
                             return;
                         }
+                        // CLINIC_API_FIX_V1 — живая очередь: времени нет, спрашивать нечего.
+                        if (isLiveQueueDoc(p.doctor_id)) {
+                            setLineTime(p, '');
+                            timeCell.appendChild(note('живая очередь'));
+                            return;
+                        }
                         if (!p.date) { timeCell.appendChild(note('сначала дата')); return; }
                         timeCell.appendChild(note('Ищем время…'));
                         const day = await loadSlotDay(Number(p.doctor_id), p.date, lineDuration(p),
@@ -2523,19 +2547,32 @@ async function paint() {
                 const days = [...new Set(live.map((p) => p.date))].sort();
                 let booked = 0, touched = 0;
                 for (const day of days) {
-                    const timed = live.filter((p) => p.date === day && p.doctor_id);
-                    if (!timed.length) continue;              // день «на дату» — слота нет
+                    // CLINIC_API_FIX_V1 — врач с живой очередью слота не держит и
+                    // головной строкой дня не бывает (headTimedLine в visit-wizard.js).
+                    const timed = live.filter((p) => p.date === day && p.doctor_id && !isLiveQueueDoc(p.doctor_id));
+                    // CLINIC_API_FIX_V1 — день, где врачи только с живой очередью,
+                    // заводится как в окне визита: визит «сейчас», ensure_visit
+                    // без book. Окно визита умеет так только СЕГОДНЯ (wiz.when);
+                    // будущий день остаётся «на дату», как день без врача, —
+                    // регистратура подхватит строку в свой день.
+                    const queued = timed.length || day !== localTodayIso() ? []
+                        : live.filter((p) => p.date === day && p.doctor_id && isLiveQueueDoc(p.doctor_id));
+                    const dayLines = timed.length ? timed : queued;
+                    if (!dayLines.length) continue;           // день «на дату» — слота нет
                     // CRM_REAL_BOOKING_V1 — ДЕНЬ, В КОТОРОМ НИЧЕГО НЕ МЕНЯЛОСЬ,
                     // НЕ ЗАПИСЫВАЮТ ЗАНОВО: приём по нему уже стоит, и повторный
                     // вызов заставил бы сервер перенести визит на то же время.
-                    if (timed.every(keptBooking)) continue;
+                    if (dayLines.every(keptBooking)) continue;
                     // Головная строка — та, ради которой день и записывают:
                     // сначала изменённая, и только если таких нет — любая со
                     // временем (день, где одну строку тронули, а вторую нет).
-                    const head = timed.find((p) => !keptBooking(p) && p.start_iso) || timed.find((p) => p.start_iso);
+                    // CLINIC_API_FIX_V1 — у живой очереди — первый врач дня, как dayDoc окна визита.
+                    const head = timed.length
+                        ? (timed.find((p) => !keptBooking(p) && p.start_iso) || timed.find((p) => p.start_iso))
+                        : queued[0];
                     const human = day.split('-').reverse().join('.');
                     if (!head || !patientId || !requestId) { failedDays.add(day); continue; }
-                    const args = {
+                    const args = timed.length ? {
                         patient_id: Number(patientId),
                         date: head.start_iso,
                         doctor_id: Number(head.doctor_id),
@@ -2545,6 +2582,11 @@ async function paint() {
                             start: head.start_iso,
                             duration_minutes: lineDuration(head),
                         },
+                    } : {
+                        // CLINIC_API_FIX_V1 — живая очередь: тот же вызов окна визита, без book.
+                        patient_id: Number(patientId),
+                        date: liveQueueNowIso(),
+                        doctor_id: Number(head.doctor_id),
                     };
                     let res = await supabase.rpc('ensure_visit', args);
                     // ЗАНЯТО — ЭТО ВОПРОС ЧЕЛОВЕКУ, А НЕ ГАЛОЧКА. Слова отказа
@@ -2715,7 +2757,8 @@ async function paint() {
                 // keptBooking — строка, приём по которой уже стоит и которую не
                 // трогали: требовать у неё время значило бы запереть окно
                 // записанной заявки (время хранится в визите, а не в строке).
-                const noTime = picked.filter(p => p.status !== 'done' && p.doctor_id && !p.start_iso && !keptBooking(p));
+                const noTime = picked.filter(p => p.status !== 'done' && p.doctor_id && !p.start_iso && !keptBooking(p)
+                    && !isLiveQueueDoc(p.doctor_id));   // CLINIC_API_FIX_V1 — у живой очереди времени нет
                 if (noTime.length) { toast(trf('Не выбрано время: {names}', { names: noTime.map(p => p.name).join(', ') }), 'fail'); return; }
                 saveAll.disabled = true;
                 const row = await persist();

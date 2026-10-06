@@ -1289,11 +1289,11 @@ const DOCTOR = { id: 31, full_name: 'Петров Пётр', specialty: 'тер�
 const LAB_DAY = '2026-10-09';
 
 /** Заявка привязанного пациента, открытая ОПЕРАТОРОМ колл-центра, и лист дат. */
-async function doctorSheet({ lines = null, lead = null } = {}) {
+async function doctorSheet({ lines = null, lead = null, doctors = null } = {}) {
   forgetSlots();
   RPC.length = 0; ENSURE_PLAN = []; ENSURE_N = 0; SLOT_FAIL = false;
   SERVICES = [DOC_SVC, LAB_SVC];
-  DOCTORS = [DOCTOR];
+  DOCTORS = doctors || [DOCTOR];   // CLINIC_API_FIX_V1 — врачи стенда (живая очередь)
   REQ_LINES = lines || [{ id: 901, service_id: DOC_SVC.id, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null }];
   const modal = await openRequest(Object.assign({
     id: 1, status: 'in_process', service_id: DOC_SVC.id, scheduled_date: null,
@@ -2090,5 +2090,96 @@ test('врача консультации выбрали в окне дат — 
     'врача выбрали, а окно дат называет цену вида — касса возьмёт цену врача');
   assert.deepStrictEqual(priceTexts(modal), ['150000 сум'], 'карточка заявки под окном дат осталась со старой ценой');
   SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
+  window.easymed.state.user = null;
+});
+
+// ═══ CLINIC_API_FIX_V1 — ВРАЧ С ЖИВОЙ ОЧЕРЕДЬЮ: ЗАПИСЬ БЕЗ ВРЕМЕНИ ══════════
+//
+// Окно визита и каталог услуг у врача с users.scheduling_mode = 'live_queue'
+// время не спрашивают: визит заводится сейчас, ensure_visit уходит БЕЗ book
+// (headTimedLine в visit-wizard.js такие строки не берёт), а дальше очередь —
+// номерами и кассой. Заявка же ставила такого врача на слот, как врача по
+// записи. Проверяется то, что уходит на сервер.
+
+const LQ_DOCTOR = { id: 34, full_name: 'Каримов Карим', specialty: 'терапевт', service_rates: null, scheduling_mode: 'live_queue' };
+const localDayIso = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+const TODAY = localDayIso(new Date());
+const FUTURE_DAY = localDayIso(new Date(Date.now() + 3 * 86400000));
+
+test('врач с живой очередью: окно дат не спрашивает время, визит дня заводится без слота — как в окне визита', async () => {
+  const { sheet } = await doctorSheet({ doctors: [DOCTOR, LQ_DOCTOR] });
+  await fillRow(sheet, 0, TODAY, LQ_DOCTOR.id);
+
+  assert.strictEqual(rpcOf('calendar_slots').filter((c) => c.body && c.body.doctor_id === LQ_DOCTOR.id).length, 0,
+    'у врача с живой очередью спросили свободное время — слотов он не держит');
+  assert.strictEqual(timeSelects(sheet).length, 0, 'у врача с живой очередью окно дат предлагает выбрать время');
+  assert.ok(/живая очередь/.test(textOf(sheet)), 'окно дат не говорит, что у врача живая очередь');
+
+  CALLS.length = 0; TOASTS.length = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  assert.ok(!someToast(/Не выбрано время/), 'запись к врачу с живой очередью отказана «не выбрано время»: ' + JSON.stringify(TOASTS));
+  const ev = rpcOf('ensure_visit');
+  assert.strictEqual(ev.length, 1, 'визит дня не заведён одним вызовом: ' + JSON.stringify(ev.map((c) => c.body)));
+  const b = ev[0].body;
+  assert.ok(!('book' in b), 'к врачу с живой очередью ушла просьба занять слот: ' + JSON.stringify(b));
+  assert.strictEqual(b.patient_id, 7, 'визит заведён не на пациента заявки');
+  assert.strictEqual(b.doctor_id, LQ_DOCTOR.id, 'визит дня заведён не к врачу строки');
+  assert.strictEqual(localDayIso(new Date(b.date)), TODAY, 'визит живой очереди заведён не на сегодня: ' + b.date);
+  const link = visitLinks();
+  assert.strictEqual(link.length, 1, 'визит не проставлен строкам заявки: ' + JSON.stringify(link));
+  assert.deepStrictEqual((link[0].filters || []).find((f) => f.col === 'scheduled_date'),
+    { col: 'scheduled_date', op: 'eq', val: TODAY });
+  window.easymed.state.user = null;
+});
+
+test('в одном дне врач по записи и врач с живой очередью: слот занимает только врач по записи', async () => {
+  CONSULTS = [CONSULT_TYPE];
+  CONSULT_PRICES = [{ id: 3, doctor_id: LQ_DOCTOR.id, consultation_type_id: 5, price: 90000, available: 1, is_free: 0 }];
+  const { sheet } = await doctorSheet({ doctors: [DOCTOR, LQ_DOCTOR], lines: [
+    { id: 901, service_id: DOC_SVC.id, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null },
+    consultLine(915, null, ''),
+  ] });
+  await fillRow(sheet, 0, TODAY, DOCTOR.id);
+  await fillRow(sheet, 1, TODAY, LQ_DOCTOR.id);
+  const sels = timeSelects(sheet);
+  assert.strictEqual(sels.length, 1, 'время спрашивается не у одного врача по записи: ' + sels.length);
+  sels[0].value = '09:30'; fire(sels[0]);
+
+  CALLS.length = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  const ev = rpcOf('ensure_visit');
+  assert.strictEqual(ev.length, 1, JSON.stringify(ev.map((c) => c.body)));
+  assert.ok(ev[0].body.book, 'врач по записи остался без слота');
+  assert.strictEqual(ev[0].body.book.doctor_id, DOCTOR.id, 'слот занят не у врача по записи');
+  assert.strictEqual(ev[0].body.book.service_id, DOC_SVC.id);
+  SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
+  window.easymed.state.user = null;
+});
+
+// Окно визита заводит визит живой очереди только СЕГОДНЯ (wiz.when — «сейчас»,
+// поля даты у такой строки нет). Будущего дня у него нет вовсе, поэтому заявка
+// ничего не придумывает: такой день остаётся «на дату», как день без врача, —
+// регистратура подхватит строку в этот день. Решение — за владельцем.
+test('врач с живой очередью на будущий день: визит не заводится, строка остаётся «на дату»', async () => {
+  const { sheet } = await doctorSheet({ doctors: [DOCTOR, LQ_DOCTOR] });
+  await fillRow(sheet, 0, FUTURE_DAY, LQ_DOCTOR.id);
+  assert.strictEqual(timeSelects(sheet).length, 0, 'у врача с живой очередью окно дат предлагает выбрать время');
+
+  CALLS.length = 0; TOASTS.length = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  assert.ok(!someToast(/Не выбрано время/), JSON.stringify(TOASTS));
+  assert.strictEqual(rpcOf('ensure_visit').length, 0, 'на будущий день живой очереди заведён визит — окно визита так не умеет');
+  const row = savedRow();
+  assert.ok(row, 'заявка не сохранилась');
+  assert.strictEqual(row.values.scheduled_date, FUTURE_DAY, 'заявка сохранилась без даты');
+  const ins = CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'insert');
+  assert.ok(ins.some((c) => [].concat(c.values).some((v) => v.doctor_id === LQ_DOCTOR.id && v.scheduled_date === FUTURE_DAY)),
+    'строка заявки потеряла врача или день: ' + JSON.stringify(ins.map((c) => c.values)));
   window.easymed.state.user = null;
 });
