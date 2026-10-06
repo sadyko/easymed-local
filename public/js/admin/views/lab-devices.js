@@ -20,8 +20,9 @@ import { splitDevices, portState, isTruncatedMessage } from './lab-devices-lists
 // проверка адреса, строка состояния), служебные за сегодня, подпись модели.
 import { splitTray, groupReceiving, staleSeriesRest, seriesPendingRest, isLocalIp, isIpAddress, dialLine, dialSig,
     serviceSummary, modelNote, connectionOf } from './lab-devices-lists.js?v=lists4';
-// LIS_VENDOR_EXACT_V1 — D14: кто подключён к порту приёма и что прислал (lis_listeners.peers).
-import { peerNotes } from './lab-devices-lists.js?v=lists4';
+// LIS_VENDOR_EXACT_V1 — D14: кто подключён к порту приёма и что прислал (lis_listeners.peers);
+// D10: в сообщении лотка есть непрочитанные буквы (U+FFFD).
+import { peerNotes, hasUnreadableText } from './lab-devices-lists.js?v=lists4';
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
 const TRANSPORTS = [
@@ -87,6 +88,8 @@ const GENERIC_LABEL = 'Другой анализатор (общий HL7)';
 const MODEL_REQUIRED = 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».';
 /** Прибор, у которого человек выбрал «Другой анализатор (общий HL7)». */
 const isGenericModel = (d) => !!d && !String(d.profile || '').trim() && Number(d.model_confirmed) === 1;
+// LIS_VENDOR_EXACT_V1 — D10: строка лотка у сообщения с непрочитанными буквами.
+const UNREADABLE_NOTE = 'Часть букв в сообщении не прочиталась — задайте на анализаторе коды тестов латиницей (например, GLU, ALT).';
 
 // Живая лента опрашивает сервер, пока экран открыт. Таймер модульный и гасится
 // при следующем монтировании и при уходе с вкладки (laboratory.js): иначе
@@ -1199,6 +1202,11 @@ export async function mountLabDevices(container) {
                     truncated
                         ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                             tr('пришло не целиком — пусть прибор отправит пробу ещё раз'))
+                        : null,
+                    // LIS_VENDOR_EXACT_V1 — D10: кириллица из компьютера прибора не
+                    // прочиталась — такой код «Поле анализатора» не предлагает.
+                    hasUnreadableText(m)
+                        ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } }, tr(UNREADABLE_NOTE))
                         : null,
                     raw),
                 h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },

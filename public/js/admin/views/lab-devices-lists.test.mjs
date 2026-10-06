@@ -267,3 +267,13 @@ test('D14: соединения — непонятные данные с под�
   assert.deepEqual(peerNotes(undefined, [], NOW), []);
   assert.deepEqual(peerNotes([null, 'мусор', { open: true }], [], NOW), [], 'без адреса строки нет');
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D10: непрочитанные буквы (U+FFFD) в сообщении лотка ──
+test('D10: сообщение с U+FFFD узнаётся — лоток скажет, что коды тестов должны быть латиницей', async () => {
+  const { hasUnreadableText } = await import('./lab-devices-lists.js');
+  const BAD = String.fromCharCode(0xFFFD);
+  assert.equal(hasUnreadableText({ raw: 'OBX|1|NM|' + BAD + BAD + BAD + '|Glucose|5.23' }), true);
+  assert.equal(hasUnreadableText({ raw: 'OBX|1|NM|GLU|Глюкоза|5.23' }), false, 'кириллица, прочитанная верно, — не беда');
+  assert.equal(hasUnreadableText({ raw: null }), false);
+  assert.equal(hasUnreadableText(null), false);
+});

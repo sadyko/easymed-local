@@ -389,3 +389,17 @@ export function peerNotes(peers, devices = [], now = Date.now()) {
     const byIp = (a, b) => a.ip.localeCompare(b.ip, 'en', { numeric: true });
     return [...[...noise.values()].sort(byIp), ...[...waiting.values()].sort(byIp)];
 }
+
+// ── LIS_VENDOR_EXACT_V1 — D10: непрочитанные буквы в сообщении ───────────────
+//
+// U+FFFD — знак, которым приём заменяет байты, не прочитанные в кодировке кадра:
+// так выглядит кириллица из компьютера прибора (BS-200 отдаёт «Код на ЛИС» в
+// своей кодировке). Код теста с таким знаком «Поле анализатора» не предлагает
+// (server/services/rpc/lis.js), и лоток говорит, что поправить на приборе:
+// коды тестов — латиницей.
+const UNREADABLE = String.fromCharCode(0xFFFD);
+
+/** В сообщении лотка есть непрочитанные буквы (U+FFFD). */
+export function hasUnreadableText(m) {
+    return !!m && String(m.raw == null ? '' : m.raw).includes(UNREADABLE);
+}

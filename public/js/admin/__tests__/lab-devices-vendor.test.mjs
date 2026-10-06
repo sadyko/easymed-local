@@ -412,3 +412,31 @@ test('D2: строки экрана — в словаре на uz и en', () => 
   // Подпись выбора цитируется в отказе её же переводом.
   for (const lang of ['en', 'uz']) assert.ok(STRINGS[MODEL_REQUIRED][lang].includes('«' + STRINGS[GENERIC_LABEL][lang] + '»'), lang);
 });
+
+// ── D10: непрочитанные буквы (U+FFFD) — в лотке сказано, что коды должны быть латиницей ──
+// BS-200 отдаёт «Код на ЛИС» в кодировке своего компьютера; кириллица, прочитанная
+// не той кодировкой, — знаки U+FFFD. Такой код «Поле анализатора» больше не
+// предлагает (rpc/lis.js), и лоток объясняет, что поправить на приборе.
+const UNREADABLE_NOTE = 'Часть букв в сообщении не прочиталась — задайте на анализаторе коды тестов латиницей (например, GLU, ALT).';
+const BAD = String.fromCharCode(0xFFFD);
+const trayMsg = (id, raw) => ({ id, device_id: 1, peer: '10.0.0.40', raw, sample_id: 'LAB-000123', visit_service_id: 123,
+  status: 'unmapped', detail: 'не сопоставлено: ' + BAD + BAD + BAD, received_at: iso(Date.now() - 2 * 3600000), resolved_at: null, kind: 'result' });
+const BS200_RAW = (code) => ['MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||',
+  'OBR|1|LAB-000123|12|Mindray^BS-200|N||20261005101200',
+  'OBX|1|NM|' + code + '|Glucose|5.230000|mmol/L|3.900000-6.100000|N|||F|||20261005101200'].join('\r');
+const trayRow = (root, id) => walk(cardWithTitle(root, 'Необработанные')).filter((n) => n.tagName === 'TR')
+  .find((r) => walk(r).some((b) => b.tagName === 'BUTTON' && label(b) === 'Сырое') && textOf(r).includes('#' + id + '#'));
+
+test('D10: в лотке — сообщение с непрочитанными буквами: коды тестов на анализаторе — латиницей; обычное — без строки', async () => {
+  reset();
+  MESSAGES = [
+    { ...trayMsg(1, BS200_RAW(BAD + BAD + BAD)), sample_id: '#1#' },
+    { ...trayMsg(2, BS200_RAW('GLU')), sample_id: '#2#', detail: 'не сопоставлено: GLU' },
+  ];
+  const root = await mount();
+  const tray = cardWithTitle(root, 'Необработанные');
+  assert.ok(tray, 'лоток на экране');
+  assert.ok(textOf(trayRow(root, 1)).includes(UNREADABLE_NOTE), textOf(tray));
+  assert.ok(!textOf(trayRow(root, 2)).includes(UNREADABLE_NOTE), 'у сообщения без U+FFFD строки нет');
+  assert.ok(STRINGS[UNREADABLE_NOTE] && STRINGS[UNREADABLE_NOTE].en && STRINGS[UNREADABLE_NOTE].uz, 'в словаре на uz и en');
+});
