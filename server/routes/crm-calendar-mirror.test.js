@@ -469,20 +469,26 @@ test('R-I2. выданный талон очереди — строка не с�
 // заявку пациента без строк, а calendar_book — только «ждущую этот день». Теперь
 // оба — по правилу ensure_visit (crm/visit-link.js, шаг C): открытая карточка
 // пациента без строк любой давности — это его карточка.
-test('R-I3 (CRM_UNIFY_V1): давняя открытая карточка без строк едет в «Записан» при любой записи; второй колл-центр не заводит', async () => {
+// CRM_UNIFY_V1 (проверка ревью задачи 3, P3) — без строк И без даты карточка ждёт
+// прихода только в окне повторного обращения (72 ч): двухдневная — его карточка,
+// шестидесятидневная — о другом обращении, запись её не берёт.
+test('R-I3 (CRM_UNIFY_V1): открытая карточка без строк в окне едет в «Записан» при любой записи, давняя — нет; второй колл-центр не заводит', async () => {
   const t = await start();
   try {
-    const old = t.db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id, created_at, updated_at) VALUES ('Пациент Тест','+998900000077','in_process',77,?,?)")
-      .run(daysAgoIso(60), daysAgoIso(60)).lastInsertRowid;
+    const add = (ago) => t.db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id, created_at, updated_at) VALUES ('Пациент Тест','+998900000077','in_process',77,?,?)")
+      .run(daysAgoIso(ago), daysAgoIso(ago)).lastInsertRowid;
+    const stale = add(60);
+    const old = add(2);
     const r1 = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
     assert.equal(r1.status, 200, JSON.stringify(r1.json));
     assert.equal(reqRow(t.db, old).status, 'scheduled', 'запись регистратуры не нашла открытую карточку пациента — ensure_visit нашёл бы');
+    assert.equal(reqRow(t.db, stale).status, 'in_process', 'запись взяла давнюю карточку о другом обращении');
     const link = t.db.prepare('SELECT * FROM crm_booking_links WHERE visit_id = ?').get(r1.json.data.visit.id);
     assert.ok(link && link.request_id === old);
     assert.equal(link.source, 'match');
     const r3 = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 11, start: at(D2, 12), duration_minutes: 30 });
     assert.equal(r3.status, 200, JSON.stringify(r3.json));
-    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 1, 'колл-центр завёл вторую карточку пациенту с открытой');
+    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 2, 'колл-центр завёл третью карточку пациенту с открытой');
   } finally { t.close(); }
 });
 

@@ -35,6 +35,10 @@ import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, windowHo
 // CLINIC_DAY_V1 — «сегодня» и «день визита» — местные дни клиники, теми же
 // словами, какими их считают касса, дневник и документы.
 import { localDate } from '../domain/day.js';
+// CRM_UNIFY_V1 — приход ставит в визит строки, которые визит держит, а в нём их
+// нет (вызов во время прихода, не при загрузке модуля: booking-mirror.js сам
+// берёт отсюда EVIDENCE_SERVICE_STATUSES).
+import { placeHeldLines } from './booking-mirror.js';
 
 /** Статусы визита, означающие «пациент здесь». Словарь — из миграции 003. */
 export const ARRIVED_STATUSES = Object.freeze(['arrived']);
@@ -123,7 +127,9 @@ function settleLineless(db, { patientId, day, open, won, write }) {
  * ЧТО ДЕЛАЕТ СМЕНА СТАТУСА ВИЗИТА С ЗАЯВКАМИ, ЧЬИ СТРОКИ ЕГО ДЕРЖАТ.
  *
  *   arrived    — строки этого визита закрываются ('done'), и заявка становится
- *                конверсией. CRM_UNIFY_V1 — ПЕРВЫЙ ПРИХОД ЗАКРЫВАЕТ КАРТОЧКУ
+ *                конверсией. CRM_UNIFY_V1 (инвариант) — закрывается только
+ *                строка, чья услуга В ВИЗИТЕ: сначала строки без строки визита
+ *                встают в визит (placeHeldLines), не встали — ждут. CRM_UNIFY_V1 — ПЕРВЫЙ ПРИХОД ЗАКРЫВАЕТ КАРТОЧКУ
  *                (решение владельца 1, Р8): «Пришёл» ставится сразу, даже если
  *                у заявки остались строки на другие дни, — они остаются в
  *                карточке и в календаре как записи (прежде заявка на три дня
@@ -201,7 +207,23 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
                                JOIN crm_requests r ON r.id = b.request_id WHERE b.visit_id = ?`).all(id);
       } catch { linked = []; }   // сборка без 187
       if (parents.length) {
-        db.prepare("UPDATE crm_request_services SET status = 'done' WHERE visit_id = ? AND status = 'pending'").run(id);
+        // CRM_UNIFY_V1 (проверка ревью задачи 3, N1/P2) — СНАЧАЛА УСЛУГИ:
+        // строки, которые визит держит, а в визите их нет (взяли после прихода
+        // или при счёте), встают в визит 'added' — касса видит их в «Ждут
+        // счёта» (booking-mirror.js placeHeldLines).
+        placeHeldLines(db, id);
+        // ИНВАРИАНТ (решение контролёра) — ЕДИНСТВЕННОЕ МЕСТО, ГДЕ СТРОКА
+        // ЗАЯВКИ СТАНОВИТСЯ 'done': только строка, чья услуга ДЕЙСТВИТЕЛЬНО в
+        // визите (строка визита visit_service_id этого визита). Поставить её в
+        // визит не удалось (хирургия, снятая с продажи, визит соседнего здания)
+        // — строка ждёт, а не пропадает молча с «выполнено» без услуги, счёта и
+        // анализа. Ступень карточки от этого не зависит (ниже).
+        db.prepare(`UPDATE crm_request_services SET status = 'done'
+                     WHERE visit_id = ? AND status = 'pending'
+                       AND EXISTS (SELECT 1 FROM visit_services vs
+                                    WHERE vs.id = crm_request_services.visit_service_id
+                                      AND vs.visit_id = crm_request_services.visit_id
+                                      AND COALESCE(vs.status, '') <> 'cancelled')`).run(id);
       }
       const all = new Map();
       for (const p of [...parents, ...linked]) if (!all.has(p.id)) all.set(p.id, p);

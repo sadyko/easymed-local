@@ -118,6 +118,23 @@ export function mirrorBefore(db, meta, body, user) {
     }
   }
   try {
+    // CRM_UNIFY_V1 (проверка ревью задачи 3) — ИНВАРИАНТ: строку заявки
+    // закрывает ('done') только приход, когда её услуга уже в визите
+    // (crm/visit-status.js). Дверь /api/db её не закрывает: ни вставкой сразу
+    // 'done', ни правкой ждущей. Те же значения у уже закрытой — проходят
+    // (сохранение карточки ради комментария).
+    if (meta.table === 'crm_request_services' && ['insert', 'upsert', 'update'].includes(meta.op)) {
+      const vals = Array.isArray(body && body.values) ? body.values : [(body && body.values) || {}];
+      if (vals.some((r) => r && r.status === 'done')) {
+        const ids = meta.op === 'update' ? targetIds(db, body, user) : [];
+        const opens = meta.op !== 'update' || (ids.length > 0
+          && !!db.prepare(`SELECT 1 FROM crm_request_services WHERE id IN (${holes(ids)}) AND status <> 'done' LIMIT 1`).get(...ids));
+        if (opens) {
+          ctx.refusal = 'Строку заявки закрывает приход пациента, когда услуга уже в визите, — вручную её не закрывают.';
+          return ctx;
+        }
+      }
+    }
     if (meta.table === 'visit_services' && (meta.op === 'update' || meta.op === 'delete')) {
       ctx.ids = targetIds(db, body, user);
       // V3120_FIX — неоплаченную услугу в работу не берут (visit-status-guard.js).

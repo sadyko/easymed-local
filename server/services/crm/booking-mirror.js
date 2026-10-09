@@ -326,14 +326,18 @@ export function mirrorVisit(db, visitId, { actorId = null } = {}) {
   try {
     const v = visitRow(db, visitId);
     if (!beforeArrival(db, v)) {
-      // CRM_UNIFY_V1 (ревью задачи 3, R1) — ПРИШЁЛ, НО СЧЁТА ЕЩЁ НЕТ. После
-      // регистрации на стойке (или отметки «Пришёл») строки заявки этого визита
-      // закрыты, и сверка больше ничего не ставит и не снимает. Но регистратура
-      // как раз сейчас вставляет свои строки — и строка зеркала той же услуги
-      // уступает ей место, как до прихода: вторая строка той же услуги — это
-      // двойной счёт. Только своё здание, только живой визит, только без
-      // счёта и работы (I5).
-      if (v && v.sync_origin == null && (isPreArrival(v) || v.status === 'arrived') && !visitHasWork(db, v.id)) {
+      // CRM_UNIFY_V1 (ревью задачи 3, R1; проверка, N1/P1) — ПАЦИЕНТ ПРИШЁЛ.
+      // Сверка больше ничего не снимает и не переносит, но две вещи делает и
+      // теперь — при счёте и без него:
+      //   • строки заявки, которые визит держит, а в визите их нет (взяли после
+      //     прихода), встают в визит 'added' — как услуга, добавленная к уже
+      //     пришедшему визиту: касса видит её в «Ждут счёта» (placeHeldLines);
+      //   • строка зеркала той же услуги, ещё не в счёте, уступает место строке
+      //     регистратуры или кассы — вторая строка той же услуги это двойной
+      //     счёт (replaceAutoTwins).
+      // Только своё здание и только живой визит.
+      if (v && v.sync_origin == null && (isPreArrival(v) || v.status === 'arrived')) {
+        placeHeldLines(db, v.id, { actorId });
         db.transaction(() => replaceAutoTwins(db, v))();
       }
       return null;
@@ -405,21 +409,11 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
       touched.add(line.request_id); out.moved++;
       continue;
     }
-    // Уже есть такая услуга в визите и ни одна строка заявки её не держит —
-    // берём её, а не заводим вторую (её поставила регистратура раньше нас).
-    const mk = matchKey(db, line);
-    const cand = vsOfVisit().find((x) => matchKey(db, x) === mk && !isReferenced(x.id) && x.clinic_item_id == null);
-    if (cand) { linkLine.run(cand.id, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
-    // V3120_FIX — ВТОРАЯ КАРТОЧКА НА ТУ ЖЕ УСЛУГУ. Оператор завёл вторую
-    // заявку (не заметил первую) на ту же консультацию у того же врача в тот
-    // же день. Строка визита под эту услугу уже есть и её держит строка первой
-    // заявки — вторая строка заявки ДЕЛИТ её, а не заводит вторую строку
-    // визита: одна консультация — один счёт (было 200 000 вместо 100 000).
-    // Делёж безопасен: снятие одной из строк заявки строку визита не трогает,
-    // пока её держит другая (шаг 1 выше — `others`).
-    const shared = vsOfVisit().find((x) => matchKey(db, x) === mk && x.clinic_item_id == null
-      && referencedBy.all(x.id).some((r) => r.id !== line.id && r.status === 'pending'));
-    if (shared) { linkLine.run(shared.id, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
+    // Уже есть такая услуга в визите — берём её, а не заводим вторую
+    // (homeFor: её поставила регистратура раньше нас, или её делит вторая
+    // карточка того же человека).
+    const home = homeFor(db, V, line);
+    if (home) { linkLine.run(home, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
     if (frozen) continue;
     // C1 — хирургию и снятое с продажи зеркало в запись не ставит: строка
     // заявки остаётся ждать, запись — без неё.
@@ -439,18 +433,21 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
   }
   for (const x of vsOfVisit()) {
     if (!getVs.get(x.id)) continue;   // уступила место выше в этом же проходе
-    if (!lineKey(x) || x.clinic_item_id != null || x.sync_origin != null) continue;
-    if (x.status !== 'added' || x.invoice_item_id != null) continue;
+    if (!lineKey(x) || x.clinic_item_id != null || x.sync_origin != null || x.status === 'cancelled') continue;
     if (isReferenced(x.id)) continue;
     // ЗАМЕНА СТРОКИ ЗЕРКАЛА. Регистратура в день приёма подставляет строки
     // заявки в смету и вставляет СВОИ строки визита (со своей ценой, пакетом,
     // плательщиком). Строка, заведённая зеркалом под ту же услугу, уступает
-    // место: вторая строка той же услуги — это двойной счёт.
+    // место: вторая строка той же услуги — это двойной счёт. CRM_UNIFY_V1
+    // (проверка ревью задачи 3, P1) — и при счёте (I5 здесь не держит: уходит
+    // только строка зеркала, которая сама НЕ в счёте), и перед строкой, которую
+    // касса поставила сразу в счёт.
     const auto = autoLineFor(db, V, x);
     if (auto) {
-      if (frozen) continue;   // I5 — при счёте строку зеркала не трогаем и вторую строку заявки не заводим
       if (yieldAutoLine(db, V, x, auto)) { out.linked++; out.removed++; continue; }
+      if (frozen) continue;   // I5 — при счёте вторую строку заявки не заводим
     }
+    if (x.status !== 'added' || x.invoice_item_id != null) continue;
     if (!reqId) continue;   // запись не из заявки — зеркалить некуда
     db.prepare(`INSERT INTO crm_request_services
                   (request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id, visit_service_id, visit_service_auto)
@@ -464,8 +461,93 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
 }
 
 /**
+ * CRM_UNIFY_V1 (проверка ревью задачи 3, P1b) — ТА ЖЕ УСЛУГА: ключ услуги
+ * (lineKey) равен, и врач тот же (matchKey) — или у строки `a` врача нет вовсе.
+ * Строка заявки «консультация терапевта» без врача и строка регистратуры
+ * «консультация терапевта у Иванова» — одна консультация, а не две в счёте.
+ * Две строки с РАЗНЫМИ врачами — по-прежнему разные записи (разбор ревью I1).
+ */
+export function sameService(db, a, x) {
+  const k = lineKey(a);
+  if (!k || k !== lineKey(x)) return false;
+  return a.doctor_id == null || matchKey(db, a) === matchKey(db, x);
+}
+
+/**
+ * Строка визита этой записи, которую строка заявки `line` берёт вместо новой.
+ *   1. Та же услуга (sameService), и ни одна строка заявки её не держит — её
+ *      поставила регистратура раньше нас.
+ *   2. V3120_FIX — ВТОРАЯ КАРТОЧКА НА ТУ ЖЕ УСЛУГУ. Оператор завёл вторую
+ *      заявку (не заметил первую) на ту же консультацию у того же врача в тот
+ *      же день. Строка визита под эту услугу уже есть и её держит строка первой
+ *      заявки — вторая строка заявки ДЕЛИТ её, а не заводит вторую строку
+ *      визита: одна консультация — один счёт (было 200 000 вместо 100 000).
+ *      Делёж безопасен: снятие одной из строк заявки строку визита не трогает,
+ *      пока её держит другая (шаг 1 сверки — `others`). CRM_UNIFY_V1 — и строка
+ *      первой заявки, уже закрытая приходом ('done').
+ * null — такой нет, нужна новая.
+ */
+function homeFor(db, V, line) {
+  const referencedBy = db.prepare('SELECT id, status FROM crm_request_services WHERE visit_service_id = ?');
+  const rows = db.prepare('SELECT * FROM visit_services WHERE visit_id = ? ORDER BY id').all(V)
+    .filter((x) => x.clinic_item_id == null && x.status !== 'cancelled');
+  const cand = rows.find((x) => sameService(db, line, x) && !referencedBy.all(x.id).length);
+  if (cand) return cand.id;
+  const mk = matchKey(db, line);
+  const shared = rows.find((x) => matchKey(db, x) === mk
+    && referencedBy.all(x.id).some((r) => r.id !== line.id && r.status !== 'cancelled'));
+  return shared ? shared.id : null;
+}
+
+/**
+ * CRM_UNIFY_V1 (проверка ревью задачи 3, N1/P2) — СТРОКИ, КОТОРЫЕ ВИЗИТ ДЕРЖИТ,
+ * А В ВИЗИТЕ ИХ НЕТ. Строка заявки взяла визит (visit_id), но строки визита у
+ * неё нет (visit_service_id пуст): визит уже пришёл или при счёте, и сверка их
+ * не ставит. Перед приходом и после него такая строка встаёт в визит так же,
+ * как услуга, добавленная к уже выставленному или пришедшему визиту:
+ *   • такая же услуга в визите уже есть — строка берёт её (homeFor);
+ *   • иначе — новая строка визита 'added' (insertBookingLine — та же цена, что
+ *     у регистратуры и кассы): касса видит её в «Ждут счёта», анализ уходит в
+ *     лабораторию после оплаты, как обычно.
+ * Поставить нельзя (хирургия, снятая с продажи) — строка заявки ЖДЁТ: закрыть
+ * её без услуги в визите правило прихода не вправе (crm/visit-status.js).
+ * Строку, чья строка визита ИСЧЕЗЛА (visit_service_id есть, строки нет — её
+ * сняли), заново не ставит: снятую услугу снял человек.
+ * Визит СОСЕДНЕГО здания (sync_origin) здесь не правится (BRANCH_MONEY_GUARD_V1):
+ * строка заявки только берёт такую же услугу, если она приехала с визитом, и
+ * ничего не ставит. Только живой визит. Не бросает.
+ */
+export function placeHeldLines(db, visitId, { actorId = null } = {}) {
+  try {
+    const v = visitRow(db, visitId);
+    if (!v || (!PRE_ARRIVAL.includes(v.status) && v.status !== 'arrived')) return 0;
+    const foreign = v.sync_origin != null;
+    const lines = db.prepare(`SELECT * FROM crm_request_services
+                               WHERE visit_id = ? AND status = 'pending' AND visit_service_id IS NULL ORDER BY id`).all(v.id);
+    let placed = 0;
+    const link = db.prepare('UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = ? WHERE id = ?');
+    for (const line of lines) {
+      if (!lineKey(line)) continue;
+      db.transaction(() => {
+        const home = homeFor(db, v.id, line);
+        if (home) { link.run(home, 0, line.id); placed++; return; }
+        if (foreign) return;
+        if (bookingLineRefusal(db, { serviceId: line.service_id, consultationTypeId: line.consultation_type_id })) return;
+        const id = insertBookingLine(db, { visit: v, serviceId: line.service_id, consultationTypeId: line.consultation_type_id, doctorId: line.doctor_id, createdBy: actorId });
+        link.run(id, 1, line.id);
+        placed++;
+      })();
+    }
+    return placed;
+  } catch (e) {
+    console.error('[crm-mirror] строки заявки визита', visitId, 'не поставлены в визит:', e && e.message);
+    return 0;
+  }
+}
+
+/**
  * Строка заявки этого визита, державшая строку ЗЕРКАЛА той же услуги
- * (matchKey), что и строка визита `x`. CRM_UNIFY_V1 (ревью задачи 3, R1) — при
+ * (sameService), что и строка визита `x`. CRM_UNIFY_V1 (ревью задачи 3, R1) — при
  * любом статусе строки заявки, кроме снятой: после регистрации на стойке
  * строки этого визита уже 'done', а строка зеркала всё ещё в смете.
  */
@@ -473,7 +555,7 @@ function autoLineFor(db, V, x) {
   return db.prepare(`SELECT * FROM crm_request_services
                       WHERE visit_id = ? AND status <> 'cancelled'
                         AND visit_service_auto = 1 AND visit_service_id IS NOT NULL AND visit_service_id <> ?
-                      ORDER BY id`).all(V, x.id).find((l) => matchKey(db, l) === matchKey(db, x));
+                      ORDER BY id`).all(V, x.id).find((l) => sameService(db, l, x));
 }
 
 /**
@@ -495,19 +577,19 @@ function yieldAutoLine(db, V, x, auto) {
 }
 
 /**
- * CRM_UNIFY_V1 (ревью задачи 3, R1) — ТОЛЬКО ЗАМЕНА СТРОК ЗЕРКАЛА, для визита
- * после прихода (mirrorVisit): свободная строка визита, которую не держит ни
- * одна строка заявки (её только что поставила регистратура), занимает место
- * строки зеркала той же услуги. Ничего не ставит, не переносит и строк заявки
- * не заводит.
+ * CRM_UNIFY_V1 (ревью задачи 3, R1; проверка, P1) — ТОЛЬКО ЗАМЕНА СТРОК
+ * ЗЕРКАЛА, для визита после прихода (mirrorVisit): строка визита, которую не
+ * держит ни одна строка заявки (её только что поставила регистратура или касса
+ * — в смету или сразу в счёт), занимает место строки зеркала той же услуги,
+ * если та сама ещё не в счёте (yieldAutoLine → vsFree). До первого счёта и
+ * после него. Ничего не ставит, не переносит и строк заявки не заводит.
  */
 function replaceAutoTwins(db, v) {
   const getVs = db.prepare('SELECT * FROM visit_services WHERE id = ?');
   const referenced = db.prepare('SELECT 1 FROM crm_request_services WHERE visit_service_id = ? LIMIT 1');
   for (const x of db.prepare('SELECT * FROM visit_services WHERE visit_id = ? ORDER BY id').all(v.id)) {
     if (!getVs.get(x.id)) continue;   // уступила место выше в этом же проходе
-    if (!lineKey(x) || x.clinic_item_id != null || x.sync_origin != null) continue;
-    if (x.status !== 'added' || x.invoice_item_id != null) continue;
+    if (!lineKey(x) || x.clinic_item_id != null || x.sync_origin != null || x.status === 'cancelled') continue;
     if (referenced.get(x.id)) continue;
     const auto = autoLineFor(db, v.id, x);
     if (auto) yieldAutoLine(db, v.id, x, auto);
@@ -680,9 +762,9 @@ export function pruneAutoLinesOnInvoice(db, visitId, keepIds = []) {
       if (keep.has(Number(a.vs_id))) continue;
       const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(a.vs_id);
       if (!vsFree(db, vs)) continue;
-      const mk = matchKey(db, vs);
+      // CRM_UNIFY_V1 (P1b) — та же услуга: и строка зеркала без врача.
       const twin = db.prepare('SELECT * FROM visit_services WHERE visit_id = ? AND id <> ?').all(visitId, vs.id)
-        .find((x) => x.clinic_item_id == null && matchKey(db, x) === mk
+        .find((x) => x.clinic_item_id == null && sameService(db, vs, x)
           && !db.prepare("SELECT 1 FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled'").get(x.id));
       if (!twin) continue;
       db.prepare('UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0 WHERE id = ?').run(twin.id, a.line_id);

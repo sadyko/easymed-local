@@ -275,10 +275,13 @@ test('строка, уже закрытая регистратурой, втор
   t.after(() => { server.close(); sqlite.close(); });
   const cookie = await login(base);
   const { pat, svc, svc2 } = await seed(base);
-  await bookRequest(base, cookie, { patientId: pat.id, lines: [
-    { serviceId: svc.id,  date: '2026-08-20', status: 'done' },
+  const { lines } = await bookRequest(base, cookie, { patientId: pat.id, lines: [
+    { serviceId: svc.id,  date: '2026-08-20' },
     { serviceId: svc2.id, date: '2026-08-20' },
   ] });
+  // CRM_UNIFY_V1 — строку закрывает только приход (crm/visit-status.js), дверь
+  // /api/db 'done' не ставит (booking-mirror-db.js): закрытая строка — прямо в базе.
+  sqlite.prepare("UPDATE crm_request_services SET status = 'done' WHERE id = ?").run(lines[0].id);
 
   const hit = await prefill(base, cookie, pat.id, '2026-08-20');
   assert.equal(hit.length, 1, 'оплаченная услуга подставилась в смету второй раз');
@@ -294,9 +297,12 @@ test('attaching the service closes the request, so the no-show sweep cannot clai
 
   // closeCrmLines() после того, как услуги легли в визит: строки → 'done',
   // родитель → «Пришёл», потому что ждать в нём больше нечего.
+  // CRM_UNIFY_V1 — строку закрывает только приход (crm/visit-status.js, когда
+  // услуга уже в визите): дверь /api/db 'done' не ставит, закрытие — прямо в базе.
   const doneLines = await db(base, cookie, { table: 'crm_request_services', op: 'update',
     values: { status: 'done' }, filters: [{ col: 'id', op: 'in', val: lines.map((l) => l.id) }] });
-  assert.equal(doneLines.status, 200, JSON.stringify(doneLines.json));
+  assert.equal(doneLines.status, 409, 'экран закрыл строку заявки сам: ' + JSON.stringify(doneLines.json));
+  for (const l of lines) sqlite.prepare("UPDATE crm_request_services SET status = 'done' WHERE id = ?").run(l.id);
   const left = await db(base, cookie, { table: 'crm_request_services', op: 'select', columns: 'id',
     filters: [{ col: 'request_id', op: 'eq', val: request.id }, { col: 'status', op: 'eq', val: 'pending' }], order: [] });
   assert.equal(left.json.data.length, 0, 'в заявке не должно остаться ожидающих строк');
@@ -328,9 +334,9 @@ test('заявка на три дня переживает первый визи
     { serviceId: svc2.id, date: '2026-08-24' },
   ] });
 
-  // Закрыли ТОЛЬКО строку первого дня.
-  await db(base, cookie, { table: 'crm_request_services', op: 'update',
-    values: { status: 'done' }, filters: [{ col: 'id', op: 'in', val: [lines[0].id] }] });
+  // Закрыли ТОЛЬКО строку первого дня. CRM_UNIFY_V1 — закрывает только приход,
+  // не дверь /api/db: закрытие — прямо в базе.
+  sqlite.prepare("UPDATE crm_request_services SET status = 'done' WHERE id = ?").run(lines[0].id);
   const left = await db(base, cookie, { table: 'crm_request_services', op: 'select', columns: 'id',
     filters: [{ col: 'request_id', op: 'eq', val: request.id }, { col: 'status', op: 'eq', val: 'pending' }], order: [] });
   assert.equal(left.json.data.length, 1, 'в заявке ещё есть ожидающая строка — закрывать саму заявку нельзя');

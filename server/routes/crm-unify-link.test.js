@@ -59,11 +59,13 @@ test('по телефону — только если номер у ОДНОЙ �
 
 // CRM_UNIFY_V1 (ревью задачи 1) — карточке 60 дней: прежний attachVisitToCrm брал
 // у колл-центра только заявку моложе 30 дней и заводил дубль; шаг C берёт
-// открытую карточку пациента без строк любой давности.
+// открытую карточку пациента, ждущую этот день, любой давности. CRM_UNIFY_V1
+// (проверка ревью задачи 3, P3) — у карточки дата этого дня: без строк и без
+// даты она ждала бы прихода только в окне повторного обращения (72 ч).
 test('запись оператора Б двигает карточку оператора А на сервере, но ответ записи о ней молчит', async () => {
   const t = await startCrmApp();
   try {
-    const rid = addLead(t.db, { assigned: 3, name: 'Секретная Карточка', updated: daysAgoIso(60) });
+    const rid = addLead(t.db, { assigned: 3, name: 'Секретная Карточка', date: D, updated: daysAgoIso(60) });
     const b = await t.rpc('calendar_book', 'cc2', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
     assert.equal(b.status, 200, b.text);
     assert.equal(t.lead(rid).status, 'scheduled', 'карточка не узнала о записи, потому что её ведёт другой оператор');
@@ -110,7 +112,8 @@ test('регистратура: пациент без карточки карт�
 test('booking_lines_add колл-центра к записи регистратуры находит открытую карточку пациента', async () => {
   const t = await startCrmApp();
   try {
-    const old = addLead(t.db, { updated: daysAgoIso(60) });
+    // CRM_UNIFY_V1 (P3) — карточка этого дня: давняя без строк и даты прихода не ждёт.
+    const old = addLead(t.db, { date: D, updated: daysAgoIso(60) });
     const b = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
     const vid = b.json.data.visit.id;
     const add = await t.rpc('booking_lines_add', 'cc', { visit_id: vid, patient_id: 77, lines: [{ service_id: 40 }] });
@@ -128,7 +131,8 @@ test('запись врача: пациент без карточки её не 
     const b1 = await t.rpc('calendar_book', 'doc', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
     assert.equal(b1.status, 200, b1.text);
     assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 0, 'врач завёл карточку пришедшему без звонка');
-    const old = addLead(t.db, { updated: daysAgoIso(60) });
+    // CRM_UNIFY_V1 (P3) — карточка этого дня: давняя без строк и даты прихода не ждёт.
+    const old = addLead(t.db, { date: D2, updated: daysAgoIso(60) });
     const b2 = await t.rpc('calendar_book', 'doc', { patient_id: 77, doctor_id: 10, start: at(D2, 9), duration_minutes: 30 });
     assert.equal(b2.status, 200, b2.text);
     assert.deepEqual([t.lead(old).status, t.lead(old).scheduled_date], ['scheduled', D2]);

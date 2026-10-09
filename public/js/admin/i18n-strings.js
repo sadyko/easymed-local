@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CRM_UNIFY_V1 (2026-10-09) — строку заявки закрывает только приход (services/crm/booking-mirror-db.js)
+  "Строку заявки закрывает приход пациента, когда услуга уже в визите, — вручную её не закрывают.": {"en":"A request line is closed by the patient's arrival once the service is on the visit — it is not closed by hand.","ru":"Строку заявки закрывает приход пациента, когда услуга уже в визите, — вручную её не закрывают.","uz":"So‘rov qatorini bemorning kelishi yopadi, xizmat tashrifda bo‘lganda — uni qo‘lda yopishmaydi."},   // CRM_UNIFY_V1
   // CRM_UNIFY_V1 (2026-10-09) — задачи CRM: ответственный обязан видеть карточку (services/crm/tasks-follow.js)
   "Ответственным можно назначить только того, кто видит эту карточку: её оператора или руководителя.": {"en":"Only someone who can see this card can be made responsible: its operator or a supervisor.","ru":"Ответственным можно назначить только того, кто видит эту карточку: её оператора или руководителя.","uz":"Mas’ul qilib faqat bu kartochkani ko‘radigan xodimni tayinlash mumkin: uning operatorini yoki rahbarni."},   // CRM_UNIFY_V1
   "Задачи CRM вам недоступны.": {"en":"CRM tasks are not available to you.","ru":"Задачи CRM вам недоступны.","uz":"CRM vazifalari sizga ochiq emas."},   // CRM_UNIFY_V1

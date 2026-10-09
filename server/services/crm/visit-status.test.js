@@ -20,10 +20,16 @@ import { recordPayment, markInvoiceDebt, createInvoiceForVisit } from '../rpc/bi
 // смениться: порция обмена от соседнего здания (branch-sync/records.js).
 import { applyBatch } from '../branch-sync/records.js';
 
+// CRM_UNIFY_V1 (проверка ревью задачи 3) — ИНВАРИАНТ: строка заявки закрывается
+// ('done'), только если её услуга действительно в визите. Поэтому строки здесь —
+// с услугой (90, анализ): приход ставит её в визит (placeHeldLines) и только
+// тогда закрывает. Прежде строки были без услуги и закрывались без строки визита.
+const LINE_SVC = 90;
 function freshDb() {
   const db = openDb(':memory:');
   migrate(db);
   db.prepare("INSERT INTO patients (id, full_name) VALUES (1,'Пациент')").run();
+  db.prepare("INSERT INTO services (id, name, price, type, is_lab) VALUES (?, 'Анализ (заявка)', 30000, 'lab', 1)").run(LINE_SVC);
   return db;
 }
 const addVisit = (db, date = '2026-08-09T09:00:00Z', status = 'scheduled') =>
@@ -31,10 +37,13 @@ const addVisit = (db, date = '2026-08-09T09:00:00Z', status = 'scheduled') =>
 const addReq = (db, { status = 'scheduled', date = null, name = 'Лид' } = {}) =>
   db.prepare('INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date) VALUES (?,?,?,1,?)')
     .run(name, '998900000000', status, date).lastInsertRowid;
-const addLine = (db, requestId, { date = null, status = 'pending', visit = null } = {}) =>
-  db.prepare('INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status, visit_id) VALUES (?,NULL,?,?,?)')
-    .run(requestId, date, status, visit).lastInsertRowid;
+const addLine = (db, requestId, { date = null, status = 'pending', visit = null, svc = LINE_SVC } = {}) =>
+  db.prepare('INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status, visit_id) VALUES (?,?,?,?,?)')
+    .run(requestId, svc, date, status, visit).lastInsertRowid;
 const line = (db, id) => db.prepare('SELECT status, visit_id FROM crm_request_services WHERE id=?').get(id);
+/** Строка визита, которую держит строка заявки (null — услуги в визите нет). */
+const lineVs = (db, id) => db.prepare(`SELECT vs.visit_id, vs.service_id, vs.status FROM crm_request_services l
+                                         JOIN visit_services vs ON vs.id = l.visit_service_id WHERE l.id = ?`).get(id) || null;
 const reqRow = (db, id) => db.prepare('SELECT status, scheduled_date FROM crm_requests WHERE id=?').get(id);
 
 test('словарь прихода — это статус визита «arrived», и он один', () => {
@@ -52,7 +61,27 @@ test('пришёл: строки визита закрываются, заявк
   crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
 
   assert.equal(line(db, lid).status, 'done', 'пациент пришёл, а строка заявки так и ждёт');
+  // CRM_UNIFY_V1 (инвариант) — строка закрыта, потому что её услуга в визите.
+  assert.deepEqual(lineVs(db, lid), { visit_id: vid, service_id: LINE_SVC, status: 'added' },
+    'строка закрыта, а услуги в визите нет — касса её не увидит');
   assert.equal(reqRow(db, rid).status, 'came', 'ждать больше нечего, а конверсии нет');
+  db.close();
+});
+
+// CRM_UNIFY_V1 (проверка ревью задачи 3) — ИНВАРИАНТ: услугу, которую в визит
+// поставить нельзя (снята с продажи), приход не закрывает — строка ждёт; карточка
+// при этом закрывается (ступень от строк не зависит).
+test('CRM_UNIFY_V1: строка без услуги в визите приходом не закрывается — ждёт; карточка закрыта', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO services (id, name, price, type, active) VALUES (91, 'Снятая', 10000, 'procedure', 0)").run();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid, svc: 91 });
+
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
+
+  assert.deepEqual([line(db, lid).status, lineVs(db, lid)], ['pending', null], 'строка закрыта без услуги в визите');
+  assert.equal(reqRow(db, rid).status, 'came');
   db.close();
 });
 
@@ -342,8 +371,10 @@ test('приход, приехавший из соседнего здания, �
   applyBatch(db, [put('visits', 'v1', stamp(T0 + 2000), { status: 'arrived' })], { self: 'B' });
 
   assert.equal(db.prepare('SELECT status FROM visits WHERE id=?').get(vid).status, 'arrived');
-  assert.equal(line(db, lid).status, 'done',
-    'приход отмечен в соседнем здании, а строка заявки так и ждёт');
+  // CRM_UNIFY_V1 (инвариант) — услуги этой строки в визите соседнего здания нет,
+  // а ставить её туда отсюда нельзя (BRANCH_MONEY_GUARD_V1): строка ждёт, а не
+  // закрывается без услуги. Карточка закрывается — ступень от строк не зависит.
+  assert.equal(line(db, lid).status, 'pending', 'строка закрыта без услуги в визите');
   assert.equal(reqRow(db, rid).status, 'came',
     'заявка осталась в «Записан»: ночная автоматика унесёт дошедшего пациента в «Не пришёл»');
   db.close();
@@ -589,8 +620,9 @@ test('оплата, приехавшая из соседнего здания, �
 
   assert.equal(db.prepare("SELECT paid_amount FROM invoices WHERE uid = 'i9'").get().paid_amount, 100000,
     'платёж не доехал — проверять нечего');
-  assert.equal(line(db, lid).status, 'done',
-    'пациент заплатил в соседнем здании, а строка заявки так и ждёт');
+  // CRM_UNIFY_V1 (инвариант) — в визите соседнего здания этой услуги нет:
+  // строка ждёт, карточка закрыта.
+  assert.equal(line(db, lid).status, 'pending', 'строка закрыта без услуги в визите');
   assert.equal(reqRow(db, rid).status, 'came',
     'заявка осталась открытой: деньги приехали, а воронка их не заметила');
   db.close();
@@ -610,7 +642,9 @@ test('работа над услугой, приехавшая из соседн
   const rid = db.prepare(
     "INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date) VALUES (?,?,?,?,?)",
   ).run('Лид', '998900000008', 'scheduled', pid, '2026-08-09').lastInsertRowid;
-  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  // CRM_UNIFY_V1 (инвариант) — строка заявки на ту же услугу (31), что приехала в
+  // визите соседа: приход берёт её строку визита и только тогда закрывает строку.
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid, svc: 31 });
 
   applyBatch(db, [put('visit_services', 'vs8', stamp(T0 + 2000), { quantity: 1, status: 'added' }, { visit_id: 'v8', service_code: 'A1' })], { self: 'B' });
   assert.equal(line(db, lid).status, 'pending', 'строка в смете — это ещё не работа над пациентом');
@@ -618,6 +652,9 @@ test('работа над услугой, приехавшая из соседн
   applyBatch(db, [put('visit_services', 'vs8', stamp(T0 + 3000), { status: 'completed' }, { visit_id: 'v8' })], { self: 'B' });
 
   assert.equal(line(db, lid).status, 'done', 'услугу выдали в соседнем здании, а строка заявки так и ждёт');
+  assert.deepEqual(lineVs(db, lid), { visit_id: vid, service_id: 31, status: 'completed' }, 'строка закрыта без услуги в визите');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(vid).n, 1,
+    'в визит соседнего здания поставлена строка отсюда');
   assert.equal(reqRow(db, rid).status, 'came');
   db.close();
 });

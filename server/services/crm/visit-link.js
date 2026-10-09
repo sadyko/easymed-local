@@ -200,18 +200,27 @@ export function phoneLeadCandidates(db, key, open) {
 /**
  * Ждёт ли заявка ЭТОТ приход: без ждущих строк, или дата / строка на этот день.
  * Строка без даты («когда придёт») считается, только если undated.
+ *
+ * CRM_UNIFY_V1 (проверка ревью задачи 3, P3) — заявка БЕЗ ждущих строк и БЕЗ
+ * даты ждёт прихода только в окне повторного обращения (updated_at, иначе
+ * created_at; windowHours, 72 ч) — на любой двери записи и регистрации, как у
+ * стойки (deskCloses) и правила прихода (settleLineless). Трёхмесячный «Новый
+ * лид» — о другом обращении: запись его не берёт, и оплата потом не закрывает.
+ * Заявка с датой или со строками — по-прежнему, любой давности.
  */
-export function waitsForDay(db, requestId, day, { undated = false } = {}) {
+export function waitsForDay(db, requestId, day, { undated = false, hours = windowHours(db) } = {}) {
   const undatedSql = undated ? "l.scheduled_date IS NULL OR l.scheduled_date = '' OR " : '';
   return !!db.prepare(`
     SELECT 1 FROM crm_requests r
      WHERE r.id = ?
-       AND (NOT EXISTS (SELECT 1 FROM crm_request_services l WHERE l.request_id = r.id AND l.status = 'pending')
+       AND ((NOT EXISTS (SELECT 1 FROM crm_request_services l WHERE l.request_id = r.id AND l.status = 'pending')
+             AND ((r.scheduled_date IS NOT NULL AND r.scheduled_date <> '')
+                  OR julianday(COALESCE(NULLIF(r.updated_at, ''), r.created_at)) >= julianday('now', ?)))
             OR date(r.scheduled_date) = date(?)
             OR EXISTS (SELECT 1 FROM crm_request_services l
                         WHERE l.request_id = r.id AND l.status = 'pending'
                           AND (${undatedSql}date(l.scheduled_date) = date(?))))`)
-    .get(requestId, day, day);
+    .get(requestId, `-${Number(hours) || 72} hours`, day, day);
 }
 
 /**
@@ -298,8 +307,11 @@ export function crmLinkVisit(db, visitId, user, { undated = false, desk = false 
  *      строками визита ('added'), как у ensure_visit до задачи 3, — касса их
  *      видит. Закрой правило прихода строки раньше, зеркало сочло бы визит
  *      пришедшим и молча оставило бы записанные услуги вне визита.
- *   2. Правило прихода (crmVisitStatus → 'arrived'): строки этого визита —
- *      'done', карточки — в конверсию (Р8, Р9, settleLineless).
+ *   2. Правило прихода (crmVisitStatus → 'arrived'): строки, которые зеркало
+ *      поставить не смогло (визит уже пришёл или при счёте), встают в визит
+ *      там же (placeHeldLines); 'done' — только строки, чья услуга в визите
+ *      (инвариант, проверка ревью задачи 3); карточки — в конверсию (Р8, Р9,
+ *      settleLineless).
  *   3. След: ступени, которые сменило правило прихода (например, «Не пришёл» →
  *      «Пришёл»), пишутся в crm_booking_undo, как и ступени шага G, —
  *      discard_empty_visit возвращает их вместе со строками.
