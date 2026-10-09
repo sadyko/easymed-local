@@ -9,9 +9,8 @@
 import { recordMessage, touchDevice } from './inbox.js';
 import { receiveMessage } from './receive.js';
 import { ensureProxyDevice } from './discover.js';
-import { buildOru, junkReason, normaliseProxyBarcode, PROXY_QUIET_PREFIX } from './lisproxy-form.js';
+import { buildOru, junkReason, normaliseProxyBarcode, worklistEntries, PROXY_QUIET_PREFIX } from './lisproxy-form.js';
 import { worklistLines } from './ingest.js';
-import { worklistEntries } from './lisproxy-form.js';
 
 /** Журнал строки, пока запрос не разобран: если процесс упал посреди — строка так и скажет. */
 export const JOURNAL_PENDING = 'LIS Proxy: запрос сохранён, разбор не завершён';
@@ -70,8 +69,7 @@ export function failJournal(db, id, err) {
 }
 
 /**
- * Разобрать запрос, уже записанный в журнал строкой id. Задачи 7–8 плана
- * наполняют разбор запросов; пока у них — прибор и ответ.
+ * Разобрать запрос, уже записанный в журнал строкой id.
  * @returns {{type:'text'|'json', body:any}}
  */
 export function handleProxyRequest(db, { id, peer = '', body = {}, now = new Date() } = {}) {
@@ -79,9 +77,12 @@ export function handleProxyRequest(db, { id, peer = '', body = {}, now = new Dat
   const method = methodOf(b);
   if (method === 'apiResultSave') return handleResult(db, { id, peer, body: b, now });
   if (method === 'apiOrderGet') return handleOrder(db, { id, peer, body: b });
-  const who = obj(b.order);
-  if (str(who.name).trim()) resolveDevice(db, id, { name: str(who.name), label: str(who.host), peer });
-  return fallbackReply(method);
+  if (method === 'apiBarcodeListGet') {
+    return quietQuery(db, { id, peer, who: obj(b.order),
+      detail: (reply) => 'LIS Proxy: запрос всех проб (apiBarcodeListGet) — пакетная загрузка выключена, ответ ' + reply });
+  }
+  return quietQuery(db, { id, peer, who: b.order ? obj(b.order) : obj(b.lisResult),
+    detail: (reply) => 'LIS Proxy: незнакомый запрос «' + (method || '(нет method)') + '» — ответ ' + reply });
 }
 
 /** Прибор запроса: найти или завести (discover.js), записать в журнал, «на связи» — на каждом запросе. */
@@ -171,4 +172,18 @@ function handleOrder(db, { id, peer, body }) {
   recordMessage(db, { id, deviceId: d ? d.id : null, peer, raw: '', sampleId, status: 'unmatched', detail, kind: 'query', resolved: true });
   db.prepare('UPDATE lab_device_messages SET reply_body = ? WHERE id = ?').run(replyText(out), id);
   return out;
+}
+
+/**
+ * apiBarcodeListGet и незнакомый method: ORDER_NOT_FOUND и строка журнала (Р19, Р26).
+ * detail(reply) — текст журнала с ответом, как он ушёл по проводу.
+ */
+function quietQuery(db, { id, peer, who: w, detail }) {
+  const name = str(w.name).trim();
+  const who = name ? resolveDevice(db, id, { name, label: str(w.host), peer }) : { device: null, moved: null };
+  const reply = replyText(ORDER_NOT_FOUND);
+  recordMessage(db, { id, deviceId: who.device ? who.device.id : null, peer, raw: '', sampleId: '', status: 'unmatched',
+    detail: detail(reply) + movedNote(who.moved), kind: 'query', resolved: true });
+  db.prepare('UPDATE lab_device_messages SET reply_body = ? WHERE id = ?').run(reply, id);
+  return ORDER_NOT_FOUND;
 }
