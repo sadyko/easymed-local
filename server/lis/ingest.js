@@ -33,7 +33,8 @@ import { decimalPoint } from './wire.js';   // LIS_VENDOR_EXACT_V1 (D0) — де
 import { readEnvelope } from './wire.js';   // LIS_VENDOR_EXACT_V1 (п. 6) — служебное сообщение к пациенту не идёт и при прямом вызове
 import { planTube, tubeOutcome, heldChangeText, resentText } from './match.js';   // LIS_VENDOR_EXACT_V1 — D3 (пробирка — услуги визита) и N1 (повтор)
 import { getProfile } from './profiles/index.js';
-import { PROXY_NOT_TUBE } from './lisproxy-form.js';   // LIS_PROXY_V1
+import { PROXY_NOT_TUBE, PROXY_QUIET_PREFIX } from './lisproxy-form.js';   // LIS_PROXY_V1
+import { unusedText } from './match.js';   // LIS_PROXY_V1 — справка гематологии
 import { LAB_RESULT_STATUSES } from '../services/visit-status-guard.js';   // LIS_REAL_ANALYZERS_V1 — ревью R7, п. 1: ворота лаборатории, общие с ручным вводом
 import { today, localDate } from '../services/domain/day.js';
 
@@ -1136,7 +1137,10 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   }
 
   // LIS_REAL_ANALYZERS_V1_SERIES — прибор шлёт по тесту в сообщении.
-  const oneTest = !!(profile && profile.oneTestPerMessage);
+  // LIS_PROXY_V1 — LIS Proxy шлёт одно значение в запросе при любой модели: серия всегда.
+  const oneTest = proxy || !!(profile && profile.oneTestPerMessage);
+  // LIS_PROXY_V1 (Р14) — гематология за LIS Proxy: лишний показатель — справка, а не лоток.
+  const heme = !!(profile && profile.kind === 'hematology');
   // LIS_VENDOR_EXACT_V1 (D3) — о каком заказе говорит сообщение: о заказе
   // пробирки — всегда, если других нет; при других — если ему досталась
   // строка прибора, а у прибора без серии и тогда, когда его подтверждённые
@@ -1165,6 +1169,16 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       }
       const plan = tube.plans[k];
       const seriesOn = oneTest && plan.fills.length > 0;
+      // LIS_PROXY_V1 (Р14) — гематология через LIS Proxy: значение, которое ничего не
+      // заполнило и ни на что не претендует (не подтверждено, не повтор) — только
+      // «не использованы». На своём порту такие строки — справка в принятом
+      // сообщении (правило владельца 2026-09-28); по одному значению в запросе
+      // каждая была бы строкой лотка на каждую пробирку. Строка — разрешённая
+      // справка; бланк судит серия. BS-200 и AutoLumo — как свой порт: в лоток.
+      if (proxy && heme && !fanned && k === 0 && !plan.fills.length && !plan.unconfirmed.length && !plan.repeats.length && plan.unused.length) {
+        Object.assign(report, { status: 'unmapped', detail: PROXY_QUIET_PREFIX + unusedText(plan.unused), pending: false, open: true, quiet: true });
+        return;
+      }
       // LIS_VENDOR_EXACT_V1 (N1) — у прибора без серии новое сообщение МЕНЯЕТ
       // значение прибора в черновике заказа (приёмка: WBC 5.40 → 14.20
       // пробирки с чужим автономером — молча, без строки в лотке): в этот
@@ -1224,7 +1238,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       // Сообщение, из которого в бланк не легло ничего, — правило одного
       // сообщения, как прежде, и в серию оно не входит.
       if (seriesOn) {
-        const who = { orderId: O.id, deviceId, perInstrument: !!s.pi, profileKey: device.profile };   // ревью R2, п. 1; R4, п. A
+        const who = { orderId: O.id, deviceId, perInstrument: proxy || !!s.pi, profileKey: device.profile };   // ревью R2, п. 1; R4, п. A; LIS_PROXY_V1 — серия LIS Proxy — по строке прибора
         const { members, overflow } = seriesMembers(db, { ...who, profile, analytes: s.analytes });
         if (overflow) {
           // Ревью R2, п. 9 — серия не растёт без предела: сверх потолка она не
@@ -1283,7 +1297,8 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       detail = t.pending ? SERIES_PENDING_PREFIX + t.detail : t.detail;
     }
     const linked = reports.length === 1 && reports[0].k > 0 ? reports[0].orderId : order.id;
-    const id = record({ ...base, visitServiceId: linked, status, detail, disputes: disputes.length ? JSON.stringify(disputes) : null });
+    const quiet = !fanned && !!reports[0].quiet;   // LIS_PROXY_V1 (Р14) — справка разрешена сразу
+    const id = record({ ...base, visitServiceId: linked, status, detail, disputes: disputes.length ? JSON.stringify(disputes) : null, resolved: quiet });
     // Ревью R4, п. B — у записанного — номер этой строки лотка.
     for (const rid of writtenIds) db.prepare('UPDATE lab_results SET source_message_id = ? WHERE id = ?').run(id, rid);
     for (const m of accepted) {
