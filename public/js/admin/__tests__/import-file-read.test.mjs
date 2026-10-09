@@ -77,3 +77,50 @@ test('.xlsx: числовые ячейки читаются числами, ка
     assert.strictEqual(row.payload.tax_rate, 12);
     assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
 });
+
+// CLINIC_API_FIX_V1 (ревью итога) — ЯЧЕЙКА В ПРОЦЕНТНОМ ФОРМАТЕ EXCEL. «40%»,
+// набранное в Excel, хранится числом 0,4 и только показывается «40%». Импорт
+// брал 0,4: доля исполнителя 0,4 %, НДС 0,12 %, ступень 0,45 % — со статусом
+// «готово». Теперь такая ячейка доходит до правила числа как «40%»: колонка
+// процентов читает 40, колонка не процентов («цена») — отказывает.
+function xlsxWith(header, cells) {
+    const ws = XLSX.utils.aoa_to_sheet([header, cells.map((c) => (c && typeof c === 'object' ? c.v : c))]);
+    cells.forEach((c, i) => { if (c && typeof c === 'object') ws[XLSX.utils.encode_cell({ r: 1, c: i })].z = c.z; });
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Services');
+    return XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+}
+
+test('.xlsx в процентном формате: 40% — 40, 12% — 12, 45,0% — 45, а не 0,4 / 0,12 / 0,45', () => {
+    const buf = xlsxWith(['name', 'group', 'price', 'tax_rate', 'default_doctor_percent', 'doctor_tier_from', 'doctor_tier_percent'],
+        ['Приём кардиолога', 'Консультация', 150000, { v: 0.12, z: '0%' }, { v: 0.4, z: '0%' }, 10, { v: 0.45, z: '0.0%' }]);
+    const raw = readSheetRows(XLSX, buf, 'services');
+    assert.strictEqual(raw[0].default_doctor_percent, '40%');
+    assert.strictEqual(raw[0].price, 150000, 'обычная числовая ячейка — число, как раньше');
+    const [row] = rowsOf(buf, 'services', UPDATE());
+    assert.strictEqual(row.payload.tax_rate, 12);
+    assert.strictEqual(row.payload.default_doctor_percent, 40);
+    assert.strictEqual(row.payload.doctor_tier_from, 10);
+    assert.strictEqual(row.payload.doctor_tier_percent, 45);
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+});
+
+test('.xlsx в процентном формате без дробной части: 12,5% показано «13%», а читается 12,5', () => {
+    const buf = xlsxWith(['name', 'group', 'price', 'default_doctor_percent'], ['Приём кардиолога', 'Консультация', 150000, { v: 0.125, z: '0%' }]);
+    const [row] = rowsOf(buf, 'services', UPDATE());
+    assert.strictEqual(row.payload.default_doctor_percent, 12.5);
+});
+
+test('.xlsx: процентный формат в цене — не число (у обновляемой цена остаётся, новая не ввозится)', () => {
+    const buf = xlsxWith(['name', 'group', 'price'], ['Приём кардиолога', 'Консультация', { v: 0.5, z: '0%' }]);
+    const [upd] = rowsOf(buf, 'services', UPDATE());
+    assert.ok(!('price' in upd.payload), 'цена записана: ' + JSON.stringify(upd.payload.price));
+    assert.ok(upd.notes.some((n) => String(n).includes('«50%»')), JSON.stringify(upd.notes));
+    const [fresh] = rowsOf(buf, 'services');
+    assert.strictEqual(fresh.status, 'error');
+});
+
+test('.xlsx: знак % как подпись в формате (0"%") — число не умножается на 100', () => {
+    const buf = xlsxWith(['name', 'group', 'price', 'default_doctor_percent'], ['Приём кардиолога', 'Консультация', 150000, { v: 40, z: '0"%"' }]);
+    const [row] = rowsOf(buf, 'services', UPDATE());
+    assert.strictEqual(row.payload.default_doctor_percent, 40);
+});

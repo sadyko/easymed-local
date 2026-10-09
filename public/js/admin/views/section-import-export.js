@@ -1784,15 +1784,43 @@ export function readSheetRows(XLSX, buf, section) {
     // числа (readImportNumber): «150.000» → 150, «1,500» → 1500, «12,5» → 125
     // (и в CSV с «;» из русского Excel), «40%» → 0,4 — со статусом «готово» и
     // без слова. Числовые ячейки .xlsx читаются числами, как и раньше.
-    const wb = XLSX.read(buf, { type: 'array', raw: true });
+    // cellNF — формат ячейки (z): по нему узнаётся процентный формат.
+    const wb = XLSX.read(buf, { type: 'array', raw: true, cellNF: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
     if (!ws) throw new Error('В книге нет ни одного листа.');
+    percentCellsAsText(ws);
     // PROCUREMENT_IMPORT_V1 — warehouse exports carry a title + blank
     // row above the real header, so `headerRow: 'auto'` scans the
     // first rows for the one matching the most known column names.
     let rows = (cfg && cfg.headerRow === 'auto') ? _rowsWithDetectedHeader(ws, XLSX, cfg) : null;
     if (!rows) rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
     return rows;
+}
+
+// CLINIC_API_FIX_V1 (ревью итога) — ЯЧЕЙКА В ПРОЦЕНТНОМ ФОРМАТЕ EXCEL.
+// «40%», набранное в Excel, хранится числом 0,4 и только ПОКАЗЫВАЕТСЯ «40%».
+// Импорт брал 0,4: доля исполнителя 0,4 %, НДС 0,12 %, ступень 0,45 % — со
+// статусом «готово». Теперь такая ячейка уходит к правилу числа текстом
+// «40%» из ЗНАЧЕНИЯ (v × 100), а не из показанного текста: формат «0%»
+// показывает 12,5 % как «13%». Колонка процентов читает 40; колонка не
+// процентов («цена») отказывает, как любому «…%». Процентный формат — знак %
+// в формате ячейки вне кавычек (0"%" — просто подпись, число не умножается);
+// формата нет — по показанному тексту.
+function isPercentFormat(cell) {
+    if (cell.z != null && cell.z !== '') {
+        return /%/.test(String(cell.z).replace(/"[^"]*"/g, '').replace(/\\./g, ''));
+    }
+    return /%\s*$/.test(String(cell.w || ''));
+}
+function percentCellsAsText(ws) {
+    for (const addr of Object.keys(ws)) {
+        if (addr[0] === '!') continue;
+        const cell = ws[addr];
+        if (!cell || cell.t !== 'n' || !Number.isFinite(cell.v) || !isPercentFormat(cell)) continue;
+        const text = String(+(cell.v * 100).toFixed(10)) + '%';
+        cell.t = 's'; cell.v = text; cell.w = text;
+        delete cell.z;
+    }
 }
 
 // PROCUREMENT_IMPORT_V1 — find the real header row inside the first rows of
