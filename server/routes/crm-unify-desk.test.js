@@ -435,18 +435,22 @@ test('R5: старая карточка, привязанная к этому в
 // пропущенной записи. Пациент, пришедший на день позже, — тот же приход: стойка
 // закрывает сидовую «Не пришёл», которая двигалась в окне повторного обращения
 // (тем же правилом deskCloses, что и живые). Давний «Не пришёл» — история.
+// CRM_UNIFY_V1 (ревью задач 5–6, I-5) — ОБНОВЛЕНО НАМЕРЕННО: «Не пришёл» проход ставит без
+// движения карточки, поэтому опоздание считается и по ПРОПУЩЕННОМУ ДНЮ (дата карточки не
+// раньше окна назад): записанный три недели назад и опоздавший на день — «Пришёл».
+// Давний — и давно двигался, и давно пропустил.
 test('стойка: «Не пришёл» в пределах окна (пришёл на день позже) — «Пришёл»; давний «Не пришёл» — не трогается', async () => {
-  for (const [ago, want] of [[0, 'came'], [1, 'came'], [10, 'no_show']]) {
+  for (const [ago, date, want] of [[0, -1, 'came'], [1, -1, 'came'], [21, -1, 'came'], [10, -10, 'no_show']]) {
     const t = await startCrmApp();
     try {
-      const rid = addLead(t.db, { status: 'no_show', date: localDay(-1), updated: daysAgoIso(ago) });
+      const rid = addLead(t.db, { status: 'no_show', date: localDay(date), updated: daysAgoIso(ago) });
       const stopped = addLead(t.db, { status: 'stopped', updated: daysAgoIso(ago), name: 'Отказ' });
       const r = await desk(t);
       assert.equal(r.status, 200, r.text);
-      assert.equal(t.lead(rid).status, want, `${ago} дн. назад`);
+      assert.equal(t.lead(rid).status, want, `${ago} дн. назад, пропущен день ${date}`);
       assert.equal(t.lead(stopped).status, 'stopped', 'стойка открыла «Отказ»');
       if (want === 'came') {
-        assert.equal(t.lead(rid).scheduled_date, localDay(-1), 'дата карточки переписана');
+        assert.equal(t.lead(rid).scheduled_date, localDay(date), 'дата карточки переписана');
         const d = await t.rpc('discard_empty_visit', 'reg', { visit_id: r.json.data.visit.id });
         assert.equal(d.status, 200, d.text);
         assert.equal(t.lead(rid).status, 'no_show', 'удаление пустого визита не вернуло «Не пришёл»');

@@ -178,8 +178,10 @@ test('an operator already working the lead by hand blocks the call from adding a
 // CRM_UNIFY_V1 — UPDATED ON PURPOSE: the closed card is now dated outside the
 // repeat-contact window. Inside the window a closed card blocks a new one and
 // is left alone (Р5 — see the CRM_UNIFY_V1 tests at the end of this file).
+// CRM_UNIFY_V1 (ревью задач 5–6, I-3) — UPDATED ON PURPOSE: the seeded «Не пришёл»
+// is not a closed card any more — after the window it goes back to the start (below).
 test('a CLOSED lead does not block a new one after the repeat-contact window (CRM_UNIFY_V1)', () => {
-  for (const status of ['came', 'no_show', 'stopped', 'not_qualified']) {
+  for (const status of ['came', 'stopped', 'not_qualified']) {
     const db2 = fresh();
     const old = agoIso(10);
     db2.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at, created_at) VALUES ('Прошлый','998909610004','call',?,?,?)").run(status, old, old);
@@ -388,9 +390,11 @@ test('phone key: last nine only for a whole Uzbek number — +7 991… and +998 
 // Р2–Р5) для ВХОДЯЩЕГО звонка. Исходящий — как раньше (Р4).
 // --------------------------------------------------------------------------
 
+// CRM_UNIFY_V1 (ревью задач 5–6, I-3) — ОБНОВЛЕНО НАМЕРЕННО: «Не пришёл» — не закрытая
+// (её случаи — ниже и в unify-review-t5t6.test.js).
 test('CRM_UNIFY_V1: входящий в окне при закрытой карточке — новой нет, закрытая не тронута; после окна — новая', () => {
   for (const [when, want] of [[null, 1], [agoIso(2), 1], [agoIso(10), 2]]) {
-    for (const status of ['came', 'no_show', 'stopped']) {
+    for (const status of ['came', 'stopped']) {
       const db = fresh();
       const id = db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Прошлый','998909610004','call',?)").run(status).lastInsertRowid;
       if (when) db.prepare('UPDATE crm_requests SET updated_at = ?, created_at = ? WHERE id = ?').run(when, when, id);
@@ -440,6 +444,17 @@ test('CRM_UNIFY_V1: открытая после окна и свежая зак�
   recordCall(db, call({ callType: 0 }), 'poll');
   assert.equal(leads(db).length, 2);
   assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(open).status, 'in_process');
+});
+
+test('CRM_UNIFY_V1 (ревью, I-3): «Не пришёл» — не закрытая: в окне та же карточка, после окна — в начало, без дубля', () => {
+  for (const [when, want] of [[agoIso(1), 'no_show'], [agoIso(10), 'in_process']]) {
+    const db = fresh();
+    const id = db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at, created_at) VALUES ('Не пришёл','998909610004','call','no_show',?,?)")
+      .run(when, when).lastInsertRowid;
+    recordCall(db, call({ callType: 0 }), 'poll');
+    assert.equal(leads(db).length, 1, 'после неявки звонок завёл дубль');
+    assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(id).status, want);
+  }
 });
 
 test('CRM_UNIFY_V1: исходящий — как раньше: при любой карточке новой нет и существующая не двигается', () => {

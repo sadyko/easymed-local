@@ -108,7 +108,7 @@
 import { openStageKeys, scheduledStageKey, wonStageKey, windowHours, SEED_NO_SHOW_STAGE } from './config.js';
 // CRM_UNIFY_V1 (задача 6) — окно повторного обращения: одно правило «двигалась
 // ли карточка в окне» (inWindowSql) и одно решение по новому обращению.
-import { contactDecision, reopenLead, inWindowSql, windowArg } from './contact-window.js';
+import { contactDecision, reopenLead, inWindowSql, windowArg, leadInWindow, firstStageKey } from './contact-window.js';
 import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL, cardDateOf, mirrorVisit } from './booking-mirror.js';
 import { crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';
 import { hasAnyRole } from '../roles.js';   // CRM_UNIFY_V1 — стойка (deskArrival)
@@ -262,8 +262,17 @@ export function phoneLeadFor(db, patientId, open, day, { undated = false, accept
  * Спрашивать ДО того, как шаг связи тронул карточку (D ставит updated_at).
  * CRM_UNIFY_V1 (задача 6) — окно — одно правило (contact-window.js inWindowSql);
  * тем же правилом стойка закрывает и сидовую «Не пришёл» (шаг C).
+ *
+ * CRM_UNIFY_V1 (ревью задач 5–6, I-5) — у сидовой «Не пришёл» есть ещё одно
+ * основание: ПРОПУЩЕННЫЙ ДЕНЬ (дата карточки) не раньше, чем окно назад.
+ * «Не пришёл» проход ставит без движения карточки (updated_at прежний —
+ * обычно день записи, недели назад), и пациент, опоздавший на день, — это
+ * приход на назначенную запись, а не новое обращение (решение владельца 4).
+ * Карточка, пропущенная двести дней назад, — история: посторонний приход её не
+ * закрывает.
  */
 export function deskCloses(db, requestId, v, hours = windowHours(db)) {
+  const lateDays = Math.max(1, Math.ceil((Number(hours) > 0 ? Number(hours) : 72) / 24));
   return !!db.prepare(`
     SELECT 1 FROM crm_requests r
      WHERE r.id = ?
@@ -272,8 +281,10 @@ export function deskCloses(db, requestId, v, hours = windowHours(db)) {
                        AND (l.scheduled_date IS NULL OR l.scheduled_date = '' OR date(l.scheduled_date) = date(?)))
             OR date(r.scheduled_date) = date(?)
             OR EXISTS (SELECT 1 FROM crm_booking_links b WHERE b.request_id = r.id AND b.visit_id = ?)
-            OR ${inWindowSql('r')})`)
-    .get(requestId, v.day, v.day, v.id, windowArg(hours));   // CRM_UNIFY_V1 (задача 6) — одно правило окна
+            OR ${inWindowSql('r')}
+            OR (r.status = ? AND date(r.scheduled_date) BETWEEN date(?, ?) AND date(?)))`)
+    .get(requestId, v.day, v.day, v.id, windowArg(hours),   // CRM_UNIFY_V1 (задача 6) — одно правило окна
+      SEED_NO_SHOW_STAGE, v.day, `-${lateDays} days`, v.day);   // CRM_UNIFY_V1 (ревью, I-5) — опоздал на день
 }
 
 /**
@@ -388,12 +399,20 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   //    сегодня или двигались в окне повторного обращения.
   //    CRM_UNIFY_V1 (задача 6; Р8, Р11) — на стойке тем же правилом и сидовая
   //    «Не пришёл» (пришёл на день позже): двигалась в окне или ждёт сегодня.
-  const hours = desk ? windowHours(db) : 0;
+  //    CRM_UNIFY_V1 (ревью задач 5–6, I-3) — «Не пришёл» не закрытая: запись на
+  //    сегодня или позже берёт сидовую «Не пришёл», которая двигалась в окне, и
+  //    шаг G переводит её в «Колонку записи». Давнюю — нет (колл-центру её
+  //    возвращает в начало шаг E).
+  const hours = windowHours(db);
   const closes = (id) => deskCloses(db, id, v, hours);
-  const missed = (r) => desk && r.status === SEED_NO_SHOW_STAGE;
+  const rebook = !desk && v.day >= today(db);
+  const missed = (r) => r.status === SEED_NO_SHOW_STAGE && (desk || rebook);
   for (const r of mine) {
     if (touched.has(r.id) || (!open.includes(r.status) && !missed(r))) continue;
-    if (desk ? closes(r.id) : waitsForDay(db, r.id, v.day, { undated })) touched.set(r.id, 'patient');
+    const take = desk ? closes(r.id)
+      : open.includes(r.status) ? waitsForDay(db, r.id, v.day, { undated })
+        : leadInWindow(db, r.id, hours);
+    if (take) touched.set(r.id, 'patient');
   }
 
   // D. По телефону — одна заявка, только patient_id (на стойке — тем же
@@ -448,12 +467,17 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   const schedAt = scheduled ? open.indexOf(scheduled) : -1;
   const won = desk ? wonStageKey(db) : null;   // CRM_UNIFY_V1
   const read = db.prepare('SELECT id, status, scheduled_date FROM crm_requests WHERE id = ?');
+  // CRM_UNIFY_V1 (ревью, I-5) — updated_at двигается: запись и приход на стойке — контакт.
   const write = db.prepare(`UPDATE crm_requests SET status = ?, scheduled_date = ?, updated_at = ${NOW_SQL} WHERE id = ?`);
   for (const [id, via] of touched) {
     if (via === 'created') continue;
     const r = read.get(id);
-    // CRM_UNIFY_V1 (задача 6) — на стойке и сидовая «Не пришёл», взятая шагом C.
-    if (!r || (!open.includes(r.status) && !(desk && r.status === SEED_NO_SHOW_STAGE))) continue;
+    // CRM_UNIFY_V1 (задача 6; ревью задач 5–6, I-3) — и сидовая «Не пришёл»:
+    // на стойке — в «Пришёл»; записью на сегодня или позже — в «Колонку
+    // записи» (запись по такой карточке её и берёт). Запись прошлого дня
+    // (правка давнего визита) «Не пришёл» не трогает.
+    const missed = r && r.status === SEED_NO_SHOW_STAGE && (desk || rebook);
+    if (!r || (!open.includes(r.status) && !missed)) continue;
     let status = r.status;
     let when = r.scheduled_date;
     if (desk) {
@@ -461,6 +485,7 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
     } else {
       const at = open.indexOf(r.status);
       if (schedAt >= 0 && at >= 0 && at < schedAt) status = scheduled;
+      if (missed) status = scheduled || firstStageKey(db) || r.status;   // CRM_UNIFY_V1 (ревью, I-3)
       when = cardDateOf(db, id, v.day);   // CRM_UNIFY_V1 (ревью 3, D4) — одно правило со сверкой зеркала
     }
     const was = prevOf.get(id) || r;   // CRM_UNIFY_V1 (задача 6) — ступень до возврата в начало

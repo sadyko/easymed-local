@@ -26,8 +26,14 @@ test('открытая в окне — та же; открытая после о
   assert.deepEqual(decide(db, [b]), ['reopen', b]);
   const c = lead(db, 'came', 5);
   assert.deepEqual(decide(db, [c]), ['closed', c]);
+  // CRM_UNIFY_V1 (ревью задач 5–6, I-3) — ОБНОВЛЕНО НАМЕРЕННО: сидовая «Не пришёл»
+  // не закрытая — в окне та же, после окна возвращается в начало.
   const d = lead(db, 'no_show', 5);
-  assert.deepEqual(decide(db, [d]), ['closed', d], '«Не пришёл» — тоже закрытая');
+  assert.deepEqual(decide(db, [d]), ['same', d], '«Не пришёл» в окне — та же карточка');
+  const d2 = lead(db, 'no_show', 500);
+  assert.deepEqual(decide(db, [d2]), ['reopen', d2]);
+  const lost = lead(db, 'stopped', 5);
+  assert.deepEqual(decide(db, [lost]), ['closed', lost], '«Отказ» — закрытая');
   const e = lead(db, 'came', 100);
   assert.deepEqual(decide(db, [e]), ['new', null]);
   assert.deepEqual(decide(db, []), ['new', null]);
@@ -82,6 +88,9 @@ test('вернуть в начало — первая открытая ВИДИ�
   const r = db.prepare('SELECT status, updated_at FROM crm_requests WHERE id = ?').get(id);
   assert.equal(r.status, 'recall');
   assert.ok(r.updated_at > before, 'возврат не отмечен движением — окно не начнётся заново');
+  const missed = lead(db, 'no_show', 500);   // CRM_UNIFY_V1 (ревью, I-3) — «Не пришёл» возвращается
+  assert.equal(reopenLead(db, missed), true);
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(missed).status, 'recall');
   const won = lead(db, 'came', 500);
   assert.equal(reopenLead(db, won), false);
   assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(won).status, 'came', 'закрытая карточка открылась');

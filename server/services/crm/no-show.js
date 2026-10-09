@@ -24,6 +24,14 @@
 //     (в том числе в соседнем здании);
 //   • карточка «НА ДАТУ» без живой записи: дата прошла, и в этот день у
 //     пациента нет визита с доказательством прихода.
+//   • CRM_UNIFY_V1 (ревью задач 5–6, I-2) — «В ЭТОТ ДЕНЬ НЕ ПРИХОДИЛ» — ТОЛЬКО
+//     ЯСНО (clearlyAbsent): в день записи (каждый, у карточки «на дату» — её
+//     дата) ни у пациента, ни у карт с тем же ОСНОВНЫМ номером (phoneMatchKey,
+//     последние 9 цифр: дубль карты, ребёнок на номере мамы) нет живого визита
+//     с доказательством прихода (cameBy) или с ЛЮБЫМ счётом (и нулевым:
+//     бесплатный повторный приём), и нет госпитализации, поступившей в этот
+//     день. Ошибиться в сторону «не ставить» безопасно: карточка остаётся
+//     ждать, её разберёт оператор.
 // Доказательство прихода (cameBy) — отметка «Пришёл», деньги, работа, закрытые
 // строки, талон, товар (arrivedByEvidence) и ещё счёт по акту и долг у кассы
 // (rpc/billing.js зовёт по ним crmVisitEvidence: человек стоял у окна).
@@ -31,23 +39,29 @@
 // Предоплата мешает «Не пришёл», но приходом не считается (это решает
 // visit-status.js по дню визита).
 //
-// ДЕНЬГИ: меняется только ступень карточки (и updated_at — серверный переход
-// это движение карточки, Р2). Статус визита, строки заявки, визиты и счета
-// проход не трогает.
+// ДЕНЬГИ: меняется только ступень карточки. Статус визита, строки заявки,
+// визиты и счета проход не трогает.
+//
+// CRM_UNIFY_V1 (ревью задач 5–6, I-5) — updated_at НЕ МЕНЯЕТСЯ: «Не пришёл»,
+// поставленный сервером, — не контакт с пациентом. Иначе давняя карточка,
+// которую проход тронул при запуске, выглядела бы свежей для окна повторного
+// обращения (contact-window.js): звонок через час молча не заводил карточку, а
+// посторонний приход на стойку закрывал карточку двухсотдневной давности.
 //
 // САМОИСПРАВЛЕНИЕ: доказательство, пришедшее позже (вчерашний визит оплатили
 // сегодня, порция соседнего здания доехала через crmFromSync), поднимает «Не
-// пришёл» в «Пришёл» правилом прихода (visit-status.js): карточку с записью — по
-// строкам и привязке, карточку «на дату» — settleLineless по дню визита.
+// пришёл» в «Пришёл» правилом прихода (visit-status.js): по строкам и привязке
+// этого визита, и (ревью, I-1) любую сидовую «Не пришёл» пациента, чей день —
+// дата, ждущая строка или живая запись — этот день (liftMissed).
 //
 // При запуске и раз в час (server/index.js). Не бросает: ошибка — в лог.
 import { openStageKeys, noShowStageKey, scheduledStageKey, SEED_NO_SHOW_STAGE } from './config.js';
 import { arrivedByEvidence } from './booking-mirror.js';
 import { EVIDENCE_SERVICE_STATUSES } from './visit-status.js';   // CRM_UNIFY_V1 (задача 14) — cameSurely
 import { localDate, today } from '../domain/day.js';
+import { phoneMatchKey } from './visit-link.js';   // CRM_UNIFY_V1 (ревью, I-2) — одно правило номера
 
 const holes = (a) => a.map(() => '?').join(',');
-const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 // Мёртвый визит доказательством не бывает (visit-status.js DEAD_VISIT_STATUSES).
 const LIVE_VISIT_SQL = "status NOT IN ('cancelled', 'no_show')";
 
@@ -98,6 +112,48 @@ export function cameSurely(db, v) {
   } catch { return false; }   // сборка без 054
 }
 
+/**
+ * CRM_UNIFY_V1 (ревью задач 5–6, I-2) — «был ли пациент в клинике в этот день»
+ * в ШИРОКОМ смысле: если да — «Не пришёл» неясен и не ставится. Возвращает
+ * (pid, day) → boolean с кэшем на один проход. Карты с тем же основным номером
+ * собираются один раз за проход (все номера карт — одним чтением), и только
+ * если до них дошло.
+ */
+function presentOn(db) {
+  const visitsOn = db.prepare(`SELECT id, status FROM visits
+                                WHERE patient_id = ? AND ${localDate('visit_date')} = date(?) AND ${LIVE_VISIT_SQL}`);
+  const invoiced = db.prepare('SELECT 1 FROM invoices WHERE visit_id = ? LIMIT 1');
+  let admitted = null;
+  try {
+    admitted = db.prepare(`SELECT 1 FROM admissions WHERE patient_id = ? AND ${localDate('admitted_at')} = date(?) LIMIT 1`);
+  } catch { admitted = null; }   // сборка без стационара
+  const phoneOf = db.prepare('SELECT phone FROM patients WHERE id = ?');
+  let byKey = null;
+  const mates = (pid) => {
+    const p = phoneOf.get(pid);
+    const key = phoneMatchKey(p && p.phone);
+    if (!key) return [pid];
+    if (!byKey) {
+      byKey = new Map();
+      for (const r of db.prepare("SELECT id, phone FROM patients WHERE phone IS NOT NULL AND phone <> ''").all()) {
+        const k = phoneMatchKey(r.phone);
+        if (!k) continue;
+        if (!byKey.has(k)) byKey.set(k, []);
+        byKey.get(k).push(Number(r.id));
+      }
+    }
+    return [...new Set([Number(pid), ...(byKey.get(key) || [])])];
+  };
+  const here = (id, d) => (admitted && !!admitted.get(id, d))
+    || visitsOn.all(id, d).some((v) => cameBy(db, v) || !!invoiced.get(v.id));
+  const memo = new Map();
+  return (pid, d) => {
+    const k = pid + '|' + d;
+    if (!memo.has(k)) memo.set(k, here(pid, d) || mates(pid).some((id) => id !== Number(pid) && here(id, d)));
+    return memo.get(k);
+  };
+}
+
 /** Один проход. Возвращает id карточек, ушедших в «Не пришёл». */
 export function crmNoShowSweep(db, { day = null } = {}) {
   const moved = [];
@@ -125,10 +181,9 @@ export function crmNoShowSweep(db, { day = null } = {}) {
                        WHERE request_id = ? AND status = 'pending' AND visit_id IS NOT NULL
                       ${links ? 'UNION SELECT visit_id FROM crm_booking_links WHERE request_id = ?' : ''})
          AND v.${LIVE_VISIT_SQL}`);
-    const dayVisits = db.prepare(`SELECT id, status FROM visits
-                                   WHERE patient_id = ? AND ${localDate('visit_date')} = date(?) AND ${LIVE_VISIT_SQL}`);
-    const cameOn = (pid, d) => dayVisits.all(pid, d).some((x) => cameBy(db, x));
-    const write = db.prepare(`UPDATE crm_requests SET status = ?, updated_at = ${NOW_SQL} WHERE id = ? AND status = ?`);
+    const cameOn = presentOn(db);
+    // CRM_UNIFY_V1 (ревью, I-5) — без updated_at: переход сервера — не движение карточки.
+    const write = db.prepare('UPDATE crm_requests SET status = ? WHERE id = ? AND status = ?');
     db.transaction(() => {
       for (const L of leads) {
         const books = links ? bookingsOf.all(L.id, L.id) : bookingsOf.all(L.id);

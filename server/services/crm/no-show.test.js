@@ -54,7 +54,9 @@ test('запись вчера, ни отметки, ни денег, ни раб
   const vid = visit(db, Y); const rid = lead(db, { date: Y }); const lid = line(db, rid, vid, Y);
   assert.deepEqual(crmNoShowSweep(db), [rid]);
   assert.equal(st(db, rid), 'no_show');
-  assert.ok(db.prepare('SELECT updated_at FROM crm_requests WHERE id = ?').get(rid).updated_at > OLD, 'серверный переход не отмечен движением карточки');
+  // CRM_UNIFY_V1 (ревью задач 5–6, I-5) — ОБНОВЛЕНО НАМЕРЕННО: «Не пришёл», поставленный
+  // сервером, — не контакт; updated_at прежний (окно повторного обращения не освежается).
+  assert.equal(db.prepare('SELECT updated_at FROM crm_requests WHERE id = ?').get(rid).updated_at, OLD, 'проход освежил карточку');
   assert.equal(db.prepare('SELECT status FROM visits WHERE id = ?').get(vid).status, 'scheduled', 'статус визита изменён');
   assert.deepEqual(db.prepare('SELECT status, visit_id FROM crm_request_services WHERE id = ?').get(lid), { status: 'pending', visit_id: vid },
     'неявка стёрла строку заявки');
@@ -79,11 +81,14 @@ test('долг у кассы и счёт по акту — тоже доказа
   }
 });
 
-test('выставленный, но не оплаченный счёт приходом не является — «Не пришёл»', () => {
+// CRM_UNIFY_V1 (ревью задач 5–6, I-2) — ОБНОВЛЕНО НАМЕРЕННО: счёт по визиту того дня —
+// любой, и неоплаченный, и нулевой — значит, что отсутствие неясно: «Не пришёл» не ставится.
+test('выставленный, но не оплаченный счёт по визиту того дня — «Не пришёл» неясен, не ставится', () => {
   const db = freshDb();
   const vid = visit(db, Y); const rid = lead(db, { date: Y }); line(db, rid, vid, Y);
   invoice(db, vid);
-  assert.deepEqual(crmNoShowSweep(db), [rid]);
+  assert.deepEqual(crmNoShowSweep(db), []);
+  assert.equal(st(db, rid), 'scheduled');
 });
 
 test('отметка «Пришёл» у визита записи — не «Не пришёл»', () => {

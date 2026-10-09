@@ -149,12 +149,16 @@ test('запись врача: пациент без карточки её не 
 // иначе created_at; 72 ч) — как есть, после окна — возвращается в начало воронки
 // (одна карточка, история внутри) и записывается. След отмены помнит прежнюю
 // ступень — discard_empty_visit вернёт её.
+// CRM_UNIFY_V1 (ревью задач 5–6, I-4) — ОБНОВЛЕНО НАМЕРЕННО: карточка, которая ждёт
+// будущий день, в начало не возвращается при любой давности (ниже); здесь — карточка,
+// чья строка ждала прошедший день и так и не была записана.
 test('колл-центр: открытая карточка, ждущая другой день, — та же при любой давности; после окна — возвращена в начало и записана', async () => {
+  const PAST = localDay(-5);
   for (const [age, status] of [[1, 'approved'], [10, 'scheduled'], [40, 'scheduled']]) {
     const t = await startCrmApp();
     try {
-      const rid = addLead(t.db, { assigned: 3, status: 'approved', date: D2, updated: daysAgoIso(age) });
-      addLine(t.db, rid, { svc: 40, day: D2 });
+      const rid = addLead(t.db, { assigned: 3, status: 'approved', date: PAST, updated: daysAgoIso(age) });
+      addLine(t.db, rid, { svc: 40, day: PAST });
       const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
       assert.equal(b.status, 200, b.text);
       const vid = b.json.data.visit.id;
@@ -169,6 +173,19 @@ test('колл-центр: открытая карточка, ждущая др�
       }
     } finally { t.close(); }
   }
+});
+
+test('CRM_UNIFY_V1 (ревью, I-4): колл-центр — карточка, давно записанная на будущий день, при новой записи в начало не возвращается', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { assigned: 3, status: 'approved', date: D2, updated: daysAgoIso(40) });
+    addLine(t.db, rid, { svc: 40, day: D2 });
+    const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
+    assert.equal(b.status, 200, b.text);
+    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 1);
+    assert.equal(t.lead(rid).status, 'approved', 'ждущая будущего карточка возвращена в начало');
+    assert.equal(t.db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(b.json.data.visit.id).request_id, rid);
+  } finally { t.close(); }
 });
 
 test('колл-центр: открытая карточка, три недели без движения, ждущая другой день — та же карточка, возвращена в начало и записана', async () => {
@@ -189,7 +206,9 @@ test('колл-центр: открытая карточка, три недел�
 // привязки к ней нет. После окна — новая карточка с тем же пациентом.
 test('колл-центр: закрытая карточка в окне — новой нет, закрытая не тронута; после окна — новая с тем же пациентом', async () => {
   for (const [ago, want] of [[1, 1], [10, 2]]) {
-    for (const closed of ['came', 'no_show', 'stopped']) {
+    // CRM_UNIFY_V1 (ревью задач 5–6, I-3) — ОБНОВЛЕНО НАМЕРЕННО: «Не пришёл» не закрытая
+    // (её перезапись — unify-review-t5t6.test.js W2).
+    for (const closed of ['came', 'stopped', 'not_qualified']) {
       const t = await startCrmApp();
       try {
         const old = addLead(t.db, { status: closed, updated: daysAgoIso(ago) });
