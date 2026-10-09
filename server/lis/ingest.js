@@ -747,6 +747,28 @@ function staleTextOf(side, plan) {
 }
 
 /**
+ * LIS_PROXY_V1 (ревью C1) — материал услуги (services.specimen, свободный текст
+ * «Материал (кровь, моча…)») для «одна пробирка — все услуги» (D3): моча,
+ * плазма, сыворотка, кровь — по слову (плазма и сыворотка раньше крови:
+ * «плазма крови», «сыворотка крови»); прочее — сам текст без регистра и лишних
+ * пробелов; пусто — '' (не указан). Делят пробирку только заказы с одним
+ * ключом: не указан у обоих — делят (клиника, которая поле не заполняет,
+ * ничего не теряет); у одного — не делят (значение — «не использованы», его
+ * видно). Кровь и сыворотка — разные пробирки (ЭДТА и сыворотка), хотя BS-200
+ * обе называет serum (lisproxy-form.js biomaterialOf): HbA1c из цельной крови
+ * не идёт в рабочий список пробирки сыворотки.
+ */
+export function specimenKey(specimen) {
+  const s = String(specimen == null ? '' : specimen).trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!s) return '';
+  if (/моч|urine/.test(s)) return 'urine';
+  if (/плазм|plasma/.test(s)) return 'plasma';
+  if (/сыворот|serum/.test(s)) return 'serum';
+  if (/кров|blood/.test(s)) return 'blood';
+  return s;
+}
+
+/**
  * LIS_VENDOR_EXACT_V1 (D3; решение владельца 2026-10-06, п. 2 — «Заполнить
  * все») — другие лабораторные заказы визита пробирки, которые кормит этот
  * прибор (orderSide — то же правило «свой прибор / та же модель») и у панели
@@ -759,11 +781,18 @@ function staleTextOf(side, plan) {
 function siblingSides(db, order, ctx) {
   if (order.visit_id == null) return [];
   const out = [];
-  const rows = db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name FROM visit_services vs
+  const rows = db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
                              JOIN services s ON s.id = vs.service_id
                             WHERE vs.visit_id = ? AND vs.id <> ? AND s.is_lab = 1
-                            ORDER BY vs.id LIMIT ?`).all(order.visit_id, order.id, SIBLINGS_MAX);
+                            ORDER BY vs.id LIMIT ?`).all(order.visit_id, order.id, SIBLINGS_MAX);   // service_specimen: LIS_PROXY_V1 (ревью C1)
+  const tubeSpecimen = specimenKey(order.service_specimen);   // LIS_PROXY_V1 (ревью C1)
   for (const o of rows) {
+    // LIS_PROXY_V1 (ревью C1) — одна пробирка — заказы ОДНОГО материала: проба
+    // мочи не заполняет «Биохимию» сыворотки (и не переписывает её 5.1 своими
+    // 0.3), а рабочий список пробирки мочи не велит гнать на ней глюкозу
+    // сыворотки. И у своего порта, и у LIS Proxy. Материал не указан у обоих —
+    // один (D3 как прежде); у одного — разные (specimenKey).
+    if (specimenKey(o.service_specimen) !== tubeSpecimen) continue;
     let closed = '';
     if (o.status === 'added') closed = 'unpaid';
     else if (o.status === 'completed') closed = 'released';
@@ -1042,9 +1071,9 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   const vsId = parseSampleId(pick.value);
 
   const order = vsId
-    ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name FROM visit_services vs
+    ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
                     JOIN services s ON s.id = vs.service_id
-                   WHERE vs.id = ?`).get(vsId)
+                   WHERE vs.id = ?`).get(vsId)   // service_specimen: LIS_PROXY_V1 (ревью C1) — материал пробирки для D3
     : null;
 
   if (!order) {
@@ -1346,7 +1375,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
 // @returns {{ok:true, codes:string[], patient:{date_of_birth:string|null, gender:string|null}, specimen:string}
 //          | {ok:false, why:string}}
 export function worklistLines(db, { deviceId, orderId } = {}) {
-  const order = orderId ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen FROM visit_services vs
+  const order = orderId ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
                                         JOIN services s ON s.id = vs.service_id WHERE vs.id = ?`).get(orderId) : null;
   if (!order) return { ok: false, why: 'заказ по номеру пробы не найден' };
   if (!order.is_lab) return { ok: false, why: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' };
@@ -1372,5 +1401,5 @@ export function worklistLines(db, { deviceId, orderId } = {}) {
   if (!codes.length) return { ok: false, why: 'у панели нет подтверждённых кодов этого прибора' };
   const patient = db.prepare('SELECT p.date_of_birth, p.gender FROM visits v JOIN patients p ON p.id = v.patient_id WHERE v.id = ?').get(order.visit_id)
     || { date_of_birth: null, gender: null };
-  return { ok: true, codes, patient, specimen: order.specimen || '' };
+  return { ok: true, codes, patient, specimen: order.service_specimen || '' };
 }
