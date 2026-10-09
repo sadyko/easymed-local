@@ -5,11 +5,14 @@
 // задача 13). Партнёры по API клиники получают КОДЫ, а не текст; этот экран —
 // место, где клиника видит, какой код у какого названия.
 //
-// ЧТО ЗДЕСЬ ПОКАЗАНО. Два общих списка, из которых клиника выбирает в анкетах:
+// ЧТО ЗДЕСЬ ПОКАЗАНО. Общие списки, из которых клиника выбирает в анкетах:
 //   • «Города и районы» — таблицы countries / regions / districts, миграция 132
 //     (GEO_HARDCODE_V1): код, ru, uz, en. Регионы Узбекистана (страна с кодом
 //     'UZ'): слева регион — русское название, под ним uz · en, код и число
 //     районов; справа районы выбранного региона. Сразу открыт город Ташкент;
+//   • «Страны» — та же таблица countries: код, ru, uz, en (дизайн API клиники,
+//     «Шаг 2»: «страны / регионы / районы с кодами»). Узбекистан первым,
+//     остальные по алфавиту; выключенные в «Географии» не показаны;
 //   • «Специальности» — SPECIALTY_ROWS (shared/specialty-list.js): код, ru,
 //     uz, en. Встроены в программу целиком, серверу они не нужны.
 //
@@ -46,20 +49,26 @@ const byRu = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 
 const kindRank = (d) => (d.kind in KIND_ORDER ? KIND_ORDER[d.kind] : 2);
 
 /**
- * Регионы страны COUNTRY_CODE с их районами: { regions } или { error }.
- * Три запроса — страна по коду, её регионы, районы всех регионов разом.
+ * Страны и регионы страны COUNTRY_CODE с их районами: { countries, regions }
+ * или { error }. Три запроса — все страны, регионы страны с кодом
+ * COUNTRY_CODE, районы всех её регионов разом.
  */
 export async function loadGeography() {
-    const c = await supabase.from('countries').select('id, code').eq('code', COUNTRY_CODE);
+    const c = await supabase.from('countries').select('id, code, name, name_uz, name_en, active');
     if (c.error) return { error: c.error };
-    const country = (c.data || [])[0];
-    if (!country) return { regions: [] };
+    // Регионы — у страны с кодом COUNTRY_CODE, как и прежде, даже если её
+    // выключили в «Географии»; в списке стран показаны только включённые.
+    const country = (c.data || []).find((x) => x.code === COUNTRY_CODE);
+    const top = (x) => (x.code === COUNTRY_CODE ? 0 : 1);
+    const countries = (c.data || []).filter((x) => x.active !== false && x.active !== 0)
+        .sort((a, b) => (top(a) - top(b)) || byRu(a, b));
+    if (!country) return { countries, regions: [] };
 
     const r = await supabase.from('regions').select('id, name, code, name_uz, name_en')
         .eq('country_id', country.id).eq('active', true);
     if (r.error) return { error: r.error };
     const regions = (r.data || []).map((x) => ({ ...x, districts: [] }));
-    if (!regions.length) return { regions };
+    if (!regions.length) return { countries, regions };
 
     const d = await supabase.from('districts').select('id, region_id, name, code, name_uz, name_en, kind')
         .in('region_id', regions.map((x) => x.id)).eq('active', true);
@@ -71,7 +80,7 @@ export async function loadGeography() {
     // Открытый сразу регион — первым, остальные по алфавиту.
     const first = (x) => (x.code === DEFAULT_REGION ? 0 : 1);
     regions.sort((a, b) => (first(a) - first(b)) || byRu(a, b));
-    return { regions };
+    return { countries, regions };
 }
 
 // REFERENCE_LISTS_V1 (ревью M2) — id вкладок и панели уникальны на каждую отрисовку.
@@ -89,7 +98,7 @@ export async function renderReferenceLists(container, ctx = {}) {
     container.appendChild(root);
     root.appendChild(PageHead({
         title: 'Справочники',
-        subtitle: 'Города, районы и специальности: коды и названия на трёх языках',
+        subtitle: 'Страны, города, районы и специальности: коды и названия на трёх языках',
     }));
     root.appendChild(h('div', {
         style: {
@@ -134,8 +143,10 @@ function paintCard(state, card, body, paint, focus) {
         return el;
     };
     const geoCount = state.geo && state.geo.regions ? state.geo.regions.length : null;
+    const countryCount = state.geo && state.geo.countries ? state.geo.countries.length : null;
     card.appendChild(h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Справочники', style: { padding: '0 12px' } },
         tab('geo', 'Города и районы', geoCount),
+        tab('countries', 'Страны', countryCount),
         tab('spec', 'Специальности', SPECIALTY_ROWS.length),
     ));
     body.setAttribute('aria-labelledby', tabId(state.tab));
@@ -144,12 +155,13 @@ function paintCard(state, card, body, paint, focus) {
     let selRow = null;
     if (state.tab === 'spec') paintSpecialties(body);
     else if (!state.geo) body.appendChild(h('div', { class: 'muted', style: { padding: '24px', textAlign: 'center' } }, 'Загрузка…'));
+    else if (state.tab === 'countries') paintCountries(state, body);
     else selRow = paintGeography(state, body, paint);
     const target = focus === 'tab' ? activeTab : focus === 'region' ? selRow : null;
     if (target) target.focus();
 }
 
-/** Таблица «Код · RU · UZ · EN» — одна на районы и на специальности. */
+/** Таблица «Код · RU · UZ · EN» — одна на страны, районы и специальности. */
 function codeTable(rows, rowClass) {
     return h('div', { style: { overflowX: 'auto' } },
         h('table', { class: 'tbl' },
@@ -164,6 +176,14 @@ function codeTable(rows, rowClass) {
 
 function paintSpecialties(body) {
     body.appendChild(codeTable(SPECIALTY_ROWS.map((s) => ({ code: s.slug, ru: s.ru, uz: s.uz, en: s.en })), 'ref-spec'));
+}
+
+function paintCountries(state, body) {
+    const empty = (text) => h('div', { class: 'empty', style: { padding: '32px 20px' } }, text);
+    if (state.geo.error) { body.appendChild(empty('Не удалось загрузить страны — обновите страницу.')); return; }
+    const countries = state.geo.countries || [];
+    if (!countries.length) { body.appendChild(empty('Стран нет.')); return; }
+    body.appendChild(codeTable(countries.map((c) => ({ code: c.code, ru: c.name, uz: c.name_uz, en: c.name_en })), 'ref-country'));
 }
 
 /** Рисует вкладку «Города и районы»; возвращает строку выбранного региона (для фокуса). */

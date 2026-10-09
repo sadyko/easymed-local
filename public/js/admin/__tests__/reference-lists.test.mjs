@@ -7,6 +7,8 @@
 // региона — код, RU, UZ, EN; специальности — код, RU, UZ, EN. Партнёры по API
 // получают КОДЫ, и этот экран — место, где клиника видит, какой код у какого
 // названия. Ничего не редактируется: списки встроены в программу.
+// Вкладка «Страны» (дизайн API клиники, «Шаг 2»: «страны / регионы / районы с
+// кодами и ru / uz / en») — 7 стран миграции 132: код, RU, UZ, EN.
 //
 // Данные экрана здесь — НАСТОЯЩИЕ: база в памяти после всех миграций
 // (миграция 132 — коды и названия ru/uz/en), а каждый запрос экрана к /api/db
@@ -109,6 +111,7 @@ const perms = await import('../permissions.js');
 // Что лежит в базе — тем же SQL, мимо экрана.
 const UZ_REGIONS = db.prepare(`SELECT r.code, r.name, r.name_uz, r.name_en FROM regions r
   JOIN countries c ON c.id = r.country_id WHERE c.code = 'UZ' AND r.active = 1`).all();
+const COUNTRIES = db.prepare('SELECT code, name, name_uz, name_en FROM countries WHERE active = 1').all();
 const districtsOf = (regionCode) => db.prepare(`SELECT d.code, d.name, d.name_uz, d.name_en, d.kind FROM districts d
   JOIN regions r ON r.id = d.region_id WHERE r.code = ? AND d.active = 1`).all(regionCode);
 
@@ -123,6 +126,7 @@ const tabs = (root) => byClass(root, 'tab');
 const tabNamed = (root, label) => tabs(root).find((t) => textOf(t).includes(label));
 const regionRows = (root) => byClass(root, 'ref-region');
 const districtRows = (root) => byClass(root, 'ref-district');
+const countryRows = (root) => byClass(root, 'ref-country');
 const specRows = (root) => byClass(root, 'ref-spec');
 
 test('стенд: в базе после миграций 14 регионов Узбекистана и 12 районов города Ташкента, у всех код и uz/en', () => {
@@ -132,21 +136,66 @@ test('стенд: в базе после миграций 14 регионов У
   assert.equal(tash.length, 12);
   assert.ok(tash.every((d) => d.code && d.name_uz && d.name_en));
   assert.equal(SPECIALTY_ROWS.length, 120);
+  assert.equal(COUNTRIES.length, 7, 'стенд: миграция 132 — 7 стран');
+  assert.ok(COUNTRIES.every((c) => c.code && c.name_uz && c.name_en), 'миграция 132 не дала кодов и названий странам');
 });
 
-test('экран строит две вкладки — «Города и районы» и «Специальности» — со счётчиками; открыта первая', async () => {
+test('экран строит три вкладки — «Города и районы», «Страны» и «Специальности» — со счётчиками; открыта первая', async () => {
   const root = await mount();
   assert.deepEqual(refused, [], 'компилятор отверг запрос экрана');
   const names = tabs(root).map((t) => textOf(t).trim());
-  assert.equal(names.length, 2, 'вкладок: ' + names.join(' | '));
+  assert.equal(names.length, 3, 'вкладок: ' + names.join(' | '));
   const geo = tabNamed(root, 'Города и районы');
+  const countries = tabNamed(root, 'Страны');
   const spec = tabNamed(root, 'Специальности');
-  assert.ok(geo && spec, 'вкладки: ' + names.join(' | '));
+  assert.ok(geo && countries && spec, 'вкладки: ' + names.join(' | '));
   assert.ok(geo.className.split(/\s+/).includes('on'), '«Города и районы» не открыта по умолчанию');
   assert.equal(geo.attrs['aria-selected'], 'true');
+  assert.equal(countries.attrs['aria-selected'], 'false');
   assert.equal(spec.attrs['aria-selected'], 'false');
   assert.equal(textOf(byClass(geo, 'tab-count')[0] || mk('i')).trim(), '14', 'счётчик регионов');
+  assert.equal(textOf(byClass(countries, 'tab-count')[0] || mk('i')).trim(), '7', 'счётчик стран');
   assert.equal(textOf(byClass(spec, 'tab-count')[0] || mk('i')).trim(), String(SPECIALTY_ROWS.length), 'счётчик специальностей');
+});
+
+// REFERENCE_LISTS_V1 (ревью итога) — дизайн API клиники, «Шаг 2»: экран
+// показывает и страны с кодами и ru / uz / en, а не только регионы и районы.
+test('«Страны»: 7 стран из countries — код, RU, UZ, EN; Узбекистан первым, дальше по алфавиту', async () => {
+  const root = await mount();
+  assert.equal(countryRows(root).length, 0, 'страны видны до открытия своей вкладки');
+  tabNamed(root, 'Страны').click();
+  await tick();
+  assert.ok(tabNamed(root, 'Страны').className.split(/\s+/).includes('on'), 'вкладка не переключилась');
+  const rows = countryRows(root);
+  assert.equal(rows.length, 7, 'стран на экране: ' + rows.length);
+  const got = rows.map(cellsOf);
+  for (const c of COUNTRIES) {
+    assert.ok(got.some((r) => r[0] === c.code && r[1] === c.name && r[2] === c.name_uz && r[3] === c.name_en),
+      'нет строки страны ' + c.code + ' / ' + c.name + ' / ' + c.name_uz + ' / ' + c.name_en);
+  }
+  assert.equal(got[0][0], 'UZ', 'Узбекистан — первым');
+  const rest = got.slice(1).map((r) => r[1]);
+  assert.deepEqual(rest, [...rest].sort((a, b) => a.localeCompare(b, 'ru')), 'остальные страны не по алфавиту: ' + rest.join(', '));
+  assert.equal(regionRows(root).length, 0, 'на вкладке стран остались регионы');
+  assert.equal(specRows(root).length, 0, 'на вкладке стран остались специальности');
+  // Шапка — та же таблица «Код · RU · UZ · EN», что у районов и специальностей.
+  const ths = walk(root).filter((n) => n.tagName === 'TH').map((n) => textOf(n).trim());
+  assert.deepEqual(ths, ['Код', 'RU', 'UZ', 'EN']);
+});
+
+test('страна, выключенная в «Географии», в списке стран не показана', async () => {
+  db.prepare("UPDATE countries SET active = 0 WHERE code = 'AF'").run();
+  try {
+    const root = await mount();
+    tabNamed(root, 'Страны').click();
+    await tick();
+    const codes = countryRows(root).map((r) => cellsOf(r)[0]);
+    assert.equal(codes.length, 6);
+    assert.ok(!codes.includes('AF'), 'выключенная страна на экране');
+    assert.equal(textOf(byClass(tabNamed(root, 'Страны'), 'tab-count')[0] || mk('i')).trim(), '6', 'счётчик стран');
+  } finally {
+    db.prepare("UPDATE countries SET active = 1 WHERE code = 'AF'").run();
+  }
 });
 
 test('«Города и районы»: 14 регионов Узбекистана — ru, под ним uz · en, код из regions.code и число районов', async () => {
@@ -317,9 +366,14 @@ test('названия — данные, а не текст экрана: на �
     assert.ok(textOf(root).includes(STRINGS['Города и районы'].uz), 'подписи экрана не перевелись на узбекский');
     const tash = regionRows(root).find((r) => r.attrs['data-code'] === 'tashkent-city');
     assert.ok(cellsOf(tash)[0].startsWith('город Ташкент'), 'русское название региона перевели: ' + cellsOf(tash)[0]);
-    tabs(root)[1].click();
+    tabs(root).find((t) => textOf(t).includes(STRINGS['Специальности'].uz)).click();
     await tick();
     assert.deepEqual(cellsOf(specRows(root)[0]), [s.slug, s.ru, s.uz, s.en], 'колонку RU перевели — tr() добрался до данных');
+    tabs(root).find((t) => textOf(t).includes(STRINGS['Страны'].uz)).click();
+    await tick();
+    const ru = countryRows(root).find((r) => cellsOf(r)[0] === 'RU');
+    assert.ok(ru, 'на узбекском интерфейсе нет строки России');
+    assert.equal(cellsOf(ru)[1], 'Россия', 'русское название страны перевели: ' + cellsOf(ru)[1]);
   } finally { setLang('ru'); }
 });
 
@@ -347,8 +401,11 @@ test('запросы к /api/db: только countries / regions / districts и
     assert.deepEqual(cols.filter((c) => !readable.includes(c)), [], d.table + ': колонки вне реестра');
     assert.ok(REGISTRY[d.table].read.roles.includes('registrar'), d.table + ': регистратор не читает');
   }
-  assert.ok(sent.some((d) => d.table === 'countries' && d.filters.some((f) => f.col === 'code' && f.val === 'UZ')),
-    'страна выбирается не по коду UZ');
+  // Регионы — страны с кодом UZ (по коду, а не по названию или номеру).
+  const uzId = db.prepare("SELECT id FROM countries WHERE code = 'UZ'").get().id;
+  assert.ok(sent.some((d) => d.table === 'regions' && d.filters.some((f) => f.col === 'country_id' && f.val === uzId)),
+    'регионы выбираются не по стране с кодом UZ');
+  assert.equal(sent.filter((d) => d.table === 'countries').length, 1, 'страны читаются одним запросом');
 });
 
 test('сервер не ответил: экран говорит об этом словами, а специальности открываются', async () => {
@@ -357,6 +414,10 @@ test('сервер не ответил: экран говорит об этом 
     const root = await mount();
     assert.ok(textOf(root).includes('Не удалось загрузить города и районы — обновите страницу.'), textOf(root).slice(0, 300));
     assert.equal(regionRows(root).length, 0);
+    tabNamed(root, 'Страны').click();
+    await tick();
+    assert.ok(textOf(root).includes('Не удалось загрузить страны — обновите страницу.'), textOf(root).slice(0, 300));
+    assert.equal(countryRows(root).length, 0);
     tabNamed(root, 'Специальности').click();
     await tick();
     assert.equal(specRows(root).length, SPECIALTY_ROWS.length, 'специальности встроены в программу — им сервер не нужен');
