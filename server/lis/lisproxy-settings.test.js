@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tmpDir } from '../test-helpers/tmpdir.js';
-import { readProxySettings, writeProxySettings, newProxyKey, keyMatches, settingsPath } from './lisproxy-settings.js';
+import { readProxySettings, writeProxySettings, newProxyKey, keyMatches, settingsPath, backupPath } from './lisproxy-settings.js';
 
 test('нет файла, мусор, массив, включён без ключа — выключено', () => {
   const dir = tmpDir('em-lpx-set-');
@@ -51,4 +51,32 @@ test('keyMatches: только точное совпадение; не стро�
 
 test('settingsPath — файл в папке данных здания', () => {
   assert.equal(path.basename(settingsPath('X')), 'lisproxy.json');
+});
+
+// ── LIS_PROXY_V1 (ревью) — запись с fsync и копия .bak ─────────────────────
+// Испорченный файл раньше читался как «выключено»: 404 у каждого лабораторного
+// ПК, значения теряются, а включить снова — значит сменить ключ на всех ПК.
+test('запись — и в lisproxy.json, и в копию .bak (то же содержимое)', () => {
+  const dir = tmpDir('em-lpx-set-');
+  writeProxySettings(dir, { enabled: true, key: 'k-1', changed_by: 3 });
+  assert.equal(fs.readFileSync(backupPath(dir), 'utf8'), fs.readFileSync(settingsPath(dir), 'utf8'));
+  writeProxySettings(dir, { enabled: true, key: 'k-2' });
+  assert.equal(JSON.parse(fs.readFileSync(backupPath(dir), 'utf8')).key, 'k-2', 'копия — нынешний ключ, не прежний');
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.includes('.tmp-')), []);
+});
+
+test('lisproxy.json испорчен, пуст или пропал — читается копия .bak; испорчены оба — выключено', () => {
+  const dir = tmpDir('em-lpx-set-');
+  writeProxySettings(dir, { enabled: true, key: 'k-1' });
+  for (const text of ['', '{"enabled":tr', '{не json', '[]']) {
+    fs.writeFileSync(settingsPath(dir), text);
+    assert.deepEqual([readProxySettings(dir).enabled, readProxySettings(dir).key], [true, 'k-1'], JSON.stringify(text));
+  }
+  fs.unlinkSync(settingsPath(dir));
+  assert.deepEqual([readProxySettings(dir).enabled, readProxySettings(dir).key], [true, 'k-1'], 'файл пропал — копия');
+  fs.writeFileSync(settingsPath(dir), '{не json');
+  fs.writeFileSync(backupPath(dir), '{тоже не json');
+  assert.equal(readProxySettings(dir).enabled, false);
+  fs.writeFileSync(settingsPath(dir), JSON.stringify({ enabled: false, key: 'k-1' }));
+  assert.equal(readProxySettings(dir).enabled, false, 'целый файл «выключено» — выключено, копия не читается');
 });

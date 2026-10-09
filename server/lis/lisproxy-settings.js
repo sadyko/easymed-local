@@ -4,25 +4,37 @@
 // Файл data/lisproxy.json, а не таблица: миграции этой работы — только ADD
 // COLUMN, таблицы настроек у лаборатории нет, а секрет пары филиалов уже живёт
 // так же (branch-sync/pairing.js) — у здания свой, в /api/db и в синхронизацию
-// зданий не попадает. Чтение НИКОГДА не бросает: испорченный файл — «выключено»
-// (прокси получит 404, а не 500).
+// зданий не попадает. Чтение НИКОГДА не бросает (прокси получит 404, а не 500).
+//
+// LIS_PROXY_V1 (ревью) — запись с fsync и копия lisproxy.json.bak с ТЕМ ЖЕ
+// содержимым. Испорченный файл раньше читался как «выключено»: 404 у каждого
+// лабораторного ПК, значения теряются (повтора у прокси нет), а «Включить» снова
+// — новый ключ на всех ПК. Теперь испорчен или пропал основной — читается
+// копия. Копия — нынешний ключ, а не прежний: прежний дал бы те же 404.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { writeAtomic } from '../services/control/checkin.js';
 
 export const SETTINGS_FILE = 'lisproxy.json';
 const OFF = Object.freeze({ enabled: false, key: null, changed_at: null, changed_by: null });
 
 export function settingsPath(dataDir) { return path.join(dataDir, SETTINGS_FILE); }
+/** Копия настройки (то же содержимое, пишется следом за основным файлом). */
+export function backupPath(dataDir) { return settingsPath(dataDir) + '.bak'; }
 
-/** { enabled, key, changed_at, changed_by }; включён — только с ключом. */
-export function readProxySettings(dataDir) {
+/** Файл → объект настройки или null (нет файла, не JSON, не объект). Не бросает. */
+function readFileSettings(file) {
   let raw;
-  try { raw = fs.readFileSync(settingsPath(dataDir), 'utf8'); } catch { return { ...OFF }; }
+  try { raw = fs.readFileSync(file, 'utf8'); } catch { return null; }
   let v;
-  try { v = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw); } catch { return { ...OFF }; }
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return { ...OFF };
+  try { v = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw); } catch { return null; }
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+}
+
+/** { enabled, key, changed_at, changed_by }; включён — только с ключом. Основной файл не читается — копия .bak. */
+export function readProxySettings(dataDir) {
+  const v = readFileSettings(settingsPath(dataDir)) || readFileSettings(backupPath(dataDir));
+  if (!v) return { ...OFF };
   const key = typeof v.key === 'string' && v.key.trim() ? v.key.trim() : null;
   return {
     enabled: v.enabled === true && !!key,
@@ -32,11 +44,35 @@ export function readProxySettings(dataDir) {
   };
 }
 
-/** Записать настройку целиком (tmp + rename) и вернуть её прочитанной. */
+/**
+ * Записать файл так, чтобы после сбоя питания он был либо прежним, либо новым:
+ * временный файл → fsync → rename; каталог — fsync по возможности (на Windows
+ * каталог как файл не открывается).
+ */
+function writeDurable(file, content) {
+  const dir = path.dirname(file);
+  const tmp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  try {
+    const fd = fs.openSync(tmp, 'w');
+    try { fs.writeSync(fd, content); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* уже нет */ }
+    throw e;
+  }
+  try {
+    const d = fs.openSync(dir, 'r');
+    try { fs.fsyncSync(d); } finally { fs.closeSync(d); }
+  } catch { /* Windows: каталог не синхронизируется — rename уже на диске журнала NTFS */ }
+}
+
+/** Записать настройку целиком (основной файл, затем копия .bak) и вернуть её прочитанной. */
 export function writeProxySettings(dataDir, { enabled = false, key = null, changed_by = null } = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
   const rec = { enabled: enabled === true, key: key || null, changed_at: new Date().toISOString(), changed_by: Number.isInteger(changed_by) ? changed_by : null };
-  writeAtomic(settingsPath(dataDir), JSON.stringify(rec, null, 2));
+  const text = JSON.stringify(rec, null, 2);
+  writeDurable(settingsPath(dataDir), text);
+  writeDurable(backupPath(dataDir), text);
   return readProxySettings(dataDir);
 }
 
