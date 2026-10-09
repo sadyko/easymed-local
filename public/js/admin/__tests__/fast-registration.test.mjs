@@ -451,6 +451,39 @@ test('+Пакеты: строка помнит пакет — подпись с�
   dlg.close(); dlg2.close();
 });
 
+// CLINIC_API_FIX_V1 (ревью итога) — экран и бумага по одному правилу
+// (receipt-print.js packageLabel, 5b1999b): «пакет» — только у пакета со
+// скидкой. Шаблон сметы (0 % или без скидки) — та же таблица service_templates,
+// но пакета пациент не брал: чек его так не называет, и экран — тоже.
+test('шаблон сметы без скидки — в строке нет «Пакет «…»», как и на чеке', async () => {
+  const { packageLabel } = await import('../views/receipt-print.js');
+  for (const tpl of [
+    { id: 21, name: 'Смета терапевта', service_ids: [1], discount_percent: 0 },
+    { id: 22, name: 'Смета хирурга', service_ids: [2] },   // скидка не пришла
+  ]) {
+    reset();
+    const dlg = openFastRegistrationDialog({});
+    await tick(40);
+    dlg.state.applyTemplate(tpl);
+    const row = dlg.state.rows[0];
+    assert.ok(row && row.package && row.package.id === tpl.id, 'строка не помнит, из какого шаблона она');
+    assert.strictEqual(packageLabel(row.package), '', 'стенд: для бланка это не пакет');
+    const text = textOf(dlg.table);
+    assert.ok(!text.includes('Пакет «' + tpl.name + '»'), tpl.name + ': экран зовёт шаблон пакетом, а чек — нет: ' + text);
+    assert.ok(!text.includes(tpl.name), tpl.name + ': под услугой подписан шаблон');
+    assert.strictEqual(walk(dlg.table).filter((n) => n.attrs && 'data-package-line' in n.attrs).length, 0, 'строка подписи пакета на экране');
+    dlg.close();
+  }
+  // Пакет со скидкой — подпись на месте, та же, что раньше.
+  reset();
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  dlg.state.applyTemplate({ id: 12, name: 'Осень', service_ids: [1], discount_percent: 12.5 });
+  assert.strictEqual(packageLabel(dlg.state.rows[0].package), 'Осень');
+  assert.ok(textOf(dlg.table).includes('Пакет «Осень», скидка 12,5 %'), 'у пакета со скидкой пропала подпись');
+  dlg.close();
+});
+
 test('сохранение: пациент → визит → строки с врачом → счёт → очередь, окно переходит в сохранённое состояние', async () => {
   reset();
   let savedWith = 0;

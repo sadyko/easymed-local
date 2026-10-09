@@ -498,15 +498,20 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         }
         state.rows.forEach((row, i) => {
             const price = rowPrice(i);
+            const pkgName = packageLabel(row.package);   // CLINIC_API_FIX_V1 — правило бланка
             tbody.appendChild(h('tr', null,
                 h('td', { class: 'muted' }, String(i + 1)),
                 h('td', { class: 'cell-strong' }, row.service.name || '—',
                     // PACKAGES_V1 — из какого пакета строка и его скидка (её
                     // применит сервер в счёте; итог после записи — уже со скидкой).
-                    row.package ? h('div', { 'data-package-line': String(row.package.id), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px' } },
-                        row.package.pct > 0
-                            ? trf('Пакет «{name}», скидка {pct} %', { name: row.package.name, pct: String(row.package.pct).replace('.', ',') })
-                            : trf('Пакет «{name}»', { name: row.package.name })) : null),
+                    // CLINIC_API_FIX_V1 (ревью итога) — «пакет» по тому же правилу,
+                    // что чек и счёт (receipt-print.js packageLabel): только у пакета
+                    // со скидкой. Шаблон сметы (0 % или скидка не пришла) — та же
+                    // таблица service_templates, но пакета пациент не брал: экран
+                    // звал его «Пакет «…»», а бумага — нет. Строка по-прежнему
+                    // помнит свой шаблон (row.package) — сервер выставит её сам.
+                    pkgName ? h('div', { 'data-package-line': String(row.package.id), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px' } },
+                        trf('Пакет «{name}», скидка {pct} %', { name: pkgName, pct: String(row.package.pct).replace('.', ',') })) : null),
                 h('td', null, fmtPrice(netOfVat(price, row.service.tax_rate))),
                 h('td', { class: 'cell-strong' }, fmtPrice(price)),
                 doctorCell(row),
