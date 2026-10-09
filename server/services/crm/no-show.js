@@ -43,6 +43,7 @@
 // При запуске и раз в час (server/index.js). Не бросает: ошибка — в лог.
 import { openStageKeys, noShowStageKey, scheduledStageKey, SEED_NO_SHOW_STAGE } from './config.js';
 import { arrivedByEvidence } from './booking-mirror.js';
+import { EVIDENCE_SERVICE_STATUSES } from './visit-status.js';   // CRM_UNIFY_V1 (задача 14) — cameSurely
 import { localDate, today } from '../domain/day.js';
 
 const holes = (a) => a.map(() => '?').join(',');
@@ -50,12 +51,50 @@ const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 // Мёртвый визит доказательством не бывает (visit-status.js DEAD_VISIT_STATUSES).
 const LIVE_VISIT_SQL = "status NOT IN ('cancelled', 'no_show')";
 
-/** Был ли пациент на этом (живом) визите: отметка, деньги, работа, акт, долг. */
-function cameBy(db, v) {
+/**
+ * Был ли пациент на этом (живом) визите: отметка, деньги, работа, акт, долг.
+ * ШИРОКО — для «Не пришёл»: любой намёк на приход (и предоплата) мешает
+ * объявить неявку. CRM_UNIFY_V1 (задача 14) — экспорт; рядом его строгая пара
+ * cameSurely для разового исправления.
+ */
+export function cameBy(db, v) {
   if (v.status === 'arrived') return true;
   if (arrivedByEvidence(db, v.id)) return true;
   try {
     return !!db.prepare("SELECT 1 FROM invoices WHERE visit_id = ? AND (payer_id IS NOT NULL OR status = 'debt') LIMIT 1").get(v.id);
+  } catch { return false; }   // сборка без 054
+}
+
+/**
+ * CRM_UNIFY_V1 (задача 14) — НЕСОМНЕННЫЙ приход на этом живом визите дня v.day:
+ * СТРОГАЯ пара cameBy — чтобы ПЕРЕВЕСТИ карточку в конверсию (разовое
+ * исправление, crm/unify-repair.js). Ошибка здесь объявила бы конверсией того,
+ * кто не приходил, поэтому считается только то, что бывает лишь с человеком в
+ * клинике в день визита или позже:
+ *   • отметка «Пришёл» (calendar_book);
+ *   • работа над услугой (EVIDENCE_SERVICE_STATUSES: проба, приём, результат);
+ *   • платёж, сделанный в день визита или позже, по счёту, который не
+ *     возвращён (paid_amount > 0) и не аннулирован — предоплата не приход;
+ *   • счёт по акту или долг у кассы, выставленный в день визита или позже —
+ *     акт мастер визита выставляет и при записи, на будущие дни.
+ * Не считается (в отличие от cameBy): предоплата, товар и талон очереди (их
+ * ставят и заранее), закрытые строки заявки ('done' ставила и прежняя запись,
+ * до прихода), неоплаченный счёт. Визит соседнего здания считается, как и в
+ * cameBy, — по тем же признакам, приехавшим с порцией обмена (статус визита,
+ * строки визита, счёт и платежи).
+ */
+export function cameSurely(db, v) {
+  if (v.status === 'arrived') return true;
+  const marks = EVIDENCE_SERVICE_STATUSES.map(() => '?').join(',');
+  if (db.prepare(`SELECT 1 FROM visit_services WHERE visit_id = ? AND status IN (${marks}) LIMIT 1`)
+    .get(v.id, ...EVIDENCE_SERVICE_STATUSES)) return true;
+  if (db.prepare(`SELECT 1 FROM invoices i JOIN payments p ON p.invoice_id = i.id
+                   WHERE i.visit_id = ? AND i.paid_amount > 0 AND i.status NOT IN ('void', 'refunded')
+                     AND p.amount > 0 AND ${localDate('p.paid_at')} >= date(?) LIMIT 1`).get(v.id, v.day)) return true;
+  try {
+    return !!db.prepare(`SELECT 1 FROM invoices
+                          WHERE visit_id = ? AND (payer_id IS NOT NULL OR status = 'debt') AND status NOT IN ('void', 'refunded')
+                            AND ${localDate('created_at')} >= date(?) LIMIT 1`).get(v.id, v.day);
   } catch { return false; }   // сборка без 054
 }
 

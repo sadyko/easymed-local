@@ -24,6 +24,7 @@ import { readPairing } from './services/branch-sync/pairing.js';
 import { runBranchSync } from './services/rpc/branch-sync.js';
 import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EVENTS_V1
 import { scheduleCrmNoShow } from './services/crm/no-show.js';   // CRM_UNIFY_V1
+import { crmUnifyRepair } from './services/crm/unify-repair.js';   // CRM_UNIFY_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -180,6 +181,16 @@ if (isMain) {
   // только внутри транзакции; после падения их не должно остаться.
   try { db.exec('DELETE FROM ledger_write_token; DELETE FROM merge_money_moves;'); }
   catch (e) { console.warn('[ledger-token] cleanup:', e.message); }
+
+  // CRM_UNIFY_V1 — разовое исправление застрявших карточек и потерянных задач
+  // (миграция 238 ставит отметку «не сделано»; crm/unify-repair.js). Сразу после
+  // миграций и ДО первого прохода «Не пришёл» (scheduleCrmNoShow ниже): проход не
+  // должен успеть пометить карточку, которую исправление закрыло бы. Упало —
+  // откатилось целиком и повторится при следующем запуске.
+  try {
+    const repaired = crmUnifyRepair(db);
+    if (repaired.summary) console.log('  ' + repaired.summary);
+  } catch (e) { console.warn('[crm-unify-repair]', e && e.message); }
 
   // PRUNE_VERSIONS_V1 — старые версии программы убираются ИМЕННО ЗДЕСЬ: после
   // того, как миграции прошли. Это первый момент, когда известно, что
