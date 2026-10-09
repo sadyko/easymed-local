@@ -105,3 +105,16 @@ test('подсказки шаблона «Товары» для колонок �
         assert.ok(e && e.uz && e.en, k + ': подсказке нужен перевод');
     }
 });
+
+// CLINIC_API_FIX_V1 (ревью 4, M5) — привязка поставщиков выключена, но если её
+// включат, цена и кратность закупки из текста ячейки читаются правилом числа
+// (readImportNumber), а не Number(): «1 145» — 1145, а не «не число», и
+// «1.500» — не молча 1,5.
+test('linkSuppliers читает цену и кратность закупки правилом числа, а не Number()', () => {
+    const src = fs.readFileSync(new URL('../views/section-import-export.js', import.meta.url), 'utf8');
+    const body = src.slice(src.indexOf('async function linkSuppliers()'), src.indexOf('let supMsg = null;'));
+    assert.ok(body.length > 100, 'не найдено тело linkSuppliers');
+    assert.ok(!body.includes('Number(r.captures.supPrice)') && !body.includes('Number(r.captures.supPack)'), 'цена/кратность закупки — через Number()');
+    assert.ok(body.includes('readImportNumber(r.captures.supPrice'), 'цена закупки — не правилом числа');
+    assert.ok(body.includes('readImportNumber(r.captures.supPack'), 'кратность закупки — не правилом числа');
+});

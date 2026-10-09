@@ -372,9 +372,14 @@ const IMPORT_CONFIGS = {
                     const supId  = supByName.get(normKey(r.captures.supplier.trim()));
                     if (!itemId || !supId) continue;
                     const patch = {};
-                    if (r.captures.supPrice != null && r.captures.supPrice !== '' && !isNaN(Number(r.captures.supPrice))) patch.last_price = Number(r.captures.supPrice);
+                    // CLINIC_API_FIX_V1 (ревью 4, M5) — цена и кратность закупки
+                    // приходят текстом ячейки: правило числа (readImportNumber), а
+                    // не Number() — «1 145» — 1145, «1.500» — не молча 1,5.
+                    const supPrice = readImportNumber(r.captures.supPrice, false);
+                    const supPack = readImportNumber(r.captures.supPack, false);
+                    if ('n' in supPrice && supPrice.n >= 0) patch.last_price = supPrice.n;
                     if ((r.captures.supUnit || '').trim()) patch.purchase_unit = String(r.captures.supUnit).trim();
-                    if (r.captures.supPack != null && r.captures.supPack !== '' && Number(r.captures.supPack) > 0) patch.pack_factor = Number(r.captures.supPack);
+                    if ('n' in supPack && supPack.n > 0) patch.pack_factor = supPack.n;
                     const { data: ex } = await supabase.from('item_suppliers').select('id')
                         .eq('company_id', cid).eq('item_id', itemId).eq('supplier_id', supId).limit(1);
                     if (ex && ex.length) {
