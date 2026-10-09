@@ -6,7 +6,8 @@
 // source_body), потом всё остальное дописывает ЭТУ ЖЕ строку, и ответ — 200 на
 // любой исход (маршрут server/routes/lisproxy.js). Результат идёт в прежний
 // приём (receive.js → ingest.js) синтетическим ORU^R01 (lisproxy-form.js).
-import { recordMessage } from './inbox.js';
+import { recordMessage, touchDevice } from './inbox.js';
+import { ensureProxyDevice } from './discover.js';
 
 /** Журнал строки, пока запрос не разобран: если процесс упал посреди — строка так и скажет. */
 export const JOURNAL_PENDING = 'LIS Proxy: запрос сохранён, разбор не завершён';
@@ -63,10 +64,26 @@ export function failJournal(db, id, err) {
 }
 
 /**
- * Разобрать запрос, уже записанный в журнал строкой id. Задачи 3–8 плана
- * наполняют разбор; пока — только ответ.
+ * Разобрать запрос, уже записанный в журнал строкой id. Задачи 5–8 плана
+ * наполняют разбор; пока — прибор и ответ.
  * @returns {{type:'text'|'json', body:any}}
  */
 export function handleProxyRequest(db, { id, peer = '', body = {} } = {}) {
-  return fallbackReply(methodOf(body));
+  const b = obj(body);
+  const method = methodOf(b);
+  const who = method === 'apiResultSave' ? obj(b.lisResult) : obj(b.order);
+  if (str(who.name).trim()) resolveDevice(db, id, { name: str(who.name), label: str(who.host), peer });
+  return fallbackReply(method);
 }
+
+/** Прибор запроса: найти или завести (discover.js), записать в журнал, «на связи» — на каждом запросе. */
+function resolveDevice(db, id, { name, label, peer }) {
+  const r = ensureProxyDevice(db, { name, label, ip: peer });
+  if (r.device) {
+    db.prepare('UPDATE lab_device_messages SET device_id = ? WHERE id = ?').run(r.device.id, id);
+    touchDevice(db, r.device.id);
+  }
+  return r;
+}
+// Примечание к журналу о смене адреса (Р8, п. 2) — пишут разборы результата и запросов.
+const movedNote = (m) => (m ? '; адрес LIS Proxy сменился: ' + (m.from || '—') + ' → ' + (m.to || '—') : '');

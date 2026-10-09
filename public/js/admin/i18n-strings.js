@@ -3,6 +3,10 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // LIS_PROXY_V1 (2026-10-09) — причины прибора LIS Proxy (server/lis/discover.js ensureProxyDevice)
+  "LIS Proxy не прислал имя анализатора": {"en":"LIS Proxy did not send the analyzer name","ru":"LIS Proxy не прислал имя анализатора","uz":"LIS Proxy analizator nomini yubormadi"},   // LIS_PROXY_V1
+  "адрес сменился": {"en":"the address changed","ru":"адрес сменился","uz":"manzil o‘zgardi"},   // LIS_PROXY_V1
+  "заведён по первому запросу LIS Proxy": {"en":"registered from the first LIS Proxy request","ru":"заведён по первому запросу LIS Proxy","uz":"LIS Proxy’ning birinchi so‘rovi bo‘yicha ro‘yxatga olindi"},   // LIS_PROXY_V1
   // CLINIC_API_FIX_V1 (ревью 5) — окно импорта: отдельное предложение в сообщении о полном отказе (views/section-import-export.js)
   "Не импортировано (ошибки в файле): {n}.": {"en":"Not imported (errors in the file): {n}.","ru":"Не импортировано (ошибки в файле): {n}.","uz":"Import qilinmadi (fayldagi xatolar): {n}."},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью 5) — импорт услуг: без колонки цены визита пустые дни ничего не меняют (views/section-import-export.js)

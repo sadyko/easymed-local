@@ -302,7 +302,7 @@ async function start(db, { log = console.log } = {}) {
   if (currentDb !== db) await stop();
   currentDb = db;
 
-  const devices = db.prepare("SELECT * FROM lab_devices WHERE enabled = 1 AND transport = 'mllp'").all();
+  const devices = db.prepare("SELECT * FROM lab_devices WHERE enabled = 1 AND transport = 'mllp' AND via IS NULL").all();   // LIS_PROXY_V1 — у строки LIS Proxy нечего слушать и некому звонить
 
   // Порт по умолчанию есть в списке всегда — даже с пустой клиникой.
   const byPort = new Map([[Number(process.env.LIS_PORT) || DEFAULT_PORT, []]]);
