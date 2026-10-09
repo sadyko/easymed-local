@@ -243,7 +243,7 @@ export function readEnvelope(text, wire) {
 }
 
 /** BS-200 пишет «5.000000»: хвостовые нули после точки срезаются, число не округляется. */
-function trimZeros(v) {
+export function trimZeros(v) {   // LIS_PROXY_V1 — export: значение BS-200 через LIS Proxy (lisproxy-form.js)
   const m = /^([-+]?\d+)\.(\d*?)0*$/.exec(v);
   if (!m) return v;
   const out = m[2] ? m[1] + '.' + m[2] : m[1];
@@ -273,7 +273,7 @@ const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
  * качественных тестов («-», «+», «+-») не число и правило не задевает.
  */
 const NO_RESULT_MAX = -100000000;
-function isNoResult(v) {
+export function isNoResult(v) {   // LIS_PROXY_V1 — export: «нет результата» от LIS Proxy — справка (lisproxy-form.js)
   const s = decimalPoint(String(v == null ? '' : v).trim());
   return /^-\d+(\.\d+)?$/.test(s) && parseFloat(s) <= NO_RESULT_MAX;
 }
