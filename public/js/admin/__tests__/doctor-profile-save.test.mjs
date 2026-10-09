@@ -177,7 +177,11 @@ globalThis.fetch = async (url, opts = {}) => {
             if (scenario.specs === 'fail') return reply(500, { error: { message: 'database is locked' } });
             return reply(200, { data: scenario.specs.map((r) => ({ ...r })) });
         }
-        if (desc.table === 'doctor_conditions') return reply(200, { data: scenario.conds.map((r) => ({ ...r })) });
+        if (desc.table === 'doctor_conditions') {
+            // CLINIC_API_FIX_V1 (ревью итога) — отказ базы приходит как {error}, без исключения.
+            if (scenario.conds === 'fail') return reply(500, { error: { message: 'database is locked' } });
+            return reply(200, { data: scenario.conds.map((r) => ({ ...r })) });
+        }
         return reply(200, { data: [] });
     }
     if (u === '/api/rpc/update_my_doctor_profile') {
@@ -314,6 +318,50 @@ test('CLINIC_API_FIX_V1: специальности не загрузились 
     assert.ok(!('specialties' in rpcCalls[0]), 'не загрузившиеся специальности ушли на сервер');
     const e = STRINGS[SPEC_LOAD_FAILED];
     assert.ok(e && e.ru && e.uz && e.en, 'подсказке нужен перевод в i18n-strings.js');
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 (ревью итога) — болезни и симптомы, которые не
+// загрузились, не меняются — так же, как специальности (5391bed). Отказ базы
+// приходил как {error} и молча давал пустой список: врач отмечает одну
+// болезнь, и сервер (DELETE + INSERT) стирает все сохранённые.
+// ---------------------------------------------------------------------------
+const COND_LOAD_FAILED = 'Болезни и симптомы не загрузились — обновите страницу, чтобы их изменить.';
+
+test('CLINIC_API_FIX_V1: болезни не загрузились — подсказка вместо списка, в RPC их нет', async () => {
+    const s = await openProfile({ conds: 'fail' });
+    const text = s.container.textContent;
+    assert.ok(text.includes(COND_LOAD_FAILED), 'карточка болезней не говорит, что они не загрузились');
+    assert.ok(!text.includes('Каталог болезней в офлайн-версии не подключён'),
+        'отказ базы выдан за «каталог не подключён — уже отмеченные сохраняются как были»');
+    const search = tagsOf(s.container, 'input').find((i) => i.attrs.placeholder === 'Поиск болезней / симптомов…');
+    assert.ok(!search, 'болезни не загрузились, а поиск по ним на экране');
+    s.bio.ru.value = 'Новый текст.';
+    await s.save();
+    assert.equal(rpcCalls.length, 1);
+    assert.deepEqual(rpcCalls[0].p, { bio_ru: 'Новый текст.' });
+    assert.ok(!('conditions' in rpcCalls[0]), 'не загрузившиеся болезни ушли на сервер');
+    const e = STRINGS[COND_LOAD_FAILED];
+    assert.ok(e && e.ru && e.uz && e.en, 'подсказке нужен перевод в i18n-strings.js');
+});
+
+test('CLINIC_API_FIX_V1: болезни загрузились — подсказки об отказе нет, набор не уходит без правок', async () => {
+    const s = await openProfile();
+    assert.ok(!s.container.textContent.includes(COND_LOAD_FAILED));
+    s.bio.ru.value = 'Новый текст.';
+    await s.save();
+    assert.ok(!('conditions' in rpcCalls[0]));
+});
+
+// Каталога болезней офлайн нет, и отметить болезнь на экране сейчас нельзя —
+// поэтому запрет «не загрузились — не слать» проверен и в коде: тот же
+// замок, что у специальностей, стоит на самом ключе conditions.
+test('CLINIC_API_FIX_V1: отказ загрузки болезней — {error} не проглатывается, ключ conditions под замком', () => {
+    const load = src.slice(src.indexOf("from('doctor_conditions')"), src.indexOf("from('doctor_conditions')") + 600);
+    assert.match(load, /\berror\b/, 'ответ doctor_conditions читается без {error}');
+    assert.match(src, /st\.condLoadFailed = true/, 'отказ загрузки болезней не запоминается');
+    assert.match(src, /if \(!st\.condLoadFailed && [^\n]*\) args\.conditions = now\.conditions;/,
+        'conditions уходят на сервер и тогда, когда не загрузились');
 });
 
 // ---------------------------------------------------------------------------

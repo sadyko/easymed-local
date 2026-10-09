@@ -68,6 +68,7 @@ export async function renderDoctorProfile(container, doctorId) {
         specSlugs: [],            // array of specialty_slug strings (max 4, [0] = primary)
         specLoadFailed: false,    // CLINIC_API_FIX_V1 — list did not load: no editing, never sent
         selectedConds: new Map(), // "kind:slug" -> { kind, slug, name_ru, name_uz }
+        condLoadFailed: false,    // CLINIC_API_FIX_V1 — as specLoadFailed, for doctor_conditions
         catalog: [],              // conditions catalog from gw
         specCatalog: [],          // specialties catalog from gw
     };
@@ -147,10 +148,15 @@ export async function renderDoctorProfile(container, doctorId) {
     } catch (e) { st.specSlugs = []; st.specLoadFailed = true; }   // CLINIC_API_FIX_V1
 
     try {
-        const { data } = await supabase.from('doctor_conditions')
+        // CLINIC_API_FIX_V1 (ревью итога) — как со специальностями выше: отказ
+        // базы приходит {error}, без исключения, и молча давал пустой список.
+        // Отмеченная после этого болезнь заменила бы на сервере (DELETE +
+        // INSERT) все сохранённые — поэтому не загрузились — не меняются.
+        const { data, error } = await supabase.from('doctor_conditions')
             .select('kind,slug,name_ru,name_uz').eq('doctor_id', doctorId);
+        if (error) throw error;
         for (const r of (data || [])) st.selectedConds.set(r.kind + ':' + r.slug, r);
-    } catch (e) {}
+    } catch (e) { st.selectedConds.clear(); st.condLoadFailed = true; }
 
     status.remove();
 
@@ -282,10 +288,10 @@ export async function renderDoctorProfile(container, doctorId) {
             // отвергался у всех.
             // CLINIC_API_FIX_V1 — набор уходит, только если он стал другим:
             // без ключа сервер оставляет строки как были. Не загрузившиеся
-            // специальности не уходят никогда.
+            // специальности и болезни не уходят никогда.
             const args = { p };
             if (!st.specLoadFailed && JSON.stringify(now.specialties) !== JSON.stringify(atOpen.specialties)) args.specialties = now.specialties;
-            if (JSON.stringify(now.conditions) !== JSON.stringify(atOpen.conditions)) args.conditions = now.conditions;
+            if (!st.condLoadFailed && JSON.stringify(now.conditions) !== JSON.stringify(atOpen.conditions)) args.conditions = now.conditions;
             if (!Object.keys(p).length && !('specialties' in args) && !('conditions' in args)) {
                 // Фото не загрузилось — об этом уже сказал свой тост.
                 if (!photoFailed) toast('Нет изменений', 'info');
@@ -666,6 +672,11 @@ export async function renderDoctorProfile(container, doctorId) {
 
     // ----- Conditions card (ported legacy logic — search + checkbox list) -----
     function conditionsCard() {
+        // CLINIC_API_FIX_V1 (ревью итога) — список не загрузился: ни поиска, ни
+        // отметок, только объяснение (как у специальностей, specialtyCard).
+        if (st.condLoadFailed) {
+            return h('div', { class: 'docprof-hint' }, 'Болезни и симптомы не загрузились — обновите страницу, чтобы их изменить.');
+        }
         const wrap = h('div');
         const condStatus = h('div', { class: 'docprof-status', style: { marginBottom: '8px' } }, '');
         const searchI = h('input', { class: 'docprof-cond-search', placeholder: 'Поиск болезней / симптомов…' });
