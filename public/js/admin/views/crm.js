@@ -1996,11 +1996,9 @@ async function paint() {
         const canReassign = canSeeAllLeads();
         const canDeleteTasks = hasActorRole(['admin']);
         let operSel = null;
-        // CRM_DEDUP_SEARCH_TASKS_V1 — тот же список персонала нужен полю
-        // «Ответственный» у задач. Спрашивается ОДИН раз и только у
-        // администратора: оператору список сотрудников не отдаётся (см. ниже),
-        // и задачу он ставит себе или оператору заявки.
-        let staffForTasks = null;
+        // CRM_UNIFY_V1 — список персонала ниже кормит только поле «Оператор».
+        // «Ответственный» у задач берёт людей у сервера (crm_task_assignees в
+        // views/crm-tasks.js): только тех, кто может вести эту карточку.
         if (canReassign) {
             operSel = h('select', { 'aria-label': 'Оператор, который ведёт заявку' });
             // Выбор человека НЕ теряется, если список операторов доехал позже:
@@ -2027,7 +2025,7 @@ async function paint() {
             fillOper(ownerId ? [{ id: ownerId, full_name: ownerName }] : []);
             // CRM_HEAD_MERGE_TAGS_V1 — все активные, а отбор по ролям — boardStaff:
             // дополнительная роль колл-центра тоже делает человека оператором.
-            staffForTasks = supabase.from('users').select('id, full_name, role, extra_roles')
+            supabase.from('users').select('id, full_name, role, extra_roles')
                 .eq('is_active', 1).order('full_name')
                 .then(({ data, error }) => {
                     if (error) {
@@ -2941,7 +2939,6 @@ async function paint() {
                     request: r,
                     me: selfUserId() != null ? { id: selfUserId(), full_name: (window.easymed.state.user || {}).full_name || '' } : null,
                     isAdmin: canDeleteTasks,   // CRM_HEAD_MERGE_TAGS_V1 — удаляет только администратор
-                    staff: staffForTasks,
                     onChange: () => {
                         // бейдж меню и метки на доске — сразу, не дожидаясь опроса
                         try { if (window.easymed && window.easymed.refreshNav) window.easymed.refreshNav(); } catch (e) { /* подсказка */ }

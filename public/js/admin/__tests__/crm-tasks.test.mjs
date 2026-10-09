@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, mk, walk, textOf, byClass, byAttr, tick, TOASTS } from './crm-harness.mjs';
+import { S, CALLS, RPC, mk, walk, textOf, byClass, byAttr, tick, TOASTS } from './crm-harness.mjs';
 import { isOverdue, nearestOpenTasks, localDueIso, nowIso, overdueTaskCount, DEFAULT_DUE_TIME } from '../views/crm-tasks.js';
 
 const { renderCrm } = await import('../views/crm.js');
@@ -89,6 +89,8 @@ test('у новой заявки задач нет — задаче не к че
 });
 
 test('создать: текст, дата без ограничения сверху, время, ответственный по умолчанию — оператор заявки', async () => {
+  // CRM_UNIFY_V1 — список ответственных приходит от сервера (crm_task_assignees).
+  S.assignees = [{ id: 12, full_name: 'Оператор Лола' }];
   S.tasks = []; CALLS.length = 0;
   const { modal } = await openCard(ADMIN);
   const date = one(modal, 'data-task-date');
@@ -128,10 +130,73 @@ test('без текста или без даты — отказ словами, 
   assert.ok(TOASTS.some((t) => t.includes('Укажите дату задачи.')));
 });
 
-test('у заявки без оператора ответственный по умолчанию — я', async () => {
-  S.tasks = [];
+// CRM_UNIFY_V1 — ПРАВИЛО ИЗМЕНЕНО НАМЕРЕННО: раньше у заявки без оператора
+// ответственным по умолчанию становился «я» — администратор и руководитель
+// ставили задачи себе. Теперь у ничьей карточки выбор обязателен, а список
+// людей — от сервера (crm_task_assignees): только те, кто может вести карточку.
+test('CRM_UNIFY_V1: у ничьей карточки ответственный не выбран; без выбора задача не создаётся', async () => {
+  S.tasks = []; CALLS.length = 0; TOASTS.length = 0;
+  S.assignees = [{ id: 7, full_name: 'Админ' }, { id: 12, full_name: 'Оператор Лола' }];
   const { modal } = await openCard(LOLA, { ...LEAD, assigned_to: null, users: null });
-  assert.equal(one(modal, 'data-task-who').value, '12');
+  await tick(30);
+  assert.equal(one(modal, 'data-task-who').value, '', 'у ничьей карточки ответственный снова «я»');
+  const first = walk(one(modal, 'data-task-who')).find((n) => n.tagName === 'OPTION');
+  assert.ok(textOf(first).includes('— выберите ответственного —'));
+  one(modal, 'data-task-text').value = 'Перезвонить';
+  one(modal, 'data-task-date').value = '2099-01-01';
+  one(modal, 'data-task-add').click();
+  await tick(30);
+  assert.ok(TOASTS.some((t) => t.includes('Выберите ответственного.')));
+  assert.equal(CALLS.filter((c) => c.table === 'crm_tasks' && c.op === 'insert').length, 0, 'задача создана без ответственного');
+  // выбрал — создаётся
+  const who = one(modal, 'data-task-who');
+  who.value = '7';
+  who.dispatchEvent({ type: 'change', target: who, currentTarget: who });
+  one(modal, 'data-task-add').click();
+  await tick(60);
+  const ins = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'insert');
+  assert.ok(ins, 'задача с выбранным ответственным не ушла');
+  assert.equal(ins.values.assignee_id, 7);
+});
+
+test('CRM_UNIFY_V1: список ответственных — ровно ответ сервера (кто может вести карточку)', async () => {
+  S.tasks = []; RPC.length = 0;
+  S.assignees = [{ id: 12, full_name: 'Оператор Лола' }, { id: 24, full_name: 'Руководитель' }];
+  const { modal } = await openCard(ADMIN);
+  await tick(30);
+  const opts = walk(one(modal, 'data-task-who')).filter((n) => n.tagName === 'OPTION').map((o) => o.value);
+  assert.deepEqual(opts, ['', '12', '24'], 'в списке «я» или кто-то, кого сервер не предлагал');
+  assert.equal(one(modal, 'data-task-who').value, '12', 'по умолчанию не оператор карточки');
+  assert.ok(RPC.some((r) => r.name === 'crm_task_assignees' && r.body.request_id === 1));
+});
+
+test('CRM_UNIFY_V1: оператор карточки, который вести её не может, по умолчанию не ставится', async () => {
+  S.tasks = [];
+  S.assignees = [{ id: 24, full_name: 'Руководитель' }];   // Лолы (12) в ответе нет — уволена или «просмотр»
+  const { modal } = await openCard(ADMIN);
+  await tick(30);
+  assert.equal(one(modal, 'data-task-who').value, '', 'по умолчанию стоит тот, кого сервер не предлагает');
+});
+
+test('CRM_UNIFY_V1: список ответственных не загрузился — понятное сообщение, задачу не поставить с угаданным ответственным', async () => {
+  S.tasks = []; CALLS.length = 0; TOASTS.length = 0;
+  S.assignees = [{ id: 12, full_name: 'Оператор Лола' }];
+  S.assigneesError = 'сбой сети';
+  try {
+    const { modal } = await openCard(ADMIN);
+    await tick(30);
+    const who = one(modal, 'data-task-who');
+    assert.equal(who.value, '', 'ответственный угадан без ответа сервера');
+    assert.ok(who.disabled, 'поле «Ответственный» доступно без списка');
+    const note = one(modal, 'data-task-who-error');
+    assert.ok(note && textOf(note).includes('Список ответственных не загрузился'), 'нет сообщения о сбое');
+    one(modal, 'data-task-text').value = 'Перезвонить';
+    one(modal, 'data-task-date').value = '2099-01-01';
+    one(modal, 'data-task-add').click();
+    await tick(30);
+    assert.equal(CALLS.filter((c) => c.table === 'crm_tasks' && c.op === 'insert').length, 0, 'задача ушла с угаданным ответственным');
+    assert.ok(TOASTS.some((t) => t.includes('Список ответственных не загрузился')));
+  } finally { S.assigneesError = null; }
 });
 
 test('просроченная задача — предупреждающий стиль в окне и метка на доске', async () => {
