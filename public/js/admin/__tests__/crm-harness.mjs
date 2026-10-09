@@ -104,6 +104,7 @@ function applyFilters(rows, filters) {
       case 'neq': return String(v) !== String(f.val);
       case 'in': return (f.val || []).map(String).includes(String(v));
       case 'not.in': return !(f.val || []).map(String).includes(String(v));   // CRM_UNIFY_V1 — открытые = не закрытые
+      case 'not.is': return f.val === null ? v != null : v !== f.val;   // CRM_UNIFY_V1 — задачи со сроком
       default: return true;
     }
   }));
@@ -152,8 +153,11 @@ globalThis.fetch = async (url, opts) => {
     if (body.table === 'crm_tasks') {
       if (body.op === 'select') {
         const rows = applyFilters(S.tasks, body.filters);
-        if (body.count) return jsonOk(null, rows.length);
-        return jsonOk(rows);
+        // CRM_UNIFY_V1 (итоговое ревью) — предел и число, как у сервера: строки
+        // до предела, count — по всему отбору (вид «Задачи» говорит «показаны первые N»).
+        const page = Number.isInteger(body.limit) ? rows.slice(0, body.limit) : rows;
+        if (body.count) return jsonOk(page, rows.length);
+        return jsonOk(page);
       }
       if (body.op === 'insert') {
         const row = { id: S.nextTaskId++, done_at: null, done_by: null, created_at: '2026-09-23T08:00:00Z', ...body.values };

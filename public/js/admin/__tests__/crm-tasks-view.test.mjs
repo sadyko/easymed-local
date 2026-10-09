@@ -85,6 +85,10 @@ test('строка открывает карточку; задача на чуж
   assert.equal(rows.length, 2);
   const mine = rows.find((r) => textOf(r).includes('Задача 1'));
   const foreign = rows.find((r) => textOf(r).includes('Задача 2'));
+  // CRM_UNIFY_V1 (итоговое ревью, T3) — ОБНОВЛЕНО НАМЕРЕННО: строка больше не
+  // кнопка; карточку открывает настоящая кнопка с текстом задачи.
+  byAttr(mine, 'data-task-open')[0].click();
+  assert.equal(byAttr(foreign, 'data-task-open').length, 0, 'у задачи на чужой карточке есть кнопка «открыть»');
   mine.click(); foreign.click(); await tick();
   assert.deepEqual(opened, [101]);
   assert.ok(textOf(foreign).includes('Карточка у другого оператора'));
@@ -121,7 +125,7 @@ test('доска: третий вид «Задачи» — фильтры дос
   assert.ok(q && q.filters.some((f) => f.col === 'assignee_id' && f.val === 12), 'вид открылся не на «Мои»');
   const row = byAttr(root, 'data-task-row')[0];
   assert.ok(row && textOf(row).includes('Перезвонить Азизе'));
-  row.click();
+  byAttr(row, 'data-task-open')[0].click();   // CRM_UNIFY_V1 (итоговое ревью, T3) — кнопка, а не строка
   await tick(60);
   const modal = document.body.children.find((n) => String(n.className).includes('modal'));
   assert.ok(modal && walk(modal).some((n) => n.value === 'Каримова Азиза'), 'строка не открыла карточку');
@@ -141,10 +145,75 @@ test('доска: карточку не из загруженных вид до�
   await tick(60);
   assert.ok(byAttr(root, 'data-task-who-filter').length === 1, 'администратору нет выбора оператора');
   CALLS.length = 0;
-  byAttr(root, 'data-task-row')[0].click();
+  byAttr(byAttr(root, 'data-task-row')[0], 'data-task-open')[0].click();   // CRM_UNIFY_V1 (итоговое ревью, T3)
   await tick(60);
   const one = CALLS.find((c) => c.table === 'crm_requests' && c.op === 'select' && c.single);
   assert.ok(one && one.filters.some((f) => f.col === 'id' && String(f.val) === '77'), 'карточка не запрошена с сервера');
   window.easymed.state.user = null;
   assert.ok(byClass(root, 'crm-tv-row').length >= 1);
 });
+
+// ---------------------------------------------------------------------------
+// CRM_UNIFY_V1 — ИТОГОВОЕ РЕВЬЮ: порядок и предел вида «Задачи», доступность.
+// ---------------------------------------------------------------------------
+test('порядок: сначала задачи со сроком (по сроку), без срока — в конце; предел не съедает просроченные', async () => {
+  const past = new Date(2026, 0, 1, 9);
+  S.tasks = [T(1, null), T(2, null), T(3, null), T(4, past), T(5, new Date(2026, 0, 2, 9))];
+  const root = mk('div');
+  CALLS.length = 0;
+  await renderTasksView(root, { who: 'me', me: 21, limit: 2 });
+  const reads = CALLS.filter((c) => c.table === 'crm_tasks' && c.op === 'select' && c.columns === TASK_LIST_SELECT);
+  assert.equal(reads.length, 2, 'одним запросом: SQLite ставит задачи без срока ПЕРВЫМИ, и предел съедал просроченные');
+  const dated = reads.find((c) => c.filters.some((f) => f.col === 'due_at' && f.op === 'not.is'));
+  const undated = reads.find((c) => c.filters.some((f) => f.col === 'due_at' && f.op === 'is'));
+  assert.ok(dated && undated);
+  assert.equal(dated.count, 'exact');
+  const shown = byAttr(root, 'data-task-row').map((r) => r.getAttribute('data-task-row'));
+  assert.deepEqual(shown, ['4', '5'], 'показаны не просроченные, а задачи без срока');
+  const note = byAttr(root, 'data-task-truncated');
+  assert.equal(note.length, 1, 'вид обрезан молча — счётчик и список расходятся без объяснения');
+  assert.ok(textOf(note[0]).includes('Показаны первые 2 задач из 5'), textOf(note[0]));
+  // без обрезки — подсказки нет
+  const r2 = mk('div');
+  await renderTasksView(r2, { who: 'me', me: 21 });
+  assert.equal(byAttr(r2, 'data-task-truncated').length, 0);
+  assert.equal(byAttr(r2, 'data-task-row').length, 5);
+});
+
+test('T3 доступность: строка — не кнопка; карточку открывает кнопка с текстом задачи; «Сделано» — отдельный флажок рядом', async () => {
+  S.tasks = [T(1, null), T(2, null, { crm_requests: null })];
+  const opened = [];
+  const root = mk('div');
+  await renderTasksView(root, { who: 'me', me: 21, onOpen: (id) => opened.push(id) });
+  const [vis, hid] = ['1', '2'].map((id) => byAttr(root, 'data-task-row').find((r) => r.getAttribute('data-task-row') === id));
+  for (const row of [vis, hid]) {
+    assert.equal(row.getAttribute('role'), null, 'строка снова role=button — флажок внутри кнопки немой');
+    assert.equal(row.getAttribute('tabindex'), null);
+  }
+  const open = byAttr(vis, 'data-task-open')[0];
+  assert.equal(open.tagName, 'BUTTON');
+  assert.equal(open.getAttribute('type'), 'button');
+  assert.ok(textOf(open).includes('Задача 1'));
+  const box = byAttr(vis, 'data-task-done')[0];
+  assert.equal(box.getAttribute('aria-label'), 'Сделано');
+  assert.ok(!walk(open).includes(box), 'флажок внутри кнопки');
+  open.click(); await tick();
+  assert.deepEqual(opened, [101]);
+  // у невидимой карточки — не кнопка, текст задачи и пометка
+  assert.equal(byAttr(hid, 'data-task-open').length, 0);
+  assert.ok(textOf(hid).includes('Задача 2') && textOf(hid).includes('Карточка у другого оператора'));
+  assert.equal(byAttr(hid, 'data-task-done')[0].getAttribute('aria-label'), 'Сделано');
+});
+
+test('метки задач на доске грузятся тем же порядком: со сроком, потом без срока', async () => {
+  const { loadOpenTasks } = await import('../views/crm-tasks.js');
+  S.tasks = [T(1, null), T(2, new Date(2026, 0, 1, 9))];
+  CALLS.length = 0;
+  const rows = await loadOpenTasks();
+  assert.deepEqual(rows.map((t) => t.id), [2, 1]);
+  const reads = CALLS.filter((c) => c.table === 'crm_tasks' && c.op === 'select');
+  assert.equal(reads.length, 2);
+  assert.ok(reads.some((c) => c.filters.some((f) => f.col === 'due_at' && f.op === 'not.is')));
+  assert.ok(reads.every((c) => /users\(full_name\)/.test(c.columns)));
+});
+

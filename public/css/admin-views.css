@@ -4513,9 +4513,16 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     border-top: 1px solid var(--ink-100); border-radius: 6px; min-width: 0;
 }
 .crm-tv-row:first-of-type { border-top: none; }
-.crm-tv-row.row-click { cursor: pointer; }
-.crm-tv-row.row-click:hover { background: var(--ink-25, #f8fafc); }
-.crm-tv-row.row-click:focus-visible { outline: 2px solid var(--primary-500, #2d958f); outline-offset: 1px; }
+/* CRM_UNIFY_V1 (итоговое ревью, T3) — строка не кнопка: карточку открывает
+   кнопка с текстом задачи (во всю ширину, вид — текст), «Сделано» — флажок рядом. */
+.crm-tv-row:hover { background: var(--ink-25, #f8fafc); }
+.crm-tv-open {
+    display: block; width: 100%; padding: 0; margin: 0; border: 0; background: none;
+    font: inherit; text-align: left; color: inherit; cursor: pointer;
+}
+.crm-tv-open:hover { text-decoration: underline; }
+.crm-tv-open:focus-visible { outline: 2px solid var(--primary-500, #2d958f); outline-offset: 2px; border-radius: 4px; }
+.crm-tv-truncated { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
 .crm-tv-row > input[type="checkbox"] { margin-top: 3px; flex: none; }
 .crm-tv-hidden { cursor: default; }
 .crm-tv-main { flex: 1 1 auto; min-width: 0; }

@@ -15,7 +15,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { trf } from '../i18n.js';
-import { taskQuery, nowIso } from './crm-tasks.js';
+import { loadTaskRows, nowIso, TASK_LIST_LIMIT } from './crm-tasks.js';   // CRM_UNIFY_V1 (итоговое ревью) — порядок и предел
 
 export const TASK_GROUPS = [['overdue', 'Просрочено'], ['today', 'Сегодня'], ['later', 'Позже'], ['nodue', 'Без срока']];
 
@@ -54,8 +54,10 @@ export function groupTasks(tasks, now = new Date()) {
  * @param {(requestId:number, lead:object) => void} [o.onOpen]
  * @param {(who:string) => void} [o.onWho]
  * @param {() => void} [o.onChanged]         после отметки «сделано»
+ * @param {number} [o.limit]                 предел строк (по умолчанию TASK_LIST_LIMIT)
  */
-export async function renderTasksView(root, { who = 'me', me = null, canPick = false, staff = [], onOpen, onWho, onChanged, db = supabase } = {}) {
+export async function renderTasksView(root, { who = 'me', me = null, canPick = false, staff = [], onOpen, onWho, onChanged, db = supabase,
+    limit = TASK_LIST_LIMIT } = {}) {
     clear(root);
     if (canPick) {
         const sel = h('select', { class: 'crm-tv-who', 'aria-label': 'Чьи задачи', 'data-task-who-filter': '' },
@@ -71,13 +73,20 @@ export async function renderTasksView(root, { who = 'me', me = null, canPick = f
         h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загружаем…'));
     root.appendChild(body);
 
-    const { data, error } = await taskQuery(db, { who, me }).order('due_at', { ascending: true }).limit(2000);
+    // CRM_UNIFY_V1 (итоговое ревью) — сначала со сроком (просроченные — первыми),
+    // без срока — в конце; обрезанный список говорит об этом, а не молчит:
+    // красный счётчик и вид не расходятся без объяснения.
+    const { rows, total, error } = await loadTaskRows(db, { who, me, limit });
     clear(body);
     if (error) {
         body.appendChild(h('div', { class: 'muted' }, trf('Задачи недоступны: {msg}', { msg: error.message })));
         return;
     }
-    const groups = groupTasks(data || []);
+    if (total > rows.length) {
+        body.appendChild(h('div', { class: 'muted crm-tv-truncated', 'data-task-truncated': '' }, Icon('Warning', { size: 13 }), ' ',
+            trf('Показаны первые {n} задач из {total} — сначала просроченные и ближайшие; сузьте отбор, чтобы увидеть остальные.', { n: rows.length, total })));
+    }
+    const groups = groupTasks(rows);
     let any = false;
     for (const [key, label] of TASK_GROUPS) {
         const list = groups[key];
@@ -89,10 +98,14 @@ export async function renderTasksView(root, { who = 'me', me = null, canPick = f
     }
     if (!any) body.appendChild(h('div', { class: 'card crm-tv-group' }, h('div', { class: 'empty', 'data-crm-tasks-empty': '' }, 'Открытых задач нет.')));
 
+    // CRM_UNIFY_V1 (итоговое ревью, T3) — ДОСТУПНОСТЬ. Строка была role=button с
+    // флажком внутри: у кнопки дети «презентационные», и флажок «Сделано» для
+    // экранного диктора пропадал. Теперь строка — просто строка: карточку
+    // открывает настоящая кнопка с текстом задачи (Enter и пробел — её родные),
+    // а «Сделано» — отдельный флажок рядом со своей подписью.
     function row(t) {
         const lead = t.crm_requests && t.crm_requests.id != null ? t.crm_requests : null;
         const tick = h('input', { type: 'checkbox', 'aria-label': 'Сделано', 'data-task-done': String(t.id) });
-        tick.addEventListener('click', (ev) => ev.stopPropagation());
         tick.addEventListener('change', async () => {
             if (!tick.checked) return;
             // done_by ставит сервер по сессии (реестр stamps).
@@ -102,21 +115,14 @@ export async function renderTasksView(root, { who = 'me', me = null, canPick = f
         });
         const assignee = who !== 'me' && t.users && t.users.full_name
             ? h('span', null, Icon('User', { size: 12 }), ' ', t.users.full_name) : null;
-        const open = () => { if (lead && onOpen) onOpen(t.request_id, lead); };
-        return h('div', {
-            class: 'crm-tv-row' + (lead ? ' row-click' : ' crm-tv-hidden'), 'data-task-row': String(t.id),
-            title: lead ? 'Открыть карточку' : 'Карточка у другого оператора',
-            // строку с карточкой открывают и с клавиатуры
-            ...(lead ? { role: 'button', tabindex: '0' } : {}),
-            onclick: open,
-            onkeydown: (ev) => {
-                if (ev.target !== ev.currentTarget) return;
-                if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
-            },
-        },
+        const title = lead
+            ? h('button', { type: 'button', class: 'crm-tv-open crm-tv-text', 'data-task-open': '', title: 'Открыть карточку',
+                onclick: () => { if (onOpen) onOpen(t.request_id, lead); } }, t.text)
+            : h('div', { class: 'crm-tv-text' }, t.text);
+        return h('div', { class: 'crm-tv-row' + (lead ? '' : ' crm-tv-hidden'), 'data-task-row': String(t.id) },
             tick,
             h('div', { class: 'crm-tv-main' },
-                h('div', { class: 'crm-tv-text' }, t.text),
+                title,
                 h('div', { class: 'crm-tv-meta' },
                     t.due_at ? h('span', null, Icon('Clock', { size: 12 }), ' ', fmtDateTime(t.due_at)) : h('span', null, 'Без срока'),
                     lead

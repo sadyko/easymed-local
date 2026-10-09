@@ -68,9 +68,11 @@ export const TASK_LIST_SELECT = 'id, request_id, text, due_at, assignee_id, done
  * @param {number|null} o.me
  * @param {string} [o.columns]
  * @param {boolean} [o.count]  только число (count: 'exact', без строк)
+ * @param {boolean} [o.withCount]  строки и число всего отбора (CRM_UNIFY_V1 — «показаны первые N»)
  */
-export function taskQuery(db, { who = 'me', me = null, columns = TASK_LIST_SELECT, count = false } = {}) {
-    let q = db.from('crm_tasks').select(columns, count ? { count: 'exact', head: true } : undefined).is('done_at', null);
+export function taskQuery(db, { who = 'me', me = null, columns = TASK_LIST_SELECT, count = false, withCount = false } = {}) {
+    const opts = count ? { count: 'exact', head: true } : (withCount ? { count: 'exact' } : undefined);
+    let q = db.from('crm_tasks').select(columns, opts).is('done_at', null);
     if (who === 'me') q = q.eq('assignee_id', me == null ? 0 : Number(me));
     else if (who === 'none') q = q.is('assignee_id', null);
     else if (who !== 'all' && Number(who) > 0) q = q.eq('assignee_id', Number(who));
@@ -89,18 +91,45 @@ export function taskQuery(db, { who = 'me', me = null, columns = TASK_LIST_SELEC
 export async function overdueTaskCount({ who = null, me = null, isAdmin = false, db = supabase, now = nowIso() } = {}) {
     const w = who || (isAdmin ? 'all' : 'me');
     if (w === 'me' && me == null) return null;
-    const { count, error } = await taskQuery(db, { who: w, me, columns: 'id', count: true }).lte('due_at', now);
+    // CRM_UNIFY_V1 (итоговое ревью) — нужно только число: строк не тянем (число
+    // сервер считает по всему отбору, без предела).
+    const { count, error } = await taskQuery(db, { who: w, me, columns: 'id', count: true }).lte('due_at', now).limit(1);
     if (error) return null;
     return Number(count) || 0;
 }
 
+// CRM_UNIFY_V1 (итоговое ревью) — ПОРЯДОК И ПРЕДЕЛ СПИСКА ЗАДАЧ. Один запрос
+// «по сроку» ставил задачи БЕЗ срока первыми (так SQLite сортирует NULL), и
+// предел 2000 съедал просроченные — ровно те, ради которых список открывают.
+// Теперь два запроса: со сроком — по сроку, без срока — в конце; число всего
+// отбора приходит вместе со строками, и вид честно говорит «показаны первые N».
+export const TASK_LIST_LIMIT = 5000;
+/**
+ * Открытые задачи отбора: сначала со сроком (по сроку), потом без срока.
+ * @returns {Promise<{rows: object[], total: number, error?: object}>}
+ */
+export async function loadTaskRows(db, { who = 'me', me = null, columns = TASK_LIST_SELECT, limit = TASK_LIST_LIMIT } = {}) {
+    const [dated, undated] = await Promise.all([
+        taskQuery(db, { who, me, columns, withCount: true }).not('due_at', 'is', null)
+            .order('due_at', { ascending: true }).order('id', { ascending: true }).limit(limit),
+        taskQuery(db, { who, me, columns, withCount: true }).is('due_at', null)
+            .order('id', { ascending: true }).limit(limit),
+    ]);
+    const error = (dated && dated.error) || (undated && undated.error);
+    if (error) return { rows: [], total: 0, error };
+    const a = dated.data || [];
+    const b = undated.data || [];
+    const total = (Number.isFinite(Number(dated.count)) ? Number(dated.count) : a.length)
+        + (Number.isFinite(Number(undated.count)) ? Number(undated.count) : b.length);
+    return { rows: [...a, ...b].slice(0, limit), total };
+}
+
 /** Открытые задачи всех заявок — для метки «задача: …» на карточках доски. */
 export async function loadOpenTasks(db = supabase) {
-    const { data, error } = await db.from('crm_tasks')
-        .select('id, request_id, text, due_at, assignee_id, done_at, users(full_name)')   // CRM_UNIFY_V1 — чья задача
-        .is('done_at', null).order('due_at', { ascending: true }).limit(2000);
+    // CRM_UNIFY_V1 — с исполнителем (чья задача); порядок и предел — loadTaskRows.
+    const res = await loadTaskRows(db, { who: 'all', columns: 'id, request_id, text, due_at, assignee_id, done_at, users(full_name)' });
     // Роль без права на задачи (врач видит доску, но не задачи) — просто без меток.
-    return error ? [] : (data || []);
+    return res.error ? [] : res.rows;
 }
 
 const TEXT_MAX = 500;

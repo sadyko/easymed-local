@@ -330,7 +330,9 @@ test('CRM_UNIFY_V1: чип называет исполнителя; своя —
   // загрузка меток спрашивает, чья задача
   CALLS.length = 0;
   await board(ADMIN);
-  const q = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'select' && !c.count);
+  // CRM_UNIFY_V1 (итоговое ревью) — ОБНОВЛЕНО НАМЕРЕННО: метки грузятся двумя
+  // запросами с числом (со сроком / без срока, loadTaskRows) — ищем по колонкам.
+  const q = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'select' && !String(c.columns).includes('crm_requests('));
   assert.ok(q && /users\(full_name\)/.test(q.columns), 'метки задач грузятся без исполнителя');
 });
 
