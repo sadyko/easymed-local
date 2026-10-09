@@ -213,3 +213,25 @@ test('ревью I6: «HIV Ag» = «Positive» на подтверждённой
     assert.deepEqual(db.prepare("SELECT value, flag FROM lab_results WHERE visit_service_id = 123 AND parameter = 'ВИЧ'").get(), { value: 'Positive', flag: 'abnormal' });
   } finally { await app.close(); db.close(); }
 });
+
+test('ревью CRASH: приём упал после того, как ORU собрано, — строка «ошибка разбора» хранит ORU, «Привязать» её принимает', async () => {
+  await withClinic(async (db, app) => {
+    // Вторая отметка «на связи» падает: вход отметил прибор (первая — до сборки
+    // ORU), а приём (ingest.js) отмечает снова — вне своей транзакции, и
+    // исключение уходит наружу, мимо «ошибки записи» приёма.
+    db.exec(`CREATE TRIGGER lpx_crash BEFORE UPDATE OF last_seen_at ON lab_devices
+             WHEN OLD.last_seen_at IS NOT NULL
+             BEGIN SELECT RAISE(ABORT, 'сбой отметки'); END;`);
+    const res = await post(app.url, fixture('results', 'bs200_glu'));
+    assert.deepEqual([res.status, await res.text()], [200, 'Ok']);
+    const m = lastRow(db);
+    assert.equal(m.status, 'rejected');
+    assert.match(m.detail, /ошибка разбора — сбой отметки/);
+    assert.ok(m.raw.startsWith('MSH|^~\\&|LISPROXY|LabPC|'), 'ORU — в строке журнала до приёма');
+    assert.deepEqual(blank(db, 123), {});
+    db.exec('DROP TRIGGER lpx_crash');
+    const r = lisMessageAttach(db, { id: m.id, visit_service_id: 123 }, LAB);
+    assert.equal(r.status, 'applied');
+    assert.deepEqual(blank(db, 123), { 'Глюкоза': '5.1' });
+  });
+});

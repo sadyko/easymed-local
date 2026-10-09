@@ -140,6 +140,10 @@ function handleResult(db, { id, peer, body, now }) {
     recordMessage(db, { id, deviceId, peer, raw, sampleId: sent, status: 'unmatched', detail: bc.why + note });
     return RESULT_OK;
   }
+  // LIS_PROXY_V1 (ревью CRASH) — ORU и номер — в строку журнала ДО приёма: если
+  // приём бросит наружу, строка «ошибка разбора» хранит ORU, и «Привязать» её
+  // примет (с пустым raw — «пустое сообщение»). Статус и причину пишет приём.
+  db.prepare('UPDATE lab_device_messages SET raw = ?, sample_id = ? WHERE id = ?').run(raw, bc.barcode, id);
   // Прежний вход своего порта: «прибор выключен», N2, ворота, D4/D6/D7, серия.
   receiveMessage(db, raw, { peer, deviceId, journalId: id });
   if (note) {
