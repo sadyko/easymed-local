@@ -120,10 +120,15 @@ test('обновление: «40%» в цене — не число (проце�
     assert.ok(noteAbout(row, 'price'));
 });
 
-test('обновление: пустая ячейка цены — как и раньше (0 с предупреждением «price пусто»)', () => {
-    const row = buildImportRow('services', { ...MIN, price: '' }, { lookups: UPDATE() });
-    assert.strictEqual(row.payload.price, 0);
-    assert.ok(row.notes.some((n) => /price пусто/.test(String(n))), JSON.stringify(row.notes));
+// CLINIC_API_FIX_V1 (ревью 3, решение) — пустая денежная ячейка в строке,
+// ОБНОВЛЯЮЩЕЙ запись, оставляет сохранённое (было: цена 0 с «price пусто»).
+// CLINIC_API_FIX_V1 (ревью 4) — и строка с предупреждением, если сохранённое
+// не то, что дала бы пустая ячейка (цена 0): её считает итог и видно в таблице.
+test('обновление: пустая ячейка цены — сохранённая цена остаётся, предупреждение с сохранённым значением', () => {
+    const row = buildImportRow('services', { ...MIN, price: '' }, { rowNum: 4, lookups: UPDATE() });
+    assert.ok(!('price' in row.payload), 'цена записана: ' + JSON.stringify(row.payload.price));
+    assert.strictEqual(row.status, 'warn');
+    assert.ok(row.notes.includes('Строка 4: price пусто — оставлено как было (200000).'), JSON.stringify(row.notes));
 });
 
 // --- новая строка -----------------------------------------------------------
@@ -169,15 +174,23 @@ test('обновление: не число в НДС и доле — поле �
     assert.ok(!('tax_rate' in row.payload) && !('default_doctor_percent' in row.payload), JSON.stringify(row.payload));
 });
 
-test('новая услуга без колонок и с пустыми ячейками — как раньше', () => {
-    const absent = buildImportRow('services', { ...MIN });
-    assert.strictEqual(absent.payload.price, 0);
-    assert.strictEqual(absent.payload.tax_rate, 12);
-    const blank = buildImportRow('services', { ...MIN, price: '', tax_rate: '', default_doctor_percent: '' });
-    assert.strictEqual(blank.payload.price, 0);
-    assert.strictEqual(blank.payload.tax_rate, 12);
-    assert.strictEqual(blank.payload.default_doctor_percent, 0);
-    assert.strictEqual(blank.status, 'warn', 'пустая цена — по-прежнему с предупреждением');
+// CLINIC_API_FIX_V1 (ревью 4, решение) — ОТКАТ ревью 3: новая услуга без цены
+// (пустая ячейка или нет колонки) ввозится с ценой 0 и ПРЕДУПРЕЖДЕНИЕМ, как
+// задумано в IMPORT_PRICE_OPTIONAL_V1 (прайс «название + раздел, цены
+// потом»); предупреждения теперь видны. Не число в цене — по-прежнему отказ.
+test('новая услуга с пустой ценой или без колонки цены — 0 с предупреждением; явный 0 — без него', () => {
+    for (const raw of [{ ...MIN }, { ...MIN, price: '' }]) {
+        const row = buildImportRow('services', raw, { rowNum: 6 });
+        assert.strictEqual(row.status, 'warn', JSON.stringify(raw) + ' ' + JSON.stringify(row.notes));
+        assert.strictEqual(row.payload.price, 0);
+        assert.ok(row.notes.includes('price пусто — будет 0'), JSON.stringify(row.notes));
+    }
+    const free = buildImportRow('services', { ...MIN, price: 0, tax_rate: '', default_doctor_percent: '' });
+    assert.strictEqual(free.status, 'ok', JSON.stringify(free.notes));
+    assert.strictEqual(free.payload.price, 0);
+    assert.strictEqual(free.payload.tax_rate, 12);
+    assert.strictEqual(free.payload.default_doctor_percent, 0);
+    assert.strictEqual(buildImportRow('services', { ...MIN, price: '0' }).payload.price, 0);
 });
 
 // --- цены второго/повторного визита и ступени — то же правило ---------------
@@ -284,4 +297,196 @@ test('новые сообщения — на трёх языках, узбекс
         assert.ok(!/[Ѐ-ӿ]/.test(e.uz), 'кириллица в узбекском: ' + e.uz);
         for (const ph of ['{n}', '{col}', '{v}']) assert.ok(e.uz.includes(ph) && e.en.includes(ph), ph + ' потерян в переводе: ' + k);
     }
+});
+
+// CLINIC_API_FIX_V1 (ревью 3) — ДОЛЯ ВНЕ 0…100 %. В колонке процентов (НДС,
+// доли, процент зарплаты, скидки) 120 или −5 — не доля: для правила числа это
+// то же, что не число. Новая строка не ввозится, обновляемая оставляет
+// сохранённое; сообщение называет причину — «доля больше 100%» / «меньше 0%».
+test('доля вне 0…100 %: новая услуга не ввозится, обновляемая оставляет сохранённое, причина названа', () => {
+    const fresh = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '120' }, { rowNum: 3 });
+    assert.strictEqual(fresh.status, 'error', JSON.stringify(fresh.notes));
+    assert.strictEqual(noteAbout(fresh, 'default_doctor_percent'), 'Строка 3: в колонке default_doctor_percent доля больше 100% («120») — строка не импортирована.');
+
+    const upd = buildImportRow('services', { ...MIN, tax_rate: '-5' }, { rowNum: 3, lookups: UPDATE() });
+    assert.strictEqual(upd.status, 'warn', JSON.stringify(upd.notes));
+    assert.ok(!('tax_rate' in upd.payload), 'НДС −5 записан');
+    assert.strictEqual(noteAbout(upd, 'tax_rate'), 'Строка 3: в колонке tax_rate доля меньше 0% («-5») — оставлено сохранённое значение.');
+
+    const pct = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '140%' });
+    assert.strictEqual(pct.status, 'error');
+});
+
+test('доля 0 и 100 % — допустимы', () => {
+    const row = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '100', tax_rate: '0' });
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+    assert.strictEqual(row.payload.default_doctor_percent, 100);
+    assert.strictEqual(row.payload.tax_rate, 0);
+});
+
+test('доля вне 0…100 % в ступени, товаре и зарплате — тоже отказ новой строки', () => {
+    const tier = buildImportRow('services', { ...MIN, price: 1000, doctor_tier_from: 10, doctor_tier_percent: 120 }, { rowNum: 4 });
+    assert.strictEqual(tier.status, 'error', JSON.stringify(tier.notes));
+    assert.ok(noteAbout(tier, 'doctor_tier_percent').includes('доля больше 100%'), JSON.stringify(tier.notes));
+    assert.strictEqual(buildImportRow('clinic_items', { name: 'Шприц', price: 1500, tax_rate: '150' }).status, 'error');
+    assert.strictEqual(buildImportRow('users', { username: 'a.b', role: 'doctor', salary_percent: '101' }).status, 'error');
+});
+
+test('сообщения о доле вне 0…100 % — на трёх языках', () => {
+    for (const k of ['Строка {n}: в колонке {col} {why} («{v}») — строка не импортирована.',
+        'Строка {n}: в колонке {col} {why} («{v}») — оставлено сохранённое значение.',
+        'доля больше 100%', 'доля меньше 0%']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+    }
+});
+
+// CLINIC_API_FIX_V1 (ревью 3) — ДЕНЬГИ В РАЗДЕЛАХ ИЗ sections.js. Суммы кешбэка
+// (min_purchase, max_cashback) и лимит страхового полиса (max_limit) не были
+// помечены деньгами: «много» в них не отказывало строке. Доля определяется по
+// КЛЮЧУ (percent/pct/tax_rate), а не по «%» в подписи: bonus_value — «% или
+// сумма», и 150 в нём — допустимая сумма, а не доля больше 100 %.
+const refusedFor = (section, raw, col) => {
+    const row = buildImportRow(section, raw, { rowNum: 2 });
+    return String(noteAbout(row, col) || '');
+};
+test('кешбэк и полис: не число в сумме — строка не ввозится', () => {
+    assert.ok(refusedFor('cashback', { name: 'Кешбэк', min_purchase: 'много' }, 'min_purchase').includes('строка не импортирована'));
+    assert.ok(refusedFor('cashback', { name: 'Кешбэк', max_cashback: 'без предела' }, 'max_cashback').includes('строка не импортирована'));
+    assert.ok(refusedFor('payer_policies', { name: 'Полис', max_limit: 'без лимита' }, 'max_limit').includes('строка не импортирована'));
+    assert.ok(refusedFor('doctor_referral_bonuses', { bonus_value: 'много' }, 'bonus_value').includes('строка не импортирована'));
+});
+
+test('бонус направившему 150 — сумма, а не доля больше 100 %; покрытие полиса 120 % — доля больше 100 %', () => {
+    const bonus = buildImportRow('doctor_referral_bonuses', { bonus_value: '150' });
+    assert.strictEqual(bonus.payload.bonus_value, 150);
+    assert.ok(!noteAbout(bonus, 'bonus_value'), JSON.stringify(bonus.notes));
+    assert.ok(refusedFor('payer_policies', { name: 'Полис', coverage_percentage: '120' }, 'coverage_percentage').includes('доля больше 100%'));
+});
+
+// CLINIC_API_FIX_V1 (ревью 3, решение) — ПУСТАЯ ДЕНЕЖНАЯ ЯЧЕЙКА НЕ ПИШЕТ 0.
+//  • строка обновляет услугу — поле остаётся сохранённым (цена, НДС, доля,
+//    цены визита, ступени), замечание «пусто — оставлено как было»;
+//  • разделы, где новая ли строка, узнаётся только при импорте (товары,
+//    закупка, сотрудники…), — поле не пишется никогда, замечание «пусто — не
+//    записано»; колонки в листе нет — без замечаний;
+//  • свой экспорт, импортированный обратно, ничего не меняет.
+// CLINIC_API_FIX_V1 (ревью 4) — НДС и доля пустые у обновляемой услуги —
+// сохранённые остаются (ревью 3); а ступени — одно целое: пустая цена
+// визита со всеми её ячейками снимает ступень визита, пустая пара ступени
+// доли снимает ступень (подсказка: «0 или пусто — ступени нет»).
+test('обновление: пустые НДС и доля — сохранённые; пустая ступень визита и пара ступени доли — сняты', () => {
+    const row = buildImportRow('services', { ...MIN, tax_rate: '', default_doctor_percent: '', price_secondary: '',
+        doctor_tier_from: '', doctor_tier_percent: '' }, { rowNum: 3, lookups: UPDATE() });
+    for (const k of ['tax_rate', 'default_doctor_percent']) assert.ok(!(k in row.payload), k + ' записано: ' + JSON.stringify(row.payload[k]));
+    assert.deepStrictEqual(['price_secondary', 'secondary_days_from', 'secondary_days_to'].map((k) => row.payload[k]), [null, null, null]);
+    assert.strictEqual(row.payload.doctor_tier_from, 0);
+    assert.strictEqual(row.payload.doctor_tier_percent, 0);
+    assert.notStrictEqual(row.status, 'error', JSON.stringify(row.notes));
+});
+
+test('полупара ступени доли — ступень из файла не пишется (и у новой, и у обновляемой), предупреждение', () => {
+    for (const lookups of [UPDATE(), {}]) {
+        const row = buildImportRow('services', { ...MIN, price: 1000, doctor_tier_from: 20, doctor_tier_percent: '' }, { lookups });
+        assert.ok(!('doctor_tier_from' in row.payload) && !('doctor_tier_percent' in row.payload), JSON.stringify(row.payload));
+        assert.strictEqual(row.status, 'warn');
+    }
+});
+
+test('товары, закупка, сотрудники: пустая денежная ячейка не пишется (не 0), колонки нет — без замечаний', () => {
+    const item = buildImportRow('clinic_items', { name: 'Шприц', price: '', tax_rate: '' }, { rowNum: 2 });
+    assert.ok(!('price' in item.payload) && !('tax_rate' in item.payload), JSON.stringify(item.payload));
+    assert.ok(item.notes.includes('Строка 2: price пусто — не записано.'), JSON.stringify(item.notes));
+    const proc = buildImportRow('procurement_items', { 'Товар': 'Шприц', 'Цена': '' });
+    assert.ok(!('price' in proc.payload), JSON.stringify(proc.payload));
+    const noCol = buildImportRow('procurement_items', { 'Товар': 'Шприц' });
+    assert.ok(!('price' in noCol.payload), 'нет колонки «цена» — а цена записана: ' + JSON.stringify(noCol.payload.price));
+    assert.deepEqual(noCol.notes, []);
+    const staff = buildImportRow('users', { username: 'a.b', role: 'doctor', salary_fixed: '', salary_percent: '' }, { rowNum: 5 });
+    assert.ok(!('salary_fixed' in staff.payload) && !('salary_percent' in staff.payload), JSON.stringify(staff.payload));
+    assert.ok(staff.notes.includes('Строка 5: salary_fixed пусто — не записано.'), JSON.stringify(staff.notes));
+    const staffNoCol = buildImportRow('users', { username: 'a.b', role: 'doctor' });
+    assert.ok(!('salary_fixed' in staffNoCol.payload));
+});
+
+test('свой экспорт обратно (обновление): денежные поля не меняются', () => {
+    const stored = { name: 'Приём кардиолога', price: 150000, tax_rate: 12, default_doctor_percent: 30,
+        price_secondary: null, secondary_days_from: null, secondary_days_to: null, price_repeat: 0, repeat_days_from: 7, repeat_days_to: 30,
+        doctor_tier_from: 25, doctor_tier_percent: 40, doctor_tier_from_2: 0, doctor_tier_percent_2: 0, doctor_tier_from_3: 0, doctor_tier_percent_3: 0,
+        duration_minutes: 30 };
+    // Экспорт пишет null пустой ячейкой, число — числом (exportSectionCell).
+    const cell = (v) => (v == null ? '' : v);
+    const raw = { name: stored.name, group: 'Консультация' };
+    for (const k of Object.keys(stored)) if (k !== 'name') raw[k] = cell(stored[k]);
+    const lookups = { __wantUpdate: true, __stored: new Map([['приём кардиолога', { ...stored }]]) };
+    const row = buildImportRow('services', raw, { lookups });
+    assert.notStrictEqual(row.status, 'error', JSON.stringify(row.notes));
+    for (const k of Object.keys(stored)) {
+        if (k === 'name' || !(k in row.payload)) continue;
+        assert.strictEqual(row.payload[k], stored[k], k + ': ' + JSON.stringify(row.payload[k]) + ' вместо ' + JSON.stringify(stored[k]));
+    }
+});
+
+test('сообщения о пустой денежной ячейке — на трёх языках', () => {
+    for (const k of ['Строка {n}: {col} пусто — оставлено как было.', 'Строка {n}: {col} пусто — не записано.', 'Строка {n}: укажите цену (0 — если бесплатно).']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+    }
+});
+
+// CLINIC_API_FIX_V1 (ревью 4) — заголовок «Цена» / «Стоимость» — та же колонка
+// price (синонимы), а не молча нераспознанная колонка и цена 0.
+test('заголовки «Цена» и «Стоимость» читаются как price', () => {
+    assert.strictEqual(buildImportRow('services', { name: 'Новая', group: 'Консультация', 'Цена': '150 000' }).payload.price, 150000);
+    assert.strictEqual(buildImportRow('services', { name: 'Новая', group: 'Консультация', 'Стоимость': 90000 }).payload.price, 90000);
+});
+
+// CLINIC_API_FIX_V1 (ревью 4) — ПУСТЫЕ ЦЕНА, НДС, ДОЛЯ У ОБНОВЛЯЕМОЙ УСЛУГИ.
+// Сохранённое остаётся (ревью 3). Совпадает с тем, что дала бы пустая ячейка
+// (НДС 12, доля 0), — тихое замечание; не совпадает или неизвестно —
+// предупреждение: строка видна в таблице и посчитана в итоге.
+const UPD_WITH = (extra) => ({ __wantUpdate: true, __stored: new Map([['приём кардиолога', { name: 'Приём кардиолога', ...extra }]]) });
+test('обновление: пустой НДС при сохранённых 12 — тихо; при сохранённых 0 — предупреждение с «0»', () => {
+    const same = buildImportRow('services', { ...MIN, price: 1000, tax_rate: '' }, { rowNum: 3, lookups: UPD_WITH({ tax_rate: 12 }) });
+    assert.strictEqual(same.status, 'ok', JSON.stringify(same.notes));
+    assert.ok(same.notes.includes('Строка 3: tax_rate пусто — оставлено как было.'), JSON.stringify(same.notes));
+    const zero = buildImportRow('services', { ...MIN, price: 1000, tax_rate: '' }, { rowNum: 3, lookups: UPD_WITH({ tax_rate: 0 }) });
+    assert.strictEqual(zero.status, 'warn');
+    assert.ok(zero.notes.includes('Строка 3: tax_rate пусто — оставлено как было (0).'), JSON.stringify(zero.notes));
+    assert.ok(!('tax_rate' in zero.payload));
+});
+
+test('обновление: пустая доля при сохранённых 30 % — предупреждение; сохранённое неизвестно — тоже', () => {
+    const r30 = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '' }, { rowNum: 3, lookups: UPD_WITH({ default_doctor_percent: 30 }) });
+    assert.strictEqual(r30.status, 'warn');
+    assert.ok(r30.notes.includes('Строка 3: default_doctor_percent пусто — оставлено как было (30).'), JSON.stringify(r30.notes));
+    const unknown = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '' }, { rowNum: 3, lookups: UPD_WITH({}) });
+    assert.strictEqual(unknown.status, 'warn');
+});
+
+test('подсказки цены, НДС и доли говорят, что значит пустая ячейка — на трёх языках', async () => {
+    const { importColumnHints } = await import('../views/section-import-export.js');
+    const hints = importColumnHints('services');
+    for (const k of ['price', 'tax_rate', 'default_doctor_percent']) {
+        assert.match(hints[k], /для новой услуги.*без изменений для существующей/, k + ': ' + hints[k]);
+        const e = STRINGS[hints[k]];
+        assert.ok(e && e.uz && e.en, k + ': подсказке нужен перевод');
+    }
+    assert.match(hints.tax_rate, /пусто — 12 для новой услуги/);
+    const e = STRINGS['Строка {n}: {col} пусто — оставлено как было ({v}).'];
+    assert.ok(e && e.uz && e.en, 'нет перевода сообщения с сохранённым значением');
+});
+
+// CLINIC_API_FIX_V1 (ревью 4, M4) — в колонке процентов (0…100) «33,333» и
+// «12,345%» — десятичные: прочтение «тысячи» там невозможно (33 333 % — не
+// доля), поэтому правило неоднозначных трёх знаков к процентам не относится.
+test('проценты: «33,333» и «12,345%» — 33,333 и 12,345; в цене «33,333» по-прежнему не число', () => {
+    assert.strictEqual(readImportNumber('33,333', true).n, 33.333);
+    assert.strictEqual(readImportNumber('12,345%', true).n, 12.345);
+    assert.strictEqual(readImportNumber('12.345', true).n, 12.345);
+    assert.ok('bad' in readImportNumber('33,333', false));
+    const row = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '33,333', tax_rate: '12,345%' });
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+    assert.strictEqual(row.payload.default_doctor_percent, 33.333);
+    assert.strictEqual(row.payload.tax_rate, 12.345);
 });

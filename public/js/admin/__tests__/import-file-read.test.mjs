@@ -170,3 +170,147 @@ test('.xlsx с именем файла — как раньше: числа чи�
     const raws = readSheetRows(XLSX, buf, 'services', 'uslugi.xlsx');
     assert.deepEqual(raws, [{ name: 'Приём кардиолога', group: 'Консультация', price: 150000 }]);
 });
+
+// CLINIC_API_FIX_V1 (ревью 3) — ЯЧЕЙКИ ="…" В CSV. Excel и выгрузки пишут
+// код с ведущими нулями, MRN, ПИНФЛ и телефон как ="007", чтобы они не
+// стали числом. SheetJS без raw разворачивал их сам; с raw: true (1bccdba)
+// цена ="150000" отказывала, а код, MRN и телефон ложились буквально
+// «="007"» — и повторный импорт по MRN/ПИНФЛ заводил дубли пациентов.
+test('CSV: цена и код в ="…" — 150000 и «007», как до raw: true', () => {
+    const t = 'name,group,price,tax_rate,code\nПриём кардиолога,Консультация,"=""150000""",12,"=""007"""\n';
+    const raws = readSheetRows(XLSX, utf8(t), 'services', 'uslugi.csv');
+    assert.strictEqual(raws[0].price, '150000');
+    assert.strictEqual(raws[0].code, '007');
+    const row = buildImportRow('services', raws[0]);
+    assert.strictEqual(row.payload.price, 150000);
+    assert.strictEqual(row.payload.code, '007');
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+});
+
+test('CSV пациентов: MRN, телефон и ПИНФЛ в ="…" — без «=» и кавычек, ведущие нули на месте', () => {
+    const t = 'last_name;first_name;phone;national_id;mrn\nKarimova;Aziza;="0901234567";="31204900010011";="A-26-00042"\n';
+    const raws = readSheetRows(XLSX, utf8(t), 'patients', 'pacienty.csv');
+    const row = buildImportRow('patients', raws[0]);
+    assert.strictEqual(row.payload.phone, '0901234567');
+    assert.strictEqual(row.payload.national_id, '31204900010011');
+    assert.strictEqual(row.payload.mrn, 'A-26-00042');
+});
+
+test('CSV: обычный текст со знаком «=» внутри не трогается', () => {
+    const t = 'name,group,price\n"А=Б ""тест""",Консультация,1000\n';
+    const raws = readSheetRows(XLSX, utf8(t), 'services', 'u.csv');
+    assert.strictEqual(raws[0].name, 'А=Б "тест"');
+});
+
+// CLINIC_API_FIX_V1 (ревью 3) — UTF-16 И КНИГА EXCEL ПОД ИМЕНЕМ .csv. «Текст
+// Юникод» из Excel — UTF-16 с меткой FF FE: строгий UTF-8 на нём падал, и
+// cp1251 давала кашу из нулевых байтов. А .xlsx / .ods / .xls, переименованный
+// в .csv, читался как текст и не открывался вовсе. Метка UTF-16 и подпись
+// ZIP/OLE проверяются ДО имени файла.
+function utf16(text, bigEndian) {
+    const out = bigEndian ? [0xFE, 0xFF] : [0xFF, 0xFE];
+    for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i);
+        if (bigEndian) out.push(c >> 8, c & 0xFF); else out.push(c & 0xFF, c >> 8);
+    }
+    return new Uint8Array(out).buffer;
+}
+
+test('CSV в UTF-16 (LE и BE, с меткой) читается так же, как UTF-8', () => {
+    for (const be of [false, true]) {
+        const raws = readSheetRows(XLSX, utf16(CSV_TEXT, be), 'services', 'uslugi.csv');
+        assert.deepEqual(raws.map((r) => r.name), ['Приём кардиолога', 'Ёлочный массаж'], (be ? 'BE: ' : 'LE: ') + JSON.stringify(raws[0]));
+        const rows = raws.map((raw, i) => buildImportRow('services', raw, { rowNum: i + 2 }));
+        assert.deepEqual(rows.map((r) => r.payload.price), [150000, 80000]);
+        assert.deepEqual(rows.map((r) => r.payload.tax_rate), [12.5, 12]);
+    }
+});
+
+test('книга Excel (.xlsx, .ods, .xls) под именем .csv открывается как Excel', () => {
+    const ws = XLSX.utils.aoa_to_sheet([['name', 'group', 'price'], ['Приём кардиолога', 'Консультация', 150000]]);
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Services');
+    for (const bookType of ['xlsx', 'ods', 'xls']) {
+        const buf = XLSX.write(wb, { type: 'array', bookType });
+        let raws;
+        assert.doesNotThrow(() => { raws = readSheetRows(XLSX, buf, 'services', 'uslugi.csv'); }, bookType);
+        assert.deepEqual(raws, [{ name: 'Приём кардиолога', group: 'Консультация', price: 150000 }], bookType + ': ' + JSON.stringify(raws));
+    }
+});
+
+// CLINIC_API_FIX_V1 (ревью 3) — ПРОЦЕНТНЫЙ ФОРМАТ: ТОЧНЕЕ.
+//  • «_x» и «*x» в формате — отступ и заполнитель, а не знак: 0.0_% — не
+//    процентный формат (Excel показывает «40.0 »), число не умножается на 100;
+//  • 0,12345 в формате «0%» — 12,345 %, а не отказ по правилу трёх знаков
+//    (текст из значения собирается однозначно);
+//  • 1,2 в формате «0%» — 120 %: доля больше 100 % — новая строка не ввозится.
+test('.xlsx: 0.0_% — не процентный формат, 40 остаётся 40', () => {
+    const buf = xlsxWith(['name', 'group', 'price', 'default_doctor_percent'], ['Приём кардиолога', 'Консультация', 150000, { v: 40, z: '0.0_%' }]);
+    const [row] = rowsOf(buf, 'services', UPDATE());
+    assert.strictEqual(row.payload.default_doctor_percent, 40);
+});
+
+test('.xlsx: 0,12345 в формате «0%» — 12,345, а не «не число»', () => {
+    const buf = xlsxWith(['name', 'group', 'price', 'default_doctor_percent'], ['Приём кардиолога', 'Консультация', 150000, { v: 0.12345, z: '0%' }]);
+    const [row] = rowsOf(buf, 'services', UPDATE());
+    assert.strictEqual(row.payload.default_doctor_percent, 12.345);
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+});
+
+test('.xlsx: 120% в процентной ячейке — доля больше 100%, новая строка не ввозится', () => {
+    const buf = xlsxWith(['name', 'group', 'price', 'default_doctor_percent'], ['Приём невролога', 'Консультация', 150000, { v: 1.2, z: '0%' }]);
+    const [row] = rowsOf(buf, 'services');
+    assert.strictEqual(row.status, 'error', JSON.stringify(row.notes));
+    assert.ok(row.notes.some((n) => String(n).includes('доля больше 100%')), JSON.stringify(row.notes));
+});
+
+// CLINIC_API_FIX_V1 (ревью 3) — ЯЧЕЙКИ В ФОРМАТЕ ДАТЫ. С cellNF (56e6491)
+// SheetJS отдаёт такую ячейку объектом Date. Отсюда три беды:
+//  • 0 в формате даты — это «31.12.1899», и дата рождения молча ложилась
+//    1899-12-31 (v3.16.0 предупреждала: не дата);
+//  • Date в ТЕКСТОВОЙ колонке (паспорт, заметки) записывался строкой
+//    «Tue May 12 2026 00:00:00 GMT+0500 …»;
+//  • в ЧИСЛОВОЙ колонке он отказывал с той же длинной строкой в сообщении.
+// Теперь: дата раньше 1900-01-01 — не дата (предупреждение); в тексте — ДД.ММ.ГГГГ;
+// в числе — отказ, а в сообщении ДД.ММ.ГГГГ.
+const PAT = (cells) => {
+    const header = ['last_name', 'first_name', ...cells.map((c) => c[0])];
+    return xlsxWith(header, ['Каримова', 'Азиза', ...cells.map((c) => ({ v: c[1], z: c[2] }))]);
+};
+
+test('дата рождения в формате даты: обычная — читается; 0 — не дата, предупреждение, а не 1899-12-31', () => {
+    const okRow = buildImportRow('patients', readSheetRows(XLSX, PAT([['date_of_birth', 32975, 'dd.mm.yyyy']]), 'patients', 'p.xlsx')[0]);
+    assert.strictEqual(okRow.payload.date_of_birth, '1990-04-12');
+    const zero = buildImportRow('patients', readSheetRows(XLSX, PAT([['date_of_birth', 0, 'dd.mm.yyyy']]), 'patients', 'p.xlsx')[0]);
+    assert.ok(!('date_of_birth' in zero.payload), 'записано ' + zero.payload.date_of_birth);
+    assert.strictEqual(zero.status, 'warn');
+    const note = zero.notes.map(String).find((n) => n.includes('date_of_birth'));
+    assert.ok(note && !/GMT/.test(note), JSON.stringify(zero.notes));
+    const old = buildImportRow('patients', { last_name: 'К', first_name: 'А', date_of_birth: new Date(1899, 11, 31) });
+    assert.ok(!('date_of_birth' in old.payload), 'дата до 1900 года записана');
+    assert.ok(old.notes.some((n) => String(n).includes('31.12.1899')), JSON.stringify(old.notes));
+});
+
+test('дата в текстовой колонке — ДД.ММ.ГГГГ, а не «Tue May 12 2026 … GMT»', () => {
+    const raw = readSheetRows(XLSX, PAT([['passport_number', 46154, 'dd.mm.yyyy'], ['notes', 45000, 'd mmm']]), 'patients', 'p.xlsx')[0];
+    const row = buildImportRow('patients', raw);
+    assert.strictEqual(row.payload.passport_number, '12.05.2026');
+    assert.strictEqual(row.payload.notes, '15.03.2023');
+});
+
+test('дата в числовой колонке (цена) — отказ, в сообщении ДД.ММ.ГГГГ', () => {
+    const buf = xlsxWith(['name', 'group', 'price'], ['Приём невролога', 'Консультация', { v: 46154, z: 'dd.mmm' }]);
+    const [row] = rowsOf(buf, 'services');
+    assert.strictEqual(row.status, 'error');
+    const note = row.notes.map(String).find((n) => n.includes('price'));
+    assert.ok(note && note.includes('«12.05.2026»') && !/GMT/.test(note), JSON.stringify(row.notes));
+});
+
+// CLINIC_API_FIX_V1 (ревью 4, M3) — подпись книги — целиком: ZIP — 50 4B 03 04,
+// OLE — D0 CF 11 E0 A1 B1 1A E1. По двум байтам CSV, начинающийся с «PK», или
+// CSV в cp1251, начинающийся с «РП» (D0 CF), принимался за книгу и не открывался.
+test('CSV, начинающийся с «PK» или (в cp1251) с «РП», — читается как CSV, а не как книга', () => {
+    const pk = readSheetRows(XLSX, utf8('PK;name;group;price\n1;Приём кардиолога;Консультация;1000\n'), 'services', 'uslugi.csv');
+    assert.deepEqual(pk.map((r) => r.name), ['Приём кардиолога']);
+    const rp = readSheetRows(XLSX, cp1251('РП;name;group;price\n1;Приём кардиолога;Консультация;1000\n'), 'services', 'uslugi.csv');
+    assert.deepEqual(rp.map((r) => r.name), ['Приём кардиолога']);
+});

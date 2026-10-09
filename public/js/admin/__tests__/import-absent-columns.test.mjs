@@ -53,31 +53,33 @@ test('обновление: ссылки без колонки не стираю
     for (const k of LINKS) assert.ok(!(k in row.payload), k + ' = ' + JSON.stringify(row.payload[k]));
 });
 
-test('новая услуга (услуги нет или галочка снята): без колонки — те же значения, что и раньше', () => {
+test('новая услуга (услуги нет или галочка снята): без колонки — те же значения, что и раньше; без цены — 0 с предупреждением', () => {
     for (const lookups of [{}, INSERT_TICK_OFF()]) {
         const row = buildImportRow('services', MIN, { lookups });
         assert.strictEqual(row.payload.active, true);
         assert.strictEqual(row.payload.requires_doctor, true);
-        assert.strictEqual(row.payload.price, 0);
         assert.strictEqual(row.payload.tax_rate, 12);
         assert.strictEqual(row.payload.duration_minutes, 30);
         assert.strictEqual(row.payload.default_doctor_percent, 0);
         for (const k of LINKS) assert.strictEqual(row.payload[k], null, k);
-        assert.strictEqual(row.status, 'warn', 'новая услуга без цены — по-прежнему с предупреждением');
+        // CLINIC_API_FIX_V1 (ревью 4, решение) — новая услуга без цены — 0 с предупреждением (откат ревью 3).
+        assert.strictEqual(row.payload.price, 0);
+        assert.strictEqual(row.status, 'warn', 'новая услуга без цены — без предупреждения');
     }
 });
 
-test('обновление: пустая ячейка под своим заголовком — как и раньше', () => {
+test('обновление: пустая ячейка под своим заголовком — как и раньше; денежная — оставляет сохранённое', () => {
     const row = buildImportRow('services', { ...MIN, active: '', requires_doctor: '', price: '', tax_rate: '', duration_minutes: '',
         default_doctor_percent: '', category: '', department: '', room: '' }, { lookups: UPDATE() });
     assert.strictEqual(row.payload.active, true);
     assert.strictEqual(row.payload.requires_doctor, true);
-    assert.strictEqual(row.payload.price, 0);
-    assert.strictEqual(row.payload.tax_rate, 12);
     assert.strictEqual(row.payload.duration_minutes, 30);
-    assert.strictEqual(row.payload.default_doctor_percent, 0);
     for (const k of LINKS) assert.strictEqual(row.payload[k], null, k);
-    assert.strictEqual(row.status, 'warn');
+    // CLINIC_API_FIX_V1 (ревью 3, решение) — цена, НДС и доля пустые: сохранённые
+    // остаются (было: 0, 12 и 0 поверх сохранённых). Ревью 4 — сохранённые здесь
+    // неизвестны, поэтому строка с предупреждением.
+    for (const k of ['price', 'tax_rate', 'default_doctor_percent']) assert.ok(!(k in row.payload), k + ' = ' + JSON.stringify(row.payload[k]));
+    assert.strictEqual(row.status, 'warn', JSON.stringify(row.notes));
 });
 
 test('обновление: заполненные колонки пишутся как раньше', () => {

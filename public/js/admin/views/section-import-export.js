@@ -118,9 +118,16 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { TIER_STEP_COLUMNS, tierStepsProblem, tierStepRangeProblem } from '../service-editor-logic.js';   // DOCTOR_TIER_V2
 import { SECTIONS, FK_LABEL_COLUMN } from '../sections.js?v=noikpu1';
 import { mrnSeriesRefusal } from '../patient-duplicates.js';   // MRN_BEYOND_99999_V1 — номер, исчерпавший бы серию года
+import { visitTierStateProblem, visitTierValue } from '../../shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5) — одно правило с окном услуги
 
 // CLINIC_API_FIX_V1 — колонки цен второго/повторного визита и их окон: пусто
 // значит «не задано» (null), а не 0 (см. transform услуг).
+// CLINIC_API_FIX_V1 (ревью 4, C1) — две ступени визита, каждая — одно целое:
+// цена + «со дня» + «по день» (transform услуг пишет их только вместе).
+const VISIT_TIERS = [
+    { price: 'price_secondary', days: ['secondary_days_from', 'secondary_days_to'] },
+    { price: 'price_repeat',    days: ['repeat_days_from', 'repeat_days_to'] },
+];
 // CLINIC_API_FIX_V1 (ревью итога) — money: цена визита — деньги (не число у
 // новой услуги — строка не ввозится); дни — нет.
 const VISIT_TIER_COLUMNS = [
@@ -145,29 +152,19 @@ function serviceRowUpdates(payload, lookups) {
 function visitTierProblem(t) {
     const priceBad = (k) => t[k] !== null && !(Number.isFinite(t[k]) && t[k] >= 0);
     const daysBad = (k) => t[k] !== null && !(Number.isInteger(t[k]) && t[k] >= 0);
-    const noPrice = t.price_secondary === null && t.price_repeat === null;
     for (const k of ['price_secondary', 'price_repeat']) {
         if (priceBad(k)) return trf('{col} — неотрицательное число.', { col: k });
     }
-    for (const k of ['secondary_days_from', 'secondary_days_to']) {
+    for (const k of ['secondary_days_from', 'secondary_days_to', 'repeat_days_from', 'repeat_days_to']) {
         if (daysBad(k)) return trf('{col} — целое неотрицательное число дней.', { col: k });
     }
-    if (t.secondary_days_from !== null && t.secondary_days_to !== null && t.secondary_days_to < t.secondary_days_from) {
-        return tr('Окно второго визита: «по день» не может быть раньше «со дня».');
-    }
-    if ((t.secondary_days_from !== null || t.secondary_days_to !== null) && noPrice) {
-        return tr('Укажите цену второго визита — иначе окно дней не на что применить.');
-    }
-    for (const k of ['repeat_days_from', 'repeat_days_to']) {
-        if (daysBad(k)) return trf('{col} — целое неотрицательное число дней.', { col: k });
-    }
-    if (t.repeat_days_from !== null && t.repeat_days_to !== null && t.repeat_days_to < t.repeat_days_from) {
-        return tr('Окно повторного визита: «не позже чем через» не может быть раньше «не раньше чем через».');
-    }
-    if ((t.repeat_days_from !== null || t.repeat_days_to !== null) && noPrice) {
-        return tr('Укажите цену повторного визита — иначе окно дней не на что применить.');
-    }
-    return null;
+    // CLINIC_API_FIX_V1 (ревью 5) — правила окон (порядок границ, окно без
+    // цены, цена визита без окна — «без срока») — ОДНО правило с окном услуги:
+    // shared/visit-tier-rules.js. Ревью 5: снятая ступень второго визита
+    // оставляла цену повторного без окна, и она действовала со второго визита
+    // всегда (visit-tier.js).
+    const problem = visitTierStateProblem(t);
+    return problem ? tr(problem) : null;
 }
 
 // EXCEL_SELF_HOST_V1 — served from our own origin (CSP allows 'self'); the
@@ -307,14 +304,20 @@ const IMPORT_CONFIGS = {
             { key: 'кол-во в ед. выдачи', target: 'consumption_factor', coerce: 'num', aliases: ['consumption_factor'],
               hint: 'Сколько базовых единиц в единице выдачи (обычно 1).' },
             // PROD_IMPORT_FULL_V1 — the supplier block, as in the product editor.
+            // CLINIC_API_FIX_V1 (ревью 3) — четыре колонки поставщика, пока привязка
+            // поставщиков выключена (SUPPLIER_LINK_ON, решение владельца), —
+            // просто текст: значение выбрасывается, поэтому ни проверки числа, ни
+            // отказа строке. Подсказки шаблона говорят это честно.
             { key: 'поставщик',     capture: 'supplier', aliases: ['supplier'],
-              hint: 'Поставщик товара — связка создаётся автоматически; неизвестный поставщик будет создан.' },
-            { key: 'цена закупки',  capture: 'supPrice', captureNum: true, money: true, aliases: ['закупочная цена'],
-              hint: 'Цена закупки у этого поставщика (сум).' },
+              hint: 'Поставщик — пока не используется: из файла поставщики не создаются и к товару не привязываются.' },
+            // Ревью 5 — captureRaw: значение ячейки как есть (число из Excel — числом),
+            // linkSuppliers читает его правилом числа.
+            { key: 'цена закупки',  capture: 'supPrice', captureRaw: true, aliases: ['закупочная цена'],
+              hint: 'Цена закупки у поставщика — пока не используется: из файла не сохраняется.' },
             { key: 'ед. закупки',   capture: 'supUnit', aliases: ['единица закупки'],
-              hint: 'В чём закупаете у поставщика (уп, кор…). Пусто — как базовая.' },
-            { key: 'кол-во в ед. закупки', capture: 'supPack', captureNum: true, aliases: ['кратность закупки'],
-              hint: 'Сколько базовых единиц в единице закупки — напр. 10.' },
+              hint: 'Единица закупки у поставщика — пока не используется: из файла не сохраняется.' },
+            { key: 'кол-во в ед. закупки', capture: 'supPack', captureRaw: true, aliases: ['кратность закупки'],
+              hint: 'Сколько базовых единиц в единице закупки — пока не используется: из файла не сохраняется.' },
         ],
         sampleRows: [
             { 'товар': 'Система трансфузионная стерильная', 'код': '10329', 'категория': 'Медицинские расходные материалы', 'ед.изм': 'шт', 'базовая ед.': 'шт', 'ед. выдачи': 'шт', 'кол-во в ед. выдачи': 1, 'цена': 3210, 'икпу': '03003001018000000', 'остаток': 50,  'себестоимость': 3000, 'поставщик': 'Aventus',  'цена закупки': 3000, 'ед. закупки': 'уп', 'кол-во в ед. закупки': 10 },
@@ -362,9 +365,14 @@ const IMPORT_CONFIGS = {
                     const supId  = supByName.get(normKey(r.captures.supplier.trim()));
                     if (!itemId || !supId) continue;
                     const patch = {};
-                    if (r.captures.supPrice != null && r.captures.supPrice !== '' && !isNaN(Number(r.captures.supPrice))) patch.last_price = Number(r.captures.supPrice);
+                    // CLINIC_API_FIX_V1 (ревью 4, M5) — цена и кратность закупки
+                    // приходят текстом ячейки: правило числа (readImportNumber), а
+                    // не Number() — «1 145» — 1145, «1.500» — не молча 1,5.
+                    const supPrice = readImportNumber(r.captures.supPrice, false);
+                    const supPack = readImportNumber(r.captures.supPack, false);
+                    if ('n' in supPrice && supPrice.n >= 0) patch.last_price = supPrice.n;
                     if ((r.captures.supUnit || '').trim()) patch.purchase_unit = String(r.captures.supUnit).trim();
-                    if (r.captures.supPack != null && r.captures.supPack !== '' && Number(r.captures.supPack) > 0) patch.pack_factor = Number(r.captures.supPack);
+                    if ('n' in supPack && supPack.n > 0) patch.pack_factor = supPack.n;
                     const { data: ex } = await supabase.from('item_suppliers').select('id')
                         .eq('company_id', cid).eq('item_id', itemId).eq('supplier_id', supId).limit(1);
                     if (ex && ex.length) {
@@ -526,29 +534,82 @@ const IMPORT_CONFIGS = {
             // числа (readImportNumber: «60 000», «12,5»; «1,5» дня — не 15).
             // Не число в строке, ОБНОВЛЯЮЩЕЙ услугу, — поле не пишется:
             // сохранённая цена остаётся (раньше она стиралась в «не задано»).
+            //
+            // CLINIC_API_FIX_V1 (ревью 4, C1) — СТУПЕНЬ ВИЗИТА — ОДНО ЦЕЛОЕ:
+            // цена + «со дня» + «по день». Ревью 3 оставляло пустую цену второго
+            // визита сохранённой, а её пустые дни писало NULL; visit-tier.js
+            // читает «по день» = NULL как «без предела», и скидка действовала
+            // вечно — со статусом «готово». Теперь по ступени целиком (по тем её
+            // колонкам, что есть в листе):
+            //   • не число: у обновляемой — ступень из файла не пишется
+            //     (сохранённая остаётся), у новой — цена отказывает строке, день —
+            //     «не задано», вслух;
+            //   • все ячейки пусты — ступень снимается (цена и оба дня — NULL),
+            //     как обещает подсказка «пусто — как первый / как второй»; ревью 5 —
+            //     только если колонка цены в листе есть (нет её — пустые дни
+            //     ничего не меняют, заполненные пишутся);
+            //   • цена в листе пуста, а день заполнен (полступени) — не пишется ни
+            //     одна ячейка ступени, предупреждение «неполная ступень»;
+            //   • иначе — как раньше: число — число, пустой день — «не задано».
             var svcName = String(payload.name || '').trim();
             var tierUpdating = serviceRowUpdates(payload, ctx && ctx.lookups);
-            VISIT_TIER_COLUMNS.forEach(function (c) {
-                if (!(c.key in r)) { delete payload[c.key]; return; }
-                var read = readImportNumber(r[c.key], false);
-                if (!('bad' in read)) { payload[c.key] = read.empty ? null : read.n; return; }
-                if (tierUpdating) {
-                    delete payload[c.key];
-                    if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.',
-                        { n: ctx.rowNum, col: c.key, v: read.bad }));
+            VISIT_TIERS.forEach(function (t) {
+                var keys = [t.price].concat(t.days);
+                var present = keys.filter(function (k) { return k in r; });
+                if (!present.length) { keys.forEach(function (k) { delete payload[k]; }); return; }
+                var reads = {};
+                present.forEach(function (k) { reads[k] = readImportNumber(r[k], false); });
+                var badKeys = present.filter(function (k) { return 'bad' in reads[k]; });
+                if (badKeys.length) {
+                    if (tierUpdating) {
+                        keys.forEach(function (k) { delete payload[k]; });
+                        badKeys.forEach(function (k) {
+                            if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.',
+                                { n: ctx.rowNum, col: k, v: reads[k].bad }));
+                        });
+                        return;
+                    }
+                    // CLINIC_API_FIX_V1 (ревью итога, решение) — цена визита — деньги:
+                    // новая услуга с не числом в ней не ввозится (как с ценой).
+                    if (reads[t.price] && ('bad' in reads[t.price])) {
+                        keys.forEach(function (k) { delete payload[k]; });
+                        if (ctx) ctx.fail(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
+                            { n: ctx.rowNum, col: t.price, v: reads[t.price].bad }));
+                        return;
+                    }
+                    badKeys.forEach(function (k) {
+                        if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — не записано.',
+                            { n: ctx.rowNum, col: k, v: reads[k].bad }));
+                        reads[k] = { empty: true, wasBad: true };   // ревью 7 — уже названа, второй раз не называется
+                    });
+                }
+                // CLINIC_API_FIX_V1 (ревью 5) — колонки цены в листе нет: колонка,
+                // которой нет, ничего не меняет, и снять ступень нельзя — пустые
+                // дни остаются как были (было: стирали и сохранённую цену), а
+                // заполненный день пишется. Снимает ступень только пустая ЦЕНА.
+                if (!(t.price in r)) {
+                    var kept = [];
+                    keys.forEach(function (k) {
+                        if (!(k in r)) { delete payload[k]; return; }
+                        if (reads[k].empty) { delete payload[k]; if (!reads[k].wasBad) kept.push(k); return; }
+                        payload[k] = reads[k].n;
+                    });
+                    if (kept.length && ctx) ctx.note(trf('Строка {n}: без колонки {col} пустые {cols} ничего не меняют.',
+                        { n: ctx.rowNum, col: t.price, cols: kept.join(', ') }));
                     return;
                 }
-                // CLINIC_API_FIX_V1 (ревью итога, решение) — цена визита — деньги:
-                // новая услуга с не числом в ней не ввозится (как с ценой). Дни —
-                // не задано, вслух.
-                if (c.money) {
-                    if (ctx) ctx.fail(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
-                        { n: ctx.rowNum, col: c.key, v: read.bad }));
+                var filled = present.filter(function (k) { return 'n' in reads[k]; });
+                if (!filled.length) { keys.forEach(function (k) { payload[k] = null; }); return; }
+                if ((t.price in r) && reads[t.price].empty) {
+                    keys.forEach(function (k) { delete payload[k]; });
+                    if (ctx) ctx.warn(trf('Строка {n}, «{service}»: {cols} — неполная ступень — оставлено как было.',
+                        { n: ctx.rowNum, service: svcName, cols: keys.join(', ') }));
                     return;
                 }
-                payload[c.key] = null;
-                if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — не записано.',
-                    { n: ctx.rowNum, col: c.key, v: read.bad }));
+                keys.forEach(function (k) {
+                    if (!(k in r)) { delete payload[k]; return; }
+                    payload[k] = reads[k].empty ? null : reads[k].n;
+                });
             });
             // CLINIC_API_FIX_V1 (ревью) — правила окна услуги (service_save:
             // цена — неотрицательное число, дни — целые неотрицательные, «по»
@@ -563,7 +624,15 @@ const IMPORT_CONFIGS = {
                 var v = (c.key in payload) ? payload[c.key] : tierStored[c.key];
                 tierEff[c.key] = v === undefined || v === null || v === '' ? null : Number(v);
             });
-            var tierProblem = visitTierProblem(tierEff);
+            // CLINIC_API_FIX_V1 (ревью 7) — как у окна услуги (service_save):
+            // состояние проверяется, только когда строка МЕНЯЕТ хоть одно поле цен
+            // визитов. Услуга, уже сохранённая в состоянии «без срока», и файл без
+            // колонок цен визитов (или с теми же значениями — свой экспорт) — строка
+            // обычная: она цены визитов не трогает.
+            var tierChanged = VISIT_TIER_COLUMNS.some(function (c) {
+                return (c.key in payload) && visitTierValue(payload[c.key]) !== visitTierValue(tierStored[c.key]);
+            });
+            var tierProblem = tierChanged ? visitTierProblem(tierEff) : null;
             if (tierProblem) {
                 VISIT_TIER_COLUMNS.forEach(function (c) { delete payload[c.key]; });
                 if (ctx) ctx.warn(trf('Строка {n}, «{service}»: {problem} Цены второго и повторного визита из этой строки не сохранены.',
@@ -612,10 +681,16 @@ const IMPORT_CONFIGS = {
                 var bad = ('bad' in rf) ? [c.from, rf.bad] : ('bad' in rp) ? [c.pct, rp.bad] : null;
                 // CLINIC_API_FIX_V1 (ревью итога, решение) — доля ступени — деньги:
                 // у новой услуги не число в ней строку не ввозит.
-                if (('bad' in rp) && !serviceRowUpdates(payload, ctx && ctx.lookups)) {
+                // Ревью 3 — и доля вне 0…100 % (у обновляемой услуги её назовёт
+                // проверка границ ниже, а ступень из файла не запишется).
+                var pctWhy = ('n' in rp) && (rp.n > 100 || rp.n < 0) ? tr(rp.n > 100 ? 'доля больше 100%' : 'доля меньше 0%') : null;
+                if ((('bad' in rp) || pctWhy) && !serviceRowUpdates(payload, ctx && ctx.lookups)) {
                     delete payload[c.from]; delete payload[c.pct];
-                    if (ctx) ctx.fail(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
-                        { n: ctx.rowNum, col: c.pct, v: rp.bad }));
+                    if (ctx) ctx.fail(pctWhy
+                        ? trf('Строка {n}: в колонке {col} {why} («{v}») — строка не импортирована.',
+                            { n: ctx.rowNum, col: c.pct, why: pctWhy, v: String(r[c.pct]).trim() })
+                        : trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
+                            { n: ctx.rowNum, col: c.pct, v: rp.bad }));
                     return null;
                 }
                 if (bad) {
@@ -634,12 +709,18 @@ const IMPORT_CONFIGS = {
                 payload[c.from] = Number(rawFrom) || 0;
                 payload[c.pct] = Number(rawPct) || 0;
                 // Пара или ничего: полупара из файла застряла бы в редакторе
-                // (service_save отказывает половине настройки). Отброшенная
-                // полупара называется вслух.
+                // (service_save отказывает половине настройки). CLINIC_API_FIX_V1
+                // (ревью 4) — полупара не пишет НИЧЕГО (ни у новой, ни у
+                // обновляемой: сохранённая ступень остаётся) и называется вслух;
+                // пустая пара (или 0 и 0) снимает ступень — «0 или пусто — ступени нет».
                 if (!payload[c.from] || !payload[c.pct]) {
                     var half = payload[c.from] || payload[c.pct];
+                    if (half) {
+                        delete payload[c.from]; delete payload[c.pct];
+                        if (ctx) ctx.warn(tr(HALF_MSG[c.n]));
+                        return null;
+                    }
                     payload[c.from] = 0; payload[c.pct] = 0;
-                    if (half && ctx) ctx.warn(tr(HALF_MSG[c.n]));
                 }
                 return { from: payload[c.from], pct: payload[c.pct] };
             });
@@ -661,8 +742,12 @@ const IMPORT_CONFIGS = {
         // «Раздел» с типом: обновление без колонки типа тип не сбрасывает; и
         // цены второго/повторного визита с окнами — правила окна услуги
         // проверяются по тому, что окажется у услуги (visitTierProblem).
+        // CLINIC_API_FIX_V1 (ревью 4) — и цена, НДС, доля: пустая ячейка у
+        // обновляемой услуги оставляет их, и строка предупреждает, если
+        // сохранённое — не то, что дала бы пустая ячейка.
         storedColumns: ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3', 'name_uz', 'type', 'type_id',
-            'price_secondary', 'secondary_days_from', 'secondary_days_to', 'price_repeat', 'repeat_days_from', 'repeat_days_to'],
+            'price_secondary', 'secondary_days_from', 'secondary_days_to', 'price_repeat', 'repeat_days_from', 'repeat_days_to',
+            'price', 'tax_rate', 'default_doctor_percent'],
         columns: [
             { key: 'name',             required: true, hint: 'Название услуги (обязательно)' },
             { key: 'group',            target: 'type', map: SERVICE_GROUP_MAP, required: true,
@@ -682,6 +767,9 @@ const IMPORT_CONFIGS = {
             // обновляемая услуга её не меняет (было: стирались категория,
             // отделение, кабинет; цена, НДС, длительность, доля, «нужен врач» и
             // «активна» — по умолчанию). Новая услуга получает то же, что и раньше.
+            // Ревью 3–4 — пустая ЯЧЕЙКА цены, НДС, доли у обновляемой услуги — тоже
+            // без изменений (с предупреждением, если сохранённое не то, что дала
+            // бы пустая ячейка); у новой — 0 с предупреждением / 12 / 0.
             { key: 'category',         keepIfAbsent: true, fk: { source: 'service_categories', keyField: 'name', target: 'category_id',   autoCreate: true }, hint: 'Категория/направление (напр. МРТ головного мозга) — необязательно; создаётся автоматически.' },
             { key: 'department',       keepIfAbsent: true, fk: { source: 'departments',        keyField: 'name', target: 'department_id', autoCreate: true }, hint: 'Отделение — необязательно; создаётся автоматически.' },
             // IMPORT_PRICE_OPTIONAL_V1 — price used to be required, which blocked
@@ -690,7 +778,12 @@ const IMPORT_CONFIGS = {
             // CLINIC_API_FIX_V1 (ревью итога) — money: не число в цене (НДС, доле,
             // цене визита…) новой услуги — строка не ввозится (у обновляемой —
             // поле остаётся прежним).
-            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  warnIfMissing: true, money: true, hint: 'Цена, число — напр. 150000 (пусто → 0)' },
+            // CLINIC_API_FIX_V1 (ревью 4, решение) — warnIfEmptyOnNew: новая услуга без
+            // цены (пусто или нет колонки) ложится с 0 и ПРЕДУПРЕЖДЕНИЕМ, как задумано в
+            // IMPORT_PRICE_OPTIONAL_V1 (откат отказа ревью 3); у обновляемой пустая
+            // ячейка оставляет сохранённую цену. «Цена» и «Стоимость» — синонимы.
+            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  money: true, warnIfEmptyOnNew: true, aliases: ['цена', 'стоимость'],
+              hint: 'Цена, число — напр. 150000. Пусто — 0 для новой услуги (с предупреждением), без изменений для существующей.' },
             // FULL_EXPORT_V1 (2026-09-14) — owner: «exporting and importing are not
             // giving all the information». Every field the service editor holds now
             // travels: code, the visit-tier prices (VISIT_TIER_PRICING_V1), the
@@ -711,10 +804,10 @@ const IMPORT_CONFIGS = {
             { key: 'price_repeat',     coerce: 'num', raw: true, hint: 'Цена повторного визита, третий и далее (0 — бесплатно; пусто — как второй)' },
             { key: 'repeat_days_from', coerce: 'int', raw: true, hint: 'Повторный визит — не раньше чем через N дней после предыдущего (пусто — как у второго)' },
             { key: 'repeat_days_to',   coerce: 'int', raw: true, hint: 'и не позже чем через M дней (пусто — как у второго)' },
-            { key: 'tax_rate',         keepIfAbsent: true, coerce: 'num',  defaultNum: 12, percent: true, money: true, hint: 'НДС % (по умолчанию 12, если пусто)' },
+            { key: 'tax_rate',         keepIfAbsent: true, coerce: 'num',  defaultNum: 12, percent: true, money: true, hint: 'НДС, %: пусто — 12 для новой услуги, без изменений для существующей.' },
             { key: 'duration_minutes', keepIfAbsent: true, coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
             { key: 'requires_doctor',  keepIfAbsent: true, coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },
-            { key: 'default_doctor_percent', keepIfAbsent: true, coerce: 'num', percent: true, money: true, hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
+            { key: 'default_doctor_percent', keepIfAbsent: true, coerce: 'num', percent: true, money: true, hint: 'Доля исполнителя по умолчанию, %: пусто — 0 для новой услуги, без изменений для существующей.' },
             // CLINIC_API_FIX_V1 (ревью итога) — ступени тоже читает transform (raw).
             { key: 'doctor_tier_from',    coerce: 'num', raw: true, hint: 'Ступень: порог услуг в месяц — повышенная доля начинается со следующей услуги (0 или пусто — ступени нет)' },
             { key: 'doctor_tier_percent', coerce: 'num', raw: true, hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
@@ -959,6 +1052,12 @@ function getCfg(sectionKey) {
     return autoConfigFor(sectionKey);
 }
 
+/** CLINIC_API_FIX_V1 (ревью 3) — подсказки колонок раздела { ключ: подсказка } (для тестов). */
+export function importColumnHints(sectionKey) {
+    const cfg = getCfg(sectionKey);
+    return cfg ? Object.fromEntries(cfg.columns.filter(c => c.hint).map(c => [c.key, c.hint])) : {};
+}
+
 /** FULL_EXPORT_V1 — the column keys a section's Excel file carries (for tests and screens). */
 export function exportColumnKeys(sectionKey) {
     const cfg = getCfg(sectionKey);
@@ -1005,10 +1104,14 @@ function autoConfigFor(sectionKey) {
         if (f.type === 'number') {
             col.coerce = (f.step === '1' || f.step == null || /int/i.test(f.label || '')) ? 'num' : 'num';
             if (f.default != null) col.defaultNum = f.default;
-            // CLINIC_API_FIX_V1 — «40%» читается в колонке процентов (по ключу или подписи).
-            if (/percent|pct|tax_rate|discount/i.test(f.key) || /%/.test(f.label || '')) col.percent = true;
-            // CLINIC_API_FIX_V1 (ревью итога) — деньги: проценты и суммы.
-            if (col.percent || /price|cost|amount|salary|fee|sum/i.test(f.key)) col.money = true;
+            // CLINIC_API_FIX_V1 — «40%» читается в колонке процентов. Ревью 3 —
+            // по КЛЮЧУ, а не по «%» в подписи: bonus_value — «% или сумма», и 150
+            // в нём не доля больше 100 %.
+            if (/percent|pct|tax_rate/i.test(f.key)) col.percent = true;
+            // CLINIC_API_FIX_V1 (ревью итога) — деньги: проценты и суммы. Ревью 3 —
+            // и пороги/лимиты сумм: кешбэк (min_purchase, max_cashback), лимит
+            // полиса (max_limit), бонус направившему (bonus_value).
+            if (col.percent || /price|cost|amount|salary|fee|sum|purchase|cashback|limit|bonus/i.test(f.key)) col.money = true;
         } else if (f.type === 'bool') {
             col.coerce = 'bool';
             col.defaultBool = f.default !== false;
@@ -1067,7 +1170,7 @@ export async function downloadSectionSample(sectionKey) {
     // Per-header cell comments with the per-column hint.
     tCols.forEach((col, i) => {
         const addr = XLSX.utils.encode_cell({ r: 0, c: i });
-        if (ws[addr] && col.hint) ws[addr].c = [{ a: 'Easy-Med', t: col.hint }];
+        if (ws[addr] && col.hint) ws[addr].c = [{ a: 'Easy-Med', t: tr(col.hint) }];   // CLINIC_API_FIX_V1 — на языке интерфейса, если подсказка есть в словаре
     });
 
     const wb = XLSX.utils.book_new();
@@ -1273,6 +1376,11 @@ function columnsHint(cfg) {
     const optional = shown.filter(c => !c.required).map(c => c.key);
     const autoFk   = shown.filter(c => c.fk && c.fk.autoCreate).map(c => c.key);
     const lookupFk = shown.filter(c => c.fk && !c.fk.autoCreate).map(c => c.key);
+    // CLINIC_API_FIX_V1 (ревью 4) — честно о том, что важно: денежные колонки и
+    // их правило (ступени визита и доли — своё правило, в их подсказках), и
+    // колонки, без которых новая запись ляжет с 0 и предупреждением.
+    const money    = shown.filter(c => c.money && !c.raw).map(c => c.key);
+    const zeroWarn = shown.filter(c => c.warnIfEmptyOnNew).map(c => c.key);
 
     return h('div', { class: 'imx-note' },
         h('div', null,
@@ -1293,7 +1401,31 @@ function columnsHint(cfg) {
                     ? h('div', null, 'Создаются автоматически, если их ещё нет: ', h('b', null, autoFk.join(', ')), '.')
                     : null)
             : null,
+        money.length
+            ? h('div', null, typeof cfg.rowUpdates === 'function'
+                ? trf('Деньги ({list}): не число — строка не ввозится; пустая ячейка у существующей записи — без изменений.', { list: money.join(', ') })
+                : trf('Деньги ({list}): не число — строка не ввозится; пустая ячейка не записывается.', { list: money.join(', ') }))
+            : null,
+        zeroWarn.length
+            ? h('div', null, trf('Без значения в {list} новая запись ляжет с 0 и предупреждением.', { list: zeroWarn.join(', ') }))
+            : null,
     );
+}
+
+// CLINIC_API_FIX_V1 (ревью 4) — заголовки листа, которых импорт не знает (ни
+// ключа колонки, ни синонима): их ячейки не импортируются, и окно это говорит.
+function unknownHeaders(cfg, rows) {
+    const known = new Set();
+    for (const c of cfg.columns) {
+        known.add(normHeader(c.key));
+        for (const a of (c.aliases || [])) known.add(normHeader(a));
+    }
+    const out = [];
+    for (const k of Object.keys((rows && rows[0]) || {})) {
+        if (/^__EMPTY/.test(k) || !String(k).trim()) continue;
+        if (!known.has(normHeader(k))) out.push(String(k).trim());
+    }
+    return out;
 }
 export async function openSectionImporter({ sectionKey, onImported } = {}) {
     const cfg = getCfg(sectionKey);
@@ -1345,11 +1477,32 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
             // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
             const btn = ev.currentTarget;
+            // CLINIC_API_FIX_V1 (ревью 4, M1) — второй щелчок, пока импорт идёт
+            // (или после импорта с итогом), второго импорта не запускает; галочка
+            // «Обновлять существующие» на это время выключена — её смена
+            // пересобрала бы строки и включила кнопку посреди записи.
+            if (importing || imported) return;
+            importing = true;
             btn.disabled = true;
+            btn.setAttribute('disabled', '');
+            updateExistingInp.disabled = true;
             try { await runImport(); }
-            finally { if (btn?.isConnected) btn.disabled = false; }
+            // CLINIC_API_FIX_V1 (ревью 3) — после импорта с итогом кнопка не
+            // возвращается: повтор того же файла задвоил бы новые строки.
+            finally {
+                importing = false;
+                updateExistingInp.disabled = false;
+                if (btn?.isConnected && !imported) { btn.disabled = false; btn.removeAttribute('disabled'); }
+            }
         },
     }, Icon('Check', { size: 14 }), ' Импортировать');
+
+    // CLINIC_API_FIX_V1 (ревью 3) — итог импорта в самом окне (showResult) и
+    // кнопка «Отмена», которая после импорта становится «Закрыть».
+    const result = h('div', { class: 'imx-result', role: 'status' });
+    const cancelBtn = h('button', { class: 'btn', onclick: close }, 'Отмена');
+    let imported = false;
+    let importing = false;   // CLINIC_API_FIX_V1 (ревью 4, M1) — импорт идёт
 
     // IMPORTER_UI_V2 — `modal-compact` matters: MODAL_FULLSCREEN_V1 (admin.css)
     // stretches every other .modal-card to the whole viewport, which is why this
@@ -1365,10 +1518,11 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             columnsHint(cfg),
             updateExistingBox,
             fileInput,
+            result,
             preview,
         ),
         h('footer', { class: 'modal-foot' },
-            h('button', { class: 'btn', onclick: close }, 'Отмена'),
+            cancelBtn,
             confirmBtn,
         ),
     );
@@ -1401,6 +1555,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         // её замечание (не число в цене — оставлено сохранённое…) человек
         // должен увидеть: строка статуса называет их число отдельно.
         const warnCount = parsedRows.filter(r => r.status === 'warn').length;
+        const unknown = unknownHeaders(cfg, rawRows);   // CLINIC_API_FIX_V1 (ревью 4)
         clear(status);
         // append(null) вставил бы текст «null» — узлы собираются списком.
         status.append(...[
@@ -1411,19 +1566,26 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             warnCount ? document.createTextNode('), ') : null,
             h('b', { style: { color: 'var(--crit-700)' } }, String(rawRows.length - validCount)),
             document.createTextNode(' ' + tr('с ошибками.')),
+            unknown.length ? h('div', { style: { color: 'var(--warn-700)' } },
+                // Ревью 5 — каждое название в кавычках: «Цена, сум» — одна колонка.
+                trf('Колонки не распознаны и не импортируются: {list}.', { list: unknown.map((x) => '«' + x + '»').join(', ') })) : null,
         ].filter(Boolean));
         paintPreview();
-        if (validCount > 0) confirmBtn.removeAttribute('disabled');
+        if (validCount > 0 && !imported && !importing) confirmBtn.removeAttribute('disabled');
         else                confirmBtn.setAttribute('disabled', '');
     }
     updateExistingInp.addEventListener('change', () => {
-        if (!lookups || !rawRows.length) return;
+        if (!lookups || !rawRows.length || importing) return;   // ревью 4 (M1) — не посреди записи
         buildParsed();
         paintParsed();
     });
 
     async function handleFile(file) {
         if (!file) return;
+        // Ревью 3 — новый файл: прежний итог убирается, импорт снова доступен.
+        imported = false;
+        clear(result);
+        cancelBtn.textContent = tr('Отмена');
         status.textContent = trf('Читаем {name}…', { name: file.name });
         try {
             const XLSX = await loadXlsx();
@@ -1442,6 +1604,10 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             status.textContent = trf('Не удалось прочитать файл: {msg}', { msg: e.message || e });
             clear(preview);
             confirmBtn.setAttribute('disabled', '');
+        } finally {
+            // CLINIC_API_FIX_V1 (ревью 4, I3) — поле очищается: браузер не шлёт
+            // change, если выбран тот же файл, и исправленный файл не перечитывался.
+            fileInput.value = '';
         }
     }
 
@@ -1451,13 +1617,21 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         // CLINIC_API_FIX_V1 (ревью итога) — КАЖДАЯ строка с замечанием или
         // ошибкой видна, где бы она ни стояла в файле; чистых — первые 50.
         // Раньше показывались первые 50 строк, и замечание в 62-й не видел никто.
+        // CLINIC_API_FIX_V1 (ревью 3) — и с потолком: не больше 200 строк с
+        // замечаниями (5 000 таких строк — около 90 тысяч узлов, заново на
+        // каждое переключение галочки); остальные названы числом под таблицей.
+        const FLAGGED_CAP = 200;
         const flagged = parsedRows.filter(r => r.status !== 'ok');
+        const flaggedShown = flagged.slice(0, FLAGGED_CAP);
         const clean = parsedRows.filter(r => r.status === 'ok').slice(0, 50);
         const showRows = flagged.length
-            ? [...flagged, ...clean].sort((a, b) => a.rowNum - b.rowNum)
+            ? [...flaggedShown, ...clean].sort((a, b) => a.rowNum - b.rowNum)
             : clean;
         preview.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '6px' } },
-            flagged.length
+            flagged.length > FLAGGED_CAP
+                ? trf('Предпросмотр: первые {shown} из {flagged} строк с замечаниями и ошибками и первые {n} без замечаний — всего строк {total}',
+                    { shown: flaggedShown.length, flagged: flagged.length, n: clean.length, total: parsedRows.length })
+                : flagged.length
                 ? trf('Предпросмотр: все строки с замечаниями и ошибками ({flagged}) и первые {n} без замечаний — всего строк {total}',
                     { flagged: flagged.length, n: clean.length, total: parsedRows.length })
                 : trf('Предпросмотр — первые {n} из {total}', { n: showRows.length, total: parsedRows.length })));
@@ -1481,16 +1655,26 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 h('td', { class: 'num muted' }, String(r.rowNum)),
                 h('td', null, statusPill(r.status)),
                 ...previewCols.map(c =>
-                    h('td', null, (r.raw[normHeader(c.key)] != null && r.raw[normHeader(c.key)] !== '') ? String(r.raw[normHeader(c.key)]) : h('span', { class: 'muted' }, '—'))),
+                    h('td', null, (r.raw[normHeader(c.key)] != null && r.raw[normHeader(c.key)] !== '') ? cellText(r.raw[normHeader(c.key)]) : h('span', { class: 'muted' }, '—'))),
                 h('td', { style: { fontSize: '12.5px' } }, r.notes.length ? r.notes.join('; ') : ''),
             ))),
         ));
+        if (flagged.length > FLAGGED_CAP) {
+            preview.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
+                trf('ещё {n} строк с замечаниями', { n: flagged.length - FLAGGED_CAP })));
+        }
     }
 
     async function runImport() {
         // CLINIC_API_FIX_V1 (ревью) — строки собраны с той галочкой, с которой импортируются.
         if (lookups && rawRows.length && lookups.__wantUpdate !== wantUpdateNow()) { buildParsed(); paintParsed(); }
-        const valid = parsedRows.filter(r => r.status !== 'error');
+        // CLINIC_API_FIX_V1 (ревью 5) — попытка работает со СВОИМИ копиями строк:
+        // autoCreatePendingFks заменяет заготовки справочных записей (тип,
+        // категория, отделение) на id или null прямо в строке. На неудачной
+        // попытке это были null в строках предпросмотра, и повтор после полного
+        // отказа писал услугу без типа, категории и отделения — молча.
+        const valid = parsedRows.filter(r => r.status !== 'error')
+            .map(r => ({ ...r, payload: { ...r.payload }, captures: { ...r.captures } }));
         if (valid.length === 0) { toast('Импортировать нечего — сначала исправьте ошибки в файле.', 'fail'); return; }
 
         // Decide insert vs update per row. When `Update existing` is on (and
@@ -1627,34 +1811,79 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         }
 
         const ok = updated + inserted;
+        // CLINIC_API_FIX_V1 (ревью 3) — ИТОГ ЧЕСТНЫЙ И ОСТАЁТСЯ НА ЭКРАНЕ. Было:
+        // «Импортировано строк: 2 · новых: 2.», хотя ещё 3 строки файла не
+        // ввезены (ошибки в файле), и окно закрывалось вместе с причинами; а
+        // сообщение «Товаров» об остатках заменяло итог. Теперь итог называет и
+        // строки, не ввезённые из-за ошибок в файле, и строки с замечаниями;
+        // сообщение пост-обработки дописывается к нему; окно закрывается, только
+        // если всё ввезено чисто, — иначе показывает итог над таблицей причин.
+        const refusedInFile = parsedRows.length - valid.length;
+        const warned = valid.filter(r => r.status === 'warn').length;
+
+        // OPENING_STOCK_IMPORT_V1 — config post-hook (e.g. post opening-stock
+        // receipts). Runs only when at least one row landed.
+        let afterMsg = null, afterFailed = false;
+        if (ok > 0 && typeof cfg.afterImport === 'function') {
+            try { afterMsg = await cfg.afterImport(valid); }
+            catch (e) {
+                console.warn('[section-import] afterImport failed:', e);
+                afterMsg = trf('Товары импортированы, но пост-обработка не удалась: {msg}', { msg: e.message || e });
+                afterFailed = true;
+            }
+        }
+
+        let msg;
         if (ok > 0) {
             const parts = [];
             if (inserted) parts.push(trf('новых: {n}', { n: inserted }));
             if (updated)  parts.push(trf('обновлено: {n}', { n: updated }));
             if (failed)   parts.push(trf('с ошибкой: {n}', { n: failed }));
-            // CLINIC_API_FIX_V1 (ревью итога) — итог называет строки с замечаниями:
-            // окно сейчас закроется, и их список уйдёт вместе с ним.
-            const warned = valid.filter(r => r.status === 'warn').length;
+            if (refusedInFile) parts.push(trf('не импортировано (ошибки в файле): {n}', { n: refusedInFile }));
             if (warned)   parts.push(trf('с замечаниями: {n}', { n: warned }));
-            toast(trf('Импортировано строк: {n} · {parts}.', { n: ok, parts: parts.join(' · ') }), warned ? 'warn' : 'info');
+            msg = trf('Импортировано строк: {n} · {parts}.', { n: ok, parts: parts.join(' · ') });
         } else {
-            toast(trf('Импорт не удался — отклонено строк: {n}.', { n: failed }) + (lastError ? ' ' + lastError : ''), 'fail');
+            // Ревью 4 (M2) — и строки, не ввезённые из-за ошибок в самом файле.
+            msg = trf('Импорт не удался — отклонено строк: {n}.', { n: failed })
+                // Ревью 5 — новое предложение — с заглавной буквы.
+                + (refusedInFile ? ' ' + trf('Не импортировано (ошибки в файле): {n}.', { n: refusedInFile }) : '')
+                + (lastError ? ' ' + lastError : '');
         }
-
-        // OPENING_STOCK_IMPORT_V1 — config post-hook (e.g. post opening-stock
-        // receipts). Runs only when at least one row landed.
-        if (ok > 0 && typeof cfg.afterImport === 'function') {
-            try {
-                const msg = await cfg.afterImport(valid);
-                if (msg) toast(msg);
-            } catch (e) {
-                console.warn('[section-import] afterImport failed:', e);
-                toast(trf('Товары импортированы, но пост-обработка не удалась: {msg}', { msg: e.message || e }), 'fail');
-            }
-        }
+        if (afterMsg) msg += ' ' + afterMsg;
+        toast(msg, (ok === 0 || afterFailed) ? 'fail' : (failed || refusedInFile || warned) ? 'warn' : 'info');
 
         if (ok > 0 && typeof onImported === 'function') onImported();
-        if (failed === 0) close();
+        if (failed === 0 && refusedInFile === 0 && warned === 0 && !afterFailed) { close(); return; }
+        showResult({ ok, inserted, updated, failed, lastError, refusedInFile, warned, afterMsg });
+    }
+
+    // CLINIC_API_FIX_V1 (ревью 3) — итог импорта в окне: что ввезено, что нет и
+    // почему (таблица причин остаётся ниже). Окно не закрывается само;
+    // «Импортировать» выключена до нового файла — повтор задвоил бы строки.
+    function showResult(sum) {
+        // CLINIC_API_FIX_V1 (ревью 4, M2) — не записано ничего: это не «Импорт
+        // завершён», и «Импортировать» остаётся — повторить, когда сервер ответит.
+        const nothing = sum.ok === 0;
+        imported = !nothing;
+        if (!nothing) {
+            confirmBtn.setAttribute('disabled', '');
+            confirmBtn.disabled = true;
+            cancelBtn.textContent = tr('Закрыть');
+        }
+        clear(result);
+        const line = (text, color) => h('div', color ? { style: { color } } : null, text);
+        const split = [];
+        if (sum.inserted) split.push(trf('новых: {n}', { n: sum.inserted }));
+        if (sum.updated)  split.push(trf('обновлено: {n}', { n: sum.updated }));
+        result.append(...[
+            h('b', null, nothing ? 'Импорт не выполнен' : 'Импорт завершён'),
+            line(trf('Импортировано строк: {n}', { n: sum.ok }) + (split.length ? ' (' + split.join(', ') + ')' : '')),
+            sum.refusedInFile ? line(trf('Не импортировано — ошибки в файле: {n}', { n: sum.refusedInFile }), 'var(--crit-700)') : null,
+            sum.failed ? line(trf('Не записано — ошибка при записи: {n}', { n: sum.failed }) + (sum.lastError ? ' — ' + sum.lastError : ''), 'var(--crit-700)') : null,
+            sum.warned ? line(trf('С замечаниями: {n}', { n: sum.warned }), 'var(--warn-700)') : null,
+            sum.afterMsg ? line(sum.afterMsg) : null,
+            (sum.refusedInFile || sum.warned) ? h('div', { class: 'muted' }, 'Строки с ошибками и замечаниями — в таблице ниже.') : null,
+        ].filter(Boolean));
     }
 
     // Create lookup rows for any payload slots flagged with `__autoCreate` and
@@ -1844,6 +2073,7 @@ export function readSheetRows(XLSX, buf, section, fileName) {
     const ws = wb.Sheets[wb.SheetNames[0]];
     if (!ws) throw new Error('В книге нет ни одного листа.');
     if (csvText == null) percentCellsAsText(ws);   // у текста CSV форматов нет
+    else unwrapEqualsQuoted(ws);                   // CLINIC_API_FIX_V1 (ревью 3) — ="007" → 007
     // PROCUREMENT_IMPORT_V1 — warehouse exports carry a title + blank
     // row above the real header, so `headerRow: 'auto'` scans the
     // first rows for the one matching the most known column names.
@@ -1853,18 +2083,49 @@ export function readSheetRows(XLSX, buf, section, fileName) {
 }
 
 // CLINIC_API_FIX_V1 (ревью итога) — текст CSV-файла или null (не CSV).
-// CSV — по имени файла (.csv); имени нет (вызов из теста) — по содержимому:
-// не zip (.xlsx) и не OLE (.xls). Строгий UTF-8 (fatal), метка порядка байтов
-// снимается; байты не UTF-8 — cp1251, как сохраняет «CSV» русский Excel.
+// Сначала СОДЕРЖИМОЕ (ревью 3): подпись ZIP (.xlsx, .ods) или OLE (.xls) —
+// это книга Excel, как бы файл ни назывался; переименованная в .csv книга
+// читалась как текст и не открывалась. Дальше CSV — по имени файла (.csv);
+// имени нет (вызов из теста) — всё, что не книга. Кодировка: метка UTF-16
+// (FF FE / FE FF — «Текст Юникод» из Excel) → utf-16le / utf-16be; иначе
+// строгий UTF-8 (fatal); байты не UTF-8 — cp1251, как сохраняет «CSV»
+// русский Excel. Метка порядка байтов снимается.
 function csvFileText(buf, fileName) {
     const bytes = new Uint8Array(buf);
-    const zipOrOle = (bytes[0] === 0x50 && bytes[1] === 0x4B) || (bytes[0] === 0xD0 && bytes[1] === 0xCF);
-    const isCsv = fileName ? /\.csv$/i.test(String(fileName)) : !zipOrOle;
+    // CLINIC_API_FIX_V1 (ревью 4, M3) — подпись целиком: ZIP — 50 4B 03 04, OLE —
+    // D0 CF 11 E0 A1 B1 1A E1. По двум байтам CSV, начинающийся с «PK», или CSV
+    // в cp1251, начинающийся с «РП» (D0 CF), принимался за книгу.
+    const starts = (sig) => sig.every((x, k) => bytes[k] === x);
+    const zipOrOle = starts([0x50, 0x4B, 0x03, 0x04]) || starts([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
+    if (zipOrOle) return null;
+    const isCsv = fileName ? /\.csv$/i.test(String(fileName)) : true;
     if (!isCsv) return null;
     let text;
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-    catch (e) { text = new TextDecoder('windows-1251').decode(bytes); }
+    if (bytes[0] === 0xFF && bytes[1] === 0xFE) text = new TextDecoder('utf-16le').decode(bytes);
+    else if (bytes[0] === 0xFE && bytes[1] === 0xFF) text = new TextDecoder('utf-16be').decode(bytes);
+    else {
+        try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+        catch (e) { text = new TextDecoder('windows-1251').decode(bytes); }
+    }
     return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+}
+
+// CLINIC_API_FIX_V1 (ревью 3) — ЯЧЕЙКИ ="…" В CSV. Excel и выгрузки пишут код
+// с ведущими нулями, MRN, ПИНФЛ и телефон как ="007", чтобы они не стали
+// числом. SheetJS без raw разворачивал их сам; с raw: true цена ="150000"
+// отказывала, а код, MRN и телефон ложились буквально «="007"» — повторный
+// импорт по MRN/ПИНФЛ заводил дубли пациентов. Разворачиваем, как раньше
+// SheetJS: вся ячейка ="…" → текст внутри кавычек ("" внутри — одна кавычка).
+function unwrapEqualsQuoted(ws) {
+    for (const addr of Object.keys(ws)) {
+        if (addr[0] === '!') continue;
+        const cell = ws[addr];
+        if (!cell || typeof cell.v !== 'string') continue;
+        const m = /^="(.*)"$/s.exec(cell.v);
+        if (!m) continue;
+        const text = m[1].replace(/""/g, '"');
+        cell.t = 's'; cell.v = text; cell.w = text;
+    }
 }
 
 // CLINIC_API_FIX_V1 (ревью итога) — ЯЧЕЙКА В ПРОЦЕНТНОМ ФОРМАТЕ EXCEL.
@@ -1875,10 +2136,12 @@ function csvFileText(buf, fileName) {
 // показывает 12,5 % как «13%». Колонка процентов читает 40; колонка не
 // процентов («цена») отказывает, как любому «…%». Процентный формат — знак %
 // в формате ячейки вне кавычек (0"%" — просто подпись, число не умножается);
-// формата нет — по показанному тексту.
+// формата нет — по показанному тексту. CLINIC_API_FIX_V1 (ревью 3) — «_x»
+// (отступ шириной символа x) и «*x» (заполнитель) — тоже не знак: 0.0_% Excel
+// показывает «40.0 », это не процентный формат.
 function isPercentFormat(cell) {
     if (cell.z != null && cell.z !== '') {
-        return /%/.test(String(cell.z).replace(/"[^"]*"/g, '').replace(/\\./g, ''));
+        return /%/.test(String(cell.z).replace(/"[^"]*"/g, '').replace(/\\./g, '').replace(/[_*]./g, ''));
     }
     return /%\s*$/.test(String(cell.w || ''));
 }
@@ -1887,7 +2150,12 @@ function percentCellsAsText(ws) {
         if (addr[0] === '!') continue;
         const cell = ws[addr];
         if (!cell || cell.t !== 'n' || !Number.isFinite(cell.v) || !isPercentFormat(cell)) continue;
-        const text = String(+(cell.v * 100).toFixed(10)) + '%';
+        // CLINIC_API_FIX_V1 (ревью 3) — ровно три знака после точки правило
+        // числа считает неоднозначными («12.345» — и 12 345); значение здесь
+        // точное, поэтому дописывается ноль: «12.3450%» — однозначно 12,345.
+        let num = String(+(cell.v * 100).toFixed(10));
+        if (/\.\d{3}$/.test(num)) num += '0';
+        const text = num + '%';
         cell.t = 's'; cell.v = text; cell.w = text;
         delete cell.z;
     }
@@ -1964,14 +2232,8 @@ function buildRow(raw, rowNum, lookups, cfg) {
 
         // Required check.
         if (col.required) {
-            const v = String(cellRaw ?? '').trim();
+            const v = cellText(cellRaw);
             if (!v) { notes.push(`missing ${col.key}`); status = 'error'; }
-        }
-        // IMPORT_PRICE_OPTIONAL_V1 — soft requirement: missing value imports
-        // with the column default but flags the row so the user notices.
-        if (col.warnIfMissing) {
-            const v = String(cellRaw ?? '').trim();
-            if (!v) { notes.push(trf('{col} пусто — будет {def}', { col: col.key, def: col.defaultNum ?? 0 })); if (status !== 'error') status = 'warn'; }
         }
 
         // PROCUREMENT_IMPORT_V1 — captured columns feed afterImport (e.g.
@@ -1991,16 +2253,24 @@ function buildRow(raw, rowNum, lookups, cfg) {
                 }
                 continue;
             }
+            // CLINIC_API_FIX_V1 (ревью 5) — captureRaw: значение ячейки как есть
+            // (текст — без краёв): число из Excel 2,375 текстом «2.375» стало бы
+            // неоднозначным и выпало бы по правилу числа. Его читает потребитель
+            // (linkSuppliers — readImportNumber).
+            if (col.captureRaw) {
+                if (cellText(cellRaw) !== '') captures[col.capture] = typeof cellRaw === 'string' ? cellRaw.trim() : cellRaw;
+                continue;
+            }
             // Текстовая колонка-захват (поставщик, единица закупки) — текст без
             // краёв. Раньше она шла через разбор числа и становилась null.
-            const v = String(cellRaw ?? '').trim();
+            const v = cellText(cellRaw);
             if (v !== '') captures[col.capture] = v;
             continue;
         }
 
         // FK lookup.
         if (col.fk) {
-            const v = String(cellRaw ?? '').trim();
+            const v = cellText(cellRaw);
             if (!v) { payload[col.fk.target] = null; continue; }
             const id = lookups[col.key]?.get(normKey(v));
             if (id) { payload[col.fk.target] = id; continue; }
@@ -2019,7 +2289,7 @@ function buildRow(raw, rowNum, lookups, cfg) {
 
         // SERVICE_GROUP_ROUTING_V1 — mapped enum («Раздел» label -> services.type).
         if (col.map) {
-            const v = String(cellRaw ?? '').trim();
+            const v = cellText(cellRaw);
             if (!v) { if (col.defaultTo != null) payload[col.target || col.key] = col.defaultTo; continue; }
             const mapped = col.map[normKey(v)];
             if (mapped != null) { payload[col.target || col.key] = mapped; }
@@ -2054,14 +2324,68 @@ function buildRow(raw, rowNum, lookups, cfg) {
             if (col.raw) continue;   // читает transform раздела
             const key = col.target || col.key;
             const read = readImportNumber(cellRaw, !!col.percent);
+            // CLINIC_API_FIX_V1 (ревью 3, решение) — ПУСТАЯ ДЕНЕЖНАЯ ЯЧЕЙКА НЕ ПИШЕТ 0.
+            // Было: пустая цена в строке, обновляющей услугу, писала 0 (с «price
+            // пусто»), пустой НДС — 12 поверх сохранённого, пустой оклад
+            // сотрудника — 0. Теперь:
+            //   • строка обновляет запись — поле не пишется, замечание «пусто —
+            //     оставлено как было»;
+            //   • новая строка раздела, который это знает (rowUpdates, услуги), —
+            //     как раньше: цена 0 с предупреждением (warnIfEmptyOnNew, ревью 4 —
+            //     откат отказа), НДС 12, доля 0;
+            //   • разделы, где новая ли строка, узнаётся только при импорте, —
+            //     поле не пишется никогда (у новой записи — значение базы),
+            //     замечание «пусто — не записано».
+            // Колонки нет в листе — те же правила, но без замечаний. Свой экспорт
+            // (null — пустой ячейкой) поэтому ничего не меняет.
+            if (read.empty && col.money) {
+                const inSheet = (colKey in r) || (col.aliases || []).some((a) => normHeader(a) in r);
+                if (updating) {
+                    // CLINIC_API_FIX_V1 (ревью 4) — сохранённое совпадает с тем, что
+                    // дала бы пустая ячейка (НДС 12, доля 0), — тихое замечание; не
+                    // совпадает или неизвестно — ПРЕДУПРЕЖДЕНИЕ с сохранённым
+                    // значением: строку видно в таблице, итог её считает.
+                    if (inSheet) {
+                        const savedRow = lookups && lookups.__stored
+                            ? lookups.__stored.get(normKey(r[normHeader(cfg.matchField || 'name')])) : null;
+                        const saved = savedRow ? savedRow[key] : undefined;
+                        const known = saved !== undefined && saved !== null && saved !== '';
+                        if (known && Number(saved) === (col.defaultNum ?? 0)) {
+                            notes.push(trf('Строка {n}: {col} пусто — оставлено как было.', { n: rowNum, col: col.key }));
+                        } else {
+                            notes.push(known
+                                ? trf('Строка {n}: {col} пусто — оставлено как было ({v}).', { n: rowNum, col: col.key, v: saved })
+                                : trf('Строка {n}: {col} пусто — оставлено как было.', { n: rowNum, col: col.key }));
+                            if (status !== 'error') status = 'warn';
+                        }
+                    }
+                } else if (typeof cfg.rowUpdates === 'function') {
+                    payload[key] = col.defaultNum ?? 0;
+                    if (col.warnIfEmptyOnNew) {
+                        notes.push(trf('{col} пусто — будет {def}', { col: col.key, def: col.defaultNum ?? 0 }));
+                        if (status !== 'error') status = 'warn';
+                    }
+                } else if (inSheet) {
+                    notes.push(trf('Строка {n}: {col} пусто — не записано.', { n: rowNum, col: col.key }));
+                }
+                continue;
+            }
             if (read.empty) { payload[key] = col.defaultNum ?? 0; continue; }
-            if ('n' in read) { payload[key] = col.coerce === 'int' ? Math.round(read.n) : read.n; continue; }
-            const at = { n: rowNum, col: col.key, v: read.bad };
+            // CLINIC_API_FIX_V1 (ревью 3) — в колонке процентов доля вне 0…100 %
+            // для правила числа — то же, что не число; причина называется.
+            const why = ('n' in read) && col.percent && (read.n > 100 || read.n < 0)
+                ? tr(read.n > 100 ? 'доля больше 100%' : 'доля меньше 0%') : null;
+            if (('n' in read) && !why) { payload[key] = col.coerce === 'int' ? Math.round(read.n) : read.n; continue; }
+            const at = { n: rowNum, col: col.key, v: why ? String(cellRaw).trim() : read.bad, why };
             if (updating) {
-                notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.', at));
+                notes.push(why
+                    ? trf('Строка {n}: в колонке {col} {why} («{v}») — оставлено сохранённое значение.', at)
+                    : trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.', at));
                 if (status !== 'error') status = 'warn';
-            } else if (col.money || col.required) {
-                notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.', at));
+            } else if (col.money || col.required || why) {
+                notes.push(why
+                    ? trf('Строка {n}: в колонке {col} {why} («{v}») — строка не импортирована.', at)
+                    : trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.', at));
                 status = 'error';
             } else if (typeof cfg.rowUpdates === 'function' && col.defaultNum != null) {
                 payload[key] = col.defaultNum;
@@ -2082,7 +2406,7 @@ function buildRow(raw, rowNum, lookups, cfg) {
         // not a silent drop: the registrar sees which cell to fix. The column is
         // left out of the payload so the row still imports without a bogus date.
         if (col.coerce === 'date') {
-            const rawStr = String(cellRaw ?? '').trim();
+            const rawStr = cellText(cellRaw);
             if (!rawStr) continue;
             const iso = parseFlexibleDate(cellRaw);
             if (iso) { payload[col.target || col.key] = iso; }
@@ -2095,7 +2419,9 @@ function buildRow(raw, rowNum, lookups, cfg) {
 
         // Plain text. Empty → leave the column out so the DB default fires
         // (especially important for auto-generated `code`).
-        const v = String(cellRaw ?? '').trim();
+        // CLINIC_API_FIX_V1 (ревью 3) — ячейка в формате даты (Date) — ДД.ММ.ГГГГ,
+        // а не «Tue May 12 2026 00:00:00 GMT+0500 …» (cellText).
+        const v = cellText(cellRaw);
         if (v) payload[col.target || col.key] = v;
     }
 
@@ -2110,7 +2436,8 @@ function buildRow(raw, rowNum, lookups, cfg) {
     // a hook can ask which headers the file actually carried.
     if (typeof cfg.transform === 'function') {
         const ctx = { notes, lookups, rowNum, warn(msg) { notes.push(msg); if (status !== 'error') status = 'warn'; },
-            fail(msg) { notes.push(msg); status = 'error'; } };   // CLINIC_API_FIX_V1 (ревью итога) — строка не ввозится   // CLINIC_API_FIX_V1 — rowNum: предупреждение называет строку файла
+            fail(msg) { notes.push(msg); status = 'error'; },   // CLINIC_API_FIX_V1 (ревью итога) — строка не ввозится
+            note(msg) { notes.push(msg); } };                   // CLINIC_API_FIX_V1 (ревью 3) — замечание без предупреждения   // CLINIC_API_FIX_V1 — rowNum: предупреждение называет строку файла
         try { cfg.transform(payload, r, ctx); }
         catch (e) { console.warn('[section-import] transform failed:', e); }
     }
@@ -2140,7 +2467,13 @@ function parseFlexibleDate(v) {
 
     // Real Date (only when a caller enables cellDates) — use local parts, not
     // toISOString(), which would shift a midnight date back a day east of UTC.
-    if (v instanceof Date && !isNaN(v.getTime())) return _ymd(v.getFullYear(), v.getMonth() + 1, v.getDate());
+    // CLINIC_API_FIX_V1 (ревью 3) — с cellNF ячейка в формате даты приходит
+    // объектом Date, и 0 в таком формате — «31.12.1899»: дата раньше
+    // 1900-01-01 — не дата (как в v3.16.0 — предупреждение), а не 1899-12-31.
+    if (v instanceof Date) {
+        if (isNaN(v.getTime()) || v.getFullYear() < 1900) return null;
+        return _ymd(v.getFullYear(), v.getMonth() + 1, v.getDate());
+    }
 
     const s = String(v).trim();
     if (!s) return null;
@@ -2189,6 +2522,16 @@ function parseFlexibleDate(v) {
     if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) return null;
     return _ymd(y, m, d);
 }
+// CLINIC_API_FIX_V1 (ревью 3) — текст ячейки: Date (ячейка в формате даты) —
+// ДД.ММ.ГГГГ по местным частям, как читает parseFlexibleDate; остальное — как
+// есть, без краёв.
+function cellText(v) {
+    if (v instanceof Date) {
+        if (isNaN(v.getTime())) return '';
+        return String(v.getDate()).padStart(2, '0') + '.' + String(v.getMonth() + 1).padStart(2, '0') + '.' + String(v.getFullYear()).padStart(4, '0');
+    }
+    return String(v ?? '').trim();
+}
 function _ymd(y, m, d) {
     return String(y).padStart(4, '0') + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
 }
@@ -2207,14 +2550,17 @@ function _ymd(y, m, d) {
 export function readImportNumber(v, percent) {
     if (v === null || v === undefined) return { empty: true };
     if (typeof v === 'number') return Number.isFinite(v) ? { n: v } : { bad: String(v) };
-    if (typeof v !== 'string') return { bad: String(v).trim() };   // true/false, дата — не число
+    if (typeof v !== 'string') return { bad: cellText(v) };   // true/false, дата (ДД.ММ.ГГГГ) — не число
     const text = v.trim();
     if (text === '') return { empty: true };
     const s = percent ? text.replace(/\s*%$/, '') : text;
     const m = /^([+-]?)(\d{1,3}(?:\s+\d{3})+|\d+)(?:([.,])(\d+))?$/.exec(s);
     if (!m) return { bad: text };
     const grouped = /\s/.test(m[2]);
-    if (m[3] && !grouped && m[4].length === 3 && m[2].length <= 3 && Number(m[2]) !== 0) return { bad: text };
+    // CLINIC_API_FIX_V1 (ревью 4, M4) — в колонке процентов (0…100) прочтение
+    // «тысячи» невозможно (33 333 % — не доля): там «33,333» и «12,345%» —
+    // десятичные, неоднозначности нет.
+    if (!percent && m[3] && !grouped && m[4].length === 3 && m[2].length <= 3 && Number(m[2]) !== 0) return { bad: text };
     const n = Number(m[1] + m[2].replace(/\s+/g, '') + (m[3] ? '.' + m[4] : ''));
     return Number.isFinite(n) ? { n } : { bad: text };
 }

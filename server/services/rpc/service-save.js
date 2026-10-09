@@ -20,6 +20,7 @@
 //     админ-врач держит primary-роль doctor (ADMIN_DOCTOR_V1, дважды уже
 //     стреляло).
 import { hasAnyRole } from '../roles.js';
+import { visitTierStateProblem, visitTierValue } from '../../../public/js/shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5)
 import {
   SERVICE_SECTIONS, labBlockVisible, normName, mergeServiceRates,
   performerGate, ratesArray, tierStepsProblem, tierStepRangeProblem,
@@ -205,20 +206,34 @@ export function serviceSave(db, args, user) {
   const priceRepeat = tierNum(a.price_repeat, 'Цена повторного визита');
   const daysFrom = tierDays(a.secondary_days_from, '«Со дня»');
   const daysTo = tierDays(a.secondary_days_to, '«По день»');
-  if (daysFrom !== null && daysTo !== null && daysTo < daysFrom) {
-    throw new RpcError('Окно второго визита: «по день» не может быть раньше «со дня».', 400);
-  }
-  if ((daysFrom !== null || daysTo !== null) && priceSecondary === null && priceRepeat === null) {
-    throw new RpcError('Укажите цену второго визита — иначе окно дней не на что применить.', 400);
-  }
   // REPEAT_WINDOW_V1 — the repeat visit's own window; both empty = as the second visit.
   const repDaysFrom = tierDays(a.repeat_days_from, 'Повторный визит, «не раньше чем через»');
   const repDaysTo = tierDays(a.repeat_days_to, 'Повторный визит, «не позже чем через»');
-  if (repDaysFrom !== null && repDaysTo !== null && repDaysTo < repDaysFrom) {
-    throw new RpcError('Окно повторного визита: «не позже чем через» не может быть раньше «не раньше чем через».', 400);
-  }
-  if ((repDaysFrom !== null || repDaysTo !== null) && priceSecondary === null && priceRepeat === null) {
-    throw new RpcError('Укажите цену повторного визита — иначе окно дней не на что применить.', 400);
+  // CLINIC_API_FIX_V1 (ревью 5) — правила окон — ОДНО правило с импортом из
+  // Excel (public/js/shared/visit-tier-rules.js): порядок границ, окно без
+  // цены и цена визита без окна («без срока»: цена повторного визита без
+  // второго визита действовала бы со второго визита всегда).
+  //
+  // CLINIC_API_FIX_V1 (ревью 6) — проверяется, только когда ЭТО сохранение
+  // меняет цены визитов (цены второго/повторного и их окна). В клиниках уже
+  // могут быть услуги в состоянии, которое правило теперь не пускает: правка
+  // названия, кода, цены, отделения не должна требовать сначала чинить цены
+  // визитов. Поля те же, что сохранены, — сохранение проходит; изменилось хоть
+  // одно, и итог плохой — отказ с той же причиной.
+  const visitTier = {
+    price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo,
+    price_repeat: priceRepeat, repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
+  };
+  const storedVisit = a.id !== undefined && a.id !== null
+    ? db.prepare('SELECT price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?').get(Number(a.id)) || null
+    : null;
+  // Ревью 7 — «не задано» по правилу самих цен визитов (visitTierValue):
+  // undefined, null и пустая строка — одно и то же, а не 0.
+  const sameNum = (x, y) => visitTierValue(x) === visitTierValue(y);
+  const visitChanged = !storedVisit || Object.keys(visitTier).some((k) => !sameNum(visitTier[k], storedVisit[k]));
+  if (visitChanged) {
+    const visitProblem = visitTierStateProblem(visitTier);
+    if (visitProblem) throw new RpcError(visitProblem, 400);
   }
   const active = a.active === undefined ? 1 : asBool(a.active);
   const code = a.code == null || String(a.code).trim() === '' ? null : String(a.code).trim();

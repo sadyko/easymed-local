@@ -200,3 +200,88 @@ test('A2 / OWN_PRICE_TIER_RATIO_V1: второй визит у врача с л�
   // Без врача — цена тарифа, как прежде.
   assert.equal(servicePriceQuote(db, { patient_id: 1, service_ids: [sid] }, registrar).quotes[sid].price, 60000);
 });
+
+// CLINIC_API_FIX_V1 (ревью 5) — окно услуги отказывает цене визита без окна
+// (то же правило, что у импорта: public/js/shared/visit-tier-rules.js).
+test('service_save: цена повторного визита без второго визита и без окна — отказ «без срока»', () => {
+  const db = fresh();
+  assert.throws(() => tiered(db, { price_secondary: null, secondary_days_from: null, secondary_days_to: null, price_repeat: 0 }), /без срока/);
+  assert.throws(() => tiered(db, { price_secondary: null, secondary_days_from: null, secondary_days_to: null, price_repeat: 30000, repeat_days_from: 1, repeat_days_to: 30 }), /без срока/);
+  db.close();
+});
+
+test('service_save: повторный визит со своим «не раньше» без «не позже» при ограниченном втором — отказ', () => {
+  const db = fresh();
+  assert.throws(() => tiered(db, { price_repeat: 30000, repeat_days_from: 1, repeat_days_to: null }), /«не позже чем через»/);
+  db.close();
+});
+
+test('service_save: цена второго визита без «по день» — «без предела» по выбору, сохраняется', () => {
+  const db = fresh();
+  const id = tiered(db, { price_secondary: 60000, secondary_days_from: 1, secondary_days_to: null, price_repeat: 0 });
+  assert.ok(id);
+  db.close();
+});
+
+// CLINIC_API_FIX_V1 (ревью 6) — окно услуги отказывает «без срока» только
+// тогда, когда ЭТО сохранение меняет цены визитов (цены второго/повторного и
+// их окна). В клиниках уже могут быть услуги в таком состоянии: правка
+// названия, кода, цены, отделения не должна требовать сначала чинить цены
+// визитов.
+const BAD = { price_secondary: null, secondary_days_from: null, secondary_days_to: null, price_repeat: 0, repeat_days_from: null, repeat_days_to: null };
+const visitRow = (db, id) => db.prepare('SELECT name, price, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?').get(id);
+const storedBad = (db) => {
+  const id = tiered(db);
+  db.prepare('UPDATE services SET price_secondary = NULL, secondary_days_from = NULL, secondary_days_to = NULL, price_repeat = 0, repeat_days_from = NULL, repeat_days_to = NULL WHERE id = ?').run(id);
+  return id;
+};
+
+test('service_save: сохранённое «без срока» + переименование и новая цена — сохраняется, цены визитов не тронуты', () => {
+  const db = fresh();
+  const id = storedBad(db);
+  tiered(db, { id, name: 'Приём невролога (повторный)', price: 210000, ...BAD });
+  const row = visitRow(db, id);
+  assert.strictEqual(row.name, 'Приём невролога (повторный)');
+  assert.strictEqual(row.price, 210000);
+  assert.deepEqual({ ...row, name: undefined, price: undefined }, { name: undefined, price: undefined, ...BAD });
+  db.close();
+});
+
+test('service_save: сохранённое «без срока» + правка цен визитов, которая оставляет «без срока», — отказ', () => {
+  const db = fresh();
+  const id = storedBad(db);
+  assert.throws(() => tiered(db, { id, ...BAD, price_repeat: 10000 }), /без срока/);
+  assert.strictEqual(visitRow(db, id).price_repeat, 0, 'отказ, а цена повторного визита изменилась');
+  db.close();
+});
+
+test('service_save: сохранённое «без срока» + правка, которая его чинит (цена второго визита), — сохраняется', () => {
+  const db = fresh();
+  const id = storedBad(db);
+  tiered(db, { id, ...BAD, price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6 });
+  assert.strictEqual(visitRow(db, id).price_secondary, 60000);
+  db.close();
+});
+
+test('service_save: правильные цены визитов + правка, которая делает «без срока», — отказ', () => {
+  const db = fresh();
+  const id = tiered(db);
+  assert.throws(() => tiered(db, { id, ...BAD }), /без срока/);
+  assert.strictEqual(visitRow(db, id).price_secondary, 60000, 'отказ, а цена второго визита снята');
+  db.close();
+});
+
+// CLINIC_API_FIX_V1 (ревью 7) — «не задано» сравнивается как «не задано»:
+// сохранённая пустая строка (бывает только после прямой записи в базу), null и
+// отсутствие — одно и то же, а не 0. Иначе 0 в цене повторного визита поверх
+// сохранённой '' считался «без изменений», и «без срока» проходил мимо правила.
+test('service_save: сохранённое \'\' в цене повторного визита и присланный 0 — это изменение, правило проверяет', () => {
+  const db = fresh();
+  const id = storedBad(db);
+  db.prepare("UPDATE services SET price_repeat = '' WHERE id = ?").run(id);
+  assert.throws(() => tiered(db, { id, ...BAD, price_repeat: 0 }), /без срока/);
+  // То же «не задано» с обеих сторон — не изменение: переименование проходит.
+  tiered(db, { id, name: 'Приём невролога 2', ...BAD, price_repeat: null });
+  assert.strictEqual(visitRow(db, id).name, 'Приём невролога 2');
+  db.close();
+});

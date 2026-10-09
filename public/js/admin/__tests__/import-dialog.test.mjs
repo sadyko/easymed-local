@@ -14,6 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
+import fs from 'node:fs';
 
 // Окно грузит SheetJS по адресу сайта '/js/vendor/xlsx-0.20.3.js'; здесь — тот
 // же файл с диска.
@@ -80,16 +81,29 @@ globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
 // ---- поддельный сервер ------------------------------------------------------
-const W = { writes: [], storedReads: 0, failExisting: false, failStored: false };
+const W = { writes: [], bodies: [], storedReads: 0, failExisting: false, failStored: false, gatewayOk: false, delayMs: 0, failWrites: false };
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
     const bad = (msg) => ({ ok: false, status: 500, json: async () => ({ error: { message: msg } }), text: async () => msg });
     if (u.startsWith('/api/auth/me')) return ok({ user: { id: 1, role: 'admin' } });
-    if (u.startsWith('/api/v1')) return { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' };
+    if (u.startsWith('/api/v1')) {   // ревью 3 — gatewayOk: запись товаров «прошла» (проверка итога «Товаров»)
+        if (W.gatewayOk) { W.writes.push('gw:' + (opts.method || 'GET')); return ok({}); }
+        return { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' };
+    }
     if (u.startsWith('/api/db')) {
         const d = JSON.parse(opts.body || '{}');
-        if (d.op !== 'select') { W.writes.push(d.table + ':' + d.op); return ok({ data: [] }); }
+        if (d.op !== 'select') {
+            W.writes.push(d.table + ':' + d.op);
+            W.bodies.push(d);   // ревью 5 — что именно ушло на запись
+            if (W.delayMs) await new Promise((r) => setTimeout(r, W.delayMs));   // ревью 4 — медленная запись
+            if (W.failWrites) return bad('Сервер недоступен');                    // ревью 4 — запись не прошла
+            // Ревью 5 — справочная запись (тип, категория, отделение) создаётся с id.
+            if (d.op === 'insert' && d.table !== 'services') {
+                return ok({ data: (Array.isArray(d.values) ? d.values : [d.values]).map((v, i) => ({ id: 900 + i, ...v })) });
+            }
+            return ok({ data: [] });
+        }
         if (d.table === 'services') {
             if (/doctor_tier_from/.test(String(d.columns))) {   // сохранённый список (loadLookups)
                 W.storedReads++;
@@ -118,9 +132,9 @@ function sheetFile(rows) {
 const FILE = () => sheetFile([['name', 'group', 'price', 'category'],
     ['Приём кардиолога', 'Консультация', 260000, ''], ['Приём невролога', 'Консультация', 240000, 'Неврология']]);
 
-async function openWith(file) {
+async function openWith(file, sectionKey = 'services') {
     BODY.children.length = 0;
-    await openSectionImporter({ sectionKey: 'services', onImported() {} });
+    await openSectionImporter({ sectionKey, onImported() {} });
     const overlay = BODY.children.find((n) => String(n.className).includes('modal'));
     const fileInput = all(overlay).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'file');
     const confirm = all(overlay).find((n) => n.tagName === 'BUTTON' && /Импортировать/.test(n.textContent));
@@ -245,4 +259,247 @@ test('CSV в cp1251: окно показывает русские названи
     const { overlay } = await openWith({ name: 'uslugi.csv', arrayBuffer: async () => bytes.buffer });
     const tbody = all(overlay).find((n) => n.tagName === 'TBODY');
     assert.ok(tbody && /Приём невролога/.test(tbody.textContent), 'в предпросмотре нет «Приём невролога»: ' + (tbody ? tbody.textContent.slice(0, 200) : '—'));
+});
+
+// CLINIC_API_FIX_V1 (ревью 3) — ПРЕДПРОСМОТР С ПОТОЛКОМ. Строки с замечаниями
+// рисовались все: 5 000 таких строк — около 90 тысяч узлов, и всё заново на
+// каждое переключение галочки. Теперь — не больше 200 строк с замечаниями и
+// ошибками, под таблицей — «ещё N строк с замечаниями».
+test('предпросмотр: не больше 200 строк с замечаниями, остальные названы числом', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const rows = [['name', 'group', 'price']];
+    for (let i = 1; i <= 300; i++) rows.push(['Новая ' + i, 'Консультация', 'abc']);   // ошибка: не число в цене новой услуги
+    for (let i = 1; i <= 60; i++) rows.push(['Чистая ' + i, 'Консультация', 1000 + i]);
+    const { overlay } = await openWith(sheetFile(rows));
+    const trs = previewRows(overlay);
+    const flaggedShown = trs.filter((tr) => /ошибка|внимание/.test(tr.children[1].textContent)).length;
+    assert.equal(flaggedShown, 200, 'строк с замечаниями в предпросмотре: ' + flaggedShown);
+    assert.equal(trs.length, 250, 'всего строк в предпросмотре: ' + trs.length);
+    assert.match(overlay.textContent, /ещё 100 строк с замечаниями/);
+});
+
+test('подписи потолка предпросмотра — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const k of ['ещё {n} строк с замечаниями', 'Предпросмотр: первые {shown} из {flagged} строк с замечаниями и ошибками и первые {n} без замечаний — всего строк {total}']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+    }
+});
+
+// CLINIC_API_FIX_V1 (ревью 3) — ИТОГ ИМПОРТА ЧЕСТНЫЙ И ОСТАЁТСЯ НА ЭКРАНЕ.
+// Было: «Импортировано строк: 2 · новых: 2.», хотя ещё 3 строки файла не
+// ввезены (ошибки), и окно закрывалось — вместе со списком причин. Теперь,
+// если что-то не ввезено или с замечаниями, окно остаётся и показывает итог:
+// ввезено N (новых M), не импортировано K, с замечаниями W; таблица с
+// причинами — под ним. Чистый импорт закрывает окно, как раньше. Сообщение
+// с оттенком предупреждения теперь окрашено (admin.css), а сообщение
+// «Товаров» об остатках дописывается к итогу, а не заменяет его.
+const resultText = (overlay) => {
+    const el = all(overlay).find((n) => String(n.className).includes('imx-result'));
+    return el ? el.textContent : '';
+};
+const inBody = (overlay) => all(BODY).includes(overlay);
+
+test('итог: 3 ввезены (одна без цены — с замечанием), 2 не ввезены из-за ошибок в файле — окно остаётся, итог честный', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay, confirm } = await openWith(sheetFile([['name', 'group', 'price'],
+        ['Приём A', 'Консультация', 1000], ['Приём B', 'Консультация', 2000],
+        ['Приём X', 'Консультация', 'abc'], ['Приём Y', 'Консультация', ''], ['Приём Z', 'Консультация', '1,500']]));
+    confirm.click();
+    await settle(200);
+    assert.ok(inBody(overlay), 'окно закрылось, а 2 строки не ввезены');
+    const text = resultText(overlay);
+    assert.match(text, /Импорт завершён/);
+    assert.match(text, /Импортировано строк: 3/);
+    assert.match(text, /новых: 3/);
+    assert.match(text, /Не импортировано — ошибки в файле: 2/);
+    assert.match(text, /С замечаниями: 1/);
+    assert.match(toastText(), /не импортировано \(ошибки в файле\): 2/, toastText());
+    assert.ok(confirm.disabled === true || confirm.hasAttribute('disabled'), 'после импорта «Импортировать» снова доступна — повтор задвоит');
+    assert.ok(previewRows(overlay).length >= 3, 'таблица с причинами пропала');
+});
+
+test('итог: только замечания — окно остаётся, «С замечаниями: 1»', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay, confirm } = await openWith(sheetFile([['name', 'group', 'price'],
+        ['Приём кардиолога', 'Консультация', '150 000 сум'], ['Приём A', 'Консультация', 1000]]));
+    confirm.click();
+    await settle(200);
+    assert.ok(inBody(overlay));
+    assert.match(resultText(overlay), /С замечаниями: 1/);
+});
+
+test('итог: всё чисто — окно закрывается, как раньше', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay, confirm } = await openWith(FILE());
+    confirm.click();
+    await settle(200);
+    assert.ok(!inBody(overlay), 'чистый импорт оставил окно открытым');
+    assert.match(toastText(), /Импортировано строк: 2/);
+});
+
+test('«Товары»: сообщение об остатках дописано к итогу, а не заменяет его', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false, gatewayOk: true });
+    try {
+        const { confirm } = await openWith(sheetFile([['Товар', 'Цена', 'Остаток'], ['Шприц', 1200, 5]]), 'procurement_items');
+        confirm.click();
+        await settle(250);
+        const t = toastText();
+        assert.match(t, /Импортировано строк: 1/, t);
+        assert.match(t, /Остатки пропущены/, t);
+    } finally { W.gatewayOk = false; }
+});
+
+test('сообщение с оттенком предупреждения окрашено (admin.css), цветом из токенов', () => {
+    const css = fs.readFileSync(new URL('../../../css/admin.css', import.meta.url), 'utf8');
+    assert.match(css, /\.toast\[data-kind="warn"\]\s*\{[^}]*background:\s*var\(--warn-\d+\)/);
+});
+
+test('подписи итога — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const k of ['Импорт завершён', 'Импортировано строк: {n}', 'Не импортировано — ошибки в файле: {n}', 'Не записано — ошибка при записи: {n}',
+        'С замечаниями: {n}', 'Строки с ошибками и замечаниями — в таблице ниже.', 'не импортировано (ошибки в файле): {n}']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+    }
+});
+
+// CLINIC_API_FIX_V1 (ревью 4) — ОКНО ГОВОРИТ, ЧТО ВАЖНО. Колонка, чей
+// заголовок импорт не узнал, не импортируется — строка статуса называет её
+// («Сумма»), а не молча оставляет цены нулями; подсказка колонок называет
+// денежные колонки и их правило.
+test('нераспознанная колонка названа в строке статуса; «Цена» — узнана', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay } = await openWith(sheetFile([['name', 'group', 'Цена', 'Сумма'], ['Приём A', 'Консультация', 1000, 5]]));
+    const statusText = all(overlay).find((n) => String(n.className).includes('imx-status')).textContent;
+    assert.match(statusText, /Колонки не распознаны и не импортируются: «Сумма»/, statusText);
+    assert.ok(!/Цена/.test(statusText.split('не импортируются')[1] || ''), '«Цена» названа нераспознанной: ' + statusText);
+});
+
+test('подсказка колонок называет денежные колонки и их правило', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay } = await openWith(sheetFile([['name', 'group', 'price'], ['Приём A', 'Консультация', 1000]]));
+    const note = all(overlay).find((n) => String(n.className).includes('imx-note')).textContent;
+    assert.match(note, /price/);
+    assert.match(note, /не число — строка не ввозится/, note);
+    assert.match(note, /пустая ячейка у существующей записи — без изменений/, note);
+});
+
+test('подписи о колонках — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const k of ['Колонки не распознаны и не импортируются: {list}.',
+        'Деньги ({list}): не число — строка не ввозится; пустая ячейка у существующей записи — без изменений.',
+        'Деньги ({list}): не число — строка не ввозится; пустая ячейка не записывается.',
+        'Без значения в {list} новая запись ляжет с 0 и предупреждением.']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+    }
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 (ревью 4) — ОКНО ИМПОРТА:
+//  • I3: поле файла очищается после чтения — тот же файл можно выбрать снова
+//    (браузер не шлёт change, если значение поля не изменилось);
+//  • M1: пока импорт идёт, «Импортировать» и «Обновлять существующие»
+//    выключены; второй щелчок не запускает второй импорт;
+//  • M2: не ввезено ничего — итог не говорит «Импорт завершён», кнопка
+//    остаётся для повтора, сообщение называет и строки с ошибками в файле;
+//    сообщения об ошибке окрашены (admin.css).
+// ---------------------------------------------------------------------------
+const checkboxOf = (overlay) => all(overlay).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'checkbox');
+const fileInputOf = (overlay) => all(overlay).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'file');
+
+test('I3: после чтения файла поле выбора очищено — тот же файл можно выбрать снова', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    BODY.children.length = 0;
+    await openSectionImporter({ sectionKey: 'services', onImported() {} });
+    const overlay = BODY.children.find((n) => String(n.className).includes('modal'));
+    const inp = fileInputOf(overlay);
+    inp.value = 'C:\\fakepath\\services.xlsx';
+    inp.dispatchEvent({ type: 'change', target: { files: [FILE()] } });
+    await settle(150);
+    assert.strictEqual(inp.value, '', 'поле файла не очищено');
+});
+
+test('M1: пока импорт идёт — кнопка и галочка выключены, второй щелчок и галочка не запускают второй импорт', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false, delayMs: 300 });
+    try {
+        const { overlay, confirm } = await openWith(sheetFile([['name', 'group', 'price'], ['Новая A', 'Консультация', 1000], ['Новая B', 'Консультация', 1000]]));
+        const box = checkboxOf(overlay);
+        confirm.click();
+        await settle(60);
+        assert.ok(confirm.disabled === true || confirm.hasAttribute('disabled'), 'кнопка включена во время импорта');
+        assert.strictEqual(box.disabled, true, 'галочка включена во время импорта');
+        box.checked = false; box.dispatchEvent({ type: 'change' });
+        assert.ok(confirm.disabled === true || confirm.hasAttribute('disabled'), 'галочка во время импорта включила кнопку');
+        confirm.click();
+        await settle(900);
+        assert.strictEqual(W.writes.filter((w) => w === 'services:insert').length, 1, 'второй импорт: ' + JSON.stringify(W.writes));
+    } finally { W.delayMs = 0; }
+});
+
+test('M2: не записано ничего — «Импорт не выполнен», кнопка доступна для повтора, сообщение называет и ошибки файла', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false, failWrites: true });
+    try {
+        const { overlay, confirm } = await openWith(sheetFile([['name', 'group', 'price'], ['Новая X', 'Консультация', 1000], ['Новая Y', 'Консультация', 'нет']]));
+        confirm.click();
+        await settle(200);
+        const text = resultText(overlay);
+        assert.ok(!/Импорт завершён/.test(text), 'ничего не записано, а итог «Импорт завершён»: ' + text);
+        assert.match(text, /Импорт не выполнен/);
+        assert.ok(!(confirm.disabled === true) && !confirm.hasAttribute('disabled'), 'кнопка выключена — повторить нельзя');
+        const t = document.getElementById('toast');
+        assert.strictEqual(t.dataset.kind, 'fail');
+        // Ревью 5 — новое предложение — с заглавной буквы.
+        assert.match(t.textContent, /\. Не импортировано \(ошибки в файле\): 1\./, t.textContent);
+    } finally { W.failWrites = false; }
+});
+
+test('сообщение об ошибке окрашено (admin.css), цветом опасности из токенов', () => {
+    const css = fs.readFileSync(new URL('../../../css/admin.css', import.meta.url), 'utf8');
+    assert.match(css, /\.toast\[data-kind="fail"\]\s*\{[^}]*background:\s*var\(--crit-\d+\)/);
+});
+
+test('подпись «Импорт не выполнен» — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    const e = STRINGS['Импорт не выполнен'];
+    assert.ok(e && e.uz && e.en);
+});
+
+// CLINIC_API_FIX_V1 (ревью 5) — ПОВТОР ПОСЛЕ ПОЛНОГО ОТКАЗА НЕ СТИРАЕТ ССЫЛКИ.
+// Создание справочных записей (тип, категория, отделение) в неудачной попытке
+// заменяло их заготовки на null прямо в строках предпросмотра, и повтор
+// (c41323b разрешил его) записывал услугу без типа, категории и отделения —
+// молча. Каждая попытка теперь работает со своими копиями строк.
+test('повтор после полного отказа: тип, категория и отделение услуги не теряются', async () => {
+    Object.assign(W, { writes: [], bodies: [], failExisting: false, failStored: false, failWrites: true });
+    try {
+        const { confirm } = await openWith(sheetFile([['name', 'group', 'price', 'category', 'department'], ['Новая X', 'Консультация', 1000, 'МРТ головы', 'Неврология']]));
+        confirm.click();
+        await settle(250);
+        assert.match(toastText(), /Импорт не удался/);
+        W.failWrites = false; W.bodies = [];
+        confirm.click();
+        await settle(250);
+        const ins = W.bodies.find((d) => d.table === 'services' && d.op === 'insert');
+        assert.ok(ins, 'повтор не записал услугу: ' + JSON.stringify(W.bodies.map((d) => d.table + ':' + d.op)));
+        const row = Array.isArray(ins.values) ? ins.values[0] : ins.values;
+        for (const k of ['type_id', 'category_id', 'department_id']) assert.ok(row[k] != null, k + ' пуст в повторе: ' + JSON.stringify(row));
+    } finally { W.failWrites = false; }
+});
+
+// CLINIC_API_FIX_V1 (ревью 5) — названия нераспознанных колонок в кавычках:
+// «Цена, сум», «Примечание» — запятая внутри названия не путает список.
+test('нераспознанные колонки — каждая в кавычках', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay } = await openWith(sheetFile([['name', 'group', 'price', 'Цена, сум', 'Примечание'], ['Приём A', 'Консультация', 1000, 1000, 'x']]));
+    const statusText = all(overlay).find((n) => String(n.className).includes('imx-status')).textContent;
+    assert.match(statusText, /не импортируются: «Цена, сум», «Примечание»\./, statusText);
+});
+
+test('«Не импортировано (ошибки в файле)» как начало предложения — на трёх языках, с заглавной', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    const e = STRINGS['Не импортировано (ошибки в файле): {n}.'];
+    assert.ok(e && e.uz && e.en);
+    for (const lang of ['ru', 'uz', 'en']) assert.match(e[lang], /^\p{Lu}/u, lang + ': ' + e[lang]);
 });

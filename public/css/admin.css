@@ -1809,6 +1809,14 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
 }
 .toast.hidden { display: none; }
 .toast.error { background: var(--crit-700); }
+/* CLINIC_API_FIX_V1 (ревью 3) — toast(msg, 'warn') ставит data-kind="warn", а
+   правила у него не было: предупреждение (итог импорта с замечаниями) выглядело
+   как обычное сообщение. */
+.toast[data-kind="warn"] { background: var(--warn-700); }
+/* CLINIC_API_FIX_V1 (ревью 4) — toast(msg, 'fail') ставит data-kind="fail", а
+   правила не было: ошибки по всей программе выглядели как обычные сообщения.
+   Ошибка должна выглядеть ошибкой. */
+.toast[data-kind="fail"] { background: var(--crit-700); }
 
 /* ============================================================
    Patient registration screen
