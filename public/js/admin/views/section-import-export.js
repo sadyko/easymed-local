@@ -535,6 +535,13 @@ const IMPORT_CONFIGS = {
             VISIT_TIER_COLUMNS.forEach(function (c) {
                 if (!(c.key in r)) { delete payload[c.key]; return; }
                 var read = readImportNumber(r[c.key], false);
+                // Ревью 3 (решение) — пустая цена визита у обновляемой услуги
+                // оставляет сохранённую; дни окна (не деньги) — «не задано», как было.
+                if (read.empty && c.money && tierUpdating) {
+                    delete payload[c.key];
+                    if (ctx) ctx.note(trf('Строка {n}: {col} пусто — оставлено как было.', { n: ctx.rowNum, col: c.key }));
+                    return;
+                }
                 if (!('bad' in read)) { payload[c.key] = read.empty ? null : read.n; return; }
                 if (tierUpdating) {
                     delete payload[c.key];
@@ -635,6 +642,14 @@ const IMPORT_CONFIGS = {
                     return null;
                 }
                 var rawFrom = rf.empty ? '' : String(rf.n), rawPct = rp.empty ? '' : String(rp.n);
+                // Ревью 3 (решение) — у обновляемой услуги пустая ступень (обе
+                // ячейки пусты) оставляет сохранённую, а не обнуляет её.
+                var stepUpdating = serviceRowUpdates(payload, ctx && ctx.lookups);
+                if (stepUpdating && rf.empty && rp.empty) {
+                    delete payload[c.from]; delete payload[c.pct];
+                    if (ctx) ctx.note(trf('Строка {n}: {col} пусто — оставлено как было.', { n: ctx.rowNum, col: c.from + ' / ' + c.pct }));
+                    return null;
+                }
                 var range = tierStepRangeProblem(c.n, rawFrom, rawPct);
                 if (range) {
                     delete payload[c.from]; delete payload[c.pct];
@@ -648,6 +663,13 @@ const IMPORT_CONFIGS = {
                 // полупара называется вслух.
                 if (!payload[c.from] || !payload[c.pct]) {
                     var half = payload[c.from] || payload[c.pct];
+                    // Ревью 3 (решение) — у обновляемой услуги полупара не
+                    // обнуляет сохранённую ступень: ступень из файла не пишется.
+                    if (half && stepUpdating) {
+                        delete payload[c.from]; delete payload[c.pct];
+                        if (ctx) ctx.warn(tr(HALF_MSG[c.n]));
+                        return null;
+                    }
                     payload[c.from] = 0; payload[c.pct] = 0;
                     if (half && ctx) ctx.warn(tr(HALF_MSG[c.n]));
                 }
@@ -700,7 +722,10 @@ const IMPORT_CONFIGS = {
             // CLINIC_API_FIX_V1 (ревью итога) — money: не число в цене (НДС, доле,
             // цене визита…) новой услуги — строка не ввозится (у обновляемой —
             // поле остаётся прежним).
-            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  warnIfMissing: true, money: true, hint: 'Цена, число — напр. 150000 (пусто → 0)' },
+            // CLINIC_API_FIX_V1 (ревью 3, решение) — requiredOnNew: новая услуга без
+            // цены не ввозится («укажите цену (0 — если бесплатно)»); у обновляемой
+            // пустая ячейка оставляет сохранённую цену.
+            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  money: true, requiredOnNew: true, hint: 'Цена, число — напр. 150000 (0 — бесплатно)' },
             // FULL_EXPORT_V1 (2026-09-14) — owner: «exporting and importing are not
             // giving all the information». Every field the service editor holds now
             // travels: code, the visit-tier prices (VISIT_TIER_PRICING_V1), the
@@ -2022,12 +2047,6 @@ function buildRow(raw, rowNum, lookups, cfg) {
             const v = cellText(cellRaw);
             if (!v) { notes.push(`missing ${col.key}`); status = 'error'; }
         }
-        // IMPORT_PRICE_OPTIONAL_V1 — soft requirement: missing value imports
-        // with the column default but flags the row so the user notices.
-        if (col.warnIfMissing) {
-            const v = cellText(cellRaw);
-            if (!v) { notes.push(trf('{col} пусто — будет {def}', { col: col.key, def: col.defaultNum ?? 0 })); if (status !== 'error') status = 'warn'; }
-        }
 
         // PROCUREMENT_IMPORT_V1 — captured columns feed afterImport (e.g.
         // opening stock), never the row payload.
@@ -2109,6 +2128,32 @@ function buildRow(raw, rowNum, lookups, cfg) {
             if (col.raw) continue;   // читает transform раздела
             const key = col.target || col.key;
             const read = readImportNumber(cellRaw, !!col.percent);
+            // CLINIC_API_FIX_V1 (ревью 3, решение) — ПУСТАЯ ДЕНЕЖНАЯ ЯЧЕЙКА НЕ ПИШЕТ 0.
+            // Было: пустая цена в строке, обновляющей услугу, писала 0 (с «price
+            // пусто»), пустой НДС — 12 поверх сохранённого, пустой оклад
+            // сотрудника — 0. Теперь:
+            //   • строка обновляет запись — поле не пишется, замечание «пусто —
+            //     оставлено как было»;
+            //   • новая строка раздела, который это знает (rowUpdates, услуги), —
+            //     цена обязательна (requiredOnNew: «укажите цену (0 — если
+            //     бесплатно)»), остальное — как раньше (НДС 12, доля 0);
+            //   • разделы, где новая ли строка, узнаётся только при импорте, —
+            //     поле не пишется никогда (у новой записи — значение базы),
+            //     замечание «пусто — не записано».
+            // Колонки нет в листе — те же правила, но без замечаний. Свой экспорт
+            // (null — пустой ячейкой) поэтому ничего не меняет.
+            if (read.empty && col.money) {
+                const inSheet = (colKey in r) || (col.aliases || []).some((a) => normHeader(a) in r);
+                if (updating) {
+                    if (inSheet) notes.push(trf('Строка {n}: {col} пусто — оставлено как было.', { n: rowNum, col: col.key }));
+                } else if (typeof cfg.rowUpdates === 'function') {
+                    if (col.requiredOnNew) { notes.push(trf('Строка {n}: укажите цену (0 — если бесплатно).', { n: rowNum })); status = 'error'; }
+                    else payload[key] = col.defaultNum ?? 0;
+                } else if (inSheet) {
+                    notes.push(trf('Строка {n}: {col} пусто — не записано.', { n: rowNum, col: col.key }));
+                }
+                continue;
+            }
             if (read.empty) { payload[key] = col.defaultNum ?? 0; continue; }
             // CLINIC_API_FIX_V1 (ревью 3) — в колонке процентов доля вне 0…100 %
             // для правила числа — то же, что не число; причина называется.
@@ -2175,7 +2220,8 @@ function buildRow(raw, rowNum, lookups, cfg) {
     // a hook can ask which headers the file actually carried.
     if (typeof cfg.transform === 'function') {
         const ctx = { notes, lookups, rowNum, warn(msg) { notes.push(msg); if (status !== 'error') status = 'warn'; },
-            fail(msg) { notes.push(msg); status = 'error'; } };   // CLINIC_API_FIX_V1 (ревью итога) — строка не ввозится   // CLINIC_API_FIX_V1 — rowNum: предупреждение называет строку файла
+            fail(msg) { notes.push(msg); status = 'error'; },   // CLINIC_API_FIX_V1 (ревью итога) — строка не ввозится
+            note(msg) { notes.push(msg); } };                   // CLINIC_API_FIX_V1 (ревью 3) — замечание без предупреждения   // CLINIC_API_FIX_V1 — rowNum: предупреждение называет строку файла
         try { cfg.transform(payload, r, ctx); }
         catch (e) { console.warn('[section-import] transform failed:', e); }
     }

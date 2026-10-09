@@ -119,13 +119,15 @@ for (const [what, cells, re] of CASES) {
 test('обновление: правило проверяется по тому, что окажется у услуги (файл поверх сохранённого)', () => {
     const stored = (extra) => ({ __wantUpdate: true, __stored: new Map([['приём кардиолога', {
         name: 'Приём кардиолога', price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6, price_repeat: null, repeat_days_from: null, repeat_days_to: null, ...extra }]]) });
-    // Файл стирает цену второго визита, окно у услуги остаётся — окно без цены: отказ.
-    const bad = buildImportRow('services', { ...BASE, price_secondary: '' }, { rowNum: 3, lookups: stored() });
-    assert.ok(tierDropped(bad), JSON.stringify(bad.payload));
-    assert.ok(bad.notes.some((n) => /Укажите цену второго визита/.test(String(n))), JSON.stringify(bad.notes));
-    // У услуги есть цена повторного визита — окну есть что применять.
-    const ok = buildImportRow('services', { ...BASE, price_secondary: '' }, { rowNum: 3, lookups: stored({ price_repeat: 0 }) });
-    assert.strictEqual(ok.payload.price_secondary, null);
+    // CLINIC_API_FIX_V1 (ревью 3, решение) — пустая цена визита при обновлении
+    // оставляет сохранённую (было: стирала её, и окно оставалось без цены).
+    const kept = buildImportRow('services', { ...BASE, price_secondary: '' }, { rowNum: 3, lookups: stored() });
+    assert.ok(!('price_secondary' in kept.payload), JSON.stringify(kept.payload));
+    assert.notStrictEqual(kept.status, 'error');
+    assert.ok(!kept.notes.some((n) => /Укажите цену второго визита/.test(String(n))), JSON.stringify(kept.notes));
+    // Окно по сохранённой цене — проходит, если с ним всё в порядке.
+    const ok = buildImportRow('services', { ...BASE, secondary_days_to: 10 }, { rowNum: 3, lookups: stored() });
+    assert.strictEqual(ok.payload.secondary_days_to, 10);
     assert.strictEqual(ok.status, 'ok', JSON.stringify(ok.notes));
     // Файл сдвигает «по день» раньше сохранённого «со дня» — отказ.
     const order = buildImportRow('services', { ...BASE, secondary_days_to: 0 }, { rowNum: 3, lookups: stored({ secondary_days_from: 2 }) });

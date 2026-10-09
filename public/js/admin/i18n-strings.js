@@ -3,6 +3,10 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (ревью 3, решение) — импорт Excel: пустая денежная ячейка не пишет 0 (views/section-import-export.js)
+  "Строка {n}: {col} пусто — оставлено как было.": {"en":"Row {n}: {col} is empty — left as it was.","ru":"Строка {n}: {col} пусто — оставлено как было.","uz":"{n}-qator: {col} bo'sh — avvalgidek qoldirildi."},   // CLINIC_API_FIX_V1
+  "Строка {n}: {col} пусто — не записано.": {"en":"Row {n}: {col} is empty — not saved.","ru":"Строка {n}: {col} пусто — не записано.","uz":"{n}-qator: {col} bo'sh — yozilmadi."},   // CLINIC_API_FIX_V1
+  "Строка {n}: укажите цену (0 — если бесплатно).": {"en":"Row {n}: enter a price (0 if it is free).","ru":"Строка {n}: укажите цену (0 — если бесплатно).","uz":"{n}-qator: narxni kiriting (bepul bo'lsa — 0)."},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью 3) — шаблон «Товары»: колонки поставщика пока не используются (views/section-import-export.js)
   "Поставщик — пока не используется: из файла поставщики не создаются и к товару не привязываются.": {"en":"Supplier — not used yet: suppliers are not created from the file or linked to the product.","ru":"Поставщик — пока не используется: из файла поставщики не создаются и к товару не привязываются.","uz":"Yetkazib beruvchi — hozircha ishlatilmaydi: fayldan yetkazib beruvchilar yaratilmaydi va mahsulotga bog'lanmaydi."},   // CLINIC_API_FIX_V1
   "Цена закупки у поставщика — пока не используется: из файла не сохраняется.": {"en":"The supplier's purchase price — not used yet: it is not saved from the file.","ru":"Цена закупки у поставщика — пока не используется: из файла не сохраняется.","uz":"Yetkazib beruvchidan xarid narxi — hozircha ishlatilmaydi: fayldan saqlanmaydi."},   // CLINIC_API_FIX_V1
