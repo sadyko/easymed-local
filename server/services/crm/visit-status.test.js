@@ -257,7 +257,11 @@ test('отмена: строки возвращаются к ожиданию, �
   assert.equal(line(db, lid).status, 'pending');
   const row = reqRow(db, rid);
   assert.equal(row.status, 'in_process', 'отменённая запись осталась «записанной» — оператор её не увидит в работе');
-  assert.equal(row.scheduled_date, '2026-08-09', 'дата ближайшей ждущей строки потерялась');
+  // CRM_UNIFY_V1 (финальное ревью, A-I4) — ОБНОВЛЕНО НАМЕРЕННО: живой записи не осталось —
+  // дата карточки стирается (строка свою дату хранит): иначе отменённый приём
+  // становился «Не пришёл».
+  assert.equal(row.scheduled_date, null, 'у карточки осталась дата отменённой записи');
+  assert.equal(line(db, lid).visit_id, null);
   db.close();
 });
 
@@ -410,6 +414,9 @@ test('пришёл: заявка без строк закрывается при
   const vid = addVisit(db);
   const bare = addReq(db, { status: 'in_process', name: 'лид из звонка' });
   const dated = addReq(db, { status: 'scheduled', date: '2026-08-09', name: 'на сегодня' });
+  // CRM_UNIFY_V1 (финальное ревью, A-I3) — ОБНОВЛЕНО НАМЕРЕННО: приход закрывает только
+  // карточку, заведённую в день визита (2026-08-09) или раньше.
+  db.prepare("UPDATE crm_requests SET created_at = '2026-08-09T03:00:00Z' WHERE id IN (?, ?)").run(bare, dated);
 
   crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
 
@@ -459,7 +466,9 @@ test('CRM_UNIFY_V1: старая заявка без строк и без дат
   const set = db.prepare(`UPDATE crm_requests SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now', ?),
                                                   created_at = strftime('%Y-%m-%dT%H:%M:%SZ','now', ?) WHERE id = ?`);
   set.run('-90 days', '-90 days', stale);
-  set.run('-1 days', '-1 days', fresh);
+  // CRM_UNIFY_V1 (финальное ревью, A-I3) — ОБНОВЛЕНО НАМЕРЕННО: «вчерашний» лид двигался
+  // вчера, но заведён до визита (иначе приход 2026-08-09 его бы не закрыл).
+  set.run('-1 days', '-90 days', fresh);
   set.run('-90 days', '-90 days', dated);
 
   crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });

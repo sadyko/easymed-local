@@ -36,7 +36,7 @@ import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, windowHo
 // словами, какими их считают касса, дневник и документы.
 import { localDate } from '../domain/day.js';
 // CRM_UNIFY_V1 (задача 6) — «двигалась ли карточка в окне» — одно правило (contact-window.js).
-import { inWindowSql, windowArg } from './contact-window.js';
+import { inWindowSql, windowArg, missedRecentlySql, missedRecentlyArgs } from './contact-window.js';   // CRM_UNIFY_V1 (финальное ревью, A-P5) — опоздание
 // CRM_UNIFY_V1 — приход ставит в визит строки, которые визит держит, а в нём их
 // нет (вызов во время прихода, не при загрузке модуля: booking-mirror.js сам
 // берёт отсюда EVIDENCE_SERVICE_STATUSES).
@@ -119,6 +119,12 @@ function writeParent(stmt, parent, status, when) {
  * Заявка на этот день закрывается, как и прежде, любой давности.
  *
  * Сидовую «Не пришёл» этого дня поднимает liftMissed (ниже) — и со строками.
+ *
+ * CRM_UNIFY_V1 (финальное ревью, A-I3) — только карточку, заведённую в день
+ * визита или раньше (местный день created_at). Доказательство бывает поздним
+ * (результат анализа, порция соседнего здания, оплата долга — дни спустя), а
+ * приход в тот день не может закрыть обращение, которого тогда ещё не было:
+ * сегодняшний звонок про МРТ — не конверсия анализа четырёхдневной давности.
  */
 function settleLineless(db, { patientId, day, open, won, write }) {
   if (!patientId || !open.length) return;
@@ -129,9 +135,10 @@ function settleLineless(db, { patientId, day, open, won, write }) {
      WHERE r.patient_id = ? AND r.status IN (${holes})
        AND (date(r.scheduled_date) = date(?)
             OR ((r.scheduled_date IS NULL OR r.scheduled_date = '') AND ${inWindowSql('r')}))
+       AND ${localDate('r.created_at')} <= date(?)
        AND NOT EXISTS (SELECT 1 FROM crm_request_services l
                         WHERE l.request_id = r.id AND l.status = 'pending')
-  `).all(patientId, ...open, day, windowArg(windowHours(db)));   // CRM_UNIFY_V1 (задача 6) — одно правило окна
+  `).all(patientId, ...open, day, windowArg(windowHours(db)), day);   // CRM_UNIFY_V1 (задача 6) — одно правило окна; A-I3 — заведена до визита
   for (const p of reqs) writeParent(write, p, won, p.scheduled_date);
 }
 
@@ -149,6 +156,12 @@ function settleLineless(db, { patientId, day, open, won, write }) {
  * записями. Строки не трогаются (инвариант: 'done' — только строка, чья услуга
  * в визите). Другой день, другой пациент (общий номер) и будущий визит — нет:
  * будущий визит приходом не бывает (сторож в crmVisitStatus).
+ *
+ * CRM_UNIFY_V1 (финальное ревью, A-P5) — и ОПОЗДАНИЕ: пропущенный день не
+ * раньше окна назад (contact-window.js missedRecentlySql — то же правило, что у
+ * стойки): записанный на вчера и пришедший сегодня через мастер визита и кассу
+ * — «Пришёл», как и через стойку. A-I3 — только карточка, заведённая в день
+ * визита или раньше.
  */
 function liftMissed(db, { patientId, day, won, write }) {
   if (!patientId) return;
@@ -161,13 +174,15 @@ function liftMissed(db, { patientId, day, won, write }) {
   const reqs = db.prepare(`
     SELECT r.id, r.status, r.scheduled_date FROM crm_requests r
      WHERE r.patient_id = @pid AND r.status = @missed
-       AND (date(r.scheduled_date) = date(@day)
+       AND ${localDate('r.created_at')} <= date(@day)
+       AND (${missedRecentlySql('r')}
+            OR date(r.scheduled_date) = date(@day)
             OR EXISTS (SELECT 1 FROM crm_request_services l
                         WHERE l.request_id = r.id AND l.status = 'pending' AND date(l.scheduled_date) = date(@day))
             OR EXISTS (SELECT 1 FROM crm_request_services l JOIN visits v ON v.id = l.visit_id
                         WHERE l.request_id = r.id AND l.status <> 'cancelled' AND ${live}
                           AND ${localDate('v.visit_date')} = date(@day))${links})`)
-    .all({ pid: patientId, missed: SEED_NO_SHOW_STAGE, day });
+    .all({ pid: patientId, missed: SEED_NO_SHOW_STAGE, day, ...missedRecentlyArgs(day, windowHours(db)) });
   for (const p of reqs) writeParent(write, p, won, p.scheduled_date);
 }
 
@@ -333,21 +348,30 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
                              WHERE b.request_id = ? AND b.visit_id <> ? AND v.status NOT IN ('cancelled', 'no_show') LIMIT 1`);
       otherLink = (rid) => !!q.get(rid, id);
     } catch { /* сборка без 187 */ }
+    // CRM_UNIFY_V1 (финальное ревью, A-I4) — «занятый день» — строка, которая
+    // держит ЖИВОЙ визит (визит «Не пришёл» свою строку держит как след, но
+    // записью уже не является).
+    const lineBooked = db.prepare(`SELECT 1 FROM crm_request_services l JOIN visits v ON v.id = l.visit_id
+                                    WHERE l.request_id = ? AND l.status = 'pending' AND v.status NOT IN ('cancelled', 'no_show') LIMIT 1`);
     const byLine = new Set(parents.map((p) => p.id));
     for (const p of withLinked()) {
       // Выигранную и проигранную заявку отмена визита не трогает вовсе:
       // «Пришёл» — это факт прошлого, и отменённая запись его не отменяет.
       if (!open.includes(p.status)) continue;
       const left = pendingLeft.get(p.id);
-      // Дата: у карточки со строками — ближайшая ждущая строка (как раньше);
-      // у привязанной только записью — ближайший записанный день (cardDateOf),
-      // иначе пусто: дата отменённой записи не остаётся висеть.
-      const when = byLine.has(p.id) ? ((left && left.next) || null) : cardDateOf(db, p.id, (left && left.next) || null);
       // Назад в первую открытую колонку — только если заявка стоит в
       // «Записан» и ПОСЛЕ отмены у неё не осталось ни одного занятого дня.
       // Заявка на три дня, у которой отменили один, остаётся записанной: два
       // других слота никуда не делись.
-      const stillBooked = !!(left && left.booked) || otherLink(p.id);
+      const stillBooked = !!lineBooked.get(p.id) || otherLink(p.id);
+      // Дата. Осталась живая запись — у карточки со строками ближайшая ждущая
+      // строка (как раньше), у привязанной только записью — ближайший
+      // записанный день (cardDateOf). CRM_UNIFY_V1 (финальное ревью, A-I4) —
+      // живой записи не осталось — дата СТИРАЕТСЯ в любой открытой колонке:
+      // иначе карточка «Подтверждён» с датой отменённого приёма наутро уходила
+      // в «Не пришёл». Ждущие строки свои даты сохраняют.
+      const when = !stillBooked ? null
+        : byLine.has(p.id) ? ((left && left.next) || null) : cardDateOf(db, p.id, (left && left.next) || null);
       const undo = scheduled && p.status === scheduled && !stillBooked && first;
       writeParent(quiet, p, undo ? first : p.status, when);   // CRM_UNIFY_V1 (ревью, I-5) — отмена не движение
     }

@@ -101,6 +101,29 @@ export function reopenLead(db, id) {
 }
 
 /**
+ * CRM_UNIFY_V1 (финальное ревью, A-P5) — ОПОЗДАНИЕ НА ДЕНЬ — ПРИХОД НА НАЗНАЧЕННУЮ
+ * ЗАПИСЬ, а не новое обращение (решение владельца 4): сидовая «Не пришёл»,
+ * чей ПРОПУЩЕННЫЙ ДЕНЬ (дата карточки) — не раньше, чем окно назад от дня
+ * прихода. «Не пришёл» проход ставит без движения карточки (I-5), поэтому
+ * опоздание считается по пропущенному дню, а не по updated_at. Одно правило
+ * для всех дверей: правило прихода (visit-status.js liftMissed — касса,
+ * работа, мастер визита, порция соседнего здания) и стойка (visit-link.js
+ * deskCloses — там пока своя копия того же SQL).
+ */
+export function lateDays(hours) {
+  const h = Number(hours);
+  return Math.max(1, Math.ceil((Number.isFinite(h) && h > 0 ? h : DEFAULT_WINDOW_HOURS) / 24));
+}
+/** SQL: `alias` — сидовая «Не пришёл», пропущенная не раньше окна назад от @lateDay. Параметры — missedRecentlyArgs. */
+export function missedRecentlySql(alias = 'r') {
+  return `(${alias}.status = '${SEED_NO_SHOW_STAGE}' AND date(${alias}.scheduled_date) BETWEEN date(@lateDay, @lateBack) AND date(@lateDay))`;
+}
+/** Параметры missedRecentlySql: день прихода и окно (часы). */
+export function missedRecentlyArgs(day, hours) {
+  return { lateDay: day, lateBack: `-${lateDays(hours)} days` };
+}
+
+/**
  * CRM_UNIFY_V1 (ревью, I-4) — SQL: карточка `alias` ЖДЁТ сегодня или позже. Один
  * параметр — сегодняшний местный день (today(db)), именованный @today.
  */

@@ -93,9 +93,11 @@ test('A1c: карточка «на дату» без строк поднимае
   assert.equal(st(db, rid), 'came');
 });
 
+// CRM_UNIFY_V1 (финальное ревью, A-P5) — ОБНОВЛЕНО НАМЕРЕННО: опоздание в пределах окна —
+// приход; «другой день» — за окном (пропущен шесть дней назад, пришёл вчера).
 test('I-1: приход в ДРУГОЙ день карточку с записью не поднимает', () => {
   const db = freshDb();
-  const v1 = visit(db, day(-3)); const rid = lead(db, { date: day(-3) }); line(db, rid, v1, day(-3));
+  const v1 = visit(db, day(-6)); const rid = lead(db, { date: day(-6) }); line(db, rid, v1, day(-6));
   assert.deepEqual(crmNoShowSweep(db), [rid]);
   crmInvoiceEvidence(db, paidInv(db, visit(db, Y)));
   assert.equal(st(db, rid), 'no_show');

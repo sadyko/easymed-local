@@ -449,6 +449,10 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
     }
     if (x.status !== 'added' || x.invoice_item_id != null) continue;
     if (!reqId) continue;   // запись не из заявки — зеркалить некуда
+    // CRM_UNIFY_V1 (финальное ревью, A-C2) — сначала ЖДУЩАЯ строка карточки той
+    // же услуги (adoptPendingLine): иначе она оставалась ждать рядом с новой и
+    // садилась в следующую запись — вторая оплата той же консультации.
+    if (adoptPendingLine(db, reqId, v, x)) { out.linked++; touched.add(reqId); continue; }
     db.prepare(`INSERT INTO crm_request_services
                   (request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id, visit_service_id, visit_service_auto)
                 VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, 0)`)
@@ -458,6 +462,39 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
 
   for (const r of touched) touchRequest(db, r);
   return out;
+}
+
+/**
+ * CRM_UNIFY_V1 (финальное ревью, A-C2) — ЖДУЩАЯ СТРОКА КАРТОЧКИ ВМЕСТО ВТОРОЙ.
+ *
+ * Строку визита `x` поставила регистратура или касса, и сверка отражает её в
+ * карточке записи. Если у карточки уже есть ЖДУЩАЯ строка той же услуги
+ * (sameService — и строка без врача, «двойник» строки с врачом), которую не
+ * держит ни живой визит, ни строка визита, — это она: «консультация, когда
+ * придёт» сбылась. Строка берёт визит и строку визита (не авто — строку
+ * поставил человек); без даты — получает день визита. Вторую строку той же
+ * услуги заводить нельзя: исходная оставалась бы ждать и садилась в следующую
+ * запись (шаг A crm/visit-link.js), то есть в следующий счёт.
+ * Берётся только строка БЕЗ даты или на ЭТОТ день: строка другого дня — другая
+ * запись, её место в своём дне. Сначала строка этого дня, потом без даты.
+ * Деньги не меняются: строка визита та же, меняется только ссылка строки заявки.
+ * @returns {number|null} id взятой строки или null
+ */
+function adoptPendingLine(db, reqId, v, x) {
+  const cand = db.prepare(`
+    SELECT * FROM crm_request_services l
+     WHERE l.request_id = ? AND l.status = 'pending' AND l.visit_service_id IS NULL
+       AND (l.visit_id IS NULL OR l.visit_id = ?
+            OR NOT EXISTS (SELECT 1 FROM visits w WHERE w.id = l.visit_id AND w.status NOT IN ('cancelled', 'no_show')))
+       AND (l.scheduled_date IS NULL OR l.scheduled_date = '' OR date(l.scheduled_date) = date(?))
+     ORDER BY (l.scheduled_date IS NULL OR l.scheduled_date = ''), l.id`).all(reqId, v.id, v.day)
+    .find((l) => sameService(db, l, x));
+  if (!cand) return null;
+  db.prepare(`UPDATE crm_request_services
+                 SET visit_id = ?, visit_service_id = ?, visit_service_auto = 0,
+                     scheduled_date = CASE WHEN scheduled_date IS NULL OR scheduled_date = '' THEN ? ELSE scheduled_date END
+               WHERE id = ?`).run(v.id, x.id, v.day, cand.id);
+  return Number(cand.id);
 }
 
 /**
@@ -802,6 +839,11 @@ export function mirrorCashierLine(db, vsId) {
     const st = db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(reqId);
     if (!st || !openStageKeys(db).includes(st.status)) return null;
     const v = visitRow(db, x.visit_id);
+    // CRM_UNIFY_V1 (финальное ревью, A-C2) — ждущая строка той же услуги вместо второй.
+    if (v) {
+      const adopted = adoptPendingLine(db, reqId, v, x);
+      if (adopted) return adopted;
+    }
     const info = db.prepare(`INSERT INTO crm_request_services
                   (request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id, visit_service_id, visit_service_auto)
                 VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, 0)`)

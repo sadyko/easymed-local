@@ -144,11 +144,17 @@ test('две прошедшие записи, у одной — доказате
   assert.deepEqual(crmNoShowSweep(db), []);
 });
 
-test('отменённый визит записью не считается: остаётся правило «на дату»', () => {
+// CRM_UNIFY_V1 (финальное ревью, A-I4) — ОБНОВЛЕНО НАМЕРЕННО: отменённый визит записью
+// по-прежнему не считается, но отменённый в тот день приём — не неявка: «на дату» не метится.
+test('отменённый визит записью не считается; отменённый в тот день приём — не «Не пришёл»', () => {
   const db = freshDb();
   const rid = lead(db, { date: Y });
   line(db, rid, visit(db, Y, { status: 'cancelled' }), Y);
-  assert.deepEqual(crmNoShowSweep(db), [rid]);
+  assert.deepEqual(crmNoShowSweep(db), []);
+  const db2 = freshDb();
+  const r2 = lead(db2, { date: Y });
+  line(db2, r2, visit(db2, Y2, { status: 'cancelled' }), Y2);   // отменён другой день — день карточки ясен
+  assert.deepEqual(crmNoShowSweep(db2), [r2]);
 });
 
 test('визит держит только ЖДУЩАЯ строка: отменённая строка со ссылкой записью не считается', () => {
@@ -273,7 +279,9 @@ test('оплата вчерашнего визита приходит сегод
 test('карточка «на дату»: приход того дня, доехавший позже (порция соседнего здания), поднимает «Не пришёл» в «Пришёл»', () => {
   const db = freshDb();
   const rid = lead(db, { date: Y });
-  const other = lead(db, { date: Y2 });
+  // CRM_UNIFY_V1 (финальное ревью, A-P5) — ОБНОВЛЕНО НАМЕРЕННО: опоздание в пределах окна
+  // (3 дня) — тоже приход; «другой день» здесь — за окном.
+  const other = lead(db, { date: day(-6) });
   assert.deepEqual(sorted(crmNoShowSweep(db)), sorted([rid, other]));
   const vid = visit(db, Y, { origin: 'branch-2' });
   crmVisitStatus(db, { visitId: vid, from: null, to: 'arrived' });

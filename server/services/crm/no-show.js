@@ -32,6 +32,11 @@
 //     бесплатный повторный приём), и нет госпитализации, поступившей в этот
 //     день. Ошибиться в сторону «не ставить» безопасно: карточка остаётся
 //     ждать, её разберёт оператор.
+//     CRM_UNIFY_V1 (финальное ревью, A-P4) — госпитализация, ОХВАТЫВАЮЩАЯ день:
+//     поступил в этот день или раньше и не выписан до него (отменённая — только
+//     поступившая в этот день);
+//   • CRM_UNIFY_V1 (финальное ревью, A-I4) — карточка «на дату», у пациента в
+//     этот день ОТМЕНЁННЫЙ визит: отменённый приём — не неявка.
 // Доказательство прихода (cameBy) — отметка «Пришёл», деньги, работа, закрытые
 // строки, талон, товар (arrivedByEvidence) и ещё счёт по акту и долг у кассы
 // (rpc/billing.js зовёт по ним crmVisitEvidence: человек стоял у окна).
@@ -123,9 +128,16 @@ function presentOn(db) {
   const visitsOn = db.prepare(`SELECT id, status FROM visits
                                 WHERE patient_id = ? AND ${localDate('visit_date')} = date(?) AND ${LIVE_VISIT_SQL}`);
   const invoiced = db.prepare('SELECT 1 FROM invoices WHERE visit_id = ? LIMIT 1');
+  // CRM_UNIFY_V1 (финальное ревью, A-P4) — госпитализация, охватывающая день.
   let admitted = null;
   try {
-    admitted = db.prepare(`SELECT 1 FROM admissions WHERE patient_id = ? AND ${localDate('admitted_at')} = date(?) LIMIT 1`);
+    const q = db.prepare(`SELECT 1 FROM admissions
+                           WHERE patient_id = @id
+                             AND (${localDate('admitted_at')} = date(@d)
+                                  OR (status <> 'cancelled' AND ${localDate('admitted_at')} <= date(@d)
+                                      AND (discharged_at IS NULL OR discharged_at = '' OR ${localDate('discharged_at')} >= date(@d))))
+                           LIMIT 1`);
+    admitted = { get: (id, d) => q.get({ id, d }) };
   } catch { admitted = null; }   // сборка без стационара
   const phoneOf = db.prepare('SELECT phone FROM patients WHERE id = ?');
   let byKey = null;
@@ -182,6 +194,9 @@ export function crmNoShowSweep(db, { day = null } = {}) {
                       ${links ? 'UNION SELECT visit_id FROM crm_booking_links WHERE request_id = ?' : ''})
          AND v.${LIVE_VISIT_SQL}`);
     const cameOn = presentOn(db);
+    // CRM_UNIFY_V1 (финальное ревью, A-I4) — отменённый в этот день визит пациента.
+    const cancelledOn = db.prepare(`SELECT 1 FROM visits WHERE patient_id = ? AND ${localDate('visit_date')} = date(?)
+                                      AND status = 'cancelled' LIMIT 1`);
     // CRM_UNIFY_V1 (ревью, I-5) — без updated_at: переход сервера — не движение карточки.
     const write = db.prepare('UPDATE crm_requests SET status = ? WHERE id = ? AND status = ?');
     db.transaction(() => {
@@ -193,7 +208,7 @@ export function crmNoShowSweep(db, { day = null } = {}) {
             && !books.some((b) => cameOn(L.patient_id, b.day));
         } else {
           const d = String(L.scheduled_date || '').slice(0, 10);
-          miss = !!d && d < d0 && !cameOn(L.patient_id, d);
+          miss = !!d && d < d0 && !cameOn(L.patient_id, d) && !cancelledOn.get(L.patient_id, d);
         }
         if (miss && write.run(SEED_NO_SHOW_STAGE, L.id, L.status).changes) moved.push(L.id);
       }
