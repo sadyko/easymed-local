@@ -234,8 +234,16 @@ test('BS-200: запрос — «заказов нет»; контроль и к
       assert.deepEqual([m.status, m.visit_service_id], ['unmatched', null]);
       assert.deepEqual(blank(db, 2), {}, 'заказ № 2 (чужой пациент) не тронут');
 
-      // 5. Голый номер старого открытого заказа (8 дней) — отказ с причиной, без привязки.
+      // 5. LIS_VENDOR_EXACT_V1 (решение владельца 2026-10-06, п. 4) — короткий голый
+      //    номер «124» — номер прибора, а не этикетка: в лоток, заказ не ищется
+      //    (LIS_PROXY_V1, задача 1: прежняя проверка ждала правило 7 дней).
       await bs.send(BS_ORU('124', '2', 'test2', '7.000000'));
+      m = last(db);
+      assert.deepEqual([m.status, m.visit_service_id], ['unmatched', null]);
+      assert.match(m.detail, /номер пробы «124» короче 6 цифр/);
+      //    Номер с этикетки, как напечатан («000124»), старого открытого заказа
+      //    (8 дней) — отказ с причиной, без привязки.
+      await bs.send(BS_ORU('000124', '2', 'test2', '7.000000'));
       m = last(db);
       assert.deepEqual([m.status, m.visit_service_id], ['unmatched', null]);
       assert.match(m.detail, /без префикса LAB- указывает на заказ № 124/);
@@ -261,6 +269,11 @@ test('BS-200: запрос — «заказов нет»; контроль и к
       //    первому — в её бланк проба второго не идёт: лоток с причиной.
       const bs2 = await analyzer(lisPort, '127.0.0.6');
       try {
+        // LIS_VENDOR_EXACT_V1 (N2) — находка в бланки не пишет до «Добавить»: второй
+        // BS-200 сперва найден (запрос) и добавлен — тогда видно правило R2, п. 1
+        // (LIS_PROXY_V1, задача 1).
+        await bs2.send(BS_QRY('LAB-000002'));
+        db.prepare("UPDATE lab_devices SET added = 1 WHERE host = '127.0.0.6'").run();
         const ack = await bs2.send(BS_ORU('LAB-000002', '2', 'CREA', '88.000000'));
         assert.match(ack, /\rMSA\|AA\|/);
         const dev2 = db.prepare("SELECT * FROM lab_devices WHERE host = '127.0.0.6'").get();
@@ -334,6 +347,13 @@ test('A1000: по сети (HL7, как пишет прибор) и через �
       assert.match(ack2, /\rMSA\|AA\|5\|/);
       const fdev = db.prepare("SELECT * FROM lab_devices WHERE host = '127.0.0.4'").get();
       assert.deepEqual([fdev.profile, fdev.sending_facility], ['autobio-autolumo-a1000', 'LabPC'], 'переадресатор — отдельная строка той же модели');
+      // LIS_VENDOR_EXACT_V1 (N2) — переадресатор найден сам: до «Добавить» проба в
+      // бланк не идёт (LIS_PROXY_V1, задача 1).
+      assert.deepEqual([last(db).status, last(db).detail],
+        ['unmatched', 'прибор ещё не добавлен — «Анализаторы» → «Добавить прибор» → «Найдены в сети» → «Добавить»']);
+      assert.deepEqual(blank(db, 202), {}, 'находка не пишет в бланк');
+      db.prepare('UPDATE lab_devices SET added = 1, model_confirmed = 1 WHERE id = ?').run(fdev.id);
+      await fwd.send(FWD_ORU('LAB-000202'));
       assert.equal(last(db).status, 'applied', 'та же модель — та же панель (правило «та же модель»)');
       assert.deepEqual(blank(db, 202), { 'Витамин B12': '390.946' }, 'провод переадресателя: код из OBX-3');
       notReleased(db, 202);
@@ -488,6 +508,10 @@ test('BS-200 сменил адрес: лоток с понятной причи�
     // Новый адрес.
     const after = await analyzer(lisPort, '127.0.0.7');
     try {
+      // LIS_VENDOR_EXACT_V1 (N2) — прибор с новым адресом — находка: лаборатория
+      // нажимает «Добавить» (LIS_PROXY_V1, задача 1).
+      await after.send(BS_QRY('LAB-000001'));
+      db.prepare("UPDATE lab_devices SET added = 1 WHERE host = '127.0.0.7'").run();
       for (const t of [['2', 'test2', '5.000000'], ['3', 'test3', '10.000000'], ['102', 'calctest1', '15.000000']]) {
         assert.match(await after.send(BS_ORU('LAB-000001', ...t)), /\rMSA\|AA\|/);
       }
