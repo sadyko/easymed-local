@@ -42,3 +42,29 @@ test('номер короче 7 цифр — не личность: совпад
   assert.deepEqual(patientIdsWithPhoneKey(db, '909092638'), [77]);
   db.close();
 });
+
+// CRM_UNIFY_V1 (ревью задачи 1) — владельцы номера считаются С ЗАПАСОМ: карта,
+// в поле которой номер лежит вторым («…, +998 90 909 26 38») или вторым номером
+// карты, — тоже владелец. Лишний владелец только делает совпадение реже.
+test('владельцы номера: два номера в одном поле и второй номер карты считаются', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Брат','+998 91 111 11 11, +998 90 909 26 38')").run();
+  db.prepare("INSERT INTO patients (id, full_name, phone, phone_secondary) VALUES (79,'Мама','+998 91 000 00 00','0909092638')").run();
+  db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (80,'Чужой','+998 90 909 26 39')").run();
+  assert.deepEqual(patientIdsWithPhoneKey(db, '909092638').sort(), [77, 78, 79]);
+  db.close();
+});
+
+test('отменённый и неявочный визит шаг не трогает: строки дня ждут живой записи', () => {
+  const db = freshDb();
+  for (const status of ['cancelled', 'no_show']) {
+    const rid = addReq(db);
+    db.prepare("INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status) VALUES (?, NULL, '2026-12-01', 'pending')").run(rid);
+    const vid = addVisit(db);
+    db.prepare('UPDATE visits SET status = ? WHERE id = ?').run(status, vid);
+    crmLinkVisit(db, vid, REG, { undated: true });
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM crm_request_services WHERE visit_id = ?').get(vid).n, 0, status);
+    assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(rid).status, 'in_process', status);
+  }
+  db.close();
+});

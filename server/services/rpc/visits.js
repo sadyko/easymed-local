@@ -267,7 +267,7 @@ export async function ensureVisit(db, args, user) {
 
   const out = run();
   if (!book) {
-    crmLinkVisit(db, out.visit.id, user);   // CRM_UNIFY_V1
+    crmLinkVisit(db, out.visit.id, user, { undated: true });   // CRM_UNIFY_V1 — строки «без даты» берёт только ensure_visit
     // CRM_CALENDAR_MIRROR_V1 — строки заявки, которые визит только что взял,
     // становятся строками визита (до прихода).
     mirrorVisit(db, out.visit.id, { actorId: user && user.id });
@@ -308,9 +308,11 @@ export async function ensureVisit(db, args, user) {
   const dayVisitIsBare = (visitId) => dayVisitMovableFor(db, visitId, book && book.doctorId);
 
   if (!out.created && !dayVisitIsBare(out.visit.id)) {
-    // Строки заявки с этим визитом всё равно связываются: в этот день
-    // пациента держит именно он, и в смете регистратуры они нужны.
-    crmLinkVisit(db, out.visit.id, user);   // CRM_UNIFY_V1
+    // Строки заявки этого дня всё равно связываются с ним: в этот день
+    // пациента держит именно он, и в смете регистратуры они нужны. CRM_UNIFY_V1:
+    // до прихода — как запись («Записан»); визит уже «Пришёл» — строки берут
+    // его и закрываются правилом прихода (crm/visit-link.js).
+    crmLinkVisit(db, out.visit.id, user, { undated: true });   // CRM_UNIFY_V1
     mirrorVisit(db, out.visit.id, { actorId: user && user.id });   // CRM_CALENDAR_MIRROR_V1
     const doctor = out.visit.doctor_id
       ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(out.visit.doctor_id)
@@ -382,7 +384,7 @@ export async function ensureVisit(db, args, user) {
   }
   // CRM_UNIFY_V1 — запись связывается с заявкой пациента (crm/visit-link.js);
   // затем строки записи и заявки сверяются.
-  crmLinkVisit(db, out.visit.id, user);   // CRM_UNIFY_V1
+  crmLinkVisit(db, out.visit.id, user, { undated: true });   // CRM_UNIFY_V1
   mirrorVisit(db, out.visit.id, { actorId: user && user.id });
   return { ...out, booked: true };
 }

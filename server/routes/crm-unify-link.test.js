@@ -57,10 +57,13 @@ test('по телефону — только если номер у ОДНОЙ �
   }
 });
 
+// CRM_UNIFY_V1 (ревью задачи 1) — карточке 60 дней: прежний attachVisitToCrm брал
+// у колл-центра только заявку моложе 30 дней и заводил дубль; шаг C берёт
+// открытую карточку пациента без строк любой давности.
 test('запись оператора Б двигает карточку оператора А на сервере, но ответ записи о ней молчит', async () => {
   const t = await startCrmApp();
   try {
-    const rid = addLead(t.db, { assigned: 3, name: 'Секретная Карточка' });
+    const rid = addLead(t.db, { assigned: 3, name: 'Секретная Карточка', updated: daysAgoIso(60) });
     const b = await t.rpc('calendar_book', 'cc2', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
     assert.equal(b.status, 200, b.text);
     assert.equal(t.lead(rid).status, 'scheduled', 'карточка не узнала о записи, потому что её ведёт другой оператор');
@@ -115,4 +118,42 @@ test('booking_lines_add колл-центра к записи регистрат
     assert.equal(t.db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(vid).request_id, old);
     assert.deepEqual(linesOf(t.db, old).map((l) => [l.service_id, l.visit_id]), [[40, vid]], 'строка визита не отразилась в карточке');
   } finally { t.close(); }
+});
+
+// CRM_UNIFY_V1 (ревью задачи 1) — запись врача: та же дверь, то же правило, что у
+// регистратуры (случай врача из прежнего R-I3 crm-calendar-mirror.test.js).
+test('запись врача: пациент без карточки её не получает; открытая карточка без строк едет в «Записан»', async () => {
+  const t = await startCrmApp();
+  try {
+    const b1 = await t.rpc('calendar_book', 'doc', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
+    assert.equal(b1.status, 200, b1.text);
+    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 0, 'врач завёл карточку пришедшему без звонка');
+    const old = addLead(t.db, { updated: daysAgoIso(60) });
+    const b2 = await t.rpc('calendar_book', 'doc', { patient_id: 77, doctor_id: 10, start: at(D2, 9), duration_minutes: 30 });
+    assert.equal(b2.status, 200, b2.text);
+    assert.deepEqual([t.lead(old).status, t.lead(old).scheduled_date], ['scheduled', D2]);
+    const link = t.db.prepare('SELECT request_id, source, created_request FROM crm_booking_links WHERE visit_id = ?').get(b2.json.data.visit.id);
+    assert.deepEqual(link, { request_id: old, source: 'match', created_request: 0 });
+    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 1);
+  } finally { t.close(); }
+});
+
+// CRM_UNIFY_V1 (ревью задачи 1) — шаг E: колл-центр берёт свежую (не старше
+// CALLCENTER_ATTACH_DAYS) открытую карточку пациента, даже ждущую другой день;
+// старше — заводит новую. Задача 6 заменит этот срок окном повторного обращения.
+test('колл-центр: карточка, ждущая другой день, моложе 30 дней — та же; старше — новая', async () => {
+  for (const [age, cards, same] of [[10, 1, true], [40, 2, false]]) {
+    const t = await startCrmApp();
+    try {
+      const rid = addLead(t.db, { assigned: 3, date: D2, updated: daysAgoIso(age) });
+      addLine(t.db, rid, { svc: 40, day: D2 });
+      const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
+      assert.equal(b.status, 200, b.text);
+      assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, cards, `карточке ${age} дн.`);
+      const link = t.db.prepare('SELECT request_id, source, created_request FROM crm_booking_links WHERE visit_id = ?').get(b.json.data.visit.id);
+      assert.equal(link.request_id === rid, same, `карточке ${age} дн.: привязка ${JSON.stringify(link)}`);
+      assert.equal(link.source, 'callcenter');
+      assert.deepEqual(linesOf(t.db, rid).map((l) => l.visit_id), [null], 'строка другого дня взяла визит');
+    } finally { t.close(); }
+  }
 });
