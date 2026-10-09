@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (ревью 5) — окно импорта: отдельное предложение в сообщении о полном отказе (views/section-import-export.js)
+  "Не импортировано (ошибки в файле): {n}.": {"en":"Not imported (errors in the file): {n}.","ru":"Не импортировано (ошибки в файле): {n}.","uz":"Import qilinmadi (fayldagi xatolar): {n}."},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью 5) — импорт услуг: без колонки цены визита пустые дни ничего не меняют (views/section-import-export.js)
   "Строка {n}: без колонки {col} пустые {cols} ничего не меняют.": {"en":"Row {n}: without the {col} column, the empty {cols} change nothing.","ru":"Строка {n}: без колонки {col} пустые {cols} ничего не меняют.","uz":"{n}-qator: {col} ustuni bo'lmasa, bo'sh {cols} hech narsani o'zgartirmaydi."},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью 5) — цена визита без окна: одно правило у окна услуги и импорта (shared/visit-tier-rules.js)

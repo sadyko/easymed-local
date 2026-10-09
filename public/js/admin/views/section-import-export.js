@@ -1557,7 +1557,8 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             h('b', { style: { color: 'var(--crit-700)' } }, String(rawRows.length - validCount)),
             document.createTextNode(' ' + tr('с ошибками.')),
             unknown.length ? h('div', { style: { color: 'var(--warn-700)' } },
-                trf('Колонки не распознаны и не импортируются: {list}.', { list: unknown.join(', ') })) : null,
+                // Ревью 5 — каждое название в кавычках: «Цена, сум» — одна колонка.
+                trf('Колонки не распознаны и не импортируются: {list}.', { list: unknown.map((x) => '«' + x + '»').join(', ') })) : null,
         ].filter(Boolean));
         paintPreview();
         if (validCount > 0 && !imported && !importing) confirmBtn.removeAttribute('disabled');
@@ -1834,7 +1835,8 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         } else {
             // Ревью 4 (M2) — и строки, не ввезённые из-за ошибок в самом файле.
             msg = trf('Импорт не удался — отклонено строк: {n}.', { n: failed })
-                + (refusedInFile ? ' ' + trf('не импортировано (ошибки в файле): {n}', { n: refusedInFile }) + '.' : '')
+                // Ревью 5 — новое предложение — с заглавной буквы.
+                + (refusedInFile ? ' ' + trf('Не импортировано (ошибки в файле): {n}.', { n: refusedInFile }) : '')
                 + (lastError ? ' ' + lastError : '');
         }
         if (afterMsg) msg += ' ' + afterMsg;

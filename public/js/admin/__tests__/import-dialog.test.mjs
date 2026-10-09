@@ -372,7 +372,7 @@ test('нераспознанная колонка названа в строке
     Object.assign(W, { writes: [], failExisting: false, failStored: false });
     const { overlay } = await openWith(sheetFile([['name', 'group', 'Цена', 'Сумма'], ['Приём A', 'Консультация', 1000, 5]]));
     const statusText = all(overlay).find((n) => String(n.className).includes('imx-status')).textContent;
-    assert.match(statusText, /Колонки не распознаны и не импортируются: Сумма/, statusText);
+    assert.match(statusText, /Колонки не распознаны и не импортируются: «Сумма»/, statusText);
     assert.ok(!/Цена/.test(statusText.split('не импортируются')[1] || ''), '«Цена» названа нераспознанной: ' + statusText);
 });
 
@@ -450,7 +450,8 @@ test('M2: не записано ничего — «Импорт не выпол�
         assert.ok(!(confirm.disabled === true) && !confirm.hasAttribute('disabled'), 'кнопка выключена — повторить нельзя');
         const t = document.getElementById('toast');
         assert.strictEqual(t.dataset.kind, 'fail');
-        assert.match(t.textContent, /не импортировано \(ошибки в файле\): 1/, t.textContent);
+        // Ревью 5 — новое предложение — с заглавной буквы.
+        assert.match(t.textContent, /\. Не импортировано \(ошибки в файле\): 1\./, t.textContent);
     } finally { W.failWrites = false; }
 });
 
@@ -485,4 +486,20 @@ test('повтор после полного отказа: тип, катего�
         const row = Array.isArray(ins.values) ? ins.values[0] : ins.values;
         for (const k of ['type_id', 'category_id', 'department_id']) assert.ok(row[k] != null, k + ' пуст в повторе: ' + JSON.stringify(row));
     } finally { W.failWrites = false; }
+});
+
+// CLINIC_API_FIX_V1 (ревью 5) — названия нераспознанных колонок в кавычках:
+// «Цена, сум», «Примечание» — запятая внутри названия не путает список.
+test('нераспознанные колонки — каждая в кавычках', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay } = await openWith(sheetFile([['name', 'group', 'price', 'Цена, сум', 'Примечание'], ['Приём A', 'Консультация', 1000, 1000, 'x']]));
+    const statusText = all(overlay).find((n) => String(n.className).includes('imx-status')).textContent;
+    assert.match(statusText, /не импортируются: «Цена, сум», «Примечание»\./, statusText);
+});
+
+test('«Не импортировано (ошибки в файле)» как начало предложения — на трёх языках, с заглавной', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    const e = STRINGS['Не импортировано (ошибки в файле): {n}.'];
+    assert.ok(e && e.uz && e.en);
+    for (const lang of ['ru', 'uz', 'en']) assert.match(e[lang], /^\p{Lu}/u, lang + ': ' + e[lang]);
 });
