@@ -6,8 +6,9 @@
 // Всё, что ищет конверсию, читает вид won (wonStageKey), поэтому после смены
 // приход — регистрация на стойке (crmLinkVisit desk) и отметка «Пришёл» в
 // календаре (crmVisitStatus) — кладёт карточку в НОВУЮ конверсию, а запись —
-// в «Колонку записи», посчитанную от новой конверсии. Карточки при смене не
-// двигаются. Сохранить может только администратор.
+// в «Колонку записи», посчитанную от новой конверсии. Сохранить может только
+// администратор. CRM_UNIFY_V1 (ревью задачи 4): новая колонка обязана быть
+// пустой, а карточки прежней конверсии идут за ней (crm-unify-conversion-history.test.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startCrmApp, localDay, addLead } from '../test-helpers/crm-unify-app.js';
@@ -17,7 +18,7 @@ const TODAY = localDay(0);
 const wonKeys = (db) => db.prepare("SELECT key FROM crm_stages WHERE kind = 'won'").all().map((r) => r.key);
 const seedOther = (db) => db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Другой Пациент','+998 91 111 22 33')").run();
 
-test('конверсия «Подтверждён»: ровно одна won; карточки прежней «Пришёл» не тронуты; стойка закрывает в новую', async () => {
+test('конверсия «Подтверждён»: ровно одна won; карточки прежней «Пришёл» идут за ней; стойка закрывает в новую', async () => {
   const t = await startCrmApp(seedOther);
   try {
     const old = addLead(t.db, { status: 'came', patient: 78, phone: '+998 91 111 22 33', name: 'Старая конверсия' });
@@ -25,14 +26,15 @@ test('конверсия «Подтверждён»: ровно одна won; к
     assert.equal(s.status, 200, s.text);
     assert.deepEqual(wonKeys(t.db), ['approved'], 'после сохранения конверсия ровно одна');
     assert.equal(wonStageKey(t.db), 'approved');
-    assert.equal(t.lead(old).status, 'came', 'карточка прежней конверсии переехала');
+    // CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО (ревью задачи 4): конвертированная карточка идёт за ролью.
+    assert.equal(t.lead(old).status, 'approved', 'карточка прежней конверсии осталась в ставшей открытой колонке');
 
     const rid = addLead(t.db, { assigned: 3 });
     const r = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: new Date().toISOString(), doctor_id: 10,
       visit_type: 'outpatient', desk: true });
     assert.equal(r.status, 200, r.text);
     assert.equal(t.lead(rid).status, 'approved', 'регистрация на стойке закрыла карточку не в новую конверсию');
-    assert.equal(t.lead(old).status, 'came', 'приход чужого пациента тронул карточку прежней конверсии');
+    assert.equal(t.lead(old).status, 'approved', 'приход чужого пациента тронул карточку истории');
   } finally { t.close(); }
 });
 

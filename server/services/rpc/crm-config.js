@@ -9,6 +9,7 @@
 
 import { grantAllowsAdminOr } from '../grants.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { crmConfig, saveConfig, CrmConfigError } from '../crm/config.js';
+import { withTemplate } from '../server-message.js';   // CRM_UNIFY_V1 — фраза с числом переводится на экране
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -84,7 +85,12 @@ export function crmConfigSave(db, args, user) {
     // config.js speaks in whole Russian sentences with a status already on
     // them — the screen shows them verbatim, so they must not be re-wrapped
     // into a generic "bad request" (telephony's SettingsError pattern).
-    if (e instanceof CrmConfigError) throw new RpcError(e.message, e.status);
+    if (e instanceof CrmConfigError) {
+      const err = new RpcError(e.message, e.status);
+      // CRM_UNIFY_V1 — собранная фраза («В колонке «X» карточек: N…») едет
+      // шаблоном и значениями: экран переводит шаблон (V3120_I18N).
+      throw e.template ? withTemplate(err, e.template, e.params) : err;
+    }
     throw e;
   }
 }

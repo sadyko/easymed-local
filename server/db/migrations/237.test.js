@@ -22,3 +22,21 @@ test('237: одна строка настроек; окно 1..720 часов; �
   assert.equal(db.prepare('SELECT changed_by FROM crm_settings').get().changed_by, null);
   db.close();
 });
+
+// CRM_UNIFY_V1 (ревью задачи 4) — журнал переноса «Колонки конверсии»: сколько
+// карточек, откуда, куда, кто и когда. Кто — не запрет на удаление сотрудника.
+test('237: журнал переноса конверсии — пустой; число карточек не отрицательное; автор обнуляется', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM crm_conversion_log').get().n, 0);
+  db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (5, 'adm', 'x', 'admin')").run();
+  db.prepare("INSERT INTO crm_conversion_log (moved_by, from_stage, to_stage, cards_moved) VALUES (5, 'came', 'approved', 3)").run();
+  const r = db.prepare('SELECT moved_by, from_stage, to_stage, cards_moved, moved_at FROM crm_conversion_log').get();
+  assert.deepEqual({ ...r, moved_at: undefined }, { moved_by: 5, from_stage: 'came', to_stage: 'approved', cards_moved: 3, moved_at: undefined });
+  assert.match(r.moved_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.throws(() => db.prepare("INSERT INTO crm_conversion_log (from_stage, to_stage, cards_moved) VALUES ('a','b',-1)").run(), /CHECK/);
+  assert.throws(() => db.prepare("INSERT INTO crm_conversion_log (from_stage, cards_moved) VALUES ('a', 0)").run(), /NOT NULL/);
+  db.prepare('DELETE FROM users WHERE id = 5').run();
+  assert.equal(db.prepare('SELECT moved_by FROM crm_conversion_log').get().moved_by, null);
+  db.close();
+});

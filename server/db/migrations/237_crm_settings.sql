@@ -27,3 +27,20 @@ CREATE TABLE crm_settings (
   changed_at    TEXT
 );
 INSERT INTO crm_settings (id, booked_stage, window_hours) VALUES (1, NULL, 72);
+
+-- CRM_UNIFY_V1 (ревью задачи 4) — ЖУРНАЛ ПЕРЕНОСА «КОЛОНКИ КОНВЕРСИИ».
+--
+-- Новая колонка конверсии обязана быть пустой, а карточки прежней идут за
+-- ролью той же транзакцией (иначе вся история конверсий оживала в ставшей
+-- открытой колонке). Это единственная массовая правка ступеней карточек из
+-- настроек, и updated_at карточек она намеренно не трогает — поэтому след
+-- здесь: кто, когда, откуда, куда и сколько карточек переехало. Строки только
+-- добавляются. Кто — ON DELETE SET NULL, по той же причине, что changed_by.
+CREATE TABLE crm_conversion_log (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  moved_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  moved_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  from_stage   TEXT,
+  to_stage     TEXT NOT NULL,
+  cards_moved  INTEGER NOT NULL DEFAULT 0 CHECK (cards_moved >= 0)
+);
