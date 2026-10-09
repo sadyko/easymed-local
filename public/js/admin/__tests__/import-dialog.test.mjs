@@ -14,6 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
+import fs from 'node:fs';
 
 // Окно грузит SheetJS по адресу сайта '/js/vendor/xlsx-0.20.3.js'; здесь — тот
 // же файл с диска.
@@ -80,13 +81,16 @@ globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
 // ---- поддельный сервер ------------------------------------------------------
-const W = { writes: [], storedReads: 0, failExisting: false, failStored: false };
+const W = { writes: [], storedReads: 0, failExisting: false, failStored: false, gatewayOk: false };
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
     const bad = (msg) => ({ ok: false, status: 500, json: async () => ({ error: { message: msg } }), text: async () => msg });
     if (u.startsWith('/api/auth/me')) return ok({ user: { id: 1, role: 'admin' } });
-    if (u.startsWith('/api/v1')) return { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' };
+    if (u.startsWith('/api/v1')) {   // ревью 3 — gatewayOk: запись товаров «прошла» (проверка итога «Товаров»)
+        if (W.gatewayOk) { W.writes.push('gw:' + (opts.method || 'GET')); return ok({}); }
+        return { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' };
+    }
     if (u.startsWith('/api/db')) {
         const d = JSON.parse(opts.body || '{}');
         if (d.op !== 'select') { W.writes.push(d.table + ':' + d.op); return ok({ data: [] }); }
@@ -118,9 +122,9 @@ function sheetFile(rows) {
 const FILE = () => sheetFile([['name', 'group', 'price', 'category'],
     ['Приём кардиолога', 'Консультация', 260000, ''], ['Приём невролога', 'Консультация', 240000, 'Неврология']]);
 
-async function openWith(file) {
+async function openWith(file, sectionKey = 'services') {
     BODY.children.length = 0;
-    await openSectionImporter({ sectionKey: 'services', onImported() {} });
+    await openSectionImporter({ sectionKey, onImported() {} });
     const overlay = BODY.children.find((n) => String(n.className).includes('modal'));
     const fileInput = all(overlay).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'file');
     const confirm = all(overlay).find((n) => n.tagName === 'BUTTON' && /Импортировать/.test(n.textContent));
@@ -267,6 +271,83 @@ test('предпросмотр: не больше 200 строк с замеча
 test('подписи потолка предпросмотра — на трёх языках', async () => {
     const { STRINGS } = await import('../i18n-strings.js');
     for (const k of ['ещё {n} строк с замечаниями', 'Предпросмотр: первые {shown} из {flagged} строк с замечаниями и ошибками и первые {n} без замечаний — всего строк {total}']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+    }
+});
+
+// CLINIC_API_FIX_V1 (ревью 3) — ИТОГ ИМПОРТА ЧЕСТНЫЙ И ОСТАЁТСЯ НА ЭКРАНЕ.
+// Было: «Импортировано строк: 2 · новых: 2.», хотя ещё 3 строки файла не
+// ввезены (ошибки), и окно закрывалось — вместе со списком причин. Теперь,
+// если что-то не ввезено или с замечаниями, окно остаётся и показывает итог:
+// ввезено N (новых M), не импортировано K, с замечаниями W; таблица с
+// причинами — под ним. Чистый импорт закрывает окно, как раньше. Сообщение
+// с оттенком предупреждения теперь окрашено (admin.css), а сообщение
+// «Товаров» об остатках дописывается к итогу, а не заменяет его.
+const resultText = (overlay) => {
+    const el = all(overlay).find((n) => String(n.className).includes('imx-result'));
+    return el ? el.textContent : '';
+};
+const inBody = (overlay) => all(BODY).includes(overlay);
+
+test('итог: 2 ввезены, 3 не ввезены из-за ошибок в файле — окно остаётся, итог честный', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay, confirm } = await openWith(sheetFile([['name', 'group', 'price'],
+        ['Приём A', 'Консультация', 1000], ['Приём B', 'Консультация', 2000],
+        ['Приём X', 'Консультация', 'abc'], ['Приём Y', 'Консультация', ''], ['Приём Z', 'Консультация', '1,500']]));
+    confirm.click();
+    await settle(200);
+    assert.ok(inBody(overlay), 'окно закрылось, а 3 строки не ввезены');
+    const text = resultText(overlay);
+    assert.match(text, /Импорт завершён/);
+    assert.match(text, /Импортировано строк: 2/);
+    assert.match(text, /новых: 2/);
+    assert.match(text, /Не импортировано — ошибки в файле: 3/);
+    assert.match(toastText(), /не импортировано \(ошибки в файле\): 3/, toastText());
+    assert.ok(confirm.disabled === true || confirm.hasAttribute('disabled'), 'после импорта «Импортировать» снова доступна — повтор задвоит');
+    assert.ok(previewRows(overlay).length >= 3, 'таблица с причинами пропала');
+});
+
+test('итог: только замечания — окно остаётся, «С замечаниями: 1»', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay, confirm } = await openWith(sheetFile([['name', 'group', 'price'],
+        ['Приём кардиолога', 'Консультация', '150 000 сум'], ['Приём A', 'Консультация', 1000]]));
+    confirm.click();
+    await settle(200);
+    assert.ok(inBody(overlay));
+    assert.match(resultText(overlay), /С замечаниями: 1/);
+});
+
+test('итог: всё чисто — окно закрывается, как раньше', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay, confirm } = await openWith(FILE());
+    confirm.click();
+    await settle(200);
+    assert.ok(!inBody(overlay), 'чистый импорт оставил окно открытым');
+    assert.match(toastText(), /Импортировано строк: 2/);
+});
+
+test('«Товары»: сообщение об остатках дописано к итогу, а не заменяет его', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false, gatewayOk: true });
+    try {
+        const { confirm } = await openWith(sheetFile([['Товар', 'Цена', 'Остаток'], ['Шприц', 1200, 5]]), 'procurement_items');
+        confirm.click();
+        await settle(250);
+        const t = toastText();
+        assert.match(t, /Импортировано строк: 1/, t);
+        assert.match(t, /Остатки пропущены/, t);
+    } finally { W.gatewayOk = false; }
+});
+
+test('сообщение с оттенком предупреждения окрашено (admin.css), цветом из токенов', () => {
+    const css = fs.readFileSync(new URL('../../../css/admin.css', import.meta.url), 'utf8');
+    assert.match(css, /\.toast\[data-kind="warn"\]\s*\{[^}]*background:\s*var\(--warn-\d+\)/);
+});
+
+test('подписи итога — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const k of ['Импорт завершён', 'Импортировано строк: {n}', 'Не импортировано — ошибки в файле: {n}', 'Не записано — ошибка при записи: {n}',
+        'С замечаниями: {n}', 'Строки с ошибками и замечаниями — в таблице ниже.', 'не импортировано (ошибки в файле): {n}']) {
         const e = STRINGS[k];
         assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
     }

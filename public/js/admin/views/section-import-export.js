@@ -1392,9 +1392,17 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             const btn = ev.currentTarget;
             btn.disabled = true;
             try { await runImport(); }
-            finally { if (btn?.isConnected) btn.disabled = false; }
+            // CLINIC_API_FIX_V1 (ревью 3) — после импорта с итогом кнопка не
+            // возвращается: повтор того же файла задвоил бы новые строки.
+            finally { if (btn?.isConnected && !imported) btn.disabled = false; }
         },
     }, Icon('Check', { size: 14 }), ' Импортировать');
+
+    // CLINIC_API_FIX_V1 (ревью 3) — итог импорта в самом окне (showResult) и
+    // кнопка «Отмена», которая после импорта становится «Закрыть».
+    const result = h('div', { class: 'imx-result', role: 'status' });
+    const cancelBtn = h('button', { class: 'btn', onclick: close }, 'Отмена');
+    let imported = false;
 
     // IMPORTER_UI_V2 — `modal-compact` matters: MODAL_FULLSCREEN_V1 (admin.css)
     // stretches every other .modal-card to the whole viewport, which is why this
@@ -1410,10 +1418,11 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             columnsHint(cfg),
             updateExistingBox,
             fileInput,
+            result,
             preview,
         ),
         h('footer', { class: 'modal-foot' },
-            h('button', { class: 'btn', onclick: close }, 'Отмена'),
+            cancelBtn,
             confirmBtn,
         ),
     );
@@ -1458,7 +1467,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             document.createTextNode(' ' + tr('с ошибками.')),
         ].filter(Boolean));
         paintPreview();
-        if (validCount > 0) confirmBtn.removeAttribute('disabled');
+        if (validCount > 0 && !imported) confirmBtn.removeAttribute('disabled');
         else                confirmBtn.setAttribute('disabled', '');
     }
     updateExistingInp.addEventListener('change', () => {
@@ -1469,6 +1478,10 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
 
     async function handleFile(file) {
         if (!file) return;
+        // Ревью 3 — новый файл: прежний итог убирается, импорт снова доступен.
+        imported = false;
+        clear(result);
+        cancelBtn.textContent = tr('Отмена');
         status.textContent = trf('Читаем {name}…', { name: file.name });
         try {
             const XLSX = await loadXlsx();
@@ -1684,34 +1697,70 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         }
 
         const ok = updated + inserted;
+        // CLINIC_API_FIX_V1 (ревью 3) — ИТОГ ЧЕСТНЫЙ И ОСТАЁТСЯ НА ЭКРАНЕ. Было:
+        // «Импортировано строк: 2 · новых: 2.», хотя ещё 3 строки файла не
+        // ввезены (ошибки в файле), и окно закрывалось вместе с причинами; а
+        // сообщение «Товаров» об остатках заменяло итог. Теперь итог называет и
+        // строки, не ввезённые из-за ошибок в файле, и строки с замечаниями;
+        // сообщение пост-обработки дописывается к нему; окно закрывается, только
+        // если всё ввезено чисто, — иначе показывает итог над таблицей причин.
+        const refusedInFile = parsedRows.length - valid.length;
+        const warned = valid.filter(r => r.status === 'warn').length;
+
+        // OPENING_STOCK_IMPORT_V1 — config post-hook (e.g. post opening-stock
+        // receipts). Runs only when at least one row landed.
+        let afterMsg = null, afterFailed = false;
+        if (ok > 0 && typeof cfg.afterImport === 'function') {
+            try { afterMsg = await cfg.afterImport(valid); }
+            catch (e) {
+                console.warn('[section-import] afterImport failed:', e);
+                afterMsg = trf('Товары импортированы, но пост-обработка не удалась: {msg}', { msg: e.message || e });
+                afterFailed = true;
+            }
+        }
+
+        let msg;
         if (ok > 0) {
             const parts = [];
             if (inserted) parts.push(trf('новых: {n}', { n: inserted }));
             if (updated)  parts.push(trf('обновлено: {n}', { n: updated }));
             if (failed)   parts.push(trf('с ошибкой: {n}', { n: failed }));
-            // CLINIC_API_FIX_V1 (ревью итога) — итог называет строки с замечаниями:
-            // окно сейчас закроется, и их список уйдёт вместе с ним.
-            const warned = valid.filter(r => r.status === 'warn').length;
+            if (refusedInFile) parts.push(trf('не импортировано (ошибки в файле): {n}', { n: refusedInFile }));
             if (warned)   parts.push(trf('с замечаниями: {n}', { n: warned }));
-            toast(trf('Импортировано строк: {n} · {parts}.', { n: ok, parts: parts.join(' · ') }), warned ? 'warn' : 'info');
+            msg = trf('Импортировано строк: {n} · {parts}.', { n: ok, parts: parts.join(' · ') });
         } else {
-            toast(trf('Импорт не удался — отклонено строк: {n}.', { n: failed }) + (lastError ? ' ' + lastError : ''), 'fail');
+            msg = trf('Импорт не удался — отклонено строк: {n}.', { n: failed }) + (lastError ? ' ' + lastError : '');
         }
-
-        // OPENING_STOCK_IMPORT_V1 — config post-hook (e.g. post opening-stock
-        // receipts). Runs only when at least one row landed.
-        if (ok > 0 && typeof cfg.afterImport === 'function') {
-            try {
-                const msg = await cfg.afterImport(valid);
-                if (msg) toast(msg);
-            } catch (e) {
-                console.warn('[section-import] afterImport failed:', e);
-                toast(trf('Товары импортированы, но пост-обработка не удалась: {msg}', { msg: e.message || e }), 'fail');
-            }
-        }
+        if (afterMsg) msg += ' ' + afterMsg;
+        toast(msg, (ok === 0 || afterFailed) ? 'fail' : (failed || refusedInFile || warned) ? 'warn' : 'info');
 
         if (ok > 0 && typeof onImported === 'function') onImported();
-        if (failed === 0) close();
+        if (failed === 0 && refusedInFile === 0 && warned === 0 && !afterFailed) { close(); return; }
+        showResult({ ok, inserted, updated, failed, lastError, refusedInFile, warned, afterMsg });
+    }
+
+    // CLINIC_API_FIX_V1 (ревью 3) — итог импорта в окне: что ввезено, что нет и
+    // почему (таблица причин остаётся ниже). Окно не закрывается само;
+    // «Импортировать» выключена до нового файла — повтор задвоил бы строки.
+    function showResult(sum) {
+        imported = true;
+        confirmBtn.setAttribute('disabled', '');
+        confirmBtn.disabled = true;
+        cancelBtn.textContent = tr('Закрыть');
+        clear(result);
+        const line = (text, color) => h('div', color ? { style: { color } } : null, text);
+        const split = [];
+        if (sum.inserted) split.push(trf('новых: {n}', { n: sum.inserted }));
+        if (sum.updated)  split.push(trf('обновлено: {n}', { n: sum.updated }));
+        result.append(...[
+            h('b', null, 'Импорт завершён'),
+            line(trf('Импортировано строк: {n}', { n: sum.ok }) + (split.length ? ' (' + split.join(', ') + ')' : '')),
+            sum.refusedInFile ? line(trf('Не импортировано — ошибки в файле: {n}', { n: sum.refusedInFile }), 'var(--crit-700)') : null,
+            sum.failed ? line(trf('Не записано — ошибка при записи: {n}', { n: sum.failed }) + (sum.lastError ? ' — ' + sum.lastError : ''), 'var(--crit-700)') : null,
+            sum.warned ? line(trf('С замечаниями: {n}', { n: sum.warned }), 'var(--warn-700)') : null,
+            sum.afterMsg ? line(sum.afterMsg) : null,
+            (sum.refusedInFile || sum.warned) ? h('div', { class: 'muted' }, 'Строки с ошибками и замечаниями — в таблице ниже.') : null,
+        ].filter(Boolean));
     }
 
     // Create lookup rows for any payload slots flagged with `__autoCreate` and

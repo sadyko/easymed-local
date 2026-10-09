@@ -3,6 +3,14 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (ревью 3) — окно импорта: итог в окне (views/section-import-export.js)
+  "Импорт завершён": {"en":"Import finished","ru":"Импорт завершён","uz":"Import yakunlandi"},   // CLINIC_API_FIX_V1
+  "Импортировано строк: {n}": {"en":"Rows imported: {n}","ru":"Импортировано строк: {n}","uz":"Import qilingan qatorlar: {n}"},   // CLINIC_API_FIX_V1
+  "Не импортировано — ошибки в файле: {n}": {"en":"Not imported — errors in the file: {n}","ru":"Не импортировано — ошибки в файле: {n}","uz":"Import qilinmadi — fayldagi xatolar: {n}"},   // CLINIC_API_FIX_V1
+  "Не записано — ошибка при записи: {n}": {"en":"Not saved — error while saving: {n}","ru":"Не записано — ошибка при записи: {n}","uz":"Yozilmadi — yozishda xato: {n}"},   // CLINIC_API_FIX_V1
+  "С замечаниями: {n}": {"en":"With notes: {n}","ru":"С замечаниями: {n}","uz":"Izohli: {n}"},   // CLINIC_API_FIX_V1
+  "Строки с ошибками и замечаниями — в таблице ниже.": {"en":"The rows with errors and notes are in the table below.","ru":"Строки с ошибками и замечаниями — в таблице ниже.","uz":"Xato va izohli qatorlar — quyidagi jadvalda."},   // CLINIC_API_FIX_V1
+  "не импортировано (ошибки в файле): {n}": {"en":"not imported (errors in the file): {n}","ru":"не импортировано (ошибки в файле): {n}","uz":"import qilinmadi (fayldagi xatolar): {n}"},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью 3) — окно импорта: потолок предпросмотра (views/section-import-export.js)
   "ещё {n} строк с замечаниями": {"en":"{n} more rows with notes","ru":"ещё {n} строк с замечаниями","uz":"yana {n} ta izohli qator"},   // CLINIC_API_FIX_V1
   "Предпросмотр: первые {shown} из {flagged} строк с замечаниями и ошибками и первые {n} без замечаний — всего строк {total}": {"en":"Preview: the first {shown} of {flagged} rows with notes or errors and the first {n} without notes — {total} rows in total","ru":"Предпросмотр: первые {shown} из {flagged} строк с замечаниями и ошибками и первые {n} без замечаний — всего строк {total}","uz":"Oldindan ko'rish: izoh yoki xatoli {flagged} ta qatordan birinchi {shown} tasi va izohsiz birinchi {n} tasi — jami {total} qator"},   // CLINIC_API_FIX_V1

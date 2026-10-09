@@ -4024,6 +4024,14 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     font-size: 12.5px; line-height: 1.5; }
 .imx-check input { flex: 0 0 auto; margin-top: 2px; }
 
+/* CLINIC_API_FIX_V1 (ревью 3) — итог импорта в окне: что ввезено, что нет и
+   почему; пусто — не занимает места. */
+.imx-result:empty { display: none; }
+.imx-result { margin-top: 12px; padding: 9px 12px; border-radius: 8px;
+    font-size: 13.5px; line-height: 1.5;
+    background: var(--warn-50); border: 1px solid var(--warn-500); }
+.imx-result > * + * { margin-top: 3px; }
+
 /* Collapses to nothing until a file has been parsed — no reserved blank slab. */
 .imx-preview:empty { display: none; }
 .imx-preview { margin-top: 12px; max-height: 40vh; overflow: auto;
