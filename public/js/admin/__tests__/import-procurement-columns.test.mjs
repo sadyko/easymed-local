@@ -30,7 +30,7 @@ globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
 const XLSX = await import(new URL('../../vendor/xlsx-0.20.3.js', import.meta.url).href);
-const { buildImportRow, readSheetRows, importColumnHints } = await import('../views/section-import-export.js');
+const { buildImportRow, readSheetRows, importColumnHints, readImportNumber } = await import('../views/section-import-export.js');
 const { STRINGS } = await import('../i18n-strings.js');
 
 // Строка со ВСЕМИ колонками шаблона «Товары» — заголовки как в шаблоне.
@@ -56,7 +56,7 @@ function check(row) {
     // Колонки поставщика, пока привязка выключена, — просто текст (ревью 3).
     assert.strictEqual(c.supPrice, '1 145', 'цена закупки из файла пропала');
     assert.strictEqual(c.supUnit, 'кор', 'единица закупки — текст из файла');
-    assert.strictEqual(c.supPack, '40', 'кол-во в единице закупки из файла пропало');
+    assert.strictEqual(c.supPack, 40, 'кол-во в единице закупки из файла пропало (число из ячейки — числом, ревью 5)');
 }
 
 test('строка «Товаров» со всеми колонками шаблона: единицы, кратность, себестоимость и закупка — в строке', () => {
@@ -117,4 +117,18 @@ test('linkSuppliers читает цену и кратность закупки �
     assert.ok(!body.includes('Number(r.captures.supPrice)') && !body.includes('Number(r.captures.supPack)'), 'цена/кратность закупки — через Number()');
     assert.ok(body.includes('readImportNumber(r.captures.supPrice'), 'цена закупки — не правилом числа');
     assert.ok(body.includes('readImportNumber(r.captures.supPack'), 'кратность закупки — не правилом числа');
+});
+
+// CLINIC_API_FIX_V1 (ревью 5) — цена и кратность закупки захватываются
+// значением ячейки как есть: число из Excel остаётся числом. Текстом «2.375»
+// оно стало бы неоднозначным («2 375» или 2,375) и выпало бы по правилу числа.
+test('цена закупки 2,375 из числовой ячейки — число 2.375, правило числа его читает', () => {
+    const ws = XLSX.utils.aoa_to_sheet([HEADER, [...ROW.slice(0, 12), 2.375, 'кор', 12]]);
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Товары');
+    const raws = readSheetRows(XLSX, XLSX.write(wb, { type: 'array', bookType: 'xlsx' }), 'procurement_items');
+    const row = buildImportRow('procurement_items', raws[0]);
+    assert.strictEqual(row.captures.supPrice, 2.375);
+    assert.strictEqual(readImportNumber(row.captures.supPrice, false).n, 2.375);
+    assert.strictEqual(row.captures.supPack, 12);
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
 });

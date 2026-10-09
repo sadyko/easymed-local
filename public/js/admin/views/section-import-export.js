@@ -310,11 +310,13 @@ const IMPORT_CONFIGS = {
             // отказа строке. Подсказки шаблона говорят это честно.
             { key: 'поставщик',     capture: 'supplier', aliases: ['supplier'],
               hint: 'Поставщик — пока не используется: из файла поставщики не создаются и к товару не привязываются.' },
-            { key: 'цена закупки',  capture: 'supPrice', aliases: ['закупочная цена'],
+            // Ревью 5 — captureRaw: значение ячейки как есть (число из Excel — числом),
+            // linkSuppliers читает его правилом числа.
+            { key: 'цена закупки',  capture: 'supPrice', captureRaw: true, aliases: ['закупочная цена'],
               hint: 'Цена закупки у поставщика — пока не используется: из файла не сохраняется.' },
             { key: 'ед. закупки',   capture: 'supUnit', aliases: ['единица закупки'],
               hint: 'Единица закупки у поставщика — пока не используется: из файла не сохраняется.' },
-            { key: 'кол-во в ед. закупки', capture: 'supPack', aliases: ['кратность закупки'],
+            { key: 'кол-во в ед. закупки', capture: 'supPack', captureRaw: true, aliases: ['кратность закупки'],
               hint: 'Сколько базовых единиц в единице закупки — пока не используется: из файла не сохраняется.' },
         ],
         sampleRows: [
@@ -2241,6 +2243,14 @@ function buildRow(raw, rowNum, lookups, cfg) {
                     notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — не записано.', { n: rowNum, col: col.key, v: read.bad }));
                     if (status !== 'error') status = 'warn';
                 }
+                continue;
+            }
+            // CLINIC_API_FIX_V1 (ревью 5) — captureRaw: значение ячейки как есть
+            // (текст — без краёв): число из Excel 2,375 текстом «2.375» стало бы
+            // неоднозначным и выпало бы по правилу числа. Его читает потребитель
+            // (linkSuppliers — readImportNumber).
+            if (col.captureRaw) {
+                if (cellText(cellRaw) !== '') captures[col.capture] = typeof cellRaw === 'string' ? cellRaw.trim() : cellRaw;
                 continue;
             }
             // Текстовая колонка-захват (поставщик, единица закупки) — текст без
