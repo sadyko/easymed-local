@@ -10,6 +10,8 @@ import { recordMessage, touchDevice } from './inbox.js';
 import { receiveMessage } from './receive.js';
 import { ensureProxyDevice } from './discover.js';
 import { buildOru, junkReason, normaliseProxyBarcode, PROXY_QUIET_PREFIX } from './lisproxy-form.js';
+import { worklistLines } from './ingest.js';
+import { worklistEntries } from './lisproxy-form.js';
 
 /** Журнал строки, пока запрос не разобран: если процесс упал посреди — строка так и скажет. */
 export const JOURNAL_PENDING = 'LIS Proxy: запрос сохранён, разбор не завершён';
@@ -76,6 +78,7 @@ export function handleProxyRequest(db, { id, peer = '', body = {}, now = new Dat
   const b = obj(body);
   const method = methodOf(b);
   if (method === 'apiResultSave') return handleResult(db, { id, peer, body: b, now });
+  if (method === 'apiOrderGet') return handleOrder(db, { id, peer, body: b });
   const who = obj(b.order);
   if (str(who.name).trim()) resolveDevice(db, id, { name: str(who.name), label: str(who.host), peer });
   return fallbackReply(method);
@@ -130,4 +133,42 @@ function handleResult(db, { id, peer, body, now }) {
       .run(note.slice(2), note, id);
   }
   return RESULT_OK;
+}
+
+/**
+ * apiOrderGet — рабочий список одной пробирки (раздел 5). Нашлось — JSON
+ * {"0":{…}, …}; не нашлось (любая причина) — ORDER_NOT_FOUND (Р26).
+ */
+function handleOrder(db, { id, peer, body }) {
+  const o = obj(body.order);
+  const sent = str(o.barcode).trim();
+  const who = resolveDevice(db, id, { name: str(o.name), label: str(o.host), peer });
+  const d = who.device;
+  let entries = {};
+  let why = '';
+  let sampleId = sent;
+  if (!d) why = 'прибор не заведён — ' + who.reason;
+  else if (Number(d.added) !== 1) why = 'прибор ещё не добавлен — «Добавить прибор» → «Найдены в сети» → «Добавить»';
+  else if (Number(d.enabled) !== 1) why = 'прибор выключен в «Анализаторах»';
+  else {
+    const bc = normaliseProxyBarcode(sent, { autolumo: d.profile === AUTOLUMO });
+    if (!bc.ok) why = bc.why;
+    else {
+      sampleId = bc.barcode;
+      const w = worklistLines(db, { deviceId: d.id, orderId: Number(bc.barcode.slice(4)) });
+      if (!w.ok) why = w.why;
+      else entries = worklistEntries({ barcode: bc.barcode, codes: w.codes, patient: w.patient, specimen: w.specimen });
+      if (w.ok && !(w.patient && w.patient.date_of_birth)) why = 'дата рождения не указана — прибор получит пустую дату';
+    }
+  }
+  const codes = Object.values(entries).map((e) => e.code);
+  const out = codes.length ? { type: 'json', body: entries } : ORDER_NOT_FOUND;
+  const detail = 'LIS Proxy: рабочий список по пробирке ' + (sampleId || '(пусто)')
+    + (codes.length ? ' — отдано тестов: ' + codes.length + ' (' + codes.join(', ') + ')' + (why ? '; ' + why : '') : ' — ничего не отдано: ' + why)
+    + movedNote(who.moved);
+  // Запрос — не проба: строка разрешена, к заказу не привязана (строка лотка при
+  // заказе держит кассу — billing.js), «запросы N» у прибора считает lis_service_counts.
+  recordMessage(db, { id, deviceId: d ? d.id : null, peer, raw: '', sampleId, status: 'unmatched', detail, kind: 'query', resolved: true });
+  db.prepare('UPDATE lab_device_messages SET reply_body = ? WHERE id = ?').run(replyText(out), id);
+  return out;
 }

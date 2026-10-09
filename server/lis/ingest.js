@@ -1326,3 +1326,51 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
 
   return 'AA';
 }
+
+// ═══ LIS_PROXY_V1 — РАБОЧИЙ СПИСОК ДЛЯ LIS PROXY (apiOrderGet) ═══════════════
+// (docs/specs/2026-10-09-lis-proxy-endpoint-design.md, раздел 5; решение
+// владельца 2026-10-09, п. 1 — отменяет «только результаты» 2026-10-01, §7.)
+//
+// Здесь, а не во входе прокси: тесты на пробирку отдаются по ТЕМ ЖЕ воротам,
+// по которым приём потом примет результат, — одно правило, а не копия. Только
+// чтение: ничего не пишет.
+//   — заказ есть и лабораторный; ворота лаборатории (gateRefusal: не оплачен,
+//     отменён, возврат); не выдан (D7: выданный приём всё равно не перепишет);
+//   — orderSide: панель услуги привязана к этому прибору или к прибору той же
+//     модели (у BS-200 — только к своему), подтверждения BS-200 — для этого
+//     прибора и его эпохи;
+//   — коды — только подтверждённые человеком (D4), по порядку панели; потом —
+//     открытых оплаченных невыданных заказов того же визита, которые кормит этот
+//     прибор (D3, решение владельца 2026-10-06, п. 2): без них анализатор не
+//     прогонит тесты других услуг пробирки. Повторы кода — один раз.
+// @returns {{ok:true, codes:string[], patient:{date_of_birth:string|null, gender:string|null}, specimen:string}
+//          | {ok:false, why:string}}
+export function worklistLines(db, { deviceId, orderId } = {}) {
+  const order = orderId ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen FROM visit_services vs
+                                        JOIN services s ON s.id = vs.service_id WHERE vs.id = ?`).get(orderId) : null;
+  if (!order) return { ok: false, why: 'заказ по номеру пробы не найден' };
+  if (!order.is_lab) return { ok: false, why: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' };
+  const gate = gateRefusal(order);
+  if (gate) return { ok: false, why: gate };
+  if (order.status === 'completed' || isReleased(db, order.id)) return { ok: false, why: 'результат заказа уже выдан' };
+  const sender = deviceId ? db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(deviceId) : null;
+  if (!sender) return { ok: false, why: 'прибор не найден' };
+  const ctx = { deviceId, sender, profile: getProfile(sender.profile), messageModel: null };
+  const own = orderSide(db, order, ctx);
+  if (!own.ok) return { ok: false, why: own.detail };
+  const sides = [own, ...siblingSides(db, order, ctx).filter((s) => !s.closed)];
+  const seen = new Set();
+  const codes = [];
+  for (const s of sides) {
+    for (const a of s.analytes.filter(confirmedCode)) {
+      const code = String(a.device_code).trim();
+      if (seen.has(codeKey(code))) continue;
+      seen.add(codeKey(code));
+      codes.push(code);
+    }
+  }
+  if (!codes.length) return { ok: false, why: 'у панели нет подтверждённых кодов этого прибора' };
+  const patient = db.prepare('SELECT p.date_of_birth, p.gender FROM visits v JOIN patients p ON p.id = v.patient_id WHERE v.id = ?').get(order.visit_id)
+    || { date_of_birth: null, gender: null };
+  return { ok: true, codes, patient, specimen: order.specimen || '' };
+}
