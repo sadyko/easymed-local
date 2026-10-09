@@ -1844,6 +1844,7 @@ export function readSheetRows(XLSX, buf, section, fileName) {
     const ws = wb.Sheets[wb.SheetNames[0]];
     if (!ws) throw new Error('В книге нет ни одного листа.');
     if (csvText == null) percentCellsAsText(ws);   // у текста CSV форматов нет
+    else unwrapEqualsQuoted(ws);                   // CLINIC_API_FIX_V1 (ревью 3) — ="007" → 007
     // PROCUREMENT_IMPORT_V1 — warehouse exports carry a title + blank
     // row above the real header, so `headerRow: 'auto'` scans the
     // first rows for the one matching the most known column names.
@@ -1865,6 +1866,24 @@ function csvFileText(buf, fileName) {
     try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
     catch (e) { text = new TextDecoder('windows-1251').decode(bytes); }
     return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+}
+
+// CLINIC_API_FIX_V1 (ревью 3) — ЯЧЕЙКИ ="…" В CSV. Excel и выгрузки пишут код
+// с ведущими нулями, MRN, ПИНФЛ и телефон как ="007", чтобы они не стали
+// числом. SheetJS без raw разворачивал их сам; с raw: true цена ="150000"
+// отказывала, а код, MRN и телефон ложились буквально «="007"» — повторный
+// импорт по MRN/ПИНФЛ заводил дубли пациентов. Разворачиваем, как раньше
+// SheetJS: вся ячейка ="…" → текст внутри кавычек ("" внутри — одна кавычка).
+function unwrapEqualsQuoted(ws) {
+    for (const addr of Object.keys(ws)) {
+        if (addr[0] === '!') continue;
+        const cell = ws[addr];
+        if (!cell || typeof cell.v !== 'string') continue;
+        const m = /^="(.*)"$/s.exec(cell.v);
+        if (!m) continue;
+        const text = m[1].replace(/""/g, '"');
+        cell.t = 's'; cell.v = text; cell.w = text;
+    }
 }
 
 // CLINIC_API_FIX_V1 (ревью итога) — ЯЧЕЙКА В ПРОЦЕНТНОМ ФОРМАТЕ EXCEL.

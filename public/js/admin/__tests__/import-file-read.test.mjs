@@ -170,3 +170,34 @@ test('.xlsx с именем файла — как раньше: числа чи�
     const raws = readSheetRows(XLSX, buf, 'services', 'uslugi.xlsx');
     assert.deepEqual(raws, [{ name: 'Приём кардиолога', group: 'Консультация', price: 150000 }]);
 });
+
+// CLINIC_API_FIX_V1 (ревью 3) — ЯЧЕЙКИ ="…" В CSV. Excel и выгрузки пишут
+// код с ведущими нулями, MRN, ПИНФЛ и телефон как ="007", чтобы они не
+// стали числом. SheetJS без raw разворачивал их сам; с raw: true (1bccdba)
+// цена ="150000" отказывала, а код, MRN и телефон ложились буквально
+// «="007"» — и повторный импорт по MRN/ПИНФЛ заводил дубли пациентов.
+test('CSV: цена и код в ="…" — 150000 и «007», как до raw: true', () => {
+    const t = 'name,group,price,tax_rate,code\nПриём кардиолога,Консультация,"=""150000""",12,"=""007"""\n';
+    const raws = readSheetRows(XLSX, utf8(t), 'services', 'uslugi.csv');
+    assert.strictEqual(raws[0].price, '150000');
+    assert.strictEqual(raws[0].code, '007');
+    const row = buildImportRow('services', raws[0]);
+    assert.strictEqual(row.payload.price, 150000);
+    assert.strictEqual(row.payload.code, '007');
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+});
+
+test('CSV пациентов: MRN, телефон и ПИНФЛ в ="…" — без «=» и кавычек, ведущие нули на месте', () => {
+    const t = 'last_name;first_name;phone;national_id;mrn\nKarimova;Aziza;="0901234567";="31204900010011";="A-26-00042"\n';
+    const raws = readSheetRows(XLSX, utf8(t), 'patients', 'pacienty.csv');
+    const row = buildImportRow('patients', raws[0]);
+    assert.strictEqual(row.payload.phone, '0901234567');
+    assert.strictEqual(row.payload.national_id, '31204900010011');
+    assert.strictEqual(row.payload.mrn, 'A-26-00042');
+});
+
+test('CSV: обычный текст со знаком «=» внутри не трогается', () => {
+    const t = 'name,group,price\n"А=Б ""тест""",Консультация,1000\n';
+    const raws = readSheetRows(XLSX, utf8(t), 'services', 'u.csv');
+    assert.strictEqual(raws[0].name, 'А=Б "тест"');
+});
