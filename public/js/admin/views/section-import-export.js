@@ -1454,11 +1454,23 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
             // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
             const btn = ev.currentTarget;
+            // CLINIC_API_FIX_V1 (ревью 4, M1) — второй щелчок, пока импорт идёт
+            // (или после импорта с итогом), второго импорта не запускает; галочка
+            // «Обновлять существующие» на это время выключена — её смена
+            // пересобрала бы строки и включила кнопку посреди записи.
+            if (importing || imported) return;
+            importing = true;
             btn.disabled = true;
+            btn.setAttribute('disabled', '');
+            updateExistingInp.disabled = true;
             try { await runImport(); }
             // CLINIC_API_FIX_V1 (ревью 3) — после импорта с итогом кнопка не
             // возвращается: повтор того же файла задвоил бы новые строки.
-            finally { if (btn?.isConnected && !imported) btn.disabled = false; }
+            finally {
+                importing = false;
+                updateExistingInp.disabled = false;
+                if (btn?.isConnected && !imported) { btn.disabled = false; btn.removeAttribute('disabled'); }
+            }
         },
     }, Icon('Check', { size: 14 }), ' Импортировать');
 
@@ -1467,6 +1479,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
     const result = h('div', { class: 'imx-result', role: 'status' });
     const cancelBtn = h('button', { class: 'btn', onclick: close }, 'Отмена');
     let imported = false;
+    let importing = false;   // CLINIC_API_FIX_V1 (ревью 4, M1) — импорт идёт
 
     // IMPORTER_UI_V2 — `modal-compact` matters: MODAL_FULLSCREEN_V1 (admin.css)
     // stretches every other .modal-card to the whole viewport, which is why this
@@ -1534,11 +1547,11 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 trf('Колонки не распознаны и не импортируются: {list}.', { list: unknown.join(', ') })) : null,
         ].filter(Boolean));
         paintPreview();
-        if (validCount > 0 && !imported) confirmBtn.removeAttribute('disabled');
+        if (validCount > 0 && !imported && !importing) confirmBtn.removeAttribute('disabled');
         else                confirmBtn.setAttribute('disabled', '');
     }
     updateExistingInp.addEventListener('change', () => {
-        if (!lookups || !rawRows.length) return;
+        if (!lookups || !rawRows.length || importing) return;   // ревью 4 (M1) — не посреди записи
         buildParsed();
         paintParsed();
     });
@@ -1567,6 +1580,10 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             status.textContent = trf('Не удалось прочитать файл: {msg}', { msg: e.message || e });
             clear(preview);
             confirmBtn.setAttribute('disabled', '');
+        } finally {
+            // CLINIC_API_FIX_V1 (ревью 4, I3) — поле очищается: браузер не шлёт
+            // change, если выбран тот же файл, и исправленный файл не перечитывался.
+            fileInput.value = '';
         }
     }
 
@@ -1796,7 +1813,10 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             if (warned)   parts.push(trf('с замечаниями: {n}', { n: warned }));
             msg = trf('Импортировано строк: {n} · {parts}.', { n: ok, parts: parts.join(' · ') });
         } else {
-            msg = trf('Импорт не удался — отклонено строк: {n}.', { n: failed }) + (lastError ? ' ' + lastError : '');
+            // Ревью 4 (M2) — и строки, не ввезённые из-за ошибок в самом файле.
+            msg = trf('Импорт не удался — отклонено строк: {n}.', { n: failed })
+                + (refusedInFile ? ' ' + trf('не импортировано (ошибки в файле): {n}', { n: refusedInFile }) + '.' : '')
+                + (lastError ? ' ' + lastError : '');
         }
         if (afterMsg) msg += ' ' + afterMsg;
         toast(msg, (ok === 0 || afterFailed) ? 'fail' : (failed || refusedInFile || warned) ? 'warn' : 'info');
@@ -1810,17 +1830,22 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
     // почему (таблица причин остаётся ниже). Окно не закрывается само;
     // «Импортировать» выключена до нового файла — повтор задвоил бы строки.
     function showResult(sum) {
-        imported = true;
-        confirmBtn.setAttribute('disabled', '');
-        confirmBtn.disabled = true;
-        cancelBtn.textContent = tr('Закрыть');
+        // CLINIC_API_FIX_V1 (ревью 4, M2) — не записано ничего: это не «Импорт
+        // завершён», и «Импортировать» остаётся — повторить, когда сервер ответит.
+        const nothing = sum.ok === 0;
+        imported = !nothing;
+        if (!nothing) {
+            confirmBtn.setAttribute('disabled', '');
+            confirmBtn.disabled = true;
+            cancelBtn.textContent = tr('Закрыть');
+        }
         clear(result);
         const line = (text, color) => h('div', color ? { style: { color } } : null, text);
         const split = [];
         if (sum.inserted) split.push(trf('новых: {n}', { n: sum.inserted }));
         if (sum.updated)  split.push(trf('обновлено: {n}', { n: sum.updated }));
         result.append(...[
-            h('b', null, 'Импорт завершён'),
+            h('b', null, nothing ? 'Импорт не выполнен' : 'Импорт завершён'),
             line(trf('Импортировано строк: {n}', { n: sum.ok }) + (split.length ? ' (' + split.join(', ') + ')' : '')),
             sum.refusedInFile ? line(trf('Не импортировано — ошибки в файле: {n}', { n: sum.refusedInFile }), 'var(--crit-700)') : null,
             sum.failed ? line(trf('Не записано — ошибка при записи: {n}', { n: sum.failed }) + (sum.lastError ? ' — ' + sum.lastError : ''), 'var(--crit-700)') : null,

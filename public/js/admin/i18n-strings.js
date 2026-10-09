@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (ревью 4) — окно импорта: ничего не записано (views/section-import-export.js)
+  "Импорт не выполнен": {"en":"The import did not go through","ru":"Импорт не выполнен","uz":"Import bajarilmadi"},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью 4) — импорт услуг: пустые цена, НДС, доля у обновляемой — предупреждение и подсказки (views/section-import-export.js)
   "Строка {n}: {col} пусто — оставлено как было ({v}).": {"en":"Row {n}: {col} is empty — left as it was ({v}).","ru":"Строка {n}: {col} пусто — оставлено как было ({v}).","uz":"{n}-qator: {col} bo'sh — avvalgidek qoldirildi ({v})."},   // CLINIC_API_FIX_V1
   "НДС, %: пусто — 12 для новой услуги, без изменений для существующей.": {"en":"VAT, %: empty — 12 for a new service, unchanged for an existing one.","ru":"НДС, %: пусто — 12 для новой услуги, без изменений для существующей.","uz":"QQS, %: bo'sh — yangi xizmat uchun 12, mavjud xizmat uchun o'zgarishsiz."},   // CLINIC_API_FIX_V1

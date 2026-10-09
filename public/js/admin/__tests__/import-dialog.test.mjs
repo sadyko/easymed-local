@@ -81,7 +81,7 @@ globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
 // ---- поддельный сервер ------------------------------------------------------
-const W = { writes: [], storedReads: 0, failExisting: false, failStored: false, gatewayOk: false };
+const W = { writes: [], storedReads: 0, failExisting: false, failStored: false, gatewayOk: false, delayMs: 0, failWrites: false };
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
@@ -93,7 +93,12 @@ globalThis.fetch = async (url, opts = {}) => {
     }
     if (u.startsWith('/api/db')) {
         const d = JSON.parse(opts.body || '{}');
-        if (d.op !== 'select') { W.writes.push(d.table + ':' + d.op); return ok({ data: [] }); }
+        if (d.op !== 'select') {
+            W.writes.push(d.table + ':' + d.op);
+            if (W.delayMs) await new Promise((r) => setTimeout(r, W.delayMs));   // ревью 4 — медленная запись
+            if (W.failWrites) return bad('Сервер недоступен');                    // ревью 4 — запись не прошла
+            return ok({ data: [] });
+        }
         if (d.table === 'services') {
             if (/doctor_tier_from/.test(String(d.columns))) {   // сохранённый список (loadLookups)
                 W.storedReads++;
@@ -384,4 +389,73 @@ test('подписи о колонках — на трёх языках', async 
         const e = STRINGS[k];
         assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
     }
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 (ревью 4) — ОКНО ИМПОРТА:
+//  • I3: поле файла очищается после чтения — тот же файл можно выбрать снова
+//    (браузер не шлёт change, если значение поля не изменилось);
+//  • M1: пока импорт идёт, «Импортировать» и «Обновлять существующие»
+//    выключены; второй щелчок не запускает второй импорт;
+//  • M2: не ввезено ничего — итог не говорит «Импорт завершён», кнопка
+//    остаётся для повтора, сообщение называет и строки с ошибками в файле;
+//    сообщения об ошибке окрашены (admin.css).
+// ---------------------------------------------------------------------------
+const checkboxOf = (overlay) => all(overlay).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'checkbox');
+const fileInputOf = (overlay) => all(overlay).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'file');
+
+test('I3: после чтения файла поле выбора очищено — тот же файл можно выбрать снова', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    BODY.children.length = 0;
+    await openSectionImporter({ sectionKey: 'services', onImported() {} });
+    const overlay = BODY.children.find((n) => String(n.className).includes('modal'));
+    const inp = fileInputOf(overlay);
+    inp.value = 'C:\\fakepath\\services.xlsx';
+    inp.dispatchEvent({ type: 'change', target: { files: [FILE()] } });
+    await settle(150);
+    assert.strictEqual(inp.value, '', 'поле файла не очищено');
+});
+
+test('M1: пока импорт идёт — кнопка и галочка выключены, второй щелчок и галочка не запускают второй импорт', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false, delayMs: 300 });
+    try {
+        const { overlay, confirm } = await openWith(sheetFile([['name', 'group', 'price'], ['Новая A', 'Консультация', 1000], ['Новая B', 'Консультация', 1000]]));
+        const box = checkboxOf(overlay);
+        confirm.click();
+        await settle(60);
+        assert.ok(confirm.disabled === true || confirm.hasAttribute('disabled'), 'кнопка включена во время импорта');
+        assert.strictEqual(box.disabled, true, 'галочка включена во время импорта');
+        box.checked = false; box.dispatchEvent({ type: 'change' });
+        assert.ok(confirm.disabled === true || confirm.hasAttribute('disabled'), 'галочка во время импорта включила кнопку');
+        confirm.click();
+        await settle(900);
+        assert.strictEqual(W.writes.filter((w) => w === 'services:insert').length, 1, 'второй импорт: ' + JSON.stringify(W.writes));
+    } finally { W.delayMs = 0; }
+});
+
+test('M2: не записано ничего — «Импорт не выполнен», кнопка доступна для повтора, сообщение называет и ошибки файла', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false, failWrites: true });
+    try {
+        const { overlay, confirm } = await openWith(sheetFile([['name', 'group', 'price'], ['Новая X', 'Консультация', 1000], ['Новая Y', 'Консультация', 'нет']]));
+        confirm.click();
+        await settle(200);
+        const text = resultText(overlay);
+        assert.ok(!/Импорт завершён/.test(text), 'ничего не записано, а итог «Импорт завершён»: ' + text);
+        assert.match(text, /Импорт не выполнен/);
+        assert.ok(!(confirm.disabled === true) && !confirm.hasAttribute('disabled'), 'кнопка выключена — повторить нельзя');
+        const t = document.getElementById('toast');
+        assert.strictEqual(t.dataset.kind, 'fail');
+        assert.match(t.textContent, /не импортировано \(ошибки в файле\): 1/, t.textContent);
+    } finally { W.failWrites = false; }
+});
+
+test('сообщение об ошибке окрашено (admin.css), цветом опасности из токенов', () => {
+    const css = fs.readFileSync(new URL('../../../css/admin.css', import.meta.url), 'utf8');
+    assert.match(css, /\.toast\[data-kind="fail"\]\s*\{[^}]*background:\s*var\(--crit-\d+\)/);
+});
+
+test('подпись «Импорт не выполнен» — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    const e = STRINGS['Импорт не выполнен'];
+    assert.ok(e && e.uz && e.en);
 });
