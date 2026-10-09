@@ -25,6 +25,8 @@ import { splitTray, groupReceiving, staleSeriesRest, seriesPendingRest, isLocalI
 import { peerNotes, hasUnreadableText } from './lab-devices-lists.js?v=lists4';
 // LIS_PROXY_V1 — карточка «LIS Proxy».
 import { mountProxyCard } from './lab-proxy-card.js';
+import { isProxyDevice, proxyAddress, bothPaths } from './lab-devices-lists.js?v=lists4';   // LIS_PROXY_V1
+import { PROXY_MODELS } from '../../shared/lisproxy-models.js';   // LIS_PROXY_V1
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
 const TRANSPORTS = [
@@ -88,6 +90,11 @@ const GENERIC_MODEL = '__lis_generic_hl7__';
 const GENERIC_LABEL = 'Другой анализатор (общий HL7)';
 // Тот же текст — у отказа сервера (rpc/lis.js lis_device_add): один ключ словаря.
 const MODEL_REQUIRED = 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».';
+// LIS_PROXY_V1 — прибор за LIS Proxy (решение владельца 2026-10-09, п. 6). Тот же текст — у отказа сервера (rpc/lis.js).
+const PROXY_MODEL_REQUIRED = 'Через LIS Proxy Easy-Med принимает только BS-200, BC-780 и AutoLumo A1000 — выберите одну из этих моделей.';
+const PROXY_ADOPT_HINT = 'LIS Proxy не сообщает модель анализатора — выберите её: BS-200, BC-780 или AutoLumo A1000.';
+const PROXY_FORM_NOTE = 'Подключение: через LIS Proxy — адрес лабораторного ПК меняется сам, править его не нужно.';
+const BOTH_PATHS_NOTE = '{model} присылает результаты и напрямую, и через LIS Proxy. Если это один и тот же анализатор — оставьте один путь, иначе результаты придут дважды.';
 /** Прибор, у которого человек выбрал «Другой анализатор (общий HL7)». */
 const isGenericModel = (d) => !!d && !String(d.profile || '').trim() && Number(d.model_confirmed) === 1;
 // LIS_VENDOR_EXACT_V1 — D10: строка лотка у сообщения с непрочитанными буквами.
@@ -317,12 +324,14 @@ export async function mountLabDevices(container) {
             state.loadError,
             split.found.length,
             split.table.map((d) => [d.id, d.name, d.profile, d.discovered, d.model_confirmed, d.transport, d.host, d.port, d.enabled,
+                d.via, d.proxy_label, d.proxy_ip,   // LIS_PROXY_V1
                 livenessText(d.last_seen_at, serverNow()).text,
                 // LIS_REAL_ANALYZERS_V1 — звонок (состояние без секунд) и служебные за сегодня
                 d.dial, dialSig(dialEntry(d)), countsOf(d)]),
             state.profiles.map((p) => [p.key, p.vendor, p.model, p.channelsSource, p.wireSource]),
             !!(state.listeners && Array.isArray(state.listeners.dialing)),
             peerNotesSig(peerNotesNow(true)),   // LIS_VENDOR_EXACT_V1 — D14: беды соединений
+            bothPaths(state.devices, serverNow()),   // LIS_PROXY_V1 — один анализатор, два пути
         ]);
     }
 
@@ -342,6 +351,14 @@ export async function mountLabDevices(container) {
         // под заголовком, и при пустой таблице тоже: такой прибор строки не заводит.
         const noisy = peerNotesNow(true);
         if (noisy.length) devicesCard.appendChild(peerNotesBlock(noisy));
+        // LIS_PROXY_V1 — одна модель слышна и напрямую, и через LIS Proxy: один анализатор — один приёмник.
+        const both = bothPaths(state.devices, serverNow());
+        if (both.length) {
+            devicesCard.appendChild(peerNotesBlock(both.map((key) => {
+                const p = profileOf(key);
+                return { kind: 'warn', key: BOTH_PATHS_NOTE, params: { model: p ? p.model : key }, hintKey: null };
+            })));
+        }
 
         if (state.loadError) {
             devicesCard.appendChild(h('div', { class: 'empty', style: { padding: '26px' } },
@@ -368,7 +385,7 @@ export async function mountLabDevices(container) {
             // LIS_REAL_ANALYZERS_V1 — кто кому звонит, служебные за сегодня, подпись модели.
             const conn = connectionOf(d);
             const dials = conn && Number(d.dial) === 1;
-            const sum = serviceSummary(countsOf(d));
+            const sum = serviceSummary(countsOf(d), { proxy: isProxyDevice(d) });   // LIS_PROXY_V1 — через прокси рабочий список отдаётся
             const note = modelNote(p);
             tb.appendChild(h('tr', null,
                 h('td', { style: { fontWeight: 600 } }, d.name),
@@ -396,7 +413,7 @@ export async function mountLabDevices(container) {
                 // у прибора, которому звонит Easy-Med, — состояние соединения.
                 h('td', { style: { fontSize: '12.5px' } },
                     conn ? h('div', null, trf(conn.key, conn.params)) : h('div', null, tr(TRANSPORT_LABEL[d.transport] || d.transport)),
-                    conn && !dials ? h('div', { class: 'cell-mono muted', style: { fontSize: '12.5px' } }, d.host || tr('любой адрес')) : null,
+                    conn && !dials && !isProxyDevice(d) ? h('div', { class: 'cell-mono muted', style: { fontSize: '12.5px' } }, d.host || tr('любой адрес')) : null,   // LIS_PROXY_V1 — у прокси адрес в строке выше
                     dials ? h('div', { style: { marginTop: '4px' } }, dialNode(d, 'table')) : null),
                 h('td', null, d.enabled ? Tag(tr('включён'), { kind: 'success' }) : Tag(tr('выключен'))),
                 h('td', null, live.kind === 'idle'
@@ -516,6 +533,7 @@ export async function mountLabDevices(container) {
     // ---------- форма прибора ----------
 
     function openForm(device, { fromAdd = false } = {}) {
+        if (isProxyDevice(device)) { openProxyForm(device, { fromAdd }); return; }   // LIS_PROXY_V1
         state.formMode = 'edit';   // LIS_ANALYZER_LIST_V1
         state.backToAdd = fromAdd;   // ревью M3
         formCard.style.display = '';
@@ -780,6 +798,51 @@ export async function mountLabDevices(container) {
         }
     }
 
+    // LIS_PROXY_V1 — «Изменить» прибор за LIS Proxy: название, модель (одна из трёх),
+    // «включён». Адреса, порта и звонка у него нет: адрес лабораторного ПК прокси
+    // сообщает сам (lab_devices.proxy_ip), слушать и звонить нечего.
+    function openProxyForm(device, { fromAdd = false } = {}) {
+        state.formMode = 'edit';
+        state.backToAdd = fromAdd;
+        formCard.style.display = '';
+        clear(formCard);
+        state.dialNodes.add = [];
+        const nameInp = h('input', { type: 'text', value: device.name || '' });
+        const models = state.profiles.filter((p) => PROXY_MODELS.includes(p.key));
+        const profSel = h('select', null,
+            h('option', { value: '', selected: !device.profile ? true : null }, tr('— выберите модель —')),
+            ...models.map((p) => h('option', { value: p.key, selected: p.key === device.profile ? true : null }, p.vendor + ' ' + p.model)));
+        const enabledInp = h('input', { type: 'checkbox', checked: device.enabled ? true : null });
+        const conn = connectionOf(device);
+        formCard.appendChild(h('div', { class: 'card-header' }, h('h3', null, trf('Анализатор: {name}', { name: device.name }))));
+        const body = h('div', { class: 'ld-form' });
+        body.appendChild(h('div', { class: 'ld-form-fields' }, field(tr('Название'), nameInp), field(tr('Модель'), profSel)));
+        body.appendChild(h('div', { class: 'ld-form-notes muted' },
+            conn ? h('p', null, trf(conn.key, conn.params)) : null,
+            h('p', null, tr(PROXY_FORM_NOTE))));
+        body.appendChild(h('label', { class: 'ld-form-check' }, enabledInp, h('span', null, tr('Включён — слушать этот прибор'))));
+        body.appendChild(h('div', { class: 'ld-form-foot' },
+            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save }, tr('Сохранить')),
+            h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: leaveForm }, tr('Отмена')),
+            h('span', { class: 'grow' }),
+            h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => removeDevice(device) }, tr('Удалить'))));
+        formCard.appendChild(body);
+        nameInp.focus();
+
+        async function save() {
+            const name = nameInp.value.trim();
+            if (!name) { toast(tr('Укажите название прибора'), 'warn'); return; }
+            if (!profSel.value) { toast(tr(PROXY_MODEL_REQUIRED), 'warn'); profSel.focus(); return; }
+            // Только эти поля: transport, host, port, dial у строки прокси не трогаются.
+            const res = await supabase.from('lab_devices').update({ name, profile: profSel.value, enabled: enabledInp.checked ? 1 : 0, model_confirmed: 1 }).eq('id', device.id);
+            if (res.error) { toast(trf('Не удалось сохранить прибор: {msg}', { msg: res.error.message || res.error }), 'fail'); return; }
+            toast(tr('Прибор сохранён'));
+            const back = state.backToAdd;
+            await reload();
+            if (back) openAddWindow(); else closeForm();
+        }
+    }
+
     // Ревью M3 — форма, открытая из окна «Добавить прибор», возвращает туда
     // («Отмена» здесь, «Сохранить» и «Удалить» — так же); открытая из таблицы
     // — закрывается, как прежде.
@@ -842,7 +905,8 @@ export async function mountLabDevices(container) {
         return JSON.stringify([
             state.loadError,
             split.table.length > 0,
-            split.found.map((d) => [d.id, d.name, d.sending_app, d.host, d.port, d.enabled, d.profile, livenessText(d.last_seen_at, serverNow()).text]),
+            split.found.map((d) => [d.id, d.name, d.sending_app, d.host, d.port, d.enabled, d.profile, livenessText(d.last_seen_at, serverNow()).text,
+                d.via, d.proxy_name, d.proxy_label, d.proxy_ip]),   // LIS_PROXY_V1
             split.waiting.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.profile, d.transport, d.dial]),
             // LIS_REAL_ANALYZERS_V1 — порты и состояния звонков без секунд:
             // «повтор через 30 с» обновляется на месте (refreshDialNodes), окно
@@ -901,9 +965,10 @@ export async function mountLabDevices(container) {
                     // назвал себя сам (MSH-3, lab_devices.sending_app, мигр. 229):
                     // его пишет только сервер, а имя человек может поменять.
                     // Строка без него (сервер старее миграции) — по имени, как раньше.
-                    h('td', { style: { fontWeight: 600 } }, d.sending_app || d.name),
+                    // LIS_PROXY_V1 — находка LIS Proxy: «LIS Proxy · имя в прокси».
+                    h('td', { style: { fontWeight: 600 } }, isProxyDevice(d) ? 'LIS Proxy · ' + (d.proxy_name || d.name) : (d.sending_app || d.name)),
                     h('td', { class: 'muted' }, p ? p.vendor + ' ' + p.model : tr('модель не определена')),
-                    h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } }, d.host || tr('адрес неизвестен')),
+                    h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } }, isProxyDevice(d) ? proxyAddress(d) : (d.host || tr('адрес неизвестен'))),   // LIS_PROXY_V1
                     h('td', null, live.kind === 'idle'
                         ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, live.text)
                         : Tag(live.text, { kind: live.kind })),
@@ -984,15 +1049,19 @@ export async function mountLabDevices(container) {
         // оставляют MSH-3/4 пустыми) — модель не подставляется, первый пункт —
         // «— выберите модель —»; последний — «Другой анализатор (общий HL7)».
         const guessed = String(d.profile || '').trim();
+        // LIS_PROXY_V1 — находка LIS Proxy: модель не угадывается, выбор — из трёх (решение владельца 6), «общего HL7» нет.
+        const proxy = isProxyDevice(d);
+        const models = proxy ? state.profiles.filter((p) => PROXY_MODELS.includes(p.key)) : state.profiles;
         const profSel = h('select', null,
             h('option', { value: '', selected: !guessed ? true : null }, guessed ? tr('модель не определена') : tr('— выберите модель —')),
-            ...state.profiles.map((p) => h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)),
-            state.profiles.length ? h('option', { value: GENERIC_MODEL }, tr(GENERIC_LABEL)) : null);
+            ...models.map((p) => h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)),
+            state.profiles.length && !proxy ? h('option', { value: GENERIC_MODEL }, tr(GENERIC_LABEL)) : null);
         formCard.appendChild(h('div', { class: 'card-header' }, h('h3', null, trf('Добавить «{name}»', { name: d.name }))));
         formCard.appendChild(h('div', { class: 'row', style: { gap: '14px', flexWrap: 'wrap', marginBottom: '10px' } },
             field(tr('Название'), nameInp), field(tr('Модель'), profSel)));
         formCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px' } },
-            profileOf(d.profile)
+            proxy ? tr(PROXY_ADOPT_HINT)   // LIS_PROXY_V1
+            : profileOf(d.profile)
                 ? tr('Модель подобрана по тому, как прибор себя назвал, — проверьте её.')
                 : tr('Модель по имени прибора не определилась — выберите её сами.')));
         const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save }, tr('Добавить'));
@@ -1008,7 +1077,7 @@ export async function mountLabDevices(container) {
             // модель уходит только выбранная, и тогда, когда lis_profiles не
             // ответил и в списке один пустой пункт, догадка остаётся.
             const choice = profSel.value;
-            if (!choice && !guessed) { toast(tr(MODEL_REQUIRED), 'warn'); profSel.focus(); return; }
+            if (!choice && (!guessed || proxy)) { toast(tr(proxy ? PROXY_MODEL_REQUIRED : MODEL_REQUIRED), 'warn'); profSel.focus(); return; }   // LIS_PROXY_V1 — proxy
             // LIS_VENDOR_EXACT_V1 — D2: «Добавить» — RPC lis_device_add: то же
             // правило проверяет сервер (раньше это была голая запись added = 1).
             // Модель выбрана — её проверил человек: пометка «найден сам —
@@ -1021,6 +1090,7 @@ export async function mountLabDevices(container) {
             addBtn.disabled = false;
             if (error) {
                 if (error.code === 'model_required') { toast(tr(MODEL_REQUIRED), 'warn'); profSel.focus(); return; }
+                if (error.code === 'proxy_model_required') { toast(tr(PROXY_MODEL_REQUIRED), 'warn'); profSel.focus(); return; }   // LIS_PROXY_V1
                 // Прибор уже добавили (вторая вкладка): сказать его словами и показать, где он теперь.
                 if (error.code === 'already_added') { toast(tr(error.message), 'warn'); closeForm(); await reload(); return; }
                 toast(trf('Не удалось добавить прибор: {msg}', { msg: error.message || error }), 'fail');

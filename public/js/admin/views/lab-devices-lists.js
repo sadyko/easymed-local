@@ -12,6 +12,9 @@
 // LIS_DISCOVERY_FIX_V1 (экран) — и одно правило лотка «Необработанные»: какую
 // строку нельзя «Привязать» (isTruncatedMessage).
 
+import { isProxyDevice } from '../../shared/lisproxy-models.js';   // LIS_PROXY_V1
+export { isProxyDevice };
+
 /** @returns {{table:object[], found:object[], waiting:object[]}} */
 export function splitDevices(devices = []) {
     const table = [], found = [], waiting = [];
@@ -274,14 +277,16 @@ export const QUERY_HINT_MIN = 5;
  * «сегодня: контроль 3, калибровка 1, запросы 12» — только ненулевые части.
  * @returns {{parts:Array<{key:string, params:{n:number}}>, queryHint:boolean}|null}
  */
-export function serviceSummary(c) {
+export function serviceSummary(c, { proxy = false } = {}) {   // LIS_PROXY_V1 — proxy: прибор за LIS Proxy
     if (!c) return null;
     const parts = [];
     if (Number(c.qc) > 0) parts.push(P('контроль {n}', { n: Number(c.qc) }));
     if (Number(c.calibration) > 0) parts.push(P('калибровка {n}', { n: Number(c.calibration) }));
     if (Number(c.query) > 0) parts.push(P('запросы {n}', { n: Number(c.query) }));
     if (!parts.length) return null;
-    return { parts, queryHint: Number(c.query) >= QUERY_HINT_MIN };
+    // LIS_PROXY_V1 — через LIS Proxy рабочий список отдаётся (решение владельца 2026-10-09, п. 1):
+    // подсказка «Easy-Med заказов не отдаёт, выключите запрос» у такого прибора была бы неправдой.
+    return { parts, queryHint: !proxy && Number(c.query) >= QUERY_HINT_MIN };
 }
 
 // ── подпись модели в таблице ─────────────────────────────────────────────────
@@ -312,6 +317,12 @@ export function modelNote(p) {
  */
 export function connectionOf(d) {
     if (!d || d.transport !== 'mllp') return null;
+    // LIS_PROXY_V1 — прибор за LIS Proxy: подпись (обычно имя лабораторного ПК) и его адрес.
+    if (isProxyDevice(d)) {
+        return d.proxy_label
+            ? P('через LIS Proxy · {label} ({ip})', { label: d.proxy_label, ip: d.proxy_ip || '—' })
+            : P('через LIS Proxy · {ip}', { ip: d.proxy_ip || '—' });
+    }
     if (Number(d.dial) === 1) return P('сеть · Easy-Med звонит {host}:{port}', { host: d.host || '—', port: d.port || '—' });
     return P('сеть · прибор звонит на {port}', { port: d.port || 2575 });
 }
@@ -402,4 +413,28 @@ const UNREADABLE = String.fromCharCode(0xFFFD);
 /** В сообщении лотка есть непрочитанные буквы (U+FFFD). */
 export function hasUnreadableText(m) {
     return !!m && String(m.raw == null ? '' : m.raw).includes(UNREADABLE);
+}
+
+// ── LIS_PROXY_V1 — прибор за LIS Proxy ───────────────────────────────────────
+// (docs/specs/2026-10-09-lis-proxy-endpoint-design.md, раздел 7.)
+
+/** «Адрес» находки LIS Proxy: «подпись (адрес)» или адрес. */
+export function proxyAddress(d) {
+    if (!d) return '—';
+    const ip = d.proxy_ip || '—';
+    return d.proxy_label ? d.proxy_label + ' (' + ip + ')' : ip;
+}
+
+/** Сколько времени прибор считается «слышанным» для предупреждения «один анализатор — один приёмник». */
+export const BOTH_PATHS_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Модели, которые за сутки присылали и напрямую (свой порт), и через LIS Proxy.
+ * Один анализатор на двух путях — результаты придут дважды (§0 п. 10 документа).
+ * @returns {string[]} ключи профилей, по алфавиту
+ */
+export function bothPaths(devices = [], now = Date.now()) {
+    const heard = (d) => !!d && !!d.profile && !!d.last_seen_at && now - Date.parse(d.last_seen_at) <= BOTH_PATHS_WINDOW_MS;
+    const direct = new Set(devices.filter((d) => heard(d) && !isProxyDevice(d)).map((d) => d.profile));
+    return [...new Set(devices.filter((d) => heard(d) && isProxyDevice(d) && direct.has(d.profile)).map((d) => d.profile))].sort();
 }

@@ -185,3 +185,58 @@ test('«Копировать адрес»: буфер обмена есть — 
     delete document.createRange;
   }
 });
+
+test('таблица: прибор за LIS Proxy — «через LIS Proxy · подпись (адрес)»; подсказки «Easy-Med заказов не отдаёт» нет', async () => {
+  reset();
+  COUNTS = [{ device_id: 1, qc: 0, calibration: 0, query: 12 }];
+  const root = await mount();
+  // Только таблица приборов: инструкция ниже (свёрнута, но в документе) про свой порт говорит «Easy-Med заказов не отдаёт».
+  const text = textOf(walk(root).find((n) => n.tagName === 'TABLE'));
+  assert.ok(text.includes('через LIS Proxy · LAB-PC-1 (192.168.1.21)'), text);
+  assert.ok(text.includes('запросы 12'), text);
+  assert.ok(!text.includes('Easy-Med заказов не отдаёт'));
+  assert.ok(!text.includes('любой адрес'));
+});
+
+test('одна модель напрямую и через LIS Proxy — предупреждение «один анализатор — один приёмник»', async () => {
+  reset({ devices: [PROXY_BS, MLLP_BS] });
+  const root = await mount();
+  assert.ok(textOf(root).includes('BS-200 присылает результаты и напрямую, и через LIS Proxy.'));
+});
+
+test('«Найдены в сети»: «LIS Proxy · имя», «подпись (адрес)»; «Добавить» — только три модели, без «общего HL7»; без модели — отказ словами', async () => {
+  reset({ devices: [PROXY_BS, PROXY_FOUND] });
+  const root = await mount();
+  findButtonByText(root, /Добавить прибор/).click();
+  await tick();
+  const text = textOf(root);
+  assert.ok(text.includes('LIS Proxy · lumo'));
+  assert.ok(text.includes('LAB-PC-2 (192.168.1.22)'));
+  findButtons(root).find((b) => /^\s*(<svg[\s\S]*?<\/svg>)?\s*Добавить\s*$/.test(textOf(b))).click();
+  await tick();
+  const sel = walk(root).find((n) => n.tagName === 'SELECT');
+  const values = walk(sel).filter((n) => n.tagName === 'OPTION').map((o) => o.attrs.value ?? o.value);
+  assert.deepStrictEqual(values, ['', 'mindray-bs-200', 'mindray-bc-780', 'autobio-autolumo-a1000']);
+  assert.ok(textOf(root).includes('LIS Proxy не сообщает модель анализатора'));
+  sel.value = '';
+  findButtons(root).filter((b) => /Добавить/.test(textOf(b))).pop().click();
+  await tick();
+  assert.equal(toastMsg, 'Через LIS Proxy Easy-Med принимает только BS-200, BC-780 и AutoLumo A1000 — выберите одну из этих моделей.');
+  assert.ok(!rpcCalls.some((c) => c.name === 'lis_device_add'));
+});
+
+test('«Изменить» прибор LIS Proxy: ни адреса, ни порта, ни звонка; сохраняются имя, модель, «включён»', async () => {
+  reset();
+  const root = await mount();
+  findButtonByText(root, /Изменить/).click();
+  await tick();
+  assert.ok(!walk(root).some((n) => n.tagName === 'INPUT' && n.attrs.type === 'number'), 'поля порта нет');
+  assert.ok(textOf(root).includes('Подключение: через LIS Proxy — адрес лабораторного ПК меняется сам, править его не нужно.'));
+  walk(root).find((n) => n.tagName === 'SELECT').value = 'mindray-bs-200';
+  findButtonByText(root, /Сохранить/).click();
+  await tick(60);
+  const upd = writes.find((w) => w.table === 'lab_devices' && w.op === 'update');
+  assert.ok(upd, JSON.stringify(writes) + ' ' + toastMsg);
+  assert.deepStrictEqual(Object.keys(upd.values).sort(), ['enabled', 'model_confirmed', 'name', 'profile']);
+  assert.ok(!rpcCalls.some((c) => c.name === 'lis_restart'), 'слушателей у прибора прокси нет');
+});

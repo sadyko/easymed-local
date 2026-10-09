@@ -277,3 +277,31 @@ test('D10: сообщение с U+FFFD узнаётся — лоток скаж
   assert.equal(hasUnreadableText({ raw: null }), false);
   assert.equal(hasUnreadableText(null), false);
 });
+
+// ── LIS_PROXY_V1 — прибор за LIS Proxy ──────────────────────────────────────
+import { isProxyDevice, proxyAddress, bothPaths, BOTH_PATHS_WINDOW_MS } from './lab-devices-lists.js';
+
+const PX = { id: 1, via: 'lisproxy', transport: 'mllp', host: '', proxy_name: 'bs200', proxy_label: 'LAB-PC-1', proxy_ip: '192.168.1.21' };
+
+test('LIS Proxy: подключение — подпись и адрес ПК; запросы без подсказки «выключите запрос»', () => {
+  assert.equal(isProxyDevice(PX), true);
+  assert.equal(isProxyDevice({ via: null }), false);
+  assert.deepEqual(connectionOf(PX), { key: 'через LIS Proxy · {label} ({ip})', params: { label: 'LAB-PC-1', ip: '192.168.1.21' } });
+  assert.deepEqual(connectionOf({ ...PX, proxy_label: null }), { key: 'через LIS Proxy · {ip}', params: { ip: '192.168.1.21' } });
+  assert.equal(serviceSummary({ device_id: 1, qc: 0, calibration: 0, query: QUERY_HINT_MIN + 5 }, { proxy: true }).queryHint, false);
+  assert.equal(serviceSummary({ device_id: 1, qc: 0, calibration: 0, query: QUERY_HINT_MIN + 5 }).queryHint, true, 'свой порт — как прежде');
+  assert.equal(proxyAddress(PX), 'LAB-PC-1 (192.168.1.21)');
+  assert.equal(proxyAddress({ ...PX, proxy_label: '' }), '192.168.1.21');
+});
+
+test('LIS Proxy: одна модель за сутки и напрямую, и через прокси — в списке; давняя или другая модель — нет', () => {
+  const now = Date.parse('2026-10-09T12:00:00Z');
+  const recent = '2026-10-09T11:00:00Z';
+  const old = new Date(now - BOTH_PATHS_WINDOW_MS - 1000).toISOString();
+  const direct = { id: 2, profile: 'mindray-bs-200', last_seen_at: recent };
+  const proxy = { ...PX, profile: 'mindray-bs-200', last_seen_at: recent };
+  assert.deepEqual(bothPaths([direct, proxy], now), ['mindray-bs-200']);
+  assert.deepEqual(bothPaths([{ ...direct, last_seen_at: old }, proxy], now), []);
+  assert.deepEqual(bothPaths([{ ...direct, profile: 'mindray-bc-20' }, proxy], now), []);
+  assert.deepEqual(bothPaths([proxy], now), []);
+});
