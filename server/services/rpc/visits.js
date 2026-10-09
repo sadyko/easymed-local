@@ -147,6 +147,7 @@ function parseBook(book) {
 
 // args: { patient_id, date (ISO datetime or YYYY-MM-DD), doctor_id?,
 //         visit_type?, referral_source_id?, branch_id?, notes?,
+//         desk?: true (CRM_UNIFY_V1 — регистрация на стойке, только без book),
 //         book?: { doctor_id, start, duration_minutes?, service_id?, room_id?,
 //                  emergency?, emergency_reason? } }
 // Returns { visit, created, booked, emergency?, cross_branch? }.
@@ -188,6 +189,10 @@ export async function ensureVisit(db, args, user) {
   const sourceId = optInt(args.referral_source_id, 'referral_source_id');
   const visitType = typeof args.visit_type === 'string' && args.visit_type ? args.visit_type : 'outpatient';
   const notes = typeof args.notes === 'string' ? args.notes.slice(0, 1000) : '';
+  // CRM_UNIFY_V1 (Р1) — «пациент у стойки»: быстрая регистрация и «пришёл
+  // сейчас» (registerWalkIn). Действует только без book; кому и на какой день
+  // верить, решает шаг связи (crm/visit-link.js, deskArrival).
+  const desk = args.desk === true || args.desk === 'true';
 
   // CRM_UNIFY_V1 — связь с заявками — crm/visit-link.js (crmLinkVisit), после записи.
 
@@ -267,9 +272,12 @@ export async function ensureVisit(db, args, user) {
 
   const out = run();
   if (!book) {
-    crmLinkVisit(db, out.visit.id, user, { undated: true });   // CRM_UNIFY_V1 — строки «без даты» берёт только ensure_visit
+    // CRM_UNIFY_V1 — строки «без даты» берёт только ensure_visit; desk — только здесь, без записи на время.
+    crmLinkVisit(db, out.visit.id, user, { undated: true, desk });
     // CRM_CALENDAR_MIRROR_V1 — строки заявки, которые визит только что взял,
-    // становятся строками визита (до прихода).
+    // становятся строками визита (до прихода). CRM_UNIFY_V1 — на стойке
+    // (desk) строки этого дня уже закрыты приходом, и зеркало их не копирует:
+    // в счёт идут строки, которые выбрал регистратор.
     mirrorVisit(db, out.visit.id, { actorId: user && user.id });
     return { ...out, booked: false };
   }

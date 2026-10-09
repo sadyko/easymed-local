@@ -56,7 +56,10 @@ test('пришёл: строки визита закрываются, заявк
   db.close();
 });
 
-test('пришёл: заявка на три дня закрывается последним днём, а не первым', () => {
+// CRM_UNIFY_V1 — первый приход закрывает карточку (решение владельца 1); строки
+// других дней остаются в карточке и в календаре как записи. Прежде здесь было
+// «заявка на три дня закрывается последним днём» — правило отменено владельцем.
+test('пришёл: первый приход закрывает заявку на три дня — строки других дней остаются записями', () => {
   const db = freshDb();
   const v1 = addVisit(db, '2026-08-09T09:00:00Z');
   const v2 = addVisit(db, '2026-08-10T09:00:00Z');
@@ -67,23 +70,15 @@ test('пришёл: заявка на три дня закрывается по�
 
   crmVisitStatus(db, { visitId: v1, from: 'scheduled', to: 'arrived' });
 
+  assert.equal(reqRow(db, rid).status, 'came', 'пациент пришёл, а карточка ждёт последнего дня');
   assert.equal(line(db, d1).status, 'done');
-  assert.equal(line(db, d2).status, 'pending', 'второй день закрылся вместе с первым');
-  const after1 = reqRow(db, rid);
-  assert.equal(after1.status, 'scheduled', 'заявка объявлена дошедшей, хотя два дня ещё впереди');
-  assert.equal(after1.scheduled_date, '2026-08-10',
-    'дата заявки осталась вчерашней: ночная автоматика унесёт живую заявку в «Не пришёл»');
+  assert.deepEqual(line(db, d2), { status: 'pending', visit_id: v2 }, 'запись второго дня пропала из карточки');
+  assert.equal(line(db, d3).status, 'pending');
 
+  // Второй приход ничего не ломает: карточка закрыта, строка его дня — 'done'.
   crmVisitStatus(db, { visitId: v2, from: 'scheduled', to: 'arrived' });
-  assert.equal(reqRow(db, rid).scheduled_date, '2026-08-11');
-  assert.equal(reqRow(db, rid).status, 'scheduled');
-
-  // Третий день записали и дождались — вот теперь конверсия.
-  const v3 = addVisit(db, '2026-08-11T09:00:00Z');
-  db.prepare('UPDATE crm_request_services SET visit_id = ? WHERE id = ?').run(v3, d3);
-  crmVisitStatus(db, { visitId: v3, from: 'scheduled', to: 'arrived' });
-  assert.equal(line(db, d3).status, 'done');
-  assert.equal(reqRow(db, rid).status, 'came', 'последний день отработан, а заявка так и не закрылась');
+  assert.equal(reqRow(db, rid).status, 'came');
+  assert.equal(line(db, d2).status, 'done');
   db.close();
 });
 
@@ -100,18 +95,43 @@ test('пришёл: недошедшая в прошлый раз заявка �
   db.close();
 });
 
-test('пришёл: заявку, ушедшую дальше «Записан», приход назад не отбрасывает', () => {
+// CRM_UNIFY_V1 — первый приход закрывает карточку (решение владельца 1); строки
+// других дней остаются в карточке и в календаре как записи. Прежде заявка
+// дальше «Записан» с ждущей строкой оставалась на своей ступени.
+test('пришёл: заявка дальше «Записан» тоже закрывается приходом', () => {
   const db = freshDb();
   const vid = addVisit(db);
   const rid = addReq(db, { status: 'approved', date: '2026-08-09' });
   addLine(db, rid, { date: '2026-08-09', visit: vid });
-  addLine(db, rid, { date: '2026-08-15' });   // ждать ещё есть чего
+  const later = addLine(db, rid, { date: '2026-08-15' });   // строка другого дня
 
   crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
 
-  const row = reqRow(db, rid);
-  assert.equal(row.status, 'approved', 'согласованную заявку отбросило назад в «Записан»');
-  assert.equal(row.scheduled_date, '2026-08-15', 'дата не уехала на ближайший оставшийся день');
+  assert.equal(reqRow(db, rid).status, 'came', 'пациент пришёл, а «Согласован» так и стоит');
+  assert.equal(line(db, later).status, 'pending', 'строка другого дня закрылась вместе с приходом');
+  db.close();
+});
+
+test('CRM_UNIFY_V1: приход закрывает и карточку, привязанную к визиту только записью (без строк)', () => {
+  const db = freshDb();
+  const vid = addVisit(db);
+  const rid = addReq(db, { status: 'scheduled', date: '2026-07-01' });   // дата карточки — другая
+  db.prepare("INSERT INTO crm_booking_links (visit_id, request_id, source) VALUES (?, ?, 'match')").run(vid, rid);
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
+  assert.equal(reqRow(db, rid).status, 'came', 'запись календаря без строк заявки так и не закрылась приходом');
+  db.close();
+});
+
+test('CRM_UNIFY_V1: приход не трогает «Отказ» и прочие закрытые — ни по строке, ни по привязке', () => {
+  const db = freshDb();
+  const vid = addVisit(db);
+  const stopped = addReq(db, { status: 'stopped' });
+  addLine(db, stopped, { date: '2026-08-09', visit: vid });
+  const unqualified = addReq(db, { status: 'not_qualified' });
+  db.prepare("INSERT INTO crm_booking_links (visit_id, request_id, source) VALUES (?, ?, 'match')").run(vid, unqualified);
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
+  assert.equal(reqRow(db, stopped).status, 'stopped', 'приход открыл закрытую «Отказ»');
+  assert.equal(reqRow(db, unqualified).status, 'not_qualified');
   db.close();
 });
 
@@ -407,7 +427,10 @@ test('деньги: оплата счёта визита закрывает за
   db.close();
 });
 
-test('деньги: у заявки на три дня оплата одного дня оставляет её в «Записан»', () => {
+// CRM_UNIFY_V1 — первый приход закрывает карточку (решение владельца 1); строки
+// других дней остаются в карточке и в календаре как записи. Прежде оплата
+// одного дня оставляла заявку на три дня в «Записан».
+test('деньги: у заявки на три дня оплата первого дня закрывает её — второй день остаётся записью', () => {
   const db = freshDb();
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'kassa','x','Кассир','cashier')").run();
   const vid = addVisit(db);
@@ -422,10 +445,8 @@ test('деньги: у заявки на три дня оплата одного
   recordPayment(db, { invoice_id: inv, amount: 20000, method: 'cash' }, { id: 9, role: 'cashier' });
 
   assert.equal(line(db, d1).status, 'done');
-  assert.equal(line(db, d2).status, 'pending');
-  const row = reqRow(db, rid);
-  assert.equal(row.status, 'scheduled', 'заявка объявлена дошедшей, хотя второй день ещё впереди');
-  assert.equal(row.scheduled_date, '2026-08-12', 'дата не уехала на ближайший оставшийся день');
+  assert.equal(line(db, d2).status, 'pending', 'второй день закрылся вместе с оплатой первого');
+  assert.equal(reqRow(db, rid).status, 'came', 'пациент заплатил у окна, а карточка ждёт второго дня');
   db.close();
 });
 
@@ -663,7 +684,10 @@ test('долг по ОТМЕНЁННОМУ визиту доказательст
   db.close();
 });
 
-test('счёт по акту у заявки на три дня оставляет её в «Записан» с ближайшей датой', () => {
+// CRM_UNIFY_V1 — первый приход закрывает карточку (решение владельца 1); строки
+// других дней остаются в карточке и в календаре как записи. Прежде счёт по
+// акту одного дня оставлял заявку в «Записан» с ближайшей датой.
+test('счёт по акту у заявки на три дня закрывает её — второй день остаётся записью', () => {
   const db = freshDb();
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'reg','x','Регистратор','registrar')").run();
   db.prepare("INSERT INTO services (id, name, price) VALUES (40,'Консультация',100000)").run();
@@ -680,9 +704,7 @@ test('счёт по акту у заявки на три дня оставляе
 
   assert.equal(line(db, d1).status, 'done');
   assert.equal(line(db, d2).status, 'pending');
-  const row = reqRow(db, rid);
-  assert.equal(row.status, 'scheduled');
-  assert.equal(row.scheduled_date, '2026-08-14');
+  assert.equal(reqRow(db, rid).status, 'came');
   db.close();
 });
 

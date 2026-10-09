@@ -1194,6 +1194,10 @@ test('окно быстрой регистрации не пишет в CRM са
   assert.strictEqual(visit.body.patient_id, 501, 'визит заведён не на этого пациента — закроется чужая заявка');
   assert.match(String(visit.body.date), /^\d{4}-\d{2}-\d{2}/,
     'визит заведён без дня: по дню сервер и отбирает строки заявки — ' + JSON.stringify(visit.body));
+  // CRM_UNIFY_V1 — регистрация на стойке = «Пришёл» (решение владельца 1): окно
+  // говорит серверу desk: true, и записи на время (book) у него нет.
+  assert.strictEqual(visit.body.desk, true, 'быстрая регистрация не сказала серверу, что пациент у стойки');
+  assert.ok(!('book' in visit.body), 'регистрация на стойке ушла записью на время');
 
   assert.ok(!calls.some((c) => c.table === 'crm_request_services'),
     'окно снова ходит в crm_request_services само: закрытие строк живёт на сервере, в той же транзакции, что и визит');

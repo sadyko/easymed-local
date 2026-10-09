@@ -46,7 +46,26 @@
 // берут визит, как прежде у ensure_visit, — и затем правило прихода
 // (crmVisitStatus → 'arrived'): строки закрываются, карточка — как при отметке
 // прихода. «Записан» пришедшему не ставится. Отменённый и неявочный визит шаг
-// не трогает.
+// не трогает. Регистрация на стойке по такому визиту идёт по всем шагам (ниже).
+//
+// РЕГИСТРАЦИЯ НА СТОЙКЕ = «ПРИШЁЛ» (CRM_UNIFY_V1, задача 3; решение владельца 1,
+// Р1, Р8). Быстрая регистрация и «пришёл сейчас» (registerWalkIn) шлют
+// ensure_visit с desk: true и без book. Сервер верит этому только от
+// регистратуры и администратора (основная или дополнительная роль) и только по
+// визиту СЕГОДНЯШНЕГО местного дня (deskArrival); иначе desk молча не значит
+// ничего. На стойке:
+//   C. берутся ВСЕ открытые карточки пациента, не только ждущие этот день, —
+//      первый приход закрывает карточку;
+//   D. по телефону — любая открытая карточка без пациента (те же сторожа
+//      номера), не только ждущая этот день;
+//   E. колл-центр карточку не заводит (пациент без карточки её не получает,
+//      решение 2);
+//   G. карточка — в «Пришёл» (wonStageKey) с прежней датой; строки других
+//      дней остаются в карточке и в календаре как записи;
+//   затем правило прихода (crmVisitStatus → 'arrived'): строки этого визита
+//   закрываются, карточки без строк этого дня — тоже. «Отказ», «Пришёл» и
+//   прочие закрытые не трогаются. Предоплата, будущий визит и визит соседа
+//   приходом не становятся.
 //
 // ВНЕ ВИДИМОСТИ ТОГО, КТО ЗАПИСЫВАЕТ, И НИЧЕГО НАРУЖУ: оператор Б записал
 // пациента оператора А — карточка А двигается, а функция не возвращает ничего,
@@ -58,9 +77,10 @@
 //
 // НЕ БРОСАЕТ: заявка не вправе отказать в записи. Ошибка — в лог.
 
-import { openStageKeys, scheduledStageKey, SEED_NO_SHOW_STAGE } from './config.js';
+import { openStageKeys, scheduledStageKey, wonStageKey, SEED_NO_SHOW_STAGE } from './config.js';
 import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL } from './booking-mirror.js';
 import { crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';
+import { hasAnyRole } from '../roles.js';   // CRM_UNIFY_V1 — стойка (deskArrival)
 import { today } from '../domain/day.js';
 import { phoneKey, phoneLikePattern, digitsOf } from '../../../public/js/admin/views/crm-phone-match.js';
 
@@ -68,6 +88,8 @@ import { phoneKey, phoneLikePattern, digitsOf } from '../../../public/js/admin/v
 // не старше 30 дней — то же, что attachVisitToCrm.
 export const CALLCENTER_ATTACH_DAYS = 30;
 export const MIN_PHONE_KEY_DIGITS = 7;
+/** CRM_UNIFY_V1 (Р1) — кому сервер верит «пациент у стойки». */
+export const DESK_ROLES = Object.freeze(['admin', 'registrar']);
 const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 const holes = (a) => a.map(() => '?').join(',');
 
@@ -166,43 +188,61 @@ export function waitsForDay(db, requestId, day, { undated = false } = {}) {
 
 /**
  * ОДНА открытая заявка без пациента с ОСНОВНЫМ номером этого пациента — самая
- * новая из ждущих этот приход; только если КАЖДЫЙ номер основного поля у ОДНОЙ
- * карты. null — нет. Сначала ищется заявка (дёшево), владельцы номера
- * считаются, только если она есть (ревью 2, скорость).
+ * новая из ждущих этот приход (на стойке, desk, — самая новая из открытых);
+ * только если КАЖДЫЙ номер основного поля у ОДНОЙ карты. null — нет. Сначала
+ * ищется заявка (дёшево), владельцы номера считаются, только если она есть
+ * (ревью 2, скорость).
  */
-export function phoneLeadFor(db, patientId, open, day, { undated = false } = {}) {
+export function phoneLeadFor(db, patientId, open, day, { undated = false, desk = false } = {}) {
   if (!open.length) return null;
   const p = db.prepare('SELECT phone FROM patients WHERE id = ?').get(patientId);
   const keys = phoneKeysOf(p && p.phone);
   if (!keys.length) return null;
-  const hit = phoneLeadCandidates(db, keys, open).find((id) => waitsForDay(db, id, day, { undated }));
+  const hit = phoneLeadCandidates(db, keys, open).find((id) => desk || waitsForDay(db, id, day, { undated }));
   if (!hit) return null;
   return keysOwnedOnlyBy(db, patientId, keys) ? hit : null;
+}
+
+/**
+ * CRM_UNIFY_V1 (Р1) — ВЕРИТЬ ЛИ «ПАЦИЕНТ У СТОЙКИ». desk приходит из браузера,
+ * поэтому сервер проверяет сам: прислал его регистратор или администратор
+ * (основная или дополнительная роль), и визит — сегодняшнего местного дня.
+ * Колл-центру, врачу, будущему и прошедшему дню — нет. Без book решает дверь
+ * (ensure_visit передаёт desk только без записи на время).
+ */
+export function deskArrival(db, v, user, desk) {
+  return desk === true && !!v && v.day === today(db) && hasAnyRole(user, DESK_ROLES);
 }
 
 /**
  * Связать визит с CRM. Ничего не возвращает (см. шапку) и не бросает.
  * @param {object} db
  * @param {number} visitId
- * @param {object} user — тот, кто записал (роль решает только шаг E)
- * @param {{undated?: boolean}} [opts] — undated: брать строки без даты (только ensure_visit)
+ * @param {object} user — тот, кто записал (роль решает шаг E и стойку)
+ * @param {{undated?: boolean, desk?: boolean}} [opts] — undated: брать строки
+ *        без даты (только ensure_visit); desk: регистрация на стойке (только
+ *        ensure_visit без book; верится по deskArrival — CRM_UNIFY_V1)
  */
-export function crmLinkVisit(db, visitId, user, { undated = false } = {}) {
+export function crmLinkVisit(db, visitId, user, { undated = false, desk = false } = {}) {
   try {
     const v = visitRow(db, visitId);
     if (!v || v.sync_origin != null || !v.patient_id) return;
     const arrived = ARRIVED_STATUSES.includes(v.status);
     if (!arrived && !PRE_ARRIVAL.includes(v.status)) return;   // отменён / не пришёл
-    const linked = db.transaction(() => linkTx(db, v, user, { undated: !!undated, arrived }))();
+    const atDesk = deskArrival(db, v, user, desk);   // CRM_UNIFY_V1 (Р1)
+    const linked = db.transaction(() => linkTx(db, v, user, { undated: !!undated, arrived, desk: atDesk }))();
+    // CRM_UNIFY_V1 — стойка: пациент здесь — правило прихода (строки этого
+    // визита закрываются, карточки без строк этого дня — тоже).
+    if (atDesk) crmVisitStatus(db, { visitId: v.id, from: null, to: ARRIVED_STATUSES[0] });
     // Визит уже «Пришёл»: только что взятые строки закрывает правило прихода.
-    if (arrived && linked) crmVisitStatus(db, { visitId: v.id, from: null, to: v.status });
+    else if (arrived && linked) crmVisitStatus(db, { visitId: v.id, from: null, to: v.status });
   } catch (e) {
     console.error('[crm-link] визит', visitId, 'не связан с заявкой:', e && e.message);
   }
 }
 
 /** @returns {boolean} взял ли визит хоть одну строку (шаг A) */
-function linkTx(db, v, user, { undated, arrived }) {
+function linkTx(db, v, user, { undated, arrived, desk }) {
   const open = openStageKeys(db);
   if (!open.length) return false;
   const uid = user && Number(user.id) > 0 ? Number(user.id) : null;
@@ -223,24 +263,24 @@ function linkTx(db, v, user, { undated, arrived }) {
   for (const r of mine) if (linkLines.run(v.id, r.id, v.day).changes) touched.set(r.id, 'lines');
 
   // Визит уже «Пришёл» — дальше правило прихода (crmVisitStatus в crmLinkVisit),
-  // а не «Записан».
-  // CRM_UNIFY_V1, задача 3: регистрация на стойке (desk) по такому визиту идёт
-  // дальше по всем шагам — сюда добавить «&& !desk».
-  if (arrived) return touched.size > 0;
+  // а не «Записан». CRM_UNIFY_V1 — регистрация на стойке (desk) по такому
+  // визиту идёт дальше по всем шагам: карточку другого дня закрывает и она.
+  if (arrived && !desk) return touched.size > 0;
 
   // B. Заявка, которая уже держит визит.
   const held = requestOfVisit(db, v.id);
   if (held && !touched.has(held)) touched.set(held, 'held');
 
-  // C. Открытые заявки пациента, ждущие этот приход.
+  // C. Открытые заявки пациента, ждущие этот приход. CRM_UNIFY_V1 (Р8) — на
+  //    стойке ВСЕ открытые: первый приход закрывает карточку.
   for (const r of mine) {
     if (touched.has(r.id) || !open.includes(r.status)) continue;
-    if (waitsForDay(db, r.id, v.day, { undated })) touched.set(r.id, 'patient');
+    if (desk || waitsForDay(db, r.id, v.day, { undated })) touched.set(r.id, 'patient');
   }
 
-  // D. По телефону — одна заявка, только patient_id.
+  // D. По телефону — одна заявка, только patient_id (на стойке — любая открытая).
   if (!touched.size) {
-    const id = phoneLeadFor(db, v.patient_id, open, v.day, { undated });
+    const id = phoneLeadFor(db, v.patient_id, open, v.day, { undated, desk });   // CRM_UNIFY_V1 — desk
     if (id) {
       db.prepare(`UPDATE crm_requests SET patient_id = ?, updated_at = ${NOW_SQL} WHERE id = ? AND patient_id IS NULL`)
         .run(v.patient_id, id);
@@ -248,8 +288,8 @@ function linkTx(db, v, user, { undated, arrived }) {
     }
   }
 
-  // E. Колл-центр: свежая открытая или новая.
-  if (!touched.size && callcenter) {
+  // E. Колл-центр: свежая открытая или новая. Не на стойке (решение 2).
+  if (!touched.size && callcenter && !desk) {   // CRM_UNIFY_V1 — !desk
     const recent = db.prepare(`SELECT id FROM crm_requests WHERE patient_id = ? AND status IN (${holes(open)})
                                  AND created_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-${CALLCENTER_ATTACH_DAYS} days')
                                ORDER BY created_at DESC, id DESC LIMIT 1`).get(v.patient_id, ...open);
@@ -273,9 +313,12 @@ function linkTx(db, v, user, { undated, arrived }) {
     }
   }
 
-  // G. Ступень и дата — только живым и только вперёд.
+  // G. Ступень и дата — только живым и только вперёд. CRM_UNIFY_V1 (Р1, Р8) —
+  //    на стойке ступень — «Пришёл», дата карточки остаётся прежней: строки
+  //    других дней остаются в карточке и в календаре как записи.
   const scheduled = scheduledStageKey(db);
   const schedAt = scheduled ? open.indexOf(scheduled) : -1;
+  const won = desk ? wonStageKey(db) : null;   // CRM_UNIFY_V1
   const todayDay = today(db);
   const read = db.prepare('SELECT id, status, scheduled_date FROM crm_requests WHERE id = ?');
   // На дату ждёт строка, которую держит ЖИВОЙ визит (ревью 2, F3).
@@ -287,11 +330,17 @@ function linkTx(db, v, user, { undated, arrived }) {
     if (via === 'created') continue;
     const r = read.get(id);
     if (!r || !open.includes(r.status)) continue;
-    const at = open.indexOf(r.status);
-    const status = (schedAt >= 0 && at >= 0 && at < schedAt) ? scheduled : r.status;
-    const was = String(r.scheduled_date || '').trim().slice(0, 10);
-    const keep = !!was && was >= todayDay && was <= v.day && !!bookedOn.get(id, was);
-    const when = keep ? was : v.day;
+    let status = r.status;
+    let when = r.scheduled_date;
+    if (desk) {
+      status = won;   // CRM_UNIFY_V1 — стойка: пациент здесь
+    } else {
+      const at = open.indexOf(r.status);
+      if (schedAt >= 0 && at >= 0 && at < schedAt) status = scheduled;
+      const was = String(r.scheduled_date || '').trim().slice(0, 10);
+      const keep = !!was && was >= todayDay && was <= v.day && !!bookedOn.get(id, was);
+      when = keep ? was : v.day;
+    }
     if (status === r.status && when === r.scheduled_date) continue;
     write.run(status, when, id);
     try {

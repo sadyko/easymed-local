@@ -10,7 +10,8 @@
 //
 // Половина правила, которая осталась записи, живёт в crm/visit-link.js
 // (crmLinkVisit — CRM_UNIFY_V1; прежде settleCrmOnBooking в rpc/visits.js):
-// строка берёт себе визит, заявка уезжает в «Записан».
+// строка берёт себе визит, заявка уезжает в «Записан». Регистрация на стойке
+// (desk, CRM_UNIFY_V1) — уже приход: шаг связи зовёт правило ниже сразу.
 // ВТОРАЯ ПОЛОВИНА — здесь: что происходит с заявкой, когда у ЕЁ визита
 // меняется статус.
 //
@@ -112,17 +113,18 @@ function settleLineless(db, { patientId, day, open, won, write }) {
 /**
  * ЧТО ДЕЛАЕТ СМЕНА СТАТУСА ВИЗИТА С ЗАЯВКАМИ, ЧЬИ СТРОКИ ЕГО ДЕРЖАТ.
  *
- *   arrived    — строки этого визита закрываются ('done'), и только теперь
- *                заявка вправе стать конверсией: «Пришёл» ставится, когда
- *                ждать больше нечего. Заявка на три дня после первого прихода
- *                возвращается в «Записан» с датой БЛИЖАЙШЕЙ оставшейся строки
- *                (миграция 057: родительская дата — зеркало строк, по ней
- *                живут карточка, отчёт колл-центра и ночная автоматика «Не
- *                пришёл»). Пришедший воскрешает и недошедшую заявку: он
- *                пришёл сейчас, и это та самая конверсия. Назад по ЖИВЫМ
- *                ступеням заявка не откатывается — стоящая в «Согласован»
- *                там и остаётся. Плюс проход по заявкам БЕЗ СТРОК того же
- *                пациента (settleLineless).
+ *   arrived    — строки этого визита закрываются ('done'), и заявка становится
+ *                конверсией. CRM_UNIFY_V1 — ПЕРВЫЙ ПРИХОД ЗАКРЫВАЕТ КАРТОЧКУ
+ *                (решение владельца 1, Р8): «Пришёл» ставится сразу, даже если
+ *                у заявки остались строки на другие дни, — они остаются в
+ *                карточке и в календаре как записи (прежде заявка на три дня
+ *                возвращалась в «Записан» до последнего дня). Закрываются
+ *                заявки, чьи строки держат визит, и (Р9) привязанные к нему
+ *                только записью (crm_booking_links). Из живых колонок и из
+ *                сидовой «Не пришёл»: пришедший воскрешает недошедшую заявку —
+ *                он пришёл сейчас, и это та самая конверсия. «Пришёл», «Отказ»
+ *                и прочие закрытые не меняются (решение 3). Плюс проход по
+ *                заявкам БЕЗ СТРОК того же пациента (settleLineless).
  *   no_show    — заявка уходит в «Не пришёл», и только из живых ступеней.
  *                Строки остаются со своим visit_id: неявка — это факт об
  *                этой записи, и он не стирается. Записать такую строку заново
@@ -172,7 +174,6 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
 
     const open = openStageKeys(db);
     const scheduled = scheduledStageKey(db);
-    const schedAt = scheduled ? open.indexOf(scheduled) : -1;
     const write = setParent(db);
     const pendingLeft = db.prepare(`
       SELECT COUNT(*) AS n, MIN(NULLIF(scheduled_date, '')) AS next,
@@ -182,22 +183,26 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
 
     if (ARRIVED_STATUSES.includes(now)) {
       const won = wonStageKey(db);
+      // CRM_UNIFY_V1 (Р9) — и карточка, привязанная к визиту только записью
+      // (crm_booking_links, без строк): иначе запись из календаря без строк
+      // заявки не закрывалась, если дата карточки другая.
+      let linked = [];
+      try {
+        linked = db.prepare(`SELECT r.id, r.status, r.scheduled_date FROM crm_booking_links b
+                               JOIN crm_requests r ON r.id = b.request_id WHERE b.visit_id = ?`).all(id);
+      } catch { linked = []; }   // сборка без 187
       if (parents.length) {
         db.prepare("UPDATE crm_request_services SET status = 'done' WHERE visit_id = ? AND status = 'pending'").run(id);
-        for (const p of parents) {
-          const left = pendingLeft.get(p.id);
-          if (!left || !left.n) {
-            // Ждать больше нечего — вот теперь конверсия.
-            writeParent(write, p, won, p.scheduled_date);
-            continue;
-          }
-          // Ещё есть чего ждать. Заявка стоит в «Записан» — кроме случая, когда
-          // она уже ДАЛЬШЕ него по живым ступеням: назад её не отбрасываем.
-          const at = open.indexOf(p.status);
-          const ahead = at >= 0 && schedAt >= 0 && at > schedAt;
-          const status = (scheduled && !ahead) ? scheduled : p.status;
-          writeParent(write, p, status, left.next ?? null);
-        }
+      }
+      const all = new Map();
+      for (const p of [...parents, ...linked]) if (!all.has(p.id)) all.set(p.id, p);
+      for (const p of all.values()) {
+        // CRM_UNIFY_V1 — ПЕРВЫЙ ПРИХОД ЗАКРЫВАЕТ КАРТОЧКУ (решение владельца 1,
+        // Р8): строки других дней остаются в карточке и в календаре как записи.
+        // Закрываются живые колонки и сидовая «Не пришёл»; «Пришёл», «Отказ» и
+        // прочие закрытые не меняются (решение 3).
+        if (!open.includes(p.status) && p.status !== SEED_NO_SHOW_STAGE) continue;
+        writeParent(write, p, won, p.scheduled_date);
       }
       // Строго ПОСЛЕ: заявка, у которой строки только что закрылись, уже
       // стоит в «Пришёл» и живой не считается — второй раз её не тронут.

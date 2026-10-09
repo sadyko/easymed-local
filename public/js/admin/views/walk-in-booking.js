@@ -217,6 +217,10 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
         referral_source_id: isPosInt(referralSourceId) ? Number(referralSourceId) : null,
         branch_id: branchId,
         notes: null,
+        // CRM_UNIFY_V1 — регистрация на стойке = «Пришёл» (решение владельца 1):
+        // карточка звонившего закрывается сразу. Сервер верит этому только
+        // регистратуре и администратору, только сегодня и только без book.
+        desk: true,
     });
     if (evErr) throw new Error(trf('Визит не создан: {msg}', { msg: msgOf(evErr) }));
     const visit = ev && ev.visit;
