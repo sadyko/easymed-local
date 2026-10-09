@@ -61,20 +61,27 @@ test('заполненные ячейки читаются как раньше; 
     assert.deepStrictEqual([q.tier, q.price], ['secondary', 60000]);
 });
 
-test('не число в ячейке («—», «нет») — «не задано», а не бесплатно', () => {
-    const row = buildImportRow('services', { ...BASE, ...EMPTY_TIERS, price_secondary: '—', price_repeat: 'нет', secondary_days_to: 'abc' });
-    assert.strictEqual(row.payload.price_secondary, null);
-    assert.strictEqual(row.payload.price_repeat, null);
+// CLINIC_API_FIX_V1 (ревью итога, решение) — цена визита — деньги: не число
+// в ней у НОВОЙ услуги строку не ввозит (как цена); в днях окна — «не задано».
+test('не число в днях окна («abc») — «не задано», а не бесплатно', () => {
+    const row = buildImportRow('services', { ...BASE, ...EMPTY_TIERS, price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 'abc' });
     assert.strictEqual(row.payload.secondary_days_to, null);
-    assert.strictEqual(sameDaySecond(row.payload).price, 200000);
+    assert.notStrictEqual(row.status, 'error');
+});
+
+test('не число в цене визита («—», «нет») у новой услуги — строка не ввозится, а не «бесплатно» и не «не задано» молча', () => {
+    for (const cells of [{ price_secondary: '—' }, { price_repeat: 'нет' }]) {
+        const row = buildImportRow('services', { ...BASE, ...EMPTY_TIERS, ...cells });
+        assert.strictEqual(row.status, 'error', JSON.stringify(row.notes));
+    }
 });
 
 // CLINIC_API_FIX_V1 (ревью) — ячейка не число: строка ГОВОРИТ об этом (номер
-// строки и колонка), а не молча ставит полную цену.
-test('не число в ячейке цены визита — предупреждение с номером строки и колонкой', () => {
+// строки и колонка), а не молча ставит полную цену. (Ревью итога: у новой
+// услуги — ошибкой, строка не ввозится.)
+test('не число в ячейке цены визита — ошибка с номером строки и колонкой', () => {
     const row = buildImportRow('services', { ...BASE, ...EMPTY_TIERS, price_secondary: '—' }, { rowNum: 4 });
-    assert.strictEqual(row.payload.price_secondary, null);
-    assert.strictEqual(row.status, 'warn');
+    assert.strictEqual(row.status, 'error');
     const note = row.notes.find((n) => /price_secondary/.test(String(n)));
     assert.ok(note, JSON.stringify(row.notes));
     assert.match(String(note), /Строка 4\b/);

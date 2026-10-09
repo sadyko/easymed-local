@@ -121,9 +121,11 @@ import { mrnSeriesRefusal } from '../patient-duplicates.js';   // MRN_BEYOND_999
 
 // CLINIC_API_FIX_V1 — колонки цен второго/повторного визита и их окон: пусто
 // значит «не задано» (null), а не 0 (см. transform услуг).
+// CLINIC_API_FIX_V1 (ревью итога) — money: цена визита — деньги (не число у
+// новой услуги — строка не ввозится); дни — нет.
 const VISIT_TIER_COLUMNS = [
-    { key: 'price_secondary' }, { key: 'secondary_days_from', int: true }, { key: 'secondary_days_to', int: true },
-    { key: 'price_repeat' },    { key: 'repeat_days_from', int: true },    { key: 'repeat_days_to', int: true },
+    { key: 'price_secondary', money: true }, { key: 'secondary_days_from', int: true }, { key: 'secondary_days_to', int: true },
+    { key: 'price_repeat', money: true },    { key: 'repeat_days_from', int: true },    { key: 'repeat_days_to', int: true },
 ];
 
 // CLINIC_API_FIX_V1 (ревью) — строка услуг ОБНОВИТ существующую услугу, а не
@@ -195,8 +197,10 @@ function loadXlsx() {
 //   coerce    - 'num' | 'int' | 'bool' (numeric/boolean parsing)
 //   defaultNum / defaultBool - fallback when the cell is blank
 //   percent   - CLINIC_API_FIX_V1: a numeric column that also accepts «40%»
-//   refuseBadNumber - CLINIC_API_FIX_V1: a non-number here never imports as a
-//               new row (status=error); an updating row keeps the saved value
+//   money     - CLINIC_API_FIX_V1: a money column (price, VAT, any share or
+//               percent, visit-tier prices, salary): a non-number here never
+//               imports as a new row (status=error); an updating row keeps
+//               the saved value
 //   raw       - CLINIC_API_FIX_V1: the section's transform reads this numeric
 //               column from the sheet row itself; buildRow leaves it alone
 //   captureNum - CLINIC_API_FIX_V1: a captured column that holds a number
@@ -219,11 +223,11 @@ const IMPORT_CONFIGS = {
         columns: [
             { key: 'name',     required: true, hint: 'Наименование (обязательно)' },
             { key: 'is_drug',  coerce: 'bool', defaultBool: true,  hint: 'true / false — препарат (лекарство)' },
-            { key: 'price',    coerce: 'num',  defaultNum: 0,  refuseBadNumber: true, hint: 'Цена, число — напр. 1500' },   // CLINIC_API_FIX_V1 — не число: строка не ввозится
+            { key: 'price',    coerce: 'num',  defaultNum: 0,  money: true, hint: 'Цена, число — напр. 1500' },   // CLINIC_API_FIX_V1 — не число: строка не ввозится
             { key: 'unit',     hint: 'Единица: amp, tab, ml, fl…' },
             { key: 'form',     hint: 'Форма: таблетка, ампула, раствор…' },
             { key: 'strength', hint: 'Дозировка: напр. 500 мг' },
-            { key: 'tax_rate', coerce: 'num',  defaultNum: 12, percent: true, hint: 'НДС % (по умолчанию 12)' },
+            { key: 'tax_rate', coerce: 'num',  defaultNum: 12, percent: true, money: true, hint: 'НДС % (по умолчанию 12)' },
             { key: 'code',     hint: 'Внутренний код (необязательно)' },
             { key: 'active',   coerce: 'bool', defaultBool: true,  hint: 'true / false (по умолчанию true)' },
         ],
@@ -286,14 +290,14 @@ const IMPORT_CONFIGS = {
             // into clinic_items.unit.
             { key: 'ед.изм',        target: 'unit', aliases: ['unit', 'единица', 'ед.изм.'], tmpl: false,
               hint: trf('Единица измерения — из списка: {list}. Пусто → шт.', { list: PROCUREMENT_UNITS.join(' · ') }) },
-            { key: 'цена',          target: 'price', coerce: 'num', defaultNum: 0, refuseBadNumber: true, aliases: ['price'], tmpl: false,   // CLINIC_API_FIX_V1
+            { key: 'цена',          target: 'price', coerce: 'num', defaultNum: 0, money: true, aliases: ['price'], tmpl: false,   // CLINIC_API_FIX_V1
               hint: 'Цена продажи, число — напр. 3210.' },
             { key: 'икпу',          aliases: ['ikpu', 'икпу_код'], tmpl: false,
               fk: { source: 'ikpu_codes', keyField: 'code', target: 'ikpu_code_id', autoCreate: true },
               hint: 'Код ИКПУ (17 цифр) — необязательно; отсутствующие коды создаются автоматически.' },
             { key: 'остаток',       capture: 'qty', captureNum: true, aliases: ['остатки', 'количество', 'qty'], tmpl: false,   // CLINIC_API_FIX_V1 — captureNum: правило числа
               hint: 'Текущий остаток — станет приходом на склад (филиал по умолчанию). Пусто/0 — без прихода.' },
-            { key: 'себестоимость', capture: 'cost', captureNum: true, aliases: ['cost', 'закупочная'], tmpl: false,
+            { key: 'себестоимость', capture: 'cost', captureNum: true, money: true, aliases: ['cost', 'закупочная'], tmpl: false,
               hint: 'Себестоимость — цена прихода для остатка (необязательно).' },
             // PROD_IMPORT_FULL_V1 — the unit engine, as in the product editor.
             { key: 'базовая ед.',   target: 'base_unit', aliases: ['base_unit', 'базовая единица'],
@@ -305,7 +309,7 @@ const IMPORT_CONFIGS = {
             // PROD_IMPORT_FULL_V1 — the supplier block, as in the product editor.
             { key: 'поставщик',     capture: 'supplier', aliases: ['supplier'],
               hint: 'Поставщик товара — связка создаётся автоматически; неизвестный поставщик будет создан.' },
-            { key: 'цена закупки',  capture: 'supPrice', captureNum: true, aliases: ['закупочная цена'],
+            { key: 'цена закупки',  capture: 'supPrice', captureNum: true, money: true, aliases: ['закупочная цена'],
               hint: 'Цена закупки у этого поставщика (сум).' },
             { key: 'ед. закупки',   capture: 'supUnit', aliases: ['единица закупки'],
               hint: 'В чём закупаете у поставщика (уп, кор…). Пусто — как базовая.' },
@@ -530,11 +534,17 @@ const IMPORT_CONFIGS = {
                         { n: ctx.rowNum, col: c.key, v: read.bad }));
                     return;
                 }
-                payload[c.key] = null;
-                if (ctx) {
-                    ctx.warn(trf('Строка {n}, «{service}»: в колонке {col} не число («{v}») — записано как пусто, визит по полной цене.',
-                        { n: ctx.rowNum, service: svcName, col: c.key, v: read.bad }));
+                // CLINIC_API_FIX_V1 (ревью итога, решение) — цена визита — деньги:
+                // новая услуга с не числом в ней не ввозится (как с ценой). Дни —
+                // не задано, вслух.
+                if (c.money) {
+                    if (ctx) ctx.fail(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
+                        { n: ctx.rowNum, col: c.key, v: read.bad }));
+                    return;
                 }
+                payload[c.key] = null;
+                if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — не записано.',
+                    { n: ctx.rowNum, col: c.key, v: read.bad }));
             });
             // CLINIC_API_FIX_V1 (ревью) — правила окна услуги (service_save:
             // цена — неотрицательное число, дни — целые неотрицательные, «по»
@@ -596,6 +606,14 @@ const IMPORT_CONFIGS = {
                 }
                 var rf = readImportNumber(r[c.from], false), rp = readImportNumber(r[c.pct], true);
                 var bad = ('bad' in rf) ? [c.from, rf.bad] : ('bad' in rp) ? [c.pct, rp.bad] : null;
+                // CLINIC_API_FIX_V1 (ревью итога, решение) — доля ступени — деньги:
+                // у новой услуги не число в ней строку не ввозит.
+                if (('bad' in rp) && !serviceRowUpdates(payload, ctx && ctx.lookups)) {
+                    delete payload[c.from]; delete payload[c.pct];
+                    if (ctx) ctx.fail(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
+                        { n: ctx.rowNum, col: c.pct, v: rp.bad }));
+                    return null;
+                }
                 if (bad) {
                     delete payload[c.from]; delete payload[c.pct];
                     if (ctx) ctx.warn(trf('Строка {n}, «{service}»: в колонке {col} не число («{v}») — ступень {step} из файла не сохранена.',
@@ -665,9 +683,10 @@ const IMPORT_CONFIGS = {
             // IMPORT_PRICE_OPTIONAL_V1 — price used to be required, which blocked
             // importing price-lists that get priced after upload. Missing price
             // now imports as 0 with a warning instead of an error.
-            // CLINIC_API_FIX_V1 (ревью итога) — refuseBadNumber: не число в цене новой
-            // услуги — строка не ввозится (у обновляемой — цена остаётся прежней).
-            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  warnIfMissing: true, refuseBadNumber: true, hint: 'Цена, число — напр. 150000 (пусто → 0)' },
+            // CLINIC_API_FIX_V1 (ревью итога) — money: не число в цене (НДС, доле,
+            // цене визита…) новой услуги — строка не ввозится (у обновляемой —
+            // поле остаётся прежним).
+            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  warnIfMissing: true, money: true, hint: 'Цена, число — напр. 150000 (пусто → 0)' },
             // FULL_EXPORT_V1 (2026-09-14) — owner: «exporting and importing are not
             // giving all the information». Every field the service editor holds now
             // travels: code, the visit-tier prices (VISIT_TIER_PRICING_V1), the
@@ -688,10 +707,10 @@ const IMPORT_CONFIGS = {
             { key: 'price_repeat',     coerce: 'num', raw: true, hint: 'Цена повторного визита, третий и далее (0 — бесплатно; пусто — как второй)' },
             { key: 'repeat_days_from', coerce: 'int', raw: true, hint: 'Повторный визит — не раньше чем через N дней после предыдущего (пусто — как у второго)' },
             { key: 'repeat_days_to',   coerce: 'int', raw: true, hint: 'и не позже чем через M дней (пусто — как у второго)' },
-            { key: 'tax_rate',         keepIfAbsent: true, coerce: 'num',  defaultNum: 12, percent: true, hint: 'НДС % (по умолчанию 12, если пусто)' },
+            { key: 'tax_rate',         keepIfAbsent: true, coerce: 'num',  defaultNum: 12, percent: true, money: true, hint: 'НДС % (по умолчанию 12, если пусто)' },
             { key: 'duration_minutes', keepIfAbsent: true, coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
             { key: 'requires_doctor',  keepIfAbsent: true, coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },
-            { key: 'default_doctor_percent', keepIfAbsent: true, coerce: 'num', percent: true, hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
+            { key: 'default_doctor_percent', keepIfAbsent: true, coerce: 'num', percent: true, money: true, hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
             // CLINIC_API_FIX_V1 (ревью итога) — ступени тоже читает transform (raw).
             { key: 'doctor_tier_from',    coerce: 'num', raw: true, hint: 'Ступень: порог услуг в месяц — повышенная доля начинается со следующей услуги (0 или пусто — ступени нет)' },
             { key: 'doctor_tier_percent', coerce: 'num', raw: true, hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
@@ -892,8 +911,8 @@ const IMPORT_CONFIGS = {
             { key: 'license_expiry_date', coerce: 'date', hint: 'Лицензия действует до — 2027-05-01, 01.05.2027 или дата из Excel.' },
             { key: 'hire_date',  coerce: 'date', hint: 'Дата приёма — 2026-01-15, 15.01.2026 или дата из Excel.' },
             { key: 'salary_type', hint: 'Тип зарплаты: fixed · percentage · fix_plus_kpi (пусто — не задан)' },
-            { key: 'salary_fixed',   coerce: 'num', hint: 'Оклад, сум' },
-            { key: 'salary_percent', coerce: 'num', percent: true, hint: 'Процент, 0–100' },
+            { key: 'salary_fixed',   coerce: 'num', money: true, hint: 'Оклад, сум' },
+            { key: 'salary_percent', coerce: 'num', percent: true, money: true, hint: 'Процент, 0–100' },
             { key: 'is_active',  coerce: 'bool', defaultBool: true, hint: 'true / false — активен (по умолчанию true)' },
         ],
         sampleRows: [
@@ -984,6 +1003,8 @@ function autoConfigFor(sectionKey) {
             if (f.default != null) col.defaultNum = f.default;
             // CLINIC_API_FIX_V1 — «40%» читается в колонке процентов (по ключу или подписи).
             if (/percent|pct|tax_rate|discount/i.test(f.key) || /%/.test(f.label || '')) col.percent = true;
+            // CLINIC_API_FIX_V1 (ревью итога) — деньги: проценты и суммы.
+            if (col.percent || /price|cost|amount|salary|fee|sum/i.test(f.key)) col.money = true;
         } else if (f.type === 'bool') {
             col.coerce = 'bool';
             col.defaultBool = f.default !== false;
@@ -1925,7 +1946,10 @@ function buildRow(raw, rowNum, lookups, cfg) {
             if (col.captureNum) {
                 const read = readImportNumber(cellRaw, false);
                 if ('n' in read) captures[col.capture] = read.n;
-                else if ('bad' in read) {
+                else if ('bad' in read && col.money && !updating) {
+                    notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.', { n: rowNum, col: col.key, v: read.bad }));
+                    status = 'error';
+                } else if ('bad' in read) {
                     notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — не записано.', { n: rowNum, col: col.key, v: read.bad }));
                     if (status !== 'error') status = 'warn';
                 }
@@ -1981,10 +2005,10 @@ function buildRow(raw, rowNum, lookups, cfg) {
         // давало цену 0 со статусом «готово». Теперь непустое не число в 0 не
         // превращается никогда:
         //   • строка обновляет запись — поле не пишется (сохранённое остаётся);
-        //   • новая строка, колонка refuseBadNumber (цена) или обязательная —
-        //     строка не ввозится (ошибка);
+        //   • новая строка, колонка денежная (money: цена, НДС, доля, процент…)
+        //     или обязательная — строка не ввозится (ошибка);
         //   • новая строка раздела, который знает, что она новая (rowUpdates), —
-        //     значение пустой ячейки (НДС 12, 30 мин), если оно задано;
+        //     значение пустой ячейки (30 мин), если оно задано;
         //   • иначе поле не пишется (у новой записи — значение базы).
         // Каждый раз строка называет колонку и ячейку. Пустая ячейка и
         // отсутствующая колонка — как раньше.
@@ -1998,7 +2022,7 @@ function buildRow(raw, rowNum, lookups, cfg) {
             if (updating) {
                 notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.', at));
                 if (status !== 'error') status = 'warn';
-            } else if (col.refuseBadNumber || col.required) {
+            } else if (col.money || col.required) {
                 notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.', at));
                 status = 'error';
             } else if (typeof cfg.rowUpdates === 'function' && col.defaultNum != null) {
@@ -2047,7 +2071,8 @@ function buildRow(raw, rowNum, lookups, cfg) {
     // dropping it silently. `r` is the raw row keyed by the sheet's headers —
     // a hook can ask which headers the file actually carried.
     if (typeof cfg.transform === 'function') {
-        const ctx = { notes, lookups, rowNum, warn(msg) { notes.push(msg); if (status !== 'error') status = 'warn'; } };   // CLINIC_API_FIX_V1 — rowNum: предупреждение называет строку файла
+        const ctx = { notes, lookups, rowNum, warn(msg) { notes.push(msg); if (status !== 'error') status = 'warn'; },
+            fail(msg) { notes.push(msg); status = 'error'; } };   // CLINIC_API_FIX_V1 (ревью итога) — строка не ввозится   // CLINIC_API_FIX_V1 — rowNum: предупреждение называет строку файла
         try { cfg.transform(payload, r, ctx); }
         catch (e) { console.warn('[section-import] transform failed:', e); }
     }
