@@ -319,6 +319,60 @@ async function loadLeadTags() {
 }
 const refs = { root: null, onNavigate: null };
 
+// CRM_UNIFY_V1 (итоговое ревью) — ВЫСОТА КОЛОНКИ — ПО МЕСТУ ПОД ДОСКОЙ, А НЕ
+// «ОКНО МИНУС 290px». На ноутбуке 1366×768 шапка и фильтры занимают больше
+// 290px, и низ колонок вместе с полосой прокрутки доски вбок уходил под край
+// окна. Теперь высота списка карточек считается по настоящему месту: от верха
+// списка до низа окна, минус всё, что под списком (поля колонки, полоса доски,
+// поля рабочего окна), и зазор. Если доска начинается ниже сгиба (телефон,
+// фильтры в несколько строк), колонка — по окну, когда доска докручена до
+// верха. Значение кладётся в переменную --crm-col-h рабочего окна доски.
+const COL_FIT_MIN = 200;   // меньше — доска «ниже сгиба», считаем от её верха
+const COL_MIN = 240;
+const COL_GAP = 16;
+/** Высота списка карточек колонки (px) по замерам; чистая функция для тестов. */
+export function columnHeightFor({ viewportH, listTop, windowTop, chromeBelow, gap = COL_GAP }) {
+    const below = Math.floor(viewportH - listTop - chromeBelow - gap);
+    if (below >= COL_FIT_MIN) return below;
+    const scrolled = Math.floor(viewportH - (listTop - windowTop) - chromeBelow - gap);
+    return Math.max(COL_MIN, scrolled);
+}
+function sizeBoardColumns() {
+    try {
+        const root = refs.root;
+        if (!root || typeof window === 'undefined' || !window.innerHeight || typeof getComputedStyle !== 'function') return;
+        const win = root.querySelector('[data-crm-board-window]');
+        const board = root.querySelector('[data-crm-board]');
+        const list = root.querySelector('[data-col-list]');
+        if (!win || !board || !list || !win.style || typeof win.style.setProperty !== 'function') return;
+        const px = (el, p) => parseFloat(getComputedStyle(el)[p]) || 0;
+        const col = list.parentNode;
+        const scrollbar = Math.max(0, board.offsetHeight - board.clientHeight - px(board, 'borderTopWidth') - px(board, 'borderBottomWidth'));
+        const chromeBelow = px(col, 'paddingBottom') + px(col, 'borderBottomWidth') + px(board, 'paddingBottom') + scrollbar
+            + px(win, 'paddingBottom') + px(win, 'borderBottomWidth');
+        const scrollY = window.scrollY || 0;
+        const listTop = list.getBoundingClientRect().top + scrollY;
+        const windowTop = win.getBoundingClientRect().top + scrollY;
+        const viewportH = window.innerHeight;
+        let hgt = columnHeightFor({ viewportH, listTop, windowTop, chromeBelow });
+        win.style.setProperty('--crm-col-h', hgt + 'px');
+        // Проверка по факту: колонка с подсказкой «показаны последние…» выше
+        // соседних, и сетка тянет доску по самой высокой — лишнее снимается.
+        const fitsFromTop = viewportH - listTop - chromeBelow - COL_GAP >= COL_FIT_MIN;
+        const r = win.getBoundingClientRect();
+        const bottom = fitsFromTop ? r.bottom + scrollY : r.bottom - r.top;
+        const over = bottom - (viewportH - COL_GAP);
+        if (over > 0 && hgt - over >= COL_MIN) {
+            hgt = Math.floor(hgt - over);
+            win.style.setProperty('--crm-col-h', hgt + 'px');
+        }
+    } catch (e) { /* замер — подсказка вёрстке; CSS держит запасную высоту */ }
+}
+let sizeTimer = 0;
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('resize', () => { clearTimeout(sizeTimer); sizeTimer = setTimeout(sizeBoardColumns, 120); });
+}
+
 export async function renderCrm(container, { onNavigate } = {}) {
     clear(container);
     refs.onNavigate = onNavigate;
@@ -850,7 +904,11 @@ async function paint() {
             wrap.appendChild(h('div', { class: 'muted crm-foreign-hint', 'data-crm-foreign-hint': '' },
                 Icon('Lock', { size: 13 }), ' ', 'Этот номер есть у карточки другого оператора — она вам не видна.'));
         }
-        if (state.view === 'kanban') wrap.appendChild(kanban()); else wrap.appendChild(listTable());
+        if (state.view === 'kanban') {
+            wrap.appendChild(kanban());
+            // CRM_UNIFY_V1 (итоговое ревью) — высота колонок по месту под доской.
+            if (typeof requestAnimationFrame === 'function') requestAnimationFrame(sizeBoardColumns); else sizeBoardColumns();
+        } else wrap.appendChild(listTable());
     }
 
     // CRM_UNIFY_V1 — ВИД «ЗАДАЧИ» (views/crm-tasks-view.js). По умолчанию —
@@ -906,7 +964,6 @@ async function paint() {
             // content-visibility) — страница не растягивается, сотни карточек
             // не тормозят.
             const list = h('div', { class: 'crm-col-list', 'data-col-list': key });
-            for (const r of colRows) list.appendChild(kanbanCard(r));
             // CRM_UNIFY_V1 — число в заголовке настоящее: у полной колонки — её
             // строки, у обрезанной закрытой («Всё время», последние 300) — итог
             // по базе под той же видимостью. Если на доске стоит поиск, источник
@@ -914,6 +971,16 @@ async function paint() {
             const clientFiltered = !!state.search.trim() || state.sources.length > 0 || !!state.tag;
             const trimmed = !!state.capped[key] && !clientFiltered;
             const n = trimmed ? state.counts[key] : colRows.length;
+            // CRM_UNIFY_V1 (итоговое ревью) — подсказка не зовёт выбирать период ради
+            // открытых: «Период» сужает только закрытые колонки. Стоит ПЕРВОЙ
+            // внутри прокручиваемого списка: под списком она делала колонку выше
+            // соседних, сетка тянула по ней всю доску, и высота колонок по месту
+            // (sizeBoardColumns) срезалась у всех.
+            if (trimmed) {
+                list.appendChild(h('div', { class: 'muted crm-col-capped', 'data-col-capped': key },
+                    trf('Показаны последние {n} закрытых — более ранние найдёт поиск или «Период»; открытые карточки видны всегда.', { n: CLOSED_ALL_TIME_LIMIT })));
+            }
+            for (const r of colRows) list.appendChild(kanbanCard(r));
 
             // PASTEL_IDENTITY_V1 — оттенок по позиции в воронке; заливка и цвет
             // рамки теперь в .crm-col (admin-views.css), а не инлайном.
@@ -927,11 +994,7 @@ async function paint() {
                     h('span', { class: 'crm-col-n', 'data-col-count': key }, String(n)),
                     h('span', { class: 'grow' }),
                     key === stageKey('in_process') && !crmReadOnly() ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Новая заявка', onclick: () => requestModal(null) }, '+') : null),
-                list,
-                // CRM_UNIFY_V1 (итоговое ревью) — подсказка не зовёт выбирать период ради
-                // открытых: «Период» сужает только закрытые колонки.
-                trimmed ? h('div', { class: 'muted crm-col-capped', 'data-col-capped': key },
-                    trf('Показаны последние {n} закрытых — более ранние найдёт поиск или «Период»; открытые карточки видны всегда.', { n: CLOSED_ALL_TIME_LIMIT })) : null);
+                list);
             board.appendChild(col);
         }
         // WORKING_WINDOW_V1 — доска живёт ВНУТРИ белого рабочего окна, как в
@@ -939,7 +1002,7 @@ async function paint() {
         // только вид: пастельная колонка и серый грунт страницы обе светлые, и
         // на грунте заливка колонки была бы неотличима (1.04:1). На белом нутре
         // окна та же заливка даёт 1.20:1 — оттенок ступени наконец виден.
-        return h('div', { class: 'card card-pad-sm crm-board-window' }, board);
+        return h('div', { class: 'card card-pad-sm crm-board-window', 'data-crm-board-window': '' }, board);   // CRM_UNIFY_V1 — --crm-col-h
     }
 
     function kanbanCard(r) {

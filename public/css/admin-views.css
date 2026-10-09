@@ -4338,13 +4338,19 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    перетаскивание целится в колонку ([data-col]), а не в место в списке. Высота —
    окно минус шапка и фильтры, но не меньше 320px (на телефоне фильтры
    переносятся в несколько строк). Поля (padding 4px) не менять: они входят в
-   расчёт ширины выше. */
+   расчёт ширины выше.
+   CRM_UNIFY_V1 (итоговое ревью) — высоту по настоящему месту под доской считает
+   views/crm.js (sizeBoardColumns → --crm-col-h на рабочем окне доски): на
+   1366×768 «окно минус 290px» уводило низ колонок и полосу доски под край.
+   Формула ниже — запасная, пока замера нет. overscroll-behavior: contain
+   убран: дойдя до конца колонки, колесо снова прокручивает страницу. */
 .crm-col-list {
     display: flex; flex-direction: column; gap: 8px; min-height: 60px; padding: 4px;
-    max-height: max(320px, calc(100vh - 290px)); overflow-y: auto; overscroll-behavior: contain;
+    max-height: var(--crm-col-h, max(320px, calc(100vh - 290px))); overflow-y: auto;
 }
-/* «Всё время»: в закрытой колонке последние 300 — подсказка под списком. */
-.crm-col-capped { font-size: 12.5px; margin-top: 6px; }
+/* «Всё время»: в закрытой колонке последние 300 — подсказка первой в списке
+   (CRM_UNIFY_V1, итоговое ревью: внутри прокрутки, колонка не выше соседних). */
+.crm-col-capped { font-size: 12.5px; margin: 0; }
 /* CRM_UNIFY_V1 — фильтр «Оператор»: выбор по имени не шире строки (телефон);
    подсказка «номер есть у карточки другого оператора» — над доской. */
 .crm-op-sel { max-width: 100%; min-width: 0; }

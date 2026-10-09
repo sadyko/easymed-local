@@ -237,3 +237,19 @@ test('поиск на телефоне: поле не шире строки (б�
   assert.equal(box.style.minWidth, '0');
   window.easymed.state.user = null;
 });
+
+// CRM_UNIFY_V1 (итоговое ревью) — высота колонки по месту под доской
+// (views/crm.js columnHeightFor; замеры Chrome — в отчёте задачи).
+test('высота колонки: ноутбук 1366×768 — низ колонок в окне; 1920×1080 — выше; телефон — по окну от верха доски', async () => {
+  const { columnHeightFor } = await import('../views/crm.js');
+  // 1366×768: верх списка 390, под списком 45px обвязки, зазор 16 → 317, и низ доски = 768 − 16
+  const laptop = columnHeightFor({ viewportH: 768, listTop: 390, windowTop: 333, chromeBelow: 45 });
+  assert.equal(laptop, 317);
+  assert.ok(390 + laptop + 45 <= 768 - 16 + 0.5, 'низ доски ниже края окна');
+  assert.equal(columnHeightFor({ viewportH: 1080, listTop: 390, windowTop: 333, chromeBelow: 45 }), 629);
+  // телефон: фильтры в несколько строк, доска ниже сгиба — колонка по окну, когда доска наверху
+  assert.equal(columnHeightFor({ viewportH: 740, listTop: 1010, windowTop: 950, chromeBelow: 45 }), 619);
+  // совсем мало места — не меньше 240
+  assert.equal(columnHeightFor({ viewportH: 300, listTop: 1010, windowTop: 950, chromeBelow: 45 }), 240);
+});
+
