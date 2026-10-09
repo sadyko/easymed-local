@@ -65,10 +65,14 @@ export function withOperator(q, operator, me) {
  * @param {object} o
  * @param {string[]} o.closedKeys  ключи закрытых колонок (won + lost)
  * @param {{from:string|null, to:string|null}} o.bounds  период для закрытых
+ * @param {number} [o.closedLimit]  предел на закрытую колонку при «Всё время»;
+ *   0 — без предела (CRM_UNIFY_V1, итоговое ревью: выгрузка Excel — явная просьба
+ *   «всё», ей 300 на колонку не годятся)
  * @returns {Promise<{rows: object[], counts: Object<string, number>, capped: Object<string, boolean>, error?: object}>}
  *   counts/capped — только у обрезанных закрытых колонок («Всё время»): число из базы.
  */
-export async function loadBoard({ db = supabase, closedKeys = [], bounds = { from: null, to: null }, operator = 'all', me = null } = {}) {
+export async function loadBoard({ db = supabase, closedKeys = [], bounds = { from: null, to: null }, operator = 'all', me = null,
+    closedLimit = CLOSED_ALL_TIME_LIMIT } = {}) {
     const keys = (closedKeys || []).filter(Boolean);
     const counts = {};
     const capped = {};
@@ -79,8 +83,8 @@ export async function loadBoard({ db = supabase, closedKeys = [], bounds = { fro
     if (keys.length) open = open.not('status', 'in', keys);
     jobs.push(withOperator(open, operator, me).order('id', { ascending: false }));
 
-    if (keys.length && (bounds.from || bounds.to)) {
-        // Период задан — закрытые этого периода одним запросом, без предела.
+    if (keys.length && (bounds.from || bounds.to || !closedLimit)) {
+        // Период задан (или предел снят) — закрытые одним запросом, без предела.
         let q = db.from('crm_requests').select(BOARD_SELECT).in('status', keys);
         if (bounds.from) q = q.gte('created_at', bounds.from);
         if (bounds.to) q = q.lte('created_at', bounds.to);
@@ -89,7 +93,7 @@ export async function loadBoard({ db = supabase, closedKeys = [], bounds = { fro
         // «Всё время» — последние 300 на колонку; число той же колонки — из базы.
         for (const k of keys) {
             jobs.push(withOperator(db.from('crm_requests').select(BOARD_SELECT, { count: 'exact' }).eq('status', k), operator, me)
-                .order('id', { ascending: false }).limit(CLOSED_ALL_TIME_LIMIT)
+                .order('id', { ascending: false }).limit(closedLimit)
                 .then((res) => {
                     const total = Number(res && res.count);
                     const got = (res && Array.isArray(res.data)) ? res.data.length : 0;

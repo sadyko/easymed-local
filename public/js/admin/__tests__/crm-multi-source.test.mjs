@@ -239,11 +239,15 @@ test('CRM_UNIFY_V1: «Отчёт» спрашивает базу за свой �
 // Ревью M1 — отмеченный скрытый источник, у которого в новом периоде нет ни
 // одной заявки, пропадал из ряда: доска пустая, ни один чип не отмечен, и
 // снять отметку нечем. Отмеченный источник рисуется всегда (с нулём).
+// CRM_UNIFY_V1 (итоговое ревью) — ОБНОВЛЕНО НАМЕРЕННО: «Период» больше не
+// прячет ОТКРЫТЫЕ карточки (решение контролёра: владелец — «карточки
+// пропадают»), он сужает только закрытые колонки. Поэтому случай «в периоде
+// заявок этого источника нет» строится на закрытых карточках («Пришёл»).
 test('ревью M1: отмеченный источник остаётся в ряду с нулём, когда в периоде его заявок нет, — и снимается', async () => {
   const old = new Date(Date.now() - 40 * 86400000).toISOString();
   const leads = [
-    { id: 11, full_name: 'Старая Telegram', phone: '+998905556677', status: 'in_process', source: 'telegram', sources: ['telegram'], created_at: old },
-    { id: 12, full_name: 'Свежая Instagram', phone: '+998906667788', status: 'in_process', source: 'instagram', sources: null, created_at: now },
+    { id: 11, full_name: 'Старая Telegram', phone: '+998905556677', status: 'came', source: 'telegram', sources: ['telegram'], created_at: old },
+    { id: 12, full_name: 'Свежая Instagram', phone: '+998906667788', status: 'came', source: 'instagram', sources: null, created_at: now },
   ];
   const root = await board('kanban', leads);
   const period = (re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
@@ -252,7 +256,7 @@ test('ревью M1: отмеченный источник остаётся в �
     await tick();
     assert.equal(cards(root).length, 1);
     period(/^30 дней$/).click();
-    await tick();
+    await tick(80);
     const tg = chipOf(root, 'telegram');
     assert.ok(tg, 'отмеченный «Telegram» пропал из ряда — снять отметку нечем');
     assert.equal(textOf(tg), 'Telegram · 0');
@@ -264,7 +268,7 @@ test('ревью M1: отмеченный источник остаётся в �
     assert.ok(!chipOf(root, 'telegram'), 'неотмеченный источник без заявок в периоде нарисован');
   } finally {
     period(/^Всё время$/).click();
-    await tick();
+    await tick(80);
     window.easymed.state.user = null;
   }
 });

@@ -214,7 +214,16 @@ function ymdLocal(d) {
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+// CRM_UNIFY_V1 (итоговое ревью, решение контролёра) — ключи закрытых колонок:
+// конверсия и проигрышные. Их и только их сужает «Период»; открытые карточки
+// видны всегда (владелец: «карточки пропадают»).
+function closedKeys() {
+    return [STAGE_KEYS.won, ...STAGE_KEYS.lost].filter(Boolean);
+}
 function inPeriod(r) {
+    // CRM_UNIFY_V1 (итоговое ревью) — «Период» НИКОГДА не прячет открытые
+    // карточки: это работа, и её не должно быть «не видно» из-за даты обращения.
+    if (!closedKeys().includes(r.status)) return true;
     if (state.period === 'custom') {
         const d = new Date(r.created_at);
         if (isNaN(d)) return false;
@@ -240,7 +249,7 @@ function sourceLabel(k) {
 }
 /** CRM_MULTI_SOURCE_V1 — все источники заявки через запятую, главный первым (список, Excel). */
 export function sourcesText(r) {
-    return leadSources(r).map(sourceLabel).join(', ');
+    return leadSources(r).map((k) => tr(sourceLabel(k))).join(', ');   // CRM_UNIFY_V1 (итоговое ревью) — подписи переводятся
 }
 /**
  * Строки выгрузки Excel доски (первая — заголовки). Вынесены из exportExcel
@@ -250,12 +259,13 @@ export function sourcesText(r) {
  */
 export function crmExcelRows(rows) {
     return [
-        ['Имя', 'Телефон', 'Источник', 'Услуга', 'Дата записи', 'Комментарий', 'Статус', 'Оператор', 'Метки', 'Пациент (MRN)', 'Дата'],   // CRM_UNIFY_V1 — «Оператор»
+        // CRM_UNIFY_V1 (итоговое ревью) — заголовки, ступень и метки — на языке экрана.
+        ['Имя', 'Телефон', 'Источник', 'Услуга', 'Дата записи', 'Комментарий', 'Статус', 'Оператор', 'Метки', 'Пациент (MRN)', 'Дата'].map((x) => tr(x)),
         ...(Array.isArray(rows) ? rows : []).map((r) => [
             r.full_name || '', r.phone || '', sourcesText(r),
-            r.services ? r.services.name : '', r.scheduled_date || '', r.note || '', (STATUS_RU[r.status] || [r.status])[0],
+            r.services ? r.services.name : '', r.scheduled_date || '', r.note || '', tr((STATUS_RU[r.status] || [r.status])[0]),
             (r.users && r.users.full_name) || '',   // CRM_UNIFY_V1
-            tagsOf(r).map((k) => (TAG_RU[k] || [k])[0]).join(', '),
+            tagsOf(r).map((k) => tr((TAG_RU[k] || [k])[0])).join(', '),
             r.patients ? (r.patients.mrn || r.patients.full_name || '') : '',
             (r.created_at || '').replace('T', ' ').slice(0, 16),
         ]),
@@ -354,21 +364,49 @@ async function load() {
     // «пропадали» живые заявки) и закрытые за период; для «Всё время» —
     // последние 300 на закрытую колонку с настоящим числом из базы
     // (views/crm-board-load.js, Р12/Р13).
-    const res = await loadBoard({
-        closedKeys: [STAGE_KEYS.won, ...STAGE_KEYS.lost],
-        bounds: periodBounds(state.period, state.customFrom, state.customTo),
-        operator: state.operator, me: selfUserId(),   // CRM_UNIFY_V1 — «Оператор» до любого предела
-    });
+    // CRM_UNIFY_V1 (итоговое ревью) — ПОСЛЕДНЯЯ ЗАГРУЗКА ПОБЕЖДАЕТ: чипы
+    // оператора и периода перезагружают доску, и медленный старый ответ («Все»)
+    // приходил после быстрого нового («Мои») и перезаписывал карточки и числа.
+    // Ответ устаревшей загрузки отбрасывается целиком; false — «не рисовать».
+    const my = ++loadSeq;
+    const [res, tasks, tags] = await Promise.all([
+        loadBoard({
+            closedKeys: closedKeys(),
+            bounds: periodBounds(state.period, state.customFrom, state.customTo),
+            operator: state.operator, me: selfUserId(),   // CRM_UNIFY_V1 — «Оператор» до любого предела
+        }),
+        // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
+        // права на задачи) — доска без меток, а не без заявок.
+        loadOpenTasks(),
+        loadLeadTags(),   // CRM_HEAD_MERGE_TAGS_V1
+    ]);
+    if (my !== loadSeq) return false;
     if (res.error) {
         toast(trf('Не удалось загрузить заявки: {msg}', { msg: res.error.message }), 'fail');
         state.rows = []; state.counts = {}; state.capped = {};
-        return;
+        return true;
     }
     state.rows = res.rows; state.counts = res.counts; state.capped = res.capped;
-    // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
-    // права на задачи) — доска без меток, а не без заявок.
-    state.openTasks = nearestOpenTasks(await loadOpenTasks(), selfUserId());   // CRM_UNIFY_V1 — своя задача первой
-    state.leadTags = await loadLeadTags();   // CRM_HEAD_MERGE_TAGS_V1
+    state.openTasks = nearestOpenTasks(tasks, selfUserId());   // CRM_UNIFY_V1 — своя задача первой
+    state.leadTags = tags;
+    return true;
+}
+let loadSeq = 0;   // CRM_UNIFY_V1 (итоговое ревью) — номер последней загрузки доски
+
+/**
+ * CRM_UNIFY_V1 (итоговое ревью) — строки ВЫГРУЗКИ Excel: всё под текущими
+ * фильтрами доски, без 300 на закрытую колонку («Всё время» на доске — только
+ * последние 300, а выгрузка — явная просьба «всё»). Спрашивает базу заново.
+ * @returns {Promise<{rows: object[], error?: object}>}
+ */
+export async function crmExportRows() {
+    const res = await loadBoard({
+        closedKeys: closedKeys(),
+        bounds: periodBounds(state.period, state.customFrom, state.customTo),
+        operator: state.operator, me: selfUserId(), closedLimit: 0,
+    });
+    if (res.error) return { rows: [], error: res.error };
+    return { rows: res.rows.filter((r) => leadMatchesQuery(r, state.search) && inSource(r) && inPeriod(r) && inTag(r) && inOperator(r)) };
 }
 
 // CRM_CARD_V2 — КТО это и КАК до него дозвониться, одним ответом на две строки.
@@ -507,7 +545,9 @@ async function paint() {
             .eq('is_active', 1).order('full_name');
         state.staff = error ? [] : boardStaff(data || []).map((p) => ({ id: p.id, full_name: p.full_name }));
     }
-    await load();
+    // CRM_UNIFY_V1 (итоговое ревью) — вид «Задачи» доску не показывает и не грузит;
+    // устаревшая загрузка (пришла новее) не рисует ничего.
+    if (state.view !== 'tasks' && !(await load())) return;
     const root = refs.root;
     clear(root);
 
@@ -558,7 +598,9 @@ async function paint() {
     // серверу уходит один раз на слово, а не на каждую букву.
     searchInp.addEventListener('input', () => { state.search = searchInp.value; syncClear(); paintFilters(); paintBody(); serverSearch(); });
     searchClear.addEventListener('click', () => { searchInp.value = ''; state.search = ''; syncClear(); paintFilters(); paintBody(); serverSearch(); searchInp.focus(); });
-    const searchBox = h('div', { style: { position: 'relative', flex: '0 0 300px', minWidth: '200px' } },
+    // CRM_UNIFY_V1 (итоговое ревью) — на 320 px поле не шире строки: 300px — это
+    // основа, а не закон (сжимается, страница вбок не едет).
+    const searchBox = h('div', { style: { position: 'relative', flex: '0 1 300px', minWidth: '0', maxWidth: '100%' } },
         h('span', { style: {
             position: 'absolute', left: '13px', top: '50%', transform: 'translateY(-50%)',
             color: 'var(--primary-600, #167873)', pointerEvents: 'none', display: 'flex',
@@ -718,7 +760,7 @@ async function paint() {
             const n = tally.has(key) ? tally.get(key).total : 0;
             const on = state.sources.includes(key);
             if (!n && !on) continue;
-            const btn = chip(on, sourceLabel(key) + ' · ' + n, () => {
+            const btn = chip(on, tr(sourceLabel(key)) + ' · ' + n, () => {   // CRM_UNIFY_V1 — подпись переводится до числа
                 state.sources = on ? state.sources.filter((k) => k !== key) : [...state.sources, key];
                 paintFilters(); paintBody();
             });
@@ -886,8 +928,10 @@ async function paint() {
                     h('span', { class: 'grow' }),
                     key === stageKey('in_process') && !crmReadOnly() ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Новая заявка', onclick: () => requestModal(null) }, '+') : null),
                 list,
+                // CRM_UNIFY_V1 (итоговое ревью) — подсказка не зовёт выбирать период ради
+                // открытых: «Период» сужает только закрытые колонки.
                 trimmed ? h('div', { class: 'muted crm-col-capped', 'data-col-capped': key },
-                    trf('Показаны последние {n} — выберите период, чтобы увидеть остальные', { n: CLOSED_ALL_TIME_LIMIT })) : null);
+                    trf('Показаны последние {n} закрытых — более ранние найдёт поиск или «Период»; открытые карточки видны всегда.', { n: CLOSED_ALL_TIME_LIMIT })) : null);
             board.appendChild(col);
         }
         // WORKING_WINDOW_V1 — доска живёт ВНУТРИ белого рабочего окна, как в
@@ -1134,6 +1178,16 @@ async function paint() {
                 h('div', { class: 'empty' }, state.rows.length ? 'Ничего не найдено.' : 'Заявок пока нет — зафиксируйте первое обращение.'));
         }
         const tbody = h('tbody');
+        // CRM_UNIFY_V1 (итоговое ревью) — «Список» при «Всё время» показывает
+        // закрытые колонки так же не целиком (последние 300): говорим об этом, как
+        // на доске, а не режем молча.
+        const listClientFiltered = !!state.search.trim() || state.sources.length > 0 || !!state.tag;
+        const cappedKeys = listClientFiltered ? [] : STATUSES.map(([k]) => k).filter((k) => state.capped[k]);
+        const cappedNote = cappedKeys.length ? h('div', { class: 'muted crm-col-capped', 'data-list-capped': '', style: { margin: '0 0 8px' } },
+            trf('Закрытые колонки показаны не целиком: {list}. Более ранние найдёт поиск или «Период»; открытые карточки видны всегда.', {
+                list: cappedKeys.map((k) => trf('«{label}» — {n} из {total}', {
+                    label: tr((STATUS_RU[k] || [k])[0]), n: CLOSED_ALL_TIME_LIMIT, total: state.counts[k] })).join(', '),
+            })) : null;
         for (const r of rows) {
             const [stLabel, stKind] = STATUS_RU[r.status] || [r.status, ''];
             tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: (ev) => { if (ev.target.closest('button, select, .crm-move')) return; requestModal(r); } },
@@ -1161,13 +1215,13 @@ async function paint() {
                 h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, h('span', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end' } }, ...cardActions(r))),
             ));
         }
-        return h('div', { class: 'card' }, h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
+        return h('div', null, cappedNote, h('div', { class: 'card' }, h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
             h('thead', null, h('tr', null,
                 h('th', null, 'Имя'), h('th', null, 'Телефон'), h('th', null, 'Источник'),
                 h('th', null, 'Услуга'), h('th', null, 'Комментарий'), h('th', null, 'Метки'),
                 h('th', null, 'Оператор'), h('th', null, 'Задача'),   // CRM_UNIFY_V1
                 h('th', null, 'Статус'), h('th', null, 'Дата'), h('th', null, ''))),
-            tbody)));
+            tbody))));
     }
 
     // ---------------- КОНВЕРСИЯ: попап регистрации пациента ----------------
@@ -3210,7 +3264,7 @@ async function paint() {
                 ...STATUSES.map(([k, l, kind]) => {
                     const n = rows.filter(r => r.status === k).length;
                     return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
-                        Tag(l + ' · ' + n, { kind, dot: true }));
+                        Tag(tr(l) + ' · ' + n, { kind, dot: true }));   // CRM_UNIFY_V1 — подпись переводится до числа
                 })));
 
             // по источникам
@@ -3254,7 +3308,9 @@ async function paint() {
 
     // ---------------- EXCEL ----------------
     async function exportExcel() {
-        const rows = filtered();
+        // CRM_UNIFY_V1 (итоговое ревью) — всё под текущими фильтрами, без 300 на колонку.
+        const { rows, error } = await crmExportRows();
+        if (error) { toast(trf('Не удалось загрузить заявки: {msg}', { msg: error.message }), 'fail'); return; }
         if (!rows.length) { toast('Нет заявок для выгрузки.', 'fail'); return; }
         try {
             const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');

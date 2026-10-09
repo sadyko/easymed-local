@@ -130,3 +130,14 @@ test('отчёт: свой лёгкий запрос за свой период 
   const bad = fakeDb(() => ({ data: null, error: { message: 'boom' } }));
   assert.equal(await loadReportRows({ db: bad, days: 7 }), null, 'ошибка выдана за пустой отчёт');
 });
+
+// CRM_UNIFY_V1 (итоговое ревью) — выгрузка Excel: closedLimit 0 — закрытые одним запросом без предела.
+test('closedLimit 0 («Всё время» для выгрузки): закрытые одним запросом, без 300 и без числа', async () => {
+  const db = fakeDb(() => ({ data: [], error: null }));
+  await loadBoard({ db, closedKeys: ['came', 'stopped'], bounds: { from: null, to: null }, closedLimit: 0 });
+  assert.equal(db.calls.length, 2);
+  const closed = db.calls.find((c) => c.filters.some(([op, col]) => op === 'in' && col === 'status'));
+  assert.ok(closed, 'закрытые не одним запросом');
+  assert.equal(closed.limit, null);
+  assert.ok(!closed.filters.some(([, col]) => col === 'created_at'));
+});

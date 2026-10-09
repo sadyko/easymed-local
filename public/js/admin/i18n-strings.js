@@ -3,6 +3,10 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CRM_UNIFY_V1 (2026-10-09, итоговое ревью) — «Период» не прячет открытые; подсказки обрезанных закрытых колонок (views/crm.js)
+  "Показаны последние {n} закрытых — более ранние найдёт поиск или «Период»; открытые карточки видны всегда.": {"en":"Showing the latest {n} closed — search or «Period» finds older ones; open cards are always shown.","ru":"Показаны последние {n} закрытых — более ранние найдёт поиск или «Период»; открытые карточки видны всегда.","uz":"Oxirgi {n} ta yopilgani ko‘rsatilgan — oldingilarini qidiruv yoki «Davr» topadi; ochiq kartochkalar doim ko‘rinadi."},   // CRM_UNIFY_V1
+  "Закрытые колонки показаны не целиком: {list}. Более ранние найдёт поиск или «Период»; открытые карточки видны всегда.": {"en":"Closed columns are not shown in full: {list}. Search or «Period» finds older ones; open cards are always shown.","ru":"Закрытые колонки показаны не целиком: {list}. Более ранние найдёт поиск или «Период»; открытые карточки видны всегда.","uz":"Yopilgan ustunlar to‘liq ko‘rsatilmagan: {list}. Oldingilarini qidiruv yoki «Davr» topadi; ochiq kartochkalar doim ko‘rinadi."},   // CRM_UNIFY_V1
+  "«{label}» — {n} из {total}": {"en":"«{label}» — {n} of {total}","ru":"«{label}» — {n} из {total}","uz":"«{label}» — {total} tadan {n} ta"},   // CRM_UNIFY_V1
   // CRM_UNIFY_V1 (2026-10-09) — фильтр «Оператор»: доска, поиск, список, Excel, «Отчёт» (views/crm.js)
   "Ничьи": {"en":"Unassigned","ru":"Ничьи","uz":"Hech kimniki emas"},   // CRM_UNIFY_V1
   "По имени…": {"en":"By name…","ru":"По имени…","uz":"Ism bo‘yicha…"},   // CRM_UNIFY_V1
