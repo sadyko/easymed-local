@@ -476,3 +476,17 @@ test('подсказки цены, НДС и доли говорят, что з�
     const e = STRINGS['Строка {n}: {col} пусто — оставлено как было ({v}).'];
     assert.ok(e && e.uz && e.en, 'нет перевода сообщения с сохранённым значением');
 });
+
+// CLINIC_API_FIX_V1 (ревью 4, M4) — в колонке процентов (0…100) «33,333» и
+// «12,345%» — десятичные: прочтение «тысячи» там невозможно (33 333 % — не
+// доля), поэтому правило неоднозначных трёх знаков к процентам не относится.
+test('проценты: «33,333» и «12,345%» — 33,333 и 12,345; в цене «33,333» по-прежнему не число', () => {
+    assert.strictEqual(readImportNumber('33,333', true).n, 33.333);
+    assert.strictEqual(readImportNumber('12,345%', true).n, 12.345);
+    assert.strictEqual(readImportNumber('12.345', true).n, 12.345);
+    assert.ok('bad' in readImportNumber('33,333', false));
+    const row = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '33,333', tax_rate: '12,345%' });
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+    assert.strictEqual(row.payload.default_doctor_percent, 33.333);
+    assert.strictEqual(row.payload.tax_rate, 12.345);
+});

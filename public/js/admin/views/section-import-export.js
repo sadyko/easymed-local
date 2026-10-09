@@ -2518,7 +2518,10 @@ export function readImportNumber(v, percent) {
     const m = /^([+-]?)(\d{1,3}(?:\s+\d{3})+|\d+)(?:([.,])(\d+))?$/.exec(s);
     if (!m) return { bad: text };
     const grouped = /\s/.test(m[2]);
-    if (m[3] && !grouped && m[4].length === 3 && m[2].length <= 3 && Number(m[2]) !== 0) return { bad: text };
+    // CLINIC_API_FIX_V1 (ревью 4, M4) — в колонке процентов (0…100) прочтение
+    // «тысячи» невозможно (33 333 % — не доля): там «33,333» и «12,345%» —
+    // десятичные, неоднозначности нет.
+    if (!percent && m[3] && !grouped && m[4].length === 3 && m[2].length <= 3 && Number(m[2]) !== 0) return { bad: text };
     const n = Number(m[1] + m[2].replace(/\s+/g, '') + (m[3] ? '.' + m[4] : ''));
     return Number.isFinite(n) ? { n } : { bad: text };
 }
