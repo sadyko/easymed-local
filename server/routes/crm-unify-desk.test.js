@@ -400,7 +400,9 @@ test('R5: стойка закрывает ждущие сегодня и жив�
     const undated = addLead(t.db, { status: 'in_process', updated: old, name: 'Строка без даты' });
     addLine(t.db, undated, { svc: 40, day: null });
     const datedToday = addLead(t.db, { status: 'recall', date: TODAY, updated: old, name: 'Дата сегодня' });
-    const noShowOld = addLead(t.db, { status: 'no_show', date: localDay(-5), name: 'Не пришёл -5' });
+    // CRM_UNIFY_V1 (задача 6) — ОБНОВЛЕНО НАМЕРЕННО: «Не пришёл» в окне повторного
+    // обращения стойка теперь закрывает (пришёл на день позже). Здесь — давний.
+    const noShowOld = addLead(t.db, { status: 'no_show', date: localDay(-5), updated: daysAgoIso(5), name: 'Не пришёл -5' });
     const stopped = addLead(t.db, { status: 'stopped', name: 'Отказ' });
 
     const r = await desk(t);
@@ -427,6 +429,30 @@ test('R5: старая карточка, привязанная к этому в
     assert.equal(r.status, 200, r.text);
     assert.equal(t.lead(rid).status, 'came');
   } finally { t.close(); }
+});
+
+// CRM_UNIFY_V1 (задача 6; Р8, Р11) — «Не пришёл» ставит сервер наутро после
+// пропущенной записи. Пациент, пришедший на день позже, — тот же приход: стойка
+// закрывает сидовую «Не пришёл», которая двигалась в окне повторного обращения
+// (тем же правилом deskCloses, что и живые). Давний «Не пришёл» — история.
+test('стойка: «Не пришёл» в пределах окна (пришёл на день позже) — «Пришёл»; давний «Не пришёл» — не трогается', async () => {
+  for (const [ago, want] of [[0, 'came'], [1, 'came'], [10, 'no_show']]) {
+    const t = await startCrmApp();
+    try {
+      const rid = addLead(t.db, { status: 'no_show', date: localDay(-1), updated: daysAgoIso(ago) });
+      const stopped = addLead(t.db, { status: 'stopped', updated: daysAgoIso(ago), name: 'Отказ' });
+      const r = await desk(t);
+      assert.equal(r.status, 200, r.text);
+      assert.equal(t.lead(rid).status, want, `${ago} дн. назад`);
+      assert.equal(t.lead(stopped).status, 'stopped', 'стойка открыла «Отказ»');
+      if (want === 'came') {
+        assert.equal(t.lead(rid).scheduled_date, localDay(-1), 'дата карточки переписана');
+        const d = await t.rpc('discard_empty_visit', 'reg', { visit_id: r.json.data.visit.id });
+        assert.equal(d.status, 200, d.text);
+        assert.equal(t.lead(rid).status, 'no_show', 'удаление пустого визита не вернуло «Не пришёл»');
+      }
+    } finally { t.close(); }
+  }
 });
 
 // R5 — путь по телефону на стойке — тем же правилом. Карточка по телефону

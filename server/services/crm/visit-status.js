@@ -35,6 +35,8 @@ import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, windowHo
 // CLINIC_DAY_V1 — «сегодня» и «день визита» — местные дни клиники, теми же
 // словами, какими их считают касса, дневник и документы.
 import { localDate } from '../domain/day.js';
+// CRM_UNIFY_V1 (задача 6) — «двигалась ли карточка в окне» — одно правило (contact-window.js).
+import { inWindowSql, windowArg } from './contact-window.js';
 // CRM_UNIFY_V1 — приход ставит в визит строки, которые визит держит, а в нём их
 // нет (вызов во время прихода, не при загрузке модуля: booking-mirror.js сам
 // берёт отсюда EVIDENCE_SERVICE_STATUSES).
@@ -123,12 +125,11 @@ function settleLineless(db, { patientId, day, open, won, write }) {
      WHERE r.patient_id = ?
        AND ((r.status IN (${holes})
              AND (date(r.scheduled_date) = date(?)
-                  OR ((r.scheduled_date IS NULL OR r.scheduled_date = '')
-                      AND julianday(COALESCE(NULLIF(r.updated_at, ''), r.created_at)) >= julianday('now', ?))))
+                  OR ((r.scheduled_date IS NULL OR r.scheduled_date = '') AND ${inWindowSql('r')})))
             OR (r.status = ? AND date(r.scheduled_date) = date(?)))
        AND NOT EXISTS (SELECT 1 FROM crm_request_services l
                         WHERE l.request_id = r.id AND l.status = 'pending')
-  `).all(patientId, ...open, day, `-${windowHours(db)} hours`, SEED_NO_SHOW_STAGE, day);
+  `).all(patientId, ...open, day, windowArg(windowHours(db)), SEED_NO_SHOW_STAGE, day);   // CRM_UNIFY_V1 (задача 6) — одно правило окна
   for (const p of reqs) writeParent(write, p, won, p.scheduled_date);
 }
 

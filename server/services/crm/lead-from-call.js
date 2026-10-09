@@ -16,6 +16,9 @@ import { readSettingsRow } from '../telephony/settings.js';
 // duplicate — the failure telegram/documents.js documents for the bot.
 import { phoneKey, phoneLikePattern, digitsOf, MIN_PHONE_DIGITS }
   from '../../../public/js/admin/views/crm-phone-match.js';
+// CRM_UNIFY_V1 — окно повторного обращения (решение владельца 4): одно правило
+// со входящим звонком и записью колл-центра.
+import { contactDecision, reopenLead } from './contact-window.js';
 
 // The source key every call-born lead carries. config.js refuses to delete it
 // for exactly this reason.
@@ -38,7 +41,7 @@ export function leadsForPhone(db, rawPhone, { open = false } = {}) {
   // the board a duplicate and silently stop creating leads at all.
   if (key.length < MIN_PHONE_DIGITS) return [];
   const rows = db.prepare(`
-    SELECT r.id, r.full_name, r.phone, r.status, r.created_at, r.assigned_to,
+    SELECT r.id, r.full_name, r.phone, r.status, r.created_at, r.updated_at, r.assigned_to,
            s.kind AS stage_kind, s.label AS stage_label
       FROM crm_requests r
       LEFT JOIN crm_stages s ON s.key = r.status
@@ -53,6 +56,10 @@ export function leadsForPhone(db, rawPhone, { open = false } = {}) {
  * Open only, on purpose — for an INCOMING call: a patient who came last month
  * («Пришёл») and calls again is a NEW lead, while a patient the operator is
  * already working on is not.
+ *
+ * CRM_UNIFY_V1 — leadFromCall no longer asks this: an incoming call goes
+ * through the repeat-contact window (contact-window.js contactDecision). Kept
+ * as an export for its readers (tests, de-duplication checks).
  */
 export function openLeadForPhone(db, rawPhone) {
   return leadsForPhone(db, rawPhone, { open: true })[0] || null;
@@ -128,9 +135,21 @@ export function leadFromCall(db, call) {
   // The chatty-patient guard. Somebody who calls four times before lunch is
   // ONE conversation the operator is having, not four cards to work through.
   // CRM_DEDUP_SEARCH_TASKS_V1 — an OUTGOING call is stricter: it creates a card
-  // only for a number that has never had one (see anyLeadForPhone).
+  // only for a number that has never had one (see anyLeadForPhone), and never
+  // moves the existing one (CRM_UNIFY_V1, Р4: it is the operator's own work).
   const outgoing = Number(call.call_type) === OUTGOING_CALL_TYPE;
-  if (outgoing ? anyLeadForPhone(db, phone) : openLeadForPhone(db, phone)) return null;
+  if (outgoing) {
+    if (anyLeadForPhone(db, phone)) return null;
+  } else {
+    // CRM_UNIFY_V1 — ОКНО ПОВТОРНОГО ОБРАЩЕНИЯ (решение владельца 4, Р2–Р5):
+    //   открытая карточка в окне — та же, без движения (звонок — не движение);
+    //   открытая после окна — та же, возвращается в «Новый лид» (reopenLead);
+    //   закрытая в окне — новой нет, закрытую не трогаем (Р5);
+    //   закрытая за окном или карточек нет — новая (ниже).
+    const d = contactDecision(db, leadsForPhone(db, phone));
+    if (d.action === 'same' || d.action === 'closed') return null;
+    if (d.action === 'reopen') { reopenLead(db, d.lead.id); return null; }
+  }
 
   // A known patient gets their real name on the card; an unknown caller gets
   // the number, which is what the operator has to work with anyway (and is

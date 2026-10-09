@@ -454,7 +454,9 @@ test('CRM_UNIFY_V1: колонка записи — только открыты�
   assert.ok(textOf(root).includes('Изменения не сохранены'), 'выбор сделан, а экран молчит, что его надо сохранить');
   findButtonByText(root, /Сохранить настройки/).click();
   await tick();
-  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: 'in_process' } },
+  // CRM_UNIFY_V1 (задача 6) — ОБНОВЛЕНО НАМЕРЕННО: окно повторного обращения
+  // уходит с каждым сохранением карточки (72 — значение по умолчанию).
+  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: 'in_process', window_hours: 72 } },
     'конверсию не меняли — её и не шлём');
   assert.strictEqual(lastToast(), 'Настройки сохранены.');
 });
@@ -480,7 +482,8 @@ test('CRM_UNIFY_V1: колонка конверсии — без проигры�
   assert.ok(textOf(root).includes('до «Перезвонить»'), 'подсказка колонки записи не знает новой конверсии');
   findButtonByText(root, /Сохранить настройки/).click();
   await tick();
-  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, won_stage: 'recall' } });
+  // CRM_UNIFY_V1 (задача 6) — ОБНОВЛЕНО НАМЕРЕННО: и окно повторного обращения.
+  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 72, won_stage: 'recall' } });
 });
 
 test('CRM_UNIFY_V1: отказ сервера — его фраза, экран не перерисован догадкой', async () => {
@@ -492,4 +495,53 @@ test('CRM_UNIFY_V1: отказ сервера — его фраза, экран 
   await tick();
   assert.strictEqual(lastToast(), 'Проигрышная колонка не может быть колонкой конверсии.');
   assert.strictEqual(getCalls, 1);
+});
+
+// ---------------------------------------------------------------------------
+// CRM_UNIFY_V1 (задача 6) — окно повторного обращения (решение владельца 4):
+// настройка «CRM-канбан», crm_settings.window_hours, по умолчанию 72.
+// ---------------------------------------------------------------------------
+const hoursInput = (root) => walk(root).find((n) => n.tagName === 'INPUT' && 'data-crm-window-hours' in n.attrs);
+const typeHours = (el, v) => { el.value = v; el.dispatchEvent({ type: 'input', target: el, currentTarget: el }); };
+
+test('CRM_UNIFY_V1: окно повторного обращения — 72 по умолчанию, уходит вместе с колонкой записи', async () => {
+  resetServer();
+  const root = await render();
+  const hours = hoursInput(root);
+  assert.ok(hours, 'нет поля окна');
+  assert.strictEqual(hours.value, '72');
+  assert.strictEqual(hours.attrs.type, 'number');
+  assert.ok(textOf(root).includes('Окно повторного обращения, часов'));
+  assert.ok(textOf(root).includes('Звонок или запись в пределах окна — та же карточка.'), 'нет подсказки о правиле окна');
+  assert.ok(!textOf(root).includes('Изменения не сохранены'), 'свежий экран кричит о несохранённом');
+  typeHours(hours, '48');
+  assert.ok(textOf(root).includes('Изменения не сохранены'), 'окно изменили, а экран молчит');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 48 } });
+  assert.strictEqual(lastToast(), 'Настройки сохранены.');
+});
+
+test('CRM_UNIFY_V1: окно — значение с сервера; вернули прежнее — экран больше не просит сохранить', async () => {
+  resetServer();
+  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: null, window_hours: 24 } });
+  const root = await render();
+  const hours = hoursInput(root);
+  assert.strictEqual(hours.value, '24');
+  typeHours(hours, '30');
+  assert.ok(textOf(root).includes('Изменения не сохранены'));
+  typeHours(hours, '24');
+  assert.ok(!textOf(root).includes('Изменения не сохранены'), 'вернули прежнее окно, а экран всё ещё просит сохранить');
+});
+
+test('CRM_UNIFY_V1: окно не целое или вне 1–720 — отказ до обращения к серверу', async () => {
+  for (const bad of ['0', '721', '1.5', '', 'abc']) {
+    resetServer();
+    const root = await render();
+    typeHours(hoursInput(root), bad);
+    findButtonByText(root, /Сохранить настройки/).click();
+    await tick();
+    assert.strictEqual(saveCalls, 0, 'ушло на сервер: ' + JSON.stringify(bad));
+    assert.strictEqual(lastToast(), 'Окно повторного обращения — целое число часов от 1 до 720.', JSON.stringify(bad));
+  }
 });

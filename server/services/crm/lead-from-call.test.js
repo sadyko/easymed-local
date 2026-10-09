@@ -29,6 +29,9 @@ const call = (over = {}) => ({ ...CALL, ...over });
 
 const leads = (db) => db.prepare(`SELECT id, full_name, phone, source, status, patient_id, call_id
                                     FROM crm_requests ORDER BY id`).all();
+// CRM_UNIFY_V1 — окно повторного обращения (решение владельца 4): «давно» —
+// дальше 72 часов от последнего движения карточки (updated_at, иначе created_at).
+const agoIso = (days) => new Date(Date.now() - days * 86400000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 // --------------------------------------------------------------------------
 // The happy paths — the routing table, obeyed
@@ -172,11 +175,14 @@ test('an operator already working the lead by hand blocks the call from adding a
   assert.equal(rows[0].status, 'scheduled');
 });
 
-test('a CLOSED lead does not block a new one — the patient is calling again', () => {
-  const db = fresh();
+// CRM_UNIFY_V1 — UPDATED ON PURPOSE: the closed card is now dated outside the
+// repeat-contact window. Inside the window a closed card blocks a new one and
+// is left alone (Р5 — see the CRM_UNIFY_V1 tests at the end of this file).
+test('a CLOSED lead does not block a new one after the repeat-contact window (CRM_UNIFY_V1)', () => {
   for (const status of ['came', 'no_show', 'stopped', 'not_qualified']) {
     const db2 = fresh();
-    db2.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Прошлый','998909610004','call',?)").run(status);
+    const old = agoIso(10);
+    db2.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at, created_at) VALUES ('Прошлый','998909610004','call',?,?,?)").run(status, old, old);
     recordCall(db2, call(), 'poll');
     // Only OPEN columns de-duplicate: somebody who came last month and rings
     // again is a new conversation, not a duplicate of an old one.
@@ -296,9 +302,11 @@ test('Binotel outgoing: an open card blocks too', () => {
   assert.equal(leads(db).length, 1);
 });
 
-test('Binotel incoming (callType 0) keeps today\'s rule: a closed card does not block', () => {
+// CRM_UNIFY_V1 — UPDATED ON PURPOSE: the closed card is outside the window.
+test('Binotel incoming (callType 0): a closed card does not block after the repeat-contact window (CRM_UNIFY_V1)', () => {
   const db = fresh();
-  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Прошлый','998909610004','call','came')").run();
+  const old = agoIso(10);
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at, created_at) VALUES ('Прошлый','998909610004','call','came',?,?)").run(old, old);
   recordCall(db, call({ callType: 0 }), 'poll');
   assert.equal(leads(db).length, 2);
 });
@@ -315,9 +323,11 @@ test('onlinePBX outbound → call_type 1: no card next to a closed one, one card
   assert.equal(rows[1].phone, '+998901112233');
 });
 
-test('onlinePBX inbound → call_type 0: a closed card does not block (the patient is calling again)', () => {
+// CRM_UNIFY_V1 — UPDATED ON PURPOSE: the closed card is outside the window.
+test('onlinePBX inbound → call_type 0: a closed card does not block after the repeat-contact window (CRM_UNIFY_V1)', () => {
   const db = fresh();
-  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Прошлый','+998909610004','call','came')").run();
+  const old = agoIso(10);
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at, created_at) VALUES ('Прошлый','+998909610004','call','came',?,?)").run(old, old);
   recordCall(db, pbx({ accountcode: 'inbound', caller_id_number: '998909610004', destination_number: '10' }), 'poll', { kind: 'onlinepbx' });
   assert.equal(leads(db).length, 2);
 });
@@ -371,4 +381,84 @@ test('phone key: last nine only for a whole Uzbek number — +7 991… and +998 
   db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('RU2','+7 993 111 22 33','call','came')").run();
   recordCall(db, call({ generalCallID: 'GC-UZ2', externalNumber: '998931112233', callType: 1 }), 'poll');
   assert.equal(leads(db).filter((r) => r.phone === '+998931112233').length, 1);
+});
+
+// --------------------------------------------------------------------------
+// CRM_UNIFY_V1 (2026-10-09) — окно повторного обращения (решение владельца 4,
+// Р2–Р5) для ВХОДЯЩЕГО звонка. Исходящий — как раньше (Р4).
+// --------------------------------------------------------------------------
+
+test('CRM_UNIFY_V1: входящий в окне при закрытой карточке — новой нет, закрытая не тронута; после окна — новая', () => {
+  for (const [when, want] of [[null, 1], [agoIso(2), 1], [agoIso(10), 2]]) {
+    for (const status of ['came', 'no_show', 'stopped']) {
+      const db = fresh();
+      const id = db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Прошлый','998909610004','call',?)").run(status).lastInsertRowid;
+      if (when) db.prepare('UPDATE crm_requests SET updated_at = ?, created_at = ? WHERE id = ?').run(when, when, id);
+      const before = db.prepare('SELECT * FROM crm_requests WHERE id = ?').get(id);
+      recordCall(db, call({ callType: 0 }), 'poll');
+      const what = status + ', ' + (when || 'только что');
+      assert.equal(leads(db).length, want, what + (want === 1 ? ': в окне закрытая карточка получила дубль' : ': после окна звонок — новое обращение'));
+      assert.deepEqual(db.prepare('SELECT * FROM crm_requests WHERE id = ?').get(id), before, 'закрытая карточка изменилась: ' + what);
+    }
+  }
+});
+
+test('CRM_UNIFY_V1: входящий в окне при открытой карточке — та же, без движения (звонок — не движение карточки)', () => {
+  const db = fresh();
+  const recent = agoIso(1);
+  const id = db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at, created_at) VALUES ('Свежий','998909610004','call','recall',?,?)")
+    .run(recent, recent).lastInsertRowid;
+  recordCall(db, call({ callType: 0 }), 'poll');
+  assert.equal(leads(db).length, 1);
+  assert.deepEqual(db.prepare('SELECT status, updated_at FROM crm_requests WHERE id = ?').get(id), { status: 'recall', updated_at: recent });
+});
+
+test('CRM_UNIFY_V1: входящий после окна при открытой карточке — та же карточка возвращается в «Новый лид»', () => {
+  const db = fresh();
+  const stale = agoIso(21);
+  const id = db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at, created_at) VALUES ('Давний','998909610004','call','approved',?,?)")
+    .run(stale, stale).lastInsertRowid;
+  recordCall(db, call({ callType: 0 }), 'poll');
+  assert.equal(leads(db).length, 1, 'после окна открытая карточка получила дубль');
+  const row = db.prepare('SELECT status, source, updated_at FROM crm_requests WHERE id = ?').get(id);
+  assert.equal(row.status, 'in_process', 'карточка трёхнедельной давности не вернулась в начало воронки');
+  assert.equal(row.source, 'call', 'история карточки переписана');
+  assert.ok(row.updated_at > stale, 'возврат не отмечен движением карточки — окно не начнётся заново');
+  // второй звонок вскоре — уже в окне: карточку, которую оператор успел сдвинуть, звонок не двигает
+  db.prepare("UPDATE crm_requests SET status = 'recall' WHERE id = ?").run(id);
+  recordCall(db, call({ generalCallID: 'GC-2', callType: 0 }), 'poll');
+  assert.equal(leads(db).length, 1);
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(id).status, 'recall');
+});
+
+test('CRM_UNIFY_V1: открытая после окна и свежая закрытая — возвращается открытая, новой нет', () => {
+  const db = fresh();
+  const stale = agoIso(21);
+  const open = db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at, created_at) VALUES ('Давний','998909610004','call','recall',?,?)")
+    .run(stale, stale).lastInsertRowid;
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Вчера','998909610004','call','came')").run();
+  recordCall(db, call({ callType: 0 }), 'poll');
+  assert.equal(leads(db).length, 2);
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(open).status, 'in_process');
+});
+
+test('CRM_UNIFY_V1: исходящий — как раньше: при любой карточке новой нет и существующая не двигается', () => {
+  const db = fresh();
+  const stale = agoIso(21);
+  const id = db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at, created_at) VALUES ('Давний','998909610004','call','recall',?,?)")
+    .run(stale, stale).lastInsertRowid;
+  recordCall(db, call({ callType: 1 }), 'poll');
+  assert.equal(leads(db).length, 1);
+  assert.deepEqual(db.prepare('SELECT status, updated_at FROM crm_requests WHERE id = ?').get(id), { status: 'recall', updated_at: stale },
+    'исходящий звонок оператора сдвинул карточку');
+});
+
+test('CRM_UNIFY_V1: правило звонка «не создавать» — звонок не обращение: давняя карточка не возвращается', () => {
+  const db = fresh();
+  const stale = agoIso(21);
+  const id = db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at, created_at) VALUES ('Давний','998909610004','call','recall',?,?)")
+    .run(stale, stale).lastInsertRowid;
+  saveRouting(db, [{ disposition: 'ANSWER', action: 'ignore' }]);
+  recordCall(db, call({ callType: 0 }), 'poll');
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(id).status, 'recall');
 });

@@ -78,7 +78,10 @@ for (const move of [false, true]) {
   test(`R2 входящий звонок бывшего пациента (карточка в «Пришёл») заводит новый лид (перенос: ${move})`, () => {
     const db = openDb(':memory:');
     migrate(db);
-    db.prepare("INSERT INTO crm_requests (full_name, phone, status) VALUES ('История', '+998 90 909 26 38', 'came')").run();
+    // CRM_UNIFY_V1 (задача 6) — ОБНОВЛЕНО НАМЕРЕННО: карточка истории — давняя
+    // (за окном повторного обращения). Закрытая карточка В ОКНЕ новый лид не
+    // заводит (Р5, lead-from-call.test.js).
+    db.prepare("INSERT INTO crm_requests (full_name, phone, status, updated_at, created_at) VALUES ('История', '+998 90 909 26 38', 'came', ?, ?)").run(OLD_UPDATED, OLD_UPDATED);
     if (move) saveConfig(db, { settings: { won_stage: 'approved' } });
     const cid = Number(db.prepare("INSERT INTO calls (general_call_id, started_at, disposition, external_number, call_type) VALUES ('X1','2026-10-09T08:00:00Z','ANSWER','998909092638',0)").run().lastInsertRowid);
     const created = leadFromCall(db, { id: cid, disposition: 'ANSWER', external_number: '998909092638', call_type: 0 });

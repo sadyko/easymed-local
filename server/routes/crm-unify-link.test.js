@@ -142,22 +142,83 @@ test('запись врача: пациент без карточки её не 
   } finally { t.close(); }
 });
 
-// CRM_UNIFY_V1 (ревью задачи 1) — шаг E: колл-центр берёт свежую (не старше
-// CALLCENTER_ATTACH_DAYS) открытую карточку пациента, даже ждущую другой день;
-// старше — заводит новую. Задача 6 заменит этот срок окном повторного обращения.
-test('колл-центр: карточка, ждущая другой день, моложе 30 дней — та же; старше — новая', async () => {
-  for (const [age, cards, same] of [[10, 1, true], [40, 2, false]]) {
+// CRM_UNIFY_V1 (задача 6) — ОБНОВЛЕНО НАМЕРЕННО. Шаг E брал свежую (не старше
+// 30 дней, CALLCENTER_ATTACH_DAYS) открытую карточку, а старше — заводил новую.
+// Теперь — окно повторного обращения (решение владельца 4, contact-window.js):
+// открытая карточка пациента — всегда та же, без дубля; в окне (updated_at,
+// иначе created_at; 72 ч) — как есть, после окна — возвращается в начало воронки
+// (одна карточка, история внутри) и записывается. След отмены помнит прежнюю
+// ступень — discard_empty_visit вернёт её.
+test('колл-центр: открытая карточка, ждущая другой день, — та же при любой давности; после окна — возвращена в начало и записана', async () => {
+  for (const [age, status] of [[1, 'approved'], [10, 'scheduled'], [40, 'scheduled']]) {
     const t = await startCrmApp();
     try {
-      const rid = addLead(t.db, { assigned: 3, date: D2, updated: daysAgoIso(age) });
+      const rid = addLead(t.db, { assigned: 3, status: 'approved', date: D2, updated: daysAgoIso(age) });
       addLine(t.db, rid, { svc: 40, day: D2 });
       const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
       assert.equal(b.status, 200, b.text);
-      assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, cards, `карточке ${age} дн.`);
-      const link = t.db.prepare('SELECT request_id, source, created_request FROM crm_booking_links WHERE visit_id = ?').get(b.json.data.visit.id);
-      assert.equal(link.request_id === rid, same, `карточке ${age} дн.: привязка ${JSON.stringify(link)}`);
-      assert.equal(link.source, 'callcenter');
+      const vid = b.json.data.visit.id;
+      assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 1, `карточке ${age} дн.: дубль`);
+      const link = t.db.prepare('SELECT request_id, source, created_request FROM crm_booking_links WHERE visit_id = ?').get(vid);
+      assert.deepEqual(link, { request_id: rid, source: 'callcenter', created_request: 0 }, `карточке ${age} дн.`);
+      assert.equal(t.lead(rid).status, status, `карточке ${age} дн.: ступень`);
       assert.deepEqual(linesOf(t.db, rid).map((l) => l.visit_id), [null], 'строка другого дня взяла визит');
+      if (age > 3) {
+        const undo = t.db.prepare('SELECT prev_status FROM crm_booking_undo WHERE visit_id = ? AND request_id = ?').get(vid, rid);
+        assert.equal(undo && undo.prev_status, 'approved', 'след отмены не помнит ступень до возврата в начало');
+      }
     } finally { t.close(); }
   }
+});
+
+test('колл-центр: открытая карточка, три недели без движения, ждущая другой день — та же карточка, возвращена в начало и записана', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { status: 'recall', date: D2, updated: daysAgoIso(21) });
+    addLine(t.db, rid, { svc: 40, day: D2 });
+    const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
+    assert.equal(b.status, 200, b.text);
+    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 1, 'после окна открытая карточка не должна дублироваться');
+    assert.equal(t.db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(b.json.data.visit.id).request_id, rid);
+    assert.equal(t.lead(rid).status, 'scheduled', 'возвращённая в начало карточка не уехала в «Колонку записи»');
+    assert.ok(t.lead(rid).updated_at > daysAgoIso(1), 'новое обращение не отмечено движением карточки');
+  } finally { t.close(); }
+});
+
+// Р5 — закрытая карточка в окне + новая запись: новой нет, закрытую не трогаем,
+// привязки к ней нет. После окна — новая карточка с тем же пациентом.
+test('колл-центр: закрытая карточка в окне — новой нет, закрытая не тронута; после окна — новая с тем же пациентом', async () => {
+  for (const [ago, want] of [[1, 1], [10, 2]]) {
+    for (const closed of ['came', 'no_show', 'stopped']) {
+      const t = await startCrmApp();
+      try {
+        const old = addLead(t.db, { status: closed, updated: daysAgoIso(ago) });
+        const before = t.lead(old);
+        const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
+        assert.equal(b.status, 200, b.text);
+        const what = `${closed}, ${ago} дн. назад`;
+        assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, want, what);
+        assert.deepEqual(t.lead(old), before, 'закрытая карточка изменилась: ' + what);
+        const link = t.db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(b.json.data.visit.id);
+        if (want === 1) assert.equal(link, undefined, 'запись привязалась к закрытой карточке: ' + what);
+        else {
+          assert.notEqual(link.request_id, old);
+          assert.equal(t.lead(link.request_id).patient_id, 77);
+        }
+      } finally { t.close(); }
+    }
+  }
+});
+
+// Окно действует на новую запись колл-центра (шаг E), но не на запись, которой
+// карточка ждёт: дата или строка этого дня — любой давности (шаг C).
+test('колл-центр: давняя карточка, ждущая ЭТОТ день, — та же и без возврата в начало', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { status: 'approved', date: D, updated: daysAgoIso(30) });
+    const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
+    assert.equal(b.status, 200, b.text);
+    assert.equal(t.lead(rid).status, 'approved', 'запись на назначенный день сочтена новым обращением');
+    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 1);
+  } finally { t.close(); }
 });
