@@ -144,3 +144,22 @@ test('crm_search: оператор не находит чужие; одна бу
   assert.deepEqual(search(db, '', admin), []);
   assert.equal(isReadOnlyRpc('crm_search'), true);
 });
+
+// CRM_UNIFY_V1 (задача 9) — фильтр «Оператор» в поиске (Р15): поверх видимости,
+// а не вместо неё. Оператор, выбравший «по имени» чужого, получает пусто.
+test('CRM_UNIFY_V1: crm_search { assigned } — мои / ничьи / по имени; видимость не расширяется', () => {
+  const { db, admin, op1, op2 } = seed();
+  ins(db, { full_name: 'Тестова Лолы', phone: '901000001', assigned_to: op1.id });
+  ins(db, { full_name: 'Тестова Зарины', phone: '901000002', assigned_to: op2.id });
+  ins(db, { full_name: 'Тестова Ничья', phone: '901000003', assigned_to: null });
+  const search = getRpc('crm_search');
+  const owners = (rows) => rows.map((r) => r.assigned_to);
+  assert.deepEqual(owners(search(db, { q: 'тестова', assigned: op2.id }, admin)), [op2.id]);
+  assert.deepEqual(owners(search(db, { q: 'тестова', assigned: String(op2.id) }, admin)), [op2.id], 'номер строкой не понят');
+  assert.deepEqual(owners(search(db, { q: 'тестова', assigned: 'none' }, admin)), [null]);
+  assert.deepEqual(owners(search(db, { q: 'тестова', assigned: 'me' }, op1)), [op1.id]);
+  assert.deepEqual(owners(search(db, { q: 'тестова', assigned: 'all' }, op1)).sort(), [null, op1.id].sort());
+  assert.deepEqual(search(db, { q: 'тестова', assigned: op2.id }, op1), [], 'оператор увидел чужую карточку через фильтр');
+  assert.equal(search(db, { q: 'тестова' }, admin).length, 3, 'без assigned — как раньше');
+  assert.deepEqual(search(db, { q: 'тестова', assigned: 'мусор' }, admin), [], 'непонятный фильтр расширил выдачу');
+});

@@ -3,6 +3,12 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CRM_UNIFY_V1 (2026-10-09) — фильтр «Оператор»: доска, поиск, список, Excel, «Отчёт» (views/crm.js)
+  "Ничьи": {"en":"Unassigned","ru":"Ничьи","uz":"Hech kimniki emas"},   // CRM_UNIFY_V1
+  "По имени…": {"en":"By name…","ru":"По имени…","uz":"Ism bo‘yicha…"},   // CRM_UNIFY_V1
+  "Оператор по имени": {"en":"Operator by name","ru":"Оператор по имени","uz":"Operator ism bo‘yicha"},   // CRM_UNIFY_V1
+  "Оператор: {name}": {"en":"Operator: {name}","ru":"Оператор: {name}","uz":"Operator: {name}"},   // CRM_UNIFY_V1
+  "Этот номер есть у карточки другого оператора — она вам не видна.": {"en":"This number belongs to another operator’s card — it is not visible to you.","ru":"Этот номер есть у карточки другого оператора — она вам не видна.","uz":"Bu raqam boshqa operator kartochkasida bor — u sizga ko‘rinmaydi."},   // CRM_UNIFY_V1
   // CRM_UNIFY_V1 (2026-10-09) — «Отчёт» считает по базе; сервер не ответил — по загруженному (views/crm.js reportModal)
   "Не удалось посчитать по базе — показано по заявкам, загруженным на доску.": {"en":"Could not count from the database — showing the requests loaded on the board.","ru":"Не удалось посчитать по базе — показано по заявкам, загруженным на доску.","uz":"Bazadan hisoblab bo‘lmadi — doskaga yuklangan arizalar bo‘yicha ko‘rsatilgan."},   // CRM_UNIFY_V1
   // CRM_UNIFY_V1 (2026-10-09) — доска: закрытая колонка «Всё время» — последние 300 (views/crm.js, crm-board-load.js)

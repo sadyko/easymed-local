@@ -165,7 +165,7 @@ export function boardStaff(users) {
 // CRM_FILTERS_V1 — источник и период сужают доску. Живут в state, потому что
 // paintBody() перерисовывает только тело, без повторного запроса к базе.
 // CRM_MULTI_SOURCE_V1 — `sources`: отмеченные в фильтре источники (пусто = все).
-const state = { view: 'kanban', filter: 'all', search: '', rows: [], sources: [], period: 'all',
+const state = { view: 'kanban', search: '', rows: [], sources: [], period: 'all',   // CRM_UNIFY_V1 — мёртвое filter: 'all' убрано
                 // CRM_PERIOD_CUSTOM_V1 — границы своего периода, 'YYYY-MM-DD'.
                 // Пустая граница = без ограничения с этой стороны: «с 01.08 и
                 // далее» — нормальный вопрос, и запрещать его незачем.
@@ -183,7 +183,11 @@ const state = { view: 'kanban', filter: 'all', search: '', rows: [], sources: []
                 tag: '', leadTags: new Map(),
                 // CRM_UNIFY_V1 — вид «Задачи»: чьи задачи ('me' | 'all' | 'none' |
                 // id сотрудника) и сотрудники для выбора (только руководителю).
-                taskWho: 'me', taskStaff: null,
+                taskWho: 'me',
+                // CRM_UNIFY_V1 — фильтр «Оператор» (Р15): 'all' | 'me' | 'none' | id;
+                // сотрудники для выбора по имени (только тому, кто видит всю доску);
+                // номер из поиска есть у чужой карточки (подсказка, без карточки).
+                operator: 'all', staff: [], staffLoaded: false, searchForeign: false,
                 // CRM_UNIFY_V1 — у обрезанных закрытых колонок («Всё время», 300)
                 // настоящее число из базы: Map ключ ступени → число / обрезана ли.
                 counts: {}, capped: {} };
@@ -246,10 +250,11 @@ export function sourcesText(r) {
  */
 export function crmExcelRows(rows) {
     return [
-        ['Имя', 'Телефон', 'Источник', 'Услуга', 'Дата записи', 'Комментарий', 'Статус', 'Метки', 'Пациент (MRN)', 'Дата'],
+        ['Имя', 'Телефон', 'Источник', 'Услуга', 'Дата записи', 'Комментарий', 'Статус', 'Оператор', 'Метки', 'Пациент (MRN)', 'Дата'],   // CRM_UNIFY_V1 — «Оператор»
         ...(Array.isArray(rows) ? rows : []).map((r) => [
             r.full_name || '', r.phone || '', sourcesText(r),
             r.services ? r.services.name : '', r.scheduled_date || '', r.note || '', (STATUS_RU[r.status] || [r.status])[0],
+            (r.users && r.users.full_name) || '',   // CRM_UNIFY_V1
             tagsOf(r).map((k) => (TAG_RU[k] || [k])[0]).join(', '),
             r.patients ? (r.patients.mrn || r.patients.full_name || '') : '',
             (r.created_at || '').replace('T', ' ').slice(0, 16),
@@ -262,6 +267,25 @@ function tagsOf(r) {
 }
 function inTag(r) {
     return !state.tag || tagsOf(r).includes(state.tag);
+}
+// CRM_UNIFY_V1 — фильтр «Оператор» на экране: то же правило, что на сервере
+// (crm-board-load.js withOperator, rpc/crm-leads.js ownerFilter). Доска уже
+// загружена с ним; здесь его проходят и строки поиска.
+function inOperator(r) {
+    const op = state.operator;
+    if (!op || op === 'all') return true;
+    if (op === 'none') return r.assigned_to == null;
+    if (op === 'me') return r.assigned_to != null && String(r.assigned_to) === String(selfUserId() ?? '');
+    return r.assigned_to != null && String(r.assigned_to) === String(op);
+}
+// CRM_UNIFY_V1 — подпись выбранного оператора («Отчёт»): Мои / Ничьи / имя.
+function operatorLabel() {
+    const op = state.operator;
+    if (!op || op === 'all') return '';
+    if (op === 'me') return tr('Мои');
+    if (op === 'none') return tr('Ничьи');
+    const p = state.staff.find((x) => String(x.id) === String(op));
+    return (p && p.full_name) || trf('Сотрудник №{id}', { id: op });
 }
 /**
  * Строки связи «заявка — метка» → Map(String(request_id) → [ключи]). Сервер
@@ -333,6 +357,7 @@ async function load() {
     const res = await loadBoard({
         closedKeys: [STAGE_KEYS.won, ...STAGE_KEYS.lost],
         bounds: periodBounds(state.period, state.customFrom, state.customTo),
+        operator: state.operator, me: selfUserId(),   // CRM_UNIFY_V1 — «Оператор» до любого предела
     });
     if (res.error) {
         toast(trf('Не удалось загрузить заявки: {msg}', { msg: res.error.message }), 'fail');
@@ -474,6 +499,14 @@ async function setStatus(r, status) {
 }
 
 async function paint() {
+    // CRM_UNIFY_V1 — «Оператор: по имени» и «Чьи задачи» — только тому, кто видит
+    // всю доску; список тот же, что у поля «Оператор» в карточке. Один раз.
+    if (canSeeAllLeads() && !state.staffLoaded) {
+        state.staffLoaded = true;
+        const { data, error } = await supabase.from('users').select('id, full_name, role, extra_roles')
+            .eq('is_active', 1).order('full_name');
+        state.staff = error ? [] : boardStaff(data || []).map((p) => ({ id: p.id, full_name: p.full_name }));
+    }
     await load();
     const root = refs.root;
     clear(root);
@@ -602,9 +635,21 @@ async function paint() {
     async function serverSearch() {
         const q = state.search.trim();
         const my = ++searchSeq;
-        if (!q) { state.searchRows = null; state.searchQ = ''; return; }
-        const { data, error } = await supabase.rpc('crm_search', { q });
+        if (!q) { state.searchRows = null; state.searchQ = ''; state.searchForeign = false; return; }
+        // CRM_UNIFY_V1 — фильтр «Оператор» едет и в поиск; при «Все» тело прежнее.
+        const args = { q };
+        if (state.operator && state.operator !== 'all') args.assigned = /^\d+$/.test(String(state.operator)) ? Number(state.operator) : state.operator;
+        const { data, error } = await supabase.rpc('crm_search', args);
         if (my !== searchSeq) return;   // пока ждали, набрали дальше
+        // CRM_UNIFY_V1 — номер (7+ цифр) есть у карточки другого оператора: говорим
+        // об этом, саму карточку не показываем (crm_leads_by_phone, метка foreign).
+        let foreign = false;
+        if (digitsOf(q).length >= 7) {
+            const dup = await supabase.rpc('crm_leads_by_phone', { phone: q });
+            if (my !== searchSeq) return;
+            foreign = !dup.error && Array.isArray(dup.data) && dup.data.some((x) => x && x.foreign);
+        }
+        state.searchForeign = foreign;
         // Сервер не ответил — доска ищет по загруженным, как раньше.
         state.searchRows = (!error && Array.isArray(data)) ? data : null;
         state.searchQ = q;
@@ -612,7 +657,7 @@ async function paint() {
         paintBody();
     }
     function filtered() {
-        return searchBase().filter(r => matchesSearch(r) && inSource(r) && inPeriod(r) && inTag(r));
+        return searchBase().filter(r => matchesSearch(r) && inSource(r) && inPeriod(r) && inTag(r) && inOperator(r));   // CRM_UNIFY_V1
     }
 
     // CRM_FILTERS_V1 — «Источник» и «Период» над доской.
@@ -629,11 +674,32 @@ async function paint() {
         } }, t);
         const chip = (on, label, onclick) => h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', onclick }, label);
 
-        const byPeriodAll = searchBase().filter(r => matchesSearch(r) && inPeriod(r));
+        const byPeriodAll = searchBase().filter(r => matchesSearch(r) && inPeriod(r) && inOperator(r));   // CRM_UNIFY_V1
         // CRM_HEAD_MERGE_TAGS_V1 — счётчики источников учитывают выбранную
         // метку, а счётчики меток — выбранный источник: каждый ряд считается по
         // ОСТАЛЬНЫМ фильтрам, как и раньше.
         const byPeriod = byPeriodAll.filter(inTag);
+
+        // CRM_UNIFY_V1 — «Оператор»: Все / Мои / Ничьи; руководителю и
+        // администратору — ещё и по имени (Р15). Первым рядом. Смена — новая
+        // загрузка: фильтр стоит в запросе доски до любого предела.
+        const opRow = h('div', { class: 'row', 'data-crm-op-filter': '', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Оператор'));
+        const setOperator = (key) => { state.operator = key; paint(); };
+        for (const [key, label] of [['all', 'Все'], ['me', 'Мои'], ['none', 'Ничьи']]) {
+            const b = chip(state.operator === key, label, () => setOperator(key));
+            b.setAttribute('data-op-chip', key);
+            b.setAttribute('aria-pressed', state.operator === key ? 'true' : 'false');
+            opRow.appendChild(b);
+        }
+        if (canSeeAllLeads() && state.staff.length) {
+            const sel = h('select', { class: 'crm-op-sel', 'aria-label': 'Оператор по имени', 'data-op-select': '' },
+                h('option', { value: '' }, 'По имени…'),
+                ...state.staff.map((p) => h('option', { value: String(p.id) }, p.full_name || trf('Сотрудник №{id}', { id: p.id }))));
+            sel.value = /^\d+$/.test(String(state.operator)) ? String(state.operator) : '';
+            sel.addEventListener('change', () => { if (sel.value) setOperator(sel.value); });
+            opRow.appendChild(sel);
+        }
+        filtersEl.appendChild(opRow);
         // CRM_MULTI_SOURCE_V1 — число на чипе: сколько заявок выборки имеют этот
         // источник. Заявка с двумя источниками считается в обоих, поэтому сумма
         // чипов бывает больше «Все · N» — а «Все» считает заявки.
@@ -737,6 +803,11 @@ async function paint() {
         if (!wrap) return;
         clear(wrap);
         if (state.view === 'tasks') { paintTasks(wrap); return; }   // CRM_UNIFY_V1
+        // CRM_UNIFY_V1 — номер из поиска есть у карточки другого оператора.
+        if (state.search.trim() && state.searchForeign) {
+            wrap.appendChild(h('div', { class: 'muted crm-foreign-hint', 'data-crm-foreign-hint': '' },
+                Icon('Lock', { size: 13 }), ' ', 'Этот номер есть у карточки другого оператора — она вам не видна.'));
+        }
         if (state.view === 'kanban') wrap.appendChild(kanban()); else wrap.appendChild(listTable());
     }
 
@@ -746,11 +817,10 @@ async function paint() {
     // ограничением видимости, что у доски.
     async function paintTasks(wrap) {
         const canPick = canSeeAllLeads();
-        if (canPick && !state.taskStaff) state.taskStaff = await loadTaskStaff();
         const box = h('div', { 'data-crm-tasks-wrap': '' });
         wrap.appendChild(box);
         await renderTasksView(box, {
-            who: state.taskWho, me: selfUserId(), canPick, staff: canPick ? (state.taskStaff || []) : [],
+            who: state.taskWho, me: selfUserId(), canPick, staff: canPick ? state.staff : [],   // список — paint()
             onOpen: (id) => openLeadById(id),
             onWho: (w) => { state.taskWho = w; paintBody(); },
             onChanged: () => {
@@ -758,11 +828,6 @@ async function paint() {
                 paintBody();
             },
         });
-    }
-    async function loadTaskStaff() {
-        const { data, error } = await supabase.from('users').select('id, full_name, role, extra_roles')
-            .eq('is_active', 1).order('full_name');
-        return error ? [] : boardStaff(data || []).map((p) => ({ id: p.id, full_name: p.full_name }));
     }
     async function openLeadById(id) {
         let r = state.rows.find((x) => String(x.id) === String(id)) || null;
@@ -1086,6 +1151,8 @@ async function paint() {
                     ? h('span', { class: 'row', style: { gap: '4px', flexWrap: 'wrap' } },
                         ...tagsOf(r).map((k) => Tag((TAG_RU[k] || [k])[0], { kind: (TAG_RU[k] || [k, ''])[1] })))
                     : h('span', { class: 'muted' }, '—')),
+                // CRM_UNIFY_V1 — «Оператор»: кто ведёт карточку.
+                h('td', { 'data-list-operator': '' }, (r.users && r.users.full_name) || h('span', { class: 'muted' }, '—')),
                 // CRM_UNIFY_V1 — «Задача»: то же, что чип на карточке доски.
                 h('td', { 'data-list-task': '', style: { maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                     chipTextOf(r) || h('span', { class: 'muted' }, '—')),
@@ -1098,7 +1165,7 @@ async function paint() {
             h('thead', null, h('tr', null,
                 h('th', null, 'Имя'), h('th', null, 'Телефон'), h('th', null, 'Источник'),
                 h('th', null, 'Услуга'), h('th', null, 'Комментарий'), h('th', null, 'Метки'),
-                h('th', null, 'Задача'),   // CRM_UNIFY_V1
+                h('th', null, 'Оператор'), h('th', null, 'Задача'),   // CRM_UNIFY_V1
                 h('th', null, 'Статус'), h('th', null, 'Дата'), h('th', null, ''))),
             tbody)));
     }
@@ -3048,7 +3115,7 @@ async function paint() {
             const my = ++reportSeq;
             reportRows = undefined;
             paintReport();
-            const got = await loadReportRows({ days: period, operator: state.operator || 'all', me: selfUserId() });
+            const got = await loadReportRows({ days: period, operator: state.operator, me: selfUserId() });   // CRM_UNIFY_V1 — с фильтром «Оператор»
             if (my !== reportSeq) return;   // пока считали, выбрали другой период
             reportRows = got;
             paintReport();
@@ -3073,6 +3140,11 @@ async function paint() {
             }, label);
             bodyEl.appendChild(h('div', { class: 'row', style: { gap: '8px', marginBottom: '14px' } },
                 chip(1, 'Сегодня'), chip(7, '7 дней'), chip(30, '30 дней'), chip(0, 'Всё время')));
+            // CRM_UNIFY_V1 — отчёт считает с фильтром «Оператор» доски и называет его.
+            if (operatorLabel()) {
+                bodyEl.appendChild(h('div', { class: 'muted', 'data-report-operator': '', style: { fontSize: '13.5px', margin: '-6px 0 12px' } },
+                    Icon('User', { size: 13 }), ' ', trf('Оператор: {name}', { name: operatorLabel() })));
+            }
             // CRM_UNIFY_V1 — пока база считает, чисел нет: показать загруженное на
             // доску и тут же заменить другими числами значило бы мигнуть неправдой.
             if (reportRows === undefined) {
@@ -3188,7 +3260,9 @@ async function paint() {
             const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
             const aoa = crmExcelRows(rows);   // CRM_MULTI_SOURCE_V1 — строки собирает чистая функция
             const ws = XLSX.utils.aoa_to_sheet(aoa);
-            ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 13 }, { wch: 34 }, { wch: 12 }, { wch: 16 }, { wch: 17 }];
+            // CRM_UNIFY_V1 — ширины на все колонки, «Оператор» — восьмая.
+            ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 13 }, { wch: 34 }, { wch: 12 }, { wch: 16 }, { wch: 17 },
+                { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 17 }];
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'CRM');
             XLSX.writeFile(wb, 'crm-requests.xlsx');

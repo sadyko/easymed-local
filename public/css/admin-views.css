@@ -4345,6 +4345,10 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 }
 /* «Всё время»: в закрытой колонке последние 300 — подсказка под списком. */
 .crm-col-capped { font-size: 12.5px; margin-top: 6px; }
+/* CRM_UNIFY_V1 — фильтр «Оператор»: выбор по имени не шире строки (телефон);
+   подсказка «номер есть у карточки другого оператора» — над доской. */
+.crm-op-sel { max-width: 100%; min-width: 0; }
+.crm-foreign-hint { display: flex; align-items: center; gap: 6px; font-size: 13.5px; margin: 0 0 8px; }
 
 /* CRM_CARD_V2 (2026-09-05, владелец: «name phone number and other badges design
    be more appealing?») — КАРТОЧКА ЗАЯВКИ.
