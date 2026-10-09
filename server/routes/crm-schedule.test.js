@@ -374,7 +374,10 @@ test('a request for someone with no card is linked when the card is created', as
   const pat = (await db(base, cookie, { table: 'patients', op: 'insert', returning: true, single: 'single',
     values: { full_name: 'Новый Пациент', phone: '901234567' } })).json.data;
 
-  // linkCrmRequestsToPatient(): open, unlinked requests whose phone tail matches.
+  // Так делал браузер до CRM_UNIFY_V1 (linkCrmRequestsToPatient): open, unlinked
+  // requests whose phone tail matches. The browser no longer does it — the server
+  // links by phone at booking (crm/visit-link.js). This test keeps checking the
+  // /api/db door (the update is still allowed), not the removed browser function.
   const open = await db(base, cookie, { table: 'crm_requests', op: 'select', columns: 'id, phone, patient_id, status',
     filters: [{ col: 'patient_id', op: 'is', val: null },
               { col: 'status', op: 'in', val: OPEN_STATUSES }], order: [] });

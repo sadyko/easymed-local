@@ -12,7 +12,6 @@ import { getSelectedBranchIds, soleBranchId } from './branch-context.js?v=bc3'; 
 // PATIENT_DUP_RULE_V2 — one definition of "same person", shared by the register
 // scan and the registration-time guard. See the header of that file for the rule.
 import { duplicateIdSet, namesMatch, levenshtein as rawLevenshtein } from './patient-duplicates.js';
-import { crmStageKeys } from './crm-stages.js';   // CRM_LINKS_V1 — ступени воронки по виду, а не по имени
 
 // ---------------------------------------------------------------------------
 // DEMO DATA — used as fallback when Supabase is empty or unreachable.
@@ -564,61 +563,8 @@ export async function savePatient(payload, opts = {}) {
 
     const { data, error } = await insertRow('patients', insert, { stampCreatedBy: false });
     if (error) throw error;
-    await linkCrmRequestsToPatient(data);   // CRM_LINK_ON_REGISTER_V1
+    // CRM_UNIFY_V1 — заявки по номеру привязывает сервер при записи (crm/visit-link.js).
     return shapePatient(data);
-}
-
-// CRM_LINK_ON_REGISTER_V1 — attach the call centre's waiting requests to a card
-// the moment it exists.
-//
-// The call centre books people who are not patients yet — a cold call has a name
-// and a phone, no card. Those requests carry patient_id = NULL, and the
-// registrar's prefill matches on patient_id, so without this the booking would
-// simply never reach them: the patient walks in, gets registered, and the
-// services booked for that day stay invisible in CRM.
-//
-// The join is the PHONE, compared by digits only, because the call centre types
-// «+998 90 123 45 67» and the registrar «901234567» for the same person — the
-// same normalisation crm-phone-match.js already uses for its search. Only
-// still-open requests are linked; a closed lead is history and must not be
-// reopened by a namesake registering later.
-export async function linkCrmRequestsToPatient(patient) {
-    if (!patient || !patient.id) return 0;
-    const digits = (s) => String(s || '').replace(/\D/g, '');
-    const mine = digits(patient.phone);
-    // A handful of digits is not an identity — refuse to match on a fragment
-    // rather than link a stranger's booking to this card.
-    if (mine.length < 7) return 0;
-    try {
-        // CRM_LINKS_V1 — какие заявки ещё ОТКРЫТЫ, решает настроенная воронка,
-        // а не зашитая четвёрка сидовых ключей: у клиники, добавившей свою
-        // колонку, заявки из неё не подхватывались новой картой никогда.
-        const { open } = await crmStageKeys();
-        if (!open.length) return 0;
-        const { data, error } = await supabase.from('crm_requests')
-            .select('id, phone, patient_id, status')
-            .is('patient_id', null)
-            .in('status', open);
-        if (error || !data || !data.length) return 0;
-
-        // Compare on the local part so a number stored with the country code and
-        // one without still match (998901234567 vs 901234567).
-        const tail = (d) => (d.length > 9 ? d.slice(-9) : d);
-        const hits = data.filter(r => {
-            const theirs = digits(r.phone);
-            return theirs.length >= 7 && tail(theirs) === tail(mine);
-        });
-        if (!hits.length) return 0;
-
-        await supabase.from('crm_requests')
-            .update({ patient_id: patient.id })
-            .in('id', hits.map(r => r.id));
-        return hits.length;
-    } catch (e) {
-        // Registration must never fail because of a CRM lookup.
-        console.warn('[crm] link on register skipped:', e && e.message);
-        return 0;
-    }
 }
 
 // Levenshtein edit distance — used to spot typos in names. Lives in
