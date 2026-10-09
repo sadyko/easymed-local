@@ -19,14 +19,52 @@ test('новый прибор LIS Proxy — находка без модели; 
     ['bs200', '', 'mllp', '', null, 1, 1, 0, 'lisproxy', 'bs200', 'LAB-PC-1', '192.168.1.21', null]);
 });
 
-test('тот же адрес и то же имя (регистр не важен) — та же строка; новая подпись запоминается', () => {
+test('тот же адрес, то же имя и та же подпись (регистр не важен) — та же строка', () => {
   const db = freshDb();
   const id = ensureProxyDevice(db, { name: 'bs200', label: 'LAB-PC-1', ip: '10.0.0.5' }).device.id;
-  const r = ensureProxyDevice(db, { name: 'BS200', label: 'LAB-PC-1b', ip: '10.0.0.5' });
+  const r = ensureProxyDevice(db, { name: 'BS200', label: 'lab-pc-1', ip: '10.0.0.5' });
   assert.equal(r.device.id, id);
   assert.equal(r.moved, null);
-  assert.equal(r.device.proxy_label, 'LAB-PC-1b');
+  assert.equal(r.device.proxy_label, 'LAB-PC-1');
   assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_devices').get().c, 1);
+});
+
+// LIS_PROXY_V1 (ревью I5) — подпись названа: прибор = (имя, подпись), адрес —
+// какой есть. Чужая непустая подпись на том же адресе — другой ПК (DHCP отдал
+// ему старый адрес первого): новая находка, подпись строки не переписывается.
+test('ревью I5: после обмена адресами по DHCP ПК2 на старом адресе ПК1 — новая находка; ПК1 на новом адресе — своя строка с подтверждениями', () => {
+  const db = freshDb();
+  const pc1 = addProxyDevice(db, { name: 'bs200', label: 'PC1', ip: '10.0.0.5', profile: 'mindray-bs-200' });
+  db.exec("INSERT INTO services (id, name, is_lab) VALUES (9, 'Биохимия', 1)");
+  bindPanel(db, { id: 5, serviceId: 9, deviceId: pc1, name: 'Биохимия', lines: [['GLU', 'Глюкоза', 'GLU']] });
+  const pc2 = ensureProxyDevice(db, { name: 'bs200', label: 'PC2', ip: '10.0.0.5' });
+  assert.notEqual(pc2.device.id, pc1, 'чужая подпись на адресе ПК1 — не ПК1');
+  assert.deepEqual([pc2.device.added, pc2.device.proxy_label, pc2.reason], [0, 'PC2', 'заведён по первому запросу LIS Proxy']);
+  assert.deepEqual(db.prepare('SELECT proxy_label, proxy_ip, added FROM lab_devices WHERE id = ?').get(pc1), { proxy_label: 'PC1', proxy_ip: '10.0.0.5', added: 1 },
+    'подпись и адрес ПК1 не тронуты');
+  const back = ensureProxyDevice(db, { name: 'bs200', label: 'PC1', ip: '10.0.0.6' });
+  assert.equal(back.device.id, pc1, 'ПК1 по имени и подписи — своя строка');
+  assert.deepEqual(back.moved, { from: '10.0.0.5', to: '10.0.0.6' });
+  assert.equal(back.device.added, 1);
+  assert.deepEqual(db.prepare('SELECT device_code_confirmed_device_id AS d, device_code_confirmed_epoch AS e FROM lab_panel_analytes').get(), { d: pc1, e: 0 });
+  const again = ensureProxyDevice(db, { name: 'bs200', label: 'PC2', ip: '10.0.0.5' });
+  assert.equal(again.device.id, pc2.device.id, 'ПК2 — своя находка, не ПК1');
+});
+
+test('ревью I5: строка без подписи на том же адресе — та же (подпись добавили в прокси): подпись запоминается', () => {
+  const db = freshDb();
+  const id = ensureProxyDevice(db, { name: 'bs200', label: '', ip: '10.0.0.5' }).device.id;
+  const r = ensureProxyDevice(db, { name: 'bs200', label: 'PC1', ip: '10.0.0.5' });
+  assert.equal(r.device.id, id);
+  assert.equal(r.device.proxy_label, 'PC1');
+});
+
+test('ревью I5: подпись не названа — (имя, адрес); подпись строки пустым не затирается', () => {
+  const db = freshDb();
+  const id = addProxyDevice(db, { name: 'bs200', label: 'PC1', ip: '10.0.0.5' });
+  const r = ensureProxyDevice(db, { name: 'bs200', label: '', ip: '10.0.0.5' });
+  assert.equal(r.device.id, id);
+  assert.equal(r.device.proxy_label, 'PC1');
 });
 
 test('адрес лабораторного ПК сменился (DHCP): та же строка, адрес переписан; подтверждения BS-200 и эпоха кодов целы', () => {

@@ -339,14 +339,24 @@ export function ensureDevice(db, { sendingApp = '', sendingFacility = '', peer =
 // подтверждения BS-200, по sending_app приём угадывает модель — а модель здесь
 // выбирает только человек («Добавить»).
 //
-// Кто прибор:
-//   1. строка LIS Proxy с тем же именем (без учёта регистра) и тем же адресом;
-//   2. иначе — РОВНО ОДНА строка с тем же именем и той же подписью: адрес
-//      лабораторного ПК сменился (DHCP) — proxy_ip переписывается, подтверждения
-//      и эпоха кодов целы (триггер смотрит host и port);
-//   3. иначе — новая находка (discovered = 1, added = 0, модель пустая): ждёт
-//      «Добавить» с выбором модели. Два ПК с одинаковыми именем и подписью —
-//      видимая лишняя строка, а не склейка двух приборов (как шаг 2 выше).
+// Кто прибор (LIS_PROXY_V1, ревью I5 — подпись важнее адреса):
+//   подпись названа (-host, у каждого лабораторного ПК своя):
+//     1. строка с тем же именем и той же подписью (без учёта регистра) и тем же
+//        адресом; иначе РОВНО ОДНА с тем же именем и подписью — адрес
+//        лабораторного ПК сменился (DHCP): proxy_ip переписывается молча,
+//        подтверждения и эпоха кодов целы (триггер смотрит host и port);
+//     2. иначе строка с тем же именем и адресом БЕЗ подписи — та же (подпись
+//        добавили в прокси): подпись запоминается;
+//     3. иначе — новая находка. Чужая непустая подпись на том же адресе — другой
+//        ПК (DHCP отдал ему старый адрес первого): подпись строки не
+//        переписывается никогда, подтверждения первого ПК ему не достаются;
+//   подпись не названа: (имя, адрес) — строка без подписи на этом адресе, иначе
+//     единственная на нём; иначе ровно одна строка с тем же именем без подписи —
+//     адрес сменился; иначе находка. Два ПК с одинаковым именем без подписи не
+//     различаются — известное ограничение (инструкция: -host у каждого ПК свой).
+//   Новая находка — discovered = 1, added = 0, модель пустая: ждёт «Добавить»
+//   с выбором модели. При сомнении — лишняя видимая строка, а не склейка двух
+//   приборов (как шаг 2 выше).
 export const PROXY_VIA = 'lisproxy';
 /** Предел находок LIS Proxy — свой, как MAX_DISCOVERED у своего порта. */
 export const MAX_PROXY_FOUND = 20;
@@ -363,18 +373,32 @@ export function ensureProxyDevice(db, { name = '', label = '', ip = '' } = {}) {
   const fresh = (id) => db.prepare('SELECT * FROM lab_devices WHERE id = ?').get(id);
   const rows = db.prepare('SELECT * FROM lab_devices WHERE via = ? ORDER BY id').all(PROXY_VIA)
     .filter((d) => appKey(d.proxy_name) === key);
-  const here = rows.find((d) => String(d.proxy_ip == null ? '' : d.proxy_ip).trim() === addr);
-  if (here) {
-    if (lab && lab !== String(here.proxy_label == null ? '' : here.proxy_label)) {
-      db.prepare('UPDATE lab_devices SET proxy_label = ? WHERE id = ?').run(lab, here.id);
+  const ipOf = (d) => String(d.proxy_ip == null ? '' : d.proxy_ip).trim();
+  const labelOf = (d) => appKey(d.proxy_label);
+  const labKey = appKey(lab);
+  const moveTo = (d) => {
+    db.prepare('UPDATE lab_devices SET proxy_ip = ? WHERE id = ?').run(addr, d.id);
+    return { device: fresh(d.id), moved: { from: ipOf(d), to: addr }, reason: 'адрес сменился' };
+  };
+  if (labKey) {
+    // ревью I5 — подпись названа: прибор — (имя, подпись), адрес — какой есть.
+    const same = rows.filter((d) => labelOf(d) === labKey);
+    const here = same.find((d) => ipOf(d) === addr);
+    if (here) return { device: fresh(here.id), moved: null, reason: 'по адресу и имени' };
+    if (same.length === 1) return moveTo(same[0]);
+    if (!same.length) {
+      const bare = rows.filter((d) => !labelOf(d) && ipOf(d) === addr);
+      if (bare.length === 1) {
+        db.prepare('UPDATE lab_devices SET proxy_label = ? WHERE id = ?').run(lab, bare[0].id);
+        return { device: fresh(bare[0].id), moved: null, reason: 'по адресу и имени' };
+      }
     }
-    return { device: fresh(here.id), moved: null, reason: 'по адресу и имени' };
-  }
-  const same = rows.filter((d) => appKey(d.proxy_label) === appKey(lab));
-  if (same.length === 1) {
-    const from = String(same[0].proxy_ip == null ? '' : same[0].proxy_ip);
-    db.prepare('UPDATE lab_devices SET proxy_ip = ? WHERE id = ?').run(addr, same[0].id);
-    return { device: fresh(same[0].id), moved: { from, to: addr }, reason: 'адрес сменился' };
+  } else {
+    const atIp = rows.filter((d) => ipOf(d) === addr);
+    const here = atIp.find((d) => !labelOf(d)) || (atIp.length === 1 ? atIp[0] : null);
+    if (here) return { device: fresh(here.id), moved: null, reason: 'по адресу и имени' };
+    const bare = rows.filter((d) => !labelOf(d));
+    if (bare.length === 1) return moveTo(bare[0]);
   }
   const found = db.prepare('SELECT COUNT(*) c FROM lab_devices WHERE via = ? AND discovered = 1').get(PROXY_VIA).c;
   if (found >= MAX_PROXY_FOUND) return { device: null, moved: null, reason: 'достигнут предел найденных приборов LIS Proxy (' + MAX_PROXY_FOUND + ')' };
