@@ -240,3 +240,23 @@ test('«Изменить» прибор LIS Proxy: ни адреса, ни по�
   assert.deepStrictEqual(Object.keys(upd.values).sort(), ['enabled', 'model_confirmed', 'name', 'profile']);
   assert.ok(!rpcCalls.some((c) => c.name === 'lis_restart'), 'слушателей у прибора прокси нет');
 });
+
+test('лоток: строки одного прибора LIS Proxy с тем же номером за 10 минут — одной строкой «значений: 3»; «Отклонить» — все', async () => {
+  reset();
+  const at = (s) => new Date(Date.now() - s * 1000).toISOString();
+  MESSAGES = [
+    { id: 13, device_id: 1, sample_id: '1', status: 'unmatched', detail: 'LIS Proxy прислал не штрихкод пробирки: 1 — a', received_at: at(10), resolved_at: null, raw: '' },
+    { id: 12, device_id: 1, sample_id: '1', status: 'unmatched', detail: 'LIS Proxy прислал не штрихкод пробирки: 1 — b', received_at: at(20), resolved_at: null, raw: '' },
+    { id: 11, device_id: 1, sample_id: '1', status: 'unmatched', detail: 'LIS Proxy прислал не штрихкод пробирки: 1 — a', received_at: at(30), resolved_at: null, raw: '' },
+    { id: 10, device_id: 3, sample_id: '7', status: 'unmatched', detail: 'другое', received_at: at(40), resolved_at: null, raw: '' },
+  ];
+  const root = await mount();
+  const text = textOf(root);
+  assert.ok(text.includes('значений: 3'), text);
+  assert.ok(text.includes('ещё причин: 1'));
+  const dismissButtons = findButtons(root).filter((b) => /Отклонить/.test(textOf(b)));
+  assert.equal(dismissButtons.length, 2, 'группа и строка своего порта');
+  dismissButtons[0].click();
+  await tick(60);
+  assert.deepStrictEqual(rpcCalls.filter((c) => c.name === 'lis_message_dismiss').map((c) => c.args.id), [13, 12, 11]);
+});

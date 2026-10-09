@@ -25,7 +25,7 @@ import { splitTray, groupReceiving, staleSeriesRest, seriesPendingRest, isLocalI
 import { peerNotes, hasUnreadableText } from './lab-devices-lists.js?v=lists4';
 // LIS_PROXY_V1 — карточка «LIS Proxy».
 import { mountProxyCard } from './lab-proxy-card.js';
-import { isProxyDevice, proxyAddress, bothPaths } from './lab-devices-lists.js?v=lists4';   // LIS_PROXY_V1
+import { isProxyDevice, proxyAddress, bothPaths, groupProxyTray } from './lab-devices-lists.js?v=lists4';   // LIS_PROXY_V1
 import { PROXY_MODELS } from '../../shared/lisproxy-models.js';   // LIS_PROXY_V1
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
@@ -1280,6 +1280,24 @@ export async function mountLabDevices(container) {
         body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '12px' } },
             tr('COM-порт может держать только одна программа: пока работает переадресатор, ПО производителя этот прибор не видит. Чтобы работали оба, прибору нужен второй последовательный порт или разветвитель.')));
 
+        // LIS_PROXY_V1 — «Через LIS Proxy» (§5 документа LISPROXY-EASYMED.md).
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Через LIS Proxy (BS-200, BC-780, AutoLumo A1000)')));
+        body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px' } },
+            tr('LIS Proxy — программа поставщика на лабораторном ПК. Она говорит с анализатором сама и передаёт Easy-Med каждое значение отдельно; для BS-200 она же загружает из Easy-Med список тестов по пробирке.')));
+        body.appendChild(h('ol', { style: { paddingLeft: '20px', marginBottom: '8px' } },
+            step(tr('В карточке «LIS Proxy» выше нажмите «Включить», затем «Копировать адрес» — это адрес для LIS Proxy.')),
+            step(tr('На лабораторном ПК закройте старую программу LIS этого анализатора: один анализатор — один приёмник. Если анализатор подключён к Easy-Med напрямую — отключите прямой путь.')),
+            h('li', { style: { marginBottom: '6px' } },
+                tr('В LIS Proxy (командная строка администратора) добавьте анализатор. Имя выберите один раз и не меняйте — по нему Easy-Med узнаёт прибор; -host — имя этого ПК, у каждого ПК своё; -timeout — всегда 100:'),
+                commandBox('lisproxy add <name> -class <class> -ip <ip> -port <port> -host <pc> -api "<url>" -timeout 100')),
+            step(tr('Тип в LIS Proxy: BS-200 — AsServerMindrayBS200, порт 5150 (на BS-200 в настройках хоста — адрес лабораторного ПК, не 127.0.0.1); BC-780 — AsClientMindrayBC780 с адресом и портом LIS самого BC-780; AutoLumo A1000 — AsServerAutoLumoA1860ASTM (на приборе: протокол ASTM, «As client», адрес ПК). BC-20, BC-5300 и CL-900i через LIS Proxy не подключайте — только напрямую.')),
+            step(tr('Прогоните одну пробу. В «Добавить прибор» → «Найдены в сети» появится «LIS Proxy · <имя>»: нажмите «Добавить» и выберите модель, затем в «Панелях» выберите этот прибор у панели и подтвердите коды.')),
+            step(tr('BS-200 загружает тесты сам: отсканируйте пробирку оплаченного заказа и запросите список — на экране прибора вместо имени будет номер пробирки.'))));
+        body.appendChild(h('ul', { style: { paddingLeft: '20px', fontSize: '12.5px', marginBottom: '12px' } },
+            h('li', { style: { marginBottom: '4px' } }, tr('В поле штрихкода на анализаторе — только этикетка LAB-. Номер пациента, номер места и голые цифры через LIS Proxy в бланк не ложатся — такие пробы ждут в «Необработанных».')),
+            h('li', { style: { marginBottom: '4px' } }, tr('AutoLumo: номер пробы не короче 8 знаков (этикетка LAB-000123 подходит); короче — LIS Proxy его теряет.')),
+            h('li', null, tr('В журнале LIS Proxy «Response Code : 404» — адрес устарел: скопируйте его здесь снова. «Response Code : 0» — Easy-Med был выключен: эти результаты потеряны, прогоните пробирки ещё раз.'))));
+
         body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Важно')));
         body.appendChild(h('ul', { style: { paddingLeft: '20px', fontSize: '12.5px' } },
             h('li', { style: { marginBottom: '4px' } }, tr('Прибор отправляет результаты только по ОДНОМУ адресу. Если он сейчас направлен на другую программу, после переключения та программа результаты получать перестанет.')),
@@ -1367,7 +1385,7 @@ export async function mountLabDevices(container) {
         }
 
         const tb = h('tbody');
-        for (const m of previewRows(tray, 'tray')) {   // LD_LAYOUT_V1
+        for (const m of previewRows(groupProxyTray(tray, state.devices), 'tray')) {   // LD_LAYOUT_V1; LIS_PROXY_V1 — группы строк прибора LIS Proxy (Р22)
             const raw = h('pre', {
                 style: {
                     display: state.rawOpen.has(m.id) ? '' : 'none', margin: '8px 0 0', padding: '10px', background: 'var(--ink-050, #f4f6f8)',
@@ -1389,6 +1407,12 @@ export async function mountLabDevices(container) {
                 h('td', null, Tag(tr(STATUS_RU[m.status] || m.status), { kind: m.status === 'superseded' ? 'warn' : '' })),
                 h('td', { class: 'muted', style: { fontSize: '12.5px' } },
                     staleRest != null ? trf('серия не дошла до конца: {rest}', { rest: staleRest }) : (m.detail || '—'),
+                    // LIS_PROXY_V1 (Р22) — группа строк одного прибора LIS Proxy: сколько значений и сколько ещё причин.
+                    m.count > 1
+                        ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                            trf('значений: {n}', { n: m.count }),
+                            m.details && m.details.length > 1 ? h('span', null, ' · ', trf('ещё причин: {n}', { n: m.details.length - 1 })) : null)
+                        : null,
                     h('button', {
                         class: 'btn btn-outline btn-sm', type: 'button', style: { marginLeft: '8px' },
                         onclick: () => {
@@ -1433,7 +1457,20 @@ export async function mountLabDevices(container) {
         const vsId = fromLabel ? Number(fromLabel[1]) : (/^\d+$/.test(typed) ? Number(typed) : 0);
         if (!vsId) { toast(tr('Нужен номер заказа'), 'warn'); return; }
 
-        const { data, error } = await supabase.rpc('lis_message_attach', { id: m.id, visit_service_id: vsId });
+        // LIS_PROXY_V1 (Р22) — группа строк прибора LIS Proxy: номер один, строки — по очереди.
+        const ids = Array.isArray(m.ids) && m.ids.length ? m.ids : [m.id];
+        if (ids.length > 1) {
+            let ok = 0;
+            for (const id of ids) {
+                const r = await supabase.rpc('lis_message_attach', { id, visit_service_id: vsId });
+                if (r.error) { toast(r.error.message || String(r.error.code || r.error), 'warn'); break; }
+                if (r.data && r.data.ok) ok += 1;
+            }
+            toast(trf('Привязано: {ok} из {n}', { ok, n: ids.length }), ok === ids.length ? 'ok' : 'warn');
+            await reload();
+            return;
+        }
+        const { data, error } = await supabase.rpc('lis_message_attach', { id: ids[0], visit_service_id: vsId });
         if (error) {
             // LIS_DISCOVERY_FIX_V1 (экран) — отказ по правилу, а не сбой: сообщение,
             // пришедшее не целиком, сервер не привязывает (409 — иначе в бланк
@@ -1464,9 +1501,16 @@ export async function mountLabDevices(container) {
     }
 
     async function dismiss(m) {
-        if (!window.confirm(tr('Отклонить это сообщение? Оно останется в базе, но перестанет требовать внимания.'))) return;
-        const { error } = await supabase.rpc('lis_message_dismiss', { id: m.id });
-        if (error) { toast(trf('Не удалось отклонить сообщение: {msg}', { msg: error.message || error }), 'fail'); return; }
+        // LIS_PROXY_V1 (Р22) — группа строк прибора LIS Proxy: одно подтверждение на все.
+        const ids = Array.isArray(m.ids) && m.ids.length ? m.ids : [m.id];
+        const question = ids.length > 1
+            ? trf('Отклонить {n} сообщений? Они останутся в базе, но перестанут требовать внимания.', { n: ids.length })
+            : tr('Отклонить это сообщение? Оно останется в базе, но перестанет требовать внимания.');
+        if (!window.confirm(question)) return;
+        for (const id of ids) {
+            const { error } = await supabase.rpc('lis_message_dismiss', { id });
+            if (error) { toast(trf('Не удалось отклонить сообщение: {msg}', { msg: error.message || error }), 'fail'); break; }
+        }
         await reload();
     }
 

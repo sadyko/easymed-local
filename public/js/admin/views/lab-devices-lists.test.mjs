@@ -305,3 +305,18 @@ test('LIS Proxy: одна модель за сутки и напрямую, и �
   assert.deepEqual(bothPaths([{ ...direct, profile: 'mindray-bc-20' }, proxy], now), []);
   assert.deepEqual(bothPaths([proxy], now), []);
 });
+
+import { groupProxyTray, PROXY_GROUP_WINDOW_MS } from './lab-devices-lists.js';
+
+test('LIS Proxy: лоток — строки одного прибора прокси с тем же номером и состоянием за 10 минут — одной группой; прочие — как были', () => {
+  const t = (min) => new Date(Date.parse('2026-10-09T12:00:00Z') - min * 60000).toISOString();
+  const m = (id, device_id, sample_id, min, detail = 'x', status = 'unmatched') => ({ id, device_id, sample_id, status, detail, received_at: t(min) });
+  const rows = [m(9, 1, '1', 0, 'a'), m(8, 1, '1', 2, 'b'), m(7, 9, '1', 3), m(6, 1, '1', 5, 'a'), m(5, 1, '2', 6), m(4, 1, '1', 0 + PROXY_GROUP_WINDOW_MS / 60000 + 1)];
+  const g = groupProxyTray(rows, [PX, { id: 9 }]);
+  assert.deepEqual(g.map((x) => [x.id, x.ids, x.count, x.details]), [
+    [9, [9, 8, 6], 3, ['a', 'b']],
+    [7, [7], 1, ['x']],
+    [5, [5], 1, ['x']],
+    [4, [4], 1, ['x']],
+  ]);
+});

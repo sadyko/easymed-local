@@ -438,3 +438,38 @@ export function bothPaths(devices = [], now = Date.now()) {
     const direct = new Set(devices.filter((d) => heard(d) && !isProxyDevice(d)).map((d) => d.profile));
     return [...new Set(devices.filter((d) => heard(d) && isProxyDevice(d) && direct.has(d.profile)).map((d) => d.profile))].sort();
 }
+
+/** Окно группы строк лотка одного прибора LIS Proxy. */
+export const PROXY_GROUP_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * LIS_PROXY_V1 (Р22) — прокси шлёт значение запросом, и контроль, находка до
+ * «Добавить» или чужой номер — это 20–30 строк лотка на одну пробирку. Строки
+ * одного прибора LIS Proxy с тем же номером пробы и тем же состоянием, пришедшие
+ * в пределах 10 минут от самой новой строки группы, — одной строкой:
+ * { ...самая новая, ids, count, details } (details — разные причины, новые первыми).
+ * Прочие строки — как были (count 1). Порядок — как на входе (новые первыми).
+ */
+export function groupProxyTray(rows = [], devices = []) {
+    const proxyIds = new Set((devices || []).filter(isProxyDevice).map((d) => d.id));
+    const out = [];
+    const open = new Map();
+    for (const m of rows || []) {
+        if (!m) continue;
+        const detail = m.detail || '';
+        if (!proxyIds.has(m.device_id)) { out.push({ ...m, ids: [m.id], count: 1, details: [detail] }); continue; }
+        const key = m.device_id + '|' + (m.sample_id || '') + '|' + m.status;
+        const t = Date.parse(m.received_at);
+        const g = open.get(key);
+        if (g && Number.isFinite(t) && Number.isFinite(g.newest) && g.newest - t <= PROXY_GROUP_WINDOW_MS) {
+            g.ids.push(m.id);
+            g.count += 1;
+            if (!g.details.includes(detail)) g.details.push(detail);
+            continue;
+        }
+        const ng = { ...m, ids: [m.id], count: 1, details: [detail], newest: t };
+        open.set(key, ng);
+        out.push(ng);
+    }
+    return out;
+}
