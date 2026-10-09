@@ -255,6 +255,13 @@ function deleteVs(db, id) {
  * заявки и только если у неё есть ждущие строки: заявка без строк (лид из
  * звонка) свою дату держит сама. Ступень едет только вперёд — в «Записан», и
  * только из колонок ДО него (то же правило, что crmLinkVisit — CRM_UNIFY_V1).
+ *
+ * CRM_UNIFY_V1 (ревью 2, F2) — ДАТА ТОЛЬКО ВПЕРЁД: ближайшая ждущая строка С
+ * СЕГОДНЯШНЕГО дня. Нет такой — дата остаётся той, что поставила запись
+ * (crmLinkVisit), и назад в прошлое не едет. Раньше брался самый ранний день
+ * вообще, и незаписанная строка прошлой недели возвращала записанной карточке
+ * прошедшую дату на каждом клике двери: дата прыгала туда-обратно, а после
+ * снятия услуги обход доски уносил карточку в «Не пришёл».
  */
 export function touchRequest(db, requestId) {
   if (!requestId) return;
@@ -263,9 +270,10 @@ export function touchRequest(db, requestId) {
   const open = openStageKeys(db);
   if (!open.includes(p.status)) return;
   const left = db.prepare(`
-    SELECT COUNT(*) AS n, MIN(NULLIF(scheduled_date, '')) AS next,
+    SELECT COUNT(*) AS n,
+           MIN(CASE WHEN date(scheduled_date) >= date(?) THEN scheduled_date END) AS next,   -- CRM_UNIFY_V1 (F2)
            SUM(visit_id IS NOT NULL) AS booked
-      FROM crm_request_services WHERE request_id = ? AND status = 'pending'`).get(requestId);
+      FROM crm_request_services WHERE request_id = ? AND status = 'pending'`).get(today(db), requestId);
   if (!left || !left.n) return;
   const scheduled = scheduledStageKey(db);
   const schedAt = scheduled ? open.indexOf(scheduled) : -1;

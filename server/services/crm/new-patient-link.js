@@ -14,13 +14,17 @@
 // ПРАВИЛО:
 //   • карта заведена ЗДЕСЬ и только что (не старше NEW_PATIENT_MINUTES): это
 //     дверь для новой карты, а не проход по давним;
-//   • ключ ОСНОВНОГО номера карты не короче 7 цифр; второй номер заявок не
-//     ищет (обычно это номер родственника);
-//   • номер у ОДНОЙ карты — владельцы считаются с запасом, по обоим полям
-//     (patientIdsWithPhoneKey): общий семейный номер не отдаёт заявку никому;
+//   • ключи ОСНОВНОГО номера карты не короче 7 цифр — у каждого номера поля
+//     (phoneKeysOf: «8 93 …» и 998 приведены); второй номер заявок не ищет
+//     (обычно это номер родственника);
+//   • КАЖДЫЙ номер у ОДНОЙ карты — владельцы считаются с запасом, по всем
+//     номерам карты, включая экстренный контакт и опекуна
+//     (patientIdsWithPhoneKey, CRM_UNIFY_V1 ревью 2): общий семейный номер не
+//     отдаёт заявку никому;
 //   • у карты ещё нет ни одной заявки — повторный вызов не проходит номер
 //     частями, по заявке за раз;
-//   • ОДНА заявка: самая новая ОТКРЫТАЯ без пациента с тем же ключом номера.
+//   • ОДНА заявка: самая новая ОТКРЫТАЯ без пациента, каждый номер которой —
+//     из ключей карты (phoneLeadCandidates).
 //     Закрытая («Пришёл», «Отказ», «Не пришёл») — история, её не трогают;
 //   • пишется ТОЛЬКО patient_id (и updated_at, как у всякой правки карточки):
 //     ни ступени, ни строк, ни visit_id, ни привязки записи. Деньги карточка
@@ -35,8 +39,10 @@ import { canWrite } from '../../db/schema-registry.js';
 import { writeGrantAllows, writeGrantNarrows } from '../../db/write-grant.js';
 import { effectiveRoles } from '../roles.js';
 import { openStageKeys } from './config.js';
-import { patientIdsWithPhoneKey, MIN_PHONE_KEY_DIGITS } from './visit-link.js';
-import { phoneKey, phoneLikePattern } from '../../../public/js/admin/views/crm-phone-match.js';
+// CRM_UNIFY_V1 (ревью 2 задачи 1, F4) — ключи номеров основного поля и отбор
+// заявок — те же, что у шага записи: «8 93 …» и два номера в поле считаются
+// так же, и владельцы номера (с запасом, все номера карты) — тоже.
+import { phoneKeysOf, keysOwnedOnlyBy, phoneLeadCandidates } from './visit-link.js';
 
 /** Сколько минут карта считается только что заведённой. */
 export const NEW_PATIENT_MINUTES = 10;
@@ -73,18 +79,14 @@ function linkNewPatient(db, pid) {
                          WHERE id = ? AND sync_origin IS NULL
                            AND julianday(created_at) >= julianday('now', '-${NEW_PATIENT_MINUTES} minutes')`).get(pid);
   if (!p) return;
-  const key = phoneKey(p.phone || '');
-  if (key.length < MIN_PHONE_KEY_DIGITS) return;
-  const owners = patientIdsWithPhoneKey(db, key);
-  if (owners.length !== 1 || owners[0] !== pid) return;
+  const keys = phoneKeysOf(p.phone);   // CRM_UNIFY_V1 (F4) — каждый номер поля, «8 …» и 998 приведены
+  if (!keys.length) return;
   if (db.prepare('SELECT 1 FROM crm_requests WHERE patient_id = ? LIMIT 1').get(pid)) return;
   const open = openStageKeys(db);
   if (!open.length) return;
-  const rows = db.prepare(`SELECT id, phone FROM crm_requests
-                            WHERE patient_id IS NULL AND phone LIKE ? AND status IN (${open.map(() => '?').join(',')})
-                            ORDER BY created_at DESC, id DESC`).all(phoneLikePattern(key), ...open);
-  const hit = rows.find((r) => phoneKey(r.phone || '') === key);
+  const hit = phoneLeadCandidates(db, keys, open)[0];
   if (!hit) return;
+  if (!keysOwnedOnlyBy(db, pid, keys)) return;   // CRM_UNIFY_V1 (F1, F4) — каждый номер у ОДНОЙ карты
   db.prepare(`UPDATE crm_requests SET patient_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
-               WHERE id = ? AND patient_id IS NULL`).run(pid, hit.id);
+               WHERE id = ? AND patient_id IS NULL`).run(pid, hit);
 }

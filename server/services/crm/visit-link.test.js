@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { crmLinkVisit, patientIdsWithPhoneKey } from './visit-link.js';
+import { crmLinkVisit, patientIdsWithPhoneKey, phoneKeysOf } from './visit-link.js';
 
 const REG = { id: 1, role: 'registrar', extra_roles: [] };
 function freshDb() {
@@ -67,4 +67,35 @@ test('отменённый и неявочный визит шаг не трог
     assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(rid).status, 'in_process', status);
   }
   db.close();
+});
+
+// CRM_UNIFY_V1 (ревью 2, F1) — владелец номера и тот, у кого он записан
+// экстренным контактом или номером опекуна (карта ребёнка без своего номера).
+test('владельцы номера: экстренный контакт и опекун карты тоже считаются', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO patients (id, full_name, phone, emergency_contact_phone) VALUES (81,'Ребёнок','','+998 90 909 26 38')").run();
+  db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (82,'Внук','')").run();
+  db.prepare("INSERT INTO patient_guardians (patient_id, name, phone) VALUES (82,'Бабушка','8 90 909 26 38')").run();
+  db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (83,'Опекун-карта','+998 99 999 99 99')").run();
+  db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (84,'Подопечный','')").run();
+  db.prepare("INSERT INTO patient_guardians (patient_id, guardian_patient_id, phone) VALUES (84, 83, '909092638')").run();
+  assert.deepEqual(patientIdsWithPhoneKey(db, '909092638').sort((a, b) => a - b), [77, 81, 82, 83, 84]);
+  db.close();
+});
+
+// CRM_UNIFY_V1 (ревью 2, F4) — ключи КАЖДОГО номера поля: восьмёрка и 998 сняты.
+test('phoneKeysOf: номера поля по отдельности, к местным девяти цифрам', () => {
+  assert.deepEqual(phoneKeysOf('+998 90 909 26 38'), ['909092638']);
+  assert.deepEqual(phoneKeysOf('8 90 909 26 38'), ['909092638']);
+  assert.deepEqual(phoneKeysOf('0909092638'), ['909092638']);
+  assert.deepEqual(phoneKeysOf('+998 (90) 909-26-38'), ['909092638']);
+  assert.deepEqual(phoneKeysOf('+998 90 909 26 38, +998 91 111 11 11'), ['909092638', '911111111']);
+  assert.deepEqual(phoneKeysOf('+998909092638\n+998911111111'), ['909092638', '911111111']);
+  assert.deepEqual(phoneKeysOf('+998 90 909 26 38 +998 91 111 11 11'), ['909092638', '911111111']);
+  assert.deepEqual(phoneKeysOf('тел: 90 909 26 38 (мама)'), ['909092638']);
+  assert.deepEqual(phoneKeysOf('+998 90 909 26 38 доб. 12'), ['909092638']);
+  assert.deepEqual(phoneKeysOf('+7 999 123 45 67'), ['79991234567']);
+  assert.deepEqual(phoneKeysOf(''), []);
+  assert.deepEqual(phoneKeysOf(null), []);
+  assert.deepEqual(phoneKeysOf('638'), []);
 });

@@ -78,6 +78,41 @@ test('CRM_UNIFY_V1: общий номер — второй номер чужой
   }
 });
 
+// CRM_UNIFY_V1 (ревью 2 задачи 1, F1 и F4) — номер у карты ребёнка как
+// экстренный контакт или номер опекуна, и «8 93 …» у новой карты при «93 …» у
+// родственника: номер не одной карты — заявку не трогают.
+test('CRM_UNIFY_V1: номер — экстренный контакт или опекун другой карты; «8 93 …» при «93 …» у родственника — заявку не трогают', async () => {
+  for (const [label, seed, values] of [
+    ['экстренный контакт', (db) => db.prepare("INSERT INTO patients (id, full_name, phone, emergency_contact_phone) VALUES (80,'Ребёнок','',?)").run(NEW_PHONE), {}],
+    ['опекун', (db) => {
+      db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (80,'Ребёнок','')").run();
+      db.prepare("INSERT INTO patient_guardians (patient_id, name, phone) VALUES (80,'Мама',?)").run(NEW_PHONE);
+    }, {}],
+    ['восьмёрка', (db) => db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (80,'Родственник','93 111 22 33')").run(),
+      { phone: '8 93 111 22 33' }],
+  ]) {
+    const t = await startCrmApp(seed);
+    try {
+      const y = addLead(t.db, { patient: null, phone: '8 93 111 22 33' });
+      const z = addLead(t.db, { patient: null, phone: '931112233' });
+      const pat = await register(t, 'reg', values);
+      const r = await link(t, 'reg', pat.id);
+      assert.equal(r.status, 200, r.text);
+      assert.deepEqual([t.lead(y).patient_id, t.lead(z).patient_id], [null, null], label);
+    } finally { t.close(); }
+  }
+});
+
+test('CRM_UNIFY_V1: «8 93 …» у новой карты находит заявку «931112233», если номер у одной карты', async () => {
+  const t = await startCrmApp();
+  try {
+    const y = addLead(t.db, { patient: null, phone: '931112233' });
+    const pat = await register(t, 'reg', { phone: '8 93 111 22 33' });
+    await link(t, 'reg', pat.id);
+    assert.equal(t.lead(y).patient_id, pat.id);
+  } finally { t.close(); }
+});
+
 test('CRM_UNIFY_V1: второй номер новой карты заявок не ищет — только основной', async () => {
   const t = await startCrmApp();
   try {

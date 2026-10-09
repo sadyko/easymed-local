@@ -43,6 +43,13 @@ for (const door of ['ensure_visit', 'booking_lines_add']) {
 for (const [label, seed] of [
   ['два номера в одном поле у брата', (db) => db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Брат','+998 90 909 26 38, +998 91 111 11 11')").run()],
   ['второй номер карты мамы', (db) => db.prepare("INSERT INTO patients (id, full_name, phone, phone_secondary) VALUES (78,'Мама','+998 91 000 00 00','0909092638')").run()],
+  // CRM_UNIFY_V1 (ревью 2, F1) — у карты ребёнка своего номера нет (поле не
+  // обязательное), номер мамы — только экстренный контакт или номер опекуна.
+  ['номер мамы — экстренный контакт карты ребёнка', (db) => db.prepare("INSERT INTO patients (id, full_name, phone, emergency_contact_phone) VALUES (78,'Ребёнок','','+998 90 909 26 38')").run()],
+  ['номер мамы — номер опекуна карты ребёнка', (db) => {
+    db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Ребёнок','')").run();
+    db.prepare("INSERT INTO patient_guardians (patient_id, name, relationship, phone) VALUES (78,'Мама','мать','+998 90 909 26 38')").run();
+  }],
 ]) {
   for (const door of ['ensure_visit', 'booking_lines_add']) {
     test(`по телефону, общий номер (${label}): ни первая дверь, ни следующая (${door}) не цепляют карточку`, async () => {
@@ -62,6 +69,39 @@ for (const [label, seed] of [
     });
   }
 }
+
+// CRM_UNIFY_V1 (ревью 2, F4) — основной номер записанного записан не по образцу:
+// «8 90 …» (междугородняя восьмёрка) или два номера в одном поле. Ключи берутся
+// у КАЖДОГО номера поля, приведённого к местным девяти цифрам, и у каждого
+// считаются владельцы; хоть у одного есть второй владелец — совпадения нет.
+for (const [label, own, sibling, leads] of [
+  ['«8 90 …» у записанного, брат «90 …»', '8 90 909 26 38', '90 909 26 38', ['8 90 909 26 38', '909092638']],
+  ['два номера в поле записанного, брат на втором', '+998 90 909 26 38, +998 91 111 11 11', '+998 91 111 11 11',
+    ['909092638', '+998 90 909 26 38, +998 91 111 11 11']],
+]) {
+  test(`по телефону, ${label}: номер не одной карты — заявки не трогаются`, async () => {
+    const t = await startCrmApp((db) => {
+      db.prepare('UPDATE patients SET phone = ? WHERE id = 77').run(own);
+      db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Брат',?)").run(sibling);
+    });
+    try {
+      const ids = leads.map((phone) => addLead(t.db, { patient: null, phone, assigned: 4 }));
+      const b = await book(t, 'reg', D, 9);
+      assert.equal(b.status, 200, b.text);
+      for (const id of ids) assert.equal(t.lead(id).patient_id, null, 'заявка ушла записанному, хотя номер есть у брата: ' + t.lead(id).phone);
+    } finally { t.close(); }
+  });
+}
+
+test('по телефону: «8 90 …» у записанного и «909092638» в заявке — один номер, если он у одной карты', async () => {
+  const t = await startCrmApp((db) => db.prepare("UPDATE patients SET phone = '8 90 909 26 38' WHERE id = 77").run());
+  try {
+    const rid = addLead(t.db, { patient: null, phone: '909092638', assigned: 4 });
+    const b = await book(t, 'reg', D, 9);
+    assert.equal(b.status, 200, b.text);
+    assert.deepEqual([t.lead(rid).patient_id, t.lead(rid).status], [77, 'scheduled']);
+  } finally { t.close(); }
+});
 
 test('по телефону ищется только ОСНОВНОЙ номер записанного: его второй номер (мамин) карточку мамы не берёт', async () => {
   const t = await startCrmApp((db) => db.prepare("UPDATE patients SET phone_secondary = '+998 93 333 33 33' WHERE id = 77").run());
@@ -159,13 +199,69 @@ test('прошедшая дата карточки заменяется днём
     assert.deepEqual([t.lead(stale).status, t.lead(stale).scheduled_date], ['scheduled', localDay(2)], 'осталась вчерашняя дата');
     t.db.prepare("UPDATE crm_requests SET status = 'came' WHERE id = ?").run(stale);
 
-    const ahead = addLead(t.db, { assigned: 3, date: localDay(1) });
+    // Дата остаётся, только если на неё ждёт строка, которую держит живой визит.
+    const ahead = addLead(t.db, { assigned: 3 });
     addLine(t.db, ahead, { svc: 40, day: localDay(1) });
     addLine(t.db, ahead, { svc: 30, day: localDay(4), doctor: 10 });
+    b = await book(t, 'reg', localDay(1), 9);
+    assert.equal(b.status, 200, b.text);
+    assert.equal(t.lead(ahead).scheduled_date, localDay(1));
     b = await book(t, 'reg', localDay(4), 9, { service_id: 30 });
     assert.equal(b.status, 200, b.text);
     assert.deepEqual([t.lead(ahead).status, t.lead(ahead).scheduled_date], ['scheduled', localDay(1)],
-      'ближайший ждущий день — завтра, а не день этой записи');
+      'ближайший записанный день — завтра, а не день этой записи');
+  } finally { t.close(); }
+});
+
+// CRM_UNIFY_V1 (ревью 2, F3) — будущая дата звонка, на которую ничто не записано,
+// датой записанной карточки не остаётся: послезавтра обход унёс бы её в «Не пришёл».
+test('«Перезвонить» завтра, строка на D+5, колл-центр записал на D+3 без услуги — дата карточки D+3', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { status: 'recall', assigned: 3, date: localDay(1) });
+    addLine(t.db, rid, { svc: 40, day: localDay(5) });
+    const b = await book(t, 'cc', localDay(3), 9);
+    assert.equal(b.status, 200, b.text);
+    assert.equal(t.db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(b.json.data.visit.id).request_id, rid);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['scheduled', localDay(3)]);
+  } finally { t.close(); }
+});
+
+// CRM_UNIFY_V1 (ревью 2, F2) — прошедшая незаписанная строка не возвращает карточке
+// прошедшую дату: сверка зеркала (touchRequest) берёт ближайшую ждущую строку
+// с сегодняшнего дня, а нет такой — оставляет дату, поставленную записью.
+test('строка прошлой недели не тянет дату назад: запись, повторные клики двери, добавление и снятие услуги', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { assigned: 3, date: localDay(-6) });
+    addLine(t.db, rid, { svc: 40, day: localDay(-6) });
+    addLine(t.db, rid, { svc: 30, day: D, doctor: 10 });
+    const b = await book(t, 'reg', D, 9, { service_id: 30 });
+    assert.equal(b.status, 200, b.text);
+    assert.equal(t.lead(rid).scheduled_date, D, 'сверка вернула прошедшую дату');
+    const undo = () => t.db.prepare('SELECT COUNT(*) n FROM crm_booking_undo').get().n;
+    const was = undo();
+    for (let i = 0; i < 3; i++) {
+      const e = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: D, doctor_id: 10 });
+      assert.equal(e.status, 200, e.text);
+      assert.equal(t.lead(rid).scheduled_date, D, 'дата прыгает на каждом клике двери');
+    }
+    assert.equal(undo(), was, 'клики двери копят след отмены');
+
+    t.db.prepare("UPDATE crm_requests SET status = 'came' WHERE id = ?").run(rid);
+    const cc = addLead(t.db, { assigned: 3, date: localDay(-6), updated: daysAgoIso(6), name: 'Колл-центр' });
+    addLine(t.db, cc, { svc: 40, day: localDay(-6) });
+    const b2 = await book(t, 'cc', D2, 9);
+    assert.equal(b2.status, 200, b2.text);
+    const vid = b2.json.data.visit.id;
+    assert.equal(t.lead(cc).scheduled_date, D2);
+    const add = await t.rpc('booking_lines_add', 'cc', { visit_id: vid, patient_id: 77, lines: [{ service_id: 30, doctor_id: 10 }] });
+    assert.equal(add.status, 200, add.text);
+    assert.equal(t.lead(cc).scheduled_date, D2, 'добавление услуги вернуло прошедшую дату');
+    const vsId = t.db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND service_id = 30').get(vid).id;
+    const del = await t.dbq('reg', { table: 'visit_services', op: 'delete', filters: [{ col: 'id', op: 'eq', val: vsId }] });
+    assert.equal(del.status, 200, del.text);
+    assert.equal(t.lead(cc).scheduled_date, D2, 'снятие услуги вернуло прошедшую дату — наутро обход унесёт карточку в «Не пришёл»');
   } finally { t.close(); }
 });
 
