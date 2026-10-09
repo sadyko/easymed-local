@@ -11,6 +11,12 @@
 // отчёт и показатели звонков не могут разойтись в ответе «кто видит всё».
 import { rowScope } from '../../db/schema-registry.js';
 import { scopeLifted } from '../../db/row-scope.js';
+// CRM_UNIFY_V1 — canEditCrm живёт здесь (перенесён из crm/booking-mirror-db.js):
+// правило «может вести карточку» (crm/tasks-follow.js) зовёт его, а
+// booking-mirror-db.js сам зовёт tasks-follow.js — нейтральный модуль
+// разрывает круг импорта.
+import { grantAllowsOr } from '../grants.js';
+import { sectionLevel } from '../roles.js';
 
 export const CRM_ALL_KEY = 'crm.all';
 
@@ -27,6 +33,22 @@ export function canSeeAllLeads(db, user) {
  * его передать: право читается из role_permissions несколькими запросами, и
  * на каждую строку поиск оператора становился в десятки раз медленнее.
  */
+/**
+ * V3120_FIX — может ли человек ВЕСТИ заявки. Роль с «CRM: просмотр» видит
+ * доску, но не ведёт её. Настроенный ключ «crm» (матрица прав) — его уровень;
+ * не настроенный — прежний уровень раздела (sections/levels): только явный
+ * «просмотр» закрывает запись. Ненастроенная роль пишет, как и раньше, — по
+ * списку ролей реестра. Зовут дверь /api/db (crm/booking-mirror-db.js) и
+ * правило «может вести карточку» (crm/tasks-follow.js, CRM_UNIFY_V1).
+ */
+export function canEditCrm(db, user) {
+  try {
+    return grantAllowsOr(db, user, 'crm', 'edit', () => sectionLevel(db, user, 'crm') !== 'viewer');
+  } catch {
+    return true;   // права не прочитались — решает реестр, как до этой проверки
+  }
+}
+
 export function leadVisible(db, user, assignedTo, { lifted } = {}) {
   const sc = rowScope('crm_requests');
   if (!sc) return true;

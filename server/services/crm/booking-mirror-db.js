@@ -18,9 +18,11 @@ import { calendarBook } from '../rpc/calendar.js';
 import { localDate } from '../domain/day.js';
 // V3120_FIX — работа над неоплаченной услугой и право «CRM: изменение».
 import { unpaidWorkRefusal, FREE_MOVES } from '../visit-status-guard.js';
-import { grantAllowsOr } from '../grants.js';
-import { sectionLevel } from '../roles.js';
 import { moveTasksWithLead } from './tasks-follow.js';   // CRM_UNIFY_V1 — задачи идут за карточкой
+// CRM_UNIFY_V1 — canEditCrm перенесён в crm/visibility.js (круг импорта с
+// tasks-follow.js); отсюда он по-прежнему экспортируется для старых вызовов.
+import { canEditCrm } from './visibility.js';
+export { canEditCrm };
 
 const LINE_KEYS = ['status', 'scheduled_date', 'doctor_id', 'service_id', 'visit_id', 'consultation_type_id'];
 
@@ -69,22 +71,9 @@ function lockedLineRefusal(db, ids, values) {
 // строки, задачи и метки. Реестр (schema-registry) пускает запись по ШТАТНОЙ
 // роли (регистратура, колл-центр), а уровень раздела — свойство роли клиники в
 // базе (role_permissions), поэтому проверяется здесь, в единственной двери
-// записи, как и остальные правила этой двери.
+// записи, как и остальные правила этой двери. Само правило — canEditCrm
+// (crm/visibility.js).
 const CRM_TABLES = new Set(['crm_requests', 'crm_request_services', 'crm_tasks', 'crm_request_tags']);
-
-/**
- * Может ли человек ВЕСТИ заявки. Настроенный ключ «crm» (матрица прав) — его
- * уровень; не настроенный — прежний уровень раздела (sections/levels): только
- * явный «просмотр» закрывает запись. Ненастроенная роль пишет, как и раньше, —
- * по списку ролей реестра.
- */
-export function canEditCrm(db, user) {
-  try {
-    return grantAllowsOr(db, user, 'crm', 'edit', () => sectionLevel(db, user, 'crm') !== 'viewer');
-  } catch {
-    return true;   // права не прочитались — решает реестр, как до этой проверки
-  }
-}
 
 /** До записи: что заденет правка. { refusal? } — отказ по-русски. */
 export function mirrorBefore(db, meta, body, user) {

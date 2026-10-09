@@ -5,9 +5,19 @@
 // считал, а открыть карточку он не мог. И ответственным можно было назначить
 // того, кто карточку не видит. Правила Р16 и Р17 плана
 // docs/plans/2026-10-09-crm-unify.md; код — server/services/crm/tasks-follow.js.
+//
+// РЕВЬЮ ЗАДАЧИ 10 (2026-10-09), решение контролёра — ОДНО ПРАВИЛО «может вести
+// карточку» (crm/tasks-follow.js canWorkLead): активен, пишет задачи CRM по
+// реестру, «CRM: изменение» (не просмотр), видит карточку. По нему — список
+// «Ответственный», отказ двери, новый хозяин карточки и задачи, идущие за ней:
+// к новому хозяину уходят открытые задачи без исполнителя, прежнего хозяина и
+// тех, кто эту карточку вести больше не может. Остаются только у тех, кто её
+// по-прежнему ведёт (руководитель, администратор, «crm.all»). Случаи R1–R10 —
+// находки ревью.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startCrmApp, addLead } from '../test-helpers/crm-unify-app.js';
+import { hashPassword } from '../services/auth.js';
 import { crmMergeLeads } from '../services/rpc/crm-merge.js';
 import { isReadOnlyRpc } from '../services/control/gate.js';
 
@@ -16,19 +26,66 @@ const task = (db, rid, assignee, text = 'Перезвонить', done = null) =
     .run(rid, text, '2026-01-01T09:00:00Z', assignee, done).lastInsertRowid);
 const who = (db, id) => db.prepare('SELECT assignee_id FROM crm_tasks WHERE id = ?').get(id).assignee_id;
 const upd = (t, by, id, values) => t.dbq(by, { table: 'crm_requests', op: 'update', values, filters: [{ col: 'id', op: 'eq', val: id }] });
-const ASSIGNEE_REFUSAL = 'Ответственным можно назначить только того, кто видит эту карточку: её оператора или руководителя.';
+const sel = (t, by, table, id) => t.dbq(by, { table, op: 'select', columns: 'id', filters: [{ col: 'id', op: 'eq', val: id }] });
+const ASSIGNEE_REFUSAL = 'Ответственным можно назначить только того, кто может вести эту карточку: её оператора или руководителя.';
+const OWNER_REFUSAL = 'Передать заявку можно только сотруднику, который может вести заявки CRM: активному и с правом их изменять.';
+const ADMIN = { id: 1, role: 'admin', extra_roles: [] };
 
-test('«Взять в работу»: задачи без исполнителя переходят взявшему; поручение руководителя конкретному человеку — нет', async () => {
+// Роль клиники на основе колл-центра с «CRM: просмотр» — видит доску, но не ведёт её.
+function seedViewer(db) {
+  db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('cc_view', 'КЦ просмотр', 'callcenter')").run();
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)')
+    .run('cc_view', JSON.stringify({ sections: ['crm'], levels: { crm: 'viewer' } }));
+  db.prepare('INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, custom_role_code) VALUES (?,?,?,?,?,?,?)')
+    .run(6, 'viewer', hashPassword('password1'), 'Наблюдатель', 'callcenter', 0, 'cc_view');
+}
+
+// CRM_UNIFY_V1 (ревью задачи 10, R2) — ПРАВИЛО ИЗМЕНЕНО НАМЕРЕННО: раньше
+// задача, поручённая Б на ничьей карточке, оставалась у Б, когда карточку брал
+// А, — и Б терял к ней дорогу (карточка А ему не видна). Теперь она идёт к А;
+// остаётся только у того, кто карточку по-прежнему ведёт (руководитель).
+test('«Взять в работу»: задачи без исполнителя и тех, кто карточку больше не видит, — взявшему; руководителя — на месте', async () => {
   const t = await startCrmApp();
   try {
     const rid = addLead(t.db, { assigned: null });
     const free = task(t.db, rid, null);
     const toB = task(t.db, rid, 4, 'Поручено Б');
+    const head = task(t.db, rid, 5, 'Руководителю');
+    const boss = task(t.db, rid, 1, 'Администратору');
     const r = await upd(t, 'cc', rid, { assigned_to: 3 });
     assert.equal(r.status, 200, r.text);
     assert.equal(t.lead(rid).assigned_to, 3);
     assert.equal(who(t.db, free), 3);
-    assert.equal(who(t.db, toB), 4, 'поручение конкретному человеку переехало');
+    assert.equal(who(t.db, toB), 3, 'CRM_UNIFY_V1: задача Б осталась у Б на карточке, которую Б не видит');
+    assert.deepEqual([who(t.db, head), who(t.db, boss)], [5, 1], 'задача того, кто карточку ведёт, уехала');
+  } finally { t.close(); }
+});
+
+test('R1: А отпустил карточку в стопку, Б взял — задача А идёт к Б, а не сиротеет у А', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { assigned: 3 });
+    const a = task(t.db, rid, 3, 'А: перезвонить');
+    assert.equal((await upd(t, 'cc', rid, { assigned_to: null })).status, 200);
+    assert.equal(who(t.db, a), 3, 'в стопке задачи не двигаются');
+    assert.equal((await upd(t, 'cc2', rid, { assigned_to: 4 })).status, 200);
+    assert.equal(t.lead(rid).assigned_to, 4);
+    assert.equal(who(t.db, a), 4);
+    assert.equal((await sel(t, 'cc', 'crm_tasks', a)).json.data.length, 0, 'у А в счётчике чужая задача');
+    assert.equal((await sel(t, 'cc2', 'crm_tasks', a)).json.data.length, 1);
+  } finally { t.close(); }
+});
+
+test('R2: оператор В поставил себе задачу на ничьей карточке, А её взял — задача В идёт к А', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { assigned: null });
+    const r = await t.dbq('cc2', { table: 'crm_tasks', op: 'insert', values: { request_id: rid, text: 'Перезвоню сам', due_at: '2026-12-01T09:00:00Z', assignee_id: 4 } });
+    assert.equal(r.status, 200, r.text);
+    const id = t.db.prepare('SELECT MAX(id) id FROM crm_tasks').get().id;
+    assert.equal((await upd(t, 'cc', rid, { assigned_to: 3 })).status, 200);
+    assert.equal(who(t.db, id), 3);
+    assert.equal((await sel(t, 'cc2', 'crm_tasks', id)).json.data.length, 0, 'В считает задачу карточки, которую не видит');
   } finally { t.close(); }
 });
 
@@ -113,6 +170,124 @@ test('слияние: задачи оператора влитой карточ�
   } finally { t.close(); }
 });
 
+test('R3: слияние ничьей карточки с задачей оператора В в карточку А — задача В идёт к А', async () => {
+  const t = await startCrmApp();
+  try {
+    const keep = addLead(t.db, { assigned: 3, patient: null, phone: '+998 91 555 66 77' });
+    const pool = addLead(t.db, { assigned: null, patient: null, phone: '915556677' });
+    const c = task(t.db, pool, 4, 'В на ничьей');
+    const head = task(t.db, pool, 5, 'Руководителю');
+    crmMergeLeads(t.db, { keep_id: keep, merge_ids: [pool] }, ADMIN);
+    assert.equal(who(t.db, c), 3);
+    assert.equal(who(t.db, head), 5, 'задача руководителя уехала');
+    assert.equal((await sel(t, 'cc2', 'crm_tasks', c)).json.data.length, 0);
+  } finally { t.close(); }
+});
+
+test('слияние: оператор, который заявки вести не может, не становится хозяином — карточка в стопку, задачи на месте', async () => {
+  const t = await startCrmApp();
+  try {
+    // оставшаяся ничья, влитая — у уволенного оператора Б
+    const keep = addLead(t.db, { assigned: null, patient: null, phone: '+998 91 555 66 77' });
+    const lose = addLead(t.db, { assigned: 4, patient: null, phone: '915556677' });
+    const b = task(t.db, lose, 4);
+    t.db.prepare('UPDATE users SET is_active = 0 WHERE id = 4').run();
+    crmMergeLeads(t.db, { keep_id: keep, merge_ids: [lose] }, ADMIN);
+    assert.equal(t.lead(keep).assigned_to, null, 'хозяином слитой карточки стал уволенный');
+    assert.equal(who(t.db, b), 4);
+    // у оставшейся — свой хозяин, и он может вести: он и остаётся, задачи Б — к нему
+    const keep2 = addLead(t.db, { assigned: 3, patient: null, phone: '+998 93 111 22 33' });
+    const lose2 = addLead(t.db, { assigned: 4, patient: null, phone: '931112233' });
+    const b2 = task(t.db, lose2, 4);
+    crmMergeLeads(t.db, { keep_id: keep2, merge_ids: [lose2] }, ADMIN);
+    assert.equal(t.lead(keep2).assigned_to, 3);
+    assert.equal(who(t.db, b2), 3);
+  } finally { t.close(); }
+});
+
+test('слияние: журнал помнит прежних исполнителей задач', async () => {
+  const t = await startCrmApp();
+  try {
+    const keep = addLead(t.db, { assigned: null, patient: null, phone: '+998 91 555 66 77' });
+    const lose = addLead(t.db, { assigned: 3, patient: null, phone: '915556677' });
+    const k = task(t.db, keep, 4, 'В на оставшейся');
+    const a = task(t.db, lose, 3);
+    const n = task(t.db, lose, null, 'Без исполнителя');
+    crmMergeLeads(t.db, { keep_id: keep, merge_ids: [lose] }, ADMIN);
+    // задача В на ничьей оставшейся — к новому хозяину; у влитой хозяин тот же
+    // (А), её задачи не двигаются — как у карточки без смены оператора
+    assert.deepEqual([who(t.db, k), who(t.db, a), who(t.db, n)], [3, 3, null]);
+    const snap = JSON.parse(t.db.prepare('SELECT snapshot FROM crm_merge_log ORDER BY id DESC LIMIT 1').get().snapshot);
+    assert.deepEqual(snap.kept.task_assignees, [[k, 4]]);
+    assert.deepEqual(snap.merged[0].task_assignees, [[a, 3], [n, null]]);
+  } finally { t.close(); }
+});
+
+test('R4/R10: карточку не передать тому, кто заявки вести не может (кассир, врач, уволенный, несуществующий) — задачи на месте', async () => {
+  const t = await startCrmApp();
+  try {
+    t.db.prepare('UPDATE users SET is_active = 0 WHERE id = 4').run();
+    for (const to of [9, 10, 4, 99999, 'abc']) {
+      const rid = addLead(t.db, { assigned: 3 });
+      const a = task(t.db, rid, 3);
+      const r = await upd(t, 'head', rid, { assigned_to: to });
+      assert.equal(r.status, 403, `передали ${JSON.stringify(to)}: ${r.text}`);
+      assert.equal(r.json.error.message, OWNER_REFUSAL);
+      assert.equal(t.lead(rid).assigned_to, 3);
+      assert.equal(who(t.db, a), 3);
+    }
+    // и новую карточку на такого не завести
+    const ins = await t.dbq('boss', { table: 'crm_requests', op: 'insert', values: { full_name: 'Новая', phone: '901234567', assigned_to: 9 } });
+    assert.equal(ins.status, 403, ins.text);
+    // руководителю и себе — можно
+    const rid = addLead(t.db, { assigned: 3 });
+    assert.equal((await upd(t, 'boss', rid, { assigned_to: 5 })).status, 200);
+    assert.equal((await upd(t, 'head', rid, { assigned_to: 5 })).status, 200);
+  } finally { t.close(); }
+});
+
+test('R5: роль с «CRM: просмотр» не предлагается, не назначается ответственным и карточку не получает', async () => {
+  const t = await startCrmApp(seedViewer);
+  try {
+    const free = addLead(t.db, { assigned: null });
+    const list = await t.rpc('crm_task_assignees', 'cc', { request_id: free });
+    assert.equal(list.status, 200, list.text);
+    assert.ok(!list.json.data.some((p) => p.id === 6), 'наблюдатель в списке «Ответственный»');
+    const ins = await t.dbq('cc', { table: 'crm_tasks', op: 'insert', values: { request_id: free, text: 'Т', assignee_id: 6 } });
+    assert.equal(ins.status, 403, ins.text);
+    assert.equal(ins.json.error.message, ASSIGNEE_REFUSAL);
+    const rid = addLead(t.db, { assigned: 3 });
+    const a = task(t.db, rid, 3);
+    const pass = await upd(t, 'head', rid, { assigned_to: 6 });
+    assert.equal(pass.status, 403, pass.text);
+    assert.equal(pass.json.error.message, OWNER_REFUSAL);
+    assert.equal(who(t.db, a), 3);
+    // старая задача наблюдателя на ничьей карточке уходит к взявшему
+    const old = task(t.db, free, 6, 'Старая задача наблюдателя');
+    assert.equal((await upd(t, 'cc', free, { assigned_to: 3 })).status, 200);
+    assert.equal(who(t.db, old), 3);
+  } finally { t.close(); }
+});
+
+test('R6: держатель «осиротевшей» задачи не узнаёт, чья карточка, — любая смена исполнителя безликим отказом', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { assigned: 4 });        // карточка Б
+    const orphan = task(t.db, rid, 3, 'Старая задача А'); // задача А с прежних времён
+    const probe = (x) => t.dbq('cc', { table: 'crm_tasks', op: 'update', values: { assignee_id: x }, filters: [{ col: 'id', op: 'eq', val: orphan }] });
+    for (const x of [2, 4, 5, 1, 9]) {
+      const r = await probe(x);
+      assert.equal(r.status, 403, `проба ${x}: ${r.text}`);
+      assert.equal(r.json.error.message, 'not allowed', `проба ${x} ответила не безлико`);
+    }
+    assert.equal(who(t.db, orphan), 3);
+    // сохранить свою задачу (тот же исполнитель) и отметить «сделано» — можно
+    assert.equal((await probe(3)).status, 200);
+    const done = await t.dbq('cc', { table: 'crm_tasks', op: 'update', values: { done_at: '2026-10-09T10:00:00Z' }, filters: [{ col: 'id', op: 'eq', val: orphan }] });
+    assert.equal(done.status, 200, done.text);
+  } finally { t.close(); }
+});
+
 test('ответственный обязан видеть карточку: на карточке А — А или руководитель; Б — отказ 403', async () => {
   const t = await startCrmApp();
   try {
@@ -133,6 +308,12 @@ test('ответственный обязан видеть карточку: н�
     const re = await t.dbq('head', { table: 'crm_tasks', op: 'update', values: { assignee_id: 4 }, filters: [{ col: 'id', op: 'eq', val: id }] });
     assert.equal(re.status, 403);
     assert.equal(who(t.db, id), 3);
+    // правка нескольких задач разом — то же правило
+    const ids2 = t.db.prepare('SELECT id FROM crm_tasks WHERE request_id = ?').all(rid).map((x) => x.id);
+    const bulk = await t.dbq('head', { table: 'crm_tasks', op: 'update', values: { assignee_id: 4 }, filters: [{ col: 'id', op: 'in', val: ids2 }] });
+    assert.equal(bulk.status, 403);
+    assert.equal(bulk.json.error.message, ASSIGNEE_REFUSAL);
+    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_tasks WHERE assignee_id = 4').get().n, 0);
     // пакет: одна строка на того, кто не видит, — отказ всему пакету
     const batch = await t.dbq('head', { table: 'crm_tasks', op: 'insert', values: [
       { request_id: rid, text: 'x', assignee_id: 3 }, { request_id: rid, text: 'y', assignee_id: 4 }] });

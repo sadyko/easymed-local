@@ -121,10 +121,11 @@ test('слияние трёх: услуги и задачи ПЕРЕЕЗЖАЮТ
     assert.equal(log[0].actor_name, 'Админ');
     const snap = JSON.parse(log[0].snapshot);
     // M2 — в журнале номера, ступени, пациенты и счётчики; ни имён, ни
-    // телефонов, ни заметок.
+    // телефонов, ни заметок. CRM_UNIFY_V1 — и прежние исполнители задач
+    // (task_assignees, номера): слияние ведёт задачи за карточкой.
     const mb = snap.merged.find((x) => x.id === b);
-    assert.deepEqual(Object.keys(mb).sort(), ['assigned_to', 'id', 'line_ids', 'lines', 'patient_id', 'status', 'tags', 'task_ids', 'tasks']);
-    assert.deepEqual(Object.keys(snap.kept).sort(), ['assigned_to', 'id', 'patient_id', 'status']);
+    assert.deepEqual(Object.keys(mb).sort(), ['assigned_to', 'id', 'line_ids', 'lines', 'patient_id', 'status', 'tags', 'task_assignees', 'task_ids', 'tasks']);
+    assert.deepEqual(Object.keys(snap.kept).sort(), ['assigned_to', 'id', 'patient_id', 'status', 'task_assignees']);
     assert.equal(mb.status, 'no_show');
     assert.deepEqual(mb.line_ids, [lb]);
     assert.deepEqual(mb.task_ids, [tb]);

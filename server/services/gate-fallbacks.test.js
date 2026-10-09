@@ -57,7 +57,8 @@ const ALLOW = {
   // CRM «viewer» запирают запись. Сами ничего не дают, поэтому в FALLBACK_FN им не
   // место: там «прежнее правило» (не viewer) засчитало бы право crm и роли без
   // раздела вовсе — защита «Ролей» решила бы, что она его держит и может выдать.
-  "services/crm/booking-mirror-db.js|grantAllowsOr|'crm'": { n: 1, why: 'canEditCrm: только сужает запись реестра (явный просмотр crm закрывает); ключ crm — раздел, уровень выводит экран' },
+  // CRM_UNIFY_V1 — canEditCrm перенесён из crm/booking-mirror-db.js в crm/visibility.js (круг импорта с tasks-follow.js).
+  "services/crm/visibility.js|grantAllowsOr|'crm'": { n: 1, why: 'canEditCrm: только сужает запись реестра (явный просмотр crm закрывает); ключ crm — раздел, уровень выводит экран' },
   // Сама защита сравнивает уровни — она не ворота.
   'services/role-guard.js|effectiveLevel|key': { n: 2, why: 'защита «Ролей»: сравнение уровней' },
   'services/role-guard.js|grantAllowsOr|key': { n: 1, why: 'защита «Ролей»: gatePasses по спискам карты' },

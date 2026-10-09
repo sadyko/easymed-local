@@ -20,7 +20,7 @@ import { roleWriteRefusal } from '../services/role-guard.js';   // ADMIN_ROWS_GR
 import { packageStampRefusal } from '../services/rpc/billing.js';   // PACKAGES_V1 (ревью I-3)
 // CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
-import { taskAssigneeRefusal } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
+import { taskAssigneeRefusal, canOwnLead, ownerRefusal } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -547,16 +547,23 @@ export function dbRoutes(db) {
 // коллеги — и она исчезала у него с доски, появляясь у другого без следа.
 // Кто видит всё (scopeLifted — то же правило, что у доски), назначает кого
 // угодно; остальные — себя или никого.
+// CRM_UNIFY_V1 (ревью задачи 10, R4/R5/R10) — «кого угодно» — из тех, кто может
+// вести заявки (crm/tasks-follow.js canOwnLead: активен, пишет задачи CRM,
+// «CRM: изменение»). Иначе карточка — и её задачи, идущие за ней, — уходили
+// кассиру, врачу, уволенному, наблюдателю или несуществующему номеру.
 function crmAssignRefusal(db, meta, body, user) {
   if (!meta || meta.table !== 'crm_requests') return null;
   if (meta.op !== 'insert' && meta.op !== 'update' && meta.op !== 'upsert') return null;
   const rows = Array.isArray(body && body.values) ? body.values : [body && body.values];
   const me = user && Number(user.id);
-  const foreign = rows.some((r) => r && Object.prototype.hasOwnProperty.call(r, 'assigned_to')
+  const foreign = rows.filter((r) => r && Object.prototype.hasOwnProperty.call(r, 'assigned_to')
     && r.assigned_to !== null && r.assigned_to !== '' && Number(r.assigned_to) !== me);
-  if (!foreign) return null;
-  if (scopeLifted(rowScope('crm_requests'), user, db)) return null;
-  return 'Передать заявку другому сотруднику может руководитель колл-центра или администратор. Возьмите её себе или оставьте в общей стопке.';
+  if (!foreign.length) return null;
+  if (!scopeLifted(rowScope('crm_requests'), user, db)) {
+    return 'Передать заявку другому сотруднику может руководитель колл-центра или администратор. Возьмите её себе или оставьте в общей стопке.';
+  }
+  if (foreign.some((r) => !canOwnLead(db, r.assigned_to))) return ownerRefusal();   // CRM_UNIFY_V1
+  return null;
 }
 
 // STAFF_SYNC_V1 — эта установка является филиалом? Испорченная или отсутствующая
