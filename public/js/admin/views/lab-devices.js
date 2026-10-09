@@ -23,6 +23,8 @@ import { splitTray, groupReceiving, staleSeriesRest, seriesPendingRest, isLocalI
 // LIS_VENDOR_EXACT_V1 — D14: кто подключён к порту приёма и что прислал (lis_listeners.peers);
 // D10: в сообщении лотка есть непрочитанные буквы (U+FFFD).
 import { peerNotes, hasUnreadableText } from './lab-devices-lists.js?v=lists4';
+// LIS_PROXY_V1 — карточка «LIS Proxy».
+import { mountProxyCard } from './lab-proxy-card.js';
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
 const TRANSPORTS = [
@@ -136,6 +138,7 @@ export async function mountLabDevices(container) {
     const liveCard = h('div', { class: 'card' });
     const trayCard = h('div', { class: 'card' });
     const guideCard = h('div', { class: 'card' });
+    const proxyCard = h('div', { class: 'card' });   // LIS_PROXY_V1 — карточка «LIS Proxy»
     // LAB_COMPACT_V1 — владелец: «too much noise and text … fix the listings».
     // Карточки — сеткой с общим зазором: приборы во всю ширину, «последние
     // результаты» и «необработанные» рядом, инструкция — свёрнутой внизу.
@@ -143,6 +146,7 @@ export async function mountLabDevices(container) {
     // (lab-panels-mode.test.mjs) реализует именно его.
     const grid = h('div', { class: 'ld' });
     grid.appendChild(devicesCard);
+    grid.appendChild(proxyCard);   // LIS_PROXY_V1
     grid.appendChild(formCard);
     const pair = h('div', { class: 'ld-grid' });
     pair.appendChild(liveCard);
@@ -151,6 +155,8 @@ export async function mountLabDevices(container) {
     grid.appendChild(guideCard);
     container.appendChild(grid);
     paintGuide();
+    // LIS_PROXY_V1 — карточка читает свою настройку сама (lis_proxy_get) и в живой опрос не входит.
+    mountProxyCard(proxyCard).catch(() => {});
 
     // ---------- загрузка ----------
 
