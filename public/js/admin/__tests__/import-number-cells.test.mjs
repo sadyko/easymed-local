@@ -1,0 +1,248 @@
+// CLINIC_API_FIX_V1 (ревью итога) — ЧИСЛОВАЯ ЯЧЕЙКА ИМПОРТА: ОДНО ПРАВИЛО.
+//
+// Было: num() убирал пробелы и запятые и звал Number(); всё, что не
+// разобралось, молча становилось значением по умолчанию — у цены это 0.
+// Ячейка «150 000 сум» в строке, ОБНОВЛЯЮЩЕЙ услугу, давала price = 0, статус
+// «готово», ни слова — и сохранённая цена услуги становилась 0. «40%» в доле
+// исполнителя — тоже 0. Цены второго/повторного визита (88e6d03) уже
+// говорили о не числе; остальные числовые колонки — нет.
+//
+// Правило теперь одно для каждой числовой колонки:
+//   • число — «150000», «150 000» (пробелы, в том числе неразрывные, —
+//     разделитель тысяч), «12,5» / «12.5» (запятая или точка — десятичный
+//     знак), в колонке процентов — ещё «40%»;
+//   • непустое не число в 0 не превращается НИКОГДА: строка, обновляющая
+//     запись, это поле не пишет (сохранённое остаётся) и говорит, в какой
+//     колонке что стояло; новая строка с не числом в цене не ввозится вовсе
+//     (ошибка); прочее — как пустая ячейка, но вслух;
+//   • пустая ячейка и отсутствующая колонка — как раньше.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+// Minimal DOM so the view module (and i18n it pulls) can load; nothing renders here.
+class F { constructor(t) { this.tagName = String(t).toUpperCase(); this.style = {}; this.children = []; this.attrs = {}; this.className = ''; this._t = ''; this.dataset = {}; this.value = ''; }
+    appendChild(c) { this.children.push(c); return c; } removeChild() {} setAttribute(k, v) { this.attrs[k] = String(v); } getAttribute(k) { return this.attrs[k] ?? null; }
+    addEventListener() {} removeEventListener() {} querySelector() { return null; } querySelectorAll() { return []; } remove() {}
+    get textContent() { return this._t; } set textContent(v) { this._t = String(v); }
+    get classList() { return { contains: () => false, add() {}, remove() {}, toggle() {} }; } }
+const mk = (t) => new F(t);
+globalThis.Node = F;
+globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
+globalThis.document = { createElement: mk, createElementNS: (_n, t) => mk(t), createTextNode: (t) => { const e = mk('#text'); e._t = String(t); return e; }, head: mk('head'), body: mk('body'), documentElement: mk('html'), addEventListener() {}, removeEventListener() {}, getElementById() { return null; } };
+globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener() {}, removeEventListener() {} };
+globalThis.MutationObserver = class { observe() {} disconnect() {} };
+globalThis.requestAnimationFrame = (fn) => fn();
+const { buildImportRow, readImportNumber } = await import('../views/section-import-export.js');
+const { STRINGS } = await import('../i18n-strings.js');
+
+const MIN = { name: 'Приём кардиолога', group: 'Консультация' };
+// Услуга есть, галочка «Обновлять существующие» стоит — строка её ОБНОВИТ.
+const SAVED = { name: 'Приём кардиолога', price: 200000, tax_rate: 12, price_secondary: 150000, secondary_days_from: 1, secondary_days_to: 30,
+    price_repeat: null, repeat_days_from: null, repeat_days_to: null, doctor_tier_from: 10, doctor_tier_percent: 30 };
+const UPDATE = () => ({ __wantUpdate: true, __stored: new Map([['приём кардиолога', { ...SAVED }]]) });
+// Та же услуга есть, но галочка снята — строка ляжет новой услугой.
+const INSERT_TICK_OFF = () => ({ __wantUpdate: false, __stored: UPDATE().__stored });
+const noteAbout = (row, col) => row.notes.map(String).find((n) => n.includes('колонке ' + col + ' '));
+
+// --- разбор ячейки ---------------------------------------------------------
+
+test('readImportNumber: обычная запись чисел — пробелы тысяч (и неразрывные), запятая или точка, % только в процентах', () => {
+    const n = (v, pct) => readImportNumber(v, pct).n;
+    assert.strictEqual(n(150000), 150000, 'число из Excel — как есть');
+    assert.strictEqual(n('150000'), 150000);
+    assert.strictEqual(n('150 000'), 150000);
+    assert.strictEqual(n('150 000'), 150000, 'неразрывный пробел');
+    assert.strictEqual(n('150 000'), 150000, 'узкий неразрывный пробел');
+    assert.strictEqual(n(' 1 500 000 '), 1500000);
+    assert.strictEqual(n('12,5'), 12.5);
+    assert.strictEqual(n('12.5'), 12.5);
+    assert.strictEqual(n('1 500,50'), 1500.5);
+    assert.strictEqual(n('0,125'), 0.125);
+    assert.strictEqual(n('1500,000'), 1500, 'четыре цифры до запятой — не тысячи: десятичная запятая');
+    assert.strictEqual(n('-5'), -5, 'знак читается; границы проверяют правила колонки');
+    assert.strictEqual(n('40%', true), 40);
+    assert.strictEqual(n('12,5 %', true), 12.5);
+    assert.deepStrictEqual(readImportNumber('', false), { empty: true });
+    assert.deepStrictEqual(readImportNumber('   ', false), { empty: true });
+    assert.deepStrictEqual(readImportNumber(null, false), { empty: true });
+    assert.deepStrictEqual(readImportNumber(undefined, false), { empty: true });
+});
+
+test('readImportNumber: не число остаётся не числом — с текстом ячейки, а не 0', () => {
+    for (const [v, pct] of [['150 000 сум', false], ['сум 150000', false], ['—', false], ['нет', false], ['40%', false],
+        ['15 00', false], ['1e5', false], ['12,5,1', false], [true, false], ['сорок', true], ['%40', true]]) {
+        const r = readImportNumber(v, pct);
+        assert.ok('bad' in r, JSON.stringify(v) + ' прочитано как ' + JSON.stringify(r));
+        assert.strictEqual(r.bad, String(v).trim());
+    }
+});
+
+test('readImportNumber: «1,500» и «150.000» — не число (это и полтора, и полторы тысячи), а не молча 1,5 или 150', () => {
+    for (const v of ['1,500', '150.000', '12.500', '-1,500']) {
+        assert.ok('bad' in readImportNumber(v, false), v + ' прочитано как ' + JSON.stringify(readImportNumber(v, false)));
+    }
+});
+
+// --- строка, обновляющая услугу ----------------------------------------------
+
+test('обновление: цена «150 000 сум» — сохранённая цена остаётся, строка предупреждает и называет колонку и ячейку', () => {
+    const row = buildImportRow('services', { ...MIN, price: '150 000 сум' }, { rowNum: 7, lookups: UPDATE() });
+    assert.ok(!('price' in row.payload), 'цена записана: ' + JSON.stringify(row.payload.price));
+    assert.strictEqual(row.status, 'warn');
+    const note = noteAbout(row, 'price');
+    assert.ok(note, JSON.stringify(row.notes));
+    assert.ok(note.includes('Строка 7') && note.includes('«150 000 сум»'), note);
+    assert.strictEqual(note, 'Строка 7: в колонке price не число («150 000 сум») — оставлено сохранённое значение.');
+});
+
+test('обновление: «150 000» — 150000; «40%» в доле исполнителя — 40; «12,5» в НДС — 12,5; без предупреждений', () => {
+    const row = buildImportRow('services', { ...MIN, price: '150 000', default_doctor_percent: '40%', tax_rate: '12,5', duration_minutes: '45' }, { lookups: UPDATE() });
+    assert.strictEqual(row.payload.price, 150000);
+    assert.strictEqual(row.payload.default_doctor_percent, 40);
+    assert.strictEqual(row.payload.tax_rate, 12.5);
+    assert.strictEqual(row.payload.duration_minutes, 45);
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+});
+
+test('обновление: «сорок» в доле, «полчаса» в длительности, «150.000» в цене — каждое поле остаётся сохранённым, каждое названо', () => {
+    const row = buildImportRow('services', { ...MIN, price: '150.000', default_doctor_percent: 'сорок', duration_minutes: 'полчаса' }, { lookups: UPDATE() });
+    for (const k of ['price', 'default_doctor_percent', 'duration_minutes']) {
+        assert.ok(!(k in row.payload), k + ' записано: ' + JSON.stringify(row.payload[k]));
+        assert.ok(noteAbout(row, k), k + ': нет предупреждения — ' + JSON.stringify(row.notes));
+    }
+    assert.strictEqual(row.status, 'warn');
+});
+
+test('обновление: «40%» в цене — не число (процент только в колонке процентов)', () => {
+    const row = buildImportRow('services', { ...MIN, price: '40%' }, { lookups: UPDATE() });
+    assert.ok(!('price' in row.payload));
+    assert.ok(noteAbout(row, 'price'));
+});
+
+test('обновление: пустая ячейка цены — как и раньше (0 с предупреждением «price пусто»)', () => {
+    const row = buildImportRow('services', { ...MIN, price: '' }, { lookups: UPDATE() });
+    assert.strictEqual(row.payload.price, 0);
+    assert.ok(row.notes.some((n) => /price пусто/.test(String(n))), JSON.stringify(row.notes));
+});
+
+// --- новая строка -----------------------------------------------------------
+
+test('новая услуга с не числом в цене не ввозится — ошибка с колонкой и ячейкой', () => {
+    for (const lookups of [{}, INSERT_TICK_OFF()]) {
+        const row = buildImportRow('services', { ...MIN, price: '150 000 сум' }, { rowNum: 5, lookups });
+        assert.strictEqual(row.status, 'error', JSON.stringify(row));
+        assert.notStrictEqual(row.payload.price, 0, 'цена стала 0');
+        assert.strictEqual(noteAbout(row, 'price'), 'Строка 5: в колонке price не число («150 000 сум») — строка не импортирована.');
+    }
+});
+
+test('новая услуга: «150 000» — 150000, без ошибки', () => {
+    const row = buildImportRow('services', { ...MIN, price: '150 000' });
+    assert.strictEqual(row.payload.price, 150000);
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+});
+
+test('новая услуга: не число в НДС и длительности — как пустая ячейка (12 и 30), вслух; в доле — не пишется (база: 0), вслух', () => {
+    const row = buildImportRow('services', { ...MIN, price: 1000, tax_rate: 'двенадцать', duration_minutes: 'полчаса', default_doctor_percent: 'сорок' }, { rowNum: 3 });
+    assert.notStrictEqual(row.status, 'error', 'строка с ценой не должна отказывать из-за НДС: ' + JSON.stringify(row.notes));
+    assert.strictEqual(row.status, 'warn');
+    assert.strictEqual(row.payload.tax_rate, 12);
+    assert.strictEqual(row.payload.duration_minutes, 30);
+    assert.ok(!('default_doctor_percent' in row.payload));
+    assert.strictEqual(noteAbout(row, 'tax_rate'), 'Строка 3: в колонке tax_rate не число («двенадцать») — записано 12, как для пустой ячейки.');
+    assert.strictEqual(noteAbout(row, 'default_doctor_percent'), 'Строка 3: в колонке default_doctor_percent не число («сорок») — не записано.');
+});
+
+test('новая услуга без колонок и с пустыми ячейками — как раньше', () => {
+    const absent = buildImportRow('services', { ...MIN });
+    assert.strictEqual(absent.payload.price, 0);
+    assert.strictEqual(absent.payload.tax_rate, 12);
+    const blank = buildImportRow('services', { ...MIN, price: '', tax_rate: '', default_doctor_percent: '' });
+    assert.strictEqual(blank.payload.price, 0);
+    assert.strictEqual(blank.payload.tax_rate, 12);
+    assert.strictEqual(blank.payload.default_doctor_percent, 0);
+    assert.strictEqual(blank.status, 'warn', 'пустая цена — по-прежнему с предупреждением');
+});
+
+// --- цены второго/повторного визита и ступени — то же правило ---------------
+
+test('цены визита: «60 000» и неразрывный пробел читаются; при обновлении не число оставляет сохранённую цену', () => {
+    const fresh = buildImportRow('services', { ...MIN, price: 200000, price_secondary: '60 000', secondary_days_from: 1, secondary_days_to: 6,
+        price_repeat: '', repeat_days_from: '', repeat_days_to: '' });
+    assert.strictEqual(fresh.payload.price_secondary, 60000);
+    assert.strictEqual(fresh.status, 'ok', JSON.stringify(fresh.notes));
+
+    const upd = buildImportRow('services', { ...MIN, price: 200000, price_secondary: '60 000 сум' }, { rowNum: 8, lookups: UPDATE() });
+    assert.ok(!('price_secondary' in upd.payload), 'сохранённая цена второго визита стёрта: ' + JSON.stringify(upd.payload.price_secondary));
+    assert.strictEqual(noteAbout(upd, 'price_secondary'), 'Строка 8: в колонке price_secondary не число («60 000 сум») — оставлено сохранённое значение.');
+    assert.strictEqual(upd.status, 'warn');
+});
+
+test('цены визита: «1,5» дня — дробный день по правилу окна, а не 15 дней', () => {
+    const row = buildImportRow('services', { ...MIN, price: 200000, price_secondary: 60000, secondary_days_from: '1,5', secondary_days_to: 6 }, { rowNum: 4 });
+    assert.ok(!('secondary_days_from' in row.payload), JSON.stringify(row.payload));
+    assert.ok(row.notes.some((n) => /secondary_days_from — целое неотрицательное число дней/.test(String(n))), JSON.stringify(row.notes));
+});
+
+test('ступени: «40%» в доле ступени — 40; «сорок» — ступень из файла не сохраняется, колонка и ячейка названы', () => {
+    const ok = buildImportRow('services', { ...MIN, price: 1000, doctor_tier_from: '10', doctor_tier_percent: '40%' });
+    assert.strictEqual(ok.payload.doctor_tier_from, 10);
+    assert.strictEqual(ok.payload.doctor_tier_percent, 40);
+    assert.strictEqual(ok.status, 'ok', JSON.stringify(ok.notes));
+
+    const bad = buildImportRow('services', { ...MIN, price: 1000, doctor_tier_from: '10', doctor_tier_percent: 'сорок' }, { rowNum: 6, lookups: UPDATE() });
+    assert.ok(!('doctor_tier_from' in bad.payload) && !('doctor_tier_percent' in bad.payload), 'ступень записана: ' + JSON.stringify(bad.payload));
+    assert.strictEqual(noteAbout(bad, 'doctor_tier_percent'),
+        'Строка 6, «Приём кардиолога»: в колонке doctor_tier_percent не число («сорок») — ступень 1 из файла не сохранена.');
+});
+
+// --- другие разделы: то же правило ------------------------------------------
+
+test('товары: цена «1 500» — 1500; «1 500 сум» — строка не ввозится; не число в НДС — не пишется, вслух', () => {
+    assert.strictEqual(buildImportRow('clinic_items', { name: 'Шприц', price: '1 500' }).payload.price, 1500);
+    const bad = buildImportRow('clinic_items', { name: 'Шприц', price: '1 500 сум' }, { rowNum: 2 });
+    assert.strictEqual(bad.status, 'error');
+    assert.strictEqual(noteAbout(bad, 'price'), 'Строка 2: в колонке price не число («1 500 сум») — строка не импортирована.');
+    const vat = buildImportRow('clinic_items', { name: 'Шприц', price: 1500, tax_rate: 'без НДС' });
+    assert.ok(!('tax_rate' in vat.payload), 'НДС записан: ' + JSON.stringify(vat.payload.tax_rate));
+    assert.strictEqual(vat.status, 'warn');
+    assert.ok(noteAbout(vat, 'tax_rate'));
+    assert.strictEqual(buildImportRow('clinic_items', { name: 'Шприц', price: 1500, tax_rate: '12%' }).payload.tax_rate, 12);
+
+    const proc = buildImportRow('procurement_items', { 'товар': 'Шапочка', 'цена': '3 210 сум' }, { rowNum: 4 });
+    assert.strictEqual(proc.status, 'error');
+    assert.ok(noteAbout(proc, 'цена'), JSON.stringify(proc.notes));
+    assert.strictEqual(buildImportRow('procurement_items', { 'товар': 'Шапочка', 'цена': '3 210' }).payload.price, 3210);
+});
+
+test('остаток при импорте товаров: «50» — приход 50; «50 шт» — без прихода, вслух', () => {
+    assert.strictEqual(buildImportRow('procurement_items', { 'товар': 'Шапочка', 'цена': 749, 'остаток': '1 200' }).captures.qty, 1200);
+    const bad = buildImportRow('procurement_items', { 'товар': 'Шапочка', 'цена': 749, 'остаток': '50 шт' });
+    assert.ok(!(Number(bad.captures.qty) > 0), 'приход из «50 шт»: ' + JSON.stringify(bad.captures));
+    assert.strictEqual(bad.status, 'warn');
+    assert.ok(noteAbout(bad, 'остаток'), JSON.stringify(bad.notes));
+});
+
+test('сотрудники: «30%» в проценте зарплаты — 30; «тридцать» — не пишется, вслух', () => {
+    const base = { username: 'a.yusupov', role: 'doctor', last_name: 'Юсупов', first_name: 'Азиз' };
+    assert.strictEqual(buildImportRow('users', { ...base, salary_percent: '30%' }).payload.salary_percent, 30);
+    const bad = buildImportRow('users', { ...base, salary_percent: 'тридцать', salary_fixed: '4 000 000' });
+    assert.ok(!('salary_percent' in bad.payload));
+    assert.strictEqual(bad.payload.salary_fixed, 4000000);
+    assert.ok(noteAbout(bad, 'salary_percent'));
+});
+
+test('новые сообщения — на трёх языках, узбекский латиницей', () => {
+    for (const k of [
+        'Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.',
+        'Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
+        'Строка {n}: в колонке {col} не число («{v}») — записано {def}, как для пустой ячейки.',
+        'Строка {n}: в колонке {col} не число («{v}») — не записано.',
+        'Строка {n}, «{service}»: в колонке {col} не число («{v}») — ступень {step} из файла не сохранена.',
+    ]) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+        assert.ok(!/[Ѐ-ӿ]/.test(e.uz), 'кириллица в узбекском: ' + e.uz);
+        for (const ph of ['{n}', '{col}', '{v}']) assert.ok(e.uz.includes(ph) && e.en.includes(ph), ph + ' потерян в переводе: ' + k);
+    }
+});

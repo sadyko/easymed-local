@@ -194,6 +194,12 @@ function loadXlsx() {
 //               fly so the import never silently drops a label.
 //   coerce    - 'num' | 'int' | 'bool' (numeric/boolean parsing)
 //   defaultNum / defaultBool - fallback when the cell is blank
+//   percent   - CLINIC_API_FIX_V1: a numeric column that also accepts «40%»
+//   refuseBadNumber - CLINIC_API_FIX_V1: a non-number here never imports as a
+//               new row (status=error); an updating row keeps the saved value
+//   raw       - CLINIC_API_FIX_V1: the section's transform reads this numeric
+//               column from the sheet row itself; buildRow leaves it alone
+//   captureNum - CLINIC_API_FIX_V1: a captured column that holds a number
 //   hint      - per-column comment baked into the sample file's header row
 // sampleRows[] - pre-filled rows in the downloadable template.
 // ---------------------------------------------------------------------------
@@ -213,11 +219,11 @@ const IMPORT_CONFIGS = {
         columns: [
             { key: 'name',     required: true, hint: 'Наименование (обязательно)' },
             { key: 'is_drug',  coerce: 'bool', defaultBool: true,  hint: 'true / false — препарат (лекарство)' },
-            { key: 'price',    coerce: 'num',  defaultNum: 0,  hint: 'Цена, число — напр. 1500' },
+            { key: 'price',    coerce: 'num',  defaultNum: 0,  refuseBadNumber: true, hint: 'Цена, число — напр. 1500' },   // CLINIC_API_FIX_V1 — не число: строка не ввозится
             { key: 'unit',     hint: 'Единица: amp, tab, ml, fl…' },
             { key: 'form',     hint: 'Форма: таблетка, ампула, раствор…' },
             { key: 'strength', hint: 'Дозировка: напр. 500 мг' },
-            { key: 'tax_rate', coerce: 'num',  defaultNum: 12, hint: 'НДС % (по умолчанию 12)' },
+            { key: 'tax_rate', coerce: 'num',  defaultNum: 12, percent: true, hint: 'НДС % (по умолчанию 12)' },
             { key: 'code',     hint: 'Внутренний код (необязательно)' },
             { key: 'active',   coerce: 'bool', defaultBool: true,  hint: 'true / false (по умолчанию true)' },
         ],
@@ -280,14 +286,14 @@ const IMPORT_CONFIGS = {
             // into clinic_items.unit.
             { key: 'ед.изм',        target: 'unit', aliases: ['unit', 'единица', 'ед.изм.'], tmpl: false,
               hint: trf('Единица измерения — из списка: {list}. Пусто → шт.', { list: PROCUREMENT_UNITS.join(' · ') }) },
-            { key: 'цена',          target: 'price', coerce: 'num', defaultNum: 0, aliases: ['price'], tmpl: false,
+            { key: 'цена',          target: 'price', coerce: 'num', defaultNum: 0, refuseBadNumber: true, aliases: ['price'], tmpl: false,   // CLINIC_API_FIX_V1
               hint: 'Цена продажи, число — напр. 3210.' },
             { key: 'икпу',          aliases: ['ikpu', 'икпу_код'], tmpl: false,
               fk: { source: 'ikpu_codes', keyField: 'code', target: 'ikpu_code_id', autoCreate: true },
               hint: 'Код ИКПУ (17 цифр) — необязательно; отсутствующие коды создаются автоматически.' },
-            { key: 'остаток',       capture: 'qty', aliases: ['остатки', 'количество', 'qty'], tmpl: false,
+            { key: 'остаток',       capture: 'qty', captureNum: true, aliases: ['остатки', 'количество', 'qty'], tmpl: false,   // CLINIC_API_FIX_V1 — captureNum: правило числа
               hint: 'Текущий остаток — станет приходом на склад (филиал по умолчанию). Пусто/0 — без прихода.' },
-            { key: 'себестоимость', capture: 'cost', aliases: ['cost', 'закупочная'], tmpl: false,
+            { key: 'себестоимость', capture: 'cost', captureNum: true, aliases: ['cost', 'закупочная'], tmpl: false,
               hint: 'Себестоимость — цена прихода для остатка (необязательно).' },
             // PROD_IMPORT_FULL_V1 — the unit engine, as in the product editor.
             { key: 'базовая ед.',   target: 'base_unit', aliases: ['base_unit', 'базовая единица'],
@@ -299,11 +305,11 @@ const IMPORT_CONFIGS = {
             // PROD_IMPORT_FULL_V1 — the supplier block, as in the product editor.
             { key: 'поставщик',     capture: 'supplier', aliases: ['supplier'],
               hint: 'Поставщик товара — связка создаётся автоматически; неизвестный поставщик будет создан.' },
-            { key: 'цена закупки',  capture: 'supPrice', aliases: ['закупочная цена'],
+            { key: 'цена закупки',  capture: 'supPrice', captureNum: true, aliases: ['закупочная цена'],
               hint: 'Цена закупки у этого поставщика (сум).' },
             { key: 'ед. закупки',   capture: 'supUnit', aliases: ['единица закупки'],
               hint: 'В чём закупаете у поставщика (уп, кор…). Пусто — как базовая.' },
-            { key: 'кол-во в ед. закупки', capture: 'supPack', aliases: ['кратность закупки'],
+            { key: 'кол-во в ед. закупки', capture: 'supPack', captureNum: true, aliases: ['кратность закупки'],
               hint: 'Сколько базовых единиц в единице закупки — напр. 10.' },
         ],
         sampleRows: [
@@ -507,16 +513,27 @@ const IMPORT_CONFIGS = {
             // CLINIC_API_FIX_V1 (ревью) — не число в непустой ячейке строка
             // называет (номер строки, колонка, значение). Дни не округляются:
             // дробный день — нарушение правила ниже, как в окне услуги.
+            //
+            // CLINIC_API_FIX_V1 (ревью итога) — ячейка читается общим правилом
+            // числа (readImportNumber: «60 000», «12,5»; «1,5» дня — не 15).
+            // Не число в строке, ОБНОВЛЯЮЩЕЙ услугу, — поле не пишется:
+            // сохранённая цена остаётся (раньше она стиралась в «не задано»).
             var svcName = String(payload.name || '').trim();
+            var tierUpdating = serviceRowUpdates(payload, ctx && ctx.lookups);
             VISIT_TIER_COLUMNS.forEach(function (c) {
                 if (!(c.key in r)) { delete payload[c.key]; return; }
-                var cell = String(r[c.key] == null ? '' : r[c.key]).trim();
-                var raw = cell.replace(/[\s,]/g, '');
-                var n = raw === '' ? NaN : Number(raw);
-                payload[c.key] = Number.isFinite(n) ? n : null;
-                if (raw !== '' && !Number.isFinite(n) && ctx) {
+                var read = readImportNumber(r[c.key], false);
+                if (!('bad' in read)) { payload[c.key] = read.empty ? null : read.n; return; }
+                if (tierUpdating) {
+                    delete payload[c.key];
+                    if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.',
+                        { n: ctx.rowNum, col: c.key, v: read.bad }));
+                    return;
+                }
+                payload[c.key] = null;
+                if (ctx) {
                     ctx.warn(trf('Строка {n}, «{service}»: в колонке {col} не число («{v}») — записано как пусто, визит по полной цене.',
-                        { n: ctx.rowNum, service: svcName, col: c.key, v: cell }));
+                        { n: ctx.rowNum, service: svcName, col: c.key, v: read.bad }));
                 }
             });
             // CLINIC_API_FIX_V1 (ревью) — правила окна услуги (service_save:
@@ -568,13 +585,24 @@ const IMPORT_CONFIGS = {
             var who = String(payload.name || '').trim();
             var storedMap = ctx && ctx.lookups && ctx.lookups.__stored;
             var stored = storedMap ? (storedMap.get(normKey(who)) || null) : null;
-            var cellOf = function (v) { return v === '' || v == null ? '' : String(v).replace(/[\s,]/g, ''); };
+            // CLINIC_API_FIX_V1 (ревью итога) — ячейки ступени читаются общим
+            // правилом числа (readImportNumber; доля — колонка процентов: «40%»).
+            // Не число — ступень из файла не пишется (сохранённая остаётся), и
+            // строка называет колонку и ячейку.
             var fileSteps = TIER_STEP_COLUMNS.map(function (c) {
                 if (!(c.from in r) && !(c.pct in r)) {
                     delete payload[c.from]; delete payload[c.pct];
                     return null;
                 }
-                var rawFrom = cellOf(r[c.from]), rawPct = cellOf(r[c.pct]);
+                var rf = readImportNumber(r[c.from], false), rp = readImportNumber(r[c.pct], true);
+                var bad = ('bad' in rf) ? [c.from, rf.bad] : ('bad' in rp) ? [c.pct, rp.bad] : null;
+                if (bad) {
+                    delete payload[c.from]; delete payload[c.pct];
+                    if (ctx) ctx.warn(trf('Строка {n}, «{service}»: в колонке {col} не число («{v}») — ступень {step} из файла не сохранена.',
+                        { n: ctx.rowNum, service: who, col: bad[0], v: bad[1], step: c.n }));
+                    return null;
+                }
+                var rawFrom = rf.empty ? '' : String(rf.n), rawPct = rp.empty ? '' : String(rp.n);
                 var range = tierStepRangeProblem(c.n, rawFrom, rawPct);
                 if (range) {
                     delete payload[c.from]; delete payload[c.pct];
@@ -637,7 +665,9 @@ const IMPORT_CONFIGS = {
             // IMPORT_PRICE_OPTIONAL_V1 — price used to be required, which blocked
             // importing price-lists that get priced after upload. Missing price
             // now imports as 0 with a warning instead of an error.
-            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  warnIfMissing: true, hint: 'Цена, число — напр. 150000 (пусто → 0)' },
+            // CLINIC_API_FIX_V1 (ревью итога) — refuseBadNumber: не число в цене новой
+            // услуги — строка не ввозится (у обновляемой — цена остаётся прежней).
+            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  warnIfMissing: true, refuseBadNumber: true, hint: 'Цена, число — напр. 150000 (пусто → 0)' },
             // FULL_EXPORT_V1 (2026-09-14) — owner: «exporting and importing are not
             // giving all the information». Every field the service editor holds now
             // travels: code, the visit-tier prices (VISIT_TIER_PRICING_V1), the
@@ -650,23 +680,26 @@ const IMPORT_CONFIGS = {
             { key: 'name_uz',          hint: 'Название на узбекском (обязательно для онлайн-записи)' },
             { key: 'name_en',          hint: 'Название на английском (необязательно)' },
             { key: 'online_booking',   coerce: 'bool', defaultBool: false, hint: 'true / false — доступна для онлайн-записи (нужны названия ru и uz)' },
-            { key: 'price_secondary',  coerce: 'num', hint: 'Цена второго визита (пусто — как первый)' },
-            { key: 'secondary_days_from', coerce: 'int', hint: 'Второй визит — не раньше чем через N дней после предыдущего' },
-            { key: 'secondary_days_to',   coerce: 'int', hint: 'и не позже чем через M дней (пусто — без предела)' },
-            { key: 'price_repeat',     coerce: 'num', hint: 'Цена повторного визита, третий и далее (0 — бесплатно; пусто — как второй)' },
-            { key: 'repeat_days_from', coerce: 'int', hint: 'Повторный визит — не раньше чем через N дней после предыдущего (пусто — как у второго)' },
-            { key: 'repeat_days_to',   coerce: 'int', hint: 'и не позже чем через M дней (пусто — как у второго)' },
-            { key: 'tax_rate',         keepIfAbsent: true, coerce: 'num',  defaultNum: 12, hint: 'НДС % (по умолчанию 12, если пусто)' },
+            // CLINIC_API_FIX_V1 (ревью итога) — raw: эти колонки читает transform
+            // выше из строки листа (тем же readImportNumber), buildRow их не трогает.
+            { key: 'price_secondary',  coerce: 'num', raw: true, hint: 'Цена второго визита (пусто — как первый)' },
+            { key: 'secondary_days_from', coerce: 'int', raw: true, hint: 'Второй визит — не раньше чем через N дней после предыдущего' },
+            { key: 'secondary_days_to',   coerce: 'int', raw: true, hint: 'и не позже чем через M дней (пусто — без предела)' },
+            { key: 'price_repeat',     coerce: 'num', raw: true, hint: 'Цена повторного визита, третий и далее (0 — бесплатно; пусто — как второй)' },
+            { key: 'repeat_days_from', coerce: 'int', raw: true, hint: 'Повторный визит — не раньше чем через N дней после предыдущего (пусто — как у второго)' },
+            { key: 'repeat_days_to',   coerce: 'int', raw: true, hint: 'и не позже чем через M дней (пусто — как у второго)' },
+            { key: 'tax_rate',         keepIfAbsent: true, coerce: 'num',  defaultNum: 12, percent: true, hint: 'НДС % (по умолчанию 12, если пусто)' },
             { key: 'duration_minutes', keepIfAbsent: true, coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
             { key: 'requires_doctor',  keepIfAbsent: true, coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },
-            { key: 'default_doctor_percent', keepIfAbsent: true, coerce: 'num', hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
-            { key: 'doctor_tier_from',    coerce: 'num', hint: 'Ступень: порог услуг в месяц — повышенная доля начинается со следующей услуги (0 или пусто — ступени нет)' },
-            { key: 'doctor_tier_percent', coerce: 'num', hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
+            { key: 'default_doctor_percent', keepIfAbsent: true, coerce: 'num', percent: true, hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
+            // CLINIC_API_FIX_V1 (ревью итога) — ступени тоже читает transform (raw).
+            { key: 'doctor_tier_from',    coerce: 'num', raw: true, hint: 'Ступень: порог услуг в месяц — повышенная доля начинается со следующей услуги (0 или пусто — ступени нет)' },
+            { key: 'doctor_tier_percent', coerce: 'num', raw: true, hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
             // DOCTOR_TIER_V2 — ступени 2 и 3: пороги строго растут, заполняются по порядку.
-            { key: 'doctor_tier_from_2',    coerce: 'num', hint: 'Ступень 2: порог услуг в месяц — больше порога ступени 1 (0 или пусто — ступени нет)' },
-            { key: 'doctor_tier_percent_2', coerce: 'num', hint: 'Ступень 2: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
-            { key: 'doctor_tier_from_3',    coerce: 'num', hint: 'Ступень 3: порог услуг в месяц — больше порога ступени 2 (0 или пусто — ступени нет)' },
-            { key: 'doctor_tier_percent_3', coerce: 'num', hint: 'Ступень 3: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
+            { key: 'doctor_tier_from_2',    coerce: 'num', raw: true, hint: 'Ступень 2: порог услуг в месяц — больше порога ступени 1 (0 или пусто — ступени нет)' },
+            { key: 'doctor_tier_percent_2', coerce: 'num', raw: true, hint: 'Ступень 2: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
+            { key: 'doctor_tier_from_3',    coerce: 'num', raw: true, hint: 'Ступень 3: порог услуг в месяц — больше порога ступени 2 (0 или пусто — ступени нет)' },
+            { key: 'doctor_tier_percent_3', coerce: 'num', raw: true, hint: 'Ступень 3: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
             { key: 'room',             keepIfAbsent: true, fk: { source: 'rooms', keyField: 'name', target: 'room_id' }, hint: 'Кабинет (очередь диагностики) — по названию из справочника; необязательно' },
             { key: 'specimen',         hint: 'Лаборатория: материал (кровь, моча…) — необязательно' },
             { key: 'tube_color',       hint: 'Лаборатория: пробирка — light_blue, red, gold, green, lavender, pink, grey, royal_blue, yellow_acd, black, none' },
@@ -860,7 +893,7 @@ const IMPORT_CONFIGS = {
             { key: 'hire_date',  coerce: 'date', hint: 'Дата приёма — 2026-01-15, 15.01.2026 или дата из Excel.' },
             { key: 'salary_type', hint: 'Тип зарплаты: fixed · percentage · fix_plus_kpi (пусто — не задан)' },
             { key: 'salary_fixed',   coerce: 'num', hint: 'Оклад, сум' },
-            { key: 'salary_percent', coerce: 'num', hint: 'Процент, 0–100' },
+            { key: 'salary_percent', coerce: 'num', percent: true, hint: 'Процент, 0–100' },
             { key: 'is_active',  coerce: 'bool', defaultBool: true, hint: 'true / false — активен (по умолчанию true)' },
         ],
         sampleRows: [
@@ -949,6 +982,8 @@ function autoConfigFor(sectionKey) {
         if (f.type === 'number') {
             col.coerce = (f.step === '1' || f.step == null || /int/i.test(f.label || '')) ? 'num' : 'num';
             if (f.default != null) col.defaultNum = f.default;
+            // CLINIC_API_FIX_V1 — «40%» читается в колонке процентов (по ключу или подписи).
+            if (/percent|pct|tax_rate|discount/i.test(f.key) || /%/.test(f.label || '')) col.percent = true;
         } else if (f.type === 'bool') {
             col.coerce = 'bool';
             col.defaultBool = f.default !== false;
@@ -1819,6 +1854,17 @@ function buildRow(raw, rowNum, lookups, cfg) {
         // PROCUREMENT_IMPORT_V1 — captured columns feed afterImport (e.g.
         // opening stock), never the row payload.
         if (col.capture) {
+            // CLINIC_API_FIX_V1 (ревью итога) — числовая колонка-захват (остаток,
+            // себестоимость…) — по общему правилу числа: «50 шт» не молчит.
+            if (col.captureNum) {
+                const read = readImportNumber(cellRaw, false);
+                if ('n' in read) captures[col.capture] = read.n;
+                else if ('bad' in read) {
+                    notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — не записано.', { n: rowNum, col: col.key, v: read.bad }));
+                    if (status !== 'error') status = 'warn';
+                }
+                continue;
+            }
             const v = String(cellRaw ?? '').trim();
             if (v !== '') captures[col.capture] = num(cellRaw, null);
             continue;
@@ -1862,8 +1908,41 @@ function buildRow(raw, rowNum, lookups, cfg) {
 
         // Numeric / boolean coercion. `target` (optional) renames the payload
         // column so a template can keep human headers (e.g. «цена» -> price).
+        //
+        // CLINIC_API_FIX_V1 (ревью итога) — ОДНО ПРАВИЛО ЧИСЛА (readImportNumber).
+        // Было: всё, что не разобралось, молча становилось значением по
+        // умолчанию — у цены это 0: «150 000 сум» в строке, обновляющей услугу,
+        // давало цену 0 со статусом «готово». Теперь непустое не число в 0 не
+        // превращается никогда:
+        //   • строка обновляет запись — поле не пишется (сохранённое остаётся);
+        //   • новая строка, колонка refuseBadNumber (цена) или обязательная —
+        //     строка не ввозится (ошибка);
+        //   • новая строка раздела, который знает, что она новая (rowUpdates), —
+        //     значение пустой ячейки (НДС 12, 30 мин), если оно задано;
+        //   • иначе поле не пишется (у новой записи — значение базы).
+        // Каждый раз строка называет колонку и ячейку. Пустая ячейка и
+        // отсутствующая колонка — как раньше.
         if (col.coerce === 'num' || col.coerce === 'int') {
-            payload[col.target || col.key] = num(cellRaw, col.defaultNum ?? 0, col.coerce === 'int');
+            if (col.raw) continue;   // читает transform раздела
+            const key = col.target || col.key;
+            const read = readImportNumber(cellRaw, !!col.percent);
+            if (read.empty) { payload[key] = col.defaultNum ?? 0; continue; }
+            if ('n' in read) { payload[key] = col.coerce === 'int' ? Math.round(read.n) : read.n; continue; }
+            const at = { n: rowNum, col: col.key, v: read.bad };
+            if (updating) {
+                notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.', at));
+                if (status !== 'error') status = 'warn';
+            } else if (col.refuseBadNumber || col.required) {
+                notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.', at));
+                status = 'error';
+            } else if (typeof cfg.rowUpdates === 'function' && col.defaultNum != null) {
+                payload[key] = col.defaultNum;
+                notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — записано {def}, как для пустой ячейки.', { ...at, def: col.defaultNum }));
+                if (status !== 'error') status = 'warn';
+            } else {
+                notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — не записано.', at));
+                if (status !== 'error') status = 'warn';
+            }
             continue;
         }
         if (col.coerce === 'bool') {
@@ -1985,6 +2064,34 @@ function _ymd(y, m, d) {
     return String(y).padStart(4, '0') + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
 }
 
+// CLINIC_API_FIX_V1 (ревью итога) — ЧИСЛОВАЯ ЯЧЕЙКА ИМПОРТА: ОДНО ПРАВИЛО.
+// Число — «150000», «150 000» (пробелы, в том числе неразрывные, — только
+// между группами по три цифры: разделитель тысяч), «12,5» / «12.5» (запятая
+// или точка — десятичный знак); в колонке процентов (percent) — ещё «40%».
+// Число из Excel (ячейка числового формата) — как есть. Всё остальное
+// непустое — не число: «150 000 сум», «—», «нет», «1e5».
+// Неоднозначное «1,500» / «150.000» (одна запятая или точка, ровно три цифры
+// после неё, до неё 1–3 цифры, без пробелов тысяч) — тоже не число: это и
+// полтора, и полторы тысячи. Цену в Узбекистане часто пишут «150.000», и
+// прежний разбор молча давал 150 (точка) или 1500 вместо 1,5 (запятая).
+// Возвращает { empty: true } | { n } | { bad: текст ячейки }.
+export function readImportNumber(v, percent) {
+    if (v === null || v === undefined) return { empty: true };
+    if (typeof v === 'number') return Number.isFinite(v) ? { n: v } : { bad: String(v) };
+    if (typeof v !== 'string') return { bad: String(v).trim() };   // true/false, дата — не число
+    const text = v.trim();
+    if (text === '') return { empty: true };
+    const s = percent ? text.replace(/\s*%$/, '') : text;
+    const m = /^([+-]?)(\d{1,3}(?:\s+\d{3})+|\d+)(?:([.,])(\d+))?$/.exec(s);
+    if (!m) return { bad: text };
+    const grouped = /\s/.test(m[2]);
+    if (m[3] && !grouped && m[4].length === 3 && m[2].length <= 3 && Number(m[2]) !== 0) return { bad: text };
+    const n = Number(m[1] + m[2].replace(/\s+/g, '') + (m[3] ? '.' + m[4] : ''));
+    return Number.isFinite(n) ? { n } : { bad: text };
+}
+
+// Прежний разбор — остался только у текстовых колонок-захватов (поставщик,
+// единица закупки), которые числом не являются.
 function num(v, fallback, asInt) {
     if (v === '' || v == null) return fallback;
     const n = Number(String(v).replace(/[\s,]/g, ''));
