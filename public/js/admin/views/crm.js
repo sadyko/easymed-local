@@ -58,7 +58,7 @@ import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso } fro
 // CRM_UNIFY_V1 — вид «Задачи»: третий вид раздела (Канбан / Список / Задачи).
 import { renderTasksView } from './crm-tasks-view.js';
 // CRM_UNIFY_V1 — загрузка доски: все открытые, закрытые за период, настоящие числа.
-import { loadBoard, periodBounds, periodStart, dayStart, dayEnd, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT } from './crm-board-load.js';
+import { loadBoard, periodBounds, periodStart, dayStart, dayEnd, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT, loadReportRows } from './crm-board-load.js';
 // CRM_MULTI_SOURCE_V1 — несколько источников у заявки (миграция 231). Правило
 // чтения одно на экран и сервер: sources, иначе [source], иначе ['other'].
 import { leadSources, toggleLeadSource, leadHasAnySource, sourceTally, MAX_LEAD_SOURCES } from '../crm-sources.js';
@@ -3037,8 +3037,25 @@ async function paint() {
 
         let period = 30;   // дней; 0 = всё время
         const bodyEl = h('div', { class: 'modal-body', style: { overflowY: 'auto' } });
+        // CRM_UNIFY_V1 — «Отчёт» считает заявки ПО БАЗЕ своим лёгким запросом за
+        // свой период (crm-board-load.js loadReportRows, Р14), а не то, что
+        // загрузила доска: доска держит закрытые карточки только за свой период.
+        // undefined — считается; null — сервер не ответил (тогда, с пометкой, по
+        // загруженному на доску); массив — строки базы.
+        let reportRows;
+        let reportSeq = 0;
+        async function refresh() {
+            const my = ++reportSeq;
+            reportRows = undefined;
+            paintReport();
+            const got = await loadReportRows({ days: period, operator: state.operator || 'all', me: selfUserId() });
+            if (my !== reportSeq) return;   // пока считали, выбрали другой период
+            reportRows = got;
+            paintReport();
+        }
 
         function rowsInPeriod() {
+            if (Array.isArray(reportRows)) return reportRows;
             if (!period) return state.rows;
             const from = Date.now() - period * 86400000;
             return state.rows.filter(r => Date.parse(r.created_at || 0) >= from);
@@ -3052,10 +3069,20 @@ async function paint() {
 
             const chip = (days, label) => h('button', {
                 class: 'btn btn-sm ' + (period === days ? 'btn-primary' : 'btn-outline'), type: 'button',
-                onclick: () => { period = days; paintReport(); },
+                onclick: () => { period = days; refresh(); },   // CRM_UNIFY_V1 — новый период — новый запрос
             }, label);
             bodyEl.appendChild(h('div', { class: 'row', style: { gap: '8px', marginBottom: '14px' } },
                 chip(1, 'Сегодня'), chip(7, '7 дней'), chip(30, '30 дней'), chip(0, 'Всё время')));
+            // CRM_UNIFY_V1 — пока база считает, чисел нет: показать загруженное на
+            // доску и тут же заменить другими числами значило бы мигнуть неправдой.
+            if (reportRows === undefined) {
+                bodyEl.appendChild(h('div', { class: 'muted', 'data-report-loading': '' }, 'Загружаем…'));
+                return;
+            }
+            if (reportRows === null) {
+                bodyEl.appendChild(h('div', { class: 'muted', 'data-report-fallback': '', style: { fontSize: '12.5px', marginBottom: '10px' } },
+                    'Не удалось посчитать по базе — показано по заявкам, загруженным на доску.'));
+            }
 
             const kpi = (label, value, color) => h('div', { class: 'card', style: { flex: 1, padding: '12px 14px', textAlign: 'center' } },
                 h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
@@ -3140,7 +3167,7 @@ async function paint() {
                     h('th', { style: { textAlign: 'right' } }, 'Пришло'), h('th', { style: { textAlign: 'right' } }, 'Конверсия'))),
                 tbody)));
         }
-        paintReport();
+        refresh();   // CRM_UNIFY_V1 — первый показ: «Загружаем…», затем числа базы
 
         overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '640px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
             h('header', { class: 'modal-head' },

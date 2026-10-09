@@ -107,3 +107,26 @@ test('фильтр оператора: мои / ничьи / по имени / �
   withOperator(q, 'me', 21); withOperator(q, 'none', 21); withOperator(q, '24', 21); withOperator(q, 'all', 21); withOperator(q, undefined, 21);
   assert.deepEqual(seen, [['eq', 'assigned_to', 21], ['is', 'assigned_to', null], ['eq', 'assigned_to', 24]]);
 });
+
+// CRM_UNIFY_V1 (задача 8) — «Отчёт» считает заявки по базе своим лёгким запросом
+// за свой период (и с фильтром оператора, Р14), а не то, что загрузила доска.
+test('отчёт: свой лёгкий запрос за свой период и с фильтром оператора', async () => {
+  const { loadReportRows, REPORT_SELECT } = await import('../views/crm-board-load.js');
+  const db = fakeDb(() => ({ data: [lead(1, 'came')], error: null }));
+  const now = new Date(2026, 9, 9, 12, 0);
+  const rows = await loadReportRows({ db, days: 30, operator: 'none', now });
+  assert.equal(rows.length, 1);
+  const c = db.calls[0];
+  assert.equal(c.select, REPORT_SELECT);
+  assert.equal(REPORT_SELECT, 'id, status, source, sources, created_at, assigned_to');
+  const gte = c.filters.find(([op, col]) => op === 'gte' && col === 'created_at');
+  assert.ok(gte, 'период отчёта не ушёл в запрос');
+  assert.equal(new Date(gte[2]).getTime(), now.getTime() - 30 * 86400000);
+  assert.ok(c.filters.some(([op, col, val]) => op === 'is' && col === 'assigned_to' && val === null));
+  assert.equal(c.limit, null, 'отчёт обрезан пределом');
+  const all = await loadReportRows({ db, days: 0 });
+  assert.ok(!db.calls[1].filters.some(([, col]) => col === 'created_at'), '«Всё время» обрезано датой');
+  assert.ok(Array.isArray(all));
+  const bad = fakeDb(() => ({ data: null, error: { message: 'boom' } }));
+  assert.equal(await loadReportRows({ db: bad, days: 7 }), null, 'ошибка выдана за пустой отчёт');
+});

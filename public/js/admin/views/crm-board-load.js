@@ -106,3 +106,21 @@ export async function loadBoard({ db = supabase, closedKeys = [], bounds = { fro
     for (const res of results) for (const r of res.data || []) if (r && r.id != null) byId.set(String(r.id), r);
     return { rows: [...byId.values()].sort((a, b) => Number(b.id) - Number(a.id)), counts, capped };
 }
+
+// CRM_UNIFY_V1 (задача 8) — СТРОКИ «ОТЧЁТА» (Р14). Отчёт считал state.rows — то,
+// что загрузила доска (раньше 800 последних, теперь закрытые только за период
+// доски), и его числа зависели от того, что открыто на экране. Теперь у отчёта
+// свой лёгкий запрос: только нужные для подсчёта колонки, за его собственный
+// период и с фильтром оператора. Видимость — та же, что у доски (компилятор).
+export const REPORT_SELECT = 'id, status, source, sources, created_at, assigned_to';
+/**
+ * @param {object} o
+ * @param {number} o.days  период отчёта в днях (0 — всё время)
+ * @returns {Promise<object[]|null>}  null — сервер не ответил
+ */
+export async function loadReportRows({ db = supabase, days = 30, operator = 'all', me = null, now = new Date() } = {}) {
+    let q = db.from('crm_requests').select(REPORT_SELECT);
+    if (days) q = q.gte('created_at', new Date(now.getTime() - days * 86400000).toISOString());
+    const { data, error } = await withOperator(q, operator, me);
+    return error ? null : (data || []);
+}

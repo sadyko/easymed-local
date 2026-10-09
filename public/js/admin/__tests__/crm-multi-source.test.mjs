@@ -213,6 +213,29 @@ test('«Отчёт»: заявка с двумя источниками — в �
   window.easymed.state.user = null;
 });
 
+// CRM_UNIFY_V1 (задача 8) — «Отчёт» считает заявки по базе своим лёгким запросом
+// за свой период, а не то, что загрузила доска (Р14).
+test('CRM_UNIFY_V1: «Отчёт» спрашивает базу за свой период; смена периода — новый запрос', async () => {
+  const root = await board();
+  document.body.children.length = 0;
+  CALLS.length = 0;
+  button(root, /Отчёт/).click();
+  await tick(60);
+  const isReport = (c) => c.table === 'crm_requests' && c.op === 'select' && c.columns === 'id, status, source, sources, created_at, assigned_to';
+  const q = CALLS.find(isReport);
+  assert.ok(q, 'отчёт считает загруженное на доску, а не базу');
+  assert.ok((q.filters || []).some((f) => f.col === 'created_at' && f.op === 'gte'), 'период отчёта (30 дней) не ушёл в запрос');
+  const modal = document.body.children.find((n) => String(n.className).includes('modal'));
+  CALLS.length = 0;
+  walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n) === 'Всё время').click();
+  await tick(60);
+  const q2 = CALLS.find(isReport);
+  assert.ok(q2 && !(q2.filters || []).some((f) => f.col === 'created_at'), '«Всё время» в отчёте обрезано датой');
+  // отчёт считает ответ базы: стенд отдаёт те же четыре заявки
+  assert.deepEqual(byAttr(modal, 'data-src-total')[0].children.map(textOf), ['Всего', '4', '1', '25%']);
+  window.easymed.state.user = null;
+});
+
 // Ревью M1 — отмеченный скрытый источник, у которого в новом периоде нет ни
 // одной заявки, пропадал из ряда: доска пустая, ни один чип не отмечен, и
 // снять отметку нечем. Отмеченный источник рисуется всегда (с нулём).
