@@ -30,7 +30,8 @@ import { crmServiceEvidence } from '../services/crm/visit-status.js';
 // нужных полей (wire.js); профиль называет провод.
 import { readResult, pickMessageSample, wireFor, wireDecision } from './wire.js';   // pickMessageSample: LIS_REAL_ANALYZERS_V1, ревью R1, п. 1; wireDecision: ревью R2, п. 12
 import { decimalPoint } from './wire.js';   // LIS_VENDOR_EXACT_V1 (D0) — десятичная запятая на любом проводе
-import { readEnvelope } from './wire.js';   // LIS_VENDOR_EXACT_V1 (п. 6) — служебное сообщение к пациенту не идёт и при прямом вызове
+import { readEnvelope } from './wire.js';
+import { forwarderLike } from './wire.js';   // LIS_PROXY_V1 (ревью I2/I3)   // LIS_VENDOR_EXACT_V1 (п. 6) — служебное сообщение к пациенту не идёт и при прямом вызове
 import { planTube, tubeOutcome, heldChangeText, resentText } from './match.js';   // LIS_VENDOR_EXACT_V1 — D3 (пробирка — услуги визита) и N1 (повтор)
 import { getProfile } from './profiles/index.js';
 import { PROXY_NOT_TUBE, PROXY_QUIET_PREFIX } from './lisproxy-form.js';   // LIS_PROXY_V1
@@ -101,7 +102,7 @@ function plainNumberRefusal(value, wire) {
     return 'номер пробы «' + s + '» короче ' + n + ' цифр — на приборе вводите номер с этикетки Easy-Med (' + n
       + ' цифр, например 000123) или сканируйте её; эту пробу привяжите кнопкой «Привязать»';
   }
-  if (wire !== 'forwarder' && s !== String(parseInt(s, 10)).padStart(n, '0')) {
+  if (!forwarderLike(wire) && s !== String(parseInt(s, 10)).padStart(n, '0')) {   // forwarderLike: LIS_PROXY_V1 — и провода lisproxy*
     return 'номер пробы «' + s + '» — не номер с этикетки Easy-Med: на этикетке номер заказа из ' + n
       + ' цифр без лишних нулей впереди (например 000123), а это, возможно, свой штрихкод пробирки — на приборе'
       + ' вводите номер с этикетки Easy-Med или сканируйте её; эту пробу привяжите кнопкой «Привязать»';

@@ -22,6 +22,7 @@
 // MSA-4, по которому он отмечает результат «Accepted».
 import { readEnvelope, wireDecision } from './wire.js';   // wireDecision: LIS_VENDOR_EXACT_V1 — провод и для вида ответа
 import { readResult, pickMessageSample } from './wire.js';   // LIS_VENDOR_EXACT_V1 (ревью) — номер пробы выключенного прибора — в лоток
+import { forwarderLike } from './wire.js';   // LIS_PROXY_V1 (ревью I2/I3)
 import { buildAck, buildQueryReply, mshOf } from './hl7.js';
 import { internalAck, internalCode, firstField, LAYOUT_LONG, LAYOUT_SHORT } from './hl7.js';   // LIS_VENDOR_EXACT_V1
 import { guessProfile } from './discover.js';   // LIS_VENDOR_EXACT_V1 — как сообщение назвало себя
@@ -74,7 +75,7 @@ const dmuHematology = (app, facility) => !String(app == null ? '' : app).trim()
  */
 export function replyStyle({ profile = null, app = '', facility = '' } = {}) {
   const { wire } = wireDecision({ profile, facility, app });
-  if (wire === 'forwarder') return { layout: LAYOUT_LONG, wire };
+  if (forwarderLike(wire)) return { layout: LAYOUT_LONG, wire };   // LIS_PROXY_V1 — и провода lisproxy* (ответ входу не нужен)
   const own = guessProfile({ app, facility });
   // LIS_VENDOR_EXACT_V1 (ревью) — и гематология DMU без модели («|Mindray»).
   const heme = isHeme(own || profile) || (!own && !profile && dmuHematology(app, facility));

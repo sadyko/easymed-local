@@ -22,6 +22,23 @@ import { guessProfile } from './discover.js';   // LIS_REAL_ANALYZERS_V1 (рев
 
 export const WIRES = Object.freeze(['default', 'forwarder', 'mindray-chem', 'autobio-hl7', 'mindray-hematology']);
 
+/**
+ * LIS_PROXY_V1 (ревью I2/I3) — MSH-3 синтетического ORU входа LIS Proxy
+ * (lisproxy-form.js buildOru; MSH-4 — LabPC). Поля такого сообщения — как у
+ * переадресателя (номер — OBR-3, код — OBX-3, значение — OBX-5 целиком, флаг
+ * прибора — OBX-8), а правила значения и флага — МОДЕЛИ строки прибора, как у
+ * своего порта: провод lisproxy-chem (BS-200 и химия Mindray — D6: качественный
+ * ответ, хвостовые нули), lisproxy-autobio (A1000 — D9: флаги прибора), lisproxy
+ * (гематология, прибор без модели — как переадресатель).
+ */
+export const LISPROXY_APP = 'LISPROXY';
+const PROXY_WIRE_OF = Object.freeze({ 'mindray-chem': 'lisproxy-chem', 'autobio-hl7': 'lisproxy-autobio' });
+export const PROXY_WIRES = Object.freeze(new Set(['lisproxy', 'lisproxy-chem', 'lisproxy-autobio']));
+// Провода lisproxy* не в WIRES: WIRES — провода, которые называет профиль; эти
+// выбирает только wireDecision по самому сообщению.
+/** Провод с полями переадресателя: номер — OBR-3, подпись — OBX-4 (наш переадресатель и вход LIS Proxy). */
+export const forwarderLike = (wire) => wire === 'forwarder' || PROXY_WIRES.has(wire);
+
 /** MSH-4 нашего переадресателя (analyzers/forwarder/hl7-oru.js). */
 export const FORWARDER_FACILITY = 'LabPC';
 
@@ -32,13 +49,16 @@ export const FORWARDER_FACILITY = 'LabPC';
 const SAMPLE_FIELDS = Object.freeze({
   'default':            { primary: 'filler', fallback: null,     never: [] },
   'forwarder':          { primary: 'filler', fallback: null,     never: [] },
+  'lisproxy':           { primary: 'filler', fallback: null,     never: [] },   // LIS_PROXY_V1 — как forwarder
+  'lisproxy-chem':      { primary: 'filler', fallback: null,     never: [] },   // LIS_PROXY_V1 — номер кладёт сам вход (OBR-3)
+  'lisproxy-autobio':   { primary: 'filler', fallback: null,     never: [] },   // LIS_PROXY_V1
   'mindray-chem':       { primary: 'placer', fallback: null,     never: ['filler'] },
   'autobio-hl7':        { primary: 'placer', fallback: null,     never: [] },
   'mindray-hematology': { primary: 'filler', fallback: 'placer', never: [] },
 });
 const FIELD_NAME = { placer: 'OBR-2', filler: 'OBR-3' };
 
-const known = (wire) => (WIRES.includes(wire) ? wire : 'default');
+const known = (wire) => (WIRES.includes(wire) || PROXY_WIRES.has(wire) ? wire : 'default');   // PROXY_WIRES: LIS_PROXY_V1 (ревью I2/I3)
 
 /**
  * LIS_REAL_ANALYZERS_V1 (ревью R1, п. 11) — какой провод безопаснее, когда
@@ -47,7 +67,7 @@ const known = (wire) => (WIRES.includes(wire) ? wire : 'default');
  * autobio-hl7 берёт голые цифры только из OBR-2, mindray-hematology — из OBR-3
  * и запасного OBR-2.
  */
-const SAFER = ['default', 'forwarder', 'mindray-hematology', 'autobio-hl7', 'mindray-chem'];
+const SAFER = ['default', 'forwarder', 'lisproxy', 'lisproxy-chem', 'lisproxy-autobio', 'mindray-hematology', 'autobio-hl7', 'mindray-chem'];   // lisproxy*: LIS_PROXY_V1 — спора у них не бывает (wireDecision)
 
 /**
  * Какой провод у сообщения: переадресатор узнаётся по MSH-4, иначе — провод
@@ -77,7 +97,12 @@ export function wireFor(o = {}) {
  * @returns {{wire:string, conflict:boolean, rowModel?:string, messageModel?:string}}
  */
 export function wireDecision({ profile = null, facility = '', app = '' } = {}) {
-  if (String(facility == null ? '' : facility).trim().toLowerCase() === FORWARDER_FACILITY.toLowerCase()) return { wire: 'forwarder', conflict: false };
+  const viaForwarder = String(facility == null ? '' : facility).trim().toLowerCase() === FORWARDER_FACILITY.toLowerCase();
+  // LIS_PROXY_V1 (ревью I2/I3) — синтетическое ORU входа LIS Proxy: правила — модели строки.
+  if (viaForwarder && String(app == null ? '' : app).trim().toUpperCase() === LISPROXY_APP) {
+    return { wire: PROXY_WIRE_OF[profile && profile.wire] || 'lisproxy', conflict: false };
+  }
+  if (viaForwarder) return { wire: 'forwarder', conflict: false };
   const own = guessProfile({ app, facility });
   const fromRow = known(profile && profile.wire);
   const fromMessage = known(own && own.wire);
@@ -357,6 +382,50 @@ const A1000_LOW = new Set(['ORL']);
 const A1000_CRITICAL = new Map([['CRH', 'HH'], ['CRL', 'LL']]);
 
 /**
+ * LIS_VENDOR_EXACT_V1 (D9) — флаги A1000 → что писать. Общий для провода
+ * autobio-hl7 (флаги из NTE) и входа LIS Proxy (lisproxy-autobio: флаги — поле
+ * flag прокси, OBX-8 синтетического ORU) — LIS_PROXY_V1 (ревью I3).
+ *   hold — не писать (ошибка измерения, незнакомый флаг, «выше» вместе с «ниже»);
+ *   иначе abnormal (H / L / HH / LL или '') и value («>предел» / «<предел»).
+ * @param {string[]} flags  флаги в верхнем регистре
+ * @param {string[]} sent   те же, как прислал прибор (для причины в лотке)
+ * @returns {{hold:string, abnormal:string, value:string}}
+ */
+function a1000Flags(flags, sent, value) {
+  let v = value;
+  const rest = flags.filter((x) => !A1000_IGNORE.has(x));
+  const high = rest.some((x) => A1000_HIGH.has(x));
+  const low = rest.some((x) => A1000_LOW.has(x));
+  const critical = [...new Set(rest.filter((x) => A1000_CRITICAL.has(x)).map((x) => A1000_CRITICAL.get(x)))];
+  const up = high || critical.includes('HH');
+  const down = low || critical.includes('LL');
+  const other = rest.filter((x) => !A1000_HIGH.has(x) && !A1000_LOW.has(x) && !A1000_CRITICAL.has(x));
+  if (other.length || (up && down)) return { hold: 'флаги прибора: ' + sent.join('-'), abnormal: '', value: v };   // LIS_VENDOR_EXACT_V1 — как прислал прибор
+  let abnormal = '';
+  if (high) {
+    abnormal = 'H';
+    if (v && !/^[<>]/.test(v)) v = '>' + v;
+  } else if (low) {
+    abnormal = 'L';
+    if (v && !/^[<>]/.test(v)) v = '<' + v;
+  }
+  if (critical.length) abnormal = critical[0];   // LIS_VENDOR_EXACT_V1 — «критический» сильнее «выше»/«ниже»
+  return { hold: '', abnormal, value: v };
+}
+
+/**
+ * LIS_PROXY_V1 (ревью I3) — флаги A1000 из поля flag LIS Proxy (OBX-8
+ * синтетического ORU, экранированное lisproxy-form.js escapeHl7): через «-»,
+ * как в NTE своего порта, или иным разделителем. «N» — «нет флага» (не флаг
+ * перечня A1000). Каким видом прокси шлёт флаги AutoLumo, на программе не
+ * проверено: незнакомое — не писать (D9), его видно в лотке.
+ */
+function proxyFlags(field) {
+  const sent = String(field == null ? '' : field).split(/\\[FSTRE]\\|[-\s,;|~^&\\]+/).map((x) => x.trim()).filter((x) => x && x.toUpperCase() !== 'N');
+  return { sent, flags: sent.map((x) => x.toUpperCase()) };
+}
+
+/**
  * LIS_VENDOR_EXACT_V1 (D9) — NTE, который A1000 ставит ПЕРЕД каждым OBX
  * (кодировщик программы клиники; лист A1000, §3): NTE-3 — повторения
  * «лот ~ флаги через «-» ~ имя реагента ~ код ~ срок ~ штатив ~ место».
@@ -458,8 +527,32 @@ export function readResult(raw, wire = 'default') {
         status: t(f[11]),
         label: '',
       };
-      if (w === 'forwarder') {
+      if (w === 'forwarder' || w === 'lisproxy') {   // lisproxy: LIS_PROXY_V1 — гематология и прибор без модели — как переадресатель
         o.label = t(f[4]);
+      } else if (w === 'lisproxy-chem') {
+        // LIS_PROXY_V1 (ревью I2) — BS-200 (химия Mindray) через LIS Proxy: значение
+        // и ответ — как у своего порта (mindray-chem ниже): хвостовые нули
+        // срезаются, запятая — точка, качественный ответ «+» / «Positive» / «-»
+        // — по тексту не-числовой строки (D6; OBX-9 прокси не передаёт), простое
+        // число — NM. Код — OBX-3 одним компонентом (вход кладёт его сам).
+        o.label = t(f[4]);
+        o.name = '';
+        o.value = trimZeros(decimalPoint(o.value));
+        const q = o.valueType.toUpperCase() !== 'NM' ? qualitativeOf(o.value) : '';
+        if (q) o.qualitative = q;
+        if (PLAIN_NUMBER.test(o.value)) o.valueType = 'NM';
+      } else if (w === 'lisproxy-autobio') {
+        // LIS_PROXY_V1 (ревью I3) — AutoLumo A1000 через LIS Proxy: значение —
+        // концентрация (прокси шлёт её одну), флаги прибора — поле flag прокси
+        // (OBX-8): правила D9 те же, что у провода autobio-hl7 (a1000Flags).
+        o.label = t(f[4]);
+        o.name = '';
+        const pf = proxyFlags(f[8]);
+        const a = a1000Flags(pf.flags, pf.sent, decimalPoint(o.value));
+        o.abnormal = a.abnormal;
+        if (a.hold) o.hold = a.hold;
+        o.value = a.value;
+        if (PLAIN_NUMBER.test(o.value)) o.valueType = 'NM';
       } else if (w === 'mindray-chem') {
         // Номер теста задаёт лаборатория на приборе (ItemID.ini, с. 22);
         // OBX-4 — подпись, которую оператор правит как хочет: «functions as a
@@ -505,25 +598,10 @@ export function readResult(raw, wire = 'default') {
         // LIS_VENDOR_EXACT_V1 (D9, доклассификация) — и критический диапазон
         // (CRH/CRL → HH/LL); OVD и DRX — в A1000_IGNORE; спор направлений
         // (выше и ниже разом, в том числе критического) — не писать.
-        const rest = note.flags.filter((x) => !A1000_IGNORE.has(x));
-        const high = rest.some((x) => A1000_HIGH.has(x));
-        const low = rest.some((x) => A1000_LOW.has(x));
-        const critical = [...new Set(rest.filter((x) => A1000_CRITICAL.has(x)).map((x) => A1000_CRITICAL.get(x)))];
-        const up = high || critical.includes('HH');
-        const down = low || critical.includes('LL');
-        const other = rest.filter((x) => !A1000_HIGH.has(x) && !A1000_LOW.has(x) && !A1000_CRITICAL.has(x));
-        if (other.length || (up && down)) {
-          o.hold = 'флаги прибора: ' + note.sent.join('-');   // LIS_VENDOR_EXACT_V1 — как прислал прибор
-        } else {
-          if (high) {
-            o.abnormal = 'H';
-            if (v && !/^[<>]/.test(v)) v = '>' + v;
-          } else if (low) {
-            o.abnormal = 'L';
-            if (v && !/^[<>]/.test(v)) v = '<' + v;
-          }
-          if (critical.length) o.abnormal = critical[0];   // LIS_VENDOR_EXACT_V1 — «критический» сильнее «выше»/«ниже»
-        }
+        const a = a1000Flags(note.flags, note.sent, v);   // LIS_PROXY_V1 (ревью I3) — те же правила у входа LIS Proxy
+        if (a.hold) o.hold = a.hold;
+        else if (a.abnormal) o.abnormal = a.abnormal;
+        v = a.value;
         o.value = v;
         // LIS_VENDOR_EXACT_V1 (D0) — простое число — число (NM): без этого у
         // A1000 не было numeric_value, диапазон клиники не срабатывал, и флаг

@@ -75,7 +75,7 @@ test('buildOru: провод forwarder, номер из OBR-3, код одним
   ].join('\r'));
   assert.doesNotThrow(() => parseMessage(raw));
   const head = mshOf(raw);
-  assert.deepEqual(wireDecision({ profile: null, facility: head.facility, app: head.app }), { wire: 'forwarder', conflict: false });
+  assert.deepEqual(wireDecision({ profile: null, facility: head.facility, app: head.app }), { wire: 'lisproxy', conflict: false }, 'ревью I2/I3 — провод входа LIS Proxy');
   assert.equal(guessProfile({ app: PROXY_APP, facility: head.facility }), null);
   const { obrs, observations } = readResult(raw, 'forwarder');
   assert.equal(pickMessageSample(obrs, 'forwarder').value, 'LAB-000123');

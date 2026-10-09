@@ -6,10 +6,10 @@
 // самого низа: сырое сообщение перечитывают серия, «Привязать», «Поле
 // анализатора». Поэтому значение превращается в минимальный ORU^R01 и идёт тем
 // же входом, что у своего порта (receive.js), — правила владельца не дублируются.
-import { decimalPoint, trimZeros, isNoResult, FORWARDER_FACILITY } from './wire.js';
+import { decimalPoint, trimZeros, isNoResult, FORWARDER_FACILITY, LISPROXY_APP } from './wire.js';   // LISPROXY_APP: ревью I2/I3
 
 /** MSH-3 синтетического сообщения: постоянное. Имя анализатора в прокси — свободный текст, а модель по MSH-3 угадывает приём (discover.js guessProfile). */
-export const PROXY_APP = 'LISPROXY';
+export const PROXY_APP = LISPROXY_APP;   // ревью I2/I3 — по нему (и MSH-4 LabPC) wire.js выбирает провод lisproxy* по модели строки
 /** Начало журнала у строки, которая не результат и не беда: мусор прибора, лишний показатель гематологии. Такие строки разрешены сразу и не в ленте (rpc/lis.js lisRecent). */
 export const PROXY_QUIET_PREFIX = 'LIS Proxy, справка: ';
 /** Начало причины «не номер пробирки» (лоток; ingest.js — та же стена у строк LIS Proxy). */
