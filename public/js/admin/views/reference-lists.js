@@ -94,7 +94,7 @@ export async function renderReferenceLists(container, ctx = {}) {
     root.appendChild(h('div', {
         style: {
             display: 'flex', alignItems: 'flex-start', gap: '10px', margin: '0 0 16px', padding: '11px 14px',
-            borderRadius: '10px', background: 'var(--info-50)', color: 'var(--info-700)', fontSize: '13px', lineHeight: '1.5',
+            borderRadius: '10px', background: 'var(--info-50)', color: 'var(--info-700)', fontSize: '13.5px', lineHeight: '1.5',
         },
     },
         h('span', { style: { flex: '0 0 auto', display: 'inline-flex', marginTop: '1px' } }, Icon('Info', { size: 16 })),
