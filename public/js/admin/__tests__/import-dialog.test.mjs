@@ -290,20 +290,21 @@ const resultText = (overlay) => {
 };
 const inBody = (overlay) => all(BODY).includes(overlay);
 
-test('итог: 2 ввезены, 3 не ввезены из-за ошибок в файле — окно остаётся, итог честный', async () => {
+test('итог: 3 ввезены (одна без цены — с замечанием), 2 не ввезены из-за ошибок в файле — окно остаётся, итог честный', async () => {
     Object.assign(W, { writes: [], failExisting: false, failStored: false });
     const { overlay, confirm } = await openWith(sheetFile([['name', 'group', 'price'],
         ['Приём A', 'Консультация', 1000], ['Приём B', 'Консультация', 2000],
         ['Приём X', 'Консультация', 'abc'], ['Приём Y', 'Консультация', ''], ['Приём Z', 'Консультация', '1,500']]));
     confirm.click();
     await settle(200);
-    assert.ok(inBody(overlay), 'окно закрылось, а 3 строки не ввезены');
+    assert.ok(inBody(overlay), 'окно закрылось, а 2 строки не ввезены');
     const text = resultText(overlay);
     assert.match(text, /Импорт завершён/);
-    assert.match(text, /Импортировано строк: 2/);
-    assert.match(text, /новых: 2/);
-    assert.match(text, /Не импортировано — ошибки в файле: 3/);
-    assert.match(toastText(), /не импортировано \(ошибки в файле\): 3/, toastText());
+    assert.match(text, /Импортировано строк: 3/);
+    assert.match(text, /новых: 3/);
+    assert.match(text, /Не импортировано — ошибки в файле: 2/);
+    assert.match(text, /С замечаниями: 1/);
+    assert.match(toastText(), /не импортировано \(ошибки в файле\): 2/, toastText());
     assert.ok(confirm.disabled === true || confirm.hasAttribute('disabled'), 'после импорта «Импортировать» снова доступна — повтор задвоит');
     assert.ok(previewRows(overlay).length >= 3, 'таблица с причинами пропала');
 });
@@ -348,6 +349,38 @@ test('подписи итога — на трёх языках', async () => {
     const { STRINGS } = await import('../i18n-strings.js');
     for (const k of ['Импорт завершён', 'Импортировано строк: {n}', 'Не импортировано — ошибки в файле: {n}', 'Не записано — ошибка при записи: {n}',
         'С замечаниями: {n}', 'Строки с ошибками и замечаниями — в таблице ниже.', 'не импортировано (ошибки в файле): {n}']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+    }
+});
+
+// CLINIC_API_FIX_V1 (ревью 4) — ОКНО ГОВОРИТ, ЧТО ВАЖНО. Колонка, чей
+// заголовок импорт не узнал, не импортируется — строка статуса называет её
+// («Сумма»), а не молча оставляет цены нулями; подсказка колонок называет
+// денежные колонки и их правило.
+test('нераспознанная колонка названа в строке статуса; «Цена» — узнана', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay } = await openWith(sheetFile([['name', 'group', 'Цена', 'Сумма'], ['Приём A', 'Консультация', 1000, 5]]));
+    const statusText = all(overlay).find((n) => String(n.className).includes('imx-status')).textContent;
+    assert.match(statusText, /Колонки не распознаны и не импортируются: Сумма/, statusText);
+    assert.ok(!/Цена/.test(statusText.split('не импортируются')[1] || ''), '«Цена» названа нераспознанной: ' + statusText);
+});
+
+test('подсказка колонок называет денежные колонки и их правило', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay } = await openWith(sheetFile([['name', 'group', 'price'], ['Приём A', 'Консультация', 1000]]));
+    const note = all(overlay).find((n) => String(n.className).includes('imx-note')).textContent;
+    assert.match(note, /price/);
+    assert.match(note, /не число — строка не ввозится/, note);
+    assert.match(note, /пустая ячейка у существующей записи — без изменений/, note);
+});
+
+test('подписи о колонках — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const k of ['Колонки не распознаны и не импортируются: {list}.',
+        'Деньги ({list}): не число — строка не ввозится; пустая ячейка у существующей записи — без изменений.',
+        'Деньги ({list}): не число — строка не ввозится; пустая ячейка не записывается.',
+        'Без значения в {list} новая запись ляжет с 0 и предупреждением.']) {
         const e = STRINGS[k];
         assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
     }

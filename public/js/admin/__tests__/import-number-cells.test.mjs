@@ -171,14 +171,16 @@ test('обновление: не число в НДС и доле — поле �
     assert.ok(!('tax_rate' in row.payload) && !('default_doctor_percent' in row.payload), JSON.stringify(row.payload));
 });
 
-// CLINIC_API_FIX_V1 (ревью 3, решение) — новая услуга без цены не ввозится:
-// «укажите цену (0 — если бесплатно)»; явный 0 — допустимая цена. НДС и доля
-// пустые — как раньше (12 и 0).
-test('новая услуга с пустой ценой или без колонки цены — не ввозится; явный 0 — ввозится', () => {
+// CLINIC_API_FIX_V1 (ревью 4, решение) — ОТКАТ ревью 3: новая услуга без цены
+// (пустая ячейка или нет колонки) ввозится с ценой 0 и ПРЕДУПРЕЖДЕНИЕМ, как
+// задумано в IMPORT_PRICE_OPTIONAL_V1 (прайс «название + раздел, цены
+// потом»); предупреждения теперь видны. Не число в цене — по-прежнему отказ.
+test('новая услуга с пустой ценой или без колонки цены — 0 с предупреждением; явный 0 — без него', () => {
     for (const raw of [{ ...MIN }, { ...MIN, price: '' }]) {
         const row = buildImportRow('services', raw, { rowNum: 6 });
-        assert.strictEqual(row.status, 'error', JSON.stringify(raw));
-        assert.ok(row.notes.includes('Строка 6: укажите цену (0 — если бесплатно).'), JSON.stringify(row.notes));
+        assert.strictEqual(row.status, 'warn', JSON.stringify(raw) + ' ' + JSON.stringify(row.notes));
+        assert.strictEqual(row.payload.price, 0);
+        assert.ok(row.notes.includes('price пусто — будет 0'), JSON.stringify(row.notes));
     }
     const free = buildImportRow('services', { ...MIN, price: 0, tax_rate: '', default_doctor_percent: '' });
     assert.strictEqual(free.status, 'ok', JSON.stringify(free.notes));
@@ -427,4 +429,11 @@ test('сообщения о пустой денежной ячейке — на 
         const e = STRINGS[k];
         assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
     }
+});
+
+// CLINIC_API_FIX_V1 (ревью 4) — заголовок «Цена» / «Стоимость» — та же колонка
+// price (синонимы), а не молча нераспознанная колонка и цена 0.
+test('заголовки «Цена» и «Стоимость» читаются как price', () => {
+    assert.strictEqual(buildImportRow('services', { name: 'Новая', group: 'Консультация', 'Цена': '150 000' }).payload.price, 150000);
+    assert.strictEqual(buildImportRow('services', { name: 'Новая', group: 'Консультация', 'Стоимость': 90000 }).payload.price, 90000);
 });

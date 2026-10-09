@@ -748,10 +748,12 @@ const IMPORT_CONFIGS = {
             // CLINIC_API_FIX_V1 (ревью итога) — money: не число в цене (НДС, доле,
             // цене визита…) новой услуги — строка не ввозится (у обновляемой —
             // поле остаётся прежним).
-            // CLINIC_API_FIX_V1 (ревью 3, решение) — requiredOnNew: новая услуга без
-            // цены не ввозится («укажите цену (0 — если бесплатно)»); у обновляемой
-            // пустая ячейка оставляет сохранённую цену.
-            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  money: true, requiredOnNew: true, hint: 'Цена, число — напр. 150000 (0 — бесплатно)' },
+            // CLINIC_API_FIX_V1 (ревью 4, решение) — warnIfEmptyOnNew: новая услуга без
+            // цены (пусто или нет колонки) ложится с 0 и ПРЕДУПРЕЖДЕНИЕМ, как задумано в
+            // IMPORT_PRICE_OPTIONAL_V1 (откат отказа ревью 3); у обновляемой пустая
+            // ячейка оставляет сохранённую цену. «Цена» и «Стоимость» — синонимы.
+            { key: 'price',            keepIfAbsent: true, coerce: 'num',  defaultNum: 0,  money: true, warnIfEmptyOnNew: true, aliases: ['цена', 'стоимость'],
+              hint: 'Цена, число — напр. 150000. Пусто — 0 для новой услуги (с предупреждением), без изменений для существующей.' },
             // FULL_EXPORT_V1 (2026-09-14) — owner: «exporting and importing are not
             // giving all the information». Every field the service editor holds now
             // travels: code, the visit-tier prices (VISIT_TIER_PRICING_V1), the
@@ -1344,6 +1346,11 @@ function columnsHint(cfg) {
     const optional = shown.filter(c => !c.required).map(c => c.key);
     const autoFk   = shown.filter(c => c.fk && c.fk.autoCreate).map(c => c.key);
     const lookupFk = shown.filter(c => c.fk && !c.fk.autoCreate).map(c => c.key);
+    // CLINIC_API_FIX_V1 (ревью 4) — честно о том, что важно: денежные колонки и
+    // их правило (ступени визита и доли — своё правило, в их подсказках), и
+    // колонки, без которых новая запись ляжет с 0 и предупреждением.
+    const money    = shown.filter(c => c.money && !c.raw).map(c => c.key);
+    const zeroWarn = shown.filter(c => c.warnIfEmptyOnNew).map(c => c.key);
 
     return h('div', { class: 'imx-note' },
         h('div', null,
@@ -1364,7 +1371,31 @@ function columnsHint(cfg) {
                     ? h('div', null, 'Создаются автоматически, если их ещё нет: ', h('b', null, autoFk.join(', ')), '.')
                     : null)
             : null,
+        money.length
+            ? h('div', null, typeof cfg.rowUpdates === 'function'
+                ? trf('Деньги ({list}): не число — строка не ввозится; пустая ячейка у существующей записи — без изменений.', { list: money.join(', ') })
+                : trf('Деньги ({list}): не число — строка не ввозится; пустая ячейка не записывается.', { list: money.join(', ') }))
+            : null,
+        zeroWarn.length
+            ? h('div', null, trf('Без значения в {list} новая запись ляжет с 0 и предупреждением.', { list: zeroWarn.join(', ') }))
+            : null,
     );
+}
+
+// CLINIC_API_FIX_V1 (ревью 4) — заголовки листа, которых импорт не знает (ни
+// ключа колонки, ни синонима): их ячейки не импортируются, и окно это говорит.
+function unknownHeaders(cfg, rows) {
+    const known = new Set();
+    for (const c of cfg.columns) {
+        known.add(normHeader(c.key));
+        for (const a of (c.aliases || [])) known.add(normHeader(a));
+    }
+    const out = [];
+    for (const k of Object.keys((rows && rows[0]) || {})) {
+        if (/^__EMPTY/.test(k) || !String(k).trim()) continue;
+        if (!known.has(normHeader(k))) out.push(String(k).trim());
+    }
+    return out;
 }
 export async function openSectionImporter({ sectionKey, onImported } = {}) {
     const cfg = getCfg(sectionKey);
@@ -1481,6 +1512,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         // её замечание (не число в цене — оставлено сохранённое…) человек
         // должен увидеть: строка статуса называет их число отдельно.
         const warnCount = parsedRows.filter(r => r.status === 'warn').length;
+        const unknown = unknownHeaders(cfg, rawRows);   // CLINIC_API_FIX_V1 (ревью 4)
         clear(status);
         // append(null) вставил бы текст «null» — узлы собираются списком.
         status.append(...[
@@ -1491,6 +1523,8 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             warnCount ? document.createTextNode('), ') : null,
             h('b', { style: { color: 'var(--crit-700)' } }, String(rawRows.length - validCount)),
             document.createTextNode(' ' + tr('с ошибками.')),
+            unknown.length ? h('div', { style: { color: 'var(--warn-700)' } },
+                trf('Колонки не распознаны и не импортируются: {list}.', { list: unknown.join(', ') })) : null,
         ].filter(Boolean));
         paintPreview();
         if (validCount > 0 && !imported) confirmBtn.removeAttribute('disabled');
@@ -2222,8 +2256,8 @@ function buildRow(raw, rowNum, lookups, cfg) {
             //   • строка обновляет запись — поле не пишется, замечание «пусто —
             //     оставлено как было»;
             //   • новая строка раздела, который это знает (rowUpdates, услуги), —
-            //     цена обязательна (requiredOnNew: «укажите цену (0 — если
-            //     бесплатно)»), остальное — как раньше (НДС 12, доля 0);
+            //     как раньше: цена 0 с предупреждением (warnIfEmptyOnNew, ревью 4 —
+            //     откат отказа), НДС 12, доля 0;
             //   • разделы, где новая ли строка, узнаётся только при импорте, —
             //     поле не пишется никогда (у новой записи — значение базы),
             //     замечание «пусто — не записано».
@@ -2234,8 +2268,11 @@ function buildRow(raw, rowNum, lookups, cfg) {
                 if (updating) {
                     if (inSheet) notes.push(trf('Строка {n}: {col} пусто — оставлено как было.', { n: rowNum, col: col.key }));
                 } else if (typeof cfg.rowUpdates === 'function') {
-                    if (col.requiredOnNew) { notes.push(trf('Строка {n}: укажите цену (0 — если бесплатно).', { n: rowNum })); status = 'error'; }
-                    else payload[key] = col.defaultNum ?? 0;
+                    payload[key] = col.defaultNum ?? 0;
+                    if (col.warnIfEmptyOnNew) {
+                        notes.push(trf('{col} пусто — будет {def}', { col: col.key, def: col.defaultNum ?? 0 }));
+                        if (status !== 'error') status = 'warn';
+                    }
                 } else if (inSheet) {
                     notes.push(trf('Строка {n}: {col} пусто — не записано.', { n: rowNum, col: col.key }));
                 }

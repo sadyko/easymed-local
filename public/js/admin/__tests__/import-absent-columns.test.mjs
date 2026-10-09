@@ -53,7 +53,7 @@ test('обновление: ссылки без колонки не стираю
     for (const k of LINKS) assert.ok(!(k in row.payload), k + ' = ' + JSON.stringify(row.payload[k]));
 });
 
-test('новая услуга (услуги нет или галочка снята): без колонки — те же значения, что и раньше; без цены — не ввозится', () => {
+test('новая услуга (услуги нет или галочка снята): без колонки — те же значения, что и раньше; без цены — 0 с предупреждением', () => {
     for (const lookups of [{}, INSERT_TICK_OFF()]) {
         const row = buildImportRow('services', MIN, { lookups });
         assert.strictEqual(row.payload.active, true);
@@ -62,9 +62,9 @@ test('новая услуга (услуги нет или галочка сня�
         assert.strictEqual(row.payload.duration_minutes, 30);
         assert.strictEqual(row.payload.default_doctor_percent, 0);
         for (const k of LINKS) assert.strictEqual(row.payload[k], null, k);
-        // CLINIC_API_FIX_V1 (ревью 3, решение) — новая услуга без цены не ввозится (было: 0 с предупреждением).
-        assert.ok(!('price' in row.payload), JSON.stringify(row.payload.price));
-        assert.strictEqual(row.status, 'error', 'новая услуга без цены ввезена');
+        // CLINIC_API_FIX_V1 (ревью 4, решение) — новая услуга без цены — 0 с предупреждением (откат ревью 3).
+        assert.strictEqual(row.payload.price, 0);
+        assert.strictEqual(row.status, 'warn', 'новая услуга без цены — без предупреждения');
     }
 });
 
