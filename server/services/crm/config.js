@@ -12,6 +12,10 @@
 // not a cosmetic bug — it is a day of the call centre's work with nowhere to
 // live. Every guard below is one such way to lose the board.
 
+// CRM_UNIFY_V1 — «Колонка записи» и «Колонка конверсии»: одно правило с экраном.
+import { bookedStageKey, bookedStageCandidates, conversionRefusal } from '../../../public/js/shared/crm-booked-stage.js';
+import { rpcT } from '../server-message.js';   // CRM_UNIFY_V1 — отказ с числом карточек переводится на экране
+
 export class CrmConfigError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
 }
@@ -106,7 +110,10 @@ export function listRouting(db, provider = DEFAULT_PROVIDER) {
 
 /** Everything the board and the settings screen both need, in one read. */
 export function crmConfig(db) {
-  return { stages: listStages(db), sources: listSources(db), routing: listRouting(db), tags: listTags(db) };
+  return {
+    stages: listStages(db), sources: listSources(db), routing: listRouting(db), tags: listTags(db),
+    settings: { ...readCrmSettings(db), booked_effective: scheduledStageKey(db) },   // CRM_UNIFY_V1
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -171,20 +178,146 @@ export function noShowStageKey(db) {
  * записывал одним: «человека записали» и «человек пришёл». Первому нужна своя
  * колонка, и у сидовой воронки она есть — «Записан» (миграция 077).
  *
- * Спрашивается так же, как «Не пришёл»: сидовое имя, ПОКА ОНО ЖИВОЕ, — а
- * клиника, которая его переименовала или убрала, получает ПОСЛЕДНЮЮ открытую
- * колонку перед конверсией. Догадываться о названии чужой колонки хуже, чем
- * назвать единственное, что о ней известно: дальше неё живой заявке идти
- * некуда, следующий шаг — приход.
+ * CRM_UNIFY_V1 — ОДНО ПРАВИЛО С ЭКРАНОМ (public/js/shared/crm-booked-stage.js):
+ * «Колонка записи» — открытая ВИДИМАЯ колонка ДО «Пришёл». Выбор
+ * администратора в «CRM-канбан» (crm_settings.booked_stage), если он допустим;
+ * иначе «Записан», если она есть и видна; иначе последняя такая. Раньше здесь
+ * бралась сидовая даже скрытая, иначе последняя открытая по порядку — и после
+ * конверсии тоже, а экран брал первую видимую: у клиники записанные уезжали в
+ * «Успешно». Все, кто двигает карточку при записи (crmLinkVisit — шаги E и G,
+ * touchRequest зеркала, откат отмены в crmVisitStatus, отчёт колл-центра),
+ * спрашивают здесь.
  *
- * null отдаётся только у воронки без единой открытой колонки (справочник
- * вычищен руками). Звонящий обязан это пережить: переход заявки не вправе
- * отказать в визите.
+ * Пустой или нечитаемый справочник — сидовая «Записан»: переход заявки не
+ * вправе отказать в визите. null — только у воронки без единой открытой
+ * видимой колонки до конверсии; звонящий обязан это пережить.
  */
 export function scheduledStageKey(db) {
-  const open = openStageKeys(db);
-  if (open.includes(SEED_SCHEDULED_STAGE)) return SEED_SCHEDULED_STAGE;
-  return open.length ? open[open.length - 1] : null;
+  let stages = [];
+  try { stages = listStages(db); } catch (e) { stages = []; }
+  if (!stages.length) return SEED_SCHEDULED_STAGE;
+  return bookedStageKey(stages, readCrmSettings(db).booked_stage);
+}
+
+// --------------------------------------------------------------------------
+// CRM_UNIFY_V1 — НАСТРОЙКИ «CRM-КАНБАН» ЭТОЙ УСТАНОВКИ (crm_settings, мигр. 237)
+// --------------------------------------------------------------------------
+
+export const DEFAULT_WINDOW_HOURS = 72;
+const MAX_WINDOW_HOURS = 720;
+
+/** Настройки этой установки. Нет таблицы (старая база) — значения по умолчанию. */
+export function readCrmSettings(db) {
+  try {
+    const r = db.prepare('SELECT booked_stage, window_hours FROM crm_settings WHERE id = 1').get();
+    return {
+      booked_stage: (r && typeof r.booked_stage === 'string' && r.booked_stage) || null,
+      window_hours: r && Number(r.window_hours) > 0 ? Number(r.window_hours) : DEFAULT_WINDOW_HOURS,
+    };
+  } catch (e) {
+    return { booked_stage: null, window_hours: DEFAULT_WINDOW_HOURS };
+  }
+}
+
+/**
+ * CRM_UNIFY_V1 — ОКНО ПОВТОРНОГО ОБРАЩЕНИЯ, в часах: crm_settings.window_hours,
+ * иначе 72. Одна точка для стойки (какие карточки закрывает регистрация,
+ * crm/visit-link.js) и для окна звонка и записи (задача 6).
+ */
+export function windowHours(db) {
+  return readCrmSettings(db).window_hours;
+}
+
+// Отказы — целые фразы без подстановок: экран переводит их словарём
+// (i18n-strings.js), а собранную фразу словарь не узнаёт.
+const BOOKED_REFUSAL = 'Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией.';
+const CONVERSION_REFUSALS = {
+  missing: 'Выбранной колонки нет в воронке — обновите страницу.',
+  lost: 'Проигрышная колонка не может быть колонкой конверсии.',
+  no_show: '«Не пришёл» не может быть колонкой конверсии.',
+  hidden: 'Скрытая колонка не может быть колонкой конверсии.',
+  booked_none: 'Перед колонкой конверсии нужна открытая видимая колонка — в неё переходят записанные.',
+  booked_order: BOOKED_REFUSAL,
+};
+
+/**
+ * Сохранить то, что прислали: { booked_stage?, won_stage?, window_hours? }.
+ *
+ * won_stage — «Колонка конверсии (пришёл)» (дополнение владельца 2026-10-09).
+ * Не хранится: вид won переносится на выбранную колонку, прежняя конверсия
+ * становится открытой. Сначала снимается старая, потом ставится новая —
+ * частичный уникальный индекс crm_stages_one_won проверяется построчно. Всё —
+ * внутри транзакции saveConfig: отказ колонки записи после переноса откатывает
+ * и перенос.
+ *
+ * CRM_UNIFY_V1 (ревью задачи 4, решение контролёра) — КОНВЕРСИЯ ЭТО РОЛЬ, И
+ * КАРТОЧКИ ИДУТ ЗА НЕЙ. Перенос вида без карточек оставлял всю историю
+ * «Пришёл» в ставшей открытой колонке: обход уносил её в «Не пришёл», запись
+ * колл-центра цеплялась к карточке 2025 года, стойка двигала старые карточки,
+ * звонок бывшего пациента не заводил лида, отчёт проваливался. Поэтому:
+ *   1. новая колонка обязана быть ПУСТОЙ (ни одной карточки любого вида) —
+ *      иначе её живые карточки стали бы ложными конверсиями; отказ 409 с числом;
+ *   2. той же транзакцией все карточки прежней конверсии переезжают в новую,
+ *      updated_at НЕ меняется (окно повторного обращения и «последнее
+ *      движение» не должны счесть историю свежей); перенос — в журнал
+ *      crm_conversion_log (кто, откуда, куда, сколько); прежняя колонка
+ *      остаётся пустой открытой;
+ *   3. правила звонков, создававшие карточки в новой колонке, выключаются (как
+ *      у скрытой колонки в saveStages): звонок не рождает конверсию.
+ *
+ * Колонка записи проверяется по воронке ПОСЛЕ переноса: присланная — или
+ * сохранённая, если её не прислали (сохранённая, которая уже не действовала,
+ * Р10, сбрасывается на правило по умолчанию).
+ */
+export function saveCrmSettings(db, s = {}, actorId = null) {
+  const has = (k) => Object.prototype.hasOwnProperty.call(s, k);
+  const cur = readCrmSettings(db);
+  const next = { ...cur };
+  let stages = listStages(db);
+
+  let booked = cur.booked_stage && bookedStageCandidates(stages).includes(cur.booked_stage) ? cur.booked_stage : null;
+  if (has('booked_stage')) booked = s.booked_stage == null || s.booked_stage === '' ? null : normKey(s.booked_stage);
+
+  if (has('won_stage')) {
+    const key = normKey(s.won_stage);
+    const current = (stages.find((x) => x.kind === 'won') || {}).key || null;
+    if (key !== current) {
+      const why = conversionRefusal(stages, key, booked);
+      if (why) throw new CrmConfigError(CONVERSION_REFUSALS[why] || BOOKED_REFUSAL);
+      // CRM_UNIFY_V1 — 1. цель пустая.
+      const n = db.prepare('SELECT COUNT(*) AS n FROM crm_requests WHERE status = ?').get(key).n;
+      if (n) {
+        const label = (stages.find((x) => x.key === key) || {}).label || key;
+        throw rpcT(CrmConfigError, 'В колонке «{label}» карточек: {n} — сначала перенесите их в другие колонки.', { label, n }, 409);
+      }
+      db.prepare("UPDATE crm_stages SET kind = 'open' WHERE kind = 'won' AND key <> ?").run(key);
+      db.prepare("UPDATE crm_stages SET kind = 'won' WHERE key = ?").run(key);
+      // CRM_UNIFY_V1 — 2. конвертированные карточки идут за ролью; updated_at не трогается.
+      const moved = current
+        ? db.prepare('UPDATE crm_requests SET status = ? WHERE status = ?').run(key, current).changes
+        : 0;
+      db.prepare('INSERT INTO crm_conversion_log (moved_by, from_stage, to_stage, cards_moved) VALUES (?, ?, ?, ?)')
+        .run(actorId, current, key, moved);
+      // CRM_UNIFY_V1 — 3. звонок не заводит карточку прямо в конверсию.
+      db.prepare("UPDATE crm_call_routing SET action = 'ignore', stage_key = NULL WHERE stage_key = ?").run(key);
+      stages = listStages(db);
+    }
+  }
+
+  if (booked && !bookedStageCandidates(stages).includes(booked)) throw new CrmConfigError(BOOKED_REFUSAL);
+  next.booked_stage = booked;
+
+  if (has('window_hours')) {
+    const h = typeof s.window_hours === 'string' && s.window_hours.trim() !== '' ? Number(s.window_hours) : s.window_hours;
+    if (!Number.isInteger(h) || h < 1 || h > MAX_WINDOW_HOURS) {
+      throw new CrmConfigError('Окно повторного обращения — целое число часов от 1 до 720.');
+    }
+    next.window_hours = h;
+  }
+  db.prepare(`UPDATE crm_settings SET booked_stage = ?, window_hours = ?, changed_by = ?,
+                     changed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 1`)
+    .run(next.booked_stage, next.window_hours, actorId);
+  return readCrmSettings(db);
 }
 
 // --------------------------------------------------------------------------
@@ -236,20 +369,29 @@ function requireArray(v, what) {
  * reorder + rename + recolour + add + hide are ONE save and ONE transaction —
  * which is what the screen actually does, and the only way a half-applied
  * reorder cannot leave two columns claiming position 3.
+ *
+ * CRM_UNIFY_V1 (ревью задачи 4, R5) — ВИД КОЛОНКИ ЗДЕСЬ НЕ МЕНЯЕТСЯ. Присланный
+ * kind существующей колонки игнорируется (остаётся тот, что в базе), новая
+ * колонка всегда открытая. Конверсию двигают только настройки «Колонка
+ * конверсии» (saveCrmSettings: пустая цель, карточки идут за ролью, журнал).
+ * Раньше устаревшая вкладка «Колонки» молча откатывала перенос конверсии, а
+ * собранный руками запрос делал «Не пришёл» конверсией в обход проверок.
  */
 export function saveStages(db, stages) {
+  const kindOf = new Map(db.prepare('SELECT key, kind FROM crm_stages').all().map((r) => [r.key, r.kind]));   // CRM_UNIFY_V1
   const wanted = requireArray(stages, 'колонок').map((s, i) => {
     const key = normKey(s && s.key);
     checkKey(key, 'колонки');
-    const kind = String((s && s.kind) ?? 'open').trim();
-    if (!STAGE_KINDS.includes(kind)) {
-      throw new CrmConfigError(`Неизвестный тип колонки «${kind}» у «${key}».`);
+    // Неизвестное слово по-прежнему отказ: экран с таким видом — сломан.
+    const sent = String((s && s.kind) ?? 'open').trim();
+    if (!STAGE_KINDS.includes(sent)) {
+      throw new CrmConfigError(`Неизвестный тип колонки «${sent}» у «${key}».`);
     }
     return {
       key,
       label: normLabel(s && s.label, 'колонки'),
       color: normColor(s && s.color),
-      kind,
+      kind: kindOf.has(key) ? kindOf.get(key) : 'open',   // CRM_UNIFY_V1 — вид из базы; новая — открытая
       // Absent is_active means «active»: a screen that adds a column without
       // touching the toggle means to show it.
       is_active: (s && s.is_active) === undefined ? 1 : (s.is_active ? 1 : 0),
@@ -270,6 +412,11 @@ export function saveStages(db, stages) {
   // unique index: the index would answer with a raw SQLite error, and the
   // owner needs a sentence. Two conversions is a fork with no owner — the
   // conversion is what registers a patient card.
+  // CRM_UNIFY_V1 — виды берутся из базы, поэтому «ни одной» значит одно: колонку
+  // конверсии убрали из списка (удаление). Её сначала сменяют в настройках.
+  if (!won.length && [...kindOf.values()].includes('won')) {
+    throw new CrmConfigError('Колонку конверсии нельзя удалить — сначала выберите другую колонку конверсии.', 409);
+  }
   if (won.length !== 1) {
     throw new CrmConfigError(won.length
       ? 'Колонка-конверсия должна быть ровно одна.'
@@ -293,21 +440,17 @@ export function saveStages(db, stages) {
     if (n) throw new CrmConfigError(`В колонке «${key}» ${n} заявок — её можно только скрыть, но не удалить.`, 409);
   }
 
+  // CRM_UNIFY_V1 — kind пишется только у НОВОЙ строки; у существующей его не
+  // трогает и правка (ON CONFLICT … без kind). Снимать won со всех колонок перед
+  // записью (как раньше) больше незачем: здесь он не переезжает никогда.
   const upsert = db.prepare(`INSERT INTO crm_stages (key, label, color, position, is_active, kind)
     VALUES (@key, @label, @color, @position, @is_active, @kind)
     ON CONFLICT(key) DO UPDATE SET label = excluded.label, color = excluded.color,
-      position = excluded.position, is_active = excluded.is_active, kind = excluded.kind`);
+      position = excluded.position, is_active = excluded.is_active`);
   const unroute = db.prepare("UPDATE crm_call_routing SET action = 'ignore', stage_key = NULL WHERE stage_key = ?");
   const drop = db.prepare('DELETE FROM crm_stages WHERE key = ?');
-  const clearWon = db.prepare("UPDATE crm_stages SET kind = 'open' WHERE kind = 'won'");
 
   db.transaction(() => {
-    // Handing the conversion from «Пришёл» to another column is a legitimate
-    // edit, but the partial unique index is checked per ROW: setting the new
-    // one first would collide with the old. So the flag is cleared from every
-    // column BEFORE the upserts, and re-applied by them. At no point do two
-    // columns claim it.
-    clearWon.run();
     for (const key of removed) {
       // A rule that fed a column which no longer exists cannot stay 'create' —
       // the foreign key would refuse the delete, and a create rule pointing
@@ -321,6 +464,14 @@ export function saveStages(db, stages) {
     // column nobody can see produces leads that look lost. Flipping the rule
     // is the honest outcome, and it is visible on the routing card.
     for (const s of wanted) if (!s.is_active) unroute.run(s.key);
+    // CRM_UNIFY_V1 (ревью задачи 4) — колонку записи скрыли, удалили или
+    // переставили за конверсию: выбор стирается сразу (Р10 — правило по
+    // умолчанию), а не ждёт, пока колонку покажут снова и он молча оживёт.
+    const booked = readCrmSettings(db).booked_stage;
+    if (booked && !bookedStageCandidates(listStages(db)).includes(booked)) {
+      try { db.prepare('UPDATE crm_settings SET booked_stage = NULL WHERE id = 1').run(); }
+      catch { /* база без 237 — выбора нет */ }
+    }
   })();
 
   return listStages(db);
@@ -505,14 +656,24 @@ export function saveRouting(db, rows) {
  *
  * better-sqlite3 nests transactions as SAVEPOINTs, so the per-list
  * transactions inside still behave as one atomic unit here.
+ *
+ * CRM_UNIFY_V1 — settings ({ booked_stage?, won_stage?, window_hours? }) идут
+ * ПОСЛЕДНИМИ: выбранная колонка может быть добавлена в ту же правку. Кто
+ * сохранил — третьим аргументом от RPC (вошедший), не из тела запроса.
  */
-export function saveConfig(db, args = {}) {
+export function saveConfig(db, args = {}, { actorId = null } = {}) {
   const out = {};
   db.transaction(() => {
     if (args.stages !== undefined) out.stages = saveStages(db, args.stages);
     if (args.sources !== undefined) out.sources = saveSources(db, args.sources);
     if (args.routing !== undefined) out.routing = saveRouting(db, args.routing);
     if (args.tags !== undefined) out.tags = saveTags(db, args.tags);   // CRM_HEAD_MERGE_TAGS_V1
+    if (args.settings !== undefined) {   // CRM_UNIFY_V1
+      if (!args.settings || typeof args.settings !== 'object' || Array.isArray(args.settings)) {
+        throw new CrmConfigError('Ожидались настройки CRM-канбана.');
+      }
+      out.settings = saveCrmSettings(db, args.settings, actorId);
+    }
   })();
   // Always the full picture back, not just what was sent: saving columns can
   // change routing (a hidden column switches its rules off), and a screen that

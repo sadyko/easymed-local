@@ -26,9 +26,10 @@
 import { hasAnyRole } from '../roles.js';
 import { today } from '../domain/day.js';
 import {
-  isPreArrival, visitHasWork, insertBookingLine, mirrorVisit, attachVisitToCrm, arrivedByEvidence, lineKey,
+  isPreArrival, visitHasWork, insertBookingLine, mirrorVisit, arrivedByEvidence, lineKey,
   bookingLineRefusal,
 } from '../crm/booking-mirror.js';
+import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
 import { localDate } from '../domain/day.js';
 
 export class RpcError extends Error {
@@ -115,8 +116,9 @@ export function bookingLinesAdd(db, args, user) {
     return { visit_id: visitId, added, skipped };
   });
   const out = run();
-  // Запись без заявки получает её (колл-центр), строки заявки — сами.
-  attachVisitToCrm(db, visitId, user);
+  // Запись связывается с заявкой пациента (колл-центру без неё — новая),
+  // строки заявки — сами.
+  crmLinkVisit(db, visitId, user);   // CRM_UNIFY_V1
   mirrorVisit(db, visitId, { actorId: user && user.id });
   return out;
 }

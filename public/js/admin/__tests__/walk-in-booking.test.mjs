@@ -473,3 +473,30 @@ test('ЛИЧНАЯ ЦЕНА ВРАЧА: строка и экран — та же
   const rows = all('SELECT unit_price FROM visit_services WHERE visit_id = ? ORDER BY id', out.visit.id);
   assert.deepEqual(rows.map((r) => r.unit_price), [150000, 40000]);
 });
+
+// CRM_UNIFY_V1 — «пришёл сейчас» говорит серверу desk: true, и карточка звонившего
+// закрывается в «Пришёл» сразу, ещё до оплаты (решение владельца 1). Карточка,
+// записанная на другой день, закрывается тоже (первый приход закрывает), а её
+// строка того дня остаётся записью.
+test('CRM_UNIFY_V1: регистрация «пришёл сейчас» закрывает карточку звонившего в «Пришёл»', async () => {
+  seed();
+  DB.prepare("UPDATE patients SET phone = '+998 90 909 26 38' WHERE id = ?").run(PATIENT);
+  const lead = Number(DB.prepare("INSERT INTO crm_requests (full_name, phone, status) VALUES ('909092638','909092638','in_process')").run().lastInsertRowid);
+  await registerWalkIn({ patientId: PATIENT, lines: [{ service: svc(LAB), doctorId: DOCTOR }], createdBy: USER.id });
+  const r = one('SELECT status, patient_id FROM crm_requests WHERE id = ?', lead);
+  assert.equal(r.patient_id, PATIENT, 'лид из звонка не узнал пациента по номеру');
+  assert.equal(r.status, 'came', 'регистратор зарегистрировал звонившего — карточка не в «Пришёл»');
+});
+
+test('CRM_UNIFY_V1: «пришёл сейчас» закрывает карточку, записанную на другой день; строка того дня остаётся', async () => {
+  seed();
+  const later = one("SELECT date('now','localtime','+3 days') d").d;
+  const lead = Number(DB.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date) VALUES ('Иванов','',?,?,?)")
+    .run('scheduled', PATIENT, later).lastInsertRowid);
+  const line = Number(DB.prepare("INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status) VALUES (?,?,?,'pending')")
+    .run(lead, LAB, later).lastInsertRowid);
+  await registerWalkIn({ patientId: PATIENT, lines: [{ service: svc(CONSULT), doctorId: DOCTOR }], createdBy: USER.id });
+  assert.equal(one('SELECT status FROM crm_requests WHERE id = ?', lead).status, 'came', 'первый приход не закрыл карточку');
+  assert.deepEqual(one('SELECT status, visit_id FROM crm_request_services WHERE id = ?', line), { status: 'pending', visit_id: null },
+    'строка другого дня закрылась сегодняшним приходом');
+});

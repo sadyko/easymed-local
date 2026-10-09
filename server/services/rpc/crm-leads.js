@@ -80,7 +80,8 @@ export function crmLeadsByPhone(db, args, user) {
 }
 
 // ---------------------------------------------------------------------------
-// crm_search { q, limit? } — поиск по ВСЕМ заявкам, а не по загруженным.
+// crm_search { q, limit?, assigned? } — поиск по ВСЕМ заявкам, а не по загруженным.
+// CRM_UNIFY_V1 — assigned: фильтр «Оператор» доски (ownerFilter ниже).
 //
 // Доска грузит последние 800 заявок (views/crm.js load()), и в базе клиники
 // 1 191 карточка старше их не находилась поиском никогда. Правило совпадения —
@@ -93,6 +94,21 @@ export function crmLeadsByPhone(db, args, user) {
 // Чужие заявки оператору не отдаются (CRM_OWNERSHIP_V1), как и через /api/db.
 // ---------------------------------------------------------------------------
 const SEARCH_LIMIT = 200;
+
+/**
+ * CRM_UNIFY_V1 (задача 9) — фильтр «Оператор» (Р15): 'all' (или не задан) | 'me' |
+ * 'none' | номер сотрудника. Работает ПОВЕРХ видимости, а не вместо неё: чужую
+ * карточку оператору не отдаёт никакой фильтр. Непонятное значение не
+ * расширяет выдачу — оно ничего не находит.
+ */
+export function ownerFilter(assigned, user) {
+  if (assigned === undefined || assigned === null || assigned === '' || assigned === 'all') return () => true;
+  if (assigned === 'none') return (r) => r.assigned_to == null;
+  if (assigned === 'me') return (r) => r.assigned_to != null && Number(r.assigned_to) === Number(user && user.id);
+  const id = Number(assigned);
+  if (Number.isInteger(id) && id > 0) return (r) => r.assigned_to != null && Number(r.assigned_to) === id;
+  return () => false;
+}
 
 export function crmSearch(db, args, user) {
   requireBoardRead(user);
@@ -115,8 +131,10 @@ export function crmSearch(db, args, user) {
      ORDER BY r.id DESC`).all(...(byPhone ? [pattern] : []));
   const ids = [];
   const lifted = canSeeAllLeads(db, user);   // ревью I4 — один раз на запрос, а не на строку
+  const wantOwner = ownerFilter(args && args.assigned, user);   // CRM_UNIFY_V1 — фильтр «Оператор»
   for (const r of cand) {
     if (!leadVisibleTo(db, user, r.assigned_to, { lifted })) continue;
+    if (!wantOwner(r)) continue;   // CRM_UNIFY_V1
     if (!leadMatchesQuery(r, q)) continue;
     ids.push(r.id);
     if (ids.length >= limit) break;

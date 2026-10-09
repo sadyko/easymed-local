@@ -115,7 +115,11 @@ test('карточка доски — тег на каждый источник;
 
   root = await board('list');
   const cells = byAttr(root, 'data-list-sources').map(textOf);
-  assert.deepEqual(cells, ['Instagram, Рекомендация', 'Instagram', 'Звонок', 'Telegram, Звонок']);
+  // CRM_UNIFY_V1 — доска грузится несколькими запросами (открытые / закрытые по
+  // колонкам, views/crm-board-load.js) и сводит их по убыванию номера — тем же
+  // порядком, что сервер отдавал и раньше (order id desc). Прежний стенд порядок
+  // не применял, и список шёл порядком посева.
+  assert.deepEqual(cells, ['Telegram, Звонок', 'Звонок', 'Instagram', 'Instagram, Рекомендация']);
 
   const aoa = crmExcelRows(LEADS);
   const col = aoa[0].indexOf('Источник');
@@ -209,14 +213,41 @@ test('«Отчёт»: заявка с двумя источниками — в �
   window.easymed.state.user = null;
 });
 
+// CRM_UNIFY_V1 (задача 8) — «Отчёт» считает заявки по базе своим лёгким запросом
+// за свой период, а не то, что загрузила доска (Р14).
+test('CRM_UNIFY_V1: «Отчёт» спрашивает базу за свой период; смена периода — новый запрос', async () => {
+  const root = await board();
+  document.body.children.length = 0;
+  CALLS.length = 0;
+  button(root, /Отчёт/).click();
+  await tick(60);
+  const isReport = (c) => c.table === 'crm_requests' && c.op === 'select' && c.columns === 'id, status, source, sources, created_at, assigned_to';
+  const q = CALLS.find(isReport);
+  assert.ok(q, 'отчёт считает загруженное на доску, а не базу');
+  assert.ok((q.filters || []).some((f) => f.col === 'created_at' && f.op === 'gte'), 'период отчёта (30 дней) не ушёл в запрос');
+  const modal = document.body.children.find((n) => String(n.className).includes('modal'));
+  CALLS.length = 0;
+  walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n) === 'Всё время').click();
+  await tick(60);
+  const q2 = CALLS.find(isReport);
+  assert.ok(q2 && !(q2.filters || []).some((f) => f.col === 'created_at'), '«Всё время» в отчёте обрезано датой');
+  // отчёт считает ответ базы: стенд отдаёт те же четыре заявки
+  assert.deepEqual(byAttr(modal, 'data-src-total')[0].children.map(textOf), ['Всего', '4', '1', '25%']);
+  window.easymed.state.user = null;
+});
+
 // Ревью M1 — отмеченный скрытый источник, у которого в новом периоде нет ни
 // одной заявки, пропадал из ряда: доска пустая, ни один чип не отмечен, и
 // снять отметку нечем. Отмеченный источник рисуется всегда (с нулём).
+// CRM_UNIFY_V1 (итоговое ревью) — ОБНОВЛЕНО НАМЕРЕННО: «Период» больше не
+// прячет ОТКРЫТЫЕ карточки (решение контролёра: владелец — «карточки
+// пропадают»), он сужает только закрытые колонки. Поэтому случай «в периоде
+// заявок этого источника нет» строится на закрытых карточках («Пришёл»).
 test('ревью M1: отмеченный источник остаётся в ряду с нулём, когда в периоде его заявок нет, — и снимается', async () => {
   const old = new Date(Date.now() - 40 * 86400000).toISOString();
   const leads = [
-    { id: 11, full_name: 'Старая Telegram', phone: '+998905556677', status: 'in_process', source: 'telegram', sources: ['telegram'], created_at: old },
-    { id: 12, full_name: 'Свежая Instagram', phone: '+998906667788', status: 'in_process', source: 'instagram', sources: null, created_at: now },
+    { id: 11, full_name: 'Старая Telegram', phone: '+998905556677', status: 'came', source: 'telegram', sources: ['telegram'], created_at: old },
+    { id: 12, full_name: 'Свежая Instagram', phone: '+998906667788', status: 'came', source: 'instagram', sources: null, created_at: now },
   ];
   const root = await board('kanban', leads);
   const period = (re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
@@ -225,7 +256,7 @@ test('ревью M1: отмеченный источник остаётся в �
     await tick();
     assert.equal(cards(root).length, 1);
     period(/^30 дней$/).click();
-    await tick();
+    await tick(80);
     const tg = chipOf(root, 'telegram');
     assert.ok(tg, 'отмеченный «Telegram» пропал из ряда — снять отметку нечем');
     assert.equal(textOf(tg), 'Telegram · 0');
@@ -237,7 +268,7 @@ test('ревью M1: отмеченный источник остаётся в �
     assert.ok(!chipOf(root, 'telegram'), 'неотмеченный источник без заявок в периоде нарисован');
   } finally {
     period(/^Всё время$/).click();
-    await tick();
+    await tick(80);
     window.easymed.state.user = null;
   }
 });

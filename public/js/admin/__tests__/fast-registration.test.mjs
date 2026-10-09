@@ -504,8 +504,12 @@ test('сохранение: пациент → визит → строки с в
   // воронки (какие ступени живые), а проверяется здесь порядок ЗАПИСЕЙ.
   const chain = calls.filter((c) => c.kind !== 'select' && c.name !== 'crm_config_get')
     .map((c) => (c.kind === 'rpc' ? 'rpc:' + c.name : 'insert:' + c.table));
+  // CRM_UNIFY_V1 — новая карта сразу спрашивает сервер о заявке колл-центра с
+  // её номером (crm_link_new_patient в savePatient) — ДО визита: шаг связи
+  // визита и смета должны уже видеть эту заявку по карте.
   assert.deepStrictEqual(chain, [
     'insert:patients',
+    'rpc:crm_link_new_patient',
     'rpc:ensure_visit',
     'rpc:service_price_quote',
     'insert:visit_services',
@@ -1190,6 +1194,10 @@ test('окно быстрой регистрации не пишет в CRM са
   assert.strictEqual(visit.body.patient_id, 501, 'визит заведён не на этого пациента — закроется чужая заявка');
   assert.match(String(visit.body.date), /^\d{4}-\d{2}-\d{2}/,
     'визит заведён без дня: по дню сервер и отбирает строки заявки — ' + JSON.stringify(visit.body));
+  // CRM_UNIFY_V1 — регистрация на стойке = «Пришёл» (решение владельца 1): окно
+  // говорит серверу desk: true, и записи на время (book) у него нет.
+  assert.strictEqual(visit.body.desk, true, 'быстрая регистрация не сказала серверу, что пациент у стойки');
+  assert.ok(!('book' in visit.body), 'регистрация на стойке ушла записью на время');
 
   assert.ok(!calls.some((c) => c.table === 'crm_request_services'),
     'окно снова ходит в crm_request_services само: закрытие строк живёт на сервере, в той же транзакции, что и визит');

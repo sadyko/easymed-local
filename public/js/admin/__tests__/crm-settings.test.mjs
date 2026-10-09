@@ -330,7 +330,11 @@ test('маршрут звонков уехал в «Телефонию» — н�
                       'Правила работают, только пока подключён модуль']) {
     assert.ok(!text.includes(gone), 'осталось от карточки маршрута: ' + gone);
   }
-  assert.strictEqual(findSelects(root).length, 0, 'выпадающих списков на этом экране больше нет вовсе');
+  // CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО: выпадающие списки на экране снова есть,
+  // но только два — «Колонка записи» и «Колонка конверсии» карточки «Запись и
+  // повторные обращения». Ни один из них не пишет routing.
+  assert.deepStrictEqual(findSelects(root).map((s) => Object.keys(s.attrs).filter((k) => k.startsWith('data-crm-')).join()),
+    ['data-crm-booked-stage', 'data-crm-won-stage'], 'на экране появился выпадающий список маршрута звонков');
   assert.strictEqual(findAllButtons(root).filter((b) => /маршрут|телефон/i.test(textOf(b))).length, 0,
     'и ни одной кнопки, которая писала бы routing');
 });
@@ -424,3 +428,170 @@ test('«Метки»: пришедшие с сервера — с цветом, 
   await tick();
   assert.deepStrictEqual(lastSaveBody.tags.map((t) => [t.key, t.label, t.color]), [['vip', 'VIP-клиент', 'purple']]);
 });
+
+// ---------------------------------------------------------------------------
+// CRM_UNIFY_V1 (2026-10-09) — «Запись и повторные обращения»: колонка записи и
+// колонка конверсии (дополнение владельца). Браузер предлагает только
+// допустимые варианты — по тому же правилу, что проверяет сервер
+// (public/js/shared/crm-booked-stage.js).
+// ---------------------------------------------------------------------------
+const bookedSel = (root) => walk(root).find((n) => n.tagName === 'SELECT' && 'data-crm-booked-stage' in n.attrs);
+const wonSel = (root) => walk(root).find((n) => n.tagName === 'SELECT' && 'data-crm-won-stage' in n.attrs);
+const optionValues = (sel) => walk(sel).filter((n) => n.tagName === 'OPTION').map((o) => o.value);
+const change = (sel, value) => { sel.value = value; sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel }); };
+
+test('CRM_UNIFY_V1: колонка записи — только открытые видимые до «Пришёл»; сохранение шлёт settings', async () => {
+  resetServer();
+  const root = await render();
+  assert.ok(textOf(root).includes('Запись и повторные обращения'), 'нет карточки настроек записи');
+  const sel = bookedSel(root);
+  assert.ok(sel, 'нет поля «Колонка записи»');
+  assert.deepStrictEqual(optionValues(sel), ['', 'in_process', 'recall'],
+    'в выборе колонка после «Пришёл», скрытая или проигрышная');
+  assert.ok(textOf(sel).includes('По умолчанию — «Перезвонить»'));
+  assert.strictEqual(sel.value, '', 'выбор не сделан — стоит правило по умолчанию');
+  change(sel, 'in_process');
+  assert.ok(textOf(root).includes('Изменения не сохранены'), 'выбор сделан, а экран молчит, что его надо сохранить');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  // CRM_UNIFY_V1 (задача 6) — ОБНОВЛЕНО НАМЕРЕННО: окно повторного обращения
+  // уходит с каждым сохранением карточки (72 — значение по умолчанию).
+  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: 'in_process', window_hours: 72 } },
+    'конверсию не меняли — её и не шлём');
+  assert.strictEqual(lastToast(), 'Настройки сохранены.');
+});
+
+test('CRM_UNIFY_V1: колонка конверсии — без проигрышных, скрытых и без колонки, перед которой некуда записывать', async () => {
+  resetServer();
+  const root = await render();
+  const won = wonSel(root);
+  assert.ok(won, 'нет поля «Колонка конверсии»');
+  // «В обработке» — первая: перед ней нет колонки для записанных. «Нецелевой» — проигрышная и скрытая.
+  assert.deepStrictEqual(optionValues(won), ['recall', 'came']);
+  assert.strictEqual(won.value, 'came', 'поле не показывает нынешнюю конверсию');
+  // CRM_UNIFY_V1 (ревью задачи 4) — новая колонка пустая, история переезжает в неё.
+  assert.ok(textOf(root).includes('Выбрать можно только пустую колонку'), 'нет подсказки о правиле переноса конверсии');
+
+  // Конверсия «Перезвонить»: колонка записи пересчитана от неё.
+  const booked = bookedSel(root);
+  change(booked, 'recall');
+  change(won, 'recall');
+  assert.deepStrictEqual(optionValues(bookedSel(root)), ['', 'in_process'], 'колонка записи предлагается на месте конверсии или после неё');
+  assert.strictEqual(bookedSel(root).value, '', 'выбор «Перезвонить» стал недопустимым и не сброшен');
+  assert.ok(textOf(bookedSel(root)).includes('По умолчанию — «В обработке»'));
+  assert.ok(textOf(root).includes('до «Перезвонить»'), 'подсказка колонки записи не знает новой конверсии');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  // CRM_UNIFY_V1 (задача 6) — ОБНОВЛЕНО НАМЕРЕННО: и окно повторного обращения.
+  // CRM_UNIFY_V1 (итоговое ревью, S3) — ОБНОВЛЕНО НАМЕРЕННО: колонка записи
+  // уходит, только если её действительно сменили; здесь сохранённое «по
+  // умолчанию» так и осталось «по умолчанию» — слать null незачем.
+  assert.deepStrictEqual(lastSaveBody, { settings: { window_hours: 72, won_stage: 'recall' } });
+});
+
+test('CRM_UNIFY_V1: отказ сервера — его фраза, экран не перерисован догадкой', async () => {
+  resetServer();
+  saveRespond = () => jsonErr({ message: 'Проигрышная колонка не может быть колонкой конверсии.' }, 400);
+  const root = await render();
+  change(wonSel(root), 'recall');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.strictEqual(lastToast(), 'Проигрышная колонка не может быть колонкой конверсии.');
+  assert.strictEqual(getCalls, 1);
+});
+
+// ---------------------------------------------------------------------------
+// CRM_UNIFY_V1 (задача 6) — окно повторного обращения (решение владельца 4):
+// настройка «CRM-канбан», crm_settings.window_hours, по умолчанию 72.
+// ---------------------------------------------------------------------------
+const hoursInput = (root) => walk(root).find((n) => n.tagName === 'INPUT' && 'data-crm-window-hours' in n.attrs);
+const typeHours = (el, v) => { el.value = v; el.dispatchEvent({ type: 'input', target: el, currentTarget: el }); };
+
+test('CRM_UNIFY_V1: окно повторного обращения — 72 по умолчанию, уходит вместе с колонкой записи', async () => {
+  resetServer();
+  const root = await render();
+  const hours = hoursInput(root);
+  assert.ok(hours, 'нет поля окна');
+  assert.strictEqual(hours.value, '72');
+  assert.strictEqual(hours.attrs.type, 'number');
+  assert.ok(textOf(root).includes('Окно повторного обращения, часов'));
+  assert.ok(textOf(root).includes('Звонок или запись в пределах окна — та же карточка.'), 'нет подсказки о правиле окна');
+  assert.ok(!textOf(root).includes('Изменения не сохранены'), 'свежий экран кричит о несохранённом');
+  typeHours(hours, '48');
+  assert.ok(textOf(root).includes('Изменения не сохранены'), 'окно изменили, а экран молчит');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  // CRM_UNIFY_V1 (итоговое ревью, S3) — ОБНОВЛЕНО НАМЕРЕННО: колонку записи не
+  // трогали — её и не шлём (раньше уходил booked_stage: null).
+  assert.deepStrictEqual(lastSaveBody, { settings: { window_hours: 48 } });
+  assert.strictEqual(lastToast(), 'Настройки сохранены.');
+});
+
+test('CRM_UNIFY_V1: окно — значение с сервера; вернули прежнее — экран больше не просит сохранить', async () => {
+  resetServer();
+  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: null, window_hours: 24 } });
+  const root = await render();
+  const hours = hoursInput(root);
+  assert.strictEqual(hours.value, '24');
+  typeHours(hours, '30');
+  assert.ok(textOf(root).includes('Изменения не сохранены'));
+  typeHours(hours, '24');
+  assert.ok(!textOf(root).includes('Изменения не сохранены'), 'вернули прежнее окно, а экран всё ещё просит сохранить');
+});
+
+test('CRM_UNIFY_V1: окно не целое или вне 1–720 — отказ до обращения к серверу', async () => {
+  for (const bad of ['0', '721', '1.5', '', 'abc']) {
+    resetServer();
+    const root = await render();
+    typeHours(hoursInput(root), bad);
+    findButtonByText(root, /Сохранить настройки/).click();
+    await tick();
+    assert.strictEqual(saveCalls, 0, 'ушло на сервер: ' + JSON.stringify(bad));
+    assert.strictEqual(lastToast(), 'Окно повторного обращения — целое число часов от 1 до 720.', JSON.stringify(bad));
+  }
+});
+
+// CRM_UNIFY_V1 (итоговое ревью, S3) — конверсию сменили туда и обратно: выбор
+// колонки записи, сделанный человеком, помнится; сохранение одного окна не
+// сбрасывает колонку записи в «по умолчанию».
+test('CRM_UNIFY_V1 S3: конверсия туда и обратно — выбор колонки записи на месте; правка окна не шлёт booked_stage', async () => {
+  resetServer();
+  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'in_process', window_hours: 72 } });
+  saveRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'in_process', window_hours: 48 } });
+  const root = await render();
+  assert.strictEqual(bookedSel(root).value, 'in_process');
+  change(wonSel(root), 'recall');
+  assert.strictEqual(bookedSel(root).value, 'in_process', 'выбор «В обработке» до «Перезвонить» допустим и пропал');
+  // выбор пользователя — «Перезвонить», затем конверсия «Перезвонить» делает его недопустимым
+  change(wonSel(root), 'came');
+  change(bookedSel(root), 'recall');
+  change(wonSel(root), 'recall');
+  assert.strictEqual(bookedSel(root).value, '', 'недопустимый выбор показан');
+  change(wonSel(root), 'came');
+  assert.strictEqual(bookedSel(root).value, 'recall', 'конверсию вернули — выбор человека забыт');
+  // вернули всё как было — экран не просит сохранить
+  change(bookedSel(root), 'in_process');
+  assert.ok(!textOf(root).includes('Изменения не сохранены'), 'всё как было, а экран просит сохранить');
+  typeHours(hoursInput(root), '48');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.deepStrictEqual(lastSaveBody, { settings: { window_hours: 48 } }, 'правка окна сбросила колонку записи');
+});
+
+test('CRM_UNIFY_V1 S3: человек сам выбрал «по умолчанию» — уходит null; выбор стал недопустимым — уходит null', async () => {
+  resetServer();
+  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'recall', window_hours: 72 } });
+  let root = await render();
+  change(bookedSel(root), '');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 72 } });
+  resetServer();
+  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'recall', window_hours: 72 } });
+  root = await render();
+  change(wonSel(root), 'recall');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 72, won_stage: 'recall' } });
+});
+

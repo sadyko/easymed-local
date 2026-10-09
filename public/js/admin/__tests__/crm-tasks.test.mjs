@@ -7,10 +7,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, mk, walk, textOf, byClass, byAttr, tick, TOASTS } from './crm-harness.mjs';
-import { isOverdue, nearestOpenTasks, localDueIso, nowIso, overdueTaskCount, DEFAULT_DUE_TIME } from '../views/crm-tasks.js';
+import { S, CALLS, RPC, mk, walk, textOf, byClass, byAttr, tick, TOASTS } from './crm-harness.mjs';
+import { isOverdue, nearestOpenTasks, localDueIso, nowIso, overdueTaskCount, DEFAULT_DUE_TIME, TASK_LIST_SELECT } from '../views/crm-tasks.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const { renderCrm } = await import('../views/crm.js');
+const { renderCrm, openCrmTasks } = await import('../views/crm.js');
 
 const ADMIN = { id: 7, full_name: 'Админ', role: 'admin', is_admin: true };
 const LOLA = { id: 12, full_name: 'Оператор Лола', role: 'callcenter' };
@@ -89,6 +92,8 @@ test('у новой заявки задач нет — задаче не к че
 });
 
 test('создать: текст, дата без ограничения сверху, время, ответственный по умолчанию — оператор заявки', async () => {
+  // CRM_UNIFY_V1 — список ответственных приходит от сервера (crm_task_assignees).
+  S.assignees = [{ id: 12, full_name: 'Оператор Лола' }];
   S.tasks = []; CALLS.length = 0;
   const { modal } = await openCard(ADMIN);
   const date = one(modal, 'data-task-date');
@@ -128,16 +133,79 @@ test('без текста или без даты — отказ словами, 
   assert.ok(TOASTS.some((t) => t.includes('Укажите дату задачи.')));
 });
 
-test('у заявки без оператора ответственный по умолчанию — я', async () => {
-  S.tasks = [];
+// CRM_UNIFY_V1 — ПРАВИЛО ИЗМЕНЕНО НАМЕРЕННО: раньше у заявки без оператора
+// ответственным по умолчанию становился «я» — администратор и руководитель
+// ставили задачи себе. Теперь у ничьей карточки выбор обязателен, а список
+// людей — от сервера (crm_task_assignees): только те, кто может вести карточку.
+test('CRM_UNIFY_V1: у ничьей карточки ответственный не выбран; без выбора задача не создаётся', async () => {
+  S.tasks = []; CALLS.length = 0; TOASTS.length = 0;
+  S.assignees = [{ id: 7, full_name: 'Админ' }, { id: 12, full_name: 'Оператор Лола' }];
   const { modal } = await openCard(LOLA, { ...LEAD, assigned_to: null, users: null });
-  assert.equal(one(modal, 'data-task-who').value, '12');
+  await tick(30);
+  assert.equal(one(modal, 'data-task-who').value, '', 'у ничьей карточки ответственный снова «я»');
+  const first = walk(one(modal, 'data-task-who')).find((n) => n.tagName === 'OPTION');
+  assert.ok(textOf(first).includes('— выберите ответственного —'));
+  one(modal, 'data-task-text').value = 'Перезвонить';
+  one(modal, 'data-task-date').value = '2099-01-01';
+  one(modal, 'data-task-add').click();
+  await tick(30);
+  assert.ok(TOASTS.some((t) => t.includes('Выберите ответственного.')));
+  assert.equal(CALLS.filter((c) => c.table === 'crm_tasks' && c.op === 'insert').length, 0, 'задача создана без ответственного');
+  // выбрал — создаётся
+  const who = one(modal, 'data-task-who');
+  who.value = '7';
+  who.dispatchEvent({ type: 'change', target: who, currentTarget: who });
+  one(modal, 'data-task-add').click();
+  await tick(60);
+  const ins = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'insert');
+  assert.ok(ins, 'задача с выбранным ответственным не ушла');
+  assert.equal(ins.values.assignee_id, 7);
+});
+
+test('CRM_UNIFY_V1: список ответственных — ровно ответ сервера (кто может вести карточку)', async () => {
+  S.tasks = []; RPC.length = 0;
+  S.assignees = [{ id: 12, full_name: 'Оператор Лола' }, { id: 24, full_name: 'Руководитель' }];
+  const { modal } = await openCard(ADMIN);
+  await tick(30);
+  const opts = walk(one(modal, 'data-task-who')).filter((n) => n.tagName === 'OPTION').map((o) => o.value);
+  assert.deepEqual(opts, ['', '12', '24'], 'в списке «я» или кто-то, кого сервер не предлагал');
+  assert.equal(one(modal, 'data-task-who').value, '12', 'по умолчанию не оператор карточки');
+  assert.ok(RPC.some((r) => r.name === 'crm_task_assignees' && r.body.request_id === 1));
+});
+
+test('CRM_UNIFY_V1: оператор карточки, который вести её не может, по умолчанию не ставится', async () => {
+  S.tasks = [];
+  S.assignees = [{ id: 24, full_name: 'Руководитель' }];   // Лолы (12) в ответе нет — уволена или «просмотр»
+  const { modal } = await openCard(ADMIN);
+  await tick(30);
+  assert.equal(one(modal, 'data-task-who').value, '', 'по умолчанию стоит тот, кого сервер не предлагает');
+});
+
+test('CRM_UNIFY_V1: список ответственных не загрузился — понятное сообщение, задачу не поставить с угаданным ответственным', async () => {
+  S.tasks = []; CALLS.length = 0; TOASTS.length = 0;
+  S.assignees = [{ id: 12, full_name: 'Оператор Лола' }];
+  S.assigneesError = 'сбой сети';
+  try {
+    const { modal } = await openCard(ADMIN);
+    await tick(30);
+    const who = one(modal, 'data-task-who');
+    assert.equal(who.value, '', 'ответственный угадан без ответа сервера');
+    assert.ok(who.disabled, 'поле «Ответственный» доступно без списка');
+    const note = one(modal, 'data-task-who-error');
+    assert.ok(note && textOf(note).includes('Список ответственных не загрузился'), 'нет сообщения о сбое');
+    one(modal, 'data-task-text').value = 'Перезвонить';
+    one(modal, 'data-task-date').value = '2099-01-01';
+    one(modal, 'data-task-add').click();
+    await tick(30);
+    assert.equal(CALLS.filter((c) => c.table === 'crm_tasks' && c.op === 'insert').length, 0, 'задача ушла с угаданным ответственным');
+    assert.ok(TOASTS.some((t) => t.includes('Список ответственных не загрузился')));
+  } finally { S.assigneesError = null; }
 });
 
 test('просроченная задача — предупреждающий стиль в окне и метка на доске', async () => {
   S.tasks = [
-    { id: 50, request_id: 1, text: 'Уточнить анализы', due_at: PAST, assignee_id: 12, done_at: null },
-    { id: 51, request_id: 1, text: 'Напомнить о приёме', due_at: FUTURE, assignee_id: 12, done_at: null },
+    { id: 50, request_id: 1, text: 'Уточнить анализы', due_at: PAST, assignee_id: 12, done_at: null, users: { full_name: 'Оператор Лола' } },
+    { id: 51, request_id: 1, text: 'Напомнить о приёме', due_at: FUTURE, assignee_id: 12, done_at: null, users: { full_name: 'Оператор Лола' } },
   ];
   const { root, modal } = await openCard(ADMIN);
   const rows = taskRows(modal);
@@ -149,7 +217,8 @@ test('просроченная задача — предупреждающий �
   assert.ok(!String(ok.className).includes('crm-task-overdue'));
   const chip = byClass(root, 'crm-card-task');
   assert.equal(chip.length, 1);
-  assert.ok(textOf(chip[0]).includes('задача: Уточнить анализы'), 'на доске не ближайшая задача');
+  // CRM_UNIFY_V1 — чип называет, чья задача (было «задача: …» без исполнителя).
+  assert.ok(textOf(chip[0]).includes('задача (Оператор Лола): Уточнить анализы'), 'на доске не ближайшая задача или не назван исполнитель');
   assert.ok(String(chip[0].className).includes('crm-card-task-late'));
 });
 
@@ -187,6 +256,8 @@ test('удалить может только администратор', async 
   assert.equal(taskRows(modal).length, 0);
 });
 
+// CRM_UNIFY_V1 — старая подпись { me, isAdmin } оставлена для совместимости;
+// внутри — тот же taskQuery, что у вида «Задачи» (проверка ниже).
 test('счётчик меню: оператору — свои просроченные, администратору — все', async () => {
   S.tasks = [
     { id: 1, request_id: 1, text: 'a', due_at: PAST, assignee_id: 12, done_at: null },
@@ -204,3 +275,120 @@ test('счётчик меню: оператору — свои просроче�
   assert.equal(await overdueTaskCount({ me: 7, isAdmin: true }), 3);
   assert.equal(await overdueTaskCount({ me: null, isAdmin: false }), null, 'без «кто я» число выдумано');
 });
+
+// ---------------------------------------------------------------------------
+// CRM_UNIFY_V1 (задача 13) — счётчик и вид «Задачи» — одно правило (taskQuery);
+// чип называет исполнителя, своя задача первой; колонка «Задача» в «Списке».
+// ---------------------------------------------------------------------------
+test('CRM_UNIFY_V1: счётчик — тот же запрос, что у вида «Задачи»: «мои» и «все»', async () => {
+  S.tasks = [
+    { id: 1, request_id: 1, text: 'a', due_at: PAST, assignee_id: 12, done_at: null },
+    { id: 2, request_id: 1, text: 'b', due_at: PAST, assignee_id: 12, done_at: null },
+    { id: 3, request_id: 1, text: 'c', due_at: FUTURE, assignee_id: 12, done_at: null },
+    { id: 4, request_id: 1, text: 'd', due_at: PAST, assignee_id: 13, done_at: null },
+  ];
+  CALLS.length = 0;
+  assert.equal(await overdueTaskCount({ who: 'me', me: 12 }), 2);
+  const q = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'select');
+  assert.equal(q.count, 'exact');
+  assert.deepEqual(q.filters.filter((f) => f.col !== 'due_at'),
+    [{ col: 'done_at', op: 'is', val: null }, { col: 'assignee_id', op: 'eq', val: 12 }], 'отбор счётчика разошёлся с видом');
+  assert.ok(q.filters.some((f) => f.col === 'due_at' && f.op === 'lte'));
+  assert.equal(await overdueTaskCount({ who: 'all', me: 7 }), 3);
+  assert.equal(await overdueTaskCount({ who: 'me', me: null }), null);
+});
+
+test('CRM_UNIFY_V1: ближайшая задача карточки — сначала своя, потом по сроку', () => {
+  const m = nearestOpenTasks([
+    { id: 1, request_id: 5, due_at: '2026-10-01T09:00:00Z', assignee_id: 22 },
+    { id: 2, request_id: 5, due_at: '2026-10-05T09:00:00Z', assignee_id: 21 },
+    { id: 3, request_id: 5, due_at: '2026-10-07T09:00:00Z', assignee_id: 21 },
+  ], 21);
+  assert.equal(m.get('5').id, 2);
+  assert.equal(nearestOpenTasks([{ id: 1, request_id: 5, due_at: '2026-10-01T09:00:00Z', assignee_id: 22 }], 21).get('5').id, 1);
+  assert.equal(nearestOpenTasks([
+    { id: 1, request_id: 5, due_at: '2026-10-01T09:00:00Z', assignee_id: 22 },
+    { id: 2, request_id: 5, due_at: '2026-10-05T09:00:00Z', assignee_id: 21 },
+  ]).get('5').id, 1, 'без «кто я» — просто ближайшая');
+});
+
+test('CRM_UNIFY_V1: чип называет исполнителя; своя — «вы» и первой; без исполнителя — как раньше', async () => {
+  S.tasks = [
+    { id: 80, request_id: 1, text: 'Чужая раньше', due_at: PAST, assignee_id: 24, done_at: null, users: { full_name: 'Руководитель' } },
+    { id: 81, request_id: 1, text: 'Своя позже', due_at: FUTURE, assignee_id: 12, done_at: null, users: { full_name: 'Оператор Лола' } },
+  ];
+  let root = await board(LOLA);
+  let chip = byClass(root, 'crm-card-task')[0];
+  assert.ok(textOf(chip).includes('задача (вы): Своя позже'), 'своя задача не первой или не «вы»: ' + textOf(chip));
+  root = await board(ADMIN);
+  chip = byClass(root, 'crm-card-task')[0];
+  assert.ok(textOf(chip).includes('задача (Руководитель): Чужая раньше'), textOf(chip));
+  S.tasks = [{ id: 82, request_id: 1, text: 'Ничья', due_at: FUTURE, assignee_id: null, done_at: null }];
+  root = await board(ADMIN);
+  chip = byClass(root, 'crm-card-task')[0];
+  assert.ok(textOf(chip).includes('задача: Ничья'), textOf(chip));
+  // загрузка меток спрашивает, чья задача
+  CALLS.length = 0;
+  await board(ADMIN);
+  // CRM_UNIFY_V1 (итоговое ревью) — ОБНОВЛЕНО НАМЕРЕННО: метки грузятся двумя
+  // запросами с числом (со сроком / без срока, loadTaskRows) — ищем по колонкам.
+  const q = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'select' && !String(c.columns).includes('crm_requests('));
+  assert.ok(q && /users\(full_name\)/.test(q.columns), 'метки задач грузятся без исполнителя');
+});
+
+test('CRM_UNIFY_V1: «Список» — колонка «Задача» говорит то же, что чип', async () => {
+  S.tasks = [{ id: 90, request_id: 1, text: 'Перезвонить вечером', due_at: FUTURE, assignee_id: 12, done_at: null, users: { full_name: 'Оператор Лола' } }];
+  window.easymed.state.user = ADMIN;
+  S.leads = [LEAD, { ...LEAD, id: 2, full_name: 'Без задач', phone: '+998901112233' }];
+  document.body.children.length = 0;
+  const root = mk('div');
+  await renderCrm(root, { onNavigate() {} });
+  await tick();
+  walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'list').click();
+  await tick(60);
+  const heads = walk(root).filter((n) => n.tagName === 'TH').map(textOf);
+  assert.ok(heads.includes('Задача'), 'в списке нет колонки «Задача»');
+  const cells = byAttr(root, 'data-list-task');
+  assert.equal(cells.length, 2);
+  assert.ok(cells.some((c) => textOf(c).includes('задача (Оператор Лола): Перезвонить вечером')));
+  assert.ok(cells.some((c) => textOf(c).trim() === '—'));
+  window.easymed.state.user = null;
+});
+
+test('CRM_UNIFY_V1: красный счётчик открывает «Задачи» с тем же отбором (openCrmTasks)', async () => {
+  window.easymed.state.user = ADMIN;
+  S.leads = [LEAD];
+  S.tasks = [{ id: 95, request_id: 1, text: 'Просрочена', due_at: PAST, assignee_id: 12, done_at: null,
+    crm_requests: { id: 1, full_name: 'Каримова Азиза', phone: '901', status: 'in_process', assigned_to: 12 }, users: { full_name: 'Оператор Лола' } }];
+  document.body.children.length = 0;
+  const root = mk('div');
+  await renderCrm(root, { onNavigate() {} });
+  await tick();
+  CALLS.length = 0;
+  openCrmTasks('all');
+  await tick(80);
+  const q = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'select' && c.columns === TASK_LIST_SELECT);
+  assert.ok(q, 'вид «Задачи» не открылся');
+  assert.ok(!q.filters.some((f) => f.col === 'assignee_id'), 'счётчик «все», а вид открылся на «мои»');
+  assert.equal(byAttr(root, 'data-task-who-filter')[0].value, 'all');
+  // переключатель вида после этого открывает «Мои»
+  CALLS.length = 0;
+  walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'tasks').click();
+  await tick(80);
+  const q2 = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'select' && c.columns === TASK_LIST_SELECT);
+  assert.ok(q2.filters.some((f) => f.col === 'assignee_id' && f.val === 7), 'переключатель вида открыл не «Мои»');
+  window.easymed.state.user = null;
+});
+
+test('CRM_UNIFY_V1: меню — счётчик считает тем отбором, с которым откроет «Задачи»; значок открывает вид', () => {
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(HERE, '..', '..', 'admin.js'), 'utf8');
+  assert.match(src, /import \{ renderCrm, openCrmTasks \}\s+from '\.\/admin\/views\/crm\.js\?v=crr1'/, 'другой спецификатор — второй экземпляр модуля доски');
+  const start = src.indexOf('async function loadNavCounts');
+  const body = src.slice(start, src.indexOf('\n}\n', start));
+  assert.match(body, /state\.crmTaskWho = lifted \? 'all' : 'me'/);
+  assert.match(body, /overdueTaskCount\(\{ me, who: state\.crmTaskWho \}\)/);
+  assert.match(src, /'data-nav-crm-tasks': ''/);
+  assert.match(src, /openCrmTasks\(state\.crmTaskWho \|\| 'me'\); navigate\('crm'\)/);
+});
+

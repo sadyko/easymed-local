@@ -18,6 +18,8 @@
 // /api/db (visit_services и crm_request_services), remove_own_visit_line и RPC
 // колл-центра booking_lines_add / booking_line_remove. Второго писателя в
 // браузере нет и быть не должно (урок crm-lines.js closeCrmLines).
+// CRM_UNIFY_V1 — КАКАЯ ЗАЯВКА держит запись, решает crm/visit-link.js
+// (crmLinkVisit): все двери записи зовут его перед сверкой.
 //
 // ГРАНИЦА — ПРИХОД. Сверка работает только у записи ДО прихода: визит своего
 // здания в статусе scheduled/confirmed. Строки визита она трогает только
@@ -50,7 +52,7 @@ const VS_CHILDREN = ['lab_results', 'visit_documents', 'lab_device_messages', 's
 const SYSTEM = Object.freeze({ id: 0, role: 'admin', extra_roles: [] });
 const round2 = (x) => Math.round((Number(x) || 0) * 100) / 100;
 
-function visitRow(db, visitId) {
+export function visitRow(db, visitId) {   // CRM_UNIFY_V1 — нужен crm/visit-link.js
   const id = Number(visitId);
   if (!Number.isInteger(id) || id <= 0) return null;
   return db.prepare(`
@@ -236,11 +238,15 @@ export function insertBookingLine(db, { visit, serviceId = null, consultationTyp
   return Number(info.lastInsertRowid);
 }
 
-// V3120_FINAL — ждущие строки заявок, державшие строку визита `fromId`,
-// переходят на `toId` (строка визита уходит, её место заняла другая).
-function relinkPending(db, fromId, toId) {
+// V3120_FINAL — строки заявок, державшие строку визита `fromId`, переходят на
+// `toId` (строка визита уходит, её место заняла другая). CRM_UNIFY_V1 (ревью
+// задачи 3, R1) — ждущие И закрытые приходом ('done'): после регистрации на
+// стойке строки этого визита закрыты, а строка визита — та же услуга, и ссылка
+// на ушедшую строку визита никому не нужна. Снятые ('cancelled') не переходят:
+// снятая строка на чужой строке визита велела бы сверке снять и её.
+function relinkHeld(db, fromId, toId) {
   db.prepare(`UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0
-               WHERE visit_service_id = ? AND status = 'pending'`).run(toId, fromId);
+               WHERE visit_service_id = ? AND status <> 'cancelled'`).run(toId, fromId);
 }
 
 function deleteVs(db, id) {
@@ -249,10 +255,48 @@ function deleteVs(db, id) {
 }
 
 /**
+ * CRM_UNIFY_V1 (ревью 3, D4) — ДАТА КАРТОЧКИ: ОДНО ПРАВИЛО для шага связи
+ * визита (crm/visit-link.js, шаг G) и сверки зеркала (touchRequest ниже).
+ * Раньше их было два: шаг G брал записанный день, сверка — самую раннюю ждущую
+ * строку, и незаписанная строка до дня визита перекидывала дату туда-обратно
+ * на каждом клике двери, а след отмены (crm_booking_undo) рос.
+ *
+ *   1. ближайший с СЕГОДНЯШНЕГО дня ЗАПИСАННЫЙ день: ждущая строка, которую
+ *      держит живой визит, или живой визит привязки записи (crm_booking_links);
+ *   2. иначе — ближайшая ждущая строка с сегодняшнего дня;
+ *   3. иначе — fallback: дата, которую ставит шаг связи (день визита) или
+ *      прежняя дата карточки (сверка).
+ * Строки прошлых дней в выбор не попадают: назад в прошлое дата не едет.
+ */
+export function cardDateOf(db, requestId, fallback = null) {
+  const day = today(db);
+  const live = "x.status NOT IN ('cancelled', 'no_show')";
+  const booked = db.prepare(`
+    SELECT MIN(d) AS d FROM (
+      SELECT l.scheduled_date AS d FROM crm_request_services l
+        JOIN visits x ON x.id = l.visit_id AND ${live}
+       WHERE l.request_id = ? AND l.status = 'pending' AND date(l.scheduled_date) >= date(?)
+      UNION ALL
+      SELECT ${localDate('x.visit_date')} AS d FROM crm_booking_links b
+        JOIN visits x ON x.id = b.visit_id AND ${live}
+       WHERE b.request_id = ? AND ${localDate('x.visit_date')} >= date(?))`).get(requestId, day, requestId, day);
+  if (booked && booked.d) return booked.d;
+  const next = db.prepare(`SELECT MIN(scheduled_date) AS d FROM crm_request_services
+                            WHERE request_id = ? AND status = 'pending' AND date(scheduled_date) >= date(?)`).get(requestId, day);
+  return (next && next.d) || fallback;
+}
+
+/**
  * ДАТА И СТУПЕНЬ ЗАЯВКИ — ЗЕРКАЛО ЕЁ СТРОК (миграция 057). Только у ЖИВОЙ
  * заявки и только если у неё есть ждущие строки: заявка без строк (лид из
  * звонка) свою дату держит сама. Ступень едет только вперёд — в «Записан», и
- * только из колонок ДО него (то же правило, что settleCrmOnBooking).
+ * только из колонок ДО него (то же правило, что crmLinkVisit — CRM_UNIFY_V1).
+ *
+ * CRM_UNIFY_V1 (ревью 2, F2; ревью 3, D4) — ДАТА — по cardDateOf, тому же
+ * правилу, что у шага связи: только вперёд, сначала записанный день. Раньше
+ * брался самый ранний день вообще, и незаписанная строка прошлой недели
+ * возвращала записанной карточке прошедшую дату на каждом клике двери, а после
+ * снятия услуги обход доски уносил карточку в «Не пришёл».
  */
 export function touchRequest(db, requestId) {
   if (!requestId) return;
@@ -261,15 +305,14 @@ export function touchRequest(db, requestId) {
   const open = openStageKeys(db);
   if (!open.includes(p.status)) return;
   const left = db.prepare(`
-    SELECT COUNT(*) AS n, MIN(NULLIF(scheduled_date, '')) AS next,
-           SUM(visit_id IS NOT NULL) AS booked
+    SELECT COUNT(*) AS n, SUM(visit_id IS NOT NULL) AS booked
       FROM crm_request_services WHERE request_id = ? AND status = 'pending'`).get(requestId);
   if (!left || !left.n) return;
   const scheduled = scheduledStageKey(db);
   const schedAt = scheduled ? open.indexOf(scheduled) : -1;
   const at = open.indexOf(p.status);
   const status = (left.booked && schedAt >= 0 && at >= 0 && at < schedAt) ? scheduled : p.status;
-  const when = left.next || p.scheduled_date || null;
+  const when = cardDateOf(db, requestId, p.scheduled_date || null);   // CRM_UNIFY_V1 (D4)
   if (status === p.status && when === p.scheduled_date) return;
   db.prepare(`UPDATE crm_requests SET status = ?, scheduled_date = ?,
                      updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`).run(status, when, requestId);
@@ -282,7 +325,23 @@ export function touchRequest(db, requestId) {
 export function mirrorVisit(db, visitId, { actorId = null } = {}) {
   try {
     const v = visitRow(db, visitId);
-    if (!beforeArrival(db, v)) return null;
+    if (!beforeArrival(db, v)) {
+      // CRM_UNIFY_V1 (ревью задачи 3, R1; проверка, N1/P1) — ПАЦИЕНТ ПРИШЁЛ.
+      // Сверка больше ничего не снимает и не переносит, но две вещи делает и
+      // теперь — при счёте и без него:
+      //   • строки заявки, которые визит держит, а в визите их нет (взяли после
+      //     прихода), встают в визит 'added' — как услуга, добавленная к уже
+      //     пришедшему визиту: касса видит её в «Ждут счёта» (placeHeldLines);
+      //   • строка зеркала той же услуги, ещё не в счёте, уступает место строке
+      //     регистратуры или кассы — вторая строка той же услуги это двойной
+      //     счёт (replaceAutoTwins).
+      // Только своё здание и только живой визит.
+      if (v && v.sync_origin == null && (isPreArrival(v) || v.status === 'arrived')) {
+        placeHeldLines(db, v.id, { actorId });
+        db.transaction(() => replaceAutoTwins(db, v))();
+      }
+      return null;
+    }
     // Разбор ревью (I5): счёт выставлен или работа начата — строки визита
     // ведёт касса. Зеркало тогда только СВЯЗЫВАЕТ строки, но не ставит, не
     // снимает и не переносит их.
@@ -350,21 +409,11 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
       touched.add(line.request_id); out.moved++;
       continue;
     }
-    // Уже есть такая услуга в визите и ни одна строка заявки её не держит —
-    // берём её, а не заводим вторую (её поставила регистратура раньше нас).
-    const mk = matchKey(db, line);
-    const cand = vsOfVisit().find((x) => matchKey(db, x) === mk && !isReferenced(x.id) && x.clinic_item_id == null);
-    if (cand) { linkLine.run(cand.id, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
-    // V3120_FIX — ВТОРАЯ КАРТОЧКА НА ТУ ЖЕ УСЛУГУ. Оператор завёл вторую
-    // заявку (не заметил первую) на ту же консультацию у того же врача в тот
-    // же день. Строка визита под эту услугу уже есть и её держит строка первой
-    // заявки — вторая строка заявки ДЕЛИТ её, а не заводит вторую строку
-    // визита: одна консультация — один счёт (было 200 000 вместо 100 000).
-    // Делёж безопасен: снятие одной из строк заявки строку визита не трогает,
-    // пока её держит другая (шаг 1 выше — `others`).
-    const shared = vsOfVisit().find((x) => matchKey(db, x) === mk && x.clinic_item_id == null
-      && referencedBy.all(x.id).some((r) => r.id !== line.id && r.status === 'pending'));
-    if (shared) { linkLine.run(shared.id, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
+    // Уже есть такая услуга в визите — берём её, а не заводим вторую
+    // (homeFor: её поставила регистратура раньше нас, или её делит вторая
+    // карточка того же человека).
+    const home = homeFor(db, V, line);
+    if (home) { linkLine.run(home, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
     if (frozen) continue;
     // C1 — хирургию и снятое с продажи зеркало в запись не ставит: строка
     // заявки остаётся ждать, запись — без неё.
@@ -384,33 +433,26 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
   }
   for (const x of vsOfVisit()) {
     if (!getVs.get(x.id)) continue;   // уступила место выше в этом же проходе
-    if (!lineKey(x) || x.clinic_item_id != null || x.sync_origin != null) continue;
-    if (x.status !== 'added' || x.invoice_item_id != null) continue;
+    if (!lineKey(x) || x.clinic_item_id != null || x.sync_origin != null || x.status === 'cancelled') continue;
     if (isReferenced(x.id)) continue;
     // ЗАМЕНА СТРОКИ ЗЕРКАЛА. Регистратура в день приёма подставляет строки
     // заявки в смету и вставляет СВОИ строки визита (со своей ценой, пакетом,
     // плательщиком). Строка, заведённая зеркалом под ту же услугу, уступает
-    // место: вторая строка той же услуги — это двойной счёт.
-    const auto = db.prepare(`SELECT * FROM crm_request_services
-                              WHERE visit_id = ? AND status = 'pending'
-                                AND visit_service_auto = 1 AND visit_service_id IS NOT NULL AND visit_service_id <> ?
-                              ORDER BY id`).all(V, x.id).find((l) => matchKey(db, l) === matchKey(db, x));
+    // место: вторая строка той же услуги — это двойной счёт. CRM_UNIFY_V1
+    // (проверка ревью задачи 3, P1) — и при счёте (I5 здесь не держит: уходит
+    // только строка зеркала, которая сама НЕ в счёте), и перед строкой, которую
+    // касса поставила сразу в счёт.
+    const auto = autoLineFor(db, V, x);
     if (auto) {
-      const old = getVs.get(auto.visit_service_id);
-      if (frozen) continue;   // I5 — при счёте строку зеркала не трогаем и вторую строку заявки не заводим
-      if (old && old.visit_id === V && vsFree(db, old)) {
-        linkLine.run(x.id, 0, auto.id);
-        // V3120_FINAL — строку визита делят несколько заявок (две карточки
-        // одного человека, CRM_ONE_LINE): на новую строку переходят ВСЕ ждущие
-        // строки, а не одна. Оставшаяся со ссылкой на удалённую строку
-        // снималась следующей сверкой («строку визита сняли — снимаем и в заявке»).
-        relinkPending(db, old.id, x.id);
-        deleteVs(db, old.id);
-        out.linked++; out.removed++;
-        continue;
-      }
+      if (yieldAutoLine(db, V, x, auto)) { out.linked++; out.removed++; continue; }
+      if (frozen) continue;   // I5 — при счёте вторую строку заявки не заводим
     }
+    if (x.status !== 'added' || x.invoice_item_id != null) continue;
     if (!reqId) continue;   // запись не из заявки — зеркалить некуда
+    // CRM_UNIFY_V1 (финальное ревью, A-C2) — сначала ЖДУЩАЯ строка карточки той
+    // же услуги (adoptPendingLine): иначе она оставалась ждать рядом с новой и
+    // садилась в следующую запись — вторая оплата той же консультации.
+    if (adoptPendingLine(db, reqId, v, x)) { out.linked++; touched.add(reqId); continue; }
     db.prepare(`INSERT INTO crm_request_services
                   (request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id, visit_service_id, visit_service_auto)
                 VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, 0)`)
@@ -420,6 +462,175 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
 
   for (const r of touched) touchRequest(db, r);
   return out;
+}
+
+/**
+ * CRM_UNIFY_V1 (финальное ревью, A-C2) — ЖДУЩАЯ СТРОКА КАРТОЧКИ ВМЕСТО ВТОРОЙ.
+ *
+ * Строку визита `x` поставила регистратура или касса, и сверка отражает её в
+ * карточке записи. Если у карточки уже есть ЖДУЩАЯ строка той же услуги
+ * (sameService — и строка без врача, «двойник» строки с врачом), которую не
+ * держит ни живой визит, ни строка визита, — это она: «консультация, когда
+ * придёт» сбылась. Строка берёт визит и строку визита (не авто — строку
+ * поставил человек); без даты — получает день визита. Вторую строку той же
+ * услуги заводить нельзя: исходная оставалась бы ждать и садилась в следующую
+ * запись (шаг A crm/visit-link.js), то есть в следующий счёт.
+ * Берётся только строка БЕЗ даты или на ЭТОТ день: строка другого дня — другая
+ * запись, её место в своём дне. Сначала строка этого дня, потом без даты.
+ * Деньги не меняются: строка визита та же, меняется только ссылка строки заявки.
+ * @returns {number|null} id взятой строки или null
+ */
+function adoptPendingLine(db, reqId, v, x) {
+  const cand = db.prepare(`
+    SELECT * FROM crm_request_services l
+     WHERE l.request_id = ? AND l.status = 'pending' AND l.visit_service_id IS NULL
+       AND (l.visit_id IS NULL OR l.visit_id = ?
+            OR NOT EXISTS (SELECT 1 FROM visits w WHERE w.id = l.visit_id AND w.status NOT IN ('cancelled', 'no_show')))
+       AND (l.scheduled_date IS NULL OR l.scheduled_date = '' OR date(l.scheduled_date) = date(?))
+     ORDER BY (l.scheduled_date IS NULL OR l.scheduled_date = ''), l.id`).all(reqId, v.id, v.day)
+    .find((l) => sameService(db, l, x));
+  if (!cand) return null;
+  db.prepare(`UPDATE crm_request_services
+                 SET visit_id = ?, visit_service_id = ?, visit_service_auto = 0,
+                     scheduled_date = CASE WHEN scheduled_date IS NULL OR scheduled_date = '' THEN ? ELSE scheduled_date END
+               WHERE id = ?`).run(v.id, x.id, v.day, cand.id);
+  return Number(cand.id);
+}
+
+/**
+ * CRM_UNIFY_V1 (проверка ревью задачи 3, P1b) — ТА ЖЕ УСЛУГА: ключ услуги
+ * (lineKey) равен, и врач тот же (matchKey) — или у строки `a` врача нет вовсе.
+ * Строка заявки «консультация терапевта» без врача и строка регистратуры
+ * «консультация терапевта у Иванова» — одна консультация, а не две в счёте.
+ * Две строки с РАЗНЫМИ врачами — по-прежнему разные записи (разбор ревью I1).
+ */
+export function sameService(db, a, x) {
+  const k = lineKey(a);
+  if (!k || k !== lineKey(x)) return false;
+  return a.doctor_id == null || matchKey(db, a) === matchKey(db, x);
+}
+
+/**
+ * Строка визита этой записи, которую строка заявки `line` берёт вместо новой.
+ *   1. Та же услуга (sameService), и ни одна строка заявки её не держит — её
+ *      поставила регистратура раньше нас.
+ *   2. V3120_FIX — ВТОРАЯ КАРТОЧКА НА ТУ ЖЕ УСЛУГУ. Оператор завёл вторую
+ *      заявку (не заметил первую) на ту же консультацию у того же врача в тот
+ *      же день. Строка визита под эту услугу уже есть и её держит строка первой
+ *      заявки — вторая строка заявки ДЕЛИТ её, а не заводит вторую строку
+ *      визита: одна консультация — один счёт (было 200 000 вместо 100 000).
+ *      Делёж безопасен: снятие одной из строк заявки строку визита не трогает,
+ *      пока её держит другая (шаг 1 сверки — `others`). CRM_UNIFY_V1 — и строка
+ *      первой заявки, уже закрытая приходом ('done').
+ * null — такой нет, нужна новая.
+ */
+function homeFor(db, V, line) {
+  const referencedBy = db.prepare('SELECT id, status FROM crm_request_services WHERE visit_service_id = ?');
+  const rows = db.prepare('SELECT * FROM visit_services WHERE visit_id = ? ORDER BY id').all(V)
+    .filter((x) => x.clinic_item_id == null && x.status !== 'cancelled');
+  const cand = rows.find((x) => sameService(db, line, x) && !referencedBy.all(x.id).length);
+  if (cand) return cand.id;
+  const mk = matchKey(db, line);
+  const shared = rows.find((x) => matchKey(db, x) === mk
+    && referencedBy.all(x.id).some((r) => r.id !== line.id && r.status !== 'cancelled'));
+  return shared ? shared.id : null;
+}
+
+/**
+ * CRM_UNIFY_V1 (проверка ревью задачи 3, N1/P2) — СТРОКИ, КОТОРЫЕ ВИЗИТ ДЕРЖИТ,
+ * А В ВИЗИТЕ ИХ НЕТ. Строка заявки взяла визит (visit_id), но строки визита у
+ * неё нет (visit_service_id пуст): визит уже пришёл или при счёте, и сверка их
+ * не ставит. Перед приходом и после него такая строка встаёт в визит так же,
+ * как услуга, добавленная к уже выставленному или пришедшему визиту:
+ *   • такая же услуга в визите уже есть — строка берёт её (homeFor);
+ *   • иначе — новая строка визита 'added' (insertBookingLine — та же цена, что
+ *     у регистратуры и кассы): касса видит её в «Ждут счёта», анализ уходит в
+ *     лабораторию после оплаты, как обычно.
+ * Поставить нельзя (хирургия, снятая с продажи) — строка заявки ЖДЁТ: закрыть
+ * её без услуги в визите правило прихода не вправе (crm/visit-status.js).
+ * Строку, чья строка визита ИСЧЕЗЛА (visit_service_id есть, строки нет — её
+ * сняли), заново не ставит: снятую услугу снял человек.
+ * Визит СОСЕДНЕГО здания (sync_origin) здесь не правится (BRANCH_MONEY_GUARD_V1):
+ * строка заявки только берёт такую же услугу, если она приехала с визитом, и
+ * ничего не ставит. Только живой визит. Не бросает.
+ */
+export function placeHeldLines(db, visitId, { actorId = null } = {}) {
+  try {
+    const v = visitRow(db, visitId);
+    if (!v || (!PRE_ARRIVAL.includes(v.status) && v.status !== 'arrived')) return 0;
+    const foreign = v.sync_origin != null;
+    const lines = db.prepare(`SELECT * FROM crm_request_services
+                               WHERE visit_id = ? AND status = 'pending' AND visit_service_id IS NULL ORDER BY id`).all(v.id);
+    let placed = 0;
+    const link = db.prepare('UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = ? WHERE id = ?');
+    for (const line of lines) {
+      if (!lineKey(line)) continue;
+      db.transaction(() => {
+        const home = homeFor(db, v.id, line);
+        if (home) { link.run(home, 0, line.id); placed++; return; }
+        if (foreign) return;
+        if (bookingLineRefusal(db, { serviceId: line.service_id, consultationTypeId: line.consultation_type_id })) return;
+        const id = insertBookingLine(db, { visit: v, serviceId: line.service_id, consultationTypeId: line.consultation_type_id, doctorId: line.doctor_id, createdBy: actorId });
+        link.run(id, 1, line.id);
+        placed++;
+      })();
+    }
+    return placed;
+  } catch (e) {
+    console.error('[crm-mirror] строки заявки визита', visitId, 'не поставлены в визит:', e && e.message);
+    return 0;
+  }
+}
+
+/**
+ * Строка заявки этого визита, державшая строку ЗЕРКАЛА той же услуги
+ * (sameService), что и строка визита `x`. CRM_UNIFY_V1 (ревью задачи 3, R1) — при
+ * любом статусе строки заявки, кроме снятой: после регистрации на стойке
+ * строки этого визита уже 'done', а строка зеркала всё ещё в смете.
+ */
+function autoLineFor(db, V, x) {
+  return db.prepare(`SELECT * FROM crm_request_services
+                      WHERE visit_id = ? AND status <> 'cancelled'
+                        AND visit_service_auto = 1 AND visit_service_id IS NOT NULL AND visit_service_id <> ?
+                      ORDER BY id`).all(V, x.id).find((l) => sameService(db, l, x));
+}
+
+/**
+ * Строка зеркала уступает место строке визита `x` (её поставила регистратура):
+ * строки заявки переходят на `x`, свободная строка зеркала уходит. false —
+ * строка зеркала уже не свободна (счёт, работа) или не этого визита.
+ */
+function yieldAutoLine(db, V, x, auto) {
+  const old = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(auto.visit_service_id);
+  if (!old || old.visit_id !== V || !vsFree(db, old)) return false;
+  db.prepare('UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0 WHERE id = ?').run(x.id, auto.id);
+  // V3120_FINAL — строку визита делят несколько заявок (две карточки одного
+  // человека, CRM_ONE_LINE): на новую строку переходят ВСЕ строки, а не одна.
+  // Оставшаяся со ссылкой на удалённую строку снималась следующей сверкой
+  // («строку визита сняли — снимаем и в заявке»).
+  relinkHeld(db, old.id, x.id);
+  deleteVs(db, old.id);
+  return true;
+}
+
+/**
+ * CRM_UNIFY_V1 (ревью задачи 3, R1; проверка, P1) — ТОЛЬКО ЗАМЕНА СТРОК
+ * ЗЕРКАЛА, для визита после прихода (mirrorVisit): строка визита, которую не
+ * держит ни одна строка заявки (её только что поставила регистратура или касса
+ * — в смету или сразу в счёт), занимает место строки зеркала той же услуги,
+ * если та сама ещё не в счёте (yieldAutoLine → vsFree). До первого счёта и
+ * после него. Ничего не ставит, не переносит и строк заявки не заводит.
+ */
+function replaceAutoTwins(db, v) {
+  const getVs = db.prepare('SELECT * FROM visit_services WHERE id = ?');
+  const referenced = db.prepare('SELECT 1 FROM crm_request_services WHERE visit_service_id = ? LIMIT 1');
+  for (const x of db.prepare('SELECT * FROM visit_services WHERE visit_id = ? ORDER BY id').all(v.id)) {
+    if (!getVs.get(x.id)) continue;   // уступила место выше в этом же проходе
+    if (!lineKey(x) || x.clinic_item_id != null || x.sync_origin != null || x.status === 'cancelled') continue;
+    if (referenced.get(x.id)) continue;
+    const auto = autoLineFor(db, v.id, x);
+    if (auto) yieldAutoLine(db, v.id, x, auto);
+  }
 }
 
 /**
@@ -455,95 +666,12 @@ export function mirrorReschedule(db, visitId, { oldDoctorId = null } = {}) {
   }
 }
 
-/**
- * ЗАПИСЬ ИЗ КАЛЕНДАРЯ → ЗАЯВКА. Правило (разбор ревью I3, решено 2026-09-27):
- *
- *   • запись уже держит строки заявки (записали из CRM) — ничего не делаем;
- *   • записывает КОЛЛ-ЦЕНТР — запись привязывается к самой поздней открытой
- *     заявке пациента НЕ СТАРШЕ 30 ДНЕЙ; такой нет — заводится новая заявка
- *     («Записан», оператор — он же, источник «Звонок»);
- *   • записывает кто угодно (регистратура, врач) — привязка только к открытой
- *     заявке, которая уже ждёт ЭТОТ день: у неё есть ждущая строка на этот
- *     день или сама дата заявки — этот день. Давний лид («звонил в марте»)
- *     к сегодняшней записи у стойки не цепляется и в «Записан» не едет.
- *
- * Привязка помнит, откуда она (source), кто записал (created_by) и завела ли
- * запись заявку сама (created_request — для discard_empty_visit).
- * Возвращает id заявки или null.
- */
-export const CALLCENTER_ATTACH_DAYS = 30;
-
-function isCallcenterUser(user) {
+// CRM_UNIFY_V1 — «ЗАПИСЬ ИЗ КАЛЕНДАРЯ → ЗАЯВКА» (attachVisitToCrm) переехала в
+// crm/visit-link.js (crmLinkVisit) — одно правило для всех дверей записи.
+// «Чистый» колл-центр остаётся здесь: его зовут cancellableBookingsOf ниже и
+// шаг E crmLinkVisit.
+export function isCallcenterUser(user) {
   return hasAnyRole(user, ['callcenter']) && !hasAnyRole(user, ['registrar', 'doctor', 'admin']);
-}
-
-export function attachVisitToCrm(db, visitId, user) {
-  try {
-    const v = visitRow(db, visitId);
-    if (!beforeArrival(db, v) || !v.patient_id) return null;
-    return db.transaction(() => {
-      const had = requestOfVisit(db, v.id);
-      if (had) return had;
-      const open = openStageKeys(db);
-      if (!open.length) return null;
-      const holes = open.map(() => '?').join(',');
-      const uid = user && Number.isInteger(Number(user.id)) && Number(user.id) > 0 ? Number(user.id) : null;
-      const scheduled = scheduledStageKey(db);
-      const link = (requestId, source, created) => db.prepare(`INSERT OR REPLACE INTO crm_booking_links
-            (visit_id, request_id, source, created_by, created_request) VALUES (?, ?, ?, ?, ?)`)
-        .run(v.id, requestId, source, uid, created ? 1 : 0);
-
-      // (б) Заявка, которая уже ждёт этот день, — для любой роли.
-      let req = db.prepare(`SELECT r.id, r.status, r.scheduled_date FROM crm_requests r
-                             WHERE r.patient_id = ? AND r.status IN (${holes})
-                               AND (date(r.scheduled_date) = date(?)
-                                    OR EXISTS (SELECT 1 FROM crm_request_services l
-                                                WHERE l.request_id = r.id AND l.status = 'pending'
-                                                  AND date(l.scheduled_date) = date(?)))
-                             ORDER BY r.created_at DESC, r.id DESC LIMIT 1`).get(v.patient_id, ...open, v.day, v.day);
-      let source = 'match';
-      if (!req) {
-        // (а) Иначе — только колл-центр, и только свежая заявка.
-        if (!isCallcenterUser(user)) return null;
-        source = 'callcenter';
-        req = db.prepare(`SELECT id, status, scheduled_date FROM crm_requests
-                           WHERE patient_id = ? AND status IN (${holes})
-                             AND created_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-${CALLCENTER_ATTACH_DAYS} days')
-                           ORDER BY created_at DESC, id DESC LIMIT 1`).get(v.patient_id, ...open);
-        if (!req) {
-          const p = db.prepare('SELECT full_name, phone FROM patients WHERE id = ?').get(v.patient_id) || {};
-          const status = scheduled || open[0];
-          const id = Number(db.prepare(`INSERT INTO crm_requests (full_name, phone, source, status, patient_id, assigned_to, created_by, scheduled_date)
-                                        VALUES (?, ?, 'call', ?, ?, ?, ?, ?)`)
-            .run(p.full_name || '—', p.phone || '', status, v.patient_id, uid, uid, v.day).lastInsertRowid);
-          link(id, source, true);
-          return id;
-        }
-      } else if (isCallcenterUser(user)) {
-        source = 'callcenter';
-      }
-      link(req.id, source, false);
-      const schedAt = scheduled ? open.indexOf(scheduled) : -1;
-      const at = open.indexOf(req.status);
-      const status = (schedAt >= 0 && at >= 0 && at < schedAt) ? scheduled : req.status;
-      const was = String(req.scheduled_date || '').trim().slice(0, 10);
-      const when = (!was || was > v.day) ? v.day : was;
-      if (status !== req.status || when !== req.scheduled_date) {
-        db.prepare(`UPDATE crm_requests SET status = ?, scheduled_date = ?,
-                           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`).run(status, when, req.id);
-        // След для discard_empty_visit (миграция 186): убрали пустую запись —
-        // заявка возвращается как была.
-        try {
-          db.prepare(`INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, prev_scheduled_date, set_status, set_scheduled_date)
-                      VALUES (?, ?, ?, ?, ?, ?)`).run(v.id, req.id, req.status, req.scheduled_date ?? null, status, when);
-        } catch { /* сборка без 186 */ }
-      }
-      return req.id;
-    })();
-  } catch (e) {
-    console.error('[crm-mirror] запись', visitId, 'не привязана к заявке:', e && e.message);
-    return null;
-  }
 }
 
 /**
@@ -657,6 +785,8 @@ export function syncLineFromVisit(db, vsId) {
  * строку зеркала, у которой есть «двойник» регистратуры; строка заявки
  * переходит на двойника. Нет двойника — строка остаётся: это услуга, которую
  * пациент ещё может получить, и снимать её вправе только человек.
+ * CRM_UNIFY_V1 (ревью задачи 3, R1) — строка заявки при любом статусе, кроме
+ * снятой: после регистрации на стойке строки этого визита уже 'done'.
  */
 export function pruneAutoLinesOnInvoice(db, visitId, keepIds = []) {
   try {
@@ -664,18 +794,18 @@ export function pruneAutoLinesOnInvoice(db, visitId, keepIds = []) {
     const keep = new Set((keepIds || []).map(Number));
     const autos = db.prepare(`SELECT l.id AS line_id, l.visit_service_id AS vs_id FROM crm_request_services l
                                JOIN visit_services vs ON vs.id = l.visit_service_id
-                              WHERE vs.visit_id = ? AND l.visit_service_auto = 1 AND l.status = 'pending'`).all(visitId);
+                              WHERE vs.visit_id = ? AND l.visit_service_auto = 1 AND l.status <> 'cancelled'`).all(visitId);
     for (const a of autos) {
       if (keep.has(Number(a.vs_id))) continue;
       const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(a.vs_id);
       if (!vsFree(db, vs)) continue;
-      const mk = matchKey(db, vs);
+      // CRM_UNIFY_V1 (P1b) — та же услуга: и строка зеркала без врача.
       const twin = db.prepare('SELECT * FROM visit_services WHERE visit_id = ? AND id <> ?').all(visitId, vs.id)
-        .find((x) => x.clinic_item_id == null && matchKey(db, x) === mk
+        .find((x) => x.clinic_item_id == null && sameService(db, vs, x)
           && !db.prepare("SELECT 1 FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled'").get(x.id));
       if (!twin) continue;
       db.prepare('UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0 WHERE id = ?').run(twin.id, a.line_id);
-      relinkPending(db, vs.id, twin.id);   // V3120_FINAL — и остальные ждущие строки этой строки визита
+      relinkHeld(db, vs.id, twin.id);   // V3120_FINAL — и остальные строки этой строки визита (CRM_UNIFY_V1 — и 'done')
       deleteVs(db, vs.id);
     }
   } catch (e) {
@@ -709,6 +839,11 @@ export function mirrorCashierLine(db, vsId) {
     const st = db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(reqId);
     if (!st || !openStageKeys(db).includes(st.status)) return null;
     const v = visitRow(db, x.visit_id);
+    // CRM_UNIFY_V1 (финальное ревью, A-C2) — ждущая строка той же услуги вместо второй.
+    if (v) {
+      const adopted = adoptPendingLine(db, reqId, v, x);
+      if (adopted) return adopted;
+    }
     const info = db.prepare(`INSERT INTO crm_request_services
                   (request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id, visit_service_id, visit_service_auto)
                 VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, 0)`)

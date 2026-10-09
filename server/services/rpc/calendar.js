@@ -149,7 +149,8 @@ import { getDataDir } from '../control/config.js';
 // не пришёл, отменили. Правило живёт в crm/visit-status.js, здесь только дверь.
 import { crmVisitStatus } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 — запись календаря и заявка CRM — одна запись.
-import { attachVisitToCrm, mirrorVisit, mirrorReschedule, dayVisitMovableFor } from '../crm/booking-mirror.js';
+import { mirrorVisit, mirrorReschedule, dayVisitMovableFor } from '../crm/booking-mirror.js';
+import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
 // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
 import { localDate } from '../domain/day.js';
 
@@ -1012,9 +1013,9 @@ export async function calendarBook(db, args, user, deps = {}) {
         const moved = await calendarBook(db, {
           ...a, visit_id: dayVisit.id, patient_id: undefined, duration_minutes: durationMin,
         }, user, deps);
-        // Как у ensure_visit после записи: запись без заявки привязывается к
-        // заявке пациента (колл-центру — к своей или новой), затем сверка.
-        attachVisitToCrm(db, moved.visit.id, user);
+        // Как у ensure_visit после записи: связь с заявкой пациента
+        // (crm/visit-link.js — одно правило), затем сверка.
+        crmLinkVisit(db, moved.visit.id, user);   // CRM_UNIFY_V1
         mirrorVisit(db, moved.visit.id, { actorId: user && user.id });
         return { ...moved, moved: true };
       }
@@ -1160,13 +1161,13 @@ export async function calendarBook(db, args, user, deps = {}) {
 
   // CRM_CALENDAR_MIRROR_V1 (2026-09-27) — ЗАЯВКА ВИДИТ ТО ЖЕ, ЧТО КАЛЕНДАРЬ.
   //
-  // Новая запись привязывается к заявке пациента (самой поздней открытой; у
-  // колл-центра без заявки — новой), перенос времени, дня или врача доезжает
+  // Новая запись связывается с заявкой пациента (crm/visit-link.js — одно
+  // правило на все двери, CRM_UNIFY_V1), перенос времени, дня или врача доезжает
   // до строк заявки. Обе вещи — только у записи до прихода и только своего
   // здания; правило — crm/booking-mirror.js. Тоже ЗА транзакцией и тоже молча:
   // заявка не вправе отказать в записи.
   if (!existing) {
-    attachVisitToCrm(db, out.visit.id, user);
+    crmLinkVisit(db, out.visit.id, user);   // CRM_UNIFY_V1
   } else if (BUSY_STATUSES.includes(status)
       && (existing.visit_date !== out.visit.visit_date || Number(existing.doctor_id || 0) !== Number(out.visit.doctor_id || 0))) {
     mirrorReschedule(db, out.visit.id, { oldDoctorId: existing.doctor_id });

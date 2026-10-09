@@ -69,7 +69,7 @@ import { renderReport }       from './admin/views/report.js';
 import { renderLaboratory }   from './admin/views/laboratory.js?v=labwords14';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head · LIS_MINDRAY_CODES_V1 — штамп · LIS_ANALYZER_LIST_V1 · LIS_DISCOVERY_FIX_V1 (экран) · LIS_REAL_ANALYZERS_V1 (экран; ревью R3–R7 — штамп)
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned2';
 import { renderQueue }       from './admin/views/queue.js?v=q7';   // QUEUE_BOARD_V1
-import { renderCrm }          from './admin/views/crm.js?v=crr1';   // CALL_RECORDING_REASONS_V1 — «Прослушать»: причина словами и повтор, пока запись готовится · CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию) · ROLES_SAVE_TRUTH_V1 — «Прослушать» по can_listen · CRM_MULTI_SOURCE_V1 — несколько источников у заявки и в фильтре
+import { renderCrm, openCrmTasks } from './admin/views/crm.js?v=crr1';   // CRM_UNIFY_V1 — openCrmTasks (спецификатор прежний: другой ?v — второй экземпляр модуля) · CALL_RECORDING_REASONS_V1 — «Прослушать»: причина словами и повтор, пока запись готовится · CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию) · ROLES_SAVE_TRUTH_V1 — «Прослушать» по can_listen · CRM_MULTI_SOURCE_V1 — несколько источников у заявки и в фильтре
 import { overdueTaskCount } from './admin/views/crm-tasks.js';   // CRM_DEDUP_SEARCH_TASKS_V1 — красный счётчик просроченных задач у пункта CRM
 import { renderDocsArchive }  from './admin/views/docs-archive.js?v=pa1';   // CLINICAL_DOCS_ARCHIVE_V1 — restored after concurrent clobber; PRINT_AUTO_V1 — pa1 «Открыть» только показывает
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=jrn9';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder; JOURNALS_V1 — журналы (jrn1 карточки, jrn2 окно выбора услуг, jrn3 обрезка заключения, jrn4 «Печать», jrn5 «Скачать Excel» снова доступна, jrn6 печать и поиск окна выбора); JOURNALS_V1_RJ2C — jrn7 предел выбора и печати, выбор у каждого сотрудника, jrn8 «Итого — по всем строкам» на печати; JOURNALS_V1_ALL — jrn9 ничего не выбрано — все услуги
@@ -1398,6 +1398,13 @@ function renderSidebar() {
             h('span', null, t('sidebar.nav.' + item.id, item.label)),
             badgeText && h('span', {
                 class: 'nav-badge' + (item.badgeKind === 'alert' && navCounts[item.id] > 0 ? ' alert' : ''),
+                // CRM_UNIFY_V1 — красный счётчик CRM открывает вид «Задачи» с теми
+                // задачами, что он посчитал (Р18). Сам пункт меню ведёт на доску,
+                // как раньше; с клавиатуры «Задачи» — переключатель вида в CRM.
+                ...(item.id === 'crm' ? {
+                    'data-nav-crm-tasks': '', title: 'Открыть задачи',
+                    onclick: (ev) => { ev.stopPropagation(); openCrmTasks(state.crmTaskWho || 'me'); navigate('crm'); },
+                } : {}),
             }, badgeText),
             unlicensed && h('span', { class: 'nav-lock-icon' }, Icon('Lock', { size: 14 })),
         ));
@@ -1584,7 +1591,11 @@ async function loadNavCounts() {
                 const me = (state.user && state.user.id) || null;
                 // CRM_HEAD_MERGE_TAGS_V1 — «все просроченные» видит и руководитель
                 // колл-центра (`crm.all`): сервер отдаёт ему задачи всей доски.
-                const n = await overdueTaskCount({ me, isAdmin: roles.includes('admin') || (roles.length > 0 && canSeeAllLeads()) });
+                const lifted = roles.includes('admin') || (roles.length > 0 && canSeeAllLeads());
+                // CRM_UNIFY_V1 — счётчик и вид «Задачи» — один запрос (crm-tasks.js
+                // taskQuery); щелчок по счётчику открывает вид с этим же отбором (Р18).
+                state.crmTaskWho = lifted ? 'all' : 'me';
+                const n = await overdueTaskCount({ me, who: state.crmTaskWho });
                 navCounts.crm = n;
             } catch (e) {
                 console.warn('[nav counts] crm tasks:', e.message);

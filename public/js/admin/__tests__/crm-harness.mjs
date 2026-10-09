@@ -80,7 +80,12 @@ export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTa
   // её в ту же секунду поставил коллега.
   tagInsertConflict: false,
   // ROLES_SAVE_TRUTH_V1 — ответ crm_lead_calls: журнал звонков в карточке заявки.
-  leadCalls: [] };
+  leadCalls: [],
+  // CRM_UNIFY_V1 — ответ crm_task_assignees (кого можно назначить ответственным;
+  // функция — по телу запроса) и отказ этого RPC по требованию.
+  assignees: [], assigneesError: null,
+  // CRM_UNIFY_V1 — настоящее число закрытой колонки из базы: { ключ ступени: число }.
+  countFor: null };
 export const CALLS = [];
 export const RPC = [];
 const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
@@ -93,7 +98,13 @@ function applyFilters(rows, filters) {
       case 'eq': return String(v) === String(f.val);
       case 'is': return f.val === null ? v == null : v === f.val;
       case 'lte': return v != null && String(v) <= String(f.val);
+      case 'gte': return v != null && String(v) >= String(f.val);   // CRM_UNIFY_V1
+      case 'gt': return v != null && String(v) > String(f.val);
+      case 'lt': return v != null && String(v) < String(f.val);
+      case 'neq': return String(v) !== String(f.val);
       case 'in': return (f.val || []).map(String).includes(String(v));
+      case 'not.in': return !(f.val || []).map(String).includes(String(v));   // CRM_UNIFY_V1 — открытые = не закрытые
+      case 'not.is': return f.val === null ? v != null : v !== f.val;   // CRM_UNIFY_V1 — задачи со сроком
       default: return true;
     }
   }));
@@ -109,6 +120,10 @@ globalThis.fetch = async (url, opts) => {
     if (name === 'crm_leads_by_phone') return jsonOk(S.dups);
     if (name === 'crm_search') return jsonOk(typeof S.search === 'function' ? S.search(body) : S.search);
     if (name === 'crm_lead_calls') return jsonOk(S.leadCalls || []);
+    if (name === 'crm_task_assignees') {   // CRM_UNIFY_V1
+      if (S.assigneesError) return { ok: false, json: async () => ({ error: { message: S.assigneesError } }) };
+      return jsonOk(typeof S.assignees === 'function' ? S.assignees(body) : (S.assignees || []));
+    }
     if (name === 'crm_duplicate_groups') return jsonOk(S.dupGroups);
     if (name === 'crm_merge_leads') {
       if (S.mergeError) return { ok: false, json: async () => ({ error: { message: S.mergeError } }) };
@@ -120,7 +135,15 @@ globalThis.fetch = async (url, opts) => {
     CALLS.push(body);
     if (body.table === 'crm_requests' && body.op === 'select') {
       if (body.single) return jsonOk(applyFilters(S.leads, body.filters)[0] || null);
-      return jsonOk(S.leads);
+      // CRM_UNIFY_V1 — доска грузится несколькими запросами (открытые / закрытые
+      // по колонкам с числом / отчёт): отбор, предел и счёт применяются.
+      const rows = applyFilters(S.leads, body.filters);
+      const page = Number.isInteger(body.limit) ? rows.slice(0, body.limit) : rows;
+      if (body.count) {
+        const st = (body.filters || []).find((f) => f.col === 'status' && f.op === 'eq');
+        return jsonOk(page, S.countFor && st && S.countFor[st.val] != null ? S.countFor[st.val] : rows.length);
+      }
+      return jsonOk(page);
     }
     if (body.table === 'crm_requests' && body.op === 'insert') {
       if (S.failInsertOnce) { S.failInsertOnce = false; return { ok: false, json: async () => ({ error: { message: 'сбой вставки' } }) }; }
@@ -130,8 +153,11 @@ globalThis.fetch = async (url, opts) => {
     if (body.table === 'crm_tasks') {
       if (body.op === 'select') {
         const rows = applyFilters(S.tasks, body.filters);
-        if (body.count) return jsonOk(null, rows.length);
-        return jsonOk(rows);
+        // CRM_UNIFY_V1 (итоговое ревью) — предел и число, как у сервера: строки
+        // до предела, count — по всему отбору (вид «Задачи» говорит «показаны первые N»).
+        const page = Number.isInteger(body.limit) ? rows.slice(0, body.limit) : rows;
+        if (body.count) return jsonOk(page, rows.length);
+        return jsonOk(page);
       }
       if (body.op === 'insert') {
         const row = { id: S.nextTaskId++, done_at: null, done_by: null, created_at: '2026-09-23T08:00:00Z', ...body.values };

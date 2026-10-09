@@ -22,8 +22,10 @@ function freshDb() {
   db.prepare("INSERT INTO patients (id, full_name) VALUES (1,'Пациент')").run();
   return db;
 }
+// CRM_UNIFY_V1 (финальное ревью, A-I3) — ОБНОВЛЕНО НАМЕРЕННО: приход закрывает только
+// карточку, заведённую в день визита или раньше, — карточки заведены до визита.
 const addReq = (db, date, name) =>
-  db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date) VALUES (?,?,'scheduled',1,?)")
+  db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date, created_at) VALUES (?,?,'scheduled',1,?,'2026-08-01T00:00:00Z')")
     .run(name, '998900000000', date).lastInsertRowid;
 const status = (db, id) => db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(id).status;
 

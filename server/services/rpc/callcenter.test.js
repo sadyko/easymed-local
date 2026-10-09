@@ -405,6 +405,24 @@ test('CRM_LINKS_V1: своя колонка до «Записан» тоже с�
   db.close();
 });
 
+// CRM_UNIFY_V1 (задача 5) — граница «зависших» — та же «Колонка записи», что
+// двигает запись и с которой сервер ставит «Не пришёл» (scheduledStageKey;
+// public/js/shared/crm-booked-stage.js), а не зашитый ключ 'scheduled'.
+test('CRM_UNIFY_V1: граница «зависших» — «Колонка записи» из настроек', () => {
+  const db = seed();
+  db.prepare("UPDATE crm_settings SET booked_stage = 'approved' WHERE id = 1").run();
+  const old = (status, name) => {
+    const id = addLead(db, { day: '2026-08-17', localHour: 10, status });
+    db.prepare("UPDATE crm_requests SET updated_at = datetime('now','localtime','-10 days'), full_name = ? WHERE id = ?").run(name, id);
+  };
+  old('scheduled', 'До колонки записи');
+  old('approved', 'В колонке записи');
+  const names = callcenterReport(db, RANGE, USER).stale.oldest.map((x) => x.name);
+  assert.ok(names.includes('До колонки записи'), 'карточка до выбранной «Колонки записи» не считается зависшей: ' + JSON.stringify(names));
+  assert.ok(!names.includes('В колонке записи'), 'записанного пациента объявили зависшим');
+  db.close();
+});
+
 // И «зависшие заявки» зовут колонку так же, как её зовёт доска. Словарь отчёта
 // подписывал 'in_process' как «В работе», а справочник — как «В обработке»:
 // одна и та же колонка называлась в клинике двумя именами.

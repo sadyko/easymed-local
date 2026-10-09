@@ -6,6 +6,9 @@
 //      старая «Пришёл» (№19) поглощала свежую заявку в работе (№337).
 // I3 — разные имена на одном номере: предупреждение и имя в приписке.
 // M1 — задача, переехавшая на карточку другого оператора, видна исполнителю.
+//      CRM_UNIFY_V1 — с тех пор задачи влитой карточки идут к оператору
+//      оставшейся, кроме задач тех, кто её по-прежнему ведёт; orOwn остался
+//      для задач, заведённых до обновления (см. тест M1).
 // M3 — запрет разных пациентов — по ВЫБРАННЫМ карточкам, а не по всей группе.
 // I4 — поиск оператора не читает права на каждую строку.
 
@@ -118,23 +121,40 @@ test('M3: в группе есть карточка другого пациен�
   } finally { db.close(); }
 });
 
-test('M1: задача переехала на карточку другого оператора — исполнитель её видит и закрывает, чужие — нет', () => {
+// CRM_UNIFY_V1 (2026-10-09) — ПРАВИЛО ИЗМЕНЕНО: задачи идут за карточкой
+// (crm/tasks-follow.js). Открытые задачи оператора влитой карточки, задачи без
+// исполнителя и задачи тех, кто оставшуюся карточку вести не может (ревью
+// задачи 10: здесь — поручение Лоле на ничьей карточке), уходят к оператору
+// оставшейся. Остаются только у того, кто её по-прежнему ведёт
+// (администратор). Правило orOwn осталось для задач, заведённых до обновления:
+// их исполнитель по-прежнему видит и закрывает свою задачу на чужой карточке —
+// это и проверяет M1.
+test('M1: задачи влитой карточки — к оператору оставшейся (кроме тех, кто её ведёт); старое поручение на чужой карточке исполнитель видит и закрывает, чужие — нет', () => {
   const db = seed();
   try {
     const keep = lead(db, { assigned_to: 5 });
     const gone = lead(db, { assigned_to: 2 });
-    const t = Number(db.prepare("INSERT INTO crm_tasks (request_id, text, assignee_id) VALUES (?, 'Перезвонить', 2)").run(gone).lastInsertRowid);
-    const other = Number(db.prepare("INSERT INTO crm_tasks (request_id, text, assignee_id) VALUES (?, 'Задача Зары', 5)").run(keep).lastInsertRowid);
-    crmMergeLeads(db, { keep_id: keep, merge_ids: [gone] }, BOSS);
+    const pool = lead(db, { assigned_to: null });
+    const ins = (rid, text, who) => Number(db.prepare('INSERT INTO crm_tasks (request_id, text, assignee_id) VALUES (?, ?, ?)').run(rid, text, who).lastInsertRowid);
+    const moved = ins(gone, 'Перезвонить', 2);
+    const pinned = ins(pool, 'Поручено Лоле', 2);
+    const boss = ins(gone, 'Администратору', 1);
+    const other = ins(keep, 'Задача Зары', 5);
+    crmMergeLeads(db, { keep_id: keep, merge_ids: [gone, pool] }, BOSS);
+    const whoOf = (id) => db.prepare('SELECT assignee_id FROM crm_tasks WHERE id = ?').get(id).assignee_id;
+    assert.deepEqual([whoOf(moved), whoOf(pinned), whoOf(boss)], [5, 5, 1],
+      'CRM_UNIFY_V1: задачи не пошли за карточкой или ушла задача того, кто карточку ведёт');
+    // Поручение с прежних времён — Лоле на карточке Зары (до CRM_UNIFY_V1 так бывало).
+    const t = ins(keep, 'Старое поручение Лоле', 2);
     const run = (desc, user) => { const q = compile(desc, user, { db }); return desc.op === 'select' ? db.prepare(q.sql).all(...q.params) : db.prepare(q.sql).run(...q.params).changes; };
     const seen = run({ op: 'select', table: 'crm_tasks', columns: 'id, assignee_id', filters: [] }, OP).map((r) => r.id);
-    assert.deepEqual(seen, [t], 'исполнитель потерял свою задачу или увидел чужую');
+    assert.deepEqual(seen, [t], 'исполнитель потерял своё поручение или увидел чужую задачу');
     assert.equal(run({ op: 'update', table: 'crm_tasks', values: { done_at: '2026-09-25T10:00:00Z' }, filters: [{ col: 'id', op: 'eq', val: t }] }, OP), 1);
     assert.equal(run({ op: 'update', table: 'crm_tasks', values: { done_at: '2026-09-25T10:00:00Z' }, filters: [{ col: 'id', op: 'eq', val: other }] }, OP), 0);
     // Новую задачу на чужую карточку оператор по-прежнему не поставит.
     const q = compile({ op: 'insert', table: 'crm_tasks', values: { request_id: keep, text: 'x', assignee_id: 2 } }, OP, { db });
     assert.equal(db.prepare(q.sql).run(...q.params).changes, 0);
-    assert.equal(run({ op: 'select', table: 'crm_tasks', columns: 'id', filters: [] }, OP2).length, 2);
+    assert.equal(run({ op: 'select', table: 'crm_tasks', columns: 'id', filters: [] }, OP2).length, 5);
   } finally { db.close(); }
 });
 

@@ -49,6 +49,9 @@ import { listStages } from '../crm/config.js';
 import { lineKey, mirrorVisit } from '../crm/booking-mirror.js';
 // CRM_MULTI_SOURCE_V1 — источники оставленной: объединение всех сливаемых.
 import { unionLeadSources } from '../crm/sources.js';
+// CRM_UNIFY_V1 — задачи идут за карточкой: при слиянии — к оператору оставшейся;
+// оператор оставшейся — только тот, кто может вести заявки (canOwnLead).
+import { moveTasksWithLead, canOwnLead } from '../crm/tasks-follow.js';
 
 /**
  * V3120_FIX — ДУБЛИ СТРОК ПОСЛЕ СЛИЯНИЯ. Две карточки одного человека почти
@@ -246,6 +249,13 @@ export function crmMergeLeads(db, args, user) {
   // — самая продвинутая из них.
   const status = isOpenCard(keep) ? keep.status
     : cards.reduce((best, c) => (rank(c.status) > rank(best) ? c.status : best), keep.status);
+  // CRM_UNIFY_V1 (ревью задачи 10) — оператор оставшейся: первый непустой, если
+  // он может вести заявки (crm/tasks-follow.js canOwnLead); иначе свой оператор
+  // оставшейся, если может он; иначе никто (стопка). Никогда — тот, кто вести
+  // заявки не может (кассир, врач, уволенный, «CRM: просмотр»).
+  const firstOwner = firstNonEmpty(order, (c) => c.assigned_to);
+  const newOwner = firstOwner != null && canOwnLead(db, firstOwner) ? firstOwner
+    : (keep.assigned_to != null && canOwnLead(db, keep.assigned_to) ? keep.assigned_to : null);
 
   const dd = db.prepare("SELECT strftime('%d.%m', ?, 'localtime') AS d");
   const notes = [];
@@ -267,13 +277,18 @@ export function crmMergeLeads(db, args, user) {
   // M2 — только номера, ступени, пациенты и счётчики: ни имён, ни телефонов,
   // ни заметок.
   const brief = (c) => ({ id: c.id, status: c.status, patient_id: c.patient_id ?? null, assigned_to: c.assigned_to ?? null });
+  // CRM_UNIFY_V1 — исполнители задач ДО слияния ([номер задачи, исполнитель]):
+  // слияние их меняет (задачи идут за карточкой), журнал помнит, у кого были.
+  const taskAssignees = (id) => db.prepare('SELECT id, assignee_id FROM crm_tasks WHERE request_id = ? ORDER BY id').all(id)
+    .map((x) => [x.id, x.assignee_id ?? null]);
   const snapshot = {
-    kept: brief(keep),
+    kept: { ...brief(keep), task_assignees: taskAssignees(keep.id) },   // CRM_UNIFY_V1
     merged: losers.map((c) => {
       const lineIds = idsOf('SELECT id FROM crm_request_services WHERE request_id = ? ORDER BY id', c.id);
       const taskIds = idsOf('SELECT id FROM crm_tasks WHERE request_id = ? ORDER BY id', c.id);
       const tags = hasTags ? idsOf('SELECT tag_key FROM crm_request_tags WHERE request_id = ? ORDER BY tag_key', c.id) : [];
-      return { ...brief(c), line_ids: lineIds, task_ids: taskIds, tags, lines: lineIds.length, tasks: taskIds.length };
+      return { ...brief(c), line_ids: lineIds, task_ids: taskIds, tags, lines: lineIds.length, tasks: taskIds.length,
+        task_assignees: taskAssignees(c.id) };   // CRM_UNIFY_V1
     }),
   };
   const actorName = user && user.id != null
@@ -285,11 +300,16 @@ export function crmMergeLeads(db, args, user) {
     // 1. Строки услуг и задачи — ПЕРЕЕЗЖАЮТ. Удаление заявки ниже уносит
     //    свои строки каскадом (ON DELETE CASCADE), поэтому переезд обязан
     //    случиться раньше — иначе услуги и задачи пропали бы вместе с карточкой.
-    //    Исполнитель задачи не меняется: даже на чужой карточке он свою задачу
-    //    видит (crm_tasks.scope.orOwn).
+    //    CRM_UNIFY_V1 — исполнитель меняется по правилу «задачи идут за
+    //    карточкой» (ниже, crm/tasks-follow.js); задача остаётся только у того,
+    //    кто оставшуюся карточку по-прежнему может вести.
     db.prepare(`UPDATE crm_request_services SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
     // V3120_FIX — переехавшие строки не удваивают услугу (см. cancelDuplicateLines).
     for (const v of cancelDuplicateLines(db, keepId)) touchedVisits.add(v);
+    // CRM_UNIFY_V1 — задачи идут за карточкой: открытые задачи оператора каждой
+    // карточки, без исполнителя и тех, кто оставшуюся вести не может, — к
+    // оператору оставшейся (newOwner выше; он же — patch.assigned_to ниже).
+    for (const c of cards) moveTasksWithLead(db, c.id, { from: c.assigned_to ?? null, to: newOwner });
     db.prepare(`UPDATE crm_tasks SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
     // CRM_CALENDAR_MIRROR_V1 — привязки записей календаря к заявке (миграция 187)
     // переезжают так же: запись без строк иначе держалась бы за удалённую карточку.
@@ -314,7 +334,7 @@ export function crmMergeLeads(db, args, user) {
       full_name: firstNonEmpty(order, (c) => c.full_name) || keep.full_name,
       phone: firstNonEmpty(order, (c) => c.phone) || keep.phone,
       patient_id: firstNonEmpty(order, (c) => c.patient_id),
-      assigned_to: firstNonEmpty(order, (c) => c.assigned_to),
+      assigned_to: newOwner,   // CRM_UNIFY_V1 — тот же, к кому ушли задачи
       status,
       note: notes.join('\n'),
       // Доказательство звонка у оставшейся — своё; нет своего — самое раннее.

@@ -40,41 +40,96 @@ export function isOverdue(task, now = nowIso()) {
 /**
  * Ближайшая открытая задача каждой заявки: Map(request_id → task). Сначала по
  * сроку; задача без срока — после любой со сроком.
+ * CRM_UNIFY_V1 — `me`: своя задача (assignee_id = me) показывается первой, даже
+ * если чужая наступает раньше: на чипе доски человек ищет своё дело.
  */
-export function nearestOpenTasks(tasks) {
+export function nearestOpenTasks(tasks, me = null) {
     const out = new Map();
+    const mine = (t) => me != null && String(t.assignee_id) === String(me);
     for (const t of tasks || []) {
         if (!t || t.done_at) continue;
         const key = String(t.request_id);
         const cur = out.get(key);
-        if (!cur || dueRank(t) < dueRank(cur)) out.set(key, t);
+        if (!cur || (mine(t) && !mine(cur)) || (mine(t) === mine(cur) && dueRank(t) < dueRank(cur))) out.set(key, t);
     }
     return out;
 }
 const dueRank = (t) => (t.due_at ? String(t.due_at) : '￿');
 
+// CRM_UNIFY_V1 — ОДНО ПРАВИЛО ДЛЯ СПИСКА И СЧЁТЧИКА: чьи открытые задачи (Р18).
+// Вид «Задачи» (crm-tasks-view.js) и красный счётчик меню строят запрос здесь.
+// Задача приходит с карточкой (embed crm_requests): у невидимой карточки сервер
+// отдаёт пустую связь — строка вида «Карточка у другого оператора».
+export const TASK_LIST_SELECT = 'id, request_id, text, due_at, assignee_id, done_at, users(full_name), crm_requests(id, full_name, phone, status, assigned_to)';
+/**
+ * @param {object} db  клиент /api/db
+ * @param {object} o
+ * @param {'me'|'all'|'none'|string|number} o.who  мои / все / без ответственного / сотрудник
+ * @param {number|null} o.me
+ * @param {string} [o.columns]
+ * @param {boolean} [o.count]  только число (count: 'exact', без строк)
+ * @param {boolean} [o.withCount]  строки и число всего отбора (CRM_UNIFY_V1 — «показаны первые N»)
+ */
+export function taskQuery(db, { who = 'me', me = null, columns = TASK_LIST_SELECT, count = false, withCount = false } = {}) {
+    const opts = count ? { count: 'exact', head: true } : (withCount ? { count: 'exact' } : undefined);
+    let q = db.from('crm_tasks').select(columns, opts).is('done_at', null);
+    if (who === 'me') q = q.eq('assignee_id', me == null ? 0 : Number(me));
+    else if (who === 'none') q = q.is('assignee_id', null);
+    else if (who !== 'all' && Number(who) > 0) q = q.eq('assignee_id', Number(who));
+    return q;
+}
+
 /**
  * Сколько просроченных задач показать у пункта CRM в меню. Оператору — только
  * назначенные ему, администратору — все. null — число не узнать (нет права на
  * таблицу, нет сети): бейдж тогда не рисуется вовсе, а не врёт нулём.
+ *
+ * CRM_UNIFY_V1 — тот же запрос, что у вида «Задачи» (taskQuery), плюс «срок
+ * наступил»: щелчок по счётчику открывает вид с тем же отбором `who`. Старая
+ * подпись { me, isAdmin } оставлена для совместимости.
  */
-export async function overdueTaskCount({ me, isAdmin, db = supabase, now = nowIso() } = {}) {
-    if (!isAdmin && me == null) return null;
-    let q = db.from('crm_tasks').select('id', { count: 'exact', head: true })
-        .is('done_at', null).lte('due_at', now);
-    if (!isAdmin) q = q.eq('assignee_id', me);
-    const { count, error } = await q;
+export async function overdueTaskCount({ who = null, me = null, isAdmin = false, db = supabase, now = nowIso() } = {}) {
+    const w = who || (isAdmin ? 'all' : 'me');
+    if (w === 'me' && me == null) return null;
+    // CRM_UNIFY_V1 (итоговое ревью) — нужно только число: строк не тянем (число
+    // сервер считает по всему отбору, без предела).
+    const { count, error } = await taskQuery(db, { who: w, me, columns: 'id', count: true }).lte('due_at', now).limit(1);
     if (error) return null;
     return Number(count) || 0;
 }
 
+// CRM_UNIFY_V1 (итоговое ревью) — ПОРЯДОК И ПРЕДЕЛ СПИСКА ЗАДАЧ. Один запрос
+// «по сроку» ставил задачи БЕЗ срока первыми (так SQLite сортирует NULL), и
+// предел 2000 съедал просроченные — ровно те, ради которых список открывают.
+// Теперь два запроса: со сроком — по сроку, без срока — в конце; число всего
+// отбора приходит вместе со строками, и вид честно говорит «показаны первые N».
+export const TASK_LIST_LIMIT = 5000;
+/**
+ * Открытые задачи отбора: сначала со сроком (по сроку), потом без срока.
+ * @returns {Promise<{rows: object[], total: number, error?: object}>}
+ */
+export async function loadTaskRows(db, { who = 'me', me = null, columns = TASK_LIST_SELECT, limit = TASK_LIST_LIMIT } = {}) {
+    const [dated, undated] = await Promise.all([
+        taskQuery(db, { who, me, columns, withCount: true }).not('due_at', 'is', null)
+            .order('due_at', { ascending: true }).order('id', { ascending: true }).limit(limit),
+        taskQuery(db, { who, me, columns, withCount: true }).is('due_at', null)
+            .order('id', { ascending: true }).limit(limit),
+    ]);
+    const error = (dated && dated.error) || (undated && undated.error);
+    if (error) return { rows: [], total: 0, error };
+    const a = dated.data || [];
+    const b = undated.data || [];
+    const total = (Number.isFinite(Number(dated.count)) ? Number(dated.count) : a.length)
+        + (Number.isFinite(Number(undated.count)) ? Number(undated.count) : b.length);
+    return { rows: [...a, ...b].slice(0, limit), total };
+}
+
 /** Открытые задачи всех заявок — для метки «задача: …» на карточках доски. */
 export async function loadOpenTasks(db = supabase) {
-    const { data, error } = await db.from('crm_tasks')
-        .select('id, request_id, text, due_at, assignee_id, done_at')
-        .is('done_at', null).order('due_at', { ascending: true }).limit(2000);
+    // CRM_UNIFY_V1 — с исполнителем (чья задача); порядок и предел — loadTaskRows.
+    const res = await loadTaskRows(db, { who: 'all', columns: 'id, request_id, text, due_at, assignee_id, done_at, users(full_name)' });
     // Роль без права на задачи (врач видит доску, но не задачи) — просто без меток.
-    return error ? [] : (data || []);
+    return res.error ? [] : res.rows;
 }
 
 const TEXT_MAX = 500;
@@ -86,18 +141,28 @@ const TEXT_MAX = 500;
  * @param {object} o.request     строка заявки (нужны id и assigned_to/users)
  * @param {{id:number, full_name:string}|null} o.me
  * @param {boolean} o.isAdmin    удалять задачи может только администратор
- * @param {Promise<object[]>|null} o.staff  кого можно назначить (у админа — весь
- *        персонал доски); без него — «я» и оператор заявки
  * @param {() => void} [o.onChange]  после любой правки (обновить бейдж меню)
+ *
+ * CRM_UNIFY_V1 — КОГО МОЖНО НАЗНАЧИТЬ, РЕШАЕТ СЕРВЕР (Р17): RPC
+ * crm_task_assignees отдаёт тех, кто может вести эту карточку (активен, ведёт
+ * заявки, видит карточку). Браузер чужих прав не знает, поэтому своего списка
+ * не собирает. По умолчанию — оператор карточки, если он в ответе сервера; у
+ * ничьей карточки выбор обязателен, «себе» по умолчанию нет. Список не
+ * загрузился — поле заперто и говорит об этом: задача с угаданным
+ * ответственным не уходит.
  */
-export function crmTasksBlock({ request, me, isAdmin, staff = null, onChange } = {}) {
+export function crmTasksBlock({ request, me, isAdmin, onChange } = {}) {
     const root = h('div', { class: 'crm-tasks', 'data-crm-tasks': '' });
     const list = h('div', { class: 'crm-task-list' },
         h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загружаем…'));
     let tasks = [];
-    let people = basePeople(request, me);
+    // CRM_UNIFY_V1 — people: кого можно выбрать (только ответ сервера);
+    // known: «я» и оператор карточки — лишь подписи к уже стоящим задачам.
+    let people = [];
+    let peopleState = 'loading';   // 'loading' | 'ready' | 'failed'
+    const known = basePeople(request, me);
     const nameOf = (id) => {
-        const p = people.find((x) => String(x.id) === String(id));
+        const p = people.find((x) => String(x.id) === String(id)) || known.find((x) => String(x.id) === String(id));
         return p ? p.full_name : '';
     };
     const changed = () => { try { if (onChange) onChange(); } catch (e) { /* бейдж — подсказка */ } };
@@ -173,26 +238,36 @@ export function crmTasksBlock({ request, me, isAdmin, staff = null, onChange } =
     const dateInp = h('input', { type: 'date', 'aria-label': 'Дата', 'data-task-date': '' });
     const timeInp = h('input', { type: 'time', 'aria-label': 'Время', value: DEFAULT_DUE_TIME, 'data-task-time': '' });
     const whoSel = h('select', { 'aria-label': 'Ответственный', 'data-task-who': '' });
-    const defaultWho = () => String((request && request.assigned_to) || (me && me.id) || '');
+    // CRM_UNIFY_V1 — по умолчанию оператор карточки (если сервер его предлагает);
+    // у ничьей карточки — никто: «себе» по умолчанию больше нет.
+    const defaultWho = () => String((request && request.assigned_to) || '');
     let whoTouched = false;
     whoSel.addEventListener('change', () => { whoTouched = true; });
+    // CRM_UNIFY_V1 — список не загрузился: сообщение у поля, поле заперто.
+    const whoError = h('div', { class: 'muted crm-task-who-error', 'data-task-who-error': '', style: { fontSize: '12.5px', display: 'none' } },
+        Icon('Warning', { size: 12 }), ' ', 'Список ответственных не загрузился — задачу сейчас не поставить. Закройте карточку и откройте её снова.');
     function fillWho() {
         const keep = whoTouched ? whoSel.value : defaultWho();
         clear(whoSel);
+        whoSel.appendChild(h('option', { value: '' }, '— выберите ответственного —'));
         for (const p of people) whoSel.appendChild(h('option', { value: String(p.id) }, p.full_name || trf('Сотрудник №{id}', { id: p.id })));
-        whoSel.value = people.some((p) => String(p.id) === keep) ? keep : (people[0] ? String(people[0].id) : '');
+        whoSel.value = people.some((p) => String(p.id) === keep) ? keep : '';
+        whoSel.disabled = peopleState === 'failed';
+        whoError.style.display = peopleState === 'failed' ? '' : 'none';
     }
     fillWho();
-    if (staff && typeof staff.then === 'function') {
-        staff.then((list2) => {
-            if (!Array.isArray(list2) || !list2.length) return;
-            const merged = [...people];
-            for (const p of list2) if (!merged.some((x) => String(x.id) === String(p.id))) merged.push(p);
-            people = merged;
+    // CRM_UNIFY_V1 — кого можно назначить, решает сервер (Р17).
+    const assigneesFailed = () => { peopleState = 'failed'; people = []; fillWho(); };
+    Promise.resolve()
+        .then(() => supabase.rpc('crm_task_assignees', { request_id: request.id }))
+        .then(({ data, error }) => {
+            if (error || !Array.isArray(data)) { assigneesFailed(); return; }
+            people = data.map((p) => ({ id: p.id, full_name: p.full_name }));
+            peopleState = 'ready';
             fillWho();
             paintList();
-        }).catch(() => {});
-    }
+        })
+        .catch(assigneesFailed);
 
     const addBtn = h('button', { class: 'btn btn-sm btn-primary', type: 'button', 'data-task-add': '' }, Icon('Plus', { size: 13 }), ' ', 'Добавить задачу');
     addBtn.addEventListener('click', async () => {
@@ -200,11 +275,14 @@ export function crmTasksBlock({ request, me, isAdmin, staff = null, onChange } =
         if (!text) { toast('Напишите, что нужно сделать.', 'fail'); return; }
         const due = localDueIso(dateInp.value, timeInp.value);
         if (!due) { toast('Укажите дату задачи.', 'fail'); return; }
+        // CRM_UNIFY_V1 — ответственный обязателен и только из ответа сервера.
+        if (peopleState === 'failed') { toast('Список ответственных не загрузился — задачу сейчас не поставить. Закройте карточку и откройте её снова.', 'fail'); return; }
+        if (!whoSel.value || !people.some((p) => String(p.id) === String(whoSel.value))) { toast('Выберите ответственного.', 'fail'); return; }
         addBtn.disabled = true;
         try {
             const { error } = await supabase.from('crm_tasks').insert({
                 request_id: request.id, text: text.slice(0, TEXT_MAX), due_at: due,
-                assignee_id: whoSel.value ? Number(whoSel.value) : null,
+                assignee_id: Number(whoSel.value),   // CRM_UNIFY_V1 — выбран из ответа сервера
                 // created_by ставит сервер по сессии (реестр stamps).
             });
             if (error) { toast(error.message, 'fail'); return; }
@@ -216,11 +294,12 @@ export function crmTasksBlock({ request, me, isAdmin, staff = null, onChange } =
 
     root.appendChild(list);
     root.appendChild(h('div', { class: 'crm-task-form' }, textInp, dateInp, timeInp, whoSel, addBtn));
+    root.appendChild(whoError);   // CRM_UNIFY_V1
     reload();
     return root;
 }
 
-/** «Я» и оператор заявки — кого можно назначить без списка персонала. */
+/** «Я» и оператор заявки — подписи к задачам. CRM_UNIFY_V1: выбрать их можно, только если их предлагает сервер. */
 function basePeople(request, me) {
     const out = [];
     if (me && me.id != null) out.push({ id: me.id, full_name: me.full_name || tr('Я') });

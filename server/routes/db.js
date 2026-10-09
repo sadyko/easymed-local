@@ -22,6 +22,7 @@ import { PROXY_MODEL_REQUIRED } from '../services/rpc/lis.js';   // LIS_PROXY_V1
 import { PROXY_MODELS } from '../../public/js/shared/lisproxy-models.js';   // LIS_PROXY_V1 (ревью, Р21)
 // CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
+import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -366,6 +367,9 @@ export function dbRoutes(db) {
     // берёт заявку себе или отпускает её в общую стопку (NULL).
     const assignRefusal = crmAssignRefusal(db, compiled.meta, req.body, req.user);
     if (assignRefusal) return res.status(403).json({ error: { code: 'forbidden', message: assignRefusal } });
+    // CRM_UNIFY_V1 — ответственный за задачу обязан видеть её карточку (crm/tasks-follow.js).
+    const taskRefusal = taskAssigneeRefusal(db, compiled.meta, req.body, req.user);
+    if (taskRefusal) return res.status(403).json({ error: { code: 'forbidden', message: taskRefusal } });
     // CRM_MULTI_SOURCE_V1 — источники заявки: сервер проверяет `sources` и сам
     // ставит главный `source = sources[0]`; запись одного `source` сбрасывает
     // `sources` в [source]. Тело правится на месте и собирается заново тем же
@@ -453,6 +457,7 @@ export function dbRoutes(db) {
           } catch (e) { if (!refused) throw e; }
           if (refused) return res.status(403).json({ error: { code: 'forbidden', message: 'not allowed' } });
           mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
+          rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
           return res.json({ data: null });
         }
         const info = db.prepare(sql).run(...params);
@@ -472,6 +477,7 @@ export function dbRoutes(db) {
           crmServiceEvidence(db, [Number(info.lastInsertRowid)]);
         }
         mirrorAfter(db, mirror, meta, req.body, req.user, { insertedId: Number(info.lastInsertRowid) });   // CRM_CALENDAR_MIRROR_V1
+        rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
         if (!meta.returning) return res.json({ data: null });
         const row = db.prepare(
           `SELECT ${readableColumns(meta.table).map((c) => `"${c}"`).join(', ')} FROM "${meta.table}" WHERE rowid = ?`
@@ -482,6 +488,7 @@ export function dbRoutes(db) {
       if (meta.op === 'upsert') {
         db.prepare(sql).run(...params);
         mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
+        rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
         // A bulk (array) upsert has no single row to hand back; callers that use
         // it don't request returning. Single-row upsert re-selects below.
         if (!meta.returning || meta.multi) return res.json({ data: null });
@@ -506,6 +513,7 @@ export function dbRoutes(db) {
         if (updInfo.changes === 0 && zeroRowRefusal(meta.table)) return res.status(403).json({ error: { code: 'forbidden', message: zeroRowRefusal(meta.table) } });
         if (evidence.length) crmServiceEvidence(db, evidence);
         mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
+        rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
         if (!meta.returning) return res.json({ data: null });
         // Re-select the affected rows using the SAME filters that scoped the
         // update (never the whole table) so `returning` reflects only what
@@ -519,6 +527,7 @@ export function dbRoutes(db) {
         const delInfo = db.prepare(sql).run(...params);
         if (delInfo.changes === 0 && zeroRowRefusal(meta.table)) return res.status(403).json({ error: { code: 'forbidden', message: zeroRowRefusal(meta.table) } });   // CABINET_FIX_V1_R1
         mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
+        rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
         return res.json({ data: null });
       }
     } catch (e) {
@@ -568,16 +577,32 @@ export function dbRoutes(db) {
 // коллеги — и она исчезала у него с доски, появляясь у другого без следа.
 // Кто видит всё (scopeLifted — то же правило, что у доски), назначает кого
 // угодно; остальные — себя или никого.
+// CRM_UNIFY_V1 (ревью задачи 10, R4/R5/R10) — «кого угодно» — из тех, кто может
+// вести заявки (crm/tasks-follow.js canOwnLead: активен, пишет задачи CRM,
+// «CRM: изменение»). Иначе карточка — и её задачи, идущие за ней, — уходили
+// кассиру, врачу, уволенному, наблюдателю или несуществующему номеру.
+// CRM_UNIFY_V1 (финальное ревью) — права ролей сменились («Настройки → Роли»
+// пишет role_permissions через эту дверь): «crm.all» сняли, CRM — «просмотр»
+// или без раздела. Задачи тех, кто больше не может вести карточку, сразу —
+// её хозяину (crm/tasks-follow.js rehomeOrphanTasks; иначе — проход раз в
+// час, server/index.js). Не бросает.
+function rehomeAfterRolesWrite(db, meta) {
+  if (meta && meta.table === 'role_permissions') rehomeOrphanTasks(db);
+}
+
 function crmAssignRefusal(db, meta, body, user) {
   if (!meta || meta.table !== 'crm_requests') return null;
   if (meta.op !== 'insert' && meta.op !== 'update' && meta.op !== 'upsert') return null;
   const rows = Array.isArray(body && body.values) ? body.values : [body && body.values];
   const me = user && Number(user.id);
-  const foreign = rows.some((r) => r && Object.prototype.hasOwnProperty.call(r, 'assigned_to')
+  const foreign = rows.filter((r) => r && Object.prototype.hasOwnProperty.call(r, 'assigned_to')
     && r.assigned_to !== null && r.assigned_to !== '' && Number(r.assigned_to) !== me);
-  if (!foreign) return null;
-  if (scopeLifted(rowScope('crm_requests'), user, db)) return null;
-  return 'Передать заявку другому сотруднику может руководитель колл-центра или администратор. Возьмите её себе или оставьте в общей стопке.';
+  if (!foreign.length) return null;
+  if (!scopeLifted(rowScope('crm_requests'), user, db)) {
+    return 'Передать заявку другому сотруднику может руководитель колл-центра или администратор. Возьмите её себе или оставьте в общей стопке.';
+  }
+  if (foreign.some((r) => !canOwnLead(db, r.assigned_to))) return ownerRefusal();   // CRM_UNIFY_V1
+  return null;
 }
 
 // STAFF_SYNC_V1 — эта установка является филиалом? Испорченная или отсутствующая

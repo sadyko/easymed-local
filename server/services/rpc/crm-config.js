@@ -9,6 +9,7 @@
 
 import { grantAllowsAdminOr } from '../grants.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { crmConfig, saveConfig, CrmConfigError } from '../crm/config.js';
+import { withTemplate } from '../server-message.js';   // CRM_UNIFY_V1 — фраза с числом переводится на экране
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -60,7 +61,11 @@ export function crmConfigGet(db) {
  * args: { stages?: [{key,label,color,kind,is_active}], — WHOLE ordered array
  *         sources?: [{key,label,is_active}],           — WHOLE ordered array
  *         tags?: [{key,label,color,is_active}],        — WHOLE ordered array (CRM_HEAD_MERGE_TAGS_V1, may be empty)
- *         routing?: [{provider?,disposition,action,stage_key}] } — upsert only
+ *         routing?: [{provider?,disposition,action,stage_key}], — upsert only
+ *         settings?: {booked_stage?, won_stage?, window_hours?} } — CRM_UNIFY_V1:
+ *           «Колонка записи», «Колонка конверсии (пришёл)» (перенос вида won
+ *           одной транзакцией) и окно повторного обращения; уровень — тот же
+ *           «CRM-канбан: Изменение», что у колонок (по умолчанию — администратор)
  *
  * Always answers with the full config, never just what was posted: hiding a
  * column switches the routing rules that fed it off, and a screen redrawing
@@ -74,12 +79,18 @@ export function crmConfigSave(db, args, user) {
     requireLevel(db, user, 'delete');
   }
   try {
-    return saveConfig(db, args || {});
+    // CRM_UNIFY_V1 — кто сохранил (crm_settings.changed_by) — вошедший, а не тело запроса.
+    return saveConfig(db, a, { actorId: user && Number(user.id) > 0 ? Number(user.id) : null });
   } catch (e) {
     // config.js speaks in whole Russian sentences with a status already on
     // them — the screen shows them verbatim, so they must not be re-wrapped
     // into a generic "bad request" (telephony's SettingsError pattern).
-    if (e instanceof CrmConfigError) throw new RpcError(e.message, e.status);
+    if (e instanceof CrmConfigError) {
+      const err = new RpcError(e.message, e.status);
+      // CRM_UNIFY_V1 — собранная фраза («В колонке «X» карточек: N…») едет
+      // шаблоном и значениями: экран переводит шаблон (V3120_I18N).
+      throw e.template ? withTemplate(err, e.template, e.params) : err;
+    }
     throw e;
   }
 }

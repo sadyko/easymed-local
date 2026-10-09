@@ -23,6 +23,9 @@ import { scheduleBranchPull } from './services/branch-sync/schedule-pull.js';   
 import { readPairing } from './services/branch-sync/pairing.js';
 import { runBranchSync } from './services/rpc/branch-sync.js';
 import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EVENTS_V1
+import { scheduleCrmNoShow } from './services/crm/no-show.js';   // CRM_UNIFY_V1
+import { crmUnifyRepair } from './services/crm/unify-repair.js';   // CRM_UNIFY_V1
+import { scheduleCrmTaskRehome } from './services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -180,6 +183,16 @@ if (isMain) {
   try { db.exec('DELETE FROM ledger_write_token; DELETE FROM merge_money_moves;'); }
   catch (e) { console.warn('[ledger-token] cleanup:', e.message); }
 
+  // CRM_UNIFY_V1 — разовое исправление застрявших карточек и потерянных задач
+  // (миграция 238 ставит отметку «не сделано»; crm/unify-repair.js). Сразу после
+  // миграций и ДО первого прохода «Не пришёл» (scheduleCrmNoShow ниже): проход не
+  // должен успеть пометить карточку, которую исправление закрыло бы. Упало —
+  // откатилось целиком и повторится при следующем запуске.
+  try {
+    const repaired = crmUnifyRepair(db);
+    if (repaired.summary) console.log('  ' + repaired.summary);
+  } catch (e) { console.warn('[crm-unify-repair]', e && e.message); }
+
   // PRUNE_VERSIONS_V1 — старые версии программы убираются ИМЕННО ЗДЕСЬ: после
   // того, как миграции прошли. Это первый момент, когда известно, что
   // запущенная версия работает. Чистить раньше — во время обновления — нельзя:
@@ -203,6 +216,15 @@ if (isMain) {
   // hammering 500s or retrying a doomed login between restarts.
   pruneOpsEvents(db);
   setInterval(() => pruneOpsEvents(db), 3600 * 1000).unref();
+
+  // CRM_UNIFY_V1 — «Не пришёл» ставит сервер: при запуске и раз в час (crm/no-show.js).
+  // Таймер unref, проход не бросает; ошибка запуска — предупреждение, не отказ.
+  try { scheduleCrmNoShow(db); } catch (e) { console.warn('[crm-no-show]', e && e.message); }
+  // CRM_UNIFY_V1 — задачи тех, кто больше не может вести карточку («crm.all»
+  // сняли, роль — «просмотр», уволен), — её хозяину: при запуске (после
+  // разового исправления выше) и раз в час (crm/tasks-follow.js). Правка прав
+  // ролей через /api/db делает то же сразу (routes/db.js).
+  try { scheduleCrmTaskRehome(db); } catch (e) { console.warn('[crm-task-rehome]', e && e.message); }
 
   // TELEGRAM_BOT_V1 — опросник Telegram живёт внутри этого же процесса, чтобы у
   // клиники был один `npm start`. Он сам проверяет, включён ли бот в настройках,

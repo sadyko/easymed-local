@@ -20,10 +20,6 @@ import { formatPhone } from '../phone-format.js';
 import { selfUserId, hasActorRole, canSeeAllLeads } from '../permissions.js';
 import { openCrmDuplicates } from './crm-duplicates.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
-// CRM_LINKS_V1 — общий путь заведения карты: проверка дубля, штампы клиники и
-// филиала, привязка открытых заявок по телефону. Регистрация из CRM обязана
-// идти им же, иначе карта «почти правильная» (см. patientRegistrationModal).
-import { linkCrmRequestsToPatient } from '../data.js';
 // QUICK_PATIENT_V1 — пациента с заявки заводит ОБЩЕЕ окно быстрой регистрации:
 // те же реквизиты, что в регистратуре и в привязке каталога услуг. Строка
 // запроса (?v=qp1) — ТА ЖЕ, что у каталога: адрес с другим ?v это для браузера
@@ -59,6 +55,10 @@ import { readEnsureVisit } from '../ensure-visit-answer.js';
 // CRM_DEDUP_SEARCH_TASKS_V1 — задачи на карточке заявки (миграция 148): блок в
 // окне заявки, метка «задача: …» на карточке доски.
 import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso } from './crm-tasks.js';
+// CRM_UNIFY_V1 — вид «Задачи»: третий вид раздела (Канбан / Список / Задачи).
+import { renderTasksView } from './crm-tasks-view.js';
+// CRM_UNIFY_V1 — загрузка доски: все открытые, закрытые за период, настоящие числа.
+import { loadBoard, periodBounds, periodStart, dayStart, dayEnd, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT, loadReportRows } from './crm-board-load.js';
 // CRM_MULTI_SOURCE_V1 — несколько источников у заявки (миграция 231). Правило
 // чтения одно на экран и сервер: sources, иначе [source], иначе ['other'].
 import { leadSources, toggleLeadSource, leadHasAnySource, sourceTally, MAX_LEAD_SOURCES } from '../crm-sources.js';
@@ -89,6 +89,10 @@ let TAGS = [], TAG_RU = {};
 // автоматика обязана их видеть. Считаются из ТОГО ЖЕ ответа, что и доска, —
 // второго запроса за настройками не нужно.
 let STAGE_KEYS = stageKeysFrom(null);
+// CRM_UNIFY_V1 — «Колонка записи» из настроек «CRM-канбан» (boardConfig.bookedStatus):
+// то же правило, что у сервера (public/js/shared/crm-booked-stage.js), а не
+// догадка «сидовая, если видна, иначе первая видимая». null — некуда.
+let BOOKED_STATUS = 'scheduled';
 function applyBoardConfig(data) {
     const c = boardConfig(data);
     SOURCES = c.sources; SOURCE_RU = c.sourceRu;
@@ -97,6 +101,7 @@ function applyBoardConfig(data) {
     ACTIVE_STATUSES = c.activeStatuses; LOST_STATUSES = c.lostStatuses;
     STAGE_KEYS = stageKeysFrom(data);
     TAGS = c.tags || []; TAG_RU = c.tagRu || {};   // CRM_HEAD_MERGE_TAGS_V1
+    BOOKED_STATUS = c.bookedStatus;   // CRM_UNIFY_V1
 }
 applyBoardConfig(null);   // запасная воронка — до первого ответа сервера доска уже рабочая
 async function loadBoardConfig() {
@@ -121,14 +126,13 @@ function stageKey(preferred) {
     if (STATUSES.some(([k]) => k === preferred)) return preferred;
     return STATUSES.length ? STATUSES[0][0] : CONVERT_STATUS;
 }
-// Есть ли такая колонка вообще: для фоновой автоматики, которой лучше не
-// сработать, чем сработать не туда.
-const hasStage = (key) => STATUSES.some(([k]) => k === key);
+// CRM_UNIFY_V1 — hasStage('scheduled') ушёл: есть ли «Колонка записи», решает
+// BOOKED_STATUS (null — некуда); другой автоматике проверка не нужна.
 // Источник новой заявки по умолчанию — первый видимый, а не жёсткое 'call':
 // источник тоже редактируется, и 'call' может быть переименован или скрыт.
 const defaultSource = () => (SOURCES.length ? SOURCES[0][0] : 'call');
-// CRM_KANBAN_PAGE_V1 — сколько карточек рисуется в колонке сразу.
-const KANBAN_PAGE = 20;
+// CRM_UNIFY_V1 — CRM_KANBAN_PAGE_V1 («Показать ещё 20») убран: колонка рисует все
+// свои карточки и прокручивается сама (admin-views.css .crm-col-list).
 
 // CRM_REASSIGN_V1 — КОМУ МОЖНО ПЕРЕДАТЬ ЗАЯВКУ.
 //
@@ -161,7 +165,7 @@ export function boardStaff(users) {
 // CRM_FILTERS_V1 — источник и период сужают доску. Живут в state, потому что
 // paintBody() перерисовывает только тело, без повторного запроса к базе.
 // CRM_MULTI_SOURCE_V1 — `sources`: отмеченные в фильтре источники (пусто = все).
-const state = { view: 'kanban', filter: 'all', search: '', rows: [], sources: [], period: 'all',
+const state = { view: 'kanban', search: '', rows: [], sources: [], period: 'all',   // CRM_UNIFY_V1 — мёртвое filter: 'all' убрано
                 // CRM_PERIOD_CUSTOM_V1 — границы своего периода, 'YYYY-MM-DD'.
                 // Пустая граница = без ограничения с этой стороны: «с 01.08 и
                 // далее» — нормальный вопрос, и запрещать его незачем.
@@ -176,7 +180,17 @@ const state = { view: 'kanban', filter: 'all', search: '', rows: [], sources: []
                 openTasks: new Map(),
                 // CRM_HEAD_MERGE_TAGS_V1 — фильтр «Метки» ('' = все) и метки
                 // каждой заявки: Map(String(request_id) → [tag_key]).
-                tag: '', leadTags: new Map() };
+                tag: '', leadTags: new Map(),
+                // CRM_UNIFY_V1 — вид «Задачи»: чьи задачи ('me' | 'all' | 'none' |
+                // id сотрудника) и сотрудники для выбора (только руководителю).
+                taskWho: 'me',
+                // CRM_UNIFY_V1 — фильтр «Оператор» (Р15): 'all' | 'me' | 'none' | id;
+                // сотрудники для выбора по имени (только тому, кто видит всю доску);
+                // номер из поиска есть у чужой карточки (подсказка, без карточки).
+                operator: 'all', staff: [], staffLoaded: false, searchForeign: false,
+                // CRM_UNIFY_V1 — у обрезанных закрытых колонок («Всё время», 300)
+                // настоящее число из базы: Map ключ ступени → число / обрезана ли.
+                counts: {}, capped: {} };
 let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний ответ поиска побеждает
 
 // Период считается по created_at — «когда обратились», а не когда записаны:
@@ -189,47 +203,33 @@ let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний отв�
 // остаются скользящими: месяц здесь про объём, а не про календарь.
 const PERIODS = [['all', 'Всё время'], ['today', 'Сегодня'], ['week', 'Эта неделя'], ['30', '30 дней'],
                  ['custom', 'Свой период']];   // CRM_PERIOD_CUSTOM_V1
-// Граница периода — НАЧАЛО дня по местному времени, а не «минус 24 часа»:
-// «7 дней» для регистратуры это семь календарных дней, а не 168 часов.
-function periodStart(key) {
-    if (key === 'all') return null;
-    const d = new Date(); d.setHours(0, 0, 0, 0);
-    if (key === 'today') return d;
-    // Неделя начинается с ПОНЕДЕЛЬНИКА: getDay() считает воскресенье нулём,
-    // поэтому сдвигаем, иначе в воскресенье «эта неделя» показала бы один день.
-    if (key === 'week') {
-        d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-        return d;
-    }
-    d.setDate(d.getDate() - (Number(key) - 1));
-    return d;
-}
-// CRM_PERIOD_CUSTOM_V1 — 'YYYY-MM-DD' в границы МЕСТНЫХ суток.
-//
-// Верхняя граница включает весь день целиком. Иначе «по 18.08» отрезало бы
-// заявки, поданные 18-го после полуночи, — то есть почти все заявки последнего
-// дня выборки, и пропажу заметили бы не сразу.
-//
-// Без 'Z' в строке: new Date('2026-08-18T00:00:00') разбирается как местное
-// время, а с 'Z' — как UTC, и на UTC+5 период съезжал бы на пять часов.
+// Граница периода — НАЧАЛО дня по местному времени, а не «минус 24 часа».
+// CRM_UNIFY_V1 — periodStart / dayStart / dayEnd (неделя с понедельника, «по» —
+// включая весь последний день, CRM_PERIOD_CUSTOM_V1) перенесены в
+// views/crm-board-load.js: по ним же грузятся закрытые карточки периода.
 // Местная дата как 'YYYY-MM-DD'. Через toISOString() вечером на UTC+5
 // получилось бы завтрашнее число.
 function ymdLocal(d) {
     const p = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
-function dayStart(ymd) {
-    if (!ymd) return null;
-    const d = new Date(ymd + 'T00:00:00');
-    return isNaN(d) ? null : d;
-}
-function dayEnd(ymd) {
-    if (!ymd) return null;
-    const d = new Date(ymd + 'T23:59:59.999');
-    return isNaN(d) ? null : d;
-}
 
+// CRM_UNIFY_V1 (итоговое ревью, решение контролёра) — ключи закрытых колонок:
+// конверсия и проигрышные. Их и только их сужает «Период»; открытые карточки
+// видны всегда (владелец: «карточки пропадают»).
+// Сидовая «Не пришёл» — ЖИВАЯ работа, а не закрытая: операторы перезванивают
+// этим пациентам, и звонок или запись её открывает (сервер: I-3,
+// services/crm/contact-window.js liveKeys = открытые + 'no_show'). На доске
+// она как открытая: видна всегда, без периода и без 300 на колонку, число
+// полное — и в «Списке», и в Excel (всё это идёт отсюда).
+const SEED_NO_SHOW_STAGE = 'no_show';   // тот же ключ, что SEED_NO_SHOW_STAGE сервера
+function closedKeys() {
+    return [STAGE_KEYS.won, ...STAGE_KEYS.lost].filter((k) => k && k !== SEED_NO_SHOW_STAGE);
+}
 function inPeriod(r) {
+    // CRM_UNIFY_V1 (итоговое ревью) — «Период» НИКОГДА не прячет открытые
+    // карточки: это работа, и её не должно быть «не видно» из-за даты обращения.
+    if (!closedKeys().includes(r.status)) return true;
     if (state.period === 'custom') {
         const d = new Date(r.created_at);
         if (isNaN(d)) return false;
@@ -255,7 +255,7 @@ function sourceLabel(k) {
 }
 /** CRM_MULTI_SOURCE_V1 — все источники заявки через запятую, главный первым (список, Excel). */
 export function sourcesText(r) {
-    return leadSources(r).map(sourceLabel).join(', ');
+    return leadSources(r).map((k) => tr(sourceLabel(k))).join(', ');   // CRM_UNIFY_V1 (итоговое ревью) — подписи переводятся
 }
 /**
  * Строки выгрузки Excel доски (первая — заголовки). Вынесены из exportExcel
@@ -265,11 +265,13 @@ export function sourcesText(r) {
  */
 export function crmExcelRows(rows) {
     return [
-        ['Имя', 'Телефон', 'Источник', 'Услуга', 'Дата записи', 'Комментарий', 'Статус', 'Метки', 'Пациент (MRN)', 'Дата'],
+        // CRM_UNIFY_V1 (итоговое ревью) — заголовки, ступень и метки — на языке экрана.
+        ['Имя', 'Телефон', 'Источник', 'Услуга', 'Дата записи', 'Комментарий', 'Статус', 'Оператор', 'Метки', 'Пациент (MRN)', 'Дата'].map((x) => tr(x)),
         ...(Array.isArray(rows) ? rows : []).map((r) => [
             r.full_name || '', r.phone || '', sourcesText(r),
-            r.services ? r.services.name : '', r.scheduled_date || '', r.note || '', (STATUS_RU[r.status] || [r.status])[0],
-            tagsOf(r).map((k) => (TAG_RU[k] || [k])[0]).join(', '),
+            r.services ? r.services.name : '', r.scheduled_date || '', r.note || '', tr((STATUS_RU[r.status] || [r.status])[0]),
+            (r.users && r.users.full_name) || '',   // CRM_UNIFY_V1
+            tagsOf(r).map((k) => tr((TAG_RU[k] || [k])[0])).join(', '),
             r.patients ? (r.patients.mrn || r.patients.full_name || '') : '',
             (r.created_at || '').replace('T', ' ').slice(0, 16),
         ]),
@@ -281,6 +283,25 @@ function tagsOf(r) {
 }
 function inTag(r) {
     return !state.tag || tagsOf(r).includes(state.tag);
+}
+// CRM_UNIFY_V1 — фильтр «Оператор» на экране: то же правило, что на сервере
+// (crm-board-load.js withOperator, rpc/crm-leads.js ownerFilter). Доска уже
+// загружена с ним; здесь его проходят и строки поиска.
+function inOperator(r) {
+    const op = state.operator;
+    if (!op || op === 'all') return true;
+    if (op === 'none') return r.assigned_to == null;
+    if (op === 'me') return r.assigned_to != null && String(r.assigned_to) === String(selfUserId() ?? '');
+    return r.assigned_to != null && String(r.assigned_to) === String(op);
+}
+// CRM_UNIFY_V1 — подпись выбранного оператора («Отчёт»): Мои / Ничьи / имя.
+function operatorLabel() {
+    const op = state.operator;
+    if (!op || op === 'all') return '';
+    if (op === 'me') return tr('Мои');
+    if (op === 'none') return tr('Ничьи');
+    const p = state.staff.find((x) => String(x.id) === String(op));
+    return (p && p.full_name) || trf('Сотрудник №{id}', { id: op });
 }
 /**
  * Строки связи «заявка — метка» → Map(String(request_id) → [ключи]). Сервер
@@ -304,6 +325,60 @@ async function loadLeadTags() {
 }
 const refs = { root: null, onNavigate: null };
 
+// CRM_UNIFY_V1 (итоговое ревью) — ВЫСОТА КОЛОНКИ — ПО МЕСТУ ПОД ДОСКОЙ, А НЕ
+// «ОКНО МИНУС 290px». На ноутбуке 1366×768 шапка и фильтры занимают больше
+// 290px, и низ колонок вместе с полосой прокрутки доски вбок уходил под край
+// окна. Теперь высота списка карточек считается по настоящему месту: от верха
+// списка до низа окна, минус всё, что под списком (поля колонки, полоса доски,
+// поля рабочего окна), и зазор. Если доска начинается ниже сгиба (телефон,
+// фильтры в несколько строк), колонка — по окну, когда доска докручена до
+// верха. Значение кладётся в переменную --crm-col-h рабочего окна доски.
+const COL_FIT_MIN = 200;   // меньше — доска «ниже сгиба», считаем от её верха
+const COL_MIN = 240;
+const COL_GAP = 16;
+/** Высота списка карточек колонки (px) по замерам; чистая функция для тестов. */
+export function columnHeightFor({ viewportH, listTop, windowTop, chromeBelow, gap = COL_GAP }) {
+    const below = Math.floor(viewportH - listTop - chromeBelow - gap);
+    if (below >= COL_FIT_MIN) return below;
+    const scrolled = Math.floor(viewportH - (listTop - windowTop) - chromeBelow - gap);
+    return Math.max(COL_MIN, scrolled);
+}
+function sizeBoardColumns() {
+    try {
+        const root = refs.root;
+        if (!root || typeof window === 'undefined' || !window.innerHeight || typeof getComputedStyle !== 'function') return;
+        const win = root.querySelector('[data-crm-board-window]');
+        const board = root.querySelector('[data-crm-board]');
+        const list = root.querySelector('[data-col-list]');
+        if (!win || !board || !list || !win.style || typeof win.style.setProperty !== 'function') return;
+        const px = (el, p) => parseFloat(getComputedStyle(el)[p]) || 0;
+        const col = list.parentNode;
+        const scrollbar = Math.max(0, board.offsetHeight - board.clientHeight - px(board, 'borderTopWidth') - px(board, 'borderBottomWidth'));
+        const chromeBelow = px(col, 'paddingBottom') + px(col, 'borderBottomWidth') + px(board, 'paddingBottom') + scrollbar
+            + px(win, 'paddingBottom') + px(win, 'borderBottomWidth');
+        const scrollY = window.scrollY || 0;
+        const listTop = list.getBoundingClientRect().top + scrollY;
+        const windowTop = win.getBoundingClientRect().top + scrollY;
+        const viewportH = window.innerHeight;
+        let hgt = columnHeightFor({ viewportH, listTop, windowTop, chromeBelow });
+        win.style.setProperty('--crm-col-h', hgt + 'px');
+        // Проверка по факту: колонка с подсказкой «показаны последние…» выше
+        // соседних, и сетка тянет доску по самой высокой — лишнее снимается.
+        const fitsFromTop = viewportH - listTop - chromeBelow - COL_GAP >= COL_FIT_MIN;
+        const r = win.getBoundingClientRect();
+        const bottom = fitsFromTop ? r.bottom + scrollY : r.bottom - r.top;
+        const over = bottom - (viewportH - COL_GAP);
+        if (over > 0 && hgt - over >= COL_MIN) {
+            hgt = Math.floor(hgt - over);
+            win.style.setProperty('--crm-col-h', hgt + 'px');
+        }
+    } catch (e) { /* замер — подсказка вёрстке; CSS держит запасную высоту */ }
+}
+let sizeTimer = 0;
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('resize', () => { clearTimeout(sizeTimer); sizeTimer = setTimeout(sizeBoardColumns, 120); });
+}
+
 export async function renderCrm(container, { onNavigate } = {}) {
     clear(container);
     refs.onNavigate = onNavigate;
@@ -315,92 +390,83 @@ export async function renderCrm(container, { onNavigate } = {}) {
     await paint();
 }
 
+/**
+ * CRM_UNIFY_V1 — открыть вид «Задачи» (красный счётчик меню, admin.js). `who` —
+ * тот же отбор, которым счётчик посчитал задачи: оператору «мои», администратору
+ * и руководителю (crm.all) — «все» (Р18). Доска уже на экране — перерисовка;
+ * нет — её нарисует переход в раздел с этим же состоянием.
+ */
+export function openCrmTasks(who = 'me') {
+    state.view = 'tasks';
+    state.taskWho = who || 'me';
+    if (refs.root && refs.root.isConnected) paint();
+}
+
+// CRM_UNIFY_V1 — подпись ближайшей задачи карточки: ЧЬЯ и что. Одна для чипа на
+// карточке доски и колонки «Задача» в «Списке» — два места говорят одно.
+function chipTextOf(r) {
+    const t = r ? state.openTasks.get(String(r.id)) : null;
+    if (!t) return '';
+    const text = String(t.text || '');
+    const short = text.length > 60 ? text.slice(0, 59) + '…' : text;
+    const me = selfUserId();
+    const mine = me != null && t.assignee_id != null && String(t.assignee_id) === String(me);
+    const who = mine ? tr('вы') : ((t.users && t.users.full_name) || '');
+    return who ? trf('задача ({who}): {text}', { who, text: short }) : trf('задача: {text}', { text: short });
+}
+
 async function load() {
-    // CRM_AUTO_NOSHOW_V1 — день записи прошёл, а визита так и не было: заявка
-    // автоматически уходит в «Не пришёл». Идемпотентно, ошибки не блокируют
-    // загрузку (у ролей без права записи просто ничего не произойдёт).
-    try {
-        if (crmReadOnly()) throw new Error('read-only');   // V3120_FIX — автоматика пишет, просмотру нельзя
-        const d = new Date(); const pad = (n) => String(n).padStart(2, '0');
-        const today = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-        // CRM_CONFIG_V1 — если проигрышной колонки в воронке нет вовсе,
-        // автоматика просто не срабатывает: молча переложить заявку в живую
-        // колонку было бы хуже, чем оставить её там, где она есть.
-        //
-        // CRM_LINKS_V1 — и «откуда», и «куда» читаются из НАСТРОЕК. Здесь стояла
-        // зашитая пара ['scheduled','approved'] и ключ 'no_show': клиника,
-        // добавившая свою колонку или переименовавшая «Не пришёл», получала
-        // заявки, которые автоматика не подхватывала ничем, — они оставались
-        // ожидающими приёма навсегда.
-        //
-        // НО НЕ ВСЕ ЖИВЫЕ КОЛОНКИ. «Не пришёл» бывает только у того, кого
-        // ЖДАЛИ, а в начале воронки пациента ещё не ждут: дата в карточке
-        // «Перезвонить» значит «когда звонить», а не «когда придёт». Оператор,
-        // отложивший вчерашний лид на «Перезвонить», наутро находил его в
-        // «Не пришёл» — заявка, с которой он ещё работает, объявлена
-        // потерянной, и вернуть её можно только руками.
-        //
-        // Отсюда отбор: всё, что стоит в воронке С «Записан» И ДАЛЬШЕ. Дальше
-        // по порядку колонок — это дальше по пути пациента, и там дата уже
-        // значит приём; колонка, заведённая клиникой после «Записан», попадает
-        // сюда сама. Колонки «Записан» в воронке нет вовсе — берём все живые,
-        // как раньше: гадать, с какой начинается ожидание, не по чему.
-        if (STAGE_KEYS.noShow) {
-            const at = STAGE_KEYS.open.indexOf(stageKey('scheduled'));
-            const waiting = at >= 0 ? STAGE_KEYS.open.slice(at) : STAGE_KEYS.open;
-            const from = waiting.filter((k) => k !== STAGE_KEYS.noShow);
-            if (from.length) {
-                // CRM_REAL_BOOKING_V1 (2026-09-21) — СЛЕПОЕ СМЕТАНИЕ КОНЧИЛОСЬ
-                // ТАМ, ГДЕ НАЧАЛАСЬ НАСТОЯЩАЯ ЗАПИСЬ.
-                //
-                // Эта автоматика — догадка: «день прошёл, визита мы не видим,
-                // значит не пришёл». Для заявки, у строки которой есть слот в
-                // календаре, догадываться больше не о чем: её судьбу объявляет
-                // сам приём — «Не пришёл» в сетке, отметка прихода, деньги по
-                // счёту, — и переносит это в заявку сервер
-                // (crm/visit-status.js), а не ночная выборка по дате. Оставь мы
-                // догадку здесь — записанного пациента уносили бы в «Не пришёл»
-                // ДВА писателя с разными правилами, и второй делал бы это
-                // раньше первого: приём назначен на утро, а карточка уже
-                // потеряна, потому что дата вчерашняя.
-                //
-                // Поэтому метим ТОЛЬКО заявки без единой записанной строки:
-                // те, что так и остались пожеланием на дату.
-                const { data: cands, error: candErr } = await supabase.from('crm_requests')
-                    .select('id').in('status', from).lt('scheduled_date', today).limit(500);
-                const ids = (!candErr && cands ? cands : []).map((c) => c.id).filter((id) => id != null);
-                if (ids.length) {
-                    // ВИЗИТ ДЕРЖИТ ТОЛЬКО ЖДУЩАЯ СТРОКА (разбор ревью 2026-09-21).
-                    // Без отбора по статусу заявка, у которой ссылку несёт одна
-                    // ОТМЕНЁННАЯ строка — а их заводит сама же замена набора в
-                    // saveLines, — становилась невидимой для автоматики навсегда:
-                    // ждать её никто не ждёт, а «записанной» она числится.
-                    const { data: held, error: heldErr } = await supabase.from('crm_request_services')
-                        .select('request_id').in('request_id', ids)
-                        .eq('status', 'pending').not('visit_id', 'is', null);
-                    // Отказ выборки — НЕ повод считать, что записанных нет:
-                    // молча смести записанного хуже, чем не смести никого.
-                    if (!heldErr) {
-                        const booked = new Set((held || []).map((l) => String(l.request_id)));
-                        const blind = ids.filter((id) => !booked.has(String(id)));
-                        if (blind.length) {
-                            await supabase.from('crm_requests').update({ status: STAGE_KEYS.noShow })
-                                .in('id', blind).in('status', from).lt('scheduled_date', today);
-                        }
-                    }
-                }
-            }
-        }
-    } catch (e) { /* фоновая автоматика — молча */ }
-    const { data, error } = await supabase.from('crm_requests')
-        .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
-        .order('id', { ascending: false }).limit(800);
-    if (error) { toast(trf('Не удалось загрузить заявки: {msg}', { msg: error.message }), 'fail'); state.rows = []; return; }
-    state.rows = data || [];
-    // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
-    // права на задачи) — доска без меток, а не без заявок.
-    state.openTasks = nearestOpenTasks(await loadOpenTasks());
-    state.leadTags = await loadLeadTags();   // CRM_HEAD_MERGE_TAGS_V1
+    // CRM_UNIFY_V1 — «Не пришёл» ставит сервер (server/services/crm/no-show.js): при
+    // запуске и раз в час, по записи и доказательствам прихода. Доска только читает.
+    // Прежний обход здесь (CRM_AUTO_NOSHOW_V1) не видел оплаты, уносил «Перезвонить»
+    // с прошедшей датой звонка и пропускал записи календаря без строк.
+    // CRM_UNIFY_V1 — ВСЕ открытые карточки (без предела 800, из-за которого
+    // «пропадали» живые заявки) и закрытые за период; для «Всё время» —
+    // последние 300 на закрытую колонку с настоящим числом из базы
+    // (views/crm-board-load.js, Р12/Р13).
+    // CRM_UNIFY_V1 (итоговое ревью) — ПОСЛЕДНЯЯ ЗАГРУЗКА ПОБЕЖДАЕТ: чипы
+    // оператора и периода перезагружают доску, и медленный старый ответ («Все»)
+    // приходил после быстрого нового («Мои») и перезаписывал карточки и числа.
+    // Ответ устаревшей загрузки отбрасывается целиком; false — «не рисовать».
+    const my = ++loadSeq;
+    const [res, tasks, tags] = await Promise.all([
+        loadBoard({
+            closedKeys: closedKeys(),
+            bounds: periodBounds(state.period, state.customFrom, state.customTo),
+            operator: state.operator, me: selfUserId(),   // CRM_UNIFY_V1 — «Оператор» до любого предела
+        }),
+        // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
+        // права на задачи) — доска без меток, а не без заявок.
+        loadOpenTasks(),
+        loadLeadTags(),   // CRM_HEAD_MERGE_TAGS_V1
+    ]);
+    if (my !== loadSeq) return false;
+    if (res.error) {
+        toast(trf('Не удалось загрузить заявки: {msg}', { msg: res.error.message }), 'fail');
+        state.rows = []; state.counts = {}; state.capped = {};
+        return true;
+    }
+    state.rows = res.rows; state.counts = res.counts; state.capped = res.capped;
+    state.openTasks = nearestOpenTasks(tasks, selfUserId());   // CRM_UNIFY_V1 — своя задача первой
+    state.leadTags = tags;
+    return true;
+}
+let loadSeq = 0;   // CRM_UNIFY_V1 (итоговое ревью) — номер последней загрузки доски
+
+/**
+ * CRM_UNIFY_V1 (итоговое ревью) — строки ВЫГРУЗКИ Excel: всё под текущими
+ * фильтрами доски, без 300 на закрытую колонку («Всё время» на доске — только
+ * последние 300, а выгрузка — явная просьба «всё»). Спрашивает базу заново.
+ * @returns {Promise<{rows: object[], error?: object}>}
+ */
+export async function crmExportRows() {
+    const res = await loadBoard({
+        closedKeys: closedKeys(),
+        bounds: periodBounds(state.period, state.customFrom, state.customTo),
+        operator: state.operator, me: selfUserId(), closedLimit: 0,
+    });
+    if (res.error) return { rows: [], error: res.error };
+    return { rows: res.rows.filter((r) => leadMatchesQuery(r, state.search) && inSource(r) && inPeriod(r) && inTag(r) && inOperator(r)) };
 }
 
 // CRM_CARD_V2 — КТО это и КАК до него дозвониться, одним ответом на две строки.
@@ -531,13 +597,26 @@ async function setStatus(r, status) {
 }
 
 async function paint() {
-    await load();
+    // CRM_UNIFY_V1 — «Оператор: по имени» и «Чьи задачи» — только тому, кто видит
+    // всю доску; список тот же, что у поля «Оператор» в карточке. Один раз.
+    if (canSeeAllLeads() && !state.staffLoaded) {
+        state.staffLoaded = true;
+        const { data, error } = await supabase.from('users').select('id, full_name, role, extra_roles')
+            .eq('is_active', 1).order('full_name');
+        state.staff = error ? [] : boardStaff(data || []).map((p) => ({ id: p.id, full_name: p.full_name }));
+    }
+    // CRM_UNIFY_V1 (итоговое ревью) — вид «Задачи» доску не показывает и не грузит;
+    // устаревшая загрузка (пришла новее) не рисует ничего.
+    if (state.view !== 'tasks' && !(await load())) return;
     const root = refs.root;
     clear(root);
 
     const viewBtn = (key, label, icon) => h('button', {
         class: 'btn btn-sm ' + (state.view === key ? 'btn-primary' : 'btn-outline'), type: 'button',
-        onclick: () => { state.view = key; paint(); },
+        'data-crm-view': key,   // CRM_UNIFY_V1
+        'aria-pressed': state.view === key ? 'true' : 'false',
+        // CRM_UNIFY_V1 — переключатель вида открывает «Задачи» на «Мои» (Р18).
+        onclick: () => { state.view = key; if (key === 'tasks') state.taskWho = 'me'; paint(); },
     }, Icon(icon, { size: 13 }), ' ' + label);
 
     // CRM_FILTERS_V1 — поиск СЛЕВА и крупнее: для регистратуры это основной
@@ -579,7 +658,9 @@ async function paint() {
     // серверу уходит один раз на слово, а не на каждую букву.
     searchInp.addEventListener('input', () => { state.search = searchInp.value; syncClear(); paintFilters(); paintBody(); serverSearch(); });
     searchClear.addEventListener('click', () => { searchInp.value = ''; state.search = ''; syncClear(); paintFilters(); paintBody(); serverSearch(); searchInp.focus(); });
-    const searchBox = h('div', { style: { position: 'relative', flex: '0 0 300px', minWidth: '200px' } },
+    // CRM_UNIFY_V1 (итоговое ревью) — на 320 px поле не шире строки: 300px — это
+    // основа, а не закон (сжимается, страница вбок не едет).
+    const searchBox = h('div', { style: { position: 'relative', flex: '0 1 300px', minWidth: '0', maxWidth: '100%' } },
         h('span', { style: {
             position: 'absolute', left: '13px', top: '50%', transform: 'translateY(-50%)',
             color: 'var(--primary-600, #167873)', pointerEvents: 'none', display: 'flex',
@@ -599,6 +680,7 @@ async function paint() {
         h('div', { class: 'page-head-actions', style: { flexWrap: 'wrap' } },
             viewBtn('kanban', 'Канбан', 'Grid'),
             viewBtn('list', 'Список', 'Layers'),
+            viewBtn('tasks', 'Задачи', 'Clock'),   // CRM_UNIFY_V1
             // CUSTDEV_V1 — рабочее место обзвона. Отдельное право: заявки ведёт
             // регистратура, а оценки о врачах и кассирах читать ей незачем.
             canView('custdev') ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => openCustDev() },
@@ -618,9 +700,13 @@ async function paint() {
     // Раньше поиск занимал строку целиком, «Источник» шёл второй строкой, а
     // «Период» третьей: три яруса на то, что помещается в один, и доска
     // начиналась ниже сгиба экрана.
-    root.appendChild(h('div', { style: {
-        display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px',
-    } }, searchBox, filtersEl));
+    // CRM_UNIFY_V1 — в виде «Задачи» ряда фильтров доски нет: поиск, источник,
+    // период и метки сужают карточки, а не задачи.
+    if (state.view !== 'tasks') {
+        root.appendChild(h('div', { style: {
+            display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px',
+        } }, searchBox, filtersEl));
+    }
     paintFilters();
 
     const bodyWrap = h('div', { 'data-crm-body': '' });
@@ -651,9 +737,21 @@ async function paint() {
     async function serverSearch() {
         const q = state.search.trim();
         const my = ++searchSeq;
-        if (!q) { state.searchRows = null; state.searchQ = ''; return; }
-        const { data, error } = await supabase.rpc('crm_search', { q });
+        if (!q) { state.searchRows = null; state.searchQ = ''; state.searchForeign = false; return; }
+        // CRM_UNIFY_V1 — фильтр «Оператор» едет и в поиск; при «Все» тело прежнее.
+        const args = { q };
+        if (state.operator && state.operator !== 'all') args.assigned = /^\d+$/.test(String(state.operator)) ? Number(state.operator) : state.operator;
+        const { data, error } = await supabase.rpc('crm_search', args);
         if (my !== searchSeq) return;   // пока ждали, набрали дальше
+        // CRM_UNIFY_V1 — номер (7+ цифр) есть у карточки другого оператора: говорим
+        // об этом, саму карточку не показываем (crm_leads_by_phone, метка foreign).
+        let foreign = false;
+        if (digitsOf(q).length >= 7) {
+            const dup = await supabase.rpc('crm_leads_by_phone', { phone: q });
+            if (my !== searchSeq) return;
+            foreign = !dup.error && Array.isArray(dup.data) && dup.data.some((x) => x && x.foreign);
+        }
+        state.searchForeign = foreign;
         // Сервер не ответил — доска ищет по загруженным, как раньше.
         state.searchRows = (!error && Array.isArray(data)) ? data : null;
         state.searchQ = q;
@@ -661,7 +759,7 @@ async function paint() {
         paintBody();
     }
     function filtered() {
-        return searchBase().filter(r => matchesSearch(r) && inSource(r) && inPeriod(r) && inTag(r));
+        return searchBase().filter(r => matchesSearch(r) && inSource(r) && inPeriod(r) && inTag(r) && inOperator(r));   // CRM_UNIFY_V1
     }
 
     // CRM_FILTERS_V1 — «Источник» и «Период» над доской.
@@ -678,11 +776,32 @@ async function paint() {
         } }, t);
         const chip = (on, label, onclick) => h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', onclick }, label);
 
-        const byPeriodAll = searchBase().filter(r => matchesSearch(r) && inPeriod(r));
+        const byPeriodAll = searchBase().filter(r => matchesSearch(r) && inPeriod(r) && inOperator(r));   // CRM_UNIFY_V1
         // CRM_HEAD_MERGE_TAGS_V1 — счётчики источников учитывают выбранную
         // метку, а счётчики меток — выбранный источник: каждый ряд считается по
         // ОСТАЛЬНЫМ фильтрам, как и раньше.
         const byPeriod = byPeriodAll.filter(inTag);
+
+        // CRM_UNIFY_V1 — «Оператор»: Все / Мои / Ничьи; руководителю и
+        // администратору — ещё и по имени (Р15). Первым рядом. Смена — новая
+        // загрузка: фильтр стоит в запросе доски до любого предела.
+        const opRow = h('div', { class: 'row', 'data-crm-op-filter': '', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Оператор'));
+        const setOperator = (key) => { state.operator = key; paint(); };
+        for (const [key, label] of [['all', 'Все'], ['me', 'Мои'], ['none', 'Ничьи']]) {
+            const b = chip(state.operator === key, label, () => setOperator(key));
+            b.setAttribute('data-op-chip', key);
+            b.setAttribute('aria-pressed', state.operator === key ? 'true' : 'false');
+            opRow.appendChild(b);
+        }
+        if (canSeeAllLeads() && state.staff.length) {
+            const sel = h('select', { class: 'crm-op-sel', 'aria-label': 'Оператор по имени', 'data-op-select': '' },
+                h('option', { value: '' }, 'По имени…'),
+                ...state.staff.map((p) => h('option', { value: String(p.id) }, p.full_name || trf('Сотрудник №{id}', { id: p.id }))));
+            sel.value = /^\d+$/.test(String(state.operator)) ? String(state.operator) : '';
+            sel.addEventListener('change', () => { if (sel.value) setOperator(sel.value); });
+            opRow.appendChild(sel);
+        }
+        filtersEl.appendChild(opRow);
         // CRM_MULTI_SOURCE_V1 — число на чипе: сколько заявок выборки имеют этот
         // источник. Заявка с двумя источниками считается в обоих, поэтому сумма
         // чипов бывает больше «Все · N» — а «Все» считает заявки.
@@ -701,7 +820,7 @@ async function paint() {
             const n = tally.has(key) ? tally.get(key).total : 0;
             const on = state.sources.includes(key);
             if (!n && !on) continue;
-            const btn = chip(on, sourceLabel(key) + ' · ' + n, () => {
+            const btn = chip(on, tr(sourceLabel(key)) + ' · ' + n, () => {   // CRM_UNIFY_V1 — подпись переводится до числа
                 state.sources = on ? state.sources.filter((k) => k !== key) : [...state.sources, key];
                 paintFilters(); paintBody();
             });
@@ -724,8 +843,8 @@ async function paint() {
                     state.customTo = ymdLocal(now);
                 }
                 state.period = key;
-                paintFilters();
-                paintBody();
+                // CRM_UNIFY_V1 — закрытые карточки грузятся за период: перезагрузка.
+                paint();
             }));
         }
         if (state.period === 'custom') perRow.appendChild(customRange());
@@ -763,7 +882,7 @@ async function paint() {
         // рамка и фон живут на контейнере (.crm-range), поля внутри прозрачные.
         const bad = !!(state.customFrom && state.customTo && state.customFrom > state.customTo);
         const box = h('div', { class: 'crm-range' + (bad ? ' bad' : '') });
-        const apply = () => { paintFilters(); paintBody(); };
+        const apply = () => { paint(); };   // CRM_UNIFY_V1 — закрытые грузятся за период
         const inp = (value, onchange) => {
             const el = h('input', { type: 'date', value: value || '' });
             el.addEventListener('change', () => onchange(el.value));
@@ -785,7 +904,47 @@ async function paint() {
         const wrap = root.querySelector('[data-crm-body]');
         if (!wrap) return;
         clear(wrap);
-        if (state.view === 'kanban') wrap.appendChild(kanban()); else wrap.appendChild(listTable());
+        if (state.view === 'tasks') { paintTasks(wrap); return; }   // CRM_UNIFY_V1
+        // CRM_UNIFY_V1 — номер из поиска есть у карточки другого оператора.
+        if (state.search.trim() && state.searchForeign) {
+            wrap.appendChild(h('div', { class: 'muted crm-foreign-hint', 'data-crm-foreign-hint': '' },
+                Icon('Lock', { size: 13 }), ' ', 'Этот номер есть у карточки другого оператора — она вам не видна.'));
+        }
+        if (state.view === 'kanban') {
+            wrap.appendChild(kanban());
+            // CRM_UNIFY_V1 (итоговое ревью) — высота колонок по месту под доской.
+            if (typeof requestAnimationFrame === 'function') requestAnimationFrame(sizeBoardColumns); else sizeBoardColumns();
+        } else wrap.appendChild(listTable());
+    }
+
+    // CRM_UNIFY_V1 — ВИД «ЗАДАЧИ» (views/crm-tasks-view.js). По умолчанию —
+    // мои; администратор и руководитель (crm.all) выбирают оператора. Строка
+    // открывает карточку: из загруженных, иначе с сервера — под тем же
+    // ограничением видимости, что у доски.
+    async function paintTasks(wrap) {
+        const canPick = canSeeAllLeads();
+        const box = h('div', { 'data-crm-tasks-wrap': '' });
+        wrap.appendChild(box);
+        await renderTasksView(box, {
+            who: state.taskWho, me: selfUserId(), canPick, staff: canPick ? state.staff : [],   // список — paint()
+            onOpen: (id) => openLeadById(id),
+            onWho: (w) => { state.taskWho = w; paintBody(); },
+            onChanged: () => {
+                try { if (window.easymed && window.easymed.refreshNav) window.easymed.refreshNav(); } catch (e) { /* подсказка */ }
+                paintBody();
+            },
+        });
+    }
+    async function openLeadById(id) {
+        let r = state.rows.find((x) => String(x.id) === String(id)) || null;
+        if (!r) {
+            const { data } = await supabase.from('crm_requests')
+                .select(BOARD_SELECT)
+                .eq('id', id).maybeSingle();
+            r = data || null;
+        }
+        if (!r) { toast('Карточка у другого оператора — открыть её может он или руководитель.', 'fail'); return; }
+        requestModal(r);
     }
 
     // ---------------- КАНБАН ----------------
@@ -804,30 +963,30 @@ async function paint() {
             const colRows = rows.filter(r => r.status === key);
             // Поля списка входят в обвязку, из которой считается внутренняя
             // ширина карточки, — поэтому они в .crm-col-list рядом с расчётом.
-            const list = h('div', { class: 'crm-col-list' });
-
-            // Показываем первые KANBAN_PAGE, остальные — по кнопке. Дело не
-            // только в длине страницы: каждая карточка вешает свои обработчики
-            // перетаскивания, и несколько сотен «Пришёл» разом заметно тормозят
-            // доску. Дорисовываем на месте, без перерисовки всей доски, — иначе
-            // терялась бы позиция прокрутки и уже открытые колонки схлопывались.
-            let shown = 0;
-            const more = h('button', {
-                class: 'btn btn-ghost btn-sm', type: 'button',
-                style: { width: '100%', marginTop: '8px' },
-                onclick: () => showMore(),
-            });
-            function syncMore() {
-                const left = colRows.length - shown;
-                if (left <= 0) { more.remove(); return; }
-                more.textContent = trf('Показать ещё {n}', { n: Math.min(KANBAN_PAGE, left) });
+            // CRM_UNIFY_V1 — «Показать ещё 20» убрано (владелец: «чтобы все
+            // карточки были в окне»): колонка рисует ВСЕ свои карточки и
+            // прокручивается сама (.crm-col-list: max-height + overflow-y), а
+            // карточка вне экрана не отрисовывается браузером (.crm-card:
+            // content-visibility) — страница не растягивается, сотни карточек
+            // не тормозят.
+            const list = h('div', { class: 'crm-col-list', 'data-col-list': key });
+            // CRM_UNIFY_V1 — число в заголовке настоящее: у полной колонки — её
+            // строки, у обрезанной закрытой («Всё время», последние 300) — итог
+            // по базе под той же видимостью. Если на доске стоит поиск, источник
+            // или метка, число — по показанным: итог базы под такой фильтр не считан.
+            const clientFiltered = !!state.search.trim() || state.sources.length > 0 || !!state.tag;
+            const trimmed = !!state.capped[key] && !clientFiltered;
+            const n = trimmed ? state.counts[key] : colRows.length;
+            // CRM_UNIFY_V1 (итоговое ревью) — подсказка не зовёт выбирать период ради
+            // открытых: «Период» сужает только закрытые колонки. Стоит ПЕРВОЙ
+            // внутри прокручиваемого списка: под списком она делала колонку выше
+            // соседних, сетка тянула по ней всю доску, и высота колонок по месту
+            // (sizeBoardColumns) срезалась у всех.
+            if (trimmed) {
+                list.appendChild(h('div', { class: 'muted crm-col-capped', 'data-col-capped': key },
+                    trf('Показаны последние {n} закрытых — более ранние найдёт поиск или «Период»; открытые карточки видны всегда.', { n: CLOSED_ALL_TIME_LIMIT })));
             }
-            function showMore() {
-                for (const r of colRows.slice(shown, shown + KANBAN_PAGE)) list.appendChild(kanbanCard(r));
-                shown = Math.min(shown + KANBAN_PAGE, colRows.length);
-                syncMore();
-            }
-            showMore();
+            for (const r of colRows) list.appendChild(kanbanCard(r));
 
             // PASTEL_IDENTITY_V1 — оттенок по позиции в воронке; заливка и цвет
             // рамки теперь в .crm-col (admin-views.css), а не инлайном.
@@ -836,14 +995,12 @@ async function paint() {
             },
                 h('div', { class: 'row', style: { gap: '8px', marginBottom: '8px' } },
                     Tag(label, { kind, dot: true }),
-                    // Счётчик — ПОЛНОЕ число заявок в статусе, а не сколько
-                    // отрисовано: это цифра воронки, и зависеть от того, сколько
-                    // раз нажали «показать ещё», она не должна.
-                    h('span', { class: 'crm-col-n' }, String(colRows.length)),
+                    // Счётчик — ПОЛНОЕ число заявок в статусе (CRM_UNIFY_V1: у
+                    // обрезанной закрытой колонки — из базы).
+                    h('span', { class: 'crm-col-n', 'data-col-count': key }, String(n)),
                     h('span', { class: 'grow' }),
                     key === stageKey('in_process') && !crmReadOnly() ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Новая заявка', onclick: () => requestModal(null) }, '+') : null),
-                list,
-                shown < colRows.length ? more : null);
+                list);
             board.appendChild(col);
         }
         // WORKING_WINDOW_V1 — доска живёт ВНУТРИ белого рабочего окна, как в
@@ -851,7 +1008,7 @@ async function paint() {
         // только вид: пастельная колонка и серый грунт страницы обе светлые, и
         // на грунте заливка колонки была бы неотличима (1.04:1). На белом нутре
         // окна та же заливка даёт 1.20:1 — оттенок ступени наконец виден.
-        return h('div', { class: 'card card-pad-sm crm-board-window' }, board);
+        return h('div', { class: 'card card-pad-sm crm-board-window', 'data-crm-board-window': '' }, board);   // CRM_UNIFY_V1 — --crm-col-h
     }
 
     function kanbanCard(r) {
@@ -1006,14 +1163,15 @@ async function paint() {
     // CRM_DEDUP_SEARCH_TASKS_V1 — «задача: …» — ближайшая открытая задача
     // заявки. Просроченная — в предупреждающем цвете: это то, с чего оператор
     // начинает смену.
+    // CRM_UNIFY_V1 — чип называет, чья задача («задача (вы): …»), и своя идёт
+    // первой (nearestOpenTasks с «кто я»). Текст — chipTextOf, общий со «Списком».
     function taskChip(r) {
         const t = state.openTasks.get(String(r.id));
         if (!t) return null;
         const late = isOverdue(t, nowIso());
-        const text = String(t.text || '');
-        return h('div', { class: 'crm-card-task' + (late ? ' crm-card-task-late' : ''), title: text },
+        return h('div', { class: 'crm-card-task' + (late ? ' crm-card-task-late' : ''), title: String(t.text || '') },
             Icon('Clock', { size: 12 }),
-            h('span', null, trf('задача: {text}', { text: text.length > 60 ? text.slice(0, 59) + '…' : text })));
+            h('span', null, chipTextOf(r)));
     }
 
     function cardActions(r) {
@@ -1089,6 +1247,16 @@ async function paint() {
                 h('div', { class: 'empty' }, state.rows.length ? 'Ничего не найдено.' : 'Заявок пока нет — зафиксируйте первое обращение.'));
         }
         const tbody = h('tbody');
+        // CRM_UNIFY_V1 (итоговое ревью) — «Список» при «Всё время» показывает
+        // закрытые колонки так же не целиком (последние 300): говорим об этом, как
+        // на доске, а не режем молча.
+        const listClientFiltered = !!state.search.trim() || state.sources.length > 0 || !!state.tag;
+        const cappedKeys = listClientFiltered ? [] : STATUSES.map(([k]) => k).filter((k) => state.capped[k]);
+        const cappedNote = cappedKeys.length ? h('div', { class: 'muted crm-col-capped', 'data-list-capped': '', style: { margin: '0 0 8px' } },
+            trf('Закрытые колонки показаны не целиком: {list}. Более ранние найдёт поиск или «Период»; открытые карточки видны всегда.', {
+                list: cappedKeys.map((k) => trf('«{label}» — {n} из {total}', {
+                    label: tr((STATUS_RU[k] || [k])[0]), n: CLOSED_ALL_TIME_LIMIT, total: state.counts[k] })).join(', '),
+            })) : null;
         for (const r of rows) {
             const [stLabel, stKind] = STATUS_RU[r.status] || [r.status, ''];
             tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: (ev) => { if (ev.target.closest('button, select, .crm-move')) return; requestModal(r); } },
@@ -1106,16 +1274,23 @@ async function paint() {
                     ? h('span', { class: 'row', style: { gap: '4px', flexWrap: 'wrap' } },
                         ...tagsOf(r).map((k) => Tag((TAG_RU[k] || [k])[0], { kind: (TAG_RU[k] || [k, ''])[1] })))
                     : h('span', { class: 'muted' }, '—')),
+                // CRM_UNIFY_V1 — «Оператор»: кто ведёт карточку.
+                h('td', { 'data-list-operator': '' }, (r.users && r.users.full_name) || h('span', { class: 'muted' }, '—')),
+                // CRM_UNIFY_V1 — «Задача»: то же, что чип на карточке доски.
+                h('td', { 'data-list-task': '', style: { maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                    chipTextOf(r) || h('span', { class: 'muted' }, '—')),
                 h('td', null, Tag(stLabel, { kind: stKind, dot: true })),
                 h('td', { class: 'num', style: { fontSize: '12.5px' } }, fmtDateTime(r.created_at)),
                 h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, h('span', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end' } }, ...cardActions(r))),
             ));
         }
-        return h('div', { class: 'card' }, h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
+        return h('div', null, cappedNote, h('div', { class: 'card' }, h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
             h('thead', null, h('tr', null,
                 h('th', null, 'Имя'), h('th', null, 'Телефон'), h('th', null, 'Источник'),
-                h('th', null, 'Услуга'), h('th', null, 'Комментарий'), h('th', null, 'Метки'), h('th', null, 'Статус'), h('th', null, 'Дата'), h('th', null, ''))),
-            tbody)));
+                h('th', null, 'Услуга'), h('th', null, 'Комментарий'), h('th', null, 'Метки'),
+                h('th', null, 'Оператор'), h('th', null, 'Задача'),   // CRM_UNIFY_V1
+                h('th', null, 'Статус'), h('th', null, 'Дата'), h('th', null, ''))),
+            tbody))));
     }
 
     // ---------------- КОНВЕРСИЯ: попап регистрации пациента ----------------
@@ -1267,10 +1442,11 @@ async function paint() {
             // цепочке идёт СТРОКА БАЗЫ, как и раньше.
             //
             // ОБЕЩАНИЕ ВОЗВРАЩАЕТСЯ ОКНУ, а не бросается в пустоту. Хвост
-            // регистрации — привязка открытых заявок, правка карточки, лист
-            // дат — асинхронный, и брошенное обещание не ловится ничем: окно к
-            // тому мигу уже снято, отказ уходит в «unhandled rejection», а на
-            // экране это выглядит как «нажал — и ничего не произошло».
+            // регистрации — правка карточки, лист дат (CRM_UNIFY_V1: привязки
+            // заявок по номеру в нём больше нет) — асинхронный, и брошенное
+            // обещание не ловится ничем: окно к тому мигу уже снято, отказ
+            // уходит в «unhandled rejection», а на экране это выглядит как
+            // «нажал — и ничего не произошло».
             onCreated: (p) => finishRegistration(p && p._raw ? p._raw : p),
         };
         // CRM_LEAD_CONTEXT_V1 — ОТКУДА ЭТОТ ЧЕЛОВЕК, ВИДНО В САМОМ ОКНЕ.
@@ -1323,16 +1499,15 @@ async function paint() {
          */
         async function finishRegistration(p) {
             if (!p || !p.id) { toast('Пациент не создан.', 'fail'); return; }
-            // CRM_LINKS_V1 — ПРИВЯЗКА ВСЕХ ОТКРЫТЫХ ЗАЯВОК С ЭТИМ НОМЕРОМ.
+            // CRM_UNIFY_V1 — к карте здесь привязывается ОДНА заявка: та, из
+            // которой открыли окно (явное действие человека). Заявок по номеру
+            // браузер не ищет. Сервер берёт по номеру не больше одной и только
+            // если номер у одной карты: новой карте — самую новую открытую
+            // заявку без пациента (crm_link_new_patient, его зовёт savePatient),
+            // а при записи — только если у пациента нет своей ждущей заявки
+            // (crm/visit-link.js, шаг D). Остальные заявки того же номера
+            // остаются без карты — их видно в «Дубликатах» доски.
             //
-            // savePatient() делает это сам ПОСЛЕ вставки, но на пути «карта уже
-            // есть, беру её» вставки нет — и у человека, звонившего трижды, к
-            // найденной карте цеплялась ровно та заявка, из которой открыли
-            // окно. Две другие оставались ничьими: их не подхватит ни смета,
-            // ни визит. Зовём всегда: вызов идемпотентен (берёт только заявки
-            // без пациента), и различать исходы здесь было бы лишним знанием
-            // о чужом окне.
-            await linkCrmRequestsToPatient(p);
             // Заявку обновляем, только если она УЖЕ сохранена: «Записать на
             // дату» может вызвать регистрацию из ещё не созданной заявки —
             // её patient_id запишет persist() при сохранении.
@@ -2068,11 +2243,9 @@ async function paint() {
         const canReassign = canSeeAllLeads();
         const canDeleteTasks = hasActorRole(['admin']);
         let operSel = null;
-        // CRM_DEDUP_SEARCH_TASKS_V1 — тот же список персонала нужен полю
-        // «Ответственный» у задач. Спрашивается ОДИН раз и только у
-        // администратора: оператору список сотрудников не отдаётся (см. ниже),
-        // и задачу он ставит себе или оператору заявки.
-        let staffForTasks = null;
+        // CRM_UNIFY_V1 — список персонала ниже кормит только поле «Оператор».
+        // «Ответственный» у задач берёт людей у сервера (crm_task_assignees в
+        // views/crm-tasks.js): только тех, кто может вести эту карточку.
         if (canReassign) {
             operSel = h('select', { 'aria-label': 'Оператор, который ведёт заявку' });
             // Выбор человека НЕ теряется, если список операторов доехал позже:
@@ -2099,7 +2272,7 @@ async function paint() {
             fillOper(ownerId ? [{ id: ownerId, full_name: ownerName }] : []);
             // CRM_HEAD_MERGE_TAGS_V1 — все активные, а отбор по ролям — boardStaff:
             // дополнительная роль колл-центра тоже делает человека оператором.
-            staffForTasks = supabase.from('users').select('id, full_name, role, extra_roles')
+            supabase.from('users').select('id, full_name, role, extra_roles')
                 .eq('is_active', 1).order('full_name')
                 .then(({ data, error }) => {
                     if (error) {
@@ -2185,10 +2358,10 @@ async function paint() {
             // Двигаем только ВПЕРЁД — по живым колонкам, стоящим В ВОРОНКЕ ДО
             // «Записан». «Подтверждён» стоит после, и назначение новой даты не
             // имеет права откатывать подтверждённую заявку назад.
-            const bookedStage = stageKey('scheduled');
+            const bookedStage = BOOKED_STATUS;   // CRM_UNIFY_V1 — «Колонка записи» из настроек
             const bookedAt = STAGE_KEYS.open.indexOf(bookedStage);
             const notBookedYet = bookedAt > 0 ? STAGE_KEYS.open.slice(0, bookedAt) : [];
-            if (isEdit && bookedDate && notBookedYet.includes(r.status) && hasStage('scheduled')) payload.status = bookedStage;
+            if (isEdit && bookedDate && notBookedYet.includes(r.status) && bookedStage) payload.status = bookedStage;   // CRM_UNIFY_V1
             if (isEdit) {
                 // Ревью W2-M5 — номер заявки сменили на номер, у которого уже
                 // есть другая карточка: то же предупреждение, что при создании.
@@ -2210,7 +2383,7 @@ async function paint() {
             // записать» зовёт persist() повторно, и спрашивать дважды незачем.
             if (!(await confirmNoDuplicate(phone, null))) return null;
             const { data, error } = await supabase.from('crm_requests')
-                .insert({ ...payload, status: bookedDate ? stageKey('scheduled') : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })
+                .insert({ ...payload, status: (bookedDate && BOOKED_STATUS) ? BOOKED_STATUS : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })   // CRM_UNIFY_V1
                 .select().single();
             if (error) { toast(error.message, 'fail'); return null; }
             // insert не возвращает join'ы — подставляем услугу из каталога, иначе
@@ -3013,11 +3186,10 @@ async function paint() {
                     request: r,
                     me: selfUserId() != null ? { id: selfUserId(), full_name: (window.easymed.state.user || {}).full_name || '' } : null,
                     isAdmin: canDeleteTasks,   // CRM_HEAD_MERGE_TAGS_V1 — удаляет только администратор
-                    staff: staffForTasks,
                     onChange: () => {
                         // бейдж меню и метки на доске — сразу, не дожидаясь опроса
                         try { if (window.easymed && window.easymed.refreshNav) window.easymed.refreshNav(); } catch (e) { /* подсказка */ }
-                        loadOpenTasks().then((t) => { state.openTasks = nearestOpenTasks(t); paintBody(); });
+                        loadOpenTasks().then((t) => { state.openTasks = nearestOpenTasks(t, selfUserId()); paintBody(); });   // CRM_UNIFY_V1
                     },
                 })) : null,
                 // CALL_RECORDING_V1 — ЗВОНКИ ЭТОГО ЧЕЛОВЕКА, С ЗАПИСЯМИ.
@@ -3055,8 +3227,25 @@ async function paint() {
 
         let period = 30;   // дней; 0 = всё время
         const bodyEl = h('div', { class: 'modal-body', style: { overflowY: 'auto' } });
+        // CRM_UNIFY_V1 — «Отчёт» считает заявки ПО БАЗЕ своим лёгким запросом за
+        // свой период (crm-board-load.js loadReportRows, Р14), а не то, что
+        // загрузила доска: доска держит закрытые карточки только за свой период.
+        // undefined — считается; null — сервер не ответил (тогда, с пометкой, по
+        // загруженному на доску); массив — строки базы.
+        let reportRows;
+        let reportSeq = 0;
+        async function refresh() {
+            const my = ++reportSeq;
+            reportRows = undefined;
+            paintReport();
+            const got = await loadReportRows({ days: period, operator: state.operator, me: selfUserId() });   // CRM_UNIFY_V1 — с фильтром «Оператор»
+            if (my !== reportSeq) return;   // пока считали, выбрали другой период
+            reportRows = got;
+            paintReport();
+        }
 
         function rowsInPeriod() {
+            if (Array.isArray(reportRows)) return reportRows;
             if (!period) return state.rows;
             const from = Date.now() - period * 86400000;
             return state.rows.filter(r => Date.parse(r.created_at || 0) >= from);
@@ -3070,10 +3259,25 @@ async function paint() {
 
             const chip = (days, label) => h('button', {
                 class: 'btn btn-sm ' + (period === days ? 'btn-primary' : 'btn-outline'), type: 'button',
-                onclick: () => { period = days; paintReport(); },
+                onclick: () => { period = days; refresh(); },   // CRM_UNIFY_V1 — новый период — новый запрос
             }, label);
             bodyEl.appendChild(h('div', { class: 'row', style: { gap: '8px', marginBottom: '14px' } },
                 chip(1, 'Сегодня'), chip(7, '7 дней'), chip(30, '30 дней'), chip(0, 'Всё время')));
+            // CRM_UNIFY_V1 — отчёт считает с фильтром «Оператор» доски и называет его.
+            if (operatorLabel()) {
+                bodyEl.appendChild(h('div', { class: 'muted', 'data-report-operator': '', style: { fontSize: '13.5px', margin: '-6px 0 12px' } },
+                    Icon('User', { size: 13 }), ' ', trf('Оператор: {name}', { name: operatorLabel() })));
+            }
+            // CRM_UNIFY_V1 — пока база считает, чисел нет: показать загруженное на
+            // доску и тут же заменить другими числами значило бы мигнуть неправдой.
+            if (reportRows === undefined) {
+                bodyEl.appendChild(h('div', { class: 'muted', 'data-report-loading': '' }, 'Загружаем…'));
+                return;
+            }
+            if (reportRows === null) {
+                bodyEl.appendChild(h('div', { class: 'muted', 'data-report-fallback': '', style: { fontSize: '12.5px', marginBottom: '10px' } },
+                    'Не удалось посчитать по базе — показано по заявкам, загруженным на доску.'));
+            }
 
             const kpi = (label, value, color) => h('div', { class: 'card', style: { flex: 1, padding: '12px 14px', textAlign: 'center' } },
                 h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
@@ -3129,7 +3333,7 @@ async function paint() {
                 ...STATUSES.map(([k, l, kind]) => {
                     const n = rows.filter(r => r.status === k).length;
                     return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
-                        Tag(l + ' · ' + n, { kind, dot: true }));
+                        Tag(tr(l) + ' · ' + n, { kind, dot: true }));   // CRM_UNIFY_V1 — подпись переводится до числа
                 })));
 
             // по источникам
@@ -3158,7 +3362,7 @@ async function paint() {
                     h('th', { style: { textAlign: 'right' } }, 'Пришло'), h('th', { style: { textAlign: 'right' } }, 'Конверсия'))),
                 tbody)));
         }
-        paintReport();
+        refresh();   // CRM_UNIFY_V1 — первый показ: «Загружаем…», затем числа базы
 
         overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '640px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
             h('header', { class: 'modal-head' },
@@ -3173,13 +3377,17 @@ async function paint() {
 
     // ---------------- EXCEL ----------------
     async function exportExcel() {
-        const rows = filtered();
+        // CRM_UNIFY_V1 (итоговое ревью) — всё под текущими фильтрами, без 300 на колонку.
+        const { rows, error } = await crmExportRows();
+        if (error) { toast(trf('Не удалось загрузить заявки: {msg}', { msg: error.message }), 'fail'); return; }
         if (!rows.length) { toast('Нет заявок для выгрузки.', 'fail'); return; }
         try {
             const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
             const aoa = crmExcelRows(rows);   // CRM_MULTI_SOURCE_V1 — строки собирает чистая функция
             const ws = XLSX.utils.aoa_to_sheet(aoa);
-            ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 13 }, { wch: 34 }, { wch: 12 }, { wch: 16 }, { wch: 17 }];
+            // CRM_UNIFY_V1 — ширины на все колонки, «Оператор» — восьмая.
+            ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 13 }, { wch: 34 }, { wch: 12 }, { wch: 16 }, { wch: 17 },
+                { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 17 }];
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'CRM');
             XLSX.writeFile(wb, 'crm-requests.xlsx');
