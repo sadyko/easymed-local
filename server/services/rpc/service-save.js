@@ -20,7 +20,7 @@
 //     админ-врач держит primary-роль doctor (ADMIN_DOCTOR_V1, дважды уже
 //     стреляло).
 import { hasAnyRole } from '../roles.js';
-import { visitTierStateProblem } from '../../../public/js/shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5)
+import { visitTierStateProblem, visitTierValue } from '../../../public/js/shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5)
 import {
   SERVICE_SECTIONS, labBlockVisible, normName, mergeServiceRates,
   performerGate, ratesArray, tierStepsProblem, tierStepRangeProblem,
@@ -227,7 +227,9 @@ export function serviceSave(db, args, user) {
   const storedVisit = a.id !== undefined && a.id !== null
     ? db.prepare('SELECT price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?').get(Number(a.id)) || null
     : null;
-  const sameNum = (x, y) => (x === null || x === undefined ? null : Number(x)) === (y === null || y === undefined ? null : Number(y));
+  // Ревью 7 — «не задано» по правилу самих цен визитов (visitTierValue):
+  // undefined, null и пустая строка — одно и то же, а не 0.
+  const sameNum = (x, y) => visitTierValue(x) === visitTierValue(y);
   const visitChanged = !storedVisit || Object.keys(visitTier).some((k) => !sameNum(visitTier[k], storedVisit[k]));
   if (visitChanged) {
     const visitProblem = visitTierStateProblem(visitTier);

@@ -270,3 +270,18 @@ test('service_save: правильные цены визитов + правка,
   assert.strictEqual(visitRow(db, id).price_secondary, 60000, 'отказ, а цена второго визита снята');
   db.close();
 });
+
+// CLINIC_API_FIX_V1 (ревью 7) — «не задано» сравнивается как «не задано»:
+// сохранённая пустая строка (бывает только после прямой записи в базу), null и
+// отсутствие — одно и то же, а не 0. Иначе 0 в цене повторного визита поверх
+// сохранённой '' считался «без изменений», и «без срока» проходил мимо правила.
+test('service_save: сохранённое \'\' в цене повторного визита и присланный 0 — это изменение, правило проверяет', () => {
+  const db = fresh();
+  const id = storedBad(db);
+  db.prepare("UPDATE services SET price_repeat = '' WHERE id = ?").run(id);
+  assert.throws(() => tiered(db, { id, ...BAD, price_repeat: 0 }), /без срока/);
+  // То же «не задано» с обеих сторон — не изменение: переименование проходит.
+  tiered(db, { id, name: 'Приём невролога 2', ...BAD, price_repeat: null });
+  assert.strictEqual(visitRow(db, id).name, 'Приём невролога 2');
+  db.close();
+});

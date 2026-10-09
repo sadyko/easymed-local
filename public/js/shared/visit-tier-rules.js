@@ -32,7 +32,17 @@ export const VISIT_TIER_MESSAGES = {
     repeatOpenEnded: 'Окно повторного визита задано без «не позже чем через» — цена повторного визита действовала бы без срока. Задайте «не позже чем через» или очистите окно повторного визита.',
 };
 
-const n = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
+/**
+ * CLINIC_API_FIX_V1 (ревью 7) — значение поля цен визитов: «не задано»
+ * (undefined, null, пустая или пробельная строка) — null, иначе число. Им же
+ * service_save сравнивает присланное с сохранённым.
+ */
+export function visitTierValue(v) {
+    if (v === undefined || v === null) return null;
+    if (typeof v === 'string' && v.trim() === '') return null;
+    return Number(v);
+}
+const n = visitTierValue;
 
 /**
  * Причина (русская фраза) или null. `t` — шесть полей так, как они окажутся у
