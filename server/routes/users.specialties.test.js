@@ -6,8 +6,11 @@
 // («Врач УЗД») слага не было вовсе. Свой профиль врача (rpc/doctor-profile.js)
 // пишет слаг, ru и uz по канону (shared/specialty-list.js); теперь и карточка.
 //
-// users.specialty не меняется: это по-прежнему первое название, как его
-// прислали (отчёты, печать и «врач ли это» читают его).
+// users.specialty — первое название (отчёты, печать и «врач ли это» читают
+// его). Ревью итога CLINIC_API_FIX_V1: в том же написании, что основная
+// строка user_specialties, — каноническом из списка («Врач УЗД» → «Врач
+// УЗИ»); не из списка — как прислано. Так же пишет свой профиль врача
+// (rpc/doctor-profile.js).
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -143,8 +146,9 @@ test('своя строка «kardiolog / Эксперт клиники» (чу�
 });
 
 // Ревью 5a6da51 — название ищется в списке без учёта регистра и лишних пробелов
-// (specialtyGroupName — тот же, что группирует отчёт). users.specialty — как прислано.
-test('«кардиолог», « Врач  узи », «лор» — находятся в списке со слагом и uz; users.specialty как прислано', async () => {
+// (specialtyGroupName — тот же, что группирует отчёт). users.specialty — каноническое
+// название основной строки (ревью итога CLINIC_API_FIX_V1).
+test('«кардиолог», « Врач  узи », «лор» — находятся в списке со слагом и uz; users.specialty — как основная строка', async () => {
   const { db, server, base } = await startServer();
   try {
     const admin = await loginAdmin(base);
@@ -156,7 +160,7 @@ test('«кардиолог», « Врач  узи », «лор» — наход�
       ['uzi', 'Врач УЗИ', 'UTT shifokori', 0],
       ['lor', 'Отоларинголог (ЛОР)', 'Otolaringolog (LOR)', 0],
     ]);
-    assert.equal(db.prepare('SELECT specialty FROM users WHERE id = ?').get(id).specialty, 'кардиолог', 'users.specialty — как прислано');
+    assert.equal(db.prepare('SELECT specialty FROM users WHERE id = ?').get(id).specialty, 'Кардиолог', 'users.specialty — не как основная строка');
 
     // одна специальность двумя написаниями — одна строка
     res = await send(base, 'PATCH', `/api/users/${id}`, { specialties: [' Кардиолог ', 'КАРДИОЛОГ'] }, admin);
@@ -215,5 +219,59 @@ test('POST нового врача: специальности ложатся с
     assert.equal(res.status, 201, JSON.stringify(body));
     assert.deepEqual(rowsOf(db, body.user.id), [['nevrolog', 'Невролог', 'Nevrolog', 1], ['uzi', 'Врач УЗИ', 'UTT shifokori', 0]]);
     assert.equal(body.user.specialty, 'Невролог');
+  } finally { server.close(); }
+});
+
+// CLINIC_API_FIX_V1 (ревью итога) — users.specialty и основная строка
+// user_specialties — одно и то же название. Было: строка — каноническая
+// («Врач УЗИ»), а users.specialty — как прислано («Врач УЗД»): отчёт, печать и
+// карточка показывали одного врача двумя написаниями.
+const specialtyOf = (db, id) => db.prepare('SELECT specialty FROM users WHERE id = ?').get(id).specialty;
+
+test('PATCH «Врач УЗД»: users.specialty — «Врач УЗИ», как основная строка', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    const id = seedCardiologist(db);
+    let res = await send(base, 'PATCH', `/api/users/${id}`, { specialties: ['Врач УЗД'] }, admin);
+    assert.equal(res.status, 200, await res.text());
+    assert.deepEqual(rowsOf(db, id), [['uzi', 'Врач УЗИ', 'UTT shifokori', 1]]);
+    assert.equal(specialtyOf(db, id), 'Врач УЗИ', 'users.specialty — как прислано, а строка — каноническая');
+
+    // { name, slug } от карточки — то же правило; ответ сервера — тоже каноническое.
+    res = await send(base, 'PATCH', `/api/users/${id}`, { specialties: [{ slug: null, name: ' лор ' }, 'Врач УЗД'] }, admin);
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(rowsOf(db, id)[0][1], 'Отоларинголог (ЛОР)');
+    assert.equal(specialtyOf(db, id), 'Отоларинголог (ЛОР)');
+    assert.equal(body.user ? body.user.specialty : body.specialty, 'Отоларинголог (ЛОР)');
+
+    // Не из списка — как прислано (без крайних пробелов), как и строка.
+    res = await send(base, 'PATCH', `/api/users/${id}`, { specialties: ['  Консультант клиники', 'Врач УЗД'] }, admin);
+    assert.equal(res.status, 200);
+    assert.equal(rowsOf(db, id)[0][1], 'Консультант клиники');
+    assert.equal(specialtyOf(db, id), 'Консультант клиники');
+
+    // Пустой список — пусто, как и было.
+    res = await send(base, 'PATCH', `/api/users/${id}`, { specialties: [] }, admin);
+    assert.equal(res.status, 200);
+    assert.deepEqual(rowsOf(db, id), []);
+    assert.equal(specialtyOf(db, id), '');
+  } finally { server.close(); }
+});
+
+test('POST нового врача со старым написанием: users.specialty — каноническое, как основная строка', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    const res = await send(base, 'POST', '/api/users', {
+      username: 'dr.uzi', password: 'password2', role: 'doctor', staff_type: 'doctor', last_name: 'Ким', first_name: 'Олег',
+      specialties: ['Врач УЗД', 'Невролог'],
+    }, admin);
+    const body = await res.json();
+    assert.equal(res.status, 201, JSON.stringify(body));
+    assert.deepEqual(rowsOf(db, body.user.id)[0], ['uzi', 'Врач УЗИ', 'UTT shifokori', 1]);
+    assert.equal(specialtyOf(db, body.user.id), 'Врач УЗИ');
+    assert.equal(body.user.specialty, 'Врач УЗИ');
   } finally { server.close(); }
 });

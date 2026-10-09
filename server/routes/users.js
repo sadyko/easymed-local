@@ -469,10 +469,22 @@ export function parseSpecialties(raw) {
 // (`{ slug: 'kardiolog', name: 'Трихолог' }`): он и его uz не переживают
 // пересохранения. Два написания одной специальности — одна строка.
 // users.specialty здесь не трогается (его пишут POST / PATCH ниже, в одной
-// транзакции с этой записью).
+// транзакции с этой записью, — primarySpecialtyName).
 const SPEC_BY_RU = new Map(SPECIALTY_ROWS.map((r) => [r.ru, r]));
 const CANON_SLUGS = new Set(SPECIALTY_ROWS.map((r) => r.slug));
 const specNameKey = (v) => String(v == null ? '' : v).trim().replace(/\s+/g, ' ').toLowerCase();
+// CLINIC_API_FIX_V1 (ревью итога) — users.specialty — то же название, что
+// основная (первая) строка writeSpecialties: каноническое из списка («Врач
+// УЗД» → «Врач УЗИ», «кардиолог» → «Кардиолог»); не из списка — как прислано.
+// Прежде здесь было первое название как прислано, и один врач читался двумя
+// написаниями (строка — «Врач УЗИ», users.specialty — «Врач УЗД»). Свой
+// профиль врача (rpc/doctor-profile.js) пишет так же — name_ru основной строки.
+export function primarySpecialtyName(list) {
+  if (!list || !list.length) return '';
+  const name = String(list[0].name || '').trim();
+  const canon = SPEC_BY_RU.get(specialtyGroupName(name));
+  return canon ? canon.ru : name;
+}
 export function writeSpecialties(db, userId, list) {
   const own = new Map(db.prepare('SELECT specialty_slug, name_ru, name_uz FROM user_specialties WHERE user_id = ?').all(userId)
     .map((r) => [specNameKey(r.name_ru), r]));
@@ -646,7 +658,7 @@ export function userRoutes(db) {
     const ef = parsed.fields;
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
-    if (specs.list) ef.specialty = specs.list.length ? specs.list[0].name : '';
+    if (specs.list) ef.specialty = primarySpecialtyName(specs.list);   // CLINIC_API_FIX_V1 — как основная строка
 
     const hasNameParts = req.body && (req.body.last_name !== undefined || req.body.first_name !== undefined || req.body.middle_name !== undefined);
     const finalFullName = hasNameParts ? deriveFullName(ef) : full_name.slice(0, 100).trim();
@@ -751,7 +763,7 @@ export function userRoutes(db) {
     const ef = parsed.fields;
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
-    if (specs.list) ef.specialty = specs.list.length ? specs.list[0].name : '';
+    if (specs.list) ef.specialty = primarySpecialtyName(specs.list);   // CLINIC_API_FIX_V1 — как основная строка
 
     // If any name part was supplied, recompute full_name from the merged
     // (existing + incoming) parts rather than from the incoming ones alone,
