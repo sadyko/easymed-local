@@ -31,7 +31,7 @@
 // отметке прихода: воронка — это учёт работы колл-центра, а не условие приёма
 // пациента. Любая ошибка попадает в лог и там остаётся.
 
-import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, SEED_NO_SHOW_STAGE } from './config.js';
+import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, windowHours, SEED_NO_SHOW_STAGE } from './config.js';   // CRM_UNIFY_V1 — windowHours
 // CLINIC_DAY_V1 — «сегодня» и «день визита» — местные дни клиники, теми же
 // словами, какими их считают касса, дневник и документы.
 import { localDate } from '../domain/day.js';
@@ -95,6 +95,13 @@ function writeParent(stmt, parent, status, when) {
  * 'pending') и она либо без даты («когда придёт»), либо ровно на этот день.
  * Заявка, назначенная на другой день, сегодняшним приходом не закрывается —
  * то самое правило CRM_FUTURE_LEAD_V2, ради которого оно однажды и появилось.
+ *
+ * CRM_UNIFY_V1 (ревью задачи 3, R5) — заявка БЕЗ ДАТЫ закрывается приходом,
+ * только если она двигалась в окне повторного обращения (updated_at, иначе
+ * created_at; windowHours, 72 ч) — то же правило, что у стойки (deskCloses в
+ * crm/visit-link.js). Трёхмесячный «Новый лид» без записи — о другом
+ * обращении: приход сегодня его не закрывает, ни на стойке, ни оплатой.
+ * Заявка на этот день закрывается, как и прежде, любой давности.
  */
 function settleLineless(db, { patientId, day, open, won, write }) {
   if (!patientId || !open.length) return;
@@ -103,10 +110,12 @@ function settleLineless(db, { patientId, day, open, won, write }) {
     SELECT r.id, r.status, r.scheduled_date
       FROM crm_requests r
      WHERE r.patient_id = ? AND r.status IN (${holes})
-       AND (r.scheduled_date IS NULL OR r.scheduled_date = '' OR date(r.scheduled_date) = date(?))
+       AND (date(r.scheduled_date) = date(?)
+            OR ((r.scheduled_date IS NULL OR r.scheduled_date = '')
+                AND julianday(COALESCE(NULLIF(r.updated_at, ''), r.created_at)) >= julianday('now', ?)))
        AND NOT EXISTS (SELECT 1 FROM crm_request_services l
                         WHERE l.request_id = r.id AND l.status = 'pending')
-  `).all(patientId, ...open, day);
+  `).all(patientId, ...open, day, `-${windowHours(db)} hours`);
   for (const p of reqs) writeParent(write, p, won, p.scheduled_date);
 }
 

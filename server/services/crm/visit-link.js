@@ -16,7 +16,13 @@
 //      вторые. Строки БЕЗ ДАТЫ («консультация, когда придёт») — только у
 //      ensure_visit (регистрация, мастер визита, «Записать на дату»: опция
 //      undated): запись календаря и booking_lines_add их не берут, иначе
-//      консультация «когда придёт» вставала с ценой в смету анализа через неделю;
+//      консультация «когда придёт» вставала с ценой в смету анализа через неделю.
+//      CRM_UNIFY_V1 (ревью задачи 3, R3) — строки берутся у ВСЕХ карточек
+//      пациента, кроме проигрышных («Отказ», «Не квалифицирован»…; сидовая «Не
+//      пришёл» — как прежде, берётся): и у закрытой в «Пришёл». Первый приход
+//      закрывает карточку, а её строка другого дня остаётся записью и обязана
+//      дойти до визита и кассы своего дня. Ступень закрытой карточки шаг не
+//      меняет никогда — она не открывается (G только у живых);
 //   B. заявка, которая уже держит этот визит (строками или привязкой);
 //   C. открытые заявки пациента, которые ЖДУТ этот приход: без ждущих строк,
 //      или с датой / строкой на этот день (без даты — только с undated) —
@@ -55,18 +61,31 @@
 // регистратуры и администратора (основная или дополнительная роль) и только по
 // визиту СЕГОДНЯШНЕГО местного дня (deskArrival); иначе desk молча не значит
 // ничего. На стойке:
-//   C. берутся ВСЕ открытые карточки пациента, не только ждущие этот день, —
-//      первый приход закрывает карточку;
-//   D. по телефону — любая открытая карточка без пациента (те же сторожа
-//      номера), не только ждущая этот день;
+//   C. открытые карточки пациента, которые стойка ЗАКРЫВАЕТ (deskCloses,
+//      решение контролёра по ревью задачи 3, R5): (а) ждут сегодня — ждущая
+//      строка на сегодня или без даты, дата карточки сегодня, привязка записи
+//      к этому визиту (любой давности); или (б) двигались в окне повторного
+//      обращения (updated_at, иначе created_at; windowHours, 72 ч). Старая
+//      карточка, ждущая не сегодня («Новый лид» трёхмесячной давности,
+//      «Перезвонить» три недели назад), остаётся как была;
+//   D. по телефону — то же правило deskCloses. Карточка по телефону получает
+//      ТОЛЬКО patient_id и ступень: её строки в визит не идут (правило денег —
+//      общий семейный номер не ставит услуги в чужой счёт);
 //   E. колл-центр карточку не заводит (пациент без карточки её не получает,
 //      решение 2);
 //   G. карточка — в «Пришёл» (wonStageKey) с прежней датой; строки других
 //      дней остаются в карточке и в календаре как записи;
-//   затем правило прихода (crmVisitStatus → 'arrived'): строки этого визита
-//   закрываются, карточки без строк этого дня — тоже. «Отказ», «Пришёл» и
-//   прочие закрытые не трогаются. Предоплата, будущий визит и визит соседа
-//   приходом не становятся.
+//   затем (deskArrive) — СНАЧАЛА ДЕНЬГИ, ПОТОМ ВОРОНКА (ревью задачи 3, R1/R2):
+//   зеркало ведёт взятые строки в визит ('added' — касса их видит, как до
+//   задачи 3), и только потом правило прихода (crmVisitStatus → 'arrived'):
+//   строки этого визита закрываются, карточки без строк этого дня — тоже.
+//   Что правило прихода сменило в карточках, пишется в след crm_booking_undo
+//   (discard_empty_visit возвращает, R6). «Отказ», «Пришёл» и прочие закрытые
+//   не трогаются. Предоплата, будущий визит и визит соседа приходом не
+//   становятся. СТУПЕНЬ КАРТОЧКИ НИКОГДА НЕ РЕШАЕТ СУДЬБУ УСЛУГ: закрыть
+//   карточку — учёт воронки; строки визита и касса живут по своим правилам
+//   (booking-mirror.js: замена строки зеркала строкой регистратуры и разбор
+//   при первом счёте — при любом статусе строки заявки).
 //
 // ВНЕ ВИДИМОСТИ ТОГО, КТО ЗАПИСЫВАЕТ, И НИЧЕГО НАРУЖУ: оператор Б записал
 // пациента оператора А — карточка А двигается, а функция не возвращает ничего,
@@ -78,8 +97,8 @@
 //
 // НЕ БРОСАЕТ: заявка не вправе отказать в записи. Ошибка — в лог.
 
-import { openStageKeys, scheduledStageKey, wonStageKey, SEED_NO_SHOW_STAGE } from './config.js';
-import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL, cardDateOf } from './booking-mirror.js';
+import { openStageKeys, scheduledStageKey, wonStageKey, windowHours, SEED_NO_SHOW_STAGE } from './config.js';
+import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL, cardDateOf, mirrorVisit } from './booking-mirror.js';
 import { crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';
 import { hasAnyRole } from '../roles.js';   // CRM_UNIFY_V1 — стойка (deskArrival)
 import { today } from '../domain/day.js';
@@ -197,19 +216,42 @@ export function waitsForDay(db, requestId, day, { undated = false } = {}) {
 
 /**
  * ОДНА открытая заявка без пациента с ОСНОВНЫМ номером этого пациента — самая
- * новая из ждущих этот приход (на стойке, desk, — самая новая из открытых);
- * только если основной номер — один номер и его ключ у ОДНОЙ карты. null — нет.
- * Сначала ищется заявка (дёшево), владельцы ключа считаются, только если она
- * есть (ревью 2, скорость).
+ * новая из ждущих этот приход (accept — своё правило отбора: на стойке это
+ * deskCloses, CRM_UNIFY_V1); только если основной номер — один номер и его
+ * ключ у ОДНОЙ карты. null — нет. Сначала ищется заявка (дёшево), владельцы
+ * ключа считаются, только если она есть (ревью 2, скорость).
  */
-export function phoneLeadFor(db, patientId, open, day, { undated = false, desk = false } = {}) {
+export function phoneLeadFor(db, patientId, open, day, { undated = false, accept = null } = {}) {
   if (!open.length) return null;
   const p = db.prepare('SELECT phone FROM patients WHERE id = ?').get(patientId);
   const key = phoneMatchKey(p && p.phone);
   if (!key) return null;
-  const hit = phoneLeadCandidates(db, key, open).find((id) => desk || waitsForDay(db, id, day, { undated }));
+  const ok = accept || ((id) => waitsForDay(db, id, day, { undated }));
+  const hit = phoneLeadCandidates(db, key, open).find(ok);
   if (!hit) return null;
   return keyOwnedOnlyBy(db, patientId, key) ? hit : null;
+}
+
+/**
+ * CRM_UNIFY_V1 (ревью задачи 3, R5) — ЗАКРЫВАЕТ ЛИ СТОЙКА ЭТУ ОТКРЫТУЮ КАРТОЧКУ.
+ * Да, если она (а) ждёт сегодня: ждущая строка на день визита или без даты,
+ * дата карточки — день визита, привязка записи к этому визиту — любой
+ * давности; или (б) двигалась в окне повторного обращения: updated_at (нет —
+ * created_at) не старше windowHours. Иначе это старая карточка о другом —
+ * «Новый лид» трёхмесячной давности регистрация сегодня не закрывает.
+ * Спрашивать ДО того, как шаг связи тронул карточку (D ставит updated_at).
+ */
+export function deskCloses(db, requestId, v, hours = windowHours(db)) {
+  return !!db.prepare(`
+    SELECT 1 FROM crm_requests r
+     WHERE r.id = ?
+       AND (EXISTS (SELECT 1 FROM crm_request_services l
+                     WHERE l.request_id = r.id AND l.status = 'pending'
+                       AND (l.scheduled_date IS NULL OR l.scheduled_date = '' OR date(l.scheduled_date) = date(?)))
+            OR date(r.scheduled_date) = date(?)
+            OR EXISTS (SELECT 1 FROM crm_booking_links b WHERE b.request_id = r.id AND b.visit_id = ?)
+            OR julianday(COALESCE(NULLIF(r.updated_at, ''), r.created_at)) >= julianday('now', ?))`)
+    .get(requestId, v.day, v.day, v.id, `-${Number(hours) || 72} hours`);
 }
 
 /**
@@ -240,14 +282,47 @@ export function crmLinkVisit(db, visitId, user, { undated = false, desk = false 
     if (!arrived && !PRE_ARRIVAL.includes(v.status)) return;   // отменён / не пришёл
     const atDesk = deskArrival(db, v, user, desk);   // CRM_UNIFY_V1 (Р1)
     const linked = db.transaction(() => linkTx(db, v, user, { undated: !!undated, arrived, desk: atDesk }))();
-    // CRM_UNIFY_V1 — стойка: пациент здесь — правило прихода (строки этого
-    // визита закрываются, карточки без строк этого дня — тоже).
-    if (atDesk) crmVisitStatus(db, { visitId: v.id, from: null, to: ARRIVED_STATUSES[0] });
+    // CRM_UNIFY_V1 — стойка: пациент здесь (deskArrive — сначала деньги, потом воронка).
+    if (atDesk) deskArrive(db, v, user);
     // Визит уже «Пришёл»: только что взятые строки закрывает правило прихода.
     else if (arrived && linked) crmVisitStatus(db, { visitId: v.id, from: null, to: v.status });
   } catch (e) {
     console.error('[crm-link] визит', visitId, 'не связан с заявкой:', e && e.message);
   }
+}
+
+/**
+ * CRM_UNIFY_V1 (ревью задачи 3, R1/R2/R6) — ПРИХОД НА СТОЙКЕ: СНАЧАЛА ДЕНЬГИ,
+ * ПОТОМ ВОРОНКА.
+ *   1. Зеркало: строки, которые визит только что взял (шаг A), становятся
+ *      строками визита ('added'), как у ensure_visit до задачи 3, — касса их
+ *      видит. Закрой правило прихода строки раньше, зеркало сочло бы визит
+ *      пришедшим и молча оставило бы записанные услуги вне визита.
+ *   2. Правило прихода (crmVisitStatus → 'arrived'): строки этого визита —
+ *      'done', карточки — в конверсию (Р8, Р9, settleLineless).
+ *   3. След: ступени, которые сменило правило прихода (например, «Не пришёл» →
+ *      «Пришёл»), пишутся в crm_booking_undo, как и ступени шага G, —
+ *      discard_empty_visit возвращает их вместе со строками.
+ */
+function deskArrive(db, v, user) {
+  mirrorVisit(db, v.id, { actorId: user && user.id });
+  db.transaction(() => {
+    const around = db.prepare(`
+      SELECT id, status, scheduled_date FROM crm_requests
+       WHERE patient_id = ?
+          OR id IN (SELECT request_id FROM crm_request_services WHERE visit_id = ?)
+          OR id IN (SELECT request_id FROM crm_booking_links WHERE visit_id = ?)`);
+    const before = new Map(around.all(v.patient_id, v.id, v.id).map((r) => [r.id, r]));
+    crmVisitStatus(db, { visitId: v.id, from: null, to: ARRIVED_STATUSES[0] });
+    for (const r of around.all(v.patient_id, v.id, v.id)) {
+      const was = before.get(r.id);
+      if (!was || (was.status === r.status && was.scheduled_date === r.scheduled_date)) continue;
+      try {
+        db.prepare(`INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, prev_scheduled_date, set_status, set_scheduled_date)
+                    VALUES (?, ?, ?, ?, ?, ?)`).run(v.id, r.id, was.status, was.scheduled_date ?? null, r.status, r.scheduled_date ?? null);
+      } catch { /* сборка без 186 — возвращать будет нечего */ }
+    }
+  })();
 }
 
 /** @returns {boolean} взял ли визит хоть одну строку (шаг A) */
@@ -260,7 +335,10 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
 
   // A. Строки этого дня (без даты — только с undated). «Не пришёл» (сидовая)
   //    в выборке: её строки можно записать заново, но ступень меняет только приход.
-  const lookIn = [...new Set([...open, SEED_NO_SHOW_STAGE])];
+  //    CRM_UNIFY_V1 (ревью задачи 3, R3) — и карточка в конверсии («Пришёл»):
+  //    её строка другого дня — запись, которая обязана дойти до визита и кассы.
+  //    Ступень её не меняется (G только у живых). Проигрышные — никогда.
+  const lookIn = [...new Set([...open, wonStageKey(db), SEED_NO_SHOW_STAGE])];
   const mine = db.prepare(`SELECT id, status FROM crm_requests WHERE patient_id = ? AND status IN (${holes(lookIn)})
                             ORDER BY updated_at DESC, id DESC`).all(v.patient_id, ...lookIn);
   const linkLines = db.prepare(`
@@ -280,16 +358,21 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   const held = requestOfVisit(db, v.id);
   if (held && !touched.has(held)) touched.set(held, 'held');
 
-  // C. Открытые заявки пациента, ждущие этот приход. CRM_UNIFY_V1 (Р8) — на
-  //    стойке ВСЕ открытые: первый приход закрывает карточку.
+  // C. Открытые заявки пациента, ждущие этот приход. CRM_UNIFY_V1 (Р8; ревью
+  //    задачи 3, R5) — на стойке те, что стойка закрывает (deskCloses): ждут
+  //    сегодня или двигались в окне повторного обращения.
+  const hours = desk ? windowHours(db) : 0;
+  const closes = (id) => deskCloses(db, id, v, hours);
   for (const r of mine) {
     if (touched.has(r.id) || !open.includes(r.status)) continue;
-    if (desk || waitsForDay(db, r.id, v.day, { undated })) touched.set(r.id, 'patient');
+    if (desk ? closes(r.id) : waitsForDay(db, r.id, v.day, { undated })) touched.set(r.id, 'patient');
   }
 
-  // D. По телефону — одна заявка, только patient_id (на стойке — любая открытая).
+  // D. По телефону — одна заявка, только patient_id (на стойке — тем же
+  //    правилом deskCloses). Строки карточки по телефону визит не берут — ни
+  //    здесь, ни на стойке: правило денег (общий номер — не общий счёт).
   if (!touched.size) {
-    const id = phoneLeadFor(db, v.patient_id, open, v.day, { undated, desk });   // CRM_UNIFY_V1 — desk
+    const id = phoneLeadFor(db, v.patient_id, open, v.day, { undated, accept: desk ? closes : null });   // CRM_UNIFY_V1
     if (id) {
       db.prepare(`UPDATE crm_requests SET patient_id = ?, updated_at = ${NOW_SQL} WHERE id = ? AND patient_id IS NULL`)
         .run(v.patient_id, id);

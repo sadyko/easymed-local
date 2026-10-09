@@ -218,6 +218,15 @@ export function readCrmSettings(db) {
   }
 }
 
+/**
+ * CRM_UNIFY_V1 — ОКНО ПОВТОРНОГО ОБРАЩЕНИЯ, в часах: crm_settings.window_hours,
+ * иначе 72. Одна точка для стойки (какие карточки закрывает регистрация,
+ * crm/visit-link.js) и для окна звонка и записи (задача 6).
+ */
+export function windowHours(db) {
+  return readCrmSettings(db).window_hours;
+}
+
 // Отказы — целые фразы без подстановок: экран переводит их словарём
 // (i18n-strings.js), а собранную фразу словарь не узнаёт.
 const BOOKED_REFUSAL = 'Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией.';

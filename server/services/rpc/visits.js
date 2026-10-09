@@ -275,9 +275,10 @@ export async function ensureVisit(db, args, user) {
     // CRM_UNIFY_V1 — строки «без даты» берёт только ensure_visit; desk — только здесь, без записи на время.
     crmLinkVisit(db, out.visit.id, user, { undated: true, desk });
     // CRM_CALENDAR_MIRROR_V1 — строки заявки, которые визит только что взял,
-    // становятся строками визита (до прихода). CRM_UNIFY_V1 — на стойке
-    // (desk) строки этого дня уже закрыты приходом, и зеркало их не копирует:
-    // в счёт идут строки, которые выбрал регистратор.
+    // становятся строками визита (до прихода). CRM_UNIFY_V1 — на стойке (desk)
+    // шаг связи сам зовёт зеркало ДО правила прихода (ревью задачи 3, R1/R2);
+    // здесь после прихода остаётся только замена строк зеркала строками
+    // регистратуры.
     mirrorVisit(db, out.visit.id, { actorId: user && user.id });
     return { ...out, booked: false };
   }
@@ -463,7 +464,12 @@ export function discardEmptyVisit(db, args, user) {
       db.prepare('DELETE FROM crm_booking_undo WHERE visit_id = ?').run(visitId);
     } catch { /* сборка без 186 — возвращать нечего */ }
     // Строки заявок, которые ensure_visit успел привязать, снова свободны.
-    db.prepare('UPDATE crm_request_services SET visit_id = NULL WHERE visit_id = ?').run(visitId);
+    // CRM_UNIFY_V1 (ревью задачи 3, R6) — и снова ждут: закрыть строку пустого
+    // визита ('done') мог только приход на стойке по этому же визиту, а визита
+    // больше нет. Ступени, которые сменил этот приход, вернул след выше.
+    db.prepare(`UPDATE crm_request_services SET visit_id = NULL,
+                       status = CASE WHEN status = 'done' THEN 'pending' ELSE status END
+                 WHERE visit_id = ?`).run(visitId);
     // CRM_CALENDAR_MIRROR_V1 — и привязка записи к заявке уходит вместе с ней.
     // Разбор ревью (M7): заявку, которую завела САМА эта запись (колл-центр без
     // открытой заявки), убираем тоже — иначе на доске осталась бы «Записан»

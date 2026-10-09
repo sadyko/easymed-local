@@ -163,3 +163,18 @@ test('две карточки «приём у Иванова» по виду п�
     const q = CALLS.find((c) => c.table === 'crm_request_services');
     assert.match(String(q.columns || q.select || ''), /consultation_type_id/, 'вид приёма не спрошен');
 });
+
+// CRM_UNIFY_V1 (ревью задачи 3, R3) — подстановка в смету берёт ждущие строки
+// ОТКРЫТЫХ и закрытых в конверсию («Пришёл») карточек: первый приход закрывает
+// карточку, а строка другого дня остаётся записью и должна дойти до сметы
+// своего дня. Проигрышные («Отказ», «Не пришёл») — никогда.
+test('ждущие строки берутся у открытых и у «Пришёл», но не у проигрышных', async () => {
+  reset();
+  LINES = [lineOf({})];
+  await pendingCrmLines(7, DAY);
+  const reqQ = CALLS.find((c) => c.table === 'crm_requests');
+  const st = (reqQ.filters || []).find((f) => f.col === 'status');
+  assert.ok(st && st.op === 'in', 'ступени заявок не отобраны: ' + JSON.stringify(reqQ.filters));
+  assert.deepEqual([...st.val].sort(), ['came', 'in_process', 'scheduled'],
+    'строка карточки «Пришёл» на другой день не дойдёт до сметы своего дня (или в смету попал «Отказ»)');
+});

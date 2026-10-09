@@ -398,6 +398,29 @@ test('пришёл: заявка без строк у ДРУГОГО пацие�
   db.close();
 });
 
+// CRM_UNIFY_V1 (ревью задачи 3, R5) — заявка без строк и без даты закрывается
+// приходом, только если двигалась в окне повторного обращения (72 ч). Заявка на
+// день визита — любой давности, как прежде.
+test('CRM_UNIFY_V1: старая заявка без строк и без даты приходом не закрывается; на день визита — закрывается', () => {
+  const db = freshDb();
+  const vid = addVisit(db);   // визит 2026-08-09
+  const stale = addReq(db, { status: 'in_process', name: 'лид трёхмесячной давности' });
+  const fresh = addReq(db, { status: 'in_process', name: 'лид вчерашний' });
+  const dated = addReq(db, { status: 'recall', date: '2026-08-09', name: 'на день визита, старая' });
+  const set = db.prepare(`UPDATE crm_requests SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now', ?),
+                                                  created_at = strftime('%Y-%m-%dT%H:%M:%SZ','now', ?) WHERE id = ?`);
+  set.run('-90 days', '-90 days', stale);
+  set.run('-1 days', '-1 days', fresh);
+  set.run('-90 days', '-90 days', dated);
+
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
+
+  assert.equal(reqRow(db, stale).status, 'in_process', 'приход закрыл лид о другом обращении трёхмесячной давности');
+  assert.equal(reqRow(db, fresh).status, 'came');
+  assert.equal(reqRow(db, dated).status, 'came');
+  db.close();
+});
+
 // ─── ДОКАЗАТЕЛЬСТВА ПРИХОДА, КОТОРЫЕ НЕ ЯВЛЯЮТСЯ СТАТУСОМ ВИЗИТА ───────────
 //
 // Кнопку «Пришёл» в клинике не нажимает никто: на боевой базе ВСЕ 390 визитов

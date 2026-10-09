@@ -57,10 +57,14 @@ export async function pendingCrmLines(patientId, dayIso, visitId = null) {
     if (!patientId || !day) return [];
     const fail = (where, msg) => { const e = new Error(String(msg)); e.where = where; return e; };
 
-    const { open } = await crmStageKeys();
-    if (!open.length) return [];
+    // CRM_UNIFY_V1 (ревью задачи 3, R3) — живые И закрытые в конверсию
+    // («Пришёл»): первый приход закрывает карточку, а её строка другого дня
+    // остаётся записью и должна дойти до сметы своего дня. Проигрышные — нет.
+    const { open, won } = await crmStageKeys();
+    const live = [...new Set([...open, won].filter(Boolean))];
+    if (!live.length) return [];
     const { data: reqs, error: reqErr } = await supabase.from('crm_requests')
-        .select('id').eq('patient_id', patientId).in('status', open);
+        .select('id').eq('patient_id', patientId).in('status', live);
     if (reqErr) throw fail('requests', reqErr.message || reqErr);
     if (!reqs || !reqs.length) return [];
 

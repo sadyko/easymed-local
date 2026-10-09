@@ -238,11 +238,15 @@ export function insertBookingLine(db, { visit, serviceId = null, consultationTyp
   return Number(info.lastInsertRowid);
 }
 
-// V3120_FINAL — ждущие строки заявок, державшие строку визита `fromId`,
-// переходят на `toId` (строка визита уходит, её место заняла другая).
-function relinkPending(db, fromId, toId) {
+// V3120_FINAL — строки заявок, державшие строку визита `fromId`, переходят на
+// `toId` (строка визита уходит, её место заняла другая). CRM_UNIFY_V1 (ревью
+// задачи 3, R1) — ждущие И закрытые приходом ('done'): после регистрации на
+// стойке строки этого визита закрыты, а строка визита — та же услуга, и ссылка
+// на ушедшую строку визита никому не нужна. Снятые ('cancelled') не переходят:
+// снятая строка на чужой строке визита велела бы сверке снять и её.
+function relinkHeld(db, fromId, toId) {
   db.prepare(`UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0
-               WHERE visit_service_id = ? AND status = 'pending'`).run(toId, fromId);
+               WHERE visit_service_id = ? AND status <> 'cancelled'`).run(toId, fromId);
 }
 
 function deleteVs(db, id) {
@@ -321,7 +325,19 @@ export function touchRequest(db, requestId) {
 export function mirrorVisit(db, visitId, { actorId = null } = {}) {
   try {
     const v = visitRow(db, visitId);
-    if (!beforeArrival(db, v)) return null;
+    if (!beforeArrival(db, v)) {
+      // CRM_UNIFY_V1 (ревью задачи 3, R1) — ПРИШЁЛ, НО СЧЁТА ЕЩЁ НЕТ. После
+      // регистрации на стойке (или отметки «Пришёл») строки заявки этого визита
+      // закрыты, и сверка больше ничего не ставит и не снимает. Но регистратура
+      // как раз сейчас вставляет свои строки — и строка зеркала той же услуги
+      // уступает ей место, как до прихода: вторая строка той же услуги — это
+      // двойной счёт. Только своё здание, только живой визит, только без
+      // счёта и работы (I5).
+      if (v && v.sync_origin == null && (isPreArrival(v) || v.status === 'arrived') && !visitHasWork(db, v.id)) {
+        db.transaction(() => replaceAutoTwins(db, v))();
+      }
+      return null;
+    }
     // Разбор ревью (I5): счёт выставлен или работа начата — строки визита
     // ведёт касса. Зеркало тогда только СВЯЗЫВАЕТ строки, но не ставит, не
     // снимает и не переносит их.
@@ -430,24 +446,10 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
     // заявки в смету и вставляет СВОИ строки визита (со своей ценой, пакетом,
     // плательщиком). Строка, заведённая зеркалом под ту же услугу, уступает
     // место: вторая строка той же услуги — это двойной счёт.
-    const auto = db.prepare(`SELECT * FROM crm_request_services
-                              WHERE visit_id = ? AND status = 'pending'
-                                AND visit_service_auto = 1 AND visit_service_id IS NOT NULL AND visit_service_id <> ?
-                              ORDER BY id`).all(V, x.id).find((l) => matchKey(db, l) === matchKey(db, x));
+    const auto = autoLineFor(db, V, x);
     if (auto) {
-      const old = getVs.get(auto.visit_service_id);
       if (frozen) continue;   // I5 — при счёте строку зеркала не трогаем и вторую строку заявки не заводим
-      if (old && old.visit_id === V && vsFree(db, old)) {
-        linkLine.run(x.id, 0, auto.id);
-        // V3120_FINAL — строку визита делят несколько заявок (две карточки
-        // одного человека, CRM_ONE_LINE): на новую строку переходят ВСЕ ждущие
-        // строки, а не одна. Оставшаяся со ссылкой на удалённую строку
-        // снималась следующей сверкой («строку визита сняли — снимаем и в заявке»).
-        relinkPending(db, old.id, x.id);
-        deleteVs(db, old.id);
-        out.linked++; out.removed++;
-        continue;
-      }
+      if (yieldAutoLine(db, V, x, auto)) { out.linked++; out.removed++; continue; }
     }
     if (!reqId) continue;   // запись не из заявки — зеркалить некуда
     db.prepare(`INSERT INTO crm_request_services
@@ -459,6 +461,57 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
 
   for (const r of touched) touchRequest(db, r);
   return out;
+}
+
+/**
+ * Строка заявки этого визита, державшая строку ЗЕРКАЛА той же услуги
+ * (matchKey), что и строка визита `x`. CRM_UNIFY_V1 (ревью задачи 3, R1) — при
+ * любом статусе строки заявки, кроме снятой: после регистрации на стойке
+ * строки этого визита уже 'done', а строка зеркала всё ещё в смете.
+ */
+function autoLineFor(db, V, x) {
+  return db.prepare(`SELECT * FROM crm_request_services
+                      WHERE visit_id = ? AND status <> 'cancelled'
+                        AND visit_service_auto = 1 AND visit_service_id IS NOT NULL AND visit_service_id <> ?
+                      ORDER BY id`).all(V, x.id).find((l) => matchKey(db, l) === matchKey(db, x));
+}
+
+/**
+ * Строка зеркала уступает место строке визита `x` (её поставила регистратура):
+ * строки заявки переходят на `x`, свободная строка зеркала уходит. false —
+ * строка зеркала уже не свободна (счёт, работа) или не этого визита.
+ */
+function yieldAutoLine(db, V, x, auto) {
+  const old = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(auto.visit_service_id);
+  if (!old || old.visit_id !== V || !vsFree(db, old)) return false;
+  db.prepare('UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0 WHERE id = ?').run(x.id, auto.id);
+  // V3120_FINAL — строку визита делят несколько заявок (две карточки одного
+  // человека, CRM_ONE_LINE): на новую строку переходят ВСЕ строки, а не одна.
+  // Оставшаяся со ссылкой на удалённую строку снималась следующей сверкой
+  // («строку визита сняли — снимаем и в заявке»).
+  relinkHeld(db, old.id, x.id);
+  deleteVs(db, old.id);
+  return true;
+}
+
+/**
+ * CRM_UNIFY_V1 (ревью задачи 3, R1) — ТОЛЬКО ЗАМЕНА СТРОК ЗЕРКАЛА, для визита
+ * после прихода (mirrorVisit): свободная строка визита, которую не держит ни
+ * одна строка заявки (её только что поставила регистратура), занимает место
+ * строки зеркала той же услуги. Ничего не ставит, не переносит и строк заявки
+ * не заводит.
+ */
+function replaceAutoTwins(db, v) {
+  const getVs = db.prepare('SELECT * FROM visit_services WHERE id = ?');
+  const referenced = db.prepare('SELECT 1 FROM crm_request_services WHERE visit_service_id = ? LIMIT 1');
+  for (const x of db.prepare('SELECT * FROM visit_services WHERE visit_id = ? ORDER BY id').all(v.id)) {
+    if (!getVs.get(x.id)) continue;   // уступила место выше в этом же проходе
+    if (!lineKey(x) || x.clinic_item_id != null || x.sync_origin != null) continue;
+    if (x.status !== 'added' || x.invoice_item_id != null) continue;
+    if (referenced.get(x.id)) continue;
+    const auto = autoLineFor(db, v.id, x);
+    if (auto) yieldAutoLine(db, v.id, x, auto);
+  }
 }
 
 /**
@@ -613,6 +666,8 @@ export function syncLineFromVisit(db, vsId) {
  * строку зеркала, у которой есть «двойник» регистратуры; строка заявки
  * переходит на двойника. Нет двойника — строка остаётся: это услуга, которую
  * пациент ещё может получить, и снимать её вправе только человек.
+ * CRM_UNIFY_V1 (ревью задачи 3, R1) — строка заявки при любом статусе, кроме
+ * снятой: после регистрации на стойке строки этого визита уже 'done'.
  */
 export function pruneAutoLinesOnInvoice(db, visitId, keepIds = []) {
   try {
@@ -620,7 +675,7 @@ export function pruneAutoLinesOnInvoice(db, visitId, keepIds = []) {
     const keep = new Set((keepIds || []).map(Number));
     const autos = db.prepare(`SELECT l.id AS line_id, l.visit_service_id AS vs_id FROM crm_request_services l
                                JOIN visit_services vs ON vs.id = l.visit_service_id
-                              WHERE vs.visit_id = ? AND l.visit_service_auto = 1 AND l.status = 'pending'`).all(visitId);
+                              WHERE vs.visit_id = ? AND l.visit_service_auto = 1 AND l.status <> 'cancelled'`).all(visitId);
     for (const a of autos) {
       if (keep.has(Number(a.vs_id))) continue;
       const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(a.vs_id);
@@ -631,7 +686,7 @@ export function pruneAutoLinesOnInvoice(db, visitId, keepIds = []) {
           && !db.prepare("SELECT 1 FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled'").get(x.id));
       if (!twin) continue;
       db.prepare('UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0 WHERE id = ?').run(twin.id, a.line_id);
-      relinkPending(db, vs.id, twin.id);   // V3120_FINAL — и остальные ждущие строки этой строки визита
+      relinkHeld(db, vs.id, twin.id);   // V3120_FINAL — и остальные строки этой строки визита (CRM_UNIFY_V1 — и 'done')
       deleteVs(db, vs.id);
     }
   } catch (e) {
