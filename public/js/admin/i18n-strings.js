@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CRM_UNIFY_V1 (2026-10-09) — доска: закрытая колонка «Всё время» — последние 300 (views/crm.js, crm-board-load.js)
+  "Показаны последние {n} — выберите период, чтобы увидеть остальные": {"en":"Showing the latest {n} — choose a period to see the rest","ru":"Показаны последние {n} — выберите период, чтобы увидеть остальные","uz":"Oxirgi {n} tasi ko‘rsatilgan — qolganlarini ko‘rish uchun davrni tanlang"},   // CRM_UNIFY_V1
   // CRM_UNIFY_V1 (2026-10-09) — чип задачи называет исполнителя, колонка «Задача» в «Списке», счётчик меню открывает «Задачи» (views/crm.js, admin.js)
   "задача ({who}): {text}": {"en":"task ({who}): {text}","ru":"задача ({who}): {text}","uz":"vazifa ({who}): {text}"},   // CRM_UNIFY_V1
   "вы": {"en":"you","ru":"вы","uz":"siz"},   // CRM_UNIFY_V1

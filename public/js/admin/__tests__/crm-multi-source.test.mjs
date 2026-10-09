@@ -115,7 +115,11 @@ test('карточка доски — тег на каждый источник;
 
   root = await board('list');
   const cells = byAttr(root, 'data-list-sources').map(textOf);
-  assert.deepEqual(cells, ['Instagram, Рекомендация', 'Instagram', 'Звонок', 'Telegram, Звонок']);
+  // CRM_UNIFY_V1 — доска грузится несколькими запросами (открытые / закрытые по
+  // колонкам, views/crm-board-load.js) и сводит их по убыванию номера — тем же
+  // порядком, что сервер отдавал и раньше (order id desc). Прежний стенд порядок
+  // не применял, и список шёл порядком посева.
+  assert.deepEqual(cells, ['Telegram, Звонок', 'Звонок', 'Instagram', 'Instagram, Рекомендация']);
 
   const aoa = crmExcelRows(LEADS);
   const col = aoa[0].indexOf('Источник');

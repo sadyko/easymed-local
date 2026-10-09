@@ -83,7 +83,9 @@ export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTa
   leadCalls: [],
   // CRM_UNIFY_V1 — ответ crm_task_assignees (кого можно назначить ответственным;
   // функция — по телу запроса) и отказ этого RPC по требованию.
-  assignees: [], assigneesError: null };
+  assignees: [], assigneesError: null,
+  // CRM_UNIFY_V1 — настоящее число закрытой колонки из базы: { ключ ступени: число }.
+  countFor: null };
 export const CALLS = [];
 export const RPC = [];
 const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
@@ -96,7 +98,12 @@ function applyFilters(rows, filters) {
       case 'eq': return String(v) === String(f.val);
       case 'is': return f.val === null ? v == null : v === f.val;
       case 'lte': return v != null && String(v) <= String(f.val);
+      case 'gte': return v != null && String(v) >= String(f.val);   // CRM_UNIFY_V1
+      case 'gt': return v != null && String(v) > String(f.val);
+      case 'lt': return v != null && String(v) < String(f.val);
+      case 'neq': return String(v) !== String(f.val);
       case 'in': return (f.val || []).map(String).includes(String(v));
+      case 'not.in': return !(f.val || []).map(String).includes(String(v));   // CRM_UNIFY_V1 — открытые = не закрытые
       default: return true;
     }
   }));
@@ -127,7 +134,15 @@ globalThis.fetch = async (url, opts) => {
     CALLS.push(body);
     if (body.table === 'crm_requests' && body.op === 'select') {
       if (body.single) return jsonOk(applyFilters(S.leads, body.filters)[0] || null);
-      return jsonOk(S.leads);
+      // CRM_UNIFY_V1 — доска грузится несколькими запросами (открытые / закрытые
+      // по колонкам с числом / отчёт): отбор, предел и счёт применяются.
+      const rows = applyFilters(S.leads, body.filters);
+      const page = Number.isInteger(body.limit) ? rows.slice(0, body.limit) : rows;
+      if (body.count) {
+        const st = (body.filters || []).find((f) => f.col === 'status' && f.op === 'eq');
+        return jsonOk(page, S.countFor && st && S.countFor[st.val] != null ? S.countFor[st.val] : rows.length);
+      }
+      return jsonOk(page);
     }
     if (body.table === 'crm_requests' && body.op === 'insert') {
       if (S.failInsertOnce) { S.failInsertOnce = false; return { ok: false, json: async () => ({ error: { message: 'сбой вставки' } }) }; }

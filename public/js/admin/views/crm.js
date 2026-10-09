@@ -57,6 +57,8 @@ import { readEnsureVisit } from '../ensure-visit-answer.js';
 import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso } from './crm-tasks.js';
 // CRM_UNIFY_V1 — вид «Задачи»: третий вид раздела (Канбан / Список / Задачи).
 import { renderTasksView } from './crm-tasks-view.js';
+// CRM_UNIFY_V1 — загрузка доски: все открытые, закрытые за период, настоящие числа.
+import { loadBoard, periodBounds, periodStart, dayStart, dayEnd, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT } from './crm-board-load.js';
 // CRM_MULTI_SOURCE_V1 — несколько источников у заявки (миграция 231). Правило
 // чтения одно на экран и сервер: sources, иначе [source], иначе ['other'].
 import { leadSources, toggleLeadSource, leadHasAnySource, sourceTally, MAX_LEAD_SOURCES } from '../crm-sources.js';
@@ -129,8 +131,8 @@ function stageKey(preferred) {
 // Источник новой заявки по умолчанию — первый видимый, а не жёсткое 'call':
 // источник тоже редактируется, и 'call' может быть переименован или скрыт.
 const defaultSource = () => (SOURCES.length ? SOURCES[0][0] : 'call');
-// CRM_KANBAN_PAGE_V1 — сколько карточек рисуется в колонке сразу.
-const KANBAN_PAGE = 20;
+// CRM_UNIFY_V1 — CRM_KANBAN_PAGE_V1 («Показать ещё 20») убран: колонка рисует все
+// свои карточки и прокручивается сама (admin-views.css .crm-col-list).
 
 // CRM_REASSIGN_V1 — КОМУ МОЖНО ПЕРЕДАТЬ ЗАЯВКУ.
 //
@@ -181,7 +183,10 @@ const state = { view: 'kanban', filter: 'all', search: '', rows: [], sources: []
                 tag: '', leadTags: new Map(),
                 // CRM_UNIFY_V1 — вид «Задачи»: чьи задачи ('me' | 'all' | 'none' |
                 // id сотрудника) и сотрудники для выбора (только руководителю).
-                taskWho: 'me', taskStaff: null };
+                taskWho: 'me', taskStaff: null,
+                // CRM_UNIFY_V1 — у обрезанных закрытых колонок («Всё время», 300)
+                // настоящее число из базы: Map ключ ступени → число / обрезана ли.
+                counts: {}, capped: {} };
 let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний ответ поиска побеждает
 
 // Период считается по created_at — «когда обратились», а не когда записаны:
@@ -194,44 +199,15 @@ let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний отв�
 // остаются скользящими: месяц здесь про объём, а не про календарь.
 const PERIODS = [['all', 'Всё время'], ['today', 'Сегодня'], ['week', 'Эта неделя'], ['30', '30 дней'],
                  ['custom', 'Свой период']];   // CRM_PERIOD_CUSTOM_V1
-// Граница периода — НАЧАЛО дня по местному времени, а не «минус 24 часа»:
-// «7 дней» для регистратуры это семь календарных дней, а не 168 часов.
-function periodStart(key) {
-    if (key === 'all') return null;
-    const d = new Date(); d.setHours(0, 0, 0, 0);
-    if (key === 'today') return d;
-    // Неделя начинается с ПОНЕДЕЛЬНИКА: getDay() считает воскресенье нулём,
-    // поэтому сдвигаем, иначе в воскресенье «эта неделя» показала бы один день.
-    if (key === 'week') {
-        d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-        return d;
-    }
-    d.setDate(d.getDate() - (Number(key) - 1));
-    return d;
-}
-// CRM_PERIOD_CUSTOM_V1 — 'YYYY-MM-DD' в границы МЕСТНЫХ суток.
-//
-// Верхняя граница включает весь день целиком. Иначе «по 18.08» отрезало бы
-// заявки, поданные 18-го после полуночи, — то есть почти все заявки последнего
-// дня выборки, и пропажу заметили бы не сразу.
-//
-// Без 'Z' в строке: new Date('2026-08-18T00:00:00') разбирается как местное
-// время, а с 'Z' — как UTC, и на UTC+5 период съезжал бы на пять часов.
+// Граница периода — НАЧАЛО дня по местному времени, а не «минус 24 часа».
+// CRM_UNIFY_V1 — periodStart / dayStart / dayEnd (неделя с понедельника, «по» —
+// включая весь последний день, CRM_PERIOD_CUSTOM_V1) перенесены в
+// views/crm-board-load.js: по ним же грузятся закрытые карточки периода.
 // Местная дата как 'YYYY-MM-DD'. Через toISOString() вечером на UTC+5
 // получилось бы завтрашнее число.
 function ymdLocal(d) {
     const p = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-function dayStart(ymd) {
-    if (!ymd) return null;
-    const d = new Date(ymd + 'T00:00:00');
-    return isNaN(d) ? null : d;
-}
-function dayEnd(ymd) {
-    if (!ymd) return null;
-    const d = new Date(ymd + 'T23:59:59.999');
-    return isNaN(d) ? null : d;
 }
 
 function inPeriod(r) {
@@ -350,11 +326,20 @@ async function load() {
     // запуске и раз в час, по записи и доказательствам прихода. Доска только читает.
     // Прежний обход здесь (CRM_AUTO_NOSHOW_V1) не видел оплаты, уносил «Перезвонить»
     // с прошедшей датой звонка и пропускал записи календаря без строк.
-    const { data, error } = await supabase.from('crm_requests')
-        .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
-        .order('id', { ascending: false }).limit(800);
-    if (error) { toast(trf('Не удалось загрузить заявки: {msg}', { msg: error.message }), 'fail'); state.rows = []; return; }
-    state.rows = data || [];
+    // CRM_UNIFY_V1 — ВСЕ открытые карточки (без предела 800, из-за которого
+    // «пропадали» живые заявки) и закрытые за период; для «Всё время» —
+    // последние 300 на закрытую колонку с настоящим числом из базы
+    // (views/crm-board-load.js, Р12/Р13).
+    const res = await loadBoard({
+        closedKeys: [STAGE_KEYS.won, ...STAGE_KEYS.lost],
+        bounds: periodBounds(state.period, state.customFrom, state.customTo),
+    });
+    if (res.error) {
+        toast(trf('Не удалось загрузить заявки: {msg}', { msg: res.error.message }), 'fail');
+        state.rows = []; state.counts = {}; state.capped = {};
+        return;
+    }
+    state.rows = res.rows; state.counts = res.counts; state.capped = res.capped;
     // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
     // права на задачи) — доска без меток, а не без заявок.
     state.openTasks = nearestOpenTasks(await loadOpenTasks(), selfUserId());   // CRM_UNIFY_V1 — своя задача первой
@@ -690,8 +675,8 @@ async function paint() {
                     state.customTo = ymdLocal(now);
                 }
                 state.period = key;
-                paintFilters();
-                paintBody();
+                // CRM_UNIFY_V1 — закрытые карточки грузятся за период: перезагрузка.
+                paint();
             }));
         }
         if (state.period === 'custom') perRow.appendChild(customRange());
@@ -729,7 +714,7 @@ async function paint() {
         // рамка и фон живут на контейнере (.crm-range), поля внутри прозрачные.
         const bad = !!(state.customFrom && state.customTo && state.customFrom > state.customTo);
         const box = h('div', { class: 'crm-range' + (bad ? ' bad' : '') });
-        const apply = () => { paintFilters(); paintBody(); };
+        const apply = () => { paint(); };   // CRM_UNIFY_V1 — закрытые грузятся за период
         const inp = (value, onchange) => {
             const el = h('input', { type: 'date', value: value || '' });
             el.addEventListener('change', () => onchange(el.value));
@@ -783,7 +768,7 @@ async function paint() {
         let r = state.rows.find((x) => String(x.id) === String(id)) || null;
         if (!r) {
             const { data } = await supabase.from('crm_requests')
-                .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
+                .select(BOARD_SELECT)
                 .eq('id', id).maybeSingle();
             r = data || null;
         }
@@ -807,30 +792,21 @@ async function paint() {
             const colRows = rows.filter(r => r.status === key);
             // Поля списка входят в обвязку, из которой считается внутренняя
             // ширина карточки, — поэтому они в .crm-col-list рядом с расчётом.
-            const list = h('div', { class: 'crm-col-list' });
-
-            // Показываем первые KANBAN_PAGE, остальные — по кнопке. Дело не
-            // только в длине страницы: каждая карточка вешает свои обработчики
-            // перетаскивания, и несколько сотен «Пришёл» разом заметно тормозят
-            // доску. Дорисовываем на месте, без перерисовки всей доски, — иначе
-            // терялась бы позиция прокрутки и уже открытые колонки схлопывались.
-            let shown = 0;
-            const more = h('button', {
-                class: 'btn btn-ghost btn-sm', type: 'button',
-                style: { width: '100%', marginTop: '8px' },
-                onclick: () => showMore(),
-            });
-            function syncMore() {
-                const left = colRows.length - shown;
-                if (left <= 0) { more.remove(); return; }
-                more.textContent = trf('Показать ещё {n}', { n: Math.min(KANBAN_PAGE, left) });
-            }
-            function showMore() {
-                for (const r of colRows.slice(shown, shown + KANBAN_PAGE)) list.appendChild(kanbanCard(r));
-                shown = Math.min(shown + KANBAN_PAGE, colRows.length);
-                syncMore();
-            }
-            showMore();
+            // CRM_UNIFY_V1 — «Показать ещё 20» убрано (владелец: «чтобы все
+            // карточки были в окне»): колонка рисует ВСЕ свои карточки и
+            // прокручивается сама (.crm-col-list: max-height + overflow-y), а
+            // карточка вне экрана не отрисовывается браузером (.crm-card:
+            // content-visibility) — страница не растягивается, сотни карточек
+            // не тормозят.
+            const list = h('div', { class: 'crm-col-list', 'data-col-list': key });
+            for (const r of colRows) list.appendChild(kanbanCard(r));
+            // CRM_UNIFY_V1 — число в заголовке настоящее: у полной колонки — её
+            // строки, у обрезанной закрытой («Всё время», последние 300) — итог
+            // по базе под той же видимостью. Если на доске стоит поиск, источник
+            // или метка, число — по показанным: итог базы под такой фильтр не считан.
+            const clientFiltered = !!state.search.trim() || state.sources.length > 0 || !!state.tag;
+            const trimmed = !!state.capped[key] && !clientFiltered;
+            const n = trimmed ? state.counts[key] : colRows.length;
 
             // PASTEL_IDENTITY_V1 — оттенок по позиции в воронке; заливка и цвет
             // рамки теперь в .crm-col (admin-views.css), а не инлайном.
@@ -839,14 +815,14 @@ async function paint() {
             },
                 h('div', { class: 'row', style: { gap: '8px', marginBottom: '8px' } },
                     Tag(label, { kind, dot: true }),
-                    // Счётчик — ПОЛНОЕ число заявок в статусе, а не сколько
-                    // отрисовано: это цифра воронки, и зависеть от того, сколько
-                    // раз нажали «показать ещё», она не должна.
-                    h('span', { class: 'crm-col-n' }, String(colRows.length)),
+                    // Счётчик — ПОЛНОЕ число заявок в статусе (CRM_UNIFY_V1: у
+                    // обрезанной закрытой колонки — из базы).
+                    h('span', { class: 'crm-col-n', 'data-col-count': key }, String(n)),
                     h('span', { class: 'grow' }),
                     key === stageKey('in_process') && !crmReadOnly() ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Новая заявка', onclick: () => requestModal(null) }, '+') : null),
                 list,
-                shown < colRows.length ? more : null);
+                trimmed ? h('div', { class: 'muted crm-col-capped', 'data-col-capped': key },
+                    trf('Показаны последние {n} — выберите период, чтобы увидеть остальные', { n: CLOSED_ALL_TIME_LIMIT })) : null);
             board.appendChild(col);
         }
         // WORKING_WINDOW_V1 — доска живёт ВНУТРИ белого рабочего окна, как в
