@@ -235,3 +235,14 @@ test('новые подписи окна импорта — на трёх язы
         assert.ok(!/[Ѐ-ӿ]/.test(e.uz), 'кириллица в узбекском: ' + e.uz);
     }
 });
+
+// CLINIC_API_FIX_V1 (ревью итога) — окно передаёт имя файла: CSV из русского
+// Excel (cp1251) читается кириллицей, а не кашей.
+test('CSV в cp1251: окно показывает русские названия, а не кашу', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const text = 'name;group;price\nПриём невролога;Консультация;240 000\n';
+    const bytes = new Uint8Array([...text].map((ch) => { const c = ch.codePointAt(0); return c < 0x80 ? c : c === 0x451 ? 0xB8 : c - 0x410 + 0xC0; }));
+    const { overlay } = await openWith({ name: 'uslugi.csv', arrayBuffer: async () => bytes.buffer });
+    const tbody = all(overlay).find((n) => n.tagName === 'TBODY');
+    assert.ok(tbody && /Приём невролога/.test(tbody.textContent), 'в предпросмотре нет «Приём невролога»: ' + (tbody ? tbody.textContent.slice(0, 200) : '—'));
+});

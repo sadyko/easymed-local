@@ -1428,7 +1428,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         try {
             const XLSX = await loadXlsx();
             const buf = await file.arrayBuffer();
-            const rows = readSheetRows(XLSX, buf, cfg);   // CLINIC_API_FIX_V1 — путь чтения вынесен (тесты)
+            const rows = readSheetRows(XLSX, buf, cfg, file.name);   // CLINIC_API_FIX_V1 — путь чтения вынесен (тесты); имя — для .csv
             if (rows.length === 0) throw new Error('Лист пустой — под заголовками нет строк.');
 
             lookups = null;   // CLINIC_API_FIX_V1 (ревью) — каждый файл — по свежему списку сохранённых
@@ -1823,24 +1823,48 @@ function insertPayloadFor(table, keyField, value) {
  * раздела или его настройка. Вынесено из handleFile, чтобы тест читал файл
  * тем же путём, что и окно.
  */
-export function readSheetRows(XLSX, buf, section) {
+export function readSheetRows(XLSX, buf, section, fileName) {
     const cfg = typeof section === 'string' ? getCfg(section) : section;
+    // CLINIC_API_FIX_V1 (ревью итога) — КОДИРОВКА CSV. SheetJS читал байты CSV
+    // без метки порядка байтов как latin-1: UTF-8 без метки и CSV русского
+    // Excel (cp1251) приходили кашей — «Приём» → «ÐŸÑ€Ð¸Ñ‘Ð¼», «Раздел» не
+    // узнавался. Поэтому .csv декодируется здесь, до SheetJS: строго UTF-8
+    // (метка снимается), не вышло — cp1251; SheetJS получает строку. .xlsx и
+    // .xls читаются как раньше.
+    const csvText = csvFileText(buf, fileName);
     // CLINIC_API_FIX_V1 (ревью итога) — raw: true: текст CSV остаётся текстом.
     // Без него SheetJS сам делал из ячеек CSV числа ДО импорта, мимо правила
     // числа (readImportNumber): «150.000» → 150, «1,500» → 1500, «12,5» → 125
     // (и в CSV с «;» из русского Excel), «40%» → 0,4 — со статусом «готово» и
     // без слова. Числовые ячейки .xlsx читаются числами, как и раньше.
     // cellNF — формат ячейки (z): по нему узнаётся процентный формат.
-    const wb = XLSX.read(buf, { type: 'array', raw: true, cellNF: true });
+    const wb = csvText != null
+        ? XLSX.read(csvText, { type: 'string', raw: true })
+        : XLSX.read(buf, { type: 'array', raw: true, cellNF: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
     if (!ws) throw new Error('В книге нет ни одного листа.');
-    percentCellsAsText(ws);
+    if (csvText == null) percentCellsAsText(ws);   // у текста CSV форматов нет
     // PROCUREMENT_IMPORT_V1 — warehouse exports carry a title + blank
     // row above the real header, so `headerRow: 'auto'` scans the
     // first rows for the one matching the most known column names.
     let rows = (cfg && cfg.headerRow === 'auto') ? _rowsWithDetectedHeader(ws, XLSX, cfg) : null;
     if (!rows) rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
     return rows;
+}
+
+// CLINIC_API_FIX_V1 (ревью итога) — текст CSV-файла или null (не CSV).
+// CSV — по имени файла (.csv); имени нет (вызов из теста) — по содержимому:
+// не zip (.xlsx) и не OLE (.xls). Строгий UTF-8 (fatal), метка порядка байтов
+// снимается; байты не UTF-8 — cp1251, как сохраняет «CSV» русский Excel.
+function csvFileText(buf, fileName) {
+    const bytes = new Uint8Array(buf);
+    const zipOrOle = (bytes[0] === 0x50 && bytes[1] === 0x4B) || (bytes[0] === 0xD0 && bytes[1] === 0xCF);
+    const isCsv = fileName ? /\.csv$/i.test(String(fileName)) : !zipOrOle;
+    if (!isCsv) return null;
+    let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch (e) { text = new TextDecoder('windows-1251').decode(bytes); }
+    return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
 }
 
 // CLINIC_API_FIX_V1 (ревью итога) — ЯЧЕЙКА В ПРОЦЕНТНОМ ФОРМАТЕ EXCEL.

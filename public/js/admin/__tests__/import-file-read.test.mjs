@@ -124,3 +124,49 @@ test('.xlsx: знак % как подпись в формате (0"%") — чи�
     const [row] = rowsOf(buf, 'services', UPDATE());
     assert.strictEqual(row.payload.default_doctor_percent, 40);
 });
+
+// CLINIC_API_FIX_V1 (ревью итога) — КОДИРОВКА CSV. SheetJS читал байты CSV
+// без метки порядка байтов как latin-1: UTF-8 без метки («Приём» →
+// «ÐŸÑ€Ð¸Ñ‘Ð¼») и CSV русского Excel в cp1251 приходили кашей — названия не
+// совпадали ни с одной услугой, «Раздел» не узнавался. Теперь .csv
+// декодируется до SheetJS: UTF-8 (строго, метка снимается), иначе cp1251.
+
+// cp1251: А–я подряд с 0xC0, Ё — 0xA8, ё — 0xB8; латиница, цифры и знаки — как есть.
+function cp1251(text) {
+    return new Uint8Array([...text].map((ch) => {
+        const c = ch.codePointAt(0);
+        if (c < 0x80) return c;
+        if (c >= 0x410 && c <= 0x44F) return c - 0x410 + 0xC0;
+        if (ch === 'Ё') return 0xA8;
+        if (ch === 'ё') return 0xB8;
+        throw new Error('нет в таблице теста: ' + ch);
+    })).buffer;
+}
+const utf8 = (text) => new TextEncoder().encode(text).buffer;
+const CSV_TEXT = 'name;group;price;tax_rate\nПриём кардиолога;Консультация;150 000;12,5\nЁлочный массаж;Процедуры;80 000;12\n';
+
+test('CSV в UTF-8 с меткой, UTF-8 без метки и cp1251 читаются одинаково — названия и числа', () => {
+    const variants = {
+        'UTF-8 с меткой': utf8('\uFEFF' + CSV_TEXT),
+        'UTF-8 без метки': utf8(CSV_TEXT),
+        'cp1251 (русский Excel)': cp1251(CSV_TEXT),
+    };
+    for (const [what, buf] of Object.entries(variants)) {
+        const raws = readSheetRows(XLSX, buf, 'services', 'uslugi.csv');
+        assert.deepEqual(raws.map((r) => r.name), ['Приём кардиолога', 'Ёлочный массаж'], what + ': ' + JSON.stringify(raws));
+        assert.ok(!Object.keys(raws[0]).some((k) => k.charCodeAt(0) === 0xFEFF), what + ': метка порядка байтов попала в заголовок');
+        const rows = raws.map((raw, i) => buildImportRow('services', raw, { rowNum: i + 2 }));
+        assert.deepEqual(rows.map((r) => r.payload.type), ['consultation', 'procedure'], what + ': «Раздел» не узнан');
+        assert.deepEqual(rows.map((r) => r.payload.price), [150000, 80000], what);
+        assert.deepEqual(rows.map((r) => r.payload.tax_rate), [12.5, 12], what);
+        assert.ok(rows.every((r) => r.status === 'ok'), what + ': ' + JSON.stringify(rows.map((r) => r.notes)));
+    }
+});
+
+test('.xlsx с именем файла — как раньше: числа числами, кириллица как есть', () => {
+    const ws = XLSX.utils.aoa_to_sheet([['name', 'group', 'price'], ['Приём кардиолога', 'Консультация', 150000]]);
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Services');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const raws = readSheetRows(XLSX, buf, 'services', 'uslugi.xlsx');
+    assert.deepEqual(raws, [{ name: 'Приём кардиолога', group: 'Консультация', price: 150000 }]);
+});
