@@ -1396,14 +1396,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         try {
             const XLSX = await loadXlsx();
             const buf = await file.arrayBuffer();
-            const wb = XLSX.read(buf, { type: 'array' });
-            const ws = wb.Sheets[wb.SheetNames[0]];
-            if (!ws) throw new Error('В книге нет ни одного листа.');
-            // PROCUREMENT_IMPORT_V1 — warehouse exports carry a title + blank
-            // row above the real header, so `headerRow: 'auto'` scans the
-            // first rows for the one matching the most known column names.
-            let rows = (cfg.headerRow === 'auto') ? _rowsWithDetectedHeader(ws, XLSX, cfg) : null;
-            if (!rows) rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+            const rows = readSheetRows(XLSX, buf, cfg);   // CLINIC_API_FIX_V1 — путь чтения вынесен (тесты)
             if (rows.length === 0) throw new Error('Лист пустой — под заголовками нет строк.');
 
             lookups = null;   // CLINIC_API_FIX_V1 (ревью) — каждый файл — по свежему списку сохранённых
@@ -1776,6 +1769,30 @@ function insertPayloadFor(table, keyField, value) {
     // i18n-exempt: «ИКПУ …» уходит в ИМЯ создаваемой записи справочника — хранимые данные, а не текст экрана
     if (table === 'ikpu_codes' && keyField === 'code') row.name = 'ИКПУ ' + value;
     return row;
+}
+
+/**
+ * CLINIC_API_FIX_V1 (ревью итога) — строки первого листа файла импорта так,
+ * как их читает окно импорта: объекты по заголовкам листа. `section` — ключ
+ * раздела или его настройка. Вынесено из handleFile, чтобы тест читал файл
+ * тем же путём, что и окно.
+ */
+export function readSheetRows(XLSX, buf, section) {
+    const cfg = typeof section === 'string' ? getCfg(section) : section;
+    // CLINIC_API_FIX_V1 (ревью итога) — raw: true: текст CSV остаётся текстом.
+    // Без него SheetJS сам делал из ячеек CSV числа ДО импорта, мимо правила
+    // числа (readImportNumber): «150.000» → 150, «1,500» → 1500, «12,5» → 125
+    // (и в CSV с «;» из русского Excel), «40%» → 0,4 — со статусом «готово» и
+    // без слова. Числовые ячейки .xlsx читаются числами, как и раньше.
+    const wb = XLSX.read(buf, { type: 'array', raw: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) throw new Error('В книге нет ни одного листа.');
+    // PROCUREMENT_IMPORT_V1 — warehouse exports carry a title + blank
+    // row above the real header, so `headerRow: 'auto'` scans the
+    // first rows for the one matching the most known column names.
+    let rows = (cfg && cfg.headerRow === 'auto') ? _rowsWithDetectedHeader(ws, XLSX, cfg) : null;
+    if (!rows) rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+    return rows;
 }
 
 // PROCUREMENT_IMPORT_V1 — find the real header row inside the first rows of
