@@ -81,6 +81,7 @@ const REGISTRAR = { id: 7, role: 'registrar', extra_roles: [] };
 let sent = [];          // каждый запрос экрана к /api/db
 let refused = [];       // то, что компилятор отверг
 let failDb = false;     // сервер не ответил
+const failTables = new Set();   // REFERENCE_LISTS_V1 (ревью итога) — не ответил запрос к одной таблице
 let gate = null;        // REFERENCE_LISTS_V1 (ревью M5) — придержать ответы одной отрисовки
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -88,7 +89,7 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/db')) {
     sent.push(body);
     if (gate) await gate;
-    if (failDb) return { ok: false, status: 500, json: async () => ({ error: { message: 'server down' } }) };
+    if (failDb || failTables.has(body.table)) return { ok: false, status: 500, json: async () => ({ error: { message: 'server down' } }) };
     let rows;
     try {
       const c = compile(body, REGISTRAR, { db });
@@ -464,4 +465,35 @@ test('доступ: экран открывает тот, кому открыт�
     assert.equal(perms.isRouteAllowed('reference-lists'), true, 'роль с «Настройками» не открывает справочники');
   } finally { perms.setFullAccess('Admin'); }
   assert.equal(perms.isRouteAllowed('reference-lists'), true, 'полный доступ не открывает справочники');
+});
+
+// REFERENCE_LISTS_V1 (ревью итога) — у каждой вкладки своя причина. Отказ
+// запроса регионов или районов писал и на вкладке «Страны» «Не удалось
+// загрузить страны», хотя страны пришли.
+test('не ответили регионы или районы — «Страны» показывают страны, «Города и районы» — свою причину', async () => {
+  for (const table of ['regions', 'districts']) {
+    failTables.clear(); failTables.add(table);
+    try {
+      const root = await mount();
+      assert.ok(textOf(root).includes('Не удалось загрузить города и районы — обновите страницу.'), table + ': ' + textOf(root).slice(0, 300));
+      assert.equal(regionRows(root).length, 0);
+      tabNamed(root, 'Страны').click();
+      await tick();
+      assert.ok(!textOf(root).includes('Не удалось загрузить страны'), table + ': страны пришли, а вкладка говорит, что нет');
+      assert.equal(countryRows(root).length, 7, table + ': стран на экране ' + countryRows(root).length);
+      assert.equal(textOf(byClass(tabNamed(root, 'Страны'), 'tab-count')[0] || mk('i')).trim(), '7', table + ': счётчик стран');
+    } finally { failTables.clear(); }
+  }
+});
+
+test('не ответили страны — обе вкладки географии говорят о своём', async () => {
+  failTables.add('countries');
+  try {
+    const root = await mount();
+    assert.ok(textOf(root).includes('Не удалось загрузить города и районы — обновите страницу.'));
+    tabNamed(root, 'Страны').click();
+    await tick();
+    assert.ok(textOf(root).includes('Не удалось загрузить страны — обновите страницу.'));
+    assert.equal(countryRows(root).length, 0);
+  } finally { failTables.clear(); }
 });

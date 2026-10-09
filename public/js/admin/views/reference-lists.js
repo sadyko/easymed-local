@@ -49,13 +49,16 @@ const byRu = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 
 const kindRank = (d) => (d.kind in KIND_ORDER ? KIND_ORDER[d.kind] : 2);
 
 /**
- * Страны и регионы страны COUNTRY_CODE с их районами: { countries, regions }
- * или { error }. Три запроса — все страны, регионы страны с кодом
- * COUNTRY_CODE, районы всех её регионов разом.
+ * Страны и регионы страны COUNTRY_CODE с их районами: { countries, regions }.
+ * Три запроса — все страны, регионы страны с кодом COUNTRY_CODE, районы всех
+ * её регионов разом. REFERENCE_LISTS_V1 (ревью итога) — у каждой вкладки своя
+ * причина отказа: countriesError — не пришли страны (тогда и регионы не
+ * найти — regionsError тоже); regionsError — не пришли регионы или районы,
+ * а страны — пришли, и вкладка «Страны» их показывает.
  */
 export async function loadGeography() {
     const c = await supabase.from('countries').select('id, code, name, name_uz, name_en, active');
-    if (c.error) return { error: c.error };
+    if (c.error) return { countriesError: c.error, regionsError: c.error };
     // Регионы — у страны с кодом COUNTRY_CODE, как и прежде, даже если её
     // выключили в «Географии»; в списке стран показаны только включённые.
     const country = (c.data || []).find((x) => x.code === COUNTRY_CODE);
@@ -66,13 +69,13 @@ export async function loadGeography() {
 
     const r = await supabase.from('regions').select('id, name, code, name_uz, name_en')
         .eq('country_id', country.id).eq('active', true);
-    if (r.error) return { error: r.error };
+    if (r.error) return { countries, regionsError: r.error };
     const regions = (r.data || []).map((x) => ({ ...x, districts: [] }));
     if (!regions.length) return { countries, regions };
 
     const d = await supabase.from('districts').select('id, region_id, name, code, name_uz, name_en, kind')
         .in('region_id', regions.map((x) => x.id)).eq('active', true);
-    if (d.error) return { error: d.error };
+    if (d.error) return { countries, regionsError: d.error };
     const byId = new Map(regions.map((x) => [x.id, x]));
     for (const row of d.data || []) { const reg = byId.get(row.region_id); if (reg) reg.districts.push(row); }
     for (const reg of regions) reg.districts.sort((a, b) => (kindRank(a) - kindRank(b)) || byRu(a, b));
@@ -180,7 +183,7 @@ function paintSpecialties(body) {
 
 function paintCountries(state, body) {
     const empty = (text) => h('div', { class: 'empty', style: { padding: '32px 20px' } }, text);
-    if (state.geo.error) { body.appendChild(empty('Не удалось загрузить страны — обновите страницу.')); return; }
+    if (state.geo.countriesError) { body.appendChild(empty('Не удалось загрузить страны — обновите страницу.')); return; }
     const countries = state.geo.countries || [];
     if (!countries.length) { body.appendChild(empty('Стран нет.')); return; }
     body.appendChild(codeTable(countries.map((c) => ({ code: c.code, ru: c.name, uz: c.name_uz, en: c.name_en })), 'ref-country'));
@@ -189,7 +192,7 @@ function paintCountries(state, body) {
 /** Рисует вкладку «Города и районы»; возвращает строку выбранного региона (для фокуса). */
 function paintGeography(state, body, paint) {
     const empty = (text) => h('div', { class: 'empty', style: { padding: '32px 20px' } }, text);
-    if (state.geo.error) { body.appendChild(empty('Не удалось загрузить города и районы — обновите страницу.')); return null; }
+    if (state.geo.regionsError) { body.appendChild(empty('Не удалось загрузить города и районы — обновите страницу.')); return null; }
     const regions = state.geo.regions;
     const sel = regions.find((r) => r.id === state.region)
         || regions.find((r) => r.code === DEFAULT_REGION) || regions[0];
