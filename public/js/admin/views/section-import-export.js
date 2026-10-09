@@ -1021,10 +1021,14 @@ function autoConfigFor(sectionKey) {
         if (f.type === 'number') {
             col.coerce = (f.step === '1' || f.step == null || /int/i.test(f.label || '')) ? 'num' : 'num';
             if (f.default != null) col.defaultNum = f.default;
-            // CLINIC_API_FIX_V1 — «40%» читается в колонке процентов (по ключу или подписи).
-            if (/percent|pct|tax_rate|discount/i.test(f.key) || /%/.test(f.label || '')) col.percent = true;
-            // CLINIC_API_FIX_V1 (ревью итога) — деньги: проценты и суммы.
-            if (col.percent || /price|cost|amount|salary|fee|sum/i.test(f.key)) col.money = true;
+            // CLINIC_API_FIX_V1 — «40%» читается в колонке процентов. Ревью 3 —
+            // по КЛЮЧУ, а не по «%» в подписи: bonus_value — «% или сумма», и 150
+            // в нём не доля больше 100 %.
+            if (/percent|pct|tax_rate/i.test(f.key)) col.percent = true;
+            // CLINIC_API_FIX_V1 (ревью итога) — деньги: проценты и суммы. Ревью 3 —
+            // и пороги/лимиты сумм: кешбэк (min_purchase, max_cashback), лимит
+            // полиса (max_limit), бонус направившему (bonus_value).
+            if (col.percent || /price|cost|amount|salary|fee|sum|purchase|cashback|limit|bonus/i.test(f.key)) col.money = true;
         } else if (f.type === 'bool') {
             col.coerce = 'bool';
             col.defaultBool = f.default !== false;

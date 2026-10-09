@@ -327,3 +327,26 @@ test('сообщения о доле вне 0…100 % — на трёх язык
         assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
     }
 });
+
+// CLINIC_API_FIX_V1 (ревью 3) — ДЕНЬГИ В РАЗДЕЛАХ ИЗ sections.js. Суммы кешбэка
+// (min_purchase, max_cashback) и лимит страхового полиса (max_limit) не были
+// помечены деньгами: «много» в них не отказывало строке. Доля определяется по
+// КЛЮЧУ (percent/pct/tax_rate), а не по «%» в подписи: bonus_value — «% или
+// сумма», и 150 в нём — допустимая сумма, а не доля больше 100 %.
+const refusedFor = (section, raw, col) => {
+    const row = buildImportRow(section, raw, { rowNum: 2 });
+    return String(noteAbout(row, col) || '');
+};
+test('кешбэк и полис: не число в сумме — строка не ввозится', () => {
+    assert.ok(refusedFor('cashback', { name: 'Кешбэк', min_purchase: 'много' }, 'min_purchase').includes('строка не импортирована'));
+    assert.ok(refusedFor('cashback', { name: 'Кешбэк', max_cashback: 'без предела' }, 'max_cashback').includes('строка не импортирована'));
+    assert.ok(refusedFor('payer_policies', { name: 'Полис', max_limit: 'без лимита' }, 'max_limit').includes('строка не импортирована'));
+    assert.ok(refusedFor('doctor_referral_bonuses', { bonus_value: 'много' }, 'bonus_value').includes('строка не импортирована'));
+});
+
+test('бонус направившему 150 — сумма, а не доля больше 100 %; покрытие полиса 120 % — доля больше 100 %', () => {
+    const bonus = buildImportRow('doctor_referral_bonuses', { bonus_value: '150' });
+    assert.strictEqual(bonus.payload.bonus_value, 150);
+    assert.ok(!noteAbout(bonus, 'bonus_value'), JSON.stringify(bonus.notes));
+    assert.ok(refusedFor('payer_policies', { name: 'Полис', coverage_percentage: '120' }, 'coverage_percentage').includes('доля больше 100%'));
+});
