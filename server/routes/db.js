@@ -18,6 +18,8 @@ import { tagInsertRefusal } from '../services/crm/config.js';   // CRM_HEAD_MERG
 import { crmSourcesWrite, CrmSourcesError } from '../services/crm/sources.js';   // CRM_MULTI_SOURCE_V1
 import { roleWriteRefusal } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { packageStampRefusal } from '../services/rpc/billing.js';   // PACKAGES_V1 (ревью I-3)
+import { PROXY_MODEL_REQUIRED } from '../services/rpc/lis.js';   // LIS_PROXY_V1 (ревью, Р21)
+import { PROXY_MODELS } from '../../public/js/shared/lisproxy-models.js';   // LIS_PROXY_V1 (ревью, Р21)
 // CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
 
@@ -84,6 +86,24 @@ function refuseSurgeryWithoutBed(db, meta, body) {
     if (refusal) return refusal;
   }
   return null;
+}
+
+// LIS_PROXY_V1 (ревью, Р21; решение владельца 2026-10-09, п. 6) — прибор за LIS
+// Proxy — только BS-200, BC-780 или AutoLumo A1000. «Добавить» (RPC
+// lis_device_add) это требует; здесь — та же стена у правки через /api/db: иначе
+// строке прокси ставилась любая модель или пустая. Задета хоть одна строка
+// прокси — отказ целиком (пачка не делится). Строки своего порта — как прежде.
+function refuseProxyModelWrite(db, meta, body, user) {
+  if (!meta || meta.table !== 'lab_devices' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;
+  const rows = Array.isArray(body && body.values) ? body.values : (body && body.values ? [body.values] : []);
+  const offModel = rows.some((r) => r && Object.prototype.hasOwnProperty.call(r, 'profile') && !PROXY_MODELS.includes(r.profile));
+  if (!offModel) return null;
+  let proxy = false;
+  try {
+    const sel = compile({ table: body.table, op: 'select', columns: 'id,via', filters: body.filters }, user, { db });
+    proxy = db.prepare(sel.sql).all(...sel.params).some((r) => r.via === 'lisproxy');
+  } catch { proxy = false; }
+  return proxy ? PROXY_MODEL_REQUIRED : null;
 }
 
 // PACKAGES_V1 (ревью I-3) — текст отказа или null. Вставка: пакет строки
@@ -372,6 +392,11 @@ export function dbRoutes(db) {
     const packageRefusal = refusePackageWrite(db, compiled.meta, req.body, req.user);
     if (packageRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: packageRefusal } });
+    }
+    // LIS_PROXY_V1 (ревью, Р21) — модель прибора за LIS Proxy: см. refuseProxyModelWrite.
+    const proxyModelRefusal = refuseProxyModelWrite(db, compiled.meta, req.body, req.user);
+    if (proxyModelRefusal) {
+      return res.status(409).json({ error: { code: 'proxy_model_required', message: proxyModelRefusal } });   // код — как у RPC lis_device_add
     }
     // INPATIENT_MONEY_FIX_V1 (D7) — строки стационара: см. refuseAdmissionLineWrite.
     const admLineRefusal = refuseAdmissionLineWrite(db, compiled.meta, req.body, req.user);

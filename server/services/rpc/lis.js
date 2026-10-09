@@ -592,4 +592,4 @@ const MODEL_REQUIRED = 'Выберите модель анализатора: б
 // LIS_VENDOR_EXACT_V1 — N2: «Привязать» до «Добавить». Перевод — ключ словаря (i18n-strings.js): тост экрана переводит его сам.
 const NOT_ADDED = 'Прибор этого сообщения ещё не добавлен — «Добавить прибор» → «Найдены в сети» → «Добавить», затем «Привязать».';
 // LIS_PROXY_V1 — Р21: тот же текст показывает экран (lab-devices.js), один ключ словаря.
-const PROXY_MODEL_REQUIRED = 'Через LIS Proxy Easy-Med принимает только BS-200, BC-780 и AutoLumo A1000 — выберите одну из этих моделей.';
+export const PROXY_MODEL_REQUIRED = 'Через LIS Proxy Easy-Med принимает только BS-200, BC-780 и AutoLumo A1000 — выберите одну из этих моделей.';
