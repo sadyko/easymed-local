@@ -166,3 +166,72 @@ test('второй файл в том же окне перечитывает с�
     await pick(FILE());
     assert.equal(W.storedReads, 2, 'второй файл собран по списку, прочитанному для первого');
 });
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 (ревью итога) — ЗАМЕЧАНИЕ НЕ ТЕРЯЕТСЯ. Правило числа
+// (900496a) держится на том, что человек ВИДИТ предупреждение. А предпросмотр
+// показывал только первые 50 строк, строка статуса считала строку с
+// замечанием «готовой», и итоговое сообщение о замечаниях молчало: «150 000
+// сум» в 62-й строке не видел никто. Теперь строка статуса считает строки с
+// замечаниями, предпросмотр показывает КАЖДУЮ строку с замечанием или
+// ошибкой, где бы она ни стояла (и первые 50 чистых), а итог называет число
+// строк с замечаниями.
+// ---------------------------------------------------------------------------
+const BIG = () => {
+    const rows = [['name', 'group', 'price']];
+    for (let i = 1; i <= 60; i++) rows.push(['Услуга ' + i, 'Консультация', 1000 + i]);
+    rows.push(['Приём кардиолога', 'Консультация', '150 000 сум']);   // строка 62: обновление, замечание
+    rows.push(['Приём невролога', 'Консультация', 'abc']);            // строка 63: новая, ошибка
+    return sheetFile(rows);
+};
+const previewRows = (overlay) => {
+    const tbody = all(overlay).find((n) => n.tagName === 'TBODY');
+    return tbody ? tbody.children.filter((n) => n.tagName === 'TR') : [];
+};
+const rowNumOf = (tr) => tr.children[0].textContent.trim();
+
+test('замечания видны: строка статуса считает их, предпросмотр показывает строку 62 и 63, итог называет число', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const { overlay, confirm } = await openWith(BIG());
+    const statusText = all(overlay).find((n) => String(n.className).includes('imx-status')).textContent;
+    assert.match(statusText, /Строк в файле: 62/, statusText);
+    assert.match(statusText, /61\s*готовы/, statusText);
+    assert.match(statusText, /из них с замечаниями:\s*1\b/, 'строка статуса молчит о замечании: ' + statusText);
+    assert.match(statusText, /1\s*с ошибками/, statusText);
+
+    const rows = previewRows(overlay);
+    const nums = rows.map(rowNumOf);
+    assert.ok(nums.includes('62'), 'строки с замечанием (62) нет в предпросмотре: ' + nums.slice(-5).join(','));
+    assert.ok(nums.includes('63'), 'строки с ошибкой (63) нет в предпросмотре');
+    assert.equal(rows.length, 52, 'предпросмотр: 50 чистых + 2 с замечаниями — ' + rows.length);
+    const r62 = rows.find((tr) => rowNumOf(tr) === '62');
+    assert.match(r62.textContent, /150 000 сум/);
+    const caption = all(overlay).find((n) => /Предпросмотр/.test(n._text || '')).textContent;
+    assert.match(caption, /с замечаниями и ошибками \(2\)/, caption);
+
+    confirm.click();
+    await settle(200);
+    assert.match(toastText(), /с замечаниями: 1\b/, 'итог импорта молчит о замечаниях: ' + toastText());
+});
+
+test('без замечаний — строка статуса и итог как раньше, предпросмотр — первые 50', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const rowsIn = [['name', 'group', 'price']];
+    for (let i = 1; i <= 55; i++) rowsIn.push(['Услуга ' + i, 'Консультация', 1000 + i]);
+    const { overlay, confirm } = await openWith(sheetFile(rowsIn));
+    const statusText = all(overlay).find((n) => String(n.className).includes('imx-status')).textContent;
+    assert.ok(!/замечани/.test(statusText), statusText);
+    assert.equal(previewRows(overlay).length, 50);
+    confirm.click();
+    await settle(200);
+    assert.ok(!/замечани/.test(toastText()), toastText());
+});
+
+test('новые подписи окна импорта — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const k of ['из них с замечаниями:', 'Предпросмотр: все строки с замечаниями и ошибками ({flagged}) и первые {n} без замечаний — всего строк {total}', 'с замечаниями: {n}']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+        assert.ok(!/[Ѐ-ӿ]/.test(e.uz), 'кириллица в узбекском: ' + e.uz);
+    }
+});

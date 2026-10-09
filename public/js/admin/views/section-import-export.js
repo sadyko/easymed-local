@@ -1372,14 +1372,21 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
     }
     function paintParsed() {
         const validCount = parsedRows.filter(r => r.status !== 'error').length;
+        // CLINIC_API_FIX_V1 (ревью итога) — строка с замечанием «готова», но
+        // её замечание (не число в цене — оставлено сохранённое…) человек
+        // должен увидеть: строка статуса называет их число отдельно.
+        const warnCount = parsedRows.filter(r => r.status === 'warn').length;
         clear(status);
-        status.append(
+        // append(null) вставил бы текст «null» — узлы собираются списком.
+        status.append(...[
             document.createTextNode(trf('Строк в файле: {n}', { n: rawRows.length }) + ' — '),
             h('b', { style: { color: 'var(--ok-700)' } }, String(validCount)),
-            document.createTextNode(' ' + tr('готовы') + ', '),
+            document.createTextNode(' ' + tr('готовы') + (warnCount ? ' (' + tr('из них с замечаниями:') + ' ' : ', ')),
+            warnCount ? h('b', { style: { color: 'var(--warn-700)' } }, String(warnCount)) : null,
+            warnCount ? document.createTextNode('), ') : null,
             h('b', { style: { color: 'var(--crit-700)' } }, String(rawRows.length - validCount)),
             document.createTextNode(' ' + tr('с ошибками.')),
-        );
+        ].filter(Boolean));
         paintPreview();
         if (validCount > 0) confirmBtn.removeAttribute('disabled');
         else                confirmBtn.setAttribute('disabled', '');
@@ -1416,9 +1423,19 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
     function paintPreview() {
         clear(preview);
         if (parsedRows.length === 0) return;
-        const showRows = parsedRows.slice(0, 50);
+        // CLINIC_API_FIX_V1 (ревью итога) — КАЖДАЯ строка с замечанием или
+        // ошибкой видна, где бы она ни стояла в файле; чистых — первые 50.
+        // Раньше показывались первые 50 строк, и замечание в 62-й не видел никто.
+        const flagged = parsedRows.filter(r => r.status !== 'ok');
+        const clean = parsedRows.filter(r => r.status === 'ok').slice(0, 50);
+        const showRows = flagged.length
+            ? [...flagged, ...clean].sort((a, b) => a.rowNum - b.rowNum)
+            : clean;
         preview.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '6px' } },
-            trf('Предпросмотр — первые {n} из {total}', { n: showRows.length, total: parsedRows.length })));
+            flagged.length
+                ? trf('Предпросмотр: все строки с замечаниями и ошибками ({flagged}) и первые {n} без замечаний — всего строк {total}',
+                    { flagged: flagged.length, n: clean.length, total: parsedRows.length })
+                : trf('Предпросмотр — первые {n} из {total}', { n: showRows.length, total: parsedRows.length })));
 
         // Show up to four columns in the preview so the table stays compact;
         // the full data still imports.
@@ -1590,7 +1607,11 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             if (inserted) parts.push(trf('новых: {n}', { n: inserted }));
             if (updated)  parts.push(trf('обновлено: {n}', { n: updated }));
             if (failed)   parts.push(trf('с ошибкой: {n}', { n: failed }));
-            toast(trf('Импортировано строк: {n} · {parts}.', { n: ok, parts: parts.join(' · ') }));
+            // CLINIC_API_FIX_V1 (ревью итога) — итог называет строки с замечаниями:
+            // окно сейчас закроется, и их список уйдёт вместе с ним.
+            const warned = valid.filter(r => r.status === 'warn').length;
+            if (warned)   parts.push(trf('с замечаниями: {n}', { n: warned }));
+            toast(trf('Импортировано строк: {n} · {parts}.', { n: ok, parts: parts.join(' · ') }), warned ? 'warn' : 'info');
         } else {
             toast(trf('Импорт не удался — отклонено строк: {n}.', { n: failed }) + (lastError ? ' ' + lastError : ''), 'fail');
         }

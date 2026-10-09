@@ -3,6 +3,10 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (ревью итога) — окно импорта: строки с замечаниями видны всегда (views/section-import-export.js)
+  "из них с замечаниями:": {"en":"of them with notes:","ru":"из них с замечаниями:","uz":"shundan izohli:"},   // CLINIC_API_FIX_V1
+  "Предпросмотр: все строки с замечаниями и ошибками ({flagged}) и первые {n} без замечаний — всего строк {total}": {"en":"Preview: every row with notes or errors ({flagged}) and the first {n} without notes — {total} rows in total","ru":"Предпросмотр: все строки с замечаниями и ошибками ({flagged}) и первые {n} без замечаний — всего строк {total}","uz":"Oldindan ko'rish: izoh yoki xatoli barcha qatorlar ({flagged}) va izohsiz birinchi {n} tasi — jami {total} qator"},   // CLINIC_API_FIX_V1
+  "с замечаниями: {n}": {"en":"with notes: {n}","ru":"с замечаниями: {n}","uz":"izohli: {n}"},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью итога) — импорт Excel: не число в числовой ячейке не становится 0 (views/section-import-export.js readImportNumber)
   "Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.": {"en":"Row {n}: column {col} is not a number («{v}») — the saved value is kept.","ru":"Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.","uz":"{n}-qator: {col} ustunida son emas («{v}») — saqlangan qiymat qoldirildi."},   // CLINIC_API_FIX_V1
   "Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.": {"en":"Row {n}: column {col} is not a number («{v}») — the row was not imported.","ru":"Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.","uz":"{n}-qator: {col} ustunida son emas («{v}») — qator import qilinmadi."},   // CLINIC_API_FIX_V1
