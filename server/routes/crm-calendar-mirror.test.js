@@ -465,21 +465,24 @@ test('R-I2. выданный талон очереди — строка не с�
   } finally { t.close(); }
 });
 
-test('R-I3. давняя заявка не цепляется к записи регистратуры и врача; колл-центр заводит новую', async () => {
+// CRM_UNIFY_V1 — ОДНО ПРАВИЛО ДЛЯ ВСЕХ ДВЕРЕЙ. Раньше ensure_visit двигал любую открытую
+// заявку пациента без строк, а calendar_book — только «ждущую этот день». Теперь
+// оба — по правилу ensure_visit (crm/visit-link.js, шаг C): открытая карточка
+// пациента без строк любой давности — это его карточка.
+test('R-I3 (CRM_UNIFY_V1): давняя открытая карточка без строк едет в «Записан» при любой записи; второй колл-центр не заводит', async () => {
   const t = await start();
   try {
-    const old = t.db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id, created_at) VALUES ('Пациент Тест','+998900000077','in_process',77,?)").run(daysAgoIso(60)).lastInsertRowid;
+    const old = t.db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id, created_at, updated_at) VALUES ('Пациент Тест','+998900000077','in_process',77,?,?)")
+      .run(daysAgoIso(60), daysAgoIso(60)).lastInsertRowid;
     const r1 = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
-    const r2 = await t.rpc('calendar_book', 'doc', { patient_id: 77, doctor_id: 10, start: at(D2, 9), duration_minutes: 30 });
-    assert.equal(r1.status, 200); assert.equal(r2.status, 200, JSON.stringify(r2.json));
-    assert.equal(reqRow(t.db, old).status, 'in_process', 'давняя заявка уехала в «Записан» по чужой записи');
-    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_booking_links').get().n, 0);
-    const r3 = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 11, start: at(D, 12), duration_minutes: 30 });
-    assert.equal(r3.status, 200);
-    const link = t.db.prepare('SELECT * FROM crm_booking_links WHERE visit_id = ?').get(r3.json.data.visit.id);
-    assert.ok(link && link.request_id !== old, 'колл-центр прицепил запись к заявке двухмесячной давности');
-    assert.equal(link.source, 'callcenter');
-    assert.equal(link.created_by, 3);
+    assert.equal(r1.status, 200, JSON.stringify(r1.json));
+    assert.equal(reqRow(t.db, old).status, 'scheduled', 'запись регистратуры не нашла открытую карточку пациента — ensure_visit нашёл бы');
+    const link = t.db.prepare('SELECT * FROM crm_booking_links WHERE visit_id = ?').get(r1.json.data.visit.id);
+    assert.ok(link && link.request_id === old);
+    assert.equal(link.source, 'match');
+    const r3 = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 11, start: at(D2, 12), duration_minutes: 30 });
+    assert.equal(r3.status, 200, JSON.stringify(r3.json));
+    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 1, 'колл-центр завёл вторую карточку пациенту с открытой');
   } finally { t.close(); }
 });
 

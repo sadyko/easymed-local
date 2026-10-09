@@ -18,6 +18,8 @@
 // /api/db (visit_services и crm_request_services), remove_own_visit_line и RPC
 // колл-центра booking_lines_add / booking_line_remove. Второго писателя в
 // браузере нет и быть не должно (урок crm-lines.js closeCrmLines).
+// CRM_UNIFY_V1 — КАКАЯ ЗАЯВКА держит запись, решает crm/visit-link.js
+// (crmLinkVisit): все двери записи зовут его перед сверкой.
 //
 // ГРАНИЦА — ПРИХОД. Сверка работает только у записи ДО прихода: визит своего
 // здания в статусе scheduled/confirmed. Строки визита она трогает только
@@ -50,7 +52,7 @@ const VS_CHILDREN = ['lab_results', 'visit_documents', 'lab_device_messages', 's
 const SYSTEM = Object.freeze({ id: 0, role: 'admin', extra_roles: [] });
 const round2 = (x) => Math.round((Number(x) || 0) * 100) / 100;
 
-function visitRow(db, visitId) {
+export function visitRow(db, visitId) {   // CRM_UNIFY_V1 — нужен crm/visit-link.js
   const id = Number(visitId);
   if (!Number.isInteger(id) || id <= 0) return null;
   return db.prepare(`
@@ -252,7 +254,7 @@ function deleteVs(db, id) {
  * ДАТА И СТУПЕНЬ ЗАЯВКИ — ЗЕРКАЛО ЕЁ СТРОК (миграция 057). Только у ЖИВОЙ
  * заявки и только если у неё есть ждущие строки: заявка без строк (лид из
  * звонка) свою дату держит сама. Ступень едет только вперёд — в «Записан», и
- * только из колонок ДО него (то же правило, что settleCrmOnBooking).
+ * только из колонок ДО него (то же правило, что crmLinkVisit — CRM_UNIFY_V1).
  */
 export function touchRequest(db, requestId) {
   if (!requestId) return;
@@ -455,95 +457,12 @@ export function mirrorReschedule(db, visitId, { oldDoctorId = null } = {}) {
   }
 }
 
-/**
- * ЗАПИСЬ ИЗ КАЛЕНДАРЯ → ЗАЯВКА. Правило (разбор ревью I3, решено 2026-09-27):
- *
- *   • запись уже держит строки заявки (записали из CRM) — ничего не делаем;
- *   • записывает КОЛЛ-ЦЕНТР — запись привязывается к самой поздней открытой
- *     заявке пациента НЕ СТАРШЕ 30 ДНЕЙ; такой нет — заводится новая заявка
- *     («Записан», оператор — он же, источник «Звонок»);
- *   • записывает кто угодно (регистратура, врач) — привязка только к открытой
- *     заявке, которая уже ждёт ЭТОТ день: у неё есть ждущая строка на этот
- *     день или сама дата заявки — этот день. Давний лид («звонил в марте»)
- *     к сегодняшней записи у стойки не цепляется и в «Записан» не едет.
- *
- * Привязка помнит, откуда она (source), кто записал (created_by) и завела ли
- * запись заявку сама (created_request — для discard_empty_visit).
- * Возвращает id заявки или null.
- */
-export const CALLCENTER_ATTACH_DAYS = 30;
-
-function isCallcenterUser(user) {
+// CRM_UNIFY_V1 — «ЗАПИСЬ ИЗ КАЛЕНДАРЯ → ЗАЯВКА» (attachVisitToCrm) переехала в
+// crm/visit-link.js (crmLinkVisit) — одно правило для всех дверей записи.
+// «Чистый» колл-центр остаётся здесь: его зовут cancellableBookingsOf ниже и
+// шаг E crmLinkVisit.
+export function isCallcenterUser(user) {
   return hasAnyRole(user, ['callcenter']) && !hasAnyRole(user, ['registrar', 'doctor', 'admin']);
-}
-
-export function attachVisitToCrm(db, visitId, user) {
-  try {
-    const v = visitRow(db, visitId);
-    if (!beforeArrival(db, v) || !v.patient_id) return null;
-    return db.transaction(() => {
-      const had = requestOfVisit(db, v.id);
-      if (had) return had;
-      const open = openStageKeys(db);
-      if (!open.length) return null;
-      const holes = open.map(() => '?').join(',');
-      const uid = user && Number.isInteger(Number(user.id)) && Number(user.id) > 0 ? Number(user.id) : null;
-      const scheduled = scheduledStageKey(db);
-      const link = (requestId, source, created) => db.prepare(`INSERT OR REPLACE INTO crm_booking_links
-            (visit_id, request_id, source, created_by, created_request) VALUES (?, ?, ?, ?, ?)`)
-        .run(v.id, requestId, source, uid, created ? 1 : 0);
-
-      // (б) Заявка, которая уже ждёт этот день, — для любой роли.
-      let req = db.prepare(`SELECT r.id, r.status, r.scheduled_date FROM crm_requests r
-                             WHERE r.patient_id = ? AND r.status IN (${holes})
-                               AND (date(r.scheduled_date) = date(?)
-                                    OR EXISTS (SELECT 1 FROM crm_request_services l
-                                                WHERE l.request_id = r.id AND l.status = 'pending'
-                                                  AND date(l.scheduled_date) = date(?)))
-                             ORDER BY r.created_at DESC, r.id DESC LIMIT 1`).get(v.patient_id, ...open, v.day, v.day);
-      let source = 'match';
-      if (!req) {
-        // (а) Иначе — только колл-центр, и только свежая заявка.
-        if (!isCallcenterUser(user)) return null;
-        source = 'callcenter';
-        req = db.prepare(`SELECT id, status, scheduled_date FROM crm_requests
-                           WHERE patient_id = ? AND status IN (${holes})
-                             AND created_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-${CALLCENTER_ATTACH_DAYS} days')
-                           ORDER BY created_at DESC, id DESC LIMIT 1`).get(v.patient_id, ...open);
-        if (!req) {
-          const p = db.prepare('SELECT full_name, phone FROM patients WHERE id = ?').get(v.patient_id) || {};
-          const status = scheduled || open[0];
-          const id = Number(db.prepare(`INSERT INTO crm_requests (full_name, phone, source, status, patient_id, assigned_to, created_by, scheduled_date)
-                                        VALUES (?, ?, 'call', ?, ?, ?, ?, ?)`)
-            .run(p.full_name || '—', p.phone || '', status, v.patient_id, uid, uid, v.day).lastInsertRowid);
-          link(id, source, true);
-          return id;
-        }
-      } else if (isCallcenterUser(user)) {
-        source = 'callcenter';
-      }
-      link(req.id, source, false);
-      const schedAt = scheduled ? open.indexOf(scheduled) : -1;
-      const at = open.indexOf(req.status);
-      const status = (schedAt >= 0 && at >= 0 && at < schedAt) ? scheduled : req.status;
-      const was = String(req.scheduled_date || '').trim().slice(0, 10);
-      const when = (!was || was > v.day) ? v.day : was;
-      if (status !== req.status || when !== req.scheduled_date) {
-        db.prepare(`UPDATE crm_requests SET status = ?, scheduled_date = ?,
-                           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`).run(status, when, req.id);
-        // След для discard_empty_visit (миграция 186): убрали пустую запись —
-        // заявка возвращается как была.
-        try {
-          db.prepare(`INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, prev_scheduled_date, set_status, set_scheduled_date)
-                      VALUES (?, ?, ?, ?, ?, ?)`).run(v.id, req.id, req.status, req.scheduled_date ?? null, status, when);
-        } catch { /* сборка без 186 */ }
-      }
-      return req.id;
-    })();
-  } catch (e) {
-    console.error('[crm-mirror] запись', visitId, 'не привязана к заявке:', e && e.message);
-    return null;
-  }
 }
 
 /**

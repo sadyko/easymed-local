@@ -1,7 +1,7 @@
 // CRM_MULTI_SOURCE_V1 (2026-09-29) — СОСЕДИ, КОТОРЫЕ ПИШУТ ЗАЯВКУ САМИ.
 //
 // Звонок → заявка (lead-from-call.js) и зеркало записи календаря
-// (booking-mirror.js attachVisitToCrm) пишут только главный source — правило
+// (crm/visit-link.js crmLinkVisit — CRM_UNIFY_V1) пишут только главный source — правило
 // чтения делает из него [source], и доска с отчётом видят их как прежде.
 // Слияние дублей (rpc/crm-merge.js) даёт оставленной заявке объединение
 // источников всех сливаемых, главный — её собственный. Справочник источников
@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { recordCall } from '../telephony/poller.js';
-import { attachVisitToCrm } from './booking-mirror.js';
+import { crmLinkVisit } from './visit-link.js';   // CRM_UNIFY_V1 — attachVisitToCrm слит в crmLinkVisit
 import { saveSources, listSources, CrmConfigError } from './config.js';
 import { crmMergeLeads } from '../rpc/crm-merge.js';
 import { callcenterReport } from '../rpc/callcenter.js';
@@ -60,7 +60,9 @@ test('зеркало записи: колл-центр записал без з�
     const day = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
     const vid = Number(db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'scheduled', 2)")
       .run(day + 'T09:00:00Z').lastInsertRowid);
-    const rid = attachVisitToCrm(db, vid, CC);
+    // CRM_UNIFY_V1 — шаг ничего не возвращает (ответ записи не раскрывает заявок):
+    // заявку записи читаем из привязки.
+    crmLinkVisit(db, vid, CC); const rid = db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(vid).request_id;
     assert.ok(rid, 'зеркало не завело заявку');
     const r = get(db, rid);
     assert.deepEqual(r, { source: 'call', sources: null });
