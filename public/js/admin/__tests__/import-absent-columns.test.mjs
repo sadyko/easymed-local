@@ -76,9 +76,10 @@ test('обновление: пустая ячейка под своим заго
     assert.strictEqual(row.payload.duration_minutes, 30);
     for (const k of LINKS) assert.strictEqual(row.payload[k], null, k);
     // CLINIC_API_FIX_V1 (ревью 3, решение) — цена, НДС и доля пустые: сохранённые
-    // остаются (было: 0, 12 и 0 поверх сохранённых).
+    // остаются (было: 0, 12 и 0 поверх сохранённых). Ревью 4 — сохранённые здесь
+    // неизвестны, поэтому строка с предупреждением.
     for (const k of ['price', 'tax_rate', 'default_doctor_percent']) assert.ok(!(k in row.payload), k + ' = ' + JSON.stringify(row.payload[k]));
-    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+    assert.strictEqual(row.status, 'warn', JSON.stringify(row.notes));
 });
 
 test('обновление: заполненные колонки пишутся как раньше', () => {

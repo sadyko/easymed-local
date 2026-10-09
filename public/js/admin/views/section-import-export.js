@@ -719,8 +719,12 @@ const IMPORT_CONFIGS = {
         // «Раздел» с типом: обновление без колонки типа тип не сбрасывает; и
         // цены второго/повторного визита с окнами — правила окна услуги
         // проверяются по тому, что окажется у услуги (visitTierProblem).
+        // CLINIC_API_FIX_V1 (ревью 4) — и цена, НДС, доля: пустая ячейка у
+        // обновляемой услуги оставляет их, и строка предупреждает, если
+        // сохранённое — не то, что дала бы пустая ячейка.
         storedColumns: ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3', 'name_uz', 'type', 'type_id',
-            'price_secondary', 'secondary_days_from', 'secondary_days_to', 'price_repeat', 'repeat_days_from', 'repeat_days_to'],
+            'price_secondary', 'secondary_days_from', 'secondary_days_to', 'price_repeat', 'repeat_days_from', 'repeat_days_to',
+            'price', 'tax_rate', 'default_doctor_percent'],
         columns: [
             { key: 'name',             required: true, hint: 'Название услуги (обязательно)' },
             { key: 'group',            target: 'type', map: SERVICE_GROUP_MAP, required: true,
@@ -740,6 +744,9 @@ const IMPORT_CONFIGS = {
             // обновляемая услуга её не меняет (было: стирались категория,
             // отделение, кабинет; цена, НДС, длительность, доля, «нужен врач» и
             // «активна» — по умолчанию). Новая услуга получает то же, что и раньше.
+            // Ревью 3–4 — пустая ЯЧЕЙКА цены, НДС, доли у обновляемой услуги — тоже
+            // без изменений (с предупреждением, если сохранённое не то, что дала
+            // бы пустая ячейка); у новой — 0 с предупреждением / 12 / 0.
             { key: 'category',         keepIfAbsent: true, fk: { source: 'service_categories', keyField: 'name', target: 'category_id',   autoCreate: true }, hint: 'Категория/направление (напр. МРТ головного мозга) — необязательно; создаётся автоматически.' },
             { key: 'department',       keepIfAbsent: true, fk: { source: 'departments',        keyField: 'name', target: 'department_id', autoCreate: true }, hint: 'Отделение — необязательно; создаётся автоматически.' },
             // IMPORT_PRICE_OPTIONAL_V1 — price used to be required, which blocked
@@ -774,10 +781,10 @@ const IMPORT_CONFIGS = {
             { key: 'price_repeat',     coerce: 'num', raw: true, hint: 'Цена повторного визита, третий и далее (0 — бесплатно; пусто — как второй)' },
             { key: 'repeat_days_from', coerce: 'int', raw: true, hint: 'Повторный визит — не раньше чем через N дней после предыдущего (пусто — как у второго)' },
             { key: 'repeat_days_to',   coerce: 'int', raw: true, hint: 'и не позже чем через M дней (пусто — как у второго)' },
-            { key: 'tax_rate',         keepIfAbsent: true, coerce: 'num',  defaultNum: 12, percent: true, money: true, hint: 'НДС % (по умолчанию 12, если пусто)' },
+            { key: 'tax_rate',         keepIfAbsent: true, coerce: 'num',  defaultNum: 12, percent: true, money: true, hint: 'НДС, %: пусто — 12 для новой услуги, без изменений для существующей.' },
             { key: 'duration_minutes', keepIfAbsent: true, coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
             { key: 'requires_doctor',  keepIfAbsent: true, coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },
-            { key: 'default_doctor_percent', keepIfAbsent: true, coerce: 'num', percent: true, money: true, hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
+            { key: 'default_doctor_percent', keepIfAbsent: true, coerce: 'num', percent: true, money: true, hint: 'Доля исполнителя по умолчанию, %: пусто — 0 для новой услуги, без изменений для существующей.' },
             // CLINIC_API_FIX_V1 (ревью итога) — ступени тоже читает transform (raw).
             { key: 'doctor_tier_from',    coerce: 'num', raw: true, hint: 'Ступень: порог услуг в месяц — повышенная доля начинается со следующей услуги (0 или пусто — ступени нет)' },
             { key: 'doctor_tier_percent', coerce: 'num', raw: true, hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
@@ -2266,7 +2273,24 @@ function buildRow(raw, rowNum, lookups, cfg) {
             if (read.empty && col.money) {
                 const inSheet = (colKey in r) || (col.aliases || []).some((a) => normHeader(a) in r);
                 if (updating) {
-                    if (inSheet) notes.push(trf('Строка {n}: {col} пусто — оставлено как было.', { n: rowNum, col: col.key }));
+                    // CLINIC_API_FIX_V1 (ревью 4) — сохранённое совпадает с тем, что
+                    // дала бы пустая ячейка (НДС 12, доля 0), — тихое замечание; не
+                    // совпадает или неизвестно — ПРЕДУПРЕЖДЕНИЕ с сохранённым
+                    // значением: строку видно в таблице, итог её считает.
+                    if (inSheet) {
+                        const savedRow = lookups && lookups.__stored
+                            ? lookups.__stored.get(normKey(r[normHeader(cfg.matchField || 'name')])) : null;
+                        const saved = savedRow ? savedRow[key] : undefined;
+                        const known = saved !== undefined && saved !== null && saved !== '';
+                        if (known && Number(saved) === (col.defaultNum ?? 0)) {
+                            notes.push(trf('Строка {n}: {col} пусто — оставлено как было.', { n: rowNum, col: col.key }));
+                        } else {
+                            notes.push(known
+                                ? trf('Строка {n}: {col} пусто — оставлено как было ({v}).', { n: rowNum, col: col.key, v: saved })
+                                : trf('Строка {n}: {col} пусто — оставлено как было.', { n: rowNum, col: col.key }));
+                            if (status !== 'error') status = 'warn';
+                        }
+                    }
                 } else if (typeof cfg.rowUpdates === 'function') {
                     payload[key] = col.defaultNum ?? 0;
                     if (col.warnIfEmptyOnNew) {

@@ -122,10 +122,13 @@ test('обновление: «40%» в цене — не число (проце�
 
 // CLINIC_API_FIX_V1 (ревью 3, решение) — пустая денежная ячейка в строке,
 // ОБНОВЛЯЮЩЕЙ запись, оставляет сохранённое (было: цена 0 с «price пусто»).
-test('обновление: пустая ячейка цены — сохранённая цена остаётся, замечание «пусто — оставлено как было»', () => {
+// CLINIC_API_FIX_V1 (ревью 4) — и строка с предупреждением, если сохранённое
+// не то, что дала бы пустая ячейка (цена 0): её считает итог и видно в таблице.
+test('обновление: пустая ячейка цены — сохранённая цена остаётся, предупреждение с сохранённым значением', () => {
     const row = buildImportRow('services', { ...MIN, price: '' }, { rowNum: 4, lookups: UPDATE() });
     assert.ok(!('price' in row.payload), 'цена записана: ' + JSON.stringify(row.payload.price));
-    assert.ok(row.notes.includes('Строка 4: price пусто — оставлено как было.'), JSON.stringify(row.notes));
+    assert.strictEqual(row.status, 'warn');
+    assert.ok(row.notes.includes('Строка 4: price пусто — оставлено как было (200000).'), JSON.stringify(row.notes));
 });
 
 // --- новая строка -----------------------------------------------------------
@@ -436,4 +439,40 @@ test('сообщения о пустой денежной ячейке — на 
 test('заголовки «Цена» и «Стоимость» читаются как price', () => {
     assert.strictEqual(buildImportRow('services', { name: 'Новая', group: 'Консультация', 'Цена': '150 000' }).payload.price, 150000);
     assert.strictEqual(buildImportRow('services', { name: 'Новая', group: 'Консультация', 'Стоимость': 90000 }).payload.price, 90000);
+});
+
+// CLINIC_API_FIX_V1 (ревью 4) — ПУСТЫЕ ЦЕНА, НДС, ДОЛЯ У ОБНОВЛЯЕМОЙ УСЛУГИ.
+// Сохранённое остаётся (ревью 3). Совпадает с тем, что дала бы пустая ячейка
+// (НДС 12, доля 0), — тихое замечание; не совпадает или неизвестно —
+// предупреждение: строка видна в таблице и посчитана в итоге.
+const UPD_WITH = (extra) => ({ __wantUpdate: true, __stored: new Map([['приём кардиолога', { name: 'Приём кардиолога', ...extra }]]) });
+test('обновление: пустой НДС при сохранённых 12 — тихо; при сохранённых 0 — предупреждение с «0»', () => {
+    const same = buildImportRow('services', { ...MIN, price: 1000, tax_rate: '' }, { rowNum: 3, lookups: UPD_WITH({ tax_rate: 12 }) });
+    assert.strictEqual(same.status, 'ok', JSON.stringify(same.notes));
+    assert.ok(same.notes.includes('Строка 3: tax_rate пусто — оставлено как было.'), JSON.stringify(same.notes));
+    const zero = buildImportRow('services', { ...MIN, price: 1000, tax_rate: '' }, { rowNum: 3, lookups: UPD_WITH({ tax_rate: 0 }) });
+    assert.strictEqual(zero.status, 'warn');
+    assert.ok(zero.notes.includes('Строка 3: tax_rate пусто — оставлено как было (0).'), JSON.stringify(zero.notes));
+    assert.ok(!('tax_rate' in zero.payload));
+});
+
+test('обновление: пустая доля при сохранённых 30 % — предупреждение; сохранённое неизвестно — тоже', () => {
+    const r30 = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '' }, { rowNum: 3, lookups: UPD_WITH({ default_doctor_percent: 30 }) });
+    assert.strictEqual(r30.status, 'warn');
+    assert.ok(r30.notes.includes('Строка 3: default_doctor_percent пусто — оставлено как было (30).'), JSON.stringify(r30.notes));
+    const unknown = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '' }, { rowNum: 3, lookups: UPD_WITH({}) });
+    assert.strictEqual(unknown.status, 'warn');
+});
+
+test('подсказки цены, НДС и доли говорят, что значит пустая ячейка — на трёх языках', async () => {
+    const { importColumnHints } = await import('../views/section-import-export.js');
+    const hints = importColumnHints('services');
+    for (const k of ['price', 'tax_rate', 'default_doctor_percent']) {
+        assert.match(hints[k], /для новой услуги.*без изменений для существующей/, k + ': ' + hints[k]);
+        const e = STRINGS[hints[k]];
+        assert.ok(e && e.uz && e.en, k + ': подсказке нужен перевод');
+    }
+    assert.match(hints.tax_rate, /пусто — 12 для новой услуги/);
+    const e = STRINGS['Строка {n}: {col} пусто — оставлено как было ({v}).'];
+    assert.ok(e && e.uz && e.en, 'нет перевода сообщения с сохранённым значением');
 });
