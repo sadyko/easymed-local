@@ -213,11 +213,26 @@ export function serviceSave(db, args, user) {
   // Excel (public/js/shared/visit-tier-rules.js): порядок границ, окно без
   // цены и цена визита без окна («без срока»: цена повторного визита без
   // второго визита действовала бы со второго визита всегда).
-  const visitProblem = visitTierStateProblem({
+  //
+  // CLINIC_API_FIX_V1 (ревью 6) — проверяется, только когда ЭТО сохранение
+  // меняет цены визитов (цены второго/повторного и их окна). В клиниках уже
+  // могут быть услуги в состоянии, которое правило теперь не пускает: правка
+  // названия, кода, цены, отделения не должна требовать сначала чинить цены
+  // визитов. Поля те же, что сохранены, — сохранение проходит; изменилось хоть
+  // одно, и итог плохой — отказ с той же причиной.
+  const visitTier = {
     price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo,
     price_repeat: priceRepeat, repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
-  });
-  if (visitProblem) throw new RpcError(visitProblem, 400);
+  };
+  const storedVisit = a.id !== undefined && a.id !== null
+    ? db.prepare('SELECT price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?').get(Number(a.id)) || null
+    : null;
+  const sameNum = (x, y) => (x === null || x === undefined ? null : Number(x)) === (y === null || y === undefined ? null : Number(y));
+  const visitChanged = !storedVisit || Object.keys(visitTier).some((k) => !sameNum(visitTier[k], storedVisit[k]));
+  if (visitChanged) {
+    const visitProblem = visitTierStateProblem(visitTier);
+    if (visitProblem) throw new RpcError(visitProblem, 400);
+  }
   const active = a.active === undefined ? 1 : asBool(a.active);
   const code = a.code == null || String(a.code).trim() === '' ? null : String(a.code).trim();
 

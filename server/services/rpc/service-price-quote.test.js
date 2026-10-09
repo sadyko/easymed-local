@@ -222,3 +222,51 @@ test('service_save: цена второго визита без «по день�
   assert.ok(id);
   db.close();
 });
+
+// CLINIC_API_FIX_V1 (ревью 6) — окно услуги отказывает «без срока» только
+// тогда, когда ЭТО сохранение меняет цены визитов (цены второго/повторного и
+// их окна). В клиниках уже могут быть услуги в таком состоянии: правка
+// названия, кода, цены, отделения не должна требовать сначала чинить цены
+// визитов.
+const BAD = { price_secondary: null, secondary_days_from: null, secondary_days_to: null, price_repeat: 0, repeat_days_from: null, repeat_days_to: null };
+const visitRow = (db, id) => db.prepare('SELECT name, price, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?').get(id);
+const storedBad = (db) => {
+  const id = tiered(db);
+  db.prepare('UPDATE services SET price_secondary = NULL, secondary_days_from = NULL, secondary_days_to = NULL, price_repeat = 0, repeat_days_from = NULL, repeat_days_to = NULL WHERE id = ?').run(id);
+  return id;
+};
+
+test('service_save: сохранённое «без срока» + переименование и новая цена — сохраняется, цены визитов не тронуты', () => {
+  const db = fresh();
+  const id = storedBad(db);
+  tiered(db, { id, name: 'Приём невролога (повторный)', price: 210000, ...BAD });
+  const row = visitRow(db, id);
+  assert.strictEqual(row.name, 'Приём невролога (повторный)');
+  assert.strictEqual(row.price, 210000);
+  assert.deepEqual({ ...row, name: undefined, price: undefined }, { name: undefined, price: undefined, ...BAD });
+  db.close();
+});
+
+test('service_save: сохранённое «без срока» + правка цен визитов, которая оставляет «без срока», — отказ', () => {
+  const db = fresh();
+  const id = storedBad(db);
+  assert.throws(() => tiered(db, { id, ...BAD, price_repeat: 10000 }), /без срока/);
+  assert.strictEqual(visitRow(db, id).price_repeat, 0, 'отказ, а цена повторного визита изменилась');
+  db.close();
+});
+
+test('service_save: сохранённое «без срока» + правка, которая его чинит (цена второго визита), — сохраняется', () => {
+  const db = fresh();
+  const id = storedBad(db);
+  tiered(db, { id, ...BAD, price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6 });
+  assert.strictEqual(visitRow(db, id).price_secondary, 60000);
+  db.close();
+});
+
+test('service_save: правильные цены визитов + правка, которая делает «без срока», — отказ', () => {
+  const db = fresh();
+  const id = tiered(db);
+  assert.throws(() => tiered(db, { id, ...BAD }), /без срока/);
+  assert.strictEqual(visitRow(db, id).price_secondary, 60000, 'отказ, а цена второго визита снята');
+  db.close();
+});
