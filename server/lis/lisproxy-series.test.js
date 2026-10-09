@@ -5,11 +5,12 @@ import assert from 'node:assert/strict';
 import { SERIES_PENDING_PREFIX } from './inbox.js';
 import { PROXY_QUIET_PREFIX } from './lisproxy-form.js';
 import { freshDb, seedLisProxyClinic, addProxyDevice, bindPanel, startProxyApp, post, fixture, lastRow, tray, blank, rows } from '../test-helpers/lisproxy-clinic.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';   // LIS_PROXY_V1 — стенд получает listen от теста
 
 async function withClinic(fn) {
   const db = freshDb();
   seedLisProxyClinic(db);
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try { await fn(db, app); } finally { await app.close(); db.close(); }
 }
 
@@ -46,7 +47,7 @@ test('BC-780: неподтверждённая строка панели — л�
   const db = freshDb();
   seedLisProxyClinic(db);
   db.prepare("UPDATE lab_panel_analytes SET device_code_confirmed = 0 WHERE panel_id = 7 AND device_code = 'HGB'").run();
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try {
     await post(app.url, fixture('results', 'bc780_hgb'));
     const m = lastRow(db);
@@ -85,7 +86,7 @@ test('две услуги одной пробирки (D3) через LIS Proxy:
   const db = freshDb();
   seedLisProxyClinic(db);
   bindPanel(db, { id: 8, serviceId: 12, deviceId: 1, name: 'Мочевина', lines: [['UREA', 'Мочевина', 'UREA']] });
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try {
     await post(app.url, fixture('results', 'bs200_glu'));
     await post(app.url, fixture('results', 'bs200_glu').replace('code]=GLU', 'code]=UREA').replace('5.100000', '4.200000'));

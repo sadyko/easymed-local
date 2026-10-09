@@ -4,12 +4,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ORDER_NOT_FOUND, replyText } from './lisproxy.js';
 import { freshDb, startProxyApp, post, fixture, lastRow, tray, device } from '../test-helpers/lisproxy-clinic.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';   // LIS_PROXY_V1 — стенд получает listen от теста
 
 const NOTHING = replyText(ORDER_NOT_FOUND);
 
 test('apiBarcodeListGet — 200 «ничего», строка журнала «пакетная загрузка выключена», прибор найден и на связи', async () => {
   const db = freshDb();
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try {
     const res = await post(app.url, fixture('lists', 'cl_barcode_list'));
     assert.equal(res.status, 200);
@@ -24,7 +25,7 @@ test('apiBarcodeListGet — 200 «ничего», строка журнала «
 
 test('незнакомый method — 200 «ничего», строка журнала, не ошибка; без имени — без прибора', async () => {
   const db = freshDb();
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try {
     const body = fixture('unknown', 'unknown_method');
     const res = await post(app.url, body);

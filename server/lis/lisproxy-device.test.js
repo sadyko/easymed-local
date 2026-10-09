@@ -8,6 +8,7 @@ import net from 'node:net';
 import { ensureDevice, ensureProxyDevice, MAX_PROXY_FOUND } from './discover.js';
 import { startLisListeners, stopLisListeners, listenerStatus } from './index.js';
 import { freshDb, addProxyDevice, bindPanel, startProxyApp, post, fixture, device, rows } from '../test-helpers/lisproxy-clinic.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';   // LIS_PROXY_V1 — стенд получает listen от теста
 
 test('новый прибор LIS Proxy — находка без модели; адрес без «::ffff:», подпись запомнены; host и sending_app пусты', () => {
   const db = freshDb();
@@ -113,7 +114,7 @@ test('слушатели пропускают строки LIS Proxy: ни по�
 
 test('«на связи» и прибор в журнале — на каждом запросе с ключом: и в лотке, и рабочий список, и мусор; с неверным ключом — нет', async () => {
   const db = freshDb();
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try {
     await post(app.url, fixture('results', 'bs200_patient_number_as_barcode'));
     await post(app.url, fixture('orders', 'cl_garbage_all'));

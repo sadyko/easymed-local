@@ -13,13 +13,14 @@ import { PROXY_QUIET_PREFIX, PROXY_NOT_TUBE } from './lisproxy-form.js';
 import { ORDER_NOT_FOUND, replyText } from './lisproxy.js';
 import { NOT_FOUND } from '../routes/lisproxy.js';
 import { FIXTURES, freshDb, seedLisProxyClinic, startProxyApp, post, rows, lastRow, tray, blank } from '../test-helpers/lisproxy-clinic.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';   // LIS_PROXY_V1 — стенд получает listen от теста
 
 const NOTHING = replyText(ORDER_NOT_FOUND);
 
 async function run(ids, check) {
   const db = freshDb();
   seedLisProxyClinic(db);
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try {
     const out = [];
     for (const [group, id] of ids) {
@@ -116,7 +117,7 @@ test('фикстуры BC-780 подряд: WBC, мусор IS, HGB — сери
 test('фикстуры auth: без ключа и с неверным ключом — тот же 404, что у неизвестного адреса; ничего не записано', async () => {
   const db = freshDb();
   seedLisProxyClinic(db);
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try {
     const body = FIXTURES.results[0].body;
     for (const url of [app.base + '/api/lisproxy', app.base + '/api/lisproxy?key=WRONG']) {

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { worklistLines } from './ingest.js';
 import { ORDER_NOT_FOUND, replyText } from './lisproxy.js';
 import { freshDb, seedLisProxyClinic, bindPanel, addProxyDevice, startProxyApp, post, fixture, lastRow, rows } from '../test-helpers/lisproxy-clinic.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';   // LIS_PROXY_V1 — стенд получает listen от теста
 
 const ask = (barcode, name = 'bs200', host = 'LAB-PC-1') =>
   'method=apiOrderGet&order[name]=' + name + '&order[host]=' + host + '&order[barcode]=' + encodeURIComponent(barcode);
@@ -16,7 +17,7 @@ async function withClinic(fn, extra = () => {}) {
   const db = freshDb();
   seedLisProxyClinic(db);
   extra(db);
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try { await fn(db, app); } finally { await app.close(); db.close(); }
 }
 const json = async (res) => { assert.equal(res.status, 200); return res.json(); };

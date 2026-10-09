@@ -11,6 +11,7 @@ import { lisProxyGet, lisProxySet, proxyState } from './lis-proxy.js';
 import { lisDeviceAdd } from './lis.js';
 import { RPC } from './index.js';
 import { freshDb, addProxyDevice, startProxyApp, post, fixture } from '../../test-helpers/lisproxy-clinic.js';
+import { listen } from '../../../control-plane/server/test-helpers/listen.js';   // LIS_PROXY_V1 — стенд получает listen от теста
 
 const ADMIN = { id: 1, role: 'admin' };
 const LAB = { id: 2, role: 'lab' };
@@ -62,7 +63,7 @@ test('карта RPC: lis_proxy_get — чтение (лицензия), lis_pro
 
 test('ключ сменили — старый адрес сразу 404, новый — 200', async () => {
   const db = freshDb();
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   setDataDir(app.dataDir);
   try {
     const before = await post(app.url, fixture('lists', 'cl_barcode_list'));

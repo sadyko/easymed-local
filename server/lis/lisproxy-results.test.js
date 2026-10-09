@@ -11,6 +11,7 @@ import { lisRecent, lisMessageAttach } from '../services/rpc/lis.js';
 import {
   freshDb, seedLisProxyClinic, addProxyDevice, startProxyApp, post, fixture, rows, lastRow, tray, blank,
 } from '../test-helpers/lisproxy-clinic.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';   // LIS_PROXY_V1 — стенд получает listen от теста
 
 const LAB = { role: 'lab' };
 const order = (db, id) => db.prepare('SELECT status FROM visit_services WHERE id = ?').get(id).status;
@@ -18,7 +19,7 @@ const order = (db, id) => db.prepare('SELECT status FROM visit_services WHERE id
 async function withClinic(fn) {
   const db = freshDb();
   seedLisProxyClinic(db);
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try { await fn(db, app); } finally { await app.close(); db.close(); }
 }
 

@@ -11,12 +11,6 @@ import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';
 import { writeProxySettings } from '../lis/lisproxy-settings.js';
 
-// listen (control-plane: порты, которые fetch() не открывает) грузится при
-// запуске стенда, а не статическим import: сторож поставки
-// (scripts/build-bundle.test.js) читает статические import всего server/, кроме
-// *.test.js, а control-plane в поставку не идёт. Этот файл в поставку не идёт
-// тоже (BUNDLE_EXCLUDES: server/test-helpers).
-const listenHelper = () => import('../../control-plane/server/test-helpers/listen.js');
 
 export const FIXTURES = JSON.parse(fs.readFileSync(new URL('./lisproxy-fixtures.json', import.meta.url), 'utf8'));
 
@@ -46,11 +40,15 @@ export function freshDb() {
 /**
  * Приложение с LIS Proxy. settings: true — data/lisproxy.json с enabled и key;
  * false — файла нет (приём выключен).
+ * listen — из теста (control-plane/server/test-helpers/listen.js: порты,
+ * которые fetch() не открывает): этот файл его не импортирует — сторож поставки
+ * (scripts/build-bundle.test.js) читает import всего server/, кроме *.test.js, а
+ * control-plane в поставку не идёт.
  */
-export async function startProxyApp(db, { enabled = true, key = DEV_KEY, settings = true } = {}) {
+export async function startProxyApp(db, { listen, enabled = true, key = DEV_KEY, settings = true } = {}) {
+  if (typeof listen !== 'function') throw new Error('startProxyApp: передайте listen из control-plane/server/test-helpers/listen.js');
   const dataDir = licensedDataDir();
   if (settings) writeProxySettings(dataDir, { enabled, key });
-  const { listen } = await listenHelper();
   const server = await listen(createApp(db, { dataDir }));
   const base = 'http://127.0.0.1:' + server.address().port;
   return {

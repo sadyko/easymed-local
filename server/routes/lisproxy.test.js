@@ -15,9 +15,9 @@ const ORDER = fixture('orders', 'bs200_order');
 
 test('приём выключен (файла нет), выключен с ключом, нет ключа, не тот, ключ массивом, ключ в теле, GET, лишний путь — тот же 404, что у неизвестного адреса; ничего не записано', async () => {
   const db = freshDb();
-  const off = await startProxyApp(db, { settings: false });
-  const on = await startProxyApp(db, { enabled: true });
-  const disabled = await startProxyApp(db, { enabled: false });
+  const off = await startProxyApp(db, { listen, settings: false });
+  const on = await startProxyApp(db, { listen, enabled: true });
+  const disabled = await startProxyApp(db, { listen, enabled: false });
   try {
     const unknown = await fetch(on.base + '/api/definitely-not-here', { method: 'POST', headers: PROXY_HEADERS, body: RESULT });
     assert.equal(unknown.status, 404);
@@ -47,7 +47,7 @@ test('приём выключен (файла нет), выключен с кл�
 
 test('ключ верный: строка журнала с телом как пришло; результат — 200 «Ok», запрос — 200 «ничего» (ORDER_NOT_FOUND); без сессии (до requirePasswordChanged)', async () => {
   const db = freshDb();
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try {
     const r1 = await post(app.url, RESULT);
     assert.equal(r1.status, 200);
@@ -117,7 +117,7 @@ test('ответ больше 1 КБ при Accept-Encoding: gzip — не сж�
   const db = freshDb();
   const big = {};
   for (let i = 0; i < 30; i++) big[String(i)] = { clientId: 'LAB-000123', surname: '', name: '', date_birth: '03.02.1990', sex: '1', biomaterial_code: 'serum', code: 'T' + i };
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   const bare = await bareRouter(db, () => ({ type: 'json', body: big }));
   try {
     // Через настоящее приложение: compress.js стоит первым и сжал бы такой JSON.
@@ -133,7 +133,7 @@ test('ответ больше 1 КБ при Accept-Encoding: gzip — не сж�
 
 test('тело не формой (JSON) — тоже запрос с ключом: строка журнала и 200 «ничего» (ORDER_NOT_FOUND)', async () => {
   const db = freshDb();
-  const app = await startProxyApp(db);
+  const app = await startProxyApp(db, { listen });
   try {
     const res = await fetch(app.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"x":1}' });
     assert.equal(res.status, 200);
