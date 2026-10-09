@@ -563,8 +563,28 @@ export async function savePatient(payload, opts = {}) {
 
     const { data, error } = await insertRow('patients', insert, { stampCreatedBy: false });
     if (error) throw error;
-    // CRM_UNIFY_V1 — заявки по номеру привязывает сервер при записи (crm/visit-link.js).
+    await linkNewPatientToCrm(data);   // CRM_UNIFY_V1
     return shapePatient(data);
+}
+
+// CRM_UNIFY_V1 — НОВАЯ КАРТА НАХОДИТ ЗАЯВКУ КОЛЛ-ЦЕНТРА. Колл-центр записывает
+// человека без карты (заявка без пациента, строки на день прихода), а смета
+// регистратуры (pendingCrmLines) ищет заявки ПО КАРТЕ. Связь по номеру решает
+// СЕРВЕР (crm_link_new_patient, server/services/crm/new-patient-link.js): одна
+// заявка — самая новая открытая без пациента, только если номер у одной карты,
+// и вне видимости регистратора. Раньше здесь браузер сам привязывал ВСЕ
+// открытые заявки с номером (linkCrmRequestsToPatient) — без этих проверок.
+//
+// Ждём ответа, чтобы смета, которая откроется следом, уже видела заявку. Сбой
+// регистрации не мешает: пишем в консоль, человеку не показываем.
+async function linkNewPatientToCrm(patient) {
+    if (!patient || !patient.id) return;
+    try {
+        const { error } = await supabase.rpc('crm_link_new_patient', { patient_id: patient.id });
+        if (error) console.warn('[crm] new card not linked to a call-centre request:', error.message || error);
+    } catch (e) {
+        console.warn('[crm] new card not linked to a call-centre request:', e && e.message);
+    }
 }
 
 // Levenshtein edit distance — used to spot typos in names. Lives in

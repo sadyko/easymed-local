@@ -68,6 +68,15 @@ async function db(base, cookie, desc) {
   return { status: res.status, json: await res.json().catch(() => ({})) };
 }
 
+// CRM_UNIFY_V1 — вызов RPC тем же путём, что и экран (/api/rpc/<имя>).
+async function rpc(base, cookie, name, args) {
+  const res = await fetch(base + '/api/rpc/' + name, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify(args || {}),
+  });
+  return { status: res.status, json: await res.json().catch(() => ({})) };
+}
+
 // Ступени, на которых заявка ещё ждёт своего дня — сид миграции 077
 // (kind = 'open'). Экраны спрашивают их у настроек воронки (CRM_LINKS_V1);
 // здесь список стоит явно, чтобы тест сам говорил, что считается открытой
@@ -355,7 +364,14 @@ test('a request the patient never came for IS swept — the sweep still works', 
 // is NULL — and the registrar's prefill matches on patient_id. Without linking at
 // registration the booking could never reach them: the patient walks in, gets a
 // card, and the services booked for that day stay invisible.
-test('a request for someone with no card is linked when the card is created', async (t) => {
+//
+// CRM_UNIFY_V1 — the link is made by the SERVER now: savePatient() calls
+// crm_link_new_patient right after inserting a NEW card (crm/new-patient-link.js).
+// One open lead without a card — the newest — and only if the number belongs to
+// this one card. The browser's own pass over all open leads with the number
+// (linkCrmRequestsToPatient) is gone: it never checked «one card per number» and
+// saw only the registrar's own leads.
+test('CRM_UNIFY_V1: a request for someone with no card is linked by the server when the card is created', async (t) => {
   const { db: sqlite, server, base } = await startServer();
   t.after(() => { server.close(); sqlite.close(); });
   const cookie = await login(base);
@@ -374,52 +390,53 @@ test('a request for someone with no card is linked when the card is created', as
   const pat = (await db(base, cookie, { table: 'patients', op: 'insert', returning: true, single: 'single',
     values: { full_name: 'Новый Пациент', phone: '901234567' } })).json.data;
 
-  // Так делал браузер до CRM_UNIFY_V1 (linkCrmRequestsToPatient): open, unlinked
-  // requests whose phone tail matches. The browser no longer does it — the server
-  // links by phone at booking (crm/visit-link.js). This test keeps checking the
-  // /api/db door (the update is still allowed), not the removed browser function.
-  const open = await db(base, cookie, { table: 'crm_requests', op: 'select', columns: 'id, phone, patient_id, status',
-    filters: [{ col: 'patient_id', op: 'is', val: null },
-              { col: 'status', op: 'in', val: OPEN_STATUSES }], order: [] });
-  assert.equal(open.status, 200, JSON.stringify(open.json));
-  const digits = (s) => String(s || '').replace(/\D/g, '');
-  const tail = (d) => (d.length > 9 ? d.slice(-9) : d);
-  const hits = open.json.data.filter(r => tail(digits(r.phone)) === tail(digits('901234567')));
-  assert.equal(hits.length, 1, 'the phone must match across formatting');
-
-  const upd = await db(base, cookie, { table: 'crm_requests', op: 'update',
-    values: { patient_id: pat.id }, filters: [{ col: 'id', op: 'in', val: hits.map(r => r.id) }] });
-  assert.equal(upd.status, 200, JSON.stringify(upd.json));
+  // …and savePatient() asks the server for the call centre's lead of this number.
+  const linked = await rpc(base, cookie, 'crm_link_new_patient', { patient_id: pat.id });
+  assert.equal(linked.status, 200, JSON.stringify(linked.json));
+  assert.deepEqual(linked.json.data, { ok: true }, 'the reply says nothing about leads');
 
   // And now the registrar's prefill finds it on the booked day.
   const found = await prefill(base, cookie, pat.id, '2026-08-20');
-  assert.equal(found.length, 1);
+  assert.equal(found.length, 1, 'the phone must match across formatting');
   assert.equal(found[0].service_id, svc.id);
 });
 
-test('a CLOSED lead is not reopened by a namesake registering later', async (t) => {
+// CRM_UNIFY_V1 — the same intent as before (a closed lead is history), now
+// checked against the server's link for a new card, not the removed browser pass.
+test('CRM_UNIFY_V1: a CLOSED lead is not reopened by a namesake registering later', async (t) => {
   const { db: sqlite, server, base } = await startServer();
   t.after(() => { server.close(); sqlite.close(); });
   const cookie = await login(base);
-  await bookRequest(base, cookie, { patientId: null, status: 'not_qualified',
+  const { request } = await bookRequest(base, cookie, { patientId: null, status: 'not_qualified',
     fullName: 'Ушедший', phone: '+998901234567', lines: [{ date: '2026-01-01' }] });
 
-  const open = await db(base, cookie, { table: 'crm_requests', op: 'select', columns: 'id',
-    filters: [{ col: 'patient_id', op: 'is', val: null },
-              { col: 'status', op: 'in', val: OPEN_STATUSES }], order: [] });
-  assert.equal(open.json.data.length, 0, 'closed leads are history, not pending work');
+  const pat = (await db(base, cookie, { table: 'patients', op: 'insert', returning: true, single: 'single',
+    values: { full_name: 'Ушедший', phone: '901234567' } })).json.data;
+  const linked = await rpc(base, cookie, 'crm_link_new_patient', { patient_id: pat.id });
+  assert.equal(linked.status, 200, JSON.stringify(linked.json));
+
+  const after = sqlite.prepare('SELECT patient_id, status FROM crm_requests WHERE id = ?').get(request.id);
+  assert.equal(after.patient_id, null, 'closed leads are history, not pending work');
+  assert.equal(after.status, 'not_qualified');
 });
 
-test('a request already tied to a card is left alone', async (t) => {
+// CRM_UNIFY_V1 — a lead that already has a card keeps it, even when its phone is
+// the new card's number (a parent calling about a child from their own phone).
+test('CRM_UNIFY_V1: a request already tied to a card is left alone', async (t) => {
   const { db: sqlite, server, base } = await startServer();
   t.after(() => { server.close(); sqlite.close(); });
   const cookie = await login(base);
   const { pat } = await seed(base);
-  await bookRequest(base, cookie, { patientId: pat.id, lines: [{ date: '2026-08-20' }] });
+  const { request } = await bookRequest(base, cookie, { patientId: pat.id, phone: '+998 90 123 45 67',
+    lines: [{ date: '2026-08-20' }] });
 
-  const unlinked = await db(base, cookie, { table: 'crm_requests', op: 'select', columns: 'id',
-    filters: [{ col: 'patient_id', op: 'is', val: null }], order: [] });
-  assert.equal(unlinked.json.data.length, 0, 'the linking pass must not touch it');
+  const other = (await db(base, cookie, { table: 'patients', op: 'insert', returning: true, single: 'single',
+    values: { full_name: 'Другой Пациент', phone: '901234567' } })).json.data;
+  const linked = await rpc(base, cookie, 'crm_link_new_patient', { patient_id: other.id });
+  assert.equal(linked.status, 200, JSON.stringify(linked.json));
+
+  assert.equal(sqlite.prepare('SELECT patient_id FROM crm_requests WHERE id = ?').get(request.id).patient_id, pat.id,
+    'the linking pass must not touch it');
 });
 
 test('a line with a date but no service is not prefilled', async (t) => {

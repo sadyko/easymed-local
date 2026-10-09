@@ -504,8 +504,12 @@ test('сохранение: пациент → визит → строки с в
   // воронки (какие ступени живые), а проверяется здесь порядок ЗАПИСЕЙ.
   const chain = calls.filter((c) => c.kind !== 'select' && c.name !== 'crm_config_get')
     .map((c) => (c.kind === 'rpc' ? 'rpc:' + c.name : 'insert:' + c.table));
+  // CRM_UNIFY_V1 — новая карта сразу спрашивает сервер о заявке колл-центра с
+  // её номером (crm_link_new_patient в savePatient) — ДО визита: шаг связи
+  // визита и смета должны уже видеть эту заявку по карте.
   assert.deepStrictEqual(chain, [
     'insert:patients',
+    'rpc:crm_link_new_patient',
     'rpc:ensure_visit',
     'rpc:service_price_quote',
     'insert:visit_services',

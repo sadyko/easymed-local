@@ -77,6 +77,7 @@ import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_
 import { roleEffectiveGrants } from './roles-effective.js';   // ROLES_SAVE_TRUTH_V1 — что у роли есть сейчас
 import { crmLeadsByPhone, crmSearch, crmVisitLinks } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
 import { crmDuplicateGroups, crmMergeLeads } from './crm-merge.js';   // CRM_HEAD_MERGE_TAGS_V1
+import { crmLinkNewPatient } from '../crm/new-patient-link.js';   // CRM_UNIFY_V1 — новая карта находит заявку колл-центра
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
@@ -649,6 +650,11 @@ export const RPC = {
   // только номер визита и номер заявки, всем, кто читает строки CRM. Чтение.
   crm_visit_links:          (db, args, user) => crmVisitLinks(db, args, user),
   crm_merge_leads:          (db, args, user) => crmMergeLeads(db, args, user),
+  // CRM_UNIFY_V1 — только что заведённая карта находит заявку колл-центра по
+  // номеру: одну, только если номер у одной карты, только patient_id. Зовёт
+  // savePatient() после вставки. Ответ — { ok: true } и ничего о заявках.
+  // Пишет — в READ_ONLY_RPCS (control/gate.js) не входит.
+  crm_link_new_patient:     (db, args, user) => crmLinkNewPatient(db, args, user),
 
   // LICENCE_CORE_V1 — the three that stay reachable while locked (see
   // control/gate.js ALWAYS_ALLOWED_RPCS). Without them a clinic that wants to
