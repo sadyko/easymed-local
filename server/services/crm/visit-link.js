@@ -21,13 +21,13 @@
 //   C. открытые заявки пациента, которые ЖДУТ этот приход: без ждущих строк,
 //      или с датой / строкой на этот день (без даты — только с undated) —
 //      любой роли, любой давности;
-//   D. ни одной — по телефону: ОДНА открытая заявка БЕЗ пациента (самая новая
-//      из ждущих этот приход) с номером из ОСНОВНОГО поля записанного — и
-//      КАЖДЫЙ номер этого поля у ОДНОЙ карты (phoneKeysOf: номера поля по
-//      отдельности, «8 90 …» и 998 приведены). Второй номер записанного
-//      (phone_secondary) заявок не ищет: обычно это номер родственника.
-//      Владельцы номера считаются с запасом, по всем номерам карты, включая
-//      экстренный контакт и опекуна (patientIdsWithPhoneKey). Пишется ТОЛЬКО patient_id и ступень:
+//   D. ни одной — по телефону, ОДНИМ СТРОГИМ ПРАВИЛОМ (ревью 3): ОДНА
+//      открытая заявка БЕЗ пациента (самая новая из ждущих этот приход), у
+//      которой поле номера и ОСНОВНОЙ номер записанного — оба ОДИН номер с
+//      равным ключом (phoneMatchKey), и владельцы ключа — ровно {записанный}
+//      (patientIdsWithPhoneKey: все номера карт, экстренный контакт, опекуны и
+//      связи опекунства). Второй номер записанного (phone_secondary) заявок не
+//      ищет: обычно это номер родственника. Пишется ТОЛЬКО patient_id и ступень:
 //      ни строк, ни visit_id, ни привязки. Но следующая дверь (ensure_visit,
 //      booking_lines_add) уже видит карточку пациента и ведёт её строки в его
 //      счёт — поэтому единственность номера и есть защита денег;
@@ -35,11 +35,12 @@
 //      пациента, иначе новая («Звонок», оператор — он же);
 //   F. привязка записи (crm_booking_links) — для C и E, не для телефона;
 //   G. ступень: только из живых колонок и только вперёд — в «Колонку записи»
-//      (scheduledStageKey); дата заявки — ближайший ЗАПИСАННЫЙ день: прежняя
-//      остаётся, только если она не прошла, не позже этого визита и на неё
-//      ждёт строка, которую держит живой визит; иначе — день визита. Прошедшая
-//      дата «Перезвонить» наутро уносила записанную карточку в «Не пришёл», а
-//      будущая, на которую ничто не записано, — послезавтра (ревью 2, F3).
+//      (scheduledStageKey); дата заявки — cardDateOf (booking-mirror.js), ОДНО
+//      правило со сверкой зеркала (ревью 3, D4): ближайший с сегодняшнего дня
+//      записанный день, иначе ближайшая ждущая строка с сегодняшнего дня, иначе
+//      день этого визита. Прошедшая дата «Перезвонить» наутро уносила
+//      записанную карточку в «Не пришёл», будущая, на которую ничто не записано,
+//      — послезавтра, а два разных правила перекидывали дату на каждом клике.
 //      След в crm_booking_undo для discard_empty_visit.
 //
 // ВИЗИТ УЖЕ «ПРИШЁЛ» (arrived, своего здания): только шаг A — строки этого дня
@@ -78,59 +79,61 @@
 // НЕ БРОСАЕТ: заявка не вправе отказать в записи. Ошибка — в лог.
 
 import { openStageKeys, scheduledStageKey, wonStageKey, SEED_NO_SHOW_STAGE } from './config.js';
-import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL } from './booking-mirror.js';
+import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL, cardDateOf } from './booking-mirror.js';
 import { crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';
 import { hasAnyRole } from '../roles.js';   // CRM_UNIFY_V1 — стойка (deskArrival)
 import { today } from '../domain/day.js';
-import { phoneKey, phoneLikePattern, digitsOf } from '../../../public/js/admin/views/crm-phone-match.js';
+import { phoneLikePattern, digitsOf } from '../../../public/js/admin/views/crm-phone-match.js';
 
 // До окна повторного обращения (задача 6) колл-центр по-прежнему берёт заявку
 // не старше 30 дней — то же, что attachVisitToCrm.
 export const CALLCENTER_ATTACH_DAYS = 30;
-export const MIN_PHONE_KEY_DIGITS = 7;
 /** CRM_UNIFY_V1 (Р1) — кому сервер верит «пациент у стойки». */
 export const DESK_ROLES = Object.freeze(['admin', 'registrar']);
 const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 const holes = (a) => a.map(() => '?').join(',');
 
-/**
- * КЛЮЧИ НОМЕРОВ ПОЛЯ — у КАЖДОГО номера по отдельности (ревью 2, F4). Поле
- * режется на номера там, где кончается номер: на буквах, запятых, «;», «/»,
- * переводе строки и перед каждым «+». Номер приводится к ключу phoneKey
- * (местные девять цифр узбекского номера: 998 и ведущий 0 сняты), плюс
- * междугородняя восьмёрка «8 90 …» (десять цифр на 8). Короче 7 цифр — не
- * номер (добавочный, хвост). Пусто — номера нет.
- */
-export function phoneKeysOf(raw) {
-  const out = [];
-  for (const part of String(raw ?? '').split(/[^\d \t().\-+]+|(?=\+)/)) {
-    const d = digitsOf(part);
-    if (d.length < MIN_PHONE_KEY_DIGITS) continue;
-    const k = d.length === 10 && d.startsWith('8') ? d.slice(1) : phoneKey(d);
-    if (k.length >= MIN_PHONE_KEY_DIGITS && !out.includes(k)) out.push(k);
-  }
-  return out;
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_UNIFY_V1 (ревью 3) — НОМЕР ТЕЛЕФОНА: ОДНО СТРОГОЕ ПРАВИЛО
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Ревью 2 резало поле на номера (phoneKeysOf), и каждое исправление разрезания
+// открывало новую ошибку: неразрывный пробел и тире рвали номер, два номера
+// через пробел склеивались в один, российский ключ держал код страны. Теперь
+// резать нечего:
+//   1. цифры поля — все цифры, остальное выброшено (любые разделители);
+//   2. поле — ОДИН номер, только если цифр от 7 до 12; иначе это «не один
+//      номер» (пусто, коротко, два номера, добавочный) — автоматически такое не
+//      связывается никогда, это делает оператор руками;
+//   3. ключ — последние 9 цифр одного номера (+7 / 8 / 998 / 0 не важны);
+//      короче 9 — ключа нет;
+//   4. заявка — пациенту, только если её поле и ОСНОВНОЙ номер пациента — оба
+//      один номер с равным ключом;
+//   5. владельцы ключа — карты, у которых цифры phone, phone_secondary,
+//      emergency_contact_phone или номера опекуна (patient_guardians.phone)
+//      СОДЕРЖАТ ключ, и все, кто связан с ними опекунством в любую сторону,
+//      даже без номера в строке опекунства. С запасом — безопасная сторона;
+//   6. связь — только если владельцы ровно {этот пациент}.
+
+const SINGLE_MIN_DIGITS = 7;
+const SINGLE_MAX_DIGITS = 12;
+export const PHONE_KEY_DIGITS = 9;
+
+/** Ключ одного номера: последние 9 цифр; '' — поле не один номер или ключ короче 9. */
+export function phoneMatchKey(raw) {
+  const d = digitsOf(raw);
+  if (d.length < SINGLE_MIN_DIGITS || d.length > SINGLE_MAX_DIGITS) return '';
+  return d.length >= PHONE_KEY_DIGITS ? d.slice(-PHONE_KEY_DIGITS) : '';
 }
 
 /**
- * Карты, которые МОГУТ владеть этим номером, — счёт С ЗАПАСОМ: цифры номера
- * карты СОДЕРЖАТ ключ (а с ним и '998'+ключ), как у поиска заявок
- * (leadMatchesQuery). Номер карты — любой номер, по которому до неё дозваниваются:
- *   • patients.phone и phone_secondary — поле с двумя номерами тоже владелец;
- *   • patients.emergency_contact_phone и patient_guardians.phone (ревью 2, F1):
- *     у карты ребёнка своего номера часто нет (поле не обязательное), мамин
- *     номер записан только экстренным контактом или номером опекуна — и
- *     звонок о ребёнке иначе уходил на карту мамы, а его услуги — в её счёт.
- *     Опекун-карта (guardian_patient_id) — тоже владелец.
- * Лишний владелец только делает совпадение реже — безопасная сторона;
- * недосчитанный отдаёт заявку не тому члену семьи.
- *
- * LIKE-шаблон по цифрам подряд (phoneLikePattern) — грубый отбор: всякое поле,
- * где цифры ключа идут подряд, под него попадает при любых разделителях.
+ * Карты, которые МОГУТ владеть номером с этим ключом (правило 5). LIKE по
+ * цифрам ключа через «%» (phoneLikePattern) — грубый отбор с запасом: всякое
+ * поле, чьи цифры содержат ключ, под него попадает при любых разделителях.
  */
 export function patientIdsWithPhoneKey(db, key) {
-  const k = String(key || '');
-  if (k.length < MIN_PHONE_KEY_DIGITS) return [];
+  const k = String(key ?? '');
+  if (!/^\d+$/.test(k) || k.length < PHONE_KEY_DIGITS) return [];
   const like = phoneLikePattern(k);
   const has = (x) => digitsOf(x).includes(k);
   const ids = new Set();
@@ -142,30 +145,36 @@ export function patientIdsWithPhoneKey(db, key) {
     if (!has(g.phone)) continue;
     for (const id of [g.patient_id, g.guardian_patient_id]) if (id != null) ids.add(Number(id));
   }
+  // Опекунство в обе стороны, и без номера в строке (ревью 3, D5): ребёнок,
+  // чья мама — опекун-карта, владеет и её номером.
+  if (ids.size) {
+    const list = [...ids];
+    for (const g of db.prepare(`SELECT patient_id, guardian_patient_id FROM patient_guardians
+                                 WHERE patient_id IN (${holes(list)}) OR guardian_patient_id IN (${holes(list)})`).all(...list, ...list)) {
+      for (const id of [g.patient_id, g.guardian_patient_id]) if (id != null) ids.add(Number(id));
+    }
+  }
   return [...ids];
 }
 
-/** Каждый ключ — у ОДНОЙ карты, и это patientId. Пустой список — нет. */
-export function keysOwnedOnlyBy(db, patientId, keys) {
-  if (!keys || !keys.length) return false;
-  return keys.every((k) => {
-    const owners = patientIdsWithPhoneKey(db, k);
-    return owners.length === 1 && owners[0] === Number(patientId);
-  });
+/** Ключ — у ОДНОЙ карты, и это patientId (правило 6). */
+export function keyOwnedOnlyBy(db, patientId, key) {
+  if (!key) return false;
+  const owners = patientIdsWithPhoneKey(db, key);
+  return owners.length === 1 && owners[0] === Number(patientId);
 }
 
 /**
- * Открытые заявки БЕЗ пациента, чей номер — из этих ключей: КАЖДЫЙ номер поля
- * заявки среди ключей (заявка «90 …, 93 …», где второй чужой, не наша). Самые
- * новые первыми. Только отбор — владельцев номера проверяет звонящий.
+ * Открытые заявки БЕЗ пациента, чьё поле номера — один номер с этим ключом
+ * (правило 4). Самые новые первыми. Только отбор — владельцев ключа проверяет
+ * звонящий (keyOwnedOnlyBy).
  */
-export function phoneLeadCandidates(db, keys, open) {
-  if (!keys || !keys.length || !open || !open.length) return [];
-  const likes = keys.map(() => 'phone LIKE ?').join(' OR ');
+export function phoneLeadCandidates(db, key, open) {
+  if (!key || !open || !open.length) return [];
   return db.prepare(`SELECT id, phone FROM crm_requests
-                      WHERE patient_id IS NULL AND (${likes}) AND status IN (${holes(open)})
-                      ORDER BY created_at DESC, id DESC`).all(...keys.map(phoneLikePattern), ...open)
-    .filter((r) => { const lk = phoneKeysOf(r.phone); return lk.length > 0 && lk.every((k) => keys.includes(k)); })
+                      WHERE patient_id IS NULL AND phone LIKE ? AND status IN (${holes(open)})
+                      ORDER BY created_at DESC, id DESC`).all(phoneLikePattern(key), ...open)
+    .filter((r) => phoneMatchKey(r.phone) === key)
     .map((r) => Number(r.id));
 }
 
@@ -189,18 +198,18 @@ export function waitsForDay(db, requestId, day, { undated = false } = {}) {
 /**
  * ОДНА открытая заявка без пациента с ОСНОВНЫМ номером этого пациента — самая
  * новая из ждущих этот приход (на стойке, desk, — самая новая из открытых);
- * только если КАЖДЫЙ номер основного поля у ОДНОЙ карты. null — нет. Сначала
- * ищется заявка (дёшево), владельцы номера считаются, только если она есть
- * (ревью 2, скорость).
+ * только если основной номер — один номер и его ключ у ОДНОЙ карты. null — нет.
+ * Сначала ищется заявка (дёшево), владельцы ключа считаются, только если она
+ * есть (ревью 2, скорость).
  */
 export function phoneLeadFor(db, patientId, open, day, { undated = false, desk = false } = {}) {
   if (!open.length) return null;
   const p = db.prepare('SELECT phone FROM patients WHERE id = ?').get(patientId);
-  const keys = phoneKeysOf(p && p.phone);
-  if (!keys.length) return null;
-  const hit = phoneLeadCandidates(db, keys, open).find((id) => desk || waitsForDay(db, id, day, { undated }));
+  const key = phoneMatchKey(p && p.phone);
+  if (!key) return null;
+  const hit = phoneLeadCandidates(db, key, open).find((id) => desk || waitsForDay(db, id, day, { undated }));
   if (!hit) return null;
-  return keysOwnedOnlyBy(db, patientId, keys) ? hit : null;
+  return keyOwnedOnlyBy(db, patientId, key) ? hit : null;
 }
 
 /**
@@ -319,12 +328,7 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   const scheduled = scheduledStageKey(db);
   const schedAt = scheduled ? open.indexOf(scheduled) : -1;
   const won = desk ? wonStageKey(db) : null;   // CRM_UNIFY_V1
-  const todayDay = today(db);
   const read = db.prepare('SELECT id, status, scheduled_date FROM crm_requests WHERE id = ?');
-  // На дату ждёт строка, которую держит ЖИВОЙ визит (ревью 2, F3).
-  const bookedOn = db.prepare(`SELECT 1 FROM crm_request_services l
-                                 JOIN visits x ON x.id = l.visit_id AND x.status NOT IN ('cancelled', 'no_show')
-                                WHERE l.request_id = ? AND l.status = 'pending' AND date(l.scheduled_date) = date(?) LIMIT 1`);
   const write = db.prepare(`UPDATE crm_requests SET status = ?, scheduled_date = ?, updated_at = ${NOW_SQL} WHERE id = ?`);
   for (const [id, via] of touched) {
     if (via === 'created') continue;
@@ -337,9 +341,7 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
     } else {
       const at = open.indexOf(r.status);
       if (schedAt >= 0 && at >= 0 && at < schedAt) status = scheduled;
-      const was = String(r.scheduled_date || '').trim().slice(0, 10);
-      const keep = !!was && was >= todayDay && was <= v.day && !!bookedOn.get(id, was);
-      when = keep ? was : v.day;
+      when = cardDateOf(db, id, v.day);   // CRM_UNIFY_V1 (ревью 3, D4) — одно правило со сверкой зеркала
     }
     if (status === r.status && when === r.scheduled_date) continue;
     write.run(status, when, id);

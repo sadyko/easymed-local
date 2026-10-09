@@ -251,16 +251,47 @@ function deleteVs(db, id) {
 }
 
 /**
+ * CRM_UNIFY_V1 (ревью 3, D4) — ДАТА КАРТОЧКИ: ОДНО ПРАВИЛО для шага связи
+ * визита (crm/visit-link.js, шаг G) и сверки зеркала (touchRequest ниже).
+ * Раньше их было два: шаг G брал записанный день, сверка — самую раннюю ждущую
+ * строку, и незаписанная строка до дня визита перекидывала дату туда-обратно
+ * на каждом клике двери, а след отмены (crm_booking_undo) рос.
+ *
+ *   1. ближайший с СЕГОДНЯШНЕГО дня ЗАПИСАННЫЙ день: ждущая строка, которую
+ *      держит живой визит, или живой визит привязки записи (crm_booking_links);
+ *   2. иначе — ближайшая ждущая строка с сегодняшнего дня;
+ *   3. иначе — fallback: дата, которую ставит шаг связи (день визита) или
+ *      прежняя дата карточки (сверка).
+ * Строки прошлых дней в выбор не попадают: назад в прошлое дата не едет.
+ */
+export function cardDateOf(db, requestId, fallback = null) {
+  const day = today(db);
+  const live = "x.status NOT IN ('cancelled', 'no_show')";
+  const booked = db.prepare(`
+    SELECT MIN(d) AS d FROM (
+      SELECT l.scheduled_date AS d FROM crm_request_services l
+        JOIN visits x ON x.id = l.visit_id AND ${live}
+       WHERE l.request_id = ? AND l.status = 'pending' AND date(l.scheduled_date) >= date(?)
+      UNION ALL
+      SELECT ${localDate('x.visit_date')} AS d FROM crm_booking_links b
+        JOIN visits x ON x.id = b.visit_id AND ${live}
+       WHERE b.request_id = ? AND ${localDate('x.visit_date')} >= date(?))`).get(requestId, day, requestId, day);
+  if (booked && booked.d) return booked.d;
+  const next = db.prepare(`SELECT MIN(scheduled_date) AS d FROM crm_request_services
+                            WHERE request_id = ? AND status = 'pending' AND date(scheduled_date) >= date(?)`).get(requestId, day);
+  return (next && next.d) || fallback;
+}
+
+/**
  * ДАТА И СТУПЕНЬ ЗАЯВКИ — ЗЕРКАЛО ЕЁ СТРОК (миграция 057). Только у ЖИВОЙ
  * заявки и только если у неё есть ждущие строки: заявка без строк (лид из
  * звонка) свою дату держит сама. Ступень едет только вперёд — в «Записан», и
  * только из колонок ДО него (то же правило, что crmLinkVisit — CRM_UNIFY_V1).
  *
- * CRM_UNIFY_V1 (ревью 2, F2) — ДАТА ТОЛЬКО ВПЕРЁД: ближайшая ждущая строка С
- * СЕГОДНЯШНЕГО дня. Нет такой — дата остаётся той, что поставила запись
- * (crmLinkVisit), и назад в прошлое не едет. Раньше брался самый ранний день
- * вообще, и незаписанная строка прошлой недели возвращала записанной карточке
- * прошедшую дату на каждом клике двери: дата прыгала туда-обратно, а после
+ * CRM_UNIFY_V1 (ревью 2, F2; ревью 3, D4) — ДАТА — по cardDateOf, тому же
+ * правилу, что у шага связи: только вперёд, сначала записанный день. Раньше
+ * брался самый ранний день вообще, и незаписанная строка прошлой недели
+ * возвращала записанной карточке прошедшую дату на каждом клике двери, а после
  * снятия услуги обход доски уносил карточку в «Не пришёл».
  */
 export function touchRequest(db, requestId) {
@@ -270,16 +301,14 @@ export function touchRequest(db, requestId) {
   const open = openStageKeys(db);
   if (!open.includes(p.status)) return;
   const left = db.prepare(`
-    SELECT COUNT(*) AS n,
-           MIN(CASE WHEN date(scheduled_date) >= date(?) THEN scheduled_date END) AS next,   -- CRM_UNIFY_V1 (F2)
-           SUM(visit_id IS NOT NULL) AS booked
-      FROM crm_request_services WHERE request_id = ? AND status = 'pending'`).get(today(db), requestId);
+    SELECT COUNT(*) AS n, SUM(visit_id IS NOT NULL) AS booked
+      FROM crm_request_services WHERE request_id = ? AND status = 'pending'`).get(requestId);
   if (!left || !left.n) return;
   const scheduled = scheduledStageKey(db);
   const schedAt = scheduled ? open.indexOf(scheduled) : -1;
   const at = open.indexOf(p.status);
   const status = (left.booked && schedAt >= 0 && at >= 0 && at < schedAt) ? scheduled : p.status;
-  const when = left.next || p.scheduled_date || null;
+  const when = cardDateOf(db, requestId, p.scheduled_date || null);   // CRM_UNIFY_V1 (D4)
   if (status === p.status && when === p.scheduled_date) return;
   db.prepare(`UPDATE crm_requests SET status = ?, scheduled_date = ?,
                      updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`).run(status, when, requestId);

@@ -365,3 +365,118 @@ test('сбой внутри шага откатывает связь целик�
     assert.equal(t.lead(rid).status, 'scheduled');
   } finally { t.close(); }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_UNIFY_V1 (ревью 3) — ОДНО СТРОГОЕ ПРАВИЛО НОМЕРА вместо разрезания поля:
+// поле — ОДИН номер, только если в нём 7–12 цифр; ключ — последние 9 цифр;
+// заявка и ОСНОВНОЙ номер записанного — оба один номер с равным ключом; владельцы
+// ключа — ровно {записанный}. Два номера в поле и добавочный автоматически не
+// связываются никогда — это делает оператор руками.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const NBSP = '\u00a0';
+const NDASH = '\u2013';
+for (const [label, leadPhone] of [
+  ['второй номер через неразрывные пробелы (D1)', `909092638, 91${NBSP}111${NBSP}11${NBSP}11`],
+  ['второй номер через короткое тире (D1)', `909092638, 91${NDASH}111${NDASH}11${NDASH}11`],
+  ['два номера через пробел', '909092638 911111111'],
+  ['добавочный', '+998 90 909 26 38 доб. 12'],
+]) {
+  test(`заявка «${label}» к записи мамы не цепляется`, async () => {
+    const t = await startCrmApp((db) => db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Ребёнок','+998 91 111 11 11')").run());
+    try {
+      const rid = addLead(t.db, { patient: null, phone: leadPhone, assigned: 4 });
+      addLine(t.db, rid, { svc: 40, day: D });
+      const b = await book(t, 'reg', D, 9);
+      assert.equal(b.status, 200, b.text);
+      const r = await followUp(t, 'ensure_visit', b.json.data.visit.id, D);
+      assert.equal(r.status, 200, r.text);
+      assert.deepEqual([t.lead(rid).patient_id, t.lead(rid).status], [null, 'in_process'], 'поле не из одного номера связано автоматически');
+      assert.ok(!vsOf(t.db, b.json.data.visit.id).some((x) => x.service_id === 40), 'услуга заявки встала в счёт мамы');
+    } finally { t.close(); }
+  });
+}
+
+test('+7 и 8 одного российского номера (D2): брат с «8 (916) …» — владелец; один на номер — связь', async () => {
+  let t = await startCrmApp((db) => {
+    db.prepare("UPDATE patients SET phone = '+7 916 123 45 67' WHERE id = 77").run();
+    db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Брат','8 (916) 123-45-67')").run();
+  });
+  try {
+    const rid = addLead(t.db, { patient: null, phone: '79161234567', assigned: 4 });
+    assert.equal((await book(t, 'reg', D, 9)).status, 200);
+    assert.equal(t.lead(rid).patient_id, null, 'номер брата в форме «8 …» не посчитан');
+  } finally { t.close(); }
+  t = await startCrmApp((db) => db.prepare("UPDATE patients SET phone = '+7 916 123 45 67' WHERE id = 77").run());
+  try {
+    const rid = addLead(t.db, { patient: null, phone: '8 916 123 45 67', assigned: 4 });
+    assert.equal((await book(t, 'reg', D, 9)).status, 200);
+    assert.deepEqual([t.lead(rid).patient_id, t.lead(rid).status], [77, 'scheduled']);
+  } finally { t.close(); }
+});
+
+test('два номера через пробел (D3): у записанного — не один номер; у брата — владелец', async () => {
+  let t = await startCrmApp((db) => {
+    db.prepare("UPDATE patients SET phone = '909092638 911111111' WHERE id = 77").run();
+    db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Брат','+998 90 909 26 38')").run();
+  });
+  try {
+    const ids = ['909092638 911111111', '909092638'].map((phone) => addLead(t.db, { patient: null, phone, assigned: 4 }));
+    assert.equal((await book(t, 'reg', D, 9)).status, 200);
+    for (const id of ids) assert.equal(t.lead(id).patient_id, null, t.lead(id).phone);
+  } finally { t.close(); }
+  t = await startCrmApp((db) => db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Брат','909092638 911111111')").run());
+  try {
+    const rid = addLead(t.db, { patient: null, phone: '909092638', assigned: 4 });
+    assert.equal((await book(t, 'reg', D, 9)).status, 200);
+    assert.equal(t.lead(rid).patient_id, null, 'брат с двумя номерами через пробел не посчитан владельцем');
+  } finally { t.close(); }
+});
+
+test('опекунство без номера в строке (D5): ребёнок, чья мама — опекун-карта, — владелец её номера', async () => {
+  const t = await startCrmApp((db) => {
+    db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Ребёнок','')").run();
+    db.prepare("INSERT INTO patient_guardians (patient_id, guardian_patient_id, name, relationship) VALUES (78, 77, 'Мама', 'мать')").run();
+  });
+  try {
+    const rid = addLead(t.db, { patient: null, phone: '909092638', assigned: 4, name: 'Звонок о ребёнке' });
+    addLine(t.db, rid, { svc: 40, day: D });
+    const b = await book(t, 'reg', D, 9);
+    assert.equal(b.status, 200, b.text);
+    await followUp(t, 'booking_lines_add', b.json.data.visit.id, D);
+    assert.equal(t.lead(rid).patient_id, null, 'звонок о ребёнке ушёл на карту мамы');
+    assert.ok(!vsOf(t.db, b.json.data.visit.id).some((x) => x.service_id === 40));
+  } finally { t.close(); }
+});
+
+// D4 — дата карточки: ОДНА функция для шага G и сверки зеркала (cardDateOf).
+// Незаписанная строка завтра, консультация на D: запись D, затем по кругу
+// ensure_visit, перенос внутри D и booking_lines_add — дата стоит на D, след
+// отмены не растёт.
+test('дата карточки не прыгает: ensure_visit, перенос в календаре и booking_lines_add по кругу', async () => {
+  const t = await startCrmApp();
+  try {
+    const T1 = localDay(1);
+    const rid = addLead(t.db, { assigned: 3, date: T1 });
+    addLine(t.db, rid, { svc: 40, day: T1 });
+    addLine(t.db, rid, { svc: 30, day: D, doctor: 10 });
+    const b = await book(t, 'reg', D, 9, { service_id: 30 });
+    assert.equal(b.status, 200, b.text);
+    const vid = b.json.data.visit.id;
+    const undo = () => t.db.prepare('SELECT COUNT(*) n FROM crm_booking_undo').get().n;
+    assert.equal(t.lead(rid).scheduled_date, D);
+    const was = undo();
+    for (let i = 0; i < 3; i++) {
+      const e = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: D, doctor_id: 10 });
+      assert.equal(e.status, 200, e.text);
+      assert.equal(t.lead(rid).scheduled_date, D, `клик ${i + 1}: ensure_visit`);
+      const mv = await t.rpc('calendar_book', 'reg', { visit_id: vid, start: at(D, 10 + i), duration_minutes: 30 });
+      assert.equal(mv.status, 200, mv.text);
+      assert.equal(t.lead(rid).scheduled_date, D, `клик ${i + 1}: перенос`);
+      const add = await t.rpc('booking_lines_add', 'reg', { visit_id: vid, patient_id: 77, lines: [{ service_id: 40, doctor_id: 10 }] });
+      assert.equal(add.status, 200, add.text);
+      assert.equal(t.lead(rid).scheduled_date, D, `клик ${i + 1}: booking_lines_add`);
+    }
+    assert.equal(undo(), was, 'двери по кругу копят след отмены — дата прыгает');
+  } finally { t.close(); }
+});
