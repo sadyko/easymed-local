@@ -1,0 +1,53 @@
+{
+  "_about": "Exact request bodies LIS Proxy (lisproxyd.exe, build 2026-10-09) sent during black-box tests on 2026-10-09. Headers on every request: Content-Type: application/x-www-form-urlencoded; User-Agent: Mozilla/5.0; Accept-Language: en-US,en;q=0.5; Accept-Encoding: gzip. Method POST to the per-analyzer api_url (query string kept). 'expect' is what Easy-Med SHOULD do, per LISPROXY-EASYMED.md section 3.",
+  "results": [
+    {"id": "bs200_glu", "body": "method=apiResultSave&lisResult[name]=bs200&lisResult[host]=LAB-PC-1&lisResult[barcode]=LAB-000123&lisResult[code]=GLU&lisResult[R][res]=5.100000&lisResult[R][unit]=mmol%2FL&lisResult[R][norms]=3.900000-6.100000&lisResult[R][flag]=N",
+     "expect": "200; journaled; value 5.1 written to the confirmed GLU line of order LAB-000123 (series waits for the other confirmed lines)"},
+    {"id": "bs200_patient_number_as_barcode", "body": "method=apiResultSave&lisResult[name]=bs200&lisResult[host]=LAB-PC-1&lisResult[barcode]=PATNUM9&lisResult[code]=GLU&lisResult[R][res]=5.1&lisResult[R][unit]=mmol%2FL&lisResult[R][norms]=3.9-6.1&lisResult[R][flag]=N",
+     "expect": "200; journaled; tray 'unmatched' (proxy took PID-2). Bare digits here must NOT be treated as an order id"},
+    {"id": "bs200_bare_digits", "body": "method=apiResultSave&lisResult[name]=bs200&lisResult[host]=LAB-PC-1&lisResult[barcode]=900001&lisResult[code]=GLU&lisResult[R][res]=5.100000&lisResult[R][unit]=mmol%2FL&lisResult[R][norms]=3.900000-6.100000&lisResult[R][flag]=N",
+     "expect": "200; tray 'unmatched' — from a proxy row a bare number is a patient/admission number, never an order id (wrong-patient guard)"},
+    {"id": "bc780_wbc", "body": "method=apiResultSave&lisResult[name]=bc780x&lisResult[host]=LABPC&lisResult[barcode]=LAB-000555&lisResult[code]=WBC&lisResult[R][res]=4.63&lisResult[R][unit]=10*9%2FL&lisResult[R][norms]=4.00-10.00&lisResult[R][flag]=N",
+     "expect": "200; WBC written to LAB-000555"},
+    {"id": "bc780_hgb", "body": "method=apiResultSave&lisResult[name]=bc780x&lisResult[host]=LABPC&lisResult[barcode]=LAB-000555&lisResult[code]=HGB&lisResult[R][res]=132&lisResult[R][unit]=g%2FL&lisResult[R][norms]=120-160&lisResult[R][flag]=N",
+     "expect": "200; HGB written to LAB-000555"},
+    {"id": "bc780_junk_IS_empty", "body": "method=apiResultSave&lisResult[name]=bc780x&lisResult[host]=LABPC&lisResult[barcode]=LAB-000555&lisResult[code]=IS&lisResult[R][res]=&lisResult[R][unit]=&lisResult[R][norms]=&lisResult[R][flag]=",
+     "expect": "200; journaled as ignored (empty value / service line); NO tray row"},
+    {"id": "bc20_take_mode", "body": "method=apiResultSave&lisResult[name]=bc20x&lisResult[host]=LABPC&lisResult[barcode]=LAB-000321&lisResult[code]=Take+Mode&lisResult[R][res]=O&lisResult[R][unit]=&lisResult[R][norms]=&lisResult[R][flag]=",
+     "expect": "200; journaled as ignored (Mindray service line); NO tray row"},
+    {"id": "bc20_test_mode", "body": "method=apiResultSave&lisResult[name]=bc20x&lisResult[host]=LABPC&lisResult[barcode]=LAB-000321&lisResult[code]=Test+Mode&lisResult[R][res]=CBC%2BDIFF&lisResult[R][unit]=&lisResult[R][norms]=&lisResult[R][flag]=",
+     "expect": "200; journaled as ignored; NO tray row"},
+    {"id": "bc20_pv1_dept_as_barcode", "body": "method=apiResultSave&lisResult[name]=bc20x&lisResult[host]=LABPC&lisResult[barcode]=Therapy%5E%5E12&lisResult[code]=WBC&lisResult[R][res]=4.63&lisResult[R][unit]=10*9%2FL&lisResult[R][norms]=4.00-10.00&lisResult[R][flag]=N",
+     "expect": "200; tray 'unmatched' with a reason naming the proxy fault (barcode contains ^)"},
+    {"id": "bc20_loinc_as_barcode", "body": "method=apiResultSave&lisResult[name]=bc20&lisResult[host]=LABPC&lisResult[barcode]=6690-2%5EWBC%5ELN&lisResult[code]=WBC&lisResult[R][res]=6.42&lisResult[R][unit]=10*3%2FuL&lisResult[R][norms]=4.00-10.00&lisResult[R][flag]=N",
+     "expect": "200; tray 'unmatched'"},
+    {"id": "bc20_empty_barcode", "body": "method=apiResultSave&lisResult[name]=bc20&lisResult[host]=LABPC&lisResult[barcode]=&lisResult[code]=WBC&lisResult[R][res]=6.42&lisResult[R][unit]=10*3%2FuL&lisResult[R][norms]=4.00-10.00&lisResult[R][flag]=N",
+     "expect": "200; tray 'unmatched' (no barcode)"},
+    {"id": "lumo_truncated_barcode", "body": "method=apiResultSave&lisResult[name]=lumo&lisResult[host]=LAB-PC-2&lisResult[barcode]=B-000777&lisResult[code]=214&lisResult[R][res]=28.4&lisResult[R][unit]=&lisResult[R][norms]=&lisResult[R][flag]=",
+     "expect": "200; barcode restored to LAB-000777 (AutoLumo class keeps only the last 8 characters); value 28.4 to the line confirmed for code 214"},
+    {"id": "lumo_numeric_id", "body": "method=apiResultSave&lisResult[name]=lumo&lisResult[host]=LAB-PC-2&lisResult[barcode]=12345678&lisResult[code]=214&lisResult[R][res]=28.4&lisResult[R][unit]=&lisResult[R][norms]=&lisResult[R][flag]=",
+     "expect": "200; tray 'unmatched' (bare digits from a proxy row are refused)"}
+  ],
+  "orders": [
+    {"id": "bs200_order", "body": "method=apiOrderGet&order[name]=bs200&order[host]=LAB-PC-1&order[barcode]=LAB-000123",
+     "expect": "200 JSON {\"0\":{clientId:'LAB-000123',surname:'',name:'',date_birth:'dd.MM.yyyy',sex:'1'|'0'|'',biomaterial_code:'serum',code:<confirmed device code>}, \"1\":{...}} — one entry per confirmed line; {} when not found / gated / nothing confirmed"},
+    {"id": "lumo_order_truncated", "body": "method=apiOrderGet&order[name]=lumo&order[host]=LAB-PC-2&order[barcode]=B-000123",
+     "expect": "same as bs200_order for LAB-000123 (restore the truncated barcode)"},
+    {"id": "cl_garbage_msh9", "body": "method=apiOrderGet&order[name]=cl900i&order[host]=LAB-PC-1&order[barcode]=ORU%5ER01", "expect": "200 {}"},
+    {"id": "cl_garbage_qry", "body": "method=apiOrderGet&order[name]=cl900i&order[host]=LAB-PC-1&order[barcode]=QRY%5EQ02", "expect": "200 {}"},
+    {"id": "cl_garbage_all", "body": "method=apiOrderGet&order[name]=cl900i&order[host]=LAB-PC-1&order[barcode]=ALL", "expect": "200 {}"},
+    {"id": "cl_garbage_n", "body": "method=apiOrderGet&order[name]=cl900i&order[host]=LAB-PC-1&order[barcode]=N", "expect": "200 {}"},
+    {"id": "cl_garbage_timestamp", "body": "method=apiOrderGet&order[name]=cl900i&order[host]=LAB-PC-1&order[barcode]=20261009202110", "expect": "200 {} (14 bare digits; never an order id)"},
+    {"id": "cl_garbage_empty", "body": "method=apiOrderGet&order[name]=cl900i&order[host]=LAB-PC-1&order[barcode]=", "expect": "200 {}"}
+  ],
+  "lists": [
+    {"id": "cl_barcode_list", "body": "method=apiBarcodeListGet&order[name]=cl900i&order[host]=LAB-PC-1", "expect": "200 {} in v1 (batch download off)"}
+  ],
+  "unknown": [
+    {"id": "unknown_method", "body": "method=apiSomethingNew&x=1", "expect": "200 {} and journaled (never an error page)"}
+  ],
+  "auth": [
+    {"id": "no_key", "note": "same body as bs200_glu but URL without ?key=", "expect": "404 like an unknown path; nothing written"},
+    {"id": "wrong_key", "note": "same body, ?key=WRONG", "expect": "404; nothing written"}
+  ]
+}

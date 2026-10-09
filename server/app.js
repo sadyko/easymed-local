@@ -14,6 +14,7 @@ import { setDataDir } from './services/control/config.js';   // LICENCE_CORE_V1
 import { recordEvent } from './services/ops-log.js';   // OPS_EVENTS_V1
 import { telephonyWebhooks } from './services/telephony/webhooks.js';   // TELEPHONY_V1
 import { branchSyncRoutes } from './routes/branch-sync.js';   // BRANCH_SYNC_V1
+import { lisProxyRoutes } from './routes/lisproxy.js';   // LIS_PROXY_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -115,6 +116,13 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // req.control from attachControl above, the vendor source-IP allowlist and
   // the Company ID check), and every refusal is a non-advertising 404.
   app.use('/api/telephony/binotel', telephonyWebhooks(db));
+
+  // LIS_PROXY_V1 — LIS Proxy (программа поставщика на лабораторном ПК) шлёт
+  // результаты анализаторов и запросы рабочего списка формой POST. Здесь же и
+  // по той же причине, что вебхуки выше: сессии у неё нет. Свой гейт — ключ в
+  // строке запроса; отказ — тот же 404, что у неизвестного адреса.
+  // Лицензионного модуля нет (решение владельца 2026-10-09, п. 5) — как у порта LIS.
+  app.use('/api/lisproxy', lisProxyRoutes(db, dataDir));
 
   // BRANCH_SYNC_V1 — раздача справочника другому ФИЛИАЛУ той же клиники.
   // Стоит здесь же и по той же причине, что вебхуки выше: запрос приходит от

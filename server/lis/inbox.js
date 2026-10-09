@@ -54,11 +54,11 @@ export const REATTACHED_NOTE = 'перепривязано к заказу № '
  * LIS_REAL_ANALYZERS_V1 (ревью R4, п. D) — disputes: споры «повтор» строки
  * структурой (JSON-строка, match.js disputeOf) или null.
  */
-export function recordMessage(db, { deviceId = null, peer = '', raw, sampleId = '', visitServiceId = null, status, detail = '', kind = 'result', resolved = false, disputes = null }) {
+export function recordMessage(db, { deviceId = null, peer = '', raw, sampleId = '', visitServiceId = null, status, detail = '', kind = 'result', resolved = false, disputes = null, sourceBody = null }) {
   return db.prepare(`INSERT INTO lab_device_messages
-      (device_id, peer, raw, sample_id, visit_service_id, status, detail, kind, resolved_at, disputes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END, ?)`)
-    .run(deviceId, peer, String(raw == null ? '' : raw), sampleId, visitServiceId, status, detail, kind, resolved ? 1 : 0, disputes).lastInsertRowid;
+      (device_id, peer, raw, sample_id, visit_service_id, status, detail, kind, resolved_at, disputes, source_body)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END, ?, ?)`)
+    .run(deviceId, peer, String(raw == null ? '' : raw), sampleId, visitServiceId, status, detail, kind, resolved ? 1 : 0, disputes, sourceBody).lastInsertRowid;   // LIS_PROXY_V1 — source_body: тело запроса LIS Proxy как пришло
 }
 
 /**
