@@ -67,6 +67,16 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
     res.set('Referrer-Policy', 'same-origin');
     next();
   });
+  // LIS_PROXY_V1 — LIS Proxy (программа поставщика на лабораторном ПК) шлёт
+  // результаты анализаторов и запросы рабочего списка формой POST. Сессии у неё
+  // нет — как у вебхуков телефонии ниже; свой гейт — ключ в строке запроса,
+  // отказ — тот же 404, что у неизвестного адреса. Лицензионного модуля нет
+  // (решение владельца 2026-10-09, п. 5) — как у порта LIS.
+  // Ревью I1 — ЗДЕСЬ, до общих разборщиков тела (express.json ниже): вход сам
+  // читает тело байтами и пишет его в журнал первым; разборщик, стоящий раньше,
+  // отказал бы большому телу 413-м или съел бы его, и в журнале не осталось бы
+  // ничего. До requirePasswordChanged — тем более.
+  app.use('/api/lisproxy', lisProxyRoutes(db, dataDir));
   // PROCUREMENT_REDESIGN_V1 — Excel import posts up to MAX_IMPORT_ROWS (2000)
   // rows in one RPC call; 2000 Cyrillic rows is ~460 KB. Registered before the
   // global /api parser so body-parser's first-wins rule gives RPCs the larger
@@ -116,13 +126,6 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // req.control from attachControl above, the vendor source-IP allowlist and
   // the Company ID check), and every refusal is a non-advertising 404.
   app.use('/api/telephony/binotel', telephonyWebhooks(db));
-
-  // LIS_PROXY_V1 — LIS Proxy (программа поставщика на лабораторном ПК) шлёт
-  // результаты анализаторов и запросы рабочего списка формой POST. Здесь же и
-  // по той же причине, что вебхуки выше: сессии у неё нет. Свой гейт — ключ в
-  // строке запроса; отказ — тот же 404, что у неизвестного адреса.
-  // Лицензионного модуля нет (решение владельца 2026-10-09, п. 5) — как у порта LIS.
-  app.use('/api/lisproxy', lisProxyRoutes(db, dataDir));
 
   // BRANCH_SYNC_V1 — раздача справочника другому ФИЛИАЛУ той же клиники.
   // Стоит здесь же и по той же причине, что вебхуки выше: запрос приходит от

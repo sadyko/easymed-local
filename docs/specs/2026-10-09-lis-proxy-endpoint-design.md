@@ -94,14 +94,14 @@ LIS Proxy — служба Windows на лабораторном ПК. Она г
 
 ## 1. Вход: адрес и ключ
 
-- **Адрес:** `POST /api/lisproxy`. Маршрут `server/routes/lisproxy.js` (`lisProxyRoutes(db, dataDir)`), в `server/app.js` — рядом с вебхуками телефонии (`app.js:117`), **до** `app.use('/api', requirePasswordChanged)` (`app.js:131`). Сессии у прокси нет.
+- **Адрес:** `POST /api/lisproxy`. Маршрут `server/routes/lisproxy.js` (`lisProxyRoutes(db, dataDir)`), в `server/app.js` — **до** общих разборщиков тела (`express.json`) и до `app.use('/api', requirePasswordChanged)` (ревью I1: разборщик, стоящий раньше, отказал бы большому телу или съел бы его). Сессии у прокси нет.
 - **Порядок внутри маршрута:**
   1. ключ (Р3) — по `req.query.key`, до тела;
-  2. разбор тела — свой `express.urlencoded({ extended: true, limit: '100kb', verify })` (`verify` сохраняет сырое тело, как пришло);
+  2. тело — **байтами**, до любого разбора (ревью I1): распаковка gzip/deflate/br, предел 2 МБ (сверх — сохранены первые 2 МБ, не разбирается); текст — UTF-8, иначе объявленная кодировка или windows-1251 с отметкой в журнале. Разбор — свой (`lisproxy-form.js` `parseProxyForm`: ключи в скобках как в PHP, до 10 000 пар, повтор ключа — последнее значение, у `method` — первое, имя запроса без учёта регистра). Запрос результата узнаётся и по сырому тексту (`method=apiResultSave`): ответ `Ok`, даже если тело не разобралось (тогда строка — в лотке). Прежний `express.urlencoded` отказывал телу больше 100 КБ, больше 1000 пар, не формой или не в UTF-8 — ни тела в журнале, ни `Ok`;
   3. журнал (раздел 2);
   4. обработка (разделы 3–6);
   5. ответ (Р5, Р23).
-- **Общий JSON-разборщик** `/api` (`app.js:93`) тело формы не трогает: он разбирает только `application/json`.
+- **Общий JSON-разборщик** `/api` стоит после входа и тело прокси не видит.
 - **Лицензия** — не проверяется (решение 5). `attachControl` (`app.js:109`) только кладёт состояние в запрос и ничего не запрещает.
 - **Адрес отправителя** — `req.socket.remoteAddress` без `::ffff:`, никогда не `X-Forwarded-For`.
 - **Настройка** (Р1, Р2): `server/lis/lisproxy-settings.js` — `readProxySettings(dataDir)`, `writeProxySettings(dataDir, next)`, `newProxyKey()`, `keyMatches(given, stored)`. Файл читается на каждом запросе (меньше 1 КБ) — смена ключа действует сразу.

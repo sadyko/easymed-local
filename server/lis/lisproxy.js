@@ -45,9 +45,22 @@ export const ORDER_NOT_FOUND = /^text$/i.test(String(process.env.EASYMED_LISPROX
 export const replyText = (out) => (out.type === 'json' ? JSON.stringify(out.body) : String(out.body));
 
 const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
-const str = (v) => (typeof v === 'string' ? v : '');
+// LIS_PROXY_V1 (ревью A8) — ключ, присланный дважды, — массив (lisproxy-form.js
+// parseProxyForm): значение — ПОСЛЕДНЕЕ строковое, а не «пустое значение».
+const str = (v) => (typeof v === 'string' ? v : Array.isArray(v) ? [...v].reverse().find((x) => typeof x === 'string') ?? '' : '');
 
-export const methodOf = (body) => str(obj(body).method).trim();
+/** Запросы прокси (LIS-API.md, §1) — по имени без учёта регистра (ревью A4). */
+export const PROXY_METHODS = Object.freeze(['apiResultSave', 'apiOrderGet', 'apiBarcodeListGet']);
+/**
+ * method запроса: первое строковое значение (у method[] — тоже, ревью A5); имя
+ * известного запроса — в его написании, какой бы ни был регистр.
+ */
+export const methodOf = (body) => {
+  const v = obj(body).method;
+  const first = typeof v === 'string' ? v : Array.isArray(v) ? v.find((x) => typeof x === 'string') ?? '' : '';
+  const m = first.trim();
+  return PROXY_METHODS.find((k) => k.toLowerCase() === m.toLowerCase()) || m;
+};
 
 /** Ответ, когда разбор сорвался: прокси ждёт 2xx; результату — «Ok», запросу — «ничего». */
 export function fallbackReply(method) { return method === 'apiResultSave' ? RESULT_OK : ORDER_NOT_FOUND; }

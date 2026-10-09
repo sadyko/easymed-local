@@ -155,3 +155,110 @@ export function worklistEntries({ barcode, codes = [], patient = {}, specimen = 
   });
   return out;
 }
+
+// ═══ LIS_PROXY_V1 (ревью I1) — ТЕЛО ЗАПРОСА: СВОЙ РАЗБОР ═════════════════════
+// Вход (routes/lisproxy.js) читает тело байтами ДО разбора и пишет его в
+// журнал первым; разбирает — здесь. Разборщик express (urlencoded) отказывал
+// телу больше 100 КБ, больше 1000 пар, с Content-Type не формой или с
+// charset не UTF-8 — и тогда ни тела в журнале, ни «Ok» в ответе, а на не-«Ok»
+// прокси бросает остальные тесты пробы (LIS-API.md, §2). Здесь отказа нет:
+// что разобралось — разобрано, остальное — отметка в журнале.
+
+/** Сколько пар «ключ=значение» разбирается (одно значение — восемь пар). */
+export const FORM_MAX_PAIRS = 10000;
+/** Глубина скобок ключа: lisResult[R][res] — 3; глубже — остаток одним сегментом. */
+const FORM_MAX_DEPTH = 5;
+/** Сегменты ключа, которые не пишутся никогда: подмена прототипа объекта. */
+const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
+
+const utf8Strict = () => new TextDecoder('utf-8', { fatal: true });
+const decoderFor = (label) => { try { return new TextDecoder(label); } catch { return null; } };
+
+/**
+ * Байты тела → текст. UTF-8; не UTF-8 — объявленная в Content-Type кодировка
+ * (если её знает TextDecoder), иначе windows-1251 (ПК с русскими настройками).
+ * @returns {{text:string, charset:string}}  charset — чем прочитано на деле
+ */
+export function decodeProxyBody(buf, declared = '') {
+  const bytes = Buffer.isBuffer(buf) ? buf : Buffer.from(buf == null ? '' : String(buf), 'utf8');
+  try { return { text: utf8Strict().decode(bytes), charset: 'utf-8' }; } catch { /* не UTF-8 */ }
+  const own = declared && !/^utf-?8$/i.test(String(declared).trim()) ? decoderFor(String(declared).trim()) : null;
+  const d = own || new TextDecoder('windows-1251');
+  return { text: d.decode(bytes), charset: d.encoding };
+}
+
+/** Запрос результата — по СЫРОМУ тексту (method=apiResultSave, любой регистр, и method[]): ответ «Ok», даже если тело не разобралось. */
+export function looksLikeResult(text) {
+  return /(?:^|&)\s*method(?:\[\]|%5B%5D)?=\s*apiresultsave\s*(?:&|$)/i.test(String(text == null ? '' : text));
+}
+
+/** «+» — пробел; подряд идущие %XX — байты: UTF-8, иначе windows-1251 (notes узнаёт об этом). */
+function pctDecode(s, notes) {
+  return String(s).replace(/\+/g, ' ').replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+    const bytes = Buffer.from(run.replace(/%/g, ''), 'hex');
+    try { return utf8Strict().decode(bytes); } catch {
+      notes.add('значения в %XX не в UTF-8 — прочитаны как windows-1251');
+      return new TextDecoder('windows-1251').decode(bytes);
+    }
+  });
+}
+
+/** Ключ → сегменты: «lisResult[R][res]» → ['lisResult', 'R', 'res']; «[]» — ''. Не по форме — ключ целиком. */
+function keySegments(key) {
+  const m = /^([^[\]]+)((?:\[[^[\]]*\])*)$/.exec(key);
+  if (!m) return [key];
+  const segs = [m[1], ...[...m[2].matchAll(/\[([^[\]]*)\]/g)].map((x) => x[1])];
+  return segs.length > FORM_MAX_DEPTH ? [...segs.slice(0, FORM_MAX_DEPTH - 1), segs.slice(FORM_MAX_DEPTH - 1).join('][')] : segs;
+}
+
+const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** Положить значение по сегментам. Повтор ключа — массив значений; «[]» — в массив; строка не затирает объект. */
+function put(root, segs, value) {
+  let node = root;
+  for (let i = 0; i < segs.length - 1; i++) {
+    const seg = segs[i];
+    if (Array.isArray(node)) {
+      const next = {};
+      node.push(next);
+      node = next;
+      continue;
+    }
+    const nextIsArray = segs[i + 1] === '';
+    if (nextIsArray ? !Array.isArray(node[seg]) : !isPlainObject(node[seg])) {
+      if (nextIsArray && typeof node[seg] === 'string') node[seg] = [node[seg]];
+      else node[seg] = nextIsArray ? [] : {};
+    }
+    node = node[seg];
+  }
+  const last = segs[segs.length - 1];
+  if (Array.isArray(node)) { node.push(value); return; }
+  const cur = node[last];
+  if (cur === undefined) node[last] = value;
+  else if (typeof cur === 'string') node[last] = [cur, value];
+  else if (Array.isArray(cur)) cur.push(value);
+  // объект уже есть («lisResult[name]=…» раньше «lisResult=…») — строка его не затирает
+}
+
+/**
+ * Тело application/x-www-form-urlencoded в виде PHP (lisResult[R][res]=…) →
+ * объект. Никогда не бросает. Повтор ключа — массив (кто читает, выбирает:
+ * lisproxy.js — последнее значение, у method — первое).
+ * @returns {{body: object, notes: string[]}}  notes — что разобрано не так, как пришло
+ */
+export function parseProxyForm(text) {
+  const notes = new Set();
+  const body = {};
+  const pairs = String(text == null ? '' : text).split('&');
+  if (pairs.length > FORM_MAX_PAIRS) notes.add('пар в теле больше ' + FORM_MAX_PAIRS + ' — разобраны первые ' + FORM_MAX_PAIRS);
+  for (const pair of pairs.slice(0, FORM_MAX_PAIRS)) {
+    if (!pair) continue;
+    const eq = pair.indexOf('=');
+    const key = pctDecode(eq < 0 ? pair : pair.slice(0, eq), notes);
+    if (!key) continue;
+    const segs = keySegments(key);
+    if (segs.some((s) => FORBIDDEN_SEGMENTS.has(s))) continue;
+    put(body, segs, pctDecode(eq < 0 ? '' : pair.slice(eq + 1), notes));
+  }
+  return { body, notes: [...notes] };
+}

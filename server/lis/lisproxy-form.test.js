@@ -7,6 +7,7 @@ import { guessProfile } from './discover.js';
 import {
   escapeHl7, proxyValue, proxyNorms, junkReason, normaliseProxyBarcode, buildOru, hl7Stamp,
   dottedDate, sexCode, biomaterialOf, worklistEntries, PROXY_APP, PROXY_NOT_TUBE,
+  parseProxyForm, decodeProxyBody, looksLikeResult, FORM_MAX_PAIRS,   // LIS_PROXY_V1 (ревью I1)
 } from './lisproxy-form.js';
 
 test('escapeHl7: | ^ ~ \\ & — escape-последовательности, перевод строки — пробел', () => {
@@ -101,4 +102,43 @@ test('рабочий список: dd.MM.yyyy, пол 1/0/пусто, биома
     1: { clientId: 'LAB-000123', surname: '', name: '', date_birth: '03.02.1990', sex: '1', biomaterial_code: 'serum', code: 'UREA' },
   });
   assert.deepEqual(worklistEntries({ barcode: 'LAB-000001', codes: [] }), {});
+});
+
+// ── LIS_PROXY_V1 (ревью I1, A4/A5/A8) — тело формы: свой разбор ────────────
+test('parseProxyForm: ключи в скобках как в PHP, «+» — пробел, %XX — UTF-8; повтор ключа — массив; «[]» — массив', () => {
+  const { body, notes } = parseProxyForm('method=apiResultSave&lisResult[name]=bs200&lisResult[host]=LAB+PC%2D1&lisResult[R][res]=5.1&lisResult[R][unit]=10%5E9%2FL'
+    + '&lisResult[host2]=%D0%9B%D0%B0%D0%B1&lisResult[R][res]=6.2&method2[]=a&method2[]=b');
+  assert.deepEqual(notes, []);
+  assert.equal(body.method, 'apiResultSave');
+  assert.deepEqual(body.lisResult, { name: 'bs200', host: 'LAB PC-1', R: { res: ['5.1', '6.2'], unit: '10^9/L' }, host2: 'Лаб' });
+  assert.deepEqual(body.method2, ['a', 'b']);
+});
+
+test('parseProxyForm: __proto__ и constructor не трогают объект; мусорные ключи и глубина не бросают; предел пар', () => {
+  const { body } = parseProxyForm('lisResult[__proto__][code]=GLU&constructor[prototype][x]=1&lisResult[name]=bs200&' + 'a['.repeat(40) + 'x' + ']'.repeat(40) + '=1&=v&&k');
+  assert.equal(({}).code, undefined);
+  assert.equal(Object.prototype.x, undefined);
+  assert.equal(body.lisResult.name, 'bs200');
+  assert.equal(Object.getPrototypeOf(body.lisResult), Object.prototype);
+  const many = parseProxyForm('method=apiResultSave' + '&x=1'.repeat(FORM_MAX_PAIRS + 5));
+  assert.equal(many.body.method, 'apiResultSave');
+  assert.match(many.notes[0], /пар в теле больше 10000/);
+});
+
+test('parseProxyForm: %XX не в UTF-8 — windows-1251 (с отметкой); битая последовательность не бросает', () => {
+  const r = parseProxyForm('lisResult[unit]=%EC%EC%EE%EB%FC%2F%EB&lisResult[R][res]=5.1%E0%A4%A');
+  assert.equal(r.body.lisResult.unit, 'ммоль/л');
+  assert.match(r.notes.join('; '), /windows-1251/);
+  assert.equal(typeof r.body.lisResult.R.res, 'string');
+});
+
+test('decodeProxyBody: UTF-8; не UTF-8 — windows-1251 с отметкой; объявленная кодировка — запасная', () => {
+  assert.deepEqual(decodeProxyBody(Buffer.from('a=Лаб', 'utf8')), { text: 'a=Лаб', charset: 'utf-8' });
+  assert.deepEqual(decodeProxyBody(Buffer.from([0x61, 0x3d, 0xcb, 0xe0, 0xe1])), { text: 'a=Лаб', charset: 'windows-1251' });
+  assert.deepEqual(decodeProxyBody(Buffer.from([0x61, 0x3d, 0xe9]), 'latin1'), { text: 'a=é', charset: 'windows-1252' });
+});
+
+test('looksLikeResult: method=apiResultSave в любом регистре и как method[] — по сырому тексту', () => {
+  for (const t of ['method=apiResultSave&x=1', 'x=1&METHOD=APIRESULTSAVE', 'method[]=apiResultSave', 'method%5B%5D=apiresultsave&x']) assert.equal(looksLikeResult(t), true, t);
+  for (const t of ['method=apiOrderGet', 'xmethod=apiResultSave2', '']) assert.equal(looksLikeResult(t), false, t);
 });
