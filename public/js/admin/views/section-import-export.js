@@ -1496,13 +1496,21 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         // CLINIC_API_FIX_V1 (ревью итога) — КАЖДАЯ строка с замечанием или
         // ошибкой видна, где бы она ни стояла в файле; чистых — первые 50.
         // Раньше показывались первые 50 строк, и замечание в 62-й не видел никто.
+        // CLINIC_API_FIX_V1 (ревью 3) — и с потолком: не больше 200 строк с
+        // замечаниями (5 000 таких строк — около 90 тысяч узлов, заново на
+        // каждое переключение галочки); остальные названы числом под таблицей.
+        const FLAGGED_CAP = 200;
         const flagged = parsedRows.filter(r => r.status !== 'ok');
+        const flaggedShown = flagged.slice(0, FLAGGED_CAP);
         const clean = parsedRows.filter(r => r.status === 'ok').slice(0, 50);
         const showRows = flagged.length
-            ? [...flagged, ...clean].sort((a, b) => a.rowNum - b.rowNum)
+            ? [...flaggedShown, ...clean].sort((a, b) => a.rowNum - b.rowNum)
             : clean;
         preview.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '6px' } },
-            flagged.length
+            flagged.length > FLAGGED_CAP
+                ? trf('Предпросмотр: первые {shown} из {flagged} строк с замечаниями и ошибками и первые {n} без замечаний — всего строк {total}',
+                    { shown: flaggedShown.length, flagged: flagged.length, n: clean.length, total: parsedRows.length })
+                : flagged.length
                 ? trf('Предпросмотр: все строки с замечаниями и ошибками ({flagged}) и первые {n} без замечаний — всего строк {total}',
                     { flagged: flagged.length, n: clean.length, total: parsedRows.length })
                 : trf('Предпросмотр — первые {n} из {total}', { n: showRows.length, total: parsedRows.length })));
@@ -1530,6 +1538,10 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 h('td', { style: { fontSize: '12.5px' } }, r.notes.length ? r.notes.join('; ') : ''),
             ))),
         ));
+        if (flagged.length > FLAGGED_CAP) {
+            preview.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
+                trf('ещё {n} строк с замечаниями', { n: flagged.length - FLAGGED_CAP })));
+        }
     }
 
     async function runImport() {

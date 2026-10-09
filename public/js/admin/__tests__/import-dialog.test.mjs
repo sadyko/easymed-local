@@ -246,3 +246,28 @@ test('CSV в cp1251: окно показывает русские названи
     const tbody = all(overlay).find((n) => n.tagName === 'TBODY');
     assert.ok(tbody && /Приём невролога/.test(tbody.textContent), 'в предпросмотре нет «Приём невролога»: ' + (tbody ? tbody.textContent.slice(0, 200) : '—'));
 });
+
+// CLINIC_API_FIX_V1 (ревью 3) — ПРЕДПРОСМОТР С ПОТОЛКОМ. Строки с замечаниями
+// рисовались все: 5 000 таких строк — около 90 тысяч узлов, и всё заново на
+// каждое переключение галочки. Теперь — не больше 200 строк с замечаниями и
+// ошибками, под таблицей — «ещё N строк с замечаниями».
+test('предпросмотр: не больше 200 строк с замечаниями, остальные названы числом', async () => {
+    Object.assign(W, { writes: [], failExisting: false, failStored: false });
+    const rows = [['name', 'group', 'price']];
+    for (let i = 1; i <= 300; i++) rows.push(['Новая ' + i, 'Консультация', 'abc']);   // ошибка: не число в цене новой услуги
+    for (let i = 1; i <= 60; i++) rows.push(['Чистая ' + i, 'Консультация', 1000 + i]);
+    const { overlay } = await openWith(sheetFile(rows));
+    const trs = previewRows(overlay);
+    const flaggedShown = trs.filter((tr) => /ошибка|внимание/.test(tr.children[1].textContent)).length;
+    assert.equal(flaggedShown, 200, 'строк с замечаниями в предпросмотре: ' + flaggedShown);
+    assert.equal(trs.length, 250, 'всего строк в предпросмотре: ' + trs.length);
+    assert.match(overlay.textContent, /ещё 100 строк с замечаниями/);
+});
+
+test('подписи потолка предпросмотра — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const k of ['ещё {n} строк с замечаниями', 'Предпросмотр: первые {shown} из {flagged} строк с замечаниями и ошибками и первые {n} без замечаний — всего строк {total}']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+    }
+});

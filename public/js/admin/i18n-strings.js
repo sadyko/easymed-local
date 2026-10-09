@@ -3,6 +3,9 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (ревью 3) — окно импорта: потолок предпросмотра (views/section-import-export.js)
+  "ещё {n} строк с замечаниями": {"en":"{n} more rows with notes","ru":"ещё {n} строк с замечаниями","uz":"yana {n} ta izohli qator"},   // CLINIC_API_FIX_V1
+  "Предпросмотр: первые {shown} из {flagged} строк с замечаниями и ошибками и первые {n} без замечаний — всего строк {total}": {"en":"Preview: the first {shown} of {flagged} rows with notes or errors and the first {n} without notes — {total} rows in total","ru":"Предпросмотр: первые {shown} из {flagged} строк с замечаниями и ошибками и первые {n} без замечаний — всего строк {total}","uz":"Oldindan ko'rish: izoh yoki xatoli {flagged} ta qatordan birinchi {shown} tasi va izohsiz birinchi {n} tasi — jami {total} qator"},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью 3, решение) — импорт Excel: пустая денежная ячейка не пишет 0 (views/section-import-export.js)
   "Строка {n}: {col} пусто — оставлено как было.": {"en":"Row {n}: {col} is empty — left as it was.","ru":"Строка {n}: {col} пусто — оставлено как было.","uz":"{n}-qator: {col} bo'sh — avvalgidek qoldirildi."},   // CLINIC_API_FIX_V1
   "Строка {n}: {col} пусто — не записано.": {"en":"Row {n}: {col} is empty — not saved.","ru":"Строка {n}: {col} пусто — не записано.","uz":"{n}-qator: {col} bo'sh — yozilmadi."},   // CLINIC_API_FIX_V1
