@@ -2061,7 +2061,11 @@ export function readSheetRows(XLSX, buf, section, fileName) {
 // русский Excel. Метка порядка байтов снимается.
 function csvFileText(buf, fileName) {
     const bytes = new Uint8Array(buf);
-    const zipOrOle = (bytes[0] === 0x50 && bytes[1] === 0x4B) || (bytes[0] === 0xD0 && bytes[1] === 0xCF);
+    // CLINIC_API_FIX_V1 (ревью 4, M3) — подпись целиком: ZIP — 50 4B 03 04, OLE —
+    // D0 CF 11 E0 A1 B1 1A E1. По двум байтам CSV, начинающийся с «PK», или CSV
+    // в cp1251, начинающийся с «РП» (D0 CF), принимался за книгу.
+    const starts = (sig) => sig.every((x, k) => bytes[k] === x);
+    const zipOrOle = starts([0x50, 0x4B, 0x03, 0x04]) || starts([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
     if (zipOrOle) return null;
     const isCsv = fileName ? /\.csv$/i.test(String(fileName)) : true;
     if (!isCsv) return null;

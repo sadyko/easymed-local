@@ -304,3 +304,13 @@ test('дата в числовой колонке (цена) — отказ, в 
     const note = row.notes.map(String).find((n) => n.includes('price'));
     assert.ok(note && note.includes('«12.05.2026»') && !/GMT/.test(note), JSON.stringify(row.notes));
 });
+
+// CLINIC_API_FIX_V1 (ревью 4, M3) — подпись книги — целиком: ZIP — 50 4B 03 04,
+// OLE — D0 CF 11 E0 A1 B1 1A E1. По двум байтам CSV, начинающийся с «PK», или
+// CSV в cp1251, начинающийся с «РП» (D0 CF), принимался за книгу и не открывался.
+test('CSV, начинающийся с «PK» или (в cp1251) с «РП», — читается как CSV, а не как книга', () => {
+    const pk = readSheetRows(XLSX, utf8('PK;name;group;price\n1;Приём кардиолога;Консультация;1000\n'), 'services', 'uslugi.csv');
+    assert.deepEqual(pk.map((r) => r.name), ['Приём кардиолога']);
+    const rp = readSheetRows(XLSX, cp1251('РП;name;group;price\n1;Приём кардиолога;Консультация;1000\n'), 'services', 'uslugi.csv');
+    assert.deepEqual(rp.map((r) => r.name), ['Приём кардиолога']);
+});
