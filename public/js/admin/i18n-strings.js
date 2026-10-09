@@ -3,6 +3,9 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // LIS_PROXY_V1 (2026-10-09, доработка) — экран «Анализаторы»: окно «Выключить LIS Proxy?» (views/lab-proxy-card.js)
+  "Выключить LIS Proxy?": {"en":"Turn LIS Proxy off?","ru":"Выключить LIS Proxy?","uz":"LIS Proxy o‘chirilsinmi?"},   // LIS_PROXY_V1
+  "Пока LIS Proxy выключен, результаты анализаторов, отправленные через него, теряются — лаборатории придётся повторить пробы.": {"en":"While LIS Proxy is off, analyzer results sent through it are lost — the lab will have to run those samples again.","ru":"Пока LIS Proxy выключен, результаты анализаторов, отправленные через него, теряются — лаборатории придётся повторить пробы.","uz":"LIS Proxy o‘chiq turganda u orqali yuborilgan analizator natijalari yo‘qoladi — laboratoriya namunalarni qayta o‘tkazishi kerak bo‘ladi."},   // LIS_PROXY_V1
   // LIS_PROXY_V1 (2026-10-09) — экран «Анализаторы»: группы лотка и инструкция «Через LIS Proxy» (views/lab-devices.js)
   "значений: {n}": {"en":"values: {n}","ru":"значений: {n}","uz":"qiymatlar: {n}"},   // LIS_PROXY_V1
   "ещё причин: {n}": {"en":"more reasons: {n}","ru":"ещё причин: {n}","uz":"yana sabablar: {n}"},   // LIS_PROXY_V1

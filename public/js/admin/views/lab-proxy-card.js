@@ -19,6 +19,8 @@ const ROTATE_Q = 'Сменить ключ? Старый адрес перест�
 const ROTATED = 'Ключ сменён — обновите адрес на лабораторных ПК';
 const NO_ADDR = 'Адрес этого компьютера в сети не определился. Откройте Easy-Med с другого компьютера по адресу в сети — здесь появится готовый адрес для LIS Proxy.';
 const ROLE_NOTE = 'Адрес для LIS Proxy видят и меняют администратор и лаборант.';
+const OFF_TITLE = 'Выключить LIS Proxy?';
+const OFF_Q = 'Пока LIS Proxy выключен, результаты анализаторов, отправленные через него, теряются — лаборатории придётся повторить пробы.';
 
 /**
  * Адреса для показа. Сервер даёт по адресу на каждую сетевую карту ПК;
@@ -52,9 +54,46 @@ function selectContents(el) {
     } catch { /* выделение — удобство, не обязанность */ }
 }
 
+/**
+ * «Выключить LIS Proxy?» — окно с «Отмена» и красной «Выключить», как у
+ * «Только со своих полок» (inventory-own-shelf.js confirmToggle). Прокси шлёт
+ * каждое значение один раз и не повторяет: пока приём выключен, результаты
+ * теряются. Включение не спрашивает.
+ * @returns {Promise<boolean>} true — выключить
+ */
+function askTurnOff() {
+    return new Promise((resolve) => {
+        const overlay = h('div', { class: 'modal', style: { zIndex: '140' }, 'data-lisproxy-confirm': 'off' });
+        const done = (v) => { overlay.remove(); resolve(v); };
+        const cancel = h('button', { class: 'btn', type: 'button', onclick: () => done(false) }, tr('Отмена'));
+        overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => done(false) }));
+        overlay.appendChild(h('div', { class: 'modal-card modal-compact', role: 'alertdialog', style: { width: '480px', maxWidth: 'calc(100vw - 32px)' } },
+            h('header', { class: 'modal-head' },
+                h('h2', null, Icon('Warning', { size: 16 }), ' ', tr(OFF_TITLE)),
+                h('button', { class: 'modal-close', type: 'button', onclick: () => done(false) }, '×')),
+            h('div', { class: 'modal-body' }, h('p', { style: { margin: 0 } }, tr(OFF_Q))),
+            h('footer', { class: 'modal-foot' },
+                cancel,
+                h('span', { class: 'grow' }),
+                h('button', { class: 'btn btn-danger', type: 'button', onclick: () => done(true) }, tr('Выключить')))));
+        document.body.appendChild(overlay);
+        cancel.focus();   // безопасный ответ — под рукой: Enter не выключает приём
+    });
+}
+
 /** Нарисовать карточку в card и прочитать настройку. */
 export async function mountProxyCard(card) {
-    const state = { st: null, error: null, busy: false };
+    const state = { st: null, error: null, busy: false, asking: false };
+
+    // «Выключить» — только после «Выключить» в окне (LIS_PROXY_V1, доработка);
+    // второе нажатие, пока окно открыто, второго окна не открывает.
+    async function turnOff() {
+        if (state.asking) return;
+        state.asking = true;
+        let ok = false;
+        try { ok = await askTurnOff(); } finally { state.asking = false; }
+        if (ok) await change({ enabled: false });
+    }
 
     async function load() {
         const { data, error } = await supabase.rpc('lis_proxy_get', {});
@@ -104,7 +143,7 @@ export async function mountProxyCard(card) {
             st ? Tag(st.enabled ? tr('включён') : tr('выключен'), { kind: st.enabled ? 'success' : '' }) : null,
             st && st.can_manage
                 ? h('button', { class: 'btn btn-sm ' + (st.enabled ? 'btn-outline' : 'btn-primary'), type: 'button', style: { marginLeft: '8px' },
-                    onclick: () => change({ enabled: !st.enabled }) }, st.enabled ? tr('Выключить') : tr('Включить'))
+                    onclick: () => (st.enabled ? turnOff() : change({ enabled: true })) }, st.enabled ? tr('Выключить') : tr('Включить'))
                 : null));
         const body = h('div', { style: { padding: '0 16px 16px' } });   // поля — как у формы прибора рядом (.ld-form)
         card.appendChild(body);

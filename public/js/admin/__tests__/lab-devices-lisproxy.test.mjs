@@ -260,3 +260,41 @@ test('лоток: строки одного прибора LIS Proxy с тем �
   await tick(60);
   assert.deepStrictEqual(rpcCalls.filter((c) => c.name === 'lis_message_dismiss').map((c) => c.args.id), [13, 12, 11]);
 });
+
+// LIS_PROXY_V1 (доработка) — «Выключить» спрашивает окном: пока LIS Proxy выключен,
+// значения, отправленные через него, теряются (прокси не повторяет). Включение — без вопроса.
+const offDialogs = () => walk(document.body).filter((n) => n.attrs && n.attrs['data-lisproxy-confirm'] === 'off');
+const setCalls = () => rpcCalls.filter((c) => c.name === 'lis_proxy_set').map((c) => c.args);
+
+test('«Выключить» — окно «Выключить / Отмена» с предупреждением о потере результатов; «Включить» — без вопроса', async () => {
+  reset();
+  CONFIRM = true;   // браузерное «ОК» не выключает: спрашивает окно экрана
+  const root = await mount();
+  const before = offDialogs().length;
+  findButtonByText(root, /^\s*Выключить\s*$/).click();
+  await tick();
+  assert.equal(offDialogs().length, before + 1, 'окно подтверждения открыто');
+  let box = offDialogs().at(-1);
+  assert.equal(box.children.find((n) => n.attrs && n.attrs.role === 'alertdialog') ? 'ok' : 'no', 'ok', 'окно — alertdialog');
+  assert.ok(textOf(box).includes('Выключить LIS Proxy?'), textOf(box));
+  assert.ok(textOf(box).includes('Пока LIS Proxy выключен, результаты анализаторов, отправленные через него, теряются — лаборатории придётся повторить пробы.'), textOf(box));
+  assert.deepStrictEqual(setCalls(), [], 'до ответа ничего не меняется');
+  findButtonByText(box, /^\s*Отмена\s*$/).click();
+  await tick();
+  assert.deepStrictEqual(setCalls(), [], '«Отмена» — ничего');
+  assert.ok(textOf(root).includes('/api/lisproxy?key=K1'), 'адрес на месте');
+
+  findButtonByText(root, /^\s*Выключить\s*$/).click();
+  await tick();
+  box = offDialogs().at(-1);
+  findButtonByText(box, /^\s*Выключить\s*$/).click();
+  await tick();
+  assert.deepStrictEqual(setCalls(), [{ enabled: false }]);
+  assert.ok(textOf(root).includes('Выключен — LIS Proxy получает ответ «адрес не найден», и его результаты теряются.'));
+
+  const opened = offDialogs().length;
+  findButtonByText(root, /^\s*Включить\s*$/).click();
+  await tick();
+  assert.equal(offDialogs().length, opened, 'включение — без вопроса');
+  assert.deepStrictEqual(setCalls(), [{ enabled: false }, { enabled: true }]);
+});
