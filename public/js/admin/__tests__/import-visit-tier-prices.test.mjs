@@ -284,3 +284,31 @@ test('сообщения правила цен визитов — на трёх 
         assert.ok(e && e.uz && e.en, 'нет перевода: ' + k);
     }
 });
+
+// CLINIC_API_FIX_V1 (ревью 7) — как у окна услуги: состояние цен визитов
+// проверяется, только когда СТРОКА меняет хоть одно их поле. Услуга, уже
+// сохранённая в состоянии «без срока», и файл «название + цена» (без колонок
+// цен визитов) — строка обычная, без предупреждения «цены визитов из этой строки
+// не сохранены»: строка их и не трогает.
+const STORED_BAD = () => ({ __wantUpdate: true, __stored: new Map([['только повтор', {
+    name: 'Только повтор', type: 'consultation', price: 150000, tax_rate: 12, default_doctor_percent: 0,
+    price_secondary: null, secondary_days_from: null, secondary_days_to: null, price_repeat: 0, repeat_days_from: 1, repeat_days_to: 14 }]]) });
+test('сохранённое «без срока» + файл без колонок цен визитов — строка без предупреждения', () => {
+    for (const raw of [{ name: 'Только повтор', group: 'Консультация', price: 160000 }, { name: 'Только повтор', group: 'Консультация', code: 'X-1' }]) {
+        const row = buildImportRow('services', raw, { rowNum: 2, lookups: STORED_BAD() });
+        assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+        assert.ok(TIER_KEYS.every((k) => !(k in row.payload)));
+    }
+});
+
+test('сохранённое «без срока» + те же значения цен визитов (свой экспорт) — без изменений и без предупреждения', () => {
+    const row = buildImportRow('services', { name: 'Только повтор', group: 'Консультация', price: 150000,
+        price_secondary: '', secondary_days_from: '', secondary_days_to: '', price_repeat: 0, repeat_days_from: 1, repeat_days_to: 14 }, { rowNum: 2, lookups: STORED_BAD() });
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+});
+
+test('сохранённое «без срока» + правка цены повторного визита (всё ещё «без срока») — не пишется, предупреждение', () => {
+    const row = buildImportRow('services', { name: 'Только повтор', group: 'Консультация', price: 150000, price_repeat: 10000 }, { rowNum: 2, lookups: STORED_BAD() });
+    assert.ok(TIER_KEYS.every((k) => !(k in row.payload)), JSON.stringify(row.payload));
+    assert.strictEqual(row.status, 'warn');
+});

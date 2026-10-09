@@ -118,7 +118,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { TIER_STEP_COLUMNS, tierStepsProblem, tierStepRangeProblem } from '../service-editor-logic.js';   // DOCTOR_TIER_V2
 import { SECTIONS, FK_LABEL_COLUMN } from '../sections.js?v=noikpu1';
 import { mrnSeriesRefusal } from '../patient-duplicates.js';
-import { visitTierStateProblem } from '../../shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5) — одно правило с окном услуги   // MRN_BEYOND_99999_V1 — номер, исчерпавший бы серию года
+import { visitTierStateProblem, visitTierValue } from '../../shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5) — одно правило с окном услуги   // MRN_BEYOND_99999_V1 — номер, исчерпавший бы серию года
 
 // CLINIC_API_FIX_V1 — колонки цен второго/повторного визита и их окон: пусто
 // значит «не задано» (null), а не 0 (см. transform услуг).
@@ -624,7 +624,15 @@ const IMPORT_CONFIGS = {
                 var v = (c.key in payload) ? payload[c.key] : tierStored[c.key];
                 tierEff[c.key] = v === undefined || v === null || v === '' ? null : Number(v);
             });
-            var tierProblem = visitTierProblem(tierEff);
+            // CLINIC_API_FIX_V1 (ревью 7) — как у окна услуги (service_save):
+            // состояние проверяется, только когда строка МЕНЯЕТ хоть одно поле цен
+            // визитов. Услуга, уже сохранённая в состоянии «без срока», и файл без
+            // колонок цен визитов (или с теми же значениями — свой экспорт) — строка
+            // обычная: она цены визитов не трогает.
+            var tierChanged = VISIT_TIER_COLUMNS.some(function (c) {
+                return (c.key in payload) && visitTierValue(payload[c.key]) !== visitTierValue(tierStored[c.key]);
+            });
+            var tierProblem = tierChanged ? visitTierProblem(tierEff) : null;
             if (tierProblem) {
                 VISIT_TIER_COLUMNS.forEach(function (c) { delete payload[c.key]; });
                 if (ctx) ctx.warn(trf('Строка {n}, «{service}»: {problem} Цены второго и повторного визита из этой строки не сохранены.',
