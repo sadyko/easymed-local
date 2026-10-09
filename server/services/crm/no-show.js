@@ -26,8 +26,9 @@
 //     пациента нет визита с доказательством прихода.
 //   • CRM_UNIFY_V1 (ревью задач 5–6, I-2) — «В ЭТОТ ДЕНЬ НЕ ПРИХОДИЛ» — ТОЛЬКО
 //     ЯСНО (clearlyAbsent): в день записи (каждый, у карточки «на дату» — её
-//     дата) ни у пациента, ни у карт с тем же ОСНОВНЫМ номером (phoneMatchKey,
-//     последние 9 цифр: дубль карты, ребёнок на номере мамы) нет живого визита
+//     дата) ни у пациента, ни у карт с тем же номером (CRM_UNIFY_V1, итоговая
+//     проверка N1: мягкий ключ lenientPhoneKey любого из номеров карты —
+//     дубль карты, ребёнок на номере мамы, номер +7 или с пометкой) нет живого визита
 //     с доказательством прихода (cameBy) или с ЛЮБЫМ счётом (и нулевым:
 //     бесплатный повторный приём), и нет госпитализации, поступившей в этот
 //     день. Ошибиться в сторону «не ставить» безопасно: карточка остаётся
@@ -64,7 +65,7 @@ import { openStageKeys, noShowStageKey, scheduledStageKey, SEED_NO_SHOW_STAGE } 
 import { arrivedByEvidence } from './booking-mirror.js';
 import { EVIDENCE_SERVICE_STATUSES } from './visit-status.js';   // CRM_UNIFY_V1 (задача 14) — cameSurely
 import { localDate, today } from '../domain/day.js';
-import { phoneMatchKey } from './visit-link.js';   // CRM_UNIFY_V1 (ревью, I-2) — одно правило номера
+import { digitsOf } from '../../../public/js/admin/views/crm-phone-match.js';   // CRM_UNIFY_V1 — мягкий ключ прохода
 
 const holes = (a) => a.map(() => '?').join(',');
 // Мёртвый визит доказательством не бывает (visit-status.js DEAD_VISIT_STATUSES).
@@ -118,11 +119,27 @@ export function cameSurely(db, v) {
 }
 
 /**
+ * CRM_UNIFY_V1 (итоговая проверка, N1) — МЯГКИЙ КЛЮЧ НОМЕРА ДЛЯ ПРОХОДА «НЕ
+ * ПРИШЁЛ». Строгий ключ связи (visit-link.js phoneMatchKey) нарочно не даёт
+ * ключа номерам +7, номерам с пометкой буквами и прочим «не по образцу»: связь
+ * заявки с картой по такому номеру опасна для денег. Здесь наоборот: совпадение
+ * значит только «не ставить "Не пришёл"», и лишнее совпадение безопасно, а
+ * пропущенное объявляет пришедшую семью неявкой. Поэтому: только цифры (буквы
+ * и знаки не мешают), от 7 до 12 цифр, последние 9. Для связи — не использовать.
+ */
+export function lenientPhoneKey(raw) {
+  const d = digitsOf(raw);
+  return d.length >= 7 && d.length <= 12 ? d.slice(-9) : '';
+}
+
+/**
  * CRM_UNIFY_V1 (ревью задач 5–6, I-2) — «был ли пациент в клинике в этот день»
  * в ШИРОКОМ смысле: если да — «Не пришёл» неясен и не ставится. Возвращает
- * (pid, day) → boolean с кэшем на один проход. Карты с тем же основным номером
+ * (pid, day) → boolean с кэшем на один проход. Карты с тем же номером
  * собираются один раз за проход (все номера карт — одним чтением), и только
- * если до них дошло.
+ * если до них дошло. CRM_UNIFY_V1 (итоговая проверка, N1) — «тот же номер» —
+ * мягкий ключ (lenientPhoneKey) ЛЮБОГО из номеров карты (основной, второй,
+ * экстренный контакт) у обеих карт.
  */
 function presentOn(db) {
   const visitsOn = db.prepare(`SELECT id, status FROM visits
@@ -139,22 +156,26 @@ function presentOn(db) {
                            LIMIT 1`);
     admitted = { get: (id, d) => q.get({ id, d }) };
   } catch { admitted = null; }   // сборка без стационара
-  const phoneOf = db.prepare('SELECT phone FROM patients WHERE id = ?');
+  const PHONES = 'phone, phone_secondary, emergency_contact_phone';
+  const keysOf = (r) => [...new Set([r.phone, r.phone_secondary, r.emergency_contact_phone].map(lenientPhoneKey).filter(Boolean))];
+  const phonesOf = db.prepare(`SELECT ${PHONES} FROM patients WHERE id = ?`);
   let byKey = null;
   const mates = (pid) => {
-    const p = phoneOf.get(pid);
-    const key = phoneMatchKey(p && p.phone);
-    if (!key) return [pid];
+    const p = phonesOf.get(pid);
+    const keys = p ? keysOf(p) : [];
+    if (!keys.length) return [Number(pid)];
     if (!byKey) {
       byKey = new Map();
-      for (const r of db.prepare("SELECT id, phone FROM patients WHERE phone IS NOT NULL AND phone <> ''").all()) {
-        const k = phoneMatchKey(r.phone);
-        if (!k) continue;
-        if (!byKey.has(k)) byKey.set(k, []);
-        byKey.get(k).push(Number(r.id));
+      for (const r of db.prepare(`SELECT id, ${PHONES} FROM patients
+                                   WHERE COALESCE(phone, '') <> '' OR COALESCE(phone_secondary, '') <> ''
+                                      OR COALESCE(emergency_contact_phone, '') <> ''`).all()) {
+        for (const k of keysOf(r)) {
+          if (!byKey.has(k)) byKey.set(k, []);
+          byKey.get(k).push(Number(r.id));
+        }
       }
     }
-    return [...new Set([Number(pid), ...(byKey.get(key) || [])])];
+    return [...new Set([Number(pid), ...keys.flatMap((k) => byKey.get(k) || [])])];
   };
   const here = (id, d) => (admitted && !!admitted.get(id, d))
     || visitsOn.all(id, d).some((v) => cameBy(db, v) || !!invoiced.get(v.id));

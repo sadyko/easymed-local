@@ -241,3 +241,48 @@ test('A-C2: строка, добавленная кассой сразу в сч
     assert.deepEqual([rows[0].visit_id, rows[0].visit_service_id], [vid, x]);
   } finally { t.close(); }
 });
+
+// ── «Не пришёл»: родственник на том же номере (итоговая проверка, N1) ───────
+// CRM_UNIFY_V1 — строгий ключ связи (phoneMatchKey) не даёт ключа номерам +7 и
+// номерам с пометкой буквами, и проверка «в тот день пришёл кто-то с этого
+// номера» пропускалась — карточку метили «Не пришёл». У прохода свой МЯГКИЙ
+// ключ (цифры, буквы не мешают, 7–12 цифр, последние 9) по всем номерам карты:
+// лишнее совпадение значит только «не ставить», а это безопасно.
+for (const [label, phone] of [['+7 family number', '+7 916 123 45 67'], ['number with a note', '+998 90 909 26 38 (мама)'], ['uz number (control)', '+998 90 909 26 38']]) {
+  test(`N1 no-show: relative on the same number (${label}) came on the booked day — card is not «Не пришёл»`, async () => {
+    const t = await startCrmApp((db) => {
+      db.prepare('UPDATE patients SET phone = ? WHERE id = 77').run(phone);
+      db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78, 'Сын', ?)").run(phone);
+    });
+    try {
+      const y = localDay(-1);
+      const rid = addLead(t.db, { status: 'scheduled', patient: 77, date: y, updated: agoIso(5) });
+      const v = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (78, 10, ?, 'arrived', 2)").run(at(y, 10)).lastInsertRowid);
+      t.db.prepare("INSERT INTO invoices (visit_id, patient_id, total_amount, paid_amount, status) VALUES (?, 78, 100000, 100000, 'paid')").run(v);
+      assert.deepEqual(crmNoShowSweep(t.db), [], 'family member came that day, card marked «Не пришёл»');
+      assert.equal(t.lead(rid).status, 'scheduled');
+    } finally { t.close(); }
+  });
+}
+
+test('N1: номер семьи — во втором номере или в экстренном контакте любой из карт; посторонний номер — «Не пришёл»', async () => {
+  for (const [p77, p78, want] of [
+    [{ phone: '+998 90 909 26 38' }, { phone: '+998 91 000 00 01', phone_secondary: '909092638' }, 'scheduled'],
+    [{ phone: '+998 91 000 00 02', emergency_contact_phone: '8 (90) 909-26-38' }, { phone: '90 909 26 38 мама' }, 'scheduled'],
+    [{ phone: '+998 90 909 26 38' }, { phone: '+998 93 333 33 33' }, 'no_show'],
+  ]) {
+    const t = await startCrmApp((db) => {
+      db.prepare('UPDATE patients SET phone = ?, phone_secondary = ?, emergency_contact_phone = ? WHERE id = 77')
+        .run(p77.phone, p77.phone_secondary ?? '', p77.emergency_contact_phone ?? '');
+      db.prepare("INSERT INTO patients (id, full_name, phone, phone_secondary) VALUES (78, 'Сын', ?, ?)").run(p78.phone, p78.phone_secondary ?? '');
+    });
+    try {
+      const y = localDay(-1);
+      const rid = addLead(t.db, { status: 'scheduled', patient: 77, date: y, updated: agoIso(5) });
+      const v = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (78, 10, ?, 'arrived', 2)").run(at(y, 10)).lastInsertRowid);
+      t.db.prepare("INSERT INTO invoices (visit_id, patient_id, total_amount, paid_amount, status) VALUES (?, 78, 100000, 100000, 'paid')").run(v);
+      crmNoShowSweep(t.db);
+      assert.equal(t.lead(rid).status, want, JSON.stringify([p77, p78]));
+    } finally { t.close(); }
+  }
+});
