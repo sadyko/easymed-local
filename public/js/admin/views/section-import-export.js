@@ -379,9 +379,13 @@ const IMPORT_CONFIGS = {
                 if (created) m += ', ' + trf('создано новых: {n}', { n: created });
                 return m;
             }
+            // CLINIC_API_FIX_V1 (ревью итога) — создавать поставщиков и их связки из файла — РЕШЕНИЕ ВЛАДЕЛЬЦА; выключено, как и было на деле (колонка «поставщик» читалась как null).
+            const SUPPLIER_LINK_ON = false;
             let supMsg = null;
-            try { supMsg = await linkSuppliers(); }
-            catch (e) { supMsg = trf('Поставщики: ошибка — {msg}', { msg: (e && e.message) || e }); }
+            if (SUPPLIER_LINK_ON) {
+                try { supMsg = await linkSuppliers(); }
+                catch (e) { supMsg = trf('Поставщики: ошибка — {msg}', { msg: (e && e.message) || e }); }
+            }
 
             const rows = validRows.filter(r => Number(r.captures?.qty || 0) > 0 && r.payload.name);
             if (!rows.length) return supMsg;
@@ -1477,7 +1481,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 h('td', { class: 'num muted' }, String(r.rowNum)),
                 h('td', null, statusPill(r.status)),
                 ...previewCols.map(c =>
-                    h('td', null, (r.raw[c.key] != null && r.raw[c.key] !== '') ? String(r.raw[c.key]) : h('span', { class: 'muted' }, '—'))),
+                    h('td', null, (r.raw[normHeader(c.key)] != null && r.raw[normHeader(c.key)] !== '') ? String(r.raw[normHeader(c.key)]) : h('span', { class: 'muted' }, '—'))),
                 h('td', { style: { fontSize: '12.5px' } }, r.notes.length ? r.notes.join('; ') : ''),
             ))),
         ));
@@ -1893,13 +1897,16 @@ function _rowsWithDetectedHeader(ws, XLSX, cfg) {
         });
 }
 
+// Заголовок листа и ключ колонки — в одном виде: без краёв, нижний регистр,
+// пробелы → _ («Цена закупки» → «цена_закупки»).
+function normHeader(k) {
+    return String(k).trim().toLowerCase().replace(/\s+/g, '_');
+}
+
 function buildRow(raw, rowNum, lookups, cfg) {
     // Normalise headers — case-insensitive, trim, snake_case-friendly.
     const r = {};
-    for (const [k, v] of Object.entries(raw)) {
-        const key = String(k).trim().toLowerCase().replace(/\s+/g, '_');
-        r[key] = v;
-    }
+    for (const [k, v] of Object.entries(raw)) r[normHeader(k)] = v;
 
     const notes = [];
     let status  = 'ok';
@@ -1912,10 +1919,15 @@ function buildRow(raw, rowNum, lookups, cfg) {
     for (const col of cfg.columns) {
         // PROCUREMENT_IMPORT_V1 — a column may match by its key or any alias
         // (headers arrive normalised: lowercase, spaces -> _).
-        let cellRaw = r[col.key];
+        // CLINIC_API_FIX_V1 (ревью итога) — ключ колонки приводится к виду
+        // заголовков (normHeader), как синонимы ниже: «цена закупки» искалась
+        // как есть, а заголовок листа — «цена_закупки», и шесть колонок шаблона
+        // «Товары» с пробелом в названии не находились никогда (99cea7b).
+        const colKey = normHeader(col.key);
+        let cellRaw = r[colKey];
         if (cellRaw == null && col.aliases) {
             for (const a of col.aliases) {
-                const ak = String(a).trim().toLowerCase().replace(/\s+/g, '_');
+                const ak = normHeader(a);
                 if (r[ak] != null) { cellRaw = r[ak]; break; }
             }
         }
@@ -1923,8 +1935,8 @@ function buildRow(raw, rowNum, lookups, cfg) {
         // записи, которую строка обновляет: ни значения по умолчанию, ни
         // предупреждения о нём. Пустая ячейка под своим заголовком — как раньше;
         // новая запись — как раньше.
-        if (col.keepIfAbsent && updating && !(col.key in r)
-            && !(col.aliases || []).some((a) => String(a).trim().toLowerCase().replace(/\s+/g, '_') in r)) continue;
+        if (col.keepIfAbsent && updating && !(colKey in r)
+            && !(col.aliases || []).some((a) => normHeader(a) in r)) continue;
 
         // Required check.
         if (col.required) {
@@ -1955,8 +1967,10 @@ function buildRow(raw, rowNum, lookups, cfg) {
                 }
                 continue;
             }
+            // Текстовая колонка-захват (поставщик, единица закупки) — текст без
+            // краёв. Раньше она шла через разбор числа и становилась null.
             const v = String(cellRaw ?? '').trim();
-            if (v !== '') captures[col.capture] = num(cellRaw, null);
+            if (v !== '') captures[col.capture] = v;
             continue;
         }
 
@@ -2181,14 +2195,6 @@ export function readImportNumber(v, percent) {
     return Number.isFinite(n) ? { n } : { bad: text };
 }
 
-// Прежний разбор — остался только у текстовых колонок-захватов (поставщик,
-// единица закупки), которые числом не являются.
-function num(v, fallback, asInt) {
-    if (v === '' || v == null) return fallback;
-    const n = Number(String(v).replace(/[\s,]/g, ''));
-    if (!Number.isFinite(n)) return fallback;
-    return asInt ? Math.round(n) : n;
-}
 function bool(v, fallback) {
     if (v === '' || v == null) return fallback;
     if (typeof v === 'boolean') return v;
