@@ -217,8 +217,14 @@ function ymdLocal(d) {
 // CRM_UNIFY_V1 (итоговое ревью, решение контролёра) — ключи закрытых колонок:
 // конверсия и проигрышные. Их и только их сужает «Период»; открытые карточки
 // видны всегда (владелец: «карточки пропадают»).
+// Сидовая «Не пришёл» — ЖИВАЯ работа, а не закрытая: операторы перезванивают
+// этим пациентам, и звонок или запись её открывает (сервер: I-3,
+// services/crm/contact-window.js liveKeys = открытые + 'no_show'). На доске
+// она как открытая: видна всегда, без периода и без 300 на колонку, число
+// полное — и в «Списке», и в Excel (всё это идёт отсюда).
+const SEED_NO_SHOW_STAGE = 'no_show';   // тот же ключ, что SEED_NO_SHOW_STAGE сервера
 function closedKeys() {
-    return [STAGE_KEYS.won, ...STAGE_KEYS.lost].filter(Boolean);
+    return [STAGE_KEYS.won, ...STAGE_KEYS.lost].filter((k) => k && k !== SEED_NO_SHOW_STAGE);
 }
 function inPeriod(r) {
     // CRM_UNIFY_V1 (итоговое ревью) — «Период» НИКОГДА не прячет открытые

@@ -253,3 +253,44 @@ test('высота колонки: ноутбук 1366×768 — низ коло�
   assert.equal(columnHeightFor({ viewportH: 300, listTop: 1010, windowTop: 950, chromeBelow: 45 }), 240);
 });
 
+
+// CRM_UNIFY_V1 (итоговое ревью, решение контролёра) — сидовая «Не пришёл» — ЖИВАЯ
+// работа (операторы перезванивают; с I-3 звонок или запись её открывают, сервер:
+// contact-window.js liveKeys). На доске — как открытая: видна всегда, «Период» её
+// не сужает, 300 на колонку нет, число полное; «Список» и Excel — так же.
+test('«Не пришёл» — живая колонка: видна при любом периоде, без 300, число полное; «Список» и Excel согласны', async () => {
+  const { crmExportRows } = await import('../views/crm.js');
+  const leads = [
+    lead(1, 'no_show', { full_name: 'Давний Не пришёл', created_at: isoAgo(40) }),
+    ...Array.from({ length: 349 }, (_, i) => lead(i + 2, 'no_show', { created_at: isoAgo(1) })),
+    lead(900, 'stopped', { full_name: 'Давний Остановлен', created_at: isoAgo(40) }),
+  ];
+  S.countFor = { no_show: 350 };
+  try {
+    const root = await board(leads);
+    // «Всё время»: не обрезана — все 350 карточек, без подсказки «последние 300»
+    assert.equal(byClass(colOf(root, 'no_show'), 'crm-card').length, 350, '«Не пришёл» обрезана, как закрытая');
+    assert.equal(countOf(root, 'no_show'), '350');
+    assert.ok(!byAttr(root, 'data-col-capped').some((n) => n.getAttribute('data-col-capped') === 'no_show'));
+    // в загрузке «Не пришёл» — среди открытых (not in), отдельного запроса по колонке нет
+    const reads = CALLS.filter((c) => c.table === 'crm_requests' && c.op === 'select');
+    const open = reads.find((c) => (c.filters || []).some((f) => f.op === 'not.in'));
+    assert.ok(open && !open.filters.find((f) => f.op === 'not.in').val.includes('no_show'), '«Не пришёл» исключена из открытых');
+    assert.ok(!reads.some((c) => (c.filters || []).some((f) => f.op === 'eq' && f.col === 'status' && f.val === 'no_show')), '«Не пришёл» грузится как закрытая');
+    // «Сегодня»: давняя «Не пришёл» видна, число полное; давняя «Остановлена» (закрытая) — нет
+    chipText(root, /^Сегодня$/).click(); await tick(80);
+    assert.ok(textOf(colOf(root, 'no_show')).includes('Давний Не пришёл'), '«Период» спрятал «Не пришёл»');
+    assert.equal(countOf(root, 'no_show'), '350');
+    assert.ok(!textOf(colOf(root, 'stopped')).includes('Давний Остановлен'), 'закрытая карточка вне периода видна');
+    // «Список» — те же карточки
+    walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'list').click(); await tick(80);
+    assert.ok(textOf(root).includes('Давний Не пришёл'), '«Список» спрятал «Не пришёл» периодом');
+    assert.equal(byAttr(root, 'data-list-capped').length, 0);
+    // Excel — тоже
+    const exp = await crmExportRows();
+    assert.ok(exp.rows.some((r) => r.full_name === 'Давний Не пришёл'), 'выгрузка спрятала «Не пришёл» периодом');
+    assert.ok(!exp.rows.some((r) => r.full_name === 'Давний Остановлен'));
+    walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'kanban').click(); await tick(80);
+    chipText(root, /^Всё время$/).click(); await tick(80);
+  } finally { S.countFor = null; window.easymed.state.user = null; }
+});
