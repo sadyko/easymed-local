@@ -201,3 +201,38 @@ test('CSV: обычный текст со знаком «=» внутри не �
     const raws = readSheetRows(XLSX, utf8(t), 'services', 'u.csv');
     assert.strictEqual(raws[0].name, 'А=Б "тест"');
 });
+
+// CLINIC_API_FIX_V1 (ревью 3) — UTF-16 И КНИГА EXCEL ПОД ИМЕНЕМ .csv. «Текст
+// Юникод» из Excel — UTF-16 с меткой FF FE: строгий UTF-8 на нём падал, и
+// cp1251 давала кашу из нулевых байтов. А .xlsx / .ods / .xls, переименованный
+// в .csv, читался как текст и не открывался вовсе. Метка UTF-16 и подпись
+// ZIP/OLE проверяются ДО имени файла.
+function utf16(text, bigEndian) {
+    const out = bigEndian ? [0xFE, 0xFF] : [0xFF, 0xFE];
+    for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i);
+        if (bigEndian) out.push(c >> 8, c & 0xFF); else out.push(c & 0xFF, c >> 8);
+    }
+    return new Uint8Array(out).buffer;
+}
+
+test('CSV в UTF-16 (LE и BE, с меткой) читается так же, как UTF-8', () => {
+    for (const be of [false, true]) {
+        const raws = readSheetRows(XLSX, utf16(CSV_TEXT, be), 'services', 'uslugi.csv');
+        assert.deepEqual(raws.map((r) => r.name), ['Приём кардиолога', 'Ёлочный массаж'], (be ? 'BE: ' : 'LE: ') + JSON.stringify(raws[0]));
+        const rows = raws.map((raw, i) => buildImportRow('services', raw, { rowNum: i + 2 }));
+        assert.deepEqual(rows.map((r) => r.payload.price), [150000, 80000]);
+        assert.deepEqual(rows.map((r) => r.payload.tax_rate), [12.5, 12]);
+    }
+});
+
+test('книга Excel (.xlsx, .ods, .xls) под именем .csv открывается как Excel', () => {
+    const ws = XLSX.utils.aoa_to_sheet([['name', 'group', 'price'], ['Приём кардиолога', 'Консультация', 150000]]);
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Services');
+    for (const bookType of ['xlsx', 'ods', 'xls']) {
+        const buf = XLSX.write(wb, { type: 'array', bookType });
+        let raws;
+        assert.doesNotThrow(() => { raws = readSheetRows(XLSX, buf, 'services', 'uslugi.csv'); }, bookType);
+        assert.deepEqual(raws, [{ name: 'Приём кардиолога', group: 'Консультация', price: 150000 }], bookType + ': ' + JSON.stringify(raws));
+    }
+});

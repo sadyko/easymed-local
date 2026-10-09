@@ -1854,17 +1854,26 @@ export function readSheetRows(XLSX, buf, section, fileName) {
 }
 
 // CLINIC_API_FIX_V1 (ревью итога) — текст CSV-файла или null (не CSV).
-// CSV — по имени файла (.csv); имени нет (вызов из теста) — по содержимому:
-// не zip (.xlsx) и не OLE (.xls). Строгий UTF-8 (fatal), метка порядка байтов
-// снимается; байты не UTF-8 — cp1251, как сохраняет «CSV» русский Excel.
+// Сначала СОДЕРЖИМОЕ (ревью 3): подпись ZIP (.xlsx, .ods) или OLE (.xls) —
+// это книга Excel, как бы файл ни назывался; переименованная в .csv книга
+// читалась как текст и не открывалась. Дальше CSV — по имени файла (.csv);
+// имени нет (вызов из теста) — всё, что не книга. Кодировка: метка UTF-16
+// (FF FE / FE FF — «Текст Юникод» из Excel) → utf-16le / utf-16be; иначе
+// строгий UTF-8 (fatal); байты не UTF-8 — cp1251, как сохраняет «CSV»
+// русский Excel. Метка порядка байтов снимается.
 function csvFileText(buf, fileName) {
     const bytes = new Uint8Array(buf);
     const zipOrOle = (bytes[0] === 0x50 && bytes[1] === 0x4B) || (bytes[0] === 0xD0 && bytes[1] === 0xCF);
-    const isCsv = fileName ? /\.csv$/i.test(String(fileName)) : !zipOrOle;
+    if (zipOrOle) return null;
+    const isCsv = fileName ? /\.csv$/i.test(String(fileName)) : true;
     if (!isCsv) return null;
     let text;
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-    catch (e) { text = new TextDecoder('windows-1251').decode(bytes); }
+    if (bytes[0] === 0xFF && bytes[1] === 0xFE) text = new TextDecoder('utf-16le').decode(bytes);
+    else if (bytes[0] === 0xFE && bytes[1] === 0xFF) text = new TextDecoder('utf-16be').decode(bytes);
+    else {
+        try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+        catch (e) { text = new TextDecoder('windows-1251').decode(bytes); }
+    }
     return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
 }
 
