@@ -277,16 +277,22 @@ for (const desk of [true, false]) {
   });
 }
 
-test('C2e: предоплата записи на сегодня, потом строка «без даты» 50 в карточке, потом стойка', async () => {
+// CRM_UNIFY_V1 (финальное ревью, A-C2) — предоплата сегодняшней записи уже
+// закрыла карточку («Пришёл»). Строка «без даты», дописанная в ЗАКРЫТУЮ карточку,
+// в визит больше не встаёт: «без даты» берётся только у живых карточек — иначе
+// давняя консультация закрытой карточки выставлялась в каждом следующем визите.
+// Прежде этот тест ждал её в визите и в счёте.
+test('C2e: предоплата записи на сегодня закрыла карточку; строка «без даты» в закрытой карточке — не в визит', async () => {
   const t = await startCrmApp(seed);
   try {
     const { rid, vid } = await ccBookToday(t, [{ svc: 30, doc: 10 }]);
     await pay(t, await invoiceVs(t, vid, [liveOf(t.db, vid, 30)[0].id]));
+    assert.equal(t.lead(rid).status, 'came');
     const l = addLine(t.db, rid, { svc: 50, day: null });
     await walkIn(t, []);
-    assert.equal(liveOf(t.db, vid, 50).length, 1, 'строка «без даты» не дошла до визита');
-    assert.equal(lineRow(t.db, l).status, 'done');
-    assert.equal(await unbilled(t, vid), 50000);
+    assert.equal(liveOf(t.db, vid, 50).length, 0, 'строка «без даты» закрытой карточки встала в визит');
+    assert.deepEqual(lineRow(t.db, l), { status: 'pending', visit_id: null, visit_service_id: null });
+    assert.equal(await unbilled(t, vid), 0);
     assertInvariant(t.db, 'C2e');
   } finally { t.close(); }
 });
@@ -294,7 +300,8 @@ test('C2e: предоплата записи на сегодня, потом с�
 test('C2f: лид по телефону с анализом 40 сегодня — две регистрации на стойке; анализ доходит до визита', async () => {
   const t = await startCrmApp(seed);
   try {
-    const rid = addLead(t.db, { patient: null, phone: '909092638', updated: hoursAgoIso(2), name: 'phone lead' });
+    // CRM_UNIFY_V1 (финальное ревью, A-C1) — имя заявки звонка — номер (иначе имя не совпало бы с картой).
+    const rid = addLead(t.db, { patient: null, phone: '909092638', updated: hoursAgoIso(2), name: '909092638' });
     const l = addLine(t.db, rid, { svc: 40, day: TODAY });
     const a = await walkIn(t, [[30, 10]]);
     assert.deepEqual([t.lead(rid).status, t.lead(rid).patient_id], ['came', 77]);
@@ -413,7 +420,8 @@ test('C4e: в окне — та же карточка без строк и да�
 test('C4f: лид по телефону вчера, регистрация без стойки и оплата — карточка пациента закрыта', async () => {
   const t = await startCrmApp(seed);
   try {
-    const rid = addLead(t.db, { patient: null, phone: '909092638', updated: hoursAgoIso(24), name: 'phone yesterday' });
+    // CRM_UNIFY_V1 (финальное ревью, A-C1) — имя заявки звонка — номер.
+    const rid = addLead(t.db, { patient: null, phone: '909092638', updated: hoursAgoIso(24), name: '909092638' });
     const { inv } = await walkIn(t, [[50, null]], { desk: false });
     assert.equal(t.lead(rid).patient_id, 77);
     await pay(t, inv);

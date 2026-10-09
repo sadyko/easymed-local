@@ -14,18 +14,19 @@
 // ПРАВИЛО:
 //   • карта заведена ЗДЕСЬ и только что (не старше NEW_PATIENT_MINUTES): это
 //     дверь для новой карты, а не проход по давним;
-//   • номер — по ОДНОМУ строгому правилу шага записи (visit-link.js, ревью 3):
-//     ОСНОВНОЙ номер карты — один номер (7–12 цифр), ключ — последние 9 цифр
-//     (phoneMatchKey); второй номер заявок не ищет (обычно это номер
-//     родственника);
+//   • номер — по ОДНОМУ строгому правилу шага записи (visit-link.js, ревью 3,
+//     финальное ревью): ОСНОВНОЙ номер карты — целый узбекский номер без букв,
+//     ключ — последние 9 цифр (phoneMatchKey); второй номер заявок не ищет
+//     (обычно это номер родственника);
 //   • ключ у ОДНОЙ карты — владельцы считаются с запасом, по всем номерам карт,
 //     экстренному контакту, опекунам и связям опекунства (patientIdsWithPhoneKey):
 //     общий семейный номер не отдаёт заявку никому;
 //   • у карты ещё нет ни одной заявки — повторный вызов не проходит номер
 //     частями, по заявке за раз;
-//   • ОДНА заявка: самая новая ОТКРЫТАЯ без пациента, чьё поле номера — один
-//     номер с тем же ключом (phoneLeadCandidates). Два номера в поле и
-//     добавочный автоматически не связываются.
+//   • ОДНА заявка: ЕДИНСТВЕННАЯ ОТКРЫТАЯ без пациента с тем же ключом (две и
+//     больше — семья на одном номере: ни одной), и её имя, если есть, — имя
+//     или фамилия карты (soleMatchingLead, финальное ревью A-C1). Два номера
+//     в поле и добавочный автоматически не связываются.
 //     Закрытая («Пришёл», «Отказ», «Не пришёл») — история, её не трогают;
 //   • пишется ТОЛЬКО patient_id (и updated_at, как у всякой правки карточки):
 //     ни ступени, ни строк, ни visit_id, ни привязки записи. Деньги карточка
@@ -42,7 +43,9 @@ import { effectiveRoles } from '../roles.js';
 import { openStageKeys } from './config.js';
 // CRM_UNIFY_V1 (ревью 3 задачи 1) — номер, отбор заявок и владельцы — одно
 // строгое правило с шагом записи (visit-link.js).
-import { phoneMatchKey, keyOwnedOnlyBy, phoneLeadCandidates } from './visit-link.js';
+// CRM_UNIFY_V1 (финальное ревью, A-C1) — и заявка по номеру — то же правило
+// (soleMatchingLead): единственная на ключ, имя подходит карте.
+import { soleMatchingLead } from './visit-link.js';
 
 /** Сколько минут карта считается только что заведённой. */
 export const NEW_PATIENT_MINUTES = 10;
@@ -79,14 +82,13 @@ function linkNewPatient(db, pid) {
                          WHERE id = ? AND sync_origin IS NULL
                            AND julianday(created_at) >= julianday('now', '-${NEW_PATIENT_MINUTES} minutes')`).get(pid);
   if (!p) return;
-  const key = phoneMatchKey(p.phone);   // CRM_UNIFY_V1 (ревью 3) — один номер, последние 9 цифр
-  if (!key) return;
   if (db.prepare('SELECT 1 FROM crm_requests WHERE patient_id = ? LIMIT 1').get(pid)) return;
   const open = openStageKeys(db);
   if (!open.length) return;
-  const hit = phoneLeadCandidates(db, key, open)[0];
+  // CRM_UNIFY_V1 (финальное ревью, A-C1) — единственная заявка на ключ номера,
+  // с подходящим именем, владельцы ключа — ровно {эта карта}.
+  const hit = soleMatchingLead(db, pid, open);
   if (!hit) return;
-  if (!keyOwnedOnlyBy(db, pid, key)) return;   // CRM_UNIFY_V1 (ревью 3) — владельцы ровно {эта карта}
   db.prepare(`UPDATE crm_requests SET patient_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
                WHERE id = ? AND patient_id IS NULL`).run(pid, hit);
 }

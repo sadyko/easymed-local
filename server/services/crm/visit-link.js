@@ -27,12 +27,14 @@
 //   C. открытые заявки пациента, которые ЖДУТ этот приход: без ждущих строк,
 //      или с датой / строкой на этот день (без даты — только с undated) —
 //      любой роли, любой давности;
-//   D. ни одной — по телефону, ОДНИМ СТРОГИМ ПРАВИЛОМ (ревью 3): ОДНА
-//      открытая заявка БЕЗ пациента (самая новая из ждущих этот приход), у
-//      которой поле номера и ОСНОВНОЙ номер записанного — оба ОДИН номер с
-//      равным ключом (phoneMatchKey), и владельцы ключа — ровно {записанный}
-//      (patientIdsWithPhoneKey: все номера карт, экстренный контакт, опекуны и
-//      связи опекунства). Второй номер записанного (phone_secondary) заявок не
+//   D. ни одной — по телефону, ОДНИМ СТРОГИМ ПРАВИЛОМ (ревью 3; финальное
+//      ревью — soleMatchingLead): ЕДИНСТВЕННАЯ открытая заявка БЕЗ пациента на
+//      ключ (две и больше — семья: ни одной), ждущая этот приход, у которой
+//      поле номера и ОСНОВНОЙ номер записанного — оба целый узбекский номер с
+//      равным ключом (phoneMatchKey), имя подходит карте (leadNameFits), и
+//      владельцы ключа — ровно {записанный} (patientIdsWithPhoneKey: все номера
+//      карт, экстренный контакт, опекуны, связи опекунства и «Родственники»).
+//      Второй номер записанного (phone_secondary) заявок не
 //      ищет: обычно это номер родственника. Пишется ТОЛЬКО patient_id и ступень:
 //      ни строк, ни visit_id, ни привязки. Но следующая дверь (ensure_visit,
 //      booking_lines_add) уже видит карточку пациента и ведёт её строки в его
@@ -109,9 +111,13 @@ import { openStageKeys, scheduledStageKey, wonStageKey, windowHours, SEED_NO_SHO
 // CRM_UNIFY_V1 (задача 6) — окно повторного обращения: одно правило «двигалась
 // ли карточка в окне» (inWindowSql) и одно решение по новому обращению.
 import { contactDecision, reopenLead, inWindowSql, windowArg, leadInWindow, firstStageKey } from './contact-window.js';
+import { missedRecentlySql, missedRecentlyArgs } from './contact-window.js';   // CRM_UNIFY_V1 (финальное ревью) — одно правило опоздания
 import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL, cardDateOf, mirrorVisit } from './booking-mirror.js';
 import { crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';
 import { hasAnyRole } from '../roles.js';   // CRM_UNIFY_V1 — стойка (deskArrival)
+// CRM_UNIFY_V1 (финальное ревью, B) — «может вести карточку»: одно правило
+// с /api/db (tasks-follow.js); шаг E не делает хозяином того, кто не может.
+import { canOwnLead } from './tasks-follow.js';
 import { today } from '../domain/day.js';
 import { phoneLikePattern, digitsOf } from '../../../public/js/admin/views/crm-phone-match.js';
 
@@ -123,36 +129,39 @@ const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 const holes = (a) => a.map(() => '?').join(',');
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CRM_UNIFY_V1 (ревью 3) — НОМЕР ТЕЛЕФОНА: ОДНО СТРОГОЕ ПРАВИЛО
+// CRM_UNIFY_V1 (ревью 3; финальное ревью) — НОМЕР ТЕЛЕФОНА: ОДНО СТРОГОЕ ПРАВИЛО
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // Ревью 2 резало поле на номера (phoneKeysOf), и каждое исправление разрезания
-// открывало новую ошибку: неразрывный пробел и тире рвали номер, два номера
-// через пробел склеивались в один, российский ключ держал код страны. Теперь
-// резать нечего:
-//   1. цифры поля — все цифры, остальное выброшено (любые разделители);
-//   2. поле — ОДИН номер, только если цифр от 7 до 12; иначе это «не один
-//      номер» (пусто, коротко, два номера, добавочный) — автоматически такое не
-//      связывается никогда, это делает оператор руками;
-//   3. ключ — последние 9 цифр одного номера (+7 / 8 / 998 / 0 не важны);
-//      короче 9 — ключа нет;
+// открывало новую ошибку. Резать нечего:
+//   1. в поле нет ни одной буквы (добавочный «доб», «тел: … (мама)» — нет);
+//   2. цифры поля (любые разделители выброшены) — ЦЕЛЫЙ узбекский номер:
+//      9 цифр, 0 + 9, 8 + 9 или 998 + 9. Иначе — не номер для автоматической
+//      связи (пусто, коротко, два номера, неполный, иностранный +7 …): его
+//      «последние 9 цифр» — часто чужой номер. Связывает оператор руками;
+//   3. ключ — последние 9 цифр;
 //   4. заявка — пациенту, только если её поле и ОСНОВНОЙ номер пациента — оба
-//      один номер с равным ключом;
+//      целый номер с равным ключом; и это ЕДИНСТВЕННАЯ открытая заявка без
+//      пациента на этот ключ (две и больше — почти всегда семья: ни одной); и
+//      её имя, если оно есть, — имя или фамилия пациента (leadNameFits);
 //   5. владельцы ключа — карты, у которых цифры phone, phone_secondary,
 //      emergency_contact_phone или номера опекуна (patient_guardians.phone)
-//      СОДЕРЖАТ ключ, и все, кто связан с ними опекунством в любую сторону,
-//      даже без номера в строке опекунства. С запасом — безопасная сторона;
+//      СОДЕРЖАТ ключ, и все, кто связан с ними опекунством или «Родственниками»
+//      (patient_relationships) в любую сторону, даже без номера в строке связи.
+//      С запасом — безопасная сторона;
 //   6. связь — только если владельцы ровно {этот пациент}.
 
-const SINGLE_MIN_DIGITS = 7;
-const SINGLE_MAX_DIGITS = 12;
 export const PHONE_KEY_DIGITS = 9;
 
-/** Ключ одного номера: последние 9 цифр; '' — поле не один номер или ключ короче 9. */
+/** Ключ целого узбекского номера: последние 9 цифр; '' — поле не такой номер. */
 export function phoneMatchKey(raw) {
-  const d = digitsOf(raw);
-  if (d.length < SINGLE_MIN_DIGITS || d.length > SINGLE_MAX_DIGITS) return '';
-  return d.length >= PHONE_KEY_DIGITS ? d.slice(-PHONE_KEY_DIGITS) : '';
+  const s = String(raw ?? '');
+  if (/\p{L}/u.test(s)) return '';
+  const d = digitsOf(s);
+  if (d.length === PHONE_KEY_DIGITS) return d;
+  if (d.length === PHONE_KEY_DIGITS + 1 && (d[0] === '0' || d[0] === '8')) return d.slice(1);
+  if (d.length === PHONE_KEY_DIGITS + 3 && d.startsWith('998')) return d.slice(3);
+  return '';
 }
 
 /**
@@ -174,16 +183,38 @@ export function patientIdsWithPhoneKey(db, key) {
     if (!has(g.phone)) continue;
     for (const id of [g.patient_id, g.guardian_patient_id]) if (id != null) ids.add(Number(id));
   }
-  // Опекунство в обе стороны, и без номера в строке (ревью 3, D5): ребёнок,
-  // чья мама — опекун-карта, владеет и её номером.
+  // Связи семьи в обе стороны, и без номера в строке связи: опекунство (ревью 3,
+  // D5) и «Родственники» карты (patient_relationships, финальное ревью, B) —
+  // ребёнок, чья мама записана опекуном или родственником, владеет её номером.
   if (ids.size) {
     const list = [...ids];
-    for (const g of db.prepare(`SELECT patient_id, guardian_patient_id FROM patient_guardians
-                                 WHERE patient_id IN (${holes(list)}) OR guardian_patient_id IN (${holes(list)})`).all(...list, ...list)) {
-      for (const id of [g.patient_id, g.guardian_patient_id]) if (id != null) ids.add(Number(id));
-    }
+    const add = (rows) => { for (const r of rows) for (const id of [r.a, r.b]) if (id != null) ids.add(Number(id)); };
+    add(db.prepare(`SELECT patient_id AS a, guardian_patient_id AS b FROM patient_guardians
+                     WHERE patient_id IN (${holes(list)}) OR guardian_patient_id IN (${holes(list)})`).all(...list, ...list));
+    add(db.prepare(`SELECT patient_id_a AS a, patient_id_b AS b FROM patient_relationships
+                     WHERE patient_id_a IN (${holes(list)}) OR patient_id_b IN (${holes(list)})`).all(...list, ...list));
   }
   return [...ids];
+}
+
+/** Слова имени: строчными, ё как е, только буквы, от 3 букв. */
+const nameWords = (s) => (String(s ?? '').toLowerCase().replace(/ё/g, 'е').match(/\p{L}+/gu) || []).filter((w) => w.length >= 3);
+
+/**
+ * CRM_UNIFY_V1 (финальное ревью, A-C1) — ИМЯ ЗАЯВКИ ПОДХОДИТ КАРТЕ. Имени нет
+ * (пусто или только цифры — так звонок называет незнакомца) — не мешает. Иначе
+ * хоть одно слово заявки из 3+ букв равно имени или фамилии карты (first_name,
+ * last_name; их нет — первые два слова full_name), без регистра, ё как е.
+ * Другое письмо (латиница против кириллицы) не совпадает — безопасная сторона:
+ * заявку «Сын Каримов» маме «Каримова Мама» не отдают.
+ */
+export function leadNameFits(leadName, patient) {
+  const words = nameWords(leadName);
+  if (!words.length) return true;
+  const p = patient || {};
+  let own = [...nameWords(p.first_name), ...nameWords(p.last_name)];
+  if (!own.length) own = nameWords(p.full_name).slice(0, 2);
+  return words.some((w) => own.includes(w));
 }
 
 /** Ключ — у ОДНОЙ карты, и это patientId (правило 6). */
@@ -235,21 +266,34 @@ export function waitsForDay(db, requestId, day, { undated = false, hours = windo
 }
 
 /**
- * ОДНА открытая заявка без пациента с ОСНОВНЫМ номером этого пациента — самая
- * новая из ждущих этот приход (accept — своё правило отбора: на стойке это
- * deskCloses, CRM_UNIFY_V1); только если основной номер — один номер и его
- * ключ у ОДНОЙ карты. null — нет. Сначала ищется заявка (дёшево), владельцы
- * ключа считаются, только если она есть (ревью 2, скорость).
+ * CRM_UNIFY_V1 (финальное ревью, A-C1) — ЗАЯВКА ПО НОМЕРУ: ОДНО ПРАВИЛО для шага
+ * записи (phoneLeadFor) и новой карты (new-patient-link.js). Открытая заявка
+ * без пациента с ключом ОСНОВНОГО номера карты — только если она ЕДИНСТВЕННАЯ
+ * на этот ключ (две и больше — семья на одном номере: ни одной, их разбирает
+ * оператор), её принимает accept, её имя подходит карте (leadNameFits) и
+ * владельцы ключа — ровно {эта карта}. null — нет. Владельцы считаются
+ * последними (ревью 2, скорость).
  */
-export function phoneLeadFor(db, patientId, open, day, { undated = false, accept = null } = {}) {
-  if (!open.length) return null;
-  const p = db.prepare('SELECT phone FROM patients WHERE id = ?').get(patientId);
+export function soleMatchingLead(db, patientId, open, accept = () => true) {
+  if (!open || !open.length) return null;
+  const p = db.prepare('SELECT phone, full_name, first_name, last_name FROM patients WHERE id = ?').get(patientId);
   const key = phoneMatchKey(p && p.phone);
   if (!key) return null;
+  const cands = phoneLeadCandidates(db, key, open);
+  if (cands.length !== 1) return null;
+  const lead = db.prepare('SELECT id, full_name FROM crm_requests WHERE id = ?').get(cands[0]);
+  if (!lead || !accept(lead.id) || !leadNameFits(lead.full_name, p)) return null;
+  return keyOwnedOnlyBy(db, patientId, key) ? Number(lead.id) : null;
+}
+
+/**
+ * Заявка по номеру для шага записи (D): soleMatchingLead, принятая, если ждёт
+ * этот приход (accept — своё правило отбора: на стойке это deskCloses,
+ * CRM_UNIFY_V1). null — нет.
+ */
+export function phoneLeadFor(db, patientId, open, day, { undated = false, accept = null } = {}) {
   const ok = accept || ((id) => waitsForDay(db, id, day, { undated }));
-  const hit = phoneLeadCandidates(db, key, open).find(ok);
-  if (!hit) return null;
-  return keyOwnedOnlyBy(db, patientId, key) ? hit : null;
+  return soleMatchingLead(db, patientId, open, ok);
 }
 
 /**
@@ -269,10 +313,11 @@ export function phoneLeadFor(db, patientId, open, day, { undated = false, accept
  * обычно день записи, недели назад), и пациент, опоздавший на день, — это
  * приход на назначенную запись, а не новое обращение (решение владельца 4).
  * Карточка, пропущенная двести дней назад, — история: посторонний приход её не
- * закрывает.
+ * закрывает. CRM_UNIFY_V1 (финальное ревью) — правило опоздания одно на всех:
+ * contact-window.js missedRecentlySql / missedRecentlyArgs (его же зовёт
+ * правило прихода, visit-status.js), а не своя копия SQL.
  */
 export function deskCloses(db, requestId, v, hours = windowHours(db)) {
-  const lateDays = Math.max(1, Math.ceil((Number(hours) > 0 ? Number(hours) : 72) / 24));
   return !!db.prepare(`
     SELECT 1 FROM crm_requests r
      WHERE r.id = ?
@@ -282,9 +327,9 @@ export function deskCloses(db, requestId, v, hours = windowHours(db)) {
             OR date(r.scheduled_date) = date(?)
             OR EXISTS (SELECT 1 FROM crm_booking_links b WHERE b.request_id = r.id AND b.visit_id = ?)
             OR ${inWindowSql('r')}
-            OR (r.status = ? AND date(r.scheduled_date) BETWEEN date(?, ?) AND date(?)))`)
+            OR ${missedRecentlySql('r')})`)   // CRM_UNIFY_V1 (ревью, I-5; финальное ревью) — опоздал на день: одно правило
     .get(requestId, v.day, v.day, v.id, windowArg(hours),   // CRM_UNIFY_V1 (задача 6) — одно правило окна
-      SEED_NO_SHOW_STAGE, v.day, `-${lateDays} days`, v.day);   // CRM_UNIFY_V1 (ревью, I-5) — опоздал на день
+      missedRecentlyArgs(v.day, hours));
 }
 
 /**
@@ -377,13 +422,24 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   const lookIn = [...new Set([...open, wonStageKey(db), SEED_NO_SHOW_STAGE])];
   const mine = db.prepare(`SELECT id, status FROM crm_requests WHERE patient_id = ? AND status IN (${holes(lookIn)})
                             ORDER BY updated_at DESC, id DESC`).all(v.patient_id, ...lookIn);
-  const linkLines = db.prepare(`
+  // CRM_UNIFY_V1 (финальное ревью, A-C2) — строки «без даты» — только у ЖИВЫХ
+  // карточек (открытые колонки и сидовая «Не пришёл»), никогда у закрытых:
+  // консультация «когда придёт» карточки, перетащенной в «Пришёл» (или уже
+  // оплаченная в прошлом визите), вставала с ценой в каждый следующий визит —
+  // двойной счёт. Строка закрытой карточки НА ЭТОТ ДЕНЬ — по-прежнему (R3).
+  // Подстановка сметы в браузере (crm-lines.js) читает так же.
+  const linkSql = (withUndated) => db.prepare(`
     UPDATE crm_request_services SET visit_id = ?
      WHERE request_id = ? AND status = 'pending'
        AND (visit_id IS NULL OR NOT EXISTS (SELECT 1 FROM visits x WHERE x.id = crm_request_services.visit_id
                                                 AND x.status NOT IN ('cancelled', 'no_show')))
-       AND (${undated ? "scheduled_date IS NULL OR scheduled_date = '' OR " : ''}date(scheduled_date) = date(?))`);
-  for (const r of mine) if (linkLines.run(v.id, r.id, v.day).changes) touched.set(r.id, 'lines');
+       AND (${withUndated ? "scheduled_date IS NULL OR scheduled_date = '' OR " : ''}date(scheduled_date) = date(?))`);
+  const linkDated = linkSql(false);
+  const linkAny = undated ? linkSql(true) : linkDated;
+  const live = new Set([...open, SEED_NO_SHOW_STAGE]);
+  for (const r of mine) {
+    if ((live.has(r.status) ? linkAny : linkDated).run(v.id, r.id, v.day).changes) touched.set(r.id, 'lines');
+  }
 
   // Визит уже «Пришёл» — дальше правило прихода (crmVisitStatus в crmLinkVisit),
   // а не «Записан». CRM_UNIFY_V1 — регистрация на стойке (desk) по такому
@@ -443,9 +499,13 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
       touched.set(d.lead.id, 'callcenter');
     } else if (d.action === 'new') {
       const p = db.prepare('SELECT full_name, phone FROM patients WHERE id = ?').get(v.patient_id) || {};
+      // CRM_UNIFY_V1 (финальное ревью, B) — хозяин — записавший, только если он
+      // может вести карточку (canOwnLead, то же правило, что у /api/db); иначе
+      // карточка ничья: наблюдатель CRM её не получает.
+      const owner = uid && canOwnLead(db, uid) ? uid : null;
       const id = Number(db.prepare(`INSERT INTO crm_requests (full_name, phone, source, status, patient_id, assigned_to, created_by, scheduled_date)
                                     VALUES (?, ?, 'call', ?, ?, ?, ?, ?)`)
-        .run(p.full_name || '—', p.phone || '', scheduledStageKey(db) || open[0], v.patient_id, uid, uid, v.day).lastInsertRowid);
+        .run(p.full_name || '—', p.phone || '', scheduledStageKey(db) || open[0], v.patient_id, owner, uid, v.day).lastInsertRowid);
       touched.set(id, 'created');
     }
   }

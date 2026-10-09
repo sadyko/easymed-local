@@ -7,7 +7,28 @@ import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';
-import { listen } from '../../control-plane/server/test-helpers/listen.js';
+
+// CRM_UNIFY_V1 (финальное ревью) — СВОЙ listen, БЕЗ ИМПОРТА ИЗ control-plane.
+// Сторож сборки (scripts/build-bundle.test.js) не пускает из server/ ни одного
+// импорта за пределы поставки, а control-plane/ в неё не входит. Задача та же,
+// что у control-plane/server/test-helpers/listen.js (FETCH_BAD_PORT_V1): на
+// этой машине listen(0) иногда отдаёт порт из «плохих» для fetch() (undici:
+// «bad port»). Здесь не список портов (его пришлось бы держать второй копией),
+// а проверка самим fetch(): порт, который fetch() отвергает, закрывается, и
+// берётся следующий. Любая другая ошибка — не наша: сервер отдаётся как есть.
+const isBadPortError = (e) => /bad port/i.test(String((e && e.cause && e.cause.message) || (e && e.message) || ''));
+async function listen(app, attempts = 6) {
+  for (let i = 0; ; i++) {
+    const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+    try {
+      await fetch(`http://127.0.0.1:${server.address().port}/api/health`);
+      return server;
+    } catch (e) {
+      if (!isBadPortError(e) || i >= attempts) return server;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+}
 
 const pad = (n) => String(n).padStart(2, '0');
 /** Местный день со сдвигом: 'YYYY-MM-DD'. */

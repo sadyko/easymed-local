@@ -96,7 +96,9 @@ for (const [label, own, sibling, leads] of [
 test('по телефону: «8 90 …» у записанного и «909092638» в заявке — один номер, если он у одной карты', async () => {
   const t = await startCrmApp((db) => db.prepare("UPDATE patients SET phone = '8 90 909 26 38' WHERE id = 77").run());
   try {
-    const rid = addLead(t.db, { patient: null, phone: '909092638', assigned: 4 });
+    // CRM_UNIFY_V1 (финальное ревью, A-C1) — имя заявки — номер (так звонок
+    // называет незнакомца): имени, которое могло бы не совпасть, нет.
+    const rid = addLead(t.db, { patient: null, phone: '909092638', assigned: 4, name: '909092638' });
     const b = await book(t, 'reg', D, 9);
     assert.equal(b.status, 200, b.text);
     assert.deepEqual([t.lead(rid).patient_id, t.lead(rid).status], [77, 'scheduled']);
@@ -113,16 +115,19 @@ test('по телефону ищется только ОСНОВНОЙ номе�
   } finally { t.close(); }
 });
 
-test('по телефону — не больше ОДНОЙ карточки: две открытые на номер — берётся самая новая, вторая остаётся операторам', async () => {
+// CRM_UNIFY_V1 (финальное ревью, A-C1) — прежнее правило «самая новая из двух»
+// отдавало маме заявку сына: две открытые карточки на один номер — это почти
+// всегда семья. Теперь ни одной: их разбирает оператор.
+test('по телефону: две открытые карточки на номер — не привязывается ни одна', async () => {
   const t = await startCrmApp();
   try {
-    const older = addLead(t.db, { patient: null, phone: '909092638', assigned: 3, name: 'звонок 1', updated: daysAgoIso(2) });
-    const newer = addLead(t.db, { patient: null, phone: '+998909092638', assigned: 4, name: 'звонок 2' });
+    const older = addLead(t.db, { patient: null, phone: '909092638', assigned: 3, name: '909092638', updated: daysAgoIso(2) });
+    const newer = addLead(t.db, { patient: null, phone: '+998909092638', assigned: 4, name: '998909092638' });
     const b = await book(t, 'reg', D, 9);
     assert.equal(b.status, 200, b.text);
-    assert.deepEqual([t.lead(newer).patient_id, t.lead(newer).status], [77, 'scheduled']);
-    assert.deepEqual([t.lead(older).patient_id, t.lead(older).status], [null, 'in_process'],
-      'одна запись привязала две карточки — потом это две конверсии одного прихода');
+    for (const id of [older, newer]) {
+      assert.deepEqual([t.lead(id).patient_id, t.lead(id).status], [null, 'in_process'], 'две карточки на номер, а одну отдали записанному');
+    }
   } finally { t.close(); }
 });
 
@@ -397,7 +402,10 @@ for (const [label, leadPhone] of [
   });
 }
 
-test('+7 и 8 одного российского номера (D2): брат с «8 (916) …» — владелец; один на номер — связь', async () => {
+// CRM_UNIFY_V1 (финальное ревью, B) — иностранный номер (+7 …, 8 + десять
+// цифр) ключа не даёт вовсе: автоматической связи нет, даже если номер у
+// одной карты. Связывает оператор.
+test('+7 и 8 одного российского номера (D2): ключа нет — заявка не связывается ни с братом, ни без него', async () => {
   let t = await startCrmApp((db) => {
     db.prepare("UPDATE patients SET phone = '+7 916 123 45 67' WHERE id = 77").run();
     db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Брат','8 (916) 123-45-67')").run();
@@ -409,9 +417,9 @@ test('+7 и 8 одного российского номера (D2): брат с
   } finally { t.close(); }
   t = await startCrmApp((db) => db.prepare("UPDATE patients SET phone = '+7 916 123 45 67' WHERE id = 77").run());
   try {
-    const rid = addLead(t.db, { patient: null, phone: '8 916 123 45 67', assigned: 4 });
+    const rid = addLead(t.db, { patient: null, phone: '8 916 123 45 67', assigned: 4, name: '89161234567' });
     assert.equal((await book(t, 'reg', D, 9)).status, 200);
-    assert.deepEqual([t.lead(rid).patient_id, t.lead(rid).status], [77, 'scheduled']);
+    assert.deepEqual([t.lead(rid).patient_id, t.lead(rid).status], [null, 'in_process'], 'иностранный номер связан автоматически');
   } finally { t.close(); }
 });
 
@@ -478,5 +486,172 @@ test('дата карточки не прыгает: ensure_visit, перено�
       assert.equal(t.lead(rid).scheduled_date, D, `клик ${i + 1}: booking_lines_add`);
     }
     assert.equal(undo(), was, 'двери по кругу копят след отмены — дата прыгает');
+  } finally { t.close(); }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_UNIFY_V1 (финальное ревью) — деньги и номер: семья на одном номере,
+// имя заявки, строки «без даты» закрытых карточек, номера не по образцу,
+// «Родственники», хозяин новой карточки.
+// ═══════════════════════════════════════════════════════════════════════════
+const nowIso = () => new Date().toISOString();
+const hoursAgoIso = (h) => new Date(Date.now() - h * 3600000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+// A-C1 (P2): две заявки на семейный номер — мамина и сына. Мама заводит карту
+// и регистрируется на стойке: заявка сына не уходит к маме, его анализ — не в её визит.
+test('A-C1: мама и сын на одном номере — новая карта мамы и стойка не берут ни одной заявки', async () => {
+  const t = await startCrmApp((db) => db.prepare("UPDATE patients SET phone = '+998 91 000 00 01' WHERE id = 77").run());
+  try {
+    const mom = addLead(t.db, { patient: null, phone: '+998 90 909 26 38', name: 'Мама Каримова', updated: hoursAgoIso(2) });
+    addLine(t.db, mom, { svc: 30, day: TODAY, doctor: 10 });
+    const kid = addLead(t.db, { patient: null, phone: '+998 90 909 26 38', name: 'Сын Каримов' });
+    addLine(t.db, kid, { svc: 40, day: TODAY });
+    const p = await t.dbq('reg', { table: 'patients', op: 'insert', returning: true, single: 'single',
+      values: { full_name: 'Мама Каримова', phone: '+998 90 909 26 38' } });
+    assert.equal(p.status, 200, p.text);
+    const pid = p.json.data.id;
+    assert.equal((await t.rpc('crm_link_new_patient', 'reg', { patient_id: pid })).status, 200);
+    const e = await t.rpc('ensure_visit', 'reg', { patient_id: pid, date: nowIso(), doctor_id: 10, visit_type: 'outpatient', desk: true });
+    assert.equal(e.status, 200, e.text);
+    assert.deepEqual([t.lead(mom).patient_id, t.lead(kid).patient_id], [null, null], 'семейный номер отдал заявку одной из карт');
+    assert.ok(!vsOf(t.db, e.json.data.visit.id).some((x) => x.service_id === 40), 'анализ сына встал в визит мамы');
+  } finally { t.close(); }
+});
+
+// A-C1 (P2b): одна заявка о ребёнке без карты; номер — мамин. Имя заявки — не
+// мамино: не связывается, и вторая дверь того же дня анализ в её визит не ставит.
+test('A-C1: заявка с чужим именем на номер мамы — не к маме; вторая дверь анализ в её визит не ставит', async () => {
+  const t = await startCrmApp();
+  try {
+    const kid = addLead(t.db, { patient: null, phone: '909092638', name: 'Сын (без карты)' });
+    addLine(t.db, kid, { svc: 40, day: TODAY });
+    const e = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: nowIso(), doctor_id: 10, visit_type: 'outpatient', desk: true });
+    assert.equal(e.status, 200, e.text);
+    const e2 = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: nowIso(), doctor_id: 10, visit_type: 'outpatient' });
+    assert.equal(e2.status, 200, e2.text);
+    assert.equal(t.lead(kid).patient_id, null, 'заявку о ребёнке отдали маме');
+    assert.ok(!vsOf(t.db, e.json.data.visit.id).some((x) => x.service_id === 40), 'анализ ребёнка встал в визит мамы');
+  } finally { t.close(); }
+});
+
+test('A-C1: имя заявки совпадает с именем или фамилией карты (регистр, ё/е) — связь есть; другое письмо — нет', async () => {
+  for (const [name, linked] of [['пациент', true], ['Тёст Иванович', true], ['Patsient Test', false], ['Мама', false], ['Ли', true]]) {
+    const t = await startCrmApp((db) => db.prepare("UPDATE patients SET full_name = 'Пациент Тест' WHERE id = 77").run());
+    try {
+      const rid = addLead(t.db, { patient: null, phone: '909092638', assigned: 4, name });
+      assert.equal((await book(t, 'reg', D, 9)).status, 200);
+      assert.equal(t.lead(rid).patient_id, linked ? 77 : null, name);
+    } finally { t.close(); }
+  }
+});
+
+// A-C2 (Q1-a): строка «без даты» карточки, перетащенной в «Пришёл», в визит стойки
+// не встаёт: «без даты» — только у живых карточек. Строка закрытой карточки НА
+// ЭТОТ ДЕНЬ — встаёт (R3).
+test('A-C2: строка «без даты» закрытой карточки не встаёт в визит; строка того же дня — встаёт', async () => {
+  const t = await startCrmApp();
+  try {
+    const old = addLead(t.db, { status: 'in_process', patient: 77, assigned: 3 });
+    const undatedLine = addLine(t.db, old, { svc: 30, day: null, doctor: 10 });
+    const drag = await t.dbq('cc', { table: 'crm_requests', op: 'update', values: { status: 'came' }, filters: [{ col: 'id', op: 'eq', val: old }] });
+    assert.equal(drag.status, 200, drag.text);
+    t.db.prepare('UPDATE crm_requests SET updated_at = ?, created_at = ? WHERE id = ?').run(daysAgoIso(60), daysAgoIso(61), old);
+    const won = addLead(t.db, { status: 'came', patient: 77, assigned: 3 });
+    const todayLine = addLine(t.db, won, { svc: 40, day: TODAY });
+    const e = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: nowIso(), doctor_id: 10, visit_type: 'outpatient', desk: true });
+    assert.equal(e.status, 200, e.text);
+    const vid = e.json.data.visit.id;
+    assert.ok(!vsOf(t.db, vid).some((x) => x.service_id === 30), 'давняя консультация «без даты» закрытой карточки встала в счёт');
+    assert.deepEqual(t.db.prepare('SELECT status, visit_id FROM crm_request_services WHERE id = ?').get(undatedLine), { status: 'pending', visit_id: null });
+    assert.equal(t.db.prepare('SELECT visit_id FROM crm_request_services WHERE id = ?').get(todayLine).visit_id, vid,
+      'строка закрытой карточки на этот день не дошла до визита (R3)');
+  } finally { t.close(); }
+});
+
+// A-C2 (Q1-a2): консультация «без даты» записана колл-центром из календаря,
+// пациент пришёл, оплатил; через неделю — новая запись: консультации в ней нет.
+test('A-C2: консультация «без даты» оплачена в первом визите — следующая запись её второй раз не берёт', async () => {
+  const t = await startCrmApp();
+  try {
+    const r = await t.dbq('cc', { table: 'crm_requests', op: 'insert', returning: true, single: 'single',
+      values: { full_name: 'Пациент Тест', phone: '+998 90 909 26 38', patient_id: 77, status: 'in_process', source: 'call' } });
+    assert.equal(r.status, 200, r.text);
+    const rid = r.json.data.id;
+    await t.dbq('cc', { table: 'crm_request_services', op: 'insert', values: [{ request_id: rid, service_id: 30, scheduled_date: null, doctor_id: 10, status: 'pending' }] });
+    const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, start: at(TODAY, 8), duration_minutes: 30 });
+    assert.equal(b.status, 200, b.text);
+    const v1 = b.json.data.visit.id;
+    const ins = await t.dbq('reg', { table: 'visit_services', op: 'insert', returning: true, single: 'single',
+      values: { visit_id: v1, service_id: 30, doctor_id: 10, quantity: 1, unit_price: 100000, total: 100000, status: 'added' } });
+    assert.equal(ins.status, 200, ins.text);
+    const ids = t.db.prepare('SELECT id FROM visit_services WHERE visit_id = ?').all(v1).map((x) => x.id);
+    const inv = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: v1, visit_service_ids: ids, discount_amount: 0, payer_id: null });
+    assert.equal(inv.status, 200, inv.text);
+    const pay = await t.rpc('record_payment', 'kassa', { invoice_id: inv.json.data.invoice.id, amount: Number(inv.json.data.invoice.total_amount), method: 'cash' });
+    assert.equal(pay.status, 200, pay.text);
+    assert.equal(t.lead(rid).status, 'came');
+    const s2 = at(localDay(7), 11);
+    const e2 = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: s2, doctor_id: 10, book: { doctor_id: 10, start: s2, duration_minutes: 30 } });
+    assert.equal(e2.status, 200, e2.text);
+    assert.ok(!vsOf(t.db, e2.json.data.visit.id).some((x) => x.service_id === 30), 'консультация выставлена второй раз');
+  } finally { t.close(); }
+});
+
+// B: номера, которые раньше давали ключ чужого номера (последние 9 цифр сдвигались).
+for (const [label, leadPhone, strangerPhone] of [
+  ['добавочный «90 912 34 56 доб. 78»', '90 912 34 56 доб. 78', '+998 91 234 56 78'],
+  ['городской с добавочным «71 207 12 34 доб 56»', '71 207 12 34 доб 56', '+998 20 712 34 56'],
+  ['+998 без двух цифр «+998 90 123 45»', '+998 90 123 45', '+998 98 901 23 45'],
+  ['российский «+7 (990) 123-45-67»', '+7 (990) 123-45-67', '+998 90 123 45 67'],
+]) {
+  test(`номер не по образцу (${label}) не связывает заявку с посторонним`, async () => {
+    const t = await startCrmApp((db) => db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (80,'Посторонний',?)").run(strangerPhone));
+    try {
+      const rid = addLead(t.db, { patient: null, phone: leadPhone, assigned: 4, name: leadPhone.replace(/\D/g, '') });
+      addLine(t.db, rid, { svc: 40, day: D });
+      assert.equal((await t.rpc('calendar_book', 'reg', { patient_id: 80, doctor_id: 10, start: at(D, 9), duration_minutes: 30 })).status, 200);
+      const e = await t.rpc('ensure_visit', 'reg', { patient_id: 80, date: D });
+      assert.equal(e.status, 200, e.text);
+      assert.equal(t.lead(rid).patient_id, null, 'заявка связана с посторонним');
+      assert.ok(!vsOf(t.db, e.json.data.visit.id).some((x) => x.service_id === 40), 'услуга заявки встала в счёт постороннего');
+    } finally { t.close(); }
+  });
+}
+
+// B: «Родственники» карточки пациента (patient_relationships) — связь владельцев
+// номера, как опекунство: мама и ребёнок связаны — заявка о ребёнке маме не идёт.
+test('B: мама и ребёнок связаны в «Родственниках» или опекунством — заявка на мамин номер ни к кому', async () => {
+  for (const table of ['patient_relationships', 'patient_relationships_reverse', 'patient_guardians']) {
+    const t = await startCrmApp((db) => {
+      db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (82,'Мама','+998 93 111 22 33')").run();
+      db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (83,'Ребёнок','')").run();
+      if (table === 'patient_relationships') db.prepare("INSERT INTO patient_relationships (patient_id_a, patient_id_b, relation_type) VALUES (82, 83, 'parent')").run();
+      else if (table === 'patient_relationships_reverse') db.prepare("INSERT INTO patient_relationships (patient_id_a, patient_id_b, relation_type) VALUES (83, 82, 'child')").run();
+      else db.prepare("INSERT INTO patient_guardians (patient_id, guardian_patient_id, name, phone) VALUES (83, 82, 'Мама', NULL)").run();
+    });
+    try {
+      const rid = addLead(t.db, { patient: null, phone: '931112233', assigned: 4, name: '931112233' });
+      addLine(t.db, rid, { svc: 40, day: D });
+      assert.equal((await t.rpc('calendar_book', 'reg', { patient_id: 82, doctor_id: 10, start: at(D, 9), duration_minutes: 30 })).status, 200);
+      assert.equal(t.lead(rid).patient_id, null, table);
+    } finally { t.close(); }
+  }
+});
+
+// B: шаг E не делает хозяином новой карточки того, кто не может её вести
+// (наблюдатель CRM): карточка заводится, но ничья.
+test('B: наблюдатель CRM записывает пациента без карточки — карточка ничья, не его', async () => {
+  const t = await startCrmApp((db) => {
+    db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('cc_view', 'КЦ просмотр', 'callcenter')").run();
+    db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)')
+      .run('cc_view', JSON.stringify({ sections: ['crm'], levels: { crm: 'viewer' } }));
+    db.prepare("UPDATE users SET custom_role_code = 'cc_view' WHERE id = 4").run();
+  });
+  try {
+    const b = await t.rpc('calendar_book', 'cc2', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
+    assert.equal(b.status, 200, b.text);
+    const card = t.db.prepare('SELECT id, assigned_to, created_by FROM crm_requests WHERE patient_id = 77').get();
+    assert.ok(card, 'карточка не заведена');
+    assert.deepEqual([card.assigned_to, card.created_by], [null, 4], 'наблюдатель стал хозяином карточки');
   } finally { t.close(); }
 });

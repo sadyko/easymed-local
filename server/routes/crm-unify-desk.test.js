@@ -462,17 +462,25 @@ test('стойка: «Не пришёл» в пределах окна (приш
 // R5 — путь по телефону на стойке — тем же правилом. Карточка по телефону
 // получает только patient_id и ступень: её строки в визит не идут (правило
 // денег — общий семейный номер не ставит услуги в чужой счёт).
+// CRM_UNIFY_V1 (финальное ревью, A-C1) — две открытые карточки на один номер
+// теперь не берутся вовсе (семья на одном номере), поэтому граница стойки
+// проверяется по одной карточке на прогон. Имя заявки звонка — номер.
 test('R5: по телефону на стойке — та же граница; строки карточки по телефону в визит не идут', async () => {
-  const t = await startCrmApp();
+  let t = await startCrmApp();
   try {
-    const phoneOld = addLead(t.db, { patient: null, phone: '909092638', status: 'recall', updated: daysAgoIso(60), name: 'По телефону 60 дн.' });
-    const phoneToday = addLead(t.db, { patient: null, phone: '909092638', status: 'recall', date: localDay(-60), updated: daysAgoIso(61), name: 'По телефону, строка сегодня' });
+    const phoneOld = addLead(t.db, { patient: null, phone: '909092638', status: 'recall', updated: daysAgoIso(60), name: '909092638' });
+    const r = await desk(t);
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual([t.lead(phoneOld).status, t.lead(phoneOld).patient_id], ['recall', null],
+      'стойка взяла по телефону старую карточку, которая сегодня не ждёт');
+  } finally { t.close(); }
+  t = await startCrmApp();
+  try {
+    const phoneToday = addLead(t.db, { patient: null, phone: '909092638', status: 'recall', date: localDay(-60), updated: daysAgoIso(61), name: '909092638' });
     const lt = addLine(t.db, phoneToday, { svc: 40, day: TODAY });
     const r = await desk(t);
     assert.equal(r.status, 200, r.text);
     assert.deepEqual([t.lead(phoneToday).status, t.lead(phoneToday).patient_id], ['came', 77]);
-    assert.deepEqual([t.lead(phoneOld).status, t.lead(phoneOld).patient_id], ['recall', null],
-      'стойка взяла по телефону старую карточку, которая сегодня не ждёт');
     assert.deepEqual(lineRow(t.db, lt), { status: 'pending', visit_id: null }, 'строка карточки по телефону взяла визит');
     assert.equal(vsOf(t.db, r.json.data.visit.id).length, 0, 'услуга карточки по телефону встала в счёт');
   } finally { t.close(); }

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { crmLinkVisit, patientIdsWithPhoneKey, phoneMatchKey } from './visit-link.js';
+import { crmLinkVisit, patientIdsWithPhoneKey, phoneMatchKey, leadNameFits } from './visit-link.js';
 import { touchRequest } from './booking-mirror.js';
 import { localDay } from '../../test-helpers/crm-unify-app.js';
 
@@ -89,18 +89,41 @@ test('владельцы номера: экстренный контакт и о
 // на номера (phoneKeysOf, ревью 2): разрезание ошибалось на неразрывных пробелах,
 // тире и номерах через пробел. Поле — ОДИН номер, только если в нём 7–12 цифр;
 // ключ — последние 9 цифр; короче 9 — ключа нет.
-test('phoneMatchKey: один номер в любом виде — ключ из 9 цифр; два номера, добавочный, короткий — нет', () => {
+// CRM_UNIFY_V1 (финальное ревью, B) — правило строже: ключ даёт только ЦЕЛЫЙ
+// узбекский номер (9 цифр; 0 + 9; 8 + 9; 998 + 9), без единой буквы. Текст
+// («тел: … (мама)»), добавочный и иностранный номер (+7 …) ключа не дают:
+// последние 9 цифр такого поля — часто чужой номер.
+test('phoneMatchKey: целый узбекский номер в любом виде — ключ из 9 цифр; буквы, иностранный, неполный — нет', () => {
   for (const f of ['+998 90 909 26 38', '+998 (90) 909-26-38', '998909092638', '0909092638', '8 90 909 26 38',
     '90.909.26.38', '+998(90)9092638', ' +998 90 909 26 38 ', '+998\t90\t909\t26\t38', '+ 998 90 909 26 38',
-    '+998\u00a090\u00a0909\u00a026\u00a038', '+998 90\u2013909\u201326\u201338', 'тел: 90 909 26 38 (мама)']) {
+    '+998\u00a090\u00a0909\u00a026\u00a038', '+998 90\u2013909\u201326\u201338', '909092638', '8-90-909-26-38']) {
     assert.equal(phoneMatchKey(f), '909092638', JSON.stringify(f));
   }
-  assert.equal(phoneMatchKey('+7 916 123 45 67'), '161234567');
-  assert.equal(phoneMatchKey('8 (916) 123-45-67'), '161234567');
   for (const f of ['+998 90 909 26 38, +998 91 111 11 11', '909092638 911111111', '+998 90 909 26 38 доб. 12',
-    '+998 90 909 26 38 12', '909092638, 91\u00a0111\u00a011\u00a011', '234 56 78', '12345', '', null, undefined]) {
+    '+998 90 909 26 38 12', '909092638, 91\u00a0111\u00a011\u00a011', '234 56 78', '12345', '', null, undefined,
+    'тел: 90 909 26 38 (мама)', '+7 916 123 45 67', '8 (916) 123-45-67', '+998 90 123 45', '90 912 34 56 доб. 78',
+    '71 207 12 34 доб 56', '+7 (990) 123-45-67', '9989 0909 26 38 1']) {
     assert.equal(phoneMatchKey(f), '', JSON.stringify(f));
   }
+});
+
+// CRM_UNIFY_V1 (финальное ревью, A-C1) — имя заявки: пусто или только цифры (так
+// звонок называет незнакомца) — не мешает; иначе хоть одно слово из 3+ букв
+// равно имени или фамилии карты (регистр, ё/е не важны). Другое письмо — нет.
+test('leadNameFits: имя заявки и имя карты', () => {
+  const p = { full_name: 'Пациент Тест', first_name: '', last_name: '' };
+  for (const [name, fits] of [['', true], [null, true], ['909092638', true], ['+998 90 909 26 38', true], ['Ли', true],
+    ['пациент', true], ['ТЕСТ', true], ['Тёст Иванович', true], ['Patsient Test', false], ['Мама', false],
+    ['Сын (без карты)', false], ['Пациентка', false]]) {
+    assert.equal(leadNameFits(name, p), fits, JSON.stringify(name));
+  }
+  const q = { full_name: 'Каримова Азиза Рустамовна', first_name: 'Азиза', last_name: 'Королёва' };
+  assert.equal(leadNameFits('королева', q), true);
+  assert.equal(leadNameFits('Азиза', q), true);
+  assert.equal(leadNameFits('Рустамовна', q), false, 'отчество — не имя и не фамилия');
+  assert.equal(leadNameFits('Каримова', { full_name: 'Каримова Азиза Рустамовна' }), true);
+  assert.equal(leadNameFits('Рустамовна', { full_name: 'Каримова Азиза Рустамовна' }), false);
+  assert.equal(leadNameFits('Азиза', { full_name: '' }), false, 'у карты нет имени — заявка с именем не её');
 });
 
 test('владельцы номера: опекунство в обе стороны, даже без номера в строке (D5); +7 и 8 одного номера', () => {
@@ -111,9 +134,16 @@ test('владельцы номера: опекунство в обе сторо
   db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (87,'Опекун ребёнка','+998 33 333 33 33')").run();
   db.prepare("INSERT INTO patient_guardians (patient_id, guardian_patient_id) VALUES (77, 87)").run();
   assert.deepEqual(patientIdsWithPhoneKey(db, '909092638').sort((a, b) => a - b), [77, 85, 87]);
+  // CRM_UNIFY_V1 (финальное ревью, B) — иностранный номер ключа не даёт, но
+  // владельцы по-прежнему считаются по вхождению цифр — с запасом.
   db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (90,'Рус','+7 916 123 45 67')").run();
   db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (91,'Брат','8 (916) 123-45-67')").run();
-  assert.deepEqual(patientIdsWithPhoneKey(db, phoneMatchKey('+7 916 123 45 67')).sort((a, b) => a - b), [90, 91]);
+  assert.equal(phoneMatchKey('+7 916 123 45 67'), '');
+  assert.deepEqual(patientIdsWithPhoneKey(db, '161234567').sort((a, b) => a - b), [90, 91]);
+  // «Родственники» (patient_relationships) — связь владельцев в обе стороны.
+  db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (92,'Сестра','')").run();
+  db.prepare("INSERT INTO patient_relationships (patient_id_a, patient_id_b, relation_type) VALUES (92, 77, 'sibling')").run();
+  assert.deepEqual(patientIdsWithPhoneKey(db, '909092638').sort((a, b) => a - b), [77, 85, 87, 92]);
   db.close();
 });
 

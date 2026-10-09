@@ -30,7 +30,8 @@ const bookingLinks = (t, rid) => t.db.prepare('SELECT COUNT(*) AS n FROM crm_boo
 test('CRM_UNIFY_V1: новая карта с номером одной карты — заявка получает пациента, смета регистратуры видит её строку', async () => {
   const t = await startCrmApp();
   try {
-    const y = addLead(t.db, { patient: null, phone: '931112233', name: 'Звонок' });
+    // CRM_UNIFY_V1 (финальное ревью, A-C1) — имя заявки звонка — номер.
+    const y = addLead(t.db, { patient: null, phone: '931112233', name: '931112233' });
     const line = addLine(t.db, y, { svc: 40, day: TODAY });
     const pat = await register(t);
 
@@ -106,7 +107,7 @@ test('CRM_UNIFY_V1: номер — экстренный контакт или о
 test('CRM_UNIFY_V1: «8 93 …» у новой карты находит заявку «931112233», если номер у одной карты', async () => {
   const t = await startCrmApp();
   try {
-    const y = addLead(t.db, { patient: null, phone: '931112233' });
+    const y = addLead(t.db, { patient: null, phone: '931112233', name: '931112233' });   // CRM_UNIFY_V1 (финальное ревью) — имя звонка — номер
     const pat = await register(t, 'reg', { phone: '8 93 111 22 33' });
     await link(t, 'reg', pat.id);
     assert.equal(t.lead(y).patient_id, pat.id);
@@ -123,25 +124,36 @@ test('CRM_UNIFY_V1: второй номер новой карты заявок �
   } finally { t.close(); }
 });
 
-test('CRM_UNIFY_V1: две открытые заявки с номером — привязывается только самая новая, повторный вызов вторую не берёт', async () => {
+// CRM_UNIFY_V1 (финальное ревью, A-C1) — прежнее правило «самая новая» отдавало
+// новой карте мамы заявку сына: две открытые заявки на номер — ни одной.
+test('CRM_UNIFY_V1: две открытые заявки с номером — не привязывается ни одна, и повторный вызов тоже', async () => {
   const t = await startCrmApp();
   try {
-    const older = addLead(t.db, { patient: null, phone: '931112233', name: 'Старая', updated: daysAgoIso(3) });
-    const newer = addLead(t.db, { patient: null, phone: '+998931112233', name: 'Новая', updated: daysAgoIso(1) });
+    const older = addLead(t.db, { patient: null, phone: '931112233', name: '931112233', updated: daysAgoIso(3) });
+    const newer = addLead(t.db, { patient: null, phone: '+998931112233', name: '998931112233', updated: daysAgoIso(1) });
     const pat = await register(t);
     await link(t, 'reg', pat.id);
-    assert.equal(t.lead(newer).patient_id, pat.id, 'самая новая заявка осталась без карты');
-    assert.equal(t.lead(older).patient_id, null, 'привязаны обе — это прежняя пачка по номеру');
-    // Повтор — не проход по номеру частями: у карты уже есть заявка.
     await link(t, 'reg', pat.id);
-    assert.equal(t.lead(older).patient_id, null, 'повторный вызов взял следующую заявку номера');
+    assert.deepEqual([t.lead(newer).patient_id, t.lead(older).patient_id], [null, null], 'две заявки на номер, а одну отдали новой карте');
   } finally { t.close(); }
+});
+
+test('CRM_UNIFY_V1: имя заявки не совпадает с именем новой карты — не привязывается; совпадает — привязывается', async () => {
+  for (const [name, linked] of [['Сын Каримов', false], ['Мама Каримова', true], ['каримова', true]]) {
+    const t = await startCrmApp();
+    try {
+      const y = addLead(t.db, { patient: null, phone: '931112233', name });
+      const pat = await register(t, 'reg', { full_name: 'Мама Каримова' });
+      await link(t, 'reg', pat.id);
+      assert.equal(t.lead(y).patient_id, linked ? pat.id : null, name);
+    } finally { t.close(); }
+  }
 });
 
 test('CRM_UNIFY_V1: закрытая заявка («Пришёл», «Нецелевой», «Не пришёл») не трогается никогда', async () => {
   const t = await startCrmApp();
   try {
-    const open = addLead(t.db, { patient: null, phone: '931112233', name: 'Открытая', updated: daysAgoIso(5) });
+    const open = addLead(t.db, { patient: null, phone: '931112233', name: '931112233', updated: daysAgoIso(5) });   // CRM_UNIFY_V1 — имя звонка — номер
     const closed = ['came', 'not_qualified', 'no_show'].map((status) =>
       addLead(t.db, { status, patient: null, phone: '931112233', name: status, updated: daysAgoIso(1) }));
     const pat = await register(t);
@@ -198,7 +210,8 @@ test('CRM_UNIFY_V1: старая карта или карта соседнего
 test('CRM_UNIFY_V1: ответ один и тот же — привязали или нет; о заявках ни слова', async () => {
   const t = await startCrmApp();
   try {
-    addLead(t.db, { patient: null, phone: '931112233', assigned: 4, name: 'Чужая заявка' });
+    // CRM_UNIFY_V1 (финальное ревью, A-C1) — имя заявки — имя новой карты: правило имени здесь ни при чём.
+    addLead(t.db, { patient: null, phone: '931112233', assigned: 4, name: 'Новый Пациент (чужая заявка)' });
     const pat = await register(t, 'cc');
     // Оператор А заявку оператора Б не видит, но привязку решает сервер.
     const r = await link(t, 'cc', pat.id);
