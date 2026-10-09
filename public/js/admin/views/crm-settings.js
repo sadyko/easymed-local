@@ -399,7 +399,13 @@ function bookingCard() {
 
     // Выбор держится в переменной, а не в select.value: браузер обнуляет value,
     // когда список пересобирается, и выбор потерялся бы на каждой смене конверсии.
-    let bookedWant = state.cfg.settings.booked_stage || '';
+    // CRM_UNIFY_V1 (итоговое ревью, S3) — ВЫБОР ЧЕЛОВЕКА ПОМНИТСЯ. bookedPick —
+    // что выбрал человек; bookedWant — что действует при нынешней конверсии
+    // (выбор, если он допустим, иначе «по умолчанию»). Раньше недопустимый на миг
+    // выбор затирался насовсем: конверсию сменили и вернули — колонка записи уже
+    // «по умолчанию», и сохранение молча её сбрасывало.
+    let bookedPick = state.cfg.settings.booked_stage || '';
+    let bookedWant = bookedPick;
     const bookedSel = h('select', { 'aria-label': 'Колонка подтверждения (запись)', 'data-crm-booked-stage': '' });
     const bookedHint = h('div', { class: 'hint' });
     const fillBooked = () => {
@@ -409,7 +415,7 @@ function bookingCard() {
         clear(bookedSel);
         bookedSel.appendChild(h('option', { value: '' }, trf('По умолчанию — «{label}»', { label: def ? tr(label(def)) : '—' })));
         for (const k of cand) bookedSel.appendChild(h('option', { value: k }, label(k)));
-        if (!cand.includes(bookedWant)) bookedWant = '';
+        bookedWant = cand.includes(bookedPick) ? bookedPick : '';   // CRM_UNIFY_V1 — выбор не затирается
         bookedSel.value = bookedWant;
         bookedHint.textContent = trf('Сюда переходит карточка, когда пациента записали на приём. Только открытая видимая колонка до «{won}».',
             { won: tr(label(wonSel.value)) });
@@ -431,7 +437,12 @@ function bookingCard() {
                 toast('Окно повторного обращения — целое число часов от 1 до 720.', 'warn');
                 return;
             }
-            const settings = { booked_stage: bookedWant || null, window_hours: windowHours };
+            // CRM_UNIFY_V1 (итоговое ревью, S3) — колонку записи шлём, только если
+            // она действительно сменилась: человек выбрал другую или «по
+            // умолчанию», либо прежняя стала недопустимой при новой конверсии.
+            // Иначе сохранение одного окна не трогает её вовсе.
+            const settings = { window_hours: windowHours };
+            if (bookedWant !== base.booked) settings.booked_stage = bookedWant || null;
             // Конверсию шлём, только если её сменили: перенос вида — отдельное
             // решение, и сохранение одной колонки записи его не повторяет.
             if (wonSel.value && wonSel.value !== savedWon) settings.won_stage = wonSel.value;
@@ -440,7 +451,7 @@ function bookingCard() {
             await reload(fresh);
         }, bookedWant !== base.booked || wonSel.value !== base.won || String(hours.value ?? '').trim() !== base.hours));   // CRM_UNIFY_V1 — и окно
     };
-    bookedSel.addEventListener('change', () => { bookedWant = bookedSel.value || ''; repaintSave(); });
+    bookedSel.addEventListener('change', () => { bookedPick = bookedSel.value || ''; bookedWant = bookedPick; repaintSave(); });   // CRM_UNIFY_V1 — помнить выбор
     wonSel.addEventListener('change', () => { fillBooked(); repaintSave(); });
     hours.addEventListener('input', repaintSave);   // CRM_UNIFY_V1 — правка окна видна сразу
     repaintSave();

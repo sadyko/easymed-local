@@ -483,7 +483,10 @@ test('CRM_UNIFY_V1: колонка конверсии — без проигры�
   findButtonByText(root, /Сохранить настройки/).click();
   await tick();
   // CRM_UNIFY_V1 (задача 6) — ОБНОВЛЕНО НАМЕРЕННО: и окно повторного обращения.
-  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 72, won_stage: 'recall' } });
+  // CRM_UNIFY_V1 (итоговое ревью, S3) — ОБНОВЛЕНО НАМЕРЕННО: колонка записи
+  // уходит, только если её действительно сменили; здесь сохранённое «по
+  // умолчанию» так и осталось «по умолчанию» — слать null незачем.
+  assert.deepStrictEqual(lastSaveBody, { settings: { window_hours: 72, won_stage: 'recall' } });
 });
 
 test('CRM_UNIFY_V1: отказ сервера — его фраза, экран не перерисован догадкой', async () => {
@@ -518,7 +521,9 @@ test('CRM_UNIFY_V1: окно повторного обращения — 72 по
   assert.ok(textOf(root).includes('Изменения не сохранены'), 'окно изменили, а экран молчит');
   findButtonByText(root, /Сохранить настройки/).click();
   await tick();
-  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 48 } });
+  // CRM_UNIFY_V1 (итоговое ревью, S3) — ОБНОВЛЕНО НАМЕРЕННО: колонку записи не
+  // трогали — её и не шлём (раньше уходил booked_stage: null).
+  assert.deepStrictEqual(lastSaveBody, { settings: { window_hours: 48 } });
   assert.strictEqual(lastToast(), 'Настройки сохранены.');
 });
 
@@ -545,3 +550,48 @@ test('CRM_UNIFY_V1: окно не целое или вне 1–720 — отка�
     assert.strictEqual(lastToast(), 'Окно повторного обращения — целое число часов от 1 до 720.', JSON.stringify(bad));
   }
 });
+
+// CRM_UNIFY_V1 (итоговое ревью, S3) — конверсию сменили туда и обратно: выбор
+// колонки записи, сделанный человеком, помнится; сохранение одного окна не
+// сбрасывает колонку записи в «по умолчанию».
+test('CRM_UNIFY_V1 S3: конверсия туда и обратно — выбор колонки записи на месте; правка окна не шлёт booked_stage', async () => {
+  resetServer();
+  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'in_process', window_hours: 72 } });
+  saveRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'in_process', window_hours: 48 } });
+  const root = await render();
+  assert.strictEqual(bookedSel(root).value, 'in_process');
+  change(wonSel(root), 'recall');
+  assert.strictEqual(bookedSel(root).value, 'in_process', 'выбор «В обработке» до «Перезвонить» допустим и пропал');
+  // выбор пользователя — «Перезвонить», затем конверсия «Перезвонить» делает его недопустимым
+  change(wonSel(root), 'came');
+  change(bookedSel(root), 'recall');
+  change(wonSel(root), 'recall');
+  assert.strictEqual(bookedSel(root).value, '', 'недопустимый выбор показан');
+  change(wonSel(root), 'came');
+  assert.strictEqual(bookedSel(root).value, 'recall', 'конверсию вернули — выбор человека забыт');
+  // вернули всё как было — экран не просит сохранить
+  change(bookedSel(root), 'in_process');
+  assert.ok(!textOf(root).includes('Изменения не сохранены'), 'всё как было, а экран просит сохранить');
+  typeHours(hoursInput(root), '48');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.deepStrictEqual(lastSaveBody, { settings: { window_hours: 48 } }, 'правка окна сбросила колонку записи');
+});
+
+test('CRM_UNIFY_V1 S3: человек сам выбрал «по умолчанию» — уходит null; выбор стал недопустимым — уходит null', async () => {
+  resetServer();
+  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'recall', window_hours: 72 } });
+  let root = await render();
+  change(bookedSel(root), '');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 72 } });
+  resetServer();
+  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'recall', window_hours: 72 } });
+  root = await render();
+  change(wonSel(root), 'recall');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 72, won_stage: 'recall' } });
+});
+
