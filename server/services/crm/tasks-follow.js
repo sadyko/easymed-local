@@ -70,14 +70,20 @@ export const canOwnLead = (db, userId) => staffCanWorkLead(db, userId, userId);
  * assigned_to })` у карточки с хозяином — то же правило без «прежнего».
  * @returns {number} сколько задач переехало
  */
-export function moveTasksWithLead(db, requestId, { from = null, to = null } = {}) {
+export function moveTasksWithLead(db, requestId, { from = null, to = null, cache = null } = {}) {
   const t = idOrNull(to);
   const f = idOrNull(from);
-  if (t == null || t === f || !canOwnLead(db, t)) return 0;
-  const known = new Map();
+  // CRM_UNIFY_V1 (финальное ревью) — cache: общий для прохода по многим
+  // карточкам (rehomeOrphanTasks) ответ «может вести» по паре (сотрудник,
+  // хозяин) — права читаются несколькими запросами, а пар немного.
+  const known = cache || new Map();
+  const ownKey = 'own>' + t;
+  if (t != null && !known.has(ownKey)) known.set(ownKey, canOwnLead(db, t));
+  if (t == null || t === f || !known.get(ownKey)) return 0;
   const stays = (a) => {
-    if (!known.has(a)) known.set(a, staffCanWorkLead(db, a, t));
-    return known.get(a);
+    const k = a + '>' + t;
+    if (!known.has(k)) known.set(k, staffCanWorkLead(db, a, t));
+    return known.get(k);
   };
   const ids = db.prepare('SELECT id, assignee_id FROM crm_tasks WHERE request_id = ? AND done_at IS NULL').all(requestId)
     .filter((x) => {
@@ -87,6 +93,62 @@ export function moveTasksWithLead(db, requestId, { from = null, to = null } = {}
     .map((x) => x.id);
   if (!ids.length) return 0;
   return db.prepare(`UPDATE crm_tasks SET assignee_id = ? WHERE id IN (${ids.map(() => '?').join(',')})`).run(t, ...ids).changes;
+}
+
+/**
+ * CRM_UNIFY_V1 (финальное ревью) — ЗАДАЧИ ТОГО, КТО ПОТЕРЯЛ ПРАВО ВЕСТИ
+ * КАРТОЧКУ. Держатель задачи мог перестать вести карточку и без смены её
+ * хозяина: сняли «crm.all», роль сменили на «просмотр» или без раздела CRM,
+ * сотрудника уволили. Задача оставалась у него: красный счётчик её считал, а
+ * открыть (или отметить) её он не мог. Здесь у каждой карточки С ХОЗЯИНОМ,
+ * где есть открытая задача без исполнителя или у того, кто её вести не может,
+ * — moveTasksWithLead(db, id, { to: хозяин }): то же правило, что при смене
+ * хозяина и в разовом исправлении (crm/unify-repair.js). Хозяин сам вести
+ * карточку не может (уволен) — ничего: задачи пойдут за карточкой, когда
+ * руководитель её передаст. Ничья карточка — ничего (её видят все).
+ *
+ * Меняется только crm_tasks.assignee_id — карточки (updated_at) не трогаются.
+ * Повтор ничего не находит. Один проход — один запрос по открытым задачам и
+ * ответ «может вести» по паре (сотрудник, хозяин) один раз. Не бросает.
+ * @returns {number} сколько задач переехало
+ */
+export function rehomeOrphanTasks(db) {
+  try {
+    const rows = db.prepare(`SELECT t.request_id AS rid, r.assigned_to AS owner, t.assignee_id AS a
+                               FROM crm_tasks t JOIN crm_requests r ON r.id = t.request_id
+                              WHERE t.done_at IS NULL AND r.assigned_to IS NOT NULL
+                                AND (t.assignee_id IS NULL OR t.assignee_id <> r.assigned_to)`).all();
+    if (!rows.length) return 0;
+    const cache = new Map();
+    const can = (a, owner) => {
+      const k = a + '>' + owner;
+      if (!cache.has(k)) cache.set(k, staffCanWorkLead(db, a, owner));
+      return cache.get(k);
+    };
+    const cards = new Map();
+    for (const x of rows) if (x.a == null || !can(x.a, x.owner)) cards.set(x.rid, x.owner);
+    if (!cards.size) return 0;
+    let moved = 0;
+    db.transaction(() => {
+      for (const [rid, owner] of cards) moved += moveTasksWithLead(db, rid, { to: owner, cache });
+    })();
+    return moved;
+  } catch (e) {
+    console.error('[crm-tasks] задачи хозяину карточки не переданы:', e && e.message);
+    return 0;
+  }
+}
+
+/** При запуске и раз в час (server/index.js). Таймер unref: остановке сервера не мешает. */
+export function scheduleCrmTaskRehome(db, { everyMs = 3600 * 1000 } = {}) {
+  const run = () => {
+    const n = rehomeOrphanTasks(db);
+    if (n) console.log(`  CRM: задач передано оператору карточки (держатель больше не может её вести): ${n}`);
+  };
+  run();
+  const h = setInterval(run, everyMs);
+  if (h && typeof h.unref === 'function') h.unref();
+  return h;
 }
 
 function assigneeRefusal() {
@@ -117,6 +179,10 @@ export function ownerRefusal() {
  * значении — иначе перебором номеров он узнавал бы, чья это карточка.
  */
 export function taskAssigneeRefusal(db, meta, body, user) {
+  // CRM_UNIFY_V1 (финальное ревью) — upsert задачи обходил бы и правило
+  // исполнителя (ниже — только вставка и правка), и метки created_by. Экран
+  // upsert задач не делает никогда — дверь его не принимает: безликий отказ.
+  if (meta && meta.table === 'crm_tasks' && meta.op === 'upsert') return facelessRefusal();
   if (!meta || meta.table !== 'crm_tasks' || (meta.op !== 'insert' && meta.op !== 'update')) return null;
   const rows = (Array.isArray(body && body.values) ? body.values : [body && body.values]).filter((r) => has(r, 'assignee_id'));
   if (!rows.length) return null;

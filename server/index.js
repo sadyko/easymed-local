@@ -25,6 +25,7 @@ import { runBranchSync } from './services/rpc/branch-sync.js';
 import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EVENTS_V1
 import { scheduleCrmNoShow } from './services/crm/no-show.js';   // CRM_UNIFY_V1
 import { crmUnifyRepair } from './services/crm/unify-repair.js';   // CRM_UNIFY_V1
+import { scheduleCrmTaskRehome } from './services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -219,6 +220,11 @@ if (isMain) {
   // CRM_UNIFY_V1 — «Не пришёл» ставит сервер: при запуске и раз в час (crm/no-show.js).
   // Таймер unref, проход не бросает; ошибка запуска — предупреждение, не отказ.
   try { scheduleCrmNoShow(db); } catch (e) { console.warn('[crm-no-show]', e && e.message); }
+  // CRM_UNIFY_V1 — задачи тех, кто больше не может вести карточку («crm.all»
+  // сняли, роль — «просмотр», уволен), — её хозяину: при запуске (после
+  // разового исправления выше) и раз в час (crm/tasks-follow.js). Правка прав
+  // ролей через /api/db делает то же сразу (routes/db.js).
+  try { scheduleCrmTaskRehome(db); } catch (e) { console.warn('[crm-task-rehome]', e && e.message); }
 
   // TELEGRAM_BOT_V1 — опросник Telegram живёт внутри этого же процесса, чтобы у
   // клиники был один `npm start`. Он сам проверяет, включён ли бот в настройках,

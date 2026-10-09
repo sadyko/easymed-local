@@ -20,7 +20,7 @@ import { roleWriteRefusal } from '../services/role-guard.js';   // ADMIN_ROWS_GR
 import { packageStampRefusal } from '../services/rpc/billing.js';   // PACKAGES_V1 (ревью I-3)
 // CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
-import { taskAssigneeRefusal, canOwnLead, ownerRefusal } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
+import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -432,6 +432,7 @@ export function dbRoutes(db) {
           } catch (e) { if (!refused) throw e; }
           if (refused) return res.status(403).json({ error: { code: 'forbidden', message: 'not allowed' } });
           mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
+          rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
           return res.json({ data: null });
         }
         const info = db.prepare(sql).run(...params);
@@ -451,6 +452,7 @@ export function dbRoutes(db) {
           crmServiceEvidence(db, [Number(info.lastInsertRowid)]);
         }
         mirrorAfter(db, mirror, meta, req.body, req.user, { insertedId: Number(info.lastInsertRowid) });   // CRM_CALENDAR_MIRROR_V1
+        rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
         if (!meta.returning) return res.json({ data: null });
         const row = db.prepare(
           `SELECT ${readableColumns(meta.table).map((c) => `"${c}"`).join(', ')} FROM "${meta.table}" WHERE rowid = ?`
@@ -461,6 +463,7 @@ export function dbRoutes(db) {
       if (meta.op === 'upsert') {
         db.prepare(sql).run(...params);
         mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
+        rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
         // A bulk (array) upsert has no single row to hand back; callers that use
         // it don't request returning. Single-row upsert re-selects below.
         if (!meta.returning || meta.multi) return res.json({ data: null });
@@ -485,6 +488,7 @@ export function dbRoutes(db) {
         if (updInfo.changes === 0 && zeroRowRefusal(meta.table)) return res.status(403).json({ error: { code: 'forbidden', message: zeroRowRefusal(meta.table) } });
         if (evidence.length) crmServiceEvidence(db, evidence);
         mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
+        rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
         if (!meta.returning) return res.json({ data: null });
         // Re-select the affected rows using the SAME filters that scoped the
         // update (never the whole table) so `returning` reflects only what
@@ -498,6 +502,7 @@ export function dbRoutes(db) {
         const delInfo = db.prepare(sql).run(...params);
         if (delInfo.changes === 0 && zeroRowRefusal(meta.table)) return res.status(403).json({ error: { code: 'forbidden', message: zeroRowRefusal(meta.table) } });   // CABINET_FIX_V1_R1
         mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
+        rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
         return res.json({ data: null });
       }
     } catch (e) {
@@ -551,6 +556,15 @@ export function dbRoutes(db) {
 // вести заявки (crm/tasks-follow.js canOwnLead: активен, пишет задачи CRM,
 // «CRM: изменение»). Иначе карточка — и её задачи, идущие за ней, — уходили
 // кассиру, врачу, уволенному, наблюдателю или несуществующему номеру.
+// CRM_UNIFY_V1 (финальное ревью) — права ролей сменились («Настройки → Роли»
+// пишет role_permissions через эту дверь): «crm.all» сняли, CRM — «просмотр»
+// или без раздела. Задачи тех, кто больше не может вести карточку, сразу —
+// её хозяину (crm/tasks-follow.js rehomeOrphanTasks; иначе — проход раз в
+// час, server/index.js). Не бросает.
+function rehomeAfterRolesWrite(db, meta) {
+  if (meta && meta.table === 'role_permissions') rehomeOrphanTasks(db);
+}
+
 function crmAssignRefusal(db, meta, body, user) {
   if (!meta || meta.table !== 'crm_requests') return null;
   if (meta.op !== 'insert' && meta.op !== 'update' && meta.op !== 'upsert') return null;

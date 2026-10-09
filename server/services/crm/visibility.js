@@ -43,7 +43,19 @@ export function canSeeAllLeads(db, user) {
  */
 export function canEditCrm(db, user) {
   try {
-    return grantAllowsOr(db, user, 'crm', 'edit', () => sectionLevel(db, user, 'crm') !== 'viewer');
+    // CRM_UNIFY_V1 (финальное ревью) — РАЗДЕЛ CRM ДОЛЖЕН БЫТЬ ВЫДАН. Ненастроенный
+    // ключ решает то же правило, что меню (permissions.js isModuleAllowed('crm')):
+    // раздел «crm» есть в правах роли (своя роль клиники заменяет основу,
+    // ненастроенная своя — права основы, дополнительные роли прибавляются —
+    // sectionLevel) и это не «просмотр». Прежде роль БЕЗ раздела (уровень null)
+    // считалась ведущей заявки: ей предлагали задачи и отдавали карточки, а
+    // экрана CRM у неё нет. Администратор проходит, как прежде (grantAllowsOr);
+    // штатные регистратура (editor) и колл-центр (admin) — тоже: раздел им выдан
+    // сидом прав.
+    return grantAllowsOr(db, user, 'crm', 'edit', () => {
+      const lvl = sectionLevel(db, user, 'crm');   // null — раздела нет
+      return lvl != null && lvl !== 'viewer';
+    });
   } catch {
     return true;   // права не прочитались — решает реестр, как до этой проверки
   }
