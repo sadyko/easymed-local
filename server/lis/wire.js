@@ -90,10 +90,12 @@ export function wireDecision({ profile = null, facility = '', app = '' } = {}) {
 /**
  * LIS_REAL_ANALYZERS_V1 (ревью R1, п. 7) — провода, у которых MSH-16 = 1/2
  * значит калибровку и контроль качества: химия Mindray (руководство BS-200,
- * с. 8: «0- Sample result; 1- Calibration result; 2- QC result»). BS-240 и
- * CL-900i — на проводе default: руководства на их HL7 у нас нет, и прятать
- * пробу пациента в «служебные» по догадке нельзя; их контроль, если придёт,
- * ляжет в «Необработанные», как до E4, и его отклонит человек.
+ * с. 8: «0- Sample result; 1- Calibration result; 2- QC result»).
+ * LIS_VENDOR_EXACT_V1 (D2) — и BS-240 с CL-900i: их профили теперь на этом
+ * проводе, и соглашение у них документировано тем же словами (руководство
+ * BS-360E/BS-240Pro/BS-240E, с. 12; Host Interface Manual CL, с. 1-26).
+ * Раньше они стояли на default «по отсутствию руководства», и их контроль
+ * (MSH + OBR, номер теста в OBR-2) читался как проба.
  *
  * Ревью R2, п. 11 — Autobio по сети (autobio-hl7) снят: его провод — по
  * полевому драйверу, не по документу, и то, что MSH-16 у него значит то же,
@@ -102,6 +104,80 @@ export function wireDecision({ profile = null, facility = '', app = '' } = {}) {
  * ПРОВЕРИТЬ НА ПРИБОРЕ (спецификация, раздел 5).
  */
 const VENDOR_KIND_WIRES = new Set(['mindray-chem']);
+
+/**
+ * LIS_VENDOR_EXACT_V1 (D7) — контроль гематологии Mindray. Её диалект читают
+ * провода default (BC-20, BC-5300 — профили без провода) и mindray-hematology
+ * (BC-780). MSH-16 там пуст; контроль — ORU^R01 с
+ *   — MSH-11 = Q («the MSH-11 value of QC message is Q», руководство BC-3600,
+ *     с. D-31; BC-5300, приложение C, табл. 1) или T / D (табл. D-2 того же
+ *     руководства: результат контроля / настройка контроля), ИЛИ
+ *   — OBR-4.1 = 00003–00008 — тип результата: L-J, X, XB, X-R, средние X и X-R
+ *     (BC-5300, табл. 9; BC-3600, табл. D-8). Проба — 00001 (счёт) и 00002
+ *     (микроскопия).
+ * В OBR-3 контроля — номер файла контроля, маленькое голое число («6»):
+ * прочитанный как проба, он ложился в открытый свежий заказ № 6 чужого
+ * пациента. Теперь такое сообщение служебное: мимо бланков и лотка, ответ AA.
+ * T и D у MSH-11 и в стандарте HL7 — не рабочая проба (обучение, отладка).
+ */
+const HEMATOLOGY_KIND_WIRES = new Set(['default', 'mindray-hematology']);
+const HEMATOLOGY_QC_PROCESSING = new Set(['Q', 'T', 'D']);
+const HEMATOLOGY_QC_RESULT_TYPE = /^0000[3-8]$/;
+/**
+ * LIS_VENDOR_EXACT_V1 (D7, ревью) — система кодов Mindray. Провод default читает
+ * и чужие приборы (найденный без модели, «Другой анализатор (общий HL7)»,
+ * прежние профили), а «00003»–«00008» — вид результата только у Mindray: в
+ * каждом примере производителя — «00003^LJ QCR^99MRC» (BC-5300, табл. 9;
+ * BC-3600, с. D-32). Без 99MRC такой OBR-4 — чужой код теста, а не контроль.
+ */
+const HEMATOLOGY_QC_SYSTEM = '99MRC';
+
+/** LIS_VENDOR_EXACT_V1 (D7) — контроль гематологии по MSH-11 или OBR-4 любого OBR (вид результата Mindray, 99MRC). */
+function hematologyQc(text, msh) {
+  const segs = String(text == null ? '' : text).split(SEG).filter((s) => s.trim() !== '');
+  const comps = (v) => String(v == null ? '' : v).split(msh.compSep).map((c) => c.trim());
+  const processing = comps(String(segs[0] || '').split(msh.fieldSep)[10])[0].toUpperCase();
+  if (HEMATOLOGY_QC_PROCESSING.has(processing)) return true;
+  return segs.some((s) => {
+    if (!s.startsWith('OBR')) return false;
+    const c = comps(s.split(msh.fieldSep)[4]);
+    return HEMATOLOGY_QC_RESULT_TYPE.test(c[0]) && String(c[2] || '').toUpperCase() === HEMATOLOGY_QC_SYSTEM;   // LIS_VENDOR_EXACT_V1 — только код Mindray
+  });
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 — контроль A1000 (провод autobio-hl7). Кодировщик
+ * программы клиники (AutoLumo1000.exe 1.0.7) шлёт контроль РОВНО как пробу
+ * пациента, без всякой пометки (autobio-autolumo-a1000.settle.md, находка 2):
+ * MSH-16 пуст, вид пробы в сообщение не идёт. Отличие одно — у контроля пуст
+ * «ID пациента», и сегмента PID нет (HL7-библиотека прибора пустой сегмент не
+ * пишет; у 19 настоящих контролей клиники PID нет ни у одного). Номер контроля
+ * в OBR-2 — маленькое голое число («1», «3») — ложился в открытый свежий заказ
+ * № 3 чужого пациента (acceptance A1000, T7a).
+ *
+ * Но PID нет и у пробы пациента — отсюда границы правила:
+ *   — «по пробе» (MSH-10 = 7) кодировщик PID не пишет никогда (Et4JYjNVXn), а
+ *     контроль «по пробе» не отправляется вовсе (settle, находка 1): только
+ *     «по тесту», MSH-10 = 5 — код команды, не номер сообщения;
+ *   — «по тесту» PID-3 = «ID пациента» (fKQJJMdGWN), вид пробы кодировщику не
+ *     передаётся (wencExhtA): проба с пустым «ID пациента» выглядит как
+ *     контроль. Поэтому без PID — контроль, только если номер не может быть
+ *     пробиркой пациента: не этикетка LAB- (в любом поле OBR, хоть две — спор
+ *     решает приём), не номер с этикетки — LABEL_DIGITS и больше цифр (решение
+ *     владельца 2026-10-06, п. 4), и номер вообще есть (без номера — в лоток).
+ * Остаётся проба без «ID пациента» и с номером, который приём и так не
+ * принимает (номер лаборатории «5», буквы): она станет контролем, а не строкой
+ * «Необработанных» — поэтому в настройке A1000 «ID пациента» заполняют или
+ * сканируют этикетку LAB-.
+ */
+function autobioQc(text, msh) {
+  if (msh.controlId !== '5') return false;
+  const lines = String(text == null ? '' : text).split(SEG);
+  if (lines.some((s) => s === 'PID' || s.startsWith('PID' + msh.fieldSep))) return false;
+  const pick = pickMessageSample(readResult(text, 'autobio-hl7').obrs, 'autobio-hl7');
+  if (pick.lab || pick.conflict || !pick.sampleId) return false;
+  return !(DIGITS.test(pick.value) && pick.value.length >= LABEL_DIGITS);
+}
 
 // Запросы рабочего списка (раздел 7): Easy-Med заказов не отдаёт, отвечает
 // «заказов нет». QRY^Q02 — BS-200 и химия Mindray, QRY^Q01 — Autobio,
@@ -120,7 +196,10 @@ const SEG = /\r\n?|\n/;
  *                   LIS_REAL_ANALYZERS_V1 (ревью R1, п. 7) — калибровка и контроль
  *                   по MSH-16 — только у проводов VENDOR_KIND_WIRES (wire —
  *                   второй аргумент; не назван — по MSH-3/4 сообщения). У прочих
- *                   MSH-16 вида не меняет: проба пациента не прячется в служебные;
+ *                   MSH-16 вида не меняет: проба пациента не прячется в служебные.
+ *                   LIS_VENDOR_EXACT_V1 (D7) — у гематологии Mindray (провода
+ *                   HEMATOLOGY_KIND_WIRES) контроль — MSH-11 = Q/T/D или OBR-4.1 =
+ *                   00003–00008 с системой кодов Mindray 99MRC (OBR-4.3);
  *   'query'       — запрос рабочего списка (QRY^Q02, QRY^Q01, ORM^O01);
  *   'unsupported' — разобранный заголовок известного, но не поддержанного типа
  *                   (ADT^A01 …) — ответ AR;
@@ -140,7 +219,10 @@ export function readEnvelope(text, wire) {
     // это соглашение; провод не назван — по тому, как сообщение называет себя.
     const w = wire === undefined ? wireFor({ app: msh.app, facility: msh.facility }) : known(wire);
     const vendor = VENDOR_KIND_WIRES.has(w);
-    env.kind = vendor && msh.ackType === '2' ? 'qc' : vendor && msh.ackType === '1' ? 'calibration' : 'result';
+    env.kind = vendor && msh.ackType === '2' ? 'qc' : vendor && msh.ackType === '1' ? 'calibration'
+      : HEMATOLOGY_KIND_WIRES.has(w) && hematologyQc(text, msh) ? 'qc'   // LIS_VENDOR_EXACT_V1 (D7)
+      : w === 'autobio-hl7' && autobioQc(text, msh) ? 'qc'   // LIS_VENDOR_EXACT_V1 — контроль A1000: без PID, не номер пробирки
+      : 'result';
   } else if (QUERY_TYPES.has(msh.type)) {
     env.kind = 'query';
     for (const s of String(text).split(SEG)) {
@@ -169,6 +251,134 @@ function trimZeros(v) {
 }
 
 /**
+ * LIS_VENDOR_EXACT_V1 (D0) — одна десятичная запятая между цифрами — точка:
+ * ПК прибора с русскими региональными настройками пишет «4,17» (A1000 —
+ * double.ToString() .NET; BS-200, CL-900i, BC-5300 — тоже Windows). Только
+ * число целиком «цифры,цифры»: «1,2,3», «a,b» и «4,17 mg» не трогаются. В
+ * числе HL7 разделителей тысяч нет — «1,000» тем самым единица (как
+ * match.js valueKey).
+ */
+export function decimalPoint(v) {
+  return String(v == null ? '' : v).replace(/^([-+]?\d+),(\d+)$/, '$1.$2');
+}
+/** LIS_VENDOR_EXACT_V1 (D0) — простое число, как его читает приём (ingest.js). */
+const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
+
+/**
+ * LIS_VENDOR_EXACT_V1 (D5) — «нет результата» Mindray: число в OBX-5 не больше
+ * −100000000. Руководство CL: «-0x0fffffff means invalid value» (−268435455);
+ * в записях BS-240 (2017) — «-268435455.000000» по каждому непосчитанному
+ * тесту, у BS-300 того же семейства — «-100000000.0». Такого значения не
+ * бывает ни у одного анализа, поэтому правило — на любом проводе. Текст
+ * качественных тестов («-», «+», «+-») не число и правило не задевает.
+ */
+const NO_RESULT_MAX = -100000000;
+function isNoResult(v) {
+  const s = decimalPoint(String(v == null ? '' : v).trim());
+  return /^-\d+(\.\d+)?$/.test(s) && parseFloat(s) <= NO_RESULT_MAX;
+}
+/**
+ * Причина «не писать» для журнала лотка: что прислал прибор и, для сверки,
+ * OBX-13 — значение ДО правки (руководство BS-200: «used as original
+ * result»). OBX-13 в бланк не пишется никогда.
+ * LIS_VENDOR_EXACT_V1 (D6) — и OBX-9 химии/ИХЛА Mindray: «If the fifth field
+ * is invalid value, please refer to ninth field for the result» (Host
+ * Interface Manual CL, с. 1-20) — человек видит ответ прибора и вносит его
+ * сам; приём «нет результата» не дописывает ничем.
+ */
+function noResultHold(obx5, obx13, obx9 = '') {
+  const refs = [obx13 && 'OBX-13 «' + obx13 + '»', obx9 && 'OBX-9 «' + obx9 + '»'].filter(Boolean);
+  return 'прибор: нет результата «' + obx5 + '»' + (refs.length ? ', ' + refs.join(', ') + ' — для сверки, в бланк не пишется' : '');
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 (D6) — качественный ответ в OBX-9 химии и ИХЛА Mindray:
+ * «Negative-, Positive+, weak positive+-» (Host Interface Manual CL,
+ * с. 1-20; руководство BS-360E/BS-240Pro/BS-240E — то же). На экране CL те же
+ * ответы — флаги REAC / NREA («реактивно» / «нереактивно»). Неопределённый
+ * ответ (пограничный, «серая зона») — тоже отклонение: человек обязан
+ * посмотреть. 'positive' | 'negative' | '' — не качественный ответ (пусто,
+ * целое «вероятность» BS-200, «оптимизированный результат» числом).
+ */
+const QUAL_NEGATIVE = /^(negative|neg|non-?reactive|non reactive|nrea|отрицательн\S*)$/;
+const QUAL_POSITIVE = /^(positive|pos|reactive|reac|weak(ly)? positive|weak(ly)? reactive|borderline|equivocal|gr[ae]y ?zone|indeterminate|положительн\S*|слабоположительн\S*|слабо положительн\S*|сомнительн\S*)$/;
+function qualitativeOf(raw) {
+  // Скобки — как в таблице ASTM того же руководства: «Negative(-)», «Weak positive(+-)».
+  const s = String(raw == null ? '' : raw).toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  const word = s.replace(/[\s+\-±]+$/, '');   // «positive+», «negative-», «weak positive+-»
+  if (!word) return s.startsWith('-') ? 'negative' : 'positive';   // одни знаки: «-», «+», «+-», «±»
+  if (QUAL_NEGATIVE.test(word)) return 'negative';
+  if (QUAL_POSITIVE.test(word)) return 'positive';
+  return '';
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5 —
+ * analyzer-research\fix\DECISIONS.md: «предупреждения не мешают») — флаги A1000
+ * по перечню самого прибора: ToolsLib.Flags программы клиники AutoLumo1000 1.0.7,
+ * смысл каждого — её же подписи (en\AutoLumo1000.resources.dll, Data_Item_FLAG*).
+ * Раньше в лоток уходил любой флаг, кроме ORH/ORL, а у A1000 клиники 832 из 949
+ * результатов несут CEX (realtest\verify\a1000\reports\flags-decoded.txt): в
+ * бланк не ложилось почти ничего, а A1000 по MSA-4 отмечал результат «Accepted».
+ *   A1000_IGNORE — предупреждения о сроках и контроле качества: число пишется,
+ *     флаг — по диапазону клиники. CEX «calibration curve or cut-off value is
+ *     expired», PEX «kit is beyond the after-open validate period», LEX «kit is
+ *     beyond the expiry date», EXS «substrate is expired», QEX «quality control
+ *     lot is beyond expiry date», QCF «a quality control violates one or more
+ *     Westgard rules», LQCF «result is obtained after that the QC is out of range».
+ *   A1000_HIGH — ORH «above the upper limit of the measuring range», OVR «above
+ *     the highest calibrator»: «>число» и «Выше»;
+ *   A1000_LOW — ORL «below the lower limit of the measuring range»: «<число» и «Ниже».
+ * Остальное — ошибки измерения (ERR, QNS, QNR, SUC, RLU, CLT, TRI…), флаги,
+ * которых нет в перечне владельца (GRY, CRH, CRL, OVD, DRX, γ…), и незнакомые —
+ * не писать: строка бланка «не пришла», проба в лотке с «флаги прибора: …».
+ *
+ * LIS_VENDOR_EXACT_V1 (D9, доклассификация) — остаток перечня по подписям той же
+ * программы (весь перечень, 62 имени, — wire.test.js A1000_ENUM):
+ *   — OVD «Result from a diluted sample» (прибор сам развёл пробу и пересчитал —
+ *     число окончательное) и DRX «The result is calculated from the derivation
+ *     of formula» (расчётный тест) — не мешают, как сроки: в A1000_IGNORE;
+ *   — A1000_CRITICAL — CRH «above the upper limit of the critical range», CRL
+ *     «below the lower limit of the critical range» (критический диапазон задаёт
+ *     лаборатория на приборе): число пишется, OBX-8 — HH / LL, словарь HL7 для
+ *     «паники»; ingest.js flagFromDevice делает из них 'critical';
+ *   — GRY «For qualitative assays or the QC, result is within the specified gray
+ *     zone» — пограничный ответ: не писать, решает человек; прочие 48 имён
+ *     перечня — ошибки, сбои температуры, «повторите тест», ответы TB-IGRA — тоже;
+ *     имя вне перечня — незнакомое: не писать.
+ * Критический и предел измерения в одну сторону — «>» / «<» и «критический»;
+ * в разные стороны (CRH с ORL, CRL с ORH/OVR, CRH с CRL) — спор: не писать.
+ */
+const A1000_IGNORE = new Set(['CEX', 'PEX', 'LEX', 'EXS', 'QEX', 'QCF', 'LQCF', 'OVD', 'DRX']);   // LIS_VENDOR_EXACT_V1 — + OVD, DRX
+const A1000_HIGH = new Set(['ORH', 'OVR']);
+const A1000_LOW = new Set(['ORL']);
+/** LIS_VENDOR_EXACT_V1 (D9) — критический диапазон прибора → OBX-8 HL7 «HH» / «LL». */
+const A1000_CRITICAL = new Map([['CRH', 'HH'], ['CRL', 'LL']]);
+
+/**
+ * LIS_VENDOR_EXACT_V1 (D9) — NTE, который A1000 ставит ПЕРЕД каждым OBX
+ * (кодировщик программы клиники; лист A1000, §3): NTE-3 — повторения
+ * «лот ~ флаги через «-» ~ имя реагента ~ код ~ срок ~ штатив ~ место».
+ * Флаги (ToolsLib.Flags): ORH — выше предела измерения, ORL — ниже; ERR,
+ * QNS, CEX, PEX и прочие — с результатом что-то не так. В OBX-8 A1000 флагов
+ * не пишет — только здесь.
+ */
+function autobioNote(nte, fieldSep, repSep) {
+  if (!nte) return { flags: [], sent: [], reagent: '' };
+  const reps = String(nte.split(fieldSep)[3] == null ? '' : nte.split(fieldSep)[3]).split(repSep);
+  // LIS_VENDOR_EXACT_V1 — sent: флаги как их прислал прибор — для причины в лотке
+  // (лаборант сверяет с экраном A1000; «γPO+» в верхнем регистре стал бы «ΓPO+»);
+  // flags — те же в верхнем регистре, для классов.
+  const sent = String(reps[1] == null ? '' : reps[1]).split('-').map((x) => x.trim()).filter(Boolean);
+  return {
+    flags: sent.map((x) => x.toUpperCase()),
+    sent,
+    reagent: String(reps[2] == null ? '' : reps[2]).trim(),
+  };
+}
+
+/**
  * Строки теста и первый OBR по проводу (раздел 4). Без исключений: мусор даёт
  * пустой результат. Наружу — строки в сегодняшнем виде (valueType, code, name,
  * system, codeRaw, value, unit, range, abnormal, status) и новое поле label.
@@ -182,10 +392,23 @@ function trimZeros(v) {
  * | default            | OBX-3.1, затем 3.2   | —                   | OBX-5 целиком                     |
  * | forwarder          | OBX-3.1, затем 3.2   | OBX-4               | OBX-5 целиком                     |
  * | mindray-chem       | OBX-3.1 — номер теста| OBX-4 — имя теста   | OBX-5 без хвостовых нулей         |
- * | autobio-hl7        | OBX-4.1 — код позиции| OBX-3.2, иначе 3.1  | OBX-5, 1-е повторение, компонент 2|
+ * | autobio-hl7        | OBX-4.1, иначе 3.1   | NTE-3.3, OBX-3.2/3.1| OBX-5, 1-е повторение, компонент 2|
  * | mindray-hematology | OBX-3.1, затем 3.2   | —                   | OBX-5 целиком                     |
  * Единица — OBX-6.1, референс — OBX-7, флаг — OBX-8 (1-е повторение), статус —
  * OBX-11 (пусто = F решает match.js), у всех одинаково.
+ *
+ * LIS_VENDOR_EXACT_V1 — hold: причина НЕ писать строку (match.js: строка бланка
+ * «не пришла» с этой причиной, лоток). Есть только у таких строк: «нет
+ * результата» Mindray (D5), флаги прибора A1000 — ошибка измерения или
+ * незнакомый флаг (D9; предупреждения о сроках и контроле, ORH/OVR/ORL — не
+ * hold: решение владельца 2026-10-06, п. 5; LIS_VENDOR_EXACT_V1 — и OVD, DRX,
+ * CRH/CRL — не hold, у CRH/CRL abnormal HH/LL; GRY — hold).
+ * Десятичная запятая у mindray-chem и autobio-hl7 — точка (D0); у A1000
+ * простое число — NM, флаги ORH/ORL — в abnormal (H/L) и знак «>»/«<» (D9).
+ * qualitative (D6) — качественный ответ OBX-9 у mindray-chem: 'positive' |
+ * 'negative'; есть только у таких строк. Простое число у mindray-chem — NM
+ * (индекс COI качественного теста CL). LIS_VENDOR_EXACT_V1 (D6, ревью) — у
+ * не-числовой строки без ответа в OBX-9 — по тексту OBX-5 («+», «+-», «-» BS-200).
  *
  * obr — первый OBR: { placer: OBR-2, filler: OBR-3 }, компонент 1 без пробелов
  * по краям; null — OBR нет.
@@ -211,9 +434,12 @@ export function readResult(raw, wire = 'default') {
   let obr = null;
   const obrs = [];
   const observations = [];
+  let nte = '';   // LIS_VENDOR_EXACT_V1 (D9) — NTE перед очередным OBX (A1000)
   for (const seg of segments.slice(1)) {
     const f = seg.split(fieldSep);
-    if (seg.startsWith('OBR')) {
+    if (seg.startsWith('NTE')) {
+      nte = seg;
+    } else if (seg.startsWith('OBR')) {
       // Первый OBR задаёт пробу, как в parseMessage.
       if (!obr) obr = { placer: comp(f[2])[0].trim(), filler: comp(f[3])[0].trim() };
       obrs.push({ placer: t(f[2]), filler: t(f[3]), compSep });
@@ -240,22 +466,75 @@ export function readResult(raw, wire = 'default') {
         // note and must not be analyzed» (с. 24).
         o.name = '';
         o.label = t(f[4]);
-        o.value = trimZeros(o.value);
+        o.value = trimZeros(decimalPoint(o.value));   // LIS_VENDOR_EXACT_V1 (D0) — «5,000000» → «5»
+        // LIS_VENDOR_EXACT_V1 (D6) — качественный ответ прибора — OBX-9: у CL-900i
+        // OBX-8 «Fixed as N» у КАЖДОГО результата, и положительный HBsAg/HCV/HIV
+        // выходил «Норма». Флаг по ответу ставит ingest.js (resultFlag).
+        // LIS_VENDOR_EXACT_V1 (D6, ревью) — а BS-200 пишет ответ в сам OBX-5:
+        // «test result (concentration, negative(-), positive(+), weak
+        // positive(+-), etc)» (HIM v5.0, с. 18), его OBX-9 — целое «вероятность».
+        // Текст OBX-5 читается только у не-числовой строки (OBX-2 не NM) и
+        // только если OBX-9 ответа не дал; число ответом не бывает (qualitativeOf).
+        const q = qualitativeOf(f[9]) || (o.valueType.toUpperCase() !== 'NM' ? qualitativeOf(o.value) : '');
+        if (q) o.qualitative = q;
+        // Индекс COI качественного теста (OBX-2 = ST) — число: numeric_value
+        // есть, и диапазон клиники работает. Текст («+», «-», «+-») — как был.
+        if (PLAIN_NUMBER.test(o.value)) o.valueType = 'NM';
       } else if (w === 'autobio-hl7') {
         // AutoLumoHL7.cs (LiveMachine), строки 129–163: код — OBX-4, значение —
-        // компонент 2 OBX-5; компонент 1 — RLU, сигнал прибора. OBX-3 у Autobio
-        // может быть номером заявки на тест, своим у каждого прогона, — не
-        // сравнивается. Это ВЕРОЯТНО, а не документ (один драйвер, A2000 Plus):
-        // первая настоящая проба сверяется построчно.
+        // компонент 2 OBX-5; компонент 1 — RLU, сигнал прибора.
+        // LIS_VENDOR_EXACT_V1 — сверено с кодировщиком самой программы клиники
+        // (AutoLumo1000.exe 1.0.7; лист A1000, §3): «по тесту» OBX-3 = OBX-4 =
+        // код теста, OBX-1 — внутренний номер заявки; «по пробе» OBX-4 пуст, и
+        // код — OBX-3.1 (D9). OBX-2 у A1000 всегда CE.
         const obx4 = comp(f[4]);
-        o.code = t(obx4[0]);
+        o.code = t(obx4[0]) || t(obx3[0]);
         o.name = '';
         o.system = '';
-        o.codeRaw = t(f[4]);
-        o.label = t(obx3[1]) || t(obx3[0]);
-        o.value = t(comp(String(f[5] == null ? '' : f[5]).split(repSep)[0])[1]);
+        o.codeRaw = t(f[4]) || t(f[3]);
+        const note = autobioNote(nte, fieldSep, repSep);
+        o.label = note.reagent || t(obx3[1]) || t(obx3[0]);   // LIS_VENDOR_EXACT_V1 — имя реагента из NTE («AFP»)
+        let v = decimalPoint(t(comp(String(f[5] == null ? '' : f[5]).split(repSep)[0])[1]));
+        // LIS_VENDOR_EXACT_V1 (D9) — флаги прибора. За пределом измерения
+        // прибор шлёт сам предел простым числом: ORH — «выше» и знак «>»,
+        // ORL — «ниже» и «<» (если знака ещё нет).
+        // LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5) —
+        // предупреждения о сроках и контроле (A1000_IGNORE: CEX, PEX, LEX…) не
+        // мешают; OVR — как ORH; не писать (строка бланка «не пришла», проба в
+        // лотке) — только ошибку измерения, незнакомый флаг и спор «выше» с «ниже».
+        // LIS_VENDOR_EXACT_V1 (D9, доклассификация) — и критический диапазон
+        // (CRH/CRL → HH/LL); OVD и DRX — в A1000_IGNORE; спор направлений
+        // (выше и ниже разом, в том числе критического) — не писать.
+        const rest = note.flags.filter((x) => !A1000_IGNORE.has(x));
+        const high = rest.some((x) => A1000_HIGH.has(x));
+        const low = rest.some((x) => A1000_LOW.has(x));
+        const critical = [...new Set(rest.filter((x) => A1000_CRITICAL.has(x)).map((x) => A1000_CRITICAL.get(x)))];
+        const up = high || critical.includes('HH');
+        const down = low || critical.includes('LL');
+        const other = rest.filter((x) => !A1000_HIGH.has(x) && !A1000_LOW.has(x) && !A1000_CRITICAL.has(x));
+        if (other.length || (up && down)) {
+          o.hold = 'флаги прибора: ' + note.sent.join('-');   // LIS_VENDOR_EXACT_V1 — как прислал прибор
+        } else {
+          if (high) {
+            o.abnormal = 'H';
+            if (v && !/^[<>]/.test(v)) v = '>' + v;
+          } else if (low) {
+            o.abnormal = 'L';
+            if (v && !/^[<>]/.test(v)) v = '<' + v;
+          }
+          if (critical.length) o.abnormal = critical[0];   // LIS_VENDOR_EXACT_V1 — «критический» сильнее «выше»/«ниже»
+        }
+        o.value = v;
+        // LIS_VENDOR_EXACT_V1 (D0) — простое число — число (NM): без этого у
+        // A1000 не было numeric_value, диапазон клиники не срабатывал, и флаг
+        // выходил «Норма» при любом значении. «>x» и «<x» остаются текстом.
+        if (PLAIN_NUMBER.test(v)) o.valueType = 'NM';
       }
+      // LIS_VENDOR_EXACT_V1 (D5) — «нет результата»: строка помечена hold, и
+      // match.js её не пишет — строка бланка «не пришла» с этой причиной (лоток).
+      if (!o.hold && isNoResult(o.value)) o.hold = noResultHold(t(f[5]), t(f[13]), w === 'mindray-chem' ? t(f[9]) : '');
       observations.push(o);
+      nte = '';   // LIS_VENDOR_EXACT_V1 (D9) — NTE относится только к своему OBX
     }
   }
   return { obr, obrs, observations };
@@ -270,7 +549,14 @@ export function readResult(raw, wire = 'default') {
  * считались нашей этикеткой и обходили правило голых цифр (открытый заказ
  * последних 7 дней). Easy-Med так не печатает — это не наше.
  */
-const LAB_RE = /^lab-(\d{6,})$/i;
+/**
+ * LIS_VENDOR_EXACT_V1 — сколько цифр в номере на этикетке: номер заказа,
+ * дополненный нулями до 6 (lab-doc.js labAccession). Та же граница у «номера с
+ * этикетки» без LAB- (решение владельца 2026-10-06, п. 4; ingest.js) и у
+ * контроля A1000 (autobioQc).
+ */
+export const LABEL_DIGITS = 6;
+const LAB_RE = new RegExp('^lab-(\\d{' + LABEL_DIGITS + ',})$', 'i');   // LIS_VENDOR_EXACT_V1 — было /^lab-(\d{6,})$/i
 const labNumber = (v) => { const m = LAB_RE.exec(String(v == null ? '' : v).trim()); return m ? parseInt(m[1], 10) : null; };
 const DIGITS = /^\d+$/;
 

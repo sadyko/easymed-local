@@ -183,8 +183,16 @@ export function isNumericValue(v) {
 }
 
 // Флаг для строки бланка: пусто у нечисловых значений, иначе обычное правило.
+// LIS_VENDOR_EXACT_V1 — «>1000» и «<0.50» — тоже число: так AutoLumo A1000
+// пишет результат за пределом измерения (ORH/OVR — «>предел» и «Выше», ORL —
+// «<предел» и «Ниже»), и пустая графа «Флаг» у AFP выше предела была тише, чем
+// у AFP 12 при норме 0–10. Знак, за ним (через пробелы) цифра; «>=5», «> нормы» —
+// по-прежнему текст.
+const LIMIT_VALUE = /^[<>]\s*\d/;   // LIS_VENDOR_EXACT_V1
 export function labFlagCell(x) {
-    return isNumericValue(x && x.value) ? labFlagFor(x) : '';
+    const v = x && x.value;
+    const limit = v != null && LIMIT_VALUE.test(String(v).trim());   // LIS_VENDOR_EXACT_V1
+    return isNumericValue(v) || limit ? labFlagFor(x) : '';
 }
 
 // ---------------------------------------------------------------------------

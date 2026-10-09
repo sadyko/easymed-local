@@ -101,20 +101,60 @@ export function parseMessage(text) {
 /** MSH-3/4 в заголовок ответа: наши разделители и конец сегмента в эхо не попадают. */
 const echo = (v) => String(v == null ? '' : v).replace(/[|\r\n]/g, ' ').trim();
 
+// LIS_VENDOR_EXACT_V1 — два вида ответа прибору; какой — решает receive.js
+// (replyStyle) по проводу и профилю прибора:
+//   LAYOUT_LONG  — вид руководства BS-200 (HIM v5.0, P/N BA20-20-75337,
+//                  с. 25–27; тот же у BS-240 — M pdf 34, 38 — и CL-900i — HIM
+//                  pdf 35, SM pdf 603–605): MSH до MSH-20 с хвостом
+//                  «…|ASCII|||», «|» после последнего поля MSA, ERR и QAK.
+//                  BS200.exe режет весь ответ по «|» и читает куски 10, 27 и 32
+//                  (MSH-10, MSA-6, QAK-2): у короткого ответа куска 27 нет.
+//                  CL-900i отвергает MSH короче 19 полей и блокирует связь.
+//                  Декодер A1000 этот вид принимает (autobio-autolumo-a1000.
+//                  settle.md, табл. c). Химия и ИХЛА Mindray, A1000,
+//                  переадресатор и незнакомый прибор — первым может заговорить
+//                  и CL-900i, и BS-200.
+//   LAYOUT_SHORT — гематология Mindray (BC-20, BC-5300, BC-780…): сегодняшний
+//                  короткий вид — пустые поля в конце не пишутся (17 «|», как в
+//                  примере производителя, OM13 pdf 485).
+// У обоих — CR после КАЖДОГО сегмента, и последнего тоже: «Each HL7 message is
+// composed of segments that end with <CR>» (HIM v5.0, с. 3, 23; OM13 C.2.1).
+// Кадр поэтому кончается «…<CR><FS><CR>» (mllp.js frameOf).
+export const LAYOUT_LONG = 'long';
+export const LAYOUT_SHORT = 'short';
+
+/** LIS_VENDOR_EXACT_V1 — сегменты ответа: CR после каждого, и последнего тоже. */
+const segments = (list) => list.map((s) => s + '\r').join('');
+
+/**
+ * LIS_VENDOR_EXACT_V1 — MSH-7 ответа: МЕСТНОЕ время ПК, «YYYYMMDDHHMMSS» без
+ * пояса. Так TS понимает HL7 v2.3.1 (время отправителя), и так пишут сами
+ * приборы: A1000 — DateTime.Now (кодировщик программы клиники 1.0.7), BC-20 —
+ * «…123946» в 12:39:46 по часам клиники. Раньше здесь был toISOString — UTC
+ * без пояса: в Ташкенте ответ «отставал» на 5 часов (acceptance mindray-bc-20).
+ */
+const two = (n) => String(n).padStart(2, '0');
+function localStamp(d = new Date()) {
+  return String(d.getFullYear()).padStart(4, '0') + two(d.getMonth() + 1) + two(d.getDate())
+    + two(d.getHours()) + two(d.getMinutes()) + two(d.getSeconds());
+}
+
 /**
  * Заголовок сообщения без исключений.
  * @returns {{ok:boolean, fieldSep:string, compSep:string, app:string, facility:string,
  *   appField:string, facilityField:string, type:string, event:string, controlId:string,
- *   version:string, ackType:string, charset:string}}
+ *   processingId:string, version:string, ackType:string, charset:string}}
  *   app/facility — компонент 1 MSH-3/MSH-4 (как прибор себя назвал);
  *   appField/facilityField — поля целиком, для эха в MSH-5/6 ответа;
  *   type — 'ORU^R01' в нашем виде, event — 'R01';
+ *   processingId — MSH-11, компонент 1 (LIS_VENDOR_EXACT_V1: P — проба, у
+ *     гематологии Mindray Q/T/D — контроль; эхом в ответе);
  *   ackType — MSH-16 (у Mindray и Autobio: 0 — проба, 1 — калибровка, 2 — контроль);
  *   charset — MSH-18.
  */
 export function mshOf(text) {
   const out = { ok: false, fieldSep: '|', compSep: '^', app: '', facility: '', appField: '', facilityField: '',
-    type: '', event: '', controlId: '', version: '', ackType: '', charset: '' };
+    type: '', event: '', controlId: '', processingId: '', version: '', ackType: '', charset: '' };
   // Первый непустой сегмент — как у parseMessage: прибор, приславший пустую
   // строку перед MSH, разобран приёмом, и ответ обязан это знать.
   const first = String(text == null ? '' : text).split(SEG).find((s) => s.trim() !== '') || '';
@@ -141,6 +181,7 @@ export function mshOf(text) {
     // идут в ответ эхом и чистятся так же, как MSH-3/4: у отправителя со своим
     // разделителем полей «|» в поле — просто знак, а в нашем ответе — граница.
     controlId: echo(f[9]),
+    processingId: echo(comp(f[10])[0]),   // LIS_VENDOR_EXACT_V1 — MSH-11 эхом в ответе
     version: echo(f[11]),
     ackType: echo(f[15]),
     charset: echo(f[17]),
@@ -149,26 +190,46 @@ export function mshOf(text) {
 
 /**
  * Заголовок ответа: «MSH|^~\&|EASYMED|CLINIC|<MSH-3>|<MSH-4>|<время>||<тип>|
- * <MSH-10>|P|<MSH-12 или 2.3.1>||||<MSH-16>||<MSH-18>». MSH-5/6 — эхо MSH-3/4
- * входящего (с. 8: «fields 5 and 6 are set to Manufacturer and Model»), MSH-10
- * — номер входящего (с. 25: «returned unchanged in the response message»),
- * MSH-16 и MSH-18 — эхом (с. 27: у ответа на контроль стоит 2). Пустые поля в
- * конце не пишутся: у прибора без MSH-16/18 заголовок кончается на MSH-12, как
- * и до этой правки.
+ * <MSH-10>|<MSH-11>|<MSH-12 или 2.3.1>||||<MSH-16>||<MSH-18>». MSH-3/4 — наши:
+ * «Fields 3 and 4 are determined by LIS manufacturer» (HIM v5.0, с. 8); MSH-5/6
+ * — эхо MSH-3/4 входящего («fields 5 and 6 are set to Manufacturer and Model»,
+ * там же), MSH-10 — номер входящего («returned unchanged in the response
+ * message», с. 24), MSH-16 и MSH-18 — эхом (с. 26: у ответа на контроль стоит 2).
+ *
+ * LIS_VENDOR_EXACT_V1 — вид (o.layout):
+ *   LAYOUT_LONG  (по умолчанию) — до MSH-20 с хвостом «|||», как в руководстве;
+ *                MSH-18 — эхом, а если прибор его не прислал — ASCII
+ *                («Character set. ASCII is used», с. 8; mindray-bs-240.md M15);
+ *   LAYOUT_SHORT — пустые поля в конце не пишутся (гематология, как прежде).
+ * MSH-11 — эхом P/Q/T/D: «In the ACK it equals the received message» (BC-5300
+ * OM13, Table 1), «the value of MSH-11 … in QC response message is Q» (BC-3600
+ * OM, p. D-31); иное и пустое — P. Раньше здесь всегда стояло P, и ответ на
+ * контроль гематологии нарушал правило производителя.
+ * MSH-16 — только у подтверждения (ACK…): «It is void in non-ORU messages»
+ * (HIM v5.0, с. 8); у QCK^Q02 он пуст (с. 27).
+ * @param {{layout?: string}} [o]
  */
-export function replyMsh(msh, type) {
+export function replyMsh(msh, type, { layout = LAYOUT_LONG } = {}) {
   const m = msh || mshOf('');
-  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const stamp = localStamp();   // LIS_VENDOR_EXACT_V1 — местное время ПК, не UTC
   // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 9) — MSH-16 эхом только 0/1/2 — вид
   // результата по руководству BS-200 (с. 8: «0- Sample result; 1- Calibration
   // result; 2- QC result»; эхом в ACK^R01 на с. 25 и 27). Стандартные
   // AL/NE/ER/SU — просьба отправителя о виде подтверждения, а не вид
   // результата: в ответ не возвращаются. Поля — чищеные (echo).
-  const ackType = /^[012]$/.test(echo(m.ackType)) ? echo(m.ackType) : '';
+  // LIS_VENDOR_EXACT_V1 — и только в подтверждении (ACK…), не в QCK/DSR/ORR.
+  const ackType = String(type).startsWith('ACK') && /^[012]$/.test(echo(m.ackType)) ? echo(m.ackType) : '';
+  const proc = /^[PQTD]$/.test(echo(m.processingId)) ? echo(m.processingId) : 'P';   // LIS_VENDOR_EXACT_V1 — MSH-11 эхом
   const f = ['MSH', '^~\\&', 'EASYMED', 'CLINIC', m.appField || '', m.facilityField || '', stamp, '', type,
-    echo(m.controlId) || '1', 'P', echo(m.version) || '2.3.1', '', '', '', ackType, '', echo(m.charset)];
-  while (f.length > 12 && f[f.length - 1] === '') f.pop();
-  return f.join('|');
+    echo(m.controlId) || '1', proc, echo(m.version) || '2.3.1', '', '', '', ackType, '', echo(m.charset)];
+  if (layout === LAYOUT_SHORT) {
+    while (f.length > 12 && f[f.length - 1] === '') f.pop();
+    return f.join('|');
+  }
+  // LIS_VENDOR_EXACT_V1 — вид руководства: «…|2.3.1||||<MSH-16>||ASCII|||» —
+  // 20 «|» (MSH-19, MSH-20 и «|» после него), ничего не срезается.
+  f[17] = f[17] || 'ASCII';
+  return [...f, '', '', ''].join('|');
 }
 
 /** MSA-3 и MSA-6 по коду ответа (с. 9). */
@@ -179,6 +240,49 @@ const MSA_TEXT = {
 };
 /** AE, когда разобрано, но сорвалась запись или сообщение переросло потолок. */
 export const ACK_INTERNAL = Object.freeze({ text: 'Application internal error', error: '207' });
+/**
+ * LIS_VENDOR_EXACT_V1 — сорвалась запись у химии Mindray: AR 206 «Application
+ * record locked» — код руководства для «could not be performed at the
+ * application storage level, such as locked database» (HIM v5.0, с. 9; пример
+ * с. 25: «MSA|AR|1|Application record locked|||206|»). AE по руководству — только
+ * 100–103, AR — 200–207 (receive.js).
+ */
+export const ACK_LOCKED = Object.freeze({ text: 'Application record locked', error: '206' });
+
+/**
+ * LIS_VENDOR_EXACT_V1 — код отказа по нашей вине (сорвалась запись, сообщение
+ * переросло потолок, приём бросил): у химии Mindray (провод 'mindray-chem',
+ * wire.js) — AR: пары AE с 207 руководство не знает (AE — только 100–103, AR —
+ * 200–207; HIM v5.0, с. 9). У прочих — AE, как прежде: переадресатор повторяет
+ * на любом не-AA, A1000 смотрит только MSA-6, у гематологии документ AE и AR
+ * не различает.
+ * @param {{wire?:string}} [style]  receive.js replyStyle
+ */
+export const internalCode = (style) => ((style || {}).wire === 'mindray-chem' ? 'AR' : 'AE');
+
+/**
+ * LIS_VENDOR_EXACT_V1 — ответ на отказ по нашей вине в виде прибора (style:
+ * receive.js replyStyle). Сорвалась запись (o.write) у химии — AR 206
+ * «Application record locked» (ACK_LOCKED), прочее у химии — AR 207, у прочих
+ * проводов — AE 207 (ACK_INTERNAL), как прежде.
+ * @param {ReturnType<typeof mshOf>} msh
+ * @param {{layout?:string, wire?:string}} [style]
+ * @param {{write?:boolean}} [o]
+ */
+export function internalAck(msh, style, { write = false } = {}) {
+  const code = internalCode(style);
+  return buildAck(msh, code, { ...(code === 'AR' && write ? ACK_LOCKED : ACK_INTERNAL), layout: (style || {}).layout });
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 — «MSA|<код>|<номер>|<текст>|<MSA-4>||<MSA-6>»; у вида
+ * руководства — с «|» после MSA-6 («MSA|AA|1|Message accepted|||0|», с. 25):
+ * у BS200.exe это кусок 27.
+ */
+function msaLine(layout, code, controlId, text, error, ref = '') {
+  const line = ['MSA', code, echo(controlId), text, echo(ref), '', error].join('|');   // echo: ревью R1, п. 9
+  return layout === LAYOUT_SHORT ? line : line + '|';
+}
 
 /**
  * ACK (`AA`), NAK (`AE`) или отказ без повтора (`AR`). Номер исходного
@@ -189,17 +293,25 @@ export const ACK_INTERNAL = Object.freeze({ text: 'Application internal error', 
  * вместо него — прежняя форма: номер исходного сообщения.
  * @param {ReturnType<typeof mshOf>|string} msh
  * @param {'AA'|'AE'|'AR'} code
- * @param {{text?:string, error?:string}} [why]  MSA-3/MSA-6 вместо принятых для кода (ACK_INTERNAL)
+ * @param {{text?:string, error?:string, layout?:string, ref?:string}} [why]
+ *   text/error — MSA-3/MSA-6 вместо принятых для кода (ACK_INTERNAL, ACK_LOCKED);
+ *   layout — LIS_VENDOR_EXACT_V1: LAYOUT_LONG (по умолчанию) или LAYOUT_SHORT;
+ *   ref — LIS_VENDOR_EXACT_V1: MSA-4, только у AA. A1000 ставит результату
+ *     «Accepted», только если в MSA-4 — OBX-1 (по тесту) или OBR-3 (по пробе)
+ *     его сообщения (settle, табл. c; выбирает receive.js); при AE/AR MSA-4
+ *     пуст — результат остаётся «Finished» к повтору (A1000, M18).
  */
 export function buildAck(msh, code, why = {}) {
   const m = typeof msh === 'string' || msh == null ? { ...mshOf(''), controlId: String(msh == null ? '' : msh).trim() } : msh;
   const c = MSA_TEXT[code] ? code : 'AE';
-  const text = why.text || MSA_TEXT[c].text;
-  const error = why.error || MSA_TEXT[c].error;
-  return [
-    replyMsh(m, m.event ? 'ACK^' + m.event : 'ACK'),
-    ['MSA', c, echo(m.controlId), text, '', '', error].join('|'),   // echo: ревью R1, п. 9
-  ].join('\r');
+  const w = why || {};
+  const layout = w.layout === LAYOUT_SHORT ? LAYOUT_SHORT : LAYOUT_LONG;
+  const text = w.text || MSA_TEXT[c].text;
+  const error = w.error || MSA_TEXT[c].error;
+  return segments([
+    replyMsh(m, m.event ? 'ACK^' + m.event : 'ACK', { layout }),
+    msaLine(layout, c, m.controlId, text, error, c === 'AA' ? w.ref : ''),
+  ]);
 }
 
 /**
@@ -207,19 +319,51 @@ export function buildAck(msh, code, why = {}) {
  * нет». Easy-Med остаётся «только результаты» и заказов приборам не отдаёт
  * (docs/specs/2026-10-01-lis-real-analyzers-design.md, раздел 7).
  *
- *   QRY^Q02 (BS-200, химия Mindray) → QCK^Q02: MSA AA, ERR|0, QAK|SR|NF —
- *     руководство BS-200, с. 28, дословно («If the sample of the bar code does
- *     not exist»); с QRD-9 = CAN (отмена группового, с. 34) — тот же ответ;
+ *   QRY^Q02 (BS-200, химия Mindray) → QCK^Q02: MSA AA, ERR|0|, QAK|SR|NF| —
+ *     руководство BS-200 (HIM v5.0), с. 27, дословно («If the sample of the bar
+ *     code does not exist»); с QRD-9 = CAN (отмена группового, с. 33) — тот же
+ *     ответ;
  *   QRY^Q01 (Autobio) → DSR^Q01: MSA AA, ERR|0, QAK|SR|NF, эхо QRD и QRF, без
  *     DSP — по образцу AutoLumoHL7.cs (там QAK|SR|OK и DSP с заказом); «нет
- *     данных» — по аналогии, ПРОВЕРИТЬ НА ПРИБОРЕ;
- *   ORM^O01 (гематология Mindray) → ACK^O01 «принято» — документа нет,
- *     ПРОВЕРИТЬ НА ПРИБОРЕ.
+ *     данных» — по аналогии, ПРОВЕРИТЬ НА ПРИБОРЕ (декодер A1000 ждёт ERR-1.4 и
+ *     строки DSP — autobio-autolumo-a1000.md M20; на приборе запрос выключен);
+ *   ORM^O01 (гематология Mindray) → LIS_VENDOR_EXACT_V1: ORR^O02 с MSA|AR|<номер
+ *     запроса> — «заказов нет» по OM13 pdf 489–490 (mindray-bc-5300.md §5; у
+ *     BC-20 так же — mindray-bc-20.md M14). Было ACK^O01 AA без документа.
+ * LIS_VENDOR_EXACT_V1 — вид (o.layout) — как у buildAck: длинный — «|» в конце
+ * MSA, ERR и QAK (BS200.exe читает кусок 32 — QAK-2), MSH-16 пуст; короткий —
+ * как прежде; у обоих CR после последнего сегмента.
  * @param {object} env  readEnvelope() запроса (wire.js): заголовок, qrd, qrf
+ * @param {{layout?: string}} [o]
  */
-export function buildQueryReply(env) {
-  const msa = ['MSA', 'AA', echo(env.controlId), MSA_TEXT.AA.text, '', '', MSA_TEXT.AA.error].join('|');   // echo: ревью R1, п. 9
-  if (env.type === 'QRY^Q02') return [replyMsh(env, 'QCK^Q02'), msa, 'ERR|0', 'QAK|SR|NF'].join('\r');
-  if (env.type === 'QRY^Q01') return [replyMsh(env, 'DSR^Q01'), msa, 'ERR|0', 'QAK|SR|NF', env.qrd, env.qrf].filter(Boolean).join('\r');
-  return buildAck(env, 'AA');
+export function buildQueryReply(env, { layout = LAYOUT_LONG } = {}) {
+  const lay = layout === LAYOUT_SHORT ? LAYOUT_SHORT : LAYOUT_LONG;
+  const tail = lay === LAYOUT_SHORT ? '' : '|';
+  const msa = msaLine(lay, 'AA', env.controlId, MSA_TEXT.AA.text, MSA_TEXT.AA.error);
+  if (env.type === 'QRY^Q02') return segments([replyMsh(env, 'QCK^Q02', { layout: lay }), msa, 'ERR|0' + tail, 'QAK|SR|NF' + tail]);
+  if (env.type === 'QRY^Q01') return segments([replyMsh(env, 'DSR^Q01', { layout: lay }), msa, 'ERR|0' + tail, 'QAK|SR|NF' + tail, env.qrd, env.qrf].filter(Boolean));
+  if (env.type === 'ORM^O01') {
+    // Короткий — дословно OM13 pdf 490: «MSA|AR|<id>»; длинный (ORM^O01 от
+    // незнакомого прибора) — AR 200 с MSA-6, как всякий отказ этого вида.
+    const ar = lay === LAYOUT_SHORT
+      ? ['MSA', 'AR', echo(env.controlId)].join('|')
+      : msaLine(lay, 'AR', env.controlId, MSA_TEXT.AR.text, MSA_TEXT.AR.error);
+    return segments([replyMsh(env, 'ORR^O02', { layout: lay }), ar]);
+  }
+  return buildAck(env, 'AA', { layout: lay });
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 — поле n первого сегмента seg (не MSH) сообщения,
+ * компонент 1, чищенное, как эхо; без исключений: нет сегмента — ''. Для MSA-4
+ * ответа A1000: OBX-1 (TestRequest_ID) по тесту, OBR-3 (внутренний номер пробы)
+ * по пробе (receive.js).
+ */
+export function firstField(text, seg, n) {
+  const m = mshOf(text);
+  if (!m.ok) return '';
+  const line = String(text).split(SEG).find((s) => s.startsWith(seg + m.fieldSep));
+  if (!line) return '';
+  const v = line.split(m.fieldSep)[n];
+  return echo(String(v == null ? '' : v).split(m.compSep)[0]);
 }

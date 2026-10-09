@@ -7,6 +7,7 @@ import { planSeries, seriesOutcome, SERIES_WINDOW_MS } from './match.js';   // L
 import { changeText, SERIES_MAX_MESSAGES } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, пп. 6 и 9
 import { sameValue, SERIES_FORM_MAX_AGE_MS } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R3, пп. 6 и 10
 import { disputeOf, sameDispute } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R4, п. D; R5, п. 4
+import { planTube, tubeOutcome, heldChangeText } from './match.js';   // LIS_VENDOR_EXACT_V1 — D3 и N1
 
 const obs = (codeRaw, value = '1', status = 'F') => {
   const [code = '', name = '', system = ''] = codeRaw.split('^');
@@ -374,4 +375,95 @@ test('R5 п. 4: «5,10» = «5.1» для сравнения и спора; «5,
   const s = planSeries([[{ code: '2', name: 'GLU', value: '5,10', valueType: 'NM', status: 'F' }]],
     [{ id: 1, name: 'Глюкоза', device_code: '2', device_code_confirmed: 1 }], { before: new Map([['Глюкоза', '5.1']]) });
   assert.deepEqual([s.changed.length, s.resent.length], [0, 1], 'повторная передача, а не спор');
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D5, D9: строка, которую провод велел не писать ─────
+// wire.js ставит obs.hold: «нет результата» Mindray (−268435455, −100000000)
+// или флаги прибора A1000 (ERR, QNS…). Такая строка не значение: в бланк не
+// идёт, строка бланка «не пришла» с причиной провода (лоток), и спором
+// («повтор») с уже записанным значением она не считается.
+test('D5: строка с hold — не значение: строка бланка «не пришла» с причиной провода, спора нет', () => {
+  const held = { ...obs('Glu-G', '-268435455'), hold: 'прибор: нет результата «-268435455.000000», OBX-13 «0.000000» — для сверки, в бланк не пишется' };
+  const p = planObservations([held], [line(1, 'Глюкоза', 'Glu-G')]);
+  assert.equal(p.fills.length, 0);
+  assert.equal(p.missing[0].reason, held.hold);
+  assert.deepEqual(p.unused, [], 'строка отнесена к своей строке бланка, не «лишняя»');
+  assert.deepEqual(outcome(p), { status: 'unmapped',
+    detail: 'не пришли: Глюкоза (Glu-G, прибор: нет результата «-268435455.000000», OBX-13 «0.000000» — для сверки, в бланк не пишется)' });
+  // Рядом окончательное значение той же строки — пишется оно, hold — не «повтор».
+  const both = planObservations([obs('Glu-G', '5.1'), held], [line(1, 'Глюкоза', 'Glu-G')]);
+  assert.equal(both.fills.length, 1);
+  assert.equal(both.fills[0].obs.value, '5.1');
+  assert.deepEqual(both.repeats, []);
+});
+
+// ── LIS_VENDOR_EXACT_V1 (D3) — одна пробирка, несколько заказов визита ──────
+// Решение владельца 2026-10-06, п. 2 («Заполнить все»). planTube — чистое
+// правило: заказ пробирки (X) берёт своё первым; что X не взял — в тот заказ
+// визита, где код подтверждён; у двух — «неоднозначно» (не угадываем); у
+// заказа, который принять не может (tier 2), — только если открытого нет.
+
+test('D3: planTube — X первым, остальное — где код подтверждён; у двух заказов — «неоднозначно»', () => {
+  const X = { analytes: [line(1, 'ТТГ', 'TSH')] };
+  const ft4 = { analytes: [line(2, 'Т4 свободный', 'FT4')], tier: 1 };
+  const prof = { analytes: [line(3, 'Т4 свободный', 'FT4'), line(4, 'Анти-ТПО', 'ATPO')], tier: 1 };
+  const ft3 = { analytes: [line(5, 'Т3 свободный', 'FT3')], tier: 1 };
+  const all = [obs('TSH', '2.35'), obs('FT4', '15.2'), obs('FT3', '4.1'), obs('PRL', '300')];
+
+  const t = planTube(all, [X, ft4, ft3]);
+  assert.deepEqual(t.plans.map((p) => p.fills.map((f) => f.analyte.id)), [[1], [2], [5]]);
+  assert.deepEqual(t.involved, [true, true, true]);
+  assert.deepEqual(t.ambiguous, []);
+  assert.deepEqual(t.unused.map((o) => o.code), ['PRL'], 'код не подтверждён ни у кого — «не использован»');
+
+  const amb = planTube(all, [X, ft4, prof, ft3]);
+  assert.deepEqual(amb.ambiguous.map((a) => [a.obs.code, a.orders]), [['FT4', [1, 2]]], 'FT4 у двух заказов — не угадываем');
+  assert.deepEqual(amb.plans.map((p) => p.fills.length), [1, 0, 0, 1]);
+  assert.deepEqual(amb.involved, [true, false, false, true]);
+  assert.deepEqual(amb.unused.map((o) => o.code), ['PRL'], '«неоднозначно» — не «не использовано»');
+
+  // Код у X и у другого заказа — берёт X, спора нет.
+  const both = planTube([obs('TSH', '2.35')], [X, { analytes: [line(9, 'ТТГ', 'TSH')], tier: 1 }]);
+  assert.deepEqual([both.plans[0].fills.length, both.plans[1].fills.length, both.ambiguous.length, both.involved[1]], [1, 0, 0, false]);
+});
+
+test('D3: planTube — заказ, который принять не может (tier 2), получает строку, только если открытого нет', () => {
+  const X = { analytes: [line(1, 'ТТГ', 'TSH')] };
+  const open = { analytes: [line(2, 'Т4 свободный', 'FT4')], tier: 1 };
+  const closed = { analytes: [line(3, 'Т4 свободный', 'FT4')], tier: 2 };
+  const t = planTube([obs('FT4', '15.2')], [X, closed, open]);
+  assert.deepEqual([t.plans[1].fills.length, t.plans[2].fills.length, t.ambiguous.length], [0, 1, 0], 'отменённый/выданный дубль не спорит с открытым');
+  const only = planTube([obs('FT4', '15.2')], [X, closed]);
+  assert.deepEqual([only.plans[1].fills.length, only.involved[1]], [1, true], 'открытого нет — строка у закрытого: сказать человеку, почему не записано');
+});
+
+test('D3: planTube — X без кода в сообщении не «участвует»; неподтверждённый код другого заказа — его «не подтверждено» (D4)', () => {
+  const X = { analytes: [line(1, 'Глюкоза', 'GLU')] };
+  const alt = { analytes: [line(2, 'АЛТ', 'ALT')], tier: 1 };
+  const lipid = { analytes: [line(3, 'Холестерин', 'CHOL', 0)], tier: 1 };
+  const t = planTube([obs('ALT', '85.3'), obs('CHOL', '5.2')], [X, alt, lipid]);
+  assert.deepEqual(t.involved, [false, true, true]);
+  assert.deepEqual(t.plans[2].unconfirmed.map((o) => o.code), ['CHOL']);
+  assert.equal(t.plans[2].fills.length, 0, 'неподтверждённое не применяется');
+  assert.deepEqual(t.unused, []);
+  // Без других заказов — ровно planObservations, как раньше.
+  const solo = planTube([obs('GLU', '5.1'), obs('X1', '1')], [X]);
+  assert.deepEqual([solo.plans[0].fills.length, solo.unused.map((o) => o.code)], [1, ['X1']]);
+});
+
+test('D3: tubeOutcome — журнал по заказам; выданный — superseded; «ждём» — только если беда лишь в серии', () => {
+  const ok = tubeOutcome([{ orderId: 301, name: 'ТТГ', status: 'applied', detail: '' }, { orderId: 302, name: 'Т4', status: 'applied', detail: '' }]);
+  assert.deepEqual(ok, { status: 'applied', detail: 'заказ № 301 «ТТГ»: принято; заказ № 302 «Т4»: принято', pending: false });
+  const amb = tubeOutcome([{ orderId: 301, name: 'ТТГ', status: 'applied', detail: '' }], { ambiguous: [{ obs: obs('FT4'), orders: [302, 305] }], unused: [obs('PRL')] });
+  assert.equal(amb.status, 'unmapped');
+  assert.match(amb.detail, /^заказ № 301 «ТТГ»: принято; неоднозначно: FT4 — у заказов № 302, № 305 — .*; не использованы: PRL$/);
+  const old = tubeOutcome([{ orderId: 301, name: 'ТТГ', status: 'applied', detail: '' }, { orderId: 302, name: 'Т4', status: 'superseded', detail: 'результат уже выдан' }]);
+  assert.equal(old.status, 'superseded');
+  const wait = tubeOutcome([{ orderId: 22, name: 'Биохимия', status: 'unmapped', detail: 'не пришли: Мочевина (UREA)', pending: true }]);
+  assert.deepEqual([wait.status, wait.pending, wait.detail], ['unmapped', true, 'не пришли: Мочевина (UREA)'], 'один заказ — журнал без «заказ № …»');
+});
+
+test('N1: heldChangeText — что было и что пришло, словами панели', () => {
+  assert.equal(heldChangeText([{ analyte: { name: 'Лейкоциты (WBC)' }, was: '5.40', now: '14.20' }]),
+    'повтор: значения отличаются от уже записанных (Лейкоциты (WBC) 5.40 → 14.20) — проверьте пробу; принять новые значения — «Привязать»');
 });

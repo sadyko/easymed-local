@@ -14,9 +14,17 @@
 //   — ответ — ACK^R01 AA с MSH-16 эхом или ответ на запрос «заказов нет».
 // Проба пациента идёт в тот же приём, что и прежде; здесь решается только
 // ответ: AE 100 — не разобрано, AR 200 — известный, но не поддержанный тип
-// (отказ без повтора), AE 207 — сорвалась запись (прибор пришлёт снова).
-import { readEnvelope, wireFor } from './wire.js';   // wireFor: LIS_REAL_ANALYZERS_V1, ревью R1, пп. 7 и 11
-import { buildAck, buildQueryReply, ACK_INTERNAL, mshOf } from './hl7.js';
+// (отказ без повтора), AE 207 — сорвалась запись (прибор пришлёт снова); у
+// химии Mindray — AR 206 (LIS_VENDOR_EXACT_V1, hl7.js internalAck).
+//
+// LIS_VENDOR_EXACT_V1 — и ВИД ответа (replyStyle ниже): вид руководства Mindray
+// или короткий вид гематологии (hl7.js LAYOUT_LONG / LAYOUT_SHORT); у A1000 —
+// MSA-4, по которому он отмечает результат «Accepted».
+import { readEnvelope, wireDecision } from './wire.js';   // wireDecision: LIS_VENDOR_EXACT_V1 — провод и для вида ответа
+import { readResult, pickMessageSample } from './wire.js';   // LIS_VENDOR_EXACT_V1 (ревью) — номер пробы выключенного прибора — в лоток
+import { buildAck, buildQueryReply, mshOf } from './hl7.js';
+import { internalAck, internalCode, firstField, LAYOUT_LONG, LAYOUT_SHORT } from './hl7.js';   // LIS_VENDOR_EXACT_V1
+import { guessProfile } from './discover.js';   // LIS_VENDOR_EXACT_V1 — как сообщение назвало себя
 import { getProfile } from './profiles/index.js';
 import { ingestMessage } from './ingest.js';
 import { recordMessage, touchDevice } from './inbox.js';
@@ -30,21 +38,80 @@ function serviceDetail(env) {
     + ' — Easy-Med заказов не отдаёт, ответ «заказов нет»; запрос лучше выключить в настройках LIS прибора';
 }
 
+/** LIS_VENDOR_EXACT_V1 — гематология: провод mindray-hematology или вид профиля hematology. */
+const isHeme = (p) => !!p && (p.wire === 'mindray-hematology' || p.kind === 'hematology');
+/**
+ * LIS_VENDOR_EXACT_V1 (ревью; mindray-bc-5300.md §2) — гематология Mindray эпохи
+ * DMU называет себя «MSH-3 пуст, MSH-4 = Mindray» (BC-5390 CRP, C90 §2.5.1, p. 7).
+ * Химия и ИХЛА Mindray так не пишут: BS-200 — «Mindray|BS-200», BS-240 и CL-900i
+ * — оба поля пусты. Только когда ни сообщение, ни строка прибора модели не
+ * называют: у строки с моделью решает строка.
+ */
+const dmuHematology = (app, facility) => !String(app == null ? '' : app).trim()
+  && String(facility == null ? '' : facility).trim().toLowerCase() === 'mindray';
+
+/**
+ * LIS_VENDOR_EXACT_V1 — каким видом отвечать прибору (hl7.js LAYOUT_*).
+ * Чистое решение, без базы:
+ *   — переадресатор (MSH-4 = LabPC) — длинный: ответ читает наш переадресатор
+ *     (forwarder/deliver.js ищет «MSA|AA»), а не прибор;
+ *   — гематология Mindray — короткий, сегодняшний (OM13 pdf 485): провод
+ *     mindray-hematology или профиль вида hematology (BC-20, BC-5300, BC-780,
+ *     BC-2800, BC-3000 Plus). Чей профиль: сообщения, если оно назвало себя
+ *     (MSH-3/4, discover.js guessProfile), иначе строки прибора — отвечать надо
+ *     тому, кто на самом деле говорит;
+ *   — всё прочее — длинный, вид руководства: химия и ИХЛА Mindray, A1000 и
+ *     НЕЗНАКОМЫЙ прибор. Первым может заговорить и CL-900i (MSH короче 19
+ *     полей — отказ и блок связи), и BS-200 (BS200.exe читает кусок 27 —
+ *     MSA-6); декодер A1000 длинный вид принимает (autobio-autolumo-a1000.
+ *     settle.md, табл. c); у BS-240 — тот же вид (mindray-bs-240.md M15).
+ * wire — провод (wire.js wireDecision): по нему приём читает вид сообщения, у
+ * A1000 ставится MSA-4, а отказ по нашей вине у химии — AR (hl7.js internalAck).
+ * Им же пользуется mllp.js для ответов, которые строит сам (приём бросил,
+ * переросшее), — через index.js.
+ * @param {{profile?:object|null, app?:string, facility?:string}} [o]
+ * @returns {{layout:string, wire:string}}
+ */
+export function replyStyle({ profile = null, app = '', facility = '' } = {}) {
+  const { wire } = wireDecision({ profile, facility, app });
+  if (wire === 'forwarder') return { layout: LAYOUT_LONG, wire };
+  const own = guessProfile({ app, facility });
+  // LIS_VENDOR_EXACT_V1 (ревью) — и гематология DMU без модели («|Mindray»).
+  const heme = isHeme(own || profile) || (!own && !profile && dmuHematology(app, facility));
+  return { layout: heme ? LAYOUT_SHORT : LAYOUT_LONG, wire };
+}
+
+/**
+ * LIS_VENDOR_EXACT_V1 — MSA-4 ответа A1000 (провод autobio-hl7): OBX-1
+ * (TestRequest_ID), когда MSH-10 = 5 (по тесту), OBR-3 (внутренний номер
+ * пробы), когда MSH-10 = 7 (по пробе); иначе пусто. Без него результат на A1000
+ * не становится «Accepted», и лаборатория не видит, какие дошли
+ * (autobio-autolumo-a1000.settle.md, табл. c, R1 и R5; M18).
+ */
+function autobioRef(text, env) {
+  if (env.controlId === '5') return firstField(text, 'OBX', 1);
+  if (env.controlId === '7') return firstField(text, 'OBR', 3);
+  return '';
+}
+
 /**
  * @param {import('better-sqlite3').Database} db
  * @param {string} text  сырой текст сообщения
  * @param {{peer?:string, deviceId?:number|null}} [o]
  * @returns {{code:'AA'|'AE'|'AR', kind:string, reply:string}}
  *   reply — готовый ответ прибору (без кадра MLLP); mllp.js шлёт его как есть.
+ *   code — MSA-1 этого ответа.
  */
 export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
   // LIS_REAL_ANALYZERS_V1 (ревью R1, пп. 7 и 11) — провод: профиль строки
   // прибора и то, как сообщение называет себя (wire.js wireFor). Калибровка и
   // контроль по MSH-16 — только у провода, объявившего это соглашение (химия
   // Mindray, Autobio по сети); приём читает тем же проводом.
-  const device = deviceId ? db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(deviceId) : null;
+  // LIS_VENDOR_EXACT_V1 — и вид ответа (replyStyle): провод тот же.
+  const device = deviceId ? db.prepare('SELECT profile, enabled FROM lab_devices WHERE id = ?').get(deviceId) : null;   // enabled: LIS_VENDOR_EXACT_V1 (ревью)
   const head = mshOf(text);
-  const wire = wireFor({ profile: device ? getProfile(device.profile) : null, facility: head.facility, app: head.app });
+  const style = replyStyle({ profile: device ? getProfile(device.profile) : null, facility: head.facility, app: head.app });
+  const { wire, layout } = style;
   const env = readEnvelope(text, wire);
 
   if (env.service) {
@@ -55,7 +122,25 @@ export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
       kind: env.kind, resolved: true,
     });
     touchDevice(db, deviceId);
-    return { code: 'AA', kind: env.kind, reply: env.kind === 'query' ? buildQueryReply(env) : buildAck(env, 'AA') };
+    if (env.kind !== 'query') return { code: 'AA', kind: env.kind, reply: buildAck(env, 'AA', { layout }) };
+    // LIS_VENDOR_EXACT_V1 — ORM^O01 гематологии: ORR^O02 с MSA|AR «заказов нет».
+    return { code: env.type === 'ORM^O01' ? 'AR' : 'AA', kind: env.kind, reply: buildQueryReply(env, { layout }) };
+  }
+
+  // LIS_VENDOR_EXACT_V1 (ревью) — прибор выключен («Включён — слушать этот
+  // прибор» снят): проба пациента — в лоток с причиной, в бланк не пишется. До D4
+  // «Сохранить» рвал соединение, теперь оно живёт на общем порту, и пробы
+  // выключенного прибора писались бы, как у включённого. Ответ AA: сообщение
+  // сохранено, повторять незачем; «Привязать» (rpc/lis.js) — руками, как прежде.
+  if (device && Number(device.enabled) === 0 && env.kind === 'result') {
+    recordMessage(db, {
+      deviceId, peer, raw: text, sampleId: pickMessageSample(readResult(text, wire).obrs, wire).sampleId,   // номер — человеку, как у приёма
+      visitServiceId: null, status: 'unmatched',
+      detail: 'прибор выключен в «Анализаторах» — значения не записаны; включите его («Изменить» → «Включён») или нажмите «Привязать»',
+    });
+    touchDevice(db, deviceId);
+    const ref = wire === 'autobio-hl7' ? autobioRef(text, env) : '';
+    return { code: 'AA', kind: 'result', reply: buildAck(env, 'AA', { layout, ref }) };
   }
 
   // Проба пациента, неразобранное и неподдержанное — прежний приём: он пишет
@@ -63,9 +148,11 @@ export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
   // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 12) — провод приём решает сам тем же
   // wireDecision: при споре профиля и сообщения он кладёт пробу в лоток.
   const code = ingestMessage(db, text, peer, deviceId);
-  if (env.kind === 'unsupported') return { code: 'AR', kind: 'result', reply: buildAck(env, 'AR') };
-  if (env.kind === 'unparsed') return { code: 'AE', kind: 'result', reply: buildAck(env, 'AE') };
+  if (env.kind === 'unsupported') return { code: 'AR', kind: 'result', reply: buildAck(env, 'AR', { layout }) };
+  if (env.kind === 'unparsed') return { code: 'AE', kind: 'result', reply: buildAck(env, 'AE', { layout }) };
   // Заголовок разобран как ORU^R01, значит AE приёма — сорвавшаяся запись.
-  if (code !== 'AA') return { code: 'AE', kind: 'result', reply: buildAck(env, 'AE', ACK_INTERNAL) };
-  return { code: 'AA', kind: 'result', reply: buildAck(env, 'AA') };
+  // LIS_VENDOR_EXACT_V1 — у химии Mindray AR 206, у прочих AE 207 (hl7.js).
+  if (code !== 'AA') return { code: internalCode(style), kind: 'result', reply: internalAck(env, style, { write: true }) };
+  const ref = wire === 'autobio-hl7' ? autobioRef(text, env) : '';   // LIS_VENDOR_EXACT_V1 — MSA-4 у A1000
+  return { code: 'AA', kind: 'result', reply: buildAck(env, 'AA', { layout, ref }) };
 }

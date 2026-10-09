@@ -9,6 +9,10 @@ import { isReadOnlyRpc } from '../control/gate.js';   // LIS_MINDRAY_CODES_V1 (�
 import { ingestMessage } from '../../lis/ingest.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 2
 import { ABANDONED_DETAIL_PREFIX } from '../../lis/inbox.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 10
 import { saveLabResults } from './lab.js';   // LIS_REAL_ANALYZERS_V1 — ревью R6, п. 2: касса не открывается
+// LIS_VENDOR_EXACT_V1 — D2: находка заводится тем же путём, что у слушателя (server/lis/index.js).
+import { ensureDevice } from '../../lis/discover.js';
+import { receiveMessage } from '../../lis/receive.js';
+import { readEnvelope } from '../../lis/wire.js';
 
 function fresh() {
   const db = openDb(':memory:');
@@ -500,9 +504,16 @@ test('lis_profiles отдаёт aliases, wire, oneTestPerMessage, connect, wireS
   const bc780 = all.find((p) => p.key === 'mindray-bc-780');
   assert.deepEqual([bc780.wire, bc780.oneTestPerMessage, bc780.connect, bc780.wireSource, bc780.channelsSource, bc780.channels.length],
     ['mindray-hematology', false, 'unknown', 'siblings', 'siblings', 27]);
-  const old = all.find((p) => p.key === 'mindray-bc-5300');
-  assert.deepEqual({ aliases: old.aliases, wire: old.wire, one: old.oneTestPerMessage, connect: old.connect, src: old.wireSource },
-    { aliases: ['BC-5300'], wire: 'default', one: false, connect: 'listen', src: null });
+  // LIS_VENDOR_EXACT_V1 — прежний профиль без списка псевдонимов — BC-20; у
+  // BC-5300 список теперь есть: «BC-5300 or BC-5380» в MSH-3 (приложение C, табл. 1).
+  // LIS_VENDOR_EXACT_V1 (раунд 2) — BC-20 — TCP-сервер: connect 'dial', порт прибора 5100
+  // (профиль, 2d08ffc); экран по ним сам ставит флажок звонка и порт (lab-devices.js).
+  const old = all.find((p) => p.key === 'mindray-bc-20');
+  assert.deepEqual({ aliases: old.aliases, wire: old.wire, one: old.oneTestPerMessage, connect: old.connect, src: old.wireSource, port: old.defaultPort },
+    { aliases: ['BC-20'], wire: 'default', one: false, connect: 'dial', src: null, port: 5100 });
+  const bc5300 = all.find((p) => p.key === 'mindray-bc-5300');
+  assert.deepEqual({ aliases: bc5300.aliases, wire: bc5300.wire, one: bc5300.oneTestPerMessage, connect: bc5300.connect, src: bc5300.wireSource },
+    { aliases: ['BC-5300', 'BC5300', 'BC-5380', 'BC5380'], wire: 'default', one: false, connect: 'listen', src: null });
   db.close();
 });
 
@@ -1117,5 +1128,235 @@ test('R7 п. 1: не оплачен — в лоток; оплатили — «П
   assert.equal(out.ok, true);
   assert.deepEqual(formOf(db, 123), { 'Глюкоза': '5.5' });
   assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 123').get().status, 'resulted');
+  db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D10: код с U+FFFD в «Поле анализатора» не предлагается ──
+// BS-200 отдаёт «Код на ЛИС» в кодировке компьютера (cp1251), а Easy-Med читал
+// кадр как UTF-8: кириллические «ГЛЮ» и «АЛТ» оба становились тремя знаками U+FFFD — одним и
+// тем же кодом, и подтверждённая строка бланка ловила бы чужой тест. Такой код
+// «Присылал этот анализатор» не показывает вовсе; искажённые подпись, имя и
+// единица — пустые (это только показ). Кадр — как в mindray-bs-200.md §3.1
+// (значения синтетические).
+const BS200_FRAME = (id, code, label, unit) => [
+  'MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|' + id + '|P|2.3.1||||0||ASCII|||',
+  'PID|1',
+  'OBR|1|LAB-000123|12|Mindray^BS-200|N||20261005101200',
+  'OBX|1|NM|' + code + '|' + label + '|5.230000|' + unit + '|3.900000-6.100000|N|||F|||20261005101200',
+].join('\r') + '\r';
+
+test('D10: код с U+FFFD (кириллица в «Код на ЛИС» не той кодировкой) не предлагается; искажённые подпись и единица — пустые', () => {
+  const db = fresh();
+  const G = '\uFFFD';
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'BS-200','mindray-bs-200')").run();
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, received_at) VALUES (1,'10.0.0.40',?,'unmapped',?)");
+  ins.run(BS200_FRAME(17, G + G + G, G.repeat(7), 'mmol/L'), '2026-10-05T10:15:00Z');   // «ГЛЮ» / «Глюкоза»
+  ins.run(BS200_FRAME(18, G + G + G, G.repeat(3), 'U/L'), '2026-10-05T10:16:00Z');       // «АЛТ» — те же три U+FFFD
+  ins.run(BS200_FRAME(19, 'GLU' + G, 'Glucose', 'mmol/L'), '2026-10-05T10:17:00Z');      // одна буква не прочиталась
+  ins.run(BS200_FRAME(20, 'UREA', G.repeat(8), G.repeat(6) + '/' + G), '2026-10-05T10:18:00Z');   // код латиницей, имя и единица — кириллицей
+  ins.run(BS200_FRAME(21, 'GLU', 'Glucose', 'mmol/L'), '2026-10-05T10:19:00Z');
+
+  const codes = lisDeviceCodes(db, { device_id: 1 }, LAB);
+  assert.ok(!codes.some((c) => [c.code, c.name, c.label, c.unit, c.system].some((s) => String(s || '').includes(G))),
+    'ни одного U+FFFD в ответе: ' + JSON.stringify(codes));
+  assert.deepEqual(codes.map((c) => c.code).sort(), ['GLU', 'UREA'], 'коды с U+FFFD не предложены, латинские — на месте');
+  const urea = codes.find((c) => c.code === 'UREA');
+  assert.equal(urea.label, '', 'искажённая подпись не показывается');
+  assert.equal(urea.unit, '', 'искажённая единица не показывается');
+  assert.equal(codes.find((c) => c.code === 'GLU').label, 'Glucose');
+  db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D14: кто подключён к порту приёма (listenerStatus().peers) ──
+// Прибор, который подключился и шлёт не то (ASTM, формат Autobio, Unicode),
+// раньше выглядел так же, как «никто не подключался». Слушатель запоминает
+// соединения (server/lis/index.js — другая часть работы), а lis_listeners
+// обязан донести их до экрана как есть: только данные, без сокетов и функций.
+// Ответ слушателя здесь подставлен руками: тест про RPC, а не про слушатель.
+test('D14: lis_listeners отдаёт peers слушателя — поля как есть, без сокетов; нет списка — пустой', async () => {
+  const mod = await import('./lis.js');
+  assert.equal(typeof mod.listenersReply, 'function', 'чистая сборка ответа lis_listeners');
+  const now = new Date('2026-10-06T08:00:00Z');
+  const status = {
+    listening: [2575], failed: [], dialing: [],
+    peers: [
+      { ip: '192.168.1.33', port: 2575, connectedAt: '2026-10-06T07:58:00Z', lastRxAt: '2026-10-06T07:59:30Z',
+        frames: 0, noiseBytes: 412, noiseHint: 'astm', open: true, socket: { destroy() {} }, onData() {} },
+      { ip: '192.168.1.40', port: 2575, connectedAt: '2026-10-06T07:00:00Z', lastRxAt: null,
+        frames: 0, noiseBytes: 0, noiseHint: null, open: true },
+    ],
+  };
+  const out = mod.listenersReply(status, now);
+  assert.equal(out.now, '2026-10-06T08:00:00.000Z');
+  assert.deepEqual(out.listening, [2575]);
+  assert.deepEqual(out.peers, [
+    { ip: '192.168.1.33', port: 2575, connectedAt: '2026-10-06T07:58:00Z', lastRxAt: '2026-10-06T07:59:30Z',
+      frames: 0, noiseBytes: 412, noiseHint: 'astm', open: true },
+    { ip: '192.168.1.40', port: 2575, connectedAt: '2026-10-06T07:00:00Z', lastRxAt: null,
+      frames: 0, noiseBytes: 0, noiseHint: null, open: true },
+  ], 'сокет и функции не уходят в ответ');
+  assert.ok(JSON.stringify(out), 'ответ сериализуется');
+  // Слушатель старее (peers ещё нет) — пустой список, а не undefined.
+  assert.deepEqual(mod.listenersReply({ listening: [], failed: [], dialing: [] }, now).peers, []);
+  // Живой вызов: peers — всегда список.
+  const db = fresh();
+  assert.ok(Array.isArray(lisListeners(db, {}, LAB).peers));
+  db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D2: «Добавить» найденный прибор — только с моделью ──
+// BS-240, CL-900i и A1000 оставляют MSH-3/4 пустыми — модель по имени не
+// узнать, и строка находки заводится без модели. Без модели приём читает
+// общим правилом (номер пробы — OBR-3), а у BS-240 и CL-900i там номер прогона
+// прибора: результат лёг бы не тому пациенту. Поэтому «Добавить» (RPC
+// lis_device_add) — только с выбранной моделью или с явным «Другой анализатор
+// (общий HL7)»; прежние строки (уже добавленные) не трогаются.
+// Находка заводится тем же путём, что у слушателя (index.js: readEnvelope →
+// ensureDevice → receiveMessage), из кадра справочника.
+const BS240_FRAME = [   // mindray-bs-240.md §3.1, настоящий BS-240 (2017): MSH-3/4 пустые; значения синтетические
+  'MSH|^~\\&|||||20170413120602||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+  'PID|2|||||||O|||||||||||||||||||||||',
+  'OBR|2|LAB-000123|1|^|N|20170413114023|20170413113910|20170413113910||1^12||||20170413113910|Serum',
+  'OBX|1|NM|GLU|GLUCOSE HUMAN|5.400000|mmol/L|-|N|||F||5.400000|20170413115600|||0|',
+].join('\r') + '\r';
+// LIS_VENDOR_EXACT_V1 — было «BC-5380|Mindray»; BC-5380 теперь узнаётся как
+// BC-5300 (одно приложение LIS, табл. 1). Прибор не из списка — гематология
+// эпохи DMU (BC-5390 CRP): MSH-3 пуст, MSH-4 = «Mindray» (mindray-bc-5300.md §2,
+// C90 §2.5.1); поля — как в §7; значения синтетические.
+const BC5380_FRAME = [
+  'MSH|^~\\&||Mindray|||20080419104618||ORU^R01|1|P|2.3.1||||||UNICODE',
+  'OBR|1||LAB-000124|00001^Automated Count^99MRC||20071207080000|20071207160000|||Mindray',
+  'OBX|6|NM|6690-2^WBC^LN||4.63|10*9/L|11.00-12.00|L|||F||E',
+].join('\r') + '\r';
+const BS200_NAMED = [   // mindray-bs-200.md §3.1: BS200.exe называет себя Mindray / BS-200
+  'MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||',
+  'OBR|1|LAB-000125|12|Mindray^BS-200|N||20261005101200',
+  'OBX|1|NM|GLU|Glucose|5.230000|mmol/L|3.900000-6.100000|N|||F|||20261005101200',
+].join('\r') + '\r';
+
+/** Находка — тем же путём, что у слушателя (server/lis/index.js onMessage). */
+function foundFrom(db, raw, ip) {
+  const env = readEnvelope(raw);
+  const found = ensureDevice(db, { sendingApp: env.app, sendingFacility: env.facility, peer: ip, port: 2575, allowCreate: true });
+  receiveMessage(db, raw, { peer: ip, deviceId: found.device.id });
+  return found.device;
+}
+const deviceRow = (db, id) => db.prepare('SELECT name, profile, added, model_confirmed FROM lab_devices WHERE id = ?').get(id);
+
+test('D2: найденный BS-240 не назвал модель — «Добавить» без модели — отказ; с моделью — добавлен, модель подтверждена', async () => {
+  const { lisDeviceAdd } = await import('./lis.js');
+  assert.equal(typeof lisDeviceAdd, 'function', 'RPC lis_device_add');
+  const db = fresh();
+  const dev = foundFrom(db, BS240_FRAME, '192.168.1.60');
+  assert.deepEqual(deviceRow(db, dev.id), { name: dev.name, profile: '', added: 0, model_confirmed: 0 }, 'находка без модели');
+
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'Биохимия' }, LAB), (e) => {
+    assert.equal(e.status, 400);
+    assert.equal(e.code, 'model_required', 'экран узнаёт отказ по коду');
+    assert.equal(e.message, 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».');
+    return true;
+  });
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'Биохимия', profile: 'mindray-bs-9999' }, LAB),
+    (e) => e.status === 400 && e.message === 'Такой модели нет в списке — обновите страницу и выберите модель снова.');
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'Биохимия', profile: 'mindray-bs-240', generic: true }, LAB),
+    (e) => e.status === 400 && e.message === 'Выберите что-то одно: модель или «Другой анализатор (общий HL7)».');
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: '  ', profile: 'mindray-bs-240' }, LAB),
+    (e) => e.status === 400 && e.message === 'Укажите название прибора');
+  assert.deepEqual(deviceRow(db, dev.id), { name: dev.name, profile: '', added: 0, model_confirmed: 0 }, 'отказы ничего не записали');
+
+  const out = lisDeviceAdd(db, { id: dev.id, name: ' Биохимия ', profile: 'mindray-bs-240' }, LAB);
+  assert.equal(out.ok, true);
+  assert.deepEqual(deviceRow(db, dev.id), { name: 'Биохимия', profile: 'mindray-bs-240', added: 1, model_confirmed: 1 });
+  // Повторное «Добавить» (вторая вкладка, двойное нажатие) — отказ словами, строка не тронута.
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'Другое', profile: 'mindray-bs-240' }, LAB),
+    (e) => e.status === 409 && e.code === 'already_added' && e.message === 'Прибор уже добавлен — меняйте его через «Изменить».');
+  assert.equal(deviceRow(db, dev.id).name, 'Биохимия');
+  db.close();
+});
+
+test('D2: «Другой анализатор (общий HL7)» — явный выбор: модель пустая, но подтверждена человеком', async () => {
+  const { lisDeviceAdd } = await import('./lis.js');
+  const db = fresh();
+  const dev = foundFrom(db, BC5380_FRAME, '192.168.1.61');
+  assert.equal(deviceRow(db, dev.id).profile, '', 'BC-5390 (DMU, «|Mindray») по имени не узнаётся');
+  lisDeviceAdd(db, { id: dev.id, name: 'Гематология 2', generic: true }, LAB);
+  assert.deepEqual(deviceRow(db, dev.id), { name: 'Гематология 2', profile: '', added: 1, model_confirmed: 1 });
+  db.close();
+});
+
+test('D2: находка назвала модель — «Добавить» без выбора оставляет догадку (как прежде), пометка «проверьте модель» остаётся', async () => {
+  const { lisDeviceAdd } = await import('./lis.js');
+  const db = fresh();
+  const dev = foundFrom(db, BS200_NAMED, '192.168.1.62');
+  assert.equal(deviceRow(db, dev.id).profile, 'mindray-bs-200');
+  lisDeviceAdd(db, { id: dev.id, name: 'BS-200' }, LAB);
+  assert.deepEqual(deviceRow(db, dev.id), { name: 'BS-200', profile: 'mindray-bs-200', added: 1, model_confirmed: 0 });
+  db.close();
+});
+
+test('D2: lis_device_add — только лаборатория; номер прибора строгий; прибор обязан существовать; заведён в карте RPC, это запись', async () => {
+  const { lisDeviceAdd } = await import('./lis.js');
+  const db = fresh();
+  const dev = foundFrom(db, BS240_FRAME, '192.168.1.63');
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'X', profile: 'mindray-bs-240' }, { role: 'reception' }), (e) => e.status === 403);
+  assert.throws(() => lisDeviceAdd(db, { id: dev.id, name: 'X', profile: 'mindray-bs-240' }, null), (e) => e.status === 403);
+  for (const bad of [undefined, null, 0, -1, 1.5, 'abc', '0x1', '', true, [1], {}]) {
+    assert.throws(() => lisDeviceAdd(db, { id: bad, name: 'X', profile: 'mindray-bs-240' }, LAB),
+      (e) => e.status === 400 && e.message === 'Нужен номер прибора', 'id=' + String(bad));
+  }
+  assert.throws(() => lisDeviceAdd(db, { id: 999, name: 'X', profile: 'mindray-bs-240' }, LAB), (e) => e.status === 404 && e.message === 'Прибор не найден');
+  assert.equal(typeof RPC.lis_device_add, 'function', 'заведён в карте RPC');
+  assert.equal(isReadOnlyRpc('lis_device_add'), false, 'запись: клиника с просроченной лицензией приборы не добавляет');
+  db.close();
+});
+
+test('D2: прежние строки работают как прежде — заведённый без модели и уже добавленный прибор принимает пробы', () => {
+  const db = fresh();
+  // Строка, заведённая до обновления: добавлена, модели нет, модель не подтверждалась.
+  db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled) VALUES (7,'Старый','','mllp','192.168.1.64',2575,1)").run();
+  const out = receiveMessage(db, BS240_FRAME, { peer: '192.168.1.64', deviceId: 7 });
+  assert.equal(out.kind, 'result');
+  assert.ok(db.prepare('SELECT COUNT(*) AS n FROM lab_device_messages WHERE device_id = 7').get().n >= 1, 'проба принята в лоток прибора');
+  assert.deepEqual(deviceRow(db, 7), { name: 'Старый', profile: '', added: 1, model_confirmed: 0 }, 'строку никто не правил');
+  db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 (раунд 2) — «Привязать» до «Добавить» ────────────────
+// N2 (приём, ingest.js): проба найденного, но не добавленного прибора в бланк не
+// идёт — его модель ещё догадка; «Привязать» до «Добавить» — тоже нет. Без
+// отказа здесь «Привязать» прогонял приём, тот клал в лоток НОВУЮ строку с той
+// же причиной, прежняя разбиралась, а экран говорил «Приём не применил
+// сообщение». Теперь — отказ сразу, словами и с кодом; строка лотка остаётся.
+const NOT_ADDED = 'Прибор этого сообщения ещё не добавлен — «Добавить прибор» → «Найдены в сети» → «Добавить», затем «Привязать».';
+
+test('N2: «Привязать» пробу найденного, но не добавленного прибора — 409 «сначала добавьте», лоток не тронут; после «Добавить» — обычная привязка', async () => {
+  const { lisDeviceAdd } = await import('./lis.js');
+  const db = fresh();
+  const dev = foundFrom(db, BS200_NAMED, '192.168.1.65');
+  assert.equal(deviceRow(db, dev.id).added, 0, 'находка');
+  const msg = db.prepare('SELECT id FROM lab_device_messages WHERE device_id = ? ORDER BY id DESC').get(dev.id);
+  const trayNow = () => db.prepare('SELECT id, status, detail, visit_service_id, resolved_at FROM lab_device_messages ORDER BY id').all();
+  const before = trayNow();
+  assert.throws(() => lisMessageAttach(db, { id: msg.id, visit_service_id: 125 }, LAB), (e) => {
+    assert.equal(e.status, 409);
+    assert.equal(e.code, 'device_not_added', 'экран показывает отказ его словами');
+    assert.equal(e.message, NOT_ADDED);
+    return true;
+  });
+  assert.deepEqual(trayNow(), before, 'лоток не тронут: ни новой строки, ни разобранной');
+
+  lisDeviceAdd(db, { id: dev.id, name: 'BS-200', profile: 'mindray-bs-200' }, LAB);
+  const out = lisMessageAttach(db, { id: msg.id, visit_service_id: 125 }, LAB);
+  assert.equal(out.code, 'AA', 'после «Добавить» — обычная привязка: ' + JSON.stringify(out));
+  assert.ok(db.prepare('SELECT resolved_at FROM lab_device_messages WHERE id = ?').get(msg.id).resolved_at, 'прежняя строка разобрана');
+  db.close();
+});
+
+test('N2: прибор, заведённый человеком (added = 1), и сообщение без прибора — «Привязать» как прежде', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled) VALUES (8,'Химия','mindray-bs-200','mllp','192.168.1.66',2575,1)").run();
+  db.prepare("INSERT INTO lab_device_messages (id, device_id, peer, raw, sample_id, status) VALUES (41, 8, '192.168.1.66', ?, 'LAB-000125', 'unmatched')").run(BS200_NAMED);
+  db.prepare("INSERT INTO lab_device_messages (id, device_id, peer, raw, sample_id, status) VALUES (42, NULL, '192.168.1.67', ?, 'LAB-000125', 'unmatched')").run(BS200_NAMED);
+  for (const id of [41, 42]) assert.equal(lisMessageAttach(db, { id, visit_service_id: 125 }, LAB).code, 'AA', 'сообщение ' + id);
   db.close();
 });

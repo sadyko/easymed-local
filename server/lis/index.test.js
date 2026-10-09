@@ -196,8 +196,11 @@ test('QRY^Q02 по проводу: ответ QCK^Q02 NF, прибор заве�
     sock.destroy();
     const lines = text.split('\r');
     assert.equal(lines[0].split('|')[8], 'QCK^Q02', text);
-    assert.equal(lines[1], 'MSA|AA|1|Message accepted|||0');
-    assert.equal(lines[3], 'QAK|SR|NF');
+    // LIS_VENDOR_EXACT_V1 — вид руководства (HIM v5.0, с. 27): «|» в конце
+    // MSA, ERR и QAK, CR после последнего сегмента.
+    assert.equal(lines[1], 'MSA|AA|1|Message accepted|||0|');
+    assert.equal(lines[3], 'QAK|SR|NF|');
+    assert.equal(lines[4], '', 'CR после QAK');
 
     const dev = db.prepare('SELECT * FROM lab_devices').all();
     assert.equal(dev.length, 1, 'прибор, который спросил, заведён');
@@ -208,6 +211,39 @@ test('QRY^Q02 по проводу: ответ QCK^Q02 NF, прибор заве�
     assert.equal(m.kind, 'query');
     assert.equal(m.device_id, dev[0].id);
     assert.ok(m.resolved_at, 'в «Необработанных» пусто');
+  } finally {
+    await stopLisListeners();
+    if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;
+    db.close();
+  }
+});
+
+// LIS_VENDOR_EXACT_V1 — приём бросил (здесь — запись в журнал сообщений
+// отказывает): ответ строит сам провод, и он тоже в виде прибора — по тому, как
+// сообщение назвало себя (receive.js replyStyle): BS-200 — вид руководства с
+// AR 207 (AE у химии — только 100–103, HIM v5.0, с. 9), BC-5300 — короткий AE 207.
+test('LIS_VENDOR_EXACT_V1 D1: приём бросил — ответ провода в виде прибора: BS-200 — AR 207 вида руководства, BC-5300 — короткий AE 207', async () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const port = await freePort();
+  const prevPort = process.env.LIS_PORT;
+  process.env.LIS_PORT = String(port);
+  try {
+    await startLisListeners(db, { log: () => {} });
+    db.exec("CREATE TRIGGER no_messages BEFORE INSERT ON lab_device_messages BEGIN SELECT RAISE(ABORT, 'disk full'); END");
+    const sock = await connect(port);
+    let reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from('MSH|^~\\&|Mindray|BS-200|||20261005101500||QRY^Q02|8|P|2.3.1||||||ASCII|||\rQRD|20261005101500|R|D|1|||RD|LAB-000123|OTH|||T|\rQRF|BS-200|||||RCT|COR|ALL||\r', 'utf8'), Buffer.from([FS, 0x0d])]));
+    const chem = await reply;
+    sock.removeAllListeners('data');
+    reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from('MSH|^~\\&|BC-5300|Mindray|||20080419104618||ORU^R01|32|P|2.3.1||||||UNICODE\rOBR|1||LAB-000127|00001^Automated Count^99MRC\r', 'utf8'), Buffer.from([FS, 0x0d])]));
+    const heme = await reply;
+    sock.destroy();
+    assert.equal(chem.split('\r')[0].split('|').length, 21, 'MSH до MSH-20: ' + chem);
+    assert.equal(chem.split('\r')[1], 'MSA|AR|8|Application internal error|||207|');
+    assert.equal(heme.split('\r')[1], 'MSA|AE|32|Application internal error|||207');
+    assert.ok(heme.endsWith('|207\r'), 'CR после последнего сегмента');
   } finally {
     await stopLisListeners();
     if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;
@@ -418,7 +454,21 @@ test('selfPorts: порты LIS, HTTP и EasyPhone', () => {
   }
 });
 
-test('lis_restart и lis_device_delete рвут соединение и не ждут прибора', async () => {
+/** LIS_VENDOR_EXACT_V1 — что увидела сторона соединения: 'end' — FIN, код ошибки — RST. */
+function trackClose(sock) {
+  const ev = [];
+  sock.on('data', () => {});
+  sock.on('end', () => ev.push('end'));
+  sock.on('error', (e) => ev.push(e.code));
+  sock.on('close', () => ev.push('close'));
+  return ev;
+}
+
+// LIS_VENDOR_EXACT_V1 — D4: lis_restart («Сохранить» любого прибора) больше не
+// рвёт соединение строки, которая не менялась: прибор, ждущий звонка, иначе
+// терял бы результат, сделанный во время переподключения. Удаление прибора —
+// рвёт, и RST, а не FIN.
+test('lis_restart не рвёт соединение неизменённой строки звонка (LIS_VENDOR_EXACT_V1, D4); lis_device_delete рвёт его RST и не ждёт прибора', async () => {
   const fake = await fakeAnalyzer();
   const LAB = { role: 'lab' };
   try {
@@ -427,12 +477,14 @@ test('lis_restart и lis_device_delete рвут соединение и не ж�
       await startLisListeners(db, { log: () => {} });
       await until(() => fake.live().length === 1, 5000, 'подключение');
       const first = fake.live()[0];
+      const ev = trackClose(first);
 
       let t = Date.now();
       await lisRestart(db, {}, LAB);
       assert.ok(Date.now() - t < 2000, 'перезапуск не висит на открытом соединении прибора');
-      await until(() => first.destroyed || first.readableEnded, 3000, 'старое соединение порвано');
-      await until(() => fake.live().length === 1 && fake.conns.length === 2, 5000, 'новый клиент подключился');
+      await sleep(300);
+      assert.deepEqual(ev, [], 'строка не менялась — соединение не тронуто');
+      assert.equal(fake.conns.length, 1, 'нового звонка нет');
       assert.equal(lisListeners(db, {}, LAB).dialing.find((d) => d.device_id === 7).state, 'connected');
 
       t = Date.now();
@@ -440,11 +492,90 @@ test('lis_restart и lis_device_delete рвут соединение и не ж�
       assert.equal(out.ok, true);
       assert.ok(Date.now() - t < 2000, 'удаление не висит на открытом соединении прибора');
       await until(() => fake.live().length === 0, 3000, 'соединение порвано удалением');
+      await until(() => ev.includes('close'), 3000, 'закрыто');
+      assert.ok(ev.includes('ECONNRESET') && !ev.includes('end'), 'RST, а не FIN: ' + ev.join(','));
       await sleep(300);
-      assert.equal(fake.conns.length, 2, 'удалённый прибор больше не звонят');
+      assert.equal(fake.conns.length, 1, 'удалённый прибор больше не звонят');
       assert.equal(dialing(7), undefined);
     });
   } finally { await fake.close(); }
+});
+
+test('LIS_VENDOR_EXACT_V1 D4: у строки звонка сменили порт — старое соединение RST, звонок — на новый порт', async () => {
+  const a = await fakeAnalyzer();
+  const b = await fakeAnalyzer();
+  const LAB = { role: 'lab' };
+  try {
+    await withLis(async (db) => {
+      dialRow(db, { id: 7, port: a.port });
+      await startLisListeners(db, { log: () => {} });
+      await until(() => a.live().length === 1, 5000, 'подключение к старому порту');
+      const ev = trackClose(a.live()[0]);
+      db.prepare('UPDATE lab_devices SET port = ? WHERE id = 7').run(b.port);
+      await lisRestart(db, {}, LAB);
+      await until(() => b.live().length === 1, 5000, 'подключение к новому порту');
+      await until(() => ev.includes('close'), 3000, 'старое закрыто');
+      assert.ok(ev.includes('ECONNRESET') && !ev.includes('end'), 'RST, а не FIN: ' + ev.join(','));
+      assert.equal(dialing(7).port, b.port);
+    });
+  } finally { await a.close(); await b.close(); }
+});
+
+// LIS_VENDOR_EXACT_V1 — D4: слушатель. A1000 подключается при запуске своей
+// программы и может молчать часами; после нашего закрытия он обрыва не
+// замечает и теряет следующий результат (settle, находка 6). Раньше каждый
+// «Сохранить» прибора (lis_restart) рвал ВСЕ соединения слушателей; теперь —
+// только у слушателя, чей порт больше не нужен.
+const A1000_TEST = ['MSH|^~\\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123', 'OBR|1|LAB-000123|7764|AutoLumo A1000',
+  'NTE|||180323~~AFP~107~20271231~DQ70~1', 'OBX|10455|CE|107|107|41765^4.17~||||||F|||2026/10/05 12:00:00'].join('\r') + '\r';
+
+test('LIS_VENDOR_EXACT_V1 D4: lis_restart при неизменном порте не трогает соединение прибора; результат по нему приходит и после', async () => {
+  const LAB = { role: 'lab' };
+  await withLis(async (db, lisPort) => {
+    await startLisListeners(db, { log: () => {} });
+    const sock = await connect(lisPort);
+    const ev = trackClose(sock);
+    try {
+      await sleep(100);
+      await lisRestart(db, {}, LAB);
+      // «Сохранить» прибора на том же порте — тоже lis_restart.
+      db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port, enabled) VALUES (3, 'ИХЛА', 'autobio-autolumo-a1000', 'mllp', ?, 1)").run(lisPort);
+      await lisRestart(db, {}, LAB);
+      await sleep(300);
+      assert.deepEqual(ev, [], 'соединение не тронуто');
+      assert.ok(listenerStatus().listening.includes(lisPort));
+      const reply = readFrame(sock);
+      sock.write(frameOf(A1000_TEST));
+      assert.match(await reply, /\rMSA\|AA\|5\|/, 'результат по тому же соединению принят');
+    } finally { sock.destroy(); }
+  });
+});
+
+test('LIS_VENDOR_EXACT_V1 D4: у прибора сменили порт — закрыт только слушатель старого порта, его соединение — RST, а не FIN; порт по умолчанию не тронут', async () => {
+  const LAB = { role: 'lab' };
+  await withLis(async (db, lisPort) => {
+    const p1 = await freePort();
+    let p2 = await freePort();
+    while (p2 === p1 || p2 === lisPort) p2 = await freePort();
+    db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port, enabled) VALUES (4, 'CL-900i', 'mindray-cl-900i', 'mllp', ?, 1)").run(p1);
+    await startLisListeners(db, { log: () => {} });
+    assert.ok(listenerStatus().listening.includes(p1));
+    const onOld = await connect(p1);
+    const onDefault = await connect(lisPort);
+    const oldEv = trackClose(onOld);
+    const defEv = trackClose(onDefault);
+    try {
+      await sleep(100);
+      db.prepare('UPDATE lab_devices SET port = ? WHERE id = 4').run(p2);
+      await lisRestart(db, {}, LAB);
+      await until(() => oldEv.includes('close'), 3000, 'старое соединение закрыто');
+      assert.ok(oldEv.includes('ECONNRESET') && !oldEv.includes('end'), 'RST, а не FIN: ' + oldEv.join(','));
+      await sleep(200);
+      assert.deepEqual(defEv, [], 'соединение на порте по умолчанию не тронуто');
+      const st = listenerStatus();
+      assert.ok(st.listening.includes(p2) && !st.listening.includes(p1) && st.listening.includes(lisPort), JSON.stringify(st.listening));
+    } finally { onOld.destroy(); onDefault.destroy(); }
+  });
 });
 
 // ── LIS_REAL_ANALYZERS_V1 — ревью R2 ───────────────────────────────────────
@@ -622,4 +753,141 @@ test('R4 п. E: dialPlan — у IPv4 зона отбрасывается и дл
   assert.equal(by[4].code, 'bad_address');
   assert.equal(by[5].code, 'bad_address');
   assert.equal(by[6].code, 'duplicate', '«10.0.0.5%eth0» и «10.0.0.5» — один прибор');
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D14: кто подключался к порту приёма ───────────────
+// Договор с экраном «Анализаторы» (lis_listeners → lab-devices-lists.js
+// peerNotes): listenerStatus().peers — [{ ip, port, connectedAt, lastRxAt,
+// frames, noiseBytes, noiseHint, open }]; port — порт приёма; noiseHint —
+// 'astm' | 'autobio' | 'utf16' | 'hl7-unframed' | 'other' | null.
+test('LIS_VENDOR_EXACT_V1 D14: listenerStatus().peers — соединения с портом приёма по договору с экраном; подключение и байты не в кадре — в журнале', async () => {
+  await withLis(async (db, lisPort) => {
+    const logs = [];
+    await startLisListeners(db, { log: (m) => logs.push(m) });
+    const sock = await connect(lisPort);
+    sock.on('error', () => {});
+    const mine = sock.localPort;
+    try {
+      // A1000 с «Protocol type = ASTM» (autobio-autolumo-a1000.md §2): ENQ.
+      sock.write(Buffer.from([0x05]));
+      await until(() => (listenerStatus().peers || []).some((p) => p.noiseHint === 'astm'), 3000, 'подсказка ASTM');
+      let p = listenerStatus().peers.find((x) => x.remotePort === mine);
+      assert.deepEqual(
+        [p.ip, p.port, p.frames, p.noiseBytes, p.noiseHint, p.open],
+        ['127.0.0.1', lisPort, 0, 1, 'astm', true], JSON.stringify(p));
+      assert.ok(p.connectedAt && p.lastRxAt);
+      assert.ok(logs.some((l) => l.includes('127.0.0.1:' + mine) && /подключ/.test(l)), 'подключение — в журнале: ' + logs.join(' | '));
+      assert.ok(logs.some((l) => /не в кадре/.test(l) && /ASTM/.test(l)), 'байты не в кадре — в журнале с подсказкой');
+      // Потом прибор переключили на HL7 — кадр принят, счёт кадров растёт.
+      const reply = readFrame(sock);
+      sock.write(frameOf(A1000_TEST));
+      await reply;
+      p = listenerStatus().peers.find((x) => x.remotePort === mine);
+      assert.equal(p.frames, 1);
+    } finally { sock.destroy(); }
+    await until(() => listenerStatus().peers.find((x) => x.remotePort === mine).open === false, 3000, 'закрыто');
+  });
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D1/D9/D13 по настоящему слушателю ─────────────────
+// Сквозная сверка: кадр прибора → находка (discover.js) → приём (receive.js) →
+// ответ → кадр MLLP — байт в байт со строками набора захвата
+// (analyzer-research\notes\capture-kit\tests\run-tests.ps1), кроме MSH-3/4 =
+// EASYMED|CLINIC (наши, HIM v5.0 с. 8), MSH-5/6 гематологии (эхо её MSH-3/4) и
+// MSH-7 (время). Каждый прибор — со своего адреса петли, как в клинике.
+async function kitAnalyzer(port, localAddress) {
+  const sock = net.createConnection({ host: '127.0.0.1', port, localAddress });
+  await new Promise((res, rej) => { sock.once('connect', res); sock.once('error', rej); });
+  sock.on('error', () => {});
+  let buf = Buffer.alloc(0);
+  const frames = [];
+  sock.on('data', (d) => {
+    buf = Buffer.concat([buf, d]);
+    for (;;) {
+      const s = buf.indexOf(VT);
+      const e = buf.indexOf(FS, s + 1);
+      if (s === -1 || e === -1 || buf.length < e + 2) break;
+      frames.push(buf.subarray(s, e + 2));
+      buf = buf.subarray(e + 2);
+    }
+  });
+  return {
+    async send(text) {
+      const n = frames.length;
+      sock.write(frameOf(text));
+      await until(() => frames.length > n, 10000, 'ответ Easy-Med');
+      return frames[n];
+    },
+    close() { sock.destroy(); },
+  };
+}
+const kitSegs = (...s) => s.join('\r') + '\r';
+/** Кадр ответа из строки набора: VT + текст + FS CR; {TS} — MSH-7 ответа; MSH-3/4 — EASYMED|CLINIC. */
+function kitFrame(kit, got, { msh5, msh6, msh10 } = {}) {
+  const text = got.subarray(1, got.length - 2).toString('latin1');
+  const [mshLine, ...rest] = kit.replace('{TS}', text.split('|')[6]).split('\r');
+  const f = mshLine.split('|');
+  f[2] = 'EASYMED';
+  f[3] = 'CLINIC';
+  if (msh5 !== undefined) f[4] = msh5;
+  if (msh6 !== undefined) f[5] = msh6;
+  if (msh10 !== undefined) f[9] = msh10;
+  return Buffer.concat([Buffer.from([VT]), Buffer.from([f.join('|'), ...rest].join('\r'), 'latin1'), Buffer.from([FS, 0x0d])]);
+}
+/** Разрез BS200.exe: кусок n всего ответа (notes\bs200-probes\manual-check-pieces.mjs). */
+const kitPiece = (frame, n) => frame.subarray(1, frame.length - 2).toString('latin1').split('|').slice(0, -1)[n - 1];
+
+test('LIS_VENDOR_EXACT_V1: по настоящему слушателю — ответ каждому прибору клиники байт в байт со строками набора захвата', async () => {
+  await withLis(async (db, lisPort) => {
+    // A1000 — строка с моделью (D2: «Добавить» — только с моделью), его MSH-3/4 пусты.
+    db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, added) VALUES (21, 'ИХЛА', 'autobio-autolumo-a1000', 'mllp', '127.0.0.25', ?, 1, 1)").run(lisPort);
+    await startLisListeners(db, { log: () => {} });
+    const bs = await kitAnalyzer(lisPort, '127.0.0.22');
+    const cl = await kitAnalyzer(lisPort, '127.0.0.23');
+    const bc = await kitAnalyzer(lisPort, '127.0.0.24');
+    const ab = await kitAnalyzer(lisPort, '127.0.0.25');
+    try {
+      // BS-200 — X_BS200_ACK и X_BS200_QCK; куски 10, 27, 32 BS200.exe.
+      let got = await bs.send(kitSegs('MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||', 'PID|1',
+        'OBR|1|LAB-000123|12|Mindray^BS-200|N||20261005101200||||||||serum', 'OBX|1|NM|GLU|Glucose|5.230000|mmol/L|3.900000-6.100000|N|||F|||20261005101200'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||Mindray|BS-200|{TS}||ACK^R01|17|P|2.3.1||||0||ASCII|||\rMSA|AA|17|Message accepted|||0|\r', got));
+      assert.deepEqual([kitPiece(got, 10), kitPiece(got, 27)], ['17', '0']);
+      got = await bs.send(kitSegs('MSH|^~\\&|Mindray|BS-200|||20261005101500||QRY^Q02|8|P|2.3.1||||||ASCII|||', 'QRD|20261005101500|R|D|1|||RD|LAB-000123|OTH|||T|', 'QRF|BS-200|||||RCT|COR|ALL||'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||Mindray|BS-200|{TS}||QCK^Q02|8|P|2.3.1||||||ASCII|||\rMSA|AA|8|Message accepted|||0|\rERR|0|\rQAK|SR|NF|\r', got));
+      assert.deepEqual([kitPiece(got, 10), kitPiece(got, 27), kitPiece(got, 32)], ['8', '0', 'NF']);
+
+      // CL-900i (BS-240 — так же): MSH-3/4 пусты — X_CL_ACK, X_CL_ACK_QC, X_CL_QCK; 19 «|» после «^~\&».
+      got = await cl.send(kitSegs('MSH|^~\\&|||||20120508094822||ORU^R01|1|P|2.3.1||||0||ASCII|||', 'PID|1|TEST-0001|||||||||||||||||||||||||||',
+        'OBR|1|LAB-000125|10|^|Y|20120405193926|20120405193914|20120405193914||||||20120405193914|serum|||||||||3|||||||||||||||||||||||',
+        'OBX|1|NM|2|TBil|100| umol/L |-|N|||F||100|20120405194245||tester|0|'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||||{TS}||ACK^R01|1|P|2.3.1||||0||ASCII|||\rMSA|AA|1|Message accepted|||0|\r', got));
+      const msh = got.subarray(1).toString('latin1').split('\r')[0];
+      assert.equal((msh.slice(msh.indexOf('^~\\&') + 4).match(/\|/g) || []).length, 19, 'CL-900i: «MSH segment field count < 19» — нет');
+      got = await cl.send(kitSegs('MSH|^~\\&|||||20120508103014||ORU^R01|1|P|2.3.1||||2||ASCII|||',
+        'OBR|1|7|AST|^|0|20130729160839|20120405141255|20130729161552|||1|2|QUAL2|2222|20300101|0|M|55.000000|5.000000|0.137470|nkat/L|||||||||1||||||||||||||||||'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||||{TS}||ACK^R01|1|P|2.3.1||||2||ASCII|||\rMSA|AA|1|Message accepted|||0|\r', got));
+      got = await cl.send(kitSegs('MSH|^~\\&|||||20190222102859||QRY^Q02|10|P|2.3.1||||||ASCII|||', 'QRD|20190222102859|R|D|9|||RD|LAB-000126|OTH|||T|', 'QRF||||||RCT|COR|ALL||'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||||{TS}||QCK^Q02|10|P|2.3.1||||||ASCII|||\rMSA|AA|10|Message accepted|||0|\rERR|0|\rQAK|SR|NF|\r', got));
+
+      // BC-5300 — X_HEME_ACK, X_HEME_ACK_QC (MSH-11 = Q), X_HEME_ORR; MSA-3/6 у ACK — как сегодня.
+      got = await bc.send(kitSegs('MSH|^~\\&|BC-5300|Mindray|||20080419104618||ORU^R01|42|P|2.3.1||||||UNICODE', 'PID|1||TEST-0002^^^^MR', 'PV1|1',
+        'OBR|1||LAB-000127|00001^Automated Count^99MRC||20071207080000|20071207160000|||Mindray||||20071207083000||||||||||HM||||||||Mindray',
+        'OBX|6|NM|6690-2^WBC^LN||4.63|10*9/L|11.00-12.00|L|||F||E'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|LIS||||{TS}||ACK^R01|42|P|2.3.1||||||UNICODE\rMSA|AA|42|Message accepted|||0\r', got, { msh5: 'BC-5300', msh6: 'Mindray' }));
+      got = await bc.send(kitSegs('MSH|^~\\&|BC-5300|Mindray|||20081120171602||ORU^R01|1|Q|2.3.1||||||UNICODE', 'PID|1||LOT1234^^^^MR||||20301231',
+        'OBR|1||6|00003^LJ QCR^99MRC||||||||||||||||||||HM', 'OBX|1|NM|6690-2^WBC^LN||7.10|10*9/L|||||F'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|LIS||||{TS}||ACK^R01|1|Q|2.3.1||||||UNICODE\rMSA|AA|1|Message accepted|||0\r', got, { msh5: 'BC-5300', msh6: 'Mindray' }));
+      got = await bc.send(kitSegs('MSH|^~\\&|BC-5300|Mindray|||20081120174836||ORM^O01|9|P|2.3.1||||||UNICODE', 'ORC|RF||SampleID1||IP'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|LIS||||{TS}||ORR^O02|1|P|2.3.1||||||UNICODE\rMSA|AR|9\r', got, { msh5: 'BC-5300', msh6: 'Mindray', msh10: '9' }));
+
+      // A1000 — «Mindray long form» с MSA-4 (settle, табл. c, R1 и R5).
+      got = await ab.send(kitSegs('MSH|^~\\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123', 'OBR|1|LAB-000123|7764|AutoLumo A1000',
+        'NTE|||180323~~AFP~107~20271231~DQ70~1', 'OBX|10455|CE|107|107|41765^4.17~||||||F|||2026/10/05 12:00:00'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||||{TS}||ACK^R01|5|P|2.3.1||||||ASCII|||\rMSA|AA|5|Message accepted|10455||0|\r', got));
+      got = await ab.send(kitSegs('MSH|^~\\&|||||20261005120000||ORU^R01|7|P|2.3.1|261005120000124', 'OBR|1|LAB-000123|7764|AutoLumo A1000',
+        'OBX||CE|107||41765^4.17||||||F', 'OBX||CE|112||22000^1.23||||||F'));
+      assert.deepEqual(got, kitFrame('MSH|^~\\&|||||{TS}||ACK^R01|7|P|2.3.1||||||ASCII|||\rMSA|AA|7|Message accepted|7764||0|\r', got));
+      assert.equal(db.prepare("SELECT COUNT(*) c FROM lab_devices WHERE host = '127.0.0.25'").get().c, 1, 'A1000 — его строка, не находка');
+    } finally { bs.close(); cl.close(); bc.close(); ab.close(); }
+  });
 });

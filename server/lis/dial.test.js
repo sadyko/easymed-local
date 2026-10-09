@@ -82,10 +82,34 @@ test('кадры приходят — ответ ACK^R01 тем же прово�
     await until(() => fake.acks.length === 1, 3000, 'ответ');
     const [msh, msa] = fake.acks[0].split('\r');
     assert.equal(msh.split('|')[8], 'ACK^R01');
-    assert.equal(msa, 'MSA|AA|5|Message accepted|||0');
+    // LIS_VENDOR_EXACT_V1 — вид не назван (replyStyle нет) — вид руководства.
+    assert.equal(msa, 'MSA|AA|5|Message accepted|||0|');
     assert.equal(seen.length, 1);
     assert.equal(seen[0].peer, '127.0.0.1', 'peer — адрес прибора');
     assert.ok(client.status().last_rx_at, 'время последнего байта от прибора');
+  } finally {
+    client.close();
+    await fake.close();
+  }
+});
+
+// LIS_VENDOR_EXACT_V1 — ответ, который клиент строит сам, — в виде прибора
+// строки (replyStyle от index.js): у гематологии (BC-780, BC-20) — короткий,
+// с CR после последнего сегмента и MSH-11 эхом (BC-3600 OM p. D-31: «the value
+// of MSH-11 … in QC response message is Q»).
+test('LIS_VENDOR_EXACT_V1: replyStyle звонка — гематология получает короткий ответ с MSH-11 эхом и CR в конце', async () => {
+  const fake = await fakeAnalyzer();
+  const client = startMllpClient({ host: '127.0.0.1', port: fake.port, timing: FAST, onMessage: async () => 'AA',
+    replyStyle: () => ({ layout: 'short', wire: 'mindray-hematology' }) });
+  try {
+    await until(() => fake.live().length === 1, 3000, 'подключение');
+    fake.live()[0].write(frame(ORU('9').replace('|ORU^R01|9|P|', '|ORU^R01|9|Q|')));
+    await until(() => fake.acks.length === 1, 3000, 'ответ');
+    const ack = fake.acks[0];
+    assert.equal(ack.split('\r')[0].split('|')[10], 'Q', 'MSH-11 эхом');
+    assert.equal(ack.split('\r')[0].split('|').length, 18, 'короткий заголовок, MSH-18 UNICODE эхом');
+    assert.equal(ack.split('\r')[1], 'MSA|AA|9|Message accepted|||0');
+    assert.ok(ack.endsWith('\r'), 'CR после последнего сегмента');
   } finally {
     client.close();
     await fake.close();
@@ -180,6 +204,75 @@ test('прибор слал сигнал и замолчал — соедине�
     await until(() => fake.conns.length === 2, 3000, 'переподключение после тишины');
     assert.equal(waits[0], 'silent');
     assert.ok(fake.conns[0].destroyed || fake.conns[0].readableEnded, 'мёртвое соединение закрыто');
+  } finally {
+    client.close();
+    await fake.close();
+  }
+});
+
+// LIS_VENDOR_EXACT_V1 — D4: закрываем соединение с прибором RST, а не FIN
+// (после FIN A1000 не замечает обрыва, теряет следующий результат и крутит
+// ядро — autobio-autolumo-a1000.settle.md, находка 6). Сторож тишины после
+// сигнала 0x02 — прежний: он нужен гематологии, ждущей звонка.
+function trackClose(sock) {
+  const ev = [];
+  sock.on('end', () => ev.push('end'));
+  sock.on('error', (e) => ev.push(e.code));
+  const closed = new Promise((r) => sock.once('close', r));
+  return { ev, closed };
+}
+
+test('LIS_VENDOR_EXACT_V1 D4: close() рвёт соединение с прибором RST, а не FIN', async () => {
+  const fake = await fakeAnalyzer();
+  const client = startMllpClient({ host: '127.0.0.1', port: fake.port, timing: FAST, onMessage: async () => 'AA' });
+  try {
+    await until(() => fake.live().length === 1, 3000, 'подключение');
+    await until(() => client.status().state === 'connected', 3000, 'connected');
+    const { ev, closed } = trackClose(fake.live()[0]);
+    client.close();
+    await closed;
+    assert.ok(ev.includes('ECONNRESET') && !ev.includes('end'), 'RST, а не FIN: ' + ev.join(','));
+  } finally {
+    client.close();
+    await fake.close();
+  }
+});
+
+test('LIS_VENDOR_EXACT_V1 D4: сторож тишины после сигнала — как прежде, но мёртвое соединение рвётся RST', async () => {
+  const fake = await fakeAnalyzer();
+  const waits = [];
+  const client = startMllpClient({ host: '127.0.0.1', port: fake.port, timing: { ...FAST, silenceMs: 300 }, onMessage: async () => 'AA', onWait: (ms, code) => waits.push(code) });
+  try {
+    await until(() => fake.live().length === 1, 3000, 'подключение');
+    const { ev, closed } = trackClose(fake.live()[0]);
+    fake.live()[0].write(Buffer.from([0x02]));   // сигнал — и тишина
+    await closed;
+    await until(() => waits.length > 0, 3000, 'клиент заметил обрыв');
+    assert.equal(waits[0], 'silent');
+    assert.ok(ev.includes('ECONNRESET') && !ev.includes('end'), 'RST, а не FIN: ' + ev.join(','));
+  } finally {
+    client.close();
+    await fake.close();
+  }
+});
+
+// LIS_VENDOR_EXACT_V1 — D14: читатель общий со слушателем: байты не в кадре
+// идут в журнал с подсказкой протокола, но сигнал 0x02 гематологии (раз в 3 с,
+// BC-3600 OM p. D-8) — не беда и журнал не засоряет.
+test('LIS_VENDOR_EXACT_V1 D14: сигнал 0x02 в журнал не идёт; непонятное от прибора — идёт с подсказкой', async () => {
+  const fake = await fakeAnalyzer();
+  const logs = [];
+  const client = startMllpClient({ host: '127.0.0.1', port: fake.port, timing: FAST, onMessage: async () => 'AA', log: (m) => logs.push(m) });
+  try {
+    await until(() => fake.live().length === 1, 3000, 'подключение');
+    const sock = fake.live()[0];
+    for (let i = 0; i < 3; i++) { sock.write(Buffer.from([0x02])); await settle(30); }
+    await settle(100);
+    assert.ok(!logs.some((l) => /не в кадре/.test(l)), 'сигнал — не беда: ' + logs.join(' | '));
+    // BC-20 с протоколом «15ID» вместо HL7 начинает с 0x05 (BC-3600 OM p. D-13; mindray-bc-20.md M16).
+    sock.write(Buffer.from([0x05]));
+    await until(() => logs.some((l) => /не в кадре/.test(l)), 3000, 'строка о непонятном');
+    assert.ok(logs.some((l) => /не в кадре/.test(l) && l.includes('127.0.0.1:' + fake.port)), logs.join(' | '));
   } finally {
     client.close();
     await fake.close();

@@ -20,6 +20,9 @@ import { splitDevices, portState, isTruncatedMessage } from './lab-devices-lists
 // проверка адреса, строка состояния), служебные за сегодня, подпись модели.
 import { splitTray, groupReceiving, staleSeriesRest, seriesPendingRest, isLocalIp, isIpAddress, dialLine, dialSig,
     serviceSummary, modelNote, connectionOf } from './lab-devices-lists.js?v=lists4';
+// LIS_VENDOR_EXACT_V1 — D14: кто подключён к порту приёма и что прислал (lis_listeners.peers);
+// D10: в сообщении лотка есть непрочитанные буквы (U+FFFD).
+import { peerNotes, hasUnreadableText } from './lab-devices-lists.js?v=lists4';
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
 const TRANSPORTS = [
@@ -72,6 +75,24 @@ function partText(p) {
 const DIAL_LABEL = 'Easy-Med подключается к прибору сам';
 const DIAL_ADD_HINT = 'Анализатор сам не звонит, а ждёт программу LIS? «Добавить по адресу» — и отметьте «Easy-Med подключается к прибору сам».';
 const CONNECT_UNKNOWN_HINT = 'Если в настройках LIS прибора нет адреса сервера, а есть только «порт прибора», — отметьте «Easy-Med подключается к прибору сам».';
+
+// LIS_VENDOR_EXACT_V1 — D2: модель выбирают явно. BS-240, CL-900i и A1000 не
+// называют себя (MSH-3/4 пустые), и без модели Easy-Med читал бы общим
+// правилом — у BS-240 и CL-900i номер прогона вместо номера пробирки. Для
+// анализатора не из списка — явный пункт «Другой анализатор (общий HL7)»: модель
+// пустая, но выбор сделан человеком (model_confirmed = 1). Значение пункта — не
+// модель, а команда экрана (как TYPE_OWN в lab-device-codes.js).
+const GENERIC_MODEL = '__lis_generic_hl7__';
+const GENERIC_LABEL = 'Другой анализатор (общий HL7)';
+// Тот же текст — у отказа сервера (rpc/lis.js lis_device_add): один ключ словаря.
+const MODEL_REQUIRED = 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».';
+/** Прибор, у которого человек выбрал «Другой анализатор (общий HL7)». */
+const isGenericModel = (d) => !!d && !String(d.profile || '').trim() && Number(d.model_confirmed) === 1;
+// LIS_VENDOR_EXACT_V1 — D10: строка лотка у сообщения с непрочитанными буквами.
+const UNREADABLE_NOTE = 'Часть букв в сообщении не прочиталась — задайте на анализаторе коды тестов латиницей (например, GLU, ALT).';
+// LIS_VENDOR_EXACT_V1 (раунд 2) — REPORT.md B0.2: входящий 2575 на компьютере с
+// Easy-Med. Команда — дословно, не переводится (выполняется от имени администратора).
+const FIREWALL_CMD = 'netsh advfirewall firewall add rule name="Easy-Med LIS 2575" dir=in action=allow protocol=TCP localport=2575';
 
 // Живая лента опрашивает сервер, пока экран открыт. Таймер модульный и гасится
 // при следующем монтировании и при уходе с вкладки (laboratory.js): иначе
@@ -242,6 +263,42 @@ export async function mountLabDevices(container) {
             Array.isArray(l.dialing) ? l.dialing.map((x) => [x.device_id, dialSig(x)]) : null]);
     }
 
+    // ---------- соединения с портом приёма (LIS_VENDOR_EXACT_V1, D14) ----------
+    //
+    // Прибор подключился и шлёт не то (ASTM, собственный формат Autobio,
+    // Unicode) — раньше это выглядело так же, как «никто не подключался».
+    // Правило — у чистой функции (peerNotes), здесь — перевод и разметка.
+    // Беда видна и в карточке «Анализаторы»; «подключён и ждёт первую пробу» —
+    // только в окне «Добавить прибор»: это не беда, а подсказка, где искать.
+
+    /** Строки о соединениях; onlyWarn — только беды. */
+    function peerNotesNow(onlyWarn = false) {
+        const peers = state.listeners && Array.isArray(state.listeners.peers) ? state.listeners.peers : [];
+        const notes = peerNotes(peers, state.devices, serverNow());
+        return onlyWarn ? notes.filter((n) => n.kind === 'warn') : notes;
+    }
+
+    /** Подпись строк о соединениях для решения «перерисовать»: без времени. */
+    const peerNotesSig = (notes) => notes.map((n) => [n.ip, n.kind, n.key, n.hintKey]);
+
+    /** Перевод СНАЧАЛА, подстановка ПОТОМ: подсказка — тоже ключ словаря. */
+    function peerNoteText(n) {
+        return trf(n.key, { ...n.params, hint: n.hintKey ? tr(n.hintKey) : '' });
+    }
+
+    function peerNotesBlock(notes) {
+        const box = h('div', { style: { display: 'grid', gap: '6px', padding: '4px 14px 10px' } });
+        for (const n of notes) {
+            const warn = n.kind === 'warn';
+            box.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', lineHeight: '1.45',
+                padding: '6px 10px', borderLeft: '3px solid ' + (warn ? 'var(--warn-500, #d99a00)' : 'var(--ink-200, #d5dbe1)') } },
+                h('span', { style: { color: warn ? 'var(--warn-600, #b98200)' : 'var(--ink-500, #6b7785)', flex: '0 0 14px', marginTop: '1px' } },
+                    Icon(warn ? 'Warning' : 'Info', { size: 13 })),
+                h('span', { class: warn ? '' : 'muted' }, peerNoteText(n))));
+        }
+        return box;
+    }
+
     // ---------- список приборов ----------
 
     // LIS_DISCOVERY_FIX_V1 (экран) — всё, что видно в карточке «Анализаторы»:
@@ -259,6 +316,7 @@ export async function mountLabDevices(container) {
                 d.dial, dialSig(dialEntry(d)), countsOf(d)]),
             state.profiles.map((p) => [p.key, p.vendor, p.model, p.channelsSource, p.wireSource]),
             !!(state.listeners && Array.isArray(state.listeners.dialing)),
+            peerNotesSig(peerNotesNow(true)),   // LIS_VENDOR_EXACT_V1 — D14: беды соединений
         ]);
     }
 
@@ -273,6 +331,11 @@ export async function mountLabDevices(container) {
             h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: openAddWindow },
                 Icon('Plus', { size: 13 }), ' ',
                 split.found.length ? trf('Добавить прибор · найдено {n}', { n: split.found.length }) : tr('Добавить прибор'))));
+
+        // LIS_VENDOR_EXACT_V1 — D14: прибор подключился и шлёт непонятное — сразу
+        // под заголовком, и при пустой таблице тоже: такой прибор строки не заводит.
+        const noisy = peerNotesNow(true);
+        if (noisy.length) devicesCard.appendChild(peerNotesBlock(noisy));
 
         if (state.loadError) {
             devicesCard.appendChild(h('div', { class: 'empty', style: { padding: '26px' } },
@@ -305,7 +368,8 @@ export async function mountLabDevices(container) {
                 h('td', { style: { fontWeight: 600 } }, d.name),
                 h('td', { class: 'muted' },
                     p ? p.vendor + ' ' + p.model
-                      : (d.profile ? trf('{key} — профиль не найден', { key: d.profile }) : tr('модель не выбрана')),
+                      : (d.profile ? trf('{key} — профиль не найден', { key: d.profile })
+                          : isGenericModel(d) ? tr(GENERIC_LABEL) : tr('модель не выбрана')),   // LIS_VENDOR_EXACT_V1 — D2
                     // Найденный прибор: модель ПОДОБРАНА по тому, как он себя
                     // назвал. Это догадка, и лаборант обязан её увидеть прежде,
                     // чем привяжет прибор к панели. LIS_ANALYZER_LIST_V1 — пока
@@ -452,8 +516,12 @@ export async function mountLabDevices(container) {
         clear(formCard);
         state.dialNodes.add = [];   // LIS_REAL_ANALYZERS_V1 — окно «Добавить прибор» больше не на экране
 
-        const d = device || { name: '', profile: (state.profiles[0] || {}).key || '', transport: 'mllp', host: '', port: 2575, enabled: 1, dial: 0 };
+        // LIS_VENDOR_EXACT_V1 — D2: новый прибор начинает БЕЗ модели (раньше —
+        // с первой модели списка, Mindray BC-20: BS-240, добавленный по адресу
+        // без правки модели, читался бы как гематология). Выбор обязателен — см. save().
+        const d = device || { name: '', profile: '', transport: 'mllp', host: '', port: 2575, enabled: 1, dial: 0 };
         const dialsNow = Number(d.dial) === 1;   // LIS_REAL_ANALYZERS_V1
+        const genericNow = isGenericModel(d);   // LIS_VENDOR_EXACT_V1 — D2
 
         const nameInp = h('input', { type: 'text', value: d.name, placeholder: tr('Например: Гематология') });
         // LIS_ANALYZER_LIST_V1 (ревью I2) — первый пункт «модель не выбрана».
@@ -461,14 +529,19 @@ export async function mountLabDevices(container) {
         // показывал первый (Mindray BC-20), и «Изменить → Сохранить» молча
         // ставил BC-20. Модель, которой нет среди профилей (профиль убрали или
         // lis_profiles не ответил), — своим пунктом: сохранение её не стирает.
-        // Новый прибор по-прежнему начинает с первой модели (d выше).
+        // LIS_VENDOR_EXACT_V1 — D2: у нового прибора первый пункт — «— выберите
+        // модель —»; последний — «Другой анализатор (общий HL7)» (и у прибора,
+        // для которого его уже выбрали, даже если список моделей не пришёл).
         const profSel = h('select', null,
-            h('option', { value: '', selected: !d.profile ? true : null }, tr('модель не выбрана')),
+            h('option', { value: '', selected: !d.profile && !genericNow ? true : null }, device ? tr('модель не выбрана') : tr('— выберите модель —')),
             d.profile && !profileOf(d.profile)
                 ? h('option', { value: d.profile, selected: true }, trf('{key} — профиль не найден', { key: d.profile }))
                 : null,
             ...state.profiles.map((p) =>
-                h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)));
+                h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)),
+            state.profiles.length || genericNow
+                ? h('option', { value: GENERIC_MODEL, selected: genericNow ? true : null }, tr(GENERIC_LABEL))
+                : null);
         // LIS_DISCOVERY_FIX_V1 (экран) — решение владельца 2026-09-29: новый
         // прибор руками — только СЕТЕВОЙ. Анализатор на кабеле COM приходит
         // через переадресатор на лабораторном ПК и появляется в «Найдены в
@@ -496,13 +569,26 @@ export async function mountLabDevices(container) {
         // Easy-Med подключается к нему сам. Нужны IP-адрес локальной сети и порт
         // прибора; сервер другой адрес и так не наберёт (bad_address), но
         // /api/db строку сохранит — поэтому проверка здесь, до записи.
-        const defaultPort = () => (profileOf(profSel.value) || {}).defaultPort || 2575;
+        // LIS_VENDOR_EXACT_V1 (раунд 2) — у модели, которая ждёт звонка (connect
+        // 'dial': BC-20 — TCP-сервер, профиль 2d08ffc), defaultPort — порт ПРИБОРА,
+        // по которому звонит Easy-Med (5100); у остальных — порт приёма Easy-Med.
+        // Раньше порт модели считался только портом приёма, и отметка флажка его
+        // стирала: 5100 у BC-20 пришлось бы набирать заново (приёмка BC-20, T3).
+        const selectedProfile = () => profileOf(profSel.value);
+        const dialModel = () => { const p = selectedProfile(); return !!p && p.connect === 'dial'; };
+        const listenPort = () => { const p = selectedProfile(); return (p && p.connect !== 'dial' && p.defaultPort) || 2575; };
+        const devicePort = () => { const p = selectedProfile(); return p && p.connect === 'dial' && p.defaultPort ? String(p.defaultPort) : ''; };
+        const portNow = () => String(portInp.value == null ? '' : portInp.value).trim();
+        let dialByForm = false;   // LIS_VENDOR_EXACT_V1 — флажок поставила форма по модели, а не человек
         const dialInp = h('input', { type: 'checkbox', checked: dialsNow ? true : null, onchange: () => {
+            dialByForm = false;   // отметил или снял человек — его выбор
+            const p = portNow();
             if (dialInp.checked) {
-                const p = String(portInp.value == null ? '' : portInp.value).trim();
-                if (p === String(defaultPort()) || p === '2575') portInp.value = '';
-            } else if (!String(portInp.value == null ? '' : portInp.value).trim()) {
-                portInp.value = String(defaultPort());
+                if (!p || p === String(listenPort()) || p === '2575') portInp.value = devicePort();
+            } else if (!p || (!device && devicePort() && p === devicePort())) {
+                // Новый прибор: порт прибора BC-20 — не порт приёма. У заведённой
+                // строки порт, как прежде, остаётся (ревью: «порт прибора сохранён»).
+                portInp.value = String(listenPort());
             }
             syncTransport();
         } });
@@ -555,8 +641,21 @@ export async function mountLabDevices(container) {
         // LIS_REAL_ANALYZERS_V1 — слушатель, а не свойство onchange: смена модели
         // ещё и показывает или прячет подсказку про звонок (syncTransport).
         // Порт по умолчанию модели — только новому прибору, который звонит сам.
+        // LIS_VENDOR_EXACT_V1 (раунд 2) — модель ждёт звонка (BC-20): флажок
+        // «Easy-Med подключается к прибору сам» и порт прибора ставятся сами.
+        // Сменили на модель, которая звонит сама, — снимается только флажок,
+        // поставленный формой; отмеченный человеком остаётся.
         profSel.addEventListener('change', () => {
-            if (!device && !dialOn()) portInp.value = String(defaultPort());
+            if (!device) {
+                if (dialModel()) {
+                    if (!dialInp.checked) { dialInp.checked = true; dialByForm = true; }
+                    const p = portNow();
+                    if (!p || p === '2575') portInp.value = devicePort();
+                } else {
+                    if (dialByForm) { dialInp.checked = false; dialByForm = false; }
+                    if (!dialOn()) portInp.value = String(listenPort());
+                }
+            }
             syncTransport();
         });
 
@@ -596,9 +695,11 @@ export async function mountLabDevices(container) {
 
         async function save() {
             const dial = dialOn();   // LIS_REAL_ANALYZERS_V1
+            const choice = profSel.value;   // LIS_VENDOR_EXACT_V1 — D2
+            const generic = choice === GENERIC_MODEL;
             const payload = {
                 name: nameInp.value.trim(),
-                profile: profSel.value,
+                profile: generic ? '' : choice,   // LIS_VENDOR_EXACT_V1 — D2: «общий HL7» — модель пустая
                 transport: transport(),
                 host: hostInp.value.trim(),
                 port: Number(portInp.value) || 2575,
@@ -606,6 +707,9 @@ export async function mountLabDevices(container) {
                 dial: dial ? 1 : 0,   // LIS_REAL_ANALYZERS_V1 — Easy-Med подключается к прибору сам
             };
             if (!payload.name) { toast(tr('Укажите название прибора'), 'warn'); return; }
+            // LIS_VENDOR_EXACT_V1 — D2: новый прибор — только с выбранной моделью или
+            // «Другой анализатор (общий HL7)». Заведённые строки правятся, как прежде.
+            if (!device && !choice) { toast(tr(MODEL_REQUIRED), 'warn'); profSel.focus(); return; }
             // LIS_DISCOVERY_FIX_V1 (экран) — новый прибор — только с адресом
             // (решение владельца 2026-09-29): по адресу сервер узнаёт прибор, а
             // строка без адреса забирала бы первый попавшийся сетевой прибор на
@@ -634,11 +738,24 @@ export async function mountLabDevices(container) {
 
             // LIS_ANALYZER_LIST_V1 — сохранение найденного прибора с выбранной
             // моделью и есть проверка модели человеком: пометка «проверьте
-            // модель» снимается. Только в правке — у вставки такой колонки нет.
+            // модель» снимается (в правке; новая строка с моделью — не находка).
+            // LIS_VENDOR_EXACT_V1 — D2: «Другой анализатор (общий HL7)» — тоже
+            // выбор человека (model_confirmed = 1) у любой строки; сняли его,
+            // выбрав «модель не выбрана», — отметка снимается.
+            const confirm = {};
+            if (device) {
+                if (device.discovered) confirm.model_confirmed = payload.profile || generic ? 1 : 0;
+                else if (generic) confirm.model_confirmed = 1;
+                else if (!payload.profile && Number(device.model_confirmed) === 1) confirm.model_confirmed = 0;
+            } else if (generic) {
+                // LIS_VENDOR_EXACT_V1 — D2 (раунд 2): model_confirmed — колонка вставки
+                // (schema-registry.js), выбор «общего HL7» уходит той же записью. Вставку
+                // без модели и без этого выбора сервер не принимает.
+                confirm.model_confirmed = 1;
+            }
             const res = device
-                ? await supabase.from('lab_devices').update(
-                    device.discovered ? { ...payload, model_confirmed: payload.profile ? 1 : 0 } : payload).eq('id', device.id)
-                : await supabase.from('lab_devices').insert(payload);
+                ? await supabase.from('lab_devices').update({ ...payload, ...confirm }).eq('id', device.id)
+                : await supabase.from('lab_devices').insert({ ...payload, ...confirm });   // LIS_VENDOR_EXACT_V1 — D2: одна запись
             if (res.error) { toast(trf('Не удалось сохранить прибор: {msg}', { msg: res.error.message || res.error }), 'fail'); return; }
 
             // Перезапуск слушателей: без него смена порта требовала бы
@@ -726,6 +843,7 @@ export async function mountLabDevices(container) {
             // ради него не перестраивается.
             listenersSig(),
             state.profiles.map((p) => p.key),
+            peerNotesSig(peerNotesNow()),   // LIS_VENDOR_EXACT_V1 — D14: соединения без времени
         ]);
     }
 
@@ -741,6 +859,10 @@ export async function mountLabDevices(container) {
 
         // LD_LAYOUT_V1 — подзаголовки окна стояли вплотную к краю карточки.
         formCard.appendChild(h('div', { class: 'ld-subhead' }, tr('Найдены в сети')));
+        // LIS_VENDOR_EXACT_V1 — D14: кто подключён к порту, но анализатором ещё
+        // не стал: шлёт непонятное или ждёт первую пробу.
+        const peerLines = peerNotesNow();
+        if (peerLines.length) formCard.appendChild(peerNotesBlock(peerLines));
         if (state.loadError) {
             // Ревью I1: список не прочитался — так и сказать. Пустой список
             // здесь значит «не знаем», а не «никого нет».
@@ -852,9 +974,14 @@ export async function mountLabDevices(container) {
         clear(formCard);
         state.dialNodes.add = [];   // LIS_REAL_ANALYZERS_V1 — окно «Добавить прибор» больше не на экране
         const nameInp = h('input', { type: 'text', value: d.name || '' });
+        // LIS_VENDOR_EXACT_V1 — D2: прибор себя не назвал (BS-240, CL-900i, A1000
+        // оставляют MSH-3/4 пустыми) — модель не подставляется, первый пункт —
+        // «— выберите модель —»; последний — «Другой анализатор (общий HL7)».
+        const guessed = String(d.profile || '').trim();
         const profSel = h('select', null,
-            h('option', { value: '', selected: !d.profile ? true : null }, tr('модель не определена')),
-            ...state.profiles.map((p) => h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)));
+            h('option', { value: '', selected: !guessed ? true : null }, guessed ? tr('модель не определена') : tr('— выберите модель —')),
+            ...state.profiles.map((p) => h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)),
+            state.profiles.length ? h('option', { value: GENERIC_MODEL }, tr(GENERIC_LABEL)) : null);
         formCard.appendChild(h('div', { class: 'card-header' }, h('h3', null, trf('Добавить «{name}»', { name: d.name }))));
         formCard.appendChild(h('div', { class: 'row', style: { gap: '14px', flexWrap: 'wrap', marginBottom: '10px' } },
             field(tr('Название'), nameInp), field(tr('Модель'), profSel)));
@@ -862,22 +989,37 @@ export async function mountLabDevices(container) {
             profileOf(d.profile)
                 ? tr('Модель подобрана по тому, как прибор себя назвал, — проверьте её.')
                 : tr('Модель по имени прибора не определилась — выберите её сами.')));
+        const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save }, tr('Добавить'));
         formCard.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '6px' } },
-            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save }, tr('Добавить')),
+            addBtn,
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: openAddWindow }, tr('Назад'))));
 
         async function save() {
             const name = nameInp.value.trim();
             if (!name) { toast(tr('Укажите название прибора'), 'warn'); return; }
-            // Ревью I2: модель — только выбранная. «модель не определена» ('')
-            // не шлётся вовсе: иначе стиралась бы догадка сервера — и тогда,
-            // когда lis_profiles не ответил и в списке один пустой пункт.
-            const values = { name, added: 1 };
+            // LIS_VENDOR_EXACT_V1 — D2: прибор без модели — только с выбором.
+            // Догадку сервера пустой пункт по-прежнему не стирает (ревью I2):
+            // модель уходит только выбранная, и тогда, когда lis_profiles не
+            // ответил и в списке один пустой пункт, догадка остаётся.
+            const choice = profSel.value;
+            if (!choice && !guessed) { toast(tr(MODEL_REQUIRED), 'warn'); profSel.focus(); return; }
+            // LIS_VENDOR_EXACT_V1 — D2: «Добавить» — RPC lis_device_add: то же
+            // правило проверяет сервер (раньше это была голая запись added = 1).
             // Модель выбрана — её проверил человек: пометка «найден сам —
-            // проверьте модель» в таблице больше не нужна.
-            if (profSel.value) { values.profile = profSel.value; values.model_confirmed = 1; }
-            const { error } = await supabase.from('lab_devices').update(values).eq('id', d.id);
-            if (error) { toast(trf('Не удалось добавить прибор: {msg}', { msg: error.message || error }), 'fail'); return; }
+            // проверьте модель» в таблице больше не нужна (сервер ставит её сам).
+            const args = { id: d.id, name };
+            if (choice === GENERIC_MODEL) args.generic = true;
+            else if (choice) args.profile = choice;
+            addBtn.disabled = true;   // двойное нажатие — один вызов
+            const { error } = await supabase.rpc('lis_device_add', args);
+            addBtn.disabled = false;
+            if (error) {
+                if (error.code === 'model_required') { toast(tr(MODEL_REQUIRED), 'warn'); profSel.focus(); return; }
+                // Прибор уже добавили (вторая вкладка): сказать его словами и показать, где он теперь.
+                if (error.code === 'already_added') { toast(tr(error.message), 'warn'); closeForm(); await reload(); return; }
+                toast(trf('Не удалось добавить прибор: {msg}', { msg: error.message || error }), 'fail');
+                return;
+            }
             toast(trf('Прибор «{name}» добавлен', { name }));
             closeForm();
             await reload();
@@ -911,6 +1053,42 @@ export async function mountLabDevices(container) {
         return guideHostKnown() || tr('адрес этого компьютера в сети');
     }
 
+    // LIS_VENDOR_EXACT_V1 (раунд 2) — REPORT.md B0.2: команда брандмауэра —
+    // целиком, без перевода, с кнопкой «Копировать». Буфер обмена есть только
+    // в защищённом окне (Easy-Med, открытый как localhost, — то есть на самом
+    // компьютере с Easy-Med, где команду и выполняют); по http с другого
+    // компьютера его нет — тогда команда выделяется, и её копируют Ctrl+C.
+    function commandBox(cmd) {
+        const code = h('code', { class: 'cell-mono', translate: 'no', style: {
+            display: 'block', flex: '1 1 260px', padding: '6px 10px', background: 'var(--ink-050, #f4f6f8)', borderRadius: '6px',
+            fontSize: '12.5px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', userSelect: 'all' } }, cmd);
+        const copy = h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => copyCommand(cmd, code) },
+            Icon('Copy', { size: 13 }), ' ', tr('Копировать'));
+        return h('div', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap', marginTop: '6px' } }, code, copy);
+    }
+    async function copyCommand(cmd, codeEl) {
+        const cb = (typeof navigator !== 'undefined' && navigator && navigator.clipboard) || null;
+        try {
+            if (!cb || typeof cb.writeText !== 'function') throw new Error('no clipboard');
+            await cb.writeText(cmd);
+            toast(tr('Скопировано'), 'ok');
+        } catch {
+            selectContents(codeEl);
+            toast(tr('Скопируйте вручную'), 'info');
+        }
+    }
+    /** Выделить текст элемента, чтобы его скопировали Ctrl+C; выделить нечем — команда и так видна целиком. */
+    function selectContents(el) {
+        try {
+            const sel = typeof window !== 'undefined' && typeof window.getSelection === 'function' ? window.getSelection() : null;
+            if (!sel || typeof document.createRange !== 'function') return;
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        } catch { /* выделение — удобство, не обязанность */ }
+    }
+
     function paintGuide() {
         clear(guideCard);
         const body = h('div', { style: { display: 'none' } });
@@ -927,49 +1105,98 @@ export async function mountLabDevices(container) {
             toggle));
 
         const step = (text) => h('li', { style: { marginBottom: '6px' } }, text);
-        // LIS_REAL_ANALYZERS_V1 — и три настоящих прибора клиники: BC-780, BS-200, A1000 по сети.
-        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор с сетевым разъёмом (BC-20, BC-5300, BC-780, BS-200, BS-240, CL-900i, AutoLumo A1000)')));
-        // LIS_DISCOVERY_FIX_V1 (экран) — «ничего настраивать не нужно» было
-        // неправдой: прибор ещё надо «Добавить».
+        // LIS_VENDOR_EXACT_V1 — D12: инструкция по шести приборам клиники
+        // (исследование analyzer-research, REPORT.md часть B). BC-20 больше не в
+        // общем списке «порт 2575»: поля для адреса Easy-Med у него нет — к нему
+        // подключается Easy-Med (порт 5100). Пути меню — у каждой модели свои,
+        // словами экранов самих приборов; общих «Настройка → Системные настройки →
+        // Связь» и «Автоматическая передача» больше нет — у моделей они разные.
         body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px' } },
-            tr('В Easy-Med настраивать почти ничего не нужно: прибор появится в «Добавить прибор» → «Найдены в сети» — останется нажать «Добавить».')));
+            tr('Почти все анализаторы сами отправляют результаты на компьютер с Easy-Med: после первой пробы прибор появится в «Добавить прибор» → «Найдены в сети». Mindray BC-20 — наоборот: к нему подключается Easy-Med (см. ниже).')));
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор, который сам отправляет результаты (BC-5300, BS-200, BS-240, CL-900i, AutoLumo A1000)')));
         body.appendChild(h('ol', { style: { paddingLeft: '20px', marginBottom: '12px' } },
-            step(tr('Подключите прибор сетевым кабелем к той же сети, где стоит компьютер с Easy-Med.')),
-            // LIS_REAL_ANALYZERS_V1 — путь меню был только гематологии Mindray;
-            // у BS-200 связь с LIS — в программе прибора на его компьютере.
-            step(tr('Откройте на приборе настройки связи с LIS: у гематологии Mindray — Настройка → Системные настройки → Связь (Setup → System Setup → Communication); у BS-200 — в программе прибора на его компьютере.')),
-            step(tr('Связь: «сетевой порт» (Network port), а не «последовательный порт».')),
+            // LIS_VENDOR_EXACT_V1 — D12: у BS-200 и A1000 в сеть идёт компьютер с программой прибора.
+            step(tr('Подключите прибор — или компьютер, на котором работает его программа, — сетевым кабелем к той же сети, где стоит компьютер с Easy-Med.')),
+            // LIS_VENDOR_EXACT_V1 (раунд 2) — REPORT.md B0.2: входящий 2575 — шаг
+            // ДО настройки прибора, с командой, а не «если прибор не появился».
+            h('li', { style: { marginBottom: '6px' } },
+                tr('На компьютере с Easy-Med разрешите входящий TCP-порт 2575 в брандмауэре Windows — без этого результаты прибора до Easy-Med не дойдут. Нажмите «Пуск», найдите «Командная строка», щёлкните по ней правой кнопкой → «Запуск от имени администратора» и выполните команду:'),
+                commandBox(FIREWALL_CMD)),
             // location может отсутствовать (тестовый DOM); а localhost человеку у
             // прибора бесполезен — ему нужен адрес компьютера В СЕТИ клиники.
-            step(trf('Адрес назначения: адрес компьютера с Easy-Med — {ip}. Порт: 2575. Протокол: HL7.', { ip: hostForGuide() })),
+            step(trf('В настройках связи с LIS на приборе (у каждой модели путь свой — ниже) укажите: адрес компьютера с Easy-Med — {ip}, порт — 2575, протокол — HL7.', { ip: hostForGuide() })),   // LIS_VENDOR_EXACT_V1 — D12
             // LIS_REAL_ANALYZERS_V1 — Easy-Med только принимает результаты.
             step(tr('Передача — в одну сторону: прибор только отправляет результаты. Запрос заказов из LIS (рабочий список, «загрузка из LIS») выключите — Easy-Med заказов не отдаёт.')),
-            step(tr('Включите «Автоматическая передача» (Auto Communicate) — тогда прибор отправляет каждую готовую пробу сам.')),
             // Ревью M2: находка ждёт в окне «Добавить прибор», а не появляется
             // «в списке выше» сама — инструкция ведёт туда, где она есть.
-            step(tr('Прогоните одну пробу. Прибор появится в «Добавить прибор» → «Найдены в сети»: нажмите «Добавить», затем в «Панелях» выберите его у панели и подтвердите поля.')),
+            // LIS_VENDOR_EXACT_V1 — D12: и модель при «Добавить» выбирают явно (D2).
+            step(tr('Прогоните одну пробу. Прибор появится в «Добавить прибор» → «Найдены в сети»: нажмите «Добавить» и выберите модель, затем в «Панелях» выберите его у панели и подтвердите поля.')),
             // LIS_DISCOVERY_FIX_V1 (экран) — ручной путь: адрес обязателен, и
             // прибор ждёт первую пробу в своём разделе окна.
-            step(tr('Анализатор не появился? В «Добавить прибор» → «Добавить по адресу» укажите его адрес и порт — он будет ждать в «Ждут первого сообщения», пока не пришлёт пробу.')),
-            // LIS_REAL_ANALYZERS_V1 — входящий 2575 в брандмауэре Windows
-            // открывает только администратор, и без него прибор молчит.
-            step(tr('Прибор не появляется, хотя адрес и порт верны? На компьютере с Easy-Med разрешите входящий TCP-порт 2575 в брандмауэре Windows — это делается с правами администратора.'))));
+            step(tr('Анализатор не появился? В «Добавить прибор» → «Добавить по адресу» укажите его адрес и порт — он будет ждать в «Ждут первого сообщения», пока не пришлёт пробу.'))));
+            // LIS_VENDOR_EXACT_V1 (раунд 2) — шаг «прибор не появляется — откройте
+            // 2575 в брандмауэре» стал вторым шагом, с самой командой (выше).
 
-        // LIS_REAL_ANALYZERS_V1 — три настоящих прибора клиники, у каждого своё.
-        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Особенности моделей')));
+        // LIS_VENDOR_EXACT_V1 — D12: настройка на приборе — у каждой модели своя,
+        // словами её экрана (русские руководства Mindray; A1000 — английские
+        // экраны его программы 1.0.7). Особенность BS-200 (постоянный адрес) и
+        // BC-780 (кто звонит — неизвестно) — как прежде.
+        const model = (text) => h('li', { style: { marginBottom: '6px' } }, text);
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Настройка на приборе — по моделям')));
         body.appendChild(h('ul', { style: { paddingLeft: '20px', fontSize: '12.5px', marginBottom: '12px' } },
-            h('li', { style: { marginBottom: '4px' } }, tr('Mindray BS-200 — связь с LIS настраивается в программе прибора на его компьютере: адрес этого компьютера, порт 2575. Номер пробирки прибор передаёт из поля «Штрихкод» (Barcode): сканируйте этикетку LAB-… или впишите её номер в это поле, а не в «Номер пробы» (Sample ID) — это место в штативе, Easy-Med его не читает. Тесты приходят по одному: пока проба не пришла целиком, она видна в «Необработанные» → «Идёт приём результатов».')),
+            model(tr('Mindray BC-20 — к нему подключается Easy-Med: поля для адреса Easy-Med у BC-20 нет. На приборе: «Меню» → «Установка» → «Устан.системы» → «Обмен данными»: «Связь:сетевой порт», его собственный «IP-адрес», «Протокол связи» — HL7, отметьте «Автосвязь». В Easy-Med: «Добавить прибор» → «Добавить по адресу», модель Mindray BC-20, отметьте «Easy-Med подключается к прибору сам», адрес — IP-адрес самого BC-20, порт — 5100.')),
+            // LIS_VENDOR_EXACT_V1 — D12, ревью: шаги REPORT.md B1 — номер пробы руками (иначе
+            // автономер прибора ложится в чужой заказ), «ID пробы», запасные порты.
+            model(tr('Mindray BC-20 — «Установка» → «Вспомог.установка» → «Настройка следующей пробы»: «Ввод следующего ID пробы» — «Ввод вручную», а не «Автоприращение». Этикетку сканируйте в «ID пробы», а не в «ID пациента». Порт 5100 не отвечает — попробуйте 3600 и 5000.')),
+            model(tr('Mindray BC-5300 — «Меню» → «Установка» → «Общая настройка» → «Связь»: «IP-адрес» — адрес компьютера с Easy-Med, «Порт» — 2575, «Авт.дан» — «Вкл», затем «Применить». Компьютеру BC-5300 нужна вторая сетевая карта в сети клиники: первая соединяет его с анализатором — её не трогайте.')),
+            // LIS_VENDOR_EXACT_V1 — D12, ревью: REPORT.md B2 — «Связь» видна только
+            // «Администратору»; подтверждение связи; номер пробы руками (по умолчанию «Автоувеличение»).
+            model(tr('Mindray BC-5300 — войдите как «Администратор». В «Связь» поставьте и «Подтверждение связи» — «Вкл» (если прибор сообщает о сбое связи, а проба в Easy-Med пришла, — «Выкл»). В «Общая настройка» → «Вспомогательный» → «Код пробы» → «Способ ввода» выберите «Ввод вручную»: при «Автоувеличение» прибор нумерует пробы сам, и номер может совпасть с заказом другого пациента.')),
+            model(tr('Mindray BS-200 — в программе прибора на его компьютере: «Настройка» → «Система» → «ЛИС»: отметьте «Разрешение ЛИС», «IP хоста ЛИС» — адрес компьютера с Easy-Med, «Порт» — 2575, отметьте «Отпр.рез.после обр.каждой пробы». В «Согласование тестов» → «Код на ЛИС» дайте каждому тесту свой код латиницей (GLU, UREA, ALT…): тест без кода прибор не отправляет. Нажмите «OK», затем «Подключение». Номер пробирки — в поле «Штрих-код» на экране «Запрос пробы». Тесты приходят по одному: пока проба не пришла целиком, она видна в «Необработанные» → «Идёт приём результатов».')),
+            // LIS_VENDOR_EXACT_V1 — D12, ревью: REPORT.md B4 — BS200.exe звонит сам и
+            // переподключается только с этой отметкой (Text120.dll № 7336).
+            model(tr('Mindray BS-200 — отметьте и «Подключение к ЛИС при запуске», а Easy-Med запускайте раньше программы прибора. Появилось «Не удается подкл. главный компьютер LIS» — нажмите «Подключение».')),
             // LIS_REAL_ANALYZERS_V1 (ревью R3, п. 3) — у BS-200 номер теста свой у
             // каждого прибора: сменился адрес — для Easy-Med это новый прибор, и
             // панель надо перепривязать и подтвердить номера тестов заново.
-            h('li', { style: { marginBottom: '4px' } }, tr('Дайте компьютеру BS-200 постоянный адрес в сети (закрепите его в роутере). Сменится адрес — Easy-Med увидит новый прибор, и пробы пойдут в «Необработанные», пока панель не привязана к новой строке прибора и номера тестов не подтверждены заново.')),
-            h('li', { style: { marginBottom: '4px' } }, tr('Mindray BC-780 — если в настройках LIS прибора есть адрес сервера, укажите адрес этого компьютера и порт 2575: прибор позвонит сам. Если есть только «порт прибора» — прибор ждёт звонка: «Добавить по адресу», впишите IP-адрес и порт прибора и отметьте «Easy-Med подключается к прибору сам».')),
-            h('li', null, tr('Autobio AutoLumo A1000 — лучше по сети: связь с LIS по TCP/IP, протокол HL7, тип порта «As client», адрес этого компьютера и порт 2575, приоритет LIS «только локальный» (2), «Get from LIS…» выключите. Если сетевой разъём занят — кабелем COM через переадресатор (FORWARD-AutoLumo-A1000.bat), на приборе протокол ASTM.'))));
+            model(tr('Дайте компьютеру BS-200 постоянный адрес в сети (закрепите его в роутере). Сменится адрес — Easy-Med увидит новый прибор, и пробы пойдут в «Необработанные», пока панель не привязана к новой строке прибора и номера тестов не подтверждены заново.')),
+            model(tr('Mindray BS-240 и CL-900i — «Утилита» → «Устан.системы» → «Хост F5» → «Параметры связи с хостом»: «Перенести» — TCP/IP, «IP-адрес» — адрес компьютера с Easy-Med, «Порт» — 2575, «Протокол» — HL7, «Режим» — «Однонаправленный»; отметьте «Автосоединение с ЛИС» и «Отправить завершенные пробы». В таблице каналов («№ канала», у CL-900i — «№ стандарт. канала») дайте каждому тесту свой код латиницей. Нажмите «Сохр.», затем «Подключено» — это кнопка подключения. Номер пробирки — сканером или в поле «Штрихкод», а не в «ИД»: «ИД» — номер прогона прибора.')),
+            // LIS_VENDOR_EXACT_V1 — D12, ревью: REPORT.md B5.2, B6.5 — без «Повтор после
+            // отключения» прибор не переподключается после перезапуска Easy-Med; B6.1 —
+            // вторая сетевая карта CL-900i (в клинике его зовут «ИХЛА 900i»).
+            // LIS_VENDOR_EXACT_V1 (раунд 2) — «Отправить незавершенные пробы» можно
+            // оставить у обоих: части одной пробы дополняют один и тот же бланк.
+            model(tr('Mindray BS-240 и CL-900i — в том же окне отметьте «Повтор после отключения» («Интервал» — 30, «Вр.ожид» — 30): без этого после перезапуска или обновления Easy-Med прибор сам не переподключится. «Отправить незавершенные пробы» можно оставить отмеченным: части одной пробы, пришедшие в разное время, дополняют один и тот же бланк.')),
+            model(tr('Mindray CL-900i («ИХЛА 900i») — компьютеру прибора нужна вторая сетевая карта в сети клиники. Первая (192.168.23.3) соединяет его с анализатором — её не трогайте. Адрес второй: «Утилита» → «Устан.системы» → «Аппарат F1» → «3 Устан.связи» → «Связь системы» → «Следующий IP-адрес».')),
+            model(tr('Autobio AutoLumo A1000 (программа 1.0.7, экраны на английском) — System configure → LIS settings: LIS interface — Off, Result type — «Send all test results», Sending mode — «By test», Communication type — LAN, Protocol type — HL7, Socket Type — «As client», Address — адрес компьютера с Easy-Med, Port — 2575, Encoding type — UTF-8. Нажмите Save F2, откройте LIS settings снова и проверьте, что Result type не сбросился в Off. Компьютеру A1000 нужна вторая сетевая карта в сети клиники: первая (192.168.253.x) соединяет его с анализатором.')),
+            model(tr('Mindray BC-780 — если в настройках LIS прибора есть адрес сервера, укажите адрес этого компьютера и порт 2575: прибор позвонит сам. Если есть только «порт прибора» — прибор ждёт звонка: «Добавить по адресу», впишите IP-адрес и порт прибора и отметьте «Easy-Med подключается к прибору сам».'))));
+
+        // LIS_VENDOR_EXACT_V1 — D12: правила для каждой пробы и каждого прибора.
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Для всех анализаторов')));
+        body.appendChild(h('ul', { style: { paddingLeft: '20px', fontSize: '12.5px', marginBottom: '12px' } },
+            // LIS_VENDOR_EXACT_V1 (раунд 2) — почему сканером, и номер руками —
+            // только 6 цифрами с этикетки (решение владельца № 4, DECISIONS.md).
+            model(tr('Сканируйте этикетку Easy-Med LAB-… в поле номера пробирки на приборе, а не набирайте номер руками: ошибка в одной цифре — и результат ляжет в заказ другого пациента. Не давайте прибору нумеровать пробы самому.')),
+            model(tr('Сканера нет — наберите номер так, как он напечатан под штрихкодом: LAB-000123 или все 6 цифр — 000123. Номер короче 6 цифр (123) Easy-Med не примет: проба ляжет в «Необработанные», и привязать её придётся кнопкой «Привязать».')),
+            model(tr('Пробам контроля качества давайте номера с буквами (QC1, QC-AFP-1): такой номер не совпадёт с заказом пациента.')),
+            model(tr('Пока сканируете, раскладка клавиатуры — английская: на русской сканер напечатает «ДФИ-000123» вместо LAB-000123.')),
+            model(tr('Добавляя прибор, всегда выбирайте модель — без неё Easy-Med прочитает не те поля. Нет в списке — «Другой анализатор (общий HL7)».')),
+            // LIS_VENDOR_EXACT_V1 (раунд 2) — REPORT.md B0.1, B5.1: прибор узнаётся
+            // по адресу; панель кормит одна модель (ingest.js — «кормится анализатором другой модели»).
+            model(tr('Дайте постоянный адрес в сети (закрепите его в роутере) компьютеру с Easy-Med и каждому анализатору — или компьютеру его программы. Сменился адрес анализатора — Easy-Med видит в нём новый прибор и не заполняет бланки, пока его снова не добавят в «Добавить прибор» → «Найдены в сети». К BC-20 Easy-Med подключается сам: сменился его адрес — исправьте его в «Изменить».')),
+            model(tr('Одну услугу общего анализа крови заполняет анализатор одной модели. BC-20 делит лейкоциты на 3 группы, а BC-5300 — на 5: заведите им разные услуги, каждой — свою панель (например, «ОАК (BC-20)» и «ОАК (BC-5300)»). Иначе пробы второго анализатора лягут в «Необработанные».')),
+            // LIS_VENDOR_EXACT_V1 — D12, ревью: REPORT.md B6.8 — флаг без диапазона
+            // клиники основания не имеет и пишется «Норма» (lab_results.flag NOT NULL).
+            model(tr('Введите диапазоны клиники в каждой строке панели: AutoLumo A1000 диапазона не присылает, а CL-900i у каждого результата пишет «N» — без диапазона любое число выйдет «Норма».'))));
 
         // LIS_REAL_ANALYZERS_V1 — A1000 больше не «только кабелем COM»: основной путь у него — сеть.
         body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор, подключённый к компьютеру только кабелем COM (BC-2800, BC-3000 Plus и другие)')));
+        // LIS_VENDOR_EXACT_V1 — D12: переадресатор A1000 больше не предлагается: кабель
+        // COM у A1000 и BS-200 соединяет анализатор с его собственной программой.
         body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '12px' } },
-            tr('Такой прибор не умеет отправлять по сети — за него это делает переадресатор на том же компьютере. Папку «analyzers» выдаёт разработчик: скопируйте её целиком на лабораторный компьютер и запустите файл своей модели — FORWARD-BC-2800.bat, FORWARD-AutoLumo-A1000.bat и так далее. При первом запуске он спросит COM-порт, скорость и адрес этого компьютера с Easy-Med. Дальше результаты приходят сюда так же, как с сетевого прибора.')));
+            tr('Такой прибор не умеет отправлять по сети — за него это делает переадресатор на том же компьютере. Папку «analyzers» выдаёт разработчик: скопируйте её целиком на лабораторный компьютер и запустите файл своей модели — например, FORWARD-BC-2800.bat. При первом запуске он спросит COM-порт, скорость и адрес этого компьютера с Easy-Med. Дальше результаты приходят сюда так же, как с сетевого прибора.')));
+        body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '12px' } },
+            tr('BS-200 и AutoLumo A1000 переадресатор не нужен: их кабель COM соединяет анализатор с его собственной программой, а результаты программа отправляет по сети. На их компьютерах переадресатор только отнимет порт у программы прибора — уберите его.')));
         // LIS_DISCOVERY_FIX_V1 (экран) — решение владельца 2026-09-29: в ручной
         // форме кабеля COM больше нет.
         body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '12px' } },
@@ -983,9 +1210,19 @@ export async function mountLabDevices(container) {
             h('li', { style: { marginBottom: '4px' } }, tr('Результат никогда не выдаётся сам: прибор заполняет бланк, а проверяет и выдаёт лаборант.')),
             // LIS_REAL_ANALYZERS_V1 — что сделано по документам, а не на приборе;
             // единицы; служебные сообщения.
-            h('li', { style: { marginBottom: '4px' } }, tr('Первую пробу каждого нового прибора сверьте построчно с распечаткой прибора: BS-200 сделан по руководству производителя, AutoLumo A1000 — по рабочим программам других LIS, BC-780 — по документам соседних моделей.')),
+            // LIS_VENDOR_EXACT_V1 — D12, ревью: A1000 сверен с программой самого прибора
+            // (AutoLumo1000.exe 1.0.7, autobio-autolumo-a1000.settle.md), а не с чужими LIS.
+            h('li', { style: { marginBottom: '4px' } }, tr('Первую пробу каждого нового прибора сверьте построчно с распечаткой прибора: BS-200 сделан по руководству производителя, AutoLumo A1000 — по программе самого прибора (1.0.7), BC-780 — по документам соседних моделей.')),
             h('li', { style: { marginBottom: '4px' } }, tr('Единицы не пересчитываются: настройте на приборе те же единицы, что в панели.')),
-            h('li', { style: { marginBottom: '4px' } }, tr('Контроль качества, калибровка и запросы заказов в бланки и «Необработанные» не идут — их число за сегодня видно у прибора в таблице.')),
+            // LIS_VENDOR_EXACT_V1 — D12, ревью: REPORT.md B5.5 — у BS-240 смена единицы
+            // химанализа требует повторной калибровки (руководство, с. 7-3).
+            h('li', { style: { marginBottom: '4px' } }, tr('У BS-240 меняйте единицу в панели Easy-Med, а не на приборе: смена «Ед.изм.» на BS-240 требует повторной калибровки.')),
+            // LIS_VENDOR_EXACT_V1 — D12: строки «контроль качества в бланки и
+            // «Необработанные» не идёт» больше нет — это неправда: A1000
+            // отправляет контроль без всякой пометки, как обычную пробу
+            // (autobio-autolumo-a1000.settle.md, находка 2), и такой контроль
+            // ложится в «Необработанные» или — с номером-цифрой — в чужой заказ.
+            // Правило про номера контроля с буквами — выше, «Для всех анализаторов».
             // Ревью M2: пробы находки ложатся и до «Добавить» — значит, условие
             // не «появился в списке», а «уже присылал пробы».
             h('li', null, tr('Если прибор уже присылал пробы, но значения не ложатся — смотрите «Необработанные»: там написано, чего именно не хватает.'))));
@@ -1087,6 +1324,11 @@ export async function mountLabDevices(container) {
                     truncated
                         ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                             tr('пришло не целиком — пусть прибор отправит пробу ещё раз'))
+                        : null,
+                    // LIS_VENDOR_EXACT_V1 — D10: кириллица из компьютера прибора не
+                    // прочиталась — такой код «Поле анализатора» не предлагает.
+                    hasUnreadableText(m)
+                        ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } }, tr(UNREADABLE_NOTE))
                         : null,
                     raw),
                 h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },

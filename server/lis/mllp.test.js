@@ -245,9 +245,77 @@ test('ответ на ORU — ACK^R01 с эхом заголовка и MSA-3/6'
     const f = mshLine.split('|');
     assert.deepEqual([f[2], f[3], f[4], f[5], f[8], f[9], f[15], f[17]],
       ['EASYMED', 'CLINIC', 'Mindray', 'BS-200E', 'ACK^R01', '5', '0', 'ASCII']);
-    assert.equal(msa, 'MSA|AA|5|Message accepted|||0');
+    // LIS_VENDOR_EXACT_V1 — без replyStyle (незнакомый прибор) — вид
+    // руководства BS-200 (HIM v5.0, с. 25): «|» после MSA-6.
+    assert.equal(msa, 'MSA|AA|5|Message accepted|||0|');
     sock.end();
   });
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D1: ответ провода в виде прибора ──────────────────
+/** Ждёт ОДИН кадр ответа и отдаёт его байты целиком, с VT и FS CR. */
+function readFrameBytes(sock) {
+  return new Promise((res, rej) => {
+    let buf = Buffer.alloc(0);
+    const timer = setTimeout(() => rej(new Error('ответ не пришёл за 3 с')), 3000);
+    sock.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      const end = buf.indexOf(FS);
+      if (end !== -1 && buf.length > end + 1) { clearTimeout(timer); res(buf.subarray(0, end + 2)); }
+    });
+  });
+}
+
+test('D1: кадр ответа кончается «|<CR><FS><CR>» — CR после последнего сегмента (HIM v5.0, с. 3, 23: «segments that end with <CR>»)', async () => {
+  const oru = 'MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||\rPID|1\rOBR|1|LAB-000123|12|Mindray^BS-200|N\rOBX|1|NM|GLU|Glucose|5.230000|mmol/L|3.900000-6.100000|N|||F\r';
+  await withServer(async () => 'AA', async (port) => {
+    const sock = await connect(port);
+    const bytes = readFrameBytes(sock);
+    sock.write(frame(oru));
+    const b = await bytes;
+    assert.equal(b[0], VT);
+    assert.deepEqual([...b.subarray(b.length - 4)], [0x7c, CR, FS, CR], '«…0|<CR><FS><CR>», как в примере руководства, с. 25');
+    sock.end();
+  });
+});
+
+test('D1: ответы, которые провод строит сам (приём бросил), — в виде прибора (replyStyle): химия — AR 207 вида руководства, гематология — AE 207 короткий', async () => {
+  const bs = 'MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|31|P|2.3.1||||0||ASCII|||\rPID|1\r';
+  const bc = 'MSH|^~\\&|BC-5300|Mindray|||20080419104618||ORU^R01|32|P|2.3.1||||||UNICODE\rPID|1\r';
+  const styles = {
+    'BS-200': { layout: 'long', wire: 'mindray-chem' },
+    'BC-5300': { layout: 'short', wire: 'default' },
+  };
+  const seen = [];
+  await withServer(async () => { throw new Error('база недоступна'); }, async (port) => {
+    const sock = await connect(port);
+    let reply = readFrame(sock);
+    sock.write(frame(bs));
+    const chem = await reply;
+    sock.removeAllListeners('data');
+    reply = readFrame(sock);
+    sock.write(frame(bc));
+    const heme = await reply;
+    // HIM v5.0, с. 9: AE — только 100–103, AR — 200–207.
+    assert.equal(chem.split('\r')[1], 'MSA|AR|31|Application internal error|||207|');
+    assert.equal(chem.split('\r')[0].split('|').length, 21, 'MSH до MSH-20');
+    assert.equal(heme, heme.split('\r')[0] + '\rMSA|AE|32|Application internal error|||207\r');
+    assert.ok(!heme.split('\r')[0].endsWith('|'), 'короткий заголовок гематологии');
+    sock.end();
+  }, { replyStyle: (msh) => { seen.push(msh.app); return styles[msh.app === 'Mindray' ? msh.facility : msh.app]; } });
+  assert.deepEqual(seen, ['Mindray', 'BC-5300'], 'вид решает вызывающий — по заголовку входящего (mshOf)');
+});
+
+test('D1: переросшее — ответ в виде прибора (replyStyle): химия — AR 207 вида руководства', async () => {
+  await withServer(async () => 'AA', async (port) => {
+    const sock = await connect(port);
+    sock.on('error', () => {});
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from('MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|79|P|2.3.1||||0||ASCII|||\r' + 'C'.repeat(4096), 'utf8')]));
+    assert.equal((await reply).split('\r')[1], 'MSA|AR|79|Application internal error|||207|');
+    await settle(50);
+    sock.destroy();
+  }, { maxBytes: 1024, onOversize: () => {}, replyStyle: () => ({ layout: 'long', wire: 'mindray-chem' }) });
 });
 
 test('приём ответил AR — прибору AR 200 (известный, но не поддержанный тип)', async () => {
@@ -376,4 +444,311 @@ test('R2 п. 10а: новый VT до конца кадра — брошенно
   assert.equal(cut.length, 1);
   assert.equal(cut[0].head, MSG('71') + '\rOBX|1|NM|WBC^^99MRC||6.');
   assert.ok(cut[0].peer);
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D4: соединение прибора не рвётся простоем ─────────
+// A1000 и BS-200 подключаются при запуске своей программы и могут молчать
+// часами. A1000 после нашего FIN (end/destroy) не замечает закрытия: следующий
+// результат уходит в мёртвое соединение и теряется, а до того его программа
+// крутит ядро процессора (autobio-autolumo-a1000.settle.md, находка 6; RST —
+// без этого). Поэтому: простоя нет, мёртвых убирает TCP keep-alive (30 с),
+// закрываем — RST (resetAndDestroy), не FIN.
+
+/** Что увидел прибор при закрытии: 'end' — FIN, код ошибки — RST (ECONNRESET). */
+function trackClose(sock) {
+  const ev = [];
+  sock.on('data', () => {});
+  sock.on('end', () => ev.push('end'));
+  sock.on('error', (e) => ev.push(e.code));
+  const closed = new Promise((r) => sock.once('close', r));
+  return { ev, closed };
+}
+
+test('D4: соединению прибора при приёме — keep-alive 30 с и NoDelay; простоя (setTimeout) нет', async () => {
+  const P = net.Socket.prototype;
+  const orig = { setTimeout: P.setTimeout, setKeepAlive: P.setKeepAlive, setNoDelay: P.setNoDelay };
+  const calls = [];
+  for (const k of Object.keys(orig)) P[k] = function (...a) { calls.push({ sock: this, k, a }); return orig[k].apply(this, a); };
+  try {
+    await withServer(async () => 'AA', async (port) => {
+      const sock = await connect(port);
+      const reply = readFrame(sock);
+      sock.write(frame(MSG('61')));
+      await reply;
+      // Серверная сторона этого соединения: её удалённый порт — наш локальный.
+      const mine = calls.filter((c) => c.sock !== sock && c.sock.localPort === port && c.sock.remotePort === sock.localPort);
+      const shown = JSON.stringify(mine.map((c) => [c.k, ...c.a.filter((x) => typeof x !== 'function')]));
+      assert.ok(mine.some((c) => c.k === 'setKeepAlive' && c.a[0] === true && c.a[1] === 30000), 'keep-alive 30 с: ' + shown);
+      assert.ok(mine.some((c) => c.k === 'setNoDelay' && c.a[0] !== false), 'NoDelay — ответы не склеиваются в один сегмент (A1000 M19): ' + shown);
+      assert.ok(!mine.some((c) => c.k === 'setTimeout' && c.a[0] > 0), 'простоя нет: ' + shown);
+      sock.end();
+    });
+  } finally {
+    Object.assign(P, orig);
+  }
+});
+
+test('D4: close() слушателя рвёт соединение прибора RST, а не FIN', async () => {
+  const srv = await startMllpServer({ port: 0, onMessage: async () => 'AA' });
+  const sock = await connect(srv.port);
+  const { ev, closed } = trackClose(sock);
+  const reply = readFrame(sock);
+  sock.write(frame(MSG('62')));
+  await reply;   // соединение принято и живо
+  await srv.close();
+  await closed;
+  assert.ok(ev.includes('ECONNRESET'), 'RST: ' + ev.join(','));
+  assert.ok(!ev.includes('end'), 'FIN не пришёл: ' + ev.join(','));
+});
+
+test('D4: переросшее — отказ дочитывается, потом RST, а не FIN', async () => {
+  await withServer(async () => 'AA', async (port) => {
+    const sock = await connect(port);
+    const { ev, closed } = trackClose(sock);
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(MSG('81') + '\r' + 'D'.repeat(4096), 'utf8')]));
+    assert.match(await reply, /MSA\|AE\|81\|/, 'отказ дошёл до прибора');
+    await closed;
+    assert.ok(ev.includes('ECONNRESET') && !ev.includes('end'), 'RST, а не FIN: ' + ev.join(','));
+  }, { maxBytes: 1024, onOversize: () => {} });
+});
+
+// LIS_VENDOR_EXACT_V1 — D4, ревью: RST по сокету, у которого FIN уже в пути.
+// Прибор прислал FIN — Node (allowHalfOpen = false) сам зовёт end(), и до конца
+// shutdown libuv отвергает RST (uv_tcp_close_reset → EINVAL): Node выдаёт
+// 'error', теряет дескриптор, не закрыв его, и 'close' не приходит никогда. Тогда
+// слушатель вечно помнит соединение открытым (peers, экран), а звонок
+// (dial.js), которого сторож тишины рвёт в этот миг, не поднимается заново — он
+// ждёт 'close'. Здесь end() зовётся явно: то же состояние, без гонки.
+test('D4: resetSocket сокета, у которого FIN уже в пути (end() вызван), — сокет закрывается: «close» приходит, EINVAL нет', async () => {
+  const { resetSocket } = await import('./mllp.js');
+  const server = net.createServer();
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const accepted = new Promise((r) => server.once('connection', r));
+  const peer = net.createConnection({ port: server.address().port, host: '127.0.0.1' });
+  peer.on('error', () => {});
+  const sock = await accepted;
+  const ev = [];
+  sock.on('error', (e) => ev.push('error:' + e.code));
+  const closed = new Promise((r) => sock.once('close', () => r(true)));
+  sock.end();          // FIN в пути: shutdown ещё не исполнен
+  resetSocket(sock);   // тот же тик
+  const ok = await Promise.race([closed, settle(2000).then(() => false)]);
+  peer.destroy();
+  server.close();
+  assert.equal(ok, true, 'сокет закрылся (close): ' + ev.join(','));
+  assert.deepEqual(ev, [], 'без ошибки EINVAL');
+});
+
+// LIS_VENDOR_EXACT_V1 — D4, ревью: тайм-аута простоя больше нет, а он был одним
+// из двух пределов для того, кто не представился (порт неаутентифицирован).
+// Новый предел — число открытых соединений с одного адреса: прибору нужно одно
+// (A1000 держит его часами), переадресателю — по одному на анализатор его ПК.
+// Сверх предела рвётся RST старейшее молчащее (кадров не было), иначе старейшее.
+test('D4: с одного адреса — не больше MAX_SOCKETS_PER_IP открытых соединений; лишнее — старейшее молчащее, RST; живой прибор не тронут', async () => {
+  const { MAX_SOCKETS_PER_IP } = await import('./mllp.js');
+  assert.equal(MAX_SOCKETS_PER_IP, 16);
+  const logs = [];
+  const srv = await startMllpServer({ port: 0, onMessage: async () => 'AA', log: (m) => logs.push(m) });
+  const all = [];
+  try {
+    // Первым подключился и прислал пробу настоящий прибор.
+    const live = await connect(srv.port);
+    all.push(live);
+    const liveEv = trackClose(live);
+    const reply = readFrame(live);
+    live.write(frame(MSG('95')));
+    await reply;
+    // Потом тот же адрес открыл ещё MAX_SOCKETS_PER_IP молчащих.
+    const silent = [];
+    for (let i = 0; i < MAX_SOCKETS_PER_IP; i++) {
+      const s = await connect(srv.port);
+      all.push(s);
+      silent.push({ s, localPort: s.localPort, ...trackClose(s) });   // порт — до закрытия: у закрытого его нет
+    }
+    await silent[0].closed;
+    assert.ok(silent[0].ev.includes('ECONNRESET'), 'старейшее молчащее — RST: ' + silent[0].ev.join(','));
+    await until(() => srv.peers().filter((p) => p.open).length === MAX_SOCKETS_PER_IP, 3000, 'открытых — ровно предел');
+    assert.deepEqual(liveEv.ev, [], 'прибор, приславший пробу, на связи');
+    assert.ok(srv.peers().some((p) => p.open && p.remotePort === live.localPort));
+    assert.ok(logs.some((l) => /предел/.test(l) && l.includes('127.0.0.1:' + silent[0].localPort + ' ')), 'в журнал: ' + logs.filter((l) => /предел/.test(l)).join(' | '));
+  } finally {
+    for (const s of all) s.destroy();
+    await srv.close();
+  }
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D10: текст кадра — UTF-8 строго, иначе windows-1251 ──
+// BS-200 и CL-900i пишут однобайтно: «ISO 8859-1 characters (hexadecimal
+// 20-FF)» (HIM v5.0, с. 1), на деле — кодовая страница ПК прибора (у клиники —
+// кириллица, cp1251; mindray-bs-200.manual-check.md E6). Раньше всё читалось как
+// UTF-8: «µmol/L» BS-240 приходило «�mol/L» (mindray-bs-240.md M3), кириллица —
+// знаками U+FFFD.
+const until = async (fn, ms = 3000, what = 'условие') => {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = fn();
+    if (v) return v;
+    if (Date.now() > end) throw new Error(what + ' не наступило за ' + ms + ' мс');
+    await settle(10);
+  }
+};
+
+test('D10: кадр не в UTF-8 (windows-1251 / ISO 8859-1) читается как есть — кириллица ПК прибора, «µmol/L», без «�»', async () => {
+  const seen = [];
+  const bytes = Buffer.concat([
+    Buffer.from([VT]),
+    Buffer.from('MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|71|P|2.3.1||||0||ASCII|||\rPID|1||||', 'latin1'),
+    Buffer.from([0xC8, 0xE2, 0xE0, 0xED, 0xEE, 0xE2]),   // «Иванов» в windows-1251
+    Buffer.from('\rOBR|1|LAB-000123|12|Mindray^BS-200|N\rOBX|1|NM|CREA|Creatinine|88.000000|', 'latin1'),
+    Buffer.from([0xB5]),   // «µ»: одинаково в ISO 8859-1 и windows-1251
+    Buffer.from('mol/L|-|N|||F\r', 'latin1'),
+    Buffer.from([FS, CR]),
+  ]);
+  await withServer(async (t) => { seen.push(t); return 'AA'; }, async (port) => {
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(bytes);
+    assert.match(await reply, /MSA\|AA\|71\|/);
+    sock.end();
+  });
+  assert.equal(seen.length, 1);
+  assert.match(seen[0], /\rPID\|1\|\|\|\|Иванов\r/);
+  assert.match(seen[0], /\|µmol\/L\|/);
+  assert.ok(!seen[0].includes('\uFFFD'), 'ни одного U+FFFD');
+});
+
+test('D10: верный UTF-8 (BC-5300 пишет UTF-8, MSH-18 = UNICODE) — как прежде', async () => {
+  const seen = [];
+  const text = 'MSH|^~\\&|BC-5300|Mindray|||20080419104618||ORU^R01|72|P|2.3.1||||||UNICODE\rPID|1||TEST-0002^^^^MR||Иванов^Иван\rOBX|1|NM|6690-2^WBC^LN||4.63|10*9/L|||||F\r';
+  await withServer(async (t) => { seen.push(t); return 'AA'; }, async (port) => {
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(frame(text));
+    await reply;
+    sock.end();
+  });
+  assert.equal(seen[0], text);
+});
+
+test('D10: decodeFrame — UTF-8 строго, иначе windows-1251; у начала переросшего обрезанный знак UTF-8 не превращает всё в windows-1251', async () => {
+  const { decodeFrame } = await import('./mllp.js');
+  assert.equal(decodeFrame(Buffer.from('MSH|Иванов µ', 'utf8')), 'MSH|Иванов µ');
+  assert.equal(decodeFrame(Buffer.from([0x4d, 0xc8, 0xe2, 0xb5])), 'MИвµ', 'windows-1251');
+  assert.equal(decodeFrame(Buffer.from('MSH|^~\\&|X', 'latin1')), 'MSH|^~\\&|X');
+  const cut = Buffer.from('MSH|Иванов', 'utf8');
+  assert.equal(decodeFrame(cut.subarray(0, cut.length - 1), { head: true }), 'MSH|Ивано', 'начало режется по 64 КБ — посреди знака');
+});
+
+test('D10: начало переросшего кадра в windows-1251 доходит до лотка читаемым', async () => {
+  const over = [];
+  await withServer(async () => 'AA', async (port) => {
+    const sock = await connect(port);
+    sock.on('error', () => {});
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(MSG('83') + '\rPID|1||||', 'latin1'), Buffer.from([0xC8, 0xE2, 0xE0, 0xED, 0xEE, 0xE2]), Buffer.alloc(4096, 0x51)]));
+    await reply;
+    sock.destroy();
+  }, { maxBytes: 1024, onOversize: (o) => over.push(o) });
+  assert.equal(over.length, 1);
+  assert.match(over[0].head, /PID\|1\|\|\|\|ИвановQ/);
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D14: байты не в кадре больше не пропадают молча ────
+// Прибор, настроенный не на тот протокол (A1000 по умолчанию шлёт свой формат
+// «{…}», ASTM — ENQ/STX, кодировка Unicode — UTF-16), раньше выглядел так же,
+// как «никто не подключался» (mllp.js, байты до VT выбрасывались без следа).
+// Теперь: подключение — в журнал с адресом и портом; байты не в кадре — в
+// журнал с подсказкой протокола; по соединению — состояние для экрана
+// (srv.peers(), index.js listenerStatus().peers). Пачки — раскладка
+// производителя с синтетическими значениями (capture-kit\tests\run-tests.ps1:
+// ASTM_AB_1, AUTOBIO_NATIVE, UTF16, HL7_NO_MLLP, BINARY).
+const astmFrame = (fnText, term) => {
+  const body = Buffer.concat([Buffer.from(fnText, 'latin1'), Buffer.from([term])]);
+  let sum = 0;
+  for (const x of body) sum += x;
+  return Buffer.concat([Buffer.from([0x02]), body, Buffer.from((sum % 256).toString(16).toUpperCase().padStart(2, '0') + '\r\n', 'latin1')]);
+};
+const ASTM_AB_1 = astmFrame('1H|\\^&|||AutoLumo A1000||0|||||REQ5|1394-97|20261005120000\rP|1||TEST\rO|1||^LAB-000123^R01^3|432^107^||\r', 0x17);
+const AUTOBIO_NATIVE = Buffer.from('{5,0,[S]LAB-000123,107,41765L,4.17F}', 'latin1');
+const HL7_NO_MLLP = Buffer.from('MSH|^~\\&|||||20261005120000||ORU^R01|41|P|2.3.1\rPID|1\r', 'latin1');
+
+test('D14: noiseHint — на что похожи байты не в кадре: ASTM, Autobio, UTF-16, HL7 без рамки, сигнал 0x02, прочее', async () => {
+  const { noiseHint } = await import('./mllp.js');
+  assert.equal(noiseHint(Buffer.from([0x05])), 'astm', 'ENQ');
+  assert.equal(noiseHint(Buffer.from([0x04])), 'astm', 'EOT');
+  assert.equal(noiseHint(ASTM_AB_1), 'astm', 'кадр ASTM A1000 (STX, номер кадра, ETB)');
+  assert.equal(noiseHint(AUTOBIO_NATIVE), 'autobio', 'родной формат Autobio');
+  assert.equal(noiseHint(Buffer.from('MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|51|P|2.3.1||||0||ASCII|||\r', 'utf16le')), 'utf16');
+  assert.equal(noiseHint(HL7_NO_MLLP), 'hl7-unframed');
+  assert.equal(noiseHint(Buffer.from([0x02])), 'heartbeat', 'сигнал гематологии Mindray');
+  assert.equal(noiseHint(Buffer.from([0x02, 0x02, 0x02])), 'heartbeat');
+  assert.equal(noiseHint(Buffer.from([0xff, 0xfe, 0x10, 0x20, 0x80, 0x81, 0x7f, 0x01])), 'other');
+  assert.equal(noiseHint(Buffer.from('\r\n', 'latin1')), null, 'концы строк — не шум');
+});
+
+test('D14: подключение — в журнал с адресом и портом; байты не в кадре — с подсказкой протокола, не чаще раза в минуту на вид', async () => {
+  const logs = [];
+  const srv = await startMllpServer({ port: 0, onMessage: async () => 'AA', log: (m) => logs.push(m) });
+  const sock = await connect(srv.port);
+  sock.on('error', () => {});
+  try {
+    const label = '127.0.0.1:' + sock.localPort;
+    await until(() => logs.some((l) => l.includes(label)), 3000, 'строка о подключении');
+    for (const b of [Buffer.from([0x05]), Buffer.from([0x05]), AUTOBIO_NATIVE]) { sock.write(b); await settle(60); }
+    await until(() => logs.some((l) => /Autobio/.test(l)), 3000, 'строка о формате Autobio');
+    const noise = logs.filter((l) => l.includes(label) && /не в кадре/.test(l));
+    assert.equal(noise.filter((l) => /ASTM/.test(l)).length, 1, 'два ENQ подряд — одна строка: ' + noise.join(' | '));
+    assert.equal(noise.filter((l) => /Autobio/.test(l)).length, 1);
+  } finally {
+    sock.destroy();
+    await srv.close();
+  }
+  await until(() => logs.some((l) => /закрыто/.test(l)), 3000, 'закрытие — тоже в журнал');
+});
+
+test('D14: srv.peers() — по соединению ip, port (порт приёма), connectedAt, lastRxAt, frames, noiseBytes, noiseHint, open; сигнал 0x02 — не «непонятные данные»', async () => {
+  const srv = await startMllpServer({ port: 0, onMessage: async () => 'AA' });
+  try {
+    const a = await connect(srv.port);
+    const reply = readFrame(a);
+    a.write(Buffer.concat([Buffer.from([0x05]), frame(MSG('91'))]));
+    await reply;
+    const b = await connect(srv.port);
+    b.write(Buffer.from([0x02, 0x02]));
+    await until(() => (srv.peers() || []).some((p) => p.remotePort === b.localPort && p.lastRxAt), 3000, 'сигнал дошёл');
+    const aPort = a.localPort;
+    const pa = srv.peers().find((p) => p.remotePort === aPort);
+    const pb = srv.peers().find((p) => p.remotePort === b.localPort);
+    for (const k of ['ip', 'port', 'connectedAt', 'lastRxAt', 'frames', 'noiseBytes', 'noiseHint', 'open']) assert.ok(k in pa, k);
+    assert.deepEqual([pa.ip, pa.port, pa.frames, pa.noiseBytes, pa.noiseHint, pa.open], ['127.0.0.1', srv.port, 1, 1, 'astm', true]);
+    assert.match(pa.connectedAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+    assert.match(pa.lastRxAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+    assert.deepEqual([pb.frames, pb.noiseBytes, pb.noiseHint, pb.open], [0, 0, null, true], 'экран скажет «ждёт первую пробу», а не «непонятные данные»');
+    a.destroy();
+    await until(() => srv.peers().find((p) => p.remotePort === aPort).open === false, 3000, 'закрытое — open: false');
+    b.destroy();
+  } finally {
+    await srv.close();
+  }
+});
+
+test('D14: srv.peers() помнит последние ~50 соединений; открытые — все', async () => {
+  const srv = await startMllpServer({ port: 0, onMessage: async () => 'AA' });
+  try {
+    const keep = await connect(srv.port);
+    for (let i = 0; i < 55; i++) {
+      const s = await connect(srv.port);
+      const gone = new Promise((r) => s.once('close', r));
+      s.destroy();
+      await gone;
+    }
+    await until(() => srv.peers().filter((p) => p.open).length === 1, 3000, 'закрытые помечены');
+    const peers = srv.peers();
+    assert.equal(peers.length, 50);
+    assert.ok(peers.some((p) => p.open && p.remotePort === keep.localPort), 'открытое не вытеснено');
+    keep.destroy();
+  } finally {
+    await srv.close();
+  }
 });

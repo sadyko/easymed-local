@@ -263,6 +263,26 @@ test('C2: сервер отказал в привязке (409) — его сл�
   assert.ok(r.reread, 'лоток перечитан: строка могла измениться');
 });
 
+// LIS_VENDOR_EXACT_V1 (раунд 2) — N2: «Привязать» пробу найденного, но не
+// добавленного прибора — отказ сервера с кодом device_not_added (rpc/lis.js):
+// словами сервера и предупреждением, лоток перечитан; на uz/en тост переводит
+// фразу словарём, экраны в ней — их подписями на этом языке.
+test('N2: «Привязать» до «Добавить» — отказ сервера его словами; на uz/en — переведён', async () => {
+  const msg = 'Прибор этого сообщения ещё не добавлен — «Добавить прибор» → «Найдены в сети» → «Добавить», затем «Привязать».';
+  const r = await attachWithError({ status: 409, error: { code: 'device_not_added', message: msg } });
+  assert.strictEqual(toastMsg, msg);
+  assert.strictEqual(toastEl.dataset.kind, 'warn', 'отказ по правилу — не сбой');
+  assert.ok(r.reread, 'лоток перечитан');
+  const { STRINGS } = await import('../i18n-strings.js');
+  for (const lang of ['en', 'uz']) {
+    const t = STRINGS[msg] && STRINGS[msg][lang];
+    assert.ok(t && !/[Ѐ-ӿ]/.test(t), lang + ': ' + t);
+    for (const l of ['Добавить прибор', 'Найдены в сети', 'Добавить', 'Привязать']) {
+      assert.ok(t.includes('«' + STRINGS[l][lang] + '»'), lang + ' «' + l + '»: ' + t);
+    }
+  }
+});
+
 test('C2: сбой сервера при привязке — как прежде: «Не удалось привязать сообщение: …»', async () => {
   await attachWithError({ status: 500, error: { code: 'internal', message: 'Ошибка сервера. Повторите позже.' } });
   assert.strictEqual(toastMsg, 'Не удалось привязать сообщение: Ошибка сервера. Повторите позже.');

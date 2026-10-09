@@ -275,18 +275,29 @@ test('BS-200: запрос — «заказов нет»; контроль и к
 });
 
 // ── Autobio AutoLumo A1000 ─────────────────────────────────────────────────
-// По сети — HL7, собрано по драйверу AutoLumoHL7.cs (строки 129–163): номер —
-// OBR-2, код позиции — OBX-4, концентрация — компонент 2 поля OBX-5 (компонент
-// 1 — RLU). Через переадресатор с COM — договор forwarder/hl7-oru.js: MSH-4 =
+// LIS_VENDOR_EXACT_V1 — по сети HL7 ровно так, как пишет кодировщик программы
+// клиники AutoLumo1000.exe 1.0.7 (запуск её DLL на синтетических данных;
+// analyzer-research: лист A1000, §3; settle, находка 1): MSH-3/4 пусты
+// (параметры базы, на экране их нет), MSH-10 = 5 — код команды «по тесту»,
+// OBR-2 — номер пробирки, OBR-3 — внутренний номер, NTE перед OBX (имя
+// реагента, флаги прибора), OBX-1 — внутренний номер заявки, OBX-2 всегда CE,
+// OBX-3 = OBX-4 = код теста, OBX-5 = RLU^концентрация~, OBX-6/7/8 пусты.
+// Прежняя фикстура (по драйверу A2000 Plus: NM, единица, «A1000|Autolumo»)
+// пряталась от того, что A1000 значения писались текстом с флагом «Норма».
+// Через переадресатор с COM — договор forwarder/hl7-oru.js: MSH-4 =
 // LabPC, номер — OBR-3, код — OBX-3 («206^^AUTOBIO»), подпись — OBX-4.
-const A_QRY = ['MSH|^~\\&|A1000|Autolumo|||20261001101500||QRY^Q01|3|P|2.3.1',
+const A_QRY = ['MSH|^~\\&|||||20261001101500||QRY^Q01|3|P|2.3.1',
   'QRD|20261001101500|R|D|7|||RD|LAB-000201|OTH|||T', 'QRF|A1000|20261001000000|20261001101500|||RCT|COR|ALL'].join('\r');
-const A_ORU = (label) => ['MSH|^~\\&|A1000|Autolumo|||20261001101500||ORU^R01|4|P|2.3.1||||0||ASCII|||',
-  `OBR|1|${label}|||`, 'OBX|1|NM|1^Vitamin B12|206|5981666^390.946|pg/mL||||||F'].join('\r');
+// LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5) — flags: флаги
+// прибора в NTE-3 (2-е повторение). У A1000 клиники 832 из 949 результатов
+// несут CEX (истекла калибровка; realtest\verify\a1000\reports\flags-decoded.txt).
+const A_ORU = (label, value, flags = '') => ['MSH|^~\\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123',
+  'PID|||SYN-PAT-1', `OBR|1|${label}|7764|SYSID-SYN`, `NTE|||LOT-SYN~${flags}~Vitamin B12~206~~RACK-SYN~1`,
+  `OBX|10455|CE|206|206|5981666^${value}~||||||F|||2026/10/05 12:00:00`].join('\r');
 const FWD_ORU = (label) => ['MSH|^~\\&|AutoLumo A1000|LabPC|||20261001101600||ORU^R01|5|P|2.3.1',
   `OBR|1||${label}|`, 'OBX|1|NM|206^^AUTOBIO|Vitamin B12|390.946|pg/mL|||||F'].join('\r');
 
-test('A1000: по сети (HL7) и через переадресатор с COM — одна панель, код позиции 206, в бланке концентрация, не RLU; запрос QRY^Q01 — DSR^Q01 «заказов нет»', async () => {
+test('A1000: по сети (HL7, как пишет прибор) и через переадресатор с COM — одна панель, код 206, в бланке концентрация числом, флаг по диапазону клиники; запрос QRY^Q01 — DSR^Q01 «заказов нет»', async () => {
   await withClinic(async (db, lisPort) => {
     await startLisListeners(db, { log: () => {} });
     const net1 = await analyzer(lisPort, '127.0.0.3');
@@ -298,15 +309,24 @@ test('A1000: по сети (HL7) и через переадресатор с COM
       assert.match(dsr, /\rQAK\|SR\|NF/);
       assert.ok(!/\rDSP\|/.test(dsr), 'заказов Easy-Med не отдаёт');
       const dev = db.prepare("SELECT * FROM lab_devices WHERE host = '127.0.0.3'").get();
-      assert.equal(dev.profile, 'autobio-autolumo-a1000', 'модель — по MSH-3 «A1000»');
-      db.prepare('UPDATE lab_devices SET added = 1 WHERE id = ?').run(dev.id);
+      assert.deepEqual([dev.profile, dev.name], ['', 'Анализатор 127.0.0.3'], 'A1000 себя не называет — модели нет');
+      // Лаборатория: «Добавить» — модель «AutoLumo A1000» выбрана вручную
+      // (обязательный шаг настройки A1000); диапазон клиники для B12, пг/мл.
+      db.prepare("UPDATE lab_devices SET added = 1, profile = 'autobio-autolumo-a1000', model_confirmed = 1 WHERE id = ?").run(dev.id);
       bindPanel(db, { id: 6, serviceId: 10, deviceId: dev.id, name: 'Витамин B12', lines: [['B12', 'Витамин B12', 'пг/мл', '206']] });
+      db.prepare('UPDATE lab_panel_analytes SET ref_low = 187, ref_high = 883 WHERE panel_id = 6').run();
 
-      const ack = await net1.send(A_ORU('LAB-000201'));
+      // Значение с десятичной запятой (Windows прибора с русскими настройками)
+      // и самым частым флагом прибора клиники — CEX (LIS_VENDOR_EXACT_V1, D9:
+      // предупреждение о сроке калибровки запись не останавливает).
+      const ack = await net1.send(A_ORU('LAB-000201', '1250,5', 'CEX'));
       assert.equal(fieldOf(ack, 'MSH', 9), 'ACK^R01');
-      assert.match(ack, /\rMSA\|AA\|4\|/);
+      assert.match(ack, /\rMSA\|AA\|5\|/, 'MSH-10 = 5 эхом');
+      assert.equal(fieldOf(ack, 'MSA', 4), '10455', 'MSA-4 = OBX-1: A1000 отмечает результат «Accepted»');
       assert.equal(last(db).status, 'applied');
-      assert.deepEqual(blank(db, 201), { 'Витамин B12': '390.946' }, 'компонент 2 — концентрация, а не «5981666^390.946»');
+      assert.deepEqual(blank(db, 201), { 'Витамин B12': '1250.5' }, 'компонент 2 — концентрация, не «5981666^1250,5»; запятая — точка');
+      const b12 = db.prepare('SELECT numeric_value, flag FROM lab_results WHERE visit_service_id = 201').get();
+      assert.deepEqual(b12, { numeric_value: 1250.5, flag: 'high' }, 'CE — число: диапазон клиники ставит «Выше», а не «Норма»');
       assert.equal(order(db, 201), 'resulted');
       notReleased(db, 201);
 
@@ -512,5 +532,235 @@ test('BS-200 сменил адрес: лоток с понятной причи�
     // судится по записанному).
     assert.match(last(db).detail, /серия из 4 сообщений принята/);
     notReleased(db, 1);
+  });
+});
+
+// ── LIS_VENDOR_EXACT_V1 — Mindray BS-240 и CL-900i, как пишут приборы ───────
+// BS-240 — расположение полей настоящих записей BS-240 (2017) и BS-240E (2026)
+// и руководства BS-360E/BS-240Pro/BS-240E V1.0: MSH-3/4 пусты, OBR-2 —
+// штрихкод, OBR-3 — внутренний номер прибора («must not be analyzed by the
+// server»), OBX-3 — Channel No., OBX-4 — имя, OBX-13 — исходное значение;
+// «нет результата» — «-268435455.000000»; контроль — MSH-16 = 2, MSH + OBR, в
+// OBR-2 — номер теста. Значения синтетические. Прибор себя не называет —
+// заведён «по адресу» с моделью BS-240.
+let b2Id = 0;
+const B240 = (obr2, obr3, obx) => [`MSH|^~\\&|||||20260528122129||ORU^R01|${++b2Id}|P|2.3.1||||0||ASCII|||`,
+  'PID|1|||||||O|||||||||||||||||||||||',
+  `OBR|1|${obr2}|${obr3}|^|N|20260528115302|20260528115240|20260528115240||1^1||||20260528115240|Serum`, ...obx].join('\r');
+const B240_GLU = (v) => `OBX|1|NM|Glu-G|Glucose (GOD-POD Method)|${v}|mmol/L|-|N|||F||${v}|20260528122129|||0||`;
+const B240_QC = () => [`MSH|^~\\&|||||20260528120000||ORU^R01|${++b2Id}|P|2.3.1||||2||ASCII|||`,
+  'OBR|1|1|Glu-G|^|0|20260528115000|20260528115000|20260528115900|||1|2|QUAL1|1111|20280101|0|M|5.500000|0.300000|5.430000|mmol/L|||||||||1||||||||||||||||||'].join('\r');
+
+test('BS-240 (как пишет прибор): номер пробирки из OBR-2, внутренний номер в OBR-3 — приманка; «нет результата» — в лоток; контроль — мимо бланков', async () => {
+  await withClinic(async (db, lisPort) => {
+    db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, added, dial) VALUES (9, 'Биохимия BS-240', 'mindray-bs-240', 'mllp', '127.0.0.8', ?, 1, 1, 0)").run(lisPort);
+    bindPanel(db, { id: 8, serviceId: 9, deviceId: 9, name: 'Биохимия', lines: [['GLU', 'Глюкоза', 'ммоль/л', 'Glu-G'], ['UREA', 'Мочевина', 'ммоль/л', 'UREA']] });
+    await startLisListeners(db, { log: () => {} });
+    const bs = await analyzer(lisPort, '127.0.0.8');
+    try {
+      // 1. Контроль: в OBR-2 — номер теста «1»; заказ № 1 — открытая свежая
+      //    биохимия другого пациента.
+      const qc = await bs.send(B240_QC());
+      assert.equal(fieldOf(qc, 'MSH', 9), 'ACK^R01');
+      assert.match(qc, /\rMSA\|AA\|/);
+      let m = last(db);
+      assert.deepEqual([m.kind, m.status, m.visit_service_id, !!m.resolved_at], ['qc', 'unmatched', null, true]);
+
+      // 2. Без штрихкода: OBR-3 = «1» — внутренний номер прибора, не номер пробирки.
+      await bs.send(B240('', '1', [B240_GLU('5.900000')]));
+      m = last(db);
+      assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['unmatched', null, '']);
+
+      // 3. Этикетка в OBR-2, приманка «2» в OBR-3; мочевина не посчитана.
+      const ack = await bs.send(B240('LAB-000123', '2', [B240_GLU('5.123400'),
+        'OBX|2|NM|UREA|Urea|-268435455.000000||-|N|||F||0.000000|19000101000000|||0||']));
+      assert.match(ack, /\rMSA\|AA\|/);
+      m = last(db);
+      assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['unmapped', 123, 'LAB-000123']);
+      assert.equal(m.detail, 'не пришли: Мочевина (UREA, прибор: нет результата «-268435455.000000», OBX-13 «0.000000» — для сверки, в бланк не пишется)');
+      assert.deepEqual(blank(db, 123), { 'Глюкоза': '5.1234' }, '«нет результата» в бланк не легло');
+      assert.deepEqual(blank(db, 1), {}, 'заказ № 1 чужого пациента не тронут');
+      assert.deepEqual(blank(db, 2), {}, 'заказ № 2 чужого пациента не тронут');
+      notReleased(db, 123);
+      assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_devices').get().c, 1, 'находок нет');
+    } finally { bs.close(); }
+  });
+});
+
+// CL-900i — Host Interface Manual CL (2013-08; диалект журналов сервисного
+// руководства CL-900i): MSH-3/4 пусты, OBR-2 — штрихкод, OBR-3 — номер пробы
+// прибора, OBX-3 — Routine Channel No., OBX-8 «N» всегда, качественный ответ —
+// OBX-9; контроль — MSH-16 = 2 (пример руководства, с. 1-28). Значения
+// синтетические.
+let clId = 0;
+const CL9 = (obr2, obr3, obx) => [`MSH|^~\\&|||||20261005101500||ORU^R01|${++clId}|P|2.3.1||||0||ASCII|||`,
+  'PID|1|P1|||SYN^PAT||19800101|F|||||||||||||||||||||',
+  `OBR|1|${obr2}|${obr3}|^|N|20261005100000|20261005100000|20261005100000|||||||serum||||||||||||||||||||||||||`, ...obx].join('\r');
+const CL9_QC = () => [`MSH|^~\\&|||||20120508103014||ORU^R01|${++clId}|P|2.3.1||||2||ASCII|||`,
+  'OBR|1|7|AST|^|0|20130729160839|20120405141255|20130729161552|||1|2|QUAL2|2222|20300101|0|M|55.000000|5.000000|0.137470|nkat/L|||||||||1||||||||||||||||||'].join('\r');
+
+test('CL-900i (как пишет прибор): положительный HBsAg (OBX-9) — «Отклонение», не «Норма»; номер пробы прибора в OBR-3 — приманка; контроль — мимо бланков', async () => {
+  await withClinic(async (db, lisPort) => {
+    db.prepare("INSERT INTO services (id, name, is_lab) VALUES (12, 'Иммунохимия', 1)").run();
+    const now = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
+    db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (10, 56, 12, 'in_progress', ${now}), (125, 55, 12, 'queued', ${now})`).run();
+    db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, added, dial) VALUES (10, 'ИХЛА 900i', 'mindray-cl-900i', 'mllp', '127.0.0.9', ?, 1, 1, 0)").run(lisPort);
+    bindPanel(db, { id: 9, serviceId: 12, deviceId: 10, name: 'Иммунохимия', lines: [['TSH', 'ТТГ', 'мкМЕ/мл', 'TSH'], ['HBS', 'HBsAg', 'COI', 'HBsAg']] });
+    await startLisListeners(db, { log: () => {} });
+    const cl = await analyzer(lisPort, '127.0.0.9');
+    try {
+      const qc = await cl.send(CL9_QC());
+      assert.equal(fieldOf(qc, 'MSH', 9), 'ACK^R01');
+      assert.equal(last(db).kind, 'qc', 'контроль (MSH-16 = 2) — служебное');
+
+      await cl.send(CL9('', '10', ['OBX|1|NM|TSH|TSH|2.350000|uIU/mL|-|N|||F||2.350000|20261005101400||admin|0|']));
+      assert.deepEqual([last(db).status, last(db).visit_service_id], ['unmatched', null], 'номер пробы прибора «10» — не номер пробирки');
+      assert.deepEqual(blank(db, 10), {}, 'заказ № 10 чужого пациента не тронут');
+
+      const ack = await cl.send(CL9('LAB-000125', '10', [
+        'OBX|1|NM|TSH|TSH|2.350000|uIU/mL|-|N|||F||2.350000|20261005101400||admin|0|',
+        'OBX|2|ST|HBsAg|HBsAg|5.320000|COI|-|N|Positive+||F||5.320000|20261005101400||admin|0|']));
+      assert.match(ack, /\rMSA\|AA\|/);
+      assert.equal(last(db).status, 'applied', last(db).detail);
+      assert.deepEqual(blank(db, 125), { 'ТТГ': '2.35', 'HBsAg': '5.32' });
+      const hbsag = db.prepare("SELECT numeric_value, flag, reference_range FROM lab_results WHERE visit_service_id = 125 AND parameter = 'HBsAg'").get();
+      assert.deepEqual(hbsag, { numeric_value: 5.32, flag: 'abnormal', reference_range: '' }, 'положительный — «Отклонение»; OBX-7 «-» — не диапазон');
+      assert.deepEqual(blank(db, 10), {});
+      notReleased(db, 125);
+    } finally { cl.close(); }
+  });
+});
+
+// ═══ LIS_VENDOR_EXACT_V1 — раунд 2 (сопоставление и запись), сквозь настоящий слушатель ═══
+// Решения владельца 2026-10-06 (analyzer-research\fix\DECISIONS.md): п. 2 —
+// одна пробирка заполняет все услуги визита (D3); п. 4 — голые цифры только
+// номером с этикетки (6 цифр). И остатки приёмки: N1 — значение прибора в
+// черновике молча не меняется; N2 — находка до «Добавить» в бланки не пишет;
+// п. 5 — устаревшие строки лотка закрываются, когда заказ заполнен.
+
+/** Услуги-панели визита пациента: [номер услуги, имя, код строки, поле анализатора]; заказы — [номер, услуга, визит]. */
+function servicesFor(db, deviceId, services, orders) {
+  const now = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
+  for (const [svc, name, code, deviceCode] of services) {
+    db.prepare('INSERT INTO services (id, name, is_lab) VALUES (?, ?, 1)').run(svc, name);
+    bindPanel(db, { id: svc, serviceId: svc, deviceId, name, lines: [[code, name, '', deviceCode]] });
+  }
+  for (const [id, svc, visit] of orders) {
+    db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (?, ?, ?, 'queued', ${now})`).run(id, visit, svc);
+  }
+}
+
+test('D3 сквозь слушатель: CL-900i — ТТГ, Т4 св. и Т3 св. тремя услугами, одна пробирка — три бланка; та же услуга другого пациента не тронута', async () => {
+  await withClinic(async (db, lisPort) => {
+    db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, added, dial) VALUES (11, 'ИХЛА 900i', 'mindray-cl-900i', 'mllp', '127.0.0.10', ?, 1, 1, 0)").run(lisPort);
+    servicesFor(db, 11, [[13, 'ТТГ', 'TSH', 'TSH'], [14, 'Т4 свободный', 'FT4', 'FT4'], [15, 'Т3 свободный', 'FT3', 'FT3']],
+      [[601, 13, 55], [602, 14, 55], [603, 15, 55], [604, 14, 56]]);
+    await startLisListeners(db, { log: () => {} });
+    const cl = await analyzer(lisPort, '127.0.0.10');
+    try {
+      const ack = await cl.send(CL9('LAB-000601', '10', [
+        'OBX|1|NM|TSH|TSH|2.350000|uIU/mL|-|N|||F||2.350000|20261005101400||admin|0|',
+        'OBX|2|NM|FT4|FT4|15.200000|pmol/L|-|N|||F||15.200000|20261005101400||admin|0|',
+        'OBX|3|NM|FT3|FT3|4.100000|pmol/L|-|N|||F||4.100000|20261005101400||admin|0|']));
+      assert.match(ack, /\rMSA\|AA\|/);
+      const m = last(db);
+      assert.deepEqual([m.status, m.visit_service_id], ['applied', 601], m.detail);
+      assert.deepEqual([blank(db, 601), blank(db, 602), blank(db, 603)], [{ 'ТТГ': '2.35' }, { 'Т4 свободный': '15.2' }, { 'Т3 свободный': '4.1' }]);
+      for (const id of [601, 602, 603]) notReleased(db, id);
+      assert.deepEqual(blank(db, 604), {}, 'другой визит — другой пациент');
+      assert.deepEqual(tray(db), []);
+    } finally { cl.close(); }
+  });
+});
+
+test('D3, N2, п. 5 сквозь слушатель: BS-200 (приёмка T8) — находка в бланк не пишет; после «Добавить» Глюкоза и АЛТ отдельными услугами — каждая в свою, лоток пуст', async () => {
+  await withClinic(async (db, lisPort) => {
+    const now = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
+    db.prepare(`INSERT INTO visits (id, patient_id, visit_date, status) VALUES (58, 3, ${now}, 'scheduled')`).run();
+    db.prepare("INSERT INTO services (id, name, is_lab) VALUES (16, 'Глюкоза', 1), (17, 'АЛТ', 1)").run();
+    db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (701, 58, 16, 'queued', ${now}), (702, 58, 17, 'queued', ${now})`).run();
+    await startLisListeners(db, { log: () => {} });
+    const bs = await analyzer(lisPort, '127.0.0.11');
+    try {
+      // Прибор заговорил впервые — найден сам, ещё не добавлен: проба в лотке.
+      await bs.send(BS_ORU('LAB-000701', 'GLU', 'Glucose', '5.100000'));
+      const dev = db.prepare("SELECT * FROM lab_devices WHERE host = '127.0.0.11'").get();
+      assert.deepEqual([dev.added, dev.profile], [0, 'mindray-bs-200']);
+      const found = last(db);
+      assert.equal(found.detail, 'прибор ещё не добавлен — «Анализаторы» → «Добавить прибор» → «Найдены в сети» → «Добавить»');
+      assert.deepEqual([found.visit_service_id, blank(db, 701)], [701, {}], 'в бланк не легло ничего; строка — при заказе (этикетка)');
+      // «Добавить» (модель — BS-200) и панели двух услуг на этот прибор.
+      db.prepare('UPDATE lab_devices SET added = 1, model_confirmed = 1 WHERE id = ?').run(dev.id);
+      bindPanel(db, { id: 16, serviceId: 16, deviceId: dev.id, name: 'Глюкоза', lines: [['GLU', 'Глюкоза', '', 'GLU']] });
+      bindPanel(db, { id: 17, serviceId: 17, deviceId: dev.id, name: 'АЛТ', lines: [['ALT', 'АЛТ', '', 'ALT']] });
+
+      await bs.send(BS_ORU('LAB-000701', 'GLU', 'Glucose', '5.100000'));
+      assert.deepEqual([last(db).status, last(db).visit_service_id], ['applied', 701]);
+      assert.ok(db.prepare('SELECT resolved_at FROM lab_device_messages WHERE id = ?').get(found.id).resolved_at, 'строка «не добавлен» закрыта той же пробой');
+      await bs.send(BS_ORU('LAB-000701', 'ALT', 'ALT', '85.300000'));
+      const alt = last(db);
+      assert.deepEqual([alt.status, alt.visit_service_id], ['applied', 702], alt.detail);
+      assert.doesNotMatch(alt.detail, /не пришли/);
+      assert.deepEqual([blank(db, 701), blank(db, 702)], [{ 'Глюкоза': '5.1' }, { 'АЛТ': '85.3' }]);
+      notReleased(db, 701); notReleased(db, 702);
+      assert.deepEqual(tray(db), [], '«Необработанные» пусты');
+    } finally { bs.close(); }
+  });
+});
+
+test('п. 4 сквозь слушатель: A1000 — номер лаборатории «5» и контроль «3» (без PID) — приманки № 3 и № 5 не тронуты; номер с этикетки «000201» — принят', async () => {
+  await withClinic(async (db, lisPort) => {
+    const now = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
+    db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (3, 56, 10, 'queued', ${now}), (5, 56, 10, 'queued', ${now})`).run();
+    db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, added, dial, model_confirmed) VALUES (12, 'A1000', 'autobio-autolumo-a1000', 'mllp', '127.0.0.12', ?, 1, 1, 0, 1)").run(lisPort);
+    bindPanel(db, { id: 10, serviceId: 10, deviceId: 12, name: 'Витамин B12', lines: [['B12', 'Витамин B12', 'пг/мл', '206']] });
+    await startLisListeners(db, { log: () => {} });
+    const a = await analyzer(lisPort, '127.0.0.12');
+    try {
+      // Номер лаборатории «5» (приёмка A1000 T6b: автономер) — не номер заказа.
+      assert.match(await a.send(A_ORU('5', '390.1')), /\rMSA\|AA\|5\|/);
+      assert.deepEqual([last(db).status, last(db).visit_service_id], ['unmatched', null]);
+      assert.match(last(db).detail, /^номер пробы «5» короче 6 цифр/);
+      // Контроль (приёмка T7a; кодировщик: без PID, номер контроля).
+      await a.send(['MSH|^~\\&|||||20261006123256||ORU^R01|5|P|2.3.1|261006123256749', 'OBR|1|3|7766|Autolumo 1000',
+        'NTE|||SYNLOT1~~Vitamin B12~206~~R001~2', 'OBX|10457|CE|206|206|52000^25.1~||||||F|||2026/10/06 12:32:56'].join('\r'));
+      assert.equal(last(db).visit_service_id, null);
+      assert.deepEqual([blank(db, 3), blank(db, 5)], [{}, {}], 'чужие бланки не тронуты');
+      // Номер с этикетки без LAB- — как напечатан под штрихкодом.
+      await a.send(A_ORU('000201', '390.1'));
+      assert.deepEqual([last(db).status, last(db).visit_service_id], ['applied', 201], last(db).detail);
+      assert.deepEqual(blank(db, 201), { 'Витамин B12': '390.1' });
+    } finally { a.close(); }
+  });
+});
+
+test('N1 сквозь слушатель: BC-5300 — вторая пробирка с той же этикеткой (автоприращение) — в лотке «повтор», бланк не тронут; «Привязать» принимает новые', async () => {
+  await withClinic(async (db, lisPort) => {
+    db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, added, dial, model_confirmed) VALUES (13, 'BC-5300', 'mindray-bc-5300', 'mllp', '127.0.0.13', ?, 1, 1, 0, 1)").run(lisPort);
+    OAK(db, 13);
+    await startLisListeners(db, { log: () => {} });
+    const bc = await analyzer(lisPort, '127.0.0.13');
+    // BC-5300 — пример руководства (OM13, прил. C): номер пробы — OBR-3.
+    const B53 = (label, wbc, hgb, id) => [`MSH|^~\\&|BC-5300|Mindray|||20261006133432||ORU^R01|${id}|P|2.3.1||||||UNICODE`,
+      'PID|1||T0001^^^^MR||Тестов^Анализатор||19900101000000|Мужской', 'PV1|1|Амбулаторно|Терапия^^12',
+      `OBR|1||${label}|00001^Automated Count^99MRC|||20261006133432|||||||||||||||||HM||||||||Лаборант`,
+      'OBX|1|IS|08001^Take Mode^99MRC||O||||||F', `OBX|2|NM|6690-2^WBC^LN||${wbc}|10*9/L||N|||F`, `OBX|3|NM|718-7^HGB^LN||${hgb}|g/L||N|||F`].join('\r');
+    try {
+      await bc.send(B53('LAB-000302', '5.40', '128', 1));
+      assert.equal(last(db).status, 'applied');
+      assert.match(await bc.send(B53('LAB-000302', '14.20', '146', 2)), /\rMSA\|AA\|2\|/, 'сохранено — повторять незачем');
+      const held = last(db);
+      assert.equal(held.status, 'unmapped');
+      assert.match(held.detail, /^повтор: значения отличаются от уже записанных \(Лейкоциты 5\.40 → 14\.20, Гемоглобин 128 → 146\) — проверьте пробу; принять новые значения — «Привязать»/);
+      assert.deepEqual(blank(db, 302), { 'Лейкоциты': '5.40', 'Гемоглобин': '128' }, 'черновик молча не переписан');
+      await bc.send(B53('LAB-000302', '5.4', '128', 3));   // тот же прогон ещё раз — повторная передача
+      assert.equal(last(db).status, 'applied');
+      assert.deepEqual(tray(db).map((r) => r.id), [held.id], 'в лотке — только «повтор»');
+      const out = lisMessageAttach(db, { id: held.id, visit_service_id: 302 }, LAB);
+      assert.equal(out.status, 'applied', out.detail);
+      assert.deepEqual(blank(db, 302), { 'Лейкоциты': '14.20', 'Гемоглобин': '146' }, 'человек принял новые значения');
+      assert.deepEqual(tray(db), []);
+      notReleased(db, 302);
+    } finally { bc.close(); }
   });
 });

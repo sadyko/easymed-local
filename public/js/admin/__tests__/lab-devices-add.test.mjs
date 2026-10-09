@@ -182,16 +182,17 @@ test('«Добавить» у находки переводит её в табл
   const save = findButtons(root).filter((b) => /Добавить/.test(textOf(b))).pop();
   save.click();
   await tick(60);
-  const upd = writes.find((w) => w.table === 'lab_devices' && w.op === 'update');
-  assert.ok(upd, 'записано: ' + JSON.stringify(writes));
-  assert.strictEqual(upd.values.added, 1);
-  assert.strictEqual(upd.values.profile, 'mindray-bc-5300', 'выбранная модель записана');
-  assert.strictEqual(upd.values.model_confirmed, 1, 'человек выбрал модель — пометка «проверьте модель» снимается');
+  // LIS_VENDOR_EXACT_V1 — D2: «Добавить» — RPC lis_device_add, а не голая
+  // запись added = 1 в /api/db: правило «без модели не добавлять» проверяет и
+  // сервер. added = 1 и model_confirmed = 1 (человек выбрал модель — пометка
+  // «проверьте модель» снимается) ставит он — это пиннит server/services/rpc/lis.test.js.
+  const add = rpcCalls.find((c) => c.name === 'lis_device_add');
+  assert.ok(add, 'вызвано: ' + JSON.stringify(rpcCalls.map((c) => c.name)));
+  assert.deepStrictEqual(add.args, { id: 5, name: 'BC-5300', profile: 'mindray-bc-5300' }, 'обновлена именно находка, выбранная модель — серверу');
   // Ревью C1: discovered = 0 для discover.js — «заведён человеком на этот
   // адрес», и после одного «Добавить» всё с того же адреса ложилось бы сюда.
-  assert.ok(!('discovered' in upd.values), 'discovered пишет только сервер: ' + JSON.stringify(upd.values));
-  assert.strictEqual(upd.values.name, 'BC-5300');
-  assert.ok(JSON.stringify(upd.filters || []).includes('5'), 'обновлена именно находка: ' + JSON.stringify(upd.filters));
+  assert.ok(!('discovered' in add.args), 'discovered пишет только сервер: ' + JSON.stringify(add.args));
+  assert.ok(!writes.some((w) => w.table === 'lab_devices'), 'голой записи в /api/db нет: ' + JSON.stringify(writes));
 });
 
 // Ревью I1: «Ни один анализатор пока не выходил на связь.» стояло всякий раз,
@@ -334,9 +335,10 @@ async function openAdoptFor(device) {
 async function saveAdopt(root) {
   findButtons(root).filter((b) => /Добавить/.test(textOf(b))).pop().click();
   await tick(60);
-  const upd = writes.find((w) => w.table === 'lab_devices' && w.op === 'update');
-  assert.ok(upd, 'записано: ' + JSON.stringify(writes));
-  return upd;
+  // LIS_VENDOR_EXACT_V1 — D2: «Добавить» — RPC lis_device_add; аргументы вызова — то, что уходит серверу.
+  const add = rpcCalls.find((c) => c.name === 'lis_device_add');
+  assert.ok(add, 'вызвано: ' + JSON.stringify(rpcCalls.map((c) => c.name)));
+  return { values: add.args };
 }
 const optionsOf = (sel) => walk(sel).filter((n) => n.tagName === 'OPTION');
 const selectedValues = (sel) => optionsOf(sel).filter((o) => 'selected' in o.attrs).map((o) => o.value);
@@ -346,7 +348,7 @@ test('ревью I2: «Добавить» с «модель не определ�
   const root = await openAdoptFor(FOUND);
   walk(root).find((n) => n.tagName === 'SELECT').value = '';
   const upd = await saveAdopt(root);
-  assert.deepStrictEqual(upd.values, { name: 'BC-5300', added: 1 });
+  assert.deepStrictEqual(upd.values, { id: 5, name: 'BC-5300' });   // LIS_VENDOR_EXACT_V1 — D2: added = 1 ставит сервер
 });
 
 // Пометка «найден сам — проверьте модель» в таблице — пока модель находки не
@@ -558,7 +560,8 @@ test('C5: сервер узнал, как прибор назвался, — о�
 // ── Ревью M2 — инструкция ведёт туда, где прибор теперь появляется ──────────
 // «Прибор появится в списке выше сам» — больше неправда: находка ждёт в окне
 // «Добавить прибор», а в таблицу попадает после нажатия «Добавить».
-const GUIDE_STEP = 'Прогоните одну пробу. Прибор появится в «Добавить прибор» → «Найдены в сети»: нажмите «Добавить», затем в «Панелях» выберите его у панели и подтвердите поля.';
+// LIS_VENDOR_EXACT_V1 — D12: и модель при «Добавить» выбирают явно (D2).
+const GUIDE_STEP = 'Прогоните одну пробу. Прибор появится в «Добавить прибор» → «Найдены в сети»: нажмите «Добавить» и выберите модель, затем в «Панелях» выберите его у панели и подтвердите поля.';
 const GUIDE_NOTE = 'Если прибор уже присылал пробы, но значения не ложатся — смотрите «Необработанные»: там написано, чего именно не хватает.';
 
 test('ревью M2: инструкция — «Добавить прибор» → «Найдены в сети» → «Добавить», а не «в списке выше»', async () => {
@@ -581,7 +584,9 @@ test('ревью M2: английская и узбекская инструкц
 // ── LIS_DISCOVERY_FIX_V1 (экран), C6 — инструкция «Как подключить анализатор» ──
 // «В Easy-Med ничего настраивать не нужно» — уже неправда: прибор надо
 // «Добавить». Не появился — «Добавить по адресу»; на кабеле COM — не руками.
-const GUIDE_EASY = 'В Easy-Med настраивать почти ничего не нужно: прибор появится в «Добавить прибор» → «Найдены в сети» — останется нажать «Добавить».';
+// LIS_VENDOR_EXACT_V1 — D12: «почти ничего не настраивать» — неправда для BC-20:
+// к нему подключается Easy-Med. Вступление говорит это прямо.
+const GUIDE_EASY = 'Почти все анализаторы сами отправляют результаты на компьютер с Easy-Med: после первой пробы прибор появится в «Добавить прибор» → «Найдены в сети». Mindray BC-20 — наоборот: к нему подключается Easy-Med (см. ниже).';
 const GUIDE_BY_ADDRESS = 'Анализатор не появился? В «Добавить прибор» → «Добавить по адресу» укажите его адрес и порт — он будет ждать в «Ждут первого сообщения», пока не пришлёт пробу.';
 const GUIDE_COM = 'Прибор на кабеле COM руками не добавляйте — через переадресатор он появится в «Найдены в сети» сам.';
 
@@ -595,7 +600,7 @@ test('C6: инструкция — почти ничего не настраив
 test('C6: английская и узбекская инструкция называют экраны их подписями на этом языке', () => {
   const byAddress = (lang) => STRINGS['Анализатор не появился? Добавить по адресу'][lang].split('? ')[1];   // подпись кнопки после вопроса
   const quoted = {
-    [GUIDE_EASY]: (lang) => ['Добавить прибор', 'Найдены в сети', 'Добавить'].map((k) => STRINGS[k][lang]),
+    [GUIDE_EASY]: (lang) => ['Добавить прибор', 'Найдены в сети'].map((k) => STRINGS[k][lang]),   // LIS_VENDOR_EXACT_V1 — D12
     [GUIDE_BY_ADDRESS]: (lang) => [STRINGS['Добавить прибор'][lang], byAddress(lang), STRINGS['Ждут первого сообщения'][lang]],
     [GUIDE_COM]: (lang) => [STRINGS['Найдены в сети'][lang]],
   };
@@ -621,14 +626,20 @@ test('ревью M3: форма из таблицы по-прежнему про
   assert.ok(!findButtons(root).some((b) => /^\s*Сохранить\s*$/.test(textOf(b))), 'форма закрыта');
 });
 
-test('ревью I2: новый прибор по адресу — по-прежнему выбрана первая модель', async () => {
+// LIS_VENDOR_EXACT_V1 — D2: раньше здесь пиннилось «новый прибор начинает с
+// первой модели списка». Это и была ловушка: BS-240, добавленный по адресу без
+// правки модели, читался бы как первая модель (BC-20). Теперь модель не
+// подставляется — её выбирают явно (или «Другой анализатор (общий HL7)»).
+test('ревью I2 → D2: новый прибор по адресу — модель не подставлена, первый пункт «— выберите модель —»', async () => {
   DEVICES = [HEARD];
   const root = await mount();
   findButtonByText(root, /Добавить прибор/).click();
   await tick();
   findButtonByText(root, /Добавить по адресу/).click();
   await tick();
-  assert.deepStrictEqual(selectedValues(modelSelect(root)), ['mindray-bc-5300']);
+  const sel = walk(root).find((n) => n.tagName === 'SELECT' && optionsOf(n).some((o) => o.value === 'mindray-bc-5300'));
+  assert.deepStrictEqual(selectedValues(sel), ['']);
+  assert.strictEqual(textOf(optionsOf(sel)[0]), '— выберите модель —');
 });
 
 // ── LIS_DISCOVERY_FIX_V1 (экран), C1 — ручная форма: только сеть, адрес обязателен ──
@@ -649,6 +660,11 @@ async function openNewDeviceForm() {
   await tick();
   return root;
 }
+// LIS_VENDOR_EXACT_V1 — D2: модель новому прибору выбирают явно (тестовый DOM
+// не выводит value списка из selected-пункта — ставим его сами, ревью M10).
+const chooseModel = (root, key = 'mindray-bc-5300') => {
+  walk(root).find((n) => n.tagName === 'SELECT' && optionsOf(n).some((o) => o.value === key)).value = key;
+};
 
 test('C1: новый прибор руками — без выбора «Подключение», адрес с сетевой подсказкой, строка про COM', async () => {
   const root = await openNewDeviceForm();
@@ -664,6 +680,7 @@ test('C1: новый прибор руками — без выбора «Под�
 test('C1: новый прибор без адреса не сохраняется — предупреждение, в базу ничего', async () => {
   const root = await openNewDeviceForm();
   inputByPlaceholder(root, 'Например: Гематология').value = 'Гематология';
+  chooseModel(root);   // LIS_VENDOR_EXACT_V1 — D2
   inputByPlaceholder(root, ADDR_PH).value = '   ';
   formButton(root, /^Сохранить$/).click();
   await tick(60);
@@ -677,6 +694,7 @@ test('C1: новый прибор без адреса не сохраняетс�
 test('C1: новый прибор с адресом записывается сетевым: transport = mllp', async () => {
   const root = await openNewDeviceForm();
   inputByPlaceholder(root, 'Например: Гематология').value = 'Гематология';
+  chooseModel(root);   // LIS_VENDOR_EXACT_V1 — D2
   inputByPlaceholder(root, ADDR_PH).value = ' 10.0.0.20 ';
   formButton(root, /^Сохранить$/).click();
   await tick(60);

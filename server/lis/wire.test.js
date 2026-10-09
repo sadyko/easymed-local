@@ -419,3 +419,423 @@ test('R2 п. 12: wireDecision — спор, когда профиль и соо�
   assert.equal(wireDecision({ profile: { wire: 'mindray-chem', model: 'BS-200' }, app: 'AutoLumo A1000', facility: 'LabPC' }).wire, 'forwarder');
   assert.equal(wireFor({ profile: { wire: 'mindray-hematology' }, ...bs }), 'mindray-chem', 'wireFor — безопасный, как в R1');
 });
+
+// ── LIS_VENDOR_EXACT_V1 — D7: контроль гематологии — не проба пациента ──────
+// BC-5300: контроль — ORU^R01 с MSH-11 = Q и OBR-4 = 00003–00008 (L-J, X, XB,
+// X-R, средние X и X-R; руководство оператора BC-5300, приложение C, табл. 9).
+// В OBR-3 — номер файла контроля, маленькое голое число («6»). Кадр — пример
+// X-R-контроля из того же приложения (pdf 486–489), сокращён: имя оператора
+// заменено, из 109 строк OBX оставлены четыре.
+const BC5300_QC = seg(
+  'MSH|^~\&|BC-5300|Mindray|||20081120171602||ORU^R01|1|Q|2.3.1||||||UNICODE',
+  'PID|1||6666666||||20080807235959',
+  'OBR|1||6|00006^XR QCR^99MRC|||20080807142518|||||||||||||||||HM||||||||Operator',
+  'OBX|1|IS|05001^Qc Level^99MRC||M||||||F',
+  'OBX|4|NM|6690-2^WBC^LN||0.00|10*9/L|||||F',
+  'OBX|23|NM|777-3^PLT^LN||4|10*9/L|||||F',
+  'PID|3||6666666',
+  'OBR|3||6|00008^XR QCR Mean^99MRC||||||||||||||||||||HM',
+  'OBX|83|NM|6690-2^WBC^LN||0.00|10*9/L|||||F',
+);
+// BC-20 — по руководству BC-3600 (то же семейство, приложение D, с. D-30–D-32):
+// контроль L-J — MSH-11 = Q (в табл. D-2 — T или D), OBR-4 = 00003^LJ QCR^99MRC,
+// в OBR-3 — номер файла контроля 1…12, в PID-3 — номер лота.
+const BC20_QC = (msh11 = 'Q', obr4 = '00003^LJ QCR^99MRC') => seg(
+  `MSH|^~\&|||||20101206164344||ORU^R01|1|${msh11}|2.3.1||||||UNICODE`,
+  'PID|1||LOT123^^^^MR',
+  `OBR|1||3|${obr4}||20000102030405|20010203040506`,
+  'OBX|7|NM|6690-2^WBC^LN||7.10|10*9/L|||||F',
+);
+
+test('D7: гематология — контроль по MSH-11 (Q, T, D) или OBR-4 00003–00008 — служебное, не проба', async () => {
+  const { getProfile } = await import('./profiles/index.js');
+  const wireOf = (key, raw) => {
+    const m = readEnvelope(raw);
+    return wireFor({ profile: getProfile(key), facility: m.facility, app: m.app });
+  };
+  // BC-5300 называет себя «BC-5300|Mindray»; BC-20 — не называет (профиль строки).
+  const e = readEnvelope(BC5300_QC, wireOf('mindray-bc-5300', BC5300_QC));
+  assert.deepEqual([e.kind, e.service], ['qc', true]);
+  assert.equal(readEnvelope(BC5300_QC).kind, 'qc', 'провод по имени сообщения — тот же');
+  for (const msh11 of ['Q', 'T', 'D', 'q']) {
+    assert.equal(readEnvelope(BC20_QC(msh11), wireOf('mindray-bc-20', BC20_QC(msh11))).kind, 'qc', 'MSH-11 = ' + msh11);
+  }
+  // OBR-4 сам по себе: тип результата — контроль, даже если MSH-11 = P.
+  for (const code of ['00003', '00004', '00005', '00006', '00007', '00008']) {
+    assert.equal(readEnvelope(BC20_QC('P', code + '^QCR^99MRC'), 'default').kind, 'qc', 'OBR-4 ' + code);
+  }
+  // Проба пациента: MSH-11 = P, OBR-4 = 00001 (счёт) или 00002 (микроскопия).
+  assert.equal(readEnvelope(BC20_QC('P', '00001^Automated Count^99MRC'), 'default').kind, 'result');
+  assert.equal(readEnvelope(BC20_QC('P', '00002^Manual Count^99MRC'), 'default').kind, 'result');
+  assert.equal(readEnvelope(BC780('', 'LAB-000123'), 'mindray-hematology').kind, 'result');
+  // BC-780 (mindray-hematology) — то же семейство, тот же признак.
+  assert.equal(readEnvelope(BC20_QC(), 'mindray-hematology').kind, 'qc');
+  // У прочих проводов MSH-11 и OBR-4 вида не меняют.
+  for (const wire of ['forwarder', 'autobio-hl7', 'mindray-chem']) {
+    assert.equal(readEnvelope(BC20_QC(), wire).kind, 'result', wire);
+  }
+});
+
+// LIS_VENDOR_EXACT_V1 (D7, ревью) — провод default читает не только гематологию
+// Mindray: найденный прибор без модели, «Другой анализатор (общий HL7)», прежние
+// профили. Вид результата 00003–00008 — код Mindray: в каждом примере
+// производителя он с системой кодов «99MRC» (BC-5300, приложение C, табл. 9 и
+// pdf 486–489; BC-3600, с. D-32 — «00003^LJ QCR^99MRC»). Без неё «00005» в
+// OBR-4 — чужой код теста, и проба пациента остаётся пробой, как в 3.16.0.
+test('D7: OBR-4 00003–00008 — контроль, только если это код Mindray (99MRC); у чужого прибора на проводе default — проба', () => {
+  const generic = (obr4) => seg('MSH|^~\&|XN-350|Sysmex|||20261006101500||ORU^R01|7|P|2.3.1', 'PID|1||P1',
+    `OBR|1||LAB-000123|${obr4}`, 'OBX|1|NM|WBC^WBC||6.10|10*9/L|||||F');
+  for (const obr4 of ['00005^Hemogram', '00003', '00006^X-R^LN', 'CBC^Complete blood count']) {
+    assert.equal(readEnvelope(generic(obr4), 'default').kind, 'result', obr4);
+  }
+  // Код Mindray — контроль, как прежде: и без имени, и в любом регистре системы.
+  for (const obr4 of ['00005^XB QCR^99MRC', '00004^^99MRC', '00003^LJ QCR^99mrc']) {
+    assert.equal(readEnvelope(generic(obr4), 'default').kind, 'qc', obr4);
+  }
+});
+
+// CL-900i и BS-240 — с D2 на mindray-chem: контроль — MSH-16 = 2, сообщение из
+// MSH и OBR, в OBR-2 — НОМЕР КАНАЛА теста («7»), не номер пробирки. Кадр —
+// пример руководства CL (Host Interface Manual, с. 1-28, pdf 36).
+const CL_QC = seg(
+  'MSH|^~\&|||||20120508103014||ORU^R01|1|P|2.3.1||||2||ASCII|||',
+  'OBR|1|7|AST|^|0|20130729160839|20120405141255|20130729161552|||1|2|QUAL2|2222|20300101|0|M|55.000000|5.000000|0.137470|nkat/L|||||||||1||||||||||||||||||',
+);
+
+test('D7: CL-900i и BS-240 — контроль (MSH-16 = 2) и калибровка (1) по проводу профиля — служебные', async () => {
+  const { getProfile } = await import('./profiles/index.js');
+  for (const key of ['mindray-cl-900i', 'mindray-bs-240']) {
+    const w = wireFor({ profile: getProfile(key), facility: '', app: '' });
+    assert.equal(readEnvelope(CL_QC, w).kind, 'qc', key);
+    assert.equal(readEnvelope(CL_QC.replace('||||2||ASCII', '||||1||ASCII'), w).kind, 'calibration', key);
+    assert.equal(readEnvelope(CL_QC.replace('||||2||ASCII', '||||0||ASCII'), w).kind, 'result', key);
+  }
+  // На прежнем проводе default (до D2) тот же контроль читался как проба.
+  assert.equal(readEnvelope(CL_QC, 'default').kind, 'result');
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D5: «нет результата» Mindray ──────────────────────
+// Mindray пишет в OBX-5 «нет результата» числом: −268435455 (−0x0FFFFFFF;
+// Host Interface Manual CL, с. 1-20: «-0x0fffffff means invalid value») или
+// −100000000. Кадры: настоящая запись BS-240 (2017, LiveMachine BS240_New.cs —
+// «нет результата» по каждому тесту, OBX-13 «0.000000») и BS-300 того же
+// семейства (OBX-5 «-100000000.0», в OBX-13 — исходное число 73.7). OBX-13 —
+// значение ДО правки, в бланк не пишется никогда: только для сверки в лотке.
+test('D5: OBX-5 ≤ −100000000 — «нет результата»: строка помечена hold, с OBX-13 для сверки; OBX-13 не читается как значение', () => {
+  const bs240 = seg('MSH|^~\&|||||20170413120602||ORU^R01|1|P|2.3.1||||0||ASCII|||', 'OBR|2|LAB-000123|1|^|N',
+    'OBX|1|NM||GLUCOSE HUMAN|-268435455.000000||-|N|||F||0.000000|19000101000000|||0|');
+  const [o] = readResult(bs240, 'mindray-chem').observations;
+  assert.match(o.hold, /^прибор: нет результата «-268435455\.000000», OBX-13 «0\.000000» — для сверки, в бланк не пишется$/);
+  const bs300 = seg('MSH|^~\&|||||20160101101500||ORU^R01|2|P|2.3.1||||0||ASCII|||', 'OBR|1|LAB-000123|2|Mindray^BS-300',
+    'OBX|1|NM|5|ALT|-100000000.0|U/L|-|N|||F||73.7|20160101101400|||0|');
+  const [p] = readResult(bs300, 'mindray-chem').observations;
+  assert.match(p.hold, /нет результата «-100000000\.0», OBX-13 «73\.7»/);
+  assert.notEqual(p.value, '73.7', 'OBX-13 — не значение');
+  // Без OBX-13 — без него; десятичная запятая; на любом проводе (BC-5300 — default).
+  const raw = (v, obx13 = '') => seg('MSH|^~\&|BC-5300|Mindray|||1||ORU^R01|1|P|2.3.1', 'OBR|1||LAB-000123',
+    `OBX|1|NM|6690-2^WBC^LN||${v}|10*9/L|||||F||${obx13}`);
+  assert.equal(readResult(raw('-268435455'), 'default').observations[0].hold, 'прибор: нет результата «-268435455»');
+  assert.ok(readResult(raw('-268435455,000000'), 'default').observations[0].hold);
+  assert.ok(readResult(raw('-100000000'), 'mindray-hematology').observations[0].hold);
+  // Не «нет результата»: обычные отрицательные числа, текст качественных тестов.
+  for (const v of ['-99999999', '-1.25', '0', '5.1', '-', '+', '+-', '<0.01', '***']) {
+    assert.equal(readResult(raw(v), 'default').observations[0].hold, undefined, v);
+  }
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D0, D9: AutoLumo A1000 по сети, как пишет прибор ───
+// Кадр — вывод кодировщика самой программы клиники AutoLumo1000.exe 1.0.7
+// (запуск её DLL на синтетических данных; analyzer-research,
+// autobio-autolumo-a1000.settle.md, находка 1; лист A1000, §3): MSH-3/4 пусты,
+// MSH-10 = 5 (код команды «по тесту»), OBR-2 — номер пробирки, OBR-3 —
+// внутренний номер, NTE перед OBX: NTE-3 — лот~ФЛАГИ через «-»~реагент~код~
+// срок~штатив~место; OBX-1 — внутренний номер заявки, OBX-2 всегда CE,
+// OBX-3 = OBX-4 = код теста, OBX-5 = RLU^результат~, OBX-6/7/8 пусты.
+const A1000 = ({ value = '4.17', flags = '', reagent = 'AFP', code = '107', nte = true } = {}) => seg(
+  'MSH|^~\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123',
+  'PID|||SYN-PAT-1',
+  'OBR|1|LAB-000123|7764|SYSID-SYN',
+  ...(nte ? [`NTE|||LOT-SYN~${flags}~${reagent}~${code}~~RACK-SYN~1`] : []),
+  `OBX|10455|CE|${code}|${code}|41765^${value}~||||||F|||2026/10/05 12:00:00`,
+);
+
+test('D0: A1000 — простое число из CE становится NM (число для диапазона клиники); подпись — реагент из NTE', () => {
+  const [o] = readResult(A1000(), 'autobio-hl7').observations;
+  assert.deepEqual([o.code, o.value, o.valueType, o.label, o.abnormal], ['107', '4.17', 'NM', 'AFP', '']);
+  assert.equal(o.hold, undefined);
+  // Десятичная запятая (Windows прибора с русскими настройками) — точка.
+  assert.deepEqual(readResult(A1000({ value: '4,17' }), 'autobio-hl7').observations.map((x) => [x.value, x.valueType]), [['4.17', 'NM']]);
+  assert.deepEqual(readResult(A1000({ value: '1250' }), 'autobio-hl7').observations.map((x) => [x.value, x.valueType]), [['1250', 'NM']]);
+  // «>x» / «<x» (режим «результат строкой») — текст, как пришёл.
+  for (const v of ['>1000', '<0.50']) {
+    const [x] = readResult(A1000({ value: v }), 'autobio-hl7').observations;
+    assert.deepEqual([x.value, x.valueType], [v, 'CE'], v);
+  }
+});
+
+test('D9: A1000 — флаги прибора из NTE перед OBX: ORH → H и «>», ORL → L и «<»; прочие — не писать (hold)', () => {
+  const read = (o) => readResult(A1000(o), 'autobio-hl7').observations[0];
+  // За пределом диапазона измерения прибор шлёт сам предел простым числом.
+  const hi = read({ value: '1210', flags: 'ORH' });
+  assert.deepEqual([hi.value, hi.abnormal, hi.valueType, hi.hold], ['>1210', 'H', 'CE', undefined]);
+  const lo = read({ value: '0,6', flags: 'ORL' });
+  assert.deepEqual([lo.value, lo.abnormal, lo.valueType], ['<0.6', 'L', 'CE']);
+  assert.equal(read({ value: '>1210', flags: 'ORH' }).value, '>1210', 'знак уже есть — второй не ставится');
+  // LIS_VENDOR_EXACT_V1 — «PEX-CEX-ORL» отсюда убран: по решению владельца
+  // 2026-10-06, п. 5 (analyzer-research\fix\DECISIONS.md) предупреждения о
+  // сроках (PEX, CEX) не мешают, и это «<» с «Ниже» — тест ниже.
+  for (const flags of ['QNS', 'ERR', 'ORH-ORL']) {
+    assert.equal(read({ flags }).hold, 'флаги прибора: ' + flags, flags);
+  }
+  // NTE — только к своему OBX: следующий OBX без NTE флагов не наследует.
+  const two = readResult(seg('MSH|^~\&|||||20261005120000||ORU^R01|5|P|2.3.1', 'OBR|1|LAB-000123|7764|SYSID-SYN',
+    'NTE|||LOT~QNS~AFP~107~~R~1', 'OBX|10455|CE|107|107|41765^4.17~||||||F',
+    'OBX|10456|CE|112|112|22000^1.23~||||||F'), 'autobio-hl7').observations;
+  assert.deepEqual(two.map((x) => [x.code, x.hold || '']), [['107', 'флаги прибора: QNS'], ['112', '']]);
+});
+
+// LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5 —
+// analyzer-research\fix\DECISIONS.md) — флаги прибора по перечню самого A1000:
+// ToolsLib.Flags программы клиники 1.0.7, смысл — её же подписи
+// (en\AutoLumo1000.resources.dll, Data_Item_FLAG*). Сочетания — ровно те, что
+// пришли в клинике (realtest\verify\a1000\reports\flags-decoded.txt: 949
+// результатов, у 832 — CEX); кадр — кодировщика прибора (NTE перед OBX).
+test('D9: A1000 — предупреждения о сроках и контроле (CEX у 88 % результатов) не мешают; ORH/OVR — «>» и H, ORL — «<» и L; ошибка измерения и незнакомый флаг — не писать', () => {
+  const read = (flags, value = '4.17') => readResult(A1000({ value, flags }), 'autobio-hl7').observations[0];
+  // CEX — «calibration curve or cut-off value is expired», PEX/LEX — сроки
+  // набора, EXS — субстрат, QEX — лот контроля, QCF/LQCF — контроль вне правил:
+  // число пишется как есть, флаг — по диапазону клиники.
+  for (const flags of ['CEX', 'CEX-PEX', 'CEX-LEX-PEX', 'EXS', 'QEX', 'QCF', 'LQCF', 'CEX-LQCF']) {
+    const o = read(flags);
+    assert.deepEqual([o.value, o.valueType, o.abnormal, o.hold], ['4.17', 'NM', '', undefined], flags);
+  }
+  // ORH — выше предела измерения, OVR — выше старшего калибратора: «>» и H.
+  for (const flags of ['CEX-ORH-OVR-PEX', 'CEX-OVR', 'ORH-OVR']) {
+    const o = read(flags, '1210');
+    assert.deepEqual([o.value, o.valueType, o.abnormal, o.hold], ['>1210', 'CE', 'H', undefined], flags);
+  }
+  // ORL — ниже предела измерения: «<» и L (запятая — точка).
+  for (const flags of ['CEX-LEX-ORL-PEX', 'CEX-ORL-PEX', 'CEX-ORL', 'PEX-CEX-ORL']) {
+    const o = read(flags, '0,6');
+    assert.deepEqual([o.value, o.valueType, o.abnormal, o.hold], ['<0.6', 'CE', 'L', undefined], flags);
+  }
+  // Ошибка измерения (ERR, QNR — нет реагента, RLU — сигнал за пределом, SUC —
+  // сбой забора, QNS), спор ORH с ORL, серая зона (GRY) и незнакомый флаг — не
+  // писать: строка бланка «не пришла», проба в лотке.
+  // LIS_VENDOR_EXACT_V1 — CRH отсюда убран: критический диапазон — число с
+  // флагом «критический» (весь перечень прибора — тест ниже).
+  for (const flags of ['ERR-QNR-CEX-ORL', 'RLU-CEX-ORH-OVR', 'RLU-CEX-LEX-OVR-PEX', 'CEX-SUC', 'QNS', 'ORH-ORL', 'GRY', 'XYZ', 'CEX-XYZ']) {
+    assert.equal(read(flags).hold, 'флаги прибора: ' + flags, flags);
+  }
+});
+
+// LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5) — ВЕСЬ перечень
+// флагов A1000: ToolsLib.Flags программы клиники 1.0.7 — 62 имени (константы
+// *_NAME, ToolsLib.dll, прочитано без запуска), смысл — подписи самой программы
+// (en\AutoLumo1000.resources.dll, Data_Item_FLAG*). Каждое имя — в своём классе:
+//   — не мешают (число пишется, флаг — по диапазону клиники): сроки и контроль —
+//     CEX, PEX, LEX, EXS, QEX, QCF, LQCF; OVD «Result from a diluted sample»
+//     (прибор развёл пробу сам и пересчитал) и DRX «The result is calculated from
+//     the derivation of formula» (расчётный тест);
+//   — предел измерения: ORH, OVR — «>число» и H; ORL — «<число» и L;
+//   — критический диапазон: CRH «above the upper limit of the critical range»,
+//     CRL «below the lower limit of the critical range» — число и OBX-8 HH / LL
+//     (словарь HL7; ingest.js flagFromDevice → 'critical');
+//   — прочие 48 — ошибки, сбои и пограничные ответы: GRY «within the specified
+//     gray zone», HCV, температуры TRI…TRSH, повтор VRT*/MBK, γ-ответы TB-IGRA…
+//     — не писать, в лоток с «флаги прибора: …»; имя вне перечня — тоже.
+const A1000_ENUM = ['CCR', 'CLT', 'IND', 'QNS', 'RLU', 'SYS', 'TRI', 'TRIH', 'TRS', 'TRSH', 'TRR', 'TRRH', 'QSB', 'ERR', 'CEX', 'CRH', 'CRL',
+  'EXS', 'GRY', 'LEX', 'ORH', 'ORL', 'OVR', 'PEX', 'QCF', 'LQCF', 'QEX', 'HCV', 'DRX', 'QWB', 'QNR', 'DRK', 'REJ', 'OVD', 'OLR', 'RTE', 'NNT',
+  'RRT', 'VRTS', 'SNA', 'VRT1', 'VRT3', 'VRT4', 'MBK', 'PVA', 'ASY', 'γNE', 'γPO', 'γNT', 'PLR', 'γPO±', 'γPO+', 'γPO++', 'γPO+++', 'SUC', 'HBF',
+  'HBFH', 'WBF', 'WBFH', 'ABORTE', 'MIXEDTEST', 'NRT'];
+
+test('D9: A1000 — весь перечень флагов прибора (62): OVD и DRX не мешают, CRH/CRL — «критический», GRY и ошибки — в лоток, незнакомый — в лоток', () => {
+  assert.equal(A1000_ENUM.length, 62);
+  const read = (flags, value = '4.17') => readResult(A1000({ value, flags }), 'autobio-hl7').observations[0];
+  const pick = (o) => [o.value, o.valueType, o.abnormal, o.hold];
+  const IGNORE = ['CEX', 'PEX', 'LEX', 'EXS', 'QEX', 'QCF', 'LQCF', 'OVD', 'DRX'];
+  const want = {
+    ...Object.fromEntries(IGNORE.map((f) => [f, ['4.17', 'NM', '', undefined]])),
+    ORH: ['>4.17', 'CE', 'H', undefined], OVR: ['>4.17', 'CE', 'H', undefined], ORL: ['<4.17', 'CE', 'L', undefined],
+    CRH: ['4.17', 'NM', 'HH', undefined], CRL: ['4.17', 'NM', 'LL', undefined],
+  };
+  for (const flag of A1000_ENUM) {
+    assert.deepEqual(pick(read(flag)), want[flag] || ['4.17', 'NM', '', 'флаги прибора: ' + flag], flag);
+  }
+  // Имя вне перечня — незнакомое: не писать, и рядом с «не мешающими» тоже.
+  for (const flags of ['XYZ', 'CRX', 'ORH2', 'CEX-ABC', 'OVD-XYZ']) assert.equal(read(flags).hold, 'флаги прибора: ' + flags, flags);
+});
+
+test('D9: A1000 — сочетания: OVD/DRX рядом с пределом и критическим; критический с «>»; спор направлений — в лоток', () => {
+  const read = (flags, value = '4.17') => readResult(A1000({ value, flags }), 'autobio-hl7').observations[0];
+  const pick = (o) => [o.value, o.valueType, o.abnormal, o.hold];
+  // Разведённая или расчётная проба с пределом измерения — как без них.
+  assert.deepEqual(pick(read('CEX-ORH-OVD', '1210')), ['>1210', 'CE', 'H', undefined]);
+  assert.deepEqual(pick(read('DRX-ORL', '0,6')), ['<0.6', 'CE', 'L', undefined]);
+  assert.deepEqual(pick(read('CEX-OVD-PEX', '35,2')), ['35.2', 'NM', '', undefined], 'разведённая — число с точкой');
+  // Выше предела измерения И выше критического — «>» и «критический».
+  assert.deepEqual(pick(read('CEX-CRH-ORH-OVR', '1210')), ['>1210', 'CE', 'HH', undefined]);
+  assert.deepEqual(pick(read('CRL-ORL', '0,6')), ['<0.6', 'CE', 'LL', undefined]);
+  assert.deepEqual(pick(read('CEX-CRH-PEX', '987')), ['987', 'NM', 'HH', undefined]);
+  // Разные направления — не знает никто: не писать.
+  for (const flags of ['CRH-CRL', 'CRH-ORL', 'CRL-ORH', 'CRL-OVR', 'ORH-ORL', 'CEX-CRH-GRY']) {
+    assert.equal(read(flags).hold, 'флаги прибора: ' + flags, flags);
+  }
+});
+
+test('D9: A1000 — «критический» доходит до флага бланка: OBX-8 HH / LL — «critical» (ingest.js resultFlag без диапазона клиники)', async () => {
+  const { resultFlag } = await import('./ingest.js');
+  for (const [flags, value] of [['CRH', '987'], ['CRL', '0.01'], ['CEX-CRH-ORH-OVR', '1210']]) {
+    const o = readResult(A1000({ value, flags }), 'autobio-hl7').observations[0];
+    const num = o.valueType === 'NM' ? parseFloat(o.value) : null;
+    assert.equal(resultFlag({ num, abnormal: o.abnormal, deviceRange: o.range }), 'critical', flags);
+  }
+});
+
+test('D9: A1000 — флаг в причине — как его прислал прибор (γ ответов TB-IGRA не становится «Γ»)', () => {
+  for (const flags of ['γPO+', 'γNE', 'CEX-γPO±']) {
+    assert.equal(readResult(A1000({ flags }), 'autobio-hl7').observations[0].hold, 'флаги прибора: ' + flags, flags);
+  }
+});
+
+// ── LIS_VENDOR_EXACT_V1 — контроль A1000: без PID и не номер пробирки ───────
+// Кодировщик программы клиники (AutoLumo1000 1.0.7) шлёт контроль РОВНО как
+// пробу пациента, без пометки (settle, находка 2): у контроля «ID пациента»
+// пуст, и сегмента PID нет — у 19 настоящих контролей клиники PID нет ни у
+// одного. Кадр — вывод самого кодировщика, байт в байт (realtest\verify\a1000\
+// runs\20261006-130904-en-US-ABDE\raw\05-A3-QC-sent.bin), номер контроля «1».
+// Но PID нет и у пробы пациента — это и есть граница правила:
+//   — «по пробе» (MSH-10 = 7) кодировщик PID не пишет НИКОГДА (Et4JYjNVXn), а
+//     контроль «по пробе» не уходит вовсе (settle, находка 1);
+//   — «по тесту» PID-3 — «ID пациента», вид пробы в кодировщик не передаётся
+//     (wencExhtA); пустой — PID не пишется: проба без «ID пациента» выглядит
+//     как контроль.
+// Поэтому контроль — «по тесту» без PID, только если номер в OBR-2 не может
+// быть пробиркой пациента: не этикетка LAB-, не номер с этикетки (6+ цифр —
+// решение владельца 2026-10-06, п. 4) и не пусто.
+const A1000_QC_KIT = seg('MSH|^~\\&|||||20261006130927||ORU^R01|5|P|2.3.1|261006130927616', 'OBR|1|1|7766|Autolumo 1000',
+  'NTE|||SYNLOT1~~AFP~107~~R001~2', 'OBX|10457|CE|107|107|52000^25.1~||||||F|||2026/10/06 13:09:27') + '\r';
+const A1000_BY_TEST = ({ sample = '3', pid = '', msh10 = '5', obr3 = '7766' } = {}) => seg(
+  `MSH|^~\\&|||||20261006130927||ORU^R01|${msh10}|P|2.3.1|261006130927616`,
+  ...(pid === null ? [] : [pid]),
+  `OBR|1|${sample}|${obr3}|Autolumo 1000`,
+  'NTE|||SYNLOT1~CEX~AFP~107~~R001~2',
+  'OBX|10457|CE|107|107|52000^25.1~||||||F|||2026/10/06 13:09:27');
+
+test('A1000: контроль — «по тесту», без PID, номер контроля («1», «3», «QC-AFP-1») — служебное, в бланк и лоток не идёт', () => {
+  const kit = readEnvelope(A1000_QC_KIT, 'autobio-hl7');
+  assert.deepEqual([kit.kind, kit.service], ['qc', true], 'кадр кодировщика прибора, байт в байт');
+  for (const sample of ['1', '3', '42', '12345', 'QC1', 'QC-AFP-1', 'qc-lot2-L', '2^7']) {
+    const e = readEnvelope(A1000_BY_TEST({ sample, pid: null }), 'autobio-hl7');
+    assert.deepEqual([e.kind, e.service], ['qc', true], '«' + sample + '»');
+  }
+});
+
+test('A1000: проба пациента — не контроль: есть PID (и с пустым PID-3), этикетка LAB-, номер с этикетки 6+ цифр, «по пробе», без номера', () => {
+  const kind = (o, wire = 'autobio-hl7') => readEnvelope(A1000_BY_TEST(o), wire).kind;
+  // PID есть — проба пациента, какой бы ни был номер («ID пациента» заполнен).
+  for (const pid of ['PID|||SYNTHETIC', 'PID|||', 'PID|1']) {
+    for (const sample of ['3', 'QC-AFP-1', 'LAB-000123']) assert.equal(kind({ sample, pid }), 'result', pid + ' / ' + sample);
+  }
+  // Без PID (не заполнен «ID пациента») — этикетка Easy-Med или номер с неё.
+  for (const sample of ['LAB-000123', 'lab-0001234', '000123', '1234567', '0000000021', '2^LAB-000123']) {
+    assert.equal(kind({ sample, pid: null }), 'result', '«' + sample + '»');
+  }
+  assert.equal(kind({ sample: '', obr3: 'LAB-000123', pid: null }), 'result', 'этикетка в OBR-3 — тоже');
+  assert.equal(kind({ sample: 'LAB-000123', obr3: 'LAB-000124', pid: null }), 'result', 'две этикетки — спор, решает приём (лоток)');
+  assert.equal(kind({ sample: '', pid: null }), 'result', 'номера нет вовсе — не контроль (у контроля номер есть всегда): в лоток');
+  // «По пробе» (MSH-10 = 7) PID нет никогда — кадр приёмки T12a: проба, а не контроль.
+  const bySample = seg('MSH|^~\\&|||||20261006130515||ORU^R01|7|P|2.3.1|261006130515962', 'OBR|1|LAB-000116|7716|AutoLumo A1000',
+    'OBX||CE|107||41765^4.17||||||F', 'OBX||CE|102||22000^1.23||||||F');
+  assert.equal(readEnvelope(bySample, 'autobio-hl7').kind, 'result');
+  for (const sample of ['3', 'QC1']) assert.equal(kind({ sample, pid: null, msh10: '7' }), 'result', 'по пробе: «' + sample + '»');
+  // Иной MSH-10 (не код команды «по тесту») — правило не применяется.
+  assert.equal(kind({ sample: '3', pid: null, msh10: '1' }), 'result');
+  // Правило — только у провода A1000: у прочих тот же кадр — проба, как прежде.
+  for (const wire of ['default', 'forwarder', 'mindray-chem', 'mindray-hematology']) {
+    assert.equal(readEnvelope(A1000_QC_KIT, wire).kind, 'result', wire);
+  }
+  assert.equal(readEnvelope(A1000_QC_KIT).kind, 'result', 'MSH-3/4 A1000 пусты: без профиля строки — провод default');
+});
+
+test('A1000: граница «номер с этикетки» — та же, что у приёма (решение владельца, п. 4)', async () => {
+  const { LABEL_DIGITS } = await import('./wire.js');
+  assert.equal(LABEL_DIGITS, 6, 'этикетка — LAB- и номер заказа, дополненный до 6 цифр (lab-doc.js labAccession)');
+  const ingest = await import('./ingest.js');
+  if (ingest.PLAIN_NUMBER_MIN_DIGITS !== undefined) assert.equal(ingest.PLAIN_NUMBER_MIN_DIGITS, LABEL_DIGITS, 'одна граница у приёма и у контроля A1000');
+  assert.equal(readEnvelope(A1000_BY_TEST({ sample: '9'.repeat(LABEL_DIGITS - 1), pid: null }), 'autobio-hl7').kind, 'qc');
+  assert.equal(readEnvelope(A1000_BY_TEST({ sample: '9'.repeat(LABEL_DIGITS), pid: null }), 'autobio-hl7').kind, 'result');
+});
+
+test('D9: A1000 «по пробе» — OBX-4 пуст, код берётся из OBX-3', () => {
+  // Кодировщик в режиме «по пробе» (команда 7): OBX-1 и OBX-4 пусты, NTE нет
+  // (лист A1000, §3, a1000-hl7-probe.ps1).
+  const raw = seg('MSH|^~\&|||||20261005120000||ORU^R01|7|P|2.3.1|261005120000124', 'OBR|1|LAB-000123|7764|SYSID',
+    'OBX||CE|107||41765^4.17||||||F', 'OBX||CE|112||22000^1.23||||||F');
+  assert.deepEqual(readResult(raw, 'autobio-hl7').observations.map((x) => [x.code, x.codeRaw, x.value, x.valueType]),
+    [['107', '107', '4.17', 'NM'], ['112', '112', '1.23', 'NM']]);
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D6: CL-900i — качественный ответ в OBX-9 ──────────
+// Host Interface Manual CL (с. 1-19–1-20): OBX-2 — NM у количественных, ST у
+// качественных тестов; OBX-5 — результат (у качественных — индекс COI);
+// OBX-7 — «Fixed and reserved» («-»); OBX-8 — «Fixed as N»; OBX-9 —
+// «Negative-, Positive+, weak positive+-». Значения синтетические.
+const CL_ORU = (...obx) => seg(
+  'MSH|^~\&|||||20261005101500||ORU^R01|3583|P|2.3.1||||0||ASCII|||',
+  'PID|1|P1|||SYN^PAT||19800101|F|||||||||||||||||||||',
+  'OBR|1|LAB-000123|10|^|N|20261005100000|20261005100000|20261005100000|||||||serum||||||||||||||||||||||||||',
+  ...obx,
+);
+
+test('D6: CL-900i — OBX-9 читается: положительно/отрицательно; индекс COI в ST — число (NM) для диапазона клиники', () => {
+  const read = (obx9, v = '5.320000') => readResult(CL_ORU(`OBX|1|ST|HBsAg|HBsAg|${v}|COI|-|N|${obx9}||F||${v}|20261005101400||admin|0|`), 'mindray-chem').observations[0];
+  const pos = read('Positive+');
+  assert.deepEqual([pos.code, pos.value, pos.valueType, pos.qualitative, pos.abnormal], ['HBsAg', '5.32', 'NM', 'positive', 'N']);
+  for (const [obx9, q] of [['Negative-', 'negative'], ['weak positive+-', 'positive'], ['Reactive', 'positive'], ['Nonreactive', 'negative'],
+    ['Non-Reactive', 'negative'], ['POSITIVE', 'positive'], ['+', 'positive'], ['-', 'negative'], ['+-', 'positive']]) {
+    assert.equal(read(obx9).qualitative, q, obx9);
+  }
+  // LIS_VENDOR_EXACT_V1 — тот же ответ в скобках, как его пишет таблица ASTM
+  // того же руководства (с. 2-20–2-21: «Negative(-), Positive(+), Weak positive(+-)»).
+  for (const [obx9, q] of [['Negative(-)', 'negative'], ['Positive(+)', 'positive'], ['Weak positive(+-)', 'positive'], ['Positive (+)', 'positive']]) {
+    assert.equal(read(obx9).qualitative, q, obx9);
+  }
+  // Пусто и не качественный ответ (у BS-200 OBX-9 — целое «вероятность») — нет ответа.
+  for (const obx9 of ['', '1', '0.85']) assert.equal(read(obx9).qualitative, undefined, JSON.stringify(obx9));
+  // Количественная строка CL — как была.
+  const [tsh] = readResult(CL_ORU('OBX|1|NM|TSH|TSH|2.350000|uIU/mL|-|N|||F||2.350000|20261005101400||admin|0|'), 'mindray-chem').observations;
+  assert.deepEqual([tsh.value, tsh.valueType, tsh.qualitative], ['2.35', 'NM', undefined]);
+  // OBX-9 читается только у химии/ИХЛА Mindray.
+  assert.equal(readResult(CL_ORU('OBX|1|ST|HBsAg|HBsAg|5.32|COI|-|N|Positive+||F'), 'default').observations[0].qualitative, undefined);
+});
+
+// LIS_VENDOR_EXACT_V1 (D6, ревью) — BS-200 пишет качественный ответ в OBX-5:
+// «used as test result (concentration, negative(-), positive(+), weak
+// positive(+-), etc)» (Host Interface Manual v5.0, с. 18); OBX-9 у него —
+// целое «вероятность». Кадр — расположение полей руководства (с. 24): BS200.exe
+// называет себя «Mindray|BS-200»; значения синтетические.
+const BS200_Q = (obx2, v, obx9 = '') => seg('MSH|^~\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||',
+  'OBR|1|LAB-000123|12|Mindray^BS-200|N||20261005101200',
+  `OBX|1|${obx2}|RF|RF|${v}||-|N|${obx9}||F|||20261005101200`);
+
+test('D6: BS-200 — качественный ответ в OBX-5 («+», «+-», «-») — qualitative; число и целое OBX-9 — как прежде', () => {
+  const read = (...a) => readResult(BS200_Q(...a), 'mindray-chem').observations[0];
+  const pos = read('ST', '+');
+  assert.deepEqual([pos.value, pos.valueType, pos.qualitative], ['+', 'ST', 'positive'], 'текст в бланк — как пришёл');
+  assert.equal(read('ST', '+-').qualitative, 'positive', 'слабоположительно — тоже отклонение');
+  assert.equal(read('ST', '-').qualitative, 'negative');
+  assert.equal(read('ST', 'negative(-)').qualitative, 'negative');
+  assert.equal(read('ST', '+', '1').qualitative, 'positive', 'целое OBX-9 («вероятность») ответа не перекрывает');
+  // Число — не качественный ответ, и числовая строка (NM) текстом OBX-5 не читается.
+  assert.equal(read('NM', '5.230000', '1').qualitative, undefined);
+  assert.equal(read('ST', '5.32', '1').qualitative, undefined);
+  assert.equal(read('NM', '-').qualitative, undefined);
+  // Ответ в OBX-9 (CL-900i, BS-240) сильнее текста OBX-5.
+  assert.equal(read('ST', '-', 'Positive+').qualitative, 'positive');
+});
+
+test('D6 + D5: CL-900i — «нет результата» в OBX-5: не пишется; OBX-9 показан в причине для сверки', () => {
+  const [o] = readResult(CL_ORU('OBX|2|ST|HCV|Anti-HCV|-268435455|COI|-|N|Positive+||F||-268435455|20261005101400||admin|0|'), 'mindray-chem').observations;
+  assert.equal(o.hold, 'прибор: нет результата «-268435455», OBX-13 «-268435455», OBX-9 «Positive+» — для сверки, в бланк не пишется');
+});

@@ -226,7 +226,10 @@ test('ревью C1: «Добавить» у находки не меняет, �
 test('ревью C1: признак «найден сам» браузер не пишет — реестр не пускает discovered в update', () => {
   assert.ok(!writableColumns('lab_devices', 'update').includes('discovered'),
     'discovered — правило приёма (ensureDevice), ставит его только сервер');
-  assert.ok(writableColumns('lab_devices', 'update').includes('added'), '«Добавить» — это update added = 1');
+  // LIS_VENDOR_EXACT_V1 — D2 (18c18b3): «Добавить» — только RPC lis_device_add
+  // (без модели отказывает); /api/db added больше не пишет. А N2 (приём): пока
+  // added = 0, пробы находки в бланки не идут — added стал правилом приёма.
+  assert.ok(!writableColumns('lab_devices', 'update').includes('added'), '«Добавить» — lis_device_add, не /api/db');
 });
 
 // ── LIS_DISCOVERY_FIX_V1 — прибор узнаётся по адресу и по тому, КАК ОН СЕБЯ ──

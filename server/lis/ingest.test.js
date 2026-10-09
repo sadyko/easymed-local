@@ -10,6 +10,7 @@ import { ingestMessage, parseSampleId } from './ingest.js';
 import { ensureDevice } from './discover.js';   // LIS_DISCOVERY_FIX_V1 — провод целиком, как index.js
 import { parseMessage } from './hl7.js';
 import { SERIES_PENDING_PREFIX, resolveMessage } from './inbox.js';   // LIS_REAL_ANALYZERS_V1_SERIES
+import { lisMessageAttach } from '../services/rpc/lis.js';   // LIS_VENDOR_EXACT_V1 — «Привязать» тем же RPC, что у экрана
 
 const MSG = (sampleId, obx) => [
   'MSH|^~\\&|BC-5300|Mindray|||20260910143943||ORU^R01|42|P|2.3.1',
@@ -159,13 +160,21 @@ test('значение анализатора замещает набранно�
   db.close();
 });
 
+// LIS_VENDOR_EXACT_V1 (N1) — раньше второе сообщение молча меняло черновик
+// (6.1 → 7.2; приёмка: WBC 5.40 → 14.20 чужой пробирки, ни строки в лотке).
+// Теперь значение прибора в черновике не меняется молча: сообщение — в лоток
+// «повтор…», а принять новые значения — «Привязать» (номер называет человек).
+// Строк в бланке по-прежнему одна на показатель.
 test('повторный прогон обновляет ту же строку, а не дублирует', () => {
   const db = fresh();
   ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1');
   ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '7.2')]), '127.0.0.1');
+  assert.deepEqual(results(db).map((r) => r.value), ['6.1'], 'другое значение прибора — не молча: в черновике прежнее');
+  assert.match(message(db).detail, /^повтор: значения отличаются от уже записанных \(Лейкоциты 6\.1 → 7\.2\)/);
+  ingestMessage(db, message(db).raw, '127.0.0.1', null, { touch: false, sampleIdOverride: 123 });
   const rows = results(db);
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].value, '7.2');
+  assert.equal(rows[0].value, '7.2', '«Привязать» принимает новое значение — той же строкой');
   db.close();
 });
 
@@ -232,7 +241,11 @@ test('панель без анализатора → unmapped: клиника е
 test('панель кормится анализатором ДРУГОЙ МОДЕЛИ → unmatched, значения не пишутся', () => {
   const db = fresh();
   db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Биохимия','mindray-bs-240')").run();
-  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1', 2);
+  // LIS_VENDOR_EXACT_V1 — BS-240 пишет пробу по-своему (провод mindray-chem):
+  // MSH-3/4 пусты, штрихкод в OBR-2, OBR-3 — его внутренний номер.
+  const bs240 = ['MSH|^~\\&|||||20260528122129||ORU^R01|3|P|2.3.1', 'OBR|1|LAB-000123|1|^|N',
+    'OBX|1|NM|WBC|Leukocytes|6.100000|10*9/L|-|N|||F||6.100000|20260528122129|||0||'].join('\r');
+  ingestMessage(db, bs240, '127.0.0.1', 2);
   assert.equal(message(db).status, 'unmatched');
   assert.match(message(db).detail, /другой модел/i);
   assert.equal(results(db).length, 0);
@@ -629,7 +642,10 @@ test('серия: неподтверждённый код во 2-м сообще
   assert.equal(message(db).status, 'unmapped');
   // Из сообщения ничего не легло — правило одного сообщения, и в серию оно не
   // входит (спецификация, раздел 3, п. 2): лежит в лотке само по себе.
-  assert.equal(message(db).detail, 'не пришли: Глюкоза (2), Расчётный (102); не подтверждено: 3 (test3)');
+  // LIS_VENDOR_EXACT_V1 (D3; приёмка BS-200 T8) — «не пришли» у прибора с
+  // серией — по бланку: Глюкозу записало первое сообщение той же пробирки, и
+  // называть её «не пришедшей» — неправда.
+  assert.equal(message(db).detail, 'не пришли: Расчётный (102); не подтверждено: 3 (test3)');
   ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
   assert.equal(message(db).status, 'applied', 'подтверждённые строки бланка — Глюкоза и Расчётный — пришли');
   assert.equal(blank(db)['Мочевина'], undefined, 'D4: неподтверждённое не применяется');
@@ -729,7 +745,7 @@ test('серия: сообщения второго прибора той же �
   const db = chem({ profile: 'autobio-autolumo-a1000', lines: [['B12', 'Витамин B12', '206'], ['FER', 'Ферритин', '207']] });
   db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'A1000 (2)','autobio-autolumo-a1000')").run();
   const A = (code, v) => ['MSH|^~\\&|A1000|Autolumo|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
-    'OBR|1|LAB-000123|||', `OBX|1|NM|1^X|${code}|1^${v}|pg/mL|||||F`].join('\r');
+    'PID|||SYN-PAT-1', 'OBR|1|LAB-000123|||', `OBX|1|NM|1^X|${code}|1^${v}|pg/mL|||||F`].join('\r');   // LIS_VENDOR_EXACT_V1 — PID: у пробы пациента он есть (без PID «по тесту» — контроль, wire.js)
   ingestMessage(db, A('206', '390.9'), '10.0.0.40', 1);
   assert.ok(message(db).detail.startsWith(SERIES_PENDING_PREFIX), message(db).detail);
   ingestMessage(db, A('207', '52.1'), '10.0.0.41', 2);
@@ -1002,7 +1018,7 @@ test('R3 п. 6: в пределах суток — по бланку, как в 
 test('R3 п. 10: A1000 «390.10», потом «390.1» — повторная передача, а не повтор; в бланке значение как пришло', () => {
   const db = chem({ profile: 'autobio-autolumo-a1000', lines: [['B12', 'Витамин B12', '206']] });
   const A = (v) => ['MSH|^~\\&|A1000|Autolumo|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
-    'OBR|1|LAB-000123|||', `OBX|1|NM|1^X|206|1^${v}|pg/mL|||||F`].join('\r');
+    'PID|||SYN-PAT-1', 'OBR|1|LAB-000123|||', `OBX|1|NM|1^X|206|1^${v}|pg/mL|||||F`].join('\r');   // LIS_VENDOR_EXACT_V1 — PID: у пробы пациента он есть (без PID «по тесту» — контроль, wire.js)
   ingestMessage(db, A('390.10'), '10.0.0.41', 1);
   assert.equal(blank(db)['Витамин B12'], '390.10');
   ingestMessage(db, A('390.1'), '10.0.0.41', 1);
@@ -1022,8 +1038,11 @@ test('R3 п. 10: A1000 «390.10», потом «390.1» — повторная �
 // значения пишет только прибор панели и только в строки, подтверждённые для
 // него. Прочие профили — как прежде: та же модель кормит панель, отметка не
 // читается.
+// LIS_VENDOR_EXACT_V1 — расположение полей BS-240 (руководство BS-360E/
+// BS-240Pro/BS-240E, с. 16, 32–33): штрихкод в OBR-2, внутренний номер прибора
+// в OBR-3, Channel No. в OBX-3, имя теста в OBX-4.
 const BS240 = (n, value) => ['MSH|^~\\&|BS-240|Mindray|||20261001101500||ORU^R01|42|P|2.3.1',
-  'OBR|1||LAB-000123|x', `OBX|1|NM|${n}^^99MRC||${value}|umol/L|||||F`].join('\r');
+  'OBR|1|LAB-000123|1|^|N', `OBX|1|NM|${n}|test${n}|${value}|umol/L|-|N|||F||${value}|20261001101500|||0||`].join('\r');
 
 test('R4 п. A (дыра a): строку BS-200 панели переименовали в BS-240 — проба другого прибора «BS-240» в её бланк не идёт', () => {
   const db = chem();
@@ -1171,10 +1190,14 @@ test('R4 п. D: текст спора в журнале разобранной �
 });
 
 // ── LIS_REAL_ANALYZERS_V1 — ревью R5, п. 4 ─────────────────────────────────
-test('R5 п. 4: «5,10», потом «5.1» — повторная передача, а не спор; в бланке — как пришло', () => {
+// LIS_VENDOR_EXACT_V1 (D0) — в бланке десятичная запятая стала точкой (и у
+// mindray-chem хвостовые нули срезаны): «5,10» — «5.1». Раньше значение
+// ложилось «как пришло», текстом без числа, и окно результатов его не показывало.
+test('R5 п. 4: «5,10», потом «5.1» — повторная передача, а не спор; в бланке — число с точкой', () => {
   const db = chem();
   ingestMessage(db, BS('2', 'test2', '5,10'), '10.0.0.40', 1);
-  assert.equal(blank(db)['Глюкоза'], '5,10', 'значение как пришло');
+  assert.equal(blank(db)['Глюкоза'], '5.1', 'запятая — точка, нули срезаны (D0)');
+  assert.equal(db.prepare("SELECT numeric_value FROM lab_results WHERE parameter = 'Глюкоза'").get().numeric_value, 5.1);
   ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
   assert.ok(!/повтор:/.test(message(db).detail), message(db).detail);
   assert.match(message(db).detail, /повторная передача: 2 \(test2\)/);
@@ -1279,5 +1302,713 @@ test('R7 п. 1: анализ пациента в стационаре, отпу�
   assert.equal(message(db).status, 'applied');
   assert.equal(results(db).length, 2);
   assert.equal(order(db).status, 'resulted');
+  db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D5: «нет результата» Mindray не пишется ───────────
+// Кадр BS-240E (2026, расположение полей настоящей записи; значения
+// синтетические): штрихкод в OBR-2, Channel No. в OBX-3, имя в OBX-4, OBX-13 —
+// исходное значение. В сообщении два теста: глюкоза посчитана, мочевина — нет
+// («-268435455.000000»; так BS-240 пишет «нет результата», запись 2017 г.).
+const BS240E = (obx) => ['MSH|^~\&|||||20260528122129||ORU^R01|3|P|2.3.1',
+  'PID|1|||||||O|||||||||||||||||||||||',
+  'OBR|1|LAB-000123|1|^|N|20260528115302|20260528115240|20260528115240||1^1||||20260528115240|Serum',
+  ...obx].join('\r');
+
+test('D5: −268435455 не пишется в бланк и не стирает набранное руками; лоток называет код и показывает OBX-13', () => {
+  const db = chem({ profile: 'mindray-bs-240', lines: [['GLU', 'Глюкоза', 'Glu-G'], ['UREA', 'Мочевина', 'UREA']] });
+  // Лаборант уже набрал мочевину руками (черновик).
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, numeric_value, flag, source) VALUES (123, 'Мочевина', '6.2', 6.2, 'normal', 'manual')").run();
+  assert.equal(ingestMessage(db, BS240E([
+    'OBX|1|NM|Glu-G|Glucose (GOD-POD Method)|5.123400|mmol/L|-|N|||F||5.123400|20260528122129|||0||',
+    'OBX|2|NM|UREA|Urea|-268435455.000000||-|N|||F||0.000000|19000101000000|||0||',
+  ]), '10.0.0.42', 1), 'AA');
+  assert.deepEqual(blank(db), { 'Глюкоза': '5.1234', 'Мочевина': '6.2' }, '«нет результата» не легло и черновик не стёрло');
+  const urea = db.prepare("SELECT * FROM lab_results WHERE parameter = 'Мочевина'").get();
+  assert.deepEqual([urea.numeric_value, urea.source], [6.2, 'manual']);
+  const m = message(db);
+  assert.equal(m.status, 'unmapped', 'в лоток: строка бланка не заполнена прибором');
+  assert.equal(m.detail, 'не пришли: Мочевина (UREA, прибор: нет результата «-268435455.000000», OBX-13 «0.000000» — для сверки, в бланк не пишется)');
+  db.close();
+});
+
+test('D5: −100000000 c числом в OBX-13 — в бланк не идёт ни то, ни другое; качественное «+-» пишется, как прежде', () => {
+  const db = chem({ profile: 'mindray-bs-240', lines: [['ALT', 'АЛТ', 'ALT'], ['HCG', 'ХГЧ', 'HCG']] });
+  ingestMessage(db, BS240E([
+    'OBX|1|NM|ALT|ALT|-100000000.0|U/L|-|N|||F||73.7|20260528122129|||0||',
+    'OBX|2|ST|HCG|hCG|+-||-|N|||F|||20260528122129|||0||',
+  ]), '10.0.0.42', 1);
+  assert.deepEqual(blank(db), { 'ХГЧ': '+-' });
+  assert.match(message(db).detail, /^не пришли: АЛТ \(ALT, прибор: нет результата «-100000000\.0», OBX-13 «73\.7» — для сверки, в бланк не пишется\)$/);
+  db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D0, D9: AutoLumo A1000 — число, флаг, флаги прибора ─
+// Кадр — вывод кодировщика программы клиники AutoLumo1000.exe 1.0.7 (лист A1000,
+// §3; settle, находка 1): OBX-2 всегда CE, OBX-3 = OBX-4 = код теста, OBX-5 =
+// RLU^результат~, OBX-6/7/8 пусты, флаги прибора — только в NTE-3 (2-е
+// повторение) перед OBX. Раньше значение писалось текстом без numeric_value, и
+// флаг выходил «Норма» при любом диапазоне клиники: высокий АФП печатался
+// нормой.
+const A1000 = (value, flags = '') => ['MSH|^~\&|||||20261005120000||ORU^R01|5|P|2.3.1|261005120000123',
+  'PID|||SYN-PAT-1', 'OBR|1|LAB-000123|7764|SYSID-SYN', `NTE|||LOT-SYN~${flags}~AFP~107~~RACK-SYN~1`,
+  `OBX|10455|CE|107|107|41765^${value}~||||||F|||2026/10/05 12:00:00`].join('\r');
+const afp = (db) => db.prepare("SELECT value, numeric_value, flag FROM lab_results WHERE visit_service_id = 123 AND parameter = 'АФП'").get();
+function a1000Clinic() {
+  const db = chem({ profile: 'autobio-autolumo-a1000', lines: [['AFP', 'АФП', '107']] });
+  db.prepare('UPDATE lab_panel_analytes SET ref_low = 0, ref_high = 10').run();   // диапазон клиники, нг/мл
+  return db;
+}
+
+test('D0: A1000 — значение пишется числом: numeric_value и флаг по диапазону клиники; запятая — точка', () => {
+  const db = a1000Clinic();
+  assert.equal(ingestMessage(db, A1000('12,5'), '10.0.0.41', 1), 'AA');
+  assert.deepEqual(afp(db), { value: '12.5', numeric_value: 12.5, flag: 'high' }, 'высокий АФП — «Выше», а не «Норма»');
+  assert.equal(message(db).status, 'applied');
+  ingestMessage(db, A1000('4.17'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '4.17', numeric_value: 4.17, flag: 'normal' });
+  db.close();
+});
+
+test('D9: A1000 — ORH: «>предел» и «Выше»; ORL: «<» и «Ниже»; число не выдумывается', () => {
+  const db = a1000Clinic();
+  ingestMessage(db, A1000('1210', 'ORH'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '>1210', numeric_value: null, flag: 'high' });
+  ingestMessage(db, A1000('0,6', 'ORL'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '<0.6', numeric_value: null, flag: 'low' });
+  db.close();
+});
+
+// LIS_VENDOR_EXACT_V1 — было «PEX-CEX» — в лоток. Решение владельца
+// 2026-10-06, п. 5 (analyzer-research\fix\DECISIONS.md): CEX, PEX, LEX —
+// предупреждения о сроках, они не мешают (тест ниже); в лоток — только ошибка
+// измерения. Сочетание — настоящее, из записей A1000 клиники (5 из 949).
+test('D9: A1000 — ошибка измерения (ERR, QNR…) — в бланк не пишется, в лоток «флаги прибора: …»', () => {
+  const db = a1000Clinic();
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, numeric_value, flag, source) VALUES (123, 'АФП', '3.3', 3.3, 'normal', 'manual')").run();
+  ingestMessage(db, A1000('4.17', 'ERR-QNR-CEX-ORL'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '3.3', numeric_value: 3.3, flag: 'normal' }, 'набранное руками не стёрто');
+  const m = message(db);
+  assert.equal(m.status, 'unmapped');
+  assert.equal(m.detail, 'не пришли: АФП (107, флаги прибора: ERR-QNR-CEX-ORL)');
+  db.close();
+});
+
+// LIS_VENDOR_EXACT_V1 (D9; решение владельца 2026-10-06, п. 5) — у A1000 клиники
+// 832 из 949 результатов несут CEX («calibration curve … is expired»), многие —
+// ещё PEX/LEX (сроки набора): раньше ни один такой результат в бланк не ложился,
+// а A1000 по MSA-4 отмечал его «Accepted» и не повторял. Сочетания — настоящие
+// (realtest\verify\a1000\reports\flags-decoded.txt).
+test('D9: A1000 — CEX, CEX-PEX, CEX-LEX-PEX пишутся числом с флагом по диапазону клиники; CEX-ORH-OVR-PEX — «>предел» и «Выше»; CEX-LEX-ORL-PEX — «<» и «Ниже»', () => {
+  const db = a1000Clinic();
+  assert.equal(ingestMessage(db, A1000('12,5', 'CEX'), '10.0.0.41', 1), 'AA');
+  assert.deepEqual(afp(db), { value: '12.5', numeric_value: 12.5, flag: 'high' }, 'CEX не мешает: число и «Выше» по диапазону клиники');
+  assert.equal(message(db).status, 'applied');
+  ingestMessage(db, A1000('4.17', 'CEX-PEX'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '4.17', numeric_value: 4.17, flag: 'normal' });
+  ingestMessage(db, A1000('4,2', 'CEX-LEX-PEX'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '4.2', numeric_value: 4.2, flag: 'normal' });
+  ingestMessage(db, A1000('1210', 'CEX-ORH-OVR-PEX'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '>1210', numeric_value: null, flag: 'high' }, 'за пределом измерения — сам предел со знаком');
+  ingestMessage(db, A1000('0,6', 'CEX-LEX-ORL-PEX'), '10.0.0.41', 1);
+  assert.deepEqual(afp(db), { value: '<0.6', numeric_value: null, flag: 'low' });
+  db.close();
+});
+
+test('D0: десятичная запятая — на любом проводе: в бланке точка и число (BC-5300, провод default)', () => {
+  const db = fresh({ refLow: 4, refHigh: 9 });
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '9,81')]), '127.0.0.1');
+  const r = results(db)[0];
+  assert.deepEqual([r.value, r.numeric_value, r.flag], ['9.81', 9.81, 'high']);
+  db.close();
+});
+
+// D0 — флаг без основания. Пустой флаг прибора и «N» без его диапазона (CL-900i
+// пишет N всегда) — не основание для «Норма»: правило отдаёт null.
+test('D0: resultFlag — основание флага: диапазон клиники, иначе флаг прибора; без основания — null', async () => {
+  const { resultFlag } = await import('./ingest.js');
+  assert.equal(resultFlag({ num: 12, refLow: 0, refHigh: 10 }), 'high', 'диапазон клиники');
+  assert.equal(resultFlag({ num: 5, refLow: 0, refHigh: 10, abnormal: 'H' }), 'normal', 'инвариант 3: клиника бьёт прибор');
+  assert.equal(resultFlag({ num: null, abnormal: '' }), null, 'текст без флага прибора — основания нет');
+  assert.equal(resultFlag({ num: 5, abnormal: '' }), null, 'число без диапазона клиники и без флага — основания нет');
+  assert.equal(resultFlag({ num: null, abnormal: 'N', deviceRange: '-' }), null, '«N» без диапазона прибора — не основание');
+  assert.equal(resultFlag({ num: null, abnormal: 'N', deviceRange: '' }), null);
+  assert.equal(resultFlag({ num: null, abnormal: 'N', deviceRange: '4.00-10.00' }), 'normal', '«N» по своему диапазону');
+  assert.equal(resultFlag({ num: null, abnormal: 'H' }), 'high');
+  assert.equal(resultFlag({ num: null, abnormal: 'L' }), 'low');
+  assert.equal(resultFlag({ num: null, abnormal: 'LL' }), 'critical');
+  assert.equal(resultFlag({ num: null, abnormal: 'A' }), 'abnormal');
+});
+
+// Схема не даёт хранить «нет флага»: lab_results.flag NOT NULL DEFAULT 'normal'
+// CHECK (…) (мигр. 006). Приём пишет умолчание колонки — так же, как ручной
+// ввод (rpc/lab.js saveLabResults). Если флаг станет допускать NULL, этот тест
+// скажет, что запись без основания можно перестать подменять.
+test('D0: без основания — в базе умолчание колонки «normal» (NOT NULL, мигр. 006), запись не срывается', () => {
+  const db = chem({ profile: 'autobio-autolumo-a1000', lines: [['AFP', 'АФП', '107']] });
+  assert.equal(db.prepare("SELECT \"notnull\" AS nn, dflt_value AS d FROM pragma_table_info('lab_results') WHERE name = 'flag'").get().nn, 1);
+  assert.equal(ingestMessage(db, A1000('4.17'), '10.0.0.41', 1), 'AA');
+  assert.deepEqual(afp(db), { value: '4.17', numeric_value: 4.17, flag: 'normal' });
+  db.close();
+});
+
+// ── LIS_VENDOR_EXACT_V1 — D6: CL-900i — флаг из OBX-9, OBX-8 «N» не основание ─
+// Host Interface Manual CL (с. 1-19–1-20): OBX-8 «Fixed as N» у КАЖДОГО
+// результата, качественный ответ — в OBX-9 («Negative-, Positive+, weak
+// positive+-»), OBX-7 «-». Раньше положительный HBsAg (ST, без числа) получал
+// флаг «Норма» по OBX-8. Кадр — расположение полей руководства, значения
+// синтетические.
+const CL_HBS = (value, obx9) => ['MSH|^~\&|||||20261005101500||ORU^R01|3583|P|2.3.1||||0||ASCII|||',
+  'PID|1|P1|||SYN^PAT||19800101|F|||||||||||||||||||||',
+  'OBR|1|LAB-000123|10|^|N|20261005100000|20261005100000|20261005100000|||||||serum||||||||||||||||||||||||||',
+  `OBX|1|ST|HBsAg|HBsAg|${value}|COI|-|N|${obx9}||F||${value}|20261005101400||admin|0|`].join('\r');
+const hbs = (db) => db.prepare("SELECT value, numeric_value, flag, reference_range FROM lab_results WHERE visit_service_id = 123 AND parameter = 'HBsAg'").get();
+const clClinic = (range) => {
+  const db = chem({ profile: 'mindray-cl-900i', lines: [['HBS', 'HBsAg', 'HBsAg']] });
+  if (range) db.prepare('UPDATE lab_panel_analytes SET ref_low = ?, ref_high = ?').run(...range);
+  return db;
+};
+
+// LIS_VENDOR_EXACT_V1 (N1) — каждая проба — в своём бланке: второе другое
+// значение прибора в тот же черновик теперь держится в лотке («повтор»).
+test('D6: CL-900i — положительный HBsAg без диапазона клиники — «Отклонение», а не «Норма»', () => {
+  const db = clClinic(null);
+  assert.equal(ingestMessage(db, CL_HBS('5.320000', 'Positive+'), '10.0.0.43', 1), 'AA');
+  assert.deepEqual(hbs(db), { value: '5.32', numeric_value: 5.32, flag: 'abnormal', reference_range: '' },
+    'флаг — из OBX-9; индекс COI — число; OBX-7 «-» — не диапазон');
+  db.close();
+  const weak = clClinic(null);
+  ingestMessage(weak, CL_HBS('0.120000', 'weak positive+-'), '10.0.0.43', 1);
+  assert.equal(hbs(weak).flag, 'abnormal', 'слабоположительно — тоже отклонение');
+  weak.close();
+  const neg = clClinic(null);
+  ingestMessage(neg, CL_HBS('0.120000', 'Negative-'), '10.0.0.43', 1);
+  assert.deepEqual(hbs(neg), { value: '0.12', numeric_value: 0.12, flag: 'normal', reference_range: '' });
+  neg.close();
+});
+
+test('D6: CL-900i — диапазон клиники для индекса COI работает; положительный ответ «нормой» не перекрывается', () => {
+  const db = clClinic([0, 1]);
+  ingestMessage(db, CL_HBS('5.320000', 'Positive+'), '10.0.0.43', 1);
+  assert.equal(hbs(db).flag, 'high', 'диапазон клиники — «Выше»');
+  const neg = clClinic([0, 1]);   // LIS_VENDOR_EXACT_V1 (N1) — другая проба — свой бланк
+  ingestMessage(neg, CL_HBS('0.120000', 'Negative-'), '10.0.0.43', 1);
+  assert.equal(hbs(neg).flag, 'normal');
+  neg.close();
+  // Диапазон клиники говорит «норма», прибор — «положительно»: положительный
+  // результат «Нормой» не печатается.
+  const wide = clClinic([0, 10]);
+  ingestMessage(wide, CL_HBS('5.320000', 'Positive+'), '10.0.0.43', 1);
+  assert.equal(hbs(wide).flag, 'abnormal');
+  db.close(); wide.close();
+});
+
+// LIS_VENDOR_EXACT_V1 (D6, ревью) — BS-200: качественный ответ — в OBX-5
+// («negative(-), positive(+), weak positive(+-)», HIM v5.0, с. 18), OBX-2 = ST.
+// Раньше «+» ложился в бланк с флагом «Норма». Кадр — руководство BS-200 (с. 24).
+const BS200_RF = (value) => ['MSH|^~\\&|Mindray|BS-200|||20261005101500||ORU^R01|17|P|2.3.1||||0||ASCII|||',
+  'PID|1', 'OBR|1|LAB-000123|12|Mindray^BS-200|N||20261005101200||||||||serum',
+  `OBX|1|ST|7|RF|${value}||-|N|||F|||20261005101200`].join('\r');
+test('D6: BS-200 — «+» и «+-» в OBX-5 — «Отклонение», «-» — «Норма»; значение — текст, как пришло', () => {
+  const db = chem({ lines: [['RF', 'Ревматоидный фактор', '7']] });
+  const rf = () => db.prepare("SELECT value, numeric_value, flag FROM lab_results WHERE visit_service_id = 123 AND parameter = 'Ревматоидный фактор'").get();
+  assert.equal(ingestMessage(db, BS200_RF('+'), '10.0.0.40', 1), 'AA');
+  assert.deepEqual(rf(), { value: '+', numeric_value: null, flag: 'abnormal' }, 'положительный — не «Норма»');
+  ingestMessage(db, BS200_RF('+-'), '10.0.0.40', 1);
+  assert.deepEqual(rf(), { value: '+-', numeric_value: null, flag: 'abnormal' });
+  ingestMessage(db, BS200_RF('-'), '10.0.0.40', 1);
+  assert.deepEqual(rf(), { value: '-', numeric_value: null, flag: 'normal' });
+  db.close();
+});
+
+test('D6: resultFlag — качественный ответ прибора', async () => {
+  const { resultFlag } = await import('./ingest.js');
+  assert.equal(resultFlag({ num: 5.3, qualitative: 'positive', abnormal: 'N', deviceRange: '-' }), 'abnormal');
+  assert.equal(resultFlag({ num: 5.3, refLow: 0, refHigh: 1, qualitative: 'positive' }), 'high');
+  assert.equal(resultFlag({ num: 5.3, refLow: 0, refHigh: 10, qualitative: 'positive' }), 'abnormal', 'клиника «норма» положительное не перекрывает');
+  assert.equal(resultFlag({ num: 0.1, qualitative: 'negative', abnormal: 'N', deviceRange: '-' }), 'normal', 'основание — ответ прибора');
+  assert.equal(resultFlag({ num: 0.9, refLow: 0, refHigh: 0.5, qualitative: 'negative' }), 'high', 'клиника бьёт «отрицательно» (инвариант 3)');
+  assert.equal(resultFlag({ num: 2.35, abnormal: 'N', deviceRange: '-' }), null, 'CL: «N» без диапазона — не основание');
+});
+
+// ═══ LIS_VENDOR_EXACT_V1 — раунд 2: какая проба в какой заказ и что пишется ═══
+// Решения владельца 2026-10-06 (analyzer-research\fix\DECISIONS.md) и остатки
+// раунда 1 (fix\C1-RESULT.md). Кадры — по листам приборов и сценариям приёмки
+// (acceptance\runs\…), значения синтетические.
+
+const LAB = { role: 'lab' };   // «Привязать» — тем же RPC, что у экрана (rpc/lis.js lis_message_attach)
+const formOf = (db, id) => Object.fromEntries(db.prepare('SELECT parameter, value FROM lab_results WHERE visit_service_id = ? ORDER BY id').all(id).map((r) => [r.parameter, r.value]));
+const statusOf = (db, id) => db.prepare('SELECT status FROM visit_services WHERE id = ?').get(id).status;
+const msgRow = (db, id) => db.prepare('SELECT * FROM lab_device_messages WHERE id = ?').get(id);
+
+/**
+ * Визит 55 пациента 3 с несколькими лабораторными услугами; у каждой услуги своя
+ * панель, все панели кормит прибор 1 (подтверждено для него). services — { имя
+ * услуги: [[код строки, имя строки, поле анализатора], …] }; orders — [[номер
+ * заказа, имя услуги, статус = 'queued', визит = 55]]. Визит 56 — другой пациент.
+ */
+function visitClinic({ profile = 'mindray-cl-900i', services, orders }) {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Иванов Иван'), (4,'Подставной Пациент')").run();
+  db.prepare(`INSERT INTO visits (id, patient_id, visit_date, status) VALUES (55,3,strftime('%Y-%m-%dT%H:%M:%SZ','now'),'scheduled'),
+              (56,4,strftime('%Y-%m-%dT%H:%M:%SZ','now'),'scheduled')`).run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port, host) VALUES (1,'Прибор',?,'mllp',2575,'10.0.0.43')").run(profile);
+  const svc = {};
+  Object.entries(services).forEach(([name, rows], i) => {
+    const id = 20 + i;
+    svc[name] = id;
+    db.prepare('INSERT INTO services (id, name, is_lab) VALUES (?, ?, 1)').run(id, name);
+    db.prepare('INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (?, ?, ?, 1)').run(id, name, id);
+    rows.forEach(([code, rowName, dc], k) => {
+      db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id, device_code_confirmed_epoch)
+                  VALUES (?, ?, ?, '', ?, ?, 1, 1, 0)`).run(id, code, rowName, k + 1, dc);
+    });
+  });
+  for (const [id, name, status = 'queued', visit = 55] of orders) {
+    db.prepare('INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (?, ?, ?, ?)').run(id, visit, svc[name], status);
+  }
+  return db;
+}
+
+// CL-900i — «Chemiluminescence Immunoassay Analyzer Host Interface Manual»
+// (2013-08), с. 1-25…1-27: одно сообщение на пробу со всеми тестами; OBR-2 —
+// штрихкод, OBR-3 — номер пробы прибора, OBX-3 — Routine Channel No., OBX-4 —
+// имя теста, OBX-13 — то же значение.
+const CLT = (sample, tests, { id = 31 } = {}) => ['MSH|^~\\&|||||20261006101500||ORU^R01|' + id + '|P|2.3.1||||0||ASCII|||',
+  'PID|1|1001|||SYN^PAT||19851001095133|M|||keshi|||||||||||||||beizhu|||||',
+  `OBR|1|${sample}|10|^|Y|20261006100000|20261006100000|20261006100000|||||linchuangzhenduan|20261006100000|serum|lincyisheng|keshi||||||||3|||||||||||||||||||||||`,
+  ...tests.map(([code, v, st = 'F'], i) => `OBX|${i + 1}|NM|${code}|${code}|${v}|pmol/L|-|N|||${st}||${v}|20261006101400||yishen|0|`)].join('\r');
+const THYROID = { 'ТТГ': [['TSH', 'ТТГ', 'TSH']], 'Т4 свободный': [['FT4', 'Т4 свободный', 'FT4']], 'Т3 свободный': [['FT3', 'Т3 свободный', 'FT3']] };
+
+// BS-200 — Host Interface Manual v5.0, пример с. 24 (приёмка runs\mindray-bs-200):
+// по тесту в сообщении, OBR-2 — штрихкод, OBR-3 — номер пробы прибора,
+// OBX-3 — «Код на ЛИС».
+const BS2 = (sample, code, name, value, { id = 1 } = {}) => [
+  `MSH|^~\\&|Mindray|BS-200|||20261006124717||ORU^R01|${id}|P|2.3.1||||0||ASCII|||`,
+  'PID|1|900001|||Тестов Анализатор||19900101000000|M|||||||||||||||||||||||',
+  `OBR|1|${sample}|7|Mindray^BS-200|N||20261006124717||||||||serum|||||||||||||||||||||||||||||||||`,
+  `OBX|1|NM|${code}|${name}|${value}|mmol/L|-|N|||F|||20261006124717|||`].join('\r');
+
+// A1000 «по тесту» — вывод кодировщика программы прибора клиники
+// (realtest\a1000\runs\20261006-123254-en-US-ABDE\raw\01-A1): код — OBX-3 = OBX-4.
+const A1T = (sample, code, reagent, value) => ['MSH|^~\\&|||||20261006123256||ORU^R01|5|P|2.3.1|261006123256638',
+  'PID|||SYNTHETIC', `OBR|1|${sample}|7764|Autolumo 1000`, `NTE|||SYNLOT1~CEX~${reagent}~${code}~~R001~1`,
+  `OBX|10455|CE|${code}|${code}|41765^${value}~||||||F|||2026/10/06 12:32:56`].join('\r');
+
+// BC-5300 — пример руководства (OM13, прил. C; приёмка runs\mindray-bc-5300):
+// номер пробы — OBR-3, OBX-3 «LOINC^ИМЯ^LN», строки режимов (IS) — справка.
+const BC53 = (sample, { wbc = '5.40', hgb = '128', id = 1 } = {}) => [
+  `MSH|^~\\&|BC-5300|Mindray|||20261006133432||ORU^R01|${id}|P|2.3.1||||||UNICODE`,
+  'PID|1||T0001^^^^MR||Тестов^Анализатор||19900101000000|Мужской', 'PV1|1|Амбулаторно|Терапия^^12',
+  `OBR|1||${sample}|00001^Automated Count^99MRC|||20261006133432|||||||||||||||||HM||||||||Лаборант`,
+  'OBX|1|IS|08001^Take Mode^99MRC||O||||||F',
+  ...(wbc == null ? [] : [`OBX|2|NM|6690-2^WBC^LN||${wbc}|10*9/L||N|||F`]),
+  ...(hgb == null ? [] : [`OBX|3|NM|718-7^HGB^LN||${hgb}|g/L||N|||F`])].join('\r');
+
+// ── D3 — решение владельца, п. 2: «Заполнить все» ─────────────────────────
+
+test('D3: CL-900i — ТТГ, Т4 св. и Т3 св. тремя услугами, одна пробирка LAB- (ТТГ): заполнены все три; та же услуга другого пациента не тронута', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный'], [303, 'Т3 свободный'], [304, 'Т4 свободный', 'queued', 56]] });
+  assert.equal(ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000'], ['FT3', '4.100000']]), '10.0.0.43', 1), 'AA');
+  const m = message(db);
+  assert.equal(m.status, 'applied', m.detail);
+  assert.equal(m.visit_service_id, 301, 'строка лотка — при заказе пробирки');
+  assert.equal(m.detail, 'заказ № 301 «ТТГ»: принято; заказ № 302 «Т4 свободный»: принято; заказ № 303 «Т3 свободный»: принято');
+  assert.deepEqual([formOf(db, 301), formOf(db, 302), formOf(db, 303)], [{ 'ТТГ': '2.35' }, { 'Т4 свободный': '15.2' }, { 'Т3 свободный': '4.1' }]);
+  assert.deepEqual([301, 302, 303].map((id) => statusOf(db, id)), ['resulted', 'resulted', 'resulted']);
+  assert.deepEqual(db.prepare('SELECT DISTINCT source_message_id s FROM lab_results').all().map((r) => r.s), [m.id], 'каждое значение помнит строку лотка');
+  assert.deepEqual(formOf(db, 304), {}, 'другой пациент — другой визит: не тронут');
+  assert.equal(statusOf(db, 304), 'queued');
+  db.close();
+});
+
+test('D3: код подтверждён у двух других услуг визита — не угадываем: «неоднозначно», значение не записано никуда; «Привязать» к нужной', () => {
+  const db = visitClinic({
+    services: { ...THYROID, 'Тиреоидный профиль': [['FT4', 'Т4 свободный', 'FT4'], ['ATPO', 'Анти-ТПО', 'Anti-TPO']] },
+    orders: [[301, 'ТТГ'], [302, 'Т4 свободный'], [305, 'Тиреоидный профиль']] });
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']]), '10.0.0.43', 1);
+  const m = message(db);
+  assert.equal(m.status, 'unmapped');
+  assert.equal(m.detail, 'заказ № 301 «ТТГ»: принято; неоднозначно: FT4 (FT4) — у заказов № 302, № 305'
+    + ' — код подтверждён у нескольких услуг визита, значение не записано; «Привязать» к нужному заказу');
+  assert.deepEqual([formOf(db, 301), formOf(db, 302), formOf(db, 305)], [{ 'ТТГ': '2.35' }, {}, {}]);
+  // Человек называет заказ — его код у названного заказа и берётся.
+  const out = lisMessageAttach(db, { id: m.id, visit_service_id: 302 }, LAB);
+  assert.equal(out.status, 'applied', out.detail);
+  assert.deepEqual([formOf(db, 301), formOf(db, 302), formOf(db, 305)], [{ 'ТТГ': '2.35' }, { 'Т4 свободный': '15.2' }, {}]);
+  db.close();
+});
+
+test('D3: код и у заказа пробирки, и у другого заказа визита (услуга заказана дважды) — берёт заказ пробирки', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [306, 'ТТГ']] });
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000']]), '10.0.0.43', 1);
+  assert.deepEqual([message(db).status, message(db).detail], ['applied', '']);
+  assert.deepEqual([formOf(db, 301), formOf(db, 306)], [{ 'ТТГ': '2.35' }, {}]);
+  db.close();
+});
+
+test('D3: услуга визита, которую кормит прибор другой модели, этим прибором не заполняется — «не использованы», как раньше', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный']] });
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'BS-240','mindray-bs-240')").run();
+  db.prepare("UPDATE lab_panels SET device_id = 2 WHERE name = 'Т4 свободный'").run();
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']]), '10.0.0.43', 1);
+  assert.deepEqual([message(db).status, message(db).detail], ['applied', 'не использованы: FT4 (FT4)']);
+  assert.deepEqual(formOf(db, 302), {});
+  db.close();
+});
+
+test('D3: другая услуга визита не оплачена — её значение не пишется, в лотке «заказ ещё не оплачен…»', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный', 'added']] });
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']]), '10.0.0.43', 1);
+  const m = message(db);
+  assert.equal(m.status, 'unmapped');
+  assert.equal(m.detail, 'заказ № 301 «ТТГ»: принято; заказ № 302 «Т4 свободный»: заказ ещё не оплачен — результат прибора можно «Привязать» после оплаты');
+  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.35' }, {}]);
+  assert.equal(statusOf(db, 302), 'added', 'касса не обойдена');
+  db.close();
+});
+
+test('D3: другая услуга визита уже выдана — значение не переписано, сообщение superseded (D7)', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный', 'completed']] });
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, verified_at) VALUES (302, 'Т4 свободный', '14', 'analyzer', '2026-10-06T08:00:00Z')").run();
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']]), '10.0.0.43', 1);
+  const m = message(db);
+  assert.equal(m.status, 'superseded');
+  assert.equal(m.detail, 'заказ № 301 «ТТГ»: принято; заказ № 302 «Т4 свободный»: результат уже выдан; новый результат требует подтверждения человеком');
+  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.35' }, { 'Т4 свободный': '14' }]);
+  db.close();
+});
+
+test('D3: BS-200 по тесту в сообщении (приёмка T8) — Глюкоза и АЛТ отдельными услугами: АЛТ ложится в свою; «не пришли: Глюкоза» нет', () => {
+  const db = visitClinic({ profile: 'mindray-bs-200', services: { 'Глюкоза': [['GLU', 'Глюкоза', 'GLU']], 'АЛТ': [['ALT', 'АЛТ', 'ALT']] },
+    orders: [[22, 'Глюкоза'], [23, 'АЛТ']] });
+  ingestMessage(db, BS2('LAB-000022', 'GLU', 'Glucose', '5.100000', { id: 1 }), '10.0.0.40', 1);
+  assert.deepEqual([message(db).status, message(db).visit_service_id], ['applied', 22]);
+  ingestMessage(db, BS2('LAB-000022', 'ALT', 'ALT', '85.300000', { id: 2 }), '10.0.0.40', 1);
+  const alt = message(db);
+  assert.equal(alt.status, 'applied', alt.detail);
+  assert.equal(alt.visit_service_id, 23, 'сообщение одного теста — при заказе, который оно заполнило');
+  assert.doesNotMatch(alt.detail, /не пришли/);
+  assert.deepEqual([formOf(db, 22), formOf(db, 23)], [{ 'Глюкоза': '5.1' }, { 'АЛТ': '85.3' }]);
+  assert.deepEqual([statusOf(db, 22), statusOf(db, 23)], ['resulted', 'resulted']);
+  assert.deepEqual(tray(db), []);
+  db.close();
+});
+
+test('D3: BS-200 — пока заказ пробирки ждёт свою строку, тест другой услуги ложится в неё; ожидание — в строке заказа пробирки', () => {
+  const db = visitClinic({ profile: 'mindray-bs-200', services: { 'Биохимия': [['GLU', 'Глюкоза', 'GLU'], ['UREA', 'Мочевина', 'UREA']], 'АЛТ': [['ALT', 'АЛТ', 'ALT']] },
+    orders: [[22, 'Биохимия'], [23, 'АЛТ']] });
+  ingestMessage(db, BS2('LAB-000022', 'GLU', 'Glucose', '5.100000', { id: 1 }), '10.0.0.40', 1);
+  const glu = message(db);
+  assert.equal(glu.detail, SERIES_PENDING_PREFIX + 'не пришли: Мочевина (UREA)');
+  ingestMessage(db, BS2('LAB-000022', 'ALT', 'ALT', '85.300000', { id: 2 }), '10.0.0.40', 1);
+  assert.deepEqual([message(db).status, message(db).visit_service_id, message(db).detail], ['applied', 23, '']);
+  assert.equal(msgRow(db, glu.id).status, 'unmapped', 'заказ пробирки всё ещё ждёт мочевину');
+  ingestMessage(db, BS2('LAB-000022', 'UREA', 'Urea', '6.600000', { id: 3 }), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'applied', message(db).detail);
+  assert.equal(msgRow(db, glu.id).status, 'applied', 'серия заказа пробирки дошла');
+  assert.deepEqual(tray(db), []);
+  db.close();
+});
+
+test('D3: A1000 по тесту — АФП и РЭА двумя услугами одной пробирки: каждый тест — в свою услугу', () => {
+  const db = visitClinic({ profile: 'autobio-autolumo-a1000', services: { 'АФП': [['AFP', 'АФП', '107']], 'РЭА': [['CEA', 'РЭА', '102']] },
+    orders: [[401, 'АФП'], [402, 'РЭА']] });
+  ingestMessage(db, A1T('LAB-000401', '107', 'AFP', '4.17'), '10.0.0.41', 1);
+  ingestMessage(db, A1T('LAB-000401', '102', 'CEA', '2.3'), '10.0.0.41', 1);
+  assert.deepEqual([message(db).status, message(db).visit_service_id], ['applied', 402], message(db).detail);
+  assert.deepEqual([formOf(db, 401), formOf(db, 402)], [{ 'АФП': '4.17' }, { 'РЭА': '2.3' }]);
+  db.close();
+});
+
+test('D3: «Привязать» (номер называет человек) — пробирка заполняет и другие услуги визита', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный'], [303, 'Т3 свободный']] });
+  ingestMessage(db, CLT('LAB-999999', [['TSH', '2.350000'], ['FT4', '15.200000'], ['FT3', '4.100000']]), '10.0.0.43', 1);
+  const lost = message(db);
+  assert.equal(lost.status, 'unmatched');
+  const out = lisMessageAttach(db, { id: lost.id, visit_service_id: 302 }, LAB);
+  assert.equal(out.status, 'applied', out.detail);
+  assert.deepEqual([formOf(db, 301), formOf(db, 302), formOf(db, 303)], [{ 'ТТГ': '2.35' }, { 'Т4 свободный': '15.2' }, { 'Т3 свободный': '4.1' }]);
+  db.close();
+});
+
+test('D3: прибор сообщения неизвестен (строку удалили) — чужие панели визита он не кормит', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный']] });
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']]), '10.0.0.43', null);
+  // Без строки прибора кадр CL (MSH-3/4 пусты) читается общим проводом — нули не срезаны.
+  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.350000' }, {}]);
+  assert.match(message(db).detail, /не использованы: FT4/);
+  db.close();
+});
+
+test('D3: «Привязать» строку пробирки к заказу другого пациента — её значения сняты и из других услуг визита', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный'], [303, 'Т3 свободный'], [304, 'Т4 свободный', 'queued', 56]] });
+  // Т3 пришёл предварительным (P): проба в лотке, а ТТГ и Т4 уже в бланках.
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000'], ['FT3', '4.100000', 'P']]), '10.0.0.43', 1);
+  const m = message(db);
+  assert.equal(m.status, 'unmapped', m.detail);
+  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.35' }, { 'Т4 свободный': '15.2' }]);
+  const out = lisMessageAttach(db, { id: m.id, visit_service_id: 304 }, LAB);   // человек: это пробирка другого пациента
+  assert.equal(out.ok, true, out.detail);
+  assert.deepEqual([formOf(db, 301), formOf(db, 302), formOf(db, 303)], [{}, {}, {}], 'значения пробирки ушли из всех бланков визита 55');
+  assert.deepEqual(formOf(db, 304), { 'Т4 свободный': '15.2' });
+  assert.match(out.detail, /снято из бланка заказа № 301: ТТГ, Т4 свободный \(заказ № 302\)/);
+  assert.deepEqual([statusOf(db, 301), statusOf(db, 302)], ['queued', 'queued'], 'опустевшие заказы — снова у лаборатории');
+  db.close();
+});
+
+// ── N1 — значение прибора в черновике молча не меняется ─────────────────────
+
+test('N1: вторая пробирка с тем же номером (автоприращение, приёмка BC-5300 T6) меняет значения прибора — ничего не записано, в лотке «повтор…»; «Привязать» принимает', () => {
+  const db = fresh();
+  ingestMessage(db, BC53('LAB-000123', { wbc: '5.40', hgb: '128' }), '10.0.0.9', 1);
+  const first = message(db);
+  assert.equal(first.status, 'applied', first.detail);
+  ingestMessage(db, BC53('LAB-000123', { wbc: '14.20', hgb: '146', id: 2 }), '10.0.0.9', 1);
+  const m = message(db);
+  assert.deepEqual([m.status, m.visit_service_id], ['unmapped', 123]);
+  assert.equal(m.detail, 'повтор: значения отличаются от уже записанных (Лейкоциты 5.40 → 14.20, Гемоглобин 128 → 146)'
+    + ' — проверьте пробу; принять новые значения — «Привязать»; не использованы: 08001^Take Mode^99MRC');
+  assert.deepEqual(JSON.parse(m.disputes), [{ code: 'WBC', a: '5.4', b: '14.2' }, { code: 'HGB', a: '128', b: '146' }], 'спор — структурой, как у серии');
+  assert.deepEqual(results(db).map((r) => [r.parameter, r.value, r.source_message_id]), [['Лейкоциты', '5.40', first.id], ['Гемоглобин', '128', first.id]],
+    'черновик не тронут ни одной строкой');
+  assert.deepEqual(tray(db).map((r) => r.id), [m.id]);
+  const out = lisMessageAttach(db, { id: m.id, visit_service_id: 123 }, LAB);
+  assert.equal(out.status, 'applied', out.detail);
+  assert.deepEqual(results(db).map((r) => [r.parameter, r.value]), [['Лейкоциты', '14.20'], ['Гемоглобин', '146']], 'человек принял новые значения');
+  assert.ok(msgRow(db, m.id).resolved_at, 'строка «повтор» разобрана');
+  assert.deepEqual(tray(db), []);
+  db.close();
+});
+
+test('N1: то же сообщение ещё раз (прибор не получил ACK) — повторная передача: ничего не меняется, в лоток не идёт', () => {
+  const db = fresh();
+  ingestMessage(db, BC53('LAB-000123'), '10.0.0.9', 1);
+  const before = results(db).map((r) => [r.value, r.entered_at, r.source_message_id]);
+  ingestMessage(db, BC53('LAB-000123', { wbc: '5.4', id: 2 }), '10.0.0.9', 1);   // «5.4» и «5.40» — одно число
+  const m = message(db);
+  assert.equal(m.status, 'applied', m.detail);
+  assert.match(m.detail, /^повторная передача: 6690-2\^WBC\^LN, 718-7\^HGB\^LN/);
+  assert.deepEqual(results(db).map((r) => [r.value, r.entered_at, r.source_message_id]), before, 'ничего не изменилось');
+  assert.deepEqual(tray(db), []);
+  db.close();
+});
+
+test('N1: записанное не меняется, а пустая строка бланка заполняется — принято', () => {
+  const db = fresh();
+  ingestMessage(db, BC53('LAB-000123', { hgb: null }), '10.0.0.9', 1);
+  const first = message(db);
+  assert.equal(first.detail, 'не пришли: Гемоглобин (HGB); не использованы: 08001^Take Mode^99MRC');
+  ingestMessage(db, BC53('LAB-000123', { id: 2 }), '10.0.0.9', 1);
+  const m = message(db);
+  assert.equal(m.status, 'applied', m.detail);
+  assert.deepEqual(results(db).map((r) => [r.parameter, r.value, r.source_message_id]), [['Лейкоциты', '5.40', first.id], ['Гемоглобин', '128', m.id]]);
+  db.close();
+});
+
+// ── N2 — найденный, но не добавленный прибор в бланки не пишет ──────────────
+
+test('N2: найденный, но не добавленный прибор (added = 0) в бланк не пишет — и как «та же модель» (приёмка BC-5300 N2, проба H)', () => {
+  const db = fresh();
+  db.prepare("UPDATE lab_devices SET host = '10.0.0.5' WHERE id = 1").run();   // добавленный BC-5300 — на своём адресе
+  const found = ensureDevice(db, { sendingApp: 'BC-5300', sendingFacility: 'Mindray', peer: '10.0.0.55', port: 2575 }).device;
+  assert.deepEqual([found.added, found.profile], [0, 'mindray-bc-5300'], 'находка той же модели, ещё не добавлена');
+  ingestMessage(db, BC53('LAB-000123'), '10.0.0.55', found.id);
+  const m = message(db);
+  assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['unmatched', 123, 'LAB-000123'], 'этикетка LAB- — заказ назван, как у прочих отказов');
+  assert.equal(m.detail, 'прибор ещё не добавлен — «Анализаторы» → «Добавить прибор» → «Найдены в сети» → «Добавить»');
+  assert.deepEqual(results(db), [], 'бланк пациента не тронут');
+  // «Привязать» до «Добавить» (приём с номером человека) — тоже нет: модель
+  // находки — ещё догадка.
+  ingestMessage(db, m.raw, '10.0.0.55', found.id, { touch: false, sampleIdOverride: 123 });
+  const held = message(db);
+  assert.deepEqual([held.status, held.visit_service_id, results(db).length], ['unmatched', 123, 0]);
+  // Голый номер находки заказ не привязывает (номер прочитан проводом догадки).
+  ingestMessage(db, BC53('000123', { id: 3 }), '10.0.0.55', found.id);
+  assert.deepEqual([message(db).visit_service_id, message(db).detail], [null, m.detail]);
+  const bare = message(db);
+  // «Добавить» с моделью (lis_device_add) — дальше как у добавленного; та же
+  // проба ещё раз — в бланке, и строки «не добавлен» этой пробы закрываются (п. 5).
+  db.prepare('UPDATE lab_devices SET added = 1, model_confirmed = 1 WHERE id = ?').run(found.id);
+  ingestMessage(db, BC53('LAB-000123', { id: 2 }), '10.0.0.55', found.id);
+  const done = message(db);
+  assert.equal(done.status, 'applied', done.detail);
+  assert.equal(results(db).length, 2);
+  for (const row of [m, held]) {
+    assert.ok(msgRow(db, row.id).resolved_at, 'строка «не добавлен» этой пробы закрыта: № ' + row.id);
+    assert.match(msgRow(db, row.id).detail, new RegExp('закрыто: бланк заказа № 123 заполнен сообщением № ' + done.id + '$'));
+  }
+  assert.equal(msgRow(db, bare.id).resolved_at, null, 'голый номер без заказа — остаётся человеку');
+  db.close();
+});
+
+// ── п. 5 — устаревшие строки лотка закрываются, когда заказ заполнен ────────
+
+test('п. 5: проба до настройки («панель … не привязана к анализатору») закрывается, когда та же проба после настройки заполнила бланк', () => {
+  const db = fresh();
+  db.prepare('UPDATE lab_panels SET device_id = NULL WHERE id = 5').run();
+  ingestMessage(db, BC53('LAB-000123'), '10.0.0.9', 1);
+  const pre = message(db);
+  assert.equal(pre.detail, 'панель «ОАК» не привязана к анализатору');
+  db.prepare('UPDATE lab_panels SET device_id = 1 WHERE id = 5').run();
+  ingestMessage(db, BC53('LAB-000123', { id: 2 }), '10.0.0.9', 1);
+  const done = message(db);
+  assert.equal(done.status, 'applied', done.detail);
+  const after = msgRow(db, pre.id);
+  assert.ok(after.resolved_at, 'строка до настройки снята с лотка');
+  assert.equal(after.status, 'unmapped', 'статус — как был: строку закрыла проба, а не человек');
+  assert.equal(after.detail, 'панель «ОАК» не привязана к анализатору; закрыто: бланк заказа № 123 заполнен сообщением № ' + done.id);
+  assert.deepEqual(tray(db), []);
+  db.close();
+});
+
+test('п. 5: частичная отправка CL-900i («Отправить незавершенные пробы») закрывается полной', () => {
+  const db = chem({ profile: 'mindray-cl-900i', lines: [['TSH', 'ТТГ', 'TSH'], ['FT4', 'Т4 свободный', 'FT4']] });
+  ingestMessage(db, CLT('LAB-000123', [['TSH', '2.350000']]), '10.0.0.43', 1);
+  const part = message(db);
+  assert.equal(part.detail, 'не пришли: Т4 свободный (FT4)');
+  ingestMessage(db, CLT('LAB-000123', [['TSH', '2.350000'], ['FT4', '15.200000']], { id: 32 }), '10.0.0.43', 1);
+  const full = message(db);
+  assert.equal(full.status, 'applied', full.detail);
+  assert.equal(msgRow(db, part.id).detail, 'не пришли: Т4 свободный (FT4); закрыто: бланк заказа № 123 заполнен сообщением № ' + full.id);
+  assert.ok(msgRow(db, part.id).resolved_at);
+  assert.deepEqual(tray(db), []);
+  db.close();
+});
+
+test('п. 5 и D3: частичная отправка, легшая в другую услугу визита, закрывается, когда пробирка пришла целиком', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный']] });
+  ingestMessage(db, CLT('LAB-000301', [['FT4', '15.200000']]), '10.0.0.43', 1);   // ТТГ ещё не посчитан
+  const part = message(db);
+  assert.equal(part.status, 'unmapped');
+  assert.equal(part.detail, 'заказ № 301 «ТТГ»: не пришли: ТТГ (TSH); заказ № 302 «Т4 свободный»: принято');
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']], { id: 32 }), '10.0.0.43', 1);
+  const full = message(db);
+  assert.equal(full.status, 'applied', full.detail);
+  assert.ok(msgRow(db, part.id).resolved_at, 'всё, что говорила ранняя строка, теперь в бланках');
+  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.35' }, { 'Т4 свободный': '15.2' }]);
+  assert.deepEqual(tray(db), []);
+  db.close();
+});
+
+test('N1 и D3: значение прибора в другой услуге визита меняется — в неё не пишется ничего, проба в лотке; заказ пробирки заполнен', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный']] });
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source) VALUES (302, 'Т4 свободный', '14.1', 'analyzer')").run();
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']]), '10.0.0.43', 1);
+  const m = message(db);
+  assert.equal(m.status, 'unmapped');
+  assert.equal(m.detail, 'заказ № 301 «ТТГ»: принято; заказ № 302 «Т4 свободный»: повтор: значения отличаются от уже записанных'
+    + ' (Т4 свободный 14.1 → 15.2) — проверьте пробу; принять новые значения — «Привязать»');
+  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.35' }, { 'Т4 свободный': '14.1' }]);
+  assert.deepEqual(JSON.parse(m.disputes), [{ code: 'FT4', a: '14.1', b: '15.2' }]);
+  db.close();
+});
+
+test('п. 5: не закрываются — «повтор», строка другого заказа, другие значения, другой прибор', () => {
+  // «повтор» (N1): спор разбирает человек.
+  const a = fresh();
+  ingestMessage(a, BC53('LAB-000123'), '10.0.0.9', 1);
+  ingestMessage(a, BC53('LAB-000123', { wbc: '14.20', id: 2 }), '10.0.0.9', 1);
+  const held = message(a);
+  ingestMessage(a, BC53('LAB-000123', { id: 3 }), '10.0.0.9', 1);
+  assert.equal(message(a).status, 'applied');
+  assert.equal(msgRow(a, held.id).resolved_at, null, '«повтор» остаётся в лотке');
+  a.close();
+
+  // Строка другого заказа (другой пациент) — его заказ не заполнен.
+  const b = fresh();
+  b.prepare("INSERT INTO patients (id, full_name) VALUES (4,'Петров')").run();
+  b.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (56,4,'2026-09-10T09:00:00Z','scheduled')").run();
+  b.prepare("INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (124,56,9,'in_progress')").run();
+  ingestMessage(b, BC53('LAB-000124', { hgb: null }), '10.0.0.9', 1);
+  const other = message(b);
+  ingestMessage(b, BC53('LAB-000123'), '10.0.0.9', 1);
+  assert.equal(msgRow(b, other.id).resolved_at, null, 'строка заказа 124 — не заказа 123');
+  b.close();
+
+  // До настройки пришли другие значения (другой прогон) — человек сверит сам.
+  const c = fresh();
+  c.prepare('UPDATE lab_panels SET device_id = NULL WHERE id = 5').run();
+  ingestMessage(c, BC53('LAB-000123', { wbc: '6.10', hgb: '140' }), '10.0.0.9', 1);
+  const pre = message(c);
+  c.prepare('UPDATE lab_panels SET device_id = 1 WHERE id = 5').run();
+  ingestMessage(c, BC53('LAB-000123', { id: 2 }), '10.0.0.9', 1);
+  assert.equal(message(c).status, 'applied');
+  assert.equal(msgRow(c, pre.id).resolved_at, null, 'значения ранней строки не те, что в бланке');
+  c.close();
+
+  // Строка другого прибора (второй BC-5300) — «того же прибора» нет.
+  const d = fresh();
+  d.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Гематология 2','mindray-bc-5300')").run();
+  ingestMessage(d, BC53('LAB-000123', { hgb: null }), '10.0.0.12', 2);
+  const second = message(d);
+  ingestMessage(d, BC53('LAB-000123'), '10.0.0.9', 1);
+  assert.equal(message(d).status, 'applied');
+  assert.equal(msgRow(d, second.id).resolved_at, null, 'строка второго прибора не закрывается первым');
+  d.close();
+});
+
+// ── п. 6 — контроль качества к сопоставлению с пациентом не доходит ─────────
+
+test('п. 6: контроль BS-200 (MSH-16 = 2, номер теста «7» в OBR-2), поданный в приём напрямую и с номером человека, — служебная строка; бланки не тронуты', () => {
+  const db = chem({ lines: [['GLU', 'Глюкоза', '7']] });
+  db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (7,55,9,'queued')").run();
+  // Приёмка BS-200 T7 — вид руководства: MSH + OBR, OBR-2 — номер теста.
+  const qc = ['MSH|^~\\&|Mindray|BS-200|||20261006124717||ORU^R01|18|P|2.3.1||||2||ASCII|||',
+    'OBR|1|7|Glucose|Mindray^BS-200||20261006124717|||||||QC-N1|1111|20271231000000||M|5.000000|0.250000|5.10295|mmol/L|||||||||||||||||||||||||||'].join('\r');
+  for (const opts of [{}, { touch: false, sampleIdOverride: 7 }]) {
+    assert.equal(ingestMessage(db, qc, '10.0.0.40', 1, opts), 'AA');
+    const m = message(db);
+    assert.deepEqual([m.kind, m.status, m.visit_service_id, !!m.resolved_at], ['qc', 'unmatched', null, true], JSON.stringify(opts));
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_results').get().c, 0);
+  db.close();
+});
+
+test('п. 6: контроль гематологии (BC-5300 X-R, MSH-11 = Q; BC-20 L-J, OBR-4 00003^LJ QCR^99MRC) — мимо сопоставления и при прямом вызове приёма', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (6,55,9,'queued'), (3,55,9,'queued')").run();
+  const xr = ['MSH|^~\\&|BC-5300|Mindray|||20081120171602||ORU^R01|1|Q|2.3.1||||||UNICODE', 'PID|1||6666666||||20080807235959',
+    'OBR|1||6|00006^XR QCR^99MRC|||20080807142518|||||||||||||||||HM||||||||Operator', 'OBX|4|NM|6690-2^WBC^LN||7.10|10*9/L|||||F'].join('\r');
+  const lj = ['MSH|^~\\&|||||20261006133432||ORU^R01|9|P|2.3.1||||||UNICODE', 'PID|1||LOT-SYN^^^^MR',
+    'OBR|1||3|00003^LJ QCR^99MRC|||20261006133432|||||||||||||||||HM||||||||Admin', 'OBX|1|NM|6690-2^WBC^LN||7.20|10*9/L||N|||F'].join('\r');
+  for (const [raw, n] of [[xr, 6], [lj, 3]]) {
+    ingestMessage(db, raw, '10.0.0.9', 1);
+    assert.deepEqual([message(db).kind, message(db).visit_service_id], ['qc', null], String(n));
+    ingestMessage(db, raw, '10.0.0.9', 1, { touch: false, sampleIdOverride: n });
+    assert.deepEqual([message(db).kind, message(db).visit_service_id], ['qc', null], n + ': и с номером человека');
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_results').get().c, 0, 'значения контроля не легли ни в один бланк');
+  db.close();
+});
+
+test('D3 и D7: заказ пробирки уже выдан — его значение не переписывается, другая услуга визита заполняется; сообщение superseded', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ', 'completed'], [302, 'Т4 свободный']] });
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, verified_at) VALUES (301, 'ТТГ', '2.1', 'analyzer', '2026-10-06T08:00:00Z')").run();
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']]), '10.0.0.43', 1);
+  const m = message(db);
+  assert.equal(m.status, 'superseded', 'новое значение к выданному бланку смотрит человек');
+  assert.equal(m.detail, 'заказ № 301 «ТТГ»: результат уже выдан; новый результат требует подтверждения человеком; заказ № 302 «Т4 свободный»: принято');
+  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.1' }, { 'Т4 свободный': '15.2' }]);
+  // Тест только своей, выданной услуги — как прежде: superseded, без журнала по заказам.
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.400000']], { id: 33 }), '10.0.0.43', 1);
+  assert.deepEqual([message(db).status, message(db).detail], ['superseded', 'результат уже выдан; новый результат требует подтверждения человеком']);
+  db.close();
+});
+
+test('п. 5: A1000 (серия) — проба до настройки закрывается, когда та же проба после настройки легла в бланк (приёмка A1000, находка T5)', () => {
+  const db = a1000Clinic();
+  db.prepare('UPDATE lab_panels SET device_id = NULL WHERE id = 5').run();
+  ingestMessage(db, A1000('4.17', 'CEX'), '10.0.0.41', 1);
+  const pre = message(db);
+  assert.match(pre.detail, /^панель «Биохимия» не привязана к анализатору$/);
+  db.prepare('UPDATE lab_panels SET device_id = 1 WHERE id = 5').run();
+  ingestMessage(db, A1000('4.17', 'CEX'), '10.0.0.41', 1);
+  const done = message(db);
+  assert.equal(done.status, 'applied', done.detail);
+  assert.equal(msgRow(db, pre.id).detail, 'панель «Биохимия» не привязана к анализатору; закрыто: бланк заказа № 123 заполнен сообщением № ' + done.id);
+  assert.ok(msgRow(db, pre.id).resolved_at);
+  assert.deepEqual(tray(db), []);
   db.close();
 });

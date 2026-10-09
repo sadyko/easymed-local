@@ -29,9 +29,30 @@ test('ключи уникальны — в lab_devices.profile лежит име
 test('BC-5300 несёт все 27 каналов со скриншота владельца', () => {
   const p = getProfile('mindray-bc-5300');
   assert.equal(p.channels.length, 27);
-  for (const code of ['WBC', 'NEU%', 'NEU#', 'RBC', 'HGB', 'PLT', 'PCT', 'RDW-SD', 'ALY%', 'LIC#']) {
+  // LIS_VENDOR_EXACT_V1 — исследовательские — со звёздочкой, как их пишет прибор (тест ниже).
+  for (const code of ['WBC', 'NEU%', 'NEU#', 'RBC', 'HGB', 'PLT', 'PCT', 'RDW-SD', '*ALY%', '*LIC#']) {
     assert.ok(p.channels.some((c) => c.code === code), 'нет канала ' + code);
   }
+});
+
+// LIS_VENDOR_EXACT_V1 — «Типовые для модели» BC-5300 — имена OBX-3.2 таблицы 10
+// руководства BC-5300/5380 (OM13, приложение C, pdf 493–495): исследовательские
+// параметры прибор пишет со звёздочкой — «26477-0^*ALY#^LN», «13046-8^*ALY%^LN»,
+// «10000^*LIC#^99MRC», «10001^*LIC%^99MRC». match.js сравнивает код строки бланка
+// с OBX-3.1 или OBX-3.2 целиком (без учёта регистра), и подтверждённые из
+// типовых «ALY#», «LIC#» не совпадали никогда: строки бланка пустые, каждая проба
+// в «Необработанных» с «не пришли: … (LIC#)» (acceptance mindray-bc-5300, T12d, N3).
+test('BC-5300: типовые коды — имена провода из табл. 10 OM13; исследовательские ALY и LIC — со звёздочкой', () => {
+  const codes = getProfile('mindray-bc-5300').channels.map((c) => c.code);
+  const table10 = ['6690-2^WBC^LN', '704-7^BAS#^LN', '706-2^BAS%^LN', '751-8^NEU#^LN', '770-8^NEU%^LN', '711-2^EOS#^LN', '713-8^EOS%^LN',
+    '731-0^LYM#^LN', '736-9^LYM%^LN', '742-7^MON#^LN', '5905-5^MON%^LN', '26477-0^*ALY#^LN', '13046-8^*ALY%^LN', '10000^*LIC#^99MRC',
+    '10001^*LIC%^99MRC', '789-8^RBC^LN', '718-7^HGB^LN', '787-2^MCV^LN', '785-6^MCH^LN', '786-4^MCHC^LN', '788-0^RDW-CV^LN',
+    '21000-5^RDW-SD^LN', '4544-3^HCT^LN', '777-3^PLT^LN', '32623-1^MPV^LN', '32207-3^PDW^LN', '10002^PCT^99MRC'];
+  assert.deepEqual([...codes].sort(), table10.map((x) => x.split('^')[1]).sort(), 'каждый типовой код — OBX-3.2 таблицы 10');
+  for (const bare of ['ALY#', 'ALY%', 'LIC#', 'LIC%']) assert.equal(findChannel('mindray-bc-5300', bare), null, bare + ' прибор не шлёт');
+  assert.equal(findChannel('mindray-bc-5300', '*aly#').code, '*ALY#');
+  // Подписи — те же, что были: звёздочка — только в коде.
+  assert.equal(findChannel('mindray-bc-5300', '*LIC%').name, 'Крупные незрелые клетки, %');
 });
 
 test('BS-240 и CL-900i несут типовые наборы — заполнены по просьбе владельца 2026-09-11', () => {
@@ -104,11 +125,40 @@ test('три профиля клиники в списке, у каждого п
 });
 
 test('прежние профили провода не называют — читаются проводом default, как раньше', () => {
-  for (const key of ['mindray-bc-20', 'mindray-bc-5300', 'mindray-bs-240', 'mindray-cl-900i', 'mindray-bc-2800', 'mindray-bc-3000-plus']) {
+  // LIS_VENDOR_EXACT_V1 — BS-240 и CL-900i ушли на mindray-chem (D2, тест ниже).
+  for (const key of ['mindray-bc-20', 'mindray-bc-5300', 'mindray-bc-2800', 'mindray-bc-3000-plus']) {
     const p = getProfile(key);
     assert.equal(p.wire, undefined, key);
     assert.ok(!p.oneTestPerMessage, key + ': серия — только у тех, кто шлёт по тесту');
   }
+});
+
+// LIS_VENDOR_EXACT_V1 — D2: BS-240 и CL-900i — химия и ИХЛА Mindray одного
+// диалекта (руководство BS-360E/BS-240Pro/BS-240E; Host Interface Manual CL):
+// номер пробирки — OBR-2 (штрихкод), OBR-3 — внутренний номер прибора, не
+// читается никогда. Прибор звонит сам. По одному сообщению на пробу со всеми
+// тестами — серии нет. Номер теста у BS-240 НЕ свой у каждого прибора
+// (codesPerInstrument опровергнут при сверке).
+test('D2: BS-240 и CL-900i — провод mindray-chem, псевдонимы, прибор звонит сам, формат документирован', async () => {
+  const { guessProfile } = await import('../discover.js');
+  const bs = getProfile('mindray-bs-240');
+  assert.deepEqual([bs.wire, bs.connect, bs.wireSource], ['mindray-chem', 'listen', 'documented']);
+  assert.deepEqual(bs.aliases, ['BS-240', 'BS-240E', 'BS-240Pro', 'BS-230']);
+  assert.ok(!bs.oneTestPerMessage, 'BS-240 шлёт пробу одним сообщением');
+  assert.ok(!bs.codesPerInstrument, 'опровергнуто при сверке');
+  const cl = getProfile('mindray-cl-900i');
+  assert.deepEqual([cl.wire, cl.connect, cl.wireSource], ['mindray-chem', 'listen', 'documented']);
+  assert.ok(cl.aliases.includes('CL-900i') && cl.aliases.includes('CL-920i') && cl.aliases.includes('CL-980i'));
+  assert.ok(!cl.oneTestPerMessage, 'CL шлёт пробу одним сообщением');
+  assert.ok(!cl.codesPerInstrument);
+  // Как прибор может назвать себя — модель узнаётся (раньше «Mindray|BS-240E» — нет).
+  for (const [app, facility, key] of [['Mindray', 'BS-240E', 'mindray-bs-240'], ['Mindray', 'BS-240Pro', 'mindray-bs-240'],
+    ['Mindray', 'BS-230', 'mindray-bs-240'], ['', 'CL-900', 'mindray-cl-900i'], ['', 'CL-960i', 'mindray-cl-900i']]) {
+    const p = guessProfile({ app, facility });
+    assert.equal(p && p.key, key, app + '|' + facility);
+  }
+  // BS-200 по-прежнему BS-200: псевдонимы BS-240 его не перехватывают.
+  assert.equal(guessProfile({ app: 'Mindray', facility: 'BS-200E' }).key, 'mindray-bs-200');
 });
 
 test('BS-200 и A1000: типового списка нет, коды — от прибора; по одному тесту в сообщении', () => {
@@ -137,7 +187,11 @@ test('BC-780: 27 каналов по документам соседних мо�
   assert.ok(!p.oneTestPerMessage);
   assert.equal(p.channels.length, 27);
   // Тот же набор CBC + 5-diff, что у BC-5300 (снят с экрана Mindray).
-  assert.deepEqual(p.channels.map((c) => c.code).sort(), getProfile('mindray-bc-5300').channels.map((c) => c.code).sort());
+  // LIS_VENDOR_EXACT_V1 — у BC-5300 исследовательские коды теперь со звёздочкой,
+  // как в его табл. 10 (тест выше); документа BC-780 нет — его коды не тронуты,
+  // набор сверяется без звёздочки.
+  const unmarked = (key) => getProfile(key).channels.map((c) => c.code.replace(/^\*/, '')).sort();
+  assert.deepEqual(unmarked('mindray-bc-780'), unmarked('mindray-bc-5300'));
   assert.equal(findChannel('mindray-bc-780', 'WBC').code, 'WBC');
   assert.equal(findChannel('mindray-bc-780', 'WBC').loinc, '6690-2', 'LOINC — подпись, не код: «6690-2^WBC^LN» ловится по имени');
   assert.equal(findChannel('mindray-bc-780', 'HGB').loinc, '718-7');
@@ -146,9 +200,63 @@ test('BC-780: 27 каналов по документам соседних мо�
 
 test('aliasesOf: у профиля без списка псевдоним — сама модель', async () => {
   const { aliasesOf } = await import('./index.js');
-  assert.deepEqual(aliasesOf(getProfile('mindray-bc-5300')), ['BC-5300']);
+  // LIS_VENDOR_EXACT_V1 — пример «без списка» — BC-20: у BC-5300 список теперь есть (тест ниже).
+  assert.deepEqual(aliasesOf(getProfile('mindray-bc-20')), ['BC-20']);
   assert.deepEqual(aliasesOf(getProfile('mindray-bs-200')), ['BS-200', 'BS-200E']);
   assert.deepEqual(aliasesOf(null), []);
+});
+
+// LIS_VENDOR_EXACT_V1 (ревью; mindray-bc-5300.md M5) — BC-5300 и BC-5380 —
+// одно приложение LIS, и MSH-3 называет любую из двух: «BC-5300 or BC-5380»
+// (руководство BC-5300/5380, приложение C, табл. 1; издание P08 пишет без
+// дефиса — «BC5300», «BC5380»). Раньше «BC-5380|Mindray» не узнавался: строка
+// без модели и ответ не гематологии, а вида химии.
+test('BC-5300: псевдонимы BC-5300, BC5300, BC-5380, BC5380 — прибор узнаётся по любому', async () => {
+  const { guessProfile } = await import('../discover.js');
+  assert.deepEqual(getProfile('mindray-bc-5300').aliases, ['BC-5300', 'BC5300', 'BC-5380', 'BC5380']);
+  for (const app of ['BC-5300', 'BC5300', 'BC-5380', 'BC5380', 'bc-5380']) {
+    assert.equal((guessProfile({ app, facility: 'Mindray' }) || {}).key, 'mindray-bc-5300', app);
+  }
+  assert.equal((guessProfile({ app: 'Mindray', facility: 'BC-5380' }) || {}).key, 'mindray-bc-5300', 'пример C.2.1 меняет поля местами');
+  assert.equal(guessProfile({ app: 'BC-5390', facility: 'Mindray' }), null, 'BC-5390 (DMU) — другая модель, по имени не угадывается');
+});
+
+// LIS_VENDOR_EXACT_V1 — BC-20 — TCP-СЕРВЕР: адреса LIS у него нет (OM20, с. 9-5),
+// он ждёт звонка на своём порту 5100 (рабочий драйвер BC-20 bc20.js звонит на
+// :5100; REPORT B1). Экран «Добавить по адресу» берёт из lis_profiles connect и
+// defaultPort — раньше там было 'listen' и 2575, и форма не ставила «Easy-Med
+// подключается к прибору сам» и не предлагала 5100 (acceptance mindray-bc-20,
+// T3; clinic-boot C20).
+test('BC-20: Easy-Med звонит прибору сам (connect «dial»), порт прибора по умолчанию — 5100', () => {
+  const p = getProfile('mindray-bc-20');
+  assert.deepEqual([p.connect, p.defaultPort], ['dial', 5100]);
+  // Прочие модели клиники звонят в Easy-Med сами — их порт по-прежнему 2575.
+  for (const key of ['mindray-bc-5300', 'mindray-bs-200', 'mindray-bs-240', 'mindray-cl-900i', 'autobio-autolumo-a1000']) {
+    assert.equal(getProfile(key).defaultPort, 2575, key);
+    assert.notEqual(getProfile(key).connect, 'dial', key);
+  }
+  const allowed = ['listen', 'dial', 'unknown', undefined];
+  for (const q of listProfiles()) assert.ok(allowed.includes(q.connect), q.key + ': connect=' + q.connect);
+});
+
+// LIS_VENDOR_EXACT_V1 — «Типовые для модели» BC-20 — имена, которые прибор
+// пишет в OBX-3.2: GRA#/GRA% он не шлёт никогда, на проводе GRAN#/GRAN%
+// («10028^GRAN#^99MRC», «10030^GRAN%^99MRC» — таблица кодов семейства, BC-3600
+// OM с. D-32/D-33; так же BC-5150 и BC-30s; analyzers\mindray-bc-20.md, M6).
+// Подтверждённая из типовых GRA# оставляла строку бланка пустой на КАЖДОЙ пробе
+// («не пришли: … (GRA#)»). RDW-SD и P-LCR — из 20 параметров BC-20 (OM20, с. B-1).
+test('BC-20: типовые коды — как пишет прибор: GRAN#/GRAN% вместо GRA#/GRA%, RDW-SD и PLCR', () => {
+  const codes = getProfile('mindray-bc-20').channels.map((c) => c.code);
+  for (const never of ['GRA#', 'GRA%']) assert.ok(!codes.includes(never), never + ' BC-20 не шлёт');
+  assert.deepEqual([...codes].sort(), ['GRAN#', 'GRAN%', 'HCT', 'HGB', 'LYM#', 'LYM%', 'MCH', 'MCHC', 'MCV', 'MID#', 'MID%',
+    'MPV', 'PCT', 'PDW', 'PLCR', 'PLT', 'RBC', 'RDW-CV', 'RDW-SD', 'WBC'], 'двадцать параметров BC-20 — именами провода');
+  // Каждое имя — то, что match.js сравнивает с OBX-3.2 (компонент 2) настоящей строки.
+  const wire = ['6690-2^WBC^LN', '731-0^LYM#^LN', '736-9^LYM%^LN', '789-8^RBC^LN', '718-7^HGB^LN', '787-2^MCV^LN', '785-6^MCH^LN',
+    '786-4^MCHC^LN', '788-0^RDW-CV^LN', '21000-5^RDW-SD^LN', '4544-3^HCT^LN', '777-3^PLT^LN', '32623-1^MPV^LN', '32207-3^PDW^LN',
+    '10002^PCT^99MRC', '10027^MID#^99MRC', '10029^MID%^99MRC', '10028^GRAN#^99MRC', '10030^GRAN%^99MRC', '10014^PLCR^99MRC'];
+  assert.deepEqual(wire.map((x) => x.split('^')[1]).sort(), [...codes].sort());
+  assert.equal(findChannel('mindray-bc-20', 'gran#').code, 'GRAN#');
+  assert.equal(findChannel('mindray-bc-20', 'GRA#'), null);
 });
 
 // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 1: у BS-200 номер теста задаёт клиника
