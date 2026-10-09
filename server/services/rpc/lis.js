@@ -18,6 +18,7 @@ import { readResult, wireFor, readEnvelope } from '../../lis/wire.js';   // LIS_
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
 import { hasAnyRole } from '../roles.js';   // ЭФФЕКТИВНЫЕ роли, как в lab-stats.js — не голая строка user.role
 import { PROXY_QUIET_PREFIX } from '../../lis/lisproxy-form.js';   // LIS_PROXY_V1
+import { PROXY_MODELS } from '../../../public/js/shared/lisproxy-models.js';   // LIS_PROXY_V1
 import { rpcT } from '../server-message.js';   // LIS_ANALYZER_LIST_V1 (ревью C2) — отказ с названиями панелей переводится
 import { today, utcDayRange } from '../domain/day.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — «сегодня» местного дня клиники
 
@@ -554,11 +555,19 @@ export function lisDeviceAdd(db, args, user) {
   if (profile && !getProfile(profile)) throw new LisError('Такой модели нет в списке — обновите страницу и выберите модель снова.');
 
   return db.transaction(() => {
-    const dev = db.prepare('SELECT id, profile, added FROM lab_devices WHERE id = ?').get(id);
+    const dev = db.prepare('SELECT id, profile, added, via FROM lab_devices WHERE id = ?').get(id);   // via: LIS_PROXY_V1
     if (!dev) throw new LisError('Прибор не найден', 404);
     if (Number(dev.added) === 1) {
       const err = new LisError('Прибор уже добавлен — меняйте его через «Изменить».', 409);
       err.code = 'already_added';   // вторая вкладка или двойное нажатие: экран перечитает список
+      throw err;
+    }
+    // LIS_PROXY_V1 (решение владельца 2026-10-09, п. 6; Р21) — прибор за LIS Proxy:
+    // прокси модель не сообщает, и через него принимаются только BS-200, BC-780 и
+    // AutoLumo A1000 — модель обязательна и одна из трёх; «общий HL7» — нет.
+    if (dev.via === 'lisproxy' && (generic || !PROXY_MODELS.includes(profile))) {
+      const err = new LisError(PROXY_MODEL_REQUIRED);
+      err.code = 'proxy_model_required';   // экран показывает отказ его словами
       throw err;
     }
     const values = { name, added: 1 };
@@ -582,3 +591,5 @@ export function lisDeviceAdd(db, args, user) {
 const MODEL_REQUIRED = 'Выберите модель анализатора: без неё Easy-Med прочитает не те поля. Нет в списке — выберите «Другой анализатор (общий HL7)».';
 // LIS_VENDOR_EXACT_V1 — N2: «Привязать» до «Добавить». Перевод — ключ словаря (i18n-strings.js): тост экрана переводит его сам.
 const NOT_ADDED = 'Прибор этого сообщения ещё не добавлен — «Добавить прибор» → «Найдены в сети» → «Добавить», затем «Привязать».';
+// LIS_PROXY_V1 — Р21: тот же текст показывает экран (lab-devices.js), один ключ словаря.
+const PROXY_MODEL_REQUIRED = 'Через LIS Proxy Easy-Med принимает только BS-200, BC-780 и AutoLumo A1000 — выберите одну из этих моделей.';

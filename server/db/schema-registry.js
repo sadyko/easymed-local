@@ -1277,7 +1277,7 @@ export const REGISTRY = {
   // Лаборатория → «Анализаторы». Принадлежность ЗДАНИЮ: в справочник филиалов
   // не едут, потому что прибор соседнего здания в нашей базе бессмыслен.
   lab_devices: {
-    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered','added','model_confirmed','sending_app','dial','sending_facility','code_epoch'] },   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер; added, model_confirmed: LIS_ANALYZER_LIST_V1 (мигр. 228); sending_app: LIS_DISCOVERY_FIX_V1 (сервер) (мигр. 229) — как прибор назвал себя сам (MSH-3), пишет только сервер, в insert/update её нет; dial, sending_facility: LIS_REAL_ANALYZERS_V1 (мигр. 233) — dial: Easy-Med подключается к прибору сам (пишет человек: «Добавить по адресу», «Изменить»); sending_facility: MSH-4, пишет только сервер, в insert/update её нет; code_epoch (ревью R6): эпоха кодов прибора — пишет только триггер адреса мигр. 233, в insert/update её нет
+    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered','added','model_confirmed','sending_app','dial','sending_facility','code_epoch','via','proxy_name','proxy_label','proxy_ip'] },   // LIS_PROXY_V1 (мигр. 239) — via, proxy_*: прибор за LIS Proxy; пишет только сервер, в insert/update их нет   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер; added, model_confirmed: LIS_ANALYZER_LIST_V1 (мигр. 228); sending_app: LIS_DISCOVERY_FIX_V1 (сервер) (мигр. 229) — как прибор назвал себя сам (MSH-3), пишет только сервер, в insert/update её нет; dial, sending_facility: LIS_REAL_ANALYZERS_V1 (мигр. 233) — dial: Easy-Med подключается к прибору сам (пишет человек: «Добавить по адресу», «Изменить»); sending_facility: MSH-4, пишет только сервер, в insert/update её нет; code_epoch (ревью R6): эпоха кодов прибора — пишет только триггер адреса мигр. 233, в insert/update её нет
     // LIS_VENDOR_EXACT_V1 — D2: вставка — это «Добавить по адресу». model_confirmed —
     // выбор «Другой анализатор (общий HL7)» той же записью (раньше — второй).
     // Новый прибор — только с моделью или с этим выбором (requireAny; onlyValues:
@@ -1298,7 +1298,7 @@ export const REGISTRY = {
              // общим правилом, и номер прогона из OBR-3 ложился в чужой заказ.
              update: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','model_confirmed','dial'] },   // model_confirmed — модель проверил человек (пометка, не правило приёма); dial: LIS_REAL_ANALYZERS_V1 — «Изменить»
              delete: { roles: LAB_SECTION_ROLES } },
-    filters: ['id','enabled','transport','profile'],
+    filters: ['id','enabled','transport','profile','via'],   // via: LIS_PROXY_V1
     embed:   {},
   },
 

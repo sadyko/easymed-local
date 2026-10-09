@@ -73,6 +73,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners, lisDeviceDelete } from './lis.js';   // LIS_INGEST_V1, LIS_MINDRAY_CODES_V1, LIS_ANALYZER_LIST_V1
 import { lisServiceCounts } from './lis.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — контроль, калибровка, запросы у прибора за сегодня
 import { lisDeviceAdd } from './lis.js';   // LIS_VENDOR_EXACT_V1 — D2: «Добавить» найденный прибор — только с моделью или «общим HL7»
+import { lisProxyGet, lisProxySet } from './lis-proxy.js';   // LIS_PROXY_V1 — карточка «LIS Proxy»
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_V1 — своя роль одним действием
 import { roleEffectiveGrants } from './roles-effective.js';   // ROLES_SAVE_TRUTH_V1 — что у роли есть сейчас
@@ -591,6 +592,8 @@ export const RPC = {
   // READ_ONLY_RPCS; async, как lis_restart.
   lis_device_delete:        (db, args, user) => lisDeviceDelete(db, args, user),
   lis_device_add:           (db, args, user) => lisDeviceAdd(db, args, user),   // LIS_VENDOR_EXACT_V1 — D2: запись, НЕ в READ_ONLY_RPCS
+  lis_proxy_get:            (db, args, user) => lisProxyGet(db, args, user),   // LIS_PROXY_V1 — чтение (gate.js)
+  lis_proxy_set:            (db, args, user) => lisProxySet(db, args, user),   // LIS_PROXY_V1 — запись, НЕ в READ_ONLY_RPCS
   lis_message_attach:       (db, args, user) => lisMessageAttach(db, args, user),
   lis_message_dismiss:      (db, args, user) => lisMessageDismiss(db, args, user),
 

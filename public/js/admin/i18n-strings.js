@@ -3,6 +3,10 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // LIS_PROXY_V1 (2026-10-09) — сообщения сервера: lis_proxy_set, lis_device_add (rpc/lis-proxy.js, rpc/lis.js)
+  "Укажите: включить или выключить LIS Proxy": {"en":"Say whether to turn LIS Proxy on or off","ru":"Укажите: включить или выключить LIS Proxy","uz":"LIS Proxy’ni yoqish yoki o‘chirishni ko‘rsating"},   // LIS_PROXY_V1
+  "Нечего менять: укажите «включить», «выключить» или «сменить ключ»": {"en":"Nothing to change: say «turn on», «turn off» or «change the key»","ru":"Нечего менять: укажите «включить», «выключить» или «сменить ключ»","uz":"O‘zgartiradigan narsa yo‘q: «yoqish», «o‘chirish» yoki «kalitni almashtirish»ni ko‘rsating"},   // LIS_PROXY_V1
+  "Через LIS Proxy Easy-Med принимает только BS-200, BC-780 и AutoLumo A1000 — выберите одну из этих моделей.": {"en":"Through LIS Proxy Easy-Med accepts only the BS-200, BC-780 and AutoLumo A1000 — choose one of these models.","ru":"Через LIS Proxy Easy-Med принимает только BS-200, BC-780 и AutoLumo A1000 — выберите одну из этих моделей.","uz":"LIS Proxy orqali Easy-Med faqat BS-200, BC-780 va AutoLumo A1000 ni qabul qiladi — shulardan birini tanlang."},   // LIS_PROXY_V1
   // LIS_PROXY_V1 (2026-10-09) — причины прибора LIS Proxy (server/lis/discover.js ensureProxyDevice)
   "LIS Proxy не прислал имя анализатора": {"en":"LIS Proxy did not send the analyzer name","ru":"LIS Proxy не прислал имя анализатора","uz":"LIS Proxy analizator nomini yubormadi"},   // LIS_PROXY_V1
   "адрес сменился": {"en":"the address changed","ru":"адрес сменился","uz":"manzil o‘zgardi"},   // LIS_PROXY_V1
