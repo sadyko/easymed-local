@@ -142,3 +142,24 @@ test('looksLikeResult: method=apiResultSave в любом регистре и к
   for (const t of ['method=apiResultSave&x=1', 'x=1&METHOD=APIRESULTSAVE', 'method[]=apiResultSave', 'method%5B%5D=apiresultsave&x']) assert.equal(looksLikeResult(t), true, t);
   for (const t of ['method=apiOrderGet', 'xmethod=apiResultSave2', '']) assert.equal(looksLikeResult(t), false, t);
 });
+
+// ── LIS_PROXY_V1 (ревью I4, I6) ────────────────────────────────────────────
+test('ревью I4: обрезка AutoLumo «-ddddddd» — только 7-значный номер без нуля впереди (этикетки от 1 000 000); «B-dddddd» — как прежде', () => {
+  assert.equal(normaliseProxyBarcode('-1234567', { autolumo: true }).barcode, 'LAB-1234567');
+  assert.equal(normaliseProxyBarcode('B-000777', { autolumo: true }).barcode, 'LAB-000777');
+  for (const raw of ['-0000777', '-0123456']) {
+    const r = normaliseProxyBarcode(raw, { autolumo: true });
+    assert.equal(r.ok, false, raw);
+    assert.ok(r.why.startsWith(PROXY_NOT_TUBE + ': ' + raw), r.why);
+  }
+});
+
+test('ревью I6: мусор — только служебные строки Mindray по списку, пусто, «*», «нет результата»; код с пробелом и текстом — значение', () => {
+  assert.equal(junkReason({ code: 'HIV Ag', res: 'Positive' }), null);
+  assert.equal(junkReason({ code: 'HIV Ag', res: '<0.10' }), null);
+  assert.equal(junkReason({ code: 'Anti HCV', res: 'Negative' }), null);
+  for (const code of ['Take Mode', 'Blood Mode', 'Test Mode', 'Ref Group', 'Remark', 'Age', 'IS', 'Qc Level',
+    'WBC Histogram. BMP', 'RBC Histogram. Left Line', 'PLT Histogram. Right Line']) {
+    assert.match(junkReason({ code, res: 'Qk1x' }), /служебная строка прибора/, code);
+  }
+});

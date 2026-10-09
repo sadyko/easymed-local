@@ -186,3 +186,30 @@ test('прибор не заведён (предел находок) — лот�
   assert.deepEqual(blank(db, 555), {});
   db.close();
 });
+
+// ── LIS_PROXY_V1 (ревью I4, I6) ────────────────────────────────────────────
+test('ревью I4: AutoLumo «-0000777» — не этикетка (7-значные номера от 1 000 000): лоток, № 777 не тронут', async () => {
+  await withClinic(async (db, app) => {
+    await post(app.url, fixture('results', 'lumo_truncated_barcode').replace('B-000777', '-0000777'));
+    const m = lastRow(db);
+    assert.deepEqual([m.status, m.visit_service_id], ['unmatched', null]);
+    assert.ok(m.detail.startsWith(PROXY_NOT_TUBE + ': -0000777'), m.detail);
+    assert.deepEqual(blank(db, 777), {});
+  });
+});
+
+test('ревью I6: «HIV Ag» = «Positive» на подтверждённой строке — значение в бланке («Отклонение»), не справка', async () => {
+  const db = freshDb();
+  seedLisProxyClinic(db);
+  db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id, device_code_confirmed_epoch)
+              VALUES (5, 'HIV', 'ВИЧ', '', 9, 'HIV Ag', 1, 1, 0)`).run();
+  const app = await startProxyApp(db, { listen });
+  try {
+    const body = 'method=apiResultSave&lisResult[name]=bs200&lisResult[host]=LAB-PC-1&lisResult[barcode]=LAB-000123'
+      + '&lisResult[code]=HIV+Ag&lisResult[R][res]=Positive&lisResult[R][unit]=&lisResult[R][norms]=&lisResult[R][flag]=N';
+    assert.equal(await (await post(app.url, body)).text(), 'Ok');
+    const m = lastRow(db);
+    assert.ok(!m.detail.startsWith(PROXY_QUIET_PREFIX), m.detail);
+    assert.deepEqual(db.prepare("SELECT value, flag FROM lab_results WHERE visit_service_id = 123 AND parameter = 'ВИЧ'").get(), { value: 'Positive', flag: 'abnormal' });
+  } finally { await app.close(); db.close(); }
+});

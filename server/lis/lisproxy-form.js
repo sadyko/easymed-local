@@ -15,7 +15,12 @@ export const PROXY_QUIET_PREFIX = 'LIS Proxy, справка: ';
 /** Начало причины «не номер пробирки» (лоток; ingest.js — та же стена у строк LIS Proxy). */
 export const PROXY_NOT_TUBE = 'LIS Proxy прислал не штрихкод пробирки';
 /** Служебные строки Mindray, которые прокси шлёт как значения (BC-20/BC-5300: Take Mode, Test Mode; BC-780: IS). Сравнение — без учёта регистра. */
-export const PROXY_SERVICE_CODES = Object.freeze(['TAKE MODE', 'TEST MODE', 'BLOOD MODE', 'REF GROUP', 'REMARK', 'AGE', 'IS']);
+export const PROXY_SERVICE_CODES = Object.freeze(['TAKE MODE', 'TEST MODE', 'BLOOD MODE', 'REF GROUP', 'REMARK', 'AGE', 'IS', 'QC LEVEL']);   // QC LEVEL: ревью I6 (05001^Qc Level^99MRC)
+/**
+ * LIS_PROXY_V1 (ревью I6) — гистограммы Mindray (15001^WBC Histogram. Left Line^99MRC,
+ * 15008^WBC Histogram. BMP^99MRC — картинка base64…): данные прибора, не тест клиники.
+ */
+const PROXY_SERVICE_FAMILIES = /^(WBC|RBC|PLT) HISTOGRAM\b/i;
 
 const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
 const SIX_DECIMALS = /^-?\d+\.\d{6}$/;
@@ -57,8 +62,10 @@ export function junkReason({ code, res } = {}) {
   const c = t(code);
   const v = t(res);
   if (!v || /^\*+$/.test(v)) return 'пустое значение' + (c ? ' («' + c + '»)' : '');
-  if (PROXY_SERVICE_CODES.includes(c.toUpperCase())) return 'служебная строка прибора «' + c + '»';
-  if (/\s/.test(c) && !PLAIN_NUMBER.test(decimalPoint(v))) return 'служебная строка прибора «' + c + '»';
+  // LIS_PROXY_V1 (ревью I6) — служебная строка — только по списку Mindray. Прежнее
+  // «код с пробелом и значение не число» прятало настоящие ответы («HIV Ag» =
+  // «Positive») в разрешённую справку: их не видел никто.
+  if (PROXY_SERVICE_CODES.includes(c.toUpperCase()) || PROXY_SERVICE_FAMILIES.test(c)) return 'служебная строка прибора «' + c + '»';
   if (isNoResult(v)) return 'прибор: нет результата «' + v + '»' + (c ? ' (' + c + ')' : '');
   return null;
 }
@@ -66,7 +73,10 @@ export function junkReason({ code, res } = {}) {
 const LAB_LABEL = /^LAB-(\d{6,})$/i;
 // AutoLumo (тип AsServerAutoLumoA1860ASTM) отдаёт только последние 8 знаков
 // номера: «LAB-000777» → «B-000777», «LAB-1234567» → «-1234567».
-const AUTOLUMO_CUT = [/^B-(\d{6})$/i, /^-(\d{7})$/];
+// LIS_PROXY_V1 (ревью I4) — семь цифр бывают у этикетки только без нуля впереди
+// (номер от 1 000 000; меньший дополняется до шести): «-0000777» — хвост чужого
+// номера («QC-0000777», «2026-0000777»), не наша этикетка.
+const AUTOLUMO_CUT = [/^B-(\d{6})$/i, /^-([1-9]\d{6})$/];
 
 /**
  * Номер пробирки из поля barcode прокси (раздел 3.5).
