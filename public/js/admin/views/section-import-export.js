@@ -307,14 +307,18 @@ const IMPORT_CONFIGS = {
             { key: 'кол-во в ед. выдачи', target: 'consumption_factor', coerce: 'num', aliases: ['consumption_factor'],
               hint: 'Сколько базовых единиц в единице выдачи (обычно 1).' },
             // PROD_IMPORT_FULL_V1 — the supplier block, as in the product editor.
+            // CLINIC_API_FIX_V1 (ревью 3) — четыре колонки поставщика, пока привязка
+            // поставщиков выключена (SUPPLIER_LINK_ON, решение владельца), —
+            // просто текст: значение выбрасывается, поэтому ни проверки числа, ни
+            // отказа строке. Подсказки шаблона говорят это честно.
             { key: 'поставщик',     capture: 'supplier', aliases: ['supplier'],
-              hint: 'Поставщик товара — связка создаётся автоматически; неизвестный поставщик будет создан.' },
-            { key: 'цена закупки',  capture: 'supPrice', captureNum: true, money: true, aliases: ['закупочная цена'],
-              hint: 'Цена закупки у этого поставщика (сум).' },
+              hint: 'Поставщик — пока не используется: из файла поставщики не создаются и к товару не привязываются.' },
+            { key: 'цена закупки',  capture: 'supPrice', aliases: ['закупочная цена'],
+              hint: 'Цена закупки у поставщика — пока не используется: из файла не сохраняется.' },
             { key: 'ед. закупки',   capture: 'supUnit', aliases: ['единица закупки'],
-              hint: 'В чём закупаете у поставщика (уп, кор…). Пусто — как базовая.' },
-            { key: 'кол-во в ед. закупки', capture: 'supPack', captureNum: true, aliases: ['кратность закупки'],
-              hint: 'Сколько базовых единиц в единице закупки — напр. 10.' },
+              hint: 'Единица закупки у поставщика — пока не используется: из файла не сохраняется.' },
+            { key: 'кол-во в ед. закупки', capture: 'supPack', aliases: ['кратность закупки'],
+              hint: 'Сколько базовых единиц в единице закупки — пока не используется: из файла не сохраняется.' },
         ],
         sampleRows: [
             { 'товар': 'Система трансфузионная стерильная', 'код': '10329', 'категория': 'Медицинские расходные материалы', 'ед.изм': 'шт', 'базовая ед.': 'шт', 'ед. выдачи': 'шт', 'кол-во в ед. выдачи': 1, 'цена': 3210, 'икпу': '03003001018000000', 'остаток': 50,  'себестоимость': 3000, 'поставщик': 'Aventus',  'цена закупки': 3000, 'ед. закупки': 'уп', 'кол-во в ед. закупки': 10 },
@@ -965,6 +969,12 @@ function getCfg(sectionKey) {
     return autoConfigFor(sectionKey);
 }
 
+/** CLINIC_API_FIX_V1 (ревью 3) — подсказки колонок раздела { ключ: подсказка } (для тестов). */
+export function importColumnHints(sectionKey) {
+    const cfg = getCfg(sectionKey);
+    return cfg ? Object.fromEntries(cfg.columns.filter(c => c.hint).map(c => [c.key, c.hint])) : {};
+}
+
 /** FULL_EXPORT_V1 — the column keys a section's Excel file carries (for tests and screens). */
 export function exportColumnKeys(sectionKey) {
     const cfg = getCfg(sectionKey);
@@ -1073,7 +1083,7 @@ export async function downloadSectionSample(sectionKey) {
     // Per-header cell comments with the per-column hint.
     tCols.forEach((col, i) => {
         const addr = XLSX.utils.encode_cell({ r: 0, c: i });
-        if (ws[addr] && col.hint) ws[addr].c = [{ a: 'Easy-Med', t: col.hint }];
+        if (ws[addr] && col.hint) ws[addr].c = [{ a: 'Easy-Med', t: tr(col.hint) }];   // CLINIC_API_FIX_V1 — на языке интерфейса, если подсказка есть в словаре
     });
 
     const wb = XLSX.utils.book_new();

@@ -30,7 +30,8 @@ globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
 const XLSX = await import(new URL('../../vendor/xlsx-0.20.3.js', import.meta.url).href);
-const { buildImportRow, readSheetRows } = await import('../views/section-import-export.js');
+const { buildImportRow, readSheetRows, importColumnHints } = await import('../views/section-import-export.js');
+const { STRINGS } = await import('../i18n-strings.js');
 
 // Строка со ВСЕМИ колонками шаблона «Товары» — заголовки как в шаблоне.
 const HEADER = ['Товар', 'Код', 'Категория', 'Ед.изм', 'Базовая ед.', 'Ед. выдачи', 'Кол-во в ед. выдачи', 'Цена', 'ИКПУ',
@@ -52,9 +53,10 @@ function check(row) {
     assert.strictEqual(c.qty, 77);
     assert.strictEqual(c.cost, 1145, 'себестоимость');
     assert.strictEqual(c.supplier, 'Aventus', 'поставщик — текст, а не null');
-    assert.strictEqual(c.supPrice, 1145, 'цена закупки из файла пропала');
+    // Колонки поставщика, пока привязка выключена, — просто текст (ревью 3).
+    assert.strictEqual(c.supPrice, '1 145', 'цена закупки из файла пропала');
     assert.strictEqual(c.supUnit, 'кор', 'единица закупки — текст из файла');
-    assert.strictEqual(c.supPack, 40, 'кол-во в единице закупки из файла пропало');
+    assert.strictEqual(c.supPack, '40', 'кол-во в единице закупки из файла пропало');
 }
 
 test('строка «Товаров» со всеми колонками шаблона: единицы, кратность, себестоимость и закупка — в строке', () => {
@@ -72,7 +74,7 @@ test('то же через настоящий .xlsx и путь чтения о�
 
 test('колонки с пробелом в названии ищутся и по синониму («кратность закупки», «единица закупки»)', () => {
     const row = buildImportRow('procurement_items', { 'Товар': 'Шприц', 'Цена': 1200, 'Кратность закупки': '10', 'Единица закупки': ' уп ' });
-    assert.strictEqual(row.captures.supPack, 10);
+    assert.strictEqual(row.captures.supPack, '10');
     assert.strictEqual(row.captures.supUnit, 'уп');
 });
 
@@ -80,4 +82,26 @@ test('привязка поставщиков из файла выключена
     const src = fs.readFileSync(new URL('../views/section-import-export.js', import.meta.url), 'utf8');
     assert.match(src, /const SUPPLIER_LINK_ON = false;/, 'нет явного выключателя привязки поставщиков');
     assert.match(src, /if \(SUPPLIER_LINK_ON\) \{\s*try \{ supMsg = await linkSuppliers\(\); \}/, 'linkSuppliers зовётся без выключателя');
+});
+
+// CLINIC_API_FIX_V1 (ревью 3) — ОТБРАСЫВАЕМЫЕ КОЛОНКИ НЕ ОТКАЗЫВАЮТ СТРОКАМ.
+// «Цена закупки» была помечена деньгами (0414e58), и «договорная» не ввозила
+// товар, хотя значение этой колонки выбрасывается: привязка поставщиков
+// выключена. Колонки поставщика — просто текст, без проверок; подсказки
+// шаблона говорят честно: колонка пока не используется.
+test('«цена закупки» и «кол-во в ед. закупки» не числом — товар ввозится без замечаний', () => {
+    const row = buildImportRow('procurement_items', { 'Товар': 'Шприц', 'Цена': 1200, 'Цена закупки': 'договорная', 'Кол-во в ед. закупки': 'коробка', 'Поставщик': 'Aventus' });
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+    assert.deepEqual(row.notes, []);
+});
+
+test('подсказки шаблона «Товары» для колонок поставщика: «пока не используется», на трёх языках', () => {
+    const hints = importColumnHints('procurement_items');
+    for (const k of ['поставщик', 'цена закупки', 'ед. закупки', 'кол-во в ед. закупки']) {
+        const hint = hints[k];
+        assert.ok(hint && hint.includes('пока не используется'), k + ': ' + hint);
+        assert.ok(!/создаётся автоматически|будет создан/.test(hint), k + ': подсказка обещает то, чего нет: ' + hint);
+        const e = STRINGS[hint];
+        assert.ok(e && e.uz && e.en, k + ': подсказке нужен перевод');
+    }
 });
