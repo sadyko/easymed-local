@@ -55,6 +55,8 @@ import { readEnsureVisit } from '../ensure-visit-answer.js';
 // CRM_DEDUP_SEARCH_TASKS_V1 — задачи на карточке заявки (миграция 148): блок в
 // окне заявки, метка «задача: …» на карточке доски.
 import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso } from './crm-tasks.js';
+// CRM_UNIFY_V1 — вид «Задачи»: третий вид раздела (Канбан / Список / Задачи).
+import { renderTasksView } from './crm-tasks-view.js';
 // CRM_MULTI_SOURCE_V1 — несколько источников у заявки (миграция 231). Правило
 // чтения одно на экран и сервер: sources, иначе [source], иначе ['other'].
 import { leadSources, toggleLeadSource, leadHasAnySource, sourceTally, MAX_LEAD_SOURCES } from '../crm-sources.js';
@@ -176,7 +178,10 @@ const state = { view: 'kanban', filter: 'all', search: '', rows: [], sources: []
                 openTasks: new Map(),
                 // CRM_HEAD_MERGE_TAGS_V1 — фильтр «Метки» ('' = все) и метки
                 // каждой заявки: Map(String(request_id) → [tag_key]).
-                tag: '', leadTags: new Map() };
+                tag: '', leadTags: new Map(),
+                // CRM_UNIFY_V1 — вид «Задачи»: чьи задачи ('me' | 'all' | 'none' |
+                // id сотрудника) и сотрудники для выбора (только руководителю).
+                taskWho: 'me', taskStaff: null };
 let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний ответ поиска побеждает
 
 // Период считается по created_at — «когда обратились», а не когда записаны:
@@ -465,7 +470,10 @@ async function paint() {
 
     const viewBtn = (key, label, icon) => h('button', {
         class: 'btn btn-sm ' + (state.view === key ? 'btn-primary' : 'btn-outline'), type: 'button',
-        onclick: () => { state.view = key; paint(); },
+        'data-crm-view': key,   // CRM_UNIFY_V1
+        'aria-pressed': state.view === key ? 'true' : 'false',
+        // CRM_UNIFY_V1 — переключатель вида открывает «Задачи» на «Мои» (Р18).
+        onclick: () => { state.view = key; if (key === 'tasks') state.taskWho = 'me'; paint(); },
     }, Icon(icon, { size: 13 }), ' ' + label);
 
     // CRM_FILTERS_V1 — поиск СЛЕВА и крупнее: для регистратуры это основной
@@ -527,6 +535,7 @@ async function paint() {
         h('div', { class: 'page-head-actions', style: { flexWrap: 'wrap' } },
             viewBtn('kanban', 'Канбан', 'Grid'),
             viewBtn('list', 'Список', 'Layers'),
+            viewBtn('tasks', 'Задачи', 'Clock'),   // CRM_UNIFY_V1
             // CUSTDEV_V1 — рабочее место обзвона. Отдельное право: заявки ведёт
             // регистратура, а оценки о врачах и кассирах читать ей незачем.
             canView('custdev') ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => openCustDev() },
@@ -546,9 +555,13 @@ async function paint() {
     // Раньше поиск занимал строку целиком, «Источник» шёл второй строкой, а
     // «Период» третьей: три яруса на то, что помещается в один, и доска
     // начиналась ниже сгиба экрана.
-    root.appendChild(h('div', { style: {
-        display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px',
-    } }, searchBox, filtersEl));
+    // CRM_UNIFY_V1 — в виде «Задачи» ряда фильтров доски нет: поиск, источник,
+    // период и метки сужают карточки, а не задачи.
+    if (state.view !== 'tasks') {
+        root.appendChild(h('div', { style: {
+            display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px',
+        } }, searchBox, filtersEl));
+    }
     paintFilters();
 
     const bodyWrap = h('div', { 'data-crm-body': '' });
@@ -713,7 +726,44 @@ async function paint() {
         const wrap = root.querySelector('[data-crm-body]');
         if (!wrap) return;
         clear(wrap);
+        if (state.view === 'tasks') { paintTasks(wrap); return; }   // CRM_UNIFY_V1
         if (state.view === 'kanban') wrap.appendChild(kanban()); else wrap.appendChild(listTable());
+    }
+
+    // CRM_UNIFY_V1 — ВИД «ЗАДАЧИ» (views/crm-tasks-view.js). По умолчанию —
+    // мои; администратор и руководитель (crm.all) выбирают оператора. Строка
+    // открывает карточку: из загруженных, иначе с сервера — под тем же
+    // ограничением видимости, что у доски.
+    async function paintTasks(wrap) {
+        const canPick = canSeeAllLeads();
+        if (canPick && !state.taskStaff) state.taskStaff = await loadTaskStaff();
+        const box = h('div', { 'data-crm-tasks-wrap': '' });
+        wrap.appendChild(box);
+        await renderTasksView(box, {
+            who: state.taskWho, me: selfUserId(), canPick, staff: canPick ? (state.taskStaff || []) : [],
+            onOpen: (id) => openLeadById(id),
+            onWho: (w) => { state.taskWho = w; paintBody(); },
+            onChanged: () => {
+                try { if (window.easymed && window.easymed.refreshNav) window.easymed.refreshNav(); } catch (e) { /* подсказка */ }
+                paintBody();
+            },
+        });
+    }
+    async function loadTaskStaff() {
+        const { data, error } = await supabase.from('users').select('id, full_name, role, extra_roles')
+            .eq('is_active', 1).order('full_name');
+        return error ? [] : boardStaff(data || []).map((p) => ({ id: p.id, full_name: p.full_name }));
+    }
+    async function openLeadById(id) {
+        let r = state.rows.find((x) => String(x.id) === String(id)) || null;
+        if (!r) {
+            const { data } = await supabase.from('crm_requests')
+                .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
+                .eq('id', id).maybeSingle();
+            r = data || null;
+        }
+        if (!r) { toast('Карточка у другого оператора — открыть её может он или руководитель.', 'fail'); return; }
+        requestModal(r);
     }
 
     // ---------------- КАНБАН ----------------

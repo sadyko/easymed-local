@@ -53,6 +53,27 @@ export function nearestOpenTasks(tasks) {
 }
 const dueRank = (t) => (t.due_at ? String(t.due_at) : '￿');
 
+// CRM_UNIFY_V1 — ОДНО ПРАВИЛО ДЛЯ СПИСКА И СЧЁТЧИКА: чьи открытые задачи (Р18).
+// Вид «Задачи» (crm-tasks-view.js) и красный счётчик меню строят запрос здесь.
+// Задача приходит с карточкой (embed crm_requests): у невидимой карточки сервер
+// отдаёт пустую связь — строка вида «Карточка у другого оператора».
+export const TASK_LIST_SELECT = 'id, request_id, text, due_at, assignee_id, done_at, users(full_name), crm_requests(id, full_name, phone, status, assigned_to)';
+/**
+ * @param {object} db  клиент /api/db
+ * @param {object} o
+ * @param {'me'|'all'|'none'|string|number} o.who  мои / все / без ответственного / сотрудник
+ * @param {number|null} o.me
+ * @param {string} [o.columns]
+ * @param {boolean} [o.count]  только число (count: 'exact', без строк)
+ */
+export function taskQuery(db, { who = 'me', me = null, columns = TASK_LIST_SELECT, count = false } = {}) {
+    let q = db.from('crm_tasks').select(columns, count ? { count: 'exact', head: true } : undefined).is('done_at', null);
+    if (who === 'me') q = q.eq('assignee_id', me == null ? 0 : Number(me));
+    else if (who === 'none') q = q.is('assignee_id', null);
+    else if (who !== 'all' && Number(who) > 0) q = q.eq('assignee_id', Number(who));
+    return q;
+}
+
 /**
  * Сколько просроченных задач показать у пункта CRM в меню. Оператору — только
  * назначенные ему, администратору — все. null — число не узнать (нет права на

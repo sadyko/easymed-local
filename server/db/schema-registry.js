@@ -123,7 +123,12 @@ export const REGISTRY = {
              update: { roles: ['admin','registrar','callcenter'], columns: ['text','due_at','assignee_id','done_at'] },
              delete: { roles: ['admin'] } },
     filters: ['id','request_id','assignee_id','done_at','due_at'],
-    embed:   { users: { table:'users', fk:'assignee_id', columns:['id','full_name'] } },
+    embed:   { users: { table:'users', fk:'assignee_id', columns:['id','full_name'] },
+               // CRM_UNIFY_V1 — вид «Задачи» (views/crm-tasks-view.js): карточка
+               // задачи. Ограничение заявок (своя или ничья; всем — администратору
+               // и crm.all) ложится в JOIN, поэтому у задачи на невидимой карточке
+               // (старое поручение, orOwn) связь приходит пустой.
+               crm_requests: { table:'crm_requests', fk:'request_id', columns:['id','full_name','phone','status','assigned_to'] } },
     // Ревью I1: задача — часть заявки и видна ровно тогда, когда видна её
     // заявка (CRM_OWNERSHIP_V1 родителя: своя или ничья, администратору всё).
     // Задача, назначенная оператору Б на заявке оператора А, Б НЕ видна: чужая

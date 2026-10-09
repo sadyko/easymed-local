@@ -386,3 +386,29 @@ test('crm_task_assignees: на карточке А — А, админ и рук�
 test('crm_task_assignees — чтение: работает и у клиники с просроченной лицензией', () => {
   assert.equal(isReadOnlyRpc('crm_task_assignees'), true);
 });
+
+// CRM_UNIFY_V1 (задача 12) — вид «Задачи» читает задачу вместе с её карточкой
+// (embed crm_requests). Ограничение заявок ложится в JOIN: задачу на карточке,
+// которую человек не видит (старое поручение, orOwn), он получает, а карточку —
+// пустой. Иначе через задачу раскрывалась бы чужая карточка.
+test('crm_tasks + crm_requests(...): задача видна исполнителю, а карточка чужого оператора приходит пустой', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { assigned: 3, name: 'Карточка А' });
+    const own = addLead(t.db, { assigned: 4, name: 'Карточка Б' });
+    task(t.db, rid, 4, 'Старое поручение Б');
+    task(t.db, own, 4, 'Своя задача Б');
+    // ровно TASK_LIST_SELECT вида (public/js/admin/views/crm-tasks.js; его сверяет crm-tasks-view.test.mjs)
+    const cols = 'id, request_id, text, due_at, assignee_id, done_at, users(full_name), crm_requests(id, full_name, phone, status, assigned_to)';
+    const r = await t.dbq('cc2', { table: 'crm_tasks', op: 'select', columns: cols, filters: [{ col: 'done_at', op: 'is', val: null }] });
+    assert.equal(r.status, 200, r.text);
+    const byText = Object.fromEntries(r.json.data.map((x) => [x.text, x]));
+    assert.equal(r.json.data.length, 2);
+    assert.equal(byText['Старое поручение Б'].crm_requests, null, 'через задачу раскрыта чужая карточка');
+    assert.equal(byText['Своя задача Б'].crm_requests.full_name, 'Карточка Б');
+    assert.equal(byText['Своя задача Б'].users.full_name, 'Оператор Б');
+    // администратор видит обе карточки
+    const a = await t.dbq('boss', { table: 'crm_tasks', op: 'select', columns: cols, filters: [] });
+    assert.ok(a.json.data.every((x) => x.crm_requests && x.crm_requests.id), 'администратору карточка не пришла');
+  } finally { t.close(); }
+});

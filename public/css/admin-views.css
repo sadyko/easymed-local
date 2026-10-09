@@ -4476,6 +4476,33 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .crm-task-form > input[type="time"],
 .crm-task-form > select { flex: 0 0 auto; }
 
+/* CRM_UNIFY_V1 — вид «Задачи» (views/crm-tasks-view.js): группы Просрочено /
+   Сегодня / Позже / Без срока, строка = отметка · текст и подписи. Без
+   фиксированных ширин: на телефоне подписи переносятся, страница вбок не едет. */
+.crm-tv-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--ink-500); max-width: 100%; }
+.crm-tv-who { max-width: 100%; min-width: 0; }
+.crm-tv { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.crm-tv-group { padding: 10px 12px; min-width: 0; }
+.crm-tv-title { font-size: 15px; font-weight: 700; margin: 0 0 6px; color: var(--ink-900); }
+.crm-tv-late .crm-tv-title { color: var(--warn-700, #8a5a00); }
+.crm-tv-row {
+    display: flex; align-items: flex-start; gap: 10px; padding: 8px 4px;
+    border-top: 1px solid var(--ink-100); border-radius: 6px; min-width: 0;
+}
+.crm-tv-row:first-of-type { border-top: none; }
+.crm-tv-row.row-click { cursor: pointer; }
+.crm-tv-row.row-click:hover { background: var(--ink-25, #f8fafc); }
+.crm-tv-row.row-click:focus-visible { outline: 2px solid var(--primary-500, #2d958f); outline-offset: 1px; }
+.crm-tv-row > input[type="checkbox"] { margin-top: 3px; flex: none; }
+.crm-tv-hidden { cursor: default; }
+.crm-tv-main { flex: 1 1 auto; min-width: 0; }
+.crm-tv-text { font-size: 13.5px; font-weight: 600; line-height: 1.45; color: var(--ink-900); overflow-wrap: anywhere; }
+.crm-tv-meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 3px;
+    font-size: 12.5px; color: var(--ink-500); min-width: 0;
+}
+.crm-tv-meta > span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+
 .crm-card-foot {
     display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
     gap: 6px 8px; margin-top: 9px; padding-top: 8px;

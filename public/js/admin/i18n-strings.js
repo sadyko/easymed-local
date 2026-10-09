@@ -3,6 +3,14 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CRM_UNIFY_V1 (2026-10-09) — вид «Задачи» (views/crm-tasks-view.js)
+  "Все операторы": {"en":"All operators","ru":"Все операторы","uz":"Barcha operatorlar"},   // CRM_UNIFY_V1
+  "Без ответственного": {"en":"No one responsible","ru":"Без ответственного","uz":"Mas’ulsiz"},   // CRM_UNIFY_V1
+  "Чьи задачи": {"en":"Whose tasks","ru":"Чьи задачи","uz":"Kimning vazifalari"},   // CRM_UNIFY_V1
+  "Открытых задач нет.": {"en":"No open tasks.","ru":"Открытых задач нет.","uz":"Ochiq vazifalar yo‘q."},   // CRM_UNIFY_V1
+  "Карточка у другого оператора": {"en":"The card belongs to another operator","ru":"Карточка у другого оператора","uz":"Kartochka boshqa operatorda"},   // CRM_UNIFY_V1
+  "Открыть карточку": {"en":"Open the card","ru":"Открыть карточку","uz":"Kartochkani ochish"},   // CRM_UNIFY_V1
+  "Карточка у другого оператора — открыть её может он или руководитель.": {"en":"The card belongs to another operator — only they or a supervisor can open it.","ru":"Карточка у другого оператора — открыть её может он или руководитель.","uz":"Kartochka boshqa operatorda — uni o‘sha operator yoki rahbar ocha oladi."},   // CRM_UNIFY_V1
   // CRM_UNIFY_V1 (2026-10-09) — «Ответственный» у задачи: список от сервера, у ничьей карточки выбор обязателен (views/crm-tasks.js)
   "— выберите ответственного —": {"en":"— choose who is responsible —","ru":"— выберите ответственного —","uz":"— mas’ulni tanlang —"},   // CRM_UNIFY_V1
   "Выберите ответственного.": {"en":"Choose who is responsible.","ru":"Выберите ответственного.","uz":"Mas’ulni tanlang."},   // CRM_UNIFY_V1
