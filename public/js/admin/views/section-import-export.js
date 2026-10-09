@@ -1657,7 +1657,13 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
     async function runImport() {
         // CLINIC_API_FIX_V1 (ревью) — строки собраны с той галочкой, с которой импортируются.
         if (lookups && rawRows.length && lookups.__wantUpdate !== wantUpdateNow()) { buildParsed(); paintParsed(); }
-        const valid = parsedRows.filter(r => r.status !== 'error');
+        // CLINIC_API_FIX_V1 (ревью 5) — попытка работает со СВОИМИ копиями строк:
+        // autoCreatePendingFks заменяет заготовки справочных записей (тип,
+        // категория, отделение) на id или null прямо в строке. На неудачной
+        // попытке это были null в строках предпросмотра, и повтор после полного
+        // отказа писал услугу без типа, категории и отделения — молча.
+        const valid = parsedRows.filter(r => r.status !== 'error')
+            .map(r => ({ ...r, payload: { ...r.payload }, captures: { ...r.captures } }));
         if (valid.length === 0) { toast('Импортировать нечего — сначала исправьте ошибки в файле.', 'fail'); return; }
 
         // Decide insert vs update per row. When `Update existing` is on (and

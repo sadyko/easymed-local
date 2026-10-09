@@ -81,7 +81,7 @@ globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
 // ---- поддельный сервер ------------------------------------------------------
-const W = { writes: [], storedReads: 0, failExisting: false, failStored: false, gatewayOk: false, delayMs: 0, failWrites: false };
+const W = { writes: [], bodies: [], storedReads: 0, failExisting: false, failStored: false, gatewayOk: false, delayMs: 0, failWrites: false };
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
@@ -95,8 +95,13 @@ globalThis.fetch = async (url, opts = {}) => {
         const d = JSON.parse(opts.body || '{}');
         if (d.op !== 'select') {
             W.writes.push(d.table + ':' + d.op);
+            W.bodies.push(d);   // ревью 5 — что именно ушло на запись
             if (W.delayMs) await new Promise((r) => setTimeout(r, W.delayMs));   // ревью 4 — медленная запись
             if (W.failWrites) return bad('Сервер недоступен');                    // ревью 4 — запись не прошла
+            // Ревью 5 — справочная запись (тип, категория, отделение) создаётся с id.
+            if (d.op === 'insert' && d.table !== 'services') {
+                return ok({ data: (Array.isArray(d.values) ? d.values : [d.values]).map((v, i) => ({ id: 900 + i, ...v })) });
+            }
             return ok({ data: [] });
         }
         if (d.table === 'services') {
@@ -458,4 +463,26 @@ test('подпись «Импорт не выполнен» — на трёх я
     const { STRINGS } = await import('../i18n-strings.js');
     const e = STRINGS['Импорт не выполнен'];
     assert.ok(e && e.uz && e.en);
+});
+
+// CLINIC_API_FIX_V1 (ревью 5) — ПОВТОР ПОСЛЕ ПОЛНОГО ОТКАЗА НЕ СТИРАЕТ ССЫЛКИ.
+// Создание справочных записей (тип, категория, отделение) в неудачной попытке
+// заменяло их заготовки на null прямо в строках предпросмотра, и повтор
+// (c41323b разрешил его) записывал услугу без типа, категории и отделения —
+// молча. Каждая попытка теперь работает со своими копиями строк.
+test('повтор после полного отказа: тип, категория и отделение услуги не теряются', async () => {
+    Object.assign(W, { writes: [], bodies: [], failExisting: false, failStored: false, failWrites: true });
+    try {
+        const { confirm } = await openWith(sheetFile([['name', 'group', 'price', 'category', 'department'], ['Новая X', 'Консультация', 1000, 'МРТ головы', 'Неврология']]));
+        confirm.click();
+        await settle(250);
+        assert.match(toastText(), /Импорт не удался/);
+        W.failWrites = false; W.bodies = [];
+        confirm.click();
+        await settle(250);
+        const ins = W.bodies.find((d) => d.table === 'services' && d.op === 'insert');
+        assert.ok(ins, 'повтор не записал услугу: ' + JSON.stringify(W.bodies.map((d) => d.table + ':' + d.op)));
+        const row = Array.isArray(ins.values) ? ins.values[0] : ins.values;
+        for (const k of ['type_id', 'category_id', 'department_id']) assert.ok(row[k] != null, k + ' пуст в повторе: ' + JSON.stringify(row));
+    } finally { W.failWrites = false; }
 });
