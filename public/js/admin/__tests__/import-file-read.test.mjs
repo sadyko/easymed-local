@@ -262,3 +262,45 @@ test('.xlsx: 120% в процентной ячейке — доля больше
     assert.strictEqual(row.status, 'error', JSON.stringify(row.notes));
     assert.ok(row.notes.some((n) => String(n).includes('доля больше 100%')), JSON.stringify(row.notes));
 });
+
+// CLINIC_API_FIX_V1 (ревью 3) — ЯЧЕЙКИ В ФОРМАТЕ ДАТЫ. С cellNF (56e6491)
+// SheetJS отдаёт такую ячейку объектом Date. Отсюда три беды:
+//  • 0 в формате даты — это «31.12.1899», и дата рождения молча ложилась
+//    1899-12-31 (v3.16.0 предупреждала: не дата);
+//  • Date в ТЕКСТОВОЙ колонке (паспорт, заметки) записывался строкой
+//    «Tue May 12 2026 00:00:00 GMT+0500 …»;
+//  • в ЧИСЛОВОЙ колонке он отказывал с той же длинной строкой в сообщении.
+// Теперь: дата раньше 1900-01-01 — не дата (предупреждение); в тексте — ДД.ММ.ГГГГ;
+// в числе — отказ, а в сообщении ДД.ММ.ГГГГ.
+const PAT = (cells) => {
+    const header = ['last_name', 'first_name', ...cells.map((c) => c[0])];
+    return xlsxWith(header, ['Каримова', 'Азиза', ...cells.map((c) => ({ v: c[1], z: c[2] }))]);
+};
+
+test('дата рождения в формате даты: обычная — читается; 0 — не дата, предупреждение, а не 1899-12-31', () => {
+    const okRow = buildImportRow('patients', readSheetRows(XLSX, PAT([['date_of_birth', 32975, 'dd.mm.yyyy']]), 'patients', 'p.xlsx')[0]);
+    assert.strictEqual(okRow.payload.date_of_birth, '1990-04-12');
+    const zero = buildImportRow('patients', readSheetRows(XLSX, PAT([['date_of_birth', 0, 'dd.mm.yyyy']]), 'patients', 'p.xlsx')[0]);
+    assert.ok(!('date_of_birth' in zero.payload), 'записано ' + zero.payload.date_of_birth);
+    assert.strictEqual(zero.status, 'warn');
+    const note = zero.notes.map(String).find((n) => n.includes('date_of_birth'));
+    assert.ok(note && !/GMT/.test(note), JSON.stringify(zero.notes));
+    const old = buildImportRow('patients', { last_name: 'К', first_name: 'А', date_of_birth: new Date(1899, 11, 31) });
+    assert.ok(!('date_of_birth' in old.payload), 'дата до 1900 года записана');
+    assert.ok(old.notes.some((n) => String(n).includes('31.12.1899')), JSON.stringify(old.notes));
+});
+
+test('дата в текстовой колонке — ДД.ММ.ГГГГ, а не «Tue May 12 2026 … GMT»', () => {
+    const raw = readSheetRows(XLSX, PAT([['passport_number', 46154, 'dd.mm.yyyy'], ['notes', 45000, 'd mmm']]), 'patients', 'p.xlsx')[0];
+    const row = buildImportRow('patients', raw);
+    assert.strictEqual(row.payload.passport_number, '12.05.2026');
+    assert.strictEqual(row.payload.notes, '15.03.2023');
+});
+
+test('дата в числовой колонке (цена) — отказ, в сообщении ДД.ММ.ГГГГ', () => {
+    const buf = xlsxWith(['name', 'group', 'price'], ['Приём невролога', 'Консультация', { v: 46154, z: 'dd.mmm' }]);
+    const [row] = rowsOf(buf, 'services');
+    assert.strictEqual(row.status, 'error');
+    const note = row.notes.map(String).find((n) => n.includes('price'));
+    assert.ok(note && note.includes('«12.05.2026»') && !/GMT/.test(note), JSON.stringify(row.notes));
+});

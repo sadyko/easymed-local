@@ -1487,7 +1487,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 h('td', { class: 'num muted' }, String(r.rowNum)),
                 h('td', null, statusPill(r.status)),
                 ...previewCols.map(c =>
-                    h('td', null, (r.raw[normHeader(c.key)] != null && r.raw[normHeader(c.key)] !== '') ? String(r.raw[normHeader(c.key)]) : h('span', { class: 'muted' }, '—'))),
+                    h('td', null, (r.raw[normHeader(c.key)] != null && r.raw[normHeader(c.key)] !== '') ? cellText(r.raw[normHeader(c.key)]) : h('span', { class: 'muted' }, '—'))),
                 h('td', { style: { fontSize: '12.5px' } }, r.notes.length ? r.notes.join('; ') : ''),
             ))),
         ));
@@ -2005,13 +2005,13 @@ function buildRow(raw, rowNum, lookups, cfg) {
 
         // Required check.
         if (col.required) {
-            const v = String(cellRaw ?? '').trim();
+            const v = cellText(cellRaw);
             if (!v) { notes.push(`missing ${col.key}`); status = 'error'; }
         }
         // IMPORT_PRICE_OPTIONAL_V1 — soft requirement: missing value imports
         // with the column default but flags the row so the user notices.
         if (col.warnIfMissing) {
-            const v = String(cellRaw ?? '').trim();
+            const v = cellText(cellRaw);
             if (!v) { notes.push(trf('{col} пусто — будет {def}', { col: col.key, def: col.defaultNum ?? 0 })); if (status !== 'error') status = 'warn'; }
         }
 
@@ -2034,14 +2034,14 @@ function buildRow(raw, rowNum, lookups, cfg) {
             }
             // Текстовая колонка-захват (поставщик, единица закупки) — текст без
             // краёв. Раньше она шла через разбор числа и становилась null.
-            const v = String(cellRaw ?? '').trim();
+            const v = cellText(cellRaw);
             if (v !== '') captures[col.capture] = v;
             continue;
         }
 
         // FK lookup.
         if (col.fk) {
-            const v = String(cellRaw ?? '').trim();
+            const v = cellText(cellRaw);
             if (!v) { payload[col.fk.target] = null; continue; }
             const id = lookups[col.key]?.get(normKey(v));
             if (id) { payload[col.fk.target] = id; continue; }
@@ -2060,7 +2060,7 @@ function buildRow(raw, rowNum, lookups, cfg) {
 
         // SERVICE_GROUP_ROUTING_V1 — mapped enum («Раздел» label -> services.type).
         if (col.map) {
-            const v = String(cellRaw ?? '').trim();
+            const v = cellText(cellRaw);
             if (!v) { if (col.defaultTo != null) payload[col.target || col.key] = col.defaultTo; continue; }
             const mapped = col.map[normKey(v)];
             if (mapped != null) { payload[col.target || col.key] = mapped; }
@@ -2131,7 +2131,7 @@ function buildRow(raw, rowNum, lookups, cfg) {
         // not a silent drop: the registrar sees which cell to fix. The column is
         // left out of the payload so the row still imports without a bogus date.
         if (col.coerce === 'date') {
-            const rawStr = String(cellRaw ?? '').trim();
+            const rawStr = cellText(cellRaw);
             if (!rawStr) continue;
             const iso = parseFlexibleDate(cellRaw);
             if (iso) { payload[col.target || col.key] = iso; }
@@ -2144,7 +2144,9 @@ function buildRow(raw, rowNum, lookups, cfg) {
 
         // Plain text. Empty → leave the column out so the DB default fires
         // (especially important for auto-generated `code`).
-        const v = String(cellRaw ?? '').trim();
+        // CLINIC_API_FIX_V1 (ревью 3) — ячейка в формате даты (Date) — ДД.ММ.ГГГГ,
+        // а не «Tue May 12 2026 00:00:00 GMT+0500 …» (cellText).
+        const v = cellText(cellRaw);
         if (v) payload[col.target || col.key] = v;
     }
 
@@ -2189,7 +2191,13 @@ function parseFlexibleDate(v) {
 
     // Real Date (only when a caller enables cellDates) — use local parts, not
     // toISOString(), which would shift a midnight date back a day east of UTC.
-    if (v instanceof Date && !isNaN(v.getTime())) return _ymd(v.getFullYear(), v.getMonth() + 1, v.getDate());
+    // CLINIC_API_FIX_V1 (ревью 3) — с cellNF ячейка в формате даты приходит
+    // объектом Date, и 0 в таком формате — «31.12.1899»: дата раньше
+    // 1900-01-01 — не дата (как в v3.16.0 — предупреждение), а не 1899-12-31.
+    if (v instanceof Date) {
+        if (isNaN(v.getTime()) || v.getFullYear() < 1900) return null;
+        return _ymd(v.getFullYear(), v.getMonth() + 1, v.getDate());
+    }
 
     const s = String(v).trim();
     if (!s) return null;
@@ -2238,6 +2246,16 @@ function parseFlexibleDate(v) {
     if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) return null;
     return _ymd(y, m, d);
 }
+// CLINIC_API_FIX_V1 (ревью 3) — текст ячейки: Date (ячейка в формате даты) —
+// ДД.ММ.ГГГГ по местным частям, как читает parseFlexibleDate; остальное — как
+// есть, без краёв.
+function cellText(v) {
+    if (v instanceof Date) {
+        if (isNaN(v.getTime())) return '';
+        return String(v.getDate()).padStart(2, '0') + '.' + String(v.getMonth() + 1).padStart(2, '0') + '.' + String(v.getFullYear()).padStart(4, '0');
+    }
+    return String(v ?? '').trim();
+}
 function _ymd(y, m, d) {
     return String(y).padStart(4, '0') + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
 }
@@ -2256,7 +2274,7 @@ function _ymd(y, m, d) {
 export function readImportNumber(v, percent) {
     if (v === null || v === undefined) return { empty: true };
     if (typeof v === 'number') return Number.isFinite(v) ? { n: v } : { bad: String(v) };
-    if (typeof v !== 'string') return { bad: String(v).trim() };   // true/false, дата — не число
+    if (typeof v !== 'string') return { bad: cellText(v) };   // true/false, дата (ДД.ММ.ГГГГ) — не число
     const text = v.trim();
     if (text === '') return { empty: true };
     const s = percent ? text.replace(/\s*%$/, '') : text;
