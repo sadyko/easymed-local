@@ -320,6 +320,31 @@ export async function renderCrm(container, { onNavigate } = {}) {
     await paint();
 }
 
+/**
+ * CRM_UNIFY_V1 — открыть вид «Задачи» (красный счётчик меню, admin.js). `who` —
+ * тот же отбор, которым счётчик посчитал задачи: оператору «мои», администратору
+ * и руководителю (crm.all) — «все» (Р18). Доска уже на экране — перерисовка;
+ * нет — её нарисует переход в раздел с этим же состоянием.
+ */
+export function openCrmTasks(who = 'me') {
+    state.view = 'tasks';
+    state.taskWho = who || 'me';
+    if (refs.root && refs.root.isConnected) paint();
+}
+
+// CRM_UNIFY_V1 — подпись ближайшей задачи карточки: ЧЬЯ и что. Одна для чипа на
+// карточке доски и колонки «Задача» в «Списке» — два места говорят одно.
+function chipTextOf(r) {
+    const t = r ? state.openTasks.get(String(r.id)) : null;
+    if (!t) return '';
+    const text = String(t.text || '');
+    const short = text.length > 60 ? text.slice(0, 59) + '…' : text;
+    const me = selfUserId();
+    const mine = me != null && t.assignee_id != null && String(t.assignee_id) === String(me);
+    const who = mine ? tr('вы') : ((t.users && t.users.full_name) || '');
+    return who ? trf('задача ({who}): {text}', { who, text: short }) : trf('задача: {text}', { text: short });
+}
+
 async function load() {
     // CRM_UNIFY_V1 — «Не пришёл» ставит сервер (server/services/crm/no-show.js): при
     // запуске и раз в час, по записи и доказательствам прихода. Доска только читает.
@@ -332,7 +357,7 @@ async function load() {
     state.rows = data || [];
     // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
     // права на задачи) — доска без меток, а не без заявок.
-    state.openTasks = nearestOpenTasks(await loadOpenTasks());
+    state.openTasks = nearestOpenTasks(await loadOpenTasks(), selfUserId());   // CRM_UNIFY_V1 — своя задача первой
     state.leadTags = await loadLeadTags();   // CRM_HEAD_MERGE_TAGS_V1
 }
 
@@ -984,14 +1009,15 @@ async function paint() {
     // CRM_DEDUP_SEARCH_TASKS_V1 — «задача: …» — ближайшая открытая задача
     // заявки. Просроченная — в предупреждающем цвете: это то, с чего оператор
     // начинает смену.
+    // CRM_UNIFY_V1 — чип называет, чья задача («задача (вы): …»), и своя идёт
+    // первой (nearestOpenTasks с «кто я»). Текст — chipTextOf, общий со «Списком».
     function taskChip(r) {
         const t = state.openTasks.get(String(r.id));
         if (!t) return null;
         const late = isOverdue(t, nowIso());
-        const text = String(t.text || '');
-        return h('div', { class: 'crm-card-task' + (late ? ' crm-card-task-late' : ''), title: text },
+        return h('div', { class: 'crm-card-task' + (late ? ' crm-card-task-late' : ''), title: String(t.text || '') },
             Icon('Clock', { size: 12 }),
-            h('span', null, trf('задача: {text}', { text: text.length > 60 ? text.slice(0, 59) + '…' : text })));
+            h('span', null, chipTextOf(r)));
     }
 
     function cardActions(r) {
@@ -1084,6 +1110,9 @@ async function paint() {
                     ? h('span', { class: 'row', style: { gap: '4px', flexWrap: 'wrap' } },
                         ...tagsOf(r).map((k) => Tag((TAG_RU[k] || [k])[0], { kind: (TAG_RU[k] || [k, ''])[1] })))
                     : h('span', { class: 'muted' }, '—')),
+                // CRM_UNIFY_V1 — «Задача»: то же, что чип на карточке доски.
+                h('td', { 'data-list-task': '', style: { maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                    chipTextOf(r) || h('span', { class: 'muted' }, '—')),
                 h('td', null, Tag(stLabel, { kind: stKind, dot: true })),
                 h('td', { class: 'num', style: { fontSize: '12.5px' } }, fmtDateTime(r.created_at)),
                 h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, h('span', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end' } }, ...cardActions(r))),
@@ -1092,7 +1121,9 @@ async function paint() {
         return h('div', { class: 'card' }, h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
             h('thead', null, h('tr', null,
                 h('th', null, 'Имя'), h('th', null, 'Телефон'), h('th', null, 'Источник'),
-                h('th', null, 'Услуга'), h('th', null, 'Комментарий'), h('th', null, 'Метки'), h('th', null, 'Статус'), h('th', null, 'Дата'), h('th', null, ''))),
+                h('th', null, 'Услуга'), h('th', null, 'Комментарий'), h('th', null, 'Метки'),
+                h('th', null, 'Задача'),   // CRM_UNIFY_V1
+                h('th', null, 'Статус'), h('th', null, 'Дата'), h('th', null, ''))),
             tbody)));
     }
 
@@ -2992,7 +3023,7 @@ async function paint() {
                     onChange: () => {
                         // бейдж меню и метки на доске — сразу, не дожидаясь опроса
                         try { if (window.easymed && window.easymed.refreshNav) window.easymed.refreshNav(); } catch (e) { /* подсказка */ }
-                        loadOpenTasks().then((t) => { state.openTasks = nearestOpenTasks(t); paintBody(); });
+                        loadOpenTasks().then((t) => { state.openTasks = nearestOpenTasks(t, selfUserId()); paintBody(); });   // CRM_UNIFY_V1
                     },
                 })) : null,
                 // CALL_RECORDING_V1 — ЗВОНКИ ЭТОГО ЧЕЛОВЕКА, С ЗАПИСЯМИ.

@@ -40,14 +40,17 @@ export function isOverdue(task, now = nowIso()) {
 /**
  * Ближайшая открытая задача каждой заявки: Map(request_id → task). Сначала по
  * сроку; задача без срока — после любой со сроком.
+ * CRM_UNIFY_V1 — `me`: своя задача (assignee_id = me) показывается первой, даже
+ * если чужая наступает раньше: на чипе доски человек ищет своё дело.
  */
-export function nearestOpenTasks(tasks) {
+export function nearestOpenTasks(tasks, me = null) {
     const out = new Map();
+    const mine = (t) => me != null && String(t.assignee_id) === String(me);
     for (const t of tasks || []) {
         if (!t || t.done_at) continue;
         const key = String(t.request_id);
         const cur = out.get(key);
-        if (!cur || dueRank(t) < dueRank(cur)) out.set(key, t);
+        if (!cur || (mine(t) && !mine(cur)) || (mine(t) === mine(cur) && dueRank(t) < dueRank(cur))) out.set(key, t);
     }
     return out;
 }
@@ -78,13 +81,15 @@ export function taskQuery(db, { who = 'me', me = null, columns = TASK_LIST_SELEC
  * Сколько просроченных задач показать у пункта CRM в меню. Оператору — только
  * назначенные ему, администратору — все. null — число не узнать (нет права на
  * таблицу, нет сети): бейдж тогда не рисуется вовсе, а не врёт нулём.
+ *
+ * CRM_UNIFY_V1 — тот же запрос, что у вида «Задачи» (taskQuery), плюс «срок
+ * наступил»: щелчок по счётчику открывает вид с тем же отбором `who`. Старая
+ * подпись { me, isAdmin } оставлена для совместимости.
  */
-export async function overdueTaskCount({ me, isAdmin, db = supabase, now = nowIso() } = {}) {
-    if (!isAdmin && me == null) return null;
-    let q = db.from('crm_tasks').select('id', { count: 'exact', head: true })
-        .is('done_at', null).lte('due_at', now);
-    if (!isAdmin) q = q.eq('assignee_id', me);
-    const { count, error } = await q;
+export async function overdueTaskCount({ who = null, me = null, isAdmin = false, db = supabase, now = nowIso() } = {}) {
+    const w = who || (isAdmin ? 'all' : 'me');
+    if (w === 'me' && me == null) return null;
+    const { count, error } = await taskQuery(db, { who: w, me, columns: 'id', count: true }).lte('due_at', now);
     if (error) return null;
     return Number(count) || 0;
 }
@@ -92,7 +97,7 @@ export async function overdueTaskCount({ me, isAdmin, db = supabase, now = nowIs
 /** Открытые задачи всех заявок — для метки «задача: …» на карточках доски. */
 export async function loadOpenTasks(db = supabase) {
     const { data, error } = await db.from('crm_tasks')
-        .select('id, request_id, text, due_at, assignee_id, done_at')
+        .select('id, request_id, text, due_at, assignee_id, done_at, users(full_name)')   // CRM_UNIFY_V1 — чья задача
         .is('done_at', null).order('due_at', { ascending: true }).limit(2000);
     // Роль без права на задачи (врач видит доску, но не задачи) — просто без меток.
     return error ? [] : (data || []);
