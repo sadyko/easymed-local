@@ -100,13 +100,15 @@ const CASES = [
     ['отрицательные дни', { price_repeat: 0, repeat_days_from: -1 }, /repeat_days_from — целое неотрицательное число дней/],
     ['окно второго визита наоборот', { price_secondary: 60000, secondary_days_from: 6, secondary_days_to: 1 }, /Окно второго визита: «по день» не может быть раньше «со дня»/],
     ['окно повторного визита наоборот', { price_repeat: 0, repeat_days_from: 10, repeat_days_to: 3 }, /Окно повторного визита: «не позже чем через» не может быть раньше «не раньше чем через»/],
-    ['окно второго визита без цены', { secondary_days_from: 1, secondary_days_to: 6 }, /Укажите цену второго визита/],
-    ['окно повторного визита без цены', { repeat_days_from: 7 }, /Укажите цену повторного визита/],
+    // CLINIC_API_FIX_V1 (ревью 4) — окно без цены в той же строке — полступени:
+    // не пишется эта ступень, предупреждение «неполная ступень».
+    ['окно второго визита без цены', { secondary_days_from: 1, secondary_days_to: 6 }, /неполная ступень/, ['price_secondary', 'secondary_days_from', 'secondary_days_to']],
+    ['окно повторного визита без цены', { repeat_days_from: 7 }, /неполная ступень/, ['price_repeat', 'repeat_days_from', 'repeat_days_to']],
 ];
-for (const [what, cells, re] of CASES) {
+for (const [what, cells, re, dropKeys] of CASES) {
     test('правило окна услуги: ' + what + ' — цены визитов строки не пишутся, предупреждение', () => {
         const row = buildImportRow('services', { ...BASE, ...EMPTY_TIERS, ...cells, tax_rate: 12 }, { rowNum: 9 });
-        assert.ok(tierDropped(row), 'цены визитов записаны: ' + JSON.stringify(row.payload));
+        assert.ok(dropKeys ? dropKeys.every((k) => !(k in row.payload)) : tierDropped(row), 'цены визитов записаны: ' + JSON.stringify(row.payload));
         assert.strictEqual(row.payload.price, 200000, 'остальная строка ложится');
         assert.strictEqual(row.status, 'warn');
         const note = row.notes.find((n) => re.test(String(n)));
@@ -119,12 +121,13 @@ for (const [what, cells, re] of CASES) {
 test('обновление: правило проверяется по тому, что окажется у услуги (файл поверх сохранённого)', () => {
     const stored = (extra) => ({ __wantUpdate: true, __stored: new Map([['приём кардиолога', {
         name: 'Приём кардиолога', price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6, price_repeat: null, repeat_days_from: null, repeat_days_to: null, ...extra }]]) });
-    // CLINIC_API_FIX_V1 (ревью 3, решение) — пустая цена визита при обновлении
-    // оставляет сохранённую (было: стирала её, и окно оставалось без цены).
-    const kept = buildImportRow('services', { ...BASE, price_secondary: '' }, { rowNum: 3, lookups: stored() });
-    assert.ok(!('price_secondary' in kept.payload), JSON.stringify(kept.payload));
-    assert.notStrictEqual(kept.status, 'error');
-    assert.ok(!kept.notes.some((n) => /Укажите цену второго визита/.test(String(n))), JSON.stringify(kept.notes));
+    // CLINIC_API_FIX_V1 (ревью 4) — ступень визита — одно целое (цена + дни):
+    // все её ячейки в листе пусты — ступень снимается целиком (цена и оба дня
+    // — NULL), окно без цены не остаётся.
+    const cleared = buildImportRow('services', { ...BASE, price_secondary: '' }, { rowNum: 3, lookups: stored() });
+    assert.deepStrictEqual(['price_secondary', 'secondary_days_from', 'secondary_days_to'].map((k) => cleared.payload[k]), [null, null, null], JSON.stringify(cleared.payload));
+    assert.notStrictEqual(cleared.status, 'error');
+    assert.ok(!cleared.notes.some((n) => /Укажите цену второго визита/.test(String(n))), JSON.stringify(cleared.notes));
     // Окно по сохранённой цене — проходит, если с ним всё в порядке.
     const ok = buildImportRow('services', { ...BASE, secondary_days_to: 10 }, { rowNum: 3, lookups: stored() });
     assert.strictEqual(ok.payload.secondary_days_to, 10);
@@ -140,4 +143,68 @@ test('допустимые значения — как раньше, без пр
         price_repeat: 0, repeat_days_from: 7, repeat_days_to: 30 });
     assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
     assert.deepStrictEqual(TIER_KEYS.map((k) => row.payload[k]), [60000, 0, 6, 0, 7, 30]);
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 (ревью 4, C1) — СТУПЕНЬ ВИЗИТА — ОДНО ЦЕЛОЕ: цена + «со
+// дня» + «по день». Правило ревью 3 оставляло пустую цену второго визита
+// сохранённой, а её пустые дни писало как NULL; visit-tier.js читает «по
+// день» = NULL как «без предела», и скидка второго визита действовала
+// вечно — со статусом «готово». Теперь:
+//   • все ячейки ступени пусты — ступень снимается (цена и дни — NULL),
+//     как обещает подсказка «пусто — как первый»;
+//   • цена заполнена — как раньше;
+//   • цена пуста, а день заполнен (полступени) — не пишется ни одна ячейка
+//     ступени, строка с предупреждением «неполная ступень — оставлено как было».
+// ---------------------------------------------------------------------------
+const C1_STORED = () => ({ __wantUpdate: true, __stored: new Map([['приём кардиолога', {
+    name: 'Приём кардиолога', price: 200000, price_secondary: 50000, secondary_days_from: 1, secondary_days_to: 7,
+    price_repeat: null, repeat_days_from: null, repeat_days_to: null }]]) });
+const SECOND = ['price_secondary', 'secondary_days_from', 'secondary_days_to'];
+const afterUpdate = (stored, payload) => ({ ...stored, ...Object.fromEntries(Object.entries(payload).filter(([k]) => k in stored)) });
+
+test('C1: у обновляемой услуги все три ячейки второго визита пусты — ступень снята, а не «цена навсегда»', () => {
+    const lookups = C1_STORED();
+    const row = buildImportRow('services', { ...BASE, price_secondary: '', secondary_days_from: '', secondary_days_to: '' }, { rowNum: 5, lookups });
+    assert.deepStrictEqual(SECOND.map((k) => row.payload[k]), [null, null, null], JSON.stringify(row.payload));
+    assert.notStrictEqual(row.status, 'error', JSON.stringify(row.notes));
+    // Касса после обновления: через 3, 60 и 400 дней — полная цена.
+    const svc = afterUpdate(lookups.__stored.get('приём кардиолога'), row.payload);
+    for (const prevDay of ['2026-10-06', '2026-08-10', '2025-09-04']) {
+        assert.strictEqual(tierFor(svc, { day: prevDay, tier: 'primary' }, '2026-10-09').price, 200000, 'второй визит после ' + prevDay + ' не по полной цене');
+    }
+});
+
+test('C1: до правки (цена сохранена, дни NULL) касса брала бы 50 000 и через год — стенд', () => {
+    const broken = { price: 200000, price_secondary: 50000, secondary_days_from: null, secondary_days_to: null };
+    assert.strictEqual(tierFor(broken, { day: '2025-09-04', tier: 'primary' }, '2026-10-09').price, 50000);
+});
+
+test('полступени: цена пуста, а дни заполнены — ступень не пишется, строка с предупреждением', () => {
+    const row = buildImportRow('services', { ...BASE, price_secondary: '', secondary_days_from: 1, secondary_days_to: 7 }, { rowNum: 6, lookups: C1_STORED() });
+    for (const k of SECOND) assert.ok(!(k in row.payload), k + ' записано: ' + JSON.stringify(row.payload[k]));
+    assert.strictEqual(row.status, 'warn');
+    assert.ok(row.notes.some((n) => String(n).includes('неполная ступень — оставлено как было')), JSON.stringify(row.notes));
+    // Новая услуга с полступени — тоже ничего не пишется и предупреждение.
+    const fresh = buildImportRow('services', { ...BASE, price_repeat: '', repeat_days_from: 7 }, { rowNum: 6 });
+    assert.ok(!('price_repeat' in fresh.payload) && !('repeat_days_from' in fresh.payload), JSON.stringify(fresh.payload));
+    assert.strictEqual(fresh.status, 'warn');
+});
+
+test('цена второго визита заполнена — пишется как раньше; пустые дни — «не задано»', () => {
+    const row = buildImportRow('services', { ...BASE, price_secondary: 60000, secondary_days_from: '', secondary_days_to: '' }, { lookups: C1_STORED() });
+    assert.deepStrictEqual(SECOND.map((k) => row.payload[k]), [60000, null, null]);
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+});
+
+test('в листе только дни, и они пусты — ступень снята целиком (сохранённая цена не остаётся без окна)', () => {
+    const row = buildImportRow('services', { ...BASE, secondary_days_from: '', secondary_days_to: '' }, { lookups: C1_STORED() });
+    assert.deepStrictEqual(SECOND.map((k) => row.payload[k]), [null, null, null], JSON.stringify(row.payload));
+});
+
+test('подпись «неполная ступень» — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    const k = 'Строка {n}, «{service}»: {cols} — неполная ступень — оставлено как было.';
+    const e = STRINGS[k];
+    assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
 });

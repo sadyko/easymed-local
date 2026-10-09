@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (ревью 4) — импорт услуг: ступень визита — одно целое (views/section-import-export.js)
+  "Строка {n}, «{service}»: {cols} — неполная ступень — оставлено как было.": {"en":"Row {n}, «{service}»: {cols} — the tier is incomplete — left as it was.","ru":"Строка {n}, «{service}»: {cols} — неполная ступень — оставлено как было.","uz":"{n}-qator, «{service}»: {cols} — pog‘ona to'liq emas — avvalgidek qoldirildi."},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью 3) — окно импорта: итог в окне (views/section-import-export.js)
   "Импорт завершён": {"en":"Import finished","ru":"Импорт завершён","uz":"Import yakunlandi"},   // CLINIC_API_FIX_V1
   "Импортировано строк: {n}": {"en":"Rows imported: {n}","ru":"Импортировано строк: {n}","uz":"Import qilingan qatorlar: {n}"},   // CLINIC_API_FIX_V1

@@ -366,22 +366,26 @@ test('бонус направившему 150 — сумма, а не доля �
 //    закупка, сотрудники…), — поле не пишется никогда, замечание «пусто — не
 //    записано»; колонки в листе нет — без замечаний;
 //  • свой экспорт, импортированный обратно, ничего не меняет.
-test('обновление: пустые НДС, доля, цена визита и ступень — сохранённые остаются', () => {
+// CLINIC_API_FIX_V1 (ревью 4) — НДС и доля пустые у обновляемой услуги —
+// сохранённые остаются (ревью 3); а ступени — одно целое: пустая цена
+// визита со всеми её ячейками снимает ступень визита, пустая пара ступени
+// доли снимает ступень (подсказка: «0 или пусто — ступени нет»).
+test('обновление: пустые НДС и доля — сохранённые; пустая ступень визита и пара ступени доли — сняты', () => {
     const row = buildImportRow('services', { ...MIN, tax_rate: '', default_doctor_percent: '', price_secondary: '',
         doctor_tier_from: '', doctor_tier_percent: '' }, { rowNum: 3, lookups: UPDATE() });
-    for (const k of ['tax_rate', 'default_doctor_percent', 'price_secondary', 'doctor_tier_from', 'doctor_tier_percent']) {
-        assert.ok(!(k in row.payload), k + ' записано: ' + JSON.stringify(row.payload[k]));
-    }
+    for (const k of ['tax_rate', 'default_doctor_percent']) assert.ok(!(k in row.payload), k + ' записано: ' + JSON.stringify(row.payload[k]));
+    assert.deepStrictEqual(['price_secondary', 'secondary_days_from', 'secondary_days_to'].map((k) => row.payload[k]), [null, null, null]);
+    assert.strictEqual(row.payload.doctor_tier_from, 0);
+    assert.strictEqual(row.payload.doctor_tier_percent, 0);
     assert.notStrictEqual(row.status, 'error', JSON.stringify(row.notes));
-    for (const k of ['tax_rate', 'default_doctor_percent', 'price_secondary']) {
-        assert.ok(row.notes.includes('Строка 3: ' + k + ' пусто — оставлено как было.'), k + ': ' + JSON.stringify(row.notes));
-    }
 });
 
-test('обновление: полупара ступени — ступень из файла не пишется, сохранённая остаётся (не обнуляется)', () => {
-    const row = buildImportRow('services', { ...MIN, doctor_tier_from: 20, doctor_tier_percent: '' }, { lookups: UPDATE() });
-    assert.ok(!('doctor_tier_from' in row.payload) && !('doctor_tier_percent' in row.payload), JSON.stringify(row.payload));
-    assert.strictEqual(row.status, 'warn');
+test('полупара ступени доли — ступень из файла не пишется (и у новой, и у обновляемой), предупреждение', () => {
+    for (const lookups of [UPDATE(), {}]) {
+        const row = buildImportRow('services', { ...MIN, price: 1000, doctor_tier_from: 20, doctor_tier_percent: '' }, { lookups });
+        assert.ok(!('doctor_tier_from' in row.payload) && !('doctor_tier_percent' in row.payload), JSON.stringify(row.payload));
+        assert.strictEqual(row.status, 'warn');
+    }
 });
 
 test('товары, закупка, сотрудники: пустая денежная ячейка не пишется (не 0), колонки нет — без замечаний', () => {

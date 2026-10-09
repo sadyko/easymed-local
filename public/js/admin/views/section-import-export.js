@@ -121,6 +121,12 @@ import { mrnSeriesRefusal } from '../patient-duplicates.js';   // MRN_BEYOND_999
 
 // CLINIC_API_FIX_V1 — колонки цен второго/повторного визита и их окон: пусто
 // значит «не задано» (null), а не 0 (см. transform услуг).
+// CLINIC_API_FIX_V1 (ревью 4, C1) — две ступени визита, каждая — одно целое:
+// цена + «со дня» + «по день» (transform услуг пишет их только вместе).
+const VISIT_TIERS = [
+    { price: 'price_secondary', days: ['secondary_days_from', 'secondary_days_to'] },
+    { price: 'price_repeat',    days: ['repeat_days_from', 'repeat_days_to'] },
+];
 // CLINIC_API_FIX_V1 (ревью итога) — money: цена визита — деньги (не число у
 // новой услуги — строка не ввозится); дни — нет.
 const VISIT_TIER_COLUMNS = [
@@ -530,36 +536,65 @@ const IMPORT_CONFIGS = {
             // числа (readImportNumber: «60 000», «12,5»; «1,5» дня — не 15).
             // Не число в строке, ОБНОВЛЯЮЩЕЙ услугу, — поле не пишется:
             // сохранённая цена остаётся (раньше она стиралась в «не задано»).
+            //
+            // CLINIC_API_FIX_V1 (ревью 4, C1) — СТУПЕНЬ ВИЗИТА — ОДНО ЦЕЛОЕ:
+            // цена + «со дня» + «по день». Ревью 3 оставляло пустую цену второго
+            // визита сохранённой, а её пустые дни писало NULL; visit-tier.js
+            // читает «по день» = NULL как «без предела», и скидка действовала
+            // вечно — со статусом «готово». Теперь по ступени целиком (по тем её
+            // колонкам, что есть в листе):
+            //   • не число: у обновляемой — ступень из файла не пишется
+            //     (сохранённая остаётся), у новой — цена отказывает строке, день —
+            //     «не задано», вслух;
+            //   • все ячейки пусты — ступень снимается (цена и оба дня — NULL),
+            //     как обещает подсказка «пусто — как первый / как второй»;
+            //   • цена в листе пуста, а день заполнен (полступени) — не пишется ни
+            //     одна ячейка ступени, предупреждение «неполная ступень»;
+            //   • иначе — как раньше: число — число, пустой день — «не задано».
             var svcName = String(payload.name || '').trim();
             var tierUpdating = serviceRowUpdates(payload, ctx && ctx.lookups);
-            VISIT_TIER_COLUMNS.forEach(function (c) {
-                if (!(c.key in r)) { delete payload[c.key]; return; }
-                var read = readImportNumber(r[c.key], false);
-                // Ревью 3 (решение) — пустая цена визита у обновляемой услуги
-                // оставляет сохранённую; дни окна (не деньги) — «не задано», как было.
-                if (read.empty && c.money && tierUpdating) {
-                    delete payload[c.key];
-                    if (ctx) ctx.note(trf('Строка {n}: {col} пусто — оставлено как было.', { n: ctx.rowNum, col: c.key }));
+            VISIT_TIERS.forEach(function (t) {
+                var keys = [t.price].concat(t.days);
+                var present = keys.filter(function (k) { return k in r; });
+                if (!present.length) { keys.forEach(function (k) { delete payload[k]; }); return; }
+                var reads = {};
+                present.forEach(function (k) { reads[k] = readImportNumber(r[k], false); });
+                var badKeys = present.filter(function (k) { return 'bad' in reads[k]; });
+                if (badKeys.length) {
+                    if (tierUpdating) {
+                        keys.forEach(function (k) { delete payload[k]; });
+                        badKeys.forEach(function (k) {
+                            if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.',
+                                { n: ctx.rowNum, col: k, v: reads[k].bad }));
+                        });
+                        return;
+                    }
+                    // CLINIC_API_FIX_V1 (ревью итога, решение) — цена визита — деньги:
+                    // новая услуга с не числом в ней не ввозится (как с ценой).
+                    if (reads[t.price] && ('bad' in reads[t.price])) {
+                        keys.forEach(function (k) { delete payload[k]; });
+                        if (ctx) ctx.fail(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
+                            { n: ctx.rowNum, col: t.price, v: reads[t.price].bad }));
+                        return;
+                    }
+                    badKeys.forEach(function (k) {
+                        if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — не записано.',
+                            { n: ctx.rowNum, col: k, v: reads[k].bad }));
+                        reads[k] = { empty: true };
+                    });
+                }
+                var filled = present.filter(function (k) { return 'n' in reads[k]; });
+                if (!filled.length) { keys.forEach(function (k) { payload[k] = null; }); return; }
+                if ((t.price in r) && reads[t.price].empty) {
+                    keys.forEach(function (k) { delete payload[k]; });
+                    if (ctx) ctx.warn(trf('Строка {n}, «{service}»: {cols} — неполная ступень — оставлено как было.',
+                        { n: ctx.rowNum, service: svcName, cols: keys.join(', ') }));
                     return;
                 }
-                if (!('bad' in read)) { payload[c.key] = read.empty ? null : read.n; return; }
-                if (tierUpdating) {
-                    delete payload[c.key];
-                    if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.',
-                        { n: ctx.rowNum, col: c.key, v: read.bad }));
-                    return;
-                }
-                // CLINIC_API_FIX_V1 (ревью итога, решение) — цена визита — деньги:
-                // новая услуга с не числом в ней не ввозится (как с ценой). Дни —
-                // не задано, вслух.
-                if (c.money) {
-                    if (ctx) ctx.fail(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
-                        { n: ctx.rowNum, col: c.key, v: read.bad }));
-                    return;
-                }
-                payload[c.key] = null;
-                if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — не записано.',
-                    { n: ctx.rowNum, col: c.key, v: read.bad }));
+                keys.forEach(function (k) {
+                    if (!(k in r)) { delete payload[k]; return; }
+                    payload[k] = reads[k].empty ? null : reads[k].n;
+                });
             });
             // CLINIC_API_FIX_V1 (ревью) — правила окна услуги (service_save:
             // цена — неотрицательное число, дни — целые неотрицательные, «по»
@@ -642,14 +677,6 @@ const IMPORT_CONFIGS = {
                     return null;
                 }
                 var rawFrom = rf.empty ? '' : String(rf.n), rawPct = rp.empty ? '' : String(rp.n);
-                // Ревью 3 (решение) — у обновляемой услуги пустая ступень (обе
-                // ячейки пусты) оставляет сохранённую, а не обнуляет её.
-                var stepUpdating = serviceRowUpdates(payload, ctx && ctx.lookups);
-                if (stepUpdating && rf.empty && rp.empty) {
-                    delete payload[c.from]; delete payload[c.pct];
-                    if (ctx) ctx.note(trf('Строка {n}: {col} пусто — оставлено как было.', { n: ctx.rowNum, col: c.from + ' / ' + c.pct }));
-                    return null;
-                }
                 var range = tierStepRangeProblem(c.n, rawFrom, rawPct);
                 if (range) {
                     delete payload[c.from]; delete payload[c.pct];
@@ -659,19 +686,18 @@ const IMPORT_CONFIGS = {
                 payload[c.from] = Number(rawFrom) || 0;
                 payload[c.pct] = Number(rawPct) || 0;
                 // Пара или ничего: полупара из файла застряла бы в редакторе
-                // (service_save отказывает половине настройки). Отброшенная
-                // полупара называется вслух.
+                // (service_save отказывает половине настройки). CLINIC_API_FIX_V1
+                // (ревью 4) — полупара не пишет НИЧЕГО (ни у новой, ни у
+                // обновляемой: сохранённая ступень остаётся) и называется вслух;
+                // пустая пара (или 0 и 0) снимает ступень — «0 или пусто — ступени нет».
                 if (!payload[c.from] || !payload[c.pct]) {
                     var half = payload[c.from] || payload[c.pct];
-                    // Ревью 3 (решение) — у обновляемой услуги полупара не
-                    // обнуляет сохранённую ступень: ступень из файла не пишется.
-                    if (half && stepUpdating) {
+                    if (half) {
                         delete payload[c.from]; delete payload[c.pct];
                         if (ctx) ctx.warn(tr(HALF_MSG[c.n]));
                         return null;
                     }
                     payload[c.from] = 0; payload[c.pct] = 0;
-                    if (half && ctx) ctx.warn(tr(HALF_MSG[c.n]));
                 }
                 return { from: payload[c.from], pct: payload[c.pct] };
             });

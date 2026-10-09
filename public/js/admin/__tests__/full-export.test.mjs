@@ -120,12 +120,14 @@ test('импорт услуг: пустая ячейка под своим за�
     assert.strictEqual(status, 'ok', 'осознанно пустая пара — не повод пугать предупреждением');
 });
 
-test('импорт услуг: полупара обнуляется И называется вслух', () => {
+// CLINIC_API_FIX_V1 (ревью 4) — полупара не пишет НИЧЕГО (было: 0 и 0) — у новой
+// услуги это то же «ступени нет», у обновляемой сохранённая ступень остаётся.
+test('импорт услуг: полупара не пишется И называется вслух', () => {
     const row = buildImportRow('services', {
         name: 'Приём терапевта', group: 'Консультация', price: 100000, doctor_tier_percent: 50,
     });
-    assert.strictEqual(row.payload.doctor_tier_from, 0, 'полупара сохранилась — редактор её не примет');
-    assert.strictEqual(row.payload.doctor_tier_percent, 0);
+    assert.ok(!('doctor_tier_from' in row.payload), 'полупара сохранилась — редактор её не примет');
+    assert.ok(!('doctor_tier_percent' in row.payload));
     assert.strictEqual(row.status, 'warn', 'строка уехала без предупреждения: ' + JSON.stringify(row.notes));
     assert.ok(row.notes.some((n) => /полупара/.test(String(n))),
         'предупреждение не сказало, что именно отброшено: ' + JSON.stringify(row.notes));
@@ -192,11 +194,11 @@ test('DOCTOR_TIER_V2: в файле нет колонок ступеней 2–3
     for (const k of SIX.slice(2)) assert.ok(!(k in payload), k + ' попал в запись из файла без такой колонки');
 });
 
-test('DOCTOR_TIER_V2: полупара ступени 2 обнуляется и называется вслух', () => {
+test('DOCTOR_TIER_V2: полупара ступени 2 не пишется и называется вслух', () => {
     const row = buildImportRow('services', { ...SVC_BASE, doctor_tier_from: 25, doctor_tier_percent: 40,
         doctor_tier_from_2: 50, doctor_tier_percent_2: '', doctor_tier_from_3: '', doctor_tier_percent_3: '' });
-    assert.strictEqual(row.payload.doctor_tier_from_2, 0);
-    assert.strictEqual(row.payload.doctor_tier_percent_2, 0);
+    assert.ok(!('doctor_tier_from_2' in row.payload), 'полупара ступени 2 записана');
+    assert.ok(!('doctor_tier_percent_2' in row.payload));
     assert.strictEqual(row.payload.doctor_tier_from, 25, 'ступень 1 цела');
     assert.strictEqual(row.status, 'warn');
     assert.ok(row.notes.some((n) => /Ступень 2/.test(String(n)) && /полупара/.test(String(n))), JSON.stringify(row.notes));
