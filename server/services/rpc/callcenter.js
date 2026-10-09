@@ -27,11 +27,12 @@ import { resolveRange } from './reports.js';   // REPORTS_AUDIT_FIX_V1
 import { sourceEachSql } from '../crm/sources.js';
 import { leadSources } from '../../../public/js/admin/crm-sources.js';
 
-// Сидовая колонка «Записан» (миграция 077) — граница между «заявку ещё ведёт
-// оператор» и «пациента уже ждут в конкретный день». Имя здесь не поведение, а
-// точка отсчёта в ПОРЯДКЕ колонок: переименованная или отсутствующая колонка
-// просто возвращает отбор к прежнему «все живые».
-const SCHEDULED_STAGE = 'scheduled';
+// CRM_UNIFY_V1 (задача 5) — граница между «заявку ещё ведёт оператор» и
+// «пациента уже ждут в конкретный день» — «Колонка записи» (scheduledStageKey:
+// одно правило с записью, сервером «Не пришёл» и экраном,
+// public/js/shared/crm-booked-stage.js). Здесь стояла зашитая сидовая
+// 'scheduled' (SCHEDULED_STAGE): у клиники с выбранной своей колонкой записи
+// «зависшие» считались по другой границе, чем доска и «Не пришёл».
 
 // CRM_LINKS_V1 — ПОДПИСИ ЖИВУТ В СПРАВОЧНИКАХ, А НЕ ЗДЕСЬ.
 //
@@ -356,14 +357,14 @@ export function callcenterReport(db, args, user) {
   //    виду совсем: в отчёте они не зависшие, а на доске их никто не
   //    перебирает — лид лежит, пока о нём случайно не вспомнят.
   //
-  //    Граница та же, что у ночной автоматики «Не пришёл» (views/crm.js):
+  //    Граница та же, что у «Не пришёл» на сервере (crm/no-show.js — CRM_UNIFY_V1):
   //    «Записан» делит воронку надвое. ДО него заявку ведёт ОПЕРАТОР, и
   //    молчание три дня и есть «зависла». С «Записан» пациента уже ЖДУТ в
   //    конкретный день — молчание там не значит ничего, такую заявку разбирает
   //    автоматика по дате. Колонки «Записан» в воронке нет вовсе — считаются
   //    все живые, как было: гадать, где кончается работа оператора, не по чему.
   const openKeys = openStageKeys(db);
-  const bookedAt = openKeys.indexOf(SCHEDULED_STAGE);
+  const bookedAt = SCHEDULED ? openKeys.indexOf(SCHEDULED) : -1;   // CRM_UNIFY_V1 — «Колонка записи»
   const workedKeys = bookedAt >= 0 ? openKeys.slice(0, bookedAt) : openKeys;
   const staleRows = !workedKeys.length ? [] : db.prepare(`
     SELECT r.id, r.full_name, r.phone, r.status,

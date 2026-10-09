@@ -106,6 +106,13 @@ function writeParent(stmt, parent, status, when) {
  * crm/visit-link.js). Трёхмесячный «Новый лид» без записи — о другом
  * обращении: приход сегодня его не закрывает, ни на стойке, ни оплатой.
  * Заявка на этот день закрывается, как и прежде, любой давности.
+ *
+ * CRM_UNIFY_V1 (задача 5, Р8, Р11) — и сидовая «Не пришёл» на ЭТОТ день: её
+ * ставит сервер (crm/no-show.js) по карточке «на дату», если прихода того дня
+ * не видно. Доказательство, пришедшее позже (вчерашний визит оплатили сегодня,
+ * порция соседнего здания доехала через crmFromSync), — это приход на
+ * назначенный день: «Не пришёл» поднимается в «Пришёл», как у карточки с
+ * записью. Только ровно на день визита — без даты и на другой день не трогается.
  */
 function settleLineless(db, { patientId, day, open, won, write }) {
   if (!patientId || !open.length) return;
@@ -113,13 +120,15 @@ function settleLineless(db, { patientId, day, open, won, write }) {
   const reqs = db.prepare(`
     SELECT r.id, r.status, r.scheduled_date
       FROM crm_requests r
-     WHERE r.patient_id = ? AND r.status IN (${holes})
-       AND (date(r.scheduled_date) = date(?)
-            OR ((r.scheduled_date IS NULL OR r.scheduled_date = '')
-                AND julianday(COALESCE(NULLIF(r.updated_at, ''), r.created_at)) >= julianday('now', ?)))
+     WHERE r.patient_id = ?
+       AND ((r.status IN (${holes})
+             AND (date(r.scheduled_date) = date(?)
+                  OR ((r.scheduled_date IS NULL OR r.scheduled_date = '')
+                      AND julianday(COALESCE(NULLIF(r.updated_at, ''), r.created_at)) >= julianday('now', ?))))
+            OR (r.status = ? AND date(r.scheduled_date) = date(?)))
        AND NOT EXISTS (SELECT 1 FROM crm_request_services l
                         WHERE l.request_id = r.id AND l.status = 'pending')
-  `).all(patientId, ...open, day, `-${windowHours(db)} hours`);
+  `).all(patientId, ...open, day, `-${windowHours(db)} hours`, SEED_NO_SHOW_STAGE, day);
   for (const p of reqs) writeParent(write, p, won, p.scheduled_date);
 }
 
@@ -183,9 +192,20 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
     const lines = linesOf(db, id);
     const requestIds = [...new Set(lines.map((l) => l.request_id).filter(Boolean))];
     const parents = requestIds.length ? parentsOf(db, requestIds) : [];
+    // CRM_UNIFY_V1 (Р9) — и карточки, привязанные к визиту только записью
+    // (crm_booking_links, без строк): их закрывает приход, и (задача 5) в «Не
+    // пришёл» их уводит неявка — иначе запись из календаря без строк заявки не
+    // узнавала ни о том, ни о другом.
+    let linked = [];
+    if (ARRIVED_STATUSES.includes(now) || now === 'no_show') {
+      try {
+        linked = db.prepare(`SELECT r.id, r.status, r.scheduled_date FROM crm_booking_links b
+                               JOIN crm_requests r ON r.id = b.request_id WHERE b.visit_id = ?`).all(id);
+      } catch { linked = []; }   // сборка без 187
+    }
     // Приход обязан дойти до заявки БЕЗ СТРОК, поэтому выходим раньше времени
     // только там, где работать действительно не с чем.
-    if (!parents.length && !ARRIVED_STATUSES.includes(now)) return;
+    if (!parents.length && !linked.length && !ARRIVED_STATUSES.includes(now)) return;
 
     const open = openStageKeys(db);
     const scheduled = scheduledStageKey(db);
@@ -195,17 +215,15 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
              SUM(visit_id IS NOT NULL) AS booked
         FROM crm_request_services WHERE request_id = ? AND status = 'pending'
     `);
+    // Строки и привязка — одна карточка один раз.
+    const withLinked = () => {
+      const all = new Map();
+      for (const p of [...parents, ...linked]) if (!all.has(p.id)) all.set(p.id, p);
+      return [...all.values()];
+    };
 
     if (ARRIVED_STATUSES.includes(now)) {
       const won = wonStageKey(db);
-      // CRM_UNIFY_V1 (Р9) — и карточка, привязанная к визиту только записью
-      // (crm_booking_links, без строк): иначе запись из календаря без строк
-      // заявки не закрывалась, если дата карточки другая.
-      let linked = [];
-      try {
-        linked = db.prepare(`SELECT r.id, r.status, r.scheduled_date FROM crm_booking_links b
-                               JOIN crm_requests r ON r.id = b.request_id WHERE b.visit_id = ?`).all(id);
-      } catch { linked = []; }   // сборка без 187
       if (parents.length) {
         // CRM_UNIFY_V1 (проверка ревью задачи 3, N1/P2) — СНАЧАЛА УСЛУГИ:
         // строки, которые визит держит, а в визите их нет (взяли после прихода
@@ -225,9 +243,7 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
                                       AND vs.visit_id = crm_request_services.visit_id
                                       AND COALESCE(vs.status, '') <> 'cancelled')`).run(id);
       }
-      const all = new Map();
-      for (const p of [...parents, ...linked]) if (!all.has(p.id)) all.set(p.id, p);
-      for (const p of all.values()) {
+      for (const p of withLinked()) {
         // CRM_UNIFY_V1 — ПЕРВЫЙ ПРИХОД ЗАКРЫВАЕТ КАРТОЧКУ (решение владельца 1,
         // Р8): строки других дней остаются в карточке и в календаре как записи.
         // Закрываются живые колонки и сидовая «Не пришёл»; «Пришёл», «Отказ» и
@@ -248,7 +264,7 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
       // совсем другой факт о ней.
       const noShow = noShowStageKey(db);
       if (noShow !== SEED_NO_SHOW_STAGE) return;
-      for (const p of parents) {
+      for (const p of withLinked()) {   // CRM_UNIFY_V1 (Р9) — и привязанные записью
         // Только из ЖИВЫХ: уже закрытую заявку неявка не переписывает, а
         // дошедшую — тем более (пациент был, визит ему потом отменили —
         // конверсия от этого не исчезает).

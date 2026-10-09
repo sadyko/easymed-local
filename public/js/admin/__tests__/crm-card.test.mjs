@@ -153,9 +153,8 @@ let BOARD_CFG = null;
 let CFG_FAIL = false;
 let LINES_HOLD = null;
 let LINES_ERROR = false;
-// CRM_REAL_BOOKING_V1 — ЧТО ВИДИТ НОЧНОЕ СМЕТАНИЕ, спрашивая «у каких из этих
-// заявок есть записанная строка». null = то же, что видит окно заявки.
-let SWEEP_LINES = null;
+// CRM_UNIFY_V1 — SWEEP_LINES (что видело ночное сметание) убран вместе с самим
+// сметанием: «Не пришёл» ставит сервер (server/services/crm/no-show.js).
 // CRM_REAL_BOOKING_V1 — ВИЗИТЫ, читаемые карточкой: из них подставляется время
 // уже записанной строки и берётся день старого приёма при переносе.
 let VISITS = [];
@@ -235,16 +234,15 @@ globalThis.fetch = async (url, opts) => {
     }
     if (body && body.table === 'crm_request_services' && body.op === 'select') {
       // CRM_REAL_BOOKING_V1 — задержка и отказ касаются ТОЛЬКО выборки строк
-      // ОДНОЙ заявки (.eq('request_id', …)), которую делает её окно. Ночное
-      // сметание читает ту же таблицу ПАЧКОЙ (.in('request_id', …)), и
-      // задержанный ответ повесил бы загрузку доски целиком.
+      // ОДНОЙ заявки (.eq('request_id', …)), которую делает её окно. Выборка
+      // ПАЧКОЙ (.in('request_id', …)) не задерживается: задержанный ответ
+      // повесил бы загрузку доски целиком.
       const own = (body.filters || []).some((f) => f.col === 'request_id' && f.op === 'eq');
       if (own && LINES_HOLD) await LINES_HOLD;
       if (own && LINES_ERROR) return { ok: false, json: async () => ({ error: { message: 'строки не отданы' } }) };
-      const rows = SWEEP_LINES !== null && !own ? SWEEP_LINES : REQ_LINES;
-      // Отбор по статусу стенд выполняет ПО-НАСТОЯЩЕМУ: правило «отменённая
-      // строка визита не держит» проверяется тем, что сметание её не видит, а
-      // не тем, что в запросе есть нужный ключ.
+      const rows = REQ_LINES;   // CRM_UNIFY_V1 — SWEEP_LINES ушёл вместе со сметанием
+      // Отбор по статусу стенд выполняет ПО-НАСТОЯЩЕМУ: проверяется то, что
+      // экран получает, а не то, что в запросе есть нужный ключ.
       const st = (body.filters || []).find((f) => f.col === 'status' && f.op === 'eq');
       return jsonOk(st ? rows.filter((r) => String(r.status || 'pending') === String(st.val)) : rows);
     }
@@ -1123,14 +1121,17 @@ test('CRM_UNIFY_V1: «Открыть существующего» привязы
   window.easymed.state.user = null;
 });
 
-// ═══ 9. НОЧНАЯ АВТОМАТИКА ЧИТАЕТ НАСТРОЕННУЮ ВОРОНКУ ════════════════════════
+// ═══ 9. «НЕ ПРИШЁЛ» СТАВИТ СЕРВЕР — ДОСКА ТОЛЬКО ЧИТАЕТ ══════════════════════
 //
-// CRM_LINKS_V1 (2026-09-20). Доска умеет любую воронку (миграция 077: «добавить
-// колонку "Ждёт оплаты" больше не значит выпустить релиз»), а автоматика
-// «день записи прошёл, визита не было → Не пришёл» сверялась с зашитой парой
-// ['scheduled','approved']. Клиника, переименовавшая или добавившая колонку,
-// получала заявки, которые не подхватывались НИЧЕМ: они оставались в своей
-// колонке навсегда, и отчёт считал их всё ещё ожидающими приёма.
+// CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО. Здесь стояли три теста ночной автоматики
+// доски (CRM_LINKS_V1: «откуда» и «куда» — из настроек, отбор с «Записан» и
+// дальше, «Перезвонить» не трогается). Автоматика удалена: она не видела
+// оплаты, уносила «Перезвонить» с прошедшей датой звонка и пропускала записи
+// календаря без строк. «Не пришёл» ставит сервер (server/services/crm/no-show.js)
+// при запуске и раз в час; правила «откуда» («Колонка записи» и дальше, без
+// «Перезвонить»), «куда» (только сидовая «Не пришёл»), «записанную строку с
+// доказательством прихода не метить» и «отменённая строка визит не держит»
+// проверяет server/services/crm/no-show.test.js.
 
 const SEEDED_STAGES = [
   { key: 'in_process',    label: 'В обработке',           color: 'info',   position: 1, is_active: 1, kind: 'open' },
@@ -1143,75 +1144,28 @@ const SEEDED_STAGES = [
   { key: 'not_qualified', label: 'Нецелевой',             color: '',       position: 8, is_active: 1, kind: 'lost' },
 ];
 
-
-// CRM_REAL_BOOKING_V1 — у сметания появился ПЕРВЫЙ шаг: сначала «кто просрочен»,
-// потом «у кого из них есть записанная строка». Без единой просроченной заявки
-// метить теперь нечего и второй запрос не уходит — поэтому доска этих трёх
-// проверок посеяна одним просроченным лидом.
+// Просроченная карточка «Записан» — та, которую прежняя автоматика метила бы.
 const OVERDUE_LEAD = { id: 1, status: 'scheduled', source: 'call', full_name: 'Каримова Азиза',
   phone: UZ_RAW, scheduled_date: '2020-01-01', created_at: '2020-01-01T10:00:00Z' };
 
-/** Отбор по статусу у автоматики «Не пришёл» (правка ПАЧКИ, без фильтра по id). */
-const sweepCall = () => CALLS.find((c) => c.table === 'crm_requests' && c.op === 'update'
-  && (c.filters || []).some((f) => f.col === 'scheduled_date' && f.op === 'lt'));
-
-test('автоматика «Не пришёл» берёт живые колонки из настроек, а не из зашитой пары', async () => {
-  BOARD_CFG = { stages: [...SEEDED_STAGES, { key: 'waiting_pay', label: 'Ждёт оплаты', color: 'info', position: 9, is_active: 1, kind: 'open' }], sources: [], routing: [] };
-  CALLS.length = 0;
-  await board([OVERDUE_LEAD]);
-
-  const sweep = sweepCall();
-  assert.ok(sweep, 'ночная автоматика не сработала вовсе');
-  const mine = (sweep.filters || []).find((f) => f.col === 'status' && f.op === 'in');
-  assert.ok(mine, 'автоматика не отбирает по ступени');
-  assert.ok(mine.val.includes('waiting_pay'),
-    'заведённая клиникой живая колонка не попала в автоматику: заявки в ней зависнут навсегда — ' + JSON.stringify(mine.val));
-  assert.ok(!mine.val.includes('came'), 'автоматика метит «не пришёл» тем, кто уже дошёл');
-  assert.ok(!mine.val.includes('no_show'), 'автоматика перекладывает заявку саму в себя');
-  assert.strictEqual(sweep.values.status, 'no_show', 'заявка уходит не в проигрышную колонку');
-  BOARD_CFG = null;
-});
-
-test('колонку «Не пришёл» переименовали — автоматика уходит в неё, а не в исчезнувший ключ', async () => {
-  BOARD_CFG = { stages: SEEDED_STAGES.filter((s) => s.key !== 'no_show')
-    .concat([{ key: 'missed', label: 'Пропустил', color: 'crit', position: 6, is_active: 1, kind: 'lost' }]), sources: [], routing: [] };
-  CALLS.length = 0;
-  await board([OVERDUE_LEAD]);
-
-  const sweep = sweepCall();
-  assert.ok(sweep, 'без сидовой колонки автоматика молчит — заявки зависают');
-  assert.strictEqual(sweep.values.status, 'missed',
-    'автоматика пишет несуществующий ключ: вставка упадёт по внешнему ключу, и заявка останется висеть');
-  BOARD_CFG = null;
-});
-
-// CRM_LINKS_V1 — «НЕ ПРИШЁЛ» БЫВАЕТ ТОЛЬКО У ТОГО, КОГО ЖДАЛИ.
-//
-// Автоматика брала ВСЕ живые колонки. Но «В обработке» и «Перезвонить» — это
-// колонки, в которых пациента ещё НЕ ЖДУТ: дата в такой карточке значит «когда
-// перезвонить», а не «когда придёт». Оператор, отложивший вчерашний лид на
-// «Перезвонить», наутро находил его в «Не пришёл» — заявка, с которой он ещё
-// работает, объявлена потерянной, и вернуть её можно только руками.
-//
-// Метится всё, что стоит в воронке С «Записан» И ДАЛЬШЕ: дальше по порядку
-// колонок — это дальше по пути пациента, и там дата уже значит приём.
-test('сметание «Не пришёл» начинается с «Записан» — отложенный на «Перезвонить» лид не трогают', async () => {
-  BOARD_CFG = { stages: [...SEEDED_STAGES, { key: 'waiting_pay', label: 'Ждёт оплаты', color: 'info', position: 9, is_active: 1, kind: 'open' }], sources: [], routing: [] };
-  CALLS.length = 0;
-  await board([OVERDUE_LEAD]);
-
-  const sweep = sweepCall();
-  assert.ok(sweep, 'ночная автоматика не сработала вовсе');
-  const mine = (sweep.filters || []).find((f) => f.col === 'status' && f.op === 'in');
-  assert.ok(mine, 'автоматика не отбирает по ступени');
-  assert.ok(!mine.val.includes('in_process'),
-    'заявка «В обработке» с прошедшей датой уезжает в «Не пришёл»: её ещё никто не ждал — ' + JSON.stringify(mine.val));
-  assert.ok(!mine.val.includes('recall'),
-    'лид, отложенный оператором на «Перезвонить», объявлен не пришедшим: дата в нём значит «когда звонить»');
-  assert.ok(mine.val.includes('scheduled'), 'записанного пациента автоматика перестала проверять вовсе');
-  assert.ok(mine.val.includes('approved'), 'подтверждённая запись выпала из автоматики');
-  assert.ok(mine.val.includes('waiting_pay'),
-    'колонка клиники ПОСЛЕ «Записан» выпала из автоматики: заявки в ней зависнут навсегда');
+test('CRM_UNIFY_V1: доска при загрузке «Не пришёл» не пишет — это делает сервер', async () => {
+  const configs = [
+    { stages: [...SEEDED_STAGES, { key: 'waiting_pay', label: 'Ждёт оплаты', color: 'info', position: 9, is_active: 1, kind: 'open' }], sources: [], routing: [] },
+    // «Не пришёл» переименовали в свою проигрышную — прежняя автоматика писала бы в неё
+    { stages: SEEDED_STAGES.filter((s) => s.key !== 'no_show')
+      .concat([{ key: 'missed', label: 'Пропустил', color: 'crit', position: 6, is_active: 1, kind: 'lost' }]), sources: [], routing: [] },
+    null,   // запасная воронка
+  ];
+  for (const cfg of configs) {
+    BOARD_CFG = cfg;
+    CALLS.length = 0;
+    await board([OVERDUE_LEAD, { ...OVERDUE_LEAD, id: 2, status: 'recall' }]);
+    const writes = CALLS.filter((c) => c.table === 'crm_requests' && c.op === 'update');
+    assert.deepEqual(writes, [], 'доска сама перекладывает карточки: ' + JSON.stringify(writes));
+    const probe = CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'select'
+      && (c.filters || []).some((f) => f.col === 'request_id' && f.op === 'in'));
+    assert.deepEqual(probe, [], 'доска всё ещё ищет «записанные строки» просроченных карточек');
+  }
   BOARD_CFG = null;
 });
 
@@ -1635,46 +1589,13 @@ test('записанную строку перенесли на другой д�
   window.easymed.state.user = null;
 });
 
-// CRM_REAL_BOOKING_V1 (2026-09-21) — У ЗАПИСАННОГО ЕСТЬ КТО СУДИТЬ, И ЭТО НЕ
-// НОЧНАЯ ВЫБОРКА ПО ДАТЕ.
-//
-// Сметание — догадка: «день прошёл, визита мы не видим, значит не пришёл».
-// Заявка, строка которой держит настоящий слот, в догадках не нуждается: её
-// судьбу объявляет сам приём — «Не пришёл» в сетке, отметка прихода, деньги по
-// счёту, — и переносит это в заявку сервер. Оставь догадку здесь — записанного
-// пациента метили бы ДВА писателя с разными правилами, и ночной успевал бы
-// первым: приём назначен на утро, а карточка уже потеряна.
-
-test('заявка с записанной строкой ночью не метится: её судьбу объявляет сам приём', async () => {
-  BOARD_CFG = null;
-  SWEEP_LINES = [{ request_id: 1, visit_id: 555 }];
-  CALLS.length = 0;
-  await board([OVERDUE_LEAD]);
-
-  const ask = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'select'
-    && (c.filters || []).some((f) => f.col === 'visit_id' && String(f.op).startsWith('not')));
-  assert.ok(ask, 'автоматика не спрашивает, у кого из просроченных есть записанный слот — значит метит вслепую');
-  assert.deepStrictEqual((ask.filters || []).find((f) => f.col === 'request_id'),
-    { col: 'request_id', op: 'in', val: [1] }, 'спрошены строки не тех заявок, что просрочены');
-
-  assert.strictEqual(sweepCall(), undefined,
-    'записанного пациента ночная автоматика всё-таки унесла в «Не пришёл» — а его приём ещё даже не начался');
-  SWEEP_LINES = null;
-});
-
-test('заявка без единой записанной строки метится, как и раньше', async () => {
-  BOARD_CFG = null;
-  SWEEP_LINES = [];
-  CALLS.length = 0;
-  await board([OVERDUE_LEAD]);
-
-  const sweep = sweepCall();
-  assert.ok(sweep, 'просроченное пожелание на дату перестало метиться вовсе — заявка зависнет навсегда');
-  assert.strictEqual(sweep.values.status, 'no_show');
-  assert.deepStrictEqual((sweep.filters || []).find((f) => f.col === 'id'),
-    { col: 'id', op: 'in', val: [1] }, 'метится пачка по статусу, а не названные заявки');
-  SWEEP_LINES = null;
-});
+// CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО. Здесь стояли два теста ночной автоматики
+// доски: «заявка с записанной строкой ночью не метится» и «заявка без единой
+// записанной строки метится». Автоматика удалена — «Не пришёл» ставит сервер
+// (server/services/crm/no-show.js), и оба правила (запись с доказательством
+// прихода не метится; карточка «на дату» без записи — метится) теперь
+// проверяет server/services/crm/no-show.test.js. Что доска сама не пишет —
+// раздел 9.
 
 // ═══ 13. ОТВЕТ СЕРВЕРА ЧИТАЕТСЯ ЦЕЛИКОМ, А НЕ ПО НАЛИЧИЮ id ═════════════════
 //
@@ -1808,6 +1729,11 @@ test('после занятого дня оператор меняет врем�
 // возвращалось с другой стороны: сметание «Не пришёл» считало заявку
 // записанной по ЛЮБОЙ строке со ссылкой, и заявка, у которой ссылку несёт одна
 // отменённая строка, становилась невидимой для автоматики навсегда.
+//
+// CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО: два теста сметания («ссылку несёт только
+// отменённая строка — метится», «ждущая строка — не трогают») ушли вместе со
+// сметанием доски. Правило «визит держит только ждущая строка» для «Не пришёл»
+// проверяет server/services/crm/no-show.test.js.
 
 test('визит проставляется только ждущим строкам — отменённые двойники его не берут', async () => {
   const { sheet } = await readyToBook();
@@ -1822,28 +1748,6 @@ test('визит проставляется только ждущим строк
     'визит проставлен всем строкам дня: отменённый двойник и выполненная услуга получили ссылку на приём, '
     + 'которого у них нет — ' + JSON.stringify(link[0].filters));
   window.easymed.state.user = null;
-});
-
-test('ссылку несёт только ОТМЕНЁННАЯ строка — заявка всё равно метится ночью', async () => {
-  BOARD_CFG = null;
-  SWEEP_LINES = [{ request_id: 1, visit_id: 555, status: 'cancelled' }];
-  CALLS.length = 0;
-  await board([OVERDUE_LEAD]);
-
-  const sweep = sweepCall();
-  assert.ok(sweep, 'заявка, у которой записана только отменённая строка, стала невидимой для автоматики навсегда');
-  assert.deepStrictEqual((sweep.filters || []).find((f) => f.col === 'id'),
-    { col: 'id', op: 'in', val: [1] });
-  SWEEP_LINES = null;
-});
-
-test('ссылку несёт ЖДУЩАЯ строка — заявку ночью не трогают', async () => {
-  BOARD_CFG = null;
-  SWEEP_LINES = [{ request_id: 1, visit_id: 555, status: 'pending' }];
-  CALLS.length = 0;
-  await board([OVERDUE_LEAD]);
-  assert.strictEqual(sweepCall(), undefined, 'записанного пациента унесли в «Не пришёл» до его приёма');
-  SWEEP_LINES = null;
 });
 
 // ═══ 15. УЖЕ ЗАПИСАННУЮ СТРОКУ НЕ ЗАСТАВЛЯЮТ ЗАПИСЫВАТЬСЯ ЗАНОВО ═══════════

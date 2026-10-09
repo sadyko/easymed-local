@@ -23,6 +23,7 @@ import { scheduleBranchPull } from './services/branch-sync/schedule-pull.js';   
 import { readPairing } from './services/branch-sync/pairing.js';
 import { runBranchSync } from './services/rpc/branch-sync.js';
 import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EVENTS_V1
+import { scheduleCrmNoShow } from './services/crm/no-show.js';   // CRM_UNIFY_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -203,6 +204,10 @@ if (isMain) {
   // hammering 500s or retrying a doomed login between restarts.
   pruneOpsEvents(db);
   setInterval(() => pruneOpsEvents(db), 3600 * 1000).unref();
+
+  // CRM_UNIFY_V1 — «Не пришёл» ставит сервер: при запуске и раз в час (crm/no-show.js).
+  // Таймер unref, проход не бросает; ошибка запуска — предупреждение, не отказ.
+  try { scheduleCrmNoShow(db); } catch (e) { console.warn('[crm-no-show]', e && e.message); }
 
   // TELEGRAM_BOT_V1 — опросник Telegram живёт внутри этого же процесса, чтобы у
   // клиники был один `npm start`. Он сам проверяет, включён ли бот в настройках,

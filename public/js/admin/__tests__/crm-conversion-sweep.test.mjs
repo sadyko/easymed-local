@@ -6,6 +6,11 @@
 // Теперь конвертированные карточки идут за ролью (services/crm/config.js
 // saveCrmSettings). Настройки и сама карточка берутся из НАСТОЯЩЕГО серверного
 // кода (saveConfig + crmConfig на базе в памяти), доска — настоящая crm.js.
+//
+// CRM_UNIFY_V1 (задача 5) — ОБНОВЛЕНО НАМЕРЕННО: обхода в браузере больше нет
+// («Не пришёл» ставит сервер, services/crm/no-show.js — его тест проверяет и
+// историю конверсии после смены колонки). Здесь остаётся сторож: доска при
+// загрузке не пишет в карточки ничего, при любой конверсии.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { S, CALLS, mk, tick } from './crm-harness.mjs';
@@ -33,18 +38,11 @@ async function boardSweep({ cfg, card }) {
   const root = mk('div');
   await renderCrm(root, { onNavigate() {} });
   await tick();
-  return CALLS.find((c) => c.table === 'crm_requests' && c.op === 'update'
-    && (c.filters || []).some((f) => f.col === 'scheduled_date' && f.op === 'lt'));
+  return CALLS.filter((c) => c.table === 'crm_requests' && c.op === 'update');   // CRM_UNIFY_V1 — любая правка
 }
-/**
- * Обход (если был) не трогает статус карточки истории. Поддельный сервер стенда
- * не применяет фильтры выборки (id карточки попадает в список кандидатов
- * всегда), поэтому настоящая защита — фильтр статуса в самой правке.
- */
-function assertNotSwept(sweep, card) {
-  if (!sweep) return;
-  const st = (sweep.filters || []).find((f) => f.col === 'status');
-  assert.ok(st && !st.val.includes(card.status), 'обход «Не пришёл» уносит карточку истории: ' + JSON.stringify(sweep));
+/** CRM_UNIFY_V1 — доска не пишет в карточки вовсе: ни обхода, ни правки статуса истории. */
+function assertNotSwept(writes, card) {
+  assert.deepEqual(writes, [], 'доска при загрузке правит карточки (' + card.status + '): ' + JSON.stringify(writes));
 }
 
 test('без смены конверсии: карточка «Пришёл» не попадает под обход', async () => {

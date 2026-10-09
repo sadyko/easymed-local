@@ -208,6 +208,24 @@ test('не пришёл: уже дошедшую заявку неявка не 
   db.close();
 });
 
+// CRM_UNIFY_V1 (Р9, задача 5) — неявка видит и карточку, привязанную к визиту
+// только записью (crm_booking_links, без строк), как и приход. Закрытые — нет.
+test('CRM_UNIFY_V1: не пришёл — и карточка, привязанная только записью; закрытые не трогаются', () => {
+  const db = freshDb();
+  const vid = addVisit(db);
+  const rid = addReq(db, { status: 'scheduled', date: '2026-07-01' });   // дата карточки — другая
+  const won = addReq(db, { status: 'came' });
+  const link = db.prepare("INSERT INTO crm_booking_links (visit_id, request_id, source) VALUES (?, ?, 'match')");
+  link.run(vid, rid);
+  const vid2 = addVisit(db, '2026-08-10T09:00:00Z');
+  link.run(vid2, won);
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'no_show' });
+  crmVisitStatus(db, { visitId: vid2, from: 'scheduled', to: 'no_show' });
+  assert.equal(reqRow(db, rid).status, 'no_show', 'неявка по записи календаря без строк до карточки не дошла');
+  assert.equal(reqRow(db, won).status, 'came', 'неявка переписала закрытую карточку');
+  db.close();
+});
+
 // «Не пришёл» берётся ТОЛЬКО сидовым именем: запасной вариант noShowStageKey()
 // отдаёт первую проигрышную колонку, и у клиники без сидовой неявка уносила бы
 // заявку в «Обработка остановлена» — совсем другой факт о ней.
