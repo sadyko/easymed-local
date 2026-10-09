@@ -89,6 +89,8 @@ const READ_ONLY_RPCS = new Set([
   'crm_leads_by_phone',
   // …и поиск доски по всем заявкам — тоже чтение.
   'crm_search',
+  // CRM_UNIFY_V1 — кого можно назначить ответственным за задачу карточки — чтение.
+  'crm_task_assignees',
   // CRM_HEAD_MERGE_TAGS_V1 — список «Дубликаты» только читает; само слияние
   // (crm_merge_leads) — запись и сюда не входит.
   'crm_duplicate_groups',

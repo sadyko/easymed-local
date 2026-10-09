@@ -78,6 +78,7 @@ import { roleEffectiveGrants } from './roles-effective.js';   // ROLES_SAVE_TRUT
 import { crmLeadsByPhone, crmSearch, crmVisitLinks } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
 import { crmDuplicateGroups, crmMergeLeads } from './crm-merge.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { crmLinkNewPatient } from '../crm/new-patient-link.js';   // CRM_UNIFY_V1 — новая карта находит заявку колл-центра
+import { crmTaskAssignees } from '../crm/tasks-follow.js';   // CRM_UNIFY_V1 — кого можно назначить ответственным
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
@@ -641,6 +642,9 @@ export const RPC = {
   // CRM_DEDUP_SEARCH_TASKS_V1 — поиск доски по ВСЕМ заявкам (доска грузит 800):
   // номер по цифрам, имя без пробелов, имя привязанного пациента. Чтение.
   crm_search:               (db, args, user) => crmSearch(db, args, user),
+  // CRM_UNIFY_V1 — кого можно назначить ответственным за задачу карточки: только
+  // тех, кто её видит (crm/tasks-follow.js). Чтение (READ_ONLY_RPCS).
+  crm_task_assignees:       (db, args, user) => crmTaskAssignees(db, args, user),   // CRM_UNIFY_V1
   // CRM_HEAD_MERGE_TAGS_V1 — «Дубликаты» на доске: группы карточек с одним
   // номером (чтение, READ_ONLY_RPCS) и слияние группы в одну карточку (запись:
   // переезд услуг/задач/меток, удаление влитых, журнал crm_merge_log). Оба —

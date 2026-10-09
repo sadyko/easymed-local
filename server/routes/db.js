@@ -20,6 +20,7 @@ import { roleWriteRefusal } from '../services/role-guard.js';   // ADMIN_ROWS_GR
 import { packageStampRefusal } from '../services/rpc/billing.js';   // PACKAGES_V1 (ревью I-3)
 // CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
+import { taskAssigneeRefusal } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -346,6 +347,9 @@ export function dbRoutes(db) {
     // берёт заявку себе или отпускает её в общую стопку (NULL).
     const assignRefusal = crmAssignRefusal(db, compiled.meta, req.body, req.user);
     if (assignRefusal) return res.status(403).json({ error: { code: 'forbidden', message: assignRefusal } });
+    // CRM_UNIFY_V1 — ответственный за задачу обязан видеть её карточку (crm/tasks-follow.js).
+    const taskRefusal = taskAssigneeRefusal(db, compiled.meta, req.body, req.user);
+    if (taskRefusal) return res.status(403).json({ error: { code: 'forbidden', message: taskRefusal } });
     // CRM_MULTI_SOURCE_V1 — источники заявки: сервер проверяет `sources` и сам
     // ставит главный `source = sources[0]`; запись одного `source` сбрасывает
     // `sources` в [source]. Тело правится на месте и собирается заново тем же

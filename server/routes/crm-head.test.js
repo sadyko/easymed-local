@@ -106,6 +106,10 @@ test('руководитель с crm.all через /api/db видит, пра�
       filters: [{ col: 'id', op: 'eq', val: 3 }] });
     assert.equal(pass.status, 200);
     assert.equal(db.prepare('SELECT assigned_to FROM crm_requests WHERE id = 3').get().assigned_to, 21, 'заявка не передалась');
+    // CRM_UNIFY_V1 — задачи идут за карточкой (crm/tasks-follow.js): открытая
+    // задача прежнего оператора Б переходит к новому оператору А. Раньше она
+    // оставалась у Б — он видел её в счётчике, а карточку открыть не мог.
+    assert.equal(db.prepare('SELECT assignee_id FROM crm_tasks WHERE id = 11').get().assignee_id, 21, 'CRM_UNIFY_V1: задача Б не пошла за карточкой к А');
 
     // Задачу чужой заявки — переназначить.
     const tk = await dbCall(base, head, { table: 'crm_tasks', op: 'update', values: { assignee_id: 24 },

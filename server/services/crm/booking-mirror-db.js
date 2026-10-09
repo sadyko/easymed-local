@@ -20,6 +20,7 @@ import { localDate } from '../domain/day.js';
 import { unpaidWorkRefusal, FREE_MOVES } from '../visit-status-guard.js';
 import { grantAllowsOr } from '../grants.js';
 import { sectionLevel } from '../roles.js';
+import { moveTasksWithLead } from './tasks-follow.js';   // CRM_UNIFY_V1 — задачи идут за карточкой
 
 const LINE_KEYS = ['status', 'scheduled_date', 'doctor_id', 'service_id', 'visit_id', 'consultation_type_id'];
 
@@ -87,7 +88,8 @@ export function canEditCrm(db, user) {
 
 /** До записи: что заденет правка. { refusal? } — отказ по-русски. */
 export function mirrorBefore(db, meta, body, user) {
-  const ctx = { table: meta && meta.table, op: meta && meta.op, ids: [], visits: new Set(), cancelVisits: new Set(), lost: [] };
+  const ctx = { table: meta && meta.table, op: meta && meta.op, ids: [], visits: new Set(), cancelVisits: new Set(), lost: [],
+    owners: [] };   // CRM_UNIFY_V1 — хозяева карточек ДО правки assigned_to
   if (!meta || meta.op === 'select') return ctx;
   if (CRM_TABLES.has(meta.table) && !canEditCrm(db, user)) {
     ctx.refusal = 'Раздел «CRM · Заявки» выдан вам только на просмотр — менять заявки нельзя.';
@@ -144,13 +146,18 @@ export function mirrorBefore(db, meta, body, user) {
         }
       }
     } else if (meta.table === 'crm_requests' && meta.op === 'update') {
-      const status = body && body.values && body.values.status;
-      if (isRefusalStage(db, status)) {
-        const ids = targetIds(db, body, user);
-        if (ids.length) {
-          ctx.lost = db.prepare(`SELECT id FROM crm_requests WHERE id IN (${holes(ids)}) AND status <> ?`)
-            .all(...ids, status).map((r) => r.id);
-        }
+      const values = (body && body.values) || {};
+      const status = values.status;
+      const reassign = Object.prototype.hasOwnProperty.call(values, 'assigned_to');   // CRM_UNIFY_V1
+      const refusal = isRefusalStage(db, status);
+      const ids = (refusal || reassign) ? targetIds(db, body, user) : [];
+      if (refusal && ids.length) {
+        ctx.lost = db.prepare(`SELECT id FROM crm_requests WHERE id IN (${holes(ids)}) AND status <> ?`)
+          .all(...ids, status).map((r) => r.id);
+      }
+      // CRM_UNIFY_V1 — хозяева ДО правки: задачи пойдут за карточкой (mirrorAfter).
+      if (reassign && ids.length) {
+        ctx.owners = db.prepare(`SELECT id, assigned_to FROM crm_requests WHERE id IN (${holes(ids)})`).all(...ids);
       }
     }
   } catch (e) {
@@ -231,7 +238,18 @@ export function mirrorAfter(db, ctx, meta, body, user, { insertedId = null } = {
       return;
     }
 
-    if (meta.table === 'crm_requests' && ctx.lost.length) {
+    if (meta.table === 'crm_requests') {
+      // CRM_UNIFY_V1 — ЗАДАЧИ ИДУТ ЗА КАРТОЧКОЙ (crm/tasks-follow.js): взяли,
+      // передали — открытые задачи прежнего хозяина и без исполнителя переходят
+      // новому. Свой try: сбой здесь не должен отменить отмену записей ниже.
+      try {
+        for (const o of ctx.owners || []) {
+          const now = db.prepare('SELECT assigned_to FROM crm_requests WHERE id = ?').get(o.id);
+          if (now) moveTasksWithLead(db, o.id, { from: o.assigned_to, to: now.assigned_to });
+        }
+      } catch (e) {
+        console.error('[crm-mirror] задачи не пошли за карточкой:', e && e.message);   // CRM_UNIFY_V1
+      }
       // ОТКАЗ В CRM = ОТМЕНА ЗАПИСИ. Заявку перевели в проигрышную колонку
       // («Отказ», «Обработка остановлена» — не «Не пришёл»): её записи до
       // прихода отменяются той же дверью, что в календаре. Запись, в которой

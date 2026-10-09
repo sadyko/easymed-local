@@ -49,6 +49,8 @@ import { listStages } from '../crm/config.js';
 import { lineKey, mirrorVisit } from '../crm/booking-mirror.js';
 // CRM_MULTI_SOURCE_V1 — источники оставленной: объединение всех сливаемых.
 import { unionLeadSources } from '../crm/sources.js';
+// CRM_UNIFY_V1 — задачи идут за карточкой: при слиянии — к оператору оставшейся.
+import { moveTasksWithLead } from '../crm/tasks-follow.js';
 
 /**
  * V3120_FIX — ДУБЛИ СТРОК ПОСЛЕ СЛИЯНИЯ. Две карточки одного человека почти
@@ -285,11 +287,17 @@ export function crmMergeLeads(db, args, user) {
     // 1. Строки услуг и задачи — ПЕРЕЕЗЖАЮТ. Удаление заявки ниже уносит
     //    свои строки каскадом (ON DELETE CASCADE), поэтому переезд обязан
     //    случиться раньше — иначе услуги и задачи пропали бы вместе с карточкой.
-    //    Исполнитель задачи не меняется: даже на чужой карточке он свою задачу
-    //    видит (crm_tasks.scope.orOwn).
+    //    CRM_UNIFY_V1 — исполнитель меняется по правилу «задачи идут за
+    //    карточкой» (ниже, crm/tasks-follow.js); поручение конкретному человеку
+    //    остаётся у него и видно ему и на чужой карточке (crm_tasks.scope.orOwn).
     db.prepare(`UPDATE crm_request_services SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
     // V3120_FIX — переехавшие строки не удваивают услугу (см. cancelDuplicateLines).
     for (const v of cancelDuplicateLines(db, keepId)) touchedVisits.add(v);
+    // CRM_UNIFY_V1 — задачи идут за карточкой: открытые задачи оператора каждой
+    // карточки (и без исполнителя) — к оператору оставшейся. Тот же выбор
+    // оператора, что у самой карточки ниже (patch.assigned_to).
+    const newOwner = firstNonEmpty(order, (c) => c.assigned_to);
+    for (const c of cards) moveTasksWithLead(db, c.id, { from: c.assigned_to ?? null, to: newOwner });
     db.prepare(`UPDATE crm_tasks SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
     // CRM_CALENDAR_MIRROR_V1 — привязки записей календаря к заявке (миграция 187)
     // переезжают так же: запись без строк иначе держалась бы за удалённую карточку.
@@ -314,7 +322,7 @@ export function crmMergeLeads(db, args, user) {
       full_name: firstNonEmpty(order, (c) => c.full_name) || keep.full_name,
       phone: firstNonEmpty(order, (c) => c.phone) || keep.phone,
       patient_id: firstNonEmpty(order, (c) => c.patient_id),
-      assigned_to: firstNonEmpty(order, (c) => c.assigned_to),
+      assigned_to: newOwner,   // CRM_UNIFY_V1 — тот же, к кому ушли задачи
       status,
       note: notes.join('\n'),
       // Доказательство звонка у оставшейся — своё; нет своего — самое раннее.
