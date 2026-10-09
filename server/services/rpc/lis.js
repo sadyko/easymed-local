@@ -17,6 +17,7 @@ import { mshOf } from '../../lis/hl7.js';   // LIS_REAL_ANALYZERS_V1_WIRE — т
 import { readResult, wireFor, readEnvelope } from '../../lis/wire.js';   // LIS_REAL_ANALYZERS_V1_WIRE — тот же провод, что у приёма; readEnvelope: ревью R1, п. 6
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
 import { hasAnyRole } from '../roles.js';   // ЭФФЕКТИВНЫЕ роли, как в lab-stats.js — не голая строка user.role
+import { PROXY_QUIET_PREFIX } from '../../lis/lisproxy-form.js';   // LIS_PROXY_V1
 import { rpcT } from '../server-message.js';   // LIS_ANALYZER_LIST_V1 (ревью C2) — отказ с названиями панелей переводится
 import { today, utcDayRange } from '../domain/day.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — «сегодня» местного дня клиники
 
@@ -105,8 +106,9 @@ export function lisRecent(db, args, user) {
       LEFT JOIN visits         v  ON v.id  = vs.visit_id
       LEFT JOIN patients       p  ON p.id  = v.patient_id
      WHERE m.kind = 'result'   -- LIS_REAL_ANALYZERS_V1_SERVICE: утренний контроль (тридцать тестов на два уровня) не вытесняет пробы пациентов
+       AND substr(COALESCE(m.detail, ''), 1, ?) <> ?   -- LIS_PROXY_V1 (Р13): справка LIS Proxy (мусор прибора, лишний показатель) — не в ленте
      ORDER BY m.id DESC
-     LIMIT ?`).all(limit);
+     LIMIT ?`).all(PROXY_QUIET_PREFIX.length, PROXY_QUIET_PREFIX, limit);
 
   const valuesFor = db.prepare(`
     SELECT parameter, value, unit, flag

@@ -54,7 +54,17 @@ export const REATTACHED_NOTE = 'перепривязано к заказу № '
  * LIS_REAL_ANALYZERS_V1 (ревью R4, п. D) — disputes: споры «повтор» строки
  * структурой (JSON-строка, match.js disputeOf) или null.
  */
-export function recordMessage(db, { deviceId = null, peer = '', raw, sampleId = '', visitServiceId = null, status, detail = '', kind = 'result', resolved = false, disputes = null, sourceBody = null }) {
+export function recordMessage(db, { id = null, deviceId = null, peer = '', raw, sampleId = '', visitServiceId = null, status, detail = '', kind = 'result', resolved = false, disputes = null, sourceBody = null }) {
+  // LIS_PROXY_V1 — id: строка журнала уже записана (вход LIS Proxy пишет запрос
+  // ДО разбора — server/lis/lisproxy.js); приём дописывает ЕЁ, а не заводит
+  // вторую. source_body (тело запроса как пришло) после вставки не меняется.
+  if (id != null) {
+    const r = db.prepare(`UPDATE lab_device_messages SET device_id = ?, peer = ?, raw = ?, sample_id = ?, visit_service_id = ?, status = ?, detail = ?, kind = ?,
+                            resolved_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END, disputes = ? WHERE id = ?`)
+      .run(deviceId, peer, String(raw == null ? '' : raw), sampleId, visitServiceId, status, detail, kind, resolved ? 1 : 0, disputes, id);
+    if (r.changes !== 1) throw new Error('строка журнала № ' + id + ' не найдена');
+    return id;
+  }
   return db.prepare(`INSERT INTO lab_device_messages
       (device_id, peer, raw, sample_id, visit_service_id, status, detail, kind, resolved_at, disputes, source_body)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END, ?, ?)`)

@@ -33,6 +33,7 @@ import { decimalPoint } from './wire.js';   // LIS_VENDOR_EXACT_V1 (D0) — де
 import { readEnvelope } from './wire.js';   // LIS_VENDOR_EXACT_V1 (п. 6) — служебное сообщение к пациенту не идёт и при прямом вызове
 import { planTube, tubeOutcome, heldChangeText, resentText } from './match.js';   // LIS_VENDOR_EXACT_V1 — D3 (пробирка — услуги визита) и N1 (повтор)
 import { getProfile } from './profiles/index.js';
+import { PROXY_NOT_TUBE } from './lisproxy-form.js';   // LIS_PROXY_V1
 import { LAB_RESULT_STATUSES } from '../services/visit-status-guard.js';   // LIS_REAL_ANALYZERS_V1 — ревью R7, п. 1: ворота лаборатории, общие с ручным вводом
 import { today, localDate } from '../services/domain/day.js';
 
@@ -922,7 +923,9 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // (статус строки, её номер, сколько строк бланка записано) — привязка из
   // лотка снимает значения из прежнего заказа, только если новый их принял.
   const record = (o) => {
-    const id = recordMessage(db, manual ? { ...o, detail: o.detail ? o.detail + '; ' + MANUAL : MANUAL } : o);
+    const row = manual ? { ...o, detail: o.detail ? o.detail + '; ' + MANUAL : MANUAL } : o;
+    // LIS_PROXY_V1 — запрос LIS Proxy уже в журнале (записан до разбора): приём дописывает ту же строку.
+    const id = recordMessage(db, opts.journalId != null ? { ...row, id: opts.journalId } : row);
     if (opts.report) Object.assign(opts.report, { status: o.status, rowId: id });
     return id;
   };
@@ -938,7 +941,9 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // (MSH-4 = LabPC) — forwarder, иначе провод профиля, иначе default (прежние
   // профили и прибор без профиля читаются ровно как раньше).
   // LIS_VENDOR_EXACT_V1 (N2) — и added: находка, которую человек ещё не добавил.
-  const device = deviceId ? db.prepare('SELECT profile, added FROM lab_devices WHERE id = ?').get(deviceId) : null;
+  const device = deviceId ? db.prepare('SELECT profile, added, via FROM lab_devices WHERE id = ?').get(deviceId) : null;   // via: LIS_PROXY_V1
+  // LIS_PROXY_V1 — прибор за LIS Proxy (мигр. 239): прокси шлёт по значению в запросе, номер — только этикетка.
+  const proxy = !!(device && device.via === 'lisproxy');
   const profile = device ? getProfile(device.profile) : null;
   // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 11) — и по тому, как сообщение называет
   // себя (MSH-3/4): BS-200 на строке без профиля или с чужим профилем не
@@ -1002,6 +1007,15 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // номера нет, бланки не трогаются, в sample_id — оба номера.
   if (pick.conflict) {
     record({ ...base, status: 'unmatched', detail: CONFLICT_DETAIL[pick.why] || CONFLICT_DETAIL.fields });
+    return 'AA';
+  }
+  // LIS_PROXY_V1 (решение владельца 2026-10-09, п. 3) — у прибора за LIS Proxy номер
+  // пробы — только этикетка LAB-: тип BS-200 прокси кладёт в поле штрихкода номер
+  // пациента (PID-2), и правило голых цифр ниже заполнило бы бланк ДРУГОГО
+  // пациента. Вход прокси (lisproxy.js) такое сюда не пускает; это стена на
+  // случай любого другого пути. Номер, названный человеком («Привязать»), — как прежде.
+  if (proxy && !manual && !pick.lab) {
+    record({ ...base, status: 'unmatched', detail: PROXY_NOT_TUBE + ': ' + (pick.sampleId || '(пусто)') + ' — заказ не ищется; пробу привяжите кнопкой «Привязать»' });
     return 'AA';
   }
   // LIS_REAL_ANALYZERS_V1 (ревью R1, пп. 2 и 8) — в поле номера не этикетка

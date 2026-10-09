@@ -102,7 +102,7 @@ function autobioRef(text, env) {
  *   reply — готовый ответ прибору (без кадра MLLP); mllp.js шлёт его как есть.
  *   code — MSA-1 этого ответа.
  */
-export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
+export function receiveMessage(db, text, { peer = '', deviceId = null, journalId = null } = {}) {   // LIS_PROXY_V1 — journalId: строка журнала LIS Proxy, записанная до разбора
   // LIS_REAL_ANALYZERS_V1 (ревью R1, пп. 7 и 11) — провод: профиль строки
   // прибора и то, как сообщение называет себя (wire.js wireFor). Калибровка и
   // контроль по MSH-16 — только у провода, объявившего это соглашение (химия
@@ -116,6 +116,7 @@ export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
 
   if (env.service) {
     recordMessage(db, {
+      id: journalId,   // LIS_PROXY_V1
       deviceId, peer, raw: text,
       sampleId: env.kind === 'query' ? env.queryBarcode : '',
       visitServiceId: null, status: 'unmatched', detail: serviceDetail(env),
@@ -134,6 +135,7 @@ export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
   // сохранено, повторять незачем; «Привязать» (rpc/lis.js) — руками, как прежде.
   if (device && Number(device.enabled) === 0 && env.kind === 'result') {
     recordMessage(db, {
+      id: journalId,   // LIS_PROXY_V1
       deviceId, peer, raw: text, sampleId: pickMessageSample(readResult(text, wire).obrs, wire).sampleId,   // номер — человеку, как у приёма
       visitServiceId: null, status: 'unmatched',
       detail: 'прибор выключен в «Анализаторах» — значения не записаны; включите его («Изменить» → «Включён») или нажмите «Привязать»',
@@ -147,7 +149,7 @@ export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
   // строку лотка (rejected — у мусора и неподдержанного типа) и решает AA/AE.
   // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 12) — провод приём решает сам тем же
   // wireDecision: при споре профиля и сообщения он кладёт пробу в лоток.
-  const code = ingestMessage(db, text, peer, deviceId);
+  const code = ingestMessage(db, text, peer, deviceId, journalId != null ? { journalId } : {});   // LIS_PROXY_V1
   if (env.kind === 'unsupported') return { code: 'AR', kind: 'result', reply: buildAck(env, 'AR', { layout }) };
   if (env.kind === 'unparsed') return { code: 'AE', kind: 'result', reply: buildAck(env, 'AE', { layout }) };
   // Заголовок разобран как ORU^R01, значит AE приёма — сорвавшаяся запись.
