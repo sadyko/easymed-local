@@ -198,9 +198,22 @@ test('цена второго визита заполнена — пишется
     assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
 });
 
-test('в листе только дни, и они пусты — ступень снята целиком (сохранённая цена не остаётся без окна)', () => {
-    const row = buildImportRow('services', { ...BASE, secondary_days_from: '', secondary_days_to: '' }, { lookups: C1_STORED() });
-    assert.deepStrictEqual(SECOND.map((k) => row.payload[k]), [null, null, null], JSON.stringify(row.payload));
+// CLINIC_API_FIX_V1 (ревью 5) — колонки, которой нет в листе, импорт не меняет:
+// снять ступень можно только пустой ячейкой ЦЕНЫ. Нет колонки цены — пустые
+// дни ничего не меняют (было: стирали и сохранённую цену); заполненный день
+// пишется, пустой — остаётся как был (не «без предела» под сохранённой ценой).
+test('колонки цены второго визита в листе нет — пустые дни ничего не меняют, с замечанием', () => {
+    const row = buildImportRow('services', { ...BASE, secondary_days_from: '', secondary_days_to: '' }, { rowNum: 7, lookups: C1_STORED() });
+    for (const k of SECOND) assert.ok(!(k in row.payload), k + ' записано: ' + JSON.stringify(row.payload[k]));
+    assert.notStrictEqual(row.status, 'error');
+    assert.ok(row.notes.some((n) => String(n).includes('без колонки price_secondary')), JSON.stringify(row.notes));
+});
+
+test('колонки цены нет: «со дня» заполнено, «по день» пусто — пишется «со дня», «по день» остаётся сохранённым', () => {
+    const row = buildImportRow('services', { ...BASE, secondary_days_from: 2, secondary_days_to: '' }, { lookups: C1_STORED() });
+    assert.strictEqual(row.payload.secondary_days_from, 2);
+    assert.ok(!('secondary_days_to' in row.payload), 'сохранённое «по день» 7 стёрто: ' + JSON.stringify(row.payload.secondary_days_to));
+    assert.ok(!('price_secondary' in row.payload));
 });
 
 test('подпись «неполная ступень» — на трёх языках', async () => {
