@@ -312,3 +312,18 @@ test('сохранённое «без срока» + правка цены по�
     assert.ok(TIER_KEYS.every((k) => !(k in row.payload)), JSON.stringify(row.payload));
     assert.strictEqual(row.status, 'warn');
 });
+
+// CLINIC_API_FIX_V1 (ревью 7) — без колонки цены визита не число в дне
+// называется ОДИН раз и точно («не число — не записано»), а не ещё и как
+// «пустые … ничего не меняют».
+test('без колонки цены: не число в дне — одно точное сообщение о нём', () => {
+    const row = buildImportRow('services', { name: 'Новая', group: 'Консультация', price: 1000, secondary_days_from: 'нет', secondary_days_to: 5 }, { rowNum: 2 });
+    const about = row.notes.map(String).filter((n) => n.includes('secondary_days_from'));
+    assert.deepStrictEqual(about, ['Строка 2: в колонке secondary_days_from не число («нет») — не записано.'], JSON.stringify(row.notes));
+});
+
+test('комментарий MRN_BEYOND_99999_V1 стоит у импорта mrnSeriesRefusal', () => {
+    const src = fs.readFileSync(new URL('../views/section-import-export.js', import.meta.url), 'utf8');
+    assert.match(src, /import \{ mrnSeriesRefusal \} from '\.\.\/patient-duplicates\.js';\s*\/\/ MRN_BEYOND_99999_V1/);
+    assert.ok(!/visit-tier-rules\.js';[^\n]*MRN_BEYOND_99999_V1/.test(src), 'комментарий MRN остался у чужого импорта');
+});

@@ -117,8 +117,8 @@ import { h, Icon, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { TIER_STEP_COLUMNS, tierStepsProblem, tierStepRangeProblem } from '../service-editor-logic.js';   // DOCTOR_TIER_V2
 import { SECTIONS, FK_LABEL_COLUMN } from '../sections.js?v=noikpu1';
-import { mrnSeriesRefusal } from '../patient-duplicates.js';
-import { visitTierStateProblem, visitTierValue } from '../../shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5) — одно правило с окном услуги   // MRN_BEYOND_99999_V1 — номер, исчерпавший бы серию года
+import { mrnSeriesRefusal } from '../patient-duplicates.js';   // MRN_BEYOND_99999_V1 — номер, исчерпавший бы серию года
+import { visitTierStateProblem, visitTierValue } from '../../shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5) — одно правило с окном услуги
 
 // CLINIC_API_FIX_V1 — колонки цен второго/повторного визита и их окон: пусто
 // значит «не задано» (null), а не 0 (см. transform услуг).
@@ -580,7 +580,7 @@ const IMPORT_CONFIGS = {
                     badKeys.forEach(function (k) {
                         if (ctx) ctx.warn(trf('Строка {n}: в колонке {col} не число («{v}») — не записано.',
                             { n: ctx.rowNum, col: k, v: reads[k].bad }));
-                        reads[k] = { empty: true };
+                        reads[k] = { empty: true, wasBad: true };   // ревью 7 — уже названа, второй раз не называется
                     });
                 }
                 // CLINIC_API_FIX_V1 (ревью 5) — колонки цены в листе нет: колонка,
@@ -591,7 +591,7 @@ const IMPORT_CONFIGS = {
                     var kept = [];
                     keys.forEach(function (k) {
                         if (!(k in r)) { delete payload[k]; return; }
-                        if (reads[k].empty) { delete payload[k]; kept.push(k); return; }
+                        if (reads[k].empty) { delete payload[k]; if (!reads[k].wasBad) kept.push(k); return; }
                         payload[k] = reads[k].n;
                     });
                     if (kept.length && ctx) ctx.note(trf('Строка {n}: без колонки {col} пустые {cols} ничего не меняют.',
