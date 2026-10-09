@@ -20,6 +20,7 @@
 //     админ-врач держит primary-роль doctor (ADMIN_DOCTOR_V1, дважды уже
 //     стреляло).
 import { hasAnyRole } from '../roles.js';
+import { visitTierStateProblem } from '../../../public/js/shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5)
 import {
   SERVICE_SECTIONS, labBlockVisible, normName, mergeServiceRates,
   performerGate, ratesArray, tierStepsProblem, tierStepRangeProblem,
@@ -205,21 +206,18 @@ export function serviceSave(db, args, user) {
   const priceRepeat = tierNum(a.price_repeat, 'Цена повторного визита');
   const daysFrom = tierDays(a.secondary_days_from, '«Со дня»');
   const daysTo = tierDays(a.secondary_days_to, '«По день»');
-  if (daysFrom !== null && daysTo !== null && daysTo < daysFrom) {
-    throw new RpcError('Окно второго визита: «по день» не может быть раньше «со дня».', 400);
-  }
-  if ((daysFrom !== null || daysTo !== null) && priceSecondary === null && priceRepeat === null) {
-    throw new RpcError('Укажите цену второго визита — иначе окно дней не на что применить.', 400);
-  }
   // REPEAT_WINDOW_V1 — the repeat visit's own window; both empty = as the second visit.
   const repDaysFrom = tierDays(a.repeat_days_from, 'Повторный визит, «не раньше чем через»');
   const repDaysTo = tierDays(a.repeat_days_to, 'Повторный визит, «не позже чем через»');
-  if (repDaysFrom !== null && repDaysTo !== null && repDaysTo < repDaysFrom) {
-    throw new RpcError('Окно повторного визита: «не позже чем через» не может быть раньше «не раньше чем через».', 400);
-  }
-  if ((repDaysFrom !== null || repDaysTo !== null) && priceSecondary === null && priceRepeat === null) {
-    throw new RpcError('Укажите цену повторного визита — иначе окно дней не на что применить.', 400);
-  }
+  // CLINIC_API_FIX_V1 (ревью 5) — правила окон — ОДНО правило с импортом из
+  // Excel (public/js/shared/visit-tier-rules.js): порядок границ, окно без
+  // цены и цена визита без окна («без срока»: цена повторного визита без
+  // второго визита действовала бы со второго визита всегда).
+  const visitProblem = visitTierStateProblem({
+    price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo,
+    price_repeat: priceRepeat, repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
+  });
+  if (visitProblem) throw new RpcError(visitProblem, 400);
   const active = a.active === undefined ? 1 : asBool(a.active);
   const code = a.code == null || String(a.code).trim() === '' ? null : String(a.code).trim();
 

@@ -200,3 +200,25 @@ test('A2 / OWN_PRICE_TIER_RATIO_V1: второй визит у врача с л�
   // Без врача — цена тарифа, как прежде.
   assert.equal(servicePriceQuote(db, { patient_id: 1, service_ids: [sid] }, registrar).quotes[sid].price, 60000);
 });
+
+// CLINIC_API_FIX_V1 (ревью 5) — окно услуги отказывает цене визита без окна
+// (то же правило, что у импорта: public/js/shared/visit-tier-rules.js).
+test('service_save: цена повторного визита без второго визита и без окна — отказ «без срока»', () => {
+  const db = fresh();
+  assert.throws(() => tiered(db, { price_secondary: null, secondary_days_from: null, secondary_days_to: null, price_repeat: 0 }), /без срока/);
+  assert.throws(() => tiered(db, { price_secondary: null, secondary_days_from: null, secondary_days_to: null, price_repeat: 30000, repeat_days_from: 1, repeat_days_to: 30 }), /без срока/);
+  db.close();
+});
+
+test('service_save: повторный визит со своим «не раньше» без «не позже» при ограниченном втором — отказ', () => {
+  const db = fresh();
+  assert.throws(() => tiered(db, { price_repeat: 30000, repeat_days_from: 1, repeat_days_to: null }), /«не позже чем через»/);
+  db.close();
+});
+
+test('service_save: цена второго визита без «по день» — «без предела» по выбору, сохраняется', () => {
+  const db = fresh();
+  const id = tiered(db, { price_secondary: 60000, secondary_days_from: 1, secondary_days_to: null, price_repeat: 0 });
+  assert.ok(id);
+  db.close();
+});

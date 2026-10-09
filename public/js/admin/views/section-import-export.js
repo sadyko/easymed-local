@@ -117,7 +117,8 @@ import { h, Icon, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { TIER_STEP_COLUMNS, tierStepsProblem, tierStepRangeProblem } from '../service-editor-logic.js';   // DOCTOR_TIER_V2
 import { SECTIONS, FK_LABEL_COLUMN } from '../sections.js?v=noikpu1';
-import { mrnSeriesRefusal } from '../patient-duplicates.js';   // MRN_BEYOND_99999_V1 — номер, исчерпавший бы серию года
+import { mrnSeriesRefusal } from '../patient-duplicates.js';
+import { visitTierStateProblem } from '../../shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5) — одно правило с окном услуги   // MRN_BEYOND_99999_V1 — номер, исчерпавший бы серию года
 
 // CLINIC_API_FIX_V1 — колонки цен второго/повторного визита и их окон: пусто
 // значит «не задано» (null), а не 0 (см. transform услуг).
@@ -151,29 +152,19 @@ function serviceRowUpdates(payload, lookups) {
 function visitTierProblem(t) {
     const priceBad = (k) => t[k] !== null && !(Number.isFinite(t[k]) && t[k] >= 0);
     const daysBad = (k) => t[k] !== null && !(Number.isInteger(t[k]) && t[k] >= 0);
-    const noPrice = t.price_secondary === null && t.price_repeat === null;
     for (const k of ['price_secondary', 'price_repeat']) {
         if (priceBad(k)) return trf('{col} — неотрицательное число.', { col: k });
     }
-    for (const k of ['secondary_days_from', 'secondary_days_to']) {
+    for (const k of ['secondary_days_from', 'secondary_days_to', 'repeat_days_from', 'repeat_days_to']) {
         if (daysBad(k)) return trf('{col} — целое неотрицательное число дней.', { col: k });
     }
-    if (t.secondary_days_from !== null && t.secondary_days_to !== null && t.secondary_days_to < t.secondary_days_from) {
-        return tr('Окно второго визита: «по день» не может быть раньше «со дня».');
-    }
-    if ((t.secondary_days_from !== null || t.secondary_days_to !== null) && noPrice) {
-        return tr('Укажите цену второго визита — иначе окно дней не на что применить.');
-    }
-    for (const k of ['repeat_days_from', 'repeat_days_to']) {
-        if (daysBad(k)) return trf('{col} — целое неотрицательное число дней.', { col: k });
-    }
-    if (t.repeat_days_from !== null && t.repeat_days_to !== null && t.repeat_days_to < t.repeat_days_from) {
-        return tr('Окно повторного визита: «не позже чем через» не может быть раньше «не раньше чем через».');
-    }
-    if ((t.repeat_days_from !== null || t.repeat_days_to !== null) && noPrice) {
-        return tr('Укажите цену повторного визита — иначе окно дней не на что применить.');
-    }
-    return null;
+    // CLINIC_API_FIX_V1 (ревью 5) — правила окон (порядок границ, окно без
+    // цены, цена визита без окна — «без срока») — ОДНО правило с окном услуги:
+    // shared/visit-tier-rules.js. Ревью 5: снятая ступень второго визита
+    // оставляла цену повторного без окна, и она действовала со второго визита
+    // всегда (visit-tier.js).
+    const problem = visitTierStateProblem(t);
+    return problem ? tr(problem) : null;
 }
 
 // EXCEL_SELF_HOST_V1 — served from our own origin (CSP allows 'self'); the

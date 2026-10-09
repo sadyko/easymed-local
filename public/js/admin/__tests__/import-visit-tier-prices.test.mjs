@@ -9,6 +9,7 @@
 // насчитает касса.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 // Minimal DOM so the view module (and i18n it pulls) can load; nothing renders here.
 class F { constructor(t) { this.tagName = String(t).toUpperCase(); this.style = {}; this.children = []; this.attrs = {}; this.className = ''; this._t = ''; this.dataset = {}; this.value = ''; }
@@ -207,4 +208,66 @@ test('подпись «неполная ступень» — на трёх яз�
     const k = 'Строка {n}, «{service}»: {cols} — неполная ступень — оставлено как было.';
     const e = STRINGS[k];
     assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_API_FIX_V1 (ревью 5) — ЦЕНА ВИЗИТА БЕЗ ОКНА. visit-tier.js: второй
+// визит идёт по окну второго визита (нет «по день» — без предела) и, если цены
+// второго визита нет, берёт цену повторного; повторный — по своему окну, а без
+// своего — по окну второго. Снятая ступень второго визита оставляла цену
+// повторного (0 или 30 000) без окна — и она действовала со второго визита
+// всегда. Одно правило (shared/visit-tier-rules.js) у окна услуги и у импорта:
+// такое состояние — ошибка с понятной причиной; импорт ступени не пишет
+// (сохранённые остаются), строка с предупреждением.
+// ---------------------------------------------------------------------------
+const STORED_WITH = (extra) => ({ __wantUpdate: true, __stored: new Map([['приём кардиолога', {
+    name: 'Приём кардиолога', price: 200000, price_secondary: 50000, secondary_days_from: 1, secondary_days_to: 7,
+    price_repeat: null, repeat_days_from: null, repeat_days_to: null, ...extra }]]) });
+const CLEAR_SECOND = { price_secondary: '', secondary_days_from: '', secondary_days_to: '' };
+
+for (const [what, extra] of [
+    ['повторный визит бесплатно, общее окно', { price_repeat: 0 }],
+    ['повторный 30 000 со своим окном 1–30', { price_repeat: 30000, repeat_days_from: 1, repeat_days_to: 30 }],
+]) {
+    test('снять второй визит, когда есть ' + what + ' — не пишется, предупреждение, касса как была', () => {
+        const lookups = STORED_WITH(extra);
+        const row = buildImportRow('services', { ...BASE, ...CLEAR_SECOND }, { rowNum: 4, lookups });
+        assert.ok(TIER_KEYS.every((k) => !(k in row.payload)), 'ступени записаны: ' + JSON.stringify(row.payload));
+        assert.strictEqual(row.status, 'warn');
+        assert.ok(row.notes.some((n) => String(n).includes('без срока')), JSON.stringify(row.notes));
+        const svc = lookups.__stored.get('приём кардиолога');
+        assert.strictEqual(tierFor(svc, { day: '2025-09-04', tier: 'primary' }, '2026-10-09').price, 200000, 'через 400 дней — не полная цена');
+    });
+}
+
+test('цена повторного визита со своим «не раньше», но без «не позже» при ограниченном втором визите — не пишется', () => {
+    const row = buildImportRow('services', { ...BASE, price_repeat: 20000, repeat_days_from: 1, repeat_days_to: '' }, { rowNum: 4, lookups: STORED_WITH({}) });
+    assert.ok(TIER_KEYS.every((k) => !(k in row.payload)), JSON.stringify(row.payload));
+    assert.strictEqual(row.status, 'warn');
+    assert.ok(row.notes.some((n) => String(n).includes('«не позже чем через»')), JSON.stringify(row.notes));
+});
+
+test('цена второго визита, набранная без «по день», — «без предела» по подсказке (одна ступень), пишется', () => {
+    const row = buildImportRow('services', { ...BASE, price_secondary: 60000, secondary_days_from: 1, secondary_days_to: '' }, { lookups: STORED_WITH({}) });
+    assert.strictEqual(row.payload.price_secondary, 60000);
+    assert.strictEqual(row.payload.secondary_days_to, null);
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+});
+
+test('правило — одно: импорт и окно услуги зовут shared/visit-tier-rules.js', () => {
+    const imp = fs.readFileSync(new URL('../views/section-import-export.js', import.meta.url), 'utf8');
+    const srv = fs.readFileSync(new URL('../../../../server/services/rpc/service-save.js', import.meta.url), 'utf8');
+    assert.match(imp, /from '\.\.\/\.\.\/shared\/visit-tier-rules\.js'/);
+    assert.match(srv, /shared\/visit-tier-rules\.js'/);
+    assert.match(imp, /visitTierStateProblem\(/);
+    assert.match(srv, /visitTierStateProblem\(/);
+});
+
+test('сообщения правила цен визитов — на трёх языках', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    const { VISIT_TIER_MESSAGES } = await import('../../shared/visit-tier-rules.js');
+    for (const k of Object.values(VISIT_TIER_MESSAGES)) {
+        const e = STRINGS[k];
+        assert.ok(e && e.uz && e.en, 'нет перевода: ' + k);
+    }
 });
