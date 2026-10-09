@@ -3,6 +3,8 @@
 //
 // Two jobs on one screen, in the order the owner described them:
 //   1. «Колонки канбана» — the funnel itself: name, colour, order, visible.
+//      1б. «Запись и повторные обращения» (CRM_UNIFY_V1) — the booking column
+//      and the conversion column, chosen explicitly.
 //   2. «Источники» — where a lead came from.
 //
 // TELEPHONY_ROUTING_V1 (docs/plans/2026-08-24-telephony-owns-its-routing.md)
@@ -35,7 +37,7 @@
 // file is DOM only.
 
 import { supabase } from '../../supabase.js';
-import { h, Icon, PageHead, Tag, clear, toast, checkField } from '../ui.js';
+import { h, Icon, PageHead, Tag, clear, toast, checkField, field } from '../ui.js';
 // h() runs tr() over its text children, but anything that changes text AFTER
 // the render through .textContent bypasses h() — those places call tr()
 // explicitly (same trick as telephony-settings.js).
@@ -49,6 +51,9 @@ import {
     validateStages, validateSources, validateTags,
     shapeConfig, isNotImplemented,
 } from '../crm-settings-logic.js';
+// CRM_UNIFY_V1 — «Колонка записи» и «Колонка конверсии»: то же правило, что
+// проверяет сервер (services/crm/config.js saveCrmSettings).
+import { bookedStageCandidates, bookedStageKey, conversionCandidates, withConversion } from '../../shared/crm-booked-stage.js';
 
 // The signature of a section as the SERVER last gave it. Dirtiness is then a
 // comparison, not a flag every edit path has to remember to set — and the
@@ -135,6 +140,7 @@ export async function renderCrmSettings(container) {
 function paint() {
     clear(refs.body);
     refs.body.appendChild(stagesCard());
+    refs.body.appendChild(bookingCard());   // CRM_UNIFY_V1
     refs.body.appendChild(sourcesCard());
     refs.body.appendChild(tagsCard());   // CRM_HEAD_MERGE_TAGS_V1
 }
@@ -352,6 +358,83 @@ function colorPicker(row) {
     };
     repaint();
     return box;
+}
+
+// ---------------------------------------------------------------------------
+// 1б. Запись и повторные обращения — CRM_UNIFY_V1 (2026-10-09)
+// ---------------------------------------------------------------------------
+// Два выбора рядом (дополнение владельца):
+//   «Колонка подтверждения (запись)» — куда переходит карточка, когда пациента
+//     записали (crm_settings.booked_stage; пусто — правило по умолчанию);
+//   «Колонка конверсии (пришёл)» — какая колонка вида won. Сервер переносит вид
+//     одной транзакцией; карточки не двигаются, отчёты считают по новой.
+// Варианты считает то же правило, что проверяет сервер
+// (public/js/shared/crm-booked-stage.js): браузер предлагает только допустимые.
+// Колонка записи считается от ВЫБРАННОЙ конверсии: смена конверсии пересобирает
+// её список, и ставший недопустимым выбор сбрасывается на правило по умолчанию.
+// Воронка — снимок того, что последним отдал сервер: несохранённые правки
+// карточки колонок сюда не попадают (их сервер ещё не знает).
+// Окно повторного обращения добавит задача 6.
+function bookingCard() {
+    const stages = state.cfg.stages.map((s) => ({ ...s }));
+    // Подписи колонок переводятся там же, где их переводит доска (tr() в h()):
+    // в подстановку шаблона они идут уже переведёнными.
+    const label = (k) => (stages.find((s) => s.key === k) || {}).label || k;
+    const savedWon = (stages.find((s) => s.kind === 'won') || {}).key || '';
+    // Нынешняя конверсия показывается всегда — даже если сегодня её не выбрать
+    // (поле обязано показывать то, что есть); остальные — только допустимые.
+    const wonOk = conversionCandidates(stages);
+    const wonKeys = stages.map((s) => s.key).filter((k) => k === savedWon || wonOk.includes(k));
+
+    const wonSel = h('select', { 'aria-label': 'Колонка конверсии (пришёл)', 'data-crm-won-stage': '' },
+        ...wonKeys.map((k) => h('option', { value: k }, label(k))));
+    wonSel.value = savedWon;
+
+    // Выбор держится в переменной, а не в select.value: браузер обнуляет value,
+    // когда список пересобирается, и выбор потерялся бы на каждой смене конверсии.
+    let bookedWant = state.cfg.settings.booked_stage || '';
+    const bookedSel = h('select', { 'aria-label': 'Колонка подтверждения (запись)', 'data-crm-booked-stage': '' });
+    const bookedHint = h('div', { class: 'hint' });
+    const fillBooked = () => {
+        const next = withConversion(stages, wonSel.value);
+        const cand = bookedStageCandidates(next);
+        const def = bookedStageKey(next, null);
+        clear(bookedSel);
+        bookedSel.appendChild(h('option', { value: '' }, trf('По умолчанию — «{label}»', { label: def ? tr(label(def)) : '—' })));
+        for (const k of cand) bookedSel.appendChild(h('option', { value: k }, label(k)));
+        if (!cand.includes(bookedWant)) bookedWant = '';
+        bookedSel.value = bookedWant;
+        bookedHint.textContent = trf('Сюда переходит карточка, когда пациента записали на приём. Только открытая видимая колонка до «{won}».',
+            { won: tr(label(wonSel.value)) });
+    };
+    fillBooked();
+    const base = { booked: bookedWant, won: wonSel.value };
+
+    const saveBox = h('div');
+    const repaintSave = () => {
+        clear(saveBox);
+        saveBox.appendChild(saveRow('Сохранить настройки', async () => {
+            const settings = { booked_stage: bookedWant || null };
+            // Конверсию шлём, только если её сменили: перенос вида — отдельное
+            // решение, и сохранение одной колонки записи его не повторяет.
+            if (wonSel.value && wonSel.value !== savedWon) settings.won_stage = wonSel.value;
+            const fresh = await rpc('crm_config_save', { settings });
+            toast('Настройки сохранены.', 'success');
+            await reload(fresh);
+        }, bookedWant !== base.booked || wonSel.value !== base.won));
+    };
+    bookedSel.addEventListener('change', () => { bookedWant = bookedSel.value || ''; repaintSave(); });
+    wonSel.addEventListener('change', () => { fillBooked(); repaintSave(); });
+    repaintSave();
+
+    const withHint = (box, hintEl) => { box.appendChild(hintEl); return box; };
+    return cardShell('Calendar', 'Запись и повторные обращения',
+        h('div', { style: { padding: '18px' } },
+            h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' } },
+                withHint(field('Колонка подтверждения (запись)', bookedSel), bookedHint),
+                withHint(field('Колонка конверсии (пришёл)', wonSel),
+                    h('div', { class: 'hint' }, 'Сюда переходит карточка, когда пациент пришёл. При смене карточки остаются на своих местах, отчёты считают по новой колонке.'))),
+            saveBox));
 }
 
 // ---------------------------------------------------------------------------

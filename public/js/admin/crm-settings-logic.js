@@ -36,6 +36,8 @@ import { fill } from './updates-logic.js';
 // about Binotel — so it is imported rather than copied, which is what keeps
 // the two screens from drifting apart when the route's shape changes.
 import { isNotImplemented } from './telephony-logic.js';
+// CRM_UNIFY_V1 — «Колонка записи»: одно правило с сервером (services/crm/config.js scheduledStageKey).
+import { bookedStageKey } from '../shared/crm-booked-stage.js';
 
 export { isNotImplemented };
 
@@ -487,6 +489,13 @@ export function shapeConfig(data) {
                 action: r.action === 'create' ? 'create' : 'ignore',
                 stage_key: typeof r.stage_key === 'string' && r.stage_key ? r.stage_key : null,
             })),
+        // CRM_UNIFY_V1 — «Колонка записи» и окно повторного обращения (crm_settings,
+        // мигр. 237). Сервер старше экрана настроек не присылает — правило по
+        // умолчанию и 72 часа. «Колонка конверсии» здесь не нужна: это вид won.
+        settings: {
+            booked_stage: raw.settings && typeof raw.settings.booked_stage === 'string' && raw.settings.booked_stage ? raw.settings.booked_stage : null,
+            window_hours: raw.settings && Number(raw.settings.window_hours) > 0 ? Number(raw.settings.window_hours) : 72,
+        },
     };
 }
 
@@ -527,5 +536,9 @@ export function boardConfig(data) {
         // подписанной (как скрытая колонка в statusRu).
         tags: cfg.tags.filter((s) => s.is_active).map((s) => [s.key, s.label, tagKind(s.color)]),
         tagRu: Object.fromEntries(cfg.tags.map((s) => [s.key, [s.label, tagKind(s.color)]])),
+        // CRM_UNIFY_V1 — «Колонка записи»: куда доска ставит заявку с датой записи.
+        // То же правило, что у сервера; null — у воронки без открытой видимой
+        // колонки до конверсии (доска тогда статус не трогает).
+        bookedStatus: bookedStageKey(cfg.stages, cfg.settings.booked_stage),
     };
 }

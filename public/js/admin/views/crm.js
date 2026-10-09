@@ -85,6 +85,10 @@ let TAGS = [], TAG_RU = {};
 // автоматика обязана их видеть. Считаются из ТОГО ЖЕ ответа, что и доска, —
 // второго запроса за настройками не нужно.
 let STAGE_KEYS = stageKeysFrom(null);
+// CRM_UNIFY_V1 — «Колонка записи» из настроек «CRM-канбан» (boardConfig.bookedStatus):
+// то же правило, что у сервера (public/js/shared/crm-booked-stage.js), а не
+// догадка «сидовая, если видна, иначе первая видимая». null — некуда.
+let BOOKED_STATUS = 'scheduled';
 function applyBoardConfig(data) {
     const c = boardConfig(data);
     SOURCES = c.sources; SOURCE_RU = c.sourceRu;
@@ -93,6 +97,7 @@ function applyBoardConfig(data) {
     ACTIVE_STATUSES = c.activeStatuses; LOST_STATUSES = c.lostStatuses;
     STAGE_KEYS = stageKeysFrom(data);
     TAGS = c.tags || []; TAG_RU = c.tagRu || {};   // CRM_HEAD_MERGE_TAGS_V1
+    BOOKED_STATUS = c.bookedStatus;   // CRM_UNIFY_V1
 }
 applyBoardConfig(null);   // запасная воронка — до первого ответа сервера доска уже рабочая
 async function loadBoardConfig() {
@@ -117,9 +122,8 @@ function stageKey(preferred) {
     if (STATUSES.some(([k]) => k === preferred)) return preferred;
     return STATUSES.length ? STATUSES[0][0] : CONVERT_STATUS;
 }
-// Есть ли такая колонка вообще: для фоновой автоматики, которой лучше не
-// сработать, чем сработать не туда.
-const hasStage = (key) => STATUSES.some(([k]) => k === key);
+// CRM_UNIFY_V1 — hasStage('scheduled') ушёл: есть ли «Колонка записи», решает
+// BOOKED_STATUS (null — некуда); другой автоматике проверка не нужна.
 // Источник новой заявки по умолчанию — первый видимый, а не жёсткое 'call':
 // источник тоже редактируется, и 'call' может быть переименован или скрыт.
 const defaultSource = () => (SOURCES.length ? SOURCES[0][0] : 'call');
@@ -342,7 +346,7 @@ async function load() {
         // сюда сама. Колонки «Записан» в воронке нет вовсе — берём все живые,
         // как раньше: гадать, с какой начинается ожидание, не по чему.
         if (STAGE_KEYS.noShow) {
-            const at = STAGE_KEYS.open.indexOf(stageKey('scheduled'));
+            const at = STAGE_KEYS.open.indexOf(BOOKED_STATUS);   // CRM_UNIFY_V1 — «Колонка записи»
             const waiting = at >= 0 ? STAGE_KEYS.open.slice(at) : STAGE_KEYS.open;
             const from = waiting.filter((k) => k !== STAGE_KEYS.noShow);
             if (from.length) {
@@ -2181,10 +2185,10 @@ async function paint() {
             // Двигаем только ВПЕРЁД — по живым колонкам, стоящим В ВОРОНКЕ ДО
             // «Записан». «Подтверждён» стоит после, и назначение новой даты не
             // имеет права откатывать подтверждённую заявку назад.
-            const bookedStage = stageKey('scheduled');
+            const bookedStage = BOOKED_STATUS;   // CRM_UNIFY_V1 — «Колонка записи» из настроек
             const bookedAt = STAGE_KEYS.open.indexOf(bookedStage);
             const notBookedYet = bookedAt > 0 ? STAGE_KEYS.open.slice(0, bookedAt) : [];
-            if (isEdit && bookedDate && notBookedYet.includes(r.status) && hasStage('scheduled')) payload.status = bookedStage;
+            if (isEdit && bookedDate && notBookedYet.includes(r.status) && bookedStage) payload.status = bookedStage;   // CRM_UNIFY_V1
             if (isEdit) {
                 // Ревью W2-M5 — номер заявки сменили на номер, у которого уже
                 // есть другая карточка: то же предупреждение, что при создании.
@@ -2206,7 +2210,7 @@ async function paint() {
             // записать» зовёт persist() повторно, и спрашивать дважды незачем.
             if (!(await confirmNoDuplicate(phone, null))) return null;
             const { data, error } = await supabase.from('crm_requests')
-                .insert({ ...payload, status: bookedDate ? stageKey('scheduled') : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })
+                .insert({ ...payload, status: (bookedDate && BOOKED_STATUS) ? BOOKED_STATUS : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })   // CRM_UNIFY_V1
                 .select().single();
             if (error) { toast(error.message, 'fail'); return null; }
             // insert не возвращает join'ы — подставляем услугу из каталога, иначе

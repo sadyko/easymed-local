@@ -330,7 +330,11 @@ test('маршрут звонков уехал в «Телефонию» — н�
                       'Правила работают, только пока подключён модуль']) {
     assert.ok(!text.includes(gone), 'осталось от карточки маршрута: ' + gone);
   }
-  assert.strictEqual(findSelects(root).length, 0, 'выпадающих списков на этом экране больше нет вовсе');
+  // CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО: выпадающие списки на экране снова есть,
+  // но только два — «Колонка записи» и «Колонка конверсии» карточки «Запись и
+  // повторные обращения». Ни один из них не пишет routing.
+  assert.deepStrictEqual(findSelects(root).map((s) => Object.keys(s.attrs).filter((k) => k.startsWith('data-crm-')).join()),
+    ['data-crm-booked-stage', 'data-crm-won-stage'], 'на экране появился выпадающий список маршрута звонков');
   assert.strictEqual(findAllButtons(root).filter((b) => /маршрут|телефон/i.test(textOf(b))).length, 0,
     'и ни одной кнопки, которая писала бы routing');
 });
@@ -423,4 +427,68 @@ test('«Метки»: пришедшие с сервера — с цветом, 
   findButtonByText(root, /Сохранить метки/).click();
   await tick();
   assert.deepStrictEqual(lastSaveBody.tags.map((t) => [t.key, t.label, t.color]), [['vip', 'VIP-клиент', 'purple']]);
+});
+
+// ---------------------------------------------------------------------------
+// CRM_UNIFY_V1 (2026-10-09) — «Запись и повторные обращения»: колонка записи и
+// колонка конверсии (дополнение владельца). Браузер предлагает только
+// допустимые варианты — по тому же правилу, что проверяет сервер
+// (public/js/shared/crm-booked-stage.js).
+// ---------------------------------------------------------------------------
+const bookedSel = (root) => walk(root).find((n) => n.tagName === 'SELECT' && 'data-crm-booked-stage' in n.attrs);
+const wonSel = (root) => walk(root).find((n) => n.tagName === 'SELECT' && 'data-crm-won-stage' in n.attrs);
+const optionValues = (sel) => walk(sel).filter((n) => n.tagName === 'OPTION').map((o) => o.value);
+const change = (sel, value) => { sel.value = value; sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel }); };
+
+test('CRM_UNIFY_V1: колонка записи — только открытые видимые до «Пришёл»; сохранение шлёт settings', async () => {
+  resetServer();
+  const root = await render();
+  assert.ok(textOf(root).includes('Запись и повторные обращения'), 'нет карточки настроек записи');
+  const sel = bookedSel(root);
+  assert.ok(sel, 'нет поля «Колонка записи»');
+  assert.deepStrictEqual(optionValues(sel), ['', 'in_process', 'recall'],
+    'в выборе колонка после «Пришёл», скрытая или проигрышная');
+  assert.ok(textOf(sel).includes('По умолчанию — «Перезвонить»'));
+  assert.strictEqual(sel.value, '', 'выбор не сделан — стоит правило по умолчанию');
+  change(sel, 'in_process');
+  assert.ok(textOf(root).includes('Изменения не сохранены'), 'выбор сделан, а экран молчит, что его надо сохранить');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: 'in_process' } },
+    'конверсию не меняли — её и не шлём');
+  assert.strictEqual(lastToast(), 'Настройки сохранены.');
+});
+
+test('CRM_UNIFY_V1: колонка конверсии — без проигрышных, скрытых и без колонки, перед которой некуда записывать', async () => {
+  resetServer();
+  const root = await render();
+  const won = wonSel(root);
+  assert.ok(won, 'нет поля «Колонка конверсии»');
+  // «В обработке» — первая: перед ней нет колонки для записанных. «Нецелевой» — проигрышная и скрытая.
+  assert.deepStrictEqual(optionValues(won), ['recall', 'came']);
+  assert.strictEqual(won.value, 'came', 'поле не показывает нынешнюю конверсию');
+  assert.ok(textOf(root).includes('При смене карточки остаются на своих местах'), 'нет подсказки, что карточки не переезжают');
+
+  // Конверсия «Перезвонить»: колонка записи пересчитана от неё.
+  const booked = bookedSel(root);
+  change(booked, 'recall');
+  change(won, 'recall');
+  assert.deepStrictEqual(optionValues(bookedSel(root)), ['', 'in_process'], 'колонка записи предлагается на месте конверсии или после неё');
+  assert.strictEqual(bookedSel(root).value, '', 'выбор «Перезвонить» стал недопустимым и не сброшен');
+  assert.ok(textOf(bookedSel(root)).includes('По умолчанию — «В обработке»'));
+  assert.ok(textOf(root).includes('до «Перезвонить»'), 'подсказка колонки записи не знает новой конверсии');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, won_stage: 'recall' } });
+});
+
+test('CRM_UNIFY_V1: отказ сервера — его фраза, экран не перерисован догадкой', async () => {
+  resetServer();
+  saveRespond = () => jsonErr({ message: 'Проигрышная колонка не может быть колонкой конверсии.' }, 400);
+  const root = await render();
+  change(wonSel(root), 'recall');
+  findButtonByText(root, /Сохранить настройки/).click();
+  await tick();
+  assert.strictEqual(lastToast(), 'Проигрышная колонка не может быть колонкой конверсии.');
+  assert.strictEqual(getCalls, 1);
 });

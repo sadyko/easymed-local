@@ -13,6 +13,7 @@ import {
   listStages, listSources, listRouting, crmConfig,
   saveStages, saveSources, saveRouting, saveConfig, CrmConfigError,
   openStageKeys, wonStageKey, lostStageKeys, noShowStageKey, scheduledStageKey,
+  readCrmSettings,   // CRM_UNIFY_V1
 } from './config.js';
 
 const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
@@ -38,7 +39,9 @@ test('crmConfig answers the board and the settings screen in one call', () => {
   const db = fresh();
   const cfg = crmConfig(db);
   // CRM_HEAD_MERGE_TAGS_V1 — и метки карточек (миграция 150); у свежей базы их нет.
-  assert.deepEqual(Object.keys(cfg).sort(), ['routing', 'sources', 'stages', 'tags']);
+  // CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО: и настройки «CRM-канбан» (crm_settings, мигр. 237).
+  assert.deepEqual(Object.keys(cfg).sort(), ['routing', 'settings', 'sources', 'stages', 'tags']);
+  assert.deepEqual(cfg.settings, { booked_stage: null, window_hours: 72, booked_effective: 'scheduled' });
   assert.deepEqual(cfg.tags, []);
   assert.equal(cfg.stages.length, 8);
   assert.equal(cfg.sources.length, 8);
@@ -410,9 +413,14 @@ test('колонка «не пришёл» — сидовая, если она �
 // CRM_REAL_BOOKING_V1 — «ЗАПИСАН» СПРАШИВАЕТСЯ ТАК ЖЕ, КАК «НЕ ПРИШЁЛ».
 //
 // Владелец развёл запись и приход: у заявки, держащей настоящий слот, своя
-// колонка. Сидовая — «Записан»; клиника вправе её переименовать или убрать, и
-// тогда честный ответ один — последняя открытая колонка перед конверсией.
-test('колонка «записан» — сидовая, если она есть, иначе последняя открытая перед конверсией', () => {
+// колонка. Сидовая — «Записан»; клиника вправе её переименовать или убрать.
+//
+// CRM_UNIFY_V1 — ПЕРЕПИСАНО НАМЕРЕННО: «Колонка записи» — одно правило с экраном
+// (public/js/shared/crm-booked-stage.js): открытая ВИДИМАЯ колонка ДО «Пришёл».
+// Раньше сервер брал последнюю открытую по порядку, даже стоящую ПОСЛЕ
+// конверсии (здесь — «Ждёт оплаты» на 9-м месте), а экран — первую видимую:
+// у клиники записанные уезжали в «Успешно».
+test('колонка записи: «Записан», если видна; без неё — последняя открытая видимая ДО «Пришёл»', () => {
   const db = fresh();
   assert.equal(scheduledStageKey(db), 'scheduled');
 
@@ -420,17 +428,117 @@ test('колонка «записан» — сидовая, если она ес
   db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('waiting_pay','Ждёт оплаты','info',9,1,'open')").run();
   assert.equal(scheduledStageKey(db), 'scheduled');
 
-  // Клиника убрала сидовую — берётся последняя открытая, дальше неё живой
-  // заявке идти некуда.
+  // Клиника убрала сидовую — берётся последняя открытая видимая ДО «Пришёл»;
+  // «Ждёт оплаты» стоит после конверсии и записанных не принимает.
   db.prepare("DELETE FROM crm_stages WHERE key = 'scheduled'").run();
-  assert.equal(scheduledStageKey(db), 'waiting_pay');
+  assert.equal(scheduledStageKey(db), 'approved');
 });
 
-test('скрытая колонка «Записан» всё равно та самая: в ней лежат записанные заявки', () => {
+// CRM_UNIFY_V1 — ЗАМЕНЁН НАМЕРЕННО (был «скрытая колонка «Записан» всё равно та
+// самая»): скрытая колонка не может принимать записанных — их там не видно.
+test('колонка записи: скрытая «Записан» не принимает записанных — последняя открытая видимая до «Пришёл»', () => {
   const db = fresh();
   db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'scheduled'").run();
-  assert.equal(scheduledStageKey(db), 'scheduled',
-    'спрятанная колонка перестала быть «Записан» — записанные заявки уехали бы в другую');
+  assert.equal(scheduledStageKey(db), 'approved', 'скрытая колонка не может принимать записанных — их не видно');
+});
+
+// CRM_UNIFY_V1 — «Колонка записи» — явная настройка «CRM-канбан» (crm_settings, мигр. 237).
+test('колонка записи: выбор администратора и его проверка при сохранении', () => {
+  const db = fresh();
+  saveConfig(db, { settings: { booked_stage: 'approved' } });
+  assert.equal(scheduledStageKey(db), 'approved');
+  assert.equal(crmConfig(db).settings.booked_stage, 'approved');
+  assert.equal(crmConfig(db).settings.booked_effective, 'approved');
+  assert.throws(() => saveConfig(db, { settings: { booked_stage: 'came' } }), /Колонка записи/);
+  assert.throws(() => saveConfig(db, { settings: { booked_stage: 'no_show' } }), /Колонка записи/);
+  assert.equal(readCrmSettings(db).booked_stage, 'approved', 'отказ ничего не записал');
+  saveConfig(db, { settings: { booked_stage: null } });
+  assert.equal(scheduledStageKey(db), 'scheduled');
+  // Р10: выбор, ставший недопустимым (колонку скрыли), молча заменяется правилом.
+  saveConfig(db, { settings: { booked_stage: 'recall' } });
+  db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'recall'").run();
+  assert.equal(scheduledStageKey(db), 'scheduled');
+  db.close();
+});
+
+test('окно повторного обращения: целое 1..720, по умолчанию 72', () => {
+  const db = fresh();
+  assert.equal(readCrmSettings(db).window_hours, 72);
+  saveConfig(db, { settings: { window_hours: 48 } });
+  assert.equal(readCrmSettings(db).window_hours, 48);
+  for (const bad of [0, 721, 1.5, 'abc']) assert.throws(() => saveConfig(db, { settings: { window_hours: bad } }), /Окно повторного обращения/);
+  db.close();
+});
+
+test('настройки помнят, кто и когда их менял', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (1, 'adm', 'x', 'admin')").run();
+  saveConfig(db, { settings: { booked_stage: 'recall' } }, { actorId: 1 });
+  const row = db.prepare('SELECT changed_by, changed_at FROM crm_settings WHERE id = 1').get();
+  assert.equal(row.changed_by, 1);
+  assert.match(String(row.changed_at), /^\d{4}-\d{2}-\d{2}T/);
+  db.close();
+});
+
+// --------------------------------------------------------------------------
+// CRM_UNIFY_V1 — «КОЛОНКА КОНВЕРСИИ (ПРИШЁЛ)» (дополнение владельца 2026-10-09)
+// --------------------------------------------------------------------------
+// Выбор переносит вид won на выбранную колонку одной транзакцией; прежняя
+// конверсия становится открытой. Новой таблицы нет: всё, что ищет конверсию,
+// читает вид won (wonStageKey). Карточки не двигаются.
+const wonKeys = (db) => db.prepare("SELECT key FROM crm_stages WHERE kind = 'won'").all().map((r) => r.key);
+
+test('конверсия: перенос won одной транзакцией — после сохранения ровно одна won; карточки на местах', () => {
+  const db = fresh();
+  const inCame = lead(db, { status: 'came' });
+  const inApproved = lead(db, { status: 'approved' });
+  const out = saveConfig(db, { settings: { won_stage: 'approved' } });
+  assert.deepEqual(wonKeys(db), ['approved']);
+  assert.equal(wonStageKey(db), 'approved');
+  assert.equal(listStages(db).find((s) => s.key === 'came').kind, 'open', 'прежняя конверсия — открытая колонка');
+  assert.equal(out.stages.find((s) => s.key === 'approved').kind, 'won', 'ответ сохранения — уже новая воронка');
+  const status = (id) => db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(id).status;
+  assert.equal(status(inCame), 'came', 'карточка прежней конверсии не тронута');
+  assert.equal(status(inApproved), 'approved');
+  // Колонка записи по умолчанию считается от новой конверсии.
+  assert.equal(scheduledStageKey(db), 'scheduled');
+  db.close();
+});
+
+test('конверсия: отказ для проигрышной, «Не пришёл», скрытой — и для колонки записи на месте конверсии или после', () => {
+  const db = fresh();
+  assert.throws(() => saveConfig(db, { settings: { won_stage: 'stopped' } }), /Проигрышная колонка/);
+  assert.throws(() => saveConfig(db, { settings: { won_stage: 'no_show' } }), /Проигрышная колонка|«Не пришёл»/);
+  db.prepare("UPDATE crm_stages SET kind = 'open' WHERE key = 'no_show'").run();
+  assert.throws(() => saveConfig(db, { settings: { won_stage: 'no_show' } }), /«Не пришёл» не может быть колонкой конверсии/);
+  db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'approved'").run();
+  assert.throws(() => saveConfig(db, { settings: { won_stage: 'approved' } }), /Скрытая колонка/);
+  db.prepare("UPDATE crm_stages SET is_active = 1 WHERE key = 'approved'").run();
+  assert.throws(() => saveConfig(db, { settings: { won_stage: 'nope' } }), /нет в воронке/);
+  // Колонка записи «Подтверждён» и конверсия «Записан» — запись после конверсии.
+  assert.throws(() => saveConfig(db, { settings: { booked_stage: 'approved', won_stage: 'scheduled' } }), /Колонка записи/);
+  // Сохранённый выбор тоже проверяется: «Подтверждён» стоит после новой «Записан».
+  saveConfig(db, { settings: { booked_stage: 'approved' } });
+  assert.throws(() => saveConfig(db, { settings: { won_stage: 'scheduled' } }), /Колонка записи/);
+  // Запись = конверсия.
+  assert.throws(() => saveConfig(db, { settings: { booked_stage: 'approved', won_stage: 'approved' } }), /Колонка записи/);
+  // Перед конверсией не осталось ни одной колонки для записанных.
+  assert.throws(() => saveConfig(db, { settings: { booked_stage: null, won_stage: 'in_process' } }), /Перед колонкой конверсии/);
+  assert.deepEqual(wonKeys(db), ['came'], 'ни один отказ не сдвинул конверсию');
+  assert.equal(readCrmSettings(db).booked_stage, 'approved', 'ни один отказ не изменил колонку записи');
+  db.close();
+});
+
+test('конверсия и запись одной правкой: пара проверяется по новой воронке', () => {
+  const db = fresh();
+  saveConfig(db, { settings: { booked_stage: 'scheduled', won_stage: 'approved' } });
+  assert.deepEqual(wonKeys(db), ['approved']);
+  assert.equal(scheduledStageKey(db), 'scheduled');
+  // Назад — тоже одной правкой.
+  saveConfig(db, { settings: { booked_stage: null, won_stage: 'came' } });
+  assert.deepEqual(wonKeys(db), ['came']);
+  assert.equal(listStages(db).find((s) => s.key === 'approved').kind, 'open');
+  db.close();
 });
 
 // Переход заявки не вправе отказать в визите (settleCrmOnBooking в

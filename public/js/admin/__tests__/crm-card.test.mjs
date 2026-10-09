@@ -751,6 +751,45 @@ test('«Записать на дату»: дата из окна дат доез
   window.easymed.state.user = null;
 });
 
+// CRM_UNIFY_V1 — «Колонка записи» — явная настройка «CRM-канбан»: доска берёт
+// её из crm_config_get (settings.booked_stage) по тому же правилу, что сервер
+// (public/js/shared/crm-booked-stage.js), а не угадывает. Воронка — сидовая
+// (своя копия: SEEDED_STAGES объявлена ниже по файлу).
+const UNIFY_STAGES = [
+  { key: 'in_process', label: 'В обработке', color: 'info',   position: 1, is_active: 1, kind: 'open' },
+  { key: 'recall',     label: 'Перезвонить', color: 'warn',   position: 2, is_active: 1, kind: 'open' },
+  { key: 'scheduled',  label: 'Записан',     color: 'purple', position: 3, is_active: 1, kind: 'open' },
+  { key: 'approved',   label: 'Подтверждён', color: 'teal',   position: 4, is_active: 1, kind: 'open' },
+  { key: 'came',       label: 'Пришёл',      color: 'ok',     position: 5, is_active: 1, kind: 'won' },
+  { key: 'no_show',    label: 'Не пришёл',   color: 'crit',   position: 6, is_active: 1, kind: 'lost' },
+  { key: 'stopped',       label: 'Обработка остановлена', color: '', position: 7, is_active: 1, kind: 'lost' },
+  { key: 'not_qualified', label: 'Нецелевой',             color: '', position: 8, is_active: 1, kind: 'lost' },
+];
+test('CRM_UNIFY_V1: записанная заявка уходит в «Колонку записи» из настроек, а не в угаданную', async () => {
+  BOARD_CFG = { stages: UNIFY_STAGES, sources: [], routing: [], settings: { booked_stage: 'approved' } };
+  try {
+    const modal = await openBookable();
+    const sheet = await openScheduleSheet(modal);
+    const inputs = dateInputs(sheet);
+    const rowDate = inputs[inputs.length - 1];
+    rowDate.value = BOOK_DAY;
+    rowDate.dispatchEvent({ type: 'change', target: rowDate, currentTarget: rowDate });
+    walk(sheet).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Сохранить и записать')).click();
+    await tick(80);
+    const row = savedRow();
+    assert.ok(row, 'сохранение не дошло до базы');
+    assert.strictEqual(row.values.scheduled_date, BOOK_DAY);
+    assert.strictEqual(row.values.status, 'approved', 'заявка ушла не в колонку записи из настроек');
+  } finally {
+    // Пустой ответ настроек доска не применяет (остаётся прежняя воронка),
+    // поэтому сидовая без выбора возвращается явно — следующим тестам «Записан».
+    BOARD_CFG = { stages: UNIFY_STAGES, sources: [], routing: [] };
+    await board([]);
+    BOARD_CFG = null;
+    window.easymed.state.user = null;
+  }
+});
+
 test('«Применить ко всем» — тот же результат: дата уходит в заявку', async () => {
   const modal = await openBookable();
   const sheet = await openScheduleSheet(modal);

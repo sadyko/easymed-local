@@ -26,7 +26,8 @@ const registrar = { id: 3, role: 'registrar' };
 test('crm_config_get answers stages, sources and routing in one call', () => {
   const db = fresh();
   const out = crmConfigGet(db, {}, registrar);
-  assert.deepEqual(Object.keys(out).sort(), ['routing', 'sources', 'stages', 'tags']);   // CRM_HEAD_MERGE_TAGS_V1
+  // CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО: и настройки «CRM-канбан» (crm_settings, мигр. 237).
+  assert.deepEqual(Object.keys(out).sort(), ['routing', 'settings', 'sources', 'stages', 'tags']);   // CRM_HEAD_MERGE_TAGS_V1
   assert.equal(out.stages.length, 8);
   assert.equal(out.sources.length, 8);
   assert.equal(out.routing.length, 15);
@@ -97,4 +98,41 @@ test('the gate classifies them: get reads, save writes, neither is always-allowe
   // Reshaping the CRM board is clinical operations, not licence recovery.
   assert.equal(isAlwaysAllowedRpc('crm_config_get'), false);
   assert.equal(isAlwaysAllowedRpc('crm_config_save'), false);
+});
+
+// CRM_UNIFY_V1 — «Колонка записи» и «Колонка конверсии (пришёл)» сохраняются той
+// же дверью, что колонки: только администратор (или роль с «CRM-канбан:
+// Изменение»), с записью кто и когда.
+test('CRM_UNIFY_V1: оператор без права админа не меняет ни колонку записи, ни конверсию', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (4, 'cc', 'x', 'callcenter')").run();
+  const operator = { id: 4, role: 'callcenter' };
+  for (const user of [operator, registrar]) {
+    for (const settings of [{ won_stage: 'approved' }, { booked_stage: 'recall' }]) {
+      assert.throws(() => crmConfigSave(db, { settings }, user), (e) => e instanceof RpcError && e.status === 403);
+    }
+  }
+  assert.deepEqual(db.prepare("SELECT key FROM crm_stages WHERE kind = 'won'").all().map((r) => r.key), ['came']);
+  assert.deepEqual(db.prepare('SELECT booked_stage, changed_by FROM crm_settings').get(), { booked_stage: null, changed_by: null });
+});
+
+test('CRM_UNIFY_V1: администратор переносит конверсию — кто и когда записано; отказ — 400 с фразой', () => {
+  const db = fresh();
+  const out = crmConfigSave(db, { settings: { won_stage: 'approved', booked_stage: 'scheduled' } }, doctorAdmin);
+  assert.equal(out.stages.find((s) => s.kind === 'won').key, 'approved');
+  assert.deepEqual(out.settings, { booked_stage: 'scheduled', window_hours: 72, booked_effective: 'scheduled' });
+  const row = db.prepare('SELECT changed_by, changed_at FROM crm_settings').get();
+  assert.equal(row.changed_by, 2, 'кто менял — тот, кто вошёл, а не то, что прислал браузер');
+  assert.ok(row.changed_at);
+  // actorId из тела запроса не подменяет вошедшего.
+  crmConfigSave(db, { settings: { booked_stage: 'recall' }, actorId: 3 }, admin);
+  assert.equal(db.prepare('SELECT changed_by FROM crm_settings').get().changed_by, 1);
+  try {
+    crmConfigSave(db, { settings: { won_stage: 'stopped' } }, admin);
+    assert.fail('ожидался отказ');
+  } catch (e) {
+    assert.ok(e instanceof RpcError);
+    assert.equal(e.status, 400);
+    assert.match(e.message, /Проигрышная колонка/);
+  }
 });

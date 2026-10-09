@@ -368,3 +368,19 @@ test('isNotImplemented is the same 501 rule the telephony screen uses', () => {
     assert.equal(isNotImplemented({ message: 'нет доступа' }), false);
     assert.equal(isNotImplemented(null), false);
 });
+
+// CRM_UNIFY_V1 — «Колонка записи» и окно приходят в настройках; доска берёт колонку по общему правилу
+// (public/js/shared/crm-booked-stage.js — то же, что у сервера).
+test('CRM_UNIFY_V1: settings в ответе; bookedStatus — выбор, иначе «Записан», иначе последняя открытая видимая до «Пришёл»', () => {
+    const stages = [
+        { key: 'in_process', label: 'Новый', kind: 'open', position: 1, is_active: 1 },
+        { key: 'approved', label: 'Подтверждён', kind: 'open', position: 2, is_active: 1 },
+        { key: 'came', label: 'Пришёл', kind: 'won', position: 3, is_active: 1 },
+    ];
+    assert.deepEqual(shapeConfig({ stages, settings: { booked_stage: 'approved', window_hours: 48 } }).settings, { booked_stage: 'approved', window_hours: 48 });
+    assert.deepEqual(shapeConfig({ stages }).settings, { booked_stage: null, window_hours: 72 });
+    assert.equal(boardConfig({ stages, settings: { booked_stage: 'in_process' } }).bookedStatus, 'in_process');
+    assert.equal(boardConfig({ stages }).bookedStatus, 'approved', 'без «Записан» — последняя открытая видимая до «Пришёл»');
+    assert.equal(boardConfig({ stages, settings: { booked_stage: 'came' } }).bookedStatus, 'approved', 'недопустимый выбор не действует');
+    assert.equal(boardConfig(null).bookedStatus, 'scheduled', 'запасная воронка — «Записан»');
+});
