@@ -145,7 +145,6 @@ test('импорт услуг: полупара обнуляется И назы
 test('импорт услуг: дробный порог и доля > 100 — ступень не сохраняется, с предупреждением', () => {
     for (const [cells, msg] of [
         [{ doctor_tier_from: '25.6', doctor_tier_percent: '40' }, 'Порог ступени — целое число'],
-        [{ doctor_tier_from: '25', doctor_tier_percent: '140' }, 'Доля выше порога — от 0 до 100 %'],
         [{ doctor_tier_from: '25', doctor_tier_percent: '40', doctor_tier_from_2: '7.5', doctor_tier_percent_2: '45' }, 'Порог ступени 2 — целое число'],
     ]) {
         const row = buildImportRow('services', { name: 'Приём терапевта', group: 'Консультация', price: 100000, ...cells });
@@ -157,6 +156,18 @@ test('импорт услуг: дробный порог и доля > 100 — �
     const bad2 = buildImportRow('services', { name: 'Приём терапевта', group: 'Консультация', price: 100000,
         doctor_tier_from: '25', doctor_tier_percent: '40', doctor_tier_from_2: '7.5', doctor_tier_percent_2: '45' });
     assert.ok(!('doctor_tier_from_2' in bad2.payload), 'сломанная ступень 2 уехала в запись');
+    // CLINIC_API_FIX_V1 (ревью 3) — доля 140 % у НОВОЙ услуги: строка не
+    // ввозится (доля — деньги, вне 0…100 % — как не число), 100 молча нет.
+    const pct = buildImportRow('services', { name: 'Приём терапевта', group: 'Консультация', price: 100000, doctor_tier_from: '25', doctor_tier_percent: '140' });
+    assert.strictEqual(pct.status, 'error', JSON.stringify(pct.notes));
+    assert.ok(pct.notes.some((n) => String(n).includes('доля больше 100%')), JSON.stringify(pct.notes));
+    assert.ok(!Object.values(pct.payload).includes(100), 'число молча округлено: ' + JSON.stringify(pct.payload));
+    // У обновляемой — ступень из файла не сохраняется, причина — как у окна услуги.
+    const upd = buildImportRow('services', { name: 'Приём терапевта', group: 'Консультация', price: 100000, doctor_tier_from: '25', doctor_tier_percent: '140' },
+        { lookups: { __wantUpdate: true, __stored: new Map([['приём терапевта', { name: 'Приём терапевта' }]]) } });
+    assert.strictEqual(upd.status, 'warn');
+    assert.ok(upd.notes.some((n) => String(n).includes('Доля выше порога — от 0 до 100 %')), JSON.stringify(upd.notes));
+    assert.ok(!('doctor_tier_percent' in upd.payload));
 });
 
 // ---------------------------------------------------------------------------

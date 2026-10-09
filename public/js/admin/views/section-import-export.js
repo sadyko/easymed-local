@@ -612,10 +612,16 @@ const IMPORT_CONFIGS = {
                 var bad = ('bad' in rf) ? [c.from, rf.bad] : ('bad' in rp) ? [c.pct, rp.bad] : null;
                 // CLINIC_API_FIX_V1 (ревью итога, решение) — доля ступени — деньги:
                 // у новой услуги не число в ней строку не ввозит.
-                if (('bad' in rp) && !serviceRowUpdates(payload, ctx && ctx.lookups)) {
+                // Ревью 3 — и доля вне 0…100 % (у обновляемой услуги её назовёт
+                // проверка границ ниже, а ступень из файла не запишется).
+                var pctWhy = ('n' in rp) && (rp.n > 100 || rp.n < 0) ? tr(rp.n > 100 ? 'доля больше 100%' : 'доля меньше 0%') : null;
+                if ((('bad' in rp) || pctWhy) && !serviceRowUpdates(payload, ctx && ctx.lookups)) {
                     delete payload[c.from]; delete payload[c.pct];
-                    if (ctx) ctx.fail(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
-                        { n: ctx.rowNum, col: c.pct, v: rp.bad }));
+                    if (ctx) ctx.fail(pctWhy
+                        ? trf('Строка {n}: в колонке {col} {why} («{v}») — строка не импортирована.',
+                            { n: ctx.rowNum, col: c.pct, why: pctWhy, v: String(r[c.pct]).trim() })
+                        : trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.',
+                            { n: ctx.rowNum, col: c.pct, v: rp.bad }));
                     return null;
                 }
                 if (bad) {
@@ -1903,10 +1909,12 @@ function unwrapEqualsQuoted(ws) {
 // показывает 12,5 % как «13%». Колонка процентов читает 40; колонка не
 // процентов («цена») отказывает, как любому «…%». Процентный формат — знак %
 // в формате ячейки вне кавычек (0"%" — просто подпись, число не умножается);
-// формата нет — по показанному тексту.
+// формата нет — по показанному тексту. CLINIC_API_FIX_V1 (ревью 3) — «_x»
+// (отступ шириной символа x) и «*x» (заполнитель) — тоже не знак: 0.0_% Excel
+// показывает «40.0 », это не процентный формат.
 function isPercentFormat(cell) {
     if (cell.z != null && cell.z !== '') {
-        return /%/.test(String(cell.z).replace(/"[^"]*"/g, '').replace(/\\./g, ''));
+        return /%/.test(String(cell.z).replace(/"[^"]*"/g, '').replace(/\\./g, '').replace(/[_*]./g, ''));
     }
     return /%\s*$/.test(String(cell.w || ''));
 }
@@ -1915,7 +1923,12 @@ function percentCellsAsText(ws) {
         if (addr[0] === '!') continue;
         const cell = ws[addr];
         if (!cell || cell.t !== 'n' || !Number.isFinite(cell.v) || !isPercentFormat(cell)) continue;
-        const text = String(+(cell.v * 100).toFixed(10)) + '%';
+        // CLINIC_API_FIX_V1 (ревью 3) — ровно три знака после точки правило
+        // числа считает неоднозначными («12.345» — и 12 345); значение здесь
+        // точное, поэтому дописывается ноль: «12.3450%» — однозначно 12,345.
+        let num = String(+(cell.v * 100).toFixed(10));
+        if (/\.\d{3}$/.test(num)) num += '0';
+        const text = num + '%';
         cell.t = 's'; cell.v = text; cell.w = text;
         delete cell.z;
     }
@@ -2083,13 +2096,21 @@ function buildRow(raw, rowNum, lookups, cfg) {
             const key = col.target || col.key;
             const read = readImportNumber(cellRaw, !!col.percent);
             if (read.empty) { payload[key] = col.defaultNum ?? 0; continue; }
-            if ('n' in read) { payload[key] = col.coerce === 'int' ? Math.round(read.n) : read.n; continue; }
-            const at = { n: rowNum, col: col.key, v: read.bad };
+            // CLINIC_API_FIX_V1 (ревью 3) — в колонке процентов доля вне 0…100 %
+            // для правила числа — то же, что не число; причина называется.
+            const why = ('n' in read) && col.percent && (read.n > 100 || read.n < 0)
+                ? tr(read.n > 100 ? 'доля больше 100%' : 'доля меньше 0%') : null;
+            if (('n' in read) && !why) { payload[key] = col.coerce === 'int' ? Math.round(read.n) : read.n; continue; }
+            const at = { n: rowNum, col: col.key, v: why ? String(cellRaw).trim() : read.bad, why };
             if (updating) {
-                notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.', at));
+                notes.push(why
+                    ? trf('Строка {n}: в колонке {col} {why} («{v}») — оставлено сохранённое значение.', at)
+                    : trf('Строка {n}: в колонке {col} не число («{v}») — оставлено сохранённое значение.', at));
                 if (status !== 'error') status = 'warn';
-            } else if (col.money || col.required) {
-                notes.push(trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.', at));
+            } else if (col.money || col.required || why) {
+                notes.push(why
+                    ? trf('Строка {n}: в колонке {col} {why} («{v}») — строка не импортирована.', at)
+                    : trf('Строка {n}: в колонке {col} не число («{v}») — строка не импортирована.', at));
                 status = 'error';
             } else if (typeof cfg.rowUpdates === 'function' && col.defaultNum != null) {
                 payload[key] = col.defaultNum;

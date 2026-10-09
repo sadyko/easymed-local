@@ -285,3 +285,45 @@ test('новые сообщения — на трёх языках, узбекс
         for (const ph of ['{n}', '{col}', '{v}']) assert.ok(e.uz.includes(ph) && e.en.includes(ph), ph + ' потерян в переводе: ' + k);
     }
 });
+
+// CLINIC_API_FIX_V1 (ревью 3) — ДОЛЯ ВНЕ 0…100 %. В колонке процентов (НДС,
+// доли, процент зарплаты, скидки) 120 или −5 — не доля: для правила числа это
+// то же, что не число. Новая строка не ввозится, обновляемая оставляет
+// сохранённое; сообщение называет причину — «доля больше 100%» / «меньше 0%».
+test('доля вне 0…100 %: новая услуга не ввозится, обновляемая оставляет сохранённое, причина названа', () => {
+    const fresh = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '120' }, { rowNum: 3 });
+    assert.strictEqual(fresh.status, 'error', JSON.stringify(fresh.notes));
+    assert.strictEqual(noteAbout(fresh, 'default_doctor_percent'), 'Строка 3: в колонке default_doctor_percent доля больше 100% («120») — строка не импортирована.');
+
+    const upd = buildImportRow('services', { ...MIN, tax_rate: '-5' }, { rowNum: 3, lookups: UPDATE() });
+    assert.strictEqual(upd.status, 'warn', JSON.stringify(upd.notes));
+    assert.ok(!('tax_rate' in upd.payload), 'НДС −5 записан');
+    assert.strictEqual(noteAbout(upd, 'tax_rate'), 'Строка 3: в колонке tax_rate доля меньше 0% («-5») — оставлено сохранённое значение.');
+
+    const pct = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '140%' });
+    assert.strictEqual(pct.status, 'error');
+});
+
+test('доля 0 и 100 % — допустимы', () => {
+    const row = buildImportRow('services', { ...MIN, price: 1000, default_doctor_percent: '100', tax_rate: '0' });
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+    assert.strictEqual(row.payload.default_doctor_percent, 100);
+    assert.strictEqual(row.payload.tax_rate, 0);
+});
+
+test('доля вне 0…100 % в ступени, товаре и зарплате — тоже отказ новой строки', () => {
+    const tier = buildImportRow('services', { ...MIN, price: 1000, doctor_tier_from: 10, doctor_tier_percent: 120 }, { rowNum: 4 });
+    assert.strictEqual(tier.status, 'error', JSON.stringify(tier.notes));
+    assert.ok(noteAbout(tier, 'doctor_tier_percent').includes('доля больше 100%'), JSON.stringify(tier.notes));
+    assert.strictEqual(buildImportRow('clinic_items', { name: 'Шприц', price: 1500, tax_rate: '150' }).status, 'error');
+    assert.strictEqual(buildImportRow('users', { username: 'a.b', role: 'doctor', salary_percent: '101' }).status, 'error');
+});
+
+test('сообщения о доле вне 0…100 % — на трёх языках', () => {
+    for (const k of ['Строка {n}: в колонке {col} {why} («{v}») — строка не импортирована.',
+        'Строка {n}: в колонке {col} {why} («{v}») — оставлено сохранённое значение.',
+        'доля больше 100%', 'доля меньше 0%']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет перевода: ' + k);
+    }
+});

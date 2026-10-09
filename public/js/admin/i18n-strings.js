@@ -3,6 +3,11 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_API_FIX_V1 (ревью 3) — импорт Excel: доля вне 0…100 % в колонке процентов (views/section-import-export.js)
+  "Строка {n}: в колонке {col} {why} («{v}») — строка не импортирована.": {"en":"Row {n}: column {col}: {why} («{v}») — the row was not imported.","ru":"Строка {n}: в колонке {col} {why} («{v}») — строка не импортирована.","uz":"{n}-qator: {col} ustunida {why} («{v}») — qator import qilinmadi."},   // CLINIC_API_FIX_V1
+  "Строка {n}: в колонке {col} {why} («{v}») — оставлено сохранённое значение.": {"en":"Row {n}: column {col}: {why} («{v}») — the saved value is kept.","ru":"Строка {n}: в колонке {col} {why} («{v}») — оставлено сохранённое значение.","uz":"{n}-qator: {col} ustunida {why} («{v}») — saqlangan qiymat qoldirildi."},   // CLINIC_API_FIX_V1
+  "доля больше 100%": {"en":"the share is over 100%","ru":"доля больше 100%","uz":"ulush 100% dan katta"},   // CLINIC_API_FIX_V1
+  "доля меньше 0%": {"en":"the share is below 0%","ru":"доля меньше 0%","uz":"ulush 0% dan kichik"},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью итога) — окно импорта: строки с замечаниями видны всегда (views/section-import-export.js)
   "из них с замечаниями:": {"en":"of them with notes:","ru":"из них с замечаниями:","uz":"shundan izohli:"},   // CLINIC_API_FIX_V1
   "Предпросмотр: все строки с замечаниями и ошибками ({flagged}) и первые {n} без замечаний — всего строк {total}": {"en":"Preview: every row with notes or errors ({flagged}) and the first {n} without notes — {total} rows in total","ru":"Предпросмотр: все строки с замечаниями и ошибками ({flagged}) и первые {n} без замечаний — всего строк {total}","uz":"Oldindan ko'rish: izoh yoki xatoli barcha qatorlar ({flagged}) va izohsiz birinchi {n} tasi — jami {total} qator"},   // CLINIC_API_FIX_V1

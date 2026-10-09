@@ -236,3 +236,29 @@ test('книга Excel (.xlsx, .ods, .xls) под именем .csv открыв
         assert.deepEqual(raws, [{ name: 'Приём кардиолога', group: 'Консультация', price: 150000 }], bookType + ': ' + JSON.stringify(raws));
     }
 });
+
+// CLINIC_API_FIX_V1 (ревью 3) — ПРОЦЕНТНЫЙ ФОРМАТ: ТОЧНЕЕ.
+//  • «_x» и «*x» в формате — отступ и заполнитель, а не знак: 0.0_% — не
+//    процентный формат (Excel показывает «40.0 »), число не умножается на 100;
+//  • 0,12345 в формате «0%» — 12,345 %, а не отказ по правилу трёх знаков
+//    (текст из значения собирается однозначно);
+//  • 1,2 в формате «0%» — 120 %: доля больше 100 % — новая строка не ввозится.
+test('.xlsx: 0.0_% — не процентный формат, 40 остаётся 40', () => {
+    const buf = xlsxWith(['name', 'group', 'price', 'default_doctor_percent'], ['Приём кардиолога', 'Консультация', 150000, { v: 40, z: '0.0_%' }]);
+    const [row] = rowsOf(buf, 'services', UPDATE());
+    assert.strictEqual(row.payload.default_doctor_percent, 40);
+});
+
+test('.xlsx: 0,12345 в формате «0%» — 12,345, а не «не число»', () => {
+    const buf = xlsxWith(['name', 'group', 'price', 'default_doctor_percent'], ['Приём кардиолога', 'Консультация', 150000, { v: 0.12345, z: '0%' }]);
+    const [row] = rowsOf(buf, 'services', UPDATE());
+    assert.strictEqual(row.payload.default_doctor_percent, 12.345);
+    assert.strictEqual(row.status, 'ok', JSON.stringify(row.notes));
+});
+
+test('.xlsx: 120% в процентной ячейке — доля больше 100%, новая строка не ввозится', () => {
+    const buf = xlsxWith(['name', 'group', 'price', 'default_doctor_percent'], ['Приём невролога', 'Консультация', 150000, { v: 1.2, z: '0%' }]);
+    const [row] = rowsOf(buf, 'services');
+    assert.strictEqual(row.status, 'error', JSON.stringify(row.notes));
+    assert.ok(row.notes.some((n) => String(n).includes('доля больше 100%')), JSON.stringify(row.notes));
+});
