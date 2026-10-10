@@ -199,7 +199,12 @@ function connRow(c, s) {
     h('td', null, c.last_used_at ? fmtDateTime(c.last_used_at) : h('span', { class: 'muted' }, 'ещё не было')),
     h('td', null, Tag(c.active ? 'Включено' : 'Выключено', { kind: c.active ? 'ok' : '', dot: true }), expiryTag(c)));
   row.addEventListener('click', () => openCard(c));
-  row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCard(c); } });
+  row.addEventListener('keydown', (e) => {
+    // CLINIC_API_STEP7_V1 (ревью №12) — нажатие на кнопке внутри строки («Скопировать
+    // ключ») принадлежит кнопке: строка его не перехватывает и не отменяет.
+    if (e.target !== row) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCard(c); }
+  });
   return row;
 }
 

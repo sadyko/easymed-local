@@ -152,3 +152,20 @@ test('адрес API — в поле только для чтения: без б
   assert.equal(input.selected, true, 'адрес не выделен');
   assert.equal(document.activeElement, input, 'фокус не в поле адреса');
 });
+
+// CLINIC_API_STEP7_V1 (ревью №12) — Enter и пробел на значке «Скопировать ключ»
+// всплывали к строке, и строка открывала карточку, отменив нажатие кнопки.
+test('Enter и пробел на значке «Скопировать ключ» достаются кнопке, а не строке; Enter на самой строке открывает карточку', async () => {
+  reset();
+  const root = await open();
+  const row = byAttr(root, 'data-apic-conn', '3')[0];
+  const btn = byAttr(row, 'data-apic-act', 'copy-key')[0];
+  for (const key of ['Enter', ' ']) {
+    let prevented = false;
+    row.dispatchEvent({ type: 'keydown', key, target: btn, currentTarget: row, preventDefault() { prevented = true; } });
+    assert.equal(prevented, false, 'строка отменила нажатие кнопки: ' + JSON.stringify(key));
+  }
+  assert.ok(!modal('conn'), 'карточка открылась с клавиатуры на значке копирования');
+  row.dispatchEvent({ type: 'keydown', key: 'Enter', target: row, currentTarget: row, preventDefault() {} });
+  assert.ok(modal('conn'), 'Enter на строке не открыл карточку');
+});
