@@ -793,9 +793,9 @@ const IMPORT_CONFIGS = {
             // SERVICE_NAMES_ONLINE_V1 — the uz/en names and the online flag.
             // CLINIC_API_FIX_V1 — an online row without a uz name imports with
             // the flag off and a warning (transform above), as the dialog refuses it.
-            { key: 'name_uz',          hint: 'Название на узбекском (обязательно для онлайн-записи)' },
+            { key: 'name_uz',          hint: 'Название на узбекском (обязательно, чтобы показывать на сайте и у партнёров)' },   // SERVICES_PACKAGES_V1
             { key: 'name_en',          hint: 'Название на английском (необязательно)' },
-            { key: 'online_booking',   coerce: 'bool', defaultBool: false, hint: 'true / false — доступна для онлайн-записи (нужны названия ru и uz)' },
+            { key: 'online_booking',   coerce: 'bool', defaultBool: false, hint: 'true / false — показывать на сайте и у партнёров (нужны названия ru и uz)' },   // SERVICES_PACKAGES_V1
             // CLINIC_API_FIX_V1 (ревью итога) — raw: эти колонки читает transform
             // выше из строки листа (тем же readImportNumber), buildRow их не трогает.
             { key: 'price_secondary',  coerce: 'num', raw: true, hint: 'Цена второго визита (пусто — как первый)' },

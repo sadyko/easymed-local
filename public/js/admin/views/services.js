@@ -143,7 +143,8 @@ const COLUMNS = [
     // SERVICE_NAMES_ONLINE_V1
     { key: 'name_uz',    label: 'Название (UZ)', w: 24, optional: true, text: (s) => s.name_uz || '' },
     { key: 'name_en',    label: 'Название (EN)', w: 24, optional: true, text: (s) => s.name_en || '' },
-    { key: 'online',     label: 'Онлайн-запись', w: 9,  optional: true, text: (s) => (s.online_booking ? 'Да' : 'Нет'),
+    { key: 'online',     label: 'Сайт и партнёры',   // SERVICES_PACKAGES_V1 — тот же флаг, что на экране «Услуги для сайта и партнёров»
+      w: 9,  optional: true, text: (s) => (s.online_booking ? 'Да' : 'Нет'),
       cell: (s) => h('td', null, s.online_booking ? Tag('Да', { kind: 'ok', dot: true }) : h('span', { class: 'muted' }, '—')) },
 ];
 const DEFAULT_COLS = COLUMNS.filter((c) => !c.optional).map((c) => c.key);

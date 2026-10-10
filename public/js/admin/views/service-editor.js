@@ -18,6 +18,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, toast, field, checkField } from '../ui.js';
 import { tr, trf } from '../i18n.js';
+import { SERVICE_PUBLIC_MESSAGES } from '../../shared/service-public.js';   // SERVICES_PACKAGES_V1 — одно правило и одни слова с сервером
 import {
     SERVICE_SECTIONS, labBlockVisible, resolveCombobox, splitPerformers,
     currentPerformerIds, performerGate, rpcErrorTemplate,
@@ -272,7 +273,7 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
         // SERVICE_NAMES_ONLINE_V1 — the server refuses this too; the check here
         // only puts the cursor where the missing word goes.
         if (onlineChk.checked && !nameUzInp.value.trim()) {
-            toast('Для онлайн-записи заполните название на русском и узбекском.', 'warn'); goTo('main', nameUzInp); return;
+            toast(SERVICE_PUBLIC_MESSAGES.online, 'warn'); goTo('main', nameUzInp); return;   // SERVICES_PACKAGES_V1
         }
         const price = Number(priceInp.value);
         if (priceInp.value === '' || !Number.isFinite(price) || price < 0) {
@@ -412,8 +413,9 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
                     uzField,
                     field('Название (EN)', nameEnInp)),
                 h('div', { class: 'svc-ed-online' },
-                    checkField('Доступна для онлайн-записи', onlineChk),
-                    h('div', { class: 'svc-ed-note' }, 'Пока только параметр. Для онлайн-записи нужны названия на русском и узбекском — без них сохранить с включённой галочкой нельзя.'))),
+                    // SERVICES_PACKAGES_V1 — тот же флаг, что переключатель экрана «Услуги для сайта и партнёров»: одно значение, одно имя.
+                    checkField('Показывать на сайте и у партнёров', onlineChk),
+                    h('div', { class: 'svc-ed-note' }, 'Сайт клиники, Symptex и партнёры. Нужны названия на русском и узбекском — без них сохранить с включённой галочкой нельзя.'))),
             grp('Классификация',
                 grid(2,
                     field('Группа — одна из пяти, задаёт маршрут', typeSel),   // SVC_VOCAB_V1
