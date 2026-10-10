@@ -71,39 +71,70 @@ function descriptions({ ru, uz } = {}) {
   };
 }
 
-// CLINIC_PROFILE_V1 — отпечаток описания, которое Telegram уже принял
-// (telegram_state, мигр. 060). По нему цикл бота узнаёт, что клинику
-// переименовали в «Компании», и не шлёт то же описание на каждом проходе.
+// CLINIC_PROFILE_V1 — отпечаток НАЗВАНИЙ клиники, с которыми описание бота
+// последний раз принято (telegram_state, мигр. 060). По нему цикл бота
+// узнаёт, что клинику переименовали в «Компании», и не шлёт то же описание
+// на каждом проходе.
+//   • ключа нет — первый проход после обновления: отпечаток запоминается БЕЗ
+//     отправки (ревью M5) — у бота может стоять описание из @BotFather, и
+//     затирать его сгенерированным при обновлении никто не просил;
+//   • пустая строка — «описание надо дослать» (setupBot не смог его поставить).
 const DESCRIBED_KEY = 'bot_description';
-const fingerprint = (d) => d.long.slice(0, 512) + '\n--\n' + d.short.slice(0, 120);
-function readDescribed(db) {
-  try { const r = db.prepare('SELECT value FROM telegram_state WHERE key = ?').get(DESCRIBED_KEY); return r ? r.value : ''; }
-  catch { return ''; }
+// CLINIC_PROFILE_V1 (ревью M5) — пауза после сбоя: { fails, next } (мс).
+// 5 мин, 10, 20, … — не больше 6 часов; удача снимает паузу.
+const RETRY_KEY = 'bot_description_retry';
+const RETRY_BASE_MS = 5 * 60 * 1000;
+const RETRY_CAP_MS = 6 * 60 * 60 * 1000;
+const namesPrint = ({ ru, uz }) => JSON.stringify([ru || '', uz || '']);
+function readState(db, key) {
+  try { const r = db.prepare('SELECT value FROM telegram_state WHERE key = ?').get(key); return r ? r.value : null; }
+  catch { return null; }
 }
-function writeDescribed(db, v) {
+function writeState(db, key, v) {
   db.prepare(`INSERT INTO telegram_state (key, value, updated_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(DESCRIBED_KEY, v);
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(key, v);
+}
+function clearRetry(db) {
+  try { db.prepare('DELETE FROM telegram_state WHERE key = ?').run(RETRY_KEY); } catch { /* нет таблицы — нечего снимать */ }
+}
+function readRetry(db) {
+  try { const v = JSON.parse(readState(db, RETRY_KEY) || 'null'); return v && Number.isFinite(v.next) ? v : null; }
+  catch { return null; }
 }
 
 // CLINIC_PROFILE_V1 — описание бота следует за названием клиники. Цикл бота
-// зовёт это на каждом проходе рассылки (index.js): то же описание — ни одного
+// зовёт это на каждом проходе рассылки (index.js): название то же — ни одного
 // запроса; другое — два запроса и новый отпечаток. Сбой — исключение наружу,
-// отпечаток прежний, следующий проход повторит.
+// отпечаток прежний, а следующая попытка — не раньше паузы (ревью M5).
 export async function syncBotDescription(db, token, deps = {}) {
-  const d = descriptions(clinicNames(db));
-  const fp = fingerprint(d);
-  if (readDescribed(db) === fp) return { changed: false };
-  await setMyDescription(token, d.long.slice(0, 512), '', deps);
-  await setMyShortDescription(token, d.short.slice(0, 120), '', deps);
-  writeDescribed(db, fp);
+  const now = typeof deps.now === 'function' ? deps.now() : Date.now();
+  const names = clinicNames(db);
+  const fp = namesPrint(names);
+  const stored = readState(db, DESCRIBED_KEY);
+  if (stored === null) { writeState(db, DESCRIBED_KEY, fp); return { changed: false, adopted: true }; }
+  if (stored === fp) return { changed: false };
+  const retry = readRetry(db);
+  if (retry && now < retry.next) return { changed: false, waiting: true };
+  const d = descriptions(names);
+  try {
+    await setMyDescription(token, d.long.slice(0, 512), '', deps);
+    await setMyShortDescription(token, d.short.slice(0, 120), '', deps);
+  } catch (e) {
+    const fails = (retry ? Number(retry.fails) || 0 : 0) + 1;
+    const wait = Math.min(RETRY_BASE_MS * 2 ** Math.min(fails - 1, 20), RETRY_CAP_MS);
+    try { writeState(db, RETRY_KEY, JSON.stringify({ fails, next: now + wait })); } catch { /* пауза не записалась — повтор раньше, не хуже */ }
+    throw e;
+  }
+  writeState(db, DESCRIBED_KEY, fp);
+  clearRetry(db);
   return { changed: true };
 }
 
 // Возвращает список того, что удалось и что нет, — раздел настроек показывает
 // это администратору строкой, не превращая в ошибку.
 export async function setupBot(db, token, deps = {}) {
-  const d = descriptions(clinicNames(db));   // CLINIC_PROFILE_V1
-  const { long, short } = d;
+  const names = clinicNames(db);   // CLINIC_PROFILE_V1
+  const { long, short } = descriptions(names);
   const done = [];
   const failed = [];
 
@@ -119,11 +150,13 @@ export async function setupBot(db, token, deps = {}) {
   // режем здесь, а не полагаемся на то, что название клиники короткое.
   await step('description', () => setMyDescription(token, long.slice(0, 512), '', deps));
   await step('short_description', () => setMyShortDescription(token, short.slice(0, 120), '', deps));
-  // CLINIC_PROFILE_V1 — оба описания приняты: запомнить отпечаток, чтобы цикл
-  // бота (syncBotDescription) не слал то же самое ещё раз.
-  if (done.includes('description') && done.includes('short_description')) {
-    try { writeDescribed(db, fingerprint(d)); } catch { /* отпечаток не записался — цикл повторит */ }
-  }
+  // CLINIC_PROFILE_V1 — оба описания приняты: запомнить отпечаток названий,
+  // чтобы цикл бота (syncBotDescription) не слал то же самое ещё раз. Не
+  // приняты — пустой отпечаток: цикл не примет молча, а дошлёт (ревью M5).
+  try {
+    if (done.includes('description') && done.includes('short_description')) { writeState(db, DESCRIBED_KEY, namesPrint(names)); clearRetry(db); }
+    else writeState(db, DESCRIBED_KEY, '');
+  } catch { /* отпечаток не записался — цикл разберётся сам */ }
   await step('menu_button', () => setChatMenuButton(token, deps));
 
   return { ok: !failed.length, done, failed };

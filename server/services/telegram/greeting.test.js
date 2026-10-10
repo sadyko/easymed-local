@@ -186,29 +186,93 @@ test('setup: описание бота — узбекская часть с name
   db.close();
 });
 
-test('описание бота следует за переименованием: тот же текст — ни одного запроса; новое название — снова; сбой — повтор', async () => {
+// CLINIC_PROFILE_V1 (ревью M5) — первый проход после обновления НЕ шлёт
+// описание: у бота уже может стоять описание из @BotFather, и затирать его
+// сгенерированным никто не просил. Отпечаток запоминается без отправки;
+// описание уходит, только когда название клиники потом меняется.
+test('первый проход без отпечатка: описание не отправляется, отпечаток запоминается; дальше — только при смене названия', async () => {
   const { syncBotDescription } = await import('./setup.js');
   const db = seed();
   const { sent, deps } = harness();
 
-  assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: true });
-  assert.deepEqual(sent.map((s) => s.method).sort(), ['setMyDescription', 'setMyShortDescription']);
-
-  sent.length = 0;
+  assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: false, adopted: true });
+  assert.equal(sent.length, 0, 'описание из @BotFather не затирается');
   assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: false });
-  assert.equal(sent.length, 0, 'то же описание — Telegram не спрашиваем');
+  assert.equal(sent.length, 0, 'то же название — Telegram не спрашиваем');
 
   db.prepare("UPDATE doc_settings SET clinic_name = 'Другая' WHERE id = 1").run();
   assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: true });
+  assert.deepEqual(sent.map((s) => s.method).sort(), ['setMyDescription', 'setMyShortDescription']);
   assert.match(sent.find((s) => s.method === 'setMyDescription').params.description, /«Другая»/);
 
-  // Сбой Telegram — отпечаток прежний, следующий проход повторит.
-  db.prepare("UPDATE doc_settings SET name_uz = 'Boshqa' WHERE id = 1").run();
-  const failing = { fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({ ok: false, description: 'boom' }) }) };
-  await assert.rejects(() => syncBotDescription(db, 'T', failing));
   sent.length = 0;
-  assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: true }, 'после сбоя — повтор');
+  db.prepare("UPDATE doc_settings SET name_uz = 'Boshqa' WHERE id = 1").run();
+  assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: true });
   assert.match(sent.find((s) => s.method === 'setMyDescription').params.description, /«Boshqa» klinikasining/);
+  db.close();
+});
+
+// CLINIC_PROFILE_V1 (ревью M5) — сбой Telegram не повторяется каждые 30 секунд
+// цикла: пауза растёт вдвое (5 мин, 10, 20, …) и не больше 6 часов; удача —
+// пауза снимается.
+test('сбой: повтор не на каждом проходе — пауза растёт вдвое до 6 часов; удача её снимает', async () => {
+  const { syncBotDescription } = await import('./setup.js');
+  const db = seed();
+  let now = Date.UTC(2026, 9, 10, 9, 0, 0);
+  const MIN = 60 * 1000;
+  const { sent, deps: okDeps } = harness();
+  const ok = { ...okDeps, now: () => now };
+  let failCalls = 0;
+  const failing = { now: () => now, fetchImpl: async () => { failCalls++; return { ok: false, status: 500, json: async () => ({ ok: false, description: 'boom' }) }; } };
+
+  await syncBotDescription(db, 'T', ok);   // отпечаток запомнен
+  db.prepare("UPDATE doc_settings SET clinic_name = 'Другая' WHERE id = 1").run();
+
+  await assert.rejects(() => syncBotDescription(db, 'T', failing));
+  assert.equal(failCalls, 1);
+  now += 30 * 1000;
+  assert.deepEqual(await syncBotDescription(db, 'T', failing), { changed: false, waiting: true });
+  now += 4 * MIN;
+  assert.deepEqual(await syncBotDescription(db, 'T', failing), { changed: false, waiting: true });
+  assert.equal(failCalls, 1, 'в пределах паузы Telegram не спрашиваем');
+
+  now += 1 * MIN;                                   // 5 мин прошло — повтор
+  await assert.rejects(() => syncBotDescription(db, 'T', failing));
+  assert.equal(failCalls, 2);
+  now += 9 * MIN;
+  assert.deepEqual(await syncBotDescription(db, 'T', failing), { changed: false, waiting: true }, 'вторая пауза — 10 мин');
+  now += 1 * MIN;
+  await assert.rejects(() => syncBotDescription(db, 'T', failing));
+  assert.equal(failCalls, 3);
+
+  for (let i = 0; i < 12; i++) { now += 7 * 60 * MIN; await assert.rejects(() => syncBotDescription(db, 'T', failing)); }
+  const calls = failCalls;
+  now += 6 * 60 * MIN - MIN;
+  assert.deepEqual(await syncBotDescription(db, 'T', failing), { changed: false, waiting: true }, 'пауза не больше 6 часов');
+  now += MIN;
+  await assert.rejects(() => syncBotDescription(db, 'T', failing));
+  assert.equal(failCalls, calls + 1, 'через 6 часов — повтор');
+
+  now += 6 * 60 * MIN;
+  assert.deepEqual(await syncBotDescription(db, 'T', ok), { changed: true });
+  assert.ok(sent.some((s) => s.method === 'setMyDescription'));
+  sent.length = 0;
+  db.prepare("UPDATE doc_settings SET clinic_name = 'Третья' WHERE id = 1").run();
+  assert.deepEqual(await syncBotDescription(db, 'T', ok), { changed: true }, 'после удачи пауза снята — новое название уходит сразу');
+  db.close();
+});
+
+test('setup не смог поставить описание — цикл не принимает молча, а досылает', async () => {
+  const { syncBotDescription } = await import('./setup.js');
+  const db = seed();
+  const failingDescription = { fetchImpl: async (url) => String(url).includes('Description')
+    ? { ok: false, status: 500, json: async () => ({ ok: false, description: 'boom' }) }
+    : { ok: true, status: 200, json: async () => ({ ok: true, result: {} }) } };
+  const res = await setupBot(db, 'T', failingDescription);
+  assert.equal(res.ok, false);
+  const { sent, deps } = harness();
+  assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: true });
+  assert.ok(sent.some((s) => s.method === 'setMyDescription'));
   db.close();
 });
 
