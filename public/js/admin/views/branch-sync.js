@@ -600,7 +600,12 @@ function paintBranchList(card) {
 /** Резервный канал филиалу выписать не удалось — сказать это, но не пугать. */
 function noteRelay(statusEl, data) {
     const relay = data && data.relay;
-    statusEl.textContent = relay && relay.ok === false && relay.message ? relay.message : '';
+    // CLINIC_API_STEP7_V1 (ревью слияния №1) — филиал заведён скрытым, пока включено
+    // подключение API: строка просит заполнить адрес в «Филиалах» (сервер присылает
+    // ключ словаря, экран переводит). Это тоже состояние, а не отказ.
+    const lines = [relay && relay.ok === false && relay.message ? relay.message : '',
+        data && data.address_note ? tr(data.address_note) : ''];
+    statusEl.textContent = lines.filter(Boolean).join(' ');
 }
 
 /**

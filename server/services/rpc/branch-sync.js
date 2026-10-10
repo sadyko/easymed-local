@@ -18,6 +18,7 @@ import {
 // читает эта установка про себя (identity.js).
 import { allocateLetter } from '../branch-sync/letters.js';
 import { readIdentity } from '../branch-sync/identity.js';
+import { partnerAddressRequired, ADDRESS_MESSAGES } from '../api/partner-address.js';   // CLINIC_API_STEP7_V1 (ревью слияния №1)
 // BRANCH_SYNC_RELAY_V1 — Маршрут Б: те же три файла, что и у Маршрута А, только
 // транспорт другой. Ключ группы и его выпуск при активации — в sync-group.js.
 import { ensureSyncGroup, regenerateSyncGroup, readSyncGroup } from '../branch-sync/sync-group.js';
@@ -1285,8 +1286,23 @@ export async function branchSyncAddBranch(db, args, user, {
   }
 
   let letter;
+  let hidden = false;   // CLINIC_API_STEP7_V1 (ревью слияния №1)
   try {
-    letter = allocateLetter(db, { name });
+    // CLINIC_API_STEP7_V1 (ревью слияния №1) — РЕШЕНИЕ ВЛАДЕЛЬЦА 11: пока включено
+    // подключение API, здание на сайте без адреса для партнёров запрещено, а эта
+    // карточка спрашивает только название. Отказывать нельзя — ключ филиала
+    // выдаётся этим же нажатием, — поэтому здание заводится СКРЫТЫМ (show_public = 0);
+    // владелец заполнит адрес в «Филиалах» и покажет его там (строка address_note).
+    // Транзакцию открывает вызывающий и именно .immediate(), как в branchSyncBranchKey:
+    // буква, строка и отметка «скрыто» — одним целым, решение — под той же блокировкой.
+    db.transaction(() => {
+      hidden = partnerAddressRequired(db);
+      letter = allocateLetter(db, { name });
+      if (hidden) {
+        const done = db.prepare('UPDATE branches SET show_public = 0 WHERE letter = ? COLLATE NOCASE').run(letter);
+        if (done.changes !== 1) throw new Error('new branch row not found to hide');
+      }
+    }).immediate();
   } catch (e) {
     // RangeError — буквы кончились (letters.js бросает вместо того, чтобы выдать
     // букву, которую принимающая сторона откажется принять). Всё остальное —
@@ -1349,7 +1365,8 @@ export async function branchSyncAddBranch(db, args, user, {
   }
 
   return { ok: true, branch: branchRow(db, readPairing(dataDir), branch, null), relay, enroll,
-    relay_turned_on: relayTurnedOn, published };
+    relay_turned_on: relayTurnedOn, published,
+    ...(hidden ? { address_note: ADDRESS_MESSAGES.addBranchHidden } : {}) };   // CLINIC_API_STEP7_V1 (ревью слияния №1)
 }
 
 /**
