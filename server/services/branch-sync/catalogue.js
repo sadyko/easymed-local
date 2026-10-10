@@ -500,6 +500,17 @@ export function exportCatalogue(db, { now = () => new Date() } = {}) {
 }
 
 /**
+ * DOCTOR_PROFILE_V1 (ревью шага 5, №5) — «работает врачом с» из стажа, правило
+ * мигр. 243: целое число лет 0..80 — текущий местный год минус стаж; пусто,
+ * мусор или вне пределов — null (CHECK practice_since 1940..2200 не задет).
+ */
+function practiceSinceFromYears(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 && n <= 80 ? new Date().getFullYear() - n : null;
+}
+
+/**
  * Буква ЭТОЙ установки. Пусто — установка ещё не знает, кто она.
  *
  * Читается из branch_identity, как и везде в этом коде: это единственная
@@ -796,6 +807,10 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
 
     // Кандидаты на усыновление — все свои строки таблицы, по одному чтению.
     const localRows = db.prepare(`SELECT * FROM "${spec.name}"`).all();
+    // DOCTOR_PROFILE_V1 (ревью шага 5, №5) — у этой базы есть «работает с»
+    // (мигр. 243): стаж от главной старой версии пересчитывается в год ниже.
+    const derivesSince = spec.name === 'users'
+      && db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'practice_since');
 
     for (const remote of rows) {
       if (!remote || typeof remote !== 'object' || remote.id === undefined || remote.id === null) continue;
@@ -895,6 +910,21 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
             db.prepare(`UPDATE "${spec.name}" SET "${spec.localFlag}" = 0 WHERE id = ?`).run(localId);
           }
         }
+      }
+
+      // DOCTOR_PROFILE_V1 (ревью шага 5, №5) — ГЛАВНАЯ СТАРШЕ ШАГА 5 шлёт стаж
+      // (experience_years), но не «работает с» (practice_since). Год этой базы
+      // — из её бэкфилла (мигр. 243), а экраны предпочитают год: правка стажа
+      // в главной здесь бы не показалась. Стаж изменился (или сотрудник новый)
+      // — год пересчитан из него тем же правилом, что мигр. 243: целое 0..80 —
+      // текущий год минус стаж, иначе пусто (мусор не должен упереться в CHECK
+      // и откатить весь справочник вместе с прайсом). Стаж тот же — год не
+      // трогается: иначе он сдвигался бы каждый январь. Новая главная шлёт год
+      // сама — тогда он и едет.
+      if (derivesSince && 'experience_years' in remote && !('practice_since' in remote)
+          && (!localRow || !sameValue(values.experience_years, localRow.experience_years))) {
+        present.push('practice_since');
+        values.practice_since = practiceSinceFromYears(values.experience_years);
       }
 
       // --- вставка ---------------------------------------------------------

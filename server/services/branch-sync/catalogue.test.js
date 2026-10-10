@@ -1185,3 +1185,49 @@ test('показ врача и его профиль для партнёров �
   assert.doesNotThrow(() => apply(branch, old));
   assert.equal(pick().booking_days, 7, 'ключа нет — отправитель старый, местное остаётся');
 });
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №5) — ГЛАВНАЯ СТАРШЕ ШАГА 5 МЕНЯЕТ СТАЖ.
+// Она шлёт experience_years, но не practice_since; филиал шага 5 держал бы
+// «работает с» из своего бэкфилла, а экран предпочитает год — стаж расходился.
+// Теперь: стаж изменился (или сотрудник новый) — год пересчитан из него, как
+// мигр. 243 (целое 0..80, иначе пусто — CHECK не роняет приём); стаж тот же —
+// год не трогается (иначе каждый январь сдвигался бы); новая главная шлёт год —
+// он и едет.
+test('главная старой версии меняет стаж — «работает с» филиала пересчитан; тот же стаж год не трогает; мусор — пусто, приём не падает', () => {
+  const main = seedStaff(seedMain(fresh()));
+  main.prepare("UPDATE users SET experience_years = 10 WHERE username = 'ivanov'").run();
+  const branch = staffReceiver();
+  const oldExport = () => {
+    const cat = exportCatalogue(main);
+    for (const r of cat.users) for (const k of DOC_PUBLIC) delete r[k];
+    return cat;
+  };
+  const y = new Date().getFullYear();
+  const row = () => ({ ...branch.prepare("SELECT practice_since, experience_years FROM users WHERE username = 'ivanov'").get() });
+
+  apply(branch, oldExport());
+  assert.deepEqual(row(), { practice_since: y - 10, experience_years: 10 }, 'новый сотрудник от старой главной — год из стажа');
+
+  branch.prepare("UPDATE users SET practice_since = 2000 WHERE username = 'ivanov'").run();
+  apply(branch, oldExport());
+  assert.equal(row().practice_since, 2000, 'стаж не менялся — год не переписывается');
+
+  main.prepare("UPDATE users SET experience_years = 25 WHERE username = 'ivanov'").run();
+  apply(branch, oldExport());
+  assert.deepEqual(row(), { practice_since: y - 25, experience_years: 25 }, 'стаж изменился — год из него');
+
+  for (const [bad, label] of [[500, 'больше 80'], [12.5, 'не целое'], [-3, 'меньше 0']]) {
+    main.prepare("UPDATE users SET experience_years = ? WHERE username = 'ivanov'").run(bad);
+    assert.doesNotThrow(() => apply(branch, oldExport()), label);
+    assert.deepEqual(row(), { practice_since: null, experience_years: bad }, label + ' — год пустой, CHECK не тронут');
+  }
+  assert.ok(branch.prepare("SELECT 1 FROM services WHERE code = 'S-CARD'").get(), 'прайс принят той же транзакцией');
+
+  main.prepare("UPDATE users SET experience_years = NULL WHERE username = 'ivanov'").run();
+  apply(branch, oldExport());
+  assert.deepEqual(row(), { practice_since: null, experience_years: null });
+
+  main.prepare("UPDATE users SET experience_years = 12, practice_since = 2009 WHERE username = 'ivanov'").run();
+  apply(branch, exportCatalogue(main));
+  assert.deepEqual(row(), { practice_since: 2009, experience_years: 12 }, 'новая главная шлёт год — он и едет');
+});
