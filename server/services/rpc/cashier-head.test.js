@@ -22,6 +22,7 @@ import { hashPassword } from '../auth.js';
 import { createApp } from '../../app.js';
 import { licensedDataDir } from '../control/licensed-fixture.js';
 import { listen } from '../../../control-plane/server/test-helpers/listen.js';
+import { insertVisitLine } from '../../test-helpers/package-line.js';   // SERVICES_PACKAGES_V1 — строка, как её заводит дверь /api/db
 
 const admin = { id: 1, role: 'admin', full_name: 'Админ' };
 const registrar = { id: 7, role: 'registrar', full_name: 'Регистратор' };
@@ -183,19 +184,22 @@ test('смена врача в неоплаченном счёте: цена н�
   assert.equal(s1.lines.length, 0, 'прежний врач по этой строке ничего не получает');
 });
 
-test('смена врача у строки пакета: скидка пакета пересчитывается от новой цены', () => {
+// SERVICES_PACKAGES_V1 — цена пакета фиксируется на строке при записи: своя
+// цена нового врача её не меняет (прежде: 200 000 − 20 % = 160 000).
+test('смена врача у строки пакета: цена пакета не меняется — пациент платит цену пакета', () => {
   const db = seed();
   const CONS = svc(db, 'Приём', 100000);
   rates(db, DOC2, [{ service_id: CONS, price: 200000 }]);
-  const pkg = Number(db.prepare("INSERT INTO service_templates (name, service_ids, discount_percent) VALUES ('Пакет', ?, 20)").run(JSON.stringify([CONS])).lastInsertRowid);
+  const pkg = Number(db.prepare("INSERT INTO service_templates (name, service_ids, discount_percent, is_package, discount_mode, discount_value) VALUES ('Пакет', ?, 20, 1, 'percent', 20)").run(JSON.stringify([CONS])).lastInsertRowid);
   const { vid } = visit(db);
-  const l = line(db, vid, CONS, DOC, { package_id: pkg });
+  const l = insertVisitLine(db, { visit_id: vid, service_id: CONS, doctor_id: DOC, quantity: 1, unit_price: 0, total: 0, status: 'added', package_id: pkg });
   const o = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [l] }, registrar);
   assert.equal(o.invoice.total_amount, 80000);
   setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
   const r = call('cashier_line_set_doctor', db, { visit_service_id: l, doctor_id: DOC2 }, cashier);
-  assert.deepEqual([r.invoice.subtotal, r.invoice.discount_amount, r.invoice.total_amount], [200000, 40000, 160000]);
-  assert.equal(db.prepare('SELECT discount_amount FROM invoice_items WHERE invoice_id = ?').get(o.invoice.id).discount_amount, 40000);
+  assert.deepEqual([r.invoice.subtotal, r.invoice.discount_amount, r.invoice.total_amount], [100000, 20000, 80000]);
+  assert.equal(db.prepare('SELECT discount_amount FROM invoice_items WHERE invoice_id = ?').get(o.invoice.id).discount_amount, 20000);
+  assert.equal(vsRow(db, l).doctor_id, DOC2);
 });
 
 test('добавить услугу: ложится в открытый неоплаченный счёт по цене врача и со скидкой группы', () => {

@@ -15,6 +15,7 @@ import { invoiceStatusFor, idemReplay, idemRemember } from '../domain/money.js';
 // catalog, and VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit
 // keeps that price at the till (the catalog price is the FIRST visit's price).
 import { lineUnitPrice, consultationFor } from '../domain/pricing.js';
+import { packageLineMoney } from '../../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1 — цена в пакете, записанная на строке
 import { hasAnyRole, effectiveRoles } from '../roles.js';
 import { localDate, localMonth } from '../domain/day.js';
 // CASHIER_HEAD_V1 — право кассы «Исправляет услуги в счёте» (cashier.lines).
@@ -528,7 +529,12 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false } = {}) {
       }
       const line = round2(unit * qty);
       const pkg = linePackage(db, row, visitDay, packages);
-      return { row, unit, qty, line, svcName, pkg };
+      // SERVICES_PACKAGES_V1 — деньги строки из пакета записаны на ней при
+      // записи (domain/package-lines.js): цена без скидки — это unit
+      // (lineUnitPrice), скидка — до цены в пакете. Сегодняшний процент пакета
+      // их не меняет. Срок и состав пакета проверяет linePackage выше.
+      const pm = packageLineMoney(row);
+      return { row, unit, qty, line, svcName, pkg, pm };
     });
 
     const subtotal = round2(priced.reduce((sum, p) => sum + p.line, 0));
@@ -561,17 +567,17 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false } = {}) {
     // контрагенту. Ручная скидка кассира и скидка пакета остаются.
     const payerSet = args && args.payer_id !== undefined && args.payer_id !== null;
     const categoryPercent = payerSet ? 0 : patientCategoryDiscount(db, visit.patient_id);
-    // PACKAGES_V1 (2026-09-26) — СКИДКА ПАКЕТА ПОСТРОЧНО. Строка пакета со
-    // скидкой получает СВОЮ скидку (invoice_items.discount_amount): бо́льшую из
-    // скидки пакета и скидки категории пациента — не обе (решение владельца).
-    // Ручная скидка кассира и пол категории действуют, как прежде, но только на
-    // строки без своей скидки и зажаты их суммой. Скидка счёта — сумма обеих
-    // частей, поэтому итог счёта и сумма строк после скидки сходятся. Пакет без
-    // скидки (прежний шаблон) — обычная строка, всё как было.
+    // PACKAGES_V1 (2026-09-26) — СКИДКА ПАКЕТА ПОСТРОЧНО: строка пакета со
+    // скидкой получает СВОЮ скидку (invoice_items.discount_amount).
+    // SERVICES_PACKAGES_V1 (решение владельца 1, 2026-10-06) — ЦЕНА ПАКЕТА
+    // ОКОНЧАТЕЛЬНАЯ: своя скидка строки — до цены в пакете, записанной при
+    // записи; скидка группы пациента на неё не ложится (прежде — бо́льшая из
+    // двух). Ручная скидка кассира и пол категории — только на строки без своей
+    // скидки и зажаты их суммой, как прежде. Строка пакета, у которой в пакете
+    // нет скидки (пакет без скидки), — обычная строка: так её видят и отчёты
+    // (reports.js — своя скидка у строки с discount_amount > 0).
     for (const p of priced) {
-      p.ownDiscount = p.pkg && p.pkg.pct > 0
-        ? round2(p.line * Math.max(p.pkg.pct, categoryPercent) / 100)
-        : 0;
+      p.ownDiscount = p.pm && p.pm.discount > 0 ? round2(Math.min(p.pm.discount, p.line)) : 0;
     }
     const lineDiscounts = round2(priced.reduce((sum, p) => sum + p.ownDiscount, 0));
     const restSubtotal = round2(priced.reduce((sum, p) => sum + (p.ownDiscount > 0 ? 0 : p.line), 0));

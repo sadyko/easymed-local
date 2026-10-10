@@ -20,6 +20,7 @@ import { migrate } from '../../db/migrate.js';
 import { runReport, doctorPaySummary, doctorReferralReward, payPeriodClose } from './reports.js';
 import { createInvoiceForVisit, createInvoiceForAdmission, recordPayment, refundPayment, refundInvoiceLine } from './billing.js';
 import { today } from '../domain/day.js';
+import { insertVisitLine } from '../../test-helpers/package-line.js';   // SERVICES_PACKAGES_V1 — строка, как её заводит дверь /api/db
 
 const admin = { id: 9, role: 'admin' };
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -47,13 +48,12 @@ function clinic({ rates = null, refRates = '[]' } = {}) {
   if (!src) src = { id: db.prepare("INSERT INTO referral_sources (name, doctor_id) VALUES ('Направляев Н.', 2)").run().lastInsertRowid };
   db.prepare("UPDATE referral_sources SET reward_mode = 'own', own_percent = 10, own_rates = ? WHERE id = ?").run(refRates, src.id);
   db.prepare("INSERT INTO patients (id, mrn, full_name, referral_source_id) VALUES (1, 'P-1', 'Пациент', ?)").run(src.id);
-  const pkg = db.prepare(`INSERT INTO service_templates (name, service_ids, discount_percent, active)
-                          VALUES ('Осень', '[1,2]', 20, 1)`).run().lastInsertRowid;
+  const pkg = db.prepare(`INSERT INTO service_templates (name, service_ids, discount_percent, active, is_package, discount_mode, discount_value)
+                          VALUES ('Осень', '[1,2]', 20, 1, 1, 'percent', 20)`).run().lastInsertRowid;   // SERVICES_PACKAGES_V1
   const visit = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (1, ?, 'scheduled')").run(at).lastInsertRowid;
   const line = (serviceId, inPackage) => {
     const price = serviceId === 3 ? 50000 : 100000;
-    return db.prepare(`INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, package_id)
-                       VALUES (?,?,1,1,?,?,'completed',?)`).run(visit, serviceId, price, price, inPackage ? pkg : null).lastInsertRowid;
+    return insertVisitLine(db, { visit_id: visit, service_id: serviceId, doctor_id: 1, quantity: 1, unit_price: price, total: price, status: 'completed', package_id: inPackage ? pkg : null });
   };
   const bill = (ids) => createInvoiceForVisit(db, { visit_id: visit, visit_service_ids: ids }, admin);
   const pay = (inv) => {

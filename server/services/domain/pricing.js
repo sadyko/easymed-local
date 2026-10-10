@@ -2,6 +2,7 @@ import { tierUnitPrice } from './visit-tier.js';   // PAY_BASIS_PERFORMED_V1 —
 // OWN_PRICE_REPEAT_V1 — правило «своя цена сильнее яруса» одно на сервер и экраны.
 import { serviceLinePrice } from '../../../public/js/shared/own-price-rule.js';
 import { consultPrice } from '../../../public/js/shared/consultation-price.js';   // DOCTOR_PROFILE_V1 — одно правило цены консультации
+import { packageLineMoney, packageDayState } from '../../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1 — цена пакета, записанная на строке; срок пакета
 
 // DOCTOR_OWN_PRICE_V1 — what a service costs when THIS doctor performs it.
 //
@@ -141,6 +142,14 @@ export function unitPriceFor(db, { doctorId, serviceId, catalogPrice }, ownPrice
 // Правило цены от этого не меняется — меняется только, откуда взят ответ.
 export function lineUnitPrice(db, row, { service = null, product = null, tiered = true, ownPrice = null, consult = null } = {}) {
   if (row.service_id != null) {
+    // SERVICES_PACKAGES_V1 — строка из пакета: цена услуги без скидки, записанная
+    // на строке при записи вместе с ценой в пакете (domain/package-lines.js).
+    // Ни ярус, ни своя цена врача, ни сегодняшний прайс её не меняют: цена
+    // пакета окончательная (решение владельца 1). Только амбулаторная строка
+    // (tiered): счёт стационара пакетов не знает и считает, как считал.
+    if (tiered && row.package_price != null && row.package_full != null && Number.isFinite(Number(row.package_full))) {
+      return Math.max(0, Number(row.package_full));
+    }
     const catalogPrice = service ? service.price : 0;
     // OWN_PRICE_TIER_RATIO_V1 — нет своей цены — цена яруса; есть — своя со
     // скидкой яруса: своя × (цена яруса ÷ каталог первичного).

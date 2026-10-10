@@ -15,6 +15,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { createInvoiceForVisit, removeUnpaidService, changeUnpaidService } from './billing.js';
 import { runReport, performedPayLines } from './reports.js';
+import { insertVisitLine } from '../../test-helpers/package-line.js';   // SERVICES_PACKAGES_V1 — строка, как её заводит дверь /api/db
 
 const admin = { id: 9, role: 'admin' };
 const registrar = { id: 7, role: 'registrar' };
@@ -42,13 +43,13 @@ function clinic({ categoryPct = 0, pkg = {} } = {}) {
   db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (1, 'УЗИ', 100000, 6, 'imaging')").run();
   db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (2, 'Анализ', 50000, 0, 'lab')").run();
   const p = { name: 'Осень', ids: [1], pct: 20, from: '2026-09-01', until: '2026-09-30', active: 1, ...pkg };
-  const packageId = db.prepare(`INSERT INTO service_templates (name, service_ids, discount_percent, valid_from, valid_until, active)
-                                VALUES (?,?,?,?,?,?)`).run(p.name, JSON.stringify(p.ids), p.pct, p.from, p.until, p.active).lastInsertRowid;
+  // SERVICES_PACKAGES_V1 — пакет (is_package = 1), скидка процентом.
+  const packageId = db.prepare(`INSERT INTO service_templates (name, service_ids, discount_percent, valid_from, valid_until, active, is_package, discount_mode, discount_value)
+                                VALUES (?,?,?,?,?,?,1,'percent',?)`).run(p.name, JSON.stringify(p.ids), p.pct, p.from, p.until, p.active, p.pct).lastInsertRowid;
   const visitId = db.prepare("INSERT INTO visits (patient_id, visit_date, status, referral_source_id) VALUES (1, ?, 'scheduled', ?)").run(DAY, src).lastInsertRowid;
   const line = (serviceId, { pkgId = null, status = 'completed' } = {}) => {
     const price = serviceId === 1 ? 100000 : 50000;
-    return db.prepare(`INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, package_id)
-                       VALUES (?,?,1,1,?,?,?,?)`).run(visitId, serviceId, price, price, status, pkgId).lastInsertRowid;
+    return insertVisitLine(db, { visit_id: visitId, service_id: serviceId, doctor_id: 1, quantity: 1, unit_price: price, total: price, status, package_id: pkgId });
   };
   return { db, packageId, visitId, line };
 }
@@ -69,13 +70,16 @@ test('строка пакета несёт свою скидку; строка �
   assert.equal(res.invoice.total_amount, 130000);
 });
 
-test('категория пациента и пакет не суммируются: на строке пакета — бо́льшая из двух', () => {
-  // Категория 30 % > пакет 20 %: строка пакета 30 %, строка вне пакета 30 %.
+// SERVICES_PACKAGES_V1 — решение владельца 1 (2026-10-06): цена пакета
+// окончательная, скидка группы пациента на строку пакета не ложится (прежде —
+// бо́льшая из двух).
+test('решение 1: скидка группы на строку пакета не ложится — пакет по своей цене, остальное со скидкой группы', () => {
+  // Категория 30 % > пакет 20 %: строка пакета — 20 % (как пакет), строка вне пакета — 30 %.
   let c = clinic({ categoryPct: 30 });
   let res = invoiceOf(c, [c.line(1, { pkgId: c.packageId }), c.line(2)]);
-  assert.equal(itemFor(res, 1).discount_amount, 30000);
-  assert.equal(res.invoice.discount_amount, 30000 + 15000);
-  assert.equal(res.invoice.total_amount, 105000);
+  assert.equal(itemFor(res, 1).discount_amount, 20000);
+  assert.equal(res.invoice.discount_amount, 20000 + 15000);
+  assert.equal(res.invoice.total_amount, 115000);
   // Категория 5 % < пакет 20 %: строка пакета 20 % (не 25), вне пакета 5 %.
   c = clinic({ categoryPct: 5 });
   res = invoiceOf(c, [c.line(1, { pkgId: c.packageId }), c.line(2)]);
@@ -229,8 +233,7 @@ function bigClinic(opts) {
   c.db.prepare('UPDATE service_templates SET service_ids = ? WHERE id = ?').run(JSON.stringify([1, 3]), c.packageId);
   c.add = (serviceId, { pkgId = null } = {}) => {
     const price = c.db.prepare('SELECT price FROM services WHERE id = ?').get(serviceId).price;
-    return c.db.prepare(`INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, package_id)
-                         VALUES (?,?,1,1,?,?,'added',?)`).run(c.visitId, serviceId, price, price, pkgId).lastInsertRowid;
+    return insertVisitLine(c.db, { visit_id: c.visitId, service_id: serviceId, doctor_id: 1, quantity: 1, unit_price: price, total: price, status: 'added', package_id: pkgId });
   };
   return c;
 }
@@ -276,7 +279,7 @@ test('замена услуги тоже пересчитывает остато
 
 test('строка пакета заменена у пациента с категорией — на ней действует пол категории (ревью M-3)', () => {
   const c = bigClinic({ categoryPct: 10 });
-  const p = c.add(1, { pkgId: c.packageId });    // 100 000, max(20, 10) = 20 000
+  const p = c.add(1, { pkgId: c.packageId });    // 100 000, цена в пакете 80 000 — скидка 20 000 (группа на неё не ложится)
   const lab = c.add(2);                          // 50 000, категория 5 000
   const res = invoiceOf(c, [p, lab]);
   assert.equal(res.invoice.discount_amount, 25000);

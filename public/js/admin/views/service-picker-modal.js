@@ -71,7 +71,7 @@ import { pendingCrmLines } from '../crm-lines.js';
 import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 // PACKAGES_V1 — «Шаблоны» каталога — это пакеты: только действующие сегодня,
 // со скидкой и сроком в строке; строка сметы помнит свой пакет.
-import { listTemplates, packageDiscount, packageValidOn } from './service-templates.js?v=tpl1';
+import { listTemplates, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // SERVICES_PACKAGES_V1 — cartPackage: цена услуги в пакете
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
@@ -1369,7 +1369,8 @@ export function openServicePickerModal({
     // каталог. Раньше смета
     // брала каталог, а касса — цену врача: назвали 900 000, выставили 1 100 000.
     function itemPrice(a) {
-        return pickerLinePrice(a, (state.providers || []).concat(state.doctors || []));
+        // SERVICES_PACKAGES_V1 — день визита тот же, что у записи строки (wizSave).
+        return pickerLinePrice(a, (state.providers || []).concat(state.doctors || []), { day: localDayOf(cartVisitDateIso()) });
     }
     // OWN_PRICE_TIER_RATIO_V1 — чип яруса и зачёркнутая цена первого визита: у
     // врача со своей ценой ярус снова меняет цену (та же скидка, что у каталога),
@@ -1835,7 +1836,9 @@ export function openServicePickerModal({
             h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', onclick: shut }, 'Закрыть'))));
         document.body.appendChild(ov);
         document.addEventListener('keydown', onEsc);
-        const { data, error } = await listTemplates(supabase, { on: offerDay() });
+        // SERVICES_PACKAGES_V1 — пакеты с раскладкой по прайсу; колл-центр (его дверь
+        // booking_lines_add пакет не несёт) видит только шаблоны сметы.
+        const { data, error } = await listTemplates(supabase, { on: offerDay(), withPrices: true, ...(canAddVisitLines() ? {} : { kinds: 'templates' }) });
         clear(listEl);
         if (error) {
             listEl.appendChild(h('div', { class: 'muted', style: { padding: '10px', textAlign: 'center' } },
@@ -1881,10 +1884,6 @@ export function openServicePickerModal({
 
     async function applyServiceTemplate(t) {
         const ids = Array.isArray(t.service_ids) ? t.service_ids : [];
-        const pkg = t && t.id != null ? {
-            id: Number(t.id), name: t.name || '', pct: packageDiscount(t),
-            valid_from: t.valid_from || null, valid_until: t.valid_until || null,
-        } : null;
         let added = 0, missing = 0;
         for (const id of ids) {
             const svc = state.services.find(s => s.id === id);
@@ -1897,7 +1896,8 @@ export function openServicePickerModal({
                 // Ревью M-9: помечается строка, которую catAdd ТОЛЬКО ЧТО
                 // добавил (последняя), а не первая с той же услугой.
                 const item = state.added[state.added.length - 1];
-                if (item && pkg && item.service && item.service.id === svc.id) item.package = pkg;
+                // SERVICES_PACKAGES_V1 — строка помнит пакет и цену услуги в нём (cartPackage).
+                if (item && item.service && item.service.id === svc.id) item.package = cartPackage(t, svc.id);
             }
         }
         paintCatalog();
@@ -2560,11 +2560,12 @@ export function openServicePickerModal({
         state.added.forEach((a, i) => {
             if (covOf(i) !== 'patient') return;
             const isConsult = !!(a.service && a.service.__consult);
-            const pkgOn = !isConsult && !!(a.package && Number(a.package.pct) > 0 && packageValidOn(a.package, day));
+            // SERVICES_PACKAGES_V1 — строка пакета в его срок: своя скидка — до цены в пакете.
+            const pkgOn = !isConsult && !!(a.package && a.package.price != null && a.package.full != null && packageValidOn(a.package, day));
             out.push({
                 service_id: isConsult ? null : Number(a.service && a.service.id),
                 price: itemPrice(a),
-                packaged: pkgOn, packagePct: pkgOn ? Number(a.package.pct) : 0,
+                packageOff: pkgOn ? Math.max(0, Math.round((Number(a.package.full) - Number(a.package.price)) * 100) / 100) : 0,
             });
         });
         return out;
@@ -2876,12 +2877,17 @@ export function openServicePickerModal({
             const tb = h('tbody');
             for (const i of idxs) {
                 const a = state.added[i]; const unit = itemPrice(a);
+                // SERVICES_PACKAGES_V1 — строка пакета: зачёркнута цена без скидки, рядом — цена в пакете.
+                const inPkg = withDisc && a.package && a.package.price != null && a.package.full != null && Number(a.package.price) < Number(a.package.full)
+                    && packageValidOn(a.package, localDayOf(cartVisitDateIso()));
                 tb.appendChild(h('tr', null,
                     h('td', { style: { fontWeight: 500 } }, a.service?.name || '—',
                         refUniform ? null : h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 400, marginTop: '2px' } }, trf('Направление: {ref}', { ref: refLabels[i] }))),   // SVC_REFERRAL_CONFIRM_V1
                     h('td', { class: 'muted' }, a.doctor ? (a.doctor.full_name || a.doctor.name || '—') : '—'),
                     h('td', { class: 'num', style: { textAlign: 'right' } },
-                        withDisc && wizDiscountPct()
+                        inPkg
+                            ? h('span', null, h('s', { class: 'muted', style: { marginRight: '6px' } }, formatMoney(unit)), formatMoney(Number(a.package.price)))
+                            : withDisc && wizDiscountPct()
                             ? h('span', null, h('s', { class: 'muted', style: { marginRight: '6px' } }, formatMoney(unit)), formatMoney(wizDiscounted(unit)))
                             : formatMoney(unit)),
                 ));
@@ -3128,14 +3134,16 @@ export function openServicePickerModal({
                 // были прямые вставки в invoices / invoice_items / payments, которые
                 // реестр не пускает ни одной роли: «счёт не создан: not allowed»,
                 // а касса потом выставляла счёт БЕЗ скидки.
+                // SERVICES_PACKAGES_V1 — строка счёта — по ценам, записанным сервером на
+                // строке (цена без скидки и в пакете): их же возьмёт счёт.
                 const billLineOf = (r) => {
                     const isConsult = !!r.a.service.__consult;
-                    const pkgOn = !isConsult && !!(r.vs && r.vs.package_id != null && r.a.package && Number(r.a.package.pct) > 0);
+                    const stamped = !isConsult && r.vs && r.vs.package_price != null && r.vs.package_full != null;
                     return {
                         visit_service_id: r.vs && r.vs.id,
                         service_id: isConsult ? null : Number(r.a.service.id),
-                        price: Number(r.unitPrice || 0),
-                        packaged: pkgOn, packagePct: pkgOn ? Number(r.a.package.pct) : 0,
+                        price: stamped ? Number(r.vs.package_full) : Number(r.unitPrice || 0),
+                        packageOff: stamped ? Math.max(0, Math.round((Number(r.vs.package_full) - Number(r.vs.package_price)) * 100) / 100) : 0,
                     };
                 };
                 const bill = await invoicePickerLines({ visitId: visit.id, lines: patientRows.map(billLineOf), pct: wizDiscountPct(), promo: promoRow, categoryPct: wiz.categoryPct || 0 });
@@ -3653,18 +3661,22 @@ async function safeSelect(table, q = b => b) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * @param {Array<{service_id:number|null, price:number, packaged?:boolean, packagePct?:number}>} lines
- *        строки, за которые платит пациент; packaged — строка пакета со скидкой,
- *        действующего в день визита
+ * @param {Array<{service_id:number|null, price:number, packageOff?:number}>} lines
+ *        строки, за которые платит пациент; packageOff — своя скидка строки
+ *        пакета (цена без скидки − цена в пакете), пакет действует в день визита
  * @param {{pct?:number, promo?:object|null}} opts  лояльность в % и выбранная скидка
  */
+// SERVICES_PACKAGES_V1 — решение владельца 1: цена пакета окончательная. Строка
+// пакета со скидкой несёт только свою скидку; группа, лояльность и промокод —
+// по остальным (как billing.js). Строка пакета без скидки — обычная.
 export function pickerDiscount(lines, { pct = 0, promo = null, categoryPct = 0 } = {}) {
     const all = Array.isArray(lines) ? lines : [];
     const money = (l) => Math.max(0, Number(l && l.price) || 0);
     const r2 = (n) => Math.round(n * 100) / 100;   // как round2 в billing.js
     const pc = (n) => Math.min(100, Math.max(0, Number(n) || 0));
     const cat = pc(categoryPct);
-    const rest = all.filter((l) => !l.packaged);
+    const own = (l) => Math.min(Math.max(0, Number(l && l.packageOff) || 0), money(l));
+    const rest = all.filter((l) => !(own(l) > 0));
     const subtotal = all.reduce((s, l) => s + money(l), 0);
     const restSubtotal = rest.reduce((s, l) => s + money(l), 0);
     const loyalty = Math.round(restSubtotal * pc(pct) / 100);
@@ -3676,9 +3688,8 @@ export function pickerDiscount(lines, { pct = 0, promo = null, categoryPct = 0 }
     // суммой строк без пакета и поднимает до скидки группы пациента.
     const discount = Math.min(restSubtotal, loyalty + promoOff);
     const restOff = r2(Math.min(Math.max(discount, r2(restSubtotal * cat / 100)), restSubtotal));
-    // Строка пакета: бо́льшая из скидки пакета и группы — не обе (billing.js).
-    const packageOff = r2(all.filter((l) => l.packaged)
-        .reduce((s, l) => s + r2(money(l) * Math.max(pc(l.packagePct), cat) / 100), 0));
+    // SERVICES_PACKAGES_V1 — строка пакета: только своя скидка (до цены в пакете).
+    const packageOff = r2(all.reduce((s, l) => s + own(l), 0));
     return {
         subtotal, restSubtotal, loyalty, promoOff: Math.max(0, discount - loyalty), discount, packageOff,
         categoryOff: r2(restOff - discount), restOff,
@@ -3716,9 +3727,15 @@ export function pickerOwnPrice(a, people = []) {
  *     каталог первого визита), до 0,01.
  * Правило — shared/own-price-rule.js serviceLinePrice, одно с сервером.
  */
-export function pickerLinePrice(a, people = []) {
+export function pickerLinePrice(a, people = [], { day = null } = {}) {
     const s = (a && a.service) || {};
     if (s.__consult) return Number(s.price || 0);
+    // SERVICES_PACKAGES_V1 — строка пакета: цена услуги без скидки, по которой
+    // считалась раскладка (сервер запишет её же — domain/package-lines.js).
+    // day — день визита: вне срока пакета запись пакет на строку не ставит,
+    // и строка — обычная (ярус, своя цена врача), как её выставит касса.
+    if (a && a.package && a.package.full != null && a.package.price != null
+        && (!day || packageValidOn(a.package, day))) return Number(a.package.full);
     const t = a && a.tier;
     const cat = s.__base_price != null ? Number(s.__base_price) : Number(s.price || 0);
     const tierPrice = t && (t.tier === 'secondary' || t.tier === 'repeat') ? Number(t.price || 0) : cat;

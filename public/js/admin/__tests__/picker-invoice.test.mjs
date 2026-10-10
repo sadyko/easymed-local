@@ -72,6 +72,8 @@ const { migrate } = await import('../../../../server/db/migrate.js');
 const { compile } = await import('../../../../server/db/query-compiler.js');
 const { readableColumns } = await import('../../../../server/db/schema-registry.js');   // OWN_PRICE_REPEAT_V1 (ревью 1)
 const { getRpc } = await import('../../../../server/services/rpc/index.js');
+const { insertVisitLine } = await import('../../../../server/test-helpers/package-line.js');   // SERVICES_PACKAGES_V1 — строка, как её заводит дверь /api/db
+const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');   // SERVICES_PACKAGES_V1
 
 let USER = { id: 1, role: 'registrar', extra_roles: [] };
 let DB = null;
@@ -96,6 +98,7 @@ globalThis.fetch = async (url, opts) => {
     catch (e) { return { ok: false, status: e.status || 500, json: async () => ({ error: { code: e.code || (e.status === 403 ? 'forbidden' : 'bad_request'), message: e.message } }) }; }
   }
   if (u === '/api/db') {
+    stampWriteBody(DB, body);   // SERVICES_PACKAGES_V1 — как настоящая дверь (routes/db.js): цена пакета на строке
     let compiled;
     try { compiled = compile(body, USER); }
     catch (e) { return { ok: false, status: 403, json: async () => ({ error: { code: 'forbidden', message: e.message } }) }; }
@@ -133,11 +136,11 @@ function seed({ categoryPct = 0 } = {}) {
   }
   db.prepare("INSERT INTO services (id, name, price) VALUES (21,'МРТ',900000)").run();
   db.prepare("INSERT INTO services (id, name, price) VALUES (22,'Анализ крови',100000)").run();
-  db.prepare("INSERT INTO service_templates (id, name, service_ids, discount_percent) VALUES (9,'Чек-ап','[22]',20)").run();
+  db.prepare("INSERT INTO service_templates (id, name, service_ids, discount_percent, is_package, discount_mode, discount_value) VALUES (9,'Чек-ап','[22]',20,1,'percent',20)").run();   // SERVICES_PACKAGES_V1
   const now = new Date().toISOString();
   db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (40,3,?,'scheduled')").run(now);
   db.prepare("INSERT INTO visit_services (id, visit_id, service_id, quantity, unit_price, total, status) VALUES (101,40,21,1,900000,900000,'added')").run();
-  db.prepare("INSERT INTO visit_services (id, visit_id, service_id, quantity, unit_price, total, status, package_id) VALUES (102,40,22,1,100000,100000,'added',9)").run();
+  insertVisitLine(db, { id: 102, visit_id: 40, service_id: 22, quantity: 1, unit_price: 100000, total: 100000, status: 'added', package_id: 9 });   // цена в пакете 80 000
   if (DB) DB.close();
   DB = db;
   RPC.length = 0; DBWRITES.length = 0;
@@ -146,7 +149,7 @@ function seed({ categoryPct = 0 } = {}) {
 
 const LINES = [
   { visit_service_id: 101, service_id: 21, price: 900000, packaged: false },
-  { visit_service_id: 102, service_id: 22, price: 100000, packaged: true, packagePct: 20 },
+  { visit_service_id: 102, service_id: 22, price: 100000, packageOff: 20000 },   // SERVICES_PACKAGES_V1 — своя скидка строки пакета
 ];
 
 test('pickerDiscount: лояльность и скидка — только по строкам без пакета', () => {
@@ -185,7 +188,7 @@ test('скидка группы пациента — пол: меньшая ру
   const out = await invoicePickerLines({ visitId: 40, lines: LINES, pct: 5, promo: null });
   assert.equal(out.error, null);
   const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
-  // строки без пакета: max(5 % · 900 000, 15 % · 900 000) = 135 000; строка пакета: max(20, 15) % · 100 000 = 20 000
+  // строки без пакета: max(5 % · 900 000, 15 % · 900 000) = 135 000; строка пакета — только своя скидка 20 000 (решение 1)
   assert.equal(inv.discount_amount, 155000);
 });
 
@@ -547,7 +550,7 @@ test('I2: своя цена врача — смета и счёт сходятс
   DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, service_rates) VALUES (7,'doc','x','Петров','doctor',1,?)")
     .run(JSON.stringify([{ service_id: 21, price: 1100000, percentage: 30 }]));
   DB.prepare('UPDATE visit_services SET doctor_id = 7 WHERE id = 101').run();
-  DB.prepare('UPDATE visit_services SET package_id = NULL WHERE id = 102').run();
+  DB.prepare('UPDATE visit_services SET package_id = NULL, package_full = NULL, package_price = NULL WHERE id = 102').run();   // SERVICES_PACKAGES_V1 — пакет снят вместе с ценой
   const docRow = { id: 7, service_rates: [{ service_id: 21, price: 1100000, percentage: 30 }] };
   const items = [
     { service: { id: 21, price: 900000 }, doctor: docRow },
@@ -575,7 +578,7 @@ function repeatPatient() {
   const past = new Date(Date.now() - 3 * 86400000).toISOString();
   const pv = DB.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (3, ?, 'arrived')").run(past).lastInsertRowid;
   DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier) VALUES (?, 21, 8, 1, 200000, 200000, 'completed', 'primary')").run(pv);
-  DB.prepare('UPDATE visit_services SET package_id = NULL WHERE id = 102').run();
+  DB.prepare('UPDATE visit_services SET package_id = NULL, package_full = NULL, package_price = NULL WHERE id = 102').run();   // SERVICES_PACKAGES_V1
 }
 const OWN_DOC = { id: 7, service_rates: [{ service_id: 21, price: 300000, pct: 30 }] };
 
@@ -662,18 +665,20 @@ test('OWN_PRICE_TIER_RATIO_V1: кабинет врача «Добавить» �
   }
 });
 
-test('M1: скидка группы пациента — пол в смете, как в счёте; на строке пакета — большая из пакета и группы', async () => {
+// SERVICES_PACKAGES_V1 — решение владельца 1: цена пакета окончательная, скидка
+// группы на строку пакета не ложится (прежде — бо́льшая из пакета и группы).
+test('M1: скидка группы пациента — пол в смете, как в счёте; строка пакета — только своя скидка (решение 1)', async () => {
   seed({ categoryPct: 15 });
   const d = pickerDiscount(LINES, { pct: 5, promo: null, categoryPct: 15 });
-  assert.equal(d.packageOff, 20000, 'строка пакета: max(20, 15) %');
+  assert.equal(d.packageOff, 20000, 'строка пакета: цена в пакете');
   assert.equal(d.categoryOff, 135000 - 45000, 'группа поднимает скидку остальных строк с 45 000 до 135 000');
   const out = await invoicePickerLines({ visitId: 40, lines: LINES, pct: 5, promo: null, categoryPct: 15 });
   const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
   assert.equal(inv.total_amount, out.payable, 'смета ' + out.payable + ' ≠ счёт ' + inv.total_amount);
   assert.equal(out.payable, 845000);
-  // группа выше пакета: пакет 20 %, группа 30 % → строка пакета по группе
+  // группа выше пакета: пакет 20 %, группа 30 % → строка пакета всё равно по цене пакета
   const hi = pickerDiscount(LINES, { pct: 0, promo: null, categoryPct: 30 });
-  assert.equal(hi.packageOff, 30000);
+  assert.equal(hi.packageOff, 20000);
   seed({ categoryPct: 30 });
   const out2 = await invoicePickerLines({ visitId: 40, lines: LINES, pct: 0, promo: null, categoryPct: 30 });
   assert.equal(DB.prepare('SELECT total_amount FROM invoices WHERE visit_id = 40').get().total_amount, out2.payable);
@@ -909,4 +914,21 @@ test('FINAL_MONEY_FIX_V1 I1: окно визита не отмечает воз�
   const call = RPC.filter((r) => r.name === 'create_invoice_for_visit').pop();
   assert.equal(call.body.rebill_refunded, true);
   assert.equal(DB.prepare("SELECT COUNT(*) c FROM invoice_items WHERE service_id = 21").get().c, 1);
+});
+
+// SERVICES_PACKAGES_V1 (сборщик А, ревью задачи 9) — смета = счёт и тогда, когда
+// день визита ушёл за срок пакета: запись строку без пакета ставит (сервер бы
+// отказал), значит и смета считает её обычной строкой — по ярусу и своей цене
+// врача, как выставит касса, а не по цене пакета без скидки.
+test('строка пакета в смете: в срок пакета — цена без скидки из раскладки; вне дня визита — обычная цена, как у кассы', async () => {
+  const pkg = { id: 9, is_package: 1, full: 200000, price: 160000, valid_from: '2026-09-01', valid_until: '2026-09-30' };
+  const a = { service: { id: 21, price: 60000, __base_price: 200000 }, doctor: null, tier: { tier: 'secondary', price: 60000 }, package: pkg };
+  assert.equal(pickerLinePrice(a), 200000, 'день не назван — цена пакета без скидки');
+  assert.equal(pickerLinePrice(a, [], { day: '2026-09-30' }), 200000, 'в срок пакета: ярус цену пакета не меняет');
+  assert.equal(pickerLinePrice(a, [], { day: '2026-10-01' }), 60000, 'вне срока пакет на строку не ставится — цена яруса');
+  assert.equal(pickerLinePrice({ ...a, doctor: OWN_DOC }, [], { day: '2026-10-01' }), 90000, 'вне срока — своя цена врача со скидкой яруса');
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../views/service-picker-modal.js', import.meta.url), 'utf8');
+  assert.match(src, /function itemPrice\(a\) \{[^}]*?\{ day: localDayOf\(cartVisitDateIso\(\)\) \}\)/, 'смета называет день визита — тот же, что запись строки');
+  assert.match(src, /const inPkg = [^;]*packageValidOn\(a\.package, localDayOf\(cartVisitDateIso\(\)\)\)/, 'таблица подтверждения — пакетная цена только в срок пакета');
 });

@@ -23,6 +23,7 @@ import { runReport, doctorPaySummary } from './reports.js';
 import { createInvoiceForVisit, createInvoiceForAdmission } from './billing.js';
 import { voidInvoice } from './cashier.js';
 import { requestAdmission, admissionOrderCreate } from './inpatient.js';
+import { insertVisitLine } from '../../test-helpers/package-line.js';   // SERVICES_PACKAGES_V1 — строка, как её заводит дверь /api/db
 
 const admin = { id: 9, role: 'admin' };
 const FROM = '2026-09-01';
@@ -46,8 +47,7 @@ function clinic() {
   let seq = 0;
   const line = ({ status = 'completed', service = 1, pkg = null } = {}) => {
     const id = ++seq;
-    db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status, package_id)
-                VALUES (?,1,?,1,1,100000,100000,?,?)`).run(id, service, status, pkg);
+    insertVisitLine(db, { id, visit_id: 1, service_id: service, doctor_id: 1, quantity: 1, unit_price: 100000, total: 100000, status, package_id: pkg });
     return id;
   };
   return { db, line };
@@ -135,8 +135,8 @@ test('M3: скидка пакета у невыставленной строки
   const { db, line } = clinic();
   db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (2,'Анализ',100000,6,'lab')").run();
   db.prepare("UPDATE users SET service_rates = ? WHERE id = 1").run(JSON.stringify([{ service_id: 1, pct: 30 }, { service_id: 2, pct: 30 }]));
-  const pk = db.prepare(`INSERT INTO service_templates (name, service_ids, discount_percent, valid_from, valid_until)
-                         VALUES (?,?,?,?,?)`);
+  const pk = db.prepare(`INSERT INTO service_templates (name, service_ids, discount_percent, valid_from, valid_until, is_package, discount_mode, discount_value)
+                         VALUES (?,?,?,?,?,1,'percent',50)`);   // SERVICES_PACKAGES_V1 — пакет, 50 %
   const live = pk.run('Действующий', JSON.stringify([1]), 50, '2026-09-01', '2026-09-30').lastInsertRowid;
   const expired = pk.run('Истёк', JSON.stringify([1]), 50, '2026-08-01', '2026-08-31').lastInsertRowid;
   const a = line({ pkg: live });            // в сроке, услуга в пакете → скидка 50 %

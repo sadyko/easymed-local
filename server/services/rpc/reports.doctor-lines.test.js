@@ -21,6 +21,7 @@ import { runReport, doctorPaySummary, reportChoices } from './reports.js';
 import { RPC } from './index.js';
 import { isReadOnlyRpc } from '../control/gate.js';
 import { specialtyGroupName, canonicalSpecialty } from '../../../public/js/shared/specialty-list.js';
+import { insertVisitLine } from '../../test-helpers/package-line.js';   // SERVICES_PACKAGES_V1 — строка, как её заводит дверь /api/db
 
 const admin = { id: 9, role: 'admin' };
 const FROM = '2026-09-01';
@@ -48,14 +49,13 @@ function clinic() {
   db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Азизов А.'), (2,'P-2','Каримова К.')").run();
   db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (1,'Приём',100000,0,'consultation')").run();
   db.prepare("INSERT INTO services (id, name, price, tax_rate, type, is_lab) VALUES (2,'Анализ крови',50000,0,'lab',1)").run();
-  db.prepare("INSERT INTO service_templates (id, name, service_ids, discount_percent) VALUES (1,'Пакет «Сердце»','[1]',20)").run();
+  db.prepare("INSERT INTO service_templates (id, name, service_ids, discount_percent, is_package, discount_mode, discount_value) VALUES (1,'Пакет «Сердце»','[1]',20,1,'percent',20)").run();   // SERVICES_PACKAGES_V1
   let seq = 0;
   const line = ({ doctor = 1, service = 1, status = 'completed', invoice = null, discount = 0, price = 100000,
                   patient = 1, pkg = null, at = DAY } = {}) => {
     const id = ++seq;
     db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (?,?,?,'scheduled')").run(id, patient, at);
-    db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status, package_id)
-                VALUES (?,?,?,?,1,?,?,?,?)`).run(id, id, service, doctor, price, price, status, pkg);
+    insertVisitLine(db, { id, visit_id: id, service_id: service, doctor_id: doctor, quantity: 1, unit_price: price, total: price, status, package_id: pkg });
     if (invoice) {
       const total = price - discount;
       db.prepare(`INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)

@@ -85,7 +85,9 @@ const picker = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin', 'views',
 const visitModal = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin', 'views', 'visit-modal.js'), 'utf8');
 test('каталог: пакеты по дню визита; пакет вне срока не ставится; помечается только что добавленная строка', () => {
   const code = strip(picker);
-  assert.match(code, /listTemplates\(supabase,\s*\{\s*on:\s*offerDay\(\)\s*\}\)/);
+  assert.match(code, /listTemplates\(supabase,\s*\{\s*on:\s*offerDay\(\),\s*withPrices:\s*true/);   // SERVICES_PACKAGES_V1 — раскладка пакетов по прайсу
+  // SERVICES_PACKAGES_V1 — колл-центр (дверь booking_lines_add пакет не несёт) видит только шаблоны сметы.
+  assert.match(code, /canAddVisitLines\(\) \? \{\} : \{ kinds: 'templates' \}/);
   assert.match(code, /packageValidOn\(a\.package, localDayOf\(visitDate\)\)/);
   const apply = code.slice(code.indexOf('async function applyServiceTemplate('), code.indexOf('async function catAdd('));
   assert.match(apply, /state\.added\[state\.added\.length - 1\]/, 'ревью M-9: строка, которую catAdd только что добавил');
