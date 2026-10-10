@@ -54,7 +54,7 @@ test('предупреждение называет ровно то время, 
     assert.deepEqual(calendarSlots(db, { doctor_id: 7, date: DAY }, REG).window, { from: '08:00', to: '20:00', breaks: [] });
     const next = MON_FRI();
     const petrov = branchHoursImpact(db, { branch_id: 5, ...next }, ADMIN).doctors.find((d) => d.id === 7);
-    assert.deepEqual(petrov, { id: 7, name: 'Петров П. П.', lost: [{ day: 'mon', from: '08:00', to: '09:00' }, { day: 'mon', from: '18:00', to: '20:00' }] });
+    assert.deepEqual(petrov, { id: 7, name: 'Петров П. П.', role: 'doctor', lost: [{ day: 'mon', from: '08:00', to: '09:00' }, { day: 'mon', from: '18:00', to: '20:00' }] });
     db.prepare('UPDATE branches SET working_hours = ?, is_24_7 = ? WHERE id = 5').run(next.working_hours, next.is_24_7);
     assert.deepEqual(calendarSlots(db, { doctor_id: 7, date: DAY }, REG).window, { from: '09:00', to: '18:00', breaks: [] });
   } finally { db.close(); }
@@ -65,7 +65,67 @@ test('врач без графика теряет выходные; другое
   try {
     const { doctors } = branchHoursImpact(db, { branch_id: 5, ...MON_FRI() }, ADMIN);
     assert.deepEqual(doctors.map((d) => d.name), ['Каримов Р.', 'Петров П. П.', 'Узистов У.']);
+    assert.deepEqual(doctors.map((d) => d.role), ['doctor', 'doctor', 'doctor'], 'специальность — в календаре он врач');
     assert.deepEqual(doctors[0].lost, [{ day: 'sat', from: '09:00', to: '18:00' }, { day: 'sun', from: '09:00', to: '18:00' }]);
+  } finally { db.close(); }
+});
+
+// BRANCH_PROFILE_V1 (ревью шага 4, #4) — часы здания сужают окно ЛЮБОГО
+// сотрудника этого здания, которого можно записать (rpc/calendar.js
+// resourceWindow читает users.branch_id кого угодно): медсестру-исполнителя
+// процедур (PROC_PERFORMER_V1) окно записи спрашивает тем же calendar_slots.
+// Её время закрывается так же — и предупреждение обязано её назвать.
+function nextSaturday() {
+  const d = new Date(MON); d.setDate(d.getDate() + 5);
+  return iso(d);
+}
+function addStaff(db, rows) {
+  const add = db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, working_hours, branch_id, specialty,
+                          is_active, extra_roles, service_rates) VALUES (?,?,?,?,?,0,?,?,'',?,?,?)`);
+  for (const r of rows) add.run(r.id, 'u' + r.id, 'x', r.name, r.role, r.hours || '', r.branch === undefined ? 5 : r.branch,
+    r.active === undefined ? 1 : r.active, r.extra || '', r.rates || '');
+}
+
+test('медсестра-исполнитель теряет субботу — предупреждение называет её, с ролью', () => {
+  const db = seed();
+  try {
+    addStaff(db, [{ id: 12, name: 'Медсестра Н.', role: 'nurse', hours: JSON.stringify({ sat: { on: true, from: '09:00', to: '13:00' } }),
+      rates: '[{"service_id":1}]' }]);
+    const SAT = nextSaturday();
+    const before = calendarSlots(db, { doctor_id: 12, date: SAT }, REG).slots.length;
+    const next = MON_FRI();
+    const nurse = branchHoursImpact(db, { branch_id: 5, ...next }, ADMIN).doctors.find((d) => d.id === 12);
+    db.prepare('UPDATE branches SET working_hours = ?, is_24_7 = ? WHERE id = 5').run(next.working_hours, next.is_24_7);
+    const after = calendarSlots(db, { doctor_id: 12, date: SAT }, REG).slots.length;
+    assert.ok(before > 0 && after === 0, 'календарь закрыл ей субботу: ' + before + ' → ' + after);
+    assert.deepEqual(nurse, { id: 12, name: 'Медсестра Н.', role: 'nurse', lost: [{ day: 'sat', from: '09:00', to: '13:00' }] });
+  } finally { db.close(); }
+});
+
+test('исполнители — как у записи: роль медсестры (и дополнительная), ставки услуг; без здания, уволенные и прочие — нет', () => {
+  const db = seed();
+  try {
+    addStaff(db, [
+      { id: 20, name: 'А Медсестра без графика', role: 'nurse' },                                     // 09–18 каждый день — теряет выходные
+      { id: 21, name: 'Б Старшая медсестра', role: 'registrar', extra: '["senior_nurse"]' },          // роль — только дополнительная
+      { id: 22, name: 'В Лаборант со ставкой', role: 'lab', rates: '[{"service_id":3,"percentage":10}]' },   // исполнитель услуги
+      { id: 23, name: 'Г Медсестра без здания', role: 'nurse', branch: null },                        // решение владельца: не ограничена
+      { id: 24, name: 'Д Уволенная медсестра', role: 'nurse', active: 0 },
+      { id: 25, name: 'Е Кассир', role: 'cashier', rates: '' },
+      { id: 26, name: 'Ж Кассир с пустыми ставками', role: 'cashier', rates: '[]' },
+      { id: 27, name: 'З Главврач', role: 'head_doctor' },
+    ]);
+    const { doctors } = branchHoursImpact(db, { branch_id: 5, ...MON_FRI() }, ADMIN);
+    const got = Object.fromEntries(doctors.map((d) => [d.name, d.role]));
+    assert.deepEqual(got, {
+      'А Медсестра без графика': 'nurse', 'Б Старшая медсестра': 'senior_nurse', 'В Лаборант со ставкой': 'lab', 'З Главврач': 'head_doctor',
+      'Каримов Р.': 'doctor', 'Петров П. П.': 'doctor', 'Узистов У.': 'doctor',
+    });
+    assert.deepEqual(doctors.find((d) => d.id === 20).lost, [{ day: 'sat', from: '09:00', to: '18:00' }, { day: 'sun', from: '09:00', to: '18:00' }]);
+    for (const id of [20, 21, 22, 27]) {
+      // Каждый названный и правда спрашивается окном записи: календарь отдаёт ему субботу до и не отдаёт после.
+      assert.ok(calendarSlots(db, { doctor_id: id, date: nextSaturday() }, REG).slots.length > 0, 'до: ' + id);
+    }
   } finally { db.close(); }
 });
 

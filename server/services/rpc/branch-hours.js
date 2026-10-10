@@ -6,12 +6,24 @@
 // часами здания (clinicWindow → clampWindow), минус обед (windowSegments).
 // Было окно с прежними часами, стало с новыми — разница и есть потерянное время.
 //
-// Чьё время: врачи, у которых в «Сотрудниках» выбрано это здание
-// (users.branch_id) — ровно те, чьё окно сужает rpc/calendar.js resourceWindow;
-// «врач» — как колонка календаря (views/room-calendar.js:283: is_doctor, роль
-// doctor или специальность). Уволенные (is_active = 0) — нет. Врачи без
-// выбранного здания часами здания не ограничиваются (решение владельца
-// 2026-10-10, вариант A) — их здесь и нет.
+// Чьё время (ревью шага 4, #4): rpc/calendar.js resourceWindow сужает часами
+// здания окно ЛЮБОГО сотрудника, у которого в «Сотрудниках» выбрано это здание
+// (users.branch_id), — врача и не врача одинаково. Поэтому здесь — каждый
+// работающий (is_active = 1) сотрудник здания, которого окно записи может
+// спросить о свободном времени:
+//   • врач — как колонка календаря (views/room-calendar.js: is_doctor, роль
+//     doctor или специальность) → role 'doctor';
+//   • исполнитель процедур — тем же правилом, что очередь процедур и окно
+//     записи (rpc/procedures.js canPerformProcedures, PROC_PERFORMER_V1:
+//     is_doctor или роль медсестры / врача, основная или дополнительная) →
+//     role — эта роль ('nurse', 'senior_nurse', 'head_doctor', …);
+//   • исполнитель услуг — назначен ставкой в users.service_rates (окно записи
+//     предлагает его для этой услуги, SERVICE_NURSE_PROVIDER_V1) → role —
+//     его основная роль.
+// Сотрудники без выбранного здания часами здания не ограничиваются (решение
+// владельца 2026-10-10, вариант A) — их здесь и нет. Ответ — прежний
+// { doctors: [{ id, name, role, lost }] }: список зовётся doctors по истории,
+// role говорит, кто это.
 //
 // Ничего не пишет. Ворота — право записи в branches (реестр + плитка «Филиалы»,
 // db/write-grant.js tableWriteAllowed): кто не может сохранить часы, тому и
@@ -21,6 +33,26 @@ import { tableWriteAllowed } from '../../db/write-grant.js';
 import { readIdentity } from '../branch-sync/identity.js';
 import { WEEK, storedHoursProblem } from '../../../public/js/shared/branch-hours.js';
 import { BRANCH_MESSAGES } from '../../../public/js/shared/branch-profile.js';
+import { canPerformProcedures } from './procedures.js';   // BRANCH_PROFILE_V1 (ревью #4) — то же правило исполнителя
+
+function jsonArray(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v !== 'string' || !v.trim()) return [];
+  try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; }
+}
+// Врач — как колонка календаря (views/room-calendar.js, ADMIN_DOCTOR_LIST_V1).
+const calendarDoctor = (u) => Number(u.is_doctor) === 1 || String(u.role || '').toLowerCase() === 'doctor' || String(u.specialty || '').trim() !== '';
+// Исполнитель услуги — назначен ставкой (users.service_rates: [{ service_id, … }]).
+const servicePerformer = (u) => jsonArray(u.service_rates).some((r) => r && typeof r === 'object' && r.service_id != null);
+/** Кого окно записи может спросить о времени — и кто это; null — никто не спросит. */
+function bookableRole(u) {
+  if (calendarDoctor(u)) return 'doctor';
+  if (canPerformProcedures(u)) {
+    const roles = [u.role, ...jsonArray(u.extra_roles)].filter((r) => typeof r === 'string');
+    return roles.find((r) => canPerformProcedures({ role: r })) || String(u.role || '');
+  }
+  return servicePerformer(u) ? String(u.role || '') : null;
+}
 
 export class RpcError extends Error {
   constructor(message, status = 400, code = null) { super(message); this.status = status; if (code) this.code = code; }
@@ -75,14 +107,15 @@ export function branchHoursImpact(db, args, user) {
   if (!before) return { doctors: [] };
   // Как пишет экран и /api/db: 0/1 или true/false; строка '0' — не «круглосуточно».
   const after = { working_hours: wh, is_24_7: a.is_24_7 === true || Number(a.is_24_7) === 1 ? 1 : 0 };
-  const rows = db.prepare(`SELECT id, full_name, working_hours FROM users
+  const rows = db.prepare(`SELECT id, full_name, role, extra_roles, is_doctor, specialty, service_rates, working_hours FROM users
      WHERE branch_id = ? AND is_active = 1
-       AND (is_doctor = 1 OR lower(role) = 'doctor' OR trim(coalesce(specialty, '')) <> '')
      ORDER BY full_name, id`).all(id);
   const doctors = [];
   for (const u of rows) {
+    const role = bookableRole(u);   // BRANCH_PROFILE_V1 (ревью #4) — врачи и исполнители
+    if (role == null) continue;
     const lost = lostHours(u.working_hours, before, after);
-    if (lost.length) doctors.push({ id: u.id, name: u.full_name || '', lost });
+    if (lost.length) doctors.push({ id: u.id, name: u.full_name || '', role, lost });
   }
   return { doctors };
 }
