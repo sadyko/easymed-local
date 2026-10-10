@@ -7,7 +7,7 @@ import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто на
 // STAFF_SYNC_V1 — «филиал я или сама по себе клиника» решается по базе, а не по
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
 import { readIdentity } from '../services/branch-sync/identity.js';
-import { COMPANY_CLINIC_WIDE } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1
+import { COMPANY_CLINIC_WIDE, storedProfileProblems } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
@@ -352,6 +352,14 @@ export function dbRoutes(db) {
     const companyRefusal = companyBranchRefusal(db, compiled.meta, req.body);
     if (companyRefusal) return res.status(409).json({ error: { code: 'conflict', message: companyRefusal } });
 
+    // CLINIC_PROFILE_V1 (ревью I2) — ФОРМАТ ПРОФИЛЯ КЛИНИКИ. CHECK миграции 240
+    // — запасной замок, и он пропускал «..» в пути логотипа, разметку в адресе
+    // сайта и чужой хост карты. Здесь — те же строгие правила, что у экрана
+    // (shared/clinic-profile.js storedProfileProblems), до того как база
+    // тронута; отказ — первым объяснением, тем же, что видно под полем.
+    const profileRefusal = companyProfileRefusal(compiled.meta, req.body);
+    if (profileRefusal) return res.status(400).json({ error: { code: 'bad_request', message: profileRefusal.message, field: profileRefusal.field } });
+
     // ADMIN_ROWS_GRANTABLE_V1 — «Роли: Изменение» у не-администратора: ни роли
     // администратора, ни своих ролей, ни прав выше собственных. Компилятор уже
     // пустил запись по ключу плитки; содержание записи проверяется здесь, до
@@ -635,6 +643,19 @@ function companyBranchRefusal(db, meta, body) {
   const same = (a, b) => String(a == null ? '' : a) === String(b == null ? '' : b);
   const changes = COMPANY_CLINIC_WIDE.some((c) => Object.prototype.hasOwnProperty.call(values, c) && !same(values[c], cur[c]));
   return changes ? COMPANY_MAIN_ONLY : null;
+}
+
+// CLINIC_PROFILE_V1 (ревью I2) — запись в doc_settings (вставка, правка,
+// upsert; одна строка или пачка): первая проблема формата — { field, message }.
+function companyProfileRefusal(meta, body) {
+  if (!meta || meta.table !== 'doc_settings' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
+  const v = body && body.values;
+  for (const row of Array.isArray(v) ? v : [v]) {
+    const problems = storedProfileProblems(row);
+    const field = Object.keys(problems)[0];
+    if (field) return { field, message: problems[field] };
+  }
+  return null;
 }
 
 // Shapes the row list according to desc.single: 'single' requires exactly

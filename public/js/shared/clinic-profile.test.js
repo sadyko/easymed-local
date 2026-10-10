@@ -107,3 +107,54 @@ test('каждое сообщение модуля переведено на ru 
     assert.ok(e && e.ru && e.uz && e.en, 'нет статьи словаря: ' + m);
   }
 });
+
+// ---------------------------------------------------------------------------
+// CLINIC_PROFILE_V1 (ревью I2) — строгие правила: CHECK миграции 240 — лишь
+// запасной замок, и он пропускал «..» в пути логотипа, разметку в адресе сайта
+// и чужой хост «yandex.evil.com». Те же правила — экрану и серверу (/api/db).
+// ---------------------------------------------------------------------------
+test('сайт: только https с настоящим хостом; кавычки, <, > и пробелы — отказ', () => {
+  for (const bad of ['https://a.uz/"><script>alert(1)</script>', "https://a.uz/'x", 'https://a.uz/a b', 'https://a.uz/<b>',
+    'https://localhost', 'https://a', 'https://-a.uz', 'https://a..uz', 'https://a.uz:99999', 'javascript:alert(1)', 'https://a.uz/`x`']) {
+    assert.equal(websiteProblem(bad), PROFILE_MESSAGES.website, bad);
+  }
+  for (const good of ['https://klinika.uz', 'https://www.klinika.uz/ru/about?x=1&y=2#top', 'https://xn--80aswg.xn--p1ai', 'https://a-b.c-d.uz:8443/x']) {
+    assert.equal(websiteProblem(good), '', good);
+  }
+});
+
+test('карта: только yandex.uz / .ru / .com (и www., maps.yandex.*) с путём /maps; разметка и чужие хосты — отказ', () => {
+  for (const bad of ['https://yandex.evil.com/maps', 'https://yandex.uz.evil.com/maps', 'https://yandex.uz/mapsx', 'https://yandex.kz/maps/',
+    'https://yandex.uz/maps/"><script>', 'https://yandex.uz/maps/a b', 'http://yandex.uz/maps/', 'https://evil.com/?https://yandex.uz/maps']) {
+    assert.equal(mapsProblem(bad), PROFILE_MESSAGES.maps, bad);
+  }
+  for (const good of ['https://yandex.uz/maps/-/CDabc123', 'https://www.yandex.ru/maps/org/shifo/123/', 'https://yandex.com/maps?ll=69.2%2C41.3',
+    'https://maps.yandex.uz/?pt=69.2,41.3', 'https://yandex.uz/maps']) {
+    assert.equal(mapsProblem(good), '', good);
+  }
+});
+
+test('сервер: storedProfileProblems проверяет значения ровно в том виде, в каком их пишут в базу', async () => {
+  const { storedProfileProblems } = await import('./clinic-profile.js');
+  assert.deepEqual(storedProfileProblems({ clinic_name: 'Шифо', address: 'что угодно', logo_data_url: 'data:image/png;base64,AAAA' }), {}, 'прочие колонки не проверяются');
+  assert.deepEqual(storedProfileProblems({ website: '', telegram_bot: '', instagram: '', maps_url: '', logo_square_path: '', logo_portrait_path: '' }), {}, 'пусто — можно');
+  assert.deepEqual(storedProfileProblems({ website: 'https://klinika.uz', telegram_bot: '@klinika_bot', telegram_channel: '@klinika',
+    instagram: '@klinika.uz', maps_url: 'https://yandex.uz/maps/-/CDabc', logo_square_path: 'square/1760000000000-ab12cd.png',
+    logo_portrait_path: 'portrait/1760000000000-ab12cd.png' }), {});
+  const bad = storedProfileProblems({
+    logo_square_path: 'square/../../clinic-docs/patients/1/docs/scan.png',
+    logo_portrait_path: 'square/1-a.png',
+    website: 'klinika.uz',                     // не приведён — сервер не дописывает https:// за клиента
+    telegram_bot: 't.me/klinika_bot',          // не урезан до @имени
+    telegram_channel: '@klinika channel',
+    instagram: '@кли ника',
+    maps_url: 'https://yandex.evil.com/maps',
+  });
+  assert.deepEqual(Object.keys(bad).sort(), ['instagram', 'logo_portrait_path', 'logo_square_path', 'maps_url', 'telegram_bot', 'telegram_channel', 'website']);
+  assert.equal(bad.logo_square_path, PROFILE_MESSAGES.logoPath);
+  assert.equal(bad.website, PROFILE_MESSAGES.website);
+  assert.equal(bad.maps_url, PROFILE_MESSAGES.maps);
+  for (const p of ['square/a b.png', 'square/a.PNG.exe', 'square/.png', 'square/a/b.png', 'square\a.png', 'square/a.png ', 'portrait/a.png'])
+    assert.equal(storedProfileProblems({ logo_square_path: p }).logo_square_path, PROFILE_MESSAGES.logoPath, p);
+  assert.equal(storedProfileProblems({ website: 5 }).website, PROFILE_MESSAGES.website, 'не строка — отказ');
+});

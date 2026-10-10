@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_PROFILE_V1 (ревью I2) — путь к файлу логотипа (shared/clinic-profile.js, /api/db)
+  "Неверный путь к файлу логотипа: квадратный — square/<имя>.png, вертикальный — portrait/<имя>.png (латинские буквы, цифры, «-» и «_»).": {"en":"Wrong logo file path: square — square/<name>.png, portrait — portrait/<name>.png (Latin letters, digits, “-” and “_”).","ru":"Неверный путь к файлу логотипа: квадратный — square/<имя>.png, вертикальный — portrait/<имя>.png (латинские буквы, цифры, «-» и «_»).","uz":"Logotip fayliga yo‘l noto‘g‘ri: kvadrat — square/<nom>.png, vertikal — portrait/<nom>.png (lotin harflari, raqamlar, «-» va «_»)."},   // CLINIC_PROFILE_V1
   // CLINIC_PROFILE_V1 (2026-10-10) — «Компания» в филиале: общее — из главного здания (routes/db.js, экран)
   "Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.": {"en":"The name, description, logos, website and social media, licence and brand colour are changed in the main building. Here — this building’s address, phone, email and map.","ru":"Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.","uz":"Nomi, tavsifi, logotiplar, sayt va ijtimoiy tarmoqlar, litsenziya va firma rangi bosh binoda o‘zgartiriladi. Bu yerda — shu binoning manzili, telefoni, pochtasi va xaritasi."},   // CLINIC_PROFILE_V1
   // CLINIC_PROFILE_V1 (2026-10-10) — хранилище: корзина логотипов клиники (routes/storage.js)

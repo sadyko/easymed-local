@@ -55,3 +55,39 @@ test('doc_settings: logo_data_url = "" сохраняется, null — 400 с �
     assert.match((await bad.json()).error.message, /logo_data_url/);
   } finally { t.stop(); }
 });
+
+// CLINIC_PROFILE_V1 (ревью I2) — CHECK миграции 240 — запасной замок; первый —
+// /api/db: те же строгие правила, что у экрана (shared/clinic-profile.js
+// storedProfileProblems), с понятным переведённым отказом 400.
+test('/api/db: путь логотипа с «..», разметка в сайте, чужой хост карты, неприведённые имена — 400, база не тронута', async () => {
+  const { STRINGS } = await import('../../public/js/admin/i18n-strings.js');
+  const t = await setup();
+  try {
+    const cookie = await login(t.base, 'boss');
+    const save = (values) => fetch(t.base + '/api/db', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ table: 'doc_settings', op: 'update', values, filters: [{ col: 'id', op: 'eq', val: 1 }] }) });
+    const before = t.db.prepare('SELECT * FROM doc_settings WHERE id = 1').get();
+    for (const values of [
+      { logo_square_path: 'square/../../clinic-docs/patients/1/docs/scan.png' },
+      { logo_portrait_path: 'portrait/../x.png' },
+      { website: 'https://a.uz/"><script>alert(1)</script>' },
+      { maps_url: 'https://yandex.evil.com/maps' },
+      { telegram_bot: 't.me/klinika_bot' },
+      { instagram: '@a b' },
+      { clinic_name: 'Шифо', website: 'https://a.uz/<b>' },
+    ]) {
+      const res = await save(values);
+      assert.equal(res.status, 400, JSON.stringify(values));
+      const { error } = await res.json();
+      assert.equal(error.code, 'bad_request');
+      const e = STRINGS[error.message];
+      assert.ok(e && e.uz && e.en, 'сообщение переведено: ' + error.message);
+    }
+    assert.deepEqual(t.db.prepare('SELECT * FROM doc_settings WHERE id = 1').get(), before, 'ни одна запись не прошла');
+
+    const ok = await save({ clinic_name: 'Шифо', website: 'https://shifo.uz', telegram_bot: '@shifo_clinic_bot', instagram: '@shifo.uz',
+      maps_url: 'https://yandex.uz/maps/-/CDabc', logo_square_path: 'square/1760000000000-ab12cd.png' });
+    assert.equal(ok.status, 200, JSON.stringify(await ok.clone().json()));
+  } finally { t.stop(); }
+});
