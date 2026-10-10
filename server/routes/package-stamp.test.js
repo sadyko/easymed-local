@@ -26,8 +26,9 @@ async function startServer() {
   db.prepare("INSERT INTO patients (id, full_name) VALUES (77,'Пациент Тест')").run();
   // Визит 10.09 — пакет «Август» кончился 31.08, пакет «Осень» действует.
   db.prepare("INSERT INTO visits (id, patient_id, visit_date) VALUES (500,77,'2026-09-10T09:00:00Z')").run();
-  db.prepare("INSERT INTO service_templates (id, name, service_ids, discount_percent, valid_from, valid_until) VALUES (1,'Август','[1]',20,'2026-08-01','2026-08-31')").run();
-  db.prepare("INSERT INTO service_templates (id, name, service_ids, discount_percent, valid_from, valid_until) VALUES (2,'Осень','[1]',20,'2026-09-01','2026-09-30')").run();
+  // SERVICES_PACKAGES_V1 — пакеты (is_package = 1), скидка 20 %.
+  db.prepare("INSERT INTO service_templates (id, name, service_ids, discount_percent, valid_from, valid_until, is_package, discount_mode, discount_value) VALUES (1,'Август','[1]',20,'2026-08-01','2026-08-31',1,'percent',20)").run();
+  db.prepare("INSERT INTO service_templates (id, name, service_ids, discount_percent, valid_from, valid_until, is_package, discount_mode, discount_value) VALUES (2,'Осень','[1]',20,'2026-09-01','2026-09-30',1,'percent',20)").run();
   const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
   return { db, server, base: `http://127.0.0.1:${server.address().port}` };
 }
@@ -88,5 +89,56 @@ test('пакет со строки вне счёта снимается — и �
     const res = await setPackage(base, cookie, inv, null);
     assert.equal(res.status, 409);
     assert.equal(db.prepare('SELECT package_id FROM visit_services WHERE id = ?').get(inv).package_id, 2);
+  } finally { server.close(); db.close(); }
+});
+
+// ===========================================================================
+// SERVICES_PACKAGES_V1 — ЦЕНА ПАКЕТА ФИКСИРУЕТСЯ НА СТРОКЕ ПРИ ЗАПИСИ. Дверь
+// /api/db ставит строке из пакета цену без скидки и цену в пакете
+// (domain/package-lines.js); присланное браузером не в счёт; шаблон сметы —
+// обычные строки; правка, снимающая пакет, снимает и цену.
+// ===========================================================================
+const PKG_ROWS = (db) => db.prepare('SELECT service_id, package_id, package_full, package_price, unit_price, total FROM visit_services WHERE visit_id = 500 ORDER BY id').all()
+  .map((r) => [r.service_id, r.package_id, r.package_full, r.package_price, r.unit_price, r.total]);
+
+test('строке из пакета дверь ставит цену без скидки и цену в пакете; присланное браузером не в счёт; счёт — ровно цена пакета', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    db.prepare("INSERT INTO services (id, name, price, type) VALUES (2,'Анализ',50000,'lab')").run();
+    db.prepare("UPDATE service_templates SET service_ids = '[1,2]', discount_mode = 'price', discount_value = 120000 WHERE id = 2").run();
+    const cookie = await login(base);
+    const res = await call(base, cookie, { table: 'visit_services', op: 'insert', values: [
+      { visit_id: 500, service_id: 1, quantity: 1, unit_price: 1, total: 1, status: 'added', package_id: 2, package_full: 5, package_price: 1 },
+      { visit_id: 500, service_id: 2, quantity: 1, unit_price: 1, total: 1, status: 'added', package_id: 2 },
+      { visit_id: 500, service_id: 2, quantity: 1, unit_price: 50000, total: 50000, status: 'added', package_price: 1 },
+    ] });
+    assert.equal(res.status, 200, await res.text());
+    // 150 000 → 120 000 (k = 0,8): УЗИ 80 000, анализ — остаток 40 000; строка без пакета — обычная.
+    assert.deepEqual(PKG_ROWS(db), [[1, 2, 100000, 80000, 100000, 100000], [2, 2, 50000, 40000, 50000, 50000], [2, null, null, null, 50000, 50000]]);
+    const ids = db.prepare('SELECT id FROM visit_services WHERE visit_id = 500 AND package_id IS NOT NULL ORDER BY id').all().map((r) => r.id);
+    const out = createInvoiceForVisit(db, { visit_id: 500, visit_service_ids: ids }, { id: 1, role: 'registrar' });
+    assert.equal(out.invoice.total_amount, 120000, 'счёт — ровно цена пакета');
+    // Каталог подешевел после записи — цена строк та же: она записана.
+    db.prepare('UPDATE services SET price = 10 WHERE id IN (1, 2)').run();
+    assert.deepEqual(PKG_ROWS(db).slice(0, 2).map((r) => r[3]), [80000, 40000]);
+  } finally { server.close(); db.close(); }
+});
+
+test('шаблон сметы — обычные строки; снятый со строки пакет снимает и его цену; ставить цену правкой нельзя', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const cookie = await login(base);
+    db.prepare('UPDATE service_templates SET is_package = 0 WHERE id = 2').run();
+    assert.equal((await addLine(base, cookie, 2)).status, 200);
+    db.prepare('UPDATE service_templates SET is_package = 1 WHERE id = 2').run();
+    assert.equal((await addLine(base, cookie, 2)).status, 200);
+    assert.deepEqual(PKG_ROWS(db), [[1, 2, null, null, 100000, 100000], [1, 2, 100000, 80000, 100000, 100000]]);
+    const id = db.prepare('SELECT MAX(id) id FROM visit_services').get().id;
+    const sneak = await call(base, cookie, { table: 'visit_services', op: 'update', values: { package_price: 1 }, filters: [{ col: 'id', op: 'eq', val: id }] });
+    assert.equal(sneak.status, 403, 'цену пакета правкой не поставить');
+    assert.equal((await setPackage(base, cookie, id, null)).status, 200);
+    assert.deepEqual(PKG_ROWS(db)[1], [1, null, null, null, 100000, 100000]);
+    const out = createInvoiceForVisit(db, { visit_id: 500, visit_service_ids: [id] }, { id: 1, role: 'registrar' });
+    assert.equal(out.invoice.total_amount, 100000, 'без пакета — обычная цена');
   } finally { server.close(); db.close(); }
 });

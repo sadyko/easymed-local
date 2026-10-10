@@ -30,6 +30,7 @@ import { PROXY_MODELS } from '../../public/js/shared/lisproxy-models.js';   // L
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
 import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 import { geoCodeRefusal } from '../services/geo-codes-guard.js';   // REFERENCE_LISTS_V1 (полировка) — коды географии не меняются
+import { stampWriteBody } from '../services/domain/package-lines.js';   // SERVICES_PACKAGES_V1 — цена пакета на строке при записи
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -478,6 +479,12 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     if (packageRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: packageRefusal } });
     }
+    // SERVICES_PACKAGES_V1 — ЦЕНА ПАКЕТА ФИКСИРУЕТСЯ НА СТРОКЕ ПРИ ЗАПИСИ
+    // (спецификация «Пакеты»). Строке из пакета сервер сам ставит цену без
+    // скидки и цену в пакете (domain/package-lines.js) — присланное браузером в
+    // эти колонки затирается; правка, снимающая пакет, снимает и его цену. Тело
+    // правится на месте и собирается заново тем же compile() — те же права.
+    if (stampWriteBody(db, req.body, compiled.meta)) compiled = compile(req.body, req.user, { db });
     // LIS_PROXY_V1 (ревью, Р21) — модель прибора за LIS Proxy: см. refuseProxyModelWrite.
     const proxyModelRefusal = refuseProxyModelWrite(db, compiled.meta, req.body, req.user);
     if (proxyModelRefusal) {

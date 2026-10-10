@@ -1290,7 +1290,7 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
     // скидкой тарифа (OWN_PRICE_TIER_RATIO_V1). Одно правило с кассой и выплатой врачу.
     const visitRow = db.prepare('SELECT patient_id, visit_date FROM visits WHERE id = ?').get(vs.visit_id);
     const tier = quoteTier(db, visitRow, vs.visit_id, newServiceId, user);
-    const unit = round2(lineUnitPrice(db, { ...vs, service_id: newServiceId, clinic_item_id: null, consultation_type_id: null, price_tier: tier }, { service: svc }));
+    const unit = round2(lineUnitPrice(db, { ...vs, service_id: newServiceId, clinic_item_id: null, consultation_type_id: null, price_tier: tier, package_full: null, package_price: null }, { service: svc }));   // SERVICES_PACKAGES_V1 — у новой услуги цены пакета нет
     const lineTotal = round2(unit * qty);
     const before = item ? lineLabel(db, vs, item) + ' · ' + moneyWords(item.total) : null;   // CASHIER_HEAD_V1 — для журнала
     // PACKAGES_V1 — другая услуга уже не услуга пакета: строка теряет пакет и
@@ -1299,7 +1299,8 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
     // неё снимается, иначе остаётся химера «услуга + вид приёма».
     // CASHIER_HEAD_V1 (ревью I5) — номер очереди прежней услуги снимается:
     // другая услуга — другая очередь; номер выдаст оплата.
-    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')
+    // SERVICES_PACKAGES_V1 — и цена пакета, записанная на строке, уходит с ним.
+    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL, package_full = NULL, package_price = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')
       .run(newServiceId, unit, lineTotal, tier, vsId);
 
     let invoice = null;
@@ -1831,7 +1832,7 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
   const visitRow = db.prepare('SELECT patient_id, visit_date FROM visits WHERE id = ?').get(vs.visit_id);
   const tier = serviceChanges ? quoteTier(db, visitRow, vs.visit_id, newServiceId) : (vs.price_tier || 'primary');
   const priced = serviceChanges
-    ? { ...vs, service_id: newServiceId, doctor_id: targetDoctor, clinic_item_id: null, consultation_type_id: null, price_tier: tier }
+    ? { ...vs, service_id: newServiceId, doctor_id: targetDoctor, clinic_item_id: null, consultation_type_id: null, price_tier: tier, package_full: null, package_price: null }   // SERVICES_PACKAGES_V1
     : { ...vs, doctor_id: targetDoctor };
   const svcRow = priced.service_id != null ? (svc || db.prepare('SELECT * FROM services WHERE id = ?').get(priced.service_id)) : null;
   const unit = round2(lineUnitPrice(db, priced, { service: svcRow }));
@@ -1840,7 +1841,7 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
   const oldOwn = invoiceOwnDiscount(db, inv.id);
   const oldBase = invoiceRestBase(db, inv.id);
   if (serviceChanges) {
-    db.prepare('UPDATE visit_services SET service_id = ?, doctor_id = ?, unit_price = ?, total = ?, package_id = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')
+    db.prepare('UPDATE visit_services SET service_id = ?, doctor_id = ?, unit_price = ?, total = ?, package_id = NULL, package_full = NULL, package_price = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')   // SERVICES_PACKAGES_V1
       .run(newServiceId, targetDoctor, unit, lineTotal, tier, vsId);
   } else {
     db.prepare('UPDATE visit_services SET doctor_id = ?, unit_price = ?, total = ?, queue_key = NULL, queue_no = NULL WHERE id = ?')
