@@ -340,3 +340,20 @@ test('B2: полный возврат с «оставить услуги» — �
   assert.equal(line.invoice_item_id, null);
   assert.equal(line.status, 'added');
 });
+
+// DOCTOR_PROFILE_V1 — решения владельца 8 и 13: касса считает по общему
+// правилу (shared/consultation-price.js). Строка врача с пустой ценой
+// («Консультации врачей» пишут её, когда цену не ввели) — 0, как и до шага 5;
+// вид без строки врача — общая цена вида. Страж: касса так считает и сейчас —
+// тест держит правило при переходе кассы на consultPrice.
+test('DOCTOR_PROFILE_V1: строка врача с пустой ценой — 0 (решение 13), вид без строки — общая цена (решение 8)', () => {
+  const { db, vid } = seed();
+  const ct = db.prepare("INSERT INTO consultation_types (name, price) VALUES ('Первичный приём', 100000)").run().lastInsertRowid;
+  const ct2 = db.prepare("INSERT INTO consultation_types (name, price) VALUES ('Повторный приём', 60000)").run().lastInsertRowid;
+  db.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available, is_free) VALUES (?, ?, NULL, 1, 0)').run(DOC, ct);
+  const a = addLine(db, vid, { service_id: null, consultation_type_id: ct, doctor_id: DOC, unit_price: 1 });
+  const b = addLine(db, vid, { service_id: null, consultation_type_id: ct2, doctor_id: DOC, unit_price: 1 });
+  const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [a, b] }, registrar);
+  assert.deepEqual(out.items.map((i) => i.unit_price).sort((x, y) => x - y), [0, 60000], 'пустая цена — 0, а не 100 000; вид без строки — 60 000');
+  assert.equal(out.invoice.total_amount, 60000);
+});

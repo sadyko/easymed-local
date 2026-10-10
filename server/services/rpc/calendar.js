@@ -138,6 +138,7 @@ import {
   clampWindow, clinicWindow, dayWindow, formatHhmm,
   overlapsMs, serviceDurationMinutes, slotStarts, windowSegments,
 } from './slot-engine.js';
+import { consultMinutes } from '../../../public/js/shared/consultation-price.js';   // DOCTOR_PROFILE_V1 — длительность вида консультации
 // CROSS_BRANCH_CALENDAR_V1. Список зданий и возраст их картинки — один на всю
 // систему (rpc/branch-sync.js networkBuildings); срочная выгрузка — та же
 // машина, что и часовая (branch-sync/relay.js), а не второй канал.
@@ -341,8 +342,8 @@ function unassignedForeign(db, { letter, fromMs, toMs }) {
   return out;
 }
 
-/** Длительность записи: из услуги, иначе явная, иначе 15 (решение владельца). */
-function resolveDuration(db, { serviceId, explicit }) {
+/** Длительность записи: явная, иначе из услуги, иначе из вида консультации (DOCTOR_PROFILE_V1), иначе 15. */
+function resolveDuration(db, { serviceId, consultationTypeId = null, explicit }) {
   if (explicit !== undefined && explicit !== null && explicit !== '') {
     const n = Math.round(Number(explicit));
     if (!Number.isFinite(n) || n < 5) throw new RpcError('Длительность приёма — не меньше 5 минут.', 400);
@@ -352,6 +353,13 @@ function resolveDuration(db, { serviceId, explicit }) {
   if (serviceId) {
     const svc = db.prepare('SELECT duration_minutes FROM services WHERE id = ?').get(serviceId);
     return serviceDurationMinutes(svc, DEFAULT_DURATION_MIN);
+  }
+  // DOCTOR_PROFILE_V1 (мигр. 243) — консультация по виду приёма: длительность
+  // вида (по умолчанию 30 — столько окно записи ставило консультации). Раньше
+  // здесь было 15 — консультация без услуги длилась как самая короткая услуга.
+  if (consultationTypeId) {
+    const ct = db.prepare('SELECT duration_minutes FROM consultation_types WHERE id = ?').get(consultationTypeId);
+    if (ct) return consultMinutes(ct);
   }
   return DEFAULT_DURATION_MIN;
 }
@@ -723,7 +731,8 @@ function crossContext(db, { fromMs, toMs }) {
 
 /**
  * args: { doctor_id? , room_id?, date:'YYYY-MM-DD', service_id?,
- *         duration_minutes?, step_minutes?, exclude_visit_id? }
+ *         duration_minutes?, step_minutes?, exclude_visit_id?,
+ *         consultation_type_id? }   // DOCTOR_PROFILE_V1
  *
  * Возвращает окно дня, свободные начала и занятое — всё в местном настенном
  * времени ('09:30') плюс ISO для тех, кто будет записывать.
@@ -751,7 +760,8 @@ export function calendarSlots(db, args, user) {
   if (roomId && !room) throw new RpcError('Кабинет не найден.', 400);
 
   const serviceId = optId(a.service_id, 'service_id');
-  const durationMin = resolveDuration(db, { serviceId, explicit: a.duration_minutes });
+  const consultationTypeId = optId(a.consultation_type_id, 'consultation_type_id');   // DOCTOR_PROFILE_V1
+  const durationMin = resolveDuration(db, { serviceId, consultationTypeId, explicit: a.duration_minutes });
   const stepMin = a.step_minutes ? Math.max(5, Math.round(Number(a.step_minutes))) : durationMin;
   const excludeVisitId = optId(a.exclude_visit_id, 'exclude_visit_id');
 
@@ -907,7 +917,8 @@ function conflictError(doctorName, conflict) {
  * args:
  *   { visit_id?, patient_id?, doctor_id?, room_id?, service_id?, branch_id?,
  *     start, duration_minutes?, status?, notes?,
- *     emergency?, emergency_reason? }
+ *     emergency?, emergency_reason?,
+ *     consultation_type_id? }   // DOCTOR_PROFILE_V1
  *
  * Без visit_id — создаёт запись (нужен patient_id). С visit_id — переносит
  * и/или растягивает существующую: то же действие, та же проверка, тот же отказ.
@@ -953,9 +964,10 @@ export async function calendarBook(db, args, user, deps = {}) {
     throw new RpcError('Услуга не найдена.', 400);
   }
 
+  const consultationTypeId = optId(a.consultation_type_id, 'consultation_type_id');   // DOCTOR_PROFILE_V1
   const durationMin = a.duration_minutes === undefined && existing
     ? Math.max(5, Number(existing.duration_minutes) || DEFAULT_DURATION_MIN)
-    : resolveDuration(db, { serviceId, explicit: a.duration_minutes });
+    : resolveDuration(db, { serviceId, consultationTypeId, explicit: a.duration_minutes });
 
   const patientId = existing ? existing.patient_id : optId(a.patient_id, 'patient_id');
   if (!existing) {

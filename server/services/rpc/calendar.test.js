@@ -637,3 +637,18 @@ test('CRM_UNIFY_V1: «пришёл» на БУДУЩИЙ визит своего
     'отметка «Пришёл» на визите будущего дня не дошла до заявки');
   db.close();
 });
+
+// DOCTOR_PROFILE_V1 (мигр. 243) — консультация по виду приёма длится столько,
+// сколько у вида (по умолчанию 30 — как окно записи ставило её раньше); без
+// вида и услуги — прежние 15; явная длительность сильнее.
+test('DOCTOR_PROFILE_V1: длительность консультации — из вида приёма', async () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO consultation_types (id, name, price, duration_minutes) VALUES (5, 'Первичный приём', 100000, 45)").run();
+  db.prepare("INSERT INTO consultation_types (id, name, price) VALUES (6, 'Повторный приём', 60000)").run();
+  assert.equal(calendarSlots(db, { doctor_id: 7, date: DAY, consultation_type_id: 5 }, registrar).duration_minutes, 45);
+  assert.equal(calendarSlots(db, { doctor_id: 7, date: DAY, consultation_type_id: 6 }, registrar).duration_minutes, 30);
+  assert.equal(calendarSlots(db, { doctor_id: 7, date: DAY }, registrar).duration_minutes, 15);
+  assert.equal(calendarSlots(db, { doctor_id: 7, date: DAY, consultation_type_id: 5, duration_minutes: 20 }, registrar).duration_minutes, 20);
+  const out = await calendarBook(db, { patient_id: 3, doctor_id: 7, start: at(10), consultation_type_id: 5 }, registrar);
+  assert.equal(out.visit.duration_minutes, 45);
+});
