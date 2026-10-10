@@ -52,6 +52,8 @@ import { COMPANY_COLUMNS, NAME_MAX, ABOUT_MAX, normalizeProfile, companyProblems
 import { triGroup, labeled } from './company-fields.js';
 import { logosCard } from './company-logos.js';
 import { addressCard, mapCard } from './company-address.js';
+import { patientPreview } from './company-preview.js';
+import { logoSrc } from './company-logos.js';
 
 // SETTINGS_SPLIT_V1 — paper_size/show_watermark/footer_note/legal_note остались
 // в таблице, но не в этом объекте: DEFAULTS описывает то, чем управляет ЭТОТ
@@ -70,8 +72,10 @@ function setState(values) {
     Object.assign(state, DEFAULTS, values || {});
 }
 const refs = { container: null, previewEl: null, saveBtn: null, errNote: null, controls: null,
-    // CLINIC_PROFILE_V1 — строки ошибок по колонкам; доступность списков адреса.
-    errs: {}, geoAvailability: () => ({}), logos: null, address: null, map: null };
+    // CLINIC_PROFILE_V1 — строки ошибок по колонкам; доступность списков адреса;
+    // «Как это увидят пациенты» и его язык (не язык интерфейса).
+    errs: {}, geoAvailability: () => ({}), logos: null, address: null, map: null,
+    patientEl: null, langBtns: null, previewLang: 'ru' };
 
 export async function renderDocumentsSettings(container, { onNavigate } = {}) {
     refs.container = container;
@@ -111,8 +115,23 @@ function mount(onNavigate) {
 
     refs.previewEl = h('div');
     const previewCard = h('div', { class: 'card' },
-        h('div', { class: 'card-header' }, h('h3', null, Icon('ID', { size: 16 }), ' ', 'Как это выглядит')),
+        h('div', { class: 'card-header' }, h('h3', null, Icon('ID', { size: 16 }), ' ', 'Как это выглядит в документах')),
         h('div', { style: { padding: '18px' } }, refs.previewEl));
+
+    // CLINIC_PROFILE_V1 — «Как это увидят пациенты»: RU / UZ / EN — язык
+    // ПРЕДПРОСМОТРА (так покажут сайт и партнёры), а не интерфейса.
+    refs.patientEl = h('div');
+    refs.langBtns = h('div', { class: 'segmented', role: 'group', 'aria-label': 'Язык' },
+        ...[['ru', 'RU'], ['uz', 'UZ'], ['en', 'EN']].map(([code, tag]) => {
+            const b = h('button', { type: 'button', dataset: { lang: code },
+                onclick: () => { refs.previewLang = code; paintLangBtns(); renderPreview(); } }, document.createTextNode(tag));
+            return b;
+        }));
+    paintLangBtns();
+    const patientCard = h('div', { class: 'card' },
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Image', { size: 16 }), ' ', 'Как это увидят пациенты'), refs.langBtns),
+        h('div', { class: 'cpf-body' }, refs.patientEl,
+            h('p', { class: 'cpf-hint' }, 'Так данные клиники выглядят на сайте клиники, в Symptex и у партнёров. Каждый показывает их в своём стиле, данные одинаковые.')));
 
     refs.container.appendChild(h('div', { class: 'fade-in' },
         h('div', { class: 'page-head' },
@@ -132,7 +151,7 @@ function mount(onNavigate) {
             h('div', { class: 'col cpf-main', style: { minWidth: 'min(320px, 100%)', flex: '3 1 480px' } },
                 h('div', { class: 'cpf-stack' }, formCard, refs.address.node, refs.logos.node, linksCard, refs.map.node)),
             h('div', { class: 'col cpf-side', style: { minWidth: 'min(320px, 100%)', flex: '1 1 320px' } },
-                h('div', { class: 'cpf-stack' }, previewCard)),
+                h('div', { class: 'cpf-stack' }, patientCard, previewCard)),
         ),
     ));
 
@@ -346,7 +365,28 @@ async function save() {
 // All clinic-supplied strings go through h()'s textContent path — never
 // innerHTML.
 // -----------------------------------------------------------------------------
+// CLINIC_PROFILE_V1 — кнопки языка предпросмотра: выбранная — .on и aria-pressed.
+function paintLangBtns() {
+    if (!refs.langBtns) return;
+    for (const b of refs.langBtns.children) {
+        const on = b.dataset && b.dataset.lang === refs.previewLang;
+        b.className = on ? 'on' : '';
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+}
+
+// CLINIC_PROFILE_V1 — «Как это увидят пациенты»: квадратный логотип — файл,
+// иначе печатная копия (прежний логотип); адрес — из выбранных строк справочника.
+function renderPatientPreview() {
+    if (!refs.patientEl) return;
+    clear(refs.patientEl);
+    const logo = state.logo_square_path ? logoSrc(state.logo_square_path) : (state.logo_data_url || '');
+    const parts = refs.address ? refs.address.parts() : {};
+    refs.patientEl.appendChild(patientPreview(state, { lang: refs.previewLang, parts, logo }));
+}
+
 function renderPreview() {
+    renderPatientPreview();   // CLINIC_PROFILE_V1
     if (!refs.previewEl) return;
     clear(refs.previewEl);
 

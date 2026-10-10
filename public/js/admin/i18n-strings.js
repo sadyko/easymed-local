@@ -11233,5 +11233,12 @@ export const STRINGS = {
   "Кнопка «Маршрут»": {"en":"The “Route” button","ru":"Кнопка «Маршрут»","uz":"«Yo‘nalish» tugmasi"},   // CLINIC_PROFILE_V1
   "Открыть маршрут": {"en":"Open the route","ru":"Открыть маршрут","uz":"Yo‘nalishni ochish"},   // CLINIC_PROFILE_V1
   "Появится, когда будет ссылка на карту.": {"en":"Appears once there is a map link.","ru":"Появится, когда будет ссылка на карту.","uz":"Xarita havolasi bo‘lganda paydo bo‘ladi."},   // CLINIC_PROFILE_V1
+  "Как это увидят пациенты": {"en":"How patients will see it","ru":"Как это увидят пациенты","uz":"Bemorlar buni qanday ko‘radi"},   // CLINIC_PROFILE_V1
+  "Как это выглядит в документах": {"en":"How it looks on documents","ru":"Как это выглядит в документах","uz":"Hujjatlarda qanday ko‘rinadi"},   // CLINIC_PROFILE_V1
+  "Язык": {"en":"Language","ru":"Язык","uz":"Til"},   // CLINIC_PROFILE_V1
+  "Маршрут": {"en":"Route","ru":"Маршрут","uz":"Yo‘nalish"},   // CLINIC_PROFILE_V1
+  "Нет описания на этом языке — партнёры покажут русское.": {"en":"No description in this language — partners will show the Russian one.","ru":"Нет описания на этом языке — партнёры покажут русское.","uz":"Bu tilda tavsif yo‘q — hamkorlar ruschasini ko‘rsatadi."},   // CLINIC_PROFILE_V1
+  "Описания пока нет — добавьте его в «Реквизитах».": {"en":"No description yet — add it in “Clinic details”.","ru":"Описания пока нет — добавьте его в «Реквизитах».","uz":"Tavsif hali yo‘q — uni «Klinika rekvizitlari»da qo‘shing."},   // CLINIC_PROFILE_V1
+  "Так данные клиники выглядят на сайте клиники, в Symptex и у партнёров. Каждый показывает их в своём стиле, данные одинаковые.": {"en":"This is how the clinic’s data looks on the clinic website, in Symptex and at partners. Each shows it in its own style; the data is the same.","ru":"Так данные клиники выглядят на сайте клиники, в Symptex и у партнёров. Каждый показывает их в своём стиле, данные одинаковые.","uz":"Klinika ma’lumotlari klinika saytida, Symptex’da va hamkorlarda shunday ko‘rinadi. Har biri ularni o‘z uslubida ko‘rsatadi, ma’lumotlar bir xil."},   // CLINIC_PROFILE_V1
   // /CLINIC_PROFILE_V1 — экран «Компания»
 };

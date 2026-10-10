@@ -108,6 +108,8 @@ export function addressCard(state, { onChange = null, secondary = false } = {}) 
         node,
         street,
         get geo() { return geo; },
+        // Выбранные строки справочника — для предпросмотра «Как это увидят пациенты».
+        parts: () => parts,
         // Ошибки по колонкам — для showProblems экрана.
         errs: { region_code: boxes.region.err, district_code: boxes.district.err, street_ru: street.inputs.ru.err },
         // Есть ли из чего выбирать: «Регионы не заведены» не требует региона.

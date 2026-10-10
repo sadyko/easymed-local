@@ -7609,6 +7609,19 @@ table.list tr.is-off td { color: var(--ink-400); }
     .cpf-kv { grid-template-columns: minmax(0, 1fr); }
     .cpf-kv dd { margin-bottom: 4px; }
 }
+/* «Как это увидят пациенты»: карточка-образец, кнопки-ссылки на языке предпросмотра. */
+.cpf-side .card-header { flex-wrap: wrap; }
+.cpf-preview { display: grid; gap: 12px; padding: 16px; min-width: 0; border: 1px solid var(--ink-100); border-radius: 12px; background: var(--white); box-shadow: 0 1px 2px rgba(11, 20, 24, 0.04); }
+.cpf-preview-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.cpf-pmark { flex: none; width: 52px; height: 52px; border-radius: 12px; object-fit: contain; }
+.cpf-pmark.is-empty { display: grid; place-items: center; background: var(--primary-50); color: var(--primary-700); }
+.cpf-pname-box { display: grid; gap: 2px; min-width: 0; }
+.cpf-pname { font-size: 15px; font-weight: 650; color: var(--ink-900); overflow-wrap: anywhere; }
+.cpf-psub { font-size: 12.5px; color: var(--ink-500); line-height: 1.4; overflow-wrap: anywhere; }
+.cpf-pabout { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--ink-700); overflow-wrap: anywhere; }
+.cpf-pmiss { margin: 0; font-size: 12.5px; color: var(--warn-700); }
+.cpf-pbtns { display: flex; flex-wrap: wrap; gap: 8px; }
+.cpf-pbtns .btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) {
     .cpf-body { padding: 14px 16px 16px; }
 }

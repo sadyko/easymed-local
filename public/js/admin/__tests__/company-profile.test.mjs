@@ -629,3 +629,112 @@ test('карта: не Яндекс — объяснение и запроса �
     await save(root);
     assert.equal(lastUpdate.maps_url, url);
 });
+
+// ===========================================================================
+// Задача 13 — «Как это увидят пациенты»: RU / UZ / EN, «Позвонить»,
+// «Маршрут», Telegram, Instagram, сайт. Подписи — на языке предпросмотра.
+// ===========================================================================
+const preview = (root) => {
+    const p = descendants(root).find((n) => matches(n, '.cpf-preview'));
+    assert.ok(p, 'нет карточки «Как это увидят пациенты»');
+    return p;
+};
+const previewName = (root) => textOf(descendants(preview(root)).find((n) => matches(n, '.cpf-pname')));
+const previewSubs = (root) => descendants(preview(root)).filter((n) => matches(n, '.cpf-psub')).map(textOf);
+const previewLinks = (root) => descendants(preview(root)).filter((n) => n.tagName === 'A')
+    .map((a) => ({ text: labelText(a), href: a.attrs.href, target: a.attrs.target || '', rel: a.attrs.rel || '' }));
+const langButton = (root, tag) => {
+    const seg = descendants(root).find((n) => matches(n, '.segmented') && n.attrs['aria-label'] === 'Язык');
+    assert.ok(seg, 'нет переключателя языка предпросмотра');
+    return seg.children.find((b) => labelText(b) === tag);
+};
+
+test('предпросмотр на UZ: узбекское название, адрес из справочника, «Qo‘ng‘iroq qilish» набирает номер', async () => {
+    const root = await open({ name_uz: 'Shifo', country_code: 'UZ', region_code: 'tashkent-city', district_code: 'yunusobod',
+        street_ru: 'ул. Мира 1', street_uz: 'Tinchlik ko‘chasi, 1' });
+    assert.equal(langButton(root, 'RU').attrs['aria-pressed'], 'true', 'по умолчанию — RU');
+    assert.equal(previewName(root), 'Клиника «Шифо»');
+
+    langButton(root, 'UZ').click();
+    assert.equal(langButton(root, 'UZ').attrs['aria-pressed'], 'true');
+    assert.equal(langButton(root, 'RU').attrs['aria-pressed'], 'false');
+    assert.equal(preview(root).attrs.lang, 'uz');
+    assert.equal(previewName(root), 'Shifo');
+    assert.ok(previewSubs(root).includes('Toshkent shahri, Yunusobod tumani, Tinchlik ko‘chasi, 1'), previewSubs(root).join(' | '));
+    const call = previewLinks(root).find((l) => l.text === 'Qo‘ng‘iroq qilish');
+    assert.ok(call, 'нет кнопки «Qo‘ng‘iroq qilish»: ' + previewLinks(root).map((l) => l.text).join(', '));
+    assert.equal(call.href, 'tel:+998712001200');
+
+    type(triInput(root, 'Название клиники', 'uz'), 'Shifo Plus');
+    assert.equal(previewName(root), 'Shifo Plus', 'предпросмотр следует за вводом');
+});
+
+test('предпросмотр на EN: без перевода — русское название; без описания — пометка; «Call»', async () => {
+    const root = await open({ about_ru: 'Семейная клиника.' });
+    langButton(root, 'EN').click();
+    assert.equal(previewName(root), 'Клиника «Шифо»');
+    assert.match(textOf(preview(root)), /Нет описания на этом языке — партнёры покажут русское\./);
+    assert.ok(previewLinks(root).some((l) => l.text === 'Call' && l.href === 'tel:+998712001200'));
+
+    langButton(root, 'RU').click();
+    assert.match(textOf(preview(root)), /Семейная клиника\./);
+});
+
+test('кнопки-ссылки: без карты «Маршрута» нет; с картой, ботом, Instagram и сайтом — верные адреса', async () => {
+    const root = await open();
+    assert.deepEqual(previewLinks(root).map((l) => l.text), ['Позвонить']);
+
+    const url = 'https://yandex.uz/maps/?ll=69.24%2C41.29&pt=69.24,41.29';
+    type(fieldInput(root, 'Ссылка на клинику в Яндекс Картах'), url);
+    type(fieldInput(root, 'Telegram-бот'), '@shifo');   // ещё не годится — кнопки нет
+    type(fieldInput(root, 'Instagram'), 'https://instagram.com/shifo.uz/');
+    type(fieldInput(root, 'Сайт'), 'shifo.uz');
+    let links = previewLinks(root);
+    assert.ok(!links.some((l) => l.text === '@shifo'), 'неверное имя бота — без кнопки');
+    const route = links.find((l) => l.text === 'Маршрут');
+    assert.ok(route, 'нет кнопки «Маршрут»');
+    assert.equal(route.href, 'https://yandex.uz/maps/?rtext=~41.29,69.24&rtt=auto');
+    assert.equal(route.target, '_blank');
+    assert.match(route.rel, /noopener/);
+    assert.equal(links.find((l) => l.text === '@shifo.uz').href, 'https://instagram.com/shifo.uz');
+    assert.equal(links.find((l) => l.text === 'Сайт').href, 'https://shifo.uz');
+
+    type(fieldInput(root, 'Telegram-бот'), 't.me/shifo_bot');
+    links = previewLinks(root);
+    assert.equal(links.find((l) => l.text === '@shifo_bot').href, 'https://t.me/shifo_bot');
+});
+
+test('логотип в предпросмотре: квадратный файл, иначе печатная копия', async () => {
+    let root = await open({ logo_square_path: 'square/1-a.png', logo_data_url: PRINT_COPY });
+    let mark = descendants(preview(root)).find((n) => n.tagName === 'IMG');
+    assert.equal(mark && mark.attrs.src, '/api/storage/clinic-logos/square/1-a.png');
+    root = await open({ logo_data_url: 'data:image/png;base64,T0xE' });
+    mark = descendants(preview(root)).find((n) => n.tagName === 'IMG');
+    assert.equal(mark && mark.attrs.src, 'data:image/png;base64,T0xE');
+});
+
+test('«Как это выглядит в документах»: адрес, вписанный руками; сайта на бланке нет', async () => {
+    const root = await open({ website: 'https://shifo-clinic.uz', street_ru: 'ул. Амира Темура, 12' });
+    const card = descendants(root).find((n) => matches(n, '.card')
+        && labelText(descendants(n).find((x) => x.tagName === 'H3')) === 'Как это выглядит в документах');
+    assert.ok(card, 'нет карточки «Как это выглядит в документах»');
+    assert.match(textOf(card), /Ташкент, ул\. Мира 1/, 'на бланке — «Адрес в документах»');
+    assert.doesNotMatch(textOf(card), /shifo-clinic\.uz/, 'сайт на бланках не печатается (ответ владельца)');
+    assert.doesNotMatch(textOf(card), /Амира Темура/, 'адрес для партнёров на бланк не идёт');
+    assert.ok(previewLinks(root).some((l) => l.text === 'Сайт'), 'а пациентам и партнёрам сайт виден');
+});
+
+test('ширина телефона: две колонки .col в обёртке с переносом; ни одна не требует больше 380 px', async () => {
+    const root = await open();
+    const main = descendants(root).find((n) => matches(n, '.cpf-main'));
+    const side = descendants(root).find((n) => matches(n, '.cpf-side'));
+    assert.ok(main && side, 'нет колонок экрана');
+    for (const col of [main, side]) {
+        assert.ok(col.classList.contains('col'));
+        assert.equal(col._parent.style.flexWrap, 'wrap', 'колонки переносятся в один столбец');
+        const px = Object.values(col.style).join(' ').match(/\d+(?=px)/g) || [];
+        for (const n of px) assert.ok(Number(n) <= (col === side ? 380 : 480), 'колонка задаёт ' + n + 'px');
+        assert.match(String(col.style.minWidth), /min\(320px, 100%\)/, 'минимум не шире экрана телефона');
+    }
+    assert.ok(!('width' in side.style) && !('maxWidth' in side.style), 'правая колонка не задаёт ширину в стиле');
+});
