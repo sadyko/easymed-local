@@ -152,3 +152,20 @@ test('CLINIC_API_STEP7_V1: «CRM-канбан: Изменение» без «У�
   // Настоящее удаление по-прежнему требует «Удаления».
   assert.throws(() => crmConfigSave(db, { sources: sent.filter((s) => s.key !== 'other') }, editor), (e) => e.status === 403);
 });
+
+// CLINIC_API_STEP7_V1 (ревью №7) — на границе RPC отказ остаётся 409 и едет шаблоном
+// (экран переводит), а не превращается в «Источники сохранены».
+test('CLINIC_API_STEP7_V1: новый источник с кодом подключения — RpcError 409 с шаблоном', () => {
+  const db = fresh();
+  const { key } = ensureApiSource(db, { kind: 'symptex', name: 'Symptex' });
+  insertConnectionRow(db, { kind: 'symptex', name: 'Symptex', crm_source_key: key });
+  const sent = crmConfigGet(db).sources.filter((s) => !(s.api && s.api.owned)).map((s) => ({ key: s.key, label: s.label, is_active: s.is_active }));
+  try {
+    crmConfigSave(db, { sources: [...sent, { key, label: 'API Symptex', is_active: true }] }, admin);
+    assert.fail('сохранение прошло');
+  } catch (e) {
+    assert.ok(e instanceof RpcError);
+    assert.equal(e.status, 409);
+    assert.ok(e.template && e.params && e.params.key === key);
+  }
+});

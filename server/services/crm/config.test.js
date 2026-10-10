@@ -670,9 +670,18 @@ test('свой источник подключения: список его не
   const api = saveSources(db, mine).find((s) => s.key === src.key);
   assert.ok(api, 'источник подключения удалён сохранением списка');
   assert.equal(api.position, mine.length + 1);
-  // Собранный руками список с переименованием и скрытием — присланное не действует.
-  const forged = asInput(listSources(db)).map((s) => (s.key === src.key ? { ...s, label: 'Другое имя', is_active: false } : s));
-  const after = saveSources(db, forged).find((s) => s.key === src.key);
+  // CLINIC_API_STEP7_V1 (ревью №7) — собранный руками список с другим названием или
+  // видимостью своего источника подключения — отказ 409 с шаблоном, а не молчаливая
+  // подмена с ответом «сохранено»; источник не тронут.
+  for (const over of [{ label: 'Другое имя' }, { is_active: false }]) {
+    const forged = asInput(listSources(db)).map((s) => (s.key === src.key ? { ...s, ...over } : s));
+    const e = refused(() => saveSources(db, forged));
+    assert.equal(e.status, 409, JSON.stringify(over));
+    assert.ok(e.template, 'фраза собрана шаблоном — экран переведёт');
+    assert.match(e.message, /«api_med24_uz».*«med24\.uz»/);
+  }
+  // Тот же источник как есть — проходит.
+  const after = saveSources(db, asInput(listSources(db))).find((s) => s.key === src.key);
   assert.deepEqual([after.label, after.is_active], ['med24.uz', true]);
   assert.deepEqual(after.api, { connection_id: 1, connection_name: 'med24.uz', owned: true, archived: false });
   assert.equal(listSources(db).find((s) => s.key === 'call').api, null);
@@ -724,4 +733,28 @@ test('переименование подключения переименовы
   assert.notEqual(a.key, b.key);
   renameApiSource(db, a.key, 'med24 (новый)');
   assert.equal(db.prepare('SELECT label FROM crm_sources WHERE key = ?').get(a.key).label, 'med24 (новый)');
+});
+
+// CLINIC_API_STEP7_V1 (ревью №7) — новый источник, чей код совпал с кодом подключения
+// (в том числе удалённого): раньше сервер молча подменял присланное своим и отвечал
+// «Источники сохранены», а нового источника не было нигде.
+test('новый источник с кодом подключения (и удалённого) — 409 с шаблоном, источник подключения не тронут', () => {
+  const db = fresh();
+  const { key } = ensureApiSource(db, { kind: 'symptex', name: 'Symptex' });
+  assert.equal(key, 'api_symptex');
+  const id = insertConnectionRow(db, { kind: 'symptex', name: 'Symptex', crm_source_key: key });
+  for (const archived of [false, true]) {
+    if (archived) {
+      db.prepare(`UPDATE api_connections SET deleted_at = '2026-10-10T10:00:00Z', active = 0,
+        key_hash = '', key_sealed = '', secret_sealed = '' WHERE id = ?`).run(id);
+      archiveApiSource(db, key);
+    }
+    const before = { ...db.prepare('SELECT label, is_active FROM crm_sources WHERE key = ?').get(key) };
+    const mine = asInput(listSources(db)).filter((s) => !(s.api && s.api.owned));
+    const e = refused(() => saveSources(db, [...mine, { key, label: 'API Symptex', is_active: true }]));
+    assert.equal(e.status, 409, archived ? 'удалённое' : 'живое');
+    assert.ok(e.template);
+    assert.match(e.message, /«api_symptex».*«Symptex»/);
+    assert.deepEqual({ ...db.prepare('SELECT label, is_active FROM crm_sources WHERE key = ?').get(key) }, before);
+  }
 });

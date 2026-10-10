@@ -80,6 +80,11 @@ function apiSourceRefusal(label, use) {
   return rpcT(CrmConfigError, 'Источник «{label}» нужен подключению «{name}» в разделе «API» — скрыть или удалить его нельзя, пока подключение есть.',
     { label, name: use.connection_name }, 409);
 }
+// CLINIC_API_STEP7_V1 (ревью №7) — свой источник подключения прислан не таким, как есть.
+function apiOwnedSourceRefusal(key, use) {
+  return rpcT(CrmConfigError, 'Код источника «{key}» принадлежит подключению «{name}» в разделе «API»: название и видимость такого источника меняются только вместе с подключением. Новому источнику дайте другое название.',
+    { key, name: use.connection_name }, 409);
+}
 const NEXT_POSITION = '(SELECT COALESCE(MAX(position), 0) + 1 FROM crm_sources)';
 /** Источник для нового подключения: «Сайт» у сайта клиники (заводится и показывается, если надо), свой — у остальных. */
 export function ensureApiSource(db, { kind, name = '' }) {
@@ -559,15 +564,18 @@ export function saveSources(db, sources) {
     if (seen.has(s.key)) throw new CrmConfigError(`Код источника «${s.key}» повторяется.`);
     seen.add(s.key);
   }
-  // CLINIC_API_STEP7_V1 — свой источник подключения: присланные название и
-  // видимость не действуют (они — у подключения); нужный (Сайт у сайта) —
-  // не скрывается.
+  // CLINIC_API_STEP7_V1 — свой источник подключения: название и видимость у
+  // него — от подключения; нужный (Сайт у сайта) — не скрывается.
+  // CLINIC_API_STEP7_V1 (ревью №7) — присланный свой источник с ДРУГИМ названием
+  // или видимостью — отказ 409, а не молчаливая подмена: это либо правка в обход
+  // подключения, либо НОВЫЙ источник, чей код совпал с кодом подключения, — и
+  // ответ «сохранено» потерял бы его. Присланный как есть — проходит.
   const curRow = db.prepare('SELECT label, is_active FROM crm_sources WHERE key = ?');
   for (const s of wanted) {
     const u = use.get(s.key);
     if (u && u.owned) {
       const cur = curRow.get(s.key);
-      if (cur) { s.label = cur.label; s.is_active = cur.is_active; }
+      if (cur && (cur.label !== s.label || (cur.is_active ? 1 : 0) !== s.is_active)) throw apiOwnedSourceRefusal(s.key, u);
     } else if (u && !s.is_active) {
       throw apiSourceRefusal(s.label, u);
     }
