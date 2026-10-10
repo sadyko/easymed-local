@@ -428,6 +428,9 @@ const LEGACY_ROUTES = {
     'settings:doctor_referral_bonuses': { view: 'settings' },   // ставка живёт на категории источника
     'settings:floors': { view: 'rooms-setup' },        // этажи — в «Помещениях»
     'settings:departments': { view: 'departments' },   // отделы — своим экраном DEPARTMENTS_V1
+    // BRANCH_PROFILE_V1 — облачная форма филиала (sections.js) писала бы name_uz /
+    // name_en и часы мимо предупреждения о врачах; здания — в «Филиалах» хаба.
+    'settings:branches': { view: 'settings' },
 };
 
 // V3120_FIX — АДРЕСА-ПЕРЕСЫЛКИ РЕШАЮТСЯ ДО ПАНЕЛИ.

@@ -45,6 +45,10 @@ import { isRouteAllowed, settingsTileLevel, hasRestriction, actorIsAdmin, settin
 // которую SETTINGS_ONE_COMPANY_V1 только что убрал.
 import { packageValidityParts, packageDiscount } from './service-templates.js?v=tpl1';   // PACKAGES_V1
 import { renderBranchSyncCard } from './branch-sync.js?v=bsync4';   // bsync4: филиалы таблицей, предупреждения — в окна подтверждения (BRANCH_LIST_V2)
+// BRANCH_PROFILE_V1 — «Филиалы» — свой экран (views/branches-editor.js: список
+// зданий карточками и страница здания) вместо общего редактора справочника;
+// карточку связи зданий он монтирует над списком, как раньше.
+import { renderBranchesEditor } from './branches-editor.js';   // BRANCH_PROFILE_V1
 
 let state = { section: null, readOnly: false };   // null = hub; else one of LOOKUP_CONFIG's keys
 
@@ -61,6 +65,7 @@ export async function renderSettingsHub(container, { onNavigate } = {}) {
 async function repaint() {
     clear(refs.container);
     if (state.section === 'roles') await renderRolesEditor(refs.container, { onBack: backToHub, readOnly: state.readOnly });   // ADMIN_ROWS_GRANTABLE_V1 — «Роли: Просмотр»
+    else if (state.section === 'branches') await renderBranchesEditor(refs.container, { onBack: backToHub, onNavigate: refs.onNavigate, readOnly: state.readOnly, renderSyncCard: renderBranchSyncCard });   // BRANCH_PROFILE_V1
     else if (state.section) await renderEditor(refs.container, state.section);
     else renderHub(refs.container);
     if (!state.section) paintUpdateStatus();   // UPDATE_STATUS_ROW_V1
@@ -296,10 +301,10 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
         title: 'Настройки Easy-Med', icon: 'Shield', color: { bg: '#e4f3f1', fg: '#1f8a80' },
         items: [
             { label: 'Компания',            desc: 'Название, логотип, фирменный цвет и контакты клиники', icon: 'ID', live: true, action: nav('documents-settings'), route: 'documents-settings' },
-            // Единственное «управление филиалами» в системе: тот же редактор
-            // (LOOKUP_CONFIG.branches), просто теперь у него один вход, а не
-            // собственная группа из двух строк.
-            { label: 'Филиалы',             desc: 'Адреса зданий клиники', icon: 'Building', live: true, action: () => openSection('branches'), section: 'branches' },
+            // Единственное «управление филиалами» в системе: один вход, а не
+            // собственная группа из двух строк. BRANCH_PROFILE_V1 — экран
+            // «Филиалы» (branches-editor.js) вместо LOOKUP_CONFIG.branches.
+            { label: 'Филиалы',             desc: 'Адреса, карты и часы работы зданий', icon: 'Building', live: true, action: () => openSection('branches'), section: 'branches' },   // BRANCH_PROFILE_V1
             // SETTINGS_SPLIT_V1 (2026-08-29, владелец: «в подписке оставить
             // только подписку и статус модулей (с запросом), а в системе —
             // только версию и что нового») — «Система» больше не четыре
@@ -663,16 +668,9 @@ const LOOKUP_CONFIG = {
         ],
     },
 
-    // ---- Управление филиалами / Branch management ------------------------
-    branches: {
-        table: 'branches', title: 'Филиалы', icon: 'Building',
-        columns: [{ key: 'name', label: 'Название' }, { key: 'phone', label: 'Телефон' }, { key: 'address', label: 'Адрес' }],
-        fields: [
-            { key: 'name', label: 'Название', type: 'text', required: true },
-            { key: 'phone', label: 'Телефон', type: 'phone' },
-            { key: 'address', label: 'Адрес', type: 'text' },
-        ],
-    },
+    // BRANCH_PROFILE_V1 — «Филиалы» больше не справочник: свой экран
+    // (views/branches-editor.js, repaint() выше) — профиль здания, часы работы
+    // с предупреждением о врачах, показ на сайте.
 
     // ---- Управление плательщиками / Payer management ---------------------
     payers: {
@@ -1144,12 +1142,9 @@ async function renderEditor(container, key) {
             : h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openRowModal(null) },
                 Icon('Plus', { size: 14 }), ' Add');
 
-    // BRANCH_SYNC_V1 — слот под карточку связи филиалов. Заполняется после
-    // отрисовки (карточка ходит в RPC), поэтому список филиалов появляется
-    // сразу и не ждёт сети.
-    // ROLE_REPORTS_SETTINGS_V1 — карточка связи зданий зовёт админские RPC,
-    // поэтому показывается только полному доступу — роль с «Филиалы: Изменение» правит адреса, не связь.
-    const syncSlot = key === 'branches' && (!hasRestriction() || actorIsAdmin()) ? h('div') : null;   // ревью C1
+    // BRANCH_PROFILE_V1 — слот карточки связи зданий жил здесь только для
+    // «Филиалов»; он переехал в их экран (branches-editor.js) с тем же правилом
+    // ROLE_REPORTS_SETTINGS_V1: только полному доступу.
 
     container.appendChild(h('div', { class: 'fade-in' },
         // APPBAR_BACK_V1 — это возврат ВНУТРИ раздела (из справочника к плиткам),
@@ -1163,7 +1158,6 @@ async function renderEditor(container, key) {
         // CASHBACK_BY_GROUP_V1 / CARD_SALE_V1 — пояснение справочника одной
         // строкой над таблицей (как работает правило), если оно задано.
         cfg.intro ? h('p', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px' } }, tr(cfg.intro)) : null,
-        syncSlot,
         h('div', { class: 'card' },
             h('div', { class: 'card-header' },
                 h('h3', null, Icon(cfg.icon, { size: 16 }), ' ', cfg.title),
@@ -1183,12 +1177,6 @@ async function renderEditor(container, key) {
             emptyEl,
         ),
     ));
-
-    if (syncSlot) {
-        // Не await: карточка связи не должна задерживать список, а её
-        // собственные отказы она показывает сама.
-        renderBranchSyncCard(syncSlot).catch((e) => console.warn('[branch-sync] card failed:', e && e.message));
-    }
 
 
     await load();

@@ -15,6 +15,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 // ===========================================================================
 // Поддельный DOM
@@ -703,4 +704,154 @@ test('филиал: часы только видны — переключате�
     const { root } = await openPage({ id: 5, name: 'Юнусабад', working_hours: WEEK() }, { secondary: true });
     for (const l of ['Не ограничивать', 'По дням недели', 'Круглосуточно']) assert.ok(isOff(modeInput(root, l)), l);
     assert.ok(dayCtrls(root, 'Пн').every(isOff));
+});
+
+// ===========================================================================
+// Задача 15 — список «Филиалов».
+// ===========================================================================
+const { renderBranchesEditor } = await import('../views/branches-editor.js');
+const { setLang } = await import('../i18n.js');
+let failBranchesSelect = false;   // чтение branches отвечает 503 (сервер перезапускается)
+let failCompanySelect = false;    // чтение doc_settings отвечает 503
+{
+    const base = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => {
+        if (String(url).startsWith('/api/db')) {
+            const d = JSON.parse(opts.body || '{}');
+            const fail = (d.table === 'branches' && failBranchesSelect) || (d.table === 'doc_settings' && failCompanySelect);
+            if (fail && (d.op || 'select') === 'select') return { ok: false, status: 503, json: async () => ({ error: { code: 'unavailable', message: 'server restarting' } }) };
+        }
+        return base(url, opts);
+    };
+}
+async function openList(rows, { role = 'main', own = null, readOnly = false, company = null } = {}) {
+    branchRows = rows.map((r, i) => ({ ...BLANK_ROW, id: i + 1, ...r }));
+    companyRow = company; writes = []; impactCalls = []; impactReply = { data: { doctors: [] } };
+    const t = document.getElementById('toast'); if (t) t.textContent = '';
+    globalThis.window.CLINIC.building_role = role;
+    if (own == null) delete globalThis.window.CLINIC.own_branch_id; else globalThis.window.CLINIC.own_branch_id = own;
+    const nav = []; let backs = 0;
+    const root = mkEl('div');
+    await renderBranchesEditor(root, { onBack: () => { backs++; }, onNavigate: (r) => nav.push(r), readOnly });
+    await settle(80);
+    return { root, nav, backs: () => backs };
+}
+const items = (root) => descendants(root).filter((n) => matches(n, '.brf-item'));
+const SAT_15 = (() => { const d = blankDays(); d.sat = { on: true, from: '09:00', to: '15:00' }; return writeBranchHours({ mode: 'week', days: d }).working_hours; })();
+
+test('список: название на языке интерфейса, часы, карта, показ на сайте, «Работает»', async () => {
+    const rows = [
+        { name: 'Юнусабад', name_uz: 'Yunusobod filiali', street_ru: 'ул. Мира, 1', landmark_ru: 'у парка', working_hours: SAT_15, maps_url: 'https://yandex.uz/maps/-/CDx' },
+        { name: 'Стационар', is_24_7: 1, show_public: 0, active: 0, address: 'Старый адрес' },
+    ];
+    let { root } = await openList(rows);
+    const [a, b] = items(root).map(labelText);
+    assert.match(a, /Юнусабад/);
+    assert.match(a, /ул\. Мира, 1, у парка/);
+    assert.match(a, /Пн–Пт 09:00–18:00, Сб 09:00–15:00/);
+    assert.match(a, /Есть карта/);
+    assert.match(a, /На сайте/);
+    assert.match(a, /Работает/);
+    assert.match(b, /Круглосуточно/);
+    assert.match(b, /Скрыт с сайта/);
+    assert.match(b, /Отключён/);
+    assert.match(b, /Нет карты/);
+    assert.match(b, /Старый адрес/, 'пока улицы нет — прежний адрес');
+    assert.ok(buttonByText(root, /Добавить филиал/));
+    assert.ok(buttonByText(root, /К плиткам настроек/));
+    setLang('uz');
+    try { ({ root } = await openList(rows)); assert.match(labelText(items(root)[0]), /Yunusobod filiali/); }
+    finally { setLang('ru'); }
+});
+
+test('список: «Без ограничений», подсказки языков — RU / UZ / EN с переводом и без', async () => {
+    const { root } = await openList([{ name: 'Юнусабад', street_ru: 'ул. Мира, 1', name_uz: 'Yunusobod', street_uz: 'Tinchlik, 1' }]);
+    const t = labelText(items(root)[0]);
+    assert.match(t, /Без ограничений/);
+    const chips = descendants(items(root)[0]).filter((n) => matches(n, '.brf-chip'));
+    assert.deepEqual(chips.map((c) => [labelText(c), c.classList.contains('on')]), [['RU', true], ['UZ', true], ['EN', false]]);
+    assert.equal(chips[2].attrs.title, 'Нет перевода');
+});
+
+test('своё здание главного — «Это здание», адрес и телефон из «Компании»; страница открывается своим', async () => {
+    const { root, nav } = await openList([{ name: 'Главный корпус', phone: 'старый', street_ru: 'не отсюда' }, { name: 'Чиланзар' }],
+        { own: 1, company: { id: 1, phone: '+998 71 200 12 00', street_ru: 'ул. Мира, 1', country_code: 'UZ', region_code: '', district_code: '', street_uz: '', street_en: '', maps_url: '' } });
+    const t = labelText(items(root)[0]);
+    assert.match(t, /Это здание/);
+    assert.match(t, /\+998 71 200 12 00/);
+    assert.match(t, /ул\. Мира, 1/);
+    assert.doesNotMatch(t, /не отсюда|старый/, 'второго адреса и телефона у своего здания нет');
+    assert.doesNotMatch(labelText(items(root)[1]), /Это здание/);
+    items(root)[0].click(); await settle(80);
+    assert.ok(buttonByText(root, /Изменить в «Компании»/), 'страница своего здания');
+    buttonByText(root, /Изменить в «Компании»/).click();
+    assert.deepEqual(nav, ['documents-settings']);
+});
+
+test('строка → страница → «К списку филиалов»; после сохранения — снова список с новым значением', async () => {
+    const { root } = await openList([{ name: 'Юнусабад' }]);
+    items(root)[0].click(); await settle(80);
+    assert.ok(buttonByText(root, /К списку филиалов/));
+    assert.equal(items(root).length, 0, 'страница вместо списка');
+    type(triInput(root, 'Название филиала', 'uz'), 'Yunusobod');
+    await save(root);
+    await settle(80);
+    assert.equal(items(root).length, 1, 'вернулись к списку');
+    assert.equal(branchRows[0].name_uz, 'Yunusobod');
+    assert.match(labelText(items(root)[0]), /Юнусабад/);
+    items(root)[0].click(); await settle(80);
+    buttonByText(root, /К списку филиалов/).click(); await settle(80);
+    assert.equal(items(root).length, 1);
+});
+
+test('«Добавить филиал» → новая страница → «Добавить» — в списке два здания', async () => {
+    const { root } = await openList([{ name: 'Юнусабад' }]);
+    buttonByText(root, /Добавить филиал/).click(); await settle(80);
+    type(triInput(root, 'Название филиала', 'ru'), 'Сергели');
+    buttonByText(root, /^Добавить$/).click(); await settle(120);
+    assert.equal(writes[0].op, 'insert');
+    assert.equal(items(root).length, 2);
+});
+
+test('филиал: «Добавить филиал» нет, вверху объяснение; «Просмотр»: «Только просмотр»', async () => {
+    let { root } = await openList([{ name: 'Главный корпус' }], { role: 'secondary', own: 1 });
+    assert.equal(buttonByText(root, /Добавить филиал/), null);
+    assert.ok(textOf(root).includes(BRANCH_MESSAGES.mainOnly));
+    assert.match(labelText(items(root)[0]), /Это здание/, 'своя строка филиала тоже помечена');
+    items(root)[0].click(); await settle(80);
+    assert.equal(buttonByText(root, /^Сохранить$/), null, 'в филиале страница только видна');
+    ({ root } = await openList([{ name: 'Главный корпус' }], { readOnly: true }));
+    assert.equal(buttonByText(root, /Добавить филиал/), null);
+    assert.match(textOf(root), /Только просмотр/);
+});
+
+test('список не прочитался — объяснение, «Добавить филиал» выключено: вслепую здание не заводится', async () => {
+    failBranchesSelect = true;
+    try {
+        const { root } = await openList([{ name: 'Юнусабад' }]);
+        assert.match(textOf(root), /Не удалось загрузить филиалы/);
+        const add = buttonByText(root, /Добавить филиал/);
+        assert.ok(!add || isOff(add), '«Добавить филиал» выключено');
+        assert.equal(items(root).length, 0);
+    } finally { failBranchesSelect = false; }
+});
+
+test('«Компания» не прочиталась — у своего здания адреса и телефона не видно (не подставляем чужие), объяснение', async () => {
+    failCompanySelect = true;
+    try {
+        const { root } = await openList([{ name: 'Главный корпус', phone: 'старый', street_ru: 'не отсюда' }], { own: 1, company: { phone: '+998 71 200 12 00' } });
+        const t = labelText(items(root)[0]);
+        assert.doesNotMatch(t, /не отсюда|старый/);
+        assert.match(toastText(), /Не удалось загрузить данные компании/);
+    } finally { failCompanySelect = false; }
+});
+
+test('прежний облачный адрес #settings:branches ведёт в хаб настроек; общего редактора у «Филиалов» больше нет', () => {
+    const shell = fs.readFileSync(new URL('../../admin.js', import.meta.url), 'utf8');
+    const legacy = shell.slice(shell.indexOf('const LEGACY_ROUTES = {'), shell.indexOf('function navigate('));
+    assert.match(legacy, /'settings:branches':\s*\{\s*view:\s*'settings'\s*\}/);
+    const hub = fs.readFileSync(new URL('../views/settings-hub.js', import.meta.url), 'utf8');
+    assert.match(hub, /state\.section === 'branches'\) await renderBranchesEditor\(/);
+    const lookup = hub.slice(hub.indexOf('const LOOKUP_CONFIG = {'));
+    assert.doesNotMatch(lookup.slice(0, lookup.indexOf('\n};')), /\n    branches: \{/);
 });

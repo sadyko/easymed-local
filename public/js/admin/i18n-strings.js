@@ -11307,5 +11307,17 @@ export const STRINGS = {
   "Уже записанные пациенты не отменяются; новых записей на это время программа не предложит. Считается по врачам, приписанным к этому зданию в «Сотрудниках».": {"en":"Patients already booked are not cancelled; the program will not offer new bookings at these times. Counted for the doctors assigned to this building in “Staff”.","ru":"Уже записанные пациенты не отменяются; новых записей на это время программа не предложит. Считается по врачам, приписанным к этому зданию в «Сотрудниках».","uz":"Allaqachon yozilgan bemorlar bekor qilinmaydi; bu vaqtga yangi yozuvlarni dastur taklif qilmaydi. «Xodimlar»da shu binoga biriktirilgan shifokorlar bo‘yicha hisoblanadi."},   // BRANCH_PROFILE_V1
   "Вернуться к часам": {"en":"Back to the hours","ru":"Вернуться к часам","uz":"Soatlarga qaytish"},   // BRANCH_PROFILE_V1
   "Не удалось проверить, у кого из врачей закроется время: {msg}": {"en":"Could not check which doctors would lose time: {msg}","ru":"Не удалось проверить, у кого из врачей закроется время: {msg}","uz":"Qaysi shifokorlarning vaqti yopilishini tekshirib bo‘lmadi: {msg}"},   // BRANCH_PROFILE_V1
+  "Здания клиники. Название, адрес, карта и часы работы на трёх языках получат сайт клиники, Symptex и партнёры.": {"en":"The clinic’s buildings. The clinic website, Symptex and partners receive the name, address, map and working hours in three languages.","ru":"Здания клиники. Название, адрес, карта и часы работы на трёх языках получат сайт клиники, Symptex и партнёры.","uz":"Klinika binolari. Uch tildagi nom, manzil, xarita va ish vaqtini klinika sayti, Symptex va hamkorlar oladi."},   // BRANCH_PROFILE_V1
+  "Отключён": {"en":"Off","ru":"Отключён","uz":"O‘chirilgan"},   // BRANCH_PROFILE_V1
+  "На сайте": {"en":"On the website","ru":"На сайте","uz":"Saytda"},   // BRANCH_PROFILE_V1
+  "Скрыт с сайта": {"en":"Hidden from the website","ru":"Скрыт с сайта","uz":"Saytdan yashirilgan"},   // BRANCH_PROFILE_V1
+  "Без ограничений": {"en":"No limit","ru":"Без ограничений","uz":"Cheklovsiz"},   // BRANCH_PROFILE_V1
+  "Есть карта": {"en":"Map added","ru":"Есть карта","uz":"Xarita bor"},   // BRANCH_PROFILE_V1
+  "Нет карты": {"en":"No map","ru":"Нет карты","uz":"Xarita yo‘q"},   // BRANCH_PROFILE_V1
+  "Есть перевод": {"en":"Translated","ru":"Есть перевод","uz":"Tarjima bor"},   // BRANCH_PROFILE_V1
+  "Нет перевода": {"en":"Not translated","ru":"Нет перевода","uz":"Tarjima yo‘q"},   // BRANCH_PROFILE_V1
+  "Не удалось загрузить филиалы.": {"en":"Could not load the branches.","ru":"Не удалось загрузить филиалы.","uz":"Filiallarni yuklab bo‘lmadi."},   // BRANCH_PROFILE_V1
+  "Не удалось загрузить филиалы — обновите страницу.": {"en":"Could not load the branches — reload the page.","ru":"Не удалось загрузить филиалы — обновите страницу.","uz":"Filiallarni yuklab bo‘lmadi — sahifani yangilang."},   // BRANCH_PROFILE_V1
+  "Адреса, карты и часы работы зданий": {"en":"Building addresses, maps and working hours","ru":"Адреса, карты и часы работы зданий","uz":"Binolarning manzillari, xaritalari va ish vaqti"},   // BRANCH_PROFILE_V1
   // /BRANCH_PROFILE_V1 (экран «Филиалы»)
 };

@@ -213,7 +213,7 @@ test('ничего не потеряло вход: Компания → document
   g.rows[4].node.click();
   assert.deepStrictEqual(nav, [['clinic-data']], '«Данные клиники» — единственный вход к копиям и удалению данных');
 
-  // «Филиалы» — не переход, а тот же встроенный редактор LOOKUP_CONFIG.branches.
+  // «Филиалы» — не переход, а экран «Филиалы» внутри хаба (branches-editor.js, BRANCH_PROFILE_V1).
   nav.length = 0;
   dbTables = [];
   g.rows[1].node.click();
