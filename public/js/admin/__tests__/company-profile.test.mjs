@@ -166,6 +166,7 @@ const GEO = {
 const { COMPANY_COLUMNS } = await import('../../shared/clinic-profile.js');
 
 let docRow;
+let ownBranchRow = null;      // BRANCH_PROFILE_V1 — своя строка branches («Компания» филиала читает её)
 let lastUpdate;
 let uploads;
 let nextStorageError = null;   // { status, error } — отказ хранилища на следующую загрузку
@@ -212,6 +213,7 @@ globalThis.fetch = async (url, opts = {}) => {
             if (op === 'update') { lastUpdate = desc.values; docRow = { ...docRow, ...desc.values }; }
             return ok({ data: { ...docRow } });
         }
+        if (desc.table === 'branches') return ok({ data: ownBranchRow ? { ...ownBranchRow } : null });   // BRANCH_PROFILE_V1
         if (geoTables[desc.table]) {
             let rows = geoTables[desc.table].filter((r) => r.active);
             for (const f of desc.filters || []) {
@@ -866,6 +868,42 @@ test('филиал: названия, описание, лицензия, цве
     assert.ok(lastUpdate, 'запрос ушёл');
     for (const c of Object.keys(lastUpdate)) assert.ok(COMPANY_BUILDING.includes(c), c + ' — своё у здания');
     assert.deepEqual(lastUpdate, { address: 'ул. Филиальная, 7' });
+});
+
+// BRANCH_PROFILE_V1 — «Компания» филиала: адрес для партнёров, карта и телефон для сайта —
+// из «Филиалов» главного здания (своя строка branches), только видны.
+test('филиал: адрес для партнёров, карта и телефон для сайта — из «Филиалов», только видны; уходит только своё для документов', async () => {
+    ownBranchRow = { id: 7, name: 'Чиланзар', phone: '+998 71 222 33 44', country_code: 'UZ', region_code: 'tashkent-city',
+        district_code: 'yunusobod', street_ru: 'ул. Бунёдкор, 5', street_uz: '', street_en: '', maps_url: 'https://yandex.uz/maps/-/CDchil' };
+    globalThis.window.CLINIC.own_branch_id = 7;
+    try {
+        const root = await openAs('secondary', { street_ru: 'своё из шага 3', region_code: '' });
+        for (const l of ['Страна', 'Город / область', 'Район']) assert.ok(isOff(geoSel(root, l)), l);
+        assert.equal(selectedValue(geoSel(root, 'Район')), 'yunusobod');
+        assert.equal(triInput(root, 'Улица, дом', 'ru').value, 'ул. Бунёдкор, 5', 'из «Филиалов», не из своей «Компании»');
+        assert.ok(isOff(triInput(root, 'Улица, дом', 'ru')));
+        assert.ok(isOff(fieldInput(root, 'Ссылка на клинику в Яндекс Картах')));
+        assert.equal(fieldInput(root, 'Ссылка на клинику в Яндекс Картах').value, 'https://yandex.uz/maps/-/CDchil');
+        assert.match(textOf(root), /ведёт главное здание в «Филиалах»/);
+        assert.match(textOf(root), /Сайт и партнёры получают телефон из «Филиалов» главного здания/, 'подсказка под телефоном для документов');
+        assert.ok(previewLinks(root).some((l) => l.text === 'Позвонить' && l.href === 'tel:+998712223344'), 'предпросмотр — телефон из «Филиалов»');
+        assert.ok(previewSubs(root).includes('город Ташкент, Юнусабадский район, ул. Бунёдкор, 5'), 'предпросмотр — адрес из «Филиалов»: ' + previewSubs(root).join(' | '));
+        type(fieldInput(root, 'Адрес в документах'), 'ул. Филиальная, 7');
+        await save(root);
+        assert.deepEqual(lastUpdate, { address: 'ул. Филиальная, 7' });
+    } finally { ownBranchRow = null; delete globalThis.window.CLINIC.own_branch_id; }
+});
+
+test('главное здание: адрес для партнёров — свой, правится; «Филиалы» не читаются', async () => {
+    ownBranchRow = { id: 1, street_ru: 'не отсюда' };
+    globalThis.window.CLINIC.own_branch_id = 1;
+    try {
+        const root = await openAs('main', { street_ru: 'ул. Мира 1' });
+        assert.equal(triInput(root, 'Улица, дом', 'ru').value, 'ул. Мира 1');
+        assert.ok(!isOff(triInput(root, 'Улица, дом', 'ru')) && !isOff(geoSel(root, 'Район')));
+        assert.match(textOf(root), /Адреса других зданий — в «Филиалах»\./);
+        assert.match(textOf(root), /У пациентов это кнопка «Позвонить»\./);
+    } finally { ownBranchRow = null; delete globalThis.window.CLINIC.own_branch_id; }
 });
 
 test('главное здание: всё открыто, заметки филиала нет, сохраняются все колонки «Компании»', async () => {

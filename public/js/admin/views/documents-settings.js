@@ -49,7 +49,7 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 import { refreshClinicBrand } from '../clinic-context.js?v=localclinic2';
 // CLINIC_PROFILE_V1 — профиль клиники: колонки и проверки; поля на трёх языках.
 import { COMPANY_COLUMNS, NAME_MAX, ABOUT_MAX, normalizeProfile, companyProblems } from '../../shared/clinic-profile.js';
-import { COMPANY_BUILDING } from '../../shared/clinic-profile.js';   // CLINIC_PROFILE_V1 — филиал сохраняет только своё
+import { COMPANY_PRINT, COMPANY_PARTNER } from '../../shared/clinic-profile.js';   // BRANCH_PROFILE_V1 — филиал сохраняет только своё для документов
 import { triGroup, labeled } from './company-fields.js';
 import { logosCard } from './company-logos.js';
 import { addressCard, mapCard } from './company-address.js';
@@ -79,7 +79,8 @@ const refs = { container: null, previewEl: null, saveBtn: null, errNote: null, c
     patientEl: null, langBtns: null, previewLang: 'ru',
     // CLINIC_PROFILE_V1 (ревью C1) — что прочитано из базы (снимок для сравнения)
     // и удалось ли прочитать вообще.
-    loaded: null, loadFailed: false };
+    loaded: null, loadFailed: false,
+    building: {} };   // BRANCH_PROFILE_V1 — своя строка branches в филиале
 
 // CLINIC_PROFILE_V1 (ревью C1) — СОХРАНЯЕТСЯ ТОЛЬКО ИЗМЕНЁННОЕ.
 //
@@ -123,9 +124,12 @@ function paintLoadFailed() {
 // описание, логотипы, сайт и соцсети, лицензия, цвет — COMPANY_CLINIC_WIDE)
 // приезжает из главного здания (branch-sync/catalogue.js), и /api/db
 // отказывает его правке 409. Поэтому здесь эти поля только видны, вверху —
-// объяснение, а «Сохранить» шлёт ровно своё у здания (COMPANY_BUILDING):
-// адрес для бланков, телефон, почту, адрес для партнёров и карту.
-const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.';
+// объяснение, а «Сохранить» шлёт ровно своё у здания для документов
+// (COMPANY_PRINT): адрес для бланков, телефон, почту.
+// BRANCH_PROFILE_V1 — адрес для партнёров, карту и телефон для сайта филиала
+// ведёт главное здание в «Филиалах» (одно место на здание): здесь они только
+// видны — из своей строки branches, которая приезжает со списком сети.
+const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон и почта для документов этого здания.';   // BRANCH_PROFILE_V1
 let secondary = false;
 const isSecondaryBuilding = () => !!(typeof window !== 'undefined' && window.CLINIC && window.CLINIC.building_role === 'secondary');
 
@@ -163,8 +167,13 @@ function mount(onNavigate) {
     // CLINIC_PROFILE_V1 — адрес для партнёров и сайта (списки справочника,
     // улица RU / UZ / EN) и карта с маршрутом — company-address.js. Адрес на
     // бланках — «Адрес в документах» в «Реквизитах»: списки его не меняют.
-    refs.address = addressCard(state, { onChange: () => renderPreview(), secondary });   // CLINIC_PROFILE_V1 — «Адрес этого здания» в филиале
-    refs.map = mapCard(state, { onChange: () => renderPreview() });
+    // BRANCH_PROFILE_V1 — в филиале адрес для партнёров, карту и телефон для
+    // сайта ведёт главное здание в «Филиалах» (одно место на здание): карточки
+    // показывают СВОЮ строку branches (приезжает со списком сети), только видно.
+    const partner = secondary ? refs.building : state;
+    refs.address = addressCard(partner, { onChange: () => renderPreview(), secondary, disabled: secondary,   // CLINIC_PROFILE_V1 — «Адрес этого здания» в филиале
+        hint: secondary ? 'Адрес для партнёров, карту и телефон для сайта этого здания ведёт главное здание в «Филиалах». Здесь они только видны.' : '' });
+    refs.map = mapCard(partner, { onChange: () => renderPreview(), disabled: secondary });
     Object.assign(refs.errs, refs.address.errs, { maps_url: refs.map.err });
     refs.geoAvailability = () => refs.address.availability();
 
@@ -271,7 +280,8 @@ function buildForm(card) {
         about.node,
         addressBox.node,
         h('div', { class: 'cpf-grid' },
-            h('div', null, field('Телефон', phoneInp), h('p', { class: 'cpf-hint' }, 'У пациентов это кнопка «Позвонить».')),
+            h('div', null, field('Телефон', phoneInp), h('p', { class: 'cpf-hint' },
+                secondary ? 'Печатается на документах этого здания. Сайт и партнёры получают телефон из «Филиалов» главного здания.' : 'У пациентов это кнопка «Позвонить».')),   // BRANCH_PROFILE_V1
             field('Электронная почта', emailInp),
             field('Номер лицензии', licenseInp),
             field('Фирменный цвет', accentInp)),
@@ -382,12 +392,27 @@ async function load() {
         refs.loaded = null;
         refs.loadFailed = true;   // CLINIC_PROFILE_V1 (ревью C1) — сохранять нечем: выключено
     }
+    if (secondary) await loadBuilding();   // BRANCH_PROFILE_V1
     paintLoadFailed();
     applyStateToControls();
     // CLINIC_PROFILE_V1 — списки адреса грузятся один раз, уже с сохранёнными
     // кодами: каскад выбирает их только из пресета, заданного до прихода списков.
     if (refs.address) refs.address.load();
     renderPreview();
+}
+
+// BRANCH_PROFILE_V1 — своя строка branches (window.CLINIC.own_branch_id). Тот же
+// объект, что держат карточки адреса и карты, — меняется на месте. Не
+// прочиталась — карточки пустые; править их здесь всё равно нельзя, и в
+// сохранение они не входят.
+async function loadBuilding() {
+    for (const k of Object.keys(refs.building)) delete refs.building[k];
+    const id = typeof window !== 'undefined' && window.CLINIC ? window.CLINIC.own_branch_id : null;
+    if (id == null) return;
+    try {
+        const { data } = await supabase.from('branches').select('*').eq('id', id).maybeSingle();
+        if (data && typeof data === 'object' && !Array.isArray(data)) Object.assign(refs.building, data);
+    } catch (_) { /* не прочиталось — карточки пустые */ }
 }
 
 // CLINIC_API_FIX_V1 — содержимое кнопки «Сохранить»: значок и подпись. Одним
@@ -415,7 +440,7 @@ async function save() {
     // них нет — его меняет только администратор, в другом месте); филиал шлёт
     // только своё у здания (общее приезжает из главного, /api/db отказал бы
     // его правке); и из них — только ИЗМЕНЁННЫЕ (ревью C1).
-    const payload = changedValues(secondary ? COMPANY_BUILDING : COMPANY_COLUMNS);
+    const payload = changedValues(secondary ? COMPANY_PRINT : COMPANY_COLUMNS);   // BRANCH_PROFILE_V1 — филиал шлёт только своё для документов
     const keys = Object.keys(payload);
     if (!keys.length) { showProblems({}); toast(tr('Нет изменений'), 'info'); return; }
     // CLINIC_PROFILE_V1 — сначала привести (https://, @имя, пробелы) и проверить
@@ -488,7 +513,11 @@ function renderPatientPreview() {
     clear(refs.patientEl);
     const logo = state.logo_square_path ? logoSrc(state.logo_square_path) : (state.logo_data_url || '');
     const parts = refs.address ? refs.address.parts() : {};
-    refs.patientEl.appendChild(patientPreview(state, { lang: refs.previewLang, parts, logo }));
+    // BRANCH_PROFILE_V1 — в филиале пациенты видят адрес, карту и телефон из «Филиалов».
+    const src = secondary
+        ? { ...state, ...Object.fromEntries(COMPANY_PARTNER.map((c) => [c, refs.building[c] || ''])), phone: refs.building.phone || '' }
+        : state;
+    refs.patientEl.appendChild(patientPreview(src, { lang: refs.previewLang, parts, logo }));
 }
 
 function renderPreview() {
