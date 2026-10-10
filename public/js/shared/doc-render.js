@@ -474,11 +474,10 @@ function darken(hex, by) {
     const b = Math.max(0, Math.round(parseInt(hex.slice(5, 7), 16) * (1 - by)));
     return '#' + [r, g, b].map(n => n.toString(16).padStart(2, '0')).join('');
 }
-// LOGO_WORDMARK_V1 — the uploaded logo IS the clinic's wordmark: it already
-// carries the name, so printing the name beside it said everything twice.
-// hasLogo() decides both halves of that (see headerHTML) — without an uploaded
-// logo the built-in gradient mark carries no name and the text must stay.
-function hasLogo(s) { return !!(s.logoUrl || s.logoDataUrl); }
+// CLINIC_PROFILE_V1 — логотип не прячет название: квадратный логотип — знак, а
+// не надпись; название печатается всегда (спецификация, «Правила, без которых
+// не строим»). Прежнее правило LOGO_WORDMARK_V1 (логотип = надпись, название
+// рядом не печаталось) снято: с квадратным знаком бланк остался бы без имени.
 function logoMark(s) {
     const _logo = s.logoUrl || s.logoDataUrl;
     if (_logo) {
@@ -486,7 +485,8 @@ function logoMark(s) {
         // made object-fit shrink it to a stamp. Fix the HEIGHT, let the width
         // follow the artwork, and cap it so a very long logo can't crowd out the
         // contact block on the right.
-        return `<img src="${esc(_logo)}" alt="${esc(s.clinicName)}" style="height:64px;width:auto;max-width:300px;object-fit:contain;object-position:left center;flex:0 1 auto;display:block;" />`;
+        // CLINIC_PROFILE_V1 — alt пустой: название напечатано рядом.
+        return `<img src="${esc(_logo)}" alt="" style="height:64px;width:auto;max-width:300px;object-fit:contain;object-position:left center;flex:0 1 auto;display:block;" />`;
     }
     return logoSVG(s.accent);
 }
@@ -517,7 +517,7 @@ function docHeadHTML(s, doc) {
     return `<div style="border-bottom:2px solid ${s.accent};padding-bottom:14px;">
         <div style="display:flex;align-items:center;gap:14px;">
             ${logoMark(s)}
-            ${hasLogo(s) ? '' : `<div style="font-size:15px;font-weight:800;letter-spacing:-0.01em;color:${s.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28%;">${esc(s.clinicName)}</div>`}
+            <div style="font-size:15px;font-weight:800;letter-spacing:-0.01em;color:${s.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28%;">${esc(s.clinicName)}</div>
             <div style="flex:0 0 2px;align-self:stretch;min-height:34px;background:${s.accent};border-radius:999px;"></div>
             <div style="flex:1;min-width:0;">
                 <div style="font-size:16px;font-weight:800;letter-spacing:-0.01em;color:${s.ink};line-height:1.25;">${esc(doc.title || '')}</div>
@@ -534,7 +534,7 @@ function headerHTML(s) {
     return `<div style="display:flex;align-items:center;gap:14px;padding-bottom:18px;border-bottom:2px solid ${s.accent};">
         ${logoMark(s)}
         <div style="flex:1;">
-            ${hasLogo(s) ? '' : `<div style="font-size:17px;font-weight:700;letter-spacing:-0.01em;color:${s.ink};">${esc(s.clinicName)}</div>`}
+            <div style="font-size:17px;font-weight:700;letter-spacing:-0.01em;color:${s.ink};">${esc(s.clinicName)}</div>
             ${s.tagline ? `<div style="font-size:11px;color:#55636d;margin-top:1px;font-weight:500;">${esc(s.tagline)}</div>` : ''}
         </div>
         <div style="text-align:right;font-size:10.5px;color:#55636d;line-height:1.55;">
