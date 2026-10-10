@@ -73,6 +73,9 @@ globalThis.fetch = async (url, opts = {}) => {
 const { tr, getLang } = await import('../i18n.js');
 const { specialtyOptions, SPECIALTIES } = await import('../specialties.js?v=spec2');
 const { renderDoctorProfile } = await import('../views/doctor-profile.js');
+// DOCTOR_PROFILE_V1 (ревью шага 5, №10) — подпись специальности — название общего справочника на языке экрана.
+const { SPECIALTY_ROWS } = await import('../../shared/specialty-list.js');
+const refName = (ru) => SPECIALTY_ROWS.find((r) => r.ru === ru).uz;
 
 const sortedIn = (labels, lang) => labels.every((l, i) => i === 0 || labels[i - 1].localeCompare(l, lang) <= 0);
 
@@ -86,13 +89,16 @@ test('карточка сотрудника: специальности по у�
     assert.equal(opts[0][0], '', 'первым — «не указана»');
     const listed = opts.slice(1);
     assert.equal(listed.length, SPECIALTIES.length);
-    const shown = listed.map(([, l]) => tr(l));
+    // DOCTOR_PROFILE_V1 (ревью №10) — подпись уже на языке экрана и из справочника (а не словарь): «Хирург» — «Jarroh», как в строке UZ / EN под списком и в шапке.
+    const shown = listed.map(([, l]) => l);
+    assert.ok(listed.every(([v, l]) => l === refName(v)), 'подпись не из справочника: ' + listed.filter(([v, l]) => l !== refName(v)).slice(0, 3).map(([v, l]) => v + '→' + l).join(', '));
+    assert.equal(listed.find(([v]) => v === 'Хирург')[1], 'Jarroh');
     assert.ok(sortedIn(shown, 'uz'), 'не по алфавиту показанных подписей: ' + shown.slice(0, 12).join(' · '));
     assert.deepEqual(new Set(listed.map(([v]) => v)), new Set(SPECIALTIES), 'сохраняемые значения — те же русские названия');
     // Значение «не из списка» остаётся сразу под «не указана».
     const kept = specialtyOptions('Гирудотерапевт');
     assert.equal(kept[1][0], 'Гирудотерапевт');
-    assert.ok(sortedIn(kept.slice(2).map(([, l]) => tr(l)), 'uz'));
+    assert.ok(sortedIn(kept.slice(2).map(([, l]) => l), 'uz'));
 });
 
 test('«Мой профиль»: «+ Добавить специальность» — по узбекской подписи, значения — slug', async () => {
@@ -107,4 +113,7 @@ test('«Мой профиль»: «+ Добавить специальность
     assert.ok(sortedIn(shown, 'uz'), 'не по алфавиту показанных подписей: ' + shown.slice(0, 12).join(' · '));
     assert.ok(opts.every((o) => /^[a-z0-9-]+$/.test(o.attrs.value)), 'значение пункта — slug');
     assert.ok(!opts.some((o) => o.attrs.value === 'kardiolog'), 'уже выбранная специальность в списке не повторяется');
+    // DOCTOR_PROFILE_V1 (ревью №10) — те же названия справочника, что в карточке сотрудника.
+    assert.equal(opts.find((o) => o.attrs.value === 'hirurg').textContent, 'Jarroh');
+    assert.equal(opts.find((o) => o.attrs.value === 'neyrohirurg').textContent, 'Neyrojarroh');
 });

@@ -23,6 +23,23 @@ import { tr, trf, getLang } from './i18n.js';   // I18N_COVERAGE_V1 — суфф
 import { SPECIALTY_ROWS, SPECIALTIES, SPECIALTY_ALIASES, canonicalSpecialty, sortByShownLabel } from '../shared/specialty-list.js?v=spl1';
 export { SPECIALTY_ROWS, SPECIALTIES, SPECIALTY_ALIASES, canonicalSpecialty };
 
+// DOCTOR_PROFILE_V1 (ревью шага 5, №10) — НАЗВАНИЕ СПЕЦИАЛЬНОСТИ НА ЯЗЫКЕ ЭКРАНА.
+// Одно правило на список «Специальность», шапку и список «Сотрудников», строку
+// UZ / EN под списком и «Мой профиль»: название общего справочника
+// (SPECIALTY_ROWS — его же отдаёт партнёрам API) по коду, у записи без кода — по
+// русскому названию. Не из справочника — как записана: это данные клиники, перевода
+// у них нет. entry — код, русское название или { slug, name }.
+export function specialtyLabel(entry) {
+    const slug = entry && typeof entry === 'object' ? entry.slug : null;
+    const name = String((entry && typeof entry === 'object' ? entry.name : entry) || '').trim();
+    const row = (slug && SPECIALTY_ROWS.find((r) => r.slug === slug))
+        || SPECIALTY_ROWS.find((r) => r.slug === name)
+        || SPECIALTY_ROWS.find((r) => r.ru === canonicalSpecialty(name));
+    if (!row) return name;
+    const lang = getLang();
+    return (lang !== 'ru' && row[lang]) || row.ru;
+}
+
 // Option pairs [value, label] for a <select>.
 //
 // `current` is whatever the record already holds. A value typed in before the
@@ -33,8 +50,13 @@ export { SPECIALTY_ROWS, SPECIALTIES, SPECIALTY_ALIASES, canonicalSpecialty };
 // REFERENCE_LISTS_V1 — пункты по ПОКАЗАННОЙ подписи (перевод на языке
 // интерфейса): в uz/en русский порядок выглядел вразнобой. Значение — то же
 // русское название.
+// DOCTOR_PROFILE_V1 (ревью шага 5, №10) — подпись УЖЕ на языке экрана и из общего
+// справочника (specialtyLabel), не из словаря: словарь местами называет ту же
+// специальность иначе (en «Internist» — справочник «Internal Medicine
+// (Therapist)», uz «Xirurg» — «Jarroh»), и на одной карточке у неё было два
+// имени. Вызывающий кладёт подпись текстом (createTextNode), не через h()-перевод.
 export function specialtyOptions(current) {
-    const opts = [['', '— не указана —'], ...sortByShownLabel(SPECIALTIES, (s) => tr(s), getLang()).map((s) => [s, s])];
+    const opts = [['', tr('— не указана —')], ...sortByShownLabel(SPECIALTIES, specialtyLabel, getLang()).map((s) => [s, specialtyLabel(s)])];
     const cur = canonicalSpecialty(current);
     if (cur && !SPECIALTIES.includes(cur)) opts.splice(1, 0, [cur, trf('{name}  (не из списка)', { name: cur })]);
     return opts;

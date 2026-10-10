@@ -10,6 +10,7 @@ import { uploadFile } from '../storage.js';
 // RPC_PORT_V1 — офлайн каталог специальностей из медкора (gw) недоступен:
 // выбор идёт из того же канонического списка, по которому сервер проверяет слаг.
 import { SPECIALTY_ROWS, canonicalSpecialty, sortByShownLabel } from '../../shared/specialty-list.js';   // REFERENCE_LISTS_V1 — sortByShownLabel
+import { specialtyLabel } from '../specialties.js?v=spec2';   // DOCTOR_PROFILE_V1 — название из справочника, как в карточке сотрудника (ревью №10)
 import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1
 // PATIENT_PHOTO_V1 — те же правила и то же уменьшение, что в окне заведения
 // пациента: один набор на оба виджета фото и на сервер.
@@ -685,7 +686,9 @@ export async function renderDoctorProfile(container, doctorId) {
         if (st.specLoadFailed) {
             return h('div', { class: 'docprof-hint' }, 'Специальности не загрузились — обновите страницу, чтобы их изменить.');
         }
-        const nameOf = (s) => (s && (s.name_ru || s.slug)) || '';
+        // DOCTOR_PROFILE_V1 (ревью шага 5, №10) — название на языке экрана из справочника
+        // (specialtyLabel), как в карточке сотрудника; текстом — без второго перевода.
+        const nameOf = (s) => document.createTextNode(specialtyLabel((s && s.slug) || ''));
         const wrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
         const chips = h('div', { class: 'docprof-spec-chips' });
         const ctrlWrap = h('div');
@@ -705,7 +708,7 @@ export async function renderDoctorProfile(container, doctorId) {
                 // REFERENCE_LISTS_V1 — по показанной (переведённой) подписи на языке
                 // интерфейса: в uz/en русский порядок выглядел вразнобой.
                 const avail = sortByShownLabel(st.specCatalog.filter((s) => !st.specSlugs.includes(s.slug)),
-                    (s) => tr(nameOf(s)), getLang());
+                    (s) => specialtyLabel(s.slug), getLang());
                 const sel = h('select', { class: 'docprof-in', style: { maxWidth: '320px' },
                     onchange: (e) => {
                         const v = e.target.value;

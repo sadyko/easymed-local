@@ -9,13 +9,13 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field, checkField, Ring, initials } from '../ui.js';
-import { tr, trf, getLang } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ; DOCTOR_PROFILE_V1 — getLang для названий справочника
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openEmployeePasswordModal, openChangeOwnPasswordModal } from '../password-change.js';   // PASSWORD_CHANGE_V2
 import { selfUserId, settingsTileLevel, settingsMoneyAllowed, actorIsAdmin, hasRestriction, actorRoleCodes } from '../permissions.js';   // PASSWORD_CHANGE_V2 — своя карточка меняет пароль через текущий · ADMIN_ROWS_GRANTABLE_V1
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
-import { specialtyOptions, canonicalSpecialty, SPECIALTY_ROWS } from '../specialties.js?v=spec2';   // SPECIALTY_LIST_V1 + SPECIALTIES_CLONED_V1 + MULTI_SPECIALTY_V1
+import { specialtyOptions, specialtyLabel, canonicalSpecialty, SPECIALTY_ROWS } from '../specialties.js?v=spec2';   // SPECIALTY_LIST_V1 + SPECIALTIES_CLONED_V1 + MULTI_SPECIALTY_V1
 import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — рабочая ставка за направления (источник врача)
 import { employeeNameParts, employeeSaveGaps, NAME_KEYS } from '../../shared/employee-name.js?v=ecs2';   // EMPLOYEE_CARD_SAVE_V1 — имя из full_name и что держит сохранение; ecs2 — ревью: нетронутое ФИО побайтно, стёртый телефон
 import { weekHoursGrid } from './week-hours.js';   // BRANCH_PROFILE_V1 — сетка дней одна на программу
@@ -75,18 +75,9 @@ const staffLabel = (s) => (STAFF_TYPES.find(x => x[0] === s) || ['', 'Не вы�
 // словами, что список «Филиалов» (шаг 4).
 const specEntriesOf = (u) => (Array.isArray(u.specialties) && u.specialties.length ? u.specialties : (u.specialty ? [u.specialty] : []))
     .filter((s) => s && (typeof s !== 'object' || s.name));
-// DOCTOR_PROFILE_V1 — специальность на языке экрана: узбекское / английское
-// название общего справочника — по коду (у записи без кода — по русскому
-// названию), как у строки специальности в карточке. Не из справочника — как
-// записана: это данные клиники, перевода у них нет.
-function specialtyShown(entry) {
-    const slug = entry && typeof entry === 'object' ? entry.slug : null;
-    const name = String((entry && typeof entry === 'object' ? entry.name : entry) || '').trim();
-    const row = (slug && SPECIALTY_ROWS.find((r) => r.slug === slug)) || SPECIALTY_ROWS.find((r) => r.ru === canonicalSpecialty(name));
-    if (!row) return name;
-    const lang = getLang();
-    return (lang !== 'ru' && row[lang]) || row.ru;
-}
+// DOCTOR_PROFILE_V1 — специальность на языке экрана — specialtyLabel (specialties.js):
+// одно правило с подписью в списке «Специальность» (ревью шага 5, №10).
+const specialtyShown = specialtyLabel;
 function publicTag(u, branchesById) {
     const state = doctorPublicState(u, branchesById);
     if (state === 'shown') return h('span', { class: 'emp-pub on' }, Icon('Globe', { size: 12 }), ' ', 'На сайте');
@@ -786,7 +777,7 @@ function openEditor(user, root) {
                 const rows = list();
                 rows.forEach((val, i) => {
                     const s2 = h('select', { 'aria-label': i === 0 ? 'Основная специальность' : 'Дополнительная' },
-                        ...specialtyOptions(val).map(([v, l]) => h('option', { value: v, selected: String(v) === String(val) }, l)));
+                        ...specialtyOptions(val).map(([v, l]) => h('option', { value: v, selected: String(v) === String(val) }, document.createTextNode(l))));   // DOCTOR_PROFILE_V1 — подпись уже на языке экрана (ревью №10)
                     const names = h('div', { class: 'spec-names-slot' }, namesOf(val));
                     s2.addEventListener('change', () => {
                         const v = String(s2.value || '').trim();

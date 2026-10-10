@@ -305,3 +305,20 @@ test('DOCTOR_PROFILE_V1: колонка «Специальность» спис�
     assert.ok(textOf(row).includes(want), 'нет «' + want + '»: ' + textOf(row));
   });
 });
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №10) — одна специальность — одно название на
+// карточке: подпись в списке «Специальность» — то же название справочника, что
+// в шапке, в колонке списка и в строке UZ / EN под списком (на en словарь давал
+// «Internist», справочник — «Internal Medicine (Therapist)»).
+test('DOCTOR_PROFILE_V1: на en подпись специальности в списке — название справочника, как в шапке и строке EN', async () => {
+  await inLang('en', async () => {
+    const card = await openCard('dr.cardio');
+    await tab(card, STRINGS['Должность'].en);   // рейка тоже на en
+    const sel = specSelects(card)[1];
+    const opt = sel.children.find((o) => o.attrs && o.attrs.value === 'Терапевт');
+    assert.ok(opt, 'нет пункта «Терапевт»');
+    assert.equal(textOf(opt).trim(), refRow('terapevt').en);
+    assert.ok(headSub(card).startsWith(refRow('kardiolog').en + ', ' + refRow('terapevt').en), headSub(card));
+    assert.ok(textOf(byClass(card, 'spec-names')[1]).includes(refRow('terapevt').en));
+  });
+});
