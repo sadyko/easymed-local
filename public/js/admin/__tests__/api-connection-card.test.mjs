@@ -245,3 +245,62 @@ test('включение: филиал на сайте без адреса — �
   assert.deepEqual(nav, [['settings', { section: 'branches' }]]);
   assert.ok(!modal('conn'), 'карточка не закрылась при уходе');
 });
+
+// CLINIC_API_STEP7_V1 (ревью слияния №2, №5) — дорога к адресу из отказа: кнопки
+// «Открыть «Компанию»» / «Открыть «Филиалы»» — только тому, кто там может править
+// адрес (иначе «Нет доступа» или тост хаба); иначе — строка, кто его заполняет.
+// Кнопка — переход, не правка: рамка «только просмотр» её не перехватывает.
+function asRole(name, extra) {
+  return import('../roles-matrix.js').then(({ grantsFromLegacy, legacyFromGrants }) => import('../permissions.js').then((perms) => {
+    const legacy = { sections: ['patients', 'dashboard'], levels: { patients: 'editor', dashboard: 'viewer' } };
+    const grants = { ...grantsFromLegacy(legacy), settings: 'view', ...extra };
+    perms.setEffectiveFromRole({ name, permissions: { ...legacyFromGrants(grants, legacy), grants } });
+    return perms;
+  }));
+}
+
+test('отказ включения у роли без «Компании» и «Филиалов»: кнопок нет — строка, кто заполняет адрес; переходов нет', async () => {
+  const perms = await asRole('Маркетолог', { 'settings.api': 'edit' });
+  try {
+    const s = settingsFixture({ can: { view: true, edit: true, admin: false, reveal: false } });
+    const nav = [];
+    for (const [code, line] of [['partner_address_required', 'изменение «Компании»'], ['branch_address_required', 'изменение «Филиалов»']]) {
+      reset();
+      onRpc('api_connection_update', () => ({ __error: { code, message: 'Подключение нельзя включить: адрес не заполнен.' }, status: 409 }));
+      openConnectionCard({ settings: s, connection: { ...P, active: false }, onNavigate: (v, p) => nav.push([v, p]) });
+      const m = modal('conn');
+      const box = byAttr(m, 'id', 'apic-f-active')[0];
+      box.checked = true; box.dispatchEvent({ type: 'change' });
+      buttonByText(m, /^Сохранить$/).click();
+      await tick();
+      assert.ok(textOf(m).includes('Подключение нельзя включить'), 'стенд не тот: отказа нет');
+      assert.equal(byAttr(m, 'data-apic-act', 'open-company').length + byAttr(m, 'data-apic-act', 'open-branches').length, 0,
+        code + ': кнопка ведёт туда, где роль адрес не правит');
+      assert.ok(textOf(m).includes(line), code + ': не сказано, кто заполняет адрес');
+    }
+    assert.deepEqual(nav, []);
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+test('отказ включения у роли с «Компания: Изменение» и «Филиалы: Изменение»: обе кнопки есть и не перехватываются рамкой «только просмотр»', async () => {
+  const perms = await asRole('Администратор сайта', { 'settings.api': 'edit', 'settings.company': 'edit', 'settings.branches': 'edit' });
+  try {
+    const s = settingsFixture({ can: { view: true, edit: true, admin: false, reveal: false } });
+    for (const [code, act] of [['partner_address_required', 'open-company'], ['branch_address_required', 'open-branches']]) {
+      reset();
+      onRpc('api_connection_update', () => ({ __error: { code, message: 'Подключение нельзя включить: адрес не заполнен.' }, status: 409 }));
+      const nav = [];
+      openConnectionCard({ settings: s, connection: { ...P, active: false }, onNavigate: (v, p) => nav.push([v, p]) });
+      const m = modal('conn');
+      const box = byAttr(m, 'id', 'apic-f-active')[0];
+      box.checked = true; box.dispatchEvent({ type: 'change' });
+      buttonByText(m, /^Сохранить$/).click();
+      await tick();
+      const go = byAttr(m, 'data-apic-act', act)[0];
+      assert.ok(go, code + ': нет кнопки ' + act);
+      assert.equal(go.dataset.viewOk, '1', act + ' перехватит рамка «только просмотр»');
+      go.click();
+      assert.deepEqual(nav, [act === 'open-company' ? ['documents-settings', undefined] : ['settings', { section: 'branches' }]]);
+    }
+  } finally { perms.setFullAccess('Admin'); }
+});
