@@ -138,6 +138,13 @@ const isSecondaryBuilding = () => !!(typeof window !== 'undefined' && window.CLI
 // API, адрес для партнёров обязателен. Флаг приходит с сервера (rpc/clinic.js)
 // при входе; страница «API и подключения» обновляет его после каждого изменения.
 const apiAddressRequired = () => !!(typeof window !== 'undefined' && window.CLINIC && window.CLINIC.api_address_required);
+// CLINIC_API_STEP7_V1 (ревью слияния №6) — «Компания» из кэша оболочки не
+// перерисовывается: запись клиники перечитали (refreshClinicBrand, событие
+// 'clinic:refreshed') — звёздочки по свежему флагу. Одна функция на модуль:
+// повторный mount снимает прежнюю подписку и ставит её же.
+function onClinicRefreshed() {
+    if (refs.address) refs.address.setRequired(apiAddressRequired() && !secondary);
+}
 
 export async function renderDocumentsSettings(container, { onNavigate } = {}) {
     refs.container = container;
@@ -155,6 +162,10 @@ export async function renderDocumentsSettings(container, { onNavigate } = {}) {
 // -----------------------------------------------------------------------------
 function mount(onNavigate) {
     clear(refs.container);
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && typeof window.removeEventListener === 'function') {   // CLINIC_API_STEP7_V1 (ревью слияния №6)
+        window.removeEventListener('clinic:refreshed', onClinicRefreshed);
+        window.addEventListener('clinic:refreshed', onClinicRefreshed);
+    }
 
     // APPBAR_BACK_V1 — своя кнопка «назад» убрана: путь назад теперь один и
     // живёт в верхней панели оболочки (admin.js PARENT_OF). Четыре экрана
@@ -489,6 +500,12 @@ async function save() {
     // CLINIC_API_STEP7_V1 — решение владельца 11: пока включено подключение API,
     // адрес для партнёров обязателен целиком, что бы ни меняли (сервер, routes/db.js,
     // откажет так же). В филиале подключений нет — правило его не касается.
+    // Ревью слияния №6 — флаг перечитывается перед проверкой: подключения могли
+    // включить или выключить на другом компьютере, пока экран открыт.
+    if (!secondary) {
+        await refreshClinicBrand(supabase).catch(() => null);
+        if (refs.address) refs.address.setRequired(apiAddressRequired());
+    }
     if (apiAddressRequired() && !secondary) {
         for (const [k, msg] of Object.entries(partnerAddressProblems(v, refs.geoAvailability()))) problems[k] = msg;
     }

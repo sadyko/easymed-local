@@ -36,6 +36,7 @@ async function setup() {
   const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify(body) });
   return {
     db, branch,
+    dbCall: (body) => post('/api/db', body),   // CLINIC_API_STEP7_V1 (ревью слияния №3) — запрос /api/db как есть
     saveBranch: (values, id = branch) => post('/api/db', { table: 'branches', op: 'update', values, filters: [{ col: 'id', op: 'eq', val: id }] }),
     rpc: (name, body) => post('/api/rpc/' + name, body),
     stop() { server.close(); db.close(); fs.rmSync(dataDir, { recursive: true, force: true }); },
@@ -79,5 +80,27 @@ test('подключение не включается, пока филиал н
     assert.equal(t.db.prepare('SELECT active FROM api_connections WHERE id = ?').get(id).active, 0, 'подключение осталось выключенным');
     t.db.prepare('UPDATE branches SET show_public = 0 WHERE id = ?').run(t.branch);
     assert.equal((await t.rpc('api_connection_update', { id, active: true })).status, 200, 'скрытый филиал не мешает');
+  } finally { t.stop(); }
+});
+
+// CLINIC_API_STEP7_V1 (ревью слияния №3) — собранные руками запросы не обходят правило:
+// отбор «in» строкой «(id)» рядом с «eq» и вставка с active: 0 (active при вставке не
+// пишется — здание ляжет работающим и видимым на сайте).
+test('/api/db: «eq» + «in» строкой и вставка с active: 0 — 400, база не тронута', async () => {
+  const t = await setup();
+  try {
+    insertConnectionRow(t.db);
+    t.db.prepare("UPDATE branches SET district_code = '', show_public = 0 WHERE id = ?").run(t.branch);   // скрытое, неполное — допустимо
+    const post = t.dbCall;
+    const bypass = await post({ table: 'branches', op: 'update', values: { show_public: 1 },
+      filters: [{ col: 'id', op: 'eq', val: t.branch }, { col: 'id', op: 'in', val: `(${t.branch})` }] });
+    assert.equal(bypass.status, 400);
+    assert.equal((await bypass.json()).error.code, 'partner_address_required');
+    assert.equal(t.db.prepare('SELECT show_public FROM branches WHERE id = ?').get(t.branch).show_public, 0, 'здание осталось скрытым');
+    const n = t.db.prepare('SELECT COUNT(*) AS n FROM branches').get().n;
+    const ins = await post({ table: 'branches', op: 'insert', values: { name: 'Юнусабад', active: 0 } });
+    assert.equal(ins.status, 400);
+    assert.equal((await ins.json()).error.field, 'region_code');
+    assert.equal(t.db.prepare('SELECT COUNT(*) AS n FROM branches').get().n, n, 'здание не заведено');
   } finally { t.stop(); }
 });

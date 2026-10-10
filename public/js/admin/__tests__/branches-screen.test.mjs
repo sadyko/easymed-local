@@ -863,7 +863,7 @@ test('прежний облачный адрес #settings:branches ведёт �
     const legacy = shell.slice(shell.indexOf('const LEGACY_ROUTES = {'), shell.indexOf('function navigate('));
     assert.match(legacy, /'settings:branches':\s*\{\s*view:\s*'settings'\s*\}/);
     const hub = fs.readFileSync(new URL('../views/settings-hub.js', import.meta.url), 'utf8');
-    assert.match(hub, /state\.section === 'branches'\) await renderBranchesEditor\(/);
+    assert.match(hub, /state\.section === 'branches'\) (?:refs\.branches = )?await renderBranchesEditor\(/);   // CLINIC_API_STEP7_V1 (ревью слияния №4) — refs.branches: «к списку» через защиту страницы
     const lookup = hub.slice(hub.indexOf('const LOOKUP_CONFIG = {'));
     assert.doesNotMatch(lookup.slice(0, lookup.indexOf('\n};')), /\n    branches: \{/);
 });
@@ -1157,4 +1157,76 @@ test('флаг устарел (выключен): отказ сервера part
             assert.deepEqual(stars(root), [true, true], 'звёздочки не появились');
         } finally { globalThis.fetch = realFetch; }
     });
+});
+
+// CLINIC_API_STEP7_V1 (ревью слияния №4) — «Открыть «Филиалы»» из окна подключения,
+// когда хаб в кэше оболочки уже на странице здания с несохранённым адресом: переход
+// идёт через ту же защиту, что «К списку филиалов», — спрашивает; отказ — страница с
+// правками остаётся; согласие или страница без правок — список. Из списка — без вопроса.
+test('кэшированный хаб на странице здания с несохранённым: переход в «Филиалы» спрашивает; отказ — правки на месте; согласие — список', async () => {
+    branchRows = [{ ...BLANK_ROW, id: 1, name: 'Юнусабад' }];
+    companyRow = null; writes = [];
+    globalThis.window.CLINIC.building_role = 'main'; delete globalThis.window.CLINIC.own_branch_id;
+    const perms = await import('../permissions.js');
+    perms.setFullAccess('Admin');
+    const { renderSettingsHub } = await import('../views/settings-hub.js');
+    const onPage = (root) => descendants(root).some((n) => matches(n, '.brf-page'));
+    let hook = null;
+    const root = mkEl('div');
+    await renderSettingsHub(root, { onPayload: (fn) => { hook = fn; } });
+    hook({ section: 'branches' }); await settle(80);
+    items(root)[0].click(); await settle(80);
+    assert.ok(onPage(root), 'стенд не тот: страница здания не открылась');
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Амира Темура, 1');
+    const asked = [];
+    let answer = false;
+    globalThis.window.confirm = (t) => { asked.push(t); return answer; };
+    try {
+        hook({ section: 'branches' }); await settle(80);
+        assert.equal(asked.length, 1, 'переход заменил страницу с несохранённым, не спросив');
+        assert.ok(onPage(root), 'отказ — а страница ушла');
+        assert.equal(triInput(root, 'Улица, дом', 'ru').value, 'ул. Амира Темура, 1', 'правки пропали');
+        answer = true;
+        hook({ section: 'branches' }); await settle(80);
+        assert.equal(asked.length, 2);
+        assert.ok(!onPage(root) && items(root).length === 1, 'согласие — а список не открылся');
+        hook({ section: 'branches' }); await settle(80);
+        assert.equal(asked.length, 2, 'из списка переход не спрашивает');
+        assert.ok(items(root).length === 1);
+    } finally { delete globalThis.window.confirm; }
+});
+
+// CLINIC_API_STEP7_V1 (ревью слияния №6) — страница здания слышит 'clinic:refreshed'
+// (refreshClinicBrand любого экземпляра clinic-context.js): подключение включили на
+// «API и подключения» — звёздочки у филиала на сайте появляются без перерисовки.
+test('страница здания: флаг изменили на «API и подключения» — звёздочки ставятся и снимаются без перерисовки', async () => {
+    const l = {};
+    const prev = { add: globalThis.window.addEventListener, remove: globalThis.window.removeEventListener, dispatch: globalThis.window.dispatchEvent };
+    globalThis.window.addEventListener = (t, fn) => { (l[t] || (l[t] = [])).push(fn); };
+    globalThis.window.removeEventListener = (t, fn) => { const a = l[t] || []; const i = a.indexOf(fn); if (i > -1) a.splice(i, 1); };
+    globalThis.window.dispatchEvent = (e) => { for (const fn of [...(l[e.type] || [])]) fn(e); return true; };
+    const clinic = globalThis.window.CLINIC;
+    let flag = false;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => (String(url).startsWith('/api/rpc/get_clinic_by_slug')
+        ? { ok: true, status: 200, json: async () => ({ data: { ...clinic, api_address_required: flag } }) }
+        : realFetch(url, opts));
+    try {
+        clinic.api_address_required = false;
+        const { root } = await openPage(HALF);
+        assert.deepEqual(stars(root), [false, false], 'стенд не тот');
+        const { supabase } = await import('../../supabase.js');
+        const apiInstance = await import('../clinic-context.js');   // как api-connections.js — без ?v=
+        flag = true;
+        await apiInstance.refreshClinicBrand(supabase);
+        assert.deepEqual(stars(root), [true, true], 'подключение включили — звёздочек нет');
+        flag = false;
+        await apiInstance.refreshClinicBrand(supabase);
+        assert.deepEqual(stars(root), [false, false], 'подключения выключили — звёздочки остались');
+    } finally {
+        globalThis.fetch = realFetch;
+        Object.assign(globalThis.window, { addEventListener: prev.add, removeEventListener: prev.remove, dispatchEvent: prev.dispatch });
+        globalThis.window.CLINIC = clinic;
+        delete clinic.api_address_required;
+    }
 });

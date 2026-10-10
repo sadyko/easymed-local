@@ -47,6 +47,12 @@ const FIELD_ORDER = ['name', 'phone', 'country_code', 'region_code', 'district_c
 const same = (a, b) => String(a == null ? '' : a) === String(b == null ? '' : b);
 // CLINIC_API_STEP7_V1 — включено ли подключение API (флаг записи клиники, только главное здание).
 const apiAddressRequired = () => !!(typeof window !== 'undefined' && window.CLINIC && window.CLINIC.api_address_required);
+// CLINIC_API_STEP7_V1 (ревью слияния №6) — запись клиники перечитали
+// (refreshClinicBrand, событие 'clinic:refreshed', из любого экземпляра
+// clinic-context.js): звёздочки открытой страницы — по свежему флагу. Одна
+// функция на модуль; страница, нарисованная последней, — та, что на экране.
+let currentSync = null;
+function onClinicRefreshed() { if (typeof currentSync === 'function') currentSync(); }
 
 function card(icon, title, ...body) {
     return h('div', { class: 'card' },
@@ -75,6 +81,7 @@ export async function renderBranchPage(container, opts = {}) {
     const {
         row = null, company = null, own = false, readOnly = false, secondary = false,
         onDone = null, onBack = null, onNavigate = null,
+        registerLeave = null,   // CLINIC_API_STEP7_V1 (ревью слияния №4) — уход извне через ту же защиту
     } = opts;
     const isNew = !row || !row.id;
     const lockAll = readOnly || secondary;    // филиал или «Просмотр» — только видно
@@ -144,6 +151,11 @@ export async function renderBranchPage(container, opts = {}) {
 
     // CLINIC_API_STEP7_V1 — звёздочки и строка «адрес обязателен» по текущему состоянию.
     function syncRequired() { address.setRequired(needsAddress()); }
+    currentSync = lockCompany ? null : syncRequired;   // ревью слияния №6
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('clinic:refreshed', onClinicRefreshed);
+        window.addEventListener('clinic:refreshed', onClinicRefreshed);
+    }
 
     // ---- часы работы (задача 14) ----
     const hours = readBranchHours(state.working_hours, state.is_24_7);
@@ -287,6 +299,10 @@ export async function renderBranchPage(container, opts = {}) {
         if (asking) hoursUi.clearImpact();
         go();
     };
+    // CLINIC_API_STEP7_V1 (ревью слияния №4) — уход, который начинает не страница
+    // («Открыть «Филиалы»» из окна подключения в хаб из кэша), идёт через ту же
+    // защиту несохранённого.
+    if (typeof registerLeave === 'function') registerLeave(leave);
     const back = h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' },
         onclick: () => leave(() => { if (typeof onBack === 'function') onBack(); }) },
         Icon('ChevronLeft', { size: 14 }), ' ', 'К списку филиалов');

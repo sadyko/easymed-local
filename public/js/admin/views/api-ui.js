@@ -12,6 +12,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, toast, fmtDate, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
+import { isRouteAllowed, settingsTileAllows } from '../permissions.js';   // CLINIC_API_STEP7_V1 (ревью слияния №2) — дорога к адресу по праву
 import {
   KINDS, KIND_INFO, READ_SCOPES, WRITE_SCOPES, SCOPE_INFO, EVENTS, EVENT_INFO, RATE_LIMITS, KEY_TTLS, KEY_TTL_LABEL,
   NAME_MAX, CONTACT_MAX, keyExpiryState,
@@ -287,17 +288,30 @@ export function openModal({ title, body, foot, tabs = null, width = 920, name = 
 export function addressBlock(message, onNavigate, onLeave = null, { branches = false } = {}) {
   // CLINIC_API_STEP7_V1 — отказ из-за филиала на сайте (branch_address_required):
   // адрес здания ведут «Филиалы» (хаб настроек, раздел branches), а не «Компания».
-  const go = branches
-    ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'open-branches' },
-        Icon('Building', { size: 13 }), ' ', 'Открыть «Филиалы»')
-    : h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'open-company' },
-        Icon('MapPin', { size: 13 }), ' ', 'Открыть «Компанию»');
-  go.addEventListener('click', () => {
-    if (onLeave) onLeave();
-    if (!onNavigate) return;
-    if (branches) onNavigate('settings', { section: 'branches' }); else onNavigate('documents-settings');
-  });
-  return h('div', { class: 'apic-confirm', role: 'alert' }, h('p', null, message), h('div', { class: 'apic-row' }, go));
+  // Ревью слияния №2 — кнопка только тому, кто там правит адрес (иначе «Нет
+  // доступа» или тост хаба; как branch-page.js «Изменить в «Компании»»), остальным —
+  // строка, кто его заполняет. №5 — переход, не правка: рамка «только просмотр»
+  // (view-only.js) кнопку не перехватывает.
+  const canGo = branches
+    ? isRouteAllowed('settings') && settingsTileAllows('settings.branches', 'edit')
+    : isRouteAllowed('documents-settings') && settingsTileAllows('settings.company', 'edit');
+  let go = null;
+  if (canGo) {
+    go = branches
+      ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'open-branches', dataset: { viewOk: '1' } },
+          Icon('Building', { size: 13 }), ' ', 'Открыть «Филиалы»')
+      : h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'open-company', dataset: { viewOk: '1' } },
+          Icon('MapPin', { size: 13 }), ' ', 'Открыть «Компанию»');
+    go.addEventListener('click', () => {
+      if (onLeave) onLeave();
+      if (!onNavigate) return;
+      if (branches) onNavigate('settings', { section: 'branches' }); else onNavigate('documents-settings');
+    });
+  }
+  const who = canGo ? null : h('p', { class: 'hint' }, branches
+    ? 'Адрес здания заполняет администратор или тот, кому выдано изменение «Филиалов».'
+    : 'Адрес для партнёров заполняет администратор или тот, кому выдано изменение «Компании».');
+  return h('div', { class: 'apic-confirm', role: 'alert' }, h('p', null, message), go ? h('div', { class: 'apic-row' }, go) : who);
 }
 /** CLINIC_API_STEP7_V1 — отказ включения из-за адреса: «Компании» или филиала на сайте. */
 export const isAddressRefusal = (e) => !!e && (e.code === 'partner_address_required' || e.code === 'branch_address_required');

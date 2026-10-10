@@ -20,6 +20,7 @@ import { partnerAddressProblems, PARTNER_ADDRESS_COLUMNS, PROFILE_MESSAGES } fro
 import { readIdentity } from '../branch-sync/identity.js';   // CLINIC_API_STEP7_V1 (ревью №8)
 import { branchShownToPartners } from '../../../public/js/shared/branch-profile.js';   // CLINIC_API_STEP7_V1 — здания на сайте
 import { withTemplate } from '../server-message.js';   // CLINIC_API_STEP7_V1 — сообщение называет здание: шаблон + значения
+import { targetBranches } from '../branch-targets.js';   // CLINIC_API_STEP7_V1 (ревью слияния №3) — отбор строк — общий со стражем шага 4
 
 export const ADDRESS_MESSAGES = Object.freeze({
   enable: 'Подключение нельзя включить: в «Компании» не заполнен адрес для партнёров — город или область, район и улица на русском.',
@@ -28,6 +29,9 @@ export const ADDRESS_MESSAGES = Object.freeze({
   enableBranch: 'Подключение нельзя включить: у здания «{name}», которое показывается на сайте, не заполнен адрес для партнёров — город или область, район и улица на русском. Заполните его в «Филиалах» или снимите там «Показывать филиал на сайте и у партнёров».',
   enableBranches: 'Подключение нельзя включить: у зданий, которые показываются на сайте, не заполнен адрес для партнёров — {names}. Заполните его в «Филиалах» или снимите там «Показывать филиал на сайте и у партнёров».',
   saveBranch: 'Пока включены подключения API, у здания, которое показывается на сайте, адрес для партнёров обязателен: город или область, район и улица на русском. Заполните его или снимите «Показывать филиал на сайте и у партнёров».',
+  // CLINIC_API_STEP7_V1 (ревью слияния №1) — «Добавить филиал» карточки синхронизации
+  // при включённом подключении заводит здание скрытым (rpc/branch-sync.js).
+  addBranchHidden: 'Новый филиал пока не показывается на сайте и у партнёров: пока включено подключение API, сначала заполните его адрес в «Филиалах» — город или область, район и улицу на русском, — затем включите там «Показывать филиал на сайте и у партнёров».',
 });
 
 export function apiActive(db) {
@@ -137,21 +141,14 @@ export function companyAddressRefusal(db, meta, body) {
 }
 
 // CLINIC_API_STEP7_V1 — /api/db: правка строки branches, пока подключение включено.
-// Строки, которые правят: отбор по id (eq / in — так пишут экраны); иной отбор —
-// все здания. Своя строка главного здания не проверяется: её адрес — «Компания».
+// Строки, которые правят: отбор по id (eq / in массивом — так пишут экраны); иной
+// отбор — все здания. Своя строка главного здания не проверяется: её адрес — «Компания».
+// CLINIC_API_STEP7_V1 (ревью слияния №3) — разбор отбора — общий со стражем шага 4
+// (services/branch-targets.js): «in» строкой «(5)» и id не числом — «не известно,
+// какие строки», то есть все, а не ни одной, как было.
 function targetRows(db, body) {
-  const f = body && Array.isArray(body.filters) ? body.filters : [];
-  let ids = null;
-  let byId = f.length > 0;
-  for (const x of f) {
-    if (!x || x.col !== 'id' || (x.op !== 'eq' && x.op !== 'in')) { byId = false; break; }
-    const list = (x.op === 'in' && Array.isArray(x.val) ? x.val : [x.val]).map(Number);
-    ids = ids == null ? list : ids.filter((i) => list.includes(i));
-  }
   try {
-    if (!byId) return db.prepare('SELECT * FROM branches').all();
-    const one = db.prepare('SELECT * FROM branches WHERE id = ?');
-    return [...new Set(ids)].map((i) => one.get(i)).filter(Boolean);
+    return targetBranches(db, body) ?? db.prepare('SELECT * FROM branches').all();
   } catch { return []; }
 }
 /**
@@ -170,8 +167,12 @@ export function branchAddressRefusal(db, meta, body) {
     return field ? { field, message: ADDRESS_MESSAGES.saveBranch } : null;
   };
   if (meta.op !== 'update') {
+    // CLINIC_API_STEP7_V1 (ревью слияния №3) — строка так, как она ЛЯЖЕТ: active
+    // при вставке не пишется (реестр его не пускает, компилятор молча отбрасывает),
+    // новое здание всегда работает — присланное active: 0 его от проверки не прячет.
+    // Вставка и upsert заводят новое здание (routes/db.js branchWriteRefusal).
     for (const row of Array.isArray(v) ? v : [v]) {
-      const r = check({ active: 1, show_public: 1, ...(row && typeof row === 'object' ? row : {}) });
+      const r = check({ show_public: 1, ...(row && typeof row === 'object' ? row : {}), active: 1 });
       if (r) return r;
     }
     return null;

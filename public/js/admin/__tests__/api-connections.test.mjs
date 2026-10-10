@@ -262,3 +262,47 @@ test('«Изменение» без администратора (can.reveal н�
   assert.ok(textOf(root).includes('Скрыт'));
   assert.equal(byAttr(root, 'data-apic-act', 'copy-key').length, 0);
 });
+
+// CLINIC_API_STEP7_V1 (ревью слияния №2, №5) — «Адрес для партнёров не заполнен» на
+// странице: «Открыть «Компанию»» — только тому, кто правит «Компанию» (иначе строка,
+// кто заполняет адрес); в рамке «только просмотр» кнопку-переход рамка не глотает.
+async function pageInFrame(extra) {
+  const perms = await import('../permissions.js');
+  const { grantsFromLegacy, legacyFromGrants } = await import('../roles-matrix.js');
+  const { renderWithViewOnly } = await import('../view-only.js');
+  const legacy = { sections: ['patients', 'dashboard'], levels: { patients: 'editor', dashboard: 'viewer' } };
+  const grants = { ...grantsFromLegacy(legacy), settings: 'view', 'settings.api': 'view', ...extra };
+  perms.setEffectiveFromRole({ name: 'Регистратор', permissions: { ...legacyFromGrants(grants, legacy), grants } });
+  onRpc('api_settings_get', () => settingsFixture({ partner_address_missing: ['region_code'], can: { view: true, edit: false, admin: false, reveal: false } }));
+  onRpc('api_journal_list', () => JOURNAL);
+  const root = mk('div');
+  const nav = [];
+  await renderWithViewOnly(root, 'settings.api', (r) => renderApiConnections(r, { onNavigate: (v, p) => nav.push([v, p]) }));
+  await tick();
+  return { perms, root, nav, host: root.children[0] };
+}
+
+test('рамка «только просмотр», «Компания: Изменение»: «Открыть «Компанию»» ведёт в «Компанию», рамка её не глотает', async () => {
+  reset();
+  const { perms, root, nav, host } = await pageInFrame({ 'settings.company': 'edit' });
+  try {
+    assert.ok(String(host.className).includes('is-view-only'), 'стенд не тот: экран не в рамке');
+    const go = byAttr(root, 'data-apic-act', 'open-company')[0];
+    assert.ok(go, 'нет «Открыть «Компанию»»');
+    let stopped = false;
+    const ev = { type: 'click', target: go, currentTarget: host, preventDefault() {}, stopPropagation() { stopped = true; } };
+    for (const fn of host._l.click || []) fn(ev);   // перехват рамки идёт первым (capture)
+    assert.equal(stopped, false, 'рамка «только просмотр» проглотила переход');
+    go.click();
+    assert.deepEqual(nav, [['documents-settings', undefined]]);
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+test('«Компания: Просмотр»: кнопки нет — строка, кто заполняет адрес', async () => {
+  reset();
+  const { perms, root } = await pageInFrame({ 'settings.company': 'view' });
+  try {
+    assert.equal(byAttr(root, 'data-apic-act', 'open-company').length, 0, 'кнопка ведёт туда, где адрес не правится');
+    assert.ok(textOf(root).includes('Адрес для партнёров заполняет администратор или тот, кому выдано изменение «Компании».'));
+  } finally { perms.setFullAccess('Admin'); }
+});

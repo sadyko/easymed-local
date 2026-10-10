@@ -12,6 +12,7 @@ import { BRANCH_MESSAGES, BRANCH_MAIN_COLUMNS, OWN_FROM_COMPANY, storedBranchPro
 import { CONSULT_API_KINDS, CONSULT_MESSAGES, consultTypeProblem } from '../../public/js/shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 import { keepLegacyLogo } from '../services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1 (ревью M3)
 import { companyAddressRefusal, branchAddressRefusal } from '../services/api/partner-address.js';   // CLINIC_API_STEP7_V1
+import { targetBranches } from '../services/branch-targets.js';   // CLINIC_API_STEP7_V1 (ревью слияния №3) — одна на двух стражей
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
@@ -749,19 +750,8 @@ const flat = (v) => (v === true ? '1' : v === false ? '0' : String(v == null ? '
 // Строки, которые правят: отбор только по id (eq / in — так пишут экраны;
 // правку без выбора строк компилятор не пускает сам). Другой отбор — null:
 // что правится, заранее не известно, и тогда страж отказывает.
-function targetBranches(db, body) {
-  const f = body && Array.isArray(body.filters) ? body.filters : [];
-  let ids = null;
-  for (const x of f) {
-    if (!x || x.col !== 'id' || (x.op !== 'eq' && x.op !== 'in')) return null;
-    if (x.op === 'in' && !Array.isArray(x.val)) return null;
-    const list = (x.op === 'in' ? x.val : [x.val]).map(Number);
-    ids = ids == null ? list : ids.filter((i) => list.includes(i));
-  }
-  if (ids == null) return null;
-  const one = db.prepare('SELECT * FROM branches WHERE id = ?');
-  return [...new Set(ids)].map((i) => one.get(i)).filter(Boolean);
-}
+// CLINIC_API_STEP7_V1 (ревью слияния №3) — targetBranches переехала в
+// services/branch-targets.js: её же зовёт страж решения владельца 11.
 function branchWriteRefusal(db, meta, body) {
   if (!meta || meta.table !== 'branches' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
   const secondary = isSecondary(db);

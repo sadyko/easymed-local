@@ -85,6 +85,7 @@ let syncNow = null;
 // попытка по-прежнему взрывается.
 let reissue = null;
 let pair = null;
+let addBranch = null;   // CLINIC_API_STEP7_V1 (ревью слияния №1) — ответ «Добавить филиал»
 const calls = [];
 globalThis.fetch = async (url, init) => {
   const name = String(url).replace('/api/rpc/', '');
@@ -96,6 +97,7 @@ globalThis.fetch = async (url, init) => {
   if (name === 'branch_sync_now' && syncNow) return { ok: true, json: async () => ({ data: syncNow }) };
   if (name === 'branch_sync_reissue_key' && reissue) return { ok: true, json: async () => ({ data: reissue(body) }) };
   if (name === 'branch_sync_pair' && pair) return pair(body);
+  if (name === 'branch_sync_add_branch' && addBranch) return { ok: true, json: async () => ({ data: addBranch(body) }) };   // CLINIC_API_STEP7_V1
   throw new Error('экран не должен звать ' + name + ' в этом состоянии');
 };
 
@@ -129,6 +131,7 @@ async function paint(st, br = null) {
   syncNow = null;
   reissue = null;
   pair = null;
+  addBranch = null;   // CLINIC_API_STEP7_V1
   calls.length = 0;
   confirms = [];
   confirmAnswer = true;
@@ -670,5 +673,23 @@ test('у не-администратора кнопки на карточке г
     assert.equal(!!buttonWith(card, SYNC), false);
   } finally {
     globalThis.window.easymed.state.user = saved;
+  }
+});
+
+// CLINIC_API_STEP7_V1 (ревью слияния №1) — пока включено подключение API, сервер
+// заводит филиал скрытым и присылает строку address_note: экран показывает её
+// под кнопкой (а не красным тостом — филиал заведён). Без неё — как раньше.
+test('«Добавить филиал» при включённом подключении: строка «заполните адрес в «Филиалах»» под кнопкой', async () => {
+  const NOTE = 'Новый филиал пока не показывается на сайте и у партнёров: пока включено подключение API, сначала заполните его адрес в «Филиалах» — город или область, район и улицу на русском, — затем включите там «Показывать филиал на сайте и у партнёров».';
+  for (const note of [NOTE, undefined]) {
+    await paint(MAIN_STATUS, MAIN_BRANCHES);
+    addBranch = () => ({ ok: true, branch: { id: 9, name: 'Сергели', letter: 'D' }, relay: { ok: true },
+      ...(note ? { address_note: note } : {}) });
+    const nameInput = tags(card, 'input').find((i) => i.getAttribute('placeholder') === 'Чиланзар');
+    nameInput.value = 'Сергели';
+    buttonWith(card, 'Добавить филиал').click();
+    await flush();
+    assert.ok(calls.includes('branch_sync_add_branch'));
+    assert.equal(textOf(card).includes(NOTE), !!note, note ? 'строки про адрес нет' : 'строка про адрес без причины');
   }
 });

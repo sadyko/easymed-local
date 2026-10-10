@@ -69,7 +69,9 @@ export async function renderBranchesEditor(container, { onBack = null, onNavigat
     const secondary = clinic().building_role === 'secondary';
     const ownId = clinic().own_branch_id;
     let company = null;
+    let pageLeave = null;   // CLINIC_API_STEP7_V1 (ревью слияния №4) — защита открытой страницы здания
     async function showList() {
+        pageLeave = null;
         clear(container);
         const listBox = h('div', { class: 'brf-list' });
         const actions = h('div', { class: 'page-head-actions' });
@@ -125,7 +127,13 @@ export async function renderBranchesEditor(container, { onBack = null, onNavigat
     }
     async function showPage(row, own) {
         await renderBranchPage(container, { row, own: !!own && !secondary, company, readOnly, secondary,
-            onBack: showList, onDone: showList, onNavigate });
+            onBack: showList, onDone: showList, onNavigate, registerLeave: (fn) => { pageLeave = fn; } });
     }
     await showList();
+    // CLINIC_API_STEP7_V1 (ревью слияния №4) — «к списку» извне: со страницы здания —
+    // через её защиту (несохранённое — вопрос, отказ — страница остаётся); со списка —
+    // ничего не меняется.
+    return {
+        toList() { if (pageLeave) pageLeave(() => { showList(); }); },
+    };
 }
