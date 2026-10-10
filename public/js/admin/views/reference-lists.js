@@ -34,19 +34,22 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, clear } from '../ui.js';
 import { SPECIALTY_ROWS } from '../../shared/specialty-list.js';
+import { bySheetOrder } from '../../shared/geo-codes.js';   // REFERENCE_LISTS_V1 (полировка) — порядок бланка
 
 /** Страна, чьи регионы показывает экран, и регион, открытый сразу. */
 export const COUNTRY_CODE = 'UZ';
 export const DEFAULT_REGION = 'tashkent-city';
 
-// Районы — сначала районы, потом города областного подчинения (как в бланке
-// «Справочники EasyMed»), внутри — по алфавиту.
-// i18n-exempt: значения колонки districts.kind из миграции 132, а не текст экрана
-const KIND_ORDER = { 'район': 0, 'город': 1 };
+// REFERENCE_LISTS_V1 (полировка по макету, 2026-10-10) — регионы и районы — в
+// ПОРЯДКЕ БЛАНКА «Справочники EasyMed», как в согласованном макете: город
+// Ташкент, Ташкентская область, Андижанская … Хорезмская, Каракалпакстан
+// последним; районы — как в бланке. Не по алфавиту и не по id: id в базе
+// раздала миграция 030 в другом порядке. Порядок — shared/geo-codes.js (он
+// сверен с миграцией 132); строки, заведённые в «Географии», — после строк
+// бланка, по названию.
 
 const raw = (v) => document.createTextNode(v == null || v === '' ? '—' : String(v));
 const byRu = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru');
-const kindRank = (d) => (d.kind in KIND_ORDER ? KIND_ORDER[d.kind] : 2);
 
 /**
  * Страны и регионы страны COUNTRY_CODE с их районами: { countries, regions }.
@@ -78,11 +81,10 @@ export async function loadGeography() {
     if (d.error) return { countries, regionsError: d.error };
     const byId = new Map(regions.map((x) => [x.id, x]));
     for (const row of d.data || []) { const reg = byId.get(row.region_id); if (reg) reg.districts.push(row); }
-    for (const reg of regions) reg.districts.sort((a, b) => (kindRank(a) - kindRank(b)) || byRu(a, b));
+    for (const reg of regions) reg.districts.sort(bySheetOrder('districts'));
 
-    // Открытый сразу регион — первым, остальные по алфавиту.
-    const first = (x) => (x.code === DEFAULT_REGION ? 0 : 1);
-    regions.sort((a, b) => (first(a) - first(b)) || byRu(a, b));
+    // Порядок бланка; открытый сразу город Ташкент в нём и так первый.
+    regions.sort(bySheetOrder('regions'));
     return { countries, regions };
 }
 
@@ -110,7 +112,14 @@ export async function renderReferenceLists(container, ctx = {}) {
         },
     },
         h('span', { style: { flex: '0 0 auto', display: 'inline-flex', marginTop: '1px' } }, Icon('Info', { size: 16 })),
-        h('span', null, 'Общие списки: одинаковые у всех клиник и партнёров; партнёры получают коды. Списки встроены в программу и обновляются вместе с ней.'),
+        // REFERENCE_LISTS_V1 (полировка по макету) — три предложения макета: списки
+        // работают без интернета; код не меняется никогда, переименованная строка
+        // сохраняет код для партнёров; недостающий район или специальность — через
+        // поддержку EasyMed. Каждое предложение — своя статья словаря.
+        h('span', null,
+            'Общие списки: одинаковые у всех клиник и партнёров; партнёры получают коды. Списки встроены в программу и обновляются вместе с ней; интернет для них не нужен.',
+            ' ', 'Код не меняется никогда; если меняется название, партнёры получают новое название с тем же кодом.',
+            ' ', 'Добавить район или специальность можно в новой версии программы — напишите в поддержку EasyMed.'),
     ));
 
     const card = h('section', { class: 'card', style: { overflow: 'hidden' } });
