@@ -27,7 +27,7 @@
 // блок Telegram и обе кнопки подвала (сохранить · сохранить и добавить
 // услугу).
 
-import { tr, trf, getLang } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 // MOTION_DIALOG_V1 — окно ОТКРЫВАЕТСЯ чистым CSS (правило на .modal), а
 // закрывается через общий помощник: угасание и снятие из документа одной
 // строкой. Помощник обязан убрать окно в любом случае — нет анимации (старый
@@ -49,6 +49,9 @@ import { openAccessDeniedDialog } from '../access-denied.js';
 // клинической сети; сервер проверяет то же самое ещё раз.
 import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
 import { downscalePhoto } from '../../shared/photo-downscale.js?v=pph1';
+// CLINIC_PROFILE_V1 — каскад вынесен в geo-cascade.js (им пользуется и «Компания»); имя и адрес экспорта прежние.
+import { geoCascade } from './geo-cascade.js';
+export { geoCascade };
 
 // AURORA_REG_FORM_V1 — корзина фотографий: photo_url хранит постоянный URL,
 // который карточка пациента отдаёт прямо в <img src>.
@@ -1455,83 +1458,4 @@ function telegramBlock(state, getPhone) {
         } },
         Icon('Send', { size: 13 }), ' ', tr('Отправить приглашение в бот'));
     return h('div', { class: 'tg-wrap' }, h('div', { class: 'tg-row' }, chip, btn), note);
-}
-
-// ---------------------------------------------------------------------------
-// Каскад страна → регион → район. Значение каждого select — ИМЯ, поэтому
-// payload по-прежнему пишет в patients.country / region / district текст.
-// ---------------------------------------------------------------------------
-export function geoCascade() {
-    const countrySel  = h('select', { name: 'country'  });
-    const regionSel   = h('select', { name: 'region'   });
-    const districtSel = h('select', { name: 'district' });
-
-    // GEO_HARDCODE_V1 — the option shows the name in the interface language
-    // (uz / en from migration 132); the VALUE stays the Russian name, which is
-    // what patients.country/region/district have always stored.
-    const label = (r) => { const l = getLang(); return (l === 'uz' && r.name_uz) || (l === 'en' && r.name_en) || r.name; };
-    function paintSelect(sel, rows, placeholder, selectedName) {
-        clear(sel);
-        sel.appendChild(h('option', { value: '' }, placeholder));
-        for (const r of [...rows].sort((a, b) => label(a).localeCompare(label(b), 'ru'))) {
-            const opt = h('option', { value: r.name }, label(r));
-            opt.dataset.id = r.id;
-            if (selectedName && selectedName === r.name) opt.selected = true;
-            sel.appendChild(opt);
-        }
-    }
-    function selectedId(sel) {
-        const o = sel.options ? sel.options[sel.selectedIndex] : null;
-        return o ? (o.dataset.id || '') : '';
-    }
-    const load = async (table, filter) => {
-        try {
-            let q = supabase.from(table).select('id, name, name_uz, name_en').eq('active', true).order('name');
-            if (filter) q = q.eq(filter[0], filter[1]);
-            const { data, error } = await q;
-            if (error) return [];
-            return data || [];
-        } catch (e) { return []; }
-    };
-
-    paintSelect(countrySel,  [], tr('Загрузка…'));
-    paintSelect(regionSel,   [], tr('Сначала выберите страну'));
-    paintSelect(districtSel, [], tr('Сначала выберите регион'));
-
-    countrySel.addEventListener('change', async () => {
-        paintSelect(regionSel,   [], tr('Загрузка…'));
-        paintSelect(districtSel, [], tr('Сначала выберите регион'));
-        const cid = selectedId(countrySel);
-        const regs = cid ? await load('regions', ['country_id', cid]) : [];
-        paintSelect(regionSel, regs, regs.length ? tr('Выберите регион') : tr('Регионы не заведены — Настройки → География'));
-    });
-    regionSel.addEventListener('change', async () => {
-        paintSelect(districtSel, [], tr('Загрузка…'));
-        const rid = selectedId(regionSel);
-        const dists = rid ? await load('districts', ['region_id', rid]) : [];
-        paintSelect(districtSel, dists, dists.length ? tr('Выберите район') : tr('Районы не заведены — Настройки → География'));
-    });
-
-    // PATIENT_FORM_ONE_V1 — режим правки: страна/регион/район пациента
-    // выбираются по именам, как только соответствующий список приехал.
-    const want = { country: '', region: '', district: '' };
-    (async () => {
-        const countries = await load('countries', null);
-        paintSelect(countrySel, countries,
-            countries.length ? tr('Выберите страну') : tr('Список стран не загрузился — обновите страницу'),   // GEO_HARDCODE_V1 — the list ships with the app; empty means the request failed
-            want.country || 'Uzbekistan');
-        const cid = selectedId(countrySel);
-        if (cid) {
-            const regs = await load('regions', ['country_id', cid]);
-            paintSelect(regionSel, regs, regs.length ? tr('Выберите регион') : tr('Регионы не заведены — Настройки → География'), want.region);
-            const rid = selectedId(regionSel);
-            if (rid && want.district) {
-                const dists = await load('districts', ['region_id', rid]);
-                paintSelect(districtSel, dists, dists.length ? tr('Выберите район') : tr('Районы не заведены — Настройки → География'), want.district);
-            }
-        }
-    })();
-
-    return { countrySel, regionSel, districtSel,
-        preset: ({ country, region, district } = {}) => { want.country = country || ''; want.region = region || ''; want.district = district || ''; } };
 }
