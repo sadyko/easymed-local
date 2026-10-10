@@ -10,6 +10,7 @@ import { migrate } from '../../db/migrate.js';
 import { updateMyDoctorProfile, PROFILE_KEYS } from './doctor-profile.js';
 import { getRpc } from './index.js';
 import { STRINGS } from '../../../public/js/admin/i18n-strings.js';   // CLINIC_API_FIX_V1 — отказы переводятся
+import { DOCTOR_PUBLIC_MESSAGES } from '../../../public/js/shared/doctor-public.js';   // DOCTOR_PROFILE_V1
 
 function seed() {
   const db = openDb(':memory:'); migrate(db);
@@ -358,4 +359,55 @@ test('CLINIC_API_FIX_V1: photo_url — выход из своей папки («
     assert.throws(() => updateMyDoctorProfile(db, { p: { photo_url: bad } }, doc), (e) => e.status === 400, bad);
   }
   assert.equal(db.prepare('SELECT photo_url FROM users WHERE id = 2').get().photo_url, null);
+});
+
+// ===========================================================================
+// DOCTOR_PROFILE_V1 (мигр. 243) — языки приёма и «работает врачом с» — часть
+// профиля (правят и «Мой профиль», и карточка); показ — не поле профиля;
+// показываемый врач не стирает себе ФИО на русском и специальности.
+// ===========================================================================
+const YEAR = new Date().getFullYear();
+
+test('DOCTOR_PROFILE_V1: в белом списке — языки и «работает с», показа нет', () => {
+  for (const k of ['languages', 'practice_since']) assert.ok(PROFILE_KEYS.includes(k), k);
+  assert.ok(!PROFILE_KEYS.includes('is_public'));
+});
+
+test('DOCTOR_PROFILE_V1: языки приёма — список ru/uz/en в порядке; пустой и чужой — отказ, ничего не записано', () => {
+  const db = seed();
+  updateMyDoctorProfile(db, { p: { languages: ['uz', 'ru'] } }, doc);
+  assert.equal(db.prepare('SELECT languages FROM users WHERE id = 2').get().languages, '["ru","uz"]');
+  assert.throws(() => updateMyDoctorProfile(db, { p: { languages: [] } }, doc), (e) => e.status === 400 && e.message === DOCTOR_PUBLIC_MESSAGES.oneLanguage);
+  assert.throws(() => updateMyDoctorProfile(db, { p: { languages: ['de'] } }, doc), (e) => e.status === 400 && e.message === DOCTOR_PUBLIC_MESSAGES.languages);
+  assert.equal(db.prepare('SELECT languages FROM users WHERE id = 2').get().languages, '["ru","uz"]');
+});
+
+test('DOCTOR_PROFILE_V1: «работает с» пишет и стаж; прежний стаж (экран старой версии) пишет и год', () => {
+  const db = seed();
+  const out = updateMyDoctorProfile(db, { p: { practice_since: YEAR - 9 } }, doc);
+  assert.deepEqual(out.saved, ['practice_since'], 'saved — то, что прислано');
+  assert.deepEqual({ ...db.prepare('SELECT practice_since, experience_years FROM users WHERE id = 2').get() }, { practice_since: YEAR - 9, experience_years: 9 });
+  updateMyDoctorProfile(db, { p: { experience_years: 4 } }, doc);
+  assert.deepEqual({ ...db.prepare('SELECT practice_since, experience_years FROM users WHERE id = 2').get() }, { practice_since: YEAR - 4, experience_years: 4 });
+  assert.throws(() => updateMyDoctorProfile(db, { p: { practice_since: 1900 } }, doc), (e) => e.status === 400 && e.message === DOCTOR_PUBLIC_MESSAGES.since);
+  assert.throws(() => updateMyDoctorProfile(db, { p: { practice_since: YEAR + 1 } }, doc), (e) => e.status === 400);
+});
+
+test('DOCTOR_PROFILE_V1: показываемый врач — без пустого ФИО на русском и пустого списка специальностей; скрытому — можно', () => {
+  const db = seed();
+  updateMyDoctorProfile(db, { p: { full_name_ru: 'Врач Один' }, specialties: ['kardiolog'] }, doc);
+  db.prepare('UPDATE users SET is_public = 1 WHERE id = 2').run();
+  assert.throws(() => updateMyDoctorProfile(db, { p: { full_name_ru: '' } }, doc), (e) => e.status === 400 && e.message === DOCTOR_PUBLIC_MESSAGES.nameRu);
+  assert.throws(() => updateMyDoctorProfile(db, { p: {}, specialties: [] }, doc), (e) => e.status === 400 && e.message === DOCTOR_PUBLIC_MESSAGES.specialty);
+  assert.equal(db.prepare('SELECT full_name_ru FROM users WHERE id = 2').get().full_name_ru, 'Врач Один');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM user_specialties WHERE user_id = 2').get().n, 1);
+  assert.doesNotThrow(() => updateMyDoctorProfile(db, { p: { bio_ru: 'Кардиолог' } }, doc), 'остальное правится как раньше');
+  db.prepare('UPDATE users SET is_public = 0 WHERE id = 2').run();
+  assert.doesNotThrow(() => updateMyDoctorProfile(db, { p: { full_name_ru: '' } }, doc));
+});
+
+test('DOCTOR_PROFILE_V1: показ — не поле профиля: врач сам себя не показывает', () => {
+  const db = seed();
+  assert.throws(() => updateMyDoctorProfile(db, { p: { is_public: 1 } }, doc), (e) => e.status === 400);
+  assert.equal(db.prepare('SELECT is_public FROM users WHERE id = 2').get().is_public, 0);
 });

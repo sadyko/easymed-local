@@ -35,6 +35,7 @@
 import { hasAnyRole } from '../roles.js';
 import { rpcT } from '../server-message.js';   // V3120_I18N
 import { SPECIALTY_ROWS } from '../../../public/js/shared/specialty-list.js';
+import { languagesProblem, normalizeLanguages, readLanguages, cleanPracticeSince, withExperience, publicationProblem } from '../../../public/js/shared/doctor-public.js';   // DOCTOR_PROFILE_V1
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -48,7 +49,12 @@ const TEXT_KEYS = [
 ];
 const ENTRY_KEYS = ['education_entries', 'experience_entries', 'certifications_entries', 'prof_dev_entries'];
 const URL_KEYS = ['instagram_url', 'telegram_url', 'photo_url'];
-export const PROFILE_KEYS = Object.freeze([...TEXT_KEYS, ...ENTRY_KEYS, 'experience_years', ...URL_KEYS]);
+// DOCTOR_PROFILE_V1 (мигр. 243) — языки приёма и «работает врачом с» — часть
+// профиля: их правят и «Мой профиль», и карточка сотрудника (одно правило).
+// Показ врача (is_public) сюда НЕ входит — его меняет только администратор
+// (routes/users.js); прислать его в профиле — отказ, как любой чужой ключ.
+const PUBLIC_KEYS = ['languages', 'practice_since'];
+export const PROFILE_KEYS = Object.freeze([...TEXT_KEYS, ...ENTRY_KEYS, 'experience_years', ...URL_KEYS, ...PUBLIC_KEYS]);
 export const PROFILE_ENTRY_KEYS = Object.freeze([...ENTRY_KEYS]);
 
 const MAX_TEXT = 5000;
@@ -72,6 +78,18 @@ function cleanValue(key, v, ownerId) {
     const json = JSON.stringify(v);
     if (json.length > MAX_TEXT * 10) throw new RpcError(key + ' is too long.', 400);
     return json;
+  }
+  // DOCTOR_PROFILE_V1 — языки приёма: список из ru / uz / en, хотя бы один.
+  if (key === 'languages') {
+    const problem = languagesProblem(v);
+    if (problem) throw new RpcError(problem, 400);
+    return JSON.stringify(normalizeLanguages(v));
+  }
+  // DOCTOR_PROFILE_V1 — год «работает врачом с»: целый, 1940..текущий; пусто — снять.
+  if (key === 'practice_since') {
+    const c = cleanPracticeSince(v);
+    if (c.problem) throw new RpcError(c.problem, 400);
+    return c.value;
   }
   if (key === 'experience_years') {
     if (v == null || v === '') return null;
@@ -204,6 +222,10 @@ export function publicProfileOf(u) {
       let arr = [];
       try { arr = JSON.parse(v || '[]'); } catch { arr = []; }
       out[k] = Array.isArray(arr) ? arr : [];
+    } else if (k === 'languages') {   // DOCTOR_PROFILE_V1 — списком
+      out[k] = readLanguages(v);
+    } else if (k === 'practice_since') {   // DOCTOR_PROFILE_V1
+      out[k] = v == null ? null : Number(v);
     } else if (k === 'experience_years') {
       out[k] = v == null ? null : Number(v);
     } else {
@@ -213,6 +235,15 @@ export function publicProfileOf(u) {
   return out;
 }
 
+// DOCTOR_PROFILE_V1 — сколько специальностей у сотрудника: строки списка, а у
+// записанного до списка — одна колонка users.specialty.
+export function specialtyCountOf(db, userId) {
+  const n = db.prepare('SELECT COUNT(*) AS n FROM user_specialties WHERE user_id = ?').get(userId).n;
+  if (n) return n;
+  const u = db.prepare('SELECT specialty FROM users WHERE id = ?').get(userId);
+  return u && String(u.specialty || '').trim() ? 1 : 0;
+}
+
 function isEmpty(v) {
   return v == null || v === '' || v === '[]';
 }
@@ -220,7 +251,7 @@ function isEmpty(v) {
 export function updateMyDoctorProfile(db, args, user) {
   const uid = Number(user && user.id);
   if (!Number.isInteger(uid) || uid <= 0) throw new RpcError('Нужно войти в систему.', 401);
-  const me = db.prepare('SELECT id, is_doctor, is_local FROM users WHERE id = ?').get(uid);
+  const me = db.prepare('SELECT id, is_doctor, is_local, is_public, full_name_ru FROM users WHERE id = ?').get(uid);   // DOCTOR_PROFILE_V1 — показ и ФИО для проверки ниже
   if (!me || !(me.is_doctor === 1 || hasAnyRole(user, ['doctor']))) {
     throw new RpcError('Профиль врача редактирует только врач.', 403);
   }
@@ -244,6 +275,16 @@ export function updateMyDoctorProfile(db, args, user) {
   const a = args || {};
   const specRows = a.specialties === undefined ? null : cleanSpecialties(db, uid, a.specialties);
   const condRows = a.conditions === undefined ? null : cleanConditions(a.conditions);
+  // DOCTOR_PROFILE_V1 — показываемый врач не стирает себе ФИО на русском и не
+  // остаётся без специальностей: показ меняет администратор, а не врач.
+  if (Number(me.is_public) === 1) {
+    const name = 'full_name_ru' in values ? values.full_name_ru : me.full_name_ru;
+    const specCount = specRows ? specRows.length : specialtyCountOf(db, uid);
+    const problem = publicationProblem({ is_public: 1, full_name_ru: name, specialties: specCount });
+    if (problem) throw new RpcError(problem, 400);
+  }
+  // DOCTOR_PROFILE_V1 — «работает с» и прежний стаж пишутся вместе; saved — то, что прислано.
+  const write = withExperience(values);
 
   const cols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
   const saved = [];
@@ -253,11 +294,12 @@ export function updateMyDoctorProfile(db, args, user) {
     else if (!isEmpty(values[k])) notStored.push(k);
   }
   db.transaction(() => {
-    if (saved.length) {
+    const writeKeys = Object.keys(write).filter((k) => cols.has(k));   // DOCTOR_PROFILE_V1 — с выведенной парой
+    if (writeKeys.length) {
       // Имена колонок — только из белого списка PROFILE_KEYS и проверены по
       // PRAGMA выше: в SQL не попадает ни одного имени от клиента.
-      const sql = 'UPDATE users SET ' + saved.map((k) => k + ' = ?').join(', ') + ' WHERE id = ?';
-      db.prepare(sql).run(...saved.map((k) => values[k]), uid);
+      const sql = 'UPDATE users SET ' + writeKeys.map((k) => k + ' = ?').join(', ') + ' WHERE id = ?';
+      db.prepare(sql).run(...writeKeys.map((k) => write[k]), uid);
     }
     if (specRows) {
       db.prepare('DELETE FROM user_specialties WHERE user_id = ?').run(uid);
