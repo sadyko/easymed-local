@@ -284,12 +284,23 @@ export function openModal({ title, body, foot, tabs = null, width = 920, name = 
 }
 
 /** Отказ «нет адреса для партнёров» (решение владельца 11) — с дорогой в «Компанию». */
-export function addressBlock(message, onNavigate, onLeave = null) {
-  const go = h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'open-company' },
-    Icon('MapPin', { size: 13 }), ' ', 'Открыть «Компанию»');
-  go.addEventListener('click', () => { if (onLeave) onLeave(); if (onNavigate) onNavigate('documents-settings'); });
+export function addressBlock(message, onNavigate, onLeave = null, { branches = false } = {}) {
+  // CLINIC_API_STEP7_V1 — отказ из-за филиала на сайте (branch_address_required):
+  // адрес здания ведут «Филиалы» (хаб настроек, раздел branches), а не «Компания».
+  const go = branches
+    ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'open-branches' },
+        Icon('Building', { size: 13 }), ' ', 'Открыть «Филиалы»')
+    : h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'open-company' },
+        Icon('MapPin', { size: 13 }), ' ', 'Открыть «Компанию»');
+  go.addEventListener('click', () => {
+    if (onLeave) onLeave();
+    if (!onNavigate) return;
+    if (branches) onNavigate('settings', { section: 'branches' }); else onNavigate('documents-settings');
+  });
   return h('div', { class: 'apic-confirm', role: 'alert' }, h('p', null, message), h('div', { class: 'apic-row' }, go));
 }
+/** CLINIC_API_STEP7_V1 — отказ включения из-за адреса: «Компании» или филиала на сайте. */
+export const isAddressRefusal = (e) => !!e && (e.code === 'partner_address_required' || e.code === 'branch_address_required');
 
 // ---- поля подключения (окно «Новое подключение» и карточка) ---------------------
 export function basicsFields(d, errs, { disabled = false, isNew = false, sourceLabel = '', companyWebsite = '' } = {}) {

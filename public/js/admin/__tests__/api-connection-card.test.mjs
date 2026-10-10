@@ -222,3 +222,26 @@ test('«Изменение» без администратора (can.reveal н�
   assert.ok(textOf(m).includes('Секрет видит и меняет только администратор.'));
   assert.equal(byAttr(m, 'data-apic-act', 'show').length, 0);
 });
+
+// CLINIC_API_STEP7_V1 — решение владельца 11 по зданиям: включение отказано из-за
+// филиала на сайте без адреса — сообщение сервера называет здание, кнопка ведёт в
+// «Филиалы» (хаб настроек, раздел branches), а не в «Компанию».
+const BRANCH_REFUSAL = { code: 'branch_address_required',
+  message: 'Подключение нельзя включить: у здания «Чиланзар», которое показывается на сайте, не заполнен адрес для партнёров — город или область, район и улица на русском. Заполните его в «Филиалах» или снимите там «Показывать филиал на сайте и у партнёров».' };
+
+test('включение: филиал на сайте без адреса — сообщение называет здание, «Открыть «Филиалы»» ведёт в раздел «Филиалы»', async () => {
+  reset();
+  onRpc('api_connection_update', () => ({ __error: BRANCH_REFUSAL, status: 409 }));
+  const nav = [];
+  openConnectionCard({ settings: settingsFixture(), connection: { ...P, active: false }, onNavigate: (v, p) => nav.push([v, p]), tab: 'main' });
+  const m = modal('conn');
+  const active = byAttr(m, 'id', 'apic-f-active')[0];
+  active.checked = true; active.dispatchEvent({ type: 'change' });
+  buttonByText(m, /^Сохранить$/).click();
+  await tick();
+  assert.ok(textOf(m).includes('у здания «Чиланзар»'), 'сообщение не называет здание');
+  assert.ok(!buttonByText(m, /Открыть «Компанию»/), 'кнопка ведёт в «Компанию», а адрес — в «Филиалах»');
+  buttonByText(m, /Открыть «Филиалы»/).click();
+  assert.deepEqual(nav, [['settings', { section: 'branches' }]]);
+  assert.ok(!modal('conn'), 'карточка не закрылась при уходе');
+});

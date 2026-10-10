@@ -55,12 +55,18 @@ let state = { section: null, readOnly: false };   // null = hub; else one of LOO
 
 const refs = { container: null, onNavigate: null };
 
-export async function renderSettingsHub(container, { onNavigate } = {}) {
+export async function renderSettingsHub(container, { onNavigate, payload = null, onPayload = null } = {}) {
     refs.container  = container;
     refs.onNavigate = onNavigate;
     state = { section: null, readOnly: false };
     hubQuery = '';
+    // CLINIC_API_STEP7_V1 — дорога в «Филиалы» из окна подключения (решение владельца
+    // 11 по зданиям): переход с { section: 'branches' } открывает раздел сразу; хаб
+    // из кэша оболочки получает такой переход через onPayload. Только «Филиалы»:
+    // остальные разделы открываются плитками.
+    if (typeof onPayload === 'function') onPayload((p) => { if (p && p.section === 'branches' && refs.container === container) openSection('branches'); });
     await repaint();
+    if (payload && payload.section === 'branches') openSection('branches');
 }
 
 async function repaint() {

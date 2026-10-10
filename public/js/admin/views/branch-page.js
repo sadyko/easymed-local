@@ -12,7 +12,14 @@
 //   • остальные здания — всё здесь (branches), правит главное здание;
 //   • в филиале (secondary) — всё только видно: ведёт главное здание.
 // Сохраняется только изменённое (как «Компания», ревью C1 шага 3): нетронутое
-// поле не может быть затёрто ничем. Страница вместо окна макета (решение Р12):
+// поле не может быть затёрто ничем.
+//
+// CLINIC_API_STEP7_V1 — решение владельца 11 по зданиям: пока включено
+// подключение API (window.CLINIC.api_address_required), у филиала, показанного
+// на сайте (работает и «Показывать на сайте»), адрес для партнёров обязателен —
+// звёздочки, строка над полями и проверка до записи; отказ сервера
+// partner_address_required — объяснение под полем и фокус, флаг исправляется.
+// Своё здание главного (адрес — «Компания») и филиал-установка — без этого. Страница вместо окна макета (решение Р12):
 // карточки шага 3 переиспользуются как есть, на телефоне — один столбец.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag } from '../ui.js';
@@ -21,8 +28,10 @@ import { isRouteAllowed } from '../permissions.js';   // ревью 6 — «Из
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { triGroup, labeled } from './company-fields.js';
 import { addressCard, mapCard } from './company-address.js';   // те же карточки, что «Компания»
-import { NAME_MAX } from '../../shared/clinic-profile.js';
-import { BRANCH_EDIT_COLUMNS, OWN_FROM_COMPANY, BRANCH_MESSAGES, LANDMARK_MAX, PHONE_MAX, normalizeBranch, branchProblems, overlayOwnBuilding } from '../../shared/branch-profile.js';
+import { NAME_MAX, partnerAddressProblems } from '../../shared/clinic-profile.js';   // CLINIC_API_STEP7_V1 — partnerAddressProblems
+import { refreshClinicBrand } from '../clinic-context.js?v=localclinic2';   // CLINIC_API_STEP7_V1 — свежий флаг «адрес обязателен»
+import { BRANCH_EDIT_COLUMNS, OWN_FROM_COMPANY, BRANCH_MESSAGES, LANDMARK_MAX, PHONE_MAX, normalizeBranch, branchProblems, overlayOwnBuilding,
+    branchShownToPartners } from '../../shared/branch-profile.js';   // CLINIC_API_STEP7_V1 — branchShownToPartners
 import { readBranchHours, writeBranchHours, hoursProblem } from '../../shared/branch-hours.js';
 import { hoursCard, DAY_LABEL } from './branch-hours-card.js';   // задача 14 — часы и предупреждение о сотрудниках, чьё время закроется
 
@@ -36,6 +45,8 @@ const ADDRESS_COLUMNS = ['country_code', 'region_code', 'district_code', 'street
 // Порядок экрана: неудачное сохранение ведёт к первому неверному полю (как «Компания»).
 const FIELD_ORDER = ['name', 'phone', 'country_code', 'region_code', 'district_code', 'street_ru', 'maps_url', 'hours'];
 const same = (a, b) => String(a == null ? '' : a) === String(b == null ? '' : b);
+// CLINIC_API_STEP7_V1 — включено ли подключение API (флаг записи клиники, только главное здание).
+const apiAddressRequired = () => !!(typeof window !== 'undefined' && window.CLINIC && window.CLINIC.api_address_required);
 
 function card(icon, title, ...body) {
     return h('div', { class: 'card' },
@@ -85,7 +96,7 @@ export async function renderBranchPage(container, opts = {}) {
     const activeChk = h('input', { type: 'checkbox' });
     activeChk.checked = Number(state.active) !== 0;
     activeChk.disabled = lockAll;
-    activeChk.addEventListener('change', () => { state.active = activeChk.checked ? 1 : 0; });
+    activeChk.addEventListener('change', () => { state.active = activeChk.checked ? 1 : 0; syncRequired(); });
 
     // ---- телефон для пациентов ----
     const phone = phoneInput('phone', '+998 71 200 12 00', { value: state.phone });
@@ -111,8 +122,12 @@ export async function renderBranchPage(container, opts = {}) {
     const legacy = !own && String(state.address || '').trim()
         ? h('p', { class: 'cpf-hint' }, document.createTextNode(trf('Прежний адрес из списка: {address}', { address: String(state.address).trim() })))
         : null;
+    // CLINIC_API_STEP7_V1 — адрес обязателен: подключение включено, адрес правится
+    // здесь (не своё здание главного, не филиал-установка) и здание видно на сайте.
+    const needsAddress = () => apiAddressRequired() && !lockCompany && branchShownToPartners(state);
     const address = addressCard(state, {
         title: 'Адрес для партнёров и сайта', disabled: lockCompany, after: [landmark.node, legacy].filter(Boolean),
+        required: needsAddress(),   // CLINIC_API_STEP7_V1
         hint: 'Страна, город и район — из списков, как при регистрации пациента; партнёры получают их коды. Ориентир помогает пациенту найти вход.',
     });
     Object.assign(errs, address.errs);
@@ -123,9 +138,12 @@ export async function renderBranchPage(container, opts = {}) {
     const pubChk = h('input', { type: 'checkbox' });
     pubChk.checked = Number(state.show_public) !== 0;
     pubChk.disabled = lockAll;
-    pubChk.addEventListener('change', () => { state.show_public = pubChk.checked ? 1 : 0; });
+    pubChk.addEventListener('change', () => { state.show_public = pubChk.checked ? 1 : 0; syncRequired(); });
     const pubCard = card('Globe', 'Сайт и партнёры', checkRow('Показывать филиал на сайте и у партнёров', pubChk),
         h('p', { class: 'cpf-hint' }, 'Скрытый филиал работает в программе как обычно, но не виден пациентам на сайте и у партнёров; его врачей там тоже не покажут.'));
+
+    // CLINIC_API_STEP7_V1 — звёздочки и строка «адрес обязателен» по текущему состоянию.
+    function syncRequired() { address.setRequired(needsAddress()); }
 
     // ---- часы работы (задача 14) ----
     const hours = readBranchHours(state.working_hours, state.is_24_7);
@@ -200,6 +218,10 @@ export async function renderBranchPage(container, opts = {}) {
                 const keys = Object.keys(payload);
                 if (!keys.length) { showProblems({}); toast(tr('Нет изменений'), 'info'); return; }
                 const problems = problemsFor(v, keys);
+                // CLINIC_API_STEP7_V1 — решение владельца 11: пока включено подключение,
+                // адрес филиала на сайте обязателен целиком, что бы ни меняли (сервер,
+                // routes/db.js, откажет так же).
+                if (needsAddress()) for (const [k, msg] of Object.entries(partnerAddressProblems(v, availability()))) problems[k] = msg;
                 showProblems(problems, { focus: true });
                 if (Object.keys(problems).length) { toast(tr('Проверьте выделенные поля.'), 'fail'); return; }
                 // «Каким врачам какое время закроется» — до записи (спецификация).
@@ -224,6 +246,18 @@ export async function renderBranchPage(container, opts = {}) {
             // (вторая «Добавить» завела бы его ещё раз).
             else if (isNew && data && data.id) await renderBranchPage(container, { ...opts, row: data });
         } catch (e) {
+            // CLINIC_API_STEP7_V1 — сервер знает, что подключение включено, а флаг экрана
+            // устарел: исправить флаг, поставить звёздочки, показать под полями, чего не
+            // хватает (та же partnerAddressProblems), и вести к первому полю.
+            if (e && e.code === 'partner_address_required' && !lockCompany) {
+                if (typeof window !== 'undefined' && window.CLINIC) window.CLINIC.api_address_required = true;
+                syncRequired();
+                const missing = partnerAddressProblems(collect(), availability());
+                if (e.field && !missing[e.field] && errs[e.field]) missing[e.field] = e.message;
+                showProblems(missing, { focus: true });
+                toast(tr(e.message || 'Проверьте выделенные поля.'), 'fail');
+                return;
+            }
             // Сервер назвал поле (/api/db: { field, message } — те же правила, что у экрана): объяснение под ним.
             const field = e && e.field === 'working_hours' ? 'hours' : e && e.field;
             if (field && e.message && errs[field]) showProblems({ [field]: e.message }, { focus: true });
@@ -284,4 +318,7 @@ export async function renderBranchPage(container, opts = {}) {
         ...notes,
         h('div', { class: 'cpf-stack' }, ...cards)));
     map.load(); await address.load();   // списки адреса грузятся уже с сохранёнными кодами
+    // CLINIC_API_STEP7_V1 — флаг мог устареть (подключение включили или выключили в
+    // другом окне): перечитать запись клиники и поставить звёздочки по свежему.
+    if (!lockCompany) refreshClinicBrand(supabase).then(syncRequired).catch(() => {});
 }

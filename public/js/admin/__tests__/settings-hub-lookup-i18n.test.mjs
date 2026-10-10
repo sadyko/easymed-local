@@ -76,3 +76,27 @@ test('пустой справочник и окно «Добавить» — п�
   assert.ok(!/\bAdd\b/.test(modalText), 'заголовок окна по-английски');
   assert.ok(modalText.includes('Добавить: Категории пациентов'));
 });
+
+// CLINIC_API_STEP7_V1 — дорога в «Филиалы» из окна подключения (решение владельца 11
+// по зданиям): переход в хаб с { section: 'branches' } открывает раздел сразу;
+// кэшированный хаб получает переход через onPayload. Другие разделы так не открываются.
+test('хаб: payload { section: "branches" } открывает «Филиалы»; переход в кэшированный хаб — тоже; иной раздел — нет', async () => {
+  perms.setFullAccess('Admin');
+  const inBranches = (root) => byClass(root, 'brf-list').length > 0;
+  const root = mk('div');
+  await renderSettingsHub(root, { payload: { section: 'branches' } });
+  await tick();
+  assert.ok(inBranches(root), 'переход с section: branches не открыл «Филиалы»');
+  let hook = null;
+  const root2 = mk('div');
+  await renderSettingsHub(root2, { onPayload: (fn) => { hook = fn; } });
+  await tick();
+  assert.equal(typeof hook, 'function', 'хаб не подписался на переходы оболочки');
+  assert.ok(!inBranches(root2) && byClass(root2, 'set-row-link').length, 'без payload — плитки хаба');
+  hook({ section: 'patient_categories' });
+  await tick();
+  assert.ok(byClass(root2, 'set-row-link').length, 'иной раздел открылся переходом');
+  hook({ section: 'branches' });
+  await tick();
+  assert.ok(inBranches(root2), 'переход в кэшированный хаб не открыл «Филиалы»');
+});

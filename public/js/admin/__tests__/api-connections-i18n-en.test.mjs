@@ -55,3 +55,28 @@ test('en: страница, окна и вкладки карточки — бе
   }
   assert.deepEqual(out, [], 'кириллица на английском экране:\n' + out.join('\n'));
 });
+
+// CLINIC_API_STEP7_V1 — решение владельца 11 по зданиям: отказ включения из-за
+// филиала на сайте на английском — фраза сервера переведена по шаблону (имя здания
+// — значение), кнопка «Открыть «Филиалы»» — тоже; ни одной кириллической буквы.
+test('en: отказ «филиал на сайте без адреса» — переведённая фраза с именем здания и «Open “Branches”»', async () => {
+  reset();
+  const fx = fixture();
+  const template = 'Подключение нельзя включить: у здания «{name}», которое показывается на сайте, не заполнен адрес для партнёров — город или область, район и улица на русском. Заполните его в «Филиалах» или снимите там «Показывать филиал на сайте и у партнёров».';
+  onRpc('api_connection_update', () => ({ status: 409, __error: { code: 'branch_address_required',
+    message: template.replace('{name}', 'Chilanzar'), template, params: { name: 'Chilanzar' } } }));
+  const conn = { ...fx.connections[1], active: false };
+  openConnectionCard({ settings: fx, connection: conn, tab: 'main', onNavigate: () => {} });
+  const m = document.body.children.find((n) => n.attrs && n.attrs['data-apic-modal'] === 'conn');
+  const active = walk(m).find((n) => n.attrs && n.attrs.id === 'apic-f-active');
+  active.checked = true; active.dispatchEvent({ type: 'change' });
+  walk(m).find((n) => n.tagName === 'BUTTON' && n.attrs['data-apic-act'] === 'save').click();
+  await tick();
+  const out = [];
+  leaks(m, 'card', out);
+  assert.deepEqual(out, [], 'кириллица в отказе на английском экране:\n' + out.join('\n'));
+  const text = walk(m).map((n) => n._t || '').join('');
+  assert.ok(text.includes('the building “Chilanzar”'), 'фраза сервера не переведена: ' + text.slice(0, 300));
+  assert.ok(text.includes('Open “Branches”'));
+  document.body.children.length = 0;
+});

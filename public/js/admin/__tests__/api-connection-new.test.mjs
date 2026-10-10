@@ -99,3 +99,22 @@ test('текст «Скопировать всё»: секрет — тольк�
   assert.ok(withHook.includes('Разрешено: О клинике, Заявки'));
   assert.ok(withHook.includes('публичный сервер'));
 });
+
+// CLINIC_API_STEP7_V1 — решение владельца 11 по зданиям: создание включённого
+// подключения отказано из-за филиала на сайте без адреса — сообщение называет
+// здание, «Подключение включено» снято, дорога — в «Филиалы».
+test('создание включённого: филиал на сайте без адреса — сообщение называет здание, «Открыть «Филиалы»»', async () => {
+  reset(); draftServer();
+  const nav = [];
+  onRpc('api_connection_create', () => ({ __error: { code: 'branch_address_required',
+    message: 'Подключение нельзя включить: у здания «Чиланзар», которое показывается на сайте, не заполнен адрес для партнёров — город или область, район и улица на русском. Заполните его в «Филиалах» или снимите там «Показывать филиал на сайте и у партнёров».' }, status: 409 }));
+  await openNewConnection({ settings: settingsFixture(), onNavigate: (v, p) => nav.push([v, p]) });
+  const m = modal('conn-new');
+  type(field(m, 'apic-f-name'), 'med24.uz');
+  buttonByText(m, /Создать подключение и ключ/).click();
+  await tick();
+  assert.ok(textOf(m).includes('у здания «Чиланзар»'));
+  assert.equal(field(m, 'apic-f-active').attrs.checked, undefined, '«Подключение включено» не снято');
+  buttonByText(m, /Открыть «Филиалы»/).click();
+  assert.deepEqual(nav, [['settings', { section: 'branches' }]]);
+});

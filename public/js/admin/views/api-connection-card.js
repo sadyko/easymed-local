@@ -11,7 +11,7 @@ import { h, Icon, Tag, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { KIND_INFO, KEY_TTL_LABEL, normalizeConnection, connectionProblems, orderedScopes, orderedEvents, normalizeIpList } from '../../shared/api-connections.js';
 import { rpc, secretField, section, basicsFields, accessSections, hooksSection, securityFields, activeField, openModal,
-  openModalByKey, addressBlock, journalTable, expiryTag } from './api-ui.js';
+  openModalByKey, addressBlock, isAddressRefusal, journalTable, expiryTag } from './api-ui.js';
 import { openHandover } from './api-connection-new.js';
 
 const TABS = [['main', 'Основное'], ['access', 'Доступ'], ['hooks', 'Уведомления'], ['key', 'Ключ'], ['log', 'Журнал']];
@@ -34,6 +34,7 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
   let errs = {};
   let confirm = '';   // 'key' | 'secret' | 'delete'
   let fail = '';
+  let failBranches = false;   // CLINIC_API_STEP7_V1 — отказ из-за филиала на сайте: дорога в «Филиалы»
   let journal = null;
   let m = null;
   const reveal = (what) => async () => (await rpc('api_connection_reveal', { id: c.id, what })).value;
@@ -71,7 +72,7 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
   function paint() {
     paintTabs();
     clear(body);
-    if (fail) body.appendChild(addressBlock(fail, onNavigate, () => m.close()));
+    if (fail) body.appendChild(addressBlock(fail, onNavigate, () => m.close(), { branches: failBranches }));
     if (current === 'main') paintMain();
     else if (current === 'access') {
       body.appendChild(accessSections(d, errs, { disabled: !can.admin }));
@@ -181,7 +182,7 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
       toast(tr('Сохранено'), 'success');
       if (onChanged) onChanged();
     } catch (e) {
-      if (e.code === 'partner_address_required') { fail = e.message; current = 'main'; paint(); return; }
+      if (isAddressRefusal(e)) { fail = e.message; failBranches = e.code === 'branch_address_required'; current = 'main'; paint(); return; }
       toast(tr(e.message), 'fail');
     }
   }

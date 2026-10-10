@@ -1070,3 +1070,91 @@ test('ревью 7: у своего здания главного список �
     items(root)[0].click(); await settle(80);
     assert.doesNotMatch(textOf(root), /ул\. Старая, 5/);
 });
+
+// ===========================================================================
+// CLINIC_API_STEP7_V1 — решение владельца 11 ПО ЗДАНИЯМ: пока включено подключение
+// API (window.CLINIC.api_address_required), у филиала, показанного на сайте, адрес
+// для партнёров обязателен — звёздочки, строка над полями, проверка до записи;
+// отказ сервера partner_address_required — ошибка под полем и фокус (как «Компания»,
+// ревью №9). Скрытый филиал, своё здание главного и филиал-установка — без этого.
+// ===========================================================================
+const HALF = { id: 5, name: 'Юнусабад', country_code: 'UZ', region_code: 'tashkent-city', district_code: '', street_ru: 'ул. Мира, 1' };
+const stars = (root) => ['Город / область', 'Район'].map((l) => labelText(fieldBox(root, l).children.find((c) => c.tagName === 'LABEL')).includes('*'));
+async function withApiOn(on, fn) {
+    const prev = globalThis.window.CLINIC.api_address_required;
+    globalThis.window.CLINIC.api_address_required = on;
+    try { await fn(); } finally { globalThis.window.CLINIC.api_address_required = prev; }
+}
+
+test('подключение включено, филиал на сайте: звёздочки и строка; без района — объяснение под полем, записи нет', async () => {
+    await withApiOn(true, async () => {
+        const { root } = await openPage(HALF);
+        assert.deepEqual(stars(root), [true, true]);
+        assert.match(textOf(root), /Пока включены подключения API, адрес для партнёров обязателен/);
+        type(triInput(root, 'Название филиала', 'en'), 'Yunusabad');
+        await save(root);
+        assert.equal(writes.length, 0, 'филиал на сайте без района ушёл на сервер');
+        assert.ok(fieldError(root, 'Район'), 'нет объяснения под «Район»');
+    });
+});
+
+test('подключение включено: снятая отметка «Показывать на сайте» снимает звёздочки, и скрыть можно без адреса', async () => {
+    await withApiOn(true, async () => {
+        const { root } = await openPage(HALF);
+        const pub = fieldInput(root, 'Показывать филиал на сайте и у партнёров');
+        pub.checked = false; pub.dispatchEvent({ type: 'change', target: pub });
+        assert.deepEqual(stars(root), [false, false], 'звёздочки у скрытого филиала');
+        await save(root);
+        assert.deepEqual(writes[0] && writes[0].values, { show_public: 0 });
+    });
+});
+
+test('подключение включено, филиал скрыт: звёздочек нет; отметка «Показывать на сайте» их ставит', async () => {
+    await withApiOn(true, async () => {
+        const { root } = await openPage({ ...HALF, show_public: 0 });
+        assert.deepEqual(stars(root), [false, false]);
+        type(triInput(root, 'Название филиала', 'en'), 'Yunusabad');
+        await save(root);
+        assert.equal(writes.length, 1, 'скрытый филиал не проверяется');
+        const pub = fieldInput(root, 'Показывать филиал на сайте и у партнёров');
+        pub.checked = true; pub.dispatchEvent({ type: 'change', target: pub });
+        assert.deepEqual(stars(root), [true, true]);
+    });
+});
+
+test('подключений нет — звёздочек нет, филиал без района сохраняется (как в шаге 4)', async () => {
+    await withApiOn(false, async () => {
+        const { root } = await openPage(HALF);
+        assert.deepEqual(stars(root), [false, false]);
+        type(triInput(root, 'Название филиала', 'en'), 'Yunusabad');
+        await save(root);
+        assert.equal(writes.length, 1);
+    });
+});
+
+test('своё здание главного и филиал-установка: адрес только виден — звёздочек нет и при включённом подключении', async () => {
+    await withApiOn(true, async () => {
+        const own = await openPage({ ...HALF, id: 1, name: 'Главный корпус' }, { own: true, company: { country_code: 'UZ', region_code: '', district_code: '', street_ru: '' } });
+        assert.deepEqual(stars(own.root), [false, false], 'своё здание главного проверяется только через «Компанию»');
+        const sec = await openPage(HALF, { secondary: true });
+        assert.deepEqual(stars(sec.root), [false, false], 'в филиале-установке правило не действует');
+    });
+});
+
+test('флаг устарел (выключен): отказ сервера partner_address_required — ошибка под полем, фокус, звёздочки, флаг включён', async () => {
+    await withApiOn(false, async () => {
+        const { root } = await openPage(HALF);
+        const realFetch = globalThis.fetch;
+        const msg = 'Пока включены подключения API, у здания, которое показывается на сайте, адрес для партнёров обязателен: город или область, район и улица на русском. Заполните его или снимите «Показывать филиал на сайте и у партнёров».';
+        globalThis.fetch = async (url, opts) => (String(url).startsWith('/api/db') && JSON.parse(opts.body || '{}').op === 'update'
+            ? { ok: false, status: 400, json: async () => ({ error: { code: 'partner_address_required', message: msg, field: 'district_code' } }) }
+            : realFetch(url, opts));
+        try {
+            type(triInput(root, 'Название филиала', 'en'), 'Yunusabad');
+            await save(root);
+            assert.equal(globalThis.window.CLINIC.api_address_required, true, 'флаг не исправлен');
+            assert.ok(fieldError(root, 'Район'), 'нет ошибки под «Район»');
+            assert.deepEqual(stars(root), [true, true], 'звёздочки не появились');
+        } finally { globalThis.fetch = realFetch; }
+    });
+});

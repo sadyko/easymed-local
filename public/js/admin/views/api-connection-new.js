@@ -11,7 +11,7 @@ import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { DEFAULTS, READ_SCOPES, WRITE_SCOPES, SCOPE_INFO, normalizeConnection, connectionProblems } from '../../shared/api-connections.js';
 import { rpc, secretField, section, fieldBox, kindPicker, basicsFields, accessSections, hooksSection, securityFields,
-  activeField, openModal, addressBlock, permChips, copyText } from './api-ui.js';
+  activeField, openModal, addressBlock, isAddressRefusal, permChips, copyText } from './api-ui.js';
 
 const KEY_HINT = 'Ключ создан сам. Скопируйте его и передайте вместе с адресом API. Он сохранится, когда вы нажмёте «Создать подключение и ключ»; позже его можно открыть в карточке подключения — видят его только администраторы.';
 const defaultsOf = (k) => { const d = DEFAULTS[k] || DEFAULTS.partner; return { scopes: [...d.scopes], webhook_events: [...d.events], rate_limit: d.rate_limit, key_ttl: d.key_ttl }; };
@@ -23,6 +23,7 @@ export async function openNewConnection({ settings, onCreated = null, onNavigate
   const d = { kind: 'partner', name: '', site_url: '', contact: '', webhook_url: '', ip_allow: '', active: ready, ...defaultsOf('partner') };
   let errs = {};
   let fail = '';   // отказ сервера «нет адреса для партнёров» — с дорогой в «Компанию»
+  let failBranches = false;   // CLINIC_API_STEP7_V1 — или в «Филиалы»: адрес филиала на сайте
   let m = null;
   const keyBox = secretField({ label: 'Ключ доступа', value: draft.key, regen: { label: 'Сгенерировать новый', onClick: () => renew('key') } });
   const secretBox = secretField({ label: 'Секрет для подписи уведомлений', value: draft.secret, regen: { label: 'Новый секрет', onClick: () => renew('secret') } });
@@ -38,7 +39,7 @@ export async function openNewConnection({ settings, onCreated = null, onNavigate
   }
   function paint() {
     clear(body);
-    if (fail) body.appendChild(addressBlock(fail, onNavigate, () => m.close()));
+    if (fail) body.appendChild(addressBlock(fail, onNavigate, () => m.close(), { branches: failBranches }));
     body.appendChild(section('Кто подключается', '', kindPicker(d.kind, (k) => { Object.assign(d, { kind: k }, defaultsOf(k)); paint(); })));
     body.appendChild(section('Основное', '', basicsFields(d, errs, { isNew: true })));
     body.appendChild(section('Ключ доступа', 'подключение передаёт его в каждом запросе', keyBox, h('p', { class: 'hint' }, KEY_HINT)));
@@ -65,7 +66,7 @@ export async function openNewConnection({ settings, onCreated = null, onNavigate
       if (onCreated) onCreated();
     } catch (e) {
       createBtn.disabled = false;
-      if (e.code === 'partner_address_required') { fail = e.message; d.active = false; paint(); return; }
+      if (isAddressRefusal(e)) { fail = e.message; failBranches = e.code === 'branch_address_required'; d.active = false; paint(); return; }
       toast(tr(e.message), 'fail');
     }
   });
