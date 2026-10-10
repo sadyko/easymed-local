@@ -738,3 +738,50 @@ test('ширина телефона: две колонки .col в обёртк�
     }
     assert.ok(!('width' in side.style) && !('maxWidth' in side.style), 'правая колонка не задаёт ширину в стиле');
 });
+
+// ===========================================================================
+// Задача 14 — «Компания» в филиале: общее для клиники — только просмотр
+// ===========================================================================
+const isOff = (n) => !!n && (n.disabled === true || n.attrs.disabled !== undefined);
+async function openAs(role, extra = {}) {
+    const prev = globalThis.window.CLINIC.building_role;
+    globalThis.window.CLINIC.building_role = role;
+    try { return await open(extra); } finally { globalThis.window.CLINIC.building_role = prev; }
+}
+
+test('филиал: названия, описание, лицензия, цвет, сайт и соцсети, логотипы — выключены; вверху заметка; адрес этого здания', async () => {
+    const { COMPANY_BUILDING } = await import('../../shared/clinic-profile.js');
+    const root = await openAs('secondary', { name_uz: 'Shifo', website: 'https://shifo.uz', logo_data_url: 'data:image/png;base64,T0xE' });
+    for (const lang of ['ru', 'uz', 'en']) {
+        assert.ok(isOff(triInput(root, 'Название клиники', lang)), 'название ' + lang);
+        assert.ok(isOff(triInput(root, 'Коротко о клинике', lang)), 'описание ' + lang);
+    }
+    for (const label of ['Номер лицензии', 'Фирменный цвет', 'Сайт', 'Telegram-бот', 'Telegram-канал', 'Instagram']) {
+        assert.ok(isOff(fieldInput(root, label)), label + ' — общее для клиники, правится в главном здании');
+    }
+    for (const title of ['Квадратный, 1:1', 'Вертикальный']) {
+        const btns = descendants(logoTile(root, title)).filter((n) => n.tagName === 'BUTTON');
+        assert.ok(btns.length > 0 && btns.every(isOff), 'кнопки логотипа «' + title + '» выключены');
+    }
+    const note = descendants(root).find((n) => n.attrs && n.attrs.role === 'note');
+    assert.ok(note, 'нет заметки филиала');
+    assert.match(textOf(note), /^Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании\./);
+    assert.match(textOf(root), /Адрес этого здания/);
+
+    // Своё у здания — открыто и сохраняется; уходит ровно COMPANY_BUILDING.
+    for (const label of ['Адрес в документах', 'Телефон', 'Электронная почта']) assert.ok(!isOff(fieldInput(root, label)), label);
+    type(fieldInput(root, 'Адрес в документах'), 'ул. Филиальная, 7');
+    await save(root);
+    assert.ok(lastUpdate, 'запрос ушёл');
+    assert.deepEqual(Object.keys(lastUpdate).sort(), [...COMPANY_BUILDING].sort());
+    assert.equal(lastUpdate.address, 'ул. Филиальная, 7');
+});
+
+test('главное здание: всё открыто, заметки филиала нет, сохраняются все колонки «Компании»', async () => {
+    const root = await openAs('main');
+    assert.ok(!isOff(triInput(root, 'Название клиники', 'ru')));
+    assert.ok(!isOff(fieldInput(root, 'Сайт')));
+    assert.ok(!descendants(root).some((n) => n.attrs && n.attrs.role === 'note'), 'заметки филиала нет');
+    await save(root);
+    assert.deepEqual(Object.keys(lastUpdate).sort(), [...COMPANY_COLUMNS].sort());
+});

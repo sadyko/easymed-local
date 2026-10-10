@@ -49,6 +49,7 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 import { refreshClinicBrand } from '../clinic-context.js?v=localclinic2';
 // CLINIC_PROFILE_V1 — профиль клиники: колонки и проверки; поля на трёх языках.
 import { COMPANY_COLUMNS, NAME_MAX, ABOUT_MAX, normalizeProfile, companyProblems } from '../../shared/clinic-profile.js';
+import { COMPANY_BUILDING } from '../../shared/clinic-profile.js';   // CLINIC_PROFILE_V1 — филиал сохраняет только своё
 import { triGroup, labeled } from './company-fields.js';
 import { logosCard } from './company-logos.js';
 import { addressCard, mapCard } from './company-address.js';
@@ -77,8 +78,19 @@ const refs = { container: null, previewEl: null, saveBtn: null, errNote: null, c
     errs: {}, geoAvailability: () => ({}), logos: null, address: null, map: null,
     patientEl: null, langBtns: null, previewLang: 'ru' };
 
+// CLINIC_PROFILE_V1 — «КОМПАНИЯ» В ФИЛИАЛЕ. Общее для клиники (названия,
+// описание, логотипы, сайт и соцсети, лицензия, цвет — COMPANY_CLINIC_WIDE)
+// приезжает из главного здания (branch-sync/catalogue.js), и /api/db
+// отказывает его правке 409. Поэтому здесь эти поля только видны, вверху —
+// объяснение, а «Сохранить» шлёт ровно своё у здания (COMPANY_BUILDING):
+// адрес для бланков, телефон, почту, адрес для партнёров и карту.
+const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.';
+let secondary = false;
+const isSecondaryBuilding = () => !!(typeof window !== 'undefined' && window.CLINIC && window.CLINIC.building_role === 'secondary');
+
 export async function renderDocumentsSettings(container, { onNavigate } = {}) {
     refs.container = container;
+    secondary = isSecondaryBuilding();   // CLINIC_PROFILE_V1
     state = { ...DEFAULTS };
     mount(onNavigate);
     await load();
@@ -104,11 +116,11 @@ function mount(onNavigate) {
     const linksCard = buildLinksCard();
     // CLINIC_PROFILE_V1 — два логотипа (company-logos.js); прежний логотип
     // «Реквизитов» ушёл в квадратную плитку.
-    refs.logos = logosCard(state, { onChange: () => renderPreview() });
+    refs.logos = logosCard(state, { onChange: () => renderPreview(), disabled: secondary });   // CLINIC_PROFILE_V1 — в филиале логотипы главного здания
     // CLINIC_PROFILE_V1 — адрес для партнёров и сайта (списки справочника,
     // улица RU / UZ / EN) и карта с маршрутом — company-address.js. Адрес на
     // бланках — «Адрес в документах» в «Реквизитах»: списки его не меняют.
-    refs.address = addressCard(state, { onChange: () => renderPreview() });
+    refs.address = addressCard(state, { onChange: () => renderPreview(), secondary });   // CLINIC_PROFILE_V1 — «Адрес этого здания» в филиале
     refs.map = mapCard(state, { onChange: () => renderPreview() });
     Object.assign(refs.errs, refs.address.errs, { maps_url: refs.map.err });
     refs.geoAvailability = () => refs.address.availability();
@@ -144,6 +156,16 @@ function mount(onNavigate) {
             ),
             h('div', { class: 'page-head-actions' }, refs.saveBtn),
         ),
+        // CLINIC_PROFILE_V1 — филиал: строка-объяснение первой (вид — как
+        // «Мой профиль» врача из главного здания, doctor-profile.js).
+        secondary ? h('div', {
+            class: 'docprof-managed', role: 'note',
+            style: {
+                display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px',
+                padding: '9px 12px', borderRadius: '9px', fontSize: '12.5px', lineHeight: 1.5,
+                background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)', color: 'var(--ink-600)',
+            },
+        }, Icon('Building', { size: 15 }), h('span', null, COMPANY_MAIN_ONLY)) : null,
         // CLINIC_PROFILE_V1 — слева карточки профиля стопкой, справа
         // предпросмотры; на узком экране — один столбец (flexWrap). Ширину
         // правой колонки на широком экране держит CSS (.cpf-side).
@@ -167,12 +189,12 @@ function buildForm(card) {
     // CLINIC_PROFILE_V1 — название и описание на трёх языках. RU-название —
     // clinic_name: его печатают документы и показывает строка под меню.
     const names = triGroup('Название клиники', null, {
-        key: 'name', cellLabel: 'Название', max: NAME_MAX,
+        key: 'name', cellLabel: 'Название', max: NAME_MAX, disabled: secondary,   // CLINIC_PROFILE_V1 — филиал: из главного здания
         hint: 'RU печатается на документах. UZ и EN видят партнёры и программа на узбекском и английском.',
         onInput: (l, v) => { state[l === 'ru' ? 'clinic_name' : 'name_' + l] = v; renderPreview(); },
     });
     const about = triGroup('Коротко о клинике', null, {
-        key: 'about', cellLabel: 'Описание', textarea: true, max: ABOUT_MAX,
+        key: 'about', cellLabel: 'Описание', textarea: true, max: ABOUT_MAX, disabled: secondary,   // CLINIC_PROFILE_V1
         hint: 'Два-три предложения: чем клиника занимается. Партнёры показывают это под названием.',
         onInput: (l, v) => { state['about_' + l] = v; renderPreview(); },
     });
@@ -189,8 +211,8 @@ function buildForm(card) {
     const phoneInp   = phoneInput('phone', '+998 71 200 12 00');
     phoneInp.addEventListener('input', () => { state.phone = phoneInp.value; renderPreview(); });
     const emailInp   = h('input', { type: 'text', oninput: onText('email') });
-    const licenseInp = h('input', { type: 'text', oninput: onText('license') });
-    const accentInp  = h('input', { type: 'color', oninput: onText('accent_color') });
+    const licenseInp = h('input', { type: 'text', oninput: onText('license'), disabled: secondary });   // CLINIC_PROFILE_V1 — филиал: из главного здания
+    const accentInp  = h('input', { type: 'color', oninput: onText('accent_color'), disabled: secondary });
 
     refs.controls = { names, about, addressInp, phoneInp, emailInp, licenseInp, accentInp };
     refs.errNote = h('div', { class: 'empty', style: { display: 'none', margin: '0 16px 12px' } },
@@ -233,7 +255,8 @@ function buildLinksCard() {
     refs.links = {};
     const grid = h('div', { class: 'cpf-grid' });
     for (const f of LINK_FIELDS) {
-        const ctrl = h('input', { type: 'text', placeholder: f.ph, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', inputmode: f.mode || null });
+        const ctrl = h('input', { type: 'text', placeholder: f.ph, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', inputmode: f.mode || null,
+            disabled: secondary });   // CLINIC_PROFILE_V1 — филиал: ссылки клиники — из главного здания
         const box = labeled(f.label, ctrl, { key: f.key, hint: f.hint, prefix: Icon(f.icon, { size: 15 }) });
         ctrl.addEventListener('input', () => { state[f.key] = ctrl.value; box.err.set(''); renderPreview(); });
         refs.links[f.key] = box;
@@ -330,9 +353,13 @@ async function save() {
         // CLINIC_PROFILE_V1 — «эти поля» теперь COMPANY_COLUMNS; lab_scope
         // среди них нет (его меняет только администратор, в другом месте).
         const payload = {};
-        for (const c of COMPANY_COLUMNS) payload[c] = v[c] == null ? DEFAULTS[c] : v[c];
-        payload.logo_data_url = v.logo_data_url || '';    // null отклоняет база (NOT NULL)
-        payload.accent_color = v.accent_color || '#167873';
+        // CLINIC_PROFILE_V1 — филиал шлёт только своё у здания: общее для
+        // клиники приезжает из главного, и /api/db отказал бы его правке.
+        for (const c of (secondary ? COMPANY_BUILDING : COMPANY_COLUMNS)) payload[c] = v[c] == null ? DEFAULTS[c] : v[c];
+        if (!secondary) {
+            payload.logo_data_url = v.logo_data_url || '';    // null отклоняет база (NOT NULL)
+            payload.accent_color = v.accent_color || '#167873';
+        }
         const { data, error } = await supabase.from('doc_settings').update(payload).eq('id', 1).select().single();
         if (error) throw error;
         setState(data || payload);
