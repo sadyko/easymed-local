@@ -38,7 +38,7 @@ import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug1
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
-import { consultPrice as consultPriceRule, consultOffered } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
+import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -1332,6 +1332,9 @@ const RV_WEEK    = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
 // Шаг и длительность повторного визита. Это НЕ расчёт расписания: сервер
 // принимает их как аргументы и сам решает, что из этого свободно.
+// DOCTOR_PROFILE_V1 (ревью шага 5, №1) — длительность визита по виду
+// консультации — длительность вида (consultMinutes); 20 — шаг сетки и
+// длительность визита без вида.
 const RV_SLOT_MIN = 20;
 function rvPad(n) { return String(n).padStart(2, '0'); }
 function minToHhmm(m) { return `${rvPad(Math.floor(m / 60))}:${rvPad(m % 60)}`; }
@@ -1425,7 +1428,7 @@ async function openRevisitModal(ctx) {
     if (cid) {
         const [{ data: ctData }, { data: dcData }] = await Promise.all([
             supabase.from('consultation_types')
-                .select('id, name_ru, name_uz, sort_order, active, price')   // DOCTOR_PROFILE_V1 — общая цена вида
+                .select('id, name_ru, name_uz, sort_order, active, price, duration_minutes')   // DOCTOR_PROFILE_V1 — общая цена и длительность вида
                 .eq('company_id', cid).eq('active', true).order('sort_order', { ascending: true }),
             supabase.from('doctor_consultation_prices')
                 .select('consultation_type_id, price, is_free, available, name_ru, name_uz')
@@ -1453,6 +1456,8 @@ async function openRevisitModal(ctx) {
             ? consultTypes.map(ct => h('option', { value: ct.id }, consultLabel(ct)))
             : [h('option', { value: '' }, 'Консультация')]));
     const commentInput = h('textarea', { rows: '2', placeholder: 'Например: с результатами анализов' });
+    // DOCTOR_PROFILE_V1 (ревью шага 5, №1) — сколько длится визит выбранного вида.
+    const rvMinutes = () => { const ct = consultTypes.find((c) => String(c.id) === String(svcSel.value)); return ct ? consultMinutes(ct) : RV_SLOT_MIN; };
 
     // --- calendar state ---
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -1522,7 +1527,7 @@ async function openRevisitModal(ctx) {
         }
         slotsWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 0' } }, 'Загрузка…'));
         const dayIso = rvIso(state.sel.y, state.sel.m, state.sel.d);
-        const day = await loadSlotDay(doctorId, dayIso, RV_SLOT_MIN, { stepMinutes: RV_SLOT_MIN, patientId });
+        const day = await loadSlotDay(doctorId, dayIso, rvMinutes(), { stepMinutes: RV_SLOT_MIN, patientId });   // DOCTOR_PROFILE_V1 — длительность вида, шаг 20
         clear(slotsWrap);
         if (!day || !day.window) {
             slotsWrap.appendChild(h('div', { class: 'rv-pickhint muted' }, Icon('Calendar', { size: 16 }), ' ',
@@ -1566,7 +1571,7 @@ async function openRevisitModal(ctx) {
                 doctor_id:        doctorId,
                 service_id:       null,            // consultation-primary → null (CONSULT_BOOKING_V1)
                 start:            visitDate,
-                duration_minutes: RV_SLOT_MIN,
+                duration_minutes: ct ? consultMinutes(ct) : RV_SLOT_MIN,   // DOCTOR_PROFILE_V1 — длительность вида (ревью №1)
                 status:           'scheduled',
                 notes,
             });
@@ -1660,6 +1665,9 @@ async function openRevisitModal(ctx) {
     document.body.appendChild(overlay);
     document.addEventListener('keydown', onKey);
     renderCal(); renderSlots();
+    // DOCTOR_PROFILE_V1 (ревью шага 5, №1) — другой вид — другая длительность:
+    // свободное время заново, выбранное время снимается (может не поместиться).
+    svcSel.addEventListener('change', () => { state.slot = null; renderSlots(); refreshFootBtn(); });
 }
 
 // ЧЕТВЁРТАЯ РЕАЛИЗАЦИЯ РАСПИСАНИЯ (loadBookedSlots) СТОЯЛА ЗДЕСЬ И УДАЛЕНА.

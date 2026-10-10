@@ -439,3 +439,64 @@ test('DOCTOR_PROFILE_V1: «Виды консультаций» правят на
     for (const k of ["key: 'name_uz'", "key: 'name_en'", "key: 'duration_minutes'", "key: 'api_kind'"]) assert.ok(block.includes(k), k);
     assert.match(block, /beforeSave: \(p\) => prepareConsultTypeSave\(p\)/);
 });
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №1) — «Повторный визит»: свободное время и
+// запись — на длительность выбранного вида консультации (consultMinutes), шаг
+// сетки — прежние 20 минут; смена вида пересчитывает слоты. Раньше и слоты, и
+// визит были на 20 минут при любом виде. Запись сервер здесь отклоняет —
+// проверяется, с какой длительностью она ушла.
+test('DOCTOR_PROFILE_V1: «Повторный визит» — слоты и запись на длительность выбранного вида; смена вида пересчитывает слоты', async () => {
+    seedPrices();
+    const WEEK = JSON.stringify(Object.fromEntries(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map((d) => [d, { on: true, from: '09:00', to: '18:00' }])));
+    const prevHours = DB.prepare('SELECT working_hours FROM users WHERE id = ?').get(PETROV).working_hours;
+    DB.prepare('UPDATE users SET working_hours = ? WHERE id = ?').run(WEEK, PETROV);
+    DB.prepare('UPDATE consultation_types SET duration_minutes = 45 WHERE id = ?').run(LED);
+    const seen = [];
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = (url, opts = {}) => {
+        const u = String(url);
+        if (u === '/api/rpc/calendar_slots' || u === '/api/rpc/calendar_book') {
+            seen.push({ name: u.slice('/api/rpc/'.length), body: JSON.parse(opts.body || '{}') });
+            if (u === '/api/rpc/calendar_book') {
+                return Promise.resolve({ ok: false, status: 400, json: async () => ({ error: { message: 'Запись в тесте не нужна.' } }) });
+            }
+        }
+        return prevFetch(url, opts);
+    };
+    try {
+        document.body.children = [];
+        const container = new El('div');
+        const ctx = { container, visitServiceId: 904, visitId: 1904, patient: { id: 77, lastName: 'Пациент', firstName: 'Тест', mrn: 'P-77', __service: { id: 904, name: 'Приём', doctorId: PETROV, doctorName: 'Петров Пётр' } } };
+        WS.activateWorkspace(ctx);
+        container.appendChild(WS.soapForm(ctx));
+        const btn = container.querySelector('[data-revisit-btn]');
+        btn.dispatch('click');
+        await btn._pending;
+        const dlg = await until(() => modals().pop());
+        const svcSel = dlg.querySelectorAll('select').find((s) => s.querySelectorAll('option').some((o) => o.getAttribute('value') === String(LED)));
+        assert.ok(svcSel, 'нет выбора вида консультации');
+        svcSel.value = String(LED);
+        svcSel.dispatch('change');
+        dlg.querySelectorAll('button').find((b) => b.textContent.includes('+1 мес')).dispatch('click');
+        dlg.querySelectorAll('button').find((b) => b.classList.contains('rv-cell') && b.textContent === '10').dispatch('click');
+        const slotsAsked = () => seen.filter((c) => c.name === 'calendar_slots');
+        await until(() => slotsAsked().length);
+        assert.deepEqual([slotsAsked().at(-1).body.duration_minutes, slotsAsked().at(-1).body.step_minutes], [45, 20],
+            'вид на 45 минут: слоты спрошены не на его длительность (шаг — 20)');
+        svcSel.value = String(NOT_LED);   // вид без своей длительности — 30
+        svcSel.dispatch('change');
+        await until(() => slotsAsked().at(-1).body.duration_minutes === 30);
+        assert.equal(slotsAsked().at(-1).body.duration_minutes, 30, 'смена вида не пересчитала слоты');
+        const slot = await until(() => dlg.querySelectorAll('button').find((b) => b.classList.contains('rv-slot') && !b.hasAttribute('disabled')));
+        assert.ok(slot, 'нет свободного слота');
+        slot.dispatch('click');
+        dlg.querySelectorAll('button').find((b) => /Записать/.test(b.textContent)).dispatch('click');
+        const book = await until(() => seen.find((c) => c.name === 'calendar_book'));
+        assert.ok(book, 'запись не ушла на сервер');
+        assert.equal(book.body.duration_minutes, 30, 'визит занят не на длительность выбранного вида');
+    } finally {
+        globalThis.fetch = prevFetch;
+        DB.prepare('UPDATE users SET working_hours = ? WHERE id = ?').run(prevHours, PETROV);
+        DB.prepare('UPDATE consultation_types SET duration_minutes = 30 WHERE id = ?').run(LED);
+    }
+});
