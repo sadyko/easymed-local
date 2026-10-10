@@ -457,3 +457,96 @@ test('отказ сервера: с полем — объяснение под �
         assert.equal(triError(root, 'Название филиала', 'ru'), BRANCH_MESSAGES.name);
     } finally { globalThis.fetch = realFetch; }
 });
+
+// ---- задача 13: адрес для партнёров, ориентир, карта, показ на сайте ----
+test('адрес для партнёров: коды, улица и ориентир на трёх языках; прежний адрес не трогается', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад', address: 'Юнусабад-4' });
+    assert.equal(selectedValue(geoSel(root, 'Страна')), 'UZ');
+    assert.match(textOf(root), /Прежний адрес из списка: Юнусабад-4/);
+    await choose(geoSel(root, 'Город / область'), 'tashkent-city');
+    await choose(geoSel(root, 'Район'), 'yunusobod');
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Амира Темура, 12');
+    type(triInput(root, 'Ориентир', 'ru'), 'Напротив парка');
+    type(triInput(root, 'Ориентир', 'uz'), 'Bog‘ qarshisida');
+    assert.equal(fullAddr(root, 'ru'), 'город Ташкент, Юнусабадский район, ул. Амира Темура, 12');
+    await save(root);
+    const v = writes[0].values;
+    assert.deepEqual([v.country_code, v.region_code, v.district_code, v.street_ru, v.landmark_ru, v.landmark_uz],
+        ['UZ', 'tashkent-city', 'yunusobod', 'ул. Амира Темура, 12', 'Напротив парка', 'Bog‘ qarshisida']);
+    assert.ok(!('address' in v), 'прежний адрес экран не пишет (Р3)');
+});
+
+test('начатый адрес доводится до конца; ориентир — не адрес', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    type(triInput(root, 'Ориентир', 'ru'), 'Напротив парка');
+    await save(root);
+    assert.deepEqual(writes[0].values, { landmark_ru: 'Напротив парка' });
+    writes.length = 0;
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Мира, 1');
+    await save(root);
+    assert.equal(writes.length, 0);
+    assert.equal(fieldError(root, 'Город / область'), 'Выберите город или область.');
+});
+
+test('сохранённые коды выбраны в списках; нетронутый адрес не шлётся', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад', country_code: 'UZ', region_code: 'tashkent-city', district_code: 'yunusobod', street_ru: 'ул. Мира, 1' });
+    assert.equal(selectedValue(geoSel(root, 'Район')), 'yunusobod');
+    assert.equal(triInput(root, 'Улица, дом', 'ru').value, 'ул. Мира, 1');
+    assert.doesNotMatch(textOf(root), /Прежний адрес из списка/, 'прежнего адреса нет — подсказки нет');
+    type(triInput(root, 'Улица, дом', 'uz'), 'Tinchlik ko‘chasi, 1');
+    await save(root);
+    assert.deepEqual(writes[0].values, { street_uz: 'Tinchlik ko‘chasi, 1' });
+});
+
+test('карта филиала: не Яндекс — объяснение; Яндекс — маршрут и запись', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    const maps = fieldInput(root, 'Ссылка на филиал в Яндекс Картах');
+    type(maps, 'https://maps.google.com/x');
+    await save(root);
+    assert.equal(writes.length, 0);
+    assert.match(fieldError(root, 'Ссылка на филиал в Яндекс Картах'), /Нужна ссылка из Яндекс Карт/);
+    type(maps, 'https://yandex.uz/maps/?ll=69.24%2C41.29&pt=69.24,41.29');
+    assert.ok(textOf(routeDd(root)).includes('https://yandex.uz/maps/?rtext=~41.29,69.24&rtt=auto'));
+    await save(root);
+    assert.equal(writes[0].values.maps_url, 'https://yandex.uz/maps/?ll=69.24%2C41.29&pt=69.24,41.29');
+});
+
+test('«Показывать филиал на сайте и у партнёров»: включено по умолчанию; снятая отметка — show_public 0; врачи — тоже', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    const pub = fieldInput(root, 'Показывать филиал на сайте и у партнёров');
+    assert.equal(pub.checked, true);
+    assert.match(textOf(root), /его врачей там тоже не покажут/);
+    pub.checked = false; pub.dispatchEvent({ type: 'change', target: pub });
+    await save(root);
+    assert.deepEqual(writes[0].values, { show_public: 0 });
+});
+
+test('своё здание главного: адрес и карта — из «Компании», только видны; ориентир правится', async () => {
+    const { root } = await openPage({ id: 1, name: 'Главный корпус', address: 'старый адрес' }, { own: true, company: { country_code: 'UZ',
+        region_code: 'tashkent-city', district_code: 'yunusobod', street_ru: 'ул. Мира, 1', street_uz: '', street_en: '',
+        maps_url: 'https://yandex.uz/maps/-/CDm', phone: '+998712001200' } });
+    assert.equal(selectedValue(geoSel(root, 'Район')), 'yunusobod');
+    assert.ok(isOff(geoSel(root, 'Район')) && isOff(triInput(root, 'Улица, дом', 'ru')) && isOff(fieldInput(root, 'Ссылка на филиал в Яндекс Картах')));
+    assert.equal(fullAddr(root, 'ru'), 'город Ташкент, Юнусабадский район, ул. Мира, 1');
+    assert.equal(fieldInput(root, 'Ссылка на филиал в Яндекс Картах').value, 'https://yandex.uz/maps/-/CDm');
+    assert.doesNotMatch(textOf(root), /Прежний адрес из списка/, 'у своего здания адрес — в «Компании»: второго не рисуем');
+    type(triInput(root, 'Ориентир', 'ru'), 'Напротив парка');
+    await save(root);
+    assert.deepEqual(writes[0].values, { landmark_ru: 'Напротив парка' });
+});
+
+test('филиал: адрес, ориентир, карта и показ на сайте — только видны', async () => {
+    const { root } = await openPage({ id: 5, name: 'Главный корпус', country_code: 'UZ', region_code: 'tashkent-city', district_code: 'yunusobod' }, { secondary: true });
+    for (const l of ['Страна', 'Город / область', 'Район']) assert.ok(isOff(geoSel(root, l)), l);
+    assert.ok(isOff(triInput(root, 'Улица, дом', 'ru')) && isOff(triInput(root, 'Ориентир', 'uz')));
+    assert.ok(isOff(fieldInput(root, 'Ссылка на филиал в Яндекс Картах')) && isOff(fieldInput(root, 'Показывать филиал на сайте и у партнёров')));
+});
+
+test('«нет перевода» — у пустых UZ / EN названия и улицы филиала; у ориентира — нет', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад', name_uz: 'Yunusobod' });
+    const miss = (label, lang) => { const c = triInput(root, label, lang); const m = descendants(c._parent).find((n) => matches(n, '.cpf-miss')); return !!m && !m.hidden; };
+    assert.deepEqual([miss('Название филиала', 'uz'), miss('Название филиала', 'en'), miss('Улица, дом', 'uz'), miss('Ориентир', 'uz')],
+        [false, true, true, false]);
+    type(triInput(root, 'Название филиала', 'en'), 'Yunusabad');
+    assert.equal(miss('Название филиала', 'en'), false);
+});

@@ -16,11 +16,12 @@
 // карточки шага 3 переиспользуются как есть, на телефоне — один столбец.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag } from '../ui.js';
-import { tr } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { triGroup, labeled } from './company-fields.js';
+import { addressCard, mapCard } from './company-address.js';   // те же карточки, что «Компания»
 import { NAME_MAX } from '../../shared/clinic-profile.js';
-import { BRANCH_EDIT_COLUMNS, OWN_FROM_COMPANY, BRANCH_MESSAGES, normalizeBranch, branchProblems, overlayOwnBuilding } from '../../shared/branch-profile.js';
+import { BRANCH_EDIT_COLUMNS, OWN_FROM_COMPANY, BRANCH_MESSAGES, LANDMARK_MAX, normalizeBranch, branchProblems, overlayOwnBuilding } from '../../shared/branch-profile.js';
 
 export const BRANCH_DEFAULTS = Object.freeze({
     name: '', name_uz: '', name_en: '', phone: '', address: '', active: 1,
@@ -92,9 +93,38 @@ export async function renderBranchPage(container, opts = {}) {
     phoneBox.err.ctrl = phone.input;
     errs.phone = phoneBox.err;
 
+    // ---- адрес для партнёров, ориентир, карта, показ на сайте (задача 13) ----
+    const landmark = triGroup('Ориентир', { ru: state.landmark_ru, uz: state.landmark_uz, en: state.landmark_en }, {
+        key: 'landmark', max: LANDMARK_MAX, disabled: lockAll,   // без «нет перевода»: ориентир необязателен (макет: noMiss)
+        hint: 'Необязательно. Например: «напротив парка», «вход со двора».',
+        onInput: (l, v) => { state['landmark_' + l] = v; },
+    });
+    // Р3 — прежний адрес, вписанный руками в старом списке, больше не правится:
+    // виден, пока его не перенесут в списки и улицу. У своего здания главного
+    // адрес — в «Компании»: второго адреса здесь не рисуем.
+    const legacy = !own && String(state.address || '').trim()
+        ? h('p', { class: 'cpf-hint' }, document.createTextNode(trf('Прежний адрес из списка: {address}', { address: String(state.address).trim() })))
+        : null;
+    const address = addressCard(state, {
+        title: 'Адрес для партнёров и сайта', disabled: lockCompany, after: [landmark.node, legacy].filter(Boolean),
+        hint: 'Страна, город и район — из списков, как при регистрации пациента; партнёры получают их коды. Ориентир помогает пациенту найти вход.',
+    });
+    Object.assign(errs, address.errs);
+    availability = () => address.availability();
+    const map = mapCard(state, { label: 'Ссылка на филиал в Яндекс Картах', disabled: lockCompany,
+        hint: 'Найдите здание в Яндекс Картах, нажмите «Поделиться» и скопируйте ссылку. У каждого здания своя ссылка.' });
+    errs.maps_url = map.err;
+    const pubChk = h('input', { type: 'checkbox' });
+    pubChk.checked = Number(state.show_public) !== 0;
+    pubChk.disabled = lockAll;
+    pubChk.addEventListener('change', () => { state.show_public = pubChk.checked ? 1 : 0; });
+    const pubCard = card('Globe', 'Сайт и партнёры', checkRow('Показывать филиал на сайте и у партнёров', pubChk),
+        h('p', { class: 'cpf-hint' }, 'Скрытый филиал работает в программе как обычно, но не виден пациентам на сайте и у партнёров; его врачей там тоже не покажут.'));
+
     const cards = [
         card('Building', 'Название', name.node, isNew ? null : checkRow('Работает', activeChk)),
         card('Phone', 'Телефон', phoneBox.node),
+        address.node, map.node, pubCard,
     ];
 
     const collect = () => {
@@ -188,4 +218,5 @@ export async function renderBranchPage(container, opts = {}) {
             h('div', { class: 'page-head-actions' }, actions)),
         ...notes,
         h('div', { class: 'cpf-stack' }, ...cards)));
+    map.load(); await address.load();   // списки адреса грузятся уже с сохранёнными кодами
 }
