@@ -12,7 +12,8 @@
 import { h, Icon, clear } from '../ui.js';
 import { geoCascade } from './geo-cascade.js';
 import { triGroup, labeled, fieldErr } from './company-fields.js';
-import { composeAddress, routeUrl, mapsProblem, STREET_MAX } from '../../shared/clinic-profile.js';
+import { composeAddress, routeUrl, mapsProblem, STREET_MAX, PROFILE_MESSAGES } from '../../shared/clinic-profile.js';
+import { tr } from '../i18n.js';   // CLINIC_API_STEP7_V1 — строка «адрес обязателен» ставится через textContent
 
 const LANG_ROWS = [['ru', 'RU'], ['uz', 'UZ'], ['en', 'EN']];
 // Сколько вариантов в списке (первый — «Выберите…»); без options — ни одного.
@@ -39,7 +40,7 @@ function geoField(key, label) {
  * doc_settings прочитана: каскад выбирает сохранённые коды только из пресета,
  * заданного до прихода списков.
  */
-export function addressCard(state, { onChange = null, secondary = false } = {}) {
+export function addressCard(state, { onChange = null, secondary = false, required = false } = {}) {
     let parts = { country: null, region: null, district: null };
     const streetOf = () => ({ ru: state.street_ru, uz: state.street_uz, en: state.street_en });
     const changed = () => { if (typeof onChange === 'function') onChange(); };
@@ -102,11 +103,30 @@ export function addressCard(state, { onChange = null, secondary = false } = {}) 
         onInput: (l, v) => { state['street_' + l] = v; paintFull(); changed(); },
     });
 
+    // CLINIC_API_STEP7_V1 — решение владельца 11: пока включено подключение API,
+    // город / область, район и улица RU обязательны — звёздочка у подписи и
+    // строка над полями. Звёздочка — текст, а не атрибут: поддельный DOM тестов
+    // и настоящий показывают её одинаково.
+    const marks = [boxes.region, boxes.district].map((b) => {
+        const mk = h('span', { class: 'req' });
+        b.node.children[0].appendChild(mk);   // <label> поля — первый ребёнок
+        return mk;
+    });
+    const streetMark = h('span', { class: 'req' });
+    street.node.firstChild.appendChild(streetMark);   // <legend> группы «Улица, дом»
+    const reqNote = h('p', { class: 'cpf-hint cpf-req-note' });
+    function setRequired(on) {
+        for (const mk of [...marks, streetMark]) mk.textContent = on ? ' *' : '';
+        reqNote.textContent = on ? tr(PROFILE_MESSAGES.partnerAddress) : '';
+    }
+    setRequired(required);
+
     const node = h('div', { class: 'card' },
         h('div', { class: 'card-header' }, h('h3', null, Icon('MapPin', { size: 16 }), ' ',
             secondary ? 'Адрес этого здания для партнёров и сайта' : 'Адрес для партнёров и сайта')),
         h('div', { class: 'cpf-body' },
             h('p', { class: 'cpf-hint' }, 'Страна, город и район — из списков, как при регистрации пациента; партнёры получают их коды. На бланках печатается «Адрес в документах» из «Реквизитов» — эти списки его не меняют.'),
+            reqNote,   // CLINIC_API_STEP7_V1
             h('div', { class: 'cpf-geo' }, boxes.country.node, boxes.region.node, boxes.district.node),
             street.node,
             h('div', { class: 'cpf-full' },
@@ -117,6 +137,7 @@ export function addressCard(state, { onChange = null, secondary = false } = {}) 
     return {
         node,
         street,
+        setRequired,   // CLINIC_API_STEP7_V1
         get geo() { return geo; },
         // Выбранные строки справочника — для предпросмотра «Как это увидят пациенты».
         parts: () => parts,

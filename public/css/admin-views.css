@@ -7631,4 +7631,7 @@ table.list tr.is-off td { color: var(--ink-400); }
 .crm-api-src-name { font-weight: 600; font-size: 13.5px; }
 .apic-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: var(--ink-100); font-size: 12.5px; }
 .apic-chip.api { background: var(--info-50); color: var(--info-700); }
+.cpf-set > legend .req { color: var(--crit-500); margin-left: 2px; }
+.cpf-req-note { color: var(--warn-700); }
+.cpf-req-note:empty { display: none; }
 /* /CLINIC_API_STEP7_V1 */

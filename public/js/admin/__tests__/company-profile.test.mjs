@@ -909,3 +909,29 @@ test('ревью R4: страна вне списка — показана «(н
     assert.deepEqual(lastUpdate, { email: 'hello@shifo.uz' });
     assert.equal(docRow.country_code, 'XX');
 });
+
+// CLINIC_API_STEP7_V1 — решение владельца 11: пока включено подключение API,
+// адрес для партнёров обязателен.
+test('подключение API включено: звёздочки у города, района и улицы RU; без адреса «Компания» не сохраняется — ошибки под полями', async () => {
+    globalThis.window.CLINIC.api_address_required = true;
+    try {
+        const root = await open();
+        const label = (name) => labelText(fieldBox(root, name).children.find((c) => c.tagName === 'LABEL'));
+        assert.ok(label('Город / область').includes('*'));
+        assert.ok(label('Район').includes('*'));
+        assert.ok(textOf(root).includes('Пока включены подключения API, адрес для партнёров обязателен'));
+        type(triInput(root, 'Название клиники', 'uz'), 'Shifo');
+        await save(root);
+        assert.equal(lastUpdate, null, 'сохранение ушло без адреса');
+        assert.ok(fieldError(root, 'Город / область'));
+        assert.ok(triError(root, 'Улица, дом', 'ru'));
+    } finally { globalThis.window.CLINIC.api_address_required = false; }
+});
+
+test('подключений нет — адрес необязателен, звёздочек нет (как в шаге 3)', async () => {
+    const root = await open();
+    assert.ok(!labelText(fieldBox(root, 'Город / область').children.find((c) => c.tagName === 'LABEL')).includes('*'));
+    type(triInput(root, 'Название клиники', 'uz'), 'Shifo');
+    await save(root);
+    assert.ok(lastUpdate && lastUpdate.name_uz === 'Shifo', 'правка названия не прошла');
+});

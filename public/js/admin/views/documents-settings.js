@@ -50,6 +50,7 @@ import { refreshClinicBrand } from '../clinic-context.js?v=localclinic2';
 // CLINIC_PROFILE_V1 — профиль клиники: колонки и проверки; поля на трёх языках.
 import { COMPANY_COLUMNS, NAME_MAX, ABOUT_MAX, normalizeProfile, companyProblems } from '../../shared/clinic-profile.js';
 import { COMPANY_BUILDING } from '../../shared/clinic-profile.js';   // CLINIC_PROFILE_V1 — филиал сохраняет только своё
+import { partnerAddressProblems } from '../../shared/clinic-profile.js';   // CLINIC_API_STEP7_V1 — решение владельца 11
 import { triGroup, labeled } from './company-fields.js';
 import { logosCard } from './company-logos.js';
 import { addressCard, mapCard } from './company-address.js';
@@ -128,6 +129,10 @@ function paintLoadFailed() {
 const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.';
 let secondary = false;
 const isSecondaryBuilding = () => !!(typeof window !== 'undefined' && window.CLINIC && window.CLINIC.building_role === 'secondary');
+// CLINIC_API_STEP7_V1 — решение владельца 11: пока включено хоть одно подключение
+// API, адрес для партнёров обязателен. Флаг приходит с сервера (rpc/clinic.js)
+// при входе; страница «API и подключения» обновляет его после каждого изменения.
+const apiAddressRequired = () => !!(typeof window !== 'undefined' && window.CLINIC && window.CLINIC.api_address_required);
 
 export async function renderDocumentsSettings(container, { onNavigate } = {}) {
     refs.container = container;
@@ -163,7 +168,7 @@ function mount(onNavigate) {
     // CLINIC_PROFILE_V1 — адрес для партнёров и сайта (списки справочника,
     // улица RU / UZ / EN) и карта с маршрутом — company-address.js. Адрес на
     // бланках — «Адрес в документах» в «Реквизитах»: списки его не меняют.
-    refs.address = addressCard(state, { onChange: () => renderPreview(), secondary });   // CLINIC_PROFILE_V1 — «Адрес этого здания» в филиале
+    refs.address = addressCard(state, { onChange: () => renderPreview(), secondary, required: apiAddressRequired() && !secondary });   // CLINIC_PROFILE_V1 — «Адрес этого здания» в филиале; CLINIC_API_STEP7_V1 — звёздочки
     refs.map = mapCard(state, { onChange: () => renderPreview() });
     Object.assign(refs.errs, refs.address.errs, { maps_url: refs.map.err });
     refs.geoAvailability = () => refs.address.availability();
@@ -408,6 +413,12 @@ async function save() {
     const problems = {};
     for (const [k, msg] of Object.entries(all)) {
         if (keys.includes(k) || (addressTouched && (ADDRESS_COLUMNS.includes(k)))) problems[k] = msg;
+    }
+    // CLINIC_API_STEP7_V1 — решение владельца 11: пока включено подключение API,
+    // адрес для партнёров обязателен целиком, что бы ни меняли (сервер, routes/db.js,
+    // откажет так же). В филиале подключений нет — правило его не касается.
+    if (apiAddressRequired() && !secondary) {
+        for (const [k, msg] of Object.entries(partnerAddressProblems(v, refs.geoAvailability()))) problems[k] = msg;
     }
     showProblems(problems);
     if (Object.keys(problems).length) { toast(tr('Проверьте выделенные поля.'), 'fail'); return; }
