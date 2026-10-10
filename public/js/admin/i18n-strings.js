@@ -3,6 +3,11 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_PROFILE_V1 (2026-10-10) — хранилище: корзина логотипов клиники (routes/storage.js)
+  "Логотипы клиники меняет администратор или тот, кому выдано изменение «Компании».": {"en":"Clinic logos are changed by the administrator or by someone granted “Company” edit rights.","ru":"Логотипы клиники меняет администратор или тот, кому выдано изменение «Компании».","uz":"Klinika logotiplarini administrator yoki «Kompaniya»ni o‘zgartirish huquqi berilgan xodim o‘zgartiradi."},   // CLINIC_PROFILE_V1
+  "Логотипы клиники меняются в главном здании.": {"en":"Clinic logos are changed in the main building.","ru":"Логотипы клиники меняются в главном здании.","uz":"Klinika logotiplari bosh binoda o‘zgartiriladi."},   // CLINIC_PROFILE_V1
+  "Логотип не удаляется — новая загрузка заменяет прежний, а «Удалить» в «Компании» снимает его с бланков.": {"en":"A logo is not deleted — a new upload replaces the old one, and “Delete” in “Company” takes it off the forms.","ru":"Логотип не удаляется — новая загрузка заменяет прежний, а «Удалить» в «Компании» снимает его с бланков.","uz":"Logotip o‘chirilmaydi — yangi yuklash eskisini almashtiradi, «Kompaniya»dagi «O‘chirish» esa uni blankalardan olib tashlaydi."},   // CLINIC_PROFILE_V1
+  "Требуется вход.": {"en":"Please sign in.","ru":"Требуется вход.","uz":"Tizimga kirish talab qilinadi."},   // CLINIC_PROFILE_V1
   // CLINIC_PROFILE_V1 (2026-10-10) — логотипы клиники: отказы правил (shared/clinic-logo-rules.js)
   "Логотип {got} МБ — это больше предела в {max} МБ. Сохраните PNG поменьше.": {"en":"The logo is {got} MB, over the {max} MB limit. Save a smaller PNG.","ru":"Логотип {got} МБ — это больше предела в {max} МБ. Сохраните PNG поменьше.","uz":"Logotip {got} MB — bu {max} MB chegarasidan katta. Kichikroq PNG saqlang."},   // CLINIC_PROFILE_V1
   "Логотип — только PNG с прозрачным фоном.": {"en":"The logo must be a PNG with a transparent background.","ru":"Логотип — только PNG с прозрачным фоном.","uz":"Logotip faqat shaffof fonli PNG bo‘lishi kerak."},   // CLINIC_PROFILE_V1

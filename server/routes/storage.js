@@ -5,6 +5,8 @@ import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_
 import { canViewSection, canEditSection, canViewPatientTab, canEditPatientTab } from '../services/roles.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
 import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, photoRefusal, refusalText, ALLOWED_PATIENT_FILE_EXT, ALLOWED_PHOTO_EXT } from '../../public/js/shared/patient-file-limits.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
 import { grantAllowsAdminOr, isAdminUser } from '../services/grants.js';   // V3120_FIX (M7) — корзина Telegram по праву бота
+import { LOGO_BUCKET, LOGO_KINDS, logoRefusal } from '../../public/js/shared/clinic-logo-rules.js';   // CLINIC_PROFILE_V1
+import { readIdentity } from '../services/branch-sync/identity.js';   // CLINIC_PROFILE_V1
 
 // Local file storage — the offline stand-in for Supabase Storage. Objects live
 // on disk under <storageDir>/<bucket>/<path>. Buckets are an allow-list; every
@@ -29,7 +31,9 @@ import { grantAllowsAdminOr, isAdminUser } from '../services/grants.js';   // V3
 // вправе это менять» (фото пациента — тот, кто правит пациента; фото врача —
 // сам врач) и разная судьба (карточка врача уезжает на Symptex, фотография
 // пациента не покидает клинику).
-const BUCKETS = new Set(['clinic-docs', 'telegram-media', 'patient-photos', 'doctor-photos']);
+//
+// CLINIC_PROFILE_V1 — `clinic-logos`: два логотипа клиники («Компания»).
+const BUCKETS = new Set(['clinic-docs', 'telegram-media', 'patient-photos', 'doctor-photos', LOGO_BUCKET]);   // CLINIC_PROFILE_V1
 
 // V3120_FIX (M6) — ЧТО ОТДАЁТСЯ «ВНУТРИ СТРАНИЦЫ». Файл из хранилища открыт
 // тем же адресом, что и само приложение, и SVG или HTML, отданные как есть,
@@ -57,6 +61,7 @@ const BUCKET_EXT = {
   'telegram-media': new Set([...ALLOWED_PATIENT_FILE_EXT, '.mp3', '.ogg', '.oga', '.opus', '.m4a', '.wav', '.mp4', '.mov', '.webm']),
   'patient-photos': new Set(ALLOWED_PHOTO_EXT),
   'doctor-photos': new Set(ALLOWED_PHOTO_EXT),
+  [LOGO_BUCKET]: new Set(['.png']),   // CLINIC_PROFILE_V1
 };
 const TYPE_REFUSED = 'Файлы такого типа в хранилище не кладутся. Подойдут картинки (JPG, PNG), PDF, документы Word и Excel, обычный текст.';
 
@@ -168,6 +173,21 @@ export function photoTarget(bucket, rest) {
   return null;
 }
 const isPhotoBucket = (bucket) => bucket === 'patient-photos' || bucket === 'doctor-photos';
+
+// CLINIC_PROFILE_V1 — ЛОГОТИП КЛИНИКИ УЗНАЁТСЯ ПО ПУТИ, как фото врача:
+//   clinic-logos/square/<ключ>.png    — квадратный (шапка, печать, карточки)
+//   clinic-logos/portrait/<ключ>.png  — вертикальный (страница клиники у партнёров)
+// Вид логотипа — в пути, поэтому правило «квадратный — квадратный» проверяется
+// по тому месту, куда файл ложится, а не по слову в теле запроса.
+// clinic-logos/legacy/… пишет только сервер (services/clinic-logo-legacy.js).
+export function logoTarget(bucket, rest) {
+  if (bucket !== LOGO_BUCKET) return null;
+  const s = segmentsOf(rest);
+  return (s.length === 2 && LOGO_KINDS.includes(s[0]) && s[1]) ? { kind: s[0] } : null;
+}
+const LOGO_DENIED = 'Логотипы клиники меняет администратор или тот, кому выдано изменение «Компании».';   // CLINIC_PROFILE_V1
+const LOGO_MAIN_ONLY = 'Логотипы клиники меняются в главном здании.';   // CLINIC_PROFILE_V1
+const LOGO_NO_DELETE = 'Логотип не удаляется — новая загрузка заменяет прежний, а «Удалить» в «Компании» снимает его с бланков.';   // CLINIC_PROFILE_V1
 
 // Отказ вкладки «Документы» тем же текстом, каким отказывает карта пациента
 // (rpc/patient-card.js DENIED_TEMPLATE) — человек читает одно и то же
@@ -302,6 +322,19 @@ export function storageRoutes(storageDir, db = null) {
     return canEditSection(db, user, 'settings') ? null : DOCTOR_PHOTO_DENIED;
   }
 
+  // CLINIC_PROFILE_V1 — кто кладёт логотип клиники: не в филиале (логотипы
+  // главного здания приезжают к нему печатной копией), администратор или
+  // «Компания: Изменение» — тот же ключ, что пишет doc_settings.
+  function logoDenial(req) {
+    const user = req.user;
+    if (!user) return { status: 401, code: 'unauthorized', message: 'Требуется вход.' };
+    if (!db) return { status: 403, code: 'forbidden', message: LOGO_DENIED };
+    try { if (readIdentity(db).role === 'secondary') return { status: 409, code: 'conflict', message: LOGO_MAIN_ONLY }; }
+    catch { /* строки нет — установка не филиал */ }
+    try { if (grantAllowsAdminOr(db, user, 'settings.company', 'edit')) return null; } catch { /* права не прочитались — отказ */ }
+    return { status: 403, code: 'forbidden', message: LOGO_DENIED };
+  }
+
   // Одна дверь для обеих фотокорзин: форма пути → право. Возвращает false
   // (можно продолжать) либо уже отправленный ответ.
   function photoGate(req, res, { write }) {
@@ -332,10 +365,23 @@ export function storageRoutes(storageDir, db = null) {
       return refuse(res, 415, 'file_type_not_allowed',
         'Исполняемые файлы в клинику не загружаются.');
     }
+    // CLINIC_PROFILE_V1 — логотип клиники: путь → здание и право → PNG с прозрачностью.
+    if (req.params.bucket === LOGO_BUCKET) {
+      const target = logoTarget(req.params.bucket, req.params.rest);
+      if (!target) return badPath(res);
+      const d = logoDenial(req);
+      if (d) return refuse(res, d.status, d.code, d.message);
+      const bad = logoRefusal({ kind: target.kind, name: path.basename(abs), bytes: body });
+      if (bad) {
+        return res.status(bad.code === 'file_too_large' ? 413 : 415)
+          .json({ error: { code: bad.code, message: refusalText(bad), template: bad.template, params: bad.params } });
+      }
+    }
     // V3120_FIX (M8) — расширение по корзине. Фото проверяет photoRefusal
     // ниже своим, более понятным текстом, поэтому здесь — остальные корзины.
     const allowedExt = BUCKET_EXT[req.params.bucket];
-    if (allowedExt && !isPhotoBucket(req.params.bucket) && !allowedExt.has(path.extname(abs).toLowerCase())) {
+    if (allowedExt && !isPhotoBucket(req.params.bucket) && req.params.bucket !== LOGO_BUCKET   // CLINIC_PROFILE_V1 — логотип проверен выше
+        && !allowedExt.has(path.extname(abs).toLowerCase())) {
       return refuse(res, 415, 'file_type_not_allowed', TYPE_REFUSED);
     }
     if (req.params.bucket === 'telegram-media') {
@@ -373,7 +419,8 @@ export function storageRoutes(storageDir, db = null) {
     // чем; совпадение — это попытка подменить уже приложенный скан или лицо
     // под тем же адресом, на который ссылается карта. Флаг 'wx' — проверка и
     // создание одним действием, без окна между ними.
-    const noOverwrite = underPatients(req.params.bucket, req.params.rest) || isPhotoBucket(req.params.bucket);
+    const noOverwrite = underPatients(req.params.bucket, req.params.rest) || isPhotoBucket(req.params.bucket)
+      || req.params.bucket === LOGO_BUCKET;   // CLINIC_PROFILE_V1 — логотип не подменяется под тем же адресом
     // V3120_FINAL — папка в пути занята ФАЙЛОМ с тем же именем
     // (misc/a.pdf/b.pdf при существующем misc/a.pdf). mkdir отвечал EEXIST, и
     // человек читал «файл с таким именем уже есть — программа даст новое имя»,
@@ -426,6 +473,7 @@ export function storageRoutes(storageDir, db = null) {
   r.get('/:bucket/*rest', (req, res) => {
     const abs = safeResolve(storageDir, req.params.bucket, req.params.rest);
     if (!abs) return badPath(res);
+    if (req.params.bucket === LOGO_BUCKET && !logoTarget(req.params.bucket, req.params.rest)) return badPath(res);   // CLINIC_PROFILE_V1
     if (isPhotoBucket(req.params.bucket)) {
       const stop = photoGate(req, res, { write: false });
       if (stop) return stop;
@@ -473,6 +521,9 @@ export function storageRoutes(storageDir, db = null) {
     if (req.control?.locked) return lockedResponse(res, req.control);
     const abs = safeResolve(storageDir, req.params.bucket, req.params.rest);
     if (!abs) return badPath(res);
+    // CLINIC_PROFILE_V1 — логотип не удаляется (Р7): восстановление копии
+    // откатывает строки, а файлы только сливает — вчерашняя ссылка обязана открыться.
+    if (req.params.bucket === LOGO_BUCKET) return refuse(res, 403, 'forbidden', LOGO_NO_DELETE);
     // PATIENT_FILE_ATTACH_V1 — ДОКУМЕНТ ПАЦИЕНТА НЕ УДАЛЯЕТСЯ, он отзывается
     // (rpc patient_card_doc_void, миграция 105). Раньше карта звала этот
     // маршрут сразу после удаления строки, и файл исчезал безвозвратно — при
