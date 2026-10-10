@@ -2551,3 +2551,32 @@ test('DOCTOR_PROFILE_V1: окно дат предлагает консульта
   SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
   window.easymed.state.user = null;
 });
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №1) — консультация по виду приёма в окне
+// дат спрашивает свободное время и занимает слот на длительность ВИДА
+// (consultMinutes, «Виды консультаций»), а не на получас по умолчанию: иначе
+// 45-минутный приём занимал 30 минут, и следующему пациенту предлагалось
+// время внутри идущего приёма. Вид без длительности — по-прежнему 30.
+test('DOCTOR_PROFILE_V1: консультация в окне дат — слоты и запись на длительность вида (45 мин), без неё — 30', async () => {
+  VISITS = [];
+  for (const [minutes, want] of [[45, 45], [null, 30]]) {
+    CONSULTS = [{ id: 5, name: 'Первичный', name_ru: 'Первичный приём', price: 100000, duration_minutes: minutes, active: 1 }];
+    CONSULT_PRICES = [{ id: 1, doctor_id: 31, consultation_type_id: 5, price: 150000, available: 1, is_free: 0 }];
+    const { sheet } = await doctorSheet({ lines: [{ id: 903, service_id: null, consultation_type_id: 5, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null }] });
+    await tick(60);
+    await fillRow(sheet, 0, BOOK_DAY, DOCTOR.id);
+    const asked = rpcOf('calendar_slots');
+    assert.ok(asked.length, 'окно дат не спросило свободное время');
+    assert.strictEqual(asked[asked.length - 1].body.duration_minutes, want, 'слоты спрошены не на длительность вида (' + minutes + ')');
+    const sel = timeSelects(sheet)[0];
+    sel.value = '09:30'; fire(sel);
+    CALLS.length = 0;
+    saveSheet(sheet);
+    await tick(150);
+    const ev = rpcOf('ensure_visit');
+    assert.ok(ev.length && ev[0].body.book, 'визит не заведён с просьбой занять слот');
+    assert.strictEqual(ev[0].body.book.duration_minutes, want, 'слот занят не на длительность вида (' + minutes + ')');
+  }
+  SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
+  window.easymed.state.user = null;
+});

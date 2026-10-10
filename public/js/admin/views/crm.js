@@ -4,7 +4,7 @@
 // желанию до сохранения). Внутри — «Отчёт» (период, конверсия, источники)
 // и выгрузка Excel. Таблица crm_requests (mig 044).
 import { supabase } from '../../supabase.js';
-import { consultPrice, consultOffered } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1 — флаги 0/1 (isOn) и цена консультации — одно правило с кассой
+import { consultPrice, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1 — флаги 0/1 (isOn) и цена консультации — одно правило с кассой
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { askRecordingUntilReady, recordingMessage, RECORDING_WAITING, RECORDING_GAVE_UP } from '../../shared/call-recording.js?v=crr1';   // CALL_RECORDING_REASONS_V1 — «Прослушать»: причина словами, повтор, пока запись готовится
@@ -1829,6 +1829,12 @@ async function paint() {
         // предлагались бы начала, которых сервер при записи не подтвердит.
         const SLOT_FALLBACK_MIN = 30;
         const lineDuration = (p) => {
+            // DOCTOR_PROFILE_V1 (ревью шага 5, №1) — консультация по виду приёма
+            // длится столько, сколько у вида (consultMinutes; не задано — 30, как
+            // окно записи и сервер). И слоты, и занятый слот — на эту длину.
+            if (p && p.service_id == null && p.consultation_type_id != null) {
+                return consultMinutes(consultTypes.find((c) => String(c.id) === String(p.consultation_type_id)) || null);
+            }
             const sv = svcCatalog.find(x => String(x.id) === String(p.service_id));
             return Math.max(5, Number(sv && sv.duration_minutes) || SLOT_FALLBACK_MIN);
         };
@@ -2091,7 +2097,7 @@ async function paint() {
             if (isEdit && r.id) {
                 // CRM_CALENDAR_MIRROR_V1 — виды приёма: строка записи бывает
                 // консультацией (service_id NULL + consultation_type_id, миграция 188).
-                const consultsP = supabase.from('consultation_types').select('id, name, name_ru, price')
+                const consultsP = supabase.from('consultation_types').select('id, name, name_ru, price, duration_minutes')   // DOCTOR_PROFILE_V1 — длительность вида (ревью №1)
                     .then(({ data }) => data || [], () => []);
                 // CLINIC_API_FIX_V1 — id, price, is_free: цена строки консультации (consultPriceOf);
                 // строки заявки ждут этот ответ, иначе цена врача не успела бы доехать.
