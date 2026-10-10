@@ -77,7 +77,7 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
   }
   function paintMain() {
     if (confirm === 'delete') {
-      body.appendChild(confirmBlock(trf('Удалить подключение «{name}»? Ключ и секрет сотрутся и больше не заработают. Заявки, которые уже пришли, останутся в CRM со своим источником.', { name: c.name }),
+      body.appendChild(confirmBlock(trf('Удалить подключение «{name}»? Ключ и секрет сотрутся и больше не заработают. Заявки, которые уже пришли, останутся в CRM со своим источником.', { name: tr(c.name) }),   // CLINIC_API_STEP7_V1 (ревью №5) — tr() имени
         'delete-yes', tr('Удалить'), remove));
     }
     body.appendChild(activeField(d, { disabled: !can.edit, ready: settings.partner_address_missing.length === 0 || c.active }));
@@ -147,7 +147,7 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
     try {
       await rpc('api_connection_delete', { id: c.id, confirm: true });
       m.close();
-      toast(trf('Подключение «{name}» удалено, ключ стёрт.', { name: c.name }), 'success');
+      toast(trf('Подключение «{name}» удалено, ключ стёрт.', { name: tr(c.name) }), 'success');
       if (onChanged) onChanged();
     } catch (e) { toast(tr(e.message), 'fail'); }
   }

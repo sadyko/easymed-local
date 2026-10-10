@@ -105,7 +105,9 @@ export function openHandover({ settings, connection: c, key, secret = '', baseUr
     withSecret ? fieldBox('Секрет для проверки уведомлений', secretField({ label: 'Секрет для проверки уведомлений', value: secret }), null, null) : null,
     section('Что ещё знать', '', h('dl', { class: 'apic-kv' },
       h('dt', null, 'Разрешено'), h('dd', null, permChips(c.scopes)),
-      h('dt', null, 'Заявки в CRM'), h('dd', null, trf('с источником «{label}»', { label: c.crm_source_label })),
+      // CLINIC_API_STEP7_V1 (ревью №5) — у сайта клиники имя и источник системные, по-русски
+      // («Сайт клиники», «Сайт»): tr() до подстановки в фразу.
+      h('dt', null, 'Заявки в CRM'), h('dd', null, trf('с источником «{label}»', { label: tr(c.crm_source_label) })),
       h('dt', null, 'Как передавать ключ'), h('dd', null, h('code', { translate: 'no' }, 'Authorization: Bearer <ключ>')),
       h('dt', null, 'Ключ потом'), h('dd', null, 'Его можно открыть и скопировать в карточке подключения, вкладка «Ключ».'))),
     fieldBox('Текст для отправки', area, null, null));
@@ -115,7 +117,7 @@ export function openHandover({ settings, connection: c, key, secret = '', baseUr
   });
   const close = h('button', { class: 'btn', type: 'button' }, 'Закрыть');
   const m = openModal({ name: 'conn-key', width: 680, body,
-    title: [Icon('Key', { size: 18 }), ' ', rotated ? trf('Новый ключ для «{name}»', { name: c.name }) : trf('Подключение «{name}» создано', { name: c.name })],
+    title: [Icon('Key', { size: 18 }), ' ', rotated ? trf('Новый ключ для «{name}»', { name: tr(c.name) }) : trf('Подключение «{name}» создано', { name: tr(c.name) })],
     foot: [close, h('span', { class: 'grow' }), copyAll] });
   close.addEventListener('click', () => m.close());
   return m;
