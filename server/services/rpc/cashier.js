@@ -18,6 +18,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
 import { lineUnitPrice, consultationFor, doctorPriceLookup } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта
+import { packageLineMoney } from '../../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1 — «Ждут счёта»: строка пакета — по цене в пакете
 import { searchArg } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
 // откуда его взяли (одно правило на сервер, rpc/inventory.js).
@@ -902,8 +903,9 @@ export function cashierRefunds(db, args, user) {
 //     прошлые от новых к старым; в одном дне — по самой свежей строке.
 //
 // Сумма — ДО скидок, по тому же правилу цены, что у счёта (lineUnitPrice:
-// личная цена врача, каталог, тариф визита, сохранённая цена товара); скидки
-// группы и пакета посчитает сам счёт. Только чтение (READ_ONLY_RPCS).
+// личная цена врача, каталог, тариф визита, сохранённая цена товара); скидку
+// группы посчитает сам счёт. SERVICES_PACKAGES_V1 — строка из пакета — по цене
+// в пакете, записанной на ней (она окончательная). Только чтение (READ_ONLY_RPCS).
 //
 // План: визиты окна берутся по индексу дня (idx_visits_date), строки — по
 // визиту (idx_visit_services_visit). CROSS JOIN держит этот порядок: иначе
@@ -948,6 +950,7 @@ export function cashierUnbilled(db, args, user) {
   const lines = db.prepare(`
     SELECT vs.id, vs.visit_id, vs.service_id, vs.clinic_item_id, vs.consultation_type_id, vs.doctor_id,
            vs.quantity, vs.unit_price, vs.price_tier, vs.created_at,
+           vs.package_full, vs.package_price,   -- SERVICES_PACKAGES_V1
            ub.full_name AS added_by,
            v.visit_date, v.patient_id,
            ${localDate('v.visit_date')} AS visit_day,
@@ -1001,7 +1004,10 @@ export function cashierUnbilled(db, args, user) {
     else if (l.consultation_type_id != null) { const c = consult(l.consultation_type_id, l.doctor_id); name = c && c.name; }
     const qty = Number(l.quantity);
     const unit = Number(lineUnitPrice(db, l, { service: svc, product: prod, ownPrice, consult })) || 0;   // REFBILL_REVIEW_V1
-    const sum = Number.isFinite(qty) && qty > 0 ? round2(unit * qty) : 0;
+    // SERVICES_PACKAGES_V1 — строка из пакета — по цене в пакете, записанной при
+    // записи: она окончательная (решение владельца 1), её и выставит счёт.
+    const pm = packageLineMoney(l);
+    const sum = Number.isFinite(qty) && qty > 0 ? (pm ? pm.net : round2(unit * qty)) : 0;
     let g = byVisit.get(l.visit_id);
     if (!g) {
       g = {

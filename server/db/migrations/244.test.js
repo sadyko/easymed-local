@@ -82,6 +82,26 @@ test('244: строки визита — выставленная из пози�
   ]);
 });
 
+// SERVICES_PACKAGES_V1 (сборщик А) — выставленные деньги бэкфилл не трогает:
+// счета и позиции счёта — те же; записанная цена выставленной строки пакета —
+// ровно её позиция счёта (повторное выставление возвращённой строки даст то же).
+test('244: счета и позиции счёта не тронуты; цена выставленной строки пакета = её позиция счёта', () => {
+  const db = dbBefore244();
+  seed(db);
+  const money = () => [db.prepare('SELECT * FROM invoices ORDER BY id').all(), db.prepare('SELECT * FROM invoice_items ORDER BY id').all()];
+  const before = money();
+  migrate(db);
+  assert.deepEqual(money(), before);
+  const billed = db.prepare(`SELECT vs.package_full, vs.package_price, vs.quantity, ii.unit_price, ii.total, ii.discount_amount
+                               FROM visit_services vs JOIN invoice_items ii ON ii.id = vs.invoice_item_id
+                              WHERE vs.package_full IS NOT NULL`).all();
+  assert.equal(billed.length, 1);
+  for (const x of billed) {
+    assert.equal(x.package_full, x.unit_price);
+    assert.equal(Math.round(x.package_price * x.quantity * 100) / 100, x.total - x.discount_amount);
+  }
+});
+
 test('244: CHECK — запасной замок: отметки 0/1, способ скидки, процент до 100, цена в пакете не выше цены услуги', () => {
   const db = openDb(':memory:'); migrate(db);
   db.prepare("INSERT INTO services (id, name, price) VALUES (1, 'УЗИ', 100000)").run();
