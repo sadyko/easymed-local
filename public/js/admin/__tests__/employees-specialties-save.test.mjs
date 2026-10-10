@@ -74,12 +74,14 @@ const CARDIO = person(80, 'dr.cardio', { specialty: 'Кардиолог',
 const LEGACY = person(81, 'dr.uzd', { specialty: 'Врач УЗД', specialties: [] });
 // Медсестра: специальностей нет вовсе.
 const NURSE = person(82, 'nurse.k', { role: 'nurse', staff_type: 'mid_low', is_doctor: false, specialty: '', specialties: [] });
+// DOCTOR_PROFILE_V1 — специальность не из справочника (данные клиники без перевода).
+const OFFLIST = person(83, 'dr.offlist', { specialty: 'Космонавт', specialties: [{ slug: null, name: 'Космонавт' }] });
 
 const writes = [];
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const method = opts.method || 'GET';
-  if (u === '/api/users' && method === 'GET') return { ok: true, json: async () => ({ users: [CARDIO, LEGACY, NURSE] }) };
+  if (u === '/api/users' && method === 'GET') return { ok: true, json: async () => ({ users: [CARDIO, LEGACY, NURSE, OFFLIST] }) };
   if (u.startsWith('/api/users')) { writes.push({ u, method, body: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ user: {} }) }; }
   if (u === '/api/db') {
     const desc = opts.body ? JSON.parse(opts.body) : {};
@@ -249,4 +251,57 @@ test('DOCTOR_PROFILE_V1: повтор специальности отклоня�
   assert.match(textOf(byClass(card, 'spec-err')[0]), /Эта специальность уже выбрана\./);
   await save(card);
   assert.ok(!('specialties' in onlyWrite()), 'отклонённый повтор ушёл на сервер');
+});
+
+// DOCTOR_PROFILE_V1 — шапка карточки («Кардиолог, Терапевт · Врачи») и колонка
+// «Специальность» списка на языке экрана: специальность — узбекское / английское
+// название общего справочника по коду, категория — через словарь. Раньше строка
+// собиралась до перевода и оставалась русской. Кириллица — только у данных
+// клиники без перевода (специальность не из справочника).
+const { setLang } = await import('../i18n.js');
+const { STRINGS } = await import('../i18n-strings.js');
+const { SPECIALTY_ROWS } = await import('../../shared/specialty-list.js');
+const CYR = /[Ѐ-ӿ]/;
+const refRow = (slug) => SPECIALTY_ROWS.find((r) => r.slug === slug);
+async function inLang(lang, fn) {
+  if (typeof window.dispatchEvent !== 'function') window.dispatchEvent = () => true;   // setLang шлёт langchange
+  setLang(lang);
+  try { await fn(); } finally { setLang('ru'); }
+}
+// Строка под именем в шапке карточки: «специальности · категория».
+const headSub = (card) => {
+  const el = walk(card).find((n) => n.tagName === 'DIV' && String(n.className || '').split(/\s+/).includes('muted') && textOf(n).includes(' · '));
+  assert.ok(el, 'нет строки «специальности · категория» в шапке');
+  return textOf(el).replace(/\s+/g, ' ').trim();
+};
+
+test('DOCTOR_PROFILE_V1: шапка карточки на uz и en — специальности из справочника, категория переведена, без кириллицы', async () => {
+  for (const lang of ['uz', 'en']) {
+    await inLang(lang, async () => {
+      const card = await openCard('dr.cardio');
+      const sub = headSub(card);
+      assert.equal(sub, refRow('kardiolog')[lang] + ', ' + refRow('terapevt')[lang] + ' · ' + STRINGS['Врачи'][lang], lang);
+      assert.ok(!CYR.test(sub), lang + ': кириллица в шапке: ' + sub);
+    });
+  }
+});
+
+test('DOCTOR_PROFILE_V1: специальность не из справочника в шапке — как записана (данные клиники), категория переведена', async () => {
+  await inLang('en', async () => {
+    const card = await openCard('dr.offlist');
+    assert.equal(headSub(card), 'Космонавт · ' + STRINGS['Врачи'].en);
+  });
+});
+
+test('DOCTOR_PROFILE_V1: колонка «Специальность» списка на en — те же названия справочника, что в шапке', async () => {
+  await inLang('en', async () => {
+    document.body.children.length = 0;
+    container = mk('div');
+    await renderEmployees(container);
+    await flush();
+    const row = tags(container, 'tr').find((r) => textOf(r).includes('@dr.cardio'));
+    assert.ok(row, 'нет строки @dr.cardio');
+    const want = refRow('kardiolog').en + ', ' + refRow('terapevt').en;
+    assert.ok(textOf(row).includes(want), 'нет «' + want + '»: ' + textOf(row));
+  });
 });

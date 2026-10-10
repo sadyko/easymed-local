@@ -9,7 +9,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field, checkField, Ring, initials } from '../ui.js';
-import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf, getLang } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ; DOCTOR_PROFILE_V1 — getLang для названий справочника
 import { openEmployeePasswordModal, openChangeOwnPasswordModal } from '../password-change.js';   // PASSWORD_CHANGE_V2
 import { selfUserId, settingsTileLevel, settingsMoneyAllowed, actorIsAdmin, hasRestriction, actorRoleCodes } from '../permissions.js';   // PASSWORD_CHANGE_V2 — своя карточка меняет пароль через текущий · ADMIN_ROWS_GRANTABLE_V1
 import { phoneInput } from '../phone-input.js?v=ph1';
@@ -73,8 +73,20 @@ const staffLabel = (s) => (STAFF_TYPES.find(x => x[0] === s) || ['', 'Не вы�
 // DOCTOR_PROFILE_V1 — колонки макета в списке: специальности строки (из списка, у
 // записанного до него — одна колонка) и показ на сайте и у партнёров — теми же
 // словами, что список «Филиалов» (шаг 4).
-const specNamesOf = (u) => (Array.isArray(u.specialties) && u.specialties.length
-    ? u.specialties.map((s) => (s && typeof s === 'object' ? s.name : s)) : (u.specialty ? [u.specialty] : [])).filter(Boolean);
+const specEntriesOf = (u) => (Array.isArray(u.specialties) && u.specialties.length ? u.specialties : (u.specialty ? [u.specialty] : []))
+    .filter((s) => s && (typeof s !== 'object' || s.name));
+// DOCTOR_PROFILE_V1 — специальность на языке экрана: узбекское / английское
+// название общего справочника — по коду (у записи без кода — по русскому
+// названию), как у строки специальности в карточке. Не из справочника — как
+// записана: это данные клиники, перевода у них нет.
+function specialtyShown(entry) {
+    const slug = entry && typeof entry === 'object' ? entry.slug : null;
+    const name = String((entry && typeof entry === 'object' ? entry.name : entry) || '').trim();
+    const row = (slug && SPECIALTY_ROWS.find((r) => r.slug === slug)) || SPECIALTY_ROWS.find((r) => r.ru === canonicalSpecialty(name));
+    if (!row) return name;
+    const lang = getLang();
+    return (lang !== 'ru' && row[lang]) || row.ru;
+}
 function publicTag(u, branchesById) {
     const state = doctorPublicState(u, branchesById);
     if (state === 'shown') return h('span', { class: 'emp-pub on' }, Icon('Globe', { size: 12 }), ' ', 'На сайте');
@@ -304,7 +316,7 @@ async function paint(root) {
                     fromMain(u) ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '8px', padding: '1px 7px', border: '1px solid var(--ink-100)', borderRadius: '20px', whiteSpace: 'nowrap' } }, 'Главная клиника') : null),
                 h('td', null, u.staff_type ? staffLabel(u.staff_type) : (u.is_doctor ? 'Врачи' : '—')),
                 // DOCTOR_PROFILE_V1 — специальность, приём, показ на сайте и у партнёров (у не-врача — «—»).
-                h('td', null, document.createTextNode(specNamesOf(u).map((n) => tr(n)).join(', ') || '—')),
+                h('td', null, document.createTextNode(specEntriesOf(u).map(specialtyShown).filter(Boolean).join(', ') || '—')),
                 h('td', null, u.is_doctor ? (u.scheduling_mode === 'live_queue' ? 'Живая очередь' : 'По записи') : '—'),
                 h('td', null, u.is_doctor ? publicTag(u, branchesById) : '—'),
                 h('td', null, roleTitle(u)),   // CUSTOM_ROLES_V1 — своя роль зовётся своим именем
@@ -636,8 +648,12 @@ function openEditor(user, root) {
             // SPECIALTY_LIST_V1 — было «должность · категория». Должности больше
             // нет, и специальность описывает сотрудника точнее; без неё
             // остаётся одна категория, а не «Без должности».
-            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                [(emp.specialties || []).filter(Boolean).join(', ') || emp.specialty, staffLabel(emp.staff_type)].filter(Boolean).join(' · ')),
+            // DOCTOR_PROFILE_V1 — каждая часть переводится ДО склейки: специальности —
+            // названиями справочника на языке экрана (specialtyShown), категория —
+            // словарём. Склеенная строка в tr() не находилась и оставалась русской.
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, document.createTextNode(
+                [((emp.specialties || []).filter(Boolean).length ? emp.specialties.filter(Boolean) : [emp.specialty]).filter(Boolean).map(specialtyShown).join(', '),
+                    tr(staffLabel(emp.staff_type))].filter(Boolean).join(' · '))),
             h('div', { style: { display: 'flex', gap: '6px', marginTop: '5px', flexWrap: 'wrap' } }, chip(depName(emp.department_id) || 'Без отдела'), chip('Lic. ' + (emp.license_number || '—')), chip(roleLabel(emp.role)))));
     }
 
