@@ -155,3 +155,79 @@ test('сбой оформления не считается сбоем наст�
   assert.ok(res.done.includes('menu_button'), 'остальные шаги всё равно выполняются');
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// CLINIC_PROFILE_V1 — узбекское название клиники («Компания», name_uz) в
+// узбекской строке приветствия и описания бота; русская — по-прежнему
+// clinic_name. Описание бота следует за переименованием само.
+// ---------------------------------------------------------------------------
+test('приветствие: узбекская строка — name_uz, русская — clinic_name; без name_uz — как было', async () => {
+  const db = seed();
+  const plain = greeting(db);
+  assert.match(plain, /Bu — «Novo Medics» klinikasining/);
+  assert.match(plain, /бот клиники «Novo Medics»/);
+  db.prepare("UPDATE doc_settings SET name_uz = 'Novo Medika' WHERE id = 1").run();
+  const g = greeting(db);
+  assert.match(g, /Bu — «Novo Medika» klinikasining/);
+  assert.match(g, /бот клиники «Novo Medics»/);
+  assert.ok(!/«Novo Medika»/.test(g.split('Здравствуйте')[1]), 'русская строка — с русским названием');
+  db.close();
+});
+
+test('setup: описание бота — узбекская часть с name_uz, русская с clinic_name', async () => {
+  const db = seed();
+  db.prepare("UPDATE doc_settings SET name_uz = 'Novo Medika' WHERE id = 1").run();
+  const { sent, deps } = harness();
+  await setupBot(db, 'T', deps);
+  const d = sent.find((s) => s.method === 'setMyDescription').params.description;
+  const [uz, ru] = d.split('\n\n');
+  assert.match(uz, /«Novo Medika» klinikasining/);
+  assert.match(ru, /клиники «Novo Medics»/);
+  db.close();
+});
+
+test('описание бота следует за переименованием: тот же текст — ни одного запроса; новое название — снова; сбой — повтор', async () => {
+  const { syncBotDescription } = await import('./setup.js');
+  const db = seed();
+  const { sent, deps } = harness();
+
+  assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: true });
+  assert.deepEqual(sent.map((s) => s.method).sort(), ['setMyDescription', 'setMyShortDescription']);
+
+  sent.length = 0;
+  assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: false });
+  assert.equal(sent.length, 0, 'то же описание — Telegram не спрашиваем');
+
+  db.prepare("UPDATE doc_settings SET clinic_name = 'Другая' WHERE id = 1").run();
+  assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: true });
+  assert.match(sent.find((s) => s.method === 'setMyDescription').params.description, /«Другая»/);
+
+  // Сбой Telegram — отпечаток прежний, следующий проход повторит.
+  db.prepare("UPDATE doc_settings SET name_uz = 'Boshqa' WHERE id = 1").run();
+  const failing = { fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({ ok: false, description: 'boom' }) }) };
+  await assert.rejects(() => syncBotDescription(db, 'T', failing));
+  sent.length = 0;
+  assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: true }, 'после сбоя — повтор');
+  assert.match(sent.find((s) => s.method === 'setMyDescription').params.description, /«Boshqa» klinikasining/);
+  db.close();
+});
+
+test('setup после успешной настройки описания — синхронизация не повторяет его', async () => {
+  const { syncBotDescription } = await import('./setup.js');
+  const db = seed();
+  const { sent, deps } = harness();
+  await setupBot(db, 'T', deps);
+  sent.length = 0;
+  assert.deepEqual(await syncBotDescription(db, 'T', deps), { changed: false });
+  assert.equal(sent.length, 0);
+  db.close();
+});
+
+test('цикл бота зовёт синхронизацию описания на проходе рассылки', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  assert.match(src, /import \{ syncBotDescription \} from '\.\/setup\.js';/);
+  const push = src.indexOf('runPushScan(db, cfg.token)');
+  const sync = src.indexOf('syncBotDescription(db, cfg.token)');
+  assert.ok(push > 0 && sync > push, 'синхронизация описания — сразу после прохода рассылки');
+});

@@ -37,37 +37,73 @@ const COMMANDS = {
   ],
 };
 
+// CLINIC_PROFILE_V1 — названия для бота: RU — то, что печатается (clinic_name);
+// UZ — узбекское из «Компании» (name_uz, мигр. 240), иначе то же RU. SELECT * —
+// база до мигр. 240 колонки name_uz не знает, и бот не должен терять название
+// из-за этого. Его же читает приветствие (flow.js).
+export function clinicNames(db) {
+  try {
+    const r = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {};
+    const ru = r.clinic_name || '';
+    return { ru, uz: r.name_uz || ru };
+  } catch { return { ru: '', uz: '' }; }
+}
+
 // Описание видно на пустом экране до первого сообщения — это первое, что
 // читает пациент, и единственное место, где можно объяснить, что бот вообще
 // не человек и что он умеет.
-function descriptions(clinic) {
-  const name = clinic || 'klinika';
+// CLINIC_PROFILE_V1 — узбекская часть называет клинику по-узбекски, русская —
+// по-русски; короткое описание — русским названием, как было.
+function descriptions({ ru, uz } = {}) {
+  const nameRu = ru || 'klinika';
+  const nameUz = uz || ru || 'klinika';
   return {
     long: [
-      'Bu — «' + name + '» klinikasining rasmiy boti.',
+      'Bu — «' + nameUz + '» klinikasining rasmiy boti.',
       'Tahlil natijalari, shifokor xulosalari va hisob-fakturalarni shu yerdan olasiz.',
       'Boshlash uchun telefon raqamingizni yuboring.',
       '',
-      'Это официальный бот клиники «' + name + '».',
+      'Это официальный бот клиники «' + nameRu + '».',
       'Результаты анализов, заключения врачей и счета — здесь.',
       'Чтобы начать, отправьте свой номер телефона.',
     ].join('\n'),
-    short: 'Hujjatlaringiz · Ваши документы — ' + name,
+    short: 'Hujjatlaringiz · Ваши документы — ' + nameRu,
   };
 }
 
-function clinicName(db) {
-  try {
-    const row = db.prepare('SELECT clinic_name FROM doc_settings WHERE id = 1').get();
-    return (row && row.clinic_name) || '';
-  } catch { return ''; }
+// CLINIC_PROFILE_V1 — отпечаток описания, которое Telegram уже принял
+// (telegram_state, мигр. 060). По нему цикл бота узнаёт, что клинику
+// переименовали в «Компании», и не шлёт то же описание на каждом проходе.
+const DESCRIBED_KEY = 'bot_description';
+const fingerprint = (d) => d.long.slice(0, 512) + '\n--\n' + d.short.slice(0, 120);
+function readDescribed(db) {
+  try { const r = db.prepare('SELECT value FROM telegram_state WHERE key = ?').get(DESCRIBED_KEY); return r ? r.value : ''; }
+  catch { return ''; }
+}
+function writeDescribed(db, v) {
+  db.prepare(`INSERT INTO telegram_state (key, value, updated_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(DESCRIBED_KEY, v);
+}
+
+// CLINIC_PROFILE_V1 — описание бота следует за названием клиники. Цикл бота
+// зовёт это на каждом проходе рассылки (index.js): то же описание — ни одного
+// запроса; другое — два запроса и новый отпечаток. Сбой — исключение наружу,
+// отпечаток прежний, следующий проход повторит.
+export async function syncBotDescription(db, token, deps = {}) {
+  const d = descriptions(clinicNames(db));
+  const fp = fingerprint(d);
+  if (readDescribed(db) === fp) return { changed: false };
+  await setMyDescription(token, d.long.slice(0, 512), '', deps);
+  await setMyShortDescription(token, d.short.slice(0, 120), '', deps);
+  writeDescribed(db, fp);
+  return { changed: true };
 }
 
 // Возвращает список того, что удалось и что нет, — раздел настроек показывает
 // это администратору строкой, не превращая в ошибку.
 export async function setupBot(db, token, deps = {}) {
-  const clinic = clinicName(db);
-  const { long, short } = descriptions(clinic);
+  const d = descriptions(clinicNames(db));   // CLINIC_PROFILE_V1
+  const { long, short } = d;
   const done = [];
   const failed = [];
 
@@ -83,6 +119,11 @@ export async function setupBot(db, token, deps = {}) {
   // режем здесь, а не полагаемся на то, что название клиники короткое.
   await step('description', () => setMyDescription(token, long.slice(0, 512), '', deps));
   await step('short_description', () => setMyShortDescription(token, short.slice(0, 120), '', deps));
+  // CLINIC_PROFILE_V1 — оба описания приняты: запомнить отпечаток, чтобы цикл
+  // бота (syncBotDescription) не слал то же самое ещё раз.
+  if (done.includes('description') && done.includes('short_description')) {
+    try { writeDescribed(db, fingerprint(d)); } catch { /* отпечаток не записался — цикл повторит */ }
+  }
   await step('menu_button', () => setChatMenuButton(token, deps));
 
   return { ok: !failed.length, done, failed };

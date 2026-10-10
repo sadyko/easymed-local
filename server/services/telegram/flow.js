@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDataDir } from '../control/config.js';   // SUPERVISED_INSTALL_V1
+import { clinicNames } from './setup.js';   // CLINIC_PROFILE_V1 — узбекское название клиники в узбекской строке
 
 // Корень проекта считаем от расположения модуля, а не от process.cwd():
 // сервер могут запустить ярлыком из любой папки, и тогда cwd указывает мимо.
@@ -104,24 +105,19 @@ const KIND_LINE = {
   file:       '📎 Biriktirilgan fayllar · Прикреплённые файлы',
 };
 
-function clinicName(db) {
-  try {
-    const row = db.prepare('SELECT clinic_name FROM doc_settings WHERE id = 1').get();
-    return (row && row.clinic_name) || '';
-  } catch { return ''; }
-}
-
 // Приветствие собирается на лету: название клиники и перечень видов документов
 // берутся из настроек, поэтому текст не может разойтись с тем, что бот реально
 // умеет выдавать.
 export function greeting(db) {
-  const name = clinicName(db);
+  // CLINIC_PROFILE_V1 — узбекская строка — узбекским названием («Компания»,
+  // name_uz), русская — тем, что печатается (clinic_name); пустые — как было.
+  const { ru, uz } = clinicNames(db);
   const lines = allowedKinds(db).map((k) => KIND_LINE[k]).filter(Boolean);
   return [
-    name ? '🏥 Assalomu alaykum! Bu — «' + name + '» klinikasining rasmiy boti.'
-         : '🏥 Assalomu alaykum! Bu — klinikaning rasmiy boti.',
-    name ? 'Здравствуйте! Это официальный бот клиники «' + name + '».'
-         : 'Здравствуйте! Это официальный бот клиники.',
+    uz ? '🏥 Assalomu alaykum! Bu — «' + uz + '» klinikasining rasmiy boti.'
+       : '🏥 Assalomu alaykum! Bu — klinikaning rasmiy boti.',
+    ru ? 'Здравствуйте! Это официальный бот клиники «' + ru + '».'
+       : 'Здравствуйте! Это официальный бот клиники.',
     '',
     'Bu yerda quyidagilarni olishingiz mumkin:',
     'Здесь вы можете получить:',

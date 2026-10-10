@@ -14,6 +14,7 @@ import { getUpdates, TelegramError } from './api.js';
 import { getDecryptedToken } from './settings.js';
 import { handleUpdate } from './flow.js';
 import { runPushScan } from './push.js';
+import { syncBotDescription } from './setup.js';   // CLINIC_PROFILE_V1
 
 const OFFSET_KEY = 'updates_offset';
 const POLL_TIMEOUT = 25;          // секунд держим длинный опрос
@@ -111,6 +112,9 @@ async function loop(db, pollTimeout) {
       lastPush = Date.now();
       try { await runPushScan(db, cfg.token); }
       catch (e) { console.warn('[telegram] push scan:', (e && e.message) || e); }
+      // CLINIC_PROFILE_V1 — переименовали клинику в «Компании» — описание бота следом.
+      try { await syncBotDescription(db, cfg.token); }
+      catch (e) { console.warn('[telegram] description:', (e && e.message) || e); }
     }
 
     try {
