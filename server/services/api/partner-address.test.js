@@ -168,3 +168,34 @@ test('сообщения про здания переведены', () => {
     assert.ok(!/[А-Яа-яЁё]/.test(STRINGS[m].uz + STRINGS[m].en), 'кириллица в uz / en: ' + m);
   }
 });
+
+// CLINIC_API_STEP7_V1 (ревью слияния №3) — страж судит строку так, как она ЛЯЖЕТ в базу,
+// а не так, как её прислали:
+//   (а) active при вставке не пишется (реестр его не пускает, компилятор молча
+//       отбрасывает) — новое здание всегда работает; присланное active: 0 / false
+//       не прячет его от проверки (вставка и upsert заводят новое здание);
+//   (б) отбор, по которому нельзя точно сказать, какие строки правятся (in строкой
+//       «(5)», id — не число), — проверяются все здания, а не ни одного.
+test('/api/db: вставка с active: 0 и отбор «in» строкой не обходят правило', () => {
+  const db = fresh();
+  setAddr(db, FULL);
+  insertConnectionRow(db);
+  const ins = (op, values) => branchAddressRefusal(db, { table: 'branches', op }, { values });
+  for (const op of ['insert', 'upsert']) {
+    for (const active of [0, false, '0']) {
+      assert.deepEqual(ins(op, { name: 'Новый', active }), { field: 'region_code', message: ADDRESS_MESSAGES.saveBranch }, op + ' active=' + active);
+    }
+    assert.equal(ins(op, { name: 'Новый', active: 0, show_public: 0 }), null, op + ': скрытое — можно');
+  }
+  const id = addBranch(db, { ...FULL_BRANCH, district_code: '', show_public: 0 });   // скрытое, неполное — допустимо
+  const upd = (filters) => branchAddressRefusal(db, { table: 'branches', op: 'update' }, { values: { show_public: 1 }, filters });
+  assert.deepEqual(upd([{ col: 'id', op: 'eq', val: id }]), { field: 'district_code', message: ADDRESS_MESSAGES.saveBranch }, 'контроль');
+  for (const filters of [
+    [{ col: 'id', op: 'eq', val: id }, { col: 'id', op: 'in', val: `(${id})` }],
+    [{ col: 'id', op: 'in', val: `(${id})` }],
+    [{ col: 'id', op: 'eq', val: 'x' + id }],
+  ]) {
+    assert.deepEqual(upd(filters), { field: 'district_code', message: ADDRESS_MESSAGES.saveBranch }, JSON.stringify(filters));
+  }
+  assert.deepEqual(upd([{ col: 'id', op: 'in', val: [id, id + 100] }]), { field: 'district_code', message: ADDRESS_MESSAGES.saveBranch }, 'in массивом — как раньше');
+});
