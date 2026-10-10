@@ -25,6 +25,7 @@ import { PROXY_MODELS } from '../../public/js/shared/lisproxy-models.js';   // L
 // CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
 import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
+import { geoCodeRefusal } from '../services/geo-codes-guard.js';   // REFERENCE_LISTS_V1 (полировка) — коды географии не меняются
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -355,6 +356,14 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     // адрес и телефон своего здания.
     const companyRefusal = companyBranchRefusal(db, compiled.meta, req.body);
     if (companyRefusal) return res.status(409).json({ error: { code: 'conflict', message: companyRefusal } });
+
+    // REFERENCE_LISTS_V1 (полировка, 2026-10-10) — КОДЫ ГЕОГРАФИИ КЛИНИКА НЕ
+    // МЕНЯЕТ: партнёры получают коды страны, города и района. Код строки не
+    // меняется и не стирается, строка бланка не удаляется (её выключают), новый
+    // код не повторяет занятый. Названия и «активна» — как прежде
+    // (services/geo-codes-guard.js).
+    const geoRefusal = geoCodeRefusal(db, compiled.meta, req.body, req.user);
+    if (geoRefusal) return res.status(409).json({ error: { code: 'conflict', message: geoRefusal } });
 
     // CLINIC_PROFILE_V1 (ревью I2) — ФОРМАТ ПРОФИЛЯ КЛИНИКИ. CHECK миграции 240
     // — запасной замок, и он пропускал «..» в пути логотипа, разметку в адресе
