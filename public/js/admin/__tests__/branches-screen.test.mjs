@@ -20,6 +20,8 @@ import fs from 'node:fs';
 // ===========================================================================
 // Поддельный DOM
 // ===========================================================================
+const focusLog = [];
+const scrollLog = [];
 class FakeNode {
     constructor(tag) {
         this.tagName = String(tag).toUpperCase();
@@ -56,7 +58,8 @@ class FakeNode {
     querySelector(sel) { return descendants(this).find((n) => matches(n, sel)) || null; }
     querySelectorAll(sel) { return descendants(this).filter((n) => matches(n, sel)); }
     remove() { if (this._parent) this._parent.removeChild(this); }
-    focus() {} blur() {} scrollIntoView() {} select() {}
+    // Ревью шага 4 (находка 8) — куда экран увёл фокус и прокрутку после неудачного сохранения.
+    focus() { focusLog.push(this); } blur() {} scrollIntoView() { scrollLog.push(this); } select() {}
     get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
     set textContent(v) { this._text = String(v); this.children.length = 0; }
     get classList() {
@@ -695,9 +698,12 @@ test('новый филиал с часами — без проверки (вр�
     assert.equal(writes[0].values.working_hours, WEEK());
 });
 
-test('подсказка часов: ограничивают только врачей с выбранным зданием (ответ владельца 2026-10-10)', async () => {
+test('подсказка часов: ограничивают тех, у кого выбрано это здание — врачей и других исполнителей; без здания — нет (ответ владельца 2026-10-10)', async () => {
     const { root } = await openPage({ id: 5, name: 'Юнусабад' });
-    assert.match(labelText(hoursCardNode(root)), /Врачей без выбранного здания они не ограничивают/);
+    const t = labelText(hoursCardNode(root));
+    assert.match(t, /врачей и других исполнителей услуг/);
+    assert.match(t, /Сотрудников без выбранного здания они не ограничивают/);
+    assert.doesNotMatch(t, /ограничивают только врачей/, 'ограничиваются не только врачи (ревью шага 4, находка 4)');
 });
 
 test('филиал: часы только видны — переключатели и сетка выключены', async () => {
@@ -854,4 +860,161 @@ test('прежний облачный адрес #settings:branches ведёт �
     assert.match(hub, /state\.section === 'branches'\) await renderBranchesEditor\(/);
     const lookup = hub.slice(hub.indexOf('const LOOKUP_CONFIG = {'));
     assert.doesNotMatch(lookup.slice(0, lookup.indexOf('\n};')), /\n    branches: \{/);
+});
+
+// ===========================================================================
+// Ревью шага 4 (2026-10-10) — находки экрана: 1, 2, 4, 6, 7, 8.
+// Повторы — из scratchpad/step4-review (zz-s4-*), перенесены сюда.
+// ===========================================================================
+const perms = await import('../permissions.js');
+const LOSES_SAT = { data: { doctors: [{ id: 8, name: 'Каримов Р.', lost: [{ day: 'sat', from: '09:00', to: '18:00' }] }] } };
+
+test('ревью 1: правка, набранная пока открыт вопрос о врачах, уходит вместе с часами по «Сохранить всё равно»', async () => {
+    const { root, done } = await openPage({ id: 5, name: 'Юнусабад', phone: '+998 71 111 11 11' });
+    impactReply = LOSES_SAT;
+    await pickMode(root, 'По дням недели');
+    await save(root);
+    assert.ok(descendants(root).find((n) => matches(n, '.brf-impact')), 'вопрос открыт');
+    type(triInput(root, 'Название филиала', 'ru'), 'Юнусабад-2');
+    type(triInput(root, 'Название филиала', 'en'), 'Yunusabad branch');
+    buttonByText(root, /Сохранить всё равно/).click(); await settle(80);
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0].values, { name: 'Юнусабад-2', name_en: 'Yunusabad branch', working_hours: WEEK() });
+    assert.equal(done(), 1);
+});
+
+test('ревью 1: правка, набранная пока открыт вопрос, проверяется заново — неверное не уходит и часы тоже', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    impactReply = LOSES_SAT;
+    await pickMode(root, 'По дням недели');
+    await save(root);
+    type(triInput(root, 'Название филиала', 'ru'), '  ');
+    buttonByText(root, /Сохранить всё равно/).click(); await settle(80);
+    assert.equal(writes.length, 0, 'пустое RU-название не уходит');
+    assert.equal(triError(root, 'Название филиала', 'ru'), 'Введите название на русском.');
+});
+
+test('ревью 1 (список): дописанное EN-название после «Сохранить всё равно» не теряется', async () => {
+    branchRows = [{ ...BLANK_ROW, id: 1, name: 'Юнусабад' }];
+    companyRow = null; writes = []; impactCalls = []; impactReply = LOSES_SAT;
+    globalThis.window.CLINIC.building_role = 'main'; delete globalThis.window.CLINIC.own_branch_id;
+    const root = mkEl('div');
+    await renderBranchesEditor(root, { onBack: () => {}, onNavigate: () => {} });
+    await settle(80);
+    items(root)[0].click(); await settle(80);
+    await pickMode(root, 'По дням недели');
+    await save(root);
+    type(triInput(root, 'Название филиала', 'en'), 'Yunusabad branch');
+    buttonByText(root, /Сохранить всё равно/).click(); await settle(120);
+    assert.equal(writes.length, 1);
+    assert.equal(branchRows[0].name_en, 'Yunusabad branch');
+    assert.equal(items(root).length, 1, 'вернулись к списку');
+});
+
+test('ревью 2: ушли со страницы, пока проверка часов ещё идёт, и согласились бросить — ничего не записано', async () => {
+    const realFetch = globalThis.fetch;
+    let backs = 0;
+    globalThis.window.confirm = () => true;
+    try {
+        const { root } = await openPage({ id: 5, name: 'Юнусабад' }, { onBack: () => { backs++; } });
+        globalThis.fetch = async (url, opts) => {
+            if (String(url).startsWith('/api/rpc/branch_hours_impact')) await new Promise((r) => setTimeout(r, 150));
+            return realFetch(url, opts);
+        };
+        await pickMode(root, 'По дням недели');
+        buttonByText(root, /^Сохранить$/).click();
+        await settle(10);                                   // проверка ещё идёт
+        buttonByText(root, /К списку филиалов/).click();    // «Изменения пропадут» → OK
+        await settle(300);
+        assert.equal(backs, 1);
+        assert.equal(writes.length, 0, 'брошенные часы не записаны');
+        assert.doesNotMatch(toastText(), /Филиал сохранён/);
+    } finally { globalThis.fetch = realFetch; delete globalThis.window.confirm; }
+});
+
+test('ревью 2: ушли, но отказались бросать — проверка доходит, часы записываются как обычно', async () => {
+    const realFetch = globalThis.fetch;
+    let backs = 0;
+    globalThis.window.confirm = () => false;
+    try {
+        const { root } = await openPage({ id: 5, name: 'Юнусабад' }, { onBack: () => { backs++; } });
+        globalThis.fetch = async (url, opts) => {
+            if (String(url).startsWith('/api/rpc/branch_hours_impact')) await new Promise((r) => setTimeout(r, 100));
+            return realFetch(url, opts);
+        };
+        await pickMode(root, 'По дням недели');
+        buttonByText(root, /^Сохранить$/).click();
+        await settle(10);
+        buttonByText(root, /К списку филиалов/).click();
+        await settle(250);
+        assert.deepEqual([backs, writes.length], [0, 1]);
+    } finally { globalThis.fetch = realFetch; delete globalThis.window.confirm; }
+});
+
+test('ревью 4: исполнитель услуг (не врач) — в предупреждении с ролью; заголовок говорит «сотрудники»', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    impactReply = { data: { doctors: [
+        { id: 8, name: 'Каримов Р.', lost: [{ day: 'sat', from: '09:00', to: '18:00' }] },
+        { id: 12, name: 'Медсестра Н.', role: 'nurse', lost: [{ day: 'sat', from: '09:00', to: '13:00' }] },
+    ] } };
+    await pickMode(root, 'По дням недели');
+    await save(root);
+    const panel = descendants(root).find((n) => matches(n, '.brf-impact'));
+    const t = labelText(panel);
+    assert.match(t, /Эти сотрудники потеряют часы приёма/);
+    assert.match(t, /Медсестра Н\. \(Медсестра\) — Сб 09:00–13:00/);
+    assert.match(t, /Каримов Р\. — Сб 09:00–18:00/, 'у врача роль не дописывается');
+    assert.doesNotMatch(t, /Каримов Р\. \(/);
+});
+
+test('ревью 8: ошибка только в часах — экран ведёт к ней: прокрутка и фокус в карточке часов', async () => {
+    const within = (outer, n) => n === outer || descendants(outer).includes(n);
+    let { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    await pickMode(root, 'По дням недели');
+    for (const d of ['Пн', 'Вт', 'Ср', 'Чт', 'Пт']) setDay(root, d, { on: false });
+    focusLog.length = 0; scrollLog.length = 0;
+    await save(root);
+    assert.equal(writes.length, 0);
+    const card = hoursCardNode(root);
+    assert.ok(focusLog.some((n) => within(card, n)) && scrollLog.some((n) => within(card, n)), 'фокус и прокрутка — в карточке часов');
+    const [monChk] = dayCtrls(root, 'Пн');
+    assert.equal(focusLog[focusLog.length - 1], monChk, 'ни одного рабочего дня — фокус на понедельнике');
+
+    ({ root } = await openPage({ id: 5, name: 'Юнусабад' }));
+    await pickMode(root, 'По дням недели');
+    setDay(root, 'Ср', { from: '18:00', to: '09:00' });
+    focusLog.length = 0;
+    await save(root);
+    const [, , wedTo] = dayCtrls(root, 'Ср');
+    assert.equal(focusLog[focusLog.length - 1], wedTo, 'конец раньше начала — фокус на «до» этого дня');
+    assert.equal(wedTo.attrs['aria-invalid'], 'true');
+    setDay(root, 'Ср', { to: '19:00' });
+    assert.equal(wedTo.attrs['aria-invalid'], undefined, 'исправили — пометка снята');
+});
+
+test('ревью 6: роль с «Филиалы: Изменение», но без «Компании» — кнопки «Изменить в «Компании»» нет, объяснение другое', async () => {
+    perms.setEffectiveFromRole({ name: 'Офис', permissions: { sections: ['settings'], levels: {},
+        grants: { settings: 'view', 'settings.branches': 'edit', 'settings.company': 'none' } } });
+    try {
+        assert.equal(perms.isRouteAllowed('documents-settings'), false, 'стенд: «Компания» роли закрыта');
+        const nav = [];
+        const { root } = await openPage({ id: 1, name: 'Главный корпус' }, { own: true, company: { phone: '+998 71 200 12 00' }, onNavigate: (r) => nav.push(r) });
+        assert.equal(buttonByText(root, /Изменить в «Компании»/), null);
+        assert.match(textOf(root), /её меняет администратор или тот, кому выдано изменение «Компании»/);
+        assert.ok(isOff(fieldInput(root, 'Телефон для пациентов')), 'телефон по-прежнему только виден');
+    } finally { perms.setFullAccess('Admin'); }
+    const { root } = await openPage({ id: 1, name: 'Главный корпус' }, { own: true, company: {} });
+    assert.ok(buttonByText(root, /Изменить в «Компании»/), 'полному доступу кнопка есть');
+});
+
+test('ревью 7: у своего здания главного список не показывает прежний адрес из branches (его нет ни на странице, ни в «Компании»)', async () => {
+    const company = { id: 1, address: 'г. Ташкент, ул. Навои, 10 (бланк)', phone: '+998 71 200 12 00', country_code: 'UZ',
+        region_code: '', district_code: '', street_ru: '', street_uz: '', street_en: '', maps_url: '' };
+    const { root } = await openList([{ name: 'Главный корпус', address: 'ул. Старая, 5 (старый список)' },
+        { name: 'Чиланзар', address: 'ул. Филиальная, 3' }], { own: 1, company });
+    const [own, other] = items(root).map(labelText);
+    assert.doesNotMatch(own, /ул\. Старая, 5/);
+    assert.match(other, /ул\. Филиальная, 3/, 'у других зданий прежний адрес виден, как и на их странице');
+    items(root)[0].click(); await settle(80);
+    assert.doesNotMatch(textOf(root), /ул\. Старая, 5/);
 });

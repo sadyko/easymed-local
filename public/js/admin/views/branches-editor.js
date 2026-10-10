@@ -44,11 +44,14 @@ function chips(row) {
         return h('span', { class: 'brf-chip' + (on ? ' on' : ''), title: on ? 'Есть перевод' : 'Нет перевода' }, document.createTextNode(l.toUpperCase()));
     }));
 }
-function itemEl(row, { own, onOpen }) {
+// legacy — показывать ли прежний адрес (branches.address), пока улицы нет. У
+// своего здания главного его нет ни на странице, ни в «Компании»: там адрес
+// один — из «Компании» (ревью шага 4, находка 7).
+function itemEl(row, { own, onOpen, legacy = true }) {
     const off = Number(row.active) === 0;
     const shown = Number(row.show_public ?? 1) !== 0;
     const addr = [row.street_ru, row.landmark_ru].map((s) => String(s || '').trim()).filter(Boolean).join(', ')
-        || String(row.address || '').trim() || '—';
+        || (legacy ? String(row.address || '').trim() : '') || '—';
     return h('button', { type: 'button', class: 'brf-item' + (off ? ' brf-off' : ''), onclick: onOpen },
         h('span', { class: 'brf-head' },
             h('b', null, document.createTextNode(placeName(row, getLang()) || '—')),
@@ -117,7 +120,7 @@ export async function renderBranchesEditor(container, { onBack = null, onNavigat
         for (const r of rows) {
             const own = ownId != null && Number(r.id) === Number(ownId);
             const shown = own && !secondary ? overlayOwnBuilding(r, company) : r;
-            listBox.appendChild(itemEl(shown, { own, onOpen: () => showPage(r, own) }));
+            listBox.appendChild(itemEl(shown, { own, legacy: !(own && !secondary), onOpen: () => showPage(r, own) }));   // ревью 7
         }
     }
     async function showPage(row, own) {

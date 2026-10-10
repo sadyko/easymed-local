@@ -17,6 +17,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag } from '../ui.js';
 import { tr, trf } from '../i18n.js';
+import { isRouteAllowed } from '../permissions.js';   // ревью 6 — «Изменить в «Компании»» только тому, кому она открыта
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { triGroup, labeled } from './company-fields.js';
 import { addressCard, mapCard } from './company-address.js';   // те же карточки, что «Компания»
@@ -72,6 +73,7 @@ export async function renderBranchPage(container, opts = {}) {
     let availability = () => ({});            // задача 13 — доступность списков адреса
     let busy = false;
     let asking = false;                       // открыт вопрос «эти врачи потеряют часы приёма»
+    let gen = 0;                              // поколение сохранения (ревью 2)
 
     // ---- название и «Работает» ----
     const name = triGroup('Название филиала', { ru: state.name, uz: state.name_uz, en: state.name_en }, {
@@ -158,16 +160,18 @@ export async function renderBranchPage(container, opts = {}) {
             const mine = k === 'name' ? (isNew || keys.includes('name')) : (keys.includes(k) || (addrTouched && ADDRESS_COLUMNS.includes(k)));
             if (mine) out[k] = msg;
         }
-        // Часы проверяются, если их меняли.
+        // Часы проверяются, если их меняли. Третий элемент — к какому полю вести
+        // (ревью 8): понедельник, если рабочих дней нет, иначе «до» этого дня.
         if (keys.includes('working_hours') || keys.includes('is_24_7')) {
             const hp = hoursProblem(hours);
-            if (hp) out.hours = [hp.template, hp.day ? { day: tr(DAY_LABEL[hp.day]) } : undefined];
+            if (hp) out.hours = [hp.template, hp.day ? { day: tr(DAY_LABEL[hp.day]) } : undefined, hp.day || 'noDay'];
         }
         return out;
     }
     function showProblems(p, { focus = false } = {}) {
         for (const [k, e] of Object.entries(errs)) {
             const m = p[k];
+            if (k === 'hours') hoursUi.pointAt(Array.isArray(m) ? m[2] : null);   // ревью 8 — у ошибки часов есть поле
             if (Array.isArray(m)) e.set(m[0], m[1]); else e.set(m || '');
         }
         if (!focus) return;
@@ -180,22 +184,34 @@ export async function renderBranchPage(container, opts = {}) {
         Icon('Check', { size: 14 }), ' ', isNew ? 'Добавить' : 'Сохранить');
     async function save() {
         if (busy || lockAll) return;
-        const v = collect();
-        const payload = changedOf(v);
-        const keys = Object.keys(payload);
-        if (!keys.length) { showProblems({}); toast(tr('Нет изменений'), 'info'); return; }
-        const problems = problemsFor(v, keys);
-        showProblems(problems, { focus: true });
-        if (Object.keys(problems).length) { toast(tr('Проверьте выделенные поля.'), 'fail'); return; }
         busy = true; saveBtn.disabled = true;
+        const mine = ++gen;   // ревью 2 — уход со страницы делает это сохранение чужим
         try {
-            // «Каким врачам какое время закроется» — до записи (спецификация).
-            // Только новые часы «По дням недели» могут закрыть время; у нового
-            // здания врачей ещё нет.
-            if (!isNew && hours.mode === 'week' && (keys.includes('working_hours') || keys.includes('is_24_7'))) {
+            // Ревью 1 — что записать, считается ПОСЛЕ проверки часов: пока шла
+            // проверка или был открыт вопрос, человек мог дописать другие поля,
+            // и уходит текущее (с той же проверкой полей). Часы, изменённые за
+            // время проверки, проверяются заново; правка часов при открытом
+            // вопросе снимает его (ответ «нет»).
+            let v, payload, checked = null;
+            for (;;) {
+                v = collect();
+                payload = changedOf(v);
+                const keys = Object.keys(payload);
+                if (!keys.length) { showProblems({}); toast(tr('Нет изменений'), 'info'); return; }
+                const problems = problemsFor(v, keys);
+                showProblems(problems, { focus: true });
+                if (Object.keys(problems).length) { toast(tr('Проверьте выделенные поля.'), 'fail'); return; }
+                // «Каким врачам какое время закроется» — до записи (спецификация).
+                // Только новые часы «По дням недели» могут закрыть время; у нового
+                // здания врачей ещё нет.
+                const hoursTouched = keys.includes('working_hours') || keys.includes('is_24_7');
+                const sameAsChecked = !!checked && checked.working_hours === v.working_hours && checked.is_24_7 === v.is_24_7;
+                if (isNew || hours.mode !== 'week' || !hoursTouched || sameAsChecked) break;
                 asking = true;
-                const go = await confirmHours(v).finally(() => { asking = false; });
-                if (!go) return;
+                let go = false;
+                try { go = await confirmHours(v); } finally { asking = false; }
+                if (!go || mine !== gen) return;
+                checked = { working_hours: v.working_hours, is_24_7: v.is_24_7 };
             }
             const q = isNew ? supabase.from('branches').insert(payload) : supabase.from('branches').update(payload).eq('id', row.id);
             const { data, error } = await q.select().single();
@@ -228,10 +244,13 @@ export async function renderBranchPage(container, opts = {}) {
     // Уйти со страницы: без несохранённого — сразу; с ним — спросить.
     // Открытый вопрос о врачах не держит человека на странице: уход снимает его
     // (ответ «нет» — ничего не записано), дальше — как обычно.
+    // Ревью 2 — ушли, пока проверка часов ещё шла: её ответ больше ничего не пишет.
     const leave = (go) => {
         if (busy && !asking) return;
+        if (!(lockAll || !dirty() || askDiscard())) return;
+        gen++;
         if (asking) hoursUi.clearImpact();
-        if (lockAll || !dirty() || askDiscard()) go();
+        go();
     };
     const back = h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' },
         onclick: () => leave(() => { if (typeof onBack === 'function') onBack(); }) },
@@ -243,10 +262,16 @@ export async function renderBranchPage(container, opts = {}) {
     if (secondary) {
         notes.push(h('p', { class: 'cpf-note', role: 'note' }, Icon('Building', { size: 16 }), h('span', null, BRANCH_MESSAGES.mainOnly)));
     } else if (own) {
+        // Ревью 6 — кнопка ведёт в «Компанию» только того, кому она открыта;
+        // остальным — объяснение, кто её меняет (иначе «Нет доступа» после
+        // брошенных правок).
+        const canCompany = isRouteAllowed('documents-settings');
         notes.push(h('div', { class: 'cpf-note brf-own', role: 'note' }, Icon('Info', { size: 16 }),
-            h('span', null, 'Адрес для партнёров, телефон и карта этого здания — из «Компании»: там их и меняйте.'),
-            h('button', { class: 'btn btn-outline btn-sm', type: 'button',
-                onclick: () => leave(() => { if (typeof onNavigate === 'function') onNavigate('documents-settings'); }) }, 'Изменить в «Компании»')));
+            h('span', null, canCompany
+                ? 'Адрес для партнёров, телефон и карта этого здания — из «Компании»: там их и меняйте.'
+                : 'Адрес для партнёров, телефон и карта этого здания — из «Компании»; её меняет администратор или тот, кому выдано изменение «Компании».'),
+            canCompany ? h('button', { class: 'btn btn-outline btn-sm', type: 'button',
+                onclick: () => leave(() => { if (typeof onNavigate === 'function') onNavigate('documents-settings'); }) }, 'Изменить в «Компании»') : null));
     }
     clear(container);
     container.appendChild(h('div', { class: 'fade-in brf-page' },

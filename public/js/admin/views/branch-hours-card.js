@@ -5,8 +5,10 @@
 //
 // Способы (решение плана Р6): «Не ограничивать» — '{}', как у всех зданий до
 // шага 4; «По дням недели» — все семь дней; «Круглосуточно» — is_24_7.
-// Часы ограничивают только врачей, у которых в «Сотрудниках» выбрано это
-// здание; врачей без здания — нет (ответ владельца 2026-10-10: как сейчас).
+// Часы ограничивают тех, к кому записывают, — врачей и других исполнителей
+// услуг (медсестра с процедурами), — у кого в «Сотрудниках» выбрано это
+// здание; сотрудников без здания — нет (ответ владельца 2026-10-10: как сейчас;
+// ревью шага 4, находка 4: не только врачей).
 import { h, Icon, clear } from '../ui.js';
 import { tr } from '../i18n.js';
 import { weekHoursGrid, WEEK_DAYS } from './week-hours.js';
@@ -15,9 +17,17 @@ import { fieldErr } from './company-fields.js';
 export const DAY_LABEL = Object.freeze(Object.fromEntries(WEEK_DAYS));
 const MODES = [
     ['none', 'Не ограничивать', 'Врачи этого здания принимают по своему графику из «Сотрудников». Так сейчас у всех зданий.'],
-    ['week', 'По дням недели', 'Вне этих часов врачам этого здания запись не предлагается.'],
+    ['week', 'По дням недели', 'Вне этих часов запись к сотрудникам этого здания не предлагается.'],   // ревью 4 — не только к врачам
     ['allday', 'Круглосуточно', 'Например, стационар или дежурная лаборатория.'],
 ];
+// Ревью 4 — роль исполнителя-не врача в предупреждении (RPC отдаёт users.role).
+const ROLE_LABEL = Object.freeze({
+    doctor: 'Врач', nurse: 'Медсестра', registrar: 'Регистратор', cashier: 'Кассир', lab: 'Лаборант',
+    admin: 'Администратор', inventory: 'Склад', callcenter: 'Оператор колл-центра',
+    head_doctor: 'Главный врач', senior_nurse: 'Старшая медсестра', head_cashier: 'Старший кассир',
+});
+const isDoctor = (d) => !d.role || d.role === 'doctor';
+const roleLabel = (role) => tr(ROLE_LABEL[role] || String(role));
 let seq = 0;
 
 /** Потерянное время врача одной строкой: «Пн 18:00–20:00, Сб 09:00–15:00». */
@@ -33,6 +43,15 @@ export function lostText(lost) {
 export function hoursCard(hours, { disabled = false, onChange = null } = {}) {
     const name = 'brf-hours-' + (++seq);
     const err = fieldErr(null);
+    // Ревью 8 — у ошибки часов есть поле: экран прокручивает к нему и ставит
+    // фокус. 'noDay' — понедельник; ключ дня — «до» этого дня; иначе — способ.
+    function pointAt(target) {
+        const next = target === 'noDay' ? grid.rows.mon.chk
+            : (target && grid.rows[target]) ? grid.rows[target].to
+            : (radios[hours.mode] || radios.week);
+        if (err.ctrl && err.ctrl !== next && typeof err.ctrl.removeAttribute === 'function') err.ctrl.removeAttribute('aria-invalid');
+        err.ctrl = next;
+    }
     const impactSlot = h('div', { class: 'brf-impact-slot' });
     let pending = null;
     function clearImpact() {
@@ -65,11 +84,15 @@ export function hoursCard(hours, { disabled = false, onChange = null } = {}) {
             const done = (v) => { pending = null; clear(impactSlot); resolve(v); };
             const headId = name + '-impact';
             const backBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => done(false) }, 'Вернуться к часам');
+            const allDoctors = doctors.every(isDoctor);
             impactSlot.appendChild(h('div', { class: 'brf-impact', role: 'alertdialog', 'aria-labelledby': headId },
-                h('p', { class: 'brf-impact-head', id: headId }, Icon('Warning', { size: 16 }), ' ', 'Эти врачи потеряют часы приёма'),
+                h('p', { class: 'brf-impact-head', id: headId }, Icon('Warning', { size: 16 }), ' ',
+                    allDoctors ? 'Эти врачи потеряют часы приёма' : 'Эти сотрудники потеряют часы приёма'),
                 h('ul', null, ...doctors.map((d) => h('li', null,
-                    h('b', null, document.createTextNode(d.name || '—')), document.createTextNode(' — ' + lostText(d.lost))))),
-                h('p', { class: 'cpf-hint' }, 'Уже записанные пациенты не отменяются; новых записей на это время программа не предложит. Считается по врачам, приписанным к этому зданию в «Сотрудниках».'),
+                    h('b', null, document.createTextNode(d.name || '—')),
+                    isDoctor(d) ? null : h('span', { class: 'brf-role' }, document.createTextNode(' (' + roleLabel(d.role) + ')')),
+                    document.createTextNode(' — ' + lostText(d.lost))))),
+                h('p', { class: 'cpf-hint' }, 'Уже записанные пациенты не отменяются; новых записей на это время программа не предложит. Считается по тем, у кого в «Сотрудниках» выбрано это здание.'),
                 h('div', { class: 'cpf-row' },
                     h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => done(true) }, 'Сохранить всё равно'),
                     backBtn)));
@@ -82,7 +105,7 @@ export function hoursCard(hours, { disabled = false, onChange = null } = {}) {
     const node = h('div', { class: 'card' },
         h('div', { class: 'card-header' }, h('h3', null, Icon('Clock', { size: 16 }), ' ', 'Часы работы')),
         h('div', { class: 'cpf-body' }, modes, grid.node,
-            h('p', { class: 'cpf-hint' }, 'Часы здания ограничивают только врачей, у которых в «Сотрудниках» выбрано это здание. Врачей без выбранного здания они не ограничивают.'),
+            h('p', { class: 'cpf-hint' }, 'Часы ограничивают тех, к кому записывают пациентов, — врачей и других исполнителей услуг, — если в «Сотрудниках» у них выбрано это здание. Сотрудников без выбранного здания они не ограничивают.'),   // ревью 4
             err.node, impactSlot));
-    return { node, err, askImpact, clearImpact, paint };
+    return { node, err, askImpact, clearImpact, paint, pointAt };
 }
