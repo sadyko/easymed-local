@@ -42,7 +42,7 @@ import { refreshClinicBrand } from '../clinic-context.js?v=localclinic2';
 // экран, и лишнее поле здесь снова превратилось бы в поле формы.
 const DEFAULTS = {
     clinic_name: '', address: '', phone: '', email: '', license: '',
-    logo_data_url: null, accent_color: '#167873',
+    logo_data_url: '', accent_color: '#167873',   // CLINIC_PROFILE_V1 — колонка NOT NULL: «нет логотипа» — ''
 };
 
 let state = { ...DEFAULTS };
@@ -191,7 +191,7 @@ function onLogoPick(e) {
 }
 
 function removeLogo() {
-    state.logo_data_url = null;
+    state.logo_data_url = '';   // CLINIC_PROFILE_V1
     paintThumb();
     renderPreview();
 }
@@ -260,7 +260,7 @@ async function save() {
             phone:          state.phone || '',
             email:          state.email || '',
             license:        state.license || '',
-            logo_data_url:  state.logo_data_url || null,
+            logo_data_url:  state.logo_data_url || '',   // CLINIC_PROFILE_V1 — null отклоняет база (NOT NULL)
             accent_color:   state.accent_color || '#167873',
         };
         const { data, error } = await supabase.from('doc_settings').update(payload).eq('id', 1).select().single();

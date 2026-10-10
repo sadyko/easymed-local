@@ -266,6 +266,16 @@ test('«Компания»: сохранение шлёт ТОЛЬКО свои 
   assert.strictEqual(docSettingsRow.legal_note, 'Электронный документ.', 'юридическая сноска в базе не тронута');
 });
 
+// CLINIC_PROFILE_V1 — колонка NOT NULL: «логотипа нет» — пустая строка, не null.
+test('«Компания» без логотипа: сохранение шлёт пустую строку, не null', async () => {
+  const root = mk('div');
+  await renderDocumentsSettings(root, { onNavigate: () => {} });
+  findButtonByText(root, /Сохранить/).click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(lastDocUpdate, 'запрос на обновление ушёл');
+  assert.strictEqual(lastDocUpdate.logo_data_url, '', 'null база отклоняет: колонка NOT NULL');
+});
+
 // --- старая ссылка ------------------------------------------------------------
 
 test('старая ссылка #updates/subscription приводит на подписку, а не на «Систему»', async () => {
