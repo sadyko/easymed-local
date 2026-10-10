@@ -745,7 +745,9 @@ function openEditor(user, root) {
             h('span', { style: { width: '40px', height: '40px', borderRadius: '11px', background: 'var(--primary-50, #e8f3f2)', color: 'var(--primary-700, #1f7a72)', display: 'grid', placeItems: 'center', flex: '0 0 40px' } }, Icon(sec.icon, { size: 19 })),
             h('div', { style: { flex: 1 } }, h('h2', { style: { margin: 0, fontSize: '17px' } }, title), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub)),
             right || null);
-        const grid = (...els) => h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' } }, ...els.filter(Boolean));
+        // DOCTOR_PROFILE_V1 (ревью шага 5, №12) — две колонки на широком экране, одна на телефоне
+        // (как .dpp-grid2): «1fr 1fr» на 360 px уводил поля разделов вбок.
+        const grid = (...els) => h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 260px), 1fr))', gap: '12px 16px' } }, ...els.filter(Boolean));
         // MULTI_SPECIALTY_V1 — up to four specialties (owner). The first is the
         // primary: it is what users.specialty carries and what every other
         // screen shows. «+ Добавить специальность» adds a row; «×» removes one.

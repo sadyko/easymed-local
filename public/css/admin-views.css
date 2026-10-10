@@ -7840,6 +7840,8 @@ table.list tr.is-off td { color: var(--ink-400); }
   .emp-ed-body { flex: 1 1 auto; min-height: 0; padding: 14px 12px; }
   /* «Удалить» и «Сменить пароль» уезжали за левый край окна (подвал прижат вправо и не переносился). */
   .emp-ed-card .modal-foot { flex-wrap: wrap; row-gap: 8px; }
+  /* Ревью шага 5, №12 — «Ставка для всех» («Услуги и ставки», «Стационар») переносится, а не выезжает на 16 px. */
+  .emp-ed-card .rt-bulk { flex-wrap: wrap; }
 }
 /* Группы на трёх языках сжимаются вместе с разделом (у fieldset min-width — по содержимому). */
 .dpp .cpf-set { min-width: 0; }

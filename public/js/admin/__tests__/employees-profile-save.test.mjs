@@ -538,3 +538,20 @@ test('DOCTOR_PROFILE_V1: отказ сервера с полем ссылки �
   const toasts = document.body.children.filter((c) => c.attrs && c.attrs.id === 'toast').slice(toastsBefore).map((t) => t._shown);
   assert.ok(!toasts.includes(msg), 'отказ ушёл тостом: ' + toasts.join(' | '));
 });
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №12) — сетки полей карточки («Личные данные»,
+// «Должность», «Вход и доступ», …) складываются в один столбец на ширине
+// телефона: auto-fill с min(100%, 260px), как .dpp-grid2, а не «1fr 1fr» — две
+// колонки по ~150 px на 360 px уводили поля вбок. На широком экране — две.
+test('DOCTOR_PROFILE_V1: сетки полей карточки — auto-fill (на телефоне один столбец), не «1fr 1fr»', async () => {
+  const card = await openCard('dr.karimov');
+  const RULE = 'repeat(auto-fill, minmax(min(100%, 260px), 1fr))';
+  for (const label of ['Личные данные', 'Должность', 'Лицензия', 'Занятость и зарплата', 'Вход и доступ']) {
+    await tab(card, label);
+    const grids = walk(card).filter((n) => n.style && n.style.display === 'grid' && n.style.gridTemplateColumns);
+    assert.ok(grids.length, label + ': нет сетки полей');
+    const fixed = grids.filter((g) => /^(1fr ?)+$/.test(String(g.style.gridTemplateColumns).trim()));
+    assert.deepEqual(fixed.map((g) => g.style.gridTemplateColumns), [], label + ': сетка с жёсткими колонками');
+    assert.ok(grids.some((g) => g.style.gridTemplateColumns === RULE), label + ': нет сетки auto-fill');
+  }
+});
