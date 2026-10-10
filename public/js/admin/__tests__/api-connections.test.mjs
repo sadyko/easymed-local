@@ -214,3 +214,51 @@ test('телефон: сетки экрана — minmax(0, 1fr), шапки к�
   }
   assert.match(css, /\n\.apic-card \.card-header \{[^}]*flex-wrap: wrap/, 'шапка карточки не переносит «Добавить подключение»');
 });
+
+// CLINIC_API_STEP7_V1 (ревью №1, решение владельца 5) — администратор с «API:
+// Просмотр» (`can.reveal`, без `can.admin`): на странице — маски и «Скопировать
+// ключ», без «Добавить подключение» и «Изменить имя». Экран смонтирован, как в
+// оболочке, в рамке «только просмотр»: копирование — не правка, рамка его не
+// перехватывает.
+test('администратор на «Просмотре», рамка «только просмотр»: маски и «Скопировать ключ» работают; создания и правки нет', async () => {
+  reset();
+  const perms = await import('../permissions.js');
+  const { grantsFromLegacy, legacyFromGrants } = await import('../roles-matrix.js');
+  const { renderWithViewOnly } = await import('../view-only.js');
+  const legacy = { sections: ['patients', 'dashboard'], levels: { patients: 'editor', dashboard: 'viewer' } };
+  const grants = { ...grantsFromLegacy(legacy), settings: 'view', 'settings.api': 'view' };
+  perms.setEffectiveFromRole({ name: 'Администратор (просмотр API)', permissions: { ...legacyFromGrants(grants, legacy), grants } });
+  try {
+    onRpc('api_settings_get', () => settingsFixture({ can: { view: true, edit: false, admin: false, reveal: true } }));
+    onRpc('api_journal_list', () => JOURNAL);
+    onRpc('api_connection_reveal', () => ({ value: KEY_VALUE }));
+    const root = mk('div');
+    await renderWithViewOnly(root, 'settings.api', (r) => renderApiConnections(r, {}));
+    await tick();
+    const host = root.children[0];
+    assert.ok(String(host.className).includes('is-view-only'), 'стенд не тот: экран не в рамке «только просмотр»');
+    const t = textOf(root);
+    assert.ok(t.includes('em_live_••••a91c') && !t.includes('Скрыт'), 'маски ключей скрыты от администратора');
+    assert.ok(!buttonByText(root, /Добавить подключение/) && !buttonByText(root, /Изменить имя/));
+    const copy = byAttr(root, 'data-apic-act', 'copy-key')[1];
+    assert.ok(copy, 'нет «Скопировать ключ»');
+    let stopped = false;
+    const ev = { type: 'click', target: copy, currentTarget: host, preventDefault() {}, stopPropagation() { stopped = true; } };
+    for (const fn of host._l.click || []) fn(ev);   // перехват рамки идёт первым (capture)
+    assert.equal(stopped, false, 'рамка «только просмотр» проглотила «Скопировать ключ»');
+    copy.click();
+    await tick();
+    assert.deepEqual(calls.find((c) => c[0] === 'api_connection_reveal')[1], { id: 3, what: 'key' });
+    assert.deepEqual(clip, [KEY_VALUE]);
+    const urlCopy = byAttr(root, 'data-apic-act', 'copy')[0];
+    assert.equal(urlCopy.dataset.viewOk, '1', '«Скопировать» адрес API перехватит рамка');
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+test('«Изменение» без администратора (can.reveal нет): «Скрыт», без «Скопировать ключ»', async () => {
+  reset();
+  const root = await open({ can: { view: true, edit: true, admin: false, reveal: false },
+    connections: settingsFixture().connections.map((c) => ({ ...c, key_mask: '', secret_mask: '' })) });
+  assert.ok(textOf(root).includes('Скрыт'));
+  assert.equal(byAttr(root, 'data-apic-act', 'copy-key').length, 0);
+});

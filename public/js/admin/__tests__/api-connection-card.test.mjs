@@ -167,3 +167,58 @@ test('та же карточка дважды (Enter дважды на стро�
   openConnectionCard({ settings: settingsFixture(), connection: P, tab: 'main' });
   assert.ok(modal('conn'), 'после закрытия карточка снова открывается');
 });
+
+// CLINIC_API_STEP7_V1 (ревью №1, решение владельца 5) — ключи видят только
+// администраторы и открывают их снова: администратор с «API: Просмотр» (`can.reveal`
+// без `can.admin`) видит маски и «Показать / Скопировать», но не выпускает новых
+// ключей и секретов, не удаляет и ничего не правит.
+const VIEW_ADMIN = { can: { view: true, edit: false, admin: false, reveal: true } };
+
+test('администратор на «Просмотре»: ключ — маска, «Показать» спрашивает сервер; выпуска нового ключа, удаления и «Сохранить» нет', async () => {
+  reset();
+  onRpc('api_connection_reveal', () => ({ value: KEY_VALUE }));
+  const { m } = open(VIEW_ADMIN, P, 'key');
+  const input = byAttr(m, 'aria-label', 'Ключ доступа')[0];
+  assert.ok(input, 'ключа не видно администратору на «Просмотре»');
+  assert.equal(input.value, 'em_live_••••a91c');
+  const show = byAttr(m, 'data-apic-act', 'show')[0];
+  assert.ok(show, 'нет «Показать»');
+  assert.equal(show.dataset.viewOk, '1', '«Показать» перехватит рамка «только просмотр»');
+  assert.equal(byAttr(m, 'data-apic-act', 'copy')[0].dataset.viewOk, '1', '«Скопировать» перехватит рамка «только просмотр»');
+  show.click();
+  await tick();
+  assert.deepEqual(sent('api_connection_reveal'), [{ id: 3, what: 'key' }]);
+  assert.equal(input.value, KEY_VALUE);
+  assert.equal(byAttr(m, 'data-apic-act', 'rotate').length, 0, '«Выпустить новый ключ» у администратора без «Изменения»');
+  assert.ok(textOf(m).includes('Новый ключ выпускает администратор с правом «Изменение».'));
+  assert.ok(!buttonByText(m, /Удалить подключение/), 'удаление у администратора без «Изменения»');
+  assert.ok(!buttonByText(m, /^Сохранить$/), '«Сохранить» у администратора без «Изменения»');
+});
+
+test('администратор на «Просмотре»: секрет — маска и «Показать», без «Новый секрет»; права и уведомления не правятся', async () => {
+  reset();
+  onRpc('api_connection_reveal', () => ({ value: 'em_whsec_TESTONLYtestonlyTESTONLYtest51d0' }));
+  const { m } = open(VIEW_ADMIN, P, 'hooks');
+  const input = byAttr(m, 'aria-label', 'Секрет для подписи уведомлений')[0];
+  assert.ok(input && input.value === 'em_whsec_••••51d0', 'секрета не видно администратору на «Просмотре»');
+  assert.equal(byAttr(m, 'data-apic-act', 'regen').length, 0, '«Новый секрет» у администратора без «Изменения»');
+  assert.ok(textOf(m).includes('Новый секрет выпускает администратор с правом «Изменение».'));
+  assert.ok('disabled' in byAttr(m, 'id', 'apic-f-hook')[0].attrs, 'адрес уведомлений правится');
+  byAttr(m, 'data-apic-act', 'show')[0].click();
+  await tick();
+  assert.deepEqual(sent('api_connection_reveal'), [{ id: 3, what: 'secret' }]);
+  tabBtn(m, 'access').click();
+  assert.ok('disabled' in byAttr(m, 'id', 'apic-read-packages')[0].attrs, 'права правятся');
+  tabBtn(m, 'main').click();
+  assert.ok('disabled' in byAttr(m, 'id', 'apic-f-name')[0].attrs, 'название правится');
+});
+
+test('«Изменение» без администратора (can.reveal нет): ключ и секрет скрыты, «Показать» нет', () => {
+  reset();
+  const { m } = open({ can: { view: true, edit: true, admin: false, reveal: false } }, { ...P, key_mask: '', secret_mask: '' }, 'key');
+  assert.ok(textOf(m).includes('Ключ видит и меняет только администратор.'));
+  assert.equal(byAttr(m, 'data-apic-act', 'show').length, 0);
+  tabBtn(m, 'hooks').click();
+  assert.ok(textOf(m).includes('Секрет видит и меняет только администратор.'));
+  assert.equal(byAttr(m, 'data-apic-act', 'show').length, 0);
+});

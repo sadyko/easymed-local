@@ -99,7 +99,7 @@ export function settingsFixture(over = {}) {
   return {
     slug: 'klinika-demo', base_url: 'https://api.easymed.uz/klinika-demo/v1/', slug_suggestion: '', public_server: false,
     building_role: 'main', clinic_name: 'Клиника Демо', company_website: 'https://klinika-demo.uz', partner_address_missing: [],
-    can: { view: true, edit: true, admin: true },
+    can: { view: true, edit: true, admin: true, reveal: true },   // reveal — показать ключ (администратор и на «Просмотре»)
     connections: [
       { id: 1, kind: 'site', name: 'Сайт клиники', site_url: '', contact: '', scopes: ALL, active: false,
         crm_source_key: 'website', crm_source_label: 'Сайт', owns_source: false, key_mask: 'em_live_••••s1te',

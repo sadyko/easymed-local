@@ -36,7 +36,11 @@ export function shapeSettings(raw) {
     public_server: !!r.public_server, building_role: r.building_role === 'secondary' ? 'secondary' : 'main',
     clinic_name: String(r.clinic_name || ''), company_website: String(r.company_website || ''),
     partner_address_missing: Array.isArray(r.partner_address_missing) ? r.partner_address_missing : [],
-    can: { view: !!can.view, edit: !!can.edit, admin: !!can.admin },
+    // CLINIC_API_STEP7_V1 (ревью №1, решение владельца 5) — reveal: «Показать /
+    // Скопировать» ключ и секрет — любому администратору, и на «Просмотре»; admin —
+    // администратор с «Изменением» (выпуск, права, удаление). Сервер без reveal —
+    // как раньше: показывает тот же, кто правит.
+    can: { view: !!can.view, edit: !!can.edit, admin: !!can.admin, reveal: can.reveal === undefined ? !!can.admin : !!can.reveal },
     connections: Array.isArray(r.connections) ? r.connections : [],
   };
 }

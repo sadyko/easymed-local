@@ -40,10 +40,15 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
   // CLINIC_API_STEP7_V1 (ревью №2) — ключ, уже открытый «Скопировать ключ» таблицы
   // без буфера обмена, приходит сюда: поле показывает его сразу, второго
   // открытия (и второй строки журнала) нет.
-  const shownKey = can.admin && revealed && revealed.key ? String(revealed.key) : '';
-  const keyBox = can.admin ? secretField({ label: 'Ключ доступа', mask: c.key_mask, value: shownKey, getValue: reveal('key') }) : null;
-  const secretBox = can.admin ? secretField({ label: 'Секрет для подписи уведомлений', mask: c.secret_mask, getValue: reveal('secret'),
-    regen: { label: 'Новый секрет', onClick: () => { confirm = 'secret'; paint(); } } }) : null;
+  // CLINIC_API_STEP7_V1 (ревью №1, решение владельца 5) — ПОКАЗЫВАЕТ ключ и секрет
+  // любой администратор (can.reveal, и на «Просмотре»); выпускает новые и правит —
+  // только администратор с «Изменением» (can.admin). «Показать / Скопировать» — не
+  // правка: рамка «только просмотр» их не перехватывает (viewOk).
+  const shownKey = can.reveal && revealed && revealed.key ? String(revealed.key) : '';
+  const keyBox = can.reveal ? secretField({ label: 'Ключ доступа', mask: c.key_mask, value: shownKey, getValue: reveal('key'), viewOk: true }) : null;
+  const secretBox = can.reveal ? secretField({ label: 'Секрет для подписи уведомлений', mask: c.secret_mask, getValue: reveal('secret'), viewOk: true,
+    regen: can.admin ? { label: 'Новый секрет', onClick: () => { confirm = 'secret'; paint(); } } : null }) : null;
+  const issueHint = (text) => h('p', { class: 'hint' }, text);
   const body = h('div', { class: 'modal-body apic-modal-body' });
   const tabs = h('div', { class: 'tabs apic-tabs', role: 'tablist' });
 
@@ -94,13 +99,16 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
       body.appendChild(confirmBlock('Выпустить новый секрет? Прежний перестанет подходить сразу — передайте новый подключению.',
         'secret-yes', tr('Выпустить новый секрет'), () => regenerate('secret')));
     }
-    body.appendChild(hooksSection(d, errs, { disabled: !can.admin, secretEl: secretBox,
-      secretNote: can.admin ? null : h('p', { class: 'hint' }, 'Секрет видит и меняет только администратор.') }));
+    const secretEl = secretBox && !can.admin
+      ? h('div', null, secretBox, issueHint('Новый секрет выпускает администратор с правом «Изменение».'))
+      : secretBox;
+    body.appendChild(hooksSection(d, errs, { disabled: !can.admin, secretEl,
+      secretNote: can.reveal ? null : issueHint('Секрет видит и меняет только администратор.') }));
     body.appendChild(section('Последние уведомления', '',
       h('div', { class: 'empty' }, 'Уведомлений ещё не было: они пойдут, когда в Easy-Med включат публичный сервер.')));
   }
   function paintKey() {
-    if (!can.admin) { body.appendChild(h('p', { class: 'hint' }, 'Ключ видит и меняет только администратор.')); return; }
+    if (!can.reveal) { body.appendChild(issueHint('Ключ видит и меняет только администратор.')); return; }
     const facts = h('dl', { class: 'apic-kv' },
       h('dt', null, 'Выпущен'), h('dd', null, fmtDateTime(c.key_issued_at), c.key_issued_by_name ? [' · ', c.key_issued_by_name] : null),
       h('dt', null, 'Действует до'), h('dd', null, c.key_expires_at ? fmtDateTime(c.key_expires_at) : KEY_TTL_LABEL.never, expiryTag(c)),
@@ -111,7 +119,9 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
     body.appendChild(section('Ключ доступа', '', keyBox,
       h('p', { class: 'hint' }, 'Ключ видят и копируют только администраторы клиники. Если он мог попасть к чужим людям, выпустите новый.'),
       facts,
-      confirm === 'key'
+      !can.admin
+        ? issueHint('Новый ключ выпускает администратор с правом «Изменение».')
+        : confirm === 'key'
         ? confirmBlock('Подключение получит новый ключ, а прежний перестанет работать сразу. Передайте новый ключ подключению.',
             'rotate-yes', tr('Выпустить новый ключ'), () => regenerate('key'))
         : h('div', { class: 'apic-row' }, rotate, h('span', { class: 'hint' }, 'Если ключ потерян или мог попасть к чужим людям.'))));

@@ -158,7 +158,11 @@ function connectionsCard(s) {
   if (add) add.addEventListener('click', () => openNewConnection({ settings: s, onCreated: changed, onNavigate: refs.onNavigate }));
   const body = h('div', { class: 'apic-body' });
   if (s.can.admin && !s.slug) body.appendChild(h('p', { class: 'hint' }, 'Сначала задайте короткое имя клиники в адресе API.'));
-  if (!s.can.admin) body.appendChild(h('p', { class: 'hint' }, 'Новое подключение создаёт администратор: вместе с ним выпускается ключ.'));
+  if (!s.can.admin) {
+    body.appendChild(h('p', { class: 'hint' }, s.can.reveal
+      ? 'Новое подключение создаёт администратор с правом «Изменение»: вместе с ним выпускается ключ.'   // ревью №1
+      : 'Новое подключение создаёт администратор: вместе с ним выпускается ключ.'));
+  }
   if (!s.connections.length) {
     body.appendChild(h('div', { class: 'empty' }, 'Подключений пока нет.'));
   } else {
@@ -174,7 +178,9 @@ function connectionsCard(s) {
     body);
 }
 function keyCell(c, s) {
-  if (!s.can.admin) return h('span', { class: 'muted' }, 'Скрыт');
+  // CLINIC_API_STEP7_V1 (ревью №1, решение владельца 5) — ключ видит любой
+  // администратор (can.reveal), и на «Просмотре»; копирование — не правка.
+  if (!s.can.reveal) return h('span', { class: 'muted' }, 'Скрыт');
   const btn = h('button', { class: 'apic-ibtn', type: 'button', 'aria-label': 'Скопировать ключ', title: 'Скопировать ключ', 'data-apic-act': 'copy-key' },
     Icon('Copy', { size: 14 }));
   btn.addEventListener('click', async (e) => {
