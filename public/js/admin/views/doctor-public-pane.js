@@ -10,6 +10,7 @@
 //   • ctx.specialtiesNode() — тот же список специальностей, что во «Должности»;
 //   • ctx.errors — отказы сохранения по полям (publicPaneProblems), живут
 //     между перерисовками раздела.
+//   • ctx.loadPreview() — ответ doctor_public_preview (null — сотрудник не сохранён, false — сервер не ответил).
 // Показ меняет только администратор (ctx.isAdmin; сервер — 403, routes/users.js).
 // Данные врача и клиники — текстом (createTextNode), не через tr().
 import { h, Icon, clear, toast, field } from '../ui.js';
@@ -20,11 +21,13 @@ import { triGroup, fieldErr } from './company-fields.js';
 import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
 import { downscalePhoto } from '../../shared/photo-downscale.js?v=pph1';
 import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, DOCTOR_PUBLIC_MESSAGES, profileCompleteness,
-    experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince } from '../../shared/doctor-public.js';
+    experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince, BOOKING_DAYS, DEFAULT_BOOKING_DAYS } from '../../shared/doctor-public.js';
+import { renderPartnerPreview, renderConsultPrices, renderConsultServices } from './doctor-public-preview.js';   // DOCTOR_PROFILE_V1 — приём, превью, цены
 import { branchAllowsDoctor } from '../../shared/branch-profile.js';
 
 const LANG_TAG = Object.freeze({ ru: 'RU', uz: 'UZ', en: 'EN' });
 const PHOTO_BUCKET = 'doctor-photos';
+const DAY_LABEL = Object.freeze({ 7: '7 дней вперёд', 14: '14 дней вперёд', 30: '30 дней вперёд' });
 let seq = 0;
 
 /** Тексты экрана — ключи словаря. */
@@ -199,6 +202,63 @@ export function doctorPublicPane(ctx) {
         onInput: (lng, v) => { ctx.setProfile('bio_' + lng, v); paintSwitch(); },
     }).node);
 
+    // ---- приём пациентов и что увидят партнёры ----
+    const MODES = [['schedulable', 'Calendar', 'По записи', 'Пациент выбирает свободное время. Окна по 15 минут.'],
+        ['live_queue', 'Patients', 'Живая очередь', 'Пациент приходит в часы приёма, порядок — по приходу.']];
+    const modeBtns = {};
+    const modeBox = h('div', { class: 'dpp-modes', role: 'radiogroup', 'aria-label': 'Как принимает' });
+    const receptionBody = h('div', { class: 'dpp-reception' });
+    const previewBox = h('div', { class: 'dpp-preview', 'aria-live': 'polite' });
+    let preview;   // ответ doctor_public_preview: undefined — грузится; null — не сохранён; false — сервер не ответил
+    const queueMode = () => emp.scheduling_mode === 'live_queue';
+    const paintPreview = () => renderPartnerPreview(previewBox, preview, { mode: queueMode() ? 'live_queue' : 'schedulable', showQueue: !!emp.show_queue_count });
+    function paintReception() {
+        for (const [k, b] of Object.entries(modeBtns)) b.setAttribute('aria-checked', (k === 'live_queue') === queueMode() ? 'true' : 'false');
+        clear(receptionBody);
+        if (!queueMode()) {
+            const cur = BOOKING_DAYS.includes(Number(emp.booking_days)) ? Number(emp.booking_days) : DEFAULT_BOOKING_DAYS;
+            const days = h('select', { class: 'docprof-in', id: 'dpp-days-' + (++seq) },
+                ...BOOKING_DAYS.map((n) => h('option', { value: String(n), selected: cur === n }, DAY_LABEL[n])));
+            days.value = String(cur);
+            days.disabled = !!readOnly;
+            days.addEventListener('change', () => ctx.setField({ booking_days: Number(days.value) }));
+            receptionBody.appendChild(h('div', { class: 'dpp-grid2' },
+                h('div', { class: 'field' }, h('span', { class: 'dpp-label' }, 'Длина окна'),
+                    h('span', { class: 'dpp-fixed' }, Icon('Clock', { size: 14 }), ' ', '15 минут'), h('p', { class: 'cpf-hint' }, 'Одинаково для всех врачей.')),
+                h('div', { class: 'field' }, h('label', { for: days.getAttribute('id') }, 'Запись открыта на'), days,
+                    h('p', { class: 'cpf-hint' }, 'Дальше этого срока партнёры время не видят.'))));
+        } else {
+            const chk = h('input', { type: 'checkbox', id: 'dpp-qc-' + (++seq) });
+            chk.checked = !!emp.show_queue_count;
+            chk.disabled = !!readOnly;
+            chk.addEventListener('change', () => { ctx.setField({ show_queue_count: chk.checked }); paintPreview(); });
+            receptionBody.appendChild(h('label', { class: 'dpp-check', for: chk.getAttribute('id') }, chk,
+                h('b', null, 'Показывать, сколько человек сейчас в очереди'), h('span', null, 'Число пациентов, которые пришли к врачу и ждут приёма.')));
+        }
+        paintPreview();
+    }
+    for (const [k, icon, title, sub] of MODES) {
+        const b = h('button', { type: 'button', class: 'dpp-mode', role: 'radio' }, Icon(icon, { size: 18 }), h('span', null, h('b', null, title), h('span', null, sub)));
+        b.disabled = !!readOnly;
+        b.addEventListener('click', () => { ctx.setField({ scheduling_mode: k }); paintReception(); });
+        modeBtns[k] = b;
+        modeBox.appendChild(b);
+    }
+    root.appendChild(section('Приём пациентов', 'Та же настройка, что «Приём услуг» в «Должности»: «по записи» или «живая очередь».',
+        modeBox, receptionBody,
+        h('div', null, h('p', { class: 'dpp-h5' }, 'Что увидят партнёры'), previewBox),
+        h('p', { class: 'cpf-hint' }, 'Часы приёма берутся из «Рабочего времени» врача и часов работы филиала. Показано по сохранённому графику.')));
+
+    // ---- цены консультаций (решение 8) и консультации из прайса (решение 12) ----
+    const pricesBox = h('div');
+    const servicesBox = h('div');
+    root.appendChild(section('Цены консультаций', 'Из раздела «Консультации врачей».', pricesBox,
+        h('div', { class: 'dpp-row' },
+            ctx.openConsultations ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => ctx.openConsultations() },
+                Icon('Edit', { size: 14 }), ' ', 'Изменить в «Консультации врачей»') : null,
+            h('span', { class: 'cpf-hint' }, 'Партнёры получают эти цены вместе с профилем врача. Пустая цена и «Бесплатно» — 0: чтобы брать деньги, впишите цену в «Консультациях врачей».'))));
+    root.appendChild(section('Консультации из прайса', 'Услуги группы «Консультации», которые оказывает врач: кто оказывает услугу — в окне услуги и во вкладке «Услуги и ставки». Партнёры увидят их в профиле врача, если у услуги включена онлайн-запись.', servicesBox));
+
     // ---- соцсети и опыт (как было: списки правит врач в «Моём профиле») ----
     const ptxt = (k, ph) => {
         const i = h('input', { type: 'text', class: 'docprof-in', placeholder: ph });
@@ -219,6 +279,18 @@ export function doctorPublicPane(ctx) {
                 : h('div', { class: 'cpf-hint' }, 'Пока пусто — врач заполняет в «Моём профиле».'));
         })));
 
+    // DOCTOR_PROFILE_V1 — приём и превью: сначала «Загрузка…», потом ответ doctor_public_preview.
+    paintReception();
+    renderConsultPrices(pricesBox, undefined);
+    renderConsultServices(servicesBox, undefined);
+    if (typeof ctx.loadPreview === 'function') {
+        Promise.resolve(ctx.loadPreview()).then((data) => {
+            preview = data && typeof data === 'object' && !Array.isArray(data) ? data : (data === false ? false : null);
+            paintPreview();
+            renderConsultPrices(pricesBox, preview ? preview.consultations : preview);
+            renderConsultServices(servicesBox, preview ? preview.services : preview);
+        });
+    }
     if (typeof ctx.onRepaint === 'function') ctx.onRepaint(paintSwitch);
     return root;
 }

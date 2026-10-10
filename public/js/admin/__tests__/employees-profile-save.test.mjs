@@ -331,3 +331,46 @@ test('DOCTOR_PROFILE_V1: список — специальность, приём
   assert.match(textOf(rowOf('dr.shown')), /На сайте/);
   assert.match(textOf(rowOf('dr.pub')), /Скрыт с сайта[\s\S]*филиал скрыт/);
 });
+
+// DOCTOR_PROFILE_V1 — «Приём пациентов», «Что увидят партнёры», цены консультаций (задача 15).
+test('DOCTOR_PROFILE_V1: «по записи» — окна и занятое, сколько свободно, срок записи уходит числом', async () => {
+  const s = await openProfileTab('dr.karimov');
+  const slots = walk(s.card).filter((n) => n.className === 'dpp-slot' || n.className === 'dpp-slot busy');
+  assert.deepEqual(slots.map((n) => [textOf(n).trim(), n.className]), [['09:00', 'dpp-slot'], ['09:15', 'dpp-slot busy'], ['09:30', 'dpp-slot']]);
+  assert.match(textOf(s.card), /Свободно 2 из 3 окон\./);
+  assert.match(textOf(s.card), /первичный приём на 30 мин показываем, только если подряд свободно окон: 2\./);
+  const days = tags(s.card, 'select').find((x) => x.children.some((o) => o.attrs && o.attrs.value === '30'));
+  days.value = '30';
+  days.dispatchEvent({ type: 'change' });
+  await save(s.card);
+  const body = onlyWrite();
+  assert.deepEqual([body.booking_days, body.scheduling_mode], [30, 'schedulable']);
+});
+
+test('DOCTOR_PROFILE_V1: «Живая очередь» — часы приёма, «сейчас ждут» по отметке; уходят scheduling_mode и show_queue_count', async () => {
+  const s = await openProfileTab('dr.karimov');
+  tags(s.card, 'button').find((b) => b.attrs.role === 'radio' && textOf(b).includes('Живая очередь')).click();
+  assert.match(textOf(s.card), /Живая очередь\./);
+  assert.match(textOf(s.card), /09:00–09:45/);
+  assert.doesNotMatch(textOf(s.card), /Сейчас ждут приёма/);
+  const chk = tags(s.card, 'input').find((i) => i.attrs.type === 'checkbox' && String(i.attrs.id || '').startsWith('dpp-qc'));
+  chk.checked = true;
+  chk.dispatchEvent({ type: 'change' });
+  assert.match(textOf(s.card), /Сейчас ждут приёма: 3 чел\./);
+  await save(s.card);
+  const body = onlyWrite();
+  assert.deepEqual([body.scheduling_mode, body.show_queue_count], ['live_queue', true]);
+});
+
+test('DOCTOR_PROFILE_V1: цены консультаций — своя, «Бесплатно», общая, пустая — «0 сум · цена не введена»; консультации из прайса — с отметкой «На сайте»', async () => {
+  const s = await openProfileTab('dr.karimov');
+  const txt = textOf(s.card);
+  const [prices] = tags(s.card, 'dl').filter((d) => d.className === 'dpp-price');
+  assert.deepEqual(tags(prices, 'dd').map((d) => textOf(d).trim()), ['150 000 сум', 'Бесплатно', '120 000 сум', '0 сум'],
+    'пустая цена в строке врача — «0 сум», не «Бесплатно» и не пусто (решение владельца 13)');
+  assert.match(txt, /Онлайн-консультация[\s\S]*общая цена[\s\S]*120 000 сум/);
+  assert.match(txt, /Консультация по анализам[\s\S]*цена не введена/);
+  assert.deepEqual(tags(prices, 'dd').filter((d) => d.className === 'dpp-zero').length, 1, 'пустая цена выделена');
+  assert.match(txt, /Пустая цена и «Бесплатно» — 0: чтобы брать деньги, впишите цену в «Консультациях врачей»\./);
+  assert.match(txt, /Консультация невролога[\s\S]*На сайте/);
+});

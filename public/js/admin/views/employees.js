@@ -488,6 +488,16 @@ function openEditor(user, root) {
     // DOCTOR_PROFILE_V1 — показ, срок записи и счётчик очереди, с которыми карточка открылась.
     const opened = { is_public: !!emp.is_public, booking_days: Number(emp.booking_days) || 14, show_queue_count: !!emp.show_queue_count };
     const paneErrors = {};   // DOCTOR_PROFILE_V1 — отказы сохранения по полям «Публичного профиля»
+    let previewPromise = null;
+    // DOCTOR_PROFILE_V1 — «Что увидят партнёры» и цены: один запрос на открытие карточки.
+    const loadPreview = () => {
+        if (!isEdit) return Promise.resolve(null);
+        if (!previewPromise) {
+            previewPromise = supabase.rpc('doctor_public_preview', { doctor_id: user.id })
+                .then(({ data, error }) => (error || !data || typeof data !== 'object' || Array.isArray(data) ? false : data), () => false);
+        }
+        return previewPromise;
+    };
     const profileSame = (k, a, b) => {
         if (k === 'experience_years' || k === 'practice_since') { const n = (v) => (v == null || v === '' ? null : Number(v)); return n(a) === n(b); }   // DOCTOR_PROFILE_V1 — год тоже числом
         if (Array.isArray(a) || Array.isArray(b)) return JSON.stringify(a || []) === JSON.stringify(b || []);
@@ -824,6 +834,7 @@ function openEditor(user, root) {
                     specialtiesNode: () => specialtiesField(),
                     specialtiesCount: () => (emp.specialties || []).filter((v) => String(v || '').trim()).length,
                     branchesById: new Map(branches.map((b) => [Number(b.id), b])),
+                    loadPreview,
                     onRepaint: (fn) => { paneRepaint = fn; },
                     openConsultations: isRouteAllowed('consultation-types') ? () => {
                         close();

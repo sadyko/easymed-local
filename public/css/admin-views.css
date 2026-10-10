@@ -7795,3 +7795,36 @@ table.list tr.is-off td { color: var(--ink-400); }
 .emp-pub { display: inline-grid; gap: 2px; font-size: 12.5px; color: var(--ink-500); }
 .emp-pub.on { display: inline-flex; align-items: center; gap: 4px; color: var(--ok-700); font-weight: 600; }
 /* /DOCTOR_PROFILE_V1 — список сотрудников */
+/* DOCTOR_PROFILE_V1 — «Приём пациентов», «Что увидят партнёры», цены (views/doctor-public-preview.js). */
+.dpp-modes { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 10px; }
+.dpp-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--ink-200); border-radius: 10px; background: var(--white); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.dpp-mode[aria-checked="true"] { border-color: var(--primary-600); background: var(--primary-50); }
+.dpp-mode:disabled { cursor: default; }
+.dpp-mode b { display: block; font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.dpp-mode span span { font-size: 12.5px; color: var(--ink-500); line-height: 1.4; }
+.dpp-fixed { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px; background: var(--ok-50); color: var(--ok-700); font-size: 13.5px; font-weight: 500; }
+.dpp-check { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; padding: 10px 12px; border: 1px solid var(--ink-100); border-radius: 10px; cursor: pointer; }
+.dpp-check input { grid-row: span 2; margin: 2px 0 0; accent-color: var(--primary-600); }
+.dpp-check b { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.dpp-check span { font-size: 12.5px; color: var(--ink-500); line-height: 1.4; }
+.dpp-preview, .dpp-day-slots { display: grid; gap: 10px; min-width: 0; }
+.dpp-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.dpp-day { display: grid; min-width: 72px; padding: 6px 10px; border: 1px solid var(--ink-200); border-radius: 8px; background: var(--white); color: var(--ink-700); font: 500 12.5px var(--font-sans); text-align: center; cursor: pointer; }
+.dpp-day b { font-size: 13.5px; color: var(--ink-900); }
+.dpp-day.on { border-color: var(--primary-600); background: var(--primary-50); }
+.dpp-day:disabled { opacity: .55; cursor: default; }
+.dpp-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; }
+.dpp-slot { display: grid; place-items: center; height: 32px; border: 1px solid var(--primary-200); border-radius: 7px; color: var(--primary-700); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dpp-slot.busy { border-color: var(--ink-100); background: var(--ink-50); color: var(--ink-400); text-decoration: line-through; font-weight: 500; }
+.dpp-soft { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--primary-200); border-radius: 10px; background: var(--primary-50); }
+.dpp-soft p { margin: 0; font-size: 13.5px; color: var(--ink-800); }
+.dpp-kv { display: grid; grid-template-columns: minmax(0, 120px) minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 13.5px; }
+.dpp-kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+.dpp-price { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; margin: 0; padding: 12px 14px; border: 1px solid var(--ink-100); border-radius: 10px; }
+.dpp-price dt { font-size: 13.5px; color: var(--ink-700); overflow-wrap: anywhere; }
+.dpp-price dd { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-900); text-align: right; font-variant-numeric: tabular-nums; }
+.dpp-sub { display: block; font-size: 12.5px; font-weight: 400; color: var(--ink-500); }
+.dpp-price dd.dpp-zero { color: var(--warn-700); }   /* решение владельца 13: пустая цена — 0, партнёрам тоже */
+/* Подпись над кнопками языков и «15 минут» — как подпись поля (.field label), не как заголовок. */
+.field > .dpp-label { font-size: 12.5px; font-weight: 500; color: var(--ink-600); letter-spacing: .005em; }
+/* /DOCTOR_PROFILE_V1 — приём и превью */
