@@ -56,9 +56,19 @@ export function clearLegacyDocSettings(s) {
 //     logoUrl — всегда логотип клиники (или ничего), logoDataUrl не трогается.
 export function overlayCompanyBranding(s, clinic) {
     const c = clinic || null;
+    // CLINIC_PROFILE_V1 (ревью M1) — отметка «название запасное» считается
+    // заново при каждом наложении: «Документы» сохраняют объект целиком, и
+    // старая отметка из копии не должна пережить смену названия или режима.
+    delete s.clinicNameFallback;
     if (s.useCompanyIdentity === false) { s.logoUrl = null; return s; }
     if (!c) return s;
     if (c.name_ru || c.name) s.clinicName = c.name_ru || c.name;
+    // CLINIC_PROFILE_V1 (ревью M1) — «Компания» без названия: запись клиники
+    // (rpc/clinic.js) отдаёт name_ru = null и запасное name «Easy-Med Local».
+    // Имя печатается, как печаталось; отметка говорит шапке бланка
+    // (doc-render.js logoMark), что рядом с логотипом его не ставят — до шага 3
+    // логотип в этом случае стоял один.
+    if ('name_ru' in c && !c.name_ru && c.name) s.clinicNameFallback = true;
     if (c.address)           s.address    = c.address;
     if (c.phone)             s.phone      = c.phone;
     if (c.email)             s.email      = c.email;

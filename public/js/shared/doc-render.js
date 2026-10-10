@@ -478,6 +478,19 @@ function darken(hex, by) {
 // не надпись; название печатается всегда (спецификация, «Правила, без которых
 // не строим»). Прежнее правило LOGO_WORDMARK_V1 (логотип = надпись, название
 // рядом не печаталось) снято: с квадратным знаком бланк остался бы без имени.
+//
+// CLINIC_PROFILE_V1 (ревью M1) — кроме одного случая: своего названия у
+// клиники нет (пустое, или «Компания» пуста и запись клиники подставила
+// запасное «Easy-Med Local» — company-branding.js clinicNameFallback). Тогда
+// рядом с логотипом не печатается ничего, и alt — как до шага 3: логотип
+// стоит один. Без логотипа — как всегда: знак клиники и имя.
+function nameBesideLogo(s) {
+    if (!(s.logoUrl || s.logoDataUrl)) return true;
+    return !s.clinicNameFallback && !!String(s.clinicName || '').trim();
+}
+function nameBlock(s, style) {
+    return nameBesideLogo(s) ? `<div style="${style}">${esc(s.clinicName)}</div>` : '';
+}
 function logoMark(s) {
     const _logo = s.logoUrl || s.logoDataUrl;
     if (_logo) {
@@ -485,8 +498,8 @@ function logoMark(s) {
         // made object-fit shrink it to a stamp. Fix the HEIGHT, let the width
         // follow the artwork, and cap it so a very long logo can't crowd out the
         // contact block on the right.
-        // CLINIC_PROFILE_V1 — alt пустой: название напечатано рядом.
-        return `<img src="${esc(_logo)}" alt="" style="height:64px;width:auto;max-width:300px;object-fit:contain;object-position:left center;flex:0 1 auto;display:block;" />`;
+        // CLINIC_PROFILE_V1 — alt пустой, когда название напечатано рядом; иначе — название (как до шага 3).
+        return `<img src="${esc(_logo)}" alt="${nameBesideLogo(s) ? '' : esc(s.clinicName)}" style="height:64px;width:auto;max-width:300px;object-fit:contain;object-position:left center;flex:0 1 auto;display:block;" />`;
     }
     return logoSVG(s.accent);
 }
@@ -517,7 +530,7 @@ function docHeadHTML(s, doc) {
     return `<div style="border-bottom:2px solid ${s.accent};padding-bottom:14px;">
         <div style="display:flex;align-items:center;gap:14px;">
             ${logoMark(s)}
-            <div style="font-size:15px;font-weight:800;letter-spacing:-0.01em;color:${s.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28%;">${esc(s.clinicName)}</div>
+            ${nameBlock(s, `font-size:15px;font-weight:800;letter-spacing:-0.01em;color:${s.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28%;`)}
             <div style="flex:0 0 2px;align-self:stretch;min-height:34px;background:${s.accent};border-radius:999px;"></div>
             <div style="flex:1;min-width:0;">
                 <div style="font-size:16px;font-weight:800;letter-spacing:-0.01em;color:${s.ink};line-height:1.25;">${esc(doc.title || '')}</div>
@@ -534,7 +547,7 @@ function headerHTML(s) {
     return `<div style="display:flex;align-items:center;gap:14px;padding-bottom:18px;border-bottom:2px solid ${s.accent};">
         ${logoMark(s)}
         <div style="flex:1;">
-            <div style="font-size:17px;font-weight:700;letter-spacing:-0.01em;color:${s.ink};">${esc(s.clinicName)}</div>
+            ${nameBlock(s, `font-size:17px;font-weight:700;letter-spacing:-0.01em;color:${s.ink};`)}
             ${s.tagline ? `<div style="font-size:11px;color:#55636d;margin-top:1px;font-weight:500;">${esc(s.tagline)}</div>` : ''}
         </div>
         <div style="text-align:right;font-size:10.5px;color:#55636d;line-height:1.55;">

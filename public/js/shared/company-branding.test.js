@@ -106,3 +106,17 @@ test('resolveDocSettings: сначала чистка, потом клиника
     assert.equal(s.address, 'Новый адрес');
     assert.equal(s.clinicName, 'Новая');
 });
+
+// CLINIC_PROFILE_V1 (ревью M1) — «Компания» без названия: запись клиники
+// подставляет запасное имя (name — «Easy-Med Local», name_ru — null). Печать
+// должна знать, что это запасное: рядом с логотипом его не печатают (как до
+// шага 3). Отметка считается заново при каждом наложении — сохранённая копия
+// «Документов» могла унести старую.
+test('отметка «название запасное»: ставится при пустом name_ru, снимается при своём названии, в ручном режиме и без клиники', () => {
+    assert.equal(overlayCompanyBranding({}, { name: 'Easy-Med Local', name_ru: null }).clinicNameFallback, true);
+    assert.equal(overlayCompanyBranding({}, { name: 'Easy-Med Local', name_ru: null }).clinicName, 'Easy-Med Local', 'имя — как было');
+    assert.equal('clinicNameFallback' in overlayCompanyBranding({ clinicNameFallback: true }, { name: 'Шифо', name_ru: 'Шифо' }), false);
+    assert.equal('clinicNameFallback' in overlayCompanyBranding({ clinicNameFallback: true, useCompanyIdentity: false }, { name: 'X', name_ru: null }), false);
+    assert.equal('clinicNameFallback' in overlayCompanyBranding({ clinicNameFallback: true }, null), false);
+    assert.equal('clinicNameFallback' in overlayCompanyBranding({}, { name: 'Clinic' }), false, 'запись без name_ru (облачная) — не запасное');
+});

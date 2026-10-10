@@ -149,3 +149,17 @@ test('сайт из «Компании» в PDF не печатается', () =
   assert.ok(!html.includes('shifo-clinic.uz'), 'сайт напечатался на бланке');
   db.close();
 });
+
+// CLINIC_PROFILE_V1 (ревью M1) — «Компания» без названия, логотип есть: в PDF
+// рядом с логотипом нет запасного «Easy-Med Local» — как до шага 3.
+test('нет своего названия: запасное имя рядом с логотипом в PDF не печатается', () => {
+  const db = seed({ copy: { ...OLD_COPY, clinicName: '' }, company: { clinic_name: '' } });
+  const s = loadServerDocSettings(db);
+  assert.equal(s.logoUrl, LOGO_NEW);
+  for (const args of [{ type: 'custom', bodyHtml: '<p>x</p>' }, { type: 'inpatient_contract', data: null }, { type: 'act', data: null }]) {
+    const html = buildSheetHtml({ ...args, s });
+    assert.ok(html.includes(LOGO_NEW), args.type);
+    assert.ok(!/>\s*Easy-Med Local\s*</.test(html), args.type + ': запасное имя рядом с логотипом');
+  }
+  db.close();
+});
