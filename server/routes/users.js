@@ -922,10 +922,13 @@ function publicationRefusal(db, actor, row, ef, specsList) {
   if (ef.is_public !== undefined && (ef.is_public === 1) !== was && !isAdminUser(actor)) {
     return { status: 403, message: DOCTOR_PUBLIC_MESSAGES.adminOnly };
   }
-  if (ef.is_public === undefined && !('full_name_ru' in ef) && specsList === undefined) return null;
+  // Ревью шага 5 (укрепление) — и прежнее поле specialty без списка: без строк
+  // списка оно одно держит специальность врача (specialtyCountOf).
+  if (ef.is_public === undefined && !('full_name_ru' in ef) && specsList === undefined && !('specialty' in ef)) return null;
   const isPublic = ef.is_public !== undefined ? ef.is_public : (was ? 1 : 0);
   const name = 'full_name_ru' in ef ? ef.full_name_ru : (row ? row.full_name_ru : '');
-  const specs = specsList !== undefined ? specsList.length : (row ? specialtyCountOf(db, row.id) : 0);
+  const specs = specsList !== undefined ? specsList.length
+    : specialtyCountOf(db, row ? row.id : null, 'specialty' in ef ? ef.specialty : undefined);
   const problem = publicationProblem({ is_public: isPublic, full_name_ru: name, specialties: specs });
   return problem ? { status: 400, message: problem } : null;
 }

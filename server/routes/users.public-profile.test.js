@@ -205,3 +205,31 @@ test('DOCTOR_PROFILE_V1: срок записи 7/14/30, отметки — да/
     assert.equal(card.public_profile.practice_since, year - 6);
   } finally { server.close(); db.close(); }
 });
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, укрепление) — одно прежнее поле specialty
+// (без списка specialties) тоже проверяется: показываемый врач без строк
+// списка не остаётся без специальности. Считается как specialtyCountOf:
+// строки списка, а без них — текст (новый, если прислан).
+test('DOCTOR_PROFILE_V1: показываемому врачу не стереть специальность и прежним полем specialty; строки списка его держат', async () => {
+  const { db, server, base, docId } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    const patch = (body) => req(base, 'PATCH', '/api/users/' + docId, body, admin);
+    db.prepare("UPDATE users SET is_public = 1, full_name_ru = 'Иванов Иван', specialty = 'Кардиолог' WHERE id = ?").run(docId);
+    let res = await patch({ specialty: '' });
+    assert.equal(res.status, 400, 'строк списка нет — пустой текст оставил бы врача без специальности');
+    assert.equal((await res.json()).error.message, DOCTOR_PUBLIC_MESSAGES.specialty);
+    assert.equal(db.prepare('SELECT specialty FROM users WHERE id = ?').get(docId).specialty, 'Кардиолог', 'отказ ничего не пишет');
+    res = await patch({ specialty: 'Терапевт' });
+    assert.equal(res.status, 200, await res.clone().text());
+    db.prepare("INSERT INTO user_specialties (user_id, specialty_slug, name_ru, is_primary) VALUES (?, 'kardiolog', 'Кардиолог', 1)").run(docId);
+    res = await patch({ specialty: '' });
+    assert.equal(res.status, 200, 'строка списка есть — специальность у врача остаётся');
+    res = await req(base, 'POST', '/api/users', { username: 'newdoc', password: 'password9', role: 'doctor', is_public: true,
+      public_profile: { full_name_ru: 'Петров Пётр' }, specialty: 'Невролог' }, admin);
+    assert.equal(res.status, 201, 'новый с текстом специальности — как specialtyCountOf: ' + await res.clone().text());
+    res = await req(base, 'POST', '/api/users', { username: 'newdoc2', password: 'password9', role: 'doctor', is_public: true,
+      public_profile: { full_name_ru: 'Сидоров Сидор' }, specialty: '  ' }, admin);
+    assert.equal(res.status, 400);
+  } finally { server.close(); db.close(); }
+});

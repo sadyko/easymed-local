@@ -237,11 +237,18 @@ export function publicProfileOf(u) {
 
 // DOCTOR_PROFILE_V1 — сколько специальностей у сотрудника: строки списка, а у
 // записанного до списка — одна колонка users.specialty.
-export function specialtyCountOf(db, userId) {
-  const n = db.prepare('SELECT COUNT(*) AS n FROM user_specialties WHERE user_id = ?').get(userId).n;
+// Ревью шага 5 (укрепление): specialtyText — текст колонки ПОСЛЕ правки, если
+// запрос его присылает (прежнее поле specialty карточки); userId null — новый
+// сотрудник, строк списка у него нет.
+export function specialtyCountOf(db, userId, specialtyText) {
+  const n = userId == null ? 0 : db.prepare('SELECT COUNT(*) AS n FROM user_specialties WHERE user_id = ?').get(userId).n;
   if (n) return n;
-  const u = db.prepare('SELECT specialty FROM users WHERE id = ?').get(userId);
-  return u && String(u.specialty || '').trim() ? 1 : 0;
+  let text = specialtyText;
+  if (text === undefined) {
+    const u = userId == null ? null : db.prepare('SELECT specialty FROM users WHERE id = ?').get(userId);
+    text = u ? u.specialty : '';
+  }
+  return String(text || '').trim() ? 1 : 0;
 }
 
 function isEmpty(v) {
