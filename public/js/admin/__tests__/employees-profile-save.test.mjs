@@ -88,6 +88,8 @@ const BARE = person(91, 'dr.bare', {});
 const PUB = person(92, 'dr.pub', { specialty: '', specialties: [], is_public: true, branch_id: 2, public_profile: { ...PROFILE } });
 // DOCTOR_PROFILE_V1 — показываемый врач открытого филиала.
 const SHOWN = person(93, 'dr.shown', { is_public: true, branch_id: 1, public_profile: { ...PROFILE } });
+// DOCTOR_PROFILE_V1 (ревью шага 5, №7) — врач главного здания в филиале: карточка только для просмотра.
+const MAIN = person(94, 'dr.main', { is_local: false, public_profile: { ...PROFILE } });
 // DOCTOR_PROFILE_V1 — ответ doctor_public_preview (rpc/doctor-public.js).
 const PREVIEW = {
   doctor_id: 90, scheduling_mode: 'schedulable', booking_days: 14, show_queue_count: false, slot_minutes: 15,
@@ -113,7 +115,7 @@ const uploads = [];   // DOCTOR_PROFILE_V1 — файлы фото в храни
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const method = opts.method || 'GET';
-  if (u === '/api/users' && method === 'GET') return { ok: true, json: async () => ({ users: [DOC, BARE, PUB, SHOWN] }) };
+  if (u === '/api/users' && method === 'GET') return { ok: true, json: async () => ({ users: [DOC, BARE, PUB, SHOWN, MAIN] }) };
   if (u.startsWith('/api/users')) { writes.push({ u, method, body: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ user: {} }) }; }
   if (u === '/api/rpc/doctor_public_preview') return { ok: true, json: async () => ({ data: PREVIEW }) };
   if (u.startsWith('/api/storage/')) { uploads.push(u); return { ok: true, json: async () => ({}) }; }
@@ -410,6 +412,28 @@ test('DOCTOR_PROFILE_V1: «Изменить в «Консультации вра
     assert.deepEqual(navs, ['consultation-types', 'consultation-types']);
   } finally {
     window.confirm = prevConfirm;
+    delete window.easymed.navigate;
+  }
+});
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №7) — карточка «только просмотр» (врач главного
+// здания в филиале; роль с «Сотрудники: Просмотр») выключает поля, но не переход
+// «Изменить в «Консультации врачей»»: цены врача в филиале свои
+// (doctor_consultation_prices между зданиями не ездят), и роль, которой экран
+// открыт, вправе туда перейти. Кнопка помечена viewOk, как в «API и подключения».
+test('DOCTOR_PROFILE_V1: карточка «только просмотр» — поля выключены, «Изменить в «Консультации врачей»» работает', async () => {
+  const navs = [];
+  window.easymed.navigate = (v) => navs.push(v);
+  try {
+    const s = await openProfileTab('dr.main');
+    const go = tags(s.card, 'button').find((b) => textOf(b).includes('Изменить в «Консультации врачей»'));
+    assert.ok(go, 'нет кнопки «Изменить в «Консультации врачей»»');
+    assert.ok(!go.disabled, 'кнопка перехода выключена в карточке «только просмотр»');
+    assert.equal(s.bio.ru.disabled, true, 'поле биографии не выключено');
+    assert.ok(tags(s.card, 'button').filter((b) => b.className === 'dpp-lang').every((b) => b.disabled === true), 'кнопки языков не выключены');
+    go.click();
+    assert.deepEqual(navs, ['consultation-types']);
+  } finally {
     delete window.easymed.navigate;
   }
 });

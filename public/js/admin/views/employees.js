@@ -710,7 +710,10 @@ function openEditor(user, root) {
     function disableAll(node) {
         for (const child of node.children || []) {
             const tag = String(child.tagName || '').toUpperCase();
-            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') child.disabled = true;
+            // DOCTOR_PROFILE_V1 (ревью шага 5, №7) — помеченное viewOk — переход, а не
+            // правка («Изменить в «Консультации врачей»»): остаётся рабочим, как в
+            // рамке «только просмотр» плиток настроек (view-only.js).
+            if ((tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') && !(child.dataset && child.dataset.viewOk)) child.disabled = true;
             disableAll(child);
         }
     }

@@ -254,7 +254,7 @@ export function doctorPublicPane(ctx) {
     const servicesBox = h('div');
     root.appendChild(section('Цены консультаций', 'Из раздела «Консультации врачей».', pricesBox,
         h('div', { class: 'dpp-row' },
-            ctx.openConsultations ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => ctx.openConsultations() },
+            ctx.openConsultations ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', dataset: { viewOk: '1' }, onclick: () => ctx.openConsultations() },   // DOCTOR_PROFILE_V1 — переход, не правка: работает и в карточке «только просмотр» (ревью №7)
                 Icon('Edit', { size: 14 }), ' ', 'Изменить в «Консультации врачей»') : null,
             h('span', { class: 'cpf-hint' }, 'Партнёры получают эти цены вместе с профилем врача. Пустая цена и «Бесплатно» — 0: чтобы брать деньги, впишите цену в «Консультациях врачей».'))));
     root.appendChild(section('Консультации из прайса', 'Услуги группы «Консультации», которые оказывает врач: кто оказывает услугу — в окне услуги и во вкладке «Услуги и ставки». Партнёры увидят их в профиле врача, если у услуги включена онлайн-запись.', servicesBox));
