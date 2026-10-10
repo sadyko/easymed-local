@@ -24,7 +24,7 @@ import { addressCard, mapCard } from './company-address.js';   // те же ка
 import { NAME_MAX } from '../../shared/clinic-profile.js';
 import { BRANCH_EDIT_COLUMNS, OWN_FROM_COMPANY, BRANCH_MESSAGES, LANDMARK_MAX, PHONE_MAX, normalizeBranch, branchProblems, overlayOwnBuilding } from '../../shared/branch-profile.js';
 import { readBranchHours, writeBranchHours, hoursProblem } from '../../shared/branch-hours.js';
-import { hoursCard, DAY_LABEL } from './branch-hours-card.js';   // задача 14 — часы и предупреждение о врачах
+import { hoursCard, DAY_LABEL } from './branch-hours-card.js';   // задача 14 — часы и предупреждение о сотрудниках, чьё время закроется
 
 export const BRANCH_DEFAULTS = Object.freeze({
     name: '', name_uz: '', name_en: '', phone: '', address: '', active: 1,
@@ -72,7 +72,7 @@ export async function renderBranchPage(container, opts = {}) {
     const errs = {};
     let availability = () => ({});            // задача 13 — доступность списков адреса
     let busy = false;
-    let asking = false;                       // открыт вопрос «эти врачи потеряют часы приёма»
+    let asking = false;                       // открыт вопрос «эти врачи / сотрудники потеряют часы приёма»
     let gen = 0;                              // поколение сохранения (ревью 2)
 
     // ---- название и «Работает» ----
@@ -235,7 +235,7 @@ export async function renderBranchPage(container, opts = {}) {
     async function confirmHours(v) {
         const { data, error } = await supabase.rpc('branch_hours_impact', { branch_id: row.id, working_hours: v.working_hours, is_24_7: v.is_24_7 });
         if (error) {
-            toast(trf('Не удалось проверить, у кого из врачей закроется время: {msg}', { msg: tr(error.message || '') }), 'fail');
+            toast(trf('Не удалось проверить, у кого из сотрудников закроется время: {msg}', { msg: tr(error.message || '') }), 'fail');
             return false;
         }
         const doctors = data && Array.isArray(data.doctors) ? data.doctors : [];

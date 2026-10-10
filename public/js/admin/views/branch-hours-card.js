@@ -34,7 +34,7 @@ const isDoctor = (d) => d.role == null || d.role === 'doctor';
 const roleLabel = (role) => tr(Object.prototype.hasOwnProperty.call(ROLE_LABEL, role) ? ROLE_LABEL[role] : 'Исполнитель');
 let seq = 0;
 
-/** Потерянное время врача одной строкой: «Пн 18:00–20:00, Сб 09:00–15:00». */
+/** Потерянное время сотрудника одной строкой: «Пн 18:00–20:00, Сб 09:00–15:00». */
 export function lostText(lost) {
     return (lost || []).map((l) => tr(DAY_LABEL[l.day] || l.day) + ' ' + l.from + '–' + l.to).join(', ');
 }
