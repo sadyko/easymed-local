@@ -15,6 +15,7 @@ import { listen } from '../../control-plane/server/test-helpers/listen.js';
 import { updateMyDoctorProfile } from '../services/rpc/doctor-profile.js';
 import { readableColumns, REGISTRY } from '../db/schema-registry.js';
 import { TABLES as CATALOGUE_TABLES } from '../services/branch-sync/catalogue.js';
+import { DOCTOR_PUBLIC_MESSAGES } from '../../public/js/shared/doctor-public.js';   // DOCTOR_PROFILE_V1
 
 async function startServer() {
   const db = openDb(':memory:');
@@ -120,4 +121,87 @@ test('CLINIC_API_FIX_V1: is_local читается через реестр, но
   assert.ok(readableColumns('users').includes('is_local'));
   const w = REGISTRY.users.write;
   assert.deepEqual([w.insert.roles, w.update.roles, w.delete.roles], [[], [], []]);
+});
+
+// ===========================================================================
+// DOCTOR_PROFILE_V1 (мигр. 243) — показ врача на сайте и у партнёров меняет
+// только администратор; показываемый — с ФИО на русском и специальностью;
+// срок записи — 7/14/30; «работает с» пишет и стаж; карточка всё это отдаёт.
+// ===========================================================================
+function addGrants(db, role, grants) {
+  const row = db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(role);
+  const perms = row ? JSON.parse(row.permissions) : { sections: [], levels: {} };
+  perms.grants = { ...(perms.grants || {}), ...grants };
+  if (row) db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify(perms), role);
+  else db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(role, JSON.stringify(perms));
+}
+async function loginAs(base, username) {
+  const res = await req(base, 'POST', '/api/auth/login', { username, password: 'password1' });
+  return res.headers.get('set-cookie').split(';')[0];
+}
+
+test('DOCTOR_PROFILE_V1: без ФИО на русском и специальности врача не показать; с ними — показ включается; стереть их у показываемого нельзя', async () => {
+  const { db, server, base, docId } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    const patch = (body) => req(base, 'PATCH', '/api/users/' + docId, body, admin);
+    let res = await patch({ is_public: true });
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).error.message, DOCTOR_PUBLIC_MESSAGES.nameRu);
+    res = await patch({ is_public: true, public_profile: { full_name_ru: 'Иванов Иван' } });
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).error.message, DOCTOR_PUBLIC_MESSAGES.specialty);
+    assert.equal(db.prepare('SELECT is_public FROM users WHERE id = ?').get(docId).is_public, 0, 'отказ ничего не пишет');
+    res = await patch({ is_public: true, public_profile: { full_name_ru: 'Иванов Иван' }, specialties: [{ name: 'Кардиолог', slug: 'kardiolog' }] });
+    assert.equal(res.status, 200, await res.clone().text());
+    assert.equal((await res.json()).user.is_public, true);
+    res = await patch({ public_profile: { full_name_ru: '' } });
+    assert.equal(res.status, 400, 'показываемому нельзя стереть ФИО на русском');
+    res = await patch({ specialties: [] });
+    assert.equal(res.status, 400, 'и все специальности');
+    res = await patch({ salary_fixed: 3000000 });
+    assert.equal(res.status, 200, 'проверка не держит сохранение оклада');
+  } finally { server.close(); db.close(); }
+});
+
+test('DOCTOR_PROFILE_V1: показ меняет только администратор — «Сотрудники: Изменение» получает 403; неизменённое проходит', async () => {
+  const { db, server, base, docId } = await startServer();
+  try {
+    db.prepare("INSERT INTO users (username, password_hash, full_name, role, is_doctor) VALUES ('chief', ?, 'Главврач', 'doctor', 1)").run(hashPassword('password1'));
+    addGrants(db, 'doctor', { settings: 'view', 'settings.employees': 'edit' });
+    const chief = await loginAs(base, 'chief');
+    let res = await req(base, 'PATCH', '/api/users/' + docId, { is_public: true }, chief);
+    assert.equal(res.status, 403);
+    assert.equal((await res.json()).error.message, DOCTOR_PUBLIC_MESSAGES.adminOnly);
+    res = await req(base, 'PATCH', '/api/users/' + docId, { is_public: false, booking_days: 30 }, chief);
+    assert.equal(res.status, 200, 'значение не меняется — не отказ; срок записи правит и не администратор');
+    assert.equal(db.prepare('SELECT booking_days, is_public FROM users WHERE id = ?').get(docId).booking_days, 30);
+  } finally { server.close(); db.close(); }
+});
+
+test('DOCTOR_PROFILE_V1: срок записи 7/14/30, отметки — да/нет, языки, «работает с»; карточка отдаёт их', async () => {
+  const { db, server, base, docId } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    const patch = (body) => req(base, 'PATCH', '/api/users/' + docId, body, admin);
+    for (const [body, msg] of [
+      [{ booking_days: 10 }, DOCTOR_PUBLIC_MESSAGES.bookingDays], [{ show_queue_count: 1 }, DOCTOR_PUBLIC_MESSAGES.flag],
+      [{ is_public: 'да' }, DOCTOR_PUBLIC_MESSAGES.flag], [{ public_profile: { languages: [] } }, DOCTOR_PUBLIC_MESSAGES.oneLanguage],
+      [{ public_profile: { practice_since: 1800 } }, DOCTOR_PUBLIC_MESSAGES.since],
+    ]) {
+      const res = await patch(body);
+      assert.equal(res.status, 400, JSON.stringify(body));
+      assert.equal((await res.json()).error.message, msg);
+    }
+    const year = new Date().getFullYear();
+    const res = await patch({ booking_days: 7, show_queue_count: true, public_profile: { practice_since: year - 6, languages: ['uz', 'ru'] } });
+    assert.equal(res.status, 200, await res.clone().text());
+    const row = db.prepare('SELECT booking_days, show_queue_count, practice_since, experience_years, languages FROM users WHERE id = ?').get(docId);
+    assert.deepEqual({ ...row }, { booking_days: 7, show_queue_count: 1, practice_since: year - 6, experience_years: 6, languages: '["ru","uz"]' });
+    const list = await (await req(base, 'GET', '/api/users', null, admin)).json();
+    const card = list.users.find((u) => u.id === docId);
+    assert.deepEqual([card.is_public, card.booking_days, card.show_queue_count], [false, 7, true]);
+    assert.deepEqual(card.public_profile.languages, ['ru', 'uz']);
+    assert.equal(card.public_profile.practice_since, year - 6);
+  } finally { server.close(); db.close(); }
 });

@@ -6,9 +6,10 @@ import { isAdminUser, grantAllowsAdminOr } from '../services/grants.js';   // AD
 import { roleExceedsActor, isAdminRoleCode } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1
 // DOCTOR_PUBLIC_PROFILE_V1 — публичный профиль врача: те же проверки, что у
 // «Моего профиля» врача (rpc/doctor-profile.js), и тот же вид для экранов.
-import { cleanProfileFields, publicProfileOf } from '../services/rpc/doctor-profile.js';
+import { cleanProfileFields, publicProfileOf, specialtyCountOf } from '../services/rpc/doctor-profile.js';   // DOCTOR_PROFILE_V1 — specialtyCountOf
 // CLINIC_API_FIX_V1 — канон специальностей (тот же, что у профиля врача и отчётов).
 import { SPECIALTY_ROWS, specialtyGroupName } from '../../public/js/shared/specialty-list.js';
+import { BOOKING_DAYS, DEFAULT_BOOKING_DAYS, DOCTOR_PUBLIC_MESSAGES, publicationProblem, withExperience } from '../../public/js/shared/doctor-public.js';   // DOCTOR_PROFILE_V1
 
 export { VALID_ROLES, PRIMARY_ROLES };
 
@@ -119,8 +120,23 @@ export function parseEmployeeFields(body, db, currentRole, ownerId) {
   // публичный профиль врача: { public_profile: { bio_ru, …, *_entries: [...] } }.
   // Ключи и значения — белый список профиля; присланные ключи и только они.
   if (body.public_profile !== undefined) {
-    try { Object.assign(fields, cleanProfileFields(body.public_profile, ownerId)); }   // CLINIC_API_FIX_V1 — фото только из папки владельца
+    // DOCTOR_PROFILE_V1 — «работает с» и прежний стаж пишутся вместе (withExperience).
+    try { Object.assign(fields, withExperience(cleanProfileFields(body.public_profile, ownerId))); }   // CLINIC_API_FIX_V1 — фото только из папки владельца
     catch (e) { return { ok: false, message: e.message }; }
+  }
+
+  // DOCTOR_PROFILE_V1 (мигр. 243) — показ врача на сайте и у партнёров, срок
+  // записи для партнёров, счётчик живой очереди. Кто вправе менять показ,
+  // решает маршрут (только администратор, publicationRefusal); здесь — формат.
+  for (const key of ['is_public', 'show_queue_count']) {
+    if (body[key] === undefined) continue;
+    if (typeof body[key] !== 'boolean') return { ok: false, message: DOCTOR_PUBLIC_MESSAGES.flag };
+    fields[key] = body[key] ? 1 : 0;
+  }
+  if (body.booking_days !== undefined) {
+    const n = Number(body.booking_days);
+    if (!BOOKING_DAYS.includes(n)) return { ok: false, message: DOCTOR_PUBLIC_MESSAGES.bookingDays };
+    fields.booking_days = n;
   }
 
   if (body.branch_id !== undefined) {
@@ -394,6 +410,10 @@ export function employeeView(u) {
     staff_type: u.staff_type, scheduling_mode: u.scheduling_mode, branch_id: u.branch_id,
     pbx_extension: u.pbx_extension || '',   // CALL_FROM_CRM_V1 — внутренний номер на АТС
     public_profile: publicProfileOf(u),     // DOCTOR_PUBLIC_PROFILE_V1
+    // DOCTOR_PROFILE_V1 (мигр. 243) — показ на сайте и у партнёров, срок записи, счётчик очереди.
+    is_public: Number(u.is_public) === 1,
+    booking_days: BOOKING_DAYS.includes(Number(u.booking_days)) ? Number(u.booking_days) : DEFAULT_BOOKING_DAYS,
+    show_queue_count: Number(u.show_queue_count) === 1,
     working_hours: u.working_hours, service_rate_default: u.service_rate_default,
     referral_rate_default: u.referral_rate_default,
     service_rates: parseJsonArray(u.service_rates), referral_rates: parseJsonArray(u.referral_rates),
@@ -659,6 +679,8 @@ export function userRoutes(db) {
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
     if (specs.list) ef.specialty = primarySpecialtyName(specs.list);   // CLINIC_API_FIX_V1 — как основная строка
+    const pubRefusal = publicationRefusal(db, req.user, null, ef, specs.list);   // DOCTOR_PROFILE_V1
+    if (pubRefusal) return pubRefusal.status === 403 ? forbid(res, pubRefusal.message) : bad(res, pubRefusal.message);
 
     const hasNameParts = req.body && (req.body.last_name !== undefined || req.body.first_name !== undefined || req.body.middle_name !== undefined);
     const finalFullName = hasNameParts ? deriveFullName(ef) : full_name.slice(0, 100).trim();
@@ -764,6 +786,8 @@ export function userRoutes(db) {
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
     if (specs.list) ef.specialty = primarySpecialtyName(specs.list);   // CLINIC_API_FIX_V1 — как основная строка
+    const pubRefusal = publicationRefusal(db, req.user, user, ef, specs.list);   // DOCTOR_PROFILE_V1
+    if (pubRefusal) return pubRefusal.status === 403 ? forbid(res, pubRefusal.message) : bad(res, pubRefusal.message);
 
     // If any name part was supplied, recompute full_name from the merged
     // (existing + incoming) parts rather than from the incoming ones alone,
@@ -883,6 +907,27 @@ export function userRoutes(db) {
   });
 
   return r;
+}
+
+// DOCTOR_PROFILE_V1 — ПОКАЗ ВРАЧА НА САЙТЕ И У ПАРТНЁРОВ.
+//   • меняет только администратор (спецификация, «Правила»): отказ — только
+//     если значение МЕНЯЕТСЯ (карточка шлёт неизменённое — не беда);
+//   • показываемый врач — с ФИО на русском и хотя бы одной специальностью
+//     (макет «Публичный профиль»). Проверяется, когда запрос трогает показ, ФИО
+//     на русском или специальности: правка оклада у давнего врача не держится.
+// row — строка до правки (null у нового), ef — разобранные поля, specsList —
+// присланный список специальностей (undefined — не присылали).
+function publicationRefusal(db, actor, row, ef, specsList) {
+  const was = !!row && Number(row.is_public) === 1;
+  if (ef.is_public !== undefined && (ef.is_public === 1) !== was && !isAdminUser(actor)) {
+    return { status: 403, message: DOCTOR_PUBLIC_MESSAGES.adminOnly };
+  }
+  if (ef.is_public === undefined && !('full_name_ru' in ef) && specsList === undefined) return null;
+  const isPublic = ef.is_public !== undefined ? ef.is_public : (was ? 1 : 0);
+  const name = 'full_name_ru' in ef ? ef.full_name_ru : (row ? row.full_name_ru : '');
+  const specs = specsList !== undefined ? specsList.length : (row ? specialtyCountOf(db, row.id) : 0);
+  const problem = publicationProblem({ is_public: isPublic, full_name_ru: name, specialties: specs });
+  return problem ? { status: 400, message: problem } : null;
 }
 
 const ADMIN_DELETE_REFUSAL = 'Администратора удаляет только администратор.';
