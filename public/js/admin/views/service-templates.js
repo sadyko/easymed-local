@@ -103,35 +103,29 @@ export function packageDiscount(template) {
 }
 
 /**
- * PACKAGES_V1 (ревью I-1) — how the SERVER will split a смета's discount
- * (billing.js createInvoiceForVisit), so the screen quotes and sends the same:
- *   • a line whose package has a discount AND is on offer on the line's day
- *     carries its OWN discount — the larger of the package % and the patient
- *     category % (never both);
- *   • loyalty / promo / category apply only to the REST, and are clamped by it.
- * `lines` — [{ total, package: {pct, valid_from, valid_until} | null, day }].
- * Returns { packageDiscount, restTotal } (money, rounded to tiyin like the server).
+ * PACKAGES_V1 (ревью I-1) → SERVICES_PACKAGES_V1 — как СЕРВЕР разделит смету
+ * (billing.js createInvoiceForVisit), чтобы экран показал и отправил то же:
+ *   • строка пакета, у которой известна цена в пакете (package.full / .price —
+ *     cartPackage), в день строки в сроке пакета — СВОЯ скидка (full − price) ×
+ *     количество; скидка группы пациента на неё не ложится (решение 1);
+ *   • строка пакета без скидки и все остальные — «остальное»: лояльность,
+ *     промокод и пол группы считаются только по нему.
+ * `lines` — [{ total, qty, package, day }]; total строки пакета — full × qty,
+ * ровно как выставит счёт. Returns { packageDiscount, restTotal } (до тийина).
  */
-export function packageSplit(lines, categoryPct = 0) {
-    const cat = Math.min(Math.max(Number(categoryPct) || 0, 0), 100);
+export function packageSplit(lines) {
     const r2 = (n) => Math.round(n * 100) / 100;
     let packageDiscount = 0;
     let restTotal = 0;
     for (const l of Array.isArray(lines) ? lines : []) {
-        const total = Number(l && l.total) || 0;
         const pkg = l && l.package;
-        const pct = pkg ? packageDiscount_(pkg) : 0;
-        if (pct > 0 && packageValidOn(pkg, l.day || localToday())) {
-            packageDiscount += r2(total * Math.max(pct, cat) / 100);
-        } else {
-            restTotal += total;
-        }
+        const m = pkg && pkg.price != null && pkg.full != null && packageValidOn(pkg, l.day || localToday())
+            ? packageLineMoney({ package_full: pkg.full, package_price: pkg.price, quantity: l.qty == null ? 1 : l.qty })
+            : null;
+        if (m && m.discount > 0) packageDiscount += m.discount;
+        else restTotal += Number(l && l.total) || 0;
     }
     return { packageDiscount: r2(packageDiscount), restTotal: r2(restTotal) };
-}
-// A cart line keeps `pct`; a template row keeps `discount_percent`.
-function packageDiscount_(pkg) {
-    return packageDiscount({ discount_percent: pkg.pct != null ? pkg.pct : pkg.discount_percent });
 }
 
 /**

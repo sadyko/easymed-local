@@ -157,28 +157,29 @@ test('смета, сохранённая шаблоном, — пакет без
   assert.deepStrictEqual(Object.keys(ins).sort(), ['active', 'name', 'service_ids']);
 });
 
-// PACKAGES_V1 (ревью I-1) — смета мастера делит строки так же, как сервер:
-// строка пакета со скидкой, действующего в её день, несёт СВОЮ скидку (бо́льшую
-// из пакета и категории), а лояльность/промокод считаются только по остальным.
+// PACKAGES_V1 (ревью I-1) → SERVICES_PACKAGES_V1 — смета мастера делит строки
+// так же, как сервер: строка пакета со скидкой, действующего в её день, несёт
+// СВОЮ скидку — до цены услуги в пакете; скидка группы на неё не ложится
+// (решение владельца 1); лояльность/промокод — только по остальным.
 import { packageSplit } from '../views/service-templates.js';
 
-test('смета: строки пакета — своя скидка, лояльность — только по остальным (как сервер)', () => {
-  const pkg = { id: 1, pct: 20, valid_from: '2026-09-01', valid_until: '2026-09-30' };
+test('смета: строки пакета — своя скидка до цены в пакете, лояльность — только по остальным (как сервер)', () => {
+  const pkg = { id: 1, is_package: 1, full: 200000, price: 160000, valid_from: '2026-09-01', valid_until: '2026-09-30' };
   const lines = [
-    { total: 200000, package: pkg, day: '2026-09-10' },   // УЗИ по пакету
-    { total: 100000, package: null, day: '2026-09-10' },  // анализ
+    { total: 200000, qty: 1, package: pkg, day: '2026-09-10' },   // УЗИ по пакету
+    { total: 100000, qty: 1, package: null, day: '2026-09-10' },  // анализ
   ];
-  // VIP 10 %: на строке пакета max(20, 10) = 40 000; остаток — 100 000.
-  assert.deepStrictEqual(packageSplit(lines, 10), { packageDiscount: 40000, restTotal: 100000 });
-  // Категория больше пакета — на строке пакета категория.
-  assert.deepStrictEqual(packageSplit(lines, 30), { packageDiscount: 60000, restTotal: 100000 });
+  assert.deepStrictEqual(packageSplit(lines), { packageDiscount: 40000, restTotal: 100000 });
+  assert.deepStrictEqual(packageSplit([{ total: 400000, qty: 2, package: pkg, day: '2026-09-10' }]), { packageDiscount: 80000, restTotal: 0 }, 'количество 2');
 });
 
-test('смета: пакет вне дня строки или без скидки — обычная строка', () => {
-  const pkg = { id: 1, pct: 20, valid_from: '2026-09-01', valid_until: '2026-09-30' };
-  assert.deepStrictEqual(packageSplit([{ total: 100, package: pkg, day: '2026-10-01' }], 0), { packageDiscount: 0, restTotal: 100 });
-  assert.deepStrictEqual(packageSplit([{ total: 100, package: { id: 2, pct: 0 }, day: '2026-09-10' }], 0), { packageDiscount: 0, restTotal: 100 });
-  assert.deepStrictEqual(packageSplit([], 10), { packageDiscount: 0, restTotal: 0 });
+test('смета: пакет вне дня строки, без скидки, без цены в пакете или шаблон сметы — обычная строка', () => {
+  const pkg = { id: 1, is_package: 1, full: 100, price: 80, valid_from: '2026-09-01', valid_until: '2026-09-30' };
+  assert.deepStrictEqual(packageSplit([{ total: 100, package: pkg, day: '2026-10-01' }]), { packageDiscount: 0, restTotal: 100 });
+  assert.deepStrictEqual(packageSplit([{ total: 100, package: { ...pkg, price: 100 }, day: '2026-09-10' }]), { packageDiscount: 0, restTotal: 100 });
+  assert.deepStrictEqual(packageSplit([{ total: 100, package: { id: 2, is_package: 1 }, day: '2026-09-10' }]), { packageDiscount: 0, restTotal: 100 });
+  assert.deepStrictEqual(packageSplit([{ total: 100, package: { id: 3, is_package: 0 }, day: '2026-09-10' }]), { packageDiscount: 0, restTotal: 100 });
+  assert.deepStrictEqual(packageSplit([]), { packageDiscount: 0, restTotal: 0 });
 });
 
 // SERVICES_PACKAGES_V1 — пакет строки сметы и раскладка списком.

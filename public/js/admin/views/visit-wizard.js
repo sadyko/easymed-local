@@ -29,7 +29,7 @@ import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE
 import { CAT_ORDER, categoryOf } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1
 import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDateTime } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageDiscount, packageSplit, packageValidOn } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
+import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageSplit, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';   // PACKAGES_V1 — «скидка 20 % · до 30.09.2026»
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
@@ -369,7 +369,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // quote is keyed by service AND day, and asked per day.
     const lineDay = (c) => String((c && c.when) || wiz.when || '').slice(0, 10) || null;
     const tierKey = (svcId, day) => String(svcId) + '@' + (day || '');
-    const cartLinePrice = (c) => linePrice(c.svc, c.doctorId, lineDay(c));
+    // SERVICES_PACKAGES_V1 — строка пакета в его срок: цена услуги без скидки,
+    // по которой считалась раскладка (её запишет сервер; ярус и своя цена
+    // врача цену пакета не меняют). Вне срока строка уйдёт без пакета — по
+    // обычной цене.
+    const cartLinePrice = (c) => (c && c.package && c.package.full != null && c.package.price != null && packageValidOn(c.package, lineDay(c) || undefined)
+        ? Number(c.package.full)
+        : linePrice(c.svc, c.doctorId, lineDay(c)));
     const lineTier = (c) => { const q = c && c.svc && wiz.tiers[tierKey(c.svc.id, lineDay(c))]; return q ? (tierApplies(q) ? q.tier : 'primary') : null; };
     // Ask once per (services × days) set — the newest answer wins; called from
     // repaintRail so a changed day or a new line re-asks by itself.
@@ -1904,7 +1910,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
         // PACKAGES_V1 (ревью I-3) — пакеты, действующие в день ЗАПИСИ, а не
         // сегодня: сервер сверяет срок пакета с местным днём визита.
-        const { data, error } = await listTemplates(supabase, { on: lineDay(null) || undefined });
+        const { data, error } = await listTemplates(supabase, { on: lineDay(null) || undefined, withPrices: true });   // SERVICES_PACKAGES_V1 — раскладка пакетов по прайсу
         clear(listEl);
         if (error) {
             listEl.appendChild(h('div', { style: { padding: '12px', textAlign: 'center', color: 'var(--crit-700)', fontSize: '12.5px' } },
@@ -1949,15 +1955,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // PACKAGES_V1 — новая строка сметы помнит пакет: скидку пакета даст счёт.
         // Ревью I-1/I-3: окно пакета едет вместе со строкой — смета и запись
         // проверяют его по дню САМОЙ строки (она может уйти на другой день).
-        const pkg = t && t.id != null ? {
-            id: Number(t.id), name: t.name || '', pct: packageDiscount(t),
-            valid_from: t.valid_from || null, valid_until: t.valid_until || null,
-        } : null;
+        // SERVICES_PACKAGES_V1 — строка помнит пакет и цену услуги в нём (cartPackage).
         for (const svc of services) {
             const had = wiz.cart.some(c => c.svc.id === svc.id);
             addToCart(svc);
             const line = had ? null : wiz.cart.find(c => c.svc.id === svc.id);
-            if (line && pkg) line.package = pkg;
+            if (line) line.package = cartPackage(t, svc.id);
         }
         const added = wiz.cart.length - before;
         // paint(), not repaintCatalog(): that one is scoped inside paintStep1 and
@@ -2008,13 +2011,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // счёта 70 000 вместо 50 000.
     // function, не const: смета рисуется раньше, чем исполнение дойдёт до этой
     // строки (объявления функций всплывают, const — нет).
-    function linePackageOn(c) { return !!(c && c.package && c.package.pct > 0 && packageValidOn(c.package, lineDay(c) || undefined)); }
+    // SERVICES_PACKAGES_V1 — строка пакета со скидкой в её день (цена в пакете ниже цены без скидки).
+    function linePackageOn(c) { return !!(c && c.package && c.package.price != null && Number(c.package.price) < Number(c.package.full) && packageValidOn(c.package, lineDay(c) || undefined)); }
     function restCart() { return visibleCart().filter((c) => !linePackageOn(c)); }
     function restTotal() { return restCart().reduce((s, c) => s + cartLinePrice(c) * c.qty, 0); }
     function packageDiscountTotal() {
         return packageSplit(visibleCart().map((c) => ({
-            total: cartLinePrice(c) * c.qty, package: c.package || null, day: lineDay(c) || undefined,
-        })), wiz.categoryPct || 0).packageDiscount;
+            total: cartLinePrice(c) * c.qty, qty: c.qty, package: c.package || null, day: lineDay(c) || undefined,
+        }))).packageDiscount;   // SERVICES_PACKAGES_V1 — скидка группы на пакет не ложится (решение 1)
     }
     function loyaltyDiscount() {
         const sub = restTotal();
