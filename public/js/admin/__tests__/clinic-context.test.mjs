@@ -93,3 +93,77 @@ test('refreshClinicBrand keeps the old clinic and name when the re-read fails', 
   assert.strictEqual(window.CLINIC, CLINIC);
   assert.strictEqual(sub.textContent, 'Ann Family Clinic');
 });
+
+// CLINIC_PROFILE_V1 — шапка программы: название под меню — на языке
+// интерфейса (UZ / EN из «Компании», иначе прежнее), квадратный логотип —
+// в знаке меню #sidebar-logo (тот же элемент сворачивает меню).
+function shellDom(lang) {
+  const sub = { textContent: '' };
+  const mkNode = (tag) => {
+    const n = {
+      tagName: String(tag).toUpperCase(), className: '', attrs: {}, children: [], parent: null,
+      setAttribute(k, v) { this.attrs[k] = String(v); },
+      getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+      appendChild(c) { c.parent = this; this.children.push(c); return c; },
+      remove() { if (this.parent) { this.parent.children = this.parent.children.filter((x) => x !== this); this.parent = null; } },
+      querySelector(sel) { return sel === 'img.brand-logo' ? (this.children.find((c) => c.tagName === 'IMG' && c.className === 'brand-logo') || null) : null; },
+    };
+    n.classList = {
+      add: (c) => { const l = n.className.split(/\s+/).filter(Boolean); if (!l.includes(c)) l.push(c); n.className = l.join(' '); },
+      remove: (c) => { n.className = n.className.split(/\s+/).filter((x) => x && x !== c).join(' '); },
+      contains: (c) => n.className.split(/\s+/).includes(c),
+    };
+    return n;
+  };
+  const mark = mkNode('div');
+  mark.className = 'brand-mark';
+  mark.appendChild(mkNode('svg'));   // «+» — остаётся, его прячет CSS
+  globalThis.document = {
+    documentElement: { lang },
+    createElement: mkNode,
+    querySelector: (sel) => (sel === '.brand-sub' ? sub : null),
+    getElementById: (id) => (id === 'sidebar-logo' ? mark : null),
+  };
+  return { sub, mark };
+}
+
+test('название под меню — на языке интерфейса: UZ из «Компании»; EN без перевода — прежнее', async () => {
+  const { paintClinicBrand, clinicNameFor } = await import('../clinic-context.js');
+  let dom = shellDom('uz');
+  globalThis.window = { CLINIC: { id: 1, name: 'Шифо', name_uz: 'Shifo' }, location: { hostname: 'localhost' } };
+  paintClinicBrand();
+  assert.strictEqual(dom.sub.textContent, 'Shifo');
+
+  dom = shellDom('en');
+  paintClinicBrand();
+  assert.strictEqual(dom.sub.textContent, 'Шифо', 'name_en пуст — прежнее название');
+
+  dom = shellDom('ru');
+  globalThis.window.CLINIC = { id: 1, name: 'Шифо', name_uz: 'Shifo', name_en: 'Shifo Clinic' };
+  paintClinicBrand();
+  assert.strictEqual(dom.sub.textContent, 'Шифо', 'на русском — то, что печатается');
+  assert.strictEqual(clinicNameFor(globalThis.window.CLINIC, 'en'), 'Shifo Clinic');
+  assert.strictEqual(clinicNameFor(null, 'uz'), '');
+});
+
+test('квадратный логотип в знаке меню: есть — картинка и has-logo; нет — «+» как был', async () => {
+  const { paintClinicBrand } = await import('../clinic-context.js');
+  const { mark } = shellDom('ru');
+  const LOGO = 'data:image/png;base64,iVBORw0KGgo=';
+  globalThis.window = { CLINIC: { id: 1, name: 'Шифо', logo_mark_url: LOGO }, location: { hostname: 'localhost' } };
+  paintClinicBrand();
+  assert.ok(mark.classList.contains('has-logo'));
+  const img = mark.querySelector('img.brand-logo');
+  assert.ok(img, 'нет картинки логотипа в знаке меню');
+  assert.strictEqual(img.attrs.src, LOGO);
+  assert.strictEqual(img.attrs.alt, '', 'знак — украшение: название стоит рядом');
+  assert.ok(mark.children.some((c) => c.tagName === 'SVG'), '«+» не удаляется — его прячет CSS');
+
+  paintClinicBrand();   // повтор — та же одна картинка
+  assert.strictEqual(mark.children.filter((c) => c.tagName === 'IMG').length, 1);
+
+  globalThis.window.CLINIC = { id: 1, name: 'Шифо', logo_mark_url: null };
+  paintClinicBrand();
+  assert.strictEqual(mark.querySelector('img.brand-logo'), null);
+  assert.ok(!mark.classList.contains('has-logo'));
+});

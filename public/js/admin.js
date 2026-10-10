@@ -2764,6 +2764,7 @@ async function boot() {
     const { slug, clinic } = await initClinicContext(supabase);
     loadDocBrandingAsync().catch(() => {});   // clinic-global document branding at boot
     paintClinicBrand();   // CLINIC_API_FIX_V1 — имя под меню; то же правило, что после входа и после «Компании»
+    onLangChange(() => paintClinicBrand());   // CLINIC_PROFILE_V1 — название под меню на новом языке
 
     const userRow = await rehydrateUserFromSession();
     if (!userRow) { showLogin(); return; }

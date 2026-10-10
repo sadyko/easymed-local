@@ -198,7 +198,9 @@ const docRow = {
     id: 1, clinic_name: 'Клиника «Шифо»', address: 'Ташкент', phone: '+998 71 200 12 00',
     email: 'info@shifo.uz', license: 'LIC-1', logo_data_url: null, accent_color: '#167873',
 };
-const clinicRow = () => ({ id: 1, slug: 'local', name: docRow.clinic_name || 'Easy-Med Local', active: true, logo_url: docRow.logo_data_url || null });
+const clinicRow = () => ({ id: 1, slug: 'local', name: docRow.clinic_name || 'Easy-Med Local', active: true, logo_url: docRow.logo_data_url || null,
+    // CLINIC_PROFILE_V1 — как rpc/clinic.js: названия на uz / en.
+    name_uz: docRow.name_uz || null, name_en: docRow.name_en || null });
 let clinicReads = 0;
 
 globalThis.fetch = async (url, opts = {}) => {
@@ -304,6 +306,36 @@ test('стёрли название в «Компании» — под меню 
 
     assert.equal(globalThis.window.CLINIC.name, 'Easy-Med Local');
     assert.equal(BRAND_SUB.textContent, 'Easy-Med Local');
+});
+
+// CLINIC_PROFILE_V1 — название под меню — на языке интерфейса: узбекское из
+// «Компании», когда программа переключена на узбекский; назад — прежнее.
+test('переключили язык интерфейса — под меню название на этом языке', async () => {
+    // Экран «Компания» ещё открыт: вписываем RU и UZ в группу «Название клиники».
+    const names = descendants(VIEW_ROOT).find((n) => n.tagName === 'FIELDSET'
+        && labelOf(n.children.find((c) => c.tagName === 'LEGEND')) === 'Название клиники');
+    assert.ok(names, 'нет группы «Название клиники»');
+    const [ruInp, uzInp] = descendants(names).filter((n) => n.tagName === 'INPUT');
+    for (const [inp, v] of [[ruInp, 'Шифо'], [uzInp, 'Shifo']]) {
+        inp.value = v;
+        inp.dispatchEvent({ type: 'input', target: inp, currentTarget: inp });
+    }
+    findSaveBtn().click();
+    await settle(200);
+    assert.equal(docRow.name_uz, 'Shifo', 'узбекское название не ушло на сервер');
+    assert.equal(BRAND_SUB.textContent, 'Шифо', 'на русском — то, что печатается');
+
+    const langBtn = (code) => LANG_EL.children.find((b) => b.dataset.lang === code);
+    const pickLang = (code) => LANG_EL.dispatchEvent({ type: 'click', target: { closest: () => langBtn(code) } });
+    pickLang('uz');
+    await settle(50);
+    assert.equal(BRAND_SUB.textContent, 'Shifo', 'на узбекском — узбекское название из «Компании»');
+    pickLang('en');
+    await settle(50);
+    assert.equal(BRAND_SUB.textContent, 'Шифо', 'английского нет — прежнее');
+    pickLang('ru');
+    await settle(50);
+    assert.equal(BRAND_SUB.textContent, 'Шифо');
 });
 
 test('глушим таймеры экранов, чтобы прогон завершался', () => {

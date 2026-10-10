@@ -128,11 +128,48 @@ export async function ensureClinicContext(supabase) {
 export function paintClinicBrand() {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
     if (typeof document.querySelector !== 'function') return;
+    const clinic = window.CLINIC;
+    paintBrandMark(clinic);   // CLINIC_PROFILE_V1
     const sub = document.querySelector('.brand-sub');
     if (!sub) return;
-    const clinic = window.CLINIC;
-    if (clinic && clinic.name)  sub.textContent = clinic.name;
+    // CLINIC_PROFILE_V1 — на языке интерфейса (UZ / EN из «Компании»).
+    if (clinic && clinic.name)  sub.textContent = clinicNameFor(clinic, uiLang());
     else if (window.CLINIC_SLUG) sub.textContent = window.CLINIC_SLUG;
+}
+
+// CLINIC_PROFILE_V1 — название под меню — на языке интерфейса, если клиника его
+// вписала («Компания», UZ / EN); иначе прежнее (то, что печатается: clinic_name,
+// запасное 'Easy-Med Local' приходит от сервера).
+export function clinicNameFor(clinic, lang) {
+    if (!clinic) return '';
+    return (lang === 'uz' && clinic.name_uz) || (lang === 'en' && clinic.name_en) || clinic.name || '';
+}
+function uiLang() {
+    return (typeof document !== 'undefined' && document.documentElement && document.documentElement.lang) || 'ru';
+}
+// CLINIC_PROFILE_V1 — квадратный логотип клиники в знаке меню. Элемент тот же
+// (#sidebar-logo сворачивает меню, admin.js), «+» не удаляется — его прячет
+// CSS (.brand-mark.has-logo svg). logo_mark_url сервер отдаёт только для
+// КВАДРАТНОЙ печатной копии (rpc/clinic.js): широкий прежний логотип в знак
+// 30×30 не помещается — тогда знак остаётся «+».
+function paintBrandMark(clinic) {
+    const mark = typeof document.getElementById === 'function' ? document.getElementById('sidebar-logo') : null;
+    if (!mark) return;
+    const src = clinic && clinic.logo_mark_url;
+    let img = typeof mark.querySelector === 'function' ? mark.querySelector('img.brand-logo') : null;
+    if (!src) {
+        if (img) img.remove();
+        if (mark.classList) mark.classList.remove('has-logo');
+        return;
+    }
+    if (!img) {
+        img = document.createElement('img');
+        img.className = 'brand-logo';
+        img.setAttribute('alt', '');   // знак — украшение: название стоит рядом
+        mark.appendChild(img);
+    }
+    img.setAttribute('src', src);
+    if (mark.classList) mark.classList.add('has-logo');
 }
 
 // Неудачный запрос оставляет window.CLINIC как был: строка не гаснет из-за

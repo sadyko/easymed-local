@@ -14,6 +14,7 @@
 // handler does not require one (unlike RPCs that mutate data or read
 // role-restricted rows).
 import { readIdentity } from '../branch-sync/identity.js';   // CLINIC_PROFILE_V1
+import { isSquarePngDataUrl } from '../../../public/js/shared/clinic-logo-rules.js';   // CLINIC_PROFILE_V1
 
 export function getClinicBySlug(db, _args, _user) {
   const settings = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {};
@@ -40,6 +41,10 @@ export function getClinicBySlug(db, _args, _user) {
     // clinic?.verification_status) — set to values that make every one of
     // those code paths a no-op: no trial banner, never locked, never rejected.
     logo_url: settings.logo_data_url || null,
+    // CLINIC_PROFILE_V1 — знак в шапке программы: печатная копия логотипа, если
+    // она КВАДРАТНАЯ (квадратный логотип или прежний квадратный). Широкий
+    // прежний логотип в знак 30×30 не помещается — тогда знак остаётся «+».
+    logo_mark_url: isSquarePngDataUrl(settings.logo_data_url) ? settings.logo_data_url : null,
     address: settings.address || null,
     phone: settings.phone || null,
     email: settings.email || null,

@@ -442,6 +442,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .brand-mark:hover { background: var(--primary-700); }
 .brand-mark svg { width: 18px; height: 18px; }
+/* CLINIC_PROFILE_V1 — квадратный логотип клиники в знаке меню (тот же элемент сворачивает меню; «+» прячется, не удаляется). */
+.brand-mark.has-logo { background: var(--white); border: 1px solid var(--ink-100); overflow: hidden; }
+.brand-mark.has-logo:hover { background: var(--white); border-color: var(--primary-300); }
+.brand-mark.has-logo svg { display: none; }
+.brand-mark.has-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
 /* Обёртка двух строк: min-width: 0 обязателен — без него флекс-элемент не
    сжимается ниже своего содержимого, и длинное имя клиники распирало бы
    шапку, унося стрелку сворачивания за край колонки. */

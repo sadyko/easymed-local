@@ -64,3 +64,21 @@ test('get_clinic_by_slug: building_role — main по умолчанию, second
   becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
   assert.equal(getClinicBySlug(db, {}, null).building_role, 'secondary');
 });
+
+// CLINIC_PROFILE_V1 — знак в шапке программы: печатная копия логотипа, только
+// если она КВАДРАТНАЯ PNG (квадратный логотип или прежний квадратный). Широкий
+// прежний логотип в знак 30×30 не помещается — знак остаётся «+» (null).
+test('get_clinic_by_slug: logo_mark_url — только квадратная PNG-копия', async () => {
+  const { fakePng, pngDataUrl } = await import('../../test-helpers/fake-png.js');
+  const db = openDb(':memory:'); migrate(db);
+  const setLogo = (v) => db.prepare('UPDATE doc_settings SET logo_data_url = ? WHERE id = 1').run(v);
+  assert.equal(getClinicBySlug(db, {}, null).logo_mark_url, null, 'пусто — null');
+  const square = pngDataUrl(fakePng(220, 220));
+  setLogo(square);
+  assert.equal(getClinicBySlug(db, {}, null).logo_mark_url, square);
+  setLogo(pngDataUrl(fakePng(220, 80)));
+  assert.equal(getClinicBySlug(db, {}, null).logo_mark_url, null, 'широкий — null');
+  setLogo('data:image/jpeg;base64,/9j/4AAQSkZJRg==');
+  assert.equal(getClinicBySlug(db, {}, null).logo_mark_url, null, 'JPEG — null');
+  assert.equal(getClinicBySlug(db, {}, null).logo_url, 'data:image/jpeg;base64,/9j/4AAQSkZJRg==', 'logo_url (печать) — как был');
+});
