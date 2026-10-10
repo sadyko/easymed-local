@@ -73,7 +73,18 @@ export function writeBranchHours({ mode, days } = {}) {
   const out = {};
   for (const k of WEEK) {
     const d = (days && days[k]) || defaultDay(k);
-    out[k] = { on: !!d.on, from: String(d.from || ''), to: String(d.to || '') };
+    const on = !!d.on;
+    let from = String(d.from || '');
+    let to = String(d.to || '');
+    // BRANCH_PROFILE_V1 (ревью шага 4, #5) — у ВЫХОДНОГО дня время не проверяет
+    // ни экран, ни движок, а поля его выключены: стёртое («») или испорченное
+    // время владелец не видит и не поправит. Пишется время по умолчанию — иначе
+    // сервер (storedHoursProblem) отказал бы сохранению без названного дня.
+    if (!on) {
+      if (!HHMM.test(from)) from = defaultDay(k).from;
+      if (!HHMM.test(to)) to = defaultDay(k).to;
+    }
+    out[k] = { on, from, to };
   }
   return { working_hours: JSON.stringify(out), is_24_7: 0 };
 }

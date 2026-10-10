@@ -87,3 +87,53 @@ test('каждое сообщение модуля переведено на ru 
     for (const hole of m.match(/\{\w+\}/g) || []) assert.ok(e.uz.includes(hole) && e.en.includes(hole), m + ' теряет ' + hole);
   }
 });
+
+// BRANCH_PROFILE_V1 (ревью шага 4, #5) — выходной день со стёртым временем: поле
+// времени отдаёт '' и выключено у неотмеченного дня — владелец его не видит и не
+// поправит. Экран такой день не проверяет, значит и запись не должна его ронять.
+test('выходной день со стёртым временем: пишется со временем по умолчанию — сервер принимает', () => {
+  const days = blankDays();
+  days.sat = { on: false, from: '09:00', to: '' };
+  days.sun = { on: false, from: 'мусор', to: undefined };
+  const grid = { mode: 'week', days };
+  assert.equal(hoursProblem(grid), null, 'экран пропускает');
+  const cols = writeBranchHours(grid);
+  assert.equal(storedHoursProblem(cols.working_hours), '', 'и сервер принимает то же');
+  const o = JSON.parse(cols.working_hours);
+  assert.deepEqual([o.sat, o.sun], [{ on: false, from: '09:00', to: '18:00' }, { on: false, from: '09:00', to: '18:00' }]);
+  assert.deepEqual(engine(cols), engine({ working_hours: JSON.stringify({ ...o, sat: { on: false, from: '09:00', to: '' } }), is_24_7: 0 }),
+    'движку время выходного дня безразлично');
+});
+
+test('свойство: что принимает проверка экрана, то принимает и сервер (две тысячи случайных сеток)', () => {
+  let s = 11;   // mulberry32: воспроизводимо и без вырождения в числах с плавающей точкой
+  const rnd = (n) => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return (((t ^ (t >>> 14)) >>> 0) % n);
+  };
+  const GOOD = [['09:00', '18:00'], ['00:00', '23:59'], ['12:30', '18:00'], ['08:00', '09:00']];
+  const JUNK = ['', '9:00', '24:00', 'xx', undefined, null, 900, '18:00'];
+  const FLAGS_OFF = [false, 0, '', undefined, null];
+  let accepted = 0, offJunk = 0;
+  for (let i = 0; i < 2000; i++) {
+    const days = {};
+    for (const k of WEEK) {
+      if (!rnd(10)) continue;   // день не прислан
+      if (rnd(2)) { const [from, to] = GOOD[rnd(GOOD.length)]; days[k] = { on: rnd(2) ? true : 1, from, to }; }
+      else days[k] = { on: FLAGS_OFF[rnd(FLAGS_OFF.length)], from: JUNK[rnd(JUNK.length)], to: JUNK[rnd(JUNK.length)] };
+    }
+    for (const mode of ['week', 'none', 'allday']) {
+      const grid = { mode, days };
+      if (hoursProblem(grid) !== null) continue;
+      if (mode === 'week') {
+        accepted += 1;
+        if (Object.values(days).some((d) => !d.on && !/^\d\d:\d\d$/.test(String(d.to)))) offJunk += 1;
+      }
+      const cols = writeBranchHours(grid);
+      assert.equal(storedHoursProblem(cols.working_hours), '', mode + ' ' + JSON.stringify(days));
+    }
+  }
+  assert.ok(accepted > 500 && offJunk > 200, 'проверка действительно перебирает принятые сетки: ' + accepted + ' / ' + offJunk);
+});
