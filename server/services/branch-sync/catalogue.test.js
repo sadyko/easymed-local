@@ -1231,3 +1231,33 @@ test('главная старой версии меняет стаж — «ра�
   apply(branch, exportCatalogue(main));
   assert.deepEqual(row(), { practice_since: 2009, experience_years: 12 }, 'новая главная шлёт год — он и едет');
 });
+
+// ===========================================================================
+// SERVICES_PACKAGES_V1 — названия услуги на узбекском и английском и показ на
+// сайте едут с прайсом в филиал; главная старой версии их не шлёт — у филиала
+// остаётся своё; выгрузка филиала их наверх не отдаёт (канал односторонний).
+// ===========================================================================
+test('названия UZ / EN и показ услуги приезжают в филиал вместе с прайсом', () => {
+  const main = seedMain(fresh());
+  main.prepare("UPDATE services SET name_uz = 'Kardiolog qabuli', name_en = 'Cardiologist visit', online_booking = 1 WHERE code = 'S-CARD'").run();
+  const dst = receiver();
+  apply(dst, exportCatalogue(main));
+  const row = dst.prepare("SELECT name_uz, name_en, online_booking FROM services WHERE code = 'S-CARD'").get();
+  assert.deepEqual({ ...row }, { name_uz: 'Kardiolog qabuli', name_en: 'Cardiologist visit', online_booking: 1 });
+  // Главная сняла показ и стёрла английское — филиал повторяет.
+  main.prepare("UPDATE services SET name_en = NULL, online_booking = 0 WHERE code = 'S-CARD'").run();
+  apply(dst, exportCatalogue(main));
+  assert.deepEqual({ ...dst.prepare("SELECT name_uz, name_en, online_booking FROM services WHERE code = 'S-CARD'").get() },
+    { name_uz: 'Kardiolog qabuli', name_en: null, online_booking: 0 });
+});
+
+test('главная старой версии (без ключей названий и показа) → новый филиал: своё у филиала остаётся, прайс принят', () => {
+  const cat = exportCatalogue(seedMain(fresh()));
+  for (const s of cat.services) { delete s.name_uz; delete s.name_en; delete s.online_booking; }
+  const dst = receiver();
+  apply(dst, exportCatalogue(seedMain(fresh())));
+  dst.prepare("UPDATE services SET name_uz = 'Kardiolog qabuli', online_booking = 1, price = 1 WHERE code = 'S-CARD'").run();
+  assert.doesNotThrow(() => apply(dst, cat));
+  const row = dst.prepare("SELECT name_uz, online_booking, price FROM services WHERE code = 'S-CARD'").get();
+  assert.deepEqual({ ...row }, { name_uz: 'Kardiolog qabuli', online_booking: 1, price: 250000 }, 'цена — из главной, название и показ — свои');
+});
