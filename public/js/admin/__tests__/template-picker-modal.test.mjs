@@ -180,11 +180,12 @@ test('в списке только действующие сегодня пак�
   const shift = (days) => { const d = new Date(); d.setDate(d.getDate() + days); return ymd(d); };
   templateError = null;
   templateRows = [
-    { id: 1, name: 'Осень', service_ids: [1, 2], discount_percent: 20, valid_from: shift(-3), valid_until: shift(5) },
-    { id: 2, name: 'Истёкший', service_ids: [1], discount_percent: 30, valid_from: null, valid_until: shift(-1) },
-    { id: 3, name: 'Будущий', service_ids: [1], discount_percent: 10, valid_from: shift(1), valid_until: null },
-    { id: 4, name: 'Шаблон', service_ids: [3], discount_percent: 0, valid_from: null, valid_until: null },
-    { id: 5, name: 'Последний день', service_ids: [3], discount_percent: 5, valid_from: null, valid_until: shift(0) },
+    // SERVICES_PACKAGES_V1 — пакет отличает отметка is_package (мигр. 244); шаблон сметы — без неё.
+    { id: 1, name: 'Осень', service_ids: [1, 2], discount_percent: 20, valid_from: shift(-3), valid_until: shift(5), is_package: 1, discount_mode: 'percent', discount_value: 20 },
+    { id: 2, name: 'Истёкший', service_ids: [1], discount_percent: 30, valid_from: null, valid_until: shift(-1), is_package: 1, discount_mode: 'percent', discount_value: 30 },
+    { id: 3, name: 'Будущий', service_ids: [1], discount_percent: 10, valid_from: shift(1), valid_until: null, is_package: 1, discount_mode: 'percent', discount_value: 10 },
+    { id: 4, name: 'Шаблон', service_ids: [3], discount_percent: 0, valid_from: null, valid_until: null, is_package: 0 },
+    { id: 5, name: 'Последний день', service_ids: [3], discount_percent: 5, valid_from: null, valid_until: shift(0), is_package: 1, discount_mode: 'amount', discount_value: 5000 },
   ];
   let picked = null;
   const dlg = openTemplatePickerModal({ onPick: (t) => { picked = t; } });
@@ -196,7 +197,8 @@ test('в списке только действующие сегодня пак�
   assert.doesNotMatch(text, /Истёкший/);
   assert.doesNotMatch(text, /Будущий/);
   const terms = walk(dlg.overlay).filter((n) => n.attrs && 'data-package-terms' in n.attrs).map((n) => n._t || textOf(n));
-  assert.equal(terms.length, 2, 'подпись скидки — только у пакетов со скидкой: ' + JSON.stringify(terms));
+  assert.equal(terms.length, 2, 'подпись — только у пакетов, не у шаблона сметы: ' + JSON.stringify(terms));
+  assert.ok(terms.some((t) => /скидка 5 000 сум/.test(t)), 'скидка суммой — в сумах: ' + JSON.stringify(terms));   // SERVICES_PACKAGES_V1
   assert.ok(terms.some((t) => /скидка 20 %/.test(t) && /до \d{2}\.\d{2}\.\d{4}/.test(t)), JSON.stringify(terms));
   const rows = walk(dlg.overlay).filter((n) => n.tagName === 'BUTTON' && !n.classList.contains('modal-close'));
   rows[0].click();

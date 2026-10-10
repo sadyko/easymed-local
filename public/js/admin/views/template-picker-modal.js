@@ -17,15 +17,30 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { listTemplates, templateSize, packageDiscount } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
+import { listTemplates, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
+import { isPackageRow, packageTerms } from '../../shared/package-price.js';   // SERVICES_PACKAGES_V1
 
 // PACKAGES_V1 — «−20 % · до 30.09» под названием пакета: скидку и срок видно
 // ДО выбора. Список уже отобран по дню визита (listTemplates, опция on).
+// SERVICES_PACKAGES_V1 — только у ПАКЕТА (шаблон сметы — просто список услуг):
+// цена пакета, если раскладка посчитана (listTemplates withPrices), иначе
+// скидка так, как её задала клиника (процент, сумма или цена пакета).
+const sumText = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 export function packageTermsText(t) {
-    const pct = packageDiscount(t);
+    if (!isPackageRow(t)) return '';
     const until = String((t && t.valid_until) || '').slice(0, 10);
     const bits = [];
-    if (pct > 0) bits.push(trf('скидка {pct} %', { pct: String(pct).replace('.', ',') }));
+    const c = t.package_calc;
+    if (c) {
+        bits.push(c.off > 0
+            ? trf('цена пакета {sum} сум, −{pct} %', { sum: sumText(c.price), pct: String(c.pct).replace('.', ',') })
+            : trf('цена пакета {sum} сум', { sum: sumText(c.price) }));
+    } else {
+        const { mode, value } = packageTerms(t);
+        if (mode === 'percent' && value > 0) bits.push(trf('скидка {pct} %', { pct: String(value).replace('.', ',') }));
+        else if (mode === 'amount' && value > 0) bits.push(trf('скидка {sum} сум', { sum: sumText(value) }));
+        else if (mode === 'price') bits.push(trf('цена пакета {sum} сум', { sum: sumText(value) }));
+    }
     if (/^\d{4}-\d{2}-\d{2}$/.test(until)) bits.push(trf('до {date}', { date: until.slice(8, 10) + '.' + until.slice(5, 7) + '.' + until.slice(0, 4) }));
     return bits.join(' · ');
 }
@@ -39,7 +54,9 @@ export function packageTermsText(t) {
 // PACKAGES_V1 (ревью I-3) — `on`: местный день визита, на который пойдут
 // услуги ('YYYY-MM-DD'). Пакеты отбираются по НЕМУ — сервер сверяет срок пакета
 // с днём визита. Не передан — сегодня (быстрая регистрация: приём сейчас).
-export function openTemplatePickerModal({ onPick, title = 'Пакеты услуг', on } = {}) {
+// SERVICES_PACKAGES_V1 — withPrices: раскладка пакетов по прайсу (цена пакета в
+// подписи; цена каждой услуги в пакете — строкам сметы, service-templates.js cartPackage).
+export function openTemplatePickerModal({ onPick, title = 'Пакеты услуг', on, withPrices = true } = {}) {
     const pick = typeof onPick === 'function' ? onPick : () => {};
 
     const overlay = h('div', { class: 'modal', 'data-dialog': 'template-picker', style: { zIndex: '180' } });
@@ -68,7 +85,7 @@ export function openTemplatePickerModal({ onPick, title = 'Пакеты услу
     document.body.appendChild(overlay);
 
     (async () => {
-        const { data, error } = await listTemplates(supabase, { on: on || undefined });
+        const { data, error } = await listTemplates(supabase, { on: on || undefined, withPrices });   // SERVICES_PACKAGES_V1
         if (closed) return;
         clear(listEl);
         if (error) {

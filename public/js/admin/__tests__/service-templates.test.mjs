@@ -180,3 +180,27 @@ test('смета: пакет вне дня строки или без скидк
   assert.deepStrictEqual(packageSplit([{ total: 100, package: { id: 2, pct: 0 }, day: '2026-09-10' }], 0), { packageDiscount: 0, restTotal: 100 });
   assert.deepStrictEqual(packageSplit([], 10), { packageDiscount: 0, restTotal: 0 });
 });
+
+// SERVICES_PACKAGES_V1 — пакет строки сметы и раскладка списком.
+import { cartPackage, attachPackagePrices } from '../views/service-templates.js';
+
+test('пакет строки сметы: цена услуги без скидки и в пакете — из раскладки списка; у шаблона сметы цены нет', async () => {
+  const rows = [
+    { id: 4, name: 'Check-up', service_ids: [1, 2], is_package: 1, discount_mode: 'percent', discount_value: 15, valid_until: '2027-06-03' },
+    { id: 5, name: 'Смета', service_ids: [1], is_package: 0 },
+  ];
+  const sb = { from: () => ({ select: () => ({ in: async () => ({ data: [{ id: 1, price: 45000, active: 1 }, { id: 2, price: 25000, active: 1 }], error: null }) }) }) };
+  await attachPackagePrices(sb, rows);
+  assert.deepEqual([rows[0].package_calc.full, rows[0].package_calc.price], [70000, 60000], '70 000 − 15 % = 59 500 → 60 000');
+  assert.equal(rows[1].package_calc, undefined, 'шаблон сметы не считается');
+  assert.deepEqual(cartPackage(rows[0], 1), { id: 4, name: 'Check-up', is_package: 1, valid_from: null, valid_until: '2027-06-03', full: 45000, price: 38600 });
+  assert.deepEqual(cartPackage(rows[1], 1), { id: 5, name: 'Смета', is_package: 0, valid_from: null, valid_until: null });
+  assert.equal(cartPackage(null, 1), null);
+});
+
+test('процент пакета: посчитанный по прайсу; заданный клиникой; у шаблона сметы — 0', () => {
+  assert.equal(packageDiscount({ is_package: 1, package_calc: { pct: 15.1 } }), 15.1);
+  assert.equal(packageDiscount({ is_package: 1, discount_mode: 'percent', discount_value: 20 }), 20);
+  assert.equal(packageDiscount({ is_package: 1, discount_mode: 'price', discount_value: 90000 }), 0, 'цена пакета — не процент');
+  assert.equal(packageDiscount({ is_package: 0, discount_percent: 20 }), 0, 'шаблон сметы скидки не даёт');
+});

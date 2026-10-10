@@ -18,6 +18,12 @@
 // (create_invoice_for_visit), per line, and only to the package's own services.
 // A template saved from the смета is a package with 0 % and no dates.
 
+// SERVICES_PACKAGES_V1 — пакет и шаблон сметы различает отметка is_package
+// (мигр. 244); цену пакета и цену каждой услуги в нём считает одна функция
+// (shared/package-price.js packageCalc) — та же, что у окна пакета, сервера и
+// API. Скидку категории пациента пакет не получает (решение владельца 1).
+import { isPackageRow, packageIds, packageTerms, packageItems, packageCalc, packageLineOf, packageLineMoney, packageDayState } from '../../shared/package-price.js';
+
 const TABLE = 'service_templates';
 
 // The ids a template covers, whatever shape they arrive in.
@@ -75,12 +81,9 @@ export function localToday(now = new Date()) {
 const ymd = (v) => { const s = String(v == null ? '' : v).slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : ''; };
 
 /** 'active' | 'expired' | 'upcoming' — where `day` sits against the offer window. */
+// SERVICES_PACKAGES_V1 — правило одно с сервером и API (shared/package-price.js).
 export function packageState(template, day = localToday()) {
-    const from = ymd(template && template.valid_from);
-    const until = ymd(template && template.valid_until);
-    if (from && day < from) return 'upcoming';
-    if (until && day > until) return 'expired';
-    return 'active';
+    return packageDayState(template, day);
 }
 
 /** Is the package on offer on `day` (window inclusive on both ends)? */
@@ -89,9 +92,14 @@ export function packageValidOn(template, day = localToday()) {
 }
 
 /** The package discount, 0..100 (a broken value is 0 — never a made-up discount). */
+// SERVICES_PACKAGES_V1 — процент скидки пакета: посчитанный по прайсу, если цены
+// подгружены (listTemplates withPrices), иначе процент, заданный клиникой; у
+// шаблона сметы — 0.
 export function packageDiscount(template) {
-    const n = Number(template && template.discount_percent);
-    return Number.isFinite(n) && n > 0 ? Math.min(n, 100) : 0;
+    if (template && template.package_calc) return template.package_calc.pct;
+    if (template && template.is_package != null && !isPackageRow(template)) return 0;
+    const t = packageTerms(template);
+    return t.mode === 'percent' ? t.value : 0;
 }
 
 /**
@@ -126,6 +134,40 @@ function packageDiscount_(pkg) {
     return packageDiscount({ discount_percent: pkg.pct != null ? pkg.pct : pkg.discount_percent });
 }
 
+/**
+ * SERVICES_PACKAGES_V1 — пакет строки сметы: { id, name, is_package, valid_from,
+ * valid_until } и, если раскладка пакета посчитана (listTemplates withPrices),
+ * цена услуги без скидки и в пакете (full, price) — те же числа, что сервер
+ * запишет на строку. У шаблона сметы цены нет: его строки — обычные.
+ */
+export function cartPackage(template, serviceId) {
+    if (!template || template.id == null) return null;
+    const base = { id: Number(template.id), name: template.name || '', is_package: isPackageRow(template) ? 1 : 0,
+        valid_from: template.valid_from || null, valid_until: template.valid_until || null };
+    const line = base.is_package && template.package_calc ? packageLineOf(template.package_calc, serviceId) : null;
+    return line ? { ...base, full: line.full, price: line.price } : base;
+}
+
+/**
+ * SERVICES_PACKAGES_V1 — раскладка каждого ПАКЕТА списка по сегодняшнему
+ * прайсу: шаблону добавляется package_calc ({ full, price, off, pct, lines }).
+ * Цены услуг — одним запросом. Не прочитались — package_calc нет: смета
+ * покажет строки без цены пакета, а цену запишет сервер.
+ */
+export async function attachPackagePrices(supabase, templates) {
+    const list = (Array.isArray(templates) ? templates : []).filter(isPackageRow);
+    const ids = [...new Set(list.flatMap((t) => packageIds(t)))];
+    if (!ids.length) return templates;
+    let services = [];
+    try {
+        const { data, error } = await supabase.from('services').select('id, price, active').in('id', ids);
+        services = error || !Array.isArray(data) ? [] : data;
+    } catch { services = []; }
+    if (!services.length) return templates;
+    for (const t of list) t.package_calc = packageCalc(packageTerms(t), packageItems(t, services).items);
+    return templates;
+}
+
 const ruDate = (s) => (s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '');
 
 /**
@@ -147,14 +189,23 @@ export function packageValidityParts(template, day = localToday()) {
 // PACKAGES_V1 — `on` is the day to offer for (default: today). Packages whose
 // window does not cover it are left out: a registrar must never be shown a
 // discount the server will refuse. `on: null` returns every active package.
-export async function listTemplates(supabase, { on } = {}) {
+// SERVICES_PACKAGES_V1 — withPrices: раскладка пакетов по прайсу
+// (attachPackagePrices); kinds: 'templates' — только шаблоны сметы (окно
+// записи колл-центра: его дверь booking_lines_add пакета не несёт).
+export async function listTemplates(supabase, { on, withPrices = false, kinds = 'all' } = {}) {
     const res = await supabase.from(TABLE)
-        .select('id, name, service_ids, discount_percent, valid_from, valid_until')
+        .select('id, name, service_ids, discount_percent, valid_from, valid_until, is_package, name_uz, name_en, discount_mode, discount_value')
         .eq('active', true)
         .order('name');
-    if (!res || res.error || !Array.isArray(res.data) || on === null) return res;
-    const day = on || localToday();
-    return { ...res, data: res.data.filter((t) => packageValidOn(t, day)) };
+    if (!res || res.error || !Array.isArray(res.data)) return res;
+    let data = res.data;
+    if (kinds === 'templates') data = data.filter((t) => !isPackageRow(t));
+    if (on !== null) {
+        const day = on || localToday();
+        data = data.filter((t) => packageValidOn(t, day));
+    }
+    if (withPrices) await attachPackagePrices(supabase, data);
+    return data === res.data ? res : { ...res, data };
 }
 
 // A template needs a name to be findable and services to be worth anything;

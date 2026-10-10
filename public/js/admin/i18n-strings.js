@@ -11762,4 +11762,8 @@ export const STRINGS = {
   "Цена пакета больше суммы цен услуг.": {"en":"The package price is larger than the sum of the service prices.","ru":"Цена пакета больше суммы цен услуг.","uz":"Paket narxi xizmatlar narxlari yig‘indisidan katta."},   // SERVICES_PACKAGES_V1
   "Дата — в виде ГГГГ-ММ-ДД.": {"en":"The date must look like YYYY-MM-DD.","ru":"Дата — в виде ГГГГ-ММ-ДД.","uz":"Sana — YYYY-OO-KK ko‘rinishida."},   // SERVICES_PACKAGES_V1
   "Чтобы показывать пакет, нужно название на узбекском.": {"en":"To show the package, it needs a name in Uzbek.","ru":"Чтобы показывать пакет, нужно название на узбекском.","uz":"Paketni ko‘rsatish uchun o‘zbekcha nomi kerak."},   // SERVICES_PACKAGES_V1
+  // SERVICES_PACKAGES_V1 — задача 8: подпись пакета
+  "цена пакета {sum} сум, −{pct} %": {"en":"package price {sum} sum, −{pct} %","ru":"цена пакета {sum} сум, −{pct} %","uz":"paket narxi {sum} so‘m, −{pct} %"},   // SERVICES_PACKAGES_V1
+  "цена пакета {sum} сум": {"en":"package price {sum} sum","ru":"цена пакета {sum} сум","uz":"paket narxi {sum} so‘m"},   // SERVICES_PACKAGES_V1
+  "скидка {sum} сум": {"en":"discount {sum} sum","ru":"скидка {sum} сум","uz":"chegirma {sum} so‘m"},   // SERVICES_PACKAGES_V1
 };

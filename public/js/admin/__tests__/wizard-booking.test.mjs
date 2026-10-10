@@ -112,6 +112,7 @@ const { openDb } = await import('../../../../server/db/connection.js');
 const { migrate } = await import('../../../../server/db/migrate.js');
 const { compile } = await import('../../../../server/db/query-compiler.js');
 const { getRpc } = await import('../../../../server/services/rpc/index.js');
+const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');   // SERVICES_PACKAGES_V1
 const { readableColumns } = await import('../../../../server/db/schema-registry.js');
 const { calendarSlots, calendarWindows } = await import('../../../../server/services/rpc/calendar.js');
 
@@ -136,6 +137,7 @@ globalThis.fetch = async (url, opts) => {
     catch (e) { return { ok: false, status: e.status || 500, json: async () => ({ error: { code: e.code, message: e.message, params: e.params } }) }; }
   }
   if (u === '/api/db') {
+    stampWriteBody(DB, body);   // SERVICES_PACKAGES_V1 — как настоящая дверь (routes/db.js): цена пакета на строке
     let compiled;
     try { compiled = compile(body, USER); }
     catch (e) { return { ok: false, status: 400, json: async () => ({ error: { code: 'bad_request', message: e.message } }) }; }
@@ -665,7 +667,7 @@ test('МАСТЕР: VIP + пакет — в счёт уходит скидка �
     const cat = db.prepare("INSERT INTO patient_categories (name, discount_percent) VALUES ('VIP', 10)").run().lastInsertRowid;
     db.prepare('UPDATE patients SET category_id = ? WHERE id = 3').run(cat);
     db.prepare("INSERT INTO services (id, name, price, type) VALUES (31, 'УЗИ брюшной полости', 200000, 'imaging')").run();
-    db.prepare("INSERT INTO service_templates (name, service_ids, discount_percent, valid_from, valid_until) VALUES ('Осень', '[31]', 20, '2000-01-01', '2999-12-31')").run();
+    db.prepare("INSERT INTO service_templates (name, service_ids, discount_percent, valid_from, valid_until, is_package, discount_mode, discount_value) VALUES ('Осень', '[31]', 20, '2000-01-01', '2999-12-31', 1, 'percent', 20)").run();   // SERVICES_PACKAGES_V1
   });
   const ov = document.body.children.find(isWizard);
   const tplBtn = walk(ov).find((n) => n.tagName === 'BUTTON' && /Выбрать шаблон/.test(textOf(n)));
