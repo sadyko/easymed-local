@@ -330,3 +330,42 @@ test('документы карты пациента живут по своим 
     assert.equal(res.status, 200, 'правило фотографий задело вложения карты');
   } finally { s.stop(); }
 });
+
+// ---------------------------------------------------------------------------
+// DOCTOR_PROFILE_V1 — фото врача для партнёров загружают и из карточки
+// сотрудника: роль с «Сотрудники: Изменение» (не только «Настройки»). В
+// филиале фото врача главного здания — 409 (решение владельца 10): правка
+// пропала бы при следующей синхронизации.
+// ---------------------------------------------------------------------------
+function addGrants(db, role, grants) {
+  const row = db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(role);
+  const perms = row ? JSON.parse(row.permissions) : { sections: [], levels: {} };
+  perms.grants = { ...(perms.grants || {}), ...grants };
+  if (row) db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify(perms), role);
+  else db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(role, JSON.stringify(perms));
+}
+
+test('DOCTOR_PROFILE_V1: фото врача из карточки — «Сотрудники: Изменение» может, без права — 403', async () => {
+  const s = await setup();
+  try {
+    let cookie = await login(s.base, 'doc2');
+    assert.equal((await put(s.base, cookie, doctorPhoto(s.ids.doc), Buffer.from('X'))).status, 403, 'чужое фото без права');
+    addGrants(s.db, 'doctor', { settings: 'view', 'settings.employees': 'edit' });
+    cookie = await login(s.base, 'doc2');
+    const up = await put(s.base, cookie, doctorPhoto(s.ids.doc, '1757000000001-abc124-portret.jpg'), Buffer.from('JPEG'));
+    assert.equal(up.status, 200, JSON.stringify(await up.json().catch(() => ({}))));
+  } finally { s.stop(); }
+});
+
+test('DOCTOR_PROFILE_V1: фото врача главного здания в филиале не загружается — 409, файла нет', async () => {
+  const s = await setup();
+  try {
+    s.db.prepare('UPDATE users SET is_local = 0 WHERE id = ?').run(s.ids.doc);
+    const cookie = await login(s.base, 'boss');
+    const p = doctorPhoto(s.ids.doc);
+    const res = await put(s.base, cookie, p, Buffer.from('X'));
+    assert.equal(res.status, 409);
+    assert.equal((await res.json()).error.message, 'Профиль врача меняется в главном здании.');
+    assert.ok(!fs.existsSync(path.join(s.dataDir, 'storage', ...p.split('/'))), 'файл всё же записан');
+  } finally { s.stop(); }
+});

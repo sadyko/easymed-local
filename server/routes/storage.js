@@ -201,8 +201,10 @@ const DOCS_DENIED = 'Вкладка «Документы» закрыта для
 // — часть его анкеты, и меняет её тот, кому анкету менять разрешено.
 const PATIENT_PHOTO_DENIED = 'Фотографию пациента меняет тот, кому разрешено изменять карту пациента.'
   + ' Доступ открывает администратор клиники: «Настройки» → «Роли» → раздел «Пациенты» и вкладка «Детали».';
-const DOCTOR_PHOTO_DENIED = 'Своё фото врач меняет сам — в «Моём профиле».'
-  + ' Чужое может поставить только администратор клиники.';
+// DOCTOR_PROFILE_V1 — чужое фото ставит и тот, кому выдано изменение «Сотрудников» (карточка сотрудника).
+const DOCTOR_PHOTO_DENIED = 'Своё фото врач меняет сам — в «Моём профиле». Чужое ставит администратор или тот, кому выдано изменение «Сотрудников».';
+// DOCTOR_PROFILE_V1 — решение владельца 10: тот же ответ, что у профиля врача (routes/users.js, rpc/doctor-profile.js).
+const DOCTOR_MAIN_ONLY = 'Профиль врача меняется в главном здании.';
 
 /**
  * @param {string} storageDir  <dataDir>/storage
@@ -320,7 +322,9 @@ export function storageRoutes(storageDir, db = null) {
     if (!user) return 'Требуется вход.';
     if (Number(user.id) === Number(doctorId)) return null;
     if (!db) return 'Хранилище фотографий недоступно.';
-    return canEditSection(db, user, 'settings') ? null : DOCTOR_PHOTO_DENIED;
+    // DOCTOR_PROFILE_V1 — фото для партнёров ставят и из карточки сотрудника:
+    // её пишет «Сотрудники: Изменение» (routes/users.js), и путь фото — её поле.
+    return canEditSection(db, user, 'settings') || grantAllowsAdminOr(db, user, 'settings.employees', 'edit') ? null : DOCTOR_PHOTO_DENIED;
   }
 
   // CLINIC_PROFILE_V1 — кто кладёт логотип клиники: не в филиале (логотипы
@@ -344,6 +348,13 @@ export function storageRoutes(storageDir, db = null) {
   function photoGate(req, res, { write }) {
     const target = photoTarget(req.params.bucket, req.params.rest);
     if (!target) return badPath(res);
+    // DOCTOR_PROFILE_V1 — решение владельца 10: в филиале фото врача главного
+    // здания (users.is_local = 0, строка приехала синхронизацией) не меняется —
+    // как и весь его профиль (409 в routes/users.js и rpc/doctor-profile.js).
+    if (write && target.kind === 'doctor' && db) {
+      const row = db.prepare('SELECT is_local FROM users WHERE id = ?').get(target.doctorId);
+      if (row && row.is_local === 0) return refuse(res, 409, 'conflict', DOCTOR_MAIN_ONLY);
+    }
     const denial = target.kind === 'patient'
       ? patientPhotoDenial(req, { write })
       : doctorPhotoDenial(req, target.doctorId, { write });
