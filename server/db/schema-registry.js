@@ -648,10 +648,17 @@ export const REGISTRY = {
   // его очереди пробирки соседнего корпуса — раздел решает это на каждой
   // загрузке), МЕНЯЕТ ТОЛЬКО АДМИНИСТРАТОР: это устройство клиники, и оно
   // уезжает филиалам со справочником (branch-sync/catalogue.js).
+  // CLINIC_PROFILE_V1 (mig 240) — профиль клиники: названия и описание на
+  // uz/en, адрес здания кодами справочника и улицей на трёх языках, сайт и
+  // соцсети, карта, пути к файлам логотипов (корзина clinic-logos). Бланки
+  // печатают прежние clinic_name и address; новое идёт наружу (API) и в
+  // предпросмотр «Компании». Пишет тот же ключ «Компания».
   doc_settings: {
-    read:  { roles: ALL_STAFF, columns: ['id','clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope','updated_at'] },
+    read:  { roles: ALL_STAFF, columns: ['id','clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope','updated_at',
+                                         'name_uz','name_en','about_ru','about_uz','about_en','country_code','region_code','district_code','street_ru','street_uz','street_en','website','telegram_bot','telegram_channel','instagram','maps_url','logo_square_path','logo_portrait_path'] },   // CLINIC_PROFILE_V1 (mig 240) — профиль клиники
     write: { grant:'settings.company', insert: { roles: [] },
-             update: { roles: ['admin'], columns: ['clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope'] },
+             update: { roles: ['admin'], columns: ['clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope',
+                                                   'name_uz','name_en','about_ru','about_uz','about_en','country_code','region_code','district_code','street_ru','street_uz','street_en','website','telegram_bot','telegram_channel','instagram','maps_url','logo_square_path','logo_portrait_path'] },   // CLINIC_PROFILE_V1 (mig 240) — профиль клиники
              delete: { roles: [] } },
     filters: ['id'],
     embed:   {},

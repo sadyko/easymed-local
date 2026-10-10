@@ -80,6 +80,10 @@ test('ключ встаёт вместо администратора и не ш
     // doc_settings вставлять не может никто — только править единственную запись.
     assert.throws(() => run(db, { table: 'doc_settings', op: 'insert', values: { clinic_name: 'X' } }, REG), refused);
     run(db, { table: 'doc_settings', op: 'update', values: { clinic_name: 'Клиника' }, filters: [{ col: 'id', op: 'eq', val: 1 }] }, REG);
+    // CLINIC_PROFILE_V1 (mig 240) — профиль клиники пишется тем же ключом «Компания».
+    run(db, { table: 'doc_settings', op: 'update', values: { name_uz: 'Shifo', website: 'https://shifo.uz', logo_square_path: 'square/1-a.png' }, filters: [{ col: 'id', op: 'eq', val: 1 }] }, REG);
+    assert.deepEqual({ ...db.prepare('SELECT name_uz, website, logo_square_path FROM doc_settings WHERE id = 1').get() },
+      { name_uz: 'Shifo', website: 'https://shifo.uz', logo_square_path: 'square/1-a.png' });
   } finally { db.close(); }
 });
 

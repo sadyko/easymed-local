@@ -145,6 +145,18 @@ test('doc_settings: staff read, admin-only update, no insert/delete', () => {
   assert.ok(readableColumns('doc_settings').includes('logo_data_url'));
 });
 
+// CLINIC_PROFILE_V1 (mig 240) — профиль клиники читается всеми и правится тем же
+// ключом «Компания», что и прежние колонки.
+test('doc_settings: колонки профиля клиники (мигр. 240) читаются и правятся', () => {
+  for (const c of ['name_uz', 'name_en', 'about_ru', 'about_uz', 'about_en', 'country_code', 'region_code', 'district_code',
+    'street_ru', 'street_uz', 'street_en', 'website', 'telegram_bot', 'telegram_channel', 'instagram',
+    'maps_url', 'logo_square_path', 'logo_portrait_path']) {
+    assert.ok(readableColumns('doc_settings').includes(c), 'не читается ' + c);
+    assert.ok(writableColumns('doc_settings', 'update').includes(c), 'не правится ' + c);
+  }
+  assert.ok(!readableColumns('doc_settings').includes('address_manual'), 'address_manual нет (ответ владельца, вариант B)');
+});
+
 test('settings-section tables: admin-writable config, staff read, room/bed FK embeds', () => {
   for (const t of ['departments','service_types','consultation_types','patient_categories','floors','rooms','wards','beds']) {
     assert.ok(canRead(t,'registrar'), t+' readable');
