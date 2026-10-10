@@ -137,3 +137,21 @@ test('каждая подпись, описание и сообщение мод
     assert.ok(e && e.ru && e.uz && e.en, 'нет статьи словаря: ' + t);
   }
 });
+
+// DOCTOR_PROFILE_V1 (шаг 5, Р8) — горизонт свободного времени у каждого врача
+// свой: «Запись открыта на 7 / 14 / 30 дней» в карточке врача. Право
+// «Свободное время» не обещает партнёру ровно 14 дней; числа — те же, что в
+// карточке (BOOKING_DAYS).
+test('DOCTOR_PROFILE_V1: «Свободное время» — на столько дней, на сколько открыта запись у врача', async () => {
+  const { BOOKING_DAYS } = await import('./doctor-public.js');
+  const d = SCOPE_INFO.slots.desc;
+  assert.ok(!/на 14 дней вперёд/.test(d), 'право обещает ровно 14 дней: ' + d);
+  assert.match(d, /на сколько открыта запись у врача/);
+  const nums = BOOKING_DAYS.slice(0, -1).join(', ') + ' или ' + BOOKING_DAYS[BOOKING_DAYS.length - 1];
+  assert.ok(d.includes('(' + nums + ')'), 'числа не те, что в карточке врача (' + nums + '): ' + d);
+  assert.match(d, /у врачей с живой очередью — часы приёма/);
+  const e = STRINGS[d];
+  assert.ok(e && e.ru === d && e.uz && e.en, 'нет статьи словаря: ' + d);
+  assert.match(e.uz, /7, 14 yoki 30/);
+  assert.match(e.en, /7, 14 or 30/);
+});
