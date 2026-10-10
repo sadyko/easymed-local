@@ -11482,5 +11482,6 @@ export const STRINGS = {
   "Новый секрет сохранён — передайте его подключению.": {"en":"The new secret is saved — hand it to the connection.","ru":"Новый секрет сохранён — передайте его подключению.","uz":"Yangi sir saqlandi — uni ulanishga topshiring."},   // CLINIC_API_STEP7_V1
   "Подключение «{name}» удалено, ключ стёрт.": {"en":"Connection “{name}” deleted, the key erased.","ru":"Подключение «{name}» удалено, ключ стёрт.","uz":"«{name}» ulanishi o‘chirildi, kalit o‘chirildi."},   // CLINIC_API_STEP7_V1
   "Подключение сайта клиники создано автоматически: удалить его нельзя, выключить можно.": {"en":"The clinic website connection was created automatically: it cannot be deleted, but it can be switched off.","ru":"Подключение сайта клиники создано автоматически: удалить его нельзя, выключить можно.","uz":"Klinika sayti ulanishi avtomatik yaratilgan: uni o‘chirib tashlab bo‘lmaydi, to‘xtatib qo‘yish mumkin."},   // CLINIC_API_STEP7_V1
+  "Подключения сайта, Symptex и партнёров: ключи, права, уведомления": {"en":"Website, Symptex and partner connections: keys, permissions, notifications","ru":"Подключения сайта, Symptex и партнёров: ключи, права, уведомления","uz":"Sayt, Symptex va hamkorlar ulanishlari: kalitlar, huquqlar, bildirishnomalar"},   // CLINIC_API_STEP7_V1
   // /CLINIC_API_STEP7_V1
 };

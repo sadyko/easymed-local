@@ -1173,10 +1173,7 @@ export function isRouteAllowed(view) {
     if (view === 'consultation-types') return _effective.has('consultation-types') || _effective.has('settings:consultation_types') || _effective.has('settings');
     if (view === 'communications')     return _effective.has('communications') || _effective.has('settings');
     if (view === 'discounts-settings') return _effective.has('discounts-settings') || _effective.has('settings');   // PATIENT_DISCOUNTS_V2
-    // CLINIC_API_V1 · ROLE_REPORTS_SETTINGS_V1 — ключи API только
-    // администратору (решение владельца 25.09): сервер их и так не отдавал
-    // никому другому (api_tokens: чтение и запись — admin), а экран открывался
-    // голым `settings` и показывал пустой список.
+    // CLINIC_API_STEP7_V1 — «API и подключения»: открывает окно «API» в «Ролях» (SETTINGS_ROUTE_TILE выше) или администратор; ненастроенной роли — нет.
     if (view === 'api-settings') return false;
     // TELEGRAM_BOT_V1 — раздел админский целиком, включая чтение: токен бота
     // это полный доступ к переписке с пациентами, и даже его хвост регистратору

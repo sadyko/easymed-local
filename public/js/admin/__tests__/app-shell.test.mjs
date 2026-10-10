@@ -483,14 +483,6 @@ test('кнопки «+ Новый пациент» в меню нет, а соз
     assert.equal(shell().state.view, 'registration');
 });
 
-test('«Публичный сайт» — обычный пункт меню на токенах, без инлайновых стилей', () => {
-    const js = read('public/js/admin.js');
-    assert.ok(!js.includes('color-mix(in srgb, var(--primary-600)'), 'инлайновый color-mix остался');
-    const block = js.slice(js.indexOf('PUBLIC_SITE_V1 — the Symptex'), js.indexOf('let currentHeaderEl'));
-    assert.ok(block.includes("class: 'nav-item'"), '«Публичный сайт» не стал обычным пунктом меню');
-    assert.ok(!/style:/.test(block), 'у «Публичного сайта» остались встроенные стили');
-});
-
 test('активный пункт меню — залитая кнопка во всех трёх скинах', () => {
     const css = read('public/css/admin.css').replace(/\/\*[\s\S]*?\*\//g, '');
     const ruleFor = (sel) => {
@@ -904,7 +896,7 @@ test('V3120_FIX: пересылка не обходит права — закр�
 test('V3120_FIX: мёртвые облачные адреса ведут на живые экраны', async () => {
     await perms_setFull();
     const DEAD = {
-        'cashier-settings': 'settings', 'api-settings': 'settings', 'public-site': 'settings',
+        'cashier-settings': 'settings', 'public-site': 'settings',
         'doctor-room': 'consultation',
         'settings:clinic_items': 'inventory', 'settings:cashiers': 'settings',
         'settings:doctor_prices': 'doctor-pay', 'settings:doctor_referral_bonuses': 'settings',
@@ -920,6 +912,16 @@ test('V3120_FIX: мёртвые облачные адреса ведут на ж
     for (const dead of Object.keys(DEAD)) {
         assert.equal(hub.includes("'" + dead + "'"), false, 'хаб настроек ведёт на мёртвый адрес ' + dead);
     }
+});
+
+// CLINIC_API_STEP7_V1 — #api-settings снова живой: экран «API и подключения».
+test('#api-settings — экран «API и подключения»; «Публичного сайта» в меню нет', async () => {
+    await perms_setFull();
+    await go('api-settings');
+    assert.equal(shell().state.view, 'api-settings');
+    const js = read('public/js/admin.js');
+    assert.ok(!js.includes('renderPublicSite') && !js.includes("t('sidebar.publicSite'"), '«Публичный сайт» остался в оболочке');
+    assert.ok(js.includes("case 'api-settings': return void await renderWithViewOnly(viewRoot, 'settings.api'"));
 });
 
 test('глушим таймеры экранов, чтобы прогон завершался', () => {

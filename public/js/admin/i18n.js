@@ -24,7 +24,6 @@ const I18N = {
     en: {
         sidebar: {
             newPatient: 'New patient',
-            publicSite: 'Public site',
             sections: { Clinical: 'Clinical', Operations: 'Operations', Insights: 'Insights', Soon: 'Soon' },
             nav: {
                 patients:     'Patients',
@@ -130,7 +129,6 @@ const I18N = {
     ru: {
         sidebar: {
             newPatient: 'Новый пациент',
-            publicSite: 'Публичный сайт',
             sections: { Clinical: 'Клиника', Operations: 'Операции', Insights: 'Аналитика', Soon: 'Скоро' },
             nav: {
                 patients:     'Пациенты',
@@ -226,7 +224,6 @@ const I18N = {
     uz: {
         sidebar: {
             newPatient: 'Yangi bemor',
-            publicSite: 'Ommaviy sayt',
             sections: { Clinical: 'Klinika', Operations: 'Operatsiyalar', Insights: 'Tahlil', Soon: 'Tez orada' },
             nav: {
                 patients:     'Bemorlar',

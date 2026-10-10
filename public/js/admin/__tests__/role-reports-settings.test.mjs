@@ -186,7 +186,7 @@ test('регистратура с «Категории пациентов: Из�
     assert.deepStrictEqual(visibleTiles().filter((l) => !ALWAYS.includes(l)), ['Категории пациентов']);
     assert.equal(sectionLevel('patient_categories'), 'edit');
     assert.equal(sectionLevel('payers'), 'none');
-    assert.equal(sectionLevel('api_tokens'), 'none');
+    assert.equal(perms.isRouteAllowed('api-settings'), false);
     assert.equal(perms.isRouteAllowed('documents-settings'), false, 'закрытая плитка «Компания» открылась маршрутом');
   } finally { perms.setFullAccess('Admin'); }
 });
@@ -300,7 +300,7 @@ test('администратор-врач: плитки настроек на «
   try {
     assert.equal(perms.hasRestriction(), true, 'стенд не тот: администратор-врач живёт по объединению ролей');
     assert.equal(perms.actorIsAdmin(), true);
-    for (const k of ['patient_categories', 'payers', 'doctor_rates', 'api_tokens', 'roles', 'branches']) assert.equal(sectionLevel(k), 'edit', k);
+    for (const k of ['patient_categories', 'payers', 'doctor_rates', 'roles', 'branches']) assert.equal(sectionLevel(k), 'edit', k);
     for (const l of ['Роли', 'API', 'Ставки врачей', 'Сотрудники', 'Телефония', 'Telegram-бот', 'CRM-канбан']) assert.ok(visibleTiles().includes(l), l + ' спрятана от администратора-врача');
     for (const r of ['api-settings', 'telegram-settings', 'telephony-settings', 'crm-settings', 'employees', 'settings:patients', 'services']) {
       assert.equal(perms.isRouteAllowed(r), true, r + ' закрыт администратору-врачу');

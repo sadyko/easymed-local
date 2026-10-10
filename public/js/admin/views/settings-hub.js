@@ -19,7 +19,8 @@
 // it to 1); update may send it. The settings-match config tables
 // (payer_policies / payment_providers / cashback_rules /
 // referral_source_categories / patient_discounts /
-// api_tokens / doctor_rates) were added in migration 012.
+// doctor_rates) were added in migration 012 (api_tokens — облачная заглушка,
+// с CLINIC_API_STEP7_V1 недостижима: ключи — экран «API и подключения»).
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
@@ -84,7 +85,6 @@ const SECTION_GRANT = {
     patient_categories: 'settings.patient_categories',
     chronic_conditions_ref: 'settings.chronic_conditions',
     patient_discounts: 'settings.patient_discounts',
-    api_tokens: 'settings.api',
     branches: 'settings.branches',
     payers: 'settings.payers',
     payer_policies: 'settings.payer_policies',
@@ -280,7 +280,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
             // больше нет, а Телефония не упоминала маршрут, который теперь её.
             { label: 'Телефония',           desc: 'Звонки Binotel: подключение и как звонки становятся заявками', icon: 'Headset', live: true, action: nav('telephony-settings'), route: 'telephony-settings' },
             { label: 'Telegram-бот',        desc: 'Пациент получает свои документы в Telegram по номеру телефона', icon: 'Bot', live: true, action: nav('telegram-settings'), route: 'telegram-settings' },
-            { label: 'API',                 desc: 'Ключи доступа для партнёрских программ',                     icon: 'Settings', live: true, action: () => openSection('api_tokens'), section: 'api_tokens' },
+            { label: 'API', desc: 'Подключения сайта, Symptex и партнёров: ключи, права, уведомления', icon: 'Key', live: true, action: nav('api-settings'), route: 'api-settings' },   // CLINIC_API_STEP7_V1
         ],
     },
     {
@@ -593,19 +593,6 @@ const LOOKUP_CONFIG = {
             { key: 'category_id', label: 'Только для группы пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name' },
             { key: 'service_ids', label: 'Только на эти услуги (ничего не отмечено — на весь счёт)', type: 'services', full: true },
             { key: 'note', label: 'Примечание', type: 'text', full: true },
-        ],
-    },
-    api_tokens: {
-        table: 'api_tokens', title: 'Ключи API', icon: 'Settings',
-        // ADMIN_ROWS_GRANTABLE_V1 — у ключа нет областей доступа, это полный
-        // машинный доступ: создаёт ключ и задаёт его значение только
-        // администратор; «API: Изменение» переименовывает и отзывает.
-        adminInsertOnly: 'Новый ключ создаёт администратор',
-        grantHint: 'Значение ключа видит и задаёт только администратор.',
-        columns: [{ key: 'name', label: 'Название' }, { key: 'token', label: 'Ключ' }],
-        fields: [
-            { key: 'name', label: 'Название ключа и для чего он', type: 'text', required: true },
-            { key: 'token', label: 'Значение ключа', type: 'text' },
         ],
     },
 

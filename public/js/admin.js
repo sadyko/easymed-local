@@ -51,7 +51,6 @@ import { renderClinicData }   from './admin/views/clinic-data.js?v=split1';    /
 import { offerIsCurrent, formatRuHour } from './admin/updates-logic.js';   // UPDATE_DELIVERY_V1
 
 import { renderDashboard }    from './admin/views/dashboard.js?v=owndash2';
-import { renderPublicSite }   from './admin/views/public-site.js?v=pub6';   // PUBLIC_SITE_V1
 // PATIENTS_HUB_V1 — маршрут «Пациенты» открывает ХОСТ раздела (список ·
 // очередь · записи). Сам список никуда не делся: хост монтирует его первой
 // вкладкой из того же views/patients.js.
@@ -84,7 +83,7 @@ import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
 import { renderCallCenter }   from './admin/views/callcenter.js';
 import { renderDocuments }    from './admin/views/documents.js?v=cabr8d';   // CABINET_FIX_V1_TPL — шаблоны — библиотека кабинета врача · RX_TEMPLATES_V1 — штамп кабинета · PRINT_AUTO_V1 — pa3: предпросмотр шаблона — только показ · CABINET_FIX_V1_R1 — cabr1: штамп кабинета · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3 · CABINET_FIX_V1_R4 — cabr4 · CABINET_FIX_V1_R5 — cabr5 · CABINET_FIX_V1_R6 — cabr6 · cabr6b (п. 2, свои черновики) · cabr6c (ключ записи) · CABINET_FIX_V1_R7 — cabr7 · cabr7b · cabr7c · CABINET_FIX_V1_R8 — cabr8 · CABINET_DX_KEEP_CONDITIONS_V1 — cabr8d
 import { renderDiscountsSettings } from './admin/views/discounts-settings.js?v=btnright1';   // PATIENT_DISCOUNTS_V1
-import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // CLINIC_API_V1
+import { renderApiConnections } from './admin/views/api-connections.js';   // CLINIC_API_STEP7_V1 — «API и подключения» вместо облачного экрана
 import { renderWithViewOnly } from './admin/view-only.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { renderDoctorPay } from './admin/views/doctor-pay.js?v=rh2';   // DOCTOR_PAY_BULK_V1 · RATES_HONEST_V1 — штамп (ревью 1)
 import { renderCashierSettings } from './admin/views/cashier-settings.js?v=shiftmode1';   // CASHIER_SHIFT_MODE_V1
@@ -419,7 +418,6 @@ const LEGACY_ROUTES = {
     // если такого места нет — в хаб настроек. Файлы экранов оставлены: их
     // перенос в офлайн — решение владельца, а не побочный эффект правки.
     'cashier-settings': { view: 'settings' },          // companies.cashier_shift_mode офлайн нет
-    'api-settings': { view: 'settings' },              // /api/v1/keys — облачный шлюз
     'public-site': { view: 'settings' },               // /api/v1/public-site — облачный шлюз
     'doctor-room': { view: 'consultation' },           // прежний кабинет врача → «Мои услуги»
     'settings:clinic_items': { view: 'inventory' },    // товары офлайн — таблица products в «Закупках»
@@ -703,7 +701,7 @@ const PARENT_OF = {
     'crm-settings': 'settings', 'doctor-pay': 'settings',
     'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
     'departments': 'settings',   // DEPARTMENTS_V1
-    'subscription': 'settings', 'clinic-data': 'settings', 'public-site': 'settings',
+    'subscription': 'settings', 'clinic-data': 'settings',
     'reference-lists': 'settings',   // REFERENCE_LISTS_V1
     // Пациенты
     'patient-card': 'patients', 'appointments': 'patients',
@@ -1147,7 +1145,6 @@ async function renderViewInner(viewRoot, viewName, ctx) {
     try {
         switch (state.view) {
             case 'dashboard':     return void await renderDashboard(viewRoot, ctx);
-            case 'public-site':   return void await renderPublicSite(viewRoot, ctx);   // PUBLIC_SITE_V1
             case 'patients':      return void await renderPatientsHub(viewRoot, ctx);   // PATIENTS_HUB_V1 — список · очередь · записи
             case 'services':      return void await renderServices(viewRoot, ctx);   // SERVICES_CATALOG_V1
             case 'requests':      return void await renderRequestsInbox(viewRoot, ctx);   // REQUESTS_INBOX_V1
@@ -1235,7 +1232,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'documents':     return void await renderDocuments(viewRoot, ctx);
             case 'consultation-types': return void await renderConsultationTypes(viewRoot, ctx);   // CONSULTATION_TYPES_RESTORE
             case 'discounts-settings': return void await renderDiscountsSettings(viewRoot, ctx);   // PATIENT_DISCOUNTS_V1
-            case 'api-settings': return void await renderApiSettings(viewRoot, ctx);   // CLINIC_API_V1
+            case 'api-settings': return void await renderWithViewOnly(viewRoot, 'settings.api', (root) => renderApiConnections(root, ctx));   // CLINIC_API_STEP7_V1 — «Просмотр» — в рамке «только просмотр»
             // ADMIN_ROWS_GRANTABLE_V1 — на «Просмотре» экран монтируется в рамку «только просмотр».
             case 'telegram-settings': return void await renderWithViewOnly(viewRoot, 'settings.telegram', (root) => renderTelegramSettings(root, ctx));   // TELEGRAM_BOT_V1
             case 'telephony-settings': return void await renderWithViewOnly(viewRoot, 'settings.telephony', (root) => renderTelephonySettings(root, ctx));   // TELEPHONY_V1
@@ -1307,25 +1304,6 @@ function renderSidebar() {
     // whose own header carries «Создать пациента» (views/patients.js), and the
     // 'registration' route itself is untouched — bookmarks, deep links and
     // every onNavigate('registration') caller still open it.
-
-    // PUBLIC_SITE_V1 — the Symptex public-profile screen (clinic users only;
-    // hidden for the company-less platform super-admin). It used to be a second
-    // CTA styled inline with color-mix(); it is now an ordinary nav item, so it
-    // inherits the one active treatment instead of inventing a third look.
-    // V3120_FIX — пока адрес в LEGACY_ROUTES (облачный экран), пункта нет.
-    if (!LEGACY_ROUTES['public-site'] && isModuleAllowed('public-site') && window.easymed?.state?.user?.company_id) {
-        const onPS = state.view === 'public-site';
-        const navEl = h('div', { class: 'nav nav-list-top' });
-        navEl.appendChild(h('button', {
-            class: 'nav-item' + (onPS ? ' active' : ''),
-            title: t('sidebar.publicSite', 'Публичный сайт'),
-            onclick: () => navigate('public-site'),
-        },
-            h('span', { class: 'nav-icon' }, Icon('Globe', { size: 18 })),
-            h('span', null, t('sidebar.publicSite', 'Публичный сайт')),
-        ));
-        sidebarEl.appendChild(navEl);
-    }
 
     let currentHeaderEl = null;   // pending section header, appended lazily
     let currentNav = null;

@@ -74,7 +74,6 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/users')) return { ok: true, json: async () => ({ users: USERS }) };
   if (u.startsWith('/api/db')) {
     const rows = {
-      api_tokens: [{ id: 1, name: 'Symptex', token: '••••••••', active: 1 }],
       patient_categories: [{ id: 1, name: 'VIP', tier: '', discount_percent: 5, active: 1 }],
     }[body && body.table] || [];
     return { ok: true, json: async () => ({ data: rows }) };
@@ -114,7 +113,7 @@ test('ненастроенная роль — всё, что было «толь
     for (const r of ADMIN_ONLY_ROUTES) assert.equal(perms.isRouteAllowed(r), false, r + ' открылся ненастроенной роли');
     assert.ok(!visibleReports().includes('telegram'), 'Telegram-отчёт открылся всем, кому выданы «Отчёты»');
     assert.ok(visibleReports().includes('cashier'), 'стенд не тот: «Отчёты» не выданы');
-    for (const k of ['roles', 'api_tokens', 'doctor_rates', 'patient_discounts']) assert.equal(sectionLevel(k), 'none', k);
+    for (const k of ['roles', 'doctor_rates', 'patient_discounts']) assert.equal(sectionLevel(k), 'none', k);
     assert.equal(perms.settingsMoneyAllowed('settings.patient_categories'), false);
   } finally { perms.setFullAccess('Admin'); }
   // Администратор — всё, как и было.
@@ -134,7 +133,7 @@ test('выданные уровни открывают плитки и экра�
     for (const r of ['employees', 'telephony-settings', 'telegram-settings', 'crm-settings']) assert.equal(perms.isRouteAllowed(r), true, r);
     assert.equal(perms.settingsTileLevel('settings.employees'), 'view');
     assert.equal(sectionLevel('roles'), 'edit');
-    assert.equal(sectionLevel('api_tokens'), 'view');
+    assert.equal(perms.isRouteAllowed('api-settings'), true, '«API: Просмотр» открывает экран');
     assert.equal(sectionLevel('doctor_rates'), 'edit');
     assert.equal(perms.settingsTileAllows('settings.crm', 'delete'), true);
     assert.equal(perms.settingsTileAllows('settings.telephony', 'edit'), false);
@@ -175,17 +174,17 @@ test('администратор-врач: «Удаление» у строк, �
 
 // --- Экраны -----------------------------------------------------------------------
 
-test('ключи API на «Изменении» у не-администратора: списка можно касаться, а «Добавить» нет — ключ создаёт администратор', async () => {
+test('плитка «API» ведёт на экран «API и подключения» — и у не-администратора с «API: Изменение»', async () => {
   const root = mk('div');
+  const nav = [];
   perms.setEffectiveFromRole(savedRole('Регистратор', REGISTRAR, { settings: 'view', 'settings.api': 'edit' }));
   try {
-    await renderSettingsHub(root, {});
+    await renderSettingsHub(root, { onNavigate: (r) => nav.push(r) });
     byClass(root, 'set-row-link').find((n) => textOf(n).includes('API')).click();
     await tick();
-    const t = textOf(root);
-    assert.ok(t.includes('Новый ключ создаёт администратор'), 'не сказано, кто создаёт ключ');
-    assert.ok(!walk(root).some((n) => n.tagName === 'BUTTON' && String(n.className).includes('btn-primary')), 'кнопка «Добавить» ключ у не-администратора');
-    assert.ok(t.includes('Symptex'));
+    assert.deepEqual(nav, ['api-settings']);
+    assert.equal(perms.isRouteAllowed('api-settings'), true);
+    assert.ok(!textOf(root).includes('Новый ключ создаёт администратор'), 'прежний редактор ключей открылся');
   } finally { perms.setFullAccess('Admin'); }
 });
 

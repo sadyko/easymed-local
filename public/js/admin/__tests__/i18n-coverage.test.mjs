@@ -85,7 +85,6 @@ const EXCLUDE_FILES = new Set(['i18n-strings.js', 'i18n.js']);
 //     name in this list would hide a future real string, so that is
 //     asserted too.
 const EXAMPLE_STRINGS = new Set([
-  'Иванов Иван',              // api-settings curl / request-fields sample patient
   'Азиза', 'Каримова', 'Рустамовна',   // crm new-lead form placeholders
   'Акмалович', 'Араббек', 'Каюмов',    // employees form placeholders
   'Абдукаюмов Баходир', 'БА',          // pacs placeholder patient + initials
