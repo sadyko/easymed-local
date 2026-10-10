@@ -543,9 +543,7 @@ export function scanTree() {
 // ───────────────────────────────────────────────────────────────────────────
 const BASELINE = new Set([
   "public/js/admin/setup-checklist.js | branches | column \"district\"",
-  "public/js/admin/setup-checklist.js | branches | column \"name_en\"",
   "public/js/admin/setup-checklist.js | branches | column \"name_ru\"",
-  "public/js/admin/setup-checklist.js | branches | column \"name_uz\"",
   "public/js/admin/setup-checklist.js | companies | column \"name_ru\"",
   "public/js/admin/setup-checklist.js | companies | column \"setup_completed_at\"",
   "public/js/admin/setup-checklist.js | companies | column \"verification_status\"",

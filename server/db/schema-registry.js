@@ -478,9 +478,22 @@ export const REGISTRY = {
   // created_at: список филиалов и выгрузка справочника сортируются по дате
   // заведения (порядок создания = порядок в настройках). Колонка есть в таблице
   // с самого начала; её отсутствие здесь роняло ВЕСЬ запрос, а не только сортировку.
-  branches: { read:{roles:ALL_STAFF, columns:['id','name','phone','address','is_24_7','working_hours','active','created_at']},
-              write:{ grant:'settings.branches', insert:{roles:['admin'],columns:['name','phone','address','license_number','is_24_7','working_hours']},
-                      update:{roles:['admin'],columns:['name','phone','address','license_number','is_24_7','working_hours','active']},
+  // BRANCH_PROFILE_V1 (mig 241) — профиль здания для сайта и партнёров:
+  // названия uz/en, адрес кодами справочника (мигр. 132) с улицей и ориентиром
+  // на трёх языках, карта, показ на сайте. name остаётся тем, что показывает
+  // программа. Пишет то же право «Филиалы»; в филиале общее не меняется, у
+  // своего здания главного адрес, карта и телефон — в «Компании» (routes/db.js,
+  // 409); формат — shared/branch-profile.js storedBranchProblems.
+  branches: { read:{roles:ALL_STAFF, columns:['id','name','phone','address','is_24_7','working_hours','active','created_at',
+                'name_uz','name_en','country_code','region_code','district_code','street_ru','street_uz','street_en',
+                'landmark_ru','landmark_uz','landmark_en','maps_url','show_public']},   // BRANCH_PROFILE_V1 (mig 241)
+              write:{ grant:'settings.branches',
+                      insert:{roles:['admin'],columns:['name','phone','address','license_number','is_24_7','working_hours',
+                        'name_uz','name_en','country_code','region_code','district_code','street_ru','street_uz','street_en',
+                        'landmark_ru','landmark_uz','landmark_en','maps_url','show_public']},   // BRANCH_PROFILE_V1
+                      update:{roles:['admin'],columns:['name','phone','address','license_number','is_24_7','working_hours','active',
+                        'name_uz','name_en','country_code','region_code','district_code','street_ru','street_uz','street_en',
+                        'landmark_ru','landmark_uz','landmark_en','maps_url','show_public']},   // BRANCH_PROFILE_V1
                       delete:{roles:[]} },
               filters:['id','active'], embed:{} },
   payers:    { read:{roles:ALL_STAFF,columns:['id','name','kind','active']},
