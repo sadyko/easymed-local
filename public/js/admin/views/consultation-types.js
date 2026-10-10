@@ -72,7 +72,7 @@ export async function renderConsultationTypes(container, ctx = {}) {
         // Отсев по company_id снят вместе с колонкой: база офлайн — это ОДНА
         // клиника, второго юрлица в ней быть не может.
         else doctors = (dRes.data || [])
-            .filter(u => (u.role || '').toLowerCase() === 'doctor' || u.is_doctor === true
+            .filter(u => (u.role || '').toLowerCase() === 'doctor' || isOn(u.is_doctor)   // DOCTOR_PROFILE_V1 — флаг из базы числом 1 (ревью шага 5, №2)
                 || (u.specialty || '').length > 0 || (u.license_number || '').length > 0);
         if (pRes.error) console.warn('[consultation-types] prices:', pRes.error.message);
         else for (const r of (pRes.data || [])) {

@@ -500,3 +500,21 @@ test('DOCTOR_PROFILE_V1: «Повторный визит» — слоты и з�
         DB.prepare('UPDATE consultation_types SET duration_minutes = 30 WHERE id = ?').run(LED);
     }
 });
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №2) — администратор, который ведёт приём
+// (is_doctor = 1 из базы числом, без специальности и лицензии), есть в
+// «Консультациях врачей»: окно записи предлагает его консультации по общей
+// цене (решение 8), и только здесь ему ставят свою цену, «Бесплатно» или
+// снимают «Ведёт». Раньше отбор сравнивал is_doctor с true и его терял.
+test('DOCTOR_PROFILE_V1: «Консультации врачей» — администратор с is_doctor = 1 без специальности в списке врачей', async () => {
+    DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (13, 'admdoc', 'x', 'Алиева Алия', 'admin', 1)").run();
+    try {
+        document.body.children = [];
+        const container = new El('div');
+        await renderConsultationTypes(container);
+        const card = container.querySelectorAll('.card').find((c) => c.textContent.includes('Алиева Алия'));
+        assert.ok(card, 'администратора-врача нет в «Консультациях врачей»');
+    } finally {
+        DB.prepare('DELETE FROM users WHERE id = 13').run();
+    }
+});
