@@ -21,6 +21,7 @@
 // dateNumeric — тот же вид, что раньше давал ru-RU, но одинаковый везде.
 // Размеры и вёрстка бланка не тронуты: меняется только источник строки.
 import { dateNumeric } from '../../shared/date-words.js';
+import { isPackageRow } from '../../shared/package-price.js';   // SERVICES_PACKAGES_V1 — «пакет» на бланке — по отметке
 
 // Ответ issue_queue_numbers -> строки талонов для шаблона.
 //
@@ -118,7 +119,7 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
     // очередь: обе подписи живут на visit_services, и второй поход в базу за
     // тем же набором строк был бы лишним.
     const { data: vsRows } = await supabase.from('visit_services')
-        .select('id, invoice_item_id, doctor_id(full_name, specialty, role), service_templates(name, discount_percent)')   // CLINIC_API_FIX_V1 — скидка: пакет или шаблон
+        .select('id, invoice_item_id, doctor_id(full_name, specialty, role), service_templates(name, discount_percent, is_package)')   // CLINIC_API_FIX_V1 — скидка: пакет или шаблон
         .in('invoice_item_id', items.map((i) => i.id));
     const byItem = performersByItem(vsRows);
     const pkgByItem = packagesByItem(vsRows);   // PACKAGES_V1
@@ -382,15 +383,18 @@ export function performersByItem(vsRows) {
 // ({ name, discount_percent }), и пакет окна регистрации ({ name, pct }).
 // Скидка неизвестна (не пришла в выборке) — не пакет. Временно — до отметки
 // «это пакет» у самой строки service_templates.
+// SERVICES_PACKAGES_V1 — отметка появилась (мигр. 244): «пакет» — у строки
+// ПАКЕТА (is_package), а не у любой со скидкой. Строка базы (embed
+// service_templates(name, discount_percent, is_package)) и пакет окна
+// регистрации (service-templates.js cartPackage) — с одной отметкой.
 export function packageLabel(pkg) {
     if (!pkg) return '';
     const name = pkg.name ? String(pkg.name).trim() : '';
-    const pct = Number(pkg.discount_percent ?? pkg.pct);
-    return name && Number.isFinite(pct) && pct > 0 ? name : '';
+    return name && isPackageRow(pkg) ? name : '';
 }
 
 // PACKAGES_V1 — из какого пакета позиция: visit_services -> { [invoice_item_id]: имя пакета }.
-// Нужен embed service_templates(name, discount_percent) в выборке строк визита
+// Нужен embed service_templates(name, discount_percent, is_package) в выборке строк визита
 // (CLINIC_API_FIX_V1 — без скидки строка из шаблона, а не из пакета).
 export function packagesByItem(vsRows) {
     const out = {};
@@ -429,7 +433,7 @@ export async function loadInvoiceLines(supabase, invoiceId, itemIds = null) {
         }
         if (!ids.length) return { queue: [], byItem: {}, packages: {} };
         const { data: vsRows } = await supabase.from('visit_services')
-            .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role), service_templates(name, discount_percent)')   // CLINIC_API_FIX_V1 — скидка: пакет или шаблон
+            .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role), service_templates(name, discount_percent, is_package)')   // CLINIC_API_FIX_V1 — скидка: пакет или шаблон; SERVICES_PACKAGES_V1 — отметка пакета
             .in('invoice_item_id', ids);
         const byItem = performersByItem(vsRows);
         const packages = packagesByItem(vsRows);   // PACKAGES_V1

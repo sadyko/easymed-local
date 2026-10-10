@@ -69,7 +69,7 @@ import { buildPatientFields, openDuplicatePatientDialog, runPatientSearch, uploa
 // закрыл не то окно». Модуль сам не импортирует ничего (NO_IMPORT_CYCLES_V1).
 import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 import { openTemplatePickerModal } from './template-picker-modal.js?v=tpl1';   // TEMPLATE_PICKER_V1
-import { resolveTemplate, packageDiscount } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
+import { resolveTemplate, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1; SERVICES_PACKAGES_V1 — cartPackage
 import { registerWalkIn, walkInRoleRefusal, walkInLinesRefusal } from './walk-in-booking.js?v=wib1';
 import { surgeryBedRefusal, isSurgeryPick, SURGERY_NEEDS_BED_TEXT } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1   // WALK_IN_BOOKING_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        // DOCTOR_POOL_V1
@@ -402,7 +402,17 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         const line = savedLine(i);
         const row = state.rows[i];
         if (line && Number.isFinite(Number(line.unitPrice))) return Number(line.unitPrice);
+        // SERVICES_PACKAGES_V1 — строка пакета: цена услуги без скидки, по которой считалась раскладка.
+        if (row && row.package && row.package.full != null && row.package.price != null) return Number(row.package.full);
         return Number(row && row.service.price) || 0;
+    }
+
+    // SERVICES_PACKAGES_V1 — до записи: скидка строк пакета (до цены в пакете) —
+    // её даст счёт наверняка; скидку группы пациента посчитает сервер.
+    function packageOffBefore() {
+        if (state.result && state.result.invoice) return 0;
+        return state.rows.reduce((a, r) => a + (r.package && r.package.full != null && r.package.price != null
+            ? Math.max(0, Number(r.package.full) - Number(r.package.price)) : 0), 0);
     }
 
     /** Сумма строк в тех деньгах, что показаны: до записи — каталог, после — счёт. */
@@ -414,7 +424,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     function totalDue() {
         const inv = state.result && state.result.invoice;
         const total = inv && Number(inv.total_amount);
-        return Number.isFinite(total) ? total : totalGross();
+        return Number.isFinite(total) ? total : totalGross() - packageOffBefore();   // SERVICES_PACKAGES_V1
     }
 
     /** Насколько счёт меньше суммы строк — это и есть применённая скидка. */
@@ -510,8 +520,11 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                     // таблица service_templates, но пакета пациент не брал: экран
                     // звал его «Пакет «…»», а бумага — нет. Строка по-прежнему
                     // помнит свой шаблон (row.package) — сервер выставит её сам.
+                    // SERVICES_PACKAGES_V1 — цена услуги в пакете (её выставит счёт).
                     pkgName ? h('div', { 'data-package-line': String(row.package.id), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px' } },
-                        trf('Пакет «{name}», скидка {pct} %', { name: pkgName, pct: String(row.package.pct).replace('.', ',') })) : null),
+                        row.package.price != null
+                            ? trf('Пакет «{name}»: в пакете {sum} сум', { name: pkgName, sum: fmtPrice(row.package.price) })
+                            : trf('Пакет «{name}»', { name: pkgName })) : null),
                 h('td', null, fmtPrice(netOfVat(price, row.service.tax_rate))),
                 h('td', { class: 'cell-strong' }, fmtPrice(price)),
                 doctorCell(row),
@@ -563,14 +576,12 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         const { services, missing } = resolveTemplate(template, state.catalog);
         // PACKAGES_V1 — строка помнит свой пакет: сервер выставит её со скидкой
         // пакета (и проверит срок), а таблица подпишет, откуда строка.
-        const pkg = template && template.id != null
-            ? { id: Number(template.id), name: template.name || '', pct: packageDiscount(template) }
-            : null;
+        // SERVICES_PACKAGES_V1 — строка помнит пакет и цену услуги в нём (cartPackage).
         for (const s of services) {
             const row = addLine(s, null);
-            if (row && pkg) row.package = pkg;
+            if (row) row.package = cartPackage(template, s.id);
         }
-        if (pkg) paintTable();
+        paintTable();
         if (missing) toast(trf('Пакет: {n} услуг(и) не найдено в каталоге', { n: missing }), 'warn');
         return services.length;
     }

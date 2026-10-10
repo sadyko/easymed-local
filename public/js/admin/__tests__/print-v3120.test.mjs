@@ -414,17 +414,19 @@ const PKG_DB = () => ({
     { id: 12, invoice_id: 1, description: 'Общий анализ крови', quantity: 1, unit_price: 100000, total: 85000, discount_amount: 15000 },
   ],
   visit_services: [
-    { id: 101, invoice_item_id: 11, service_templates: { id: 5, name: 'Смета терапевта', discount_percent: 0 } },
-    { id: 102, invoice_item_id: 12, service_templates: { id: 6, name: 'Осень', discount_percent: 15 } },
+    // SERVICES_PACKAGES_V1 — «пакет» на бланке — по отметке is_package (мигр. 244).
+    { id: 101, invoice_item_id: 11, service_templates: { id: 5, name: 'Смета терапевта', discount_percent: 0, is_package: 0 } },
+    { id: 102, invoice_item_id: 12, service_templates: { id: 6, name: 'Осень', discount_percent: 15, is_package: 1 } },
   ],
 });
 
-test('packageLabel: имя пакета — только при скидке пакета (строка базы и пакет окна регистрации)', () => {
-  assert.equal(packageLabel({ name: 'Смета терапевта', discount_percent: 0 }), '');
-  assert.equal(packageLabel({ name: 'Осень', discount_percent: 15 }), 'Осень');
-  assert.equal(packageLabel({ name: 'Смета терапевта', pct: 0 }), '');
-  assert.equal(packageLabel({ name: 'Осень', pct: 15 }), 'Осень');
-  assert.equal(packageLabel({ name: 'Без скидки в выборке' }), '', 'неизвестная скидка — не пакет');
+test('packageLabel: «пакет» — по отметке пакета (мигр. 244), а не по скидке (строка базы и пакет окна регистрации)', () => {
+  assert.equal(packageLabel({ name: 'Смета терапевта', discount_percent: 0, is_package: 0 }), '');
+  assert.equal(packageLabel({ name: 'Осень', discount_percent: 15, is_package: 1 }), 'Осень');
+  assert.equal(packageLabel({ name: 'Акция', discount_percent: 0, is_package: 1 }), 'Акция', 'пакет без скидки — тоже пакет');
+  assert.equal(packageLabel({ name: 'Старая смета', discount_percent: 15, is_package: 0 }), '', 'скидка без отметки — шаблон сметы');
+  assert.equal(packageLabel({ id: 6, name: 'Осень', is_package: 1, full: 100000, price: 85000 }), 'Осень', 'пакет окна регистрации (cartPackage)');
+  assert.equal(packageLabel({ name: 'Без отметки в выборке', discount_percent: 15 }), '', 'отметка не пришла — не пакет');
   assert.equal(packageLabel(null), '');
   assert.deepEqual(packagesByItem(PKG_DB().visit_services), { 12: 'Осень' });
 });
@@ -454,9 +456,9 @@ test('касса и окно регистрации подписывают па�
   const desk = src('cashier-desk.js');
   const embeds = desk.match(/service_templates\([^)]*\)/g) || [];
   assert.ok(embeds.length > 0, 'касса больше не читает пакет строки');
-  for (const e of embeds) assert.match(e, /discount_percent/, 'касса: ' + e);
+  for (const e of embeds) assert.match(e, /is_package/, 'касса: ' + e);   // SERVICES_PACKAGES_V1 — отметка пакета
   const rp = src('receipt-print.js');
-  for (const e of rp.match(/service_templates\([^)]*\)/g) || []) assert.match(e, /discount_percent/, 'receipt-print: ' + e);
+  for (const e of rp.match(/service_templates\([^)]*\)/g) || []) assert.match(e, /is_package/, 'receipt-print: ' + e);
   // Счёт из окна регистрации — пакет строки через packageLabel, не голым именем.
   const reg = src('fast-registration.js');
   assert.match(reg, /packageItemName\([^;]*packageLabel\(row\.package\)/);

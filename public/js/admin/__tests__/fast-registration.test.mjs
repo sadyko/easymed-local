@@ -26,6 +26,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { packageCalc } from '../../shared/package-price.js';   // SERVICES_PACKAGES_V1 — раскладка пакета, как у окна «+Пакеты»
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const srcOf = (rel) => fs.readFileSync(path.join(HERE, '..', rel), 'utf8');
@@ -418,15 +419,22 @@ test('+Услуги добавляет строку с ценой без НДС 
 
 // PACKAGES_V1 — строка из пакета подписана пакетом и его скидкой, а в базу
 // уезжает с package_id: скидку и срок пакета проверяет и считает сервер.
-test('+Пакеты: строка помнит пакет — подпись со скидкой и package_id в строке визита', async () => {
+// SERVICES_PACKAGES_V1 — пакет окна «+Пакеты» приходит с раскладкой по прайсу
+// (listTemplates withPrices → package_calc): строка помнит цену услуги в пакете.
+const OSEN = (pct) => ({ id: 12, name: 'Осень', service_ids: [1], discount_percent: pct, valid_from: null, valid_until: null,
+  is_package: 1, discount_mode: 'percent', discount_value: pct,
+  package_calc: packageCalc({ mode: 'percent', value: pct }, [{ service_id: 1, price: SERVICES[0].price }]) });
+test('+Пакеты: строка помнит пакет — цена в пакете и package_id в строке визита', async () => {
   reset();
   const dlg = openFastRegistrationDialog({});
   await tick(40);
   fillMinimum(dlg);
-  dlg.state.applyTemplate({ id: 12, name: 'Осень', service_ids: [1], discount_percent: 20, valid_from: null, valid_until: null });
+  dlg.state.applyTemplate(OSEN(20));
   const row = dlg.state.rows[0];
-  assert.ok(row && row.package && row.package.id === 12 && row.package.pct === 20, 'строка не помнит пакет');
-  assert.ok(textOf(dlg.table).includes('Пакет «Осень», скидка 20 %'), 'в строке нет подписи пакета');
+  // 112 000 − 20 % = 89 600 → до 1 000 сум: 90 000.
+  assert.ok(row && row.package && row.package.id === 12 && row.package.is_package === 1 && row.package.full === 112000 && row.package.price === 90000,
+    'строка не помнит пакет: ' + JSON.stringify(row && row.package));
+  assert.ok(textOf(dlg.table).includes('Пакет «Осень»: в пакете 90 000 сум'), 'в строке нет цены в пакете');
   row.sel.value = '7';
   row.sel.fireChange();
   calls.length = 0;
@@ -458,8 +466,8 @@ test('+Пакеты: строка помнит пакет — подпись с�
 test('шаблон сметы без скидки — в строке нет «Пакет «…»», как и на чеке', async () => {
   const { packageLabel } = await import('../views/receipt-print.js');
   for (const tpl of [
-    { id: 21, name: 'Смета терапевта', service_ids: [1], discount_percent: 0 },
-    { id: 22, name: 'Смета хирурга', service_ids: [2] },   // скидка не пришла
+    { id: 21, name: 'Смета терапевта', service_ids: [1], discount_percent: 0, is_package: 0 },
+    { id: 22, name: 'Смета хирурга', service_ids: [2] },   // отметка не пришла — не пакет
   ]) {
     reset();
     const dlg = openFastRegistrationDialog({});
@@ -478,9 +486,9 @@ test('шаблон сметы без скидки — в строке нет «�
   reset();
   const dlg = openFastRegistrationDialog({});
   await tick(40);
-  dlg.state.applyTemplate({ id: 12, name: 'Осень', service_ids: [1], discount_percent: 12.5 });
+  dlg.state.applyTemplate(OSEN(12.5));   // 112 000 − 12,5 % = 98 000
   assert.strictEqual(packageLabel(dlg.state.rows[0].package), 'Осень');
-  assert.ok(textOf(dlg.table).includes('Пакет «Осень», скидка 12,5 %'), 'у пакета со скидкой пропала подпись');
+  assert.ok(textOf(dlg.table).includes('Пакет «Осень»: в пакете 98 000 сум'), 'у пакета пропала подпись');
   dlg.close();
 });
 

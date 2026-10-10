@@ -65,7 +65,7 @@ test('«Добавить» на карточке приёма зовёт кат�
 
 test('выбранное в смете уходит в addOwnService вместе с врачом строки', () => {
     const call = cardCall();
-    assert.match(call, /onPick:\s*\(p\)\s*=>\s*addOwnService\(\s*ctx\s*,\s*p\.service\s*,\s*p\.doctor\s*\)/,
+    assert.match(call, /onPick:\s*\(p\)\s*=>\s*addOwnService\(\s*ctx\s*,\s*p\.service\s*,\s*p\.doctor\s*,\s*p\.package\s*\)/,   // SERVICES_PACKAGES_V1 — и пакет строки
         'onPick не отдаёт услугу в addOwnService — выбор врача уходит в никуда, а карточка остаётся пустой');
     assert.match(call, /visitDoctorId:\s*ctx\.patient\?\.__service\?\.doctorId/,
         'каталог открывают без врача приёма — подбор исполнителя начинается с чистого листа');

@@ -11771,4 +11771,6 @@ export const STRINGS = {
   "цена пакета {sum} сум, −{pct} %": {"en":"package price {sum} sum, −{pct} %","ru":"цена пакета {sum} сум, −{pct} %","uz":"paket narxi {sum} so‘m, −{pct} %"},   // SERVICES_PACKAGES_V1
   "цена пакета {sum} сум": {"en":"package price {sum} sum","ru":"цена пакета {sum} сум","uz":"paket narxi {sum} so‘m"},   // SERVICES_PACKAGES_V1
   "скидка {sum} сум": {"en":"discount {sum} sum","ru":"скидка {sum} сум","uz":"chegirma {sum} so‘m"},   // SERVICES_PACKAGES_V1
+  // SERVICES_PACKAGES_V1 — задача 16: быстрая регистрация
+  "Пакет «{name}»: в пакете {sum} сум": {"en":"Package «{name}»: {sum} sum in the package","ru":"Пакет «{name}»: в пакете {sum} сум","uz":"«{name}» paketi: paketda {sum} so‘m"},   // SERVICES_PACKAGES_V1
 };

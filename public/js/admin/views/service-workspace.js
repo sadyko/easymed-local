@@ -447,7 +447,7 @@ function servicesCard(ctx) {
                 // Уже добавленные услуги в каталоге погашены — дважды одну и ту же
                 // в приём не добавить (вторую линию ловит и сам addOwnService).
                 excludeServiceIds: (wsState.payload?.services || []).map(s => s.serviceId).filter(Boolean),
-                onPick: (p) => addOwnService(ctx, p.service, p.doctor),
+                onPick: (p) => addOwnService(ctx, p.service, p.doctor, p.package),   // SERVICES_PACKAGES_V1 — пакет из каталога не теряется
             }) }, Icon('Plus', { size: 12 }), ' Добавить'),
         ),
         h('div', { 'data-own-services-list': '', style: { padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '6px' } }),
@@ -5000,7 +5000,9 @@ function paintOwnServices(ctx) {
 // а если его не выбирали — врач текущего приёма.
 // OWN_PRICE_REPEAT_V1 (ревью 1) — export только для поведенческой проверки
 // цены строки (picker-invoice.test.mjs); вызывающий на экране — каталог.
-export async function addOwnService(ctx, svc, doctor) {
+// SERVICES_PACKAGES_V1 — pkg: пакет строки каталога (service-templates.js cartPackage);
+// строке ставится package_id, цену пакета запишет сервер (routes/db.js).
+export async function addOwnService(ctx, svc, doctor, pkg = null) {
     if (!svc) return;
     // SVC_ATTACH_V1 — одну и ту же услугу в приём дважды не добавляем. Каталог
     // гасит уже добавленные (excludeServiceIds), но строки, заведённые до этой
@@ -5047,6 +5049,7 @@ export async function addOwnService(ctx, svc, doctor) {
             if (priceTier) row.price_tier = priceTier;
             if (svc.__consult) row.consultation_type_id = svc.consultation_type_id || null;
             else row.service_id = svc.id || null;
+            if (!svc.__consult && pkg && pkg.id != null) row.package_id = Number(pkg.id);   // SERVICES_PACKAGES_V1
             const { data, error } = await insertRow('visit_services', row);
             if (error) throw error;
             vsId = data?.id || null;
