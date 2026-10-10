@@ -11600,4 +11600,8 @@ export const STRINGS = {
   "биография RU": {"en":"biography RU","ru":"биография RU","uz":"tarjimai hol RU"},   // DOCTOR_PROFILE_V1
   "биография UZ": {"en":"biography UZ","ru":"биография UZ","uz":"tarjimai hol UZ"},   // DOCTOR_PROFILE_V1
   "биография EN": {"en":"biography EN","ru":"биография EN","uz":"tarjimai hol EN"},   // DOCTOR_PROFILE_V1
+  // DOCTOR_PROFILE_V1 — общий модуль цены и длины консультации: отказы (задача 4)
+  "Длительность приёма — целое число минут от 5 до 480.": {"en":"The visit length must be a whole number of minutes from 5 to 480.","ru":"Длительность приёма — целое число минут от 5 до 480.","uz":"Qabul davomiyligi — 5 dan 480 gacha butun daqiqa."},   // DOCTOR_PROFILE_V1
+  "Для партнёров — «Первичный приём», «Повторный приём» или ничего.": {"en":"For partners: “Initial appointment”, “Follow-up visit” or nothing.","ru":"Для партнёров — «Первичный приём», «Повторный приём» или ничего.","uz":"Hamkorlar uchun — «Dastlabki qabul», «Takroriy qabul» yoki hech narsa."},   // DOCTOR_PROFILE_V1
+  "Этот вид для партнёров уже выбран у другой консультации — сначала снимите его там.": {"en":"This partner type is already set on another consultation — remove it there first.","ru":"Этот вид для партнёров уже выбран у другой консультации — сначала снимите его там.","uz":"Hamkorlar uchun bu tur boshqa konsultatsiyada tanlangan — avval uni o‘sha yerda olib tashlang."},   // DOCTOR_PROFILE_V1
 };
