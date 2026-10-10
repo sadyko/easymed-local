@@ -924,6 +924,44 @@ test('#api-settings — экран «API и подключения»; «Публ
     assert.ok(js.includes("case 'api-settings': return void await renderWithViewOnly(viewRoot, 'settings.api'"));
 });
 
+// CLINIC_API_STEP7_V1 (ревью №3) — «Подключение» из CRM-канбана, когда панель
+// «API и подключения» уже в кэше оболочки: переход не перерисовывает панель, но
+// карточку открывает — и второй раз то же подключение тоже.
+test('кэшированная панель «API и подключения»: переход с connection_id открывает карточку, и то же подключение — снова', async () => {
+    await perms_setFull();
+    const conn = { id: 3, kind: 'partner', name: 'med24.uz', site_url: 'https://med24.uz', contact: '', scopes: ['clinic'], active: true,
+        crm_source_key: 'api_med24_uz', crm_source_label: 'med24.uz', owns_source: true, key_mask: 'em_live_••••a91c',
+        key_issued_at: '2026-10-10T09:00:00Z', key_issued_by_name: '', key_ttl: 'never', key_expires_at: null, rate_limit: 60,
+        ip_allow: '', webhook_url: '', webhook_events: [], secret_mask: '', last_used_at: null, created_at: '2026-10-10T09:00:00Z', created_by_name: '' };
+    const settings = { slug: 'shifo', base_url: 'https://api.easymed.uz/shifo/v1/', public_server: false, building_role: 'main',
+        clinic_name: 'Шифо', company_website: '', partner_address_missing: [], can: { view: true, edit: true, admin: true }, connections: [conn] };
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => {
+        const u = String(url);
+        if (u.startsWith('/api/rpc/api_settings_get')) return { ok: true, status: 200, json: async () => ({ data: settings }) };
+        if (u.startsWith('/api/rpc/api_journal_list')) return { ok: true, status: 200, json: async () => ({ data: [] }) };
+        return prevFetch(url, opts);
+    };
+    const cards = () => document.body.children.filter((n) => n.attrs && n.attrs['data-apic-modal'] === 'conn');
+    try {
+        await go('api-settings');
+        await go('settings');
+        await go('crm-settings');
+        const mounted = panes().filter((p) => p.dataset.viewKey === 'api-settings').length;
+        assert.equal(mounted, 1, 'стенд не тот: панель «API и подключения» не в кэше');
+        await go('api-settings', { connection_id: 3 });
+        assert.equal(shell().state.view, 'api-settings');
+        assert.equal(cards().length, 1, 'переход в кэшированную панель не открыл карточку подключения');
+        for (const c of cards()) document.body.removeChild(c);
+        await go('crm-settings');
+        await go('api-settings', { connection_id: 3 });
+        assert.equal(cards().length, 1, 'то же подключение второй раз не открылось');
+    } finally {
+        for (const c of cards()) document.body.removeChild(c);
+        globalThis.fetch = prevFetch;
+    }
+});
+
 test('глушим таймеры экранов, чтобы прогон завершался', () => {
     for (const id of appIntervals) clearInterval(id);
     appIntervals.clear();

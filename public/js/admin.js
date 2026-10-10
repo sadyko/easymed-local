@@ -525,6 +525,13 @@ function navigate(view, payload, opts = {}) {
             return;
         }
         activatePane(existing);
+        // CLINIC_API_STEP7_V1 (ревью №3) — панель из кэша не перерисовывается, но
+        // экран, подписавшийся через ctx.onPayload, получает новый payload (ссылка
+        // «Подключение» из CRM-канбана открывает карточку подключения — и когда то
+        // же подключение открывают второй раз). «Назад / Вперёд» окон не открывает.
+        if (payload && !opts.skipHistory && typeof existing.onPayload === 'function') {
+            try { existing.onPayload(payload); } catch (_) { /* экран сам скажет, если не смог */ }
+        }
         if (!opts.skipHistory) pushHistory(view, existing.payload);
         return;
     }
@@ -997,7 +1004,11 @@ async function renderViewInto(pane) {
     // globals (easymedSetTabSub / easymedSetTabLabel) take it as their handle.
     // It is the pane key now — the contract is unchanged, the mechanism
     // underneath is not.
-    const ctx = { onNavigate: navigate, payload: pane.payload, tabId: pane.key };
+    // CLINIC_API_STEP7_V1 (ревью №3) — onPayload(fn): экран просит звать fn(payload)
+    // при каждом новом переходе в его УЖЕ смонтированную панель (navigate выше).
+    pane.onPayload = null;
+    const ctx = { onNavigate: navigate, payload: pane.payload, tabId: pane.key,
+        onPayload: (fn) => { pane.onPayload = typeof fn === 'function' ? fn : null; } };
     // ONE_NAME_PER_SCREEN_V1 — экран назвал себя внутри себя; имя переезжает в
     // верхнюю панель, а дубль снимается. `finally`, а не после await: экран,
     // упавший на полпути, всё равно не должен оставить второе имя на месте.

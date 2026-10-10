@@ -169,3 +169,34 @@ test('Enter и пробел на значке «Скопировать ключ�
   row.dispatchEvent({ type: 'keydown', key: 'Enter', target: row, currentTarget: row, preventDefault() {} });
   assert.ok(modal('conn'), 'Enter на строке не открыл карточку');
 });
+
+// CLINIC_API_STEP7_V1 (ревью №3) — оболочка держит экран в кэше и второй раз его
+// не рисует: переход с connection_id (ссылка «Подключение» из CRM-канбана)
+// приходит через ctx.onPayload. Каждый такой переход открывает карточку — и
+// когда то же подключение открывают второй раз.
+test('экран из кэша оболочки: каждый переход с connection_id открывает карточку (свежие данные), и то же подключение — снова', async () => {
+  reset();
+  let hook = null;
+  await open({}, { onPayload: (fn) => { hook = fn; } });
+  assert.equal(typeof hook, 'function', 'экран не подписался на переходы оболочки');
+  assert.ok(!modal('conn'), 'без connection_id карточка открылась сама');
+  const before = rpcNames().filter((n) => n === 'api_settings_get').length;
+  hook({ connection_id: 3 });
+  await tick();
+  assert.ok(rpcNames().filter((n) => n === 'api_settings_get').length > before, 'карточка открыта по устаревшему списку');
+  let m = modal('conn');
+  assert.ok(m && textOf(m).includes('med24.uz'), 'переход в кэшированный экран не открыл карточку');
+  buttonByText(m, /^Отмена$/).click();
+  assert.ok(!modal('conn'));
+  hook({ connection_id: 3 });
+  await tick();
+  m = modal('conn');
+  assert.ok(m && textOf(m).includes('med24.uz'), 'то же подключение второй раз не открылось');
+  hook({ connection_id: 3 });
+  await tick();
+  assert.equal(document.body.children.filter((n) => n.attrs && n.attrs['data-apic-modal'] === 'conn').length, 1, 'вторая карточка поверх открытой');
+  hook({ connection_id: 999 });
+  await tick();
+  hook(null);
+  await tick();
+});

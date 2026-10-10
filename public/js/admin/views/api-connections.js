@@ -27,17 +27,26 @@ const PRIVACY = 'Данные пациентов наружу не переда�
 const state = { s: shapeSettings(null), journal: [], editSlug: false };
 let refs = { root: null, body: null, onNavigate: null };
 
-export async function renderApiConnections(container, { onNavigate = null, payload = null } = {}) {
+export async function renderApiConnections(container, { onNavigate = null, payload = null, onPayload = null } = {}) {
   clear(container);
   refs = { root: h('div', { class: 'fade-in apic' }), body: h('div', { class: 'apic-stack' }), onNavigate };
   state.editSlug = false;
   container.appendChild(refs.root);
   refs.root.appendChild(PageHead({ title: 'API и подключения', subtitle: SUBTITLE }));
   refs.root.appendChild(refs.body);
+  // CLINIC_API_STEP7_V1 (ревью №3) — оболочка держит экран в кэше и второй раз его
+  // не рисует: следующий переход с connection_id приходит сюда. Список
+  // перечитывается — карточка открывается по свежим данным.
+  if (typeof onPayload === 'function') {
+    onPayload((p) => { if (p && p.connection_id) reload().then(() => openById(p.connection_id)); });
+  }
   await reload();
   // Ссылка «Подключение» из CRM-канбана: открыть карточку сразу.
-  const id = payload && Number(payload.connection_id);
-  const c = id ? state.s.connections.find((x) => x.id === id) : null;
+  openById(payload && payload.connection_id);
+}
+function openById(id) {
+  const n = Number(id);
+  const c = n ? state.s.connections.find((x) => x.id === n) : null;
   if (c) openCard(c);
 }
 
