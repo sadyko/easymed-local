@@ -7,7 +7,8 @@ import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто на
 // STAFF_SYNC_V1 — «филиал я или сама по себе клиника» решается по базе, а не по
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
 import { readIdentity } from '../services/branch-sync/identity.js';
-import { COMPANY_CLINIC_WIDE, storedProfileProblems } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1
+import { COMPANY_CLINIC_WIDE, COMPANY_PARTNER, storedProfileProblems } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1, BRANCH_PROFILE_V1 (COMPANY_PARTNER)
+import { BRANCH_MESSAGES, BRANCH_MAIN_COLUMNS, OWN_FROM_COMPANY, storedBranchProblems, ownBuildingProblems } from '../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
 import { keepLegacyLogo } from '../services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1 (ревью M3)
 import { companyAddressRefusal } from '../services/api/partner-address.js';   // CLINIC_API_STEP7_V1
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
@@ -26,6 +27,7 @@ import { PROXY_MODELS } from '../../public/js/shared/lisproxy-models.js';   // L
 // CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
 import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
+import { geoCodeRefusal } from '../services/geo-codes-guard.js';   // REFERENCE_LISTS_V1 (полировка) — коды географии не меняются
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -357,6 +359,14 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     const companyRefusal = companyBranchRefusal(db, compiled.meta, req.body);
     if (companyRefusal) return res.status(409).json({ error: { code: 'conflict', message: companyRefusal } });
 
+    // REFERENCE_LISTS_V1 (полировка, 2026-10-10) — КОДЫ ГЕОГРАФИИ КЛИНИКА НЕ
+    // МЕНЯЕТ: партнёры получают коды страны, города и района. Код строки не
+    // меняется и не стирается, строка бланка не удаляется (её выключают), новый
+    // код не повторяет занятый. Названия и «активна» — как прежде
+    // (services/geo-codes-guard.js).
+    const geoRefusal = geoCodeRefusal(db, compiled.meta, req.body, req.user);
+    if (geoRefusal) return res.status(409).json({ error: { code: 'conflict', message: geoRefusal } });
+
     // CLINIC_PROFILE_V1 (ревью I2) — ФОРМАТ ПРОФИЛЯ КЛИНИКИ. CHECK миграции 240
     // — запасной замок, и он пропускал «..» в пути логотипа, разметку в адресе
     // сайта и чужой хост карты. Здесь — те же строгие правила, что у экрана
@@ -371,6 +381,21 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     if (addressRefusal) {
       return res.status(400).json({ error: { code: 'partner_address_required', message: addressRefusal.message, field: addressRefusal.field } });
     }
+
+    // BRANCH_PROFILE_V1 — «ФИЛИАЛЫ»: КТО ЧТО ПРАВИТ (shared/branch-profile.js).
+    //   • филиал: название, телефон, профиль, часы, показ на сайте любого здания
+    //     приходят из главного (catalogue.js roster) — правка здесь откатилась
+    //     бы синхронизацией, тот же призрак, что закрывает 409 выше; новое
+    //     здание заводит главное;
+    //   • главное: адрес для партнёров, карта и телефон СВОЕГО здания живут в
+    //     «Компании» (одно место на здание) — в строке branches их не правят.
+    // Отказ — только если значение МЕНЯЕТСЯ: экран, приславший неизменённое,
+    // сохраняет своё.
+    const branchRefusal = branchWriteRefusal(db, compiled.meta, req.body);
+    if (branchRefusal) return res.status(409).json({ error: { code: 'conflict', message: branchRefusal } });
+    // BRANCH_PROFILE_V1 — формат: карта, часы, отметки, коды — те же правила, что у экрана.
+    const branchFormat = branchFormatRefusal(compiled.meta, req.body);
+    if (branchFormat) return res.status(400).json({ error: { code: 'bad_request', message: branchFormat.message, field: branchFormat.field } });
 
     // CLINIC_PROFILE_V1 (ревью M3) — ПРЕЖНИЙ ЛОГОТИП НЕ ЗАТИРАЕТСЯ НЕСКОПИРОВАННЫМ.
     // Копия при запуске (index.js → clinic-logo-legacy.js) могла не лечь, а
@@ -655,15 +680,19 @@ function isSecondary(db) {
 
 // CLINIC_PROFILE_V1 — общее для клиники в «Компании» филиала не меняется
 // (см. вызов в POST). null — запись можно выполнять.
-const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.';
+const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон и почта для документов этого здания.';   // BRANCH_PROFILE_V1 — текст
 function companyBranchRefusal(db, meta, body) {
   if (!meta || meta.table !== 'doc_settings' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;
   if (!isSecondary(db)) return null;
   const values = body && body.values && typeof body.values === 'object' && !Array.isArray(body.values) ? body.values : {};
   const cur = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {};
   const same = (a, b) => String(a == null ? '' : a) === String(b == null ? '' : b);
-  const changes = COMPANY_CLINIC_WIDE.some((c) => Object.prototype.hasOwnProperty.call(values, c) && !same(values[c], cur[c]));
-  return changes ? COMPANY_MAIN_ONLY : null;
+  const has = (c) => Object.prototype.hasOwnProperty.call(values, c);   // BRANCH_PROFILE_V1
+  if (COMPANY_CLINIC_WIDE.some((c) => has(c) && !same(values[c], cur[c]))) return COMPANY_MAIN_ONLY;
+  // BRANCH_PROFILE_V1 — адрес для партнёров и карту филиала ведёт главное
+  // здание в «Филиалах» (одно место на здание): здесь они только видны.
+  if (COMPANY_PARTNER.some((c) => has(c) && !same(values[c], cur[c]))) return BRANCH_MESSAGES.partnerInBranches;
+  return null;
 }
 
 // CLINIC_PROFILE_V1 (ревью M3) — true: правка заменяет или снимает прежний
@@ -688,7 +717,61 @@ function companyProfileRefusal(meta, body) {
   if (!meta || meta.table !== 'doc_settings' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
   const v = body && body.values;
   for (const row of Array.isArray(v) ? v : [v]) {
-    const problems = storedProfileProblems(row);
+    // BRANCH_PROFILE_V1 (ревью шага 4, #3) — адрес для партнёров, карта и
+    // телефон главного здания уезжают в филиалы строкой его здания
+    // (catalogue.js roster, overlayOwnBuilding): им те же формат и пределы, что
+    // строке branches, — иначе филиал молча пропускал бы их при каждой синхронизации.
+    const problems = { ...storedProfileProblems(row), ...ownBuildingProblems(row) };
+    const field = Object.keys(problems)[0];
+    if (field) return { field, message: problems[field] };
+  }
+  return null;
+}
+
+// BRANCH_PROFILE_V1 — см. вызов в POST. null — запись можно выполнять.
+const flat = (v) => (v === true ? '1' : v === false ? '0' : String(v == null ? '' : v));
+// Строки, которые правят: отбор только по id (eq / in — так пишут экраны;
+// правку без выбора строк компилятор не пускает сам). Другой отбор — null:
+// что правится, заранее не известно, и тогда страж отказывает.
+function targetBranches(db, body) {
+  const f = body && Array.isArray(body.filters) ? body.filters : [];
+  let ids = null;
+  for (const x of f) {
+    if (!x || x.col !== 'id' || (x.op !== 'eq' && x.op !== 'in')) return null;
+    if (x.op === 'in' && !Array.isArray(x.val)) return null;
+    const list = (x.op === 'in' ? x.val : [x.val]).map(Number);
+    ids = ids == null ? list : ids.filter((i) => list.includes(i));
+  }
+  if (ids == null) return null;
+  const one = db.prepare('SELECT * FROM branches WHERE id = ?');
+  return [...new Set(ids)].map((i) => one.get(i)).filter(Boolean);
+}
+function branchWriteRefusal(db, meta, body) {
+  if (!meta || meta.table !== 'branches' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
+  const secondary = isSecondary(db);
+  // Вставка и upsert заводят НОВОЕ здание (id и буква через /api/db не пишутся).
+  if (meta.op !== 'update') return secondary ? BRANCH_MESSAGES.newMainOnly : null;
+  const values = body && body.values && typeof body.values === 'object' && !Array.isArray(body.values) ? body.values : {};
+  const guarded = secondary ? BRANCH_MAIN_COLUMNS : OWN_FROM_COMPANY;
+  const touched = guarded.filter((c) => Object.prototype.hasOwnProperty.call(values, c));
+  if (!touched.length) return null;
+  let rows = targetBranches(db, body);
+  if (!secondary) {
+    let own = null;
+    try { own = readIdentity(db).branch_id; } catch { own = null; }
+    if (own == null) return null;                                     // своего здания нет — беречь нечего
+    if (rows) rows = rows.filter((r) => Number(r.id) === Number(own));
+    if (rows && !rows.length) return null;                            // чужие здания — правит главное
+  }
+  const changes = (r) => touched.some((c) => flat(values[c]) !== flat(r[c]));
+  if (rows && !rows.some(changes)) return null;
+  return secondary ? BRANCH_MESSAGES.mainOnly : BRANCH_MESSAGES.ownInCompany;
+}
+function branchFormatRefusal(meta, body) {
+  if (!meta || meta.table !== 'branches' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
+  const v = body && body.values;
+  for (const row of Array.isArray(v) ? v : [v]) {
+    const problems = storedBranchProblems(row);
     const field = Object.keys(problems)[0];
     if (field) return { field, message: problems[field] };
   }

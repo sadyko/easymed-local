@@ -40,6 +40,9 @@ export function getClinicBySlug(db, _args, _user) {
     // и не сохраняет без адреса, пока включено подключение API.
     // CLINIC_API_STEP7_V1 (ревью №8) — в филиале — нет: подключения живут в главном здании.
     api_address_required: partnerAddressRequired(db),
+    // BRANCH_PROFILE_V1 — строка branches ЭТОГО здания: «Филиалы» помечают её
+    // «Это здание», «Компания» филиала показывает из неё адрес для партнёров.
+    own_branch_id: (() => { try { return readIdentity(db).branch_id ?? null; } catch { return null; } })(),
     active: true,
     // Fields the upstream trial-banner / branding code reads defensively
     // (clinic?.name, clinic?.plan, clinic?.trial_ends_at, clinic?.is_locked,

@@ -187,18 +187,26 @@ test('/api/db: пока подключение API включено, «Комп�
 });
 
 // CLINIC_API_STEP7_V1 (ревью №8) — здание, ставшее филиалом с подключением, оставленным
-// включённым: очистить адрес своего здания можно (подключений в филиале нет, а
+// включённым: адрес для партнёров там не требуется (подключений в филиале нет, а
 // выключить его отсюда нельзя — 409 «настраиваются в главном здании»).
-test('/api/db в филиале: подключение осталось включённым — очистка адреса здания — 200', async () => {
+// Слияние с шагом 4 (BRANCH_PROFILE_V1): адрес для партнёров и карту филиала ведёт
+// главное здание в «Филиалах» — их правка в «Компании» филиала — 409 шага 4, а не
+// отказ «адрес обязателен»; адрес, телефон и почта для документов сохраняются и
+// при пустом адресе для партнёров.
+test('/api/db в филиале: подключение осталось включённым — адрес для партнёров не требуется; документы сохраняются, партнёрские поля — 409 шага 4', async () => {
   const { becomeSecondary } = await import('../services/branch-sync/identity.js');
   const t = await setup();
   try {
-    t.db.prepare("UPDATE doc_settings SET region_code = 'tashkent-city', district_code = 'yunusobod', street_ru = 'ул. Мира, 1' WHERE id = 1").run();
     insertConnectionRow(t.db);
     becomeSecondary(t.db, { letter: 'C', name: 'Филиал' });
+    t.db.prepare("UPDATE doc_settings SET region_code = '', district_code = '', street_ru = '', street_uz = '', street_en = '' WHERE id = 1").run();
     const save = await saver(t);
-    const res = await save({ region_code: '', district_code: '', street_ru: '', street_uz: '', street_en: '' });
+    const res = await save({ address: 'Ташкент, Чиланзар, 5', email: 'chilanzar@shifo.uz' });
     assert.equal(res.status, 200, JSON.stringify(await res.clone().json()));
-    assert.equal(t.db.prepare('SELECT street_ru FROM doc_settings WHERE id = 1').get().street_ru, '');
+    assert.equal(t.db.prepare('SELECT address FROM doc_settings WHERE id = 1').get().address, 'Ташкент, Чиланзар, 5');
+    const partner = await save({ street_ru: 'ул. Новая, 2' });
+    const { error } = await partner.json();
+    assert.equal(partner.status, 409, JSON.stringify(error));
+    assert.equal(error.code, 'conflict', 'партнёрские поля филиала — отказ шага 4, а не «адрес обязателен»');
   } finally { t.stop(); }
 });

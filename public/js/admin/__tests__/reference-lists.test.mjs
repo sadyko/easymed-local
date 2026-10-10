@@ -116,6 +116,21 @@ const COUNTRIES = db.prepare('SELECT code, name, name_uz, name_en FROM countries
 const districtsOf = (regionCode) => db.prepare(`SELECT d.code, d.name, d.name_uz, d.name_en, d.kind FROM districts d
   JOIN regions r ON r.id = d.region_id WHERE r.code = ? AND d.active = 1`).all(regionCode);
 
+// REFERENCE_LISTS_V1 (полировка по макету) — порядок БЛАНКА «Справочники EasyMed»:
+// так строки стоят в миграции 132 (регионы, затем районы каждого региона).
+// Читается из самой миграции — мимо экрана и мимо shared/geo-codes.js.
+const SHEET = (() => {
+  const sql = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../server/db/migrations/132_geography_names.sql'), 'utf8');
+  const regionByName = new Map();
+  const regions = [];
+  for (const m of sql.matchAll(/^UPDATE regions SET code = '([^']+)'.*WHERE name = '([^']+)';$/gm)) { regions.push(m[1]); regionByName.set(m[2], m[1]); }
+  const districts = new Map(regions.map((r) => [r, []]));
+  for (const m of sql.matchAll(/^UPDATE districts SET code = '([^']+)'.*region_id = \(SELECT id FROM regions WHERE name = '([^']+)'\);$/gm)) {
+    districts.get(regionByName.get(m[2])).push(m[1]);
+  }
+  return { regions, districts };
+})();
+
 async function mount() {
   sent = []; refused = [];
   const root = mk('div');
@@ -241,10 +256,8 @@ test('выбор другого региона показывает его ра�
   assert.ok(want.length > 12, 'стенд: у Ташкентской области районов больше, чем у города');
   assert.deepEqual(districtRows(root).map((r) => cellsOf(r)[0]).sort(), want.map((d) => d.code).sort());
   assert.deepEqual(regionRows(root).filter((r) => r.attrs['aria-current'] === 'true').map((r) => r.attrs['data-code']), ['tashkent']);
-  // REFERENCE_LISTS_V1 (ревью M4) — внутри региона сначала районы, потом города.
-  const kinds = districtRows(root).map((r) => want.find((d) => d.code === cellsOf(r)[0]).kind);
-  assert.ok(kinds.includes('город') && kinds.includes('район'), 'стенд: в Ташкентской области есть и районы, и города');
-  assert.ok(kinds.lastIndexOf('район') < kinds.indexOf('город'), 'город стоит среди районов: ' + kinds.join(', '));
+  // REFERENCE_LISTS_V1 (полировка по макету) — районы в порядке бланка (миграция 132), а не по алфавиту.
+  assert.deepEqual(districtRows(root).map((r) => cellsOf(r)[0]), SHEET.districts.get('tashkent'), 'районы Ташкентской области не в порядке бланка');
 
   const sam = regionRows(root).find((r) => r.attrs['data-code'] === 'samarkand');
   sam.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
@@ -387,7 +400,7 @@ test('ничего не редактируется: ни полей, ни кно
   assert.ok(buttons.every((b) => b.className.split(/\s+/).includes('tab')), 'на экране кнопка, которая не вкладка');
   const text = textOf(root);
   assert.ok(text.includes('Только просмотр'));
-  assert.ok(text.includes('Общие списки: одинаковые у всех клиник и партнёров; партнёры получают коды. Списки встроены в программу и обновляются вместе с ней.'),
+  assert.ok(text.includes('Общие списки: одинаковые у всех клиник и партнёров; партнёры получают коды. Списки встроены в программу и обновляются вместе с ней; интернет для них не нужен.'),
     'нет подсказки про общие списки и коды');
   assert.ok(sent.every((d) => d.op === 'select'), 'экран что-то пишет: ' + sent.map((d) => d.table + ' ' + d.op).join(', '));
 });
@@ -496,4 +509,72 @@ test('не ответили страны — обе вкладки геогра�
     assert.ok(textOf(root).includes('Не удалось загрузить страны — обновите страницу.'));
     assert.equal(countryRows(root).length, 0);
   } finally { failTables.clear(); }
+});
+
+// ===========================================================================
+// Полировка по макету (2026-10-10, screen-refs.js) — порядок бланка и
+// подсказка из трёх предложений макета.
+// ===========================================================================
+test('регионы — в порядке бланка: город Ташкент, Ташкентская область, Андижанская … Хорезмская, Каракалпакстан последним', async () => {
+  assert.equal(SHEET.regions.length, 14, 'стенд: в миграции 132 — 14 регионов');
+  const root = await mount();
+  const codes = regionRows(root).map((r) => r.attrs['data-code']);
+  assert.deepEqual(codes, SHEET.regions, 'регионы не в порядке бланка');
+  assert.deepEqual([codes[0], codes[1], codes[2], codes[codes.length - 2], codes[codes.length - 1]],
+    ['tashkent-city', 'tashkent', 'andijan', 'khorezm', 'karakalpakstan']);
+  const alphabetical = [...codes].sort((a, b) => {
+    const n = (c) => UZ_REGIONS.find((r) => r.code === c).name;
+    return n(a).localeCompare(n(b), 'ru');
+  });
+  assert.notDeepEqual(codes, alphabetical, 'стенд: порядок бланка отличается от алфавита');
+});
+
+test('районы каждого региона — в порядке бланка, а не по алфавиту', async () => {
+  const root = await mount();
+  for (const code of SHEET.regions) {
+    regionRows(root).find((r) => r.attrs['data-code'] === code).click();
+    await tick();
+    assert.deepEqual(districtRows(root).map((r) => cellsOf(r)[0]), SHEET.districts.get(code), code + ': районы не в порядке бланка');
+  }
+  // Город Ташкент: Бектемир первым, Алмазар и Янгихаёт — в конце, как в бланке (по алфавиту Алмазар был бы первым).
+  regionRows(root).find((r) => r.attrs['data-code'] === 'tashkent-city').click();
+  await tick();
+  const tash = districtRows(root).map((r) => cellsOf(r)[0]);
+  assert.equal(tash[0], 'bektemir');
+  assert.deepEqual(tash.slice(-2), ['olmazor', 'yangihayot']);
+});
+
+test('строки, заведённые в «Географии» (не из бланка), — после строк бланка, по названию', async () => {
+  const uz = db.prepare("SELECT id FROM countries WHERE code = 'UZ'").get().id;
+  const own = db.prepare("INSERT INTO regions (country_id, name) VALUES (?, 'Аа-своя область')").run(uz).lastInsertRowid;
+  const tashId = db.prepare("SELECT id FROM regions WHERE code = 'tashkent-city'").get().id;
+  const d1 = db.prepare("INSERT INTO districts (region_id, name) VALUES (?, 'Аа-свой район')").run(tashId).lastInsertRowid;
+  try {
+    const root = await mount();
+    const codes = regionRows(root).map((r) => r.attrs['data-code'] ?? null);
+    assert.deepEqual(codes.slice(0, 14), SHEET.regions, 'строки бланка — первыми и в его порядке');
+    assert.ok(textOf(regionRows(root)[14]).includes('Аа-своя область'), 'своя область — после бланка');
+    const names = districtRows(root).map((r) => cellsOf(r)[1]);
+    assert.equal(names[names.length - 1], 'Аа-свой район', 'свой район — после районов бланка');
+  } finally {
+    db.prepare('DELETE FROM districts WHERE id = ?').run(d1);
+    db.prepare('DELETE FROM regions WHERE id = ?').run(own);
+  }
+});
+
+test('подсказка — три предложения макета: без интернета; код не меняется никогда; недостающее — через поддержку EasyMed', async () => {
+  const root = await mount();
+  const text = textOf(root);
+  for (const sentence of [
+    'Списки встроены в программу и обновляются вместе с ней; интернет для них не нужен.',
+    'Код не меняется никогда; если меняется название, партнёры получают новое название с тем же кодом.',
+    'Добавить район или специальность можно в новой версии программы — напишите в поддержку EasyMed.',
+  ]) assert.ok(text.includes(sentence), 'нет предложения: ' + sentence);
+  for (const key of [
+    'Общие списки: одинаковые у всех клиник и партнёров; партнёры получают коды. Списки встроены в программу и обновляются вместе с ней; интернет для них не нужен.',
+    'Код не меняется никогда; если меняется название, партнёры получают новое название с тем же кодом.',
+    'Добавить район или специальность можно в новой версии программы — напишите в поддержку EasyMed.',
+  ]) {
+    assert.ok(STRINGS[key] && STRINGS[key].uz && STRINGS[key].en, 'нет перевода uz / en: ' + key);
+  }
 });

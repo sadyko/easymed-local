@@ -7564,6 +7564,9 @@ table.list tr.is-off td { color: var(--ink-400); }
 .cpf-lang { display: inline-block; min-width: 22px; padding: 0 4px; border-radius: 4px; background: var(--ink-50); border: 1px solid var(--ink-100); color: var(--ink-600); font-size: 12.5px; font-weight: 700; letter-spacing: .04em; text-align: center; }
 .cpf-err { color: var(--crit-700); font-size: 12.5px; line-height: 1.4; }
 .cpf-err[hidden] { display: none; }
+/* Полировка по макету — «нет перевода» у пустых UZ / EN (company-fields.js triGroup markMissing). */
+.cpf-miss { margin-left: 2px; color: var(--warn-700); font-size: 12.5px; font-weight: 500; letter-spacing: 0; }
+.cpf-miss[hidden] { display: none; }
 .cpf-hint { margin: 0; color: var(--ink-500); font-size: 12.5px; line-height: 1.45; }
 .field .cpf-hint, .cpf-set .cpf-hint { margin-top: 2px; }
 .cpf-prefix { display: flex; align-items: stretch; min-width: 0; height: 38px; border: 1px solid var(--ink-200); border-radius: 8px; background: var(--white); overflow: hidden; transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
@@ -7698,3 +7701,51 @@ table.list tr.is-off td { color: var(--ink-400); }
   .apic-body { padding: 12px; }
 }
 /* /CLINIC_API_STEP7_V1 */
+
+/* ===========================================================================
+   BRANCH_PROFILE_V1 — «Филиалы» (views/branches-editor.js, branch-page.js,
+   branch-hours-card.js, week-hours.js). Префикс .brf-. Только токены
+   приложения и шкала шрифтов; на ширине телефона — один столбец, без
+   прокрутки вбок.
+   ========================================================================= */
+.brf-page .cpf-stack { max-width: 880px; }
+.brf-page .page-head, .brf-list-page .page-head { flex-wrap: wrap; }
+.brf-page .page-head > div:first-child, .brf-list-page .page-head > div:first-child { flex: 1 1 260px; min-width: 0; }
+.brf-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
+.brf-title .page-title { min-width: 0; overflow-wrap: anywhere; }
+.brf-own { flex-wrap: wrap; align-items: center; }
+.brf-own > span { flex: 1 1 220px; min-width: 0; }
+.brf-lock { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
+/* Часы работы: три способа карточками-переключателями, предупреждение о врачах. */
+.brf-modes { display: grid; gap: 8px; }
+.brf-mode { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; padding: 10px 12px; border: 1px solid var(--ink-100); border-radius: 10px; background: var(--white); cursor: pointer; }
+.brf-mode:has(input:checked) { border-color: var(--primary-200); background: var(--primary-50); }
+.brf-mode:has(input:focus-visible) { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+.brf-mode:has(input:disabled) { cursor: default; }
+.brf-mode input { grid-row: span 2; margin: 2px 0 0; accent-color: var(--primary-600); }
+.brf-mode b { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.brf-mode span { font-size: 12.5px; color: var(--ink-500); line-height: 1.4; }
+.brf-impact-slot:empty { display: none; }
+.brf-impact { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--warn-500); border-radius: 10px; background: var(--warn-50); min-width: 0; }
+.brf-impact-head { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13.5px; font-weight: 600; color: var(--warn-700); }
+.brf-impact-head > svg { flex: none; }
+.brf-impact ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--ink-900); overflow-wrap: anywhere; }
+/* Список зданий — карточками; на телефоне один столбец. */
+.brf-list-page > .cpf-note { margin-bottom: 14px; }
+.brf-sync:not(:empty) { margin-bottom: 16px; }
+.brf-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 12px; min-width: 0; }
+.brf-item { display: grid; gap: 6px; align-content: start; width: 100%; min-width: 0; padding: 14px 16px; border: 1px solid var(--ink-100); border-radius: 12px; background: var(--white); color: var(--ink-900); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--dur-1) var(--ease-out); }
+.brf-item:hover { border-color: var(--primary-200); }
+.brf-item:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+.brf-off { opacity: .65; }
+.brf-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+.brf-head b { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.brf-line { display: flex; align-items: flex-start; gap: 6px; min-width: 0; font-size: 13.5px; color: var(--ink-600); overflow-wrap: anywhere; }
+.brf-line > svg { flex: none; margin-top: 2px; }
+.brf-chips { display: flex; gap: 4px; }
+.brf-chip { padding: 0 6px; border: 1px solid var(--ink-100); border-radius: 4px; font-size: 12.5px; font-weight: 700; color: var(--ink-500); }
+.brf-chip.on { border-color: var(--ok-500); background: var(--ok-50); color: var(--ok-700); }
+/* Ревью шага 4: роль исполнителя в предупреждении; сбой своей строки «Филиалов» в «Компании» филиала. */
+.brf-role { color: var(--ink-600); }
+.cpf-note.brf-note-warn { background: var(--warn-50); color: var(--warn-700); }
+/* /BRANCH_PROFILE_V1 — «Филиалы» */

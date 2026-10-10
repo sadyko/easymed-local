@@ -25,6 +25,8 @@ import fs from 'node:fs';   // CLINIC_PROFILE_V1 — база до миграц�
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
+import { BRANCH_PROFILE_COLUMNS, BRANCH_SYNC_COLUMNS, BRANCH_MESSAGES, storedBranchProblems, ownBuildingProblems } from '../../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
+import { writeBranchHours, blankDays } from '../../../public/js/shared/branch-hours.js';   // BRANCH_PROFILE_V1
 // STAFF_SYNC_V1 — вход проверяется НАСТОЯЩИМ путём входа, а не сравнением
 // хешей: обещание владельца звучит как «человек войдёт во втором здании», и
 // проверять его надо тем же кодом, которым клиника пускает людей каждый день.
@@ -507,13 +509,17 @@ test('справочник несёт список сети: буква -> им�
   // CROSS_BRANCH_CALENDAR_V1 — ЧАСЫ ЗДАНИЯ ЕДУТ ВМЕСТЕ С ИМЕНЕМ: окно приёма
   // врача сужается часами ЕГО здания, и без них сосед предлагал бы время, на
   // которое само здание записать не даёт.
+  // BRANCH_PROFILE_V1 — строка сети несёт и профиль здания, и отметку «часы решает главное».
+  const BLANK = { phone: '', name_uz: '', name_en: '', country_code: '', region_code: '', district_code: '', street_ru: '', street_uz: '',
+    street_en: '', landmark_ru: '', landmark_uz: '', landmark_en: '', maps_url: '', show_public: 1, hours_by_main: 1 };
   assert.deepEqual(out.roster, [
-    { letter: 'A', name: 'Heal point', working_hours: WH, is_24_7: 0 },
-    { letter: 'C', name: 'Клиника на Чиланзаре', working_hours: '{}', is_24_7: 0 },
+    { letter: 'A', name: 'Heal point', working_hours: WH, is_24_7: 0, ...BLANK },
+    { letter: 'C', name: 'Клиника на Чиланзаре', working_hours: '{}', is_24_7: 0, ...BLANK },
   ], 'строка без буквы — не узел сети, соседям ни к чему');
   db.close();
 });
 
+// BRANCH_PROFILE_V1 — это выгрузка главной ДО шага 4 (без hours_by_main): свои часы филиала она не трогает (Р14).
 test('часы приезжают ЧУЖОМУ зданию и не трогают СВОЁ: распорядок здания правит здание', () => {
   const db = fresh();
   becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
@@ -943,4 +949,216 @@ test('новое главное здание → филиал до 240: неиз
   assert.equal(row.clinic_name, 'Клиника Луч');
   for (const c of PROFILE_240) assert.equal(c in row, false, 'у старой базы нет ' + c);
   assert.ok(oldBranch.prepare("SELECT 1 FROM services WHERE code = 'S-CARD'").get());
+});
+
+// ===========================================================================
+// BRANCH_PROFILE_V1 (мигр. 241) — профиль зданий едет со списком сети. Его
+// правит главное здание; филиал принимает для ВСЕХ букв, включая свою. Часы
+// своего здания — тоже из главного, но только от главной шага 4
+// (hours_by_main). Главное здание едет с адресом, картой и телефоном из своей
+// «Компании» (одно место на здание).
+// ===========================================================================
+const WEEK_HOURS = writeBranchHours({ mode: 'week', days: blankDays() }).working_hours;
+const C_PROFILE = { phone: '+998 71 222 33 44', name_uz: 'Chilonzor filiali', name_en: 'Chilonzor branch', country_code: 'UZ',
+  region_code: 'tashkent-city', district_code: 'chilonzor', street_ru: 'ул. Бунёдкор, 5', street_uz: 'Bunyodkor ko‘chasi, 5',
+  street_en: '5 Bunyodkor St', landmark_ru: 'Напротив метро', landmark_uz: 'Metro qarshisida', landmark_en: 'Opposite the metro',
+  maps_url: 'https://yandex.uz/maps/-/CDchil', show_public: 0 };
+function mainWithBranches() {
+  const db = fresh();
+  db.prepare("UPDATE branches SET name = 'Главный корпус', name_uz = 'Bosh bino' WHERE letter = 'A'").run();
+  db.prepare("INSERT INTO branches (name, letter) VALUES ('Чиланзар', 'C')").run();
+  const sets = Object.keys(C_PROFILE).map((k) => `"${k}" = @${k}`).join(', ');
+  db.prepare(`UPDATE branches SET ${sets}, working_hours = @wh WHERE letter = 'C'`).run({ ...C_PROFILE, wh: WEEK_HOURS });
+  return db;
+}
+
+test('строка сети несёт профиль здания и отметку «часы решает главное»', () => {
+  const c = exportCatalogue(mainWithBranches()).roster.find((r) => r.letter === 'C');
+  assert.deepEqual(c, { letter: 'C', name: 'Чиланзар', working_hours: WEEK_HOURS, is_24_7: 0, ...C_PROFILE, hours_by_main: 1 });
+});
+
+test('главное здание едет с адресом, картой и телефоном из своей «Компании», названия — из «Филиалов»', () => {
+  const src = mainWithBranches();
+  src.prepare(`UPDATE doc_settings SET phone = '+998 71 200 12 00', region_code = 'tashkent-city', district_code = 'mirobod',
+    street_ru = 'ул. Мира, 1', maps_url = 'https://yandex.uz/maps/-/CDmain' WHERE id = 1`).run();
+  src.prepare("UPDATE branches SET phone = 'старый', street_ru = 'не отсюда' WHERE letter = 'A'").run();
+  const a = exportCatalogue(src).roster.find((r) => r.letter === 'A');
+  assert.deepEqual([a.phone, a.region_code, a.street_ru, a.maps_url], ['+998 71 200 12 00', 'tashkent-city', 'ул. Мира, 1', 'https://yandex.uz/maps/-/CDmain']);
+  assert.equal(a.name_uz, 'Bosh bino');
+});
+
+test('филиал принимает профиль всех зданий, включая своё, и часы своего — от главной шага 4', () => {
+  const dst = fresh();
+  becomeSecondary(dst, { letter: 'C', name: 'Чиланзар' });
+  dst.prepare("UPDATE branches SET address = 'ул. Своя, 1' WHERE letter = 'C'").run();
+  const summary = apply(dst, exportCatalogue(mainWithBranches()));
+  assert.ok(summary.roster >= 2);
+  const c = dst.prepare("SELECT * FROM branches WHERE letter = 'C'").get();
+  for (const [k, v] of Object.entries(C_PROFILE)) assert.equal(c[k], v, k);
+  assert.equal(c.working_hours, WEEK_HOURS, 'часы своего здания решает главное');
+  assert.equal(c.address, 'ул. Своя, 1', 'прежний адрес — свой у установки, не едет');
+  assert.equal(dst.prepare("SELECT name_uz FROM branches WHERE letter = 'A'").get().name_uz, 'Bosh bino');
+  assert.equal(apply(dst, exportCatalogue(mainWithBranches())).roster || 0, 0, 'повтор ничего не меняет');
+});
+
+test('незнакомая буква заводится сразу с профилем (active = 0, как и прежде)', () => {
+  const dst = fresh();
+  becomeSecondary(dst, { letter: 'D', name: 'Сергели' });
+  apply(dst, exportCatalogue(mainWithBranches()));
+  const c = dst.prepare("SELECT * FROM branches WHERE letter = 'C'").get();
+  assert.deepEqual([c.active, c.name_en, c.show_public], [0, 'Chilonzor branch', 0]);
+});
+
+test('мусор в профиле не роняет приём: значение, которое база не примет, пропущено, остальное принято', () => {
+  const cat = exportCatalogue(seedMain(mainWithBranches()));
+  Object.assign(cat.roster.find((r) => r.letter === 'C'),
+    { name_uz: null, name_en: 42, maps_url: 'https://maps.google.com/x', show_public: 2, street_ru: 'x'.repeat(500) });
+  const dst = receiver();
+  becomeSecondary(dst, { letter: 'C', name: 'Чиланзар' });
+  assert.doesNotThrow(() => apply(dst, cat));
+  const row = dst.prepare("SELECT * FROM branches WHERE letter = 'C'").get();
+  assert.deepEqual([row.name_uz, row.name_en, row.maps_url, row.show_public, row.street_ru], ['', '', '', 1, '']);
+  assert.equal(row.landmark_ru, 'Напротив метро', 'остальное профиля принято');
+  assert.ok(dst.prepare("SELECT 1 FROM services WHERE code = 'S-CARD'").get(), 'и прайс тоже');
+});
+
+test('мусор в часах и в отметке не роняет приём: часы не строкой не пишутся, отметка — только 1', () => {
+  const MY = writeBranchHours({ mode: 'week', days: { ...blankDays(), sat: { on: true, from: '09:00', to: '14:00' } } }).working_hours;
+  for (const junk of [{ working_hours: { mon: {} } }, { working_hours: 42 }, { working_hours: null, is_24_7: 1, hours_by_main: '1' },
+    { working_hours: '{}', is_24_7: 1, hours_by_main: true }]) {
+    const cat = exportCatalogue(seedMain(mainWithBranches()));
+    for (const r of cat.roster) Object.assign(r, junk);
+    const dst = receiver();
+    becomeSecondary(dst, { letter: 'C', name: 'Чиланзар' });
+    dst.prepare("UPDATE branches SET working_hours = ? WHERE letter = 'C'").run(MY);
+    const mainBefore = dst.prepare("SELECT working_hours, is_24_7 FROM branches WHERE letter = 'A'").get();
+    assert.doesNotThrow(() => apply(dst, cat), JSON.stringify(junk));
+    assert.deepEqual({ ...dst.prepare("SELECT working_hours, is_24_7 FROM branches WHERE letter = 'C'").get() }, { working_hours: MY, is_24_7: 0 },
+      'свои часы — только от главной с отметкой и строкой: ' + JSON.stringify(junk));
+    if (typeof junk.working_hours !== 'string') {
+      assert.deepEqual({ ...dst.prepare("SELECT working_hours, is_24_7 FROM branches WHERE letter = 'A'").get() }, { ...mainBefore },
+        'часы не строкой (и null — «не знаю») не пишутся и чужому зданию');
+    }
+    assert.equal(dst.prepare("SELECT name_en FROM branches WHERE letter = 'C'").get().name_en, 'Chilonzor branch', 'профиль принят');
+    assert.ok(dst.prepare("SELECT 1 FROM services WHERE code = 'S-CARD'").get(), 'и прайс тоже');
+  }
+});
+
+test('выгрузка главной ДО шага 4 (без профиля и отметки): профиль и свои часы филиала не тронуты', () => {
+  const dst = fresh();
+  becomeSecondary(dst, { letter: 'C', name: 'Чиланзар' });
+  dst.prepare("UPDATE branches SET name_uz = 'Chilonzor filiali', working_hours = ? WHERE letter = 'C'").run(WEEK_HOURS);
+  apply(dst, { roster: [{ letter: 'A', name: 'Главный корпус', working_hours: '{}', is_24_7: 0 },
+    { letter: 'C', name: 'Чиланзар', working_hours: '{}', is_24_7: 1 }] });
+  assert.deepEqual({ ...dst.prepare("SELECT name_uz, working_hours, is_24_7 FROM branches WHERE letter = 'C'").get() },
+    { name_uz: 'Chilonzor filiali', working_hours: WEEK_HOURS, is_24_7: 0 });
+});
+
+test('главное здание с базой до 241 → новый филиал: профиля в выгрузке нет, приём не падает', () => {
+  const oldMain = migratedBefore(241);
+  oldMain.prepare("INSERT INTO branches (name, letter) VALUES ('Чиланзар', 'C')").run();
+  const cat = exportCatalogue(oldMain);
+  for (const col of BRANCH_PROFILE_COLUMNS) assert.equal(col in cat.roster.find((r) => r.letter === 'C'), false, col);
+  const dst = fresh();
+  becomeSecondary(dst, { letter: 'C', name: 'C' });
+  dst.prepare("UPDATE branches SET name_uz = 'Chilonzor filiali' WHERE letter = 'C'").run();
+  assert.doesNotThrow(() => apply(dst, cat));
+  assert.equal(dst.prepare("SELECT name_uz FROM branches WHERE letter = 'C'").get().name_uz, 'Chilonzor filiali');
+});
+
+test('новое главное здание → филиал с базой до 241: профиль пропущен, имена и часы приняты; холостой прогон видит то же', () => {
+  const oldBranch = migratedBefore(241);
+  becomeSecondary(oldBranch, { letter: 'C', name: 'C' });
+  const dry = applyCatalogue(oldBranch, exportCatalogue(mainWithBranches()), { dryRun: true });
+  const summary = apply(oldBranch, exportCatalogue(mainWithBranches()));
+  assert.equal(summary.roster, dry.roster);
+  assert.deepEqual({ ...oldBranch.prepare("SELECT name, working_hours FROM branches WHERE letter = 'C'").get() }, { name: 'Чиланзар', working_hours: WEEK_HOURS });
+});
+
+test('филиал не отдаёт ни профиля, ни отметки — главное правит только главное', () => {
+  const db = fresh();
+  becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
+  for (const r of exportCatalogue(db).roster) assert.deepEqual(Object.keys(r).sort(), ['is_24_7', 'letter', 'name', 'working_hours']);
+});
+
+// BRANCH_PROFILE_V1 (ревью шага 4, #3) — ЧТО ПРИНЯЛ /api/db ГЛАВНОГО, ТО
+// ДОЕЗЖАЕТ ДО ФИЛИАЛА. Раньше улица в 184 знака сохранялась в главном, приём
+// филиала её пропускал, а повторная синхронизация считала «изменений нет» —
+// главное и филиал расходились молча и навсегда. Теперь /api/db отказывает
+// тем же пределам (routes/branches-guard.test.js); здесь — что всё, что он
+// пропускает, приходит целиком: и строка здания, и своё здание главного из «Компании».
+test('всё, что пропускает проверка /api/db главного, доезжает до филиала целиком; повтор ничего не меняет', () => {
+  const C_MAX = { phone: '9'.repeat(64), name_uz: 'ж'.repeat(120), name_en: 'x'.repeat(120), country_code: 'UZ', region_code: 'tashkent-city',
+    district_code: 'chilonzor', street_ru: 'ж'.repeat(160), street_uz: 'o‘'.repeat(80), street_en: 'x'.repeat(160),
+    landmark_ru: 'ж'.repeat(160), landmark_uz: 'x'.repeat(160), landmark_en: 'x'.repeat(160),
+    maps_url: 'https://yandex.uz/maps/' + 'a'.repeat(470), show_public: 0 };
+  const A_COMPANY = { phone: '7'.repeat(64), country_code: 'UZ', region_code: 'tashkent-city', district_code: 'mirobod',
+    street_ru: 'ж'.repeat(160), street_uz: '', street_en: 'x'.repeat(160), maps_url: 'https://yandex.uz/maps/-/CDmain' };
+  assert.deepEqual(storedBranchProblems(C_MAX), {}, '/api/db строки здания пропускает');
+  assert.deepEqual(ownBuildingProblems(A_COMPANY), {}, '/api/db «Компании» пропускает');
+  assert.equal(storedBranchProblems({ street_ru: 'ул. ' + 'Очень длинная улица '.repeat(9) }).street_ru, BRANCH_MESSAGES.long160,
+    'а улицу из находки ревью — нет');
+
+  const main = fresh();
+  main.prepare("INSERT INTO branches (name, letter) VALUES ('Чиланзар', 'C')").run();
+  const sets = (o) => Object.keys(o).map((k) => `"${k}" = @${k}`).join(', ');
+  main.prepare(`UPDATE branches SET ${sets(C_MAX)} WHERE letter = 'C'`).run(C_MAX);
+  main.prepare(`UPDATE doc_settings SET ${sets(A_COMPANY)} WHERE id = 1`).run(A_COMPANY);
+  const dst = fresh();
+  becomeSecondary(dst, { letter: 'C', name: 'Чиланзар' });
+  apply(dst, exportCatalogue(main));
+  const c = dst.prepare("SELECT * FROM branches WHERE letter = 'C'").get();
+  for (const [k, v] of Object.entries(C_MAX)) assert.equal(c[k], v, 'C.' + k);
+  const a = dst.prepare("SELECT * FROM branches WHERE letter = 'A'").get();
+  for (const [k, v] of Object.entries(A_COMPANY)) assert.equal(a[k], v, 'A.' + k + ' из «Компании» главного');
+  assert.equal(applyCatalogue(dst, exportCatalogue(main), { dryRun: true }).roster || 0, 0, 'расхождения нет — повтор ничего не меняет');
+});
+
+// BRANCH_PROFILE_V1 (ревью шага 4) — мусор в каждой колонке списка сети: приём не
+// падает, холостой прогон считает то же, что настоящий, повтор ничего не меняет.
+// (Генератор — mulberry32: линейный конгруэнтный в числах с плавающей точкой
+// вырождается в константу, и такой перебор не проверял бы почти ничего.)
+test('мусор в любой колонке списка сети: приём не падает, холостой прогон == настоящий, повтор ничего не меняет', () => {
+  let s = 7;
+  const rnd = (n) => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return (((t ^ (t >>> 14)) >>> 0) % n);
+  };
+  const JUNK = [null, undefined, 0, 1, 2, -1, 1.5, true, false, '', ' ', '1', '0', 'x'.repeat(65), 'x'.repeat(121), 'x'.repeat(161), 'x'.repeat(501),
+    {}, [], [1], { a: 1 }, 'HTTPS://YANDEX.UZ/maps/x', 'https://yandex.uz/maps/"><script>', 'https://maps.google.com', 'tashkent-city',
+    'Ташкент', 'a b', '9:00', '{"mon":{"enabled":true,"from":"9:00","to":"18:00"}}', 'не json', NaN, Infinity];
+  const good = exportCatalogue(mainWithBranches());
+  const seen = new Set();
+  let written = 0;
+  // Один приёмник; каждый прогон — в транзакции, которая откатывается: база
+  // перед следующим прогоном та же, а миграции не гоняются полтораста раз.
+  const dst = fresh();
+  becomeSecondary(dst, { letter: 'C', name: 'C' });
+  const ROLLBACK = new Error('откат прогона');
+  for (let i = 0; i < 150; i++) {
+    const cat = JSON.parse(JSON.stringify(good));
+    for (const e of cat.roster) {
+      for (const col of [...BRANCH_SYNC_COLUMNS, 'working_hours', 'is_24_7', 'hours_by_main']) {
+        if (rnd(2)) { const j = rnd(JUNK.length); e[col] = JUNK[j]; seen.add(j); }
+      }
+    }
+    cat.roster.push({ letter: 'D', name: 'Сергели', working_hours: JUNK[rnd(JUNK.length)],
+      ...Object.fromEntries(BRANCH_SYNC_COLUMNS.map((c) => [c, JUNK[rnd(JUNK.length)]])) });
+    try {
+      dst.transaction(() => {
+        let dry, real;
+        assert.doesNotThrow(() => { dry = applyCatalogue(dst, cat, { dryRun: true }); }, 'холостой ' + i);
+        assert.doesNotThrow(() => { real = applyCatalogue(dst, cat); }, 'настоящий ' + i);
+        assert.equal(real.changed, dry.changed, 'холостой == настоящий ' + i);
+        assert.equal(applyCatalogue(dst, cat, { dryRun: true }).changed, 0, 'повтор ' + i);
+        const c = dst.prepare("SELECT * FROM branches WHERE letter = 'C'").get();
+        for (const col of BRANCH_SYNC_COLUMNS) if (c[col] !== (col === 'show_public' ? 1 : '')) written += 1;
+        throw ROLLBACK;
+      })();
+    } catch (e) { if (e !== ROLLBACK) throw e; }
+  }
+  assert.equal(dst.prepare("SELECT COUNT(*) n FROM branches WHERE letter = 'D'").get().n, 0, 'прогоны откатились');
+  assert.ok(seen.size === JUNK.length && written > 300, 'перебор не пуст: ' + seen.size + ' видов мусора, записано ' + written);
 });

@@ -21,6 +21,8 @@ import assert from 'node:assert/strict';
 // ===========================================================================
 // Поддельный DOM
 // ===========================================================================
+const focusLog = [];
+const scrollLog = [];
 class FakeNode {
     constructor(tag) {
         this.tagName = String(tag).toUpperCase();
@@ -57,7 +59,8 @@ class FakeNode {
     querySelector(sel) { return descendants(this).find((n) => matches(n, sel)) || null; }
     querySelectorAll(sel) { return descendants(this).filter((n) => matches(n, sel)); }
     remove() { if (this._parent) this._parent.removeChild(this); }
-    focus() {} blur() {} scrollIntoView() {} select() {}
+    // CLINIC_PROFILE_V1 (полировка) — куда экран увёл фокус и прокрутку после неудачного сохранения.
+    focus() { focusLog.push(this); } blur() {} scrollIntoView(opts) { scrollLog.push({ node: this, opts }); } select() {}
     get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
     set textContent(v) { this._text = String(v); this.children.length = 0; }
     get classList() {
@@ -163,11 +166,14 @@ const GEO = {
 const { COMPANY_COLUMNS } = await import('../../shared/clinic-profile.js');
 
 let docRow;
+let ownBranchRow = null;      // BRANCH_PROFILE_V1 — своя строка branches («Компания» филиала читает её)
+let failOwnBranch = false;    // BRANCH_PROFILE_V1 (ревью 9) — чтение своей строки branches отвечает 503
 let lastUpdate;
 let uploads;
 let nextStorageError = null;   // { status, error } — отказ хранилища на следующую загрузку
 let failNextDocSelect = false; // CLINIC_PROFILE_V1 (ревью C1) — чтение doc_settings отвечает 503 (сервер перезапускается)
 let geoTables = GEO;           // CLINIC_PROFILE_V1 (ревью I1) — справочник подменяется на «настоящие» id
+let nextUpdateError = null;    // CLINIC_PROFILE_V1 (полировка) — отказ сервера на следующее сохранение: { status, error }
 // Строка doc_settings после миграции 240: прежние поля заполнены, новые пусты.
 function freshRow(extra = {}) {
     const row = { id: 1, paper_size: 'A5', show_watermark: 1, footer_note: 'Спасибо за визит.', legal_note: 'Электронный документ.', lab_scope: 'building' };
@@ -201,9 +207,15 @@ globalThis.fetch = async (url, opts = {}) => {
                 failNextDocSelect = false;
                 return { ok: false, status: 503, json: async () => ({ error: { code: 'unavailable', message: 'server restarting' } }) };
             }
+            if (op === 'update' && nextUpdateError) {
+                const { status, error } = nextUpdateError; nextUpdateError = null;
+                return { ok: false, status, json: async () => ({ error }) };
+            }
             if (op === 'update') { lastUpdate = desc.values; docRow = { ...docRow, ...desc.values }; }
             return ok({ data: { ...docRow } });
         }
+        if (desc.table === 'branches' && failOwnBranch) return { ok: false, status: 503, json: async () => ({ error: { code: 'unavailable', message: 'server restarting' } }) };   // BRANCH_PROFILE_V1 (ревью 9)
+        if (desc.table === 'branches') return ok({ data: ownBranchRow ? { ...ownBranchRow } : null });   // BRANCH_PROFILE_V1
         if (geoTables[desc.table]) {
             let rows = geoTables[desc.table].filter((r) => r.active);
             for (const f of desc.filters || []) {
@@ -755,6 +767,35 @@ test('кнопки-ссылки: без карты «Маршрута» нет; 
     assert.equal(links.find((l) => l.text === '@shifo_bot').href, 'https://t.me/shifo_bot');
 });
 
+// Полировка по макету (2026-10-10) — внизу карточки строка «телефон · канал
+// @имя», как в макете; кнопки — как были. Под названием — только адрес.
+const previewLine = (root) => descendants(preview(root)).find((n) => matches(n, '.cpf-pline')) || null;
+test('предпросмотр: внизу строка «телефон · канал @имя» на языке предпросмотра; кнопки на месте', async () => {
+    const root = await open({ telegram_channel: '@shifo_news', region_code: 'tashkent-city', street_ru: 'ул. Мира 1' });
+    const line = previewLine(root);
+    assert.ok(line, 'нет нижней строки с телефоном');
+    assert.equal(textOf(line), '+998 71 200 12 00 · канал @shifo_news');
+    assert.equal(preview(root).children[preview(root).children.length - 1], line, 'строка — последней в карточке, под кнопками');
+    const head = descendants(preview(root)).find((n) => matches(n, '.cpf-preview-head'));
+    assert.doesNotMatch(textOf(head), /\+998/, 'телефон — внизу, а не под названием');
+    const links = previewLinks(root).map((l) => l.text);
+    assert.ok(links.includes('Позвонить') && links.includes('@shifo_news'), 'кнопки остались: ' + links.join(', '));
+
+    langButton(root, 'UZ').click();
+    assert.equal(textOf(previewLine(root)), '+998 71 200 12 00 · kanal @shifo_news');
+    langButton(root, 'EN').click();
+    assert.equal(textOf(previewLine(root)), '+998 71 200 12 00 · channel @shifo_news');
+
+    // Неверное имя канала — в строке только телефон; без телефона и канала строки нет.
+    langButton(root, 'RU').click();
+    type(fieldInput(root, 'Telegram-канал'), '@ab');
+    assert.equal(textOf(previewLine(root)), '+998 71 200 12 00');
+    const bare = await open({ phone: '' });
+    assert.equal(previewLine(bare), null, 'нечего показать — строки нет');
+    const onlyChannel = await open({ phone: '', telegram_channel: 'https://t.me/shifo_news' });
+    assert.equal(textOf(previewLine(onlyChannel)), 'канал @shifo_news', 'ссылка на канал — именем');
+});
+
 test('логотип в предпросмотре: квадратный файл, иначе печатная копия', async () => {
     let root = await open({ logo_square_path: 'square/1-a.png', logo_data_url: PRINT_COPY });
     let mark = descendants(preview(root)).find((n) => n.tagName === 'IMG');
@@ -829,6 +870,85 @@ test('филиал: названия, описание, лицензия, цве
     assert.ok(lastUpdate, 'запрос ушёл');
     for (const c of Object.keys(lastUpdate)) assert.ok(COMPANY_BUILDING.includes(c), c + ' — своё у здания');
     assert.deepEqual(lastUpdate, { address: 'ул. Филиальная, 7' });
+});
+
+// BRANCH_PROFILE_V1 — «Компания» филиала: адрес для партнёров, карта и телефон для сайта —
+// из «Филиалов» главного здания (своя строка branches), только видны.
+test('филиал: адрес для партнёров, карта и телефон для сайта — из «Филиалов», только видны; уходит только своё для документов', async () => {
+    ownBranchRow = { id: 7, name: 'Чиланзар', phone: '+998 71 222 33 44', country_code: 'UZ', region_code: 'tashkent-city',
+        district_code: 'yunusobod', street_ru: 'ул. Бунёдкор, 5', street_uz: '', street_en: '', maps_url: 'https://yandex.uz/maps/-/CDchil' };
+    globalThis.window.CLINIC.own_branch_id = 7;
+    try {
+        const root = await openAs('secondary', { street_ru: 'своё из шага 3', region_code: '' });
+        for (const l of ['Страна', 'Город / область', 'Район']) assert.ok(isOff(geoSel(root, l)), l);
+        assert.equal(selectedValue(geoSel(root, 'Район')), 'yunusobod');
+        assert.equal(triInput(root, 'Улица, дом', 'ru').value, 'ул. Бунёдкор, 5', 'из «Филиалов», не из своей «Компании»');
+        assert.ok(isOff(triInput(root, 'Улица, дом', 'ru')));
+        // Ревью шага 4, находка 10 — карта филиала только видна: подпись и подсказка
+        // не зовут вставлять ссылку, а говорят, кто её ведёт.
+        assert.ok(isOff(fieldInput(root, 'Ссылка на это здание в Яндекс Картах')));
+        assert.equal(fieldInput(root, 'Ссылка на это здание в Яндекс Картах').value, 'https://yandex.uz/maps/-/CDchil');
+        assert.match(textOf(root), /Ссылку на карту этого здания ведёт главное здание в «Филиалах»\./);
+        assert.doesNotMatch(textOf(root), /нажмите «Поделиться» и скопируйте ссылку/, 'запертое поле не просит вставить ссылку');
+        assert.match(textOf(root), /ведёт главное здание в «Филиалах»/);
+        const loadNote = descendants(root).find((n) => matches(n, '.cpf-note') && /Не удалось загрузить адрес, карту и телефон/.test(textOf(n)));
+        assert.ok(!loadNote || loadNote.style.display === 'none', 'прочиталось — объяснения о сбое не видно');
+        assert.match(textOf(root), /Сайт и партнёры получают телефон из «Филиалов» главного здания/, 'подсказка под телефоном для документов');
+        assert.ok(previewLinks(root).some((l) => l.text === 'Позвонить' && l.href === 'tel:+998712223344'), 'предпросмотр — телефон из «Филиалов»');
+        assert.ok(previewSubs(root).includes('город Ташкент, Юнусабадский район, ул. Бунёдкор, 5'), 'предпросмотр — адрес из «Филиалов»: ' + previewSubs(root).join(' | '));
+        type(fieldInput(root, 'Адрес в документах'), 'ул. Филиальная, 7');
+        await save(root);
+        assert.deepEqual(lastUpdate, { address: 'ул. Филиальная, 7' });
+    } finally { ownBranchRow = null; delete globalThis.window.CLINIC.own_branch_id; }
+});
+
+// Ревью шага 4, находка 9 — строка branches не прочиталась: пустые адрес, карта и
+// телефон объяснены (тост и строка над адресом); своё для документов сохраняется.
+test('филиал: строка «Филиалов» не прочиталась — объяснение тостом и над адресом; своё для документов сохраняется', async () => {
+    ownBranchRow = { id: 7, street_ru: 'ул. Бунёдкор, 5' };
+    failOwnBranch = true;
+    globalThis.window.CLINIC.own_branch_id = 7;
+    try {
+        const root = await openAs('secondary', {});
+        const note = descendants(root).find((n) => matches(n, '.cpf-note') && /Не удалось загрузить адрес, карту и телефон этого здания/.test(textOf(n)));
+        assert.ok(note && !note.hidden && note.style.display !== 'none', 'объяснение над адресом');
+        assert.equal(note.attrs.role, 'alert');
+        assert.match(toastText(), /Не удалось загрузить адрес, карту и телефон этого здания/);
+        assert.equal(triInput(root, 'Улица, дом', 'ru').value, '', 'чужого адреса не подставляем');
+        type(fieldInput(root, 'Адрес в документах'), 'ул. Филиальная, 7');
+        await save(root);
+        assert.deepEqual(lastUpdate, { address: 'ул. Филиальная, 7' });
+    } finally { failOwnBranch = false; ownBranchRow = null; delete globalThis.window.CLINIC.own_branch_id; }
+    // Прочиталась — объяснения нет.
+    ownBranchRow = { id: 7, street_ru: 'ул. Бунёдкор, 5' };
+    globalThis.window.CLINIC.own_branch_id = 7;
+    try {
+        const root = await openAs('secondary', {});
+        const note = descendants(root).find((n) => matches(n, '.cpf-note') && /Не удалось загрузить адрес, карту и телефон/.test(textOf(n)));
+        assert.ok(!note || note.hidden || note.style.display === 'none');
+    } finally { ownBranchRow = null; delete globalThis.window.CLINIC.own_branch_id; }
+});
+
+// BRANCH_PROFILE_V1 (ревью шага 4, #3) — предел длины телефона виден полю, а не только серверу (400).
+test('телефон «Компании» — предел длины PHONE_MAX в поле, в главном здании и в филиале', async () => {
+    const { PHONE_MAX } = await import('../../shared/branch-profile.js');
+    for (const role of ['main', 'secondary']) {
+        const root = await openAs(role, {});
+        const phone = descendants(fieldBox(root, 'Телефон')).find((n) => n.tagName === 'INPUT');
+        assert.equal(phone.attrs.maxlength, String(PHONE_MAX), role);
+    }
+});
+
+test('главное здание: адрес для партнёров — свой, правится; «Филиалы» не читаются', async () => {
+    ownBranchRow = { id: 1, street_ru: 'не отсюда' };
+    globalThis.window.CLINIC.own_branch_id = 1;
+    try {
+        const root = await openAs('main', { street_ru: 'ул. Мира 1' });
+        assert.equal(triInput(root, 'Улица, дом', 'ru').value, 'ул. Мира 1');
+        assert.ok(!isOff(triInput(root, 'Улица, дом', 'ru')) && !isOff(geoSel(root, 'Район')));
+        assert.match(textOf(root), /Адреса других зданий — в «Филиалах»\./);
+        assert.match(textOf(root), /У пациентов это кнопка «Позвонить»\./);
+    } finally { ownBranchRow = null; delete globalThis.window.CLINIC.own_branch_id; }
 });
 
 test('главное здание: всё открыто, заметки филиала нет, сохраняются все колонки «Компании»', async () => {
@@ -989,4 +1109,116 @@ test('флаг устарел (включён), а подключений уже
         globalThis.window.CLINIC = clinic;
         clinic.api_address_required = false;
     }
+});
+
+// ===========================================================================
+// Полировка по макету (2026-10-10) — «нет перевода» у пустых UZ / EN.
+// Пометка — в общем поле на трёх языках (company-fields.js triGroup): ею же
+// воспользуются «Филиалы» (название, улица), а у ориентира её нет.
+// ===========================================================================
+const { triGroup } = await import('../views/company-fields.js');
+function triCell(root, label, lang) {
+    const ctrl = triInput(root, label, lang);
+    return ctrl._parent;
+}
+const missMark = (root, label, lang) => descendants(triCell(root, label, lang)).find((n) => matches(n, '.cpf-miss')) || null;
+const missShown = (root, label, lang) => { const m = missMark(root, label, lang); return !!m && !m.hidden; };
+
+test('«нет перевода»: пустые UZ и EN у названия, описания и улицы помечены; у RU пометки нет', async () => {
+    const root = await open({ name_uz: '', name_en: 'Shifo Clinic', about_ru: 'Семейная клиника.', street_ru: 'ул. Мира 1', street_uz: 'Tinchlik ko‘chasi, 1' });
+    for (const label of ['Название клиники', 'Коротко о клинике', 'Улица, дом']) {
+        assert.equal(missMark(root, label, 'ru'), null, label + ': у RU пометки «нет перевода» быть не должно');
+    }
+    assert.equal(missShown(root, 'Название клиники', 'uz'), true, 'пустое UZ-название помечено');
+    assert.equal(missShown(root, 'Название клиники', 'en'), false, 'EN-название есть — пометки нет');
+    assert.equal(missShown(root, 'Коротко о клинике', 'uz'), true);
+    assert.equal(missShown(root, 'Коротко о клинике', 'en'), true);
+    assert.equal(missShown(root, 'Улица, дом', 'uz'), false);
+    assert.equal(missShown(root, 'Улица, дом', 'en'), true);
+    // Вид — как в макете: маленькая пометка в подписи ячейки.
+    const mark = missMark(root, 'Название клиники', 'uz');
+    assert.equal(labelText(mark), 'нет перевода');
+    assert.equal(mark._parent.tagName, 'LABEL', 'пометка — в подписи поля');
+});
+
+test('«нет перевода» исчезает с первым знаком и возвращается, если поле снова пустое', async () => {
+    const root = await open();
+    type(triInput(root, 'Название клиники', 'uz'), 'S');
+    assert.equal(missShown(root, 'Название клиники', 'uz'), false, 'набрали — пометки нет');
+    type(triInput(root, 'Название клиники', 'uz'), '   ');
+    assert.equal(missShown(root, 'Название клиники', 'uz'), true, 'одни пробелы — перевода нет');
+    type(triInput(root, 'Улица, дом', 'en'), '1 Mira St');
+    assert.equal(missShown(root, 'Улица, дом', 'en'), false);
+    type(triInput(root, 'Улица, дом', 'en'), '');
+    assert.equal(missShown(root, 'Улица, дом', 'en'), true, 'стёрли — пометка вернулась');
+    type(triInput(root, 'Коротко о клинике', 'en'), 'Family clinic.');
+    assert.equal(missShown(root, 'Коротко о клинике', 'en'), false);
+    // После сохранения поля заполняются заново (set) — пометки следуют за значениями.
+    await save(root);
+    assert.equal(lastUpdate && lastUpdate.about_en, 'Family clinic.', 'описание EN сохранено');
+    assert.equal(missShown(root, 'Название клиники', 'uz'), true, 'UZ-название так и не вписали');
+    assert.equal(missShown(root, 'Коротко о клинике', 'en'), false);
+});
+
+test('общее поле на трёх языках: пометка включается параметром — у ориентира её нет', () => {
+    const plain = triGroup('Ориентир', { ru: 'Напротив парка' }, { key: 'landmark' });
+    assert.equal(descendants(plain.node).filter((n) => matches(n, '.cpf-miss')).length, 0, 'без markMissing пометок нет');
+    const marked = triGroup('Улица, дом', { ru: 'ул. Мира 1', en: '1 Mira St' }, { key: 'street', markMissing: true });
+    const shown = descendants(marked.node).filter((n) => matches(n, '.cpf-miss') && !n.hidden);
+    assert.equal(shown.length, 1, 'помечено ровно пустое UZ');
+    marked.set({ ru: 'ул. Мира 1', uz: 'Tinchlik ko‘chasi, 1', en: '' });
+    const after = descendants(marked.node).filter((n) => matches(n, '.cpf-miss') && !n.hidden);
+    assert.equal(after.length, 1, 'после set() помечено пустое EN');
+    assert.ok(after[0]._parent.attrs.for === marked.inputs.en.ctrl.attrs.id, 'пометка — у EN');
+});
+
+// ===========================================================================
+// Полировка по макету (2026-10-10) — неудачное сохранение: объяснение под
+// каждым неверным полем, прокрутка к первому из них (в порядке экрана) и
+// фокус на нём. Раньше человек видел только тост, а поле могло быть ниже края.
+// ===========================================================================
+const resetFocus = () => { focusLog.length = 0; scrollLog.length = 0; };
+const lastFocused = () => focusLog[focusLog.length - 1] || null;
+
+test('неудачное сохранение: объяснение под каждым неверным полем; прокрутка и фокус — на первом по экрану', async () => {
+    const root = await open();
+    type(fieldInput(root, 'Сайт'), 'не сайт');                      // «Сайт и соцсети» — ниже адреса
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Мира 1');          // адрес начат — нужен город / область
+    resetFocus();
+    await save(root);
+
+    assert.equal(lastUpdate, null, 'неверное не уходит на сервер');
+    assert.equal(fieldError(root, 'Город / область'), 'Выберите город или область.');
+    assert.match(fieldError(root, 'Сайт'), /https:\/\//);
+    const region = geoSel(root, 'Город / область');
+    assert.equal(lastFocused(), region, 'фокус — на первом неверном поле по порядку экрана (адрес выше ссылок)');
+    assert.ok(scrollLog.some((s) => s.node === region), 'к первому неверному полю экран прокручен');
+    assert.equal(scrollLog[scrollLog.length - 1].opts && scrollLog[scrollLog.length - 1].opts.block, 'center', 'поле — посередине экрана, а не у края');
+    assert.match(toastText(), /Проверьте выделенные поля/);
+
+    // Осталось одно неверное — фокус на нём.
+    type(triInput(root, 'Улица, дом', 'ru'), '');
+    resetFocus();
+    await save(root);
+    assert.equal(fieldError(root, 'Город / область'), '', 'исправленное поле — без ошибки');
+    assert.equal(lastFocused(), fieldInput(root, 'Сайт'));
+});
+
+test('отказ сервера с полем: объяснение под этим полем, фокус на нём, тост с тем же текстом', async () => {
+    const root = await open();
+    const MAPS = 'Нужна ссылка из Яндекс Карт: откройте клинику в Яндекс Картах, нажмите «Поделиться» и скопируйте ссылку (yandex.uz/maps/…).';
+    type(fieldInput(root, 'Ссылка на клинику в Яндекс Картах'), 'https://yandex.uz/maps/-/CDabc');
+    nextUpdateError = { status: 400, error: { code: 'bad_request', message: MAPS, field: 'maps_url' } };
+    resetFocus();
+    await save(root);
+
+    assert.equal(fieldError(root, 'Ссылка на клинику в Яндекс Картах'), MAPS);
+    assert.equal(lastFocused(), fieldInput(root, 'Ссылка на клинику в Яндекс Картах'));
+    assert.match(toastText(), /Нужна ссылка из Яндекс Карт/);
+    // Отказ без поля — только тост, фокус не трогаем.
+    nextUpdateError = { status: 409, error: { code: 'conflict', message: 'Конфликт.' } };
+    resetFocus();
+    type(fieldInput(root, 'Электронная почта'), 'x@shifo.uz');
+    await save(root);
+    assert.equal(focusLog.length, 0, 'без поля фокус остаётся, где был');
 });

@@ -22,6 +22,7 @@
 // перенос «как есть, вместе с id» испортил бы уже выставленные счета филиала).
 
 import { normName } from '../../../public/js/admin/service-editor-logic.js';
+import { BRANCH_SYNC_COLUMNS, syncableBranchValue, overlayOwnBuilding } from '../../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
 
 // Колонки doc_settings, которые описывают КЛИНИКУ, а не ЗДАНИЕ.
 //
@@ -406,15 +407,30 @@ export function exportCatalogue(db, { now = () => new Date() } = {}) {
   // сосед предлагал на 19:00 время, на которое сам записать не даёт. График
   // врача поехал (users.working_hours выше) ровно от той же болезни; половина
   // правила без второй половины лечит её наполовину.
+  //
+  // BRANCH_PROFILE_V1 — роль и СВОЯ строка установки нужны уже списку сети:
+  // профиль зданий отдаёт только главное, и своё здание главного едет с
+  // адресом, картой и телефоном из его «Компании». Незаполненная роль (строки
+  // branch_identity нет) — главная, см. разбор у STAFF_SYNC_V1 ниже.
+  const identity = db.prepare('SELECT role, branch_id FROM branch_identity WHERE id = 1').get();
+  const isMain = !identity || identity.role !== 'secondary';
+  const ownBranchId = identity && identity.branch_id != null ? Number(identity.branch_id) : null;
   out.roster = db.prepare(
-    "SELECT letter, name, working_hours, is_24_7 FROM branches "
-    + "WHERE letter IS NOT NULL AND letter <> '' ORDER BY letter"
-  ).all().map((r) => ({
-    letter: r.letter,
-    name: r.name || '',
-    working_hours: r.working_hours || '',
-    is_24_7: r.is_24_7 ? 1 : 0,
-  }));
+    "SELECT * FROM branches WHERE letter IS NOT NULL AND letter <> '' ORDER BY letter"
+  ).all().map((raw) => {
+    // BRANCH_PROFILE_V1 — главное здание: адрес для партнёров, карта и телефон
+    // — из его «Компании» (shared/branch-profile.js overlayOwnBuilding).
+    const r = isMain && ownBranchId != null && Number(raw.id) === ownBranchId ? overlayOwnBuilding(raw, settings) : raw;
+    const entry = { letter: r.letter, name: r.name || '', working_hours: r.working_hours || '', is_24_7: r.is_24_7 ? 1 : 0 };
+    // BRANCH_PROFILE_V1 — профиль здания и «часы решает главное» отдаёт только
+    // главное. Колонки, которой у этой базы нет (до мигр. 241), в строке нет
+    // вовсе: «не знаю» — отсутствующий ключ, а не null (как 9dde74bf).
+    if (isMain) {
+      for (const col of BRANCH_SYNC_COLUMNS) if (col in r && r[col] != null) entry[col] = r[col];
+      entry.hours_by_main = 1;
+    }
+    return entry;
+  });
 
   // STAFF_SYNC_V1 — СОТРУДНИКОВ ОТДАЁТ ТОЛЬКО ГЛАВНАЯ КЛИНИКА.
   //
@@ -434,9 +450,7 @@ export function exportCatalogue(db, { now = () => new Date() } = {}) {
   //
   // Незаполненная роль (строки branch_identity нет) считается главной — так же,
   // как её считает readIdentity в остальном коде: свежая установка ещё никем не
-  // филиал.
-  const identity = db.prepare('SELECT role FROM branch_identity WHERE id = 1').get();
-  const isMain = !identity || identity.role !== 'secondary';
+  // филиал. (BRANCH_PROFILE_V1 — identity / isMain читаются выше, у списка сети.)
 
   // Буква ЭТОЙ установки и буквы её зданий — для branchLetter ниже. Читается
   // один раз на всю выгрузку: зданий у клиники два-три, а строк сотрудников
@@ -642,33 +656,66 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
     // главная; часы работы — распорядок здания, его правит здание).
     const hours = db.prepare('UPDATE branches SET working_hours = ?, is_24_7 = ? WHERE letter = ? COLLATE NOCASE');
     const mine = letterOfIdentity(db);
+    // BRANCH_PROFILE_V1 — ЧАСЫ СВОЕГО ЗДАНИЯ РЕШАЕТ ГЛАВНОЕ (спецификация:
+    // «часы правит только главное здание»). Главная шага 4 помечает это в каждой
+    // строке (hours_by_main); главная старше её не помечает — и тогда свои
+    // часы филиала, как и прежде, не трогаются (выгрузка старой главной шлёт за
+    // наше здание то, что знает она, — обычно '{}').
+    // Часы — только строкой: объект или число привязать к UPDATE нельзя, и
+    // упавший UPDATE уронил бы весь приём (прайс, права, люди) — пропуск.
+    // ПРОФИЛЬ ЗДАНИЯ — только присланные ключи (старая главная их не шлёт —
+    // местное остаётся), только колонки, которые у этой базы уже есть (филиал
+    // до мигр. 241), и только значения, которые база примет: null, чужой тип,
+    // ссылка не на Яндекс Карты пропускаются, а не роняют приём.
+    const profileChanges = (entry, row) => {
+      const out = {};
+      for (const col of BRANCH_SYNC_COLUMNS) {
+        if (!(col in entry) || !(col in row)) continue;
+        if (!syncableBranchValue(col, entry[col])) continue;
+        if (!sameValue(entry[col], row[col])) out[col] = entry[col];
+      }
+      return out;
+    };
+    const writeProfile = (letter, changes) => {
+      const keys = Object.keys(changes);
+      if (!keys.length) return;
+      // Имена колонок — из константы, значения — параметрами (тот же инвариант, что у TABLES).
+      db.prepare(`UPDATE branches SET ${keys.map((k) => `"${k}" = ?`).join(', ')} WHERE letter = ? COLLATE NOCASE`)
+        .run(...keys.map((k) => changes[k]), letter);
+    };
     for (const entry of payload.roster) {
       if (!entry || typeof entry.letter !== 'string' || typeof entry.name !== 'string') continue;
       const name = entry.name.trim().slice(0, 120);
       if (!name) continue;
       const letter = entry.letter.trim().toUpperCase();
-      const row = db.prepare('SELECT id, name, working_hours, is_24_7 FROM branches WHERE letter = ? COLLATE NOCASE').get(entry.letter);
+      const hoursKnown = typeof entry.working_hours === 'string';   // BRANCH_PROFILE_V1
+      const row = db.prepare('SELECT * FROM branches WHERE letter = ? COLLATE NOCASE').get(entry.letter);   // BRANCH_PROFILE_V1 — вся строка
       if (!row) {
         if (!ROSTER_LETTER_RE.test(entry.letter)) continue;
         summary.roster = (summary.roster || 0) + 1;
         summary.changed += 1;
         if (!dryRun) {
           adopt.run(name, entry.letter);
-          if ('working_hours' in entry) hours.run(entry.working_hours || '', entry.is_24_7 ? 1 : 0, entry.letter);
+          if (hoursKnown) hours.run(entry.working_hours, entry.is_24_7 ? 1 : 0, entry.letter);   // BRANCH_PROFILE_V1 — только строкой
+          const fresh = db.prepare('SELECT * FROM branches WHERE letter = ? COLLATE NOCASE').get(entry.letter);   // BRANCH_PROFILE_V1
+          if (fresh) writeProfile(entry.letter, profileChanges(entry, fresh));
         }
         continue;
       }
       // Версионный перекос тот же, что везде: ключа нет — отправитель старый,
       // местное значение остаётся.
-      const wantHours = ('working_hours' in entry) && letter && letter !== mine
-        && (!sameValue(entry.working_hours || '', row.working_hours || '')
+      const ownHours = entry.hours_by_main === 1;   // BRANCH_PROFILE_V1
+      const wantHours = hoursKnown && letter && (letter !== mine || ownHours)
+        && (!sameValue(entry.working_hours, row.working_hours || '')
           || !sameValue(entry.is_24_7 ? 1 : 0, row.is_24_7 ? 1 : 0));
-      if (row.name === name && !wantHours) continue;
+      const profile = profileChanges(entry, row);   // BRANCH_PROFILE_V1
+      if (row.name === name && !wantHours && !Object.keys(profile).length) continue;
       summary.roster = (summary.roster || 0) + 1;
       summary.changed += 1;
       if (!dryRun) {
         if (row.name !== name) rename.run(name, entry.letter);
-        if (wantHours) hours.run(entry.working_hours || '', entry.is_24_7 ? 1 : 0, entry.letter);
+        if (wantHours) hours.run(entry.working_hours, entry.is_24_7 ? 1 : 0, entry.letter);
+        writeProfile(entry.letter, profile);   // BRANCH_PROFILE_V1
       }
     }
   }

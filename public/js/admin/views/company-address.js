@@ -39,8 +39,12 @@ function geoField(key, label) {
  * заголовок «этого здания». Вызывающий зовёт load() после того, как строка
  * doc_settings прочитана: каскад выбирает сохранённые коды только из пресета,
  * заданного до прихода списков.
+ *
+ * BRANCH_PROFILE_V1 — заголовок, подсказку и замок задаёт экран: «Филиалы»
+ * (страница здания) и «Компания» филиала. disabled — списки и улица видны, но
+ * не правятся; after — узлы сразу под улицей (ориентир, прежний адрес).
  */
-export function addressCard(state, { onChange = null, secondary = false, required = false } = {}) {
+export function addressCard(state, { onChange = null, secondary = false, title = '', hint = '', disabled = false, after = null, required = false } = {}) {   // CLINIC_API_STEP7_V1 — required: решение владельца 11
     let parts = { country: null, region: null, district: null };
     const streetOf = () => ({ ru: state.street_ru, uz: state.street_uz, en: state.street_en });
     const changed = () => { if (typeof onChange === 'function') onChange(); };
@@ -93,6 +97,9 @@ export function addressCard(state, { onChange = null, secondary = false, require
         boxes.country.put(mine.countrySel);
         boxes.region.put(mine.regionSel);
         boxes.district.put(mine.districtSel);
+        // BRANCH_PROFILE_V1 — замок от вызывающего («Филиалы»: своё здание
+        // главного и филиал; «Компания» филиала): списки видны, выбрать нельзя.
+        if (disabled) for (const s of [mine.countrySel, mine.regionSel, mine.districtSel]) { s.disabled = true; s.setAttribute('disabled', ''); }
         return mine.ready;
     }
     // До load() — заглушки: списки грузятся один раз, уже с сохранёнными кодами.
@@ -100,6 +107,8 @@ export function addressCard(state, { onChange = null, secondary = false, require
 
     const street = triGroup('Улица, дом', streetOf(), {
         key: 'street', max: STREET_MAX,
+        markMissing: true,   // CLINIC_PROFILE_V1 (полировка по макету) — «нет перевода» у пустых UZ / EN
+        disabled,   // BRANCH_PROFILE_V1
         onInput: (l, v) => { state['street_' + l] = v; paintFull(); changed(); },
     });
 
@@ -115,20 +124,25 @@ export function addressCard(state, { onChange = null, secondary = false, require
     const streetMark = h('span', { class: 'req' });
     street.node.firstChild.appendChild(streetMark);   // <legend> группы «Улица, дом»
     const reqNote = h('p', { class: 'cpf-hint cpf-req-note' });
+    // Слияние с шагом 4 (BRANCH_PROFILE_V1): поля, которые здесь только видны
+    // (disabled — «Компания» филиала, своё здание главного в «Филиалах»), не бывают
+    // обязательными: звёздочек и строки нет, что бы ни пришло в on.
     function setRequired(on) {
-        for (const mk of [...marks, streetMark]) mk.textContent = on ? ' *' : '';
-        reqNote.textContent = on ? tr(PROFILE_MESSAGES.partnerAddress) : '';
+        const show = !!on && !disabled;
+        for (const mk of [...marks, streetMark]) mk.textContent = show ? ' *' : '';
+        reqNote.textContent = show ? tr(PROFILE_MESSAGES.partnerAddress) : '';
     }
     setRequired(required);
 
     const node = h('div', { class: 'card' },
         h('div', { class: 'card-header' }, h('h3', null, Icon('MapPin', { size: 16 }), ' ',
-            secondary ? 'Адрес этого здания для партнёров и сайта' : 'Адрес для партнёров и сайта')),
+            title || (secondary ? 'Адрес этого здания для партнёров и сайта' : 'Адрес для партнёров и сайта'))),   // BRANCH_PROFILE_V1 — заголовок от экрана
         h('div', { class: 'cpf-body' },
-            h('p', { class: 'cpf-hint' }, 'Страна, город и район — из списков, как при регистрации пациента; партнёры получают их коды. На бланках печатается «Адрес в документах» из «Реквизитов» — эти списки его не меняют.'),
+            h('p', { class: 'cpf-hint' }, hint || 'Страна, город и район — из списков, как при регистрации пациента; партнёры получают их коды. На бланках печатается «Адрес в документах» из «Реквизитов» — эти списки его не меняют. Адреса других зданий — в «Филиалах».'),   // BRANCH_PROFILE_V1 — подсказка шага 3 «Адреса других зданий — в «Филиалах»» возвращена (аудит макета)
             reqNote,   // CLINIC_API_STEP7_V1
             h('div', { class: 'cpf-geo' }, boxes.country.node, boxes.region.node, boxes.district.node),
             street.node,
+            ...[].concat(after || []),   // BRANCH_PROFILE_V1 — «Филиалы»: ориентир, прежний адрес
             h('div', { class: 'cpf-full' },
                 h('p', { class: 'cpf-subhead' }, 'Полный адрес — так его получат партнёры'),
                 fullDl)));
@@ -154,12 +168,17 @@ export function addressCard(state, { onChange = null, secondary = false, require
     };
 }
 
-/** Карточка «Карта и маршрут»: ссылка из Яндекс Карт и что откроет кнопка «Маршрут». */
-export function mapCard(state, { onChange = null } = {}) {
-    const inp = h('input', { type: 'text', inputmode: 'url', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'https://yandex.uz/maps/…' });
-    const box = labeled('Ссылка на клинику в Яндекс Картах', inp, {
+/**
+ * Карточка «Карта и маршрут»: ссылка из Яндекс Карт и что откроет кнопка «Маршрут».
+ * BRANCH_PROFILE_V1 — подпись, подсказку и замок задаёт экран («Филиалы»,
+ * «Компания» филиала); без них — как в «Компании».
+ */
+export function mapCard(state, { onChange = null, label = '', hint = '', disabled = false } = {}) {
+    const inp = h('input', { type: 'text', inputmode: 'url', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'https://yandex.uz/maps/…', disabled });
+    inp.disabled = !!disabled;   // BRANCH_PROFILE_V1
+    const box = labeled(label || 'Ссылка на клинику в Яндекс Картах', inp, {
         key: 'maps',
-        hint: 'Найдите клинику в Яндекс Картах, нажмите «Поделиться» и скопируйте ссылку. Это адрес этого здания; у других зданий ссылки свои.',
+        hint: hint || 'Найдите клинику в Яндекс Картах, нажмите «Поделиться» и скопируйте ссылку. Это адрес этого здания; у других зданий ссылки свои.',
     });
     const routeDd = h('dd');
     function paintRoute() {

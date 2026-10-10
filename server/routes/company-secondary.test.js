@@ -7,6 +7,11 @@
 // ближайшей синхронизацией — тот же призрак, что закрывает 409 у
 // MAIN_CLINIC_TABLES. Отказ — только если общее поле МЕНЯЕТСЯ: прежний экран,
 // приславший название как было, сохраняет адрес и телефон своего здания.
+//
+// BRANCH_PROFILE_V1 (шаг 4) — адрес для партнёров (коды, улица) и карту
+// филиала ведёт главное здание в «Филиалах» (одно место на здание): в
+// «Компании» филиала они только видны. Своё — адрес, телефон и почта для
+// документов этого здания.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
@@ -17,8 +22,9 @@ import { licensedDataDir } from '../services/control/licensed-fixture.js';
 import { becomeSecondary } from '../services/branch-sync/identity.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
 import { STRINGS } from '../../public/js/admin/i18n-strings.js';
+import { BRANCH_MESSAGES } from '../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
 
-const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.';
+const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон и почта для документов этого здания.';   // BRANCH_PROFILE_V1
 
 async function startServer({ secondary = false } = {}) {
   const db = openDb(':memory:');
@@ -64,17 +70,44 @@ test('филиал: общее для клиники не меняется — 4
   } finally { t.stop(); }
 });
 
-test('филиал: адрес, телефон, почта, коды, улица и карта своего здания сохраняются', async () => {
+test('филиал: адрес, телефон и почта для документов сохраняются', async () => {
   const t = await startServer({ secondary: true });
   try {
     const cookie = await loginAs(t.base);
-    const res = await save(t.base, cookie, { address: 'ул. Филиальная, 7', phone: '+998901112233', email: 'c@luch.uz',
-      country_code: 'UZ', region_code: 'tashkent-city', district_code: 'chilonzor',
-      street_ru: 'ул. Филиальная, 7', maps_url: 'https://yandex.uz/maps/-/CDbranch' });
+    const res = await save(t.base, cookie, { address: 'ул. Филиальная, 7', phone: '+998901112233', email: 'c@luch.uz' });
     assert.equal(res.status, 200, JSON.stringify(await res.clone().json()));
     const r = row(t.db);
-    assert.deepEqual([r.address, r.phone, r.street_ru, r.maps_url],
-      ['ул. Филиальная, 7', '+998901112233', 'ул. Филиальная, 7', 'https://yandex.uz/maps/-/CDbranch']);
+    assert.deepEqual([r.address, r.phone, r.email], ['ул. Филиальная, 7', '+998901112233', 'c@luch.uz']);
+  } finally { t.stop(); }
+});
+
+// BRANCH_PROFILE_V1 — адрес филиала для партнёров ведёт главное здание в «Филиалах» (одно место на здание).
+test('филиал: коды, улица и карта в «Компании» — 409; неизменённые — не мешают', async () => {
+  const t = await startServer({ secondary: true });
+  try {
+    const cookie = await loginAs(t.base);
+    for (const values of [{ region_code: 'tashkent-city' }, { street_ru: 'ул. Филиальная, 7' }, { maps_url: 'https://yandex.uz/maps/-/CDbranch' },
+      { country_code: 'UZ' }, { street_en: '7 Filial St' }]) {
+      const res = await save(t.base, cookie, values);
+      assert.equal(res.status, 409, JSON.stringify(values));
+      assert.equal((await res.json()).error.message, BRANCH_MESSAGES.partnerInBranches);
+    }
+    const r = row(t.db);
+    assert.deepEqual([r.region_code, r.street_ru, r.maps_url], ['', '', ''], 'база не тронута');
+    const ok = await save(t.base, cookie, { street_ru: '', address: 'ул. Филиальная, 8' });
+    assert.equal(ok.status, 200, 'улица как была (пусто) — не отказ');
+    assert.equal(row(t.db).address, 'ул. Филиальная, 8');
+  } finally { t.stop(); }
+});
+
+test('главное здание: адрес для партнёров и карта своего здания — в «Компании», как в шаге 3', async () => {
+  const t = await startServer();
+  try {
+    const cookie = await loginAs(t.base);
+    const res = await save(t.base, cookie, { region_code: 'tashkent-city', district_code: 'chilonzor', street_ru: 'ул. Мира, 1',
+      maps_url: 'https://yandex.uz/maps/-/CDmain' });
+    assert.equal(res.status, 200, JSON.stringify(await res.clone().json()));
+    assert.equal(row(t.db).street_ru, 'ул. Мира, 1');
   } finally { t.stop(); }
 });
 

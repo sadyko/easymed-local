@@ -300,3 +300,17 @@ test('tableWriteAllowed: doc_settings — администратор или «К
     assert.equal(tableWriteAllowed('doc_settings', 'update', null, db), false);
   } finally { db.close(); }
 });
+
+// BRANCH_PROFILE_V1 — «Филиалы: Изменение» пишет профиль здания и часы; без права — отказ.
+test('регистратура с «Филиалы: Изменение» правит профиль здания и часы', () => {
+  const db = seed();
+  try {
+    const CASHIER = { id: 52, role: 'cashier', extra_roles: [] };
+    assert.throws(() => run(db, { table: 'branches', op: 'update', values: { name_uz: 'X' }, filters: [{ col: 'id', op: 'eq', val: 1 }] }, CASHIER), refused);
+    addGrants(db, 'registrar', { settings: 'view', 'settings.branches': 'edit' });
+    run(db, { table: 'branches', op: 'update', values: { name_uz: 'Bosh bino', street_ru: 'ул. Мира, 1', show_public: 0, working_hours: '{}' },
+      filters: [{ col: 'id', op: 'eq', val: 1 }] }, REG);
+    const r = db.prepare('SELECT name_uz, street_ru, show_public FROM branches WHERE id = 1').get();
+    assert.deepEqual({ ...r }, { name_uz: 'Bosh bino', street_ru: 'ул. Мира, 1', show_public: 0 });
+  } finally { db.close(); }
+});

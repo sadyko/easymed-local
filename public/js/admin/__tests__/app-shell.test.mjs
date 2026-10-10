@@ -537,6 +537,41 @@ test('активный пункт действительно помечаетс�
     assert.ok(!String(navItemFor('Пациенты').className).split(/\s+/).includes('active'), 'активными остались два пункта');
 });
 
+// CLINIC_PROFILE_V1 / REFERENCE_LISTS_V1 (полировка по макету, 2026-10-10) —
+// пока открыт подэкран «Настроек» (Компания, Справочники, Сотрудники, CRM-канбан
+// и всё, что открывают плитки хаба), в меню выделены «Настройки» — и только они.
+// Раньше выделение гасло: «Настройки» узнавали только #settings… и #documents.
+test('подэкраны «Настроек» — плитки хаба — держат выделенным пункт «Настройки», и только его', async () => {
+    await perms_setFull();
+    const { GROUPS } = await import('../views/settings-hub.js?v=reflist1');
+    const src = read('public/js/admin.js');
+    const navAt = src.indexOf('const NAV = [');
+    const navIds = new Set([...src.slice(navAt, src.indexOf('\n];', navAt)).matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]));
+    assert.ok(navIds.has('settings') && navIds.has('inventory'), 'список меню NAV переименовали — тест смотрит не туда');
+    const routes = [...new Set(GROUPS.flatMap((g) => g.items || []).map((i) => i.route).filter(Boolean))];
+    for (const must of ['documents-settings', 'reference-lists', 'employees', 'crm-settings']) {
+        assert.ok(routes.includes(must), 'плитки «' + must + '» нет в хабе — тест смотрит не туда');
+    }
+    const activeLabels = () => navItems().filter((n) => String(n.className).split(/\s+/).includes('active')).map(labelOf);
+    const settingsOnly = () => [labelOf(navItemFor('Настройки'))];
+    let checked = 0;
+    for (const route of routes) {
+        await go(route);
+        const view = shell().state.view;
+        if (navIds.has(view)) continue;   // свой пункт меню («Товары и препараты» → «Закупки») выделяет себя сам
+        assert.deepEqual(activeLabels(), settingsOnly(), '#' + route + ' (' + view + '): выделено не «Настройки»');
+        checked++;
+    }
+    assert.ok(checked >= 10, 'проверено подэкранов: ' + checked);
+    // Подэкраны, открытые не плиткой, а изнутри разделов настроек (PARENT_OF → settings), — тоже.
+    for (const route of ['consultation-types', 'discounts-settings']) {
+        await go(route);
+        assert.deepEqual(activeLabels(), settingsOnly(), '#' + route + ': выделено не «Настройки»');
+    }
+    await go('patients');
+    assert.deepEqual(activeLabels(), [labelOf(navItemFor('Пациенты'))], 'ушли в другой раздел — выделение ушло с «Настроек»');
+});
+
 // ===========================================================================
 // 5. ЯЗЫК ДВИЖЕНИЯ
 // ===========================================================================

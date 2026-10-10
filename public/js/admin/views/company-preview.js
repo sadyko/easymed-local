@@ -17,10 +17,11 @@ import { logoSrc } from './company-logos.js';
 
 // Подписи — на языке ПРЕДПРОСМОТРА. Русские литералы — и статьи словаря:
 // i18n-coverage требует статью для каждого кириллического литерала.
+// channel — «канал @имя» в нижней строке (полировка по макету).
 const WORDS = {
-    ru: { call: 'Позвонить', route: 'Маршрут', site: 'Сайт' },
-    uz: { call: 'Qo‘ng‘iroq qilish', route: 'Yo‘nalish', site: 'Sayt' },
-    en: { call: 'Call', route: 'Route', site: 'Website' },
+    ru: { call: 'Позвонить', route: 'Маршрут', site: 'Сайт', channel: 'канал' },
+    uz: { call: 'Qo‘ng‘iroq qilish', route: 'Yo‘nalish', site: 'Sayt', channel: 'kanal' },
+    en: { call: 'Call', route: 'Route', site: 'Website', channel: 'channel' },
 };
 const text = (s) => document.createTextNode(String(s == null ? '' : s));
 
@@ -63,12 +64,18 @@ export function patientPreview(state, { lang = 'ru', parts = {}, logo = '' } = {
     if (v.instagram && !handleProblem('instagram', v.instagram)) btns.push(linkBtn('https://instagram.com/' + v.instagram.slice(1), 'Camera', v.instagram));
     if (v.website && !websiteProblem(v.website)) btns.push(linkBtn(v.website, 'Globe', w.site));
 
+    // CLINIC_PROFILE_V1 (полировка по макету) — нижняя строка «телефон · канал
+    // @имя», как в макете; телефон переехал сюда из-под названия (там — адрес).
+    // Канал — только годное имя, как и его кнопка.
+    const channel = v.telegram_channel && !handleProblem('telegram_channel', v.telegram_channel) ? v.telegram_channel : '';
+    const bottom = [v.phone ? String(v.phone).trim() : '', channel ? w.channel + ' ' + channel : ''].filter(Boolean).join(' · ');
+
     return h('div', { class: 'cpf-preview', lang },
         h('div', { class: 'cpf-preview-head' }, mark,
             h('div', { class: 'cpf-pname-box' },
                 h('b', { class: 'cpf-pname' }, text(name || '—')),
-                address ? h('span', { class: 'cpf-psub' }, text(address)) : null,
-                v.phone ? h('span', { class: 'cpf-psub' }, text(v.phone)) : null)),
+                address ? h('span', { class: 'cpf-psub' }, text(address)) : null)),
         aboutNode,
-        btns.length ? h('div', { class: 'cpf-pbtns' }, ...btns) : null);
+        btns.length ? h('div', { class: 'cpf-pbtns' }, ...btns) : null,
+        bottom ? h('span', { class: 'cpf-psub cpf-pline' }, text(bottom)) : null);
 }

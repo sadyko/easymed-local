@@ -104,3 +104,16 @@ test('get_clinic_by_slug: api_address_required — false в филиале и п
   becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
   assert.equal(getClinicBySlug(db, {}, null).api_address_required, false);
 });
+
+// BRANCH_PROFILE_V1 — строка branches этого здания: «Филиалы» помечают её «Это здание»,
+// «Компания» филиала берёт из неё адрес для партнёров, карту и телефон для сайта.
+test('get_clinic_by_slug: own_branch_id — строка этого здания (главное — A, филиал — своя буква)', async () => {
+  const { becomeSecondary } = await import('../branch-sync/identity.js');
+  const db = openDb(':memory:'); migrate(db);
+  assert.equal(getClinicBySlug(db, {}, null).own_branch_id, db.prepare("SELECT id FROM branches WHERE letter = 'A'").get().id);
+  becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
+  assert.equal(getClinicBySlug(db, {}, null).own_branch_id, db.prepare("SELECT id FROM branches WHERE letter = 'C'").get().id);
+  db.prepare('DELETE FROM branch_identity').run();
+  assert.equal(getClinicBySlug(db, {}, null).own_branch_id, null, 'нет строки установки — null, запись клиники не падает');
+  db.close();
+});

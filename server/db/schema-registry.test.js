@@ -443,3 +443,15 @@ test('admission_reviews: через /api/db отдаются метаданны�
     assert.ok(!canWrite('admission_reviews', op, 'admin'), op + ' открыт через /api/db');
   }
 });
+
+// BRANCH_PROFILE_V1 (mig 241) — профиль здания читают все, пишет право «Филиалы».
+test('branches: профиль здания (мигр. 241) — в чтении, вставке и правке; name_ru нет', () => {
+  const cols = ['name_uz', 'name_en', 'country_code', 'region_code', 'district_code', 'street_ru', 'street_uz',
+    'street_en', 'landmark_ru', 'landmark_uz', 'landmark_en', 'maps_url', 'show_public'];
+  for (const c of cols) {
+    assert.ok(readableColumns('branches').includes(c), 'чтение ' + c);
+    assert.ok(writableColumns('branches', 'insert').includes(c), 'вставка ' + c);
+    assert.ok(writableColumns('branches', 'update').includes(c), 'правка ' + c);
+  }
+  assert.ok(!readableColumns('branches').includes('name_ru'), 'RU — это name (db-query-schema.test.mjs:721-743 держит это)');
+});
