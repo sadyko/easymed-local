@@ -70,6 +70,16 @@ const roleLabel = (r) => (ALL_ASSIGNABLE_ROLES.find(x => x[0] === r) || [r, r])[
 // нередактируемым.
 const fromMain = (u) => !!u && u.is_local === false;
 const staffLabel = (s) => (STAFF_TYPES.find(x => x[0] === s) || ['', 'Не выбрана'])[1];
+// DOCTOR_PROFILE_V1 — колонки макета в списке: специальности строки (из списка, у
+// записанного до него — одна колонка) и показ на сайте и у партнёров — теми же
+// словами, что список «Филиалов» (шаг 4).
+const specNamesOf = (u) => (Array.isArray(u.specialties) && u.specialties.length
+    ? u.specialties.map((s) => (s && typeof s === 'object' ? s.name : s)) : (u.specialty ? [u.specialty] : [])).filter(Boolean);
+function publicTag(u, branchesById) {
+    const state = doctorPublicState(u, branchesById);
+    if (state === 'shown') return h('span', { class: 'emp-pub on' }, Icon('Globe', { size: 12 }), ' ', 'На сайте');
+    return h('span', { class: 'emp-pub' }, 'Скрыт с сайта', state === 'branch_hidden' ? h('span', { class: 'dpp-sub' }, 'филиал скрыт') : null);
+}
 // Routing type (раздел) — the fixed easymed set (mirrors services.js).
 const SERVICE_TYPES = [['imaging', 'Диагностика'], ['consultation', 'Консультации'], ['lab', 'Лаборатория'], ['procedure', 'Процедуры'], ['other', 'Хирургия']];   // SERVICE_TYPES_FIVE_V1 — the five the editor offers; a legacy 'radiology' row reads as «Диагностика»
 const svcTypeVal = (s) => s.type || (s.is_lab ? 'lab' : 'consultation');
@@ -201,15 +211,17 @@ async function paint(root) {
 
     root.appendChild(h('div', { class: 'card' },
         h('div', { class: 'card-header' }, h('h3', null, Icon('ID', { size: 16 }), ' Список сотрудников', countEl)),
-        h('table', { class: 'tbl' },
+        h('div', { class: 'emp-table-wrap' }, h('table', { class: 'tbl' },   // DOCTOR_PROFILE_V1 — колонок больше: на узком экране прокрутка внутри карточки
             h('thead', null,
-                h('tr', null, h('th', null, 'Имя'), h('th', null, 'Категория'), h('th', null, 'Роль'), h('th', null, 'Телефон'), h('th', null, 'Статус'), h('th', null, '')),
+                h('tr', null, h('th', null, 'Имя'), h('th', null, 'Категория'),
+                    h('th', null, 'Специальность'), h('th', null, 'Приём'), h('th', null, 'Сайт и партнёры'),   // DOCTOR_PROFILE_V1 — колонки макета
+                    h('th', null, 'Роль'), h('th', null, 'Телефон'), h('th', null, 'Статус'), h('th', null, '')),
                 h('tr', { class: 'filter-row', style: { background: 'var(--ink-25, #f6f8f9)' } },
-                    h('th', null, nameFlt), h('th', null, staffFlt), h('th', null, roleFlt),
-                    h('th', null, phoneFlt), h('th', null),
+                    h('th', null, nameFlt), h('th', null, staffFlt), h('th', null), h('th', null), h('th', null),   // DOCTOR_PROFILE_V1
+                    h('th', null, roleFlt), h('th', null, phoneFlt), h('th', null),
                     h('th', { style: { textAlign: 'right' } }, resetBtn)),
             ),
-            tbody),
+            tbody)),
     ));
 
     // Категория в таблице показывается с подстановкой: без staff_type врач всё
@@ -267,9 +279,10 @@ async function paint(root) {
             const why = showArchive
                 ? (active ? 'Ни один отключённый сотрудник не подходит под фильтры.' : 'В архиве пусто — все сотрудники работают.')
                 : (active ? 'Ни один сотрудник не подходит под фильтры.' : 'Нет сотрудников.');
-            tbody.appendChild(h('tr', null, h('td', { colspan: '6', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, why)));
+            tbody.appendChild(h('tr', null, h('td', { colspan: '9', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, why)));   // DOCTOR_PROFILE_V1 — девять колонок
             return;
         }
+        const branchesById = new Map(branches.map((b) => [Number(b.id), b]));   // DOCTOR_PROFILE_V1
         for (const u of rows) {
             const openBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Открыть');
             // Кнопки «Вернуть» у сотрудника главной клиники нет: сервер ответил
@@ -290,6 +303,10 @@ async function paint(root) {
                     // чтобы понять, кого из них он вообще вправе править.
                     fromMain(u) ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '8px', padding: '1px 7px', border: '1px solid var(--ink-100)', borderRadius: '20px', whiteSpace: 'nowrap' } }, 'Главная клиника') : null),
                 h('td', null, u.staff_type ? staffLabel(u.staff_type) : (u.is_doctor ? 'Врачи' : '—')),
+                // DOCTOR_PROFILE_V1 — специальность, приём, показ на сайте и у партнёров (у не-врача — «—»).
+                h('td', null, document.createTextNode(specNamesOf(u).map((n) => tr(n)).join(', ') || '—')),
+                h('td', null, u.is_doctor ? (u.scheduling_mode === 'live_queue' ? 'Живая очередь' : 'По записи') : '—'),
+                h('td', null, u.is_doctor ? publicTag(u, branchesById) : '—'),
                 h('td', null, roleTitle(u)),   // CUSTOM_ROLES_V1 — своя роль зовётся своим именем
                 h('td', null, u.phone || '—'),
                 h('td', null, u.is_active ? h('span', { style: { color: 'var(--ok-700, #1a7a44)', fontWeight: 600, fontSize: '12.5px' } }, '● Активен') : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '○ Неактивен')),
@@ -300,7 +317,7 @@ async function paint(root) {
 
     archiveBtn.addEventListener('click', () => { showArchive = !showArchive; renderRows(); });
 
-    tbody.appendChild(h('tr', null, h('td', { colspan: '6', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Загрузка…')));
+    tbody.appendChild(h('tr', null, h('td', { colspan: '9', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Загрузка…')));   // DOCTOR_PROFILE_V1 — девять колонок
     try {
         if (!departments.length || !branches.length || !services.length) {
             const [dep, br, sv, st, sc] = await Promise.all([
@@ -328,7 +345,7 @@ async function paint(root) {
         renderRows();
     } catch (e) {
         clear(tbody);
-        tbody.appendChild(h('tr', null, h('td', { colspan: '6', style: { textAlign: 'center', padding: '18px', color: 'var(--crit-600)' } }, trf('Ошибка: {msg}', { msg: e.message || e }))));
+        tbody.appendChild(h('tr', null, h('td', { colspan: '9', style: { textAlign: 'center', padding: '18px', color: 'var(--crit-600)' } }, trf('Ошибка: {msg}', { msg: e.message || e }))));   // DOCTOR_PROFILE_V1 — девять колонок
     }
 }
 

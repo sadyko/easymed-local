@@ -7790,3 +7790,8 @@ table.list tr.is-off td { color: var(--ink-400); }
 .dpp-sec > h4 { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink-900); }
 .dpp-entries { display: grid; gap: 2px; font-size: 13.5px; }
 /* /DOCTOR_PROFILE_V1 — «Публичный профиль» (задача 14; приём и превью — задача 15) */
+/* DOCTOR_PROFILE_V1 — список сотрудников: показ на сайте; таблица прокручивается внутри карточки. */
+.emp-table-wrap { overflow-x: auto; }
+.emp-pub { display: inline-grid; gap: 2px; font-size: 12.5px; color: var(--ink-500); }
+.emp-pub.on { display: inline-flex; align-items: center; gap: 4px; color: var(--ok-700); font-weight: 600; }
+/* /DOCTOR_PROFILE_V1 — список сотрудников */

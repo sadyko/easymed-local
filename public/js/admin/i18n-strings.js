@@ -11629,4 +11629,6 @@ export const STRINGS = {
   "Нужен хотя бы один язык": {"en":"At least one language is required","ru":"Нужен хотя бы один язык","uz":"Kamida bitta til kerak"},   // DOCTOR_PROFILE_V1
   "Биография": {"en":"Biography","ru":"Биография","uz":"Tarjimai hol"},   // DOCTOR_PROFILE_V1
   "Соцсети, образование и опыт": {"en":"Social media, education and experience","ru":"Соцсети, образование и опыт","uz":"Ijtimoiy tarmoqlar, ta’lim va tajriba"},   // DOCTOR_PROFILE_V1
+  // DOCTOR_PROFILE_V1 — список сотрудников: «Сайт и партнёры» (задача 16)
+  "филиал скрыт": {"en":"branch hidden","ru":"филиал скрыт","uz":"filial yashirilgan"},   // DOCTOR_PROFILE_V1
 };

@@ -317,3 +317,17 @@ test('DOCTOR_PROFILE_V1: филиал врача скрыт с сайта — к
   const s = await openProfileTab('dr.pub');
   assert.match(textOf(s.card), /Филиал врача скрыт с сайта/);
 });
+
+// DOCTOR_PROFILE_V1 — список сотрудников: колонки макета (задача 16).
+test('DOCTOR_PROFILE_V1: список — специальность, приём, «Сайт и партнёры»; скрытый филиал прячет врача', async () => {
+  document.body.children.length = 0;
+  const container = mk('div');
+  await renderEmployees(container);
+  await flush();
+  const head = tags(container, 'th').map((t) => textOf(t).trim());
+  for (const col of ['Специальность', 'Приём', 'Сайт и партнёры', 'Роль', 'Телефон']) assert.ok(head.includes(col), col);
+  const rowOf = (u) => tags(container, 'tr').find((r) => textOf(r).includes('@' + u));
+  assert.match(textOf(rowOf('dr.karimov')), /Кардиолог[\s\S]*По записи[\s\S]*Скрыт с сайта/);
+  assert.match(textOf(rowOf('dr.shown')), /На сайте/);
+  assert.match(textOf(rowOf('dr.pub')), /Скрыт с сайта[\s\S]*филиал скрыт/);
+});
