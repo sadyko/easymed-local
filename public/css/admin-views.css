@@ -7851,3 +7851,57 @@ table.list tr.is-off td { color: var(--ink-400); }
 .emp-page .page-head, .emp-page .page-head-actions { flex-wrap: wrap; }
 .emp-page .page-head > div:first-child { flex: 1 1 260px; min-width: 0; }
 /* /DOCTOR_PROFILE_V1 — карточка на ширине телефона */
+/* SERVICES_PACKAGES_V1 — «Пакеты услуг» и «Услуги для сайта и партнёров» (шаг 6 API клиники;
+   макет screen-packages.js, screen-services.js). Таблицы на узкой ширине прокручиваются в своей
+   карточке (.pkg-scroll), страница вбок не едет; поля и итоги — в один столбец на телефоне. */
+.pkg-page .card, .svp-page .card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.pkg-page .card-header, .svp-page .card-header { flex-wrap: wrap; row-gap: 8px; }
+.pkg-scroll { max-width: 100%; overflow-x: auto; }
+.pkg-tbl { width: 100%; }
+.pkg-tbl td, .pkg-tbl th { vertical-align: top; }
+.pkg-tbl tr.row-click { cursor: pointer; }
+.pkg-tbl tr.row-click:hover td { background: var(--ink-25); }
+.pkg-tbl tr.row-click:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
+.pkg-tbl tr.pkg-off td { color: var(--ink-500); }
+.pkg-r { text-align: right; }
+.pkg-strike { text-decoration: line-through; color: var(--ink-500); }
+.pkg-name { font-size: 13.5px; font-weight: 600; color: var(--ink-900); overflow-wrap: anywhere; }
+.pkg-why { font-size: 12.5px; margin-top: 2px; }
+.pkg-empty { padding: 12px 0; font-size: 13.5px; }
+.pkg-lock { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
+.pkg-chips { display: flex; gap: 4px; margin-top: 4px; }
+.pkg-chip { padding: 0 6px; border: 1px solid var(--ink-100); border-radius: 4px; font-size: 12.5px; font-weight: 700; color: var(--ink-500); }
+.pkg-chip.on { border-color: var(--ok-500); background: var(--ok-50); color: var(--ok-700); }
+.pkg-card { width: 920px; max-width: calc(100vw - 32px); }
+/* Подвал окна: «Отмена» слева, «Сохранить» справа (макет); на телефоне кнопки переносятся, а не уезжают за левый край. */
+.pkg-card .modal-foot { flex-wrap: wrap; row-gap: 8px; }
+.pkg-card .modal-foot .grow { flex: 1 1 auto; }
+.pkg-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+.pkg-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
+.pkg-sec h4 { margin: 0; font-size: 15px; color: var(--ink-900); }
+.pkg-sec h4 small { font-size: 12.5px; font-weight: 400; color: var(--ink-500); }
+.pkg-sec .cpf-set { min-width: 0; }
+.pkg-pick { display: grid; gap: 4px; max-height: 240px; overflow-y: auto; }
+.pkg-pick-row { display: flex; justify-content: space-between; gap: 12px; width: 100%; padding: 8px 10px; border: 1px solid var(--ink-100); border-radius: 8px; background: none; font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.pkg-pick-row:hover { background: var(--ink-25); }
+.pkg-none { padding: 8px 0; font-size: 13.5px; }
+.pkg-x { border: 0; background: none; padding: 2px; color: var(--ink-500); cursor: pointer; }
+.pkg-x:hover { color: var(--crit-600); }
+.pkg-x-cell { width: 36px; }
+.pkg-mode-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.pkg-modes { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--ink-100); border-radius: 8px; overflow: hidden; }
+.pkg-mode { padding: 6px 12px; border: 0; background: none; font: inherit; font-size: 13.5px; color: var(--ink-700); cursor: pointer; }
+.pkg-mode.on { background: var(--primary-600); color: var(--white); }
+.pkg-mode:disabled { cursor: default; }
+.pkg-value-box { display: inline-flex; align-items: center; gap: 8px; }
+.pkg-value { width: min(160px, 100%); }
+.pkg-sum { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 10px; }
+.pkg-sum > div { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--ink-100); border-radius: 10px; }
+.pkg-sum > div span { font-size: 12.5px; color: var(--ink-500); }
+.pkg-sum > div b { font-size: 17px; color: var(--ink-900); font-variant-numeric: tabular-nums; }
+.pkg-sum > div small { font-size: 12.5px; color: var(--ink-500); }
+.pkg-sum > div.main { border-color: var(--primary-500); background: var(--primary-50); }
+.pkg-grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 12px; }
+.pkg-warn { color: var(--warn-700); }
+.pkg-note { margin-top: 4px; }
+/* /SERVICES_PACKAGES_V1 */
