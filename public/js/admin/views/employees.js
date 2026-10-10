@@ -128,7 +128,7 @@ let serviceCategories = [];  // and categories (service_categories)
 export async function renderEmployees(container) {
     clear(container);
     showArchive = false;   // вход в раздел — всегда со списка работающих
-    const root = h('div', { class: 'fade-in' });
+    const root = h('div', { class: 'fade-in emp-page' });   // DOCTOR_PROFILE_V1 — .emp-page: шапка списка переносится на ширине телефона
     container.appendChild(root);
     await paint(root);
 }
@@ -546,8 +546,11 @@ function openEditor(user, root) {
     const close = () => overlay.remove();
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
-    const rail = h('div', { style: { width: '230px', flex: '0 0 230px', borderRight: '1px solid var(--ink-100)', padding: '10px 8px', overflowY: 'auto' } });
-    const body = h('div', { style: { flex: 1, minWidth: 0, padding: '18px 22px', overflowY: 'auto' } });
+    // DOCTOR_PROFILE_V1 — раскладка рейки и полей — классами (admin-views.css
+    // .emp-ed-*): на ширине телефона рейка встаёт над полями. Прежняя рейка
+    // 230 px сбоку оставляла полям около 50 px, и раздел ехал вбок.
+    const rail = h('div', { class: 'emp-ed-rail' });
+    const body = h('div', { class: 'emp-ed-body' });
     const ringWrap = h('div', { style: { textAlign: 'center' } });
     const headWrap = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 } });
     const dirtyEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
@@ -1095,9 +1098,9 @@ function openEditor(user, root) {
         } catch (e) { toast(e.message || 'Не удалось сохранить.', 'fail'); saveBtn.disabled = false; saveBtn.textContent = prev; }
     }
 
-    overlay.appendChild(h('div', { class: 'modal-card', style: { width: '1080px', maxWidth: 'calc(100vw - 32px)', height: 'min(90vh, 780px)', display: 'flex', flexDirection: 'column' } },   // RATES_FILTERS_V2 — room for the service name
+    overlay.appendChild(h('div', { class: 'modal-card emp-ed-card', style: { width: '1080px', maxWidth: 'calc(100vw - 32px)', height: 'min(90vh, 780px)', display: 'flex', flexDirection: 'column' } },   // RATES_FILTERS_V2 — room for the service name
         h('header', { class: 'modal-head', style: { alignItems: 'center' } }, headWrap, ringWrap, h('button', { class: 'modal-close', onclick: close }, '×')),
-        h('div', { style: { display: 'flex', flex: 1, minHeight: 0 } }, rail, body),
+        h('div', { class: 'emp-ed-main' }, rail, body),   // DOCTOR_PROFILE_V1 — на телефоне один столбец
         // Кнопок «Сохранить» и «Удалить» у карточки главной клиники нет вовсе —
         // не отключённых, а отсутствующих: отключённая кнопка предлагает
         // действие и молчит о том, почему оно недоступно, а причина уже сказана

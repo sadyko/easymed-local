@@ -7828,3 +7828,24 @@ table.list tr.is-off td { color: var(--ink-400); }
 /* Подпись над кнопками языков и «15 минут» — как подпись поля (.field label), не как заголовок. */
 .field > .dpp-label { font-size: 12.5px; font-weight: 500; color: var(--ink-600); letter-spacing: .005em; }
 /* /DOCTOR_PROFILE_V1 — приём и превью */
+/* DOCTOR_PROFILE_V1 — карточка сотрудника на ширине телефона: рейка разделов —
+   над полями, а не сбоку (рейка 230 px оставляла полям около 50 px, и раздел
+   ехал вбок). На широком экране — как было (значения прежних инлайн-стилей). */
+.emp-ed-main { display: flex; flex: 1; min-height: 0; }
+.emp-ed-rail { width: 230px; flex: 0 0 230px; border-right: 1px solid var(--ink-100); padding: 10px 8px; overflow-y: auto; }
+.emp-ed-body { flex: 1; min-width: 0; padding: 18px 22px; overflow-y: auto; }
+@media (max-width: 640px) {
+  .emp-ed-main { flex-direction: column; }
+  .emp-ed-rail { width: auto; flex: 0 0 auto; max-height: 32%; border-right: 0; border-bottom: 1px solid var(--ink-100); }
+  .emp-ed-body { flex: 1 1 auto; min-height: 0; padding: 14px 12px; }
+  /* «Удалить» и «Сменить пароль» уезжали за левый край окна (подвал прижат вправо и не переносился). */
+  .emp-ed-card .modal-foot { flex-wrap: wrap; row-gap: 8px; }
+}
+/* Группы на трёх языках сжимаются вместе с разделом (у fieldset min-width — по содержимому). */
+.dpp .cpf-set { min-width: 0; }
+/* Специальность: кнопка «Убрать» — в одной строке со списком, а не под ним. */
+.spec-row select { width: auto; flex: 1 1 12rem; }
+/* Список сотрудников: шапка с кнопками переносится, а не выталкивает страницу вбок (как .brf-page шага 4). */
+.emp-page .page-head, .emp-page .page-head-actions { flex-wrap: wrap; }
+.emp-page .page-head > div:first-child { flex: 1 1 260px; min-width: 0; }
+/* /DOCTOR_PROFILE_V1 — карточка на ширине телефона */
