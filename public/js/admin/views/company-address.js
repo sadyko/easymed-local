@@ -67,18 +67,28 @@ export function addressCard(state, { onChange = null, secondary = false } = {}) 
     };
     let geo = null;
     function mountGeo() {
+        // CLINIC_PROFILE_V1 (ревью C1, M4) — первый вызов onChange — показ
+        // сохранённого (каскад выбрал коды из пресета, страну по умолчанию или
+        // прежний пункт «(не используется)»): строку он не меняет. Коды пишутся
+        // только после выбора человеком — нетронутое сохранение ничего не шлёт,
+        // и ни один сохранённый код не теряется молча.
+        let shown = false;
         const mine = geoCascade({ by: 'code', onChange: (sel) => {
             if (mine !== geo) return;   // ответ прежнего каскада — не наш
             parts = sel;
-            state.country_code = sel.country ? sel.country.code : '';
-            state.region_code = sel.region ? sel.region.code : '';
-            state.district_code = sel.district ? sel.district.code : '';
+            if (shown) {
+                state.country_code = sel.country ? sel.country.code : '';
+                state.region_code = sel.region ? sel.region.code : '';
+                state.district_code = sel.district ? sel.district.code : '';
+            }
+            shown = true;
             if (sel.region) boxes.region.err.set('');
             if (sel.district) boxes.district.err.set('');
             paintFull(); changed();
         } });
         geo = mine;
-        mine.preset({ country: state.country_code || 'UZ', region: state.region_code, district: state.district_code });
+        // Пустая страна — каскад сам предложит Узбекистан (не «сохранённый» код).
+        mine.preset({ country: state.country_code, region: state.region_code, district: state.district_code });
         boxes.country.put(mine.countrySel);
         boxes.region.put(mine.regionSel);
         boxes.district.put(mine.districtSel);

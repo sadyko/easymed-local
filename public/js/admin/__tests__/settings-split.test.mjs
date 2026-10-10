@@ -136,6 +136,13 @@ const { setLicence } = await import('../licence.js');
 const { COMPANY_COLUMNS } = await import('../../shared/clinic-profile.js');
 
 function setUser(u) { globalThis.window.easymed.state.user = u; }
+// CLINIC_PROFILE_V1 — правка RU-названия «Компании», как её делает человек.
+function renameClinic(root, name) {
+  const inp = walk(root).find((n) => n.tagName === 'INPUT' && n.value === docSettingsRow.clinic_name);
+  assert.ok(inp, 'нет поля названия с текущим значением');
+  inp.value = name;
+  inp.dispatchEvent({ type: 'input', target: inp, currentTarget: inp });
+}
 const ADMIN = { id: 1, role: 'admin', is_admin: true, is_super_admin: false };
 
 // One module owned, one not — so the modules list has both a «Подключён» row
@@ -260,13 +267,16 @@ test('«Компания»: сохранение шлёт ТОЛЬКО свои 
   const root = mk('div');
   await renderDocumentsSettings(root, { onNavigate: () => {} });
 
+  // CLINIC_PROFILE_V1 (ревью C1) — уходит только изменённое: правим название.
+  renameClinic(root, 'Нурафшон Мед Плюс');
   findButtonByText(root, /Сохранить/).click();
   await new Promise((r) => setTimeout(r, 20));
 
   assert.ok(lastDocUpdate, 'запрос на обновление ушёл');
-  // CLINIC_PROFILE_V1 — колонки компании теперь — профиль клиники (COMPANY_COLUMNS).
-  assert.deepStrictEqual(Object.keys(lastDocUpdate).sort(), [...COMPANY_COLUMNS].sort(),
-    'ровно колонки компании — и ни одной колонки печатного шаблона');
+  // CLINIC_PROFILE_V1 — колонки компании теперь — профиль клиники (COMPANY_COLUMNS),
+  // и из них — только изменённые.
+  for (const c of Object.keys(lastDocUpdate)) assert.ok(COMPANY_COLUMNS.includes(c), c + ' — колонка компании');
+  assert.deepStrictEqual(lastDocUpdate, { clinic_name: 'Нурафшон Мед Плюс' }, 'только изменённое — и ни одной колонки печатного шаблона');
   for (const c of ['paper_size', 'show_watermark', 'footer_note', 'legal_note', 'lab_scope']) {
     assert.ok(!(c in lastDocUpdate), c + ' — не колонка компании');
   }
@@ -282,10 +292,23 @@ test('«Компания»: сохранение шлёт ТОЛЬКО свои 
 test('«Компания» без логотипа: сохранение шлёт пустую строку, не null', async () => {
   const root = mk('div');
   await renderDocumentsSettings(root, { onNavigate: () => {} });
+  // CLINIC_PROFILE_V1 (ревью C1) — нетронутый логотип не шлётся вовсе, а null
+  // не уходит ни в одной колонке (база отклоняет: NOT NULL).
+  renameClinic(root, 'Нурафшон');
   findButtonByText(root, /Сохранить/).click();
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(lastDocUpdate, 'запрос на обновление ушёл');
-  assert.strictEqual(lastDocUpdate.logo_data_url, '', 'null база отклоняет: колонка NOT NULL');
+  assert.ok(!Object.values(lastDocUpdate).includes(null), 'null база отклоняет: колонка NOT NULL');
+  assert.ok(!('logo_data_url' in lastDocUpdate), 'логотип не трогали — не шлётся');
+});
+
+// CLINIC_PROFILE_V1 (ревью C1) — нетронутое сохранение ничего не пишет.
+test('«Компания»: нетронутое сохранение не шлёт ни одной колонки', async () => {
+  const root = mk('div');
+  await renderDocumentsSettings(root, { onNavigate: () => {} });
+  findButtonByText(root, /Сохранить/).click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(lastDocUpdate, null, 'нечего сохранять — запроса нет');
 });
 
 // --- старая ссылка ------------------------------------------------------------

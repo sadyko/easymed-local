@@ -76,7 +76,48 @@ const refs = { container: null, previewEl: null, saveBtn: null, errNote: null, c
     // CLINIC_PROFILE_V1 — строки ошибок по колонкам; доступность списков адреса;
     // «Как это увидят пациенты» и его язык (не язык интерфейса).
     errs: {}, geoAvailability: () => ({}), logos: null, address: null, map: null,
-    patientEl: null, langBtns: null, previewLang: 'ru' };
+    patientEl: null, langBtns: null, previewLang: 'ru',
+    // CLINIC_PROFILE_V1 (ревью C1) — что прочитано из базы (снимок для сравнения)
+    // и удалось ли прочитать вообще.
+    loaded: null, loadFailed: false };
+
+// CLINIC_PROFILE_V1 (ревью C1) — СОХРАНЯЕТСЯ ТОЛЬКО ИЗМЕНЁННОЕ.
+//
+// Строка не прочиталась (сервер перезапускается, сеть) — экран показывает
+// значения по умолчанию, и «Сохранить» записало бы их поверх всей «Компании»:
+// названия, адрес для бланков, телефон, лицензию, печатную копию логотипа,
+// пути логотипов, ссылки. Синхронизация зданий унесла бы это во все филиалы.
+// До шага 3 такое сохранение случайно спасал отказ базы на null в логотипе;
+// задача 1 этот отказ убрала. Теперь два замка:
+//   1) строка не прочиталась — «Сохранить» выключено, объяснение вверху;
+//   2) уходят только колонки, которые отличаются от прочитанной строки
+//      (снимок refs.loaded): нетронутое поле не может быть затёрто ничем.
+// Значения сравниваются после тех же приведений, что и при записи.
+const ERR_LOAD = 'Не удалось загрузить данные компании — обновите страницу, чтобы сохранить.';
+const ADDRESS_COLUMNS = ['country_code', 'region_code', 'district_code', 'street_ru', 'street_uz', 'street_en'];
+function valuesOf(src) {
+    const v = normalizeProfile(src);
+    const out = {};
+    for (const c of COMPANY_COLUMNS) out[c] = v[c] == null ? DEFAULTS[c] : v[c];
+    out.logo_data_url = v.logo_data_url || '';    // null отклоняет база (NOT NULL)
+    out.accent_color = v.accent_color || '#167873';
+    return out;
+}
+function changedValues(columns) {
+    const now = valuesOf(state);
+    const was = refs.loaded || {};
+    const out = {};
+    for (const c of columns) if (String(now[c]) !== String(was[c] == null ? '' : was[c])) out[c] = now[c];
+    return out;
+}
+function paintLoadFailed() {
+    const btn = refs.saveBtn;
+    if (btn) {
+        btn.disabled = !!refs.loadFailed;
+        if (refs.loadFailed) btn.setAttribute('disabled', ''); else if (typeof btn.removeAttribute === 'function') btn.removeAttribute('disabled');
+    }
+    if (refs.errNote) refs.errNote.style.display = refs.loadFailed ? '' : 'none';
+}
 
 // CLINIC_PROFILE_V1 — «КОМПАНИЯ» В ФИЛИАЛЕ. Общее для клиники (названия,
 // описание, логотипы, сайт и соцсети, лицензия, цвет — COMPANY_CLINIC_WIDE)
@@ -91,6 +132,8 @@ const isSecondaryBuilding = () => !!(typeof window !== 'undefined' && window.CLI
 export async function renderDocumentsSettings(container, { onNavigate } = {}) {
     refs.container = container;
     secondary = isSecondaryBuilding();   // CLINIC_PROFILE_V1
+    refs.loaded = null;                  // CLINIC_PROFILE_V1 (ревью C1)
+    refs.loadFailed = false;
     state = { ...DEFAULTS };
     mount(onNavigate);
     await load();
@@ -215,8 +258,9 @@ function buildForm(card) {
     const accentInp  = h('input', { type: 'color', oninput: onText('accent_color'), disabled: secondary });
 
     refs.controls = { names, about, addressInp, phoneInp, emailInp, licenseInp, accentInp };
-    refs.errNote = h('div', { class: 'empty', style: { display: 'none', margin: '0 16px 12px' } },
-        'Не удалось загрузить данные компании — показаны значения по умолчанию.');
+    // CLINIC_PROFILE_V1 (ревью C1) — строка не прочиталась: сохранять нечего и
+    // опасно (значения по умолчанию затёрли бы «Компанию»), «Сохранить» выключено.
+    refs.errNote = h('div', { class: 'empty', role: 'alert', style: { display: 'none', margin: '0 16px 12px' } }, ERR_LOAD);
 
     card.appendChild(h('div', { class: 'card-header' }, h('h3', null, Icon('Building', { size: 16 }), ' ', 'Реквизиты клиники')));
     card.appendChild(refs.errNote);
@@ -305,7 +349,8 @@ async function load() {
         const { data, error } = await supabase.from('doc_settings').select('*').eq('id', 1).single();
         if (error) throw error;
         setState(data);   // CLINIC_PROFILE_V1 — тот же объект (карточки держат ссылку)
-        if (refs.errNote) refs.errNote.style.display = 'none';
+        refs.loaded = valuesOf(state);   // CLINIC_PROFILE_V1 (ревью C1) — снимок прочитанного
+        refs.loadFailed = false;
     } catch (e) {
         // tr() on the fixed sentence, the server's own message appended raw —
         // the convention every RPC-facing screen here follows (activation.js,
@@ -313,8 +358,10 @@ async function load() {
         // translatable at all.
         toast(tr('Не удалось загрузить данные компании.') + ' ' + ((e && e.message) || e), 'fail');
         setState(null);
-        if (refs.errNote) refs.errNote.style.display = '';
+        refs.loaded = null;
+        refs.loadFailed = true;   // CLINIC_PROFILE_V1 (ревью C1) — сохранять нечем: выключено
     }
+    paintLoadFailed();
     applyStateToControls();
     // CLINIC_PROFILE_V1 — списки адреса грузятся один раз, уже с сохранёнными
     // кодами: каскад выбирает их только из пресета, заданного до прихода списков.
@@ -335,34 +382,42 @@ function paintSaveBtn(btn, busy) {
 
 async function save() {
     const btn = refs.saveBtn;   // CLINIC_API_FIX_V1 — та же кнопка, что гасили, даже если экран перерисуют
+    // CLINIC_PROFILE_V1 (ревью C1) — строка не прочиталась: не сохранять ничего
+    // (кнопка выключена; это — на случай, если нажатие всё же дошло).
+    if (refs.loadFailed || !refs.loaded) { toast(tr(ERR_LOAD), 'fail'); return; }
+    // SETTINGS_SPLIT_V1 — ровно те поля, которыми управляет этот экран.
+    // paper_size / show_watermark / footer_note / legal_note НЕ шлются
+    // намеренно: /api/db обновляет только перечисленные колонки, поэтому
+    // то, что клиника ввела в них раньше, остаётся в базе нетронутым, а не
+    // затирается значениями по умолчанию из отсутствующей формы.
+    // CLINIC_PROFILE_V1 — «эти поля» теперь COMPANY_COLUMNS (lab_scope среди
+    // них нет — его меняет только администратор, в другом месте); филиал шлёт
+    // только своё у здания (общее приезжает из главного, /api/db отказал бы
+    // его правке); и из них — только ИЗМЕНЁННЫЕ (ревью C1).
+    const payload = changedValues(secondary ? COMPANY_BUILDING : COMPANY_COLUMNS);
+    const keys = Object.keys(payload);
+    if (!keys.length) { showProblems({}); toast(tr('Нет изменений'), 'info'); return; }
     // CLINIC_PROFILE_V1 — сначала привести (https://, @имя, пробелы) и проверить
     // теми же правилами, что знает сервер (shared/clinic-profile.js). Ошибка —
-    // объяснение под полем и тост; запрос не уходит.
+    // объяснение под полем и тост; запрос не уходит. Проверяется изменённое:
+    // ссылка — если её меняли, адрес для партнёров — если меняли его часть
+    // (прежние данные, которых не трогали, сохранение не останавливают).
     const v = normalizeProfile(state);
-    const problems = companyProblems(v, refs.geoAvailability());
+    const all = companyProblems(v, refs.geoAvailability());
+    const addressTouched = keys.some((c) => ADDRESS_COLUMNS.includes(c));
+    const problems = {};
+    for (const [k, msg] of Object.entries(all)) {
+        if (keys.includes(k) || (addressTouched && (ADDRESS_COLUMNS.includes(k)))) problems[k] = msg;
+    }
     showProblems(problems);
     if (Object.keys(problems).length) { toast(tr('Проверьте выделенные поля.'), 'fail'); return; }
     btn.disabled = true;
     paintSaveBtn(btn, true);
     try {
-        // SETTINGS_SPLIT_V1 — ровно те поля, которыми управляет этот экран.
-        // paper_size / show_watermark / footer_note / legal_note НЕ шлются
-        // намеренно: /api/db обновляет только перечисленные колонки, поэтому
-        // то, что клиника ввела в них раньше, остаётся в базе нетронутым, а не
-        // затирается значениями по умолчанию из отсутствующей формы.
-        // CLINIC_PROFILE_V1 — «эти поля» теперь COMPANY_COLUMNS; lab_scope
-        // среди них нет (его меняет только администратор, в другом месте).
-        const payload = {};
-        // CLINIC_PROFILE_V1 — филиал шлёт только своё у здания: общее для
-        // клиники приезжает из главного, и /api/db отказал бы его правке.
-        for (const c of (secondary ? COMPANY_BUILDING : COMPANY_COLUMNS)) payload[c] = v[c] == null ? DEFAULTS[c] : v[c];
-        if (!secondary) {
-            payload.logo_data_url = v.logo_data_url || '';    // null отклоняет база (NOT NULL)
-            payload.accent_color = v.accent_color || '#167873';
-        }
         const { data, error } = await supabase.from('doc_settings').update(payload).eq('id', 1).select().single();
         if (error) throw error;
-        setState(data || payload);
+        setState(data || { ...state, ...payload });
+        refs.loaded = valuesOf(state);   // CLINIC_PROFILE_V1 (ревью C1) — новый снимок: записанное
         applyStateToControls();
         renderPreview();
         toast(tr('Сохранено'), 'ok');

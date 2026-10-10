@@ -166,6 +166,8 @@ let docRow;
 let lastUpdate;
 let uploads;
 let nextStorageError = null;   // { status, error } — отказ хранилища на следующую загрузку
+let failNextDocSelect = false; // CLINIC_PROFILE_V1 (ревью C1) — чтение doc_settings отвечает 503 (сервер перезапускается)
+let geoTables = GEO;           // CLINIC_PROFILE_V1 (ревью I1) — справочник подменяется на «настоящие» id
 // Строка doc_settings после миграции 240: прежние поля заполнены, новые пусты.
 function freshRow(extra = {}) {
     const row = { id: 1, paper_size: 'A5', show_watermark: 1, footer_note: 'Спасибо за визит.', legal_note: 'Электронный документ.', lab_scope: 'building' };
@@ -195,11 +197,15 @@ globalThis.fetch = async (url, opts = {}) => {
         try { desc = JSON.parse(opts.body || '{}'); } catch (_) { /* пусто */ }
         const op = desc.op || 'select';
         if (desc.table === 'doc_settings') {
+            if (op === 'select' && failNextDocSelect) {
+                failNextDocSelect = false;
+                return { ok: false, status: 503, json: async () => ({ error: { code: 'unavailable', message: 'server restarting' } }) };
+            }
             if (op === 'update') { lastUpdate = desc.values; docRow = { ...docRow, ...desc.values }; }
             return ok({ data: { ...docRow } });
         }
-        if (GEO[desc.table]) {
-            let rows = GEO[desc.table].filter((r) => r.active);
+        if (geoTables[desc.table]) {
+            let rows = geoTables[desc.table].filter((r) => r.active);
             for (const f of desc.filters || []) {
                 if (f.op === 'eq' && f.col !== 'active') rows = rows.filter((r) => String(r[f.col]) === String(f.val));
             }
@@ -303,7 +309,8 @@ test('названия RU / UZ / EN показывают clinic_name / name_uz /
     assert.equal(lastUpdate.name_uz, 'Shifo');
     assert.equal(lastUpdate.name_en, 'Shifo Clinic');
     assert.equal(lastUpdate.about_ru, 'Семейная клиника.');
-    assert.equal(lastUpdate.clinic_name, 'Клиника «Шифо»', 'RU-название — то, что печатается, — не тронуто');
+    assert.ok(!('clinic_name' in lastUpdate), 'RU-название не меняли — не шлётся');
+    assert.equal(docRow.clinic_name, 'Клиника «Шифо»', 'RU-название — то, что печатается, — не тронуто');
 });
 
 test('сайт без https://, ссылки t.me и instagram.com — сохраняются как https://… и @имя', async () => {
@@ -336,18 +343,55 @@ test('Telegram-бот без «bot» в конце — запрос не ухо�
     assert.equal(lastUpdate && lastUpdate.telegram_bot, '@shifo_bot');
 });
 
-test('сохранение шлёт ровно колонки «Компании»; адрес, вписанный руками, — как был', async () => {
-    const root = await open();
+// CLINIC_PROFILE_V1 (ревью C1) — сохранение шлёт только то, что изменилось
+// относительно прочитанной строки: нетронутое поле не может быть затёрто.
+test('сохранение шлёт только изменённые колонки «Компании»; адрес, вписанный руками, — как был', async () => {
+    const root = await open({ logo_data_url: null });
+    type(fieldInput(root, 'Электронная почта'), 'hello@shifo.uz');
+    type(fieldInput(root, 'Номер лицензии'), 'LIC-2');
     await save(root);
 
     assert.ok(lastUpdate, 'запрос на сохранение не ушёл');
-    assert.deepEqual(Object.keys(lastUpdate).sort(), [...COMPANY_COLUMNS].sort());
-    for (const c of ['paper_size', 'show_watermark', 'footer_note', 'legal_note', 'lab_scope']) {
-        assert.ok(!(c in lastUpdate), c + ' — не колонка «Компании»');
-    }
-    assert.equal(lastUpdate.address, 'Ташкент, ул. Мира 1');
-    assert.equal(lastUpdate.logo_data_url, '', 'нет логотипа — пустая строка (колонка NOT NULL)');
+    assert.deepEqual(Object.keys(lastUpdate).sort(), ['email', 'license']);
+    for (const c of Object.keys(lastUpdate)) assert.ok(COMPANY_COLUMNS.includes(c), c + ' — колонка «Компании»');
+    assert.ok(!Object.values(lastUpdate).includes(null), 'null база отклоняет (NOT NULL)');
+    assert.equal(docRow.address, 'Ташкент, ул. Мира 1');
     assert.equal(docRow.paper_size, 'A5', 'настройки печати в базе не тронуты');
+    assert.equal(docRow.lab_scope, 'building');
+});
+
+test('нетронутое сохранение ничего не шлёт — «Нет изменений»', async () => {
+    const extra = { name_uz: 'Shifo', name_en: 'Shifo Clinic', about_ru: 'о', website: 'https://shifo.uz', telegram_bot: '@shifo_clinic_bot',
+        instagram: '@shifo.uz', logo_data_url: 'data:image/png;base64,TEVHQUNZ', street_ru: 'ул. Мира 1', country_code: 'UZ',
+        region_code: 'tashkent-city', district_code: 'yunusobod', maps_url: 'https://yandex.uz/maps/-/CDabc' };
+    const root = await open(extra);
+    const before = { ...docRow };
+    await save(root);
+    assert.equal(lastUpdate, null, 'нечего сохранять — запроса нет');
+    assert.match(toastText(), /Нет изменений/);
+    assert.deepEqual(docRow, before);
+
+    // Прежняя клиника без кодов: страна по умолчанию (UZ) в списке — ещё не изменение.
+    const root2 = await open();
+    await save(root2);
+    assert.equal(lastUpdate, null);
+    assert.equal(docRow.country_code, '');
+});
+
+// CLINIC_PROFILE_V1 (ревью C1, R1) — чтение строки не удалось (сервер
+// перезапускается): экран показывает значения по умолчанию, и «Сохранить»
+// записало бы их поверх всей «Компании» — а синхронизация унесла бы это в филиалы.
+test('ревью R1: строка не прочиталась — «Сохранить» выключено, объяснение; ничего не уходит', async () => {
+    failNextDocSelect = true;
+    const root = await open({ name_uz: 'Shifo', website: 'https://shifo.uz', logo_data_url: 'data:image/png;base64,TEVHQUNZ', street_ru: 'ул. 1' });
+    const before = { ...docRow };
+    const btn = buttonByText(root, /^Сохранить$/);
+    assert.ok(btn.disabled === true || btn.attrs.disabled !== undefined, '«Сохранить» выключено');
+    assert.match(textOf(root), /Не удалось загрузить данные компании — обновите страницу, чтобы сохранить/);
+    type(fieldInput(root, 'Электронная почта'), 'x@y.uz');
+    await save(root);   // даже если клик дошёл
+    assert.equal(lastUpdate, null, 'значения по умолчанию не должны лечь поверх строки');
+    assert.deepEqual(docRow, before);
 });
 
 // ===========================================================================
@@ -396,7 +440,8 @@ test('квадратный PNG: файл — в clinic-logos/square/…, печ�
     assert.match(lastUpdate.logo_square_path, SQ_PATH);
     assert.equal('/api/storage/clinic-logos/' + lastUpdate.logo_square_path, uploads[0].url, 'путь в строке — тот, что загружен');
     assert.equal(lastUpdate.logo_data_url, PRINT_COPY, 'печатная копия заменила прежний логотип');
-    assert.equal(lastUpdate.logo_portrait_path, '');
+    assert.ok(!('logo_portrait_path' in lastUpdate), 'вертикальный не меняли — не шлётся');
+    assert.equal(docRow.logo_portrait_path, '');
 });
 
 test('JPG, непрозрачный PNG, не квадрат — загрузки нет, понятный отказ, строка не меняется', async () => {
@@ -412,8 +457,9 @@ test('JPG, непрозрачный PNG, не квадрат — загрузк�
         assert.equal(uploads.length, 0, file.name + ': отказ на экране — до загрузки');
         assert.match(toastText(), msg);
         await save(root);
-        assert.equal(lastUpdate.logo_square_path, '');
-        assert.equal(lastUpdate.logo_data_url, '');
+        assert.equal(lastUpdate, null, 'отказ ничего не меняет — сохранять нечего');
+        assert.equal(docRow.logo_square_path, '');
+        assert.equal(docRow.logo_data_url, '');
     }
 });
 
@@ -424,8 +470,9 @@ test('вертикальный PNG: свой путь portrait/…; печатн
     assert.match(uploads[0].url, /^\/api\/storage\/clinic-logos\/portrait\//);
     await save(root);
     assert.match(lastUpdate.logo_portrait_path, PT_PATH);
-    assert.equal(lastUpdate.logo_data_url, 'data:image/png;base64,T0xE', 'прежний логотип печатается дальше');
-    assert.equal(lastUpdate.logo_square_path, '');
+    assert.deepEqual(Object.keys(lastUpdate), ['logo_portrait_path'], 'печатная копия и квадратный не шлются');
+    assert.equal(docRow.logo_data_url, 'data:image/png;base64,T0xE', 'прежний логотип печатается дальше');
+    assert.equal(docRow.logo_square_path, '');
 
     const root2 = await open();
     await pick(root2, 'Вертикальный', fileOf(fakePng(800, 800)));
@@ -443,14 +490,15 @@ test('«Удалить»: квадратный снимается с бланк�
     await save(root);
     assert.equal(lastUpdate.logo_square_path, '');
     assert.equal(lastUpdate.logo_data_url, '', 'копия на бланках тоже снята');
-    assert.equal(lastUpdate.logo_portrait_path, 'portrait/1-b.png');
+    assert.ok(!('logo_portrait_path' in lastUpdate));
+    assert.equal(docRow.logo_portrait_path, 'portrait/1-b.png');
 
     root = await open(both);
     buttonByText(logoTile(root, 'Вертикальный'), /Удалить/).click();
     await save(root);
-    assert.equal(lastUpdate.logo_portrait_path, '');
-    assert.equal(lastUpdate.logo_square_path, 'square/1-a.png');
-    assert.equal(lastUpdate.logo_data_url, PRINT_COPY);
+    assert.deepEqual(lastUpdate, { logo_portrait_path: '' });
+    assert.equal(docRow.logo_square_path, 'square/1-a.png');
+    assert.equal(docRow.logo_data_url, PRINT_COPY);
     assert.equal(uploads.length, 0, '«Удалить» не трогает хранилище');
 });
 
@@ -472,8 +520,9 @@ test('отказ хранилища с шаблоном — переведён �
     await pick(root, 'Квадратный, 1:1', fileOf(fakePng(512, 512)));
     assert.match(toastText(), /^Не удалось загрузить логотип: У этого PNG нет прозрачности/);
     await save(root);
-    assert.equal(lastUpdate.logo_square_path, '');
-    assert.equal(lastUpdate.logo_data_url, '');
+    assert.equal(lastUpdate, null, 'отказ ничего не меняет — сохранять нечего');
+    assert.equal(docRow.logo_square_path, '');
+    assert.equal(docRow.logo_data_url, '');
 });
 
 // ===========================================================================
@@ -531,8 +580,8 @@ test('новая клиника: списки и улица — коды и по
     assert.equal(lastUpdate.district_code, 'yunusobod');
     assert.equal(lastUpdate.street_ru, 'ул. Амира Темура, 12');
     assert.equal(lastUpdate.street_uz, 'Amir Temur ko‘chasi, 12');
-    assert.equal(lastUpdate.street_en, '');
-    assert.equal(lastUpdate.address, '', 'адрес для бланка — только то, что вписано руками');
+    assert.ok(!('street_en' in lastUpdate) && !('address' in lastUpdate), 'нетронутое не шлётся');
+    assert.equal(docRow.address, '', 'адрес для бланка — только то, что вписано руками');
     assert.ok(!('address_manual' in lastUpdate), 'отметки «вписан вручную» нет');
 });
 
@@ -544,21 +593,23 @@ test('сохранённые коды выбраны в списках посл�
     assert.deepEqual(geoSel(root, 'Район').options.map((o) => o.attrs.value), ['', 'yunusobod'], 'районы без кода не предлагаются');
     assert.equal(fullAddr(root, 'ru'), 'город Ташкент, Юнусабадский район, ул. Мира 1');
     assert.equal(triInput(root, 'Улица, дом', 'ru').value, 'ул. Мира 1');
+    type(triInput(root, 'Улица, дом', 'uz'), 'Tinchlik ko‘chasi, 1');
     await save(root);
-    assert.equal(lastUpdate.region_code, 'tashkent-city');
-    assert.equal(lastUpdate.district_code, 'yunusobod');
-    assert.equal(lastUpdate.street_ru, 'ул. Мира 1');
+    assert.deepEqual(lastUpdate, { street_uz: 'Tinchlik ko‘chasi, 1' }, 'коды не трогали — не шлются');
+    assert.equal(docRow.region_code, 'tashkent-city');
+    assert.equal(docRow.district_code, 'yunusobod');
+    assert.equal(docRow.street_ru, 'ул. Мира 1');
 });
 
 test('прежняя клиника без кодов: сохранение без правок проходит, адрес для бланка — как был', async () => {
     const root = await open();
     assert.equal(fieldInput(root, 'Адрес в документах').value, 'Ташкент, ул. Мира 1');
+    type(fieldInput(root, 'Электронная почта'), 'hello@shifo.uz');
     await save(root);
     assert.ok(lastUpdate, 'пустой адрес для партнёров не должен останавливать сохранение');
-    assert.equal(lastUpdate.address, 'Ташкент, ул. Мира 1');
-    assert.equal(lastUpdate.region_code, '');
-    assert.equal(lastUpdate.district_code, '');
-    assert.equal(lastUpdate.street_ru, '');
+    assert.deepEqual(lastUpdate, { email: 'hello@shifo.uz' });
+    assert.equal(docRow.address, 'Ташкент, ул. Мира 1');
+    assert.deepEqual([docRow.country_code, docRow.region_code, docRow.district_code, docRow.street_ru], ['', '', '', '']);
 });
 
 test('«Адрес в документах» и адрес для партнёров независимы; «Собрать из списков» нет', async () => {
@@ -768,13 +819,16 @@ test('филиал: названия, описание, лицензия, цве
     assert.match(textOf(note), /^Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании\./);
     assert.match(textOf(root), /Адрес этого здания/);
 
-    // Своё у здания — открыто и сохраняется; уходит ровно COMPANY_BUILDING.
+    // Своё у здания — открыто и сохраняется; уходит только своё у здания
+    // (CLINIC_PROFILE_V1, ревью C1: и только изменённое). Общее для клиники не
+    // уходит, даже если значение в нём как-то поменяли.
     for (const label of ['Адрес в документах', 'Телефон', 'Электронная почта']) assert.ok(!isOff(fieldInput(root, label)), label);
     type(fieldInput(root, 'Адрес в документах'), 'ул. Филиальная, 7');
+    type(fieldInput(root, 'Сайт'), 'https://other.uz');
     await save(root);
     assert.ok(lastUpdate, 'запрос ушёл');
-    assert.deepEqual(Object.keys(lastUpdate).sort(), [...COMPANY_BUILDING].sort());
-    assert.equal(lastUpdate.address, 'ул. Филиальная, 7');
+    for (const c of Object.keys(lastUpdate)) assert.ok(COMPANY_BUILDING.includes(c), c + ' — своё у здания');
+    assert.deepEqual(lastUpdate, { address: 'ул. Филиальная, 7' });
 });
 
 test('главное здание: всё открыто, заметки филиала нет, сохраняются все колонки «Компании»', async () => {
@@ -782,6 +836,8 @@ test('главное здание: всё открыто, заметки фил�
     assert.ok(!isOff(triInput(root, 'Название клиники', 'ru')));
     assert.ok(!isOff(fieldInput(root, 'Сайт')));
     assert.ok(!descendants(root).some((n) => n.attrs && n.attrs.role === 'note'), 'заметки филиала нет');
+    type(triInput(root, 'Название клиники', 'uz'), 'Shifo');
+    type(fieldInput(root, 'Адрес в документах'), 'ул. Главная, 1');
     await save(root);
-    assert.deepEqual(Object.keys(lastUpdate).sort(), [...COMPANY_COLUMNS].sort());
+    assert.deepEqual(lastUpdate, { name_uz: 'Shifo', address: 'ул. Главная, 1' }, 'общее для клиники и своё — оба уходят');
 });
