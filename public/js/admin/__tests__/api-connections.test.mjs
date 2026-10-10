@@ -108,8 +108,9 @@ test('сервер старше экрана (data: null): пустой, но ц
   assert.ok(textOf(root).includes('API и подключения'));
 });
 
-test('открыть по ссылке из CRM: страница с payload грузится (карточка — задача 12)', async () => {
+test('открыть по ссылке из CRM: payload.connection_id открывает карточку подключения', async () => {
   reset();
   await open({}, { payload: { connection_id: 3 } });
-  assert.ok(rpcNames().includes('api_settings_get'));
+  const m = document.body.children.find((n) => n.attrs && n.attrs['data-apic-modal'] === 'conn');
+  assert.ok(m && textOf(m).includes('med24.uz'));
 });
