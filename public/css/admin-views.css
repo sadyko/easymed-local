@@ -7564,6 +7564,9 @@ table.list tr.is-off td { color: var(--ink-400); }
 .cpf-lang { display: inline-block; min-width: 22px; padding: 0 4px; border-radius: 4px; background: var(--ink-50); border: 1px solid var(--ink-100); color: var(--ink-600); font-size: 12.5px; font-weight: 700; letter-spacing: .04em; text-align: center; }
 .cpf-err { color: var(--crit-700); font-size: 12.5px; line-height: 1.4; }
 .cpf-err[hidden] { display: none; }
+/* Полировка по макету — «нет перевода» у пустых UZ / EN (company-fields.js triGroup markMissing). */
+.cpf-miss { margin-left: 2px; color: var(--warn-700); font-size: 12.5px; font-weight: 500; letter-spacing: 0; }
+.cpf-miss[hidden] { display: none; }
 .cpf-hint { margin: 0; color: var(--ink-500); font-size: 12.5px; line-height: 1.45; }
 .field .cpf-hint, .cpf-set .cpf-hint { margin-top: 2px; }
 .cpf-prefix { display: flex; align-items: stretch; min-width: 0; height: 38px; border: 1px solid var(--ink-200); border-radius: 8px; background: var(--white); overflow: hidden; transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }

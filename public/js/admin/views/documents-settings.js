@@ -233,11 +233,13 @@ function buildForm(card) {
     // clinic_name: его печатают документы и показывает строка под меню.
     const names = triGroup('Название клиники', null, {
         key: 'name', cellLabel: 'Название', max: NAME_MAX, disabled: secondary,   // CLINIC_PROFILE_V1 — филиал: из главного здания
+        markMissing: true,   // CLINIC_PROFILE_V1 (полировка по макету) — «нет перевода» у пустых UZ / EN
         hint: 'RU печатается на документах. UZ и EN видят партнёры и программа на узбекском и английском.',
         onInput: (l, v) => { state[l === 'ru' ? 'clinic_name' : 'name_' + l] = v; renderPreview(); },
     });
     const about = triGroup('Коротко о клинике', null, {
         key: 'about', cellLabel: 'Описание', textarea: true, max: ABOUT_MAX, disabled: secondary,   // CLINIC_PROFILE_V1
+        markMissing: true,   // CLINIC_PROFILE_V1 (полировка по макету)
         hint: 'Два-три предложения: чем клиника занимается. Партнёры показывают это под названием.',
         onInput: (l, v) => { state['about_' + l] = v; renderPreview(); },
     });

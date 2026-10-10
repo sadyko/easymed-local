@@ -909,3 +909,64 @@ test('ревью R4: страна вне списка — показана «(н
     assert.deepEqual(lastUpdate, { email: 'hello@shifo.uz' });
     assert.equal(docRow.country_code, 'XX');
 });
+
+// ===========================================================================
+// Полировка по макету (2026-10-10) — «нет перевода» у пустых UZ / EN.
+// Пометка — в общем поле на трёх языках (company-fields.js triGroup): ею же
+// воспользуются «Филиалы» (название, улица), а у ориентира её нет.
+// ===========================================================================
+const { triGroup } = await import('../views/company-fields.js');
+function triCell(root, label, lang) {
+    const ctrl = triInput(root, label, lang);
+    return ctrl._parent;
+}
+const missMark = (root, label, lang) => descendants(triCell(root, label, lang)).find((n) => matches(n, '.cpf-miss')) || null;
+const missShown = (root, label, lang) => { const m = missMark(root, label, lang); return !!m && !m.hidden; };
+
+test('«нет перевода»: пустые UZ и EN у названия, описания и улицы помечены; у RU пометки нет', async () => {
+    const root = await open({ name_uz: '', name_en: 'Shifo Clinic', about_ru: 'Семейная клиника.', street_ru: 'ул. Мира 1', street_uz: 'Tinchlik ko‘chasi, 1' });
+    for (const label of ['Название клиники', 'Коротко о клинике', 'Улица, дом']) {
+        assert.equal(missMark(root, label, 'ru'), null, label + ': у RU пометки «нет перевода» быть не должно');
+    }
+    assert.equal(missShown(root, 'Название клиники', 'uz'), true, 'пустое UZ-название помечено');
+    assert.equal(missShown(root, 'Название клиники', 'en'), false, 'EN-название есть — пометки нет');
+    assert.equal(missShown(root, 'Коротко о клинике', 'uz'), true);
+    assert.equal(missShown(root, 'Коротко о клинике', 'en'), true);
+    assert.equal(missShown(root, 'Улица, дом', 'uz'), false);
+    assert.equal(missShown(root, 'Улица, дом', 'en'), true);
+    // Вид — как в макете: маленькая пометка в подписи ячейки.
+    const mark = missMark(root, 'Название клиники', 'uz');
+    assert.equal(labelText(mark), 'нет перевода');
+    assert.equal(mark._parent.tagName, 'LABEL', 'пометка — в подписи поля');
+});
+
+test('«нет перевода» исчезает с первым знаком и возвращается, если поле снова пустое', async () => {
+    const root = await open();
+    type(triInput(root, 'Название клиники', 'uz'), 'S');
+    assert.equal(missShown(root, 'Название клиники', 'uz'), false, 'набрали — пометки нет');
+    type(triInput(root, 'Название клиники', 'uz'), '   ');
+    assert.equal(missShown(root, 'Название клиники', 'uz'), true, 'одни пробелы — перевода нет');
+    type(triInput(root, 'Улица, дом', 'en'), '1 Mira St');
+    assert.equal(missShown(root, 'Улица, дом', 'en'), false);
+    type(triInput(root, 'Улица, дом', 'en'), '');
+    assert.equal(missShown(root, 'Улица, дом', 'en'), true, 'стёрли — пометка вернулась');
+    type(triInput(root, 'Коротко о клинике', 'en'), 'Family clinic.');
+    assert.equal(missShown(root, 'Коротко о клинике', 'en'), false);
+    // После сохранения поля заполняются заново (set) — пометки следуют за значениями.
+    await save(root);
+    assert.equal(lastUpdate && lastUpdate.about_en, 'Family clinic.', 'описание EN сохранено');
+    assert.equal(missShown(root, 'Название клиники', 'uz'), true, 'UZ-название так и не вписали');
+    assert.equal(missShown(root, 'Коротко о клинике', 'en'), false);
+});
+
+test('общее поле на трёх языках: пометка включается параметром — у ориентира её нет', () => {
+    const plain = triGroup('Ориентир', { ru: 'Напротив парка' }, { key: 'landmark' });
+    assert.equal(descendants(plain.node).filter((n) => matches(n, '.cpf-miss')).length, 0, 'без markMissing пометок нет');
+    const marked = triGroup('Улица, дом', { ru: 'ул. Мира 1', en: '1 Mira St' }, { key: 'street', markMissing: true });
+    const shown = descendants(marked.node).filter((n) => matches(n, '.cpf-miss') && !n.hidden);
+    assert.equal(shown.length, 1, 'помечено ровно пустое UZ');
+    marked.set({ ru: 'ул. Мира 1', uz: 'Tinchlik ko‘chasi, 1', en: '' });
+    const after = descendants(marked.node).filter((n) => matches(n, '.cpf-miss') && !n.hidden);
+    assert.equal(after.length, 1, 'после set() помечено пустое EN');
+    assert.ok(after[0]._parent.attrs.for === marked.inputs.en.ctrl.attrs.id, 'пометка — у EN');
+});

@@ -99,6 +99,7 @@ export function addressCard(state, { onChange = null, secondary = false } = {}) 
 
     const street = triGroup('Улица, дом', streetOf(), {
         key: 'street', max: STREET_MAX,
+        markMissing: true,   // CLINIC_PROFILE_V1 (полировка по макету) — «нет перевода» у пустых UZ / EN
         onInput: (l, v) => { state['street_' + l] = v; paintFull(); changed(); },
     });
 

@@ -49,9 +49,17 @@ export function labeled(label, ctrl, { hint = '', key = 'f', prefix = null } = {
  * макете: «Название клиники», под ним «RU Название», «UZ Название», …).
  * values — { ru, uz, en }; onInput(lang, value); cellLabel — подпись ячейки
  * (по умолчанию — legend); hint — строка под группой.
+ *
+ * CLINIC_PROFILE_V1 (полировка по макету) — markMissing: пустое UZ или EN
+ * помечено «нет перевода» в подписи ячейки; пометка исчезает с первым знаком
+ * и возвращается, если поле снова пустое (одни пробелы — пусто). RU —
+ * исходный язык: его пустоту объясняет проверка поля, а не пометка. Включают
+ * названия, описание и улицу; у ориентира («Филиалы») пометки нет.
  */
-export function triGroup(legend, values, { cellLabel = '', hint = '', textarea = false, max = 0, onInput = null, disabled = false, key = 'tri' } = {}) {
+export function triGroup(legend, values, { cellLabel = '', hint = '', textarea = false, max = 0, onInput = null, disabled = false, key = 'tri', markMissing = false } = {}) {
     const inputs = {};
+    const marks = {};
+    const paintMark = (lng) => { const m = marks[lng]; if (m) m.hidden = !!String(inputs[lng].ctrl.value || '').trim(); };
     const cells = LANGS.map((lng) => {
         const id = nextId(key + '-' + lng);
         const ctrl = textarea
@@ -59,10 +67,17 @@ export function triGroup(legend, values, { cellLabel = '', hint = '', textarea =
             : h('input', { id, type: 'text', class: 'docprof-in', maxlength: max ? String(max) : null, autocomplete: 'off', disabled });
         ctrl.value = (values && values[lng]) || '';
         const err = fieldErr(ctrl);
-        if (onInput) ctrl.addEventListener('input', () => { err.set(''); onInput(lng, ctrl.value); });
         inputs[lng] = { ctrl, err };
+        if (markMissing && lng !== 'ru') marks[lng] = h('span', { class: 'cpf-miss' }, 'нет перевода');
+        paintMark(lng);
+        ctrl.addEventListener('input', () => {
+            paintMark(lng);
+            if (onInput) { err.set(''); onInput(lng, ctrl.value); }
+        });
         return h('div', { class: 'docprof-tricell' },
-            h('label', { class: 'docprof-trilabel', for: id }, h('span', { class: 'cpf-lang' }, LANG_TAG[lng]), ' ', cellLabel || legend),
+            // Пробел перед пометкой — и для читалки экрана: «Название нет перевода», а не «Названиенет».
+            h('label', { class: 'docprof-trilabel', for: id }, h('span', { class: 'cpf-lang' }, LANG_TAG[lng]), ' ', cellLabel || legend,
+                marks[lng] ? [' ', marks[lng]] : null),
             ctrl, err.node);
     });
     return {
@@ -71,6 +86,6 @@ export function triGroup(legend, values, { cellLabel = '', hint = '', textarea =
             h('div', { class: 'docprof-trigroup' }, ...cells),
             hint ? h('p', { class: 'cpf-hint' }, hint) : null),
         inputs,
-        set(vals) { for (const lng of LANGS) inputs[lng].ctrl.value = (vals && vals[lng]) || ''; },
+        set(vals) { for (const lng of LANGS) { inputs[lng].ctrl.value = (vals && vals[lng]) || ''; paintMark(lng); } },
     };
 }
