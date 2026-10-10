@@ -173,7 +173,14 @@ function mount(onNavigate) {
     const partner = secondary ? refs.building : state;
     refs.address = addressCard(partner, { onChange: () => renderPreview(), secondary, disabled: secondary,   // CLINIC_PROFILE_V1 — «Адрес этого здания» в филиале
         hint: secondary ? 'Адрес для партнёров, карту и телефон для сайта этого здания ведёт главное здание в «Филиалах». Здесь они только видны.' : '' });
-    refs.map = mapCard(partner, { onChange: () => renderPreview(), disabled: secondary });
+    // Ревью шага 4, находка 10 — запертая карта филиала не просит вставить ссылку.
+    refs.map = mapCard(partner, secondary
+        ? { onChange: () => renderPreview(), disabled: true, label: 'Ссылка на это здание в Яндекс Картах',
+            hint: 'Ссылку на карту этого здания ведёт главное здание в «Филиалах».' }
+        : { onChange: () => renderPreview(), disabled: false });
+    // Ревью 9 — своя строка branches не прочиталась: объяснение над адресом.
+    refs.buildingNote = secondary ? h('div', { class: 'cpf-note brf-note-warn', role: 'alert', style: { display: 'none' } },
+        Icon('Warning', { size: 16 }), h('span', null, ERR_BUILDING)) : null;
     Object.assign(refs.errs, refs.address.errs, { maps_url: refs.map.err });
     refs.geoAvailability = () => refs.address.availability();
 
@@ -223,7 +230,7 @@ function mount(onNavigate) {
         // правой колонки на широком экране держит CSS (.cpf-side).
         h('div', { class: 'row', style: { gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' } },
             h('div', { class: 'col cpf-main', style: { minWidth: 'min(320px, 100%)', flex: '3 1 480px' } },
-                h('div', { class: 'cpf-stack' }, formCard, refs.address.node, refs.logos.node, linksCard, refs.map.node)),
+                h('div', { class: 'cpf-stack' }, formCard, refs.buildingNote, refs.address.node, refs.logos.node, linksCard, refs.map.node)),   // BRANCH_PROFILE_V1 (ревью 9) — объяснение над адресом
             h('div', { class: 'col cpf-side', style: { minWidth: 'min(320px, 100%)', flex: '1 1 320px' } },
                 h('div', { class: 'cpf-stack' }, patientCard, previewCard)),
         ),
@@ -404,15 +411,24 @@ async function load() {
 // BRANCH_PROFILE_V1 — своя строка branches (window.CLINIC.own_branch_id). Тот же
 // объект, что держат карточки адреса и карты, — меняется на месте. Не
 // прочиталась — карточки пустые; править их здесь всё равно нельзя, и в
-// сохранение они не входят.
+// сохранение они не входят. Ревью шага 4, находка 9 — пустота объяснена:
+// тост и строка над адресом.
+const ERR_BUILDING = 'Не удалось загрузить адрес, карту и телефон этого здания из «Филиалов» — обновите страницу.';
 async function loadBuilding() {
     for (const k of Object.keys(refs.building)) delete refs.building[k];
     const id = typeof window !== 'undefined' && window.CLINIC ? window.CLINIC.own_branch_id : null;
-    if (id == null) return;
-    try {
-        const { data } = await supabase.from('branches').select('*').eq('id', id).maybeSingle();
-        if (data && typeof data === 'object' && !Array.isArray(data)) Object.assign(refs.building, data);
-    } catch (_) { /* не прочиталось — карточки пустые */ }
+    let failed = false;
+    if (id != null) {
+        try {
+            const { data, error } = await supabase.from('branches').select('*').eq('id', id).maybeSingle();
+            if (error) throw error;
+            if (data && typeof data === 'object' && !Array.isArray(data)) Object.assign(refs.building, data);
+        } catch (e) {
+            failed = true;
+            toast(tr(ERR_BUILDING) + ' ' + tr((e && e.message) || ''), 'fail');
+        }
+    }
+    if (refs.buildingNote) refs.buildingNote.style.display = failed ? '' : 'none';
 }
 
 // CLINIC_API_FIX_V1 — содержимое кнопки «Сохранить»: значок и подпись. Одним

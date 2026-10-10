@@ -167,6 +167,7 @@ const { COMPANY_COLUMNS } = await import('../../shared/clinic-profile.js');
 
 let docRow;
 let ownBranchRow = null;      // BRANCH_PROFILE_V1 — своя строка branches («Компания» филиала читает её)
+let failOwnBranch = false;    // BRANCH_PROFILE_V1 (ревью 9) — чтение своей строки branches отвечает 503
 let lastUpdate;
 let uploads;
 let nextStorageError = null;   // { status, error } — отказ хранилища на следующую загрузку
@@ -213,6 +214,7 @@ globalThis.fetch = async (url, opts = {}) => {
             if (op === 'update') { lastUpdate = desc.values; docRow = { ...docRow, ...desc.values }; }
             return ok({ data: { ...docRow } });
         }
+        if (desc.table === 'branches' && failOwnBranch) return { ok: false, status: 503, json: async () => ({ error: { code: 'unavailable', message: 'server restarting' } }) };   // BRANCH_PROFILE_V1 (ревью 9)
         if (desc.table === 'branches') return ok({ data: ownBranchRow ? { ...ownBranchRow } : null });   // BRANCH_PROFILE_V1
         if (geoTables[desc.table]) {
             let rows = geoTables[desc.table].filter((r) => r.active);
@@ -882,15 +884,48 @@ test('филиал: адрес для партнёров, карта и теле
         assert.equal(selectedValue(geoSel(root, 'Район')), 'yunusobod');
         assert.equal(triInput(root, 'Улица, дом', 'ru').value, 'ул. Бунёдкор, 5', 'из «Филиалов», не из своей «Компании»');
         assert.ok(isOff(triInput(root, 'Улица, дом', 'ru')));
-        assert.ok(isOff(fieldInput(root, 'Ссылка на клинику в Яндекс Картах')));
-        assert.equal(fieldInput(root, 'Ссылка на клинику в Яндекс Картах').value, 'https://yandex.uz/maps/-/CDchil');
+        // Ревью шага 4, находка 10 — карта филиала только видна: подпись и подсказка
+        // не зовут вставлять ссылку, а говорят, кто её ведёт.
+        assert.ok(isOff(fieldInput(root, 'Ссылка на это здание в Яндекс Картах')));
+        assert.equal(fieldInput(root, 'Ссылка на это здание в Яндекс Картах').value, 'https://yandex.uz/maps/-/CDchil');
+        assert.match(textOf(root), /Ссылку на карту этого здания ведёт главное здание в «Филиалах»\./);
+        assert.doesNotMatch(textOf(root), /нажмите «Поделиться» и скопируйте ссылку/, 'запертое поле не просит вставить ссылку');
         assert.match(textOf(root), /ведёт главное здание в «Филиалах»/);
+        const loadNote = descendants(root).find((n) => matches(n, '.cpf-note') && /Не удалось загрузить адрес, карту и телефон/.test(textOf(n)));
+        assert.ok(!loadNote || loadNote.style.display === 'none', 'прочиталось — объяснения о сбое не видно');
         assert.match(textOf(root), /Сайт и партнёры получают телефон из «Филиалов» главного здания/, 'подсказка под телефоном для документов');
         assert.ok(previewLinks(root).some((l) => l.text === 'Позвонить' && l.href === 'tel:+998712223344'), 'предпросмотр — телефон из «Филиалов»');
         assert.ok(previewSubs(root).includes('город Ташкент, Юнусабадский район, ул. Бунёдкор, 5'), 'предпросмотр — адрес из «Филиалов»: ' + previewSubs(root).join(' | '));
         type(fieldInput(root, 'Адрес в документах'), 'ул. Филиальная, 7');
         await save(root);
         assert.deepEqual(lastUpdate, { address: 'ул. Филиальная, 7' });
+    } finally { ownBranchRow = null; delete globalThis.window.CLINIC.own_branch_id; }
+});
+
+// Ревью шага 4, находка 9 — строка branches не прочиталась: пустые адрес, карта и
+// телефон объяснены (тост и строка над адресом); своё для документов сохраняется.
+test('филиал: строка «Филиалов» не прочиталась — объяснение тостом и над адресом; своё для документов сохраняется', async () => {
+    ownBranchRow = { id: 7, street_ru: 'ул. Бунёдкор, 5' };
+    failOwnBranch = true;
+    globalThis.window.CLINIC.own_branch_id = 7;
+    try {
+        const root = await openAs('secondary', {});
+        const note = descendants(root).find((n) => matches(n, '.cpf-note') && /Не удалось загрузить адрес, карту и телефон этого здания/.test(textOf(n)));
+        assert.ok(note && !note.hidden && note.style.display !== 'none', 'объяснение над адресом');
+        assert.equal(note.attrs.role, 'alert');
+        assert.match(toastText(), /Не удалось загрузить адрес, карту и телефон этого здания/);
+        assert.equal(triInput(root, 'Улица, дом', 'ru').value, '', 'чужого адреса не подставляем');
+        type(fieldInput(root, 'Адрес в документах'), 'ул. Филиальная, 7');
+        await save(root);
+        assert.deepEqual(lastUpdate, { address: 'ул. Филиальная, 7' });
+    } finally { failOwnBranch = false; ownBranchRow = null; delete globalThis.window.CLINIC.own_branch_id; }
+    // Прочиталась — объяснения нет.
+    ownBranchRow = { id: 7, street_ru: 'ул. Бунёдкор, 5' };
+    globalThis.window.CLINIC.own_branch_id = 7;
+    try {
+        const root = await openAs('secondary', {});
+        const note = descendants(root).find((n) => matches(n, '.cpf-note') && /Не удалось загрузить адрес, карту и телефон/.test(textOf(n)));
+        assert.ok(!note || note.hidden || note.style.display === 'none');
     } finally { ownBranchRow = null; delete globalThis.window.CLINIC.own_branch_id; }
 });
 

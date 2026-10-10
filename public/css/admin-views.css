@@ -7675,4 +7675,5 @@ table.list tr.is-off td { color: var(--ink-400); }
 .brf-chip.on { border-color: var(--ok-500); background: var(--ok-50); color: var(--ok-700); }
 /* Ревью шага 4: роль исполнителя в предупреждении; сбой своей строки «Филиалов» в «Компании» филиала. */
 .brf-role { color: var(--ink-600); }
+.cpf-note.brf-note-warn { background: var(--warn-50); color: var(--warn-700); }
 /* /BRANCH_PROFILE_V1 — «Филиалы» */
