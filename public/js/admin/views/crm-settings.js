@@ -43,6 +43,8 @@ import { h, Icon, PageHead, Tag, clear, toast, checkField, field } from '../ui.j
 // explicitly (same trick as telephony-settings.js).
 import { tr, trf } from '../i18n.js';
 import { invalidateCrmStages } from '../crm-stages.js';   // CRM_LINKS_V1
+import { isRouteAllowed } from '../permissions.js';   // CLINIC_API_STEP7_V1
+import { KEY_PREFIX } from '../../shared/api-connections.js';   // CLINIC_API_STEP7_V1
 import {
     COLORS, tagKind, LABEL_MAX,
     UNDELETABLE_STAGE_KEYS, UNDELETABLE_SOURCE_KEYS,
@@ -73,13 +75,20 @@ const STAGE_SIG_KEYS = ['key', 'label', 'color', 'kind', 'is_active'];
 function adoptConfig(raw) {
     state.cfg = shapeConfig(raw);
     state.baseStages = sig(state.cfg.stages, STAGE_SIG_KEYS);
+    // CLINIC_API_STEP7_V1 — свои источники подключений API — отдельным закрытым
+    // списком: экран их не правит и не присылает (сервер их не удаляет).
+    state.apiSources = state.cfg.sources.filter((s) => s.api && s.api.owned);
+    state.cfg.sources = state.cfg.sources.filter((s) => !(s.api && s.api.owned));
     state.baseSources = sig(state.cfg.sources, SOURCE_SIG_KEYS);
     state.baseTags = sig(state.cfg.tags, TAG_SIG_KEYS);   // CRM_HEAD_MERGE_TAGS_V1
 }
 const SOURCE_SIG_KEYS = ['key', 'label', 'is_active'];
 const TAG_SIG_KEYS = ['key', 'label', 'color', 'is_active'];   // CRM_HEAD_MERGE_TAGS_V1
 const state = { cfg: null, busy: false };
-let refs = { root: null, body: null, stages: null, sources: null, tags: null };
+let refs = { root: null, body: null, stages: null, sources: null, tags: null, onNavigate: null };
+// CLINIC_API_STEP7_V1 — «Сайт» (или другой обычный источник), на который смотрит
+// подключение API: скрыть или удалить нельзя, переименовать можно.
+const API_NEEDED_REASON = 'Нужен подключению «{name}» в разделе «API» — скрыть или удалить нельзя.';
 
 async function rpc(name, args = {}) {
     // CRM_LINKS_V1 — воронку правят здесь, а читают её ещё и фоновые действия
@@ -100,12 +109,10 @@ async function rpc(name, args = {}) {
     return data;
 }
 
-// No onNavigate: with the routing card gone this screen navigates nowhere.
-// admin.js still passes its ctx — extra arguments are harmless — and the day
-// something here needs to navigate, it takes the parameter back.
-export async function renderCrmSettings(container) {
+// CLINIC_API_STEP7_V1 — onNavigate снова нужен: «Подключение» у источника из API ведёт в «API и подключения».
+export async function renderCrmSettings(container, { onNavigate } = {}) {
     clear(container);
-    refs = { root: null, body: null, stages: null, sources: null, tags: null };
+    refs = { root: null, body: null, stages: null, sources: null, tags: null, onNavigate: onNavigate || null };
     refs.root = h('div', { class: 'fade-in' });
     container.appendChild(refs.root);
 
@@ -142,6 +149,7 @@ function paint() {
     refs.body.appendChild(stagesCard());
     refs.body.appendChild(bookingCard());   // CRM_UNIFY_V1
     refs.body.appendChild(sourcesCard());
+    const apiCard = apiSourcesCard(); if (apiCard) refs.body.appendChild(apiCard);   // CLINIC_API_STEP7_V1
     refs.body.appendChild(tagsCard());   // CRM_HEAD_MERGE_TAGS_V1
 }
 
@@ -488,20 +496,23 @@ function paintSources() {
 
     const listBox = h('div', { class: 'crm-set-list' });
     let anyProtected = false;
+    const neededBy = [];   // CLINIC_API_STEP7_V1
     list.forEach((row, i) => {
         const protectedRow = UNDELETABLE_SOURCE_KEYS.includes(row.key);
+        // CLINIC_API_STEP7_V1 — «Сайт» подключения сайта клиники: не скрыть, не удалить.
+        const apiNeeded = !!(row.api && !row.api.owned);
         if (protectedRow) anyProtected = true;
+        if (apiNeeded) neededBy.push(row.api.connection_name);
         listBox.appendChild(rowBox({
             move: moveButtons(list, i, onChange),
             name: [labelInput(row), keyChip(row.key)],
-            visible: activeToggle(row),
-            actions: protectedRow
-                ? null
-                : removeButton(row.label, () => onChange(list.filter((_, j) => j !== i))),
+            visible: activeToggle(row, apiNeeded ? { locked: true, lockedTitle: trf(API_NEEDED_REASON, { name: row.api.connection_name }) } : undefined),
+            actions: protectedRow || apiNeeded ? null : removeButton(row.label, () => onChange(list.filter((_, j) => j !== i))),
         }));
     });
     box.appendChild(listBox);
     if (anyProtected) box.appendChild(hint(UNDELETABLE_SOURCE_REASON, { marginTop: '10px' }));
+    for (const name of neededBy) box.appendChild(hint(trf(API_NEEDED_REASON, { name }), { marginTop: '6px' }));   // CLINIC_API_STEP7_V1
 
     box.appendChild(addRow('Добавить источник', 'Название нового источника', (label, taken) => {
         state.cfg.sources = withPositions([...list, {
@@ -511,13 +522,39 @@ function paintSources() {
     }, () => list.map((s) => s.key)));
 
     box.appendChild(saveRow('Сохранить источники', async () => {
-        const sources = withPositions(state.cfg.sources).map((s) => ({ ...s, label: String(s.label || '').trim() }));
+        const sources = withPositions(state.cfg.sources).map(({ api, ...s }) => ({ ...s, label: String(s.label || '').trim() }));   // CLINIC_API_STEP7_V1 — без api
         const v = validateSources(sources, tr);
         if (!v.ok) { toast(v.error, 'warn'); return; }
         const fresh = await rpc('crm_config_save', { sources });
         toast('Источники сохранены.', 'success');
         await reload(fresh);
     }, sig(state.cfg.sources, SOURCE_SIG_KEYS) !== state.baseSources));
+}
+
+// CLINIC_API_STEP7_V1 — «Источники из API» (макет screen-crm.js): свой источник
+// подключения Symptex или партнёра. Название — как у подключения; переименовать,
+// скрыть и удалить его здесь нельзя; удалённое подключение оставляет его
+// скрытым — прежние заявки сохраняют источник для отчётов.
+function apiSourcesCard() {
+    const rows = state.apiSources || [];
+    if (!rows.length) return null;
+    const list = h('div', { class: 'crm-set-list' });
+    for (const s of rows) {
+        const link = !s.api.archived && refs.onNavigate && isRouteAllowed('api-settings')
+            ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'data-crm-api-link': String(s.api.connection_id),
+                onclick: () => refs.onNavigate('api-settings', { connection_id: s.api.connection_id }) }, 'Подключение')
+            : null;
+        list.appendChild(h('div', { class: 'crm-api-src', 'data-crm-api-source': s.key },
+            h('span', { class: 'crm-api-src-name' }, s.label),
+            keyChip(s.key),
+            h('span', { class: 'apic-chip api' }, Icon('Key', { size: 12 }), ' ', trf('ключ {mask}', { mask: KEY_PREFIX + '••••' })),
+            s.api.archived ? Tag('подключение удалено') : null,
+            link));
+    }
+    return cardShell('Key', 'Источники из API', h('div', { style: { padding: '18px' } },
+        hint('Каждое подключение в «API и подключения» приносит заявки со своим источником. Источник создаётся вместе с подключением и называется как оно. Здесь его нельзя переименовать, скрыть или удалить; заявки, которые уже пришли, сохраняют источник.', { marginBottom: '12px' }),
+        list,
+        hint('Заявки с сайта клиники приходят с обычным источником «Сайт», поэтому его здесь нет.', { marginTop: '10px' })));
 }
 
 // ---------------------------------------------------------------------------

@@ -595,3 +595,45 @@ test('CRM_UNIFY_V1 S3: человек сам выбрал «по умолчан�
   assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 72, won_stage: 'recall' } });
 });
 
+
+// CLINIC_API_STEP7_V1 — источники подключений API.
+function withApiSources() {
+  const cfg = JSON.parse(JSON.stringify(FULL_CONFIG));
+  cfg.sources.push({ key: 'website', label: 'Сайт', position: 3, is_active: 1,
+    api: { connection_id: 1, connection_name: 'Сайт клиники', owned: false, archived: false } });
+  cfg.sources.push({ key: 'api_med24_uz', label: 'med24.uz', position: 4, is_active: 1,
+    api: { connection_id: 3, connection_name: 'med24.uz', owned: true, archived: false } });
+  cfg.sources.push({ key: 'api_old', label: 'old.uz', position: 5, is_active: 0,
+    api: { connection_id: 4, connection_name: 'old.uz', owned: true, archived: true } });
+  getRespond = () => jsonOk(JSON.parse(JSON.stringify(cfg)));
+  saveRespond = () => jsonOk(JSON.parse(JSON.stringify(cfg)));
+}
+
+test('«Источники из API» — закрытый список: «ключ em_live_••••», «Подключение» ведёт в API; удалённое — помечено и без ссылки', async () => {
+  resetServer();
+  withApiSources();
+  const nav = [];
+  const root = await render((view, payload) => nav.push([view, payload]));
+  const text = textOf(root);
+  for (const s of ['Источники из API', 'ключ em_live_••••', 'подключение удалено', 'поэтому его здесь нет']) assert.ok(text.includes(s), s);
+  assert.ok(!findTextInputs(root).some((i) => i.value === 'med24.uz' || i.value === 'old.uz'), 'название источника подключения правится');
+  const links = walk(root).filter((n) => n.attrs && n.attrs['data-crm-api-link']);
+  assert.deepStrictEqual(links.map((n) => n.attrs['data-crm-api-link']), ['3'], 'ссылка только у живого подключения');
+  links[0].click();
+  assert.deepStrictEqual(nav, [['api-settings', { connection_id: 3 }]]);
+});
+
+test('«Сайт» сайта клиники: «Видна» заблокирована, «Удалить» нет, причина названа; в сохранение уходят только свои источники', async () => {
+  resetServer();
+  withApiSources();
+  const root = await render();
+  assert.ok(textOf(root).includes('Нужен подключению «Сайт клиники» в разделе «API»'));
+  assert.strictEqual(findButtonByAria(root, 'Удалить').length, 2, 'удалить можно только две колонки — ни одного источника');
+  const call = findTextInputs(root).find((i) => i.value === 'Звонок');
+  call.value = 'Входящий';
+  call.dispatchEvent({ type: 'input' });
+  saveSourcesBtn(root).click();
+  await tick();
+  const sent = lastSaveBody.sources.map((s) => s.key);
+  assert.deepStrictEqual(sent, ['call', 'telephony', 'website'], 'источники подключений ушли в список');
+});

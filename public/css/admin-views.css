@@ -7626,3 +7626,9 @@ table.list tr.is-off td { color: var(--ink-400); }
     .cpf-body { padding: 14px 16px 16px; }
 }
 /* /CLINIC_PROFILE_V1 — «Компания» */
+/* CLINIC_API_STEP7_V1 — «API и подключения» (views/api-*.js) и «Источники из API» в CRM-канбане. */
+.crm-api-src { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--ink-100); }
+.crm-api-src-name { font-weight: 600; font-size: 13.5px; }
+.apic-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: var(--ink-100); font-size: 12.5px; }
+.apic-chip.api { background: var(--info-50); color: var(--info-700); }
+/* /CLINIC_API_STEP7_V1 */

@@ -384,3 +384,13 @@ test('CRM_UNIFY_V1: settings в ответе; bookedStatus — выбор, ин�
     assert.equal(boardConfig({ stages, settings: { booked_stage: 'came' } }).bookedStatus, 'approved', 'недопустимый выбор не действует');
     assert.equal(boardConfig(null).bookedStatus, 'scheduled', 'запасная воронка — «Записан»');
 });
+
+// CLINIC_API_STEP7_V1 — источник подключения API доезжает до экрана с пометкой.
+test('shapeConfig: у источника — api (чей и свой ли) или null', () => {
+  const cfg = shapeConfig({ stages: [], sources: [
+    { key: 'call', label: 'Звонок', position: 1, is_active: 1 },
+    { key: 'api_med24_uz', label: 'med24.uz', position: 2, is_active: 1, api: { connection_id: 3, connection_name: 'med24.uz', owned: true, archived: false } },
+  ] });
+  assert.equal(cfg.sources[0].api, null);
+  assert.deepEqual(cfg.sources[1].api, { connection_id: 3, connection_name: 'med24.uz', owned: true, archived: false });
+});

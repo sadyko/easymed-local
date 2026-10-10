@@ -476,7 +476,14 @@ export function shapeConfig(data) {
             // a loss in the funnel.
             kind: KIND_VALUES.includes(r.kind) ? r.kind : 'open',
         })))),
-        sources: withPositions(sources.map((s) => norm(s, () => ({})))),
+        // CLINIC_API_STEP7_V1 — источник подключения API: чей и свой ли
+        // (services/crm/config.js listSources). Своих экран не правит.
+        sources: withPositions(sources.map((s) => norm(s, (r) => ({
+            api: r.api && typeof r.api === 'object'
+                ? { connection_id: Number(r.api.connection_id) || null, connection_name: String(r.api.connection_name || ''),
+                    owned: !!r.api.owned, archived: !!r.api.archived }
+                : null,
+        })))),
         // CRM_HEAD_MERGE_TAGS_V1 — метки. Запасного набора у них нет: пусто —
         // значит клиника меток не завела (или сервер старше экрана).
         tags: withPositions(sortByPosition((Array.isArray(raw.tags) ? raw.tags : []).filter(usableRow))
