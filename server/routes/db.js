@@ -31,6 +31,8 @@ import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js'
 import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 import { geoCodeRefusal } from '../services/geo-codes-guard.js';   // REFERENCE_LISTS_V1 (полировка) — коды географии не меняются
 import { stampWriteBody } from '../services/domain/package-lines.js';   // SERVICES_PACKAGES_V1 — цена пакета на строке при записи
+import { packageProblem, isPackageRow, packageIds, packageItems } from '../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1
+import { onlineRuleProblem } from '../../public/js/shared/service-public.js';   // SERVICES_PACKAGES_V1 — показ услуги: RU + UZ
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -406,6 +408,15 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     if (consultFormat) return res.status(400).json({ error: { code: 'bad_request', message: consultFormat.message, field: consultFormat.field } });
     const consultKind = consultKindRefusal(db, compiled.meta, req.body);
     if (consultKind) return res.status(409).json({ error: { code: 'conflict', message: consultKind, field: 'api_kind' } });
+    // SERVICES_PACKAGES_V1 — пакет: те же правила, что у окна «Пакет услуг»
+    // (shared/package-price.js packageProblem); шаблон сметы не проверяется.
+    const packageFormat = packageFormatRefusal(db, compiled.meta, req.body, req.user);
+    if (packageFormat) return res.status(400).json({ error: { code: 'bad_request', message: packageFormat.message, field: packageFormat.field } });
+    // SERVICES_PACKAGES_V1 — показ услуги на сайте и у партнёров (online_booking)
+    // — только с названием на русском и узбекском, в какую бы дверь ни писали:
+    // окно услуги (service_save), импорт Excel, экран «Услуги для сайта».
+    const onlineRule = serviceOnlineRefusal(db, compiled.meta, req.body, req.user);
+    if (onlineRule) return res.status(400).json({ error: { code: 'bad_request', message: onlineRule, field: 'name_uz' } });
     // CLINIC_API_STEP7_V1 — решение владельца 11 по зданиям: пока включено
     // подключение API, филиал, показанный на сайте (работает и «Показывать на
     // сайте»), без полного адреса для партнёров не сохраняется, и отметку у
@@ -811,6 +822,57 @@ function consultKindRefusal(db, meta, body) {
   if (meta.op !== 'insert' && self == null) return CONSULT_MESSAGES.kindTaken;   // один вид «для партнёров» не ставят пачке строк
   for (const k of kinds) {
     if (db.prepare('SELECT 1 FROM consultation_types WHERE api_kind = ? AND id <> ?').get(k, self == null ? -1 : self)) return CONSULT_MESSAGES.kindTaken;
+  }
+  return null;
+}
+
+// Строки, которые затронет правка, — тем же compile(), что и сама правка.
+function targetRows(db, body, user, columns) {
+  try {
+    const sel = compile({ table: body.table, op: 'select', columns, filters: body.filters }, user, { db });
+    return db.prepare(sel.sql).all(...sel.params);
+  } catch { return []; }
+}
+// Сумма цен действующих услуг пакета — для «суммы скидки» и «цены пакета».
+function packageFull(db, serviceIds) {
+  const ids = packageIds({ service_ids: serviceIds });
+  if (!ids.length) return 0;
+  const services = db.prepare(`SELECT id, price, active FROM services WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+  return packageItems({ service_ids: ids }, services).items.reduce((s, x) => s + x.price, 0);
+}
+function packageFormatRefusal(db, meta, body, user) {
+  if (!meta || meta.table !== 'service_templates' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
+  const v = body && body.values;
+  if (meta.op !== 'update') {
+    for (const row of (Array.isArray(v) ? v : [v])) {
+      if (!row || !isPackageRow(row)) continue;
+      const p = packageProblem(row, { insert: true, full: packageFull(db, row.service_ids) });
+      if (p) return p;
+    }
+    return null;
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const money = ['discount_mode', 'discount_value', 'service_ids'].some((k) => Object.prototype.hasOwnProperty.call(v, k));
+  for (const cur of targetRows(db, body, user, '*')) {
+    const merged = { ...cur, ...v };
+    if (!isPackageRow(merged)) continue;
+    const p = packageProblem(v, { merged, full: money ? packageFull(db, merged.service_ids) : null });
+    if (p) return p;
+  }
+  return null;
+}
+function serviceOnlineRefusal(db, meta, body, user) {
+  if (!meta || meta.table !== 'services' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
+  const v = body && body.values;
+  if (meta.op !== 'update') {
+    for (const row of (Array.isArray(v) ? v : [v])) { const p = onlineRuleProblem(row); if (p) return p; }
+    return null;
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  if (!['online_booking', 'name', 'name_uz'].some((k) => Object.prototype.hasOwnProperty.call(v, k))) return null;
+  for (const cur of targetRows(db, body, user, 'id,name,name_uz,online_booking')) {
+    const p = onlineRuleProblem({ ...cur, ...v });
+    if (p) return p;
   }
   return null;
 }
