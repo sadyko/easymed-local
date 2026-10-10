@@ -47,6 +47,12 @@ const FIELD_ORDER = ['name', 'phone', 'country_code', 'region_code', 'district_c
 const same = (a, b) => String(a == null ? '' : a) === String(b == null ? '' : b);
 // CLINIC_API_STEP7_V1 — включено ли подключение API (флаг записи клиники, только главное здание).
 const apiAddressRequired = () => !!(typeof window !== 'undefined' && window.CLINIC && window.CLINIC.api_address_required);
+// CLINIC_API_STEP7_V1 (ревью слияния №6) — запись клиники перечитали
+// (refreshClinicBrand, событие 'clinic:refreshed', из любого экземпляра
+// clinic-context.js): звёздочки открытой страницы — по свежему флагу. Одна
+// функция на модуль; страница, нарисованная последней, — та, что на экране.
+let currentSync = null;
+function onClinicRefreshed() { if (typeof currentSync === 'function') currentSync(); }
 
 function card(icon, title, ...body) {
     return h('div', { class: 'card' },
@@ -145,6 +151,11 @@ export async function renderBranchPage(container, opts = {}) {
 
     // CLINIC_API_STEP7_V1 — звёздочки и строка «адрес обязателен» по текущему состоянию.
     function syncRequired() { address.setRequired(needsAddress()); }
+    currentSync = lockCompany ? null : syncRequired;   // ревью слияния №6
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('clinic:refreshed', onClinicRefreshed);
+        window.addEventListener('clinic:refreshed', onClinicRefreshed);
+    }
 
     // ---- часы работы (задача 14) ----
     const hours = readBranchHours(state.working_hours, state.is_24_7);

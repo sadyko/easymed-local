@@ -1222,3 +1222,72 @@ test('отказ сервера с полем: объяснение под эт�
     await save(root);
     assert.equal(focusLog.length, 0, 'без поля фокус остаётся, где был');
 });
+
+// CLINIC_API_STEP7_V1 (ревью слияния №6) — «Компания» из кэша оболочки не
+// перерисовывается, а флаг «адрес для партнёров обязателен» меняется на «API и
+// подключения» (changed() → refreshClinicBrand). refreshClinicBrand говорит об этом
+// событием window 'clinic:refreshed' — его слышит и другой экземпляр модуля
+// (api-connections.js грузит clinic-context.js без ?v=); «Компания» ставит или
+// снимает звёздочки сразу. Сохранение перечитывает флаг само (подключения
+// выключили на другом компьютере).
+function liveWindowEvents() {
+    const l = {};
+    const prev = { add: globalThis.window.addEventListener, remove: globalThis.window.removeEventListener, dispatch: globalThis.window.dispatchEvent };
+    globalThis.window.addEventListener = (t, fn) => { (l[t] || (l[t] = [])).push(fn); };
+    globalThis.window.removeEventListener = (t, fn) => { const a = l[t] || []; const i = a.indexOf(fn); if (i > -1) a.splice(i, 1); };
+    globalThis.window.dispatchEvent = (e) => { for (const fn of [...(l[e.type] || [])]) fn(e); return true; };
+    return () => { globalThis.window.addEventListener = prev.add; globalThis.window.removeEventListener = prev.remove; globalThis.window.dispatchEvent = prev.dispatch; };
+}
+function serverFlag(on) {
+    const orig = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => (String(url).startsWith('/api/rpc/get_clinic_by_slug')
+        ? { ok: true, status: 200, json: async () => ({ data: { ...globalThis.window.CLINIC, api_address_required: on() } }) }
+        : orig(url, opts));
+    return () => { globalThis.fetch = orig; };
+}
+const companyStar = (root) => labelText(fieldBox(root, 'Город / область').children.find((c) => c.tagName === 'LABEL')).includes('*');
+
+test('флаг изменили на «API и подключения» (другой экземпляр clinic-context.js): «Компания» без перерисовки ставит и снимает звёздочки', async () => {
+    const clinic = globalThis.window.CLINIC;
+    let flag = false;
+    const restoreEvents = liveWindowEvents();
+    const restoreFetch = serverFlag(() => flag);
+    try {
+        clinic.api_address_required = false;
+        const root = await open();
+        assert.equal(companyStar(root), false, 'стенд не тот: звёздочки при выключенных подключениях');
+        const { supabase } = await import('../../supabase.js');
+        const apiInstance = await import('../clinic-context.js');   // как api-connections.js — без ?v=
+        flag = true;
+        await apiInstance.refreshClinicBrand(supabase);
+        assert.equal(companyStar(root), true, 'подключение включили — звёздочек нет');
+        assert.match(textOf(root), /Пока включены подключения API, адрес для партнёров обязателен/);
+        flag = false;
+        await apiInstance.refreshClinicBrand(supabase);
+        assert.equal(companyStar(root), false, 'последнее подключение выключили — «обязателен» осталось');
+    } finally {
+        restoreFetch(); restoreEvents();
+        globalThis.window.CLINIC = clinic;
+        clinic.api_address_required = false;
+    }
+});
+
+test('подключения выключили на другом компьютере: сохранение перечитывает флаг — «Компания» без адреса сохраняется без F5', async () => {
+    const clinic = globalThis.window.CLINIC;
+    let flag = true;
+    const restoreFetch = serverFlag(() => flag);
+    try {
+        clinic.api_address_required = true;
+        const root = await open();   // адреса для партнёров нет
+        assert.equal(companyStar(root), true, 'стенд не тот: флаг включён');
+        flag = false;   // другой компьютер выключил последнее подключение
+        type(triInput(root, 'Название клиники', 'uz'), 'Shifo');
+        await save(root);
+        assert.ok(lastUpdate && lastUpdate.name_uz === 'Shifo', 'сохранение остановлено устаревшим флагом');
+        assert.equal(companyStar(root), false, 'звёздочки по устаревшему флагу');
+    } finally {
+        restoreFetch();
+        globalThis.window.CLINIC = clinic;
+        clinic.api_address_required = false;
+    }
+});

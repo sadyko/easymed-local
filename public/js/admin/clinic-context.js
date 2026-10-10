@@ -179,6 +179,15 @@ export async function refreshClinicBrand(supabase) {
     const clinic = await loadClinicBySlug(supabase, window.CLINIC_SLUG || 'local');
     if (clinic) window.CLINIC = clinic;
     paintClinicBrand();
+    // CLINIC_API_STEP7_V1 (ревью слияния №6) — запись клиники перечитана: экраны из
+    // кэша оболочки («Компания», страница здания) ставят звёздочки адреса для
+    // партнёров по свежему флагу. Событие window, а не список слушателей модуля:
+    // api-connections.js грузит этот файл без ?v= — это другой экземпляр модуля.
+    try {
+        if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+            window.dispatchEvent(new CustomEvent('clinic:refreshed', { detail: { clinic: window.CLINIC || null } }));
+        }
+    } catch { /* событие — удобство, запись клиники уже обновлена */ }
     return window.CLINIC || null;
 }
 

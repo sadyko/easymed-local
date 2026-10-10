@@ -1195,3 +1195,38 @@ test('кэшированный хаб на странице здания с не
         assert.ok(items(root).length === 1);
     } finally { delete globalThis.window.confirm; }
 });
+
+// CLINIC_API_STEP7_V1 (ревью слияния №6) — страница здания слышит 'clinic:refreshed'
+// (refreshClinicBrand любого экземпляра clinic-context.js): подключение включили на
+// «API и подключения» — звёздочки у филиала на сайте появляются без перерисовки.
+test('страница здания: флаг изменили на «API и подключения» — звёздочки ставятся и снимаются без перерисовки', async () => {
+    const l = {};
+    const prev = { add: globalThis.window.addEventListener, remove: globalThis.window.removeEventListener, dispatch: globalThis.window.dispatchEvent };
+    globalThis.window.addEventListener = (t, fn) => { (l[t] || (l[t] = [])).push(fn); };
+    globalThis.window.removeEventListener = (t, fn) => { const a = l[t] || []; const i = a.indexOf(fn); if (i > -1) a.splice(i, 1); };
+    globalThis.window.dispatchEvent = (e) => { for (const fn of [...(l[e.type] || [])]) fn(e); return true; };
+    const clinic = globalThis.window.CLINIC;
+    let flag = false;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => (String(url).startsWith('/api/rpc/get_clinic_by_slug')
+        ? { ok: true, status: 200, json: async () => ({ data: { ...clinic, api_address_required: flag } }) }
+        : realFetch(url, opts));
+    try {
+        clinic.api_address_required = false;
+        const { root } = await openPage(HALF);
+        assert.deepEqual(stars(root), [false, false], 'стенд не тот');
+        const { supabase } = await import('../../supabase.js');
+        const apiInstance = await import('../clinic-context.js');   // как api-connections.js — без ?v=
+        flag = true;
+        await apiInstance.refreshClinicBrand(supabase);
+        assert.deepEqual(stars(root), [true, true], 'подключение включили — звёздочек нет');
+        flag = false;
+        await apiInstance.refreshClinicBrand(supabase);
+        assert.deepEqual(stars(root), [false, false], 'подключения выключили — звёздочки остались');
+    } finally {
+        globalThis.fetch = realFetch;
+        Object.assign(globalThis.window, { addEventListener: prev.add, removeEventListener: prev.remove, dispatchEvent: prev.dispatch });
+        globalThis.window.CLINIC = clinic;
+        delete clinic.api_address_required;
+    }
+});
