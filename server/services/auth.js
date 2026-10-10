@@ -86,7 +86,8 @@ export function login(db, username, password, { ip = '' } = {}) {
     // MY_STOCK_V1 — department_id едет с первой же минуты входа: вход НЕ
     // перезагружает страницу (форма → onAuthed), и без него пункт «Мой отдел»
     // появился бы в меню только после первого F5.
-    'SELECT id, username, password_hash, full_name, role, department_id, is_active, must_change_password FROM users WHERE username = ?'
+    // ADMIN_DOCTOR_LOCAL_V1 — is_doctor по той же причине: см. publicUser.
+    'SELECT id, username, password_hash, full_name, role, department_id, is_active, must_change_password, is_doctor FROM users WHERE username = ?'
   ).get(name);
   const match = bcrypt.compareSync(String(password ?? ''), user?.password_hash || DUMMY_HASH);
   if (!user || !user.is_active || !match) {
@@ -148,7 +149,8 @@ export function sessionUser(db, sid, { background = false } = {}) {
     // Принадлежность к отделу — ФАКТ о человеке, а не право, и спросить её
     // экрану больше негде: users читается только через /api/db, а роль без
     // прав на справочник сотрудников туда не ходит.
-    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.custom_role_code, u.department_id, u.is_active, u.must_change_password, s.expires_at AS session_expires_at, s.last_seen_at AS session_seen_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
+    // ADMIN_DOCTOR_LOCAL_V1 — is_doctor: см. publicUser.
+    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.custom_role_code, u.department_id, u.is_active, u.must_change_password, u.is_doctor, s.expires_at AS session_expires_at, s.last_seen_at AS session_seen_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
   ).get(sid);
   if (!row) return null;
   const now = Date.now();
@@ -195,7 +197,17 @@ export function publicUser(u) {
            is_active: !!u.is_active,
            // !! also maps SQLite's 0/1 — and an undefined column (rows selected
            // by callers that don't need the flag) — to a clean boolean.
-           must_change_password: !!u.must_change_password };
+           must_change_password: !!u.must_change_password,
+           // ADMIN_DOCTOR_LOCAL_V1 — ВРАЧ ЛИ ЭТО: единственный признак — флаг
+           // is_doctor, а не роль (администратор-врач — role 'admin'). Без него
+           // оболочка (public/js/admin/auth.js actorFromUser) знала врача только
+           // по role = 'doctor': у администратора-врача пустел «мой день»
+           // кабинета, «Мой профиль» не открывался, «Взять» у процедуры
+           // пряталось. Настоящим true/false, как флаги выше. Специальность и
+           // лицензию сессия НЕ отдаёт: по ним оболочка угадывала бы врача и в
+           // медсестре со специальностью. Каждый вызывающий выбирает колонку
+           // (вход, sessionUser, crm/tasks-follow.js USER_COLS).
+           is_doctor: !!u.is_doctor };
 }
 
 // FIRST_RUN_PASSWORD_V1 — the well-known default the first-run admin starts

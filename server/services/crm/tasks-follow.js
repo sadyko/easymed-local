@@ -40,7 +40,9 @@ export class RpcError extends Error {
 const idOrNull = (v) => (v == null || v === '' ? null : Number(v));
 const has = (o, k) => !!o && Object.prototype.hasOwnProperty.call(o, k);
 
-const USER_COLS = 'id, username, full_name, role, extra_roles, custom_role_code, department_id, is_active, must_change_password';
+// ADMIN_DOCTOR_LOCAL_V1 — is_doctor: publicUser отдаёт флаг, и без колонки он
+// говорил бы «не врач» про администратора-врача.
+const USER_COLS = 'id, username, full_name, role, extra_roles, custom_role_code, department_id, is_active, must_change_password, is_doctor';
 /** Сотрудник по номеру (как сессия: роли, своя роль клиники, активность) или null. */
 export function staffById(db, id) {
   const n = idOrNull(id);
