@@ -1995,20 +1995,27 @@ test('консультация по виду приёма видна в карт
 
 // Разбор ревью (M9) — консультации без врача не бывает: окно дат предлагает
 // выбрать врача, и только из тех, у кого этот вид приёма есть.
+// DOCTOR_PROFILE_V1 — врачи стенда приходят через doctorSheet({ doctors }):
+// doctorSheet сам ставит DOCTORS = doctors || [DOCTOR], и Сидоров, заданный
+// до вызова, до экрана не доходил — проверка «не предложен» ничего не
+// доказывала. После решения владельца 8 вид «ведёт» и врач (is_doctor) без
+// своей строки (тест DOCTOR_PROFILE_V1 ниже), поэтому Сидоров здесь — не врач
+// по is_doctor и без строки «Ведёт».
 test('консультация по виду приёма в окне дат требует врача — из тех, кто её ведёт', async () => {
   VISITS = [];
   SERVICES = [DOC_SVC];
-  const OTHER = { id: 32, full_name: 'Сидоров Сидор', specialty: 'хирург', service_rates: null };
+  const OTHER = { id: 32, full_name: 'Сидоров Сидор', specialty: 'хирург', service_rates: null, is_doctor: 0 };
   DOCTORS = [DOCTOR, OTHER];
   CONSULTS = [{ id: 5, name: 'Первичный', name_ru: 'Первичный приём', price: 80000 }];
   CONSULT_PRICES = [{ doctor_id: 31, consultation_type_id: 5, available: 1 }];
-  const { sheet } = await doctorSheet({ lines: [{ id: 903, service_id: null, consultation_type_id: 5, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null }] });
+  const { sheet } = await doctorSheet({ doctors: DOCTORS, lines: [{ id: 903, service_id: null, consultation_type_id: 5, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null }] });   // DOCTOR_PROFILE_V1
   await tick(60);
   const sels = doctorSelects(sheet);
   assert.equal(sels.length, 1, 'у консультации нет выбора врача: ' + textOf(sheet).slice(0, 300));
   const names = sels[0].children.map(textOf).join(' | ');
   assert.ok(/Петров Пётр/.test(names), names);
-  assert.ok(!/Сидоров/.test(names), 'предложен врач, который этот вид приёма не ведёт: ' + names);
+  assert.equal(DOCTORS.length, 2, 'стенд потерял врачей — проверка ниже снова ничего не докажет');   // DOCTOR_PROFILE_V1
+  assert.ok(!/Сидоров/.test(names), 'предложен сотрудник, который этот вид приёма не ведёт (нет строки «Ведёт», не врач по is_doctor): ' + names);
   SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
   window.easymed.state.user = null;
 });
