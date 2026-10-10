@@ -44,6 +44,9 @@ export const PROFILE_MESSAGES = Object.freeze({
   // CLINIC_PROFILE_V1 (ревью I2) — путь к файлу логотипа пишет экран; этот отказ
   // видит только тот, кто пишет в /api/db в обход экрана.
   logoPath:  'Неверный путь к файлу логотипа: квадратный — square/<имя>.png, вертикальный — portrait/<имя>.png (латинские буквы, цифры, «-» и «_»).',
+  // CLINIC_API_STEP7_V1 — решение владельца 11 (2026-10-10): адрес для партнёров
+  // обязателен, пока включено хоть одно подключение API.
+  partnerAddress: 'Пока включены подключения API, адрес для партнёров обязателен: город или область, район и улица на русском.',
 });
 
 // CLINIC_PROFILE_V1 (ревью I2) — ХВОСТ ССЫЛКИ (путь, запрос, якорь): без
@@ -143,6 +146,22 @@ export function addressProblems(v, { regionsAvailable = true, districtsAvailable
   if (regionsAvailable && !v.region_code) p.region_code = PROFILE_MESSAGES.region;
   if (v.region_code && districtsAvailable && !v.district_code) p.district_code = PROFILE_MESSAGES.district;
   if (!String(v.street_ru || '').trim()) p.street_ru = PROFILE_MESSAGES.street;
+  return p;
+}
+
+// CLINIC_API_STEP7_V1 — РЕШЕНИЕ ВЛАДЕЛЬЦА 11: пока у клиники включено хоть одно
+// подключение API, адрес для партнёров обязателен ЦЕЛИКОМ — город или
+// область, район (если у области есть районы) и улица на русском. Не «всё или
+// ничего», как addressProblems выше: пустой адрес — тоже отказ. Одно правило
+// на экран «Компания», /api/db и включение подключения
+// (server/services/api/partner-address.js).
+export const PARTNER_ADDRESS_COLUMNS = Object.freeze(['region_code', 'district_code', 'street_ru']);
+export function partnerAddressProblems(v, { regionsAvailable = true, districtsAvailable = true } = {}) {
+  const row = v || {};
+  const p = {};
+  if (regionsAvailable && !row.region_code) p.region_code = PROFILE_MESSAGES.region;
+  if (row.region_code && districtsAvailable && !row.district_code) p.district_code = PROFILE_MESSAGES.district;
+  if (!String(row.street_ru || '').trim()) p.street_ru = PROFILE_MESSAGES.street;
   return p;
 }
 

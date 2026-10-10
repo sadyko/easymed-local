@@ -82,3 +82,13 @@ test('get_clinic_by_slug: logo_mark_url — только квадратная PN
   assert.equal(getClinicBySlug(db, {}, null).logo_mark_url, null, 'JPEG — null');
   assert.equal(getClinicBySlug(db, {}, null).logo_url, 'data:image/jpeg;base64,/9j/4AAQSkZJRg==', 'logo_url (печать) — как был');
 });
+
+// CLINIC_API_STEP7_V1 — решение владельца 11: «Компания» ставит звёздочки и не
+// сохраняет без адреса для партнёров, пока включено подключение API.
+test('get_clinic_by_slug: api_address_required — false без подключений, true при включённом', async () => {
+  const { insertConnectionRow } = await import('../../test-helpers/api-connection-row.js');
+  const db = openDb(':memory:'); migrate(db);
+  assert.equal(getClinicBySlug(db, {}, null).api_address_required, false);
+  insertConnectionRow(db);
+  assert.equal(getClinicBySlug(db, {}, null).api_address_required, true);
+});

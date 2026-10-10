@@ -10,6 +10,7 @@ import {
   COMPANY_CLINIC_WIDE, COMPANY_BUILDING, COMPANY_COLUMNS, PROFILE_MESSAGES,
   normalizeWebsite, websiteProblem, normalizeHandle, handleProblem, mapsProblem, routeUrl, telHref,
   composeAddress, addressProblems, companyProblems, normalizeProfile,
+  partnerAddressProblems, PARTNER_ADDRESS_COLUMNS,   // CLINIC_API_STEP7_V1
 } from './clinic-profile.js';
 import { STRINGS } from '../admin/i18n-strings.js';
 import { writableColumns } from '../../../server/db/schema-registry.js';
@@ -157,4 +158,15 @@ test('сервер: storedProfileProblems проверяет значения р
   for (const p of ['square/a b.png', 'square/a.PNG.exe', 'square/.png', 'square/a/b.png', 'square\a.png', 'square/a.png ', 'portrait/a.png'])
     assert.equal(storedProfileProblems({ logo_square_path: p }).logo_square_path, PROFILE_MESSAGES.logoPath, p);
   assert.equal(storedProfileProblems({ website: 5 }).website, PROFILE_MESSAGES.website, 'не строка — отказ');
+});
+
+// CLINIC_API_STEP7_V1 — решение владельца 11: пока включено подключение API, адрес обязателен целиком.
+test('адрес для партнёров при включённом API: пустой — тоже отказ; без районов у области — район не нужен', () => {
+  assert.deepEqual(Object.keys(partnerAddressProblems({})).sort(), ['region_code', 'street_ru']);
+  assert.deepEqual(Object.keys(partnerAddressProblems({ region_code: 'tashkent-city', street_ru: 'ул. Мира, 1' })), ['district_code']);
+  assert.deepEqual(partnerAddressProblems({ region_code: 'x', street_ru: 'ул. Мира, 1' }, { districtsAvailable: false }), {});
+  assert.deepEqual(partnerAddressProblems({ street_ru: 'пр. Абая, 1' }, { regionsAvailable: false }), {});
+  assert.deepEqual(partnerAddressProblems({ region_code: 'tashkent-city', district_code: 'yunusobod', street_ru: 'ул. Мира, 1' }), {});
+  assert.deepEqual(PARTNER_ADDRESS_COLUMNS, ['region_code', 'district_code', 'street_ru']);
+  assert.ok(STRINGS[PROFILE_MESSAGES.partnerAddress] && STRINGS[PROFILE_MESSAGES.partnerAddress].uz);
 });

@@ -16,6 +16,7 @@ import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
+import { insertConnectionRow } from '../test-helpers/api-connection-row.js';   // CLINIC_API_STEP7_V1
 
 const mkUser = (db, username, name, role) => db
   .prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
@@ -161,5 +162,26 @@ test('квадратный уже загружен — logo_data_url его ко
     const save = await saver(t);
     const res = await save({ logo_square_path: 'square/2-b.png', logo_data_url: 'data:image/png;base64,TkVX' });
     assert.equal(res.status, 200, JSON.stringify(await res.clone().json()));
+  } finally { t.stop(); }
+});
+
+// CLINIC_API_STEP7_V1 — решение владельца 11: пока включено подключение API,
+// «Компания» без адреса для партнёров не сохраняется (400 с полем); выключили —
+// адрес снова необязателен.
+test('/api/db: пока подключение API включено, «Компания» без улицы — 400 partner_address_required; выключено — 200', async () => {
+  const t = await setup();
+  try {
+    t.db.prepare("UPDATE doc_settings SET region_code = 'tashkent-city', district_code = 'yunusobod', street_ru = 'ул. Мира, 1' WHERE id = 1").run();
+    insertConnectionRow(t.db);
+    const save = await saver(t);
+    const bad = await save({ street_ru: '' });
+    assert.equal(bad.status, 400);
+    const { error } = await bad.json();
+    assert.equal(error.code, 'partner_address_required');
+    assert.equal(error.field, 'street_ru');
+    assert.equal(t.db.prepare('SELECT street_ru FROM doc_settings WHERE id = 1').get().street_ru, 'ул. Мира, 1', 'строка не тронута');
+    t.db.prepare('UPDATE api_connections SET active = 0').run();
+    const ok = await save({ street_ru: '' });
+    assert.equal(ok.status, 200, JSON.stringify(await ok.clone().json()));
   } finally { t.stop(); }
 });
