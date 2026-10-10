@@ -347,3 +347,19 @@ test('doctor_conditions через /api/db не пишет никто — ни �
     assert.deepEqual(db.prepare('SELECT slug FROM doctor_conditions WHERE doctor_id = ?').all(docA).map((r) => r.slug), ['hypertension']);
   } finally { db.close(); }
 });
+
+// SERVICES_PACKAGES_V1 — «Пакеты услуг: Изменение» — названия, отметка, показ;
+// способ и величина скидки — только с «Ценами и процентами».
+test('регистратура с «Пакеты услуг: Изменение» заводит пакет с названиями и показом; скидка — только с «Ценами и процентами»', () => {
+  const db = seed();
+  try {
+    addGrants(db, 'registrar', { settings: 'view', 'settings.service_packages': 'edit' });
+    const ins = (values) => run(db, { table: 'service_templates', op: 'insert', values, returning: true }, REG);
+    assert.throws(() => ins({ name: 'Check-up', service_ids: [1], is_package: 1, discount_mode: 'price', discount_value: 100 }), refused);
+    const id = ins({ name: 'Check-up', name_uz: 'Check-up', service_ids: [1], is_package: 1, show_public: 1 }).id;
+    addGrants(db, 'registrar', { 'settings.service_packages.money': 'edit' });
+    run(db, { table: 'service_templates', op: 'update', values: { discount_mode: 'amount', discount_value: 5000 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
+    assert.deepEqual({ ...db.prepare('SELECT is_package, show_public, discount_mode, discount_value FROM service_templates WHERE id = ?').get(id) },
+      { is_package: 1, show_public: 1, discount_mode: 'amount', discount_value: 5000 });
+  } finally { db.close(); }
+});

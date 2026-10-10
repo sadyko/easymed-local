@@ -480,3 +480,24 @@ test('consultation_types: английское название, длитель�
     assert.ok(writableColumns('consultation_types', 'update').includes(c), 'правка ' + c);
   }
 });
+
+// SERVICES_PACKAGES_V1 (мигр. 244) — пакет: отметка, названия, скидка, показ;
+// строка визита: цена пакета — вписывает только дверь /api/db (routes/db.js).
+test('service_templates: отметка пакета, названия UZ/EN, способ и величина скидки, показ — в чтении и записи; фильтр по отметке', () => {
+  for (const c of ['is_package', 'name_uz', 'name_en', 'discount_mode', 'discount_value', 'show_public']) {
+    assert.ok(readableColumns('service_templates').includes(c), 'чтение ' + c);
+    assert.ok(writableColumns('service_templates', 'insert').includes(c), 'вставка ' + c);
+    assert.ok(writableColumns('service_templates', 'update').includes(c), 'правка ' + c);
+  }
+  assert.ok(REGISTRY.service_templates.filters.includes('is_package'));
+  assert.deepEqual(REGISTRY.service_templates.write.insert.nonAdminColumns, ['name', 'service_ids', 'active'], 'регистратура отметку пакета не ставит');
+});
+
+test('visit_services: цена пакета читается; вставка — колонки есть (их затирает дверь); правка — только снять (NULL)', () => {
+  for (const c of ['package_full', 'package_price']) {
+    assert.ok(readableColumns('visit_services').includes(c), 'чтение ' + c);
+    assert.ok(writableColumns('visit_services', 'insert').includes(c), 'вставка ' + c);
+  }
+  assert.deepEqual(REGISTRY.visit_services.write.update.onlyValues, { package_id: [null], package_full: [null], package_price: [null] });
+  assert.ok(REGISTRY.visit_services.embed.service_templates.columns.includes('is_package'), 'чек узнаёт пакет по отметке');
+});

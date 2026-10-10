@@ -355,22 +355,26 @@ export const REGISTRY = {
   visit_services: {
     read:  { roles: ALL_STAFF, columns: ['id','visit_id','service_id','clinic_item_id','doctor_id','quantity','unit_price','total','status','invoice_item_id','created_by','created_at','consultation_type_id','scheduled_at','queue_key','queue_no','notes',
              'sample_collected_at','verified_by','verified_at','sync_origin',
-             'price_tier','package_id'] },   // package_id: PACKAGES_V1 (mig 154) — the package the line came from; price_tier: VISIT_TIER_PRICING_V1 (mig 127) — primary/secondary/repeat, set by the screen from service_price_quote   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
+             'price_tier','package_id',
+             'package_full','package_price'] },   // SERVICES_PACKAGES_V1 (мигр. 244) — цена услуги без скидки и цена в пакете, записанные при записи (ставит routes/db.js)   // package_id: PACKAGES_V1 (mig 154) — the package the line came from; price_tier: VISIT_TIER_PRICING_V1 (mig 127) — primary/secondary/repeat, set by the screen from service_price_quote   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
     // FINAL_ROLES_SYNC_FIX_V1 (M3) — created_by ставит СЕРВЕР из сессии
     // (stamps ниже), а не браузер: по нему remove_own_visit_line решает, чья
     // это строка, и присланное значение позволяло бы выдать чужую строку за
     // свою. Поэтому колонки нет в списке записи — ни вставкой, ни upsert.
     stamps: { created_by: { on: 'insert' } },
-    write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','consultation_type_id','scheduled_at','price_tier','package_id'] },
+    write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','consultation_type_id','scheduled_at','price_tier','package_id',
+                       // SERVICES_PACKAGES_V1 — в списке, чтобы их могла вписать сама дверь /api/db:
+                       // routes/db.js затирает присланное и ставит цену пакета (domain/package-lines.js).
+                       'package_full','package_price'] },
              // V3120_FIX (M2) — doctor_id отсюда убран: врача строки меняет только
              // patient_card_set_doctor (проверяет счёт, закрытый период и что это
              // живой исполнитель). Экранов, писавших его табличным путём, нет.
              update: { roles: ['admin','registrar','doctor','lab','nurse'], columns: ['status','consultation_type_id','notes',
-             'sample_collected_at','verified_by','verified_at','package_id'],
+             'sample_collected_at','verified_by','verified_at','package_id','package_full','package_price'],
              // PACKAGES_V1 (ревью I-3) — пометку пакета правкой можно только
              // СНЯТЬ: пакет вне срока визита иначе запирает весь счёт. Ставится
              // пакет лишь при заведении строки (и там проверяется, routes/db.js).
-             onlyValues: { package_id: [null] } },   // LAB_HANDLING_V1 (lab) + PROCEDURES_V1 (nurse отмечает выполнение)
+             onlyValues: { package_id: [null], package_full: [null], package_price: [null] } },   // SERVICES_PACKAGES_V1 — снятый пакет снимает и свою цену (routes/db.js)   // LAB_HANDLING_V1 (lab) + PROCEDURES_V1 (nurse отмечает выполнение)
              delete: { roles: ['admin','registrar'], bulkBy: ['visit_id'] } },   // V3120_FIX (M9) — окно визита снимает услугу парой visit_id+service_id
     // BRANCH_ORIGIN_V1 — правило то же, что у patients выше, и здесь оно и
     // работает: кабинет врача и процедуры спрашивают `.is('sync_origin', null)`
@@ -400,7 +404,7 @@ export const REGISTRY = {
                verified_by: { table:'users', fk:'verified_by', columns:['id','full_name'] },   // performer:verified_by(...) в процедурах
                created_by: { table:'users', fk:'created_by', columns:['id','full_name'] },     // creator:created_by(...) — кто добавил строку в смету
                // PACKAGES_V1 — чек и счёт печатают, из какого пакета строка и его скидку.
-               service_templates: { table:'service_templates', fk:'package_id', columns:['id','name','discount_percent'] },
+               service_templates: { table:'service_templates', fk:'package_id', columns:['id','name','discount_percent','is_package'] },   // SERVICES_PACKAGES_V1 — «пакет» на бланке — только у пакета (is_package)
                // branch_id: отбор по корпусу (branch-filter: visit_services →
                // visits.branch_id); referral_source_id — отчёт по источникам.
                // Обе колонки visits и так отдаёт напрямую тем же ролям.
@@ -1599,7 +1603,9 @@ export const REGISTRY = {
   service_templates: {
     // PACKAGES_V1 (mig 154) — a template is now a PACKAGE: discount_percent and
     // the offer window valid_from/valid_until (local dates, both optional).
-    read:  { roles: ALL_STAFF, columns: ['id','name','service_ids','active','created_at','discount_percent','valid_from','valid_until'] },
+    read:  { roles: ALL_STAFF, columns: ['id','name','service_ids','active','created_at','discount_percent','valid_from','valid_until',
+             // SERVICES_PACKAGES_V1 (мигр. 244) — отметка пакета, названия UZ/EN, способ и величина скидки, показ на сайте.
+             'is_package','name_uz','name_en','discount_mode','discount_value','show_public'] },
     // WIZ_TEMPLATES_REGISTRAR_V1 — saving a смета as a template is done by the
     // role that builds the смета. Retiring one is an UPDATE (active = 0), which
     // is what the template list's «×» sends, so the registrar gets that too;
@@ -1610,9 +1616,11 @@ export const REGISTRY = {
     // after creation are the tile «Пакеты услуг» in «Роли» (`grant`): «Изменение»
     // writes name/services/dates, «Цены и проценты» the discount.
     write: { grant: 'settings.service_packages',
-             insert: { roles: ['admin','registrar'], columns: ['name','service_ids','active','discount_percent','valid_from','valid_until'],
+             insert: { roles: ['admin','registrar'], columns: ['name','service_ids','active','discount_percent','valid_from','valid_until',
+                       'is_package','name_uz','name_en','discount_mode','discount_value','show_public'],   // SERVICES_PACKAGES_V1
                        nonAdminColumns: ['name','service_ids','active'] },
-             update: { roles: ['admin','registrar'], columns: ['name','service_ids','active','discount_percent','valid_from','valid_until'],
+             update: { roles: ['admin','registrar'], columns: ['name','service_ids','active','discount_percent','valid_from','valid_until',
+                       'is_package','name_uz','name_en','discount_mode','discount_value','show_public'],   // SERVICES_PACKAGES_V1
                        nonAdminColumns: ['active'],
                        // Ревью M-1: «×» в списке — это active = 0. Вернуть снятый
                        // пакет (active = 1) — решение плитки, а не стойки: иначе
@@ -1620,7 +1628,7 @@ export const REGISTRY = {
                        // закрыл. Право плитки «Изменение» снимает сужение.
                        nonAdminValues: { active: [0] } },
              delete: { roles: ['admin'] } },
-    filters: ['id','active','name'],
+    filters: ['id','active','name','is_package'],   // SERVICES_PACKAGES_V1 — «Пакеты услуг» спрашивают только пакеты
     // service_ids is a JSON array of service ids in a TEXT column (mig 027).
     // Without this declaration bindWrite() never serialises it, bindable()
     // rejects the array with a 400, and «Сохранить как шаблон» fails for EVERY
