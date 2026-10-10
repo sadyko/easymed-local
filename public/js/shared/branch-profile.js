@@ -143,6 +143,16 @@ export function overlayOwnBuilding(row, company) {
 }
 
 /**
+ * CLINIC_API_STEP7_V1 — видно ли здание сайту и партнёрам: работает (active) и
+ * «Показывать на сайте» (show_public) — так здания прочтёт API (шаг 8). Решение
+ * владельца 11 по зданиям: пока включено подключение API, у такого здания адрес
+ * для партнёров полный (services/api/partner-address.js, страница здания).
+ */
+export function branchShownToPartners(row) {
+  return !!row && Number(row.active ?? 1) !== 0 && Number(row.show_public ?? 1) !== 0;
+}
+
+/**
  * Не прячет ли врача его здание. Скрытое здание (show_public = 0) прячет и
  * своих врачей — макет «Филиалы» (решение владельца 2026-10-06: «его врачи
  * тоже не показываются»). Здание врача — users.branch_id, как у часов и

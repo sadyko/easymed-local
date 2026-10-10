@@ -10,7 +10,7 @@ import { readIdentity } from '../services/branch-sync/identity.js';
 import { COMPANY_CLINIC_WIDE, COMPANY_PARTNER, storedProfileProblems } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1, BRANCH_PROFILE_V1 (COMPANY_PARTNER)
 import { BRANCH_MESSAGES, BRANCH_MAIN_COLUMNS, OWN_FROM_COMPANY, storedBranchProblems, ownBuildingProblems } from '../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
 import { keepLegacyLogo } from '../services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1 (ревью M3)
-import { companyAddressRefusal } from '../services/api/partner-address.js';   // CLINIC_API_STEP7_V1
+import { companyAddressRefusal, branchAddressRefusal } from '../services/api/partner-address.js';   // CLINIC_API_STEP7_V1
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
@@ -396,6 +396,14 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     // BRANCH_PROFILE_V1 — формат: карта, часы, отметки, коды — те же правила, что у экрана.
     const branchFormat = branchFormatRefusal(compiled.meta, req.body);
     if (branchFormat) return res.status(400).json({ error: { code: 'bad_request', message: branchFormat.message, field: branchFormat.field } });
+    // CLINIC_API_STEP7_V1 — решение владельца 11 по зданиям: пока включено
+    // подключение API, филиал, показанный на сайте (работает и «Показывать на
+    // сайте»), без полного адреса для партнёров не сохраняется, и отметку у
+    // такого филиала не включить (services/api/partner-address.js).
+    const branchAddress = branchAddressRefusal(db, compiled.meta, req.body);
+    if (branchAddress) {
+      return res.status(400).json({ error: { code: 'partner_address_required', message: branchAddress.message, field: branchAddress.field } });
+    }
 
     // CLINIC_PROFILE_V1 (ревью M3) — ПРЕЖНИЙ ЛОГОТИП НЕ ЗАТИРАЕТСЯ НЕСКОПИРОВАННЫМ.
     // Копия при запуске (index.js → clinic-logo-legacy.js) могла не лечь, а
