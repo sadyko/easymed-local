@@ -296,7 +296,7 @@ test('inpatient + lab-panel tables (025): staff read, correct write actors', () 
 test('staff/RBAC/branch config tables (026): staff read, admin write, correct extras', () => {
   const STAFF_CONFIG = [
     'roles', 'user_branches', 'user_specialties', 'positions',
-    'virtual_doctors', 'doctor_conditions', 'companies',
+    'virtual_doctors', 'companies',   // doctor_conditions — ниже: через /api/db её не пишет никто (DOCTOR_PROFILE_V1)
   ];
   for (const t of STAFF_CONFIG) {
     assert.ok(tableEntry(t), t + ' registered');
@@ -311,9 +311,16 @@ test('staff/RBAC/branch config tables (026): staff read, admin write, correct ex
   // roles is the dynamic-RBAC table (separate from role_permissions); permissions JSON is read+written
   assert.ok(readableColumns('roles').includes('permissions'));
   assert.ok(writableColumns('roles', 'insert').includes('permissions'));
-  // doctor edits their own saved conditions/quick-picks (doctor-profile.js self-edit)
-  assert.ok(canWrite('doctor_conditions', 'insert', 'doctor'));
-  assert.ok(canWrite('doctor_conditions', 'delete', 'doctor'));   // save = delete-then-insert reconcile
+  // DOCTOR_PROFILE_V1 (ревью шага 5, №3) — «болезни и симптомы» врача пишет
+  // только update_my_doctor_profile: своя строка, 409 врачу главного здания в
+  // филиале. Через /api/db — никто: раньше любой врач правил, удалял и
+  // подсаживал их чужому врачу. Читают все сотрудники, как раньше.
+  assert.ok(tableEntry('doctor_conditions'), 'doctor_conditions registered');
+  assert.ok(canRead('doctor_conditions', 'registrar'));
+  assert.ok(readableColumns('doctor_conditions').includes('created_at'));
+  for (const op of ['insert', 'update', 'delete']) {
+    for (const role of ['doctor', 'admin', 'registrar']) assert.ok(!canWrite('doctor_conditions', op, role), 'doctor_conditions ' + op + ' — ' + role);
+  }
   assert.ok(!canWrite('user_specialties', 'insert', 'doctor'));   // specialty assignment is admin staff-management
   // junction main FKs are allow-listed for the query layer
   assert.ok(filterAllowed('user_branches', 'user_id'));

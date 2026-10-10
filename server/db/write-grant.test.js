@@ -328,3 +328,22 @@ test('регистратура с «Консультации врачей: Из�
       { duration_minutes: 45, api_kind: 'initial', name_en: 'Initial visit' });
   } finally { db.close(); }
 });
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №3) — «болезни и симптомы» чужого врача через
+// /api/db не правит, не удаляет и не подсаживает никто, даже администратор:
+// их пишет только update_my_doctor_profile (своя строка; 409 в филиале).
+test('doctor_conditions через /api/db не пишет никто — ни врач, ни администратор', () => {
+  const db = seed();
+  try {
+    const ins = db.prepare("INSERT INTO users (username, password_hash, full_name, role, is_doctor) VALUES (?, 'x', ?, 'doctor', 1)");
+    const docA = Number(ins.run('doca', 'Врач А').lastInsertRowid);
+    const docB = { id: Number(ins.run('docb', 'Врач Б').lastInsertRowid), role: 'doctor', extra_roles: [] };
+    const cond = Number(db.prepare("INSERT INTO doctor_conditions (doctor_id, kind, slug, name_ru) VALUES (?, 'disease', 'hypertension', 'Гипертония')").run(docA).lastInsertRowid);
+    for (const user of [docB, ADMIN]) {
+      assert.throws(() => run(db, { table: 'doctor_conditions', op: 'delete', filters: [{ col: 'id', op: 'eq', val: cond }] }, user), refused, 'delete — ' + user.role);
+      assert.throws(() => run(db, { table: 'doctor_conditions', op: 'update', values: { slug: 'quackery' }, filters: [{ col: 'id', op: 'eq', val: cond }] }, user), refused, 'update — ' + user.role);
+      assert.throws(() => run(db, { table: 'doctor_conditions', op: 'insert', values: { doctor_id: docA, kind: 'disease', slug: 'quackery', name_ru: 'Лечу всё' } }, user), refused, 'insert — ' + user.role);
+    }
+    assert.deepEqual(db.prepare('SELECT slug FROM doctor_conditions WHERE doctor_id = ?').all(docA).map((r) => r.slug), ['hypertension']);
+  } finally { db.close(); }
+});

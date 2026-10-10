@@ -1480,9 +1480,14 @@ export const REGISTRY = {
   // Doctor owns their own set (delete-then-insert); admin can also manage.
   doctor_conditions: {
     read:  { roles: ALL_STAFF, columns: ['id','doctor_id','kind','slug','name_ru','name_uz','created_at'] },
-    write: { insert: { roles: ['admin','doctor'], columns: ['doctor_id','kind','slug','name_ru','name_uz'] },
-             update: { roles: ['admin','doctor'], columns: ['kind','slug','name_ru','name_uz'] },
-             delete: { roles: ['admin','doctor'] } },   // save = delete-then-insert reconcile
+    // DOCTOR_PROFILE_V1 (ревью шага 5, №3) — через /api/db не пишет никто.
+    // «Болезни и симптомы» врача пишет только update_my_doctor_profile
+    // (rpc/doctor-profile.js): только свою строку и с 409 врачу главного
+    // здания в филиале (решение владельца 10). Здесь стояли роли admin и
+    // doctor без правила «своя строка» — любой врач правил, удалял и
+    // подсаживал их чужому врачу. Экран «Мой профиль» сам больше не пишет
+    // (doctor-profile-save.test.mjs); партнёры получат их в шаге 8.
+    write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
     filters: ['id','doctor_id','kind'],
     embed:   {},
   },
