@@ -1067,8 +1067,10 @@ async function renderEditor(container, key) {
     if (!cfg) { backToHub(); return; }   // unknown section — safety net, never happens from the hub UI
 
     const tbody = h('tbody');
+    // CLINIC_API_STEP7_V1 — пустой список — русским шаблоном, а не собранной
+    // английской фразой с русским названием («No ключи api yet…»).
     const emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
-        `No ${cfg.title.toLowerCase()} yet — add the first one.`);
+        trf('В разделе «{title}» пока пусто. Нажмите «Добавить», чтобы завести первую запись.', { title: tr(cfg.title) }));
 
     // LOOKUP_COLUMN_FILTERS_V1 — строка отбора под шапкой, по полю на колонку.
     //
@@ -1459,7 +1461,8 @@ async function renderEditor(container, key) {
         overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: (cfg.modalWidth || '440px'), maxWidth: 'calc(100vw - 32px)' } },
             h('header', { class: 'modal-head' },
                 h('h2', null, Icon(cfg.icon, { size: 16 }), ' ',
-                    isEdit ? (cfg.editTitle || ('Edit ' + cfg.title)) : (cfg.addTitle || ('Add ' + cfg.title))),
+                    isEdit ? (cfg.editTitle || trf('Изменить: {title}', { title: tr(cfg.title) }))
+                           : (cfg.addTitle || trf('Добавить: {title}', { title: tr(cfg.title) }))),   // CLINIC_API_STEP7_V1
                 h('button', { class: 'modal-close', onclick: close }, '×')),
             h('div', { class: 'modal-body', style: cfg.modalCols ? { display: 'grid', gridTemplateColumns: cfg.modalCols, gap: '0 14px' } : null },
                 ...fieldEls,

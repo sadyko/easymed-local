@@ -11247,4 +11247,9 @@ export const STRINGS = {
   "Не удалось загрузить данные компании — обновите страницу, чтобы сохранить.": {"en":"Could not load the company details — reload the page to be able to save.","ru":"Не удалось загрузить данные компании — обновите страницу, чтобы сохранить.","uz":"Kompaniya ma’lumotlarini yuklab bo‘lmadi — saqlash uchun sahifani yangilang."},   // CLINIC_PROFILE_V1 (ревью C1)
   "{code} (не используется)": {"en":"{code} (no longer in use)","ru":"{code} (не используется)","uz":"{code} (ishlatilmaydi)"},   // CLINIC_PROFILE_V1 (ревью M4)
   // /CLINIC_PROFILE_V1 — экран «Компания»
+  // CLINIC_API_STEP7_V1 — «API и подключения»: подключения, ключи, источники CRM (план docs/plans/2026-10-10-clinic-api-7-api-screen.md)
+  "В разделе «{title}» пока пусто. Нажмите «Добавить», чтобы завести первую запись.": {"en":"“{title}” is empty so far. Press “Add” to create the first entry.","ru":"В разделе «{title}» пока пусто. Нажмите «Добавить», чтобы завести первую запись.","uz":"«{title}» bo‘limi hozircha bo‘sh. Birinchi yozuvni qo‘shish uchun «Qo‘shish»ni bosing."},   // CLINIC_API_STEP7_V1
+  "Изменить: {title}": {"en":"Edit: {title}","ru":"Изменить: {title}","uz":"O‘zgartirish: {title}"},   // CLINIC_API_STEP7_V1
+  "Добавить: {title}": {"en":"Add: {title}","ru":"Добавить: {title}","uz":"Qo‘shish: {title}"},   // CLINIC_API_STEP7_V1
+  // /CLINIC_API_STEP7_V1
 };
