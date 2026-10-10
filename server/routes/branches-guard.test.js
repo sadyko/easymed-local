@@ -156,3 +156,53 @@ test('формат — в любом здании: чужая карта, ста
     assert.equal(ins.status, 400, 'вставка проверяется так же');
   } finally { t.stop(); }
 });
+
+// BRANCH_PROFILE_V1 (ревью шага 4, #3) — что главное приняло, то приём филиала
+// обязан принять: длиннее предела — 400 здесь, а не молчаливое расхождение
+// главного и филиала (приём пропускает такое значение при каждой синхронизации).
+test('пределы длины — 400 с полем: название, телефон, улица, ориентир; ровно предел — сохраняется', async () => {
+  const t = await startServer();
+  try {
+    const cookie = await loginAs(t.base);
+    const c = idOf(t.db, 'C');
+    const longStreet = 'ул. ' + 'Очень длинная улица '.repeat(9);   // 184 знака — находка ревью
+    for (const [values, field, message] of [
+      [{ street_ru: longStreet }, 'street_ru', BRANCH_MESSAGES.long160],
+      [{ name_uz: 'x'.repeat(200) }, 'name_uz', BRANCH_MESSAGES.long120],
+      [{ phone: '9'.repeat(80) }, 'phone', BRANCH_MESSAGES.long64],
+      [{ landmark_en: 'x'.repeat(161) }, 'landmark_en', BRANCH_MESSAGES.long160],
+      [{ name: 'ж'.repeat(121) }, 'name', BRANCH_MESSAGES.long120],
+    ]) {
+      const res = await update(t.base, cookie, c, values);
+      assert.equal(res.status, 400, JSON.stringify(values).slice(0, 60));
+      const { error } = await res.json();
+      assert.deepEqual([error.field, error.message], [field, message]);
+    }
+    const ins = await post(t.base, cookie, { table: 'branches', op: 'insert', values: { name: 'Юнусабад', street_uz: 'x'.repeat(161) } });
+    assert.equal(ins.status, 400, 'вставка — так же');
+    const row = t.db.prepare('SELECT street_ru, name_uz, phone FROM branches WHERE id = ?').get(c);
+    assert.deepEqual({ ...row }, { street_ru: '', name_uz: '', phone: '' }, 'база не тронута');
+    const ok = await update(t.base, cookie, c, { street_ru: 'ж'.repeat(160), name_uz: 'x'.repeat(120), phone: '9'.repeat(64) });
+    assert.equal(ok.status, 200, 'ровно предел — сохраняется');
+  } finally { t.stop(); }
+});
+
+test('«Компания» главного здания: адрес для партнёров, карта и телефон уезжают в филиалы — те же пределы и формат, 400 с полем', async () => {
+  const t = await startServer();
+  try {
+    const cookie = await loginAs(t.base);
+    const company = (values) => post(t.base, cookie, { table: 'doc_settings', op: 'update', values, filters: [{ col: 'id', op: 'eq', val: 1 }] });
+    for (const [values, field, message] of [
+      [{ phone: '9'.repeat(65) }, 'phone', BRANCH_MESSAGES.long64],
+      [{ street_ru: 'ж'.repeat(161) }, 'street_ru', BRANCH_MESSAGES.long160],
+      [{ region_code: 'a b' }, 'region_code', BRANCH_MESSAGES.code],
+    ]) {
+      const res = await company(values);
+      assert.equal(res.status, 400, JSON.stringify(values).slice(0, 60));
+      const { error } = await res.json();
+      assert.deepEqual([error.field, error.message], [field, message]);
+    }
+    const ok = await company({ phone: '9'.repeat(64), street_ru: 'ж'.repeat(160), clinic_name: 'Клиника', address: 'ж'.repeat(300) });
+    assert.equal(ok.status, 200, 'ровно предел — сохраняется; адрес для документов — не дело этой проверки');
+  } finally { t.stop(); }
+});

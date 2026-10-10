@@ -22,7 +22,7 @@ import { NAME_MAX, STREET_MAX, addressProblems, mapsProblem, storedProfileProble
 import { storedHoursProblem } from './branch-hours.js';
 
 export const LANDMARK_MAX = 160;
-const PHONE_MAX = 64;
+export const PHONE_MAX = 64;   // BRANCH_PROFILE_V1 (ревью шага 4, #3) — экраны ставят его в maxlength
 
 /** Колонки миграции 241. */
 export const BRANCH_PROFILE_COLUMNS = Object.freeze([
@@ -51,6 +51,11 @@ export const BRANCH_MESSAGES = Object.freeze({
   partnerInBranches: 'Адрес для партнёров и карту этого здания ведёт главное здание — в «Филиалах».',
   flag:              'Отметка записана неверно: нужно 0 или 1.',
   code:              'Код из справочника записан неверно.',
+  // BRANCH_PROFILE_V1 (ревью шага 4, #3) — пределы длины (TEXT_MAX ниже): по
+  // фразе на предел, без {дырки} — экран переводит её tr() целиком.
+  long64:            'Слишком длинно: не больше 64 знаков.',
+  long120:           'Слишком длинно: не больше 120 знаков.',
+  long160:           'Слишком длинно: не больше 160 знаков.',
 });
 
 const TEXT = ['name', 'name_uz', 'name_en', 'phone', 'address', 'street_ru', 'street_uz', 'street_en',
@@ -90,17 +95,36 @@ export function storedBranchProblems(values) {
   for (const k of CODES) {
     if (given(k) && values[k] !== '' && !(typeof values[k] === 'string' && CODE_RE.test(values[k]))) p[k] = BRANCH_MESSAGES.code;
   }
+  // BRANCH_PROFILE_V1 (ревью шага 4, #3) — ТЕ ЖЕ ПРЕДЕЛЫ, ЧТО У ПРИЁМА ФИЛИАЛА
+  // (syncableBranchValue ниже): длиннее — отказ здесь, а не значение, которое
+  // главное сохранило, а филиал молча пропускает при каждой синхронизации.
+  for (const [k, max] of Object.entries(TEXT_MAX)) {
+    if (given(k) && typeof values[k] === 'string' && values[k].length > max) p[k] = BRANCH_MESSAGES['long' + max];
+  }
   return p;
+}
+
+/**
+ * «Компания» ГЛАВНОГО здания: адрес для партнёров, карта и телефон уезжают в
+ * филиалы как строка его здания (overlayOwnBuilding → список сети) — значит,
+ * им те же формат и пределы, что строке branches. Общее для клиники и адрес
+ * для документов — не дело этой проверки (shared/clinic-profile.js).
+ */
+export function ownBuildingProblems(values) {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) return {};
+  const own = {};
+  for (const c of OWN_FROM_COMPANY) if (Object.prototype.hasOwnProperty.call(values, c)) own[c] = values[c];
+  return storedBranchProblems(own);
 }
 
 /**
  * Синхронизация: можно ли записать приехавшее значение. Нельзя — пропустить,
  * а не уронить приём (справочник принимается ОДНОЙ транзакцией: catalogue.js).
+ * Пределы длины — внутри storedBranchProblems: одни с /api/db.
  */
 export function syncableBranchValue(col, v) {
   if (col === 'show_public') return v === 0 || v === 1;
   if (typeof v !== 'string') return false;
-  if (TEXT_MAX[col] && v.length > TEXT_MAX[col]) return false;
   return !Object.keys(storedBranchProblems({ [col]: v })).length;
 }
 

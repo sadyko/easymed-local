@@ -8,7 +8,7 @@ import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто на
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
 import { readIdentity } from '../services/branch-sync/identity.js';
 import { COMPANY_CLINIC_WIDE, COMPANY_PARTNER, storedProfileProblems } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1, BRANCH_PROFILE_V1 (COMPANY_PARTNER)
-import { BRANCH_MESSAGES, BRANCH_MAIN_COLUMNS, OWN_FROM_COMPANY, storedBranchProblems } from '../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
+import { BRANCH_MESSAGES, BRANCH_MAIN_COLUMNS, OWN_FROM_COMPANY, storedBranchProblems, ownBuildingProblems } from '../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
 import { keepLegacyLogo } from '../services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1 (ревью M3)
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
@@ -709,7 +709,11 @@ function companyProfileRefusal(meta, body) {
   if (!meta || meta.table !== 'doc_settings' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
   const v = body && body.values;
   for (const row of Array.isArray(v) ? v : [v]) {
-    const problems = storedProfileProblems(row);
+    // BRANCH_PROFILE_V1 (ревью шага 4, #3) — адрес для партнёров, карта и
+    // телефон главного здания уезжают в филиалы строкой его здания
+    // (catalogue.js roster, overlayOwnBuilding): им те же формат и пределы, что
+    // строке branches, — иначе филиал молча пропускал бы их при каждой синхронизации.
+    const problems = { ...storedProfileProblems(row), ...ownBuildingProblems(row) };
     const field = Object.keys(problems)[0];
     if (field) return { field, message: problems[field] };
   }

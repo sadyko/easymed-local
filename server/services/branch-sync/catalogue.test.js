@@ -25,7 +25,7 @@ import fs from 'node:fs';   // CLINIC_PROFILE_V1 — база до миграц�
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
-import { BRANCH_PROFILE_COLUMNS } from '../../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
+import { BRANCH_PROFILE_COLUMNS, BRANCH_SYNC_COLUMNS, BRANCH_MESSAGES, storedBranchProblems, ownBuildingProblems } from '../../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
 import { writeBranchHours, blankDays } from '../../../public/js/shared/branch-hours.js';   // BRANCH_PROFILE_V1
 // STAFF_SYNC_V1 — вход проверяется НАСТОЯЩИМ путём входа, а не сравнением
 // хешей: обещание владельца звучит как «человек войдёт во втором здании», и
@@ -1079,4 +1079,86 @@ test('филиал не отдаёт ни профиля, ни отметки �
   const db = fresh();
   becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
   for (const r of exportCatalogue(db).roster) assert.deepEqual(Object.keys(r).sort(), ['is_24_7', 'letter', 'name', 'working_hours']);
+});
+
+// BRANCH_PROFILE_V1 (ревью шага 4, #3) — ЧТО ПРИНЯЛ /api/db ГЛАВНОГО, ТО
+// ДОЕЗЖАЕТ ДО ФИЛИАЛА. Раньше улица в 184 знака сохранялась в главном, приём
+// филиала её пропускал, а повторная синхронизация считала «изменений нет» —
+// главное и филиал расходились молча и навсегда. Теперь /api/db отказывает
+// тем же пределам (routes/branches-guard.test.js); здесь — что всё, что он
+// пропускает, приходит целиком: и строка здания, и своё здание главного из «Компании».
+test('всё, что пропускает проверка /api/db главного, доезжает до филиала целиком; повтор ничего не меняет', () => {
+  const C_MAX = { phone: '9'.repeat(64), name_uz: 'ж'.repeat(120), name_en: 'x'.repeat(120), country_code: 'UZ', region_code: 'tashkent-city',
+    district_code: 'chilonzor', street_ru: 'ж'.repeat(160), street_uz: 'o‘'.repeat(80), street_en: 'x'.repeat(160),
+    landmark_ru: 'ж'.repeat(160), landmark_uz: 'x'.repeat(160), landmark_en: 'x'.repeat(160),
+    maps_url: 'https://yandex.uz/maps/' + 'a'.repeat(470), show_public: 0 };
+  const A_COMPANY = { phone: '7'.repeat(64), country_code: 'UZ', region_code: 'tashkent-city', district_code: 'mirobod',
+    street_ru: 'ж'.repeat(160), street_uz: '', street_en: 'x'.repeat(160), maps_url: 'https://yandex.uz/maps/-/CDmain' };
+  assert.deepEqual(storedBranchProblems(C_MAX), {}, '/api/db строки здания пропускает');
+  assert.deepEqual(ownBuildingProblems(A_COMPANY), {}, '/api/db «Компании» пропускает');
+  assert.equal(storedBranchProblems({ street_ru: 'ул. ' + 'Очень длинная улица '.repeat(9) }).street_ru, BRANCH_MESSAGES.long160,
+    'а улицу из находки ревью — нет');
+
+  const main = fresh();
+  main.prepare("INSERT INTO branches (name, letter) VALUES ('Чиланзар', 'C')").run();
+  const sets = (o) => Object.keys(o).map((k) => `"${k}" = @${k}`).join(', ');
+  main.prepare(`UPDATE branches SET ${sets(C_MAX)} WHERE letter = 'C'`).run(C_MAX);
+  main.prepare(`UPDATE doc_settings SET ${sets(A_COMPANY)} WHERE id = 1`).run(A_COMPANY);
+  const dst = fresh();
+  becomeSecondary(dst, { letter: 'C', name: 'Чиланзар' });
+  apply(dst, exportCatalogue(main));
+  const c = dst.prepare("SELECT * FROM branches WHERE letter = 'C'").get();
+  for (const [k, v] of Object.entries(C_MAX)) assert.equal(c[k], v, 'C.' + k);
+  const a = dst.prepare("SELECT * FROM branches WHERE letter = 'A'").get();
+  for (const [k, v] of Object.entries(A_COMPANY)) assert.equal(a[k], v, 'A.' + k + ' из «Компании» главного');
+  assert.equal(applyCatalogue(dst, exportCatalogue(main), { dryRun: true }).roster || 0, 0, 'расхождения нет — повтор ничего не меняет');
+});
+
+// BRANCH_PROFILE_V1 (ревью шага 4) — мусор в каждой колонке списка сети: приём не
+// падает, холостой прогон считает то же, что настоящий, повтор ничего не меняет.
+// (Генератор — mulberry32: линейный конгруэнтный в числах с плавающей точкой
+// вырождается в константу, и такой перебор не проверял бы почти ничего.)
+test('мусор в любой колонке списка сети: приём не падает, холостой прогон == настоящий, повтор ничего не меняет', () => {
+  let s = 7;
+  const rnd = (n) => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return (((t ^ (t >>> 14)) >>> 0) % n);
+  };
+  const JUNK = [null, undefined, 0, 1, 2, -1, 1.5, true, false, '', ' ', '1', '0', 'x'.repeat(65), 'x'.repeat(121), 'x'.repeat(161), 'x'.repeat(501),
+    {}, [], [1], { a: 1 }, 'HTTPS://YANDEX.UZ/maps/x', 'https://yandex.uz/maps/"><script>', 'https://maps.google.com', 'tashkent-city',
+    'Ташкент', 'a b', '9:00', '{"mon":{"enabled":true,"from":"9:00","to":"18:00"}}', 'не json', NaN, Infinity];
+  const good = exportCatalogue(mainWithBranches());
+  const seen = new Set();
+  let written = 0;
+  // Один приёмник; каждый прогон — в транзакции, которая откатывается: база
+  // перед следующим прогоном та же, а миграции не гоняются полтораста раз.
+  const dst = fresh();
+  becomeSecondary(dst, { letter: 'C', name: 'C' });
+  const ROLLBACK = new Error('откат прогона');
+  for (let i = 0; i < 150; i++) {
+    const cat = JSON.parse(JSON.stringify(good));
+    for (const e of cat.roster) {
+      for (const col of [...BRANCH_SYNC_COLUMNS, 'working_hours', 'is_24_7', 'hours_by_main']) {
+        if (rnd(2)) { const j = rnd(JUNK.length); e[col] = JUNK[j]; seen.add(j); }
+      }
+    }
+    cat.roster.push({ letter: 'D', name: 'Сергели', working_hours: JUNK[rnd(JUNK.length)],
+      ...Object.fromEntries(BRANCH_SYNC_COLUMNS.map((c) => [c, JUNK[rnd(JUNK.length)]])) });
+    try {
+      dst.transaction(() => {
+        let dry, real;
+        assert.doesNotThrow(() => { dry = applyCatalogue(dst, cat, { dryRun: true }); }, 'холостой ' + i);
+        assert.doesNotThrow(() => { real = applyCatalogue(dst, cat); }, 'настоящий ' + i);
+        assert.equal(real.changed, dry.changed, 'холостой == настоящий ' + i);
+        assert.equal(applyCatalogue(dst, cat, { dryRun: true }).changed, 0, 'повтор ' + i);
+        const c = dst.prepare("SELECT * FROM branches WHERE letter = 'C'").get();
+        for (const col of BRANCH_SYNC_COLUMNS) if (c[col] !== (col === 'show_public' ? 1 : '')) written += 1;
+        throw ROLLBACK;
+      })();
+    } catch (e) { if (e !== ROLLBACK) throw e; }
+  }
+  assert.equal(dst.prepare("SELECT COUNT(*) n FROM branches WHERE letter = 'D'").get().n, 0, 'прогоны откатились');
+  assert.ok(seen.size === JUNK.length && written > 300, 'перебор не пуст: ' + seen.size + ' видов мусора, записано ' + written);
 });
