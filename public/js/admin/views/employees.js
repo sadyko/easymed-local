@@ -856,6 +856,9 @@ function openEditor(user, root) {
                     loadPreview,
                     onRepaint: (fn) => { paneRepaint = fn; },
                     openConsultations: isRouteAllowed('consultation-types') ? () => {
+                        // DOCTOR_PROFILE_V1 (ревью шага 5, №4) — карточка закрывается: несохранённые
+                        // правки пропали бы молча. Сначала спросить; «Отмена» — остаёмся.
+                        if (dirty && !window.confirm(tr('Несохранённые изменения карточки пропадут. Перейти в «Консультации врачей»?'))) return;
                         close();
                         const nav = typeof window !== 'undefined' && window.easymed && window.easymed.navigate;
                         if (typeof nav === 'function') nav('consultation-types');

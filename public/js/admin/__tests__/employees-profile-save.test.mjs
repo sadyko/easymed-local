@@ -374,3 +374,42 @@ test('DOCTOR_PROFILE_V1: цены консультаций — своя, «Бе�
   assert.match(txt, /Пустая цена и «Бесплатно» — 0: чтобы брать деньги, впишите цену в «Консультациях врачей»\./);
   assert.match(txt, /Консультация невролога[\s\S]*На сайте/);
 });
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №4) — «Изменить в «Консультации врачей»»
+// закрывает карточку и уводит на другой экран. С несохранёнными правками —
+// сначала спрашивает; «Отмена» оставляет карточку и правки. Без правок — уводит
+// сразу.
+test('DOCTOR_PROFILE_V1: «Изменить в «Консультации врачей»» с несохранёнными правками — сначала спрашивает', async () => {
+  const navs = [];
+  const asked = [];
+  window.easymed.navigate = (v) => navs.push(v);
+  const prevConfirm = window.confirm;
+  try {
+    let answer = false;
+    window.confirm = (msg) => { asked.push(msg); return answer; };
+    const goBtn = (card) => tags(card, 'button').find((b) => textOf(b).includes('Изменить в «Консультации врачей»'));
+    // без правок — сразу
+    let s = await openProfileTab('dr.karimov');
+    assert.ok(goBtn(s.card), 'нет кнопки «Изменить в «Консультации врачей»»');
+    goBtn(s.card).click();
+    assert.deepEqual([asked.length, navs], [0, ['consultation-types']], 'без правок спрашивать нечего');
+    // с правками: «Отмена» — остаёмся, правка на месте
+    s = await openProfileTab('dr.karimov');
+    type(s.bio.uz, 'Kardiolog, o‘n ikki yil.');
+    goBtn(s.card).click();
+    assert.equal(asked.length, 1, 'не спросили');
+    assert.equal(asked[0], 'Несохранённые изменения карточки пропадут. Перейти в «Консультации врачей»?');
+    assert.deepEqual(navs, ['consultation-types'], 'ушли, хотя ответили «Отмена»');
+    await save(s.card);
+    assert.deepEqual(onlyWrite().public_profile, { bio_uz: 'Kardiolog, o‘n ikki yil.' }, 'правка пропала');
+    // с правками: «OK» — уходим
+    s = await openProfileTab('dr.karimov');
+    type(s.bio.uz, 'Kardiolog!');
+    answer = true;
+    goBtn(s.card).click();
+    assert.deepEqual(navs, ['consultation-types', 'consultation-types']);
+  } finally {
+    window.confirm = prevConfirm;
+    delete window.easymed.navigate;
+  }
+});
