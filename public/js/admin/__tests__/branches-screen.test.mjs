@@ -550,3 +550,157 @@ test('«нет перевода» — у пустых UZ / EN названия �
     type(triInput(root, 'Название филиала', 'en'), 'Yunusabad');
     assert.equal(miss('Название филиала', 'en'), false);
 });
+
+// ---- задача 14: часы работы и предупреждение о врачах ----
+const { writeBranchHours, blankDays } = await import('../../shared/branch-hours.js');
+const hoursMode = (root, label) => descendants(root).find((n) => matches(n, '.brf-mode') && labelText(n).startsWith(label));
+const modeInput = (root, label) => descendants(hoursMode(root, label)).find((n) => n.tagName === 'INPUT');
+async function pickMode(root, label) { const r = modeInput(root, label); r.checked = true; r.dispatchEvent({ type: 'change', target: r }); await settle(10); }
+const dayRow = (root, day) => descendants(root).find((n) => matches(n, '.wkh-row') && labelText(n).startsWith(day));
+const dayCtrls = (root, day) => descendants(dayRow(root, day)).filter((n) => n.tagName === 'INPUT');   // [отметка, с, до]
+function setDay(root, day, { on, from, to }) {
+    const [chk, f, t] = dayCtrls(root, day);
+    if (on !== undefined) { chk.checked = on; chk.dispatchEvent({ type: 'change', target: chk }); }
+    if (from !== undefined) { f.value = from; f.dispatchEvent({ type: 'change', target: f }); }
+    if (to !== undefined) { t.value = to; t.dispatchEvent({ type: 'change', target: t }); }
+}
+const hoursCardNode = (root) => descendants(root).find((n) => matches(n, '.card') && descendants(n).some((c) => matches(c, '.brf-modes')));
+const WEEK = () => writeBranchHours({ mode: 'week', days: blankDays() }).working_hours;
+
+test('«Не ограничивать» → «По дням недели»: Пн–Пт 09–18, суббота до 15; никого не задело — записано сразу', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    assert.equal(modeInput(root, 'Не ограничивать').checked, true);
+    assert.equal(descendants(root).find((n) => matches(n, '.wkh-grid')).hidden, true, 'сетка спрятана');
+    await pickMode(root, 'По дням недели');
+    assert.equal(descendants(root).find((n) => matches(n, '.wkh-grid')).hidden, false);
+    setDay(root, 'Сб', { on: true, to: '15:00' });
+    await save(root);
+    const days = blankDays(); days.sat = { on: true, from: '09:00', to: '15:00' };
+    const want = writeBranchHours({ mode: 'week', days });
+    assert.deepEqual(impactCalls, [{ branch_id: 5, working_hours: want.working_hours, is_24_7: 0 }]);
+    assert.deepEqual(writes[0].values, { working_hours: want.working_hours });
+});
+
+test('кто-то теряет время — сначала предупреждение со списком; «Вернуться к часам» — ничего не записано; «Сохранить всё равно» — записано', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    impactReply = { data: { doctors: [{ id: 8, name: 'Каримов Р.', lost: [{ day: 'sat', from: '09:00', to: '18:00' }, { day: 'sun', from: '09:00', to: '18:00' }] }] } };
+    await pickMode(root, 'По дням недели');
+    await save(root);
+    assert.equal(writes.length, 0);
+    const panel = descendants(root).find((n) => matches(n, '.brf-impact'));
+    assert.ok(panel, 'нет предупреждения');
+    assert.equal(panel.attrs.role, 'alertdialog');
+    const head = descendants(panel).find((n) => n.attrs.id && n.attrs.id === panel.attrs['aria-labelledby']);
+    assert.ok(head && /Эти врачи потеряют часы приёма/.test(labelText(head)), 'вопрос назван своим заголовком');
+    assert.match(labelText(panel), /Эти врачи потеряют часы приёма/);
+    assert.match(labelText(panel), /Каримов Р\. — Сб 09:00–18:00, Вс 09:00–18:00/);
+    assert.match(labelText(panel), /Уже записанные пациенты не отменяются/);
+    buttonByText(root, /Вернуться к часам/).click(); await settle(30);
+    assert.equal(writes.length, 0);
+    assert.equal(descendants(root).find((n) => matches(n, '.brf-impact')), undefined);
+    await save(root);
+    buttonByText(root, /Сохранить всё равно/).click(); await settle(60);
+    assert.equal(writes.length, 1);
+    assert.equal(impactCalls.length, 2);
+});
+
+test('правка часов, пока вопрос открыт: вопрос снят, ничего не записано, «Сохранить» снова работает', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    impactReply = { data: { doctors: [{ id: 8, name: 'Каримов Р.', lost: [{ day: 'sun', from: '09:00', to: '18:00' }] }] } };
+    await pickMode(root, 'По дням недели');
+    await save(root);
+    assert.ok(descendants(root).find((n) => matches(n, '.brf-impact')));
+    setDay(root, 'Вс', { on: true });
+    await settle(30);
+    assert.equal(descendants(root).find((n) => matches(n, '.brf-impact')), undefined, 'вопрос про прежние часы снят');
+    assert.equal(writes.length, 0);
+    impactReply = { data: { doctors: [] } };
+    await save(root);
+    assert.equal(writes.length, 1, 'сохранение не повисло');
+});
+
+test('вопрос открыт, а человек уходит «К списку филиалов» — уходит, ничего не записано', async () => {
+    let backs = 0;
+    globalThis.window.confirm = () => true;
+    try {
+        const { root } = await openPage({ id: 5, name: 'Юнусабад' }, { onBack: () => { backs++; } });
+        impactReply = { data: { doctors: [{ id: 8, name: 'Каримов Р.', lost: [{ day: 'sun', from: '09:00', to: '18:00' }] }] } };
+        await pickMode(root, 'По дням недели');
+        await save(root);
+        assert.ok(descendants(root).find((n) => matches(n, '.brf-impact')));
+        buttonByText(root, /К списку филиалов/).click();
+        await settle(30);
+        assert.deepEqual([backs, writes.length], [1, 0]);
+    } finally { delete globalThis.window.confirm; }
+});
+
+test('«Круглосуточно» и «Не ограничивать» никому время не закрывают — без проверки', async () => {
+    const wk = WEEK();
+    let { root } = await openPage({ id: 5, name: 'Юнусабад', working_hours: wk });
+    assert.equal(modeInput(root, 'По дням недели').checked, true);
+    await pickMode(root, 'Круглосуточно'); await save(root);
+    assert.equal(impactCalls.length, 0);
+    assert.deepEqual(writes[0].values, { working_hours: '{}', is_24_7: 1 });
+    ({ root } = await openPage({ id: 5, name: 'Юнусабад', working_hours: wk }));
+    await pickMode(root, 'Не ограничивать'); await save(root);
+    assert.equal(impactCalls.length, 0);
+    assert.deepEqual(writes[0].values, { working_hours: '{}' });
+});
+
+test('ни одного рабочего дня или конец раньше начала — объяснение, без проверки и записи', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    await pickMode(root, 'По дням недели');
+    for (const d of ['Пн', 'Вт', 'Ср', 'Чт', 'Пт']) setDay(root, d, { on: false });
+    await save(root);
+    assert.equal(impactCalls.length + writes.length, 0);
+    assert.match(labelText(hoursCardNode(root)), /Отметьте хотя бы один рабочий день/);
+    setDay(root, 'Пн', { on: true, from: '18:00', to: '09:00' });
+    await save(root);
+    assert.equal(impactCalls.length + writes.length, 0);
+    assert.match(labelText(hoursCardNode(root)), /Пн: время окончания должно быть позже начала\./);
+});
+
+test('часы не трогали — проверки нет; проверка не удалась — записи нет, объяснение', async () => {
+    let { root } = await openPage({ id: 5, name: 'Юнусабад', working_hours: WEEK() });
+    type(triInput(root, 'Название филиала', 'en'), 'Yunusabad');
+    await save(root);
+    assert.equal(impactCalls.length, 0);
+    assert.deepEqual(writes[0].values, { name_en: 'Yunusabad' });
+    ({ root } = await openPage({ id: 5, name: 'Юнусабад' }));
+    impactReply = { status: 500, error: { code: 'internal', message: 'Ошибка сервера. Повторите позже.' } };
+    await pickMode(root, 'По дням недели');
+    await save(root);
+    assert.equal(writes.length, 0);
+    assert.match(toastText(), /Не удалось проверить, у кого из врачей закроется время/);
+});
+
+test('часы прежней формы (enabled) показываются по дням; нетронутые — не шлются', async () => {
+    const old = JSON.stringify({ mon: { enabled: true, from: '08:00', to: '17:00' }, tue: { enabled: false, from: '08:00', to: '17:00' } });
+    const { root } = await openPage({ id: 5, name: 'Юнусабад', working_hours: old });
+    assert.equal(modeInput(root, 'По дням недели').checked, true);
+    const [chk, f, t] = dayCtrls(root, 'Пн');
+    assert.deepEqual([chk.checked, f.value, t.value], [true, '08:00', '17:00']);
+    assert.equal(dayCtrls(root, 'Вт')[0].checked, false);
+    await save(root);
+    assert.equal(writes.length + impactCalls.length, 0, 'ничего не меняли — «Нет изменений»');
+});
+
+test('новый филиал с часами — без проверки (врачей у него ещё нет), часы уходят со вставкой', async () => {
+    const { root } = await openPage(null);
+    type(triInput(root, 'Название филиала', 'ru'), 'Сергели');
+    await pickMode(root, 'По дням недели');
+    buttonByText(root, /^Добавить$/).click(); await settle(60);
+    assert.equal(impactCalls.length, 0);
+    assert.equal(writes[0].values.working_hours, WEEK());
+});
+
+test('подсказка часов: ограничивают только врачей с выбранным зданием (ответ владельца 2026-10-10)', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    assert.match(labelText(hoursCardNode(root)), /Врачей без выбранного здания они не ограничивают/);
+});
+
+test('филиал: часы только видны — переключатели и сетка выключены', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад', working_hours: WEEK() }, { secondary: true });
+    for (const l of ['Не ограничивать', 'По дням недели', 'Круглосуточно']) assert.ok(isOff(modeInput(root, l)), l);
+    assert.ok(dayCtrls(root, 'Пн').every(isOff));
+});

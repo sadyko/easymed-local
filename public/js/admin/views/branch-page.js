@@ -22,6 +22,8 @@ import { triGroup, labeled } from './company-fields.js';
 import { addressCard, mapCard } from './company-address.js';   // те же карточки, что «Компания»
 import { NAME_MAX } from '../../shared/clinic-profile.js';
 import { BRANCH_EDIT_COLUMNS, OWN_FROM_COMPANY, BRANCH_MESSAGES, LANDMARK_MAX, normalizeBranch, branchProblems, overlayOwnBuilding } from '../../shared/branch-profile.js';
+import { readBranchHours, writeBranchHours, hoursProblem } from '../../shared/branch-hours.js';
+import { hoursCard, DAY_LABEL } from './branch-hours-card.js';   // задача 14 — часы и предупреждение о врачах
 
 export const BRANCH_DEFAULTS = Object.freeze({
     name: '', name_uz: '', name_en: '', phone: '', address: '', active: 1,
@@ -69,6 +71,7 @@ export async function renderBranchPage(container, opts = {}) {
     const errs = {};
     let availability = () => ({});            // задача 13 — доступность списков адреса
     let busy = false;
+    let asking = false;                       // открыт вопрос «эти врачи потеряют часы приёма»
 
     // ---- название и «Работает» ----
     const name = triGroup('Название филиала', { ru: state.name, uz: state.name_uz, en: state.name_en }, {
@@ -121,13 +124,19 @@ export async function renderBranchPage(container, opts = {}) {
     const pubCard = card('Globe', 'Сайт и партнёры', checkRow('Показывать филиал на сайте и у партнёров', pubChk),
         h('p', { class: 'cpf-hint' }, 'Скрытый филиал работает в программе как обычно, но не виден пациентам на сайте и у партнёров; его врачей там тоже не покажут.'));
 
+    // ---- часы работы (задача 14) ----
+    const hours = readBranchHours(state.working_hours, state.is_24_7);
+    const hoursUi = hoursCard(hours, { disabled: lockAll });
+    errs.hours = hoursUi.err;
+
     const cards = [
         card('Building', 'Название', name.node, isNew ? null : checkRow('Работает', activeChk)),
         card('Phone', 'Телефон', phoneBox.node),
-        address.node, map.node, pubCard,
+        address.node, map.node, hoursUi.node, pubCard,
     ];
 
     const collect = () => {
+        Object.assign(state, writeBranchHours(hours));   // сетка → колонки (так их читает движок записи)
         state.phone = phone.value;
         return normalizeBranch(state);
     };
@@ -148,6 +157,11 @@ export async function renderBranchPage(container, opts = {}) {
         for (const [k, msg] of Object.entries(all)) {
             const mine = k === 'name' ? (isNew || keys.includes('name')) : (keys.includes(k) || (addrTouched && ADDRESS_COLUMNS.includes(k)));
             if (mine) out[k] = msg;
+        }
+        // Часы проверяются, если их меняли.
+        if (keys.includes('working_hours') || keys.includes('is_24_7')) {
+            const hp = hoursProblem(hours);
+            if (hp) out.hours = [hp.template, hp.day ? { day: tr(DAY_LABEL[hp.day]) } : undefined];
         }
         return out;
     }
@@ -175,6 +189,14 @@ export async function renderBranchPage(container, opts = {}) {
         if (Object.keys(problems).length) { toast(tr('Проверьте выделенные поля.'), 'fail'); return; }
         busy = true; saveBtn.disabled = true;
         try {
+            // «Каким врачам какое время закроется» — до записи (спецификация).
+            // Только новые часы «По дням недели» могут закрыть время; у нового
+            // здания врачей ещё нет.
+            if (!isNew && hours.mode === 'week' && (keys.includes('working_hours') || keys.includes('is_24_7'))) {
+                asking = true;
+                const go = await confirmHours(v).finally(() => { asking = false; });
+                if (!go) return;
+            }
             const q = isNew ? supabase.from('branches').insert(payload) : supabase.from('branches').update(payload).eq('id', row.id);
             const { data, error } = await q.select().single();
             if (error) throw error;
@@ -192,8 +214,25 @@ export async function renderBranchPage(container, opts = {}) {
         } finally { busy = false; saveBtn.disabled = false; }
     }
 
+    // Сервер считает тем же движком, что слоты записи (RPC branch_hours_impact).
+    async function confirmHours(v) {
+        const { data, error } = await supabase.rpc('branch_hours_impact', { branch_id: row.id, working_hours: v.working_hours, is_24_7: v.is_24_7 });
+        if (error) {
+            toast(trf('Не удалось проверить, у кого из врачей закроется время: {msg}', { msg: tr(error.message || '') }), 'fail');
+            return false;
+        }
+        const doctors = data && Array.isArray(data.doctors) ? data.doctors : [];
+        return doctors.length ? hoursUi.askImpact(doctors) : true;
+    }
+
     // Уйти со страницы: без несохранённого — сразу; с ним — спросить.
-    const leave = (go) => { if (busy) return; if (lockAll || !dirty() || askDiscard()) go(); };
+    // Открытый вопрос о врачах не держит человека на странице: уход снимает его
+    // (ответ «нет» — ничего не записано), дальше — как обычно.
+    const leave = (go) => {
+        if (busy && !asking) return;
+        if (asking) hoursUi.clearImpact();
+        if (lockAll || !dirty() || askDiscard()) go();
+    };
     const back = h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' },
         onclick: () => leave(() => { if (typeof onBack === 'function') onBack(); }) },
         Icon('ChevronLeft', { size: 14 }), ' ', 'К списку филиалов');

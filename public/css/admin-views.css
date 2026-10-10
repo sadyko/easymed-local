@@ -7644,4 +7644,18 @@ table.list tr.is-off td { color: var(--ink-400); }
 .brf-own { flex-wrap: wrap; align-items: center; }
 .brf-own > span { flex: 1 1 220px; min-width: 0; }
 .brf-lock { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
+/* Часы работы: три способа карточками-переключателями, предупреждение о врачах. */
+.brf-modes { display: grid; gap: 8px; }
+.brf-mode { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; padding: 10px 12px; border: 1px solid var(--ink-100); border-radius: 10px; background: var(--white); cursor: pointer; }
+.brf-mode:has(input:checked) { border-color: var(--primary-200); background: var(--primary-50); }
+.brf-mode:has(input:focus-visible) { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+.brf-mode:has(input:disabled) { cursor: default; }
+.brf-mode input { grid-row: span 2; margin: 2px 0 0; accent-color: var(--primary-600); }
+.brf-mode b { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.brf-mode span { font-size: 12.5px; color: var(--ink-500); line-height: 1.4; }
+.brf-impact-slot:empty { display: none; }
+.brf-impact { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--warn-500); border-radius: 10px; background: var(--warn-50); min-width: 0; }
+.brf-impact-head { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13.5px; font-weight: 600; color: var(--warn-700); }
+.brf-impact-head > svg { flex: none; }
+.brf-impact ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--ink-900); overflow-wrap: anywhere; }
 /* /BRANCH_PROFILE_V1 — «Филиалы» */
