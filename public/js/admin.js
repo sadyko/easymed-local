@@ -101,7 +101,7 @@ import { renderPacs }         from './admin/views/pacs.js';
 import { renderInventory }    from './admin/views/inventory.js?v=inv7';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live; inv6 — OWN_SHELF_ONLY_V1 (ревью F5) чип «Только со своих полок»; inv7 — ревью F6 «Не списано со склада»
 import { renderStockLog }     from './admin/views/stock-log.js?v=stocklog1';   // STOCK_LOG_V1 — журнал движений (кто, кому, партия, срок)
 import { renderMyStock }      from './admin/views/my-stock.js?v=mystock1';   // MY_STOCK_V1 — свой подотчёт: что выдали, кто выдал, что списал
-import { renderSettingsHub }  from './admin/views/settings-hub.js?v=reflist1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route · ROLES_SAVE_TRUTH_V1 — «Роли» (штамп) · ROLES_REVIEW_V1 · REFERENCE_LISTS_V1 — плитка «Справочники»
+import { renderSettingsHub, GROUPS as SETTINGS_HUB_GROUPS }  from './admin/views/settings-hub.js?v=reflist1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route · ROLES_SAVE_TRUTH_V1 — «Роли» (штамп) · ROLES_REVIEW_V1 · REFERENCE_LISTS_V1 — плитка «Справочники»
 import { renderReferenceLists } from './admin/views/reference-lists.js?v=reflist1';   // REFERENCE_LISTS_V1 — «Справочники»: города, районы, специальности с кодами, только просмотр
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
@@ -726,6 +726,25 @@ const PARENT_OF = {
 /** Куда ведёт «назад» с этого экрана: id пункта меню или null. */
 export function parentViewOf(view) {
     return PARENT_OF[view] || (String(view).startsWith('settings:') ? 'settings' : null);
+}
+
+// CLINIC_PROFILE_V1 / REFERENCE_LISTS_V1 (полировка по макету, 2026-10-10) —
+// ПУНКТ «НАСТРОЙКИ» ВЫДЕЛЕН, ПОКА ОТКРЫТ ЛЮБОЙ ИХ ПОДЭКРАН.
+//
+// Раньше меню узнавало «Настройки» только по #settings… и #documents: на
+// «Компании», «Справочниках», «Сотрудниках», «CRM-канбане» выделение гасло, и
+// человек терял, в каком он разделе. Подэкраны — это (1) всё, что открывают
+// плитки хаба (его собственный список GROUPS — новая плитка попадает сюда
+// сама), и (2) всё, чей родитель в PARENT_OF — «Настройки» (открытое изнутри
+// их разделов). Экран, который сам пункт меню (плитка «Товары и препараты»
+// ведёт в «Закупки»), выделяет себя, а не «Настройки»; «Публичный сайт» — тоже
+// свой пункт (над меню).
+const SETTINGS_HUB_ROUTES = new Set(SETTINGS_HUB_GROUPS.flatMap((g) => g.items || []).map((i) => i.route).filter(Boolean));
+function settingsMenuOwns(view) {
+    const v = String(view || '');
+    if (v === 'settings') return true;
+    if (v === 'public-site' || NAV.some((n) => n.id === v)) return false;
+    return v.startsWith('settings') || v === 'documents' || SETTINGS_HUB_ROUTES.has(v) || parentViewOf(v) === 'settings';
 }
 
 // BACK_TO_ALLOWED_V1 (2026-09-23) — «НАЗАД» НЕ ВЕДЁТ В «НЕТ ДОСТУПА».
@@ -1380,7 +1399,7 @@ function renderSidebar() {
             sidebarEl.appendChild(currentNav);
             currentNavHasItems = true;
         }
-        const active = state.view === item.id || (item.id === 'settings' && (state.view.startsWith('settings') || state.view === 'documents'))
+        const active = state.view === item.id || (item.id === 'settings' && settingsMenuOwns(state.view))   // CLINIC_PROFILE_V1 (полировка) — все подэкраны «Настроек»
                                               || (item.id === 'reports'  && state.view.startsWith('report'))
                                               || (item.id === 'consultation' && state.view === 'service-workspace');
         const badgeText = formatBadge(navCounts[item.id]);
