@@ -37,6 +37,7 @@ import {
 import { openAdmissionCard, openAdmissionReviewModal, openAdmissionAttendingModal } from './admission-modal.js?v=inp2';   // INPATIENT_TAB_V1 / ADMISSION_ORDER_V1
 import { loadPatientById } from '../data.js';   // NO_GREETING_V1 — currentUser() went with the greeting band
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
+import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor из базы — 1, а не true
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -1510,7 +1511,7 @@ async function loadDoctorsForDash() {
     // Prefer rows that look like doctors (role/specialty/license), fall back
     // to everyone so demo data still shows up.
     const doctors = all.filter(u =>
-        u.is_doctor === true || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').length > 0   // ADMIN_DOCTOR_LIST_V1
+        isOn(u.is_doctor) || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').length > 0   // ADMIN_DOCTOR_LIST_V1; ADMIN_DOCTOR_LOCAL_V1 — /api/db отдаёт флаг числом 1
     );
     let list = doctors.length ? doctors : all;
     // Doctor login → the dashboard is locked to that doctor only; other

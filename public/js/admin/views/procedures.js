@@ -30,6 +30,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, toast, clear, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentUser } from '../data.js';
+import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor бывает 1, а не true
 import { openItemPickerModal, isOwnShelfShort } from './item-picker-modal.js?v=billoptin2';   // PROC_PRODUCTS_V1 — reuse the dispense picker; ревью F4
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 
@@ -326,7 +327,7 @@ async function loadProcItems(visitId) {
 const PROC_PERFORMER_ROLES = ['nurse', 'senior_nurse', 'doctor', 'head_doctor'];
 export function canTakeProcedure(u = currentUser()) {
     if (!u) return true;
-    if (u.is_doctor === true) return true;
+    if (isOn(u.is_doctor)) return true;   // ADMIN_DOCTOR_LOCAL_V1 — флаг сессии (true) или строка из базы (1)
     const roles = [u.role, ...(Array.isArray(u.extra_roles) ? u.extra_roles : [])];
     return roles.some((r) => PROC_PERFORMER_ROLES.includes(String(r == null ? '' : r).trim().toLowerCase()));
 }

@@ -12,6 +12,7 @@ import { supabase } from '../../supabase.js';
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — sink-обёртки: textContent/confirm не проходят через h(); V3120_FIX — trf для сообщений с подстановкой
 import { currentUser } from '../data.js';
+import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor из базы — 1, а не true
 import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
 import { canDelete, actorRoleCodes, hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — hasActorRole
 import { openServicePickerModal } from './service-picker-modal.js?v=ownrep4';
@@ -872,7 +873,7 @@ function openAttachRecommendationModal(state, rec, onReload) {
         if (error) { console.warn('[attach-rec] doctor load failed:', error.message); }
         const all = data || [];
         const list = all.filter(u =>
-            u.is_doctor === true || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').length > 0   // ADMIN_DOCTOR_LIST_V1
+            isOn(u.is_doctor) || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').length > 0   // ADMIN_DOCTOR_LIST_V1; ADMIN_DOCTOR_LOCAL_V1 — /api/db отдаёт флаг числом 1
         );
         const final = list.length ? list : all;
         clear(doctorSelect);

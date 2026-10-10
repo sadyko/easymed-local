@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STRINGS } from '../i18n-strings.js';
+import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const procSrc   = fs.readFileSync(path.join(HERE, 'procedures.js'), 'utf8');
@@ -122,9 +123,13 @@ test('V3120_FIX: кнопка «Взять» — по зеркалу canPerformP
   // Вычисляем предикат по-настоящему: текст функции — чистый JS без импортов.
   const PROC_PERFORMER_ROLES = ['nurse', 'senior_nurse', 'doctor', 'head_doctor'];
   const src = body.replace('export function canTakeProcedure(u = currentUser())', 'function canTakeProcedure(u)');
-  const canTake = new Function('PROC_PERFORMER_ROLES', src + '; return canTakeProcedure;')(PROC_PERFORMER_ROLES);
+  // ADMIN_DOCTOR_LOCAL_V1 — флаг читается isOn (shared/flags.js): тот же, что в модуле.
+  const canTake = new Function('PROC_PERFORMER_ROLES', 'isOn', src + '; return canTakeProcedure;')(PROC_PERFORMER_ROLES, isOn);
   assert.equal(canTake({ role: 'admin', is_doctor: false }), false, 'администратору без флага врача «Взять» показан');
   assert.equal(canTake({ role: 'admin', is_doctor: true }), true, 'администратор-врач потерял «Взять»');
+  // ADMIN_DOCTOR_LOCAL_V1 — строка из базы несёт флаг числом: 1 — врач, 0 — нет.
+  assert.equal(canTake({ role: 'admin', is_doctor: 1 }), true, 'флаг из базы (1): администратор-врач потерял «Взять»');
+  assert.equal(canTake({ role: 'admin', is_doctor: 0 }), false, 'флаг из базы (0): администратору без флага «Взять» показан');
   assert.equal(canTake({ role: 'nurse' }), true);
   assert.equal(canTake({ role: 'registrar', extra_roles: ['senior_nurse'] }), true, 'дополнительная роль не учтена');
   assert.equal(canTake({ role: 'cashier' }), false);

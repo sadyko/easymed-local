@@ -18,6 +18,7 @@
 // login page (index.html + login.js, FIRST_RUN_PASSWORD_V1), not here.
 
 import { supabase } from '../supabase.js';
+import { isOn } from '../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг из базы бывает 1, а не true
 
 // ---------------------------------------------------------------------------
 // Sign-in. Returns { user } on success or { error }.
@@ -84,7 +85,10 @@ export function actorFromUser(u) {
     // ADMIN_DOCTOR_V1 — a user can be BOTH admin and doctor. is_doctor is a
     // capability (doctor lists + consultation workspace), independent of the
     // admin permission role.
-    const isDoctor = role === 'doctor' || u.is_doctor === true || !!u.specialty || !!u.license_number;
+    // ADMIN_DOCTOR_LOCAL_V1 — флаг приезжает с сессией (server/services/auth.js
+    // publicUser; прежде его там не было вовсе, и администратор-врач врачом не
+    // считался). Читается isOn: строка, взятая из базы как есть, несёт 1.
+    const isDoctor = role === 'doctor' || isOn(u.is_doctor) || !!u.specialty || !!u.license_number;
     return {
         id:             u.id || null,
         full_name:      u.full_name || u.username || 'User',
