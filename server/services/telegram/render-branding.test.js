@@ -114,3 +114,38 @@ test('оба пути идут через общий модуль: сервер 
   assert.deepEqual(applyCompanyBranding({ ...copy }), overlayCompanyBranding({ ...copy }, null));
   db.close();
 });
+
+// CLINIC_PROFILE_V1 — в PDF уходит только ВСТРОЕННЫЙ логотип (data:image/…):
+// Chrome печатает из file:// и адрес /api/storage/… не достанет (вход, другой
+// источник) — в PDF встал бы битый квадрат. Печатная копия квадратного
+// логотипа — data URL всегда; это замок на будущее.
+test('логотип адресом хранилища в PDF не уходит — только встроенный data URL', () => {
+  const db = seed({ copy: { ...OLD_COPY, logoUrl: null, logoDataUrl: '/api/storage/clinic-docs/x.png' },
+    company: { logo_data_url: '/api/storage/clinic-logos/square/1-a.png' } });
+  const s = loadServerDocSettings(db);
+  assert.ok(!s.logoUrl, 'logoUrl адресом хранилища');
+  assert.ok(!s.logoDataUrl, 'logoDataUrl адресом хранилища');
+  db.close();
+});
+
+test('встроенный логотип и название рядом доходят до PDF (правило «логотип не прячет название»)', () => {
+  const db = seed();
+  const s = loadServerDocSettings(db);
+  assert.equal(s.logoUrl, LOGO_NEW);
+  const html = buildSheetHtml({ type: 'custom', s, bodyHtml: '<p>x</p>' });
+  assert.ok(html.includes(LOGO_NEW));
+  assert.match(html, />\s*Новая\s*</, 'видимое название рядом с логотипом');
+  db.close();
+});
+
+// CLINIC_PROFILE_V1 — ответ владельца 2026-10-10: сайт клиники из «Компании»
+// на бланк, в том числе в PDF Telegram, не печатается.
+test('сайт из «Компании» в PDF не печатается', () => {
+  const db = seed();
+  db.prepare("UPDATE doc_settings SET website = 'https://shifo-clinic.uz' WHERE id = 1").run();
+  const s = loadServerDocSettings(db);
+  assert.ok(!String(s.web || '').includes('shifo-clinic.uz'));
+  const html = buildSheetHtml({ type: 'custom', s, bodyHtml: '<p>x</p>' });
+  assert.ok(!html.includes('shifo-clinic.uz'), 'сайт напечатался на бланке');
+  db.close();
+});

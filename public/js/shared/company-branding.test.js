@@ -37,12 +37,20 @@ test('реквизиты и логотип клиники перекрывают
     assert.deepEqual(s.variant, { lab: 'compact' });
 });
 
-test('name_ru главнее name; сайт, ИНН и юр. название — в свои поля', () => {
-    const s = overlayCompanyBranding({}, { name: 'Clinic', name_ru: 'Клиника', website: 'shifo.uz', tax_id: '301', legal_name: 'ООО «Шифо»' });
+test('name_ru главнее name; ИНН и юр. название — в свои поля', () => {
+    const s = overlayCompanyBranding({}, { name: 'Clinic', name_ru: 'Клиника', tax_id: '301', legal_name: 'ООО «Шифо»' });
     assert.equal(s.clinicName, 'Клиника');
-    assert.equal(s.web, 'shifo.uz');
     assert.equal(s.taxId, '301');
     assert.equal(s.legalName, 'ООО «Шифо»');
+});
+
+// CLINIC_PROFILE_V1 — ответ владельца 2026-10-10: сайт клиники на бланках НЕ
+// печатается. Запись клиники (rpc/clinic.js) теперь несёт website — для
+// интерфейса и партнёров, — и правило не должно переносить его в бланк. Свой
+// текст «сайта» дизайнера «Документов» печатается, как печатался.
+test('сайт клиники из «Компании» на бланк не идёт; свой текст дизайнера остаётся', () => {
+    assert.equal(overlayCompanyBranding({}, { name: 'Шифо', website: 'https://shifo.uz/' }).web, undefined);
+    assert.equal(overlayCompanyBranding({ web: 'shifo-design.uz' }, { name: 'Шифо', website: 'https://shifo.uz' }).web, 'shifo-design.uz');
 });
 
 test('пустые поля клиники копию не стирают; логотипа у клиники нет — logoUrl снимается, свой логотип дизайнера остаётся', () => {

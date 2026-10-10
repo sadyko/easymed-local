@@ -20,6 +20,16 @@ export function getClinicBySlug(db, _args, _user) {
     id: 1,
     slug: 'local',
     name: settings.clinic_name || 'Easy-Med Local',
+    // CLINIC_PROFILE_V1 — названия на трёх языках и сайт. name — по-прежнему
+    // то, что печатается (clinic_name, запасное 'Easy-Med Local'); name_uz /
+    // name_en идут наружу и в интерфейс на этих языках (shared/company-branding.js
+    // печатает name_ru || name — то же clinic_name). Сайт — для интерфейса и
+    // партнёров: на бланках он не печатается (ответ владельца 2026-10-10,
+    // company-branding.js его в бланк не переносит).
+    name_ru: settings.clinic_name || null,
+    name_uz: settings.name_uz || null,
+    name_en: settings.name_en || null,
+    website: settings.website || null,
     active: true,
     // Fields the upstream trial-banner / branding code reads defensively
     // (clinic?.name, clinic?.plan, clinic?.trial_ends_at, clinic?.is_locked,

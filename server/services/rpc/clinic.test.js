@@ -36,3 +36,21 @@ test('get_clinic_by_slug does not require an authenticated user (runs pre-login)
   const clinic = getClinicBySlug(db, { slug: 'anything' }, undefined);
   assert.equal(clinic.slug, 'local');
 });
+
+// CLINIC_PROFILE_V1 — названия на трёх языках и сайт в записи клиники. name —
+// по-прежнему то, что печатается (clinic_name); uz/en и сайт идут наружу и в
+// интерфейс, на бланки сайт не попадает (ответ владельца 2026-10-10).
+test('get_clinic_by_slug: названия на трёх языках и сайт; пустые — null', () => {
+  const db = openDb(':memory:'); migrate(db);
+  const empty = getClinicBySlug(db, {}, null);
+  assert.equal(empty.name_uz, null);
+  assert.equal(empty.name_en, null);
+  assert.equal(empty.website, null);
+  db.prepare("UPDATE doc_settings SET clinic_name = 'Шифо', name_uz = 'Shifo', name_en = 'Shifo Clinic', website = 'https://shifo.uz' WHERE id = 1").run();
+  const c = getClinicBySlug(db, {}, null);
+  assert.equal(c.name, 'Шифо');
+  assert.equal(c.name_ru, 'Шифо');
+  assert.equal(c.name_uz, 'Shifo');
+  assert.equal(c.name_en, 'Shifo Clinic');
+  assert.equal(c.website, 'https://shifo.uz');
+});

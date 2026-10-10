@@ -62,7 +62,10 @@ export function overlayCompanyBranding(s, clinic) {
     if (c.address)           s.address    = c.address;
     if (c.phone)             s.phone      = c.phone;
     if (c.email)             s.email      = c.email;
-    if (c.website)           s.web        = c.website;
+    // CLINIC_PROFILE_V1 — сайт клиники (c.website, «Компания») на бланк НЕ
+    // переносится: ответ владельца 2026-10-10 — сайт только для партнёров,
+    // API и предпросмотра. Свой текст «сайта» дизайнера (s.web) печатается,
+    // как печатался.
     if (c.tax_id)            s.taxId      = c.tax_id;
     if (c.license_number)    s.license    = c.license_number;
     if (c.legal_name)        s.legalName  = c.legal_name;
