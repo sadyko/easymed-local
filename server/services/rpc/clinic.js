@@ -13,6 +13,8 @@
 // verification gate). So `user` may legitimately be null/undefined here; this
 // handler does not require one (unlike RPCs that mutate data or read
 // role-restricted rows).
+import { readIdentity } from '../branch-sync/identity.js';   // CLINIC_PROFILE_V1
+
 export function getClinicBySlug(db, _args, _user) {
   const settings = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {};
 
@@ -30,6 +32,8 @@ export function getClinicBySlug(db, _args, _user) {
     name_uz: settings.name_uz || null,
     name_en: settings.name_en || null,
     website: settings.website || null,
+    // CLINIC_PROFILE_V1 — «Компания» в филиале показывает общее только для просмотра.
+    building_role: (() => { try { return readIdentity(db).role; } catch { return 'main'; } })(),
     active: true,
     // Fields the upstream trial-banner / branding code reads defensively
     // (clinic?.name, clinic?.plan, clinic?.trial_ends_at, clinic?.is_locked,

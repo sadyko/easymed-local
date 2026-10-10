@@ -49,6 +49,14 @@ export const DOC_SETTINGS_COLUMNS = [
   'clinic_name', 'license', 'logo_data_url', 'accent_color',
   'paper_size', 'show_watermark', 'footer_note', 'legal_note',
   'lab_scope',
+  // CLINIC_PROFILE_V1 (мигр. 240) — профиль КЛИНИКИ: названия и описание на
+  // трёх языках, сайт, Telegram, Instagram. Адрес здания (коды, улица, адрес
+  // для документов, карта) — свой у каждого здания, как address/phone/email
+  // выше. Пути к файлам логотипов не едут: файлов в филиале нет, а печатает
+  // он копию квадратного (logo_data_url, строкой выше). Филиал до мигр. 240
+  // новые колонки пропускает (`col in local` в applyCatalogue).
+  'name_uz', 'name_en', 'about_ru', 'about_uz', 'about_en',
+  'website', 'telegram_bot', 'telegram_channel', 'instagram',
 ];
 
 // Таблицы справочника — В ПОРЯДКЕ ЗАВИСИМОСТЕЙ. Порядок не косметика: services

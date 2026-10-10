@@ -54,3 +54,13 @@ test('get_clinic_by_slug: названия на трёх языках и сай�
   assert.equal(c.name_en, 'Shifo Clinic');
   assert.equal(c.website, 'https://shifo.uz');
 });
+
+// CLINIC_PROFILE_V1 — «Компания» в филиале показывает общее только для
+// просмотра: экран узнаёт роль здания из записи клиники.
+test('get_clinic_by_slug: building_role — main по умолчанию, secondary в филиале', async () => {
+  const { becomeSecondary } = await import('../branch-sync/identity.js');
+  const db = openDb(':memory:'); migrate(db);
+  assert.equal(getClinicBySlug(db, {}, null).building_role, 'main');
+  becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
+  assert.equal(getClinicBySlug(db, {}, null).building_role, 'secondary');
+});

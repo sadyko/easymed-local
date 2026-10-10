@@ -20,6 +20,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { exportCatalogue, applyCatalogue, TABLES, DOC_SETTINGS_COLUMNS } from './catalogue.js';
 import { becomeSecondary } from './identity.js';
+import { COMPANY_CLINIC_WIDE, COMPANY_BUILDING } from '../../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1
 // STAFF_SYNC_V1 — вход проверяется НАСТОЯЩИМ путём входа, а не сравнением
 // хешей: обещание владельца звучит как «человек войдёт во втором здании», и
 // проверять его надо тем же кодом, которым клиника пускает людей каждый день.
@@ -85,7 +86,11 @@ test('выгрузка отдаёт ровно перечисленные кол
 
   assert.deepEqual(Object.keys(cat.doc_settings).sort(), [...DOC_SETTINGS_COLUMNS].sort());
   // Контакты филиала остаются его собственными — их в выгрузке нет вовсе.
-  for (const forbidden of ['address', 'phone', 'email', 'id', 'updated_at']) {
+  // CLINIC_PROFILE_V1 (мигр. 240) — адрес здания (коды, улица, карта) свой у
+  // каждого здания; пути к файлам логотипов не едут: файлов в филиале нет.
+  for (const forbidden of ['address', 'phone', 'email', 'id', 'updated_at',
+    'country_code', 'region_code', 'district_code', 'street_ru', 'street_uz', 'street_en', 'maps_url',
+    'address_manual', 'logo_square_path', 'logo_portrait_path']) {
     assert.equal(forbidden in cat.doc_settings, false, `doc_settings.${forbidden} не должен уезжать`);
   }
   for (const spec of TABLES) {
@@ -317,6 +322,52 @@ test('лаборатория: филиал СТАРОЙ версии не пад
   assert.equal(dst.prepare("SELECT clinic_name FROM doc_settings WHERE id=1").get().clinic_name, 'Клиника Луч',
     'остальные сведения о клинике обязаны доехать');
   assert.ok(summary.changed > 0);
+});
+
+// CLINIC_PROFILE_V1 (мигр. 240) — профиль КЛИНИКИ едет из главного здания:
+// названия и описание на трёх языках, сайт, Telegram, Instagram. Адрес здания
+// и пути к файлам логотипов — нет.
+const PROFILE_WIDE = ['name_uz', 'name_en', 'about_ru', 'about_uz', 'about_en', 'website', 'telegram_bot', 'telegram_channel', 'instagram'];
+
+test('профиль клиники: общее едет в филиал, адрес здания и пути к логотипам — нет', () => {
+  const src = seedMain(fresh());
+  src.prepare(`UPDATE doc_settings SET name_uz = 'Luch klinikasi', name_en = 'Luch Clinic', about_ru = 'Семейная клиника.',
+    about_uz = 'Oilaviy klinika.', about_en = 'Family clinic.', website = 'https://luch.uz', telegram_bot = '@luch_clinic_bot',
+    telegram_channel = '@luch_news', instagram = '@luch.uz', country_code = 'UZ', region_code = 'tashkent-city',
+    district_code = 'yunusobod', street_ru = 'ул. Главная, 1', street_uz = 'Bosh ko‘cha, 1', street_en = 'Main st, 1',
+    maps_url = 'https://yandex.uz/maps/-/CDmain', logo_square_path = 'square/1-a.png', logo_portrait_path = 'portrait/1-a.png' WHERE id = 1`).run();
+  const cat = exportCatalogue(src);
+  for (const c of PROFILE_WIDE) assert.ok(c in cat.doc_settings, 'в выгрузке нет ' + c);
+
+  const dst = receiver();
+  dst.prepare(`UPDATE doc_settings SET address = 'ул. Филиальная, 7', region_code = 'samarkand', district_code = 'x',
+    street_ru = 'ул. Филиальная, 7', maps_url = 'https://yandex.uz/maps/-/CDbranch' WHERE id = 1`).run();
+  apply(dst, cat);
+  const row = dst.prepare('SELECT * FROM doc_settings WHERE id = 1').get();
+  assert.deepEqual(PROFILE_WIDE.map((c) => row[c]),
+    ['Luch klinikasi', 'Luch Clinic', 'Семейная клиника.', 'Oilaviy klinika.', 'Family clinic.', 'https://luch.uz', '@luch_clinic_bot', '@luch_news', '@luch.uz']);
+  assert.deepEqual([row.address, row.region_code, row.district_code, row.street_ru, row.maps_url],
+    ['ул. Филиальная, 7', 'samarkand', 'x', 'ул. Филиальная, 7', 'https://yandex.uz/maps/-/CDbranch'], 'адрес здания — свой');
+  assert.deepEqual([row.country_code, row.street_uz, row.logo_square_path, row.logo_portrait_path], ['', '', '', '']);
+});
+
+test('профиль клиники: филиал до миграции 240 не падает — остальное принято', () => {
+  const src = seedMain(fresh());
+  src.prepare("UPDATE doc_settings SET name_uz = 'Luch klinikasi' WHERE id = 1").run();
+  const dst = receiver();
+  dst.prepare('ALTER TABLE doc_settings DROP COLUMN name_uz').run();   // база до 240
+  const summary = apply(dst, exportCatalogue(src));
+  assert.equal(dst.prepare('SELECT clinic_name FROM doc_settings WHERE id=1').get().clinic_name, 'Клиника Луч');
+  assert.ok(summary.changed > 0);
+});
+
+test('колонки профиля в выгрузке — только общие для клиники (COMPANY_CLINIC_WIDE), своё у здания не едет', () => {
+  for (const c of PROFILE_WIDE) {
+    assert.ok(DOC_SETTINGS_COLUMNS.includes(c), c + ' не едет');
+    assert.ok(COMPANY_CLINIC_WIDE.includes(c), c + ' — не общее для клиники');
+  }
+  for (const c of COMPANY_BUILDING) assert.ok(!DOC_SETTINGS_COLUMNS.includes(c), c + ' — своё у здания, а едет');
+  for (const c of ['logo_square_path', 'logo_portrait_path']) assert.ok(!DOC_SETTINGS_COLUMNS.includes(c), c + ': файлов в филиале нет');
 });
 
 test('строку, удалённую в филиале руками, следующая синхронизация заводит заново', () => {

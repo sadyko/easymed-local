@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CLINIC_PROFILE_V1 (2026-10-10) — «Компания» в филиале: общее — из главного здания (routes/db.js, экран)
+  "Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.": {"en":"The name, description, logos, website and social media, licence and brand colour are changed in the main building. Here — this building’s address, phone, email and map.","ru":"Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.","uz":"Nomi, tavsifi, logotiplar, sayt va ijtimoiy tarmoqlar, litsenziya va firma rangi bosh binoda o‘zgartiriladi. Bu yerda — shu binoning manzili, telefoni, pochtasi va xaritasi."},   // CLINIC_PROFILE_V1
   // CLINIC_PROFILE_V1 (2026-10-10) — хранилище: корзина логотипов клиники (routes/storage.js)
   "Логотипы клиники меняет администратор или тот, кому выдано изменение «Компании».": {"en":"Clinic logos are changed by the administrator or by someone granted “Company” edit rights.","ru":"Логотипы клиники меняет администратор или тот, кому выдано изменение «Компании».","uz":"Klinika logotiplarini administrator yoki «Kompaniya»ni o‘zgartirish huquqi berilgan xodim o‘zgartiradi."},   // CLINIC_PROFILE_V1
   "Логотипы клиники меняются в главном здании.": {"en":"Clinic logos are changed in the main building.","ru":"Логотипы клиники меняются в главном здании.","uz":"Klinika logotiplari bosh binoda o‘zgartiriladi."},   // CLINIC_PROFILE_V1

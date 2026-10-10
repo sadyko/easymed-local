@@ -7,6 +7,7 @@ import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто на
 // STAFF_SYNC_V1 — «филиал я или сама по себе клиника» решается по базе, а не по
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
 import { readIdentity } from '../services/branch-sync/identity.js';
+import { COMPANY_CLINIC_WIDE } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
@@ -342,6 +343,15 @@ export function dbRoutes(db) {
       return res.status(409).json({ error: { code: 'conflict', message: managed } });
     }
 
+    // CLINIC_PROFILE_V1 — «КОМПАНИЯ» В ФИЛИАЛЕ: общее для клиники (название,
+    // описание, логотипы, сайт и соцсети, лицензия, цвет) приходит из главного
+    // здания (branch-sync/catalogue.js), и правка здесь откатилась бы ближайшей
+    // синхронизацией — тот же призрак, что закрывает 409 выше. Отказ — только
+    // если общее поле МЕНЯЕТСЯ: экран, приславший название как было, сохраняет
+    // адрес и телефон своего здания.
+    const companyRefusal = companyBranchRefusal(db, compiled.meta, req.body);
+    if (companyRefusal) return res.status(409).json({ error: { code: 'conflict', message: companyRefusal } });
+
     // ADMIN_ROWS_GRANTABLE_V1 — «Роли: Изменение» у не-администратора: ни роли
     // администратора, ни своих ролей, ни прав выше собственных. Компилятор уже
     // пустил запись по ключу плитки; содержание записи проверяется здесь, до
@@ -612,6 +622,19 @@ function crmAssignRefusal(db, meta, body, user) {
 // сторону экрана, который вдруг перестал сохранять.
 function isSecondary(db) {
   try { return readIdentity(db).role === 'secondary'; } catch { return false; }
+}
+
+// CLINIC_PROFILE_V1 — общее для клиники в «Компании» филиала не меняется
+// (см. вызов в POST). null — запись можно выполнять.
+const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.';
+function companyBranchRefusal(db, meta, body) {
+  if (!meta || meta.table !== 'doc_settings' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;
+  if (!isSecondary(db)) return null;
+  const values = body && body.values && typeof body.values === 'object' && !Array.isArray(body.values) ? body.values : {};
+  const cur = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {};
+  const same = (a, b) => String(a == null ? '' : a) === String(b == null ? '' : b);
+  const changes = COMPANY_CLINIC_WIDE.some((c) => Object.prototype.hasOwnProperty.call(values, c) && !same(values[c], cur[c]));
+  return changes ? COMPANY_MAIN_ONLY : null;
 }
 
 // Shapes the row list according to desc.single: 'single' requires exactly
