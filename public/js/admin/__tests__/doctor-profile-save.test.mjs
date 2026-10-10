@@ -526,3 +526,32 @@ test('CLINIC_API_FIX_V1: свой врач (is_local = 1) — строки не�
     await s.save();
     assert.equal(rpcCalls.length, 1);
 });
+
+// DOCTOR_PROFILE_V1 — «Мой профиль»: языки приёма, «Работает врачом с», строка о показе.
+test('DOCTOR_PROFILE_V1: «работает с» — из стажа; изменили — уходит practice_since; языки — переключателями', async () => {
+    const YEAR = new Date().getFullYear();
+    const s = await openProfile();
+    const since = tagsOf(s.container, 'input').find((i) => i.attrs.type === 'number' && i.attrs.min === '1940');
+    assert.ok(since, 'нет поля «Работает врачом с»');
+    assert.equal(since.value, String(YEAR - 12));
+    since.value = String(YEAR - 14);
+    tagsOf(s.container, 'button').find((b) => b.className === 'dpp-lang' && b.textContent.trim() === 'UZ').click();
+    await s.save();
+    assert.equal(rpcCalls.length, 1);
+    assert.deepEqual(rpcCalls[0].p, { practice_since: YEAR - 14, languages: ['uz'] });
+});
+
+test('DOCTOR_PROFILE_V1: строка о показе — включает администратор', async () => {
+    let s = await openProfile();
+    assert.ok(s.container.textContent.includes('Профиль пока не показывается на сайте клиники и у партнёров — показ включает администратор.'));
+    s = await openProfile({ user: { ...DOC_ROW, is_public: 1 } });
+    assert.ok(s.container.textContent.includes('Профиль показывается на сайте клиники и у партнёров. Показ включает и выключает администратор.'));
+});
+
+test('DOCTOR_PROFILE_V1: последний язык не снимается', async () => {
+    const s = await openProfile({ user: { ...DOC_ROW, languages: ['ru'] } });
+    tagsOf(s.container, 'button').find((b) => b.className === 'dpp-lang' && b.textContent.trim() === 'RU').click();
+    assert.equal(toastText(), 'Нужен хотя бы один язык');
+    await s.save();
+    assert.equal(rpcCalls.length, 0);
+});

@@ -11631,4 +11631,7 @@ export const STRINGS = {
   "Соцсети, образование и опыт": {"en":"Social media, education and experience","ru":"Соцсети, образование и опыт","uz":"Ijtimoiy tarmoqlar, ta’lim va tajriba"},   // DOCTOR_PROFILE_V1
   // DOCTOR_PROFILE_V1 — список сотрудников: «Сайт и партнёры» (задача 16)
   "филиал скрыт": {"en":"branch hidden","ru":"филиал скрыт","uz":"filial yashirilgan"},   // DOCTOR_PROFILE_V1
+  // DOCTOR_PROFILE_V1 — «Мой профиль»: строка о показе (задача 17)
+  "Профиль показывается на сайте клиники и у партнёров. Показ включает и выключает администратор.": {"en":"Your profile is shown on the clinic website and to partners. The administrator turns this on and off.","ru":"Профиль показывается на сайте клиники и у партнёров. Показ включает и выключает администратор.","uz":"Profil klinika saytida va hamkorlarda ko‘rsatiladi. Ko‘rsatishni administrator yoqadi va o‘chiradi."},   // DOCTOR_PROFILE_V1
+  "Профиль пока не показывается на сайте клиники и у партнёров — показ включает администратор.": {"en":"Your profile is not shown on the clinic website or to partners yet — the administrator turns this on.","ru":"Профиль пока не показывается на сайте клиники и у партнёров — показ включает администратор.","uz":"Profil hozircha klinika saytida va hamkorlarda ko‘rsatilmaydi — ko‘rsatishni administrator yoqadi."},   // DOCTOR_PROFILE_V1
 };

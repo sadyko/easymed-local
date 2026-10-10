@@ -10,6 +10,7 @@ import { uploadFile } from '../storage.js';
 // RPC_PORT_V1 — офлайн каталог специальностей из медкора (gw) недоступен:
 // выбор идёт из того же канонического списка, по которому сервер проверяет слаг.
 import { SPECIALTY_ROWS, canonicalSpecialty, sortByShownLabel } from '../../shared/specialty-list.js';   // REFERENCE_LISTS_V1 — sortByShownLabel
+import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, experienceYears, readLanguages, shownPracticeSince } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1
 // PATIENT_PHOTO_V1 — те же правила и то же уменьшение, что в окне заведения
 // пациента: один набор на оба виджета фото и на сервер.
 import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
@@ -71,6 +72,7 @@ export async function renderDoctorProfile(container, doctorId) {
         condLoadFailed: false,    // CLINIC_API_FIX_V1 — as specLoadFailed, for doctor_conditions
         catalog: [],              // conditions catalog from gw
         specCatalog: [],          // specialties catalog from gw
+        languages: [],            // DOCTOR_PROFILE_V1 — языки приёма
     };
 
     const root = h('div', { class: 'fade-in docprof', style: { maxWidth: '820px' } });
@@ -121,7 +123,8 @@ export async function renderDoctorProfile(container, doctorId) {
                 + 'full_name_ru, full_name_uz, full_name_en, academic_title_ru, academic_title_uz, academic_title_en, '
                 + 'bio_ru, bio_uz, bio_en, education_entries, experience_entries, certifications_entries, prof_dev_entries, '
                 + 'experience_years, instagram_url, telegram_url, photo_url, '
-                + 'is_local')   // CLINIC_API_FIX_V1 — 0: строка из главного здания, здесь только просмотр
+                + 'is_local, '   // CLINIC_API_FIX_V1 — 0: строка из главного здания, здесь только просмотр
+                + 'languages, practice_since, is_public')   // DOCTOR_PROFILE_V1 — языки, «работает с», показ (только видно)
             .eq('id', doctorId).single();
         st.user = data || {};
     } catch (e) { st.user = {}; }
@@ -179,11 +182,16 @@ export async function renderDoctorProfile(container, doctorId) {
             },
         }, Icon('Building', { size: 15 }), h('span', null, MANAGED_NOTE)));
     }
+    // DOCTOR_PROFILE_V1 — показ на сайте и у партнёров включает администратор
+    // (карточка сотрудника); врач его здесь только видит.
+    root.appendChild(h('p', { class: 'docprof-hint docprof-pub', role: 'note' }, Number(st.user.is_public) === 1
+        ? 'Профиль показывается на сайте клиники и у партнёров. Показ включает и выключает администратор.'
+        : 'Профиль пока не показывается на сайте клиники и у партнёров — показ включает администратор.'));
 
     // ----- Collectors read by the save flow -----
     const triInputs = {};       // base -> { ru, uz, en } controls
     const nameInputs = {};      // lng -> { last, first, middle } structured ФИО (STRUCTURED_NAME_V1)
-    const scalarInputs = {};    // experience_years
+    const scalarInputs = {};    // practice_since (DOCTOR_PROFILE_V1)
     const contactInputs = {};   // instagram_url, telegram_url
     const listCollectors = {};  // base -> () => [{ ru, uz, en, year }]
     let academicSel = null, academicOpts = [];  // Учёная степень dropdown (DEGREE_SELECT_V1)
@@ -192,10 +200,36 @@ export async function renderDoctorProfile(container, doctorId) {
     const idFields = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } });
     idFields.appendChild(nameRow());
     idFields.appendChild(academicSelect());
-    const yearsInp = h('input', { type: 'number', min: '0', step: '1', class: 'docprof-in',
-        value: st.user.experience_years != null ? String(st.user.experience_years) : '' });
-    scalarInputs.experience_years = yearsInp;
-    idFields.appendChild(field('Стаж (лет)', yearsInp));
+    // DOCTOR_PROFILE_V1 — «Работает врачом с» вместо «Стаж (лет)»: стаж на сайте
+    // растёт сам; у строки главной старой версии год — из прежнего стажа.
+    const thisYear = new Date().getFullYear();
+    const sinceInp = h('input', { type: 'number', min: String(PRACTICE_SINCE_MIN), max: String(thisYear), step: '1', class: 'docprof-in', placeholder: '2015' });
+    const shownSince = shownPracticeSince(st.user);
+    sinceInp.value = shownSince == null ? '' : String(shownSince);
+    scalarInputs.practice_since = sinceInp;
+    const sinceHint = h('div', { class: 'docprof-hint' });
+    const paintSince = () => {
+        const y = sinceInp.value === '' ? null : experienceYears(Number(sinceInp.value));
+        sinceHint.textContent = y == null ? '' : trf('Стаж на сайте, лет: {n}.', { n: y });
+    };
+    sinceInp.addEventListener('input', paintSince);
+    paintSince();
+    idFields.appendChild(h('div', { class: 'field' }, h('label', null, 'Работает врачом с'), sinceInp, sinceHint));
+    // DOCTOR_PROFILE_V1 — языки приёма (макет «Публичный профиль»): хотя бы один.
+    st.languages = readLanguages(st.user.languages);
+    const langBox = h('div', { class: 'dpp-langs', role: 'group', 'aria-label': 'Языки приёма' });
+    for (const l of DOCTOR_LANGS) {
+        const b = h('button', { type: 'button', class: 'dpp-lang', 'aria-pressed': st.languages.includes(l) ? 'true' : 'false' }, LANG_LBL[l]);
+        b.addEventListener('click', () => {
+            const on = st.languages.includes(l);
+            if (on && st.languages.length === 1) { toast('Нужен хотя бы один язык', 'fail'); return; }
+            st.languages = DOCTOR_LANGS.filter((x) => (x === l ? !on : st.languages.includes(x)));
+            b.setAttribute('aria-pressed', on ? 'false' : 'true');
+        });
+        langBox.appendChild(b);
+    }
+    idFields.appendChild(h('div', { class: 'field' }, h('label', null, 'Языки приёма'), langBox,
+        h('div', { class: 'docprof-hint' }, 'На каких языках врач говорит с пациентом.')));
 
     root.appendChild(card('Фото и личные данные', 'User',
         h('div', { class: 'docprof-idrow' }, photoBlock(), idFields)));
@@ -344,8 +378,10 @@ export async function renderDoctorProfile(container, doctorId) {
         for (const base of ['education', 'experience', 'certifications', 'prof_dev']) {
             p[`${base}_entries`] = listCollectors[base] ? listCollectors[base]() : [];
         }
-        const yrs = scalarInputs.experience_years.value.trim();
-        p.experience_years = yrs === '' ? null : Math.max(0, parseInt(yrs, 10) || 0);
+        // DOCTOR_PROFILE_V1 — год «работает с» (стаж сервер пишет сам) и языки приёма.
+        const yrs = scalarInputs.practice_since.value.trim();
+        p.practice_since = yrs === '' ? null : Number(yrs);
+        p.languages = [...(st.languages || [])];
         p.instagram_url = (contactInputs.instagram_url.value || '').trim();
         p.telegram_url = (contactInputs.telegram_url.value || '').trim();
         const specialties = st.specSlugs.filter(Boolean).slice(0, 4);
