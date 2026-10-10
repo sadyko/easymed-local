@@ -13,7 +13,8 @@ export class F {
   removeEventListener() {}
   dispatchEvent(e) { for (const fn of this._l[e.type] || []) fn(e); return true; }
   click() { this.dispatchEvent({ type: 'click', currentTarget: this, target: this, preventDefault() {}, stopPropagation() {} }); }
-  focus() {} blur() {} select() { this.selected = true; } remove() {} scrollTo() {}
+  // CLINIC_API_STEP7_V1 (ревью) — фокус виден тесту: document.activeElement.
+  focus() { globalThis.document.activeElement = this; } blur() {} select() { this.selected = true; } remove() {} scrollTo() {}
   querySelector() { return null; } querySelectorAll() { return []; }
   get textContent() { return this._t; } set textContent(v) { this._t = String(v); this.children.length = 0; }
   get classList() { const s = this; return { contains: (c) => String(s.className).split(/\s+/).includes(c), add() {}, remove() {}, toggle() {} }; }
@@ -36,7 +37,10 @@ globalThis.Event = class { constructor(t, o) { this.type = t; Object.assign(this
 globalThis.document = {
   createElement: mk, createElementNS: (_n, t) => mk(t), createTextNode: (t) => new TX(t),
   head: mk('head'), body: mk('body'), documentElement: mk('html'),
-  addEventListener() {}, removeEventListener() {},
+  // CLINIC_API_STEP7_V1 (ревью) — слушатели документа живые: Escape окна вешается на document.
+  _l: {}, activeElement: null,
+  addEventListener(t, fn) { (this._l[t] || (this._l[t] = [])).push(fn); },
+  removeEventListener(t, fn) { const a = this._l[t] || []; const i = a.indexOf(fn); if (i > -1) a.splice(i, 1); },
   getElementById: (id) => (id === 'toast' ? toastEl : null),
   querySelector: () => null, querySelectorAll: () => [],
 };
@@ -69,6 +73,13 @@ globalThis.fetch = async (url, opts) => {
 export function reset() {
   calls.length = 0; handlers.clear(); clip.length = 0; clipboardOk = true; toastMsg = null;
   document.body.children.length = 0; store.clear(); store.set('admin.lang', 'ru');
+  document._l = {}; document.activeElement = null;
+}
+/** Нажатие клавиши, дошедшее до document (так его слышит открытое окно). */
+export function docKey(key, target = null) {
+  const e = { type: 'keydown', key, target: target || document.activeElement, preventDefault() { e.prevented = true; }, stopPropagation() {} };
+  for (const fn of [...(document._l.keydown || [])]) fn(e);
+  return e;
 }
 export const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
 export const textOf = (el) => walk(el).map((n) => n._t || '').join('');

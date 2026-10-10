@@ -61,7 +61,7 @@ export async function copyText(text) {
  *   mask     — маска, пока значение не спрошено;
  *   getValue — спросить значение у сервера (api_connection_reveal).
  */
-export function secretField({ label, value = '', mask = '', getValue = null, regen = null }) {
+export function secretField({ label, value = '', mask = '', getValue = null, regen = null, viewOk = false }) {
   let known = value || '';
   let shown = !!known;
   const input = h('input', { type: 'text', readonly: 'readonly', class: 'apic-secret cell-mono', spellcheck: 'false',
@@ -69,13 +69,17 @@ export function secretField({ label, value = '', mask = '', getValue = null, reg
   input.value = known || mask;
   input.addEventListener('focus', () => { try { input.select(); } catch { /* выделение — удобство */ } });
   const ensure = async () => { if (!known && getValue) known = await getValue(); return known; };
-  const showBtn = getValue ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'data-apic-act': 'show' }, 'Показать') : null;
+  // CLINIC_API_STEP7_V1 (ревью №2, №6) — значение, пришедшее уже открытым, — кнопка
+  // сразу «Скрыть»; viewOk — «Показать / Скопировать» не правка: рамка «только
+  // просмотр» (view-only.js) их не перехватывает.
+  const ok = viewOk ? { viewOk: '1' } : null;
+  const showBtn = getValue ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'data-apic-act': 'show', dataset: ok }, shown ? 'Скрыть' : 'Показать') : null;
   if (showBtn) showBtn.addEventListener('click', async () => {
     if (shown) { shown = false; input.value = mask; showBtn.textContent = tr('Показать'); return; }
     try { input.value = await ensure(); shown = true; showBtn.textContent = tr('Скрыть'); }
     catch (e) { toast(tr(e.message), 'fail'); }
   });
-  const copyBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'copy' },
+  const copyBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'copy', dataset: ok },
     Icon('Copy', { size: 13 }), ' ', 'Скопировать');
   copyBtn.addEventListener('click', async () => {
     let v;

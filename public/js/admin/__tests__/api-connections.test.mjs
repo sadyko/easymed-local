@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { mk, reset, onRpc, calls, clip, textOf, byAttr, buttonByText, tick, rpcNames, storeValues,
-  settingsFixture, JOURNAL, KEY_VALUE } from './api-harness.mjs';
+  settingsFixture, JOURNAL, KEY_VALUE, setClipboard, modal } from './api-harness.mjs';
 
 const { renderApiConnections } = await import('../views/api-connections.js');
 
@@ -20,12 +20,13 @@ test('администратор: адрес и «Ещё не работает»
   reset();
   const root = await open();
   const t = textOf(root);
-  for (const s of ['API и подключения', 'https://api.easymed.uz/klinika-demo/v1/', 'Ещё не работает', 'Публичный сервер',
+  for (const s of ['API и подключения', 'Ещё не работает', 'Публичный сервер',
     'Ещё не включён', 'em_live_••••a91c', 'Все данные клиники', 'Запись на приём', 'med24.uz/hooks/easymed', 'событий: 3',
     'Не настроены', 'ещё не было', 'Включено', 'Выключено', 'создано автоматически', 'klinika-demo.uz',
     'Выпущен новый ключ', 'Настройки изменены: Название, Права', 'Изменено имя в адресе', 'Данные пациентов наружу не передаются']) {
     assert.ok(t.includes(s), 'нет на экране: ' + s);
   }
+  assert.equal(byAttr(root, 'aria-label', 'Адрес API')[0].value, 'https://api.easymed.uz/klinika-demo/v1/');   // ревью №2 — адрес в поле
   assert.ok(buttonByText(root, /Добавить подключение/));
   assert.ok(!/\b(No|Add|Edit|yet)\b/.test(t), 'английский шаблон на русском экране');
 });
@@ -113,4 +114,41 @@ test('открыть по ссылке из CRM: payload.connection_id откр�
   await open({}, { payload: { connection_id: 3 } });
   const m = document.body.children.find((n) => n.attrs && n.attrs['data-apic-modal'] === 'conn');
   assert.ok(m && textOf(m).includes('med24.uz'));
+});
+
+// CLINIC_API_STEP7_V1 (ревью №2) — сеть клиники открывает Easy-Med по http: буфера
+// обмена нет. Одно копирование ключа — одно открытие ключа (одна строка журнала):
+// значение, уже полученное от сервера, уходит в карточку, а не теряется.
+test('нет буфера: «Скопировать ключ» открывает карточку на «Ключе» с открытым и выделенным значением; «Скопировать» в карточке не спрашивает сервер второй раз', async () => {
+  reset();
+  setClipboard(false);
+  const root = await open();
+  onRpc('api_connection_reveal', () => ({ value: KEY_VALUE }));
+  byAttr(root, 'data-apic-act', 'copy-key')[1].click();
+  await tick();
+  const m = modal('conn');
+  assert.ok(m, 'карточка не открылась');
+  assert.equal(byAttr(m, 'data-apic-tab', 'key')[0].attrs['aria-selected'], 'true', 'карточка не на вкладке «Ключ»');
+  const input = byAttr(m, 'aria-label', 'Ключ доступа')[0];
+  assert.equal(input.value, KEY_VALUE, 'в карточке — маска вместо открытого ключа');
+  assert.equal(input.selected, true, 'значение не выделено для Ctrl+C');
+  assert.equal(document.activeElement, input, 'фокус не в поле ключа');
+  byAttr(m, 'data-apic-act', 'copy')[0].click();
+  await tick();
+  assert.equal(rpcNames().filter((n) => n === 'api_connection_reveal').length, 1, 'одно копирование — два открытия ключа в журнале');
+  assert.ok(!textOf(root).includes(KEY_VALUE), 'значение осталось на странице');
+  assert.ok(!storeValues().some((v) => v.includes(KEY_VALUE)), 'значение в localStorage');
+});
+
+test('адрес API — в поле только для чтения: без буфера «Скопировать» выделяет его для Ctrl+C', async () => {
+  reset();
+  setClipboard(false);
+  const root = await open();
+  const input = byAttr(root, 'aria-label', 'Адрес API')[0];
+  assert.ok(input && input.tagName === 'INPUT' && 'readonly' in input.attrs, 'адрес API не в поле');
+  assert.equal(input.value, 'https://api.easymed.uz/klinika-demo/v1/');
+  byAttr(root, 'data-apic-act', 'copy')[0].click();
+  await tick();
+  assert.equal(input.selected, true, 'адрес не выделен');
+  assert.equal(document.activeElement, input, 'фокус не в поле адреса');
 });

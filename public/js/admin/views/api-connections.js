@@ -17,7 +17,7 @@ import { h, Icon, PageHead, Tag, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { refreshClinicBrand } from '../clinic-context.js';
 import { API_HOST, KIND_INFO, normalizeSlug, slugProblem } from '../../shared/api-connections.js';
-import { rpc, shapeSettings, copyText, permChips, expiryTag, journalTable, addressBlock } from './api-ui.js';
+import { rpc, shapeSettings, copyText, secretField, permChips, expiryTag, journalTable, addressBlock } from './api-ui.js';
 import { openNewConnection } from './api-connection-new.js';
 import { openConnectionCard } from './api-connection-card.js';
 
@@ -62,7 +62,9 @@ async function changed() {
   await reload();
   refreshClinicBrand(supabase).catch(() => {});
 }
-const openCard = (c, tab = 'main') => openConnectionCard({ settings: state.s, connection: c, onChanged: changed, onNavigate: refs.onNavigate, tab });
+// revealed — ключ, уже полученный от сервера (ревью №2): карточка показывает его, не спрашивая снова.
+const openCard = (c, tab = 'main', revealed = null) => openConnectionCard({ settings: state.s, connection: c, onChanged: changed,
+  onNavigate: refs.onNavigate, tab, revealed });
 
 function paint() {
   clear(refs.body);
@@ -82,14 +84,16 @@ function addressCard(s) {
   const body = h('div', { class: 'apic-body' });
   if (!s.slug || state.editSlug) body.appendChild(slugEditor(s));
   else {
-    const copy = h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'copy-url' }, Icon('Copy', { size: 13 }), ' ', 'Скопировать');
-    copy.addEventListener('click', () => copyText(s.base_url));
+    // CLINIC_API_STEP7_V1 (ревью №2) — адрес в поле только для чтения: без буфера
+    // обмена (http в сети клиники) «Скопировать» выделяет его для Ctrl+C.
+    // Копирование — не правка: в рамке «только просмотр» оно работает.
+    const url = secretField({ label: 'Адрес API', value: s.base_url, viewOk: true });
     const edit = s.can.admin
       ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'data-apic-act': 'slug-edit' }, Icon('Edit', { size: 13 }), ' ', 'Изменить имя')
       : null;
     if (edit) edit.addEventListener('click', () => { state.editSlug = true; paint(); });
-    body.appendChild(h('div', { class: 'apic-row' },
-      h('span', { class: 'apic-url cell-mono', translate: 'no' }, Icon('Lock', { size: 14 }), ' ', s.base_url), copy, edit));
+    body.appendChild(h('div', { class: 'apic-row apic-urlrow' },
+      h('span', { class: 'apic-url-lock', 'aria-hidden': 'true' }, Icon('Lock', { size: 14 })), url, edit));
   }
   if (s.partner_address_missing.length) {
     body.appendChild(addressBlock('Адрес для партнёров в «Компании» не заполнен: пока его нет, подключения нельзя включить.', refs.onNavigate));
@@ -168,8 +172,9 @@ function keyCell(c, s) {
     e.stopPropagation();
     try {
       const r = await rpc('api_connection_reveal', { id: c.id, what: 'key' });
-      // Буфера нет — карточка на вкладке «Ключ»: там значение выделяется для Ctrl+C.
-      if (!(await copyText(r.value))) openCard(c, 'key');
+      // Буфера нет — карточка на вкладке «Ключ» с ЭТИМ значением, выделенным для
+      // Ctrl+C (ревью №2): одно копирование — одно открытие ключа в журнале.
+      if (!(await copyText(r.value))) openCard(c, 'key', { key: r.value });
     } catch (err) { toast(tr(err.message), 'fail'); }
   });
   return h('span', { class: 'apic-nowrap' }, h('span', { class: 'cell-mono', translate: 'no' }, c.key_mask), ' ', btn);

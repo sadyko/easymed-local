@@ -7637,7 +7637,9 @@ table.list tr.is-off td { color: var(--ink-400); }
 .apic-stack { display: grid; gap: 16px; }
 .apic-body { padding: 16px 18px; display: grid; gap: 12px; }
 .apic-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.apic-url { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px; background: var(--ink-50); font-size: 13.5px; word-break: break-all; }
+/* ревью №2 — адрес API в поле только для чтения (secretField), замок рядом. */
+.apic-urlrow > .apic-keyfield { flex: 1 1 280px; min-width: 0; }
+.apic-url-lock { display: inline-flex; color: var(--ink-500); }
 .apic-prefix { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .apic-prefix span { font-size: 13.5px; color: var(--ink-500); }
 .apic-prefix input { flex: 1 1 160px; min-width: 0; }

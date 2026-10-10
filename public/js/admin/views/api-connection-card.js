@@ -22,7 +22,7 @@ const TAB_OF = { name: 'main', site_url: 'main', contact: 'main', active: 'main'
 const comparable = (k, v) => (k === 'scopes' ? orderedScopes(v) : k === 'webhook_events' ? orderedEvents(v)
   : k === 'ip_allow' ? normalizeIpList(v) : k === 'active' ? !!v : v);
 
-export function openConnectionCard({ settings, connection: c, onChanged = null, onNavigate = null, tab = 'main' }) {
+export function openConnectionCard({ settings, connection: c, onChanged = null, onNavigate = null, tab = 'main', revealed = null }) {
   const can = settings.can;
   const d = { kind: c.kind, name: c.name, site_url: c.site_url, contact: c.contact, scopes: [...c.scopes], active: c.active,
     webhook_url: c.webhook_url, webhook_events: [...c.webhook_events], rate_limit: c.rate_limit, key_ttl: c.key_ttl, ip_allow: c.ip_allow };
@@ -33,7 +33,11 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
   let journal = null;
   let m = null;
   const reveal = (what) => async () => (await rpc('api_connection_reveal', { id: c.id, what })).value;
-  const keyBox = can.admin ? secretField({ label: 'Ключ доступа', mask: c.key_mask, getValue: reveal('key') }) : null;
+  // CLINIC_API_STEP7_V1 (ревью №2) — ключ, уже открытый «Скопировать ключ» таблицы
+  // без буфера обмена, приходит сюда: поле показывает его сразу, второго
+  // открытия (и второй строки журнала) нет.
+  const shownKey = can.admin && revealed && revealed.key ? String(revealed.key) : '';
+  const keyBox = can.admin ? secretField({ label: 'Ключ доступа', mask: c.key_mask, value: shownKey, getValue: reveal('key') }) : null;
   const secretBox = can.admin ? secretField({ label: 'Секрет для подписи уведомлений', mask: c.secret_mask, getValue: reveal('secret'),
     regen: { label: 'Новый секрет', onClick: () => { confirm = 'secret'; paint(); } } }) : null;
   const body = h('div', { class: 'modal-body apic-modal-body' });
@@ -190,5 +194,7 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
     title: [h('span', { class: 'apic-ico t-' + c.kind }, Icon((KIND_INFO[c.kind] || KIND_INFO.partner).icon, { size: 16 })), ' ', c.name, ' ',
       Tag(c.active ? 'Включено' : 'Выключено', { kind: c.active ? 'ok' : '', dot: true })] });
   cancel.addEventListener('click', () => m.close());
+  // Ключ пришёл открытым — фокус в его поле и выделение: Ctrl+C его копирует.
+  if (shownKey && current === 'key') { try { keyBox.input.focus(); keyBox.input.select(); } catch { /* выделение — удобство */ } }
   return m;
 }
