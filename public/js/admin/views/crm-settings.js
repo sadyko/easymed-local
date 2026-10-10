@@ -502,11 +502,13 @@ function paintSources() {
         // CLINIC_API_STEP7_V1 — «Сайт» подключения сайта клиники: не скрыть, не удалить.
         const apiNeeded = !!(row.api && !row.api.owned);
         if (protectedRow) anyProtected = true;
-        if (apiNeeded) neededBy.push(row.api.connection_name);
+        // CLINIC_API_STEP7_V1 (ревью №5) — имя подключения сайта клиники системное и
+        // хранится по-русски («Сайт клиники»): tr() до подстановки в фразу.
+        if (apiNeeded) neededBy.push(tr(row.api.connection_name));
         listBox.appendChild(rowBox({
             move: moveButtons(list, i, onChange),
             name: [labelInput(row), keyChip(row.key)],
-            visible: activeToggle(row, apiNeeded ? { locked: true, lockedTitle: trf(API_NEEDED_REASON, { name: row.api.connection_name }) } : undefined),
+            visible: activeToggle(row, apiNeeded ? { locked: true, lockedTitle: trf(API_NEEDED_REASON, { name: tr(row.api.connection_name) }) } : undefined),
             actions: protectedRow || apiNeeded ? null : removeButton(row.label, () => onChange(list.filter((_, j) => j !== i))),
         }));
     });
@@ -514,12 +516,14 @@ function paintSources() {
     if (anyProtected) box.appendChild(hint(UNDELETABLE_SOURCE_REASON, { marginTop: '10px' }));
     for (const name of neededBy) box.appendChild(hint(trf(API_NEEDED_REASON, { name }), { marginTop: '6px' }));   // CLINIC_API_STEP7_V1
 
+    // CLINIC_API_STEP7_V1 (ревью №7) — ключи источников подключений API (живых и
+    // удалённых) тоже заняты: новый источник с их ключом сервер подменил бы своим.
     box.appendChild(addRow('Добавить источник', 'Название нового источника', (label, taken) => {
         state.cfg.sources = withPositions([...list, {
             key: deriveKey(label, taken, 'src'), label, position: list.length + 1, is_active: 1,
         }]);
         paintSources();
-    }, () => list.map((s) => s.key)));
+    }, () => [...list.map((s) => s.key), ...(state.apiSources || []).map((s) => s.key)]));
 
     box.appendChild(saveRow('Сохранить источники', async () => {
         const sources = withPositions(state.cfg.sources).map(({ api, ...s }) => ({ ...s, label: String(s.label || '').trim() }));   // CLINIC_API_STEP7_V1 — без api
@@ -541,7 +545,9 @@ function apiSourcesCard() {
     const list = h('div', { class: 'crm-set-list' });
     for (const s of rows) {
         const link = !s.api.archived && refs.onNavigate && isRouteAllowed('api-settings')
-            ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'data-crm-api-link': String(s.api.connection_id),
+            // CLINIC_API_STEP7_V1 (ревью №6) — переход, не правка: рамка «только
+            // просмотр» (view-only.js) его не перехватывает (data-view-ok).
+            ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'data-crm-api-link': String(s.api.connection_id), dataset: { viewOk: '1' },
                 onclick: () => refs.onNavigate('api-settings', { connection_id: s.api.connection_id }) }, 'Подключение')
             : null;
         list.appendChild(h('div', { class: 'crm-api-src', 'data-crm-api-source': s.key },

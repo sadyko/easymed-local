@@ -76,6 +76,20 @@ export async function crmLeaks(lang) {
   const set = mk('div');
   await renderCrmSettings(set); await tick();
   found.settings = leaks(set);
+  // CLINIC_API_STEP7_V1 (ревью №5) — источники подключений API: подсказка и
+  // подсказка-замок у «Сайта» называют подключение; системное имя «Сайт клиники»
+  // хранится по-русски и обязано переводиться, как и «Источники из API».
+  S.config = { stages: [], sources: [
+    { key: 'call', label: 'Call', position: 1, is_active: 1 },
+    { key: 'website', label: 'Website', position: 2, is_active: 1, api: { connection_id: 1, connection_name: 'Сайт клиники', owned: false, archived: false } },
+    { key: 'api_med24_uz', label: 'med24.uz', position: 3, is_active: 1, api: { connection_id: 3, connection_name: 'med24.uz', owned: true, archived: false } },
+    { key: 'api_old_uz', label: 'old.uz', position: 4, is_active: 0, api: { connection_id: 4, connection_name: 'old.uz', owned: true, archived: true } },
+  ] };
+  const setApi = mk('div');
+  await renderCrmSettings(setApi, { onNavigate() {} }); await tick();
+  assert.ok(byAttr(setApi, 'data-crm-api-source').length === 2, 'стенд не тот: нет «Источников из API»');
+  found.settingsApi = leaks(setApi);
+  S.config = null;
   const xls = crmExcelRows(LEADS.slice(0, 2));
   found.excel = [...xls[0], ...xls.slice(1).map((r) => r[6])].filter((x) => CYR.test(String(x)));
   found.toasts = TOASTS.filter((t) => CYR.test(t));

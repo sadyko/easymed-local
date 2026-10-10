@@ -637,3 +637,60 @@ test('«Сайт» сайта клиники: «Видна» заблокиро�
   const sent = lastSaveBody.sources.map((s) => s.key);
   assert.deepStrictEqual(sent, ['call', 'telephony', 'website'], 'источники подключений ушли в список');
 });
+
+// CLINIC_API_STEP7_V1 (ревью №6) — «Подключение» — переход, не правка: в рамке
+// «только просмотр» (view-only.js) он работает, а не уходит в тост «менять эти
+// настройки может роль с правом «Изменение»».
+test('рамка «только просмотр»: «Подключение» у источника из API ведёт в API, рамка его не перехватывает', async () => {
+  resetServer();
+  withApiSources();
+  const perms = await import('../permissions.js');
+  const { grantsFromLegacy, legacyFromGrants } = await import('../roles-matrix.js');
+  const { renderWithViewOnly } = await import('../view-only.js');
+  const legacy = { sections: ['patients', 'dashboard', 'crm'], levels: { patients: 'editor', dashboard: 'viewer', crm: 'editor' } };
+  const grants = { ...grantsFromLegacy(legacy), settings: 'view', 'settings.crm': 'view', 'settings.api': 'view' };
+  perms.setEffectiveFromRole({ name: 'Регистратор', permissions: { ...legacyFromGrants(grants, legacy), grants } });
+  try {
+    assert.equal(perms.isRouteAllowed('api-settings'), true, 'стенд не тот: «API» на «Просмотре» закрыт');
+    const nav = [];
+    const root = mk('div');
+    await renderWithViewOnly(root, 'settings.crm', (r) => renderCrmSettings(r, { onNavigate: (v, p) => nav.push([v, p]) }));
+    await tick();
+    const host = root.children[0];
+    assert.ok(String(host.className).includes('is-view-only'), 'стенд не тот: экран не в рамке «только просмотр»');
+    const link = walk(root).find((n) => n.attrs && n.attrs['data-crm-api-link'] === '3');
+    assert.ok(link, 'ссылки «Подключение» нет');
+    let stopped = false;
+    const ev = { type: 'click', target: link, currentTarget: host, preventDefault() {}, stopPropagation() { stopped = true; } };
+    for (const fn of host._l.click || []) fn(ev);   // перехват рамки идёт первым (capture)
+    assert.equal(stopped, false, 'рамка «только просмотр» проглотила переход: ' + lastToast());
+    link.click();
+    assert.deepStrictEqual(nav, [['api-settings', { connection_id: 3 }]]);
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+// CLINIC_API_STEP7_V1 (ревью №7) — ключ нового источника не совпадает с ключом
+// источника подключения (живого или удалённого): иначе сервер подставлял свой
+// источник, а новый молча пропадал при «Источники сохранены.».
+test('новый источник «API Symptex» при подключении Symptex получает свой ключ, не api_symptex', async () => {
+  resetServer();
+  const cfg = JSON.parse(JSON.stringify(FULL_CONFIG));
+  cfg.sources.push({ key: 'api_symptex', label: 'Symptex', position: 3, is_active: 1,
+    api: { connection_id: 2, connection_name: 'Symptex', owned: true, archived: false } });
+  cfg.sources.push({ key: 'api_old_uz', label: 'old.uz', position: 4, is_active: 0,
+    api: { connection_id: 4, connection_name: 'old.uz', owned: true, archived: true } });
+  getRespond = () => jsonOk(JSON.parse(JSON.stringify(cfg)));
+  saveRespond = () => jsonOk(JSON.parse(JSON.stringify(cfg)));
+  const root = await render();
+  for (const label of ['API Symptex', 'API old.uz']) {
+    const input = findInputByPlaceholder(root, /Название нового источника/);
+    input.value = label;
+    input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
+  }
+  saveSourcesBtn(root).click();
+  await tick();
+  const keys = lastSaveBody.sources.map((s) => s.key);
+  assert.deepStrictEqual(keys.slice(0, 2), ['call', 'telephony']);
+  assert.equal(keys.length, 4, 'новые источники не ушли: ' + JSON.stringify(keys));
+  for (const k of keys.slice(2)) assert.ok(!['api_symptex', 'api_old_uz'].includes(k), 'ключ занят источником подключения: ' + k);
+});
