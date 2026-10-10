@@ -21,6 +21,7 @@
 //     стреляло).
 import { hasAnyRole } from '../roles.js';
 import { visitTierStateProblem, visitTierValue } from '../../../public/js/shared/visit-tier-rules.js';   // CLINIC_API_FIX_V1 (ревью 5)
+import { SERVICE_PUBLIC_MESSAGES } from '../../../public/js/shared/service-public.js';   // SERVICES_PACKAGES_V1 — показ на сайте: одно правило и одни слова
 import {
   SERVICE_SECTIONS, labBlockVisible, normName, mergeServiceRates,
   performerGate, ratesArray, tierStepsProblem, tierStepRangeProblem,
@@ -125,8 +126,11 @@ export function serviceSave(db, args, user) {
   const nameUz = String(a.name_uz ?? '').trim() || null;
   const nameEn = String(a.name_en ?? '').trim() || null;
   const onlineBooking = asBool(a.online_booking) ? 1 : 0;
+  // SERVICES_PACKAGES_V1 — флаг теперь значит «показывать на сайте клиники, в
+  // Symptex и у партнёров» (экран «Услуги для сайта и партнёров»); правило то
+  // же, слова — общие с /api/db и экраном (shared/service-public.js).
   if (onlineBooking && !nameUz) {
-    throw new RpcError('Для онлайн-записи заполните название на русском и узбекском.', 400);
+    throw new RpcError(SERVICE_PUBLIC_MESSAGES.online, 400);
   }
 
   const type = String(a.type ?? '');
