@@ -437,7 +437,8 @@ test('DOCTOR_PROFILE_V1: «Виды консультаций» правят на
     const src = fs.readFileSync(new URL('../views/settings-hub.js', import.meta.url), 'utf8');
     const block = src.slice(src.indexOf('    consultation_types: {'), src.indexOf('    // ---- Управление персоналом'));
     for (const k of ["key: 'name_uz'", "key: 'name_en'", "key: 'duration_minutes'", "key: 'api_kind'"]) assert.ok(block.includes(k), k);
-    assert.match(block, /beforeSave: \(p\) => prepareConsultTypeSave\(p\)/);
+    // DOCTOR_PROFILE_V1 (ревью шага 5, №6) — beforeSave ещё и стирает стёртые UZ / EN названия (consultation-types-lookup.test.mjs).
+    assert.match(block, /beforeSave: \(p, \{ isEdit, row \} = \{\}\) => \{[\s\S]*?return prepareConsultTypeSave\(p\);/);
 });
 
 // DOCTOR_PROFILE_V1 (ревью шага 5, №1) — «Повторный визит»: свободное время и

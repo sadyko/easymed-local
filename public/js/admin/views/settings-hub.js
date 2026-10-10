@@ -664,7 +664,13 @@ const LOOKUP_CONFIG = {
             { key: 'duration_minutes', label: 'Длительность, мин', type: 'number' },
             { key: 'api_kind', label: 'Для партнёров', type: 'select', options: [['initial', 'Первичный приём'], ['repeat', 'Повторный приём']] },
         ],
-        beforeSave: (p) => prepareConsultTypeSave(p),
+        // DOCTOR_PROFILE_V1 (ревью шага 5, №6) — общее окно пустые поля не шлёт
+        // (skip empties), и стёртое UZ / EN название оставалось в базе. При правке
+        // стёртое прежнее название уходит null — стирается.
+        beforeSave: (p, { isEdit, row } = {}) => {
+            if (isEdit && row) for (const k of ['name_uz', 'name_en']) if (!(k in p) && row[k]) p[k] = null;
+            return prepareConsultTypeSave(p);
+        },
     },
 
     // ---- Управление персоналом / Staff -----------------------------------
