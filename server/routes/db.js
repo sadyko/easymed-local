@@ -9,6 +9,7 @@ import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто на
 import { readIdentity } from '../services/branch-sync/identity.js';
 import { COMPANY_CLINIC_WIDE, COMPANY_PARTNER, storedProfileProblems } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1, BRANCH_PROFILE_V1 (COMPANY_PARTNER)
 import { BRANCH_MESSAGES, BRANCH_MAIN_COLUMNS, OWN_FROM_COMPANY, storedBranchProblems, ownBuildingProblems } from '../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
+import { CONSULT_API_KINDS, CONSULT_MESSAGES, consultTypeProblem } from '../../public/js/shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 import { keepLegacyLogo } from '../services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1 (ревью M3)
 import { companyAddressRefusal, branchAddressRefusal } from '../services/api/partner-address.js';   // CLINIC_API_STEP7_V1
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
@@ -396,6 +397,13 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     // BRANCH_PROFILE_V1 — формат: карта, часы, отметки, коды — те же правила, что у экрана.
     const branchFormat = branchFormatRefusal(compiled.meta, req.body);
     if (branchFormat) return res.status(400).json({ error: { code: 'bad_request', message: branchFormat.message, field: branchFormat.field } });
+    // DOCTOR_PROFILE_V1 — «Виды консультаций»: длительность приёма и вид для
+    // партнёров — те же правила, что у экрана (shared/consultation-price.js);
+    // одно значение «для партнёров» — у одного вида (UNIQUE мигр. 243 — запасной замок).
+    const consultFormat = consultTypeFormatRefusal(compiled.meta, req.body);
+    if (consultFormat) return res.status(400).json({ error: { code: 'bad_request', message: consultFormat.message, field: consultFormat.field } });
+    const consultKind = consultKindRefusal(db, compiled.meta, req.body);
+    if (consultKind) return res.status(409).json({ error: { code: 'conflict', message: consultKind, field: 'api_kind' } });
     // CLINIC_API_STEP7_V1 — решение владельца 11 по зданиям: пока включено
     // подключение API, филиал, показанный на сайте (работает и «Показывать на
     // сайте»), без полного адреса для партнёров не сохраняется, и отметку у
@@ -782,6 +790,30 @@ function branchFormatRefusal(meta, body) {
     const problems = storedBranchProblems(row);
     const field = Object.keys(problems)[0];
     if (field) return { field, message: problems[field] };
+  }
+  return null;
+}
+// DOCTOR_PROFILE_V1 — см. вызов в POST. null — запись можно выполнять.
+function consultTypeFormatRefusal(meta, body) {
+  if (!meta || meta.table !== 'consultation_types' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
+  const v = body && body.values;
+  for (const row of Array.isArray(v) ? v : [v]) {
+    const p = consultTypeProblem(row);
+    if (p) return p;
+  }
+  return null;
+}
+function consultKindRefusal(db, meta, body) {
+  if (!meta || meta.table !== 'consultation_types' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
+  const v = body && body.values;
+  const kinds = (Array.isArray(v) ? v : [v]).map((r) => r && r.api_kind).filter((k) => CONSULT_API_KINDS.includes(k));
+  if (!kinds.length) return null;
+  if (new Set(kinds).size !== kinds.length) return CONSULT_MESSAGES.kindTaken;
+  const f = body && Array.isArray(body.filters) ? body.filters : [];
+  const self = f.length === 1 && f[0] && f[0].col === 'id' && f[0].op === 'eq' ? Number(f[0].val) : null;
+  if (meta.op !== 'insert' && self == null) return CONSULT_MESSAGES.kindTaken;   // один вид «для партнёров» не ставят пачке строк
+  for (const k of kinds) {
+    if (db.prepare('SELECT 1 FROM consultation_types WHERE api_kind = ? AND id <> ?').get(k, self == null ? -1 : self)) return CONSULT_MESSAGES.kindTaken;
   }
   return null;
 }

@@ -422,3 +422,20 @@ test('DOCTOR_PROFILE_V1: «Повторный визит» у врача без 
     const values = dlg.querySelectorAll('option').map((o) => o.getAttribute('value'));
     assert.ok(values.includes(String(NOT_LED)) && values.includes(String(LED)), 'своей строки нет — виды ведутся по общей цене: ' + values.join(','));
 });
+
+// ─── DOCTOR_PROFILE_V1 — «Виды консультаций» и «Консультации врачей» ─────────
+test('DOCTOR_PROFILE_V1: «Консультации врачей» — пустая цена подсказывает 0; подпись говорит, что пустая цена и «Бесплатно» — 0 (решение владельца 13)', async () => {
+    seedPrices();
+    const { row, dlg } = await openDoctorDialog();
+    assert.equal(row('Повторный приём').price.getAttribute('placeholder'), '0', 'подсказка — то, что возьмёт касса, а не общая цена вида');
+    assert.ok(dlg.textContent.includes('Пустая цена — 0, как и «Бесплатно»'), dlg.textContent.slice(-400));
+    assert.ok(dlg.textContent.includes('Общая цена вида — только у врача, которого здесь ещё не сохраняли.'), dlg.textContent.slice(-400));
+});
+
+test('DOCTOR_PROFILE_V1: «Виды консультаций» правят названия RU/UZ/EN, длительность и вид для партнёров', async () => {
+    const fs = await import('node:fs');
+    const src = fs.readFileSync(new URL('../views/settings-hub.js', import.meta.url), 'utf8');
+    const block = src.slice(src.indexOf('    consultation_types: {'), src.indexOf('    // ---- Управление персоналом'));
+    for (const k of ["key: 'name_uz'", "key: 'name_en'", "key: 'duration_minutes'", "key: 'api_kind'"]) assert.ok(block.includes(k), k);
+    assert.match(block, /beforeSave: \(p\) => prepareConsultTypeSave\(p\)/);
+});

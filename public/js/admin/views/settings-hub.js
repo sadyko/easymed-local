@@ -46,6 +46,7 @@ import { isRouteAllowed, settingsTileLevel, hasRestriction, actorIsAdmin, settin
 // которую SETTINGS_ONE_COMPANY_V1 только что убрал.
 import { packageValidityParts, packageDiscount } from './service-templates.js?v=tpl1';   // PACKAGES_V1
 import { renderBranchSyncCard } from './branch-sync.js?v=bsync4';   // bsync4: филиалы таблицей, предупреждения — в окна подтверждения (BRANCH_LIST_V2)
+import { prepareConsultTypeSave } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 // BRANCH_PROFILE_V1 — «Филиалы» — свой экран (views/branches-editor.js: список
 // зданий карточками и страница здания) вместо общего редактора справочника;
 // карточку связи зданий он монтирует над списком, как раньше.
@@ -643,11 +644,21 @@ const LOOKUP_CONFIG = {
     },
     consultation_types: {
         table: 'consultation_types', title: 'Виды консультаций', icon: 'Flask',
-        columns: [{ key: 'name', label: 'Название' }, { key: 'price', label: 'Цена' }],
+        // DOCTOR_PROFILE_V1 (мигр. 243) — названия на трёх языках (наружу),
+        // длительность приёма вида (её берут окно записи и движок, 30 — как
+        // раньше) и вид для партнёров (initial / repeat — /slots API, шаг 8).
+        // name — русское; name_ru, которое читают касса и окно записи, держится
+        // тем же (prepareConsultTypeSave). «—» в «Для партнёров» — снять.
+        columns: [{ key: 'name', label: 'Название' }, { key: 'price', label: 'Цена' }, { key: 'duration_minutes', label: 'Длительность, мин' }],
         fields: [
-            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'name', label: 'Название (RU)', type: 'text', required: true },
+            { key: 'name_uz', label: 'Название (UZ)', type: 'text' },
+            { key: 'name_en', label: 'Название (EN)', type: 'text' },
             { key: 'price', label: 'Цена', type: 'number' },
+            { key: 'duration_minutes', label: 'Длительность, мин', type: 'number' },
+            { key: 'api_kind', label: 'Для партнёров', type: 'select', options: [['initial', 'Первичный приём'], ['repeat', 'Повторный приём']] },
         ],
+        beforeSave: (p) => prepareConsultTypeSave(p),
     },
 
     // ---- Управление персоналом / Staff -----------------------------------

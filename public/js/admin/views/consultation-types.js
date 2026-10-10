@@ -14,6 +14,7 @@
 //      и читаются только через isOn из shared/flags.js, не сравнением с true/false)
 //     UNIQUE(doctor_id, consultation_type_id))
 // No row for a (doctor,type) = defaults: available, not free, price = type default.
+// DOCTOR_PROFILE_V1 — строки нет — общая цена вида (решение 8); строка с пустой ценой — 0 (решение 13). «Save» пишет строку на каждый вид — после него общая цена этому врачу не подставляется.
 
 import { h, Icon, PageHead, clear, toast, initials, avColor } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
@@ -424,7 +425,7 @@ function openDoctorPricesModal(d, types, priceMap, cid, repaint) {
                 )),
                 tb),
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px' } },
-                'Цена и название — для этого врача. «Free» = бесплатно. Пустое название = название типа.'),
+                'Цена и название — для этого врача. Пустая цена — 0, как и «Бесплатно»: касса, окно записи и партнёры возьмут 0, поэтому впишите цену. Общая цена вида — только у врача, которого здесь ещё не сохраняли. Пустое название — название вида.'),   // DOCTOR_PROFILE_V1 — решения владельца 8 и 13
         ),
         h('footer', { class: 'modal-foot' },
             h('button', { class: 'btn btn-outline', type: 'button', onclick: close }, 'Отмена'),
