@@ -60,16 +60,13 @@ test('без права — как было: регистратуре 403, ад�
 });
 
 // ADMIN_ROWS_GRANTABLE_V1 — закрытых строк больше нет, но то, что было их
-// смыслом, осталось: без настройки — только администратор, а ключ API создаёт
-// только администратор и при выданном «Изменении».
-test('бывшие закрытые строки: без настройки — только администратор; ключ API не создаётся и по праву', () => {
+// смыслом, осталось: без настройки — только администратор. CLINIC_API_STEP7_V1 —
+// ключи API ушли из /api/db (api_tokens вне реестра; подключения — RPC
+// rpc/api-connections.js), их проверка — server/services/admin-rows-grantable.test.js.
+test('бывшие закрытые строки: без настройки — только администратор', () => {
   const db = seed();
   try {
-    assert.throws(() => compile({ table: 'api_tokens', op: 'select', columns: '*' }, REG, { db }), refused, 'ключи API читаются ненастроенной ролью');
     assert.throws(() => run(db, { table: 'role_permissions', op: 'update', values: { permissions: '{}' }, filters: [{ col: 'role', op: 'eq', val: 'lab' }] }, REG), refused);
-    addGrants(db, 'registrar', { settings: 'edit', 'settings.api': 'edit' });
-    assert.throws(() => run(db, { table: 'api_tokens', op: 'insert', values: { name: 'k', token: 't' } }, REG), refused);
-    assert.ok(compile({ table: 'api_tokens', op: 'select', columns: '*' }, REG, { db }), '«Изменение» ключей не читает список');
   } finally { db.close(); }
 });
 
@@ -112,7 +109,7 @@ test('каждый `write.grant` реестра — живая, не закры�
   }
   assert.ok(n >= 23, 'таблиц с ключом плитки меньше ожидаемого: ' + n);
   // ADMIN_ROWS_GRANTABLE_V1 — бывшие закрытые строки названы своими таблицами.
-  assert.equal(writeGrantKey('api_tokens'), 'settings.api');
+  // CLINIC_API_STEP7_V1 — api_tokens вне реестра: ключа плитки у неё нет.
   assert.equal(writeGrantKey('role_permissions'), 'settings.roles');
   assert.equal(writeGrantKey('custom_roles'), 'settings.roles');
   for (const t of ['doctor_rates', 'patient_discounts', 'payer_policies', 'payment_providers', 'cashback_rules']) assert.equal(writeGrantKey(t), 'settings.' + t);

@@ -168,7 +168,7 @@ test('settings-section tables: admin-writable config, staff read, room/bed FK em
   assert.equal(embedEntry('beds','wards').fk, 'ward_id');
 });
 
-test('settings-match tables: admin config, FK embeds, api_tokens admin-read-only', () => {
+test('settings-match tables: admin config, FK embeds; ключи API — не в реестре', () => {
   for (const t of ['payer_policies','payment_providers','cashback_rules','referral_source_categories','patient_discounts','doctor_rates']) {
     assert.ok(canRead(t,'registrar'), t+' staff-readable');
     assert.ok(canWrite(t,'insert','admin'), t+' admin-writable');
@@ -183,8 +183,9 @@ test('settings-match tables: admin config, FK embeds, api_tokens admin-read-only
     }
     assert.ok(!canWrite(t,'insert','registrar'), t+' not registrar-writable');
   }
-  assert.ok(!canRead('api_tokens','registrar'));   // tokens admin-only
-  assert.ok(canRead('api_tokens','admin'));
+  // CLINIC_API_STEP7_V1 — облачная заглушка api_tokens недостижима через /api/db даже администратору.
+  assert.ok(!canRead('api_tokens', 'admin'));
+  for (const t of ['api_connections', 'api_settings', 'api_journal']) assert.ok(!canRead(t, 'admin'), t + ' в реестре /api/db');
   assert.equal(embedEntry('payer_policies','payers').fk, 'payer_id');
   assert.equal(embedEntry('doctor_rates','users').fk, 'doctor_id');
   assert.equal(embedEntry('doctor_rates','services').fk, 'service_id');

@@ -853,13 +853,10 @@ export const REGISTRY = {
   chronic_conditions_ref: { read:{roles:ALL_STAFF,columns:['id','name','code','active','created_at']},
     write:{ grant:'settings.chronic_conditions',insert:{roles:['admin'],columns:['name','code','active']},update:{roles:['admin'],columns:['name','code','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
-  // ADMIN_ROWS_GRANTABLE_V1 — ключи API: плитка «API» на «Просмотр» читает
-  // список (значение ключа — `secret`, приходит замаскированным), на
-  // «Изменение» — переименовывает и отзывает (grantOps/grantColumns строки
-  // справочника). Создаёт ключ по-прежнему только администратор.
-  api_tokens: { read:{roles:['admin'],columns:['id','name','token','active','created_at'],secret:['token']},
-    write:{ grant:'settings.api',insert:{roles:['admin'],columns:['name','token','active']},update:{roles:['admin'],columns:['name','token','active']},delete:{roles:[]}},
-    filters:['id','active'], embed:{} },
+  // CLINIC_API_STEP7_V1 — api_tokens (мигр. 012, облачная заглушка: значение
+  // вписывали руками, сервер его не проверял) из реестра убрана — /api/db её не
+  // знает. Таблица в базе осталась (план шага 7, Р2). Ключи подключений — в
+  // api_connections, тоже вне реестра: только RPC rpc/api-connections.js.
   // FINAL_ROLES_SYNC_FIX_V1 (M1) — СТАВКИ ВРАЧЕЙ ВИДЯТ НЕ ВСЕ. Раньше их
   // читал весь персонал; теперь все строки — администратор, держатели
   // «Оплаты врачей» (reports.doctor_pay) и плитки «Ставки врачей»

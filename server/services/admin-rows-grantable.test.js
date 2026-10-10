@@ -84,39 +84,16 @@ test('закрытых строк больше нет: каждая бывшая
 
 // --- API-ключи ---------------------------------------------------------------
 
-test('API: нет → 403; просмотр — список без значения ключа; изменение — переименовать и отозвать, но не создать', () => {
+// CLINIC_API_STEP7_V1 — ключи API живут в «API и подключения» (RPC rpc/api-connections.js);
+// облачная заглушка api_tokens /api/db не знает — ни на каком уровне, ни администратору.
+test('API: api_tokens через /api/db недостижима — и администратору, и с «API: Изменение»', () => {
   const db = seed();
   try {
-    const id = run(db, { table: 'api_tokens', op: 'insert', values: { name: 'Symptex', token: 'emk_secret_value' } }, ADMIN).id;
-    // Ненастроенная роль — как вчера.
-    assert.throws(() => run(db, { table: 'api_tokens', op: 'select', columns: '*' }, REG), refused);
-    addGrants(db, 'registrar', { settings: 'view', 'settings.api': 'none' });
-    assert.throws(() => run(db, { table: 'api_tokens', op: 'select', columns: '*' }, REG), refused);
-    addGrants(db, 'registrar', { 'settings.api': 'view' });
-    const rows = run(db, { table: 'api_tokens', op: 'select', columns: '*' }, REG);
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].name, 'Symptex');
-    assert.ok(!JSON.stringify(rows).includes('emk_secret_value'), 'значение ключа ушло к «Просмотру»');
-    assert.ok(rows[0].token && rows[0].token !== 'emk_secret_value', 'видно, что ключ есть');
-    assert.throws(() => run(db, { table: 'api_tokens', op: 'update', values: { active: 0 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
-    addGrants(db, 'registrar', { 'settings.api': 'edit' });
-    run(db, { table: 'api_tokens', op: 'update', values: { name: 'Symptex (старый)', active: 0 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
-    assert.equal(db.prepare('SELECT active FROM api_tokens WHERE id = ?').get(id).active, 0, 'ключ не отозван');
-    // Ключ — полный машинный доступ без областей: создать и задать значение — только администратор.
-    assert.throws(() => run(db, { table: 'api_tokens', op: 'insert', values: { name: 'Мой', token: 'x' } }, REG), refused);
-    assert.throws(() => run(db, { table: 'api_tokens', op: 'update', values: { token: 'mine' }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
-    // Администратор видит ключ целиком.
-    assert.equal(run(db, { table: 'api_tokens', op: 'select', columns: '*' }, ADMIN)[0].token, 'emk_secret_value');
-  } finally { db.close(); }
-});
-
-test('API: колонка ключа, спрошенная прямо, тоже замаскирована', () => {
-  const db = seed();
-  try {
-    run(db, { table: 'api_tokens', op: 'insert', values: { name: 'k', token: 'emk_raw' } }, ADMIN);
+    const gone = (e) => e && e.status >= 400 && e.status < 500;
+    assert.throws(() => run(db, { table: 'api_tokens', op: 'select', columns: '*' }, ADMIN), gone);
     addGrants(db, 'registrar', { settings: 'view', 'settings.api': 'edit' });
-    const rows = run(db, { table: 'api_tokens', op: 'select', columns: 'id,token' }, REG);
-    assert.notEqual(rows[0].token, 'emk_raw');
+    assert.throws(() => run(db, { table: 'api_tokens', op: 'select', columns: '*' }, REG), gone);
+    assert.throws(() => run(db, { table: 'api_tokens', op: 'insert', values: { name: 'k', token: 'x' } }, ADMIN), gone);
   } finally { db.close(); }
 });
 
