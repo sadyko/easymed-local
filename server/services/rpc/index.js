@@ -46,6 +46,7 @@ import { removeOwnVisitLine, visitSetReferralSource } from './visit-lines.js';  
 import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
 import { branchHoursImpact } from './branch-hours.js';   // BRANCH_PROFILE_V1
+import { doctorPublicPreview } from './doctor-public.js';   // DOCTOR_PROFILE_V1
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
 import { sellCard, refundCardSale, listCardSales } from './card-sales.js';   // CARD_SALE_V1
@@ -292,6 +293,11 @@ export const RPC = {
   // ворота — право записи в branches (реестр). В READ_ONLY_RPCS не входит:
   // при просроченной лицензии сохранить часы всё равно нельзя.
   branch_hours_impact:       (db, args, user) => branchHoursImpact(db, args, user),
+  // DOCTOR_PROFILE_V1 — «Что увидят партнёры» карточки врача (views/doctor-public-pane.js):
+  // окна по 15 минут тем же движком, что запись, часы приёма, очередь, цены
+  // консультаций и услуги-консультации. Только чтение (READ_ONLY_RPCS);
+  // ворота — «Сотрудники: Просмотр».
+  doctor_public_preview:     (db, args, user) => doctorPublicPreview(db, args, user),
   // CRM_CALENDAR_MIRROR_V1 — услуги записи ДО ПРИХОДА: колл-центр записывает
   // пациента с услугами, а не голым слотом. Узкая дверь (booking-lines.js):
   // только 'added', без счёта и оплаты, без хирургии, своё здание.

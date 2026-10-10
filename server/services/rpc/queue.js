@@ -278,13 +278,10 @@ function ticketState(states) {
   return states.slice().sort((a, b) => STATE_RANK[a] - STATE_RANK[b])[0] || 'done';
 }
 
-export function queueBoard(db, args, user) {
-  if (!canViewSection(db, user, BOARD_KEY)) {
-    throw new RpcError('Раздел «Очередь» вам не выдан.', 403);
-  }
-  const a = args || {};
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(a.day || '')) ? String(a.day) : today(db);
-
+// DOCTOR_PROFILE_V1 — доска без проверки раздела: её читают экран «Очередь»
+// (queueBoard ниже, с проверкой) и «Что увидят партнёры» карточки врача
+// (rpc/doctor-public.js) — одна арифметика очереди.
+export function boardGroups(db, day) {
   // V3120_FIX (PERF) — ДОСКУ ДВИЖЕТ ДЕНЬ ВИЗИТА, А НЕ ПЕРЕБОР ВСЕХ СТРОК.
   //
   // Здесь стоял один отбор `queue_key LIKE '%:<день>'` — по всем строкам
@@ -389,5 +386,25 @@ export function queueBoard(db, args, user) {
   out.sort((x, y) =>
     (KIND_ORDER[x.kind] - KIND_ORDER[y.kind]) || x.label.localeCompare(y.label, 'ru'));
 
-  return { day, groups: out };
+  return out;
+}
+
+export function queueBoard(db, args, user) {
+  if (!canViewSection(db, user, BOARD_KEY)) {
+    throw new RpcError('Раздел «Очередь» вам не выдан.', 403);
+  }
+  const a = args || {};
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(a.day || '')) ? String(a.day) : today(db);
+  return { day, groups: boardGroups(db, day) };
+}
+
+/**
+ * DOCTOR_PROFILE_V1 — сколько ждут приёма у врача в этот день (живая очередь;
+ * макет «Сейчас в очереди»): талон в очереди врача есть, ещё не приняты — и
+ * ждущие, и ждущие оплаты (Р20 плана шага 5: решено контролёром).
+ */
+export function doctorQueueWaiting(db, doctorId, day) {
+  const key = 'doc:' + Number(doctorId) + ':' + day;
+  const g = boardGroups(db, day).find((x) => x.key === key);
+  return g ? g.waiting_count + g.unpaid_count : 0;
 }

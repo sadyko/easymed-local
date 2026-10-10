@@ -139,6 +139,8 @@ import {
   overlapsMs, serviceDurationMinutes, slotStarts, windowSegments,
 } from './slot-engine.js';
 import { consultMinutes } from '../../../public/js/shared/consultation-price.js';   // DOCTOR_PROFILE_V1 — длительность вида консультации
+import { WEEKDAY_KEYS } from './slot-engine.js';   // DOCTOR_PROFILE_V1
+import { PUBLIC_SLOT_MIN } from '../../../public/js/shared/doctor-public.js';   // DOCTOR_PROFILE_V1 — окно для партнёров
 // CROSS_BRANCH_CALENDAR_V1. Список зданий и возраст их картинки — один на всю
 // систему (rpc/branch-sync.js networkBuildings); срочная выгрузка — та же
 // машина, что и часовая (branch-sync/relay.js), а не второй канал.
@@ -377,6 +379,36 @@ function resourceWindow(db, { doctor, room, dayIso }) {
     ? db.prepare('SELECT id, working_hours, is_24_7 FROM branches WHERE id = ?').get(branchId)
     : null;
   return clampWindow(win, clinicWindow(branch, weekday));
+}
+
+/**
+ * DOCTOR_PROFILE_V1 — ОКНА ДЛЯ ПАРТНЁРОВ: день врача сеткой по 15 минут
+ * (макет «Что увидят партнёры», документация API /slots). Тот же движок, что
+ * calendar_slots: окно врача (график, обед), суженное часами здания
+ * (resourceWindow), занятое — его визиты (loadBusy). free — можно ли НАЧАТЬ с
+ * этого окна приём длиной durationMin (15 — свободно само окно; 30 — два
+ * подряд). Прошедшее сегодня — не свободно. Ничего не пишет; читают превью
+ * карточки сотрудника (rpc/doctor-public.js) и, в шаге 8, /slots API.
+ */
+export function doctorDayWindows(db, { doctorId, dayIso, durationMin = PUBLIC_SLOT_MIN, now = Date.now() }) {
+  const midnight = localMidnight(dayIso);
+  const dayStartMs = midnight.getTime();
+  const dayEndMs = dayStartMs + 24 * 3600 * 1000;
+  const out = { date: dayIso, weekday: WEEKDAY_KEYS[midnight.getDay()], window: null, windows: [] };
+  const doctor = db.prepare('SELECT id, working_hours, branch_id FROM users WHERE id = ?').get(doctorId);
+  if (!doctor) return out;
+  const win = resourceWindow(db, { doctor, room: null, dayIso });
+  if (!win) return out;
+  out.window = { from: formatHhmm(win.from), to: formatHhmm(win.to) };
+  const segments = windowSegments(win);
+  const clampMin = (ms) => Math.max(0, Math.min(24 * 60, Math.round((ms - dayStartMs) / 60000)));
+  const busy = loadBusy(db, { doctorId, roomId: null, fromMs: dayStartMs, toMs: dayEndMs, excludeVisitId: null })
+    .map((b) => ({ from: clampMin(b.startMs), to: clampMin(b.endMs) })).filter((b) => b.to > b.from);
+  const minStartMin = (now >= dayStartMs && now < dayEndMs) ? minutesOfLocal(now) : null;
+  const all = slotStarts({ segments, busy: [], durationMin: PUBLIC_SLOT_MIN, stepMin: PUBLIC_SLOT_MIN });
+  const free = new Set(slotStarts({ segments, busy, durationMin, stepMin: PUBLIC_SLOT_MIN, minStartMin }));
+  out.windows = all.map((t) => ({ start: formatHhmm(t), free: free.has(t) }));
+  return out;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

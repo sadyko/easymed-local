@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { queueBoard } from './queue.js';
+import { queueBoard, boardGroups, doctorQueueWaiting } from './queue.js';   // DOCTOR_PROFILE_V1 — boardGroups, doctorQueueWaiting
 
 const REG = { id: 1, role: 'registrar' };
 const DAY = '2026-08-07';
@@ -120,5 +120,24 @@ test('план запроса: кандидаты берутся по индек
   assert.match(plan, /idx_visits_date/, plan);
   assert.match(plan, /idx_visit_services_sched_queue/, plan);
   assert.doesNotMatch(plan, /SCAN vs\b|SCAN visit_services\b/, plan);
+  db.close();
+});
+
+// DOCTOR_PROFILE_V1 — «сейчас ждут приёма» у врача — та же доска: ждут и ждут
+// оплаты (талон есть, не приняты; Р20 плана). Принимаемый, другой
+// врач и лаборатория не считаются. Доска экрана не изменилась.
+test('DOCTOR_PROFILE_V1: сколько ждут приёма у врача — с той же доски', () => {
+  const db = freshDb();
+  const a = visit(db, 1, `${DAY}T09:00:00Z`);
+  const b = visit(db, 2, `${DAY}T09:05:00Z`);
+  const c = visit(db, 3, `${DAY}T09:10:00Z`);
+  const d = visit(db, 4, `${DAY}T09:15:00Z`);
+  line(db, a, { key: `doc:2:${DAY}`, no: 1, status: 'in_progress' });
+  line(db, b, { key: `doc:2:${DAY}`, no: 2, status: 'queued' });
+  line(db, c, { key: `doc:2:${DAY}`, no: 3, status: 'added' });
+  line(db, d, { svc: 3, doctor: null, key: `lab:${DAY}`, no: 1 });
+  assert.equal(doctorQueueWaiting(db, 2, DAY), 2);
+  assert.equal(doctorQueueWaiting(db, 99, DAY), 0);
+  assert.deepEqual(boardGroups(db, DAY), queueBoard(db, { day: DAY }, REG).groups);
   db.close();
 });
