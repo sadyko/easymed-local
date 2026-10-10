@@ -455,3 +455,21 @@ test('branches: профиль здания (мигр. 241) — в чтении,
   }
   assert.ok(!readableColumns('branches').includes('name_ru'), 'RU — это name (db-query-schema.test.mjs:721-743 держит это)');
 });
+
+// DOCTOR_PROFILE_V1 (мигр. 243) — профиль врача для партнёров читается; пишут только свои двери.
+test('users: показ, языки, «работает с», срок записи, счётчик очереди — в чтении, languages — JSON; через /api/db не пишутся', () => {
+  const upd = REGISTRY.users.write.update.columns || [];   // у users запись пуста целиком: пишут routes/users.js и RPC
+  for (const c of ['is_public', 'languages', 'practice_since', 'booking_days', 'show_queue_count']) {
+    assert.ok(readableColumns('users').includes(c), 'чтение ' + c);
+    assert.ok(!upd.includes(c), c + ' пишут routes/users.js и RPC, не /api/db');
+  }
+  assert.ok(jsonColumns('users').includes('languages'));
+});
+
+test('consultation_types: английское название, длительность и вид для партнёров — в чтении, вставке и правке', () => {
+  for (const c of ['name_en', 'duration_minutes', 'api_kind']) {
+    assert.ok(readableColumns('consultation_types').includes(c), 'чтение ' + c);
+    assert.ok(writableColumns('consultation_types', 'insert').includes(c), 'вставка ' + c);
+    assert.ok(writableColumns('consultation_types', 'update').includes(c), 'правка ' + c);
+  }
+});

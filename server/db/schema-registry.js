@@ -578,7 +578,12 @@ export const REGISTRY = {
                 // врач сразу видел, что профиль здесь только смотрят (правка
                 // переписалась бы синхронизацией; сервер и так отвечает 409).
                 // Только чтение: write у users пуст, пишут синхронизация и 086.
-                'is_local'],
+                'is_local',
+                // DOCTOR_PROFILE_V1 (мигр. 243) — показ врача на сайте и у
+                // партнёров, языки приёма, «работает с», срок записи для
+                // партнёров, счётчик очереди. Читают карточка сотрудника и «Мой
+                // профиль»; пишут routes/users.js и update_my_doctor_profile.
+                'is_public','languages','practice_since','booking_days','show_queue_count'],
                 // V3120_FIX (F1) — ДЕНЬГИ СОТРУДНИКА ВИДЯТ НЕ ВСЕ. Раньше любой
                 // вошедший одним запросом к users забирал оклад, процент и
                 // ставки каждого сотрудника. Теперь их видят администратор,
@@ -597,7 +602,7 @@ export const REGISTRY = {
                // кабинетом» — колонка уже читается строкой выше.
                filters:['id','role','is_active','active','is_doctor','room_id'],
                json:['service_rates','referral_rates','kpi_links',
-                     'education_entries','experience_entries','certifications_entries','prof_dev_entries'],   // DOCTOR_PUBLIC_PROFILE_V1
+                     'education_entries','experience_entries','certifications_entries','prof_dev_entries','languages'],   // DOCTOR_PUBLIC_PROFILE_V1; DOCTOR_PROFILE_V1 — языки приёма списком
                embed:{ rooms: { table:'rooms', fk:'room_id', columns:['id','name'] } } },
   products: {
     read:  { roles: ALL_STAFF, columns: ['id','name','code','unit','category','sale_price','on_hand','reorder_level','active','created_at','updated_at',
@@ -704,8 +709,16 @@ export const REGISTRY = {
   service_types: { read:{roles:ALL_STAFF,columns:['id','name','code','billing_mode','active','created_at']},
     write:{ grant:'settings.service_types',insert:{roles:['admin'],columns:['name','code','billing_mode','active']},update:{roles:['admin'],columns:['name','code','billing_mode','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
-  consultation_types: { read:{roles:ALL_STAFF,columns:['id','name','name_ru','name_uz','sort_order','price','active','created_at']},
-    write:{ grant:'settings.consultation_types',insert:{roles:['admin'],columns:['name','name_ru','name_uz','sort_order','price','active']},update:{roles:['admin'],columns:['name','name_ru','name_uz','sort_order','price','active']},delete:{roles:[]}},
+  // DOCTOR_PROFILE_V1 (мигр. 243) — английское название, длительность приёма
+  // вида и вид для партнёров (initial / repeat). Формат и единственность
+  // вида — routes/db.js (consultTypeFormatRefusal / consultKindRefusal);
+  // CHECK и UNIQUE — запасной замок.
+  consultation_types: { read:{roles:ALL_STAFF,columns:['id','name','name_ru','name_uz','sort_order','price','active','created_at',
+                'name_en','duration_minutes','api_kind']},   // DOCTOR_PROFILE_V1
+    write:{ grant:'settings.consultation_types',
+            insert:{roles:['admin'],columns:['name','name_ru','name_uz','sort_order','price','active','name_en','duration_minutes','api_kind']},
+            update:{roles:['admin'],columns:['name','name_ru','name_uz','sort_order','price','active','name_en','duration_minutes','api_kind']},
+            delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   // CATEGORY_DISCOUNT_V1 (миграция 107) — discount_percent: скидка группы.
   // Читают все (карта пациента показывает её рядом с категорией), пишет только

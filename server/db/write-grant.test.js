@@ -314,3 +314,17 @@ test('регистратура с «Филиалы: Изменение» пра�
     assert.deepEqual({ ...r }, { name_uz: 'Bosh bino', street_ru: 'ул. Мира, 1', show_public: 0 });
   } finally { db.close(); }
 });
+
+// DOCTOR_PROFILE_V1 — «Консультации врачей: Изменение» задаёт длительность, вид для партнёров и английское название.
+test('регистратура с «Консультации врачей: Изменение» пишет длительность, вид для партнёров и английское название', () => {
+  const db = seed();
+  try {
+    const id = db.prepare("INSERT INTO consultation_types (name, price) VALUES ('Первичный приём', 100000)").run().lastInsertRowid;
+    const upd = (values) => run(db, { table: 'consultation_types', op: 'update', values, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
+    assert.throws(() => upd({ duration_minutes: 45 }), refused);
+    addGrants(db, 'registrar', { settings: 'view', 'settings.consultation_types': 'edit' });
+    upd({ duration_minutes: 45, api_kind: 'initial', name_en: 'Initial visit' });
+    assert.deepEqual({ ...db.prepare('SELECT duration_minutes, api_kind, name_en FROM consultation_types WHERE id = ?').get(id) },
+      { duration_minutes: 45, api_kind: 'initial', name_en: 'Initial visit' });
+  } finally { db.close(); }
+});
