@@ -191,6 +191,8 @@ globalThis.fetch = async (url, opts = {}) => {
         events.push(probe ? 'probe' : 'save');
         // Врач из главного здания — сервер отказывает любому вызову (rpc/doctor-profile.js).
         if (scenario.managed) return reply(409, { error: { code: 'conflict', message: MANAGED_MSG } });
+        // DOCTOR_PROFILE_V1 (ревью №11) — отказ сервера с полем (error.field), как у rpc/doctor-profile.js.
+        if (scenario.refuse && !probe) return reply(400, { error: scenario.refuse });
         return reply(200, { data: { ok: true, saved: Object.keys(body.p || {}), not_stored: [] } });
     }
     return reply(200, { data: [] });
@@ -584,4 +586,35 @@ test('DOCTOR_PROFILE_V1: «Мой профиль» — неверный год �
     await s.save();
     assert.equal(rpcCalls.length, 1);
     assert.deepEqual(rpcCalls[0].p, { practice_since: YEAR - 13 });
+});
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №11) — «Мой профиль»: ссылки соцсетей
+// проверяются тем же правилом, что сервер, отказ — под полем; отказ сервера с
+// полем (error.field RPC) — тоже под полем, а не тостом.
+test('DOCTOR_PROFILE_V1: «Мой профиль» — ссылка Instagram без http(s) не уходит, отказ под полем', async () => {
+    const MSG = 'Ссылка Instagram должна начинаться с http:// или https://.';
+    const s = await openProfile();
+    const ig = s.input('https://instagram.com/…');
+    ig.value = 'instagram.com/dr.karimov';
+    await s.save();
+    assert.equal(rpcCalls.length, 0, 'ссылка без http(s) ушла на сервер');
+    assert.ok(s.container.textContent.includes(MSG), 'нет отказа под полем Instagram');
+    assert.equal(ig.attrs['aria-invalid'], 'true');
+    ig.value = 'https://instagram.com/dr.karimov2';
+    ig.dispatchEvent({ type: 'input' });
+    assert.ok(!s.container.textContent.includes(MSG), 'отказ остался после правки');
+    await s.save();
+    assert.deepEqual(rpcCalls[0].p, { instagram_url: 'https://instagram.com/dr.karimov2' });
+});
+
+test('DOCTOR_PROFILE_V1: «Мой профиль» — отказ сервера с полем ссылки — под полем, не тостом', async () => {
+    const MSG = 'Ссылка Telegram слишком длинная — не больше 2000 знаков.';
+    const s = await openProfile({ refuse: { code: 'bad_request', message: MSG, field: 'telegram_url' } });
+    const tg = s.input('https://t.me/…');
+    tg.value = 'https://t.me/dr';
+    await s.save();
+    assert.equal(rpcCalls.length, 1, 'сохранение не ушло');
+    assert.ok(s.container.textContent.includes(MSG), 'отказа сервера нет под полем Telegram');
+    assert.equal(tg.attrs['aria-invalid'], 'true');
+    assert.ok(!toastText().includes(MSG), 'отказ ушёл тостом: ' + toastText());
 });

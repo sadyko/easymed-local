@@ -10,7 +10,9 @@ import { uploadFile } from '../storage.js';
 // RPC_PORT_V1 — офлайн каталог специальностей из медкора (gw) недоступен:
 // выбор идёт из того же канонического списка, по которому сервер проверяет слаг.
 import { SPECIALTY_ROWS, canonicalSpecialty, sortByShownLabel } from '../../shared/specialty-list.js';   // REFERENCE_LISTS_V1 — sortByShownLabel
-import { specialtyLabel } from '../specialties.js?v=spec2';   // DOCTOR_PROFILE_V1 — название из справочника, как в карточке сотрудника (ревью №10)
+import { specialtyLabel } from '../specialties.js?v=spec2';
+import { profileLinkProblem, PROFILE_LINK_KEYS } from './doctor-public-pane.js';   // DOCTOR_PROFILE_V1 — ссылки соцсетей: правило сервера (ревью №11)
+import { fieldErr } from './company-fields.js';   // DOCTOR_PROFILE_V1 — отказ под полем ссылки   // DOCTOR_PROFILE_V1 — название из справочника, как в карточке сотрудника (ревью №10)
 import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1
 // PATIENT_PHOTO_V1 — те же правила и то же уменьшение, что в окне заведения
 // пациента: один набор на оба виджета фото и на сервер.
@@ -254,11 +256,18 @@ export async function renderDoctorProfile(container, doctorId) {
         placeholder: 'https://t.me/…' });
     contactInputs.instagram_url = igInp;
     contactInputs.telegram_url = tgInp;
+    // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — отказ ссылки (свой или сервера) — под полем.
+    const linkErr = { instagram_url: fieldErr(igInp), telegram_url: fieldErr(tgInp) };
+    for (const k of PROFILE_LINK_KEYS) contactInputs[k].addEventListener('input', () => linkErr[k].set(''));
+    const igField = field('Instagram', igInp);
+    igField.appendChild(linkErr.instagram_url.node);
+    const tgField = field('Telegram', tgInp);
+    tgField.appendChild(linkErr.telegram_url.node);
     root.appendChild(card('Контакты и соцсети', 'Link',
         h('div', { class: 'docprof-contacts' },
             field('Телефон', phoneInp, 'изменяется в карточке сотрудника'),
-            field('Instagram', igInp),
-            field('Telegram', tgInp))));
+            igField,
+            tgField)));
 
     // ----- Bio (trilingual long-text) -----
     for (const [base, label] of TRI_TEXT) {
@@ -302,6 +311,14 @@ export async function renderDoctorProfile(container, doctorId) {
         if ((yrsNow === '' ? null : Number(yrsNow)) !== atOpen.p.practice_since) {
             const c = cleanPracticeSince(yrsNow);
             if (c.problem) { sayYear(c.problem); sinceInp.focus(); toast(c.problem, 'fail'); return; }
+        }
+        // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — изменённые ссылки соцсетей — правилом
+        // сервера, до отправки; отказ — под полем.
+        for (const k of PROFILE_LINK_KEYS) {
+            const v = (contactInputs[k].value || '').trim();
+            if (v === atOpen.p[k]) continue;
+            const m = profileLinkProblem(k, v);
+            if (m) { linkErr[k].set(m); contactInputs[k].focus(); toast(m, 'fail'); return; }
         }
         saveBtn.disabled = true;
         saveBtn.textContent = tr('Сохранение…');
@@ -370,6 +387,8 @@ export async function renderDoctorProfile(container, doctorId) {
             else if (notStored.length) toast('Профиль сохранён. Биография, образование, соцсети и фото в офлайн-версии не хранятся.', 'info');
             else toast('Профиль сохранён', 'info');
         } catch (e) {
+            // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — отказ сервера с полем ссылки — под полем.
+            if (e && PROFILE_LINK_KEYS.includes(e.field)) { linkErr[e.field].set(e.message); contactInputs[e.field].focus(); return; }
             // CLINIC_API_FIX_V1 — причина отказа (например, «Профиль врача
             // меняется в главном здании.») — тоже на языке экрана.
             toast(trf('Не удалось сохранить: {msg}', { msg: tr(String((e && e.message) || e)) }), 'fail');

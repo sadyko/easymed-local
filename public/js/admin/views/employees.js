@@ -19,7 +19,7 @@ import { specialtyOptions, specialtyLabel, canonicalSpecialty, SPECIALTY_ROWS } 
 import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — рабочая ставка за направления (источник врача)
 import { employeeNameParts, employeeSaveGaps, NAME_KEYS } from '../../shared/employee-name.js?v=ecs2';   // EMPLOYEE_CARD_SAVE_V1 — имя из full_name и что держит сохранение; ecs2 — ревью: нетронутое ФИО побайтно, стёртый телефон
 import { weekHoursGrid } from './week-hours.js';   // BRANCH_PROFILE_V1 — сетка дней одна на программу
-import { doctorPublicPane, publicPaneProblems } from './doctor-public-pane.js';   // DOCTOR_PROFILE_V1 — «Публичный профиль» по макету
+import { doctorPublicPane, publicPaneProblems, PROFILE_LINK_KEYS } from './doctor-public-pane.js';   // DOCTOR_PROFILE_V1 — «Публичный профиль» по макету
 import { doctorPublicState, shownPracticeSince } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1
 import { isRouteAllowed } from '../permissions.js';   // DOCTOR_PROFILE_V1 — «Изменить в «Консультации врачей»» только тому, кому она открыта
 
@@ -114,7 +114,11 @@ function empAccess() {
 async function api(path, opts = {}) {
     const res = await fetch('/api/users' + path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...opts });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((json.error && json.error.message) || ('Request failed (' + res.status + ')'));
+    if (!res.ok) {
+        const e = new Error((json.error && json.error.message) || ('Request failed (' + res.status + ')'));
+        if (json.error && json.error.field) e.field = json.error.field;   // DOCTOR_PROFILE_V1 (ревью №11) — поле отказа
+        throw e;
+    }
     return json;
 }
 
@@ -1109,7 +1113,17 @@ function openEditor(user, root) {
                 if (err) toast(trf('Сотрудник сохранён, но ставка за направления — нет: {msg}', { msg: err }), 'fail');
             }
             toast('Сотрудник сохранён', 'ok'); close(); await paint(root);
-        } catch (e) { toast(e.message || 'Не удалось сохранить.', 'fail'); saveBtn.disabled = false; saveBtn.textContent = prev; }
+        } catch (e) {
+            saveBtn.disabled = false; saveBtn.textContent = prev;
+            // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — отказ сервера, названный полем
+            // «Публичного профиля» (ссылки соцсетей), — под этим полем, не тостом.
+            if (e && emp.is_doctor && PROFILE_LINK_KEYS.includes(e.field)) {
+                paneErrors[e.field] = e.message;
+                active = 'profile'; renderRail(); renderBody();
+                return;
+            }
+            toast(e.message || 'Не удалось сохранить.', 'fail');
+        }
     }
 
     overlay.appendChild(h('div', { class: 'modal-card emp-ed-card', style: { width: '1080px', maxWidth: 'calc(100vw - 32px)', height: 'min(90vh, 780px)', display: 'flex', flexDirection: 'column' } },   // RATES_FILTERS_V2 — room for the service name

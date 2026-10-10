@@ -111,12 +111,18 @@ const PREVIEW = {
 };
 
 const writes = [];
+let REFUSE = null;   // DOCTOR_PROFILE_V1 (ревью №11) — следующий PATCH отвечает этим отказом
 const uploads = [];   // DOCTOR_PROFILE_V1 — файлы фото в хранилище
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const method = opts.method || 'GET';
   if (u === '/api/users' && method === 'GET') return { ok: true, json: async () => ({ users: [DOC, BARE, PUB, SHOWN, MAIN] }) };
-  if (u.startsWith('/api/users')) { writes.push({ u, method, body: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ user: {} }) }; }
+  if (u.startsWith('/api/users')) {
+    writes.push({ u, method, body: JSON.parse(opts.body) });
+    // DOCTOR_PROFILE_V1 (ревью №11) — один отказ сервера по заказу теста (error.field — поле отказа).
+    if (REFUSE) { const error = REFUSE; REFUSE = null; return { ok: false, status: 400, json: async () => ({ error }) }; }
+    return { ok: true, json: async () => ({ user: {} }) };
+  }
   if (u === '/api/rpc/doctor_public_preview') return { ok: true, json: async () => ({ data: PREVIEW }) };
   if (u.startsWith('/api/storage/')) { uploads.push(u); return { ok: true, json: async () => ({}) }; }
   if (u === '/api/db') {
@@ -486,4 +492,49 @@ test('DOCTOR_PROFILE_V1: ошибка «Введите ФИО на русско�
   await tab(s.card, 'Должность');
   await tab(s.card, 'Публичный профиль');
   assert.ok(!textOf(s.card).includes(MSG), 'ошибка ФИО вернулась после смены раздела');
+});
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №11) — ссылки Instagram и Telegram: то же
+// правило и те же тексты, что у сервера (rpc/doctor-profile.js
+// PROFILE_LINK_MESSAGES), проверяются до отправки — отказ под полем; отказ
+// сервера с полем (error.field) — тоже под полем, а не тостом.
+test('DOCTOR_PROFILE_V1: ссылка Telegram без http(s) и слишком длинная Instagram — отказ под полем, на сервер не уходит', async () => {
+  const { PROFILE_LINK_MESSAGES } = await import('../../../../server/services/rpc/doctor-profile.js');
+  const { PANE_LINK_MESSAGES } = await import('../views/doctor-public-pane.js');
+  assert.deepEqual(PANE_LINK_MESSAGES, PROFILE_LINK_MESSAGES, 'тексты экрана и сервера разошлись');
+  const s = await openProfileTab('dr.karimov');
+  const tg = s.input('https://t.me/…');
+  type(tg, '@dr_karimov');
+  await save(s.card);
+  assert.equal(writes.length, 0, 'ссылка без http(s) ушла на сервер');
+  assert.ok(textOf(s.card).includes(PROFILE_LINK_MESSAGES.telegram_url.scheme), 'нет отказа под полем Telegram');
+  const tgNow = s.input('https://t.me/…');   // отказ перерисовал раздел
+  assert.equal(tgNow.attrs['aria-invalid'], 'true');
+  type(tgNow, 'https://t.me/dr_karimov');
+  assert.ok(!textOf(s.card).includes(PROFILE_LINK_MESSAGES.telegram_url.scheme), 'отказ остался после исправления');
+  type(s.input('https://instagram.com/…'), 'https://instagram.com/' + 'a'.repeat(2000));
+  await save(s.card);
+  assert.equal(writes.length, 0);
+  assert.ok(textOf(s.card).includes(PROFILE_LINK_MESSAGES.instagram_url.long), 'нет отказа «слишком длинная»');
+  type(s.input('https://instagram.com/…'), '/api/storage/x');   // своя страница клиники — как у сервера, допустимо
+  await save(s.card);
+  assert.deepEqual(onlyWrite().public_profile, { telegram_url: 'https://t.me/dr_karimov', instagram_url: '/api/storage/x' });
+});
+
+test('DOCTOR_PROFILE_V1: отказ сервера с полем ссылки — под полем «Публичного профиля», а не тостом', async () => {
+  const msg = 'Ссылка Telegram должна начинаться с http:// или https://.';
+  const s = await openCard('dr.karimov');
+  await tab(s, 'Публичный профиль');
+  const tg = tags(s, 'input').find((i) => i.attrs.placeholder === 'https://t.me/…');
+  type(tg, 'https://t.me/ok');
+  await tab(s, 'Занятость и зарплата');   // сохраняют с другого раздела
+  REFUSE = { code: 'bad_request', message: msg, field: 'telegram_url' };
+  const toastsBefore = document.body.children.filter((c) => c.attrs && c.attrs.id === 'toast').length;
+  await save(s);
+  assert.equal(writes.length, 1, 'запрос не ушёл');
+  assert.ok(textOf(s).includes(msg), 'отказа сервера нет под полем — карточка не открыла «Публичный профиль»');
+  const tg2 = tags(s, 'input').find((i) => i.attrs.placeholder === 'https://t.me/…');
+  assert.equal(tg2.attrs['aria-invalid'], 'true');
+  const toasts = document.body.children.filter((c) => c.attrs && c.attrs.id === 'toast').slice(toastsBefore).map((t) => t._shown);
+  assert.ok(!toasts.includes(msg), 'отказ ушёл тостом: ' + toasts.join(' | '));
 });

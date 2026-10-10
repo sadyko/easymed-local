@@ -39,13 +39,42 @@ export const PANE_MESSAGES = Object.freeze({
 });
 
 /**
+ * DOCTOR_PROFILE_V1 (ревью шага 5, №11) — ССЫЛКИ INSTAGRAM И TELEGRAM. Правило и
+ * тексты — те же, что у сервера (server/services/rpc/doctor-profile.js
+ * PROFILE_LINK_MESSAGES; тест сверяет тексты): пусто — можно; иначе http:// или
+ * https://, либо своя страница клиники с одного «/»; не длиннее 2000 знаков.
+ * Экран проверяет до отправки и ставит отказ под полем; отказ сервера с полем
+ * (error.field) ставится туда же.
+ */
+export const PANE_LINK_MESSAGES = Object.freeze({
+    instagram_url: Object.freeze({
+        scheme: 'Ссылка Instagram должна начинаться с http:// или https://.',
+        long:   'Ссылка Instagram слишком длинная — не больше 2000 знаков.',
+    }),
+    telegram_url: Object.freeze({
+        scheme: 'Ссылка Telegram должна начинаться с http:// или https://.',
+        long:   'Ссылка Telegram слишком длинная — не больше 2000 знаков.',
+    }),
+});
+export const PROFILE_LINK_KEYS = Object.freeze(['instagram_url', 'telegram_url']);
+/** Отказ ссылки соцсети или null. */
+export function profileLinkProblem(key, value) {
+    const s = String(value == null ? '' : value).trim();
+    if (!s || !PANE_LINK_MESSAGES[key]) return null;
+    if (s.length > 2000) return PANE_LINK_MESSAGES[key].long;
+    if (!(/^https?:\/\//i.test(s) || /^\/[^/]/.test(s))) return PANE_LINK_MESSAGES[key].scheme;
+    return null;
+}
+
+/**
  * Что держит сохранение карточки (макет: «Введите ФИО на русском.»,
  * «Чтобы показывать врача, выберите специальность.»):
  *   • ФИО на русском — у показываемого врача; у остальных — только если его
  *     правили и оставили пустым (EMPLOYEE_CARD_SAVE_V1: нетронутое не держит
  *     сохранение оклада);
  *   • специальность — у показываемого врача;
- *   • «работает врачом с» — если правили.
+ *   • «работает врачом с» — если правили;
+ *   • ссылки Instagram и Telegram — если правили (DOCTOR_PROFILE_V1, ревью №11).
  * Возвращает { поле: сообщение }.
  */
 export function publicPaneProblems({ isPublic, profile, profileAtOpen, touched = [], specialtiesCount = 0 }) {
@@ -58,6 +87,11 @@ export function publicPaneProblems({ isPublic, profile, profileAtOpen, touched =
     if (t.has('practice_since')) {
         const c = cleanPracticeSince(profile && profile.practice_since);
         if (c.problem) p.practice_since = c.problem;
+    }
+    for (const k of PROFILE_LINK_KEYS) {   // DOCTOR_PROFILE_V1 (ревью №11)
+        if (!t.has(k)) continue;
+        const m = profileLinkProblem(k, profile && profile[k]);
+        if (m) p[k] = m;
     }
     return p;
 }
@@ -273,11 +307,21 @@ export function doctorPublicPane(ctx) {
         i.addEventListener('input', () => ctx.setProfile(k, i.value));
         return i;
     };
+    // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — ссылка с отказом под полем (свой или сервера).
+    const linkField = (k, label, ph) => {
+        const i = ptxt(k, ph);
+        const id = 'dpp-' + k + '-' + (++seq);
+        i.setAttribute('id', id);
+        const err = fieldErr(i);
+        if (errors[k]) err.set(errors[k]);
+        i.addEventListener('input', () => { clearError(k); err.set(''); });
+        return h('div', { class: 'field' }, h('label', { for: id }, label), i, err.node);
+    };
     const LISTS = [['education_entries', 'Образование'], ['experience_entries', 'Опыт работы'],
         ['certifications_entries', 'Сертификаты'], ['prof_dev_entries', 'Повышения квалификаций']];
     const entryLine = (e) => [e && (e.ru || e.title || ''), e && (e.year || [e.year_from, e.year_to].filter(Boolean).join('–'))].filter(Boolean).join(' · ');
     root.appendChild(section('Соцсети, образование и опыт', '',
-        h('div', { class: 'dpp-grid2' }, field('Instagram', ptxt('instagram_url', 'https://instagram.com/…')), field('Telegram', ptxt('telegram_url', 'https://t.me/…'))),
+        h('div', { class: 'dpp-grid2' }, linkField('instagram_url', 'Instagram', 'https://instagram.com/…'), linkField('telegram_url', 'Telegram', 'https://t.me/…')),
         ...LISTS.map(([k, label]) => {
             const list = Array.isArray(pp[k]) ? pp[k] : [];
             return field(label, list.length
