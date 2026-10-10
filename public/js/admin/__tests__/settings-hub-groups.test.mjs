@@ -292,8 +292,8 @@ test('карточки «Лаборатория и диагностика» в �
   const g = groupNamed(root, 'Настройки услуг');
   assert.ok(g, 'сама группа «Настройки услуг» осталась');
   assert.deepStrictEqual(g.rows.map((r) => r.name),
-    // PACKAGES_V1 — пятая плитка группы: «Пакеты услуг».
-    ['Список услуг', 'Товары и препараты', 'Типы услуг', 'Консультации врачей', 'Пакеты услуг'],
+    // PACKAGES_V1 — «Пакеты услуг»; SERVICES_PACKAGES_V1 — «Услуги для сайта и партнёров».
+    ['Список услуг', 'Услуги для сайта и партнёров', 'Товары и препараты', 'Типы услуг', 'Консультации врачей', 'Пакеты услуг'],
     'остальные плитки группы не пострадали');
 });
 
@@ -316,16 +316,13 @@ test('ставки направлений — пять групп услуг, к
   assert.ok(ctl.value.some((e) => e.type_id === 6 && e.value === 4), JSON.stringify(ctl.value));
 });
 
-// PACKAGES_V1 — плитка «Пакеты услуг»: проверка формы и подпись срока.
-test('пакеты: форма отказывает словами — без услуг, скидка вне 0–100, «по» раньше «с»', async () => {
-  const { packageFormProblem, packageValidityText } = await import('../views/settings-hub.js');
-  assert.ok(packageFormProblem({ name: 'X', service_ids: [] }));
-  assert.ok(packageFormProblem({ name: 'X', service_ids: [1], discount_percent: 120 }));
-  assert.ok(packageFormProblem({ name: 'X', service_ids: [1], discount_percent: -1 }));
-  assert.ok(packageFormProblem({ name: 'X', service_ids: [1], valid_from: '2026-09-30', valid_until: '2026-09-01' }));
-  assert.strictEqual(packageFormProblem({ name: 'X', service_ids: [1], discount_percent: 15, valid_from: '2026-09-01', valid_until: '2026-09-30' }), null);
-  // Форма без денежного поля (право без «Цен и процентов») — не отказ.
-  assert.strictEqual(packageFormProblem({ name: 'X', service_ids: [1] }), null);
+// PACKAGES_V1 — плитка «Пакеты услуг»: подпись срока. SERVICES_PACKAGES_V1 —
+// проверка формы пакета — shared/package-price.js packageProblem (её тест —
+// package-price.test.js), окно — views/packages-editor.js (packages-editor.test.mjs).
+test('пакеты: подпись срока; прежней формы справочника больше нет', async () => {
+  const hub = await import('../views/settings-hub.js');
+  const { packageValidityText } = hub;
+  assert.equal(hub.packageFormProblem, undefined, 'общий редактор пакетов убран');
   assert.strictEqual(packageValidityText({}), 'бессрочно');
   assert.match(packageValidityText({ valid_until: '2000-01-01' }), /^истёк 01\.01\.2000$/);
 });

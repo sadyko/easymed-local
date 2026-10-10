@@ -44,7 +44,12 @@ import { isRouteAllowed, settingsTileLevel, hasRestriction, actorIsAdmin, settin
 // той же конвенции, что и «Роли», и монтируется НАД списком — разводить их по
 // двум пунктам меню значило бы вернуть путаницу «две плитки про одно и то же»,
 // которую SETTINGS_ONE_COMPANY_V1 только что убрал.
-import { packageValidityParts, packageDiscount } from './service-templates.js?v=tpl1';   // PACKAGES_V1
+import { packageValidityParts } from './service-templates.js?v=tpl1';   // PACKAGES_V1
+// SERVICES_PACKAGES_V1 — «Пакеты услуг» и «Услуги для сайта и партнёров» — свои
+// экраны (как «Филиалы»): общий редактор справочника цену пакета, его
+// раскладку и показ не держит.
+import { renderPackagesEditor } from './packages-editor.js';   // SERVICES_PACKAGES_V1
+import { renderServicesPublic } from './services-public.js';   // SERVICES_PACKAGES_V1
 import { renderBranchSyncCard } from './branch-sync.js?v=bsync4';   // bsync4: филиалы таблицей, предупреждения — в окна подтверждения (BRANCH_LIST_V2)
 import { prepareConsultTypeSave } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 // BRANCH_PROFILE_V1 — «Филиалы» — свой экран (views/branches-editor.js: список
@@ -79,6 +84,9 @@ export async function renderSettingsHub(container, { onNavigate, payload = null,
 async function repaint() {
     clear(refs.container);
     if (state.section === 'roles') await renderRolesEditor(refs.container, { onBack: backToHub, readOnly: state.readOnly });   // ADMIN_ROWS_GRANTABLE_V1 — «Роли: Просмотр»
+    else if (state.section === 'service_packages') await renderPackagesEditor(refs.container, { onBack: backToHub, readOnly: state.readOnly });   // SERVICES_PACKAGES_V1
+    else if (state.section === 'services_public') await renderServicesPublic(refs.container, { onBack: backToHub,   // SERVICES_PACKAGES_V1
+        onOpenConsultTypes: refs.onNavigate && isRouteAllowed('consultation-types') ? () => refs.onNavigate('consultation-types') : null });
     else if (state.section === 'branches') refs.branches = await renderBranchesEditor(refs.container, { onBack: backToHub, onNavigate: refs.onNavigate, readOnly: state.readOnly, renderSyncCard: renderBranchSyncCard });   // BRANCH_PROFILE_V1; CLINIC_API_STEP7_V1 — refs.branches.toList()
     else if (state.section) await renderEditor(refs.container, state.section);
     else renderHub(refs.container);
@@ -100,6 +108,7 @@ const SECTION_GRANT = {
     service_types: 'settings.service_types',
     consultation_types: 'settings.consultation_types',
     service_packages: 'settings.service_packages',   // PACKAGES_V1
+    services_public: 'settings.services',   // SERVICES_PACKAGES_V1 — смотрит тот, кому выдан «Список услуг»; показ меняет администратор (сервер)
     patient_categories: 'settings.patient_categories',
     chronic_conditions_ref: 'settings.chronic_conditions',
     patient_discounts: 'settings.patient_discounts',
@@ -229,6 +238,8 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
         title: 'Настройки услуг', icon: 'Flask', color: { bg: '#efeafb', fg: '#6b4fb0' },
         items: [
             { label: 'Список услуг',        desc: 'Все услуги клиники: цены и куда ведёт каждая', icon: 'Receipt', live: true, action: nav('services'), route: 'services' },
+            // SERVICES_PACKAGES_V1 — что из прайса видят сайт, Symptex и партнёры (макет screen-services.js).
+            { label: 'Услуги для сайта и партнёров', desc: 'Какие услуги и цены видят пациенты на сайте клиники, в Symptex и у партнёров', icon: 'Globe', live: true, action: () => openSection('services_public'), section: 'services_public' },
             // LAB_PANELS_BY_SECTION_V1 (2026-08-31) — «Лаборатория и диагностика»
             // is gone from this card on purpose (owner: «remove the laboratory
             // and the panels settings from the settings, leave only in the lab
@@ -615,30 +626,8 @@ const LOOKUP_CONFIG = {
     },
 
     // ---- Настройки услуг / Service settings -------------------------------
-    // PACKAGES_V1 — пакет: услуги, скидка на них, срок предложения. Та же
-    // таблица, что у шаблонов сметы (service_templates, мигр. 154): шаблон —
-    // это пакет без скидки и без дат. Скидку применяет сервер при выставлении
-    // счёта, построчно и только на услуги пакета (с категорией пациента — не
-    // суммируется, действует бо́льшая).
-    service_packages: {
-        table: 'service_templates', title: 'Пакеты услуг', icon: 'Copy',
-        grantHint: 'Скидку пакета меняет роль с правом «Цены и проценты».',
-        modalWidth: '560px',
-        columns: [
-            { key: 'name', label: 'Название' },
-            { key: 'discount_percent', label: 'Скидка, %', format: (row) => (packageDiscount(row) > 0 ? String(packageDiscount(row)) : '—') },
-            { key: 'service_ids', label: 'Услуги', format: (row) => trf('услуг: {n}', { n: Array.isArray(row && row.service_ids) ? row.service_ids.length : 0 }) },
-            { key: 'valid_until', label: 'Срок', format: (row) => packageValidityText(row) },
-        ],
-        fields: [
-            { key: 'name', label: 'Название', type: 'text', required: true, full: true },
-            { key: 'service_ids', label: 'Услуги пакета', type: 'services', full: true, emptyHint: 'Отметьте услуги, которые входят в пакет' },
-            { key: 'discount_percent', label: 'Скидка пакета, % — на услуги пакета, построчно', type: 'number' },
-            { key: 'valid_from', label: 'Действует с (пусто — сразу)', type: 'date' },
-            { key: 'valid_until', label: 'Действует по (пусто — бессрочно)', type: 'date' },
-        ],
-        beforeSave: (p) => packageFormProblem(p),
-    },
+    // PACKAGES_V1 → SERVICES_PACKAGES_V1 — «Пакеты услуг» — свой экран
+    // (views/packages-editor.js, repaint выше); записи здесь больше нет.
     service_types: {
         table: 'service_types', title: 'Типы услуг', icon: 'Layers',
         columns: [{ key: 'name', label: 'Название' }, { key: 'code', label: 'Код' }, { key: 'billing_mode', label: 'Оплата' }],
@@ -942,17 +931,8 @@ export function packageValidityText(row) {
     const [text, params] = packageValidityParts(row);
     return trf(text, params);
 }
-// PACKAGES_V1 — пакет без услуг, скидка вне 0–100 и «по» раньше «с» — отказ
-// словами до отправки (база их тоже не примет: CHECK в мигр. 154).
-export function packageFormProblem(p) {
-    if (Array.isArray(p.service_ids) && p.service_ids.length === 0) return tr('Отметьте хотя бы одну услугу пакета.');
-    if (p.discount_percent !== undefined) {
-        const d = Number(p.discount_percent);
-        if (!Number.isFinite(d) || d < 0 || d > 100) return tr('Скидка пакета — от 0 до 100 %.');
-    }
-    if (p.valid_from && p.valid_until && p.valid_until < p.valid_from) return tr('Дата «по» раньше даты «с».');
-    return null;
-}
+// SERVICES_PACKAGES_V1 — проверка формы пакета — shared/package-price.js
+// packageProblem (одна с сервером); прежняя packageFormProblem ушла с общим редактором.
 export function discountScopeText(row) {
     const ids = Array.isArray(row && row.service_ids) ? row.service_ids : [];
     return ids.length ? trf('услуг: {n}', { n: ids.length }) : tr('на весь счёт');

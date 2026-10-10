@@ -11802,4 +11802,6 @@ export const STRINGS = {
   "Таких услуг в прайсе нет.": {"en":"There are no such services in the price list.","ru":"Таких услуг в прайсе нет.","uz":"Narxnomada bunday xizmatlar yo‘q."},   // SERVICES_PACKAGES_V1
   "В этой группе услуг нет.": {"en":"There are no services in this group.","ru":"В этой группе услуг нет.","uz":"Bu guruhda xizmatlar yo‘q."},   // SERVICES_PACKAGES_V1
   "Услуги по группам": {"en":"Services by group","ru":"Услуги по группам","uz":"Guruhlar bo‘yicha xizmatlar"},   // SERVICES_PACKAGES_V1
+  // SERVICES_PACKAGES_V1 — задача 18: плитка
+  "Какие услуги и цены видят пациенты на сайте клиники, в Symptex и у партнёров": {"en":"Which services and prices patients see on the clinic website, in Symptex and at partners","ru":"Какие услуги и цены видят пациенты на сайте клиники, в Symptex и у партнёров","uz":"Bemorlar klinika saytida, Symptex va hamkorlarda qaysi xizmat va narxlarni ko‘radi"},   // SERVICES_PACKAGES_V1
 };
