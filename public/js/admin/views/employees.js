@@ -19,6 +19,9 @@ import { specialtyOptions, canonicalSpecialty, SPECIALTY_ROWS } from '../special
 import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — рабочая ставка за направления (источник врача)
 import { employeeNameParts, employeeSaveGaps, NAME_KEYS } from '../../shared/employee-name.js?v=ecs2';   // EMPLOYEE_CARD_SAVE_V1 — имя из full_name и что держит сохранение; ecs2 — ревью: нетронутое ФИО побайтно, стёртый телефон
 import { weekHoursGrid } from './week-hours.js';   // BRANCH_PROFILE_V1 — сетка дней одна на программу
+import { doctorPublicPane, publicPaneProblems } from './doctor-public-pane.js';   // DOCTOR_PROFILE_V1 — «Публичный профиль» по макету
+import { doctorPublicState, shownPracticeSince } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1
+import { isRouteAllowed } from '../permissions.js';   // DOCTOR_PROFILE_V1 — «Изменить в «Консультации врачей»» только тому, кому она открыта
 
 const SPEC_TAKEN = 'Эта специальность уже выбрана.';   // DOCTOR_PROFILE_V1 — макет «Публичный профиль»
 
@@ -302,7 +305,7 @@ async function paint(root) {
         if (!departments.length || !branches.length || !services.length) {
             const [dep, br, sv, st, sc] = await Promise.all([
                 supabase.from('departments').select('id, name').eq('active', 1).order('name'),
-                supabase.from('branches').select('id, name').eq('active', 1).order('name'),
+                supabase.from('branches').select('id, name, show_public').eq('active', 1).order('name'),   // DOCTOR_PROFILE_V1 — скрытое здание прячет врача (карточка и список)
                 supabase.from('services').select('id, name, price, is_lab, type, type_id, category_id').eq('active', 1).order('name').limit(1000),
                 // RATES_FILTERS_V2 — type and category, the clinic's own words,
                 // as filters next to the group (owner: «add not only groups,
@@ -404,6 +407,7 @@ function openEditor(user, root) {
         last_name: '', first_name: '', middle_name: '', phone: '', email: '',
         staff_type: '', scheduling_mode: 'schedulable', department_id: '', is_doctor: false,
         pbx_extension: '',   // CALL_FROM_CRM_V1
+        is_public: false, booking_days: 14, show_queue_count: false,   // DOCTOR_PROFILE_V1
         specialty: '', specialties: [], doctor_category: '', hire_date: '', license_number: '', license_expiry_date: '',
         branch_id: '', employment_type: '', salary_type: '', salary_fixed: '', salary_percent: '',
         working_hours: {}, service_rates: [], referral_rates: [],
@@ -448,6 +452,7 @@ function openEditor(user, root) {
             extra_roles: asArr(user.extra_roles).slice(), is_active: !!user.is_active,
             // DOCTOR_PUBLIC_PROFILE_V1 — что хранится; правка копится в profilePatch.
             public_profile: { ...(user.public_profile || {}) },
+            is_public: !!user.is_public, booking_days: Number(user.booking_days) || 14, show_queue_count: !!user.show_queue_count,   // DOCTOR_PROFILE_V1
         } : {}),
     };
     if (!emp.public_profile) emp.public_profile = {};
@@ -459,8 +464,15 @@ function openEditor(user, root) {
     // врач тем временем сделал в «Моём профиле». Не пришёл профиль — точка
     // отсчёта пустая, и пустой раздел ничего не стирает.
     const profileAtOpen = { ...emp.public_profile };
+    // DOCTOR_PROFILE_V1 — точка отсчёта года «работает с» — то, что раздел покажет
+    // (год из прежнего стажа у строки главной старой версии): показанное и
+    // не тронутое не уходит.
+    profileAtOpen.practice_since = shownPracticeSince(emp.public_profile);
+    // DOCTOR_PROFILE_V1 — показ, срок записи и счётчик очереди, с которыми карточка открылась.
+    const opened = { is_public: !!emp.is_public, booking_days: Number(emp.booking_days) || 14, show_queue_count: !!emp.show_queue_count };
+    const paneErrors = {};   // DOCTOR_PROFILE_V1 — отказы сохранения по полям «Публичного профиля»
     const profileSame = (k, a, b) => {
-        if (k === 'experience_years') { const n = (v) => (v == null || v === '' ? null : Number(v)); return n(a) === n(b); }
+        if (k === 'experience_years' || k === 'practice_since') { const n = (v) => (v == null || v === '' ? null : Number(v)); return n(a) === n(b); }   // DOCTOR_PROFILE_V1 — год тоже числом
         if (Array.isArray(a) || Array.isArray(b)) return JSON.stringify(a || []) === JSON.stringify(b || []);
         return String(a == null ? '' : a).trim() === String(b == null ? '' : b).trim();
     };
@@ -633,34 +645,6 @@ function openEditor(user, root) {
     // emp[key] не лежит.
     const sel = (key, opts, onset, curValue) => { const cur = curValue !== undefined ? curValue : emp[key]; const s = h('select', null, ...opts.map(([v, l]) => h('option', { value: v, selected: String(cur) === String(v) }, l))); s.addEventListener('change', () => onset ? onset(s.value) : markDirty({ [key]: s.value })); ctrls[key] = s; return s; };
 
-    // DOCTOR_PUBLIC_PROFILE_V1 — поля публичного профиля врача. Тексты
-    // правятся здесь; списки (образование, опыт, сертификаты, курсы) — в
-    // «Моём профиле» врача, здесь они показаны. Уходит только изменённое.
-    function profileSection() {
-        const pp = emp.public_profile;
-        const setP = (k, v) => { pp[k] = v; profilePatch[k] = v; markDirty({}); };
-        const ptxt = (k, ph) => { const i = h('input', { type: 'text', value: pp[k] || '', placeholder: ph || '' }); i.addEventListener('input', () => setP(k, i.value)); return i; };
-        const parea = (k) => { const i = h('textarea', { rows: '3', style: { width: '100%', boxSizing: 'border-box' } }, pp[k] || ''); i.addEventListener('input', () => setP(k, i.value)); return i; };
-        const years = h('input', { type: 'number', min: '0', max: '80', step: '1', value: pp.experience_years != null ? String(pp.experience_years) : '' });
-        years.addEventListener('input', () => setP('experience_years', years.value === '' ? null : Math.max(0, parseInt(years.value, 10) || 0)));
-        const LISTS = [['education_entries', 'Образование'], ['experience_entries', 'Опыт работы'],
-            ['certifications_entries', 'Сертификаты'], ['prof_dev_entries', 'Повышения квалификаций']];
-        const entryLine = (e) => [e && (e.ru || e.title || ''), e && (e.year || [e.year_from, e.year_to].filter(Boolean).join('–'))].filter(Boolean).join(' · ');
-        const grid2 = (...els) => h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px 16px' } }, ...els);
-        return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
-            pp.photo_url ? h('img', { src: pp.photo_url, alt: '', style: { width: '96px', height: '96px', objectFit: 'cover', borderRadius: '12px' } }) : null,
-            grid2(field('ФИО (RU)', ptxt('full_name_ru')), field('ФИО (UZ)', ptxt('full_name_uz')), field('ФИО (EN)', ptxt('full_name_en'))),
-            grid2(field('Учёная степень (RU)', ptxt('academic_title_ru')), field('Учёная степень (UZ)', ptxt('academic_title_uz')), field('Учёная степень (EN)', ptxt('academic_title_en'))),
-            field('Биография (RU)', parea('bio_ru')), field('Биография (UZ)', parea('bio_uz')), field('Биография (EN)', parea('bio_en')),
-            grid2(field('Стаж (лет)', years), field('Instagram', ptxt('instagram_url', 'https://instagram.com/…')), field('Telegram', ptxt('telegram_url', 'https://t.me/…'))),
-            ...LISTS.map(([k, label]) => {
-                const list = Array.isArray(pp[k]) ? pp[k] : [];
-                return field(label, list.length
-                    ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '13.5px' } }, ...list.map((e) => h('div', null, entryLine(e) || '—')))
-                    : h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Пока пусто — врач заполняет в «Моём профиле».')));
-            }));
-    }
-
     function pickCategory(v) {
         const becomingDoctor = v === 'doctor';
         const patch = { staff_type: v, is_doctor: becomingDoctor };
@@ -812,7 +796,24 @@ function openEditor(user, root) {
         } else if (active === 'license') {
             body.append(head('Лицензия', 'Медицинская лицензия сотрудника.'), grid(field('Номер лицензии', txt('license_number', 'AA-000000')), field('Действует до', datef('license_expiry_date'))));
         } else if (active === 'profile') {
-            body.append(head('Публичный профиль', 'Как врача видят пациенты и партнёры. Врач правит это же в «Моём профиле».'), profileSection());
+            // DOCTOR_PROFILE_V1 — раздел макета «Публичный профиль» (views/doctor-public-pane.js).
+            body.append(head('Публичный профиль', 'Как врача видят пациенты на сайте клиники, в Symptex и у партнёров. Врач правит это же в «Моём профиле».'),
+                doctorPublicPane({
+                    emp, profile: emp.public_profile, isEdit, readOnly, isAdmin: acc.admin,
+                    doctorId: isEdit ? user.id : null, errors: paneErrors,
+                    initials: initials([emp.last_name, emp.first_name].filter(Boolean).join(' ') || emp.username || ''),
+                    setProfile: (k, v) => { emp.public_profile[k] = v; profilePatch[k] = v; markDirty({}); },
+                    setField: (patch) => markDirty(patch),
+                    specialtiesNode: () => specialtiesField(),
+                    specialtiesCount: () => (emp.specialties || []).filter((v) => String(v || '').trim()).length,
+                    branchesById: new Map(branches.map((b) => [Number(b.id), b])),
+                    onRepaint: (fn) => { paneRepaint = fn; },
+                    openConsultations: isRouteAllowed('consultation-types') ? () => {
+                        close();
+                        const nav = typeof window !== 'undefined' && window.easymed && window.easymed.navigate;
+                        if (typeof nav === 'function') nav('consultation-types');
+                    } : null,
+                }));
         } else if (active === 'branches') {
             body.append(head('Филиалы', 'Филиал, в котором работает сотрудник.'), field('Основной филиал', sel('branch_id', [['', '—']].concat(branches.map(b => [String(b.id), b.name])))),
                 hint(branches.length ? '' : 'Филиалы настраиваются в Настройки → Управление филиалами.'));
@@ -985,6 +986,18 @@ function openEditor(user, root) {
                 return;
             }
         }
+        // DOCTOR_PROFILE_V1 — публичный профиль врача: ФИО на русском и
+        // специальность у показываемого, год «работает с» — у поля, до отправки
+        // (сервер проверит то же: routes/users.js).
+        if (emp.is_doctor) {
+            for (const k of Object.keys(paneErrors)) delete paneErrors[k];
+            Object.assign(paneErrors, publicPaneProblems({
+                isPublic: !!emp.is_public, profile: emp.public_profile, profileAtOpen, touched: Object.keys(profilePatch),
+                specialtiesCount: (emp.specialties || []).filter((v) => String(v || '').trim()).length,
+            }));
+            const firstKey = Object.keys(paneErrors)[0];
+            if (firstKey) { active = 'profile'; renderRail(); renderBody(); toast(paneErrors[firstKey], 'fail'); return; }
+        }
 
         const payload = {
             last_name: emp.last_name.trim(), first_name: emp.first_name.trim(), middle_name: emp.middle_name.trim(),
@@ -1029,6 +1042,12 @@ function openEditor(user, root) {
         const profileChanged = {};
         for (const [k, v] of Object.entries(profilePatch)) if (!profileSame(k, v, profileAtOpen[k])) profileChanged[k] = v;
         if (Object.keys(profileChanged).length) payload.public_profile = profileChanged;
+        // DOCTOR_PROFILE_V1 — показ, срок записи и счётчик очереди — только
+        // изменённое (показ меняет только администратор: у остальных
+        // переключатель выключен, сервер ответил бы 403).
+        if (!!emp.is_public !== opened.is_public) payload.is_public = !!emp.is_public;
+        if (!!emp.show_queue_count !== opened.show_queue_count) payload.show_queue_count = !!emp.show_queue_count;
+        if (Number(emp.booking_days) !== opened.booking_days) payload.booking_days = Number(emp.booking_days);
         // ADMIN_ROWS_GRANTABLE_V1 — без «Цены и проценты» деньги не уходят вовсе:
         // экран их не показывал, и сервер отказал бы всей записи.
         if (!acc.money) for (const k of MONEY_KEYS) delete payload[k];

@@ -30,7 +30,7 @@ class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.c
  querySelectorAll(sel){const m=String(sel).match(/^(\w+)\[([\w-]+)(?:="([^"]*)")?\]$/);if(!m)return [];const out=[];
    const go=(e)=>{for(const c of e.children||[]){if(c.tagName===m[1].toUpperCase()&&(m[3]===undefined?(m[2] in (c.attrs||{})):(c.attrs||{})[m[2]]===m[3]))out.push(c);go(c);}};go(this);return out;}
  querySelector(sel){return this.querySelectorAll(sel)[0]||null;}
- get textContent(){return this._t;} set textContent(v){this._t=String(v);this.children.length=0;}
+ get textContent(){return this._t;} set textContent(v){this._t=String(v);this._shown=this._t;this.children.length=0;}   // DOCTOR_PROFILE_V1 — _shown: текст тоста (таймер toast() ложится в _t)
  get classList(){const s=this;return{contains:c=>String(s.className).split(/\s+/).includes(c),add(){},remove(){},toggle(){}};}
  get isConnected(){return true;}}
 class TX extends F{constructor(t){super('#text');this.nodeType=3;this._t=String(t);}}
@@ -80,20 +80,47 @@ const PROFILE = {
   education_entries: [], experience_entries: [], certifications_entries: [], prof_dev_entries: [],
   experience_years: 12, instagram_url: '', telegram_url: '', photo_url: '',
 };
-const DOC = person(90, 'dr.karimov', { public_profile: PROFILE });
+const YEAR = new Date().getFullYear();   // DOCTOR_PROFILE_V1
+const DOC = person(90, 'dr.karimov', { public_profile: PROFILE, branch_id: 1, scheduling_mode: 'schedulable', is_public: false, booking_days: 14, show_queue_count: false });
 // Строка без public_profile (сервер его не прислал) — раздел открывается пустым.
 const BARE = person(91, 'dr.bare', {});
+// DOCTOR_PROFILE_V1 — показываемый врач без специальности, его филиал скрыт с сайта.
+const PUB = person(92, 'dr.pub', { specialty: '', specialties: [], is_public: true, branch_id: 2, public_profile: { ...PROFILE } });
+// DOCTOR_PROFILE_V1 — показываемый врач открытого филиала.
+const SHOWN = person(93, 'dr.shown', { is_public: true, branch_id: 1, public_profile: { ...PROFILE } });
+// DOCTOR_PROFILE_V1 — ответ doctor_public_preview (rpc/doctor-public.js).
+const PREVIEW = {
+  doctor_id: 90, scheduling_mode: 'schedulable', booking_days: 14, show_queue_count: false, slot_minutes: 15,
+  days: [
+    { date: '2026-10-12', weekday: 'mon', windows: [{ start: '09:00', free: true }, { start: '09:15', free: false }, { start: '09:30', free: true }] },
+    { date: '2026-10-13', weekday: 'tue', windows: [] },
+  ],
+  hours: { mon: ['09:00', '09:45'], tue: null },
+  queue_now: 3,
+  consultations: [
+    { consultation_type_id: 5, api_kind: 'initial', name: { ru: 'Первичный приём', uz: '', en: '' }, price: 150000, own: true, empty: false, minutes: 30 },
+    { consultation_type_id: 6, api_kind: 'repeat', name: { ru: 'Повторный приём', uz: '', en: '' }, price: 0, own: true, empty: false, minutes: 15 },
+    { consultation_type_id: 7, api_kind: '', name: { ru: 'Онлайн-консультация', uz: '', en: '' }, price: 120000, own: false, empty: false, minutes: 30 },
+    // решение владельца 13 — строка врача с пустой ценой: партнёры получат 0
+    { consultation_type_id: 8, api_kind: '', name: { ru: 'Консультация по анализам', uz: '', en: '' }, price: 0, own: true, empty: true, minutes: 20 },
+  ],
+  services: [{ service_id: 501, name: { ru: 'Консультация невролога', uz: '', en: '' }, price: 120000, own: false, online: true }],
+  initial_minutes: 30,
+};
 
 const writes = [];
+const uploads = [];   // DOCTOR_PROFILE_V1 — файлы фото в хранилище
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const method = opts.method || 'GET';
-  if (u === '/api/users' && method === 'GET') return { ok: true, json: async () => ({ users: [DOC, BARE] }) };
+  if (u === '/api/users' && method === 'GET') return { ok: true, json: async () => ({ users: [DOC, BARE, PUB, SHOWN] }) };
   if (u.startsWith('/api/users')) { writes.push({ u, method, body: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ user: {} }) }; }
+  if (u === '/api/rpc/doctor_public_preview') return { ok: true, json: async () => ({ data: PREVIEW }) };
+  if (u.startsWith('/api/storage/')) { uploads.push(u); return { ok: true, json: async () => ({}) }; }
   if (u === '/api/db') {
     const desc = opts.body ? JSON.parse(opts.body) : {};
     let rows = [];
-    if (desc.table === 'branches') rows = [{ id: 1, name: 'Чиланзар' }];
+    if (desc.table === 'branches') rows = [{ id: 1, name: 'Чиланзар', show_public: 1 }, { id: 2, name: 'Юнусабад', show_public: 0 }];
     return { ok: true, json: async () => ({ data: rows }) };
   }
   return { ok: true, json: async () => ({ data: [] }) };
@@ -111,6 +138,7 @@ const type = (el, v) => { el.value = v; el.dispatchEvent({ type: 'input' }); };
 async function openCard(username) {
   document.body.children.length = 0;
   writes.length = 0;
+  uploads.length = 0;   // DOCTOR_PROFILE_V1
   const container = mk('div');
   await renderEmployees(container);
   await flush();
@@ -134,7 +162,8 @@ async function openProfileTab(username) {
   return {
     card,
     bio: { ru: bio[0], uz: bio[1], en: bio[2] },
-    years: tags(card, 'input').find((i) => i.attrs.type === 'number' && i.attrs.max === '80'),
+    since: tags(card, 'input').find((i) => i.attrs.type === 'number' && i.attrs.min === '1940'),   // DOCTOR_PROFILE_V1 — «Работает врачом с»
+    name: Object.fromEntries(['ru', 'uz', 'en'].map((l) => [l, tags(card, 'input').find((i) => String(i.attrs.id || '').startsWith('cpf-dpp-fio-' + l))])),
     input: (ph) => tags(card, 'input').find((i) => i.attrs.placeholder === ph),
   };
 }
@@ -165,8 +194,8 @@ test('поля профиля трогали, но вернули (и с про�
   const s = await openProfileTab('dr.karimov');
   type(s.bio.ru, 'x');
   type(s.bio.ru, 'Кардиолог, двенадцать лет практики. ');
-  type(s.years, '');
-  type(s.years, '12');
+  type(s.since, '');
+  type(s.since, String(YEAR - 12));
   type(s.input('https://instagram.com/…'), 'https://instagram.com/a');
   type(s.input('https://instagram.com/…'), '');
   await save(s.card);
@@ -185,11 +214,14 @@ test('раздел профиля не открывали — public_profile н�
   assert.ok(!('public_profile' in body), 'public_profile ушёл без правок');
 });
 
-test('стаж изменили — уходит только experience_years числом', async () => {
+test('DOCTOR_PROFILE_V1: «работает врачом с» — из прежнего стажа; изменили — уходит practice_since числом; стаж на сайте пересчитан', async () => {
   const s = await openProfileTab('dr.karimov');
-  type(s.years, '13');
+  assert.equal(s.since.value, String(YEAR - 12));
+  assert.match(textOf(s.card), /Стаж на сайте, лет: 12\./);
+  type(s.since, String(YEAR - 13));
+  assert.match(textOf(s.card), /Стаж на сайте, лет: 13\./);
   await save(s.card);
-  assert.deepEqual(onlyWrite().public_profile, { experience_years: 13 });
+  assert.deepEqual(onlyWrite().public_profile, { practice_since: YEAR - 13 });
 });
 
 test('профиль с сервера не пришёл — пустой раздел ничего не стирает, правка одного поля шлёт только его', async () => {
@@ -203,4 +235,85 @@ test('профиль с сервера не пришёл — пустой раз
   type(s.input('https://t.me/…'), 'https://t.me/dr_bare');
   await save(s.card);
   assert.deepEqual(onlyWrite().public_profile, { telegram_url: 'https://t.me/dr_bare' });
+});
+
+// ===========================================================================
+// DOCTOR_PROFILE_V1 — «Публичный профиль» по макету: показ, заполненность,
+// фото, «нет перевода», языки.
+// ===========================================================================
+// Харнесс: toast() держит таймер в el._t, поэтому текст тоста — в _shown.
+const toastText = () => { const t = document.body.children.filter((c) => c.attrs && c.attrs.id === 'toast').pop(); return t ? t._shown : ''; };
+const switchOf = (card) => tags(card, 'button').find((b) => b.attrs.role === 'switch');
+const langBtn = (card, label) => tags(card, 'button').find((b) => b.className === 'dpp-lang' && textOf(b).trim() === label);
+
+test('DOCTOR_PROFILE_V1: показ — администратор включает, уходит is_public; заполненность называет, чего не хватает', async () => {
+  const s = await openProfileTab('dr.karimov');
+  const sw = switchOf(s.card);
+  assert.equal(sw.attrs['aria-checked'], 'false');
+  assert.match(textOf(s.card), /Профиль заполнен на 71%: не хватает — ФИО EN, биография EN\./);
+  sw.click();
+  assert.equal(sw.attrs['aria-checked'], 'true');
+  assert.equal(toastText(), 'Врач будет виден. Пустые переводы партнёры покажут на русском.');
+  await save(s.card);
+  const body = onlyWrite();
+  assert.equal(body.is_public, true);
+  assert.ok(!('public_profile' in body), 'показ — не поле профиля');
+});
+
+test('DOCTOR_PROFILE_V1: без ФИО на русском врача не показать — «Сначала заполните ФИО», переключатель на месте', async () => {
+  const s = await openProfileTab('dr.bare');
+  const sw = switchOf(s.card);
+  sw.click();
+  assert.equal(sw.attrs['aria-checked'], 'false');
+  assert.equal(toastText(), 'Сначала заполните ФИО');
+});
+
+test('DOCTOR_PROFILE_V1: показываемый без специальности — сохранение держится, ошибка у специальностей', async () => {
+  const s = await openProfileTab('dr.pub');
+  type(s.bio.en, 'Cardiologist.');
+  await save(s.card);
+  assert.equal(writes.length, 0, 'ушло на сервер без специальности');
+  assert.match(textOf(s.card), /Чтобы показывать врача, выберите специальность\./);
+});
+
+test('DOCTOR_PROFILE_V1: ФИО на русском стёрли — «Введите ФИО на русском.», не уходит', async () => {
+  const s = await openProfileTab('dr.karimov');
+  type(s.name.ru, '');
+  await save(s.card);
+  assert.equal(writes.length, 0);
+  assert.match(textOf(s.card), /Введите ФИО на русском\./);
+});
+
+test('DOCTOR_PROFILE_V1: «нет перевода» — у пустых UZ / EN ФИО и биографии; у степени — нет', async () => {
+  const s = await openProfileTab('dr.karimov');
+  const marks = walk(s.card).filter((n) => n.className === 'cpf-miss' && !n.hidden);
+  assert.equal(marks.length, 2, 'ФИО EN и биография EN');
+});
+
+test('DOCTOR_PROFILE_V1: языки приёма — уходят списком; последний язык не снимается', async () => {
+  const s = await openProfileTab('dr.karimov');
+  langBtn(s.card, 'RU').click();
+  langBtn(s.card, 'UZ').click();
+  langBtn(s.card, 'RU').click();
+  langBtn(s.card, 'UZ').click();
+  assert.equal(toastText(), 'Нужен хотя бы один язык');
+  assert.equal(langBtn(s.card, 'UZ').attrs['aria-pressed'], 'true');
+  await save(s.card);
+  assert.deepEqual(onlyWrite().public_profile, { languages: ['uz'] });
+});
+
+test('DOCTOR_PROFILE_V1: фото из карточки — файл в папку врача, в PATCH — photo_url', async () => {
+  const s = await openProfileTab('dr.karimov');
+  const file = tags(s.card, 'input').find((i) => i.attrs.type === 'file');
+  file.dispatchEvent({ type: 'change', target: { files: [new File(['jpeg'], 'portret.jpg', { type: 'image/jpeg' })] } });
+  await flush();
+  assert.equal(uploads.length, 1);
+  assert.ok(uploads[0].startsWith('/api/storage/doctor-photos/doctors/90/'), uploads[0]);
+  await save(s.card);
+  assert.ok(onlyWrite().public_profile.photo_url.startsWith('/api/storage/doctor-photos/doctors/90/'));
+});
+
+test('DOCTOR_PROFILE_V1: филиал врача скрыт с сайта — карточка говорит, что партнёры его не увидят', async () => {
+  const s = await openProfileTab('dr.pub');
+  assert.match(textOf(s.card), /Филиал врача скрыт с сайта/);
 });

@@ -7757,3 +7757,36 @@ table.list tr.is-off td { color: var(--ink-400); }
 .spec-names code { font-size: 12.5px; color: var(--ink-500); }
 .spec-err { margin-top: 4px; }
 /* /DOCTOR_PROFILE_V1 — список специальностей */
+/* ===========================================================================
+   DOCTOR_PROFILE_V1 — «Публичный профиль» карточки сотрудника
+   (views/doctor-public-pane.js, doctor-public-preview.js). Префикс .dpp-.
+   Только токены приложения и шкала шрифтов; на ширине телефона — один
+   столбец, без прокрутки вбок.
+   ========================================================================= */
+.dpp { display: grid; gap: 16px; min-width: 0; }
+.dpp-switch-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border: 1px solid var(--ink-100); border-radius: 10px; }
+.dpp-switch-text { display: grid; gap: 2px; min-width: 0; }
+.dpp-switch-text b { font-size: 13.5px; color: var(--ink-900); }
+.dpp-switch { position: relative; flex: none; width: 40px; height: 22px; margin-top: 1px; padding: 0; border: 0; border-radius: 999px; background: var(--ink-200); cursor: pointer; }
+.dpp-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--white); box-shadow: 0 1px 2px rgba(11, 20, 24, .2); transition: transform var(--dur-1) var(--ease-out); }
+.dpp-switch[aria-checked="true"] { background: var(--primary-600); }
+.dpp-switch[aria-checked="true"]::after { transform: translateX(18px); }
+.dpp-switch:disabled { cursor: default; opacity: .6; }
+.dpp-switch:focus-visible, .dpp-lang:focus-visible, .dpp-mode:focus-visible, .dpp-day:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+.cpf-note.dpp-note-warn { background: var(--warn-50); color: var(--warn-700); }
+.dpp-photo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.dpp-photo { display: grid; place-items: center; width: 84px; height: 84px; flex: none; border-radius: 50%; overflow: hidden; background: var(--primary-50); color: var(--primary-700); font-size: 24px; font-weight: 600; }
+.dpp-photo img { width: 100%; height: 100%; object-fit: cover; }
+.dpp-photo-acts { display: grid; gap: 6px; flex: 1 1 220px; min-width: 0; }
+.dpp-block { display: grid; gap: 6px; min-width: 0; }
+.dpp-h5, .dpp-label { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.dpp-grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 12px 16px; }
+.dpp-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.dpp-langs { display: flex; flex-wrap: wrap; gap: 8px; }
+.dpp-lang { min-width: 46px; height: 30px; padding: 0 10px; border: 1px solid var(--ink-200); border-radius: 7px; background: var(--white); color: var(--ink-600); font: 600 12.5px var(--font-sans); cursor: pointer; }
+.dpp-lang[aria-pressed="true"] { border-color: var(--primary-600); background: var(--primary-600); color: var(--white); }
+.dpp-lang:disabled { cursor: default; opacity: .6; }
+.dpp-sec { display: grid; gap: 12px; padding-top: 14px; border-top: 1px solid var(--ink-100); min-width: 0; }
+.dpp-sec > h4 { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink-900); }
+.dpp-entries { display: grid; gap: 2px; font-size: 13.5px; }
+/* /DOCTOR_PROFILE_V1 — «Публичный профиль» (задача 14; приём и превью — задача 15) */
