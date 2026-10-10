@@ -350,6 +350,10 @@ function showProblems(problems) {
 // LOAD / SAVE
 // -----------------------------------------------------------------------------
 async function load() {
+    // CLINIC_API_STEP7_V1 (ревью №9) — флаг «адрес для партнёров обязателен» мог
+    // устареть (подключение включили или выключили в другом окне): перечитать
+    // window.CLINIC при каждом открытии, вместе со строкой doc_settings.
+    const flagFresh = refreshClinicBrand(supabase).catch(() => null);
     try {
         const { data, error } = await supabase.from('doc_settings').select('*').eq('id', 1).single();
         if (error) throw error;
@@ -366,6 +370,8 @@ async function load() {
         refs.loaded = null;
         refs.loadFailed = true;   // CLINIC_PROFILE_V1 (ревью C1) — сохранять нечем: выключено
     }
+    await flagFresh;
+    if (refs.address) refs.address.setRequired(apiAddressRequired() && !secondary);   // CLINIC_API_STEP7_V1 (ревью №9)
     paintLoadFailed();
     applyStateToControls();
     // CLINIC_PROFILE_V1 — списки адреса грузятся один раз, уже с сохранёнными
@@ -437,6 +443,18 @@ async function save() {
         // сохранение не отменяет: оно уже прошло.
         await refreshClinicBrand(supabase).catch(() => {});
     } catch (e) {
+        // CLINIC_API_STEP7_V1 (ревью №9) — сервер знает, что подключение включено, а флаг
+        // экрана устарел: исправить флаг, поставить звёздочки и показать под полями,
+        // чего не хватает (той же partnerAddressProblems, что у сервера).
+        if (e && e.code === 'partner_address_required' && !secondary) {
+            if (window.CLINIC) window.CLINIC.api_address_required = true;
+            if (refs.address) refs.address.setRequired(true);
+            const missing = partnerAddressProblems(normalizeProfile(state), refs.geoAvailability());
+            if (e.field && !missing[e.field]) missing[e.field] = e.message;
+            showProblems(missing);
+            toast(tr('Проверьте выделенные поля.'), 'fail');
+            return;
+        }
         toast((e && e.message) || tr('Не удалось сохранить.'), 'fail');
     } finally {
         btn.disabled = false;

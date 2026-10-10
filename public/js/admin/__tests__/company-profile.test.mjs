@@ -935,3 +935,58 @@ test('подключений нет — адрес необязателен, з�
     await save(root);
     assert.ok(lastUpdate && lastUpdate.name_uz === 'Shifo', 'правка названия не прошла');
 });
+
+// CLINIC_API_STEP7_V1 (ревью №9) — флаг «адрес для партнёров обязателен» в
+// window.CLINIC может устареть: подключение включили или выключили в другом окне.
+// «Компания» перечитывает его при открытии, а отказ сервера partner_address_required
+// показывает под полями, ставит звёздочки и исправляет флаг.
+test('флаг устарел (выключен): отказ сервера — ошибки под полями адреса, звёздочки, флаг включён', async () => {
+    const orig = globalThis.fetch;
+    const refusal = { code: 'partner_address_required', field: 'region_code',
+        message: 'Пока включены подключения API, адрес для партнёров обязателен: город или область, район и улица на русском.' };
+    globalThis.fetch = async (url, opts = {}) => {
+        if (String(url).startsWith('/api/db')) {
+            let d = {}; try { d = JSON.parse(opts.body || '{}'); } catch (_) { /* пусто */ }
+            if (d.table === 'doc_settings' && d.op === 'update') return { ok: false, status: 400, json: async () => ({ error: refusal }) };
+        }
+        return orig(url, opts);
+    };
+    globalThis.window.CLINIC.api_address_required = false;
+    try {
+        const root = await open();
+        const label = (name) => labelText(fieldBox(root, name).children.find((c) => c.tagName === 'LABEL'));
+        assert.ok(!label('Город / область').includes('*'), 'стенд не тот: флаг уже включён');
+        type(triInput(root, 'Название клиники', 'uz'), 'Shifo');
+        await save(root);
+        assert.equal(globalThis.window.CLINIC.api_address_required, true, 'флаг не исправлен');
+        assert.ok(fieldError(root, 'Город / область'), 'нет ошибки под «Город / область»');
+        assert.ok(triError(root, 'Улица, дом', 'ru'), 'нет ошибки под улицей RU');
+        assert.ok(label('Город / область').includes('*'), 'звёздочки не появились');
+        assert.ok(textOf(root).includes('Пока включены подключения API, адрес для партнёров обязателен'));
+    } finally {
+        globalThis.fetch = orig;
+        globalThis.window.CLINIC.api_address_required = false;
+    }
+});
+
+test('флаг устарел (включён), а подключений уже нет: «Компания» перечитывает его при открытии — звёздочек нет, сохранение проходит', async () => {
+    const orig = globalThis.fetch;
+    const clinic = globalThis.window.CLINIC;
+    clinic.api_address_required = true;
+    globalThis.fetch = async (url, opts = {}) => {
+        if (String(url).startsWith('/api/rpc/get_clinic_by_slug')) return { ok: true, status: 200, json: async () => ({ data: { ...clinic, api_address_required: false } }) };
+        return orig(url, opts);
+    };
+    try {
+        const root = await open();
+        assert.equal(globalThis.window.CLINIC.api_address_required, false, 'флаг не перечитан при открытии');
+        assert.ok(!labelText(fieldBox(root, 'Город / область').children.find((c) => c.tagName === 'LABEL')).includes('*'), 'звёздочки по устаревшему флагу');
+        type(triInput(root, 'Название клиники', 'uz'), 'Shifo');
+        await save(root);
+        assert.ok(lastUpdate && lastUpdate.name_uz === 'Shifo', 'устаревший флаг не дал сохранить');
+    } finally {
+        globalThis.fetch = orig;
+        globalThis.window.CLINIC = clinic;
+        clinic.api_address_required = false;
+    }
+});
