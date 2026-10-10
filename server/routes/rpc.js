@@ -76,6 +76,8 @@ export function rpcRoutes(db) {
         message: e.message,
         ...(e.template ? { template: e.template } : {}),
         ...(e.params ? { params: e.params } : {}),
+        // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — поле отказа: экран ставит его под полем.
+        ...(typeof e.field === 'string' && e.field ? { field: e.field } : {}),
       } });
     }
   });

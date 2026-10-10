@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { updateMyDoctorProfile, PROFILE_KEYS } from './doctor-profile.js';
+import { updateMyDoctorProfile, PROFILE_KEYS, PROFILE_LINK_MESSAGES } from './doctor-profile.js';   // DOCTOR_PROFILE_V1 — PROFILE_LINK_MESSAGES
 import { getRpc } from './index.js';
 import { STRINGS } from '../../../public/js/admin/i18n-strings.js';   // CLINIC_API_FIX_V1 — отказы переводятся
 import { DOCTOR_PUBLIC_MESSAGES } from '../../../public/js/shared/doctor-public.js';   // DOCTOR_PROFILE_V1
@@ -410,4 +410,22 @@ test('DOCTOR_PROFILE_V1: показ — не поле профиля: врач �
   const db = seed();
   assert.throws(() => updateMyDoctorProfile(db, { p: { is_public: 1 } }, doc), (e) => e.status === 400);
   assert.equal(db.prepare('SELECT is_public FROM users WHERE id = 2').get().is_public, 0);
+});
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №11) — ссылку Instagram / Telegram сервер
+// отклоняет по-русски, называя соцсеть и поле (error.field), с переводом на
+// uz / en. Раньше: «telegram_url must be an http(s) link.» на любом языке.
+test('DOCTOR_PROFILE_V1: ссылка соцсети не с http(s) — русский отказ с названием и полем; слишком длинная — свой отказ', () => {
+  const db = seed();
+  for (const [key, bad] of [['telegram_url', '@dr_karimov'], ['instagram_url', 'instagram.com/doc']]) {
+    assert.throws(() => updateMyDoctorProfile(db, { p: { [key]: bad } }, doc),
+      (e) => e.status === 400 && e.message === PROFILE_LINK_MESSAGES[key].scheme && e.field === key, key);
+    assert.throws(() => updateMyDoctorProfile(db, { p: { [key]: 'https://t.me/' + 'x'.repeat(2001) } }, doc),
+      (e) => e.status === 400 && e.message === PROFILE_LINK_MESSAGES[key].long && e.field === key, key + ' длинная');
+  }
+  assert.doesNotThrow(() => updateMyDoctorProfile(db, { p: { telegram_url: 'https://t.me/dr_karimov', instagram_url: '' } }, doc));
+  for (const m of Object.values(PROFILE_LINK_MESSAGES).flatMap((x) => Object.values(x))) {
+    const e = STRINGS[m];
+    assert.ok(e && e.ru && e.uz && e.en, 'нет статьи словаря: ' + m);
+  }
 });

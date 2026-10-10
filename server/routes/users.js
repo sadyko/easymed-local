@@ -122,7 +122,7 @@ export function parseEmployeeFields(body, db, currentRole, ownerId) {
   if (body.public_profile !== undefined) {
     // DOCTOR_PROFILE_V1 — «работает с» и прежний стаж пишутся вместе (withExperience).
     try { Object.assign(fields, withExperience(cleanProfileFields(body.public_profile, ownerId))); }   // CLINIC_API_FIX_V1 — фото только из папки владельца
-    catch (e) { return { ok: false, message: e.message }; }
+    catch (e) { return { ok: false, message: e.message, ...(e.field ? { field: e.field } : {}) }; }   // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — поле отказа
   }
 
   // DOCTOR_PROFILE_V1 (мигр. 243) — показ врача на сайте и у партнёров, срок
@@ -674,7 +674,7 @@ export function userRoutes(db) {
     if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(name)) return bad(res, 'Такой логин уже занят.');
 
     const parsed = parseEmployeeFields(req.body, db, undefined, 0);   // CLINIC_API_FIX_V1 — новому сотруднику фото не ставится
-    if (!parsed.ok) return bad(res, parsed.message);
+    if (!parsed.ok) return bad(res, parsed.message, parsed.field);   // DOCTOR_PROFILE_V1 — с полем отказа
     const ef = parsed.fields;
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
@@ -781,7 +781,7 @@ export function userRoutes(db) {
     }
 
     const parsed = parseEmployeeFields(req.body, db, user.role, user.id);   // CLINIC_API_FIX_V1 — фото только из папки этого сотрудника
-    if (!parsed.ok) return bad(res, parsed.message);
+    if (!parsed.ok) return bad(res, parsed.message, parsed.field);   // DOCTOR_PROFILE_V1 — с полем отказа
     const ef = parsed.fields;
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
@@ -1059,8 +1059,9 @@ export function staffDeleteGuard(db, user, actor) {
   return { ok: true, blocking: [] };
 }
 
-function bad(res, message) {
-  return res.status(400).json({ error: { code: 'bad_request', message } });
+// DOCTOR_PROFILE_V1 (ревью шага 5, №11) — field (необязательно): поле отказа, экран ставит его под полем.
+function bad(res, message, field) {
+  return res.status(400).json({ error: { code: 'bad_request', message, ...(field ? { field } : {}) } });
 }
 
 // validPassword moved to services/auth.js (imported above) — the self-service

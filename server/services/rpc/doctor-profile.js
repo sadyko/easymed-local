@@ -58,6 +58,25 @@ export const PROFILE_KEYS = Object.freeze([...TEXT_KEYS, ...ENTRY_KEYS, 'experie
 export const PROFILE_ENTRY_KEYS = Object.freeze([...ENTRY_KEYS]);
 
 const MAX_TEXT = 5000;
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №11) — отказ ссылки соцсети: по-русски, с
+// названием соцсети, с переводом в словаре; ошибка несёт поле (err.field), и
+// экран ставит отказ под ним. Было «telegram_url must be an http(s) link.».
+export const PROFILE_LINK_MESSAGES = Object.freeze({
+  instagram_url: Object.freeze({
+    scheme: 'Ссылка Instagram должна начинаться с http:// или https://.',
+    long:   'Ссылка Instagram слишком длинная — не больше 2000 знаков.',
+  }),
+  telegram_url: Object.freeze({
+    scheme: 'Ссылка Telegram должна начинаться с http:// или https://.',
+    long:   'Ссылка Telegram слишком длинная — не больше 2000 знаков.',
+  }),
+});
+function linkRefusal(key, kind) {
+  const err = new RpcError(PROFILE_LINK_MESSAGES[key][kind], 400);
+  err.field = key;
+  return err;
+}
 const MAX_ENTRIES = 50;
 
 // CLINIC_API_FIX_V1 — ownerId: чей это профиль (у «Моего профиля» — сам врач).
@@ -130,9 +149,9 @@ function cleanValue(key, v, ownerId) {
     }
     return s;
   }
-  if (s.length > 2000 || !(/^https?:\/\//i.test(s) || /^\/[^/]/.test(s))) {
-    throw new RpcError(key + ' must be an http(s) link.', 400);
-  }
+  // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — правило то же; отказ — свой у каждой соцсети и с полем.
+  if (s.length > 2000) throw linkRefusal(key, 'long');
+  if (!(/^https?:\/\//i.test(s) || /^\/[^/]/.test(s))) throw linkRefusal(key, 'scheme');
   return s;
 }
 

@@ -16,6 +16,7 @@ import { updateMyDoctorProfile } from '../services/rpc/doctor-profile.js';
 import { readableColumns, REGISTRY } from '../db/schema-registry.js';
 import { TABLES as CATALOGUE_TABLES } from '../services/branch-sync/catalogue.js';
 import { DOCTOR_PUBLIC_MESSAGES } from '../../public/js/shared/doctor-public.js';   // DOCTOR_PROFILE_V1
+import { PROFILE_LINK_MESSAGES } from '../services/rpc/doctor-profile.js';   // DOCTOR_PROFILE_V1 (ревью шага 5, №11)
 
 async function startServer() {
   const db = openDb(':memory:');
@@ -231,5 +232,25 @@ test('DOCTOR_PROFILE_V1: показываемому врачу не стерет
     res = await req(base, 'POST', '/api/users', { username: 'newdoc2', password: 'password9', role: 'doctor', is_public: true,
       public_profile: { full_name_ru: 'Сидоров Сидор' }, specialty: '  ' }, admin);
     assert.equal(res.status, 400);
+  } finally { server.close(); db.close(); }
+});
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №11) — отказ ссылки соцсети называет поле и в
+// карточке сотрудника (PATCH), и в «Моём профиле» (RPC): экран ставит его под полем.
+test('DOCTOR_PROFILE_V1: ссылка соцсети не с http(s) — 400 с русским текстом и полем в карточке и в «Моём профиле»', async () => {
+  const { db, server, base, docId } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    let res = await req(base, 'PATCH', '/api/users/' + docId, { public_profile: { telegram_url: '@dr_karimov' } }, admin);
+    assert.equal(res.status, 400);
+    let j = await res.json();
+    assert.deepEqual([j.error.message, j.error.field], [PROFILE_LINK_MESSAGES.telegram_url.scheme, 'telegram_url']);
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword('password1'), docId);
+    const login = await req(base, 'POST', '/api/auth/login', { username: 'doc', password: 'password1' });
+    const docCookie = login.headers.get('set-cookie').split(';')[0];
+    res = await req(base, 'POST', '/api/rpc/update_my_doctor_profile', { p: { instagram_url: 'instagram.com/doc' } }, docCookie);
+    assert.equal(res.status, 400);
+    j = await res.json();
+    assert.deepEqual([j.error.message, j.error.field], [PROFILE_LINK_MESSAGES.instagram_url.scheme, 'instagram_url']);
   } finally { server.close(); db.close(); }
 });
