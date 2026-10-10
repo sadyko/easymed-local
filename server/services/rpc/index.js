@@ -74,6 +74,8 @@ import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss
 import { lisServiceCounts } from './lis.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — контроль, калибровка, запросы у прибора за сегодня
 import { lisDeviceAdd } from './lis.js';   // LIS_VENDOR_EXACT_V1 — D2: «Добавить» найденный прибор — только с моделью или «общим HL7»
 import { lisProxyGet, lisProxySet } from './lis-proxy.js';   // LIS_PROXY_V1 — карточка «LIS Proxy»
+import { apiSettingsGet, apiSlugSave, apiConnectionDraft, apiConnectionCreate, apiConnectionUpdate, apiConnectionReveal,
+  apiConnectionRegenerate, apiConnectionDelete, apiJournalList } from './api-connections.js';   // CLINIC_API_STEP7_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_V1 — своя роль одним действием
 import { roleEffectiveGrants } from './roles-effective.js';   // ROLES_SAVE_TRUTH_V1 — что у роли есть сейчас
@@ -596,6 +598,17 @@ export const RPC = {
   lis_device_add:           (db, args, user) => lisDeviceAdd(db, args, user),   // LIS_VENDOR_EXACT_V1 — D2: запись, НЕ в READ_ONLY_RPCS
   lis_proxy_get:            (db, args, user) => lisProxyGet(db, args, user),   // LIS_PROXY_V1 — чтение (gate.js)
   lis_proxy_set:            (db, args, user) => lisProxySet(db, args, user),   // LIS_PROXY_V1 — запись, НЕ в READ_ONLY_RPCS
+  // CLINIC_API_STEP7_V1 — «API и подключения». Чтение (READ_ONLY_RPCS): api_settings_get,
+  // api_journal_list; остальное — записи. Значения ключей — только администратору.
+  api_settings_get:          (db, args, user) => apiSettingsGet(db, args, user),
+  api_slug_save:             (db, args, user) => apiSlugSave(db, args, user),
+  api_connection_draft:      (db, args, user) => apiConnectionDraft(db, args, user),
+  api_connection_create:     (db, args, user) => apiConnectionCreate(db, args, user),
+  api_connection_update:     (db, args, user) => apiConnectionUpdate(db, args, user),
+  api_connection_reveal:     (db, args, user) => apiConnectionReveal(db, args, user),
+  api_connection_regenerate: (db, args, user) => apiConnectionRegenerate(db, args, user),
+  api_connection_delete:     (db, args, user) => apiConnectionDelete(db, args, user),
+  api_journal_list:          (db, args, user) => apiJournalList(db, args, user),
   lis_message_attach:       (db, args, user) => lisMessageAttach(db, args, user),
   lis_message_dismiss:      (db, args, user) => lisMessageDismiss(db, args, user),
 

@@ -50,6 +50,7 @@ const READ_ONLY_RPCS = new Set([
   'lis_profiles', 'lis_recent',
   'lis_service_counts',   // LIS_REAL_ANALYZERS_V1_SERVICE — контроль, калибровка, запросы у прибора за сегодня; чтение
   'lis_proxy_get',   // LIS_PROXY_V1 — включён ли LIS Proxy и адрес для лабораторных ПК; чтение
+  'api_settings_get', 'api_journal_list',   // CLINIC_API_STEP7_V1 — подключения API и журнал изменений; чтение
   // DOCTOR_TIER_V1 — нумерация строк врача по ступени; чистое чтение, как
   // run_report рядом: кабинет показывает прогресс и при просроченной лицензии.
   'doctor_tier_positions',
