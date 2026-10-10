@@ -186,3 +186,108 @@ export function listJournal(db, { connectionId = null, limit = 50 } = {}) {
       user_name: r.user_name, action: r.action, detail };
   });
 }
+
+// ---- правка ----------------------------------------------------------------------
+const EDITABLE = ['name', 'site_url', 'contact', 'scopes', 'webhook_url', 'webhook_events', 'rate_limit', 'key_ttl', 'ip_allow', 'active'];
+const JOURNAL_FIELDS = ['name', 'site_url', 'contact', 'scopes', 'webhook_url', 'webhook_events', 'rate_limit', 'key_ttl', 'ip_allow'];
+// В журнал — адрес без запроса и якоря: партнёры кладут туда токены.
+const urlForJournal = (u) => { if (!u) return ''; try { const x = new URL(u); return x.origin + x.pathname; } catch { return ''; } };
+function journalDetail(row, sets, changed) {
+  const d = { fields: changed };
+  if (changed.includes('name')) d.name = { from: row.name, to: sets.name };
+  if (changed.includes('scopes')) {
+    const a = arr(row.scopes); const b = arr(sets.scopes);
+    d.scopes = { added: b.filter((x) => !a.includes(x)), removed: a.filter((x) => !b.includes(x)) };
+  }
+  if (changed.includes('webhook_url')) d.webhook_url = { from: urlForJournal(row.webhook_url), to: urlForJournal(sets.webhook_url) };
+  if (changed.includes('rate_limit')) d.rate_limit = { from: row.rate_limit, to: sets.rate_limit };
+  if (changed.includes('key_ttl')) d.key_ttl = { from: row.key_ttl, to: sets.key_ttl };
+  return d;
+}
+
+/** Правка подключения: только присланное и изменённое; включение — с адресом для партнёров. */
+export function updateConnection(db, id, patch, actor) {
+  const row = liveRow(db, id);
+  const v = normalizeConnection(pick(patch, EDITABLE));
+  if (row.kind === 'site' && own(v, 'site_url')) throw new ApiConnectionError(SERVICE_MESSAGES.siteUrlInCompany, 409);
+  checkOrThrow(connectionProblems(v, { partial: true }));
+  const next = {};
+  for (const k of ['name', 'site_url', 'contact', 'webhook_url', 'rate_limit', 'ip_allow']) if (own(v, k)) next[k] = v[k];
+  if (own(v, 'scopes')) next.scopes = JSON.stringify(orderedScopes(v.scopes));
+  if (own(v, 'webhook_events')) next.webhook_events = JSON.stringify(orderedEvents(v.webhook_events));
+  if (own(v, 'key_ttl')) next.key_ttl = v.key_ttl;
+  const changed = JOURNAL_FIELDS.filter((k) => own(next, k) && String(next[k]) !== String(row[k]));
+  const turnOn = own(v, 'active') && v.active === 1 && row.active === 0;
+  const turnOff = own(v, 'active') && v.active === 0 && row.active === 1;
+  if (!changed.length && !turnOn && !turnOff) return getConnection(db, row.id);
+  if (turnOn) requirePartnerAddress(db);   // решение владельца 11
+  const sets = {};
+  for (const k of changed) sets[k] = next[k];
+  if (changed.includes('key_ttl')) sets.key_expires_at = keyExpiresAt(row.key_issued_at, next.key_ttl);
+  if (turnOn || turnOff) sets.active = turnOn ? 1 : 0;
+  sets.updated_at = nowIso();
+  db.transaction(() => {
+    const cols = Object.keys(sets);   // имена колонок — из списков выше, не из запроса
+    db.prepare(`UPDATE api_connections SET ${cols.map((c) => c + ' = ?').join(', ')} WHERE id = ?`)
+      .run(...cols.map((c) => sets[c]), row.id);
+    if (changed.includes('name') && row.owns_source) renameApiSource(db, row.crm_source_key, sets.name);
+    if (changed.length) journal(db, { connectionId: row.id, actor, action: 'updated', detail: journalDetail(row, sets, changed) });
+    if (turnOn || turnOff) journal(db, { connectionId: row.id, actor, action: turnOn ? 'enabled' : 'disabled' });
+  })();
+  return getConnection(db, row.id);
+}
+
+// ---- ключ и секрет: показать, выпустить новый ------------------------------------
+const WHAT = Object.freeze({
+  key:    { col: 'key_sealed', revealed: 'key_revealed', regenerated: 'key_regenerated', confirm: 'confirmKey' },
+  secret: { col: 'secret_sealed', revealed: 'secret_revealed', regenerated: 'secret_regenerated', confirm: 'confirmSecret' },
+});
+function whatOf(what) {
+  const w = Object.prototype.hasOwnProperty.call(WHAT, what) ? WHAT[what] : null;
+  if (!w) throw new ApiConnectionError(SERVICE_MESSAGES.badWhat);
+  return w;
+}
+/** «Показать» / «Скопировать» (решение владельца 5). KEK не создаётся: для чтения нового ключа шифрования не бывает. */
+export function revealSecret(db, id, what, actor, { kekPath } = {}) {
+  const w = whatOf(what);
+  const row = liveRow(db, id);
+  const value = unseal(row[w.col], loadKek({ kekPath }));
+  journal(db, { connectionId: row.id, actor, action: w.revealed });
+  return value;
+}
+/** Новый ключ или секрет: прежний не подходит сразу (Р17); срок ключа — от новой выдачи. */
+export function regenerateSecret(db, id, what, actor, { kekPath, confirm } = {}) {
+  const w = whatOf(what);
+  if (confirm !== true) throw new ApiConnectionError(SERVICE_MESSAGES[w.confirm]);
+  const row = liveRow(db, id);
+  const kek = loadKek({ kekPath, create: true });
+  const value = what === 'key' ? newApiKey() : newWebhookSecret();
+  const at = nowIso();
+  db.transaction(() => {
+    if (what === 'key') {
+      db.prepare(`UPDATE api_connections SET key_hash = ?, key_sealed = ?, key_tail = ?, key_issued_at = ?,
+          key_issued_by_name = ?, key_expires_at = ?, updated_at = ? WHERE id = ?`)
+        .run(keyHash(value), seal(value, kek), tailOf(value), at, actor.name, keyExpiresAt(at, row.key_ttl), at, row.id);
+    } else {
+      db.prepare('UPDATE api_connections SET secret_sealed = ?, secret_tail = ?, updated_at = ? WHERE id = ?')
+        .run(seal(value, kek), tailOf(value), at, row.id);
+    }
+    journal(db, { connectionId: row.id, actor, action: w.regenerated });
+  })();
+  return { value, connection: getConnection(db, row.id) };
+}
+
+// ---- удаление — архив (Р12) ----------------------------------------------------------
+export function deleteConnection(db, id, actor, { confirm } = {}) {
+  if (confirm !== true) throw new ApiConnectionError(SERVICE_MESSAGES.confirmDelete);
+  const row = liveRow(db, id);
+  if (row.kind === 'site') throw new ApiConnectionError(SERVICE_MESSAGES.siteNoDelete, 409);
+  const at = nowIso();
+  db.transaction(() => {
+    db.prepare(`UPDATE api_connections SET deleted_at = ?, deleted_by = ?, active = 0, key_hash = '', key_sealed = '',
+        key_tail = '', secret_sealed = '', secret_tail = '', updated_at = ? WHERE id = ?`).run(at, actor.id, at, row.id);
+    if (row.owns_source) archiveApiSource(db, row.crm_source_key);
+    journal(db, { connectionId: row.id, actor, action: 'deleted', detail: { name: row.name } });
+  })();
+  return { ok: true };
+}
