@@ -87,11 +87,13 @@ export function loadServerDocSettings(db) {
   // поставщика у давно сохранявших клиник. Запись клиники — та же, что видит
   // браузер в window.CLINIC.
   const s = resolveDocSettings({ ...SERVER_DOC_BASE, ...brand }, getClinicBySlug(db));
-  // CLINIC_PROFILE_V1 — в PDF уходит только ВСТРОЕННЫЙ логотип (data:image/…).
-  // Chrome печатает из file://: адрес /api/storage/… он не достанет (вход,
-  // другой источник), и в PDF встал бы битый квадрат. Печатная копия
+  // CLINIC_PROFILE_V1 — в PDF не уходит логотип, которого Chrome не достанет.
+  // Chrome печатает из file://: путь без схемы (/api/storage/…) он не откроет
+  // (вход, другой источник), и в PDF встал бы битый квадрат. Печатная копия
   // квадратного логотипа — data URL всегда (Р4); это замок на будущее.
-  for (const k of ['logoUrl', 'logoDataUrl']) if (s[k] && !/^data:image\//i.test(String(s[k]))) s[k] = null;
+  // Ревью (сравнение PDF до/после): встроенный data URL любого типа и полный
+  // адрес http(s):// печатаются, как печатались до шага 3.
+  for (const k of ['logoUrl', 'logoDataUrl']) if (s[k] && !/^(?:data:|https?:\/\/)/i.test(String(s[k]))) s[k] = null;
   return s;
 }
 

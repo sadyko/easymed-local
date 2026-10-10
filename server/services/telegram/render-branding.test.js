@@ -163,3 +163,20 @@ test('нет своего названия: запасное имя рядом �
   }
   db.close();
 });
+
+// CLINIC_PROFILE_V1 (ревью, сравнение PDF до/после) — замок снимает только то,
+// чего Chrome из file:// не достанет: путь без схемы (/api/storage/…).
+// Встроенный data URL любого типа и полный адрес https:// печатаются, как
+// печатались до шага 3.
+test('логотип дизайнера адресом https:// и data URL любого типа в PDF — как до шага 3', () => {
+  for (const logo of ['https://cdn.example.uz/logo.png', 'data:application/octet-stream;base64,iVBORw0KGgo=', 'http://cdn.example.uz/l.png']) {
+    const db = seed({ copy: { useCompanyIdentity: false, clinicName: 'Ручное', logoDataUrl: logo } });
+    assert.equal(loadServerDocSettings(db).logoDataUrl, logo, logo);
+    db.close();
+  }
+  for (const logo of ['/api/storage/clinic-docs/x.png', 'clinic-logos/square/1-a.png', '//cdn.example.uz/x.png']) {
+    const db = seed({ copy: { useCompanyIdentity: false, clinicName: 'Ручное', logoDataUrl: logo } });
+    assert.equal(loadServerDocSettings(db).logoDataUrl, null, logo);
+    db.close();
+  }
+});
