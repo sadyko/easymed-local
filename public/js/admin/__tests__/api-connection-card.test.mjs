@@ -3,7 +3,7 @@
 // удаление с подтверждением; журнал — запросы (шаг 8) и изменения.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { reset, onRpc, calls, textOf, byAttr, buttonByText, tick, modal, rpcNames, settingsFixture, KEY_VALUE } from './api-harness.mjs';
+import { reset, onRpc, calls, textOf, byAttr, buttonByText, tick, modal, rpcNames, settingsFixture, KEY_VALUE, mk, docKey } from './api-harness.mjs';
 
 const { openConnectionCard } = await import('../views/api-connection-card.js');
 const KEY2 = 'em_live_TESTONLYtestonlyTESTONLYtest2222';
@@ -135,4 +135,35 @@ test('журнал: «Запросы с этим ключом» — честно
   assert.ok(textOf(m).includes('Запросов с этим ключом ещё не было'));
   assert.ok(textOf(m).includes('Подключение создано'));
   assert.deepEqual(sent('api_journal_list'), [{ connection_id: 3, limit: 50 }]);
+});
+
+// CLINIC_API_STEP7_V1 (ревью №11) — окна экрана: имя для читалки, фокус внутрь и
+// обратно, Escape с любого места, одна карточка на подключение.
+test('окно: имя — заголовок (aria-labelledby), фокус — на первом поле, Escape закрывает, фокус возвращается туда, откуда открыли', () => {
+  reset();
+  const opener = mk('tr');
+  opener.focus();
+  const { m } = open();
+  const dlg = byAttr(m, 'role', 'dialog')[0];
+  const titleId = dlg.attrs['aria-labelledby'];
+  assert.ok(titleId, 'у окна нет aria-labelledby');
+  const h2 = byAttr(m, 'id', titleId)[0];
+  assert.ok(h2 && h2.tagName === 'H2' && textOf(h2).includes('med24.uz'), 'aria-labelledby не ведёт на заголовок');
+  assert.equal(document.activeElement, byAttr(m, 'id', 'apic-f-active')[0], 'фокус не перешёл в окно');
+  const e = docKey('Escape');
+  assert.ok(!modal('conn'), 'Escape не закрыл окно');
+  assert.ok(e.prevented, 'Escape окна ушёл дальше');
+  assert.equal(document.activeElement, opener, 'фокус не вернулся к строке');
+  assert.equal((document._l.keydown || []).length, 0, 'слушатель Escape остался на document после закрытия');
+});
+
+test('та же карточка дважды (Enter дважды на строке) — одно окно, без двойных id', () => {
+  reset();
+  const first = openConnectionCard({ settings: settingsFixture(), connection: P, tab: 'main' });
+  const second = openConnectionCard({ settings: settingsFixture(), connection: P, tab: 'main' });
+  assert.equal(document.body.children.filter((n) => n.attrs && n.attrs['data-apic-modal'] === 'conn').length, 1, 'две карточки одного подключения');
+  assert.equal(second, first, 'второе открытие вернуло не открытое окно');
+  first.close();
+  openConnectionCard({ settings: settingsFixture(), connection: P, tab: 'main' });
+  assert.ok(modal('conn'), 'после закрытия карточка снова открывается');
 });

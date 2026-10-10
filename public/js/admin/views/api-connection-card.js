@@ -11,7 +11,7 @@ import { h, Icon, Tag, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { KIND_INFO, KEY_TTL_LABEL, normalizeConnection, connectionProblems, orderedScopes, orderedEvents, normalizeIpList } from '../../shared/api-connections.js';
 import { rpc, secretField, section, basicsFields, accessSections, hooksSection, securityFields, activeField, openModal,
-  addressBlock, journalTable, expiryTag } from './api-ui.js';
+  openModalByKey, addressBlock, journalTable, expiryTag } from './api-ui.js';
 import { openHandover } from './api-connection-new.js';
 
 const TABS = [['main', 'Основное'], ['access', 'Доступ'], ['hooks', 'Уведомления'], ['key', 'Ключ'], ['log', 'Журнал']];
@@ -23,6 +23,10 @@ const comparable = (k, v) => (k === 'scopes' ? orderedScopes(v) : k === 'webhook
   : k === 'ip_allow' ? normalizeIpList(v) : k === 'active' ? !!v : v);
 
 export function openConnectionCard({ settings, connection: c, onChanged = null, onNavigate = null, tab = 'main', revealed = null }) {
+  // CLINIC_API_STEP7_V1 (ревью №11) — карточка этого подключения уже открыта (Enter
+  // дважды на строке, ссылка из CRM) — вторую не строить: фокус в открытую.
+  const opened = openModalByKey('conn:' + c.id);
+  if (opened) { opened.focus(); return opened; }
   const can = settings.can;
   const d = { kind: c.kind, name: c.name, site_url: c.site_url, contact: c.contact, scopes: [...c.scopes], active: c.active,
     webhook_url: c.webhook_url, webhook_events: [...c.webhook_events], rate_limit: c.rate_limit, key_ttl: c.key_ttl, ip_allow: c.ip_allow };
@@ -190,7 +194,7 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
     foot.push(saveBtn);
   }
   paint();
-  m = openModal({ name: 'conn', tabs, body, foot,
+  m = openModal({ name: 'conn', key: 'conn:' + c.id, tabs, body, foot,
     title: [h('span', { class: 'apic-ico t-' + c.kind }, Icon((KIND_INFO[c.kind] || KIND_INFO.partner).icon, { size: 16 })), ' ', c.name, ' ',
       Tag(c.active ? 'Включено' : 'Выключено', { kind: c.active ? 'ok' : '', dot: true })] });
   cancel.addEventListener('click', () => m.close());

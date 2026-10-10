@@ -191,19 +191,92 @@ export function journalTable(rows, { withConnection = true } = {}) {
       withConnection ? h('th', null, 'Подключение') : null, h('th', null, 'Что сделано'))), tb));
 }
 
-/** Окно. Закрытие убирает его из документа — значения в полях уходят вместе с ним. */
-export function openModal({ title, body, foot, tabs = null, width = 920, name = '' }) {
+// CLINIC_API_STEP7_V1 (ревью №11) — открытые окна экрана, верхнее — последнее:
+// Escape закрывает только его; по ключу (`key`) то же окно не открывается дважды.
+const openModals = [];
+let modalSeq = 0;
+const FOCUSABLE = new Set(['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON']);
+/** Первое доступное поле или кнопка внутри root — обход детей, без селекторов. */
+function firstFocusable(root) {
+  for (const n of Array.from((root && root.children) || [])) {
+    const off = !!(n.hasAttribute && (n.hasAttribute('disabled') || n.hasAttribute('hidden')))
+      || (n.style && n.style.display === 'none')
+      || (n.getAttribute && n.getAttribute('type') === 'hidden');
+    if (off) continue;
+    if (FOCUSABLE.has(String(n.tagName || '').toUpperCase())) return n;
+    const inner = firstFocusable(n);
+    if (inner) return inner;
+  }
+  return null;
+}
+// Окно, которое убрали из документа мимо close() (перерисовка оболочки), — уже не
+// открыто: его запись и слушатель Escape снимаются.
+const inBody = (el) => Array.from((document.body && document.body.children) || []).includes(el);
+function pruneModals() {
+  for (const x of [...openModals]) if (!inBody(x.handle.overlay)) x.dispose();
+}
+/** Уже открытое окно с этим ключом — или null. */
+export function openModalByKey(key) {
+  pruneModals();
+  const entry = key ? openModals.find((x) => x.key === key) : null;
+  return entry ? entry.handle : null;
+}
+
+/**
+ * Окно. Закрытие убирает его из документа — значения в полях уходят вместе с ним.
+ * Ревью №11: имя окна для читалки — его заголовок (aria-labelledby); фокус при
+ * открытии — на первом поле (или `initialFocus`), при закрытии — обратно туда,
+ * откуда окно открыли; Escape слушает document, а не окно (фокус мог остаться на
+ * строке таблицы), и слушатель снимается при закрытии; окно с тем же `key` второй
+ * раз не открывается — возвращается открытое.
+ */
+export function openModal({ title, body, foot, tabs = null, width = 920, name = '', key = '', initialFocus = null }) {
+  const already = openModalByKey(key);
+  if (already) { try { already.focus(); } catch { /* фокус — удобство */ } return already; }
+  const titleId = 'apic-modal-title-' + (++modalSeq);
+  const opener = (typeof document !== 'undefined' && document.activeElement) || null;
   const overlay = h('div', { class: 'modal apic-modal', 'data-apic-modal': name });
-  const close = () => { try { document.body.removeChild(overlay); } catch { overlay.remove(); } };
-  const card = h('div', { class: 'modal-card apic-modal-card', role: 'dialog', 'aria-modal': 'true',
+  let closed = false;
+  const entry = { key, handle: null, dispose: null };
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    pruneModals();
+    if (openModals[openModals.length - 1] !== entry) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    close();
+  };
+  entry.dispose = () => {
+    closed = true;
+    document.removeEventListener('keydown', onKey);
+    const i = openModals.indexOf(entry);
+    if (i > -1) openModals.splice(i, 1);
+  };
+  function close() {
+    if (closed) return;
+    entry.dispose();
+    try { document.body.removeChild(overlay); } catch { overlay.remove(); }
+    if (opener && typeof opener.focus === 'function' && opener.isConnected !== false) {
+      try { opener.focus(); } catch { /* фокус — удобство */ }
+    }
+  }
+  const closeBtn = h('button', { class: 'modal-close', type: 'button', onclick: close }, '×');
+  const footEl = h('footer', { class: 'modal-foot' }, ...foot);
+  const card = h('div', { class: 'modal-card apic-modal-card', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId,
     style: { width: width + 'px', maxWidth: 'calc(100vw - 32px)' } },
-    h('header', { class: 'modal-head' }, h('h2', null, ...title), h('button', { class: 'modal-close', type: 'button', onclick: close }, '×')),
-    tabs, body, h('footer', { class: 'modal-foot' }, ...foot));
+    h('header', { class: 'modal-head' }, h('h2', { id: titleId }, ...title), closeBtn),
+    tabs, body, footEl);
   overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
   overlay.appendChild(card);
-  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
   document.body.appendChild(overlay);
-  return { overlay, close };
+  document.addEventListener('keydown', onKey);
+  const focusInto = () => {
+    const target = initialFocus || firstFocusable(body) || firstFocusable(footEl) || closeBtn;
+    try { target.focus(); } catch { /* фокус — удобство */ }
+  };
+  entry.handle = { overlay, close, focus: focusInto };
+  openModals.push(entry);
+  focusInto();
+  return entry.handle;
 }
 
 /** Отказ «нет адреса для партнёров» (решение владельца 11) — с дорогой в «Компанию». */
