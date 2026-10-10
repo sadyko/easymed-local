@@ -1162,3 +1162,26 @@ test('мусор в любой колонке списка сети: приём 
   assert.equal(dst.prepare("SELECT COUNT(*) n FROM branches WHERE letter = 'D'").get().n, 0, 'прогоны откатились');
   assert.ok(seen.size === JUNK.length && written > 300, 'перебор не пуст: ' + seen.size + ' видов мусора, записано ' + written);
 });
+
+// ===========================================================================
+// DOCTOR_PROFILE_V1 (мигр. 243) — показ врача, языки, «работает с», срок
+// записи и счётчик очереди едут с сотрудником: филиал показывает того же
+// врача (только для просмотра — решение владельца 10). Главная старше шага 5
+// этих ключей не шлёт — местное остаётся.
+// ===========================================================================
+const DOC_PUBLIC = ['is_public', 'languages', 'practice_since', 'booking_days', 'show_queue_count'];
+test('показ врача и его профиль для партнёров приезжают в филиал; главная старой версии их не трогает', () => {
+  const main = seedStaff(seedMain(fresh()));
+  main.prepare(`UPDATE users SET is_public = 1, languages = '["ru","uz"]', practice_since = 2014, booking_days = 30, show_queue_count = 1
+                 WHERE username = 'ivanov'`).run();
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+  const pick = () => ({ ...branch.prepare(`SELECT ${DOC_PUBLIC.join(', ')} FROM users WHERE username = 'ivanov'`).get() });
+  assert.deepEqual(pick(), { is_public: 1, languages: '["ru","uz"]', practice_since: 2014, booking_days: 30, show_queue_count: 1 });
+
+  branch.prepare("UPDATE users SET booking_days = 7 WHERE username = 'ivanov'").run();
+  const old = exportCatalogue(main);
+  for (const r of old.users) for (const k of DOC_PUBLIC) delete r[k];
+  assert.doesNotThrow(() => apply(branch, old));
+  assert.equal(pick().booking_days, 7, 'ключа нет — отправитель старый, местное остаётся');
+});

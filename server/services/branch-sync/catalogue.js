@@ -218,6 +218,12 @@ export const TABLES = [
       'bio_ru', 'bio_uz', 'bio_en',
       'education_entries', 'experience_entries', 'certifications_entries', 'prof_dev_entries',
       'experience_years', 'instagram_url', 'telegram_url',
+      // DOCTOR_PROFILE_V1 (мигр. 243) — показ врача на сайте и у партнёров,
+      // языки приёма, «работает с», срок записи и счётчик очереди: филиал
+      // видит того же врача (правит его только главное — решение владельца
+      // 10). Главная старше шага 5 этих ключей не шлёт — приём пропускает
+      // отсутствующие (present), местное остаётся.
+      'is_public', 'languages', 'practice_since', 'booking_days', 'show_queue_count',
     ],
     refs: { department_id: 'departments' },
     // ЛОГИН, и выбор здесь вынужденный, а не вкусовой. users.username —
@@ -468,7 +474,12 @@ export function exportCatalogue(db, { now = () => new Date() } = {}) {
     // здания физически не может оказаться в теле выгрузки — тот же приём, что
     // с перечнем колонок вообще.
     const extra = spec.branchLetter ? [spec.branchLetter.column] : [];
-    const cols = ['id', ...spec.columns, ...extra].map((c) => `"${c}"`).join(', ');
+    // DOCTOR_PROFILE_V1 — колонки, которой у этой базы нет (база до мигр. 243:
+    // главное здание старой версии), в выгрузке нет вовсе — «не знаю»:
+    // отсутствующий ключ, а не ошибка всей выгрузки; приёмник оставит местное
+    // (present). Как у doc_settings и списка сети выше.
+    const have = new Set(db.prepare(`PRAGMA table_info("${spec.name}")`).all().map((c) => c.name));
+    const cols = ['id', ...spec.columns.filter((c) => have.has(c)), ...extra].map((c) => `"${c}"`).join(', ');
     // Имена таблиц и колонок — из константы выше, не из запроса, поэтому
     // интерполяция здесь не строит SQL из пользовательского ввода (тот же
     // инвариант, что и в db/query-compiler.js: идентификаторы только из
