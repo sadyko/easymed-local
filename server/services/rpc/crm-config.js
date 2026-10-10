@@ -34,11 +34,13 @@ function requireLevel(db, user, need) {
   }
 }
 
-// Удаляет ли сохранение хоть одну существующую строку списка.
-function removesAny(current, sent) {
+// Удаляет ли сохранение хоть одну существующую строку списка. CLINIC_API_STEP7_V1 —
+// `kept(x)`: строки, которые сохранение не удаляет, даже если их не прислали
+// (свой источник подключения API, services/crm/config.js).
+function removesAny(current, sent, kept = null) {
   if (!Array.isArray(sent)) return false;
   const keep = new Set(sent.map((x) => x && x.key).filter(Boolean));
-  return (current || []).some((x) => x && x.key && !keep.has(x.key));
+  return (current || []).some((x) => x && x.key && !keep.has(x.key) && !(kept && kept(x)));
 }
 
 /**
@@ -75,7 +77,7 @@ export function crmConfigSave(db, args, user) {
   requireLevel(db, user, 'edit');
   const a = args || {};
   const cur = crmConfig(db);
-  if (removesAny(cur.stages, a.stages) || removesAny(cur.sources, a.sources) || removesAny(cur.tags, a.tags)) {
+  if (removesAny(cur.stages, a.stages) || removesAny(cur.sources, a.sources, (x) => !!(x.api && x.api.owned)) || removesAny(cur.tags, a.tags)) {
     requireLevel(db, user, 'delete');
   }
   try {

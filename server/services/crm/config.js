@@ -15,6 +15,7 @@
 // CRM_UNIFY_V1 — «Колонка записи» и «Колонка конверсии»: одно правило с экраном.
 import { bookedStageKey, bookedStageCandidates, conversionRefusal } from '../../../public/js/shared/crm-booked-stage.js';
 import { rpcT } from '../server-message.js';   // CRM_UNIFY_V1 — отказ с числом карточек переводится на экране
+import { apiSourceKey } from '../../../public/js/shared/api-connections.js';   // CLINIC_API_STEP7_V1
 
 export class CrmConfigError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -48,6 +49,61 @@ export const DEFAULT_PROVIDER = 'binotel';
 export const UNDELETABLE_STAGE_KEYS = Object.freeze(['in_process']);
 export const UNDELETABLE_SOURCE_KEYS = Object.freeze(['call', 'telephony']);
 
+// CLINIC_API_STEP7_V1 — ИСТОЧНИКИ ПОДКЛЮЧЕНИЙ API (спецификация: «API-источники
+// защищены как «Звонок»: сохранение списка источников их не удаляет и не
+// переименовывает»). Два вида:
+//   СВОЙ (owns_source = 1) — у Symptex и партнёра: создан вместе с
+//     подключением и называется как оно. Список его не удаляет, не
+//     переименовывает и не скрывает — экран показывает его отдельным закрытым
+//     списком и не присылает. Подключение удалили (архив) — источник скрыт, но
+//     цел: заявки партнёра остаются в отчёте по источникам.
+//   НУЖНЫЙ (owns_source = 0) — «Сайт» у подключения сайта клиники. Источник
+//     клиники: переименовать можно; скрыть или удалить — нет, пока подключение
+//     не удалено. Скрытый источник /api/db не даёт ставить новым заявкам
+//     (crm/sources.js) — скрыть его значило бы отказать каждой заявке сайта.
+export function apiSourceUse(db) {
+  const out = new Map();
+  let rows = [];
+  try {
+    rows = db.prepare('SELECT id, name, crm_source_key, owns_source, deleted_at FROM api_connections ORDER BY id').all();
+  } catch { return out; }   // база до мигр. 242 — подключений нет
+  for (const r of rows) {
+    if (r.owns_source) {
+      out.set(r.crm_source_key, { connection_id: r.id, connection_name: r.name, owned: true, archived: !!r.deleted_at });
+    } else if (!r.deleted_at && !out.has(r.crm_source_key)) {
+      out.set(r.crm_source_key, { connection_id: r.id, connection_name: r.name, owned: false, archived: false });
+    }
+  }
+  return out;
+}
+function apiSourceRefusal(label, use) {
+  return rpcT(CrmConfigError, 'Источник «{label}» нужен подключению «{name}» в разделе «API» — скрыть или удалить его нельзя, пока подключение есть.',
+    { label, name: use.connection_name }, 409);
+}
+const NEXT_POSITION = '(SELECT COALESCE(MAX(position), 0) + 1 FROM crm_sources)';
+/** Источник для нового подключения: «Сайт» у сайта клиники (заводится и показывается, если надо), свой — у остальных. */
+export function ensureApiSource(db, { kind, name = '' }) {
+  if (kind === 'site') {
+    const cur = db.prepare("SELECT is_active FROM crm_sources WHERE key = 'website'").get();
+    if (!cur) db.prepare(`INSERT INTO crm_sources (key, label, position, is_active) VALUES ('website', 'Сайт', ${NEXT_POSITION}, 1)`).run();
+    else if (!cur.is_active) db.prepare("UPDATE crm_sources SET is_active = 1 WHERE key = 'website'").run();
+    return { key: 'website', owns: 0 };
+  }
+  const taken = db.prepare('SELECT key FROM crm_sources').all().map((r) => r.key);
+  const key = apiSourceKey(name, kind, taken);
+  const label = String(name || '').trim().slice(0, 64) || key;
+  db.prepare(`INSERT INTO crm_sources (key, label, position, is_active) VALUES (?, ?, ${NEXT_POSITION}, 1)`).run(key, label);
+  return { key, owns: 1 };
+}
+/** Подключение переименовали — его источник тоже (свой источник называется как подключение). */
+export function renameApiSource(db, key, name) {
+  db.prepare('UPDATE crm_sources SET label = ? WHERE key = ?').run(String(name || '').trim().slice(0, 64), key);
+}
+/** Подключение удалили (архив) — свой источник скрыт, но не удалён. */
+export function archiveApiSource(db, key) {
+  db.prepare('UPDATE crm_sources SET is_active = 0 WHERE key = ?').run(key);
+}
+
 // --------------------------------------------------------------------------
 // Reads
 // --------------------------------------------------------------------------
@@ -69,8 +125,9 @@ export function listStages(db) {
 }
 
 export function listSources(db) {
+  const use = apiSourceUse(db);   // CLINIC_API_STEP7_V1 — у источника подключения: какое и своё ли
   return db.prepare('SELECT key, label, position, is_active FROM crm_sources ORDER BY position, key')
-    .all().map(sourceRow);
+    .all().map((r) => ({ ...sourceRow(r), api: use.get(r.key) || null }));
 }
 
 // CRM_HEAD_MERGE_TAGS_V1 — метки карточек (миграция 150). Справочника может не
@@ -483,6 +540,7 @@ export function saveStages(db, stages) {
 
 /** Ordered array of `{ key, label, is_active }`; position is the index. */
 export function saveSources(db, sources) {
+  const use = apiSourceUse(db);   // CLINIC_API_STEP7_V1
   const wanted = requireArray(sources, 'источников').map((s, i) => {
     const key = normKey(s && s.key);
     checkKey(key, 'источника');
@@ -501,10 +559,26 @@ export function saveSources(db, sources) {
     if (seen.has(s.key)) throw new CrmConfigError(`Код источника «${s.key}» повторяется.`);
     seen.add(s.key);
   }
+  // CLINIC_API_STEP7_V1 — свой источник подключения: присланные название и
+  // видимость не действуют (они — у подключения); нужный (Сайт у сайта) —
+  // не скрывается.
+  const curRow = db.prepare('SELECT label, is_active FROM crm_sources WHERE key = ?');
+  for (const s of wanted) {
+    const u = use.get(s.key);
+    if (u && u.owned) {
+      const cur = curRow.get(s.key);
+      if (cur) { s.label = cur.label; s.is_active = cur.is_active; }
+    } else if (u && !s.is_active) {
+      throw apiSourceRefusal(s.label, u);
+    }
+  }
   if (!wanted.some((s) => s.is_active)) throw new CrmConfigError('Хотя бы один источник должен быть видимым.');
 
   const existing = db.prepare('SELECT key FROM crm_sources').all().map((r) => r.key);
-  const removed = existing.filter((k) => !seen.has(k));
+  // CLINIC_API_STEP7_V1 — свой источник подключения список не удаляет: экран его
+  // не присылает (закрытый список); он встаёт после присланных.
+  const keptApi = existing.filter((k) => !seen.has(k) && (use.get(k) || {}).owned);
+  const removed = existing.filter((k) => !seen.has(k) && !keptApi.includes(k));
   // CRM_MULTI_SOURCE_V1 — «стоит у заявки» это и главный source, и любой ключ
   // её sources (миграция 231): удалённый ключ остался бы в списке заявки
   // висеть без подписи, а её следующее сохранение сервер отказал бы как
@@ -516,6 +590,8 @@ export function saveSources(db, sources) {
     if (UNDELETABLE_SOURCE_KEYS.includes(key)) {
       throw new CrmConfigError(`Источник «${key}» удалить нельзя — на него ссылается сама система. Его можно скрыть.`, 409);
     }
+    const u = use.get(key);   // CLINIC_API_STEP7_V1 — «Сайт» подключения сайта
+    if (u) throw apiSourceRefusal(curRow.get(key)?.label || key, u);
     const n = leadCount.get(key, key).n;
     if (n) throw new CrmConfigError(`Источник «${key}» стоит у ${n} заявок — его можно только скрыть, но не удалить.`, 409);
   }
@@ -529,6 +605,11 @@ export function saveSources(db, sources) {
   db.transaction(() => {
     for (const key of removed) drop.run(key);
     for (const s of wanted) upsert.run(s);
+    // CLINIC_API_STEP7_V1 — оставленные источники подключений — после присланных, в прежнем порядке.
+    const setPos = db.prepare('UPDATE crm_sources SET position = ? WHERE key = ?');
+    const order = new Map(db.prepare('SELECT key, position FROM crm_sources').all().map((r) => [r.key, r.position]));
+    keptApi.sort((a, b) => (order.get(a) - order.get(b)) || a.localeCompare(b))
+      .forEach((k, i) => setPos.run(wanted.length + i + 1, k));
   })();
 
   return listSources(db);

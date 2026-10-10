@@ -14,7 +14,9 @@ import {
   saveStages, saveSources, saveRouting, saveConfig, CrmConfigError,
   openStageKeys, wonStageKey, lostStageKeys, noShowStageKey, scheduledStageKey,
   readCrmSettings,   // CRM_UNIFY_V1
+  apiSourceUse, ensureApiSource, renameApiSource, archiveApiSource,   // CLINIC_API_STEP7_V1
 } from './config.js';
+import { insertConnectionRow } from '../../test-helpers/api-connection-row.js';   // CLINIC_API_STEP7_V1
 
 const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
 
@@ -654,4 +656,72 @@ test('scheduledStageKey не бросается ни на пустой воро�
   assert.equal(scheduledStageKey(db), 'scheduled', 'пустой справочник обязан отвечать сидовой воронкой');
   db.prepare('DROP TABLE crm_stages').run();
   assert.equal(scheduledStageKey(db), 'scheduled', 'без таблицы справочника ответ обязан остаться сидовым');
+});
+
+// CLINIC_API_STEP7_V1 — источники подключений API (правило спецификации «API-источники
+// защищены как «Звонок»» и Р11–Р12 плана шага 7).
+test('свой источник подключения: список его не удаляет, не переименовывает и не скрывает; он встаёт после присланных', () => {
+  const db = fresh();
+  const src = ensureApiSource(db, { kind: 'partner', name: 'med24.uz' });
+  assert.deepEqual(src, { key: 'api_med24_uz', owns: 1 });
+  insertConnectionRow(db, { crm_source_key: src.key });
+  // Экран CRM шлёт только свой список — без источника подключения.
+  const mine = asInput(listSources(db)).filter((s) => s.key !== src.key);
+  const api = saveSources(db, mine).find((s) => s.key === src.key);
+  assert.ok(api, 'источник подключения удалён сохранением списка');
+  assert.equal(api.position, mine.length + 1);
+  // Собранный руками список с переименованием и скрытием — присланное не действует.
+  const forged = asInput(listSources(db)).map((s) => (s.key === src.key ? { ...s, label: 'Другое имя', is_active: false } : s));
+  const after = saveSources(db, forged).find((s) => s.key === src.key);
+  assert.deepEqual([after.label, after.is_active], ['med24.uz', true]);
+  assert.deepEqual(after.api, { connection_id: 1, connection_name: 'med24.uz', owned: true, archived: false });
+  assert.equal(listSources(db).find((s) => s.key === 'call').api, null);
+});
+
+test('«Сайт» у подключения сайта: переименовать можно; скрыть и удалить — 409 с шаблоном', () => {
+  const db = fresh();
+  ensureApiSource(db, { kind: 'site' });
+  insertConnectionRow(db, { kind: 'site', name: 'Сайт клиники', crm_source_key: 'website', owns_source: 0, active: 0 });
+  const renamed = saveSources(db, asInput(listSources(db)).map((s) => (s.key === 'website' ? { ...s, label: 'Наш сайт' } : s)));
+  assert.equal(renamed.find((s) => s.key === 'website').label, 'Наш сайт');
+  const hide = refused(() => saveSources(db, asInput(listSources(db)).map((s) => (s.key === 'website' ? { ...s, is_active: false } : s))));
+  assert.equal(hide.status, 409);
+  assert.match(hide.message, /нужен подключению «Сайт клиники»/);
+  assert.ok(hide.template, 'фраза собрана шаблоном — экран переведёт');
+  const del = refused(() => saveSources(db, asInput(listSources(db)).filter((s) => s.key !== 'website')));
+  assert.equal(del.status, 409);
+});
+
+test('источник для сайта: «Сайт» заводится заново, если его удалили, и становится видимым, если его скрыли', () => {
+  const db = fresh();
+  db.prepare("UPDATE crm_sources SET is_active = 0 WHERE key = 'website'").run();
+  assert.deepEqual(ensureApiSource(db, { kind: 'site' }), { key: 'website', owns: 0 });
+  assert.equal(db.prepare("SELECT is_active FROM crm_sources WHERE key = 'website'").get().is_active, 1);
+  db.prepare("DELETE FROM crm_sources WHERE key = 'website'").run();
+  ensureApiSource(db, { kind: 'site' });
+  assert.equal(db.prepare("SELECT label FROM crm_sources WHERE key = 'website'").get().label, 'Сайт');
+});
+
+test('архив подключения: свой источник скрыт, но цел и под замком — заявки партнёра остаются в отчётах', () => {
+  const db = fresh();
+  const { key } = ensureApiSource(db, { kind: 'partner', name: 'clinics.uz' });
+  const id = insertConnectionRow(db, { crm_source_key: key, name: 'clinics.uz' });
+  lead(db, { source: key });
+  db.prepare(`UPDATE api_connections SET deleted_at = '2026-10-10T10:00:00Z', active = 0,
+    key_hash = '', key_sealed = '', secret_sealed = '' WHERE id = ?`).run(id);
+  archiveApiSource(db, key);
+  const row = saveSources(db, asInput(listSources(db)).filter((s) => s.key !== key)).find((s) => s.key === key);
+  assert.ok(row, 'источник удалённого подключения удалён');
+  assert.equal(row.is_active, false);
+  assert.equal(row.api.archived, true);
+  assert.equal(apiSourceUse(db).get(key).owned, true);
+});
+
+test('переименование подключения переименовывает его источник; ключи двух одноимённых не сталкиваются', () => {
+  const db = fresh();
+  const a = ensureApiSource(db, { kind: 'partner', name: 'med24.uz' });
+  const b = ensureApiSource(db, { kind: 'partner', name: 'med24.uz' });
+  assert.notEqual(a.key, b.key);
+  renameApiSource(db, a.key, 'med24 (новый)');
+  assert.equal(db.prepare('SELECT label FROM crm_sources WHERE key = ?').get(a.key).label, 'med24 (новый)');
 });

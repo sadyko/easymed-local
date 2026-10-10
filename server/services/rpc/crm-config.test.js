@@ -8,6 +8,8 @@ import { migrate } from '../../db/migrate.js';
 import { crmConfigGet, crmConfigSave, RpcError } from './crm-config.js';
 import { getRpc } from './index.js';
 import { isReadOnlyRpc, isAlwaysAllowedRpc } from '../control/gate.js';
+import { ensureApiSource } from '../crm/config.js';   // CLINIC_API_STEP7_V1
+import { insertConnectionRow } from '../../test-helpers/api-connection-row.js';   // CLINIC_API_STEP7_V1
 
 const fresh = () => {
   const db = openDb(':memory:');
@@ -135,4 +137,18 @@ test('CRM_UNIFY_V1: администратор переносит конверс
     assert.equal(e.status, 400);
     assert.match(e.message, /Проигрышная колонка/);
   }
+});
+
+test('CLINIC_API_STEP7_V1: «CRM-канбан: Изменение» без «Удаления» сохраняет список без источника подключения — это не удаление', () => {
+  const db = fresh();
+  db.prepare('INSERT INTO custom_roles (code, name, base_role) VALUES (?, ?, ?)').run('crm_edit', 'crm_edit', 'registrar');
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run('crm_edit',
+    JSON.stringify({ sections: ['settings'], levels: {}, grants: { settings: 'view', 'settings.crm': 'edit' } }));
+  const editor = { id: 3, role: 'registrar', extra_roles: [], custom_role_code: 'crm_edit' };
+  const { key } = ensureApiSource(db, { kind: 'partner', name: 'med24.uz' });
+  insertConnectionRow(db, { crm_source_key: key });
+  const sent = crmConfigGet(db).sources.filter((s) => s.key !== key).map((s) => ({ key: s.key, label: s.label, is_active: s.is_active }));
+  assert.ok(crmConfigSave(db, { sources: sent }, editor).sources.some((s) => s.key === key));
+  // Настоящее удаление по-прежнему требует «Удаления».
+  assert.throws(() => crmConfigSave(db, { sources: sent.filter((s) => s.key !== 'other') }, editor), (e) => e.status === 403);
 });
