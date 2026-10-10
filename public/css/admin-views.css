@@ -7579,6 +7579,23 @@ table.list tr.is-off td { color: var(--ink-400); }
 @media (min-width: 1280px) and (min-height: 900px) {
     .cpf-side { position: sticky; top: 16px; align-self: flex-start; }
 }
+.cpf-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cpf-note { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--info-50); color: var(--info-700); font-size: 13.5px; line-height: 1.45; }
+.cpf-note > svg { flex: none; margin-top: 2px; }
+.btn.cpf-danger { color: var(--crit-700); }
+.btn.cpf-danger:hover { background: var(--crit-50); }
+/* Логотип на «клетке»: видно, где фон прозрачный. */
+.cpf-logos { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.cpf-logo { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.cpf-logo > b { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.cpf-logo-box { display: grid; place-items: center; aspect-ratio: 1 / 1; max-height: 180px; overflow: hidden; border: 1px solid var(--ink-200); border-radius: 10px;
+    background-color: var(--white);
+    background-image: linear-gradient(45deg, var(--ink-50) 25%, transparent 25%), linear-gradient(-45deg, var(--ink-50) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, var(--ink-50) 75%), linear-gradient(-45deg, transparent 75%, var(--ink-50) 75%);
+    background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
+.cpf-logo-box img { max-width: 86%; max-height: 86%; object-fit: contain; }
+.cpf-logo-box .muted { font-size: 12.5px; }
+.cpf-legacy { color: var(--warn-700); }
 @media (max-width: 640px) {
     .cpf-body { padding: 14px 16px 16px; }
 }

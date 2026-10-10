@@ -47,6 +47,7 @@ import { refreshClinicBrand } from '../clinic-context.js?v=localclinic2';
 // CLINIC_PROFILE_V1 — профиль клиники: колонки и проверки; поля на трёх языках.
 import { COMPANY_COLUMNS, NAME_MAX, ABOUT_MAX, normalizeProfile, companyProblems } from '../../shared/clinic-profile.js';
 import { triGroup, labeled } from './company-fields.js';
+import { logosCard } from './company-logos.js';
 
 // SETTINGS_SPLIT_V1 — paper_size/show_watermark/footer_note/legal_note остались
 // в таблице, но не в этом объекте: DEFAULTS описывает то, чем управляет ЭТОТ
@@ -56,10 +57,17 @@ import { triGroup, labeled } from './company-fields.js';
 const DEFAULTS = Object.freeze(Object.fromEntries(
     COMPANY_COLUMNS.map((c) => [c, c === 'accent_color' ? '#167873' : ''])));
 
+// CLINIC_PROFILE_V1 — ОДИН объект на экран: карточки (логотипы, адрес) держат
+// ссылку на него, поэтому load() и save() меняют его содержимое (setState), а
+// не подменяют объект — иначе карточка писала бы в устаревшую копию.
 let state = { ...DEFAULTS };
-const refs = { container: null, previewEl: null, thumbWrap: null, saveBtn: null, errNote: null, controls: null,
+function setState(values) {
+    for (const k of Object.keys(state)) delete state[k];
+    Object.assign(state, DEFAULTS, values || {});
+}
+const refs = { container: null, previewEl: null, saveBtn: null, errNote: null, controls: null,
     // CLINIC_PROFILE_V1 — строки ошибок по колонкам; доступность списков адреса (задача 11).
-    errs: {}, geoAvailability: () => ({}) };
+    errs: {}, geoAvailability: () => ({}), logos: null };
 
 export async function renderDocumentsSettings(container, { onNavigate } = {}) {
     refs.container = container;
@@ -86,6 +94,9 @@ function mount(onNavigate) {
     buildForm(formCard);
     refs.errs = {};   // CLINIC_PROFILE_V1 — заполняют карточки ниже
     const linksCard = buildLinksCard();
+    // CLINIC_PROFILE_V1 — два логотипа (company-logos.js); прежний логотип
+    // «Реквизитов» ушёл в квадратную плитку.
+    refs.logos = logosCard(state, { onChange: () => renderPreview() });
 
     refs.previewEl = h('div');
     const previewCard = h('div', { class: 'card' },
@@ -108,7 +119,7 @@ function mount(onNavigate) {
         // правой колонки на широком экране держит CSS (.cpf-side).
         h('div', { class: 'row', style: { gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' } },
             h('div', { class: 'col cpf-main', style: { minWidth: 'min(320px, 100%)', flex: '3 1 480px' } },
-                h('div', { class: 'cpf-stack' }, formCard, linksCard)),
+                h('div', { class: 'cpf-stack' }, formCard, refs.logos.node, linksCard)),
             h('div', { class: 'col cpf-side', style: { minWidth: 'min(320px, 100%)', flex: '1 1 320px' } },
                 h('div', { class: 'cpf-stack' }, previewCard)),
         ),
@@ -144,9 +155,6 @@ function buildForm(card) {
     const licenseInp = h('input', { type: 'text', oninput: onText('license') });
     const accentInp  = h('input', { type: 'color', oninput: onText('accent_color') });
 
-    const fileInp = h('input', { type: 'file', accept: 'image/*', onchange: onLogoPick });
-    refs.thumbWrap = h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' } });
-
     refs.controls = { names, about, addressInp, phoneInp, emailInp, licenseInp, accentInp };
     refs.errNote = h('div', { class: 'empty', style: { display: 'none', margin: '0 16px 12px' } },
         'Не удалось загрузить данные компании — показаны значения по умолчанию.');
@@ -162,7 +170,6 @@ function buildForm(card) {
             field('Электронная почта', emailInp),
             field('Номер лицензии', licenseInp),
             field('Фирменный цвет', accentInp)),
-        field('Логотип', h('div', null, fileInp, refs.thumbWrap)),
         // SETTINGS_SPLIT_V1 — сказано ровно один раз и там, где раньше стояли
         // переехавшие переключатели: иначе администратор, помнящий «размер
         // бумаги» на этом экране, решит, что настройка пропала.
@@ -215,7 +222,7 @@ function applyStateToControls() {
     c.licenseInp.value = state.license || '';
     c.accentInp.value  = state.accent_color || '#167873';
     for (const [k, box] of Object.entries(refs.links || {})) box.ctrl.value = state[k] || '';
-    paintThumb();
+    if (refs.logos) refs.logos.paint();   // CLINIC_PROFILE_V1 — плитки логотипов по загруженной строке
 }
 
 // CLINIC_PROFILE_V1 — объяснение под каждым полем с ошибкой; поле без ошибки — чистое.
@@ -223,66 +230,10 @@ function showProblems(problems) {
     for (const [k, err] of Object.entries(refs.errs)) err.set(problems[k] || '');
 }
 
-// -----------------------------------------------------------------------------
-// LOGO — client-side resize (canvas) before it ever becomes a data URL, so a
-// raw phone photo never blows the /api/db 100kb JSON body limit.
-// -----------------------------------------------------------------------------
-function resizeImageToDataUrl(file, maxDim, cb) {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-            let { width, height } = img;
-            const scale = Math.min(1, maxDim / Math.max(width, height));
-            width = Math.round(width * scale); height = Math.round(height * scale);
-            const canvas = document.createElement('canvas');
-            canvas.width = width; canvas.height = height;
-            canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-            cb(canvas.toDataURL('image/png'));
-        };
-        img.onerror = () => cb(null);
-        img.src = e.target.result;
-    };
-    reader.onerror = () => cb(null);
-    reader.readAsDataURL(file);
-}
-
-function onLogoPick(e) {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = '';   // always reset — lets the same file be re-picked after Remove
-    if (!file) return;
-    resizeImageToDataUrl(file, 220, (dataUrl) => {
-        if (!dataUrl) { toast('Не удалось прочитать это изображение.', 'fail'); return; }
-        if (dataUrl.length > 90000) {
-            toast('Логотип слишком большой даже после сжатия — выберите изображение поменьше.', 'fail');
-            return;
-        }
-        state.logo_data_url = dataUrl;
-        paintThumb();
-        renderPreview();
-    });
-}
-
-function removeLogo() {
-    state.logo_data_url = '';   // CLINIC_PROFILE_V1
-    paintThumb();
-    renderPreview();
-}
-
-function paintThumb() {
-    if (!refs.thumbWrap) return;
-    clear(refs.thumbWrap);
-    if (state.logo_data_url) {
-        refs.thumbWrap.appendChild(h('img', {
-            src: state.logo_data_url,
-            style: { height: '40px', maxWidth: '120px', objectFit: 'contain', border: '1px solid var(--ink-100)', borderRadius: '6px', background: '#fff' },
-        }));
-        refs.thumbWrap.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: removeLogo },
-            Icon('Trash', { size: 13 }), ' ', 'Удалить логотип'));
-    } else {
-        refs.thumbWrap.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Логотип не загружен'));
-    }
-}
+// CLINIC_PROFILE_V1 — прежний единственный логотип (resizeImageToDataUrl /
+// onLogoPick / removeLogo / paintThumb) ушёл: его место — квадратная плитка
+// «Логотипов» (company-logos.js). Печатная копия (logo_data_url) делается там
+// же и в тех же пределах — 220 px, не больше 90 000 знаков.
 
 // -----------------------------------------------------------------------------
 // LOAD / SAVE
@@ -291,7 +242,7 @@ async function load() {
     try {
         const { data, error } = await supabase.from('doc_settings').select('*').eq('id', 1).single();
         if (error) throw error;
-        state = { ...DEFAULTS, ...(data || {}) };
+        setState(data);   // CLINIC_PROFILE_V1 — тот же объект (карточки держат ссылку)
         if (refs.errNote) refs.errNote.style.display = 'none';
     } catch (e) {
         // tr() on the fixed sentence, the server's own message appended raw —
@@ -299,7 +250,7 @@ async function load() {
         // system-backups.js): a message built by concatenation would never be
         // translatable at all.
         toast(tr('Не удалось загрузить данные компании.') + ' ' + ((e && e.message) || e), 'fail');
-        state = { ...DEFAULTS };
+        setState(null);
         if (refs.errNote) refs.errNote.style.display = '';
     }
     applyStateToControls();
@@ -342,7 +293,7 @@ async function save() {
         payload.accent_color = v.accent_color || '#167873';
         const { data, error } = await supabase.from('doc_settings').update(payload).eq('id', 1).select().single();
         if (error) throw error;
-        state = { ...DEFAULTS, ...(data || payload) };
+        setState(data || payload);
         applyStateToControls();
         renderPreview();
         toast(tr('Сохранено'), 'ok');

@@ -165,6 +165,7 @@ const { COMPANY_COLUMNS } = await import('../../shared/clinic-profile.js');
 let docRow;
 let lastUpdate;
 let uploads;
+let nextStorageError = null;   // { status, error } — отказ хранилища на следующую загрузку
 // Строка doc_settings после миграции 240: прежние поля заполнены, новые пусты.
 function freshRow(extra = {}) {
     const row = { id: 1, paper_size: 'A5', show_watermark: 1, footer_note: 'Спасибо за визит.', legal_note: 'Электронный документ.', lab_scope: 'building' };
@@ -182,6 +183,10 @@ globalThis.fetch = async (url, opts = {}) => {
     if (u.startsWith('/api/rpc/get_clinic_by_slug')) return ok({ data: globalThis.window.CLINIC });
     if (u.startsWith('/api/rpc/')) return ok({ data: null });
     if (u.startsWith('/api/storage/')) {
+        if (nextStorageError) {
+            const { status, error } = nextStorageError; nextStorageError = null;
+            return { ok: false, status, json: async () => ({ error }) };
+        }
         uploads.push({ url: u, type: (opts.headers || {})['Content-Type'], method: opts.method });
         return ok({ data: { path: u } });
     }
@@ -206,6 +211,12 @@ globalThis.fetch = async (url, opts = {}) => {
 };
 
 const { renderDocumentsSettings } = await import('../views/documents-settings.js');
+const { logoDeps } = await import('../views/company-logos.js');
+const { fakePng } = await import('../../../../server/test-helpers/fake-png.js');
+// В поддельном DOM нет canvas: печатная копия — подставная, время — постоянное.
+const PRINT_COPY = 'data:image/png;base64,UFJJTlQ=';
+logoDeps.printCopy = async () => PRINT_COPY;
+logoDeps.now = () => 1760000000000;
 
 // ===========================================================================
 // Помощники
@@ -337,4 +348,130 @@ test('сохранение шлёт ровно колонки «Компании
     assert.equal(lastUpdate.address, 'Ташкент, ул. Мира 1');
     assert.equal(lastUpdate.logo_data_url, '', 'нет логотипа — пустая строка (колонка NOT NULL)');
     assert.equal(docRow.paper_size, 'A5', 'настройки печати в базе не тронуты');
+});
+
+// ===========================================================================
+// Задача 12 — два логотипа
+// ===========================================================================
+const logoTile = (root, title) => descendants(root).find((n) => matches(n, '.cpf-logo')
+    && labelText(n.children.find((c) => c.tagName === 'B')) === title) || null;
+function fileOf(buf, name = 'logo.png', type = 'image/png') {
+    return { name, type, size: buf.length, arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length) };
+}
+async function pick(root, title, file) {
+    const tile = logoTile(root, title);
+    assert.ok(tile, 'нет плитки «' + title + '»');
+    const input = descendants(tile).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'file');
+    assert.ok(input, 'у плитки «' + title + '» нет выбора файла');
+    assert.equal(input.attrs.accept, 'image/png');
+    input.files = [file];
+    input.dispatchEvent({ type: 'change', target: input, currentTarget: input });
+    await settle(40);
+}
+const tileImg = (root, title) => descendants(logoTile(root, title)).find((n) => n.tagName === 'IMG') || null;
+const SQ_PATH = /^square\/1760000000000-[a-z0-9]{6}\.png$/;
+const PT_PATH = /^portrait\/1760000000000-[a-z0-9]{6}\.png$/;
+
+test('прежний логотип (data URL) без квадратного — в квадратной плитке, с пометкой', async () => {
+    const root = await open({ logo_data_url: 'data:image/png;base64,T0xE' });
+    const img = tileImg(root, 'Квадратный, 1:1');
+    assert.ok(img, 'прежний логотип не показан');
+    assert.equal(img.attrs.src, 'data:image/png;base64,T0xE');
+    assert.match(textOf(logoTile(root, 'Квадратный, 1:1')), /Прежний логотип — печатается, пока не загружен квадратный/);
+    assert.match(textOf(logoTile(root, 'Вертикальный')), /Нет файла/);
+});
+
+test('квадратный PNG: файл — в clinic-logos/square/…, печатная копия — в logo_data_url', async () => {
+    const root = await open({ logo_data_url: 'data:image/png;base64,T0xE' });
+    await pick(root, 'Квадратный, 1:1', fileOf(fakePng(512, 512)));
+
+    assert.equal(uploads.length, 1, 'файл не загружен');
+    assert.match(uploads[0].url, /^\/api\/storage\/clinic-logos\/square\/1760000000000-[a-z0-9]{6}\.png$/);
+    assert.equal(uploads[0].type, 'image/png');
+    assert.equal(uploads[0].method, 'POST');
+    assert.match(tileImg(root, 'Квадратный, 1:1').attrs.src, /^\/api\/storage\/clinic-logos\/square\//, 'плитка показывает загруженный файл');
+    assert.doesNotMatch(textOf(logoTile(root, 'Квадратный, 1:1')), /Прежний логотип/);
+
+    await save(root);
+    assert.match(lastUpdate.logo_square_path, SQ_PATH);
+    assert.equal('/api/storage/clinic-logos/' + lastUpdate.logo_square_path, uploads[0].url, 'путь в строке — тот, что загружен');
+    assert.equal(lastUpdate.logo_data_url, PRINT_COPY, 'печатная копия заменила прежний логотип');
+    assert.equal(lastUpdate.logo_portrait_path, '');
+});
+
+test('JPG, непрозрачный PNG, не квадрат — загрузки нет, понятный отказ, строка не меняется', async () => {
+    const cases = [
+        [fileOf(fakePng(512, 512), 'logo.jpg', 'image/jpeg'), /Логотип — только PNG с прозрачным фоном/],
+        [fileOf(fakePng(512, 512, { colorType: 2 })), /У этого PNG нет прозрачности/],
+        [fileOf(fakePng(600, 500)), /Квадратный логотип 600×500 px — стороны должны быть равны/],
+        [fileOf(fakePng(200, 200)), /Логотип 200×200 px\. Нужно от 256 до 2048 px/],
+    ];
+    for (const [file, msg] of cases) {
+        const root = await open();
+        await pick(root, 'Квадратный, 1:1', file);
+        assert.equal(uploads.length, 0, file.name + ': отказ на экране — до загрузки');
+        assert.match(toastText(), msg);
+        await save(root);
+        assert.equal(lastUpdate.logo_square_path, '');
+        assert.equal(lastUpdate.logo_data_url, '');
+    }
+});
+
+test('вертикальный PNG: свой путь portrait/…; печатная копия не меняется', async () => {
+    const root = await open({ logo_data_url: 'data:image/png;base64,T0xE' });
+    await pick(root, 'Вертикальный', fileOf(fakePng(600, 800)));
+    assert.equal(uploads.length, 1);
+    assert.match(uploads[0].url, /^\/api\/storage\/clinic-logos\/portrait\//);
+    await save(root);
+    assert.match(lastUpdate.logo_portrait_path, PT_PATH);
+    assert.equal(lastUpdate.logo_data_url, 'data:image/png;base64,T0xE', 'прежний логотип печатается дальше');
+    assert.equal(lastUpdate.logo_square_path, '');
+
+    const root2 = await open();
+    await pick(root2, 'Вертикальный', fileOf(fakePng(800, 800)));
+    assert.equal(uploads.length, 0, 'квадрат в вертикальную плитку не грузится');
+    assert.match(toastText(), /высота должна быть больше ширины/);
+});
+
+test('«Удалить»: квадратный снимается с бланков вместе с копией; вертикальный — только свой путь', async () => {
+    const both = { logo_square_path: 'square/1-a.png', logo_portrait_path: 'portrait/1-b.png', logo_data_url: PRINT_COPY };
+    let root = await open(both);
+    let del = buttonByText(logoTile(root, 'Квадратный, 1:1'), /Удалить/);
+    assert.ok(del, 'у загруженного квадратного нет «Удалить»');
+    del.click();
+    assert.match(textOf(logoTile(root, 'Квадратный, 1:1')), /Нет файла/);
+    await save(root);
+    assert.equal(lastUpdate.logo_square_path, '');
+    assert.equal(lastUpdate.logo_data_url, '', 'копия на бланках тоже снята');
+    assert.equal(lastUpdate.logo_portrait_path, 'portrait/1-b.png');
+
+    root = await open(both);
+    buttonByText(logoTile(root, 'Вертикальный'), /Удалить/).click();
+    await save(root);
+    assert.equal(lastUpdate.logo_portrait_path, '');
+    assert.equal(lastUpdate.logo_square_path, 'square/1-a.png');
+    assert.equal(lastUpdate.logo_data_url, PRINT_COPY);
+    assert.equal(uploads.length, 0, '«Удалить» не трогает хранилище');
+});
+
+test('печатная копия больше 90 000 знаков — загрузки нет, объяснение', async () => {
+    const saved = logoDeps.printCopy;
+    logoDeps.printCopy = async () => 'data:image/png;base64,' + 'A'.repeat(90001);
+    try {
+        const root = await open();
+        await pick(root, 'Квадратный, 1:1', fileOf(fakePng(512, 512)));
+        assert.equal(uploads.length, 0);
+        assert.match(toastText(), /Не удалось подготовить логотип для печати/);
+    } finally { logoDeps.printCopy = saved; }
+});
+
+test('отказ хранилища с шаблоном — переведён в тосте; строка не меняется', async () => {
+    const root = await open();
+    nextStorageError = { status: 415, error: { code: 'logo_not_transparent', message: 'raw',
+        template: 'У этого PNG нет прозрачности: фон будет виден белым прямоугольником. Сохраните логотип с прозрачным фоном.', params: {} } };
+    await pick(root, 'Квадратный, 1:1', fileOf(fakePng(512, 512)));
+    assert.match(toastText(), /^Не удалось загрузить логотип: У этого PNG нет прозрачности/);
+    await save(root);
+    assert.equal(lastUpdate.logo_square_path, '');
+    assert.equal(lastUpdate.logo_data_url, '');
 });
