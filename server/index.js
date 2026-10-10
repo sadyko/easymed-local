@@ -26,6 +26,7 @@ import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EV
 import { scheduleCrmNoShow } from './services/crm/no-show.js';   // CRM_UNIFY_V1
 import { crmUnifyRepair } from './services/crm/unify-repair.js';   // CRM_UNIFY_V1
 import { scheduleCrmTaskRehome } from './services/crm/tasks-follow.js';   // CRM_UNIFY_V1
+import { preserveLegacyLogo } from './services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -192,6 +193,12 @@ if (isMain) {
     const repaired = crmUnifyRepair(db);
     if (repaired.summary) console.log('  ' + repaired.summary);
   } catch (e) { console.warn('[crm-unify-repair]', e && e.message); }
+
+  // CLINIC_PROFILE_V1 — прежний логотип «Компании» (data URL) — файлом в
+  // хранилище, до того как его заменит квадратный. Строка не меняется; сбой —
+  // предупреждение, а не отказ запуска; повтор при следующем запуске.
+  try { preserveLegacyLogo(db, path.join(DATA_DIR, 'storage')); }
+  catch (e) { console.warn('[legacy-logo]', e && e.message); }
 
   // PRUNE_VERSIONS_V1 — старые версии программы убираются ИМЕННО ЗДЕСЬ: после
   // того, как миграции прошли. Это первый момент, когда известно, что
