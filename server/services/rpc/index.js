@@ -45,6 +45,7 @@ import { bookingLinesAdd, bookingLineRemove } from './booking-lines.js';   // CR
 import { removeOwnVisitLine, visitSetReferralSource } from './visit-lines.js';   // LIVE_AUDIT_FIX_V1 — врач снимает свою невыставленную услугу
 import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
+import { branchHoursImpact } from './branch-hours.js';   // BRANCH_PROFILE_V1
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
 import { sellCard, refundCardSale, listCardSales } from './card-sales.js';   // CARD_SALE_V1
@@ -284,6 +285,11 @@ export const RPC = {
   // в браузере — четвёртой реализацией того же правила.
   calendar_windows:          (db, args, user) => calendarWindows(db, args, user),
   calendar_book:             (db, args, user) => calendarBook(db, args, user),
+  // BRANCH_PROFILE_V1 — «каким врачам какое время закроется» до сохранения
+  // часов здания: тот же движок, что слоты. Только считает, ничего не пишет;
+  // ворота — право записи в branches (реестр). В READ_ONLY_RPCS не входит:
+  // при просроченной лицензии сохранить часы всё равно нельзя.
+  branch_hours_impact:       (db, args, user) => branchHoursImpact(db, args, user),
   // CRM_CALENDAR_MIRROR_V1 — услуги записи ДО ПРИХОДА: колл-центр записывает
   // пациента с услугами, а не голым слотом. Узкая дверь (booking-lines.js):
   // только 'added', без счёта и оплаты, без хирургии, своё здание.
