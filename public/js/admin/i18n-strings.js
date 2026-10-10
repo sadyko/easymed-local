@@ -11773,4 +11773,33 @@ export const STRINGS = {
   "скидка {sum} сум": {"en":"discount {sum} sum","ru":"скидка {sum} сум","uz":"chegirma {sum} so‘m"},   // SERVICES_PACKAGES_V1
   // SERVICES_PACKAGES_V1 — задача 16: быстрая регистрация
   "Пакет «{name}»: в пакете {sum} сум": {"en":"Package «{name}»: {sum} sum in the package","ru":"Пакет «{name}»: в пакете {sum} сум","uz":"«{name}» paketi: paketda {sum} so‘m"},   // SERVICES_PACKAGES_V1
+  // SERVICES_PACKAGES_V1 — задача 17: «Услуги для сайта и партнёров»
+  "филиал скрыт с сайта": {"en":"branch hidden from the website","ru":"филиал скрыт с сайта","uz":"filial saytdan yashirilgan"},   // SERVICES_PACKAGES_V1
+  "врач скрыт в своей карточке": {"en":"the doctor is hidden in their card","ru":"врач скрыт в своей карточке","uz":"shifokor o‘z kartochkasida yashirilgan"},   // SERVICES_PACKAGES_V1
+  "Показывать услугу": {"en":"Show the service","ru":"Показывать услугу","uz":"Xizmatni ko‘rsatish"},   // SERVICES_PACKAGES_V1
+  "Скрыта с сайта": {"en":"Hidden from the website","ru":"Скрыта с сайта","uz":"Saytdan yashirilgan"},   // SERVICES_PACKAGES_V1
+  "Языки названия": {"en":"Name languages","ru":"Языки названия","uz":"Nom tillari"},   // SERVICES_PACKAGES_V1
+  "Кто оказывает": {"en":"Who provides it","ru":"Кто оказывает","uz":"Kim ko‘rsatadi"},   // SERVICES_PACKAGES_V1
+  "Из прайса": {"en":"From the price list","ru":"Из прайса","uz":"Narxnomadan"},   // SERVICES_PACKAGES_V1
+  "Не ведёт консультаций": {"en":"No consultations","ru":"Не ведёт консультаций","uz":"Konsultatsiya o‘tkazmaydi"},   // SERVICES_PACKAGES_V1
+  "Консультации и цены": {"en":"Consultations and prices","ru":"Консультации и цены","uz":"Konsultatsiyalar va narxlar"},   // SERVICES_PACKAGES_V1
+  "Вся группа видна пациентам": {"en":"The whole group is visible to patients","ru":"Вся группа видна пациентам","uz":"Butun guruh bemorlarga ko‘rinadi"},   // SERVICES_PACKAGES_V1
+  "Показали группу. Без узбекского названия пропущено: {n}.": {"en":"The group is shown. Skipped without an Uzbek name: {n}.","ru":"Показали группу. Без узбекского названия пропущено: {n}.","uz":"Guruh ko‘rsatildi. O‘zbekcha nomi yo‘qligi uchun o‘tkazib yuborildi: {n}."},   // SERVICES_PACKAGES_V1
+  "Услуги для сайта и партнёров": {"en":"Services for the website and partners","ru":"Услуги для сайта и партнёров","uz":"Sayt va hamkorlar uchun xizmatlar"},   // SERVICES_PACKAGES_V1
+  "Какие услуги и цены видят пациенты на сайте клиники, в Symptex и у партнёров. Группы те же пять, что в прейскуранте.": {"en":"Which services and prices patients see on the clinic website, in Symptex and at partners. The groups are the same five as in the price list.","ru":"Какие услуги и цены видят пациенты на сайте клиники, в Symptex и у партнёров. Группы те же пять, что в прейскуранте.","uz":"Bemorlar klinika saytida, Symptex va hamkorlarda qaysi xizmat va narxlarni ko‘radi. Guruhlar narxnomadagi besh guruhning o‘zi."},   // SERVICES_PACKAGES_V1
+  "Не удалось загрузить услуги — обновите страницу.": {"en":"Could not load the services — refresh the page.","ru":"Не удалось загрузить услуги — обновите страницу.","uz":"Xizmatlarni yuklab bo‘lmadi — sahifani yangilang."},   // SERVICES_PACKAGES_V1
+  "Показываем услуг": {"en":"Services shown","ru":"Показываем услуг","uz":"Ko‘rsatilayotgan xizmatlar"},   // SERVICES_PACKAGES_V1
+  "{n} из {total}": {"en":"{n} of {total}","ru":"{n} из {total}","uz":"{total} tadan {n}"},   // SERVICES_PACKAGES_V1
+  "Врачей с ценами консультаций": {"en":"Doctors with consultation prices","ru":"Врачей с ценами консультаций","uz":"Konsultatsiya narxlari bor shifokorlar"},   // SERVICES_PACKAGES_V1
+  "Без перевода на английский": {"en":"Without an English translation","ru":"Без перевода на английский","uz":"Inglizcha tarjimasiz"},   // SERVICES_PACKAGES_V1
+  "{n} — партнёры покажут русское название": {"en":"{n} — partners will show the Russian name","ru":"{n} — партнёры покажут русское название","uz":"{n} — hamkorlar ruscha nomini ko‘rsatadi"},   // SERVICES_PACKAGES_V1
+  "Показать всю группу": {"en":"Show the whole group","ru":"Показать всю группу","uz":"Butun guruhni ko‘rsatish"},   // SERVICES_PACKAGES_V1
+  "Врачей пока нет.": {"en":"No doctors yet.","ru":"Врачей пока нет.","uz":"Hozircha shifokorlar yo‘q."},   // SERVICES_PACKAGES_V1
+  "Цену и название консультации для каждого врача задают в «Консультации врачей». Консультация видна, если виден сам врач.": {"en":"The consultation price and name for each doctor are set in “Doctor consultations”. A consultation is visible when the doctor is visible.","ru":"Цену и название консультации для каждого врача задают в «Консультации врачей». Консультация видна, если виден сам врач.","uz":"Har bir shifokor uchun konsultatsiya narxi va nomi «Shifokor konsultatsiyalari»da beriladi. Konsultatsiya shifokorning o‘zi ko‘rinsa, ko‘rinadi."},   // SERVICES_PACKAGES_V1
+  "Открыть «Консультации врачей»": {"en":"Open “Doctor consultations”","ru":"Открыть «Консультации врачей»","uz":"«Shifokor konsultatsiyalari»ni ochish"},   // SERVICES_PACKAGES_V1
+  "Услуги прайса в группе «Консультации»": {"en":"Price-list services in the “Consultations” group","ru":"Услуги прайса в группе «Консультации»","uz":"«Konsultatsiyalar» guruhidagi narxnoma xizmatlari"},   // SERVICES_PACKAGES_V1
+  "Партнёры видят такую услугу в профиле врача, который её оказывает (вкладка «Услуги и ставки» в карточке услуги).": {"en":"Partners see such a service in the profile of the doctor who provides it (the “Services and rates” tab in the service card).","ru":"Партнёры видят такую услугу в профиле врача, который её оказывает (вкладка «Услуги и ставки» в карточке услуги).","uz":"Hamkorlar bunday xizmatni uni ko‘rsatadigan shifokor profilida ko‘radi (xizmat kartochkasidagi «Xizmatlar va stavkalar» yorlig‘i)."},   // SERVICES_PACKAGES_V1
+  "Таких услуг в прайсе нет.": {"en":"There are no such services in the price list.","ru":"Таких услуг в прайсе нет.","uz":"Narxnomada bunday xizmatlar yo‘q."},   // SERVICES_PACKAGES_V1
+  "В этой группе услуг нет.": {"en":"There are no services in this group.","ru":"В этой группе услуг нет.","uz":"Bu guruhda xizmatlar yo‘q."},   // SERVICES_PACKAGES_V1
+  "Услуги по группам": {"en":"Services by group","ru":"Услуги по группам","uz":"Guruhlar bo‘yicha xizmatlar"},   // SERVICES_PACKAGES_V1
 };

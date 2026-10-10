@@ -7865,7 +7865,8 @@ table.list tr.is-off td { color: var(--ink-400); }
 .pkg-tbl tr.pkg-off td { color: var(--ink-500); }
 .pkg-r { text-align: right; }
 .pkg-strike { text-decoration: line-through; color: var(--ink-500); }
-.pkg-name { font-size: 13.5px; font-weight: 600; color: var(--ink-900); overflow-wrap: anywhere; }
+/* break-word, а не anywhere: слово не рвётся посередине — узкая таблица прокручивается в своей карточке. */
+.pkg-name { font-size: 13.5px; font-weight: 600; color: var(--ink-900); overflow-wrap: break-word; }
 .pkg-why { font-size: 12.5px; margin-top: 2px; }
 .pkg-empty { padding: 12px 0; font-size: 13.5px; }
 .pkg-lock { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
@@ -7904,4 +7905,22 @@ table.list tr.is-off td { color: var(--ink-400); }
 .pkg-grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 12px; }
 .pkg-warn { color: var(--warn-700); }
 .pkg-note { margin-top: 4px; }
+.svp-page .page-head > div:first-child { flex: 1 1 260px; min-width: 0; }
+.svp-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 10px; margin: 0 0 14px; }
+.svp-facts > div { padding: 10px 12px; border: 1px solid var(--ink-100); border-radius: 10px; }
+.svp-facts dt { font-size: 12.5px; color: var(--ink-500); }
+.svp-facts dd { margin: 2px 0 0; font-size: 15px; font-weight: 600; color: var(--ink-900); }
+.svp-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--ink-100); }
+.svp-tab { padding: 8px 12px; border: 0; border-bottom: 2px solid transparent; background: none; font: inherit; font-size: 13.5px; color: var(--ink-700); cursor: pointer; }
+.svp-tab.on { border-bottom-color: var(--primary-600); color: var(--ink-900); font-weight: 600; }
+.svp-tab:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+.svp-row { display: flex; align-items: center; gap: 8px; }
+.svp-small { font-size: 12.5px; color: var(--ink-600); }
+.svp-sub { display: block; font-size: 12.5px; }
+.svp-miss { font-size: 12.5px; color: var(--warn-700); }
+.svp-price-row { display: flex; justify-content: space-between; gap: 16px; font-size: 13.5px; }
+.svp-price-row > b { white-space: nowrap; }
+.svp-from { margin-top: 6px; font-size: 12.5px; }
+.svp-foot { display: grid; gap: 10px; }
+.svp-h4 { margin: 8px 0 0; font-size: 15px; color: var(--ink-900); }
 /* /SERVICES_PACKAGES_V1 */
