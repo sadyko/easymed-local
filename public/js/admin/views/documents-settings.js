@@ -29,6 +29,14 @@
 // типов документов, варианты и предпросмотр печати. Здесь — одна запись о
 // клинике. Маршрут 'documents-settings' (НЕ 'documents'), чтобы не столкнуться
 // с тем экраном.
+//
+// CLINIC_PROFILE_V1 (2026-10-10, шаг 3 API клиники) — «Компания» стала
+// профилем клиники для сайта, Symptex и партнёров: названия и описание на
+// трёх языках, сайт, Telegram и Instagram. Документы печатают то же, что
+// печатали: RU-название (clinic_name) и адрес, вписанный руками (address);
+// сайт на бланках не печатается (ответы владельца 2026-10-10). Колонки,
+// проверки и нормализация — общие с /api/db и синхронизацией зданий
+// (shared/clinic-profile.js); поля на трёх языках — company-fields.js.
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field } from '../ui.js';
@@ -36,17 +44,22 @@ import { tr } from '../i18n.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 // CLINIC_API_FIX_V1 — тот же экземпляр модуля, что у admin.js (тот же ?v=).
 import { refreshClinicBrand } from '../clinic-context.js?v=localclinic2';
+// CLINIC_PROFILE_V1 — профиль клиники: колонки и проверки; поля на трёх языках.
+import { COMPANY_COLUMNS, NAME_MAX, ABOUT_MAX, normalizeProfile, companyProblems } from '../../shared/clinic-profile.js';
+import { triGroup, labeled } from './company-fields.js';
 
 // SETTINGS_SPLIT_V1 — paper_size/show_watermark/footer_note/legal_note остались
 // в таблице, но не в этом объекте: DEFAULTS описывает то, чем управляет ЭТОТ
 // экран, и лишнее поле здесь снова превратилось бы в поле формы.
-const DEFAULTS = {
-    clinic_name: '', address: '', phone: '', email: '', license: '',
-    logo_data_url: '', accent_color: '#167873',   // CLINIC_PROFILE_V1 — колонка NOT NULL: «нет логотипа» — ''
-};
+// CLINIC_PROFILE_V1 — это ровно колонки «Компании» (COMPANY_COLUMNS): строки
+// пустые («нет логотипа» — '': колонка NOT NULL), цвет — фирменный.
+const DEFAULTS = Object.freeze(Object.fromEntries(
+    COMPANY_COLUMNS.map((c) => [c, c === 'accent_color' ? '#167873' : ''])));
 
 let state = { ...DEFAULTS };
-const refs = { container: null, previewEl: null, thumbWrap: null, saveBtn: null, errNote: null, controls: null };
+const refs = { container: null, previewEl: null, thumbWrap: null, saveBtn: null, errNote: null, controls: null,
+    // CLINIC_PROFILE_V1 — строки ошибок по колонкам; доступность списков адреса (задача 11).
+    errs: {}, geoAvailability: () => ({}) };
 
 export async function renderDocumentsSettings(container, { onNavigate } = {}) {
     refs.container = container;
@@ -71,9 +84,11 @@ function mount(onNavigate) {
 
     const formCard = h('div', { class: 'card' });
     buildForm(formCard);
+    refs.errs = {};   // CLINIC_PROFILE_V1 — заполняют карточки ниже
+    const linksCard = buildLinksCard();
 
     refs.previewEl = h('div');
-    const previewCard = h('div', { class: 'card', style: { position: 'sticky', top: '16px', alignSelf: 'flex-start' } },
+    const previewCard = h('div', { class: 'card' },
         h('div', { class: 'card-header' }, h('h3', null, Icon('ID', { size: 16 }), ' ', 'Как это выглядит')),
         h('div', { style: { padding: '18px' } }, refs.previewEl));
 
@@ -83,13 +98,19 @@ function mount(onNavigate) {
                 // SETTINGS_SPLIT_V1 — заголовок наконец совпал с плиткой, из
                 // которой сюда приходят. Раньше здесь стояло «Documents».
                 h('h1', { class: 'page-title' }, 'Компания'),
-                h('p', { class: 'page-subtitle' }, 'Название, логотип, фирменный цвет и контакты клиники'),
+                h('p', { class: 'page-subtitle' },
+                    'Название, описание, адрес, логотипы, контакты и ссылки клиники. Эти данные видят пациенты на сайте клиники, в Symptex и у партнёров.'),
             ),
             h('div', { class: 'page-head-actions' }, refs.saveBtn),
         ),
+        // CLINIC_PROFILE_V1 — слева карточки профиля стопкой, справа
+        // предпросмотры; на узком экране — один столбец (flexWrap). Ширину
+        // правой колонки на широком экране держит CSS (.cpf-side).
         h('div', { class: 'row', style: { gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' } },
-            h('div', { class: 'col grow', style: { minWidth: '320px', flexBasis: '420px' } }, formCard),
-            h('div', { class: 'col grow', style: { minWidth: '320px', flexBasis: '420px' } }, previewCard),
+            h('div', { class: 'col cpf-main', style: { minWidth: 'min(320px, 100%)', flex: '3 1 480px' } },
+                h('div', { class: 'cpf-stack' }, formCard, linksCard)),
+            h('div', { class: 'col cpf-side', style: { minWidth: 'min(320px, 100%)', flex: '1 1 320px' } },
+                h('div', { class: 'cpf-stack' }, previewCard)),
         ),
     ));
 
@@ -102,7 +123,18 @@ function mount(onNavigate) {
 function buildForm(card) {
     const onText = (key) => (e) => { state[key] = e.target.value; renderPreview(); };
 
-    const nameInp    = h('input', { type: 'text', oninput: onText('clinic_name') });
+    // CLINIC_PROFILE_V1 — название и описание на трёх языках. RU-название —
+    // clinic_name: его печатают документы и показывает строка под меню.
+    const names = triGroup('Название клиники', null, {
+        key: 'name', cellLabel: 'Название', max: NAME_MAX,
+        hint: 'RU печатается на документах. UZ и EN видят партнёры и программа на узбекском и английском.',
+        onInput: (l, v) => { state[l === 'ru' ? 'clinic_name' : 'name_' + l] = v; renderPreview(); },
+    });
+    const about = triGroup('Коротко о клинике', null, {
+        key: 'about', cellLabel: 'Описание', textarea: true, max: ABOUT_MAX,
+        hint: 'Два-три предложения: чем клиника занимается. Партнёры показывают это под названием.',
+        onInput: (l, v) => { state['about_' + l] = v; renderPreview(); },
+    });
     const addressInp = h('input', { type: 'text', oninput: onText('address') });
     // PHONE_INPUT_V1 — country control; read its .value (not e.target.value,
     // which would be the raw inner field including a bare «+998»).
@@ -115,39 +147,80 @@ function buildForm(card) {
     const fileInp = h('input', { type: 'file', accept: 'image/*', onchange: onLogoPick });
     refs.thumbWrap = h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' } });
 
-    refs.controls = { nameInp, addressInp, phoneInp, emailInp, licenseInp, accentInp };
+    refs.controls = { names, about, addressInp, phoneInp, emailInp, licenseInp, accentInp };
     refs.errNote = h('div', { class: 'empty', style: { display: 'none', margin: '0 16px 12px' } },
         'Не удалось загрузить данные компании — показаны значения по умолчанию.');
 
-    card.appendChild(h('div', { class: 'card-header' }, h('h3', null, Icon('ID', { size: 16 }), ' ', 'Реквизиты клиники')));
+    card.appendChild(h('div', { class: 'card-header' }, h('h3', null, Icon('Building', { size: 16 }), ' ', 'Реквизиты клиники')));
     card.appendChild(refs.errNote);
-    card.appendChild(h('div', { style: { padding: '4px 16px 16px', display: 'flex', flexDirection: 'column' } },
-        field('Название клиники', nameInp),
-        field('Адрес', addressInp),
-        field('Телефон', phoneInp),
-        field('Электронная почта', emailInp),
-        field('Номер лицензии', licenseInp),
-        field('Фирменный цвет', accentInp),
+    card.appendChild(h('div', { class: 'cpf-body' },
+        names.node,
+        about.node,
+        h('div', { class: 'cpf-grid' },
+            field('Адрес', addressInp),
+            h('div', null, field('Телефон', phoneInp), h('p', { class: 'cpf-hint' }, 'У пациентов это кнопка «Позвонить».')),
+            field('Электронная почта', emailInp),
+            field('Номер лицензии', licenseInp),
+            field('Фирменный цвет', accentInp)),
         field('Логотип', h('div', null, fileInp, refs.thumbWrap)),
         // SETTINGS_SPLIT_V1 — сказано ровно один раз и там, где раньше стояли
         // переехавшие переключатели: иначе администратор, помнящий «размер
         // бумаги» на этом экране, решит, что настройка пропала.
-        h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px' } },
+        h('p', { class: 'muted', style: { fontSize: '12.5px', margin: 0 } },
             'Размер бумаги, водяной знак и подписи внизу документов настраиваются в разделе «Документы».'),
     ));
+}
+
+// CLINIC_PROFILE_V1 — «Сайт и соцсети». Хранится нормализованным (save():
+// normalizeProfile): сайт — https://…, Telegram и Instagram — @имя; вставленная
+// ссылка урезается до имени. На бланках ничего из этого не печатается (ответ
+// владельца 2026-10-10) — только API, партнёры и предпросмотр.
+const LINK_FIELDS = [
+    { key: 'website', label: 'Сайт', icon: 'Globe', ph: 'https://klinika.uz', mode: 'url',
+        hint: 'Можно без https:// — допишем сами.' },
+    { key: 'telegram_bot', label: 'Telegram-бот', icon: 'Bot', ph: '@klinika_bot',
+        hint: 'Бот для записи и вопросов пациентов. Имя заканчивается на bot.' },
+    { key: 'telegram_channel', label: 'Telegram-канал', icon: 'Send', ph: '@klinika',
+        hint: 'Новости и акции клиники.' },
+    { key: 'instagram', label: 'Instagram', icon: 'Camera', ph: '@klinika',
+        hint: 'Можно вставить ссылку — оставим только имя.' },
+];
+function buildLinksCard() {
+    refs.links = {};
+    const grid = h('div', { class: 'cpf-grid' });
+    for (const f of LINK_FIELDS) {
+        const ctrl = h('input', { type: 'text', placeholder: f.ph, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', inputmode: f.mode || null });
+        const box = labeled(f.label, ctrl, { key: f.key, hint: f.hint, prefix: Icon(f.icon, { size: 15 }) });
+        ctrl.addEventListener('input', () => { state[f.key] = ctrl.value; box.err.set(''); renderPreview(); });
+        refs.links[f.key] = box;
+        refs.errs[f.key] = box.err;
+        grid.appendChild(box.node);
+    }
+    return h('div', { class: 'card' },
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Globe', { size: 16 }), ' ', 'Сайт и соцсети')),
+        h('div', { class: 'cpf-body' },
+            h('p', { class: 'cpf-hint' }, 'Ссылки получают сайт клиники, Symptex и партнёры. На бланках они не печатаются.'),
+            grid));
 }
 
 // Push the loaded/saved `state` values into the live form controls (DOM
 // property assignment — h() only sets initial attributes at creation time).
 function applyStateToControls() {
     const c = refs.controls;
-    c.nameInp.value    = state.clinic_name || '';
+    c.names.set({ ru: state.clinic_name, uz: state.name_uz, en: state.name_en });   // CLINIC_PROFILE_V1
+    c.about.set({ ru: state.about_ru, uz: state.about_uz, en: state.about_en });
     c.addressInp.value = state.address || '';
     c.phoneInp.value   = state.phone || '';
     c.emailInp.value   = state.email || '';
     c.licenseInp.value = state.license || '';
     c.accentInp.value  = state.accent_color || '#167873';
+    for (const [k, box] of Object.entries(refs.links || {})) box.ctrl.value = state[k] || '';
     paintThumb();
+}
+
+// CLINIC_PROFILE_V1 — объяснение под каждым полем с ошибкой; поле без ошибки — чистое.
+function showProblems(problems) {
+    for (const [k, err] of Object.entries(refs.errs)) err.set(problems[k] || '');
 }
 
 // -----------------------------------------------------------------------------
@@ -246,6 +319,13 @@ function paintSaveBtn(btn, busy) {
 
 async function save() {
     const btn = refs.saveBtn;   // CLINIC_API_FIX_V1 — та же кнопка, что гасили, даже если экран перерисуют
+    // CLINIC_PROFILE_V1 — сначала привести (https://, @имя, пробелы) и проверить
+    // теми же правилами, что знает сервер (shared/clinic-profile.js). Ошибка —
+    // объяснение под полем и тост; запрос не уходит.
+    const v = normalizeProfile(state);
+    const problems = companyProblems(v, refs.geoAvailability());
+    showProblems(problems);
+    if (Object.keys(problems).length) { toast(tr('Проверьте выделенные поля.'), 'fail'); return; }
     btn.disabled = true;
     paintSaveBtn(btn, true);
     try {
@@ -254,15 +334,12 @@ async function save() {
         // намеренно: /api/db обновляет только перечисленные колонки, поэтому
         // то, что клиника ввела в них раньше, остаётся в базе нетронутым, а не
         // затирается значениями по умолчанию из отсутствующей формы.
-        const payload = {
-            clinic_name:    state.clinic_name || '',
-            address:        state.address || '',
-            phone:          state.phone || '',
-            email:          state.email || '',
-            license:        state.license || '',
-            logo_data_url:  state.logo_data_url || '',   // CLINIC_PROFILE_V1 — null отклоняет база (NOT NULL)
-            accent_color:   state.accent_color || '#167873',
-        };
+        // CLINIC_PROFILE_V1 — «эти поля» теперь COMPANY_COLUMNS; lab_scope
+        // среди них нет (его меняет только администратор, в другом месте).
+        const payload = {};
+        for (const c of COMPANY_COLUMNS) payload[c] = v[c] == null ? DEFAULTS[c] : v[c];
+        payload.logo_data_url = v.logo_data_url || '';    // null отклоняет база (NOT NULL)
+        payload.accent_color = v.accent_color || '#167873';
         const { data, error } = await supabase.from('doc_settings').update(payload).eq('id', 1).select().single();
         if (error) throw error;
         state = { ...DEFAULTS, ...(data || payload) };

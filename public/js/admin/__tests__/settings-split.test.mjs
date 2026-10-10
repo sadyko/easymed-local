@@ -132,6 +132,8 @@ const { renderSubscription } = await import('../views/subscription.js');
 const { renderClinicData } = await import('../views/clinic-data.js');
 const { renderDocumentsSettings } = await import('../views/documents-settings.js');
 const { setLicence } = await import('../licence.js');
+// CLINIC_PROFILE_V1 — колонки «Компании» — общий список экрана, /api/db и синхронизации.
+const { COMPANY_COLUMNS } = await import('../../shared/clinic-profile.js');
 
 function setUser(u) { globalThis.window.easymed.state.user = u; }
 const ADMIN = { id: 1, role: 'admin', is_admin: true, is_super_admin: false };
@@ -240,8 +242,15 @@ test('«Компания»: только сведения о клинике — 
   // экрана нарочно называет размер бумаги и водяной знак, чтобы админ знал,
   // куда они переехали.
   const nodes = walk(root);
-  assert.strictEqual(nodes.filter((n) => n.tagName === 'SELECT').length, 0, 'выбор размера бумаги — настройка шаблона, ей здесь не место');
-  assert.strictEqual(nodes.filter((n) => n.tagName === 'TEXTAREA').length, 0, 'колонтитул и юридическая сноска — тоже настройки шаблона');
+  // CLINIC_PROFILE_V1 — у экрана появились свои списки (адрес для партнёров) и
+  // многострочные поля (описание клиники), поэтому ищем именно настройки
+  // шаблона: список размеров бумаги и поля колонтитула / сноски.
+  assert.strictEqual(nodes.filter((n) => n.tagName === 'SELECT'
+    && walk(n).some((o) => o.tagName === 'OPTION' && /^(A4|A5|Letter)$/.test(textOf(o)))).length, 0,
+    'выбор размера бумаги — настройка шаблона, ей здесь не место');
+  assert.strictEqual(nodes.filter((n) => n.tagName === 'TEXTAREA'
+    && /Спасибо за визит|Электронный документ/.test(String(n.value) + textOf(n))).length, 0,
+    'колонтитул и юридическая сноска — тоже настройки шаблона');
   assert.strictEqual(nodes.filter((n) => n.tagName === 'INPUT' && n.attrs.type === 'checkbox').length, 0, 'галочки водяного знака больше нет');
   assert.doesNotMatch(text, /Medical Certificate|Patient:/, 'предпросмотр перестал изображать печатный бланк');
   assert.match(text, /настраиваются в разделе «Документы»/, 'сказано, куда они переехали');
@@ -255,9 +264,12 @@ test('«Компания»: сохранение шлёт ТОЛЬКО свои 
   await new Promise((r) => setTimeout(r, 20));
 
   assert.ok(lastDocUpdate, 'запрос на обновление ушёл');
-  assert.deepStrictEqual(Object.keys(lastDocUpdate).sort(),
-    ['accent_color', 'address', 'clinic_name', 'email', 'license', 'logo_data_url', 'phone'],
-    'ровно семь колонок компании — и ни одной колонки печатного шаблона');
+  // CLINIC_PROFILE_V1 — колонки компании теперь — профиль клиники (COMPANY_COLUMNS).
+  assert.deepStrictEqual(Object.keys(lastDocUpdate).sort(), [...COMPANY_COLUMNS].sort(),
+    'ровно колонки компании — и ни одной колонки печатного шаблона');
+  for (const c of ['paper_size', 'show_watermark', 'footer_note', 'legal_note', 'lab_scope']) {
+    assert.ok(!(c in lastDocUpdate), c + ' — не колонка компании');
+  }
   // Именно это и есть «не удалили, а перестали редактировать»: клиника,
   // однажды выбравшая A5 и водяной знак, сохраняет их после правки названия.
   assert.strictEqual(docSettingsRow.paper_size, 'A5', 'размер бумаги в базе не тронут');
