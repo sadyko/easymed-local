@@ -200,3 +200,17 @@ test('экран из кэша оболочки: каждый переход с 
   hook(null);
   await tick();
 });
+
+// CLINIC_API_STEP7_V1 (ревью №10) — ширина телефона. Поддельный DOM раскладку не
+// считает: проверено в Chrome на 360 и 320 px (страница без прокрутки вбок,
+// вкладка «Журнал» в окне); здесь сторожатся правила, которые это дают — колонка
+// сетки не шире родителя (minmax(0, 1fr)), шапка карточки переносит кнопку.
+test('телефон: сетки экрана — minmax(0, 1fr), шапки карточек переносятся', async () => {
+  const fs = await import('node:fs');
+  const css = fs.readFileSync(new URL('../../../css/admin-views.css', import.meta.url), 'utf8');
+  for (const sel of ['.apic-stack', '.apic-body', '.apic-sec']) {
+    const rule = css.match(new RegExp('\\n' + sel.replace('.', '\\.') + ' \\{([^}]*)\\}'));
+    assert.ok(rule && /grid-template-columns: minmax\(0, 1fr\)/.test(rule[1]), sel + ': колонка сетки шире родителя на телефоне');
+  }
+  assert.match(css, /\n\.apic-card \.card-header \{[^}]*flex-wrap: wrap/, 'шапка карточки не переносит «Добавить подключение»');
+});

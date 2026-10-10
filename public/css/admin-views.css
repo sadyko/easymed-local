@@ -7634,8 +7634,11 @@ table.list tr.is-off td { color: var(--ink-400); }
 .cpf-set > legend .req { color: var(--crit-500); margin-left: 2px; }
 .cpf-req-note { color: var(--warn-700); }
 .cpf-req-note:empty { display: none; }
-.apic-stack { display: grid; gap: 16px; }
-.apic-body { padding: 16px 18px; display: grid; gap: 12px; }
+/* ревью №10 — колонка сетки не шире родителя (minmax(0, 1fr)): длинное содержимое не
+   раздвигает страницу на 360 px, таблицы прокручиваются внутри своей обёртки. */
+.apic-stack { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+.apic-body { padding: 16px 18px; display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
+.apic-card .card-header { flex-wrap: wrap; row-gap: 8px; }
 .apic-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 /* ревью №2 — адрес API в поле только для чтения (secretField), замок рядом. */
 .apic-urlrow > .apic-keyfield { flex: 1 1 280px; min-width: 0; }
@@ -7666,7 +7669,7 @@ table.list tr.is-off td { color: var(--ink-400); }
 .apic-keyfield { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .apic-secret { flex: 1 1 260px; min-width: 0; font-size: 13.5px; }
 .apic-readonly { padding: 6px 10px; border-radius: 8px; background: var(--ink-50); font-size: 13.5px; }
-.apic-sec { display: grid; gap: 10px; padding: 14px 0; border-top: 1px solid var(--ink-100); }
+.apic-sec { display: grid; gap: 10px; padding: 14px 0; border-top: 1px solid var(--ink-100); grid-template-columns: minmax(0, 1fr); }
 .apic-sec:first-child { border-top: 0; padding-top: 0; }
 .apic-sec-title { margin: 0; font-size: 15px; }
 .apic-sec-sub { margin-left: 8px; font-size: 12.5px; font-weight: 400; color: var(--ink-500); }
