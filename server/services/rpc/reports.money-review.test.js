@@ -151,6 +151,22 @@ test('M3: скидка пакета у невыставленной строки
   assert.equal(fee(a), ONE / 2);
 });
 
+// SERVICES_PACKAGES_V1 — решение владельца 1 и в оплате врача: строка пакета
+// без счёта у пациента группы 30 % — доля от цены в пакете (как выставит счёт),
+// а не от «бо́льшей из пакета и группы»; до счёта = после счёта.
+test('решение 1: доля врача по невыставленной строке пакета — от цены в пакете; до счёта = после', () => {
+  const { db, line } = clinic();
+  const cat = db.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('VIP', 30, 1)").run().lastInsertRowid;
+  db.prepare('UPDATE patients SET category_id = ? WHERE id = 1').run(cat);
+  const pkg = db.prepare(`INSERT INTO service_templates (name, service_ids, discount_percent, is_package, discount_mode, discount_value)
+                          VALUES ('Осень', '[1]', 20, 1, 'percent', 20)`).run().lastInsertRowid;
+  const a = line({ pkg });
+  const fee = () => summary(db).lines.find((l) => l.kind === 'out' && l.id === a).fee;
+  assert.equal(fee(), ONE * 0.8, 'до счёта: 80 000 − налог 6 % = 75 200 × 30 % = 22 560 (а не 19 740 от «30 % группы»)');
+  createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [a] }, admin);
+  assert.equal(fee(), ONE * 0.8, 'после счёта — та же');
+});
+
 // ─── СТАЦИОНАР: I1 / I2 / I4 ─────────────────────────────────────────────────
 
 // Госпитализация 1: лечащий — врач 3 (он же admissions.doctor_id, как пишет

@@ -91,7 +91,7 @@ import { canSeeReportKey, requireReportKind } from '../report-access.js';
 // PAY_BASIS_PERFORMED_V1 — выполненная, но ещё не выставленная строка платит
 // врачу с той цены и той скидки категории, которые поставит счёт: правило
 // цены и правило скидки — у кассы, здесь только их вызов.
-import { lineUnitPrice, packageDiscountPct } from '../domain/pricing.js';
+import { lineUnitPrice, packageLineDiscount } from '../domain/pricing.js';   // SERVICES_PACKAGES_V1 — скидка пакета — записанная на строке
 // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям» группирует тем же правилом,
 // которым карточка сотрудника сохраняет специальность (старые имена → одно).
 import { specialtyGroupName } from '../../../public/js/shared/specialty-list.js';
@@ -1309,6 +1309,10 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = fal
            -- PACKAGES_V1 — пакет строки (скидка — для строки без счёта; срок и
            -- состав проверяет payLineMoney, ревью M3).
            vs.package_id                      AS package_id,
+           -- SERVICES_PACKAGES_V1 — цена услуги без скидки и цена в пакете,
+           -- записанные на строке при записи (их же берёт касса).
+           vs.package_full                    AS package_full,
+           vs.package_price                   AS package_price,
            vs.doctor_id                       AS price_doctor_id,
            ${PERF_TIER.effPct}                AS pct,
            NULL                               AS inpatient_pct,
@@ -1395,6 +1399,8 @@ function inpatientPayRows(db, { from, to, doctorId, bf, gf }) {
            ias.unit_price                     AS line_unit_price,
            NULL                               AS price_tier,
            NULL                               AS package_id,
+           NULL                               AS package_full,    -- SERVICES_PACKAGES_V1
+           NULL                               AS package_price,
            -- Счёт стационара берёт свою цену НАЗНАЧИВШЕГО (buildAdmissionInvoice).
            ias.doctor_id                      AS price_doctor_id,
            ${INPATIENT_PCT_SQL}               AS pct,
@@ -1476,7 +1482,7 @@ function foreignPayRows(db, { from, to, bf, gf }) {
            -- приехала с самой строкой счёта (записана у соседа при выдаче).
            COALESCE(s.tax_rate, ii.goods_vat_rate, 0) AS tax_rate,
            ${BILLED_COLUMNS_SQL},
-           NULL AS clinic_item_id, NULL AS line_unit_price, NULL AS price_tier, NULL AS package_id, NULL AS price_doctor_id,
+           NULL AS clinic_item_id, NULL AS line_unit_price, NULL AS price_tier, NULL AS package_id, NULL AS package_full, NULL AS package_price, NULL AS price_doctor_id,   -- SERVICES_PACKAGES_V1
            0 AS pct, NULL AS inpatient_pct, NULL AS fix, 0 AS tier_units_above,
            CASE WHEN ii.service_id IS NULL THEN 1 ELSE 0 END AS goods, 1 AS refund_keep, i.branch_id AS branch_id
       FROM invoice_items ii
@@ -1498,7 +1504,7 @@ function makePayPricer(db) {
   const svcStmt = db.prepare(`SELECT price, name, price_secondary, secondary_days_from, secondary_days_to,
                                      price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?`);
   const prodStmt = db.prepare('SELECT sale_price FROM products WHERE id = ?');
-  const pkgStmt = db.prepare('SELECT service_ids, discount_percent, valid_from, valid_until FROM service_templates WHERE id = ?');
+  const pkgStmt = db.prepare('SELECT valid_from, valid_until FROM service_templates WHERE id = ?');   // SERVICES_PACKAGES_V1 — только срок
   const units = new Map();
   let cats = null;   // id пациента → скидка категории, %; загружается один раз
   const pkgs = new Map();
@@ -1506,12 +1512,13 @@ function makePayPricer(db) {
     unit(r) {
       const tiered = r.kind === 'out';
       const key = [r.kind, r.service_id, r.clinic_item_id, r.price_doctor_id, r.price_tier,
-        r.consultation_type_id ?? '',
+        r.consultation_type_id ?? '', r.package_full ?? '', r.package_price ?? '',   // SERVICES_PACKAGES_V1
         r.service_id == null && r.clinic_item_id == null ? r.line_unit_price : ''].join('|');
       if (!units.has(key)) {
         const row = { service_id: r.service_id, clinic_item_id: r.clinic_item_id, doctor_id: r.price_doctor_id,
                       price_tier: r.price_tier, unit_price: r.line_unit_price,
-                      consultation_type_id: r.consultation_type_id ?? null };
+                      consultation_type_id: r.consultation_type_id ?? null,
+                      package_full: r.package_full ?? null, package_price: r.package_price ?? null };   // SERVICES_PACKAGES_V1
         const service = r.service_id != null ? svcStmt.get(r.service_id) || null : null;
         const product = r.clinic_item_id != null ? prodStmt.get(r.clinic_item_id) || null : null;
         units.set(key, Number(lineUnitPrice(db, row, { service, product, tiered })) || 0);
@@ -1533,12 +1540,14 @@ function makePayPricer(db) {
       }
       return cats.get(Number(patientId)) || 0;
     },
-    // Ревью M3 — скидка пакета только в его сроке (день визита) и только для
-    // услуги из пакета: то же правило, что у кассы (domain/pricing.js).
-    packagePct(r) {
-      if (r.package_id == null) return 0;
-      if (!pkgs.has(r.package_id)) pkgs.set(r.package_id, pkgStmt.get(r.package_id) || null);
-      return packageDiscountPct(pkgs.get(r.package_id), r.service_id, r.date);
+    // SERVICES_PACKAGES_V1 (было ревью M3) — скидка пакета строки: записанная
+    // на строке при записи (цена пакета окончательная), только в сроке пакета —
+    // то же правило, что у кассы (domain/pricing.js packageLineDiscount).
+    packageDiscount(r) {
+      if (r.package_price == null) return 0;
+      if (r.package_id != null && !pkgs.has(r.package_id)) pkgs.set(r.package_id, pkgStmt.get(r.package_id) || null);
+      const pkg = r.package_id != null ? pkgs.get(r.package_id) : null;
+      return packageLineDiscount({ package_id: r.package_id, package_full: r.package_full, package_price: r.package_price, quantity: r.qty }, pkg, r.date);
     },
   };
 }
@@ -1557,12 +1566,12 @@ function payLineMoney(r, pricer) {
   } else {
     const qty = Number(r.qty) || 0;
     amount = round2(pricer.unit(r) * qty);
-    const catPct = r.kind === 'out' ? pricer.categoryPct(r.patient_id) : 0;
-    // PACKAGES_V1 — строка пакета со скидкой: бо́льшая из скидки пакета и
-    // категории, не обе (ровно как create_invoice_for_visit).
-    const pkgPct = r.kind === 'out' ? pricer.packagePct(r) : 0;
-    const pct = Math.max(catPct, pkgPct);
-    discount = pct > 0 ? round2(amount * pct / 100) : 0;
+    // SERVICES_PACKAGES_V1 — строка пакета со скидкой: скидка, записанная на
+    // строке; скидка группы пациента на неё не ложится (решение владельца 1).
+    // Остальные — пол скидки группы, как create_invoice_for_visit.
+    const pkgOff = r.kind === 'out' ? pricer.packageDiscount(r) : 0;
+    const catPct = r.kind === 'out' && !(pkgOff > 0) ? pricer.categoryPct(r.patient_id) : 0;
+    discount = pkgOff > 0 ? round2(Math.min(pkgOff, amount)) : (catPct > 0 ? round2(amount * catPct / 100) : 0);
     const after = amount - discount;
     // SUPPLIERS_VAT_V1 — налог внутри цены, одно правило у товара и услуги (lineTaxOf).
     tax = lineTaxOf(r, after);

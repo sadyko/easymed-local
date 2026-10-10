@@ -209,24 +209,18 @@ export function productLineUnitPrice(row, product) {
   return product ? product.sale_price : 0;
 }
 
-// PACKAGES_V1, ревью M3 (2026-09-26) — скидка пакета, которую касса даст
-// строке визита, или 0. Правило то же, что у create_invoice_for_visit
-// (billing.js linePackage): местный день визита лежит в сроке предложения
-// [valid_from, valid_until] (границы включительно, пустая — без ограничения),
-// и услуга строки входит в пакет. Касса на нарушение ОТКАЗЫВАЕТ выставлять
-// счёт; доля врача за выполненную, но ещё не выставленную строку в этом случае
-// считается БЕЗ скидки пакета (скидку дать нельзя — значит, её и нет), а не
-// со скидкой, которую счёт никогда не поставит.
-//
-// `pkg` — строка service_templates (service_ids, discount_percent, valid_from,
-// valid_until) или null; `visitDay` — 'YYYY-MM-DD'. Чистая функция.
-export function packageDiscountPct(pkg, serviceId, visitDay) {
-  if (!pkg) return 0;
-  const day = String(visitDay || '').slice(0, 10);
-  if ((pkg.valid_from && day < pkg.valid_from) || (pkg.valid_until && day > pkg.valid_until)) return 0;
-  let ids = [];
-  try { ids = JSON.parse(pkg.service_ids || '[]'); } catch { ids = []; }
-  if (!Array.isArray(ids) || !ids.some((id) => Number(id) === Number(serviceId))) return 0;
-  const pct = Number(pkg.discount_percent);
-  return Number.isFinite(pct) ? Math.min(Math.max(pct, 0), 100) : 0;
+// SERVICES_PACKAGES_V1 (было PACKAGES_V1, ревью M3) — скидка пакета строки,
+// которую даст касса, или 0. Цена в пакете записана на строке при записи
+// (packageLineMoney); здесь — только срок: местный день визита лежит в
+// [valid_from, valid_until] (границы включительно, пустая — без ограничения).
+// Вне срока касса ОТКАЗЫВАЕТ выставлять счёт (billing.js linePackage), и доля
+// врача за выполненную, но ещё не выставленную строку считается без скидки
+// пакета, как обычная строка. Пакет удалён (package_id снят базой) — цена,
+// записанная при записи, остаётся: обещанное пациенту не отменяется.
+// `pkg` — строка service_templates или null; `visitDay` — 'YYYY-MM-DD'. Чистая функция.
+export function packageLineDiscount(row, pkg, visitDay) {
+  const m = packageLineMoney(row);
+  if (!m || !(m.discount > 0)) return 0;
+  if (row.package_id != null && pkg && packageDayState(pkg, String(visitDay || '').slice(0, 10)) !== 'active') return 0;
+  return m.discount;
 }
