@@ -7596,6 +7596,19 @@ table.list tr.is-off td { color: var(--ink-400); }
 .cpf-logo-box img { max-width: 86%; max-height: 86%; object-fit: contain; }
 .cpf-logo-box .muted { font-size: 12.5px; }
 .cpf-legacy { color: var(--warn-700); }
+/* Адрес для партнёров: три списка в ряд (на телефоне — столбцом), пары «подпись — значение». */
+.cpf-geo { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; min-width: 0; }
+.cpf-geo > * { min-width: 0; }
+.cpf-slot select { width: 100%; min-width: 0; }
+.cpf-subhead { margin: 0 0 6px; font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.cpf-kv { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 13.5px; align-items: baseline; }
+.cpf-kv dt { color: var(--ink-500); }
+.cpf-kv dd { margin: 0; min-width: 0; color: var(--ink-900); overflow-wrap: anywhere; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.cpf-mono { font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; min-width: 0; }
+@media (max-width: 420px) {
+    .cpf-kv { grid-template-columns: minmax(0, 1fr); }
+    .cpf-kv dd { margin-bottom: 4px; }
+}
 @media (max-width: 640px) {
     .cpf-body { padding: 14px 16px 16px; }
 }

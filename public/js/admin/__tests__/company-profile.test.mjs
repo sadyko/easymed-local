@@ -475,3 +475,157 @@ test('отказ хранилища с шаблоном — переведён �
     assert.equal(lastUpdate.logo_square_path, '');
     assert.equal(lastUpdate.logo_data_url, '');
 });
+
+// ===========================================================================
+// Задача 11 — адрес для партнёров и сайта (списки, улица), «Адрес в
+// документах» (вписан руками, печатается), карта и маршрут.
+// Ответ владельца 2026-10-10 (вариант B): бланки печатают поле, вписанное
+// руками; списки его не меняют; кнопки «Собрать из списков» нет.
+// ===========================================================================
+const geoSel = (root, label) => fieldInput(root, label);
+const selectedValue = (sel) => { const o = sel.options[sel.selectedIndex]; return o ? (o.attrs.value ?? '') : ''; };
+async function choose(sel, value) {
+    const opts = sel.options;
+    assert.ok(opts.some((o) => o.attrs.value === value), 'в списке нет ' + value + ': ' + opts.map((o) => o.attrs.value).join(','));
+    for (const o of opts) { o.selected = o.attrs.value === value; delete o.attrs.selected; }
+    sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+    await settle(40);
+}
+const fullAddr = (root, key) => {
+    const dd = descendants(root).find((n) => n.tagName === 'DD' && n.dataset && n.dataset.lang === key);
+    assert.ok(dd, 'нет строки полного адреса ' + key);
+    return textOf(dd);
+};
+function triError(root, label, lang) {
+    const ctrl = triInput(root, label, lang);
+    const e = descendants(ctrl._parent).find((n) => matches(n, '.cpf-err') && !n.hidden);
+    return e ? textOf(e) : '';
+}
+const routeDd = (root) => {
+    const dt = descendants(root).find((n) => n.tagName === 'DT' && labelText(n) === 'Кнопка «Маршрут»');
+    assert.ok(dt, 'нет строки «Кнопка «Маршрут»»');
+    const kids = dt._parent.children;
+    return kids[kids.indexOf(dt) + 1];
+};
+
+test('новая клиника: списки и улица — коды и полный адрес на трёх языках; «Адрес в документах» не собирается', async () => {
+    const root = await open({ address: '' });
+    assert.deepEqual(geoSel(root, 'Страна').options.map((o) => o.attrs.value), ['', 'KZ', 'UZ'], 'страны без кода не предлагаются');
+    assert.equal(selectedValue(geoSel(root, 'Страна')), 'UZ', 'страна по умолчанию — Узбекистан');
+
+    await choose(geoSel(root, 'Город / область'), 'tashkent-city');
+    await choose(geoSel(root, 'Район'), 'yunusobod');
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Амира Темура, 12');
+    type(triInput(root, 'Улица, дом', 'uz'), 'Amir Temur ko‘chasi, 12');
+
+    assert.equal(fullAddr(root, 'ru'), 'город Ташкент, Юнусабадский район, ул. Амира Темура, 12');
+    assert.equal(fullAddr(root, 'uz'), 'Toshkent shahri, Yunusobod tumani, Amir Temur ko‘chasi, 12');
+    assert.equal(fullAddr(root, 'en'), 'Tashkent city, Yunusabad district, ул. Амира Темура, 12', 'улицы на EN нет — русская');
+    assert.equal(fullAddr(root, 'codes'), 'UZ · tashkent-city · yunusobod');
+    assert.equal(fieldInput(root, 'Адрес в документах').value, '', 'списки в адрес для бланка ничего не собирают');
+
+    await save(root);
+    assert.ok(lastUpdate, 'запрос на сохранение не ушёл');
+    assert.equal(lastUpdate.country_code, 'UZ');
+    assert.equal(lastUpdate.region_code, 'tashkent-city');
+    assert.equal(lastUpdate.district_code, 'yunusobod');
+    assert.equal(lastUpdate.street_ru, 'ул. Амира Темура, 12');
+    assert.equal(lastUpdate.street_uz, 'Amir Temur ko‘chasi, 12');
+    assert.equal(lastUpdate.street_en, '');
+    assert.equal(lastUpdate.address, '', 'адрес для бланка — только то, что вписано руками');
+    assert.ok(!('address_manual' in lastUpdate), 'отметки «вписан вручную» нет');
+});
+
+test('сохранённые коды выбраны в списках после открытия; повторное сохранение их не теряет', async () => {
+    const root = await open({ country_code: 'UZ', region_code: 'tashkent-city', district_code: 'yunusobod', street_ru: 'ул. Мира 1' });
+    assert.equal(selectedValue(geoSel(root, 'Страна')), 'UZ');
+    assert.equal(selectedValue(geoSel(root, 'Город / область')), 'tashkent-city');
+    assert.equal(selectedValue(geoSel(root, 'Район')), 'yunusobod');
+    assert.deepEqual(geoSel(root, 'Район').options.map((o) => o.attrs.value), ['', 'yunusobod'], 'районы без кода не предлагаются');
+    assert.equal(fullAddr(root, 'ru'), 'город Ташкент, Юнусабадский район, ул. Мира 1');
+    assert.equal(triInput(root, 'Улица, дом', 'ru').value, 'ул. Мира 1');
+    await save(root);
+    assert.equal(lastUpdate.region_code, 'tashkent-city');
+    assert.equal(lastUpdate.district_code, 'yunusobod');
+    assert.equal(lastUpdate.street_ru, 'ул. Мира 1');
+});
+
+test('прежняя клиника без кодов: сохранение без правок проходит, адрес для бланка — как был', async () => {
+    const root = await open();
+    assert.equal(fieldInput(root, 'Адрес в документах').value, 'Ташкент, ул. Мира 1');
+    await save(root);
+    assert.ok(lastUpdate, 'пустой адрес для партнёров не должен останавливать сохранение');
+    assert.equal(lastUpdate.address, 'Ташкент, ул. Мира 1');
+    assert.equal(lastUpdate.region_code, '');
+    assert.equal(lastUpdate.district_code, '');
+    assert.equal(lastUpdate.street_ru, '');
+});
+
+test('«Адрес в документах» и адрес для партнёров независимы; «Собрать из списков» нет', async () => {
+    const root = await open();
+    type(fieldInput(root, 'Адрес в документах'), 'Ташкент, Юнусабад-4');
+    assert.equal(fullAddr(root, 'ru'), '—', 'вписанный адрес для бланка не идёт партнёрам');
+
+    await choose(geoSel(root, 'Город / область'), 'tashkent-city');
+    await choose(geoSel(root, 'Район'), 'yunusobod');
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Амира Темура, 12');
+    assert.equal(fieldInput(root, 'Адрес в документах').value, 'Ташкент, Юнусабад-4', 'списки не переписали адрес для бланка');
+    assert.equal(buttonByText(root, /Собрать из списков/), null);
+    assert.doesNotMatch(textOf(root), /Вписан вручную/);
+
+    await save(root);
+    assert.equal(lastUpdate.address, 'Ташкент, Юнусабад-4');
+    assert.equal(lastUpdate.street_ru, 'ул. Амира Темура, 12');
+});
+
+test('начатый адрес доводится до конца: город / область, район, улица RU', async () => {
+    const root = await open();
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Мира 1');
+    await save(root);
+    assert.equal(lastUpdate, null, 'адрес без города не должен уйти партнёрам');
+    assert.equal(fieldError(root, 'Город / область'), 'Выберите город или область.');
+
+    await choose(geoSel(root, 'Город / область'), 'tashkent-city');
+    assert.equal(fieldError(root, 'Город / область'), '', 'выбранный город снимает ошибку');
+    await save(root);
+    assert.equal(lastUpdate, null);
+    assert.equal(fieldError(root, 'Район'), 'Выберите район из списка.');
+
+    await choose(geoSel(root, 'Район'), 'yunusobod');
+    type(triInput(root, 'Улица, дом', 'ru'), '');
+    type(triInput(root, 'Улица, дом', 'uz'), 'Tinchlik ko‘chasi, 1');
+    await save(root);
+    assert.equal(lastUpdate, null);
+    assert.equal(triError(root, 'Улица, дом', 'ru'), 'Впишите улицу и дом на русском.');
+
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Мира 1');
+    await save(root);
+    assert.ok(lastUpdate, 'полный адрес сохраняется');
+    assert.equal(lastUpdate.district_code, 'yunusobod');
+});
+
+test('карта: не Яндекс — объяснение и запроса нет; Яндекс с координатами — маршрут «от меня»', async () => {
+    const root = await open();
+    assert.match(textOf(routeDd(root)), /Появится, когда будет ссылка на карту/);
+    const maps = fieldInput(root, 'Ссылка на клинику в Яндекс Картах');
+    type(maps, 'https://maps.google.com/x');
+    assert.match(textOf(routeDd(root)), /Появится, когда будет ссылка на карту/, 'по чужой ссылке маршрут не обещаем');
+    await save(root);
+    assert.equal(lastUpdate, null);
+    assert.match(fieldError(root, 'Ссылка на клинику в Яндекс Картах'), /Нужна ссылка из Яндекс Карт/);
+
+    const url = 'https://yandex.uz/maps/?ll=69.24%2C41.29&pt=69.24,41.29';
+    type(maps, url);
+    assert.equal(fieldError(root, 'Ссылка на клинику в Яндекс Картах'), '');
+    const route = 'https://yandex.uz/maps/?rtext=~41.29,69.24&rtt=auto';
+    const dd = routeDd(root);
+    assert.ok(textOf(dd).includes(route), 'строка маршрута: ' + textOf(dd));
+    const a = descendants(dd).find((n) => n.tagName === 'A');
+    assert.ok(a, 'нет ссылки «Открыть маршрут»');
+    assert.match(labelText(a), /Открыть маршрут/);
+    assert.equal(a.attrs.href, route);
+    assert.equal(a.attrs.target, '_blank');
+    assert.match(a.attrs.rel, /noopener/);
+    await save(root);
+    assert.equal(lastUpdate.maps_url, url);
+});

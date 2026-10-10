@@ -32,11 +32,14 @@
 //
 // CLINIC_PROFILE_V1 (2026-10-10, шаг 3 API клиники) — «Компания» стала
 // профилем клиники для сайта, Symptex и партнёров: названия и описание на
-// трёх языках, сайт, Telegram и Instagram. Документы печатают то же, что
-// печатали: RU-название (clinic_name) и адрес, вписанный руками (address);
-// сайт на бланках не печатается (ответы владельца 2026-10-10). Колонки,
-// проверки и нормализация — общие с /api/db и синхронизацией зданий
-// (shared/clinic-profile.js); поля на трёх языках — company-fields.js.
+// трёх языках, сайт, Telegram и Instagram (здесь), адрес для партнёров и
+// сайта списками справочника, карта и маршрут (company-address.js), два
+// логотипа (company-logos.js). Документы печатают то же, что печатали:
+// RU-название (clinic_name) и «Адрес в документах» (address), вписанный
+// руками, — списки его не меняют; сайт на бланках не печатается (ответы
+// владельца 2026-10-10). Колонки, проверки и нормализация — общие с /api/db и
+// синхронизацией зданий (shared/clinic-profile.js); поля на трёх языках —
+// company-fields.js.
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field } from '../ui.js';
@@ -48,6 +51,7 @@ import { refreshClinicBrand } from '../clinic-context.js?v=localclinic2';
 import { COMPANY_COLUMNS, NAME_MAX, ABOUT_MAX, normalizeProfile, companyProblems } from '../../shared/clinic-profile.js';
 import { triGroup, labeled } from './company-fields.js';
 import { logosCard } from './company-logos.js';
+import { addressCard, mapCard } from './company-address.js';
 
 // SETTINGS_SPLIT_V1 — paper_size/show_watermark/footer_note/legal_note остались
 // в таблице, но не в этом объекте: DEFAULTS описывает то, чем управляет ЭТОТ
@@ -66,8 +70,8 @@ function setState(values) {
     Object.assign(state, DEFAULTS, values || {});
 }
 const refs = { container: null, previewEl: null, saveBtn: null, errNote: null, controls: null,
-    // CLINIC_PROFILE_V1 — строки ошибок по колонкам; доступность списков адреса (задача 11).
-    errs: {}, geoAvailability: () => ({}), logos: null };
+    // CLINIC_PROFILE_V1 — строки ошибок по колонкам; доступность списков адреса.
+    errs: {}, geoAvailability: () => ({}), logos: null, address: null, map: null };
 
 export async function renderDocumentsSettings(container, { onNavigate } = {}) {
     refs.container = container;
@@ -97,6 +101,13 @@ function mount(onNavigate) {
     // CLINIC_PROFILE_V1 — два логотипа (company-logos.js); прежний логотип
     // «Реквизитов» ушёл в квадратную плитку.
     refs.logos = logosCard(state, { onChange: () => renderPreview() });
+    // CLINIC_PROFILE_V1 — адрес для партнёров и сайта (списки справочника,
+    // улица RU / UZ / EN) и карта с маршрутом — company-address.js. Адрес на
+    // бланках — «Адрес в документах» в «Реквизитах»: списки его не меняют.
+    refs.address = addressCard(state, { onChange: () => renderPreview() });
+    refs.map = mapCard(state, { onChange: () => renderPreview() });
+    Object.assign(refs.errs, refs.address.errs, { maps_url: refs.map.err });
+    refs.geoAvailability = () => refs.address.availability();
 
     refs.previewEl = h('div');
     const previewCard = h('div', { class: 'card' },
@@ -119,7 +130,7 @@ function mount(onNavigate) {
         // правой колонки на широком экране держит CSS (.cpf-side).
         h('div', { class: 'row', style: { gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' } },
             h('div', { class: 'col cpf-main', style: { minWidth: 'min(320px, 100%)', flex: '3 1 480px' } },
-                h('div', { class: 'cpf-stack' }, formCard, refs.logos.node, linksCard)),
+                h('div', { class: 'cpf-stack' }, formCard, refs.address.node, refs.logos.node, linksCard, refs.map.node)),
             h('div', { class: 'col cpf-side', style: { minWidth: 'min(320px, 100%)', flex: '1 1 320px' } },
                 h('div', { class: 'cpf-stack' }, previewCard)),
         ),
@@ -146,7 +157,14 @@ function buildForm(card) {
         hint: 'Два-три предложения: чем клиника занимается. Партнёры показывают это под названием.',
         onInput: (l, v) => { state['about_' + l] = v; renderPreview(); },
     });
-    const addressInp = h('input', { type: 'text', oninput: onText('address') });
+    // CLINIC_PROFILE_V1 — адрес, который ПЕЧАТАЕТСЯ: вписан руками, как
+    // сегодня (ответ владельца 2026-10-10, вариант B). Списки «Адреса для
+    // партнёров и сайта» его не трогают — подпись говорит это прямо.
+    const addressInp = h('input', { type: 'text', autocomplete: 'off', oninput: onText('address') });
+    const addressBox = labeled('Адрес в документах', addressInp, {
+        key: 'address',
+        hint: 'Так адрес печатается на бланках — впишите его так, как он должен стоять в документах. Адрес для партнёров и сайта выбирается ниже, из списков.',
+    });
     // PHONE_INPUT_V1 — country control; read its .value (not e.target.value,
     // which would be the raw inner field including a bare «+998»).
     const phoneInp   = phoneInput('phone', '+998 71 200 12 00');
@@ -164,8 +182,8 @@ function buildForm(card) {
     card.appendChild(h('div', { class: 'cpf-body' },
         names.node,
         about.node,
+        addressBox.node,
         h('div', { class: 'cpf-grid' },
-            field('Адрес', addressInp),
             h('div', null, field('Телефон', phoneInp), h('p', { class: 'cpf-hint' }, 'У пациентов это кнопка «Позвонить».')),
             field('Электронная почта', emailInp),
             field('Номер лицензии', licenseInp),
@@ -223,6 +241,8 @@ function applyStateToControls() {
     c.accentInp.value  = state.accent_color || '#167873';
     for (const [k, box] of Object.entries(refs.links || {})) box.ctrl.value = state[k] || '';
     if (refs.logos) refs.logos.paint();   // CLINIC_PROFILE_V1 — плитки логотипов по загруженной строке
+    if (refs.address) refs.address.paint();   // улица и полный адрес (коды — load())
+    if (refs.map) refs.map.load();
 }
 
 // CLINIC_PROFILE_V1 — объяснение под каждым полем с ошибкой; поле без ошибки — чистое.
@@ -254,6 +274,9 @@ async function load() {
         if (refs.errNote) refs.errNote.style.display = '';
     }
     applyStateToControls();
+    // CLINIC_PROFILE_V1 — списки адреса грузятся один раз, уже с сохранёнными
+    // кодами: каскад выбирает их только из пресета, заданного до прихода списков.
+    if (refs.address) refs.address.load();
     renderPreview();
 }
 
