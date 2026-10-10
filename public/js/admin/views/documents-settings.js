@@ -50,6 +50,7 @@ import { refreshClinicBrand } from '../clinic-context.js?v=localclinic2';
 // CLINIC_PROFILE_V1 — профиль клиники: колонки и проверки; поля на трёх языках.
 import { COMPANY_COLUMNS, NAME_MAX, ABOUT_MAX, normalizeProfile, companyProblems } from '../../shared/clinic-profile.js';
 import { COMPANY_PRINT, COMPANY_PARTNER } from '../../shared/clinic-profile.js';   // BRANCH_PROFILE_V1 — филиал сохраняет только своё для документов
+import { PHONE_MAX } from '../../shared/branch-profile.js';   // BRANCH_PROFILE_V1 (ревью шага 4, #3) — тот же предел, что у сервера
 import { triGroup, labeled } from './company-fields.js';
 import { logosCard } from './company-logos.js';
 import { addressCard, mapCard } from './company-address.js';
@@ -270,6 +271,7 @@ function buildForm(card) {
     // PHONE_INPUT_V1 — country control; read its .value (not e.target.value,
     // which would be the raw inner field including a bare «+998»).
     const phoneInp   = phoneInput('phone', '+998 71 200 12 00');
+    phoneInp.input.setAttribute('maxlength', String(PHONE_MAX));   // BRANCH_PROFILE_V1 (ревью шага 4, #3) — предел виден полю, а не только серверу
     phoneInp.addEventListener('input', () => { state.phone = phoneInp.value; renderPreview(); });
     const emailInp   = h('input', { type: 'text', oninput: onText('email') });
     const licenseInp = h('input', { type: 'text', oninput: onText('license'), disabled: secondary });   // CLINIC_PROFILE_V1 — филиал: из главного здания

@@ -22,7 +22,7 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 import { triGroup, labeled } from './company-fields.js';
 import { addressCard, mapCard } from './company-address.js';   // те же карточки, что «Компания»
 import { NAME_MAX } from '../../shared/clinic-profile.js';
-import { BRANCH_EDIT_COLUMNS, OWN_FROM_COMPANY, BRANCH_MESSAGES, LANDMARK_MAX, normalizeBranch, branchProblems, overlayOwnBuilding } from '../../shared/branch-profile.js';
+import { BRANCH_EDIT_COLUMNS, OWN_FROM_COMPANY, BRANCH_MESSAGES, LANDMARK_MAX, PHONE_MAX, normalizeBranch, branchProblems, overlayOwnBuilding } from '../../shared/branch-profile.js';
 import { readBranchHours, writeBranchHours, hoursProblem } from '../../shared/branch-hours.js';
 import { hoursCard, DAY_LABEL } from './branch-hours-card.js';   // задача 14 — часы и предупреждение о врачах
 
@@ -89,6 +89,7 @@ export async function renderBranchPage(container, opts = {}) {
 
     // ---- телефон для пациентов ----
     const phone = phoneInput('phone', '+998 71 200 12 00', { value: state.phone });
+    phone.input.setAttribute('maxlength', String(PHONE_MAX));   // ревью шага 4, #3 — предел виден полю, а не только серверу
     phone.disabled = lockCompany;
     const phoneBox = labeled('Телефон для пациентов', phone, { key: 'bphone', hint: 'У пациентов это кнопка «Позвонить».' });
     // Подпись — к самому полю ввода, а не к обёртке с флажком страны.

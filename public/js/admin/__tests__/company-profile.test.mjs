@@ -929,6 +929,16 @@ test('филиал: строка «Филиалов» не прочиталас�
     } finally { ownBranchRow = null; delete globalThis.window.CLINIC.own_branch_id; }
 });
 
+// BRANCH_PROFILE_V1 (ревью шага 4, #3) — предел длины телефона виден полю, а не только серверу (400).
+test('телефон «Компании» — предел длины PHONE_MAX в поле, в главном здании и в филиале', async () => {
+    const { PHONE_MAX } = await import('../../shared/branch-profile.js');
+    for (const role of ['main', 'secondary']) {
+        const root = await openAs(role, {});
+        const phone = descendants(fieldBox(root, 'Телефон')).find((n) => n.tagName === 'INPUT');
+        assert.equal(phone.attrs.maxlength, String(PHONE_MAX), role);
+    }
+});
+
 test('главное здание: адрес для партнёров — свой, правится; «Филиалы» не читаются', async () => {
     ownBranchRow = { id: 1, street_ru: 'не отсюда' };
     globalThis.window.CLINIC.own_branch_id = 1;

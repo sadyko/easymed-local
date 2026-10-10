@@ -320,7 +320,7 @@ test('адрес: свой заголовок, подсказка, замок, �
 // Задачи 12–14 — страница здания.
 // ===========================================================================
 const { renderBranchPage } = await import('../views/branch-page.js');
-const { BRANCH_MESSAGES, BRANCH_PROFILE_COLUMNS } = await import('../../shared/branch-profile.js');
+const { BRANCH_MESSAGES, BRANCH_PROFILE_COLUMNS, PHONE_MAX } = await import('../../shared/branch-profile.js');
 async function openPage(row, opts = {}) {
     branchRows = row ? [{ ...BLANK_ROW, ...row }] : [];
     writes = []; impactCalls = []; impactReply = { data: { doctors: [] } };
@@ -379,6 +379,8 @@ test('телефон для пациентов и «Работает»', async (
     const ph = fieldInput(root, 'Телефон для пациентов');
     const label = fieldBox(root, 'Телефон для пациентов').children.find((c) => c.tagName === 'LABEL');
     assert.equal(label.attrs.for, ph.attrs.id, 'подпись связана с самим полем ввода (читалка экрана)');
+    // Ревью шага 4, #3 — предел длины телефона (PHONE_MAX) виден полю, а не только серверу (400).
+    assert.equal(ph.attrs.maxlength, String(PHONE_MAX));
     ph.value = '+998 90 111 22 33';   // phoneInput читается при сохранении
     const act = fieldInput(root, 'Работает');
     act.checked = false; act.dispatchEvent({ type: 'change', target: act });
@@ -701,9 +703,11 @@ test('новый филиал с часами — без проверки (вр�
 test('подсказка часов: ограничивают тех, у кого выбрано это здание — врачей и других исполнителей; без здания — нет (ответ владельца 2026-10-10)', async () => {
     const { root } = await openPage({ id: 5, name: 'Юнусабад' });
     const t = labelText(hoursCardNode(root));
-    assert.match(t, /врачей и других исполнителей услуг/);
+    // Ревью шага 4, после 7e43f859 — каждый, к кому можно записать: врачи, медсёстры, другие исполнители.
+    assert.match(t, /каждого сотрудника, к которому можно записать пациента, — врачей, медсестёр и других исполнителей/);
     assert.match(t, /Сотрудников без выбранного здания они не ограничивают/);
-    assert.doesNotMatch(t, /ограничивают только врачей/, 'ограничиваются не только врачи (ревью шага 4, находка 4)');
+    assert.match(t, /Врачи, медсёстры и другие исполнители этого здания принимают по своему графику/, '«Не ограничивать» — тоже не только врачи');
+    assert.doesNotMatch(t, /ограничивают только врачей|^Врачи этого здания/, 'ограничиваются не только врачи (ревью шага 4, находка 4)');
 });
 
 test('филиал: часы только видны — переключатели и сетка выключены', async () => {
@@ -965,6 +969,52 @@ test('ревью 4: исполнитель услуг (не врач) — в п�
     assert.match(t, /Медсестра Н\. \(Медсестра\) — Сб 09:00–13:00/);
     assert.match(t, /Каримов Р\. — Сб 09:00–18:00/, 'у врача роль не дописывается');
     assert.doesNotMatch(t, /Каримов Р\. \(/);
+});
+
+// После 7e43f859 сервер отдаёт role: 'doctor', роль исполнителя процедур
+// ('nurse', 'senior_nurse', 'head_doctor') или users.role исполнителя по ставкам
+// (любая основная роль). Каждая — подписью; незнакомая и пустая — общим
+// «Исполнитель», никогда не сырым ключом.
+test('ревью 4: подпись роли — у каждого значения сервера; незнакомая и пустая — «Исполнитель», не ключ', async () => {
+    const roles = [['nurse', 'Медсестра'], ['senior_nurse', 'Старшая медсестра'], ['head_doctor', 'Главный врач'], ['lab', 'Лаборант'],
+        ['registrar', 'Регистратор'], ['cashier', 'Кассир'], ['admin', 'Администратор'], ['inventory', 'Склад'],
+        ['callcenter', 'Оператор колл-центра'], ['head_cashier', 'Старший кассир'], ['masseur_x', 'Исполнитель'], ['', 'Исполнитель']];
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    impactReply = { data: { doctors: [
+        { id: 1, name: 'Врач Д.', role: 'doctor', lost: [{ day: 'sun', from: '09:00', to: '18:00' }] },
+        ...roles.map(([role], i) => ({ id: 100 + i, name: 'Сотрудник ' + i, role, lost: [{ day: 'sun', from: '09:00', to: '18:00' }] })),
+    ] } };
+    await pickMode(root, 'По дням недели');
+    await save(root);
+    const panel = descendants(root).find((n) => matches(n, '.brf-impact'));
+    const lines = descendants(panel).filter((n) => n.tagName === 'LI').map(labelText);
+    assert.equal(lines[0], 'Врач Д. — Вс 09:00–18:00', 'врач — без подписи роли');
+    roles.forEach(([role, label], i) => assert.equal(lines[i + 1], 'Сотрудник ' + i + ' (' + label + ') — Вс 09:00–18:00', 'роль «' + role + '»'));
+    assert.doesNotMatch(labelText(panel), /masseur_x|senior_nurse|head_doctor|\(\)/, 'сырых ключей и пустых скобок нет');
+    // Ответ сервера старше 7e43f859 — без role: это врачи, как раньше.
+    impactReply = { data: { doctors: [{ id: 8, name: 'Каримов Р.', lost: [{ day: 'sun', from: '09:00', to: '18:00' }] }] } };
+    buttonByText(root, /Вернуться к часам/).click(); await settle(30);
+    await save(root);
+    assert.match(labelText(descendants(root).find((n) => matches(n, '.brf-impact'))), /Эти врачи потеряют часы приёма.*Каримов Р\. — Вс/);
+});
+
+test('ревью 4: на узбекском и английском подпись роли переведена', async () => {
+    const { setLang } = await import('../i18n.js');
+    for (const [lang, want] of [['uz', /Hamshira/], ['en', /Nurse/]]) {
+        setLang(lang);
+        try {
+            const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+            impactReply = { data: { doctors: [{ id: 12, name: 'N.', role: 'nurse', lost: [{ day: 'sat', from: '09:00', to: '13:00' }] },
+                { id: 13, name: 'X.', role: 'unknown_role', lost: [{ day: 'sat', from: '09:00', to: '13:00' }] }] } };
+            const week = descendants(root).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'radio' && n.attrs.value === 'week');
+            week.checked = true; week.dispatchEvent({ type: 'change', target: week }); await settle(10);
+            const btn = buttons(root).find((b) => b.className.includes('btn-primary'));
+            btn.click(); await settle(60);
+            const t = labelText(descendants(root).find((n) => matches(n, '.brf-impact')));
+            assert.match(t, want);
+            assert.doesNotMatch(t, /unknown_role|[А-Яа-яЁё]/, lang + ': без кириллицы и сырого ключа');
+        } finally { setLang('ru'); }
+    }
 });
 
 test('ревью 8: ошибка только в часах — экран ведёт к ней: прокрутка и фокус в карточке часов', async () => {
