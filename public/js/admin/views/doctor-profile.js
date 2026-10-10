@@ -10,7 +10,7 @@ import { uploadFile } from '../storage.js';
 // RPC_PORT_V1 — офлайн каталог специальностей из медкора (gw) недоступен:
 // выбор идёт из того же канонического списка, по которому сервер проверяет слаг.
 import { SPECIALTY_ROWS, canonicalSpecialty, sortByShownLabel } from '../../shared/specialty-list.js';   // REFERENCE_LISTS_V1 — sortByShownLabel
-import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, experienceYears, readLanguages, shownPracticeSince } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1
+import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1
 // PATIENT_PHOTO_V1 — те же правила и то же уменьшение, что в окне заведения
 // пациента: один набор на оба виджета фото и на сервер.
 import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
@@ -208,13 +208,24 @@ export async function renderDoctorProfile(container, doctorId) {
     sinceInp.value = shownSince == null ? '' : String(shownSince);
     scalarInputs.practice_since = sinceInp;
     const sinceHint = h('div', { class: 'docprof-hint' });
-    const paintSince = () => {
-        const y = sinceInp.value === '' ? null : experienceYears(Number(sinceInp.value));
-        sinceHint.textContent = y == null ? '' : trf('Стаж на сайте, лет: {n}.', { n: y });
+    // DOCTOR_PROFILE_V1 (ревью шага 5, №9) — год проверяется здесь, до сервера, тем же
+    // правилом, что карточка сотрудника (cleanPracticeSince): отказ — под полем, а не
+    // тостом сервера; подсказка стажа — только у годного года («12» по старой
+    // привычке «Стаж (лет)» давал «Стаж на сайте, лет: 2014.»).
+    const sinceErr = h('div', { class: 'cpf-err', role: 'alert' });
+    sinceErr.hidden = true;
+    const sayYear = (msg) => {
+        sinceErr.textContent = msg ? tr(msg) : '';
+        sinceErr.hidden = !msg;
+        if (msg) sinceInp.setAttribute('aria-invalid', 'true'); else sinceInp.removeAttribute('aria-invalid');
     };
-    sinceInp.addEventListener('input', paintSince);
+    const paintSince = () => {
+        const c = cleanPracticeSince(sinceInp.value.trim());
+        sinceHint.textContent = c.problem || c.value == null ? '' : trf('Стаж на сайте, лет: {n}.', { n: experienceYears(c.value) });
+    };
+    sinceInp.addEventListener('input', () => { sayYear(''); paintSince(); });
     paintSince();
-    idFields.appendChild(h('div', { class: 'field' }, h('label', null, 'Работает врачом с'), sinceInp, sinceHint));
+    idFields.appendChild(h('div', { class: 'field' }, h('label', null, 'Работает врачом с'), sinceInp, sinceHint, sinceErr));
     // DOCTOR_PROFILE_V1 — языки приёма (макет «Публичный профиль»): хотя бы один.
     st.languages = readLanguages(st.user.languages);
     const langBox = h('div', { class: 'dpp-langs', role: 'group', 'aria-label': 'Языки приёма' });
@@ -284,6 +295,13 @@ export async function renderDoctorProfile(container, doctorId) {
         // CLINIC_API_FIX_V1 — кнопка выключена; нажатие, которое всё же дошло,
         // не загружает фото и не зовёт сервер.
         if (managed) { toast(MANAGED_NOTE, 'fail'); return; }
+        // DOCTOR_PROFILE_V1 (ревью шага 5, №9) — изменённый год — проверка до сервера:
+        // сервер отказал бы всему сохранению (и биографии тоже).
+        const yrsNow = sinceInp.value.trim();
+        if ((yrsNow === '' ? null : Number(yrsNow)) !== atOpen.p.practice_since) {
+            const c = cleanPracticeSince(yrsNow);
+            if (c.problem) { sayYear(c.problem); sinceInp.focus(); toast(c.problem, 'fail'); return; }
+        }
         saveBtn.disabled = true;
         saveBtn.textContent = tr('Сохранение…');
         try {

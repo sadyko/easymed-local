@@ -555,3 +555,33 @@ test('DOCTOR_PROFILE_V1: последний язык не снимается', a
     await s.save();
     assert.equal(rpcCalls.length, 0);
 });
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №9) — «Работает врачом с» проверяется до
+// сервера, как в карточке сотрудника: «12» по старой привычке «Стаж (лет)» не
+// уходит, отказ — под полем (aria-invalid, курсор в поле), подсказка «Стаж на
+// сайте» при неверном годе не врёт. Исправили — отказ гаснет, профиль уходит.
+test('DOCTOR_PROFILE_V1: «Мой профиль» — неверный год «Работает врачом с» не уходит, отказ под полем', async () => {
+    const YEAR = new Date().getFullYear();
+    const MSG = 'Год начала работы врачом — от 1940 до текущего года.';
+    const s = await openProfile();
+    const since = tagsOf(s.container, 'input').find((i) => i.attrs.type === 'number' && i.attrs.min === '1940');
+    let focused = false;
+    since.focus = () => { focused = true; };
+    since.value = '12';
+    since.dispatchEvent({ type: 'input' });
+    assert.ok(!s.container.textContent.includes('Стаж на сайте, лет:'), 'подсказка стажа при неверном годе: ' + s.container.textContent.match(/Стаж на сайте[^.]*\./));
+    await s.save();
+    assert.equal(rpcCalls.length, 0, 'неверный год ушёл на сервер');
+    assert.ok(s.container.textContent.includes(MSG), 'нет отказа под полем');
+    assert.equal(since.attrs['aria-invalid'], 'true');
+    assert.ok(focused, 'курсор не в поле года');
+    since.value = String(YEAR - 12);
+    since.dispatchEvent({ type: 'input' });
+    assert.ok(!s.container.textContent.includes(MSG), 'отказ остался после исправления');
+    assert.ok(!('aria-invalid' in since.attrs));
+    assert.ok(s.container.textContent.includes('Стаж на сайте, лет: 12.'));
+    since.value = String(YEAR - 13);
+    await s.save();
+    assert.equal(rpcCalls.length, 1);
+    assert.deepEqual(rpcCalls[0].p, { practice_since: YEAR - 13 });
+});
