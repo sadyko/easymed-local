@@ -410,7 +410,7 @@ export function openServicePickerModal({
         state.types    = types || [];
         state.services = services || [];
         state.doctors  = (doctors || []).filter(u =>
-            u.is_doctor === true || isOn(u.is_doctor) || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').length > 0   // ADMIN_DOCTOR_LIST_V1
+            isOn(u.is_doctor) || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').length > 0   // ADMIN_DOCTOR_LIST_V1; DOCTOR_PROFILE_V1 — флаг из базы числом 1 (isOn понимает и true)
         );
         if (state.doctors.length === 0) state.doctors = doctors || [];
         // SERVICE_NURSE_PROVIDER_V1 — performer pool incl. nurses (assigned via service_rates);

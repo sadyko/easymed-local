@@ -35,8 +35,11 @@ const procSrc   = fs.readFileSync(path.join(HERE, 'procedures.js'), 'utf8');
 const pickerSrc = fs.readFileSync(path.join(HERE, 'service-picker-modal.js'), 'utf8');
 
 test('инвариант ADMIN_DOCTOR_LIST_V1: список врачей проверяет is_doctor, а не только role', () => {
-  assert.match(pickerSrc, /u\.is_doctor === true \|\| \(u\.role \|\| ''\)\.toLowerCase\(\) === 'doctor'/,
-    'фильтр врачей обязан начинаться с флага is_doctor');
+  // DOCTOR_PROFILE_V1 (задача 12) — база отдаёт флаг числом 1, и `=== true` его не
+  // видел: врач-администратор без специальности выпадал из окна записи. Фильтр
+  // начинается с флага, прочитанного 0/1-безопасно (isOn), и только потом — роль.
+  assert.match(pickerSrc, /\.filter\(u =>\s*isOn\(u\.is_doctor\) \|\| \(u\.role \|\| ''\)\.toLowerCase\(\) === 'doctor'/,
+    'фильтр врачей обязан начинаться с флага is_doctor, прочитанного isOn (база отдаёт 1), — до роли');
   // Предикат исполнителя — тот же инвариант: сначала флаг, потом роль.
   assert.match(pickerSrc, /function isProcedurePerformer\(u\) \{[\s\S]{0,200}?u\.is_doctor === true/,
     'isProcedurePerformer обязан спрашивать is_doctor');
