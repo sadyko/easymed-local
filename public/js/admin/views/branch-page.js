@@ -75,6 +75,7 @@ export async function renderBranchPage(container, opts = {}) {
     const {
         row = null, company = null, own = false, readOnly = false, secondary = false,
         onDone = null, onBack = null, onNavigate = null,
+        registerLeave = null,   // CLINIC_API_STEP7_V1 (ревью слияния №4) — уход извне через ту же защиту
     } = opts;
     const isNew = !row || !row.id;
     const lockAll = readOnly || secondary;    // филиал или «Просмотр» — только видно
@@ -287,6 +288,10 @@ export async function renderBranchPage(container, opts = {}) {
         if (asking) hoursUi.clearImpact();
         go();
     };
+    // CLINIC_API_STEP7_V1 (ревью слияния №4) — уход, который начинает не страница
+    // («Открыть «Филиалы»» из окна подключения в хаб из кэша), идёт через ту же
+    // защиту несохранённого.
+    if (typeof registerLeave === 'function') registerLeave(leave);
     const back = h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' },
         onclick: () => leave(() => { if (typeof onBack === 'function') onBack(); }) },
         Icon('ChevronLeft', { size: 14 }), ' ', 'К списку филиалов');

@@ -863,7 +863,7 @@ test('прежний облачный адрес #settings:branches ведёт �
     const legacy = shell.slice(shell.indexOf('const LEGACY_ROUTES = {'), shell.indexOf('function navigate('));
     assert.match(legacy, /'settings:branches':\s*\{\s*view:\s*'settings'\s*\}/);
     const hub = fs.readFileSync(new URL('../views/settings-hub.js', import.meta.url), 'utf8');
-    assert.match(hub, /state\.section === 'branches'\) await renderBranchesEditor\(/);
+    assert.match(hub, /state\.section === 'branches'\) (?:refs\.branches = )?await renderBranchesEditor\(/);   // CLINIC_API_STEP7_V1 (ревью слияния №4) — refs.branches: «к списку» через защиту страницы
     const lookup = hub.slice(hub.indexOf('const LOOKUP_CONFIG = {'));
     assert.doesNotMatch(lookup.slice(0, lookup.indexOf('\n};')), /\n    branches: \{/);
 });
@@ -1157,4 +1157,41 @@ test('флаг устарел (выключен): отказ сервера part
             assert.deepEqual(stars(root), [true, true], 'звёздочки не появились');
         } finally { globalThis.fetch = realFetch; }
     });
+});
+
+// CLINIC_API_STEP7_V1 (ревью слияния №4) — «Открыть «Филиалы»» из окна подключения,
+// когда хаб в кэше оболочки уже на странице здания с несохранённым адресом: переход
+// идёт через ту же защиту, что «К списку филиалов», — спрашивает; отказ — страница с
+// правками остаётся; согласие или страница без правок — список. Из списка — без вопроса.
+test('кэшированный хаб на странице здания с несохранённым: переход в «Филиалы» спрашивает; отказ — правки на месте; согласие — список', async () => {
+    branchRows = [{ ...BLANK_ROW, id: 1, name: 'Юнусабад' }];
+    companyRow = null; writes = [];
+    globalThis.window.CLINIC.building_role = 'main'; delete globalThis.window.CLINIC.own_branch_id;
+    const perms = await import('../permissions.js');
+    perms.setFullAccess('Admin');
+    const { renderSettingsHub } = await import('../views/settings-hub.js');
+    const onPage = (root) => descendants(root).some((n) => matches(n, '.brf-page'));
+    let hook = null;
+    const root = mkEl('div');
+    await renderSettingsHub(root, { onPayload: (fn) => { hook = fn; } });
+    hook({ section: 'branches' }); await settle(80);
+    items(root)[0].click(); await settle(80);
+    assert.ok(onPage(root), 'стенд не тот: страница здания не открылась');
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Амира Темура, 1');
+    const asked = [];
+    let answer = false;
+    globalThis.window.confirm = (t) => { asked.push(t); return answer; };
+    try {
+        hook({ section: 'branches' }); await settle(80);
+        assert.equal(asked.length, 1, 'переход заменил страницу с несохранённым, не спросив');
+        assert.ok(onPage(root), 'отказ — а страница ушла');
+        assert.equal(triInput(root, 'Улица, дом', 'ru').value, 'ул. Амира Темура, 1', 'правки пропали');
+        answer = true;
+        hook({ section: 'branches' }); await settle(80);
+        assert.equal(asked.length, 2);
+        assert.ok(!onPage(root) && items(root).length === 1, 'согласие — а список не открылся');
+        hook({ section: 'branches' }); await settle(80);
+        assert.equal(asked.length, 2, 'из списка переход не спрашивает');
+        assert.ok(items(root).length === 1);
+    } finally { delete globalThis.window.confirm; }
 });

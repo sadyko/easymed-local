@@ -64,7 +64,13 @@ export async function renderSettingsHub(container, { onNavigate, payload = null,
     // 11 по зданиям): переход с { section: 'branches' } открывает раздел сразу; хаб
     // из кэша оболочки получает такой переход через onPayload. Только «Филиалы»:
     // остальные разделы открываются плитками.
-    if (typeof onPayload === 'function') onPayload((p) => { if (p && p.section === 'branches' && refs.container === container) openSection('branches'); });
+    // Ревью слияния №4 — хаб уже в «Филиалах»: «к списку» через защиту открытой
+    // страницы здания (несохранённое не пропадает молча); иначе — открыть раздел.
+    if (typeof onPayload === 'function') onPayload((p) => {
+        if (!(p && p.section === 'branches' && refs.container === container)) return;
+        if (state.section === 'branches' && refs.branches && typeof refs.branches.toList === 'function') refs.branches.toList();
+        else openSection('branches');
+    });
     await repaint();
     if (payload && payload.section === 'branches') openSection('branches');
 }
@@ -72,7 +78,7 @@ export async function renderSettingsHub(container, { onNavigate, payload = null,
 async function repaint() {
     clear(refs.container);
     if (state.section === 'roles') await renderRolesEditor(refs.container, { onBack: backToHub, readOnly: state.readOnly });   // ADMIN_ROWS_GRANTABLE_V1 — «Роли: Просмотр»
-    else if (state.section === 'branches') await renderBranchesEditor(refs.container, { onBack: backToHub, onNavigate: refs.onNavigate, readOnly: state.readOnly, renderSyncCard: renderBranchSyncCard });   // BRANCH_PROFILE_V1
+    else if (state.section === 'branches') refs.branches = await renderBranchesEditor(refs.container, { onBack: backToHub, onNavigate: refs.onNavigate, readOnly: state.readOnly, renderSyncCard: renderBranchSyncCard });   // BRANCH_PROFILE_V1; CLINIC_API_STEP7_V1 — refs.branches.toList()
     else if (state.section) await renderEditor(refs.container, state.section);
     else renderHub(refs.container);
     if (!state.section) paintUpdateStatus();   // UPDATE_STATUS_ROW_V1
