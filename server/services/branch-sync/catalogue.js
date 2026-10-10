@@ -379,7 +379,10 @@ export function exportCatalogue(db, { now = () => new Date() } = {}) {
   const settings = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get();
   if (settings) {
     const picked = {};
-    for (const col of DOC_SETTINGS_COLUMNS) picked[col] = settings[col] ?? null;
+    // CLINIC_PROFILE_V1 — колонки, которой у этой базы нет (миграция ещё не
+    // применена), в выгрузке нет вовсе: «не знаю» — это отсутствующий ключ,
+    // а не null, который получатель записал бы поверх своего значения.
+    for (const col of DOC_SETTINGS_COLUMNS) if (col in settings) picked[col] = settings[col] ?? null;
     out.doc_settings = picked;
   }
 
@@ -563,8 +566,13 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
     const local = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get();
     if (local) {
       const changes = {};
+      // CLINIC_PROFILE_V1 — null в колонку NOT NULL не пишется: это выгрузка
+      // старой версии или сбой, а не «очистить». Такой null валил UPDATE и с
+      // ним — весь приём справочника одной транзакцией (прайс, права, люди).
+      const notNull = new Set(db.prepare('PRAGMA table_info(doc_settings)').all().filter((c) => c.notnull).map((c) => c.name));
       for (const col of DOC_SETTINGS_COLUMNS) {
         if (!(col in payload.doc_settings)) continue;
+        if (payload.doc_settings[col] == null && notNull.has(col)) continue;   // CLINIC_PROFILE_V1
         // Разные версии на двух концах — нормальное состояние этого продукта, и
         // здесь оно опаснее в ОБЕ стороны. Пропуск сверху закрывает старого
         // ОТПРАВИТЕЛЯ («ключа нет — оставь местное»); эта строка закрывает

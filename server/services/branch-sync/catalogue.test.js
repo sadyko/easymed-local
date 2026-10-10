@@ -21,6 +21,10 @@ import { migrate } from '../../db/migrate.js';
 import { exportCatalogue, applyCatalogue, TABLES, DOC_SETTINGS_COLUMNS } from './catalogue.js';
 import { becomeSecondary } from './identity.js';
 import { COMPANY_CLINIC_WIDE, COMPANY_BUILDING } from '../../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1
+import fs from 'node:fs';   // CLINIC_PROFILE_V1 — база до миграции 240
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
 // STAFF_SYNC_V1 — вход проверяется НАСТОЯЩИМ путём входа, а не сравнением
 // хешей: обещание владельца звучит как «человек войдёт во втором здании», и
 // проверять его надо тем же кодом, которым клиника пускает людей каждый день.
@@ -870,4 +874,73 @@ test('EXTERNAL_LAB_V1: отметка «Внешняя лаборатория» 
   const dst = receiver();
   apply(dst, exportCatalogue(main));
   assert.equal(dst.prepare("SELECT external_lab FROM services WHERE code='S-CARD'").get().external_lab, 1);
+});
+
+// ---------------------------------------------------------------------------
+// CLINIC_PROFILE_V1 — ЗДАНИЯ ОБНОВЛЯЮТСЯ В РАЗНОЕ ВРЕМЯ. Главное здание без
+// миграции 240 не знает колонок профиля; филиал с 240 их знает (и наоборот).
+// Справочник обязан проходить в обе стороны: отсутствующая колонка — «оставь
+// местное», а не NULL в колонку NOT NULL (полный прогон: report-access.journals
+// F1 / RJ3 падали «NOT NULL constraint failed: doc_settings.name_uz», и филиал
+// не принимал справочник вовсе — ни прайс, ни права).
+// ---------------------------------------------------------------------------
+const MIG_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'db', 'migrations');
+function migratedBefore(n) {
+  const db = openDb(':memory:');
+  const tmp = tmpDir('em-cat240-');
+  for (const x of fs.readdirSync(MIG_DIR).filter((y) => y.endsWith('.sql') && parseInt(y, 10) < n)) {
+    fs.copyFileSync(path.join(MIG_DIR, x), path.join(tmp, x));
+  }
+  migrate(db, tmp);
+  return db;
+}
+const PROFILE_240 = ['name_uz', 'name_en', 'about_ru', 'about_uz', 'about_en', 'country_code', 'region_code', 'district_code',
+  'street_ru', 'street_uz', 'street_en', 'website', 'telegram_bot', 'telegram_channel', 'instagram',
+  'maps_url', 'logo_square_path', 'logo_portrait_path'];
+
+test('главное здание до 240 → новый филиал: справочник принят, 18 колонок профиля — как лежали', () => {
+  const oldMain = seedMain(migratedBefore(240));
+  const cat = exportCatalogue(oldMain);
+  for (const c of PROFILE_WIDE) assert.equal(c in cat.doc_settings, false, 'старая база не знает ' + c + ' — в выгрузке его нет, а не null');
+
+  const dst = receiver();
+  dst.prepare("UPDATE doc_settings SET name_uz = 'Luch klinikasi', website = 'https://luch.uz', street_ru = 'ул. Филиальная, 7' WHERE id = 1").run();
+  const before = dst.prepare('SELECT * FROM doc_settings WHERE id = 1').get();
+  assert.doesNotThrow(() => apply(dst, cat));
+  const row = dst.prepare('SELECT * FROM doc_settings WHERE id = 1').get();
+  for (const c of PROFILE_240) assert.equal(row[c], before[c], c + ' не тронут');
+  assert.equal(row.name_uz, 'Luch klinikasi');
+  assert.equal(row.name_en, '');
+  assert.equal(row.clinic_name, 'Клиника Луч', 'остальное справочника принято');
+  assert.ok(dst.prepare("SELECT 1 FROM services WHERE code = 'S-CARD'").get(), 'и прайс тоже');
+});
+
+test('справочник без ключей профиля или с null в них — колонки NOT NULL не затираются', () => {
+  const cat = exportCatalogue(seedMain(fresh()));
+  const noKeys = JSON.parse(JSON.stringify(cat));
+  for (const c of PROFILE_WIDE) delete noKeys.doc_settings[c];
+  const nulls = JSON.parse(JSON.stringify(cat));
+  for (const c of PROFILE_WIDE) nulls.doc_settings[c] = null;
+  nulls.doc_settings.clinic_name = null;   // и прежняя колонка NOT NULL — тоже
+
+  for (const payload of [noKeys, nulls]) {
+    const dst = receiver();
+    dst.prepare("UPDATE doc_settings SET clinic_name = 'Своё', name_uz = 'Luch klinikasi', instagram = '@luch.uz' WHERE id = 1").run();
+    assert.doesNotThrow(() => apply(dst, payload));
+    const row = dst.prepare('SELECT clinic_name, name_uz, name_en, instagram FROM doc_settings WHERE id = 1').get();
+    assert.deepEqual({ ...row }, { clinic_name: payload === nulls ? 'Своё' : 'Клиника Луч', name_uz: 'Luch klinikasi', name_en: '', instagram: '@luch.uz' });
+  }
+});
+
+test('новое главное здание → филиал до 240: неизвестные колонки пропущены, остальное принято', () => {
+  const src = seedMain(fresh());
+  src.prepare("UPDATE doc_settings SET name_uz = 'Luch klinikasi', website = 'https://luch.uz', instagram = '@luch.uz' WHERE id = 1").run();
+  const oldBranch = migratedBefore(240);
+  oldBranch.prepare("UPDATE sqlite_sequence SET seq = 500 WHERE name = 'services'").run();
+  const summary = apply(oldBranch, exportCatalogue(src));
+  assert.ok(summary.changed > 0);
+  const row = oldBranch.prepare('SELECT * FROM doc_settings WHERE id = 1').get();
+  assert.equal(row.clinic_name, 'Клиника Луч');
+  for (const c of PROFILE_240) assert.equal(c in row, false, 'у старой базы нет ' + c);
+  assert.ok(oldBranch.prepare("SELECT 1 FROM services WHERE code = 'S-CARD'").get());
 });
