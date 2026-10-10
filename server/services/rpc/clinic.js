@@ -15,7 +15,7 @@
 // role-restricted rows).
 import { readIdentity } from '../branch-sync/identity.js';   // CLINIC_PROFILE_V1
 import { isSquarePngDataUrl } from '../../../public/js/shared/clinic-logo-rules.js';   // CLINIC_PROFILE_V1
-import { apiActive } from '../api/partner-address.js';   // CLINIC_API_STEP7_V1
+import { partnerAddressRequired } from '../api/partner-address.js';   // CLINIC_API_STEP7_V1 (ревью №8)
 
 export function getClinicBySlug(db, _args, _user) {
   const settings = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {};
@@ -38,7 +38,8 @@ export function getClinicBySlug(db, _args, _user) {
     building_role: (() => { try { return readIdentity(db).role; } catch { return 'main'; } })(),
     // CLINIC_API_STEP7_V1 — решение владельца 11: «Компания» ставит звёздочки
     // и не сохраняет без адреса, пока включено подключение API.
-    api_address_required: apiActive(db),
+    // CLINIC_API_STEP7_V1 (ревью №8) — в филиале — нет: подключения живут в главном здании.
+    api_address_required: partnerAddressRequired(db),
     active: true,
     // Fields the upstream trial-banner / branding code reads defensively
     // (clinic?.name, clinic?.plan, clinic?.trial_ends_at, clinic?.is_locked,

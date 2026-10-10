@@ -9,6 +9,7 @@
 // экрана. Филиалы, показанные партнёрам, — правило шага 4 (план шага 7, раздел
 // «Шагам 4, 8 и 9»).
 import { partnerAddressProblems, PARTNER_ADDRESS_COLUMNS, PROFILE_MESSAGES } from '../../../public/js/shared/clinic-profile.js';
+import { readIdentity } from '../branch-sync/identity.js';   // CLINIC_API_STEP7_V1 (ревью №8)
 
 export const ADDRESS_MESSAGES = Object.freeze({
   enable: 'Подключение нельзя включить: в «Компании» не заполнен адрес для партнёров — город или область, район и улица на русском.',
@@ -18,6 +19,18 @@ export const ADDRESS_MESSAGES = Object.freeze({
 export function apiActive(db) {
   try { return !!db.prepare('SELECT 1 FROM api_connections WHERE active = 1 AND deleted_at IS NULL LIMIT 1').get(); }
   catch { return false; }   // база до мигр. 242 — подключений нет
+}
+
+// CLINIC_API_STEP7_V1 (ревью №8) — адрес для партнёров требуется только в ГЛАВНОМ
+// здании: подключения живут там (таблицы api_* в филиал не едут, записи в филиале —
+// 409). Здание, ставшее филиалом с подключением, оставленным включённым, иначе не
+// могло бы очистить адрес своего здания, а выключить подключение отсюда нельзя.
+function isSecondaryInstall(db) {
+  try { return readIdentity(db).role === 'secondary'; } catch { return false; }
+}
+/** Обязателен ли сейчас адрес для партнёров: главное здание и включено хоть одно подключение. */
+export function partnerAddressRequired(db) {
+  return !isSecondaryInstall(db) && apiActive(db);
 }
 
 /** Есть ли из чего выбирать (как availability() экрана, company-address.js). */
@@ -56,7 +69,7 @@ export function requirePartnerAddress(db) {
 /** /api/db: правка doc_settings, пока подключение включено. null — можно; иначе { field, message }. */
 export function companyAddressRefusal(db, meta, body) {
   if (!meta || meta.table !== 'doc_settings' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;
-  if (!apiActive(db)) return null;
+  if (!partnerAddressRequired(db)) return null;   // CLINIC_API_STEP7_V1 (ревью №8) — и не в филиале
   const v = body && body.values;
   const values = v && typeof v === 'object' && !Array.isArray(v) ? v : {};
   const problems = companyAddressProblems(db, values);

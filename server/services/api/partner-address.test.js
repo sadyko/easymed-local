@@ -7,7 +7,8 @@ import { migrate } from '../../db/migrate.js';
 import { insertConnectionRow } from '../../test-helpers/api-connection-row.js';
 import { STRINGS } from '../../../public/js/admin/i18n-strings.js';
 import { PROFILE_MESSAGES } from '../../../public/js/shared/clinic-profile.js';
-import { ADDRESS_MESSAGES, apiActive, addressAvailability, companyAddressProblems, companyAddressRefusal, requirePartnerAddress } from './partner-address.js';
+import { ADDRESS_MESSAGES, apiActive, addressAvailability, companyAddressProblems, companyAddressRefusal, requirePartnerAddress,
+  partnerAddressRequired } from './partner-address.js';   // CLINIC_API_STEP7_V1 (ревью №8) — partnerAddressRequired
 
 const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
 const FULL = { region_code: 'tashkent-city', district_code: 'yunusobod', street_ru: 'ул. Мира, 1' };
@@ -56,4 +57,21 @@ test('/api/db: пока подключение включено, правка «
 
 test('сообщения переведены', () => {
   for (const m of [ADDRESS_MESSAGES.enable, PROFILE_MESSAGES.partnerAddress]) assert.ok(STRINGS[m] && STRINGS[m].uz && STRINGS[m].en, m);
+});
+
+// CLINIC_API_STEP7_V1 (ревью №8) — в филиале подключений нет (таблицы не едут, записи —
+// 409): подключение, оставленное включённым до присоединения к главному зданию, не
+// требует адреса — иначе филиал не мог бы очистить адрес своего здания, а выключить
+// подключение отсюда нельзя.
+test('филиал: адрес для партнёров не требуется, даже если подключение осталось включённым', async () => {
+  const { becomeSecondary } = await import('../branch-sync/identity.js');
+  const db = fresh();
+  setAddr(db, FULL);
+  insertConnectionRow(db);
+  assert.equal(partnerAddressRequired(db), true);
+  assert.ok(companyAddressRefusal(db, meta, { values: { region_code: '', district_code: '', street_ru: '' } }));
+  becomeSecondary(db, { letter: 'C', name: 'Филиал' });
+  assert.equal(apiActive(db), true, 'строка подключения на месте');
+  assert.equal(partnerAddressRequired(db), false);
+  assert.equal(companyAddressRefusal(db, meta, { values: { region_code: '', district_code: '', street_ru: '' } }), null);
 });

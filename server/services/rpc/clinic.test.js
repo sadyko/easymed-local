@@ -92,3 +92,15 @@ test('get_clinic_by_slug: api_address_required — false без подключе
   insertConnectionRow(db);
   assert.equal(getClinicBySlug(db, {}, null).api_address_required, true);
 });
+
+// CLINIC_API_STEP7_V1 (ревью №8) — в филиале «Компания» адреса для партнёров не требует:
+// подключений там нет, даже если строка осталась включённой с прежних времён.
+test('get_clinic_by_slug: api_address_required — false в филиале и при включённом подключении', async () => {
+  const { insertConnectionRow } = await import('../../test-helpers/api-connection-row.js');
+  const { becomeSecondary } = await import('../branch-sync/identity.js');
+  const db = openDb(':memory:'); migrate(db);
+  insertConnectionRow(db);
+  assert.equal(getClinicBySlug(db, {}, null).api_address_required, true);
+  becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
+  assert.equal(getClinicBySlug(db, {}, null).api_address_required, false);
+});

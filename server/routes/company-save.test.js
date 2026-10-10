@@ -185,3 +185,20 @@ test('/api/db: пока подключение API включено, «Комп�
     assert.equal(ok.status, 200, JSON.stringify(await ok.clone().json()));
   } finally { t.stop(); }
 });
+
+// CLINIC_API_STEP7_V1 (ревью №8) — здание, ставшее филиалом с подключением, оставленным
+// включённым: очистить адрес своего здания можно (подключений в филиале нет, а
+// выключить его отсюда нельзя — 409 «настраиваются в главном здании»).
+test('/api/db в филиале: подключение осталось включённым — очистка адреса здания — 200', async () => {
+  const { becomeSecondary } = await import('../services/branch-sync/identity.js');
+  const t = await setup();
+  try {
+    t.db.prepare("UPDATE doc_settings SET region_code = 'tashkent-city', district_code = 'yunusobod', street_ru = 'ул. Мира, 1' WHERE id = 1").run();
+    insertConnectionRow(t.db);
+    becomeSecondary(t.db, { letter: 'C', name: 'Филиал' });
+    const save = await saver(t);
+    const res = await save({ region_code: '', district_code: '', street_ru: '', street_uz: '', street_en: '' });
+    assert.equal(res.status, 200, JSON.stringify(await res.clone().json()));
+    assert.equal(t.db.prepare('SELECT street_ru FROM doc_settings WHERE id = 1').get().street_ru, '');
+  } finally { t.stop(); }
+});
