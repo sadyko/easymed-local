@@ -22,10 +22,14 @@ export const COMPANY_CLINIC_WIDE = Object.freeze([
 ]);
 // СВОЁ У ЗДАНИЯ — как address/phone/email с самого начала (catalogue.js).
 // address — то, что печатается на бланках этого здания (вписан руками).
-export const COMPANY_BUILDING = Object.freeze([
-  'address', 'phone', 'email',
-  'country_code', 'region_code', 'district_code', 'street_ru', 'street_uz', 'street_en', 'maps_url',
-]);
+// BRANCH_PROFILE_V1 (шаг 4) — СВОЁ У ЗДАНИЯ делится на две части:
+//   • для документов (COMPANY_PRINT) — правится в «Компании» каждого здания;
+//   • для партнёров и сайта (COMPANY_PARTNER) — у главного здания это и есть
+//     его адрес для сайта; в филиале не правится: адрес филиала ведёт главное
+//     здание в «Филиалах», и «Компания» филиала показывает его оттуда.
+export const COMPANY_PRINT = Object.freeze(['address', 'phone', 'email']);   // BRANCH_PROFILE_V1
+export const COMPANY_PARTNER = Object.freeze(['country_code', 'region_code', 'district_code', 'street_ru', 'street_uz', 'street_en', 'maps_url']);   // BRANCH_PROFILE_V1
+export const COMPANY_BUILDING = Object.freeze([...COMPANY_PRINT, ...COMPANY_PARTNER]);   // BRANCH_PROFILE_V1 — порядок прежний
 export const COMPANY_COLUMNS = Object.freeze([...COMPANY_CLINIC_WIDE, ...COMPANY_BUILDING]);
 
 export const NAME_MAX = 120;

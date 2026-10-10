@@ -7,7 +7,8 @@ import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто на
 // STAFF_SYNC_V1 — «филиал я или сама по себе клиника» решается по базе, а не по
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
 import { readIdentity } from '../services/branch-sync/identity.js';
-import { COMPANY_CLINIC_WIDE, storedProfileProblems } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1
+import { COMPANY_CLINIC_WIDE, COMPANY_PARTNER, storedProfileProblems } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1, BRANCH_PROFILE_V1 (COMPANY_PARTNER)
+import { BRANCH_MESSAGES } from '../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
 import { keepLegacyLogo } from '../services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1 (ревью M3)
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
@@ -656,15 +657,19 @@ function isSecondary(db) {
 
 // CLINIC_PROFILE_V1 — общее для клиники в «Компании» филиала не меняется
 // (см. вызов в POST). null — запись можно выполнять.
-const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон, почта и карта этого здания.';
+const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон и почта для документов этого здания.';   // BRANCH_PROFILE_V1 — текст
 function companyBranchRefusal(db, meta, body) {
   if (!meta || meta.table !== 'doc_settings' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;
   if (!isSecondary(db)) return null;
   const values = body && body.values && typeof body.values === 'object' && !Array.isArray(body.values) ? body.values : {};
   const cur = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {};
   const same = (a, b) => String(a == null ? '' : a) === String(b == null ? '' : b);
-  const changes = COMPANY_CLINIC_WIDE.some((c) => Object.prototype.hasOwnProperty.call(values, c) && !same(values[c], cur[c]));
-  return changes ? COMPANY_MAIN_ONLY : null;
+  const has = (c) => Object.prototype.hasOwnProperty.call(values, c);   // BRANCH_PROFILE_V1
+  if (COMPANY_CLINIC_WIDE.some((c) => has(c) && !same(values[c], cur[c]))) return COMPANY_MAIN_ONLY;
+  // BRANCH_PROFILE_V1 — адрес для партнёров и карту филиала ведёт главное
+  // здание в «Филиалах» (одно место на здание): здесь они только видны.
+  if (COMPANY_PARTNER.some((c) => has(c) && !same(values[c], cur[c]))) return BRANCH_MESSAGES.partnerInBranches;
+  return null;
 }
 
 // CLINIC_PROFILE_V1 (ревью M3) — true: правка заменяет или снимает прежний

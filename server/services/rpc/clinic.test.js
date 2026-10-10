@@ -82,3 +82,16 @@ test('get_clinic_by_slug: logo_mark_url — только квадратная PN
   assert.equal(getClinicBySlug(db, {}, null).logo_mark_url, null, 'JPEG — null');
   assert.equal(getClinicBySlug(db, {}, null).logo_url, 'data:image/jpeg;base64,/9j/4AAQSkZJRg==', 'logo_url (печать) — как был');
 });
+
+// BRANCH_PROFILE_V1 — строка branches этого здания: «Филиалы» помечают её «Это здание»,
+// «Компания» филиала берёт из неё адрес для партнёров, карту и телефон для сайта.
+test('get_clinic_by_slug: own_branch_id — строка этого здания (главное — A, филиал — своя буква)', async () => {
+  const { becomeSecondary } = await import('../branch-sync/identity.js');
+  const db = openDb(':memory:'); migrate(db);
+  assert.equal(getClinicBySlug(db, {}, null).own_branch_id, db.prepare("SELECT id FROM branches WHERE letter = 'A'").get().id);
+  becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
+  assert.equal(getClinicBySlug(db, {}, null).own_branch_id, db.prepare("SELECT id FROM branches WHERE letter = 'C'").get().id);
+  db.prepare('DELETE FROM branch_identity').run();
+  assert.equal(getClinicBySlug(db, {}, null).own_branch_id, null, 'нет строки установки — null, запись клиники не падает');
+  db.close();
+});

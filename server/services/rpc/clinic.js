@@ -35,6 +35,9 @@ export function getClinicBySlug(db, _args, _user) {
     website: settings.website || null,
     // CLINIC_PROFILE_V1 — «Компания» в филиале показывает общее только для просмотра.
     building_role: (() => { try { return readIdentity(db).role; } catch { return 'main'; } })(),
+    // BRANCH_PROFILE_V1 — строка branches ЭТОГО здания: «Филиалы» помечают её
+    // «Это здание», «Компания» филиала показывает из неё адрес для партнёров.
+    own_branch_id: (() => { try { return readIdentity(db).branch_id ?? null; } catch { return null; } })(),
     active: true,
     // Fields the upstream trial-banner / branding code reads defensively
     // (clinic?.name, clinic?.plan, clinic?.trial_ends_at, clinic?.is_locked,
