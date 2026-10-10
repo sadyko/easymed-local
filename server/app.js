@@ -141,7 +141,7 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // default instead of by someone remembering to add it.
   app.use('/api', requirePasswordChanged);
   app.use('/api/users', userRoutes(db));
-  app.use('/api/db', requireAuth, dbRoutes(db));
+  app.use('/api/db', requireAuth, dbRoutes(db, { storageDir: path.join(dataDir, 'storage') }));   // CLINIC_PROFILE_V1 (ревью M3) — копия прежнего логотипа перед заменой
   app.use('/api/rpc', requireAuth, rpcRoutes(db));
   // PATIENT_FILE_ATTACH_V1 — хранилище получает базу: файлы документов
   // пациента (clinic-docs/patients/<id>/docs/...) отдаются и принимаются по

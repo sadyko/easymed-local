@@ -64,3 +64,40 @@ test('index.js вызывает сохранение после миграций
   assert.ok(at > src.indexOf('migrate(db);'), 'вызов должен стоять после migrate(db)');
   assert.match(src, /import \{ preserveLegacyLogo \} from '\.\/services\/clinic-logo-legacy\.js';/);
 });
+
+// CLINIC_PROFILE_V1 (ревью M3) — прежний логотип бывает не только
+// «data:image/png;base64,…»: SVG текстом (utf8 или %-кодированный), base64 в
+// URL-безопасном алфавите, data URL с параметрами (;charset=, ;name=). Такие
+// раньше молча пропускались, и первая загрузка квадратного затирала
+// единственную копию. Теперь каждый ложится файлом с теми же байтами.
+test('варианты data URL: SVG текстом и %-кодом, URL-безопасный base64, параметры — файл с теми же байтами', () => {
+  const storage = tmpDir('em-legacy-logo-');
+  const bin = Buffer.from([0xfb, 0xff, 0xfe, 1, 2, 0x3e, 0x3f]);
+  for (const [value, ext, bytes] of [
+    ['data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg"/>', '.svg', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>')],
+    ['data:image/svg+xml,%3Csvg%2F%3E', '.svg', Buffer.from('<svg/>')],
+    ['data:image/svg+xml;charset=utf-8,%3Csvg%3E%D0%96%3C%2Fsvg%3E', '.svg', Buffer.from('<svg>Ж</svg>')],
+    ['data:image/png;base64,' + bin.toString('base64url'), '.png', bin],
+    ['data:image/png;name=logo.png;base64,' + bin.toString('base64'), '.png', bin],
+    ['data:image/PNG;BASE64,' + bin.toString('base64').replace(/(.{4})/g, '$1\n'), '.png', bin],
+    ['data:image/png;base64,' + bin.toString('base64').replace(/=/g, '%3D'), '.png', bin],
+  ]) {
+    const r = preserveLegacyLogo(seed({ logo_data_url: value }), storage);
+    assert.ok(r.kept, 'не сохранён: ' + value.slice(0, 50));
+    assert.ok(r.kept.endsWith(ext), r.kept + ' — ожидалось ' + ext);
+    assert.deepEqual(fs.readFileSync(path.join(storage, 'clinic-logos', r.kept)), bytes, value.slice(0, 50));
+  }
+});
+
+test('битый base64 не теряется: тело сохраняется как есть (.txt)', () => {
+  const storage = tmpDir('em-legacy-logo-');
+  const r = preserveLegacyLogo(seed({ logo_data_url: 'data:image/png;base64,@@not*base64@@' }), storage);
+  assert.match(r.kept, /\.txt$/);
+  assert.equal(fs.readFileSync(path.join(storage, 'clinic-logos', r.kept), 'utf8'), '@@not*base64@@');
+});
+
+test('хранилище не пишется — исключение наружу (запуск его ловит; /api/db отказывает затирать)', () => {
+  const storage = tmpDir('em-legacy-logo-');
+  fs.writeFileSync(path.join(storage, 'clinic-logos'), 'x');   // на месте папки — файл
+  assert.throws(() => preserveLegacyLogo(seed({ logo_data_url: pngDataUrl(fakePng(220, 90)) }), storage));
+});

@@ -8,6 +8,7 @@ import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто на
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
 import { readIdentity } from '../services/branch-sync/identity.js';
 import { COMPANY_CLINIC_WIDE, storedProfileProblems } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1
+import { keepLegacyLogo } from '../services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1 (ревью M3)
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
@@ -295,7 +296,10 @@ function hasEvidenceStatus(body) {
   return !!status && EVIDENCE_SERVICE_STATUSES.includes(String(status));
 }
 
-export function dbRoutes(db) {
+// CLINIC_PROFILE_V1 (ревью M3) — storageDir: хранилище файлов (<dataDir>/storage),
+// куда ложится копия прежнего логотипа перед его заменой. app.js передаёт его
+// всегда; без него (юнит-монтирование маршрута) защита не включается.
+export function dbRoutes(db, { storageDir = null } = {}) {
     setLiveColumns(liveColumnsReader(db));
     setForeignKeyColumns(foreignKeyColumnsReader(db));
   const r = Router();
@@ -359,6 +363,15 @@ export function dbRoutes(db) {
     // тронута; отказ — первым объяснением, тем же, что видно под полем.
     const profileRefusal = companyProfileRefusal(compiled.meta, req.body);
     if (profileRefusal) return res.status(400).json({ error: { code: 'bad_request', message: profileRefusal.message, field: profileRefusal.field } });
+
+    // CLINIC_PROFILE_V1 (ревью M3) — ПРЕЖНИЙ ЛОГОТИП НЕ ЗАТИРАЕТСЯ НЕСКОПИРОВАННЫМ.
+    // Копия при запуске (index.js → clinic-logo-legacy.js) могла не лечь, а
+    // правка, которая заменяет или снимает прежний логотип, уничтожила бы
+    // единственный экземпляр. Поэтому копия кладётся ещё раз здесь, до
+    // записи; не легла — отказ 409, логотип остаётся на бланках.
+    if (legacyLogoAtRisk(db, compiled.meta, req.body, storageDir)) {
+      return res.status(409).json({ error: { code: 'legacy_logo_not_saved', message: LEGACY_LOGO_NOT_SAVED } });
+    }
 
     // ADMIN_ROWS_GRANTABLE_V1 — «Роли: Изменение» у не-администратора: ни роли
     // администратора, ни своих ролей, ни прав выше собственных. Компилятор уже
@@ -643,6 +656,22 @@ function companyBranchRefusal(db, meta, body) {
   const same = (a, b) => String(a == null ? '' : a) === String(b == null ? '' : b);
   const changes = COMPANY_CLINIC_WIDE.some((c) => Object.prototype.hasOwnProperty.call(values, c) && !same(values[c], cur[c]));
   return changes ? COMPANY_MAIN_ONLY : null;
+}
+
+// CLINIC_PROFILE_V1 (ревью M3) — true: правка заменяет или снимает прежний
+// логотип (data URL, квадратного ещё нет), а положить его копию в хранилище не
+// вышло. Копия, которая уже лежит, — повтор ничего не пишет (имя по содержимому).
+const LEGACY_LOGO_NOT_SAVED = 'Прежний логотип клиники не удалось сохранить копией, поэтому он остаётся на бланках, а новый не применён. Попробуйте ещё раз; если повторится — проверьте место на диске компьютера с программой.';
+function legacyLogoAtRisk(db, meta, body, storageDir) {
+  if (!storageDir || !meta || meta.table !== 'doc_settings' || (meta.op !== 'update' && meta.op !== 'upsert')) return false;
+  const v = body && body.values;
+  const rows = (Array.isArray(v) ? v : [v]).filter((r) => r && typeof r === 'object' && Object.prototype.hasOwnProperty.call(r, 'logo_data_url'));
+  if (!rows.length) return false;
+  const cur = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {};
+  if (cur.logo_square_path || !/^data:/i.test(String(cur.logo_data_url || ''))) return false;
+  if (rows.every((r) => String(r.logo_data_url == null ? '' : r.logo_data_url) === String(cur.logo_data_url))) return false;
+  try { keepLegacyLogo(cur.logo_data_url, storageDir); return false; }
+  catch (e) { console.warn('[legacy-logo] copy before overwrite failed:', e && e.message); return true; }
 }
 
 // CLINIC_PROFILE_V1 (ревью I2) — запись в doc_settings (вставка, правка,
