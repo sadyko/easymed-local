@@ -2523,3 +2523,24 @@ test('строку живой очереди у чужого визита дня
   VISITS = [];
   window.easymed.state.user = null;
 });
+
+// DOCTOR_PROFILE_V1 — решение владельца 8: консультацию ведёт и врач (is_doctor)
+// без своей строки цены; врач с «Ведёт» снятым — нет.
+test('DOCTOR_PROFILE_V1: окно дат предлагает консультацию и врачу без своей строки, но не тому, у кого «Ведёт» снято', async () => {
+  VISITS = [];
+  SERVICES = [DOC_SVC];
+  const NOROW = { id: 34, full_name: 'Каримов Карим', specialty: 'терапевт', service_rates: null, is_doctor: 1 };
+  const OFF = { id: 35, full_name: 'Юсупов Юсуф', specialty: 'терапевт', service_rates: null, is_doctor: 1 };
+  DOCTORS = [DOCTOR, NOROW, OFF];
+  CONSULTS = [{ id: 5, name: 'Первичный', name_ru: 'Первичный приём', price: 80000 }];
+  CONSULT_PRICES = [{ id: 1, doctor_id: 31, consultation_type_id: 5, price: 150000, available: 1, is_free: 0 },
+    { id: 2, doctor_id: 35, consultation_type_id: 5, price: null, available: 0, is_free: 0 }];
+  // doctorSheet ставит DOCTORS = doctors || [DOCTOR]: врачи стенда — через doctors.
+  const { sheet } = await doctorSheet({ doctors: [DOCTOR, NOROW, OFF], lines: [{ id: 903, service_id: null, consultation_type_id: 5, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null }] });
+  await tick(60);
+  const names = doctorSelects(sheet)[0].children.map(textOf).join(' | ');
+  assert.ok(/Петров Пётр/.test(names) && /Каримов Карим/.test(names), names);
+  assert.ok(!/Юсупов/.test(names), '«Ведёт» снято, а врач предложен: ' + names);
+  SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
+  window.easymed.state.user = null;
+});

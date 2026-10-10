@@ -38,6 +38,7 @@ import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug1
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
+import { consultPrice as consultPriceRule, consultOffered } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -1424,7 +1425,7 @@ async function openRevisitModal(ctx) {
     if (cid) {
         const [{ data: ctData }, { data: dcData }] = await Promise.all([
             supabase.from('consultation_types')
-                .select('id, name_ru, name_uz, sort_order, active')
+                .select('id, name_ru, name_uz, sort_order, active, price')   // DOCTOR_PROFILE_V1 — общая цена вида
                 .eq('company_id', cid).eq('active', true).order('sort_order', { ascending: true }),
             supabase.from('doctor_consultation_prices')
                 .select('consultation_type_id, price, is_free, available, name_ru, name_uz')
@@ -1433,10 +1434,12 @@ async function openRevisitModal(ctx) {
         for (const r of (dcData || [])) docConsult[r.consultation_type_id] = r;
         // CLINIC_API_FIX_V1 — available приходит числом: 0 !== false предлагало
         // повторный приём по виду, который врач не ведёт.
-        consultTypes = (ctData || []).filter(ct => { const r = docConsult[ct.id]; return r && isOn(r.available); });
+        // DOCTOR_PROFILE_V1 — решение владельца 8: строки нет — вид ведётся по
+        // общей цене; «Ведёт» снято — нет (shared/consultation-price.js).
+        consultTypes = (ctData || []).filter((ct) => consultOffered(ct, docConsult[ct.id] || null));
     }
     const consultLabel = (ct) => { const r = docConsult[ct.id]; return (r && (r.name_ru || r.name_uz)) || ct.name_ru || ct.name_uz || 'Консультация'; };
-    const consultPrice = (ct) => { const r = docConsult[ct.id]; return r ? (isOn(r.is_free) ? 0 : Number(r.price || 0)) : 0; };   // CLINIC_API_FIX_V1
+    const consultPrice = (ct) => consultPriceRule(ct, docConsult[ct.id] || null).price;   // DOCTOR_PROFILE_V1 — правило кассы
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '140' } });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };

@@ -48,6 +48,7 @@ import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTie
 // OWN_PRICE_TIER_RATIO_V1 — своя цена врача со скидкой яруса: правило одно с сервером.
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
+import { consultPrice, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';   // DISCOUNT_RULES_V1 · CARD_BALANCE_V1
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
@@ -243,10 +244,9 @@ export function openServicePickerModal({
     const CONSULT_GROUP_ID = '__consult__';
     const consultName = (ct) => (ct && (ct.name_ru || ct.name_uz || ct.name_en)) || '—';
     function consultPriceFor(doctorId, ct) {
-        // CONSULT_PER_DOCTOR_V1 — the doctor's own price (0 if free / unset). No clinic default.
-        const dc = state.docConsult[doctorId + '|' + ct.id];
-        if (!dc || isOn(dc.is_free)) return 0;   // CLINIC_API_FIX_V1
-        return dc.price != null ? Number(dc.price) : 0;
+        // DOCTOR_PROFILE_V1 — решения владельца 8 и 13: правило кассы (shared/consultation-price.js) —
+        // своя цена врача, «Бесплатно» и пустая цена — 0, строки нет — общая цена вида.
+        return consultPrice(ct, state.docConsult[doctorId + '|' + ct.id] || null).price;
     }
     // CLINIC_API_FIX_V1 — consultAvailableFor / consultPriceRange убраны: у строки консультации всегда свой врач, и строится она, только если он этот вид ведёт (isOn ниже).
     // CONSULT_NAME_OVERRIDE_V1 — a doctor's per-type name override (doctor_consultation_prices.name_*),
@@ -410,7 +410,7 @@ export function openServicePickerModal({
         state.types    = types || [];
         state.services = services || [];
         state.doctors  = (doctors || []).filter(u =>
-            u.is_doctor === true || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').length > 0   // ADMIN_DOCTOR_LIST_V1
+            u.is_doctor === true || isOn(u.is_doctor) || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').length > 0   // ADMIN_DOCTOR_LIST_V1
         );
         if (state.doctors.length === 0) state.doctors = doctors || [];
         // SERVICE_NURSE_PROVIDER_V1 — performer pool incl. nurses (assigned via service_rates);
@@ -464,9 +464,8 @@ export function openServicePickerModal({
         // RLS scopes both to the clinic; fail-soft so a missing migration never blocks services.
         try {
             const [_ct, _dc] = await Promise.all([
-                // CLOUD_LEFTOVER_COLUMNS_V1 — офлайн у вида консультации нет ни
-                // английского названия, ни длительности; цена лежит в `price`.
-                supabase.from('consultation_types').select('id, name, name_ru, name_uz, price, sort_order, active').eq('active', true).order('sort_order', { ascending: true }),
+                // DOCTOR_PROFILE_V1 (мигр. 243) — у вида есть английское название и длительность приёма.
+                supabase.from('consultation_types').select('id, name, name_ru, name_uz, name_en, price, sort_order, active, duration_minutes').eq('active', true).order('sort_order', { ascending: true }),
                 supabase.from('doctor_consultation_prices').select('doctor_id, consultation_type_id, price, available, is_free, name_ru, name_uz, name_en'),
             ]);
             state.consultationTypes = (_ct && !_ct.error) ? (_ct.data || []) : [];
@@ -476,25 +475,24 @@ export function openServicePickerModal({
             // CONSULT_PER_DOCTOR_ROWS_V1 — one bookable row PER DOCTOR×consultation (the name + price
             // the doctor set in #consultation-types), not one aggregate clinic-type row. The doctor is
             // bound to the row (__consultDoctorId) so picking it books that doctor at that price.
-            const _ctById = {}; for (const _c of state.consultationTypes) _ctById[String(_c.id)] = _c;
-            const _docById = {}; for (const _d of state.doctors) _docById[String(_d.id)] = _d;
             const consultRows = [];
-            for (const _k in state.docConsult) {
-                const _dc2 = state.docConsult[_k]; if (!_dc2 || !isOn(_dc2.available)) continue;   // CLINIC_API_FIX_V1 — 0 из базы = «не ведёт»
-                const _bar = _k.indexOf('|'); const _did = _k.slice(0, _bar), _tid = _k.slice(_bar + 1);
-                const _ct2 = _ctById[_tid], _doc = _docById[_did];
-                if (!_ct2 || !_doc) continue;
-                consultRows.push({
-                    id: 'c|' + _did + '|' + _tid,
-                    name: consultNameFor(_did, _ct2),
-                    price: isOn(_dc2.is_free) ? 0 : (_dc2.price != null ? Number(_dc2.price) : 0),   // CLINIC_API_FIX_V1
-                    duration_minutes: 30,   // длительности у вида консультации офлайн нет — приём по умолчанию
-                    __consult: true, consultation_type_id: _ct2.id, __ct: _ct2, core_service_id: null,
-                    // CLINIC_API_FIX_V1 — номер врача — тот же, что у врача из базы (_doc.id,
-                    // число), а не текст из ключа «10|6»: '10' === 10 — ложь, и строку не
-                    // узнавали ни колонка врача в календаре, ни колонка врачей, ни поиск.
-                    __consultDoctorId: _doc.id, __consultDocName: _doc.full_name || _doc.name || '',
-                });
+            // DOCTOR_PROFILE_V1 — решение владельца 8: консультация врача без своей
+            // строки цены больше не прячется — она по общей цене вида, у каждого
+            // врача (is_doctor). Строка с «Ведёт» снятым — прячет, как прежде.
+            for (const _ct2 of state.consultationTypes) {
+                for (const _doc of state.doctors) {
+                    const _dc2 = state.docConsult[_doc.id + '|' + _ct2.id] || null;
+                    if (!consultOffered(_ct2, _dc2, _doc)) continue;
+                    consultRows.push({
+                        id: 'c|' + _doc.id + '|' + _ct2.id,
+                        name: consultNameFor(_doc.id, _ct2),
+                        price: consultPrice(_ct2, _dc2).price,
+                        duration_minutes: consultMinutes(_ct2),   // DOCTOR_PROFILE_V1 — длительность вида (было 30 для всех)
+                        __consult: true, consultation_type_id: _ct2.id, __ct: _ct2, core_service_id: null,
+                        // CLINIC_API_FIX_V1 — номер врача — тот же, что у врача из базы (_doc.id, число).
+                        __consultDoctorId: _doc.id, __consultDocName: _doc.full_name || _doc.name || '',
+                    });
+                }
             }
             consultRows.sort((_a, _b) => (_a.name || '').localeCompare(_b.name || '', 'ru'));
             if (consultRows.length) {

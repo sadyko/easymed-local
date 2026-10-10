@@ -4,7 +4,7 @@
 // желанию до сохранения). Внутри — «Отчёт» (период, конверсия, источники)
 // и выгрузка Excel. Таблица crm_requests (mig 044).
 import { supabase } from '../../supabase.js';
-import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы, одно правило
+import { consultPrice, consultOffered } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1 — флаги 0/1 (isOn) и цена консультации — одно правило с кассой
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { askRecordingUntilReady, recordingMessage, RECORDING_WAITING, RECORDING_GAVE_UP } from '../../shared/call-recording.js?v=crr1';   // CALL_RECORDING_REASONS_V1 — «Прослушать»: причина словами, повтор, пока запись готовится
@@ -1770,7 +1770,6 @@ async function paint() {
         // иначе колл-центр записал бы к врачу, у которого этой услуги нет.
         // Никто не отмечен на услугу — предлагаем всех, чтобы запись не встала.
         // Разбор ревью (M9) — кто ведёт вид приёма (doctor_consultation_prices).
-        let consultDoctors = new Map();   // consultation_type_id -> Set(doctor_id)
         // CLINIC_API_FIX_V1 — ЦЕНА КОНСУЛЬТАЦИИ — ТА, ЧТО ВОЗЬМЁТ КАССА
         // (pricing.js consultationFor): у врача есть строка по этому виду —
         // её цена (is_free → 0, пустая → 0; из двух строк — последняя), строки
@@ -1779,15 +1778,18 @@ async function paint() {
         let consultTypes = [];               // consultation_types: id, price
         let consultRows = new Map();         // 'doctor_id|type_id' -> строка doctor_consultation_prices
         function consultPriceOf(p) {
+            // DOCTOR_PROFILE_V1 — правило кассы целиком (shared/consultation-price.js):
+            // своя цена, «Бесплатно» и пустая цена — 0 (решение 13), строки нет — общая цена вида (решение 8).
             const dc = p && p.doctor_id != null ? consultRows.get(String(p.doctor_id) + '|' + String(p.consultation_type_id)) : null;
-            if (dc) return isOn(dc.is_free) ? 0 : (dc.price != null && Number.isFinite(Number(dc.price)) ? Math.max(0, Number(dc.price)) : 0);
             const ct = consultTypes.find((c) => String(c.id) === String(p && p.consultation_type_id));
-            return ct && Number.isFinite(Number(ct.price)) ? Math.max(0, Number(ct.price)) : 0;
+            return consultPrice(ct || null, dc || null).price;
         }
         function doctorsForService(svcId, p = null) {
             if (p && p.service_id == null && p.consultation_type_id != null) {
-                const who = consultDoctors.get(String(p.consultation_type_id));
-                const pool = who ? docCatalog.filter((d) => who.has(String(d.id))) : [];
+                // DOCTOR_PROFILE_V1 — решение владельца 8: ведёт тот, у кого «Ведёт»
+                // отмечено, и врач (is_doctor) без своей строки; «Ведёт» снято — нет.
+                const ct = consultTypes.find((c) => String(c.id) === String(p.consultation_type_id)) || { id: p.consultation_type_id };
+                const pool = docCatalog.filter((d) => consultOffered(ct, consultRows.get(String(d.id) + '|' + String(p.consultation_type_id)) || null, d));
                 return pool.length ? pool : docCatalog;
             }
             const assigned = docCatalog.filter(d => {
@@ -2072,7 +2074,7 @@ async function paint() {
         // CRM_LINE_DOCTOR_V1 — `requires_doctor` решает, нужен ли строке врач;
         // список врачей нужен тут же, чтобы колл-центр выбирал из тех, кто эту
         // услугу реально оказывает (Сотрудники → «Услуги и ставки»).
-        supabase.from('users').select('id, full_name, specialty, service_rates, scheduling_mode')   // CLINIC_API_FIX_V1 — живая очередь
+        supabase.from('users').select('id, full_name, specialty, service_rates, scheduling_mode, is_doctor')   // CLINIC_API_FIX_V1 — живая очередь; DOCTOR_PROFILE_V1 — кто врач, по is_doctor
             .eq('role', 'doctor').eq('is_active', true).order('full_name')
             .then(({ data }) => { docCatalog = data || []; });
         // CRM_SERVICE_FILTER_V1 — рейка категорий: сами категории и колонки, по
@@ -2095,18 +2097,13 @@ async function paint() {
                 // строки заявки ждут этот ответ, иначе цена врача не успела бы доехать.
                 const consultPricesP = supabase.from('doctor_consultation_prices').select('id, doctor_id, consultation_type_id, price, available, is_free')
                     .then(({ data }) => {
-                        const m = new Map();
                         const rows = new Map();
                         for (const r of (data || [])) {
                             const rk = String(r.doctor_id) + '|' + String(r.consultation_type_id);   // CLINIC_API_FIX_V1
                             const was = rows.get(rk);
                             if (!was || Number(r.id) > Number(was.id)) rows.set(rk, r);
-                            if (!isOn(r.available)) continue;   // CLINIC_API_FIX_V1 — одно правило флага на все окна
-                            const k = String(r.consultation_type_id);
-                            if (!m.has(k)) m.set(k, new Set());
-                            m.get(k).add(String(r.doctor_id));
                         }
-                        consultDoctors = m;
+                        // DOCTOR_PROFILE_V1 — кто ведёт вид, решает consultOffered по строке (doctorsForService).
                         consultRows = rows;   // CLINIC_API_FIX_V1
                     }, () => {});
                 supabase.from('crm_request_services')

@@ -351,3 +351,74 @@ test('кабинет врача, «Повторный визит»: в спис�
     assert.ok(values.includes(String(LED)), 'консультации, которую врач ведёт, в списке нет: ' + values.join(','));
     assert.ok(!values.includes(String(NOT_LED)), 'список предлагает консультацию, которую врач не ведёт (available = 0)');
 });
+
+// ─── DOCTOR_PROFILE_V1 — решение владельца 8: своей строки нет — общая цена ───
+test('DOCTOR_PROFILE_V1: окно записи — врач (is_doctor) без своих строк получает оба вида по общей цене; «Ведёт» снятое по-прежнему прячет', async () => {
+    seedPrices();
+    DB.prepare("INSERT OR IGNORE INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (12, 'doc3', 'x', 'Сидоров Сидор', 'doctor', 1)").run();
+    DB.prepare("UPDATE users SET role = 'doctor', is_doctor = 1 WHERE id = 12").run();
+    try {
+        document.body.children = [];
+        const picks = [];
+        openServicePickerModal({ onPick: (p) => picks.push(p) });
+        const box = await until(() => modals().find((m) => m.textContent.includes('Сидоров Сидор') && m.textContent.includes('Повторный приём')));
+        assert.ok(box, 'окно записи не открылось');
+        const sidorovRows = () => colRows(box, 'Услуги').filter((r) => r.textContent.includes('Сидоров Сидор'));
+        await until(() => sidorovRows().length >= 2, 3000);
+        const rows = sidorovRows();
+        assert.equal(rows.length, 2, 'у врача без строк — оба вида: ' + rows.map((r) => r.textContent).join(' | '));
+        assert.match(rows.find((r) => r.textContent.includes('Первичный приём')).textContent, /80\s000/);
+        assert.match(rows.find((r) => r.textContent.includes('Повторный приём')).textContent, /60\s000/);
+        assert.ok(!colRows(box, 'Услуги').some((r) => r.textContent.includes('Иванов Иван') && r.textContent.includes('Первичный приём')),
+            '«Ведёт» снято (available = 0) — вид не предлагается');
+        rows.find((r) => r.textContent.includes('Первичный приём')).dispatch('click');
+        box.querySelectorAll('button').find((b) => /Готово/.test(b.textContent)).dispatch('click');
+        await until(() => picks.length);
+        assert.equal(picks[0].service.price, 80000);
+        assert.equal(picks[0].service.duration_minutes, 30, 'длительность вида (мигр. 243, по умолчанию 30)');
+        assert.equal(picks[0].doctor && picks[0].doctor.id, 12);
+    } finally {
+        DB.prepare("UPDATE users SET role = 'registrar', is_doctor = 0 WHERE id = 12").run();
+    }
+});
+
+// DOCTOR_PROFILE_V1 — решение владельца 13: строка врача с пустой ценой — 0, как в
+// кассе; общая цена вида — только виду, по которому у врача строки нет.
+test('DOCTOR_PROFILE_V1: окно записи — строка врача с пустой ценой — 0 (решение 13), вид без строки — общая цена', async () => {
+    seedPrices();
+    DB.prepare("INSERT OR IGNORE INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (12, 'doc3', 'x', 'Сидоров Сидор', 'doctor', 1)").run();
+    DB.prepare("UPDATE users SET role = 'doctor', is_doctor = 1 WHERE id = 12").run();
+    DB.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available, is_free) VALUES (12, ?, NULL, 1, 0)').run(LED);
+    try {
+        document.body.children = [];
+        const picks = [];
+        openServicePickerModal({ onPick: (p) => picks.push(p) });
+        const box = await until(() => modals().find((m) => m.textContent.includes('Сидоров Сидор') && m.textContent.includes('Повторный приём')));
+        assert.ok(box, 'окно записи не открылось');
+        const sidorovRows = () => colRows(box, 'Услуги').filter((r) => r.textContent.includes('Сидоров Сидор'));
+        await until(() => sidorovRows().length >= 2, 3000);
+        assert.match(sidorovRows().find((r) => r.textContent.includes('Первичный приём')).textContent, /80\s000/, 'вид без строки — общая цена');
+        sidorovRows().find((r) => r.textContent.includes('Повторный приём')).dispatch('click');
+        box.querySelectorAll('button').find((b) => /Готово/.test(b.textContent)).dispatch('click');
+        await until(() => picks.length);
+        assert.equal(picks[0].service.price, 0, 'пустая цена в строке врача — 0, а не общие 60 000');
+    } finally {
+        DB.prepare('DELETE FROM doctor_consultation_prices WHERE doctor_id = 12').run();
+        DB.prepare("UPDATE users SET role = 'registrar', is_doctor = 0 WHERE id = 12").run();
+    }
+});
+
+test('DOCTOR_PROFILE_V1: «Повторный визит» у врача без своих строк — оба вида', async () => {
+    seedPrices();
+    document.body.children = [];
+    const container = new El('div');
+    const ctx = { container, visitServiceId: 902, visitId: 1902, patient: { id: 77, lastName: 'Пациент', firstName: 'Тест', mrn: 'P-77', __service: { id: 902, name: 'Приём', doctorId: PETROV, doctorName: 'Петров Пётр' } } };
+    WS.activateWorkspace(ctx);
+    container.appendChild(WS.soapForm(ctx));
+    const btn = container.querySelector('[data-revisit-btn]');
+    btn.dispatch('click');
+    await btn._pending;
+    const dlg = await until(() => modals().pop());
+    const values = dlg.querySelectorAll('option').map((o) => o.getAttribute('value'));
+    assert.ok(values.includes(String(NOT_LED)) && values.includes(String(LED)), 'своей строки нет — виды ведутся по общей цене: ' + values.join(','));
+});
