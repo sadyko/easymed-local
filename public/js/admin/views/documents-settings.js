@@ -334,8 +334,27 @@ function applyStateToControls() {
 }
 
 // CLINIC_PROFILE_V1 — объяснение под каждым полем с ошибкой; поле без ошибки — чистое.
-function showProblems(problems) {
+// Полировка по макету: focus — неудачное сохранение; экран прокручивается к
+// ПЕРВОМУ неверному полю в порядке экрана (FIELD_ORDER) и ставит на него
+// фокус. Иначе человек видел только тост, а поле могло быть ниже края.
+const FIELD_ORDER = [
+    // «Реквизиты клиники» → «Адрес для партнёров и сайта» → «Сайт и соцсети» → «Карта и маршрут»
+    'clinic_name', 'name_uz', 'name_en', 'about_ru', 'about_uz', 'about_en', 'address', 'phone', 'email', 'license',
+    'country_code', 'region_code', 'district_code', 'street_ru', 'street_uz', 'street_en',
+    'website', 'telegram_bot', 'telegram_channel', 'instagram', 'maps_url',
+];
+function showProblems(problems, { focus = false } = {}) {
     for (const [k, err] of Object.entries(refs.errs)) err.set(problems[k] || '');
+    if (!focus) return;
+    const bad = (k) => !!(problems[k] && refs.errs[k] && refs.errs[k].ctrl);
+    const first = FIELD_ORDER.find(bad) || Object.keys(problems).find(bad);
+    if (first) focusField(refs.errs[first].ctrl);
+}
+function focusField(ctrl) {
+    const calm = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    try { ctrl.scrollIntoView({ block: 'center', behavior: calm ? 'auto' : 'smooth' }); } catch (_) { /* старый браузер */ }
+    try { ctrl.focus({ preventScroll: true }); } catch (_) { /* поле исчезло */ }
 }
 
 // CLINIC_PROFILE_V1 — прежний единственный логотип (resizeImageToDataUrl /
@@ -411,7 +430,7 @@ async function save() {
     for (const [k, msg] of Object.entries(all)) {
         if (keys.includes(k) || (addressTouched && (ADDRESS_COLUMNS.includes(k)))) problems[k] = msg;
     }
-    showProblems(problems);
+    showProblems(problems, { focus: true });   // CLINIC_PROFILE_V1 (полировка) — к первому неверному полю
     if (Object.keys(problems).length) { toast(tr('Проверьте выделенные поля.'), 'fail'); return; }
     btn.disabled = true;
     paintSaveBtn(btn, true);
@@ -428,6 +447,9 @@ async function save() {
         // сохранение не отменяет: оно уже прошло.
         await refreshClinicBrand(supabase).catch(() => {});
     } catch (e) {
+        // CLINIC_PROFILE_V1 (полировка) — сервер назвал поле (/api/db: { field,
+        // message } — те же правила, что у экрана): объяснение под ним и фокус.
+        if (e && e.field && e.message && refs.errs[e.field]) showProblems({ [e.field]: e.message }, { focus: true });
         toast((e && e.message) || tr('Не удалось сохранить.'), 'fail');
     } finally {
         btn.disabled = false;

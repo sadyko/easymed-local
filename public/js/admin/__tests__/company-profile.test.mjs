@@ -21,6 +21,8 @@ import assert from 'node:assert/strict';
 // ===========================================================================
 // Поддельный DOM
 // ===========================================================================
+const focusLog = [];
+const scrollLog = [];
 class FakeNode {
     constructor(tag) {
         this.tagName = String(tag).toUpperCase();
@@ -57,7 +59,8 @@ class FakeNode {
     querySelector(sel) { return descendants(this).find((n) => matches(n, sel)) || null; }
     querySelectorAll(sel) { return descendants(this).filter((n) => matches(n, sel)); }
     remove() { if (this._parent) this._parent.removeChild(this); }
-    focus() {} blur() {} scrollIntoView() {} select() {}
+    // CLINIC_PROFILE_V1 (полировка) — куда экран увёл фокус и прокрутку после неудачного сохранения.
+    focus() { focusLog.push(this); } blur() {} scrollIntoView(opts) { scrollLog.push({ node: this, opts }); } select() {}
     get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
     set textContent(v) { this._text = String(v); this.children.length = 0; }
     get classList() {
@@ -168,6 +171,7 @@ let uploads;
 let nextStorageError = null;   // { status, error } — отказ хранилища на следующую загрузку
 let failNextDocSelect = false; // CLINIC_PROFILE_V1 (ревью C1) — чтение doc_settings отвечает 503 (сервер перезапускается)
 let geoTables = GEO;           // CLINIC_PROFILE_V1 (ревью I1) — справочник подменяется на «настоящие» id
+let nextUpdateError = null;    // CLINIC_PROFILE_V1 (полировка) — отказ сервера на следующее сохранение: { status, error }
 // Строка doc_settings после миграции 240: прежние поля заполнены, новые пусты.
 function freshRow(extra = {}) {
     const row = { id: 1, paper_size: 'A5', show_watermark: 1, footer_note: 'Спасибо за визит.', legal_note: 'Электронный документ.', lab_scope: 'building' };
@@ -200,6 +204,10 @@ globalThis.fetch = async (url, opts = {}) => {
             if (op === 'select' && failNextDocSelect) {
                 failNextDocSelect = false;
                 return { ok: false, status: 503, json: async () => ({ error: { code: 'unavailable', message: 'server restarting' } }) };
+            }
+            if (op === 'update' && nextUpdateError) {
+                const { status, error } = nextUpdateError; nextUpdateError = null;
+                return { ok: false, status, json: async () => ({ error }) };
             }
             if (op === 'update') { lastUpdate = desc.values; docRow = { ...docRow, ...desc.values }; }
             return ok({ data: { ...docRow } });
@@ -998,4 +1006,55 @@ test('общее поле на трёх языках: пометка включ�
     const after = descendants(marked.node).filter((n) => matches(n, '.cpf-miss') && !n.hidden);
     assert.equal(after.length, 1, 'после set() помечено пустое EN');
     assert.ok(after[0]._parent.attrs.for === marked.inputs.en.ctrl.attrs.id, 'пометка — у EN');
+});
+
+// ===========================================================================
+// Полировка по макету (2026-10-10) — неудачное сохранение: объяснение под
+// каждым неверным полем, прокрутка к первому из них (в порядке экрана) и
+// фокус на нём. Раньше человек видел только тост, а поле могло быть ниже края.
+// ===========================================================================
+const resetFocus = () => { focusLog.length = 0; scrollLog.length = 0; };
+const lastFocused = () => focusLog[focusLog.length - 1] || null;
+
+test('неудачное сохранение: объяснение под каждым неверным полем; прокрутка и фокус — на первом по экрану', async () => {
+    const root = await open();
+    type(fieldInput(root, 'Сайт'), 'не сайт');                      // «Сайт и соцсети» — ниже адреса
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Мира 1');          // адрес начат — нужен город / область
+    resetFocus();
+    await save(root);
+
+    assert.equal(lastUpdate, null, 'неверное не уходит на сервер');
+    assert.equal(fieldError(root, 'Город / область'), 'Выберите город или область.');
+    assert.match(fieldError(root, 'Сайт'), /https:\/\//);
+    const region = geoSel(root, 'Город / область');
+    assert.equal(lastFocused(), region, 'фокус — на первом неверном поле по порядку экрана (адрес выше ссылок)');
+    assert.ok(scrollLog.some((s) => s.node === region), 'к первому неверному полю экран прокручен');
+    assert.equal(scrollLog[scrollLog.length - 1].opts && scrollLog[scrollLog.length - 1].opts.block, 'center', 'поле — посередине экрана, а не у края');
+    assert.match(toastText(), /Проверьте выделенные поля/);
+
+    // Осталось одно неверное — фокус на нём.
+    type(triInput(root, 'Улица, дом', 'ru'), '');
+    resetFocus();
+    await save(root);
+    assert.equal(fieldError(root, 'Город / область'), '', 'исправленное поле — без ошибки');
+    assert.equal(lastFocused(), fieldInput(root, 'Сайт'));
+});
+
+test('отказ сервера с полем: объяснение под этим полем, фокус на нём, тост с тем же текстом', async () => {
+    const root = await open();
+    const MAPS = 'Нужна ссылка из Яндекс Карт: откройте клинику в Яндекс Картах, нажмите «Поделиться» и скопируйте ссылку (yandex.uz/maps/…).';
+    type(fieldInput(root, 'Ссылка на клинику в Яндекс Картах'), 'https://yandex.uz/maps/-/CDabc');
+    nextUpdateError = { status: 400, error: { code: 'bad_request', message: MAPS, field: 'maps_url' } };
+    resetFocus();
+    await save(root);
+
+    assert.equal(fieldError(root, 'Ссылка на клинику в Яндекс Картах'), MAPS);
+    assert.equal(lastFocused(), fieldInput(root, 'Ссылка на клинику в Яндекс Картах'));
+    assert.match(toastText(), /Нужна ссылка из Яндекс Карт/);
+    // Отказ без поля — только тост, фокус не трогаем.
+    nextUpdateError = { status: 409, error: { code: 'conflict', message: 'Конфликт.' } };
+    resetFocus();
+    type(fieldInput(root, 'Электронная почта'), 'x@shifo.uz');
+    await save(root);
+    assert.equal(focusLog.length, 0, 'без поля фокус остаётся, где был');
 });
