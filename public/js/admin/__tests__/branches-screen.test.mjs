@@ -311,3 +311,149 @@ test('адрес: свой заголовок, подсказка, замок, �
     assert.ok(fieldInput(mDefault, 'Ссылка на клинику в Яндекс Картах'), 'без опций — подпись «Компании»');
     assert.ok(!isOff(fieldInput(mDefault, 'Ссылка на клинику в Яндекс Картах')));
 });
+
+// ===========================================================================
+// Задачи 12–14 — страница здания.
+// ===========================================================================
+const { renderBranchPage } = await import('../views/branch-page.js');
+const { BRANCH_MESSAGES, BRANCH_PROFILE_COLUMNS } = await import('../../shared/branch-profile.js');
+async function openPage(row, opts = {}) {
+    branchRows = row ? [{ ...BLANK_ROW, ...row }] : [];
+    writes = []; impactCalls = []; impactReply = { data: { doctors: [] } };
+    const t = document.getElementById('toast'); if (t) t.textContent = '';
+    let done = 0;
+    const root = mkEl('div');
+    await renderBranchPage(root, { row: row ? branchRows[0] : null, onDone: () => { done++; }, onBack: () => {}, ...opts });
+    await settle(80);
+    return { root, done: () => done };
+}
+
+test('харнесс: пустая строка сервера — ровно колонки миграции 241', () => {
+    assert.deepEqual(PROFILE_COLS, [...BRANCH_PROFILE_COLUMNS]);
+});
+
+test('новый филиал: без названия RU — объяснение, запроса нет; с названием — вставка без «active»', async () => {
+    const { root, done } = await openPage(null);
+    const add = buttonByText(root, /^Добавить$/);
+    assert.ok(add, 'у нового — «Добавить»');
+    assert.match(textOf(root), /Новый филиал/);
+    add.click(); await settle(60);
+    assert.equal(writes.length, 0);
+    assert.equal(triError(root, 'Название филиала', 'ru'), 'Введите название на русском.');
+    type(triInput(root, 'Название филиала', 'ru'), 'Юнусабад');
+    type(triInput(root, 'Название филиала', 'uz'), 'Yunusobod filiali');
+    add.click(); await settle(60);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].op, 'insert');
+    assert.deepEqual([writes[0].values.name, writes[0].values.name_uz], ['Юнусабад', 'Yunusobod filiali']);
+    assert.ok(!('active' in writes[0].values), 'вставка active не принимает');
+    assert.ok(!('address' in writes[0].values), 'прежний адрес экран не пишет (Р3)');
+    assert.equal(done(), 1);
+    assert.match(toastText(), /Филиал сохранён/);
+});
+
+test('прежний филиал: поля показывают строку; уходит только изменённое, по id', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад', name_uz: 'Yunusobod', phone: '+998 71 200 12 00' });
+    assert.equal(triInput(root, 'Название филиала', 'ru').value, 'Юнусабад');
+    assert.equal(triInput(root, 'Название филиала', 'uz').value, 'Yunusobod');
+    type(triInput(root, 'Название филиала', 'en'), 'Yunusabad branch');
+    await save(root);
+    assert.equal(writes[0].op, 'update');
+    assert.deepEqual(writes[0].values, { name_en: 'Yunusabad branch' });
+    assert.deepEqual(writes[0].filters, [{ col: 'id', op: 'eq', val: 5 }]);
+});
+
+test('ничего не меняли — «Нет изменений», запроса нет', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад', phone: '+998712001200' });
+    await save(root);
+    assert.equal(writes.length, 0);
+    assert.match(toastText(), /Нет изменений/);
+});
+
+test('телефон для пациентов и «Работает»', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' });
+    const ph = fieldInput(root, 'Телефон для пациентов');
+    const label = fieldBox(root, 'Телефон для пациентов').children.find((c) => c.tagName === 'LABEL');
+    assert.equal(label.attrs.for, ph.attrs.id, 'подпись связана с самим полем ввода (читалка экрана)');
+    ph.value = '+998 90 111 22 33';   // phoneInput читается при сохранении
+    const act = fieldInput(root, 'Работает');
+    act.checked = false; act.dispatchEvent({ type: 'change', target: act });
+    await save(root);
+    assert.equal(writes[0].values.phone.replace(/\D/g, ''), '998901112233');
+    assert.equal(writes[0].values.active, 0);
+});
+
+test('своё здание главного: телефон — из «Компании», только виден; кнопка ведёт в «Компанию»; уходит только своё «Филиалов»', async () => {
+    const nav = [];
+    const { root } = await openPage({ id: 1, name: 'Главный корпус', phone: 'старый' },
+        { own: true, company: { phone: '+998 71 200 12 00' }, onNavigate: (r) => nav.push(r) });
+    const ph = fieldInput(root, 'Телефон для пациентов');
+    assert.ok(isOff(ph));
+    assert.equal(ph.value.replace(/\D/g, ''), '998712001200');
+    assert.match(textOf(root), /Это здание/);
+    buttonByText(root, /Изменить в «Компании»/).click();
+    assert.deepEqual(nav, ['documents-settings']);
+    type(triInput(root, 'Название филиала', 'uz'), 'Bosh bino');
+    await save(root);
+    assert.deepEqual(writes[0].values, { name_uz: 'Bosh bino' });
+});
+
+test('своё здание: «Изменить в «Компании»» с несохранённым — спрашивает; отказ — остаёмся', async () => {
+    const nav = []; const asked = [];
+    globalThis.window.confirm = (t) => { asked.push(t); return false; };
+    try {
+        const { root } = await openPage({ id: 1, name: 'Главный корпус' }, { own: true, company: {}, onNavigate: (r) => nav.push(r) });
+        type(triInput(root, 'Название филиала', 'en'), 'Main');
+        buttonByText(root, /Изменить в «Компании»/).click();
+        assert.deepEqual(nav, []);
+        assert.match(asked[0], /не сохранён/);
+    } finally { delete globalThis.window.confirm; }
+});
+
+test('филиал: всё только видно, вверху объяснение, кнопки сохранения нет', async () => {
+    const { root } = await openPage({ id: 5, name: 'Главный корпус' }, { secondary: true });
+    assert.ok(textOf(root).includes(BRANCH_MESSAGES.mainOnly));
+    for (const l of ['ru', 'uz', 'en']) assert.ok(isOff(triInput(root, 'Название филиала', l)), l);
+    assert.ok(isOff(fieldInput(root, 'Телефон для пациентов')) && isOff(fieldInput(root, 'Работает')));
+    assert.equal(buttonByText(root, /^Сохранить$/), null);
+    assert.match(textOf(root), /Только просмотр/);
+});
+
+test('«Филиалы: Просмотр» — всё только видно', async () => {
+    const { root } = await openPage({ id: 5, name: 'Юнусабад' }, { readOnly: true });
+    assert.equal(buttonByText(root, /^Сохранить$/), null);
+    assert.ok(isOff(triInput(root, 'Название филиала', 'ru')));
+    assert.ok(isOff(fieldInput(root, 'Работает')));
+});
+
+test('«К списку филиалов»: без изменений — сразу; с несохранённым — спрашивает', async () => {
+    let backs = 0; const asked = [];
+    globalThis.window.confirm = (t) => { asked.push(t); return false; };
+    try {
+        const { root } = await openPage({ id: 5, name: 'Юнусабад' }, { onBack: () => { backs++; } });
+        buttonByText(root, /К списку филиалов/).click();
+        assert.deepEqual([backs, asked.length], [1, 0]);
+        type(triInput(root, 'Название филиала', 'en'), 'X');
+        buttonByText(root, /К списку филиалов/).click();
+        assert.equal(backs, 1, 'отказ — остаёмся');
+        assert.match(asked[0], /не сохранён/);
+    } finally { delete globalThis.window.confirm; }
+});
+
+test('отказ сервера: с полем — объяснение под ним; без поля — только тост; страница остаётся', async () => {
+    const { root, done } = await openPage({ id: 5, name: 'Юнусабад' });
+    const realFetch = globalThis.fetch;
+    let reply = { status: 409, error: { code: 'conflict', message: BRANCH_MESSAGES.mainOnly } };
+    globalThis.fetch = async (url, opts) => (String(url).startsWith('/api/db') && JSON.parse(opts.body || '{}').op === 'update'
+        ? { ok: false, status: reply.status, json: async () => ({ error: reply.error }) } : realFetch(url, opts));
+    try {
+        type(triInput(root, 'Название филиала', 'en'), 'Yunusabad');
+        await save(root);
+        assert.equal(toastText(), BRANCH_MESSAGES.mainOnly);
+        assert.equal(done(), 0, 'не сохранилось — к списку не уходим');
+        reply = { status: 400, error: { code: 'bad_request', message: BRANCH_MESSAGES.name, field: 'name' } };
+        type(triInput(root, 'Название филиала', 'ru'), 'Юнусабад-2');
+        await save(root);
+        assert.equal(triError(root, 'Название филиала', 'ru'), BRANCH_MESSAGES.name);
+    } finally { globalThis.fetch = realFetch; }
+});

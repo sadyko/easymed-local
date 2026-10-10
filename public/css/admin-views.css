@@ -7629,3 +7629,19 @@ table.list tr.is-off td { color: var(--ink-400); }
     .cpf-body { padding: 14px 16px 16px; }
 }
 /* /CLINIC_PROFILE_V1 — «Компания» */
+
+/* ===========================================================================
+   BRANCH_PROFILE_V1 — «Филиалы» (views/branches-editor.js, branch-page.js,
+   branch-hours-card.js, week-hours.js). Префикс .brf-. Только токены
+   приложения и шкала шрифтов; на ширине телефона — один столбец, без
+   прокрутки вбок.
+   ========================================================================= */
+.brf-page .cpf-stack { max-width: 880px; }
+.brf-page .page-head, .brf-list-page .page-head { flex-wrap: wrap; }
+.brf-page .page-head > div:first-child, .brf-list-page .page-head > div:first-child { flex: 1 1 260px; min-width: 0; }
+.brf-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
+.brf-title .page-title { min-width: 0; overflow-wrap: anywhere; }
+.brf-own { flex-wrap: wrap; align-items: center; }
+.brf-own > span { flex: 1 1 220px; min-width: 0; }
+.brf-lock { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
+/* /BRANCH_PROFILE_V1 — «Филиалы» */

@@ -11275,5 +11275,15 @@ export const STRINGS = {
   // BRANCH_PROFILE_V1 (экран «Филиалы») — сетка дней (views/week-hours.js), страница здания, список
   "{day}, с": {"en":"{day}, from","ru":"{day}, с","uz":"{day}, dan"},   // BRANCH_PROFILE_V1
   "{day}, до": {"en":"{day}, to","ru":"{day}, до","uz":"{day}, gacha"},   // BRANCH_PROFILE_V1
+  "RU — так филиал называется во всей программе, в отчётах и при связи зданий. UZ и EN получают сайт и партнёры.": {"en":"RU is the branch name across the program, in reports and when linking buildings. The website and partners receive UZ and EN.","ru":"RU — так филиал называется во всей программе, в отчётах и при связи зданий. UZ и EN получают сайт и партнёры.","uz":"RU — filial butun dasturda, hisobotlarda va binolarni bog‘lashda shu nom bilan ataladi. UZ va EN ni sayt va hamkorlar oladi."},   // BRANCH_PROFILE_V1
+  "Телефон для пациентов": {"en":"Phone for patients","ru":"Телефон для пациентов","uz":"Bemorlar uchun telefon"},   // BRANCH_PROFILE_V1
+  "К списку филиалов": {"en":"Back to branches","ru":"К списку филиалов","uz":"Filiallar ro‘yxatiga"},   // BRANCH_PROFILE_V1
+  "Новый филиал": {"en":"New branch","ru":"Новый филиал","uz":"Yangi filial"},   // BRANCH_PROFILE_V1
+  "Название и адрес на трёх языках, карта, часы работы и показ на сайте. Эти данные получат сайт клиники, Symptex и партнёры.": {"en":"Name and address in three languages, map, working hours and showing on the website. The clinic website, Symptex and partners receive this data.","ru":"Название и адрес на трёх языках, карта, часы работы и показ на сайте. Эти данные получат сайт клиники, Symptex и партнёры.","uz":"Uch tildagi nom va manzil, xarita, ish vaqti va saytda ko‘rsatish. Bu ma’lumotlarni klinika sayti, Symptex va hamkorlar oladi."},   // BRANCH_PROFILE_V1
+  "Адрес для партнёров, телефон и карта этого здания — из «Компании»: там их и меняйте.": {"en":"This building’s address for partners, phone and map come from “Company” — change them there.","ru":"Адрес для партнёров, телефон и карта этого здания — из «Компании»: там их и меняйте.","uz":"Bu binoning hamkorlar uchun manzili, telefoni va xaritasi — «Kompaniya»dan: ularni o‘sha yerda o‘zgartiring."},   // BRANCH_PROFILE_V1
+  "Изменить в «Компании»": {"en":"Change in “Company”","ru":"Изменить в «Компании»","uz":"«Kompaniya»da o‘zgartirish"},   // BRANCH_PROFILE_V1
+  "Филиал сохранён": {"en":"Branch saved","ru":"Филиал сохранён","uz":"Filial saqlandi"},   // BRANCH_PROFILE_V1
+  "Филиал изменён, но не сохранён. Вернуться к списку? Изменения пропадут.": {"en":"The branch has unsaved changes. Go back to the list? The changes will be lost.","ru":"Филиал изменён, но не сохранён. Вернуться к списку? Изменения пропадут.","uz":"Filial o‘zgartirildi, lekin saqlanmadi. Ro‘yxatga qaytasizmi? O‘zgarishlar yo‘qoladi."},   // BRANCH_PROFILE_V1
+  "Это здание": {"en":"This building","ru":"Это здание","uz":"Shu bino"},   // BRANCH_PROFILE_V1
   // /BRANCH_PROFILE_V1 (экран «Филиалы»)
 };
