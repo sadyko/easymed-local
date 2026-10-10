@@ -60,10 +60,15 @@
 // этого визита, и (ревью, I-1) любую сидовую «Не пришёл» пациента, чей день —
 // дата, ждущая строка или живая запись — этот день (liftMissed).
 //
+// CRM_UNIFY_V1 (2026-10-10, замечание владельца) — ДОГОНЯЮЩИЙ ПРОХОД ПРИХОДА
+// (crmArrivalCatchUp, ниже): тем же запуском и тем же часовым таймером, ДО
+// прохода «Не пришёл». Закрывает карточки, чьё доказательство прихода (работа
+// над услугой, отметка «Пришёл») когда-то прошло мимо правила прихода.
+//
 // При запуске и раз в час (server/index.js). Не бросает: ошибка — в лог.
-import { openStageKeys, noShowStageKey, scheduledStageKey, SEED_NO_SHOW_STAGE } from './config.js';
+import { openStageKeys, noShowStageKey, scheduledStageKey, wonStageKey, SEED_NO_SHOW_STAGE } from './config.js';   // CRM_UNIFY_V1 (2026-10-10) — wonStageKey
 import { arrivedByEvidence } from './booking-mirror.js';
-import { EVIDENCE_SERVICE_STATUSES } from './visit-status.js';   // CRM_UNIFY_V1 (задача 14) — cameSurely
+import { EVIDENCE_SERVICE_STATUSES, crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';   // CRM_UNIFY_V1 (задача 14) — cameSurely; (2026-10-10) — догоняющий проход
 import { localDate, today } from '../domain/day.js';
 import { digitsOf } from '../../../public/js/admin/views/crm-phone-match.js';   // CRM_UNIFY_V1 — мягкий ключ прохода
 
@@ -241,10 +246,85 @@ export function crmNoShowSweep(db, { day = null } = {}) {
   return moved;
 }
 
-/** При запуске и раз в час. Таймер unref: остановке сервера не мешает. */
+/**
+ * CRM_UNIFY_V1 (2026-10-10, замечание владельца) — ДОГОНЯЮЩИЙ ПРОХОД ПРИХОДА.
+ *
+ * Владелец: карточка «Записать на дату» — на завтра; пациент пришёл сегодня,
+ * два счёта оплачены, врач подписал услугу — а карточка осталась в
+ * «Подтверждён». Правило прихода не пропускало будущий визит ничем; теперь
+ * работа над услугой и отметка «Пришёл» — приход в любой день визита своего
+ * здания (crm/visit-status.js). Этот проход догоняет карточки, чьё
+ * доказательство прошло мимо правила раньше (в том числе до обновления):
+ *   • карточка открыта (любая открытая колонка) или в сидовой «Не пришёл»;
+ *   • её держит ЖИВОЙ визит СВОЕГО здания — ждущей строкой (visit_id) или
+ *     привязкой записи (crm_booking_links). Строка, уже закрытая приходом
+ *     ('done'), — не повод: карточку с такой строкой в работу вернул человек;
+ *   • у визита есть работа над услугой (EVIDENCE_SERVICE_STATUSES) или
+ *     отметка «Пришёл» (visits.status = 'arrived').
+ * Для такого визита — обычное правило прихода (crmVisitStatus → 'arrived'):
+ * карточки — в «Колонку конверсии», строки с услугой в визите — 'done'. Две
+ * разницы (catchUp): строк, которых в визите нет, проход в визит НЕ ставит — он
+ * не трогает денег (визитов, счетов, платежей, строк визита); и updated_at не
+ * двигает — переход делает сервер, а не контакт с пациентом (ревью, I-5: как
+ * проход «Не пришёл» и разовое исправление; иначе давняя карточка, закрытая при
+ * запуске, выглядела бы свежим обращением для окна contact-window.js).
+ *
+ * Никогда: «Пришёл», «Отказ» и прочие закрытые (правило прихода их не меняет и
+ * сюда они не выбираются); визит соседнего здания (sync_origin — правила
+ * crmFromSync); отменённый визит и визит «Не пришёл»; одни деньги (предоплата
+ * будущего визита — не приход). Идемпотентен: закрытая карточка второй раз не
+ * выбирается. Не бросает.
+ * @returns {number[]} id визитов, по которым прошло правило прихода
+ */
+export function crmArrivalCatchUp(db) {
+  const done = [];
+  try {
+    const won = wonStageKey(db);
+    const from = [...new Set([...openStageKeys(db), SEED_NO_SHOW_STAGE])].filter((k) => k !== won);
+    if (!from.length) return done;
+    let links = true;
+    try { db.prepare('SELECT 1 FROM crm_booking_links LIMIT 1').get(); } catch { links = false; }   // сборка без 187
+    const visits = db.prepare(`
+      SELECT v.id FROM visits v
+       WHERE v.id IN (SELECT l.visit_id FROM crm_request_services l JOIN crm_requests r ON r.id = l.request_id
+                       WHERE l.status = 'pending' AND l.visit_id IS NOT NULL AND r.status IN (${holes(from)})
+                      ${links ? `UNION SELECT b.visit_id FROM crm_booking_links b JOIN crm_requests r ON r.id = b.request_id
+                                  WHERE r.status IN (${holes(from)})` : ''})
+         AND v.sync_origin IS NULL AND v.${LIVE_VISIT_SQL}
+         AND (v.status IN (${holes(ARRIVED_STATUSES)})
+              OR EXISTS (SELECT 1 FROM visit_services vs
+                          WHERE vs.visit_id = v.id AND vs.status IN (${holes(EVIDENCE_SERVICE_STATUSES)})))
+       ORDER BY v.id`)
+      .all(...from, ...(links ? from : []), ...ARRIVED_STATUSES, ...EVIDENCE_SERVICE_STATUSES)
+      .map((r) => r.id);
+    if (!visits.length) return done;
+    db.transaction(() => {
+      for (const id of visits) {
+        crmVisitStatus(db, { visitId: id, from: null, to: ARRIVED_STATUSES[0], catchUp: true });
+        done.push(id);
+      }
+    })();
+  } catch (e) {
+    console.error('[crm-arrival-catch-up] проход не выполнен:', e && e.message);
+    return [];
+  }
+  return done;
+}
+
+/**
+ * При запуске и раз в час. Таймер unref: остановке сервера не мешает.
+ * CRM_UNIFY_V1 (2026-10-10) — СНАЧАЛА догоняющий проход прихода, потом «Не
+ * пришёл»: пришедшего не уносит в неявку ни на минуту. При запуске сервера это
+ * первый проход после разового исправления (server/index.js).
+ */
 export function scheduleCrmNoShow(db, { everyMs = 3600 * 1000 } = {}) {
-  crmNoShowSweep(db);
-  const h = setInterval(() => crmNoShowSweep(db), everyMs);
+  const tick = () => {
+    const caught = crmArrivalCatchUp(db);
+    if (caught.length) console.log(`  CRM: приход догнан по визитам: ${caught.length}.`);
+    crmNoShowSweep(db);
+  };
+  tick();
+  const h = setInterval(tick, everyMs);
   if (h && typeof h.unref === 'function') h.unref();
   return h;
 }

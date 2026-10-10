@@ -314,7 +314,9 @@ test('10. после прихода и счёта правка из CRM отка
     // Пациент пришёл — строки закрыты, правка их из CRM отказывается.
     const arr = await t.rpc('calendar_book', 'reg', { visit_id: visitId, start: at(D, 10), status: 'arrived' });
     assert.equal(arr.status, 200, JSON.stringify(arr.json));
-    t.db.prepare("UPDATE crm_request_services SET status = 'done' WHERE request_id = ?").run(rid);   // приход в будущем дне сторож не пропускает — ставим как после прихода
+    // CRM_UNIFY_V1 (2026-10-10) — ОБНОВЛЕНО НАМЕРЕННО: отметка «Пришёл» на визите
+    // будущего дня своего здания — приход (прежде строки ставили руками).
+    assert.deepEqual(linesOf(t.db, rid).map((l) => l.status), ['done', 'done'], 'отметка «Пришёл» на визите будущего дня не закрыла строки');
     const r2 = await t.dbq('cc', { table: 'crm_request_services', op: 'update', values: { status: 'cancelled' }, filters: [{ col: 'request_id', op: 'eq', val: rid }] });
     assert.equal(r2.status, 409);
     assert.match(r2.json.error.message, /уже пришёл/);

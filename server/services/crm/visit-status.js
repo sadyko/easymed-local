@@ -110,6 +110,8 @@ function writeParent(stmt, parent, status, when) {
  * 'pending') и она либо без даты («когда придёт»), либо ровно на этот день.
  * Заявка, назначенная на другой день, сегодняшним приходом не закрывается —
  * то самое правило CRM_FUTURE_LEAD_V2, ради которого оно однажды и появилось.
+ * «Этот день» — день ВИЗИТА, и тогда, когда пациент пришёл раньше него
+ * (CRM_UNIFY_V1, 2026-10-10: работа или отметка на визите завтрашнего дня).
  *
  * CRM_UNIFY_V1 (ревью задачи 3, R5) — заявка БЕЗ ДАТЫ закрывается приходом,
  * только если она двигалась в окне повторного обращения (updated_at, иначе
@@ -154,8 +156,9 @@ function settleLineless(db, { patientId, day, open, won, write }) {
  * этого дня (строкой или привязкой crm_booking_links). Ждущие строки ей не
  * мешают: первый приход закрывает карточку, строки других дней остаются
  * записями. Строки не трогаются (инвариант: 'done' — только строка, чья услуга
- * в визите). Другой день, другой пациент (общий номер) и будущий визит — нет:
- * будущий визит приходом не бывает (сторож в crmVisitStatus).
+ * в визите). Другой день и другой пациент (общий номер) — нет. CRM_UNIFY_V1
+ * (2026-10-10) — будущий визит бывает приходом только работой и отметкой
+ * «Пришёл» на визите своего здания (сторож в crmVisitStatus); деньги — нет.
  *
  * CRM_UNIFY_V1 (финальное ревью, A-P5) — и ОПОЗДАНИЕ: пропущенный день не
  * раньше окна назад (contact-window.js missedRecentlySql — то же правило, что у
@@ -214,10 +217,17 @@ function liftMissed(db, { patientId, day, won, write }) {
  * Всё остальное ('scheduled', 'confirmed' и возврат назад) заявку не трогает.
  *
  * @param {object} db
- * @param {{visitId:number, from:?string, to:string}} p — from/to: статус визита
- *        ДО и ПОСЛЕ записи. Равные значения — не событие, и работы здесь нет.
+ * @param {{visitId:number, from:?string, to:string, catchUp?:boolean}} p — from/to:
+ *        статус визита ДО и ПОСЛЕ записи. Равные значения — не событие, и
+ *        работы здесь нет. catchUp (CRM_UNIFY_V1, 2026-10-10) — зовёт
+ *        догоняющий проход (crm/no-show.js crmArrivalCatchUp), переход делает
+ *        сам сервер: строки, которых нет в визите, в визит НЕ ставятся
+ *        (placeHeldLines — деньги проходу трогать нельзя; такая строка ждёт, как
+ *        любая непоставленная), и updated_at не двигается (ревью, I-5: переход
+ *        сервера — не контакт с пациентом, как у прохода «Не пришёл» и разового
+ *        исправления).
  */
-export function crmVisitStatus(db, { visitId, from, to } = {}) {
+export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) {
   try {
     const id = Number(visitId);
     if (!Number.isInteger(id) || id <= 0) return;
@@ -231,17 +241,25 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
       -- FINAL_MONEY_FIX_V1 (M6) — день визита МЕСТНЫЙ (как ensure_visit и
       -- отчёты): substr(visit_date, 1, 10) давал день по UTC, и приход после
       -- полуночи по местному закрывал вчерашние заявки вместо сегодняшних.
-      SELECT id, patient_id, ${localDate('visit_date')} AS day,
+      SELECT id, patient_id, sync_origin, ${localDate('visit_date')} AS day,
              (${localDate('visit_date')} > date('now','localtime')) AS future
         FROM visits WHERE id = ?
     `).get(id);
     if (!visit) return;
-    // НА ПРИЁМ, КОТОРЫЙ ЕЩЁ НЕ НАСТУПИЛ, ПРИЙТИ НЕЛЬЗЯ. Сторож стоит здесь, а
-    // не у одной из дверей, чтобы любая новая дверь получила его даром:
-    // будущий визит не закрывает заявку ни оплатой, ни актом, ни работой,
-    // ни отметкой «пришёл». Неявка и отмена будущего визита — законные
-    // события, их сторож не трогает.
-    if (visit.future && ARRIVED_STATUSES.includes(now)) return;
+    // CRM_UNIFY_V1 (2026-10-10, замечание владельца) — ПРИЙТИ РАНЬШЕ ДНЯ
+    // ЗАПИСИ МОЖНО. Владелец записал из карточки на завтра, пациент пришёл
+    // сегодня: регистратура приняла, касса взяла деньги, врач подписал — а
+    // карточка осталась ждать, потому что здесь стоял сторож «будущий визит не
+    // приход» для ВСЕХ доказательств. Теперь (решение контролёра):
+    //   • отметка «Пришёл» (calendar_book) и работа над услугой
+    //     (crmServiceEvidence) — приход в ЛЮБОЙ день визита своего здания:
+    //     это слово человека у стойки и работа над человеком в кабинете;
+    //   • одни деньги по будущему визиту — предоплата, НЕ приход: этот сторож
+    //     стоит у денег (crmVisitEvidence — оплата, акт, долг), а не здесь;
+    //   • визит соседнего здания (sync_origin) — прежнее правило: будущий не
+    //     приход ничем (правила crmFromSync не меняются).
+    // Неявка и отмена будущего визита — законные события, сторож их не трогает.
+    if (visit.future && ARRIVED_STATUSES.includes(now) && visit.sync_origin != null) return;
 
     const lines = linesOf(db, id);
     const requestIds = [...new Set(lines.map((l) => l.request_id).filter(Boolean))];
@@ -264,7 +282,7 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
 
     const open = openStageKeys(db);
     const scheduled = scheduledStageKey(db);
-    const write = setParent(db);              // приход — движение карточки
+    const write = setParent(db, !catchUp);    // приход — движение карточки (догоняющий проход — нет, I-5)
     const quiet = setParent(db, false);       // CRM_UNIFY_V1 (ревью, I-5) — неявка и отмена — нет
     const pendingLeft = db.prepare(`
       SELECT COUNT(*) AS n, MIN(NULLIF(scheduled_date, '')) AS next,
@@ -284,8 +302,9 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
         // CRM_UNIFY_V1 (проверка ревью задачи 3, N1/P2) — СНАЧАЛА УСЛУГИ:
         // строки, которые визит держит, а в визите их нет (взяли после прихода
         // или при счёте), встают в визит 'added' — касса видит их в «Ждут
-        // счёта» (booking-mirror.js placeHeldLines).
-        placeHeldLines(db, id);
+        // счёта» (booking-mirror.js placeHeldLines). CRM_UNIFY_V1 (2026-10-10) —
+        // кроме догоняющего прохода (catchUp): он денег не трогает.
+        if (!catchUp) placeHeldLines(db, id);
         // ИНВАРИАНТ (решение контролёра) — ЕДИНСТВЕННОЕ МЕСТО, ГДЕ СТРОКА
         // ЗАЯВКИ СТАНОВИТСЯ 'done': только строка, чья услуга ДЕЙСТВИТЕЛЬНО в
         // визите (строка визита visit_service_id этого визита). Поставить её в
@@ -406,26 +425,38 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
 // приход по отменённой записи.
 
 /**
- * «Есть доказательство, что пациент был здесь» — тот же переход, что у
- * отметки прихода. Идемпотентен по построению: строки уже закрыты, заявка уже
- * в «Пришёл», и повторный вызов не находит, что менять.
+ * Общий шаг двух доказательств: визит живой — тот же переход, что у отметки
+ * прихода. Идемпотентен по построению: строки уже закрыты, заявка уже в
+ * «Пришёл», и повторный вызов не находит, что менять.
+ * @param {boolean} work — доказательство РАБОТОЙ над услугой (CRM_UNIFY_V1,
+ *        2026-10-10): будущий день визита ему не помеха (визит соседнего здания
+ *        отсекает сторож crmVisitStatus). Деньги (work = false) — помеха.
+ */
+function arriveBy(db, visitId, { work }) {
+  const id = Number(visitId);
+  if (!Number.isInteger(id) || id <= 0) return;
+  // ДЕНЬГИ НЕ МОГУТ ОПЕРЕЖАТЬ ДЕНЬ ВИЗИТА (разбор ревью). Мастер визита
+  // выставляет счёт по акту В ТОТ ЖЕ КЛИК, что и записывает, — на каждый день
+  // корзины, включая будущие. Без этой строки заявка на следующий вторник
+  // становилась «Пришёл» сегодня. Вчерашний визит, оплаченный сегодня,
+  // наоборот, законен: деньги за прошлое приходят позже сплошь и рядом.
+  // CRM_UNIFY_V1 (2026-10-10) — сторож будущего дня стоит ТОЛЬКО у денег:
+  // предоплата будущего визита — не приход, а работа над пациентом — приход.
+  const visit = db.prepare(`
+    SELECT status, (${localDate('visit_date')} > date('now','localtime')) AS future
+      FROM visits WHERE id = ?
+  `).get(id);
+  if (!visit || DEAD_VISIT_STATUSES.includes(visit.status) || (visit.future && !work)) return;
+  crmVisitStatus(db, { visitId: id, from: null, to: ARRIVED_STATUSES[0] });
+}
+
+/**
+ * «Есть доказательство ДЕНЬГАМИ, что пациент был здесь» — оплата, счёт по акту,
+ * долг у кассы (rpc/billing.js). Будущий визит — предоплата, не приход.
  */
 export function crmVisitEvidence(db, visitId) {
   try {
-    const id = Number(visitId);
-    if (!Number.isInteger(id) || id <= 0) return;
-    // ДОКАЗАТЕЛЬСТВО НЕ МОЖЕТ ОПЕРЕЖАТЬ ДЕНЬ ВИЗИТА (разбор ревью). Мастер
-    // визита выставляет счёт по акту В ТОТ ЖЕ КЛИК, что и записывает, — на
-    // каждый день корзины, включая будущие. Без этой строки заявка на
-    // следующий вторник становилась «Пришёл» сегодня. Вчерашний визит,
-    // оплаченный сегодня, наоборот, законен: деньги за прошлое приходят
-    // позже сплошь и рядом.
-    const visit = db.prepare(`
-      SELECT status, (${localDate('visit_date')} > date('now','localtime')) AS future
-        FROM visits WHERE id = ?
-    `).get(id);
-    if (!visit || DEAD_VISIT_STATUSES.includes(visit.status) || visit.future) return;
-    crmVisitStatus(db, { visitId: id, from: null, to: ARRIVED_STATUSES[0] });
+    arriveBy(db, visitId, { work: false });
   } catch (e) {
     console.error('[crm] доказательство прихода по визиту', visitId, 'не учтено:', e && e.message);
   }
@@ -451,6 +482,8 @@ export function crmInvoiceEvidence(db, invoiceId) {
 
 /**
  * Работа над услугами: доказательством является визит каждой из них.
+ * CRM_UNIFY_V1 (2026-10-10, замечание владельца) — в ЛЮБОЙ день визита своего
+ * здания: записанный на завтра и принятый сегодня — «Пришёл» сразу.
  * @param {number[]} visitServiceIds строки visit_services, которые только что
  *        перешли в один из EVIDENCE_SERVICE_STATUSES.
  */
@@ -470,7 +503,11 @@ export function crmServiceEvidence(db, visitServiceIds) {
       `SELECT DISTINCT visit_id FROM visit_services
         WHERE id IN (${holes}) AND status IN (${marks})`,
     ).all(...ids, ...EVIDENCE_SERVICE_STATUSES);
-    for (const r of rows) if (r.visit_id) crmVisitEvidence(db, r.visit_id);
+    for (const r of rows) {
+      if (!r.visit_id) continue;
+      try { arriveBy(db, r.visit_id, { work: true }); }   // CRM_UNIFY_V1 (2026-10-10)
+      catch (e) { console.error('[crm] доказательство прихода по визиту', r.visit_id, 'не учтено:', e && e.message); }
+    }
   } catch (e) {
     console.error('[crm] работа по услугам', visitServiceIds, 'не учтена:', e && e.message);
   }

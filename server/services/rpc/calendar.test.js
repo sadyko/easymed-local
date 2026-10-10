@@ -614,7 +614,11 @@ test('CRM_REAL_BOOKING_V1: отмена записи возвращает стр
   db.close();
 });
 
-test('CRM_REAL_BOOKING_V1: «пришёл» на БУДУЩИЙ визит дверь пропускает, а заявку не трогает', async () => {
+// CRM_UNIFY_V1 (2026-10-10, замечание владельца) — ОБНОВЛЕНО НАМЕРЕННО. Прежде:
+// «пришёл» на БУДУЩИЙ визит заявку не трогал. Отметка «Пришёл» — прямое слово
+// человека у стойки: пациент, записанный на понедельник и пришедший раньше, —
+// приход. Визит своего здания — в любой его день (crm/visit-status.js).
+test('CRM_UNIFY_V1: «пришёл» на БУДУЩИЙ визит своего здания закрывает заявку сразу', async () => {
   const db = freshDb();
   const out = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });   // DAY — будущий понедельник
   const rid = db.prepare(
@@ -627,8 +631,9 @@ test('CRM_REAL_BOOKING_V1: «пришёл» на БУДУЩИЙ визит дв�
   const arrived = await book(db, { visit_id: out.visit.id, start: at(10), status: 'arrived' });
 
   assert.equal(arrived.visit.status, 'arrived', 'сам визит дверь помечает как просили — это её дело');
-  assert.equal(db.prepare('SELECT status FROM crm_request_services WHERE id=?').get(lid).status, 'pending',
-    'на приём, который ещё не наступил, прийти нельзя — строка закрыта заранее');
-  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id=?').get(rid).status, 'scheduled');
+  assert.equal(db.prepare('SELECT status FROM crm_request_services WHERE id=?').get(lid).status, 'done',
+    'человек отметил «Пришёл», а строка заявки ждёт дня записи');
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id=?').get(rid).status, 'came',
+    'отметка «Пришёл» на визите будущего дня не дошла до заявки');
   db.close();
 });

@@ -867,7 +867,13 @@ test('вчерашний визит, оплаченный сегодня, — п
   db.close();
 });
 
-test('будущий визит: отметка «пришёл» тоже не засчитывается', () => {
+// CRM_UNIFY_V1 (2026-10-10, замечание владельца) — ОБНОВЛЕНО НАМЕРЕННО. Прежде:
+// «будущий визит: отметка «пришёл» тоже не засчитывается». Владелец записал из
+// карточки на завтра, а пациент пришёл сегодня: регистратура приняла, врач
+// подписал — карточка осталась ждать. Отметка «Пришёл» — прямое слово человека
+// у стойки: приход в любой день визита СВОЕГО здания. Визит соседнего здания —
+// по-прежнему (правила crmFromSync не меняются).
+test('CRM_UNIFY_V1: будущий визит своего здания — отметка «пришёл» засчитывается; соседнего — нет', () => {
   const db = freshDb();
   const day = dayShift(db, 3);
   const vid = addVisit(db, noonOf(day));
@@ -876,10 +882,74 @@ test('будущий визит: отметка «пришёл» тоже не �
 
   crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
 
-  assert.equal(line(db, lid).status, 'pending', 'нельзя прийти на приём, который ещё не наступил');
-  assert.equal(reqRow(db, rid).status, 'scheduled');
-  // Неявка и отмена будущего визита — законные события, сторож их не трогает.
-  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'cancelled' });
-  assert.equal(line(db, lid).visit_id, null, 'отмена будущей записи обязана освободить строку');
+  assert.equal(line(db, lid).status, 'done', 'человек отметил «Пришёл», а строка ждёт дня записи');
+  assert.equal(reqRow(db, rid).status, 'came', 'отметка «Пришёл» на визите завтрашнего дня не дошла до карточки');
+
+  // Визит соседнего здания (sync_origin) — прежнее правило: будущий не приход.
+  const foreign = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status, sync_origin) VALUES (1, ?, 'scheduled', 'B')").run(noonOf(day)).lastInsertRowid);
+  const rid2 = addReq(db, { date: day, name: 'запись в соседнее здание' });
+  const lid2 = addLine(db, rid2, { date: day, visit: foreign });
+  crmVisitStatus(db, { visitId: foreign, from: 'scheduled', to: 'arrived' });
+  assert.equal(line(db, lid2).status, 'pending', 'будущий визит соседнего здания засчитан приходом');
+  assert.equal(reqRow(db, rid2).status, 'scheduled');
+
+  // Неявка и отмена будущего визита — законные события, как и прежде.
+  const vid3 = addVisit(db, noonOf(day));
+  const rid3 = addReq(db, { date: day, name: 'отменят' });
+  const lid3 = addLine(db, rid3, { date: day, visit: vid3 });
+  crmVisitStatus(db, { visitId: vid3, from: 'scheduled', to: 'cancelled' });
+  assert.equal(line(db, lid3).visit_id, null, 'отмена будущей записи обязана освободить строку');
+  db.close();
+});
+
+// CRM_UNIFY_V1 (2026-10-10, замечание владельца) — РАБОТА НАД УСЛУГОЙ — ПРИХОД В
+// ЛЮБОЙ ДЕНЬ ВИЗИТА; ДЕНЬГИ — НЕТ. Пробу взяли, приём начали, результат внесли,
+// услугу выдали — пациент физически здесь, на какой бы день ни был записан
+// визит. Оплата будущего визита по-прежнему предоплата, а не приход.
+test('CRM_UNIFY_V1: будущий визит — оплата сегодня не приход, выполненная услуга — приход сразу', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (8,'kassa','x','Кассир','cashier')").run();
+  db.prepare("INSERT INTO services (id, name, price) VALUES (30,'Диагностика',150000)").run();
+  const day = dayShift(db, 1);
+  const vid = addVisit(db, noonOf(day));
+  const rid = addReq(db, { date: day });
+  const lid = addLine(db, rid, { date: day, visit: vid });
+  const vs = Number(db.prepare(
+    "INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,30,1,150000,150000,'added')",
+  ).run(vid).lastInsertRowid);
+  const inv = db.prepare(`INSERT INTO invoices
+      (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by)
+    VALUES ('INV-F', ?, 1, 150000, 0, 150000, 0, 'unpaid', 8)`).run(vid).lastInsertRowid;
+
+  recordPayment(db, { invoice_id: inv, amount: 150000, method: 'cash' }, { id: 8, role: 'cashier' });
+  assert.equal(line(db, lid).status, 'pending', 'оплата завтрашнего визита закрыла строку — предоплата не приход');
+  assert.equal(reqRow(db, rid).status, 'scheduled', 'оплата завтрашнего визита объявлена приходом');
+
+  db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(vs);
+  crmServiceEvidence(db, [vs]);
+  assert.equal(line(db, lid).status, 'done', 'услуга выполнена сегодня, а строка ждёт завтрашнего дня');
+  assert.equal(reqRow(db, rid).status, 'came', 'врач подписал услугу на визите завтрашнего дня — карточка не в «Пришёл»');
+  assert.equal(db.prepare('SELECT status FROM visits WHERE id = ?').get(vid).status, 'scheduled', 'доказательство переписало статус визита');
+  db.close();
+});
+
+test('CRM_UNIFY_V1: будущий визит соседнего здания — работа над услугой по-прежнему не приход', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO services (id, name, price) VALUES (30,'Диагностика',150000)").run();
+  const day = dayShift(db, 1);
+  const vid = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status, sync_origin) VALUES (1, ?, 'scheduled', 'B')").run(noonOf(day)).lastInsertRowid);
+  const rid = addReq(db, { date: day });
+  const lid = addLine(db, rid, { date: day, visit: vid });
+  const vs = Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (?,30,'completed')").run(vid).lastInsertRowid);
+  crmServiceEvidence(db, [vs]);
+  assert.equal(line(db, lid).status, 'pending');
+  assert.equal(reqRow(db, rid).status, 'scheduled', 'будущий визит соседнего здания засчитан приходом');
+  // Отменённый визит своего здания — доказательством не бывает никогда.
+  const dead = addVisit(db, noonOf(day), 'cancelled');
+  const rid2 = addReq(db, { date: day, name: 'отменённая' });
+  addLine(db, rid2, { date: day, visit: dead });
+  const vs2 = Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (?,30,'completed')").run(dead).lastInsertRowid);
+  crmServiceEvidence(db, [vs2]);
+  assert.equal(reqRow(db, rid2).status, 'scheduled', 'работа по отменённому визиту засчитана приходом');
   db.close();
 });

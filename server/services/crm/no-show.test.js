@@ -10,7 +10,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { saveConfig } from './config.js';
 import { crmVisitStatus } from './visit-status.js';
-import { crmNoShowSweep, scheduleCrmNoShow } from './no-show.js';
+import { crmNoShowSweep, scheduleCrmNoShow, crmArrivalCatchUp } from './no-show.js';   // CRM_UNIFY_V1 (2026-10-10) — догоняющий проход
 
 const pad = (n) => String(n).padStart(2, '0');
 /** Местный день со сдвигом: 'YYYY-MM-DD'. */
@@ -289,6 +289,130 @@ test('карточка «на дату»: приход того дня, доех
   assert.equal(st(db, other), 'no_show', 'приход поднял карточку ДРУГОГО дня');
 });
 
+// ─── CRM_UNIFY_V1 (2026-10-10) — ДОГОНЯЮЩИЙ ПРОХОД ПРИХОДА ────────────────
+//
+// Замечание владельца: запись из карточки на завтра, пациент пришёл сегодня —
+// оплата, подпись врача, а карточка осталась ждать (прежний сторож «будущий
+// визит не приход» не пропустил и работу над услугой). Правило прихода теперь
+// принимает работу и отметку «Пришёл» в любой день визита своего здания, а
+// проход раз в час (и при запуске) догоняет карточки, чьё доказательство
+// когда-то пропустили: открытая карточка (или сидовая «Не пришёл»), которую
+// держит живой визит своего здания — ждущей строкой или привязкой записи, — а у
+// визита есть работа над услугой или отметка «Пришёл».
+
+/** Строка визита со статусом работы; строку заявки можно привязать к ней. */
+const work = (db, vid, status = 'completed') => Number(db.prepare(
+  'INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?, 40, 1, 1000, 1000, ?)').run(vid, status).lastInsertRowid);
+const heldBy = (db, lid, vs) => db.prepare('UPDATE crm_request_services SET visit_service_id = ? WHERE id = ?').run(vs, lid);
+const lineSt = (db, id) => db.prepare('SELECT status FROM crm_request_services WHERE id = ?').get(id).status;
+const stamp = (db, id) => db.prepare('SELECT updated_at FROM crm_requests WHERE id = ?').get(id).updated_at;
+/** Деньги и записи: визиты, счета, платежи, строки визита. */
+const moneySnap = (db) => JSON.stringify({
+  visits: db.prepare('SELECT * FROM visits ORDER BY id').all(),
+  invoices: db.prepare('SELECT * FROM invoices ORDER BY id').all(),
+  payments: db.prepare('SELECT * FROM payments ORDER BY id').all(),
+  visit_services: db.prepare('SELECT * FROM visit_services ORDER BY id').all(),
+});
+/** Строки заявок — без статуса (закрытие строк — дело самого правила прихода). */
+const linesSnap = (db) => JSON.stringify(db.prepare(
+  'SELECT id, request_id, service_id, scheduled_date, visit_id, visit_service_id, visit_service_auto FROM crm_request_services ORDER BY id').all());
+const crmSnap = (db) => JSON.stringify({
+  requests: db.prepare('SELECT * FROM crm_requests ORDER BY id').all(),
+  lines: db.prepare('SELECT * FROM crm_request_services ORDER BY id').all(),
+});
+
+test('догоняющий проход: визит на завтра уже с выполненной услугой, карточка открыта — «Пришёл» одним проходом; второй ничего не меняет', () => {
+  const db = freshDb();
+  const vid = visit(db, T);
+  const rid = lead(db, { status: 'approved', date: T });
+  const lid = line(db, rid, vid, T);
+  heldBy(db, lid, work(db, vid));
+  paid(db, vid);
+  const bystander = lead(db, { status: 'recall', date: T0 });   // чужая открытая карточка — не трогается
+  const money0 = moneySnap(db); const lines0 = linesSnap(db);
+
+  assert.deepEqual(crmArrivalCatchUp(db), [vid]);
+  assert.equal(st(db, rid), 'came', 'услуга выполнена, а карточка так и ждёт завтрашнего дня');
+  assert.equal(lineSt(db, lid), 'done', 'строка с услугой в визите не закрыта правилом прихода');
+  assert.equal(stamp(db, rid), OLD, 'проход освежил закрытую карточку — переход сервера не контакт (I-5)');
+  assert.equal(stamp(db, bystander), OLD, 'проход освежил карточку, которую не двигал');
+  assert.equal(st(db, bystander), 'recall');
+  assert.equal(moneySnap(db), money0, 'проход изменил визиты, счета, платежи или строки визита');
+  assert.equal(linesSnap(db), lines0, 'проход изменил строки заявок (кроме закрытия)');
+
+  const once = crmSnap(db);
+  assert.deepEqual(crmArrivalCatchUp(db), [], 'второй проход снова нашёл работу');
+  assert.equal(crmSnap(db), once, 'второй проход что-то изменил');
+  assert.equal(moneySnap(db), money0);
+});
+
+test('догоняющий проход: отметка «Пришёл» у визита, привязка записи без строк, сидовая «Не пришёл» — закрываются', () => {
+  const db = freshDb();
+  // Отметка «Пришёл» на визите завтрашнего дня, карточка — по строке.
+  const v1 = visit(db, T, { status: 'arrived' });
+  const byMark = lead(db, { status: 'scheduled', date: T }); line(db, byMark, v1, T);
+  // Привязка записи (crm_booking_links), работа начата.
+  const v2 = visit(db, T);
+  work(db, v2, 'in_progress');
+  const byLink = lead(db, { status: 'scheduled', date: T }); link(db, v2, byLink);
+  // Сидовая «Не пришёл»: вчерашняя запись, проба взята.
+  const v3 = visit(db, Y);
+  work(db, v3, 'collected');
+  const missed = lead(db, { status: 'no_show', date: Y }); line(db, missed, v3, Y);
+  const money0 = moneySnap(db);
+
+  assert.deepEqual(sorted(crmArrivalCatchUp(db)), sorted([v1, v2, v3]));
+  assert.deepEqual([st(db, byMark), st(db, byLink), st(db, missed)], ['came', 'came', 'came']);
+  assert.equal(moneySnap(db), money0, 'проход изменил деньги или записи');
+  assert.deepEqual(crmArrivalCatchUp(db), []);
+});
+
+test('догоняющий проход: строки, которых нет в визите, в визит НЕ ставит (деньги не трогаются) — строка ждёт, карточка закрыта', () => {
+  const db = freshDb();
+  const vid = visit(db, T);
+  work(db, vid);
+  const rid = lead(db, { status: 'scheduled', date: T });
+  const lid = line(db, rid, vid, T);   // строка держит визит, а её услуги в визите нет
+  const money0 = moneySnap(db);
+  crmArrivalCatchUp(db);
+  assert.equal(st(db, rid), 'came');
+  assert.equal(lineSt(db, lid), 'pending', 'строка закрыта без услуги в визите (инвариант)');
+  assert.equal(moneySnap(db), money0, 'проход поставил услугу в визит — у кассы новая строка «Ждут счёта»');
+});
+
+test('догоняющий проход никогда: «Отказ» и прочие закрытые, визит соседнего здания, мёртвый визит, одна оплата, нет работы, строка уже закрыта', () => {
+  const db = freshDb();
+  const ev = (d, opts) => { const v = visit(db, d, opts); work(db, v); return v; };
+  // Закрытые карточки — даже если их визит с работой.
+  const lostV = ev(T); const lost = lead(db, { status: 'stopped', date: T }); line(db, lost, lostV, T);
+  const unqV = ev(T); const unq = lead(db, { status: 'not_qualified', date: T }); link(db, unqV, unq);
+  const wonV = ev(Y); const won = lead(db, { status: 'came', date: Y }); line(db, won, wonV, Y);
+  // Визит соседнего здания — правила crmFromSync, проход их не трогает.
+  const syncV = ev(Y, { origin: 'B' }); const viaSync = lead(db, { status: 'scheduled', date: Y }); line(db, viaSync, syncV, Y);
+  const syncV2 = ev(T, { origin: 'B' }); const viaSync2 = lead(db, { status: 'scheduled', date: T }); link(db, syncV2, viaSync2);
+  // Мёртвый визит доказательством не бывает.
+  const cancV = ev(Y, { status: 'cancelled' }); const canc = lead(db, { status: 'scheduled', date: Y }); line(db, canc, cancV, Y);
+  const nsV = ev(Y, { status: 'no_show' }); const ns = lead(db, { status: 'no_show', date: Y }); line(db, ns, nsV, Y);
+  // Одна оплата завтрашнего визита — предоплата.
+  const preV = visit(db, T); paid(db, preV); const pre = lead(db, { status: 'scheduled', date: T }); line(db, pre, preV, T);
+  // Услуга в смете ('added', 'queued') — не работа.
+  const addV = visit(db, T); work(db, addV, 'added'); work(db, addV, 'queued');
+  const added = lead(db, { status: 'scheduled', date: T }); line(db, added, addV, T);
+  // Строка этого визита уже закрыта приходом, а карточку человек вернул в работу.
+  const backV = ev(Y); const back = lead(db, { status: 'recall', date: Y }); line(db, back, backV, Y, 'done');
+  const crm0 = crmSnap(db); const money0 = moneySnap(db);
+
+  assert.deepEqual(crmArrivalCatchUp(db), []);
+  assert.equal(crmSnap(db), crm0, 'проход тронул карточку или строку, которую трогать нельзя');
+  assert.equal(moneySnap(db), money0);
+});
+
+test('догоняющий проход не бросается: сломанная база — пустой ответ', () => {
+  const db = freshDb();
+  db.close();
+  assert.deepEqual(crmArrivalCatchUp(db), []);
+});
+
 // ─── ЗАПУСК ───────────────────────────────────────────────────────────────
 
 test('scheduleCrmNoShow: проход сразу и таймер, который не держит процесс', () => {
@@ -296,6 +420,17 @@ test('scheduleCrmNoShow: проход сразу и таймер, который
   const vid = visit(db, Y); const rid = lead(db, { date: Y }); line(db, rid, vid, Y);
   const h = scheduleCrmNoShow(db, { everyMs: 3600000 });
   try { assert.equal(st(db, rid), 'no_show'); assert.equal(h.hasRef(), false); }
+  finally { clearInterval(h); }
+});
+
+// CRM_UNIFY_V1 (2026-10-10) — тот же запуск (при старте сервера — после
+// разового исправления) и тот же часовой таймер догоняют и приход.
+test('scheduleCrmNoShow: догоняющий проход прихода — сразу при запуске', () => {
+  const db = freshDb();
+  const vid = visit(db, T); work(db, vid);
+  const rid = lead(db, { status: 'approved', date: T }); line(db, rid, vid, T);
+  const h = scheduleCrmNoShow(db, { everyMs: 3600000 });
+  try { assert.equal(st(db, rid), 'came', 'запуск не догнал приход'); }
   finally { clearInterval(h); }
 });
 
