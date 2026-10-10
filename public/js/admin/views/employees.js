@@ -761,7 +761,7 @@ function openEditor(user, root) {
             // массив (`rows` в paint), и новый массив терял вторую правку того же
             // списка и «Добавить специальность» после правки.
             // DOCTOR_PROFILE_V1 — заполненность «Публичного профиля» следит за списком.
-            const commit = () => { const rows = list(); rows.forEach((v, i) => { rows[i] = String(v || '').trim(); }); emp.specialty = rows[0] || ''; markDirty({ specialty: emp.specialty, specialties: rows }); if (paneRepaint) paneRepaint(); };
+            const commit = () => { const rows = list(); rows.forEach((v, i) => { rows[i] = String(v || '').trim(); }); emp.specialty = rows[0] || ''; markDirty({ specialty: emp.specialty, specialties: rows }); if (rows.some(Boolean)) delete paneErrors.specialties; if (paneRepaint) paneRepaint(); };   // DOCTOR_PROFILE_V1 (ревью №8) — выбрали специальность — отказ у списка снят
             const box = h('div', { class: 'spec-list' });
             // DOCTOR_PROFILE_V1 — повтор отклоняется у поля (макет «Эта специальность уже выбрана.»).
             const err = h('div', { class: 'cpf-err spec-err', role: 'alert' });
@@ -858,6 +858,7 @@ function openEditor(user, root) {
                     branchesById: new Map(branches.map((b) => [Number(b.id), b])),
                     loadPreview,
                     onRepaint: (fn) => { paneRepaint = fn; },
+                    clearError: (k) => { delete paneErrors[k]; },   // DOCTOR_PROFILE_V1 (ревью шага 5, №8) — отказ у поля снимается его правкой
                     openConsultations: isRouteAllowed('consultation-types') ? () => {
                         // DOCTOR_PROFILE_V1 (ревью шага 5, №4) — карточка закрывается: несохранённые
                         // правки пропали бы молча. Сначала спросить; «Отмена» — остаёмся.

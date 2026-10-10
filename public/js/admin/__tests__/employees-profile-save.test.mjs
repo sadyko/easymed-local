@@ -22,7 +22,7 @@ class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.c
  setAttribute(k,v){this.attrs[k]=String(v); if (k === 'value') this.value = String(v);
    if (k === 'checked') this.checked = true;
    if (k.startsWith('data-')) this.dataset[k.slice(5).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = String(v);}
- getAttribute(k){return this.attrs[k]??null;} hasAttribute(k){return k in this.attrs;}
+ getAttribute(k){return this.attrs[k]??null;} hasAttribute(k){return k in this.attrs;} removeAttribute(k){delete this.attrs[k];}   // DOCTOR_PROFILE_V1 — aria-invalid снимается (ревью №8)
  addEventListener(t,fn){(this._l[t]||(this._l[t]=[])).push(fn);} removeEventListener(){}
  dispatchEvent(e){for(const fn of this._l[e.type]||[])fn(e);return true;}
  click(){this.dispatchEvent({type:'click',currentTarget:this,preventDefault(){},stopPropagation(){}});}
@@ -436,4 +436,54 @@ test('DOCTOR_PROFILE_V1: карточка «только просмотр» — 
   } finally {
     delete window.easymed.navigate;
   }
+});
+
+// DOCTOR_PROFILE_V1 (ревью шага 5, №8) — отказ сохранения у поля «Публичного
+// профиля» гаснет, как только поле поправили, и не возвращается после перехода
+// по разделам карточки (как в макете): специальность, «Работает врачом с»,
+// ФИО на русском. У года снимается и aria-invalid.
+test('DOCTOR_PROFILE_V1: ошибка у специальностей гаснет, когда специальность выбрали, и не возвращается после смены раздела', async () => {
+  const s = await openProfileTab('dr.pub');
+  await save(s.card);
+  const MSG = 'Чтобы показывать врача, выберите специальность.';
+  assert.ok(textOf(s.card).includes(MSG), 'нет ошибки у специальностей');
+  const list = walk(s.card).find((n) => n.className === 'spec-list');
+  const sel = tags(list, 'select')[0];
+  sel.value = 'Кардиолог';
+  sel.dispatchEvent({ type: 'change' });
+  assert.ok(!textOf(s.card).includes(MSG), 'ошибка осталась, хотя специальность выбрана');
+  await tab(s.card, 'Должность');
+  await tab(s.card, 'Публичный профиль');
+  assert.ok(!textOf(s.card).includes(MSG), 'ошибка вернулась после смены раздела');
+});
+
+test('DOCTOR_PROFILE_V1: ошибка «Работает врачом с» гаснет при исправлении (и aria-invalid), не возвращается после смены раздела', async () => {
+  let s = await openProfileTab('dr.karimov');
+  type(s.since, '1800');
+  await save(s.card);
+  const MSG = 'Год начала работы врачом — от 1940 до текущего года.';
+  assert.equal(writes.length, 0, 'неверный год ушёл на сервер');
+  assert.ok(textOf(s.card).includes(MSG), 'нет ошибки у года');
+  s = { ...s, since: tags(s.card, 'input').find((i) => i.attrs.type === 'number' && i.attrs.min === '1940') };
+  assert.equal(s.since.attrs['aria-invalid'], 'true');
+  type(s.since, String(YEAR - 10));
+  assert.ok(!textOf(s.card).includes(MSG), 'ошибка осталась после исправления года');
+  assert.ok(!('aria-invalid' in s.since.attrs), 'поле года осталось помеченным aria-invalid');
+  await tab(s.card, 'Должность');
+  await tab(s.card, 'Публичный профиль');
+  assert.ok(!textOf(s.card).includes(MSG), 'ошибка года вернулась после смены раздела');
+});
+
+test('DOCTOR_PROFILE_V1: ошибка «Введите ФИО на русском.» не возвращается после смены раздела, когда ФИО вписали', async () => {
+  const s = await openProfileTab('dr.karimov');
+  type(s.name.ru, '');
+  await save(s.card);
+  const MSG = 'Введите ФИО на русском.';
+  assert.ok(textOf(s.card).includes(MSG), 'нет ошибки у ФИО');
+  const ru = tags(s.card, 'input').find((i) => String(i.attrs.id || '').startsWith('cpf-dpp-fio-ru'));
+  type(ru, 'Каримов Алишер');
+  assert.ok(!textOf(s.card).includes(MSG), 'ошибка осталась после исправления ФИО');
+  await tab(s.card, 'Должность');
+  await tab(s.card, 'Публичный профиль');
+  assert.ok(!textOf(s.card).includes(MSG), 'ошибка ФИО вернулась после смены раздела');
 });

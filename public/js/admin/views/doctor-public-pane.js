@@ -9,7 +9,7 @@
 //     branch_id; ctx.setField(patch) — их правка;
 //   • ctx.specialtiesNode() — тот же список специальностей, что во «Должности»;
 //   • ctx.errors — отказы сохранения по полям (publicPaneProblems), живут
-//     между перерисовками раздела.
+//     между перерисовками раздела, пока поле не поправили (ctx.clearError(k)).
 //   • ctx.loadPreview() — ответ doctor_public_preview (null — сотрудник не сохранён, false — сервер не ответил).
 // Показ меняет только администратор (ctx.isAdmin; сервер — 403, routes/users.js).
 // Данные врача и клиники — текстом (createTextNode), не через tr().
@@ -65,14 +65,11 @@ export function publicPaneProblems({ isPublic, profile, profileAtOpen, touched =
 function section(title, sub, ...body) {
     return h('section', { class: 'dpp-sec' }, h('h4', null, title), sub ? h('p', { class: 'cpf-hint' }, sub) : null, ...body);
 }
-function errLine(msg) {
-    const e = fieldErr(null);
-    if (msg) e.set(msg);
-    return e.node;
-}
 
 export function doctorPublicPane(ctx) {
     const { emp, profile: pp, isEdit, readOnly, isAdmin, doctorId, errors = {} } = ctx;
+    // DOCTOR_PROFILE_V1 (ревью шага 5, №8) — отказ у поля живёт до правки поля, не до следующего сохранения.
+    const clearError = (k) => { if (typeof ctx.clearError === 'function') ctx.clearError(k); else delete errors[k]; };
     const root = h('div', { class: 'dpp' });
 
     // ---- показ на сайте и у партнёров (только администратор) ----
@@ -153,12 +150,17 @@ export function doctorPublicPane(ctx) {
     const fio = triGroup('ФИО', { ru: pp.full_name_ru, uz: pp.full_name_uz, en: pp.full_name_en }, {
         key: 'dpp-fio', markMissing: true, disabled: !!readOnly, max: 200,
         hint: 'Имя на сайте и у партнёров. В документах печатается ФИО из «Личных данных».',
-        onInput: (lng, v) => { ctx.setProfile('full_name_' + lng, v); paintSwitch(); },
+        // DOCTOR_PROFILE_V1 (ревью шага 5, №8) — вписали ФИО на русском — отказ сохранения у поля гаснет и после смены раздела не вернётся.
+        onInput: (lng, v) => { ctx.setProfile('full_name_' + lng, v); if (lng === 'ru') clearError('full_name_ru'); paintSwitch(); },
     });
     if (errors.full_name_ru) fio.inputs.ru.err.set(errors.full_name_ru);
     root.appendChild(fio.node);
+    // DOCTOR_PROFILE_V1 (ревью шага 5, №8) — отказ «выберите специальность» гаснет, как только
+    // специальность выбрали (карточка снимает его в commit() списка и зовёт перерисовку ниже).
+    const specErr = fieldErr(null);
+    if (errors.specialties) specErr.set(errors.specialties);
     root.appendChild(h('div', { class: 'dpp-block' }, h('p', { class: 'dpp-h5' }, 'Специальности'), ctx.specialtiesNode(),
-        errLine(errors.specialties),
+        specErr.node,
         h('p', { class: 'cpf-hint' }, 'Выбор из общего справочника (120 специальностей, встроен в программу). Партнёры получают код специальности и ищут врача по нему: «pediatr» — это «Педиатр», «Pediatr» и «Pediatrician» сразу.')));
     root.appendChild(triGroup('Учёная степень', { ru: pp.academic_title_ru, uz: pp.academic_title_uz, en: pp.academic_title_en }, {
         key: 'dpp-deg', disabled: !!readOnly, max: 200, onInput: (lng, v) => ctx.setProfile('academic_title_' + lng, v),
@@ -175,7 +177,11 @@ export function doctorPublicPane(ctx) {
         const y = since.value === '' ? null : experienceYears(Number(since.value));
         sinceHint.textContent = y == null ? '' : trf('Стаж на сайте, лет: {n}.', { n: y });
     };
-    since.addEventListener('input', () => { ctx.setProfile('practice_since', since.value === '' ? null : Number(since.value)); paintSince(); });
+    since.addEventListener('input', () => {
+        ctx.setProfile('practice_since', since.value === '' ? null : Number(since.value));
+        clearError('practice_since'); sinceErr.set('');   // DOCTOR_PROFILE_V1 (ревью №8) — правят — отказ и aria-invalid снимаются
+        paintSince();
+    });
     paintSince();
     const sinceErr = fieldErr(since);
     if (errors.practice_since) sinceErr.set(errors.practice_since);
@@ -291,6 +297,7 @@ export function doctorPublicPane(ctx) {
             renderConsultServices(servicesBox, preview ? preview.services : preview);
         });
     }
-    if (typeof ctx.onRepaint === 'function') ctx.onRepaint(paintSwitch);
+    // DOCTOR_PROFILE_V1 (ревью №8) — перерисовка по правке специальностей: заполненность и отказ у списка.
+    if (typeof ctx.onRepaint === 'function') ctx.onRepaint(() => { paintSwitch(); if (!errors.specialties) specErr.set(''); });
     return root;
 }
