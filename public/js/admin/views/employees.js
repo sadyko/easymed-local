@@ -20,6 +20,8 @@ import { referralRewardEditor, saveReferralReward } from './referral-reward-edit
 import { employeeNameParts, employeeSaveGaps, NAME_KEYS } from '../../shared/employee-name.js?v=ecs2';   // EMPLOYEE_CARD_SAVE_V1 — имя из full_name и что держит сохранение; ecs2 — ревью: нетронутое ФИО побайтно, стёртый телефон
 import { weekHoursGrid } from './week-hours.js';   // BRANCH_PROFILE_V1 — сетка дней одна на программу
 
+const SPEC_TAKEN = 'Эта специальность уже выбрана.';   // DOCTOR_PROFILE_V1 — макет «Публичный профиль»
+
 const ROLES = [
     ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['nurse', 'Медсестра'],
     ['cashier', 'Кассир'], ['lab', 'Лаборант'], ['inventory', 'Склад'],
@@ -450,6 +452,7 @@ function openEditor(user, root) {
     };
     if (!emp.public_profile) emp.public_profile = {};
     const profilePatch = {};
+    let paneRepaint = null;   // DOCTOR_PROFILE_V1 — перерисовка заполненности «Публичного профиля» (задача 14)
     // CLINIC_API_FIX_V1 — профиль, с которым карточка открылась. В PATCH уходят
     // только поля, ставшие не такими (тексты — без пробелов по краям, как их
     // хранит сервер): тронутое и возвращённое не откатывает правку, которую
@@ -724,20 +727,49 @@ function openEditor(user, root) {
             // CLINIC_API_FIX_V1 — правка НА МЕСТЕ: строки на экране держат этот же
             // массив (`rows` в paint), и новый массив терял вторую правку того же
             // списка и «Добавить специальность» после правки.
-            const commit = () => { const rows = list(); rows.forEach((v, i) => { rows[i] = String(v || '').trim(); }); emp.specialty = rows[0] || ''; markDirty({ specialty: emp.specialty, specialties: rows }); };
+            // DOCTOR_PROFILE_V1 — заполненность «Публичного профиля» следит за списком.
+            const commit = () => { const rows = list(); rows.forEach((v, i) => { rows[i] = String(v || '').trim(); }); emp.specialty = rows[0] || ''; markDirty({ specialty: emp.specialty, specialties: rows }); if (paneRepaint) paneRepaint(); };
             const box = h('div', { class: 'spec-list' });
+            // DOCTOR_PROFILE_V1 — повтор отклоняется у поля (макет «Эта специальность уже выбрана.»).
+            const err = h('div', { class: 'cpf-err spec-err', role: 'alert' });
+            err.hidden = true;
+            const say = (msg) => { err.textContent = msg ? tr(msg) : ''; err.hidden = !msg; };
+            // DOCTOR_PROFILE_V1 — рядом с выбранной — её узбекское и английское названия и
+            // код справочника: по коду партнёры ищут врача (макет specialtyRows).
+            const namesOf = (val) => {
+                const canon = SPECIALTY_ROWS.find((r) => r.ru === canonicalSpecialty(val));
+                if (!canon) {
+                    return h('span', { class: 'spec-names muted' }, String(val || '').trim()
+                        ? 'Нет в справочнике — партнёры не найдут врача по ней'
+                        : 'Названия на узбекском и английском подставятся из справочника');
+                }
+                return h('span', { class: 'spec-names' },
+                    h('span', null, h('span', { class: 'cpf-lang' }, 'UZ'), ' ', document.createTextNode(canon.uz)),
+                    h('span', null, h('span', { class: 'cpf-lang' }, 'EN'), ' ', document.createTextNode(canon.en)),
+                    h('code', null, document.createTextNode(canon.slug)));
+            };
             const paint = () => {
                 clear(box);
                 const rows = list();
                 rows.forEach((val, i) => {
-                    const s2 = h('select', null, ...specialtyOptions(val).map(([v, l]) => h('option', { value: v, selected: String(v) === String(val) }, l)));
-                    s2.addEventListener('change', () => { rows[i] = s2.value; commit(); });
+                    const s2 = h('select', { 'aria-label': i === 0 ? 'Основная специальность' : 'Дополнительная' },
+                        ...specialtyOptions(val).map(([v, l]) => h('option', { value: v, selected: String(v) === String(val) }, l)));
+                    const names = h('div', { class: 'spec-names-slot' }, namesOf(val));
+                    s2.addEventListener('change', () => {
+                        const v = String(s2.value || '').trim();
+                        if (v && rows.some((x, j) => j !== i && String(x || '').trim() === v)) { s2.value = rows[i] || ''; say(SPEC_TAKEN); return; }
+                        say('');
+                        rows[i] = s2.value; commit();
+                        clear(names); names.appendChild(namesOf(rows[i]));
+                    });
                     const rm = i > 0 ? h('button', { type: 'button', class: 'icon-btn sm', title: tr('Убрать'), 'aria-label': tr('Убрать'),
                         onclick: () => { rows.splice(i, 1); commit(); paint(); } }, Icon('X', { size: 14 })) : null;
-                    box.appendChild(h('div', { class: 'spec-row' }, s2, rm));
+                    box.appendChild(h('div', { class: 'spec-row' },
+                        h('span', { class: 'spec-cap' }, i === 0 ? 'Основная' : 'Дополнительная'), s2, rm, names));
                 });
                 if (rows.length < MAX_SPEC) box.appendChild(h('button', { type: 'button', class: 'btn btn-ghost btn-sm spec-add',
                     onclick: () => { rows.push(''); paint(); } }, Icon('Plus', { size: 14 }), ' ', tr('Добавить специальность')));
+                box.appendChild(err);
             };
             paint();
             return field(trf('Специальность (основная — первая, до {n})', { n: MAX_SPEC }), box);

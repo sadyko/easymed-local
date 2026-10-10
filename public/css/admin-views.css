@@ -7749,3 +7749,11 @@ table.list tr.is-off td { color: var(--ink-400); }
 .brf-role { color: var(--ink-600); }
 .cpf-note.brf-note-warn { background: var(--warn-50); color: var(--warn-700); }
 /* /BRANCH_PROFILE_V1 — «Филиалы» */
+/* DOCTOR_PROFILE_V1 — список специальностей карточки: подпись, названия UZ / EN и код справочника. */
+.spec-row { flex-wrap: wrap; }
+.spec-cap { flex: 0 0 100%; font-size: 12.5px; color: var(--ink-500); }
+.spec-names-slot { flex: 0 0 100%; min-width: 0; }
+.spec-names { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; font-size: 12.5px; color: var(--ink-600); }
+.spec-names code { font-size: 12.5px; color: var(--ink-500); }
+.spec-err { margin-top: 4px; }
+/* /DOCTOR_PROFILE_V1 — список специальностей */

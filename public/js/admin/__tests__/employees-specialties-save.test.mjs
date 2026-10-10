@@ -225,3 +225,28 @@ test('добавили третью — список уходит целиком
   await save(card);
   noSpecialties(onlyWrite());
 });
+
+// DOCTOR_PROFILE_V1 — рядом со специальностью — её узбекское и английское
+// названия и код справочника (по коду партнёры ищут врача); одна специальность
+// дважды не выбирается — отказ у поля, а не молчаливый пропуск сервером.
+test('DOCTOR_PROFILE_V1: у выбранной специальности — UZ, EN и код; меняется вместе с выбором', async () => {
+  const card = await openCard('dr.cardio');
+  await tab(card, 'Должность');
+  const names = byClass(card, 'spec-names');
+  assert.equal(names.length, 2);
+  assert.match(textOf(names[0]), /Kardiolog/);
+  assert.match(textOf(names[0]), /Cardiologist/);
+  assert.match(textOf(names[0]), /kardiolog/);
+  pick(specSelects(card)[1], 'Невролог');
+  assert.match(textOf(byClass(card, 'spec-names')[1]), /Nevrolog/, 'названия следуют за выбором');
+});
+
+test('DOCTOR_PROFILE_V1: повтор специальности отклоняется у поля и не уходит на сервер', async () => {
+  const card = await openCard('dr.cardio');
+  await tab(card, 'Должность');
+  pick(specSelects(card)[1], 'Кардиолог');
+  assert.equal(specSelects(card)[1].value, 'Терапевт', 'повтор встал в список');
+  assert.match(textOf(byClass(card, 'spec-err')[0]), /Эта специальность уже выбрана\./);
+  await save(card);
+  assert.ok(!('specialties' in onlyWrite()), 'отклонённый повтор ушёл на сервер');
+});

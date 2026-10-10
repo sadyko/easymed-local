@@ -11575,4 +11575,11 @@ export const STRINGS = {
   "Ссылка на это здание в Яндекс Картах": {"en":"Link to this building in Yandex Maps","ru":"Ссылка на это здание в Яндекс Картах","uz":"Yandex Xaritalardagi shu bino havolasi"},   // BRANCH_PROFILE_V1
   "Ссылку на карту этого здания ведёт главное здание в «Филиалах».": {"en":"The main building keeps this building’s map link in “Branches”.","ru":"Ссылку на карту этого здания ведёт главное здание в «Филиалах».","uz":"Bu binoning xarita havolasini bosh bino «Filiallar»da yuritadi."},   // BRANCH_PROFILE_V1
   // /BRANCH_PROFILE_V1 (экран «Филиалы»)
+  // DOCTOR_PROFILE_V1 — карточка сотрудника: специальности (UZ, EN, код; повтор), задача 13
+  "Эта специальность уже выбрана.": {"en":"This specialty is already selected.","ru":"Эта специальность уже выбрана.","uz":"Bu mutaxassislik allaqachon tanlangan."},   // DOCTOR_PROFILE_V1
+  "Основная": {"en":"Primary","ru":"Основная","uz":"Asosiy"},   // DOCTOR_PROFILE_V1
+  "Дополнительная": {"en":"Additional","ru":"Дополнительная","uz":"Qo‘shimcha"},   // DOCTOR_PROFILE_V1
+  "Основная специальность": {"en":"Primary specialty","ru":"Основная специальность","uz":"Asosiy mutaxassislik"},   // DOCTOR_PROFILE_V1
+  "Названия на узбекском и английском подставятся из справочника": {"en":"The Uzbek and English names come from the reference list","ru":"Названия на узбекском и английском подставятся из справочника","uz":"O‘zbekcha va inglizcha nomlar ma’lumotnomadan olinadi"},   // DOCTOR_PROFILE_V1
+  "Нет в справочнике — партнёры не найдут врача по ней": {"en":"Not in the reference list — partners will not find the doctor by it","ru":"Нет в справочнике — партнёры не найдут врача по ней","uz":"Ma’lumotnomada yo‘q — hamkorlar shifokorni u bo‘yicha topa olmaydi"},   // DOCTOR_PROFILE_V1
 };
