@@ -7864,6 +7864,8 @@ table.list tr.is-off td { color: var(--ink-400); }
 .pkg-tbl tr.row-click:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
 .pkg-tbl tr.pkg-off td { color: var(--ink-500); }
 .pkg-r { text-align: right; }
+/* Заголовок числового столбца — справа, над числами (макет ax-r): table.tbl thead th сильнее одного класса. */
+table.pkg-tbl thead th.pkg-r { text-align: right; }
 .pkg-strike { text-decoration: line-through; color: var(--ink-500); }
 /* break-word, а не anywhere: слово не рвётся посередине — узкая таблица прокручивается в своей карточке. */
 .pkg-name { font-size: 13.5px; font-weight: 600; color: var(--ink-900); overflow-wrap: break-word; }
