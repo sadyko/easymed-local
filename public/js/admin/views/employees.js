@@ -18,6 +18,7 @@ import { soleBranchId } from '../branch-context.js?v=bc3';                  // S
 import { specialtyOptions, canonicalSpecialty, SPECIALTY_ROWS } from '../specialties.js?v=spec2';   // SPECIALTY_LIST_V1 + SPECIALTIES_CLONED_V1 + MULTI_SPECIALTY_V1
 import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — рабочая ставка за направления (источник врача)
 import { employeeNameParts, employeeSaveGaps, NAME_KEYS } from '../../shared/employee-name.js?v=ecs2';   // EMPLOYEE_CARD_SAVE_V1 — имя из full_name и что держит сохранение; ecs2 — ревью: нетронутое ФИО побайтно, стёртый телефон
+import { weekHoursGrid } from './week-hours.js';   // BRANCH_PROFILE_V1 — сетка дней одна на программу
 
 const ROLES = [
     ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['nurse', 'Медсестра'],
@@ -56,7 +57,6 @@ const STAFF_TYPES = [['doctor', 'Врачи'], ['admin_staff', 'Админист
 const DOCTOR_CATEGORIES = [['', '—'], ['highest', 'Высшая'], ['first', 'Первая'], ['second', 'Вторая'], ['none', 'Без категории']];
 const EMPLOYMENT_TYPES = [['', '—'], ['official', 'Официально'], ['civil_law', 'ГПХ (договор)'], ['unofficial', 'Неофициально']];
 const SALARY_TYPES = [['', '—'], ['fixed', 'Оклад'], ['percentage', 'Процент от выручки'], ['fix_plus_kpi', 'Оклад + KPI']];
-const DAYS = [['mon', 'Пн'], ['tue', 'Вт'], ['wed', 'Ср'], ['thu', 'Чт'], ['fri', 'Пт'], ['sat', 'Сб'], ['sun', 'Вс']];
 const roleLabel = (r) => (ALL_ASSIGNABLE_ROLES.find(x => x[0] === r) || [r, r])[1];
 // STAFF_SYNC_V1 (миграция 086) — сотрудника завела главная клиника, и этот
 // экран его только показывает. Сравнение именно с false: установка старой
@@ -1511,18 +1511,11 @@ function inpatientSection(emp, touch) {
 }
 
 function buildHours(emp, markDirty) {
-    const wrap = h('div', { style: { display: 'grid', gap: '6px' } });
-    for (const [key, label] of DAYS) {
-        const d = emp.working_hours[key] || { on: false, from: '09:00', to: '18:00' };
-        const chk = h('input', { type: 'checkbox', checked: !!d.on });
-        const from = h('input', { type: 'time', value: d.from || '09:00', disabled: !d.on, style: { width: '110px' } });
-        const to = h('input', { type: 'time', value: d.to || '18:00', disabled: !d.on, style: { width: '110px' } });
-        const commit = () => { const wh = { ...emp.working_hours, [key]: { on: chk.checked, from: from.value, to: to.value } }; from.disabled = to.disabled = !chk.checked; markDirty({ working_hours: wh }); };
-        chk.addEventListener('change', commit); from.addEventListener('change', commit); to.addEventListener('change', commit);
-        wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 0' } },
-            h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', width: '80px', cursor: 'pointer' } }, chk, h('span', { style: { fontWeight: 600, fontSize: '13.5px' } }, label)), from, h('span', { class: 'muted' }, '—'), to));
-    }
-    return wrap;
+    // BRANCH_PROFILE_V1 — сетка вынесена в week-hours.js (её же берут «Филиалы»).
+    // Пишется, как и прежде, тронутый день поверх прежнего графика.
+    return weekHoursGrid(emp.working_hours, {
+        onChange: (key, entry) => markDirty({ working_hours: { ...emp.working_hours, [key]: entry } }),
+    }).node;
 }
 
 function depName(id) { const d = departments.find(x => String(x.id) === String(id)); return d ? d.name : ''; }

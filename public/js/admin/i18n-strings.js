@@ -11258,4 +11258,8 @@ export const STRINGS = {
   "Не удалось загрузить данные компании — обновите страницу, чтобы сохранить.": {"en":"Could not load the company details — reload the page to be able to save.","ru":"Не удалось загрузить данные компании — обновите страницу, чтобы сохранить.","uz":"Kompaniya ma’lumotlarini yuklab bo‘lmadi — saqlash uchun sahifani yangilang."},   // CLINIC_PROFILE_V1 (ревью C1)
   "{code} (не используется)": {"en":"{code} (no longer in use)","ru":"{code} (не используется)","uz":"{code} (ishlatilmaydi)"},   // CLINIC_PROFILE_V1 (ревью M4)
   // /CLINIC_PROFILE_V1 — экран «Компания»
+  // BRANCH_PROFILE_V1 (экран «Филиалы») — сетка дней (views/week-hours.js), страница здания, список
+  "{day}, с": {"en":"{day}, from","ru":"{day}, с","uz":"{day}, dan"},   // BRANCH_PROFILE_V1
+  "{day}, до": {"en":"{day}, to","ru":"{day}, до","uz":"{day}, gacha"},   // BRANCH_PROFILE_V1
+  // /BRANCH_PROFILE_V1 (экран «Филиалы»)
 };
