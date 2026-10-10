@@ -11584,4 +11584,20 @@ export const STRINGS = {
   "Нет в справочнике — партнёры не найдут врача по ней": {"en":"Not in the reference list — partners will not find the doctor by it","ru":"Нет в справочнике — партнёры не найдут врача по ней","uz":"Ma’lumotnomada yo‘q — hamkorlar shifokorni u bo‘yicha topa olmaydi"},   // DOCTOR_PROFILE_V1
   // DOCTOR_PROFILE_V1 — право «Консультации врачей»: длительность и вид для партнёров (задача 2)
   "Заводит и переименовывает виды консультаций, задаёт длительность приёма и вид для партнёров. Цены — с действием «Цены и проценты».": {"en":"Adds and renames consultation kinds, sets the visit length and the partner type. Prices — with the «Prices and percentages» action.","ru":"Заводит и переименовывает виды консультаций, задаёт длительность приёма и вид для партнёров. Цены — с действием «Цены и проценты».","uz":"Konsultatsiya turlarini qo‘shadi va nomini o‘zgartiradi, qabul davomiyligi va hamkorlar uchun turini belgilaydi. Narxlar — «Narx va foizlar» amali bilan."},   // DOCTOR_PROFILE_V1
+  // DOCTOR_PROFILE_V1 — общий модуль публичного профиля врача: отказы и заполненность (задача 3)
+  "Показ врача на сайте и у партнёров меняет администратор.": {"en":"Only the administrator turns showing the doctor on the website and to partners on or off.","ru":"Показ врача на сайте и у партнёров меняет администратор.","uz":"Shifokorni saytda va hamkorlarda ko‘rsatishni administrator o‘zgartiradi."},   // DOCTOR_PROFILE_V1
+  "Чтобы показывать врача, введите ФИО на русском.": {"en":"To show the doctor, enter the full name in Russian.","ru":"Чтобы показывать врача, введите ФИО на русском.","uz":"Shifokorni ko‘rsatish uchun F.I.Sh.ni rus tilida kiriting."},   // DOCTOR_PROFILE_V1
+  "Чтобы показывать врача, выберите специальность.": {"en":"To show the doctor, choose a specialty.","ru":"Чтобы показывать врача, выберите специальность.","uz":"Shifokorni ko‘rsatish uchun mutaxassislikni tanlang."},   // DOCTOR_PROFILE_V1
+  "Нужен хотя бы один язык приёма.": {"en":"At least one consultation language is required.","ru":"Нужен хотя бы один язык приёма.","uz":"Kamida bitta qabul tili kerak."},   // DOCTOR_PROFILE_V1
+  "Языки приёма — только русский, узбекский и английский.": {"en":"Consultation languages can only be Russian, Uzbek and English.","ru":"Языки приёма — только русский, узбекский и английский.","uz":"Qabul tillari faqat rus, o‘zbek va ingliz tillari bo‘lishi mumkin."},   // DOCTOR_PROFILE_V1
+  "Год начала работы врачом — от 1940 до текущего года.": {"en":"The year the doctor started practising must be between 1940 and the current year.","ru":"Год начала работы врачом — от 1940 до текущего года.","uz":"Shifokorlik boshlangan yil — 1940-yildan joriy yilgacha."},   // DOCTOR_PROFILE_V1
+  "Запись открывается на 7, 14 или 30 дней вперёд.": {"en":"Booking opens 7, 14 or 30 days ahead.","ru":"Запись открывается на 7, 14 или 30 дней вперёд.","uz":"Yozilish 7, 14 yoki 30 kun oldinga ochiladi."},   // DOCTOR_PROFILE_V1
+  "Отметка записана неверно: нужно «да» или «нет».": {"en":"The flag is recorded incorrectly: it must be “yes” or “no”.","ru":"Отметка записана неверно: нужно «да» или «нет».","uz":"Belgi noto‘g‘ri yozilgan: «ha» yoki «yo‘q» bo‘lishi kerak."},   // DOCTOR_PROFILE_V1
+  "ФИО RU": {"en":"Full name RU","ru":"ФИО RU","uz":"F.I.Sh. RU"},   // DOCTOR_PROFILE_V1
+  "ФИО UZ": {"en":"Full name UZ","ru":"ФИО UZ","uz":"F.I.Sh. UZ"},   // DOCTOR_PROFILE_V1
+  "ФИО EN": {"en":"Full name EN","ru":"ФИО EN","uz":"F.I.Sh. EN"},   // DOCTOR_PROFILE_V1
+  "специальность": {"en":"specialty","ru":"специальность","uz":"mutaxassislik"},   // DOCTOR_PROFILE_V1
+  "биография RU": {"en":"biography RU","ru":"биография RU","uz":"tarjimai hol RU"},   // DOCTOR_PROFILE_V1
+  "биография UZ": {"en":"biography UZ","ru":"биография UZ","uz":"tarjimai hol UZ"},   // DOCTOR_PROFILE_V1
+  "биография EN": {"en":"biography EN","ru":"биография EN","uz":"tarjimai hol EN"},   // DOCTOR_PROFILE_V1
 };
