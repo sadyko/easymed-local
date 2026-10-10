@@ -95,9 +95,12 @@ function seed() {
         ],
         wards: [{ id: 50, name: 'Палата 1', code: 'П1', type: 'general', floor_id: 1, department_id: 10, billing_mode: 'daily', price_per_day: 100000, price_per_hour: 0, active: 1, plan_x: 0, plan_y: 0, plan_w: 0, plan_h: 0 }],
         beds: [{ id: 501, ward_id: 50, code: '1', type: 'standard', status: 'free', active: 1 }, { id: 502, ward_id: 50, code: '2', type: 'standard', status: 'occupied', active: 1 }],
+        // ADMIN_DOCTOR_LOCAL_V1 — флаги так, как их отдаёт /api/db: числом 1/0, а
+        // не true/false. Кассир сидит в том же кабинете 101 — врачом он не назван.
         users: [
-            { id: 7, full_name: 'Каримов Азиз', is_doctor: true, specialty: 'Кардиолог', room_id: 101, is_active: true },
-            { id: 8, full_name: 'Алиева Мадина', is_doctor: true, specialty: 'Кардиолог', room_id: null, is_active: true },
+            { id: 7, full_name: 'Каримов Азиз', is_doctor: 1, specialty: 'Кардиолог', room_id: 101, is_active: 1 },
+            { id: 8, full_name: 'Алиева Мадина', is_doctor: 1, specialty: 'Кардиолог', room_id: null, is_active: 1 },
+            { id: 9, full_name: 'Кассирова Нигора', is_doctor: 0, specialty: '', room_id: 101, is_active: 1 },
         ],
         equipment: [{ id: 900, name: 'ЭКГ', kind: '', active: 1 }],
         room_equipment: [{ id: 1, room_id: 101, ward_id: null, equipment_id: 900, quantity: 1 }],
@@ -226,7 +229,8 @@ test('карточка помещения: отделение, тип, врач�
     const side = byClass(root, 'fp-side')[0];
     const t = textOf(side);
     assert.ok(t.includes('Кардиология'), 'нет отделения');
-    assert.ok(t.includes('Каримов Азиз'), 'нет врача');
+    assert.ok(t.includes('Каримов Азиз'), 'нет врача (флаг из базы — 1)');
+    assert.ok(!t.includes('Кассирова Нигора'), 'кассир (is_doctor 0) назван врачом кабинета');   // ADMIN_DOCTOR_LOCAL_V1
     assert.ok(t.includes('ЭКГ'), 'нет оборудования');
     assert.ok(findBtn(side, 'Назначить врача') && findBtn(side, 'Добавить оборудование') && findBtn(side, 'Перенести на этаж'));
     // Добавить новое оборудование по названию.

@@ -519,3 +519,33 @@ test('DOCTOR_PROFILE_V1: «Консультации врачей» — адми�
         DB.prepare('DELETE FROM users WHERE id = 13').run();
     }
 });
+
+// ADMIN_DOCTOR_LOCAL_V1 — то же для ОКНА ЗАПИСИ, поведением, а не текстом
+// исходника: администратор-врач (роль 'admin', флаг из базы числом 1,
+// специальности нет) предлагает свои консультации, и выбранная уходит к нему.
+// Другие тесты окна кормят его врачами с ролью 'doctor' — роль и прятала
+// `is_doctor === true`: консультации такого врача строятся только для тех, кто
+// прошёл отбор врачей (service-picker-modal.js, state.doctors).
+test('ADMIN_DOCTOR_LOCAL_V1: окно записи — администратор-врач (is_doctor = 1, без специальности) предлагает свои консультации', async () => {
+    seedPrices();
+    DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (14, 'admdoc14', 'x', 'Абдуллаева Зарина', 'admin', 1)").run();
+    try {
+        const row = DB.prepare('SELECT is_doctor, specialty FROM users WHERE id = 14').get();
+        assert.equal(row.is_doctor, 1, 'стенд честный: база хранит флаг числом');
+        assert.equal(row.specialty || '', '', 'и специальности нет — подпорки «есть специальность» тоже нет');
+        document.body.children = [];
+        const picks = [];
+        openServicePickerModal({ onPick: (p) => picks.push(p) });
+        const box = await until(() => modals().find((m) => m.textContent.includes('Абдуллаева Зарина') && m.textContent.includes('Повторный приём')));
+        assert.ok(box, 'администратора-врача нет в окне записи');
+        const mine = () => colRows(box, 'Услуги').filter((r) => r.textContent.includes('Абдуллаева Зарина'));
+        await until(() => mine().length >= 2, 3000);
+        assert.equal(mine().length, 2, 'у администратора-врача без своих строк — оба вида по общей цене: ' + mine().map((r) => r.textContent).join(' | '));
+        mine().find((r) => r.textContent.includes('Первичный приём')).dispatch('click');
+        box.querySelectorAll('button').find((b) => /Готово/.test(b.textContent)).dispatch('click');
+        await until(() => picks.length);
+        assert.equal(picks[0].doctor && picks[0].doctor.id, 14, 'консультация ушла не к администратору-врачу');
+    } finally {
+        DB.prepare('DELETE FROM users WHERE id = 14').run();
+    }
+});
