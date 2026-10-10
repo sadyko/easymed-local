@@ -755,6 +755,35 @@ test('кнопки-ссылки: без карты «Маршрута» нет; 
     assert.equal(links.find((l) => l.text === '@shifo_bot').href, 'https://t.me/shifo_bot');
 });
 
+// Полировка по макету (2026-10-10) — внизу карточки строка «телефон · канал
+// @имя», как в макете; кнопки — как были. Под названием — только адрес.
+const previewLine = (root) => descendants(preview(root)).find((n) => matches(n, '.cpf-pline')) || null;
+test('предпросмотр: внизу строка «телефон · канал @имя» на языке предпросмотра; кнопки на месте', async () => {
+    const root = await open({ telegram_channel: '@shifo_news', region_code: 'tashkent-city', street_ru: 'ул. Мира 1' });
+    const line = previewLine(root);
+    assert.ok(line, 'нет нижней строки с телефоном');
+    assert.equal(textOf(line), '+998 71 200 12 00 · канал @shifo_news');
+    assert.equal(preview(root).children[preview(root).children.length - 1], line, 'строка — последней в карточке, под кнопками');
+    const head = descendants(preview(root)).find((n) => matches(n, '.cpf-preview-head'));
+    assert.doesNotMatch(textOf(head), /\+998/, 'телефон — внизу, а не под названием');
+    const links = previewLinks(root).map((l) => l.text);
+    assert.ok(links.includes('Позвонить') && links.includes('@shifo_news'), 'кнопки остались: ' + links.join(', '));
+
+    langButton(root, 'UZ').click();
+    assert.equal(textOf(previewLine(root)), '+998 71 200 12 00 · kanal @shifo_news');
+    langButton(root, 'EN').click();
+    assert.equal(textOf(previewLine(root)), '+998 71 200 12 00 · channel @shifo_news');
+
+    // Неверное имя канала — в строке только телефон; без телефона и канала строки нет.
+    langButton(root, 'RU').click();
+    type(fieldInput(root, 'Telegram-канал'), '@ab');
+    assert.equal(textOf(previewLine(root)), '+998 71 200 12 00');
+    const bare = await open({ phone: '' });
+    assert.equal(previewLine(bare), null, 'нечего показать — строки нет');
+    const onlyChannel = await open({ phone: '', telegram_channel: 'https://t.me/shifo_news' });
+    assert.equal(textOf(previewLine(onlyChannel)), 'канал @shifo_news', 'ссылка на канал — именем');
+});
+
 test('логотип в предпросмотре: квадратный файл, иначе печатная копия', async () => {
     let root = await open({ logo_square_path: 'square/1-a.png', logo_data_url: PRINT_COPY });
     let mark = descendants(preview(root)).find((n) => n.tagName === 'IMG');

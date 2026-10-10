@@ -5,6 +5,8 @@
 export const STRINGS = {
   // CLINIC_PROFILE_V1 (полировка по макету) — пометка у пустых UZ / EN (views/company-fields.js triGroup)
   "нет перевода": {"en":"no translation","ru":"нет перевода","uz":"tarjima yo‘q"},   // CLINIC_PROFILE_V1
+  // CLINIC_PROFILE_V1 (полировка по макету) — «канал @имя» в нижней строке предпросмотра (views/company-preview.js)
+  "канал": {"en":"channel","ru":"канал","uz":"kanal"},   // CLINIC_PROFILE_V1
   // CLINIC_PROFILE_V1 (ревью M3) — прежний логотип не затирается нескопированным (routes/db.js)
   "Прежний логотип клиники не удалось сохранить копией, поэтому он остаётся на бланках, а новый не применён. Попробуйте ещё раз; если повторится — проверьте место на диске компьютера с программой.": {"en":"The clinic’s previous logo could not be saved as a copy, so it stays on the forms and the new one was not applied. Try again; if it happens again, check the free disk space on the computer running the program.","ru":"Прежний логотип клиники не удалось сохранить копией, поэтому он остаётся на бланках, а новый не применён. Попробуйте ещё раз; если повторится — проверьте место на диске компьютера с программой.","uz":"Klinikaning eski logotipini nusxa sifatida saqlab bo‘lmadi, shuning uchun u blankalarda qoladi, yangisi esa qo‘llanmadi. Yana urinib ko‘ring; takrorlansa — dastur o‘rnatilgan kompyuterdagi diskda joy borligini tekshiring."},   // CLINIC_PROFILE_V1
   // CLINIC_PROFILE_V1 (ревью I2) — путь к файлу логотипа (shared/clinic-profile.js, /api/db)
