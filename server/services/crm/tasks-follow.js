@@ -30,7 +30,7 @@
 import { compile } from '../../db/query-compiler.js';
 import { canRead, canWrite } from '../../db/schema-registry.js';
 import { leadVisible, canEditCrm } from './visibility.js';
-import { publicUser } from '../auth.js';
+import { publicUser, SESSION_USER_COLUMNS } from '../auth.js';
 import { effectiveRoles } from '../roles.js';
 
 export class RpcError extends Error {
@@ -40,9 +40,10 @@ export class RpcError extends Error {
 const idOrNull = (v) => (v == null || v === '' ? null : Number(v));
 const has = (o, k) => !!o && Object.prototype.hasOwnProperty.call(o, k);
 
-// ADMIN_DOCTOR_LOCAL_V1 — is_doctor: publicUser отдаёт флаг, и без колонки он
-// говорил бы «не врач» про администратора-врача.
-const USER_COLS = 'id, username, full_name, role, extra_roles, custom_role_code, department_id, is_active, must_change_password, is_doctor';
+// LOGIN_ROLES_V1 — колонки сессии — общий список services/auth.js: сотрудник
+// для CRM читается ровно как вход и /me (прежде свой список, и с ним мог
+// разойтись — как разошёлся вход).
+const USER_COLS = SESSION_USER_COLUMNS.join(', ');
 /** Сотрудник по номеру (как сессия: роли, своя роль клиники, активность) или null. */
 export function staffById(db, id) {
   const n = idOrNull(id);

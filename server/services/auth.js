@@ -76,19 +76,36 @@ export function validPassword(pw) {
   return typeof pw === 'string' && pw.length >= 1 && Buffer.byteLength(pw, 'utf8') <= 72;
 }
 
+// LOGIN_ROLES_V1 — ОДИН СПИСОК КОЛОНОК СЕССИИ на все её чтения: вход (login),
+// восстановление (sessionUser → /api/auth/me) и сотрудник для CRM
+// (crm/tasks-follow.js staffById). Списки расходились: вход не брал ни своей
+// роли клиники (CUSTOM_ROLES_V1), ни дополнительных ролей, а вход через форму
+// страницу НЕ перезагружает — оболочка (admin.js onAuthed) строила права по
+// ответу входа, и до первого F5 сотрудник со своей ролью видел экраны её
+// основы, а администратор со своей ролью — без её «Нет». publicUser отдаёт
+// ровно эти колонки (тест routes/auth.test.js держит список и форму ответа
+// вместе). Хэша пароля здесь нет: его читает только вход, отдельно.
+export const SESSION_USER_COLUMNS = Object.freeze([
+  'id', 'username', 'full_name', 'role', 'extra_roles', 'custom_role_code',
+  'department_id',          // MY_STOCK_V1 — пункт «Мой отдел» с первой минуты
+  'is_active', 'must_change_password',
+  'is_doctor',              // ADMIN_DOCTOR_LOCAL_V1 — врач по флагу, а не по роли
+]);
+const LOGIN_USER_SQL = `SELECT password_hash, ${SESSION_USER_COLUMNS.join(', ')} FROM users WHERE username = ?`;
+const SESSION_USER_SQL = `SELECT ${SESSION_USER_COLUMNS.map((c) => 'u.' + c).join(', ')}, `
+  + 's.expires_at AS session_expires_at, s.last_seen_at AS session_seen_at '
+  + 'FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?';
+
 export function login(db, username, password, { ip = '' } = {}) {
   const name = String(username || '').trim().toLowerCase();
   const key = name + '|' + String(ip || '');
   const fail = failedAttempts.get(key);
   if (fail && fail.lockedUntil > Date.now()) return { error: 'locked' };
 
-  const user = db.prepare(
-    // MY_STOCK_V1 — department_id едет с первой же минуты входа: вход НЕ
-    // перезагружает страницу (форма → onAuthed), и без него пункт «Мой отдел»
-    // появился бы в меню только после первого F5.
-    // ADMIN_DOCTOR_LOCAL_V1 — is_doctor по той же причине: см. publicUser.
-    'SELECT id, username, password_hash, full_name, role, department_id, is_active, must_change_password, is_doctor FROM users WHERE username = ?'
-  ).get(name);
+  // MY_STOCK_V1 · ADMIN_DOCTOR_LOCAL_V1 · LOGIN_ROLES_V1 — вход НЕ
+  // перезагружает страницу (форма → onAuthed): ответ входа обязан нести всё,
+  // что несёт /me, — тот же SESSION_USER_COLUMNS.
+  const user = db.prepare(LOGIN_USER_SQL).get(name);
   const match = bcrypt.compareSync(String(password ?? ''), user?.password_hash || DUMMY_HASH);
   if (!user || !user.is_active || !match) {
     // OPS_EVENTS_V1 — one kind, no distinction between "no such user" and
@@ -150,7 +167,8 @@ export function sessionUser(db, sid, { background = false } = {}) {
     // экрану больше негде: users читается только через /api/db, а роль без
     // прав на справочник сотрудников туда не ходит.
     // ADMIN_DOCTOR_LOCAL_V1 — is_doctor: см. publicUser.
-    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.custom_role_code, u.department_id, u.is_active, u.must_change_password, u.is_doctor, s.expires_at AS session_expires_at, s.last_seen_at AS session_seen_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
+    // LOGIN_ROLES_V1 — колонки — общий SESSION_USER_COLUMNS (тот же у входа).
+    SESSION_USER_SQL
   ).get(sid);
   if (!row) return null;
   const now = Date.now();
@@ -205,8 +223,8 @@ export function publicUser(u) {
            // кабинета, «Мой профиль» не открывался, «Взять» у процедуры
            // пряталось. Настоящим true/false, как флаги выше. Специальность и
            // лицензию сессия НЕ отдаёт: по ним оболочка угадывала бы врача и в
-           // медсестре со специальностью. Каждый вызывающий выбирает колонку
-           // (вход, sessionUser, crm/tasks-follow.js USER_COLS).
+           // медсестре со специальностью. Колонку выбирает каждое чтение сессии
+           // — через общий SESSION_USER_COLUMNS (LOGIN_ROLES_V1).
            is_doctor: !!u.is_doctor };
 }
 

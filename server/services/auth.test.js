@@ -171,8 +171,10 @@ test('login still works when the ops_events table does not exist yet (recordEven
   // MY_STOCK_V1 — department_id стоит и в этом слепке: это колонка НАСТОЯЩЕЙ
   // таблицы (миграция 108), а тема теста — отсутствующий ops_events, а не
   // урезанный справочник сотрудников. ADMIN_DOCTOR_LOCAL_V1 — is_doctor тоже
-  // (миграция 018): вход читает флаг врача для сессии.
-  db.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT, full_name TEXT, role TEXT, extra_roles TEXT, department_id INTEGER, is_active INTEGER DEFAULT 1, must_change_password INTEGER DEFAULT 0, is_doctor INTEGER NOT NULL DEFAULT 0);
+  // (миграция 018): вход читает флаг врача для сессии. LOGIN_ROLES_V1 —
+  // custom_role_code (миграция 133): вход читает все колонки сессии
+  // (SESSION_USER_COLUMNS), как /me.
+  db.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT, full_name TEXT, role TEXT, extra_roles TEXT, custom_role_code TEXT, department_id INTEGER, is_active INTEGER DEFAULT 1, must_change_password INTEGER DEFAULT 0, is_doctor INTEGER NOT NULL DEFAULT 0);
            CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id INTEGER, expires_at TEXT);`);
   db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?,?,?)').run('bare', hashPassword('secret123'), 'admin');
   assert.doesNotThrow(() => login(db, 'bare', 'wrong'));
