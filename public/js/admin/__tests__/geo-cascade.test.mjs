@@ -126,6 +126,7 @@ const GEO = {
                 { id: 102, region_id: 14, name: 'Свой район', code: null, active: 1 }],
 };
 let answerWithObject = false;
+let geoTables = GEO;   // CLINIC_PROFILE_V1 (ревью I1) — подмена на справочник с совпадающими id
 const calls = [];
 globalThis.fetch = async (url, opts) => {
     const u = String(url);
@@ -134,7 +135,7 @@ globalThis.fetch = async (url, opts) => {
         calls.push(desc);
         // Чужой ответ: поддельный сервер settings-split отдаёт строку doc_settings на любой /api/db.
         if (answerWithObject) return { ok: true, status: 200, json: async () => ({ data: { id: 1, clinic_name: 'Шифо' } }) };
-        let rows = (GEO[desc.table] || []).slice();
+        let rows = (geoTables[desc.table] || []).slice();
         for (const f of desc.filters || []) {
             if (f.col === 'active') continue;
             rows = rows.filter((r) => String(r[f.col]) === String(f.val));
@@ -222,4 +223,66 @@ test('/api/db отвечает объектом вместо массива — 
 
 test('окно пациента отдаёт тот же каскад по прежнему адресу', () => {
     assert.equal(viaModal, geoCascade, 'patient-create-modal.js реэкспортирует geoCascade из geo-cascade.js');
+});
+
+// CLINIC_PROFILE_V1 (ревью I1) — в настоящем справочнике (мигр. 132) id
+// пересекаются между таблицами: Узбекистан — страна 1, Каракалпакстан — регион 1,
+// Бектемирский район — район 1. Строка выбранного пункта берётся из СВОЕГО
+// списка, а не из общей таблицы по id.
+const REAL_IDS = {
+    countries: [{ id: 1, name: 'Узбекистан', name_uz: 'O‘zbekiston', name_en: 'Uzbekistan', code: 'UZ', active: 1 }],
+    regions: [{ id: 1, country_id: 1, name: 'Республика Каракалпакстан', name_uz: 'Qoraqalpog‘iston', name_en: 'Karakalpakstan', code: 'karakalpakstan', active: 1 },
+              { id: 14, country_id: 1, name: 'город Ташкент', name_uz: 'Toshkent shahri', name_en: 'Tashkent city', code: 'tashkent-city', active: 1 }],
+    districts: [{ id: 1, region_id: 14, name: 'Бектемирский район', name_uz: 'Bektemir tumani', name_en: 'Bektemir district', code: 'bektemir', active: 1 },
+                { id: 2, region_id: 14, name: 'Юнусабадский район', name_uz: 'Yunusobod tumani', name_en: 'Yunusabad district', code: 'yunusobod', active: 1 }],
+};
+
+test('совпадающие id в странах, регионах и районах: выбранные строки — из своих списков', async () => {
+    geoTables = REAL_IDS;
+    try {
+        const seen = [];
+        const geo = geoCascade({ by: 'code', onChange: (sel) => seen.push(sel) });
+        geo.preset({ country: 'UZ', region: 'tashkent-city', district: 'yunusobod' });
+        await geo.ready;
+        const s = geo.selected();
+        assert.deepEqual([s.country.code, s.region.code, s.district.code], ['UZ', 'tashkent-city', 'yunusobod']);
+        const last = seen[seen.length - 1];
+        assert.deepEqual([last.country.code, last.region.code, last.district.code], ['UZ', 'tashkent-city', 'yunusobod']);
+
+        // Регистрация (имена): значения и загрузка дочерних списков — как были.
+        const reg = geoCascade();
+        reg.preset({ country: 'Узбекистан', region: 'город Ташкент', district: 'Бектемирский район' });
+        await reg.ready;
+        assert.equal(chosen(reg.countrySel), 'Узбекистан');
+        assert.equal(chosen(reg.regionSel), 'город Ташкент');
+        assert.equal(chosen(reg.districtSel), 'Бектемирский район');
+        assert.equal(reg.selected().country.name, 'Узбекистан');
+        assert.equal(reg.selected().district.name, 'Бектемирский район');
+    } finally { geoTables = GEO; }
+});
+
+// CLINIC_PROFILE_V1 (ревью M4) — код, которого больше нет в активном списке, не
+// теряется молча: в режиме кодов он остаётся выбранным пунктом «(не используется)».
+// Регистрация (имена) — как была: такого пункта нет.
+test('режим кодов: сохранённый код вне активного списка — выбран пунктом «(не используется)»', async () => {
+    const geo = geoCascade({ by: 'code' });
+    geo.preset({ country: 'UZ', region: 'old-region', district: 'old-district' });
+    await geo.ready;
+    assert.equal(chosen(geo.regionSel), 'old-region');
+    assert.match(geo.regionSel.options[geo.regionSel.selectedIndex].textContent, /old-region \(не используется\)/);
+    assert.equal(chosen(geo.districtSel), 'old-district');
+    const s = geo.selected();
+    assert.deepEqual([s.country.code, s.region.code, s.district.code], ['UZ', 'old-region', 'old-district']);
+    assert.equal(s.region.stale, true);
+
+    const xx = geoCascade({ by: 'code' });
+    xx.preset({ country: 'XX' });
+    await xx.ready;
+    assert.equal(chosen(xx.countrySel), 'XX');
+    assert.equal(xx.selected().country.code, 'XX');
+
+    const names = geoCascade();
+    names.preset({ country: 'Атлантида' });
+    await names.ready;
+    assert.deepEqual(values(names.countrySel), ['', 'Казахстан', 'Своя страна', 'Узбекистан'], 'регистрация: лишних пунктов нет');
 });

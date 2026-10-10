@@ -6,7 +6,7 @@
 // регистрации не изменилось.
 import { supabase } from '../../supabase.js';
 import { h, clear } from '../ui.js';
-import { tr, getLang } from '../i18n.js';
+import { tr, trf, getLang } from '../i18n.js';
 
 export function geoCascade({ by = 'name', onChange = null } = {}) {
     const byCode = by === 'code';
@@ -14,28 +14,53 @@ export function geoCascade({ by = 'name', onChange = null } = {}) {
     const countrySel  = h('select', { name: 'country'  });
     const regionSel   = h('select', { name: 'region'   });
     const districtSel = h('select', { name: 'district' });
-    const rowsById = new Map();
+    // CLINIC_PROFILE_V1 (ревью I1) — строки у КАЖДОГО списка свои. id в
+    // справочнике пересекаются между таблицами (мигр. 132: страна 1 —
+    // Узбекистан, регион 1 — Каракалпакстан, район 1 — Бектемирский), и общая
+    // таблица по id отдавала за страну строку района, нарисованного последним:
+    // «Компания» записывала country_code 'bektemir'. Регистрации это не
+    // касалось — ей нужны только id для загрузки следующего списка, а id у
+    // подменённой строки тот же.
+    const rowsOf = new Map([[countrySel, new Map()], [regionSel, new Map()], [districtSel, new Map()]]);
 
     // Подпись — на языке интерфейса (uz / en из мигр. 132); значение — имя или код.
     const label = (r) => { const l = getLang(); return (l === 'uz' && r.name_uz) || (l === 'en' && r.name_en) || r.name; };
-    function paintSelect(sel, rows, placeholder, selected) {
+    function paintSelect(sel, rows, placeholder, selected, { saved = false, parentStale = false } = {}) {
         clear(sel);
+        const byId = rowsOf.get(sel);
+        byId.clear();
         sel.appendChild(h('option', { value: '' }, placeholder));
         // CLINIC_PROFILE_V1 — в режиме кодов строка без кода не предлагается:
         // партнёр её не прочтёт (её завела клиника в «Географии»).
         const usable = rows.filter((r) => r && (!byCode || r.code));
+        // CLINIC_PROFILE_V1 (ревью M4) — режим кодов: сохранённый код, которого
+        // в активном списке больше нет (строку выключили в «Географии»), не
+        // теряется молча — он остаётся выбранным пунктом «(не используется)».
+        // Только СОХРАНЁННЫЙ код (saved; не страна по умолчанию) и только когда
+        // список пришёл (пустой мог и не загрузиться) или выше выбран такой же
+        // прежний пункт (parentStale). Регистрация (имена) — как была.
+        if (byCode && saved && selected && !usable.some((r) => r.code === selected) && (usable.length || parentStale)) {
+            const opt = h('option', { value: selected }, document.createTextNode(trf('{code} (не используется)', { code: selected })));
+            opt.dataset.stale = '1';
+            opt.dataset.code = selected;
+            opt.selected = true;
+            sel.appendChild(opt);
+        }
         for (const r of [...usable].sort((a, b) => label(a).localeCompare(label(b), 'ru'))) {
             const opt = h('option', { value: valueOf(r) }, label(r));
             opt.dataset.id = r.id;
-            rowsById.set(String(r.id), r);
+            byId.set(String(r.id), r);
             if (selected && selected === valueOf(r)) opt.selected = true;
             sel.appendChild(opt);
         }
     }
     function rowOf(sel) {
         const o = sel.options ? sel.options[sel.selectedIndex] : null;
-        const id = o && o.dataset ? (o.dataset.id || '') : '';
-        return id ? (rowsById.get(String(id)) || null) : null;
+        if (!o || !o.dataset) return null;
+        // Прежний пункт: строки справочника нет — код и вместо имени тот же код.
+        if (o.dataset.stale) return { id: null, code: o.dataset.code, name: o.dataset.code, stale: true };
+        const id = o.dataset.id || '';
+        return id ? (rowsOf.get(sel).get(String(id)) || null) : null;
     }
     const selectedId = (sel) => { const r = rowOf(sel); return r ? r.id : ''; };
     const selected = () => ({ country: rowOf(countrySel), region: rowOf(regionSel), district: rowOf(districtSel) });
@@ -84,17 +109,25 @@ export function geoCascade({ by = 'name', onChange = null } = {}) {
         const countries = await load('countries', null);
         paintSelect(countrySel, countries,
             countries.length ? tr('Выберите страну') : tr('Список стран не загрузился — обновите страницу'),   // GEO_HARDCODE_V1 — the list ships with the app; empty means the request failed
-            want.country || (byCode ? 'UZ' : 'Uzbekistan'));
+            want.country || (byCode ? 'UZ' : 'Uzbekistan'), { saved: !!want.country });
         const cid = selectedId(countrySel);
+        const isStale = (sel) => { const r = rowOf(sel); return !!(r && r.stale); };
         if (cid) {
             const regs = await load('regions', ['country_id', cid]);
-            paintSelect(regionSel, regs, regionsPh(regs.length), want.region);
+            paintSelect(regionSel, regs, regionsPh(regs.length), want.region, { saved: true });
             const rid = selectedId(regionSel);
             // CLINIC_PROFILE_V1 — в «Компании» районы нужны и тогда, когда район ещё не выбран.
             if (rid && (want.district || byCode)) {
                 const dists = await load('districts', ['region_id', rid]);
-                paintSelect(districtSel, dists, districtsPh(dists.length), want.district);
+                paintSelect(districtSel, dists, districtsPh(dists.length), want.district, { saved: true });
+            } else if (isStale(regionSel) && want.district) {
+                // CLINIC_PROFILE_V1 (ревью M4) — прежний регион: его районов не загрузить, прежний район виден как есть.
+                paintSelect(districtSel, [], tr('Сначала выберите регион'), want.district, { saved: true, parentStale: true });
             }
+        } else if (isStale(countrySel)) {
+            // CLINIC_PROFILE_V1 (ревью M4) — прежняя страна: прежние регион и район видны как есть.
+            if (want.region) paintSelect(regionSel, [], tr('Сначала выберите страну'), want.region, { saved: true, parentStale: true });
+            if (want.district) paintSelect(districtSel, [], tr('Сначала выберите регион'), want.district, { saved: true, parentStale: true });
         }
         fire();
     })();

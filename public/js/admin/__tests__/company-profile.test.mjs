@@ -841,3 +841,71 @@ test('главное здание: всё открыто, заметки фил�
     await save(root);
     assert.deepEqual(lastUpdate, { name_uz: 'Shifo', address: 'ул. Главная, 1' }, 'общее для клиники и своё — оба уходят');
 });
+
+// ===========================================================================
+// CLINIC_PROFILE_V1 (ревью I1, M4) — справочник с совпадающими id и коды,
+// которых больше нет в активных списках.
+// ===========================================================================
+// Как в настоящем справочнике (мигр. 132): Узбекистан — id 1, Каракалпакстан —
+// регион id 1, Бектемирский район — район id 1.
+const REAL_IDS = {
+    countries: [{ id: 1, name: 'Узбекистан', name_uz: 'O‘zbekiston', name_en: 'Uzbekistan', code: 'UZ', active: 1 }],
+    regions: [{ id: 1, country_id: 1, name: 'Республика Каракалпакстан', name_uz: 'Qoraqalpog‘iston', name_en: 'Karakalpakstan', code: 'karakalpakstan', active: 1 },
+              { id: 14, country_id: 1, name: 'город Ташкент', name_uz: 'Toshkent shahri', name_en: 'Tashkent city', code: 'tashkent-city', active: 1 }],
+    districts: [{ id: 1, region_id: 14, name: 'Бектемирский район', name_uz: 'Bektemir tumani', name_en: 'Bektemir district', code: 'bektemir', active: 1 },
+                { id: 2, region_id: 14, name: 'Юнусабадский район', name_uz: 'Yunusobod tumani', name_en: 'Yunusabad district', code: 'yunusobod', active: 1 }],
+};
+
+test('ревью R6: id страны, региона и района совпадают — адрес и коды не путаются', async () => {
+    geoTables = REAL_IDS;
+    try {
+        const root = await open({ country_code: 'UZ', region_code: 'tashkent-city', district_code: 'yunusobod', street_ru: 'ул. Амира Темура, 1' });
+        assert.equal(fullAddr(root, 'ru'), 'город Ташкент, Юнусабадский район, ул. Амира Темура, 1');
+        assert.equal(fullAddr(root, 'codes'), 'UZ · tashkent-city · yunusobod');
+        await save(root);
+        assert.equal(lastUpdate, null, 'нетронутое — не шлётся');
+
+        await choose(geoSel(root, 'Район'), 'bektemir');
+        assert.equal(fullAddr(root, 'uz'), 'Toshkent shahri, Bektemir tumani, ул. Амира Темура, 1');
+        await save(root);
+        assert.deepEqual(lastUpdate, { district_code: 'bektemir' }, 'страна и регион не изменились');
+        assert.deepEqual([docRow.country_code, docRow.region_code, docRow.district_code], ['UZ', 'tashkent-city', 'bektemir']);
+
+        await choose(geoSel(root, 'Город / область'), 'karakalpakstan');
+        await save(root);   // в этом справочнике у Каракалпакстана районов нет — район не требуется
+        assert.equal(fieldError(root, 'Район'), '');
+        assert.deepEqual(lastUpdate, { region_code: 'karakalpakstan', district_code: '' });
+        assert.equal(docRow.country_code, 'UZ', 'код страны — UZ, а не код региона с тем же id');
+        assert.equal(docRow.region_code, 'karakalpakstan');
+    } finally { geoTables = GEO; }
+});
+
+test('ревью R3: регион вышел из списка — показан «(не используется)», сохранение не останавливает, коды на месте', async () => {
+    const root = await open({ street_ru: 'ул. Мира 1', country_code: 'UZ', region_code: 'old-region', district_code: 'old-district' });
+    const reg = geoSel(root, 'Город / область');
+    assert.equal(selectedValue(reg), 'old-region');
+    assert.match(labelText(reg.options[reg.selectedIndex]), /old-region \(не используется\)/);
+    const dis = geoSel(root, 'Район');
+    assert.equal(selectedValue(dis), 'old-district');
+    assert.match(labelText(dis.options[dis.selectedIndex]), /old-district \(не используется\)/);
+
+    type(fieldInput(root, 'Электронная почта'), 'hello@shifo.uz');
+    await save(root);
+    assert.deepEqual(lastUpdate, { email: 'hello@shifo.uz' });
+    type(triInput(root, 'Улица, дом', 'ru'), 'ул. Мира 2');
+    await save(root);
+    assert.equal(fieldError(root, 'Город / область'), '', 'прежний регион не требует выбора заново');
+    assert.deepEqual(lastUpdate, { street_ru: 'ул. Мира 2' });
+    assert.deepEqual([docRow.country_code, docRow.region_code, docRow.district_code], ['UZ', 'old-region', 'old-district']);
+});
+
+test('ревью R4: страна вне списка — показана «(не используется)» и при сохранении не стирается', async () => {
+    const root = await open({ country_code: 'XX' });
+    const c = geoSel(root, 'Страна');
+    assert.equal(selectedValue(c), 'XX');
+    assert.match(labelText(c.options[c.selectedIndex]), /XX \(не используется\)/);
+    type(fieldInput(root, 'Электронная почта'), 'hello@shifo.uz');
+    await save(root);
+    assert.deepEqual(lastUpdate, { email: 'hello@shifo.uz' });
+    assert.equal(docRow.country_code, 'XX');
+});
