@@ -36,9 +36,15 @@ function seed() {
     db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(code,
       JSON.stringify({ sections: ['settings'], levels: {}, grants: { settings: 'view', 'settings.api': level } }));
   }
+  // CLINIC_API_STEP7_V1 (ревью №1) — своя роль клиники на основе администратора, «API: Просмотр».
+  u.run(4, 'admview', 'x', 'Старший администратор', 'admin');
+  db.prepare('INSERT INTO custom_roles (code, name, base_role) VALUES (?, ?, ?)').run('adm_view', 'adm_view', 'admin');
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run('adm_view',
+    JSON.stringify({ sections: ['settings'], levels: {}, grants: { settings: 'edit', 'settings.api': 'view' } }));
   return db;
 }
 const ADMIN = { id: 1, role: 'admin', extra_roles: [] };
+const ADMIN_VIEW = { id: 4, role: 'admin', extra_roles: [], custom_role_code: 'adm_view' };   // CLINIC_API_STEP7_V1 (ревью №1)
 const DOC_ADMIN = { id: 3, role: 'doctor', extra_roles: ['admin'] };
 const REG = { id: 2, role: 'registrar', extra_roles: [] };
 const VIEW = { id: 2, role: 'registrar', extra_roles: [], custom_role_code: 'api_view' };
@@ -56,10 +62,10 @@ test('чтение: без права — 403; «Просмотр» — без �
   partner(db);
   assert.equal(st(() => apiSettingsGet(db, {}, REG)), 403);
   const v = apiSettingsGet(db, {}, VIEW);
-  assert.deepEqual(v.can, { view: true, edit: false, admin: false });
+  assert.deepEqual(v.can, { view: true, edit: false, admin: false, reveal: false });
   assert.ok(v.connections.length === 2 && v.connections.every((c) => c.key_mask === '' && c.secret_mask === ''));
   const a = apiSettingsGet(db, {}, ADMIN);
-  assert.deepEqual(a.can, { view: true, edit: true, admin: true });
+  assert.deepEqual(a.can, { view: true, edit: true, admin: true, reveal: true });
   assert.ok(a.connections.every((c) => /^em_live_••••/.test(c.key_mask)));
   assert.deepEqual([a.slug, a.base_url, a.public_server, a.building_role, a.clinic_name],
     ['shifo', 'https://api.easymed.uz/shifo/v1/', false, 'main', 'Шифо']);
@@ -121,4 +127,35 @@ test('карта RPC, лицензия, здания, словарь', () => {
   assert.ok(!TABLES.some((t) => t.name.startsWith('api_')), 'подключения едут справочником в филиал');
   assert.ok(!Object.keys(SHIPPED).some((t) => t.startsWith('api_')), 'подключения едут журналом записей');
   for (const m of Object.values(RPC_MESSAGES)) assert.ok(STRINGS[m] && STRINGS[m].uz && STRINGS[m].en, m);
+});
+
+// CLINIC_API_STEP7_V1 (ревью №1) — роль на основе администратора с «API: Просмотр»:
+// isAdminUser у неё истина, но строка «API» — на «Просмотре». Ключ она открывает
+// (решение владельца 5: ключи видят администраторы — как у телефонии), а писать не
+// может ничего: ни имя в адресе, ни черновик, ни новое подключение, ни правку,
+// ни новый ключ или секрет, ни удаление.
+test('администратор с «API: Просмотр» — открывает ключ, но ничего не пишет', () => {
+  const db = seed();
+  const { connection: c } = partner(db);
+  const s = apiSettingsGet(db, {}, ADMIN_VIEW);
+  assert.deepEqual(s.can, { view: true, edit: false, admin: false, reveal: true });
+  assert.ok(s.connections.every((x) => /^em_live_••••/.test(x.key_mask)), 'маски — тому, кто может открыть ключ');
+  assert.match(apiConnectionReveal(db, { id: c.id, what: 'key' }, ADMIN_VIEW).value, /^em_live_/);
+  const adminDraft = apiConnectionDraft(db, {}, ADMIN);
+  for (const [what, fn] of Object.entries({
+    slug: () => apiSlugSave(db, { slug: 'other-name' }, ADMIN_VIEW),
+    draft: () => apiConnectionDraft(db, {}, ADMIN_VIEW),
+    create: () => apiConnectionCreate(db, { draft_id: adminDraft.draft_id, kind: 'partner', name: 'evil', scopes: ['clinic'] }, ADMIN_VIEW),
+    name: () => apiConnectionUpdate(db, { id: c.id, name: 'renamed' }, ADMIN_VIEW),
+    off: () => apiConnectionUpdate(db, { id: c.id, active: false }, ADMIN_VIEW),
+    scopes: () => apiConnectionUpdate(db, { id: c.id, scopes: ['clinic'] }, ADMIN_VIEW),
+    key: () => apiConnectionRegenerate(db, { id: c.id, what: 'key', confirm: true }, ADMIN_VIEW),
+    secret: () => apiConnectionRegenerate(db, { id: c.id, what: 'secret', confirm: true }, ADMIN_VIEW),
+    delete: () => apiConnectionDelete(db, { id: c.id, confirm: true }, ADMIN_VIEW),
+  })) assert.equal(st(fn), 403, what);
+  assert.throws(() => apiConnectionDelete(db, { id: c.id, confirm: true }, ADMIN_VIEW), (e) => e.message === RPC_MESSAGES.noEdit);
+  const row = db.prepare('SELECT name, active, deleted_at FROM api_connections WHERE id = ?').get(c.id);
+  assert.deepEqual({ ...row }, { name: 'med24.uz', active: 1, deleted_at: null });
+  assert.equal(db.prepare('SELECT slug FROM api_settings').get().slug, 'shifo');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM api_connections').get().n, 2, 'новое подключение не создано');
 });

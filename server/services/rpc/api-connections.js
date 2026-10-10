@@ -13,6 +13,10 @@
 //   «Изменение» — включить и выключить, название, сайт, контакт;
 //   администратор — имя в адресе, новое подключение, права подключения,
 //     уведомления, безопасность, ключи и секреты, удаление.
+// CLINIC_API_STEP7_V1 (ревью №1) — записи администратора требуют И «Изменения»,
+// И администратора: своя роль на основе администратора с «API: Просмотр» не
+// пишет ничего. Ключ и секрет она открывает («Показать / Скопировать» — решение
+// владельца 5: ключи видят администраторы; как у телефонии).
 // Филиал — только чтение: подключения живут в главном здании (публичный сервер
 // шага 8 получает данные оттуда), записи — 409.
 import { grantAllowsAdminOr, isAdminUser } from '../grants.js';
@@ -50,7 +54,15 @@ function requireEdit(db, user) {
   requireView(db, user);
   if (!grantAllowsAdminOr(db, user, KEY, 'edit')) throw new RpcError(RPC_MESSAGES.noEdit, 403);
 }
+// CLINIC_API_STEP7_V1 (ревью №1) — запись администратора: «Изменение» + администратор.
+// Раньше хватало просмотра: роль на основе администратора с «API: Просмотр»
+// удаляла подключения, выпускала ключи и меняла имя в адресе.
 function requireAdmin(db, user) {
+  requireEdit(db, user);
+  if (!isAdminUser(user)) throw new RpcError(RPC_MESSAGES.adminOnly, 403);
+}
+// «Показать / Скопировать» — администратор с правом хотя бы на «Просмотр».
+function requireRevealer(db, user) {
   requireView(db, user);
   if (!isAdminUser(user)) throw new RpcError(RPC_MESSAGES.adminOnly, 403);
 }
@@ -62,7 +74,8 @@ const forViewer = (c, admin) => (admin ? c : { ...c, key_mask: '', secret_mask: 
 
 export function apiSettingsGet(db, _args, user) {
   requireView(db, user);
-  const admin = isAdminUser(user);
+  const admin = isAdminUser(user);   // маски — тому, кто может открыть ключ
+  const edit = grantAllowsAdminOr(db, user, KEY, 'edit');
   const slug = readSlug(db);
   return {
     slug,
@@ -73,7 +86,9 @@ export function apiSettingsGet(db, _args, user) {
     clinic_name: clinicName(db),
     company_website: companyWebsite(db),
     partner_address_missing: Object.keys(companyAddressProblems(db)),   // решение владельца 11
-    can: { view: true, edit: grantAllowsAdminOr(db, user, KEY, 'edit'), admin },
+    // CLINIC_API_STEP7_V1 (ревью №1) — admin: записи администратора (нужны и «Изменение»);
+    // reveal: «Показать / Скопировать» ключ и секрет (администратору и на «Просмотре»).
+    can: { view: true, edit, admin: admin && edit, reveal: admin },
     connections: listConnections(db).map((c) => forViewer(c, admin)),
   };
 }
@@ -104,7 +119,7 @@ export function apiConnectionUpdate(db, args, user) {
   return { connection: forViewer(updateConnection(db, a.id, patch, actorOf(db, user)), isAdminUser(user)) };
 }
 export function apiConnectionReveal(db, args, user) {
-  requireAdmin(db, user); requireMain(db);
+  requireRevealer(db, user); requireMain(db);   // CLINIC_API_STEP7_V1 (ревью №1)
   const a = args || {};
   return { value: revealSecret(db, a.id, a.what, actorOf(db, user)) };
 }
