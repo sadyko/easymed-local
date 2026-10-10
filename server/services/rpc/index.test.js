@@ -24,6 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RPC, getRpc } from './index.js';
 import { setDataDir, getDataDir } from '../control/config.js';
+import { listenerStatus } from '../../lis/index.js';   // LIS_TEST_PORT_V1
 
 // V3120_CLEANUP — обход зовёт КАЖДЫЙ обработчик, и backup_create, сохранение
 // группы филиалов и прочие пишут в getDataDir(). Без своей папки это
@@ -32,6 +33,14 @@ import { setDataDir, getDataDir } from '../control/config.js';
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'em-rpc-index-'));
 setDataDir(DATA_DIR);
 test.after(() => { setDataDir(null); fs.rmSync(DATA_DIR, { recursive: true, force: true }); });
+
+// LIS_TEST_PORT_V1 (CLINIC_API_STEP5_V1) — обход зовёт и lis_restart, а он
+// поднимает настоящий приём анализаторов на 0.0.0.0:2575 (LIS_PORT по
+// умолчанию) — порт Easy-Med, запущенного на этой машине. Здесь проверяется
+// проводка, а не приём: он выключен на весь файл (страж — lis-port-hygiene.test.js).
+const PREV_LIS_ENABLED = process.env.LIS_ENABLED;
+process.env.LIS_ENABLED = '0';
+test.after(() => { if (PREV_LIS_ENABLED === undefined) delete process.env.LIS_ENABLED; else process.env.LIS_ENABLED = PREV_LIS_ENABLED; });
 
 function seed() {
   const db = openDb(':memory:'); migrate(db);
@@ -72,6 +81,9 @@ test('every registered RPC is reachable — no handler references an unimported 
   assert.deepEqual(broken, [], 'RPCs registered but not wired up:\n' + broken.join('\n'));
   assert.equal(getDataDir(), DATA_DIR, 'обход ушёл мимо временной папки данных');
   assert.ok(fs.existsSync(path.join(DATA_DIR, 'backups')), 'backup_create писал не во временную папку');
+  // LIS_TEST_PORT_V1 — lis_restart прошёл, но ничего не слушает и не пытался слушать.
+  const lis = listenerStatus();
+  assert.deepEqual([lis.listening, lis.failed], [[], []], 'обход поднял приём анализаторов: ' + JSON.stringify(lis));
 });
 
 test('getRpc returns null for an unknown name and ignores inherited properties', () => {
