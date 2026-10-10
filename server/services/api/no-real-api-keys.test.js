@@ -6,12 +6,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+import { newApiKey, newWebhookSecret } from './secret-box.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..', '..');
 const KEY_LIKE = /\bem_(?:live|whsec)_[A-Za-z0-9]{32}\b/g;
 const SKIP = new Set(['node_modules', '.git', 'data', 'releases', 'versions', 'dist']);
-const EXT = new Set(['.js', '.mjs', '.cjs', '.json', '.md', '.sql', '.html', '.css']);
+// CLINIC_API_STEP7_V1 (ревью №4) — не уже стража Telegram: и CI, и сценарии установки, и заметки.
+const EXT = new Set(['.js', '.mjs', '.cjs', '.json', '.md', '.sql', '.html', '.css',
+  '.yml', '.yaml', '.ps1', '.cmd', '.bat', '.txt']);
 
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -23,13 +27,34 @@ function walk(dir, out = []) {
   return out;
 }
 
-test('ни одного живого на вид ключа API или секрета вебхука в исходниках', () => {
+function offendersIn(root) {
   const offenders = [];
-  for (const f of walk(ROOT)) {
+  for (const f of walk(root)) {
     const text = fs.readFileSync(f, 'utf8');
     for (const hit of text.match(KEY_LIKE) || []) {
-      if (!hit.includes('TESTONLY')) offenders.push(path.relative(ROOT, f) + ': ' + hit.slice(0, 14) + '…');
+      if (!hit.includes('TESTONLY')) offenders.push(path.relative(root, f) + ': ' + hit.slice(0, 14) + '…');
     }
   }
+  return offenders;
+}
+
+test('ни одного живого на вид ключа API или секрета вебхука в исходниках', () => {
+  const offenders = offendersIn(ROOT);
   assert.deepEqual(offenders, [], 'похоже на настоящий ключ — замените образцом с TESTONLY:\n  ' + offenders.join('\n  '));
+});
+
+// CLINIC_API_STEP7_V1 (ревью №4) — страж смотрит не уже, чем страж токена Telegram
+// (no-real-tokens.test.js): настройки CI (.yml / .yaml), сценарии установки
+// (.ps1 / .cmd / .bat) и заметки (.txt). Ключ подкладывается во временную папку
+// во время теста — в исходниках его нет; значение не печатается.
+test('страж видит ключ и секрет в .yml, .yaml, .ps1, .cmd, .bat, .txt', () => {
+  const placed = ['.github/workflows/ci.yml', 'config/partner.yaml', 'install/setup.ps1', 'install/run.cmd', 'start.bat', 'docs/handover.txt'];
+  for (const rel of placed) {
+    for (const value of [newApiKey(), newWebhookSecret()]) {
+      const root = tmpDir('em-apikeyguard-');
+      fs.mkdirSync(path.join(root, path.dirname(rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), 'K=' + value + '\r\n');
+      assert.equal(offendersIn(root).length, 1, rel + ': подложенный ключ не найден');
+    }
+  }
 });
