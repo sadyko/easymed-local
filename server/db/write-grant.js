@@ -43,8 +43,9 @@
 //   • ЧТЕНИЕ таблицы, которую реестр отдаёт одному администратору (api_tokens),
 //     открывает «Просмотр» плитки — с замаскированными колонками `read.secret`
 //     (readGrantAllows / secretColumns; маскирует query-compiler.js).
-import { writeGrantKey, tableEntry, writableColumns } from './schema-registry.js';
+import { writeGrantKey, tableEntry, writableColumns, canWrite } from './schema-registry.js';   // CLINIC_PROFILE_V1 — canWrite
 import { grantAllowsOr, isAdminUser } from '../services/grants.js';
+import { effectiveRoles } from '../services/roles.js';   // CLINIC_PROFILE_V1
 import { catalogByKey, moneyRowOf } from '../../public/js/shared/permission-catalog.js';
 
 const GRANTABLE_OPS = new Set(['insert', 'update', 'delete']);
@@ -155,4 +156,27 @@ export function writeGrantNarrows(table, user, db, op = 'update') {
   } catch {
     return false;
   }
+}
+
+/**
+ * CLINIC_PROFILE_V1 — может ли человек сделать эту запись в таблицу — РОВНО
+ * так, как решает компилятор /api/db (query-compiler.js mayWrite): роль из
+ * списка реестра (кроме своей роли на основе администратора, закрывшей плитку
+ * своей записью — writeGrantNarrows) или право плитки (writeGrantAllows).
+ *
+ * Для дверей вне /api/db, которые пишут по праву той же таблицы. Первая —
+ * файлы логотипов «Компании» (routes/storage.js, корзина clinic-logos): путь
+ * к файлу — колонка doc_settings, и класть файл может тот, кто вправе её
+ * записать. Отдельных ворот с ключом справочника здесь нет: ворота — реестр
+ * (write.grant) и этот модуль, карта gate-fallbacks.js описывает их правилом
+ * плиток настроек («пишет по праву»), а не новой строкой.
+ */
+export function tableWriteAllowed(table, op, user, db) {
+  if (!user || !db) return false;
+  try {
+    if (canWrite(table, op, effectiveRoles(user))) return !writeGrantNarrows(table, user, db, op);
+  } catch {
+    return false;   // права не прочитались — самый узкий доступ
+  }
+  return writeGrantAllows(table, op, user, db);
 }

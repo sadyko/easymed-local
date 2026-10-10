@@ -103,6 +103,10 @@ export function fallbackLevel(db, user, key, mode = 'all') {
   if (key === JOURNALS_KEY) return hasAnyRole(user, ['admin']) ? 'view' : 'none';
   if (row.parent === 'reports') return (hasAnyRole(user, ['admin']) || canViewSection(db, user, 'reports-hub')) ? 'view' : 'none';
   // Плитки настроек: читать их таблицы сервер не запрещает, пишет по праву — «нет».
+  // CLINIC_PROFILE_V1 — то же правило у дверей вне /api/db, которые пишут по
+  // праву таблицы плитки: файлы логотипов «Компании» (routes/storage.js)
+  // кладёт тот, кто вправе записать doc_settings (db/write-grant.js
+  // tableWriteAllowed — реестр и write.grant, а не свои ворота с ключом).
   if (row.parent === 'settings') return 'view';
   // Раздел или маршрут оболочки — серверных ворот у ключа нет.
   return null;

@@ -7,6 +7,7 @@ import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, photoRefusal, refusalText, 
 import { grantAllowsAdminOr, isAdminUser } from '../services/grants.js';   // V3120_FIX (M7) — корзина Telegram по праву бота
 import { LOGO_BUCKET, LOGO_KINDS, logoRefusal } from '../../public/js/shared/clinic-logo-rules.js';   // CLINIC_PROFILE_V1
 import { readIdentity } from '../services/branch-sync/identity.js';   // CLINIC_PROFILE_V1
+import { tableWriteAllowed } from '../db/write-grant.js';   // CLINIC_PROFILE_V1 — логотип пишет тот, кто вправе записать doc_settings
 
 // Local file storage — the offline stand-in for Supabase Storage. Objects live
 // on disk under <storageDir>/<bucket>/<path>. Buckets are an allow-list; every
@@ -323,15 +324,18 @@ export function storageRoutes(storageDir, db = null) {
   }
 
   // CLINIC_PROFILE_V1 — кто кладёт логотип клиники: не в филиале (логотипы
-  // главного здания приезжают к нему печатной копией), администратор или
-  // «Компания: Изменение» — тот же ключ, что пишет doc_settings.
+  // главного здания приезжают к нему печатной копией), и тот, кто вправе
+  // записать doc_settings — путь к файлу и есть колонка этой таблицы. Ворота —
+  // те же, что у /api/db (db/write-grant.js tableWriteAllowed: администратор
+  // или «Компания: Изменение»), а не свои с ключом справочника: карта ворот
+  // (services/gate-fallbacks.js) описывает их правилом плиток настроек.
   function logoDenial(req) {
     const user = req.user;
     if (!user) return { status: 401, code: 'unauthorized', message: 'Требуется вход.' };
     if (!db) return { status: 403, code: 'forbidden', message: LOGO_DENIED };
     try { if (readIdentity(db).role === 'secondary') return { status: 409, code: 'conflict', message: LOGO_MAIN_ONLY }; }
     catch { /* строки нет — установка не филиал */ }
-    try { if (grantAllowsAdminOr(db, user, 'settings.company', 'edit')) return null; } catch { /* права не прочитались — отказ */ }
+    if (tableWriteAllowed('doc_settings', 'update', user, db)) return null;
     return { status: 403, code: 'forbidden', message: LOGO_DENIED };
   }
 

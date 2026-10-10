@@ -279,3 +279,27 @@ test('строка визита: package_id правкой только сним
     assert.equal(db.prepare('SELECT package_id FROM visit_services WHERE id = ?').get(vs).package_id, null);
   } finally { db.close(); }
 });
+
+// CLINIC_PROFILE_V1 (полный прогон, карта ворот) — двери вне /api/db, которые
+// пишут по праву той же таблицы (файлы логотипов «Компании» — это doc_settings,
+// routes/storage.js), спрашивают ровно то, что решает компилятор: роль реестра
+// (кроме своей роли на основе администратора, закрывшей плитку) или право плитки.
+test('tableWriteAllowed: doc_settings — администратор или «Компания: Изменение»; своя роль-администратор с закрытой плиткой — нет', async () => {
+  const { tableWriteAllowed } = await import('./write-grant.js');
+  const db = seed();
+  try {
+    assert.equal(tableWriteAllowed('doc_settings', 'update', ADMIN, db), true);
+    assert.equal(tableWriteAllowed('doc_settings', 'update', REG, db), false);
+    assert.equal(tableWriteAllowed('doc_settings', 'insert', ADMIN, db), false, 'вставку doc_settings не делает никто');
+    addGrants(db, 'registrar', { settings: 'view', 'settings.company': 'view' });
+    assert.equal(tableWriteAllowed('doc_settings', 'update', REG, db), false, '«Просмотр» — не запись');
+    addGrants(db, 'registrar', { settings: 'edit', 'settings.company': 'edit' });
+    assert.equal(tableWriteAllowed('doc_settings', 'update', REG, db), true);
+    db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('adm_nocompany', 'Админ без компании', 'admin')").run();
+    db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run('adm_nocompany',
+      JSON.stringify({ sections: [], levels: {}, grants: { settings: 'edit', 'settings.company': 'none' } }));
+    const closed = { id: 77, role: 'admin', extra_roles: [], custom_role_code: 'adm_nocompany' };
+    assert.equal(tableWriteAllowed('doc_settings', 'update', closed, db), false, 'своё «Нет» у плитки закрывает и администратора');
+    assert.equal(tableWriteAllowed('doc_settings', 'update', null, db), false);
+  } finally { db.close(); }
+});
