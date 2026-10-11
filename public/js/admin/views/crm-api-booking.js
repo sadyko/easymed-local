@@ -17,8 +17,23 @@ import { STATUS_LABEL, DECLINE_LABEL, STAFF_DECLINE_REASONS } from '../../shared
 
 const txt = (s) => document.createTextNode(String(s == null ? '' : s));
 const pad = (n) => String(n).padStart(2, '0');
-const hhmm = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : pad(d.getHours()) + ':' + pad(d.getMinutes()); };
 const dayOf = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
+// PUBLIC_API_V1 — решения владельца 18–19: время держится 30 РАБОЧИХ минут главного
+// здания от приёма заявки клиникой — срок может кончиться завтра утром или после
+// выходных (принята в субботу в 17:45 — держится до понедельника 08:15). Строка
+// «до 08:15» без дня тогда читается как «сегодня»: день пишется, как только срок
+// кончается не сегодня. Коротко, потому что строка стоит и на карточке доски:
+// сегодня — «08:15», завтра — «завтра 08:15», дальше — «11.03 08:15».
+const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+export function untilText(iso, now = Date.now()) {
+  const d = new Date(iso == null ? NaN : iso);
+  if (iso == null || iso === '' || Number.isNaN(d.getTime())) return '';
+  const time = pad(d.getHours()) + ':' + pad(d.getMinutes());
+  const today = new Date(now);
+  if (sameDay(d, today)) return time;
+  if (sameDay(d, new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1))) return trf('завтра {time}', { time });
+  return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + ' ' + time;
+}
 const sum = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 const TONE = Object.freeze({ new: 'info', accepted: 'teal', pending: 'warn', confirming: 'warn', offered: 'info', confirmed: 'ok',
   arrived: 'ok', declined: 'crit', expired: 'crit', cancelled: '', no_show: 'crit' });
@@ -44,12 +59,12 @@ export function errorText(e) {
   return tr((e && e.message) || 'Не удалось выполнить запрос.');
 }
 
-/** Статус заявки: метка и что это значит сейчас. */
-export function statusLine(it) {
+/** Статус заявки: метка и что это значит сейчас. `now` — мгновение «сейчас» (мс): срок держания — со днём, если не сегодня. */
+export function statusLine(it, now = Date.now()) {
   const tag = Tag(STATUS_LABEL[it.status] || it.status, { kind: TONE[it.status] || '' });
   let note = null;
-  if (it.status === 'pending' && it.hold_until) note = trf('время держим за пациентом до {time}', { time: hhmm(it.hold_until) });
-  else if (it.status === 'offered') note = trf('предложено {when}; ждём ответа партнёра до {time}', { when: fmtDateTime(it.offered_start), time: hhmm(it.offer_until) });
+  if (it.status === 'pending' && it.hold_until) note = trf('время держим за пациентом до {time}', { time: untilText(it.hold_until, now) });
+  else if (it.status === 'offered') note = trf('предложено {when}; ждём ответа партнёра до {time}', { when: fmtDateTime(it.offered_start), time: untilText(it.offer_until, now) });
   else if (it.status === 'confirmed' && it.partner_cancel_at) note = tr('Партнёр сообщил об отмене, но визит уже в работе. Решите вручную.');
   else if (it.status === 'confirmed') note = tr('визит создан, партнёр получит уведомление');
   else if ((it.status === 'declined' || it.status === 'expired') && it.decline_reason) note = tr(DECLINE_LABEL[it.decline_reason] || '');
@@ -74,9 +89,10 @@ function choiceEl(it) {
  * Окно «Онлайн-запись через API» карточки заявки. Пока у карточки нет заявок из
  * API — пустой скрытый блок (карточки из звонков его не видят).
  * @param {{id:number}} card строка crm_requests
- * @param {{onChanged?:Function, newPatient?:(prefill:{full_name:string, phone:string})=>Promise<{id:number, full_name:string, mrn?:string}|null>}} opts
+ * @param {{onChanged?:Function, newPatient?:(prefill:{full_name:string, phone:string})=>Promise<{id:number, full_name:string, mrn?:string}|null>, now?:()=>number}} opts
+ *   now — «сейчас» для строки срока держания (тестам; по умолчанию часы машины)
  */
-export function apiBookingBox(card, { onChanged = () => {}, newPatient = null } = {}) {
+export function apiBookingBox(card, { onChanged = () => {}, newPatient = null, now = () => Date.now() } = {}) {
   const root = h('div', { class: 'apib-box', 'data-api-booking': String(card && card.id) });
   root.style.display = 'none';
   let items = [];
@@ -226,7 +242,7 @@ export function apiBookingBox(card, { onChanged = () => {}, newPatient = null } 
       ['Пришла', txt(fmtDateTime(it.received_at))],
     ];
     if (it.kind === 'appointment') rows.push(['Пациент выбрал', choiceEl(it)]);
-    rows.push(['Статус', statusLine(it)]);
+    rows.push(['Статус', statusLine(it, now())]);
     if (it.patient) rows.push(['Карта пациента', txt(it.patient.full_name + (it.patient.mrn ? ' · ' + it.patient.mrn : ''))]);
     const parts = [
       h('h5', { class: 'apib-title' }, Icon('Key', { size: 15 }), ' ', it.kind === 'appointment' ? 'Онлайн-запись через API' : 'Заявка через API'),
@@ -262,13 +278,13 @@ export async function loadApiMarks() {
   try { return ((await rpcCall('api_board_marks', {})) || {}).marks || {}; } catch { return {}; }
 }
 
-/** Строка на карточке доски: «med24.uz · API — ждёт подтверждения до 14:32». */
-export function apiBoardLine(marks) {
+/** Строка на карточке доски: «med24.uz · API — ждёт подтверждения до 14:32» (не сегодня — со днём, см. untilText). */
+export function apiBoardLine(marks, now = Date.now()) {
   const m = Array.isArray(marks) && marks.length ? marks[0] : null;
   if (!m) return null;
   let what;
-  if (m.status === 'pending') what = trf('ждёт подтверждения до {time}', { time: hhmm(m.hold_until) });
-  else if (m.status === 'offered') what = trf('предложено другое время, ждём ответа до {time}', { time: hhmm(m.offer_until) });
+  if (m.status === 'pending') what = trf('ждёт подтверждения до {time}', { time: untilText(m.hold_until, now) });
+  else if (m.status === 'offered') what = trf('предложено другое время, ждём ответа до {time}', { time: untilText(m.offer_until, now) });
   else if (m.kind === 'request') what = m.status === 'new' ? tr('новая заявка') : tr('заявка в работе');
   else what = tr(STATUS_LABEL[m.status] || '');
   return h('div', { class: 'crm-card-api', 'data-api-mark': m.status },

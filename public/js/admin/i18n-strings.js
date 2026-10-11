@@ -11887,4 +11887,6 @@ export const STRINGS = {
   "Работает. Последний обмен — {when}.": {"en":"Working. Last exchange — {when}.","ru":"Работает. Последний обмен — {when}.","uz":"Ishlayapti. Oxirgi almashinuv — {when}."},   // PUBLIC_API_V1
   "Ждут ответа клиники: {n}.": {"en":"Awaiting the clinic's answer: {n}.","ru":"Ждут ответа клиники: {n}.","uz":"Klinika javobini kutmoqda: {n}."},   // PUBLIC_API_V1
   "Нет обмена с {when}: {why}. Заявки партнёров ждут на публичном сервере и придут, когда обмен вернётся.": {"en":"No exchange since {when}: {why}. Partner requests wait on the public server and will arrive when the exchange is back.","ru":"Нет обмена с {when}: {why}. Заявки партнёров ждут на публичном сервере и придут, когда обмен вернётся.","uz":"{when} dan beri almashinuv yo‘q: {why}. Hamkorlar arizalari ommaviy serverda kutib turadi va almashinuv tiklanganda keladi."},   // PUBLIC_API_V1
+  // PUBLIC_API_V1 — решения владельца 18–19: срок держания, который кончается завтра
+  "завтра {time}": {"en":"tomorrow {time}","ru":"завтра {time}","uz":"ertaga {time}"},   // PUBLIC_API_V1
 };

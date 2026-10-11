@@ -39,7 +39,8 @@ test('доска: строка онлайн-записи на карточке; 
   const root = await board();
   const line = byAttr(cardOf(root), 'data-api-mark')[0];
   assert.ok(line, 'нет строки онлайн-записи');
-  assert.match(textOf(line), /med24\.uz · APIждёт подтверждения до \d\d:\d\d/);
+  // Срок держания — с датой, если кончается не сегодня (решения владельца 18–19): стенд живёт в 2030 году.
+  assert.match(textOf(line), /med24\.uz · APIждёт подтверждения до (завтра |\d\d\.\d\d )?\d\d:\d\d$/);
   S.apiMarks = {};
   const plain = await board();
   assert.equal(byAttr(cardOf(plain), 'data-api-mark').length, 0);

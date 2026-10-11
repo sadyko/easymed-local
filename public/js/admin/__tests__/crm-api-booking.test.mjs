@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { reset, onRpc, calls, walk, textOf, byAttr, buttonByText, lastToast, tick } from './api-harness.mjs';
 
-const { apiBookingBox, apiBoardLine, loadApiMarks, errorText } = await import('../views/crm-api-booking.js');
+const { apiBookingBox, apiBoardLine, loadApiMarks, errorText, untilText } = await import('../views/crm-api-booking.js');
 
 const ITEM = {
   id: 41, public_id: 'rq_e2a9f0c1', kind: 'appointment', status: 'pending', partner_status: 'pending',
@@ -22,11 +22,13 @@ const CANDS = [
   { id: 1, full_name: 'Абдурахмонов Фаррух', mrn: 'A-1', date_of_birth: '1988-03-12', why: 'phone_name' },
   { id: 2, full_name: 'Абдурахмонов Тимур', mrn: 'A-2', date_of_birth: '2021-07-04', why: 'phone' },
 ];
+// «Сейчас» стенда — за 21 минуту до конца держания ITEM: срок кончается сегодня, и строка — одно время.
+const NOW_ITEM = Date.parse('2030-03-11T04:10:00Z');
 function mount(items = [ITEM], opts = {}) {
   reset();
   onRpc('api_booking_list', () => ({ items }));
   onRpc('api_booking_candidates', () => ({ items: CANDS }));
-  const box = apiBookingBox({ id: 900 }, opts);
+  const box = apiBookingBox({ id: 900 }, { now: () => NOW_ITEM, ...opts });
   return box;
 }
 const btn = (root, k) => byAttr(root, 'data-apib', k)[0];
@@ -125,7 +127,7 @@ test('доска: строка онлайн-записи — подключен�
   reset();
   onRpc('api_board_marks', () => ({ marks: { 900: [{ id: 41, kind: 'appointment', status: 'pending', connection_name: 'med24.uz', hold_until: '2030-03-11T04:31:00Z' }] } }));
   const marks = await loadApiMarks();
-  const line = apiBoardLine(marks[900]);
+  const line = apiBoardLine(marks[900], NOW_ITEM);
   assert.equal(line.attrs['data-api-mark'], 'pending');
   assert.match(textOf(line), /med24\.uz · APIждёт подтверждения до \d\d:\d\d$/);
   assert.equal(apiBoardLine(undefined), null);
@@ -163,4 +165,40 @@ test('открытая форма «Предложить другое время
   buttonByText(box, /Отправить предложение/).click();
   await tick(40);
   assert.deepEqual(calls.find((c) => c[0] === 'api_booking_offer')[1], { id: 41, start: '2030-03-12T09:15:00.000Z', patient_id: 1 });
+});
+
+// PUBLIC_API_V1 — решения владельца 18–19: время держится 30 РАБОЧИХ минут главного
+// здания от приёма заявки клиникой, и срок может кончиться в другой день (заявка,
+// принятая в субботу в 17:45, держится до понедельника 08:15). «До 08:15» без даты
+// тогда врёт — дата нужна, как только срок кончается не сегодня.
+// Даты — местным временем (new Date(год, месяц, …)): тест не зависит от пояса машины.
+const SAT_1745 = new Date(2030, 2, 9, 17, 45).getTime();   // суббота
+const iso = (...a) => new Date(...a).toISOString();
+
+test('срок держания: сегодня — только время; завтра — «завтра 08:15»; после выходных — дата и время', () => {
+  assert.equal(untilText(iso(2030, 2, 9, 17, 59), SAT_1745), '17:59');
+  assert.equal(untilText(iso(2030, 2, 10, 8, 15), SAT_1745), 'завтра 08:15');
+  assert.equal(untilText(iso(2030, 2, 11, 8, 15), SAT_1745), '11.03 08:15');
+  assert.equal(untilText(iso(2030, 2, 11, 8, 15), new Date(2030, 2, 11, 8, 0).getTime()), '08:15', 'в понедельник утром — снова одно время');
+  assert.equal(untilText(iso(2031, 0, 2, 8, 15), new Date(2030, 11, 31, 17, 50).getTime()), '02.01 08:15', 'через Новый год');
+  assert.equal(untilText(null, SAT_1745), '');
+});
+
+test('доска и окно: держание до понедельника — с датой; до утра — «завтра»', async () => {
+  const mon = iso(2030, 2, 11, 8, 15);
+  assert.match(textOf(apiBoardLine([{ id: 41, kind: 'appointment', status: 'pending', connection_name: 'med24.uz', hold_until: mon }], SAT_1745)),
+    /ждёт подтверждения до 11\.03 08:15$/);
+  assert.match(textOf(apiBoardLine([{ id: 41, kind: 'appointment', status: 'pending', connection_name: 'med24.uz', hold_until: iso(2030, 2, 10, 8, 15) }], SAT_1745)),
+    /ждёт подтверждения до завтра 08:15$/);
+  const box = mount([{ ...ITEM, hold_until: mon }], { now: () => SAT_1745 });
+  await tick();
+  assert.ok(textOf(box).includes('время держим за пациентом до 11.03 08:15'), textOf(box));
+  // Встречное предложение ждёт партнёра 30 обычных минут — и через полночь тоже с днём.
+  const late = new Date(2030, 2, 9, 23, 50).getTime();
+  const off = mount([{ ...ITEM, status: 'offered', offered_start: iso(2030, 2, 12, 10, 0), offer_until: iso(2030, 2, 10, 0, 20),
+    can: { confirm: false, offer: true, decline: true, accept: false } }], { now: () => late });
+  await tick();
+  assert.match(textOf(off), /ждём ответа партнёра до завтра 00:20/);
+  assert.match(textOf(apiBoardLine([{ id: 41, kind: 'appointment', status: 'offered', connection_name: 'med24.uz', offer_until: iso(2030, 2, 10, 0, 20) }], late)),
+    /ждём ответа до завтра 00:20$/);
 });
