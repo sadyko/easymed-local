@@ -1,0 +1,343 @@
+// PUBLIC_API_V1 — ОБМЕН С ПУБЛИЧНЫМ СЕРВЕРОМ (api.easymed.uz): отправка снимка,
+// свободного времени, ключей и событий; сбор заявок.
+//
+// Клиника за NAT, к ней не достучаться — каждый разговор начинает она. Ритм:
+//   • такт каждые 15 секунд (POLL_MS) — сбор заявок (по образцу опроса
+//     телефонии: telephony/poller.js — один процесс, такт не роняет сервер,
+//     неудача — «попробуем в следующий такт»);
+//   • ключи и права — каждый такт, если изменились (быстрый канал: выключенный
+//     ключ перестаёт подходить в пределах такта; RPC подключений будят такт
+//     сразу — wakePublicSync);
+//   • снимок — каждый такт, если изменился, и не реже раза в 15 минут;
+//   • свободное время — раз в минуту и сразу после принятой заявки;
+//   • события (api_outbox) — каждый такт, по порядку, пока не примут (по
+//     образцу выгрузки журнала между зданиями: branch-sync/relay.js — неудача
+//     не теряет, следующий такт шлёт то же).
+//
+// КТО ГОВОРИТ: каждый запрос подписан ключом клиники (sync-identity.js), к нему
+// приложена её подписанная лицензия — публичный сервер проверяет подпись
+// производителя, срок (не продлена — 503, решение владельца 4) и отпечаток
+// ключа в лицензии. Лицензия уходит как лежит, байт в байт: отметку «не
+// оплачено», которую сервер лицензий впишет в подписанную лицензию (8c),
+// публичный сервер видит сам (решение владельца 17 — 503 партнёрам, 8b).
+// Своего правила о неоплате клиника не держит: очередь, принятую до отметки,
+// разбирает как обычно (программа работает по лестнице блокировки). Сервер лицензий здесь не участвует и данных пациентов не
+// видит: адрес обмена — api.easymed.uz, не settings.easymed.uz (страж
+// no-patient-data-to-vendor.test.js).
+//
+// ПОКА НЕ ВКЛЮЧЁН: обмен молчит (ни одного запроса в сеть), пока в лицензии
+// клиники нет отпечатка её ключа — его вписывает сервер лицензий, когда
+// Easy-Med включит публичный сервер (шаг 8c). До этого экран «API» честно
+// говорит «ждём включения».
+//
+// СРОК ДЕРЖАНИЯ назначает клиника в миг приёма заявки (решения владельца 18–19:
+// 30 рабочих минут от приёма, bookings.js) и сообщает его в подтверждении
+// очереди: POST /inbox/ack {cursor, held:[{request_id, hold_until}]}.
+//
+// НИКОГДА НЕ БРОСАЕТ: syncOnce ловит всё и записывает итог в api_sync_state.
+import fs from 'node:fs';
+import path from 'node:path';
+import { readBounded } from '../control/checkin.js';
+import { loadSyncIdentity, signRequest, openSealed, SYNC_KEY_FILE } from './sync-identity.js';
+import { buildSnapshot, buildSlots, buildKeys, contentHash } from './snapshot.js';
+import { unsentEvents, markSent, markFailed } from './outbox.js';
+import { ingestItem, expireDue } from './bookings.js';
+import { syncVisitOutcomes } from './visit-events.js';
+import { isoOf } from '../../../public/js/shared/api-booking.js';
+
+export const DEFAULT_PUBLIC_URL = 'https://api.easymed.uz';
+export const SYNC_PREFIX = '/_sync/v1';
+export const POLL_MS = 15_000;
+export const SLOTS_EVERY_MS = 60_000;
+export const HEARTBEAT_MS = 15 * 60_000;
+const INITIAL_DELAY_MS = 20_000;
+const TIMEOUT_MS = 15_000;
+const MAX_RESPONSE_BYTES = 2_000_000;
+const EVENTS_BATCH = 50;
+
+export function publicBaseUrl(env = process.env) {
+  return String((env && env.EASYMED_PUBLIC_URL) || DEFAULT_PUBLIC_URL).trim().replace(/\/+$/, '');
+}
+
+// Тот же страж, что control/prod-guard.js у сервера лицензий: тест, забывший
+// подставить fetchImpl или адрес, не уходит на настоящий api.easymed.uz.
+export function assertPublicUrlIsTestSafe(env, fetchImpl) {
+  if (env && env.EASYMED_PUBLIC_URL) return;
+  if (fetchImpl && fetchImpl !== globalThis.fetch) return;
+  if (!process.env.NODE_TEST_CONTEXT) return;
+  throw new Error('refusing to reach the production public API server from inside a test process — inject a fetchImpl or set EASYMED_PUBLIC_URL');
+}
+
+class SyncFail extends Error { constructor(reason, detail = '') { super(reason); this.reason = reason; this.detail = detail; } }
+
+// ─── СОСТОЯНИЕ ──────────────────────────────────────────────────────────────
+
+function readState(db) {
+  try { return db.prepare('SELECT * FROM api_sync_state WHERE id = 1').get() || null; } catch { return null; }
+}
+function saveState(db, fields) {
+  const cols = Object.keys(fields);
+  try { db.prepare(`UPDATE api_sync_state SET ${cols.map((c) => c + ' = ?').join(', ')} WHERE id = 1`).run(...cols.map((c) => fields[c])); } catch { /* база до мигр. 245 */ }
+}
+
+function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
+function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } }
+
+/** Есть ли что отдавать: главное здание, имя в адресе, хоть одно подключение. '' — есть. */
+export function localBlocker(db) {
+  try {
+    const i = db.prepare('SELECT role FROM branch_identity WHERE id = 1').get();
+    if (i && i.role === 'secondary') return 'not_main';
+  } catch { /* нет таблицы — главное */ }
+  let slug = '';
+  try { slug = (db.prepare('SELECT slug FROM api_settings WHERE id = 1').get() || {}).slug || ''; } catch { return 'no_slug'; }
+  if (!slug) return 'no_slug';
+  try { if (!db.prepare('SELECT 1 FROM api_connections WHERE deleted_at IS NULL LIMIT 1').get()) return 'no_connections'; } catch { return 'no_connections'; }
+  return '';
+}
+
+/** Включил ли Easy-Med публичный сервер для клиники: в лицензии — отпечаток её ключа. */
+export function vendorBlocker(dataDir, identity) {
+  const control = readJson(path.join(dataDir, 'control.json'));
+  if (!control || typeof control.clinic_id !== 'string' || !control.clinic_id) return 'not_enrolled';
+  const lic = readJson(path.join(dataDir, 'licence.dat'));
+  if (!lic || !lic.payload) return 'not_enrolled';
+  if (!identity || lic.payload.api_sync_key !== identity.fingerprint) return 'not_enabled';
+  return '';
+}
+
+// ─── ЗАПРОСЫ ────────────────────────────────────────────────────────────────
+
+async function call(ctx, method, p, body, { raw = null, type = 'application/json' } = {}) {
+  const payload = raw != null ? raw : (body === undefined ? '' : JSON.stringify(body));
+  const full = SYNC_PREFIX + p;
+  const time = isoOf(ctx.now());
+  let res;
+  try {
+    res = await ctx.fetchImpl(ctx.base + full, {
+      method,
+      headers: {
+        'Content-Type': type,
+        'X-EasyMed-Clinic': ctx.clinicId,
+        // Открытая половина ключа: публичный сервер сверяет её отпечаток с лицензией и проверяет ею подпись.
+        'X-EasyMed-Key': ctx.identity.signPublic,
+        'X-EasyMed-Time': time,
+        'X-EasyMed-Signature': signRequest(ctx.identity, { method, path: full, time, body: payload }),
+        'X-EasyMed-Licence': ctx.licenceB64,
+      },
+      body: payload === '' ? undefined : payload,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch { throw new SyncFail('offline'); }
+  const text = await readBounded(res, MAX_RESPONSE_BYTES).catch(() => null);
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+  if (res.status === 401 || res.status === 403) throw new SyncFail('unauthorized');
+  if (res.status === 503) throw new SyncFail('paused');
+  if (res.status === 409) throw new SyncFail((json && json.error && json.error.code) || 'conflict');
+  if (!res.ok) throw new SyncFail('server_error');
+  return json || {};
+}
+
+// ─── ЧАСТИ ТАКТА ────────────────────────────────────────────────────────────
+
+async function pushKeys(ctx, state) {
+  const keys = { ...buildKeys(ctx.db, { now: ctx.now() }), box_key: ctx.identity.boxPublic };
+  const hash = contentHash(keys);
+  const stale = !state.keys_at || ctx.now() - Date.parse(state.keys_at) >= HEARTBEAT_MS;
+  if (hash === state.keys_hash && !stale) return false;
+  await call(ctx, 'PUT', '/keys', keys);
+  saveState(ctx.db, { keys_hash: hash, keys_at: isoOf(ctx.now()) });
+  return true;
+}
+
+async function pushSnapshot(ctx, state) {
+  const { snapshot, media } = buildSnapshot(ctx.db, { storageDir: ctx.storageDir, now: ctx.now() });
+  const hash = contentHash(snapshot);
+  const stale = !state.snapshot_at || ctx.now() - Date.parse(state.snapshot_at) >= HEARTBEAT_MS;
+  if (hash === state.snapshot_hash && !stale) return false;
+  if (media.length) {
+    const check = await call(ctx, 'POST', '/media/check', { hashes: media.map((m) => m.sha256) });
+    const missing = new Set(Array.isArray(check.missing) ? check.missing : []);
+    for (const m of media.filter((x) => missing.has(x.sha256))) {
+      let buf;
+      try { buf = fs.readFileSync(m.file); } catch { continue; }
+      await call(ctx, 'PUT', '/media/' + m.sha256 + '.' + m.ext, undefined, { raw: buf, type: m.type });
+    }
+  }
+  await call(ctx, 'PUT', '/snapshot', snapshot);
+  saveState(ctx.db, { snapshot_hash: hash, snapshot_at: isoOf(ctx.now()) });
+  return true;
+}
+
+async function pushSlots(ctx, state, force) {
+  const due = force || !state.slots_at || ctx.now() - Date.parse(state.slots_at) >= SLOTS_EVERY_MS;
+  if (!due) return false;
+  const slots = buildSlots(ctx.db, { now: ctx.now() });
+  const hash = contentHash(slots);
+  const stale = !state.slots_at || ctx.now() - Date.parse(state.slots_at) >= HEARTBEAT_MS;
+  if (hash === state.slots_hash && !stale) { saveState(ctx.db, { slots_at: isoOf(ctx.now()) }); return false; }
+  await call(ctx, 'PUT', '/slots', slots);
+  saveState(ctx.db, { slots_hash: hash, slots_at: isoOf(ctx.now()) });
+  return true;
+}
+
+async function pushEvents(ctx) {
+  let sent = 0;
+  for (;;) {
+    const rows = unsentEvents(ctx.db, EVENTS_BATCH);
+    if (!rows.length) return sent;
+    const events = rows.map((r) => ({ seq: r.id, event: r.event, status: r.status, body: r.body, webhook_url: r.webhook_url, signature: r.signature }));
+    let res;
+    try { res = await call(ctx, 'POST', '/events', { events }); } catch (e) { markFailed(ctx.db, rows.map((r) => r.id), e.reason); throw e; }
+    const accepted = new Set((Array.isArray(res.accepted) ? res.accepted : []).map(Number));
+    const ids = rows.map((r) => r.id).filter((id) => accepted.has(id));
+    markSent(ctx.db, ids, ctx.now());
+    sent += ids.length;
+    if (ids.length < rows.length) return sent;   // часть не приняли — остальное в следующий такт
+  }
+}
+
+async function pullInbox(ctx, state) {
+  const res = await call(ctx, 'GET', '/inbox?after=' + encodeURIComponent(state.inbox_cursor || ''));
+  const items = Array.isArray(res.items) ? res.items : [];
+  let cursor = state.inbox_cursor || '';
+  let applied = 0;
+  let skipped = 0;
+  // Решения владельца 18–19: срок держания назначает клиника в миг приёма —
+  // публичный сервер узнаёт его из подтверждения очереди (held) и показывает в
+  // GET /requests/{id}. Читается из строки заявки, а не из ответа ingestItem:
+  // если прежнее подтверждение не дошло и элемент пришёл снова (повтор номера),
+  // срок всё равно уходит.
+  const held = new Map();
+  const heldRow = ctx.db.prepare("SELECT public_id, hold_until FROM api_requests WHERE public_id = ? AND status = 'pending' AND hold_until IS NOT NULL");
+  for (const it of items) {
+    let item = it;
+    if (it && it.sealed) {
+      try { item = { ...it, patient: openSealed(ctx.identity, it.sealed) }; } catch { skipped += 1; cursor = String(it.cursor || cursor); continue; }
+    }
+    let r;
+    try { r = await ingestItem(ctx.db, item, { now: ctx.now(), kekPath: ctx.kekPath }); } catch (e) {
+      // Ошибка программы на одном элементе — дальше не идём и курсор не двигаем:
+      // следующий такт попробует снова, ничего не потеряно.
+      console.warn('[public-api] заявка не принята:', e && e.message);
+      break;
+    }
+    if (r && r.applied) applied += 1;
+    const h = it && typeof it.public_id === 'string' ? heldRow.get(it.public_id) : null;
+    if (h) held.set(h.public_id, { request_id: h.public_id, hold_until: h.hold_until });
+    cursor = String((it && it.cursor) || cursor);
+  }
+  if (cursor && cursor !== (state.inbox_cursor || '')) {
+    await call(ctx, 'POST', '/inbox/ack', { cursor, held: [...held.values()] });
+    saveState(ctx.db, { inbox_cursor: cursor });
+  }
+  return { applied, skipped, received: items.length };
+}
+
+// ─── ТАКТ ───────────────────────────────────────────────────────────────────
+
+let inFlight = false;
+
+/**
+ * Один такт обмена. Никогда не бросает.
+ * @returns {Promise<{ok:boolean, reason?:string, applied?:number, sent?:number}>}
+ */
+export async function syncOnce(db, dataDir, opts = {}) {
+  if (inFlight) return { ok: false, reason: 'busy' };
+  inFlight = true;
+  try { return await performSync(db, dataDir, opts); } catch (e) {
+    console.warn('[public-api] такт обмена не удался:', e && e.message);
+    saveState(db, { last_error: 'server_error', last_error_at: isoOf(Date.now()) });
+    return { ok: false, reason: 'server_error' };
+  } finally { inFlight = false; }
+}
+
+async function performSync(db, dataDir, opts) {
+  const { fetchImpl = globalThis.fetch, env = process.env, now = () => Date.now(), keyPath = path.join(dataDir, SYNC_KEY_FILE),
+    kekPath = null, storageDir = path.join(dataDir, 'storage') } = opts;
+  // Своя работа — всегда: истечение удержаний и судьба визитов (партнёр узнает,
+  // когда связь будет).
+  expireDue(db, { now: now(), kekPath });
+  syncVisitOutcomes(db, { now: now(), kekPath });
+
+  const local = localBlocker(db);
+  if (local) return { ok: false, reason: local };
+  const identity = loadSyncIdentity({ keyPath, create: true });
+  const vendor = vendorBlocker(dataDir, identity);
+  if (vendor) return { ok: false, reason: vendor };
+
+  assertPublicUrlIsTestSafe(env, fetchImpl);
+  const control = readJson(path.join(dataDir, 'control.json'));
+  const ctx = {
+    db, fetchImpl, now, kekPath, storageDir, identity,
+    base: publicBaseUrl(env), clinicId: control.clinic_id,
+    licenceB64: Buffer.from(readText(path.join(dataDir, 'licence.dat')) || '', 'utf8').toString('base64'),
+  };
+  saveState(db, { last_poll_at: isoOf(now()) });
+  try {
+    let state = readState(db) || {};
+    await pushKeys(ctx, state);
+    state = readState(db) || {};
+    await pushSnapshot(ctx, state);
+    let sent = await pushEvents(ctx);
+    state = readState(db) || {};
+    const inbox = await pullInbox(ctx, state);
+    state = readState(db) || {};
+    await pushSlots(ctx, state, inbox.applied > 0);
+    if (inbox.applied) sent += await pushEvents(ctx);
+    saveState(db, { last_ok_at: isoOf(now()), last_error: inbox.skipped ? 'sealed' : '', last_error_at: inbox.skipped ? isoOf(now()) : null });
+    return { ok: true, applied: inbox.applied, sent };
+  } catch (e) {
+    if (!(e instanceof SyncFail)) throw e;
+    saveState(db, { last_error: e.reason, last_error_at: isoOf(now()) });
+    return { ok: false, reason: e.reason };
+  }
+}
+
+/** Для экрана «API»: идёт ли обмен и что с ним. */
+export function syncStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_FILE) } = {}) {
+  const st = readState(db) || {};
+  let pendingEvents = 0;
+  let waiting = 0;
+  try { pendingEvents = db.prepare('SELECT COUNT(*) AS n FROM api_outbox WHERE sent_at IS NULL').get().n; } catch { pendingEvents = 0; }
+  try { waiting = db.prepare("SELECT COUNT(*) AS n FROM api_requests WHERE status IN ('new', 'pending', 'offered')").get().n; } catch { waiting = 0; }
+  const local = localBlocker(db);
+  let identity = null;
+  try { identity = loadSyncIdentity({ keyPath }); } catch { identity = null; }
+  const vendor = local ? '' : vendorBlocker(dataDir, identity);
+  const state = local ? 'off' : vendor ? 'waiting_vendor' : st.last_error && (!st.last_ok_at || st.last_error_at >= st.last_ok_at) ? 'error' : st.last_ok_at ? 'ok' : 'starting';
+  return {
+    state, reason: local || vendor || st.last_error || '',
+    last_ok_at: st.last_ok_at || null, last_error: st.last_error || '', last_error_at: st.last_error_at || null,
+    pending_events: pendingEvents, waiting_requests: waiting,
+  };
+}
+
+// ─── РАСПИСАНИЕ ─────────────────────────────────────────────────────────────
+
+let timer = null;
+let armFn = null;
+
+/** Разбудить обмен сейчас (RPC подключений после записи; подтверждение заявки). */
+export function wakePublicSync() { if (armFn) armFn(0); }
+
+/** Включает такт в работающем процессе; { stop }. Таймеры unref — остановке сервера не мешают. */
+export function schedulePublicSync(db, dataDir, opts = {}) {
+  const { initialDelayMs = INITIAL_DELAY_MS, everyMs = POLL_MS, ...tickOpts } = opts;
+  let stopped = false;
+  const arm = (ms) => {
+    if (stopped) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(tick, ms);
+    if (timer.unref) timer.unref();
+  };
+  const tick = () => {
+    syncOnce(db, dataDir, tickOpts)
+      .catch((e) => console.warn('[public-api] такт:', e && e.message))
+      .finally(() => arm(everyMs));
+  };
+  armFn = arm;
+  arm(initialDelayMs);
+  return { stop() { stopped = true; if (timer) clearTimeout(timer); timer = null; armFn = null; } };
+}
