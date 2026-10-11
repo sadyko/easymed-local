@@ -17,8 +17,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // которого его можно стереть.
 import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
-import { lineUnitPrice, consultationFor, doctorPriceLookup, legacyPackageOnlyOff } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
-import { packageLineMoney } from '../../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1 — «Ждут счёта»: строка пакета — по цене в пакете
+import { lineUnitPrice, consultationFor, doctorPriceLookup, legacyPackageOnlyOff, packageLineDiscount } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
 import { searchArg } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
 // откуда его взяли (одно правило на сервер, rpc/inventory.js).
@@ -1013,11 +1012,14 @@ export function cashierUnbilled(db, args, user) {
     // Ревью C1 — строка до мигр. 244 (package_legacy): её цена названа пациенту
     // со скидкой его группы; список скидку группы не показывает ни у одной
     // строки — у такой строки здесь только скидка пакета (domain/pricing.js).
-    const pm = packageLineMoney(l);
+    // Ревью C6 — скидка пакета — только в сроке пакета по местному дню визита,
+    // как у счёта и доли врача (packageLineDiscount): вне срока счёт строку не
+    // выставит, доля врача — от цены без скидки, и список показывает её же.
     const pkg = l.package_id != null ? once(packages, l.package_id, getPackage) : null;
     const gross = Number.isFinite(qty) && qty > 0 ? round2(unit * qty) : 0;
-    const legacy = legacyPackageOnlyOff(l, gross, pkg ? pkg.discount_percent : 0);
-    const sum = Number.isFinite(qty) && qty > 0 ? (legacy != null ? round2(gross - legacy) : (pm ? pm.net : gross)) : 0;
+    const pkgOff = packageLineDiscount(l, pkg, l.visit_day);
+    const legacy = pkgOff > 0 ? legacyPackageOnlyOff(l, gross, pkg ? pkg.discount_percent : 0) : null;
+    const sum = round2(gross - (legacy != null ? legacy : Math.min(pkgOff, gross)));
     let g = byVisit.get(l.visit_id);
     if (!g) {
       g = {

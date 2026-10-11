@@ -208,3 +208,21 @@ test('ревью C3: услугу убрали из пакета после за
   const raw = Number(c3.db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, package_id) VALUES (?, 20, 1, 1, 50000, 50000, 'completed', ?)").run(c3.visitId, c3.pkg).lastInsertRowid);
   assert.throws(() => createInvoiceForVisit(c3.db, { visit_id: c3.visitId, visit_service_ids: [raw] }, registrar), /не входит в пакет/);
 });
+
+// SERVICES_PACKAGES_V1 (ревью шага 6, C6) — день визита вне срока пакета (визит
+// перенесли или срок пакета сузили после записи): счёт такую строку не
+// выставляет, доля врача считается от цены без скидки пакета — «Ждут счёта»
+// показывает то же, а не цену в пакете.
+test('ревью C6: день визита за сроком пакета — «Ждут счёта» по цене без скидки, как база доли врача', () => {
+  const c = clinic();
+  const id = c.line(7, c.pkg, 'completed');   // УЗИ: 180 000 → в пакете 152 900
+  const waiting = () => cashierUnbilled(c.db, {}, cashier).rows.find((r) => r.visit_id === c.visitId).total;
+  assert.equal(waiting(), 152900, 'в сроке — цена в пакете');
+  c.db.prepare("UPDATE service_templates SET valid_until = date(?, '-1 day') WHERE id = ?").run(c.day, c.pkg);
+  assert.equal(waiting(), 180000, 'срок кончился вчера — цена без скидки пакета');
+  assert.equal(Math.round(c.fee()), Math.round(180000 * 0.3), 'доля врача — от той же суммы');
+  assert.throws(() => createInvoiceForVisit(c.db, { visit_id: c.visitId, visit_service_ids: [id] }, registrar), /действует/);
+  // Строка до 244 — так же.
+  c.db.prepare('UPDATE visit_services SET package_legacy = 1 WHERE id = ?').run(id);
+  assert.equal(waiting(), 180000);
+});
