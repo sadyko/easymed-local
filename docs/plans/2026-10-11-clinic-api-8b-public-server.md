@@ -4574,16 +4574,23 @@ test('маршруты: канал клиники и адреса партнёр
   assert.deepEqual([x.status, x.headers.get('cache-control'), (await x.json()).error.code], [404, 'no-store', 'not_found']);
 });
 
-test('уборка: закрывает не забранное 7 дней, стирает шифротекст; повтор — ничего', async (t) => {
+test('уборка: закрывает не забранное за сутки (решение владельца 20), стирает шифротекст; срок — из настроек; повтор — ничего', async (t) => {
   const s = await up();
   t.after(s.close);
   const c = testClinic(s.vendor);
   await syncCall(s.base, c, 'PUT', '/_sync/v1/keys', { generated_at: isoOf(NOW), box_key: c.identity.boxPublic, connections: [] }, { time: isoOf(NOW) });
   createRequest(s.db, { clinic: clinicRow(s.db, c.clinicId), connectionId: 3, kind: 'request', patient: { name: 'Имя', phone: '+998901234567', comment: '' }, now: NOW });
-  const r = runMaintenance(s.db, s.dir, NOW + 8 * 86400000, s.ctx.limiter);
+  const HOUR = 3600000;
+  assert.equal(runMaintenance(s.db, s.dir, NOW + 23 * HOUR, s.ctx.limiter).not_collected, 0, 'сутки ещё не прошли');
+  const jobs = startJobs({ db: s.db, dataDir: s.dir, now: () => NOW + 25 * HOUR, send: async () => ({ status: 200 }), webhooks: false,
+    uncollectedMaxMs: 48 * HOUR, maintainEveryMs: 1e9 });
+  try {
+    assert.equal(jobs.maintainTick().not_collected, 0, 'фон берёт срок из настройки PUBLIC_UNCOLLECTED_MAX_HOURS');
+  } finally { jobs.stop(); }
+  const r = runMaintenance(s.db, s.dir, NOW + 25 * HOUR, s.ctx.limiter);
   assert.equal(r.not_collected, 1);
   assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 0);
-  assert.equal(runMaintenance(s.db, s.dir, NOW + 8 * 86400000).not_collected, 0);
+  assert.equal(runMaintenance(s.db, s.dir, NOW + 25 * HOUR).not_collected, 0);
 });
 
 test('фон: доставка не перекрывает себя, сбой — в состояние, не наружу', async () => {
@@ -4678,19 +4685,21 @@ export function opsRouter(ctx) {
 // в журнал тип ошибки и стек без сообщения и ждёт следующего.
 //
 // Уборка — это и обязанности перед партнёрами, и минимизация данных:
-//   • закрыть то, на что клиника не ответит (store/requests.js closeOverdue);
+//   • закрыть то, на что клиника не ответит (store/requests.js closeOverdue):
+//     не забранное за сутки — решение владельца 20, срок из настройки
+//     PUBLIC_UNCOLLECTED_MAX_HOURS (config.js uncollectedMaxMs);
 //   • статусы старше 90 дней, журналы старше 30 дней, законченные доставки,
 //     прежние имена в адресе после 30 дней, файлы без снимка;
 //   • wal_checkpoint(TRUNCATE) — стёртые страницы не задерживаются в журнале WAL.
-import { closeOverdue, purgeRequests } from './store/requests.js';
+import { closeOverdue, purgeRequests, UNCOLLECTED_MAX_MS } from './store/requests.js';
 import { purgeLogs } from './store/logs.js';
 import { purgeDeliveries, deliverDue } from './store/deliveries.js';
 import { gcMedia } from './store/media.js';
 import { safeStack } from './lib/errors.js';
 import { isoOf } from './lib/time.js';
 
-export function runMaintenance(db, dataDir, now, limiter = null) {
-  const closed = closeOverdue(db, now);
+export function runMaintenance(db, dataDir, now, limiter = null, { uncollectedMaxMs = UNCOLLECTED_MAX_MS } = {}) {
+  const closed = closeOverdue(db, now, { uncollectedMaxMs });
   const purged = purgeRequests(db, now);
   const logs = purgeLogs(db, now);
   const deliveries = purgeDeliveries(db, now);
@@ -4703,10 +4712,10 @@ export function runMaintenance(db, dataDir, now, limiter = null) {
 
 /**
  * @param {{db, dataDir:string, now?:()=>number, send:(msg:object)=>Promise<{status:number, error?:string}>, webhooks?:boolean,
- *   limiter?:object, deliverEveryMs?:number, maintainEveryMs?:number, log?:Console}} o
+ *   limiter?:object, uncollectedMaxMs?:number, deliverEveryMs?:number, maintainEveryMs?:number, log?:Console}} o
  */
-export function startJobs({ db, dataDir, now = () => Date.now(), send, webhooks = true, limiter = null, deliverEveryMs = 5000,
-  maintainEveryMs = 60000, log = console }) {
+export function startJobs({ db, dataDir, now = () => Date.now(), send, webhooks = true, limiter = null, uncollectedMaxMs = UNCOLLECTED_MAX_MS,
+  deliverEveryMs = 5000, maintainEveryMs = 60000, log = console }) {
   const state = { deliveries_at: null, maintenance_at: null, last_error: '', last_error_at: null };
   let delivering = false;
   const fail = (what, e) => {
@@ -4725,7 +4734,7 @@ export function startJobs({ db, dataDir, now = () => Date.now(), send, webhooks 
   }
   function maintainTick() {
     try {
-      const r = runMaintenance(db, dataDir, now(), limiter);
+      const r = runMaintenance(db, dataDir, now(), limiter, { uncollectedMaxMs });
       state.maintenance_at = isoOf(now());
       return r;
     } catch (e) { fail('maintenance', e); return null; }
@@ -4833,7 +4842,8 @@ const { app, ctx } = createPublicServer({
   db, dataDir: cfg.dataDir, licencePublicKey, offsetMin: cfg.offsetMin, baseUrl: cfg.baseUrl, requireHttps: cfg.requireHttps,
   trustProxy: cfg.trustProxy, skewMs: cfg.syncSkewMs, metricsToken: cfg.metricsToken, version,
 });
-const jobs = startJobs({ db, dataDir: cfg.dataDir, send: makeSender({ selfIps: cfg.selfIps }), webhooks: cfg.webhooks, limiter: ctx.limiter });
+const jobs = startJobs({ db, dataDir: cfg.dataDir, send: makeSender({ selfIps: cfg.selfIps }), webhooks: cfg.webhooks, limiter: ctx.limiter,
+  uncollectedMaxMs: cfg.uncollectedMaxMs });
 ctx.jobs = jobs;
 
 const server = app.listen(cfg.port, cfg.bind, () => {
@@ -4874,8 +4884,9 @@ process.on('SIGINT', shutdown);
   - Поэтому служба — **отдельный процесс** под **отдельным пользователем**, с **жёстким потолком памяти**: её падение не роняет соседей, а их падение — её.
 - **Данные пациента**:
   - хранятся только запечатанными ключом клиники и стираются, как только клиника подтвердила приём;
+  - не забранные клиникой — стираются через сутки, заявка закрывается для партнёра (решение владельца 20, `PUBLIC_UNCOLLECTED_MAX_HOURS`);
   - журнал запросов — без тел;
-  - резервные копии базы держать не дольше 7 дней (столько же живёт не забранная заявка) и не копировать их за пределы машины без шифрования.
+  - резервные копии базы держать не дольше суток (столько же живёт не забранная заявка) и не копировать их за пределы машины без шифрования.
 - **Код** — выгрузка репозитория целиком (как у `control-plane/`). Служба берёт справочники и проверку подписи из `server/` и `public/js/shared/` того же коммита.
 
 ## Пользователь, папки, зависимости
@@ -4900,7 +4911,10 @@ PUBLIC_BASE_URL=https://api.easymed.uz
 PUBLIC_TRUST_PROXY=loopback
 PUBLIC_REQUIRE_HTTPS=1
 PUBLIC_TZ_OFFSET_MIN=300
+# допуск часов компьютера клиники, минуты (решение контролёра 2026-10-12)
 PUBLIC_SYNC_SKEW_MIN=15
+# сколько не забранная клиникой заявка ждёт, часы; потом закрыта для партнёра, шифротекст стёрт (решение владельца 20)
+PUBLIC_UNCOLLECTED_MAX_HOURS=24
 # адреса самой машины — уведомления туда не уходят никогда (защита соседних служб)
 PUBLIC_SELF_IPS=45.77.242.169
 # токен для /_metrics (пусто — адреса нет)
