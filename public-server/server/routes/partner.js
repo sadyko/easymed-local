@@ -8,6 +8,7 @@
 import express from 'express';
 import { clinicGate, preflight, requireKey } from './partner-auth.js';
 import { readRoutes } from './partner-read.js';
+import { writeRoutes } from './partner-write.js';
 import { mediaFile } from '../store/media.js';
 import { sendError } from '../lib/errors.js';
 
@@ -34,6 +35,7 @@ export function partnerRouter(ctx) {
   r.use(express.json({ limit: PARTNER_BODY_LIMIT }));
   r.use(requireKey(ctx));
   readRoutes(r, ctx);
+  writeRoutes(r, ctx);
   r.use((req, res) => sendError(req, res, 'not_found'));
   return r;
 }
