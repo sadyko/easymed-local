@@ -11808,4 +11808,6 @@ export const STRINGS = {
   "скидка больше суммы цен услуг": {"en":"the discount is larger than the sum of the service prices","ru":"скидка больше суммы цен услуг","uz":"chegirma xizmatlar narxlari yig‘indisidan katta"},   // SERVICES_PACKAGES_V1
   // SERVICES_PACKAGES_V1 — ревью шага 6, C9: способ скидки, в котором цена пакета стала бы другой
   "В этом виде цена станет {sum} сум — способ скидки оставлен прежним.": {"en":"In this form the price would become {sum} sum — the discount method was left unchanged.","ru":"В этом виде цена станет {sum} сум — способ скидки оставлен прежним.","uz":"Bu ko‘rinishda narx {sum} so‘m bo‘ladi — chegirma usuli o‘zgartirilmadi."},   // SERVICES_PACKAGES_V1
+  // SERVICES_PACKAGES_V1 — ревью шага 6: цену пакета на строке снимают только вместе с пакетом
+  "Цену пакета на строке ставит сервер — снять её можно только вместе с пакетом.": {"en":"The package price on a line is set by the server — it can only be removed together with the package.","ru":"Цену пакета на строке ставит сервер — снять её можно только вместе с пакетом.","uz":"Qatordagi paket narxini server qo‘yadi — uni faqat paket bilan birga olib tashlash mumkin."},   // SERVICES_PACKAGES_V1
 };

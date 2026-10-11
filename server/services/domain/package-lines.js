@@ -91,6 +91,21 @@ export function stampWriteBody(db, body, meta = null) {
   return false;
 }
 
+/**
+ * SERVICES_PACKAGES_V1 (ревью шага 6) — правка строки трогает цену пакета
+ * (package_full / package_price), не снимая сам пакет: строка осталась бы с
+ * пакетом, но без записанной цены — касса выставила бы её по обычной цене.
+ * Цену ставит только сервер при записи; снять её можно только вместе с
+ * пакетом (package_id = NULL). Текст отказа или null.
+ */
+export const STAMP_ONLY_WITH_PACKAGE = 'Цену пакета на строке ставит сервер — снять её можно только вместе с пакетом.';
+export function stampUpdateRefusal(values) {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) return null;
+  const has = (k) => Object.prototype.hasOwnProperty.call(values, k);
+  if (!STAMP_COLUMNS.some(has)) return null;
+  return has('package_id') && values.package_id == null ? null : STAMP_ONLY_WITH_PACKAGE;
+}
+
 /** Правка строки снимает пакет (package_id = NULL) — снимается и его цена. */
 export function clearStampOnUnpackage(values) {
   if (!values || typeof values !== 'object' || Array.isArray(values)) return false;

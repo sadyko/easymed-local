@@ -8,7 +8,7 @@ import { migrate } from '../../db/migrate.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stampPackageLines, packageCalcFor, clearStampOnUnpackage, stampWriteBody, STAMP_COLUMNS } from './package-lines.js';
+import { stampPackageLines, packageCalcFor, clearStampOnUnpackage, stampWriteBody, STAMP_COLUMNS, stampUpdateRefusal, STAMP_ONLY_WITH_PACKAGE } from './package-lines.js';
 import { packageCalc, packageTerms, packageItems } from '../../../public/js/shared/package-price.js';
 
 function clinic() {
@@ -85,6 +85,19 @@ test('ревью C4: скидка суммой стала больше сумм�
   const r = { service_id: 8, package_id: 4 };
   stampPackageLines(db, r);
   assert.deepEqual([r.package_full, r.package_price], [60000, 60000]);
+});
+
+// SERVICES_PACKAGES_V1 (ревью шага 6) — цену пакета правкой не трогают отдельно
+// от пакета: снять её одну (строка осталась бы с пакетом, но без цены — касса
+// выставила бы её по обычной цене) нельзя; снять вместе с пакетом — можно.
+test('правка цены пакета без снятия пакета — отказ; вместе с пакетом или без цены пакета — можно', () => {
+  assert.equal(stampUpdateRefusal({ package_price: null }), STAMP_ONLY_WITH_PACKAGE);
+  assert.equal(stampUpdateRefusal({ package_full: null, package_price: null }), STAMP_ONLY_WITH_PACKAGE);
+  assert.equal(stampUpdateRefusal({ package_id: 3, package_price: null }), STAMP_ONLY_WITH_PACKAGE);
+  assert.equal(stampUpdateRefusal({ package_id: null, package_full: null, package_price: null }), null);
+  assert.equal(stampUpdateRefusal({ package_id: null }), null);
+  assert.equal(stampUpdateRefusal({ status: 'queued' }), null);
+  assert.equal(stampUpdateRefusal(null), null);
 });
 
 test('правка, снимающая пакет, снимает и его цену; другая правка — нет', () => {

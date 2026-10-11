@@ -158,3 +158,22 @@ test('ревью C3: при записи строки услуга не из п�
     assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = 500').get().n, 0);
   } finally { server.close(); db.close(); }
 });
+
+// SERVICES_PACKAGES_V1 (ревью шага 6) — снять цену пакета, оставив пакет, нельзя:
+// строка пакета без записанной цены ушла бы в счёт по обычной цене.
+test('снять одну цену пакета правкой нельзя — 403, строка не тронута; вместе с пакетом — можно', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const cookie = await login(base);
+    assert.equal((await addLine(base, cookie, 2)).status, 200);
+    const id = db.prepare('SELECT MAX(id) id FROM visit_services').get().id;
+    for (const values of [{ package_price: null }, { package_full: null, package_price: null }]) {
+      const res = await call(base, cookie, { table: 'visit_services', op: 'update', values, filters: [{ col: 'id', op: 'eq', val: id }] });
+      assert.equal(res.status, 403, JSON.stringify(values));
+    }
+    assert.deepEqual(PKG_ROWS(db)[0], [1, 2, 100000, 80000, 100000, 100000]);
+    const both = await call(base, cookie, { table: 'visit_services', op: 'update', values: { package_id: null, package_price: null }, filters: [{ col: 'id', op: 'eq', val: id }] });
+    assert.equal(both.status, 200);
+    assert.deepEqual(PKG_ROWS(db)[0], [1, null, null, null, 100000, 100000]);
+  } finally { server.close(); db.close(); }
+});

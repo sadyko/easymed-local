@@ -30,7 +30,7 @@ import { PROXY_MODELS } from '../../public/js/shared/lisproxy-models.js';   // L
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
 import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 import { geoCodeRefusal } from '../services/geo-codes-guard.js';   // REFERENCE_LISTS_V1 (полировка) — коды географии не меняются
-import { stampWriteBody } from '../services/domain/package-lines.js';   // SERVICES_PACKAGES_V1 — цена пакета на строке при записи
+import { stampWriteBody, stampUpdateRefusal } from '../services/domain/package-lines.js';   // SERVICES_PACKAGES_V1 — цена пакета на строке при записи
 import { packageProblem, isPackageRow, packageIds, packageItems } from '../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1
 import { onlineRuleProblem } from '../../public/js/shared/service-public.js';   // SERVICES_PACKAGES_V1 — показ услуги: RU + UZ
 
@@ -495,6 +495,12 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     // скидки и цену в пакете (domain/package-lines.js) — присланное браузером в
     // эти колонки затирается; правка, снимающая пакет, снимает и его цену. Тело
     // правится на месте и собирается заново тем же compile() — те же права.
+    // Ревью шага 6 — цену пакета правкой отдельно от пакета не трогают: снять её
+    // одну нельзя (строка ушла бы в счёт по обычной цене), только вместе с пакетом.
+    if (compiled.meta.table === 'visit_services' && compiled.meta.op === 'update') {
+      const stampRefusal = stampUpdateRefusal(req.body && req.body.values);
+      if (stampRefusal) return res.status(403).json({ error: { code: 'forbidden', message: stampRefusal } });
+    }
     if (stampWriteBody(db, req.body, compiled.meta)) compiled = compile(req.body, req.user, { db });
     // LIS_PROXY_V1 (ревью, Р21) — модель прибора за LIS Proxy: см. refuseProxyModelWrite.
     const proxyModelRefusal = refuseProxyModelWrite(db, compiled.meta, req.body, req.user);
