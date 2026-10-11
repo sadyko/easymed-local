@@ -11874,4 +11874,6 @@ export const STRINGS = {
   "предложено другое время, ждём ответа до {time}": {"en":"another time offered, waiting for an answer until {time}","ru":"предложено другое время, ждём ответа до {time}","uz":"boshqa vaqt taklif qilindi, javobni {time} gacha kutamiz"},   // PUBLIC_API_V1
   "новая заявка": {"en":"new request","ru":"новая заявка","uz":"yangi ariza"},   // PUBLIC_API_V1
   "заявка в работе": {"en":"request in progress","ru":"заявка в работе","uz":"ariza ishda"},   // PUBLIC_API_V1
+  // PUBLIC_API_V1 — задача 14: окно новой карты из онлайн-записи
+  "Пациент из онлайн-записи": {"en":"Patient from an online booking","ru":"Пациент из онлайн-записи","uz":"Onlayn yozilishdagi bemor"},   // PUBLIC_API_V1
 };

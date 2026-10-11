@@ -85,7 +85,10 @@ export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTa
   // функция — по телу запроса) и отказ этого RPC по требованию.
   assignees: [], assigneesError: null,
   // CRM_UNIFY_V1 — настоящее число закрытой колонки из базы: { ключ ступени: число }.
-  countFor: null };
+  countFor: null,
+  // PUBLIC_API_V1 — заявки из API: строки доски (api_board_marks), окно карточки
+  // (api_booking_list — массив или функция по телу), кандидаты и подтверждение.
+  apiMarks: {}, apiItems: [], apiCandidates: [] };
 export const CALLS = [];
 export const RPC = [];
 const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
@@ -125,6 +128,10 @@ globalThis.fetch = async (url, opts) => {
       return jsonOk(typeof S.assignees === 'function' ? S.assignees(body) : (S.assignees || []));
     }
     if (name === 'crm_duplicate_groups') return jsonOk(S.dupGroups);
+    if (name === 'api_board_marks') return jsonOk({ marks: S.apiMarks || {} });   // PUBLIC_API_V1
+    if (name === 'api_booking_list') return jsonOk({ items: typeof S.apiItems === 'function' ? S.apiItems(body) : (S.apiItems || []) });   // PUBLIC_API_V1
+    if (name === 'api_booking_candidates') return jsonOk({ items: S.apiCandidates || [] });   // PUBLIC_API_V1
+    if (name === 'api_booking_confirm') return jsonOk({ id: body.id, status: 'confirmed', visit_id: 1, already: false });   // PUBLIC_API_V1
     if (name === 'crm_merge_leads') {
       if (S.mergeError) return { ok: false, json: async () => ({ error: { message: S.mergeError } }) };
       return jsonOk({ kept_id: body.keep_id, merged_ids: body.merge_ids });

@@ -62,6 +62,8 @@ import { loadBoard, periodBounds, periodStart, dayStart, dayEnd, CLOSED_ALL_TIME
 // CRM_MULTI_SOURCE_V1 — несколько источников у заявки (миграция 231). Правило
 // чтения одно на экран и сервер: sources, иначе [source], иначе ['other'].
 import { leadSources, toggleLeadSource, leadHasAnySource, sourceTally, MAX_LEAD_SOURCES } from '../crm-sources.js';
+// PUBLIC_API_V1 — заявки и онлайн-запись из API: окно в карточке и строка на доске.
+import { apiBookingBox, apiBoardLine, loadApiMarks } from './crm-api-booking.js';
 
 // CRM_CONFIG_V1 — воронка перестала быть константой.
 //
@@ -429,7 +431,7 @@ async function load() {
     // приходил после быстрого нового («Мои») и перезаписывал карточки и числа.
     // Ответ устаревшей загрузки отбрасывается целиком; false — «не рисовать».
     const my = ++loadSeq;
-    const [res, tasks, tags] = await Promise.all([
+    const [res, tasks, tags, apiMarks] = await Promise.all([
         loadBoard({
             closedKeys: closedKeys(),
             bounds: periodBounds(state.period, state.customFrom, state.customTo),
@@ -439,6 +441,7 @@ async function load() {
         // права на задачи) — доска без меток, а не без заявок.
         loadOpenTasks(),
         loadLeadTags(),   // CRM_HEAD_MERGE_TAGS_V1
+        loadApiMarks(),   // PUBLIC_API_V1 — строки онлайн-записи; отказ — доска без них
     ]);
     if (my !== loadSeq) return false;
     if (res.error) {
@@ -449,6 +452,7 @@ async function load() {
     state.rows = res.rows; state.counts = res.counts; state.capped = res.capped;
     state.openTasks = nearestOpenTasks(tasks, selfUserId());   // CRM_UNIFY_V1 — своя задача первой
     state.leadTags = tags;
+    state.apiMarks = apiMarks;   // PUBLIC_API_V1
     return true;
 }
 let loadSeq = 0;   // CRM_UNIFY_V1 (итоговое ревью) — номер последней загрузки доски
@@ -1078,6 +1082,7 @@ async function paint() {
             r.services ? h('div', { class: 'crm-card-line' }, h('span', { class: 'crm-card-lbl' }, 'Услуга: '), r.services.name) : null,
             r.note ? h('div', { class: 'crm-card-note', title: r.note }, r.note) : null,
             taskChip(r),
+            apiBoardLine((state.apiMarks || {})[r.id]),   // PUBLIC_API_V1 — «med24.uz · API — ждёт подтверждения до 14:32»
             h('div', { class: 'crm-card-foot' },
                 h('span', { class: 'crm-card-when' }, trf('Заявка от {d}', { d: fmtD(r.created_at) })),
                 ...acts),
@@ -1535,6 +1540,23 @@ async function paint() {
         }
 
         return dlg;
+    }
+
+    // PUBLIC_API_V1 — «Создать карту» окна онлайн-записи: то же окно быстрой
+    // регистрации, что у заявки, с именем и телефоном из заявки партнёра. Карточку
+    // заявки здесь не привязывают — карту к ней ставит подтверждение записи
+    // (rpc/api-bookings.js). Закрыли окно без карты — обещание просто не исполнится.
+    function newPatientForApi(prefill) {
+        return new Promise((resolve) => {
+            const dlg = openQuickPatientModal({ title: 'Пациент из онлайн-записи', onCreated: (p) => resolve(p && p._raw ? p._raw : p) });
+            if (!dlg) { resolve(null); return; }
+            const fio = splitFio(prefill && prefill.full_name);
+            const api = dlg.state.api;
+            api.setValue('last_name', fio.last);
+            api.setValue('first_name', fio.first);
+            api.setValue('middle_name', fio.middle);
+            api.setValue('phone', (prefill && prefill.phone) || '');
+        });
     }
 
     // ---------------- ЗАЯВКА: создание / редактирование ----------------
@@ -3168,6 +3190,17 @@ async function paint() {
                     h('div', { style: { flex: 1 } }, field('Телефон', phoneWrap, { required: true })),
                     h('div', { style: { flex: 1 } }, field('Дата рождения', dobWrap)))),
                 field('Источник', srcBox),   // CRM_MULTI_SOURCE_V1 — чипы и подсказка «первый — главный»
+                // PUBLIC_API_V1 — «Онлайн-запись через API» (макет screen-crm.js): у карточек
+                // без заявок из API блок пустой и скрыт. После подтверждения окно закрывается:
+                // карту пациента карточке поставил сервер, а «Сохранить» этого окна записало бы
+                // прежнего (пустого) пациента поверх.
+                (isEdit && r.id != null) ? apiBookingBox(r, {
+                    newPatient: newPatientForApi,
+                    onChanged: (out) => {
+                        if (out && out.status === 'confirmed') { close(); paint(); return; }
+                        loadApiMarks().then((m) => { state.apiMarks = m; paintBody(); });
+                    },
+                }) : null,
                 // CRM_REASSIGN_V1 — «кто ведёт» стоит сразу за «откуда пришла»:
                 // это два факта о самой заявке, а всё ниже — о том, что пациенту
                 // нужно. Видно только администратору (см. объявление поля).
