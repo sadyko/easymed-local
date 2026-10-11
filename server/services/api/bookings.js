@@ -264,10 +264,17 @@ export async function confirmBooking(db, { id, patientId }, user, { now = Date.n
   const day = localDayOf(db, row.start_at);
   const dv = db.prepare(`SELECT * FROM visits WHERE patient_id = ? AND ${localDate('visit_date')} = ?
                            AND status NOT IN ('cancelled', 'no_show') AND sync_origin IS NULL ORDER BY id LIMIT 1`).get(pid, day);
-  if (dv && !dayVisitMovableFor(db, dv.id, row.doctor_id)) {
+  // Ревью 8a, I7: визит дня БЕЗ работы ensure_visit перенёс бы на время
+  // онлайн-записи молча (dayVisitMovableFor) — запись колл-центра на 15:00
+  // уехала бы на 10:00, а отмена партнёром потом отменила бы обе. Чужую запись
+  // пациента подтверждение не двигает никогда: отказ day_visit_exists,
+  // регистратор сам решает в календаре (перенести, отменить) или предлагает
+  // партнёру другое время.
+  if (dv) {
+    const movable = dayVisitMovableFor(db, dv.id, row.doctor_id);
     const doc = dv.doctor_id ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(dv.doctor_id) : null;
-    const err = rpcT(BookingError, MSG.dayVisitBusy, { start: hhmmLocal(dv.visit_date), doctor: (doc && doc.full_name) || '—' }, 409);
-    err.code = 'day_visit_busy';
+    const err = rpcT(BookingError, movable ? MSG.dayVisitExists : MSG.dayVisitBusy, { start: hhmmLocal(dv.visit_date), doctor: (doc && doc.full_name) || '—' }, 409);
+    err.code = movable ? 'day_visit_exists' : 'day_visit_busy';
     throw err;
   }
 
@@ -388,6 +395,16 @@ export function expireDue(db, { now = Date.now(), kekPath = null } = {}) {
  * дверью календаря; с работой — визит не трогается, карточка говорит «партнёр
  * сообщил об отмене» (решает регистратура).
  */
+/**
+ * Ревью 8a, I7: держит ли визит и чужую запись — живую строку или привязку
+ * другой карточки CRM. Такой визит отмена партнёром не отменяет целиком.
+ */
+function visitCarriesOther(db, visitId, crmRequestId) {
+  const own = crmRequestId || 0;
+  if (db.prepare("SELECT 1 FROM crm_request_services WHERE visit_id = ? AND status <> 'cancelled' AND request_id <> ? LIMIT 1").get(visitId, own)) return true;
+  try { return !!db.prepare('SELECT 1 FROM crm_booking_links WHERE visit_id = ? AND request_id <> ?').get(visitId, own); } catch { return false; }
+}
+
 async function partnerCancel(db, row, { now, kekPath }) {
   if (['pending', 'offered', 'new', 'accepted'].includes(row.status)) {
     db.transaction(() => {
@@ -399,7 +416,7 @@ async function partnerCancel(db, row, { now, kekPath }) {
   if (row.status === 'confirmed' && row.visit_id) {
     const v = db.prepare('SELECT * FROM visits WHERE id = ?').get(row.visit_id);
     let cancelled = false;
-    if (v && PRE_ARRIVAL.includes(v.status) && !visitHasWork(db, v.id)) {
+    if (v && PRE_ARRIVAL.includes(v.status) && !visitHasWork(db, v.id) && !visitCarriesOther(db, v.id, row.crm_request_id)) {
       // C1: календарь может отказать в отмене — отмена партнёра не должна ронять
       // приём очереди: тогда пометка «решите вручную», как при визите с работой.
       try { await calendarBook(db, { visit_id: v.id, start: v.visit_date, status: 'cancelled' }, SYSTEM_BOOKER); cancelled = true; } catch (e) {

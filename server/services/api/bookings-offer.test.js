@@ -163,3 +163,17 @@ test('I5: другое время на другой день — после со
   assert.equal(one(s.db, 'SELECT visit_id FROM crm_request_services WHERE request_id = ?', cardId).visit_id, c.visit.id);
   assert.equal(one(s.db, "SELECT COUNT(*) AS n FROM crm_request_services WHERE scheduled_date = '2030-03-12' AND visit_id IS NULL").n, 0);
 });
+
+test('I7: отмена партнёром не отменяет визит, на котором есть и чужая запись (строка или привязка другой карточки) — пометка «решите вручную»', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  const c = await confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath });
+  // На тот же визит легла запись колл-центра (другая карточка): строка повторного приёма.
+  const phone = Number(s.db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, patient_id, scheduled_date) VALUES ('Абдурахмонов Фаррух', '+998901234567', 'call', 'scheduled', 1, '2030-03-12')").run().lastInsertRowid);
+  s.db.prepare("INSERT INTO crm_request_services (request_id, consultation_type_id, doctor_id, scheduled_date, status, visit_id) VALUES (?, 2, 7, '2030-03-12', 'pending', ?)").run(phone, c.visit.id);
+  const r = await inbox(s, 'appointment.cancel', NOW + 60000);
+  assert.deepEqual([r.applied, r.status, r.needs_staff], [true, 'confirmed', true]);
+  assert.equal(one(s.db, 'SELECT status FROM visits WHERE id = ?', c.visit.id).status, 'scheduled', 'визит с чужой записью не отменён');
+  assert.ok(one(s.db, 'SELECT partner_cancel_at FROM api_requests WHERE id = ?', id).partner_cancel_at);
+});

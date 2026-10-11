@@ -141,3 +141,25 @@ test('отказы: не та заявка, без карты, чужая кар
   s.db.prepare("UPDATE api_requests SET status = 'declined', decline_reason = 'other' WHERE id = ?").run(id);
   assert.equal((await refusal(confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW }))).status, 409);
 });
+
+// ─── РЕВЬЮ 8a, I7: ПОДТВЕРЖДЕНИЕ НЕ ПЕРЕНОСИТ ЧУЖУЮ ЗАПИСЬ ПАЦИЕНТА ─────────
+
+test('I7: у пациента на этот день уже есть запись (без работы) — подтверждение отказывает «day_visit_exists», та запись не сдвинута; заявка ждёт, карточка как была', async () => {
+  const s = bookingSeed();
+  const { ensureVisit } = await import('../rpc/visits.js');
+  const id = await pending(s);
+  patient(s);
+  const PHONE_AT = localAt('2030-03-12', '15:00');
+  const ph = await ensureVisit(s.db, { patient_id: 1, date: new Date(PHONE_AT).toISOString(), doctor_id: 7,
+    book: { doctor_id: 7, start: new Date(PHONE_AT).toISOString(), duration_minutes: 30 } }, s.cc);
+  assert.equal(ph.booked, true);
+  const cardId = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', id).c;
+  const cardBefore = { ...one(s.db, 'SELECT patient_id, status FROM crm_requests WHERE id = ?', cardId) };
+  const e = await refusal(confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath }));
+  assert.deepEqual([e.status, e.code], [409, 'day_visit_exists']);
+  assert.deepEqual(e.params, { start: '15:00', doctor: 'Петров Пётр Петрович' });
+  assert.equal(Date.parse(one(s.db, 'SELECT visit_date FROM visits WHERE id = ?', ph.visit.id).visit_date), PHONE_AT, 'запись 15:00 на месте');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'pending');
+  assert.deepEqual({ ...one(s.db, 'SELECT patient_id, status FROM crm_requests WHERE id = ?', cardId) }, cardBefore);
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM visits').n, 1);
+});
