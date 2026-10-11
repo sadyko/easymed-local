@@ -602,11 +602,15 @@ const nameKey = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').split(
 export function cardCandidates(db, id) {
   const row = requestRow(db, id);
   const words = nameKey(row.patient_name);
+  // Ревью 8a, M6: «тот же телефон и имя» — только когда в карте есть ВСЕ слова
+  // имени из заявки (и их не меньше двух): общая фамилия сына или брата — ещё не
+  // то же имя. Порядок — по числу совпавших слов, полное совпадение первым.
   return findPatientsByPhone(db, row.patient_phone, 10).map((p) => {
     const pw = nameKey(p.full_name);
-    const same = words.length && pw.length && words.some((w) => pw.includes(w));
-    return { id: p.id, full_name: p.full_name, mrn: p.mrn || '', date_of_birth: p.date_of_birth || '', why: same ? 'phone_name' : 'phone' };
-  }).sort((a, b) => (a.why === b.why ? 0 : a.why === 'phone_name' ? -1 : 1));
+    const hits = words.filter((w) => pw.includes(w)).length;
+    const same = words.length >= 2 && hits === words.length;
+    return { card: { id: p.id, full_name: p.full_name, mrn: p.mrn || '', date_of_birth: p.date_of_birth || '', why: same ? 'phone_name' : 'phone' }, hits };
+  }).sort((a, b) => (a.card.why === b.card.why ? b.hits - a.hits : a.card.why === 'phone_name' ? -1 : 1)).map((x) => x.card);
 }
 
 /** Строки онлайн-записи для доски: заявки, ждущие клинику, по карточкам. */

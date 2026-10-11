@@ -169,3 +169,22 @@ test('I6: слияние двух карточек онлайн-записей �
   const out = await apiBookingConfirm(s.db, { id: s.id, patient_id: 1 }, s.reg);
   assert.equal(out.status, 'confirmed');
 });
+
+// ─── РЕВЬЮ 8a, M6: «ТОТ ЖЕ ТЕЛЕФОН И ИМЯ» — ТОЛЬКО ПРИ ПОЛНОМ СОВПАДЕНИИ ИМЕНИ ─
+
+test('M6: семья на номере — «тот же телефон и имя» только у карты, где есть все слова имени из заявки; сын и брат с той же фамилией — «тот же телефон»; полное совпадение — первым', async () => {
+  const s = bookingSeed();
+  s.db.prepare('UPDATE users SET booking_days = 30 WHERE id = 7').run();
+  const r = await ingestItem(s.db, apptItem({ connId: s.connId, startMs: START, receivedMs: Date.now() - 1000, name: 'Абдурахмонов Фаррух' }), { kekPath: s.kekPath });
+  s.db.prepare(`INSERT INTO patients (id, mrn, full_name, phone, date_of_birth) VALUES
+    (1, 'P-1', 'Абдурахмонов Фаррух Бахтиёрович', '+998901234567', '1988-03-12'),
+    (2, 'P-2', 'Абдурахмонов Тимур Фаррухович', '+998901234567', '2021-07-04'),
+    (3, 'P-3', 'Абдурахмонов Санжар', '+998901234567', '1995-01-01'),
+    (4, 'P-4', 'Абдурахмонова Дилноза', '+998901234567', '1990-01-01'),
+    (5, 'P-5', 'Фаррух Каримов', '+998901234567', '1975-01-01')`).run();
+  const c = apiBookingCandidates(s.db, { id: r.id }, s.reg).items;
+  assert.equal(c[0].id, 1, 'полное совпадение — первым');
+  assert.deepEqual(c.map((x) => [x.id, x.why]).sort((a, b) => a[0] - b[0]),
+    [[1, 'phone_name'], [2, 'phone'], [3, 'phone'], [4, 'phone'], [5, 'phone']]);
+  assert.equal(c.at(-1).id, 4, 'без общего слова — последней');
+});
