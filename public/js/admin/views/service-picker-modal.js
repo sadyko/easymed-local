@@ -282,6 +282,30 @@ export function openServicePickerModal({
     if (catalogUI && patient) refs.attachedPatient = patient;   // CATALOG_WIZARD_V1 + ATTACH_CATALOG_V1
     // ATTACH_CATALOG_V1 — the payer question was settled on the visit already.
     if (attachMode) wiz.payment.mode = 'patient';
+    // BACKLOG_1011_V1 — скидка группы пациента в смете окна на визите. Счёт
+    // визита ставит её полом на строки без пакета (billing.js
+    // patientCategoryDiscount), а смета этого окна группу не знала: VIP 10 % —
+    // смета 100 000, счёт 90 000. Касса по умолчанию выставляет счёт
+    // плательщику карты (cashier-line-fix.js openRebill), а у счёта плательщику
+    // группы нет — тогда и смета без неё.
+    if (attachMode && refs.attachedPatient && refs.attachedPatient.id != null) loadAttachCategory(refs.attachedPatient);
+    async function loadAttachCategory(p) {
+        wiz.categoryPct = 0;
+        try {
+            const { data: row } = await supabase.from('patients').select('id, category_id, payer_id').eq('id', p.id).maybeSingle();
+            let pct = 0;
+            if (row && row.category_id != null) {
+                const { data: cat } = await supabase.from('patient_categories').select('id, discount_percent, active').eq('id', row.category_id).maybeSingle();
+                if (cat && isOn(cat.active)) pct = Math.min(100, Math.max(0, Number(cat.discount_percent) || 0));
+            }
+            if (pct > 0 && row && row.payer_id != null) {
+                const { data: payer } = await supabase.from('payers').select('id, active').eq('id', row.payer_id).maybeSingle();
+                if (payer && isOn(payer.active)) pct = 0;
+            }
+            wiz.categoryPct = pct;
+        } catch (_) { wiz.categoryPct = 0; }
+        if (wiz._railRefresh) wiz._railRefresh();
+    }
 
     // WIZ_FULLSCREEN_V1 — full-screen wizard so registrars get the whole screen.
     const card = h('div', { class: 'modal-card', style: { width: 'calc(100vw - 24px)', maxWidth: 'calc(100vw - 24px)', height: 'calc(100vh - 24px)', maxHeight: 'calc(100vh - 24px)', display: 'flex', flexDirection: 'column' } });

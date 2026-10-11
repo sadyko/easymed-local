@@ -198,11 +198,13 @@ function pickerOptions(win, visit, patient, picks) {
 
 /**
  * Окно, смета, запись строк и счёт по ним. add — названия услуг из каталога;
- * pkg — ещё и пакет «Анализы» (кнопка «Выбрать шаблон»).
+ * pkg — ещё и пакет «Анализы» (кнопка «Выбрать шаблон»); afterSeed — свой посев
+ * поверх seed(); noSave — только смета, без записи.
  * → { shown, total, lines, picks, billed, rail, top }.
  */
 async function run(opts) {
     seed(opts);
+    if (typeof opts.afterSeed === 'function') opts.afterSeed();   // посев сверх seed() — до открытия окна
     forgetSlots();
     BODY.children.length = 0;
     const picks = [];
@@ -346,6 +348,48 @@ test('кабинет врача (без брони): визит завтра —
     assert.equal(r.picks[0].startISO, null, 'время, которое кабинет не запишет: ' + r.picks[0].startISO);
     assert.doesNotMatch(r.rail, /\d{2}:\d{2}/, r.rail);
     assert.equal(r.lines[0].scheduled_at, null);
+});
+
+// ---- 3. Скидка группы пациента в смете окна на визите ----------------------
+//
+// Счёт визита ставит скидку группы пациента полом на строки без пакета
+// (billing.js patientCategoryDiscount); счёт плательщику — без неё. Смета окна
+// на визите группу не знала: VIP 10 % — смета 100 000, счёт 90 000. Касса по
+// умолчанию выставляет счёт плательщику карты (cashier-line-fix.js openRebill),
+// поэтому у пациента с действующим плательщиком в карте смета — без группы.
+
+/** Пациенту — действующий плательщик в карте (страховая). */
+function cardPayer() {
+    const id = DB.prepare("INSERT INTO payers (name, kind, active) VALUES ('Страховая', 'insurance', 1)").run().lastInsertRowid;
+    DB.prepare('UPDATE patients SET payer_id = ? WHERE id = 3').run(id);
+    return Number(id);
+}
+
+test('окно визита: VIP 10 %, анализ 100 000 вне пакета — смета 90 000, как счёт', async () => {
+    const r = await run({ window: 'visit', add: ['ОАК'], categoryPct: 10 });
+    assert.match(r.rail, /К оплате 90 000 сум/, r.rail);
+    assert.deepEqual([r.shown, r.billed], [90000, 90000], brief(r));
+});
+
+test('окно визита: VIP 10 %, пакет (решение 1 — без группы) и УЗИ вне пакета (группа) — смета = счёт', async () => {
+    const r = await run({ window: 'visit', pkg: true, add: ['УЗИ'], categoryPct: 10 });
+    // ОАК в пакете 80 000 (только скидка пакета) + УЗИ 50 000 − 10 % = 45 000.
+    assert.deepEqual([r.shown, r.billed], [125000, 125000], brief(r));
+});
+
+test('кабинет врача: VIP 10 %, анализ 100 000 — смета 90 000, как счёт', async () => {
+    const r = await run({ window: 'cabinet', add: ['ОАК'], categoryPct: 10 });
+    assert.deepEqual([r.shown, r.billed], [90000, 90000], brief(r));
+});
+
+test('окно визита: VIP 10 %, но в карте действующий плательщик — смета без группы, как счёт плательщику', async () => {
+    const r = await run({ window: 'visit', add: ['ОАК'], categoryPct: 10, afterSeed: cardPayer, noSave: true });
+    assert.equal(r.shown, 100000, 'смета: ' + r.rail);
+    // Счёт плательщику по той же строке — без скидки группы (billing.js: payerSet → 0 %).
+    const vs = DB.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (40, 21, 1, 100000, 100000, 'added')").run().lastInsertRowid;
+    const pid = DB.prepare('SELECT payer_id FROM patients WHERE id = 3').get().payer_id;
+    const inv = getRpc('create_invoice_for_visit')(DB, { visit_id: 40, visit_service_ids: [Number(vs)], payer_id: pid, discount_amount: 0 }, USER);
+    assert.equal(Number(inv.invoice.total_amount), 100000);
 });
 
 test.after(() => { if (DB) DB.close(); DB = null; });
