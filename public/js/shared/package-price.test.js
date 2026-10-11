@@ -43,7 +43,11 @@ test('макет «Диабет-контроль»: сумма скидки 50 0
 
 test('цена пакета — от 0 до суммы цен: скидка не бывает отрицательной; 0 % — без скидки и без округления', () => {
   assert.equal(packageCalc({ mode: 'price', value: 999999 }, items([1, 2])).price, 70000);
-  assert.equal(packageCalc({ mode: 'amount', value: 999999 }, items([1, 2])).price, 0);
+  // SERVICES_PACKAGES_V1 (ревью C4) — сумма скидки больше суммы цен (прайс подешевел, услугу сняли с учёта):
+  // пакет без скидки, как у «цены пакета» выше, а не бесплатный. Ровно сумма цен — бесплатный пакет:
+  // так его задали (packageProblem это принимает).
+  assert.equal(packageCalc({ mode: 'amount', value: 999999 }, items([1, 2])).price, 70000);
+  assert.equal(packageCalc({ mode: 'amount', value: 70000 }, items([1, 2])).price, 0);
   assert.equal(packageCalc({ mode: 'percent', value: 150 }, items([1, 2])).price, 0);
   const zero = packageCalc({ mode: 'percent', value: 0 }, [{ service_id: 9, price: 45400 }]);
   assert.deepEqual([zero.price, zero.off, zero.lines[0].price], [45400, 0, 45400], '45 400 не становится 45 000');
@@ -184,6 +188,29 @@ test('показ пакета: только пакет, действующий, 
   assert.equal(packagePublicState({ ...pkg, service_ids: [1, 2] }, svc, day), 'service_hidden', 'скрытая услуга прячет пакет');
   assert.equal(packagePublicState({ ...pkg, service_ids: [1, 3] }, svc, day), 'service_hidden', 'услуга без узбекского названия — тоже');
   assert.deepEqual(packageHiddenServices({ ...pkg, service_ids: [1, 2, 3, 4] }, svc).map((s) => s.id), [2, 3]);
+});
+
+// SERVICES_PACKAGES_V1 (ревью C4) — пакет «скидка суммой» после того, как прайс подешевел или услугу
+// сняли с учёта: скидка больше суммы цен действующих услуг. Раскладка — без скидки (не бесплатно), а
+// сайт и партнёры пакет не получают, пока клиника не поправит условия.
+test('ревью C4: скидка суммой больше суммы цен действующих услуг — «terms_invalid», раскладка без скидки', () => {
+  const svc = [
+    { id: 1, name: 'ЭКГ', name_uz: 'EKG', online_booking: 1, active: 1, price: 60000 },
+    { id: 2, name: 'УЗИ', name_uz: 'UTT', online_booking: 1, active: 1, price: 180000 },
+  ];
+  const pkg = { is_package: 1, active: 1, show_public: 1, name: 'Сердце', name_uz: 'Yurak', service_ids: [1, 2], discount_mode: 'amount', discount_value: 100000 };
+  const day = '2026-10-10';
+  assert.equal(packagePublicState(pkg, svc, day), 'shown');
+  const retired = [svc[0], { ...svc[1], active: 0 }];
+  assert.equal(packagePublicState(pkg, retired, day), 'terms_invalid', 'УЗИ сняли — 100 000 скидки на 60 000');
+  assert.equal(packageCalc(pkg, packageItems(pkg, retired).items).price, 60000, 'без скидки, а не 0');
+  const cheaper = [svc[0], { ...svc[1], price: 30000 }];
+  assert.equal(packagePublicState(pkg, cheaper, day), 'terms_invalid', 'УЗИ подешевело до 30 000');
+  assert.equal(packagePublicState({ ...pkg, discount_value: 90000 }, cheaper, day), 'shown', 'ровно сумма цен — бесплатный пакет, так его задали');
+  assert.equal(packagePublicState({ ...pkg, discount_mode: 'percent', discount_value: 100 }, cheaper, day), 'shown');
+  assert.equal(packagePublicState({ ...pkg, show_public: 0 }, retired, day), 'off', 'выключенный — по-прежнему «off»');
+  const e = STRINGS['скидка больше суммы цен услуг'];
+  assert.ok(e && e.ru && e.uz && e.en, 'подпись состояния для списка «Пакеты услуг» — в словаре');
 });
 
 test('каждое сообщение переведено на ru / uz / en', () => {

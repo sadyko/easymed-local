@@ -73,6 +73,20 @@ test('отключённая услуга в раскладку не входи�
   assert.deepEqual([r.package_full, r.package_price], [45000, 40000]);
 });
 
+// SERVICES_PACKAGES_V1 (ревью C4) — пакет «скидка суммой 100 000» на ЭКГ 60 000 + УЗИ 180 000; УЗИ сняли
+// с учёта: скидка больше суммы цен — строка получает цену без скидки, а не 0 (счёт на 0 и доля врача 0).
+test('ревью C4: скидка суммой стала больше суммы цен действующих услуг — строка по цене без скидки, а не бесплатно', () => {
+  const db = clinic();
+  db.prepare("INSERT INTO service_templates (id, name, service_ids, is_package, discount_mode, discount_value) VALUES (4, 'Сердце', '[8,7]', 1, 'amount', 100000)").run();
+  const before = { service_id: 8, package_id: 4 };
+  stampPackageLines(db, before);
+  assert.ok(before.package_price < 60000, 'пока УЗИ в пакете — скидка есть: ' + before.package_price);
+  db.prepare('UPDATE services SET active = 0 WHERE id = 7').run();
+  const r = { service_id: 8, package_id: 4 };
+  stampPackageLines(db, r);
+  assert.deepEqual([r.package_full, r.package_price], [60000, 60000]);
+});
+
 test('правка, снимающая пакет, снимает и его цену; другая правка — нет', () => {
   const v = { package_id: null };
   assert.equal(clearStampOnUnpackage(v), true);

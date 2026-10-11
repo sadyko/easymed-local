@@ -120,8 +120,11 @@ export function packageCalc(terms, items) {
   const list = (items || []).map((it) => ({ service_id: Number(it.service_id), full: money(it.price) }));
   const full = r2(list.reduce((s, x) => s + x.full, 0));
   const v = Math.max(0, Number(t.value) || 0);
+  // Ревью C4 — скидка суммой больше суммы цен (прайс подешевел, услугу сняли с
+  // учёта): пакет без скидки, как у вписанной цены больше суммы, а не бесплатный.
+  // Ровно сумма цен — бесплатный пакет: так его задали (packageProblem принимает).
   const raw = Math.min(full, Math.max(0, t.mode === 'percent' ? full * (1 - Math.min(v, 100) / 100)
-    : t.mode === 'amount' ? full - v : v));
+    : t.mode === 'amount' ? (v > full ? full : full - v) : v));
   let price;
   if (raw >= full) price = full;
   else if (t.mode === 'price') price = Math.round(raw);            // вписанная цена — как есть, до сума
@@ -263,8 +266,11 @@ export function packageProblem(values, { full = null, insert = false, merged = n
  *   'off' — показ выключен; 'expired' / 'upcoming' — день вне срока;
  *   'no_uz' — нет названия на русском или узбекском; 'empty' — ни одной
  *   действующей услуги; 'service_hidden' — в пакете есть услуга, которую сайт и
- *   партнёры не видят (В10: пакет не открывает скрытую услугу); 'shown'.
- * services — строки services (id, name, name_uz, active, online_booking).
+ *   партнёры не видят (В10: пакет не открывает скрытую услугу);
+ *   'terms_invalid' — скидка суммой больше суммы цен действующих услуг (прайс
+ *   подешевел или услугу сняли с учёта после сохранения): раскладка даёт пакет
+ *   без скидки, клинике нужно поправить условия (ревью C4); 'shown'.
+ * services — строки services (id, name, name_uz, active, online_booking, price).
  */
 export function packagePublicState(row, services, day) {
   if (!isPackageRow(row)) return 'not_package';
@@ -278,6 +284,8 @@ export function packagePublicState(row, services, day) {
   const live = ids.map((id) => byId.get(id)).filter((s) => s && servicePublicState(s) !== 'inactive');
   if (!live.length) return 'empty';
   if (live.some((s) => servicePublicState(s) !== 'shown')) return 'service_hidden';
+  const terms = packageTerms(row);
+  if (terms.mode === 'amount' && terms.value > r2(packageItems(row, services).items.reduce((sum, x) => sum + x.price, 0))) return 'terms_invalid';
   return 'shown';
 }
 

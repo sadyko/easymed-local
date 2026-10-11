@@ -11804,4 +11804,6 @@ export const STRINGS = {
   "Услуги по группам": {"en":"Services by group","ru":"Услуги по группам","uz":"Guruhlar bo‘yicha xizmatlar"},   // SERVICES_PACKAGES_V1
   // SERVICES_PACKAGES_V1 — задача 18: плитка
   "Какие услуги и цены видят пациенты на сайте клиники, в Symptex и у партнёров": {"en":"Which services and prices patients see on the clinic website, in Symptex and at partners","ru":"Какие услуги и цены видят пациенты на сайте клиники, в Symptex и у партнёров","uz":"Bemorlar klinika saytida, Symptex va hamkorlarda qaysi xizmat va narxlarni ko‘radi"},   // SERVICES_PACKAGES_V1
+  // SERVICES_PACKAGES_V1 — ревью C4: состояние пакета в списке «Пакеты услуг»
+  "скидка больше суммы цен услуг": {"en":"the discount is larger than the sum of the service prices","ru":"скидка больше суммы цен услуг","uz":"chegirma xizmatlar narxlari yig‘indisidan katta"},   // SERVICES_PACKAGES_V1
 };
