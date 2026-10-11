@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { verifyLicence } from './licence.js';
 import { buildStatsPayload as defaultBuildStatsPayload } from './metrics.js';
 import { assertControlUrlIsTestSafe } from './prod-guard.js';   // PROD_GUARD_V1
+// PUBLIC_API_V1 — открытая половина ключа подписи клиники для публичного сервера.
+import { loadSyncIdentity, SYNC_KEY_FILE } from '../api/sync-identity.js';
 
 // LICENCE_CORE_V1 — the clinic's half of the hourly call.
 //
@@ -405,6 +407,20 @@ async function performCheckin(db, dataDir, {
     // clinic disks — see readJsonFile's own comment.
     const updateResult = readJsonFile(updateResultPath);
 
+    // PUBLIC_API_V1 — открытая половина ключа подписи клиники
+    // (services/api/sync-identity.js): сервер лицензий впишет её отпечаток в
+    // лицензию, когда Easy-Med включит клинике публичный сервер (шаг 8c), и
+    // публичный сервер узнает клинику по лицензии. Только ОТКРЫТАЯ половина —
+    // закрытая не покидает клинику. Нет файла (API не настроен) или он
+    // испорчен — поля нет: сверка лицензии важнее (правило этого файла).
+    // Прежний сервер лицензий незнакомое поле пропускает
+    // (control-plane/server/routes/checkin.js берёт только свои поля).
+    let apiSyncPublicKey = null;
+    try {
+      const sync = loadSyncIdentity({ keyPath: path.join(dataDir, SYNC_KEY_FILE) });
+      apiSyncPublicKey = sync ? sync.signPublic : null;
+    } catch { apiSyncPublicKey = null; }
+
     if (!endpoint) assertControlUrlIsTestSafe(process.env, fetchImpl);   // PROD_GUARD_V1
     const url = endpoint ? String(endpoint).replace(/\/+$/, '') + CHECKIN_PATH : checkinUrl();
 
@@ -420,6 +436,7 @@ async function performCheckin(db, dataDir, {
           module_requests: pending.map((r) => ({ module_key: r.module_key, requested_at: r.requested_at })),
           stats,
           ...(updateResult ? { update_result: updateResult } : {}),
+          ...(apiSyncPublicKey ? { api_sync_public_key: apiSyncPublicKey } : {}),   // PUBLIC_API_V1
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });

@@ -28,6 +28,7 @@ import {
 } from '../api/connections.js';
 import { makeDraft, renewDraft } from '../api/drafts.js';
 import { companyAddressProblems } from '../api/partner-address.js';
+import { wakePublicSync } from '../api/public-sync.js';   // PUBLIC_API_V1 — изменения подключений уходят на публичный сервер в ближайший такт
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -94,7 +95,9 @@ export function apiSettingsGet(db, _args, user) {
 }
 export function apiSlugSave(db, args, user) {
   requireAdmin(db, user); requireMain(db);
-  return saveSlug(db, args && args.slug, actorOf(db, user));
+  const out = saveSlug(db, args && args.slug, actorOf(db, user));
+  wakePublicSync();   // PUBLIC_API_V1
+  return out;
 }
 export function apiConnectionDraft(db, args, user) {
   requireAdmin(db, user); requireMain(db);
@@ -107,6 +110,7 @@ export function apiConnectionCreate(db, args, user) {
   requireAdmin(db, user); requireMain(db);
   const a = args || {};
   const out = createConnection(db, a, actorOf(db, user), { draftId: a.draft_id });
+  wakePublicSync();   // PUBLIC_API_V1
   return { ...out, base_url: apiBaseUrl(readSlug(db)) };
 }
 export function apiConnectionUpdate(db, args, user) {
@@ -116,7 +120,9 @@ export function apiConnectionUpdate(db, args, user) {
   for (const k of [...EDIT_FIELDS, ...ADMIN_FIELDS]) if (Object.prototype.hasOwnProperty.call(a, k)) patch[k] = a[k];
   if (!Object.keys(patch).length) throw new RpcError(RPC_MESSAGES.nothing);
   if (ADMIN_FIELDS.some((k) => k in patch)) requireAdmin(db, user);
-  return { connection: forViewer(updateConnection(db, a.id, patch, actorOf(db, user)), isAdminUser(user)) };
+  const connection = forViewer(updateConnection(db, a.id, patch, actorOf(db, user)), isAdminUser(user));
+  wakePublicSync();   // PUBLIC_API_V1 — выключение и права: «сразу 401» в пределах такта
+  return { connection };
 }
 export function apiConnectionReveal(db, args, user) {
   requireRevealer(db, user); requireMain(db);   // CLINIC_API_STEP7_V1 (ревью №1)
@@ -126,12 +132,16 @@ export function apiConnectionReveal(db, args, user) {
 export function apiConnectionRegenerate(db, args, user) {
   requireAdmin(db, user); requireMain(db);
   const a = args || {};
-  return regenerateSecret(db, a.id, a.what, actorOf(db, user), { confirm: a.confirm });
+  const out = regenerateSecret(db, a.id, a.what, actorOf(db, user), { confirm: a.confirm });
+  wakePublicSync();   // PUBLIC_API_V1 — прежний ключ перестаёт подходить в ближайший такт
+  return out;
 }
 export function apiConnectionDelete(db, args, user) {
   requireAdmin(db, user); requireMain(db);
   const a = args || {};
-  return deleteConnection(db, a.id, actorOf(db, user), { confirm: a.confirm });
+  const out = deleteConnection(db, a.id, actorOf(db, user), { confirm: a.confirm });
+  wakePublicSync();   // PUBLIC_API_V1
+  return out;
 }
 export function apiJournalList(db, args, user) {
   requireView(db, user);

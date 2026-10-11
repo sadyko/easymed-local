@@ -27,6 +27,7 @@ import { scheduleCrmNoShow } from './services/crm/no-show.js';   // CRM_UNIFY_V1
 import { crmUnifyRepair } from './services/crm/unify-repair.js';   // CRM_UNIFY_V1
 import { scheduleCrmTaskRehome } from './services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 import { preserveLegacyLogo } from './services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1
+import { schedulePublicSync } from './services/api/public-sync.js';   // PUBLIC_API_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -403,6 +404,13 @@ if (isMain) {
     },
     syncImpl: (database) => runBranchSync(database),
   });
+
+  // PUBLIC_API_V1 — обмен с публичным сервером api.easymed.uz (заявки и
+  // онлайн-запись партнёров, снимок для сайта, Symptex и партнёров). Такт —
+  // 15 секунд, unref, не бросает; молчит (ни одного запроса в сеть), пока нет
+  // имени в адресе и подключений и пока Easy-Med не включил клинике публичный
+  // сервер (отпечаток ключа в лицензии — services/api/public-sync.js).
+  try { schedulePublicSync(db, DATA_DIR); } catch (e) { console.warn('[public-api]', e && e.message); }
 }
 
 function lanAddresses() {
