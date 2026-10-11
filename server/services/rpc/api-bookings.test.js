@@ -10,6 +10,7 @@ import { RPC } from './index.js';
 import { isReadOnlyRpc } from '../control/gate.js';
 import {
   apiBookingList, apiBookingCandidates, apiBookingConfirm, apiBookingOffer, apiBookingDecline, apiRequestAccept, apiBoardMarks, apiSyncStatus,
+  apiSyncSkippedAck,
 } from './api-bookings.js';
 
 // Решения RPC идут без подставного времени: запись — на неделю вперёд от сегодня.
@@ -141,4 +142,15 @@ test('I2: медсестра и врач видят заявку без кноп
   assert.deepEqual(apiBookingList(s.db, { crm_request_id: s.card }, s.reg).items[0].can, { confirm: true, offer: true, decline: true, accept: false });
   s.db.prepare("UPDATE branch_identity SET role = 'secondary' WHERE id = 1").run();
   assert.deepEqual(apiBookingList(s.db, { crm_request_id: s.card }, s.reg).items[0].can, NONE, 'в филиале решения 409 — кнопок нет');
+});
+
+test('I4: пропущенные заявки сбрасывает только администратор (api_sync_skipped_ack); до сброса они видны в состоянии обмена', async () => {
+  const s = await withBooking();
+  s.db.prepare("UPDATE api_sync_state SET skipped_sealed = 2, skipped_failed = 1, skipped_last_at = '2030-03-11T04:00:00Z', skipped_last_ids = '[\"rq_a00001\"]' WHERE id = 1").run();
+  assert.equal(typeof RPC.api_sync_skipped_ack, 'function');
+  assert.equal(isReadOnlyRpc('api_sync_skipped_ack'), false);
+  assert.equal((await refusal(() => apiSyncSkippedAck(s.db, {}, s.reg))).status, 403);
+  assert.deepEqual(apiSyncStatus(s.db, {}, s.admin).skipped, { sealed: 2, failed: 1, last_at: '2030-03-11T04:00:00Z', last_ids: ['rq_a00001'] });
+  assert.deepEqual(apiSyncSkippedAck(s.db, {}, s.admin), { ok: true });
+  assert.deepEqual(apiSyncStatus(s.db, {}, s.admin).skipped, { sealed: 0, failed: 0, last_at: null, last_ids: [] });
 });

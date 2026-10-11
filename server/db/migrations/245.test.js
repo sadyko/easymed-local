@@ -113,6 +113,6 @@ test('245: отклонённая или истёкшая онлайн-запи�
 
 test('245: состояние обмена помнит пропущенные элементы очереди и застрявший элемент', () => {
   const db = fresh();
-  const st = db.prepare('SELECT skipped_failed, skipped_last_at, skipped_last_ids, stuck_cursor, stuck_tries FROM api_sync_state WHERE id = 1').get();
-  assert.deepEqual({ ...st }, { skipped_failed: 0, skipped_last_at: null, skipped_last_ids: '[]', stuck_cursor: '', stuck_tries: 0 });
+  const st = db.prepare('SELECT skipped_failed, skipped_sealed, skipped_last_at, skipped_last_ids, stuck_cursor, stuck_tries FROM api_sync_state WHERE id = 1').get();
+  assert.deepEqual({ ...st }, { skipped_failed: 0, skipped_sealed: 0, skipped_last_at: null, skipped_last_ids: '[]', stuck_cursor: '', stuck_tries: 0 });
 });

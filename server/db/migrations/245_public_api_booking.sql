@@ -133,6 +133,9 @@ CREATE TABLE api_sync_state (
   -- пациента) живут, пока администратор их не сбросит: экран «API» говорит
   -- «обратитесь в Easy-Med», а не исчезает через такт.
   skipped_failed   INTEGER NOT NULL DEFAULT 0,
+  -- Ревью 8a, I4: заявки, запечатанные не тем ключом (ключ клиники потерян и
+  -- выпущен заново — риск 6 дизайна): открыть их нельзя никогда.
+  skipped_sealed   INTEGER NOT NULL DEFAULT 0,
   skipped_last_at  TEXT,
   skipped_last_ids TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(skipped_last_ids) AND json_type(skipped_last_ids) = 'array'),
   -- Элемент, на котором приём стоит (сбой программы): его курсор и сколько тактов подряд.

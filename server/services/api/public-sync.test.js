@@ -293,3 +293,28 @@ test('I3: сервер не принял один файл (413) — файл п
   await quietWarns(async () => { await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); });
   assert.equal(r.db.prepare('SELECT COUNT(*) AS n FROM api_requests').get().n, 1, 'запись принята');
 });
+
+// ─── РЕВЬЮ 8a, I4: ЗАПЕЧАТАННОЕ НЕ ОТКРЫЛОСЬ — СЛЕД И ПРЕДУПРЕЖДЕНИЕ ОСТАЮТСЯ ─
+
+test('I4: заявка, запечатанная прежним ключом клиники, — пропущена и подтверждена (сервер сотрёт), но номер записан в журнал и состояние; экран «работает» с предупреждением, которое не исчезает через такт', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  const old = loadSyncIdentity({ keyPath: path.join(tmpDir('em-psync-old-'), SYNC_KEY_FILE), create: true });
+  const { sealFor } = await import('./sync-identity.js');
+  r.fake.state.inbox.push({ cursor: '1', type: 'appointment.new', public_id: 'rq_lost00001', connection_id: r.connId, received_at: new Date(NOW).toISOString(),
+    data: { external_id: 'med-lost', doctor_id: 7, consultation: 'initial', start: new Date(START).toISOString(), lang: 'ru' },
+    sealed: sealFor(old.boxPublic, { name: 'Пациент Потерянный', phone: '+998905550000', comment: '' }) });
+  r.tick(15000);
+  let out;
+  const warns = await quietWarns(async () => { out = await syncOnce(r.db, r.dataDir, r.opts); });
+  assert.equal(out.ok, true, 'обмен сам по себе работает');
+  assert.deepEqual(r.fake.state.acks, [1], 'курсор подтверждён: открыть это клиника не сможет никогда');
+  assert.ok(warns.some((w) => w.includes('rq_lost00001')), 'в журнале сервера — номер заявки');
+  assert.ok(!warns.join('\n').includes('Потерянный'));
+  for (let i = 0; i < 2; i += 1) {
+    const st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+    assert.deepEqual([st.state, st.last_error, st.skipped.sealed, st.skipped.last_ids], ['ok', '', 1, ['rq_lost00001']], 'такт ' + (i + 1));
+    r.tick(15000);
+    await syncOnce(r.db, r.dataDir, r.opts);
+  }
+});

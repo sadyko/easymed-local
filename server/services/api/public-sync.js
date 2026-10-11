@@ -90,13 +90,15 @@ function saveState(db, fields) {
 }
 
 // Ревью 8a, C1 — пропущенные элементы очереди помнятся до сброса администратором.
-function noteSkipped(db, ids, now) {
+// kind: 'failed' — клиника не смогла принять; 'sealed' — не открылось её ключом (I4).
+function noteSkipped(db, ids, now, kind = 'failed') {
   if (!ids.length) return;
   const st = readState(db) || {};
   let prev = [];
   try { prev = JSON.parse(st.skipped_last_ids || '[]'); } catch { prev = []; }
+  const col = kind === 'sealed' ? 'skipped_sealed' : 'skipped_failed';
   saveState(db, {
-    skipped_failed: (Number(st.skipped_failed) || 0) + ids.length,
+    [col]: (Number(st[col]) || 0) + ids.length,
     skipped_last_at: isoOf(now),
     skipped_last_ids: JSON.stringify([...prev, ...ids].slice(-SKIPPED_IDS_KEEP)),
   });
@@ -237,6 +239,7 @@ async function pullInbox(ctx, state) {
   let skipped = 0;
   let stuck = false;
   const skippedIds = [];
+  const sealedIds = [];
   // Решения владельца 18–19: срок держания назначает клиника в миг приёма —
   // публичный сервер узнаёт его из подтверждения очереди (held) и показывает в
   // GET /requests/{id}. Читается из строки заявки, а не из ответа ingestItem:
@@ -247,7 +250,17 @@ async function pullInbox(ctx, state) {
   for (const it of items) {
     let item = it;
     if (it && it.sealed) {
-      try { item = { ...it, patient: openSealed(ctx.identity, it.sealed) }; } catch { skipped += 1; cursor = String(it.cursor || cursor); continue; }
+      // Ревью 8a, I4: не открылось ключом клиники (ключ потерян и выпущен заново —
+      // риск 6 дизайна) — открыть нельзя никогда: пропустить и подтвердить (сервер
+      // сотрёт шифротекст, решение 16), но оставить след — номер заявки в журнале
+      // сервера и в состоянии обмена (без данных пациента), а экран «API»
+      // предупреждает, пока администратор не сбросит.
+      try { item = { ...it, patient: openSealed(ctx.identity, it.sealed) }; } catch {
+        const pub = String(it.public_id || '');
+        console.warn('[public-api] заявка', pub, 'не открылась ключом клиники — пропущена, обратитесь в Easy-Med');
+        sealedIds.push(pub);
+        skipped += 1; cursor = String(it.cursor || cursor); continue;
+      }
     }
     let r;
     try { r = await ctx.ingest(ctx.db, item, { now: ctx.now(), kekPath: ctx.kekPath }); } catch (e) {
@@ -281,6 +294,7 @@ async function pullInbox(ctx, state) {
     saveState(ctx.db, { inbox_cursor: cursor });
   }
   noteSkipped(ctx.db, skippedIds, ctx.now());
+  noteSkipped(ctx.db, sealedIds, ctx.now(), 'sealed');
   if (!stuck && (state.stuck_cursor || state.stuck_tries)) saveState(ctx.db, { stuck_cursor: '', stuck_tries: 0 });
   return { applied, skipped, stuck, received: items.length };
 }
@@ -349,7 +363,8 @@ async function performSync(db, dataDir, opts) {
     await soft(() => pushSlots(ctx, state, inbox.applied > 0));
     if (inbox.applied) sent += await pushEvents(ctx);
     // C1: элемент, на котором приём стоит, — «ошибка» на экране, пока не пройдёт.
-    const err = inbox.stuck ? 'intake_failed' : partial || (inbox.skipped ? 'sealed' : '');
+    // I4: неоткрывшееся — не «ошибка обмена» (обмен работает), а пропуск в skipped.
+    const err = inbox.stuck ? 'intake_failed' : partial;
     saveState(db, { last_ok_at: isoOf(now()), last_error: err, last_error_at: err ? isoOf(now()) : null });
     return partial ? { ok: false, reason: partial, applied: inbox.applied, sent } : { ok: true, applied: inbox.applied, sent };
   } catch (e) {
@@ -378,8 +393,16 @@ export function syncStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_
     last_ok_at: st.last_ok_at || null, last_error: st.last_error || '', last_error_at: st.last_error_at || null,
     pending_events: pendingEvents, waiting_requests: waiting,
     // C1: пропущенные элементы очереди — до сброса администратором.
-    skipped: { failed: Number(st.skipped_failed) || 0, last_at: st.skipped_last_at || null, last_ids: parseIds(st.skipped_last_ids) },
+    skipped: { sealed: Number(st.skipped_sealed) || 0, failed: Number(st.skipped_failed) || 0, last_at: st.skipped_last_at || null, last_ids: parseIds(st.skipped_last_ids) },
   };
+}
+
+/**
+ * Ревью 8a, I4 — администратор увидел предупреждение о пропущенных заявках
+ * (и, если нужно, позвонил в Easy-Med): счётчики и номера сбрасываются.
+ */
+export function ackSkipped(db) {
+  saveState(db, { skipped_sealed: 0, skipped_failed: 0, skipped_last_at: null, skipped_last_ids: '[]' });
 }
 
 // ─── РАСПИСАНИЕ ─────────────────────────────────────────────────────────────

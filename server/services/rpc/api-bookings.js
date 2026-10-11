@@ -14,14 +14,14 @@
 // в филиале 409.
 import { compile } from '../../db/query-compiler.js';
 import { hasAnyRole } from '../roles.js';
-import { grantAllowsAdminOr } from '../grants.js';
+import { grantAllowsAdminOr, isAdminUser } from '../grants.js';
 import { getDataDir } from '../control/config.js';
 import { canEditCrm } from '../crm/visibility.js';   // ревью 8a, I2 — тот же запрет «CRM: просмотр», что у /api/db
 import { API_BOOKING_MESSAGES as MSG } from '../../../public/js/shared/api-booking.js';
 import {
   requestRow, requestsOfCard, cardCandidates, boardMarks, confirmBooking, offerOtherTime, declineBooking, acceptRequest,
 } from '../api/bookings.js';
-import { syncStatus, wakePublicSync } from '../api/public-sync.js';
+import { syncStatus, wakePublicSync, ackSkipped } from '../api/public-sync.js';
 import { RPC_MESSAGES as API_RPC_MESSAGES } from './api-connections.js';
 
 export class RpcError extends Error {
@@ -130,4 +130,17 @@ export function apiSyncStatus(db, _args, user) {
   if (!user) throw new RpcError('Нужно войти в систему.', 401);
   if (!grantAllowsAdminOr(db, user, 'settings.api', 'view')) throw new RpcError(API_RPC_MESSAGES.noAccess, 403);
   return syncStatus(db, getDataDir());
+}
+
+/**
+ * Ревью 8a, I4 — «Понятно» на предупреждении о пропущенных заявках (не открылись
+ * ключом клиники или не приняты): сбрасывает счётчики. Администратор с правом
+ * «API: Изменение», главное здание.
+ */
+export function apiSyncSkippedAck(db, _args, user) {
+  if (!user) throw new RpcError('Нужно войти в систему.', 401);
+  if (!grantAllowsAdminOr(db, user, 'settings.api', 'edit') || !isAdminUser(user)) throw new RpcError(API_RPC_MESSAGES.noAccess, 403);
+  requireMain(db);
+  ackSkipped(db);
+  return { ok: true };
 }
