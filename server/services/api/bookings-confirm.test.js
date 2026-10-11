@@ -234,3 +234,22 @@ test('M1: оборвалось до записи визита — заявка �
   assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'expired');
   assert.equal(JSON.parse(one(s.db, "SELECT body FROM api_outbox WHERE event = 'booking.declined'").body).reason, 'expired');
 });
+
+// ─── РЕВЬЮ 8a, M3: ОКНО ПОКАЗЫВАЕТ ЦЕНУ И ИМЯ, КОТОРЫЕ ВОЗЬМЁТ КАССА ─────────
+
+test('M3: своя цена врача, пустая (0), «Бесплатно» и без строки — окно показывает ту же цену, что получит строка визита; своё имя приёма — тоже', async () => {
+  const { requestsOfCard } = await import('./bookings.js');
+  for (const [label, row] of [['своя 200 000', { price: 200000, is_free: 0, name_ru: 'Приём педиатра' }], ['пустая', { price: null, is_free: 0 }],
+    ['бесплатно', { price: 50000, is_free: 1 }], ['без строки', null]]) {
+    const s = bookingSeed();
+    if (row) s.db.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available, is_free, name_ru) VALUES (7, 1, ?, 1, ?, ?)').run(row.price, row.is_free, row.name_ru || null);
+    const id = await pending(s);
+    const cardId = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', id).c;
+    const shown = requestsOfCard(s.db, cardId, NOW)[0].what;
+    patient(s);
+    const c = await confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+    const line = one(s.db, 'SELECT unit_price FROM visit_services WHERE visit_id = ?', c.visit.id);
+    assert.equal(shown.price, line.unit_price, label + ': цена окна = цена строки');
+    if (row && row.name_ru) assert.equal(shown.name, 'Приём педиатра', label + ': имя приёма врача');
+  }
+});
