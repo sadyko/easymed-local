@@ -41,14 +41,19 @@ export function keyFingerprint(signPublicB64) {
 
 const fail = (code, extra = {}) => ({ ok: false, code, ...extra });
 
+const headerOf = (headers) => (k) => String((headers && headers[k]) || '');
+
 /**
- * @param {{method:string, url:string, headers:object, body:Buffer}} req url — путь с query, как пришёл (originalUrl)
+ * Шаги 1–3 — только заголовки, без тела (ревью 8b, C1): тело запроса читается
+ * лишь после них, так что чужой без лицензии клиники не заставит сервер
+ * принимать и распаковывать мегабайты.
+ * @param {{headers:object}} req
  * @param {{licencePublicKey?:import('node:crypto').KeyObject|null, now:number, skewMs?:number}} opts
  * @returns {{ok:true, clinicId:string, fingerprint:string, licence:{issued_at:string, valid_until:string, subscription:string}}
  *   | {ok:false, code:string, server_time?:string}}
  */
-export function verifyClinicRequest({ method, url, headers, body }, { licencePublicKey = null, now, skewMs = DEFAULT_SKEW_MS }) {
-  const h = (k) => String((headers && headers[k]) || '');
+export function verifyClinicHeaders({ headers }, { licencePublicKey = null, now, skewMs = DEFAULT_SKEW_MS }) {
+  const h = headerOf(headers);
   const clinicId = h('x-easymed-clinic');
   if (!CLINIC_ID_RE.test(clinicId)) return fail('invalid_signature');
   const lic = h('x-easymed-licence');
@@ -57,12 +62,8 @@ export function verifyClinicRequest({ method, url, headers, body }, { licencePub
   if (!v.ok) return fail('licence_invalid');
   const fingerprint = keyFingerprint(h('x-easymed-key'));
   if (!fingerprint || v.licence.api_sync_key !== fingerprint) return fail('invalid_signature');
-  const time = h('x-easymed-time');
-  const t = Date.parse(time);
+  const t = Date.parse(h('x-easymed-time'));
   if (!Number.isFinite(t) || Math.abs(t - now) > skewMs) return fail('clock_skew', { server_time: isoOf(now) });
-  const ok = verifyRequest(h('x-easymed-key'), { method: String(method).toUpperCase(), path: url, time, body: body || Buffer.alloc(0) },
-    h('x-easymed-signature'));
-  if (!ok) return fail('invalid_signature');
   return {
     ok: true, clinicId, fingerprint,
     licence: {
@@ -71,4 +72,24 @@ export function verifyClinicRequest({ method, url, headers, body }, { licencePub
       subscription: subscriptionOf(v.licence),
     },
   };
+}
+
+/** Шаг 4 — подпись запроса ключом из заголовка (его отпечаток уже сверен с лицензией). */
+export function verifyClinicSignature({ method, url, headers, body }) {
+  const h = headerOf(headers);
+  return verifyRequest(h('x-easymed-key'), { method: String(method).toUpperCase(), path: url, time: h('x-easymed-time'), body: body || Buffer.alloc(0) },
+    h('x-easymed-signature'));
+}
+
+/**
+ * Все четыре шага.
+ * @param {{method:string, url:string, headers:object, body:Buffer}} req url — путь с query, как пришёл (originalUrl)
+ * @param {{licencePublicKey?:import('node:crypto').KeyObject|null, now:number, skewMs?:number}} opts
+ * @returns {{ok:true, clinicId:string, fingerprint:string, licence:{issued_at:string, valid_until:string, subscription:string}}
+ *   | {ok:false, code:string, server_time?:string}}
+ */
+export function verifyClinicRequest(req, opts) {
+  const pre = verifyClinicHeaders(req, opts);
+  if (!pre.ok) return pre;
+  return verifyClinicSignature(req) ? pre : fail('invalid_signature');
 }

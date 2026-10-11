@@ -2,7 +2,7 @@
 // ключа, время и подпись запроса. Подделка любой части — отказ с кодом.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyClinicRequest, keyFingerprint } from './clinic-auth.js';
+import { verifyClinicRequest, verifyClinicHeaders, verifyClinicSignature, keyFingerprint } from './clinic-auth.js';
 import { testVendor, testClinic, signedHeaders, NOW } from './test-helpers/fixture.js';
 
 const vendor = testVendor();
@@ -49,4 +49,15 @@ test('часы клиники дальше допуска — clock_skew со в
   assert.equal(late.server_time, '2030-03-11T04:00:00Z');
   assert.equal(verifyClinicRequest(req(c, { at: new Date(NOW + 14 * 60000).toISOString() }), opts).ok, true);
   assert.equal(verifyClinicRequest(req(c, { at: new Date(NOW - 50 * 60000).toISOString() }), { ...opts, skewMs: 3600000 }).ok, true);
+});
+
+test('ревью 8b, C1: заголовки проверяются без тела, подпись — отдельно', () => {
+  const c = testClinic(vendor);
+  const r = req(c);
+  const pre = verifyClinicHeaders({ headers: r.headers }, opts);
+  assert.equal(pre.ok, true);
+  assert.equal(pre.fingerprint, c.identity.fingerprint);
+  assert.equal(verifyClinicHeaders({ headers: { ...r.headers, 'x-easymed-licence': '' } }, opts).code, 'licence_invalid');
+  assert.equal(verifyClinicSignature(r), true);
+  assert.equal(verifyClinicSignature({ ...r, body: Buffer.from('{"a":2}') }), false);
 });

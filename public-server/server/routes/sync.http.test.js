@@ -3,11 +3,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { syncRouter } from './sync.js';
 import { createRequest } from '../store/requests.js';
 import { clinicRow } from '../store/clinics.js';
 import { recordAccess } from '../store/logs.js';
-import { testDb, testVendor, testClinic, serve, syncCall, NOW } from '../test-helpers/fixture.js';
+import { testDb, testVendor, testClinic, serve, syncCall, signedHeaders, NOW } from '../test-helpers/fixture.js';
 import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { openSealed } from '../../../server/services/api/sync-identity.js';
 import { isoOf } from '../lib/time.js';
@@ -100,4 +101,42 @@ test('только https: без него канал не открывается
   const c = testClinic(vendor);
   const r = await syncCall(s.base, c, 'GET', '/_sync/v1/inbox?after=', undefined, { time });
   assert.deepEqual([r.status, r.json.error.code], [400, 'https_required']);
+});
+
+// Ревью 8b, C1: тело читается только после проверки заголовков (лицензия,
+// отпечаток ключа, часы, состояние лицензии), сжатое тело не распаковывается
+// (415), предел тела — свой у каждого адреса.
+test('C1: до проверки заголовков тело не читается — чужой не заставит распаковывать и держать мегабайты', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const c = testClinic(vendor);
+  const big = Buffer.alloc(5 * 1024 * 1024, 0x20);
+  const plain = await fetch(s.base + '/_sync/v1/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: big });
+  assert.equal(plain.status, 401, 'без подписи — 401, а не 413: тело не читали');
+  const bomb = zlib.gzipSync(big);
+  const gz = await fetch(s.base + '/_sync/v1/events', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' }, body: bomb });
+  assert.equal(gz.status, 401, 'сжатое без подписи — 401 до распаковки');
+  const late = signedHeaders(c, { method: 'POST', path: '/_sync/v1/events', body: big, time: isoOf(NOW - 3600000) });
+  const skew = await fetch(s.base + '/_sync/v1/events', { method: 'POST', headers: late, body: big });
+  assert.deepEqual([skew.status, (await skew.json()).error.code], [401, 'clock_skew']);
+  const lapsed = testClinic(vendor, { clinicId: 'c-000779', validUntil: '2030-03-01T00:00:00Z' });
+  const lh = signedHeaders(lapsed, { method: 'POST', path: '/_sync/v1/events', body: big, time });
+  const l = await fetch(s.base + '/_sync/v1/events', { method: 'POST', headers: lh, body: big });
+  assert.deepEqual([l.status, (await l.json()).error.code], [503, 'licence_lapsed']);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM clinics').get().n, 0, 'до проверки подписи клиника не записывается');
+});
+
+test('C1: сжатое тело клиники — 415 без распаковки; предел тела — свой у адреса', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const c = testClinic(vendor);
+  const raw = zlib.gzipSync(Buffer.from(JSON.stringify({ events: [] })));
+  const h = { ...signedHeaders(c, { method: 'POST', path: '/_sync/v1/events', body: raw, time }), 'Content-Encoding': 'gzip' };
+  const gz = await fetch(s.base + '/_sync/v1/events', { method: 'POST', headers: h, body: raw });
+  assert.deepEqual([gz.status, (await gz.json()).error.code], [415, 'unsupported_encoding']);
+  const pad = 'x'.repeat(1536 * 1024);
+  const events = await syncCall(s.base, c, 'POST', '/_sync/v1/events', { events: [], pad }, { time });
+  assert.deepEqual([events.status, events.json.error.code], [413, 'too_large'], 'события — до 1 МБ');
+  const snap = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: pad } };
+  assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', snap, { time })).json, { ok: true }, 'снимок — до 4 МБ');
 });

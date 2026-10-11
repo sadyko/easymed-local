@@ -54,6 +54,20 @@ export function admitClinic(db, auth, now) {
   return { ok: true, clinic: clinicRow(db, auth.clinicId) };
 }
 
+/**
+ * То же решение, что admitClinic, но ничего не пишет: канал клиники отвечает
+ * licence_outdated и 503 licence_lapsed ДО чтения тела и до проверки подписи
+ * (ревью 8b, C1), а записывает клинику только после подписи.
+ * @returns {{ok:true, licence:{licence_valid_until:string, licence_subscription:string}} | {ok:false, code:'licence_outdated'}}
+ */
+export function admissionOf(db, auth) {
+  const row = clinicRow(db, auth.clinicId);
+  const presented = { licence_valid_until: auth.licence.valid_until, licence_subscription: auth.licence.subscription };
+  if (!row || (msOf(auth.licence.issued_at) || 0) >= (msOf(row.licence_issued_at) || 0)) return { ok: true, licence: presented };
+  if (row.key_fp !== auth.fingerprint) return { ok: false, code: 'licence_outdated' };
+  return { ok: true, licence: row };
+}
+
 /** Присланное не старше сохранённого (повтор старого запроса не откатывает). */
 const notOlder = (generatedAt, storedAt) => !storedAt || (msOf(generatedAt) || 0) >= (msOf(storedAt) || 0);
 

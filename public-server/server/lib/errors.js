@@ -30,6 +30,7 @@ export const ERRORS = Object.freeze({
   not_offered:        { status: 409, ru: 'Клиника не предлагала другое время по этой записи.', uz: 'Klinika bu yozuv bo‘yicha boshqa vaqt taklif qilmagan.', en: 'The clinic has not offered another time for this appointment.' },
   offer_expired:      { status: 409, ru: 'Срок ответа на предложенное время истёк.', uz: 'Taklif qilingan vaqtga javob berish muddati tugagan.', en: 'The time to answer the offered slot has passed.' },
   too_large:          { status: 413, ru: 'Запрос слишком большой.', uz: 'So‘rov juda katta.', en: 'The request is too large.' },
+  unsupported_encoding: { status: 415, ru: 'Сжатое тело запроса не принимается — пришлите без Content-Encoding.', uz: 'Siqilgan so‘rov tanasi qabul qilinmaydi — Content-Encoding siz yuboring.', en: 'Compressed request bodies are not accepted — send without Content-Encoding.' },
   rate_limited:       { status: 429, ru: 'Превышен лимит запросов — подождите столько секунд, сколько в Retry-After.', uz: 'So‘rovlar chegarasi oshdi — Retry-After dagi soniyalar qadar kuting.', en: 'Rate limit exceeded — wait as many seconds as Retry-After says.' },
   internal:           { status: 500, ru: 'Ошибка сервера.', uz: 'Server xatosi.', en: 'Server error.' },
   licence_lapsed:     { status: 503, ru: 'Клиника временно недоступна. Позвоните в клинику.', uz: 'Klinika vaqtincha mavjud emas. Klinikaga qo‘ng‘iroq qiling.', en: 'The clinic is temporarily unavailable. Please call the clinic.' },
@@ -69,6 +70,7 @@ export function errorHandler(log = console) {
     if (res.headersSent) return next(err);
     if (err && err.type === 'entity.parse.failed') return sendError(req, res, 'bad_json');
     if (err && err.type === 'entity.too.large') return sendError(req, res, 'too_large');
+    if (err && err.type === 'encoding.unsupported') return sendError(req, res, 'unsupported_encoding');
     const status = Number(err && (err.status || err.statusCode));
     if (status >= 400 && status < 500) {
       log.warn('[public-server] client error', status, (err && (err.type || err.code)) || '');
