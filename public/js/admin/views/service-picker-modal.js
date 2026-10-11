@@ -36,7 +36,7 @@ import { h, Icon, clear, toast, Avatar, initials, avColor } from '../ui.js';
 import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
 import { canWriteServiceTemplates, canAddVisitLines } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы
-import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация, хирургия без койки
+import { surgeryBedRefusal, linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация, хирургия без койки; BACKLOG_1011_V1 — исполнитель по умолчанию
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';   // insurance/B2B: print statistics act
@@ -178,6 +178,13 @@ export function openServicePickerModal({
     attachMode      = false,
     requireSlot     = true,
     ctaLabel        = 'Добавить к визиту',
+    // BACKLOG_1011_V1 — исполнитель строки, у которой врача в смете не выбрали,
+    // если окно-хозяин записывает его сам: кабинет врача ставит такой строке
+    // врача приёма (addOwnService → linePerformer). Смета считает цену по ТОМУ
+    // ЖЕ исполнителю (его своя цена), что запишет строка и выставит счёт: без
+    // этого смета называла прайс (50 000), а строка и счёт — своя цена врача
+    // приёма (80 000). Не передан — строка без врача считается без исполнителя.
+    defaultPerformerId = null,
 } = {}) {
     // Catalog UI is shared by the booking wizard and attach mode.
     const catalogUI = calculator || attachMode;
@@ -1370,13 +1377,27 @@ export function openServicePickerModal({
     // брала каталог, а касса — цену врача: назвали 900 000, выставили 1 100 000.
     function itemPrice(a) {
         // SERVICES_PACKAGES_V1 — день визита тот же, что у записи строки (wizSave).
-        return pickerLinePrice(a, (state.providers || []).concat(state.doctors || []), { day: localDayOf(cartVisitDateIso()) });
+        return pickerLinePrice(pricedItem(a), (state.providers || []).concat(state.doctors || []), { day: localDayOf(cartVisitDateIso()) });
+    }
+    // BACKLOG_1011_V1 — строка сметы с тем исполнителем, которого запишет окно:
+    // выбранный врач, иначе — исполнитель по умолчанию (defaultPerformerId) по
+    // тому же правилу linePerformer, что у addOwnService (врач приёма — только
+    // у врачебной услуги, не у анализа и процедуры).
+    function defaultPerformerOf(a) {
+        if (!a || a.doctor || !defaultPerformerId || !a.service) return null;
+        const pid = linePerformer(a.service, null, defaultPerformerId);
+        if (!pid) return null;
+        return (state.providers || []).concat(state.doctors || []).find((u) => u && String(u.id) === String(pid)) || { id: pid };
+    }
+    function pricedItem(a) {
+        const doc = defaultPerformerOf(a);
+        return doc ? { ...a, doctor: doc } : a;
     }
     // OWN_PRICE_TIER_RATIO_V1 — чип яруса и зачёркнутая цена первого визита: у
     // врача со своей ценой ярус снова меняет цену (та же скидка, что у каталога),
     // поэтому чип есть у всех; зачёркнута своя цена первого визита.
     function itemTierNote(a) {
-        return pickerTierNote(a, (state.providers || []).concat(state.doctors || []));
+        return pickerTierNote(pricedItem(a), (state.providers || []).concat(state.doctors || []));   // BACKLOG_1011_V1
     }
 
     // The right-panel action bar under the cart. Two states:
@@ -2241,7 +2262,8 @@ export function openServicePickerModal({
                 // назначит окно-хозяин: регистрация — своей строкой, кабинет врача —
                 // врачом приёма. Пустая строка это молчание, а не ответ: пишем
                 // нейтральную подсказку, чтобы строка сметы не выглядела недописанной.
-                else if (a.__needsDoc) who = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'исполнитель не выбран');
+                // BACKLOG_1011_V1 — исполнитель по умолчанию (кабинет: врач приёма) назван: по нему и цена строки.
+                else if (a.__needsDoc) { const dp = defaultPerformerOf(a); who = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, dp && dp.full_name ? document.createTextNode(dp.full_name) : 'исполнитель не выбран'); }
                 else who = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'процедурный кабинет');
                 rowsWrap.appendChild(h('div', { class: 'wzc-ln' },
                     h('div', { style: { minWidth: 0 } }, h('div', { style: { fontSize: '12.5px' } }, a.service.name), who),

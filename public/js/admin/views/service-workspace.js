@@ -446,6 +446,9 @@ function servicesCard(ctx) {
                 // смета считает срок пакета, как дверь /api/db и счёт (строка «Мои услуги»,
                 // consultation.js). Нет — каталог считает по сегодня (приём идёт сейчас).
                 packageDay:    ctx.patient?.__service?.visitDate || null,
+                // BACKLOG_1011_V1 — строке без выбранного врача addOwnService ставит врача приёма
+                // (linePerformer): смета считает её цену по нему же, как строка и счёт.
+                defaultPerformerId: ctx.patient?.__service?.doctorId || null,
                 title:         'Добавить услуги к приёму',
                 ctaLabel:      'Добавить к приёму',
                 // Уже добавленные услуги в каталоге погашены — дважды одну и ту же
