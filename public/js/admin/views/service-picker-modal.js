@@ -2552,7 +2552,12 @@ export function openServicePickerModal({
             .sort((a, b) => String(a.startISO).localeCompare(String(b.startISO)));
         const head = timed[0] || state.added[0];
         const fallback = new Date(); fallback.setHours(9, 0, 0, 0);
-        return (head && head.startISO) || scheduledISO || fallback.toISOString();
+        // SERVICES_PACKAGES_V1 (ревью шага 6, C2) — окно на существующем визите
+        // (packageDay — его день, visit-modal.js): строки без врача и времени
+        // идут в ЭТОТ день — по нему дверь /api/db ставит цену пакета, а счёт её
+        // выставляет. «Сегодня» здесь давало смете другой срок пакета: 150 000 в
+        // смете — 120 000 в счёте (и цену яруса, которую счёт не возьмёт).
+        return (head && head.startISO) || scheduledISO || packageDay || fallback.toISOString();
     }
     function previewBillLines() {
         const out = [];
