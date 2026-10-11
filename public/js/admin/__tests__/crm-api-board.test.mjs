@@ -94,3 +94,24 @@ test('карточка звонка: блок онлайн-записи скры
   assert.ok(box);
   assert.equal(box.style.display, 'none');
 });
+
+// PUBLIC_API_V1 — ревью шага 8a, I2: роль с CRM на «Просмотре» (V3120_FIX) видит в
+// окне карточки заявку из API и её статус, но не кнопки решений.
+test('окно карточки, CRM «только просмотр»: блок онлайн-записи без выбора карты и без кнопок решений', async () => {
+  const perms = await import('../permissions.js');
+  S.apiMarks = { 900: [{ id: 41, kind: 'appointment', status: 'pending', connection_name: 'med24.uz', hold_until: '2030-03-11T04:31:00Z' }] };
+  S.apiItems = (body) => (body && body.crm_request_id === 900 ? [ITEM] : []);
+  S.apiCandidates = [{ id: 1, full_name: 'Абдурахмонов Фаррух', mrn: 'A-1', date_of_birth: '', why: 'phone_name' }];
+  perms.setEffectiveFromRole({ name: 'nurse', permissions: { sections: ['crm'], levels: { crm: 'viewer' } } });
+  try {
+    const root = await board();
+    const modal = await openCard(root);
+    const box = byAttr(modal, 'data-api-booking')[0];
+    assert.ok(box && textOf(box).includes('Онлайн-запись через API') && textOf(box).includes('Ждёт подтверждения'));
+    assert.equal(walk(box).filter((n) => n.tagName === 'BUTTON').length, 0, 'кнопки решений у «Просмотра»');
+    assert.ok(!textOf(box).includes('Карта пациента'), 'выбор карты у «Просмотра»');
+  } finally {
+    perms.setFullAccess();
+    S.apiItems = []; S.apiMarks = {}; S.apiCandidates = [];
+  }
+});

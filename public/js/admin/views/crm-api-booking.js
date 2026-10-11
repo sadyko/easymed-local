@@ -35,6 +35,7 @@ export function untilText(iso, now = Date.now()) {
   return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + ' ' + time;
 }
 const sum = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const NO_ACTIONS = Object.freeze({ confirm: false, offer: false, decline: false, accept: false });
 const TONE = Object.freeze({ new: 'info', accepted: 'teal', pending: 'warn', confirming: 'warn', offered: 'info', confirmed: 'ok',
   arrived: 'ok', declined: 'crit', expired: 'crit', cancelled: '', no_show: 'crit' });
 
@@ -89,10 +90,11 @@ function choiceEl(it) {
  * Окно «Онлайн-запись через API» карточки заявки. Пока у карточки нет заявок из
  * API — пустой скрытый блок (карточки из звонков его не видят).
  * @param {{id:number}} card строка crm_requests
- * @param {{onChanged?:Function, newPatient?:(prefill:{full_name:string, phone:string})=>Promise<{id:number, full_name:string, mrn?:string}|null>, now?:()=>number}} opts
- *   now — «сейчас» для строки срока держания (тестам; по умолчанию часы машины)
+ * @param {{onChanged?:Function, newPatient?:(prefill:{full_name:string, phone:string})=>Promise<{id:number, full_name:string, mrn?:string}|null>, now?:()=>number, readOnly?:boolean}} opts
+ *   now — «сейчас» для строки срока держания (тестам; по умолчанию часы машины);
+ *   readOnly — CRM выдан «на просмотр» (crm.js crmReadOnly): только заявка и статус
  */
-export function apiBookingBox(card, { onChanged = () => {}, newPatient = null, now = () => Date.now() } = {}) {
+export function apiBookingBox(card, { onChanged = () => {}, newPatient = null, now = () => Date.now(), readOnly = false } = {}) {
   const root = h('div', { class: 'apib-box', 'data-api-booking': String(card && card.id) });
   root.style.display = 'none';
   let items = [];
@@ -263,7 +265,11 @@ export function apiBookingBox(card, { onChanged = () => {}, newPatient = null, n
     focusEl = null;
     clear(root);
     root.style.display = items.length ? '' : 'none';
-    for (const it of items) root.appendChild(itemEl(it));
+    // Ревью шага 8a, I2: решения рисуются только тому, кто их может принять.
+    // Сервер присылает can по роли и праву править карточку (медсестре, врачу,
+    // кассе — всё false), а «Просмотр» CRM гасит их и здесь, как кнопки доски
+    // (V3120_FIX). Ответ сервера без can — тоже без решений.
+    for (const it of items) root.appendChild(itemEl({ ...it, can: readOnly || !it.can ? NO_ACTIONS : it.can }));
     focusWant = '';
     if (focusEl) { try { focusEl.focus(); } catch { /* фокус — удобство */ } focusEl = null; }
   }

@@ -202,3 +202,38 @@ test('доска и окно: держание до понедельника —
   assert.match(textOf(apiBoardLine([{ id: 41, kind: 'appointment', status: 'offered', connection_name: 'med24.uz', offer_until: iso(2030, 2, 10, 0, 20) }], late)),
     /ждём ответа до завтра 00:20$/);
 });
+
+// PUBLIC_API_V1 — ревью шага 8a, I2: кто не решает заявки (CRM на «Просмотре»;
+// медсестра, врач, касса — сервер присылает им can = всё false), видит только
+// статус: ни выбора карты, ни «Подтвердить запись», ни «Предложить другое время»,
+// ни «Отклонить», ни «Взять в работу» — кнопки, которые кончались отказом 403.
+const NO_ACTIONS = { confirm: false, offer: false, decline: false, accept: false };
+const noDecisions = (box) => {
+  assert.equal(byAttr(box, 'data-apib').length, 0, 'кнопок решения нет');
+  assert.equal(walk(box).filter((n) => n.tagName === 'BUTTON').length, 0, 'ни одной кнопки');
+  const t = textOf(box);
+  for (const s of ['Карта пациента', 'Создать карту', 'Выбрать', 'Подтвердить запись', 'Предложить другое время', 'Отклонить', 'Взять в работу']) {
+    assert.ok(!t.includes(s), 'показано: ' + s);
+  }
+  assert.ok(t.includes('Ждёт подтверждения') || t.includes('Новая заявка'), 'статус виден');
+};
+
+test('ревью I2: «только просмотр» CRM — окно показывает заявку и статус, но не решения (даже если сервер прислал can)', async () => {
+  const box = mount([ITEM], { readOnly: true, newPatient: async () => null });
+  await tick();
+  noDecisions(box);
+  assert.ok(textOf(box).includes('время держим за пациентом до'), 'срок держания виден');
+  assert.equal(calls.filter((c) => c[0] === 'api_booking_candidates').length, 0, 'кандидатов не спрашивает — выбирать некому');
+  const req = mount([{ ...ITEM, kind: 'request', status: 'new', what: null, doctor: null, start_at: null, can: { ...NO_ACTIONS, accept: true } }], { readOnly: true });
+  await tick();
+  noDecisions(req);
+});
+
+test('ревью I2: сервер не дал решений (can = всё false, как медсестре) — кнопок нет и без «только просмотр»', async () => {
+  const box = mount([{ ...ITEM, can: NO_ACTIONS }], { newPatient: async () => null });
+  await tick();
+  noDecisions(box);
+  const legacy = mount([{ ...ITEM, can: undefined }], { newPatient: async () => null });
+  await tick();
+  noDecisions(legacy);
+});

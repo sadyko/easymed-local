@@ -3195,6 +3195,7 @@ async function paint() {
                 // карту пациента карточке поставил сервер, а «Сохранить» этого окна записало бы
                 // прежнего (пустого) пациента поверх.
                 (isEdit && r.id != null) ? apiBookingBox(r, {
+                    readOnly: crmReadOnly(),   // PUBLIC_API_V1 — ревью I2: «Просмотр» CRM видит статус, не решения
                     newPatient: newPatientForApi,
                     onChanged: (out) => {
                         if (out && out.status === 'confirmed') { close(); paint(); return; }
