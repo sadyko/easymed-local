@@ -151,8 +151,9 @@ test('события клиники: статус, повтор seq, испор�
   assert.equal(d[0].url, 'https://med24.uz/hooks');
   assert.equal(d[0].body, offer.body, 'тело — байт в байт как подписала клиника');
   assert.equal(d[0].connection_id, 3);
-  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [event(1, a, 'booking.confirmed', 'booked')], NOW).accepted, [1]);
-  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'declined', 'повтор seq ничего не меняет');
+  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [offer], NOW).accepted, [1]);
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'declined', 'повтор seq с тем же телом ничего не меняет');
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 1, 'и второго уведомления нет');
   applyEvents(s.db, s.c.clinicId, [event(4, a, 'booking.confirmed', 'booked', { start: '2030-03-12T10:00:00+05:00', branch_id: 1 })], NOW);
   const b = requestRow(s.db, s.c.clinicId, a.id);
   assert.deepEqual([b.status, b.reason, b.start_at, b.branch_id], ['booked', null, '2030-03-12T05:00:00Z', 1]);
@@ -209,4 +210,18 @@ test('уборка: статусы старше 90 дней, номера соб
   applyEvents(s.db, s.c.clinicId, [{ seq: 1, event: 'x', body: '' }], NOW);
   assert.deepEqual(purgeRequests(s.db, NOW + 31 * 86400000), { requests: 0, events: 1 });
   assert.deepEqual(purgeRequests(s.db, NOW + 91 * 86400000), { requests: 1, events: 0 });
+});
+
+test('ревью 8b, C2: базу клиники восстановили — новое событие с прежним номером применяется; точный повтор — нет', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const hook = { webhook_url: 'https://med24.uz/hooks', signature: 'sha256=' + 'a'.repeat(64) };
+  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [event(1, a, 'booking.confirmed', 'booked', {}, hook)], NOW).accepted, [1]);
+  // Клиника восстановила свою базу из копии: номера событий пошли заново.
+  const after = event(1, a, 'appointment.cancelled', 'cancelled', {}, hook);
+  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [after], NOW + 1000).accepted, [1]);
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'cancelled', 'новое событие с прежним номером не потеряно');
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 2, 'и уведомление о нём встало в очередь');
+  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [after], NOW + 2000).accepted, [1]);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 2, 'точный повтор (ответ сервера потерялся) — без второго уведомления');
 });

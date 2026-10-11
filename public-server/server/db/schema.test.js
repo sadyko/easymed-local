@@ -17,7 +17,7 @@ const EXPECTED = {
     'consultation', 'start_at', 'duration_min', 'status', 'reason', 'hold_until', 'offered_start', 'offer_until',
     'cancel_requested_at', 'created_at', 'delivered_at', 'answered_at', 'updated_at'],
   inbox: ['cursor', 'clinic_id', 'type', 'request_id', 'connection_id', 'received_at', 'data', 'sealed'],
-  events_seen: ['clinic_id', 'seq', 'received_at'],
+  events_seen: ['clinic_id', 'seq', 'identity', 'received_at'],
   deliveries: ['id', 'clinic_id', 'connection_id', 'request_id', 'event_id', 'event', 'url', 'body', 'signature', 'attempts',
     'state', 'next_at', 'last_code', 'last_error', 'created_at', 'updated_at'],
   delivery_log: ['id', 'clinic_id', 'delivery_id', 'connection_id', 'request_id', 'event_id', 'event', 'attempt', 'code',

@@ -107,10 +107,14 @@ CREATE TABLE inbox (
 );
 CREATE INDEX inbox_clinic ON inbox (clinic_id, cursor);
 
--- Принятые события клиники (POST /_sync/v1/events) — повтор того же seq ничего не меняет.
+-- Принятые события клиники (POST /_sync/v1/events) — повтор того же seq с тем
+-- же содержимым (identity — sha256 вида и тела события) ничего не меняет. Тот же
+-- seq с другим содержимым — новое событие: клиника восстановила базу из копии,
+-- и номера пошли заново (ревью 8b, C2).
 CREATE TABLE events_seen (
   clinic_id   TEXT NOT NULL,
   seq         INTEGER NOT NULL,
+  identity    TEXT NOT NULL,
   received_at TEXT NOT NULL,
   PRIMARY KEY (clinic_id, seq)
 );

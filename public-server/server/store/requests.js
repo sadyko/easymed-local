@@ -251,18 +251,26 @@ const SIGNATURE_RE = /^sha256=[0-9a-f]{64}$/;
  * повторяет непринятое каждый такт, так что одно отвергнутое навсегда
  * остановило бы все следующие (public-sync.js pushEvents).
  * Есть адрес и подпись клиники — уведомление встаёт в очередь доставки.
+ *
+ * Повтор — тот же seq С ТЕМ ЖЕ содержимым (клиника повторяет непринятое байт в
+ * байт). Тот же seq с другим содержимым — новое событие: клиника восстановила
+ * свою базу из копии, и номера api_outbox пошли заново (ревью 8b, C2); иначе
+ * подтверждения, отказы и отмены после восстановления пропадали бы молча.
  * @returns {{accepted:number[]}}
  */
 export function applyEvents(db, clinicId, events, now) {
   const accepted = [];
   const at = isoOf(now);
-  const seen = db.prepare('SELECT 1 FROM events_seen WHERE clinic_id = ? AND seq = ?');
+  const seen = db.prepare('SELECT identity FROM events_seen WHERE clinic_id = ? AND seq = ?');
   for (const e of Array.isArray(events) ? events.slice(0, 500) : []) {
     const seq = Number(e && e.seq);
     if (!Number.isInteger(seq) || seq <= 0) continue;
-    if (seen.get(clinicId, seq)) { accepted.push(seq); continue; }
+    const identity = crypto.createHash('sha256').update(String(e.event == null ? '' : e.event) + '\n' + (typeof e.body === 'string' ? e.body : ''))
+      .digest('hex');
+    const prev = seen.get(clinicId, seq);
+    if (prev && prev.identity === identity) { accepted.push(seq); continue; }
     db.transaction(() => {
-      db.prepare('INSERT INTO events_seen (clinic_id, seq, received_at) VALUES (?, ?, ?)').run(clinicId, seq, at);
+      db.prepare('INSERT OR REPLACE INTO events_seen (clinic_id, seq, identity, received_at) VALUES (?, ?, ?, ?)').run(clinicId, seq, identity, at);
       const raw = typeof e.body === 'string' && e.body.length <= BODY_MAX ? e.body : '';
       let body = null;
       try { body = raw ? JSON.parse(raw) : null; } catch { body = null; }
