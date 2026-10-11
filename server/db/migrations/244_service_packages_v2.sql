@@ -36,7 +36,9 @@
 --   package_legacy — ПРОЦЕНТ ПАКЕТА НА ДЕНЬ ОБНОВЛЕНИЯ (заморожен; NULL — не
 --     такая строка) — у строк, чья записанная цена несёт скидку группы
 --     пациента: невыставленных, где группа больше пакета, и выставленных
---     ПАЦИЕНТУ (счёт без плательщика) со скидкой больше пакетной. Их цена
+--     ПАЦИЕНТУ (счёт без плательщика) со скидкой больше пакетной, если такую
+--     скидку может объяснить группа пациента (её процент — действующей группы
+--     или уже выключенной — больше процента пакета на день обновления). Их цена
 --     названа пациенту, а плательщику (страховая, организация) скидка группы не
 --     положена (B5): счёт плательщику и «Ждут счёта» берут у них только скидку
 --     пакета по этому проценту, как до 244 (domain/pricing.js
@@ -112,7 +114,16 @@ UPDATE visit_services
                     AND c.discount_percent > 0), 0)
        > (SELECT MIN(t.discount_percent, 100) FROM service_templates t WHERE t.id = visit_services.package_id);
 --   • выставленные ПАЦИЕНТУ (счёт без плательщика) со скидкой больше пакетной:
---     до 244 своя скидка строки была round(сумма × бо́льшая из скидок, 2).
+--     до 244 своя скидка строки была round(сумма × бо́льшая из скидок, 2). И
+--     только если группа пациента (действующая или уже выключенная) больше
+--     пакета на день обновления: у пациента без группы скидка выставленной
+--     строки — пакетная, даже если процент пакета снизили до обновления (её
+--     цена — выставленная, одна для всех). Сверять скидку с процентом группы
+--     точно нельзя: процент группы могли поменять после счёта — тогда
+--     страховая получила бы скидку VIP. Цена этого правила: пакет снизили до
+--     обновления ниже группы, которая сама была меньше прежнего пакета, —
+--     плательщику уйдёт процент пакета на день обновления, ровно как выставил
+--     бы повторный счёт плательщику до 244 (живой процент пакета).
 UPDATE visit_services
    SET package_legacy = (SELECT MIN(t.discount_percent, 100) FROM service_templates t WHERE t.id = visit_services.package_id)
  WHERE package_id IS NOT NULL AND invoice_item_id IS NOT NULL AND package_price IS NOT NULL
@@ -122,4 +133,9 @@ UPDATE visit_services
                 WHERE ii.id = visit_services.invoice_item_id
                   AND (SELECT i.payer_id FROM invoices i WHERE i.id = ii.invoice_id) IS NULL
                   AND ii.discount_amount > round(ii.total * (SELECT MIN(t.discount_percent, 100) FROM service_templates t
-                                                             WHERE t.id = visit_services.package_id) / 100, 2) + 0.005);
+                                                             WHERE t.id = visit_services.package_id) / 100, 2) + 0.005)
+   AND COALESCE((SELECT MIN(c.discount_percent, 100) FROM visits v
+                   JOIN patients p ON p.id = v.patient_id
+                   JOIN patient_categories c ON c.id = p.category_id
+                  WHERE v.id = visit_services.visit_id AND typeof(c.discount_percent) IN ('integer', 'real')), 0)
+       > (SELECT MIN(t.discount_percent, 100) FROM service_templates t WHERE t.id = visit_services.package_id);

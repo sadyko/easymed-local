@@ -187,7 +187,8 @@ test('244 (ревью C1): бэкфилл берёт только числа —
 // долю врача не двигают. Клиника — сегодняшним днём (как сквозной тест денег),
 // счёт до 244 — по правилу до 244 (пациенту — бо́льшая из скидок, плательщику —
 // скидка пакета). Сценарии — повторной проверки ревью (zz-s6f-c1-lens).
-function upgraded({ groupPct = 0, pkgPct = 20, billed = null } = {}) {
+// before(db) — что поменяли в клинике до обновления (после счёта); qty / price — строка.
+function upgraded({ groupPct = 0, pkgPct = 20, billed = null, before = null, qty = 1, price = 100000 } = {}) {
   const db = dbBefore244();
   const day = today(db);
   const u = db.prepare('INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates, service_rate_default) VALUES (?,?,?,?,?,?,?,0)');
@@ -197,19 +198,21 @@ function upgraded({ groupPct = 0, pkgPct = 20, billed = null } = {}) {
   let cat = null;
   if (groupPct) { db.prepare("INSERT INTO patient_categories (id, name, discount_percent, active) VALUES (5, 'VIP', ?, 1)").run(groupPct); cat = 5; }
   db.prepare("INSERT INTO patients (id, mrn, full_name, category_id, payer_id) VALUES (1, 'P-1', 'Пациент', ?, 3)").run(cat);
-  db.prepare("INSERT INTO services (id, name, price, tax_rate) VALUES (1, 'УЗИ', 100000, 0)").run();
+  db.prepare("INSERT INTO services (id, name, price, tax_rate) VALUES (1, 'УЗИ', ?, 0)").run(price);
   db.prepare("INSERT INTO service_templates (id, name, service_ids, discount_percent) VALUES (1, 'Осень', '[1]', ?)").run(pkgPct);
   db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (1, 1, ?, 'arrived')").run(day + 'T09:00:00Z');
+  const gross = Math.round(price * qty * 100) / 100;
   let itemId = null;
   if (billed) {
     const pct = billed === 'patient' ? Math.max(pkgPct, groupPct) : pkgPct;   // правило счёта до 244
-    const disc = Math.round(100000 * pct) / 100;
-    db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, status, payer_id) VALUES (1, 'INV-1', 1, 1, 100000, ?, ?, 'unpaid', ?)")
-      .run(disc, 100000 - disc, billed === 'payer' ? 3 : null);
-    db.prepare("INSERT INTO invoice_items (id, invoice_id, service_id, description, quantity, unit_price, total, discount_amount) VALUES (1, 1, 1, 'УЗИ', 1, 100000, 100000, ?)").run(disc);
+    const disc = Math.round(gross * pct) / 100;
+    db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, status, payer_id) VALUES (1, 'INV-1', 1, 1, ?, ?, ?, 'unpaid', ?)")
+      .run(gross, disc, Math.round((gross - disc) * 100) / 100, billed === 'payer' ? 3 : null);
+    db.prepare("INSERT INTO invoice_items (id, invoice_id, service_id, description, quantity, unit_price, total, discount_amount) VALUES (1, 1, 1, 'УЗИ', ?, ?, ?, ?)").run(qty, price, gross, disc);
     itemId = 1;
   }
-  db.prepare("INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status, package_id, invoice_item_id) VALUES (1, 1, 1, 1, 1, 100000, 100000, 'completed', 1, ?)").run(itemId);
+  db.prepare("INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status, package_id, invoice_item_id) VALUES (1, 1, 1, 1, ?, ?, ?, 'completed', 1, ?)").run(qty, price, gross, itemId);
+  if (before) before(db);
   migrate(db);
   const fee = () => Math.round(doctorPaySummary(db, { doctor_id: 1, from: day, to: day }, admin).outpatient.fee);
   const waiting = () => { const r = cashierUnbilled(db, {}, admin).rows.find((x) => x.visit_id === 1); return r ? r.total : null; };
@@ -277,6 +280,73 @@ test('244 (ревью C1, повторно): счёт плательщику д�
   const c = upgraded({ groupPct: 30, billed: 'payer' });
   voidInvoice(c.db, { invoice_id: 1, keep_services: true }, admin);
   assert.equal(c.bill(null), 80000);
+});
+
+// SERVICES_PACKAGES_V1 (ревью C1, финальная проверка) — ВЫСТАВЛЕННАЯ ДО 244
+// СТРОКА ПОМЕЧАЕТСЯ, ТОЛЬКО ЕСЛИ ЕЁ СКИДКУ МОЖЕТ ОБЪЯСНИТЬ ГРУППА ПАЦИЕНТА
+// (группа пациента — действующая или нет — больше пакета на день обновления).
+// Без группы скидка выставленной строки — пакетная, какой бы процент пакета ни
+// стал к обновлению: отметки нет, цена строки — выставленная, одна для всех.
+const lowerPackage = (pct) => (db) => db.prepare('UPDATE service_templates SET discount_percent = ? WHERE id = 1').run(pct);
+const voided = (c) => { voidInvoice(c.db, { invoice_id: 1, keep_services: true }, admin); return c; };
+const refunded = (c, paid) => {
+  recordPayment(c.db, { invoice_id: 1, amount: paid, method: 'cash' }, admin);
+  refundInvoiceLine(c.db, { invoice_item_id: 1, reason: 'отказ' }, admin);
+  return c;
+};
+const rebill = (c, payer) => createInvoiceForVisit(c.db, { visit_id: 1, visit_service_ids: [1], payer_id: payer, discount_amount: 0, rebill_refunded: true }, admin).invoice.total_amount;
+
+test('244 (ревью C1, финально): без группы, выставлено по пакету 20 %, пакет до обновления снизили до 10 % или 0 % — отметки нет, 80 000 везде', () => {
+  for (const pct of [10, 0]) {
+    const opts = { billed: 'patient', before: lowerPackage(pct) };
+    assert.equal(legacyOf(upgraded(opts).db), null, 'пакет ' + pct + ' %: отметки нет');
+    let c = voided(upgraded(opts));
+    assert.deepEqual([c.waiting(), c.fee()], [80000, 24000], pct + ' %: отмена — «Ждут счёта» и доля врача');
+    assert.equal(c.bill(3), 80000, pct + ' %: отмена → плательщику');
+    assert.equal(c.fee(), 24000);
+    assert.equal(voided(upgraded(opts)).bill(null), 80000, pct + ' %: отмена → пациенту');
+    assert.equal(rebill(refunded(upgraded(opts), 80000), 3), 80000, pct + ' %: возврат → плательщику');
+    assert.equal(rebill(refunded(upgraded(opts), 80000), null), 80000, pct + ' %: возврат → пациенту');
+  }
+});
+
+test('244 (ревью C1, финально): VIP помечается и тогда, когда группу до обновления выключили или поменяли её процент', () => {
+  const off = { groupPct: 30, billed: 'patient', before: (db) => db.prepare('UPDATE patient_categories SET active = 0 WHERE id = 5').run() };
+  assert.equal(legacyOf(upgraded(off).db), 20, 'группа выключена');
+  assert.equal(voided(upgraded(off)).bill(3), 80000);
+  assert.equal(voided(upgraded(off)).bill(null), 70000, 'пациенту — как выставили');
+  // Процент группы поменяли 30 → 25 до обновления: счёт был со скидкой группы 30 % — плательщику её не отдаём.
+  const changed = { groupPct: 30, billed: 'patient', before: (db) => db.prepare('UPDATE patient_categories SET discount_percent = 25 WHERE id = 5').run() };
+  assert.equal(legacyOf(upgraded(changed).db), 20, 'процент группы поменяли');
+  assert.equal(voided(upgraded(changed)).bill(3), 80000);
+  assert.equal(rebill(refunded(upgraded(changed), 70000), 3), 80000, 'возврат → плательщику');
+  assert.equal(rebill(refunded(upgraded(changed), 70000), null), 70000, 'возврат → пациенту — как выставили');
+});
+
+test('244 (ревью C1, финально): группа меньше пакета на день счёта, пакет до обновления снизили ниже группы — плательщику процент пакета на день обновления, как до 244; пациенту — как выставили', () => {
+  // Пакет 20 % > группы 15 % — счёт по пакету (80 000); пакет снизили до 10 %. Скидку
+  // строки объясняет и группа (15 % > 10 %), и прежний пакет — какая была, база уже не
+  // знает. Строка помечается: плательщику — 10 % (90 000) — ровно столько, сколько при
+  // повторном счёте плательщику выставил бы код до 244 (живой процент пакета); иначе
+  // при смене процента группы (тест выше) страховая получала бы скидку VIP.
+  const opts = { groupPct: 15, billed: 'patient', before: lowerPackage(10) };
+  assert.equal(legacyOf(upgraded(opts).db), 10);
+  assert.equal(voided(upgraded(opts)).bill(3), 90000);
+  assert.equal(voided(upgraded(opts)).bill(null), 80000);
+});
+
+test('244 (ревью C1, финально): количество 3, цена не круглая — отметка и деньги как до 244', () => {
+  const opts = { groupPct: 30, billed: 'patient', qty: 3, price: 33333 };   // 99 999; VIP 29 999,70; пакет 19 999,80
+  assert.equal(legacyOf(upgraded(opts).db), 20);
+  assert.equal(voided(upgraded(opts)).bill(3), 79999.2, 'плательщику — 99 999 − 20 %');
+  assert.equal(voided(upgraded(opts)).bill(null), 69999.3, 'пациенту — как выставили');
+  const unbilled = { groupPct: 30, qty: 3, price: 33333 };
+  assert.equal(legacyOf(upgraded(unbilled).db), 20);
+  assert.equal(upgraded(unbilled).bill(3), 79999.2);
+  assert.equal(upgraded(unbilled).bill(null), 69999.3);
+  const plain = { billed: 'patient', qty: 3, price: 33333, before: lowerPackage(10) };   // без группы
+  assert.equal(legacyOf(upgraded(plain).db), null);
+  assert.equal(voided(upgraded(plain)).bill(3), 79999.2, 'без группы — как выставили, и плательщику');
 });
 
 test('244: CHECK — запасной замок: отметки 0/1, способ скидки, процент до 100, цена в пакете не выше цены услуги', () => {
