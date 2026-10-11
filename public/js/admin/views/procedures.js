@@ -328,7 +328,12 @@ const PROC_PERFORMER_ROLES = ['nurse', 'senior_nurse', 'doctor', 'head_doctor'];
 export function canTakeProcedure(u = currentUser()) {
     if (!u) return true;
     if (isOn(u.is_doctor)) return true;   // ADMIN_DOCTOR_LOCAL_V1 — флаг сессии (true) или строка из базы (1)
-    const roles = [u.role, ...(Array.isArray(u.extra_roles) ? u.extra_roles : [])];
+    // BACKLOG_1011_V1 — дополнительные роли доезжают с сессией (auth.js
+    // actorFromUser); строка users из базы несёт их JSON-строкой — как
+    // parseRoles сервера, понимаются оба вида.
+    let extra = u.extra_roles;
+    if (typeof extra === 'string') { try { extra = extra.trim() ? JSON.parse(extra) : []; } catch (_) { extra = []; } }
+    const roles = [u.role, ...(Array.isArray(extra) ? extra : [])];
     return roles.some((r) => PROC_PERFORMER_ROLES.includes(String(r == null ? '' : r).trim().toLowerCase()));
 }
 

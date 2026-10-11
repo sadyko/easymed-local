@@ -74,6 +74,18 @@ export async function signOutAndReload() {
 // pre-Day-1 implementation so downstream code (admin.js, permissions.js,
 // every view) doesn't need to change.
 // ---------------------------------------------------------------------------
+// BACKLOG_1011_V1 — дополнительные роли: из сессии — массивом, из строки users,
+// взятой из базы как есть, — JSON-строкой ('["lab"]'); понимаются оба вида, как
+// у сервера (services/auth.js parseRoleList, rpc/procedures.js parseRoles).
+// Неразборчивое — «надстроек нет».
+function roleListOf(v) {
+    let list = v;
+    if (typeof v === 'string') {
+        try { list = v.trim() ? JSON.parse(v) : []; } catch (_) { list = []; }
+    }
+    return Array.isArray(list) ? list.filter((r) => typeof r === 'string' && r) : [];
+}
+
 export function actorFromUser(u) {
     const role     = (u.role || '').toLowerCase();
     // is_super_admin is the explicit column from migration 045 — true only
@@ -110,6 +122,16 @@ export function actorFromUser(u) {
         // доходила: applyActorPermissions читал actor.custom_role_code и всегда
         // получал пустоту.
         custom_role_code: (typeof u.custom_role_code === 'string' && u.custom_role_code.trim()) || null,
+        // BACKLOG_1011_V1 — дополнительные роли («Сотрудники → Дополнительные
+        // роли») приезжают с сессией, а здесь отбрасывались: оболочка знала
+        // только основную роль, а сервер считает объединение (roles.js
+        // effectiveRoles). Регистратор с надстройкой «старшая медсестра» не
+        // видел «Взять» у процедуры, которую сервер ему отдаёт. Каждое правило
+        // оболочки по ролям — «есть ЛЮБАЯ из» (hasActorRole, isAdminActor,
+        // canTakeProcedure…), так что надстройки только добавляют. is_admin
+        // остаётся по основной роли: область видимости (scopedDoctorId,
+        // scopedProviderId) этим не меняется.
+        extra_roles: roleListOf(u.extra_roles),
     };
 }
 

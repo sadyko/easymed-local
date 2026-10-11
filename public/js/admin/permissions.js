@@ -284,8 +284,8 @@ export function setActorRoles(roles) { rememberRoles(roles); }
  * The role codes in force: what the permission loader was given, PLUS whatever
  * the signed-in actor carries on the app shell. Both, because neither is
  * complete on its own — `role_permissions` rows are named by role code but a
- * role with no row is dropped, and window.easymed.state.user carries the
- * primary role but (today) no extra_roles.
+ * role with no row is dropped. window.easymed.state.user carries the primary
+ * role and, since BACKLOG_1011_V1 (auth.js actorFromUser), extra_roles too.
  *
  * An EMPTY result means «unknown», and unknown never hides a menu item: this
  * gate narrows what a known-wrong role sees, it is not a second access system.

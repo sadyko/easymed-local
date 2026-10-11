@@ -13,11 +13,11 @@
 // screens import it.
 //
 // The rule, unchanged: primary role OR 'admin' in extra_roles, never
-// `user.role === 'admin'` alone. (window.easymed.state.user does not currently
-// carry `extra_roles` — see those two files' own history — so the fallback is
-// inert today exactly as theirs is; it stays so all call sites move together
-// the day that gap is closed, instead of fixing one and leaving the rest
-// silently behind again.)
+// `user.role === 'admin'` alone. BACKLOG_1011_V1 — window.easymed.state.user
+// now carries `extra_roles` (auth.js actorFromUser), so the extra-role branch
+// is live here and in every copy of this rule (cashier-desk.js,
+// telegram-chat.js, locked-module.js) at once — the day the comment above
+// waited for.
 //
 // Politeness only, everywhere it is used: every RPC re-checks the role
 // server-side no matter what renders.
