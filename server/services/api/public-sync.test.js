@@ -318,3 +318,21 @@ test('I4: заявка, запечатанная прежним ключом к�
     await syncOnce(r.db, r.dataDir, r.opts);
   }
 });
+
+// ─── РЕВЬЮ 8a, M4: ОБА ФАЙЛА КЛЮЧА ИСПОРЧЕНЫ — «КЛЮЧ ПОВРЕЖДЁН», А НЕ «ЖДЁМ ВКЛЮЧЕНИЯ» ─
+
+test('M4: испорчены оба файла ключа обмена у включённой клиники — такт «key_broken», экран «ошибка: key_broken»; в сеть ничего; время — часов такта', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  fs.writeFileSync(r.keyPath, 'испорчено');
+  fs.writeFileSync(r.keyPath + '.bak', 'испорчено');
+  r.fake.state.calls.length = 0;
+  r.tick(15000);
+  let out;
+  await quietWarns(async () => { out = await syncOnce(r.db, r.dataDir, r.opts); });
+  assert.deepEqual(out, { ok: false, reason: 'key_broken' });
+  assert.deepEqual(r.fake.state.calls, []);
+  const st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.deepEqual([st.state, st.reason, st.last_error, st.last_error_at], ['error', 'key_broken', 'key_broken', new Date(NOW + 15000).toISOString().replace('.000', '')]);
+  assert.equal(fs.readFileSync(r.keyPath, 'utf8'), 'испорчено', 'новая пара не создана');
+});

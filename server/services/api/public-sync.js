@@ -38,7 +38,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readBounded } from '../control/checkin.js';
-import { loadSyncIdentity, signRequest, openSealed, SYNC_KEY_FILE } from './sync-identity.js';
+import { loadSyncIdentity, signRequest, openSealed, SYNC_KEY_FILE, SyncIdentityError } from './sync-identity.js';
 import { buildSnapshot, buildSlots, buildKeys, contentHash } from './snapshot.js';
 import { unsentEvents, markSent, markFailed } from './outbox.js';
 import { ingestItem, expireDue } from './bookings.js';
@@ -312,7 +312,8 @@ export async function syncOnce(db, dataDir, opts = {}) {
   inFlight = true;
   try { return await performSync(db, dataDir, opts); } catch (e) {
     console.warn('[public-api] такт обмена не удался:', e && e.message);
-    saveState(db, { last_error: 'server_error', last_error_at: isoOf(Date.now()) });
+    const at = typeof opts.now === 'function' ? opts.now() : Date.now();   // M4 — часы такта
+    saveState(db, { last_error: 'server_error', last_error_at: isoOf(at) });
     return { ok: false, reason: 'server_error' };
   } finally { inFlight = false; }
 }
@@ -327,7 +328,16 @@ async function performSync(db, dataDir, opts) {
 
   const local = localBlocker(db);
   if (local) return { ok: false, reason: local };
-  const identity = loadSyncIdentity({ keyPath, create: true });
+  // Ревью 8a, M4: испорчены оба файла ключа — не «ждём Easy-Med» и не общая
+  // ошибка, а «ключ повреждён — обратитесь в Easy-Med»: само не заживёт (сверка
+  // не отдаёт открытый ключ, пока файл испорчен).
+  let identity;
+  try { identity = loadSyncIdentity({ keyPath, create: true }); } catch (e) {
+    if (!(e instanceof SyncIdentityError)) throw e;
+    console.warn('[public-api] файл ключа обмена повреждён — обратитесь в Easy-Med');
+    saveState(db, { last_error: 'key_broken', last_error_at: isoOf(now()) });
+    return { ok: false, reason: 'key_broken' };
+  }
   const vendor = vendorBlocker(dataDir, identity);
   if (vendor) return { ok: false, reason: vendor };
 
@@ -374,6 +384,7 @@ async function performSync(db, dataDir, opts) {
   }
 }
 
+const skippedOf = (st) => ({ sealed: Number(st.skipped_sealed) || 0, failed: Number(st.skipped_failed) || 0, last_at: st.skipped_last_at || null, last_ids: parseIds(st.skipped_last_ids) });
 const parseIds = (v) => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
 
 /** Для экрана «API»: идёт ли обмен и что с ним. */
@@ -385,15 +396,23 @@ export function syncStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_
   try { waiting = db.prepare("SELECT COUNT(*) AS n FROM api_requests WHERE status IN ('new', 'pending', 'offered')").get().n; } catch { waiting = 0; }
   const local = localBlocker(db);
   let identity = null;
-  try { identity = loadSyncIdentity({ keyPath }); } catch { identity = null; }
-  const vendor = local ? '' : vendorBlocker(dataDir, identity);
+  let keyBroken = false;
+  try { identity = loadSyncIdentity({ keyPath }); } catch (e) { identity = null; keyBroken = e instanceof SyncIdentityError; }
+  const vendor = local || keyBroken ? '' : vendorBlocker(dataDir, identity);
+  // M4: повреждённый ключ — «ошибка: key_broken»; нет файла — по-прежнему решает лицензия.
+  if (!local && keyBroken) {
+    return {
+      state: 'error', reason: 'key_broken', last_ok_at: st.last_ok_at || null, last_error: 'key_broken', last_error_at: st.last_error_at || null,
+      pending_events: pendingEvents, waiting_requests: waiting, skipped: skippedOf(st),
+    };
+  }
   const state = local ? 'off' : vendor ? 'waiting_vendor' : st.last_error && (!st.last_ok_at || st.last_error_at >= st.last_ok_at) ? 'error' : st.last_ok_at ? 'ok' : 'starting';
   return {
     state, reason: local || vendor || st.last_error || '',
     last_ok_at: st.last_ok_at || null, last_error: st.last_error || '', last_error_at: st.last_error_at || null,
     pending_events: pendingEvents, waiting_requests: waiting,
     // C1: пропущенные элементы очереди — до сброса администратором.
-    skipped: { sealed: Number(st.skipped_sealed) || 0, failed: Number(st.skipped_failed) || 0, last_at: st.skipped_last_at || null, last_ids: parseIds(st.skipped_last_ids) },
+    skipped: skippedOf(st),
   };
 }
 
