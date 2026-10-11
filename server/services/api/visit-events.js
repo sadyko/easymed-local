@@ -19,6 +19,13 @@ import { localDate } from '../domain/day.js';
 import { EV, isoOf, localIso } from '../../../public/js/shared/api-booking.js';
 import { enqueueEvent } from './outbox.js';
 
+// Ревью 8a, M5: сверка идёт каждые 15 секунд — не перебирать всю историю.
+// «Не пришёл» пересматривается (оплата, доехавшая позже) 14 дней после визита;
+// заявка «перезвоните» ищет запись по своей карточке 30 дней от прихода.
+export const RECHECK_NO_SHOW_DAYS = 14;
+export const RECHECK_CALLBACK_DAYS = 30;
+const DAY_MS = 24 * 3600 * 1000;
+
 const offsetMin = (ms) => -new Date(ms).getTimezoneOffset();
 const partnerTime = (iso) => { const ms = Date.parse(iso); return Number.isFinite(ms) ? localIso(ms, offsetMin(ms)) : ''; };
 const sameInstant = (a, b) => Date.parse(a) === Date.parse(b);
@@ -52,7 +59,7 @@ export function syncVisitOutcomes(db, { now = Date.now(), kekPath = null } = {})
   let callbacks = [];
   try {
     callbacks = db.prepare(`SELECT * FROM api_requests WHERE kind = 'request' AND status IN ('new', 'accepted')
-                              AND visit_id IS NULL AND crm_request_id IS NOT NULL`).all();
+                              AND visit_id IS NULL AND crm_request_id IS NOT NULL AND received_at >= ?`).all(isoOf(now - RECHECK_CALLBACK_DAYS * DAY_MS));
   } catch { return 0; }   // база до мигр. 245
   for (const r of callbacks) {
     try {
@@ -69,7 +76,7 @@ export function syncVisitOutcomes(db, { now = Date.now(), kekPath = null } = {})
   const bound = db.prepare(`SELECT r.*, ${localDate('v.visit_date')} AS visit_day, v.id AS v_id, v.status AS v_status,
                                    v.visit_date AS v_date, v.doctor_id AS v_doctor
                               FROM api_requests r LEFT JOIN visits v ON v.id = r.visit_id
-                             WHERE r.status IN ('confirmed', 'no_show')`).all();
+                             WHERE r.status = 'confirmed' OR (r.status = 'no_show' AND v.visit_date >= ?)`).all(isoOf(now - RECHECK_NO_SHOW_DAYS * DAY_MS));
   for (const r of bound) {
     try {
       db.transaction(() => {

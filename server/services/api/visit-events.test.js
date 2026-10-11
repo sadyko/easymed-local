@@ -106,3 +106,32 @@ test('I1: предоплата за день до визита — не «при
   syncVisitOutcomes(s.db, { now: localAt('2030-03-12', '09:30'), kekPath: s.kekPath });
   assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'arrived');
 });
+
+// ─── РЕВЬЮ 8a, M5: СВЕРКА НЕ ПЕРЕБИРАЕТ ВСЮ ИСТОРИЮ КАЖДЫЙ ТАКТ ──────────────
+
+test('M5: «не пришёл» сверяется 14 дней после визита (оплата позже — «пришёл»); старше — нет', async () => {
+  const s = bookingSeed();
+  const { id, visit } = await confirmed(s);
+  syncVisitOutcomes(s.db, { now: localAt('2030-03-13', '09:00'), kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'no_show');
+  s.db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES (1, 'INV-1', ?, 1, 150000, 150000, 150000, 'paid')").run(visit.id);
+  assert.equal(syncVisitOutcomes(s.db, { now: localAt('2030-03-30', '09:00'), kekPath: s.kekPath }), 0, '18 дней спустя — не пересматривается');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'no_show');
+  assert.equal(syncVisitOutcomes(s.db, { now: localAt('2030-03-20', '09:00'), kekPath: s.kekPath }), 1, 'в пределах 14 дней — исправляется');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'arrived');
+});
+
+test('M5: заявка «перезвоните» ищет запись по карточке 30 дней от прихода заявки; старше — нет', async () => {
+  const s = bookingSeed();
+  const r = await ingestItem(s.db, { ...apptItem({ connId: s.connId, publicId: 'rq_call0001', startMs: START, receivedMs: localAt('2030-01-20', '09:00') }), type: 'request.new',
+    data: { external_id: 'cb-1', service_id: 301 } }, { now: localAt('2030-01-20', '09:00') });
+  const card = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', r.id).c;
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  s.db.prepare('UPDATE crm_requests SET patient_id = 1 WHERE id = ?').run(card);
+  s.db.prepare("UPDATE crm_request_services SET scheduled_date = '2030-03-12', doctor_id = 7 WHERE request_id = ?").run(card);
+  const ev = await ensureVisit(s.db, { patient_id: 1, date: '2030-03-12', book: { doctor_id: 7, start: new Date(START).toISOString(), duration_minutes: 15, service_id: 301 } }, s.cc);
+  assert.equal(ev.booked, true);
+  assert.equal(syncVisitOutcomes(s.db, { now: NOW, kekPath: s.kekPath }), 0, 'заявке 50 дней — не сверяется');
+  s.db.prepare("UPDATE api_requests SET received_at = '2030-03-01T04:00:00Z' WHERE id = ?").run(r.id);
+  assert.equal(syncVisitOutcomes(s.db, { now: NOW, kekPath: s.kekPath }), 1);
+});
