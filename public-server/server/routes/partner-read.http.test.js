@@ -155,13 +155,17 @@ test('журнал запросов: известный путь и параме
   await s.get('/shifo/v1/doctors?lang=ru&specialty=pediatr&name=ИМЯ_ПАЦИЕНТА');
   await s.get('/shifo/v1/ИМЯ_В_ПУТИ');
   await s.get('/shifo/v1/clinic', { auth: false });
+  // Город, район, специальность — в журнал только кодом справочника: телефон в фильтре похож на «верный вид» [a-z0-9-].
+  await s.get('/shifo/v1/doctors?specialty=998907654321&district=998907654321&city=tashkent-city');
   const rows = s.db.prepare('SELECT connection_id, method, path, status FROM access_log ORDER BY id').all();
   assert.deepEqual(rows.map((r) => [r.connection_id, r.path, r.status]), [
     [3, '/shifo/v1/doctors?lang=ru&specialty=pediatr', 200],
     [3, '/shifo/v1/?', 404],
     [null, '/shifo/v1/clinic', 401],
+    [3, '/shifo/v1/doctors?city=tashkent-city', 200],
   ]);
   assert.ok(!JSON.stringify(s.db.prepare('SELECT * FROM access_log').all()).includes('ИМЯ'));
+  assert.ok(!JSON.stringify(s.db.prepare('SELECT * FROM access_log').all()).includes('998907654321'));
   assert.ok(s.db.prepare('SELECT last_used_at FROM connections').get().last_used_at, '«последний запрос» отмечен');
 });
 

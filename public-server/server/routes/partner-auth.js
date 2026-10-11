@@ -22,6 +22,8 @@
 // списку и по виду значения; присланного сверх этого в журнал не попадает.
 import { KEY_RE } from '../../../public/js/shared/api-connections.js';
 import { API_GROUPS } from '../../../public/js/shared/service-public.js';
+import { GEO_REGION_CODES, GEO_DISTRICT_CODES } from '../../../public/js/shared/geo-codes.js';
+import { SPECIALTY_ROWS } from '../../../public/js/shared/specialty-list.js';
 import { keyHash } from '../../../server/services/api/secret-box.js';
 import { resolveSlug, connectionByHash, originAllowedForClinic, markUsed, snapshotOf } from '../store/clinics.js';
 import { recordAccess } from '../store/logs.js';
@@ -42,10 +44,14 @@ const KNOWN_PATHS = [
   new RegExp(`^\\/requests\\/${RQ}$`),
   new RegExp(`^\\/appointments\\/${RQ}(\\/(accept|decline))?$`),
 ];
+// Город, район, специальность — только коды справочников программы: вид
+// [a-z0-9-] пропустил бы в журнал и телефон, вписанный в фильтр (сборщик Б,
+// усиление сверх плана).
+const listed = (codes) => { const set = new Set(codes); return { test: (v) => set.has(v) }; };
 const QUERY_RULES = {
   lang: /^(ru|uz|en)$/, doctor_id: /^\d{1,9}$/, service_id: /^\d{1,9}$/, branch_id: /^\d{1,9}$/, date: /^\d{4}-\d{2}-\d{2}$/,
-  consultation: /^(initial|repeat)$/, group: new RegExp('^(' + API_GROUPS.join('|') + ')$'), specialty: /^[a-z0-9-]{1,60}$/,
-  district: /^[a-z0-9-]{1,60}$/, city: /^[a-z0-9-]{1,60}$/,
+  consultation: /^(initial|repeat)$/, group: new RegExp('^(' + API_GROUPS.join('|') + ')$'), specialty: listed(SPECIALTY_ROWS.map((r) => r.slug)),
+  district: listed(GEO_DISTRICT_CODES), city: listed(GEO_REGION_CODES),
 };
 
 /** Путь для журнала: известный адрес — как есть, иначе «/?»; параметры — только известные и только верного вида. */
