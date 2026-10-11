@@ -102,7 +102,13 @@ export function syncVisitOutcomes(db, { now = Date.now(), kekPath = null } = {})
         // отметка «Пришёл», работа над услугой, ПЛАТЁЖ в день визита или позже.
         // Предоплата накануне — не приход: прежде она с полуночи дня визита делала
         // заявку «пришёл», и отмена или перенос в тот же день до партнёра не доходили.
-        const came = cameSurely(db, { id: r.v_id, status: r.v_status, day: r.visit_day });
+        // Финальная проверка 8a, п. 3: и регистрация на стойке — правило прихода
+        // CRM (deskArrive → crmVisitStatus) закрывает строки карточки этого визита
+        // ('done'), а сам визит остаётся «записан». Бесплатная консультация или
+        // неоплаченный счёт иначе давали наутро «не пришёл». Только с дня визита:
+        // предоплата накануне строк не закрывает (I1 держится).
+        const came = cameSurely(db, { id: r.v_id, status: r.v_status, day: r.visit_day })
+          || (r.visit_day <= today && !!db.prepare("SELECT 1 FROM crm_request_services WHERE visit_id = ? AND status = 'done' LIMIT 1").get(r.v_id));
         if (came) {
           emit(update(db, r.id, { status: 'arrived' }, now), EV.arrived, 'arrived', { doctor_id: r.v_doctor });
           changed += 1;
