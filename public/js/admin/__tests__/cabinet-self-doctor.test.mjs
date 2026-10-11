@@ -181,3 +181,25 @@ test('«Зарплата»: администратор переключает в
   assert.ok(host.textContent.includes(paySubtitle('Каримов Бахтиёр')));
   assert.equal(selectedId(host), String(KARIMOV));
 });
+
+// 2. «Зарплата» администратора-врача открывается на НЁМ САМОМ: это его
+//    кабинет. Прежде — на первом враче по алфавиту, и свои деньги он искал в
+//    списке. Остальные врачи в списке остаются: администратор видит всех.
+test('«Зарплата» администратора-врача открывается на нём самом, а не на первом по алфавиту; выбор других врачей остаётся', async () => {
+  const host = await openCabinet('admdoc', 'pay');
+  assert.ok(host.textContent.includes(paySubtitle('Юсупова Дилноза')),
+    'кабинет администратора-врача открылся не на нём: ' + host.textContent.slice(0, 160));
+  assert.equal(selectedId(host), String(ADMDOC));
+  assert.strictEqual(lastPayCall().body.doctor_id, ADMDOC, 'начисления запрошены не его');
+  const ids = walk(paySelect(host)).filter((o) => o.tagName === 'OPTION').map((o) => o.attrs.value);
+  assert.ok(ids.includes(String(KARIMOV)), 'администратор-врач потерял выбор остальных врачей: ' + ids.join(','));
+});
+
+test('«Зарплата»: администратор не врач — по-прежнему первый врач по алфавиту; обычный врач — только он сам', async () => {
+  const boss = await openCabinet('boss', 'pay');
+  assert.ok(boss.textContent.includes(paySubtitle('Каримов Бахтиёр')));
+  assert.equal(selectedId(boss), String(KARIMOV));
+  const doc = await openCabinet('doc', 'pay');
+  assert.ok(doc.textContent.includes(paySubtitle('Каримов Бахтиёр')));
+  assert.equal(paySelect(doc), undefined, 'у врача под своим входом выбора врача нет');
+});

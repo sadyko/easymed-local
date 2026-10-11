@@ -1529,6 +1529,14 @@ async function loadDoctorsForDash() {
         state.dash.doctorId = docId;
     }
     state.dash.doctors = list;
+    // BACKLOG_1011_V1 — администратор-врач видит всех врачей (сужения нет), но
+    // кабинет — его: «Зарплата» открывается на нём самом, а не на первом по
+    // алфавиту. selfDoctorId — «какой я врач», а не область видимости.
+    if (!state.dash.doctorId) {
+        const me = selfDoctorId();
+        const mine = me != null ? list.find(u => sameId(u.id, me)) : null;
+        if (mine) state.dash.doctorId = mine.id;
+    }
     if (!state.dash.doctorId && state.dash.doctors[0]) {
         state.dash.doctorId = state.dash.doctors[0].id;
     }
