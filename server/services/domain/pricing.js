@@ -210,15 +210,6 @@ export function productLineUnitPrice(row, product) {
   return product ? product.sale_price : 0;
 }
 
-// SERVICES_PACKAGES_V1 (было PACKAGES_V1, ревью M3) — скидка пакета строки,
-// которую даст касса, или 0. Цена в пакете записана на строке при записи
-// (packageLineMoney); здесь — только срок: местный день визита лежит в
-// [valid_from, valid_until] (границы включительно, пустая — без ограничения).
-// Вне срока касса ОТКАЗЫВАЕТ выставлять счёт (billing.js linePackage), и доля
-// врача за выполненную, но ещё не выставленную строку считается без скидки
-// пакета, как обычная строка. Пакет удалён (package_id снят базой) — цена,
-// записанная при записи, остаётся: обещанное пациенту не отменяется.
-// `pkg` — строка service_templates или null; `visitDay` — 'YYYY-MM-DD'. Чистая функция.
 // SERVICES_PACKAGES_V1 (ревью шага 6, C1) — СТРОКА, ЗАПИСАННАЯ ДО МИГР. 244
 // (package_legacy = 1, ещё не выставленная при обновлении). Её записанная цена
 // — «по названному правилу»: бо́льшая из скидки пакета и скидки группы
@@ -238,6 +229,15 @@ export function legacyPackageOnlyOff(row, lineAmount, pkgPct) {
   return pct > 0 ? Math.min(amount, Math.round(amount * pct / 100 * 100) / 100) : 0;
 }
 
+// SERVICES_PACKAGES_V1 (было PACKAGES_V1, ревью M3) — скидка пакета строки,
+// которую даст касса, или 0. Цена в пакете записана на строке при записи
+// (packageLineMoney); здесь — только срок: местный день визита лежит в
+// [valid_from, valid_until] (границы включительно, пустая — без ограничения).
+// Вне срока касса ОТКАЗЫВАЕТ выставлять счёт (billing.js linePackage), и доля
+// врача за выполненную, но ещё не выставленную строку считается без скидки
+// пакета, как обычная строка. Пакет удалён (package_id снят базой) — цена,
+// записанная при записи, остаётся: обещанное пациенту не отменяется.
+// `pkg` — строка service_templates или null; `visitDay` — 'YYYY-MM-DD'. Чистая функция.
 export function packageLineDiscount(row, pkg, visitDay) {
   const m = packageLineMoney(row);
   if (!m || !(m.discount > 0)) return 0;
