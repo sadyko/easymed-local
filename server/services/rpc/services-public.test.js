@@ -98,3 +98,20 @@ test('показ услуг: не администратор — 403; филиа
   assert.equal(overview(db).can_edit, false);
   assert.equal(overview(db).secondary, true);
 });
+
+// SERVICES_PACKAGES_V1 (ревью шага 6, C5) — показ услуги-консультации в строке
+// врача — то же правило, что у строки услуги (servicePublicState: RU + UZ), а не
+// голый флаг: услуга с флагом, но без узбекского названия (импорт до
+// CLINIC_API_FIX_V1) не «На сайте» ни там, ни там.
+test('ревью C5: услуга врача «на сайте» — тем же правилом, что строка услуги; строки не расходятся', () => {
+  const db = clinic();
+  db.prepare('UPDATE services SET name_uz = NULL, online_booking = 1 WHERE id = 10').run();
+  const r = overview(db);
+  const svc = new Map(r.services.map((s) => [s.id, s]));
+  assert.equal(svc.get(10).online, false, 'без узбекского названия — не показывается');
+  let seen = 0;
+  for (const d of r.doctors) {
+    for (const s of d.services) { seen++; assert.equal(s.online, svc.get(s.service_id).online, 'врач ' + d.id + ', услуга ' + s.service_id); }
+  }
+  assert.ok(seen >= 2, 'проверены услуги врачей: ' + seen);
+});

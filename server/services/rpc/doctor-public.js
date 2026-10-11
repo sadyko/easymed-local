@@ -19,7 +19,7 @@ import { doctorPriceFor } from '../domain/pricing.js';
 import { PREVIEW_DAYS, PUBLIC_SLOT_MIN, BOOKING_DAYS, DEFAULT_BOOKING_DAYS } from '../../../public/js/shared/doctor-public.js';
 import { doctorConsultations } from '../../../public/js/shared/consultation-price.js';
 import { categoryOf } from '../../../public/js/shared/service-categories.js';
-import { isOn } from '../../../public/js/shared/flags.js';
+import { servicePublicState } from '../../../public/js/shared/service-public.js';   // SERVICES_PACKAGES_V1 (ревью C5) — показ услуги: одно правило
 
 export class RpcError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -46,7 +46,8 @@ export function doctorConsultOffer(db, doctorId) {
  * Решение владельца 12: услуги прайса группы «Консультации», которые врач
  * оказывает (users.service_rates — та же связь, что у кассы, окна записи, CRM и
  * оплаты врача). Цена — своя у врача, иначе каталог; online — показ услуги
- * (services.online_booking).
+ * тем же правилом, что строка услуги (shared/service-public.js: флаг
+ * online_booking и названия RU + UZ; ревью шага 6, C5).
  */
 export function doctorConsultServices(db, doctorId) {
   const u = db.prepare('SELECT service_rates FROM users WHERE id = ?').get(doctorId);
@@ -58,7 +59,7 @@ export function doctorConsultServices(db, doctorId) {
     const own = doctorPriceFor(db, Number(doctorId), s.id);
     return {
       service_id: s.id, name: { ru: s.name || '', uz: s.name_uz || '', en: s.name_en || '' },
-      price: own != null ? own : Math.max(0, Number(s.price) || 0), own: own != null, online: isOn(s.online_booking),
+      price: own != null ? own : Math.max(0, Number(s.price) || 0), own: own != null, online: servicePublicState({ ...s, active: 1 }) === 'shown',
     };
   });
 }
