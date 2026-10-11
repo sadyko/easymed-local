@@ -106,10 +106,16 @@ test('отказ двери записи (экстренная запись по
   patient(s);
   patient(s, 2, 'Другой Пациент');
   await calendarBook(s.db, { patient_id: 2, doctor_id: 7, start: new Date(START).toISOString(), duration_minutes: 30, emergency: true, emergency_reason: 'боль' }, s.reg);
+  const cardId = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', id).c;
+  const cardBefore = { ...one(s.db, 'SELECT patient_id, status FROM crm_requests WHERE id = ?', cardId) };
   const e = await refusal(confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath }));
   assert.equal(e.code, 'slot_taken');
-  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'pending');
+  assert.deepEqual({ ...one(s.db, 'SELECT status, patient_id, visit_id FROM api_requests WHERE id = ?', id) }, { status: 'pending', patient_id: null, visit_id: null });
+  // PUBLIC_API_V1 — неудача возвращает и карточку: выбранная карта (1) не остаётся на ней.
+  assert.deepEqual({ ...one(s.db, 'SELECT patient_id, status FROM crm_requests WHERE id = ?', cardId) }, cardBefore, 'карточка — как до подтверждения');
+  assert.notEqual(cardBefore.patient_id, 1);
   assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM visits WHERE patient_id = 1').n, 0);
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM slot_holds WHERE api_request_id = ? AND released_at IS NULL', id).n, 1, 'удержание заявки на месте');
 });
 
 test('семья на одном номере: карточку по номеру связали с мамой — регистратор выбирает ребёнка, визит и консультация — у ребёнка', async () => {
