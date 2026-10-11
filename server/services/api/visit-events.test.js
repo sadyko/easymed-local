@@ -135,3 +135,29 @@ test('M5: заявка «перезвоните» ищет запись по к�
   s.db.prepare("UPDATE api_requests SET received_at = '2030-03-01T04:00:00Z' WHERE id = ?").run(r.id);
   assert.equal(syncVisitOutcomes(s.db, { now: NOW, kekPath: s.kekPath }), 1);
 });
+
+// ─── ПОВТОРНАЯ ПРОВЕРКА 8a, п. 2: «ПЕРЕЗВОНИТЕ» НЕ БЕРЁТ СТАРЫЙ ВИЗИТ СЛИТОЙ КАРТОЧКИ ─
+
+test('рр-2: после слияния с карточкой январского визита заявка «перезвоните» не привязывается к нему — партнёру ничего; новая запись по карточке — привязывается', async () => {
+  const { crmMergeLeads } = await import('../rpc/crm-merge.js');
+  for (const keepApi of [true, false]) {
+    const s = bookingSeed();
+    s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+    const OLD = localAt('2030-01-10', '10:00');
+    const vOld = Number(s.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (1, 8, ?, 'arrived')").run(new Date(OLD).toISOString()).lastInsertRowid);
+    const old = Number(s.db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, patient_id, scheduled_date, created_at) VALUES ('Абдурахмонов Фаррух', '+998901234567', 'call', 'in_process', 1, '2030-01-10', '2030-01-09T09:00:00Z')").run().lastInsertRowid);
+    s.db.prepare("INSERT INTO crm_request_services (request_id, consultation_type_id, doctor_id, scheduled_date, status, visit_id) VALUES (?, 2, 8, '2030-01-10', 'done', ?)").run(old, vOld);
+    const r = await ingestItem(s.db, { ...apptItem({ connId: s.connId, publicId: 'rq_call0001', startMs: NOW, receivedMs: NOW }), type: 'request.new',
+      data: { external_id: 'cb-1', service_id: 301 } }, { now: NOW });
+    const apiCard = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', r.id).c;
+    crmMergeLeads(s.db, keepApi ? { keep_id: apiCard, merge_ids: [old] } : { keep_id: old, merge_ids: [apiCard] }, s.admin);
+    assert.equal(syncVisitOutcomes(s.db, { now: NOW + 60000, kekPath: s.kekPath }), 0, 'keepApi=' + keepApi);
+    assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', r.id).status, 'new');
+    assert.equal(count(s), 0, 'о январском визите партнёру не уходит ничего');
+    const card = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', r.id).c;
+    s.db.prepare("UPDATE crm_request_services SET scheduled_date = '2030-03-12', doctor_id = 7 WHERE request_id = ? AND status = 'pending'").run(card);
+    const ev = await ensureVisit(s.db, { patient_id: 1, date: '2030-03-12', book: { doctor_id: 7, start: new Date(START).toISOString(), duration_minutes: 15, service_id: 301 } }, s.cc);
+    assert.equal(syncVisitOutcomes(s.db, { now: NOW + 120000, kekPath: s.kekPath }), 1);
+    assert.equal(one(s.db, 'SELECT visit_id FROM api_requests WHERE id = ?', r.id).visit_id, ev.visit.id, 'настоящая запись — привязана');
+  }
+});

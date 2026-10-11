@@ -37,14 +37,24 @@ function update(db, id, fields, now) {
   return db.prepare('SELECT * FROM api_requests WHERE id = ?').get(id);
 }
 
-/** Живой визит своего здания, который держит карточка: привязкой или строкой. */
-function bookedVisitOfCard(db, crmRequestId) {
+/**
+ * Визит своего здания, который держит карточка (привязкой или строкой) и
+ * который могла завести ЭТА заявка: до прихода (PRE_ARRIVAL) и не раньше дня,
+ * когда она пришла. Повторная проверка 8a, п. 2: после слияния карточек
+ * («Дубликаты») карточка несёт и старые визиты другой карточки — январский
+ * визит или визит родственника на том же номере уходил партнёру как запись по
+ * его заявке. Не по visits.created_at: это настоящие часы, а сверка живёт во
+ * времени такта. Оставшаяся щель: будущий визит родственника на слитой
+ * карточке всё ещё может быть принят за запись по заявке.
+ */
+function bookedVisitOfCard(db, crmRequestId, receivedAt) {
   return db.prepare(`
     SELECT v.* FROM visits v
-     WHERE v.status NOT IN ('cancelled', 'no_show') AND v.sync_origin IS NULL
+     WHERE v.status IN (${PRE_ARRIVAL.map(() => '?').join(', ')}) AND v.sync_origin IS NULL
+       AND ${localDate('v.visit_date')} >= ${localDate('?')}
        AND (v.id IN (SELECT visit_id FROM crm_booking_links WHERE request_id = ?)
             OR v.id IN (SELECT visit_id FROM crm_request_services WHERE request_id = ? AND visit_id IS NOT NULL))
-     ORDER BY v.visit_date, v.id LIMIT 1`).get(crmRequestId, crmRequestId) || null;
+     ORDER BY v.visit_date, v.id LIMIT 1`).get(...PRE_ARRIVAL, receivedAt, crmRequestId, crmRequestId) || null;
 }
 
 /**
@@ -63,7 +73,7 @@ export function syncVisitOutcomes(db, { now = Date.now(), kekPath = null } = {})
   } catch { return 0; }   // база до мигр. 245
   for (const r of callbacks) {
     try {
-      const v = bookedVisitOfCard(db, r.crm_request_id);
+      const v = bookedVisitOfCard(db, r.crm_request_id, r.received_at);
       if (!v) continue;
       db.transaction(() => {
         const out = update(db, r.id, { status: 'confirmed', visit_id: v.id, patient_id: v.patient_id, doctor_id: v.doctor_id, start_at: isoOf(Date.parse(v.visit_date)) }, now);
