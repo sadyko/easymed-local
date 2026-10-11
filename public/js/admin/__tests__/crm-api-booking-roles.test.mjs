@@ -26,7 +26,10 @@ async function seeded() {
 }
 function mountAs(x, user) {
   const wrap = (fn) => async (body) => {
-    try { return await fn(x.s.db, body, user); } catch (e) { return { __error: { message: e.message, code: e.code || '' }, status: e.status || 400 }; }
+    // Отказ — тем же телом, что routes/rpc.js: код, текст, шаблон и params (экран переводит по шаблону).
+    try { return await fn(x.s.db, body, user); } catch (e) {
+      return { __error: { message: e.message, code: e.code || '', ...(e.template ? { template: e.template } : {}), ...(e.params ? { params: e.params } : {}) }, status: e.status || 400 };
+    }
   };
   reset();
   for (const [name, fn] of [['api_booking_list', srv.apiBookingList], ['api_booking_candidates', srv.apiBookingCandidates],
@@ -60,4 +63,28 @@ test('регистратура: выбор карты и «Подтвердит�
   byAttr(box, 'data-apib', 'confirm')[0].click();
   await tick(80);
   assert.equal(x.s.db.prepare('SELECT status FROM api_requests WHERE id = ?').get(x.id).status, 'confirmed', lastToast());
+});
+
+// PUBLIC_API_V1 — ревью шага 8a, I7: у выбранной карты на этот день уже есть запись
+// (колл-центр записал на 15:00 к тому же врачу). Подтверждение её не переносит —
+// сервер отказывает «day_visit_exists»; окно говорит это словами отказа (со
+// временем и врачом той записи) и остаётся с кнопками: регистратор решает в
+// календаре или предлагает партнёру другое время.
+test('регистратура: у карты уже есть запись на этот день — отказ словами сервера, окно и заявка как были', async () => {
+  const x = await seeded();
+  const { ensureVisit } = await import('../../../../server/services/rpc/visits.js');
+  const at = new Date(localAt(day, '15:00')).toISOString();
+  const ph = await ensureVisit(x.s.db, { patient_id: 1, date: at, doctor_id: 7, book: { doctor_id: 7, start: at, duration_minutes: 30 } }, x.s.cc);
+  assert.equal(ph.booked, true);
+  const visitBefore = { ...x.s.db.prepare('SELECT id, visit_date, status FROM visits WHERE patient_id = 1').get() };
+  const box = mountAs(x, x.s.reg);
+  await tick(50);
+  buttonByText(walk(box).find((n) => n.attrs && n.attrs['data-candidate'] === '1'), /Выбрать/).click();
+  await tick();
+  byAttr(box, 'data-apib', 'confirm')[0].click();
+  await tick(80);
+  assert.match(String(lastToast()), /^У пациента на этот день уже есть запись \(15:00, врач .+\) — подтверждение перенесло бы её на время онлайн-записи\./);
+  assert.equal(x.s.db.prepare('SELECT status FROM api_requests WHERE id = ?').get(x.id).status, 'pending');
+  assert.deepEqual({ ...x.s.db.prepare('SELECT id, visit_date, status FROM visits WHERE patient_id = 1').get() }, visitBefore, 'та запись не сдвинута');
+  assert.ok(byAttr(box, 'data-apib', 'offer')[0], '«Предложить другое время» на месте');
 });
