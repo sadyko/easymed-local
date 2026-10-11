@@ -3,7 +3,7 @@
 // попыток для клиники.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deliverDue, purgeDeliveries, RETRY_MINUTES } from './deliveries.js';
+import { deliverDue, purgeDeliveries, RETRY_MINUTES, createHostBreaker, pendingCount, PENDING_PER_CLINIC_MAX } from './deliveries.js';
 import { applyEvents } from './requests.js';
 import { admitClinic } from './clinics.js';
 import { deliveryLogSince } from './logs.js';
@@ -76,4 +76,86 @@ test('уборка: законченные старше 30 дней', async () =
   await deliverDue(s.db, { now: NOW, send: async () => ({ status: 204 }) });
   assert.equal(purgeDeliveries(s.db, NOW + 29 * 86400000), 0);
   assert.equal(purgeDeliveries(s.db, NOW + 31 * 86400000), 1);
+});
+
+// ── Честная очередь (проверка 8b, C8): зависший адрес не держит чужие уведомления ──
+const TARPIT = 'https://hooks.tarpit.uz/h';
+const HEALTHY = 'https://med24.uz/hooks';
+const later = (ms) => new Promise((r) => setTimeout(r, ms));
+function queue(db, clinicId, url, n, from) {
+  const ins = db.prepare(`INSERT INTO deliveries (clinic_id, connection_id, event_id, event, url, body, signature, next_at, created_at, updated_at)
+                          VALUES (?, 1, ?, 'booking.declined', ?, '{}', ?, ?, ?, ?)`);
+  for (let i = 0; i < n; i += 1) ins.run(clinicId, clinicId + '-' + url.length + '-' + from + '-' + i, url, SIG, isoOf(from + i), isoOf(NOW), isoOf(NOW));
+}
+function tarpitSend(sent) {
+  return async ({ url }) => {
+    sent.push(url);
+    if (url === TARPIT) { await later(30); return { status: 0, error: 'timeout' }; }
+    return { status: 200 };
+  };
+}
+
+test('честная очередь: 40 уведомлений одной клиники на зависший адрес не задерживают другую клинику — та же волна', async () => {
+  const { db } = testDb();
+  queue(db, 'c-a', TARPIT, 40, NOW - 60000);
+  queue(db, 'c-b', HEALTHY, 1, NOW - 1000);
+  const sent = [];
+  const r = await deliverDue(db, { now: NOW, send: tarpitSend(sent), breaker: createHostBreaker() });
+  assert.ok(sent.includes(HEALTHY), 'чужая клиника — в первой же волне');
+  assert.equal(sent.filter((u) => u === TARPIT).length, 1, 'на зависший адрес — одна настоящая отправка');
+  assert.deepEqual(r, { attempts: 3, delivered: 1, failed: 0, retrying: 2 });
+  assert.deepEqual(db.prepare("SELECT last_error AS e FROM deliveries WHERE url = ? AND attempts = 1 ORDER BY id").all(TARPIT).map((x) => x.e),
+    ['timeout', 'host_down'], 'второе на тот же адрес — без отправки, попытка засчитана');
+});
+
+test('честная очередь внутри клиники: её же другой партнёр не ждёт, пока разберётся зависший', async () => {
+  const { db } = testDb();
+  queue(db, 'c-a', TARPIT, 30, NOW - 60000);
+  queue(db, 'c-a', HEALTHY, 1, NOW - 1000);
+  const sent = [];
+  await deliverDue(db, { now: NOW, send: tarpitSend(sent), breaker: createHostBreaker() });
+  assert.ok(sent.includes(HEALTHY));
+});
+
+test('отказавший адрес отдыхает минуту без отправок, его попытки идут своим чередом; потом снова пробуем', async () => {
+  const { db } = testDb();
+  queue(db, 'c-a', TARPIT, 10, NOW - 60000);
+  const breaker = createHostBreaker();
+  const sent = [];
+  await deliverDue(db, { now: NOW, send: tarpitSend(sent), breaker });
+  assert.equal(sent.length, 1);
+  const r2 = await deliverDue(db, { now: NOW + 5000, send: tarpitSend(sent), breaker });
+  assert.equal(sent.length, 1, 'через 5 секунд — ни одной отправки на отказавший адрес');
+  assert.equal(r2.attempts, 8, 'все подошедшие строки отдыхающего хоста — попыткой без отправки, по своему расписанию, а не по две за волну');
+  await deliverDue(db, { now: NOW + 61000, send: tarpitSend(sent), breaker });
+  assert.equal(sent.length, 2, 'через минуту — снова одна настоящая попытка');
+});
+
+test('одновременно — не больше четырёх отправок и не больше одной на адрес; волна берёт всех по очереди', async () => {
+  const { db } = testDb();
+  for (let h = 0; h < 10; h += 1) queue(db, 'c-' + h, 'https://h' + h + '.partner.uz/x', 2, NOW - 60000 + h);
+  let now = 0;
+  let peak = 0;
+  let hostPeak = 0;
+  const per = new Map();
+  const send = async ({ url }) => {
+    now += 1; peak = Math.max(peak, now);
+    per.set(url, (per.get(url) || 0) + 1); hostPeak = Math.max(hostPeak, per.get(url));
+    await later(5);
+    now -= 1; per.set(url, per.get(url) - 1);
+    return { status: 200 };
+  };
+  const r = await deliverDue(db, { now: NOW, send, breaker: createHostBreaker() });
+  assert.equal(r.delivered, 20);
+  assert.equal(peak, 4);
+  assert.equal(hostPeak, 1);
+});
+
+test('для приёма событий: сколько у клиники ждёт доставки, и потолок очереди', () => {
+  const { db } = testDb();
+  queue(db, 'c-a', HEALTHY, 3, NOW);
+  queue(db, 'c-b', HEALTHY, 1, NOW);
+  db.prepare("UPDATE deliveries SET state = 'delivered' WHERE id = 1").run();
+  assert.equal(pendingCount(db, 'c-a'), 2);
+  assert.ok(PENDING_PER_CLINIC_MAX >= 1000);
 });
