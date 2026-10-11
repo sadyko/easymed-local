@@ -516,7 +516,11 @@ function inpatientRow(r, onChange) {
     const right = [];
     // ADMITTING_DOCTOR_V1 — я ли приёмный врач этого пациента: тогда осмотр при
     // поступлении и назначение лечащего — мои, и сервер пустит меня по имени.
-    const meDoc = scopedDoctorId();
+    // BACKLOG_1011_V1 — «какой я врач» — selfDoctorId: у администратора-врача
+    // scopedDoctorId() — null (он видит всех), и названный приёмным врачом он
+    // получал осмотр главного врача вместо своего. Сужение данных (loadInpatients,
+    // loadInpatientWaiting) по-прежнему решает scopedDoctorId.
+    const meDoc = selfDoctorId();
     const mine = meDoc != null && r.admitting_doctor_id != null && String(r.admitting_doctor_id) === String(meDoc);
     const toIntake = () => {
         const fn = typeof window !== 'undefined' && window.easymed && window.easymed.navigate;
@@ -580,7 +584,7 @@ function inpatientRow(r, onChange) {
  * состояние, и цифра, которая никогда не гаснет, перестаёт читаться.
  */
 export function waitingOf(rows) {
-    const meDoc = scopedDoctorId();
+    const meDoc = selfDoctorId();   // BACKLOG_1011_V1 — «мой» пациент: какой я врач, как у кнопки строки
     const can = state.inpt.can || {};
     return (rows || []).filter((r) => {
         const mine = meDoc != null && r.admitting_doctor_id != null && String(r.admitting_doctor_id) === String(meDoc);

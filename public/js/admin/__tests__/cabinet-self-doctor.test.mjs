@@ -203,3 +203,35 @@ test('«Зарплата»: администратор не врач — по-п
   assert.ok(doc.textContent.includes(paySubtitle('Каримов Бахтиёр')));
   assert.equal(paySelect(doc), undefined, 'у врача под своим входом выбора врача нет');
 });
+
+// 3. «Стационар» кабинета: «я ли приёмный врач этого пациента» — вопрос «какой
+//    я врач» (selfDoctorId), а не область видимости (scopedDoctorId, у
+//    администратора — null). Администратор-врач, названный приёмным врачом,
+//    получал «Провести первичный осмотр» главного врача вместо своего
+//    «Осмотр приёмного врача».
+function seedAdmission(admittingId) {
+  DB.prepare("INSERT OR IGNORE INTO patients (id, full_name) VALUES (3, 'Иванов Иван')").run();
+  const ward = DB.prepare("INSERT INTO wards (name) VALUES ('Терапия')").run().lastInsertRowid;
+  const bed = DB.prepare("INSERT INTO beds (code, ward_id, status) VALUES ('T-1', ?, 'occupied')").run(ward).lastInsertRowid;
+  return DB.prepare(`INSERT INTO admissions (patient_id, doctor_id, admitting_doctor_id, status, ward_id, bed_id, admitted_at, created_at)
+                     VALUES (3, ?, ?, 'admitted', ?, ?, ?, ?)`).run(admittingId, admittingId, ward, bed, new Date().toISOString(), new Date().toISOString()).lastInsertRowid;
+}
+const buttonsText = (host) => walk(host).filter((n) => n.tagName === 'BUTTON').map((b) => b.textContent);
+
+test('«Стационар»: администратор-врач, названный приёмным врачом, получает «Осмотр приёмного врача», а не первичный осмотр главного врача', async () => {
+  const id = seedAdmission(ADMDOC);
+  try {
+    const host = await openCabinet('admdoc', 'inpatients');
+    const btns = buttonsText(host);
+    assert.ok(host.textContent.includes('Иванов Иван'), 'пациента в «Стационаре» нет: ' + host.textContent.slice(0, 200));
+    assert.ok(btns.some((t) => t.includes(tr('Осмотр приёмного врача'))), 'нет «Осмотр приёмного врача»: ' + JSON.stringify(btns));
+    assert.ok(!btns.some((t) => t.includes(tr('Провести первичный осмотр'))), 'администратору-врачу предложен осмотр главного врача');
+    // Администратор не врач — тот же пациент, но не «мой»: первичный осмотр (сервер пускает, can.examine).
+    const boss = await openCabinet('boss', 'inpatients');
+    const bossBtns = buttonsText(boss);
+    assert.ok(bossBtns.some((t) => t.includes(tr('Провести первичный осмотр'))), 'администратор потерял первичный осмотр: ' + JSON.stringify(bossBtns));
+    assert.ok(!bossBtns.some((t) => t.includes(tr('Осмотр приёмного врача'))));
+  } finally {
+    DB.prepare('DELETE FROM admissions WHERE id = ?').run(id);
+  }
+});
