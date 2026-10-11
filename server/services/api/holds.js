@@ -12,6 +12,9 @@
 //
 // Не бросает при чтении: база до мигр. 245 — удержаний нет.
 import { isoOf } from '../../../public/js/shared/api-booking.js';
+// PUBLIC_API_V1 — решение владельца 18: рабочие минуты удержания — по часам
+// здания, тем же чтением, что сужает окна врачей в движке записи.
+import { clinicWindow } from '../rpc/slot-engine.js';
 
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -64,4 +67,26 @@ export function placeHold(db, { doctorId, startMs, durationMin, untilMs, apiRequ
 export function releaseHolds(db, apiRequestId, reason, now = Date.now()) {
   return db.prepare('UPDATE slot_holds SET released_at = ?, release_reason = ? WHERE api_request_id = ? AND released_at IS NULL')
     .run(isoOf(now), reason, apiRequestId).changes;
+}
+
+/**
+ * PUBLIC_API_V1 — ЧАСЫ, ПО КОТОРЫМ СЧИТАЮТСЯ РАБОЧИЕ МИНУТЫ УДЕРЖАНИЯ (решение
+ * владельца 18, 2026-10-11): часы ГЛАВНОГО здания — того, где регистратура
+ * разбирает заявки из API (подключения и заявки живут там, решения в филиале —
+ * 409). Строка здания — branch_identity.branch_id, часы — branches.working_hours
+ * и is_24_7, прочитанные slot-engine.js clinicWindow: тот же источник и то же
+ * правило, которыми движок записи сужает окна врачей этого здания (пустые часы
+ * '{}' и «круглосуточно» — без границы, день вне распорядка — закрыт). Обеда у
+ * часов здания нет — обед врача срок не останавливает.
+ *
+ * @returns {(ms:number) => ({from:number,to:number}|null|undefined)} openOn для
+ *   shared/api-booking.js holdUntilFor: окно местного дня, в который попадает ms.
+ */
+export function clinicOpenOn(db) {
+  let branch = null;
+  try {
+    const own = db.prepare('SELECT branch_id FROM branch_identity WHERE id = 1').get();
+    if (own && own.branch_id != null) branch = db.prepare('SELECT id, working_hours, is_24_7 FROM branches WHERE id = ?').get(own.branch_id) || null;
+  } catch { branch = null; }
+  return (ms) => clinicWindow(branch, new Date(ms).getDay());
 }
