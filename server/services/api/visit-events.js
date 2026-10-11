@@ -1,0 +1,103 @@
+// PUBLIC_API_V1 — ЧТО СТАЛО С ВИЗИТОМ ЗАЯВКИ ИЗ API: партнёр узнаёт о записи,
+// переносе, отмене и приходе.
+//
+// Визит заявки живёт обычной жизнью: его переносят и отменяют календарём,
+// приход доказывают касса и работа (crm/booking-mirror.js arrivedByEvidence —
+// «Пришёл» в клинике нажимают не всегда). Дверей много, поэтому крючков в них
+// нет: фон (services/api/public-sync.js, каждый такт) сверяет заявки с их
+// визитами — сверка без памяти и идемпотентна, второй проход ничего не меняет.
+//
+//   • заявка «перезвоните» (kind request), по чьей карточке записали визит, —
+//     «Записан» и appointment.created;
+//   • записанная — визит перенесли (время или врач) — appointment.created с
+//     rescheduled; отменили (или удалили) — appointment.cancelled; пришёл —
+//     appointment.arrived; день прошёл без прихода — «Не пришёл» (без
+//     уведомления: такого события в словаре нет); приход, доказанный позже,
+//     поднимает «Не пришёл» в «Пришёл».
+import { arrivedByEvidence, PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { localDate } from '../domain/day.js';
+import { EV, isoOf, localIso } from '../../../public/js/shared/api-booking.js';
+import { enqueueEvent } from './outbox.js';
+
+const offsetMin = (ms) => -new Date(ms).getTimezoneOffset();
+const partnerTime = (iso) => { const ms = Date.parse(iso); return Number.isFinite(ms) ? localIso(ms, offsetMin(ms)) : ''; };
+const sameInstant = (a, b) => Date.parse(a) === Date.parse(b);
+
+function update(db, id, fields, now) {
+  const cols = Object.keys(fields);
+  db.prepare(`UPDATE api_requests SET ${cols.map((c) => c + ' = ?').join(', ')}, updated_at = ? WHERE id = ?`)
+    .run(...cols.map((c) => fields[c]), isoOf(now), id);
+  return db.prepare('SELECT * FROM api_requests WHERE id = ?').get(id);
+}
+
+/** Живой визит своего здания, который держит карточка: привязкой или строкой. */
+function bookedVisitOfCard(db, crmRequestId) {
+  return db.prepare(`
+    SELECT v.* FROM visits v
+     WHERE v.status NOT IN ('cancelled', 'no_show') AND v.sync_origin IS NULL
+       AND (v.id IN (SELECT visit_id FROM crm_booking_links WHERE request_id = ?)
+            OR v.id IN (SELECT visit_id FROM crm_request_services WHERE request_id = ? AND visit_id IS NOT NULL))
+     ORDER BY v.visit_date, v.id LIMIT 1`).get(crmRequestId, crmRequestId) || null;
+}
+
+/**
+ * Один проход сверки. Не бросает: ошибка одной заявки — в лог, остальные идут.
+ * @returns {number} сколько заявок изменилось
+ */
+export function syncVisitOutcomes(db, { now = Date.now(), kekPath = null } = {}) {
+  let changed = 0;
+  const today = db.prepare(`SELECT ${localDate('?')} AS d`).get(isoOf(now)).d;
+  const emit = (row, event, status, details = {}) => enqueueEvent(db, { request: row, event, status, details, now, kekPath });
+
+  let callbacks = [];
+  try {
+    callbacks = db.prepare(`SELECT * FROM api_requests WHERE kind = 'request' AND status IN ('new', 'accepted')
+                              AND visit_id IS NULL AND crm_request_id IS NOT NULL`).all();
+  } catch { return 0; }   // база до мигр. 245
+  for (const r of callbacks) {
+    try {
+      const v = bookedVisitOfCard(db, r.crm_request_id);
+      if (!v) continue;
+      db.transaction(() => {
+        const out = update(db, r.id, { status: 'confirmed', visit_id: v.id, patient_id: v.patient_id, doctor_id: v.doctor_id, start_at: isoOf(Date.parse(v.visit_date)) }, now);
+        emit(out, EV.created, 'confirmed', { doctor_id: v.doctor_id, start: partnerTime(v.visit_date) });
+      })();
+      changed += 1;
+    } catch (e) { console.warn('[public-api] заявка', r.id, 'не сверена с визитом:', e && e.message); }
+  }
+
+  const bound = db.prepare(`SELECT r.*, ${localDate('v.visit_date')} AS visit_day, v.id AS v_id, v.status AS v_status,
+                                   v.visit_date AS v_date, v.doctor_id AS v_doctor
+                              FROM api_requests r LEFT JOIN visits v ON v.id = r.visit_id
+                             WHERE r.status IN ('confirmed', 'no_show')`).all();
+  for (const r of bound) {
+    try {
+      db.transaction(() => {
+        if (!r.v_id || r.v_status === 'cancelled') {
+          if (r.status !== 'confirmed') return;
+          emit(update(db, r.id, { status: 'cancelled' }, now), EV.cancelled, 'cancelled', { doctor_id: r.doctor_id });
+          changed += 1;
+          return;
+        }
+        const came = r.v_status === 'arrived' || arrivedByEvidence(db, r.v_id);
+        if (came) {
+          emit(update(db, r.id, { status: 'arrived' }, now), EV.arrived, 'arrived', { doctor_id: r.v_doctor });
+          changed += 1;
+          return;
+        }
+        if (r.status === 'no_show') return;
+        if (r.v_status === 'no_show' || (PRE_ARRIVAL.includes(r.v_status) && r.visit_day < today)) {
+          update(db, r.id, { status: 'no_show' }, now);
+          changed += 1;
+          return;
+        }
+        if (!sameInstant(r.v_date, r.start_at) || Number(r.v_doctor || 0) !== Number(r.doctor_id || 0)) {
+          const out = update(db, r.id, { start_at: isoOf(Date.parse(r.v_date)), doctor_id: r.v_doctor }, now);
+          emit(out, EV.created, 'confirmed', { doctor_id: r.v_doctor, start: partnerTime(r.v_date), rescheduled: true });
+          changed += 1;
+        }
+      })();
+    } catch (e) { console.warn('[public-api] заявка', r.id, 'не сверена с визитом:', e && e.message); }
+  }
+  return changed;
+}
