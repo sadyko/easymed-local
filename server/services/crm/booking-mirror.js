@@ -398,6 +398,19 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
       deleteVs(db, vs.id); out.removed++;
       linkLine.run(null, 0, line.id);
     } else if (vs && !frozen && vs.visit_id !== V && lineKey(vs) === key && vsFree(db, vs)) {
+      // CRM_UNIFY_V1 / PUBLIC_API_V1 (повторная проверка 8a, п. 4) — СНАЧАЛА
+      // ТАКАЯ ЖЕ УСЛУГА В ЭТОМ ВИЗИТЕ. Её уже поставила другая карточка того же
+      // человека (или регистратура) — строка берёт её, а не ввозит вторую: две
+      // карточки с одной консультацией на день, запись по одной отменили, по
+      // другой записали — прежде в визите оказывались ДВЕ консультации (двойной
+      // счёт). Свою строку визита, оставшуюся ничьей, она убирает.
+      const sameHome = homeFor(db, V, line);
+      if (sameHome) {
+        linkLine.run(sameHome, 0, line.id);
+        if (!isReferenced(vs.id) && vsFree(db, vs)) { deleteVs(db, vs.id); out.removed++; }
+        out.linked++; touched.add(line.request_id);
+        continue;
+      }
       // ПЕРЕНОС ИЗ ЗАЯВКИ: строка уехала на другой день — её строка визита едет
       // следом, а не заводится второй. Цена пересчитывается: другой день —
       // другой тариф повторного визита.

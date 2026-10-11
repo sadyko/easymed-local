@@ -298,3 +298,23 @@ test('рр-1: две онлайн-записи одного номера сли�
   assert.deepEqual(kinds(v1.visit.id), [[null, 1]]);
   assert.deepEqual(kinds(v2.visit.id), [[302, null]]);
 });
+
+// ─── ПОВТОРНАЯ ПРОВЕРКА 8a, п. 4: ОТКАЗ «day_visit_exists», ЗАПИСЬ ОТМЕНИЛИ — ОДНА КОНСУЛЬТАЦИЯ ─
+
+test('рр-4: подтверждение отказало (запись колл-центра на 15:00), её отменили в календаре — подтверждённый визит несёт одну консультацию', async () => {
+  const { ensureVisit } = await import('../rpc/visits.js');
+  const s = bookingSeed();
+  const id = await pending(s);
+  patient(s);
+  const cc = Number(s.db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, patient_id, scheduled_date) VALUES ('Абдурахмонов Фаррух', '+998901234567', 'call', 'in_process', 1, '2030-03-12')").run().lastInsertRowid);
+  s.db.prepare("INSERT INTO crm_request_services (request_id, consultation_type_id, doctor_id, scheduled_date, status) VALUES (?, 1, 7, '2030-03-12', 'pending')").run(cc);
+  const PHONE_AT = localAt('2030-03-12', '15:00');
+  const ph = await ensureVisit(s.db, { patient_id: 1, date: new Date(PHONE_AT).toISOString(), doctor_id: 7,
+    book: { doctor_id: 7, start: new Date(PHONE_AT).toISOString(), duration_minutes: 30 } }, s.cc);
+  assert.equal((await refusal(confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath }))).code, 'day_visit_exists');
+  await calendarBook(s.db, { visit_id: ph.visit.id, start: new Date(PHONE_AT).toISOString(), status: 'cancelled' }, s.reg);
+  const c = await confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  assert.deepEqual(s.db.prepare("SELECT consultation_type_id, unit_price FROM visit_services WHERE visit_id = ? AND status <> 'cancelled'").all(c.visit.id).map((x) => ({ ...x })),
+    [{ consultation_type_id: 1, unit_price: 150000 }], 'одна консультация, а не две');
+});
+
