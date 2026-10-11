@@ -1699,6 +1699,7 @@ export function addServiceToVisitInvoice(db, args, user, { rpc = 'cashier_line_a
 export function cashierLinePerformers(db, args, user) {
   requireLineFix(db, user, 'edit');
   let serviceId = null; let consultTypeId = null; let tier = 'primary'; let qty = 1;
+  let stamp = null;   // SERVICES_PACKAGES_V1 (ревью C7) — цена пакета, записанная на строке
   const vsId = args && args.visit_service_id;
   if (vsId !== undefined && vsId !== null) {
     if (!isPositiveInt(vsId)) throw new RpcError('Строка услуги указана неверно.', 400);
@@ -1706,6 +1707,7 @@ export function cashierLinePerformers(db, args, user) {
     if (!vs) throw new RpcError('Строка услуги не найдена.', 400);
     serviceId = vs.service_id; consultTypeId = vs.service_id == null ? vs.consultation_type_id : null;
     tier = vs.price_tier || 'primary'; qty = vs.quantity || 1;
+    if (vs.package_price != null && vs.package_full != null) stamp = { package_full: vs.package_full, package_price: vs.package_price };
   } else {
     serviceId = args && args.service_id;
     if (!isPositiveInt(serviceId)) throw new RpcError('Услуга указана неверно.', 400);
@@ -1722,8 +1724,11 @@ export function cashierLinePerformers(db, args, user) {
   const staff = db.prepare('SELECT id, full_name, specialty, role, is_doctor, extra_roles FROM users WHERE is_active = 1 ORDER BY full_name, id').all()
     .filter((u) => (consult ? isDoctorRow(u) : isPerformerRow(u)));
   staff.sort((a, b) => (assigned.has(b.id) ? 1 : 0) - (assigned.has(a.id) ? 1 : 0));
+  // SERVICES_PACKAGES_V1 (ревью шага 6, C7) — строка пакета: цена, записанная
+  // при записи, у любого исполнителя (смена врача её не меняет — Р4), — окно
+  // называет ту, что останется после смены.
   const price = (doctorId) => round2(lineUnitPrice(db,
-    { service_id: serviceId, consultation_type_id: consultTypeId, doctor_id: doctorId, price_tier: tier, clinic_item_id: null, unit_price: 0 },
+    { service_id: serviceId, consultation_type_id: consultTypeId, doctor_id: doctorId, price_tier: tier, clinic_item_id: null, unit_price: 0, ...(stamp || {}) },
     { service: svc }) * qty);
   return {
     performers: staff.map((u) => ({ id: u.id, full_name: u.full_name, specialty: u.specialty || null, role: u.role, assigned: assigned.has(u.id), unit_price: price(u.id) })),

@@ -202,6 +202,28 @@ test('смена врача у строки пакета: цена пакета 
   assert.equal(vsRow(db, l).doctor_id, DOC2);
 });
 
+// SERVICES_PACKAGES_V1 (ревью шага 6, C7) — окно «Сменить врача» у строки пакета
+// называет ту цену, что останется после смены: цена пакета, записанная на
+// строке, — у любого врача (своя цена врача её не меняет), а не его своя цена.
+test('ревью C7: исполнители строки пакета — у каждого цена пакета строки, а не своя цена врача', () => {
+  const db = seed();
+  const CONS = svc(db, 'Приём', 100000);
+  rates(db, DOC2, [{ service_id: CONS, price: 200000 }]);
+  const pkg = Number(db.prepare("INSERT INTO service_templates (name, service_ids, discount_percent, is_package, discount_mode, discount_value) VALUES ('Пакет', ?, 20, 1, 'percent', 20)").run(JSON.stringify([CONS])).lastInsertRowid);
+  const { vid } = visit(db);
+  const l = insertVisitLine(db, { visit_id: vid, service_id: CONS, doctor_id: DOC, quantity: 1, unit_price: 0, total: 0, status: 'added', package_id: pkg });
+  createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [l] }, registrar);
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  const p = call('cashier_line_performers', db, { visit_service_id: l }, cashier);
+  const of = (id) => p.performers.find((x) => x.id === id);
+  assert.ok(of(DOC2), 'врач со своей ценой — в списке');
+  assert.equal(of(DOC2).unit_price, 100000, 'своя цена врача 200 000 строку пакета не меняет');
+  assert.equal(of(DOC).unit_price, 100000);
+  const r = call('cashier_line_set_doctor', db, { visit_service_id: l, doctor_id: DOC2 }, cashier);
+  assert.equal(vsRow(db, l).total, of(DOC2).unit_price, 'названное в окне = строка после смены');
+  assert.equal(r.invoice.total_amount, 80000);
+});
+
 test('добавить услугу: ложится в открытый неоплаченный счёт по цене врача и со скидкой группы', () => {
   const base = seed();
   const CONS = svc(base, 'Приём', 100000);
