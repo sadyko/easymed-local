@@ -75,6 +75,19 @@ function setStatus(db, id, fields, now) {
   return db.prepare('SELECT * FROM api_requests WHERE id = ?').get(id);
 }
 
+/**
+ * Ревью 8a, I5 — КАРТОЧКА И ЕЁ ЖДУЩИЕ СТРОКИ НА ДЕНЬ ВРЕМЕНИ ЗАЯВКИ. Связь визита
+ * с CRM (crm/visit-link.js) берёт строки и карточки только своего дня: после
+ * «другого времени» на другой день строка консультации оставалась бы на старом
+ * дне — визит без консультации, а чужой визит того дня забрал бы её в смету.
+ */
+function cardToDay(db, row, dayIso) {
+  if (!row.crm_request_id || !dayIso) return;
+  db.prepare("UPDATE crm_request_services SET scheduled_date = ? WHERE request_id = ? AND status = 'pending' AND visit_id IS NULL AND (scheduled_date IS NULL OR scheduled_date <> ?)")
+    .run(dayIso, row.crm_request_id, dayIso);
+  db.prepare('UPDATE crm_requests SET scheduled_date = ? WHERE id = ? AND (scheduled_date IS NULL OR scheduled_date <> ?)').run(dayIso, row.crm_request_id, dayIso);
+}
+
 // ─── ПРИЁМ ИЗ ОЧЕРЕДИ ───────────────────────────────────────────────────────
 
 /** Карточка CRM заявки: источник подключения, первая колонка воронки, комментарий пациента. */
@@ -266,6 +279,7 @@ export async function confirmBooking(db, { id, patientId }, user, { now = Date.n
   // привязать карточку к другому члену семьи с тем же телефоном).
   const card = row.crm_request_id ? db.prepare('SELECT id, patient_id FROM crm_requests WHERE id = ?').get(row.crm_request_id) : null;
   const prevPatient = card ? card.patient_id : null;
+  cardToDay(db, row, day);   // I5 — страж: строки заявки на дне её времени, что бы их ни сдвинуло
   if (card && card.patient_id !== pid) db.prepare('UPDATE crm_requests SET patient_id = ? WHERE id = ?').run(pid, card.id);
   try {
     const res = await ensureVisitImpl(db, {
@@ -425,6 +439,7 @@ function partnerAcceptOffer(db, row, { now, kekPath }) {
     releaseHolds(db, row.id, 'accepted', now);
     placeHold(db, { doctorId: row.doctor_id, startMs, durationMin: row.duration_minutes, untilMs, apiRequestId: row.id, kind: 'booking' });
     setStatus(db, row.id, { status: 'pending', start_at: row.offered_start, hold_until: isoOf(untilMs), offered_start: null, offer_until: null }, now);
+    cardToDay(db, row, localDayOf(db, row.offered_start));   // I5
   })();
   return { applied: true, id: row.id, status: 'pending', hold_until: isoOf(untilMs) };
 }

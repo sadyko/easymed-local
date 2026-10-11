@@ -142,3 +142,24 @@ test('решение 18: предложение ждёт ПАРТНЁРА — 30
   const acc = await inbox(s, 'offer.accept', t0 + 20 * 60000);
   assert.deepEqual([acc.status, acc.hold_until], ['pending', isoOf(localAt('2030-03-12', '08:30'))], 'согласие в 18:05 — держим до 08:30');
 });
+
+// ─── РЕВЬЮ 8a, I5: ДРУГОЕ ВРЕМЯ — НА ДРУГОЙ ДЕНЬ ────────────────────────────
+
+test('I5: другое время на другой день — после согласия и подтверждения строка консультации в визите по цене кассы; на старом дне ничего не висит', async () => {
+  const s = bookingSeed();
+  const NEXT = localAt('2030-03-13', '11:00');
+  const id = await pending(s);
+  offerOtherTime(s.db, { id, start: new Date(NEXT).toISOString() }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  assert.equal((await inbox(s, 'offer.accept', NOW + 5 * 60000)).status, 'pending');
+  const cardId = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', id).c;
+  assert.equal(one(s.db, 'SELECT scheduled_date FROM crm_requests WHERE id = ?', cardId).scheduled_date, '2030-03-13', 'карточка — на день нового времени');
+  assert.deepEqual(s.db.prepare('SELECT scheduled_date, status FROM crm_request_services WHERE request_id = ?').all(cardId).map((x) => ({ ...x })),
+    [{ scheduled_date: '2030-03-13', status: 'pending' }]);
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  const c = await confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW + 6 * 60000, kekPath: s.kekPath });
+  assert.equal(Date.parse(c.visit.visit_date), NEXT);
+  assert.deepEqual(s.db.prepare('SELECT consultation_type_id, doctor_id, unit_price, status FROM visit_services WHERE visit_id = ?').all(c.visit.id).map((x) => ({ ...x })),
+    [{ consultation_type_id: 1, doctor_id: 7, unit_price: 150000, status: 'added' }]);
+  assert.equal(one(s.db, 'SELECT visit_id FROM crm_request_services WHERE request_id = ?', cardId).visit_id, c.visit.id);
+  assert.equal(one(s.db, "SELECT COUNT(*) AS n FROM crm_request_services WHERE scheduled_date = '2030-03-12' AND visit_id IS NULL").n, 0);
+});
