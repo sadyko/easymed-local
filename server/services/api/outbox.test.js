@@ -40,8 +40,12 @@ test('уведомление — только выбранному событи�
   const s = bookingSeed();
   const request = withRequest(s);
   const note = (id) => s.db.prepare('SELECT note, webhook_url, signature FROM api_outbox WHERE id = ?').get(id);
-  assert.deepEqual({ ...note(enqueueEvent(s.db, { request, event: 'appointment.arrived', status: 'arrived', kekPath: s.kekPath })) },
-    { note: 'not_subscribed', webhook_url: '', signature: '' });
+  // Ревью 8a, I1: «пришёл» без подписки не уходит вовсе — ни уведомлением, ни статусом.
+  assert.equal(enqueueEvent(s.db, { request, event: 'appointment.arrived', status: 'arrived', kekPath: s.kekPath }), null);
+  assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM api_outbox WHERE event = 'appointment.arrived'").get().n, 0);
+  s.db.prepare('UPDATE api_connections SET webhook_events = ? WHERE id = ?').run(JSON.stringify(['booking.confirmed']), s.connId);
+  assert.deepEqual({ ...note(enqueueEvent(s.db, { request, event: 'appointment.cancelled', status: 'cancelled', kekPath: s.kekPath })) },
+    { note: 'not_subscribed', webhook_url: '', signature: '' }, 'прочие события — статусом без уведомления, как прежде');
   const otherPc = path.join(tmpDir('em-otherpc-'), KEK_FILE);
   assert.deepEqual({ ...note(enqueueEvent(s.db, { request, event: 'booking.confirmed', status: 'confirmed', kekPath: otherPc })) },
     { note: 'no_secret', webhook_url: '', signature: '' });

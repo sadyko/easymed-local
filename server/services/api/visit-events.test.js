@@ -51,8 +51,10 @@ test('отмена визита клиникой — «appointment.cancelled»; 
   await calendarBook(s2.db, { visit_id: b.visit.id, start: b.visit.visit_date, status: 'arrived' }, s2.reg);
   syncVisitOutcomes(s2.db, { now: NOW, kekPath: s2.kekPath });
   assert.equal(one(s2.db, 'SELECT status FROM api_requests WHERE id = ?', b.id).status, 'arrived');
-  const ev = one(s2.db, "SELECT note FROM api_outbox WHERE event = 'appointment.arrived'");
-  assert.equal(ev.note, 'not_subscribed', 'партнёр «пришёл» не выбирал — статус есть, уведомления нет');
+  // Ревью 8a, I1: партнёр «пришёл» не выбирал — статус в клинике есть, наружу не
+  // уходит ничего: ни уведомления, ни статуса на публичный сервер (врачебная тайна,
+  // дизайн §7 и §12).
+  assert.equal(one(s2.db, "SELECT COUNT(*) AS n FROM api_outbox WHERE event = 'appointment.arrived' OR status = 'arrived'").n, 0);
 });
 
 test('день прошёл без прихода — «Не пришёл»; оплата, доехавшая позже, — «Пришёл»', async () => {
@@ -81,4 +83,26 @@ test('заявка «перезвоните»: оператор записал �
   const [name, body] = last(s);
   assert.deepEqual([name, body.status, body.doctor_id], ['appointment.created', 'booked', 7]);
   assert.match(body.start, /^2030-03-12T10:00:00\+/);
+});
+
+// ─── РЕВЬЮ 8a, I1: «ПРИШЁЛ» — ТОЛЬКО ПОДПИСАННОМУ ПАРТНЁРУ И НЕ РАНЬШЕ ДНЯ ВИЗИТА ─
+
+test('I1: партнёр, включивший «пришёл», получает appointment.arrived; не включивший — ничего', async () => {
+  const s = bookingSeed();
+  s.db.prepare('UPDATE api_connections SET webhook_events = ? WHERE id = ?').run(JSON.stringify(['booking.confirmed', 'appointment.arrived']), s.connId);
+  const { visit } = await confirmed(s);
+  await calendarBook(s.db, { visit_id: visit.id, start: visit.visit_date, status: 'arrived' }, s.reg);
+  syncVisitOutcomes(s.db, { now: NOW, kekPath: s.kekPath });
+  const ev = one(s.db, "SELECT note, status FROM api_outbox WHERE event = 'appointment.arrived'");
+  assert.deepEqual({ ...ev }, { note: '', status: 'arrived' });
+});
+
+test('I1: предоплата за день до визита — не «пришёл»; в день визита та же оплата — «пришёл»', async () => {
+  const s = bookingSeed();
+  const { id, visit } = await confirmed(s);
+  s.db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES (1, 'INV-1', ?, 1, 150000, 150000, 150000, 'paid')").run(visit.id);
+  assert.equal(syncVisitOutcomes(s.db, { now: localAt('2030-03-11', '18:00'), kekPath: s.kekPath }), 0);
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'confirmed', 'накануне оплата — ещё не приход');
+  syncVisitOutcomes(s.db, { now: localAt('2030-03-12', '09:30'), kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'arrived');
 });

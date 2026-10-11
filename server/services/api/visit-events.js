@@ -79,7 +79,9 @@ export function syncVisitOutcomes(db, { now = Date.now(), kekPath = null } = {})
           changed += 1;
           return;
         }
-        const came = r.v_status === 'arrived' || arrivedByEvidence(db, r.v_id);
+        // Ревью 8a, I1: деньги и работа доказывают приход только в день визита и
+        // позже — предоплата накануне ещё не «пришёл». Отметка «Пришёл» — всегда.
+        const came = r.v_status === 'arrived' || (r.visit_day <= today && arrivedByEvidence(db, r.v_id));
         if (came) {
           emit(update(db, r.id, { status: 'arrived' }, now), EV.arrived, 'arrived', { doctor_id: r.v_doctor });
           changed += 1;

@@ -16,8 +16,11 @@
 // Тело — белый список (shared/api-booking.js webhookBody): данных пациента в
 // событиях нет по построению.
 import crypto from 'node:crypto';
-import { webhookBody, PARTNER_STATUS, isoOf } from '../../../public/js/shared/api-booking.js';
+import { webhookBody, PARTNER_STATUS, isoOf, EV } from '../../../public/js/shared/api-booking.js';
 import { loadKek, unseal } from './secret-box.js';
+
+/** События, которые без явной подписки подключения не покидают клинику (ревью 8a, I1). */
+export const PRIVATE_EVENTS = Object.freeze([EV.arrived]);
 
 const arr = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
 
@@ -28,11 +31,16 @@ export const signBody = (secret, raw) => 'sha256=' + crypto.createHmac('sha256',
  * Поставить событие в очередь наружу.
  * @param {object} request строка api_requests (id, public_id, external_id, connection_id)
  * @param {string} status внутренний статус ПОСЛЕ события (партнёру — PARTNER_STATUS)
- * @returns {number} id строки api_outbox
+ * @returns {number|null} id строки api_outbox; null — событие не уходит вовсе (PRIVATE_EVENTS)
  */
 export function enqueueEvent(db, { request, event, status, details = {}, now = Date.now(), kekPath = null } = {}) {
   const conn = db.prepare('SELECT id, webhook_url, webhook_events, secret_sealed, deleted_at FROM api_connections WHERE id = ?')
     .get(request.connection_id);
+  // Ревью 8a, I1 — «ПРИШЁЛ» ВРАЧЕБНАЯ ТАЙНА (дизайн §7, §12): партнёр узнаёт его,
+  // только если клиника включила ему это событие. Без подписки не уходит ничего:
+  // ни уведомления, ни статуса на публичный сервер (GET /requests/{id}) — сервер
+  // подписок не знает и отфильтровать сам не может. Статус в клинике остаётся.
+  if (PRIVATE_EVENTS.includes(event) && (!conn || conn.deleted_at || !arr(conn.webhook_events).includes(event))) return null;
   const body = webhookBody({
     eventId: 'ev_' + crypto.randomBytes(12).toString('hex'), event, publicId: request.public_id,
     externalId: request.external_id, status: PARTNER_STATUS[status] || status, occurredAt: isoOf(now), details,

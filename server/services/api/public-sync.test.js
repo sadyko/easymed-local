@@ -225,3 +225,25 @@ test('C1: сбой программы на элементе — такт на н
   st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
   assert.deepEqual([st.state, st.skipped.failed, st.skipped.last_ids], ['ok', 1, ['rq_bug000001']]);
 });
+
+// ─── РЕВЬЮ 8a, I1: «ПРИШЁЛ» НЕ ПОКИДАЕТ КЛИНИКУ БЕЗ ПОДПИСКИ ПАРТНЁРА ───────
+
+test('I1 страж: партнёр не включал «пришёл» — ни одно событие со статусом arrived не уходит на /_sync/v1/events (отметка и оплата)', async () => {
+  const { calendarBook } = await import('../rpc/calendar.js');
+  for (const how of ['mark', 'payment']) {
+    const r = rig();
+    await syncOnce(r.db, r.dataDir, r.opts);
+    appt(r);
+    r.tick(15000);
+    await syncOnce(r.db, r.dataDir, r.opts);
+    r.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+    const c = await confirmBooking(r.db, { id: r.db.prepare('SELECT id FROM api_requests').get().id, patientId: 1 }, r.reg, { now: NOW + 60000, kekPath: r.kekPath });
+    if (how === 'mark') await calendarBook(r.db, { visit_id: c.visit.id, start: c.visit.visit_date, status: 'arrived' }, r.reg);
+    else r.db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES (1, 'INV-1', ?, 1, 150000, 150000, 150000, 'paid')").run(c.visit.id);
+    r.tick(26 * 3600000);   // день визита наступил
+    await syncOnce(r.db, r.dataDir, r.opts);
+    assert.equal(r.db.prepare('SELECT status FROM api_requests').get().status, 'arrived', how + ': в клинике — «пришёл»');
+    const out = r.fake.state.events.filter((e) => e.status === 'arrived' || JSON.parse(e.body).status === 'arrived' || e.event === 'appointment.arrived');
+    assert.deepEqual(out, [], how + ': наружу «пришёл» не ушёл');
+  }
+});
