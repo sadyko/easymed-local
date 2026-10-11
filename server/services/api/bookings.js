@@ -441,8 +441,13 @@ function partnerDeclineOffer(db, row, { now }) {
 
 // ─── ДЛЯ ЭКРАНА ─────────────────────────────────────────────────────────────
 
-/** Заявки карточки CRM — для окна «Онлайн-запись через API». */
-export function requestsOfCard(db, crmRequestId, now = Date.now()) {
+const NO_ACTIONS = Object.freeze({ confirm: false, offer: false, decline: false, accept: false });
+
+/**
+ * Заявки карточки CRM — для окна «Онлайн-запись через API». decide — может ли
+ * смотрящий решать (rpc/api-bookings.js; ревью 8a, I2): иначе все действия false.
+ */
+export function requestsOfCard(db, crmRequestId, now = Date.now(), { decide = true } = {}) {
   const rows = db.prepare(`
     SELECT r.*, c.name AS connection_name, d.full_name AS doctor_name, b.name AS branch_name,
            ct.name AS consultation_name, ct.price AS consultation_price, s.name AS service_name, s.price AS service_price,
@@ -468,7 +473,7 @@ export function requestsOfCard(db, crmRequestId, now = Date.now()) {
     patient_name: r.patient_name, patient_phone: r.patient_phone, comment: r.comment,
     patient: r.patient_id ? { id: r.patient_id, full_name: r.patient_card_name || '', mrn: r.patient_card_mrn || '' } : null,
     visit_id: r.visit_id, partner_cancel_at: r.partner_cancel_at,
-    can: bookingActions(r, now),
+    can: decide ? bookingActions(r, now) : { ...NO_ACTIONS },
   }));
 }
 

@@ -16,6 +16,7 @@ import { compile } from '../../db/query-compiler.js';
 import { hasAnyRole } from '../roles.js';
 import { grantAllowsAdminOr } from '../grants.js';
 import { getDataDir } from '../control/config.js';
+import { canEditCrm } from '../crm/visibility.js';   // ревью 8a, I2 — тот же запрет «CRM: просмотр», что у /api/db
 import { API_BOOKING_MESSAGES as MSG } from '../../../public/js/shared/api-booking.js';
 import {
   requestRow, requestsOfCard, cardCandidates, boardMarks, confirmBooking, offerOtherTime, declineBooking, acceptRequest,
@@ -45,6 +46,9 @@ function requireCard(db, user, crmRequestId) {
 function requireWriter(db, user, crmRequestId) {
   requireCard(db, user, crmRequestId);
   if (!hasAnyRole(user, WRITE_ROLES)) throw new RpcError(MSG.noEdit, 403);
+  // Ревью 8a, I2: роль с CRM «Просмотр» (уровень раздела или строка матрицы)
+  // /api/db править карточку не даёт (V3120_FIX) — решения по заявке тоже нет.
+  if (!canEditCrm(db, user)) throw new RpcError(MSG.noEdit, 403);
   try {
     compile({ table: 'crm_requests', op: 'update', values: { note: '' }, filters: [{ col: 'id', op: 'eq', val: crmRequestId }] }, user, { db });
   } catch { throw new RpcError(MSG.noEdit, 403); }
@@ -63,10 +67,17 @@ function forDecision(db, args, user) {
   return row;
 }
 
+/** Может ли человек решать по заявкам этой карточки здесь (главное здание, право править карточку). */
+function mayDecide(db, user, crmRequestId) {
+  try { requireMain(db); requireWriter(db, user, crmRequestId); return true; } catch { return false; }
+}
+
 export function apiBookingList(db, args, user) {
   const id = posInt(args && args.crm_request_id);
   requireCard(db, user, id);
-  return { items: requestsOfCard(db, id) };
+  // Ревью 8a, I2: кнопки решений — только тому, кому сервер их разрешит; прочие
+  // (медсестра, врач, «CRM: просмотр», филиал) видят заявку без кнопок.
+  return { items: requestsOfCard(db, id, Date.now(), { decide: mayDecide(db, user, id) }) };
 }
 
 export function apiBookingCandidates(db, args, user) {

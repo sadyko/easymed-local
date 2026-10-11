@@ -90,3 +90,55 @@ test('состояние обмена — строке «API: Просмотр»
   assert.equal(st.waiting_requests, 1);
   assert.equal((await refusal(() => apiSyncStatus(s.db, {}, s.reg))).status, 403);
 });
+
+// ─── РЕВЬЮ 8a, I2: «CRM: просмотр» НЕ РЕШАЕТ; КНОПКИ — ТОЛЬКО ТОМУ, КТО РЕШАЕТ ─
+
+const NONE = { confirm: false, offer: false, decline: false, accept: false };
+function setPerms(db, role, mut) {
+  const p = JSON.parse(db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(role).permissions);
+  mut(p);
+  db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify(p), role);
+}
+async function decisions(s, user) {
+  const status = async (fn) => { try { await fn(); return 'ok'; } catch (e) { return e.status; } };
+  return [
+    await status(() => apiBookingConfirm(s.db, { id: s.id, patient_id: 1 }, user)),
+    await status(() => apiBookingOffer(s.db, { id: s.id, start: new Date(localAt(day, '15:00')).toISOString() }, user)),
+    await status(() => apiBookingDecline(s.db, { id: s.id, reason: 'other' }, user)),
+  ];
+}
+
+test('I2: своя роль регистратуры с «CRM: просмотр» — кнопок нет, решения 403, заявка и карточка не тронуты', async () => {
+  const s = await withBooking();
+  s.db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('reg_view', 'Регистратура — CRM просмотр', 'registrar')").run();
+  s.db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)')
+    .run('reg_view', JSON.stringify({ sections: ['crm', 'patients', 'calendar'], levels: { crm: 'viewer', patients: 'editor', calendar: 'editor' } }));
+  s.db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, custom_role_code) VALUES (20, 'regview', 'x', 'Регистратор Просмотр', 'registrar', 'reg_view')").run();
+  const viewer = { id: 20, role: 'registrar', extra_roles: [], custom_role_code: 'reg_view' };
+  assert.deepEqual(apiBookingList(s.db, { crm_request_id: s.card }, viewer).items[0].can, NONE);
+  assert.deepEqual(await decisions(s, viewer), [403, 403, 403]);
+  const cb = await ingestItem(s.db, { ...apptItem({ connId: s.connId, publicId: 'rq_call0001', startMs: START, receivedMs: Date.now() }), type: 'request.new', data: { external_id: 'cb-1' } }, {});
+  assert.equal((await refusal(() => apiRequestAccept(s.db, { id: cb.id }, viewer))).status, 403);
+  assert.equal(s.db.prepare('SELECT status FROM api_requests WHERE id = ?').get(s.id).status, 'pending');
+  assert.equal(s.db.prepare('SELECT patient_id FROM crm_requests WHERE id = ?').get(s.card).patient_id, null);
+});
+
+test('I2: штатные регистратура (уровень CRM «просмотр») и колл-центр (CRM view в матрице) — тоже без решений', async () => {
+  const s = await withBooking();
+  setPerms(s.db, 'registrar', (p) => { p.levels = { ...(p.levels || {}), crm: 'viewer' }; });
+  setPerms(s.db, 'callcenter', (p) => { p.grants = { ...(p.grants || {}), crm: 'view' }; });
+  for (const user of [s.reg, s.cc]) {
+    assert.deepEqual(apiBookingList(s.db, { crm_request_id: s.card }, user).items[0].can, NONE, user.role);
+    assert.deepEqual(await decisions(s, user), [403, 403, 403], user.role);
+  }
+});
+
+test('I2: медсестра и врач видят заявку без кнопок; регистратура-редактор — с кнопками; филиал — без кнопок', async () => {
+  const s = await withBooking();
+  for (const user of [s.nurse, { id: 7, role: 'doctor' }]) {
+    assert.deepEqual(apiBookingList(s.db, { crm_request_id: s.card }, user).items[0].can, NONE, user.role);
+  }
+  assert.deepEqual(apiBookingList(s.db, { crm_request_id: s.card }, s.reg).items[0].can, { confirm: true, offer: true, decline: true, accept: false });
+  s.db.prepare("UPDATE branch_identity SET role = 'secondary' WHERE id = 1").run();
+  assert.deepEqual(apiBookingList(s.db, { crm_request_id: s.card }, s.reg).items[0].can, NONE, 'в филиале решения 409 — кнопок нет');
+});
