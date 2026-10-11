@@ -315,6 +315,12 @@ export function crmMergeLeads(db, args, user) {
     // переезжают так же: запись без строк иначе держалась бы за удалённую карточку.
     try { db.prepare(`UPDATE crm_booking_links SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds); }
     catch { /* сборка без 187 */ }
+    // PUBLIC_API_V1 (ревью 8a, I6) — заявки партнёров из API (мигр. 245) идут за
+    // карточкой. Иначе удаление проигравшей обнулило бы ссылку (ON DELETE SET
+    // NULL): заявка пропала бы с доски, подтверждение — 403, а её удержание
+    // держало бы врача до истечения. Страж — crm-merge-coverage.test.js.
+    try { db.prepare(`UPDATE api_requests SET crm_request_id = ? WHERE crm_request_id IN (${lh})`).run(keepId, ...mergeIds); }
+    catch { /* база до мигр. 245 */ }
     // 2. Метки — объединение: у карточки метка либо есть, либо нет.
     if (hasTags) {
       db.prepare(`INSERT OR IGNORE INTO crm_request_tags (request_id, tag_key)

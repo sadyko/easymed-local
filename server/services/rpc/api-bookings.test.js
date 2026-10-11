@@ -154,3 +154,18 @@ test('I4: пропущенные заявки сбрасывает только 
   assert.deepEqual(apiSyncSkippedAck(s.db, {}, s.admin), { ok: true });
   assert.deepEqual(apiSyncStatus(s.db, {}, s.admin).skipped, { sealed: 0, failed: 0, last_at: null, last_ids: [] });
 });
+
+// ─── РЕВЬЮ 8a, I6: «ДУБЛИКАТЫ» CRM НЕ ОТРЫВАЮТ ЗАЯВКУ ИЗ API ОТ КАРТОЧКИ ────
+
+test('I6: слияние двух карточек онлайн-записей с одного номера — обе заявки на оставшейся карточке, подтверждаются, видны на доске', async () => {
+  const { crmMergeLeads } = await import('./crm-merge.js');
+  const s = await withBooking();
+  const r2 = await ingestItem(s.db, apptItem({ connId: s.connId, publicId: 'rq_test0002', externalId: 'med-2', startMs: localAt(day, '11:00'), receivedMs: Date.now() - 500 }), { kekPath: s.kekPath });
+  const card2 = s.db.prepare('SELECT crm_request_id AS c FROM api_requests WHERE id = ?').get(r2.id).c;
+  crmMergeLeads(s.db, { keep_id: card2, merge_ids: [s.card] }, s.admin);
+  assert.equal(s.db.prepare('SELECT crm_request_id AS c FROM api_requests WHERE id = ?').get(s.id).c, card2, 'заявка переехала за карточкой');
+  assert.deepEqual(apiBookingList(s.db, { crm_request_id: card2 }, s.reg).items.map((x) => x.id).sort(), [s.id, r2.id].sort());
+  assert.deepEqual(apiBoardMarks(s.db, {}, s.reg).marks[card2].map((m) => m.id).sort(), [s.id, r2.id].sort());
+  const out = await apiBookingConfirm(s.db, { id: s.id, patient_id: 1 }, s.reg);
+  assert.equal(out.status, 'confirmed');
+});
