@@ -1,0 +1,5628 @@
+# API клиники, шаг 8a: сторона клиники — заявки и онлайн-запись из API, удержание времени без карты, обмен с публичным сервером (PUBLIC_API_V1, CLINIC_API_STEP8_V1) Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** клиника готова к публичному серверу `api.easymed.uz`. Сам сервер — шаг 8b, а здесь клиника умеет всё со своей стороны:
+- принять из очереди сервера заявку «перезвоните» и онлайн-запись партнёра;
+- держать выбранное время **без карты пациента** (решение владельца 3);
+- дать регистратору выбрать или завести карту и подтвердить запись **той же дверью, что у регистратуры** (`ensure_visit`);
+- предложить другое время, отклонить, «взять в работу»;
+- истечь через 30 минут;
+- принять отмену и ответ партнёра;
+- сообщить партнёру о каждом исходе и о судьбе визита событиями с подписью клиники;
+- отдать наружу снимок «что видят партнёры», свободное время и отпечатки ключей;
+- доказать серверу, что пишет именно она.
+
+Пока Easy-Med не включил клинике публичный сервер (шаг 8c вписывает отпечаток её ключа в лицензию), обмен молчит: ни одного запроса в сеть.
+
+**Architecture:**
+- **Миграция 245** — четыре новые таблицы, только CREATE: `api_requests`, `slot_holds`, `api_outbox`, `api_sync_state`.
+- **Удержание** (`services/api/holds.js`) занимает врача в том же `loadBusy`, что и визиты (`rpc/calendar.js`). Поэтому `calendar_slots`, `calendar_book`, `ensure_visit` и окна для партнёров видят его одинаково. Своё удержание при подтверждении снимает только сервер — четвёртым аргументом, недостижимым из `/api/rpc`.
+- **Домен заявок** — `services/api/bookings.js`; **судьба визита** — `visit-events.js`; **события** — `outbox.js`.
+- **Снимок** — `snapshot.js`, белый список на правилах показа шагов 4–6.
+- **Личность клиники** (`sync-identity.js`) — пара Ed25519 + X25519 в `<data>/.api-sync-key`.
+- **Обмен** — `public-sync.js`: такт 15 с; протокол `/_sync/v1/*` прогнан против поддельного сервера `server/test-helpers/fake-public-server.js`.
+- **RPC** — `rpc/api-bookings.js`.
+- **Экраны:**
+  - окно «Онлайн-запись через API» в карточке заявки CRM и строка на доске (`views/crm-api-booking.js`, `crm.js`);
+  - строка «Публичный сервер» на экране «API и подключения».
+
+**Tech Stack:** Node 24 ESM, express 5, better-sqlite3, `node:crypto` (Ed25519, X25519, HKDF, AES-256-GCM, HMAC-SHA256), `node:test`. Клиент — ванильный JS без сборки, поддельный DOM в тестах видов.
+
+**Спецификация:** `docs/specs/2026-10-06-clinic-api-design.md`. Договор:
+- решения владельца 3, 4, 5, 6, 7, 11, 14, 15;
+- «Правила, без которых не строим» → «Онлайн-запись», «Сервер», «Каждый шаг»;
+- «Порядок», шаг 8.
+
+**Дизайн шага 8** (варианты, рекомендации, части 8a–8d, вопросы владельцу, протокол обмена): `docs/specs/2026-10-11-clinic-api-8-public-server-design.md` — копия `scratchpad/plan8/step8-design.md`, кладётся задачей 0.
+
+**Другие источники:**
+- Макет: `C:\Users\user\Desktop\EasyMed Clone\mockups\api-settings\js\`:
+  - `screen-crm.js` — карточка заявки из API, выбор карты, «Подтвердить запись / Предложить другое время / Отклонить», «Ждёт подтверждения … держим до 14:32»;
+  - `screen-docs.js` — статусы, события, `hold_until`, ошибки;
+  - `screen-api.js`.
+- План шага 7, раздел «Что шаг 7 оставляет шагам 4, 8 и 9» → шаг 8, пункты 1–11: каждый закрыт здесь или назван в «Не входит» с номером части (8b / 8c / 8d).
+- Критик аудита `scratchpad/audit-critic.md`, А6–А11 и В7–В8.
+- Память: `easymed-branch-network` (ретранслятор), `easymed-binotel-telephony` (опрос), `easymed-licence-lockout`, `symptex-gateway-fragility`, `easymed-clinic-api-research`.
+
+**Код плана прогнан.** Весь код плана собран в копии дерева `9521240c` (`git archive`, песочница `scratchpad/plan8/tree`):
+- тесты каждой задачи и названные сторожа — зелёные;
+- полный набор — см. «Проверки плана» в конце.
+
+**Метка кода:** `PUBLIC_API_V1` — в комментарии каждой своей вставки; в общих файлах обязательно.
+
+**Метка плана и коммитов:** `CLINIC_API_STEP8_V1`. Сообщение коммита кончается скобкой `(PUBLIC_API_V1, CLINIC_API_STEP8_V1)`.
+
+---
+
+## Решения плана
+
+| # | Решение | Почему |
+|---|---|---|
+| Р1 | **Хранение — миграция 245, только CREATE TABLE / CREATE INDEX и одна INSERT.**<br>• `api_requests` — заявка партнёра: номер `rq_…` от публичного сервера, номер у партнёра, подключение, вид, статус, карточка CRM, имя / телефон / комментарий пациента, врач, время, длительность, удержание, встречное предложение, причина отказа, карта, визит.<br>• `slot_holds` — удержание времени.<br>• `api_outbox` — события наружу.<br>• `api_sync_state` — курсор и итог обмена.<br>В `schema-registry.js` их нет. Между зданиями не ездят: их нет в `catalogue.js` `TABLES` и `journal.js` `SHIPPED`. | `/api/db` их не знает по построению, как подключения шага 7. Подключения и заявки живут в главном здании (Р1 шага 7). Визит подтверждения — обычный визит и едет, как любой. |
+| Р2 | **Удержание = строка `slot_holds`, а не визит.** Живое — `released_at` пуст и `until_at` впереди.<br>• `rpc/calendar.js loadBusy` добавляет живые удержания врача к визитам: занятость одна на весь продукт.<br>• Истечение освобождает время само, без таймера.<br>• Отказ записи поверх удержания — тот же `slot_taken` со временем.<br>• Экстренная запись с причиной — как поверх любого приёма. | Решение владельца 3: время держится без карты, а у визита `patient_id NOT NULL`. Отдельное правило занятости — второй способ ошибиться (шапка `slot-engine.js`). Код `slot_taken` уже понимают все окна записи. |
+| Р3 | **Своё удержание снимает только сервер.** У `calendarSlots` и `ensureVisit` — четвёртый аргумент `internal.excludeHoldId`, у `calendarBook` — `deps.excludeHoldId`. Маршрут `/api/rpc` зовёт обработчики тремя аргументами (`rpc/index.js`): присланное в теле не действует (тест HTTP). | Иначе регистратор (или собранный руками запрос) мог бы записать поверх чужого удержания. |
+| Р4 | **Срок удержания** — 30 минут от приёма заявки публичным сервером (`received_at`), но не дольше начала приёма. Встречное предложение — 30 минут от нажатия. Одна функция `holdUntilFor` (`shared/api-booking.js`). | Спецификация: «удержание 30 минут». Прошедшее время держать незачем. Ночные заявки — **вопрос владельцу 4**: смена — одна функция. |
+| Р5 | **Одна заявка партнёра — одна карточка CRM.** Источник подключения (`sources = [ключ]`), первая открытая колонка, примечание = комментарий пациента. Строка консультации или услуги — на день записи; у отказанной при приёме — без дня. Карту пациента заявка не заводит. | Решение 3. Окно повторного обращения звонков не подходит: у каждой заявки свой ответ партнёру. Дубликаты по номеру видны в «Дубликатах» доски. Строка на день — та же, что у записи колл-центра: при подтверждении зеркало (`crm/booking-mirror.js`) кладёт её в визит по цене кассы. |
+| Р6 | **Приём онлайн-записи** (`bookings.js intakeAppointment`). Условия:<br>• врач показан партнёрам и принимает «по записи»;<br>• вид приёма для партнёров (`api_kind`) он ведёт — или услуга показана;<br>• день в сроке записи врача;<br>• удержание ещё не истекло;<br>• начало свободно и стоит на сетке 15 минут (`slotIsFree` — тот же движок).<br>Тогда — `pending` и удержание. Иначе — `declined` (`not_bookable` / `slot_taken`) или `expired`, и событие партнёру сразу. | Клиника — правда о времени. Публичный сервер проверяет по снимку (8b), но два партнёра в пределах такта или запись у стойки решаются здесь (тест «два партнёра на одно время»). |
+| Р7 | **Подтверждение** (`confirmBooking`):<br>• отказ «визит дня с работой» — ДО первой записи;<br>• условный переход `pending → confirming`;<br>• карточке — выбранная карта (сильнее догадки по номеру);<br>• **`ensure_visit` с `book`** — та же дверь, что у регистратуры;<br>• удержание снято → `confirmed` → `booking.confirmed`;<br>• неудача возвращает `pending` и прежнюю карту карточки.<br>Повтор — тот же визит. | Спецификация «Онлайн-запись — только через ту же функцию записи». **Ровно один визит:** условный переход не пускает второго подтверждающего (тест гонки). Отказ до записи — иначе `ensure_visit` унёс бы строки заявки в смету визита с работой. |
+| Р8 | **Решения клиники и ответы партнёра.**<br>• «Предложить другое время» → `offered` (+ `booking.offered_other_time`);<br>• «Отклонить» с причиной из трёх → `declined` (+ `booking.declined`);<br>• «Взять в работу» → `accepted` (+ `request.accepted`);<br>• истечение → `expired` (+ `booking.declined`, `reason: expired`);<br>• согласие партнёра → снова `pending`;<br>• отказ партнёра → `cancelled`;<br>• отмена пациентом: ждущая — время свободно; записанная без работы — визит отменяет календарь от имени сервера; с работой — пометка «решите вручную». | Критик А8, А9, А11. Пункт 10 шага 7 для шага 8. Таблица статусов — дизайн §7. |
+| Р9 | **События — только из словаря шага 7.** Тело — белый список `webhookBody` (без данных пациента). **Подпись ставит клиника** (HMAC-SHA256 секретом подключения). Пометки: `no_webhook`, `not_subscribed`, `no_secret`. Статус партнёру — `PARTNER_STATUS` (`confirmed` → `booked`). | Подписки партнёров сохранены по словарю шага 7. Секрет не покидает клинику (решение 5). Подделать уведомление, взломав сервер, нельзя. |
+| Р10 | **Судьба визита — сверкой каждым тактом** (`visit-events.js syncVisitOutcomes`), без крючков в дверях календаря:<br>• перенос → `appointment.created` с `rescheduled`;<br>• отмена или удаление → `appointment.cancelled`;<br>• приход (отметкой или деньгами и работой) → `appointment.arrived`;<br>• день прошёл → `no_show`, а приход, доказанный позже, исправляет его;<br>• «перезвоните», по карточке которой записали, → `appointment.created`. | Визит меняют десяток дверей (календарь, касса, кабинет, филиал). Сверка без памяти идемпотентна (тест «второй проход молчит»). |
+| Р11 | **Снимок — белый список.** Клиника, здания (`branchShownToPartners`, своё здание — адрес из «Компании»), врачи (`doctorPublicState`), услуги (`servicePublicState`), пакеты (`packagePublicState` — решение 14). Файлы — ссылками `media/<sha256>.<ext>`. Справочники не входят. | Правила показа — функции шагов 4–6. Справочники зашиты в программу (решение 6) — публичный сервер возьмёт их из неё же. Тест проверяет каждый ключ снимка по списку и ищет метки пациентов и сотрудников. |
+| Р12 | **Время** — `doctorDayWindows` на срок записи врача (7 / 14 / 30 дней): начала и строка свободы `'1011…'`. Живая очередь — часы по дням недели и «сколько ждут» (если разрешено). | Тот же движок, что календарь и превью карточки сотрудника (шаг 5). Наружу — только «свободно / занято», без имён. |
+| Р13 | **Ключи — быстрым каналом.** Отпечаток SHA-256 (шаг 7 хранит его), включено ли, права, лимит, срок, IP, адреса сайтов (CORS). Удалённые не уходят. Изменение уходит в ближайший такт, а RPC подключений будят такт сразу. | Пункт 2 шага 7 для шага 8: «сразу 401». Ключ открытым текстом клинику не покидает. |
+| Р14 | **Обмен** (`public-sync.js`):<br>• такт 15 с;<br>• ключи и снимок — если изменились, и не реже 15 минут;<br>• время — раз в минуту, если изменилось, и сразу после принятой заявки;<br>• события — по порядку, пока не примут;<br>• очередь — курсор после применения.<br>Не бросает. Таймеры unref. Адрес — `EASYMED_PUBLIC_URL`, по умолчанию `https://api.easymed.uz`, со стражем тестов, как `PROD_GUARD_V1`. **Молчит, пока в лицензии нет отпечатка ключа клиники.** | Отправка — по образцу ретранслятора, сбор — по образцу опроса телефонии (спецификация «Сервер»). Молчание до 8c — клиники не стучатся в несуществующий сервер. |
+| Р15 | **Личность клиники** (`sync-identity.js`):<br>• Ed25519 (подпись запросов) + X25519 (ящик для данных пациента);<br>• файл `.api-sync-key` + `.bak`; испорчены оба — отказ, а не новая пара;<br>• **ежечасная сверка** (`checkin.js`) отдаёт открытую половину подписи (`api_sync_public_key`);<br>• закрытые половины не покидают клинику. | Дизайн §4: без общих секретов и без вопроса к серверу лицензий. Прежний сервер лицензий незнакомое поле пропускает. |
+| Р16 | **RPC** (`rpc/api-bookings.js`):<br>• видит тот, кому `/api/db` отдаёт карточку (`compile`: оператор — свои и ничьи, как у доски);<br>• решает — `admin` / `registrar` / `callcenter` с правом править карточку;<br>• филиал — 409;<br>• лицензия: чтения в `READ_ONLY_RPCS`, решения — 402.<br>`api_sync_status` — по строке «API: Просмотр» или администратору. | Это работа с карточкой заявки — ворота карточки. Отдельной строки «Ролей» нет. |
+| Р17 | **Окно в карточке CRM** — блок «Онлайн-запись через API» сразу за «Источником» (как в макете). Выбор карты из кандидатов по номеру (семья, совпавшее имя первым); «Создать карту» — то же окно быстрой регистрации. **После подтверждения окно карточки закрывается**, доска перерисовывается. Строка на карточке доски: «med24.uz · API — ждёт подтверждения до 14:32». | `persist()` окна пишет `patient_id` из своего состояния: «Сохранить» после подтверждения записал бы прежнего (пустого) пациента поверх карты, поставленной сервером. |
+| Р18 | **Экран «API и подключения»** — строка «Публичный сервер» по `api_sync_status`:<br>• «Ещё не включён»;<br>• «Клиника готова к обмену… когда Easy-Med включит»;<br>• «Работает. Последний обмен — …»;<br>• «Нет обмена с … : почему».<br>Тег: «Работает» / «Нет связи» / «Ещё не работает». | Честный экран шага 7 («ещё не включён»), теперь с правдой обмена. |
+| Р19 | **«Не пришёл» удержанные не трогает** — кода в `crm/no-show.js` не меняем, тест закрепляет. | Карточка ждущей записи — без пациента и в первой колонке, а проход берёт только карточки с пациентом из «Колонки записи» и дальше (`crmNoShowSweep`). |
+| Р20 | **Страж «сервер лицензий без данных пациентов»** (`no-patient-data-to-vendor.test.js`):<br>• модули API клиники не знают адреса и переменной сервера лицензий;<br>• в базе сервера лицензий нет таблиц и колонок пациентов, визитов, записей;<br>• в его маршрутах нет адресов заявок и очереди. | Спецификация «Сервер»: «там нет и не будет данных пациентов — проверяется тестом». |
+
+## Что 8a оставляет 8b, 8c и 8d
+
+Каждая строка — требование к названной части. Её план обязан закрыть строку или объяснить отказ.
+
+**→ 8b (публичный сервер, служба `public-server/`):**
+1. Адреса партнёров по документации макета:
+   - `/clinic`, `/branches`, `/doctors`, `/slots` (с `consultation=initial|repeat` — N свободных окон подряд), `/services?group=`, `/packages`, `/reference/geo`, `/reference/specialties`;
+   - `POST /requests`, `POST /appointments` → `{request_id, status:'pending', hold_until}`;
+   - `GET /requests/{id}`, `DELETE /appointments/{id}`, `POST /appointments/{id}/accept|decline`.
+2. `?lang=ru|uz|en`: пустой перевод → русский; суммы — целые; время — UTC+5.
+3. Ключ — по отпечатку из `PUT /keys`; права (403), выключен или истёк (401), IP, лимит (429 + `Retry-After`), CORS по `origins`.
+4. Лицензия из `X-EasyMed-Licence`: подпись производителя, `clinic_id`, срок → иначе 503 `licence_lapsed` на всех адресах партнёров.
+5. Подпись запроса клиники: `X-EasyMed-Key`, отпечаток которого = `payload.api_sync_key` лицензии.
+6. Приём заявки: данные пациента сразу запечатать `box_key` клиники (`sealFor`), открытыми их не хранить. Шифротекст стереть через 24 ч после подтверждения курсора, статус без данных пациента держать 90 дней.
+7. `409 slot_taken` по снимку времени и своей очереди. `503 clinic_offline` для онлайн-записи, если клиника молчит дольше 3 минут (вопрос 5). `/slots` старше 10 минут → `stale`.
+8. Доставка уведомлений: тело и подпись — готовые от клиники; 2xx за 10 с; повторы 1/5/10/30/60 мин; SSRF-проверка адреса перед каждой отправкой.
+9. Журнал запросов (30 дней) и итоги доставок — в очередь клинике (`access`, `deliveries`).
+10. Имя в адресе: занятость другой клиникой → `409 slug_taken`; прежнее имя работает 30 дней.
+11. Сквозной тест с настоящим приложением клиники в процессе (как `offline-lockout.test.js`) по протоколу этого плана; поддельный сервер `fake-public-server.js` — образец ответов.
+
+**→ 8c (сервер лицензий и развёртывание):**
+1. `api_sync_public_key` из сверки → `payload.api_sync_key` в подписанной лицензии — только для клиник, которым Easy-Med включил публичный сервер (переключатель в панели). Отпечаток — первые 32 hex SHA-256 от DER (SPKI) открытого ключа (`sync-identity.js`, `fingerprint`), иначе клиника не узнает себя в лицензии.
+2. Срочный отзыв ключа подключения из панели производителя (клиника без связи).
+3. Машина в Узбекистане, DNS `api.easymed.uz`, TLS, systemd, резервные копии, наблюдение (вопросы 1–2).
+4. Проба на тестовой клинике :8712.
+
+**→ 8d (что клиника видит после включения):**
+1. Журнал запросов с ключом, `last_used_at` и «Последний запрос» в карточке подключения (пункт 5 шага 7).
+2. Журнал доставок уведомлений и кнопка «Проверить адрес» (пункт 4 шага 7).
+3. Напоминание за 14 дней до срока ключа (пункт 3 шага 7).
+4. Удержание полосой в сетке календаря («Держим: онлайн-запись med24.uz до 14:32»).
+5. Отсрочка прежнего ключа на 24 часа — если владелец выберет (вопрос 6, пункт 7 шага 7).
+6. Языки ответа по ключу (пункт 8 шага 7) — вместе с 8b.
+
+**Пункт 9 шага 7** (источник подключения у заявки остаётся, оператор не может убрать или заменить) — тоже 8d. Признак «заявка пришла через подключение» теперь есть: `api_requests.crm_request_id`. Правило в `crm/sources.js` и экран без «×» у этого источника строит 8d.
+
+**Пункт 11 шага 7** (опция «подтверждать сразу») не строится — решение владельца 3.
+
+---
+
+## Карта файлов
+
+**Создаются:**
+- Миграция: `server/db/migrations/245_public_api_booking.sql`, `server/db/migrations/245.test.js`.
+- Общий модуль: `public/js/shared/api-booking.js` (+ `.test.js`).
+- Сервер, папка `server/services/api/`:
+  - `holds.js`;
+  - `outbox.js` (+ `.test.js`);
+  - `bookings.js` (+ `bookings-intake.test.js`, `bookings-confirm.test.js`, `bookings-offer.test.js`);
+  - `visit-events.js` (+ `.test.js`);
+  - `sync-identity.js` (+ `.test.js`);
+  - `snapshot.js` (+ `.test.js`);
+  - `public-sync.js` (+ `public-sync.test.js`, `public-sync.e2e.test.js`);
+  - `no-patient-data-to-vendor.test.js`.
+- Сервер, остальное:
+  - `server/services/rpc/api-bookings.js` (+ `.test.js`);
+  - `server/services/rpc/calendar-holds.test.js`;
+  - `server/routes/api-bookings-http.test.js`;
+  - `server/services/control/checkin-sync-key.test.js`.
+- Стенды тестов: `server/test-helpers/api-booking-seed.js`, `server/test-helpers/fake-public-server.js`.
+- Экран: `public/js/admin/views/crm-api-booking.js`.
+- Тесты экрана, папка `public/js/admin/__tests__/`: `crm-api-booking.test.mjs`, `crm-api-board.test.mjs`, `api-connections-sync.test.mjs`.
+
+**Меняются:**
+- Сервер:
+  - `server/services/rpc/calendar.js` (:158, :254, :277–284, :412, :772, :801, :847, :1089–1093);
+  - `server/services/rpc/visits.js` (:92–99, :148–154, :228–231, :358–367);
+  - `server/services/control/checkin.js` (:8, :408, :422);
+  - `server/services/rpc/api-connections.js` (:30, :97, :109, :119, :129, :134);
+  - `server/index.js` (:29, :404–406);
+  - `server/services/rpc/index.js` (:81, :629);
+  - `server/services/control/gate.js` (:53);
+  - `server/services/rpc/patient-merge.js` (:79).
+- Экраны: `public/js/admin/views/crm.js` (:64, :432, :441, :451, :1080, :1540, :3170), `public/js/admin/views/api-connections.js` (:27, :58, :113, :118).
+- Стенд CRM: `public/js/admin/__tests__/crm-harness.mjs` (:88, :127).
+- Словарь: `public/js/admin/i18n-strings.js` — блоками в конец.
+- Стили: `public/css/admin-views.css` — в конец.
+
+---
+
+## Сейчас в коде (сверено 2026-10-11, дерево `9521240c`)
+
+- **Занятость врача** — `rpc/calendar.js`:
+  - `loadBusy` (:254–284): только визиты в статусах `BUSY_STATUSES`, без удержаний. Его читают `doctorDayWindows` (:393–412), `calendarSlots` (:801) и `calendarBook` (:1089–1095).
+  - `calendarBook` без `visit_id` и без пациента отказывает: «Не выбран пациент.» (:1005–1006). **Удержать время без карты сегодня нечем** (критик А10).
+  - Отказ двойной записи — `conflictError` (:938–946), код `slot_taken` с `{doctor, from, to}`.
+- **`ensure_visit`** — `rpc/visits.js`:
+  - `ensureVisit(db, args, user)` (:154) спрашивает занятость через `calendarSlots` (`slotConflict` :92–104), заводит визит дня, ставит время `calendarBook` (:358–367);
+  - откатывает созданный визит при отказе (:387–390);
+  - связывает визит с заявкой CRM (`crmLinkVisit` :396) и сверяет строки (`mirrorVisit` :397).
+  - Визит дня «с работой» → `booked:false` (:319–342) — при этом связь и зеркало уже отработали.
+- **Маршрут `/api/rpc`** зовёт обработчики тремя аргументами (`rpc/index.js`: `ensure_visit` :266, `calendar_slots` :286, `calendar_book` :291).
+- **Связь визита с CRM** — `crm/visit-link.js`:
+  - шаг C — открытые заявки пациента, ждущие этот приход;
+  - шаг D — по номеру: единственная открытая заявка без пациента на ключе номера получает `patient_id`.
+  - Зеркало (`crm/booking-mirror.js` `mirrorVisit` :325) кладёт строки заявки этого дня в визит по цене кассы.
+  - `dayVisitMovableFor` :131–141, `visitHasWork` :111–116, `arrivedByEvidence` :76.
+- **«Не пришёл»** — `crm/no-show.js crmNoShowSweep` (:196): только карточки **с пациентом** из «Колонки записи» и дальше.
+- **Объединение карт** — `rpc/patient-merge.js MERGE_TABLES` (:66–84): каждая колонка схемы, указывающая на пациента. Страж `patient-merge.test.js` («охват») сверяет список со схемой — новая `api_requests.patient_id` обязана в него попасть.
+- **Подключения шага 7:**
+  - мигр. 242 `api_connections` — `key_hash` SHA-256, `key_sealed`, `secret_sealed`, `webhook_url`, `webhook_events`, `scopes`, `rate_limit`, `ip_allow`, `key_expires_at`, `crm_source_key`;
+  - `services/api/secret-box.js` — `loadKek`, `unseal`, `keyHash`;
+  - `services/api/connections.js` — `readSlug`;
+  - RPC записи — `rpc/api-connections.js` :95–135, ничего не будят;
+  - словарь событий — `shared/api-connections.js EVENTS`: 7 событий, среди них `booking.confirmed / offered_other_time / declined`;
+  - экран — `views/api-connections.js`: «Публичный сервер — Ещё не включён» (:113), тег «Ещё не работает» (:118).
+- **Сверка с сервером лицензий** — `control/checkin.js`:
+  - тело — `install_token, version, fingerprint, module_requests, stats, update_result` (:416–423);
+  - сервер лицензий берёт только свои поля (`control-plane/server/routes/checkin.js:25`);
+  - `readBounded` (:299) экспортирован;
+  - лицензия — `data/licence.dat`, подписана Ed25519 производителя (`control/licence.js`).
+- **Образцы фона:**
+  - `telephony/poller.js` (`pollOnce` :198, `schedulePolling` :335 — `inFlight`, unref, `wakePolling`);
+  - `branch-sync/relay.js` (`publishCatalogue` :322, `publishBookingNow` :1485, страж `assertControlUrlIsTestSafe` — `control/prod-guard.js`).
+- **Правила показа шагов 4–6:**
+  - `shared/branch-profile.js` — `branchShownToPartners` :151, `overlayOwnBuilding` :138;
+  - `shared/doctor-public.js` — `doctorPublicState` :120;
+  - `shared/service-public.js` — `servicePublicState` :84, `apiGroupOf` :56, `serviceNames` :74;
+  - `shared/package-price.js` — `packagePublicState` :275, `packageCalc` :118;
+  - `rpc/doctor-public.js` — `doctorConsultOffer` :38, `doctorConsultServices` :51;
+  - `rpc/queue.js` — `doctorQueueWaiting` :406.
+- **Сервер лицензий** (`control-plane/server`):
+  - таблицы — `clinics` (с `contact_phone` владельца клиники), `checkins`, `relay_*`, `releases` и прочие служебные; ни пациентов, ни визитов;
+  - маршруты — `/requests` в `admin.js` (это просьбы клиник о модулях).
+- **CRM доска** — `views/crm.js`:
+  - `load()` (:418–457) грузит доску, задачи и метки одним `Promise.all` (:432–443);
+  - `kanbanCard` (:1014) — `taskChip(r)` (:1080);
+  - окно заявки `requestModal` (:1541) — поле «Источник» (:3170);
+  - `persist()` пишет `patient_id` из своего `linkedPatient` (:2347).
+  - Стенд тестов — `__tests__/crm-harness.mjs`: неизвестный RPC отвечает `{}`.
+- **Последняя миграция — 244** (шаг 6); эта — **245**. Проверено 2026-10-11 во всех клонах `implementation workflow` (`easymed.api5` на `fix/backlog-1011` — без миграций).
+
+---
+
+## Правила рабочего дерева (читать до первого шага)
+
+**Дерево** назначает контролёр: ветка `feat/clinic-api-step8a` от основной линии (`9521240c` или новее).
+- Клон с `core.autocrlf=false` и своей копией `node_modules`, как `easymed.api7`. Ветку не переключать; worktree не создавать — он стирает `node_modules`.
+- Номера строк в плане — по `9521240c`. Если основная ушла вперёд, место находить `grep -n` по приведённой строке.
+
+**Два сборщика в одном клоне** (см. «Порядок»): каждый коммитит только свои файлы.
+- Общий файл обоих — только `public/js/admin/i18n-strings.js`: оба дописывают в конец, своими блоками.
+- Его, а также файлы, которые в том же клоне могут править сборщики других шагов (`server/services/rpc/index.js`, `server/services/control/gate.js`, `server/index.js`, `public/css/admin-views.css`, `views/crm.js`), коммитить **только своими строками** — точным блобом:
+  1. свои добавленные и удалённые строки записать в `C:/Users/user/AppData/Local/Temp/claude/c--Users-user-Desktop-ailos-agentic-system/cdaa5eb3-8422-4424-8c3a-38580164abe3/scratchpad/mine/step8a-<A|B>-<имя файла>.txt` (добавленная — с `+`, удалённая — с `-`, ровно как в файле);
+  2. `node C:/Users/user/AppData/Local/Temp/claude/c--Users-user-Desktop-ailos-agentic-system/cdaa5eb3-8422-4424-8c3a-38580164abe3/scratchpad/exact-blob.mjs <клон> <файл> <mine.txt>` — без `--stage`, показать, что ляжет;
+  3. затем то же с `--stage`;
+  4. после коммита файл `mine` очистить.
+- Если в клоне работают сборщики другого шага — свои ханки только по метке (скрипт `keep-hunks-v2.mjs` — из `docs/plans/2026-09-28-lis-mindray-codes.md` с правкой v2, память `easymed-shared-tree-hunk-commits`; в скретчпаде его нет — восстановить оттуда):
+  - `git diff -U0 -- F | node <скретчпад>/keep-hunks-v2.mjs PUBLIC_API_V1 > own.patch`;
+  - `git apply --cached --check --unidiff-zero own.patch`;
+  - `git apply --cached --unidiff-zero own.patch`.
+
+**Перед каждым коммитом:**
+1. `git status --short`.
+2. `git diff --cached --name-only` пуст. Если нет — кто-то собирает коммит: подождать, ничего не снимать.
+3. Для каждого своего файла `git diff -U0 -- <файл>`: чужих ханков нет — `git add <файл>`; есть — точным блобом (выше).
+
+**Запрещено:**
+- `git checkout`, `git restore`, `git stash`, `git reset`, `git switch`, `git merge`, `git add -A`, `git add .`;
+- трогать запущенные серверы (:8000, :8712) и каталог `data/`;
+- пушить и ставить тег — это делает контролёр.
+
+**Миграция — 245.**
+- Перед созданием — `ls server/db/migrations | tail -6` в своём клоне и `ls "C:/Users/user/Desktop/implementation workflow"/*/server/db/migrations | grep -E '^24[5-9]'`.
+- Номер занят — взять следующий свободный и переименовать файл, тест и все упоминания (`grep -rn "245" <файлы задачи>`).
+- Пропуски не заполнять (`migrate.js lateMigrations`, `migration-order.test.js`).
+
+**Файлы и коммиты:**
+- Файлы — LF, новые тоже. Проверка: `git diff --cached --stat` без `^M`.
+- Изменения существующих файлов даны в плане **единым diff-ом от `9521240c`**. Применять так:
+  1. записать блок в файл;
+  2. `git apply --check <файл>`, затем `git apply <файл>`.
+  
+  Не легло (основная ушла вперёд, CRLF) — внести руками по строкам `+` и `-`.
+- Сообщение коммита — Write в `C:/Users/user/AppData/Local/Temp/claude/c--Users-user-Desktop-ailos-agentic-system/cdaa5eb3-8422-4424-8c3a-38580164abe3/scratchpad/msgs/step8a-<N>.txt`, затем `git commit -F <файл>`.
+- Сообщение — по-русски; первая строка — текст коммита из задачи с хвостом `(PUBLIC_API_V1, CLINIC_API_STEP8_V1)`; последняя строка — `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
+- В коммит — только названные файлы задачи.
+
+**Тесты:**
+- Только явными путями, из корня клона:
+  - `node --test <файлы>` — серверные, `public/js/shared/*.test.js` и `public/js/admin/views/*.test.js`;
+  - `node --experimental-vm-modules --test <файлы>` — клиентские `.mjs`.
+- Каталог аргументом не передавать (Node 24 на Windows).
+- Серверные тесты, доходящие до RPC анализаторов, — с `LIS_ENABLED=0` (страж `lis-port-hygiene`). Тесты плана до них не доходят, но команды плана ставят `LIS_ENABLED=0` везде, где поднимается приложение или обходится карта RPC.
+- Харнессы экранов задают `localStorage['admin.lang'] = 'ru'` до импорта видов (ловушка локали CI): `api-harness.mjs` и `crm-harness.mjs` это делают.
+- Время в тестах подставное (`now`), дни записи — 2030 год: тесты не зависят от часов машины. Исключение — тесты RPC и HTTP: там решения идут без подстановки времени, и запись ставится на неделю вперёд от сегодня.
+- Ключи — только выпущенные во время теста (стенд шага 7) или строки с `TESTONLY` (страж `no-real-api-keys`).
+- Каждая задача кончается своими тестами **и** сторожами, названными у задачи. Исходники сканируют:
+  - клиентские: `i18n-coverage`, `i18n-uz-quality`, `type-scale`, `icons`, `english-literals-v3120`, `no-import-cycles`, `no-stray-globals`;
+  - серверные: `server/i18n-server-messages.test.js`, `server/services/rpc/client-rpc-coverage.test.js`, `server/services/rpc/index.test.js`, `server/services/gate-fallbacks.test.js`, `server/lis-port-hygiene.test.js`, `server/app-test-hygiene.test.js`, `server/test-helpers/no-test-helpers-in-production.test.js`, `server/services/api/no-real-api-keys.test.js`.
+- Задача, меняющая вид, кончается ещё тестами рядом с видами — явным списком (маска нельзя): `public/js/admin/views/service-group.test.js public/js/admin/views/service-search.test.js public/js/admin/views/visit-bill-origin.test.js public/js/admin/views/doctor-pool.test.js public/js/admin/views/doctor-refer-wizard.test.js public/js/admin/views/crm-phone-match.test.js`.
+
+**Текст и вид:**
+- Каждая новая строка интерфейса и каждое сообщение сервера — статьёй ru / uz / en в `i18n-strings.js`.
+  - Пишется в конец, блоком с комментарием `// PUBLIC_API_V1 — <задача N>`; каждая строка блока кончается `// PUBLIC_API_V1`.
+  - Блоки даны в задачах целиком.
+  - Перед добавлением — `grep -n '^  "<ключ>":' public/js/admin/i18n-strings.js`: статья есть — не дублировать. В блоки плана уже не вошли существующие статьи: «Новая заявка», «Записан», «Отклонено», «Отменено», «Пришёл», «Не пришёл», «Время указано неверно.», «Предложено другое время», «Отклонить», «Выбрать», «Карта пациента», «Подключение», «Статус», «Отмена», «Закрыть», «Загрузка…», «Причина», «Врач», «Дата», «Время», «Работает», «Нет связи», «Ещё не работает», «Не удалось выполнить запрос.», «Взять в работу», «Нужно войти в систему.», «{sum} сум», «Это время занято: у врача {doctor} уже есть приём {from}–{to}. Выберите другое время.».
+- Узбекский и английский — без кириллицы (`i18n-uz-quality`). Узбекский апостроф — `‘` (U+2018), как в блоках шагов 3–7.
+- Русский текст не склеивать с переменными: шаблон `{x}` + `trf()`; на сервере — `rpcT`.
+- Данные клиники и пациента (имена, номера, комментарии, названия подключений) — `document.createTextNode`, не через `tr()`.
+- Размеры шрифта — только 12.5 / 13.5 / 15 / 17 / 20 / 24 / 30 / 40 (`type-scale`).
+- Значки — только `Icon()`: Key, Check, Calendar, Send, Plus, Warning. Без эмодзи.
+- Вёрстка — без фиксированных ширин больше 320 px; на ширине телефона — один столбец (`@media (max-width: 560px)`).
+
+**Полный прогон** делает контролёр после всех задач («Завершение»). Во время работы — только файлы тестов задачи и названные сторожа.
+
+**Ответы владельца** (когда придут) — вписать блоком сюда, с номерами задач, которые они меняют. Вопрос 4 → задача 2 (`holdUntilFor`) и её тест; вопросы 1–3, 5, 6 — 8b, 8c и 8d.
+
+---
+
+## Порядок и два сборщика
+
+Сборщик **А — сервер** (задачи 0–12): миграция, общий модуль, движок записи, домен, обмен, RPC, стражи.
+
+Сборщик **Б — экраны** (задачи 13–15): окно в карточке CRM, доска, экран «API».
+
+Столбец «Нужны до начала» — что должно быть **закоммичено** до начала задачи.
+
+| Задача | Сборщик | Нужны до начала |
+|---|---|---|
+| 0 План и дизайн в репозиторий | А | — |
+| 1 Миграция 245 | А | 0 |
+| 2 Общий модуль `shared/api-booking.js` | А | 1 |
+| 3 Удержание в движке записи | А | 1, 2 |
+| 4 События наружу; стенд онлайн-записи | А | 3 |
+| 5 Заявки из API: приём, подтверждение, другое время, отказ, истечение, ответы партнёра | А | 4 |
+| 6 Судьба визита → события | А | 5 |
+| 7 Личность клиники | А | 2 |
+| 8 Снимок наружу | А | 5 |
+| 9 Обмен с публичным сервером | А | 6, 7, 8 |
+| 10 Ключ подписи в сверке, расписание, будильник подключений | А | 9 |
+| 11 RPC онлайн-записи | А | 9 |
+| 12 Страж «сервер лицензий без данных пациентов» | А | 9 |
+| 13 Окно «Онлайн-запись через API» | Б | 2, **11** (страж `client-rpc-coverage` ищет имена RPC) |
+| 14 CRM: окно в карточке и строка на доске | Б | 13 |
+| 15 «API и подключения»: строка обмена | Б | 11 |
+
+Сборщик Б начинает, когда закоммичена задача 11 — она открывает имена RPC, которые зовут экраны. До этого он может читать план и макет.
+
+Словарь `i18n-strings.js` пишут оба: каждый — своим блоком в конец, точным блобом. Статью, которую уже добавил другой, не дублировать.
+
+---
+
+## Task 0: План и дизайн в репозиторий
+
+Сборщик А.
+
+**Files:**
+- Create: `docs/plans/2026-10-11-clinic-api-8a-clinic-side.md` — копия этого файла.
+- Create: `docs/specs/2026-10-11-clinic-api-8-public-server-design.md` — копия `scratchpad/plan8/step8-design.md`.
+
+- [ ] **Step 1:** скопировать оба файла (LF).
+- [ ] **Step 2: коммит** «План шага 8a API клиники и дизайн шага 8: публичный сервер, онлайн-запись с удержанием без карты, обмен клиники с сервером; части 8a–8d, вопросы владельцу».
+
+---
+
+## Task 1: Миграция 245 — заявки из API, удержание времени, события наружу, состояние обмена (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/db/migrations/245.test.js`, `server/db/migrations/245_public_api_booking.sql`
+- Modify: `server/services/rpc/patient-merge.js` (:79) — новая колонка `api_requests.patient_id` указывает на пациента. Страж `patient-merge.test.js` («каждая колонка схемы, указывающая на пациента, объединением обработана») требует её в `MERGE_TABLES`.
+
+- [ ] **Step 1: падающий тест** `server/db/migrations/245.test.js`:
+
+```js
+// PUBLIC_API_V1 (мигр. 245) — ЗАЯВКИ ИЗ API, УДЕРЖАНИЕ ВРЕМЕНИ БЕЗ КАРТЫ, СОБЫТИЯ
+// НАРУЖУ, СОСТОЯНИЕ ОБМЕНА: только CREATE TABLE. Прежние таблицы не тронуты;
+// номер заявки партнёра у подключения один; живое удержание у заявки одно;
+// у онлайн-записи всегда есть врач и время; тело события — объект JSON.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { openDb } from '../connection.js';
+import { migrate } from '../migrate.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+import { insertConnectionRow } from '../../test-helpers/api-connection-row.js';
+
+const DIR = path.dirname(fileURLToPath(import.meta.url));
+function dbBefore245() {
+  const db = openDb(':memory:');
+  const tmp = tmpDir('em-mig245-');
+  for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && parseInt(x, 10) < 245)) {
+    fs.copyFileSync(path.join(DIR, f), path.join(tmp, f));
+  }
+  migrate(db, tmp);
+  return db;
+}
+const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
+function seed(db) {
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (7, 'doc', 'x', 'Врач', 'doctor', 1)").run();
+  const conn = insertConnectionRow(db);
+  return { conn };
+}
+const req = (db, over = {}) => {
+  const row = { public_id: 'rq_abc123def', connection_id: 1, kind: 'appointment', status: 'pending', doctor_id: 7,
+    start_at: '2026-10-20T05:00:00Z', duration_minutes: 30, received_at: '2026-10-11T09:00:00Z', ...over };
+  const cols = Object.keys(row);
+  return Number(db.prepare(`INSERT INTO api_requests (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
+    .run(...cols.map((c) => row[c])).lastInsertRowid);
+};
+
+test('245: четыре таблицы, строка состояния одна; прежние таблицы и визиты не тронуты', () => {
+  const db = dbBefore245();
+  const before = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
+  migrate(db);
+  const after = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
+  const added = after.filter((t) => !before.some((b) => b.name === t.name)).map((t) => t.name).sort();
+  assert.deepEqual(added, ['api_outbox', 'api_requests', 'api_sync_state', 'slot_holds']);
+  for (const b of before) assert.equal(after.find((t) => t.name === b.name).sql, b.sql, 'не тронута: ' + b.name);
+  assert.deepEqual(db.prepare('SELECT id, inbox_cursor, last_error FROM api_sync_state').all().map((r) => ({ ...r })),
+    [{ id: 1, inbox_cursor: '', last_error: '' }]);
+  assert.throws(() => db.prepare('INSERT INTO api_sync_state (id) VALUES (2)').run(), /CHECK/);
+});
+
+test('245: номер заявки — rq_ и латиница/цифры; номер партнёра у подключения один; повтор public_id — отказ', () => {
+  const db = fresh(); seed(db);
+  for (const bad of ['rq_', 'rq_ab', 'xx_abcdefgh', 'rq_abc-defgh', 'rq_' + 'a'.repeat(40)]) {
+    assert.throws(() => req(db, { public_id: bad }), /CHECK/, bad);
+  }
+  req(db, { public_id: 'rq_00000001', external_id: 'med-1' });
+  assert.throws(() => req(db, { public_id: 'rq_00000002', external_id: 'med-1' }), /UNIQUE/);
+  req(db, { public_id: 'rq_00000003', external_id: '' });
+  req(db, { public_id: 'rq_00000004', external_id: '' });
+  assert.throws(() => req(db, { public_id: 'rq_00000004' }), /UNIQUE/);
+});
+
+test('245: онлайн-запись — с врачом, временем и длительностью; заявка «перезвоните» — без удержания', () => {
+  const db = fresh(); seed(db);
+  assert.throws(() => req(db, { public_id: 'rq_noDoctor1', doctor_id: null }), /CHECK/);
+  assert.throws(() => req(db, { public_id: 'rq_noStart01', start_at: null }), /CHECK/);
+  assert.throws(() => req(db, { public_id: 'rq_noDur0001', duration_minutes: null }), /CHECK/);
+  req(db, { public_id: 'rq_callback1', kind: 'request', status: 'new', doctor_id: null, start_at: null, duration_minutes: null });
+  assert.throws(() => req(db, { public_id: 'rq_callback2', kind: 'request', status: 'pending', doctor_id: null, start_at: null, duration_minutes: null }), /CHECK/);
+  assert.throws(() => req(db, { public_id: 'rq_callback3', kind: 'request', status: 'new', hold_until: '2026-10-11T09:30:00Z' }), /CHECK/);
+  assert.throws(() => req(db, { public_id: 'rq_badstat1', status: 'booked' }), /CHECK/);
+  assert.throws(() => req(db, { public_id: 'rq_badreas1', status: 'declined', decline_reason: 'busy' }), /CHECK/);
+});
+
+test('245: у заявки одно живое удержание; освобождённое — с причиной', () => {
+  const db = fresh(); seed(db);
+  const id = req(db);
+  const hold = (over = {}) => db.prepare(`INSERT INTO slot_holds (doctor_id, start_at, duration_minutes, until_at, api_request_id, kind, released_at, release_reason)
+    VALUES (7, '2026-10-20T05:00:00Z', 30, '2026-10-11T09:30:00Z', ?, ?, ?, ?)`).run(id, over.kind || 'booking', over.released_at ?? null, over.release_reason ?? '');
+  hold();
+  assert.throws(() => hold(), /UNIQUE/, 'второе живое удержание');
+  hold({ released_at: '2026-10-11T09:10:00Z', release_reason: 'offered' });
+  assert.throws(() => hold({ released_at: '2026-10-11T09:10:00Z' }), /CHECK/, 'освобождено без причины');
+  assert.throws(() => hold({ release_reason: 'expired' }), /CHECK/, 'причина без освобождения');
+  assert.throws(() => hold({ kind: 'visit', released_at: '2026-10-11T09:10:00Z', release_reason: 'expired' }), /CHECK/);
+});
+
+test('245: событие — объект JSON и известная пометка', () => {
+  const db = fresh(); seed(db);
+  const id = req(db);
+  const ev = (body, note = '') => db.prepare('INSERT INTO api_outbox (api_request_id, connection_id, event, status, body, note) VALUES (?, 1, ?, ?, ?, ?)')
+    .run(id, 'booking.confirmed', 'booked', body, note);
+  ev('{"event":"booking.confirmed"}');
+  assert.throws(() => ev('[1,2]'), /CHECK/);
+  assert.throws(() => ev('не json'), /CHECK|malformed/);
+  assert.throws(() => ev('{}', 'lost'), /CHECK/);
+  ev('{}', 'no_secret');
+});
+```
+
+- [ ] **Step 2:** `node --test server/db/migrations/245.test.js` → падает: таблиц `api_requests`, `slot_holds`, `api_outbox`, `api_sync_state` нет (`no such table`).
+- [ ] **Step 3: миграция** `server/db/migrations/245_public_api_booking.sql`:
+
+```sql
+-- 245 — PUBLIC_API_V1 (2026-10-11): ЗАЯВКИ И ОНЛАЙН-ЗАПИСЬ ИЗ API — сторона
+-- клиники (шаг 8a API клиники, docs/specs/2026-10-06-clinic-api-design.md;
+-- план docs/plans/2026-10-11-clinic-api-8a-clinic-side.md).
+--
+-- ТОЛЬКО CREATE TABLE / CREATE INDEX и одна INSERT (строка состояния обмена).
+-- Ни одна прежняя таблица не пересобирается и не правится.
+--
+-- Таблиц этого файла НЕТ в schema-registry.js (как api_connections, мигр. 242):
+-- /api/db их не знает по построению, всё — через RPC rpc/api-bookings.js и фон
+-- services/api/public-sync.js. Между зданиями они не ездят (их нет в
+-- branch-sync/catalogue.js TABLES и journal.js SHIPPED): подключения API живут
+-- в главном здании, заявки партнёров — там же. Визит, заведённый подтверждением,
+-- — обычный визит и едет, как любой.
+
+-- Заявка, пришедшая через публичный сервер. kind:
+--   'request'     — «перезвоните мне» (без времени);
+--   'appointment' — онлайн-запись на выбранное время.
+-- Данные пациента (имя, телефон, комментарий) лежат здесь и в карточке CRM —
+-- в базе клиники; наружу уходит только номер заявки и её статус.
+CREATE TABLE api_requests (
+  id                   INTEGER PRIMARY KEY,
+  public_id            TEXT NOT NULL UNIQUE
+                       CHECK (public_id GLOB 'rq_*' AND length(public_id) BETWEEN 9 AND 40
+                              AND substr(public_id, 4) NOT GLOB '*[^A-Za-z0-9]*'),
+  connection_id        INTEGER NOT NULL REFERENCES api_connections(id),
+  external_id          TEXT NOT NULL DEFAULT '' CHECK (length(external_id) <= 64),
+  kind                 TEXT NOT NULL CHECK (kind IN ('request', 'appointment')),
+  status               TEXT NOT NULL CHECK (status IN ('new', 'accepted', 'pending', 'confirming', 'offered',
+                         'confirmed', 'declined', 'expired', 'cancelled', 'arrived', 'no_show')),
+  crm_request_id       INTEGER REFERENCES crm_requests(id) ON DELETE SET NULL,
+  patient_name         TEXT NOT NULL DEFAULT '' CHECK (length(patient_name) <= 120),
+  patient_phone        TEXT NOT NULL DEFAULT '' CHECK (length(patient_phone) <= 32),
+  comment              TEXT NOT NULL DEFAULT '' CHECK (length(comment) <= 1000),
+  lang                 TEXT NOT NULL DEFAULT '' CHECK (lang IN ('', 'ru', 'uz', 'en')),
+  doctor_id            INTEGER REFERENCES users(id),
+  branch_id            INTEGER REFERENCES branches(id),
+  service_id           INTEGER REFERENCES services(id),
+  consultation_type_id INTEGER REFERENCES consultation_types(id),
+  package_id           INTEGER REFERENCES service_templates(id) ON DELETE SET NULL,
+  start_at             TEXT,
+  duration_minutes     INTEGER CHECK (duration_minutes IS NULL OR duration_minutes BETWEEN 5 AND 480),
+  hold_until           TEXT,
+  offered_start        TEXT,
+  offer_until          TEXT,
+  decline_reason       TEXT NOT NULL DEFAULT '' CHECK (decline_reason IN ('', 'slot_taken', 'doctor_unavailable',
+                         'not_bookable', 'duplicate', 'expired', 'other')),
+  patient_id           INTEGER REFERENCES patients(id),
+  visit_id             INTEGER REFERENCES visits(id) ON DELETE SET NULL,
+  partner_cancel_at    TEXT,
+  received_at          TEXT NOT NULL,
+  picked_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  handled_by           INTEGER REFERENCES users(id),
+  -- Онлайн-запись всегда знает врача и время; заявке они не обязательны.
+  CHECK (kind = 'request' OR (doctor_id IS NOT NULL AND start_at IS NOT NULL AND duration_minutes IS NOT NULL)),
+  -- Удержание и встречное предложение — только у онлайн-записи.
+  CHECK (kind = 'appointment' OR (hold_until IS NULL AND offered_start IS NULL AND status IN
+         ('new', 'accepted', 'confirmed', 'cancelled', 'arrived', 'no_show')))
+);
+-- Один номер заявки партнёра — одна заявка у подключения: повтор отправки не
+-- заводит вторую карточку и второе удержание.
+CREATE UNIQUE INDEX api_requests_external ON api_requests (connection_id, external_id) WHERE external_id <> '';
+CREATE INDEX api_requests_crm    ON api_requests (crm_request_id);
+CREATE INDEX api_requests_status ON api_requests (status);
+CREATE INDEX api_requests_visit  ON api_requests (visit_id) WHERE visit_id IS NOT NULL;
+
+-- УДЕРЖАНИЕ ВРЕМЕНИ БЕЗ КАРТЫ (решение владельца 3). Не визит: карты пациента
+-- ещё нет, поэтому visits.patient_id (NOT NULL) держать время не может. Время
+-- занято, пока released_at пуст И until_at впереди: истечение освобождает слот
+-- само, без таймера (rpc/calendar.js loadBusy читает это условие). Фон только
+-- записывает итог (expired) и сообщает партнёру.
+CREATE TABLE slot_holds (
+  id               INTEGER PRIMARY KEY,
+  doctor_id        INTEGER NOT NULL REFERENCES users(id),
+  start_at         TEXT NOT NULL,
+  duration_minutes INTEGER NOT NULL CHECK (duration_minutes BETWEEN 5 AND 480),
+  until_at         TEXT NOT NULL,
+  api_request_id   INTEGER NOT NULL REFERENCES api_requests(id),
+  kind             TEXT NOT NULL CHECK (kind IN ('booking', 'offer')),
+  created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  released_at      TEXT,
+  release_reason   TEXT NOT NULL DEFAULT '' CHECK (release_reason IN ('', 'confirmed', 'expired', 'declined',
+                     'cancelled', 'offered', 'accepted')),
+  CHECK ((released_at IS NULL) = (release_reason = ''))
+);
+CREATE INDEX slot_holds_live ON slot_holds (doctor_id, start_at) WHERE released_at IS NULL;
+-- У заявки одно живое удержание.
+CREATE UNIQUE INDEX slot_holds_one_live ON slot_holds (api_request_id) WHERE released_at IS NULL;
+
+-- СОБЫТИЯ НАРУЖУ: статус заявки для партнёра и уведомление (вебхук). Тело —
+-- без данных пациента (shared/api-booking.js webhookBody); подпись HMAC-SHA256
+-- ставит КЛИНИКА секретом подключения (секрет не покидает клинику), публичный
+-- сервер только доставляет. Уходит по порядку id; sent_at — публичный сервер
+-- принял.
+CREATE TABLE api_outbox (
+  id             INTEGER PRIMARY KEY,
+  api_request_id INTEGER REFERENCES api_requests(id),
+  connection_id  INTEGER NOT NULL REFERENCES api_connections(id),
+  event          TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  body           TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+  webhook_url    TEXT NOT NULL DEFAULT '',
+  signature      TEXT NOT NULL DEFAULT '',
+  note           TEXT NOT NULL DEFAULT '' CHECK (note IN ('', 'no_webhook', 'not_subscribed', 'no_secret')),
+  created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  sent_at        TEXT,
+  attempts       INTEGER NOT NULL DEFAULT 0,
+  last_error     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX api_outbox_unsent ON api_outbox (id) WHERE sent_at IS NULL;
+
+-- Состояние обмена с публичным сервером: одна строка, id = 1 (как api_settings).
+CREATE TABLE api_sync_state (
+  id            INTEGER PRIMARY KEY CHECK (id = 1),
+  inbox_cursor  TEXT NOT NULL DEFAULT '',
+  snapshot_hash TEXT NOT NULL DEFAULT '',
+  snapshot_at   TEXT,
+  slots_hash    TEXT NOT NULL DEFAULT '',
+  slots_at      TEXT,
+  keys_hash     TEXT NOT NULL DEFAULT '',
+  keys_at       TEXT,
+  last_poll_at  TEXT,
+  last_ok_at    TEXT,
+  last_error    TEXT NOT NULL DEFAULT '',
+  last_error_at TEXT
+);
+INSERT INTO api_sync_state (id) VALUES (1);
+```
+
+- [ ] **Step 4: объединение карт** — `server/services/rpc/patient-merge.js`: выбранная регистратором карта заявки переезжает на оставленную, как карточка CRM:
+
+```diff
+diff --git a/server/services/rpc/patient-merge.js b/server/services/rpc/patient-merge.js
+index a15109f..08a98d0 100644
+--- a/server/services/rpc/patient-merge.js
++++ b/server/services/rpc/patient-merge.js
+@@ -77,6 +77,8 @@ export const MERGE_TABLES = Object.freeze([
+   { table: 'telegram_deliveries', cols: ['patient_id'], how: 'move' },
+   { table: 'calls', cols: ['patient_id'], how: 'move' },
+   { table: 'crm_requests', cols: ['patient_id'], how: 'move' },
++  // PUBLIC_API_V1 (мигр. 245) — карта, выбранная регистратором для заявки из API.
++  { table: 'api_requests', cols: ['patient_id'], how: 'move' },
+   { table: 'custdev_cards', cols: ['patient_id'], how: 'move' },
+   { table: 'patient_deposits', cols: ['patient_id'], how: 'money' },
+   { table: 'patient_guardians', cols: ['patient_id', 'guardian_patient_id'], how: 'guardians' },
+```
+
+- [ ] **Step 5:** тест зелёный (5 тестов). Сторожа:
+  - `node --test server/db/migration-order.test.js server/db/migrate.test.js server/db/migrations/242.test.js server/db/migrations/244.test.js server/services/branch-sync/journal.test.js server/db/schema-registry.test.js server/services/rpc/patient-merge.test.js server/services/branch-sync/patient-merge-sync.test.js`;
+  - журнальные триггеры не тронуты, таблиц в реестре нет, объединение карт охватывает новую колонку.
+- [ ] **Step 6: коммит** «Миграция 245: заявки и онлайн-запись из API — удержание времени без карты пациента, события партнёру, состояние обмена с публичным сервером; только новые таблицы; объединение карт переносит и карту заявки».
+
+---
+
+## Task 2: Общий модуль заявок из API — статусы, причины отказа, события, срок удержания, разбор очереди, тело уведомления (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `public/js/shared/api-booking.test.js`, `public/js/shared/api-booking.js`
+- Modify: `public/js/admin/i18n-strings.js` (блок в конец)
+
+- [ ] **Step 1: падающий тест** `public/js/shared/api-booking.test.js`:
+
+```js
+// PUBLIC_API_V1 — общий модуль заявок из API: удержание, статусы, действия,
+// разбор входящего, тело уведомления без данных пациента.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { STRINGS } from '../admin/i18n-strings.js';
+import {
+  HOLD_MINUTES, STATUSES, STATUS_LABEL, PARTNER_STATUS, DECLINE_REASONS, DECLINE_LABEL, STAFF_DECLINE_REASONS,
+  API_BOOKING_MESSAGES, eventsKnown, isoOf, localIso, holdUntilFor, holdState, shownStatus, bookingActions,
+  parseInboxItem, webhookBody, WEBHOOK_DETAIL_KEYS,
+} from './api-booking.js';
+
+const T0 = Date.parse('2026-10-11T09:00:00Z');
+
+test('удержание: 30 минут от приёма заявки, но не дольше начала приёма; мусор — пусто', () => {
+  assert.equal(HOLD_MINUTES, 30);
+  assert.equal(holdUntilFor('2026-10-11T09:00:00Z', '2026-10-20T05:00:00Z'), '2026-10-11T09:30:00Z');
+  assert.equal(holdUntilFor('2026-10-11T09:00:00Z', '2026-10-11T09:15:00Z'), '2026-10-11T09:15:00Z');
+  assert.equal(holdUntilFor('вчера', '2026-10-11T09:15:00Z'), '');
+  assert.equal(isoOf(T0), '2026-10-11T09:00:00Z');
+  assert.equal(localIso(Date.parse('2026-10-07T08:30:00Z'), 300), '2026-10-07T13:30:00+05:00');
+});
+
+test('состояние удержания и статус для экрана: истёкшее — «не подтверждено вовремя» до прохода фона', () => {
+  const pending = { kind: 'appointment', status: 'pending', hold_until: '2026-10-11T09:30:00Z' };
+  assert.equal(holdState(pending, T0), 'held');
+  assert.equal(holdState(pending, T0 + 30 * 60000), 'expired', 'ровно в срок — уже не держится');
+  assert.equal(shownStatus(pending, T0 + 31 * 60000), 'expired');
+  const offered = { kind: 'appointment', status: 'offered', hold_until: '2026-10-11T09:01:00Z', offer_until: '2026-10-11T09:40:00Z' };
+  assert.equal(holdState(offered, T0 + 35 * 60000), 'held', 'у предложения — свой срок');
+  assert.equal(holdState({ status: 'confirmed', hold_until: '2026-10-11T09:30:00Z' }, T0), 'none');
+});
+
+test('действия: подтвердить — только ждущую с живым удержанием; взять в работу — только новую заявку без времени', () => {
+  const p = { kind: 'appointment', status: 'pending', hold_until: '2026-10-11T09:30:00Z' };
+  assert.deepEqual(bookingActions(p, T0), { confirm: true, offer: true, decline: true, accept: false });
+  assert.deepEqual(bookingActions(p, T0 + 3600000), { confirm: false, offer: false, decline: false, accept: false });
+  assert.deepEqual(bookingActions({ ...p, status: 'offered', offer_until: '2026-10-11T09:30:00Z' }, T0),
+    { confirm: false, offer: true, decline: true, accept: false });
+  assert.deepEqual(bookingActions({ kind: 'request', status: 'new' }, T0), { confirm: false, offer: false, decline: false, accept: true });
+  assert.deepEqual(bookingActions({ kind: 'request', status: 'accepted' }, T0), { confirm: false, offer: false, decline: false, accept: false });
+});
+
+test('словарь: у каждого статуса — подпись и статус партнёра; причины — подписи; события — из словаря шага 7', () => {
+  for (const s of STATUSES) { assert.ok(STATUS_LABEL[s], s); assert.ok(PARTNER_STATUS[s], s); }
+  for (const r of DECLINE_REASONS) assert.ok(DECLINE_LABEL[r], r);
+  assert.ok(STAFF_DECLINE_REASONS.every((r) => DECLINE_REASONS.includes(r)));
+  assert.equal(PARTNER_STATUS.confirmed, 'booked', 'партнёр видит «booked», как в документации');
+  assert.equal(eventsKnown(), true);
+});
+
+test('каждая подпись и сообщение модуля — статья словаря ru / uz / en', () => {
+  const texts = [...Object.values(STATUS_LABEL), ...Object.values(DECLINE_LABEL), ...Object.values(API_BOOKING_MESSAGES)];
+  for (const t of texts) {
+    const e = STRINGS[t];
+    assert.ok(e && e.ru === t && e.uz && e.en, 'нет статьи: ' + t);
+  }
+});
+
+const appt = (over = {}) => ({
+  type: 'appointment.new', cursor: '17', public_id: 'rq_e2a9f0c1', connection_id: 3, received_at: '2026-10-11T09:00:00Z',
+  data: { external_id: 'med-8f2c41', doctor_id: 12, consultation: 'initial', start: '2026-10-20T10:00:00+05:00', branch_id: 1, lang: 'uz' },
+  patient: { name: ' Абдурахмонов Фаррух ', phone: '+998 90 123 45 67', comment: 'Ребёнок 5 лет' },
+  ...over,
+});
+
+test('разбор онлайн-записи: время в UTC, удержание от приёма, пациент без лишних пробелов', () => {
+  const r = parseInboxItem(appt());
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.value, {
+    type: 'appointment.new', cursor: '17', public_id: 'rq_e2a9f0c1', connection_id: 3, received_at: '2026-10-11T09:00:00Z',
+    external_id: 'med-8f2c41', lang: 'uz', patient: { name: 'Абдурахмонов Фаррух', phone: '+998 90 123 45 67', comment: 'Ребёнок 5 лет' },
+    doctor_id: 12, branch_id: 1, service_id: null, package_id: null, consultation: 'initial',
+    start_at: '2026-10-20T05:00:00Z', hold_until: '2026-10-11T09:30:00Z',
+  });
+  const own = parseInboxItem(appt({ hold_until: '2026-10-11T09:20:00Z' }));
+  assert.equal(own.value.hold_until, '2026-10-11T09:20:00Z', 'срок, названный партнёру публичным сервером');
+});
+
+test('разбор: отказы по полям; отмена и ответ на предложение — только номер', () => {
+  const bad = (over, problem) => assert.deepEqual(parseInboxItem(appt(over)), { ok: false, problem });
+  bad({ type: 'appointment.delete' }, 'type');
+  bad({ public_id: 'rq_1' }, 'public_id');
+  bad({ connection_id: 'три' }, 'connection');
+  bad({ received_at: 'вчера' }, 'received_at');
+  bad({ data: { ...appt().data, external_id: 'с пробелом' } }, 'external_id');
+  bad({ data: { ...appt().data, lang: 'de' } }, 'lang');
+  bad({ patient: { name: '', phone: '+998901234567' } }, 'patient');
+  bad({ patient: { name: 'Имя', phone: '12-34' } }, 'patient');
+  bad({ data: { ...appt().data, doctor_id: null } }, 'doctor');
+  bad({ data: { ...appt().data, start: 'завтра' } }, 'start');
+  bad({ data: { ...appt().data, consultation: 'vip' } }, 'consultation');
+  bad({ data: { ...appt().data, consultation: '', service_id: null } }, 'what');
+  assert.deepEqual(parseInboxItem({ type: 'appointment.cancel', cursor: '18', public_id: 'rq_e2a9f0c1', connection_id: 3 }),
+    { ok: true, value: { type: 'appointment.cancel', cursor: '18', public_id: 'rq_e2a9f0c1', connection_id: 3 } });
+  const cb = parseInboxItem({ ...appt({ type: 'request.new' }), data: { external_id: 'x1', service_id: 301 } });
+  assert.equal(cb.ok, true);
+  assert.equal(cb.value.start_at, null);
+  assert.equal(cb.value.service_id, 301);
+});
+
+test('тело уведомления: белый список — данные пациента не уходят, даже если их подсунуть', () => {
+  const body = webhookBody({
+    eventId: 'ev_1', event: 'booking.confirmed', publicId: 'rq_e2a9f0c1', externalId: 'med-1', status: 'booked',
+    occurredAt: '2026-10-11T09:05:00Z',
+    details: { doctor_id: 12, start: '2026-10-20T10:00:00+05:00', name: 'Фаррух', phone: '+998901234567', patient_id: 5, comment: 'x', mrn: 'A-1' },
+  });
+  assert.deepEqual(Object.keys(body), ['event_id', 'event', 'request_id', 'external_id', 'status', 'occurred_at', 'doctor_id', 'start']);
+  assert.ok(!JSON.stringify(body).includes('Фаррух') && !JSON.stringify(body).includes('998901234567'));
+  assert.deepEqual(WEBHOOK_DETAIL_KEYS.filter((k) => /name|phone|patient|comment|mrn/.test(k)), []);
+});
+```
+
+- [ ] **Step 2:** `node --test public/js/shared/api-booking.test.js` → падает: `Cannot find module …/shared/api-booking.js`.
+- [ ] **Step 3: модуль** `public/js/shared/api-booking.js`:
+
+```js
+// PUBLIC_API_V1 — ЗАЯВКИ И ОНЛАЙН-ЗАПИСЬ ИЗ API: словарь статусов, причин отказа
+// и событий; срок удержания; разбор того, что приносит публичный сервер; тело
+// уведомления партнёру. Один модуль на сервер (services/api/*.js) и экран
+// (views/crm-api-booking.js): слово статуса и правило «можно ли подтвердить» у
+// них одни.
+//
+// Чистый модуль — без базы, DOM и перевода. Подписи и сообщения — ключи словаря
+// (i18n-strings.js): экран переводит их tr(), сервер отдаёт как есть.
+import { EVENTS } from './api-connections.js';
+import { PUBLIC_SLOT_MIN } from './doctor-public.js';
+import { CONSULT_API_KINDS } from './consultation-price.js';
+
+/** Спецификация «Правила → Онлайн-запись»: время держится 30 минут. */
+export const HOLD_MINUTES = 30;
+/** Встречное предложение («Предложить другое время») держится столько же. */
+export const OFFER_MINUTES = 30;
+/** Сетка начал для партнёров — та же, что /slots (шаг 5). */
+export const SLOT_STEP_MIN = PUBLIC_SLOT_MIN;
+
+export const KINDS = Object.freeze(['request', 'appointment']);
+export const STATUSES = Object.freeze(['new', 'accepted', 'pending', 'confirming', 'offered', 'confirmed',
+  'declined', 'expired', 'cancelled', 'arrived', 'no_show']);
+/** Время держится (удержание живо, пока не истекло). */
+export const HELD_STATUSES = Object.freeze(['pending', 'offered']);
+/** Ждёт ответа клиники — карточка доски показывает строку онлайн-записи. */
+export const OPEN_STATUSES = Object.freeze(['new', 'accepted', 'pending', 'confirming', 'offered']);
+
+export const STATUS_LABEL = Object.freeze({
+  new:        'Новая заявка',
+  accepted:   'Заявка в работе',
+  pending:    'Ждёт подтверждения',
+  confirming: 'Подтверждается',
+  offered:    'Предложено другое время',
+  confirmed:  'Записан',
+  declined:   'Отклонено',
+  expired:    'Не подтверждено вовремя',
+  cancelled:  'Отменено',
+  arrived:    'Пришёл',
+  no_show:    'Не пришёл',
+});
+/** Что видит партнёр: поле status в ответе GET /requests/{id} и в уведомлении. */
+export const PARTNER_STATUS = Object.freeze({
+  new: 'new', accepted: 'accepted', pending: 'pending', confirming: 'pending', offered: 'offered',
+  confirmed: 'booked', declined: 'declined', expired: 'expired', cancelled: 'cancelled', arrived: 'arrived', no_show: 'no_show',
+});
+
+export const DECLINE_REASONS = Object.freeze(['slot_taken', 'doctor_unavailable', 'not_bookable', 'duplicate', 'expired', 'other']);
+/** Что выбирает регистратор в «Отклонить»; остальные причины ставит сервер. */
+export const STAFF_DECLINE_REASONS = Object.freeze(['slot_taken', 'doctor_unavailable', 'other']);
+export const DECLINE_LABEL = Object.freeze({
+  slot_taken:         'Время уже занято',
+  doctor_unavailable: 'Врач в это время не принимает',
+  not_bookable:       'Запись к этому врачу через API не открыта',
+  duplicate:          'Повтор заявки партнёра',
+  expired:            'Не подтверждено за 30 минут',
+  other:              'Другая причина',
+});
+
+/** События — из словаря шага 7 (shared/api-connections.js EVENTS); новых не заводим. */
+export const EV = Object.freeze({
+  accepted:  'request.accepted',
+  created:   'appointment.created',
+  confirmed: 'booking.confirmed',
+  offered:   'booking.offered_other_time',
+  declined:  'booking.declined',
+  cancelled: 'appointment.cancelled',
+  arrived:   'appointment.arrived',
+});
+/** Все события модуля есть в словаре шага 7 (тест сверяет). */
+export const eventsKnown = () => Object.values(EV).every((e) => EVENTS.includes(e));
+
+/** Что приносит публичный сервер (GET /_sync/v1/inbox). */
+export const INBOX_TYPES = Object.freeze(['request.new', 'appointment.new', 'appointment.cancel', 'offer.accept', 'offer.decline']);
+
+export const API_BOOKING_MESSAGES = Object.freeze({
+  notFound:       'Заявка из API не найдена — возможно, её уже обработали. Обновите карточку.',
+  noAccess:       'Эта карточка заявки вам недоступна.',
+  noEdit:         'Обрабатывать заявки из API может администратор, регистратура или колл-центр.',
+  mainOnly:       'Заявки из API обрабатываются в главном здании клиники.',
+  notAppointment: 'Это заявка без времени — подтверждать нечего.',
+  notRequest:     'Это онлайн-запись — её подтверждают, а не берут в работу.',
+  notPending:     'Запись уже не ждёт подтверждения.',
+  busy:           'Запись подтверждает другой сотрудник — обновите карточку.',
+  holdExpired:    'Время больше не держится: запись не подтвердили за 30 минут. Партнёр получил отказ — позвоните пациенту и запишите обычным способом.',
+  patient:        'Выберите карту пациента или заведите новую.',
+  patientMissing: 'Карта пациента не найдена.',
+  dayVisitBusy:   'У пациента на этот день уже есть визит с работой ({start}, врач {doctor}) — второй визит на день не заводится. Отклоните запись или предложите другой день.',
+  start:          'Время указано неверно.',
+  startPast:      'Это время уже прошло.',
+  slotTaken:      'Это время занято — выберите другое.',
+  reason:         'Выберите причину отказа.',
+  alreadyAccepted:'Заявка уже в работе.',
+});
+
+const PUBLIC_ID_RE = /^rq_[A-Za-z0-9]{6,37}$/;
+const EXTERNAL_RE = /^[\x21-\x7e]{1,64}$/;
+const LANGS = Object.freeze(['', 'ru', 'uz', 'en']);
+const text = (v) => String(v == null ? '' : v).trim();
+const posInt = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
+const msOf = (v) => { const t = Date.parse(String(v == null ? '' : v)); return Number.isFinite(t) ? t : null; };
+
+/** Мгновение → 'YYYY-MM-DDTHH:MM:SSZ' (без миллисекунд, как пишет база). */
+export const isoOf = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+/**
+ * Местное время клиники со смещением: '2026-10-07T13:30:00+05:00' — так время
+ * видит партнёр (документация API: «время — Ташкент, UTC+5»). offsetMin —
+ * смещение процесса клиники (сервер стоит в клинике, rpc/calendar.js).
+ */
+export function localIso(ms, offsetMin) {
+  const d = new Date(ms + offsetMin * 60000);
+  const p = (n) => String(n).padStart(2, '0');
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const a = Math.abs(offsetMin);
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`
+    + `${sign}${p(Math.floor(a / 60))}:${p(a % 60)}`;
+}
+
+/**
+ * До какого мгновения держится время: 30 минут от приёма заявки публичным
+ * сервером, но не дольше начала приёма (прошедшее время держать незачем).
+ * '' — даты неверны.
+ */
+export function holdUntilFor(receivedIso, startIso, minutes = HOLD_MINUTES) {
+  const r = msOf(receivedIso);
+  const s = msOf(startIso);
+  if (r == null || s == null) return '';
+  return isoOf(Math.min(r + minutes * 60000, s));
+}
+
+/** Удержание заявки: 'held' — держится, 'expired' — срок вышел, 'none' — не держится вовсе. */
+export function holdState(row, now = Date.now()) {
+  if (!row || !HELD_STATUSES.includes(row.status)) return 'none';
+  const until = msOf(row.status === 'offered' ? row.offer_until : row.hold_until);
+  return until != null && until > now ? 'held' : 'expired';
+}
+
+/** Статус для экрана: истёкшее удержание — «Не подтверждено вовремя», даже если фон ещё не записал итог. */
+export function shownStatus(row, now = Date.now()) {
+  return holdState(row, now) === 'expired' ? 'expired' : String(row && row.status || '');
+}
+
+/** Что можно сделать с заявкой сейчас. */
+export function bookingActions(row, now = Date.now()) {
+  const r = row || {};
+  const held = holdState(r, now) === 'held';
+  const appt = r.kind === 'appointment';
+  return {
+    confirm: appt && r.status === 'pending' && held,
+    offer:   appt && HELD_STATUSES.includes(r.status) && held,
+    decline: appt && HELD_STATUSES.includes(r.status) && held,
+    accept:  r.kind === 'request' && r.status === 'new',
+  };
+}
+
+/**
+ * Разбор элемента входящей очереди. Данные пациента приходят уже вскрытыми
+ * (services/api/public-sync.js открывает запечатанное ключом клиники) в поле
+ * patient. → { ok: true, value } | { ok: false, problem }.
+ */
+export function parseInboxItem(item) {
+  const it = item && typeof item === 'object' ? item : {};
+  const type = text(it.type);
+  if (!INBOX_TYPES.includes(type)) return { ok: false, problem: 'type' };
+  const publicId = text(it.public_id);
+  if (!PUBLIC_ID_RE.test(publicId)) return { ok: false, problem: 'public_id' };
+  const connectionId = posInt(it.connection_id);
+  if (!connectionId) return { ok: false, problem: 'connection' };
+  const base = { type, cursor: text(it.cursor), public_id: publicId, connection_id: connectionId };
+  if (type !== 'request.new' && type !== 'appointment.new') return { ok: true, value: base };
+
+  const received = msOf(it.received_at);
+  if (received == null) return { ok: false, problem: 'received_at' };
+  const d = it.data && typeof it.data === 'object' ? it.data : {};
+  const externalId = text(d.external_id);
+  if (externalId && !EXTERNAL_RE.test(externalId)) return { ok: false, problem: 'external_id' };
+  const lang = text(d.lang).toLowerCase();
+  if (!LANGS.includes(lang)) return { ok: false, problem: 'lang' };
+  const p = it.patient && typeof it.patient === 'object' ? it.patient : {};
+  const name = text(p.name);
+  const phone = text(p.phone);
+  const digits = phone.replace(/\D/g, '');
+  if (!name || name.length > 120 || phone.length > 32 || digits.length < 7) return { ok: false, problem: 'patient' };
+  const comment = text(p.comment).slice(0, 1000);
+  const value = {
+    ...base, received_at: isoOf(received), external_id: externalId, lang,
+    patient: { name, phone, comment },
+    doctor_id: posInt(d.doctor_id), branch_id: posInt(d.branch_id), service_id: posInt(d.service_id),
+    package_id: posInt(d.package_id), consultation: '', start_at: null, hold_until: '',
+  };
+  if (type === 'request.new') return { ok: true, value };
+
+  if (!value.doctor_id) return { ok: false, problem: 'doctor' };
+  const start = msOf(d.start);
+  if (start == null) return { ok: false, problem: 'start' };
+  const consultation = text(d.consultation);
+  if (consultation && !CONSULT_API_KINDS.includes(consultation)) return { ok: false, problem: 'consultation' };
+  if (!consultation && !value.service_id) return { ok: false, problem: 'what' };
+  value.consultation = consultation;
+  value.start_at = isoOf(start);
+  const hold = msOf(it.hold_until);
+  value.hold_until = hold != null && hold > received ? isoOf(Math.min(hold, start)) : holdUntilFor(value.received_at, value.start_at);
+  return { ok: true, value };
+}
+
+/** Поля уведомления сверх общих — только эти; данных пациента среди них нет. */
+export const WEBHOOK_DETAIL_KEYS = Object.freeze(['doctor_id', 'branch_id', 'start', 'offered_start', 'offer_until', 'reason', 'rescheduled']);
+
+/**
+ * Тело уведомления партнёру и записи статуса на публичном сервере. Белый
+ * список: ни имени, ни телефона, ни комментария, ни номера карты — партнёр
+ * получает номер заявки и её статус (screen-docs.js «Заявки и онлайн-запись»).
+ */
+export function webhookBody({ eventId, event, publicId, externalId = '', status, occurredAt, details = {} } = {}) {
+  const out = {
+    event_id: String(eventId || ''), event: String(event || ''), request_id: String(publicId || ''),
+    external_id: String(externalId || ''), status: String(status || ''), occurred_at: String(occurredAt || ''),
+  };
+  for (const k of WEBHOOK_DETAIL_KEYS) {
+    const v = details ? details[k] : undefined;
+    if (v === undefined || v === null || v === '') continue;
+    out[k] = typeof v === 'number' || typeof v === 'boolean' ? v : String(v);
+  }
+  return out;
+}
+```
+
+- [ ] **Step 4: словарь** — блок в конец `STRINGS` (перед закрывающей `};`):
+
+```js
+  // PUBLIC_API_V1 — задача 2: статусы, причины отказа и сообщения заявок из API
+  "Заявка в работе": {"en":"Request in progress","ru":"Заявка в работе","uz":"Ariza ishlanmoqda"},   // PUBLIC_API_V1
+  "Ждёт подтверждения": {"en":"Awaiting confirmation","ru":"Ждёт подтверждения","uz":"Tasdiqlashni kutmoqda"},   // PUBLIC_API_V1
+  "Подтверждается": {"en":"Being confirmed","ru":"Подтверждается","uz":"Tasdiqlanmoqda"},   // PUBLIC_API_V1
+  "Не подтверждено вовремя": {"en":"Not confirmed in time","ru":"Не подтверждено вовремя","uz":"O‘z vaqtida tasdiqlanmadi"},   // PUBLIC_API_V1
+  "Время уже занято": {"en":"The time is already taken","ru":"Время уже занято","uz":"Vaqt allaqachon band"},   // PUBLIC_API_V1
+  "Врач в это время не принимает": {"en":"The doctor does not see patients at this time","ru":"Врач в это время не принимает","uz":"Shifokor bu vaqtda qabul qilmaydi"},   // PUBLIC_API_V1
+  "Запись к этому врачу через API не открыта": {"en":"Booking with this doctor via the API is not open","ru":"Запись к этому врачу через API не открыта","uz":"Bu shifokorga API orqali yozilish ochilmagan"},   // PUBLIC_API_V1
+  "Повтор заявки партнёра": {"en":"Duplicate partner request","ru":"Повтор заявки партнёра","uz":"Hamkor arizasining takrori"},   // PUBLIC_API_V1
+  "Не подтверждено за 30 минут": {"en":"Not confirmed within 30 minutes","ru":"Не подтверждено за 30 минут","uz":"30 daqiqa ichida tasdiqlanmadi"},   // PUBLIC_API_V1
+  "Другая причина": {"en":"Other reason","ru":"Другая причина","uz":"Boshqa sabab"},   // PUBLIC_API_V1
+  "Заявка из API не найдена — возможно, её уже обработали. Обновите карточку.": {"en":"The API request was not found — it may have been handled already. Refresh the card.","ru":"Заявка из API не найдена — возможно, её уже обработали. Обновите карточку.","uz":"API arizasi topilmadi — ehtimol, u allaqachon ko‘rib chiqilgan. Kartochkani yangilang."},   // PUBLIC_API_V1
+  "Эта карточка заявки вам недоступна.": {"en":"This request card is not available to you.","ru":"Эта карточка заявки вам недоступна.","uz":"Bu ariza kartochkasi sizga ochiq emas."},   // PUBLIC_API_V1
+  "Обрабатывать заявки из API может администратор, регистратура или колл-центр.": {"en":"API requests can be handled by an administrator, the front desk or the call centre.","ru":"Обрабатывать заявки из API может администратор, регистратура или колл-центр.","uz":"API arizalarini administrator, registratura yoki koll-markaz ko‘rib chiqishi mumkin."},   // PUBLIC_API_V1
+  "Заявки из API обрабатываются в главном здании клиники.": {"en":"API requests are handled in the clinic's main building.","ru":"Заявки из API обрабатываются в главном здании клиники.","uz":"API arizalari klinikaning bosh binosida ko‘rib chiqiladi."},   // PUBLIC_API_V1
+  "Это заявка без времени — подтверждать нечего.": {"en":"This is a request without a time — there is nothing to confirm.","ru":"Это заявка без времени — подтверждать нечего.","uz":"Bu vaqtsiz ariza — tasdiqlanadigan narsa yo‘q."},   // PUBLIC_API_V1
+  "Это онлайн-запись — её подтверждают, а не берут в работу.": {"en":"This is an online booking — it is confirmed, not taken into work.","ru":"Это онлайн-запись — её подтверждают, а не берут в работу.","uz":"Bu onlayn yozilish — u ishga olinmaydi, tasdiqlanadi."},   // PUBLIC_API_V1
+  "Запись уже не ждёт подтверждения.": {"en":"The booking is no longer awaiting confirmation.","ru":"Запись уже не ждёт подтверждения.","uz":"Yozilish endi tasdiqlashni kutmayapti."},   // PUBLIC_API_V1
+  "Запись подтверждает другой сотрудник — обновите карточку.": {"en":"Another staff member is confirming this booking — refresh the card.","ru":"Запись подтверждает другой сотрудник — обновите карточку.","uz":"Yozilishni boshqa xodim tasdiqlamoqda — kartochkani yangilang."},   // PUBLIC_API_V1
+  "Время больше не держится: запись не подтвердили за 30 минут. Партнёр получил отказ — позвоните пациенту и запишите обычным способом.": {"en":"The time is no longer held: the booking was not confirmed within 30 minutes. The partner received a refusal — call the patient and book in the usual way.","ru":"Время больше не держится: запись не подтвердили за 30 минут. Партнёр получил отказ — позвоните пациенту и запишите обычным способом.","uz":"Vaqt endi band qilinmagan: yozilish 30 daqiqa ichida tasdiqlanmadi. Hamkor rad javobini oldi — bemorga qo‘ng‘iroq qiling va odatdagi usulda yozing."},   // PUBLIC_API_V1
+  "Выберите карту пациента или заведите новую.": {"en":"Choose the patient's card or create a new one.","ru":"Выберите карту пациента или заведите новую.","uz":"Bemor kartasini tanlang yoki yangisini oching."},   // PUBLIC_API_V1
+  "Карта пациента не найдена.": {"en":"Patient card not found.","ru":"Карта пациента не найдена.","uz":"Bemor kartasi topilmadi."},   // PUBLIC_API_V1
+  "У пациента на этот день уже есть визит с работой ({start}, врач {doctor}) — второй визит на день не заводится. Отклоните запись или предложите другой день.": {"en":"The patient already has a visit with work on this day ({start}, doctor {doctor}) — a second visit per day is not created. Decline the booking or offer another day.","ru":"У пациента на этот день уже есть визит с работой ({start}, врач {doctor}) — второй визит на день не заводится. Отклоните запись или предложите другой день.","uz":"Bemorning bu kunda ishi boshlangan tashrifi bor ({start}, shifokor {doctor}) — kuniga ikkinchi tashrif ochilmaydi. Yozilishni rad eting yoki boshqa kun taklif qiling."},   // PUBLIC_API_V1
+  "Это время уже прошло.": {"en":"This time has already passed.","ru":"Это время уже прошло.","uz":"Bu vaqt allaqachon o‘tib ketgan."},   // PUBLIC_API_V1
+  "Это время занято — выберите другое.": {"en":"This time is taken — choose another.","ru":"Это время занято — выберите другое.","uz":"Bu vaqt band — boshqasini tanlang."},   // PUBLIC_API_V1
+  "Выберите причину отказа.": {"en":"Choose the reason for declining.","ru":"Выберите причину отказа.","uz":"Rad etish sababini tanlang."},   // PUBLIC_API_V1
+  "Заявка уже в работе.": {"en":"The request is already in progress.","ru":"Заявка уже в работе.","uz":"Ariza allaqachon ishda."},   // PUBLIC_API_V1
+```
+
+- [ ] **Step 5:** тест зелёный (8 тестов). Сторожа: `node --experimental-vm-modules --test public/js/admin/__tests__/i18n-coverage.test.mjs public/js/admin/__tests__/i18n-uz-quality.test.mjs`.
+- [ ] **Step 6: коммит** «Заявки из API — общий модуль: статусы и что видит партнёр, причины отказа, события из словаря шага 7, удержание 30 минут, разбор очереди публичного сервера, тело уведомления без данных пациента».
+
+---
+
+## Task 3: Удержание онлайн-записи занимает врача, как визит; своё удержание снимает только сервер (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/services/api/holds.js`, `server/services/rpc/calendar-holds.test.js`
+- Modify: `server/services/rpc/calendar.js` (:158, :254, :277–284, :412, :772, :801, :847, :1089–1093), `server/services/rpc/visits.js` (:92–99, :148–154, :228–231, :358–367)
+
+- [ ] **Step 1: падающий тест** `server/services/rpc/calendar-holds.test.js`:
+
+```js
+// PUBLIC_API_V1 — УДЕРЖАНИЕ ОНЛАЙН-ЗАПИСИ ЗАНИМАЕТ ВРАЧА, КАК ВИЗИТ: свободные
+// начала, запись календаря, ensure_visit и окна для партнёров видят его одинаково;
+// истёкшее и снятое — не занимают; подтверждение этой же записи своим
+// удержанием не останавливается; чужого врача удержание не трогает.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { openDb } from '../../db/connection.js';
+import { migrate } from '../../db/migrate.js';
+import { calendarSlots, calendarBook, doctorDayWindows, slotIsFree } from './calendar.js';
+import { ensureVisit } from './visits.js';
+import { insertConnectionRow } from '../../test-helpers/api-connection-row.js';
+
+const DAY = '2030-03-12';
+const at = (hhmm, day = DAY) => { const [y, m, d] = day.split('-').map(Number); const [h, mi] = hhmm.split(':').map(Number); return new Date(y, m - 1, d, h, mi).getTime(); };
+const REG = { id: 1, role: 'registrar' };
+
+function setup() {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (1, 'reg', 'x', 'Регистратор', 'registrar')").run();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (7, 'doc', 'x', 'Петров П.П.', 'doctor', 1)").run();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (8, 'doc2', 'x', 'Каримов Р.', 'doctor', 1)").run();
+  db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Иванов', '+998901112233')").run();
+  const conn = insertConnectionRow(db, { name: 'med24.uz' });
+  const reqId = Number(db.prepare(`INSERT INTO api_requests (public_id, connection_id, kind, status, doctor_id, start_at, duration_minutes, received_at, hold_until)
+    VALUES ('rq_hold0001', ?, 'appointment', 'pending', 7, ?, 30, '2030-03-01T00:00:00Z', '2030-03-12T00:00:00Z')`)
+    .run(conn, new Date(at('10:00')).toISOString()).lastInsertRowid);
+  const holdId = Number(db.prepare(`INSERT INTO slot_holds (doctor_id, start_at, duration_minutes, until_at, api_request_id, kind)
+    VALUES (7, ?, 30, '2030-03-12T00:00:00Z', ?, 'booking')`).run(new Date(at('10:00')).toISOString(), reqId).lastInsertRowid);
+  return { db, reqId, holdId };
+}
+const refusal = async (p) => { try { await p; } catch (e) { return e; } return assert.fail('ожидался отказ'); };
+
+test('свободные начала: удержанное 10:00–10:30 занято; занятость называет подключение и срок, без имени', () => {
+  const { db, holdId } = setup();
+  const r = calendarSlots(db, { doctor_id: 7, date: DAY, duration_minutes: 15, step_minutes: 15 }, REG);
+  const starts = r.slots.map((s) => s.start);
+  assert.ok(!starts.includes('10:00') && !starts.includes('10:15'));
+  assert.ok(starts.includes('09:45') && starts.includes('10:30'));
+  const held = r.busy.find((b) => b.hold_id === holdId);
+  assert.deepEqual({ ...held }, { visit_id: null, from: '10:00', to: '10:30', duration_minutes: 30, status: 'held',
+    patient_id: null, patient_name: '', hold_id: holdId, held_for: 'med24.uz', held_until: '2030-03-12T00:00:00Z' });
+  const other = calendarSlots(db, { doctor_id: 8, date: DAY, duration_minutes: 15, step_minutes: 15 }, REG);
+  assert.ok(other.slots.some((s) => s.start === '10:00'), 'у другого врача время свободно');
+});
+
+test('запись календаря и ensure_visit на удержанное время — отказ «время занято»; визит не заводится', async () => {
+  const { db } = setup();
+  const e1 = await refusal(calendarBook(db, { patient_id: 1, doctor_id: 7, start: new Date(at('10:15')).toISOString(), duration_minutes: 15 }, REG));
+  assert.equal(e1.status, 409);
+  assert.equal(e1.code, 'slot_taken');
+  assert.deepEqual(e1.params, { doctor: 'Петров П.П.', from: '10:00', to: '10:30' });
+  const e2 = await refusal(ensureVisit(db, { patient_id: 1, date: DAY, book: { doctor_id: 7, start: new Date(at('10:00')).toISOString(), duration_minutes: 15 } }, REG));
+  assert.equal(e2.code, 'slot_taken');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM visits').get().n, 0);
+});
+
+test('подтверждение этой же записи: своё удержание не мешает; изнутри сервера, а не из аргументов RPC', async () => {
+  const { db, holdId } = setup();
+  const viaArgs = await refusal(ensureVisit(db, { patient_id: 1, date: DAY, exclude_hold_id: holdId,
+    book: { doctor_id: 7, start: new Date(at('10:00')).toISOString(), duration_minutes: 30, exclude_hold_id: holdId } }, REG));
+  assert.equal(viaArgs.code, 'slot_taken', 'присланное в аргументах — не действует');
+  const ok = await ensureVisit(db, { patient_id: 1, date: DAY, book: { doctor_id: 7, start: new Date(at('10:00')).toISOString(), duration_minutes: 30 } },
+    REG, { excludeHoldId: holdId });
+  assert.equal(ok.booked, true);
+  assert.equal(Date.parse(ok.visit.visit_date), at('10:00'));
+});
+
+test('истёкшее и снятое удержание время не держат', async () => {
+  const { db, holdId } = setup();
+  db.prepare("UPDATE slot_holds SET until_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(holdId);
+  assert.ok(calendarSlots(db, { doctor_id: 7, date: DAY, duration_minutes: 30, step_minutes: 15 }, REG).slots.some((s) => s.start === '10:00'));
+  db.prepare("UPDATE slot_holds SET until_at = '2030-03-12T00:00:00Z', released_at = '2030-03-01T00:10:00Z', release_reason = 'declined' WHERE id = ?").run(holdId);
+  const bk = await calendarBook(db, { patient_id: 1, doctor_id: 7, start: new Date(at('10:00')).toISOString(), duration_minutes: 30 }, REG);
+  assert.equal(bk.created, true);
+});
+
+test('окна для партнёров и проверка начала: удержанное не свободно; своё — свободно; вне сетки и прошедшее — нет', () => {
+  const { db, holdId } = setup();
+  const day = doctorDayWindows(db, { doctorId: 7, dayIso: DAY, durationMin: 15, now: at('08:00') });
+  assert.equal(day.windows.find((w) => w.start === '10:00').free, false);
+  assert.equal(day.windows.find((w) => w.start === '10:30').free, true);
+  const now = at('08:00');
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: at('10:00'), durationMin: 30, now }), false);
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: at('10:00'), durationMin: 30, excludeHoldId: holdId, now }), true);
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: at('09:45'), durationMin: 30, now }), false, '09:45–10:15 задевает удержание');
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: at('10:30'), durationMin: 30, now }), true);
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: at('10:37'), durationMin: 15, now }), false, 'вне сетки');
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: at('17:45'), durationMin: 30, now }), false, 'за концом дня');
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: at('10:30'), durationMin: 30, now: at('11:00') }), false, 'прошло');
+});
+```
+
+- [ ] **Step 2:** `LIS_ENABLED=0 node --test server/services/rpc/calendar-holds.test.js` → падает:
+  - удержание не занимает время: `10:00` есть среди свободных;
+  - `calendar_book` записывает поверх удержания;
+  - нет `slotIsFree`.
+- [ ] **Step 3: модуль удержаний** `server/services/api/holds.js`:
+
+```js
+// PUBLIC_API_V1 — УДЕРЖАНИЕ ВРЕМЕНИ БЕЗ КАРТЫ ПАЦИЕНТА (решение владельца 3).
+//
+// Онлайн-запись партнёра карту не заводит: время держится строкой slot_holds
+// (мигр. 245), а не визитом — у визита patient_id обязателен. Удержание ЗАНИМАЕТ
+// время врача ровно там же, где его занимают визиты: rpc/calendar.js loadBusy
+// читает liveHolds, поэтому calendar_slots, calendar_book, ensure_visit и окна
+// для партнёров (doctorDayWindows) видят его одинаково, без второго правила.
+//
+// ЖИВО = released_at пуст И until_at впереди. Истечение освобождает время само,
+// без таймера: следующий же вопрос «свободно ли» его не видит. Фон
+// (bookings.js expireDue) только записывает итог и сообщает партнёру.
+//
+// Не бросает при чтении: база до мигр. 245 — удержаний нет.
+import { isoOf } from '../../../public/js/shared/api-booking.js';
+
+const DAY_MS = 24 * 3600 * 1000;
+
+/**
+ * Живые удержания врача, пересекающие [fromMs, toMs).
+ * @returns {Array<{hold_id:number, api_request_id:number, startMs:number, endMs:number, durationMin:number, until:string, source:string}>}
+ */
+export function liveHolds(db, { doctorId, fromMs, toMs, excludeHoldId = null, now = Date.now() }) {
+  if (!doctorId) return [];
+  let rows = [];
+  try {
+    rows = db.prepare(`
+      SELECT h.id, h.api_request_id, h.start_at, h.duration_minutes, h.until_at, c.name AS source
+        FROM slot_holds h
+        JOIN api_requests r ON r.id = h.api_request_id
+        LEFT JOIN api_connections c ON c.id = r.connection_id
+       WHERE h.doctor_id = ? AND h.released_at IS NULL
+         AND h.start_at >= ? AND h.start_at < ?
+       ORDER BY h.start_at, h.id`).all(doctorId, isoOf(fromMs - DAY_MS), isoOf(toMs + DAY_MS));
+  } catch { return []; }
+  const out = [];
+  for (const r of rows) {
+    if (excludeHoldId && r.id === excludeHoldId) continue;
+    const until = Date.parse(r.until_at);
+    if (!(until > now)) continue;
+    const startMs = Date.parse(r.start_at);
+    if (!Number.isFinite(startMs)) continue;
+    const durationMin = Math.max(1, Number(r.duration_minutes) || 15);
+    const endMs = startMs + durationMin * 60000;
+    if (endMs <= fromMs || startMs >= toMs) continue;
+    out.push({ hold_id: r.id, api_request_id: r.api_request_id, startMs, endMs, durationMin, until: r.until_at, source: r.source || '' });
+  }
+  return out;
+}
+
+/** Живое удержание заявки или null. */
+export function liveHoldOf(db, apiRequestId, now = Date.now()) {
+  const r = db.prepare('SELECT * FROM slot_holds WHERE api_request_id = ? AND released_at IS NULL').get(apiRequestId);
+  return r && Date.parse(r.until_at) > now ? r : null;
+}
+
+/** Поставить удержание. Прежнее живое у заявки должно быть снято (уникальный индекс мигр. 245). */
+export function placeHold(db, { doctorId, startMs, durationMin, untilMs, apiRequestId, kind = 'booking' }) {
+  return Number(db.prepare(`INSERT INTO slot_holds (doctor_id, start_at, duration_minutes, until_at, api_request_id, kind)
+                            VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(doctorId, isoOf(startMs), durationMin, isoOf(untilMs), apiRequestId, kind).lastInsertRowid);
+}
+
+/** Снять удержания заявки (живые и истёкшие, но не записанные) с причиной. */
+export function releaseHolds(db, apiRequestId, reason, now = Date.now()) {
+  return db.prepare('UPDATE slot_holds SET released_at = ?, release_reason = ? WHERE api_request_id = ? AND released_at IS NULL')
+    .run(isoOf(now), reason, apiRequestId).changes;
+}
+```
+
+- [ ] **Step 4: движок записи** — `server/services/rpc/calendar.js` (diff от `9521240c`):
+
+```diff
+diff --git a/server/services/rpc/calendar.js b/server/services/rpc/calendar.js
+index fa33794..4543be3 100644
+--- a/server/services/rpc/calendar.js
++++ b/server/services/rpc/calendar.js
+@@ -156,6 +156,9 @@ import { mirrorVisit, mirrorReschedule, dayVisitMovableFor } from '../crm/bookin
+ import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
+ // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
+ import { localDate } from '../domain/day.js';
++// PUBLIC_API_V1 — время, удержанное онлайн-записью без карты, занимает врача
++// там же, где визиты (loadBusy): одно правило занятости на весь продукт.
++import { liveHolds } from '../api/holds.js';
+ 
+ export class RpcError extends Error {
+   constructor(msg, status = 400, code = null, params = null) {
+@@ -251,7 +254,7 @@ function parseStart(value) {
+  * Занято = статусы scheduled/confirmed/arrived. Отменённый и не пришедший
+  * время НЕ занимают — иначе отменённая запись держала бы слот навсегда.
+  */
+-function loadBusy(db, { doctorId, roomId, fromMs, toMs, excludeVisitId }) {
++function loadBusy(db, { doctorId, roomId, fromMs, toMs, excludeVisitId, excludeHoldId = null }) {   // PUBLIC_API_V1 — excludeHoldId
+   const col = doctorId ? 'doctor_id' : 'room_id';
+   const id = doctorId || roomId;
+   if (!id) return [];
+@@ -280,6 +283,19 @@ function loadBusy(db, { doctorId, roomId, fromMs, toMs, excludeVisitId }) {
+       status: r.status, patient_id: r.patient_id, patient_name: r.patient_name || '',
+     });
+   }
++  // PUBLIC_API_V1 — УДЕРЖАНИЕ ОНЛАЙН-ЗАПИСИ ЗАНИМАЕТ ВРАЧА, КАК ВИЗИТ (решение
++  // владельца 3: время держится без карты). Только у врача — кабинетов
++  // удержание не касается. excludeHoldId — подтверждение этой же записи: своё
++  // удержание ей не мешает (services/api/bookings.js confirmBooking).
++  if (doctorId) {
++    for (const hd of liveHolds(db, { doctorId, fromMs, toMs, excludeHoldId })) {
++      out.push({
++        visit_id: null, hold_id: hd.hold_id, startMs: hd.startMs, endMs: hd.endMs, durationMin: hd.durationMin,
++        status: 'held', patient_id: null, patient_name: '', held_for: hd.source, held_until: hd.until,
++      });
++    }
++    out.sort((a, b) => a.startMs - b.startMs);
++  }
+   return out;
+ }
+ 
+@@ -411,6 +427,30 @@ export function doctorDayWindows(db, { doctorId, dayIso, durationMin = PUBLIC_SL
+   return out;
+ }
+ 
++/**
++ * PUBLIC_API_V1 — СВОБОДНО ЛИ НАЧАЛО ДЛЯ ОНЛАЙН-ЗАПИСИ: тот же ответ, что окна
++ * для партнёров (doctorDayWindows) — окно врача, часы здания, занятое (визиты и
++ * удержания), сетка по 15 минут от начала отрезка, прошедшее — не свободно.
++ * Начало вне сетки — не свободно: партнёр получает только начала сетки.
++ * excludeHoldId — своё удержание заявки (встречное предложение той же заявки).
++ */
++export function slotIsFree(db, { doctorId, startMs, durationMin, excludeHoldId = null, now = Date.now() }) {
++  if (!Number.isFinite(startMs) || startMs < now) return false;
++  const dayIso = localDayIso(startMs);
++  const dayStartMs = localMidnight(dayIso).getTime();
++  const dayEndMs = dayStartMs + 24 * 3600 * 1000;
++  const doctor = db.prepare('SELECT id, working_hours, branch_id FROM users WHERE id = ?').get(doctorId);
++  if (!doctor) return false;
++  const win = resourceWindow(db, { doctor, room: null, dayIso });
++  if (!win) return false;
++  const clampMin = (ms) => Math.max(0, Math.min(24 * 60, Math.round((ms - dayStartMs) / 60000)));
++  const busy = loadBusy(db, { doctorId, roomId: null, fromMs: dayStartMs, toMs: dayEndMs, excludeVisitId: null, excludeHoldId })
++    .map((b) => ({ from: clampMin(b.startMs), to: clampMin(b.endMs) })).filter((b) => b.to > b.from);
++  const minStartMin = (now >= dayStartMs && now < dayEndMs) ? minutesOfLocal(now) : null;
++  const starts = slotStarts({ segments: windowSegments(win), busy, durationMin, stepMin: PUBLIC_SLOT_MIN, minStartMin });
++  return starts.includes(Math.round((startMs - dayStartMs) / 60000));
++}
++
+ // ═══════════════════════════════════════════════════════════════════════════
+ // CROSS_BRANCH_CALENDAR_V1 — здания, подтверждения, столкновения
+ // ═══════════════════════════════════════════════════════════════════════════
+@@ -769,7 +809,10 @@ function crossContext(db, { fromMs, toMs }) {
+  * Возвращает окно дня, свободные начала и занятое — всё в местном настенном
+  * времени ('09:30') плюс ISO для тех, кто будет записывать.
+  */
+-export function calendarSlots(db, args, user) {
++// PUBLIC_API_V1 — internal.excludeHoldId: только для вызова изнутри сервера
++// (ensure_visit при подтверждении онлайн-записи). Маршрут /api/rpc зовёт
++// обработчик тремя аргументами, поэтому из браузера чужое удержание не снять.
++export function calendarSlots(db, args, user, internal = {}) {
+   requireRole(user, BOOK_ROLES);
+   const a = args || {};
+   const doctorId = optId(a.doctor_id, 'doctor_id');
+@@ -798,7 +841,8 @@ export function calendarSlots(db, args, user) {
+   const excludeVisitId = optId(a.exclude_visit_id, 'exclude_visit_id');
+ 
+   const win = resourceWindow(db, { doctor, room, dayIso });
+-  const busy = loadBusy(db, { doctorId, roomId, fromMs: dayStartMs, toMs: dayEndMs, excludeVisitId });
++  const busy = loadBusy(db, { doctorId, roomId, fromMs: dayStartMs, toMs: dayEndMs, excludeVisitId,
++    excludeHoldId: (internal && internal.excludeHoldId) || null });   // PUBLIC_API_V1
+ 
+   // Занятое переводится в минуты дня СМЕЩЕНИЕМ ОТ ПОЛУНОЧИ, а не часами начала:
+   // приём, начавшийся вчера в 23:40 и кончающийся сегодня в 00:10, обязан
+@@ -845,6 +889,8 @@ export function calendarSlots(db, args, user) {
+       status: b.status,
+       patient_id: b.patient_id,
+       patient_name: b.patient_name,
++      // PUBLIC_API_V1 — удержанное онлайн-записью: чьё (подключение) и до какого мгновения.
++      ...(b.hold_id ? { hold_id: b.hold_id, held_for: b.held_for, held_until: b.held_until } : {}),
+     })),
+     at_risk: atRisk.map((b) => ({
+       visit_id: b.visit_id,
+@@ -1090,6 +1136,7 @@ export async function calendarBook(db, args, user, deps = {}) {
+       doctorId, roomId: null,
+       fromMs: startMs, toMs: startMs + durationMin * 60000,
+       excludeVisitId: visitId,
++      excludeHoldId: deps.excludeHoldId || null,   // PUBLIC_API_V1 — подтверждение этой онлайн-записи (только изнутри сервера)
+     });
+     conflict = busy.find((b) => overlapsMs(startMs, durationMin, b.startMs, b.durationMin)) || null;
+   }
+```
+
+- [ ] **Step 5: `ensure_visit`** — `server/services/rpc/visits.js`:
+
+```diff
+diff --git a/server/services/rpc/visits.js b/server/services/rpc/visits.js
+index 0b418b9..1d4bbab 100644
+--- a/server/services/rpc/visits.js
++++ b/server/services/rpc/visits.js
+@@ -89,14 +89,14 @@ const hhmmToMin = (s) => { const [h, m] = String(s || '0:0').split(':').map(Numb
+  * закрывать ему же время (у пациента, уже пришедшего сегодня, визит-контейнер
+  * дня существует и стоит на своём часе).
+  */
+-function slotConflict(db, user, { doctorId, startMs, durationMin, excludeVisitId }) {
++function slotConflict(db, user, { doctorId, startMs, durationMin, excludeVisitId, excludeHoldId = null }) {   // PUBLIC_API_V1 — excludeHoldId
+   const res = calendarSlots(db, {
+     doctor_id: doctorId,
+     date: localDayIso(startMs),
+     duration_minutes: durationMin,
+     step_minutes: durationMin,
+     exclude_visit_id: excludeVisitId || null,
+-  }, user);
++  }, user, { excludeHoldId });
+   const from = minutesOfLocal(startMs);
+   const to = from + durationMin;
+   const clash = (res.busy || []).find((b) => from < hhmmToMin(b.to) && hhmmToMin(b.from) < to) || null;
+@@ -151,7 +151,14 @@ function parseBook(book) {
+ //         book?: { doctor_id, start, duration_minutes?, service_id?, room_id?,
+ //                  emergency?, emergency_reason? } }
+ // Returns { visit, created, booked, emergency?, cross_branch? }.
+-export async function ensureVisit(db, args, user) {
++//
++// PUBLIC_API_V1 — internal.excludeHoldId: только изнутри сервера
++// (services/api/bookings.js confirmBooking). Подтверждение онлайн-записи идёт
++// ЭТОЙ ЖЕ дверью, что у регистратуры (спецификация «Онлайн-запись»), и его
++// собственное удержание времени ему не мешает. Маршрут /api/rpc зовёт
++// обработчик тремя аргументами — из браузера удержание не снять.
++export async function ensureVisit(db, args, user, internal = {}) {
++  const excludeHoldId = (internal && internal.excludeHoldId) || null;   // PUBLIC_API_V1
+   requireRole(user, ENSURE_ROLES);
+ 
+   const patientId = args && args.patient_id;
+@@ -228,6 +235,7 @@ export async function ensureVisit(db, args, user) {
+     const hit = slotConflict(db, user, {
+       doctorId: book.doctorId, startMs: book.startMs, durationMin,
+       excludeVisitId: (dayVisit() || {}).id || null,
++      excludeHoldId,   // PUBLIC_API_V1
+     });
+     if (hit) {
+       // Порядок отказов тот же, что у calendar_book: сначала «занято», и
+@@ -364,7 +372,7 @@ export async function ensureVisit(db, args, user) {
+         duration_minutes: book.durationMin || undefined,
+         emergency: book.emergency || undefined,
+         emergency_reason: book.reason || undefined,
+-      }, user);
++      }, user, { excludeHoldId });   // PUBLIC_API_V1
+       out.visit = bk.visit;
+       out.emergency = !!bk.emergency;
+       if (bk.cross_branch) out.cross_branch = bk.cross_branch;
+```
+
+- [ ] **Step 6:** тест зелёный (5 тестов). Прежние тесты записи — без изменений: `LIS_ENABLED=0 node --test server/services/rpc/calendar.test.js server/services/rpc/calendar-bytes.test.js server/services/rpc/calendar-cross-branch.test.js server/services/rpc/visits.test.js server/services/rpc/visits.local-day.test.js server/services/rpc/doctor-public.test.js` → 76+ зелёных. Сторожа: `LIS_ENABLED=0 node --test server/services/rpc/index.test.js server/i18n-server-messages.test.js`.
+- [ ] **Step 7: коммит** «Онлайн-запись: время, удержанное без карты пациента, занимает врача так же, как визит — свободные начала, запись календаря, ensure_visit и окна для партнёров; истёкшее и снятое не держат; своё удержание при подтверждении снимает только сервер».
+
+---
+
+## Task 4: События наружу — тело без данных пациента, подпись клиники секретом подключения; стенд онлайн-записи (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/test-helpers/api-booking-seed.js`, `server/services/api/outbox.test.js`, `server/services/api/outbox.js`
+
+- [ ] **Step 1: стенд** `server/test-helpers/api-booking-seed.js` — его берут тесты задач 4–11:
+
+```js
+// PUBLIC_API_V1 — стенд онлайн-записи из API: клиника со стенда подключений
+// (шаг 7: администратор «Босс», адрес для партнёров, свой файл шифрования),
+// имя в адресе, подключение партнёра med24.uz с настоящими ключом и секретом и
+// уведомлениями; регистратура, колл-центр, медсестра; врач Петров — показан
+// партнёрам, по записи; врач Каримова — живая очередь; первичный и повторный
+// приём; две услуги на сайте. Пациентов нет — их заводит тест.
+import { seed, PARTNER } from './api-connections-seed.js';
+import { saveSlug, createConnection } from '../services/api/connections.js';
+import { makeDraft } from '../services/api/drafts.js';
+
+export const HOOK_EVENTS = Object.freeze(['request.accepted', 'appointment.created', 'booking.confirmed',
+  'booking.offered_other_time', 'booking.declined', 'appointment.cancelled']);
+
+export function bookingSeed({ kekPath = null } = {}) {
+  const base = seed(kekPath ? { kekPath } : {});
+  const { db, actor } = base;
+  saveSlug(db, 'shifo', actor, { kekPath: base.kekPath });
+  const draft = makeDraft(1);
+  const made = createConnection(db, { ...PARTNER, webhook_events: [...HOOK_EVENTS] }, actor, { draftId: draft.draft_id, kekPath: base.kekPath });
+  const u = db.prepare('INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (?, ?, ?, ?, ?, ?)');
+  u.run(2, 'reg', 'x', 'Регистратор Алиева', 'registrar', 0);
+  u.run(3, 'cc', 'x', 'Оператор Ким', 'callcenter', 0);
+  u.run(4, 'nurse', 'x', 'Медсестра Юсупова', 'nurse', 0);
+  db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, is_public, full_name_ru, full_name_uz, full_name_en,
+      scheduling_mode, booking_days, languages, phone, email)
+    VALUES (7, 'doc', 'x', 'Петров Пётр Петрович', 'doctor', 1, 1, 'Петров Пётр Петрович', 'Petrov Pyotr', 'Petrov Pyotr',
+      'schedulable', 14, '["ru","uz"]', '+998907770077', 'petrov@clinic.local')`).run();
+  db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, is_public, full_name_ru, scheduling_mode, show_queue_count)
+    VALUES (8, 'doc2', 'x', 'Каримова Нигора', 'doctor', 1, 1, 'Каримова Нигора', 'live_queue', 1)`).run();
+  db.prepare("INSERT INTO user_specialties (user_id, specialty_slug, name_ru, name_uz, is_primary) VALUES (7, 'pediatr', 'Педиатр', 'Pediatr', 1)").run();
+  db.prepare("INSERT INTO user_specialties (user_id, specialty_slug, name_ru, name_uz, is_primary) VALUES (8, 'terapevt', 'Терапевт', 'Terapevt', 1)").run();
+  const ct = db.prepare('INSERT INTO consultation_types (id, name, name_ru, name_uz, price, active, duration_minutes, api_kind, sort_order) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)');
+  ct.run(1, 'Первичный приём', 'Первичный приём', 'Birlamchi qabul', 150000, 30, 'initial', 1);
+  ct.run(2, 'Повторный приём', 'Повторный приём', 'Takroriy qabul', 98000, 15, 'repeat', 2);
+  const sv = db.prepare('INSERT INTO services (id, name, name_uz, name_en, price, type, is_lab, online_booking, active, duration_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)');
+  sv.run(301, 'Общий анализ крови', 'Umumiy qon tahlili', 'Complete blood count', 45000, 'lab', 1, 1, 10);
+  sv.run(302, 'УЗИ брюшной полости', 'Qorin bo‘shlig‘i UTT', '', 180000, 'imaging', 0, 1, 20);
+  sv.run(303, 'Перевязка', '', '', 30000, 'procedure', 0, 0, 15);
+  return {
+    ...base, connId: made.connection.id, key: made.key, secret: made.secret,
+    admin: { id: 1, role: 'admin' }, reg: { id: 2, role: 'registrar' }, cc: { id: 3, role: 'callcenter' }, nurse: { id: 4, role: 'nurse' },
+  };
+}
+
+/** Местное мгновение дня day ('YYYY-MM-DD') в hh:mm — мс. */
+export function localAt(day, hhmm) {
+  const [y, m, d] = day.split('-').map(Number);
+  const [h, mi] = hhmm.split(':').map(Number);
+  return new Date(y, m - 1, d, h, mi).getTime();
+}
+
+/** Элемент входящей очереди «онлайн-запись» (как его отдаёт публичный сервер, пациент уже вскрыт). */
+export function apptItem({ publicId = 'rq_test0001', connId, startMs, receivedMs, doctorId = 7, consultation = 'initial', serviceId = null,
+  externalId = 'med-1', name = 'Абдурахмонов Фаррух', phone = '+998 90 123 45 67', comment = 'Ребёнок 5 лет', cursor = '1', holdUntil } = {}) {
+  return {
+    type: 'appointment.new', cursor, public_id: publicId, connection_id: connId, received_at: new Date(receivedMs).toISOString(),
+    ...(holdUntil ? { hold_until: holdUntil } : {}),
+    data: { external_id: externalId, doctor_id: doctorId, consultation, service_id: serviceId, start: new Date(startMs).toISOString(), lang: 'ru' },
+    patient: { name, phone, comment },
+  };
+}
+```
+
+- [ ] **Step 2: падающий тест** `server/services/api/outbox.test.js`:
+
+```js
+// PUBLIC_API_V1 — события наружу: тело без данных пациента; подпись клиники
+// секретом подключения проверяется секретом, который видит администратор;
+// уведомление — только выбранным событиям; секрет не открыть — событие уходит
+// без уведомления с пометкой.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { bookingSeed } from '../../test-helpers/api-booking-seed.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+import { KEK_FILE } from './secret-box.js';
+import { enqueueEvent, unsentEvents, markSent, markFailed, signBody } from './outbox.js';
+
+function withRequest(s) {
+  const id = Number(s.db.prepare(`INSERT INTO api_requests (public_id, connection_id, external_id, kind, status, doctor_id, start_at, duration_minutes,
+      received_at, patient_name, patient_phone, comment)
+    VALUES ('rq_outbox001', ?, 'med-77', 'appointment', 'confirmed', 7, '2030-03-12T05:00:00Z', 30, '2030-03-01T00:00:00Z',
+      'Абдурахмонов Фаррух', '+998901234567', 'Ребёнок 5 лет')`).run(s.connId).lastInsertRowid);
+  return s.db.prepare('SELECT * FROM api_requests WHERE id = ?').get(id);
+}
+
+test('событие: тело — номер заявки, статус партнёра и детали; без имени, телефона и комментария; подпись — секретом подключения', () => {
+  const s = bookingSeed();
+  const request = withRequest(s);
+  const id = enqueueEvent(s.db, { request, event: 'booking.confirmed', status: 'confirmed',
+    details: { doctor_id: 7, start: '2030-03-12T10:00:00+05:00' }, now: Date.parse('2030-03-01T00:05:00Z'), kekPath: s.kekPath });
+  const row = s.db.prepare('SELECT * FROM api_outbox WHERE id = ?').get(id);
+  const body = JSON.parse(row.body);
+  assert.match(body.event_id, /^ev_[0-9a-f]{24}$/);
+  assert.deepEqual({ ...body, event_id: 'x' }, { event_id: 'x', event: 'booking.confirmed', request_id: 'rq_outbox001', external_id: 'med-77',
+    status: 'booked', occurred_at: '2030-03-01T00:05:00Z', doctor_id: 7, start: '2030-03-12T10:00:00+05:00' });
+  for (const pii of ['Абдурахмонов', '998901234567', 'Ребёнок']) assert.ok(!row.body.includes(pii), pii);
+  assert.equal(row.webhook_url, 'https://med24.uz/hooks');
+  assert.equal(row.signature, 'sha256=' + crypto.createHmac('sha256', s.secret).update(row.body).digest('hex'));
+  assert.equal(row.signature, signBody(s.secret, row.body));
+  assert.equal(row.note, '');
+});
+
+test('уведомление — только выбранному событию и при адресе; секрет не открыть — без уведомления, с пометкой', () => {
+  const s = bookingSeed();
+  const request = withRequest(s);
+  const note = (id) => s.db.prepare('SELECT note, webhook_url, signature FROM api_outbox WHERE id = ?').get(id);
+  assert.deepEqual({ ...note(enqueueEvent(s.db, { request, event: 'appointment.arrived', status: 'arrived', kekPath: s.kekPath })) },
+    { note: 'not_subscribed', webhook_url: '', signature: '' });
+  const otherPc = path.join(tmpDir('em-otherpc-'), KEK_FILE);
+  assert.deepEqual({ ...note(enqueueEvent(s.db, { request, event: 'booking.confirmed', status: 'confirmed', kekPath: otherPc })) },
+    { note: 'no_secret', webhook_url: '', signature: '' });
+  s.db.prepare("UPDATE api_connections SET webhook_url = '' WHERE id = ?").run(s.connId);
+  assert.equal(note(enqueueEvent(s.db, { request, event: 'booking.confirmed', status: 'confirmed', kekPath: s.kekPath })).note, 'no_webhook');
+});
+
+test('очередь: по порядку; принятые уходят, неудача копит попытки', () => {
+  const s = bookingSeed();
+  const request = withRequest(s);
+  const a = enqueueEvent(s.db, { request, event: 'booking.confirmed', status: 'confirmed', kekPath: s.kekPath });
+  const b = enqueueEvent(s.db, { request, event: 'appointment.cancelled', status: 'cancelled', kekPath: s.kekPath });
+  assert.deepEqual(unsentEvents(s.db).map((r) => r.id), [a, b]);
+  markFailed(s.db, [a, b], 'offline');
+  markSent(s.db, [a]);
+  assert.deepEqual(unsentEvents(s.db).map((r) => [r.id, r.attempts, r.last_error]), [[b, 1, 'offline']]);
+});
+```
+
+- [ ] **Step 3:** `node --test server/services/api/outbox.test.js` → падает: `Cannot find module …/api/outbox.js`.
+- [ ] **Step 4: модуль** `server/services/api/outbox.js`:
+
+```js
+// PUBLIC_API_V1 — СОБЫТИЯ НАРУЖУ: статус заявки для партнёра и уведомление (вебхук).
+//
+// Каждое событие ложится строкой api_outbox (мигр. 245) и уходит на публичный
+// сервер по порядку (services/api/public-sync.js). Публичный сервер обновляет
+// по нему статус заявки (GET /requests/{id}) и, если есть адрес, доставляет
+// уведомление с повторами.
+//
+// ПОДПИСЬ СТАВИТ КЛИНИКА: HMAC-SHA256 тела секретом подключения
+// («X-EasyMed-Signature: sha256=<hex>», документация API). Секрет открывается
+// здесь ключом шифрования клиники (secret-box.js) и никуда не уходит —
+// публичный сервер получает готовые тело и подпись и подделать уведомление от
+// имени клиники не может. Секрет не открывается (база на другом компьютере) —
+// событие всё равно уходит (статус партнёр увидит), уведомления нет, пометка
+// no_secret: экран подключения скажет «выпустите новый секрет».
+//
+// Тело — белый список (shared/api-booking.js webhookBody): данных пациента в
+// событиях нет по построению.
+import crypto from 'node:crypto';
+import { webhookBody, PARTNER_STATUS, isoOf } from '../../../public/js/shared/api-booking.js';
+import { loadKek, unseal } from './secret-box.js';
+
+const arr = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
+
+/** Подпись тела — как в документации API: 'sha256=' + HMAC-SHA256(секрет, тело) в hex. */
+export const signBody = (secret, raw) => 'sha256=' + crypto.createHmac('sha256', String(secret)).update(String(raw), 'utf8').digest('hex');
+
+/**
+ * Поставить событие в очередь наружу.
+ * @param {object} request строка api_requests (id, public_id, external_id, connection_id)
+ * @param {string} status внутренний статус ПОСЛЕ события (партнёру — PARTNER_STATUS)
+ * @returns {number} id строки api_outbox
+ */
+export function enqueueEvent(db, { request, event, status, details = {}, now = Date.now(), kekPath = null } = {}) {
+  const conn = db.prepare('SELECT id, webhook_url, webhook_events, secret_sealed, deleted_at FROM api_connections WHERE id = ?')
+    .get(request.connection_id);
+  const body = webhookBody({
+    eventId: 'ev_' + crypto.randomBytes(12).toString('hex'), event, publicId: request.public_id,
+    externalId: request.external_id, status: PARTNER_STATUS[status] || status, occurredAt: isoOf(now), details,
+  });
+  const raw = JSON.stringify(body);
+  let url = '';
+  let signature = '';
+  let note = '';
+  if (!conn || conn.deleted_at || !conn.webhook_url) note = 'no_webhook';
+  else if (!arr(conn.webhook_events).includes(event)) note = 'not_subscribed';
+  else {
+    try {
+      const kek = loadKek(kekPath ? { kekPath } : {});
+      signature = signBody(unseal(conn.secret_sealed, kek), raw);
+      url = conn.webhook_url;
+    } catch { note = 'no_secret'; }
+  }
+  return Number(db.prepare(`INSERT INTO api_outbox (api_request_id, connection_id, event, status, body, webhook_url, signature, note)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(request.id, request.connection_id, event, body.status, raw, url, signature, note).lastInsertRowid);
+}
+
+/** Неотправленные события по порядку. */
+export function unsentEvents(db, limit = 50) {
+  try {
+    return db.prepare('SELECT * FROM api_outbox WHERE sent_at IS NULL ORDER BY id LIMIT ?').all(limit);
+  } catch { return []; }
+}
+
+/** Публичный сервер принял эти события. */
+export function markSent(db, ids, now = Date.now()) {
+  const st = db.prepare('UPDATE api_outbox SET sent_at = ?, attempts = attempts + 1, last_error = \'\' WHERE id = ? AND sent_at IS NULL');
+  db.transaction(() => { for (const id of ids) st.run(isoOf(now), id); })();
+}
+
+/** Попытка не удалась — события остаются в очереди. */
+export function markFailed(db, ids, error) {
+  const st = db.prepare('UPDATE api_outbox SET attempts = attempts + 1, last_error = ? WHERE id = ? AND sent_at IS NULL');
+  db.transaction(() => { for (const id of ids) st.run(String(error || '').slice(0, 120), id); })();
+}
+```
+
+- [ ] **Step 5:** тест зелёный (3 теста). Сторожа: `node --test server/test-helpers/no-test-helpers-in-production.test.js server/services/api/no-real-api-keys.test.js`.
+- [ ] **Step 6: коммит** «Заявки из API — события партнёру: тело белым списком без данных пациента, подпись HMAC-SHA256 ставит клиника секретом подключения; без адреса, без подписки и без ключа шифрования — событие без уведомления с пометкой».
+
+---
+
+## Task 5: Заявки из API — приём из очереди, подтверждение регистратором, другое время, отказ, «взять в работу», истечение, ответы партнёра (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/services/api/bookings-intake.test.js`, `server/services/api/bookings-confirm.test.js`, `server/services/api/bookings-offer.test.js`, `server/services/api/bookings.js`
+
+- [ ] **Step 1: падающие тесты.** `server/services/api/bookings-intake.test.js`:
+
+```js
+// PUBLIC_API_V1 — приём заявок и онлайн-записи из очереди публичного сервера:
+// карточка CRM с источником подключения и без карты пациента; удержание времени;
+// повтор номера — без второй карточки; занятое, закрытое для партнёров и
+// опоздавшее — отказ с причиной партнёру; два партнёра на одно время — второй
+// получает «время занято»; «Не пришёл» удержанные не трогает.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { bookingSeed, localAt, apptItem } from '../../test-helpers/api-booking-seed.js';
+import { ingestItem } from './bookings.js';
+import { slotIsFree, calendarBook } from '../rpc/calendar.js';
+import { crmNoShowSweep } from '../crm/no-show.js';
+
+const NOW = localAt('2030-03-11', '09:00');
+const START = localAt('2030-03-12', '10:00');
+const item = (s, over = {}) => apptItem({ connId: s.connId, startMs: START, receivedMs: NOW - 60000, ...over });
+const one = (db, sql, ...a) => db.prepare(sql).get(...a);
+
+test('онлайн-запись: ждёт подтверждения, время держится 30 минут от приёма; карточка без карты — источник подключения, первая колонка, строка консультации на день', async () => {
+  const s = bookingSeed();
+  const r = await ingestItem(s.db, item(s), { now: NOW, kekPath: s.kekPath });
+  assert.deepEqual({ applied: r.applied, status: r.status }, { applied: true, status: 'pending' });
+  const req = one(s.db, 'SELECT * FROM api_requests WHERE id = ?', r.id);
+  assert.deepEqual([req.kind, req.doctor_id, req.consultation_type_id, req.duration_minutes, req.hold_until, req.patient_phone, req.external_id],
+    ['appointment', 7, 1, 30, new Date(NOW - 60000 + 30 * 60000).toISOString().replace('.000', ''), '+998901234567', 'med-1']);
+  const card = one(s.db, 'SELECT * FROM crm_requests WHERE id = ?', req.crm_request_id);
+  assert.deepEqual([card.full_name, card.phone, card.source, card.sources, card.status, card.patient_id, card.note, card.scheduled_date],
+    ['Абдурахмонов Фаррух', '+998901234567', 'api_med24_uz', '["api_med24_uz"]', 'in_process', null, 'Ребёнок 5 лет', '2030-03-12']);
+  assert.deepEqual({ ...one(s.db, 'SELECT service_id, consultation_type_id, doctor_id, scheduled_date, status, visit_id FROM crm_request_services WHERE request_id = ?', card.id) },
+    { service_id: null, consultation_type_id: 1, doctor_id: 7, scheduled_date: '2030-03-12', status: 'pending', visit_id: null });
+  assert.equal(slotIsFree(s.db, { doctorId: 7, startMs: START, durationMin: 30, now: NOW }), false, 'время держится');
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM visits').n, 0, 'визита нет — нет и карты');
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM patients').n, 0, 'карту пациента заявка не заводит');
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM api_outbox').n, 0, 'ждущей записи партнёр уже знает «pending» от публичного сервера');
+});
+
+test('повтор: тот же номер заявки и тот же номер партнёра — без второй карточки и второго удержания', async () => {
+  const s = bookingSeed();
+  await ingestItem(s.db, item(s), { now: NOW, kekPath: s.kekPath });
+  assert.deepEqual(await ingestItem(s.db, item(s), { now: NOW, kekPath: s.kekPath }), { applied: false, duplicate: true });
+  assert.deepEqual(await ingestItem(s.db, item(s, { publicId: 'rq_test0002' }), { now: NOW, kekPath: s.kekPath }), { applied: false, duplicate: true });
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM crm_requests').n, 1);
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM slot_holds').n, 1);
+});
+
+test('два партнёра на одно время: второй получает отказ «время занято»; карточка всё равно появляется — без даты', async () => {
+  const s = bookingSeed();
+  await ingestItem(s.db, item(s), { now: NOW, kekPath: s.kekPath });
+  const r2 = await ingestItem(s.db, item(s, { publicId: 'rq_test0002', externalId: 'med-2', name: 'Каримов Олим', phone: '+998935550011' }), { now: NOW, kekPath: s.kekPath });
+  assert.equal(r2.status, 'declined');
+  const req = one(s.db, 'SELECT * FROM api_requests WHERE id = ?', r2.id);
+  assert.deepEqual([req.decline_reason, req.hold_until], ['slot_taken', null]);
+  const ev = one(s.db, 'SELECT * FROM api_outbox WHERE api_request_id = ?', r2.id);
+  assert.equal(ev.event, 'booking.declined');
+  const body = JSON.parse(ev.body);
+  assert.deepEqual([body.status, body.reason, body.request_id], ['declined', 'slot_taken', 'rq_test0002']);
+  assert.ok(!ev.body.includes('Каримов') && !ev.body.includes('935550011'));
+  const card = one(s.db, 'SELECT * FROM crm_requests WHERE id = ?', req.crm_request_id);
+  assert.equal(card.scheduled_date, null);
+  assert.equal(one(s.db, 'SELECT scheduled_date FROM crm_request_services WHERE request_id = ?', card.id).scheduled_date, null);
+});
+
+test('занятое визитом, врач скрыт, живая очередь, за горизонтом записи, опоздание клиники — отказ с причиной', async () => {
+  const s = bookingSeed();
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Иванов', '+998901112233')").run();
+  await calendarBook(s.db, { patient_id: 1, doctor_id: 7, start: new Date(localAt('2030-03-12', '11:00')).toISOString(), duration_minutes: 30 }, s.reg);
+  const reasonOf = async (over) => {
+    const r = await ingestItem(s.db, item(s, over), { now: NOW, kekPath: s.kekPath });
+    return one(s.db, 'SELECT status, decline_reason FROM api_requests WHERE id = ?', r.id);
+  };
+  assert.deepEqual({ ...(await reasonOf({ publicId: 'rq_busy0001', externalId: 'b1', startMs: localAt('2030-03-12', '11:15') })) }, { status: 'declined', decline_reason: 'slot_taken' });
+  assert.deepEqual({ ...(await reasonOf({ publicId: 'rq_live0001', externalId: 'b2', doctorId: 8 })) }, { status: 'declined', decline_reason: 'not_bookable' });
+  assert.deepEqual({ ...(await reasonOf({ publicId: 'rq_far00001', externalId: 'b3', startMs: localAt('2030-03-30', '10:00') })) }, { status: 'declined', decline_reason: 'not_bookable' });
+  assert.deepEqual({ ...(await reasonOf({ publicId: 'rq_grid0001', externalId: 'b4', startMs: localAt('2030-03-12', '10:07') })) }, { status: 'declined', decline_reason: 'slot_taken' });
+  assert.deepEqual({ ...(await reasonOf({ publicId: 'rq_late0001', externalId: 'b5', receivedMs: NOW - 31 * 60000 })) }, { status: 'expired', decline_reason: 'expired' });
+  s.db.prepare('UPDATE users SET is_public = 0 WHERE id = 7').run();
+  assert.deepEqual({ ...(await reasonOf({ publicId: 'rq_hide0001', externalId: 'b6', startMs: localAt('2030-03-12', '15:00') })) }, { status: 'declined', decline_reason: 'not_bookable' });
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM api_outbox WHERE event = ?', 'booking.declined').n, 6);
+});
+
+test('заявка «перезвоните»: карточка с услугой без даты; врач — только показанный партнёрам', async () => {
+  const s = bookingSeed();
+  const r = await ingestItem(s.db, { ...item(s, { publicId: 'rq_call0001' }), type: 'request.new',
+    data: { external_id: 'cb-1', service_id: 301, doctor_id: 8, lang: 'uz' } }, { now: NOW });
+  const req = one(s.db, 'SELECT * FROM api_requests WHERE id = ?', r.id);
+  assert.deepEqual([req.kind, req.status, req.service_id, req.doctor_id, req.lang, req.start_at], ['request', 'new', 301, 8, 'uz', null]);
+  assert.deepEqual({ ...one(s.db, 'SELECT service_id, doctor_id, scheduled_date FROM crm_request_services WHERE request_id = ?', req.crm_request_id) },
+    { service_id: 301, doctor_id: 8, scheduled_date: null });
+  const hidden = await ingestItem(s.db, { ...item(s, { publicId: 'rq_call0002', externalId: 'cb-2' }), type: 'request.new',
+    data: { external_id: 'cb-2', service_id: 303 } }, { now: NOW });
+  assert.equal(one(s.db, 'SELECT service_id FROM api_requests WHERE id = ?', hidden.id).service_id, null, 'скрытая услуга не ставится');
+});
+
+test('разбор: мусор и неизвестное подключение — не применяются и не бросают', async () => {
+  const s = bookingSeed();
+  assert.deepEqual(await ingestItem(s.db, { type: 'appointment.new', public_id: 'rq_x' }, { now: NOW }), { applied: false, problem: 'public_id' });
+  assert.deepEqual(await ingestItem(s.db, item(s, { connId: 99 }), { now: NOW }), { applied: false, problem: 'connection' });
+  assert.deepEqual(await ingestItem(s.db, { type: 'appointment.cancel', public_id: 'rq_nothere1', connection_id: s.connId }, { now: NOW }),
+    { applied: false, problem: 'unknown_request' });
+});
+
+test('«Не пришёл» удержанные не трогает: карточка ждущей записи остаётся в своей колонке и после дня записи', async () => {
+  const s = bookingSeed();
+  const r = await ingestItem(s.db, item(s), { now: NOW, kekPath: s.kekPath });
+  const cardId = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', r.id).c;
+  assert.deepEqual(crmNoShowSweep(s.db, { day: '2030-03-20' }), []);
+  assert.equal(one(s.db, 'SELECT status FROM crm_requests WHERE id = ?', cardId).status, 'in_process');
+});
+```
+
+`server/services/api/bookings-confirm.test.js` — **денежные и временные инварианты**:
+- удержанное время не записывается дважды;
+- подтверждение даёт ровно один визит через ту же дверь, что у регистратуры;
+- истечение освобождает время.
+
+```js
+// PUBLIC_API_V1 — ПОДТВЕРЖДЕНИЕ ОНЛАЙН-ЗАПИСИ: регистратор выбрал карту — визит
+// заводит ensure_visit (та же дверь, что у регистратуры): ровно один визит на
+// выбранное время, строка консультации по цене кассы, карточка привязана,
+// удержание снято, партнёр получает «booking.confirmed». Истёкшее не
+// подтверждается; визит дня с работой — отказ до первой записи; гонка двух
+// подтверждающих — один визит.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { bookingSeed, localAt, apptItem } from '../../test-helpers/api-booking-seed.js';
+import { ingestItem, confirmBooking, expireDue } from './bookings.js';
+import { slotIsFree, calendarBook } from '../rpc/calendar.js';
+
+const NOW = localAt('2030-03-11', '09:00');
+const START = localAt('2030-03-12', '10:00');
+const one = (db, sql, ...a) => db.prepare(sql).get(...a);
+const refusal = async (p) => { try { await p; } catch (e) { return e; } return assert.fail('ожидался отказ'); };
+
+async function pending(s, over = {}) {
+  const r = await ingestItem(s.db, apptItem({ connId: s.connId, startMs: START, receivedMs: NOW - 60000, ...over }), { now: NOW, kekPath: s.kekPath });
+  assert.equal(r.status, 'pending');
+  return r.id;
+}
+const patient = (s, id = 1, name = 'Абдурахмонов Фаррух') =>
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (?, ?, ?, '+998901234567')").run(id, 'P-' + id, name);
+
+test('подтверждение: один визит на выбранное время у выбранного врача; строка консультации по общей цене вида; карточка привязана; удержание снято; партнёру — booking.confirmed', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  patient(s);
+  const out = await confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  const visits = s.db.prepare('SELECT * FROM visits').all();
+  assert.equal(visits.length, 1);
+  const v = visits[0];
+  assert.deepEqual([v.patient_id, v.doctor_id, Date.parse(v.visit_date), v.duration_minutes, v.status], [1, 7, START, 30, 'scheduled']);
+  assert.equal(out.visit.id, v.id);
+  const req = one(s.db, 'SELECT * FROM api_requests WHERE id = ?', id);
+  assert.deepEqual([req.status, req.visit_id, req.patient_id, req.handled_by], ['confirmed', v.id, 1, 2]);
+  const line = one(s.db, 'SELECT consultation_type_id, doctor_id, unit_price, status FROM visit_services WHERE visit_id = ?', v.id);
+  assert.deepEqual({ ...line }, { consultation_type_id: 1, doctor_id: 7, unit_price: 150000, status: 'added' }, 'цена — как у кассы (решение 8)');
+  const card = one(s.db, 'SELECT * FROM crm_requests WHERE id = ?', req.crm_request_id);
+  assert.equal(card.patient_id, 1);
+  assert.equal(card.status, 'scheduled', 'карточка — в «Колонке записи», как у записи колл-центра');
+  assert.equal(one(s.db, 'SELECT visit_id FROM crm_request_services WHERE request_id = ?', card.id).visit_id, v.id);
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM slot_holds WHERE api_request_id = ? AND released_at IS NULL', id).n, 0);
+  assert.equal(one(s.db, 'SELECT release_reason FROM slot_holds WHERE api_request_id = ?', id).release_reason, 'confirmed');
+  const ev = one(s.db, "SELECT * FROM api_outbox WHERE event = 'booking.confirmed'");
+  const body = JSON.parse(ev.body);
+  assert.deepEqual([body.status, body.request_id, body.doctor_id], ['booked', 'rq_test0001', 7]);
+  assert.match(body.start, /^2030-03-12T10:00:00\+\d\d:\d\d$/);
+  assert.ok(ev.signature.startsWith('sha256='));
+  assert.equal(slotIsFree(s.db, { doctorId: 7, startMs: START, durationMin: 30, now: NOW }), false, 'теперь время держит визит');
+});
+
+test('повторное подтверждение — тот же визит; два подтверждающих одновременно — один визит', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  patient(s);
+  const [a, b] = await Promise.allSettled([
+    confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath }),
+    confirmBooking(s.db, { id, patientId: 1 }, s.cc, { now: NOW, kekPath: s.kekPath }),
+  ]);
+  const ok = [a, b].filter((x) => x.status === 'fulfilled');
+  assert.ok(ok.length >= 1);
+  for (const x of [a, b]) if (x.status === 'rejected') assert.equal(x.reason.code, 'busy');
+  const again = await confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath });
+  assert.equal(again.already, true);
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM visits').n, 1);
+  assert.equal(one(s.db, "SELECT COUNT(*) AS n FROM api_outbox WHERE event = 'booking.confirmed'").n, 1);
+});
+
+test('время истекло: подтверждения нет, итог «expired», партнёру — отказ; время свободно', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  patient(s);
+  const e = await refusal(confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW + 31 * 60000, kekPath: s.kekPath }));
+  assert.equal(e.code, 'hold_expired');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'expired');
+  const body = JSON.parse(one(s.db, "SELECT body FROM api_outbox WHERE event = 'booking.declined'").body);
+  assert.deepEqual([body.status, body.reason], ['expired', 'expired']);
+  assert.equal(slotIsFree(s.db, { doctorId: 7, startMs: START, durationMin: 30, now: NOW }), true);
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM visits').n, 0);
+  assert.equal(expireDue(s.db, { now: NOW + 40 * 60000, kekPath: s.kekPath }), 0, 'второй проход ничего не находит');
+});
+
+test('визит дня с работой: отказ до первой записи — строки заявки не уходят в чужую смету, карточку отказ не трогает', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  patient(s);
+  const dv = await calendarBook(s.db, { patient_id: 1, doctor_id: 8, start: new Date(localAt('2030-03-12', '08:00')).toISOString(), duration_minutes: 15 }, s.reg);
+  s.db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, total_amount) VALUES (1, 'INV-1', ?, 1, 1000, 1000)").run(dv.visit.id);
+  const req = one(s.db, 'SELECT crm_request_id FROM api_requests WHERE id = ?', id);
+  // Запись к Каримовой уже связала карточку по номеру (crm/visit-link.js, шаг D) — это правило CRM, не подтверждения.
+  const cardBefore = { ...one(s.db, 'SELECT patient_id, status FROM crm_requests WHERE id = ?', req.crm_request_id) };
+  const e = await refusal(confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath }));
+  assert.equal(e.code, 'day_visit_busy');
+  assert.equal(e.status, 409);
+  assert.equal(e.params.doctor, 'Каримова Нигора');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'pending');
+  assert.deepEqual({ ...one(s.db, 'SELECT patient_id, status FROM crm_requests WHERE id = ?', req.crm_request_id) }, cardBefore, 'карточку отказ не тронул');
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM visit_services WHERE visit_id = ? AND consultation_type_id = 1', dv.visit.id).n, 0, 'консультация заявки не ушла в смету визита Каримовой');
+});
+
+test('отказ двери записи (экстренная запись поверх удержания): заявка снова ждёт, карточка без карты, визита нет', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  patient(s);
+  patient(s, 2, 'Другой Пациент');
+  await calendarBook(s.db, { patient_id: 2, doctor_id: 7, start: new Date(START).toISOString(), duration_minutes: 30, emergency: true, emergency_reason: 'боль' }, s.reg);
+  const e = await refusal(confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath }));
+  assert.equal(e.code, 'slot_taken');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'pending');
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM visits WHERE patient_id = 1').n, 0);
+});
+
+test('семья на одном номере: карточку по номеру связали с мамой — регистратор выбирает ребёнка, визит и консультация — у ребёнка', async () => {
+  const s = bookingSeed();
+  const id = await pending(s, { name: 'Абдурахмонова Мадина', comment: 'Записываю дочь' });
+  patient(s, 1, 'Абдурахмонова Мадина');
+  patient(s, 2, 'Абдурахмонова Лола');
+  const req = one(s.db, 'SELECT crm_request_id FROM api_requests WHERE id = ?', id);
+  s.db.prepare('UPDATE crm_requests SET patient_id = 1 WHERE id = ?').run(req.crm_request_id);
+  const out = await confirmBooking(s.db, { id, patientId: 2 }, s.reg, { now: NOW, kekPath: s.kekPath });
+  assert.equal(out.visit.patient_id, 2);
+  assert.equal(one(s.db, 'SELECT patient_id FROM crm_requests WHERE id = ?', req.crm_request_id).patient_id, 2);
+  assert.deepEqual({ ...one(s.db, 'SELECT consultation_type_id, unit_price FROM visit_services WHERE visit_id = ?', out.visit.id) },
+    { consultation_type_id: 1, unit_price: 150000 });
+});
+
+test('отказы: не та заявка, без карты, чужая карта, не ждёт', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  assert.equal((await refusal(confirmBooking(s.db, { id, patientId: null }, s.reg, { now: NOW }))).status, 400);
+  assert.equal((await refusal(confirmBooking(s.db, { id, patientId: 99 }, s.reg, { now: NOW }))).status, 400);
+  assert.equal((await refusal(confirmBooking(s.db, { id: 999, patientId: 1 }, s.reg, { now: NOW }))).status, 404);
+  s.db.prepare("UPDATE api_requests SET status = 'declined', decline_reason = 'other' WHERE id = ?").run(id);
+  assert.equal((await refusal(confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW }))).status, 409);
+});
+```
+
+`server/services/api/bookings-offer.test.js`:
+
+```js
+// PUBLIC_API_V1 — «Предложить другое время», «Отклонить», «Взять в работу»,
+// истечение и ответы партнёра: время держится там, где надо, и только там;
+// партнёр получает событие о каждом решении клиники; отмена пациентом
+// освобождает время или отменяет визит без работы той же дверью календаря.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { bookingSeed, localAt, apptItem } from '../../test-helpers/api-booking-seed.js';
+import { ingestItem, confirmBooking, offerOtherTime, declineBooking, acceptRequest, expireDue } from './bookings.js';
+import { slotIsFree } from '../rpc/calendar.js';
+
+const NOW = localAt('2030-03-11', '09:00');
+const START = localAt('2030-03-12', '10:00');
+const LATER = localAt('2030-03-12', '14:00');
+const one = (db, sql, ...a) => db.prepare(sql).get(...a);
+const free = (s, ms, now = NOW) => slotIsFree(s.db, { doctorId: 7, startMs: ms, durationMin: 30, now });
+const events = (s) => s.db.prepare('SELECT event, body FROM api_outbox ORDER BY id').all().map((r) => [r.event, JSON.parse(r.body)]);
+const refusal = (fn) => { try { fn(); } catch (e) { return e; } return assert.fail('ожидался отказ'); };
+async function pending(s) {
+  return (await ingestItem(s.db, apptItem({ connId: s.connId, startMs: START, receivedMs: NOW - 60000 }), { now: NOW, kekPath: s.kekPath })).id;
+}
+const inbox = (s, type, now) => ingestItem(s.db, { type, cursor: '9', public_id: 'rq_test0001', connection_id: s.connId }, { now, kekPath: s.kekPath });
+
+test('другое время: прежнее освобождается, новое держится 30 минут; партнёр получает время и срок; согласие — снова ждёт подтверждения на новом времени', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  const out = offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  assert.deepEqual([out.status, out.offered_start, out.offer_until],
+    ['offered', new Date(LATER).toISOString().replace('.000', ''), new Date(NOW + 31 * 60000).toISOString().replace('.000', '')]);
+  assert.equal(free(s, START), true, 'прежнее время свободно');
+  assert.equal(free(s, LATER), false, 'предложенное держится');
+  const [ev, body] = events(s).at(-1);
+  assert.equal(ev, 'booking.offered_other_time');
+  assert.deepEqual([body.status, typeof body.offered_start, typeof body.offer_until], ['offered', 'string', 'string']);
+  assert.match(body.offered_start, /^2030-03-12T14:00:00\+/);
+  const acc = await inbox(s, 'offer.accept', NOW + 5 * 60000);
+  assert.equal(acc.status, 'pending');
+  const row = one(s.db, 'SELECT * FROM api_requests WHERE id = ?', id);
+  assert.deepEqual([row.start_at, row.offered_start, row.hold_until],
+    [new Date(LATER).toISOString().replace('.000', ''), null, new Date(NOW + 35 * 60000).toISOString().replace('.000', '')]);
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  const c = await confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW + 6 * 60000, kekPath: s.kekPath });
+  assert.equal(Date.parse(c.visit.visit_date), LATER);
+});
+
+test('другое время: только свободное, в будущем и пока время держится', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  assert.equal(refusal(() => offerOtherTime(s.db, { id, start: 'завтра' }, s.reg, { now: NOW })).status, 400);
+  assert.equal(refusal(() => offerOtherTime(s.db, { id, start: new Date(NOW - 60000).toISOString() }, s.reg, { now: NOW })).status, 400);
+  assert.equal(refusal(() => offerOtherTime(s.db, { id, start: new Date(localAt('2030-03-12', '10:07')).toISOString() }, s.reg, { now: NOW })).code, 'slot_taken');
+  const late = refusal(() => offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW + 40 * 60000 }));
+  assert.equal(late.status, 409);
+  // То же время, что уже держит заявка, предложить можно (своё удержание не мешает).
+  assert.equal(offerOtherTime(s.db, { id, start: new Date(localAt('2030-03-12', '10:15')).toISOString() }, s.reg, { now: NOW }).status, 'offered');
+});
+
+test('партнёр отказался от другого времени — отменено, время свободно; не ответил за 30 минут — истекло', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW, kekPath: s.kekPath });
+  const r = await inbox(s, 'offer.decline', NOW + 60000);
+  assert.equal(r.status, 'cancelled');
+  assert.equal(free(s, LATER), true);
+
+  const s2 = bookingSeed();
+  const id2 = await pending(s2);
+  offerOtherTime(s2.db, { id: id2, start: new Date(LATER).toISOString() }, s2.reg, { now: NOW, kekPath: s2.kekPath });
+  assert.equal(expireDue(s2.db, { now: NOW + 31 * 60000, kekPath: s2.kekPath }), 1);
+  assert.equal(one(s2.db, 'SELECT status FROM api_requests WHERE id = ?', id2).status, 'expired');
+  assert.deepEqual(events(s2).at(-1).slice(0, 1), ['booking.declined']);
+  assert.equal(events(s2).at(-1)[1].reason, 'expired');
+});
+
+test('«Отклонить»: время свободно, партнёр получает причину; причина — из трёх; повторно — нельзя', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  assert.equal(refusal(() => declineBooking(s.db, { id, reason: 'duplicate' }, s.reg, { now: NOW })).status, 400);
+  const out = declineBooking(s.db, { id, reason: 'doctor_unavailable' }, s.reg, { now: NOW, kekPath: s.kekPath });
+  assert.deepEqual([out.status, out.decline_reason, out.handled_by], ['declined', 'doctor_unavailable', 2]);
+  assert.equal(free(s, START), true);
+  const [ev, body] = events(s).at(-1);
+  assert.deepEqual([ev, body.status, body.reason], ['booking.declined', 'declined', 'doctor_unavailable']);
+  assert.equal(refusal(() => declineBooking(s.db, { id, reason: 'other' }, s.reg, { now: NOW })).status, 409);
+});
+
+test('заявка без времени: «Взять в работу» — один раз, партнёру «request.accepted»', async () => {
+  const s = bookingSeed();
+  const r = await ingestItem(s.db, { ...apptItem({ connId: s.connId, publicId: 'rq_call0001', startMs: START, receivedMs: NOW }), type: 'request.new',
+    data: { external_id: 'cb-1' } }, { now: NOW });
+  const out = acceptRequest(s.db, { id: r.id }, s.cc, { now: NOW, kekPath: s.kekPath });
+  assert.equal(out.status, 'accepted');
+  assert.deepEqual([events(s).at(-1)[0], events(s).at(-1)[1].status], ['request.accepted', 'accepted']);
+  assert.equal(refusal(() => acceptRequest(s.db, { id: r.id }, s.cc, { now: NOW })).status, 409);
+});
+
+test('отмена пациентом у партнёра: ждущая — время свободно; записанная без работы — визит отменён календарём, партнёру «appointment.cancelled»; с работой — визит не трогается', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  const r = await inbox(s, 'appointment.cancel', NOW + 60000);
+  assert.equal(r.status, 'cancelled');
+  assert.equal(free(s, START), true);
+  assert.ok(one(s.db, 'SELECT partner_cancel_at FROM api_requests WHERE id = ?', id).partner_cancel_at);
+
+  const s2 = bookingSeed();
+  const id2 = await pending(s2);
+  s2.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  const c = await confirmBooking(s2.db, { id: id2, patientId: 1 }, s2.reg, { now: NOW, kekPath: s2.kekPath });
+  const r2 = await ingestItem(s2.db, { type: 'appointment.cancel', cursor: '10', public_id: 'rq_test0001', connection_id: s2.connId }, { now: NOW + 60000, kekPath: s2.kekPath });
+  assert.equal(r2.status, 'cancelled');
+  assert.equal(one(s2.db, 'SELECT status FROM visits WHERE id = ?', c.visit.id).status, 'cancelled');
+  assert.deepEqual([events(s2).at(-1)[0], events(s2).at(-1)[1].status], ['appointment.cancelled', 'cancelled']);
+
+  const s3 = bookingSeed();
+  const id3 = await pending(s3);
+  s3.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  const c3 = await confirmBooking(s3.db, { id: id3, patientId: 1 }, s3.reg, { now: NOW, kekPath: s3.kekPath });
+  s3.db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, total_amount) VALUES (1, 'INV-1', ?, 1, 150000, 150000)").run(c3.visit.id);
+  const r3 = await ingestItem(s3.db, { type: 'appointment.cancel', cursor: '11', public_id: 'rq_test0001', connection_id: s3.connId }, { now: NOW + 60000, kekPath: s3.kekPath });
+  assert.deepEqual([r3.status, r3.needs_staff], ['confirmed', true]);
+  assert.equal(one(s3.db, 'SELECT status FROM visits WHERE id = ?', c3.visit.id).status, 'scheduled');
+  assert.ok(one(s3.db, 'SELECT partner_cancel_at FROM api_requests WHERE id = ?', id3).partner_cancel_at);
+
+  // Отмена в ту секунду, когда регистратор подтверждает, — не теряется: пометка для регистратуры.
+  const s4 = bookingSeed();
+  const id4 = await pending(s4);
+  s4.db.prepare("UPDATE api_requests SET status = 'confirming' WHERE id = ?").run(id4);
+  const r4 = await ingestItem(s4.db, { type: 'appointment.cancel', cursor: '12', public_id: 'rq_test0001', connection_id: s4.connId }, { now: NOW + 60000, kekPath: s4.kekPath });
+  assert.deepEqual([r4.applied, r4.status, r4.needs_staff], [true, 'confirming', true]);
+  assert.ok(one(s4.db, 'SELECT partner_cancel_at FROM api_requests WHERE id = ?', id4).partner_cancel_at);
+});
+```
+
+- [ ] **Step 2:** `LIS_ENABLED=0 node --test server/services/api/bookings-intake.test.js server/services/api/bookings-confirm.test.js server/services/api/bookings-offer.test.js` → падает: `Cannot find module …/api/bookings.js`.
+- [ ] **Step 3: модуль** `server/services/api/bookings.js`:
+
+```js
+// PUBLIC_API_V1 — ЗАЯВКИ И ОНЛАЙН-ЗАПИСЬ ИЗ API: приём из очереди публичного
+// сервера, удержание времени, подтверждение регистратором, встречное
+// предложение, отказ, истечение, ответы партнёра (отмена, согласие с другим
+// временем).
+//
+// ПРАВИЛА СПЕЦИФИКАЦИИ (docs/specs/2026-10-06-clinic-api-design.md):
+//   • решение владельца 3 — заявка карту пациента не создаёт; время держится
+//     без карты (services/api/holds.js); регистратор выбирает или заводит
+//     карту, затем подтверждает;
+//   • «Онлайн-запись» — только через ту же функцию записи, что у регистратора:
+//     подтверждение зовёт ensure_visit (rpc/visits.js) с book — там живут
+//     запрет двойной записи, правило «один пациент — один визит на день» и
+//     связь с CRM; удержание 30 минут; наружу — только свободное время.
+//
+// ОДНА ЗАЯВКА ПАРТНЁРА — ОДНА КАРТОЧКА CRM с источником подключения (Р6
+// плана): у неё свой номер, статус и ответ партнёру, и сливать её с чужой
+// карточкой того же номера (окно повторного обращения звонков) значило бы
+// смешать два ответа. Дубликаты по номеру видны в «Дубликатах» доски.
+//
+// РОВНО ОДИН ВИЗИТ НА ПОДТВЕРЖДЕНИЕ: переход pending → confirming — условный
+// UPDATE, второй подтверждающий получает отказ, а не второй визит; повторное
+// подтверждение уже записанной заявки отвечает тем же визитом.
+//
+// Деньги не трогаются: визит и его строки заводят ensure_visit и зеркало
+// заявки (crm/booking-mirror.js) — по тем же ценам, что у регистратуры.
+import { firstStageKey } from '../crm/contact-window.js';
+import { dayVisitMovableFor, visitHasWork, PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';
+import { findPatientsByPhone } from '../telegram/documents.js';
+import { doctorPublicState } from '../../../public/js/shared/doctor-public.js';
+import { consultOffered, consultMinutes, consultRowOf } from '../../../public/js/shared/consultation-price.js';
+import { servicePublicState } from '../../../public/js/shared/service-public.js';
+import { DEFAULT_DURATION_MIN, serviceDurationMinutes, formatHhmm } from '../rpc/slot-engine.js';
+import { slotIsFree, calendarBook } from '../rpc/calendar.js';
+import { ensureVisit } from '../rpc/visits.js';
+import { localDate } from '../domain/day.js';
+import { rpcT } from '../server-message.js';
+import {
+  HOLD_MINUTES, OFFER_MINUTES, EV, STAFF_DECLINE_REASONS, API_BOOKING_MESSAGES as MSG,
+  parseInboxItem, isoOf, localIso, holdState, shownStatus, bookingActions, PARTNER_STATUS,
+} from '../../../public/js/shared/api-booking.js';
+import { enqueueEvent } from './outbox.js';
+import { placeHold, releaseHolds, liveHoldOf } from './holds.js';
+
+export class BookingError extends Error {
+  constructor(msg, status = 400, code = null) { super(msg); this.status = status; if (code) this.code = code; }
+}
+
+/** Кто отменяет визит по просьбе партнёра: сам сервер (calendar_book требует роль записи). */
+const SYSTEM_BOOKER = Object.freeze({ id: null, role: 'admin', extra_roles: [] });
+const offsetMin = (ms) => -new Date(ms).getTimezoneOffset();
+const partnerTime = (iso) => { const ms = Date.parse(iso); return Number.isFinite(ms) ? localIso(ms, offsetMin(ms)) : ''; };
+const localDayOf = (db, iso) => db.prepare(`SELECT ${localDate('?')} AS d`).get(iso).d;
+const hhmmLocal = (iso) => { const d = new Date(Date.parse(iso)); return formatHhmm(d.getHours() * 60 + d.getMinutes()); };
+const addDays = (dayIso, n) => { const [y, m, d] = dayIso.split('-').map(Number); const x = new Date(y, m - 1, d + n); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+
+export function requestRow(db, id) {
+  const n = Number(id);
+  const r = Number.isInteger(n) && n > 0 ? db.prepare('SELECT * FROM api_requests WHERE id = ?').get(n) : null;
+  if (!r) throw new BookingError(MSG.notFound, 404, 'not_found');
+  return r;
+}
+const byPublicId = (db, publicId) => db.prepare('SELECT * FROM api_requests WHERE public_id = ?').get(publicId);
+const branchesById = (db) => new Map(db.prepare('SELECT id, active, show_public FROM branches').all().map((b) => [Number(b.id), b]));
+function setStatus(db, id, fields, now) {
+  const cols = Object.keys(fields);
+  db.prepare(`UPDATE api_requests SET ${cols.map((c) => c + ' = ?').join(', ')}, updated_at = ? WHERE id = ?`)
+    .run(...cols.map((c) => fields[c]), isoOf(now), id);
+  return db.prepare('SELECT * FROM api_requests WHERE id = ?').get(id);
+}
+
+// ─── ПРИЁМ ИЗ ОЧЕРЕДИ ───────────────────────────────────────────────────────
+
+/** Карточка CRM заявки: источник подключения, первая колонка воронки, комментарий пациента. */
+function createCard(db, { conn, v, day, line }) {
+  const key = conn.crm_source_key;
+  const crmId = Number(db.prepare(`INSERT INTO crm_requests (full_name, phone, source, sources, status, note, scheduled_date)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(v.patient.name, uzE164(v.patient.phone), key, JSON.stringify([key]), firstStageKey(db) || 'in_process',
+      v.patient.comment, day).lastInsertRowid);
+  if (line && (line.service_id || line.consultation_type_id)) {
+    db.prepare(`INSERT INTO crm_request_services (request_id, service_id, consultation_type_id, doctor_id, scheduled_date, status)
+                VALUES (?, ?, ?, ?, ?, 'pending')`)
+      .run(crmId, line.service_id || null, line.service_id ? null : (line.consultation_type_id || null), line.doctor_id || null, day);
+  }
+  return crmId;
+}
+
+function insertRequest(db, row) {
+  const cols = Object.keys(row);
+  return Number(db.prepare(`INSERT INTO api_requests (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
+    .run(...cols.map((c) => row[c])).lastInsertRowid);
+}
+const isUnique = (e) => e && String(e.code || '').startsWith('SQLITE_CONSTRAINT_UNIQUE');
+
+function intakeRequest(db, v, conn, { now }) {
+  const doctor = v.doctor_id ? db.prepare('SELECT * FROM users WHERE id = ?').get(v.doctor_id) : null;
+  const doctorId = doctor && doctorPublicState(doctor, branchesById(db)) === 'shown' ? doctor.id : null;
+  const svc = v.service_id ? db.prepare('SELECT * FROM services WHERE id = ?').get(v.service_id) : null;
+  const serviceId = svc && servicePublicState(svc) === 'shown' ? svc.id : null;
+  return db.transaction(() => {
+    const crmId = createCard(db, { conn, v, day: null, line: { service_id: serviceId, doctor_id: doctorId } });
+    const id = insertRequest(db, {
+      public_id: v.public_id, connection_id: conn.id, external_id: v.external_id, kind: 'request', status: 'new',
+      crm_request_id: crmId, patient_name: v.patient.name, patient_phone: uzE164(v.patient.phone), comment: v.patient.comment,
+      lang: v.lang, doctor_id: doctorId, service_id: serviceId, package_id: v.package_id, received_at: v.received_at, picked_at: isoOf(now),
+    });
+    return { applied: true, id, status: 'new' };
+  })();
+}
+
+/**
+ * Что записывает онлайн-запись и сколько длится: { consultationTypeId, serviceId, duration, reason }.
+ * reason — 'not_bookable', если врача, вида приёма или услуги партнёрам не показывают.
+ */
+function bookableWhat(db, v, doctor) {
+  const out = { consultationTypeId: null, serviceId: null, duration: DEFAULT_DURATION_MIN, reason: '' };
+  if (!doctor || doctorPublicState(doctor, branchesById(db)) !== 'shown' || doctor.scheduling_mode === 'live_queue') {
+    out.reason = 'not_bookable';
+    return out;
+  }
+  if (v.consultation) {
+    const ct = db.prepare('SELECT * FROM consultation_types WHERE api_kind = ?').get(v.consultation);
+    const rows = ct ? db.prepare('SELECT * FROM doctor_consultation_prices WHERE doctor_id = ? AND consultation_type_id = ?').all(doctor.id, ct.id) : [];
+    if (!ct || !consultOffered(ct, consultRowOf(rows, doctor.id, ct.id), doctor)) { out.reason = 'not_bookable'; return out; }
+    out.consultationTypeId = ct.id;
+    out.duration = consultMinutes(ct);
+    return out;
+  }
+  const svc = db.prepare('SELECT * FROM services WHERE id = ?').get(v.service_id);
+  if (!svc || servicePublicState(svc) !== 'shown') { out.reason = 'not_bookable'; return out; }
+  out.serviceId = svc.id;
+  out.duration = serviceDurationMinutes(svc, DEFAULT_DURATION_MIN);
+  return out;
+}
+
+function intakeAppointment(db, v, conn, { now, kekPath }) {
+  const doctor = db.prepare('SELECT * FROM users WHERE id = ?').get(v.doctor_id) || null;
+  const what = bookableWhat(db, v, doctor);
+  const startMs = Date.parse(v.start_at);
+  let reason = what.reason;
+  if (!reason) {
+    const horizon = Number(doctor.booking_days) > 0 ? Number(doctor.booking_days) : 14;
+    const day = localDayOf(db, v.start_at);
+    if (day > addDays(localDayOf(db, isoOf(now)), horizon - 1)) reason = 'not_bookable';
+  }
+  if (!reason && !(Date.parse(v.hold_until) > now)) reason = 'expired';
+  if (!reason && !slotIsFree(db, { doctorId: doctor.id, startMs, durationMin: what.duration, now })) reason = 'slot_taken';
+  const status = !reason ? 'pending' : reason === 'expired' ? 'expired' : 'declined';
+  return db.transaction(() => {
+    const day = reason ? null : localDayOf(db, v.start_at);
+    const crmId = createCard(db, { conn, v, day,
+      line: { service_id: what.serviceId, consultation_type_id: what.consultationTypeId, doctor_id: doctor ? doctor.id : null } });
+    const id = insertRequest(db, {
+      public_id: v.public_id, connection_id: conn.id, external_id: v.external_id, kind: 'appointment', status,
+      crm_request_id: crmId, patient_name: v.patient.name, patient_phone: uzE164(v.patient.phone), comment: v.patient.comment,
+      lang: v.lang, doctor_id: v.doctor_id, branch_id: v.branch_id, service_id: what.serviceId,
+      consultation_type_id: what.consultationTypeId, package_id: v.package_id, start_at: v.start_at,
+      duration_minutes: what.duration, hold_until: reason ? null : v.hold_until, decline_reason: reason,
+      received_at: v.received_at, picked_at: isoOf(now),
+    });
+    const row = db.prepare('SELECT * FROM api_requests WHERE id = ?').get(id);
+    if (!reason) {
+      placeHold(db, { doctorId: v.doctor_id, startMs, durationMin: what.duration, untilMs: Date.parse(v.hold_until), apiRequestId: id, kind: 'booking' });
+    } else {
+      enqueueEvent(db, { request: row, event: EV.declined, status, details: { reason, doctor_id: v.doctor_id, start: partnerTime(v.start_at) }, now, kekPath });
+    }
+    return { applied: true, id, status };
+  })();
+}
+
+/**
+ * Один элемент входящей очереди. Идемпотентно: повтор того же номера ничего не
+ * меняет. Никогда не бросает наружу причин разбора — { applied:false, problem }.
+ * @returns {Promise<{applied:boolean, id?:number, status?:string, duplicate?:boolean, problem?:string}>}
+ */
+export async function ingestItem(db, raw, { now = Date.now(), kekPath = null } = {}) {
+  const p = parseInboxItem(raw);
+  if (!p.ok) return { applied: false, problem: p.problem };
+  const v = p.value;
+  const conn = db.prepare('SELECT * FROM api_connections WHERE id = ?').get(v.connection_id);
+  if (!conn) return { applied: false, problem: 'connection' };
+  if (v.type === 'request.new' || v.type === 'appointment.new') {
+    if (byPublicId(db, v.public_id)) return { applied: false, duplicate: true };
+    try {
+      return v.type === 'request.new' ? intakeRequest(db, v, conn, { now }) : intakeAppointment(db, v, conn, { now, kekPath });
+    } catch (e) {
+      if (isUnique(e)) return { applied: false, duplicate: true };   // тот же номер партнёра у подключения
+      throw e;
+    }
+  }
+  const row = byPublicId(db, v.public_id);
+  if (!row || row.connection_id !== conn.id) return { applied: false, problem: 'unknown_request' };
+  if (v.type === 'appointment.cancel') return partnerCancel(db, row, { now, kekPath });
+  if (v.type === 'offer.accept') return partnerAcceptOffer(db, row, { now, kekPath });
+  return partnerDeclineOffer(db, row, { now });
+}
+
+// ─── ПОДТВЕРЖДЕНИЕ ──────────────────────────────────────────────────────────
+
+/**
+ * Регистратор выбрал карту — записать. Та же дверь, что у регистратуры:
+ * ensure_visit с book; удержание этой заявки ему не мешает (excludeHoldId).
+ * @returns {Promise<{request:object, visit:object, already?:boolean, cross_branch?:object}>}
+ */
+export async function confirmBooking(db, { id, patientId }, user, { now = Date.now(), kekPath = null, ensureVisitImpl = ensureVisit } = {}) {
+  const row = requestRow(db, id);
+  if (row.kind !== 'appointment') throw new BookingError(MSG.notAppointment, 409);
+  if (row.status === 'confirmed' && row.visit_id) {
+    return { request: row, visit: db.prepare('SELECT * FROM visits WHERE id = ?').get(row.visit_id), already: true };
+  }
+  if (row.status === 'confirming') throw new BookingError(MSG.busy, 409, 'busy');
+  if (row.status !== 'pending') throw new BookingError(MSG.notPending, 409);
+  const hold = liveHoldOf(db, row.id, now);
+  if (!hold) { expireDue(db, { now, kekPath }); throw new BookingError(MSG.holdExpired, 409, 'hold_expired'); }
+  const pid = Number(patientId);
+  if (!Number.isInteger(pid) || pid <= 0) throw new BookingError(MSG.patient, 400);
+  if (!db.prepare('SELECT 1 FROM patients WHERE id = ?').get(pid)) throw new BookingError(MSG.patientMissing, 400);
+
+  // Визит дня с работой — тот же отказ, что ensure_visit дал бы регистратору,
+  // но ДО первой записи: иначе строки заявки ушли бы в смету того визита.
+  const day = localDayOf(db, row.start_at);
+  const dv = db.prepare(`SELECT * FROM visits WHERE patient_id = ? AND ${localDate('visit_date')} = ?
+                           AND status NOT IN ('cancelled', 'no_show') AND sync_origin IS NULL ORDER BY id LIMIT 1`).get(pid, day);
+  if (dv && !dayVisitMovableFor(db, dv.id, row.doctor_id)) {
+    const doc = dv.doctor_id ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(dv.doctor_id) : null;
+    const err = rpcT(BookingError, MSG.dayVisitBusy, { start: hhmmLocal(dv.visit_date), doctor: (doc && doc.full_name) || '—' }, 409);
+    err.code = 'day_visit_busy';
+    throw err;
+  }
+
+  if (db.prepare("UPDATE api_requests SET status = 'confirming', updated_at = ? WHERE id = ? AND status = 'pending'").run(isoOf(now), row.id).changes !== 1) {
+    throw new BookingError(MSG.busy, 409, 'busy');
+  }
+  // Карточка получает ВЫБРАННУЮ карту — visit-link.js (шаг C) возьмёт её строки
+  // этого дня в визит. Выбор регистратора сильнее догадки по номеру (шаг D мог
+  // привязать карточку к другому члену семьи с тем же телефоном).
+  const card = row.crm_request_id ? db.prepare('SELECT id, patient_id FROM crm_requests WHERE id = ?').get(row.crm_request_id) : null;
+  const prevPatient = card ? card.patient_id : null;
+  if (card && card.patient_id !== pid) db.prepare('UPDATE crm_requests SET patient_id = ? WHERE id = ?').run(pid, card.id);
+  try {
+    const res = await ensureVisitImpl(db, {
+      patient_id: pid, date: row.start_at, doctor_id: row.doctor_id, branch_id: row.branch_id || undefined,
+      book: { doctor_id: row.doctor_id, start: row.start_at, duration_minutes: row.duration_minutes, service_id: row.service_id || undefined },
+    }, user, { excludeHoldId: hold.id });
+    if (!res || !res.booked) throw new BookingError(MSG.notPending, 409);
+    const done = db.transaction(() => {
+      releaseHolds(db, row.id, 'confirmed', now);
+      const out = setStatus(db, row.id, { status: 'confirmed', visit_id: res.visit.id, patient_id: pid, handled_by: (user && user.id) || null }, now);
+      enqueueEvent(db, { request: out, event: EV.confirmed, status: 'confirmed',
+        details: { doctor_id: out.doctor_id, branch_id: out.branch_id, start: partnerTime(res.visit.visit_date) }, now, kekPath });
+      return out;
+    })();
+    return { request: done, visit: res.visit, ...(res.cross_branch ? { cross_branch: res.cross_branch } : {}) };
+  } catch (e) {
+    db.prepare("UPDATE api_requests SET status = 'pending', updated_at = ? WHERE id = ? AND status = 'confirming'").run(isoOf(now), row.id);
+    if (card && prevPatient !== pid) db.prepare('UPDATE crm_requests SET patient_id = ? WHERE id = ? AND patient_id = ?').run(prevPatient, card.id, pid);
+    throw e;
+  }
+}
+
+// ─── ДРУГОЕ ВРЕМЯ, ОТКАЗ, ЗАЯВКА В РАБОТУ ───────────────────────────────────
+
+/** «Предложить другое время»: прежнее удержание снимается, новое держится 30 минут. */
+export function offerOtherTime(db, { id, start, patientId = null }, user, { now = Date.now(), kekPath = null } = {}) {
+  const row = requestRow(db, id);
+  if (row.kind !== 'appointment') throw new BookingError(MSG.notAppointment, 409);
+  if (!bookingActions(row, now).offer) throw new BookingError(holdState(row, now) === 'expired' ? MSG.holdExpired : MSG.notPending, 409);
+  const startMs = Date.parse(String(start || ''));
+  if (!Number.isFinite(startMs)) throw new BookingError(MSG.start, 400);
+  if (startMs <= now) throw new BookingError(MSG.startPast, 400);
+  const own = liveHoldOf(db, row.id, now);
+  if (!slotIsFree(db, { doctorId: row.doctor_id, startMs, durationMin: row.duration_minutes, excludeHoldId: own ? own.id : null, now })) {
+    throw new BookingError(MSG.slotTaken, 409, 'slot_taken');
+  }
+  const pid = Number(patientId);
+  const keepPatient = Number.isInteger(pid) && pid > 0 && db.prepare('SELECT 1 FROM patients WHERE id = ?').get(pid) ? pid : row.patient_id;
+  const untilMs = Math.min(now + OFFER_MINUTES * 60000, startMs);
+  return db.transaction(() => {
+    releaseHolds(db, row.id, 'offered', now);
+    placeHold(db, { doctorId: row.doctor_id, startMs, durationMin: row.duration_minutes, untilMs, apiRequestId: row.id, kind: 'offer' });
+    const out = setStatus(db, row.id, { status: 'offered', offered_start: isoOf(startMs), offer_until: isoOf(untilMs),
+      patient_id: keepPatient || null, handled_by: (user && user.id) || null }, now);
+    enqueueEvent(db, { request: out, event: EV.offered, status: 'offered',
+      details: { doctor_id: out.doctor_id, offered_start: partnerTime(out.offered_start), offer_until: partnerTime(out.offer_until) }, now, kekPath });
+    return out;
+  })();
+}
+
+/** «Отклонить»: время освобождается, партнёр получает отказ с причиной. */
+export function declineBooking(db, { id, reason }, user, { now = Date.now(), kekPath = null } = {}) {
+  const row = requestRow(db, id);
+  if (row.kind !== 'appointment') throw new BookingError(MSG.notAppointment, 409);
+  if (!STAFF_DECLINE_REASONS.includes(reason)) throw new BookingError(MSG.reason, 400);
+  if (!bookingActions(row, now).decline) throw new BookingError(holdState(row, now) === 'expired' ? MSG.holdExpired : MSG.notPending, 409);
+  return db.transaction(() => {
+    releaseHolds(db, row.id, 'declined', now);
+    const out = setStatus(db, row.id, { status: 'declined', decline_reason: reason, handled_by: (user && user.id) || null }, now);
+    enqueueEvent(db, { request: out, event: EV.declined, status: 'declined', details: { reason, doctor_id: out.doctor_id }, now, kekPath });
+    return out;
+  })();
+}
+
+/** «Взять в работу» заявку без времени: партнёр получает «Заявка принята». */
+export function acceptRequest(db, { id }, user, { now = Date.now(), kekPath = null } = {}) {
+  const row = requestRow(db, id);
+  if (row.kind !== 'request') throw new BookingError(MSG.notRequest, 409);
+  if (row.status !== 'new') throw new BookingError(MSG.alreadyAccepted, 409);
+  return db.transaction(() => {
+    const out = setStatus(db, row.id, { status: 'accepted', handled_by: (user && user.id) || null }, now);
+    enqueueEvent(db, { request: out, event: EV.accepted, status: 'accepted', now, kekPath });
+    return out;
+  })();
+}
+
+/**
+ * Истечение: удержание вышло, а регистратор не ответил — время уже свободно
+ * (holds.js), здесь записывается итог и партнёр получает отказ «expired».
+ * Подтверждаемые в эту секунду (confirming) не трогаются.
+ * @returns {number} сколько заявок истекло
+ */
+export function expireDue(db, { now = Date.now(), kekPath = null } = {}) {
+  let rows = [];
+  try { rows = db.prepare("SELECT * FROM api_requests WHERE status IN ('pending', 'offered')").all(); } catch { return 0; }
+  let n = 0;
+  for (const row of rows) {
+    if (holdState(row, now) !== 'expired' || liveHoldOf(db, row.id, now)) continue;
+    db.transaction(() => {
+      releaseHolds(db, row.id, 'expired', now);
+      const out = setStatus(db, row.id, { status: 'expired', decline_reason: 'expired' }, now);
+      enqueueEvent(db, { request: out, event: EV.declined, status: 'expired', details: { reason: 'expired', doctor_id: out.doctor_id }, now, kekPath });
+    })();
+    n += 1;
+  }
+  return n;
+}
+
+// ─── ОТВЕТЫ ПАРТНЁРА ────────────────────────────────────────────────────────
+
+/**
+ * Отмена пациентом у партнёра (DELETE /appointments/{id}). Ждущая — время
+ * освобождается. Записанная до прихода и без работы — визит отменяется той же
+ * дверью календаря; с работой — визит не трогается, карточка говорит «партнёр
+ * сообщил об отмене» (решает регистратура).
+ */
+async function partnerCancel(db, row, { now, kekPath }) {
+  if (['pending', 'offered', 'new', 'accepted'].includes(row.status)) {
+    db.transaction(() => {
+      releaseHolds(db, row.id, 'cancelled', now);
+      setStatus(db, row.id, { status: 'cancelled', partner_cancel_at: isoOf(now) }, now);
+    })();
+    return { applied: true, id: row.id, status: 'cancelled' };
+  }
+  if (row.status === 'confirmed' && row.visit_id) {
+    const v = db.prepare('SELECT * FROM visits WHERE id = ?').get(row.visit_id);
+    if (v && PRE_ARRIVAL.includes(v.status) && !visitHasWork(db, v.id)) {
+      await calendarBook(db, { visit_id: v.id, start: v.visit_date, status: 'cancelled' }, SYSTEM_BOOKER);
+      const out = setStatus(db, row.id, { status: 'cancelled', partner_cancel_at: isoOf(now) }, now);
+      enqueueEvent(db, { request: out, event: EV.cancelled, status: 'cancelled', details: { doctor_id: out.doctor_id }, now, kekPath });
+      return { applied: true, id: row.id, status: 'cancelled' };
+    }
+    setStatus(db, row.id, { partner_cancel_at: isoOf(now) }, now);
+    return { applied: true, id: row.id, status: row.status, needs_staff: true };
+  }
+  // Отмена пришла в ту секунду, когда регистратор подтверждает: визит ещё не
+  // заведён — отменять нечего, но и терять отмену нельзя (курсор очереди уйдёт
+  // дальше). Пометка — окно карточки скажет «решите вручную».
+  if (row.status === 'confirming') {
+    setStatus(db, row.id, { partner_cancel_at: isoOf(now) }, now);
+    return { applied: true, id: row.id, status: row.status, needs_staff: true };
+  }
+  return { applied: false, id: row.id, status: row.status };
+}
+
+/** Партнёр согласился на другое время: заявка снова ждёт подтверждения, время держится 30 минут. */
+function partnerAcceptOffer(db, row, { now, kekPath }) {
+  if (row.status !== 'offered') return { applied: false, id: row.id, status: row.status };
+  if (!liveHoldOf(db, row.id, now)) { expireDue(db, { now, kekPath }); return { applied: true, id: row.id, status: 'expired' }; }
+  const startMs = Date.parse(row.offered_start);
+  const untilMs = Math.min(now + HOLD_MINUTES * 60000, startMs);
+  db.transaction(() => {
+    releaseHolds(db, row.id, 'accepted', now);
+    placeHold(db, { doctorId: row.doctor_id, startMs, durationMin: row.duration_minutes, untilMs, apiRequestId: row.id, kind: 'booking' });
+    setStatus(db, row.id, { status: 'pending', start_at: row.offered_start, hold_until: isoOf(untilMs), offered_start: null, offer_until: null }, now);
+  })();
+  return { applied: true, id: row.id, status: 'pending' };
+}
+
+/** Партнёр отказался от другого времени: заявка отменена, время свободно. */
+function partnerDeclineOffer(db, row, { now }) {
+  if (row.status !== 'offered') return { applied: false, id: row.id, status: row.status };
+  db.transaction(() => {
+    releaseHolds(db, row.id, 'cancelled', now);
+    setStatus(db, row.id, { status: 'cancelled' }, now);
+  })();
+  return { applied: true, id: row.id, status: 'cancelled' };
+}
+
+// ─── ДЛЯ ЭКРАНА ─────────────────────────────────────────────────────────────
+
+/** Заявки карточки CRM — для окна «Онлайн-запись через API». */
+export function requestsOfCard(db, crmRequestId, now = Date.now()) {
+  const rows = db.prepare(`
+    SELECT r.*, c.name AS connection_name, d.full_name AS doctor_name, b.name AS branch_name,
+           ct.name AS consultation_name, ct.price AS consultation_price, s.name AS service_name, s.price AS service_price,
+           p.full_name AS patient_card_name, p.mrn AS patient_card_mrn
+      FROM api_requests r
+      LEFT JOIN api_connections c ON c.id = r.connection_id
+      LEFT JOIN users d ON d.id = r.doctor_id
+      LEFT JOIN branches b ON b.id = r.branch_id
+      LEFT JOIN consultation_types ct ON ct.id = r.consultation_type_id
+      LEFT JOIN services s ON s.id = r.service_id
+      LEFT JOIN patients p ON p.id = r.patient_id
+     WHERE r.crm_request_id = ? ORDER BY r.id DESC`).all(crmRequestId);
+  return rows.map((r) => ({
+    id: r.id, public_id: r.public_id, kind: r.kind, status: shownStatus(r, now), partner_status: PARTNER_STATUS[shownStatus(r, now)] || '',
+    connection: { id: r.connection_id, name: r.connection_name || '' }, external_id: r.external_id,
+    received_at: r.received_at, picked_at: r.picked_at,
+    doctor: r.doctor_id ? { id: r.doctor_id, name: r.doctor_name || '' } : null,
+    branch: r.branch_id ? { id: r.branch_id, name: r.branch_name || '' } : null,
+    what: r.consultation_type_id ? { kind: 'consultation', name: r.consultation_name || '', price: Number(r.consultation_price) || 0 }
+      : r.service_id ? { kind: 'service', name: r.service_name || '', price: Number(r.service_price) || 0 } : null,
+    start_at: r.start_at, duration_minutes: r.duration_minutes, hold_until: r.hold_until,
+    offered_start: r.offered_start, offer_until: r.offer_until, decline_reason: r.decline_reason,
+    patient_name: r.patient_name, patient_phone: r.patient_phone, comment: r.comment,
+    patient: r.patient_id ? { id: r.patient_id, full_name: r.patient_card_name || '', mrn: r.patient_card_mrn || '' } : null,
+    visit_id: r.visit_id, partner_cancel_at: r.partner_cancel_at,
+    can: bookingActions(r, now),
+  }));
+}
+
+const nameKey = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').split(/\s+/).filter(Boolean);
+/** Карты, к которым может относиться заявка: по номеру (общий номер семьи) — с пометкой, совпало ли имя. */
+export function cardCandidates(db, id) {
+  const row = requestRow(db, id);
+  const words = nameKey(row.patient_name);
+  return findPatientsByPhone(db, row.patient_phone, 10).map((p) => {
+    const pw = nameKey(p.full_name);
+    const same = words.length && pw.length && words.some((w) => pw.includes(w));
+    return { id: p.id, full_name: p.full_name, mrn: p.mrn || '', date_of_birth: p.date_of_birth || '', why: same ? 'phone_name' : 'phone' };
+  }).sort((a, b) => (a.why === b.why ? 0 : a.why === 'phone_name' ? -1 : 1));
+}
+
+/** Строки онлайн-записи для доски: заявки, ждущие клинику, по карточкам. */
+export function boardMarks(db, now = Date.now()) {
+  let rows = [];
+  try {
+    rows = db.prepare(`SELECT r.id, r.crm_request_id, r.kind, r.status, r.start_at, r.hold_until, r.offered_start, r.offer_until,
+                              c.name AS connection_name
+                         FROM api_requests r LEFT JOIN api_connections c ON c.id = r.connection_id
+                        WHERE r.crm_request_id IS NOT NULL AND r.status IN ('new', 'accepted', 'pending', 'confirming', 'offered')
+                        ORDER BY r.id`).all();
+  } catch { return {}; }
+  const out = {};
+  for (const r of rows) {
+    (out[r.crm_request_id] || (out[r.crm_request_id] = [])).push({
+      id: r.id, kind: r.kind, status: shownStatus(r, now), connection_name: r.connection_name || '',
+      start_at: r.start_at, hold_until: r.hold_until, offered_start: r.offered_start, offer_until: r.offer_until,
+    });
+  }
+  return out;
+}
+
+```
+
+- [ ] **Step 4:** тесты зелёные (7 + 7 + 6). Сторожа:
+  - `LIS_ENABLED=0 node --test server/services/crm/no-show.test.js server/services/crm/visit-link.test.js server/services/rpc/calendar-holds.test.js server/i18n-server-messages.test.js server/services/rpc/index.test.js`;
+  - `node --experimental-vm-modules --test public/js/admin/__tests__/no-import-cycles.test.mjs`.
+- [ ] **Step 5: коммит** «Заявки из API: приём онлайн-записи — карточка CRM с источником подключения и время, удержанное без карты; занятое, закрытое для партнёров и опоздавшее — отказ партнёру сразу; подтверждение — регистратор выбирает карту, визит заводит ensure_visit, ровно один; другое время, отказ, «взять в работу», истечение через 30 минут, отмена пациентом».
+
+---
+
+## Task 6: Судьба визита заявки из API → события партнёру: перенос, отмена, приход, «не пришёл», запись по заявке «перезвоните» (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/services/api/visit-events.test.js`, `server/services/api/visit-events.js`
+
+- [ ] **Step 1: падающий тест** `server/services/api/visit-events.test.js`:
+
+```js
+// PUBLIC_API_V1 — сверка заявок из API с их визитами: перенос, отмена, приход
+// (отметкой и деньгами), «не пришёл» после дня записи и его исправление
+// приходом; заявка «перезвоните», по чьей карточке записали визит, —
+// «appointment.created». Второй проход ничего не меняет.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { bookingSeed, localAt, apptItem } from '../../test-helpers/api-booking-seed.js';
+import { ingestItem, confirmBooking } from './bookings.js';
+import { syncVisitOutcomes } from './visit-events.js';
+import { calendarBook } from '../rpc/calendar.js';
+import { ensureVisit } from '../rpc/visits.js';
+
+const NOW = localAt('2030-03-11', '09:00');
+const START = localAt('2030-03-12', '10:00');
+const one = (db, sql, ...a) => db.prepare(sql).get(...a);
+const last = (s) => { const r = one(s.db, 'SELECT event, body FROM api_outbox ORDER BY id DESC LIMIT 1'); return [r.event, JSON.parse(r.body)]; };
+const count = (s) => one(s.db, 'SELECT COUNT(*) AS n FROM api_outbox').n;
+
+async function confirmed(s) {
+  const r = await ingestItem(s.db, apptItem({ connId: s.connId, startMs: START, receivedMs: NOW }), { now: NOW, kekPath: s.kekPath });
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  const c = await confirmBooking(s.db, { id: r.id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath });
+  return { id: r.id, visit: c.visit };
+}
+
+test('перенос календарём: партнёр получает новое время (rescheduled); повторный проход молчит', async () => {
+  const s = bookingSeed();
+  const { id, visit } = await confirmed(s);
+  await calendarBook(s.db, { visit_id: visit.id, start: new Date(localAt('2030-03-12', '15:00')).toISOString() }, s.reg);
+  assert.equal(syncVisitOutcomes(s.db, { now: NOW, kekPath: s.kekPath }), 1);
+  const [ev, body] = last(s);
+  assert.equal(ev, 'appointment.created');
+  assert.equal(body.rescheduled, true);
+  assert.match(body.start, /^2030-03-12T15:00:00\+/);
+  assert.equal(one(s.db, 'SELECT start_at FROM api_requests WHERE id = ?', id).start_at, new Date(localAt('2030-03-12', '15:00')).toISOString().replace('.000', ''));
+  const n = count(s);
+  assert.equal(syncVisitOutcomes(s.db, { now: NOW, kekPath: s.kekPath }), 0);
+  assert.equal(count(s), n);
+});
+
+test('отмена визита клиникой — «appointment.cancelled»; приход отметкой — «appointment.arrived»', async () => {
+  const s = bookingSeed();
+  const { id, visit } = await confirmed(s);
+  await calendarBook(s.db, { visit_id: visit.id, start: visit.visit_date, status: 'cancelled' }, s.reg);
+  syncVisitOutcomes(s.db, { now: NOW, kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'cancelled');
+  assert.deepEqual([last(s)[0], last(s)[1].status], ['appointment.cancelled', 'cancelled']);
+
+  const s2 = bookingSeed();
+  const b = await confirmed(s2);
+  await calendarBook(s2.db, { visit_id: b.visit.id, start: b.visit.visit_date, status: 'arrived' }, s2.reg);
+  syncVisitOutcomes(s2.db, { now: NOW, kekPath: s2.kekPath });
+  assert.equal(one(s2.db, 'SELECT status FROM api_requests WHERE id = ?', b.id).status, 'arrived');
+  const ev = one(s2.db, "SELECT note FROM api_outbox WHERE event = 'appointment.arrived'");
+  assert.equal(ev.note, 'not_subscribed', 'партнёр «пришёл» не выбирал — статус есть, уведомления нет');
+});
+
+test('день прошёл без прихода — «Не пришёл»; оплата, доехавшая позже, — «Пришёл»', async () => {
+  const s = bookingSeed();
+  const { id, visit } = await confirmed(s);
+  syncVisitOutcomes(s.db, { now: localAt('2030-03-13', '09:00'), kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'no_show');
+  s.db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES (1, 'INV-1', ?, 1, 150000, 150000, 150000, 'paid')").run(visit.id);
+  syncVisitOutcomes(s.db, { now: localAt('2030-03-13', '10:00'), kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'arrived');
+});
+
+test('заявка «перезвоните»: оператор записал по карточке — партнёру «appointment.created» со временем и врачом', async () => {
+  const s = bookingSeed();
+  const r = await ingestItem(s.db, { ...apptItem({ connId: s.connId, publicId: 'rq_call0001', startMs: START, receivedMs: NOW }), type: 'request.new',
+    data: { external_id: 'cb-1', service_id: 301 } }, { now: NOW });
+  const card = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', r.id).c;
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  s.db.prepare('UPDATE crm_requests SET patient_id = 1 WHERE id = ?').run(card);
+  s.db.prepare("UPDATE crm_request_services SET scheduled_date = '2030-03-12', doctor_id = 7 WHERE request_id = ?").run(card);
+  const ev = await ensureVisit(s.db, { patient_id: 1, date: '2030-03-12', book: { doctor_id: 7, start: new Date(START).toISOString(), duration_minutes: 15, service_id: 301 } }, s.cc);
+  assert.equal(ev.booked, true);
+  assert.equal(syncVisitOutcomes(s.db, { now: NOW, kekPath: s.kekPath }), 1);
+  const row = one(s.db, 'SELECT * FROM api_requests WHERE id = ?', r.id);
+  assert.deepEqual([row.status, row.visit_id, row.doctor_id, row.patient_id], ['confirmed', ev.visit.id, 7, 1]);
+  const [name, body] = last(s);
+  assert.deepEqual([name, body.status, body.doctor_id], ['appointment.created', 'booked', 7]);
+  assert.match(body.start, /^2030-03-12T10:00:00\+/);
+});
+```
+
+- [ ] **Step 2:** `LIS_ENABLED=0 node --test server/services/api/visit-events.test.js` → падает: `Cannot find module …/api/visit-events.js`.
+- [ ] **Step 3: модуль** `server/services/api/visit-events.js`:
+
+```js
+// PUBLIC_API_V1 — ЧТО СТАЛО С ВИЗИТОМ ЗАЯВКИ ИЗ API: партнёр узнаёт о записи,
+// переносе, отмене и приходе.
+//
+// Визит заявки живёт обычной жизнью: его переносят и отменяют календарём,
+// приход доказывают касса и работа (crm/booking-mirror.js arrivedByEvidence —
+// «Пришёл» в клинике нажимают не всегда). Дверей много, поэтому крючков в них
+// нет: фон (services/api/public-sync.js, каждый такт) сверяет заявки с их
+// визитами — сверка без памяти и идемпотентна, второй проход ничего не меняет.
+//
+//   • заявка «перезвоните» (kind request), по чьей карточке записали визит, —
+//     «Записан» и appointment.created;
+//   • записанная — визит перенесли (время или врач) — appointment.created с
+//     rescheduled; отменили (или удалили) — appointment.cancelled; пришёл —
+//     appointment.arrived; день прошёл без прихода — «Не пришёл» (без
+//     уведомления: такого события в словаре нет); приход, доказанный позже,
+//     поднимает «Не пришёл» в «Пришёл».
+import { arrivedByEvidence, PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { localDate } from '../domain/day.js';
+import { EV, isoOf, localIso } from '../../../public/js/shared/api-booking.js';
+import { enqueueEvent } from './outbox.js';
+
+const offsetMin = (ms) => -new Date(ms).getTimezoneOffset();
+const partnerTime = (iso) => { const ms = Date.parse(iso); return Number.isFinite(ms) ? localIso(ms, offsetMin(ms)) : ''; };
+const sameInstant = (a, b) => Date.parse(a) === Date.parse(b);
+
+function update(db, id, fields, now) {
+  const cols = Object.keys(fields);
+  db.prepare(`UPDATE api_requests SET ${cols.map((c) => c + ' = ?').join(', ')}, updated_at = ? WHERE id = ?`)
+    .run(...cols.map((c) => fields[c]), isoOf(now), id);
+  return db.prepare('SELECT * FROM api_requests WHERE id = ?').get(id);
+}
+
+/** Живой визит своего здания, который держит карточка: привязкой или строкой. */
+function bookedVisitOfCard(db, crmRequestId) {
+  return db.prepare(`
+    SELECT v.* FROM visits v
+     WHERE v.status NOT IN ('cancelled', 'no_show') AND v.sync_origin IS NULL
+       AND (v.id IN (SELECT visit_id FROM crm_booking_links WHERE request_id = ?)
+            OR v.id IN (SELECT visit_id FROM crm_request_services WHERE request_id = ? AND visit_id IS NOT NULL))
+     ORDER BY v.visit_date, v.id LIMIT 1`).get(crmRequestId, crmRequestId) || null;
+}
+
+/**
+ * Один проход сверки. Не бросает: ошибка одной заявки — в лог, остальные идут.
+ * @returns {number} сколько заявок изменилось
+ */
+export function syncVisitOutcomes(db, { now = Date.now(), kekPath = null } = {}) {
+  let changed = 0;
+  const today = db.prepare(`SELECT ${localDate('?')} AS d`).get(isoOf(now)).d;
+  const emit = (row, event, status, details = {}) => enqueueEvent(db, { request: row, event, status, details, now, kekPath });
+
+  let callbacks = [];
+  try {
+    callbacks = db.prepare(`SELECT * FROM api_requests WHERE kind = 'request' AND status IN ('new', 'accepted')
+                              AND visit_id IS NULL AND crm_request_id IS NOT NULL`).all();
+  } catch { return 0; }   // база до мигр. 245
+  for (const r of callbacks) {
+    try {
+      const v = bookedVisitOfCard(db, r.crm_request_id);
+      if (!v) continue;
+      db.transaction(() => {
+        const out = update(db, r.id, { status: 'confirmed', visit_id: v.id, patient_id: v.patient_id, doctor_id: v.doctor_id, start_at: isoOf(Date.parse(v.visit_date)) }, now);
+        emit(out, EV.created, 'confirmed', { doctor_id: v.doctor_id, start: partnerTime(v.visit_date) });
+      })();
+      changed += 1;
+    } catch (e) { console.warn('[public-api] заявка', r.id, 'не сверена с визитом:', e && e.message); }
+  }
+
+  const bound = db.prepare(`SELECT r.*, ${localDate('v.visit_date')} AS visit_day, v.id AS v_id, v.status AS v_status,
+                                   v.visit_date AS v_date, v.doctor_id AS v_doctor
+                              FROM api_requests r LEFT JOIN visits v ON v.id = r.visit_id
+                             WHERE r.status IN ('confirmed', 'no_show')`).all();
+  for (const r of bound) {
+    try {
+      db.transaction(() => {
+        if (!r.v_id || r.v_status === 'cancelled') {
+          if (r.status !== 'confirmed') return;
+          emit(update(db, r.id, { status: 'cancelled' }, now), EV.cancelled, 'cancelled', { doctor_id: r.doctor_id });
+          changed += 1;
+          return;
+        }
+        const came = r.v_status === 'arrived' || arrivedByEvidence(db, r.v_id);
+        if (came) {
+          emit(update(db, r.id, { status: 'arrived' }, now), EV.arrived, 'arrived', { doctor_id: r.v_doctor });
+          changed += 1;
+          return;
+        }
+        if (r.status === 'no_show') return;
+        if (r.v_status === 'no_show' || (PRE_ARRIVAL.includes(r.v_status) && r.visit_day < today)) {
+          update(db, r.id, { status: 'no_show' }, now);
+          changed += 1;
+          return;
+        }
+        if (!sameInstant(r.v_date, r.start_at) || Number(r.v_doctor || 0) !== Number(r.doctor_id || 0)) {
+          const out = update(db, r.id, { start_at: isoOf(Date.parse(r.v_date)), doctor_id: r.v_doctor }, now);
+          emit(out, EV.created, 'confirmed', { doctor_id: r.v_doctor, start: partnerTime(r.v_date), rescheduled: true });
+          changed += 1;
+        }
+      })();
+    } catch (e) { console.warn('[public-api] заявка', r.id, 'не сверена с визитом:', e && e.message); }
+  }
+  return changed;
+}
+```
+
+- [ ] **Step 4:** тест зелёный (4 теста). Сторожа: `LIS_ENABLED=0 node --test server/services/api/bookings-confirm.test.js server/i18n-server-messages.test.js`.
+- [ ] **Step 5: коммит** «Заявки из API: партнёр узнаёт о судьбе визита — перенос (новое время), отмена, приход отметкой или деньгами, «не пришёл» после дня записи и его исправление; запись по заявке «перезвоните» — «appointment.created»; сверка без памяти, второй проход молчит».
+
+---
+
+## Task 7: Личность клиники для публичного сервера — ключ подписи и ящик для данных пациента (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/services/api/sync-identity.test.js`, `server/services/api/sync-identity.js`
+- Modify: `public/js/admin/i18n-strings.js` (блок в конец)
+
+- [ ] **Step 1: падающий тест** `server/services/api/sync-identity.test.js`:
+
+```js
+// PUBLIC_API_V1 — личность клиники для публичного сервера: пара подписи и пара
+// ящика создаются в клинике один раз и переживают перезапуск; подпись запроса
+// проверяется открытой половиной и ломается от любой правки; запечатанное
+// открывает только эта клиника; испорченный файл — копия, оба — отказ.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+import {
+  SYNC_KEY_FILE, loadSyncIdentity, signRequest, verifyRequest, sealFor, openSealed, canonicalRequest, SyncIdentityError,
+} from './sync-identity.js';
+
+const fresh = () => path.join(tmpDir('em-sync-id-'), SYNC_KEY_FILE);
+
+test('создаётся по просьбе, читается тем же; без просьбы и без файла — null', () => {
+  const p = fresh();
+  assert.equal(loadSyncIdentity({ keyPath: p }), null);
+  const a = loadSyncIdentity({ keyPath: p, create: true });
+  assert.ok(fs.existsSync(p) && fs.existsSync(p + '.bak'));
+  const b = loadSyncIdentity({ keyPath: p });
+  assert.equal(b.signPublic, a.signPublic);
+  assert.equal(b.boxPublic, a.boxPublic);
+  assert.match(a.fingerprint, /^[0-9a-f]{32}$/);
+  assert.ok(!fs.readFileSync(p, 'utf8').includes(a.signPublic), 'в файле — закрытые половины, не открытые');
+});
+
+test('подпись запроса: проверяется открытой половиной; правка метода, пути, времени или тела ломает её', () => {
+  const id = loadSyncIdentity({ keyPath: fresh(), create: true });
+  const parts = { method: 'PUT', path: '/_sync/v1/snapshot', time: '2030-03-11T04:00:00Z', body: '{"a":1}' };
+  const sig = signRequest(id, parts);
+  assert.equal(verifyRequest(id.signPublic, parts, sig), true);
+  for (const over of [{ method: 'POST' }, { path: '/_sync/v1/keys' }, { time: '2030-03-11T04:00:01Z' }, { body: '{"a":2}' }]) {
+    assert.equal(verifyRequest(id.signPublic, { ...parts, ...over }, sig), false, JSON.stringify(over));
+  }
+  const other = loadSyncIdentity({ keyPath: fresh(), create: true });
+  assert.equal(verifyRequest(other.signPublic, parts, sig), false);
+  assert.equal(canonicalRequest(parts).split('\n').length, 4);
+});
+
+test('ящик: запечатанное открывает только эта клиника; испорченное — отказ', () => {
+  const id = loadSyncIdentity({ keyPath: fresh(), create: true });
+  const sealed = sealFor(id.boxPublic, { name: 'Абдурахмонов Фаррух', phone: '+998901234567' });
+  assert.ok(!sealed.includes('Абдурахмонов') && !sealed.includes('998901234567'));
+  assert.deepEqual(openSealed(id, sealed), { name: 'Абдурахмонов Фаррух', phone: '+998901234567' });
+  const other = loadSyncIdentity({ keyPath: fresh(), create: true });
+  assert.throws(() => openSealed(other, sealed));
+  const parts = sealed.split('.');
+  parts[4] = Buffer.from('подмена').toString('base64');
+  assert.throws(() => openSealed(id, parts.join('.')));
+  assert.throws(() => openSealed(id, 'мусор'), SyncIdentityError);
+});
+
+test('испорченный файл — копия; испорчены оба — отказ, а не новая пара', () => {
+  const p = fresh();
+  const a = loadSyncIdentity({ keyPath: p, create: true });
+  fs.writeFileSync(p, 'испорчено');
+  assert.equal(loadSyncIdentity({ keyPath: p, create: true }).signPublic, a.signPublic);
+  fs.writeFileSync(p + '.bak', '{"v":1,"sign":"xx","box":"yy"}');
+  assert.throws(() => loadSyncIdentity({ keyPath: p, create: true }), SyncIdentityError);
+});
+```
+
+- [ ] **Step 2:** `node --test server/services/api/sync-identity.test.js` → падает: `Cannot find module …/api/sync-identity.js`.
+- [ ] **Step 3: модуль** `server/services/api/sync-identity.js`:
+
+```js
+// PUBLIC_API_V1 — ЛИЧНОСТЬ КЛИНИКИ ДЛЯ ПУБЛИЧНОГО СЕРВЕРА.
+//
+// Две пары ключей, созданные В КЛИНИКЕ и не покидающие её закрытыми половинами
+// (файл <data>/.api-sync-key и копия .bak, рядом с базой, но не в ней — как
+// .api-secrets-key шага 7):
+//   • подпись (Ed25519) — каждый запрос клиники к публичному серверу подписан:
+//     «МЕТОД\nПУТЬ\nВРЕМЯ\nsha256(тело)». Открытую половину клиника отдаёт при
+//     ежечасной сверке с сервером лицензий (control/checkin.js), сервер
+//     лицензий вписывает её отпечаток в подписанную лицензию (шаг 8c), и
+//     публичный сервер узнаёт клинику по лицензии — без общего секрета и без
+//     вопроса к серверу лицензий;
+//   • ящик (X25519) — данные пациента в заявке (имя, телефон, комментарий)
+//     публичный сервер запечатывает открытой половиной в миг приёма: в его базе
+//     лежит только шифротекст, открыть который может лишь клиника (openSealed).
+//
+// Файл испорчен — берётся копия; испорчены оба — отказ, а не новая пара:
+// новая пара означала бы новую регистрацию у сервера лицензий.
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { getDataDir } from '../control/config.js';
+
+export const SYNC_KEY_FILE = '.api-sync-key';
+export const SEAL_PREFIX = 'v1';
+const HKDF_INFO = Buffer.from('easymed-seal-v1');
+
+export class SyncIdentityError extends Error {}
+
+export function defaultSyncKeyPath() {
+  return process.env.EASYMED_API_SYNC_KEY_PATH || path.join(getDataDir(), SYNC_KEY_FILE);
+}
+
+const b64 = (buf) => Buffer.from(buf).toString('base64');
+const der = (key) => key.export({ format: 'der', type: key.type === 'public' ? 'spki' : 'pkcs8' });
+const sha256 = (data) => crypto.createHash('sha256').update(data).digest('hex');
+
+function writeDurable(file, content) {
+  const tmp = file + '.tmp-' + process.pid + '-' + Date.now();
+  const fd = fs.openSync(tmp, 'w', 0o600);
+  try { fs.writeSync(fd, content); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.renameSync(tmp, file);
+}
+
+/** null — файла нет; false — файл есть, но испорчен; иначе — разобранная личность. */
+function readIdentityFile(file) {
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) { if (e && e.code === 'ENOENT') return null; throw e; }
+  try {
+    const j = JSON.parse(text);
+    if (!j || j.v !== 1) return false;
+    const signPrivate = crypto.createPrivateKey({ key: Buffer.from(j.sign, 'base64'), format: 'der', type: 'pkcs8' });
+    const boxPrivate = crypto.createPrivateKey({ key: Buffer.from(j.box, 'base64'), format: 'der', type: 'pkcs8' });
+    if (signPrivate.asymmetricKeyType !== 'ed25519' || boxPrivate.asymmetricKeyType !== 'x25519') return false;
+    return shape(signPrivate, boxPrivate);
+  } catch { return false; }
+}
+
+function shape(signPrivate, boxPrivate) {
+  const signPublicDer = der(crypto.createPublicKey(signPrivate));
+  const boxPublicDer = der(crypto.createPublicKey(boxPrivate));
+  return {
+    signPrivate, boxPrivate,
+    signPublic: b64(signPublicDer), boxPublic: b64(boxPublicDer),
+    // Отпечаток ключа подписи — его вписывает в лицензию сервер лицензий (шаг 8c).
+    fingerprint: sha256(signPublicDer).slice(0, 32),
+  };
+}
+
+/**
+ * Личность клиники. Нет файла — null (или новая пара, если create).
+ * @returns {{signPrivate, boxPrivate, signPublic:string, boxPublic:string, fingerprint:string}|null}
+ */
+export function loadSyncIdentity({ keyPath = defaultSyncKeyPath(), create = false } = {}) {
+  const main = readIdentityFile(keyPath);
+  if (main) return main;
+  const bak = readIdentityFile(keyPath + '.bak');
+  if (bak) return bak;
+  if (main === false || bak === false) throw new SyncIdentityError('Файл ключа обмена с публичным сервером повреждён. Обратитесь в поддержку Easy-Med.');
+  if (!create) return null;
+  const sign = crypto.generateKeyPairSync('ed25519');
+  const box = crypto.generateKeyPairSync('x25519');
+  const text = JSON.stringify({ v: 1, sign: b64(der(sign.privateKey)), box: b64(der(box.privateKey)) });
+  fs.mkdirSync(path.dirname(keyPath), { recursive: true });
+  writeDurable(keyPath, text);
+  writeDurable(keyPath + '.bak', text);
+  return shape(sign.privateKey, box.privateKey);
+}
+
+/** Строка, которую подписывает клиника: метод, путь, время, отпечаток тела. */
+export function canonicalRequest({ method, path: p, time, body = '' }) {
+  return String(method).toUpperCase() + '\n' + String(p) + '\n' + String(time) + '\n' + sha256(Buffer.from(body || ''));
+}
+export function signRequest(identity, parts) {
+  return crypto.sign(null, Buffer.from(canonicalRequest(parts)), identity.signPrivate).toString('base64');
+}
+/** Проверка подписи — так её делает публичный сервер (шаг 8b) и стенд тестов. */
+export function verifyRequest(signPublicB64, parts, signatureB64) {
+  try {
+    const key = crypto.createPublicKey({ key: Buffer.from(signPublicB64, 'base64'), format: 'der', type: 'spki' });
+    return crypto.verify(null, Buffer.from(canonicalRequest(parts)), key, Buffer.from(String(signatureB64 || ''), 'base64'));
+  } catch { return false; }
+}
+
+function sealKey(shared, ephPubDer, recipientPubDer) {
+  return Buffer.from(crypto.hkdfSync('sha256', shared, Buffer.concat([ephPubDer, recipientPubDer]), HKDF_INFO, 32));
+}
+
+/** Запечатать для клиники (так делает публичный сервер при приёме заявки). */
+export function sealFor(boxPublicB64, obj) {
+  const recipientDer = Buffer.from(boxPublicB64, 'base64');
+  const recipient = crypto.createPublicKey({ key: recipientDer, format: 'der', type: 'spki' });
+  const eph = crypto.generateKeyPairSync('x25519');
+  const ephDer = der(eph.publicKey);
+  const key = sealKey(crypto.diffieHellman({ privateKey: eph.privateKey, publicKey: recipient }), ephDer, recipientDer);
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const ct = Buffer.concat([c.update(JSON.stringify(obj), 'utf8'), c.final()]);
+  return [SEAL_PREFIX, b64(ephDer), b64(iv), b64(c.getAuthTag()), b64(ct)].join('.');
+}
+
+/** Вскрыть запечатанное ключом клиники. Чужое, испорченное — бросает. */
+export function openSealed(identity, sealed) {
+  const [v, eph, iv, tag, ct] = String(sealed || '').split('.');
+  if (v !== SEAL_PREFIX || !eph || !iv || !tag || !ct) throw new SyncIdentityError('Запечатанные данные заявки не открываются.');
+  const ephDer = Buffer.from(eph, 'base64');
+  const ephKey = crypto.createPublicKey({ key: ephDer, format: 'der', type: 'spki' });
+  const key = sealKey(crypto.diffieHellman({ privateKey: identity.boxPrivate, publicKey: ephKey }), ephDer, Buffer.from(identity.boxPublic, 'base64'));
+  const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
+  d.setAuthTag(Buffer.from(tag, 'base64'));
+  const plain = Buffer.concat([d.update(Buffer.from(ct, 'base64')), d.final()]).toString('utf8');
+  return JSON.parse(plain);
+}
+```
+
+- [ ] **Step 4: словарь** (страж `i18n-server-messages` требует статьи для отказов с русским текстом):
+
+```js
+  // PUBLIC_API_V1 — задача 7: ключ обмена с публичным сервером
+  "Файл ключа обмена с публичным сервером повреждён. Обратитесь в поддержку Easy-Med.": {"en":"The key file for exchange with the public server is damaged. Contact Easy-Med support.","ru":"Файл ключа обмена с публичным сервером повреждён. Обратитесь в поддержку Easy-Med.","uz":"Ommaviy server bilan almashinuv kaliti fayli shikastlangan. Easy-Med qo‘llab-quvvatlash xizmatiga murojaat qiling."},   // PUBLIC_API_V1
+  "Запечатанные данные заявки не открываются.": {"en":"The sealed request data cannot be opened.","ru":"Запечатанные данные заявки не открываются.","uz":"Arizaning muhrlangan ma’lumotlari ochilmayapti."},   // PUBLIC_API_V1
+```
+
+- [ ] **Step 5:** тест зелёный (4 теста). Сторожа: `node --test server/i18n-server-messages.test.js`, `node --experimental-vm-modules --test public/js/admin/__tests__/i18n-uz-quality.test.mjs`.
+- [ ] **Step 6: коммит** «Обмен с публичным сервером — личность клиники: пара Ed25519 для подписи запросов и X25519 для данных пациента, созданные в клинике; закрытые половины не покидают её; испорченный файл — копия, испорчены оба — отказ, а не новая пара».
+
+---
+
+## Task 8: Снимок наружу — клиника, здания, врачи, услуги, пакеты, свободное время, ключи отпечатками (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/services/api/snapshot.test.js`, `server/services/api/snapshot.js`
+
+- [ ] **Step 1: падающий тест** `server/services/api/snapshot.test.js`:
+
+```js
+// PUBLIC_API_V1 — снимок наружу: только показанное партнёрам и только поля
+// белого списка; ни пациентов, ни визитов, ни телефонов и почты сотрудников, ни
+// ключей; свободное время — «свободно / занято» без имён, удержание и визит
+// закрывают окно; ключи — отпечатками.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { bookingSeed, localAt } from '../../test-helpers/api-booking-seed.js';
+import { fakePng } from '../../test-helpers/fake-png.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+import { buildSnapshot, buildSlots, buildKeys, contentHash } from './snapshot.js';
+import { calendarBook } from '../rpc/calendar.js';
+
+const NOW = localAt('2030-03-11', '09:00');
+
+function clinic() {
+  const s = bookingSeed();
+  const storage = tmpDir('em-snap-storage-');
+  fs.mkdirSync(path.join(storage, 'clinic-logos', 'square'), { recursive: true });
+  fs.writeFileSync(path.join(storage, 'clinic-logos', 'square', 'logo1.png'), fakePng(256, 256));
+  fs.mkdirSync(path.join(storage, 'doctor-photos', 'doctors', '7'), { recursive: true });
+  fs.writeFileSync(path.join(storage, 'doctor-photos', 'doctors', '7', 'face.png'), fakePng(300, 400, { pad: 3 }));
+  s.db.prepare(`UPDATE doc_settings SET name_uz = 'Shifo klinikasi', phone = '+998712000000', website = 'https://shifo.uz',
+    logo_square_path = 'square/logo1.png', maps_url = 'https://yandex.uz/maps/?pt=69.2401,41.2995&z=17' WHERE id = 1`).run();
+  s.db.prepare("UPDATE users SET photo_url = '/api/storage/doctor-photos/doctors/7/face.png', practice_since = 2020 WHERE id = 7").run();
+  s.db.prepare("INSERT INTO branches (id, name, name_uz, region_code, district_code, street_ru, phone, working_hours, show_public) VALUES (11, 'Юнусабад', 'Yunusobod', 'tashkent-city', 'yunusobod', 'ул. Амира Темура, 5', '+998712000001', '{\"mon\":{\"on\":true,\"from\":\"08:00\",\"to\":\"20:00\"}}', 1)").run();
+  s.db.prepare("INSERT INTO branches (id, name, show_public) VALUES (12, 'Склад', 0)").run();
+  const pkg = s.db.prepare(`INSERT INTO service_templates (id, name, name_uz, service_ids, is_package, discount_mode, discount_value, discount_percent, show_public, active)
+    VALUES (?, ?, ?, ?, 1, 'percent', 15, 15, 1, 1)`);
+  pkg.run(4, 'Check-up', 'Check-up', '[301,302]');
+  pkg.run(5, 'Со скрытой', 'Yashirin bilan', '[301,303]');
+  // То, чего снаружи быть не должно.
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone, address) VALUES (1, 'P-MARK-1', 'ПАЦИЕНТ_МЕТКА', '+998909998877', 'АДРЕС_МЕТКА')").run();
+  s.db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, phone, email) VALUES (20, 'cashier', 'HASH_МЕТКА', 'КАССИР_МЕТКА', 'cashier', '+998905554433', 'kassa@clinic.local')").run();
+  s.db.prepare("INSERT INTO crm_requests (full_name, phone, note) VALUES ('ЗАЯВКА_МЕТКА', '+998901110000', 'ЗАМЕТКА_МЕТКА')").run();
+  return { ...s, storage };
+}
+
+const ALLOWED = new Set(['version', 'generated_at', 'slug', 'clinic', 'name', 'ru', 'uz', 'en', 'about', 'country', 'city', 'district',
+  'street', 'phone', 'site', 'telegram_bot', 'telegram_channel', 'instagram', 'logo', 'square', 'portrait', 'map_url', 'route_url',
+  'branches', 'id', 'landmark', 'hours', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'open_24_7', 'doctors', 'title', 'bio',
+  'specialties', 'experience_years', 'languages', 'photo', 'branch_ids', 'reception', 'booking_days', 'consultations', 'type', 'price',
+  'minutes', 'services', 'service_id', 'group', 'packages', 'price_full', 'discount_percent', 'valid_until', 'items']);
+function keysOf(v, out = new Set()) {
+  if (Array.isArray(v)) { for (const x of v) keysOf(x, out); return out; }
+  if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (!/^\d+$/.test(k)) out.add(k); keysOf(x, out); }
+  return out;
+}
+
+test('снимок: клиника, показанные здания, врачи, услуги и пакеты — по правилам показа шагов 4–6; файлы — ссылками по отпечатку', () => {
+  const s = clinic();
+  const { snapshot, media } = buildSnapshot(s.db, { storageDir: s.storage, now: NOW });
+  assert.equal(snapshot.slug, 'shifo');
+  assert.deepEqual(snapshot.clinic.name, { ru: 'Шифо', uz: 'Shifo klinikasi', en: 'Shifo Clinic' });
+  assert.match(snapshot.clinic.logo.square, /^media\/[0-9a-f]{64}\.png$/);
+  assert.equal(snapshot.clinic.logo.portrait, null);
+  assert.equal(snapshot.clinic.route_url, 'https://yandex.uz/maps/?rtext=~41.2995,69.2401&rtt=auto');
+  assert.deepEqual(snapshot.branches.map((b) => b.id), [1, 11], 'скрытое здание не уходит');
+  assert.deepEqual([snapshot.branches[0].city, snapshot.branches[0].street.ru, snapshot.branches[0].phone],
+    ['tashkent-city', 'ул. Мира, 1', '+998712000000'], 'своё здание — адрес и телефон из «Компании» (шаг 4)');
+  assert.deepEqual(snapshot.branches[1].hours.mon, ['08:00', '20:00']);
+  assert.deepEqual(snapshot.doctors.map((d) => [d.id, d.reception]), [[7, 'booking'], [8, 'live_queue']]);
+  const petrov = snapshot.doctors[0];
+  assert.deepEqual([petrov.specialties, petrov.languages, petrov.experience_years, petrov.booking_days], [['pediatr'], ['ru', 'uz'], 10, 14]);
+  assert.match(petrov.photo, /^media\/[0-9a-f]{64}\.png$/);
+  assert.deepEqual(petrov.consultations.map((c) => [c.type, c.price, c.minutes]), [['initial', 150000, 30], ['repeat', 98000, 15]]);
+  assert.deepEqual(snapshot.services.map((x) => [x.id, x.group, x.price]), [[301, 'lab', 45000], [302, 'diagnostics', 180000]]);
+  assert.deepEqual(snapshot.services[1].name, { ru: 'УЗИ брюшной полости', uz: 'Qorin bo‘shlig‘i UTT', en: '' }, 'пустой перевод — пусто: русское подставит сервер');
+  assert.deepEqual(snapshot.packages.map((p) => [p.id, p.price_full, p.price]), [[4, 225000, 191000]], 'пакет со скрытой услугой не уходит (решение 14)');
+  assert.equal(snapshot.packages[0].items.reduce((sum, x) => sum + x.price, 0), 191000, 'строки дают ровно цену пакета');
+  assert.equal(media.length, 2);
+  assert.ok(media.every((m) => m.bytes > 0 && m.type === 'image/png' && fs.existsSync(m.file)));
+  s.db.prepare('UPDATE users SET is_public = 0 WHERE id = 8').run();
+  assert.deepEqual(buildSnapshot(s.db, { storageDir: s.storage, now: NOW }).snapshot.doctors.map((d) => d.id), [7]);
+});
+
+test('снимок и время: только поля белого списка; ни пациентов, ни сотрудников, ни их телефонов и почты, ни заявок', () => {
+  const s = clinic();
+  const { snapshot } = buildSnapshot(s.db, { storageDir: s.storage, now: NOW });
+  const slots = buildSlots(s.db, { now: NOW });
+  const extra = [...keysOf(snapshot)].filter((k) => !ALLOWED.has(k));
+  assert.deepEqual(extra, [], 'поля вне белого списка');
+  const all = JSON.stringify([snapshot, slots, buildKeys(s.db, { now: NOW })]);
+  for (const mark of ['МЕТКА', '998909998877', '998905554433', '998907770077', 'petrov@clinic.local', 'kassa@clinic.local', 'HASH', 'Регистратор', 'Медсестра']) {
+    assert.ok(!all.includes(mark), 'наружу ушло: ' + mark);
+  }
+});
+
+test('свободное время: дни на срок записи врача; удержание и визит закрывают окна; живая очередь — часы и ожидающие', async () => {
+  const s = clinic();
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (2, 'P-2', 'Иванов', '+998901112233')").run();
+  await calendarBook(s.db, { patient_id: 2, doctor_id: 7, start: new Date(localAt('2030-03-12', '11:00')).toISOString(), duration_minutes: 30 }, s.reg);
+  const slots = buildSlots(s.db, { now: NOW });
+  const d7 = slots.doctors[7];
+  assert.equal(d7.reception, 'booking');
+  assert.equal(d7.days.length, 14);
+  const day = d7.days.find((d) => d.date === '2030-03-12');
+  assert.deepEqual([day.from, day.to, day.starts[0], day.starts.length], ['09:00', '18:00', '09:00', 36]);
+  const at = (hhmm) => day.free[day.starts.indexOf(hhmm)];
+  assert.deepEqual([at('10:45'), at('11:00'), at('11:15'), at('11:30')], ['1', '0', '0', '1']);
+  const later = buildSlots(s.db, { now: localAt('2030-03-11', '10:20') }).doctors[7].days.find((d) => d.date === '2030-03-11');
+  assert.deepEqual([later.free[later.starts.indexOf('10:15')], later.free[later.starts.indexOf('10:30')]], ['0', '1'], 'прошедшее сегодня — не свободно');
+  assert.ok(!JSON.stringify(slots).includes('Иванов'));
+  assert.deepEqual(slots.doctors[8].reception, 'live_queue');
+  assert.equal(typeof slots.doctors[8].queue_now, 'number');
+  assert.equal(Object.keys(slots.doctors[8].hours).length, 7);
+});
+
+test('ключи: отпечаток, права, лимит, IP и адрес сайта; ни ключа, ни секрета; удалённые не уходят; отпечаток содержимого без даты', () => {
+  const s = clinic();
+  s.db.prepare("UPDATE api_connections SET ip_allow = '203.0.113.7\n203.0.113.0/24' WHERE id = ?").run(s.connId);
+  const keys = buildKeys(s.db, { now: NOW });
+  const partner = keys.connections.find((c) => c.id === s.connId);
+  const row = s.db.prepare('SELECT key_hash FROM api_connections WHERE id = ?').get(s.connId);
+  assert.deepEqual({ ...partner, scopes: partner.scopes.length }, { id: s.connId, kind: 'partner', active: true, key_hash: row.key_hash,
+    scopes: 6, rate_limit: 60, key_expires_at: partner.key_expires_at, ip_allow: ['203.0.113.7', '203.0.113.0/24'], origins: ['https://med24.uz'] });
+  const site = keys.connections.find((c) => c.kind === 'site');
+  assert.deepEqual([site.active, site.origins], [false, ['https://shifo.uz']]);
+  const raw = JSON.stringify(keys);
+  assert.ok(!raw.includes(s.key) && !raw.includes(s.secret));
+  s.db.prepare("UPDATE api_connections SET deleted_at = '2030-03-01T00:00:00Z', active = 0, key_hash = '', key_sealed = '', secret_sealed = '' WHERE id = ?").run(s.connId);
+  assert.equal(buildKeys(s.db, { now: NOW }).connections.some((c) => c.id === s.connId), false);
+  assert.equal(contentHash({ generated_at: 'a', x: 1 }), contentHash({ generated_at: 'b', x: 1 }));
+  assert.notEqual(contentHash({ x: 1 }), contentHash({ x: 2 }));
+});
+```
+
+- [ ] **Step 2:** `LIS_ENABLED=0 node --test server/services/api/snapshot.test.js` → падает: `Cannot find module …/api/snapshot.js`.
+- [ ] **Step 3: модуль** `server/services/api/snapshot.js`:
+
+```js
+// PUBLIC_API_V1 — ЧТО КЛИНИКА ОТДАЁТ НАРУЖУ: снимок для публичного сервера.
+//
+// Три части, каждая — своим ритмом (services/api/public-sync.js):
+//   buildSnapshot — клиника, филиалы, врачи, услуги, пакеты (то, что видят
+//                   партнёры: /clinic, /branches, /doctors, /services,
+//                   /packages); уходит, когда изменился (проверка — каждый
+//                   такт), и не реже раза в 15 минут;
+//   buildSlots    — свободное время врачей по записи (окна по 15 минут, тот же
+//                   движок, что календарь: rpc/calendar.js doctorDayWindows) и
+//                   часы и очередь врачей живой очереди; проверка — каждую минуту;
+//   buildKeys     — подключения: отпечаток ключа, включено ли, права, лимит,
+//                   срок, IP, адреса сайтов — быстрый канал: изменение уходит
+//                   в ближайший такт (выключение ключа — «сразу 401»).
+//
+// БЕЛЫЙ СПИСОК: каждое поле выбрано здесь явно; правила показа — те же функции,
+// что у экранов шагов 4–6 (branchShownToPartners, doctorPublicState,
+// servicePublicState, packagePublicState). Пациентов, визитов, сотрудников (кроме
+// показанных врачей), телефонов и почты сотрудников, ключей и секретов в
+// снимке нет — это проверяет snapshot.test.js по всем ключам снимка.
+// Справочники (география, специальности) публичный сервер берёт из программы
+// (решение владельца 6) — в снимок они не входят.
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { routeUrl } from '../../../public/js/shared/clinic-profile.js';
+import { branchShownToPartners, overlayOwnBuilding } from '../../../public/js/shared/branch-profile.js';
+import { doctorPublicState, readLanguages, shownPracticeSince, experienceYears, BOOKING_DAYS, DEFAULT_BOOKING_DAYS, PUBLIC_SLOT_MIN }
+  from '../../../public/js/shared/doctor-public.js';
+import { servicePublicState, serviceNames, apiGroupOf } from '../../../public/js/shared/service-public.js';
+import { isPackageRow, packageCalc, packageItems, packageTerms, packagePublicState } from '../../../public/js/shared/package-price.js';
+import { readSlug } from './connections.js';
+import { doctorConsultOffer, doctorConsultServices } from '../rpc/doctor-public.js';
+import { doctorDayWindows } from '../rpc/calendar.js';
+import { doctorQueueWaiting } from '../rpc/queue.js';
+import { isoOf } from '../../../public/js/shared/api-booking.js';
+
+export const SNAPSHOT_VERSION = 1;
+export const MEDIA_MAX_BYTES = 2 * 1024 * 1024;
+const MEDIA_TYPES = Object.freeze({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' });
+const WEEK = Object.freeze(['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']);
+
+const text = (v) => String(v == null ? '' : v).trim();
+const tri = (ru, uz, en) => ({ ru: text(ru), uz: text(uz), en: text(en) });
+const arr = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
+const dayIsoOf = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const addDays = (dayIso, n) => { const [y, m, d] = dayIso.split('-').map(Number); return dayIsoOf(new Date(y, m - 1, d + n).getTime()); };
+
+/** Отпечаток содержимого без даты сборки — по нему фон решает, слать ли снова. */
+export function contentHash(obj) {
+  const { generated_at: _g, ...rest } = obj || {};
+  return crypto.createHash('sha256').update(JSON.stringify(rest)).digest('hex');
+}
+
+// ─── ФАЙЛЫ (логотипы, фото врачей) ──────────────────────────────────────────
+
+/** Файл хранилища → ссылка 'media/<sha256>.<ext>' и строка манифеста; нет файла, велик или чужой вид — null. */
+function mediaOf(file, media) {
+  if (!file) return null;
+  const ext = path.extname(file).slice(1).toLowerCase();
+  const type = MEDIA_TYPES[ext];
+  if (!type) return null;
+  let buf;
+  try { buf = fs.readFileSync(file); } catch { return null; }
+  if (!buf.length || buf.length > MEDIA_MAX_BYTES) return null;
+  const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+  if (!media.some((m) => m.sha256 === sha256)) media.push({ sha256, bytes: buf.length, type, ext, file });
+  return 'media/' + sha256 + '.' + ext;
+}
+const logoFile = (storageDir, rel) => (storageDir && /^(square|portrait)\/[A-Za-z0-9._~-]+\.png$/.test(rel || '') ? path.join(storageDir, 'clinic-logos', rel) : null);
+function photoFile(storageDir, url, doctorId) {
+  const own = '/api/storage/doctor-photos/doctors/' + doctorId + '/';
+  const s = text(url);
+  if (!storageDir || !s.startsWith(own)) return null;
+  const key = s.slice(own.length);
+  return /^[A-Za-z0-9_][A-Za-z0-9._~-]*$/.test(key) ? path.join(storageDir, 'doctor-photos', 'doctors', String(doctorId), key) : null;
+}
+
+// ─── КЛИНИКА, ФИЛИАЛЫ, ВРАЧИ, УСЛУГИ, ПАКЕТЫ ────────────────────────────────
+
+function clinicPart(db, storageDir, media) {
+  let d = {};
+  try { d = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {}; } catch { d = {}; }
+  return {
+    name: tri(d.clinic_name, d.name_uz, d.name_en),
+    about: tri(d.about_ru, d.about_uz, d.about_en),
+    country: text(d.country_code), city: text(d.region_code), district: text(d.district_code),
+    street: tri(d.street_ru, d.street_uz, d.street_en),
+    phone: text(d.phone), site: text(d.website),
+    telegram_bot: text(d.telegram_bot), telegram_channel: text(d.telegram_channel), instagram: text(d.instagram),
+    logo: { square: mediaOf(logoFile(storageDir, d.logo_square_path), media), portrait: mediaOf(logoFile(storageDir, d.logo_portrait_path), media) },
+    map_url: text(d.maps_url), route_url: routeUrl(d.maps_url),
+  };
+}
+
+function hoursOf(raw) {
+  let h = {};
+  try { h = raw && typeof raw === 'string' ? JSON.parse(raw) : (raw || {}); } catch { h = {}; }
+  const out = {};
+  for (const k of WEEK) {
+    const e = h && h[k];
+    const on = e && (('enabled' in e) ? !!e.enabled : ('on' in e) ? !!e.on : !!(e.from && e.to));
+    out[k] = on && e.from && e.to ? [String(e.from), String(e.to)] : null;
+  }
+  return out;
+}
+
+function branchesPart(db) {
+  let rows = [];
+  try { rows = db.prepare('SELECT * FROM branches ORDER BY id').all(); } catch { return []; }
+  let company = {};
+  try { company = db.prepare('SELECT * FROM doc_settings WHERE id = 1').get() || {}; } catch { company = {}; }
+  let own = null;
+  try { const i = db.prepare('SELECT role, branch_id FROM branch_identity WHERE id = 1').get(); own = i && i.role !== 'secondary' && i.branch_id != null ? Number(i.branch_id) : null; } catch { own = null; }
+  return rows.filter(branchShownToPartners).map((raw) => {
+    const r = own != null && Number(raw.id) === own ? overlayOwnBuilding(raw, company) : raw;
+    return {
+      id: r.id, name: tri(r.name, r.name_uz, r.name_en), city: text(r.region_code), district: text(r.district_code),
+      street: tri(r.street_ru, r.street_uz, r.street_en), landmark: tri(r.landmark_ru, r.landmark_uz, r.landmark_en),
+      phone: text(r.phone), hours: hoursOf(r.working_hours), open_24_7: Number(r.is_24_7) === 1,
+      map_url: text(r.maps_url), route_url: routeUrl(r.maps_url),
+    };
+  });
+}
+
+/** Показанные партнёрам врачи (решение шага 5), как их читает /doctors. */
+export function publicDoctors(db) {
+  const branches = new Map(db.prepare('SELECT id, active, show_public FROM branches').all().map((b) => [Number(b.id), b]));
+  return db.prepare('SELECT * FROM users WHERE is_doctor = 1 ORDER BY id').all().filter((u) => doctorPublicState(u, branches) === 'shown');
+}
+
+function doctorsPart(db, storageDir, media, now) {
+  const specs = db.prepare('SELECT user_id, specialty_slug FROM user_specialties WHERE specialty_slug IS NOT NULL AND specialty_slug <> \'\' ORDER BY is_primary DESC, id').all();
+  return publicDoctors(db).map((u) => {
+    const since = shownPracticeSince(u, new Date(now));
+    return {
+      id: u.id,
+      name: tri(u.full_name_ru || u.full_name, u.full_name_uz, u.full_name_en),
+      title: tri(u.academic_title_ru, u.academic_title_uz, u.academic_title_en),
+      bio: tri(u.bio_ru, u.bio_uz, u.bio_en),
+      specialties: [...new Set(specs.filter((s) => s.user_id === u.id).map((s) => s.specialty_slug))].slice(0, 4),
+      experience_years: since == null ? null : experienceYears(since, new Date(now)),
+      languages: readLanguages(u.languages),
+      photo: mediaOf(photoFile(storageDir, u.photo_url, u.id), media),
+      branch_ids: u.branch_id ? [Number(u.branch_id)] : [],
+      reception: u.scheduling_mode === 'live_queue' ? 'live_queue' : 'booking',
+      booking_days: BOOKING_DAYS.includes(Number(u.booking_days)) ? Number(u.booking_days) : DEFAULT_BOOKING_DAYS,
+      consultations: doctorConsultOffer(db, u.id).map((c) => ({
+        type: c.api_kind || '', name: c.name, price: Math.round(Number(c.price) || 0), minutes: c.minutes,
+      })),
+      services: doctorConsultServices(db, u.id).filter((s) => s.online).map((s) => ({ service_id: s.service_id, price: Math.round(Number(s.price) || 0) })),
+    };
+  });
+}
+
+function servicesPart(db) {
+  return db.prepare('SELECT * FROM services WHERE active = 1 ORDER BY id').all().filter((s) => servicePublicState(s) === 'shown').map((s) => ({
+    id: s.id, group: apiGroupOf(s), name: serviceNames(s), price: Math.round(Number(s.price) || 0),
+    minutes: Number(s.duration_minutes) > 0 ? Number(s.duration_minutes) : null,
+  }));
+}
+
+function packagesPart(db, now) {
+  let rows = [];
+  try { rows = db.prepare('SELECT * FROM service_templates ORDER BY id').all(); } catch { return []; }
+  const services = db.prepare('SELECT id, name, name_uz, name_en, price, active, online_booking FROM services').all();
+  const day = dayIsoOf(now);
+  return rows.filter((r) => isPackageRow(r) && packagePublicState(r, services, day) === 'shown').map((r) => {
+    const calc = packageCalc(packageTerms(r), packageItems(r, services).items);
+    return {
+      id: r.id, name: tri(r.name, r.name_uz, r.name_en),
+      price_full: Math.round(calc.full), price: Math.round(calc.price), discount_percent: calc.pct,
+      valid_until: r.valid_until || null,
+      items: calc.lines.map((l) => ({ service_id: l.service_id, price_full: Math.round(l.full), price: Math.round(l.price) })),
+    };
+  });
+}
+
+/**
+ * Снимок «что видят партнёры» и манифест файлов к нему (файлы уходят отдельно,
+ * по отпечатку; в снимке — только ссылки media/<sha256>.<ext>).
+ * @returns {{snapshot: object, media: Array<{sha256, bytes, type, ext, file}>}}
+ */
+export function buildSnapshot(db, { storageDir = null, now = Date.now() } = {}) {
+  const media = [];
+  const snapshot = {
+    version: SNAPSHOT_VERSION, generated_at: isoOf(now), slug: readSlug(db),
+    clinic: clinicPart(db, storageDir, media),
+    branches: branchesPart(db),
+    doctors: doctorsPart(db, storageDir, media, now),
+    services: servicesPart(db),
+    packages: packagesPart(db, now),
+  };
+  return { snapshot, media };
+}
+
+// ─── СВОБОДНОЕ ВРЕМЯ ────────────────────────────────────────────────────────
+
+/**
+ * Свободное время: врач по записи — дни с сегодняшнего на срок его записи (7 /
+ * 14 / 30), каждый — окно и начала по 15 минут со свободой ('1' — свободно);
+ * врач живой очереди — часы по дням недели и, если клиника разрешила, сколько
+ * ждут сейчас. Без имён и визитов: только «свободно / занято».
+ */
+export function buildSlots(db, { now = Date.now() } = {}) {
+  const today = dayIsoOf(now);
+  const doctors = {};
+  for (const u of publicDoctors(db)) {
+    if (u.scheduling_mode === 'live_queue') {
+      const hours = {};
+      for (let i = 0; i < 7; i += 1) {
+        const d = doctorDayWindows(db, { doctorId: u.id, dayIso: addDays(today, i), now });
+        hours[d.weekday] = d.window ? [d.window.from, d.window.to] : null;
+      }
+      doctors[u.id] = { reception: 'live_queue', hours, queue_now: Number(u.show_queue_count) === 1 ? doctorQueueWaiting(db, u.id, today) : null };
+      continue;
+    }
+    const horizon = BOOKING_DAYS.includes(Number(u.booking_days)) ? Number(u.booking_days) : DEFAULT_BOOKING_DAYS;
+    const days = [];
+    for (let i = 0; i < horizon; i += 1) {
+      const d = doctorDayWindows(db, { doctorId: u.id, dayIso: addDays(today, i), now });
+      if (!d.window) continue;
+      days.push({ date: d.date, from: d.window.from, to: d.window.to, starts: d.windows.map((w) => w.start), free: d.windows.map((w) => (w.free ? '1' : '0')).join('') });
+    }
+    doctors[u.id] = { reception: 'booking', days };
+  }
+  return { generated_at: isoOf(now), slot_minutes: PUBLIC_SLOT_MIN, doctors };
+}
+
+// ─── КЛЮЧИ И ПРАВА (быстрый канал) ──────────────────────────────────────────
+
+const originOf = (url) => { try { return new URL(String(url)).origin; } catch { return ''; } };
+
+/**
+ * Подключения для проверки ключа на публичном сервере: отпечаток SHA-256
+ * (шаг 7 хранит его рядом с шифротекстом), без самого ключа и без секрета.
+ * Удалённые не уходят — публичный сервер заменяет список целиком.
+ */
+export function buildKeys(db, { now = Date.now() } = {}) {
+  let rows = [];
+  try { rows = db.prepare('SELECT * FROM api_connections WHERE deleted_at IS NULL ORDER BY id').all(); } catch { rows = []; }
+  let website = '';
+  try { website = text((db.prepare('SELECT website FROM doc_settings WHERE id = 1').get() || {}).website); } catch { website = ''; }
+  return {
+    generated_at: isoOf(now),
+    connections: rows.map((c) => ({
+      id: c.id, kind: c.kind, active: Number(c.active) === 1, key_hash: c.key_hash, scopes: arr(c.scopes),
+      rate_limit: Number(c.rate_limit) || 60, key_expires_at: c.key_expires_at || null,
+      ip_allow: String(c.ip_allow || '').split('\n').map((s) => s.trim()).filter(Boolean),
+      origins: [originOf(c.kind === 'site' ? website : c.site_url)].filter(Boolean),
+    })),
+  };
+}
+```
+
+- [ ] **Step 4:** тест зелёный (4 теста). Сторожа: `LIS_ENABLED=0 node --test server/services/rpc/doctor-public.test.js server/services/rpc/services-public.test.js`, `node --experimental-vm-modules --test public/js/admin/__tests__/no-import-cycles.test.mjs`.
+- [ ] **Step 5: коммит** «Обмен с публичным сервером — снимок «что видят партнёры» белым списком на правилах показа шагов 4–6 (пакет со скрытой услугой не уходит), файлы — по отпечатку; свободное время — тот же движок, что календарь, без имён; подключения — отпечатком ключа, без ключа и секрета».
+
+---
+
+## Task 9: Обмен с публичным сервером — такт 15 секунд, ключи, снимок, время, события, очередь заявок; поддельный сервер для тестов (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/test-helpers/fake-public-server.js`, `server/services/api/public-sync.test.js`, `server/services/api/public-sync.e2e.test.js`, `server/services/api/public-sync.js`
+
+- [ ] **Step 1: поддельный сервер** `server/test-helpers/fake-public-server.js` — протокол `/_sync/v1/*` (дизайн §10), которым будет говорить сервер 8b:
+
+```js
+// PUBLIC_API_V1 — ПОДДЕЛЬНЫЙ ПУБЛИЧНЫЙ СЕРВЕР для тестов стороны клиники (шаг 8a):
+// fetchImpl в процессе, без сокетов (порты Windows — память
+// windows-dynamic-port-fetch-bad-port). Говорит протоколом обмена
+// /_sync/v1/* так, как его будет говорить настоящий сервер шага 8b:
+// проверяет подпись клиники её открытым ключом и наличие лицензии, хранит
+// снимок, время, ключи, события и файлы, отдаёт очередь заявок с курсором и
+// запечатывает данные пациента ключом-ящиком клиники (box_key из /keys).
+import { verifyRequest, sealFor } from '../services/api/sync-identity.js';
+
+export function fakePublicServer({ signPublic, clinicId = 'c-000777', base = 'https://api.test.local' } = {}) {
+  const state = {
+    keys: [], snapshots: [], slots: [], events: [], media: new Map(), inbox: [], acks: [], calls: [],
+    offline: false, refuse: null, licences: [],
+  };
+  let seq = 0;
+  const reply = (status, body) => ({
+    ok: status >= 200 && status < 300, status,
+    text: async () => JSON.stringify(body),
+    json: async () => body,
+    body: null,
+  });
+  async function fetchImpl(url, opts = {}) {
+    if (state.offline) throw new TypeError('fetch failed');
+    const u = new URL(String(url));
+    if (u.origin !== base) throw new TypeError('unexpected host ' + u.origin);
+    const method = String(opts.method || 'GET').toUpperCase();
+    const h = Object.fromEntries(Object.entries(opts.headers || {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
+    const raw = opts.body == null ? '' : opts.body;
+    const p = u.pathname + u.search;
+    state.calls.push(method + ' ' + u.pathname);
+    if (h['x-easymed-clinic'] !== clinicId || !h['x-easymed-licence'] || h['x-easymed-key'] !== signPublic
+      || !verifyRequest(signPublic, { method, path: p, time: h['x-easymed-time'], body: raw }, h['x-easymed-signature'])) {
+      return reply(401, { error: { code: 'invalid_signature' } });
+    }
+    state.licences.push(Buffer.from(h['x-easymed-licence'], 'base64').toString('utf8'));
+    if (state.refuse) return reply(state.refuse.status, state.refuse.body || { error: { code: 'refused' } });
+    const json = () => JSON.parse(String(raw || '{}'));
+    if (method === 'PUT' && u.pathname === '/_sync/v1/keys') { state.keys.push(json()); return reply(200, { ok: true }); }
+    if (method === 'PUT' && u.pathname === '/_sync/v1/snapshot') { state.snapshots.push(json()); return reply(200, { ok: true }); }
+    if (method === 'PUT' && u.pathname === '/_sync/v1/slots') { state.slots.push(json()); return reply(200, { ok: true }); }
+    if (method === 'POST' && u.pathname === '/_sync/v1/media/check') {
+      return reply(200, { missing: (json().hashes || []).filter((x) => !state.media.has(x)) });
+    }
+    const m = /^\/_sync\/v1\/media\/([0-9a-f]{64})\.[a-z]+$/.exec(u.pathname);
+    if (method === 'PUT' && m) { state.media.set(m[1], Buffer.from(raw)); return reply(200, { ok: true }); }
+    if (method === 'POST' && u.pathname === '/_sync/v1/events') {
+      const events = json().events || [];
+      state.events.push(...events);
+      return reply(200, { accepted: events.map((e) => e.seq) });
+    }
+    if (method === 'GET' && u.pathname === '/_sync/v1/inbox') {
+      const after = Number(u.searchParams.get('after') || 0);
+      return reply(200, { items: state.inbox.filter((it) => Number(it.cursor) > after) });
+    }
+    if (method === 'POST' && u.pathname === '/_sync/v1/inbox/ack') {
+      const c = Number(json().cursor);
+      state.acks.push(c);
+      state.inbox = state.inbox.filter((it) => Number(it.cursor) > c);
+      return reply(200, { ok: true });
+    }
+    return reply(404, { error: { code: 'not_found' } });
+  }
+  /** Положить в очередь то, что прислал партнёр; данные пациента — запечатанными ключом клиники. */
+  function enqueue(item, patient = null) {
+    const keys = state.keys.at(-1);
+    const out = { cursor: String(++seq), ...item };
+    if (patient) {
+      if (!keys || !keys.box_key) throw new Error('fake public server: клиника ещё не прислала box_key');
+      out.sealed = sealFor(keys.box_key, patient);
+    }
+    state.inbox.push(out);
+    return out;
+  }
+  return { fetchImpl, state, enqueue, base, env: { EASYMED_PUBLIC_URL: base } };
+}
+```
+
+- [ ] **Step 2: падающие тесты.** `server/services/api/public-sync.test.js`:
+
+```js
+// PUBLIC_API_V1 — обмен с публичным сервером (поддельным, в процессе): молчит,
+// пока Easy-Med не включил сервер (в лицензии нет отпечатка ключа клиники);
+// каждый запрос подписан и несёт лицензию; ключи, снимок, файлы и время уходят,
+// когда изменились; заявка из очереди — удержание и карточка, курсор
+// подтверждён; события уходят по порядку; нет связи и отказ сервера — не
+// бросает, ничего не теряет; адрес по умолчанию — api.easymed.uz.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { bookingSeed, localAt } from '../../test-helpers/api-booking-seed.js';
+import { fakePublicServer } from '../../test-helpers/fake-public-server.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+import { loadSyncIdentity, SYNC_KEY_FILE } from './sync-identity.js';
+import { syncOnce, syncStatus, publicBaseUrl, assertPublicUrlIsTestSafe, DEFAULT_PUBLIC_URL } from './public-sync.js';
+import { confirmBooking } from './bookings.js';
+
+const NOW = localAt('2030-03-11', '09:00');
+const START = localAt('2030-03-12', '10:00');
+
+function rig({ enabled = true } = {}) {
+  const s = bookingSeed();
+  const dataDir = tmpDir('em-psync-');
+  const keyPath = path.join(dataDir, SYNC_KEY_FILE);
+  const identity = loadSyncIdentity({ keyPath, create: true });
+  fs.writeFileSync(path.join(dataDir, 'control.json'), JSON.stringify({ clinic_id: 'c-000777', install_token: 'TESTONLY' }));
+  const payload = { clinic_id: 'c-000777', valid_until: '2030-04-01T00:00:00Z', modules: [], ...(enabled ? { api_sync_key: identity.fingerprint } : {}) };
+  fs.writeFileSync(path.join(dataDir, 'licence.dat'), JSON.stringify({ payload, sig: 'AAAA' }));
+  const fake = fakePublicServer({ signPublic: identity.signPublic });
+  let clock = NOW;
+  const opts = { fetchImpl: fake.fetchImpl, env: fake.env, now: () => clock, keyPath, kekPath: s.kekPath, storageDir: path.join(dataDir, 'storage') };
+  return { ...s, dataDir, keyPath, identity, fake, opts, tick: (ms) => { clock += ms; } };
+}
+const appt = (r, over = {}) => r.fake.enqueue({
+  type: 'appointment.new', public_id: 'rq_sync0001', connection_id: r.connId, received_at: new Date(NOW - 30000).toISOString(),
+  data: { external_id: 'med-55', doctor_id: 7, consultation: 'initial', start: new Date(START).toISOString(), lang: 'ru' }, ...over,
+}, { name: 'Абдурахмонов Фаррух', phone: '+998901234567', comment: 'Ребёнок 5 лет' });
+
+test('пока Easy-Med не включил публичный сервер — ни одного запроса в сеть; экран говорит «ждём включения»', async () => {
+  const r = rig({ enabled: false });
+  const out = await syncOnce(r.db, r.dataDir, r.opts);
+  assert.deepEqual(out, { ok: false, reason: 'not_enabled' });
+  assert.deepEqual(r.fake.state.calls, []);
+  assert.equal(syncStatus(r.db, r.dataDir, { keyPath: r.keyPath }).state, 'waiting_vendor');
+});
+
+test('первый такт: ключи (с ключом-ящиком), файлы, снимок, время — подписаны, с лицензией; повтор без изменений молчит', async () => {
+  const r = rig();
+  const out = await syncOnce(r.db, r.dataDir, r.opts);
+  assert.equal(out.ok, true);
+  assert.deepEqual(r.fake.state.calls, ['PUT /_sync/v1/keys', 'PUT /_sync/v1/snapshot', 'GET /_sync/v1/inbox', 'PUT /_sync/v1/slots']);
+  assert.equal(r.fake.state.keys[0].box_key, r.identity.boxPublic);
+  assert.equal(r.fake.state.snapshots[0].slug, 'shifo');
+  assert.deepEqual(r.fake.state.snapshots[0].doctors.map((d) => d.id), [7, 8]);
+  assert.ok(r.fake.state.licences.every((l) => l.includes('c-000777')));
+  assert.equal(syncStatus(r.db, r.dataDir, { keyPath: r.keyPath }).state, 'ok');
+  r.fake.state.calls.length = 0;
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.deepEqual(r.fake.state.calls, ['GET /_sync/v1/inbox'], 'ничего не изменилось — только сбор заявок');
+});
+
+test('выключили подключение — ключи уходят в ближайший такт (быстрый канал); время — раз в минуту и только изменившееся', async () => {
+  const r = rig();
+  r.tick(60000);   // 09:01 — дальше в тесте ни одно окно сегодняшнего дня не становится прошедшим
+  await syncOnce(r.db, r.dataDir, r.opts);
+  r.db.prepare('UPDATE api_connections SET active = 0 WHERE id = ?').run(r.connId);
+  r.fake.state.calls.length = 0;
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.deepEqual(r.fake.state.calls, ['PUT /_sync/v1/keys', 'GET /_sync/v1/inbox']);
+  assert.equal(r.fake.state.keys.at(-1).connections.find((c) => c.id === r.connId).active, false);
+  r.fake.state.calls.length = 0;
+  r.tick(60000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.deepEqual(r.fake.state.calls, ['GET /_sync/v1/inbox'], 'время не изменилось — не шлём, хоть минута и прошла');
+  r.fake.state.calls.length = 0;
+  r.tick(14 * 60000);   // 09:16 — окно 09:15 прошло: время изменилось; 15 минут — ключи и снимок повторяются для свежести
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.deepEqual(r.fake.state.calls, ['PUT /_sync/v1/keys', 'PUT /_sync/v1/snapshot', 'GET /_sync/v1/inbox', 'PUT /_sync/v1/slots']);
+});
+
+test('заявка из очереди: вскрыта ключом клиники — удержание и карточка; курсор подтверждён; время отправлено сразу', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  appt(r);
+  r.fake.state.calls.length = 0;
+  r.tick(5000);
+  const out = await syncOnce(r.db, r.dataDir, r.opts);
+  assert.equal(out.applied, 1);
+  assert.deepEqual(r.fake.state.calls, ['GET /_sync/v1/inbox', 'POST /_sync/v1/inbox/ack', 'PUT /_sync/v1/slots']);
+  const req = r.db.prepare('SELECT * FROM api_requests').get();
+  assert.deepEqual([req.status, req.patient_name, req.patient_phone], ['pending', 'Абдурахмонов Фаррух', '+998901234567']);
+  assert.deepEqual(r.fake.state.acks, [1]);
+  const day = r.fake.state.slots.at(-1).doctors[7].days.find((d) => d.date === '2030-03-12');
+  assert.equal(day.free[day.starts.indexOf('10:00')], '0', 'партнёры видят время занятым сразу');
+  r.fake.state.calls.length = 0;
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.equal(r.db.prepare('SELECT COUNT(*) AS n FROM api_requests').get().n, 1, 'подтверждённый курсор — второй раз не принимаем');
+});
+
+test('подтверждение регистратором — событие уходит в следующий такт, подписанное секретом подключения; принятые не повторяются', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  appt(r);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  r.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  const id = r.db.prepare('SELECT id FROM api_requests').get().id;
+  await confirmBooking(r.db, { id, patientId: 1 }, r.reg, { now: NOW + 60000, kekPath: r.kekPath });
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  const ev = r.fake.state.events.find((e) => e.event === 'booking.confirmed');
+  assert.ok(ev && ev.signature.startsWith('sha256=') && ev.webhook_url === 'https://med24.uz/hooks');
+  assert.equal(JSON.parse(ev.body).status, 'booked');
+  assert.ok(!ev.body.includes('Абдурахмонов'));
+  const n = r.fake.state.events.length;
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.equal(r.fake.state.events.length, n);
+});
+
+test('нет связи и отказ сервера: не бросает, итог записан, события ждут; 503 — «приостановлено»', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  appt(r);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  r.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  await confirmBooking(r.db, { id: r.db.prepare('SELECT id FROM api_requests').get().id, patientId: 1 }, r.reg, { now: NOW + 60000, kekPath: r.kekPath });
+  r.fake.state.offline = true;
+  r.tick(15000);
+  assert.deepEqual(await syncOnce(r.db, r.dataDir, r.opts), { ok: false, reason: 'offline' });
+  assert.equal(r.db.prepare('SELECT COUNT(*) AS n FROM api_outbox WHERE sent_at IS NULL').get().n, 1);
+  const st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.deepEqual([st.state, st.last_error, st.pending_events], ['error', 'offline', 1]);
+  r.fake.state.offline = false;
+  r.fake.state.refuse = { status: 503, body: { error: { code: 'licence_lapsed' } } };
+  r.tick(15000);
+  assert.deepEqual(await syncOnce(r.db, r.dataDir, r.opts), { ok: false, reason: 'paused' });
+  r.fake.state.refuse = null;
+  r.tick(15000);
+  assert.equal((await syncOnce(r.db, r.dataDir, r.opts)).ok, true);
+  assert.equal(r.db.prepare('SELECT COUNT(*) AS n FROM api_outbox WHERE sent_at IS NULL').get().n, 0);
+});
+
+test('чужая подпись — сервер отвечает 401, обмен называет это «unauthorized»; адрес — api.easymed.uz; тест без подставного fetch не уходит в сеть', async () => {
+  const r = rig();
+  const other = loadSyncIdentity({ keyPath: path.join(tmpDir('em-psync-other-'), SYNC_KEY_FILE), create: true });
+  const stranger = fakePublicServer({ signPublic: other.signPublic });
+  assert.deepEqual(await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl: stranger.fetchImpl }), { ok: false, reason: 'unauthorized' });
+  assert.equal(DEFAULT_PUBLIC_URL, 'https://api.easymed.uz');
+  assert.equal(publicBaseUrl({}), 'https://api.easymed.uz');
+  assert.throws(() => assertPublicUrlIsTestSafe({}, globalThis.fetch), /refusing to reach/);
+  assert.doesNotThrow(() => assertPublicUrlIsTestSafe({}, async () => {}));
+});
+```
+
+`server/services/api/public-sync.e2e.test.js`:
+
+```js
+// PUBLIC_API_V1 — СКВОЗНОЙ ПРОГОН СТОРОНЫ КЛИНИКИ с поддельным публичным
+// сервером: логотип уходит файлом по отпечатку; два партнёра на одно время —
+// первый держит, второй получает отказ в том же такте; регистратор
+// подтверждает — один визит той же дверью, что у регистратуры, партнёр
+// получает подписанное уведомление; пациент отменяет у партнёра — визит
+// отменён календарём, партнёр получает «appointment.cancelled». Данные
+// пациента не уходят наружу ни в одном запросе.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { bookingSeed, localAt } from '../../test-helpers/api-booking-seed.js';
+import { fakePublicServer } from '../../test-helpers/fake-public-server.js';
+import { fakePng } from '../../test-helpers/fake-png.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+import { loadSyncIdentity, SYNC_KEY_FILE } from './sync-identity.js';
+import { syncOnce } from './public-sync.js';
+import { confirmBooking } from './bookings.js';
+
+const NOW = localAt('2030-03-11', '09:00');
+const START = localAt('2030-03-12', '10:00');
+
+test('сквозной прогон: файлы, две заявки на одно время, подтверждение, отмена пациентом; наружу — без данных пациента', async () => {
+  const s = bookingSeed();
+  const dataDir = tmpDir('em-psync-e2e-');
+  const keyPath = path.join(dataDir, SYNC_KEY_FILE);
+  const identity = loadSyncIdentity({ keyPath, create: true });
+  fs.writeFileSync(path.join(dataDir, 'control.json'), JSON.stringify({ clinic_id: 'c-000777' }));
+  fs.writeFileSync(path.join(dataDir, 'licence.dat'), JSON.stringify({ payload: { clinic_id: 'c-000777', valid_until: '2030-04-01T00:00:00Z', api_sync_key: identity.fingerprint }, sig: 'AAAA' }));
+  const storage = path.join(dataDir, 'storage');
+  fs.mkdirSync(path.join(storage, 'clinic-logos', 'square'), { recursive: true });
+  const png = fakePng(256, 256);
+  fs.writeFileSync(path.join(storage, 'clinic-logos', 'square', 'l.png'), png);
+  s.db.prepare("UPDATE doc_settings SET logo_square_path = 'square/l.png' WHERE id = 1").run();
+  const fake = fakePublicServer({ signPublic: identity.signPublic });
+  let clock = NOW;
+  const opts = { fetchImpl: fake.fetchImpl, env: fake.env, now: () => clock, keyPath, kekPath: s.kekPath, storageDir: storage };
+  const wire = [];
+  const spy = async (url, o) => { wire.push(String(o && o.body != null ? (Buffer.isBuffer(o.body) ? '' : o.body) : '')); return fake.fetchImpl(url, o); };
+  const run = () => syncOnce(s.db, dataDir, { ...opts, fetchImpl: spy });
+
+  await run();
+  const sha = crypto.createHash('sha256').update(png).digest('hex');
+  assert.ok(fake.state.calls.includes('POST /_sync/v1/media/check'));
+  assert.deepEqual(fake.state.media.get(sha), png);
+  assert.equal(fake.state.snapshots[0].clinic.logo.square, 'media/' + sha + '.png');
+
+  const item = (pub, ext, name, phone) => fake.enqueue({ type: 'appointment.new', public_id: pub, connection_id: s.connId,
+    received_at: new Date(clock - 20000).toISOString(),
+    data: { external_id: ext, doctor_id: 7, consultation: 'initial', start: new Date(START).toISOString() } }, { name, phone, comment: 'КОММЕНТАРИЙ_ПАЦИЕНТА' });
+  item('rq_first0001', 'med-1', 'ИМЯ_ПЕРВОГО', '+998901111111');
+  item('rq_secnd0001', 'med-2', 'ИМЯ_ВТОРОГО', '+998902222222');
+  clock += 15000;
+  const t2 = await run();
+  assert.equal(t2.applied, 2);
+  const declined = fake.state.events.find((e) => JSON.parse(e.body).request_id === 'rq_secnd0001');
+  assert.deepEqual([declined.event, JSON.parse(declined.body).reason], ['booking.declined', 'slot_taken'], 'второй — отказ в том же такте');
+
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'ИМЯ_ПЕРВОГО', '+998901111111')").run();
+  const first = s.db.prepare("SELECT id FROM api_requests WHERE public_id = 'rq_first0001'").get().id;
+  const c = await confirmBooking(s.db, { id: first, patientId: 1 }, s.reg, { now: clock, kekPath: s.kekPath });
+  clock += 15000;
+  await run();
+  const confirmed = fake.state.events.find((e) => e.event === 'booking.confirmed');
+  assert.equal(confirmed.signature, 'sha256=' + crypto.createHmac('sha256', s.secret).update(confirmed.body).digest('hex'),
+    'партнёр проверит подпись секретом, который ему передал администратор');
+
+  fake.enqueue({ type: 'appointment.cancel', public_id: 'rq_first0001', connection_id: s.connId });
+  clock += 15000;
+  await run();
+  assert.equal(s.db.prepare('SELECT status FROM visits WHERE id = ?').get(c.visit.id).status, 'cancelled');
+  assert.ok(fake.state.events.some((e) => e.event === 'appointment.cancelled' && JSON.parse(e.body).request_id === 'rq_first0001'));
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM visits').get().n, 1, 'ровно один визит за весь прогон');
+
+  const out = wire.join('\n');
+  for (const mark of ['ИМЯ_ПЕРВОГО', 'ИМЯ_ВТОРОГО', '998901111111', '998902222222', 'КОММЕНТАРИЙ_ПАЦИЕНТА', 'P-1']) {
+    assert.ok(!out.includes(mark), 'наружу ушло: ' + mark);
+  }
+});
+```
+
+- [ ] **Step 3:** `LIS_ENABLED=0 node --test server/services/api/public-sync.test.js server/services/api/public-sync.e2e.test.js` → падает: `Cannot find module …/api/public-sync.js`.
+- [ ] **Step 4: модуль** `server/services/api/public-sync.js`:
+
+```js
+// PUBLIC_API_V1 — ОБМЕН С ПУБЛИЧНЫМ СЕРВЕРОМ (api.easymed.uz): отправка снимка,
+// свободного времени, ключей и событий; сбор заявок.
+//
+// Клиника за NAT, к ней не достучаться — каждый разговор начинает она. Ритм:
+//   • такт каждые 15 секунд (POLL_MS) — сбор заявок (по образцу опроса
+//     телефонии: telephony/poller.js — один процесс, такт не роняет сервер,
+//     неудача — «попробуем в следующий такт»);
+//   • ключи и права — каждый такт, если изменились (быстрый канал: выключенный
+//     ключ перестаёт подходить в пределах такта; RPC подключений будят такт
+//     сразу — wakePublicSync);
+//   • снимок — каждый такт, если изменился, и не реже раза в 15 минут;
+//   • свободное время — раз в минуту и сразу после принятой заявки;
+//   • события (api_outbox) — каждый такт, по порядку, пока не примут (по
+//     образцу выгрузки журнала между зданиями: branch-sync/relay.js — неудача
+//     не теряет, следующий такт шлёт то же).
+//
+// КТО ГОВОРИТ: каждый запрос подписан ключом клиники (sync-identity.js), к нему
+// приложена её подписанная лицензия — публичный сервер проверяет подпись
+// производителя, срок (не продлена — 503, решение владельца 4) и отпечаток
+// ключа в лицензии. Сервер лицензий здесь не участвует и данных пациентов не
+// видит: адрес обмена — api.easymed.uz, не settings.easymed.uz (страж
+// no-patient-data-to-vendor.test.js).
+//
+// ПОКА НЕ ВКЛЮЧЁН: обмен молчит (ни одного запроса в сеть), пока в лицензии
+// клиники нет отпечатка её ключа — его вписывает сервер лицензий, когда
+// Easy-Med включит публичный сервер (шаг 8c). До этого экран «API» честно
+// говорит «ждём включения».
+//
+// НИКОГДА НЕ БРОСАЕТ: syncOnce ловит всё и записывает итог в api_sync_state.
+import fs from 'node:fs';
+import path from 'node:path';
+import { readBounded } from '../control/checkin.js';
+import { loadSyncIdentity, signRequest, openSealed, SYNC_KEY_FILE } from './sync-identity.js';
+import { buildSnapshot, buildSlots, buildKeys, contentHash } from './snapshot.js';
+import { unsentEvents, markSent, markFailed } from './outbox.js';
+import { ingestItem, expireDue } from './bookings.js';
+import { syncVisitOutcomes } from './visit-events.js';
+import { isoOf } from '../../../public/js/shared/api-booking.js';
+
+export const DEFAULT_PUBLIC_URL = 'https://api.easymed.uz';
+export const SYNC_PREFIX = '/_sync/v1';
+export const POLL_MS = 15_000;
+export const SLOTS_EVERY_MS = 60_000;
+export const HEARTBEAT_MS = 15 * 60_000;
+const INITIAL_DELAY_MS = 20_000;
+const TIMEOUT_MS = 15_000;
+const MAX_RESPONSE_BYTES = 2_000_000;
+const EVENTS_BATCH = 50;
+
+export function publicBaseUrl(env = process.env) {
+  return String((env && env.EASYMED_PUBLIC_URL) || DEFAULT_PUBLIC_URL).trim().replace(/\/+$/, '');
+}
+
+// Тот же страж, что control/prod-guard.js у сервера лицензий: тест, забывший
+// подставить fetchImpl или адрес, не уходит на настоящий api.easymed.uz.
+export function assertPublicUrlIsTestSafe(env, fetchImpl) {
+  if (env && env.EASYMED_PUBLIC_URL) return;
+  if (fetchImpl && fetchImpl !== globalThis.fetch) return;
+  if (!process.env.NODE_TEST_CONTEXT) return;
+  throw new Error('refusing to reach the production public API server from inside a test process — inject a fetchImpl or set EASYMED_PUBLIC_URL');
+}
+
+class SyncFail extends Error { constructor(reason, detail = '') { super(reason); this.reason = reason; this.detail = detail; } }
+
+// ─── СОСТОЯНИЕ ──────────────────────────────────────────────────────────────
+
+function readState(db) {
+  try { return db.prepare('SELECT * FROM api_sync_state WHERE id = 1').get() || null; } catch { return null; }
+}
+function saveState(db, fields) {
+  const cols = Object.keys(fields);
+  try { db.prepare(`UPDATE api_sync_state SET ${cols.map((c) => c + ' = ?').join(', ')} WHERE id = 1`).run(...cols.map((c) => fields[c])); } catch { /* база до мигр. 245 */ }
+}
+
+function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
+function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } }
+
+/** Есть ли что отдавать: главное здание, имя в адресе, хоть одно подключение. '' — есть. */
+export function localBlocker(db) {
+  try {
+    const i = db.prepare('SELECT role FROM branch_identity WHERE id = 1').get();
+    if (i && i.role === 'secondary') return 'not_main';
+  } catch { /* нет таблицы — главное */ }
+  let slug = '';
+  try { slug = (db.prepare('SELECT slug FROM api_settings WHERE id = 1').get() || {}).slug || ''; } catch { return 'no_slug'; }
+  if (!slug) return 'no_slug';
+  try { if (!db.prepare('SELECT 1 FROM api_connections WHERE deleted_at IS NULL LIMIT 1').get()) return 'no_connections'; } catch { return 'no_connections'; }
+  return '';
+}
+
+/** Включил ли Easy-Med публичный сервер для клиники: в лицензии — отпечаток её ключа. */
+export function vendorBlocker(dataDir, identity) {
+  const control = readJson(path.join(dataDir, 'control.json'));
+  if (!control || typeof control.clinic_id !== 'string' || !control.clinic_id) return 'not_enrolled';
+  const lic = readJson(path.join(dataDir, 'licence.dat'));
+  if (!lic || !lic.payload) return 'not_enrolled';
+  if (!identity || lic.payload.api_sync_key !== identity.fingerprint) return 'not_enabled';
+  return '';
+}
+
+// ─── ЗАПРОСЫ ────────────────────────────────────────────────────────────────
+
+async function call(ctx, method, p, body, { raw = null, type = 'application/json' } = {}) {
+  const payload = raw != null ? raw : (body === undefined ? '' : JSON.stringify(body));
+  const full = SYNC_PREFIX + p;
+  const time = isoOf(ctx.now());
+  let res;
+  try {
+    res = await ctx.fetchImpl(ctx.base + full, {
+      method,
+      headers: {
+        'Content-Type': type,
+        'X-EasyMed-Clinic': ctx.clinicId,
+        // Открытая половина ключа: публичный сервер сверяет её отпечаток с лицензией и проверяет ею подпись.
+        'X-EasyMed-Key': ctx.identity.signPublic,
+        'X-EasyMed-Time': time,
+        'X-EasyMed-Signature': signRequest(ctx.identity, { method, path: full, time, body: payload }),
+        'X-EasyMed-Licence': ctx.licenceB64,
+      },
+      body: payload === '' ? undefined : payload,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch { throw new SyncFail('offline'); }
+  const text = await readBounded(res, MAX_RESPONSE_BYTES).catch(() => null);
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+  if (res.status === 401 || res.status === 403) throw new SyncFail('unauthorized');
+  if (res.status === 503) throw new SyncFail('paused');
+  if (res.status === 409) throw new SyncFail((json && json.error && json.error.code) || 'conflict');
+  if (!res.ok) throw new SyncFail('server_error');
+  return json || {};
+}
+
+// ─── ЧАСТИ ТАКТА ────────────────────────────────────────────────────────────
+
+async function pushKeys(ctx, state) {
+  const keys = { ...buildKeys(ctx.db, { now: ctx.now() }), box_key: ctx.identity.boxPublic };
+  const hash = contentHash(keys);
+  const stale = !state.keys_at || ctx.now() - Date.parse(state.keys_at) >= HEARTBEAT_MS;
+  if (hash === state.keys_hash && !stale) return false;
+  await call(ctx, 'PUT', '/keys', keys);
+  saveState(ctx.db, { keys_hash: hash, keys_at: isoOf(ctx.now()) });
+  return true;
+}
+
+async function pushSnapshot(ctx, state) {
+  const { snapshot, media } = buildSnapshot(ctx.db, { storageDir: ctx.storageDir, now: ctx.now() });
+  const hash = contentHash(snapshot);
+  const stale = !state.snapshot_at || ctx.now() - Date.parse(state.snapshot_at) >= HEARTBEAT_MS;
+  if (hash === state.snapshot_hash && !stale) return false;
+  if (media.length) {
+    const check = await call(ctx, 'POST', '/media/check', { hashes: media.map((m) => m.sha256) });
+    const missing = new Set(Array.isArray(check.missing) ? check.missing : []);
+    for (const m of media.filter((x) => missing.has(x.sha256))) {
+      let buf;
+      try { buf = fs.readFileSync(m.file); } catch { continue; }
+      await call(ctx, 'PUT', '/media/' + m.sha256 + '.' + m.ext, undefined, { raw: buf, type: m.type });
+    }
+  }
+  await call(ctx, 'PUT', '/snapshot', snapshot);
+  saveState(ctx.db, { snapshot_hash: hash, snapshot_at: isoOf(ctx.now()) });
+  return true;
+}
+
+async function pushSlots(ctx, state, force) {
+  const due = force || !state.slots_at || ctx.now() - Date.parse(state.slots_at) >= SLOTS_EVERY_MS;
+  if (!due) return false;
+  const slots = buildSlots(ctx.db, { now: ctx.now() });
+  const hash = contentHash(slots);
+  const stale = !state.slots_at || ctx.now() - Date.parse(state.slots_at) >= HEARTBEAT_MS;
+  if (hash === state.slots_hash && !stale) { saveState(ctx.db, { slots_at: isoOf(ctx.now()) }); return false; }
+  await call(ctx, 'PUT', '/slots', slots);
+  saveState(ctx.db, { slots_hash: hash, slots_at: isoOf(ctx.now()) });
+  return true;
+}
+
+async function pushEvents(ctx) {
+  let sent = 0;
+  for (;;) {
+    const rows = unsentEvents(ctx.db, EVENTS_BATCH);
+    if (!rows.length) return sent;
+    const events = rows.map((r) => ({ seq: r.id, event: r.event, status: r.status, body: r.body, webhook_url: r.webhook_url, signature: r.signature }));
+    let res;
+    try { res = await call(ctx, 'POST', '/events', { events }); } catch (e) { markFailed(ctx.db, rows.map((r) => r.id), e.reason); throw e; }
+    const accepted = new Set((Array.isArray(res.accepted) ? res.accepted : []).map(Number));
+    const ids = rows.map((r) => r.id).filter((id) => accepted.has(id));
+    markSent(ctx.db, ids, ctx.now());
+    sent += ids.length;
+    if (ids.length < rows.length) return sent;   // часть не приняли — остальное в следующий такт
+  }
+}
+
+async function pullInbox(ctx, state) {
+  const res = await call(ctx, 'GET', '/inbox?after=' + encodeURIComponent(state.inbox_cursor || ''));
+  const items = Array.isArray(res.items) ? res.items : [];
+  let cursor = state.inbox_cursor || '';
+  let applied = 0;
+  let skipped = 0;
+  for (const it of items) {
+    let item = it;
+    if (it && it.sealed) {
+      try { item = { ...it, patient: openSealed(ctx.identity, it.sealed) }; } catch { skipped += 1; cursor = String(it.cursor || cursor); continue; }
+    }
+    let r;
+    try { r = await ingestItem(ctx.db, item, { now: ctx.now(), kekPath: ctx.kekPath }); } catch (e) {
+      // Ошибка программы на одном элементе — дальше не идём и курсор не двигаем:
+      // следующий такт попробует снова, ничего не потеряно.
+      console.warn('[public-api] заявка не принята:', e && e.message);
+      break;
+    }
+    if (r && r.applied) applied += 1;
+    cursor = String((it && it.cursor) || cursor);
+  }
+  if (cursor && cursor !== (state.inbox_cursor || '')) {
+    await call(ctx, 'POST', '/inbox/ack', { cursor });
+    saveState(ctx.db, { inbox_cursor: cursor });
+  }
+  return { applied, skipped, received: items.length };
+}
+
+// ─── ТАКТ ───────────────────────────────────────────────────────────────────
+
+let inFlight = false;
+
+/**
+ * Один такт обмена. Никогда не бросает.
+ * @returns {Promise<{ok:boolean, reason?:string, applied?:number, sent?:number}>}
+ */
+export async function syncOnce(db, dataDir, opts = {}) {
+  if (inFlight) return { ok: false, reason: 'busy' };
+  inFlight = true;
+  try { return await performSync(db, dataDir, opts); } catch (e) {
+    console.warn('[public-api] такт обмена не удался:', e && e.message);
+    saveState(db, { last_error: 'server_error', last_error_at: isoOf(Date.now()) });
+    return { ok: false, reason: 'server_error' };
+  } finally { inFlight = false; }
+}
+
+async function performSync(db, dataDir, opts) {
+  const { fetchImpl = globalThis.fetch, env = process.env, now = () => Date.now(), keyPath = path.join(dataDir, SYNC_KEY_FILE),
+    kekPath = null, storageDir = path.join(dataDir, 'storage') } = opts;
+  // Своя работа — всегда: истечение удержаний и судьба визитов (партнёр узнает,
+  // когда связь будет).
+  expireDue(db, { now: now(), kekPath });
+  syncVisitOutcomes(db, { now: now(), kekPath });
+
+  const local = localBlocker(db);
+  if (local) return { ok: false, reason: local };
+  const identity = loadSyncIdentity({ keyPath, create: true });
+  const vendor = vendorBlocker(dataDir, identity);
+  if (vendor) return { ok: false, reason: vendor };
+
+  assertPublicUrlIsTestSafe(env, fetchImpl);
+  const control = readJson(path.join(dataDir, 'control.json'));
+  const ctx = {
+    db, fetchImpl, now, kekPath, storageDir, identity,
+    base: publicBaseUrl(env), clinicId: control.clinic_id,
+    licenceB64: Buffer.from(readText(path.join(dataDir, 'licence.dat')) || '', 'utf8').toString('base64'),
+  };
+  saveState(db, { last_poll_at: isoOf(now()) });
+  try {
+    let state = readState(db) || {};
+    await pushKeys(ctx, state);
+    state = readState(db) || {};
+    await pushSnapshot(ctx, state);
+    let sent = await pushEvents(ctx);
+    state = readState(db) || {};
+    const inbox = await pullInbox(ctx, state);
+    state = readState(db) || {};
+    await pushSlots(ctx, state, inbox.applied > 0);
+    if (inbox.applied) sent += await pushEvents(ctx);
+    saveState(db, { last_ok_at: isoOf(now()), last_error: inbox.skipped ? 'sealed' : '', last_error_at: inbox.skipped ? isoOf(now()) : null });
+    return { ok: true, applied: inbox.applied, sent };
+  } catch (e) {
+    if (!(e instanceof SyncFail)) throw e;
+    saveState(db, { last_error: e.reason, last_error_at: isoOf(now()) });
+    return { ok: false, reason: e.reason };
+  }
+}
+
+/** Для экрана «API»: идёт ли обмен и что с ним. */
+export function syncStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_FILE) } = {}) {
+  const st = readState(db) || {};
+  let pendingEvents = 0;
+  let waiting = 0;
+  try { pendingEvents = db.prepare('SELECT COUNT(*) AS n FROM api_outbox WHERE sent_at IS NULL').get().n; } catch { pendingEvents = 0; }
+  try { waiting = db.prepare("SELECT COUNT(*) AS n FROM api_requests WHERE status IN ('new', 'pending', 'offered')").get().n; } catch { waiting = 0; }
+  const local = localBlocker(db);
+  let identity = null;
+  try { identity = loadSyncIdentity({ keyPath }); } catch { identity = null; }
+  const vendor = local ? '' : vendorBlocker(dataDir, identity);
+  const state = local ? 'off' : vendor ? 'waiting_vendor' : st.last_error && (!st.last_ok_at || st.last_error_at >= st.last_ok_at) ? 'error' : st.last_ok_at ? 'ok' : 'starting';
+  return {
+    state, reason: local || vendor || st.last_error || '',
+    last_ok_at: st.last_ok_at || null, last_error: st.last_error || '', last_error_at: st.last_error_at || null,
+    pending_events: pendingEvents, waiting_requests: waiting,
+  };
+}
+
+// ─── РАСПИСАНИЕ ─────────────────────────────────────────────────────────────
+
+let timer = null;
+let armFn = null;
+
+/** Разбудить обмен сейчас (RPC подключений после записи; подтверждение заявки). */
+export function wakePublicSync() { if (armFn) armFn(0); }
+
+/** Включает такт в работающем процессе; { stop }. Таймеры unref — остановке сервера не мешают. */
+export function schedulePublicSync(db, dataDir, opts = {}) {
+  const { initialDelayMs = INITIAL_DELAY_MS, everyMs = POLL_MS, ...tickOpts } = opts;
+  let stopped = false;
+  const arm = (ms) => {
+    if (stopped) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(tick, ms);
+    if (timer.unref) timer.unref();
+  };
+  const tick = () => {
+    syncOnce(db, dataDir, tickOpts)
+      .catch((e) => console.warn('[public-api] такт:', e && e.message))
+      .finally(() => arm(everyMs));
+  };
+  armFn = arm;
+  arm(initialDelayMs);
+  return { stop() { stopped = true; if (timer) clearTimeout(timer); timer = null; armFn = null; } };
+}
+```
+
+- [ ] **Step 5:** тесты зелёные (7 + 1). Сторожа:
+  - `LIS_ENABLED=0 node --test server/services/control/prod-guard.test.js server/services/api/no-real-api-keys.test.js server/test-helpers/no-test-helpers-in-production.test.js server/i18n-server-messages.test.js`;
+  - `node --experimental-vm-modules --test public/js/admin/__tests__/no-import-cycles.test.mjs`.
+- [ ] **Step 6: коммит** «Обмен с публичным сервером api.easymed.uz: такт 15 секунд, запросы подписаны ключом клиники и несут её лицензию; ключи и снимок — по изменению и не реже 15 минут, время — раз в минуту и сразу после заявки, события — по порядку, очередь — с курсором; молчит, пока Easy-Med не включил; не бросает и ничего не теряет».
+
+---
+
+## Task 10: Ключ подписи — в ежечасной сверке; обмен — в расписании сервера; правка подключений будит обмен (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/services/control/checkin-sync-key.test.js`
+- Modify: `server/services/control/checkin.js` (:8, :408, :422), `server/index.js` (:29, :404–406), `server/services/rpc/api-connections.js` (:30, :97, :109, :119, :129, :134)
+
+- [ ] **Step 1: падающий тест** `server/services/control/checkin-sync-key.test.js`:
+
+```js
+// PUBLIC_API_V1 — ежечасная сверка с сервером лицензий несёт ОТКРЫТУЮ половину
+// ключа подписи клиники для публичного сервера, если ключ уже создан; закрытой
+// половины в теле нет; нет файла или он испорчен — поля нет, сверка идёт.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { openDb } from '../../db/connection.js';
+import { migrate } from '../../db/migrate.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+import { runCheckin } from './checkin.js';
+import { loadSyncIdentity, SYNC_KEY_FILE } from '../api/sync-identity.js';
+
+function clinic() {
+  const dir = tmpDir('em-checkin-sync-');
+  fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({ clinic_id: 'c-000047', install_token: 'TESTONLY-token' }));
+  const db = openDb(':memory:');
+  migrate(db);
+  return { dir, db };
+}
+async function sentBody(c) {
+  let body = null;
+  const fetchImpl = async (_url, opts) => { body = JSON.parse(opts.body); return { ok: false, status: 500, text: async () => '', body: null }; };
+  await runCheckin(c.db, c.dir, { fetchImpl, endpoint: 'https://cp.test.local' });
+  return body;
+}
+
+test('ключа нет — поля нет; ключ есть — открытая половина; закрытой половины в теле нет', async () => {
+  const c = clinic();
+  const before = await sentBody(c);
+  assert.equal(before.install_token, 'TESTONLY-token');
+  assert.equal('api_sync_public_key' in before, false);
+  const id = loadSyncIdentity({ keyPath: path.join(c.dir, SYNC_KEY_FILE), create: true });
+  const after = await sentBody(c);
+  assert.equal(after.api_sync_public_key, id.signPublic);
+  const file = JSON.parse(fs.readFileSync(path.join(c.dir, SYNC_KEY_FILE), 'utf8'));
+  const raw = JSON.stringify(after);
+  assert.ok(!raw.includes(file.sign) && !raw.includes(file.box), 'закрытые половины не уходят');
+});
+
+test('файл ключа испорчен — сверка идёт без поля', async () => {
+  const c = clinic();
+  fs.writeFileSync(path.join(c.dir, SYNC_KEY_FILE), 'испорчено');
+  fs.writeFileSync(path.join(c.dir, SYNC_KEY_FILE + '.bak'), 'испорчено');
+  const body = await sentBody(c);
+  assert.equal(body.install_token, 'TESTONLY-token');
+  assert.equal('api_sync_public_key' in body, false);
+});
+```
+
+- [ ] **Step 2:** `node --test server/services/control/checkin-sync-key.test.js` → падает: в теле сверки нет `api_sync_public_key`.
+- [ ] **Step 3: сверка** — `server/services/control/checkin.js`:
+
+```diff
+diff --git a/server/services/control/checkin.js b/server/services/control/checkin.js
+index 10d7024..e7afbfc 100644
+--- a/server/services/control/checkin.js
++++ b/server/services/control/checkin.js
+@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
+ import { verifyLicence } from './licence.js';
+ import { buildStatsPayload as defaultBuildStatsPayload } from './metrics.js';
+ import { assertControlUrlIsTestSafe } from './prod-guard.js';   // PROD_GUARD_V1
++// PUBLIC_API_V1 — открытая половина ключа подписи клиники для публичного сервера.
++import { loadSyncIdentity, SYNC_KEY_FILE } from '../api/sync-identity.js';
+ 
+ // LICENCE_CORE_V1 — the clinic's half of the hourly call.
+ //
+@@ -405,6 +407,20 @@ async function performCheckin(db, dataDir, {
+     // clinic disks — see readJsonFile's own comment.
+     const updateResult = readJsonFile(updateResultPath);
+ 
++    // PUBLIC_API_V1 — открытая половина ключа подписи клиники
++    // (services/api/sync-identity.js): сервер лицензий впишет её отпечаток в
++    // лицензию, когда Easy-Med включит клинике публичный сервер (шаг 8c), и
++    // публичный сервер узнает клинику по лицензии. Только ОТКРЫТАЯ половина —
++    // закрытая не покидает клинику. Нет файла (API не настроен) или он
++    // испорчен — поля нет: сверка лицензии важнее (правило этого файла).
++    // Прежний сервер лицензий незнакомое поле пропускает
++    // (control-plane/server/routes/checkin.js берёт только свои поля).
++    let apiSyncPublicKey = null;
++    try {
++      const sync = loadSyncIdentity({ keyPath: path.join(dataDir, SYNC_KEY_FILE) });
++      apiSyncPublicKey = sync ? sync.signPublic : null;
++    } catch { apiSyncPublicKey = null; }
++
+     if (!endpoint) assertControlUrlIsTestSafe(process.env, fetchImpl);   // PROD_GUARD_V1
+     const url = endpoint ? String(endpoint).replace(/\/+$/, '') + CHECKIN_PATH : checkinUrl();
+ 
+@@ -420,6 +436,7 @@ async function performCheckin(db, dataDir, {
+           module_requests: pending.map((r) => ({ module_key: r.module_key, requested_at: r.requested_at })),
+           stats,
+           ...(updateResult ? { update_result: updateResult } : {}),
++          ...(apiSyncPublicKey ? { api_sync_public_key: apiSyncPublicKey } : {}),   // PUBLIC_API_V1
+         }),
+         signal: AbortSignal.timeout(timeoutMs),
+       });
+```
+
+- [ ] **Step 4: расписание** — `server/index.js`:
+
+```diff
+diff --git a/server/index.js b/server/index.js
+index 0bfdb09..6234843 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -27,6 +27,7 @@ import { scheduleCrmNoShow } from './services/crm/no-show.js';   // CRM_UNIFY_V1
+ import { crmUnifyRepair } from './services/crm/unify-repair.js';   // CRM_UNIFY_V1
+ import { scheduleCrmTaskRehome } from './services/crm/tasks-follow.js';   // CRM_UNIFY_V1
+ import { preserveLegacyLogo } from './services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1
++import { schedulePublicSync } from './services/api/public-sync.js';   // PUBLIC_API_V1
+ 
+ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+ 
+@@ -403,6 +404,13 @@ if (isMain) {
+     },
+     syncImpl: (database) => runBranchSync(database),
+   });
++
++  // PUBLIC_API_V1 — обмен с публичным сервером api.easymed.uz (заявки и
++  // онлайн-запись партнёров, снимок для сайта, Symptex и партнёров). Такт —
++  // 15 секунд, unref, не бросает; молчит (ни одного запроса в сеть), пока нет
++  // имени в адресе и подключений и пока Easy-Med не включил клинике публичный
++  // сервер (отпечаток ключа в лицензии — services/api/public-sync.js).
++  try { schedulePublicSync(db, DATA_DIR); } catch (e) { console.warn('[public-api]', e && e.message); }
+ }
+ 
+ function lanAddresses() {
+```
+
+- [ ] **Step 5: будильник подключений** — `server/services/rpc/api-connections.js`:
+
+```diff
+diff --git a/server/services/rpc/api-connections.js b/server/services/rpc/api-connections.js
+index e028faf..d968f37 100644
+--- a/server/services/rpc/api-connections.js
++++ b/server/services/rpc/api-connections.js
+@@ -28,6 +28,7 @@ import {
+ } from '../api/connections.js';
+ import { makeDraft, renewDraft } from '../api/drafts.js';
+ import { companyAddressProblems } from '../api/partner-address.js';
++import { wakePublicSync } from '../api/public-sync.js';   // PUBLIC_API_V1 — изменения подключений уходят на публичный сервер в ближайший такт
+ 
+ export class RpcError extends Error {
+   constructor(msg, status = 400) { super(msg); this.status = status; }
+@@ -94,7 +95,9 @@ export function apiSettingsGet(db, _args, user) {
+ }
+ export function apiSlugSave(db, args, user) {
+   requireAdmin(db, user); requireMain(db);
+-  return saveSlug(db, args && args.slug, actorOf(db, user));
++  const out = saveSlug(db, args && args.slug, actorOf(db, user));
++  wakePublicSync();   // PUBLIC_API_V1
++  return out;
+ }
+ export function apiConnectionDraft(db, args, user) {
+   requireAdmin(db, user); requireMain(db);
+@@ -107,6 +110,7 @@ export function apiConnectionCreate(db, args, user) {
+   requireAdmin(db, user); requireMain(db);
+   const a = args || {};
+   const out = createConnection(db, a, actorOf(db, user), { draftId: a.draft_id });
++  wakePublicSync();   // PUBLIC_API_V1
+   return { ...out, base_url: apiBaseUrl(readSlug(db)) };
+ }
+ export function apiConnectionUpdate(db, args, user) {
+@@ -116,7 +120,9 @@ export function apiConnectionUpdate(db, args, user) {
+   for (const k of [...EDIT_FIELDS, ...ADMIN_FIELDS]) if (Object.prototype.hasOwnProperty.call(a, k)) patch[k] = a[k];
+   if (!Object.keys(patch).length) throw new RpcError(RPC_MESSAGES.nothing);
+   if (ADMIN_FIELDS.some((k) => k in patch)) requireAdmin(db, user);
+-  return { connection: forViewer(updateConnection(db, a.id, patch, actorOf(db, user)), isAdminUser(user)) };
++  const connection = forViewer(updateConnection(db, a.id, patch, actorOf(db, user)), isAdminUser(user));
++  wakePublicSync();   // PUBLIC_API_V1 — выключение и права: «сразу 401» в пределах такта
++  return { connection };
+ }
+ export function apiConnectionReveal(db, args, user) {
+   requireRevealer(db, user); requireMain(db);   // CLINIC_API_STEP7_V1 (ревью №1)
+@@ -126,12 +132,16 @@ export function apiConnectionReveal(db, args, user) {
+ export function apiConnectionRegenerate(db, args, user) {
+   requireAdmin(db, user); requireMain(db);
+   const a = args || {};
+-  return regenerateSecret(db, a.id, a.what, actorOf(db, user), { confirm: a.confirm });
++  const out = regenerateSecret(db, a.id, a.what, actorOf(db, user), { confirm: a.confirm });
++  wakePublicSync();   // PUBLIC_API_V1 — прежний ключ перестаёт подходить в ближайший такт
++  return out;
+ }
+ export function apiConnectionDelete(db, args, user) {
+   requireAdmin(db, user); requireMain(db);
+   const a = args || {};
+-  return deleteConnection(db, a.id, actorOf(db, user), { confirm: a.confirm });
++  const out = deleteConnection(db, a.id, actorOf(db, user), { confirm: a.confirm });
++  wakePublicSync();   // PUBLIC_API_V1
++  return out;
+ }
+ export function apiJournalList(db, args, user) {
+   requireView(db, user);
+```
+
+- [ ] **Step 6:** тест зелёный (2 теста). Прежние:
+  - `LIS_ENABLED=0 node --test server/services/control/checkin.test.js server/services/rpc/api-connections.test.js server/routes/api-connections-http.test.js server/app-test-hygiene.test.js server/index.datadir.test.js` — зелёные;
+  - `node --check server/index.js`.
+- [ ] **Step 7: коммит** «Сверка с сервером лицензий отдаёт открытую половину ключа подписи клиники для публичного сервера (поле пропускает прежний сервер лицензий); обмен с публичным сервером — в расписании сервера; правка, выпуск ключа и удаление подключения будят обмен — «сразу 401» в пределах такта».
+
+---
+
+## Task 11: RPC онлайн-записи — окно карточки CRM, кандидаты, решения, доска, состояние обмена (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/services/rpc/api-bookings.test.js`, `server/routes/api-bookings-http.test.js`, `server/services/rpc/api-bookings.js`
+- Modify: `server/services/rpc/index.js` (:81, :629), `server/services/control/gate.js` (:53)
+
+- [ ] **Step 1: падающие тесты.** `server/services/rpc/api-bookings.test.js`:
+
+```js
+// PUBLIC_API_V1 — RPC онлайн-записи из API: видит тот, кому /api/db отдаёт
+// карточку (оператор — свои и ничьи); решает администратор, регистратура,
+// колл-центр; медсестра и врач только смотрят; филиал не решает; список —
+// подписи, кандидаты по номеру семьи, действия; доска — только видимые карточки.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { bookingSeed, localAt, apptItem } from '../../test-helpers/api-booking-seed.js';
+import { ingestItem } from '../api/bookings.js';
+import { RPC } from './index.js';
+import { isReadOnlyRpc } from '../control/gate.js';
+import {
+  apiBookingList, apiBookingCandidates, apiBookingConfirm, apiBookingOffer, apiBookingDecline, apiRequestAccept, apiBoardMarks, apiSyncStatus,
+} from './api-bookings.js';
+
+// Решения RPC идут без подставного времени: запись — на неделю вперёд от сегодня.
+const day = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
+const START = localAt(day, '10:00');
+const refusal = async (fn) => { try { await fn(); } catch (e) { return e; } return assert.fail('ожидался отказ'); };
+
+async function withBooking() {
+  const s = bookingSeed();
+  s.db.prepare('UPDATE users SET booking_days = 30 WHERE id = 7').run();
+  const r = await ingestItem(s.db, apptItem({ connId: s.connId, startMs: START, receivedMs: Date.now() - 1000 }), { kekPath: s.kekPath });
+  assert.equal(r.status, 'pending');
+  const card = s.db.prepare('SELECT crm_request_id AS c FROM api_requests WHERE id = ?').get(r.id).c;
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998 90 123-45-67'), (2, 'P-2', 'Абдурахмонова Мадина', '998901234567'), (3, 'P-3', 'Чужой', '+998935550000')").run();
+  return { ...s, id: r.id, card };
+}
+
+test('карта RPC и ворота лицензии: чтения — в READ_ONLY_RPCS, решения — нет', () => {
+  for (const n of ['api_booking_list', 'api_booking_candidates', 'api_board_marks', 'api_sync_status']) {
+    assert.equal(typeof RPC[n], 'function', n);
+    assert.equal(isReadOnlyRpc(n), true, n);
+  }
+  for (const n of ['api_booking_confirm', 'api_booking_offer', 'api_booking_decline', 'api_request_accept']) {
+    assert.equal(typeof RPC[n], 'function', n);
+    assert.equal(isReadOnlyRpc(n), false, n);
+  }
+});
+
+test('список: подключение, врач, что выбрал пациент и цена, срок удержания, действия; кандидаты — семья на номере, совпавшее имя первым', async () => {
+  const s = await withBooking();
+  const { items } = apiBookingList(s.db, { crm_request_id: s.card }, s.reg);
+  assert.equal(items.length, 1);
+  const it = items[0];
+  assert.deepEqual([it.status, it.partner_status, it.connection.name, it.doctor.name, it.what.name, it.what.price, it.external_id],
+    ['pending', 'pending', 'med24.uz', 'Петров Пётр Петрович', 'Первичный приём', 150000, 'med-1']);
+  assert.deepEqual(it.can, { confirm: true, offer: true, decline: true, accept: false });
+  const c = apiBookingCandidates(s.db, { id: s.id }, s.reg).items;
+  assert.deepEqual(c.map((x) => [x.id, x.why]), [[1, 'phone_name'], [2, 'phone']], 'оба на номере, совпавшее имя — первым; чужой номер — нет');
+});
+
+test('решения: регистратура подтверждает; медсестра и врач — нет; чужая карточка оператора — нет; филиал — 409', async () => {
+  const s = await withBooking();
+  assert.equal((await refusal(() => apiBookingConfirm(s.db, { id: s.id, patient_id: 1 }, s.nurse))).status, 403);
+  s.db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (5, 'cc2', 'x', 'Оператор Два', 'callcenter')").run();
+  s.db.prepare('UPDATE crm_requests SET assigned_to = 5 WHERE id = ?').run(s.card);
+  assert.equal((await refusal(() => apiBookingList(s.db, { crm_request_id: s.card }, s.cc))).status, 403, 'карточка другого оператора не видна');
+  assert.equal((await refusal(() => apiBookingConfirm(s.db, { id: s.id, patient_id: 1 }, s.reg))).status, 403, 'и регистратуре без «crm.all» — как у /api/db');
+  s.db.prepare('UPDATE crm_requests SET assigned_to = NULL WHERE id = ?').run(s.card);
+  s.db.prepare("UPDATE branch_identity SET role = 'secondary' WHERE id = 1").run();
+  assert.equal((await refusal(() => apiBookingConfirm(s.db, { id: s.id, patient_id: 1 }, s.reg))).status, 409);
+  s.db.prepare("UPDATE branch_identity SET role = 'main' WHERE id = 1").run();
+  const out = await apiBookingConfirm(s.db, { id: s.id, patient_id: 1 }, s.reg);
+  assert.deepEqual([out.status, typeof out.visit_id, out.already], ['confirmed', 'number', false]);
+  assert.equal((await apiBookingConfirm(s.db, { id: s.id, patient_id: 1 }, s.reg)).already, true);
+});
+
+test('другое время и отказ через RPC; «Взять в работу»; доска — только видимые карточки', async () => {
+  const s = await withBooking();
+  const off = apiBookingOffer(s.db, { id: s.id, start: new Date(localAt(day, '15:00')).toISOString() }, s.cc);
+  assert.equal(off.status, 'offered');
+  const marks = apiBoardMarks(s.db, {}, s.reg).marks;
+  assert.deepEqual(marks[s.card].map((m) => [m.status, m.connection_name]), [['offered', 'med24.uz']]);
+  const dec = apiBookingDecline(s.db, { id: s.id, reason: 'other' }, s.admin);
+  assert.equal(dec.status, 'declined');
+  assert.deepEqual(apiBoardMarks(s.db, {}, s.reg).marks, {}, 'решённая — с доски уходит');
+  const cb = await ingestItem(s.db, { ...apptItem({ connId: s.connId, publicId: 'rq_call0001', startMs: START, receivedMs: Date.now() }), type: 'request.new', data: { external_id: 'cb-1' } }, {});
+  assert.equal(apiRequestAccept(s.db, { id: cb.id }, s.cc).status, 'accepted');
+  s.db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (5, 'cc2', 'x', 'Оператор Два', 'callcenter')").run();
+  const cardCb = s.db.prepare('SELECT crm_request_id AS c FROM api_requests WHERE id = ?').get(cb.id).c;
+  s.db.prepare('UPDATE crm_requests SET assigned_to = 5 WHERE id = ?').run(cardCb);
+  assert.equal(apiBoardMarks(s.db, {}, s.cc).marks[cardCb], undefined, 'чужая карточка оператора — без строки');
+});
+
+test('состояние обмена — строке «API: Просмотр» и администратору; регистратуре — нет', async () => {
+  const s = await withBooking();
+  const st = apiSyncStatus(s.db, {}, s.admin);
+  assert.equal(typeof st.state, 'string');
+  assert.equal(st.waiting_requests, 1);
+  assert.equal((await refusal(() => apiSyncStatus(s.db, {}, s.reg))).status, 403);
+});
+```
+
+`server/routes/api-bookings-http.test.js` — через настоящее приложение: лицензия (402 на решениях), присланный номер удержания не действует:
+
+```js
+// PUBLIC_API_V1 — RPC онлайн-записи через настоящее приложение: при живой
+// лицензии регистратура видит и подтверждает; при непродлённой — видит, но
+// решения отвечают 402 (как любая запись); удержание чужой заявки из браузера
+// не снять — ensure_visit с присланным номером удержания отвечает «время занято».
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { generateKeyPairSync, sign } from 'node:crypto';
+import { createApp } from '../app.js';
+import { hashPassword } from '../services/auth.js';
+import { canonical } from '../services/control/canonical.js';
+import { __setPublicKeyForTests } from '../services/control/state.js';
+import { tmpDir } from '../test-helpers/tmpdir.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
+import { bookingSeed, localAt, apptItem } from '../test-helpers/api-booking-seed.js';
+import { ingestItem } from '../services/api/bookings.js';
+
+const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+__setPublicKeyForTests(publicKey);
+function dataDir(validUntil) {
+  const dir = tmpDir('em-apibk-http-');
+  fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({ clinic_id: 'c-1', unlock_secret: 's', subscription: 'active' }));
+  const payload = { clinic_id: 'c-1', clinic_name: 'T', modules: [], valid_until: validUntil, issued_at: '2026-08-01T00:00:00Z', nonce: 'n' };
+  fs.writeFileSync(path.join(dir, 'licence.dat'), JSON.stringify({ payload, sig: sign(null, Buffer.from(canonical(payload), 'utf8'), privateKey).toString('base64') }));
+  return dir;
+}
+const day = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
+const START = localAt(day, '10:00');
+
+async function start(validUntil) {
+  const s = bookingSeed();
+  s.db.prepare('UPDATE users SET booking_days = 30 WHERE id = 7').run();
+  s.db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = 2').run(hashPassword('password2'));
+  const r = await ingestItem(s.db, apptItem({ connId: s.connId, startMs: START, receivedMs: Date.now() - 1000 }), { kekPath: s.kekPath });
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  const server = await listen(createApp(s.db, { dataDir: dataDir(validUntil) }));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'reg', password: 'password2' }) });
+  const cookie = login.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  const rpc = async (name, body) => {
+    const res = await fetch(base + '/api/rpc/' + name, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify(body || {}) });
+    return { status: res.status, json: await res.json() };
+  };
+  const card = s.db.prepare('SELECT crm_request_id AS c FROM api_requests WHERE id = ?').get(r.id).c;
+  return { s, server, rpc, id: r.id, card };
+}
+
+test('живая лицензия: регистратура видит и подтверждает; присланный номер удержания в ensure_visit — не действует', async (t) => {
+  const x = await start('2099-01-01T00:00:00Z');
+  t.after(() => x.server.close());
+  const list = await x.rpc('api_booking_list', { crm_request_id: x.card });
+  assert.equal(list.status, 200);
+  assert.equal(list.json.data.items[0].status, 'pending');
+  const hold = x.s.db.prepare('SELECT id FROM slot_holds WHERE api_request_id = ?').get(x.id).id;
+  const sneak = await x.rpc('ensure_visit', { patient_id: 1, date: day, book: { doctor_id: 7, start: new Date(START).toISOString(), duration_minutes: 30, exclude_hold_id: hold } });
+  assert.equal(sneak.status, 409);
+  assert.equal(sneak.json.error.code, 'slot_taken');
+  const ok = await x.rpc('api_booking_confirm', { id: x.id, patient_id: 1 });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.data.status, 'confirmed');
+});
+
+test('лицензия не продлена: видно, но решения — 402', async (t) => {
+  const x = await start('2020-01-01T00:00:00Z');
+  t.after(() => x.server.close());
+  assert.equal((await x.rpc('api_booking_list', { crm_request_id: x.card })).status, 200);
+  assert.equal((await x.rpc('api_board_marks', {})).status, 200);
+  const res = await x.rpc('api_booking_confirm', { id: x.id, patient_id: 1 });
+  assert.equal(res.status, 402);
+  assert.equal(res.json.error.code, 'licence_locked');
+  assert.equal(x.s.db.prepare('SELECT status FROM api_requests WHERE id = ?').get(x.id).status, 'pending');
+});
+```
+
+- [ ] **Step 2:** `LIS_ENABLED=0 node --test server/services/rpc/api-bookings.test.js server/routes/api-bookings-http.test.js` → падает: `Cannot find module …/rpc/api-bookings.js`.
+- [ ] **Step 3: RPC** `server/services/rpc/api-bookings.js`:
+
+```js
+// PUBLIC_API_V1 — RPC ЗАЯВОК И ОНЛАЙН-ЗАПИСИ ИЗ API: окно «Онлайн-запись через
+// API» в карточке CRM (список, карты-кандидаты, «Подтвердить запись»,
+// «Предложить другое время», «Отклонить», «Взять в работу»), строки онлайн-записи
+// на доске и состояние обмена для экрана «API и подключения».
+//
+// ВОРОТА — ТЕ ЖЕ, ЧТО У КАРТОЧКИ CRM: видит заявку тот, кому /api/db отдаёт её
+// карточку (compile — тот же отбор строк: оператор колл-центра — свои и ничьи);
+// решает — тот, кто может править карточку (admin, регистратура, колл-центр —
+// schema-registry crm_requests.update). Отдельной строки в «Ролях» нет: это
+// работа с карточкой заявки.
+//
+// Лицензия: чтения — в READ_ONLY_RPCS (control/gate.js); решения — записи
+// (при блокировке 402). Филиал: заявки из API живут в главном здании — решения
+// в филиале 409.
+import { compile } from '../../db/query-compiler.js';
+import { hasAnyRole } from '../roles.js';
+import { grantAllowsAdminOr } from '../grants.js';
+import { getDataDir } from '../control/config.js';
+import { API_BOOKING_MESSAGES as MSG } from '../../../public/js/shared/api-booking.js';
+import {
+  requestRow, requestsOfCard, cardCandidates, boardMarks, confirmBooking, offerOtherTime, declineBooking, acceptRequest,
+} from '../api/bookings.js';
+import { syncStatus, wakePublicSync } from '../api/public-sync.js';
+import { RPC_MESSAGES as API_RPC_MESSAGES } from './api-connections.js';
+
+export class RpcError extends Error {
+  constructor(msg, status = 400) { super(msg); this.status = status; }
+}
+const WRITE_ROLES = Object.freeze(['admin', 'registrar', 'callcenter']);
+const posInt = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
+
+/** Карточки из списка, которые /api/db отдал бы этому человеку. */
+function visibleCards(db, user, ids) {
+  const list = [...new Set(ids.map(posInt).filter(Boolean))];
+  if (!list.length) return new Set();
+  try {
+    const sel = compile({ table: 'crm_requests', op: 'select', columns: 'id', filters: [{ col: 'id', op: 'in', val: list }] }, user, { db });
+    return new Set(db.prepare(sel.sql).all(...sel.params).map((r) => r.id));
+  } catch { return new Set(); }
+}
+function requireCard(db, user, crmRequestId) {
+  if (!user) throw new RpcError('Нужно войти в систему.', 401);
+  if (!crmRequestId || !visibleCards(db, user, [crmRequestId]).has(crmRequestId)) throw new RpcError(MSG.noAccess, 403);
+}
+function requireWriter(db, user, crmRequestId) {
+  requireCard(db, user, crmRequestId);
+  if (!hasAnyRole(user, WRITE_ROLES)) throw new RpcError(MSG.noEdit, 403);
+  try {
+    compile({ table: 'crm_requests', op: 'update', values: { note: '' }, filters: [{ col: 'id', op: 'eq', val: crmRequestId }] }, user, { db });
+  } catch { throw new RpcError(MSG.noEdit, 403); }
+}
+function requireMain(db) {
+  try {
+    const i = db.prepare('SELECT role FROM branch_identity WHERE id = 1').get();
+    if (i && i.role === 'secondary') throw new RpcError(MSG.mainOnly, 409);
+  } catch (e) { if (e instanceof RpcError) throw e; }
+}
+/** Заявка и проверка её карточки — для решений. */
+function forDecision(db, args, user) {
+  requireMain(db);
+  const row = requestRow(db, args && args.id);
+  requireWriter(db, user, row.crm_request_id);
+  return row;
+}
+
+export function apiBookingList(db, args, user) {
+  const id = posInt(args && args.crm_request_id);
+  requireCard(db, user, id);
+  return { items: requestsOfCard(db, id) };
+}
+
+export function apiBookingCandidates(db, args, user) {
+  const row = requestRow(db, args && args.id);
+  requireCard(db, user, row.crm_request_id);
+  return { items: cardCandidates(db, row.id) };
+}
+
+export async function apiBookingConfirm(db, args, user) {
+  const row = forDecision(db, args, user);
+  const out = await confirmBooking(db, { id: row.id, patientId: args && args.patient_id }, user);
+  wakePublicSync();
+  return { id: row.id, status: out.request.status, visit_id: out.visit.id, visit_date: out.visit.visit_date,
+    already: !!out.already, ...(out.cross_branch ? { cross_branch: out.cross_branch } : {}) };
+}
+
+export function apiBookingOffer(db, args, user) {
+  const row = forDecision(db, args, user);
+  const out = offerOtherTime(db, { id: row.id, start: args && args.start, patientId: args && args.patient_id }, user);
+  wakePublicSync();
+  return { id: out.id, status: out.status, offered_start: out.offered_start, offer_until: out.offer_until };
+}
+
+export function apiBookingDecline(db, args, user) {
+  const row = forDecision(db, args, user);
+  const out = declineBooking(db, { id: row.id, reason: args && args.reason }, user);
+  wakePublicSync();
+  return { id: out.id, status: out.status, decline_reason: out.decline_reason };
+}
+
+export function apiRequestAccept(db, args, user) {
+  const row = forDecision(db, args, user);
+  const out = acceptRequest(db, { id: row.id }, user);
+  wakePublicSync();
+  return { id: out.id, status: out.status };
+}
+
+/** Строки онлайн-записи на карточках доски — только у карточек, которые человек видит. */
+export function apiBoardMarks(db, _args, user) {
+  if (!user) throw new RpcError('Нужно войти в систему.', 401);
+  const all = boardMarks(db);
+  const seen = visibleCards(db, user, Object.keys(all));
+  const marks = {};
+  for (const [k, v] of Object.entries(all)) if (seen.has(Number(k))) marks[k] = v;
+  return { marks };
+}
+
+/** Состояние обмена с публичным сервером — экрану «API и подключения» (строка «API: Просмотр» или администратор). */
+export function apiSyncStatus(db, _args, user) {
+  if (!user) throw new RpcError('Нужно войти в систему.', 401);
+  if (!grantAllowsAdminOr(db, user, 'settings.api', 'view')) throw new RpcError(API_RPC_MESSAGES.noAccess, 403);
+  return syncStatus(db, getDataDir());
+}
+```
+
+- [ ] **Step 4: карта RPC** — `server/services/rpc/index.js`:
+
+```diff
+diff --git a/server/services/rpc/index.js b/server/services/rpc/index.js
+index 0b4be94..2489de6 100644
+--- a/server/services/rpc/index.js
++++ b/server/services/rpc/index.js
+@@ -79,6 +79,7 @@ import { lisDeviceAdd } from './lis.js';   // LIS_VENDOR_EXACT_V1 — D2: «До
+ import { lisProxyGet, lisProxySet } from './lis-proxy.js';   // LIS_PROXY_V1 — карточка «LIS Proxy»
+ import { apiSettingsGet, apiSlugSave, apiConnectionDraft, apiConnectionCreate, apiConnectionUpdate, apiConnectionReveal,
+   apiConnectionRegenerate, apiConnectionDelete, apiJournalList } from './api-connections.js';   // CLINIC_API_STEP7_V1
++import { apiBookingList, apiBookingCandidates, apiBookingConfirm, apiBookingOffer, apiBookingDecline, apiRequestAccept, apiBoardMarks, apiSyncStatus } from './api-bookings.js';   // PUBLIC_API_V1
+ import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
+ import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_V1 — своя роль одним действием
+ import { roleEffectiveGrants } from './roles-effective.js';   // ROLES_SAVE_TRUTH_V1 — что у роли есть сейчас
+@@ -627,6 +628,18 @@ export const RPC = {
+   api_connection_regenerate: (db, args, user) => apiConnectionRegenerate(db, args, user),
+   api_connection_delete:     (db, args, user) => apiConnectionDelete(db, args, user),
+   api_journal_list:          (db, args, user) => apiJournalList(db, args, user),
++  // PUBLIC_API_V1 — заявки и онлайн-запись из API (карточка CRM, доска, экран «API»).
++  // Чтение (READ_ONLY_RPCS): api_booking_list, api_booking_candidates, api_board_marks,
++  // api_sync_status; решения — записи. Обработчик — тремя аргументами: внутренний
++  // четвёртый у calendar_slots / ensure_visit (снять своё удержание) отсюда не достать.
++  api_booking_list:          (db, args, user) => apiBookingList(db, args, user),
++  api_booking_candidates:    (db, args, user) => apiBookingCandidates(db, args, user),
++  api_booking_confirm:       (db, args, user) => apiBookingConfirm(db, args, user),
++  api_booking_offer:         (db, args, user) => apiBookingOffer(db, args, user),
++  api_booking_decline:       (db, args, user) => apiBookingDecline(db, args, user),
++  api_request_accept:        (db, args, user) => apiRequestAccept(db, args, user),
++  api_board_marks:           (db, args, user) => apiBoardMarks(db, args, user),
++  api_sync_status:           (db, args, user) => apiSyncStatus(db, args, user),
+   lis_message_attach:       (db, args, user) => lisMessageAttach(db, args, user),
+   lis_message_dismiss:      (db, args, user) => lisMessageDismiss(db, args, user),
+ 
+```
+
+- [ ] **Step 5: ворота лицензии** — `server/services/control/gate.js`:
+
+```diff
+diff --git a/server/services/control/gate.js b/server/services/control/gate.js
+index 5132d59..7350610 100644
+--- a/server/services/control/gate.js
++++ b/server/services/control/gate.js
+@@ -51,6 +51,7 @@ const READ_ONLY_RPCS = new Set([
+   'lis_service_counts',   // LIS_REAL_ANALYZERS_V1_SERVICE — контроль, калибровка, запросы у прибора за сегодня; чтение
+   'lis_proxy_get',   // LIS_PROXY_V1 — включён ли LIS Proxy и адрес для лабораторных ПК; чтение
+   'api_settings_get', 'api_journal_list',   // CLINIC_API_STEP7_V1 — подключения API и журнал изменений; чтение
++  'api_booking_list', 'api_booking_candidates', 'api_board_marks', 'api_sync_status',   // PUBLIC_API_V1 — заявки из API и обмен; чтение
+   // DOCTOR_TIER_V1 — нумерация строк врача по ступени; чистое чтение, как
+   // run_report рядом: кабинет показывает прогресс и при просроченной лицензии.
+   'doctor_tier_positions',
+```
+
+- [ ] **Step 6:** тесты зелёные (5 + 2). Сторожа: `LIS_ENABLED=0 node --test server/services/rpc/index.test.js server/services/gate-fallbacks.test.js server/services/rpc/client-rpc-coverage.test.js server/services/rpc/roles-effective.test.js server/routes/licence-gate.test.js server/app-test-hygiene.test.js server/i18n-server-messages.test.js`.
+- [ ] **Step 7: коммит** «RPC онлайн-записи из API: окно карточки CRM, карты-кандидаты по номеру семьи, подтверждение, другое время, отказ, «взять в работу», строки доски, состояние обмена; видит тот, кому /api/db отдаёт карточку, решают администратор, регистратура и колл-центр; филиал — 409, лицензия — 402 на решениях».
+
+---
+
+## Task 12: Страж — на сервере лицензий нет и не будет данных пациентов; клиника говорит с публичным сервером, а не с ним (PUBLIC_API_V1)
+
+Сборщик А.
+
+**Files:**
+- Create: `server/services/api/no-patient-data-to-vendor.test.js`
+
+- [ ] **Step 1: тест** `server/services/api/no-patient-data-to-vendor.test.js`:
+
+```js
+// PUBLIC_API_V1 — СТРАЖ СПЕЦИФИКАЦИИ «Сервер»: очередь заявок — на отдельном
+// публичном сервере, НЕ на сервере лицензий; на сервере лицензий нет и не будет
+// данных пациентов.
+//
+// Проверяется двумя сторонами:
+//   1. клиника: модули API (services/api/*.js) говорят только с публичным
+//      сервером — адреса и переменной сервера лицензий в них нет; адрес по
+//      умолчанию — api.easymed.uz;
+//   2. сервер лицензий (control-plane/): в его базе нет таблиц и колонок
+//      пациентов, визитов, заявок и записей, а в маршрутах — адресов заявок и
+//      онлайн-записи. Заявка партнёра, отправленная туда по ошибке, не нашла
+//      бы, куда лечь.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { openDb as openCpDb } from '../../../control-plane/server/db/connection.js';
+import { migrate as migrateCp } from '../../../control-plane/server/db/migrate.js';
+import { DEFAULT_PUBLIC_URL } from './public-sync.js';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO = path.resolve(HERE, '..', '..', '..');
+const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/.*$/gm, '');
+
+test('клиника: модули API не знают адреса сервера лицензий; адрес обмена — api.easymed.uz', () => {
+  assert.equal(new URL(DEFAULT_PUBLIC_URL).hostname, 'api.easymed.uz');
+  const files = fs.readdirSync(HERE).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'));
+  assert.ok(files.includes('public-sync.js') && files.includes('bookings.js'));
+  const bad = [];
+  for (const f of files) {
+    const src = strip(fs.readFileSync(path.join(HERE, f), 'utf8'));
+    for (const mark of ['settings.easymed.uz', 'EASYMED_CONTROL_URL', 'install_token', '/cp/v1/']) {
+      if (src.includes(mark)) bad.push(f + ': ' + mark);
+    }
+  }
+  assert.deepEqual(bad, []);
+});
+
+test('сервер лицензий: ни таблиц, ни колонок пациентов, визитов, заявок и записей', () => {
+  const db = openCpDb(':memory:');
+  migrateCp(db);
+  const BAD = /patient|visit|diagnos|appointment|booking|slot|request_id|api_request|crm|full_name_ru|date_of_birth/i;
+  const bad = [];
+  for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()) {
+    if (BAD.test(name)) bad.push(name);
+    for (const c of db.prepare(`PRAGMA table_info(${name})`).all()) if (BAD.test(c.name)) bad.push(name + '.' + c.name);
+  }
+  assert.deepEqual(bad, []);
+});
+
+test('сервер лицензий: в маршрутах нет адресов заявок, онлайн-записи и очереди', () => {
+  const dir = path.join(REPO, 'control-plane', 'server', 'routes');
+  const bad = [];
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js') && !x.endsWith('.test.js'))) {
+    const src = strip(fs.readFileSync(path.join(dir, f), 'utf8'));
+    for (const m of src.matchAll(/['"`](\/[^'"`]*)['"`]/g)) {
+      // «/requests» панели производителя (admin.js) — просьбы клиник о модулях, не заявки пациентов.
+      if (/\/(appointments|inbox|_sync|slots|patients)\b/.test(m[1])) bad.push(f + ': ' + m[1]);
+    }
+  }
+  assert.deepEqual(bad, []);
+});
+```
+
+- [ ] **Step 2:** `node --test server/services/api/no-patient-data-to-vendor.test.js` → зелёный (3 теста).
+- [ ] **Step 3: проверка, что страж ловит.** Временно вписать в `server/services/api/public-sync.js` строку `const X = 'https://settings.easymed.uz';` → тест красный («public-sync.js: settings.easymed.uz»). Убрать строку → зелёный. Не коммитить временную строку.
+- [ ] **Step 4: коммит** «Страж спецификации «Сервер»: модули API клиники не знают адреса сервера лицензий, а в базе и маршрутах сервера лицензий нет пациентов, визитов, записей и очереди заявок».
+
+---
+
+## Task 13: Окно «Онлайн-запись через API» карточки заявки и строка на доске — модуль экрана (PUBLIC_API_V1)
+
+Сборщик Б. Нужны закоммиченные задачи 2 и 11.
+
+**Files:**
+- Create: `public/js/admin/__tests__/crm-api-booking.test.mjs`, `public/js/admin/views/crm-api-booking.js`
+- Modify: `public/js/admin/i18n-strings.js` (блок в конец), `public/css/admin-views.css` (в конец)
+
+- [ ] **Step 1: падающий тест** `public/js/admin/__tests__/crm-api-booking.test.mjs` (стенд — `api-harness.mjs` шага 7):
+
+```js
+// PUBLIC_API_V1 — окно «Онлайн-запись через API» карточки заявки и строка на
+// доске: что выбрал пациент и до какого времени держим; «Подтвердить запись» —
+// только после выбора карты; новая карта — окном регистрации; другое время —
+// из свободного времени врача; отказ — с причиной; заявка без времени — «Взять
+// в работу»; отказ сервера «время занято» — словами шаблона.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { reset, onRpc, calls, walk, textOf, byAttr, buttonByText, lastToast, tick } from './api-harness.mjs';
+
+const { apiBookingBox, apiBoardLine, loadApiMarks, errorText } = await import('../views/crm-api-booking.js');
+
+const ITEM = {
+  id: 41, public_id: 'rq_e2a9f0c1', kind: 'appointment', status: 'pending', partner_status: 'pending',
+  connection: { id: 3, name: 'med24.uz' }, external_id: 'med-8f2c41', received_at: '2030-03-11T04:01:00Z', picked_at: '2030-03-11T04:01:10Z',
+  doctor: { id: 7, name: 'Петров Пётр Петрович' }, branch: { id: 1, name: 'Главный корпус' },
+  what: { kind: 'consultation', name: 'Первичный приём', price: 150000 },
+  start_at: '2030-03-12T05:00:00Z', duration_minutes: 30, hold_until: '2030-03-11T04:31:00Z', offered_start: null, offer_until: null,
+  decline_reason: '', patient_name: 'Абдурахмонов Фаррух', patient_phone: '+998901234567', comment: 'Записываю сына, 5 лет',
+  patient: null, visit_id: null, partner_cancel_at: null, can: { confirm: true, offer: true, decline: true, accept: false },
+};
+const CANDS = [
+  { id: 1, full_name: 'Абдурахмонов Фаррух', mrn: 'A-1', date_of_birth: '1988-03-12', why: 'phone_name' },
+  { id: 2, full_name: 'Абдурахмонов Тимур', mrn: 'A-2', date_of_birth: '2021-07-04', why: 'phone' },
+];
+function mount(items = [ITEM], opts = {}) {
+  reset();
+  onRpc('api_booking_list', () => ({ items }));
+  onRpc('api_booking_candidates', () => ({ items: CANDS }));
+  const box = apiBookingBox({ id: 900 }, opts);
+  return box;
+}
+const btn = (root, k) => byAttr(root, 'data-apib', k)[0];
+
+test('окно: подключение, номер у партнёра, что выбрал пациент и цена, «держим до», комментарий; данные — как есть', async () => {
+  const box = mount();
+  await tick();
+  assert.equal(box.style.display, '');
+  const t = textOf(box);
+  for (const s of ['Онлайн-запись через API', 'med24.uz', 'med-8f2c41', 'Петров Пётр Петрович', 'Первичный приём', '150 000 сум',
+    'Главный корпус', 'Ждёт подтверждения', 'Записываю сына, 5 лет', 'Карта пациента', 'тот же телефон и имя']) {
+    assert.ok(t.includes(s), 'нет: ' + s);
+  }
+  assert.match(t, /время держим за пациентом до \d\d:\d\d/);
+});
+
+test('без заявок из API — блок скрыт', async () => {
+  const box = mount([]);
+  await tick();
+  assert.equal(box.style.display, 'none');
+  assert.equal(box.children.length, 0);
+});
+
+test('«Подтвердить запись» — только после выбора карты; подтверждение уходит с выбранной картой', async () => {
+  const box = mount();
+  const changed = [];
+  await tick();
+  assert.ok('disabled' in btn(box, 'confirm').attrs, 'до выбора карты — выключено');
+  const pick = walk(box).find((n) => n.attrs && n.attrs['data-candidate'] === '2');
+  buttonByText(pick, /Выбрать/).click();
+  await tick();
+  assert.ok(!('disabled' in btn(box, 'confirm').attrs));
+  onRpc('api_booking_confirm', (b) => { changed.push(b); return { id: 41, status: 'confirmed', visit_id: 501, already: false }; });
+  btn(box, 'confirm').click();
+  await tick(40);
+  assert.deepEqual(changed, [{ id: 41, patient_id: 2 }]);
+  assert.equal(lastToast(), 'Запись подтверждена. Визит в календаре врача, партнёр получит уведомление.');
+});
+
+test('«Создать карту» — окно регистрации с именем и телефоном из заявки; новая карта становится выбранной', async () => {
+  const asked = [];
+  const box = mount([ITEM], { newPatient: async (prefill) => { asked.push(prefill); return { id: 77, full_name: 'Абдурахмонов Али', mrn: 'A-77' }; } });
+  await tick();
+  buttonByText(box, /Создать карту/).click();
+  await tick();
+  assert.deepEqual(asked, [{ full_name: 'Абдурахмонов Фаррух', phone: '+998901234567' }]);
+  assert.ok(textOf(box).includes('Абдурахмонов Али') && textOf(box).includes('Новая карта'));
+  onRpc('api_booking_confirm', (b) => ({ id: 41, status: 'confirmed', visit_id: 1, b }));
+  btn(box, 'confirm').click();
+  await tick(40);
+  assert.deepEqual(calls.filter((c) => c[0] === 'api_booking_confirm').map((c) => c[1]), [{ id: 41, patient_id: 77 }]);
+});
+
+test('другое время — из свободного времени врача на выбранный день; отказ — с причиной', async () => {
+  const box = mount();
+  onRpc('calendar_slots', () => ({ slots: [{ start: '14:00', start_iso: '2030-03-12T09:00:00.000Z' }, { start: '14:15', start_iso: '2030-03-12T09:15:00.000Z' }] }));
+  await tick();
+  btn(box, 'offer').click();
+  await tick();
+  const slotsCall = calls.find((c) => c[0] === 'calendar_slots');
+  assert.deepEqual(slotsCall[1], { doctor_id: 7, date: '2030-03-12', duration_minutes: 30, step_minutes: 15 });
+  onRpc('api_booking_offer', () => ({ id: 41, status: 'offered' }));
+  buttonByText(box, /Отправить предложение/).click();
+  await tick(40);
+  assert.deepEqual(calls.find((c) => c[0] === 'api_booking_offer')[1], { id: 41, start: '2030-03-12T09:00:00.000Z' });
+
+  const box2 = mount();
+  await tick();
+  btn(box2, 'decline').click();
+  await tick();
+  const form = byAttr(box2, 'data-apib-form', 'decline')[0];
+  const sel = walk(form).find((n) => n.tagName === 'SELECT');
+  buttonByText(form, /Отклонить запись/).click();
+  assert.equal(lastToast(), 'Выберите причину отказа.');
+  sel.value = 'doctor_unavailable';
+  onRpc('api_booking_decline', () => ({ id: 41, status: 'declined' }));
+  buttonByText(form, /Отклонить запись/).click();
+  await tick(40);
+  assert.deepEqual(calls.find((c) => c[0] === 'api_booking_decline')[1], { id: 41, reason: 'doctor_unavailable' });
+});
+
+test('заявка без времени — «Взять в работу»; отказ сервера «время занято» — шаблоном', async () => {
+  const box = mount([{ ...ITEM, kind: 'request', status: 'new', what: null, doctor: null, start_at: null, can: { confirm: false, offer: false, decline: false, accept: true } }]);
+  await tick();
+  assert.ok(textOf(box).includes('Заявка через API'));
+  assert.equal(btn(box, 'confirm'), undefined);
+  onRpc('api_request_accept', () => ({ id: 41, status: 'accepted' }));
+  btn(box, 'accept').click();
+  await tick(40);
+  assert.deepEqual(calls.find((c) => c[0] === 'api_request_accept')[1], { id: 41 });
+  assert.equal(errorText({ code: 'slot_taken', params: { doctor: 'Петров', from: '10:00', to: '10:30' }, message: 'x' }),
+    'Это время занято: у врача Петров уже есть приём 10:00–10:30. Выберите другое время.');
+});
+
+test('доска: строка онлайн-записи — подключение · API и «ждёт подтверждения до»; без заявок — ничего', async () => {
+  reset();
+  onRpc('api_board_marks', () => ({ marks: { 900: [{ id: 41, kind: 'appointment', status: 'pending', connection_name: 'med24.uz', hold_until: '2030-03-11T04:31:00Z' }] } }));
+  const marks = await loadApiMarks();
+  const line = apiBoardLine(marks[900]);
+  assert.equal(line.attrs['data-api-mark'], 'pending');
+  assert.match(textOf(line), /med24\.uz · APIждёт подтверждения до \d\d:\d\d$/);
+  assert.equal(apiBoardLine(undefined), null);
+  assert.match(textOf(apiBoardLine([{ kind: 'request', status: 'new', connection_name: 'Symptex' }])), /новая заявка/);
+});
+```
+
+- [ ] **Step 2:** `node --experimental-vm-modules --test public/js/admin/__tests__/crm-api-booking.test.mjs` → падает: `Cannot find module …/views/crm-api-booking.js`.
+- [ ] **Step 3: модуль** `public/js/admin/views/crm-api-booking.js`. Новую карту заводит окно, которое передаёт вызывающий (`newPatient`), — модуль не тянет за собой окно регистрации и проверяется на поддельном DOM:
+
+```js
+// PUBLIC_API_V1 — «ОНЛАЙН-ЗАПИСЬ ЧЕРЕЗ API» В КАРТОЧКЕ ЗАЯВКИ CRM и строка
+// онлайн-записи на карточке доски (макет screen-crm.js: «Карточка заявки из
+// API», «Пациент выбрал», «Ждёт подтверждения … держим до 14:32», выбор карты,
+// «Подтвердить запись / Предложить другое время / Отклонить»).
+//
+// Решение владельца 3: заявка карту пациента не заводит. Регистратор выбирает,
+// кто придёт (на одном номере бывает вся семья), или заводит новую карту — и
+// только тогда «Подтвердить запись» включается. Всё решает сервер
+// (rpc/api-bookings.js): экран показывает, что можно, и зовёт RPC.
+//
+// Данные клиники и пациента (имена, номера, комментарий) — текстовыми узлами,
+// не через tr(): это не фразы интерфейса.
+import { supabase } from '../../supabase.js';
+import { h, Icon, Tag, toast, fmtDateTime, clear } from '../ui.js';
+import { tr, trf } from '../i18n.js';
+import { STATUS_LABEL, DECLINE_LABEL, STAFF_DECLINE_REASONS } from '../../shared/api-booking.js';
+
+const txt = (s) => document.createTextNode(String(s == null ? '' : s));
+const pad = (n) => String(n).padStart(2, '0');
+const hhmm = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+const dayOf = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
+const sum = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const TONE = Object.freeze({ new: 'info', accepted: 'teal', pending: 'warn', confirming: 'warn', offered: 'info', confirmed: 'ok',
+  arrived: 'ok', declined: 'crit', expired: 'crit', cancelled: '', no_show: 'crit' });
+
+async function call(name, args) {
+  const { data, error } = await supabase.rpc(name, args);
+  if (error) {
+    const e = new Error(error.message || 'Не удалось выполнить запрос.');
+    e.code = error.code || '';
+    e.params = error.params || null;
+    throw e;
+  }
+  return data;
+}
+
+/** Отказ сервера словами: «время занято» — шаблоном с подстановкой, остальное — словарём (сервер шлёт шаблоны). */
+export function errorText(e) {
+  if (e && e.code === 'slot_taken' && e.params) {
+    return trf('Это время занято: у врача {doctor} уже есть приём {from}–{to}. Выберите другое время.', e.params);
+  }
+  return tr((e && e.message) || 'Не удалось выполнить запрос.');
+}
+
+/** Статус заявки: метка и что это значит сейчас. */
+export function statusLine(it) {
+  const tag = Tag(STATUS_LABEL[it.status] || it.status, { kind: TONE[it.status] || '' });
+  let note = null;
+  if (it.status === 'pending' && it.hold_until) note = trf('время держим за пациентом до {time}', { time: hhmm(it.hold_until) });
+  else if (it.status === 'offered') note = trf('предложено {when}; ждём ответа партнёра до {time}', { when: fmtDateTime(it.offered_start), time: hhmm(it.offer_until) });
+  else if (it.status === 'confirmed' && it.partner_cancel_at) note = tr('Партнёр сообщил об отмене, но визит уже в работе. Решите вручную.');
+  else if (it.status === 'confirmed') note = tr('визит создан, партнёр получит уведомление');
+  else if ((it.status === 'declined' || it.status === 'expired') && it.decline_reason) note = tr(DECLINE_LABEL[it.decline_reason] || '');
+  return h('span', { class: 'apib-status' }, tag, note ? h('span', { class: 'muted apib-note' }, note) : null);
+}
+
+function choiceEl(it) {
+  const top = h('span', null);
+  if (it.doctor) top.appendChild(h('b', null, txt(it.doctor.name)));
+  if (it.what) {
+    top.appendChild(txt(' · '));
+    top.appendChild(txt(it.what.name));
+    top.appendChild(txt(' · '));
+    top.appendChild(txt(trf('{sum} сум', { sum: sum(it.what.price) })));
+  }
+  const when = h('span', { class: 'apib-when' }, txt(fmtDateTime(it.start_at)));
+  if (it.branch) { when.appendChild(txt(' · ')); when.appendChild(txt(it.branch.name)); }
+  return h('span', { class: 'apib-choice' }, top, when);
+}
+
+/**
+ * Окно «Онлайн-запись через API» карточки заявки. Пока у карточки нет заявок из
+ * API — пустой скрытый блок (карточки из звонков его не видят).
+ * @param {{id:number}} card строка crm_requests
+ * @param {{onChanged?:Function, newPatient?:(prefill:{full_name:string, phone:string})=>Promise<{id:number, full_name:string, mrn?:string}|null>}} opts
+ */
+export function apiBookingBox(card, { onChanged = () => {}, newPatient = null } = {}) {
+  const root = h('div', { class: 'apib-box', 'data-api-booking': String(card && card.id) });
+  root.style.display = 'none';
+  let items = [];
+  const picked = new Map();
+  const candidates = new Map();
+  const open = new Map();   // id заявки → 'offer' | 'decline'
+  let busy = false;
+
+  async function load() {
+    try { items = ((await call('api_booking_list', { crm_request_id: card.id })) || {}).items || []; } catch { items = []; }
+    paint();
+  }
+  async function loadCandidates(it) {
+    if (candidates.has(it.id)) return;
+    candidates.set(it.id, null);
+    try { candidates.set(it.id, ((await call('api_booking_candidates', { id: it.id })) || {}).items || []); } catch { candidates.set(it.id, []); }
+    paint();
+  }
+  async function act(fn, okText) {
+    if (busy) return;
+    busy = true;
+    try {
+      const out = await fn();
+      toast(okText(out), 'ok');
+      open.clear();
+      onChanged(out);
+      await load();
+    } catch (e) {
+      toast(errorText(e), 'fail');
+    } finally { busy = false; }
+  }
+
+  function pickerEl(it) {
+    const list = candidates.get(it.id);
+    if (list === undefined) loadCandidates(it);
+    const chosen = picked.get(it.id) || null;
+    const rows = (list || []).map((p) => h('div', { class: 'apib-cand' + (chosen && chosen.id === p.id ? ' on' : ''), 'data-candidate': String(p.id) },
+      h('span', null, h('b', null, txt(p.full_name)), p.date_of_birth ? txt(' · ' + p.date_of_birth) : null,
+        h('span', { class: 'muted' }, ' — ', p.why === 'phone_name' ? 'тот же телефон и имя' : 'тот же телефон')),
+      chosen && chosen.id === p.id ? Tag('Выбрана', { kind: 'ok' })
+        : h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => { picked.set(it.id, p); paint(); } }, 'Выбрать')));
+    const createRow = newPatient ? h('div', { class: 'apib-cand apib-cand-new' + (chosen && chosen.created ? ' on' : '') },
+      h('span', null, chosen && chosen.created ? txt(chosen.full_name) : 'Нет в списке'),
+      chosen && chosen.created ? Tag('Новая карта', { kind: 'ok' })
+        : h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: async () => {
+          const p = await newPatient({ full_name: it.patient_name, phone: it.patient_phone });
+          if (p && p.id) { picked.set(it.id, { ...p, created: true }); paint(); }
+        } }, Icon('Plus', { size: 14 }), ' ', 'Создать карту')) : null;
+    return h('div', { class: 'apib-picker' },
+      h('p', { class: 'apib-h' }, 'Карта пациента'),
+      h('p', { class: 'muted apib-hint' }, 'Заявка карту не создаёт. Выберите, кто придёт на приём, или заведите новую карту — затем подтвердите запись.'),
+      list === null || list === undefined ? h('p', { class: 'muted' }, 'Загрузка…') : null,
+      ...rows, createRow);
+  }
+
+  function offerForm(it) {
+    const date = h('input', { type: 'date', value: dayOf(it.start_at), 'aria-label': 'Дата' });
+    const time = h('select', { 'aria-label': 'Время' });
+    const empty = h('p', { class: 'muted', style: { display: 'none' } }, 'Свободного времени в этот день нет.');
+    async function fill() {
+      clear(time);
+      empty.style.display = 'none';
+      let slots = [];
+      try {
+        slots = ((await call('calendar_slots', { doctor_id: it.doctor.id, date: date.value, duration_minutes: it.duration_minutes, step_minutes: 15 })) || {}).slots || [];
+      } catch { slots = []; }
+      for (const s of slots) time.appendChild(h('option', { value: s.start_iso }, txt(s.start)));
+      if (slots.length) time.value = slots[0].start_iso;
+      else empty.style.display = '';
+    }
+    date.addEventListener('change', fill);
+    fill();
+    const send = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => {
+      if (!time.value) { toast('Выберите время.', 'warn'); return; }
+      const p = picked.get(it.id);
+      act(() => call('api_booking_offer', { id: it.id, start: time.value, ...(p ? { patient_id: p.id } : {}) }),
+        () => tr('Партнёру предложено другое время. Оно держится 30 минут.'));
+    } }, Icon('Send', { size: 14 }), ' ', 'Отправить предложение');
+    return h('div', { class: 'apib-form', 'data-apib-form': 'offer' }, date, time, send, empty);
+  }
+
+  function declineForm(it) {
+    const reason = h('select', { 'aria-label': 'Причина' },
+      h('option', { value: '' }, 'Выберите причину'),
+      ...STAFF_DECLINE_REASONS.map((r) => h('option', { value: r }, DECLINE_LABEL[r])));
+    const send = h('button', { class: 'btn btn-outline btn-sm apib-danger', type: 'button', onclick: () => {
+      if (!reason.value) { toast('Выберите причину отказа.', 'warn'); return; }
+      act(() => call('api_booking_decline', { id: it.id, reason: reason.value }), () => tr('Запись отклонена. Партнёр получит уведомление.'));
+    } }, 'Отклонить запись');
+    return h('div', { class: 'apib-form', 'data-apib-form': 'decline' }, reason, send);
+  }
+
+  function actionsEl(it) {
+    const chosen = picked.get(it.id) || null;
+    const confirm = h('button', { class: 'btn btn-primary btn-sm', type: 'button', disabled: !it.can.confirm || !chosen, 'data-apib': 'confirm',
+      onclick: () => {
+        const p = picked.get(it.id);
+        if (!p) { toast('Выберите карту пациента или заведите новую.', 'warn'); return; }
+        act(() => call('api_booking_confirm', { id: it.id, patient_id: p.id }), (out) => (out && out.cross_branch && !out.cross_branch.published
+          ? tr('Запись подтверждена, но в том здании о ней ещё не знают: обмен подтвердит позже.')
+          : tr('Запись подтверждена. Визит в календаре врача, партнёр получит уведомление.')));
+      } }, Icon('Check', { size: 14 }), ' ', 'Подтвердить запись');
+    const toggle = (kind) => { open.set(it.id, open.get(it.id) === kind ? null : kind); paint(); };
+    const offer = h('button', { class: 'btn btn-outline btn-sm', type: 'button', disabled: !it.can.offer, 'data-apib': 'offer', onclick: () => toggle('offer') },
+      Icon('Calendar', { size: 14 }), ' ', 'Предложить другое время');
+    const decline = h('button', { class: 'btn btn-ghost btn-sm apib-danger', type: 'button', disabled: !it.can.decline, 'data-apib': 'decline', onclick: () => toggle('decline') },
+      'Отклонить');
+    const form = open.get(it.id) === 'offer' ? offerForm(it) : open.get(it.id) === 'decline' ? declineForm(it) : null;
+    return h('div', null, h('div', { class: 'apib-actions' }, it.can.confirm ? confirm : null, offer, decline), form);
+  }
+
+  function itemEl(it) {
+    const rows = [
+      ['Подключение', txt(it.connection && it.connection.name)],
+      ['Номер у партнёра', it.external_id ? h('span', { class: 'cell-mono' }, txt(it.external_id)) : txt('—')],
+      ['Пришла', txt(fmtDateTime(it.received_at))],
+    ];
+    if (it.kind === 'appointment') rows.push(['Пациент выбрал', choiceEl(it)]);
+    rows.push(['Статус', statusLine(it)]);
+    if (it.patient) rows.push(['Карта пациента', txt(it.patient.full_name + (it.patient.mrn ? ' · ' + it.patient.mrn : ''))]);
+    const parts = [
+      h('h5', { class: 'apib-title' }, Icon('Key', { size: 15 }), ' ', it.kind === 'appointment' ? 'Онлайн-запись через API' : 'Заявка через API'),
+      h('dl', { class: 'apib-kv' }, ...rows.flatMap(([k, v]) => [h('dt', null, k), h('dd', null, v)])),
+    ];
+    if (it.comment) parts.push(h('div', { class: 'apib-comment' }, h('span', { class: 'muted' }, 'Комментарий пациента'), h('p', null, txt(it.comment))));
+    if (it.can.confirm) parts.push(pickerEl(it));
+    if (it.can.confirm || it.can.offer || it.can.decline) parts.push(actionsEl(it));
+    if (it.can.accept) {
+      parts.push(h('div', { class: 'apib-actions' }, h('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-apib': 'accept',
+        onclick: () => act(() => call('api_request_accept', { id: it.id }), () => tr('Заявка взята в работу. Партнёр получит уведомление.')) },
+      Icon('Check', { size: 14 }), ' ', 'Взять в работу')));
+    }
+    return h('div', { class: 'apib-item', 'data-api-request': String(it.id) }, ...parts);
+  }
+
+  function paint() {
+    clear(root);
+    root.style.display = items.length ? '' : 'none';
+    for (const it of items) root.appendChild(itemEl(it));
+  }
+
+  root.reload = load;
+  load();
+  return root;
+}
+
+/** Строки онлайн-записи доски одним запросом: { [id карточки]: [...] }. Ошибка — пусто, доска рисуется как была. */
+export async function loadApiMarks() {
+  try { return ((await call('api_board_marks', {})) || {}).marks || {}; } catch { return {}; }
+}
+
+/** Строка на карточке доски: «med24.uz · API — ждёт подтверждения до 14:32». */
+export function apiBoardLine(marks) {
+  const m = Array.isArray(marks) && marks.length ? marks[0] : null;
+  if (!m) return null;
+  let what;
+  if (m.status === 'pending') what = trf('ждёт подтверждения до {time}', { time: hhmm(m.hold_until) });
+  else if (m.status === 'offered') what = trf('предложено другое время, ждём ответа до {time}', { time: hhmm(m.offer_until) });
+  else if (m.kind === 'request') what = m.status === 'new' ? tr('новая заявка') : tr('заявка в работе');
+  else what = tr(STATUS_LABEL[m.status] || '');
+  return h('div', { class: 'crm-card-api', 'data-api-mark': m.status },
+    Icon('Key', { size: 12 }), h('b', null, txt(m.connection_name), txt(' · API')), h('span', null, what));
+}
+```
+
+- [ ] **Step 4: словарь** — блок в конец `STRINGS`:
+
+```js
+  // PUBLIC_API_V1 — задача 13: окно «Онлайн-запись через API» и строка на доске
+  "время держим за пациентом до {time}": {"en":"the time is held for the patient until {time}","ru":"время держим за пациентом до {time}","uz":"vaqt bemor uchun {time} gacha band qilingan"},   // PUBLIC_API_V1
+  "предложено {when}; ждём ответа партнёра до {time}": {"en":"offered {when}; waiting for the partner's answer until {time}","ru":"предложено {when}; ждём ответа партнёра до {time}","uz":"{when} taklif qilindi; hamkor javobini {time} gacha kutamiz"},   // PUBLIC_API_V1
+  "Партнёр сообщил об отмене, но визит уже в работе. Решите вручную.": {"en":"The partner reported a cancellation, but the visit is already in progress. Decide manually.","ru":"Партнёр сообщил об отмене, но визит уже в работе. Решите вручную.","uz":"Hamkor bekor qilinganini xabar qildi, lekin tashrif allaqachon ishda. Qo‘lda hal qiling."},   // PUBLIC_API_V1
+  "визит создан, партнёр получит уведомление": {"en":"the visit was created, the partner will be notified","ru":"визит создан, партнёр получит уведомление","uz":"tashrif yaratildi, hamkor xabarnoma oladi"},   // PUBLIC_API_V1
+  "тот же телефон и имя": {"en":"same phone and name","ru":"тот же телефон и имя","uz":"o‘sha telefon va ism"},   // PUBLIC_API_V1
+  "тот же телефон": {"en":"same phone","ru":"тот же телефон","uz":"o‘sha telefon"},   // PUBLIC_API_V1
+  "Выбрана": {"en":"Selected","ru":"Выбрана","uz":"Tanlandi"},   // PUBLIC_API_V1
+  "Новая карта": {"en":"New card","ru":"Новая карта","uz":"Yangi karta"},   // PUBLIC_API_V1
+  "Нет в списке": {"en":"Not on the list","ru":"Нет в списке","uz":"Ro‘yxatda yo‘q"},   // PUBLIC_API_V1
+  "Создать карту": {"en":"Create a card","ru":"Создать карту","uz":"Karta yaratish"},   // PUBLIC_API_V1
+  "Заявка карту не создаёт. Выберите, кто придёт на приём, или заведите новую карту — затем подтвердите запись.": {"en":"The request does not create a card. Choose who will come to the appointment or create a new card — then confirm the booking.","ru":"Заявка карту не создаёт. Выберите, кто придёт на приём, или заведите новую карту — затем подтвердите запись.","uz":"Ariza karta yaratmaydi. Qabulga kim kelishini tanlang yoki yangi karta oching — keyin yozilishni tasdiqlang."},   // PUBLIC_API_V1
+  "Свободного времени в этот день нет.": {"en":"There is no free time on this day.","ru":"Свободного времени в этот день нет.","uz":"Bu kunda bo‘sh vaqt yo‘q."},   // PUBLIC_API_V1
+  "Выберите время.": {"en":"Choose a time.","ru":"Выберите время.","uz":"Vaqtni tanlang."},   // PUBLIC_API_V1
+  "Партнёру предложено другое время. Оно держится 30 минут.": {"en":"Another time was offered to the partner. It is held for 30 minutes.","ru":"Партнёру предложено другое время. Оно держится 30 минут.","uz":"Hamkorga boshqa vaqt taklif qilindi. U 30 daqiqa band qilinadi."},   // PUBLIC_API_V1
+  "Отправить предложение": {"en":"Send the offer","ru":"Отправить предложение","uz":"Taklifni yuborish"},   // PUBLIC_API_V1
+  "Выберите причину": {"en":"Choose a reason","ru":"Выберите причину","uz":"Sababni tanlang"},   // PUBLIC_API_V1
+  "Запись отклонена. Партнёр получит уведомление.": {"en":"The booking was declined. The partner will be notified.","ru":"Запись отклонена. Партнёр получит уведомление.","uz":"Yozilish rad etildi. Hamkor xabarnoma oladi."},   // PUBLIC_API_V1
+  "Отклонить запись": {"en":"Decline the booking","ru":"Отклонить запись","uz":"Yozilishni rad etish"},   // PUBLIC_API_V1
+  "Запись подтверждена, но в том здании о ней ещё не знают: обмен подтвердит позже.": {"en":"The booking is confirmed, but that building does not know about it yet: the exchange will confirm it later.","ru":"Запись подтверждена, но в том здании о ней ещё не знают: обмен подтвердит позже.","uz":"Yozilish tasdiqlandi, lekin u binoda bu haqda hali bilishmaydi: almashinuv keyinroq tasdiqlaydi."},   // PUBLIC_API_V1
+  "Запись подтверждена. Визит в календаре врача, партнёр получит уведомление.": {"en":"The booking is confirmed. The visit is in the doctor's calendar, the partner will be notified.","ru":"Запись подтверждена. Визит в календаре врача, партнёр получит уведомление.","uz":"Yozilish tasdiqlandi. Tashrif shifokor kalendarida, hamkor xabarnoma oladi."},   // PUBLIC_API_V1
+  "Предложить другое время": {"en":"Offer another time","ru":"Предложить другое время","uz":"Boshqa vaqt taklif qilish"},   // PUBLIC_API_V1
+  "Подтвердить запись": {"en":"Confirm the booking","ru":"Подтвердить запись","uz":"Yozilishni tasdiqlash"},   // PUBLIC_API_V1
+  "Номер у партнёра": {"en":"Partner's number","ru":"Номер у партнёра","uz":"Hamkordagi raqam"},   // PUBLIC_API_V1
+  "Пришла": {"en":"Received","ru":"Пришла","uz":"Kelgan vaqti"},   // PUBLIC_API_V1
+  "Пациент выбрал": {"en":"The patient chose","ru":"Пациент выбрал","uz":"Bemor tanladi"},   // PUBLIC_API_V1
+  "Онлайн-запись через API": {"en":"Online booking via the API","ru":"Онлайн-запись через API","uz":"API orqali onlayn yozilish"},   // PUBLIC_API_V1
+  "Заявка через API": {"en":"Request via the API","ru":"Заявка через API","uz":"API orqali ariza"},   // PUBLIC_API_V1
+  "Комментарий пациента": {"en":"Patient's comment","ru":"Комментарий пациента","uz":"Bemor izohi"},   // PUBLIC_API_V1
+  "Заявка взята в работу. Партнёр получит уведомление.": {"en":"The request was taken into work. The partner will be notified.","ru":"Заявка взята в работу. Партнёр получит уведомление.","uz":"Ariza ishga olindi. Hamkor xabarnoma oladi."},   // PUBLIC_API_V1
+  "ждёт подтверждения до {time}": {"en":"awaiting confirmation until {time}","ru":"ждёт подтверждения до {time}","uz":"{time} gacha tasdiqlashni kutmoqda"},   // PUBLIC_API_V1
+  "предложено другое время, ждём ответа до {time}": {"en":"another time offered, waiting for an answer until {time}","ru":"предложено другое время, ждём ответа до {time}","uz":"boshqa vaqt taklif qilindi, javobni {time} gacha kutamiz"},   // PUBLIC_API_V1
+  "новая заявка": {"en":"new request","ru":"новая заявка","uz":"yangi ariza"},   // PUBLIC_API_V1
+  "заявка в работе": {"en":"request in progress","ru":"заявка в работе","uz":"ariza ishda"},   // PUBLIC_API_V1
+```
+
+- [ ] **Step 5: стили** — в конец `public/css/admin-views.css`:
+
+```css
+/* PUBLIC_API_V1 — «Онлайн-запись через API» в карточке заявки CRM и строка онлайн-записи на карточке доски */
+.apib-box { display: grid; gap: 10px; margin: 4px 0 12px; }
+.apib-item { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--teal-200, #b2dfdb); border-radius: 12px; background: var(--teal-25, #f0faf9); min-width: 0; }
+.apib-title { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13.5px; color: var(--ink-900); }
+.apib-kv { display: grid; grid-template-columns: minmax(110px, 170px) minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 13.5px; }
+.apib-kv dt { color: var(--ink-500); }
+.apib-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.apib-choice { display: flex; flex-direction: column; gap: 2px; }
+.apib-status { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.apib-note { font-size: 12.5px; }
+.apib-comment p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.apib-picker { display: grid; gap: 6px; }
+.apib-h { margin: 0; font-weight: 700; font-size: 13.5px; }
+.apib-hint { margin: 0; font-size: 12.5px; }
+.apib-cand { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--ink-100); border-radius: 8px; background: var(--white, #fff); }
+.apib-cand.on { border-color: var(--primary-600); }
+.apib-cand-new { border-style: dashed; }
+.apib-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.apib-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.apib-danger { color: var(--crit-700, #b23a2e); }
+.crm-card-api { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; font-size: 12.5px; color: var(--teal-700, #00796b); }
+@media (max-width: 560px) { .apib-kv { grid-template-columns: minmax(0, 1fr); } }
+/* /PUBLIC_API_V1 */
+```
+
+- [ ] **Step 6:** тест зелёный (7 тестов). Сторожа:
+  - `node --experimental-vm-modules --test public/js/admin/__tests__/i18n-coverage.test.mjs public/js/admin/__tests__/i18n-uz-quality.test.mjs public/js/admin/__tests__/type-scale.test.mjs public/js/admin/__tests__/icons.test.mjs public/js/admin/__tests__/english-literals-v3120.test.mjs public/js/admin/__tests__/no-import-cycles.test.mjs public/js/admin/__tests__/no-stray-globals.test.mjs`;
+  - `LIS_ENABLED=0 node --test server/services/rpc/client-rpc-coverage.test.js`;
+  - тесты рядом с видами (список — в «Правилах»).
+- [ ] **Step 7: коммит** «CRM — окно «Онлайн-запись через API»: что выбрал пациент и до какого времени держим; выбор карты из кандидатов по номеру семьи или новая карта; «Подтвердить запись» — только после выбора; другое время — из свободного времени врача; отказ с причиной; «Взять в работу»; строка онлайн-записи на карточке доски».
+
+---
+
+## Task 14: CRM — окно онлайн-записи в карточке заявки, строка на доске, новая карта окном быстрой регистрации (PUBLIC_API_V1)
+
+Сборщик Б.
+
+**Files:**
+- Create: `public/js/admin/__tests__/crm-api-board.test.mjs`
+- Modify: `public/js/admin/views/crm.js` (:64, :432, :441, :451, :1080, :1540, :3170), `public/js/admin/__tests__/crm-harness.mjs` (:88, :127), `public/js/admin/i18n-strings.js` (блок в конец)
+
+- [ ] **Step 1: стенд CRM** отвечает на RPC онлайн-записи — `public/js/admin/__tests__/crm-harness.mjs`:
+
+```diff
+diff --git a/public/js/admin/__tests__/crm-harness.mjs b/public/js/admin/__tests__/crm-harness.mjs
+index 5287af4..662ffa7 100644
+--- a/public/js/admin/__tests__/crm-harness.mjs
++++ b/public/js/admin/__tests__/crm-harness.mjs
+@@ -85,7 +85,10 @@ export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTa
+   // функция — по телу запроса) и отказ этого RPC по требованию.
+   assignees: [], assigneesError: null,
+   // CRM_UNIFY_V1 — настоящее число закрытой колонки из базы: { ключ ступени: число }.
+-  countFor: null };
++  countFor: null,
++  // PUBLIC_API_V1 — заявки из API: строки доски (api_board_marks), окно карточки
++  // (api_booking_list — массив или функция по телу), кандидаты и подтверждение.
++  apiMarks: {}, apiItems: [], apiCandidates: [] };
+ export const CALLS = [];
+ export const RPC = [];
+ const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
+@@ -125,6 +128,10 @@ globalThis.fetch = async (url, opts) => {
+       return jsonOk(typeof S.assignees === 'function' ? S.assignees(body) : (S.assignees || []));
+     }
+     if (name === 'crm_duplicate_groups') return jsonOk(S.dupGroups);
++    if (name === 'api_board_marks') return jsonOk({ marks: S.apiMarks || {} });   // PUBLIC_API_V1
++    if (name === 'api_booking_list') return jsonOk({ items: typeof S.apiItems === 'function' ? S.apiItems(body) : (S.apiItems || []) });   // PUBLIC_API_V1
++    if (name === 'api_booking_candidates') return jsonOk({ items: S.apiCandidates || [] });   // PUBLIC_API_V1
++    if (name === 'api_booking_confirm') return jsonOk({ id: body.id, status: 'confirmed', visit_id: 1, already: false });   // PUBLIC_API_V1
+     if (name === 'crm_merge_leads') {
+       if (S.mergeError) return { ok: false, json: async () => ({ error: { message: S.mergeError } }) };
+       return jsonOk({ kept_id: body.keep_id, merged_ids: body.merge_ids });
+```
+
+- [ ] **Step 2: падающий тест** `public/js/admin/__tests__/crm-api-board.test.mjs`:
+
+```js
+// PUBLIC_API_V1 — доска CRM и заявки из API: карточка онлайн-записи несёт строку
+// «med24.uz · API — ждёт подтверждения до …»; в окне карточки — блок
+// «Онлайн-запись через API»; подтверждение закрывает окно (карту пациента
+// поставил сервер — «Сохранить» окна не должно записать прежнюю поверх) и
+// перерисовывает доску. Карточки из звонков блока не видят.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { S, RPC, mk, walk, textOf, byAttr, tick, button } from './crm-harness.mjs';
+
+const { renderCrm } = await import('../views/crm.js');
+
+const LEAD = { id: 900, full_name: 'Абдурахмонов Фаррух', phone: '+998901234567', status: 'in_process', source: 'call', created_at: '2030-03-11T04:01:00Z' };
+const ITEM = {
+  id: 41, public_id: 'rq_e2a9f0c1', kind: 'appointment', status: 'pending', connection: { id: 3, name: 'med24.uz' }, external_id: 'med-1',
+  received_at: '2030-03-11T04:01:00Z', doctor: { id: 7, name: 'Петров Пётр' }, branch: null, what: { kind: 'consultation', name: 'Первичный приём', price: 150000 },
+  start_at: '2030-03-12T05:00:00Z', duration_minutes: 30, hold_until: '2030-03-11T04:31:00Z', decline_reason: '', patient_name: 'Абдурахмонов Фаррух',
+  patient_phone: '+998901234567', comment: '', patient: null, partner_cancel_at: null, can: { confirm: true, offer: true, decline: true, accept: false },
+};
+
+async function board() {
+  RPC.length = 0;
+  document.body.children.length = 0;
+  S.leads = [LEAD];
+  const root = mk('div');
+  await renderCrm(root, { onNavigate() {} });
+  await tick();
+  return root;
+}
+const cardOf = (root) => walk(root).find((n) => String(n.className).split(/\s+/).includes('crm-card'));
+async function openCard(root) {
+  const card = cardOf(root);
+  card.dispatchEvent({ type: 'click', target: card, currentTarget: card, preventDefault() {}, stopPropagation() {} });
+  await tick(60);
+  return document.body.children.find((n) => String(n.className).includes('modal'));
+}
+
+test('доска: строка онлайн-записи на карточке; без заявок из API — нет', async () => {
+  S.apiMarks = { 900: [{ id: 41, kind: 'appointment', status: 'pending', connection_name: 'med24.uz', hold_until: '2030-03-11T04:31:00Z' }] };
+  const root = await board();
+  const line = byAttr(cardOf(root), 'data-api-mark')[0];
+  assert.ok(line, 'нет строки онлайн-записи');
+  assert.match(textOf(line), /med24\.uz · APIждёт подтверждения до \d\d:\d\d/);
+  S.apiMarks = {};
+  const plain = await board();
+  assert.equal(byAttr(cardOf(plain), 'data-api-mark').length, 0);
+});
+
+test('окно карточки: блок онлайн-записи; подтверждение закрывает окно и перерисовывает доску', async () => {
+  S.apiMarks = { 900: [{ id: 41, kind: 'appointment', status: 'pending', connection_name: 'med24.uz', hold_until: '2030-03-11T04:31:00Z' }] };
+  S.apiItems = (body) => (body && body.crm_request_id === 900 ? [ITEM] : []);
+  S.apiCandidates = [{ id: 1, full_name: 'Абдурахмонов Фаррух', mrn: 'A-1', date_of_birth: '', why: 'phone_name' }];
+  const root = await board();
+  const modal = await openCard(root);
+  const box = byAttr(modal, 'data-api-booking')[0];
+  assert.ok(box && textOf(box).includes('Онлайн-запись через API'));
+  button(box, /Выбрать/).click();
+  await tick();
+  const before = RPC.filter((r) => r.name === 'api_board_marks').length;
+  button(box, /Подтвердить запись/).click();
+  await tick(80);
+  assert.deepEqual(RPC.find((r) => r.name === 'api_booking_confirm').body, { id: 41, patient_id: 1 });
+  assert.ok(!document.body.children.includes(modal), 'окно карточки закрыто');
+  assert.ok(RPC.filter((r) => r.name === 'api_board_marks').length > before, 'доска перерисована');
+  S.apiItems = []; S.apiMarks = {}; S.apiCandidates = [];
+});
+
+test('окно карточки: «Отклонить» — окно остаётся открытым, строки доски перечитаны', async () => {
+  S.apiMarks = { 900: [{ id: 41, kind: 'appointment', status: 'pending', connection_name: 'med24.uz', hold_until: '2030-03-11T04:31:00Z' }] };
+  S.apiItems = (body) => (body && body.crm_request_id === 900 ? [ITEM] : []);
+  const root = await board();
+  const modal = await openCard(root);
+  const box = byAttr(modal, 'data-api-booking')[0];
+  button(box, /^Отклонить$/).click();
+  await tick();
+  const sel = walk(box).find((n) => n.tagName === 'SELECT');
+  sel.value = 'other';
+  const before = RPC.filter((r) => r.name === 'api_board_marks').length;
+  button(box, /Отклонить запись/).click();
+  await tick(80);
+  assert.deepEqual(RPC.find((r) => r.name === 'api_booking_decline').body, { id: 41, reason: 'other' });
+  assert.ok(document.body.children.includes(modal), 'окно карточки осталось');
+  assert.ok(RPC.filter((r) => r.name === 'api_board_marks').length > before, 'строки доски перечитаны');
+  S.apiItems = []; S.apiMarks = {};
+});
+
+test('карточка звонка: блок онлайн-записи скрыт', async () => {
+  S.apiItems = [];
+  const root = await board();
+  const modal = await openCard(root);
+  const box = byAttr(modal, 'data-api-booking')[0];
+  assert.ok(box);
+  assert.equal(box.style.display, 'none');
+});
+```
+
+- [ ] **Step 3:** `node --experimental-vm-modules --test public/js/admin/__tests__/crm-api-board.test.mjs` → падает: на карточке нет `data-api-mark`, в окне нет `data-api-booking`.
+- [ ] **Step 4: доска и окно** — `public/js/admin/views/crm.js`:
+
+```diff
+diff --git a/public/js/admin/views/crm.js b/public/js/admin/views/crm.js
+index 45f4409..f0cd991 100644
+--- a/public/js/admin/views/crm.js
++++ b/public/js/admin/views/crm.js
+@@ -62,6 +62,8 @@ import { loadBoard, periodBounds, periodStart, dayStart, dayEnd, CLOSED_ALL_TIME
+ // CRM_MULTI_SOURCE_V1 — несколько источников у заявки (миграция 231). Правило
+ // чтения одно на экран и сервер: sources, иначе [source], иначе ['other'].
+ import { leadSources, toggleLeadSource, leadHasAnySource, sourceTally, MAX_LEAD_SOURCES } from '../crm-sources.js';
++// PUBLIC_API_V1 — заявки и онлайн-запись из API: окно в карточке и строка на доске.
++import { apiBookingBox, apiBoardLine, loadApiMarks } from './crm-api-booking.js';
+ 
+ // CRM_CONFIG_V1 — воронка перестала быть константой.
+ //
+@@ -429,7 +431,7 @@ async function load() {
+     // приходил после быстрого нового («Мои») и перезаписывал карточки и числа.
+     // Ответ устаревшей загрузки отбрасывается целиком; false — «не рисовать».
+     const my = ++loadSeq;
+-    const [res, tasks, tags] = await Promise.all([
++    const [res, tasks, tags, apiMarks] = await Promise.all([
+         loadBoard({
+             closedKeys: closedKeys(),
+             bounds: periodBounds(state.period, state.customFrom, state.customTo),
+@@ -439,6 +441,7 @@ async function load() {
+         // права на задачи) — доска без меток, а не без заявок.
+         loadOpenTasks(),
+         loadLeadTags(),   // CRM_HEAD_MERGE_TAGS_V1
++        loadApiMarks(),   // PUBLIC_API_V1 — строки онлайн-записи; отказ — доска без них
+     ]);
+     if (my !== loadSeq) return false;
+     if (res.error) {
+@@ -449,6 +452,7 @@ async function load() {
+     state.rows = res.rows; state.counts = res.counts; state.capped = res.capped;
+     state.openTasks = nearestOpenTasks(tasks, selfUserId());   // CRM_UNIFY_V1 — своя задача первой
+     state.leadTags = tags;
++    state.apiMarks = apiMarks;   // PUBLIC_API_V1
+     return true;
+ }
+ let loadSeq = 0;   // CRM_UNIFY_V1 (итоговое ревью) — номер последней загрузки доски
+@@ -1078,6 +1082,7 @@ async function paint() {
+             r.services ? h('div', { class: 'crm-card-line' }, h('span', { class: 'crm-card-lbl' }, 'Услуга: '), r.services.name) : null,
+             r.note ? h('div', { class: 'crm-card-note', title: r.note }, r.note) : null,
+             taskChip(r),
++            apiBoardLine((state.apiMarks || {})[r.id]),   // PUBLIC_API_V1 — «med24.uz · API — ждёт подтверждения до 14:32»
+             h('div', { class: 'crm-card-foot' },
+                 h('span', { class: 'crm-card-when' }, trf('Заявка от {d}', { d: fmtD(r.created_at) })),
+                 ...acts),
+@@ -1537,6 +1542,23 @@ async function paint() {
+         return dlg;
+     }
+ 
++    // PUBLIC_API_V1 — «Создать карту» окна онлайн-записи: то же окно быстрой
++    // регистрации, что у заявки, с именем и телефоном из заявки партнёра. Карточку
++    // заявки здесь не привязывают — карту к ней ставит подтверждение записи
++    // (rpc/api-bookings.js). Закрыли окно без карты — обещание просто не исполнится.
++    function newPatientForApi(prefill) {
++        return new Promise((resolve) => {
++            const dlg = openQuickPatientModal({ title: 'Пациент из онлайн-записи', onCreated: (p) => resolve(p && p._raw ? p._raw : p) });
++            if (!dlg) { resolve(null); return; }
++            const fio = splitFio(prefill && prefill.full_name);
++            const api = dlg.state.api;
++            api.setValue('last_name', fio.last);
++            api.setValue('first_name', fio.first);
++            api.setValue('middle_name', fio.middle);
++            api.setValue('phone', (prefill && prefill.phone) || '');
++        });
++    }
++
+     // ---------------- ЗАЯВКА: создание / редактирование ----------------
+     function requestModal(r) {
+         const isEdit = !!r;
+@@ -3168,6 +3190,17 @@ async function paint() {
+                     h('div', { style: { flex: 1 } }, field('Телефон', phoneWrap, { required: true })),
+                     h('div', { style: { flex: 1 } }, field('Дата рождения', dobWrap)))),
+                 field('Источник', srcBox),   // CRM_MULTI_SOURCE_V1 — чипы и подсказка «первый — главный»
++                // PUBLIC_API_V1 — «Онлайн-запись через API» (макет screen-crm.js): у карточек
++                // без заявок из API блок пустой и скрыт. После подтверждения окно закрывается:
++                // карту пациента карточке поставил сервер, а «Сохранить» этого окна записало бы
++                // прежнего (пустого) пациента поверх.
++                (isEdit && r.id != null) ? apiBookingBox(r, {
++                    newPatient: newPatientForApi,
++                    onChanged: (out) => {
++                        if (out && out.status === 'confirmed') { close(); paint(); return; }
++                        loadApiMarks().then((m) => { state.apiMarks = m; paintBody(); });
++                    },
++                }) : null,
+                 // CRM_REASSIGN_V1 — «кто ведёт» стоит сразу за «откуда пришла»:
+                 // это два факта о самой заявке, а всё ниже — о том, что пациенту
+                 // нужно. Видно только администратору (см. объявление поля).
+```
+
+- [ ] **Step 5: словарь**:
+
+```js
+  // PUBLIC_API_V1 — задача 14: окно новой карты из онлайн-записи
+  "Пациент из онлайн-записи": {"en":"Patient from an online booking","ru":"Пациент из онлайн-записи","uz":"Onlayn yozilishdagi bemor"},   // PUBLIC_API_V1
+```
+
+- [ ] **Step 6:** тест зелёный (4 теста). Прежние тесты CRM — все: `node --experimental-vm-modules --test` по списку `ls public/js/admin/__tests__/ | grep '^crm'` (254+ зелёных). Сторожа задачи 13 и тесты рядом с видами.
+- [ ] **Step 7: коммит** «CRM: в окне карточки — «Онлайн-запись через API» (после подтверждения окно закрывается: карту пациента поставил сервер, и «Сохранить» не запишет прежнюю поверх), «Создать карту» — окно быстрой регистрации с именем и телефоном из заявки; на доске — строка «med24.uz · API — ждёт подтверждения до …»».
+
+---
+
+## Task 15: «API и подключения» — строка «Публичный сервер» по правде обмена (PUBLIC_API_V1)
+
+Сборщик Б. Нужна закоммиченная задача 11.
+
+**Files:**
+- Create: `public/js/admin/__tests__/api-connections-sync.test.mjs`
+- Modify: `public/js/admin/views/api-connections.js` (:27, :58, :113, :118), `public/js/admin/i18n-strings.js` (блок в конец)
+
+- [ ] **Step 1: падающий тест** `public/js/admin/__tests__/api-connections-sync.test.mjs`:
+
+```js
+// PUBLIC_API_V1 — «API и подключения»: строка «Публичный сервер» говорит, что с
+// обменом — ещё не включён, ждём Easy-Med, работает (когда последний обмен и
+// сколько заявок ждут клинику), нет обмена (с какого времени и почему);
+// сервер старше экрана — прежняя строка.
+import { test } from 'node:test';
+import assert from 'node:assert';
+import { mk, reset, onRpc, textOf, byAttr, tick, settingsFixture, JOURNAL } from './api-harness.mjs';
+
+const { renderApiConnections } = await import('../views/api-connections.js');
+
+async function open(sync) {
+  reset();
+  onRpc('api_settings_get', () => settingsFixture());
+  onRpc('api_journal_list', () => JOURNAL);
+  if (sync !== undefined) onRpc('api_sync_status', () => sync);
+  const root = mk('div');
+  await renderApiConnections(root, {});
+  await tick();
+  return root;
+}
+const line = (root) => byAttr(root, 'data-apic-sync')[0];
+
+test('сервер старше экрана (нет ответа) — прежняя строка «Ещё не включён» и «Ещё не работает»', async () => {
+  const root = await open(undefined);
+  assert.equal(line(root).attrs['data-apic-sync'], 'off');
+  assert.ok(textOf(root).includes('Ещё не включён') && textOf(root).includes('Ещё не работает'));
+});
+
+test('ждём Easy-Med; работает — время обмена и ждущие заявки; нет обмена — с какого времени и почему', async () => {
+  let root = await open({ state: 'waiting_vendor', reason: 'not_enabled', last_ok_at: null, pending_events: 0, waiting_requests: 0 });
+  assert.ok(textOf(line(root)).includes('Подключения заработают, когда Easy-Med включит для клиники публичный сервер.'));
+  root = await open({ state: 'ok', last_ok_at: '2030-03-11T04:00:00Z', last_error: '', waiting_requests: 2, pending_events: 0 });
+  assert.match(textOf(line(root)), /Работает\. Последний обмен — .+\. Ждут ответа клиники: 2\./);
+  assert.ok(textOf(root).includes('Работает'));
+  root = await open({ state: 'error', last_ok_at: '2030-03-11T04:00:00Z', last_error: 'offline', last_error_at: '2030-03-11T05:00:00Z', waiting_requests: 0, pending_events: 1 });
+  assert.match(textOf(line(root)), /Нет обмена с .+: нет связи с интернетом\. Заявки партнёров ждут на публичном сервере/);
+  assert.ok(textOf(root).includes('Нет связи'));
+  root = await open({ state: 'error', last_error: 'paused', last_error_at: '2030-03-11T05:00:00Z' });
+  assert.ok(textOf(line(root)).includes('лицензия Easy-Med не продлена'));
+});
+```
+
+- [ ] **Step 2:** `node --experimental-vm-modules --test public/js/admin/__tests__/api-connections-sync.test.mjs` → падает: нет `data-apic-sync`.
+- [ ] **Step 3: экран** — `public/js/admin/views/api-connections.js`:
+
+```diff
+diff --git a/public/js/admin/views/api-connections.js b/public/js/admin/views/api-connections.js
+index 4d4c8f5..8fd95cd 100644
+--- a/public/js/admin/views/api-connections.js
++++ b/public/js/admin/views/api-connections.js
+@@ -24,7 +24,7 @@ import { openConnectionCard } from './api-connection-card.js';
+ const SUBTITLE = 'Сайт клиники, Symptex и партнёры получают отсюда врачей, свободное время, услуги и цены. Заявки и записи пациентов приходят в CRM с источником своего подключения.';
+ const PRIVACY = 'Данные пациентов наружу не передаются. Подключения видят только то, что клиника публикует: профиль клиники, врачей, свободное время, услуги и пакеты. Если лицензия Easy-Med закончится, сайт и партнёры перестанут получать данные и отправлять заявки, пока её не продлят.';
+ 
+-const state = { s: shapeSettings(null), journal: [], editSlug: false };
++const state = { s: shapeSettings(null), journal: [], editSlug: false, sync: null };   // PUBLIC_API_V1 — sync: состояние обмена
+ let refs = { root: null, body: null, onNavigate: null };
+ 
+ export async function renderApiConnections(container, { onNavigate = null, payload = null, onPayload = null } = {}) {
+@@ -57,6 +57,8 @@ async function reload() {
+     state.s = shapeSettings(await rpc('api_settings_get', {}));
+     const j = await rpc('api_journal_list', { limit: 30 });
+     state.journal = Array.isArray(j) ? j : [];
++    // PUBLIC_API_V1 — обмен с публичным сервером; сервер старше экрана или отказ — прежняя строка «Ещё не включён».
++    try { state.sync = await rpc('api_sync_status', {}); } catch { state.sync = null; }
+   } catch (e) {
+     clear(refs.body);
+     refs.body.appendChild(h('div', { class: 'empty', style: { padding: '30px' } },
+@@ -110,14 +112,45 @@ function addressCard(s) {
+   const fact = (icon, dt, dd) => h('div', null, h('dt', null, dt), h('dd', null, Icon(icon, { size: 15 }), h('span', null, dd)));
+   body.appendChild(h('dl', { class: 'apic-facts' },
+     fact('Shield', 'Защита', 'Только HTTPS, у каждого подключения свой ключ'),
+-    fact('Warning', 'Публичный сервер', 'Ещё не включён. Ключи можно выпустить и передать заранее: подключения начнут получать данные и присылать заявки, когда в Easy-Med включат публичный сервер.'),
++    publicServerFact(state.sync),   // PUBLIC_API_V1
+     fact('Send', 'Заявки и записи', 'Будут приходить в CRM «Заявки» с источником своего подключения')));
+   body.appendChild(h('p', { class: 'apic-note' }, Icon('Info', { size: 16 }), h('span', null, PRIVACY)));
+   return h('section', { class: 'card apic-card', 'data-apic': 'address' },
+     h('div', { class: 'card-header' }, h('h3', null, Icon('Globe', { size: 18 }), ' ', 'Адрес клиники для подключений'),
+-      h('span', { class: 'grow' }), Tag('Ещё не работает', { kind: 'warn', dot: true })),
++      h('span', { class: 'grow' }), syncTag(state.sync)),
+     body);
+ }
++
++// PUBLIC_API_V1 — что с обменом с публичным сервером (rpc api_sync_status → services/api/public-sync.js).
++const SYNC_WHY = Object.freeze({
++  offline:      'нет связи с интернетом',
++  unauthorized: 'публичный сервер не узнал клинику — обратитесь в Easy-Med',
++  paused:       'лицензия Easy-Med не продлена — сайт и партнёры видят «клиника временно недоступна»',
++  server_error: 'ошибка на стороне сервера',
++  sealed:       'часть заявок не открылась ключом клиники — обратитесь в Easy-Med',
++});
++export function syncTag(sync) {
++  const st = sync && sync.state;
++  if (st === 'ok') return Tag('Работает', { kind: 'ok', dot: true });
++  if (st === 'error') return Tag('Нет связи', { kind: 'crit', dot: true });
++  return Tag('Ещё не работает', { kind: 'warn', dot: true });
++}
++export function publicServerFact(sync) {
++  const st = sync && sync.state;
++  let icon = 'Warning';
++  let text = tr('Ещё не включён. Ключи можно выпустить и передать заранее: подключения начнут получать данные и присылать заявки, когда в Easy-Med включат публичный сервер.');
++  if (st === 'waiting_vendor') text = tr('Клиника готова к обмену. Подключения заработают, когда Easy-Med включит для клиники публичный сервер.');
++  else if (st === 'starting') text = tr('Включён — первый обмен начнётся в течение минуты.');
++  else if (st === 'ok') {
++    icon = 'Check';
++    text = trf('Работает. Последний обмен — {when}.', { when: fmtDateTime(sync.last_ok_at) });
++    if (Number(sync.waiting_requests) > 0) text += ' ' + trf('Ждут ответа клиники: {n}.', { n: Number(sync.waiting_requests) });
++  } else if (st === 'error') {
++    text = trf('Нет обмена с {when}: {why}. Заявки партнёров ждут на публичном сервере и придут, когда обмен вернётся.',
++      { when: fmtDateTime(sync.last_error_at), why: tr(SYNC_WHY[sync.last_error] || SYNC_WHY.server_error) });
++  }
++  return h('div', { 'data-apic-sync': st || 'off' }, h('dt', null, 'Публичный сервер'), h('dd', null, Icon(icon, { size: 15 }), h('span', null, text)));
++}
+ function slugEditor(s) {
+   if (!s.can.admin) return h('p', { class: 'hint' }, 'Имя клиники в адресе ещё не задано — его задаёт администратор.');
+   const input = h('input', { type: 'text', id: 'apic-slug', autocomplete: 'off', spellcheck: 'false', translate: 'no', maxlength: '40' });
+```
+
+- [ ] **Step 4: словарь**:
+
+```js
+  // PUBLIC_API_V1 — задача 15: обмен с публичным сервером на экране «API и подключения»
+  "нет связи с интернетом": {"en":"no internet connection","ru":"нет связи с интернетом","uz":"internet bilan aloqa yo‘q"},   // PUBLIC_API_V1
+  "публичный сервер не узнал клинику — обратитесь в Easy-Med": {"en":"the public server did not recognise the clinic — contact Easy-Med","ru":"публичный сервер не узнал клинику — обратитесь в Easy-Med","uz":"ommaviy server klinikani tanimadi — Easy-Med ga murojaat qiling"},   // PUBLIC_API_V1
+  "лицензия Easy-Med не продлена — сайт и партнёры видят «клиника временно недоступна»": {"en":"the Easy-Med licence has not been renewed — the website and partners see “the clinic is temporarily unavailable”","ru":"лицензия Easy-Med не продлена — сайт и партнёры видят «клиника временно недоступна»","uz":"Easy-Med litsenziyasi uzaytirilmagan — sayt va hamkorlar «klinika vaqtincha mavjud emas» deb ko‘rishadi"},   // PUBLIC_API_V1
+  "ошибка на стороне сервера": {"en":"a server-side error","ru":"ошибка на стороне сервера","uz":"server tomonidagi xato"},   // PUBLIC_API_V1
+  "часть заявок не открылась ключом клиники — обратитесь в Easy-Med": {"en":"some requests could not be opened with the clinic's key — contact Easy-Med","ru":"часть заявок не открылась ключом клиники — обратитесь в Easy-Med","uz":"ba’zi arizalar klinika kaliti bilan ochilmadi — Easy-Med ga murojaat qiling"},   // PUBLIC_API_V1
+  "Клиника готова к обмену. Подключения заработают, когда Easy-Med включит для клиники публичный сервер.": {"en":"The clinic is ready for the exchange. The connections will start working when Easy-Med turns on the public server for the clinic.","ru":"Клиника готова к обмену. Подключения заработают, когда Easy-Med включит для клиники публичный сервер.","uz":"Klinika almashinuvga tayyor. Easy-Med klinika uchun ommaviy serverni yoqqanda ulanishlar ishlay boshlaydi."},   // PUBLIC_API_V1
+  "Включён — первый обмен начнётся в течение минуты.": {"en":"Turned on — the first exchange will start within a minute.","ru":"Включён — первый обмен начнётся в течение минуты.","uz":"Yoqilgan — birinchi almashinuv bir daqiqa ichida boshlanadi."},   // PUBLIC_API_V1
+  "Работает. Последний обмен — {when}.": {"en":"Working. Last exchange — {when}.","ru":"Работает. Последний обмен — {when}.","uz":"Ishlayapti. Oxirgi almashinuv — {when}."},   // PUBLIC_API_V1
+  "Ждут ответа клиники: {n}.": {"en":"Awaiting the clinic's answer: {n}.","ru":"Ждут ответа клиники: {n}.","uz":"Klinika javobini kutmoqda: {n}."},   // PUBLIC_API_V1
+  "Нет обмена с {when}: {why}. Заявки партнёров ждут на публичном сервере и придут, когда обмен вернётся.": {"en":"No exchange since {when}: {why}. Partner requests wait on the public server and will arrive when the exchange is back.","ru":"Нет обмена с {when}: {why}. Заявки партнёров ждут на публичном сервере и придут, когда обмен вернётся.","uz":"{when} dan beri almashinuv yo‘q: {why}. Hamkorlar arizalari ommaviy serverda kutib turadi va almashinuv tiklanganda keladi."},   // PUBLIC_API_V1
+```
+
+- [ ] **Step 5:** тест зелёный (2 теста). Прежние тесты экрана — `node --experimental-vm-modules --test public/js/admin/__tests__/api-connections.test.mjs public/js/admin/__tests__/api-connection-card.test.mjs public/js/admin/__tests__/api-connection-new.test.mjs public/js/admin/__tests__/api-connections-i18n-en.test.mjs` — зелёные. Сторожа задачи 13.
+- [ ] **Step 6: коммит** «API и подключения: строка «Публичный сервер» говорит правду обмена — ещё не включён, клиника готова и ждёт Easy-Med, работает (последний обмен и сколько заявок ждут клинику), нет обмена (с какого времени и почему)».
+
+---
+
+## Завершение (контролёр)
+
+**1. Полный набор тестов — дважды, после всех задач и когда другие сборщики клона не пишут.**
+- Как в выпуске: `npm test` (= `node --experimental-vm-modules --test`), из корня клона, с `LIS_ENABLED=0`.
+- Как CI на en-US: `node --experimental-vm-modules --import file:///C:/Users/user/AppData/Local/Temp/claude/c--Users-user-Desktop-ailos-agentic-system/cdaa5eb3-8422-4424-8c3a-38580164abe3/scratchpad/force-en.mjs --test`.
+- Если файла нет — восстановить: `Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { language: 'en-US', languages: ['en-US', 'en'], userAgent: 'Node.js' } });` (память `easymed-ci-locale-trap`).
+- Красное в чужой области — сначала проверить, не чужая ли это недописанная правка, и прогнать файл отдельно (нагрузочные осечки — см. «Проверки плана»).
+
+**2. Проверка «сломать».** Отдельный агент, только чтение; находки — в отчёт. Что пробовать:
+- **(a) Время и деньги:**
+  - два партнёра на одно время в одном такте и в соседних;
+  - запись у стойки поверх удержания: обычная — отказ; экстренная с причиной — визит, а подтверждение заявки тогда отказывает;
+  - подтверждение одновременно из двух вкладок;
+  - подтверждение, когда у пациента в этот день визит без работы (перенос) и с работой (отказ до записи);
+  - подтверждение после истечения;
+  - согласие партнёра на другое время после истечения предложения;
+  - цена строки консультации у врача со своей ценой, с пустой строкой (решение 13) и без строки (решение 8);
+  - строка в смете визита — ровно одна, счёт — по цене кассы.
+- **(b) Удержание:**
+  - удержание врача филиала (запись подтверждения — в чужое здание, `cross_branch.published`);
+  - удержание на время, которое потом закрыли часами здания или графиком врача;
+  - удержание через полночь;
+  - `exclude_hold_id` в теле `ensure_visit`, `calendar_book`, `calendar_slots` (не действует).
+- **(c) Данные пациента наружу:**
+  - тела `PUT /snapshot`, `/slots`, `/keys`, `POST /events` — ни имени, ни телефона, ни комментария, ни номера карты, ни телефонов и почты сотрудников;
+  - `console` при ошибках обмена;
+  - `api_sync_state.last_error` — только коды.
+- **(d) Ключи:**
+  - в `PUT /keys` нет ключа и секрета;
+  - выключение, новый ключ, удаление — в ближайший такт;
+  - база на другом ПК — события с `no_secret`, обмен идёт;
+  - испорченный `.api-sync-key`.
+- **(e) Очередь:**
+  - мусор, чужое подключение, повтор `public_id`, повтор `external_id`;
+  - запечатанное чужим ключом;
+  - сбой программы на элементе — курсор не двигается, следующий такт повторяет;
+  - отмена пациентом записанного с работой и без.
+- **(f) Права и здания:**
+  - медсестра, врач, оператор колл-центра с чужой карточкой, регистратура без `crm.all` с чужой карточкой;
+  - филиал — 409 на решениях;
+  - лицензия заблокирована — 402 на решениях, чтения есть.
+- **(g) CRM:**
+  - «Сохранить» окна карточки после «Предложить другое время» и «Отклонить» (окно открыто — пациента не стирает);
+  - слияние дубликатов карточки заявки из API (`crm-merge`);
+  - проход «Не пришёл» с ждущей записью и с подтверждённой.
+- **(h) Экран:**
+  - 360 px — без прокрутки вбок, блок онлайн-записи в один столбец;
+  - uz / en — без кириллицы, кроме данных;
+  - клавиатура: «Выбрать», «Создать карту», «Подтвердить запись» доступны Tab, Enter.
+
+**3. Проба на тестовой клинике** (:8712, рецепт — память `easymed-dev-prod-workflow`; без тега). Публичного сервера ещё нет, поэтому проверяется молчание и всё, что видно в клинике:
+1. «API и подключения»: строка «Публичный сервер» — «Ещё не включён» (нет имени в адресе или подключений) или «Клиника готова к обмену…» (есть). В `data/` появился `.api-sync-key` (и `.bak`), и ни одного запроса к `api.easymed.uz` в логе нет.
+2. Ежечасная сверка: в теле есть `api_sync_public_key`; сервер лицензий отвечает как раньше.
+3. Подложить заявку руками нельзя (нет сервера) — проба окна CRM идёт по тестам задач 13–14. При желании контролёр запускает `public-sync.e2e.test.js` против копии базы клиники.
+4. Окна записи: регистратор пишет как прежде; доска CRM грузится, как раньше (строк онлайн-записи нет).
+5. Интерфейс на узбекском и английском.
+
+**4. Пуш и тег.** `git push` ветки (владелец: «после изменений — пушить»). Тег — только по слову владельца. Заметки к выпуску (`RELEASE_NOTES.md` + `release-notes.test.mjs`) — при подготовке выпуска, не в этом плане.
+
+---
+
+## Вопросы владельцу
+
+Полный текст с примерами — дизайн шага 8, раздел 12. 8a строит рекомендованное. От ответа зависит только вопрос 4 — одна функция и её тест в задаче 2. Остальные — 8b, 8c и 8d.
+
+1. **Где стоит публичный сервер и кто за ним следит.** Рекомендую отдельную машину у провайдера в Узбекистане; следит команда Easy-Med.
+2. **`api.easymed.uz`: кто управляет доменом, через прокси Cloudflare или напрямую.** Рекомендую напрямую и сертификат Let's Encrypt — партнёрам нужны настоящие IP.
+3. **Лицензия не продлена — когда партнёры перестают видеть клинику.** Рекомендую одновременно с блокировкой программы клиники — по сроку лицензии.
+4. **Ночные записи: 30 минут круглые сутки или 30 рабочих минут.** Рекомендую рабочие минуты (заявка в 22:00 держится до 08:30). Построено «круглые сутки» — буква спецификации; смена — `holdUntilFor`.
+5. **ПК клиники без связи — принимать ли онлайн-записи.** Рекомендую не принимать (партнёр показывает телефон), а заявки «перезвоните» принимать.
+6. **Новый ключ — старый сразу или через 24 часа.** Рекомендую сразу, как сейчас.
+
+**Сообщить владельцу (решено, не вопросы):**
+- одна заявка партнёра — одна карточка CRM;
+- отказ «время занято» партнёр получает и тогда, когда время заняли в ту же минуту, а карточка без даты всё равно появляется — позвонить;
+- «пришёл» партнёру — только если клиника включила это событие у подключения;
+- удержанное время регистратура в окнах записи не видит свободным;
+- после «Подтвердить запись» окно карточки закрывается само.
+
+---
+
+## Не входит
+
+| Что | Почему |
+|---|---|
+| Сам публичный сервер: адреса партнёров, проверка ключа, лимиты, 503, очередь, доставка уведомлений, журнал запросов, занятость имени в адресе | 8b — протокол клиники с ним готов и прогнан против поддельного сервера (задача 9). |
+| Отпечаток ключа клиники в лицензии, переключатель «публичный сервер» в панели, срочный отзыв ключа, машина, DNS, TLS | 8c (вопросы 1–2). |
+| Журнал запросов с ключом, «Последний запрос», доставки уведомлений, «Проверить адрес», напоминание о сроке ключа | 8d: данные придут из очереди сервера (`access`, `deliveries`). |
+| Удержание полосой в сетке календаря | 8d. Окна записи удержанное время и так не предлагают, а запись поверх — отказ. |
+| Источник подключения у заявки нельзя убрать или заменить (пункт 9 шага 7) | 8d: признак «пришла через подключение» теперь есть — `api_requests.crm_request_id`. |
+| Отсрочка прежнего ключа на 24 часа | Вопрос 6; если «да» — 8d. |
+| Подтверждать онлайн-запись сразу, без регистратора | Решение владельца 3 (пункт 11 шага 7). |
+| Пакет в онлайн-записи (`package_id` у `/requests`) | Номер пакета принимается и хранится (`api_requests.package_id`), строка пакета не ставится: цену пакета на строку ставит только `/api/db` (Р4 шага 6), регистратор добавит пакет в окне визита. Записать пакет онлайн — отдельное решение после 8b. |
+| Языки ответа по ключу | 8b (`?lang`), экран — 8d. |
+| Документация API | Шаг 9 — статусы, события, ошибки и протокол — в дизайне шага 8. |
+
+---
+
+## Проверки плана (сделаны при его подготовке)
+
+- **Весь код плана собран и прогнан** в копии дерева `9521240c`:
+  - песочница `scratchpad/plan8/lf`;
+  - выгрузка — `git -c core.autocrlf=false archive`, как блобы в репозитории (LF);
+  - `node_modules` — ссылкой на модули основного дерева.
+- **Полный набор как в выпуске** (`node --experimental-vm-modules --test`): 10 398 тестов — 10 396 зелёных, 1 красный, 1 пропущен.
+- **Полный набор как CI на en-US** (с `force-en.mjs`): 10 398 тестов — 10 396 зелёных, 1 красный, 1 пропущен.
+- **Красный в обоих прогонах — свойство песочницы, не плана:** `scripts/build-bundle.test.js` «no symlinks/junctions» находит `node_modules` — ссылку на модули дерева. Так было и у шага 6.
+- **Находка прогона, исправленная в плане:** первый прогон поймал стража объединения карт (`patient-merge.test.js`, «охват»). Новая колонка `api_requests.patient_id` обязана быть в `MERGE_TABLES` — это добавлено в задачу 1.
+- **План проигран по задачам** на чистой копии `9521240c` (`scratchpad/plan8/replay`, скрипт `replay8.mjs`) — ровно как велит текст:
+  - файлы целиком — по пути шага;
+  - diff — `git apply`;
+  - блоки словаря — перед закрывающей `};`;
+  - стили — в конец;
+  - после каждой задачи — её тесты и сторожа из строк `node --test …` (`i18n-coverage` — один раз в конце), затем коммит.
+
+  Все 16 задач зелёные по своим тестам. Итог проигрыша совпадает с песочницей файл в файл — 45 новых и изменённых файлов. После всех задач `i18n-coverage`, `i18n-uz-quality` и `server-messages-i18n` зелёные.
+- **Миграция 245** — на миграциях дерева в памяти (`245.test.js`):
+  - прежние таблицы байт в байт;
+  - CHECK номеров, статусов, удержаний, пометок событий.
+- **Инварианты времени и денег** — тесты задач 3, 5, 9, 11:
+  - удержанное время не записывается ни календарём, ни `ensure_visit`, ни вторым партнёром;
+  - присланный в теле номер удержания не действует (HTTP);
+  - подтверждение даёт ровно один визит, в том числе при гонке двух подтверждающих;
+  - строка консультации — по цене кассы, у ребёнка из семьи — у ребёнка;
+  - истечение освобождает время и не даёт подтвердить;
+  - отказ двери записи возвращает заявку и карточку как были.
+- **Данные пациента наружу** — тесты задач 4, 8, 9:
+  - тела событий, снимка, времени и ключей проверены белым списком и поиском меток пациентов, сотрудников, их телефонов и почты;
+  - сквозной прогон ищет метки во всём, что ушло на поддельный сервер.
+- **Словарь** — 72 новые статьи (ru / uz / en; узбекский и английский без кириллицы; `{time}`, `{when}`, `{n}`, `{why}`, `{start}`, `{doctor}` сохранены): задача 2 — 26, 7 — 2, 13 — 33, 14 — 1, 15 — 10.
+- **`node --check`** — 31 блок плана с модулем целиком (`check-blocks.mjs`).
+- **Спецификация и шаг 7 — у каждого пункта задача или строка «Не входит»:**
+  - решения 3 → 3, 5, 13, 14; 4 → 9 (лицензия в каждом запросе), 8b; 5 → 4, 8, 13 (отпечатки, подпись клиники); 6 → 8; 7 → 9; 14 → 8;
+  - «Онлайн-запись» → 3, 5, 8 (Р2–Р7, Р19);
+  - «Сервер» → 9, 12;
+  - пункты 1–11 шага 7 для шага 8 → «Что 8a оставляет 8b, 8c и 8d»;
+  - критик А6–А11 → 1, 5, 13; В7 → 8, 9, 10; В8 → 8d.
