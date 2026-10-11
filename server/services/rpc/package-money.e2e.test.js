@@ -176,7 +176,8 @@ test('соседнему зданию уезжает документ: скид�
 test('«Ждут счёта»: строка до 244 — по скидке пакета, столько же выставит счёт плательщику', () => {
   const c = clinic({ categoryPct: 30 });
   const id = c.line(7, c.pkg, 'added');   // УЗИ 180 000, пакет 15 %
-  c.db.prepare('UPDATE visit_services SET package_price = 126000, package_legacy = 1 WHERE id = ?').run(id);   // как бэкфилл 244: 30 % группы
+  c.db.prepare('UPDATE visit_services SET package_price = 126000, package_legacy = 15 WHERE id = ?').run(id);   // как бэкфилл 244: 30 % группы, пакет был 15 %
+  c.db.prepare('UPDATE service_templates SET discount_percent = 15.1 WHERE id = ?').run(c.pkg);   // пересохранили окном: процент раскладки — заморожённый не двигается
   const row = cashierUnbilled(c.db, {}, cashier).rows.find((r) => r.visit_id === c.visitId);
   assert.equal(row.total, 153000, '180 000 − 15 % пакета; группу посчитает счёт');
   const payer = c.db.prepare("INSERT INTO payers (name, kind, active) VALUES ('Страховая', 'insurance', 1)").run().lastInsertRowid;
@@ -200,7 +201,7 @@ test('ревью C3: услугу убрали из пакета после за
   // Строка до 244 (бэкфилл без проверки состава) — тоже по записанной цене.
   const c2 = clinic();
   const old = c2.line(7, c2.pkg, 'completed');
-  c2.db.prepare("UPDATE visit_services SET package_legacy = 1 WHERE id = ?").run(old);
+  c2.db.prepare("UPDATE visit_services SET package_legacy = 15 WHERE id = ?").run(old);
   c2.db.prepare("UPDATE service_templates SET service_ids = '[1]' WHERE id = ?").run(c2.pkg);
   assert.equal(createInvoiceForVisit(c2.db, { visit_id: c2.visitId, visit_service_ids: [old] }, registrar).invoice.total_amount, 152900);
   // Без записанной цены (строку завели в обход двери) — состав проверяется, как прежде.
@@ -223,6 +224,6 @@ test('ревью C6: день визита за сроком пакета — «
   assert.equal(Math.round(c.fee()), Math.round(180000 * 0.3), 'доля врача — от той же суммы');
   assert.throws(() => createInvoiceForVisit(c.db, { visit_id: c.visitId, visit_service_ids: [id] }, registrar), /действует/);
   // Строка до 244 — так же.
-  c.db.prepare('UPDATE visit_services SET package_legacy = 1 WHERE id = ?').run(id);
+  c.db.prepare('UPDATE visit_services SET package_legacy = 15 WHERE id = ?').run(id);
   assert.equal(waiting(), 180000);
 });

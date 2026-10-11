@@ -583,11 +583,12 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false } = {}) {
     // скидки и зажаты их суммой, как прежде. Строка пакета, у которой в пакете
     // нет скидки (пакет без скидки), — обычная строка: так её видят и отчёты
     // (reports.js — своя скидка у строки с discount_amount > 0).
-    // Ревью шага 6, C1 — строка, записанная до мигр. 244 (package_legacy): её
-    // цена названа пациенту и может нести скидку его группы; плательщику — только
-    // скидка пакета, как до 244 (domain/pricing.js legacyPackageOnlyOff).
+    // Ревью шага 6, C1 — строка до мигр. 244, чья цена несёт скидку группы
+    // пациента (package_legacy — процент пакета на день обновления): плательщику —
+    // только скидка пакета по этому проценту, как до 244 (domain/pricing.js
+    // legacyPackageOnlyOff); сегодняшний процент пакета её не двигает.
     for (const p of priced) {
-      const legacy = payerSet ? legacyPackageOnlyOff(p.row, p.line, p.pkg ? p.pkg.pct : 0) : null;
+      const legacy = payerSet ? legacyPackageOnlyOff(p.row, p.line) : null;
       p.ownDiscount = legacy != null ? legacy
         : (p.pm && p.pm.discount > 0 ? round2(Math.min(p.pm.discount, p.line)) : 0);
     }

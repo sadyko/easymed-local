@@ -987,8 +987,8 @@ export function cashierUnbilled(db, args, user) {
   // что doctorPriceFor), консультация — один раз на вид приёма и врача.
   // Прежде json_each по карточке ставок на КАЖДУЮ строку держал сервер секунды.
   const ownPrice = doctorPriceLookup(db, lines.map((l) => l.doctor_id));
-  // SERVICES_PACKAGES_V1 (ревью C1) — пакет строки — один раз на пакет.
-  const getPackage = db.prepare('SELECT discount_percent, valid_from, valid_until FROM service_templates WHERE id = ?');
+  // SERVICES_PACKAGES_V1 (ревью C6) — срок пакета строки — один раз на пакет.
+  const getPackage = db.prepare('SELECT valid_from, valid_until FROM service_templates WHERE id = ?');
   const packages = new Map();
   const consults = new Map();
   const consult = (typeId, doctorId) => {
@@ -1009,16 +1009,17 @@ export function cashierUnbilled(db, args, user) {
     const unit = Number(lineUnitPrice(db, l, { service: svc, product: prod, ownPrice, consult })) || 0;   // REFBILL_REVIEW_V1
     // SERVICES_PACKAGES_V1 — строка из пакета — по цене в пакете, записанной при
     // записи: она окончательная (решение владельца 1), её и выставит счёт.
-    // Ревью C1 — строка до мигр. 244 (package_legacy): её цена названа пациенту
-    // со скидкой его группы; список скидку группы не показывает ни у одной
-    // строки — у такой строки здесь только скидка пакета (domain/pricing.js).
+    // Ревью C1 — строка до мигр. 244, чья цена несёт скидку группы пациента
+    // (package_legacy — процент пакета на день обновления): список скидку группы
+    // не показывает ни у одной строки — у такой строки здесь только скидка пакета
+    // по этому проценту (domain/pricing.js).
     // Ревью C6 — скидка пакета — только в сроке пакета по местному дню визита,
     // как у счёта и доли врача (packageLineDiscount): вне срока счёт строку не
     // выставит, доля врача — от цены без скидки, и список показывает её же.
     const pkg = l.package_id != null ? once(packages, l.package_id, getPackage) : null;
     const gross = Number.isFinite(qty) && qty > 0 ? round2(unit * qty) : 0;
     const pkgOff = packageLineDiscount(l, pkg, l.visit_day);
-    const legacy = pkgOff > 0 ? legacyPackageOnlyOff(l, gross, pkg ? pkg.discount_percent : 0) : null;
+    const legacy = pkgOff > 0 ? legacyPackageOnlyOff(l, gross) : null;
     const sum = round2(gross - (legacy != null ? legacy : Math.min(pkgOff, gross)));
     let g = byVisit.get(l.visit_id);
     if (!g) {

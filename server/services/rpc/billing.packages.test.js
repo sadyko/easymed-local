@@ -299,13 +299,14 @@ test('счёт по визиту отвечает остатком скидки 
 
 // ─── SERVICES_PACKAGES_V1 (ревью шага 6, C1) — строка, записанная до мигр. 244 ─
 // Невыставленная строка до 244 несёт цену «по названному правилу» — бо́льшую из
-// скидки пакета и группы пациента (package_legacy = 1). Пациенту — она; счёт
-// плательщику — только скидка пакета, как до 244 (B5: группа — договорённость
-// с пациентом, а не со страховой). Пакет удалён — у плательщика скидки пакета
-// нет, как до 244; у пациента — названная цена остаётся.
+// скидки пакета и группы пациента (package_legacy — процент пакета на день
+// обновления). Пациенту — она; счёт плательщику — только скидка пакета по
+// замороженному проценту (B5: группа — договорённость с пациентом, а не со
+// страховой). Правка процента и удаление пакета после обновления его не
+// двигают; у пациента — названная цена остаётся.
 function legacyLine(c, { pkgId }) {
   const id = c.line(1, { pkgId });   // 100 000; пакет 20 %
-  c.db.prepare('UPDATE visit_services SET package_price = 70000, package_legacy = 1 WHERE id = ?').run(id);   // как бэкфилл 244 у VIP 30 %
+  c.db.prepare('UPDATE visit_services SET package_price = 70000, package_legacy = 20 WHERE id = ?').run(id);   // как бэкфилл 244 у VIP 30 %: пакет был 20 %
   return id;
 }
 test('ревью C1: строка до 244 — пациенту по названной цене, плательщику только скидка пакета', () => {
@@ -324,14 +325,21 @@ test('ревью C1: строка до 244 — пациенту по назва�
   res = invoiceOf(c, [c.line(1, { pkgId: c.packageId })], { payer_id: p2 });
   assert.equal(res.invoice.total_amount, 80000);
 });
-test('ревью C1: строка до 244, пакет удалён — плательщику без скидки пакета, пациенту — названная цена', () => {
+test('ревью C1: строка до 244, процент поменяли или пакет удалили — плательщику та же скидка пакета на день обновления, пациенту — названная цена', () => {
+  for (const pct of [10, 20.4]) {
+    const c0 = clinic({ categoryPct: 30 });
+    const p0 = c0.db.prepare("INSERT INTO payers (name, kind, active) VALUES ('Страховая', 'insurance', 1)").run().lastInsertRowid;
+    const id0 = legacyLine(c0, { pkgId: c0.packageId });
+    c0.db.prepare('UPDATE service_templates SET discount_percent = ?, discount_value = ? WHERE id = ?').run(pct, pct, c0.packageId);
+    assert.equal(invoiceOf(c0, [id0], { payer_id: p0 }).invoice.total_amount, 80000, 'процент ' + pct);
+  }
   let c = clinic({ categoryPct: 30 });
   const payer = c.db.prepare("INSERT INTO payers (name, kind, active) VALUES ('Страховая', 'insurance', 1)").run().lastInsertRowid;
   let id = legacyLine(c, { pkgId: c.packageId });
   c.db.prepare('DELETE FROM service_templates WHERE id = ?').run(c.packageId);
   assert.equal(c.db.prepare('SELECT package_id FROM visit_services WHERE id = ?').get(id).package_id, null, 'база сняла пакет');
   let res = invoiceOf(c, [id], { payer_id: payer });
-  assert.equal(res.invoice.total_amount, 100000);
+  assert.equal(res.invoice.total_amount, 80000, 'пакет удалён — процент на день обновления остаётся');
   c = clinic({ categoryPct: 30 });
   id = legacyLine(c, { pkgId: c.packageId });
   c.db.prepare('DELETE FROM service_templates WHERE id = ?').run(c.packageId);
