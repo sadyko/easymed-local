@@ -77,6 +77,8 @@ export const MERGE_TABLES = Object.freeze([
   { table: 'telegram_deliveries', cols: ['patient_id'], how: 'move' },
   { table: 'calls', cols: ['patient_id'], how: 'move' },
   { table: 'crm_requests', cols: ['patient_id'], how: 'move' },
+  // PUBLIC_API_V1 (мигр. 245) — карта, выбранная регистратором для заявки из API.
+  { table: 'api_requests', cols: ['patient_id'], how: 'move' },
   { table: 'custdev_cards', cols: ['patient_id'], how: 'move' },
   { table: 'patient_deposits', cols: ['patient_id'], how: 'money' },
   { table: 'patient_guardians', cols: ['patient_id', 'guardian_patient_id'], how: 'guardians' },
