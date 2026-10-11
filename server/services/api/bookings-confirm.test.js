@@ -266,3 +266,35 @@ test('I8: врач главного здания с припиской, парт
   const c = await confirmBooking(s.db, { id: r.id, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
   assert.deepEqual({ ...one(s.db, 'SELECT branch_id, cross_branch FROM visits WHERE id = ?', c.visit.id) }, { branch_id: main, cross_branch: '' });
 });
+
+// ─── ПОВТОРНАЯ ПРОВЕРКА 8a, п. 1: ДЕНЬ МЕНЯЕТ ТОЛЬКО СВОЯ СТРОКА ЗАЯВКИ ─────
+
+test('рр-1: строка анализа на другой день на той же карточке — подтверждение её не трогает и не берёт в визит', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  const cardId = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', id).c;
+  s.db.prepare("INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status) VALUES (?, 301, '2030-03-15', 'pending')").run(cardId);
+  patient(s);
+  const c = await confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  assert.deepEqual({ ...one(s.db, 'SELECT scheduled_date, visit_id FROM crm_request_services WHERE request_id = ? AND service_id = 301', cardId) },
+    { scheduled_date: '2030-03-15', visit_id: null });
+  assert.deepEqual(s.db.prepare('SELECT service_id, consultation_type_id FROM visit_services WHERE visit_id = ?').all(c.visit.id).map((x) => [x.service_id, x.consultation_type_id]), [[null, 1]]);
+});
+
+test('рр-1: две онлайн-записи одного номера слиты в одну карточку — каждая подтверждается со своей строкой в своём визите', async () => {
+  const { crmMergeLeads } = await import('../rpc/crm-merge.js');
+  const s = bookingSeed();
+  const D2 = localAt('2030-03-14', '11:00');
+  const id1 = await pending(s);
+  const r2 = await ingestItem(s.db, apptItem({ connId: s.connId, publicId: 'rq_test0002', externalId: 'med-2', startMs: D2, receivedMs: NOW - 30000,
+    consultation: '', serviceId: 302 }), { now: NOW, kekPath: s.kekPath });
+  const c1 = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', id1).c;
+  const c2 = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', r2.id).c;
+  crmMergeLeads(s.db, { keep_id: c2, merge_ids: [c1] }, s.admin);
+  patient(s);
+  const v1 = await confirmBooking(s.db, { id: id1, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  const v2 = await confirmBooking(s.db, { id: r2.id, patientId: 1 }, s.reg, { now: NOW + 120000, kekPath: s.kekPath });
+  const kinds = (vid) => s.db.prepare('SELECT service_id, consultation_type_id FROM visit_services WHERE visit_id = ?').all(vid).map((x) => [x.service_id, x.consultation_type_id]);
+  assert.deepEqual(kinds(v1.visit.id), [[null, 1]]);
+  assert.deepEqual(kinds(v2.visit.id), [[302, null]]);
+});

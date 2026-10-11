@@ -28,6 +28,10 @@ CREATE TABLE api_requests (
   status               TEXT NOT NULL CHECK (status IN ('new', 'accepted', 'pending', 'confirming', 'offered',
                          'confirmed', 'declined', 'expired', 'cancelled', 'arrived', 'no_show')),
   crm_request_id       INTEGER REFERENCES crm_requests(id) ON DELETE SET NULL,
+  -- Своя строка заявки в карточке CRM (консультация или услуга онлайн-записи):
+  -- «другое время» переносит на новый день только её, а не все строки карточки
+  -- (повторная проверка 8a, п. 1 — анализ на другой день, слитая вторая запись).
+  crm_line_id          INTEGER REFERENCES crm_request_services(id) ON DELETE SET NULL,
   patient_name         TEXT NOT NULL DEFAULT '' CHECK (length(patient_name) <= 120),
   patient_phone        TEXT NOT NULL DEFAULT '' CHECK (length(patient_phone) <= 32),
   comment              TEXT NOT NULL DEFAULT '' CHECK (length(comment) <= 1000),

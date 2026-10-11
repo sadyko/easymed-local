@@ -82,11 +82,18 @@ function setStatus(db, id, fields, now) {
  * «другого времени» на другой день строка консультации оставалась бы на старом
  * дне — визит без консультации, а чужой визит того дня забрал бы её в смету.
  */
+//
+// Повторная проверка 8a, п. 1: переносится ТОЛЬКО своя строка заявки
+// (api_requests.crm_line_id, заведена при приёме) — не все ждущие строки
+// карточки: анализ на другой день или строка второй онлайн-записи, слитой в ту
+// же карточку («Дубликаты»), остаются на своих днях и не попадают в чужой
+// визит. Дата карточки следует, только если её задавала эта строка.
 function cardToDay(db, row, dayIso) {
-  if (!row.crm_request_id || !dayIso) return;
-  db.prepare("UPDATE crm_request_services SET scheduled_date = ? WHERE request_id = ? AND status = 'pending' AND visit_id IS NULL AND (scheduled_date IS NULL OR scheduled_date <> ?)")
-    .run(dayIso, row.crm_request_id, dayIso);
-  db.prepare('UPDATE crm_requests SET scheduled_date = ? WHERE id = ? AND (scheduled_date IS NULL OR scheduled_date <> ?)').run(dayIso, row.crm_request_id, dayIso);
+  if (!row.crm_line_id || !dayIso) return;
+  const line = db.prepare("SELECT id, request_id, scheduled_date FROM crm_request_services WHERE id = ? AND status = 'pending' AND visit_id IS NULL").get(row.crm_line_id);
+  if (!line || line.scheduled_date === dayIso) return;
+  db.prepare('UPDATE crm_request_services SET scheduled_date = ? WHERE id = ?').run(dayIso, line.id);
+  db.prepare('UPDATE crm_requests SET scheduled_date = ? WHERE id = ? AND scheduled_date IS ?').run(dayIso, line.request_id, line.scheduled_date);
 }
 
 // ─── ПРИЁМ ИЗ ОЧЕРЕДИ ───────────────────────────────────────────────────────
@@ -98,12 +105,13 @@ function createCard(db, { conn, v, day, line }) {
                                    VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(v.patient.name, uzE164(v.patient.phone), key, JSON.stringify([key]), firstStageKey(db) || 'in_process',
       v.patient.comment, day).lastInsertRowid);
+  let lineId = null;
   if (line && (line.service_id || line.consultation_type_id)) {
-    db.prepare(`INSERT INTO crm_request_services (request_id, service_id, consultation_type_id, doctor_id, scheduled_date, status)
+    lineId = Number(db.prepare(`INSERT INTO crm_request_services (request_id, service_id, consultation_type_id, doctor_id, scheduled_date, status)
                 VALUES (?, ?, ?, ?, ?, 'pending')`)
-      .run(crmId, line.service_id || null, line.service_id ? null : (line.consultation_type_id || null), line.doctor_id || null, day);
+      .run(crmId, line.service_id || null, line.service_id ? null : (line.consultation_type_id || null), line.doctor_id || null, day).lastInsertRowid);
   }
-  return crmId;
+  return { crmId, lineId };
 }
 
 function insertRequest(db, row) {
@@ -128,7 +136,7 @@ function intakeRequest(db, v, conn, { now }) {
   const svc = v.service_id ? db.prepare('SELECT * FROM services WHERE id = ?').get(v.service_id) : null;
   const serviceId = svc && servicePublicState(svc) === 'shown' ? svc.id : null;
   return db.transaction(() => {
-    const crmId = createCard(db, { conn, v, day: null, line: { service_id: serviceId, doctor_id: doctorId } });
+    const { crmId } = createCard(db, { conn, v, day: null, line: { service_id: serviceId, doctor_id: doctorId } });
     const id = insertRequest(db, {
       public_id: v.public_id, connection_id: conn.id, external_id: v.external_id, kind: 'request', status: 'new',
       crm_request_id: crmId, patient_name: v.patient.name, patient_phone: uzE164(v.patient.phone), comment: v.patient.comment,
@@ -188,11 +196,11 @@ function intakeAppointment(db, v, conn, { now, kekPath }) {
   const status = !reason ? 'pending' : reason === 'expired' ? 'expired' : 'declined';
   return db.transaction(() => {
     const day = reason ? null : localDayOf(db, v.start_at);
-    const crmId = createCard(db, { conn, v, day,
+    const { crmId, lineId } = createCard(db, { conn, v, day,
       line: { service_id: what.serviceId, consultation_type_id: what.consultationTypeId, doctor_id: doctor ? doctor.id : null } });
     const id = insertRequest(db, {
       public_id: v.public_id, connection_id: conn.id, external_id: v.external_id, kind: 'appointment', status,
-      crm_request_id: crmId, patient_name: v.patient.name, patient_phone: uzE164(v.patient.phone), comment: v.patient.comment,
+      crm_request_id: crmId, crm_line_id: lineId, patient_name: v.patient.name, patient_phone: uzE164(v.patient.phone), comment: v.patient.comment,
       // C1: врача, которого нет (удалили, пока заявка ждала), не сохранить — отказ без врача.
       // I8: здание — приписка врача; номер здания от партнёра не решает ничего
       // (ошибка партнёра или старый снимок увели бы визит не туда).

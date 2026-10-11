@@ -234,3 +234,14 @@ test('M2: своё предложение, истёкшее, но ещё не с
   assert.equal(acc.status, 'pending');
   assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'pending');
 });
+
+test('рр-1: согласие на другой день переносит только строку этой заявки — анализ на 15-е на той же карточке остаётся на 15-м', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  const cardId = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', id).c;
+  s.db.prepare("INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status) VALUES (?, 301, '2030-03-15', 'pending')").run(cardId);
+  offerOtherTime(s.db, { id, start: new Date(localAt('2030-03-13', '11:00')).toISOString() }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  assert.equal((await inbox(s, 'offer.accept', NOW + 5 * 60000)).status, 'pending');
+  assert.deepEqual(s.db.prepare('SELECT service_id, consultation_type_id, scheduled_date FROM crm_request_services WHERE request_id = ? ORDER BY id').all(cardId).map((x) => ({ ...x })),
+    [{ service_id: null, consultation_type_id: 1, scheduled_date: '2030-03-13' }, { service_id: 301, consultation_type_id: null, scheduled_date: '2030-03-15' }]);
+});
