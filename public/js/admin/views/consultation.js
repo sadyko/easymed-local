@@ -1502,6 +1502,12 @@ function localMonthKey(value) {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 }
 
+// BACKLOG_1011_V1 — ОДИН И ТОТ ЖЕ ВРАЧ, В КАКОМ БЫ ВИДЕ НИ ПРИШЁЛ НОМЕР. Номера
+// из базы — числа, а значение <select> браузер отдаёт строкой: строгое
+// «строка === число» теряло выбранного врача, и после переключения шапка
+// «Зарплаты» говорила «Врач не выбран.», а начисления считались без карточки.
+const sameId = (a, b) => a != null && b != null && String(a) === String(b);
+
 async function loadDoctorsForDash() {
     const { data, error } = await supabase.from('users')
         .select('id, full_name, is_doctor, specialty, role, salary_type, salary_fixed, salary_percent, doctor_category, kpi_links, service_rates, referral_rates, license_expiry_date')
@@ -1519,7 +1525,7 @@ async function loadDoctorsForDash() {
     // doctors must not be selectable.
     const docId = scopedDoctorId();
     if (docId) {
-        list = list.filter(u => u.id === docId);
+        list = list.filter(u => sameId(u.id, docId));   // BACKLOG_1011_V1
         state.dash.doctorId = docId;
     }
     state.dash.doctors = list;
@@ -1535,7 +1541,7 @@ async function loadDashboardData() {
     const { startIso, endIso } = periodRange(state.dash.period);
 
     // 1. Full doctor record (salary settings live here).
-    const docRow = state.dash.doctors.find(d => d.id === docId) || null;
+    const docRow = state.dash.doctors.find(d => sameId(d.id, docId)) || null;   // BACKLOG_1011_V1
     state.dash.doctor = docRow;
 
     // 2. PAY_BASIS_PERFORMED_V1 — ВСЯ выплата за период одним вызовом сервера
@@ -1773,12 +1779,13 @@ function dashboardView() {
     // одного имени был бы кнопкой, которая ничего не делает.
     const docSelect = h('select', {
         onchange: (ev) => {
-            state.dash.doctorId = ev.target.value;
+            // BACKLOG_1011_V1 — номер врача числом, как в списке и на сервере.
+            state.dash.doctorId = Number(ev.target.value) || null;
             state.dash.loaded = false; state.dash.loading = true; paint();
             loadDashboardData().then(() => { state.dash.loading = false; paint(); });
         },
     },
-        ...state.dash.doctors.map(d => h('option', { value: d.id, selected: state.dash.doctorId === d.id },
+        ...state.dash.doctors.map(d => h('option', { value: d.id, selected: sameId(state.dash.doctorId, d.id) },   // BACKLOG_1011_V1
             d.full_name + (d.specialty ? ' · ' + d.specialty : ''))),
     );
     const periodSeg = h('div', { class: 'segmented' },
