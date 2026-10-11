@@ -22,7 +22,7 @@
 // списку и по виду значения; присланного сверх этого в журнал не попадает.
 // Что вообще становится строкой (429 — нет, без ключа — только 401, потолки в
 // сутки и всего) — store/access-journal.js (проверка 8b, C6).
-import { KEY_RE } from '../../../public/js/shared/api-connections.js';
+import { KEY_RE, normalizeSlug } from '../../../public/js/shared/api-connections.js';
 import { API_GROUPS } from '../../../public/js/shared/service-public.js';
 import { GEO_REGION_CODES, GEO_DISTRICT_CODES } from '../../../public/js/shared/geo-codes.js';
 import { SPECIALTY_ROWS } from '../../../public/js/shared/specialty-list.js';
@@ -67,27 +67,57 @@ export function logPath(slug, req) {
   return '/' + slug + '/v1' + known + (q.length ? '?' + q.join('&') : '');
 }
 
+// CORS (проверка 8b, C12): Retry-After — не «простой» заголовок ответа, без
+// Access-Control-Expose-Headers скрипт сайта его не прочтёт. 429 потолка по IP
+// отвечает ДО поиска клиники (иначе перебор имён шёл бы без лимита), поэтому
+// сайт на нём узнаётся только по памяти: этому сайту по этому имени уже
+// отвечали с CORS за последние CORS_SEEN_MS. Новое имя или чужой сайт — без
+// CORS: перебор имён по заголовкам ничего не узнаёт.
+export const CORS_SEEN_MS = 10 * 60000;
+const CORS_SEEN_MAX = 5000;
+function corsHeaders(res, origin) {
+  res.set('Access-Control-Allow-Origin', origin);
+  res.set('Access-Control-Expose-Headers', 'Retry-After');
+  res.set('Vary', 'Origin');
+}
+function seenOrigins() {
+  const seen = new Map();
+  return {
+    has: (k, now) => (seen.get(k) || 0) > now,
+    add(k, now) {
+      seen.delete(k);
+      if (seen.size >= CORS_SEEN_MAX) seen.delete(seen.keys().next().value);
+      seen.set(k, now + CORS_SEEN_MS);
+    },
+  };
+}
+
 const phoneOf = (clinic) => { const s = snapshotOf(clinic); return String((s && s.clinic && s.clinic.phone) || ''); };
 
 /** Потолок по IP, клиника по имени в адресе, https, состояние клиники, журнал запросов. */
 export function clinicGate(ctx) {
   // Один на приложение: счётчики пропущенного — для наблюдения (ctx.accessJournal.stats()).
   const journal = ctx.accessJournal || (ctx.accessJournal = createAccessJournal());
+  const corsSeen = seenOrigins();
   return (req, res, next) => {
     const now = ctx.now();
     req.ipAddr = clientIp(req.ip);
+    const origin = req.get('origin');
+    const seenKey = normalizeSlug(req.params.slug) + ' ' + origin;
     // Потолок — до поиска клиники: перебор имён в адресе тоже упирается в лимит.
     if (ctx.limiter) {
       const hit = ctx.limiter.hit('ip:' + req.ipAddr, IP_LIMIT_PER_MIN, now);
-      if (!hit.ok) return sendError(req, res, 'rate_limited', {}, { 'Retry-After': hit.retryAfterSec });
+      if (!hit.ok) {
+        if (origin && corsSeen.has(seenKey, now)) corsHeaders(res, origin);
+        return sendError(req, res, 'rate_limited', {}, { 'Retry-After': hit.retryAfterSec });
+      }
     }
     const clinic = resolveSlug(ctx.db, req.params.slug, now);
     if (!clinic) return sendError(req, res, 'clinic_not_found');
     req.clinic = clinic;
-    const origin = req.get('origin');
     if (origin && originAllowedForClinic(ctx.db, clinic.clinic_id, origin)) {
-      res.set('Access-Control-Allow-Origin', origin);
-      res.set('Vary', 'Origin');
+      corsHeaders(res, origin);
+      corsSeen.add(seenKey, now);
     }
     if (req.method !== 'OPTIONS' && !/^\/media\//.test(req.path)) {
       const t0 = Date.now();

@@ -11,6 +11,7 @@ import { admitClinic, saveSnapshot, clinicRow } from '../store/clinics.js';
 import { putMedia } from '../store/media.js';
 import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { isoOf } from '../lib/time.js';
+import { createLimiter } from '../lib/rate-limit.js';
 
 const json = async (res) => ({ status: res.status, body: await res.json(), headers: res.headers });
 
@@ -114,6 +115,24 @@ test('лимит ключа: сверх rate_limit в минуту — 429 с Re
   let last;
   for (let i = 0; i < 31; i += 1) last = await s.get('/shifo/v1/clinic', { auth: false });
   assert.equal(last.status, 429, 'перебор ключей с одного адреса');
+});
+
+test('CORS: Retry-After виден браузеру; 429 потолка по IP — с CORS только для сайта, уже получавшего ответ по этому имени', async (t) => {
+  const real = createLimiter();
+  let ipBlocked = false;
+  const limiter = { hit: (k, lim, now) => (ipBlocked && k.startsWith('ip:') ? { ok: false, retryAfterSec: 9 } : real.hit(k, lim, now)), sweep: real.sweep };
+  const s = await partnerStand({ limiter, connection: { rate_limit: 1 } });
+  t.after(s.close);
+  const site = { Origin: 'https://med24.uz' };
+  const hdr = (r) => [r.status, r.headers.get('access-control-allow-origin'), r.headers.get('access-control-expose-headers'), r.headers.get('retry-after')];
+  assert.deepEqual(hdr(await s.get('/shifo/v1/clinic', { headers: site })), [200, 'https://med24.uz', 'Retry-After', null]);
+  const keyLimit = hdr(await s.get('/shifo/v1/clinic', { headers: site }));
+  assert.deepEqual(keyLimit.slice(0, 3), [429, 'https://med24.uz', 'Retry-After']);
+  assert.ok(Number(keyLimit[3]) >= 1);
+  ipBlocked = true;
+  assert.deepEqual(hdr(await s.get('/shifo/v1/clinic', { headers: site })), [429, 'https://med24.uz', 'Retry-After', '9'], 'потолок по IP — браузер читает Retry-After');
+  assert.deepEqual(hdr(await s.get('/shifo/v1/clinic', { headers: { Origin: 'https://evil.example' } })).slice(0, 2), [429, null]);
+  assert.deepEqual(hdr(await s.get('/nikto/v1/clinic', { headers: site })).slice(0, 2), [429, null], 'имя без подтверждённого сайта — без CORS: перебор имён ничего не узнаёт');
 });
 
 test('503: «не оплачено» в лицензии, срок вышел, клиника молчит 7 суток — «временно недоступна» с телефоном клиники', async (t) => {
