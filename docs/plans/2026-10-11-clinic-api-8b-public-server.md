@@ -61,6 +61,8 @@
 
 **Метка плана и коммитов:** `CLINIC_API_STEP8B_V1`. Сообщение коммита кончается скобкой `(PUBLIC_SERVER_V1, CLINIC_API_STEP8B_V1)`.
 
+**Ответы на вопросы плана (2026-10-12):** вопрос 1 — владелец выбрал **сутки** (решение 20 спецификации, а не рекомендованные 7 суток): не забранная клиникой заявка через сутки закрыта для партнёра (`closed`, `not_collected`), шифротекст стёрт; вопрос 2 — **15 минут** (решение контролёра). Оба срока — именованные постоянные `config.js` (`DEFAULT_UNCOLLECTED_MAX_HOURS`, `DEFAULT_SYNC_SKEW_MIN`) с настройками `PUBLIC_UNCOLLECTED_MAX_HOURS`, `PUBLIC_SYNC_SKEW_MIN`. Правило «клиника молчит 7 суток — 503» не меняется. Блоки кода ниже — по ответам (см. «Вопросы владельцу»).
+
 ---
 
 ## Решения плана
@@ -69,11 +71,11 @@
 |---|---|---|
 | Р1 | **Отдельная служба `public-server/` со своим `package.json`** (express, better-sqlite3; без bcryptjs — паролей у службы нет).<br>• В разработке `node_modules` берутся от корня (разрешение модулей идёт вверх по папкам), как у `control-plane/` (его README).<br>• На сервере — `npm ci --omit=dev` внутри `public-server/`.<br>• Код ставится выгрузкой репозитория целиком: служба импортирует `server/services/control/licence.js`, `server/services/api/sync-identity.js`, `secret-box.js` (`keyHash`), `public/js/shared/*`. | Дизайн §1 (А): один репозиторий — один протокол, одни справочники, одна проверка подписи. Свой `package.json` — честный список зависимостей для установки на другой машине и отдельного процесса (решение 16: свой потолок памяти). Выпуск программы клиники службу не берёт (разрешающий список `scripts/build-bundle.mjs`; страж `not-shipped.test.js`). |
 | Р2 | **Хранилище — SQLite** (WAL, `foreign_keys`, **`secure_delete`**, `busy_timeout`). Одна миграция `001_public_server.sql`, 10 таблиц:<br>• `clinics`, `slug_aliases`, `connections`, `media`;<br>• `requests`, `inbox`, `events_seen`;<br>• `deliveries`, `delivery_log`, `access_log`.<br>Страж `schema.test.js` сверяет каждую колонку со списком и не пускает колонки «пациента, ключа, секрета». | Как `control-plane/`. `secure_delete` затирает стёртую строку очереди (шифротекст) на странице базы. Уборка делает `wal_checkpoint(TRUNCATE)`. Решение 16: меньше данных — меньше риска. |
-| Р3 | **Личность клиники** (`clinic-auth.js`), по порядку:<br>1. лицензия подписана производителем (`verifyLicence` программы) и выдана этой клинике;<br>2. отпечаток присланного ключа = `payload.api_sync_key`;<br>3. время запроса — в пределах ±15 минут (`PUBLIC_SYNC_SKEW_MIN`, отказ 401 `clock_skew` с `server_time`);<br>4. подпись запроса.<br>Решает **самая новая лицензия** (по `issued_at`):<br>• более старая лицензия с другим ключом — 401 `licence_outdated`;<br>• ключи, снимок и время с `generated_at` старше сохранённого не применяются. | Дизайн §4 (А): без общих секретов и без вопросов к серверу лицензий. Клиника сама выбирает, какой `licence.dat` приложить: старая лицензия без «не оплачено» иначе обходила бы решение 17. Окно часов и «не старше» не дают проиграть перехваченный `PUT /keys` и включить обратно выключенный ключ. |
+| Р3 | **Личность клиники** (`clinic-auth.js`), по порядку:<br>1. лицензия подписана производителем (`verifyLicence` программы) и выдана этой клинике;<br>2. отпечаток присланного ключа = `payload.api_sync_key`;<br>3. время запроса — в пределах ±15 минут (`PUBLIC_SYNC_SKEW_MIN`, решение контролёра 2026-10-12; отказ 401 `clock_skew` с `server_time`);<br>4. подпись запроса.<br>Решает **самая новая лицензия** (по `issued_at`):<br>• более старая лицензия с другим ключом — 401 `licence_outdated`;<br>• ключи, снимок и время с `generated_at` старше сохранённого не применяются. | Дизайн §4 (А): без общих секретов и без вопросов к серверу лицензий. Клиника сама выбирает, какой `licence.dat` приложить: старая лицензия без «не оплачено» иначе обходила бы решение 17. Окно часов и «не старше» не дают проиграть перехваченный `PUT /keys` и включить обратно выключенный ключ. |
 | Р4 | **Состояние лицензии — одна функция** `licence-gate.js`: `subscriptionOf` (только явное `payload.subscription === 'unpaid'`) и `licenceStanding`.<br>• `lapsed` (срок вышел) — 503 `licence_lapsed` партнёрам и каналу клиники (§10);<br>• `unpaid` — 503 партнёрам, канал клиники открыт: события по уже принятым записям доходят (§9, рекомендация). | Решения 4 и 17. Шов для 8c: если поле назовут иначе — меняется одна функция и её тест. Неизвестное слово — «active»: назвать платящую клинику неплательщиком хуже (правило `easymed-licence-lockout`). Текст партнёру — «Клиника временно недоступна. Позвоните в клинику.» и телефон клиники, не «не оплатила». |
 | Р5 | **Данные пациента.**<br>• Проверяются правилами разбора клиники (`parseInboxItem`): имя ≤ 120, телефон ≤ 32 знаков и ≥ 7 цифр, комментарий ≤ 1000.<br>• Запечатываются `sealFor(box_key)` в миг приёма. Открытыми не лежат нигде: ни в `requests`, ни в `inbox.data`, ни в журнале, ни в ответах.<br>• Строка очереди стирается **целиком** при `POST /inbox/ack`, как у поддельного сервера 8a.<br>• Статус заявки без данных пациента живёт 90 дней. | Решения 5 и 16, дизайн §1. Тот же код запечатывания, что открывает клиника (`sync-identity.js`): тест задачи 4 открывает элемент ключом клиники и прогоняет его через `parseInboxItem` клиники. |
 | Р6 | **Статус ведёт клиника**: её события, тело `webhookBody` — `status`, `reason`, `start`, `offered_start`, `offer_until`. Сервер пишет только своё:<br>• приём — `new` или `pending` без `hold_until`;<br>• `held` из подтверждения → `hold_until`;<br>• отмена пациентом: ждущая или с предложением — сразу `cancelled` (клиника освобождает время без события); записанная — остаётся `booked` с `cancel_requested`, пока клиника не отменит визит;<br>• согласие на другое время → `pending` на новом времени; отказ → `cancelled`.<br>Позднее «истекло» или отказ клиники не перебивает отмену партнёра. | Дизайн §6, §7; `bookings.js` 8a: `partnerCancel` и `partnerDeclineOffer` событий не шлют, `partnerAcceptOffer` сообщает срок через `held`. Клиника, вернувшись после обрыва, сначала истекает удержания и только потом читает очередь — без этого правила партнёр увидел бы «истекло» после своей отмены. |
-| Р7 | **Закрытие без ответа** — новый статус `closed` с `reason`:<br>• `not_processed` — клиника забрала онлайн-запись (подтвердила курсор), но 30 минут не держит время и молчит (не открылось её ключом — риск 6 дизайна; не смогла принять);<br>• `not_collected` — клиника не забрала заявку 7 суток: строка очереди с шифротекстом стёрта.<br>Уведомления нет: подписать его может только клиника (решение 5), партнёр видит статус в `GET /requests/{id}`. Позднее событие клиники сильнее закрытия. | Открытый пункт 8a. 30 минут: клиника отвечает в том же такте (срок — в `held` того же подтверждения, отказ — событием через миллисекунды). 7 суток — та же граница, что «клиника молчит 7 суток — 503» (дизайн §2), и предел, сколько запечатанные данные лежат вне Узбекистана (решение 16). «Перезвоните» неудачу приёма не различить — 8a не сообщает пропуски (риск 3). |
+| Р7 | **Закрытие без ответа** — новый статус `closed` с `reason`:<br>• `not_processed` — клиника забрала онлайн-запись (подтвердила курсор), но 30 минут не держит время и молчит (не открылось её ключом — риск 6 дизайна; не смогла принять);<br>• `not_collected` — клиника не забрала заявку за сутки (решение владельца 20, `PUBLIC_UNCOLLECTED_MAX_HOURS`): строка очереди с шифротекстом стёрта. Элементы очереди без данных пациента (отмена, ответ на другое время) ждут клинику 7 суток.<br>Уведомления нет: подписать его может только клиника (решение 5), партнёр видит статус в `GET /requests/{id}`. Позднее событие клиники сильнее закрытия. | Открытый пункт 8a. 30 минут: клиника отвечает в том же такте (срок — в `held` того же подтверждения, отказ — событием через миллисекунды). Сутки — решение владельца 20 (вопрос 1): предел, сколько запечатанные данные лежат вне Узбекистана (решение 16). «Клиника молчит 7 суток — 503» (дизайн §2) — отдельное правило и не меняется; до этой границы ждут элементы без данных пациента — иначе клиника, выключенная на выходные, не узнала бы об отмене визита. «Перезвоните» неудачу приёма не различить — 8a не сообщает пропуски (риск 3). |
 | Р8 | **409 `slot_taken`**:<br>• по присланному времени — приём N минут требует `ceil(N/15)` свободных окон подряд без разрыва;<br>• плюс своя очередь — ждущие записи с живым или ещё не назначенным сроком и встречные предложения.<br>День за пределами присланного (клиника давно молчит) — запись принимается. | Дизайн §5: «сервер — первая линия», правду говорит клиника. Решение 19: запись принимается и при клинике без связи. |
 | Р9 | **`stale` и `as_of`**:<br>• `as_of` — когда клиника последний раз была на связи (опрос очереди каждые 15 с);<br>• `stale: true` — клиника молчит дольше 10 минут. | 8a шлёт неизменное время не чаще раза в 15 минут (`HEARTBEAT_MS`). Возраст присланного делал бы `stale` почти всегда, а пока клиника опрашивает очередь, её изменения доходят за такт. |
 | Р10 | **Вход партнёра** (`partner-auth.js`), по порядку:<br>1. потолок по IP — 1200 в минуту (до поиска клиники: перебор имён в адресе тоже упирается в лимит);<br>2. клиника по имени в адресе;<br>3. https;<br>4. состояние клиники — 503;<br>5. ключ: SHA-256 от `Bearer` среди отпечатков (`keyHash` клиники); выключен — `key_disabled`, истёк — `key_expired`; неверные ключи — не больше 30 в минуту с IP;<br>6. «Разрешённые IP» (`net.BlockList`, неверная запись — никого);<br>7. сайт: предварительный запрос CORS — если сайт есть у любого включённого подключения; сам запрос — только с сайта своего ключа, чужой — 403;<br>8. лимит ключа (`rate_limit`) и записи (30 в минуту) — 429 + `Retry-After`;<br>9. права раздела — 403 `forbidden_scope`.<br>Канал клиники: 600 запросов в минуту с IP — **до** чтения тела (чужой без подписи не заставит принимать мегабайты), затем 600 в минуту на клинику. | Дизайн §9, макет «Безопасность». Скользящее окно из двух отрезков по минуте — три числа на ключ, память не растёт (машина общая). Запрос с ключом с чужого сайта браузер отправил бы, даже не дав прочесть ответ, — поэтому отказ, а не просто без CORS. |
@@ -356,7 +358,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { readConfig } from './config.js';
+import { readConfig, DEFAULT_UNCOLLECTED_MAX_HOURS, DEFAULT_SYNC_SKEW_MIN } from './config.js';
 
 const ROOT = path.resolve('/srv/public-server');
 
@@ -370,6 +372,7 @@ test('умолчания: слушает только 127.0.0.1:8095, за nginx
   assert.equal(c.requireHttps, true);
   assert.equal(c.offsetMin, 300);
   assert.equal(c.syncSkewMs, 15 * 60000);
+  assert.equal(c.uncollectedMaxMs, 24 * 3600000);
   assert.deepEqual(c.selfIps, []);
   assert.equal(c.metricsToken, '');
   assert.equal(c.webhooks, true);
@@ -379,7 +382,7 @@ test('умолчания: слушает только 127.0.0.1:8095, за nginx
 test('переопределение переменными окружения', () => {
   const c = readConfig({
     PUBLIC_PORT: '9001', PUBLIC_BIND: '0.0.0.0', PUBLIC_DATA_DIR: '/var/lib/easymed-public', PUBLIC_BASE_URL: 'https://api.test/',
-    PUBLIC_TRUST_PROXY: '0', PUBLIC_REQUIRE_HTTPS: '0', PUBLIC_TZ_OFFSET_MIN: '0', PUBLIC_SYNC_SKEW_MIN: '60',
+    PUBLIC_TRUST_PROXY: '0', PUBLIC_REQUIRE_HTTPS: '0', PUBLIC_TZ_OFFSET_MIN: '0', PUBLIC_SYNC_SKEW_MIN: '60', PUBLIC_UNCOLLECTED_MAX_HOURS: '48',
     PUBLIC_SELF_IPS: '45.77.242.169, 10.0.0.5', PUBLIC_METRICS_TOKEN: 'm', PUBLIC_WEBHOOKS: '0', PUBLIC_LICENCE_PUBLIC_KEY: '/etc/k.pem',
   }, { root: ROOT });
   assert.equal(c.port, 9001);
@@ -390,6 +393,7 @@ test('переопределение переменными окружения',
   assert.equal(c.requireHttps, false);
   assert.equal(c.offsetMin, 0);
   assert.equal(c.syncSkewMs, 3600000);
+  assert.equal(c.uncollectedMaxMs, 48 * 3600000);
   assert.deepEqual(c.selfIps, ['45.77.242.169', '10.0.0.5']);
   assert.equal(c.metricsToken, 'm');
   assert.equal(c.webhooks, false);
@@ -400,6 +404,15 @@ test('неверное значение — отказ с именем пере�
   assert.throws(() => readConfig({ PUBLIC_PORT: 'восемь' }, { root: ROOT }), /PUBLIC_PORT/);
   assert.throws(() => readConfig({ PUBLIC_TZ_OFFSET_MIN: '5000' }, { root: ROOT }), /PUBLIC_TZ_OFFSET_MIN/);
   assert.throws(() => readConfig({ PUBLIC_BASE_URL: 'api.easymed.uz' }, { root: ROOT }), /PUBLIC_BASE_URL/);
+  assert.throws(() => readConfig({ PUBLIC_UNCOLLECTED_MAX_HOURS: '0' }, { root: ROOT }), /PUBLIC_UNCOLLECTED_MAX_HOURS/);
+});
+
+test('сроки владельца и контролёра — именованные постоянные, одно место на каждый', () => {
+  // Решение владельца 20 (2026-10-12): не забранная клиникой заявка ждёт сутки,
+  // затем закрыта для партнёра (closed / not_collected), шифротекст стёрт.
+  assert.equal(DEFAULT_UNCOLLECTED_MAX_HOURS, 24);
+  // Решение контролёра (2026-10-12): допуск часов клиники — 15 минут.
+  assert.equal(DEFAULT_SYNC_SKEW_MIN, 15);
 });
 ```
 
@@ -586,6 +599,19 @@ import { fileURLToPath } from 'node:url';
 
 export const SERVICE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
+// Сроки, выбранные владельцем и контролёром (2026-10-12), — одно место на
+// каждый; переменная окружения меняет его без правки кода:
+//   • DEFAULT_UNCOLLECTED_MAX_HOURS — решение владельца 20: онлайн-запись или
+//     «перезвоните», которую клиника не забрала, ждёт сутки; потом заявка
+//     закрыта для партнёра (closed / not_collected), шифротекст стёрт
+//     (store/requests.js closeOverdue). Переменная PUBLIC_UNCOLLECTED_MAX_HOURS.
+//     Отдельное правило «клиника молчит 7 суток — партнёрам 503» этим не
+//     меняется (routes/partner-auth.js).
+//   • DEFAULT_SYNC_SKEW_MIN — решение контролёра: часы клиники не дальше
+//     15 минут от сервера (clinic-auth.js). Переменная PUBLIC_SYNC_SKEW_MIN.
+export const DEFAULT_UNCOLLECTED_MAX_HOURS = 24;
+export const DEFAULT_SYNC_SKEW_MIN = 15;
+
 function int(env, name, def, min, max) {
   const raw = env[name];
   if (raw == null || String(raw).trim() === '') return def;
@@ -602,7 +628,8 @@ function trustProxyOf(raw) {
 
 /**
  * @returns {{port:number, bind:string, dataDir:string, baseUrl:string, licenceKeyPath:string, trustProxy:(string|false),
- *   requireHttps:boolean, offsetMin:number, syncSkewMs:number, selfIps:string[], metricsToken:string, webhooks:boolean}}
+ *   requireHttps:boolean, offsetMin:number, syncSkewMs:number, uncollectedMaxMs:number, selfIps:string[], metricsToken:string,
+ *   webhooks:boolean}}
  */
 export function readConfig(env = process.env, { root = SERVICE_ROOT } = {}) {
   const dataRaw = String(env.PUBLIC_DATA_DIR || '').trim();
@@ -617,7 +644,8 @@ export function readConfig(env = process.env, { root = SERVICE_ROOT } = {}) {
     trustProxy: trustProxyOf(env.PUBLIC_TRUST_PROXY),
     requireHttps: String(env.PUBLIC_REQUIRE_HTTPS ?? '1').trim() !== '0',
     offsetMin: int(env, 'PUBLIC_TZ_OFFSET_MIN', 300, -720, 840),
-    syncSkewMs: int(env, 'PUBLIC_SYNC_SKEW_MIN', 15, 1, 1440) * 60000,
+    syncSkewMs: int(env, 'PUBLIC_SYNC_SKEW_MIN', DEFAULT_SYNC_SKEW_MIN, 1, 1440) * 60000,
+    uncollectedMaxMs: int(env, 'PUBLIC_UNCOLLECTED_MAX_HOURS', DEFAULT_UNCOLLECTED_MAX_HOURS, 1, 720) * 3600000,
     selfIps: String(env.PUBLIC_SELF_IPS || '').split(',').map((s) => s.trim()).filter(Boolean),
     metricsToken: String(env.PUBLIC_METRICS_TOKEN || '').trim(),
     webhooks: String(env.PUBLIC_WEBHOOKS ?? '1').trim() !== '0',
@@ -1270,8 +1298,10 @@ import { verifyLicence } from '../../server/services/control/licence.js';
 import { verifyRequest } from '../../server/services/api/sync-identity.js';
 import { subscriptionOf } from './licence-gate.js';
 import { isoOf } from './lib/time.js';
+import { DEFAULT_SYNC_SKEW_MIN } from './config.js';
 
-export const DEFAULT_SKEW_MS = 15 * 60000;
+/** Допуск часов клиники — 15 минут (решение контролёра 2026-10-12; config.js). */
+export const DEFAULT_SKEW_MS = DEFAULT_SYNC_SKEW_MIN * 60000;
 const CLINIC_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const LICENCE_MAX = 16384;
 
@@ -1939,7 +1969,7 @@ test('отменённое партнёром не превращается в �
   assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'cancelled');
 });
 
-test('закрытие без ответа: забрала и молчит 30 минут — not_processed; не забрала 7 дней — not_collected, шифротекст стёрт', () => {
+test('закрытие без ответа: забрала и молчит 30 минут — not_processed; не забрала сутки (решение владельца 20) — not_collected, шифротекст стёрт', () => {
   const s = setup();
   const quiet = appt(s).row;
   const held = appt(s, { externalId: 'med-2', startAt: isoOf(START + 3600000) }).row;
@@ -1952,11 +1982,28 @@ test('закрытие без ответа: забрала и молчит 30 м
   assert.equal(requestRow(s.db, s.c.clinicId, held.id).status, 'pending');
   assert.equal(requestRow(s.db, s.c.clinicId, callback.id).status, 'new');
   const late = appt(s, { externalId: 'med-3', startAt: isoOf(START + 7200000) }).row;
-  assert.deepEqual(closeOverdue(s.db, NOW + 7 * 86400000 + 1000), { not_processed: 0, not_collected: 1 });
+  assert.deepEqual(closeOverdue(s.db, NOW + 86400000 - 1000), { not_processed: 0, not_collected: 0 }, 'сутки ещё не прошли');
+  assert.deepEqual(closeOverdue(s.db, NOW + 86400000 + 1000, { uncollectedMaxMs: 48 * 3600000 }), { not_processed: 0, not_collected: 0 },
+    'срок — настройка PUBLIC_UNCOLLECTED_MAX_HOURS');
+  assert.deepEqual(closeOverdue(s.db, NOW + 86400000 + 1000), { not_processed: 0, not_collected: 1 });
   assert.deepEqual([requestRow(s.db, s.c.clinicId, late.id).status, requestRow(s.db, s.c.clinicId, late.id).reason], ['closed', 'not_collected']);
   assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 0);
   applyEvents(s.db, s.c.clinicId, [event(9, quiet, 'booking.declined', 'declined', { reason: 'slot_taken' })], NOW + 32 * 60000);
   assert.equal(requestRow(s.db, s.c.clinicId, quiet.id).status, 'declined', 'позднее слово клиники сильнее закрытия');
+});
+
+test('без данных пациента — отмена пациентом записанного визита — ждёт клинику 7 суток: решение 20 — о заявках с шифротекстом', () => {
+  const s = setup();
+  const a = appt(s).row;
+  ackInbox(s.db, s.c.clinicId, '1', [{ request_id: a.id, hold_until: isoOf(NOW + 1800000) }], NOW);
+  s.db.prepare("UPDATE requests SET status = 'booked' WHERE id = ?").run(a.id);
+  partnerCancel(s.db, requestRow(s.db, s.c.clinicId, a.id), NOW);
+  assert.deepEqual(closeOverdue(s.db, NOW + 3 * 86400000), { not_processed: 0, not_collected: 0 });
+  assert.deepEqual(inboxItems(s.db, s.c.clinicId, 0).map((i) => [i.type, i.sealed]), [['appointment.cancel', undefined]],
+    'клиника, выключенная на выходные, всё равно узнает об отмене визита');
+  closeOverdue(s.db, NOW + 7 * 86400000 + 1000);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 0, 'клиника молчит 7 суток — элемент снят');
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'booked');
 });
 
 test('уборка: статусы старше 90 дней, номера событий старше 30 дней', () => {
@@ -2041,7 +2088,12 @@ export function purgeLogs(db, now) {
 //       not_processed — клиника забрала онлайн-запись, но за 30 минут не держит
 //         время и ничего не ответила (не открылось её ключом — ключ сменили;
 //         клиника не смогла принять) — партнёру «позвоните в клинику»;
-//       not_collected — клиника не забрала заявку за 7 дней: шифротекст стёрт.
+//       not_collected — клиника не забрала заявку за сутки (решение владельца 20,
+//         2026-10-12; настройка PUBLIC_UNCOLLECTED_MAX_HOURS): шифротекст стёрт.
+//     Элементы очереди БЕЗ данных пациента (отмена пациентом, ответ на другое
+//     время) решение 20 не касается: они ждут клинику 7 суток — столько, сколько
+//     партнёры ещё видят молчащую клинику (дальше — 503, routes/partner-auth.js),
+//     иначе клиника, выключенная на выходные, не узнала бы об отмене визита.
 //     Уведомления об этом нет: подписать его может только клиника (решение 5),
 //     партнёр видит статус в GET /requests/{id}. Пришедшее позже событие клиники
 //     сильнее закрытия — клиника правда.
@@ -2049,10 +2101,15 @@ import crypto from 'node:crypto';
 import { sealFor } from '../../../server/services/api/sync-identity.js';
 import { EVENTS, webhookUrlProblem } from '../../../public/js/shared/api-connections.js';
 import { isoOf, msOf } from '../lib/time.js';
+import { DEFAULT_UNCOLLECTED_MAX_HOURS } from '../config.js';
 
-const DAY = 86400000;
+const HOUR = 3600000;
+const DAY = 24 * HOUR;
 export const ANSWER_TIMEOUT_MS = 30 * 60000;
-export const UNCOLLECTED_MAX_MS = 7 * DAY;
+/** Не забранная заявка с шифротекстом — сутки (решение владельца 20; config.js). */
+export const UNCOLLECTED_MAX_MS = DEFAULT_UNCOLLECTED_MAX_HOURS * HOUR;
+/** Элемент очереди без данных пациента — 7 суток (не короче срока заявок). */
+export const PLAIN_ITEM_MAX_MS = 7 * DAY;
 export const REQUEST_KEEP_MS = 90 * DAY;
 export const EVENTS_SEEN_KEEP_MS = 30 * DAY;
 export const INBOX_PAGE = 100;
@@ -2294,21 +2351,33 @@ export function applyEvents(db, clinicId, events, now) {
   return { accepted };
 }
 
-/** Фон: закрыть то, на что клиника не ответит. → {not_processed, not_collected} */
-export function closeOverdue(db, now) {
+/**
+ * Фон: закрыть то, на что клиника не ответит. → {not_processed, not_collected}
+ * uncollectedMaxMs — срок не забранной заявки с шифротекстом (config.js
+ * uncollectedMaxMs, PUBLIC_UNCOLLECTED_MAX_HOURS); элементы без данных пациента
+ * ждут PLAIN_ITEM_MAX_MS, но не меньше этого срока.
+ */
+export function closeOverdue(db, now, { uncollectedMaxMs = UNCOLLECTED_MAX_MS } = {}) {
   const at = isoOf(now);
+  const sealedBefore = isoOf(now - uncollectedMaxMs);
+  const plainBefore = isoOf(now - Math.max(PLAIN_ITEM_MAX_MS, uncollectedMaxMs));
   let notProcessed = 0;
   let notCollected = 0;
   db.transaction(() => {
     notProcessed = db.prepare(`UPDATE requests SET status = 'closed', reason = 'not_processed', updated_at = ?
                                WHERE kind = 'appointment' AND status = 'pending' AND delivered_at IS NOT NULL AND answered_at IS NULL
                                  AND hold_until IS NULL AND delivered_at <= ?`).run(at, isoOf(now - ANSWER_TIMEOUT_MS)).changes;
-    const old = db.prepare('SELECT cursor, clinic_id, type, request_id FROM inbox WHERE received_at <= ?').all(isoOf(now - UNCOLLECTED_MAX_MS));
+    // plainBefore не позже sealedBefore (срок без данных — не короче), поэтому
+    // кандидаты — всё, что старше sealedBefore.
+    const old = db.prepare('SELECT cursor, clinic_id, type, request_id, received_at FROM inbox WHERE received_at <= ?').all(sealedBefore);
     const close = db.prepare(`UPDATE requests SET status = 'closed', reason = 'not_collected', updated_at = ?
                               WHERE id = ? AND clinic_id = ? AND status IN ('new', 'pending')`);
     const del = db.prepare('DELETE FROM inbox WHERE cursor = ?');
     for (const it of old) {
-      if (NEW_TYPES.includes(it.type)) notCollected += close.run(at, it.request_id, it.clinic_id).changes;
+      if (NEW_TYPES.includes(it.type)) {
+        if (it.received_at > sealedBefore) continue;
+        notCollected += close.run(at, it.request_id, it.clinic_id).changes;
+      } else if (it.received_at > plainBefore) continue;
       del.run(it.cursor);
     }
   })();
@@ -5286,7 +5355,7 @@ test('исходники: вызовы журнала не получают те
   - тело больше 32 КБ;
   - метки в пути и в параметрах;
   - после `ack` строк `inbox` с шифротекстом нет;
-  - `closeOverdue` через 7 суток стирает и не забранное.
+  - `closeOverdue` через сутки (решение 20) закрывает и стирает не забранное; отмена пациентом (без данных пациента) ждёт клинику 7 суток.
 - **(c) Очередь и статусы:**
   - `ack` с курсором чужой клиники и с мусором;
   - `held` чужой заявки;
@@ -5337,23 +5406,23 @@ test('исходники: вызовы журнала не получают те
 
 ## Вопросы владельцу
 
-Каждый — простыми словами, с вариантами, рекомендацией и примером. План строит рекомендованное; смена — одна постоянная.
+Каждый — простыми словами, с вариантами, рекомендацией и примером. **Ответы 2026-10-12:** вопрос 1 — **А, сутки** (владелец, решение 20 спецификации); вопрос 2 — **А, 15 минут** (решение контролёра). Код построен по ответам; смена — одна постоянная в `config.js` или настройка окружения.
 
 **Вопрос 1. Сколько ждать клинику, которая не забирает онлайн-записи?** Решение 19 — запись принимается, даже если ПК клиники выключен. Всё это время имя и телефон пациента лежат на сервере в Сингапуре — запечатанными, сервер их прочесть не может.
-- **А:** сутки. Меньше всего данных вне Узбекистана. Но клиника, выключенная на выходные, потеряет пятничные вечерние записи — партнёр получит «клиника не получила заявку».
-- **Б (рекомендую, так построено):** 7 суток — тот же срок, после которого партнёры и так видят «клиника временно недоступна» (дизайн §2). Выходные и праздники клиника переживает без потерь.
+- **А — выбрано владельцем 2026-10-12 (решение 20), так построено:** сутки. Меньше всего данных вне Узбекистана. Но клиника, выключенная на выходные, потеряет пятничные вечерние записи — партнёр получит «клиника не получила заявку».
+- **Б (рекомендовал план):** 7 суток — тот же срок, после которого партнёры и так видят «клиника временно недоступна» (дизайн §2). Выходные и праздники клиника переживает без потерь.
 - **В:** 30 суток. Почти ничего не теряется, но данные пациентов дольше всего лежат за рубежом.
 - *Пример:* клиника закрылась на Навруз с 20 по 24 марта, ПК выключен. За это время med24 прислал 6 записей. При А все 6 закрыты, партнёр видит «не получила». При Б 25 марта утром все 6 приходят в CRM: прошедшие — «не подтверждено вовремя», карточки остаются, чтобы позвонить.
-- Меняется постоянная `UNCOLLECTED_MAX_MS` в `store/requests.js` и её тест.
+- Срок — постоянная `DEFAULT_UNCOLLECTED_MAX_HOURS` в `config.js` (24) и настройка `PUBLIC_UNCOLLECTED_MAX_HOURS`; `store/requests.js` (`UNCOLLECTED_MAX_MS`, `closeOverdue`) и фон (`jobs.js`) берут его оттуда. Отмена пациентом и ответ на другое время (данных пациента нет) ждут клинику 7 суток (`PLAIN_ITEM_MAX_MS`).
 
 **Вопрос 2. Часы компьютера клиники сбиты — что делать?** Сервер отвергает запросы клиники, если её часы расходятся с настоящим временем больше чем на 15 минут: так перехваченный запрос нельзя повторить позже.
-- **А (рекомендую, так построено):** 15 минут. Если часы на ПК клиники сбиты (например, Windows стоит на московском поясе, а время подвели руками), обмен с сервером встаёт, пока часы не исправят. Экран «API» сейчас скажет «нет связи: unauthorized»; понятная надпись «часы компьютера неверны» — в 8d.
+- **А (рекомендую, так построено; решение контролёра 2026-10-12):** 15 минут. Если часы на ПК клиники сбиты (например, Windows стоит на московском поясе, а время подвели руками), обмен с сервером встаёт, пока часы не исправят. Экран «API» сейчас скажет «нет связи: unauthorized»; понятная надпись «часы компьютера неверны» — в 8d.
 - **Б:** 24 часа. Работает при любых сбитых часах, но перехваченный запрос можно повторить в течение суток — например, снова включить ключ, который клиника только что выключила.
 - *Пример:* в клинике «Шифо» часы ПК спешат на 2 часа. При А онлайн-записи не доходят, пока администратор не поправит часы (или Easy-Med по телефону). При Б всё работает, но у защиты ключей окно — сутки.
-- Меняется настройка `PUBLIC_SYNC_SKEW_MIN`.
+- Срок — постоянная `DEFAULT_SYNC_SKEW_MIN` в `config.js` (её же берёт `clinic-auth.js`) и настройка `PUBLIC_SYNC_SKEW_MIN`.
 
 **Сообщить владельцу (решено, не вопросы):**
-- **Заявку, на которую клиника не ответила, сервер закрывает сам** — статус «закрыта» с причиной: «клиника не смогла прочитать заявку» (через 30 минут) или «клиника не получила» (через 7 суток). Уведомления партнёру об этом нет — подписать его может только клиника (решение 5); партнёр видит статус по номеру заявки.
+- **Заявку, на которую клиника не ответила, сервер закрывает сам** — статус «закрыта» с причиной: «клиника не смогла прочитать заявку» (через 30 минут) или «клиника не получила» (через сутки — решение 20). Уведомления партнёру об этом нет — подписать его может только клиника (решение 5); партнёр видит статус по номеру заявки.
 - **Неоплата:** партнёры видят «клиника временно недоступна» и телефон клиники. Клиника, приложившая старую лицензию без отметки, отметку не снимет.
 - **Клиника, не выходившая на связь 7 суток**, — партнёрам «временно недоступна»: выключенный в ней ключ не работает по старым правам.
 - **Прежний адрес клиники** (`/shifo/` → `/shifo-med/`) работает 30 дней; занять его другая клиника за это время не может.
@@ -5380,7 +5449,7 @@ test('исходники: вызовы журнала не получают те
 4. **Наблюдение:**
    - `/_health` раз в минуту и сообщение в Telegram при сбое;
    - `/_metrics`: очередь, `inbox_oldest_at`, `deliveries_failed_24h`, `errors_5xx_24h`.
-5. **Резервные копии `public.db`:** не дольше 7 суток, зашифрованными, не за пределы машины без шифрования. В них — шифротекст не забранных заявок.
+5. **Резервные копии `public.db`:** не дольше суток (столько живёт не забранная заявка — решение 20), зашифрованными, не за пределы машины без шифрования. В них — шифротекст не забранных заявок.
 6. **Переключатель «публичный сервер» на клинику** в панели — это и есть `api_sync_key` в лицензии.
 7. **Срочный отзыв ключа партнёра из панели** при клинике без связи: у 8b админ-адреса нет. Предложение для 8c — подписанный производителем список отозванных отпечатков, который сервер принимает своим адресом. Решает план 8c.
 8. **Проба на тестовой клинике :8712** — сквозной обмен с настоящим сервером.
@@ -5389,11 +5458,11 @@ test('исходники: вызовы журнала не получают те
 
 ## Риски
 
-1. **Часы клиники сбиты больше чем на 15 минут** — обмен встаёт (401 `clock_skew`). Экран 8a пишет «нет связи: unauthorized». Решает вопрос 2; понятная надпись — 8d.
+1. **Часы клиники сбиты больше чем на 15 минут** — обмен встаёт (401 `clock_skew`), онлайн-записи до клиники не доходят и через сутки закрываются для партнёра (решение 20). Экран 8a пишет «нет связи: unauthorized». Вопрос 2 решён: 15 минут (решение контролёра 2026-10-12); понятная надпись — 8d.
 2. **Сервер закрывает заявку без уведомления** (`closed`) — партнёр узнаёт об этом, только спросив `GET /requests/{id}`. Документация шага 9 обязана это сказать.
 3. **«Перезвоните», не открывшаяся ключом клиники, остаётся `new`** до уборки через 90 дней: 8a не сообщает пропуски в подтверждении. Лечение — `skipped` в `POST /inbox/ack` (8d, «Не входит»). С онлайн-записью этого нет: её закрывает `not_processed`.
 4. **Продление по телефону** (разблокировка без новой лицензии): программа клиники работает, а партнёры видят 503 после `valid_until` подписанной лицензии.
-5. **Остатки на диске.** `secure_delete` и сброс WAL убирают шифротекст из файлов базы, но не из блоков файловой системы и не из резервных копий. Копии — 8c, не дольше 7 суток.
+5. **Остатки на диске.** `secure_delete` и сброс WAL убирают шифротекст из файлов базы, но не из блоков файловой системы и не из резервных копий. Копии — 8c, не дольше суток (решение 20).
 6. **Одна база и один процесс на все клиники**; лимиты — в памяти процесса. Второй процесс за nginx разделил бы лимиты пополам. Потолок памяти 256 МБ; кэш снимков (32) и корзины лимитов (50 000) ограничены.
 7. **nginx переписывает путь или query** (`proxy_pass` с путём, нормализация `%`-кодирования) — подпись клиники не сходится, обмен — 401. `DEPLOY.md`: `proxy_pass` без пути.
 8. **Cloudflare** (вопрос 2 дизайна): IP партнёров станут адресами Cloudflare, пока не настроены `set_real_ip_from` и `PUBLIC_TRUST_PROXY`. Тогда «Разрешённые IP» и лимиты считают не того.
