@@ -299,6 +299,10 @@ export async function confirmBooking(db, { id, patientId }, user, { now = Date.n
     }, user, { excludeHoldId: hold.id });
     if (!res || !res.booked) throw new BookingError(MSG.notPending, 409);
     const done = db.transaction(() => {
+      // M1: пока подтверждение ждало (публикация в чужое здание за замком обмена),
+      // фон мог уже довести заявку (recoverConfirming) — второго события не надо.
+      const cur = db.prepare('SELECT * FROM api_requests WHERE id = ?').get(row.id);
+      if (cur.status !== 'confirming') return cur;
       releaseHolds(db, row.id, 'confirmed', now);
       const out = setStatus(db, row.id, { status: 'confirmed', visit_id: res.visit.id, patient_id: pid, handled_by: (user && user.id) || null }, now);
       enqueueEvent(db, { request: out, event: EV.confirmed, status: 'confirmed',
@@ -369,16 +373,61 @@ export function acceptRequest(db, { id }, user, { now = Date.now(), kekPath = nu
   })();
 }
 
+/** Ревью 8a, M1: подтверждение, не закончившееся за столько, считается прерванным. */
+export const CONFIRM_STALE_MS = 5 * 60000;
+
+/**
+ * Ревью 8a, M1 — ПОДТВЕРЖДЕНИЕ, ПРЕРВАННОЕ ПЕРЕЗАПУСКОМ. confirmBooking ставит
+ * 'confirming', ensure_visit записывает визит, а запись к врачу другого здания
+ * потом ждёт публикацию за замком обмена (до 12 секунд и ожидание замка):
+ * выключили ПК или перезапустили сервер в этот миг — заявка навсегда
+ * «Подтверждается», визит ни к чему не привязан, партнёр не знает. Фон (каждый
+ * такт) берёт такие заявки старше CONFIRM_STALE_MS: визит есть (карта карточки,
+ * врач, то же мгновение) — доводит до «записан» с событием; визита нет — снова
+ * ждёт, пока время держится, иначе истекает с отказом партнёру.
+ */
+function recoverConfirming(db, { now, kekPath }) {
+  let rows = [];
+  try { rows = db.prepare("SELECT * FROM api_requests WHERE status = 'confirming'").all(); } catch { return 0; }
+  let expired = 0;
+  for (const row of rows) {
+    if (!(now - Date.parse(row.updated_at) >= CONFIRM_STALE_MS)) continue;
+    const card = row.crm_request_id ? db.prepare('SELECT patient_id FROM crm_requests WHERE id = ?').get(row.crm_request_id) : null;
+    const pid = card ? card.patient_id : null;
+    const visit = pid && row.doctor_id
+      ? db.prepare("SELECT * FROM visits WHERE patient_id = ? AND doctor_id = ? AND status NOT IN ('cancelled', 'no_show') ORDER BY id DESC")
+        .all(pid, row.doctor_id).find((v) => Date.parse(v.visit_date) === Date.parse(row.start_at)) || null
+      : null;
+    db.transaction(() => {
+      if (visit) {
+        releaseHolds(db, row.id, 'confirmed', now);
+        const out = setStatus(db, row.id, { status: 'confirmed', visit_id: visit.id, patient_id: pid }, now);
+        enqueueEvent(db, { request: out, event: EV.confirmed, status: 'confirmed',
+          details: { doctor_id: out.doctor_id, branch_id: out.branch_id, start: partnerTime(visit.visit_date) }, now, kekPath });
+      } else if (liveHoldOf(db, row.id, now)) {
+        setStatus(db, row.id, { status: 'pending' }, now);
+      } else {
+        releaseHolds(db, row.id, 'expired', now);
+        const out = setStatus(db, row.id, { status: 'expired', decline_reason: 'expired' }, now);
+        enqueueEvent(db, { request: out, event: EV.declined, status: 'expired', details: { reason: 'expired', doctor_id: out.doctor_id }, now, kekPath });
+        expired += 1;
+      }
+    })();
+  }
+  return expired;
+}
+
 /**
  * Истечение: удержание вышло, а регистратор не ответил — время уже свободно
  * (holds.js), здесь записывается итог и партнёр получает отказ «expired».
- * Подтверждаемые в эту секунду (confirming) не трогаются.
+ * Подтверждаемые в эту секунду (confirming) не трогаются; прерванные (дольше
+ * CONFIRM_STALE_MS) — доводятся или возвращаются (M1).
  * @returns {number} сколько заявок истекло
  */
 export function expireDue(db, { now = Date.now(), kekPath = null } = {}) {
   let rows = [];
   try { rows = db.prepare("SELECT * FROM api_requests WHERE status IN ('pending', 'offered')").all(); } catch { return 0; }
-  let n = 0;
+  let n = recoverConfirming(db, { now, kekPath });
   for (const row of rows) {
     if (holdState(row, now) !== 'expired' || liveHoldOf(db, row.id, now)) continue;
     db.transaction(() => {

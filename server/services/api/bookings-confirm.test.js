@@ -194,3 +194,43 @@ test('I8: врач главного здания без приписки, пар
   assert.equal(v.cross_branch, '');
   assert.notEqual(v.branch_id, 2);
 });
+
+// ─── РЕВЬЮ 8a, M1: ПОДТВЕРЖДЕНИЕ, ПРЕРВАННОЕ ПОСЛЕ ЗАПИСИ ВИЗИТА ────────────
+
+test('M1: процесс оборвался после записи визита — фон через 5 минут доводит заявку до «записан» (визит, событие партнёру ровно одно); раньше — не трогает', async () => {
+  const s = bookingSeed();
+  const { ensureVisit } = await import('../rpc/visits.js');
+  const id = await pending(s);
+  patient(s);
+  let resume;
+  const parked = new Promise((res) => { resume = res; });
+  const p = confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath,
+    ensureVisitImpl: async (...a) => { const out = await ensureVisit(...a); await parked; return out; } });
+  for (let i = 0; i < 10; i += 1) await new Promise((res) => setImmediate(res));
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'confirming');
+  expireDue(s.db, { now: NOW + 4 * 60000, kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'confirming', 'подтверждение ещё может идти');
+  expireDue(s.db, { now: NOW + 6 * 60000, kekPath: s.kekPath });
+  const v = one(s.db, 'SELECT id FROM visits');
+  assert.deepEqual({ ...one(s.db, 'SELECT status, visit_id, patient_id FROM api_requests WHERE id = ?', id) }, { status: 'confirmed', visit_id: v.id, patient_id: 1 });
+  assert.equal(one(s.db, 'SELECT release_reason FROM slot_holds WHERE api_request_id = ?', id).release_reason, 'confirmed');
+  // Прерванное «проснулось» (замок обмена освободился) — второго события нет.
+  resume();
+  const out = await p;
+  assert.equal(out.request.status, 'confirmed');
+  assert.equal(one(s.db, "SELECT COUNT(*) AS n FROM api_outbox WHERE event = 'booking.confirmed'").n, 1);
+});
+
+test('M1: оборвалось до записи визита — заявка снова ждёт, пока время держится; срок вышел — истекла с отказом партнёру', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  patient(s);
+  confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath, ensureVisitImpl: () => new Promise(() => {}) }).catch(() => {});
+  for (let i = 0; i < 5; i += 1) await new Promise((res) => setImmediate(res));
+  expireDue(s.db, { now: NOW + 6 * 60000, kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'pending');
+  s.db.prepare("UPDATE api_requests SET status = 'confirming', updated_at = ? WHERE id = ?").run(new Date(NOW).toISOString(), id);
+  expireDue(s.db, { now: NOW + 40 * 60000, kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'expired');
+  assert.equal(JSON.parse(one(s.db, "SELECT body FROM api_outbox WHERE event = 'booking.declined'").body).reason, 'expired');
+});
