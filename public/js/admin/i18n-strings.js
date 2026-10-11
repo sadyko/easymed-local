@@ -11806,4 +11806,6 @@ export const STRINGS = {
   "Какие услуги и цены видят пациенты на сайте клиники, в Symptex и у партнёров": {"en":"Which services and prices patients see on the clinic website, in Symptex and at partners","ru":"Какие услуги и цены видят пациенты на сайте клиники, в Symptex и у партнёров","uz":"Bemorlar klinika saytida, Symptex va hamkorlarda qaysi xizmat va narxlarni ko‘radi"},   // SERVICES_PACKAGES_V1
   // SERVICES_PACKAGES_V1 — ревью C4: состояние пакета в списке «Пакеты услуг»
   "скидка больше суммы цен услуг": {"en":"the discount is larger than the sum of the service prices","ru":"скидка больше суммы цен услуг","uz":"chegirma xizmatlar narxlari yig‘indisidan katta"},   // SERVICES_PACKAGES_V1
+  // SERVICES_PACKAGES_V1 — ревью шага 6, C9: способ скидки, в котором цена пакета стала бы другой
+  "В этом виде цена станет {sum} сум — способ скидки оставлен прежним.": {"en":"In this form the price would become {sum} sum — the discount method was left unchanged.","ru":"В этом виде цена станет {sum} сум — способ скидки оставлен прежним.","uz":"Bu ko‘rinishda narx {sum} so‘m bo‘ladi — chegirma usuli o‘zgartirilmadi."},   // SERVICES_PACKAGES_V1
 };

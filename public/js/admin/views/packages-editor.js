@@ -69,9 +69,24 @@ export function draftCalc(draft, services) {
     return packageCalc({ mode: draft.mode, value: draft.value }, packageItems(row, services).items);
 }
 
-/** «Как задать скидку» переключили: значение пересчитано, цена пакета та же (макет). */
+/**
+ * Ревью шага 6, C9 — переключение способа скидки не меняет цену пакета. Посчитанная
+ * цена (процент, сумма) округляется до 1 000, процент — до 0,1, а вписанная цена —
+ * нет: 293 500 в «сумме» стала бы 294 000, 1 267 000 «суммой» в «проценте» —
+ * 1 268 000. null — переключение цену не меняет (или это не переключение); иначе —
+ * цена, которой она стала бы в новом виде. Общее округление (package-price.js) не трогаем.
+ */
+export function modeSwitchPrice(draft, mode, services) {
+    if (!PACKAGE_MODES.includes(mode) || mode === draft.mode) return null;
+    const now = draftCalc(draft, services);
+    const next = draftCalc({ ...draft, mode, value: packageValueFor(now, mode) }, services);
+    return next.price === now.price ? null : next.price;
+}
+
+/** «Как задать скидку» переключили: значение пересчитано, цена пакета та же (макет); если в новом виде цена стала бы другой — способ прежний. */
 export function switchMode(draft, mode, services) {
     if (!PACKAGE_MODES.includes(mode) || mode === draft.mode) return draft;
+    if (modeSwitchPrice(draft, mode, services) != null) return draft;
     const value = packageValueFor(draftCalc(draft, services), mode);
     return { ...draft, mode, value };
 }
@@ -199,8 +214,20 @@ export async function renderPackagesEditor(container, { onBack = null, readOnly 
         const unit = h('span', { class: 'muted' });
         const hint = h('p', { class: 'cpf-hint' });
         const valueErr = fieldErr(valueIn);
+        // Ревью шага 6, C9 — способ, в котором цена пакета стала бы другой, не включается: окно говорит, какой она стала бы.
+        const modeNote = h('p', { class: 'cpf-hint pkg-warn', role: 'status' });
+        modeNote.hidden = true;
         const modeBtns = PACKAGE_MODES.map((m) => ({ m, el: h('button', { type: 'button', class: 'pkg-mode', 'data-mode': m, disabled: !canMoney,
-            onclick: () => { draft = switchMode(draft, m, services); valueIn.value = String(draft.value); valueErr.set(''); paint(); } }, MODE_LABEL[m]) }));
+            onclick: () => {
+                const other = modeSwitchPrice(draft, m, services);
+                if (other != null) {
+                    modeNote.textContent = trf('В этом виде цена станет {sum} сум — способ скидки оставлен прежним.', { sum: fmt(other) });
+                    modeNote.hidden = false;
+                    return;
+                }
+                modeNote.hidden = true;
+                draft = switchMode(draft, m, services); valueIn.value = String(draft.value); valueErr.set(''); paint();
+            } }, MODE_LABEL[m]) }));
         const from = h('input', { type: 'date', class: 'docprof-in', disabled: readOnly });
         const to = h('input', { type: 'date', class: 'docprof-in', disabled: readOnly });
         from.value = draft.from; to.value = draft.to;
@@ -261,7 +288,7 @@ export async function renderPackagesEditor(container, { onBack = null, readOnly 
             pubWarn.textContent = hidden.length ? trf('Партнёры не увидят пакет, пока скрыты услуги: {names}.', { names: hidden.join(', ') }) : '';
         }
         search.addEventListener('input', () => { q = search.value; paint(); });
-        valueIn.addEventListener('input', () => { draft = { ...draft, value: Number(valueIn.value) || 0 }; valueErr.set(''); paint(); });
+        valueIn.addEventListener('input', () => { draft = { ...draft, value: Number(valueIn.value) || 0 }; valueErr.set(''); modeNote.hidden = true; paint(); });
         from.addEventListener('input', () => { draft = { ...draft, from: from.value }; });
         to.addEventListener('input', () => { draft = { ...draft, to: to.value }; toF.err.set(''); });
 
@@ -312,7 +339,7 @@ export async function renderPackagesEditor(container, { onBack = null, readOnly 
                     h('div', { class: 'pkg-mode-row' },
                         h('div', { class: 'pkg-modes', role: 'group', 'aria-label': 'Как задать скидку' }, ...modeBtns.map((b) => b.el)),
                         h('div', { class: 'pkg-value-box' }, valueIn, unit)),
-                    hint, valueErr.node,
+                    hint, modeNote, valueErr.node,
                     canMoney ? null : h('p', { class: 'cpf-hint' }, 'Скидку и цену пакета меняет роль с правом «Цены и проценты».'),
                     linesBox, sumBox,
                     h('p', { class: 'cpf-note pkg-note', role: 'note' }, Icon('Info', { size: 16 }), h('span', null, NOTE))),

@@ -48,7 +48,7 @@ globalThis.fetch = async (url, opts) => {
   return ok([]);
 };
 
-const { renderPackagesEditor, draftFromRow, switchMode, draftPayload, draftCalc, pickList, PACKAGE_STATE_TEXT } = await import('../views/packages-editor.js');
+const { renderPackagesEditor, draftFromRow, switchMode, modeSwitchPrice, draftPayload, draftCalc, pickList, PACKAGE_STATE_TEXT } = await import('../views/packages-editor.js');
 
 async function mount(rows = [CHECKUP, HIDDEN, RETIRED], opts = {}) {
   reset();
@@ -230,4 +230,58 @@ test('роль без «Цен и процентов»: новый пакет �
     const stored = { discount_mode: 'percent', discount_value: 0, ...v };   // умолчания мигр. 244
     assert.equal(packageCalc(packageTerms(stored), packageItems(stored, SERVICES).items).price, 240000, 'в базе — та же цена, что в окне');
   } finally { perms.setFullAccess('Admin'); }
+});
+
+// SERVICES_PACKAGES_V1 (ревью шага 6, C9) — «Как задать скидку» не меняет цену
+// пакета. Посчитанная цена (процент, сумма) округляется до 1 000, процент — до
+// 0,1, а вписанная цена — нет: 293 500 «ценой» в «сумме» или «проценте» стала
+// бы 294 000, а 1 267 000 «суммой» в «проценте» — 1 268 000. Тогда способ не
+// переключается, а окно говорит, какой стала бы цена.
+const TYPED = { id: 7, name: 'Пакет Х', name_uz: 'X', name_en: '', service_ids: [21, 22], is_package: 1, discount_mode: 'price', discount_value: 293500,
+  discount_percent: 14.9, show_public: 0, active: 1, valid_from: null, valid_until: null };
+const PRICES = [
+  { id: 21, name: 'Услуга А', name_uz: 'A', price: 165000, type: 'lab', is_lab: 1, active: 1, online_booking: 1 },
+  { id: 22, name: 'Услуга Б', name_uz: 'B', price: 180000, type: 'imaging', is_lab: 0, active: 1, online_booking: 1 },
+  { id: 23, name: 'Услуга В', name_uz: 'V', price: 1500000, type: 'imaging', is_lab: 0, active: 1, online_booking: 1 },
+];
+
+test('способ скидки не переключается, если цена пакета стала бы другой; «в этом виде цена станет N»', () => {
+  const typed = draftFromRow(TYPED);
+  assert.equal(draftCalc(typed, PRICES).price, 293500);
+  for (const mode of ['amount', 'percent']) {
+    assert.equal(modeSwitchPrice(typed, mode, PRICES), 294000, mode);
+    assert.deepEqual(switchMode(typed, mode, PRICES), typed, 'вписанная 293 500 не становится 294 000: ' + mode);
+  }
+  const big = { ...draftFromRow(null), items: [23], mode: 'amount', value: 233000 };
+  assert.equal(draftCalc(big, PRICES).price, 1267000);
+  assert.equal(modeSwitchPrice(big, 'percent', PRICES), 1268000, '15,5 % от 1 500 000 — 1 268 000');
+  assert.deepEqual(switchMode(big, 'percent', PRICES), big);
+  // Цену способ «Цена пакета» держит всегда — туда переключение есть.
+  assert.equal(modeSwitchPrice(big, 'price', PRICES), null);
+  assert.deepEqual([switchMode(big, 'price', PRICES).mode, switchMode(big, 'price', PRICES).value], ['price', 1267000]);
+  assert.equal(modeSwitchPrice(typed, 'price', PRICES), null, 'тот же способ — не переключение');
+});
+
+test('окно: «Сумма скидки» у вписанной цены 293 500 — способ прежний, цена прежняя, подсказка; сохраняется 293 500', async () => {
+  reset();
+  packages = [TYPED]; writes.length = 0; writeError = null;
+  const box = document.createElement('div');
+  const realServices = SERVICES.splice(0, SERVICES.length, ...PRICES);
+  try {
+    await renderPackagesEditor(box, {});
+    await tick(30);
+    walk(box).find((n) => n.tagName === 'TR' && n.attrs && n.attrs['data-package-id'] === '7').click();
+    await tick();
+    const dlg = dialog();
+    buttonByText(dlg, /^Сумма скидки$/).click();
+    const txt = textOf(dlg).replace(/\s+/g, ' ');
+    assert.match(txt, /В этом виде цена станет 294 000 сум/);
+    assert.match(txt, /Цена пакета ?293 500 сум/);
+    const pressed = walk(dlg).filter((n) => n.className && /\bpkg-mode\b/.test(n.className) && n.attrs['aria-pressed'] === 'true').map((n) => textOf(n));
+    assert.deepEqual(pressed, ['Цена пакета']);
+    assert.equal(walk(dlg).find((n) => n.tagName === 'INPUT' && n.className.includes('pkg-value')).value, '293500');
+    buttonByText(dlg, /^Сохранить$/).click();
+    await tick(30);
+    assert.deepEqual([writes[0].values.discount_mode, writes[0].values.discount_value], ['price', 293500]);
+  } finally { SERVICES.splice(0, SERVICES.length, ...realServices); }
 });
