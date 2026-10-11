@@ -198,3 +198,36 @@ test('список: скидка суммой больше суммы цен у�
   assert.doesNotMatch(c[6], /На сайте/);
   assert.equal(PACKAGE_STATE_TEXT.terms_invalid[2], 'скидка больше суммы цен услуг');
 });
+
+// SERVICES_PACKAGES_V1 (ревью шага 6, C8) — роль с «Пакеты услуг: Изменение», но
+// без «Цен и процентов»: скидку окно не отправляет (база ставит 0), значит и
+// показывать новому пакету «−10 %» нельзя — окно назвало бы 216 000, а пакет
+// лёг бы за 240 000.
+test('роль без «Цен и процентов»: новый пакет — без скидки в окне, как ляжет в базу', async () => {
+  const perms = await import('../permissions.js');
+  perms.setEffectiveFromRole({ name: 'Регистратор', permissions: { sections: ['settings'],
+    grants: { 'settings.service_packages': 'edit', 'settings.service_packages.money': 'none' } } });
+  try {
+    assert.equal(perms.settingsGrantColumns('service_templates').includes('discount_value'), false, 'у роли нет денежных колонок');
+    const { box } = await mount([]);
+    buttonByText(box, /Добавить/).click();
+    await tick();
+    const dlg = dialog();
+    typeIn(walk(dlg).find((n) => n.tagName === 'INPUT' && n.attrs.id && /pkg-name-ru/.test(n.attrs.id)), 'Сердце');
+    typeIn(walk(dlg).find((n) => n.tagName === 'INPUT' && n.attrs.id && /pkg-name-uz/.test(n.attrs.id)), 'Yurak');
+    for (const name of ['ЭКГ', 'УЗИ брюшной полости']) walk(dlg).find((n) => n.className === 'pkg-pick-row' && textOf(n).startsWith(name)).click();
+    const value = walk(dlg).find((n) => n.tagName === 'INPUT' && n.className.includes('pkg-value'));
+    assert.equal(value.value, '0', 'скидка роли без права — 0');
+    const txt = textOf(dlg).replace(/\s+/g, ' ');
+    assert.ok(!txt.includes('216 000'), 'окно показало скидку, которую не запишет: ' + txt);
+    assert.match(txt, /Цена пакета ?240 000 сум/);
+    buttonByText(dlg, /^Добавить$/).click();
+    await tick(30);
+    assert.equal(writes.length, 1);
+    const v = writes[0].values;
+    assert.equal('discount_value' in v || 'discount_mode' in v || 'discount_percent' in v, false, 'деньги без права не уходят: ' + JSON.stringify(v));
+    const { packageCalc, packageTerms, packageItems } = await import('../../shared/package-price.js');
+    const stored = { discount_mode: 'percent', discount_value: 0, ...v };   // умолчания мигр. 244
+    assert.equal(packageCalc(packageTerms(stored), packageItems(stored, SERVICES).items).price, 240000, 'в базе — та же цена, что в окне');
+  } finally { perms.setFullAccess('Admin'); }
+});

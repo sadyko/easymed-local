@@ -36,7 +36,7 @@ export const PACKAGE_STATE_TEXT = Object.freeze({
     service_hidden: ['Скрыт с сайта', '', 'в пакете скрытая услуга'],
     // Ревью шага 6, C4 — скидка суммой больше суммы цен действующих услуг: пакет без скидки, наружу не уходит.
     terms_invalid:  ['Скрыт с сайта', '', 'скидка больше суммы цен услуг'],
-    retired:       ['Снят с учёта', '', ''],
+    retired:        ['Снят с учёта', '', ''],
     not_package:    ['Скрыт с сайта', '', ''],
 });
 const MODE_LABEL = Object.freeze({ percent: 'Процент', amount: 'Сумма скидки', price: 'Цена пакета' });
@@ -177,6 +177,9 @@ export async function renderPackagesEditor(container, { onBack = null, readOnly 
         const cols = settingsGrantColumns('service_templates');
         const canMoney = !readOnly && (!Array.isArray(cols) || cols.includes('discount_value'));
         let draft = draftFromRow(row);
+        // Ревью шага 6, C8 — роль без «Цен и процентов» скидку не отправляет (база ставит 0): новому
+        // пакету не показываем «−10 %» макета, которых он не получит — окно и база называют одну цену.
+        if (!row && !canMoney) draft = { ...draft, mode: 'percent', value: 0 };
         let q = '';
         const isNew = !row;
         const ov = h('div', { class: 'modal', 'data-dialog': 'package' });
