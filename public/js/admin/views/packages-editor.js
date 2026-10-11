@@ -201,7 +201,9 @@ export async function renderPackagesEditor(container, { onBack = null, readOnly 
         const shut = () => { document.removeEventListener('keydown', onEsc); ov.remove(); };
         const onEsc = (e) => { if (e.key === 'Escape') shut(); };
 
-        const name = triGroup('Название', draft.name, { key: 'pkg-name', markMissing: true, max: 120, disabled: readOnly,
+        // Один заголовок, как в макете: «Название на трёх языках» — подпись группы полей (legend),
+        // у полей — «RU / UZ / EN Название» (прежде раздел и группа повторяли «Название» дважды).
+        const name = triGroup(['Название', ' ', h('small', null, 'на трёх языках')], draft.name, { key: 'pkg-name', cellLabel: 'Название', markMissing: true, max: 120, disabled: readOnly,
             onInput: (lng, v) => { draft = { ...draft, name: { ...draft.name, [lng]: v } }; } });
         const search = h('input', { type: 'text', class: 'docprof-in', placeholder: 'Поиск услуги…', autocomplete: 'off', disabled: readOnly });
         const searchField = labeled('Добавить услугу', search, { key: 'pkg-q' });
@@ -333,7 +335,7 @@ export async function renderPackagesEditor(container, { onBack = null, readOnly 
                 h('h2', null, Icon('Copy', { size: 18 }), ' ', isNew ? 'Новый пакет услуг' : document.createTextNode(row.name || '')),
                 h('button', { class: 'modal-close', type: 'button', 'aria-label': 'Закрыть', onclick: shut }, Icon('X', { size: 16 }))),
             h('div', { class: 'modal-body pkg-body' },
-                sec('Название', 'на трёх языках', name.node),
+                h('section', { class: 'pkg-sec' }, name.node),
                 sec('Услуги пакета', 'из всех пяти групп', readOnly ? null : searchField.node, readOnly ? null : pickBox, servicesErr.node),
                 sec('Скидка и цена', '',
                     h('div', { class: 'pkg-mode-row' },

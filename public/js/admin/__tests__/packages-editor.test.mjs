@@ -285,3 +285,19 @@ test('окно: «Сумма скидки» у вписанной цены 293 5
     assert.deepEqual([writes[0].values.discount_mode, writes[0].values.discount_value], ['price', 293500]);
   } finally { SERVICES.splice(0, SERVICES.length, ...realServices); }
 });
+
+// SERVICES_PACKAGES_V1 (самопроверка шага 6) — у названия один заголовок, как в
+// макете («Название на трёх языках», у полей — «RU / UZ / EN Название»): раздел
+// окна и подпись группы полей не повторяют друг друга.
+test('окно: заголовок «Название» один — группа на трёх языках; у полей — RU / UZ / EN', async () => {
+  const { box } = await mount([]);
+  buttonByText(box, /Добавить/).click();
+  await tick();
+  const dlg = dialog();
+  const heads = walk(dlg).filter((n) => (n.tagName === 'H4' || n.tagName === 'LEGEND') && /^Название/.test(textOf(n).trim()));
+  assert.equal(heads.length, 1, 'заголовков «Название»: ' + heads.map((n) => n.tagName + ':' + textOf(n)).join(' | '));
+  assert.match(textOf(heads[0]).replace(/\s+/g, ' '), /^Название на трёх языках$/);
+  const labels = walk(dlg).filter((n) => n.tagName === 'LABEL' && /Название/.test(textOf(n))).map((n) => textOf(n).replace(/\s+/g, ' ').trim());
+  assert.deepEqual(labels.map((l) => l.slice(0, 2)), ['RU', 'UZ', 'EN'], JSON.stringify(labels));
+  for (const l of labels) assert.doesNotMatch(l, /на трёх языках/, 'подпись поля без «на трёх языках»: ' + l);
+});
