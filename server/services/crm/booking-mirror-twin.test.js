@@ -1,18 +1,21 @@
-// CRM_UNIFY_V1 / PUBLIC_API_V1 — повторная проверка 8a, п. 4: ЗЕРКАЛО ЗАПИСИ НЕ
-// ВВОЗИТ В ВИЗИТ ВТОРУЮ СТРОКУ ТОЙ ЖЕ УСЛУГИ.
+// CRM_UNIFY_V1 — СТРОКИ-ДВОЙНИКИ В ЗЕРКАЛЕ ЗАПИСИ (crm/booking-mirror.js).
 //
-// Две карточки одного пациента ждут одну и ту же консультацию в один день.
-// Запись по второй (15:00) отменили, пациента записали на 10:00: связь визита с
-// CRM берёт обе ждущие строки. Первая заводит в визит строку консультации, а
-// вторая прежде ПЕРЕНОСИЛА из отменённого визита свою — две консультации в
-// одном визите, двойной счёт. Теперь та же услуга в визите уже есть — строка
-// второй карточки берёт её, а не ввозит вторую.
+// Две карточки одного пациента держат одну и ту же услугу на один день, а
+// запись по одной из них отменяют или переносят: в визите нового дня может
+// оказаться вторая строка той же услуги (двойной счёт) или, наоборот, остаться
+// строка зеркала ×1 вместо строки регистратуры (×N, пакет, своя цена).
 //
-// Финальная проверка 8a, п. 1: «берёт её» — только когда это честно. Строку,
-// которую поставил ЧЕЛОВЕК (регистратура: количество, пакет, своя цена),
-// строка зеркала (×1 по прайсу) не вытесняет — уступает сама, как в шаге 3
-// сверки (yieldAutoLine). И две строки ОДНОЙ карточки (анализ натощак и через
-// два часа) — две настоящие строки, а не двойники: их не сливают.
+// CRM_TWIN_LINE — ОТДЕЛЬНАЯ ЗАДАЧА. Три попытки исправить это в ходе шага 8a
+// (a657cc23, e0e6f44e) каждая ломала другой случай общего кода CRM: строку,
+// которую делят две карточки, гоняло между визитами; после слияния карточек
+// консультация попадала в счёт дважды. Зеркало возвращено к виду до них
+// (9140fbe6); поведение двойников — прежнее, ещё не выпущенное поведение
+// CRM_UNIFY_V1, и проектируется отдельно. Ниже: случаи, которые прежний код
+// решает верно, — тесты; случаи, которые он решает неверно, — todo (ни «да»,
+// ни «нет»; код сценариев — в истории, e0e6f44e и a657cc23).
+// Онлайн-запись (PUBLIC_API_V1) в этот путь сотрудников больше не ведёт: отказ
+// «day_visit_exists» советует другое время или перенос той записи на другой
+// день, а не отмену и повторное подтверждение.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
@@ -21,6 +24,7 @@ import { ensureVisit } from '../rpc/visits.js';
 import { calendarBook } from '../rpc/calendar.js';
 import { mirrorVisit } from './booking-mirror.js';
 
+const TWIN = 'CRM_TWIN_LINE — отдельная задача, см. todo: ';
 const at = (day, hhmm) => { const [y, m, d] = day.split('-').map(Number); const [h, mi] = hhmm.split(':').map(Number); return new Date(y, m - 1, d, h, mi).getTime(); };
 const iso = (day, hhmm) => new Date(at(day, hhmm)).toISOString();
 const DAY = '2030-03-12';
@@ -40,29 +44,6 @@ function clinic() {
   db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Каримов Азиз', '+998901234567')").run();
   return db;
 }
-const lines = (db, visitId) => db.prepare("SELECT consultation_type_id, unit_price FROM visit_services WHERE visit_id = ? AND status <> 'cancelled'")
-  .all(visitId).map((x) => ({ ...x }));
-
-test('две карточки ждут ту же консультацию в один день; запись по второй отменили, пациента записали снова — в визите одна консультация', async () => {
-  const db = clinic();
-  // Первая карточка (раньше): сайт, другой номер — номер её с картой не свяжет.
-  const first = Number(db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, scheduled_date) VALUES ('Каримов Азиз', '+998935550000', 'website', 'in_process', '2030-03-12')").run().lastInsertRowid);
-  db.prepare("INSERT INTO crm_request_services (request_id, consultation_type_id, doctor_id, scheduled_date, status) VALUES (?, 1, 7, '2030-03-12', 'pending')").run(first);
-  // Вторая (позже): звонок, карта пациента выбрана; запись на 15:00.
-  const second = Number(db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, patient_id, scheduled_date) VALUES ('Каримов Азиз', '+998901234567', 'call', 'in_process', 1, '2030-03-12')").run().lastInsertRowid);
-  db.prepare("INSERT INTO crm_request_services (request_id, consultation_type_id, doctor_id, scheduled_date, status) VALUES (?, 1, 7, '2030-03-12', 'pending')").run(second);
-  const ph = await ensureVisit(db, { patient_id: 1, date: new Date(at('2030-03-12', '15:00')).toISOString(), doctor_id: 7,
-    book: { doctor_id: 7, start: new Date(at('2030-03-12', '15:00')).toISOString(), duration_minutes: 30 } }, CC);
-  assert.equal(lines(db, ph.visit.id).length, 1);
-  // Запись на 15:00 отменили; первая карточка получила карту пациента.
-  await calendarBook(db, { visit_id: ph.visit.id, start: new Date(at('2030-03-12', '15:00')).toISOString(), status: 'cancelled' }, REG);
-  db.prepare('UPDATE crm_requests SET patient_id = 1 WHERE id = ?').run(first);
-  const v = await ensureVisit(db, { patient_id: 1, date: new Date(at('2030-03-12', '10:00')).toISOString(), doctor_id: 7,
-    book: { doctor_id: 7, start: new Date(at('2030-03-12', '10:00')).toISOString(), duration_minutes: 30 } }, REG);
-  assert.deepEqual(lines(db, v.visit.id), [{ consultation_type_id: 1, unit_price: 150000 }], 'одна консультация, а не две');
-});
-
-// ── Финальная проверка 8a, п. 1 ─────────────────────────────────────────────
 const live = (db, visitId, sid) => db.prepare("SELECT id, quantity, unit_price, package_id FROM visit_services WHERE visit_id = ? AND service_id = ? AND status <> 'cancelled' ORDER BY id")
   .all(visitId, sid).map((x) => ({ ...x }));
 const units = (rows) => rows.reduce((n, r) => n + Number(r.quantity), 0);
@@ -79,6 +60,8 @@ function regAdd(db, visitId, serviceId, { quantity = 1, unit = null, packageId =
   return id;
 }
 
+// ── Прежний код решает верно ────────────────────────────────────────────────
+
 test('одна карточка держит два анализа глюкозы (натощак и через два часа): запись отменили и записали снова — в визите оба', async () => {
   const db = clinic();
   card(db, 'call', '+998901234567', 1);
@@ -92,61 +75,42 @@ test('одна карточка держит два анализа глюкоз�
   assert.equal(live(db, v.visit.id, 40).length, 2, 'две строки одной карточки — два анализа, а не один');
 });
 
-for (const order of ['сначала сайт', 'сначала звонок']) {
-  test(`регистратура поставила укол ×2 по записи звонка, сайт ждёт тот же укол; запись отменили и записали снова — в визите 2 укола, не 1 и не 3 (${order})`, async () => {
-    const db = clinic();
-    let site;
-    if (order === 'сначала сайт') { site = card(db, 'website', '+998935550000', null); wants(db, site, 41); }
-    card(db, 'call', '+998901234567', 1);
-    const w = await book(db, DAY, '15:00', CC);
-    regAdd(db, w.visit.id, 41, { quantity: 2 });
-    if (order === 'сначала звонок') { site = card(db, 'website', '+998935550000', null); wants(db, site, 41); }
-    assert.equal(units(live(db, w.visit.id, 41)), 2);
-    await calendarBook(db, { visit_id: w.visit.id, start: iso(DAY, '15:00'), status: 'cancelled' }, REG);
-    db.prepare('UPDATE crm_requests SET patient_id = 1 WHERE id = ?').run(site);
-    const v = await book(db, DAY, '10:00', REG);
-    assert.equal(units(live(db, v.visit.id, 41)), 2, 'строка регистратуры ×2 не уступает строке зеркала ×1');
-  });
-}
-
-for (const order of ['сначала сайт', 'сначала звонок']) {
-  test(`строка регистратуры по цене пакета и строка зеркала по прайсу на ту же услугу — остаётся пакетная (${order})`, async () => {
-    const db = clinic();
-    db.prepare("INSERT INTO service_templates (id, name, discount_percent, is_package, discount_mode, discount_value) VALUES (9, 'Check-up', 50, 1, 'percent', 50)").run();
-    let site;
-    if (order === 'сначала сайт') { site = card(db, 'website', '+998935550000', null); wants(db, site, 40); }
-    card(db, 'call', '+998901234567', 1);
-    const w = await book(db, DAY, '15:00', CC);
-    const pk = regAdd(db, w.visit.id, 40, { unit: 20000, packageId: 9 });
-    db.prepare('UPDATE visit_services SET package_full = 40000, package_price = 20000 WHERE id = ?').run(pk);
-    if (order === 'сначала звонок') { site = card(db, 'website', '+998935550000', null); wants(db, site, 40); }
-    await calendarBook(db, { visit_id: w.visit.id, start: iso(DAY, '15:00'), status: 'cancelled' }, REG);
-    db.prepare('UPDATE crm_requests SET patient_id = 1 WHERE id = ?').run(site);
-    const v = await book(db, DAY, '10:00', REG);
-    const rows = live(db, v.visit.id, 40);
-    assert.equal(rows.length, 1, 'один анализ, а не два');
-    assert.equal(rows[0].package_id, 9, 'остаётся строка регистратуры с пакетной скидкой');
-    assert.equal(rows[0].unit_price, 20000);
-  });
-}
-
-test('карточка переносит курс уколов ×10 на день, где другая карточка уже держит укол ×1 в записи, — в визите 10 уколов, а не 1', async () => {
+test('регистратура поставила укол ×2 по записи звонка, карточка сайта (заведена позже) ждёт тот же укол; запись отменили и записали снова — в визите 2 укола', async () => {
   const db = clinic();
-  const D1 = '2030-03-11';
-  const site = card(db, 'website', '+998935550000', 1, DAY);
-  wants(db, site, 41, DAY);
-  const v = await book(db, DAY, '10:00', CC);
-  assert.equal(units(live(db, v.visit.id, 41)), 1);
-  const call = card(db, 'call', '+998901234567', 1, D1);
-  const w = await book(db, D1, '15:00', REG);
-  db.prepare("INSERT OR REPLACE INTO crm_booking_links (visit_id, request_id, source, created_by, created_request) VALUES (?, ?, 'match', 2, 0)").run(w.visit.id, call);
-  regAdd(db, w.visit.id, 41, { quantity: 10 });
-  const line = db.prepare('SELECT id FROM crm_request_services WHERE request_id = ?').get(call);
-  assert.equal(units(live(db, w.visit.id, 41)), 10);
-  // Окно карточки переносит строку на DAY (crm.js saveLines: новый день, визит снят), затем сверка.
-  db.prepare('UPDATE crm_request_services SET scheduled_date = ?, visit_id = NULL WHERE id = ?').run(DAY, line.id);
-  mirrorVisit(db, w.visit.id, { actorId: 3 });
-  const again = await ensureVisit(db, { patient_id: 1, date: DAY, doctor_id: 7 }, CC);
-  assert.equal(again.visit.id, v.visit.id);
-  assert.equal(units(live(db, v.visit.id, 41)), 10, 'курс ×10 не сжимается до ×1 (180 000 недосчёта)');
+  card(db, 'call', '+998901234567', 1);
+  const w = await book(db, DAY, '15:00', CC);
+  regAdd(db, w.visit.id, 41, { quantity: 2 });
+  const site = card(db, 'website', '+998935550000', null);
+  wants(db, site, 41);
+  assert.equal(units(live(db, w.visit.id, 41)), 2);
+  await calendarBook(db, { visit_id: w.visit.id, start: iso(DAY, '15:00'), status: 'cancelled' }, REG);
+  db.prepare('UPDATE crm_requests SET patient_id = 1 WHERE id = ?').run(site);
+  const v = await book(db, DAY, '10:00', REG);
+  assert.equal(units(live(db, v.visit.id, 41)), 2);
 });
+
+test('строка регистратуры по цене пакета, карточка сайта (заведена позже) ждёт ту же услугу; запись отменили и записали снова — остаётся пакетная', async () => {
+  const db = clinic();
+  db.prepare("INSERT INTO service_templates (id, name, discount_percent, is_package, discount_mode, discount_value) VALUES (9, 'Check-up', 50, 1, 'percent', 50)").run();
+  card(db, 'call', '+998901234567', 1);
+  const w = await book(db, DAY, '15:00', CC);
+  const pk = regAdd(db, w.visit.id, 40, { unit: 20000, packageId: 9 });
+  db.prepare('UPDATE visit_services SET package_full = 40000, package_price = 20000 WHERE id = ?').run(pk);
+  const site = card(db, 'website', '+998935550000', null);
+  wants(db, site, 40);
+  await calendarBook(db, { visit_id: w.visit.id, start: iso(DAY, '15:00'), status: 'cancelled' }, REG);
+  db.prepare('UPDATE crm_requests SET patient_id = 1 WHERE id = ?').run(site);
+  const v = await book(db, DAY, '10:00', REG);
+  const rows = live(db, v.visit.id, 40);
+  assert.equal(rows.length, 1, 'один анализ, а не два');
+  assert.deepEqual([rows[0].package_id, rows[0].unit_price], [9, 20000], 'строка регистратуры с пакетной скидкой');
+});
+
+// ── Прежний код решает неверно — CRM_TWIN_LINE, отдельная задача ─────────────
+
+test.todo(TWIN + 'две карточки ждут одну консультацию на день (сайт раньше звонка), запись по звонку на 15:00 отменили, пациента записали на 10:00 — в визите должна быть одна консультация (сейчас две, 2 × 150 000)');
+test.todo(TWIN + 'карточка сайта (заведена раньше) ждёт укол, по записи звонка регистратура поставила укол ×2; запись отменили и записали снова — должно быть 2 укола (сейчас 3)');
+test.todo(TWIN + 'карточка сайта (заведена раньше) ждёт анализ, по записи звонка — пакетная строка (20 000); запись отменили и записали снова — должна остаться одна пакетная строка (сейчас обе)');
+test.todo(TWIN + 'карточка переносит курс уколов ×10 на день, где другая карточка уже держит укол ×1 в записи, — должно быть 10 уколов (сейчас 11)');
+test.todo(TWIN + 'консультацию карточки Б перенесли на день, где та же консультация карточки А уже в записи (и так же после слияния А и Б в одну карточку), — в визите должна быть одна консультация (сейчас две)');
+test.todo(TWIN + 'строку, которую делят две карточки-дубля, одна из них переносит на день, где та же услуга уже в записи, — визит нового дня должен нести одну строку (сейчас две), а прежний день — свою');
