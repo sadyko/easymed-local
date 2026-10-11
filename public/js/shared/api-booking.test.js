@@ -136,3 +136,9 @@ test('тело уведомления: белый список — данные 
   assert.ok(!JSON.stringify(body).includes('Фаррух') && !JSON.stringify(body).includes('998901234567'));
   assert.deepEqual(WEBHOOK_DETAIL_KEYS.filter((k) => /name|phone|patient|comment|mrn/.test(k)), []);
 });
+
+test('M2 (ревью 8a): ответ партнёра (отмена, согласие, отказ) несёт время, когда сервер его принял, если оно есть', () => {
+  const r = parseInboxItem({ type: 'offer.accept', cursor: '19', public_id: 'rq_e2a9f0c1', connection_id: 3, received_at: '2026-10-11T09:10:00.000Z' });
+  assert.deepEqual(r, { ok: true, value: { type: 'offer.accept', cursor: '19', public_id: 'rq_e2a9f0c1', connection_id: 3, received_at: '2026-10-11T09:10:00Z' } });
+  assert.equal('received_at' in parseInboxItem({ type: 'offer.decline', cursor: '20', public_id: 'rq_e2a9f0c1', connection_id: 3, received_at: 'вчера' }).value, false);
+});

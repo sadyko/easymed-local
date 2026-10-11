@@ -236,7 +236,7 @@ export async function ingestItem(db, raw, { now = Date.now(), kekPath = null } =
   const row = byPublicId(db, v.public_id);
   if (!row || row.connection_id !== conn.id) return { applied: false, problem: 'unknown_request' };
   if (v.type === 'appointment.cancel') return partnerCancel(db, row, { now, kekPath });
-  if (v.type === 'offer.accept') return partnerAcceptOffer(db, row, { now, kekPath });
+  if (v.type === 'offer.accept') return partnerAcceptOffer(db, row, { now, kekPath, answeredAt: v.received_at ? Date.parse(v.received_at) : null });
   return partnerDeclineOffer(db, row, { now });
 }
 
@@ -428,16 +428,27 @@ export function expireDue(db, { now = Date.now(), kekPath = null } = {}) {
   let rows = [];
   try { rows = db.prepare("SELECT * FROM api_requests WHERE status IN ('pending', 'offered')").all(); } catch { return 0; }
   let n = recoverConfirming(db, { now, kekPath });
+  const sync = (() => { try { return db.prepare('SELECT last_poll_at, last_ok_at FROM api_sync_state WHERE id = 1').get() || {}; } catch { return {}; } })();
   for (const row of rows) {
     if (holdState(row, now) !== 'expired' || liveHoldOf(db, row.id, now)) continue;
-    db.transaction(() => {
-      releaseHolds(db, row.id, 'expired', now);
-      const out = setStatus(db, row.id, { status: 'expired', decline_reason: 'expired' }, now);
-      enqueueEvent(db, { request: out, event: EV.declined, status: 'expired', details: { reason: 'expired', doctor_id: out.doctor_id }, now, kekPath });
-    })();
+    // Ревью 8a, M2: встречное предложение ждёт ответа ПАРТНЁРА, а ответ лежит в
+    // очереди публичного сервера. Пока обмен работает (уже опрашивал сервер), не
+    // истекать, пока сбор очереди после срока предложения не прошёл: иначе
+    // партнёр получил бы «истекло», а следом — согласие, данное вовремя.
+    if (row.status === 'offered' && sync.last_poll_at && !(sync.last_ok_at && sync.last_ok_at >= row.offer_until)) continue;
+    expireRow(db, row, { now, kekPath });
     n += 1;
   }
   return n;
+}
+
+/** Заявка истекла: удержание снято, итог записан, партнёру — отказ «expired». */
+function expireRow(db, row, { now, kekPath }) {
+  db.transaction(() => {
+    releaseHolds(db, row.id, 'expired', now);
+    const out = setStatus(db, row.id, { status: 'expired', decline_reason: 'expired' }, now);
+    enqueueEvent(db, { request: out, event: EV.declined, status: 'expired', details: { reason: 'expired', doctor_id: out.doctor_id }, now, kekPath });
+  })();
 }
 
 // ─── ОТВЕТЫ ПАРТНЁРА ────────────────────────────────────────────────────────
@@ -500,15 +511,34 @@ async function partnerCancel(db, row, { now, kekPath }) {
  * (решения владельца 18–19; встречное предложение до ответа ждало партнёра —
  * 30 обычных минут, offerOtherTime).
  */
-function partnerAcceptOffer(db, row, { now, kekPath }) {
-  if (row.status !== 'offered') return { applied: false, id: row.id, status: row.status };
-  if (!liveHoldOf(db, row.id, now)) { expireDue(db, { now, kekPath }); return { applied: true, id: row.id, status: 'expired' }; }
+function partnerAcceptOffer(db, row, { now, kekPath, answeredAt = null }) {
+  // Ревью 8a, M2: судить по тому, когда ответил ПАРТНЁР (публичный сервер принял
+  // ответ — received_at), а не когда клиника его забрала: клиника могла быть без
+  // связи (решение 19), а фон тем временем записать «истекло». Такое — ещё
+  // предложение: ответ, данный в срок, засчитывается.
+  const expiredOffer = row.status === 'expired' && row.decline_reason === 'expired' && row.offered_start && row.offer_until;
+  if (row.status !== 'offered' && !expiredOffer) return { applied: false, id: row.id, status: row.status };
+  const answered = Number.isFinite(answeredAt) ? answeredAt : now;
   const startMs = Date.parse(row.offered_start);
+  if (!(answered < Date.parse(row.offer_until)) || !(startMs > now)) {
+    if (row.status === 'offered') expireRow(db, row, { now, kekPath });
+    return { applied: true, id: row.id, status: 'expired' };
+  }
+  const own = liveHoldOf(db, row.id, now);
+  if (!slotIsFree(db, { doctorId: row.doctor_id, startMs, durationMin: row.duration_minutes, excludeHoldId: own ? own.id : null, now })) {
+    // Ответ вовремя, но время за это время заняли (у стойки или другой партнёр).
+    db.transaction(() => {
+      releaseHolds(db, row.id, 'declined', now);
+      const out = setStatus(db, row.id, { status: 'declined', decline_reason: 'slot_taken' }, now);
+      enqueueEvent(db, { request: out, event: EV.declined, status: 'declined', details: { reason: 'slot_taken', doctor_id: out.doctor_id }, now, kekPath });
+    })();
+    return { applied: true, id: row.id, status: 'declined' };
+  }
   const untilMs = Date.parse(holdUntilFor(isoOf(now), row.offered_start, { openOn: clinicOpenOn(db) }));
   db.transaction(() => {
     releaseHolds(db, row.id, 'accepted', now);
     placeHold(db, { doctorId: row.doctor_id, startMs, durationMin: row.duration_minutes, untilMs, apiRequestId: row.id, kind: 'booking' });
-    setStatus(db, row.id, { status: 'pending', start_at: row.offered_start, hold_until: isoOf(untilMs), offered_start: null, offer_until: null }, now);
+    setStatus(db, row.id, { status: 'pending', start_at: row.offered_start, hold_until: isoOf(untilMs), offered_start: null, offer_until: null, decline_reason: '' }, now);
     cardToDay(db, row, localDayOf(db, row.offered_start));   // I5
   })();
   return { applied: true, id: row.id, status: 'pending', hold_until: isoOf(untilMs) };

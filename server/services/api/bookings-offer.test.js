@@ -177,3 +177,51 @@ test('I7: отмена партнёром не отменяет визит, на
   assert.equal(one(s.db, 'SELECT status FROM visits WHERE id = ?', c.visit.id).status, 'scheduled', 'визит с чужой записью не отменён');
   assert.ok(one(s.db, 'SELECT partner_cancel_at FROM api_requests WHERE id = ?', id).partner_cancel_at);
 });
+
+// ─── РЕВЬЮ 8a, M2: ОТВЕТ ПАРТНЁРА ВОВРЕМЯ, ПРИНЯТЫЙ КЛИНИКОЙ ПОЗЖЕ ───────────
+
+const answer = (s, type, receivedMs, nowMs) => ingestItem(s.db, { type, cursor: '9', public_id: 'rq_test0001', connection_id: s.connId,
+  received_at: new Date(receivedMs).toISOString() }, { now: nowMs, kekPath: s.kekPath });
+
+test('M2: партнёр согласился вовремя (через 10 минут), клиника была без связи и приняла ответ через 40 — согласие засчитано, даже если фон уже записал «истекло»', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW, kekPath: s.kekPath });
+  expireDue(s.db, { now: NOW + 31 * 60000, kekPath: s.kekPath });   // обмен ещё не запускался — фон истёк предложение
+  const acc = await answer(s, 'offer.accept', NOW + 10 * 60000, NOW + 40 * 60000);
+  assert.equal(acc.status, 'pending');
+  const row = one(s.db, 'SELECT status, start_at, offered_start FROM api_requests WHERE id = ?', id);
+  assert.deepEqual([row.status, Date.parse(row.start_at), row.offered_start], ['pending', LATER, null]);
+  assert.equal(free(s, LATER, NOW + 40 * 60000), false, 'новое время держится');
+});
+
+test('M2: согласие пришло партнёру после срока предложения — истекло; вовремя, но время уже заняли — отказ «время занято»', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW, kekPath: s.kekPath });
+  assert.equal((await answer(s, 'offer.accept', NOW + 35 * 60000, NOW + 40 * 60000)).status, 'expired');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'expired');
+
+  const s2 = bookingSeed();
+  const id2 = await pending(s2);
+  offerOtherTime(s2.db, { id: id2, start: new Date(LATER).toISOString() }, s2.reg, { now: NOW, kekPath: s2.kekPath });
+  expireDue(s2.db, { now: NOW + 31 * 60000, kekPath: s2.kekPath });
+  s2.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (5, 'P-5', 'Другой', '+998935550000')").run();
+  const { calendarBook } = await import('../rpc/calendar.js');
+  await calendarBook(s2.db, { patient_id: 5, doctor_id: 7, start: new Date(LATER).toISOString(), duration_minutes: 30 }, s2.reg);
+  assert.equal((await answer(s2, 'offer.accept', NOW + 10 * 60000, NOW + 40 * 60000)).status, 'declined');
+  assert.equal(one(s2.db, 'SELECT decline_reason FROM api_requests WHERE id = ?', id2).decline_reason, 'slot_taken');
+  assert.equal(events(s2).at(-1)[1].reason, 'slot_taken');
+});
+
+test('M2: пока обмен работает, фон не истекает предложение, пока сбор очереди после его срока не прошёл — ответ партнёра успеет', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW, kekPath: s.kekPath });
+  const iso = (ms) => new Date(ms).toISOString().replace('.000', '');
+  s.db.prepare('UPDATE api_sync_state SET last_poll_at = ?, last_ok_at = ? WHERE id = 1').run(iso(NOW + 29 * 60000 + 50000), iso(NOW + 29 * 60000 + 50000));
+  assert.equal(expireDue(s.db, { now: NOW + 30 * 60000 + 5000, kekPath: s.kekPath }), 0, 'последний сбор — до срока предложения');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'offered');
+  s.db.prepare('UPDATE api_sync_state SET last_ok_at = ? WHERE id = 1').run(iso(NOW + 30 * 60000 + 5000));
+  assert.equal(expireDue(s.db, { now: NOW + 30 * 60000 + 20000, kekPath: s.kekPath }), 1, 'сбор после срока прошёл, ответа нет — истекло');
+});

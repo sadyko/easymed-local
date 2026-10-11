@@ -226,7 +226,12 @@ export function parseInboxItem(item) {
   const connectionId = posInt(it.connection_id);
   if (!connectionId) return { ok: false, problem: 'connection' };
   const base = { type, cursor: text(it.cursor), public_id: publicId, connection_id: connectionId };
-  if (type !== 'request.new' && type !== 'appointment.new') return { ok: true, value: base };
+  if (type !== 'request.new' && type !== 'appointment.new') {
+    // Ревью 8a, M2: когда публичный сервер принял ответ партнёра — по нему судят,
+    // успел ли партнёр согласиться в срок предложения (клиника могла быть без связи).
+    const answered = msOf(it.received_at);
+    return { ok: true, value: answered == null ? base : { ...base, received_at: isoOf(answered) } };
+  }
 
   const received = msOf(it.received_at);
   if (received == null) return { ok: false, problem: 'received_at' };
