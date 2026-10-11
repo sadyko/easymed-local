@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { readConfig } from './config.js';
+import { readConfig, DEFAULT_UNCOLLECTED_MAX_HOURS, DEFAULT_SYNC_SKEW_MIN } from './config.js';
 
 const ROOT = path.resolve('/srv/public-server');
 
@@ -17,6 +17,7 @@ test('умолчания: слушает только 127.0.0.1:8095, за nginx
   assert.equal(c.requireHttps, true);
   assert.equal(c.offsetMin, 300);
   assert.equal(c.syncSkewMs, 15 * 60000);
+  assert.equal(c.uncollectedMaxMs, 24 * 3600000);
   assert.deepEqual(c.selfIps, []);
   assert.equal(c.metricsToken, '');
   assert.equal(c.webhooks, true);
@@ -26,7 +27,7 @@ test('умолчания: слушает только 127.0.0.1:8095, за nginx
 test('переопределение переменными окружения', () => {
   const c = readConfig({
     PUBLIC_PORT: '9001', PUBLIC_BIND: '0.0.0.0', PUBLIC_DATA_DIR: '/var/lib/easymed-public', PUBLIC_BASE_URL: 'https://api.test/',
-    PUBLIC_TRUST_PROXY: '0', PUBLIC_REQUIRE_HTTPS: '0', PUBLIC_TZ_OFFSET_MIN: '0', PUBLIC_SYNC_SKEW_MIN: '60',
+    PUBLIC_TRUST_PROXY: '0', PUBLIC_REQUIRE_HTTPS: '0', PUBLIC_TZ_OFFSET_MIN: '0', PUBLIC_SYNC_SKEW_MIN: '60', PUBLIC_UNCOLLECTED_MAX_HOURS: '48',
     PUBLIC_SELF_IPS: '45.77.242.169, 10.0.0.5', PUBLIC_METRICS_TOKEN: 'm', PUBLIC_WEBHOOKS: '0', PUBLIC_LICENCE_PUBLIC_KEY: '/etc/k.pem',
   }, { root: ROOT });
   assert.equal(c.port, 9001);
@@ -37,6 +38,7 @@ test('переопределение переменными окружения',
   assert.equal(c.requireHttps, false);
   assert.equal(c.offsetMin, 0);
   assert.equal(c.syncSkewMs, 3600000);
+  assert.equal(c.uncollectedMaxMs, 48 * 3600000);
   assert.deepEqual(c.selfIps, ['45.77.242.169', '10.0.0.5']);
   assert.equal(c.metricsToken, 'm');
   assert.equal(c.webhooks, false);
@@ -47,4 +49,13 @@ test('неверное значение — отказ с именем пере�
   assert.throws(() => readConfig({ PUBLIC_PORT: 'восемь' }, { root: ROOT }), /PUBLIC_PORT/);
   assert.throws(() => readConfig({ PUBLIC_TZ_OFFSET_MIN: '5000' }, { root: ROOT }), /PUBLIC_TZ_OFFSET_MIN/);
   assert.throws(() => readConfig({ PUBLIC_BASE_URL: 'api.easymed.uz' }, { root: ROOT }), /PUBLIC_BASE_URL/);
+  assert.throws(() => readConfig({ PUBLIC_UNCOLLECTED_MAX_HOURS: '0' }, { root: ROOT }), /PUBLIC_UNCOLLECTED_MAX_HOURS/);
+});
+
+test('сроки владельца и контролёра — именованные постоянные, одно место на каждый', () => {
+  // Решение владельца 20 (2026-10-12): не забранная клиникой заявка ждёт сутки,
+  // затем закрыта для партнёра (closed / not_collected), шифротекст стёрт.
+  assert.equal(DEFAULT_UNCOLLECTED_MAX_HOURS, 24);
+  // Решение контролёра (2026-10-12): допуск часов клиники — 15 минут.
+  assert.equal(DEFAULT_SYNC_SKEW_MIN, 15);
 });

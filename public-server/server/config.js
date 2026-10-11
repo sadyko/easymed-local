@@ -6,6 +6,19 @@ import { fileURLToPath } from 'node:url';
 
 export const SERVICE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
+// Сроки, выбранные владельцем и контролёром (2026-10-12), — одно место на
+// каждый; переменная окружения меняет его без правки кода:
+//   • DEFAULT_UNCOLLECTED_MAX_HOURS — решение владельца 20: онлайн-запись или
+//     «перезвоните», которую клиника не забрала, ждёт сутки; потом заявка
+//     закрыта для партнёра (closed / not_collected), шифротекст стёрт
+//     (store/requests.js closeOverdue). Переменная PUBLIC_UNCOLLECTED_MAX_HOURS.
+//     Отдельное правило «клиника молчит 7 суток — партнёрам 503» этим не
+//     меняется (routes/partner-auth.js).
+//   • DEFAULT_SYNC_SKEW_MIN — решение контролёра: часы клиники не дальше
+//     15 минут от сервера (clinic-auth.js). Переменная PUBLIC_SYNC_SKEW_MIN.
+export const DEFAULT_UNCOLLECTED_MAX_HOURS = 24;
+export const DEFAULT_SYNC_SKEW_MIN = 15;
+
 function int(env, name, def, min, max) {
   const raw = env[name];
   if (raw == null || String(raw).trim() === '') return def;
@@ -22,7 +35,8 @@ function trustProxyOf(raw) {
 
 /**
  * @returns {{port:number, bind:string, dataDir:string, baseUrl:string, licenceKeyPath:string, trustProxy:(string|false),
- *   requireHttps:boolean, offsetMin:number, syncSkewMs:number, selfIps:string[], metricsToken:string, webhooks:boolean}}
+ *   requireHttps:boolean, offsetMin:number, syncSkewMs:number, uncollectedMaxMs:number, selfIps:string[], metricsToken:string,
+ *   webhooks:boolean}}
  */
 export function readConfig(env = process.env, { root = SERVICE_ROOT } = {}) {
   const dataRaw = String(env.PUBLIC_DATA_DIR || '').trim();
@@ -37,7 +51,8 @@ export function readConfig(env = process.env, { root = SERVICE_ROOT } = {}) {
     trustProxy: trustProxyOf(env.PUBLIC_TRUST_PROXY),
     requireHttps: String(env.PUBLIC_REQUIRE_HTTPS ?? '1').trim() !== '0',
     offsetMin: int(env, 'PUBLIC_TZ_OFFSET_MIN', 300, -720, 840),
-    syncSkewMs: int(env, 'PUBLIC_SYNC_SKEW_MIN', 15, 1, 1440) * 60000,
+    syncSkewMs: int(env, 'PUBLIC_SYNC_SKEW_MIN', DEFAULT_SYNC_SKEW_MIN, 1, 1440) * 60000,
+    uncollectedMaxMs: int(env, 'PUBLIC_UNCOLLECTED_MAX_HOURS', DEFAULT_UNCOLLECTED_MAX_HOURS, 1, 720) * 3600000,
     selfIps: String(env.PUBLIC_SELF_IPS || '').split(',').map((s) => s.trim()).filter(Boolean),
     metricsToken: String(env.PUBLIC_METRICS_TOKEN || '').trim(),
     webhooks: String(env.PUBLIC_WEBHOOKS ?? '1').trim() !== '0',
