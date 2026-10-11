@@ -35,6 +35,7 @@ import { openServiceEditor } from './service-editor.js?v=rh1';   // SERVICES_ONE
 import { openTableSetup, readColPrefs, writeColPrefs, widthShare } from './table-setup.js';   // TABLE_SETUP_V1
 import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — только подпись
 import { storedTierProblem } from '../service-editor-logic.js';   // DOCTOR_TIER_V2 — «Ступени нарушены»
+import { SERVICE_PUBLIC_MESSAGES, servicePublicState } from '../../shared/service-public.js';   // SERVICES_PACKAGES_V1 (ревью шага 6, C5) — колонка «Сайт и партнёры»
 
 function tierBrokenTag(s) {
     const problem = storedTierProblem(s);
@@ -144,8 +145,15 @@ const COLUMNS = [
     { key: 'name_uz',    label: 'Название (UZ)', w: 24, optional: true, text: (s) => s.name_uz || '' },
     { key: 'name_en',    label: 'Название (EN)', w: 24, optional: true, text: (s) => s.name_en || '' },
     { key: 'online',     label: 'Сайт и партнёры',   // SERVICES_PACKAGES_V1 — тот же флаг, что на экране «Услуги для сайта и партнёров»
-      w: 9,  optional: true, text: (s) => (s.online_booking ? 'Да' : 'Нет'),
-      cell: (s) => h('td', null, s.online_booking ? Tag('Да', { kind: 'ok', dot: true }) : h('span', { class: 'muted' }, '—')) },
+      // Ревью шага 6, C5 — по правилу показа (servicePublicState), а не по голому флагу:
+      // флаг без названия на узбекском (импорт до CLINIC_API_FIX_V1) наружу не уходит.
+      w: 9,  optional: true, text: (s) => ({ shown: 'Да', no_uz: SERVICE_PUBLIC_MESSAGES.needUz }[servicePublicState(s)] || 'Нет'),
+      cell: (s) => {
+          const st = servicePublicState(s);
+          return h('td', null, st === 'shown' ? Tag('Да', { kind: 'ok', dot: true })
+              : st === 'no_uz' ? h('span', { class: 'svp-miss' }, SERVICE_PUBLIC_MESSAGES.needUz)
+              : h('span', { class: 'muted' }, '—'));
+      } },
 ];
 const DEFAULT_COLS = COLUMNS.filter((c) => !c.optional).map((c) => c.key);
 const COL_PREF_KEY = 'svc.tbl.cols.v1';   // SVC_TABLE_SETUP_V1 — per browser, like the reference's prefKey

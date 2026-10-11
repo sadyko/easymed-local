@@ -687,3 +687,29 @@ test('SERVICES_SCROLL_KEEP_V1: первая отрисовка по-прежне
     holdServices = null;
   }
 });
+
+// SERVICES_PACKAGES_V1 (ревью шага 6, C5) — колонка «Сайт и партнёры» — по тому
+// же правилу, что экран «Услуги для сайта и партнёров» и API
+// (shared/service-public.js servicePublicState): флаг online_booking без
+// названия на узбекском — не «Да» (импорт до CLINIC_API_FIX_V1 мог его поставить).
+test('«Сайт и партнёры»: «Да» — только у показанной услуги; без узбекского названия — «Нужно название на узбекском»', async () => {
+  const prev = localStorage.getItem('svc.tbl.cols.v1');
+  localStorage.setItem('svc.tbl.cols.v1', JSON.stringify(['name', 'online']));
+  try {
+    const shown = { ...SVC, id: 31, name: 'ЭКГ', name_uz: 'EKG', online_booking: 1 };
+    const noUz = { ...SVC, id: 32, name: 'Липидный профиль', name_uz: null, online_booking: 1 };
+    const off = { ...SVC, id: 33, name: 'Глюкоза', name_uz: 'Glyukoza', online_booking: 0 };
+    const c = await paintRows([shown, noUz, off]);
+    const cellsFor = (name) => cellsOf(dataRows(c).find((r) => textOf(r).includes(name)));
+    assert.ok(cellsFor('ЭКГ').includes('Да'), 'показанная: ' + JSON.stringify(cellsFor('ЭКГ')));
+    assert.ok(cellsFor('Липидный профиль').includes('Нужно название на узбекском'), 'флаг без UZ: ' + JSON.stringify(cellsFor('Липидный профиль')));
+    assert.ok(!cellsFor('Липидный профиль').includes('Да'), 'флаг без UZ — не «Да»');
+    assert.ok(cellsFor('Глюкоза').includes('—'), 'скрытая: ' + JSON.stringify(cellsFor('Глюкоза')));
+    // Фильтр под колонкой ищет то, что видно.
+    type(filterBox(c, 'online'), 'Нужно');
+    assert.deepStrictEqual(dataRows(c).map((r) => cellsOf(r).find((x) => /Липидный|ЭКГ|Глюкоза/.test(x))), ['Липидный профиль']);
+  } finally {
+    if (prev == null) localStorage.removeItem('svc.tbl.cols.v1'); else localStorage.setItem('svc.tbl.cols.v1', prev);
+    services = [SVC];
+  }
+});
