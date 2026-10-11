@@ -404,7 +404,26 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
       // карточки с одной консультацией на день, запись по одной отменили, по
       // другой записали — прежде в визите оказывались ДВЕ консультации (двойной
       // счёт). Свою строку визита, оставшуюся ничьей, она убирает.
-      const sameHome = homeFor(db, V, line);
+      // Финальная проверка 8a, п. 1 — «берёт её», только когда это честно:
+      //   • ту строку визита держит ДРУГАЯ живая строка ЭТОЙ ЖЕ карточки — это
+      //     не двойник, а вторая настоящая строка (анализ натощак и через два
+      //     часа): строка едет следом, как прежде;
+      //   • та строка — строка зеркала (×1 по прайсу), ещё свободная, а едет
+      //     строка, которую поставил человек (количество, пакет, своя цена), —
+      //     уступает строка зеркала, как в шаге 3 (yieldAutoLine): строка
+      //     человека переезжает в визит, строки заявок, державшие строку
+      //     зеркала, переходят на неё, а строка зеркала уходит. Прежде всегда
+      //     уходила едущая: курс ×10 сжимался до ×1, пакетная скидка терялась.
+      let sameHome = homeFor(db, V, line);
+      if (sameHome && db.prepare(`SELECT 1 FROM crm_request_services WHERE visit_service_id = ? AND request_id = ?
+                                     AND id <> ? AND status <> 'cancelled' LIMIT 1`).get(sameHome, line.request_id, line.id)) sameHome = null;
+      if (sameHome && !line.visit_service_auto && isOwnLine(db, sameHome) && vsFree(db, getVs.get(sameHome))) {
+        db.prepare('UPDATE visit_services SET visit_id = ?, doctor_id = ? WHERE id = ?').run(V, line.doctor_id || null, vs.id);
+        relinkHeld(db, sameHome, vs.id);
+        deleteVs(db, sameHome);
+        out.moved++; out.removed++; touched.add(line.request_id);
+        continue;
+      }
       if (sameHome) {
         linkLine.run(sameHome, 0, line.id);
         if (!isReferenced(vs.id) && vsFree(db, vs)) { deleteVs(db, vs.id); out.removed++; }
