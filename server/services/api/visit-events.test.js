@@ -9,7 +9,6 @@ import { ingestItem, confirmBooking } from './bookings.js';
 import { syncVisitOutcomes } from './visit-events.js';
 import { calendarBook } from '../rpc/calendar.js';
 import { ensureVisit } from '../rpc/visits.js';
-import { crmVisitStatus } from '../crm/visit-status.js';
 
 const NOW = localAt('2030-03-11', '09:00');
 const START = localAt('2030-03-12', '10:00');
@@ -216,26 +215,39 @@ test('рр-6: пришедший пациент отменил у партнёр
   assert.equal(one(s.db, 'SELECT status FROM visits WHERE id = ?', visit.id).status, 'arrived');
 });
 
-// ─── ФИНАЛЬНАЯ ПРОВЕРКА 8a, п. 3: РЕГИСТРАЦИЯ НА СТОЙКЕ — ПРИХОД ───────────────
+// ─── ФИНАЛЬНАЯ ПРОВЕРКА 8a, п. 3: «ПРИШЁЛ» — ТОЛЬКО ПО ТВЁРДЫМ ПРИЗНАКАМ ───────
+// Строки карточки, закрытые приходом ('done'), — не признак: исправленная
+// ошибочная отметка «Пришёл» их не открывает.
 
-test('фп-3: пациента зарегистрировали на стойке в день визита (бесплатная консультация, без оплаты) — «пришёл», и наутро не «не пришёл»; подписанный партнёр получает appointment.arrived', async () => {
+const subscribed = (s) => s.db.prepare('UPDATE api_connections SET webhook_events = ? WHERE id = ?')
+  .run(JSON.stringify(['booking.confirmed', 'appointment.arrived']), s.connId);
+const arrivedEvents = (s) => one(s.db, "SELECT COUNT(*) AS n FROM api_outbox WHERE event = 'appointment.arrived'").n;
+const statusOf = (s, id) => one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status;
+
+test('фп-3: «Пришёл» нажали по ошибке и исправили на «Записан» до такта — партнёру не «пришёл» ни накануне, ни в день визита; пациент не пришёл — наутро «не пришёл»', async () => {
   const s = bookingSeed();
-  s.db.prepare('UPDATE api_connections SET webhook_events = ? WHERE id = ?').run(JSON.stringify(['booking.confirmed', 'appointment.arrived']), s.connId);
+  subscribed(s);
   const { id, visit } = await confirmed(s);
-  // Стойка (deskArrive): правило прихода CRM закрывает строки карточки — 'done'; сам визит остаётся «записан».
-  crmVisitStatus(s.db, { visitId: visit.id, from: null, to: 'arrived' });
-  assert.equal(one(s.db, 'SELECT status FROM visits WHERE id = ?', visit.id).status, 'scheduled');
-  syncVisitOutcomes(s.db, { now: localAt('2030-03-12', '10:30'), kekPath: s.kekPath });
-  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'arrived');
+  await calendarBook(s.db, { visit_id: visit.id, start: visit.visit_date, status: 'arrived' }, s.reg);
+  await calendarBook(s.db, { visit_id: visit.id, start: visit.visit_date, status: 'scheduled' }, s.reg);
+  for (const [day, hhmm] of [['2030-03-11', '18:00'], ['2030-03-12', '00:05'], ['2030-03-12', '10:30']]) {
+    syncVisitOutcomes(s.db, { now: localAt(day, hhmm), kekPath: s.kekPath });
+    assert.equal(statusOf(s, id), 'confirmed', `${day} ${hhmm}`);
+  }
   syncVisitOutcomes(s.db, { now: localAt('2030-03-13', '09:00'), kekPath: s.kekPath });
-  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'arrived', 'наутро — не «не пришёл»');
-  assert.equal(one(s.db, "SELECT COUNT(*) AS n FROM api_outbox WHERE event = 'appointment.arrived'").n, 1);
+  assert.equal(statusOf(s, id), 'no_show');
+  assert.equal(arrivedEvents(s), 0, 'партнёру «пришёл» не уходило');
 });
 
-test('фп-3: строки, закрытые приходом раньше дня визита, приходом не считаются — до дня визита заявка «записан»', async () => {
+test('фп-3: «Пришёл» по ошибке исправили на «Не пришёл» — заявка «не пришёл», партнёру не «пришёл»', async () => {
   const s = bookingSeed();
+  subscribed(s);
   const { id, visit } = await confirmed(s);
-  s.db.prepare("UPDATE crm_request_services SET status = 'done' WHERE visit_id = ?").run(visit.id);
-  syncVisitOutcomes(s.db, { now: localAt('2030-03-11', '18:00'), kekPath: s.kekPath });
-  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'confirmed');
+  await calendarBook(s.db, { visit_id: visit.id, start: visit.visit_date, status: 'arrived' }, s.reg);
+  await calendarBook(s.db, { visit_id: visit.id, start: visit.visit_date, status: 'no_show' }, s.reg);
+  syncVisitOutcomes(s.db, { now: localAt('2030-03-12', '10:30'), kekPath: s.kekPath });
+  assert.equal(statusOf(s, id), 'no_show');
+  assert.equal(arrivedEvents(s), 0);
 });
+
+test.todo('фп-3: регистрация на стойке в день визита без оплаты и без работы (бесплатная консультация, неоплаченный счёт) — партнёр наутро видит «не пришёл»; известная щель строгого правила, принята (visit-events.js)');
