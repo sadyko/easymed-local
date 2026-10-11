@@ -67,15 +67,22 @@ export function cancelDuplicateLines(db, requestId) {
                                   COALESCE(NULLIF(scheduled_date, ''), '') AS day
                              FROM crm_request_services
                             WHERE request_id = ? AND status = 'pending' ORDER BY id`).all(requestId);
-  const seen = new Set();
+  const seen = new Map();   // ключ → оставленная строка
   const visits = new Set();
   const cancel = db.prepare("UPDATE crm_request_services SET status = 'cancelled' WHERE id = ?");
+  // PUBLIC_API_V1 (финальная проверка 8a, п. 2) — заявка из API помнит свою
+  // строку (api_requests.crm_line_id, мигр. 245): снятый двойник передаёт её
+  // оставленной строке, иначе «другое время» на другой день не нашло бы, что
+  // переносить (bookings.js cardToDay).
+  let repoint = null;
+  try { repoint = db.prepare('UPDATE api_requests SET crm_line_id = ? WHERE crm_line_id = ?'); } catch { /* база до мигр. 245 */ }
   for (const r of rows) {
     const k = lineKey(r);
     if (!k) continue;
     const key = [r.visit_id || '', k, r.doctor_id || '', r.day].join('|');
-    if (!seen.has(key)) { seen.add(key); continue; }
+    if (!seen.has(key)) { seen.set(key, r.id); continue; }
     cancel.run(r.id);
+    if (repoint) repoint.run(seen.get(key), r.id);
     if (r.visit_id) visits.add(r.visit_id);
     if (r.visit_service_id) {
       const vs = db.prepare('SELECT visit_id FROM visit_services WHERE id = ?').get(r.visit_service_id);

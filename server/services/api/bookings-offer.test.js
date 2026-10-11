@@ -8,6 +8,7 @@ import { bookingSeed, localAt, apptItem } from '../../test-helpers/api-booking-s
 import { ingestItem, confirmBooking, offerOtherTime, declineBooking, acceptRequest, expireDue } from './bookings.js';
 import { slotIsFree } from '../rpc/calendar.js';
 import { isoOf } from '../../../public/js/shared/api-booking.js';
+import { crmMergeLeads } from '../rpc/crm-merge.js';
 
 const NOW = localAt('2030-03-11', '09:00');
 const START = localAt('2030-03-12', '10:00');
@@ -249,6 +250,57 @@ test('рр-1: согласие на другой день переносит т�
   assert.deepEqual(s.db.prepare('SELECT service_id, consultation_type_id, scheduled_date FROM crm_request_services WHERE request_id = ? ORDER BY id').all(cardId).map((x) => ({ ...x })),
     [{ service_id: null, consultation_type_id: 1, scheduled_date: '2030-03-13' }, { service_id: 301, consultation_type_id: null, scheduled_date: '2030-03-15' }]);
 });
+
+// ─── ФИНАЛЬНАЯ ПРОВЕРКА 8a, п. 2: СВОЯ СТРОКА ПОСЛЕ «СОХРАНИТЬ» И СЛИЯНИЯ ────
+
+const NEXT_DAY = localAt('2030-03-14', '11:00');
+const consultIn = (s, visitId) => s.db.prepare("SELECT consultation_type_id, unit_price FROM visit_services WHERE visit_id = ? AND status <> 'cancelled'")
+  .all(visitId).map((x) => ({ ...x }));
+async function otherDayConfirmed(s, id) {
+  offerOtherTime(s.db, { id, start: new Date(NEXT_DAY).toISOString() }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  assert.equal((await inbox(s, 'offer.accept', NOW + 5 * 60000)).status, 'pending');
+  if (!one(s.db, 'SELECT 1 AS x FROM patients WHERE id = 1')) {
+    s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  }
+  return confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW + 6 * 60000, kekPath: s.kekPath });
+}
+
+test('фп-2: карточку сохранили в окне (строки сняты и заведены заново) — согласие на другой день находит свою строку снова: консультация в визите нового дня, на старом дне ничего не висит', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  const cardId = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', id).c;
+  // «Сохранить» окна карточки (crm.js saveLines): ждущие строки без визита снимаются и заводятся заново под новыми номерами.
+  const old = s.db.prepare("SELECT * FROM crm_request_services WHERE request_id = ? AND status = 'pending' AND visit_id IS NULL").all(cardId);
+  s.db.prepare("UPDATE crm_request_services SET status = 'cancelled' WHERE request_id = ? AND status = 'pending' AND visit_id IS NULL").run(cardId);
+  for (const l of old) {
+    s.db.prepare("INSERT INTO crm_request_services (request_id, service_id, consultation_type_id, doctor_id, scheduled_date, status) VALUES (?, ?, ?, ?, ?, 'pending')")
+      .run(cardId, l.service_id, l.consultation_type_id, l.doctor_id, l.scheduled_date);
+  }
+  const c = await otherDayConfirmed(s, id);
+  assert.equal(Date.parse(c.visit.visit_date), NEXT_DAY);
+  assert.deepEqual(consultIn(s, c.visit.id), [{ consultation_type_id: 1, unit_price: 150000 }], 'визит нового дня несёт консультацию');
+  assert.equal(one(s.db, "SELECT COUNT(*) AS n FROM crm_request_services WHERE status = 'pending' AND visit_id IS NULL").n, 0, 'на 12-м ничего не ждёт');
+  const own = one(s.db, 'SELECT crm_line_id AS l FROM api_requests WHERE id = ?', id).l;
+  assert.equal(one(s.db, 'SELECT status FROM crm_request_services WHERE id = ?', own).status, 'pending', 'заявка помнит живую строку');
+});
+
+for (const keepOnline of [false, true]) {
+  test(`фп-2: слияние дублей сняло строку онлайн-записи как двойник строки звонка — заявка помнит оставленную; другое время на другой день — консультация в визите (остаётся ${keepOnline ? 'онлайн' : 'звонок'})`, async () => {
+    const s = bookingSeed();
+    s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+    // Карточка звонка раньше (номер строки меньше): та же консультация, тот же врач, тот же день.
+    const call = Number(s.db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, scheduled_date) VALUES ('Абдурахмонов Фаррух', '+998901234567', 'call', 'in_process', '2030-03-12')").run().lastInsertRowid);
+    const callLine = Number(s.db.prepare("INSERT INTO crm_request_services (request_id, consultation_type_id, doctor_id, scheduled_date, status) VALUES (?, 1, 7, '2030-03-12', 'pending')").run(call).lastInsertRowid);
+    const id = await pending(s);
+    const online = one(s.db, 'SELECT crm_request_id AS c, crm_line_id AS l FROM api_requests WHERE id = ?', id);
+    crmMergeLeads(s.db, keepOnline ? { keep_id: online.c, merge_ids: [call] } : { keep_id: call, merge_ids: [online.c] }, s.admin);
+    assert.equal(one(s.db, 'SELECT status FROM crm_request_services WHERE id = ?', online.l).status, 'cancelled', 'слияние сняло двойник');
+    assert.equal(one(s.db, 'SELECT crm_line_id AS l FROM api_requests WHERE id = ?', id).l, callLine, 'заявка смотрит на оставленную строку');
+    const c = await otherDayConfirmed(s, id);
+    assert.deepEqual(consultIn(s, c.visit.id), [{ consultation_type_id: 1, unit_price: 150000 }]);
+    assert.equal(one(s.db, "SELECT COUNT(*) AS n FROM crm_request_services WHERE status = 'pending' AND visit_id IS NULL").n, 0);
+  });
+}
 
 // ─── ПОВТОРНАЯ ПРОВЕРКА 8a, п. 3: ДВУХ ПРОТИВОРЕЧИВЫХ ОТВЕТОВ ПАРТНЁРУ НЕ БЫВАЕТ ─
 

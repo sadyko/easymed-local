@@ -89,9 +89,36 @@ function setStatus(db, id, fields, now) {
 // карточки: анализ на другой день или строка второй онлайн-записи, слитой в ту
 // же карточку («Дубликаты»), остаются на своих днях и не попадают в чужой
 // визит. Дата карточки следует, только если её задавала эта строка.
+//
+// Финальная проверка 8a, п. 2: своя строка могла смениться — «Сохранить» окна
+// карточки (crm.js saveLines) снимает ждущие строки без визита и заводит их
+// заново под новыми номерами, слияние дублей (crm-merge.js) снимает двойник.
+// Снятую (или исчезнувшую) строку заявка ищет снова по ключу: та же карточка,
+// ждёт без визита, та же услуга (вид приёма), тот же врач и день прежнего
+// времени заявки, — и запоминает найденную. Строка, которую уже взял визит,
+// замены не ищет: она своё место нашла. Прежде перенос молча не случался:
+// визит нового дня — без консультации, а строка на старом дне садилась в
+// чужой визит того дня.
+function ownLine(db, row) {
+  const pick = "SELECT id, request_id, scheduled_date FROM crm_request_services WHERE id = ? AND status = 'pending' AND visit_id IS NULL";
+  const stored = db.prepare('SELECT id, status FROM crm_request_services WHERE id = ?').get(row.crm_line_id);
+  if (stored && stored.status !== 'cancelled') return db.prepare(pick).get(stored.id) || null;
+  if (!row.crm_request_id || !row.start_at) return null;
+  const again = db.prepare(`
+    SELECT id FROM crm_request_services
+     WHERE request_id = ? AND status = 'pending' AND visit_id IS NULL
+       AND service_id IS ? AND consultation_type_id IS ? AND doctor_id IS ? AND scheduled_date = ?
+       AND id NOT IN (SELECT crm_line_id FROM api_requests WHERE crm_line_id IS NOT NULL AND id <> ?)
+     ORDER BY id LIMIT 1`).get(row.crm_request_id, row.service_id || null, row.service_id ? null : (row.consultation_type_id || null),
+    row.doctor_id || null, localDayOf(db, row.start_at), row.id);
+  if (!again) return null;
+  db.prepare('UPDATE api_requests SET crm_line_id = ? WHERE id = ?').run(again.id, row.id);
+  return db.prepare(pick).get(again.id);
+}
+
 function cardToDay(db, row, dayIso) {
   if (!row.crm_line_id || !dayIso) return;
-  const line = db.prepare("SELECT id, request_id, scheduled_date FROM crm_request_services WHERE id = ? AND status = 'pending' AND visit_id IS NULL").get(row.crm_line_id);
+  const line = ownLine(db, row);
   if (!line || line.scheduled_date === dayIso) return;
   db.prepare('UPDATE crm_request_services SET scheduled_date = ? WHERE id = ?').run(dayIso, line.id);
   db.prepare('UPDATE crm_requests SET scheduled_date = ? WHERE id = ? AND scheduled_date IS ?').run(dayIso, line.request_id, line.scheduled_date);
