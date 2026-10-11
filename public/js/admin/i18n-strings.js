@@ -11837,4 +11837,7 @@ export const STRINGS = {
   "Это время занято — выберите другое.": {"en":"This time is taken — choose another.","ru":"Это время занято — выберите другое.","uz":"Bu vaqt band — boshqasini tanlang."},   // PUBLIC_API_V1
   "Выберите причину отказа.": {"en":"Choose the reason for declining.","ru":"Выберите причину отказа.","uz":"Rad etish sababini tanlang."},   // PUBLIC_API_V1
   "Заявка уже в работе.": {"en":"The request is already in progress.","ru":"Заявка уже в работе.","uz":"Ariza allaqachon ishda."},   // PUBLIC_API_V1
+  // PUBLIC_API_V1 — задача 7: ключ обмена с публичным сервером
+  "Файл ключа обмена с публичным сервером повреждён. Обратитесь в поддержку Easy-Med.": {"en":"The key file for exchange with the public server is damaged. Contact Easy-Med support.","ru":"Файл ключа обмена с публичным сервером повреждён. Обратитесь в поддержку Easy-Med.","uz":"Ommaviy server bilan almashinuv kaliti fayli shikastlangan. Easy-Med qo‘llab-quvvatlash xizmatiga murojaat qiling."},   // PUBLIC_API_V1
+  "Запечатанные данные заявки не открываются.": {"en":"The sealed request data cannot be opened.","ru":"Запечатанные данные заявки не открываются.","uz":"Arizaning muhrlangan ma’lumotlari ochilmayapti."},   // PUBLIC_API_V1
 };
