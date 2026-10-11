@@ -20,7 +20,7 @@ import { settingsGrantColumns } from '../permissions.js';
 import { triGroup, labeled, fieldErr } from './company-fields.js';
 import { packageValidityParts } from './service-templates.js?v=tpl1';
 import {
-    PACKAGE_MODES, PACKAGE_MESSAGES, isPackageRow, packageIds, packageTerms, packageItems, packageCalc,
+    PACKAGE_MODES, isPackageRow, packageIds, packageTerms, packageItems, packageCalc,
     packageValueFor, packageProblem, packagePublicState, packageHiddenServices,
 } from '../../shared/package-price.js';
 import { PUBLIC_GROUPS, serviceGroupOf } from '../../shared/service-public.js';
