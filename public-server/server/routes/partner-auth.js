@@ -20,6 +20,8 @@
 //   8. права раздела — 403 forbidden_scope.
 // Журнал запросов (30 дней): путь — по списку известных адресов, параметры — по
 // списку и по виду значения; присланного сверх этого в журнал не попадает.
+// Что вообще становится строкой (429 — нет, без ключа — только 401, потолки в
+// сутки и всего) — store/access-journal.js (проверка 8b, C6).
 import { KEY_RE } from '../../../public/js/shared/api-connections.js';
 import { API_GROUPS } from '../../../public/js/shared/service-public.js';
 import { GEO_REGION_CODES, GEO_DISTRICT_CODES } from '../../../public/js/shared/geo-codes.js';
@@ -27,6 +29,7 @@ import { SPECIALTY_ROWS } from '../../../public/js/shared/specialty-list.js';
 import { keyHash } from '../../../server/services/api/secret-box.js';
 import { resolveSlug, connectionByHash, originAllowedForClinic, markUsed, snapshotOf } from '../store/clinics.js';
 import { recordAccess } from '../store/logs.js';
+import { createAccessJournal } from '../store/access-journal.js';
 import { licenceStanding } from '../licence-gate.js';
 import { ipAllowed, clientIp } from '../lib/net-guard.js';
 import { sendError } from '../lib/errors.js';
@@ -68,6 +71,8 @@ const phoneOf = (clinic) => { const s = snapshotOf(clinic); return String((s && 
 
 /** Потолок по IP, клиника по имени в адресе, https, состояние клиники, журнал запросов. */
 export function clinicGate(ctx) {
+  // Один на приложение: счётчики пропущенного — для наблюдения (ctx.accessJournal.stats()).
+  const journal = ctx.accessJournal || (ctx.accessJournal = createAccessJournal());
   return (req, res, next) => {
     const now = ctx.now();
     req.ipAddr = clientIp(req.ip);
@@ -89,7 +94,10 @@ export function clinicGate(ctx) {
       const path = logPath(clinic.slug, req);   // сейчас, пока путь — внутри маршрутизатора
       res.on('finish', () => {
         try {
-          recordAccess(ctx.db, { clinicId: clinic.clinic_id, connectionId: req.conn ? req.conn.id : null, at: isoOf(ctx.now()),
+          const connectionId = req.conn ? req.conn.id : null;
+          const at = ctx.now();
+          if (!journal.admit(ctx.db, { clinicId: clinic.clinic_id, connectionId, status: res.statusCode, now: at })) return;
+          recordAccess(ctx.db, { clinicId: clinic.clinic_id, connectionId, at: isoOf(at),
             method: req.method, path, status: res.statusCode, ip: req.ipAddr, ms: Date.now() - t0 });
         } catch { /* журнал не роняет ответ */ }
       });

@@ -169,6 +169,18 @@ test('журнал запросов: известный путь и параме
   assert.ok(s.db.prepare('SELECT last_used_at FROM connections').get().last_used_at, '«последний запрос» отмечен');
 });
 
+test('журнал запросов не растёт от отказов: 429 — только счётчик; без ключа — только 401, не больше лимита неверных ключей', async (t) => {
+  const s = await partnerStand({ connection: { rate_limit: 2 } });
+  t.after(s.close);
+  for (let i = 0; i < 3; i += 1) await (await s.get('/shifo/v1/clinic')).arrayBuffer();
+  for (let i = 0; i < 40; i += 1) await (await s.get('/shifo/v1/clinic', { auth: false })).arrayBuffer();
+  const rows = s.db.prepare('SELECT connection_id, status FROM access_log ORDER BY id').all();
+  assert.deepEqual(rows.filter((r) => r.connection_id === 3).map((r) => r.status), [200, 200], 'третий запрос ключа — 429, строки нет');
+  assert.equal(rows.filter((r) => r.connection_id === null).length, 30, 'без ключа — 30 строк 401 в минуту с IP, дальше 429 без строк');
+  assert.ok(rows.every((r) => r.status !== 429));
+  assert.equal(s.ctx.accessJournal.stats().rate_limited, 11);
+});
+
 test('только https: за nginx — X-Forwarded-Proto: https; иначе 400', async (t) => {
   const s = await partnerStand({ requireHttps: true, trustProxy: 'loopback' });
   t.after(s.close);
