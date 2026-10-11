@@ -32,7 +32,14 @@
 --     строку вернут и выставят заново, деньги будут те же;
 --   • ещё не выставленные — по прежнему правилу, которое им назвали при записи:
 --     процент пакета, а если скидка группы пациента больше — она (так считала
---     смета до шага 6).
+--     смета до шага 6). Такая строка помечена package_legacy = 1: её цена
+--     названа ПАЦИЕНТУ и может нести скидку его группы, а плательщику
+--     (страховая, организация) скидка группы не положена (B5) — счёт
+--     плательщику по ней берёт только скидку пакета, как до 244 (billing.js,
+--     ревью шага 6, C1). Новые строки (после 244) отметки не получают: их цена —
+--     цена пакета, одна для всех.
+--   Бэкфилл берёт только числа (typeof): текст в денежной колонке строку не
+--   помечает — она остаётся обычной.
 --
 -- По филиалам ничего нового не ездит: пакеты не ездили (мигр. 154), денег
 -- строки визита журнал не везёт (journal.js), а скидка позиции счёта едет, как
@@ -54,6 +61,7 @@ UPDATE service_templates SET discount_value = discount_percent WHERE discount_pe
 ALTER TABLE visit_services ADD COLUMN package_full REAL CHECK (package_full IS NULL OR package_full >= 0);
 ALTER TABLE visit_services ADD COLUMN package_price REAL
   CHECK (package_price IS NULL OR (package_full IS NOT NULL AND package_price >= 0 AND package_price <= package_full));
+ALTER TABLE visit_services ADD COLUMN package_legacy INTEGER NOT NULL DEFAULT 0 CHECK (package_legacy IN (0, 1));
 
 -- Выставленные строки пакета со скидкой — из позиции счёта.
 UPDATE visit_services
@@ -63,18 +71,25 @@ UPDATE visit_services
  WHERE package_id IS NOT NULL AND invoice_item_id IS NOT NULL
    AND EXISTS (SELECT 1 FROM invoice_items ii
                 WHERE ii.id = visit_services.invoice_item_id
+                  AND typeof(ii.unit_price) IN ('integer', 'real') AND typeof(ii.total) IN ('integer', 'real')
+                  AND typeof(ii.discount_amount) IN ('integer', 'real') AND typeof(ii.quantity) IN ('integer', 'real')
                   AND ii.discount_amount > 0 AND ii.quantity > 0 AND ii.unit_price >= 0
                   AND ii.total >= ii.discount_amount);
 
 -- Невыставленные строки пакета со скидкой — по правилу, которое им назвали:
--- бо́льшая из скидки пакета и скидки действующей группы пациента.
+-- бо́льшая из скидки пакета и скидки действующей группы пациента; отметка
+-- package_legacy — для счёта плательщику (только скидка пакета).
 UPDATE visit_services
-   SET package_full  = unit_price,
+   SET package_legacy = 1,
+       package_full  = unit_price,
        package_price = round(unit_price * (100 - MAX(
            MIN((SELECT t.discount_percent FROM service_templates t WHERE t.id = visit_services.package_id), 100),
            COALESCE((SELECT MIN(c.discount_percent, 100) FROM visits v
                        JOIN patients p ON p.id = v.patient_id
                        JOIN patient_categories c ON c.id = p.category_id AND c.active = 1
-                      WHERE v.id = visit_services.visit_id AND c.discount_percent > 0), 0))) / 100, 2)
- WHERE package_id IS NOT NULL AND invoice_item_id IS NULL AND unit_price >= 0
-   AND (SELECT t.discount_percent FROM service_templates t WHERE t.id = visit_services.package_id) > 0;
+                      WHERE v.id = visit_services.visit_id AND typeof(c.discount_percent) IN ('integer', 'real')
+                        AND c.discount_percent > 0), 0))) / 100, 2)
+ WHERE package_id IS NOT NULL AND invoice_item_id IS NULL
+   AND typeof(unit_price) IN ('integer', 'real') AND unit_price >= 0
+   AND (SELECT typeof(t.discount_percent) IN ('integer', 'real') AND t.discount_percent > 0
+          FROM service_templates t WHERE t.id = visit_services.package_id);

@@ -167,3 +167,19 @@ test('соседнему зданию уезжает документ: скид�
     assert.equal('package_full' in r.data || 'package_price' in r.data, false, 'деньги строки визита не ездят (journal.js)');
   }
 });
+
+// SERVICES_PACKAGES_V1 (ревью шага 6, C1) — строка, записанная до мигр. 244
+// (package_legacy): её цена названа пациенту со скидкой его группы. «Ждут
+// счёта» скидку группы не показывает ни у одной строки (её считает счёт) — у
+// такой строки там только скидка пакета: столько выставит счёт плательщику,
+// пациенту счёт даст ещё и группу.
+test('«Ждут счёта»: строка до 244 — по скидке пакета, столько же выставит счёт плательщику', () => {
+  const c = clinic({ categoryPct: 30 });
+  const id = c.line(7, c.pkg, 'added');   // УЗИ 180 000, пакет 15 %
+  c.db.prepare('UPDATE visit_services SET package_price = 126000, package_legacy = 1 WHERE id = ?').run(id);   // как бэкфилл 244: 30 % группы
+  const row = cashierUnbilled(c.db, {}, cashier).rows.find((r) => r.visit_id === c.visitId);
+  assert.equal(row.total, 153000, '180 000 − 15 % пакета; группу посчитает счёт');
+  const payer = c.db.prepare("INSERT INTO payers (name, kind, active) VALUES ('Страховая', 'insurance', 1)").run().lastInsertRowid;
+  const res = createInvoiceForVisit(c.db, { visit_id: c.visitId, visit_service_ids: [id], payer_id: payer }, admin);
+  assert.equal(res.invoice.total_amount, row.total, 'счёт плательщику = «Ждут счёта»');
+});

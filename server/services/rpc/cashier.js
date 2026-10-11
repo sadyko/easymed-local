@@ -17,7 +17,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // которого его можно стереть.
 import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
-import { lineUnitPrice, consultationFor, doctorPriceLookup } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта
+import { lineUnitPrice, consultationFor, doctorPriceLookup, legacyPackageOnlyOff } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
 import { packageLineMoney } from '../../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1 — «Ждут счёта»: строка пакета — по цене в пакете
 import { searchArg } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
@@ -951,6 +951,7 @@ export function cashierUnbilled(db, args, user) {
     SELECT vs.id, vs.visit_id, vs.service_id, vs.clinic_item_id, vs.consultation_type_id, vs.doctor_id,
            vs.quantity, vs.unit_price, vs.price_tier, vs.created_at,
            vs.package_full, vs.package_price,   -- SERVICES_PACKAGES_V1
+           vs.package_id, vs.package_legacy,    -- SERVICES_PACKAGES_V1 (ревью C1) — строка до мигр. 244
            ub.full_name AS added_by,
            v.visit_date, v.patient_id,
            ${localDate('v.visit_date')} AS visit_day,
@@ -987,6 +988,9 @@ export function cashierUnbilled(db, args, user) {
   // что doctorPriceFor), консультация — один раз на вид приёма и врача.
   // Прежде json_each по карточке ставок на КАЖДУЮ строку держал сервер секунды.
   const ownPrice = doctorPriceLookup(db, lines.map((l) => l.doctor_id));
+  // SERVICES_PACKAGES_V1 (ревью C1) — пакет строки — один раз на пакет.
+  const getPackage = db.prepare('SELECT discount_percent, valid_from, valid_until FROM service_templates WHERE id = ?');
+  const packages = new Map();
   const consults = new Map();
   const consult = (typeId, doctorId) => {
     const key = typeId + ':' + (doctorId ?? '');
@@ -1006,8 +1010,14 @@ export function cashierUnbilled(db, args, user) {
     const unit = Number(lineUnitPrice(db, l, { service: svc, product: prod, ownPrice, consult })) || 0;   // REFBILL_REVIEW_V1
     // SERVICES_PACKAGES_V1 — строка из пакета — по цене в пакете, записанной при
     // записи: она окончательная (решение владельца 1), её и выставит счёт.
+    // Ревью C1 — строка до мигр. 244 (package_legacy): её цена названа пациенту
+    // со скидкой его группы; список скидку группы не показывает ни у одной
+    // строки — у такой строки здесь только скидка пакета (domain/pricing.js).
     const pm = packageLineMoney(l);
-    const sum = Number.isFinite(qty) && qty > 0 ? (pm ? pm.net : round2(unit * qty)) : 0;
+    const pkg = l.package_id != null ? once(packages, l.package_id, getPackage) : null;
+    const gross = Number.isFinite(qty) && qty > 0 ? round2(unit * qty) : 0;
+    const legacy = legacyPackageOnlyOff(l, gross, pkg ? pkg.discount_percent : 0);
+    const sum = Number.isFinite(qty) && qty > 0 ? (legacy != null ? round2(gross - legacy) : (pm ? pm.net : gross)) : 0;
     let g = byVisit.get(l.visit_id);
     if (!g) {
       g = {

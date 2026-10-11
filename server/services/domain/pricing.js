@@ -3,6 +3,7 @@ import { tierUnitPrice } from './visit-tier.js';   // PAY_BASIS_PERFORMED_V1 —
 import { serviceLinePrice } from '../../../public/js/shared/own-price-rule.js';
 import { consultPrice } from '../../../public/js/shared/consultation-price.js';   // DOCTOR_PROFILE_V1 — одно правило цены консультации
 import { packageLineMoney, packageDayState } from '../../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1 — цена пакета, записанная на строке; срок пакета
+import { isOn } from '../../../public/js/shared/flags.js';   // SERVICES_PACKAGES_V1 (ревью C1) — отметка package_legacy
 
 // DOCTOR_OWN_PRICE_V1 — what a service costs when THIS doctor performs it.
 //
@@ -218,6 +219,25 @@ export function productLineUnitPrice(row, product) {
 // пакета, как обычная строка. Пакет удалён (package_id снят базой) — цена,
 // записанная при записи, остаётся: обещанное пациенту не отменяется.
 // `pkg` — строка service_templates или null; `visitDay` — 'YYYY-MM-DD'. Чистая функция.
+// SERVICES_PACKAGES_V1 (ревью шага 6, C1) — СТРОКА, ЗАПИСАННАЯ ДО МИГР. 244
+// (package_legacy = 1, ещё не выставленная при обновлении). Её записанная цена
+// — «по названному правилу»: бо́льшая из скидки пакета и скидки группы
+// пациента, так её назвала смета ПАЦИЕНТУ. Плательщику (страховая,
+// организация) скидка группы пациента не положена (B5), поэтому счёт
+// плательщику (billing.js) и «Ждут счёта» (cashier.js — список скидку группы
+// не показывает ни у одной строки, её считает счёт) берут у такой строки только
+// скидку пакета — как до 244: сумма строки × процент пакета, то же округление.
+// Пакета нет (удалён) — скидки пакета нет, как до 244. Доля врача по ещё не
+// выставленной строке — по записанной цене, как и до 244 (тогда она тоже
+// бралась со скидкой группы пациента, кому бы ни выставили счёт); после счёта —
+// от позиции счёта. null — строка не такая (обычная или без записанной цены).
+export function legacyPackageOnlyOff(row, lineAmount, pkgPct) {
+  if (!row || !isOn(row.package_legacy) || !packageLineMoney(row)) return null;
+  const pct = Math.min(Math.max(Number(pkgPct) || 0, 0), 100);
+  const amount = Math.max(0, Number(lineAmount) || 0);
+  return pct > 0 ? Math.min(amount, Math.round(amount * pct / 100 * 100) / 100) : 0;
+}
+
 export function packageLineDiscount(row, pkg, visitDay) {
   const m = packageLineMoney(row);
   if (!m || !(m.discount > 0)) return 0;

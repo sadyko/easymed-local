@@ -14,7 +14,7 @@ import { invoiceStatusFor, idemReplay, idemRemember } from '../domain/money.js';
 // function, shared with the doctor's pay (rpc/reports.js): own price over the
 // catalog, and VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit
 // keeps that price at the till (the catalog price is the FIRST visit's price).
-import { lineUnitPrice, consultationFor } from '../domain/pricing.js';
+import { lineUnitPrice, consultationFor, legacyPackageOnlyOff } from '../domain/pricing.js';   // SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
 import { packageLineMoney } from '../../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1 — цена в пакете, записанная на строке
 import { hasAnyRole, effectiveRoles } from '../roles.js';
 import { localDate, localMonth } from '../domain/day.js';
@@ -576,8 +576,13 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false } = {}) {
     // скидки и зажаты их суммой, как прежде. Строка пакета, у которой в пакете
     // нет скидки (пакет без скидки), — обычная строка: так её видят и отчёты
     // (reports.js — своя скидка у строки с discount_amount > 0).
+    // Ревью шага 6, C1 — строка, записанная до мигр. 244 (package_legacy): её
+    // цена названа пациенту и может нести скидку его группы; плательщику — только
+    // скидка пакета, как до 244 (domain/pricing.js legacyPackageOnlyOff).
     for (const p of priced) {
-      p.ownDiscount = p.pm && p.pm.discount > 0 ? round2(Math.min(p.pm.discount, p.line)) : 0;
+      const legacy = payerSet ? legacyPackageOnlyOff(p.row, p.line, p.pkg ? p.pkg.pct : 0) : null;
+      p.ownDiscount = legacy != null ? legacy
+        : (p.pm && p.pm.discount > 0 ? round2(Math.min(p.pm.discount, p.line)) : 0);
     }
     const lineDiscounts = round2(priced.reduce((sum, p) => sum + p.ownDiscount, 0));
     const restSubtotal = round2(priced.reduce((sum, p) => sum + (p.ownDiscount > 0 ? 0 : p.line), 0));

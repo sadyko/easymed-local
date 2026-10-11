@@ -296,3 +296,45 @@ test('счёт по визиту отвечает остатком скидки 
   assert.equal(res.rest_discount, 30000);
   assert.equal(res.invoice.discount_amount, 70000);
 });
+
+// ─── SERVICES_PACKAGES_V1 (ревью шага 6, C1) — строка, записанная до мигр. 244 ─
+// Невыставленная строка до 244 несёт цену «по названному правилу» — бо́льшую из
+// скидки пакета и группы пациента (package_legacy = 1). Пациенту — она; счёт
+// плательщику — только скидка пакета, как до 244 (B5: группа — договорённость
+// с пациентом, а не со страховой). Пакет удалён — у плательщика скидки пакета
+// нет, как до 244; у пациента — названная цена остаётся.
+function legacyLine(c, { pkgId }) {
+  const id = c.line(1, { pkgId });   // 100 000; пакет 20 %
+  c.db.prepare('UPDATE visit_services SET package_price = 70000, package_legacy = 1 WHERE id = ?').run(id);   // как бэкфилл 244 у VIP 30 %
+  return id;
+}
+test('ревью C1: строка до 244 — пациенту по названной цене, плательщику только скидка пакета', () => {
+  let c = clinic({ categoryPct: 30 });
+  const payer = c.db.prepare("INSERT INTO payers (name, kind, active) VALUES ('Страховая', 'insurance', 1)").run().lastInsertRowid;
+  let res = invoiceOf(c, [legacyLine(c, { pkgId: c.packageId }), c.line(2)], { payer_id: payer });
+  assert.equal(itemFor(res, 1).discount_amount, 20000, 'плательщику — скидка пакета 20 %, не группы 30 %');
+  assert.equal(res.invoice.total_amount, 80000 + 50000, 'строка вне пакета — без скидки группы (B5)');
+  c = clinic({ categoryPct: 30 });
+  res = invoiceOf(c, [legacyLine(c, { pkgId: c.packageId }), c.line(2)]);
+  assert.equal(itemFor(res, 1).discount_amount, 30000, 'пациенту — как назвала смета до обновления');
+  assert.equal(res.invoice.total_amount, 70000 + 35000);
+  // Обычная (после 244) строка пакета: плательщику — цена пакета, как и пациенту.
+  c = clinic({ categoryPct: 30 });
+  const p2 = c.db.prepare("INSERT INTO payers (name, kind, active) VALUES ('Страховая', 'insurance', 1)").run().lastInsertRowid;
+  res = invoiceOf(c, [c.line(1, { pkgId: c.packageId })], { payer_id: p2 });
+  assert.equal(res.invoice.total_amount, 80000);
+});
+test('ревью C1: строка до 244, пакет удалён — плательщику без скидки пакета, пациенту — названная цена', () => {
+  let c = clinic({ categoryPct: 30 });
+  const payer = c.db.prepare("INSERT INTO payers (name, kind, active) VALUES ('Страховая', 'insurance', 1)").run().lastInsertRowid;
+  let id = legacyLine(c, { pkgId: c.packageId });
+  c.db.prepare('DELETE FROM service_templates WHERE id = ?').run(c.packageId);
+  assert.equal(c.db.prepare('SELECT package_id FROM visit_services WHERE id = ?').get(id).package_id, null, 'база сняла пакет');
+  let res = invoiceOf(c, [id], { payer_id: payer });
+  assert.equal(res.invoice.total_amount, 100000);
+  c = clinic({ categoryPct: 30 });
+  id = legacyLine(c, { pkgId: c.packageId });
+  c.db.prepare('DELETE FROM service_templates WHERE id = ?').run(c.packageId);
+  res = invoiceOf(c, [id]);
+  assert.equal(res.invoice.total_amount, 70000);
+});
