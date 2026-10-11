@@ -1709,8 +1709,18 @@ export function openServicePickerModal({
 
     const CAT_MO = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
     const CAT_WD = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+    // BACKLOG_1011_V1 — дни выбора времени. Окно на СУЩЕСТВУЮЩЕМ визите
+    // (attachMode с днём визита — packageDay): только день визита. Прежде дни
+    // начинались с сегодня, и услуге одного врача каталог сам ставил ближайшее
+    // время — сегодня на визите завтра: строка ложилась (scheduled_at) и
+    // получала талон очереди на другой день, чем её визит.
     function catDays() {
         const out = [], t = new Date();
+        const vday = attachMode ? localDayOf(packageDay) : '';
+        if (/^\d{4}-\d{2}-\d{2}$/.test(vday)) {
+            const d = new Date(Number(vday.slice(0, 4)), Number(vday.slice(5, 7)) - 1, Number(vday.slice(8, 10)));
+            return [{ iso: vday, wd: CAT_WD[d.getDay()], dd: d.getDate(), mo: CAT_MO[d.getMonth()], today: vday === localYmd(t) }];
+        }
         for (let i = 0; i < 7; i++) {
             const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + i);
             out.push({ iso: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
@@ -1967,6 +1977,9 @@ export function openServicePickerModal({
         item.startISO = null; item.time = null; item.dateIso = null;
         // SVC_LIVE_QUEUE_V1 — live-queue doctors are served without a time; no slot pick.
         if ((doc.scheduling_mode || 'schedulable') === 'live_queue') { paintCatalog(); return; }
+        // BACKLOG_1011_V1 — окно без брони (requireSlot: false — кабинет врача,
+        // быстрая регистрация) время не пишет: не ставим и не предлагаем его.
+        if (!requireSlot) { paintCatalog(); return; }
         await ensureDocSlots(doc.id, item.durationMinutes);
         if (item.doctor !== doc || !state.added.includes(item)) return;   // CATALOG_WIZARD_V2 — stale: switched/removed mid-fetch
         for (const d of catDays()) {
@@ -2176,7 +2189,7 @@ export function openServicePickerModal({
             box.appendChild(h('div', { class: 'wzc-tsum', style: { marginTop: '8px' } }, 'Живая очередь — визит без времени (в день визита).'));
             return box;
         }
-        if (item.doctor) {
+        if (item.doctor && requireSlot) {   // BACKLOG_1011_V1 — без брони выбора времени нет
             const strip = h('div', { class: 'wzc-days' });
             for (const d of catDays()) {
                 const free = freeStarts(item.doctor.id, d.iso, item.durationMinutes, item).length;
@@ -2255,7 +2268,7 @@ export function openServicePickerModal({
                         if (catSearchEl) catSearchEl.value = cat2.q; paintCatalog(); } },
                     'выберите врача и время');
                 else if (a.doctor) who = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                    `${a.doctor.full_name || ''}${a.time ? ' · ' + (a.dateIso === catDays()[0].iso ? tr('сегодня') : (a.dateIso || '').slice(8) + '.' + (a.dateIso || '').slice(5, 7)) + ' ' + a.time : ''}`);
+                    `${a.doctor.full_name || ''}${a.time ? ' · ' + (a.dateIso === localYmd() ? tr('сегодня') : (a.dateIso || '').slice(8) + '.' + (a.dateIso || '').slice(5, 7)) + ' ' + a.time : ''}`);
                 // PICKER_CATALOG_EVERYWHERE_V1 — «процедурный кабинет» это правда
                 // только для услуги, которой врач не нужен. Услуге с исполнителями,
                 // у которой врача ещё не выбрали (requireSlot: false), исполнителя

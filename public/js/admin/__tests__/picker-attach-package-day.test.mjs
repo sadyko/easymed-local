@@ -214,6 +214,7 @@ async function quoteAndBill(opts) {
     await new Promise((r) => setTimeout(r, 250));   // цены яруса доезжают
     const tot = byClass(top(), 'wzc-tot').map(textOf);
     const shown = digits(tot[tot.length - 1].replace(/^.*?(Итого|К оплате)/, ''));
+    if (opts.noSave) return { shown, ctaOk: !byClass(top(), 'wzc-cta')[0].disabled, rail: byClass(top(), 'wzc-ln').map(textOf).join(' | ') };
     byClass(top(), 'wzc-cta')[0].click();
     await until(() => picks.length === 2, 'обе строки ушли в onPick');
     if (opts.cabinet) {
@@ -260,15 +261,20 @@ test('то же на повторном визите (ярус): пациент�
     assert.deepEqual([r.shown, r.billed], [120000, 120000], 'смета ' + r.shown + ', счёт ' + r.billed);
 });
 
-test('визит сегодня, пакет до сегодня, врач УЗИ сегодня занят (время — завтра), повторный визит: смета = счёт', async () => {
+// BACKLOG_1011_V1 — время строки в окне визита — только в день визита: занятый
+// сегодня врач больше не получает время «на завтра» на сегодняшнем визите (строка
+// легла бы на другой день, чем визит). Смету без времени не отправить.
+test('визит сегодня, пакет до сегодня, врач УЗИ сегодня занят: времени на завтра нет — смету без времени не отправить', async () => {
     busyToday = true;
     try {
-        const r = await quoteAndBill({ visitOffset: 0, pkgFromOffset: -5, pkgUntilOffset: 0, timed: true, repeat: true });
-        assert.deepEqual([r.shown, r.billed], [120000, 120000], 'смета ' + r.shown + ', счёт ' + r.billed);
+        const r = await quoteAndBill({ visitOffset: 0, pkgFromOffset: -5, pkgUntilOffset: 0, timed: true, repeat: true, noSave: true });
+        assert.equal(r.ctaOk, false, 'строка ушла бы без времени: ' + r.rail);
+        assert.doesNotMatch(r.rail, /\d{2}:\d{2}/, 'время на другой день: ' + r.rail);
+        assert.equal(r.shown, 120000, 'смета — по дню визита (пакет действует): ' + r.rail);
     } finally { busyToday = false; }
 });
 
-test('кабинет врача: визит завтра, пакет с завтра, УЗИ со временем сегодня — смета по дню визита, как счёт', async () => {
+test('кабинет врача: визит завтра, пакет с завтра, УЗИ у одного врача — смета по дню визита, как счёт', async () => {
     const r = await quoteAndBill({ visitOffset: 1, pkgFromOffset: 1, timed: true, cabinet: true });
     assert.deepEqual([r.shown, r.billed], [120000, 120000], 'смета ' + r.shown + ', счёт ' + r.billed);
 });

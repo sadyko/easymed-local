@@ -290,4 +290,62 @@ test('кабинет передаёт каталогу исполнителя п
     assert.match(src, /linePerformer\(svc,\s*doctor\?\.id,\s*ctx\.patient\?\.__service\?\.doctorId\)/, 'addOwnService записывает другого исполнителя');
 });
 
+// ---- 2. Время строки — в день визита -------------------------------------
+//
+// Дни каталога начинались с сегодня, и услуге одного врача каталог сам ставил
+// ближайшее свободное время — сегодня на визите завтра: строка ложилась
+// (scheduled_at) и получала талон очереди на другой день, чем её визит. В окне
+// на существующем визите время — только в день визита; окно без брони
+// (requireSlot: false — кабинет врача, быстрая регистрация) время не ставит
+// вовсе: addOwnService его и не пишет.
+
+/** Талоны очереди по строкам визита — как их выдаёт касса / регистратура. */
+function queueLines(lines) {
+    getRpc('issue_queue_numbers')(DB, { p_ids: lines.map((l) => l.id) }, ADMIN);
+    return DB.prepare(`SELECT id, queue_key, date(scheduled_at, 'localtime') AS sday FROM visit_services WHERE visit_id = 40 ORDER BY id`).all();
+}
+const visitDay = () => DB.prepare("SELECT date(visit_date, 'localtime') AS d FROM visits WHERE id = 40").get().d;
+
+test('окно визита: визит завтра, врач свободен и сегодня — время ставится на день визита; строка и талон — в день визита', async () => {
+    busyDays.clear();
+    const r = await run({ window: 'visit', add: ['УЗИ'], visitOffset: 1 });
+    const vday = visitDay();
+    assert.equal(vday, ymd(dayAt(1)));
+    assert.ok(r.picks[0].startISO, 'время не поставлено');
+    assert.equal(r.lines[0].sday, vday, 'строка легла на другой день: ' + brief(r));
+    const q = queueLines(r.lines);
+    assert.ok(q.every((l) => String(l.queue_key || '').endsWith(vday)), 'талон на другой день: ' + JSON.stringify(q));
+    assert.doesNotMatch(r.rail, /сегодня/, 'в смете «сегодня» у времени завтрашнего визита: ' + r.rail);
+});
+
+test('окно визита: визит завтра, врач сегодня занят — время в день визита', async () => {
+    busyDays.clear(); busyDays.add(ymd(dayAt(0)));
+    try {
+        const r = await run({ window: 'visit', add: ['УЗИ'], visitOffset: 1 });
+        assert.equal(r.lines[0].sday, visitDay(), brief(r));
+    } finally { busyDays.clear(); }
+});
+
+test('окно визита: визит завтра, врач занят в день визита — время на другой день не ставится; строка не уходит без времени', async () => {
+    busyDays.clear(); busyDays.add(ymd(dayAt(1)));
+    try {
+        const r = await run({ window: 'visit', add: ['УЗИ'], visitOffset: 1, noSave: true });
+        assert.equal(r.ctaOk, false, 'строка без времени ушла бы в визит: ' + r.rail);
+        assert.doesNotMatch(r.rail, /\d{2}:\d{2}/, 'время на другой день: ' + r.rail);
+        // День в выборе времени один — день визита.
+        const days = byClass(r.top, 'wzc-day').map(textOf);
+        assert.equal(days.length, 1, 'дни выбора: ' + JSON.stringify(days));
+        assert.match(days[0], new RegExp('\\b' + dayAt(1).getDate() + '\\b'));
+    } finally { busyDays.clear(); }
+});
+
+test('кабинет врача (без брони): визит завтра — каталог времени не ставит, строка без времени', async () => {
+    busyDays.clear();
+    const r = await run({ window: 'cabinet', add: ['УЗИ'], visitOffset: 1 });
+    assert.equal(r.picks[0].doctor && r.picks[0].doctor.id, 5, 'врач по-прежнему подставлен');
+    assert.equal(r.picks[0].startISO, null, 'время, которое кабинет не запишет: ' + r.picks[0].startISO);
+    assert.doesNotMatch(r.rail, /\d{2}:\d{2}/, r.rail);
+    assert.equal(r.lines[0].scheduled_at, null);
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });
