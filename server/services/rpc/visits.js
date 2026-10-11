@@ -89,14 +89,14 @@ const hhmmToMin = (s) => { const [h, m] = String(s || '0:0').split(':').map(Numb
  * закрывать ему же время (у пациента, уже пришедшего сегодня, визит-контейнер
  * дня существует и стоит на своём часе).
  */
-function slotConflict(db, user, { doctorId, startMs, durationMin, excludeVisitId }) {
+function slotConflict(db, user, { doctorId, startMs, durationMin, excludeVisitId, excludeHoldId = null }) {   // PUBLIC_API_V1 — excludeHoldId
   const res = calendarSlots(db, {
     doctor_id: doctorId,
     date: localDayIso(startMs),
     duration_minutes: durationMin,
     step_minutes: durationMin,
     exclude_visit_id: excludeVisitId || null,
-  }, user);
+  }, user, { excludeHoldId });
   const from = minutesOfLocal(startMs);
   const to = from + durationMin;
   const clash = (res.busy || []).find((b) => from < hhmmToMin(b.to) && hhmmToMin(b.from) < to) || null;
@@ -151,7 +151,14 @@ function parseBook(book) {
 //         book?: { doctor_id, start, duration_minutes?, service_id?, room_id?,
 //                  emergency?, emergency_reason? } }
 // Returns { visit, created, booked, emergency?, cross_branch? }.
-export async function ensureVisit(db, args, user) {
+//
+// PUBLIC_API_V1 — internal.excludeHoldId: только изнутри сервера
+// (services/api/bookings.js confirmBooking). Подтверждение онлайн-записи идёт
+// ЭТОЙ ЖЕ дверью, что у регистратуры (спецификация «Онлайн-запись»), и его
+// собственное удержание времени ему не мешает. Маршрут /api/rpc зовёт
+// обработчик тремя аргументами — из браузера удержание не снять.
+export async function ensureVisit(db, args, user, internal = {}) {
+  const excludeHoldId = (internal && internal.excludeHoldId) || null;   // PUBLIC_API_V1
   requireRole(user, ENSURE_ROLES);
 
   const patientId = args && args.patient_id;
@@ -228,6 +235,7 @@ export async function ensureVisit(db, args, user) {
     const hit = slotConflict(db, user, {
       doctorId: book.doctorId, startMs: book.startMs, durationMin,
       excludeVisitId: (dayVisit() || {}).id || null,
+      excludeHoldId,   // PUBLIC_API_V1
     });
     if (hit) {
       // Порядок отказов тот же, что у calendar_book: сначала «занято», и
@@ -364,7 +372,7 @@ export async function ensureVisit(db, args, user) {
         duration_minutes: book.durationMin || undefined,
         emergency: book.emergency || undefined,
         emergency_reason: book.reason || undefined,
-      }, user);
+      }, user, { excludeHoldId });   // PUBLIC_API_V1
       out.visit = bk.visit;
       out.emergency = !!bk.emergency;
       if (bk.cross_branch) out.cross_branch = bk.cross_branch;

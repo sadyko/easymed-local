@@ -156,6 +156,9 @@ import { mirrorVisit, mirrorReschedule, dayVisitMovableFor } from '../crm/bookin
 import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
 // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
 import { localDate } from '../domain/day.js';
+// PUBLIC_API_V1 — время, удержанное онлайн-записью без карты, занимает врача
+// там же, где визиты (loadBusy): одно правило занятости на весь продукт.
+import { liveHolds } from '../api/holds.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -251,7 +254,7 @@ function parseStart(value) {
  * Занято = статусы scheduled/confirmed/arrived. Отменённый и не пришедший
  * время НЕ занимают — иначе отменённая запись держала бы слот навсегда.
  */
-function loadBusy(db, { doctorId, roomId, fromMs, toMs, excludeVisitId }) {
+function loadBusy(db, { doctorId, roomId, fromMs, toMs, excludeVisitId, excludeHoldId = null }) {   // PUBLIC_API_V1 — excludeHoldId
   const col = doctorId ? 'doctor_id' : 'room_id';
   const id = doctorId || roomId;
   if (!id) return [];
@@ -279,6 +282,19 @@ function loadBusy(db, { doctorId, roomId, fromMs, toMs, excludeVisitId }) {
       visit_id: r.id, startMs, endMs, durationMin: dur,
       status: r.status, patient_id: r.patient_id, patient_name: r.patient_name || '',
     });
+  }
+  // PUBLIC_API_V1 — УДЕРЖАНИЕ ОНЛАЙН-ЗАПИСИ ЗАНИМАЕТ ВРАЧА, КАК ВИЗИТ (решение
+  // владельца 3: время держится без карты). Только у врача — кабинетов
+  // удержание не касается. excludeHoldId — подтверждение этой же записи: своё
+  // удержание ей не мешает (services/api/bookings.js confirmBooking).
+  if (doctorId) {
+    for (const hd of liveHolds(db, { doctorId, fromMs, toMs, excludeHoldId })) {
+      out.push({
+        visit_id: null, hold_id: hd.hold_id, startMs: hd.startMs, endMs: hd.endMs, durationMin: hd.durationMin,
+        status: 'held', patient_id: null, patient_name: '', held_for: hd.source, held_until: hd.until,
+      });
+    }
+    out.sort((a, b) => a.startMs - b.startMs);
   }
   return out;
 }
@@ -409,6 +425,30 @@ export function doctorDayWindows(db, { doctorId, dayIso, durationMin = PUBLIC_SL
   const free = new Set(slotStarts({ segments, busy, durationMin, stepMin: PUBLIC_SLOT_MIN, minStartMin }));
   out.windows = all.map((t) => ({ start: formatHhmm(t), free: free.has(t) }));
   return out;
+}
+
+/**
+ * PUBLIC_API_V1 — СВОБОДНО ЛИ НАЧАЛО ДЛЯ ОНЛАЙН-ЗАПИСИ: тот же ответ, что окна
+ * для партнёров (doctorDayWindows) — окно врача, часы здания, занятое (визиты и
+ * удержания), сетка по 15 минут от начала отрезка, прошедшее — не свободно.
+ * Начало вне сетки — не свободно: партнёр получает только начала сетки.
+ * excludeHoldId — своё удержание заявки (встречное предложение той же заявки).
+ */
+export function slotIsFree(db, { doctorId, startMs, durationMin, excludeHoldId = null, now = Date.now() }) {
+  if (!Number.isFinite(startMs) || startMs < now) return false;
+  const dayIso = localDayIso(startMs);
+  const dayStartMs = localMidnight(dayIso).getTime();
+  const dayEndMs = dayStartMs + 24 * 3600 * 1000;
+  const doctor = db.prepare('SELECT id, working_hours, branch_id FROM users WHERE id = ?').get(doctorId);
+  if (!doctor) return false;
+  const win = resourceWindow(db, { doctor, room: null, dayIso });
+  if (!win) return false;
+  const clampMin = (ms) => Math.max(0, Math.min(24 * 60, Math.round((ms - dayStartMs) / 60000)));
+  const busy = loadBusy(db, { doctorId, roomId: null, fromMs: dayStartMs, toMs: dayEndMs, excludeVisitId: null, excludeHoldId })
+    .map((b) => ({ from: clampMin(b.startMs), to: clampMin(b.endMs) })).filter((b) => b.to > b.from);
+  const minStartMin = (now >= dayStartMs && now < dayEndMs) ? minutesOfLocal(now) : null;
+  const starts = slotStarts({ segments: windowSegments(win), busy, durationMin, stepMin: PUBLIC_SLOT_MIN, minStartMin });
+  return starts.includes(Math.round((startMs - dayStartMs) / 60000));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -769,7 +809,10 @@ function crossContext(db, { fromMs, toMs }) {
  * Возвращает окно дня, свободные начала и занятое — всё в местном настенном
  * времени ('09:30') плюс ISO для тех, кто будет записывать.
  */
-export function calendarSlots(db, args, user) {
+// PUBLIC_API_V1 — internal.excludeHoldId: только для вызова изнутри сервера
+// (ensure_visit при подтверждении онлайн-записи). Маршрут /api/rpc зовёт
+// обработчик тремя аргументами, поэтому из браузера чужое удержание не снять.
+export function calendarSlots(db, args, user, internal = {}) {
   requireRole(user, BOOK_ROLES);
   const a = args || {};
   const doctorId = optId(a.doctor_id, 'doctor_id');
@@ -798,7 +841,8 @@ export function calendarSlots(db, args, user) {
   const excludeVisitId = optId(a.exclude_visit_id, 'exclude_visit_id');
 
   const win = resourceWindow(db, { doctor, room, dayIso });
-  const busy = loadBusy(db, { doctorId, roomId, fromMs: dayStartMs, toMs: dayEndMs, excludeVisitId });
+  const busy = loadBusy(db, { doctorId, roomId, fromMs: dayStartMs, toMs: dayEndMs, excludeVisitId,
+    excludeHoldId: (internal && internal.excludeHoldId) || null });   // PUBLIC_API_V1
 
   // Занятое переводится в минуты дня СМЕЩЕНИЕМ ОТ ПОЛУНОЧИ, а не часами начала:
   // приём, начавшийся вчера в 23:40 и кончающийся сегодня в 00:10, обязан
@@ -845,6 +889,8 @@ export function calendarSlots(db, args, user) {
       status: b.status,
       patient_id: b.patient_id,
       patient_name: b.patient_name,
+      // PUBLIC_API_V1 — удержанное онлайн-записью: чьё (подключение) и до какого мгновения.
+      ...(b.hold_id ? { hold_id: b.hold_id, held_for: b.held_for, held_until: b.held_until } : {}),
     })),
     at_risk: atRisk.map((b) => ({
       visit_id: b.visit_id,
@@ -1090,6 +1136,7 @@ export async function calendarBook(db, args, user, deps = {}) {
       doctorId, roomId: null,
       fromMs: startMs, toMs: startMs + durationMin * 60000,
       excludeVisitId: visitId,
+      excludeHoldId: deps.excludeHoldId || null,   // PUBLIC_API_V1 — подтверждение этой онлайн-записи (только изнутри сервера)
     });
     conflict = busy.find((b) => overlapsMs(startMs, durationMin, b.startMs, b.durationMin)) || null;
   }
