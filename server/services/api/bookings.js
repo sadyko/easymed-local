@@ -293,9 +293,11 @@ export async function confirmBooking(db, { id, patientId }, user, { now = Date.n
   if (card && card.patient_id !== pid) db.prepare('UPDATE crm_requests SET patient_id = ? WHERE id = ?').run(pid, card.id);
   try {
     const res = await ensureVisitImpl(db, {
-      // Ревью 8a, I8: здания не называем — календарь берёт здание врача сам
-      // (bookingTarget): врач филиала — запись в чужое здание с публикацией.
-      patient_id: pid, date: row.start_at, doctor_id: row.doctor_id,
+      // Ревью 8a, I8: здание — приписка врача, сохранённая при приёме (номер
+      // здания от партнёра не хранится): врач филиала — запись в чужое здание с
+      // публикацией, врач главного — визит своего здания; без приписки —
+      // календарь решает сам (bookingTarget).
+      patient_id: pid, date: row.start_at, doctor_id: row.doctor_id, branch_id: row.branch_id || undefined,
       book: { doctor_id: row.doctor_id, start: row.start_at, duration_minutes: row.duration_minutes, service_id: row.service_id || undefined },
     }, user, { excludeHoldId: hold.id });
     if (!res || !res.booked) throw new BookingError(MSG.notPending, 409);
@@ -525,7 +527,9 @@ function partnerAcceptOffer(db, row, { now, kekPath, answeredAt = null }) {
     if (row.status === 'offered') expireRow(db, row, { now, kekPath });
     return { applied: true, id: row.id, status: 'expired' };
   }
-  const own = liveHoldOf(db, row.id, now);
+  // Своё удержание (даже истёкшее, но ещё не снятое фоном — клиника была
+  // выключена) согласию не мешает.
+  const own = db.prepare('SELECT id FROM slot_holds WHERE api_request_id = ? AND released_at IS NULL').get(row.id);
   if (!slotIsFree(db, { doctorId: row.doctor_id, startMs, durationMin: row.duration_minutes, excludeHoldId: own ? own.id : null, now })) {
     // Ответ вовремя, но время за это время заняли (у стойки или другой партнёр).
     db.transaction(() => {

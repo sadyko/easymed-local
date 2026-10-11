@@ -253,3 +253,16 @@ test('M3: своя цена врача, пустая (0), «Бесплатно»
     if (row && row.name_ru) assert.equal(shown.name, 'Приём педиатра', label + ': имя приёма врача');
   }
 });
+
+test('I8: врач главного здания с припиской, партнёр назвал филиал — визит в здании врача (branch_id главного), не в филиале', async () => {
+  const s = bookingSeed();
+  const main = one(s.db, 'SELECT branch_id FROM branch_identity WHERE id = 1').branch_id;
+  s.db.prepare('UPDATE users SET branch_id = ? WHERE id = 7').run(main);
+  s.db.prepare("INSERT INTO branches (id, name, letter, active, show_public) VALUES (2, 'Филиал Чиланзар', 'B', 1, 1)").run();
+  const it = apptItem({ connId: s.connId, startMs: START, receivedMs: NOW - 60000 });
+  it.data.branch_id = 2;
+  const r = await ingestItem(s.db, it, { now: NOW, kekPath: s.kekPath });
+  patient(s);
+  const c = await confirmBooking(s.db, { id: r.id, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  assert.deepEqual({ ...one(s.db, 'SELECT branch_id, cross_branch FROM visits WHERE id = ?', c.visit.id) }, { branch_id: main, cross_branch: '' });
+});

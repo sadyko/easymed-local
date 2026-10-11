@@ -225,3 +225,12 @@ test('M2: пока обмен работает, фон не истекает п�
   s.db.prepare('UPDATE api_sync_state SET last_ok_at = ? WHERE id = 1').run(iso(NOW + 30 * 60000 + 5000));
   assert.equal(expireDue(s.db, { now: NOW + 30 * 60000 + 20000, kekPath: s.kekPath }), 1, 'сбор после срока прошёл, ответа нет — истекло');
 });
+
+test('M2: своё предложение, истёкшее, но ещё не снятое фоном (клиника была выключена), согласию не мешает', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW, kekPath: s.kekPath });
+  const acc = await answer(s, 'offer.accept', NOW + 10 * 60000, NOW + 40 * 60000);   // фон до этого не запускался
+  assert.equal(acc.status, 'pending');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'pending');
+});
