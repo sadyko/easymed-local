@@ -24,7 +24,7 @@ import { openConnectionCard } from './api-connection-card.js';
 const SUBTITLE = 'Сайт клиники, Symptex и партнёры получают отсюда врачей, свободное время, услуги и цены. Заявки и записи пациентов приходят в CRM с источником своего подключения.';
 const PRIVACY = 'Данные пациентов наружу не передаются. Подключения видят только то, что клиника публикует: профиль клиники, врачей, свободное время, услуги и пакеты. Если лицензия Easy-Med закончится, сайт и партнёры перестанут получать данные и отправлять заявки, пока её не продлят.';
 
-const state = { s: shapeSettings(null), journal: [], editSlug: false };
+const state = { s: shapeSettings(null), journal: [], editSlug: false, sync: null };   // PUBLIC_API_V1 — sync: состояние обмена
 let refs = { root: null, body: null, onNavigate: null };
 
 export async function renderApiConnections(container, { onNavigate = null, payload = null, onPayload = null } = {}) {
@@ -57,6 +57,8 @@ async function reload() {
     state.s = shapeSettings(await rpc('api_settings_get', {}));
     const j = await rpc('api_journal_list', { limit: 30 });
     state.journal = Array.isArray(j) ? j : [];
+    // PUBLIC_API_V1 — обмен с публичным сервером; сервер старше экрана или отказ — прежняя строка «Ещё не включён».
+    try { state.sync = await rpc('api_sync_status', {}); } catch { state.sync = null; }
   } catch (e) {
     clear(refs.body);
     refs.body.appendChild(h('div', { class: 'empty', style: { padding: '30px' } },
@@ -110,13 +112,44 @@ function addressCard(s) {
   const fact = (icon, dt, dd) => h('div', null, h('dt', null, dt), h('dd', null, Icon(icon, { size: 15 }), h('span', null, dd)));
   body.appendChild(h('dl', { class: 'apic-facts' },
     fact('Shield', 'Защита', 'Только HTTPS, у каждого подключения свой ключ'),
-    fact('Warning', 'Публичный сервер', 'Ещё не включён. Ключи можно выпустить и передать заранее: подключения начнут получать данные и присылать заявки, когда в Easy-Med включат публичный сервер.'),
+    publicServerFact(state.sync),   // PUBLIC_API_V1
     fact('Send', 'Заявки и записи', 'Будут приходить в CRM «Заявки» с источником своего подключения')));
   body.appendChild(h('p', { class: 'apic-note' }, Icon('Info', { size: 16 }), h('span', null, PRIVACY)));
   return h('section', { class: 'card apic-card', 'data-apic': 'address' },
     h('div', { class: 'card-header' }, h('h3', null, Icon('Globe', { size: 18 }), ' ', 'Адрес клиники для подключений'),
-      h('span', { class: 'grow' }), Tag('Ещё не работает', { kind: 'warn', dot: true })),
+      h('span', { class: 'grow' }), syncTag(state.sync)),
     body);
+}
+
+// PUBLIC_API_V1 — что с обменом с публичным сервером (rpc api_sync_status → services/api/public-sync.js).
+const SYNC_WHY = Object.freeze({
+  offline:      'нет связи с интернетом',
+  unauthorized: 'публичный сервер не узнал клинику — обратитесь в Easy-Med',
+  paused:       'лицензия Easy-Med не продлена — сайт и партнёры видят «клиника временно недоступна»',
+  server_error: 'ошибка на стороне сервера',
+  sealed:       'часть заявок не открылась ключом клиники — обратитесь в Easy-Med',
+});
+export function syncTag(sync) {
+  const st = sync && sync.state;
+  if (st === 'ok') return Tag('Работает', { kind: 'ok', dot: true });
+  if (st === 'error') return Tag('Нет связи', { kind: 'crit', dot: true });
+  return Tag('Ещё не работает', { kind: 'warn', dot: true });
+}
+export function publicServerFact(sync) {
+  const st = sync && sync.state;
+  let icon = 'Warning';
+  let text = tr('Ещё не включён. Ключи можно выпустить и передать заранее: подключения начнут получать данные и присылать заявки, когда в Easy-Med включат публичный сервер.');
+  if (st === 'waiting_vendor') text = tr('Клиника готова к обмену. Подключения заработают, когда Easy-Med включит для клиники публичный сервер.');
+  else if (st === 'starting') text = tr('Включён — первый обмен начнётся в течение минуты.');
+  else if (st === 'ok') {
+    icon = 'Check';
+    text = trf('Работает. Последний обмен — {when}.', { when: fmtDateTime(sync.last_ok_at) });
+    if (Number(sync.waiting_requests) > 0) text += ' ' + trf('Ждут ответа клиники: {n}.', { n: Number(sync.waiting_requests) });
+  } else if (st === 'error') {
+    text = trf('Нет обмена с {when}: {why}. Заявки партнёров ждут на публичном сервере и придут, когда обмен вернётся.',
+      { when: fmtDateTime(sync.last_error_at), why: tr(SYNC_WHY[sync.last_error] || SYNC_WHY.server_error) });
+  }
+  return h('div', { 'data-apic-sync': st || 'off' }, h('dt', null, 'Публичный сервер'), h('dd', null, Icon(icon, { size: 15 }), h('span', null, text)));
 }
 function slugEditor(s) {
   if (!s.can.admin) return h('p', { class: 'hint' }, 'Имя клиники в адресе ещё не задано — его задаёт администратор.');
