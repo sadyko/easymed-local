@@ -114,6 +114,8 @@ function addressCard(s) {
     fact('Shield', 'Защита', 'Только HTTPS, у каждого подключения свой ключ'),
     publicServerFact(state.sync),   // PUBLIC_API_V1
     fact('Send', 'Заявки и записи', 'Будут приходить в CRM «Заявки» с источником своего подключения')));
+  const skipped = skippedNote(state.sync, s);   // PUBLIC_API_V1 — ревью 8a, I4 / C1
+  if (skipped) body.appendChild(skipped);
   body.appendChild(h('p', { class: 'apic-note' }, Icon('Info', { size: 16 }), h('span', null, PRIVACY)));
   return h('section', { class: 'card apic-card', 'data-apic': 'address' },
     h('div', { class: 'card-header' }, h('h3', null, Icon('Globe', { size: 18 }), ' ', 'Адрес клиники для подключений'),
@@ -123,17 +125,58 @@ function addressCard(s) {
 
 // PUBLIC_API_V1 — что с обменом с публичным сервером (rpc api_sync_status → services/api/public-sync.js).
 const SYNC_WHY = Object.freeze({
-  offline:      'нет связи с интернетом',
-  unauthorized: 'публичный сервер не узнал клинику — обратитесь в Easy-Med',
-  paused:       'лицензия Easy-Med не продлена — сайт и партнёры видят «клиника временно недоступна»',
-  server_error: 'ошибка на стороне сервера',
-  sealed:       'часть заявок не открылась ключом клиники — обратитесь в Easy-Med',
+  offline:       'нет связи с интернетом',
+  unauthorized:  'публичный сервер не узнал клинику — обратитесь в Easy-Med',
+  paused:        'лицензия Easy-Med не продлена — сайт и партнёры видят «клиника временно недоступна»',
+  server_error:  'ошибка на стороне сервера',
+  // Ревью 8a: I3 — снимок отклонён, события и очередь идут; M4 — оба файла ключа испорчены;
+  // C1 — элемент очереди не принимается (после 20 тактов пропускается).
+  slug_taken:    'имя клиники в адресе занято другой клиникой — смените имя',
+  conflict:      'публичный сервер не принял данные клиники',
+  key_broken:    'файл ключа обмена повреждён — обратитесь в Easy-Med',
+  intake_failed: 'заявку из очереди не удаётся принять — если это не пройдёт за несколько минут, обратитесь в Easy-Med',
 });
+// Ревью 8a, I3: что значит причина для обмена. Обмен стоит целиком — сервер не
+// примет ничего, заявки ждут на нём; не принят только снимок (данные клиники) —
+// заявки и уведомления идут. Остальное (сбой сервера, застрявший приём) — «идёт
+// с ошибкой»: такт мог пройти частично, и «нет обмена» было бы неправдой.
+const SYNC_STOPPED = new Set(['offline', 'unauthorized', 'paused', 'key_broken']);
+const SYNC_DATA_ONLY = new Set(['slug_taken', 'conflict']);
+const syncReason = (sync) => String((sync && (sync.reason || sync.last_error)) || '');
 export function syncTag(sync) {
   const st = sync && sync.state;
   if (st === 'ok') return Tag('Работает', { kind: 'ok', dot: true });
-  if (st === 'error') return Tag('Нет связи', { kind: 'crit', dot: true });
+  if (st === 'error') return SYNC_STOPPED.has(syncReason(sync)) ? Tag('Нет связи', { kind: 'crit', dot: true }) : Tag('Ошибка', { kind: 'warn', dot: true });
   return Tag('Ещё не работает', { kind: 'warn', dot: true });
+}
+/**
+ * Ревью 8a, I4 / C1: заявки из очереди, которые клиника пропустила — не открылись
+ * её ключом (запечатаны прежним) или не сохранились, — лежат в счётчике до сброса
+ * администратором (api_sync_skipped_ack). Обмен при этом работает: это отдельное
+ * предупреждение, а не «нет связи». Номера заявок — для Easy-Med.
+ */
+export function skippedNote(sync, s) {
+  const sk = (sync && sync.skipped) || {};
+  const sealed = Number(sk.sealed) || 0;
+  const failed = Number(sk.failed) || 0;
+  if (!sealed && !failed) return null;
+  const when = fmtDateTime(sk.last_at);
+  const parts = [];
+  if (sealed) parts.push(trf('Заявки, которые не открылись ключом клиники: {n} (последняя — {when}). Обратитесь в Easy-Med.', { n: sealed, when }));
+  if (failed) parts.push(trf('Заявки из очереди, которые клиника не смогла сохранить: {n} (последняя — {when}). Обратитесь в Easy-Med.', { n: failed, when }));
+  const ids = Array.isArray(sk.last_ids) ? sk.last_ids.filter(Boolean).map(String) : [];
+  const text = h('span', null, parts.join(' '),
+    ids.length ? h('span', { class: 'apic-skipped-ids' }, ' ', tr('Номера заявок:'), ' ', document.createTextNode(ids.join(', '))) : null);
+  let ack = null;
+  if (s && s.can && s.can.admin) {
+    ack = h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-apic-act': 'skipped-ack' }, 'Сбросить');
+    ack.addEventListener('click', async () => {
+      ack.disabled = true;
+      try { await rpc('api_sync_skipped_ack', {}); } catch (e) { toast(tr(e.message), 'fail'); ack.disabled = false; return; }
+      await reload();
+    });
+  }
+  return h('p', { class: 'apic-note warn', 'data-apic-skipped': String(sealed + failed), role: 'status' }, Icon('Warning', { size: 16 }), text, ack);
 }
 export function publicServerFact(sync) {
   const st = sync && sync.state;
@@ -146,8 +189,19 @@ export function publicServerFact(sync) {
     text = trf('Работает. Последний обмен — {when}.', { when: fmtDateTime(sync.last_ok_at) });
     if (Number(sync.waiting_requests) > 0) text += ' ' + trf('Ждут ответа клиники: {n}.', { n: Number(sync.waiting_requests) });
   } else if (st === 'error') {
-    text = trf('Нет обмена с {when}: {why}. Заявки партнёров ждут на публичном сервере и придут, когда обмен вернётся.',
-      { when: fmtDateTime(sync.last_error_at), why: tr(SYNC_WHY[sync.last_error] || SYNC_WHY.server_error) });
+    const code = syncReason(sync);
+    const why = tr(SYNC_WHY[code] || SYNC_WHY.server_error);
+    // Время ошибки — только своей причины (у «ключ повреждён» его может не быть).
+    const when = sync.last_error_at && (!sync.last_error || sync.last_error === code) ? fmtDateTime(sync.last_error_at) : '';
+    if (SYNC_DATA_ONLY.has(code)) {
+      text = trf('Заявки и уведомления партнёрам идут, но данные клиники на сервере не обновляются с {when}: {why}.', { when: when || '—', why });
+    } else if (SYNC_STOPPED.has(code)) {
+      text = when
+        ? trf('Нет обмена с {when}: {why}. Заявки партнёров ждут на публичном сервере и придут, когда обмен вернётся.', { when, why })
+        : trf('Нет обмена: {why}. Заявки партнёров ждут на публичном сервере и придут, когда обмен вернётся.', { why });
+    } else {
+      text = when ? trf('С {when} обмен идёт с ошибкой: {why}.', { when, why }) : trf('Обмен идёт с ошибкой: {why}.', { why });
+    }
   }
   return h('div', { 'data-apic-sync': st || 'off' }, h('dt', null, 'Публичный сервер'), h('dd', null, Icon(icon, { size: 15 }), h('span', null, text)));
 }
