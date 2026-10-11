@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequest, requestRow, inboxItems, ackInbox, queueOverlaps, partnerCancel, partnerAnswerOffer, applyEvents,
-  closeOverdue, purgeRequests, newRequestId } from './requests.js';
+  closeOverdue, purgeRequests, newRequestId, floorInboxCursor } from './requests.js';
 import { admitClinic, saveKeys, clinicRow } from './clinics.js';
 import { openSealed } from '../../../server/services/api/sync-identity.js';
 import { parseInboxItem } from '../../../public/js/shared/api-booking.js';
@@ -224,4 +224,25 @@ test('ревью 8b, C2: базу клиники восстановили — н
   assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 2, 'и уведомление о нём встало в очередь');
   assert.deepEqual(applyEvents(s.db, s.c.clinicId, [after], NOW + 2000).accepted, [1]);
   assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 2, 'точный повтор (ответ сервера потерялся) — без второго уведомления');
+});
+
+test('ревью 8b, C3: базу сервера восстановили или собрали заново — курсор очереди не идёт назад, клиника получает всё неподтверждённое', () => {
+  const s = setup();
+  appt(s);
+  appt(s, { externalId: 'med-2', startAt: isoOf(START + 3600000) });
+  const held = inboxItems(s.db, s.c.clinicId, '');
+  const clinicCursor = held.at(-1).cursor;
+  // База сервера собрана заново: очереди нет, счётчик курсоров — с нуля.
+  s.db.prepare('DELETE FROM inbox').run();
+  s.db.prepare("UPDATE sqlite_sequence SET seq = 0 WHERE name = 'inbox'").run();
+  floorInboxCursor(s.db, NOW + 60000);   // запуск службы
+  const fresh = appt(s, { externalId: 'med-3', startAt: isoOf(START + 7200000) }).row;
+  const items = inboxItems(s.db, s.c.clinicId, clinicCursor);
+  assert.deepEqual(items.map((i) => i.public_id), [fresh.id], 'курсор клиники впереди — новая заявка всё равно отдаётся');
+  assert.ok(Number(items[0].cursor) > Number(clinicCursor), 'курсор не пошёл назад');
+  assert.deepEqual(ackInbox(s.db, s.c.clinicId, items[0].cursor, [], NOW + 61000), { ok: true, deleted: 1 });
+  floorInboxCursor(s.db, NOW);   // повторный запуск с часами раньше — не откатывает
+  appt(s, { externalId: 'med-4', startAt: isoOf(START + 10800000) });
+  const [next] = inboxItems(s.db, s.c.clinicId, '');
+  assert.ok(Number(next.cursor) > Number(items[0].cursor), 'запуск с отставшими часами курсор не откатывает');
 });

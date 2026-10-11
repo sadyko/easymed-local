@@ -176,10 +176,31 @@ export function partnerAnswerOffer(db, row, accept, now) {
   return { row: requestRow(db, row.clinic_id, row.id) };
 }
 
-/** GET /_sync/v1/inbox — элементы после курсора, по порядку, как их ждёт parseInboxItem клиники. */
+/**
+ * Запуск службы: счётчик курсоров очереди — не меньше часов (мс). Клиника
+ * хранит последний подтверждённый курсор навсегда; восстановленная из копии или
+ * собранная заново база начала бы курсоры с меньших чисел — новые заявки прятались
+ * бы за курсором клиники, а её подтверждение стирало бы чужие (ревью 8b, C3).
+ * Часы запуска всегда больше любого прежнего курсора (не больше одной заявки в
+ * миллисекунду с прошлого запуска).
+ */
+export function floorInboxCursor(db, nowMs) {
+  const floor = Math.floor(nowMs);
+  const r = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'inbox'").get();
+  if (!r) db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('inbox', ?)").run(floor);
+  else if (Number(r.seq) < floor) db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'inbox'").run(floor);
+}
+
+/**
+ * GET /_sync/v1/inbox — самые старые неподтверждённые элементы клиники, по
+ * порядку, как их ждёт parseInboxItem клиники. Курсор клиники (after) не
+ * отсекает: подтверждённое уже стёрто, а курсор клиники после восстановления
+ * базы сервера может быть впереди (ревью 8b, C3); повтор клиника узнаёт по
+ * номеру заявки.
+ */
 export function inboxItems(db, clinicId, after, limit = INBOX_PAGE) {
-  return db.prepare('SELECT * FROM inbox WHERE clinic_id = ? AND cursor > ? ORDER BY cursor LIMIT ?')
-    .all(clinicId, Number(after) || 0, Math.min(limit, INBOX_PAGE))
+  return db.prepare('SELECT * FROM inbox WHERE clinic_id = ? ORDER BY cursor LIMIT ?')
+    .all(clinicId, Math.min(limit, INBOX_PAGE))
     .map((r) => {
       let data = {};
       try { data = JSON.parse(r.data); } catch { data = {}; }

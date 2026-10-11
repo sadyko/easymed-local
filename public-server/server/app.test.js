@@ -89,3 +89,13 @@ test('фон: доставка не перекрывает себя, сбой �
     assert.equal(logs.length, 1);
   } finally { jobs.stop(); }
 });
+
+test('ревью 8b, C3: запуск службы поднимает счётчик курсоров очереди до часов — после восстановления базы он не идёт назад', async (t) => {
+  const s = await up();
+  t.after(s.close);
+  const c = testClinic(s.vendor);
+  await syncCall(s.base, c, 'PUT', '/_sync/v1/keys', { generated_at: isoOf(NOW), box_key: c.identity.boxPublic, connections: [] }, { time: isoOf(NOW) });
+  createRequest(s.db, { clinic: clinicRow(s.db, c.clinicId), connectionId: 3, kind: 'request', patient: { name: 'Имя', phone: '+998901234567', comment: '' }, now: NOW });
+  const r = await syncCall(s.base, c, 'GET', '/_sync/v1/inbox?after=', undefined, { time: isoOf(NOW) });
+  assert.ok(Number(r.json.items[0].cursor) > NOW, 'курсор — не меньше часов запуска');
+});
