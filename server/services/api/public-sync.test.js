@@ -247,3 +247,49 @@ test('I1 страж: партнёр не включал «пришёл» — н�
     assert.deepEqual(out, [], how + ': наружу «пришёл» не ушёл');
   }
 });
+
+// ─── РЕВЬЮ 8a, I3: ОТКАЗ СНИМКУ НЕ ОСТАНАВЛИВАЕТ СОБЫТИЯ И ОЧЕРЕДЬ ──────────
+
+const refusing = (r, match, status, body) => async (url, o) => (match(new URL(String(url)).pathname)
+  ? { ok: false, status, text: async () => JSON.stringify(body || {}), body: null }
+  : r.opts.fetchImpl(url, o));
+
+test('I3: 409 slug_taken на снимок — событие подтверждения уходит, очередь собирается; экран называет причину; снимок принят — снова «работает»', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  appt(r);
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  r.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  await confirmBooking(r.db, { id: r.db.prepare('SELECT id FROM api_requests').get().id, patientId: 1 }, r.reg, { now: NOW + 60000, kekPath: r.kekPath });
+  r.db.prepare("UPDATE api_settings SET slug = 'zanyato' WHERE id = 1").run();
+  second(r);
+  const fetchImpl = refusing(r, (p) => p === '/_sync/v1/snapshot', 409, { error: { code: 'slug_taken' } });
+  r.tick(15000);
+  const out = await quietWarns(async () => { await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); });
+  void out;
+  assert.ok(r.fake.state.events.some((e) => e.event === 'booking.confirmed'), 'подтверждение дошло до партнёра');
+  assert.equal(r.db.prepare("SELECT COUNT(*) AS n FROM api_requests WHERE public_id = 'rq_good00002'").get().n, 1, 'вторая запись принята');
+  let st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.deepEqual([st.state, st.last_error], ['error', 'slug_taken'], 'экран называет причину');
+  r.tick(15000);
+  const back = await syncOnce(r.db, r.dataDir, r.opts);
+  assert.equal(back.ok, true);
+  st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.equal(st.state, 'ok');
+});
+
+test('I3: сервер не принял один файл (413) — файл пропущен, снимок и очередь идут', async () => {
+  const r = rig();
+  const dir = path.join(r.opts.storageDir, 'doctor-photos', 'doctors', '7');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'p.png'), Buffer.alloc(4096, 7));
+  r.db.prepare("UPDATE users SET photo_url = '/api/storage/doctor-photos/doctors/7/p.png' WHERE id = 7").run();
+  const fetchImpl = refusing(r, (p) => /^\/_sync\/v1\/media\/[0-9a-f]{64}\./.test(p), 413, {});
+  await quietWarns(async () => { await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); });
+  assert.equal(r.fake.state.snapshots.length, 1, 'снимок ушёл');
+  appt(r);
+  r.tick(15000);
+  await quietWarns(async () => { await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); });
+  assert.equal(r.db.prepare('SELECT COUNT(*) AS n FROM api_requests').get().n, 1, 'запись принята');
+});

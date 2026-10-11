@@ -72,6 +72,11 @@ export function assertPublicUrlIsTestSafe(env, fetchImpl) {
   throw new Error('refusing to reach the production public API server from inside a test process — inject a fetchImpl or set EASYMED_PUBLIC_URL');
 }
 
+// Ревью 8a, I3: при этих отказах дальше в такте делать нечего — сервер не
+// примет ничего. Отказ снимку или времени (например, 409 slug_taken — имя в
+// адресе заняла другая клиника) — нет: события и очередь идут своим чередом.
+const FATAL_REASONS = new Set(['offline', 'unauthorized', 'paused']);
+
 class SyncFail extends Error { constructor(reason, detail = '') { super(reason); this.reason = reason; this.detail = detail; } }
 
 // ─── СОСТОЯНИЕ ──────────────────────────────────────────────────────────────
@@ -182,7 +187,13 @@ async function pushSnapshot(ctx, state) {
     for (const m of media.filter((x) => missing.has(x.sha256))) {
       let buf;
       try { buf = fs.readFileSync(m.file); } catch { continue; }
-      await call(ctx, 'PUT', '/media/' + m.sha256 + '.' + m.ext, undefined, { raw: buf, type: m.type });
+      // Ревью 8a, I3: сервер не принял один файл (велик, 413) — пропустить его, а
+      // не снимок целиком: партнёры увидят клинику без этой картинки; файл
+      // попробуем снова, когда снимок пойдёт повторно (не реже 15 минут).
+      try { await call(ctx, 'PUT', '/media/' + m.sha256 + '.' + m.ext, undefined, { raw: buf, type: m.type }); } catch (e) {
+        if (!(e instanceof SyncFail) || FATAL_REASONS.has(e.reason)) throw e;
+        console.warn('[public-api] файл', m.sha256.slice(0, 12), 'не принят публичным сервером:', e.reason);
+      }
     }
   }
   await call(ctx, 'PUT', '/snapshot', snapshot);
@@ -314,21 +325,33 @@ async function performSync(db, dataDir, opts) {
     licenceB64: Buffer.from(readText(path.join(dataDir, 'licence.dat')) || '', 'utf8').toString('base64'),
   };
   saveState(db, { last_poll_at: isoOf(now()) });
+  // Ревью 8a, I3: снимок (с файлами) и время — каждый в своём try: их отказ
+  // записывается причиной и не останавливает события и очередь. Ключи, события
+  // и очередь — как прежде: отказ любого кончает такт.
+  let partial = '';
+  const soft = async (fn) => {
+    try { return await fn(); } catch (e) {
+      if (!(e instanceof SyncFail) || FATAL_REASONS.has(e.reason)) throw e;
+      console.warn('[public-api] часть обмена не принята сервером:', e.reason);
+      if (!partial) partial = e.reason;
+      return false;
+    }
+  };
   try {
     let state = readState(db) || {};
     await pushKeys(ctx, state);
     state = readState(db) || {};
-    await pushSnapshot(ctx, state);
+    await soft(() => pushSnapshot(ctx, state));
     let sent = await pushEvents(ctx);
     state = readState(db) || {};
     const inbox = await pullInbox(ctx, state);
     state = readState(db) || {};
-    await pushSlots(ctx, state, inbox.applied > 0);
+    await soft(() => pushSlots(ctx, state, inbox.applied > 0));
     if (inbox.applied) sent += await pushEvents(ctx);
     // C1: элемент, на котором приём стоит, — «ошибка» на экране, пока не пройдёт.
-    const err = inbox.stuck ? 'intake_failed' : inbox.skipped ? 'sealed' : '';
+    const err = inbox.stuck ? 'intake_failed' : partial || (inbox.skipped ? 'sealed' : '');
     saveState(db, { last_ok_at: isoOf(now()), last_error: err, last_error_at: err ? isoOf(now()) : null });
-    return { ok: true, applied: inbox.applied, sent };
+    return partial ? { ok: false, reason: partial, applied: inbox.applied, sent } : { ok: true, applied: inbox.applied, sent };
   } catch (e) {
     if (!(e instanceof SyncFail)) throw e;
     saveState(db, { last_error: e.reason, last_error_at: isoOf(now()) });
