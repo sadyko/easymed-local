@@ -163,3 +163,34 @@ test('I7: у пациента на этот день уже есть запис�
   assert.deepEqual({ ...one(s.db, 'SELECT patient_id, status FROM crm_requests WHERE id = ?', cardId) }, cardBefore);
   assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM visits').n, 1);
 });
+
+// ─── РЕВЬЮ 8a, I8: ЗДАНИЕ ЗАПИСИ — ЗДАНИЕ ВРАЧА, А НЕ ТО, ЧТО НАЗВАЛ ПАРТНЁР ─
+
+test('I8: врач филиала Б, партнёр назвал главное здание — заявка и визит в здании врача (запись в чужое здание, cross_branch Б)', async () => {
+  const s = bookingSeed();
+  const main = one(s.db, 'SELECT branch_id FROM branch_identity WHERE id = 1').branch_id;
+  s.db.prepare("INSERT INTO branches (id, name, letter, active, show_public) VALUES (2, 'Филиал Чиланзар', 'B', 1, 1)").run();
+  s.db.prepare('UPDATE users SET branch_id = 2 WHERE id = 7').run();
+  const it = apptItem({ connId: s.connId, startMs: START, receivedMs: NOW - 60000 });
+  it.data.branch_id = main;
+  const r = await ingestItem(s.db, it, { now: NOW, kekPath: s.kekPath });
+  assert.equal(r.status, 'pending');
+  assert.equal(one(s.db, 'SELECT branch_id FROM api_requests WHERE id = ?', r.id).branch_id, 2, 'здание врача');
+  patient(s);
+  const c = await confirmBooking(s.db, { id: r.id, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT cross_branch FROM visits WHERE id = ?', c.visit.id).cross_branch, 'B');
+});
+
+test('I8: врач главного здания без приписки, партнёр назвал филиал — заявка без здания, визит не уходит в филиал', async () => {
+  const s = bookingSeed();
+  s.db.prepare("INSERT INTO branches (id, name, letter, active, show_public) VALUES (2, 'Филиал Чиланзар', 'B', 1, 1)").run();
+  const it = apptItem({ connId: s.connId, startMs: START, receivedMs: NOW - 60000 });
+  it.data.branch_id = 2;
+  const r = await ingestItem(s.db, it, { now: NOW, kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT branch_id FROM api_requests WHERE id = ?', r.id).branch_id, null);
+  patient(s);
+  const c = await confirmBooking(s.db, { id: r.id, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  const v = one(s.db, 'SELECT branch_id, cross_branch FROM visits WHERE id = ?', c.visit.id);
+  assert.equal(v.cross_branch, '');
+  assert.notEqual(v.branch_id, 2);
+});

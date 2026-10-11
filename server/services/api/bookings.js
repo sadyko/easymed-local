@@ -193,7 +193,9 @@ function intakeAppointment(db, v, conn, { now, kekPath }) {
       public_id: v.public_id, connection_id: conn.id, external_id: v.external_id, kind: 'appointment', status,
       crm_request_id: crmId, patient_name: v.patient.name, patient_phone: uzE164(v.patient.phone), comment: v.patient.comment,
       // C1: врача, которого нет (удалили, пока заявка ждала), не сохранить — отказ без врача.
-      lang: v.lang, doctor_id: doctor ? doctor.id : null, branch_id: ownedId(db, 'branches', v.branch_id), service_id: what.serviceId,
+      // I8: здание — приписка врача; номер здания от партнёра не решает ничего
+      // (ошибка партнёра или старый снимок увели бы визит не туда).
+      lang: v.lang, doctor_id: doctor ? doctor.id : null, branch_id: doctor ? ownedId(db, 'branches', doctor.branch_id) : null, service_id: what.serviceId,
       consultation_type_id: what.consultationTypeId, package_id: ownedId(db, 'service_templates', v.package_id), start_at: v.start_at,
       duration_minutes: duration, hold_until: reason ? null : holdUntil, decline_reason: reason,
       received_at: v.received_at, picked_at: isoOf(now),
@@ -290,7 +292,9 @@ export async function confirmBooking(db, { id, patientId }, user, { now = Date.n
   if (card && card.patient_id !== pid) db.prepare('UPDATE crm_requests SET patient_id = ? WHERE id = ?').run(pid, card.id);
   try {
     const res = await ensureVisitImpl(db, {
-      patient_id: pid, date: row.start_at, doctor_id: row.doctor_id, branch_id: row.branch_id || undefined,
+      // Ревью 8a, I8: здания не называем — календарь берёт здание врача сам
+      // (bookingTarget): врач филиала — запись в чужое здание с публикацией.
+      patient_id: pid, date: row.start_at, doctor_id: row.doctor_id,
       book: { doctor_id: row.doctor_id, start: row.start_at, duration_minutes: row.duration_minutes, service_id: row.service_id || undefined },
     }, user, { excludeHoldId: hold.id });
     if (!res || !res.booked) throw new BookingError(MSG.notPending, 409);
