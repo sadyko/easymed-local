@@ -318,3 +318,17 @@ test('рр-4: подтверждение отказало (запись колл
     [{ consultation_type_id: 1, unit_price: 150000 }], 'одна консультация, а не две');
 });
 
+// ─── ПОВТОРНАЯ ПРОВЕРКА 8a, п. 5: УСЛУГА — ЦЕНА КАССЫ, А НЕ ПРАЙСА ─────────────
+
+test('рр-5: онлайн-запись на услугу к врачу со своей ценой — окно показывает своё (200 000), как строка визита, а не прайс (180 000)', async () => {
+  const { requestsOfCard } = await import('./bookings.js');
+  const s = bookingSeed();
+  s.db.prepare('UPDATE users SET service_rates = ? WHERE id = 7').run(JSON.stringify([{ service_id: 302, price: 200000 }]));
+  const r = await ingestItem(s.db, apptItem({ connId: s.connId, startMs: START, receivedMs: NOW - 60000, consultation: '', serviceId: 302 }), { now: NOW, kekPath: s.kekPath });
+  assert.equal(r.status, 'pending');
+  const shown = requestsOfCard(s.db, one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', r.id).c, NOW)[0].what;
+  patient(s);
+  const c = await confirmBooking(s.db, { id: r.id, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  const billed = one(s.db, 'SELECT unit_price FROM visit_services WHERE visit_id = ? AND service_id = 302', c.visit.id).unit_price;
+  assert.deepEqual([shown.price, billed], [200000, 200000]);
+});

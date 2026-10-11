@@ -41,7 +41,7 @@ import { slotIsFree, calendarBook } from '../rpc/calendar.js';
 import { ensureVisit } from '../rpc/visits.js';
 import { localDate } from '../domain/day.js';
 import { rpcT } from '../server-message.js';
-import { consultationFor } from '../domain/pricing.js';   // ревью 8a, M3 — цена и имя приёма, как у кассы
+import { consultationFor, lineUnitPrice } from '../domain/pricing.js';   // ревью 8a, M3 (повторная проверка, п. 5) — цена и имя, как у кассы
 import {
   OFFER_MINUTES, EV, holdUntilFor, STAFF_DECLINE_REASONS, API_BOOKING_MESSAGES as MSG,
   parseInboxItem, isoOf, localIso, holdState, shownStatus, bookingActions, PARTNER_STATUS,
@@ -608,6 +608,13 @@ export function requestsOfCard(db, crmRequestId, now = Date.now(), { decide = tr
   // врача, «Бесплатно» и пустая — 0, нет строки — общая цена вида, решения 8 и
   // 13), а не общая цена вида всегда.
   const consult = (r) => consultationFor(db, r.consultation_type_id, r.doctor_id) || { price: Number(r.consultation_price) || 0, name: r.consultation_name || '' };
+  // Повторная проверка 8a, п. 5: услуга — та же цена, что поставит касса (своя
+  // цена врача, иначе прайс; ярус «первичный»: повторный визит станет ясен,
+  // когда выберут карту).
+  const servicePrice = (r) => {
+    const service = db.prepare('SELECT * FROM services WHERE id = ?').get(r.service_id);
+    return Math.round(Number(lineUnitPrice(db, { service_id: r.service_id, doctor_id: r.doctor_id, price_tier: 'primary' }, { service })) || 0);
+  };
   return rows.map((r) => ({
     id: r.id, public_id: r.public_id, kind: r.kind, status: shownStatus(r, now), partner_status: PARTNER_STATUS[shownStatus(r, now)] || '',
     connection: { id: r.connection_id, name: r.connection_name || '' }, external_id: r.external_id,
@@ -615,7 +622,7 @@ export function requestsOfCard(db, crmRequestId, now = Date.now(), { decide = tr
     doctor: r.doctor_id ? { id: r.doctor_id, name: r.doctor_name || '' } : null,
     branch: r.branch_id ? { id: r.branch_id, name: r.branch_name || '' } : null,
     what: r.consultation_type_id ? { kind: 'consultation', ...consult(r) }
-      : r.service_id ? { kind: 'service', name: r.service_name || '', price: Number(r.service_price) || 0 } : null,
+      : r.service_id ? { kind: 'service', name: r.service_name || '', price: servicePrice(r) } : null,
     start_at: r.start_at, duration_minutes: r.duration_minutes, hold_until: r.hold_until,
     offered_start: r.offered_start, offer_until: r.offer_until, decline_reason: r.decline_reason,
     patient_name: r.patient_name, patient_phone: r.patient_phone, comment: r.comment,
