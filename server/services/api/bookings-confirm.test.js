@@ -332,3 +332,27 @@ test('рр-5: онлайн-запись на услугу к врачу со с�
   const billed = one(s.db, 'SELECT unit_price FROM visit_services WHERE visit_id = ? AND service_id = 302', c.visit.id).unit_price;
   assert.deepEqual([shown.price, billed], [200000, 200000]);
 });
+
+// ─── ПОВТОРНАЯ ПРОВЕРКА 8a (по желанию): ВОССТАНОВЛЕННОЕ ПОДТВЕРЖДЕНИЕ СВЯЗЫВАЕТ КАРТОЧКУ ─
+
+test('рр-7: подтверждение к врачу другого здания оборвалось за замком обмена — фон доводит его и связывает карточку CRM с визитом, как непрерванное', async () => {
+  const { withExchangeLock } = await import('../branch-sync/relay.js');
+  const s = bookingSeed();
+  s.db.prepare("INSERT INTO branches (id, name, letter, active, show_public) VALUES (2, 'Филиал Чиланзар', 'B', 1, 1)").run();
+  s.db.prepare('UPDATE users SET branch_id = 2 WHERE id = 7').run();
+  const id = await pending(s);
+  patient(s);
+  let release;
+  withExchangeLock(() => new Promise((res) => { release = res; }));
+  confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW + 60000, kekPath: s.kekPath }).catch(() => {});
+  for (let i = 0; i < 20; i += 1) await new Promise((res) => setImmediate(res));
+  try {
+    assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'confirming');
+    expireDue(s.db, { now: NOW + 7 * 60000, kekPath: s.kekPath });
+    const req = one(s.db, 'SELECT status, visit_id, crm_request_id FROM api_requests WHERE id = ?', id);
+    assert.equal(req.status, 'confirmed');
+    assert.deepEqual(s.db.prepare('SELECT visit_id FROM crm_request_services WHERE request_id = ?').all(req.crm_request_id).map((x) => x.visit_id), [req.visit_id], 'строка заявки связана с визитом');
+    assert.deepEqual(s.db.prepare('SELECT consultation_type_id, unit_price FROM visit_services WHERE visit_id = ?').all(req.visit_id).map((x) => ({ ...x })),
+      [{ consultation_type_id: 1, unit_price: 150000 }], 'консультация в визите');
+  } finally { release(); }
+});

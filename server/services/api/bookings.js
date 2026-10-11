@@ -30,7 +30,8 @@
 // Деньги не трогаются: визит и его строки заводят ensure_visit и зеркало
 // заявки (crm/booking-mirror.js) — по тем же ценам, что у регистратуры.
 import { firstStageKey } from '../crm/contact-window.js';
-import { dayVisitMovableFor, visitHasWork, PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { dayVisitMovableFor, visitHasWork, PRE_ARRIVAL, mirrorVisit } from '../crm/booking-mirror.js';
+import { crmLinkVisit } from '../crm/visit-link.js';   // повторная проверка 8a — доведение прерванного подтверждения
 import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';
 import { findPatientsByPhone } from '../telegram/documents.js';
 import { doctorPublicState } from '../../../public/js/shared/doctor-public.js';
@@ -424,6 +425,14 @@ function recoverConfirming(db, { now, kekPath }) {
         expired += 1;
       }
     })();
+    // Повторная проверка 8a (по желанию): обрыв случился внутри записи в чужое
+    // здание — ДО того, как ensure_visit связал визит с карточкой CRM и завёл
+    // строки по заявке. Доводим тем же путём, что ensure_visit: связь и зеркало
+    // (обе не бросают и повтор не удваивают).
+    if (visit) {
+      crmLinkVisit(db, visit.id, SYSTEM_BOOKER, { undated: true });
+      mirrorVisit(db, visit.id, { actorId: null });
+    }
   }
   return expired;
 }
