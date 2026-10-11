@@ -302,6 +302,42 @@ for (const keepOnline of [false, true]) {
   });
 }
 
+// ─── ФИНАЛЬНАЯ ПРОВЕРКА 8a, п. 4: crm_line_id — ПРОСТОЙ НОМЕР, НЕ ССЫЛКА ───────
+// На строки заявки не ссылается ни одна таблица (мигр. 143: таблицу
+// пересобирают). Номер своей строки может устареть — заявка не верит ему вслепую.
+
+test('фп-4: своей строки больше нет (удалена или пересобрана под новым номером) — заявка находит её по ключу; не найдёт — согласие и подтверждение всё равно проходят', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  const own = one(s.db, 'SELECT * FROM crm_request_services WHERE id = (SELECT crm_line_id FROM api_requests WHERE id = ?)', id);
+  s.db.prepare('DELETE FROM crm_request_services WHERE id = ?').run(own.id);
+  const again = Number(s.db.prepare("INSERT INTO crm_request_services (request_id, service_id, consultation_type_id, doctor_id, scheduled_date, status) VALUES (?, ?, ?, ?, ?, 'pending')")
+    .run(own.request_id, own.service_id, own.consultation_type_id, own.doctor_id, own.scheduled_date).lastInsertRowid);
+  const c = await otherDayConfirmed(s, id);
+  assert.deepEqual(consultIn(s, c.visit.id), [{ consultation_type_id: 1, unit_price: 150000 }]);
+  assert.equal(one(s.db, 'SELECT crm_line_id AS l FROM api_requests WHERE id = ?', id).l, again);
+
+  const s2 = bookingSeed();
+  const id2 = await pending(s2);
+  s2.db.prepare('DELETE FROM crm_request_services').run();
+  const c2 = await otherDayConfirmed(s2, id2);
+  assert.equal(Date.parse(c2.visit.visit_date), NEXT_DAY, 'строки нет — визит всё равно на новом времени');
+});
+
+test('фп-4: номер своей строки после пересборки указывает на строку ДРУГОЙ карточки — её не трогаем, свою находим по ключу', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  const own = one(s.db, 'SELECT * FROM crm_request_services WHERE id = (SELECT crm_line_id FROM api_requests WHERE id = ?)', id);
+  const other = Number(s.db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, scheduled_date) VALUES ('Другой', '+998935550000', 'call', 'in_process', '2030-03-12')").run().lastInsertRowid);
+  const foreign = Number(s.db.prepare("INSERT INTO crm_request_services (request_id, consultation_type_id, doctor_id, scheduled_date, status) VALUES (?, 1, 7, '2030-03-12', 'pending')").run(other).lastInsertRowid);
+  s.db.prepare('UPDATE api_requests SET crm_line_id = ? WHERE id = ?').run(foreign, id);
+  offerOtherTime(s.db, { id, start: new Date(NEXT_DAY).toISOString() }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  assert.equal((await inbox(s, 'offer.accept', NOW + 5 * 60000)).status, 'pending');
+  assert.equal(one(s.db, 'SELECT scheduled_date FROM crm_request_services WHERE id = ?', foreign).scheduled_date, '2030-03-12', 'строка чужой карточки на своём дне');
+  assert.equal(one(s.db, 'SELECT scheduled_date FROM crm_request_services WHERE id = ?', own.id).scheduled_date, '2030-03-14', 'своя — на новом');
+  assert.equal(one(s.db, 'SELECT crm_line_id AS l FROM api_requests WHERE id = ?', id).l, own.id);
+});
+
 // ─── ПОВТОРНАЯ ПРОВЕРКА 8a, п. 3: ДВУХ ПРОТИВОРЕЧИВЫХ ОТВЕТОВ ПАРТНЁРУ НЕ БЫВАЕТ ─
 
 test('рр-3: «истекло» уже ушло партнёру — согласие, пришедшее потом (даже данное вовремя), заявку не возвращает', async () => {

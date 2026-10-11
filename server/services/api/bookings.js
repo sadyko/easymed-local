@@ -101,7 +101,10 @@ function setStatus(db, id, fields, now) {
 // чужой визит того дня.
 function ownLine(db, row) {
   const pick = "SELECT id, request_id, scheduled_date FROM crm_request_services WHERE id = ? AND status = 'pending' AND visit_id IS NULL";
-  const stored = db.prepare('SELECT id, status FROM crm_request_services WHERE id = ?').get(row.crm_line_id);
+  // Финальная проверка 8a, п. 4: crm_line_id — простой номер, не ссылка (мигр.
+  // 143: на строки заявки не ссылается ни одна таблица). Номер, ведущий в чужую
+  // карточку (пересборка таблицы), — тоже устаревший.
+  const stored = db.prepare('SELECT id, status FROM crm_request_services WHERE id = ? AND request_id IS ?').get(row.crm_line_id, row.crm_request_id);
   if (stored && stored.status !== 'cancelled') return db.prepare(pick).get(stored.id) || null;
   if (!row.crm_request_id || !row.start_at) return null;
   const again = db.prepare(`

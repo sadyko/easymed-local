@@ -31,7 +31,11 @@ CREATE TABLE api_requests (
   -- Своя строка заявки в карточке CRM (консультация или услуга онлайн-записи):
   -- «другое время» переносит на новый день только её, а не все строки карточки
   -- (повторная проверка 8a, п. 1 — анализ на другой день, слитая вторая запись).
-  crm_line_id          INTEGER REFERENCES crm_request_services(id) ON DELETE SET NULL,
+  -- Простой номер, НЕ ссылка (финальная проверка 8a, п. 4): на строки заявки не
+  -- ссылается ни одна таблица — их пересобирают миграции (страж 143.test.js).
+  -- Устаревший номер (строку сняли, удалили, пересобрали) заявка не принимает
+  -- на веру: ищет свою строку снова по ключу (services/api/bookings.js ownLine).
+  crm_line_id          INTEGER,
   patient_name         TEXT NOT NULL DEFAULT '' CHECK (length(patient_name) <= 120),
   patient_phone        TEXT NOT NULL DEFAULT '' CHECK (length(patient_phone) <= 32),
   comment              TEXT NOT NULL DEFAULT '' CHECK (length(comment) <= 1000),
