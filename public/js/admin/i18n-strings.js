@@ -11840,4 +11840,38 @@ export const STRINGS = {
   // PUBLIC_API_V1 — задача 7: ключ обмена с публичным сервером
   "Файл ключа обмена с публичным сервером повреждён. Обратитесь в поддержку Easy-Med.": {"en":"The key file for exchange with the public server is damaged. Contact Easy-Med support.","ru":"Файл ключа обмена с публичным сервером повреждён. Обратитесь в поддержку Easy-Med.","uz":"Ommaviy server bilan almashinuv kaliti fayli shikastlangan. Easy-Med qo‘llab-quvvatlash xizmatiga murojaat qiling."},   // PUBLIC_API_V1
   "Запечатанные данные заявки не открываются.": {"en":"The sealed request data cannot be opened.","ru":"Запечатанные данные заявки не открываются.","uz":"Arizaning muhrlangan ma’lumotlari ochilmayapti."},   // PUBLIC_API_V1
+  // PUBLIC_API_V1 — задача 13: окно «Онлайн-запись через API» и строка на доске
+  "время держим за пациентом до {time}": {"en":"the time is held for the patient until {time}","ru":"время держим за пациентом до {time}","uz":"vaqt bemor uchun {time} gacha band qilingan"},   // PUBLIC_API_V1
+  "предложено {when}; ждём ответа партнёра до {time}": {"en":"offered {when}; waiting for the partner's answer until {time}","ru":"предложено {when}; ждём ответа партнёра до {time}","uz":"{when} taklif qilindi; hamkor javobini {time} gacha kutamiz"},   // PUBLIC_API_V1
+  "Партнёр сообщил об отмене, но визит уже в работе. Решите вручную.": {"en":"The partner reported a cancellation, but the visit is already in progress. Decide manually.","ru":"Партнёр сообщил об отмене, но визит уже в работе. Решите вручную.","uz":"Hamkor bekor qilinganini xabar qildi, lekin tashrif allaqachon ishda. Qo‘lda hal qiling."},   // PUBLIC_API_V1
+  "визит создан, партнёр получит уведомление": {"en":"the visit was created, the partner will be notified","ru":"визит создан, партнёр получит уведомление","uz":"tashrif yaratildi, hamkor xabarnoma oladi"},   // PUBLIC_API_V1
+  "тот же телефон и имя": {"en":"same phone and name","ru":"тот же телефон и имя","uz":"o‘sha telefon va ism"},   // PUBLIC_API_V1
+  "тот же телефон": {"en":"same phone","ru":"тот же телефон","uz":"o‘sha telefon"},   // PUBLIC_API_V1
+  "Выбрана": {"en":"Selected","ru":"Выбрана","uz":"Tanlandi"},   // PUBLIC_API_V1
+  "Новая карта": {"en":"New card","ru":"Новая карта","uz":"Yangi karta"},   // PUBLIC_API_V1
+  "Нет в списке": {"en":"Not on the list","ru":"Нет в списке","uz":"Ro‘yxatda yo‘q"},   // PUBLIC_API_V1
+  "Создать карту": {"en":"Create a card","ru":"Создать карту","uz":"Karta yaratish"},   // PUBLIC_API_V1
+  "Заявка карту не создаёт. Выберите, кто придёт на приём, или заведите новую карту — затем подтвердите запись.": {"en":"The request does not create a card. Choose who will come to the appointment or create a new card — then confirm the booking.","ru":"Заявка карту не создаёт. Выберите, кто придёт на приём, или заведите новую карту — затем подтвердите запись.","uz":"Ariza karta yaratmaydi. Qabulga kim kelishini tanlang yoki yangi karta oching — keyin yozilishni tasdiqlang."},   // PUBLIC_API_V1
+  "Свободного времени в этот день нет.": {"en":"There is no free time on this day.","ru":"Свободного времени в этот день нет.","uz":"Bu kunda bo‘sh vaqt yo‘q."},   // PUBLIC_API_V1
+  "Выберите время.": {"en":"Choose a time.","ru":"Выберите время.","uz":"Vaqtni tanlang."},   // PUBLIC_API_V1
+  "Партнёру предложено другое время. Оно держится 30 минут.": {"en":"Another time was offered to the partner. It is held for 30 minutes.","ru":"Партнёру предложено другое время. Оно держится 30 минут.","uz":"Hamkorga boshqa vaqt taklif qilindi. U 30 daqiqa band qilinadi."},   // PUBLIC_API_V1
+  "Отправить предложение": {"en":"Send the offer","ru":"Отправить предложение","uz":"Taklifni yuborish"},   // PUBLIC_API_V1
+  "Выберите причину": {"en":"Choose a reason","ru":"Выберите причину","uz":"Sababni tanlang"},   // PUBLIC_API_V1
+  "Запись отклонена. Партнёр получит уведомление.": {"en":"The booking was declined. The partner will be notified.","ru":"Запись отклонена. Партнёр получит уведомление.","uz":"Yozilish rad etildi. Hamkor xabarnoma oladi."},   // PUBLIC_API_V1
+  "Отклонить запись": {"en":"Decline the booking","ru":"Отклонить запись","uz":"Yozilishni rad etish"},   // PUBLIC_API_V1
+  "Запись подтверждена, но в том здании о ней ещё не знают: обмен подтвердит позже.": {"en":"The booking is confirmed, but that building does not know about it yet: the exchange will confirm it later.","ru":"Запись подтверждена, но в том здании о ней ещё не знают: обмен подтвердит позже.","uz":"Yozilish tasdiqlandi, lekin u binoda bu haqda hali bilishmaydi: almashinuv keyinroq tasdiqlaydi."},   // PUBLIC_API_V1
+  "Запись подтверждена. Визит в календаре врача, партнёр получит уведомление.": {"en":"The booking is confirmed. The visit is in the doctor's calendar, the partner will be notified.","ru":"Запись подтверждена. Визит в календаре врача, партнёр получит уведомление.","uz":"Yozilish tasdiqlandi. Tashrif shifokor kalendarida, hamkor xabarnoma oladi."},   // PUBLIC_API_V1
+  "Предложить другое время": {"en":"Offer another time","ru":"Предложить другое время","uz":"Boshqa vaqt taklif qilish"},   // PUBLIC_API_V1
+  "Подтвердить запись": {"en":"Confirm the booking","ru":"Подтвердить запись","uz":"Yozilishni tasdiqlash"},   // PUBLIC_API_V1
+  "Номер у партнёра": {"en":"Partner's number","ru":"Номер у партнёра","uz":"Hamkordagi raqam"},   // PUBLIC_API_V1
+  "Пришла": {"en":"Received","ru":"Пришла","uz":"Kelgan vaqti"},   // PUBLIC_API_V1
+  "Пациент выбрал": {"en":"The patient chose","ru":"Пациент выбрал","uz":"Bemor tanladi"},   // PUBLIC_API_V1
+  "Онлайн-запись через API": {"en":"Online booking via the API","ru":"Онлайн-запись через API","uz":"API orqali onlayn yozilish"},   // PUBLIC_API_V1
+  "Заявка через API": {"en":"Request via the API","ru":"Заявка через API","uz":"API orqali ariza"},   // PUBLIC_API_V1
+  "Комментарий пациента": {"en":"Patient's comment","ru":"Комментарий пациента","uz":"Bemor izohi"},   // PUBLIC_API_V1
+  "Заявка взята в работу. Партнёр получит уведомление.": {"en":"The request was taken into work. The partner will be notified.","ru":"Заявка взята в работу. Партнёр получит уведомление.","uz":"Ariza ishga olindi. Hamkor xabarnoma oladi."},   // PUBLIC_API_V1
+  "ждёт подтверждения до {time}": {"en":"awaiting confirmation until {time}","ru":"ждёт подтверждения до {time}","uz":"{time} gacha tasdiqlashni kutmoqda"},   // PUBLIC_API_V1
+  "предложено другое время, ждём ответа до {time}": {"en":"another time offered, waiting for an answer until {time}","ru":"предложено другое время, ждём ответа до {time}","uz":"boshqa vaqt taklif qilindi, javobni {time} gacha kutamiz"},   // PUBLIC_API_V1
+  "новая заявка": {"en":"new request","ru":"новая заявка","uz":"yangi ariza"},   // PUBLIC_API_V1
+  "заявка в работе": {"en":"request in progress","ru":"заявка в работе","uz":"ariza ishda"},   // PUBLIC_API_V1
 };

@@ -7929,3 +7929,36 @@ table.pkg-tbl thead th.pkg-r { text-align: right; }
 .svp-foot { display: grid; gap: 10px; }
 .svp-h4 { margin: 8px 0 0; font-size: 15px; color: var(--ink-900); }
 /* /SERVICES_PACKAGES_V1 */
+/* PUBLIC_API_V1 — «Онлайн-запись через API» в карточке заявки CRM и строка онлайн-записи на карточке доски
+   (палитра макета screen-crm.js / mock.css .ax-api-box и .ax-chip.api — «информационная»: это пришло снаружи) */
+.apib-box { display: grid; gap: 10px; margin: 4px 0 12px; }
+.apib-item { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid #c7dcfd; border-radius: 12px; background: #f6f9ff; min-width: 0; }
+.apib-title { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13.5px; color: var(--info-700, #1d4ed8); }
+.apib-kv { display: grid; grid-template-columns: minmax(110px, 170px) minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 13.5px; }
+.apib-kv dt { color: var(--ink-500); }
+.apib-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--ink-900); }
+.apib-choice { display: flex; flex-direction: column; gap: 2px; }
+.apib-status { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.apib-note { font-size: 12.5px; }
+.apib-comment p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.apib-picker { display: grid; gap: 6px; }
+.apib-h { margin: 0; font-weight: 700; font-size: 13.5px; }
+.apib-hint { margin: 0; font-size: 12.5px; }
+.apib-cand { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--ink-100); border-radius: 8px; background: var(--white, #fff); min-width: 0; }
+.apib-cand > span { min-width: 0; overflow-wrap: anywhere; }
+.apib-cand > .btn, .apib-cand > .tag { flex: none; }
+.apib-cand.on { border-color: var(--primary-600); }
+.apib-cand-new { border-style: dashed; border-color: var(--ink-200); }
+.apib-cand-new.on { border-color: var(--primary-600); }
+.apib-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.apib-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.apib-form input, .apib-form select { min-width: 0; max-width: 100%; }
+.apib-danger { color: var(--crit-700, #b23a2e); }
+.btn.apib-danger:hover { background: var(--crit-50, #fef2f2); }
+.crm-card-api { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; margin-top: 7px; font-size: 12.5px; line-height: 1.4; color: var(--info-700, #1d4ed8); min-width: 0; }
+@media (max-width: 560px) {
+    .apib-kv { grid-template-columns: minmax(0, 1fr); }
+    .apib-kv dd + dt { margin-top: 4px; }
+    .apib-cand { flex-wrap: wrap; }
+}
+/* /PUBLIC_API_V1 */
