@@ -2548,15 +2548,19 @@ export function openServicePickerModal({
     // проверяют срок пакета: самая ранняя строка с врачом и временем, иначе
     // время окна, иначе сегодня 09:00 — ровно так визит и заводится.
     function cartVisitDateIso() {
+        const fallback = new Date(); fallback.setHours(9, 0, 0, 0);
+        // SERVICES_PACKAGES_V1 (ревью шага 6, C2 и повторная проверка) — окно на
+        // СУЩЕСТВУЮЩЕМ визите (attachMode: окно визита, кабинет врача): все строки
+        // ложатся в этот визит, и дверь /api/db ставит цену пакета, а счёт её
+        // выставляет по ДНЮ ВИЗИТА (packageDay). Ни «сегодня», ни время строки
+        // здесь не годятся: дни каталога начинаются с сегодня (catDays), и
+        // услуге одного врача каталог сам ставит ближайшее время — сегодня на
+        // визите завтра. Смета считала пакет по этому дню: 150 000 в смете —
+        // 120 000 в счёте, на повторном визите 80 000 — 120 000.
+        if (attachMode) return packageDay || fallback.toISOString();
         const timed = state.added.filter(a => a.doctor && a.startISO)
             .sort((a, b) => String(a.startISO).localeCompare(String(b.startISO)));
         const head = timed[0] || state.added[0];
-        const fallback = new Date(); fallback.setHours(9, 0, 0, 0);
-        // SERVICES_PACKAGES_V1 (ревью шага 6, C2) — окно на существующем визите
-        // (packageDay — его день, visit-modal.js): строки без врача и времени
-        // идут в ЭТОТ день — по нему дверь /api/db ставит цену пакета, а счёт её
-        // выставляет. «Сегодня» здесь давало смете другой срок пакета: 150 000 в
-        // смете — 120 000 в счёте (и цену яруса, которую счёт не возьмёт).
         return (head && head.startISO) || scheduledISO || packageDay || fallback.toISOString();
     }
     function previewBillLines() {

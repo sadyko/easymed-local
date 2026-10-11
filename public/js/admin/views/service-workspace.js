@@ -442,6 +442,10 @@ function servicesCard(ctx) {
                 requireSlot:   false,
                 patient:       ctx.patient,
                 visitDoctorId: ctx.patient?.__service?.doctorId || null,   // врач приёма — исполнитель по умолчанию
+                // SERVICES_PACKAGES_V1 (повторная проверка C2) — день визита приёма: по нему
+                // смета считает срок пакета, как дверь /api/db и счёт (строка «Мои услуги»,
+                // consultation.js). Нет — каталог считает по сегодня (приём идёт сейчас).
+                packageDay:    ctx.patient?.__service?.visitDate || null,
                 title:         'Добавить услуги к приёму',
                 ctaLabel:      'Добавить к приёму',
                 // Уже добавленные услуги в каталоге погашены — дважды одну и ту же

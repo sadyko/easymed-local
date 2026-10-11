@@ -1137,6 +1137,7 @@ async function openWorkspace(r) {
             doctorSpec: r.doctorSpecialty,
             price:      r.price,
             visitId:    r.visitId,
+            visitDate:  r.visitDate || null,   // SERVICES_PACKAGES_V1 — день визита: каталог кабинета считает по нему срок пакета
             status:     r.status,
         },
     };

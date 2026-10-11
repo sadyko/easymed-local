@@ -9,9 +9,18 @@
 // другим: 150 000 в смете — 120 000 в счёте; на повторном визите 80 000 — 120 000
 // (пациенту назвали меньше, чем выставили).
 //
+// Повторная проверка (ревью исправлений шага 6): то же, когда у строки ЕСТЬ
+// время. Услугу одного врача каталог сам ставит на ближайшее свободное время —
+// а дни каталога начинаются с СЕГОДНЯ (catDays), не с дня визита, и строка
+// получала время сегодня на визите завтра. Смета брала день пакета из этого
+// времени, а сервер ставит и выставляет цену пакета по дню визита. В окне на
+// визите день пакета — день визита (packageDay); кабинет врача теперь тоже
+// передаёт день своего визита.
+//
 // Стенд — поддельный DOM; /api/db и /api/rpc — настоящие сервер и дверь в
 // памяти: отказ пакета вне срока (packageStampRefusal) и цена пакета на строке
-// (stampWriteBody), как routes/db.js.
+// (stampWriteBody), как routes/db.js; calendar_slots — врач свободен с 10:00
+// каждый день (или занят сегодня).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -96,11 +105,17 @@ const { packageStampRefusal } = await import('../../../../server/services/rpc/bi
 
 const USER = { id: 1, role: 'registrar', extra_roles: [] };
 let DB = null;
+let busyToday = false;
 globalThis.fetch = async (url, opts) => {
     const u = String(url);
     const body = JSON.parse((opts && opts.body) || '{}');
     const ok = (data) => ({ ok: true, status: 200, json: async () => ({ data }), headers: { getSetCookie: () => [] } });
     const fail = (status, message) => ({ ok: false, status, json: async () => ({ error: { code: 'bad_request', message } }), headers: { getSetCookie: () => [] } });
+    if (u === '/api/rpc/calendar_slots') {
+        // Врач УЗИ свободен с 10:00 каждый день; busyToday — сегодня занят (время уедет на завтра).
+        if (busyToday && body.date === ymd(new Date())) return ok({ date: body.date, slots: [], busy: [] });
+        return ok({ date: body.date, slots: [{ start: '10:00', end: '10:30' }], busy: [] });
+    }
     if (u.startsWith('/api/rpc/')) {
         const handler = getRpc(decodeURIComponent(u.slice('/api/rpc/'.length)));
         if (!handler) return fail(501, 'RPC not implemented');
@@ -130,23 +145,31 @@ globalThis.fetch = async (url, opts) => {
     return fail(404, 'no route ' + u);
 };
 
-const { openServicePickerModal } = await import('../views/service-picker-modal.js');
+const { openServicePickerModal, forgetSlots } = await import('../views/service-picker-modal.js');
 const VM = await import('../views/visit-modal.js');
+const WS = await import('../views/service-workspace.js');
 
 const ymd = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 const NOW = new Date();
 const dayAt = (off) => new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + off, 12, 0, 0);
 
 // ОАК 100 000 + глюкоза 50 000 = 150 000; пакет 20 % → 120 000 (96 000 + 24 000 — по 1 000 и 100 сум).
-function seed({ visitOffset, pkgFromOffset, repeat = false }) {
+// timed — вторая услуга не глюкоза, а УЗИ (50 000) у ОДНОГО врача: каталог сам ставит ему время.
+function seed({ visitOffset, pkgFromOffset, pkgUntilOffset = 40, repeat = false, timed = false }) {
     const db = openDb(':memory:');
     migrate(db);
     db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (1,'reg','x','Регистратор','registrar')").run();
     db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (3,'P-3','Иванов Иван')").run();
     const lab = db.prepare('SELECT id FROM service_types ORDER BY id LIMIT 1').get().id;
-    db.prepare("INSERT INTO services (id, name, price, type_id, type, active, requires_doctor, code) VALUES (21,'ОАК',100000,?,'lab',1,0,'S-21'), (22,'Глюкоза',50000,?,'lab',1,0,'S-22')").run(lab, lab);
+    if (timed) {
+        db.prepare("INSERT INTO services (id, name, price, type_id, type, active, requires_doctor, code) VALUES (21,'ОАК',100000,?,'lab',1,0,'S-21'), (22,'УЗИ',50000,?,'imaging',1,1,'S-22')").run(lab, lab);
+        db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, service_rates)
+                    VALUES (5,'uzi','x','Узистов Улугбек','doctor',1,'[{"service_id":22,"pct":10}]')`).run();
+    } else {
+        db.prepare("INSERT INTO services (id, name, price, type_id, type, active, requires_doctor, code) VALUES (21,'ОАК',100000,?,'lab',1,0,'S-21'), (22,'Глюкоза',50000,?,'lab',1,0,'S-22')").run(lab, lab);
+    }
     db.prepare(`INSERT INTO service_templates (id, name, service_ids, discount_percent, is_package, discount_mode, discount_value, valid_from, valid_until, active)
-                VALUES (9, 'Чек-ап', '[21,22]', 20, 1, 'percent', 20, ?, ?, 1)`).run(ymd(dayAt(pkgFromOffset)), ymd(dayAt(40)));
+                VALUES (9, 'Чек-ап', '[21,22]', 20, 1, 'percent', 20, ?, ?, 1)`).run(ymd(dayAt(pkgFromOffset)), ymd(dayAt(pkgUntilOffset)));
     db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (40, 3, ?, 'scheduled')").run(dayAt(visitOffset).toISOString());
     if (repeat) {
         // Ярус «Повторный визит»: ОАК на повторном (0..30 дн.) — 30 000; прошлый визит 3 дня назад.
@@ -158,20 +181,29 @@ function seed({ visitOffset, pkgFromOffset, repeat = false }) {
     DB = db;
 }
 
-/** Смета окна визита и счёт по тем же строкам: { shown, billed }. */
+/**
+ * Смета окна и счёт по тем же строкам: { shown, billed, lines }. cabinet —
+ * кабинет врача: параметры каталога и запись строк — как у карточки «Услуги
+ * приёма» (service-workspace.js servicesCard → addOwnService); день визита
+ * кабинет берёт из строки «Мои услуги» (__service.visitDate, consultation.js).
+ */
 async function quoteAndBill(opts) {
     seed(opts);
+    forgetSlots();
     BODY.children.length = 0;
     const picks = [];
     const visit = DB.prepare('SELECT * FROM visits WHERE id = 40').get();
-    // Те же параметры, что у окна визита (visit-modal.js, «Добавить услуги к визиту»).
-    openServicePickerModal({
-        attachMode: true, title: 'Добавить услуги к визиту',
-        patient: { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' },
-        visitDoctorId: null, showSchedule: true, patientId: 3, visitId: 40,
-        initialDateIso: ymd(new Date(visit.visit_date)), packageDay: visit.visit_date, excludeServiceIds: [],
-        onPick: (p) => { picks.push(p); },
-    });
+    const patient = { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '',
+        __service: { id: 900, doctorId: null, visitId: 40, visitDate: visit.visit_date } };
+    openServicePickerModal(opts.cabinet
+        // Как service-workspace.js servicesCard.
+        ? { attachMode: true, requireSlot: false, patient, visitDoctorId: null, title: 'Добавить услуги к приёму', ctaLabel: 'Добавить к приёму',
+            packageDay: patient.__service.visitDate, excludeServiceIds: [], onPick: (p) => { picks.push(p); } }
+        // Как окно визита (visit-modal.js, «Добавить услуги к визиту»).
+        : { attachMode: true, title: 'Добавить услуги к визиту', patient,
+            visitDoctorId: null, showSchedule: true, patientId: 3, visitId: 40,
+            initialDateIso: ymd(new Date(visit.visit_date)), packageDay: visit.visit_date, excludeServiceIds: [],
+            onPick: (p) => { picks.push(p); } });
     const top = () => BODY.children[BODY.children.length - 1];
     const btn = (re) => walk(top()).find((e) => e.tagName === 'BUTTON' && re.test(textOf(e)));
     await until(() => btn(/Выбрать шаблон/), 'кнопка «Выбрать шаблон»');
@@ -184,12 +216,19 @@ async function quoteAndBill(opts) {
     const shown = digits(tot[tot.length - 1].replace(/^.*?(Итого|К оплате)/, ''));
     byClass(top(), 'wzc-cta')[0].click();
     await until(() => picks.length === 2, 'обе строки ушли в onPick');
-    const state = { visit, patient: { id: 3 }, services: [] };
-    for (const p of picks) await VM.addServiceFromPicker(state, p, () => {});
-    const vs = DB.prepare('SELECT id FROM visit_services WHERE visit_id = 40 ORDER BY id').all();
+    if (opts.cabinet) {
+        const ctx = { visitId: 40, visitServiceId: 900, patient, container: null };
+        WS.activateWorkspace(ctx);   // как при открытии приёма: состояние кабинета — этой строки
+        for (const p of picks) await WS.addOwnService(ctx, p.service, p.doctor, p.package);
+    } else {
+        const state = { visit, patient: { id: 3 }, services: [] };
+        for (const p of picks) await VM.addServiceFromPicker(state, p, () => {});
+    }
+    const vs = DB.prepare('SELECT id, service_id, scheduled_at, package_id FROM visit_services WHERE visit_id = 40 ORDER BY id').all();
     assert.equal(vs.length, 2, 'строки визита не заведены');
+    assert.ok(vs.every((r) => Number(r.package_id) === 9), 'строки без пакета: ' + JSON.stringify(vs));
     const inv = getRpc('create_invoice_for_visit')(DB, { visit_id: 40, visit_service_ids: vs.map((r) => r.id) }, USER);
-    return { shown, billed: Number(inv.invoice.total_amount) };
+    return { shown, billed: Number(inv.invoice.total_amount), lines: vs, picks };
 }
 
 test('визит завтра, пакет с завтра, строки без врача и времени: смета — цена пакета, как счёт', async () => {
@@ -206,6 +245,40 @@ test('то же на повторном визите (ярус): смета не
 test('контроль: визит завтра, пакет действует с сегодня — смета = счёт', async () => {
     const r = await quoteAndBill({ visitOffset: 1, pkgFromOffset: 0 });
     assert.deepEqual([r.shown, r.billed], [120000, 120000]);
+});
+
+// --- Строки со временем: каталог сам поставил врачу УЗИ ближайшее время ---------
+
+test('время строки — сегодня, визит завтра, пакет с завтра: смета — по дню визита, как счёт', async () => {
+    const r = await quoteAndBill({ visitOffset: 1, pkgFromOffset: 1, timed: true });
+    assert.ok(r.picks.some((p) => p.service && p.service.id === 22 && p.startISO), 'каталог не поставил УЗИ время — проверка не о том');
+    assert.deepEqual([r.shown, r.billed], [120000, 120000], 'смета ' + r.shown + ', счёт ' + r.billed);
+});
+
+test('то же на повторном визите (ярус): пациенту не называют 80 000 при счёте 120 000', async () => {
+    const r = await quoteAndBill({ visitOffset: 1, pkgFromOffset: 1, timed: true, repeat: true });
+    assert.deepEqual([r.shown, r.billed], [120000, 120000], 'смета ' + r.shown + ', счёт ' + r.billed);
+});
+
+test('визит сегодня, пакет до сегодня, врач УЗИ сегодня занят (время — завтра), повторный визит: смета = счёт', async () => {
+    busyToday = true;
+    try {
+        const r = await quoteAndBill({ visitOffset: 0, pkgFromOffset: -5, pkgUntilOffset: 0, timed: true, repeat: true });
+        assert.deepEqual([r.shown, r.billed], [120000, 120000], 'смета ' + r.shown + ', счёт ' + r.billed);
+    } finally { busyToday = false; }
+});
+
+test('кабинет врача: визит завтра, пакет с завтра, УЗИ со временем сегодня — смета по дню визита, как счёт', async () => {
+    const r = await quoteAndBill({ visitOffset: 1, pkgFromOffset: 1, timed: true, cabinet: true });
+    assert.deepEqual([r.shown, r.billed], [120000, 120000], 'смета ' + r.shown + ', счёт ' + r.billed);
+});
+
+test('кабинет врача: визит сегодня, пакет до сегодня, врач сегодня занят, повторный визит — смета = счёт', async () => {
+    busyToday = true;
+    try {
+        const r = await quoteAndBill({ visitOffset: 0, pkgFromOffset: -5, pkgUntilOffset: 0, timed: true, repeat: true, cabinet: true });
+        assert.deepEqual([r.shown, r.billed], [120000, 120000], 'смета ' + r.shown + ', счёт ' + r.billed);
+    } finally { busyToday = false; }
 });
 
 test.after(() => { if (DB) DB.close(); DB = null; });

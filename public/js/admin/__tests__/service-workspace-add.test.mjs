@@ -128,3 +128,17 @@ test('removeOwnService: строку снимает remove_own_visit_line, от�
         'пункт списка убирается раньше, чем сервер снял строку — при отказе врач видит «снято», а счёт нет');
     assert.ok(STRINGS['Услугу не снять: {msg}'], 'строки нет в словаре');
 });
+
+// SERVICES_PACKAGES_V1 (повторная проверка C2) — каталог кабинета считает срок
+// пакета по дню СВОЕГО визита (packageDay), как окно визита и как сервер, а не
+// по «сегодня» или времени, которое каталог сам поставил врачу. День визита
+// кабинет получает со строкой «Мои услуги» (consultation.js → __service.visitDate).
+test('кабинет передаёт каталогу день визита приёма (packageDay), «Мои услуги» кладут его в __service', () => {
+    const call = cardCall();
+    assert.match(call, /packageDay:\s*ctx\.patient\?\.__service\?\.visitDate\s*\|\|\s*null/,
+        'каталог кабинета без дня визита: смета посчитает пакет по сегодня, а счёт — по дню визита');
+    const consult = code(fs.readFileSync(path.join(HERE, '..', 'views', 'consultation.js'), 'utf8'));
+    const svc = consult.match(/__service:\s*\{[\s\S]*?\n\s*\}/);
+    assert.ok(svc, '__service строки «Мои услуги» не найден');
+    assert.match(svc[0], /visitDate:\s*r\.visitDate\s*\|\|\s*null/, 'строка «Мои услуги» не передаёт кабинету день визита');
+});
