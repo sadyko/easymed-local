@@ -239,7 +239,11 @@ test('I1 страж: партнёр не включал «пришёл» — н�
     r.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
     const c = await confirmBooking(r.db, { id: r.db.prepare('SELECT id FROM api_requests').get().id, patientId: 1 }, r.reg, { now: NOW + 60000, kekPath: r.kekPath });
     if (how === 'mark') await calendarBook(r.db, { visit_id: c.visit.id, start: c.visit.visit_date, status: 'arrived' }, r.reg);
-    else r.db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES (1, 'INV-1', ?, 1, 150000, 150000, 150000, 'paid')").run(c.visit.id);
+    else {
+      r.db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES (1, 'INV-1', ?, 1, 150000, 150000, 150000, 'paid')").run(c.visit.id);
+      // Повторная проверка 8a, п. 6: приход — платёж в день визита (cameSurely).
+      r.db.prepare('INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (1, 150000, ?, ?)').run('cash', new Date(localAt('2030-03-12', '10:05')).toISOString());
+    }
     r.tick(26 * 3600000);   // день визита наступил
     await syncOnce(r.db, r.dataDir, r.opts);
     assert.equal(r.db.prepare('SELECT status FROM api_requests').get().status, 'arrived', how + ': в клинике — «пришёл»');

@@ -510,6 +510,13 @@ async function partnerCancel(db, row, { now, kekPath }) {
     setStatus(db, row.id, { partner_cancel_at: isoOf(now) }, now);
     return { applied: true, id: row.id, status: row.status, needs_staff: true };
   }
+  // Повторная проверка 8a, п. 6: пациент уже пришёл (или «не пришёл») — отменять
+  // у партнёра нечего, но и терять отмену нельзя (курсор очереди уйдёт дальше):
+  // пометка для регистратуры, визит не трогается.
+  if (row.status === 'arrived' || row.status === 'no_show') {
+    setStatus(db, row.id, { partner_cancel_at: isoOf(now) }, now);
+    return { applied: true, id: row.id, status: row.status, needs_staff: true };
+  }
   // Отмена пришла в ту секунду, когда регистратор подтверждает: визит ещё не
   // заведён — отменять нечего, но и терять отмену нельзя (курсор очереди уйдёт
   // дальше). Пометка — окно карточки скажет «решите вручную».

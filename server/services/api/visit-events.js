@@ -14,7 +14,8 @@
 //     appointment.arrived; день прошёл без прихода — «Не пришёл» (без
 //     уведомления: такого события в словаре нет); приход, доказанный позже,
 //     поднимает «Не пришёл» в «Пришёл».
-import { arrivedByEvidence, PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { cameSurely } from '../crm/no-show.js';   // повторная проверка 8a, п. 6 — строгое правило прихода CRM
 import { localDate } from '../domain/day.js';
 import { EV, isoOf, localIso } from '../../../public/js/shared/api-booking.js';
 import { enqueueEvent } from './outbox.js';
@@ -96,9 +97,12 @@ export function syncVisitOutcomes(db, { now = Date.now(), kekPath = null } = {})
           changed += 1;
           return;
         }
-        // Ревью 8a, I1: деньги и работа доказывают приход только в день визита и
-        // позже — предоплата накануне ещё не «пришёл». Отметка «Пришёл» — всегда.
-        const came = r.v_status === 'arrived' || (r.visit_day <= today && arrivedByEvidence(db, r.v_id));
+        // Ревью 8a, I1 и повторная проверка, п. 6: приход — только то, что бывает
+        // лишь с человеком в клинике (cameSurely, строгое правило «Не пришёл» CRM):
+        // отметка «Пришёл», работа над услугой, ПЛАТЁЖ в день визита или позже.
+        // Предоплата накануне — не приход: прежде она с полуночи дня визита делала
+        // заявку «пришёл», и отмена или перенос в тот же день до партнёра не доходили.
+        const came = cameSurely(db, { id: r.v_id, status: r.v_status, day: r.visit_day });
         if (came) {
           emit(update(db, r.id, { status: 'arrived' }, now), EV.arrived, 'arrived', { doctor_id: r.v_doctor });
           changed += 1;
