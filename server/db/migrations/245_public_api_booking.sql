@@ -128,6 +128,10 @@ CREATE TABLE api_sync_state (
   keys_hash     TEXT NOT NULL DEFAULT '',
   keys_at       TEXT,
   last_poll_at  TEXT,
+  -- Повторная проверка 8a, п. 3: миг, когда очередь сервера была ПРОЧИТАНА
+  -- (до GET /inbox) в такте, прошедшем без застрявшего элемента. По нему фон
+  -- решает, мог ли ответ партнёра на «другое время» ещё лежать непрочитанным.
+  inbox_read_at TEXT,
   last_ok_at    TEXT,
   last_error    TEXT NOT NULL DEFAULT '',
   last_error_at TEXT,

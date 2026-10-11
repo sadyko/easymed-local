@@ -192,6 +192,8 @@ test('M2: партнёр согласился вовремя (через 10 ми
   assert.equal(acc.status, 'pending');
   const row = one(s.db, 'SELECT status, start_at, offered_start FROM api_requests WHERE id = ?', id);
   assert.deepEqual([row.status, Date.parse(row.start_at), row.offered_start], ['pending', LATER, null]);
+  // Повторная проверка 8a, п. 3: «истекло» партнёру ещё не ушло — его и не будет.
+  assert.equal(one(s.db, "SELECT COUNT(*) AS n FROM api_outbox WHERE event = 'booking.declined'").n, 0, 'неотправленное «истекло» снято');
   assert.equal(free(s, LATER, NOW + 40 * 60000), false, 'новое время держится');
 });
 
@@ -219,10 +221,12 @@ test('M2: пока обмен работает, фон не истекает п�
   const id = await pending(s);
   offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW, kekPath: s.kekPath });
   const iso = (ms) => new Date(ms).toISOString().replace('.000', '');
-  s.db.prepare('UPDATE api_sync_state SET last_poll_at = ?, last_ok_at = ? WHERE id = 1').run(iso(NOW + 29 * 60000 + 50000), iso(NOW + 29 * 60000 + 50000));
+  // Повторная проверка 8a, п. 3: судит время ЧТЕНИЯ очереди (inbox_read_at), а не конец такта.
+  s.db.prepare('UPDATE api_sync_state SET last_poll_at = ?, last_ok_at = ?, inbox_read_at = ? WHERE id = 1')
+    .run(iso(NOW + 30 * 60000 + 10000), iso(NOW + 30 * 60000 + 10000), iso(NOW + 29 * 60000 + 50000));
   assert.equal(expireDue(s.db, { now: NOW + 30 * 60000 + 5000, kekPath: s.kekPath }), 0, 'последний сбор — до срока предложения');
   assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'offered');
-  s.db.prepare('UPDATE api_sync_state SET last_ok_at = ? WHERE id = 1').run(iso(NOW + 30 * 60000 + 5000));
+  s.db.prepare('UPDATE api_sync_state SET inbox_read_at = ? WHERE id = 1').run(iso(NOW + 30 * 60000 + 5000));
   assert.equal(expireDue(s.db, { now: NOW + 30 * 60000 + 20000, kekPath: s.kekPath }), 1, 'сбор после срока прошёл, ответа нет — истекло');
 });
 
@@ -244,4 +248,29 @@ test('рр-1: согласие на другой день переносит т�
   assert.equal((await inbox(s, 'offer.accept', NOW + 5 * 60000)).status, 'pending');
   assert.deepEqual(s.db.prepare('SELECT service_id, consultation_type_id, scheduled_date FROM crm_request_services WHERE request_id = ? ORDER BY id').all(cardId).map((x) => ({ ...x })),
     [{ service_id: null, consultation_type_id: 1, scheduled_date: '2030-03-13' }, { service_id: 301, consultation_type_id: null, scheduled_date: '2030-03-15' }]);
+});
+
+// ─── ПОВТОРНАЯ ПРОВЕРКА 8a, п. 3: ДВУХ ПРОТИВОРЕЧИВЫХ ОТВЕТОВ ПАРТНЁРУ НЕ БЫВАЕТ ─
+
+test('рр-3: «истекло» уже ушло партнёру — согласие, пришедшее потом (даже данное вовремя), заявку не возвращает', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW, kekPath: s.kekPath });
+  expireDue(s.db, { now: NOW + 31 * 60000, kekPath: s.kekPath });
+  s.db.prepare("UPDATE api_outbox SET sent_at = '2030-03-11T04:32:00Z' WHERE event = 'booking.declined'").run();
+  const before = one(s.db, 'SELECT COUNT(*) AS n FROM api_outbox').n;
+  const acc = await answer(s, 'offer.accept', NOW + 10 * 60000, NOW + 40 * 60000);
+  assert.equal(acc.status, 'expired');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'expired');
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM api_outbox').n, before, 'партнёру — ничего нового');
+});
+
+test('рр-3: пока обмен стоит, предложение держится не дольше предложенного начала — потом истекает', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW, kekPath: s.kekPath });
+  const iso = (ms) => new Date(ms).toISOString().replace('.000', '');
+  s.db.prepare('UPDATE api_sync_state SET last_poll_at = ?, inbox_read_at = ? WHERE id = 1').run(iso(NOW), iso(NOW));
+  assert.equal(expireDue(s.db, { now: NOW + 3 * 3600000, kekPath: s.kekPath }), 0, 'обмен стоит, начало впереди — ждём ответа');
+  assert.equal(expireDue(s.db, { now: LATER + 60000, kekPath: s.kekPath }), 1, 'предложенное время прошло — истекло');
 });

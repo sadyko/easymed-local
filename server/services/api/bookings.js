@@ -439,14 +439,18 @@ export function expireDue(db, { now = Date.now(), kekPath = null } = {}) {
   let rows = [];
   try { rows = db.prepare("SELECT * FROM api_requests WHERE status IN ('pending', 'offered')").all(); } catch { return 0; }
   let n = recoverConfirming(db, { now, kekPath });
-  const sync = (() => { try { return db.prepare('SELECT last_poll_at, last_ok_at FROM api_sync_state WHERE id = 1').get() || {}; } catch { return {}; } })();
+  const sync = (() => { try { return db.prepare('SELECT last_poll_at, inbox_read_at FROM api_sync_state WHERE id = 1').get() || {}; } catch { return {}; } })();
   for (const row of rows) {
     if (holdState(row, now) !== 'expired' || liveHoldOf(db, row.id, now)) continue;
     // Ревью 8a, M2: встречное предложение ждёт ответа ПАРТНЁРА, а ответ лежит в
     // очереди публичного сервера. Пока обмен работает (уже опрашивал сервер), не
     // истекать, пока сбор очереди после срока предложения не прошёл: иначе
     // партнёр получил бы «истекло», а следом — согласие, данное вовремя.
-    if (row.status === 'offered' && sync.last_poll_at && !(sync.last_ok_at && sync.last_ok_at >= row.offer_until)) continue;
+    // Повторная проверка 8a, п. 3: судит миг ЧТЕНИЯ очереди без застрявшего
+    // элемента (inbox_read_at), а не конец такта; и ждать ответа есть смысл,
+    // только пока предложенное время впереди.
+    if (row.status === 'offered' && sync.last_poll_at && Date.parse(row.offered_start) > now
+      && !(sync.inbox_read_at && sync.inbox_read_at >= row.offer_until)) continue;
     expireRow(db, row, { now, kekPath });
     n += 1;
   }
@@ -529,6 +533,16 @@ function partnerAcceptOffer(db, row, { now, kekPath, answeredAt = null }) {
   // предложение: ответ, данный в срок, засчитывается.
   const expiredOffer = row.status === 'expired' && row.decline_reason === 'expired' && row.offered_start && row.offer_until;
   if (row.status !== 'offered' && !expiredOffer) return { applied: false, id: row.id, status: row.status };
+  // Повторная проверка 8a, п. 3: «истекло» уже ушло партнёру — второго,
+  // противоречащего ответа не будет: заявка остаётся истёкшей. Не ушло —
+  // снимается вместе с возвратом (или заменяется отказом «время занято»).
+  let unsentExpired = null;
+  if (expiredOffer) {
+    unsentExpired = db.prepare("SELECT id FROM api_outbox WHERE api_request_id = ? AND event = ? AND status = 'expired' AND sent_at IS NULL ORDER BY id DESC LIMIT 1")
+      .get(row.id, EV.declined) || null;
+    if (!unsentExpired) return { applied: true, id: row.id, status: 'expired' };
+  }
+  const dropExpired = () => { if (unsentExpired) db.prepare('DELETE FROM api_outbox WHERE id = ? AND sent_at IS NULL').run(unsentExpired.id); };
   const answered = Number.isFinite(answeredAt) ? answeredAt : now;
   const startMs = Date.parse(row.offered_start);
   if (!(answered < Date.parse(row.offer_until)) || !(startMs > now)) {
@@ -541,6 +555,7 @@ function partnerAcceptOffer(db, row, { now, kekPath, answeredAt = null }) {
   if (!slotIsFree(db, { doctorId: row.doctor_id, startMs, durationMin: row.duration_minutes, excludeHoldId: own ? own.id : null, now })) {
     // Ответ вовремя, но время за это время заняли (у стойки или другой партнёр).
     db.transaction(() => {
+      dropExpired();
       releaseHolds(db, row.id, 'declined', now);
       const out = setStatus(db, row.id, { status: 'declined', decline_reason: 'slot_taken' }, now);
       enqueueEvent(db, { request: out, event: EV.declined, status: 'declined', details: { reason: 'slot_taken', doctor_id: out.doctor_id }, now, kekPath });
@@ -549,6 +564,7 @@ function partnerAcceptOffer(db, row, { now, kekPath, answeredAt = null }) {
   }
   const untilMs = Date.parse(holdUntilFor(isoOf(now), row.offered_start, { openOn: clinicOpenOn(db) }));
   db.transaction(() => {
+    dropExpired();
     releaseHolds(db, row.id, 'accepted', now);
     placeHold(db, { doctorId: row.doctor_id, startMs, durationMin: row.duration_minutes, untilMs, apiRequestId: row.id, kind: 'booking' });
     setStatus(db, row.id, { status: 'pending', start_at: row.offered_start, hold_until: isoOf(untilMs), offered_start: null, offer_until: null, decline_reason: '' }, now);

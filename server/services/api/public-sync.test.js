@@ -336,3 +336,60 @@ test('M4: испорчены оба файла ключа обмена у вкл
   assert.deepEqual([st.state, st.reason, st.last_error, st.last_error_at], ['error', 'key_broken', 'key_broken', new Date(NOW + 15000).toISOString().replace('.000', '')]);
   assert.equal(fs.readFileSync(r.keyPath, 'utf8'), 'испорчено', 'новая пара не создана');
 });
+
+// ─── ПОВТОРНАЯ ПРОВЕРКА 8a, п. 3: «ИСТЕКЛО» НЕ УХОДИТ РАНЬШЕ, ЧЕМ ПРОЧИТАН ОТВЕТ ─
+
+test('рр-3: приём застрял на другом элементе, срок предложения прошёл, согласие партнёра лежит за ним — «истекло» не уходит; согласие прочитано — ждёт подтверждения', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  appt(r);
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  const id = r.db.prepare("SELECT id FROM api_requests WHERE public_id = 'rq_sync0001'").get().id;
+  const { offerOtherTime, ingestItem } = await import('./bookings.js');
+  const off = offerOtherTime(r.db, { id, start: new Date(localAt('2030-03-12', '11:00')).toISOString() }, r.reg, { now: NOW + 60000, kekPath: r.kekPath });
+  const until = Date.parse(off.offer_until);
+  appt(r, { public_id: 'rq_bug000001', data: { external_id: 'med-77', doctor_id: 7, consultation: 'initial', start: new Date(localAt('2030-03-12', '14:00')).toISOString(), lang: 'ru' } });
+  r.fake.enqueue({ type: 'offer.accept', public_id: 'rq_sync0001', connection_id: r.connId, received_at: new Date(NOW + 10 * 60000).toISOString() });
+  let broken = true;
+  const opts = { ...r.opts, ingestImpl: (db, it, o) => (broken && it.public_id === 'rq_bug000001' ? Promise.reject(new TypeError('сбой')) : ingestItem(db, it, o)) };
+  let clock = NOW + 15000;
+  const go = async (ms) => { r.tick(ms - clock); clock = ms; await quietWarns(async () => { await syncOnce(r.db, r.dataDir, opts); }); };
+  await go(NOW + 10 * 60000 + 15000);
+  await go(until + 15000);
+  await go(until + 30000);
+  await go(until + 45000);
+  assert.equal(r.db.prepare('SELECT status FROM api_requests WHERE id = ?').get(id).status, 'offered', 'приём стоит — не истекает');
+  broken = false;
+  await go(until + 60000);
+  assert.equal(r.db.prepare('SELECT status FROM api_requests WHERE id = ?').get(id).status, 'pending');
+  const told = r.fake.state.events.filter((e) => JSON.parse(e.body).request_id === 'rq_sync0001').map((e) => e.event + ':' + JSON.parse(e.body).status);
+  assert.ok(!told.includes('booking.declined:expired'), 'партнёр не получал «истекло»: ' + told.join(', '));
+});
+
+test('рр-3: очередь прочитана до срока предложения, такт кончился после — следующий такт не шлёт «истекло», а читает согласие', async () => {
+  const r = rig();
+  let clock = NOW;
+  const go = (ms) => { r.tick(ms - clock); clock = ms; };
+  await syncOnce(r.db, r.dataDir, r.opts);
+  appt(r);
+  go(NOW + 15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  const id = r.db.prepare('SELECT id FROM api_requests').get().id;
+  const { offerOtherTime } = await import('./bookings.js');
+  const until = Date.parse(offerOtherTime(r.db, { id, start: new Date(localAt('2030-03-12', '11:00')).toISOString() }, r.reg, { now: NOW + 60000, kekPath: r.kekPath }).offer_until);
+  go(until - 5000);
+  const fetchImpl = async (url, o) => {
+    const res = await r.opts.fetchImpl(url, o);
+    if (String(o && o.method || 'GET') === 'GET' && new URL(String(url)).pathname === '/_sync/v1/inbox') {
+      r.fake.enqueue({ type: 'offer.accept', public_id: 'rq_sync0001', connection_id: r.connId, received_at: new Date(until - 2000).toISOString() });
+      go(until + 1000);   // остаток такта кончился после срока
+    }
+    return res;
+  };
+  await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl });
+  go(until + 16000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.equal(r.db.prepare('SELECT status FROM api_requests WHERE id = ?').get(id).status, 'pending');
+  assert.ok(!r.fake.state.events.some((e) => e.event === 'booking.declined'), 'партнёр не получал «истекло»');
+});

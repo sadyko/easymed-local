@@ -232,6 +232,9 @@ async function pushEvents(ctx) {
 }
 
 async function pullInbox(ctx, state) {
+  // Повторная проверка 8a, п. 3: миг чтения — ДО запроса; конец такта (last_ok_at)
+  // для этого не годится: медленный остаток такта уводит его за срок предложения.
+  const readAt = ctx.now();
   const res = await call(ctx, 'GET', '/inbox?after=' + encodeURIComponent(state.inbox_cursor || ''));
   const items = Array.isArray(res.items) ? res.items : [];
   let cursor = state.inbox_cursor || '';
@@ -296,6 +299,9 @@ async function pullInbox(ctx, state) {
   noteSkipped(ctx.db, skippedIds, ctx.now());
   noteSkipped(ctx.db, sealedIds, ctx.now(), 'sealed');
   if (!stuck && (state.stuck_cursor || state.stuck_tries)) saveState(ctx.db, { stuck_cursor: '', stuck_tries: 0 });
+  // Очередь прочитана до конца — всё, что лежало на сервере к readAt, принято.
+  // Застрял элемент — нет: за ним может лежать ответ партнёра (п. 3).
+  if (!stuck) saveState(ctx.db, { inbox_read_at: isoOf(readAt) });
   return { applied, skipped, stuck, received: items.length };
 }
 
