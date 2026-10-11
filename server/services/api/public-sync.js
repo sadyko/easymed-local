@@ -54,6 +54,10 @@ const INITIAL_DELAY_MS = 20_000;
 const TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 2_000_000;
 const EVENTS_BATCH = 50;
+/** Ревью 8a, C1: сколько тактов подряд элемент очереди может ронять приём, прежде чем его пропустят (≈ 5 минут). */
+export const STUCK_MAX_TRIES = 20;
+/** Сколько последних номеров пропущенных заявок помнит состояние обмена (для поддержки Easy-Med). */
+const SKIPPED_IDS_KEEP = 10;
 
 export function publicBaseUrl(env = process.env) {
   return String((env && env.EASYMED_PUBLIC_URL) || DEFAULT_PUBLIC_URL).trim().replace(/\/+$/, '');
@@ -79,6 +83,22 @@ function saveState(db, fields) {
   const cols = Object.keys(fields);
   try { db.prepare(`UPDATE api_sync_state SET ${cols.map((c) => c + ' = ?').join(', ')} WHERE id = 1`).run(...cols.map((c) => fields[c])); } catch { /* база до мигр. 245 */ }
 }
+
+// Ревью 8a, C1 — пропущенные элементы очереди помнятся до сброса администратором.
+function noteSkipped(db, ids, now) {
+  if (!ids.length) return;
+  const st = readState(db) || {};
+  let prev = [];
+  try { prev = JSON.parse(st.skipped_last_ids || '[]'); } catch { prev = []; }
+  saveState(db, {
+    skipped_failed: (Number(st.skipped_failed) || 0) + ids.length,
+    skipped_last_at: isoOf(now),
+    skipped_last_ids: JSON.stringify([...prev, ...ids].slice(-SKIPPED_IDS_KEEP)),
+  });
+}
+// Ограничение базы (внешний ключ, CHECK, запрет триггера) — свойство самого
+// элемента: следующий такт откажет так же. Сбой программы — может пройти.
+const isPermanent = (e) => !!e && String(e.code || '').startsWith('SQLITE_CONSTRAINT');
 
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
 function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } }
@@ -204,6 +224,8 @@ async function pullInbox(ctx, state) {
   let cursor = state.inbox_cursor || '';
   let applied = 0;
   let skipped = 0;
+  let stuck = false;
+  const skippedIds = [];
   // Решения владельца 18–19: срок держания назначает клиника в миг приёма —
   // публичный сервер узнаёт его из подтверждения очереди (held) и показывает в
   // GET /requests/{id}. Читается из строки заявки, а не из ответа ingestItem:
@@ -217,10 +239,25 @@ async function pullInbox(ctx, state) {
       try { item = { ...it, patient: openSealed(ctx.identity, it.sealed) }; } catch { skipped += 1; cursor = String(it.cursor || cursor); continue; }
     }
     let r;
-    try { r = await ingestItem(ctx.db, item, { now: ctx.now(), kekPath: ctx.kekPath }); } catch (e) {
-      // Ошибка программы на одном элементе — дальше не идём и курсор не двигаем:
-      // следующий такт попробует снова, ничего не потеряно.
-      console.warn('[public-api] заявка не принята:', e && e.message);
+    try { r = await ctx.ingest(ctx.db, item, { now: ctx.now(), kekPath: ctx.kekPath }); } catch (e) {
+      // Ревью 8a, C1. Ограничение базы — элемент не принять никогда: пропустить,
+      // запомнить номер (без данных пациента), идти дальше — иначе один элемент
+      // остановил бы приём всей очереди навсегда. Сбой программы — дальше не идём
+      // и курсор не двигаем (следующий такт попробует снова), но не дольше
+      // STUCK_MAX_TRIES тактов подряд на одном элементе; экран тем временем
+      // говорит «ошибка», а не «работает».
+      const pub = String((it && it.public_id) || '');
+      const at = String((it && it.cursor) || '');
+      const tries = state.stuck_cursor === at ? (Number(state.stuck_tries) || 0) + 1 : 1;
+      if (isPermanent(e) || tries >= STUCK_MAX_TRIES) {
+        console.warn('[public-api] заявка', pub, 'пропущена — клиника не может её принять:', e && e.message);
+        skippedIds.push(pub);
+        cursor = String(at || cursor);
+        continue;
+      }
+      console.warn('[public-api] заявка', pub, 'не принята (попытка', tries + '):', e && e.message);
+      saveState(ctx.db, { stuck_cursor: at, stuck_tries: tries });
+      stuck = true;
       break;
     }
     if (r && r.applied) applied += 1;
@@ -232,7 +269,9 @@ async function pullInbox(ctx, state) {
     await call(ctx, 'POST', '/inbox/ack', { cursor, held: [...held.values()] });
     saveState(ctx.db, { inbox_cursor: cursor });
   }
-  return { applied, skipped, received: items.length };
+  noteSkipped(ctx.db, skippedIds, ctx.now());
+  if (!stuck && (state.stuck_cursor || state.stuck_tries)) saveState(ctx.db, { stuck_cursor: '', stuck_tries: 0 });
+  return { applied, skipped, stuck, received: items.length };
 }
 
 // ─── ТАКТ ───────────────────────────────────────────────────────────────────
@@ -255,7 +294,7 @@ export async function syncOnce(db, dataDir, opts = {}) {
 
 async function performSync(db, dataDir, opts) {
   const { fetchImpl = globalThis.fetch, env = process.env, now = () => Date.now(), keyPath = path.join(dataDir, SYNC_KEY_FILE),
-    kekPath = null, storageDir = path.join(dataDir, 'storage') } = opts;
+    kekPath = null, storageDir = path.join(dataDir, 'storage'), ingestImpl = ingestItem } = opts;
   // Своя работа — всегда: истечение удержаний и судьба визитов (партнёр узнает,
   // когда связь будет).
   expireDue(db, { now: now(), kekPath });
@@ -270,7 +309,7 @@ async function performSync(db, dataDir, opts) {
   assertPublicUrlIsTestSafe(env, fetchImpl);
   const control = readJson(path.join(dataDir, 'control.json'));
   const ctx = {
-    db, fetchImpl, now, kekPath, storageDir, identity,
+    db, fetchImpl, now, kekPath, storageDir, identity, ingest: ingestImpl,
     base: publicBaseUrl(env), clinicId: control.clinic_id,
     licenceB64: Buffer.from(readText(path.join(dataDir, 'licence.dat')) || '', 'utf8').toString('base64'),
   };
@@ -286,7 +325,9 @@ async function performSync(db, dataDir, opts) {
     state = readState(db) || {};
     await pushSlots(ctx, state, inbox.applied > 0);
     if (inbox.applied) sent += await pushEvents(ctx);
-    saveState(db, { last_ok_at: isoOf(now()), last_error: inbox.skipped ? 'sealed' : '', last_error_at: inbox.skipped ? isoOf(now()) : null });
+    // C1: элемент, на котором приём стоит, — «ошибка» на экране, пока не пройдёт.
+    const err = inbox.stuck ? 'intake_failed' : inbox.skipped ? 'sealed' : '';
+    saveState(db, { last_ok_at: isoOf(now()), last_error: err, last_error_at: err ? isoOf(now()) : null });
     return { ok: true, applied: inbox.applied, sent };
   } catch (e) {
     if (!(e instanceof SyncFail)) throw e;
@@ -294,6 +335,8 @@ async function performSync(db, dataDir, opts) {
     return { ok: false, reason: e.reason };
   }
 }
+
+const parseIds = (v) => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
 
 /** Для экрана «API»: идёт ли обмен и что с ним. */
 export function syncStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_FILE) } = {}) {
@@ -311,6 +354,8 @@ export function syncStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_
     state, reason: local || vendor || st.last_error || '',
     last_ok_at: st.last_ok_at || null, last_error: st.last_error || '', last_error_at: st.last_error_at || null,
     pending_events: pendingEvents, waiting_requests: waiting,
+    // C1: пропущенные элементы очереди — до сброса администратором.
+    skipped: { failed: Number(st.skipped_failed) || 0, last_at: st.skipped_last_at || null, last_ids: parseIds(st.skipped_last_ids) },
   };
 }
 

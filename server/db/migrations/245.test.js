@@ -97,3 +97,22 @@ test('245: событие — объект JSON и известная помет
   assert.throws(() => ev('{}', 'lost'), /CHECK/);
   ev('{}', 'no_secret');
 });
+
+// PUBLIC_API_V1 — ревью 8a, C1: заявку, которую клиника отклонила при приёме
+// (врача удалили, пока она ждала в очереди), нужно сохранить без врача —
+// иначе её не сохранить вовсе, и очередь встаёт. Ждущая и записанная — по-прежнему
+// только с врачом, временем и длительностью.
+test('245: отклонённая или истёкшая онлайн-запись хранится и без врача; ждущая — нет', () => {
+  const db = fresh(); seed(db);
+  req(db, { public_id: 'rq_declnodoc', status: 'declined', decline_reason: 'not_bookable', doctor_id: null });
+  req(db, { public_id: 'rq_exprnodoc', status: 'expired', decline_reason: 'expired', doctor_id: null });
+  for (const status of ['pending', 'offered', 'confirming', 'confirmed']) {
+    assert.throws(() => req(db, { public_id: 'rq_nodoc' + status.slice(0, 4), status, doctor_id: null }), /CHECK/, status);
+  }
+});
+
+test('245: состояние обмена помнит пропущенные элементы очереди и застрявший элемент', () => {
+  const db = fresh();
+  const st = db.prepare('SELECT skipped_failed, skipped_last_at, skipped_last_ids, stuck_cursor, stuck_tries FROM api_sync_state WHERE id = 1').get();
+  assert.deepEqual({ ...st }, { skipped_failed: 0, skipped_last_at: null, skipped_last_ids: '[]', stuck_cursor: '', stuck_tries: 0 });
+});

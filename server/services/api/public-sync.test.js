@@ -170,3 +170,58 @@ test('решение 17: лицензия уходит в каждом запр�
   assert.ok(r.fake.state.licences.every((l) => l === raw), 'лицензия — как лежит на диске');
   assert.equal(JSON.parse(r.fake.state.licences.at(-1)).payload.subscription, 'unpaid');
 });
+
+// ─── РЕВЬЮ 8a, C1: ОДИН ЭЛЕМЕНТ НЕ ДОЛЖЕН ОСТАНАВЛИВАТЬ ВЕСЬ ПРИЁМ ───────────
+
+const quietWarns = async (fn) => {
+  const w = console.warn; const msgs = []; console.warn = (...a) => msgs.push(a.join(' '));
+  try { await fn(); } finally { console.warn = w; }
+  return msgs;
+};
+const second = (r) => appt(r, { public_id: 'rq_good00002', data: { external_id: 'med-56', doctor_id: 7, consultation: 'initial',
+  start: new Date(localAt('2030-03-12', '12:00')).toISOString(), lang: 'ru' } });
+
+test('C1: база отказывает элементу (ограничение) — он пропускается, курсор идёт дальше, запись за ним принята; пропуск помнится, экран «работает»', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  r.db.exec("CREATE TRIGGER zz_poison BEFORE INSERT ON api_requests WHEN NEW.public_id = 'rq_poison001' BEGIN SELECT RAISE(ABORT, 'отказ базы'); END");
+  appt(r, { public_id: 'rq_poison001' });
+  second(r);
+  r.tick(15000);
+  let out;
+  const warns = await quietWarns(async () => { out = await syncOnce(r.db, r.dataDir, r.opts); });
+  assert.equal(out.applied, 1);
+  assert.deepEqual(r.fake.state.acks, [2], 'курсор подтверждён за обоими элементами');
+  assert.deepEqual(r.db.prepare('SELECT public_id FROM api_requests').all().map((x) => x.public_id), ['rq_good00002']);
+  assert.ok(warns.some((w) => w.includes('rq_poison001')), 'в журнале сервера — номер пропущенной заявки');
+  assert.ok(!warns.join('\n').includes('Абдурахмонов'), 'без данных пациента');
+  const st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.equal(st.state, 'ok', 'обмен идёт');
+  assert.deepEqual([st.skipped.failed, st.skipped.last_ids], [1, ['rq_poison001']]);
+  assert.ok(st.skipped.last_at);
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.equal(syncStatus(r.db, r.dataDir, { keyPath: r.keyPath }).skipped.failed, 1, 'следующий удачный такт пропуск не стирает');
+});
+
+test('C1: сбой программы на элементе — такт на нём стоит, экран «ошибка» (intake_failed), а не «работает»; после 20 попыток элемент пропускается', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  appt(r, { public_id: 'rq_bug000001' });
+  second(r);
+  const { ingestItem } = await import('./bookings.js');
+  const ingestImpl = (db, it, o) => (it.public_id === 'rq_bug000001' ? Promise.reject(new TypeError('сбой программы')) : ingestItem(db, it, o));
+  const opts = { ...r.opts, ingestImpl };
+  r.tick(15000);
+  await quietWarns(async () => { await syncOnce(r.db, r.dataDir, opts); });
+  assert.deepEqual(r.fake.state.acks, [], 'курсор стоит: следующий такт попробует снова');
+  let st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.deepEqual([st.state, st.last_error], ['error', 'intake_failed']);
+  await quietWarns(async () => { for (let i = 0; i < 18; i += 1) { r.tick(15000); await syncOnce(r.db, r.dataDir, opts); } });
+  assert.equal(r.db.prepare('SELECT COUNT(*) AS n FROM api_requests').get().n, 0, '19 попыток — ещё ждём');
+  r.tick(15000);
+  await quietWarns(async () => { await syncOnce(r.db, r.dataDir, opts); });
+  assert.deepEqual(r.db.prepare('SELECT public_id FROM api_requests').all().map((x) => x.public_id), ['rq_good00002'], '20-я — пропуск, дальше пошло');
+  st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.deepEqual([st.state, st.skipped.failed, st.skipped.last_ids], ['ok', 1, ['rq_bug000001']]);
+});

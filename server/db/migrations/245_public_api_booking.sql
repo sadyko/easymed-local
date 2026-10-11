@@ -51,8 +51,12 @@ CREATE TABLE api_requests (
   picked_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
   updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
   handled_by           INTEGER REFERENCES users(id),
-  -- Онлайн-запись всегда знает врача и время; заявке они не обязательны.
-  CHECK (kind = 'request' OR (doctor_id IS NOT NULL AND start_at IS NOT NULL AND duration_minutes IS NOT NULL)),
+  -- Онлайн-запись знает врача и время; заявке они не обязательны. Исключение —
+  -- отклонённая или истёкшая при приёме (ревью 8a, C1): врача могли удалить,
+  -- пока заявка ждала в очереди, — её всё равно надо сохранить (карточка для
+  -- звонка, отказ партнёру), иначе элемент не принять и очередь встаёт.
+  CHECK (kind = 'request' OR status IN ('declined', 'expired')
+         OR (doctor_id IS NOT NULL AND start_at IS NOT NULL AND duration_minutes IS NOT NULL)),
   -- Удержание и встречное предложение — только у онлайн-записи.
   CHECK (kind = 'appointment' OR (hold_until IS NULL AND offered_start IS NULL AND status IN
          ('new', 'accepted', 'confirmed', 'cancelled', 'arrived', 'no_show')))
@@ -122,6 +126,17 @@ CREATE TABLE api_sync_state (
   last_poll_at  TEXT,
   last_ok_at    TEXT,
   last_error    TEXT NOT NULL DEFAULT '',
-  last_error_at TEXT
+  last_error_at TEXT,
+  -- Ревью 8a, C1: элементы очереди, которые клиника не смогла принять (база
+  -- отказала, или сбой программы на одном элементе 20 тактов подряд), —
+  -- пропущены, чтобы очередь шла дальше. Счётчик и номера заявок (без данных
+  -- пациента) живут, пока администратор их не сбросит: экран «API» говорит
+  -- «обратитесь в Easy-Med», а не исчезает через такт.
+  skipped_failed   INTEGER NOT NULL DEFAULT 0,
+  skipped_last_at  TEXT,
+  skipped_last_ids TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(skipped_last_ids) AND json_type(skipped_last_ids) = 'array'),
+  -- Элемент, на котором приём стоит (сбой программы): его курсор и сколько тактов подряд.
+  stuck_cursor     TEXT NOT NULL DEFAULT '',
+  stuck_tries      INTEGER NOT NULL DEFAULT 0
 );
 INSERT INTO api_sync_state (id) VALUES (1);

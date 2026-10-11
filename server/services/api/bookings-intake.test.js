@@ -141,3 +141,62 @@ test('решение 18: ночная запись держится до 08:30 �
     receivedMs: night }), { now: night, kekPath: s.kekPath });
   assert.equal(plain.hold_until, isoOf(night + 30 * 60000), 'часы здания не заданы — 30 минут круглые сутки');
 });
+
+// ─── РЕВЬЮ 8a, C1: ЭЛЕМЕНТ, КОТОРЫЙ НЕЛЬЗЯ СОХРАНИТЬ КАК ЕСТЬ ───────────────
+// Пока заявка ждала в очереди (клиника без связи — решение 19), врача, пакет
+// или здание могли удалить, а услугу — сделать длиной 3 или 600 минут. Приём не
+// бросает: такой элемент принимается — отказом партнёру или без лишнего поля.
+
+test('C1: врача удалили, пока заявка ждала, — отказ «запись не открыта», заявка сохранена без врача; ничего не бросает', async () => {
+  const s = bookingSeed();
+  const r = await ingestItem(s.db, item(s, { doctorId: 999 }), { now: NOW, kekPath: s.kekPath });
+  assert.deepEqual([r.applied, r.status], [true, 'declined']);
+  const req = one(s.db, 'SELECT doctor_id, decline_reason, start_at, duration_minutes, crm_request_id FROM api_requests WHERE id = ?', r.id);
+  assert.deepEqual([req.doctor_id, req.decline_reason], [null, 'not_bookable']);
+  assert.ok(req.start_at && req.duration_minutes >= 5 && req.crm_request_id, 'время, длительность и карточка — для звонка');
+  const body = JSON.parse(one(s.db, 'SELECT body FROM api_outbox WHERE api_request_id = ?', r.id).body);
+  assert.deepEqual([body.status, body.reason, body.doctor_id], ['declined', 'not_bookable', 999], 'партнёру — его же номер врача');
+  assert.equal(one(s.db, 'SELECT doctor_id FROM crm_request_services WHERE request_id = ?', req.crm_request_id), undefined, 'без врача и вида — строки нет');
+});
+
+test('C1: незнакомые здание и пакет не сохраняются — запись принимается без них; заявка «перезвоните» — тоже', async () => {
+  const s = bookingSeed();
+  const a = item(s);
+  a.data.branch_id = 999;
+  a.data.package_id = 4242;
+  const r = await ingestItem(s.db, a, { now: NOW, kekPath: s.kekPath });
+  assert.equal(r.status, 'pending');
+  assert.deepEqual({ ...one(s.db, 'SELECT branch_id, package_id FROM api_requests WHERE id = ?', r.id) }, { branch_id: null, package_id: null });
+  const cb = await ingestItem(s.db, { ...item(s, { publicId: 'rq_call0001', externalId: 'cb-1' }), type: 'request.new',
+    data: { external_id: 'cb-1', package_id: 4242 } }, { now: NOW });
+  assert.deepEqual([cb.applied, cb.status, one(s.db, 'SELECT package_id FROM api_requests WHERE id = ?', cb.id).package_id], [true, 'new', null]);
+});
+
+test('C1: услуга короче 5 минут — держится 5 (меньше календарь не записывает); длиннее 480 — отказ «запись не открыта»', async () => {
+  const s = bookingSeed();
+  s.db.prepare('UPDATE services SET duration_minutes = 3 WHERE id = 301').run();
+  const short = await ingestItem(s.db, item(s, { publicId: 'rq_dur00003', externalId: 'd3', consultation: '', serviceId: 301 }), { now: NOW, kekPath: s.kekPath });
+  assert.equal(short.status, 'pending');
+  assert.equal(one(s.db, 'SELECT duration_minutes FROM api_requests WHERE id = ?', short.id).duration_minutes, 5);
+  assert.equal(one(s.db, 'SELECT duration_minutes FROM slot_holds WHERE api_request_id = ?', short.id).duration_minutes, 5);
+  s.db.prepare('UPDATE services SET duration_minutes = 600 WHERE id = 301').run();
+  const long = await ingestItem(s.db, item(s, { publicId: 'rq_dur00600', externalId: 'd600', consultation: '', serviceId: 301,
+    startMs: localAt('2030-03-12', '12:00') }), { now: NOW, kekPath: s.kekPath });
+  assert.equal(long.status, 'declined');
+  assert.deepEqual({ ...one(s.db, 'SELECT decline_reason, duration_minutes FROM api_requests WHERE id = ?', long.id) },
+    { decline_reason: 'not_bookable', duration_minutes: 480 });
+});
+
+test('C1: отмена записанной, когда календарь отказывает в отмене, — не бросает: пометка «решите вручную»', async () => {
+  const s = bookingSeed();
+  const r = await ingestItem(s.db, item(s), { now: NOW, kekPath: s.kekPath });
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  const { confirmBooking } = await import('./bookings.js');
+  const c = await confirmBooking(s.db, { id: r.id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath });
+  // Календарь отказывает в отмене (здесь — запретом в самой базе): отмена не должна
+  // ронять очередь — элемент принимается пометкой для регистратуры.
+  s.db.exec("CREATE TRIGGER zz_no_cancel BEFORE UPDATE OF status ON visits WHEN NEW.status = 'cancelled' BEGIN SELECT RAISE(ABORT, 'отмена запрещена'); END");
+  const out = await ingestItem(s.db, { type: 'appointment.cancel', cursor: '5', public_id: 'rq_test0001', connection_id: s.connId }, { now: NOW + 60000, kekPath: s.kekPath });
+  assert.deepEqual([out.applied, out.needs_staff], [true, true]);
+  assert.ok(one(s.db, 'SELECT partner_cancel_at FROM api_requests WHERE id = ?', r.id).partner_cancel_at);
+});

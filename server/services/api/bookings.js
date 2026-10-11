@@ -99,6 +99,15 @@ function insertRequest(db, row) {
 }
 const isUnique = (e) => e && String(e.code || '').startsWith('SQLITE_CONSTRAINT_UNIQUE');
 
+// Ревью 8a, C1: элемент очереди мог прийти со ссылкой на то, чего в клинике уже
+// нет (пакет удалили, пока заявка ждала, — решение 19), или с номером, которого
+// клиника не публиковала. Такая ссылка не сохраняется (внешний ключ отказал бы и
+// остановил приём всей очереди) — заявка принимается без неё.
+const ownedId = (db, table, id) => (id && db.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).get(id) ? id : null);
+/** Длительность, которую хранит заявка и держит удержание (мигр. 245: 5–480 минут; меньше 5 календарь не записывает). */
+const DURATION_MIN = 5;
+const DURATION_MAX = 480;
+
 function intakeRequest(db, v, conn, { now }) {
   const doctor = v.doctor_id ? db.prepare('SELECT * FROM users WHERE id = ?').get(v.doctor_id) : null;
   const doctorId = doctor && doctorPublicState(doctor, branchesById(db)) === 'shown' ? doctor.id : null;
@@ -109,7 +118,8 @@ function intakeRequest(db, v, conn, { now }) {
     const id = insertRequest(db, {
       public_id: v.public_id, connection_id: conn.id, external_id: v.external_id, kind: 'request', status: 'new',
       crm_request_id: crmId, patient_name: v.patient.name, patient_phone: uzE164(v.patient.phone), comment: v.patient.comment,
-      lang: v.lang, doctor_id: doctorId, service_id: serviceId, package_id: v.package_id, received_at: v.received_at, picked_at: isoOf(now),
+      lang: v.lang, doctor_id: doctorId, service_id: serviceId, package_id: ownedId(db, 'service_templates', v.package_id),
+      received_at: v.received_at, picked_at: isoOf(now),
     });
     return { applied: true, id, status: 'new' };
   })();
@@ -145,6 +155,10 @@ function intakeAppointment(db, v, conn, { now, kekPath }) {
   const what = bookableWhat(db, v, doctor);
   const startMs = Date.parse(v.start_at);
   let reason = what.reason;
+  // C1: услуга длиннее 480 минут онлайн не записывается (удержание и заявка
+  // хранят 5–480); короче 5 — держится 5 минут: меньше календарь не записывает.
+  if (!reason && what.duration > DURATION_MAX) reason = 'not_bookable';
+  const duration = Math.min(DURATION_MAX, Math.max(DURATION_MIN, Number(what.duration) || DEFAULT_DURATION_MIN));
   if (!reason) {
     const horizon = Number(doctor.booking_days) > 0 ? Number(doctor.booking_days) : 14;
     const day = localDayOf(db, v.start_at);
@@ -156,7 +170,7 @@ function intakeAppointment(db, v, conn, { now, kekPath }) {
   // клиники. Не дольше начала приёма — прошедший приём сразу «expired».
   const holdUntil = holdUntilFor(isoOf(now), v.start_at, { openOn: clinicOpenOn(db) });
   if (!reason && !(Date.parse(holdUntil) > now)) reason = 'expired';
-  if (!reason && !slotIsFree(db, { doctorId: doctor.id, startMs, durationMin: what.duration, now })) reason = 'slot_taken';
+  if (!reason && !slotIsFree(db, { doctorId: doctor.id, startMs, durationMin: duration, now })) reason = 'slot_taken';
   const status = !reason ? 'pending' : reason === 'expired' ? 'expired' : 'declined';
   return db.transaction(() => {
     const day = reason ? null : localDayOf(db, v.start_at);
@@ -165,14 +179,15 @@ function intakeAppointment(db, v, conn, { now, kekPath }) {
     const id = insertRequest(db, {
       public_id: v.public_id, connection_id: conn.id, external_id: v.external_id, kind: 'appointment', status,
       crm_request_id: crmId, patient_name: v.patient.name, patient_phone: uzE164(v.patient.phone), comment: v.patient.comment,
-      lang: v.lang, doctor_id: v.doctor_id, branch_id: v.branch_id, service_id: what.serviceId,
-      consultation_type_id: what.consultationTypeId, package_id: v.package_id, start_at: v.start_at,
-      duration_minutes: what.duration, hold_until: reason ? null : holdUntil, decline_reason: reason,
+      // C1: врача, которого нет (удалили, пока заявка ждала), не сохранить — отказ без врача.
+      lang: v.lang, doctor_id: doctor ? doctor.id : null, branch_id: ownedId(db, 'branches', v.branch_id), service_id: what.serviceId,
+      consultation_type_id: what.consultationTypeId, package_id: ownedId(db, 'service_templates', v.package_id), start_at: v.start_at,
+      duration_minutes: duration, hold_until: reason ? null : holdUntil, decline_reason: reason,
       received_at: v.received_at, picked_at: isoOf(now),
     });
     const row = db.prepare('SELECT * FROM api_requests WHERE id = ?').get(id);
     if (!reason) {
-      placeHold(db, { doctorId: v.doctor_id, startMs, durationMin: what.duration, untilMs: Date.parse(holdUntil), apiRequestId: id, kind: 'booking' });
+      placeHold(db, { doctorId: doctor.id, startMs, durationMin: duration, untilMs: Date.parse(holdUntil), apiRequestId: id, kind: 'booking' });
     } else {
       enqueueEvent(db, { request: row, event: EV.declined, status, details: { reason, doctor_id: v.doctor_id, start: partnerTime(v.start_at) }, now, kekPath });
     }
@@ -369,8 +384,15 @@ async function partnerCancel(db, row, { now, kekPath }) {
   }
   if (row.status === 'confirmed' && row.visit_id) {
     const v = db.prepare('SELECT * FROM visits WHERE id = ?').get(row.visit_id);
+    let cancelled = false;
     if (v && PRE_ARRIVAL.includes(v.status) && !visitHasWork(db, v.id)) {
-      await calendarBook(db, { visit_id: v.id, start: v.visit_date, status: 'cancelled' }, SYSTEM_BOOKER);
+      // C1: календарь может отказать в отмене — отмена партнёра не должна ронять
+      // приём очереди: тогда пометка «решите вручную», как при визите с работой.
+      try { await calendarBook(db, { visit_id: v.id, start: v.visit_date, status: 'cancelled' }, SYSTEM_BOOKER); cancelled = true; } catch (e) {
+        console.warn('[public-api] заявка', row.public_id, 'визит не отменён календарём:', e && e.message);
+      }
+    }
+    if (cancelled) {
       const out = setStatus(db, row.id, { status: 'cancelled', partner_cancel_at: isoOf(now) }, now);
       enqueueEvent(db, { request: out, event: EV.cancelled, status: 'cancelled', details: { doctor_id: out.doctor_id }, now, kekPath });
       return { applied: true, id: row.id, status: 'cancelled' };
