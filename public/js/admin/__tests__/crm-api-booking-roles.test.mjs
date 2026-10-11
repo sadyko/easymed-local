@@ -88,3 +88,15 @@ test('регистратура: у карты уже есть запись на 
   assert.deepEqual({ ...x.s.db.prepare('SELECT id, visit_date, status FROM visits WHERE patient_id = 1').get() }, visitBefore, 'та запись не сдвинута');
   assert.ok(byAttr(box, 'data-apib', 'offer')[0], '«Предложить другое время» на месте');
 });
+
+// PUBLIC_API_V1 — ревью шага 8a, M3: окно подтверждения называет цену и имя
+// приёма, которые возьмёт касса — своя цена врача, а не общая цена вида.
+test('окно: своя цена и имя приёма врача — как у кассы (не общая цена вида)', async () => {
+  const x = await seeded();
+  x.s.db.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available, is_free, name_ru) VALUES (7, 1, 200000, 1, 0, ?)').run('Первичный приём педиатра');
+  const box = mountAs(x, x.s.reg);
+  await tick(50);
+  const t = textOf(box);
+  assert.ok(t.includes('Первичный приём педиатра') && t.includes('200 000 сум'), t);
+  assert.ok(!t.includes('150 000 сум'), 'общая цена вида');
+});
