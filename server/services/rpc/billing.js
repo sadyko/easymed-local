@@ -249,9 +249,16 @@ function linePackage(db, row, visitDay, cache) {
     throw new RpcError(`Пакет «${pkg.name}» действует ${window}, а визит — ${ruDay(visitDay)}. `
       + 'Уберите услуги пакета из визита или выберите действующий пакет.', 400);
   }
+  // SERVICES_PACKAGES_V1 (ревью шага 6, C3) — строка с ценой пакета, записанной
+  // при записи (domain/package-lines.js), держит её (Р4): состав пакета,
+  // поменянный после записи, счёт не запирает — доля врача и «Ждут счёта» берут
+  // ту же записанную цену. Состав проверяется у строки без записанной цены и при
+  // заведении строки (packageStampRefusal — строка там ещё без цены). Срок пакета
+  // по дню визита — как прежде, выше.
+  const stamped = row.package_price != null && row.package_full != null;
   let ids = [];
   try { ids = JSON.parse(pkg.service_ids || '[]'); } catch { ids = []; }
-  if (!Array.isArray(ids) || !ids.some((id) => Number(id) === Number(row.service_id))) {
+  if (!stamped && (!Array.isArray(ids) || !ids.some((id) => Number(id) === Number(row.service_id)))) {
     throw new RpcError(`Услуга строки ${row.id} не входит в пакет «${pkg.name}» — скидку пакета на неё дать нельзя.`, 400);
   }
   const pct = Number(pkg.discount_percent);

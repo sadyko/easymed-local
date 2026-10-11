@@ -183,3 +183,28 @@ test('«Ждут счёта»: строка до 244 — по скидке па�
   const res = createInvoiceForVisit(c.db, { visit_id: c.visitId, visit_service_ids: [id], payer_id: payer }, admin);
   assert.equal(res.invoice.total_amount, row.total, 'счёт плательщику = «Ждут счёта»');
 });
+
+// SERVICES_PACKAGES_V1 (ревью шага 6, C3) — состав пакета поменяли после записи
+// (УЗИ убрали из «Check-up»): строки, уже записанные с ценой пакета, держат её
+// (Р4) — счёт выставляется, и он равен «Ждут счёта» и базе доли врача. Строку
+// без записанной цены, чья услуга не в пакете, счёт по-прежнему не выставляет.
+test('ревью C3: услугу убрали из пакета после записи — счёт по записанной цене = «Ждут счёта» = доля врача', () => {
+  const c = clinic();
+  const ids = PKG_IDS.map((sid) => c.line(sid, c.pkg, 'completed'));
+  c.db.prepare("UPDATE service_templates SET service_ids = '[1,2,6,8]' WHERE id = ?").run(c.pkg);
+  const waiting = cashierUnbilled(c.db, {}, cashier).rows.find((r) => r.visit_id === c.visitId).total;
+  const feeBefore = Math.round(c.fee());
+  const res = createInvoiceForVisit(c.db, { visit_id: c.visitId, visit_service_ids: ids }, registrar);
+  assert.deepEqual([res.invoice.total_amount, waiting], [293000, 293000]);
+  assert.deepEqual([feeBefore, Math.round(c.fee())], [Math.round(293000 * 0.3), Math.round(293000 * 0.3)]);
+  // Строка до 244 (бэкфилл без проверки состава) — тоже по записанной цене.
+  const c2 = clinic();
+  const old = c2.line(7, c2.pkg, 'completed');
+  c2.db.prepare("UPDATE visit_services SET package_legacy = 1 WHERE id = ?").run(old);
+  c2.db.prepare("UPDATE service_templates SET service_ids = '[1]' WHERE id = ?").run(c2.pkg);
+  assert.equal(createInvoiceForVisit(c2.db, { visit_id: c2.visitId, visit_service_ids: [old] }, registrar).invoice.total_amount, 152900);
+  // Без записанной цены (строку завели в обход двери) — состав проверяется, как прежде.
+  const c3 = clinic();
+  const raw = Number(c3.db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, package_id) VALUES (?, 20, 1, 1, 50000, 50000, 'completed', ?)").run(c3.visitId, c3.pkg).lastInsertRowid);
+  assert.throws(() => createInvoiceForVisit(c3.db, { visit_id: c3.visitId, visit_service_ids: [raw] }, registrar), /не входит в пакет/);
+});

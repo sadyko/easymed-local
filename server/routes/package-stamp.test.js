@@ -142,3 +142,19 @@ test('шаблон сметы — обычные строки; снятый со
     assert.equal(out.invoice.total_amount, 100000, 'без пакета — обычная цена');
   } finally { server.close(); db.close(); }
 });
+
+// SERVICES_PACKAGES_V1 (ревью шага 6, C3) — счёт больше не сверяет состав пакета
+// у строки с записанной ценой (состав могли поменять после записи); поэтому при
+// ЗАПИСИ строки состав проверяется по-прежнему: услуга не из пакета — 409.
+test('ревью C3: при записи строки услуга не из пакета отказывает 409, строка не ложится', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    db.prepare("INSERT INTO services (id, name, price, type) VALUES (2,'Анализ',50000,'lab')").run();
+    const cookie = await login(base);
+    const res = await call(base, cookie, { table: 'visit_services', op: 'insert',
+      values: { visit_id: 500, service_id: 2, quantity: 1, unit_price: 50000, total: 50000, status: 'added', package_id: 2 } });
+    assert.equal(res.status, 409);
+    assert.match((await res.json()).error.message, /не входит в пакет/);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = 500').get().n, 0);
+  } finally { server.close(); db.close(); }
+});
