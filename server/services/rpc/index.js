@@ -79,6 +79,7 @@ import { lisDeviceAdd } from './lis.js';   // LIS_VENDOR_EXACT_V1 — D2: «До
 import { lisProxyGet, lisProxySet } from './lis-proxy.js';   // LIS_PROXY_V1 — карточка «LIS Proxy»
 import { apiSettingsGet, apiSlugSave, apiConnectionDraft, apiConnectionCreate, apiConnectionUpdate, apiConnectionReveal,
   apiConnectionRegenerate, apiConnectionDelete, apiJournalList } from './api-connections.js';   // CLINIC_API_STEP7_V1
+import { apiBookingList, apiBookingCandidates, apiBookingConfirm, apiBookingOffer, apiBookingDecline, apiRequestAccept, apiBoardMarks, apiSyncStatus } from './api-bookings.js';   // PUBLIC_API_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_V1 — своя роль одним действием
 import { roleEffectiveGrants } from './roles-effective.js';   // ROLES_SAVE_TRUTH_V1 — что у роли есть сейчас
@@ -627,6 +628,18 @@ export const RPC = {
   api_connection_regenerate: (db, args, user) => apiConnectionRegenerate(db, args, user),
   api_connection_delete:     (db, args, user) => apiConnectionDelete(db, args, user),
   api_journal_list:          (db, args, user) => apiJournalList(db, args, user),
+  // PUBLIC_API_V1 — заявки и онлайн-запись из API (карточка CRM, доска, экран «API»).
+  // Чтение (READ_ONLY_RPCS): api_booking_list, api_booking_candidates, api_board_marks,
+  // api_sync_status; решения — записи. Обработчик — тремя аргументами: внутренний
+  // четвёртый у calendar_slots / ensure_visit (снять своё удержание) отсюда не достать.
+  api_booking_list:          (db, args, user) => apiBookingList(db, args, user),
+  api_booking_candidates:    (db, args, user) => apiBookingCandidates(db, args, user),
+  api_booking_confirm:       (db, args, user) => apiBookingConfirm(db, args, user),
+  api_booking_offer:         (db, args, user) => apiBookingOffer(db, args, user),
+  api_booking_decline:       (db, args, user) => apiBookingDecline(db, args, user),
+  api_request_accept:        (db, args, user) => apiRequestAccept(db, args, user),
+  api_board_marks:           (db, args, user) => apiBoardMarks(db, args, user),
+  api_sync_status:           (db, args, user) => apiSyncStatus(db, args, user),
   lis_message_attach:       (db, args, user) => lisMessageAttach(db, args, user),
   lis_message_dismiss:      (db, args, user) => lisMessageDismiss(db, args, user),
 
