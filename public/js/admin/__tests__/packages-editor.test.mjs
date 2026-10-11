@@ -181,3 +181,20 @@ test('только просмотр: нет «Добавить», поля ок�
   const save = buttonByText(dlg, /^Сохранить$/);
   assert.ok(save && 'disabled' in save.attrs, 'сохранить в просмотре');
 });
+
+// SERVICES_PACKAGES_V1 (ревью шага 6, C4) — скидка суммой больше суммы цен
+// действующих услуг (прайс подешевел, услугу сняли с учёта): раскладка даёт
+// пакет без скидки, сайт и партнёры его не получают ('terms_invalid'). Список
+// говорит это словами — не «На сайте» и не «−100 %».
+test('список: скидка суммой больше суммы цен услуг — «Скрыт с сайта — скидка больше суммы цен услуг», не «−100 %»', async () => {
+  const BROKEN = { id: 8, name: 'Сердце', name_uz: 'Yurak', name_en: '', service_ids: [8, 7], is_package: 1, discount_mode: 'amount', discount_value: 300000,
+    show_public: 1, active: 1, valid_from: null, valid_until: null };
+  const { box } = await mount([BROKEN]);
+  const row = walk(box).find((n) => n.tagName === 'TR' && n.attrs && n.attrs['data-package-id'] === '8');
+  const c = cellsOf(row);
+  assert.deepEqual([c[2], c[4]], ['240 000', '240 000'], 'пакет без скидки: ' + JSON.stringify(c));
+  assert.doesNotMatch(c[3], /100/, 'не «−100 %»: ' + c[3]);
+  assert.match(c[6], /Скрыт с сайта.*скидка больше суммы цен услуг/);
+  assert.doesNotMatch(c[6], /На сайте/);
+  assert.equal(PACKAGE_STATE_TEXT.terms_invalid[2], 'скидка больше суммы цен услуг');
+});
