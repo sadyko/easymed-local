@@ -11,6 +11,10 @@ import { COUNTERS, COUNTER_NAMES } from '../../../server/services/control/metric
 // versions numerically per segment ("0.10.0" is newer than "0.9.0") is exactly
 // the kind of function that goes subtly wrong when re-typed.
 import { compareVersions } from '../../../scripts/build-bundle.mjs';
+// PUBLIC_LICENCE_V1 — "Online booking / API" and emergency key revocation
+// (step 8c): routes on this same router, behind the same requireVendor.
+import { PUBLIC_API_ROUTE_TABLE, registerPublicApiRoutes, apiViewOf } from './admin-public-api.js';
+import { syncKeyPending } from '../services/public-api.js';
 
 // CONTROL_PLANE_V1 — the vendor's own admin API, behind vendor login. This is
 // the part of the control plane the owner actually touches: today they would
@@ -85,6 +89,7 @@ export const ADMIN_ROUTE_TABLE = [
   { method: 'POST', path: '/releases/:id/unhalt' },
   { method: 'POST', path: '/clinics/:id/ring' },
   { method: 'POST', path: '/clinics/:id/pin' },
+  ...PUBLIC_API_ROUTE_TABLE,
 ];
 
 function bad(res, message) {
@@ -303,7 +308,7 @@ export function adminRoutes(db) {
   r.get('/clinics', (req, res) => {
     const rows = db.prepare(
       `SELECT clinic_id, name, subscription, subscription_until, last_seen_at, last_version,
-              active, retired_at, parent_clinic_id, ring, pinned_version
+              active, retired_at, parent_clinic_id, ring, pinned_version, api_enabled, api_sync_key, api_sync_key_seen
        FROM clinics ORDER BY name COLLATE NOCASE`
     ).all();
 
@@ -339,6 +344,9 @@ export function adminRoutes(db) {
       latest_stats: statsByClinic.get(c.clinic_id)?.stats ?? null,
       latest_stats_at: statsByClinic.get(c.clinic_id)?.at ?? null,
       versions_behind: versionsBehind(offerable, c.last_version),
+      // PUBLIC_LICENCE_V1 — the board flags "new API key waiting" (panel-logic.js attentionReasons).
+      api_enabled: !!c.api_enabled,
+      api_key_pending: syncKeyPending(db, c),
     }));
     res.json({ clinics });
   });
@@ -346,7 +354,9 @@ export function adminRoutes(db) {
   r.get('/clinics/:id', (req, res) => {
     const c = db.prepare(
       `SELECT clinic_id, name, contact_phone, contact_name, subscription, subscription_until,
-              last_seen_at, last_version, last_fingerprint, active, created_at, collect_set
+              last_seen_at, last_version, last_fingerprint, active, created_at, collect_set,
+              api_enabled, api_sync_key, api_sync_key_accepted_at, api_sync_key_seen, api_sync_key_seen_at,
+              licence_issued_at, licence_valid_until, licence_subscription, licence_api_sync_key
        FROM clinics WHERE clinic_id = ?`
     ).get(req.params.id);
     if (!c) return notFound(res, 'Clinic not found.');
@@ -384,6 +394,8 @@ export function adminRoutes(db) {
         collect_set: parsedCollectSet(c.collect_set),
         latest_stats: latest ? latest.stats : null,
         latest_stats_at: latest ? latest.at : null,
+        // PUBLIC_LICENCE_V1 — "Online booking / API": switch, sync key, what partners see, blocks.
+        api: apiViewOf(db, c),
       },
       checkins,
     });
@@ -801,6 +813,9 @@ export function adminRoutes(db) {
       .run(version === null ? null : version.trim(), clinic.clinic_id);
     res.json({ ok: true, note: NEXT_CHECKIN_NOTE });
   });
+
+  // --- online booking / API and key revocation (PUBLIC_LICENCE_V1) -------------
+  registerPublicApiRoutes(r, db);
 
   return r;
 }
