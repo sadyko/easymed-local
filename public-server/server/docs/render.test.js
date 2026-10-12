@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderDocs, DOCS_PAGE_LANGS, withUnit, listOf } from './render.js';
-import { SECTIONS, ENDPOINTS, PAGE, SAMPLE } from './content.js';
+import { SECTIONS, ENDPOINTS, PAGE, SAMPLE, FLOWS } from './content.js';
 import { KEY_RE, SECRET_RE } from '../../../public/js/shared/api-connections.js';
 
 const pages = Object.fromEntries(DOCS_PAGE_LANGS.map((l) => [l, renderDocs({ lang: l })]));
@@ -102,5 +102,25 @@ test('узбекская и английская страницы: русско�
   for (const lang of ['uz', 'en']) {
     const words = textOf(pages[lang]).match(/\S*[А-Яа-яЁё]\S*/g) || [];
     assert.deepEqual([...new Set(words)], ['Русский'], lang);
+  }
+});
+
+// Ревью шага 9, п. 1: переходы статусов на странице — из content.js FLOWS (их
+// сверяет с кодом drift.test.js): у каждого статуса-источника своя строка, в ней —
+// каждый статус, в который он переходит.
+test('переходы статусов: у каждого статуса-источника строка со всеми его переходами, на трёх языках', () => {
+  for (const [lang, html] of Object.entries(pages)) {
+    const sec = /<section id="statuses"[\s\S]*?<\/section>/.exec(html)[0];
+    let n = 0;
+    for (const f of FLOWS) {
+      const block = sec.slice(sec.indexOf('data-flow="' + f.kind + '"'));
+      assert.ok(sec.includes('data-flow="' + f.kind + '"'), lang + ': ' + f.kind);
+      for (const s of f.steps) {
+        const li = new RegExp('<li><code>' + s.from + '</code> →(.*?)</li>').exec(block);
+        assert.ok(li, lang + ' ' + f.kind + ': нет строки ' + s.from);
+        for (const [to] of s.to) { assert.ok(li[1].includes('<code>' + to + '</code>'), lang + ' ' + f.kind + ': ' + s.from + ' → ' + to); n += 1; }
+      }
+    }
+    assert.ok(n >= 20, lang + ': переходов ' + n);
   }
 });

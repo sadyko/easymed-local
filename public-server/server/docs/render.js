@@ -14,7 +14,7 @@ import { docFacts } from './facts.js';
 import { LABELS, RESPONSES } from './generated.js';
 import {
   PAGE, SAMPLE, DOCS_CONTACT, SECTIONS, ENDPOINTS, EXAMPLES, STATUS_TEXT, REASON_TEXT, CLOSED_REASONS, EVENT_TEXT, ERROR_TEXT,
-  CLINIC_ONLY_ERRORS, FIELD_ERRORS, LIMIT_ROWS, TABLE_HEAD, KIND_TEXT, WEBHOOK_EXAMPLE, VERIFY_NODE, VERIFY_PHP,
+  CLINIC_ONLY_ERRORS, FIELD_ERRORS, LIMIT_ROWS, TABLE_HEAD, KIND_TEXT, WEBHOOK_EXAMPLE, VERIFY_NODE, VERIFY_PHP, FLOWS,
 } from './content.js';
 
 export const DOCS_PAGE_LANGS = Object.freeze(['ru', 'uz', 'en']);
@@ -147,7 +147,8 @@ export function renderDocs({ lang = 'ru', base = SAMPLE.base, uncollectedMaxMs }
         .map((c) => [String(ERRORS[c].status), code(c), esc(ERRORS[c][lang]), ti(ERROR_TEXT[c])]), title);
     }
     if (name === 'fields') {
-      return table(head, FIELD_ERRORS.map((f) => [code(f.field), f.reason ? code(f.reason) : code('404 ' + f.code),
+      // top — то же поле на верхнем уровне POST /requests: ошибка называет его без «patient.»
+      return table(head, FIELD_ERRORS.map((f) => [code(f.field) + (f.top ? '<br>' + code(f.top) : ''), f.reason ? code(f.reason) : code('404 ' + f.code),
         Object.keys(f.probes).map((id) => epLink(epOf(id))).join('<br>'), ti(f.text)]), title);
     }
     if (name === 'limits') return table(head, LIMIT_ROWS.map(([a, b]) => [ti(a), ti(b)]), title);
@@ -162,6 +163,13 @@ export function renderDocs({ lang = 'ru', base = SAMPLE.base, uncollectedMaxMs }
     return '<div class="ex"><p class="ex-h">' + esc(t(PAGE.hookRequest)) + '</p>' + pre(lines.join('\n')) + '<p class="note">' + ti(PAGE.vector) + '</p></div>';
   }
 
+  // Переходы статусов (content.js FLOWS): по строке на статус-источник — во что он переходит и когда.
+  function flows() {
+    return FLOWS.map((f) => '<div class="flow" data-flow="' + f.kind + '"><p class="ex-h">' + esc(t(f.title)) + '</p><ul>'
+      + f.steps.map((s) => '<li>' + code(s.from) + ' → ' + s.to.map(([st, note]) => code(st) + ' — ' + ti(note)).join('; ') + '</li>').join('')
+      + '</ul></div>').join('');
+  }
+
   function block(b) {
     if (b.p) return '<p>' + ti(b.p) + '</p>';
     if (b.list) return '<ul>' + b.list.map((x) => '<li>' + ti(x) + '</li>').join('') + '</ul>';
@@ -171,6 +179,7 @@ export function renderDocs({ lang = 'ru', base = SAMPLE.base, uncollectedMaxMs }
     if (b.endpoint) return endpoint(b.endpoint);
     if (b.example) return example(b.example, { response: b.response !== false });
     if (b.webhook) return webhook();
+    if (b.flows) return flows();
     if (b.verify) return '<p class="ex-h">' + (b.verify === 'node' ? 'Node.js' : 'PHP') + '</p>' + pre(b.verify === 'node' ? VERIFY_NODE : VERIFY_PHP);
     throw new Error('docs: неизвестный блок ' + Object.keys(b).join());
   }

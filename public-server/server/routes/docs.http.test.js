@@ -66,7 +66,10 @@ test('адрес сервера и срок не забранной заявки
   assert.ok(html.includes('https://api.staging.example/shifo/v1/media/'), 'ссылки в ответах — на адрес этого сервера');
   assert.ok(!html.includes('https://api.easymed.uz'), 'чужого адреса нет');
   assert.ok(html.includes('48 часов'), 'срок — PUBLIC_UNCOLLECTED_MAX_HOURS');
-  assert.ok(!html.includes('24 часа'));
+  // Каждое место, где страница называет срок не забранной заявки («за N», «ждёт её N»), — 48, не 24
+  // по умолчанию; «Кэш — 24 часа» у файлов снимка — другой срок (ревью шага 9, п. 6).
+  assert.ok(!/(?:за|её) 24 часа/.test(html), 'срок не забранной заявки — из настроек, не по умолчанию');
+  assert.ok((html.match(/(?:за|её) 48 часов/g) || []).length >= 5, 'срок не забранной — во всех местах страницы');
   assert.equal(new URL(API_DOCS_URL).pathname, '/docs');
   for (const l of ['uz', 'en']) assert.equal((await get(s, new URL(apiDocsUrl(l)).pathname)).status, 200);
 });

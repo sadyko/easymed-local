@@ -13,6 +13,8 @@ import { mediaFile } from '../store/media.js';
 import { sendError } from '../lib/errors.js';
 
 export const PARTNER_BODY_LIMIT = '32kb';
+/** Кэш файла снимка: имя — sha256 содержимого, новый файл — новая ссылка (API_DOCS_V1: страница называет срок отсюда). */
+export const MEDIA_MAX_AGE_SEC = 86400;
 
 /**
  * @param {{db, dataDir:string, now:()=>number, offsetMin:number, baseUrl:string, requireHttps?:boolean,
@@ -27,7 +29,7 @@ export function partnerRouter(ctx) {
     const f = m ? mediaFile(ctx.db, ctx.dataDir, req.clinic, m[1], m[2]) : null;
     if (!f) return sendError(req, res, 'not_found');
     res.set('Content-Type', f.type);
-    res.set('Cache-Control', 'public, max-age=86400, immutable');
+    res.set('Cache-Control', 'public, max-age=' + MEDIA_MAX_AGE_SEC + ', immutable');
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('Content-Security-Policy', "default-src 'none'");
     return res.sendFile(f.file);

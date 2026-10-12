@@ -132,9 +132,9 @@ export const ENDPOINTS = Object.freeze([
   { id: 'media', section: 'clinic', method: 'GET', path: '/media/{file}', scopes: null, examples: [],
     summary: L('Файл снимка — логотип или фото врача. Ссылки приходят готовыми в `/clinic` и `/doctors`.', 'Surat fayli — logotip yoki shifokor fotosi. Havolalar `/clinic` va `/doctors` da tayyor keladi.', 'A snapshot file — a logo or a doctor photo. The links come ready-made in `/clinic` and `/doctors`.'),
     params: [{ name: 'file', in: 'path', req: true, value: L('`<sha256>.<png|jpg|webp>` из ссылки', 'havoladagi `<sha256>.<png|jpg|webp>`', '`<sha256>.<png|jpg|webp>` from the link') }],
-    notes: [L('Ключ не нужен: картинку на вашем сайте браузер загрузит сам. Кэш — сутки; новый файл — новая ссылка.',
-      'Kalit kerak emas: rasmni saytingizda brauzer o‘zi yuklaydi. Kesh — bir sutka; yangi fayl — yangi havola.',
-      'No key needed: the browser loads the picture on your site by itself. Cached for a day; a new file gets a new link.')] },
+    notes: [L('Ключ не нужен: картинку на вашем сайте браузер загрузит сам. Кэш — {{mediaCacheHours:hour}}; новый файл — новая ссылка.',
+      'Kalit kerak emas: rasmni saytingizda brauzer o‘zi yuklaydi. Kesh — {{mediaCacheHours:hour}}; yangi fayl — yangi havola.',
+      'No key needed: the browser loads the picture on your site by itself. Cached for {{mediaCacheHours:hour}}; a new file gets a new link.')] },
   { id: 'doctors', section: 'doctors', method: 'GET', path: '/doctors', scopes: ['doctors'], examples: ['doctors'],
     summary: L('Врачи, которых клиника показывает: ФИО, должность, о враче, специальности, стаж, языки приёма, фото, филиалы, как принимает и цены.',
       'Klinika ko‘rsatadigan shifokorlar: F.I.Sh., lavozimi, shifokor haqida, mutaxassisliklari, tajribasi, qabul tillari, fotosi, filiallari, qanday qabul qilishi va narxlar.',
@@ -146,13 +146,13 @@ export const ENDPOINTS = Object.freeze([
       { name: 'city', in: 'query', req: false, value: L('код города', 'shahar kodi', 'a city code') },
       qLang],
     notes: [
-      L('`specialties` — коды справочника, первая — основная (не больше четырёх).', '`specialties` — ma’lumotnoma kodlari, birinchisi — asosiysi (to‘rttagacha).', '`specialties` — reference codes, the first one is the main one (up to four).'),
+      L('`specialties` — коды справочника, первая — основная (не больше {{specialtiesMax}}).', '`specialties` — ma’lumotnoma kodlari, birinchisi — asosiysi ({{specialtiesMax}} tagacha).', '`specialties` — reference codes, the first one is the main one (up to {{specialtiesMax}}).'),
       L('`reception`: `booking` — по записи на время, `live_queue` — живая очередь (записи на время нет).', '`reception`: `booking` — vaqtga yozilish bo‘yicha, `live_queue` — jonli navbat (vaqtga yozilish yo‘q).', '`reception`: `booking` — by appointment, `live_queue` — walk-in queue (no timed booking).'),
       L('`booking_days` — на сколько дней вперёд открыта запись: {{bookingDays|or}}.', '`booking_days` — yozilish necha kun oldinga ochiq: {{bookingDays|or}}.', '`booking_days` — how many days ahead booking is open: {{bookingDays|or}}.'),
       L('`consultations` — виды приёма `initial` (первичный) и `repeat` (повторный) с ценой и длительностью в минутах; `services` — услуги группы «Консультации», которые ведёт врач, с его ценой.',
         '`consultations` — `initial` (birlamchi) va `repeat` (takroriy) qabul turlari narxi va daqiqalardagi davomiyligi bilan; `services` — shifokor olib boradigan «Konsultatsiyalar» guruhi xizmatlari uning narxi bilan.',
         '`consultations` — the visit types `initial` and `repeat` with price and length in minutes; `services` — services of the “Consultations” group the doctor provides, at the doctor’s price.')] },
-  { id: 'slots', section: 'doctors', method: 'GET', path: '/slots', scopes: ['slots'], examples: ['slots-day', 'slots-fit', 'slots-live'],
+  { id: 'slots', section: 'doctors', method: 'GET', path: '/slots', scopes: ['slots'], examples: ['slots-day', 'slots-fit', 'slots-days', 'slots-live'],
     summary: L('Свободное время врача: окна по {{slotMin:min}}.', 'Shifokorning bo‘sh vaqti: {{slotMin:min}}lik oynalar.', 'A doctor’s free time in {{slotMin}}-minute windows.'),
     params: [
       { name: 'doctor_id', in: 'query', req: true, value: L('номер врача из `/doctors`', '`/doctors` dagi shifokor raqami', 'a doctor number from `/doctors`') },
@@ -160,6 +160,10 @@ export const ENDPOINTS = Object.freeze([
       { name: 'consultation', in: 'query', req: false, value: L('`initial` или `repeat`: только начала, где поместится этот приём', '`initial` yoki `repeat`: faqat shu qabul sig‘adigan boshlanishlar', '`initial` or `repeat`: only the starts where this visit fits') },
       { name: 'service_id', in: 'query', req: false, value: L('номер услуги: только начала, где она поместится', 'xizmat raqami: faqat u sig‘adigan boshlanishlar', 'a service number: only the starts where it fits') }],
     notes: [
+      // ревью шага 9, п. 5: форма ответа без date
+      L('С `date` ответ — `slots` этого дня; без `date` — `days`: по строке на каждый день, на который открыта запись, `[{"date", "slots"}]`.',
+        '`date` bilan javob — shu kunning `slots`i; `date`siz — `days`: yozilish ochiq bo‘lgan har bir kun uchun bitta qator, `[{"date", "slots"}]`.',
+        'With `date` the response holds that day’s `slots`; without `date` it holds `days`: one entry per day open for booking, `[{"date", "slots"}]`.'),
       L('С `consultation` или `service_id` остаются только начала, после которых свободно столько окон подряд, сколько длится приём; без них — каждое окно с `free`.',
         '`consultation` yoki `service_id` bilan faqat qabul davomiyligicha ketma-ket bo‘sh oynalar bor boshlanishlar qoladi; ularsiz — har bir oyna `free` bilan.',
         'With `consultation` or `service_id` only the starts followed by enough free windows for the whole visit remain; without them every window comes with `free`.'),
@@ -173,7 +177,8 @@ export const ENDPOINTS = Object.freeze([
         'Jonli navbat: vaqt yo‘q — `hours` (qabul soatlari) va `queue_now` (hozir nechta kishi kutmoqda; klinika navbatni ko‘rsatmasa `null`).',
         'Walk-in queue: no times — `hours` (reception hours) and `queue_now` (how many are waiting now; `null` if the clinic does not show the queue).')] },
   { id: 'services', section: 'services', method: 'GET', path: '/services', scopes: ['services'], examples: ['services'],
-    summary: L('Услуги с ценами по пяти группам.', 'Beshta guruh bo‘yicha xizmatlar narxlari bilan.', 'Services with prices in five groups.'),
+    summary: L('Услуги с ценами; групп услуг — {{groupCount}}, их коды — в таблице ниже.', 'Xizmatlar narxlari bilan; xizmat guruhlari — {{groupCount}} ta, kodlari — quyidagi jadvalda.',
+      'Services with prices; there are {{groupCount}} service groups, their codes are in the table below.'),
     params: [{ name: 'group', in: 'query', req: false, value: L('код группы — таблица ниже', 'guruh kodi — quyidagi jadval', 'a group code — see the table below') }, qLang],
     notes: [L('`minutes` — длительность, если клиника её указала, иначе `null`.', '`minutes` — klinika ko‘rsatgan bo‘lsa davomiylik, aks holda `null`.', '`minutes` — the length if the clinic set it, otherwise `null`.')],
     table: 'groups' },
@@ -193,7 +198,9 @@ export const ENDPOINTS = Object.freeze([
       { name: 'package_id', in: 'body', req: false, value: L('пакет', 'paket', 'a package') },
       { name: 'branch_id', in: 'body', req: false, value: L('филиал', 'filial', 'a branch') },
       ...common],
-    notes: [L('Поля пациента можно прислать и на верхнем уровне: `name`, `phone`, `comment`.', 'Bemor maydonlarini yuqori darajada ham yuborish mumkin: `name`, `phone`, `comment`.', 'The patient fields may also come at the top level: `name`, `phone`, `comment`.')] },
+    notes: [L('Поля пациента можно прислать и на верхнем уровне: `name`, `phone`, `comment`. Тогда и ошибка называет поле без `patient.`: `name`, `phone`, `comment`.',
+      'Bemor maydonlarini yuqori darajada ham yuborish mumkin: `name`, `phone`, `comment`. Shunda xato ham maydonni `patient.` siz nomlaydi: `name`, `phone`, `comment`.',
+      'The patient fields may also come at the top level: `name`, `phone`, `comment`. Errors then name the field without `patient.`: `name`, `phone`, `comment`.')] },
   { id: 'appointments-create', section: 'booking', method: 'POST', path: '/appointments', scopes: ['appointments'], examples: ['appointment-new', 'error-slot-taken'],
     summary: L('Онлайн-запись на свободное время. Ответ — `201` и `pending`: заявка ждёт клинику.', 'Bo‘sh vaqtga onlayn yozilish. Javob — `201` va `pending`: ariza klinikani kutmoqda.', 'An online booking for a free time. The response is `201` with `pending`: the booking waits for the clinic.'),
     params: [
@@ -214,9 +221,13 @@ export const ENDPOINTS = Object.freeze([
         '`409 slot_taken` — klinika oxirgi yuborgan ma’lumot bo‘yicha yoki boshqa kutayotgan yozuv bilan vaqt band: `/slots` ni qayta so‘rang.',
         '`409 slot_taken` — the time is taken according to what the clinic sent last, or by another waiting booking: request `/slots` again.')] },
   { id: 'request-status', section: 'booking', method: 'GET', path: '/requests/{id}', scopes: ['requests', 'appointments'], examples: ['request-held', 'request-offered'],
-    summary: L('Статус заявки или записи. Только присланные этим же подключением; чужие и неизвестные — `404`.', 'Ariza yoki yozuv holati. Faqat shu ulanish yuborganlari; boshqalarniki va noma’lumlari — `404`.', 'The status of a request or booking. Only those sent by the same connection; others and unknown ones get `404`.'),
+    summary: L('Статус заявки или записи. Только присланные этим же подключением; чужие, неизвестные и уже стёртые — `404`.',
+      'Ariza yoki yozuv holati. Faqat shu ulanish yuborganlari; boshqalarniki, noma’lumlari va allaqachon o‘chirilganlari — `404`.',
+      'The status of a request or booking. Only those sent by the same connection; others, unknown and already erased ones get `404`.'),
     params: [pathId],
-    notes: [L('Статус хранится {{keepDays:day}} после последнего изменения. Данных пациента в ответе нет.', 'Holat oxirgi o‘zgarishdan keyin {{keepDays:day}} saqlanadi. Javobda bemor ma’lumotlari yo‘q.', 'The status is kept for {{keepDays:day}} after the last change. The response has no patient data.')] },
+    notes: [L('Статус хранится {{keepDays:day}} после последнего изменения, потом стирается — дальше ответ `404`. Данных пациента в ответе нет.',
+      'Holat oxirgi o‘zgarishdan keyin {{keepDays:day}} saqlanadi, keyin o‘chiriladi — shundan so‘ng javob `404`. Javobda bemor ma’lumotlari yo‘q.',
+      'The status is kept for {{keepDays:day}} after the last change and then erased — after that the response is `404`. The response has no patient data.')] },
   { id: 'offer-accept', section: 'booking', method: 'POST', path: '/appointments/{id}/accept', scopes: ['appointments'], examples: ['offer-accept'],
     summary: L('Пациент согласен на время, которое предложила клиника.', 'Bemor klinika taklif qilgan vaqtga rozi.', 'The patient agrees to the time the clinic offered.'),
     params: [pathId, { name: 'offered_start', in: 'body', req: false, value: L('время предложения, на которое вы отвечаете, — как в `offered_start` статуса', 'siz javob berayotgan taklif vaqti — holatdagi `offered_start` kabi', 'the offered time you are answering — as in the status `offered_start`') }],
@@ -249,6 +260,8 @@ export const EXAMPLES = Object.freeze([
     title: L('Окна дня', 'Kun oynalari', 'Windows of a day') },
   { id: 'slots-fit', method: 'GET', path: '/slots?doctor_id=7&date=2030-03-12&consultation=initial',
     title: L('Только начала, где поместится первичный приём (30 минут)', 'Faqat birlamchi qabul (30 daqiqa) sig‘adigan boshlanishlar', 'Only the starts where a first visit (30 minutes) fits') },
+  { id: 'slots-days', method: 'GET', path: '/slots?doctor_id=7&consultation=initial',
+    title: L('Без даты — все дни, на которые открыта запись', 'Sanasiz — yozilish ochiq bo‘lgan barcha kunlar', 'No date — every day open for booking') },
   { id: 'slots-live', method: 'GET', path: '/slots?doctor_id=8', title: L('Врач с живой очередью', 'Jonli navbatli shifokor', 'A walk-in queue doctor') },
   { id: 'services', method: 'GET', path: '/services?lang={lang}' },
   { id: 'packages', method: 'GET', path: '/packages?lang={lang}' },
@@ -275,17 +288,31 @@ export const EXAMPLES = Object.freeze([
 
 // ---- статусы, причины, события, ошибки -------------------------------------------------
 export const STATUS_TEXT = Object.freeze({
-  new: { kind: 'request', text: L('Заявка «перезвоните» пришла, клиника её ещё не взяла.', '«Qayta qo‘ng‘iroq» arizasi keldi, klinika uni hali olmagan.', 'The callback request has arrived; the clinic has not taken it yet.') },
-  accepted: { kind: 'request', text: L('Администратор взял заявку в работу и свяжется с пациентом.', 'Administrator arizani ishga oldi va bemor bilan bog‘lanadi.', 'An administrator took the request on and will contact the patient.') },
+  // ревью шага 9, п. 2: забранная клиникой «перезвоните» срока не имеет — сервер её не закрывает
+  new: { kind: 'request', text: L('Заявка «перезвоните» пришла, администратор ещё не взял её в работу. Срока у неё нет: забранная клиникой заявка остаётся `new`, пока её не возьмут в работу (`accepted`) или по ней не запишут визит (`booked`).',
+    '«Qayta qo‘ng‘iroq» arizasi keldi, administrator uni hali ishga olmagan. Uning muddati yo‘q: klinika olgan ariza ishga olinmaguncha (`accepted`) yoki u bo‘yicha tashrifga yozilmaguncha (`booked`) `new` bo‘lib qoladi.',
+    'The callback request has arrived; no administrator has taken it on yet. It has no deadline: once the clinic has collected it, it stays `new` until someone takes it on (`accepted`) or a visit is booked from it (`booked`).') },
+  accepted: { kind: 'request', text: L('Администратор взял заявку в работу и свяжется с пациентом. Дальше статус меняется, только если по заявке запишут визит (`booked`); иначе остаётся `accepted`.',
+    'Administrator arizani ishga oldi va bemor bilan bog‘lanadi. Keyin holat faqat ariza bo‘yicha tashrifga yozilsa o‘zgaradi (`booked`); aks holda `accepted` bo‘lib qoladi.',
+    'An administrator took the request on and will contact the patient. After that the status changes only if a visit is booked from it (`booked`); otherwise it stays `accepted`.') },
   pending: { kind: 'appointment', text: L('Онлайн-запись ждёт подтверждения. Когда клиника примет заявку, время держится до `hold_until`.', 'Onlayn yozilish tasdiqlashni kutmoqda. Klinika arizani qabul qilgach, vaqt `hold_until` gacha band turadi.', 'The online booking awaits confirmation. Once the clinic takes it, the time is held until `hold_until`.') },
   offered: { kind: 'appointment', text: L('Клиника предложила другое время — `offered_start`; ответ ждёт до `offer_until`.', 'Klinika boshqa vaqt taklif qildi — `offered_start`; javob `offer_until` gacha kutiladi.', 'The clinic offered another time — `offered_start`; it waits for an answer until `offer_until`.') },
-  booked: { kind: 'both', text: L('Пациент записан, визит создан; `start` — время визита.', 'Bemor yozildi, tashrif yaratildi; `start` — tashrif vaqti.', 'The patient is booked and the visit created; `start` is the visit time.') },
-  declined: { kind: 'appointment', text: L('Клиника отказала, причина — в `reason`. Время свободно.', 'Klinika rad etdi, sababi — `reason` da. Vaqt bo‘sh.', 'The clinic declined; the reason is in `reason`. The time is free.') },
-  expired: { kind: 'appointment', text: L('Не подтверждено вовремя (`reason: expired`).', 'O‘z vaqtida tasdiqlanmadi (`reason: expired`).', 'Not confirmed in time (`reason: expired`).') },
+  booked: { kind: 'both', text: L('Пациент записан, визит создан; `start` — время визита. Визит ещё могут перенести (новое `start`), отменить или отметить приход.',
+    'Bemor yozildi, tashrif yaratildi; `start` — tashrif vaqti. Tashrifni hali ko‘chirish (yangi `start`), bekor qilish yoki kelganini belgilash mumkin.',
+    'The patient is booked and the visit created; `start` is the visit time. The visit may still be moved (a new `start`), cancelled or marked as arrived.') },
+  declined: { kind: 'appointment', text: L('Клиника отказала — в ждущей записи или после своего предложения другого времени; причина — в `reason`. Время свободно.',
+    'Klinika rad etdi — kutayotgan yozuvda yoki o‘zi boshqa vaqt taklif qilganidan keyin; sababi — `reason` da. Vaqt bo‘sh.',
+    'The clinic declined — a waiting booking, or after offering another time; the reason is in `reason`. The time is free.') },
+  // ревью шага 9, п. 1: «истекло» — и когда пациент не ответил на другое время
+  expired: { kind: 'appointment', text: L('Не подтверждено вовремя: клиника не подтвердила запись, пока держала время, или пациент не ответил на другое время до `offer_until` (`reason: expired`).',
+    'O‘z vaqtida tasdiqlanmadi: klinika vaqtni band qilib turganida yozuvni tasdiqlamadi yoki bemor boshqa vaqtga `offer_until` gacha javob bermadi (`reason: expired`).',
+    'Not confirmed in time: the clinic did not confirm while it held the time, or the patient did not answer the other time by `offer_until` (`reason: expired`).') },
   cancelled: { kind: 'both', text: L('Отменено — пациентом через вас или клиникой.', 'Bekor qilindi — siz orqali bemor yoki klinika tomonidan.', 'Cancelled — by the patient through you, or by the clinic.') },
   arrived: { kind: 'both', text: L('Пациент пришёл. Только если клиника включила подключению событие `appointment.arrived`: это врачебная тайна.', 'Bemor keldi. Faqat klinika ulanishga `appointment.arrived` hodisasini yoqqan bo‘lsa: bu shifokorlik siri.', 'The patient arrived. Only if the clinic enabled the `appointment.arrived` event for the connection: it is medical confidentiality.') },
   no_show: { kind: 'both', text: L('Пациент не пришёл. Сейчас партнёрам не сообщается: после дня визита статус остаётся `booked`.', 'Bemor kelmadi. Hozircha hamkorlarga xabar qilinmaydi: tashrif kunidan keyin holat `booked` bo‘lib qoladi.', 'The patient did not come. Not reported to partners for now: after the visit day the status stays `booked`.') },
-  closed: { kind: 'both', text: L('Закрыто сервером: клиника не ответила, причина — в `reason`. Уведомления нет; пусть пациент позвонит в клинику.', 'Server yopdi: klinika javob bermadi, sababi — `reason` da. Bildirishnoma yo‘q; bemor klinikaga qo‘ng‘iroq qilsin.', 'Closed by the server: the clinic did not answer; the reason is in `reason`. There is no notification; the patient should call the clinic.') },
+  closed: { kind: 'both', text: L('Закрыто сервером: клиника не забрала заявку или не ответила на онлайн-запись; причина — в `reason`. Уведомления нет; пусть пациент позвонит в клинику. Если клиника всё же ответит позже, статус сменится и придёт уведомление.',
+    'Server yopdi: klinika arizani olmadi yoki onlayn yozilishga javob bermadi; sababi — `reason` da. Bildirishnoma yo‘q; bemor klinikaga qo‘ng‘iroq qilsin. Klinika baribir keyinroq javob bersa, holat o‘zgaradi va bildirishnoma keladi.',
+    'Closed by the server: the clinic did not collect the request or did not answer the online booking; the reason is in `reason`. There is no notification; the patient should call the clinic. If the clinic does answer later, the status changes and a notification arrives.') },
 });
 
 /** Причины для closed ставит сервер (store/requests.js closeOverdue); остальные — клиника (DECLINE_REASONS). */
@@ -295,11 +322,55 @@ export const REASON_TEXT = Object.freeze({
   doctor_unavailable: { status: 'declined', text: L('Врач в это время не принимает.', 'Shifokor bu vaqtda qabul qilmaydi.', 'The doctor does not see patients at that time.') },
   not_bookable: { status: 'declined', text: L('Запись к этому врачу или на эту услугу через API не открыта либо время дальше срока записи врача.', 'Bu shifokorga yoki bu xizmatga API orqali yozilish ochilmagan yoki vaqt shifokorning yozilish muddatidan uzoq.', 'Booking this doctor or service via the API is not open, or the time is beyond the doctor’s booking window.') },
   duplicate: { status: 'declined', text: L('Повтор уже принятой заявки.', 'Allaqachon qabul qilingan arizaning takrori.', 'A repeat of a request already taken.') },
-  expired: { status: 'expired', text: L('Клиника не подтвердила вовремя или приём уже прошёл, пока клиника была не на связи.', 'Klinika o‘z vaqtida tasdiqlamadi yoki klinika aloqada bo‘lmaganida qabul vaqti o‘tib ketdi.', 'The clinic did not confirm in time, or the visit time passed while the clinic was offline.') },
+  expired: { status: 'expired', text: L('Время не подтвердилось вовремя: клиника не подтвердила запись, пока держала время; пациент не ответил на предложенное время до `offer_until`; или приём уже прошёл, пока клиника была не на связи.',
+    'Vaqt o‘z vaqtida tasdiqlanmadi: klinika vaqtni band qilib turganida yozuvni tasdiqlamadi; bemor taklif qilingan vaqtga `offer_until` gacha javob bermadi; yoki klinika aloqada bo‘lmaganida qabul vaqti o‘tib ketdi.',
+    'The time was not confirmed in time: the clinic did not confirm while it held the time; the patient did not answer the offered time by `offer_until`; or the visit time passed while the clinic was offline.') },
   other: { status: 'declined', text: L('Другая причина — пусть пациент позвонит в клинику.', 'Boshqa sabab — bemor klinikaga qo‘ng‘iroq qilsin.', 'Another reason — the patient should call the clinic.') },
   not_processed: { status: 'closed', text: L('Клиника получила онлайн-запись, но за {{answerMin:min}} не ответила.', 'Klinika onlayn yozilishni oldi, lekin {{answerMin:min}} ichida javob bermadi.', 'The clinic received the booking but did not answer within {{answerMin:min}}.') },
   not_collected: { status: 'closed', text: L('Клиника не забрала заявку за {{uncollectedHours:hour}} (компьютер выключен или нет интернета); данные пациента стёрты с сервера.', 'Klinika arizani {{uncollectedHours:hour}} ichida olmadi (kompyuter o‘chiq yoki internet yo‘q); bemor ma’lumotlari serverdan o‘chirildi.', 'The clinic did not collect the request within {{uncollectedHours:hour}} (computer off or no internet); the patient data was erased from the server.') },
 });
+
+/**
+ * Переходы статусов, которые видит партнёр: из какого статуса во что и когда
+ * (ревью шага 9, п. 1). Страница рисует их списком в разделе «Статусы заявки»;
+ * страж drift.test.js сверяет с кодом: каждый переход, который делают клиника
+ * (её действия и фон), ответы партнёра и закрытие сервером, здесь есть.
+ */
+const go = (status, note) => Object.freeze([status, note]);
+const BOOKED_NEXT = Object.freeze([
+  go('booked', L('визит перенесли: новое `start`, `rescheduled: true`', 'tashrif ko‘chirildi: yangi `start`, `rescheduled: true`', 'the visit was moved: a new `start`, `rescheduled: true`')),
+  go('cancelled', L('визит отменили', 'tashrif bekor qilindi', 'the visit was cancelled')),
+  go('arrived', L('пациент пришёл', 'bemor keldi', 'the patient arrived')),
+]);
+export const FLOWS = Object.freeze([
+  { kind: 'request', title: L('«Перезвоните»', '«Qayta qo‘ng‘iroq»', 'Callback'), steps: [
+    { from: 'new', to: [
+      go('accepted', L('администратор взял заявку в работу', 'administrator arizani ishga oldi', 'an administrator took it on')),
+      go('booked', L('по заявке сразу записали на визит', 'ariza bo‘yicha darhol tashrifga yozildi', 'a visit was booked from it straight away')),
+      go('closed', L('клиника не забрала заявку за {{uncollectedHours:hour}} (`not_collected`)', 'klinika arizani {{uncollectedHours:hour}} ichida olmadi (`not_collected`)',
+        'the clinic did not collect it within {{uncollectedHours:hour}} (`not_collected`)'))] },
+    { from: 'accepted', to: [go('booked', L('по заявке записали на визит', 'ariza bo‘yicha tashrifga yozildi', 'a visit was booked from it'))] },
+    { from: 'booked', to: BOOKED_NEXT },
+  ] },
+  { kind: 'appointment', title: L('Онлайн-запись', 'Onlayn yozilish', 'Online booking'), steps: [
+    { from: 'pending', to: [
+      go('booked', L('клиника подтвердила', 'klinika tasdiqladi', 'the clinic confirmed')),
+      go('offered', L('клиника предложила другое время', 'klinika boshqa vaqt taklif qildi', 'the clinic offered another time')),
+      go('declined', L('клиника отказала', 'klinika rad etdi', 'the clinic declined')),
+      go('expired', L('клиника не подтвердила, пока держала время', 'klinika vaqtni band qilib turganida tasdiqlamadi', 'the clinic did not confirm while it held the time')),
+      go('cancelled', L('пациент отменил у вас', 'bemor sizda bekor qildi', 'the patient cancelled with you')),
+      go('closed', L('клиника не забрала запись за {{uncollectedHours:hour}} (`not_collected`) или забрала, но за {{answerMin:min}} не ответила (`not_processed`)',
+        'klinika yozuvni {{uncollectedHours:hour}} ichida olmadi (`not_collected`) yoki oldi, lekin {{answerMin:min}} ichida javob bermadi (`not_processed`)',
+        'the clinic did not collect it within {{uncollectedHours:hour}} (`not_collected`), or collected it but did not answer within {{answerMin:min}} (`not_processed`)'))] },
+    { from: 'offered', to: [
+      go('pending', L('пациент согласился', 'bemor rozi bo‘ldi', 'the patient accepted')),
+      go('offered', L('клиника предложила другое время ещё раз: новое `offered_start`', 'klinika yana boshqa vaqt taklif qildi: yangi `offered_start`', 'the clinic offered yet another time: a new `offered_start`')),
+      go('declined', L('клиника отказала', 'klinika rad etdi', 'the clinic declined')),
+      go('expired', L('пациент не ответил до `offer_until`', 'bemor `offer_until` gacha javob bermadi', 'the patient did not answer by `offer_until`')),
+      go('cancelled', L('пациент отказался от другого времени или отменил запись', 'bemor boshqa vaqtdan voz kechdi yoki yozuvni bekor qildi', 'the patient declined the other time or cancelled'))] },
+    { from: 'booked', to: BOOKED_NEXT },
+  ] },
+]);
 
 /** Статусы и поля уведомлений по событиям — как их шлёт клиника (services/api/bookings.js, visit-events.js). */
 export const EVENT_TEXT = Object.freeze({
@@ -346,7 +417,7 @@ export const ERROR_TEXT = Object.freeze({
   forbidden_scope: L('Ключу не открыт раздел из поля `scope` — попросите клинику включить это право.', 'Kalitga `scope` maydonidagi bo‘lim ochilmagan — klinikadan bu huquqni yoqishni so‘rang.', 'The key has no access to the section in `scope` — ask the clinic to enable that scope.'),
   ip_not_allowed: L('Запрос не с разрешённого IP — сообщите клинике адрес своего сервера.', 'So‘rov ruxsat etilgan IP dan emas — klinikaga serveringiz manzilini ayting.', 'The request is not from an allowed IP — give the clinic your server’s address.'),
   origin_not_allowed: L('Запрос из браузера с сайта, которого нет в подключении, — сообщите клинике адрес сайта.', 'Ulanishda yo‘q saytdan brauzer so‘rovi — klinikaga sayt manzilini ayting.', 'A browser request from a site that is not in the connection — give the clinic the site address.'),
-  not_found: L('Нет такого адреса, врача, услуги или заявки либо клиника их скрыла; поле `field` подскажет, что именно. Обновите списки.', 'Bunday manzil, shifokor, xizmat yoki ariza yo‘q yoki klinika ularni yashirgan; `field` maydoni nimaligini aytadi. Ro‘yxatlarni yangilang.', 'No such endpoint, doctor, service or request, or the clinic hid it; `field` tells which. Refresh your lists.'),
+  not_found: L('Нет такого адреса, врача, услуги или заявки (статус заявки стирается через {{keepDays:day}} после последнего изменения) либо клиника их скрыла; поле `field` подскажет, что именно. Обновите списки.', 'Bunday manzil, shifokor, xizmat yoki ariza yo‘q (ariza holati oxirgi o‘zgarishdan {{keepDays:day}} o‘tgach o‘chiriladi) yoki klinika ularni yashirgan; `field` maydoni nimaligini aytadi. Ro‘yxatlarni yangilang.', 'No such endpoint, doctor, service or request (a request status is erased {{keepDays:day}} after its last change), or the clinic hid it; `field` tells which. Refresh your lists.'),
   clinic_not_found: L('Нет клиники с таким именем в адресе — сверьте адрес с клиникой.', 'Manzilda bunday nomli klinika yo‘q — manzilni klinika bilan solishtiring.', 'No clinic with that name in the address — check the address with the clinic.'),
   slot_taken: L('Время занято — запросите `/slots` заново и предложите другое.', 'Vaqt band — `/slots` ni qayta so‘rang va boshqasini taklif qiling.', 'The time is taken — request `/slots` again and offer another.'),
   not_cancellable: L('Запись уже не отменить: она отклонена, истекла, закрыта или пациент пришёл.', 'Yozuvni endi bekor qilib bo‘lmaydi: u rad etilgan, muddati o‘tgan, yopilgan yoki bemor kelgan.', 'The booking can no longer be cancelled: it was declined, expired, closed or the patient came.'),
@@ -362,7 +433,9 @@ export const ERROR_TEXT = Object.freeze({
 });
 
 /**
- * Причины полей: { field, reason, code?, text, probes:{ endpoint: {path} | {body} } }.
+ * Причины полей: { field, top?, reason, code?, text, probes:{ endpoint: {path} | {body} } }.
+ * top — то же поле на верхнем уровне тела POST /requests (без «patient.»): так его
+ * называет ошибка, когда поля пациента пришли не объектом patient (ревью шага 9, п. 4).
  * Пробы — запросы, которыми страж показывает эту ошибку на настоящем сервере
  * (body — поверх тела примера адреса).
  */
@@ -391,11 +464,11 @@ export const FIELD_ERRORS = Object.freeze([
   { field: 'start', reason: 'past', text: L('время уже прошло', 'vaqt o‘tib ketgan', 'the time has passed'), probes: { 'appointments-create': { body: { start: '2030-03-11T08:00:00+05:00' } } } },
   { field: 'start', reason: 'grid', text: L('не на сетке {{slotMin:min}}', '{{slotMin:min}}lik to‘rda emas', 'not on the {{slotMin}}-minute grid'), probes: { 'appointments-create': { body: { start: '2030-03-12T09:50:00+05:00' } } } },
   { field: 'start', reason: 'horizon', text: L('дальше срока записи врача (`booking_days`)', 'shifokorning yozilish muddatidan (`booking_days`) uzoq', 'beyond the doctor’s `booking_days`'), probes: { 'appointments-create': { body: { start: '2030-03-26T09:00:00+05:00' } } } },
-  { field: 'patient.name', reason: 'required', text: L('имени нет', 'ism yo‘q', 'no name'), probes: both({ patient: { phone: P_OK } }) },
-  { field: 'patient.name', reason: 'too_long', text: L('длиннее {{nameMax}} знаков', '{{nameMax}} belgidan uzun', 'longer than {{nameMax}} characters'), probes: both({ patient: { name: 'x'.repeat(121), phone: P_OK } }) },
-  { field: 'patient.phone', reason: 'required', text: L('телефона нет', 'telefon yo‘q', 'no phone'), probes: both({ patient: { name: 'Aziza' } }) },
-  { field: 'patient.phone', reason: 'format', text: L('меньше {{phoneDigitsMin}} цифр или длиннее {{phoneMax}} знаков', '{{phoneDigitsMin}} raqamdan kam yoki {{phoneMax}} belgidan uzun', 'fewer than {{phoneDigitsMin}} digits or longer than {{phoneMax}} characters'), probes: both({ patient: { name: 'Aziza', phone: '12' } }) },
-  { field: 'patient.comment', reason: 'too_long', text: L('длиннее {{commentMax}} знаков', '{{commentMax}} belgidan uzun', 'longer than {{commentMax}} characters'), probes: both({ patient: { name: 'Aziza', phone: P_OK, comment: 'x'.repeat(1001) } }) },
+  { field: 'patient.name', top: 'name', reason: 'required', text: L('имени нет', 'ism yo‘q', 'no name'), probes: both({ patient: { phone: P_OK } }) },
+  { field: 'patient.name', top: 'name', reason: 'too_long', text: L('длиннее {{nameMax}} знаков', '{{nameMax}} belgidan uzun', 'longer than {{nameMax}} characters'), probes: both({ patient: { name: 'x'.repeat(121), phone: P_OK } }) },
+  { field: 'patient.phone', top: 'phone', reason: 'required', text: L('телефона нет', 'telefon yo‘q', 'no phone'), probes: both({ patient: { name: 'Aziza' } }) },
+  { field: 'patient.phone', top: 'phone', reason: 'format', text: L('меньше {{phoneDigitsMin}} цифр или длиннее {{phoneMax}} знаков', '{{phoneDigitsMin}} raqamdan kam yoki {{phoneMax}} belgidan uzun', 'fewer than {{phoneDigitsMin}} digits or longer than {{phoneMax}} characters'), probes: both({ patient: { name: 'Aziza', phone: '12' } }) },
+  { field: 'patient.comment', top: 'comment', reason: 'too_long', text: L('длиннее {{commentMax}} знаков', '{{commentMax}} belgidan uzun', 'longer than {{commentMax}} characters'), probes: both({ patient: { name: 'Aziza', phone: P_OK, comment: 'x'.repeat(1001) } }) },
   { field: 'external_id', reason: 'format', text: L('пробел, кириллица или длиннее {{externalMax}} знаков', 'bo‘sh joy, kirill harflari yoki {{externalMax}} belgidan uzun', 'a space, Cyrillic or longer than {{externalMax}} characters'), probes: both({ external_id: 'has space' }) },
   { field: 'offered_start', reason: 'format', text: L('не время', 'vaqt emas', 'not a time'), probes: { 'offer-accept': { body: { offered_start: 'tomorrow' } }, 'offer-decline': { body: { offered_start: 'tomorrow' } } } },
 ]);
@@ -414,9 +487,9 @@ export const SECTIONS = Object.freeze([
       [L('Только HTTPS', 'Faqat HTTPS', 'HTTPS only'), L('Запросы по http не принимаются.', 'http orqali so‘rovlar qabul qilinmaydi.', 'Requests over http are refused.')],
       [L('Формат', 'Format', 'Format'), L('JSON в UTF-8. Тело запроса — `Content-Type: application/json`, не больше {{bodyKb}} КБ.', 'UTF-8 dagi JSON. So‘rov tanasi — `Content-Type: application/json`, {{bodyKb}} KB dan oshmasin.', 'JSON in UTF-8. Request bodies use `Content-Type: application/json`, at most {{bodyKb}} KB.')],
       [L('Язык', 'Til', 'Language'), L('`?lang=ru`, `uz` или `en` — каждое название одной строкой; без параметра — объектом `{"ru", "uz", "en"}`. Пустой перевод заменяется русским. Тот же параметр выбирает язык текста ошибок (без него — русский).', '`?lang=ru`, `uz` yoki `en` — har bir nom bitta satr; parametrsiz — `{"ru", "uz", "en"}` obyekti. Bo‘sh tarjima ruscha bilan almashtiriladi. Shu parametr xato matni tilini ham tanlaydi (usiz — ruscha).', '`?lang=ru`, `uz` or `en` — every name as one string; without it — an object `{"ru", "uz", "en"}`. An empty translation falls back to Russian. The same parameter picks the language of error messages (Russian without it).')],
-      [L('Время', 'Vaqt', 'Time'), L('Ташкент, UTC+5: `2030-03-12T09:45:00+05:00`. Время без смещения (`2030-03-12T09:45`) читается как ташкентское. Даты — `ГГГГ-ММ-ДД`, часы — `ЧЧ:ММ`. Только `occurred_at` уведомлений — в UTC.', 'Toshkent, UTC+5: `2030-03-12T09:45:00+05:00`. Siljishsiz vaqt (`2030-03-12T09:45`) Toshkent vaqti deb o‘qiladi. Sanalar — `YYYY-OO-KK`, soatlar — `SS:DD`. Faqat bildirishnomalardagi `occurred_at` — UTC da.', 'Tashkent, UTC+5: `2030-03-12T09:45:00+05:00`. A time without an offset (`2030-03-12T09:45`) is read as Tashkent time. Dates are `YYYY-MM-DD`, clock times `HH:MM`. Only the `occurred_at` of notifications is in UTC.')],
+      [L('Время', 'Vaqt', 'Time'), L('Ташкент, {{utc}}: `2030-03-12T09:45:00+05:00`. Время без смещения (`2030-03-12T09:45`) читается как ташкентское. Даты — `ГГГГ-ММ-ДД`, часы — `ЧЧ:ММ`. Только `occurred_at` уведомлений — в UTC.', 'Toshkent, {{utc}}: `2030-03-12T09:45:00+05:00`. Siljishsiz vaqt (`2030-03-12T09:45`) Toshkent vaqti deb o‘qiladi. Sanalar — `YYYY-OO-KK`, soatlar — `SS:DD`. Faqat bildirishnomalardagi `occurred_at` — UTC da.', 'Tashkent, {{utc}}: `2030-03-12T09:45:00+05:00`. A time without an offset (`2030-03-12T09:45`) is read as Tashkent time. Dates are `YYYY-MM-DD`, clock times `HH:MM`. Only the `occurred_at` of notifications is in UTC.')],
       [L('Суммы', 'Summalar', 'Amounts'), L('В сумах, целыми числами: `150000`.', 'So‘mda, butun sonlar bilan: `150000`.', 'In Uzbek som, as integers: `150000`.')],
-      [L('Свежесть', 'Yangilik', 'Freshness'), L('Сервер отдаёт то, что клиника прислала последним: изменения доходят за {{clinicPollSec:sec}}, свободное время обновляется раз в минуту. `as_of` — когда клиника последний раз была на связи. Клиника молчит {{silentDays:day}} — ответ `503 clinic_offline`.', 'Server klinika oxirgi yuborganini beradi: o‘zgarishlar {{clinicPollSec:sec}} ichida yetib keladi, bo‘sh vaqt har daqiqada yangilanadi. `as_of` — klinika oxirgi marta qachon aloqada bo‘lgani. Klinika {{silentDays:day}} jim bo‘lsa — `503 clinic_offline` javobi.', 'The server serves what the clinic sent last: changes arrive within {{clinicPollSec:sec}}, free time is refreshed every minute. `as_of` is when the clinic was last online. If the clinic is silent for {{silentDays:day}} — `503 clinic_offline`.')],
+      [L('Свежесть', 'Yangilik', 'Freshness'), L('Сервер отдаёт то, что клиника прислала последним: изменения доходят за {{clinicPollSec:sec}}, изменения свободного времени — за {{slotsEverySec:sec}}. `as_of` — когда клиника последний раз была на связи. Клиника молчит {{silentDays:day}} — ответ `503 clinic_offline`.', 'Server klinika oxirgi yuborganini beradi: o‘zgarishlar {{clinicPollSec:sec}} ichida yetib keladi, bo‘sh vaqt o‘zgarishlari — {{slotsEverySec:sec}} ichida. `as_of` — klinika oxirgi marta qachon aloqada bo‘lgani. Klinika {{silentDays:day}} jim bo‘lsa — `503 clinic_offline` javobi.', 'The server serves what the clinic sent last: changes arrive within {{clinicPollSec:sec}}, changes to free time within {{slotsEverySec:sec}}. `as_of` is when the clinic was last online. If the clinic is silent for {{silentDays:day}} — `503 clinic_offline`.')],
       [L('Новые поля', 'Yangi maydonlar', 'New fields'), L('В ответах могут появляться новые поля — пропускайте незнакомые.', 'Javoblarda yangi maydonlar paydo bo‘lishi mumkin — notanishlarini o‘tkazib yuboring.', 'New fields may appear in responses — skip the ones you do not know.')],
       [L('Примеры', 'Misollar', 'Examples'), L('Команды — для bash (Linux, macOS, Git Bash). Ответы — настоящие ответы сервера для клиники-примера «Шифо».', 'Buyruqlar — bash uchun (Linux, macOS, Git Bash). Javoblar — «Shifo» namunaviy klinikasi uchun serverning haqiqiy javoblari.', 'Commands are for bash (Linux, macOS, Git Bash). Responses are the server’s real answers for the sample clinic “Shifo”.')],
     ] },
@@ -434,7 +507,7 @@ export const SECTIONS = Object.freeze([
     { p: L('Ключ в коде страницы видят все посетители сайта. Держите ключ на своём сервере; если запросы идут из браузера, попросите клинику дать такому подключению только чтение.', 'Sahifa kodidagi kalitni saytning barcha tashrif buyuruvchilari ko‘radi. Kalitni o‘z serveringizda saqlang; so‘rovlar brauzerdan ketsa, klinikadan bunday ulanishga faqat o‘qish huquqini berishni so‘rang.', 'Every visitor of a site can see a key in the page code. Keep the key on your server; if requests come from a browser, ask the clinic to give that connection read-only scopes.') },
     { p: L('Из браузера: предварительный запрос `OPTIONS` разрешает методы `GET, POST, DELETE` и заголовки `Authorization, Content-Type` и запоминается на {{corsMaxAgeMin:min}}; заголовок `Retry-After` скрипту виден.', 'Brauzerdan: `OPTIONS` dastlabki so‘rovi `GET, POST, DELETE` usullari va `Authorization, Content-Type` sarlavhalariga ruxsat beradi va {{corsMaxAgeMin:min}} eslab qolinadi; `Retry-After` sarlavhasi skriptga ko‘rinadi.', 'From a browser: the `OPTIONS` preflight allows the `GET, POST, DELETE` methods and the `Authorization, Content-Type` headers and is cached for {{corsMaxAgeMin:min}}; the script can read `Retry-After`.') },
     { table: 'limits' },
-    { p: L('Сверх лимита — `429 rate_limited` и заголовок `Retry-After`: через сколько секунд повторить. Окно скользящее — последние 60 секунд.', 'Chegaradan oshsa — `429 rate_limited` va `Retry-After` sarlavhasi: necha soniyadan keyin takrorlash. Oyna siljuvchi — oxirgi 60 soniya.', 'Over the limit — `429 rate_limited` with a `Retry-After` header: how many seconds to wait. The window slides over the last 60 seconds.') },
+    { p: L('Сверх лимита — `429 rate_limited` и заголовок `Retry-After`: через сколько секунд повторить. Окно скользящее — последние {{rateWindowSec:sec}}.', 'Chegaradan oshsa — `429 rate_limited` va `Retry-After` sarlavhasi: necha soniyadan keyin takrorlash. Oyna siljuvchi — oxirgi {{rateWindowSec:sec}}.', 'Over the limit — `429 rate_limited` with a `Retry-After` header: how many seconds to wait. The window slides over the last {{rateWindowSec:sec}}.') },
   ] },
   { id: 'refs', title: L('Справочники', 'Ma’lumotnomalar', 'Reference lists'), blocks: [
     { p: L('Город, район и специальность приходят кодами. Коды и названия на трёх языках общие для всех клиник Easy-Med, код не меняется никогда. Загружайте справочники раз в сутки и храните у себя.', 'Shahar, tuman va mutaxassislik kodlar bilan keladi. Kodlar va uch tildagi nomlar barcha Easy-Med klinikalari uchun umumiy, kod hech qachon o‘zgarmaydi. Ma’lumotnomalarni sutkada bir marta yuklab, o‘zingizda saqlang.', 'City, district and specialty come as codes. The codes and their names in three languages are shared by all Easy-Med clinics; a code never changes. Load the lists once a day and keep them on your side.') },
@@ -454,18 +527,26 @@ export const SECTIONS = Object.freeze([
     { list: [
       L('`external_id` — ваш номер. Повтор с тем же `external_id` с того же ключа возвращает ту же заявку (`200`): при обрыве связи повторять безопасно.', '`external_id` — sizdagi raqam. Shu kalitdan shu `external_id` bilan takrorlash o‘sha arizani qaytaradi (`200`): aloqa uzilsa, takrorlash xavfsiz.', '`external_id` is your number. Repeating with the same `external_id` from the same key returns the same request (`200`): retrying after a dropped connection is safe.'),
       L('Заявки принимаются и тогда, когда клиника не на связи: заявка ждёт её {{uncollectedHours:hour}}.', 'Klinika aloqada bo‘lmaganda ham arizalar qabul qilinadi: ariza uni {{uncollectedHours:hour}} kutadi.', 'Requests are accepted even while the clinic is offline: a request waits for it for up to {{uncollectedHours:hour}}.'),
-      L('Клиника не ответит — сервер закроет заявку сам (`closed`) без уведомления: подписать его может только клиника. Пока статус не итоговый, спрашивайте [статус](#ep-request-status) раз в несколько минут.', 'Klinika javob bermasa — server arizani o‘zi yopadi (`closed`), bildirishnomasiz: uni faqat klinika imzolay oladi. Holat yakuniy bo‘lmaguncha [holatni](#ep-request-status) bir necha daqiqada bir so‘rang.', 'If the clinic does not answer, the server closes the request itself (`closed`) without a notification: only the clinic can sign one. Until the status is final, ask for the [status](#ep-request-status) every few minutes.'),
+      // ревью шага 9, п. 2: сервер закрывает только не забранное и онлайн-запись без ответа
+      L('Сервер сам закрывает заявку (`closed`) только в двух случаях: клиника не забрала её за {{uncollectedHours:hour}} (`not_collected`) или забрала онлайн-запись, но за {{answerMin:min}} не ответила (`not_processed`). Уведомления об этом нет: подписать его может только клиника. Забранная клиникой заявка «перезвоните» срока не имеет — она остаётся `new` или `accepted`, пока по ней не запишут визит.',
+        'Server arizani o‘zi faqat ikki holatda yopadi (`closed`): klinika uni {{uncollectedHours:hour}} ichida olmadi (`not_collected`) yoki onlayn yozilishni oldi, lekin {{answerMin:min}} ichida javob bermadi (`not_processed`). Bu haqda bildirishnoma yo‘q: uni faqat klinika imzolay oladi. Klinika olgan «qayta qo‘ng‘iroq» arizasining muddati yo‘q — u bo‘yicha tashrifga yozilmaguncha `new` yoki `accepted` bo‘lib qoladi.',
+        'The server closes a request itself (`closed`) in two cases only: the clinic did not collect it within {{uncollectedHours:hour}} (`not_collected`), or collected an online booking but did not answer within {{answerMin:min}} (`not_processed`). There is no notification about it: only the clinic can sign one. A callback request the clinic has collected has no deadline — it stays `new` or `accepted` until a visit is booked from it.'),
+      L('Когда перестать спрашивать [статус](#ep-request-status): `declined`, `expired`, `cancelled`, `arrived` и `closed` — итоговые. Онлайн-запись сама приходит к итогу или к `booked` — сроки держания и ответа выше; `booked` ещё может смениться (перенос, отмена, приход). «Перезвоните» после `new` или `accepted` меняется, только если по ней запишут визит: клиника ищет такую запись {{callbackBookDays:day}} от прихода заявки. Спрашивайте её статус не чаще раза в час и не дольше этого срока, а лучше получайте [уведомления](#hooks) `request.accepted` и `appointment.created`. Через {{keepDays:day}} после последнего изменения статус стирается — ответ `404`.',
+        '[Holatni](#ep-request-status) qachon so‘rashni to‘xtatish kerak: `declined`, `expired`, `cancelled`, `arrived` va `closed` — yakuniy. Onlayn yozilish o‘zi yakunga yoki `booked` ga yetadi — band qilish va javob muddatlari yuqorida; `booked` hali o‘zgarishi mumkin (ko‘chirish, bekor qilish, kelish). «Qayta qo‘ng‘iroq» `new` yoki `accepted` dan keyin faqat u bo‘yicha tashrifga yozilsa o‘zgaradi: klinika bunday yozuvni ariza kelganidan {{callbackBookDays:day}} davomida qidiradi. Uning holatini soatiga bir martadan ko‘p va shu muddatdan uzoq so‘ramang, yaxshisi `request.accepted` va `appointment.created` [bildirishnomalarini](#hooks) oling. Oxirgi o‘zgarishdan {{keepDays:day}} o‘tgach holat o‘chiriladi — javob `404`.',
+        'When to stop asking for the [status](#ep-request-status): `declined`, `expired`, `cancelled`, `arrived` and `closed` are final. An online booking reaches a final status or `booked` by itself — the hold and answer times are above; `booked` can still change (moved, cancelled, arrived). A callback changes after `new` or `accepted` only if a visit is booked from it: the clinic looks for such a booking for {{callbackBookDays:day}} after the request arrives. Ask for its status at most once an hour and no longer than that, or better, receive the `request.accepted` and `appointment.created` [notifications](#hooks). {{keepDays:day}} after the last change the status is erased — the response is `404`.'),
     ] },
     { endpoint: 'requests-create' }, { endpoint: 'appointments-create' }, { endpoint: 'request-status' },
-    { p: L('Клиника может предложить другое время: статус `offered`, ответ ждёт {{offerMin:min}} — до `offer_until`. Пришлите в теле `offered_start` — время, на которое отвечаете: если клиника успела предложить другое, ответ `409 offer_changed`. Согласие после `offer_until` — `409 offer_expired`.', 'Klinika boshqa vaqt taklif qilishi mumkin: holat `offered`, javob {{offerMin:min}} — `offer_until` gacha kutiladi. Tanada `offered_start` ni — javob berayotgan vaqtni yuboring: klinika boshqasini taklif qilib ulgurgan bo‘lsa, javob `409 offer_changed`. `offer_until` dan keyingi rozilik — `409 offer_expired`.', 'The clinic may offer another time: status `offered`, waiting {{offerMin:min}} for an answer — until `offer_until`. Send `offered_start` in the body — the time you are answering: if the clinic has offered another one meanwhile, the response is `409 offer_changed`. Accepting after `offer_until` gives `409 offer_expired`.') },
+    { p: L('Клиника может предложить другое время: статус `offered`, ответ ждёт {{offerMin:min}} — до `offer_until`. Пришлите в теле `offered_start` — время, на которое отвечаете: если клиника успела предложить другое, ответ `409 offer_changed`. Согласие после `offer_until` — `409 offer_expired`; без ответа до `offer_until` запись становится `expired`. Клиника может и предложить другое время ещё раз (снова `offered`, новое `offered_start`), и отказать (`declined`).',
+      'Klinika boshqa vaqt taklif qilishi mumkin: holat `offered`, javob {{offerMin:min}} — `offer_until` gacha kutiladi. Tanada `offered_start` ni — javob berayotgan vaqtni yuboring: klinika boshqasini taklif qilib ulgurgan bo‘lsa, javob `409 offer_changed`. `offer_until` dan keyingi rozilik — `409 offer_expired`; `offer_until` gacha javob bo‘lmasa, yozuv `expired` bo‘ladi. Klinika yana boshqa vaqt taklif qilishi (yana `offered`, yangi `offered_start`) yoki rad etishi (`declined`) ham mumkin.',
+      'The clinic may offer another time: status `offered`, waiting {{offerMin:min}} for an answer — until `offer_until`. Send `offered_start` in the body — the time you are answering: if the clinic has offered another one meanwhile, the response is `409 offer_changed`. Accepting after `offer_until` gives `409 offer_expired`; with no answer by `offer_until` the booking becomes `expired`. The clinic may also offer yet another time (`offered` again, a new `offered_start`) or decline (`declined`).') },
     { endpoint: 'offer-accept' }, { endpoint: 'offer-decline' }, { endpoint: 'appointments-cancel' },
   ] },
   { id: 'statuses', title: L('Статусы заявки', 'Ariza holatlari', 'Request statuses'), blocks: [
-    { list: [
-      L('«Перезвоните»: `new` → `accepted` → `booked` (записали на визит) → `cancelled` или `arrived`.', '«Qayta qo‘ng‘iroq»: `new` → `accepted` → `booked` (tashrifga yozildi) → `cancelled` yoki `arrived`.', 'Callback: `new` → `accepted` → `booked` (a visit was booked) → `cancelled` or `arrived`.'),
-      L('Онлайн-запись: `pending` → `booked`, `offered`, `declined` или `expired`; `offered` → `pending` (согласие) или `cancelled`; `booked` → `cancelled` или `arrived`.', 'Onlayn yozilish: `pending` → `booked`, `offered`, `declined` yoki `expired`; `offered` → `pending` (rozilik) yoki `cancelled`; `booked` → `cancelled` yoki `arrived`.', 'Online booking: `pending` → `booked`, `offered`, `declined` or `expired`; `offered` → `pending` (accepted) or `cancelled`; `booked` → `cancelled` or `arrived`.'),
-      L('Без ответа клиники: `new` или `pending` → `closed`.', 'Klinika javobisiz: `new` yoki `pending` → `closed`.', 'Without an answer from the clinic: `new` or `pending` → `closed`.'),
-    ] },
+    // ревью шага 9, п. 1: все переходы — из FLOWS (страж сверяет их с кодом)
+    { p: L('Статус меняют клиника, ваши ответы и — когда клиника не отвечает — сервер. Все переходы:',
+      'Holatni klinika, sizning javoblaringiz va — klinika javob bermasa — server o‘zgartiradi. Barcha o‘tishlar:',
+      'The status is changed by the clinic, by your answers and — when the clinic does not answer — by the server. All transitions:') },
+    { flows: true },
     { table: 'statuses' },
     { table: 'reasons' },
   ] },

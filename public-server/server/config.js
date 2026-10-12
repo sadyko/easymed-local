@@ -18,6 +18,8 @@ export const SERVICE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.
 //     15 минут от сервера (clinic-auth.js). Переменная PUBLIC_SYNC_SKEW_MIN.
 export const DEFAULT_UNCOLLECTED_MAX_HOURS = 24;
 export const DEFAULT_SYNC_SKEW_MIN = 15;
+/** Смещение времени ответов — Ташкент, UTC+5 (PUBLIC_TZ_OFFSET_MIN); документация называет его отсюда (API_DOCS_V1). */
+export const DEFAULT_TZ_OFFSET_MIN = 300;
 
 function int(env, name, def, min, max) {
   const raw = env[name];
@@ -50,7 +52,7 @@ export function readConfig(env = process.env, { root = SERVICE_ROOT } = {}) {
     licenceKeyPath: String(env.PUBLIC_LICENCE_PUBLIC_KEY || '').trim(),
     trustProxy: trustProxyOf(env.PUBLIC_TRUST_PROXY),
     requireHttps: String(env.PUBLIC_REQUIRE_HTTPS ?? '1').trim() !== '0',
-    offsetMin: int(env, 'PUBLIC_TZ_OFFSET_MIN', 300, -720, 840),
+    offsetMin: int(env, 'PUBLIC_TZ_OFFSET_MIN', DEFAULT_TZ_OFFSET_MIN, -720, 840),
     syncSkewMs: int(env, 'PUBLIC_SYNC_SKEW_MIN', DEFAULT_SYNC_SKEW_MIN, 1, 1440) * 60000,
     uncollectedMaxMs: int(env, 'PUBLIC_UNCOLLECTED_MAX_HOURS', DEFAULT_UNCOLLECTED_MAX_HOURS, 1, 720) * 3600000,
     selfIps: String(env.PUBLIC_SELF_IPS || '').split(',').map((s) => s.trim()).filter(Boolean),

@@ -5,14 +5,19 @@
 //   • каждая строка таблицы полей воспроизводится своим запросом, границы полей
 //     пациента — те, что написаны;
 //   • права: без права адреса — 403 с этим правом, с любым из названных — не 403;
-//     справочники — любому ключу, файлы — без ключа;
-//   • коды тела, CORS и Max-Age — как написано.
+//     справочники — любому ключу, файлы — без ключа, кэш файла — как написано;
+//   • коды тела, CORS (методы — ровно названные) и Max-Age — как написано.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { buildGenerated, GENERATED_FILE, docsStand, exampleRequest, sendExample, resolve, WRONG_KEY, NO_LIMITS } from '../test-helpers/docs-run.js';
-import { DOCS_ORIGIN } from '../test-helpers/docs-world.js';
+import { DOCS_ORIGIN, docsSnapshot } from '../test-helpers/docs-world.js';
+import { NOW } from '../test-helpers/fixture.js';
+import { putMedia } from '../store/media.js';
+import { saveSnapshot } from '../store/clinics.js';
+import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { EXAMPLES, ENDPOINTS, FIELD_ERRORS } from './content.js';
 import { LABELS } from './generated.js';
 import { PATIENT_RULES, CORS_MAX_AGE_SEC, docFacts } from './facts.js';
@@ -46,9 +51,21 @@ test('таблица полей: каждая строка — тем запро
       assert.deepEqual([r.status, r.body.error && r.body.error.code, r.body.error && r.body.error.field, r.body.error && r.body.error.reason], want,
         ep + ' ' + f.field + '/' + (f.reason || f.code));
       n += 1;
+      // Ревью шага 9, п. 4: те же поля на верхнем уровне (POST /requests) — ошибка с полем без «patient.» (f.top).
+      if (f.top && ep === 'requests-create') {
+        const { patient, ...rest } = req.body;
+        assert.ok(patient && typeof patient === 'object', f.field + ': проба верхнего уровня — из тела с patient');
+        const top = await sendExample(s, { ...req, body: { ...rest, ...patient } });
+        assert.deepEqual([top.status, top.body.error && top.body.error.code, top.body.error && top.body.error.field, top.body.error && top.body.error.reason],
+          [400, 'invalid_field', f.top, f.reason], ep + ' ' + f.top + '/' + f.reason + ' (верхний уровень)');
+        n += 1;
+      }
     }
   }
-  assert.ok(n >= 50, 'проб меньше, чем строк: ' + n);
+  assert.ok(n >= 55, 'проб меньше, чем строк: ' + n);
+  for (const f of FIELD_ERRORS) if (f.top) assert.ok(f.probes['requests-create'], f.field + ': у поля верхнего уровня есть проба POST /requests');
+  assert.deepEqual(FIELD_ERRORS.filter((f) => f.top).map((f) => f.top + '/' + f.reason),
+    ['name/required', 'name/too_long', 'phone/required', 'phone/format', 'comment/too_long'], 'поля пациента — и на верхнем уровне');
 });
 
 test('поля пациента и номер партнёра: граница — та, что написана (на границе — принято, за ней — 400)', async (t) => {
@@ -91,6 +108,14 @@ test('права: без права адреса — 403 с этим право�
       assert.notEqual((await call(e)).status, 403, e.id + ' с правом ' + sc);
     }
   }
+  // Настоящий файл снимка: без ключа — 200, кэш — столько, сколько называет страница (ревью шага 9, п. 6).
+  const png = fakePng(16, 16);
+  const sha = crypto.createHash('sha256').update(png).digest('hex');
+  putMedia(s.db, s.dir, s.clinicId, sha, 'png', png, NOW);
+  const snap = docsSnapshot(NOW + 1000);
+  saveSnapshot(s.db, s.clinicId, { ...snap, clinic: { ...snap.clinic, logo: { square: 'media/' + sha + '.png', portrait: null } } }, NOW + 1000);
+  const file = await fetch(s.base + '/shifo/v1/media/' + sha + '.png');
+  assert.deepEqual([file.status, file.headers.get('cache-control')], [200, 'public, max-age=' + docFacts().mediaCacheHours * 3600 + ', immutable']);
 });
 
 test('тело и браузер: bad_json, bad_request, too_large, unsupported_encoding; CORS — методы, заголовки, Max-Age, Retry-After', async (t) => {
@@ -106,7 +131,7 @@ test('тело и браузер: bad_json, bad_request, too_large, unsupported_
   const pre = await fetch(s.base + '/shifo/v1/doctors', { method: 'OPTIONS', headers: { Origin: DOCS_ORIGIN, 'Access-Control-Request-Method': 'GET' } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get('access-control-max-age'), String(CORS_MAX_AGE_SEC));
-  assert.match(pre.headers.get('access-control-allow-methods'), /^GET, POST, DELETE\b/);
+  assert.equal(pre.headers.get('access-control-allow-methods'), 'GET, POST, DELETE, OPTIONS', 'страница называет GET, POST, DELETE — и ничего сверх');
   assert.equal(pre.headers.get('access-control-allow-headers'), 'Authorization, Content-Type');
   const get = await fetch(s.base + '/shifo/v1/doctors', { headers: { Authorization: 'Bearer ' + s.key, Origin: DOCS_ORIGIN } });
   assert.equal(get.headers.get('access-control-expose-headers'), 'Retry-After');

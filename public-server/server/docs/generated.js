@@ -442,6 +442,51 @@ export const RESPONSES = {
         "stale": false
       }
     },
+    "slots-days": {
+      "status": 200,
+      "body": {
+        "doctor_id": 7,
+        "slot_minutes": 15,
+        "days": [
+          {
+            "date": "2030-03-12",
+            "slots": [
+              {
+                "start": "09:00",
+                "free": true
+              },
+              {
+                "start": "09:45",
+                "free": true
+              },
+              {
+                "start": "10:00",
+                "free": true
+              }
+            ]
+          },
+          {
+            "date": "2030-03-13",
+            "slots": [
+              {
+                "start": "14:00",
+                "free": true
+              },
+              {
+                "start": "14:15",
+                "free": true
+              },
+              {
+                "start": "14:30",
+                "free": true
+              }
+            ]
+          }
+        ],
+        "as_of": "2030-03-11T09:00:00+05:00",
+        "stale": false
+      }
+    },
     "slots-live": {
       "status": 200,
       "body": {
@@ -938,6 +983,51 @@ export const RESPONSES = {
         "stale": false
       }
     },
+    "slots-days": {
+      "status": 200,
+      "body": {
+        "doctor_id": 7,
+        "slot_minutes": 15,
+        "days": [
+          {
+            "date": "2030-03-12",
+            "slots": [
+              {
+                "start": "09:00",
+                "free": true
+              },
+              {
+                "start": "09:45",
+                "free": true
+              },
+              {
+                "start": "10:00",
+                "free": true
+              }
+            ]
+          },
+          {
+            "date": "2030-03-13",
+            "slots": [
+              {
+                "start": "14:00",
+                "free": true
+              },
+              {
+                "start": "14:15",
+                "free": true
+              },
+              {
+                "start": "14:30",
+                "free": true
+              }
+            ]
+          }
+        ],
+        "as_of": "2030-03-11T09:00:00+05:00",
+        "stale": false
+      }
+    },
     "slots-live": {
       "status": 200,
       "body": {
@@ -1428,6 +1518,51 @@ export const RESPONSES = {
           {
             "start": "10:00",
             "free": true
+          }
+        ],
+        "as_of": "2030-03-11T09:00:00+05:00",
+        "stale": false
+      }
+    },
+    "slots-days": {
+      "status": 200,
+      "body": {
+        "doctor_id": 7,
+        "slot_minutes": 15,
+        "days": [
+          {
+            "date": "2030-03-12",
+            "slots": [
+              {
+                "start": "09:00",
+                "free": true
+              },
+              {
+                "start": "09:45",
+                "free": true
+              },
+              {
+                "start": "10:00",
+                "free": true
+              }
+            ]
+          },
+          {
+            "date": "2030-03-13",
+            "slots": [
+              {
+                "start": "14:00",
+                "free": true
+              },
+              {
+                "start": "14:15",
+                "free": true
+              },
+              {
+                "start": "14:30",
+                "free": true
+              }
+            ]
           }
         ],
         "as_of": "2030-03-11T09:00:00+05:00",
