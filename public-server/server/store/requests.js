@@ -215,9 +215,11 @@ export function floorInboxCursor(db, nowMs) {
  */
 export function inboxItems(db, clinicId, after, { limit = INBOX_PAGE, now = null } = {}) {
   const rows = db.prepare('SELECT * FROM inbox WHERE clinic_id = ? ORDER BY cursor LIMIT ?').all(clinicId, Math.min(limit, INBOX_PAGE));
-  // Отдано клинике (now — из канала клиники): уборка подождёт подтверждения (C11).
+  // Отдано клинике (now — из канала клиники): уборка подождёт подтверждения (C11)
+  // HANDED_OUT_GRACE_MS от ПЕРВОЙ выдачи (проверка исправлений 8b, D): элемент,
+  // который клиника забирает каждый такт и не подтверждает, не держится вечно.
   if (now != null && rows.length) {
-    const mark = db.prepare('UPDATE inbox SET handed_out_at = ? WHERE cursor = ?');
+    const mark = db.prepare('UPDATE inbox SET handed_out_at = COALESCE(handed_out_at, ?) WHERE cursor = ?');
     db.transaction(() => { for (const r of rows) mark.run(isoOf(now), r.cursor); })();
   }
   return rows

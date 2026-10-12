@@ -368,3 +368,14 @@ test('ревью 8b, C10: предложение клиники, не дошед
   applyEvents(s.db, s.c.clinicId, [event(6, a, 'booking.declined', 'expired', { reason: 'expired' }, hook)], NOW + 3000);
   assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE request_id = ?").get(a.id).n, 1, '«истекло» после отмены уходит, как и прежде');
 });
+
+test('проверка исправлений 8b, D: элемент, который клиника забирает каждый такт и не подтверждает, — запас 10 минут от ПЕРВОЙ выдачи, потом закрыт и стёрт', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const DAY = 86400000;
+  inboxItems(s.db, s.c.clinicId, '', { now: NOW + DAY - 60000 });
+  for (let m = 1; m <= 12; m += 1) inboxItems(s.db, s.c.clinicId, '', { now: NOW + DAY + m * 60000 });   // опрос каждую минуту
+  assert.deepEqual(closeOverdue(s.db, NOW + DAY + 12 * 60000), { not_processed: 0, not_collected: 1 }, 'не держится вечно повторными выдачами');
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 0, 'шифротекст стёрт');
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).reason, 'not_collected');
+});

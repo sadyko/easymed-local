@@ -421,3 +421,19 @@ test('проверка исправлений 8b, C: сервер не прин�
   await quietWarns(async () => { await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); });
   assert.deepEqual(sent, { snapshot: 2, slots: 2 }, 'раз в 15 минут — снова (вдруг сервер уже принимает)');
 });
+
+test('проверка исправлений 8b, D: сервер после восстановления отдаёт элемент с курсором, равным сохранённому, — клиника всё равно подтверждает (иначе он висит и шифротекст не стирается)', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  r.db.prepare("UPDATE api_sync_state SET inbox_cursor = '1' WHERE id = 1").run();
+  appt(r);   // поддельный сервер даёт ему курсор '1' — тот же, что у клиники
+  // Сервер 8b отдаёт всё неподтверждённое, не глядя на after (проверка 8b, C3).
+  const fetchImpl = async (url, o = {}) => (new URL(String(url)).pathname === '/_sync/v1/inbox' && String(o.method || 'GET') === 'GET'
+    ? { ok: true, status: 200, text: async () => JSON.stringify({ items: r.fake.state.inbox }), body: null }
+    : r.opts.fetchImpl(url, o));
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl });
+  assert.deepEqual(r.fake.state.acks, [1], 'подтверждено, хотя курсор не сдвинулся');
+  assert.equal(r.fake.state.inbox.length, 0);
+  assert.equal(r.db.prepare('SELECT COUNT(*) AS n FROM api_requests').get().n, 1);
+});

@@ -259,6 +259,7 @@ async function pullInbox(ctx, state) {
   let stuck = false;
   const skippedIds = [];
   const sealedIds = [];
+  let seen = 0;   // элементы, которые клиника разобрала (принятые, повторы, отказы разбора)
   // Решения владельца 18–19: срок держания назначает клиника в миг приёма —
   // публичный сервер узнаёт его из подтверждения очереди (held) и показывает в
   // GET /requests/{id}. Читается из строки заявки, а не из ответа ingestItem:
@@ -303,12 +304,18 @@ async function pullInbox(ctx, state) {
       stuck = true;
       break;
     }
+    seen += 1;
     if (r && r.applied) applied += 1;
     const h = it && typeof it.public_id === 'string' ? heldRow.get(it.public_id) : null;
     if (h) held.set(h.public_id, { request_id: h.public_id, hold_until: h.hold_until });
     cursor = String((it && it.cursor) || cursor);
   }
-  if (cursor && cursor !== (state.inbox_cursor || '')) {
+  // Проверка исправлений 8b, D: подтверждать, когда в такте разобран хоть один
+  // элемент, даже если курсор не сдвинулся: после восстановления базы публичного
+  // сервера тот может отдать элементы с курсором, равным сохранённому, — без
+  // подтверждения они висели бы, и шифротекст не стирался. Повтор подтверждения
+  // безвреден.
+  if (cursor && (cursor !== (state.inbox_cursor || '') || seen + skipped + skippedIds.length > 0)) {
     await call(ctx, 'POST', '/inbox/ack', { cursor, held: [...held.values()] });
     saveState(ctx.db, { inbox_cursor: cursor });
   }
