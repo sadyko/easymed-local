@@ -41,6 +41,7 @@ export function metrics(db, now, jobs = null, { counters = null, accessJournal =
     access_skipped_keyless: skipped.keyless || 0,
     access_skipped_over_key_day: skipped.over_key_day || 0,
     access_skipped_over_total: skipped.over_total || 0,
+    access_skipped_over_clinic: skipped.over_clinic || 0,   // бюджет журнала клиники выбран (проверка исправлений 8b, F)
     jobs: jobs ? jobs.status() : null,
   };
 }
