@@ -6,22 +6,20 @@ import { canonical } from './canonical.js';
 // Ed25519 is used because node:crypto has it built in: this project has exactly
 // three runtime dependencies and licensing was not going to be the fourth.
 //
-// REPLACE THIS at first release with the real public key printed by
-// `node scripts/make-licence.mjs keygen` (a later task builds that tool). The
-// matching private key must never exist anywhere except the control plane. The
-// placeholder below is a real, valid Ed25519 key whose private half was
-// discarded, so an un-replaced build fails closed: no licence can ever verify
-// against it.
+// PUBLIC_LICENCE_V1 (2026-10-12) — THIS IS THE PRODUCTION KEY. Installed
+// 2026-08-22 (commit 6cd66c5c, "both trust keys are production now"): its
+// private half was generated ON the control-plane server and never left it
+// (/etc/easymed-cp/vendor-private.pem — docs/HANDOVER.md, "Keys"). Every real
+// clinic licence since then is signed with it. The development key that sat
+// here from 2026-08-20 to 2026-08-22, and the boot warning that watched for it
+// (DEV_KEY_FINGERPRINT in server/index.js), are both gone; the older comment
+// that still described them was stale and misled the step-8b plan.
 //
-// Installed 2026-08-20 so the local dev instance is usable: with the discarded
-// placeholder in place, no licence could verify and the whole app sat read-only.
-// Its private half lives in this machine's scratchpad and is worth nothing.
-//
-// Before the first real install the owner must run `make-licence.mjs keygen`,
-// store that private key somewhere deliberate and backed up, and paste its public
-// half here. Shipping THIS key would let anyone holding the throwaway private key
-// license themselves. server/index.js logs a warning at every boot while it is in
-// place — see DEV_KEY_FINGERPRINT there.
+// The same key also verifies, on the public server api.easymed.uz, every clinic
+// licence (public-server/server/clinic-auth.js) and the vendor-signed list of
+// clinics hidden from partners and revoked keys (vendor-feed.js). Its
+// DER-SHA-256 fingerprint is pinned by vendor-key.test.js: replacing it is a
+// deliberate, test-visible act, never a side effect.
 const VENDOR_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAXaSA2ArkuT/Ci1VjOzeCx/vsYZNiuKwsF1yceOrRCjM=
 -----END PUBLIC KEY-----`;
@@ -30,6 +28,11 @@ let _defaultKey = null;
 function defaultKey() {
   if (!_defaultKey) _defaultKey = createPublicKey(VENDOR_PUBLIC_KEY_PEM);
   return _defaultKey;
+}
+
+/** PUBLIC_LICENCE_V1 — the compiled-in vendor key, for the public server's own key check and the feed verifier. */
+export function vendorPublicKey() {
+  return defaultKey();
 }
 
 // Deliberately excludes '-' and '_': a base64url signature (as some tools emit)

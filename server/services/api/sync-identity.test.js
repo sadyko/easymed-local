@@ -9,6 +9,7 @@ import path from 'node:path';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
 import {
   SYNC_KEY_FILE, loadSyncIdentity, signRequest, verifyRequest, sealFor, openSealed, canonicalRequest, SyncIdentityError,
+  syncKeyFingerprint,
 } from './sync-identity.js';
 
 const fresh = () => path.join(tmpDir('em-sync-id-'), SYNC_KEY_FILE);
@@ -58,4 +59,16 @@ test('испорченный файл — копия; испорчены оба 
   assert.equal(loadSyncIdentity({ keyPath: p, create: true }).signPublic, a.signPublic);
   fs.writeFileSync(p + '.bak', '{"v":1,"sign":"xx","box":"yy"}');
   assert.throws(() => loadSyncIdentity({ keyPath: p, create: true }), SyncIdentityError);
+});
+
+// PUBLIC_LICENCE_V1 — отпечаток присланной открытой половины считается так же,
+// как свой: его вписывает в лицензию сервер лицензий (шаг 8c).
+test('syncKeyFingerprint: открытая половина → тот же отпечаток, что у клиники; ящик, мусор, лишние байты — пусто', () => {
+  const id = loadSyncIdentity({ keyPath: fresh(), create: true });
+  assert.equal(syncKeyFingerprint(id.signPublic), id.fingerprint);
+  assert.match(id.fingerprint, /^[0-9a-f]{32}$/);
+  const longer = Buffer.concat([Buffer.from(id.signPublic, 'base64'), Buffer.from([0])]).toString('base64');
+  for (const bad of [id.boxPublic, '', 'не ключ', null, undefined, 42, {}, longer, 'A'.repeat(201)]) {
+    assert.equal(syncKeyFingerprint(bad), '', String(bad).slice(0, 20));
+  }
 });

@@ -67,6 +67,25 @@ function shape(signPrivate, boxPrivate) {
 }
 
 /**
+ * PUBLIC_LICENCE_V1 — отпечаток ОТКРЫТОЙ половины ключа подписи, присланной
+ * строкой base64 (DER SPKI): первые 32 hex SHA-256 от DER — та же формула, что
+ * fingerprint выше и keyFingerprint публичного сервера (clinic-auth.js). Им
+ * пользуется сервер лицензий: клиника шлёт открытую половину при сверке
+ * (api_sync_public_key), отпечаток уходит в подписанную лицензию. Не Ed25519,
+ * мусор, не каноническая запись DER, длиннее 200 знаков — ''. Никогда не бросает.
+ */
+export function syncKeyFingerprint(signPublicB64) {
+  const s = typeof signPublicB64 === 'string' ? signPublicB64.trim() : '';
+  if (!s || s.length > 200) return '';
+  try {
+    const raw = Buffer.from(s, 'base64');
+    const key = crypto.createPublicKey({ key: raw, format: 'der', type: 'spki' });
+    if (key.asymmetricKeyType !== 'ed25519' || !der(key).equals(raw)) return '';
+    return sha256(raw).slice(0, 32);
+  } catch { return ''; }
+}
+
+/**
  * Личность клиники. Нет файла — null (или новая пара, если create).
  * @returns {{signPrivate, boxPrivate, signPublic:string, boxPublic:string, fingerprint:string}|null}
  */
