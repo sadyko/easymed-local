@@ -417,6 +417,8 @@ test('проверка исправлений 8b, C: сервер не прин�
   r.tick(61000);
   await quietWarns(async () => { await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); });
   assert.deepEqual(sent, { snapshot: 1, slots: 1 }, 'не принятое по размеру не гоняется каждый такт');
+  const again = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.deepEqual([again.state, again.last_error], ['error', 'too_large'], 'причина держится, пока сервер не примет (а не «работает»)');
   r.tick(15 * 60000);
   await quietWarns(async () => { await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); });
   assert.deepEqual(sent, { snapshot: 2, slots: 2 }, 'раз в 15 минут — снова (вдруг сервер уже принимает)');

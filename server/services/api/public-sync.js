@@ -183,15 +183,21 @@ async function pushKeys(ctx, state) {
 
 /**
  * Проверка исправлений 8b, C: сервер не принял снимок или время по размеру —
- * запомнить их отпечаток, как отправленный: то же содержимое не гоняется каждый
- * такт (мегабайты каждые 15 секунд), а уходит снова, когда изменится или раз в
- * 15 минут (HEARTBEAT_MS). Причина too_large остаётся на экране.
+ * запомнить их отпечаток с пометкой «не принят» (TOO_LARGE_MARK + отпечаток в
+ * той же колонке): то же содержимое не гоняется каждый такт (мегабайты каждые
+ * 15 секунд), а уходит снова, когда изменится или раз в 15 минут (HEARTBEAT_MS).
+ * Пока содержимое то же, такт снова называет причину too_large (stillTooLarge) —
+ * экран не говорит «работает», хотя у сервера этих данных нет.
  */
+const TOO_LARGE_MARK = 'too_large:';
 async function tooLargeRemembered(send, remember) {
   try { return await send(); } catch (e) {
     if (e instanceof SyncFail && e.reason === 'too_large') remember();
     throw e;
   }
+}
+function stillTooLarge(storedHash, hash) {
+  if (storedHash === TOO_LARGE_MARK + hash) throw new SyncFail('too_large');
 }
 
 async function pushSnapshot(ctx, state) {
@@ -199,6 +205,7 @@ async function pushSnapshot(ctx, state) {
   const hash = contentHash(snapshot);
   const stale = !state.snapshot_at || ctx.now() - Date.parse(state.snapshot_at) >= HEARTBEAT_MS;
   if (hash === state.snapshot_hash && !stale) return false;
+  if (!stale) stillTooLarge(state.snapshot_hash, hash);
   if (media.length) {
     const check = await call(ctx, 'POST', '/media/check', { hashes: media.map((m) => m.sha256) });
     const missing = new Set(Array.isArray(check.missing) ? check.missing : []);
@@ -214,19 +221,25 @@ async function pushSnapshot(ctx, state) {
       }
     }
   }
-  await tooLargeRemembered(() => call(ctx, 'PUT', '/snapshot', snapshot), () => saveState(ctx.db, { snapshot_hash: hash, snapshot_at: isoOf(ctx.now()) }));
+  await tooLargeRemembered(() => call(ctx, 'PUT', '/snapshot', snapshot),
+    () => saveState(ctx.db, { snapshot_hash: TOO_LARGE_MARK + hash, snapshot_at: isoOf(ctx.now()) }));
   saveState(ctx.db, { snapshot_hash: hash, snapshot_at: isoOf(ctx.now()) });
   return true;
 }
 
 async function pushSlots(ctx, state, force) {
   const due = force || !state.slots_at || ctx.now() - Date.parse(state.slots_at) >= SLOTS_EVERY_MS;
-  if (!due) return false;
+  if (!due) {
+    if (String(state.slots_hash || '').startsWith(TOO_LARGE_MARK)) throw new SyncFail('too_large');   // причина держится и между проверками
+    return false;
+  }
   const slots = buildSlots(ctx.db, { now: ctx.now() });
   const hash = contentHash(slots);
   const stale = !state.slots_at || ctx.now() - Date.parse(state.slots_at) >= HEARTBEAT_MS;
+  if (!stale) stillTooLarge(state.slots_hash, hash);
   if (hash === state.slots_hash && !stale) { saveState(ctx.db, { slots_at: isoOf(ctx.now()) }); return false; }
-  await tooLargeRemembered(() => call(ctx, 'PUT', '/slots', slots), () => saveState(ctx.db, { slots_hash: hash, slots_at: isoOf(ctx.now()) }));
+  await tooLargeRemembered(() => call(ctx, 'PUT', '/slots', slots),
+    () => saveState(ctx.db, { slots_hash: TOO_LARGE_MARK + hash, slots_at: isoOf(ctx.now()) }));
   saveState(ctx.db, { slots_hash: hash, slots_at: isoOf(ctx.now()) });
   return true;
 }
