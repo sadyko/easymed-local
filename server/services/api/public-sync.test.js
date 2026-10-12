@@ -439,3 +439,22 @@ test('проверка исправлений 8b, D: сервер после в�
   assert.equal(r.fake.state.inbox.length, 0);
   assert.equal(r.db.prepare('SELECT COUNT(*) AS n FROM api_requests').get().n, 1);
 });
+
+test('проверка исправлений 8b: неизменное время уходит раз в 15 минут — проверка «изменилось ли» раз в минуту не сдвигает срок повтора', async () => {
+  const r = rig();
+  let slots = 0;
+  const fetchImpl = async (url, o) => {
+    if (new URL(String(url)).pathname === '/_sync/v1/slots') slots += 1;
+    return r.opts.fetchImpl(url, o);
+  };
+  r.tick(localAt('2030-03-11', '19:00') - NOW);   // вечер: приём кончился, свободное время до полуночи не меняется
+  await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl });
+  assert.equal(slots, 1);
+  for (let m = 1; m <= 14; m += 1) { r.tick(60000); await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); }
+  assert.equal(slots, 1, 'до 15 минут — не шлётся');
+  r.tick(60000);
+  await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl });
+  assert.equal(slots, 2, 'через 15 минут — снова, хотя ничего не изменилось');
+  const st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.equal(st.state, 'ok');
+});

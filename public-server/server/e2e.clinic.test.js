@@ -175,3 +175,33 @@ test('настоящая клиника и настоящий публичный
   await sync();
   assert.equal((await partner('GET', '/shifo/v1/doctors')).status, 503, 'старая лицензия без отметки «не оплачено» не снимает её');
 });
+
+test('проверка исправлений 8b: здоровая клиника с неизменным временем — партнёр не видит stale вечером и ночью; клиника замолчала — stale', async (t) => {
+  const s = bookingSeed();
+  s.db.prepare('UPDATE api_connections SET scopes = ?, key_expires_at = NULL WHERE id = ?').run(JSON.stringify([...SCOPES]), s.connId);
+  const dataDir = tmpDir('em-pub-e2e-quiet-');
+  const keyPath = path.join(dataDir, SYNC_KEY_FILE);
+  const identity = loadSyncIdentity({ keyPath, create: true });
+  const vendor = testVendor();
+  fs.writeFileSync(path.join(dataDir, 'licence.dat'), signTestLicence(vendor, {
+    clinic_id: 'c-000777', clinic_name: 'Шифо', modules: [], valid_until: '2030-04-01T00:00:00Z', issued_at: '2030-03-10T00:00:00Z', nonce: 'q',
+    api_sync_key: identity.fingerprint }));
+  fs.writeFileSync(path.join(dataDir, 'control.json'), JSON.stringify({ clinic_id: 'c-000777' }));
+  const EVENING = localAt('2030-03-11', '19:00');   // приём кончился — свободное время до полуночи не меняется
+  const off = -new Date(EVENING).getTimezoneOffset();
+  let clock = EVENING;
+  const pub = testDb();
+  const { app } = createPublicServer({ db: pub.db, dataDir: pub.dir, now: () => clock, licencePublicKey: vendor.publicKey, offsetMin: off,
+    baseUrl: 'https://api.test', requireHttps: false, trustProxy: false, version: 'e2e' });
+  const server = await listen(app);
+  t.after(() => new Promise((r) => server.close(r)));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  const sync = () => syncOnce(s.db, dataDir, { fetchImpl: globalThis.fetch, env: { EASYMED_PUBLIC_URL: base }, now: () => clock, keyPath,
+    kekPath: s.kekPath, storageDir: path.join(dataDir, 'storage') });
+  const stale = async () => (await (await fetch(base + '/shifo/v1/slots?doctor_id=7', { headers: { Authorization: 'Bearer ' + s.key } })).json()).stale;
+  assert.equal((await sync()).ok, true);
+  for (let m = 1; m <= 50; m += 1) { clock += 60000; assert.equal((await sync()).ok, true); }   // 50 минут обычной работы, раз в минуту
+  assert.equal(await stale(), false, 'неизменное время клиника присылает раз в 15 минут — для партнёра оно свежее');
+  clock += 11 * 60000;   // клиника замолчала
+  assert.equal(await stale(), true, 'клиника молчит дольше 10 минут — stale');
+});

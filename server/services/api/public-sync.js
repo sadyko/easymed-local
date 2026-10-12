@@ -200,6 +200,14 @@ function stillTooLarge(storedHash, hash) {
   if (storedHash === TOO_LARGE_MARK + hash) throw new SyncFail('too_large');
 }
 
+// Проверка исправлений 8b (узкая): «когда проверяли, изменилось ли время» и
+// «когда время последний раз ушло на сервер» — разные мгновения. Проверка — раз
+// в минуту (в памяти процесса; после перезапуска — сразу), отправка неизменного —
+// раз в 15 минут по slots_at (последняя отправка). Прежде проверка сдвигала
+// slots_at, и неизменное время не уходило вовсе: вечером и ночью партнёры
+// видели stale (публичный сервер считает время несвежим через 35 минут).
+const slotsCheckedAt = new WeakMap();
+
 async function pushSnapshot(ctx, state) {
   const { snapshot, media } = buildSnapshot(ctx.db, { storageDir: ctx.storageDir, now: ctx.now() });
   const hash = contentHash(snapshot);
@@ -228,16 +236,18 @@ async function pushSnapshot(ctx, state) {
 }
 
 async function pushSlots(ctx, state, force) {
-  const due = force || !state.slots_at || ctx.now() - Date.parse(state.slots_at) >= SLOTS_EVERY_MS;
+  const checked = slotsCheckedAt.get(ctx.db);
+  const due = force || checked === undefined || ctx.now() - checked >= SLOTS_EVERY_MS;
   if (!due) {
     if (String(state.slots_hash || '').startsWith(TOO_LARGE_MARK)) throw new SyncFail('too_large');   // причина держится и между проверками
     return false;
   }
+  slotsCheckedAt.set(ctx.db, ctx.now());
   const slots = buildSlots(ctx.db, { now: ctx.now() });
   const hash = contentHash(slots);
   const stale = !state.slots_at || ctx.now() - Date.parse(state.slots_at) >= HEARTBEAT_MS;
+  if (hash === state.slots_hash && !stale) return false;
   if (!stale) stillTooLarge(state.slots_hash, hash);
-  if (hash === state.slots_hash && !stale) { saveState(ctx.db, { slots_at: isoOf(ctx.now()) }); return false; }
   await tooLargeRemembered(() => call(ctx, 'PUT', '/slots', slots),
     () => saveState(ctx.db, { slots_hash: TOO_LARGE_MARK + hash, slots_at: isoOf(ctx.now()) }));
   saveState(ctx.db, { slots_hash: hash, slots_at: isoOf(ctx.now()) });
