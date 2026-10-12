@@ -31,6 +31,9 @@ test('/_health — без ключа, только «жив»; /_metrics — б�
   assert.equal((await fetch(s.base + '/_metrics', { headers: { Authorization: 'Bearer wrong-TESTONLY' } })).status, 401);
   const m = await (await fetch(s.base + '/_metrics', { headers: { Authorization: 'Bearer m-TESTONLY' } })).json();
   assert.equal(m.clinics, 0);
+  for (const k of ['deliveries_queue_full', 'access_skipped_rate_limited', 'access_skipped_keyless', 'access_skipped_over_key_day', 'access_skipped_over_total']) {
+    assert.equal(m[k], 0, k + ' — ревью 8b, C6/C8: пропущенное считается');
+  }
   assert.ok(Object.values(m).every((v) => v === null || ['number', 'string'].includes(typeof v)), 'только числа и время');
   const off = await up();
   t.after(off.close);

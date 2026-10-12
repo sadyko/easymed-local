@@ -49,6 +49,8 @@ const bodyFor = (p) => (/^\/(?:snapshot|slots)\/?$/.test(p) ? BODY.big : /^\/med
  */
 export function syncRouter(ctx) {
   const r = express.Router();
+  // Пропущенные уведомления (очередь клиники полна — ревью 8b, C8): только счётчик для /_metrics.
+  if (!ctx.counters) ctx.counters = { queue_full: 0 };
   // Потолок по IP — ДО чтения тела: чужой без подписи не заставит сервер
   // принимать мегабайты в память раз за разом.
   r.use((req, res, next) => {
@@ -105,7 +107,11 @@ export function syncRouter(ctx) {
     const out = putMedia(ctx.db, ctx.dataDir, req.clinic.clinic_id, m[1], m[2], req.raw, ctx.now());
     return out.error ? sendError(req, res, out.error) : res.json({ ok: true });
   });
-  r.post('/events', withJson((req, body, now) => ({ payload: applyEvents(ctx.db, req.clinic.clinic_id, body.events, now) })));
+  r.post('/events', withJson((req, body, now) => {
+    const out = applyEvents(ctx.db, req.clinic.clinic_id, body.events, now);
+    if (out.queue_full) ctx.counters.queue_full = (ctx.counters.queue_full || 0) + out.queue_full;
+    return { payload: { accepted: out.accepted } };   // ответ протокола — как у поддельного сервера 8a
+  }));
   r.get('/inbox', (req, res) => {
     const id = req.clinic.clinic_id;
     const out = { items: inboxItems(ctx.db, id, req.query.after) };

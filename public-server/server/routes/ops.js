@@ -15,8 +15,12 @@ const sameToken = (a, b) => {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 
-/** Числа для наблюдения. */
-export function metrics(db, now, jobs = null) {
+/**
+ * Числа для наблюдения. extra — счётчики процесса (ревью 8b, C6 и C8):
+ * пропущенные уведомления (очередь клиники полна) и не записанные в журнал запросы.
+ */
+export function metrics(db, now, jobs = null, { counters = null, accessJournal = null } = {}) {
+  const skipped = accessJournal ? accessJournal.stats() : {};
   const n = (sql, ...args) => db.prepare(sql).get(...args).n;
   const day = isoOf(now - 86400000);
   return {
@@ -32,6 +36,11 @@ export function metrics(db, now, jobs = null) {
     access_24h: n('SELECT COUNT(*) AS n FROM access_log WHERE at >= ?', day),
     errors_5xx_24h: n('SELECT COUNT(*) AS n FROM access_log WHERE at >= ? AND status >= 500', day),
     rss_mb: Math.round(process.memoryUsage().rss / 1048576),
+    deliveries_queue_full: (counters && counters.queue_full) || 0,
+    access_skipped_rate_limited: skipped.rate_limited || 0,
+    access_skipped_keyless: skipped.keyless || 0,
+    access_skipped_over_key_day: skipped.over_key_day || 0,
+    access_skipped_over_total: skipped.over_total || 0,
     jobs: jobs ? jobs.status() : null,
   };
 }
@@ -47,7 +56,7 @@ export function opsRouter(ctx) {
     if (!ctx.metricsToken) return sendError(req, res, 'not_found');
     const m = /^Bearer\s+(\S+)$/i.exec(String(req.get('authorization') || ''));
     if (!m || !sameToken(m[1], ctx.metricsToken)) return sendError(req, res, 'invalid_key');
-    return res.json(metrics(ctx.db, ctx.now(), ctx.jobs || null));
+    return res.json(metrics(ctx.db, ctx.now(), ctx.jobs || null, { counters: ctx.counters || null, accessJournal: ctx.accessJournal || null }));
   });
   return r;
 }

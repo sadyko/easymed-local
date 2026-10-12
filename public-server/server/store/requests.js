@@ -32,6 +32,7 @@ import { sealFor } from '../../../server/services/api/sync-identity.js';
 import { EVENTS, webhookUrlProblem } from '../../../public/js/shared/api-connections.js';
 import { isoOf, msOf } from '../lib/time.js';
 import { DEFAULT_UNCOLLECTED_MAX_HOURS } from '../config.js';
+import { pendingCount, PENDING_PER_CLINIC_MAX } from './deliveries.js';
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -277,10 +278,16 @@ const SIGNATURE_RE = /^sha256=[0-9a-f]{64}$/;
  * байт). Тот же seq с другим содержимым — новое событие: клиника восстановила
  * свою базу из копии, и номера api_outbox пошли заново (ревью 8b, C2); иначе
  * подтверждения, отказы и отмены после восстановления пропадали бы молча.
- * @returns {{accepted:number[]}}
+ *
+ * Потолок очереди уведомлений клиники (ревью 8b, C8): ждёт доставки
+ * PENDING_PER_CLINIC_MAX — событие принимается и применяется (партнёр увидит
+ * статус в GET /requests/{id}), а уведомление пропускается и считается в queue_full.
+ * @returns {{accepted:number[], queue_full:number}}
  */
 export function applyEvents(db, clinicId, events, now) {
   const accepted = [];
+  let pending = null;
+  let queueFull = 0;
   const at = isoOf(now);
   const seen = db.prepare('SELECT identity FROM events_seen WHERE clinic_id = ? AND seq = ?');
   for (const e of Array.isArray(events) ? events.slice(0, 500) : []) {
@@ -300,6 +307,9 @@ export function applyEvents(db, clinicId, events, now) {
       const url = String(e.webhook_url || '');
       const signature = String(e.signature || '');
       if (!url || !SIGNATURE_RE.test(signature) || webhookUrlProblem(url)) return;
+      if (pending === null) pending = pendingCount(db, clinicId);
+      if (pending >= PENDING_PER_CLINIC_MAX) { queueFull += 1; return; }
+      pending += 1;
       db.prepare(`INSERT INTO deliveries (clinic_id, connection_id, request_id, event_id, event, url, body, signature, next_at, created_at, updated_at)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(clinicId, row ? row.connection_id : null, String(body.request_id || '') || null, String(body.event_id || '').slice(0, 64), e.event,
@@ -307,7 +317,7 @@ export function applyEvents(db, clinicId, events, now) {
     })();
     accepted.push(seq);
   }
-  return { accepted };
+  return { accepted, queue_full: queueFull };
 }
 
 /**

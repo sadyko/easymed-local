@@ -8,6 +8,7 @@ import { syncRouter } from './sync.js';
 import { createRequest } from '../store/requests.js';
 import { clinicRow } from '../store/clinics.js';
 import { recordAccess } from '../store/logs.js';
+import { PENDING_PER_CLINIC_MAX } from '../store/deliveries.js';
 import { testDb, testVendor, testClinic, serve, syncCall, signedHeaders, NOW } from '../test-helpers/fixture.js';
 import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { openSealed } from '../../../server/services/api/sync-identity.js';
@@ -139,4 +140,20 @@ test('C1: сжатое тело клиники — 415 без распаковк
   assert.deepEqual([events.status, events.json.error.code], [413, 'too_large'], 'события — до 1 МБ');
   const snap = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: pad } };
   assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', snap, { time })).json, { ok: true }, 'снимок — до 4 МБ');
+});
+
+test('ревью 8b, C8: очередь уведомлений клиники полна — ответ протокола прежний ({accepted}), пропуск считается', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const c = testClinic(vendor);
+  await syncCall(s.base, c, 'PUT', '/_sync/v1/keys', keys(c), { time });
+  s.db.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+                INSERT INTO deliveries (clinic_id, event_id, event, url, body, signature, next_at, created_at, updated_at)
+                SELECT ?, 'ev_' || i, 'booking.confirmed', 'https://med24.uz/h', '{}', 's', ?, ?, ? FROM n`)
+    .run(PENDING_PER_CLINIC_MAX, c.clinicId, time, time, time);
+  const body = JSON.stringify({ event_id: 'ev_x', event: 'booking.confirmed', request_id: 'rq_nonexistent00', status: 'booked' });
+  const r = await syncCall(s.base, c, 'POST', '/_sync/v1/events', { events: [{ seq: 7, event: 'booking.confirmed', status: 'booked', body,
+    webhook_url: 'https://med24.uz/hooks', signature: 'sha256=' + 'a'.repeat(64) }] }, { time });
+  assert.deepEqual(r.json, { accepted: [7] });
+  assert.equal(s.ctx.counters.queue_full, 1);
 });

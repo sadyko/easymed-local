@@ -11,6 +11,7 @@ import { openSealed } from '../../../server/services/api/sync-identity.js';
 import { parseInboxItem } from '../../../public/js/shared/api-booking.js';
 import { testDb, testVendor, testClinic, NOW } from '../test-helpers/fixture.js';
 import { isoOf } from '../lib/time.js';
+import { PENDING_PER_CLINIC_MAX } from './deliveries.js';
 
 const vendor = testVendor();
 const START = Date.parse('2030-03-12T05:00:00Z');
@@ -245,4 +246,20 @@ test('ревью 8b, C3: базу сервера восстановили или
   appt(s, { externalId: 'med-4', startAt: isoOf(START + 10800000) });
   const [next] = inboxItems(s.db, s.c.clinicId, '');
   assert.ok(Number(next.cursor) > Number(items[0].cursor), 'запуск с отставшими часами курсор не откатывает');
+});
+
+test('ревью 8b, C8: очередь уведомлений клиники полна — событие принято и применено, уведомление пропущено и сосчитано', () => {
+  const s = setup();
+  const a = appt(s).row;
+  s.db.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+                INSERT INTO deliveries (clinic_id, event_id, event, url, body, signature, next_at, created_at, updated_at)
+                SELECT ?, 'ev_' || i, 'booking.confirmed', 'https://med24.uz/h', '{}', 's', ?, ?, ? FROM n`)
+    .run(PENDING_PER_CLINIC_MAX, s.c.clinicId, isoOf(NOW), isoOf(NOW), isoOf(NOW));
+  const hook = { webhook_url: 'https://med24.uz/hooks', signature: 'sha256=' + 'a'.repeat(64) };
+  const r = applyEvents(s.db, s.c.clinicId, [event(1, a, 'booking.confirmed', 'booked', {}, hook)], NOW);
+  assert.deepEqual(r, { accepted: [1], queue_full: 1 });
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'booked', 'статус партнёру всё равно обновлён — он увидит его в GET /requests/{id}');
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, PENDING_PER_CLINIC_MAX, 'сверх потолка строк нет');
+  s.db.prepare("UPDATE deliveries SET state = 'delivered' WHERE id = 1").run();
+  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [event(2, a, 'booking.declined', 'declined', { reason: 'slot_taken' }, hook)], NOW), { accepted: [2], queue_full: 0 });
 });
