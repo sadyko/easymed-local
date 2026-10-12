@@ -264,10 +264,14 @@ export function ackInbox(db, clinicId, cursor, held, now) {
   return { ok: true, deleted };
 }
 
-/** Статус заявки по событию клиники (тело — белый список webhookBody клиники). */
+/**
+ * Статус заявки по событию клиники (тело — белый список webhookBody клиники).
+ * → {row, quiet}: quiet — уведомление партнёру не ставить: событие предлагает
+ * то, на что партнёр ответить уже не может (ревью 8b, C10).
+ */
 function applyStatus(db, clinicId, body, now) {
   const row = typeof body.request_id === 'string' ? requestRow(db, clinicId, body.request_id) : null;
-  if (!row || !PARTNER_STATUSES.includes(body.status)) return row;
+  if (!row || !PARTNER_STATUSES.includes(body.status)) return { row, quiet: false };
   const at = isoOf(now);
   // Партнёр уже отменил (или отказался от другого времени), а клиника, не дойдя
   // до этого в очереди, отпустила время («истекло» / отказ) или предложила другое
@@ -275,7 +279,10 @@ function applyStatus(db, clinicId, body, now) {
   // Итог клиники — записан, отменён, пришёл, не пришёл — сильнее.
   if (row.cancel_requested_at && row.status === 'cancelled' && !CLINIC_OUTCOMES.includes(body.status)) {
     touch(db, row.id, { answered_at: row.answered_at || at }, now);
-    return row;
+    // «Другое время» или «ждёт» партнёру, который уже отменил или отказался, —
+    // без уведомления: принять его нельзя (409 not_offered). «Истекло» и отказ —
+    // уходят, как прежде: они лишь подтверждают, что время свободно.
+    return { row, quiet: ['offered', 'pending'].includes(body.status) };
   }
   const iso = (v) => { const t = msOf(v); return t == null ? null : isoOf(t); };
   if (body.status === 'offered') {
@@ -288,7 +295,7 @@ function applyStatus(db, clinicId, body, now) {
     const answered = (it) => { try { return JSON.parse(it.data).offered_start; } catch { return null; } };
     if (row.status === 'pending' && accepts.some((it) => answered(it) === offered)) {
       touch(db, row.id, { answered_at: row.answered_at || at }, now);
-      return row;
+      return { row, quiet: true };   // партнёр уже согласился на это время — второго уведомления нет
     }
     const drop = db.prepare('DELETE FROM inbox WHERE cursor = ?');
     for (const it of accepts) if (answered(it) !== offered) drop.run(it.cursor);
@@ -302,7 +309,7 @@ function applyStatus(db, clinicId, body, now) {
   else Object.assign(fields, { offered_start: null, offer_until: null });
   if (body.status !== 'pending' && body.status !== 'offered') fields.hold_until = null;
   touch(db, row.id, fields, now);
-  return requestRow(db, clinicId, row.id);
+  return { row: requestRow(db, clinicId, row.id), quiet: false };
 }
 
 const SIGNATURE_RE = /^sha256=[0-9a-f]{64}$/;
@@ -343,7 +350,8 @@ export function applyEvents(db, clinicId, events, now) {
       let body = null;
       try { body = raw ? JSON.parse(raw) : null; } catch { body = null; }
       if (!body || typeof body !== 'object' || !EVENTS.includes(e.event) || body.event !== e.event) return;
-      const row = applyStatus(db, clinicId, body, now);
+      const { row, quiet } = applyStatus(db, clinicId, body, now);
+      if (quiet) return;
       const url = String(e.webhook_url || '');
       const signature = String(e.signature || '');
       if (!url || !SIGNATURE_RE.test(signature) || webhookUrlProblem(url)) return;

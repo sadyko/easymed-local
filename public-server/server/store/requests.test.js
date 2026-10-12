@@ -344,3 +344,27 @@ test('ревью 8b, C11: заявку, отданную клинике в GET, 
   assert.deepEqual([rb.status, rb.reason, rb.hold_until], ['pending', null, isoOf(NOW + DAY + 1800000)]);
   assert.ok(rb.delivered_at);
 });
+
+test('ревью 8b, C10: предложение клиники, не дошедшей до отмены или отказа партнёра, партнёру не уходит — ответить на него нельзя', () => {
+  const s = setup();
+  const hook = { webhook_url: 'https://med24.uz/hooks', signature: 'sha256=' + 'a'.repeat(64) };
+  const offer = (seq, row, start) => event(seq, row, 'booking.offered_other_time', 'offered', { offered_start: start, offer_until: isoOf(NOW + 1800000) }, hook);
+  const a = appt(s).row;
+  partnerCancel(s.db, a, NOW);
+  applyEvents(s.db, s.c.clinicId, [offer(1, a, '2030-03-12T07:00:00Z')], NOW + 1000);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 0, 'после отмены — без уведомления о предложении');
+  const b = appt(s, { externalId: 'med-2', startAt: isoOf(START + 3600000) }).row;
+  applyEvents(s.db, s.c.clinicId, [offer(2, b, '2030-03-12T08:00:00Z')], NOW);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 1, 'обычное предложение уведомляется');
+  partnerAnswerOffer(s.db, requestRow(s.db, s.c.clinicId, b.id), false, NOW + 1000);
+  applyEvents(s.db, s.c.clinicId, [offer(3, b, '2030-03-12T09:00:00Z')], NOW + 2000);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 1, 'после отказа — без уведомления о новом предложении');
+  const c = appt(s, { externalId: 'med-3', startAt: isoOf(START + 7200000) }).row;
+  applyEvents(s.db, s.c.clinicId, [offer(4, c, '2030-03-12T10:00:00Z')], NOW);
+  partnerAnswerOffer(s.db, requestRow(s.db, s.c.clinicId, c.id), true, NOW + 1000);
+  applyEvents(s.db, s.c.clinicId, [offer(5, c, '2030-03-12T10:00:00Z')], NOW + 2000);
+  assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE request_id = ?").get(c.id).n, 1,
+    'то же предложение, пока согласие на него в очереди, — второго уведомления нет');
+  applyEvents(s.db, s.c.clinicId, [event(6, a, 'booking.declined', 'expired', { reason: 'expired' }, hook)], NOW + 3000);
+  assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE request_id = ?").get(a.id).n, 1, '«истекло» после отмены уходит, как и прежде');
+});
