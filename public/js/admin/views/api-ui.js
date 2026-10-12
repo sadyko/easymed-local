@@ -49,11 +49,12 @@ export function shapeSettings(raw) {
 /**
  * API_DOCS_V1 — ссылка на документацию для партнёров (решение владельца 21): одна
  * публичная страница api.easymed.uz/docs на языке экрана, в новой вкладке. Своей
- * страницы документации в программе нет.
+ * страницы документации в программе нет. viewOk — открыть документацию не правка:
+ * рамка «только просмотр» (view-only.js) ссылку не перехватывает.
  */
 export function docsLink(variant = 'outline') {
   return h('a', { class: 'btn btn-' + variant + ' btn-sm', href: apiDocsUrl(getLang()), target: '_blank', rel: 'noopener noreferrer',
-    'data-apic-act': 'docs', title: 'Откроется в новой вкладке' }, Icon('Doc', { size: 14 }), ' ', 'Документация для партнёров');
+    'data-apic-act': 'docs', title: 'Откроется в новой вкладке', dataset: { viewOk: '1' } }, Icon('Doc', { size: 14 }), ' ', 'Документация для партнёров');
 }
 
 export async function copyText(text) {

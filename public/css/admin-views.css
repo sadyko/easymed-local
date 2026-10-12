@@ -7642,6 +7642,11 @@ table.list tr.is-off td { color: var(--ink-400); }
 .apic-stack { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
 .apic-body { padding: 16px 18px; display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
 .apic-card .card-header { flex-wrap: wrap; row-gap: 8px; }
+/* API_DOCS_V1 — шапка экрана со ссылкой «Документация для партнёров»: на телефоне
+   ссылка уходит под заголовок, а не за край (на 360 px страница была 435 px). */
+.apic > .page-head { flex-wrap: wrap; row-gap: 10px; }
+.apic > .page-head > div:first-child { flex: 1 1 260px; min-width: 0; }
+a.btn[data-apic-act="docs"] { text-decoration: none; }   /* ссылка-кнопка (шапка и окно «Что передать») — как остальные кнопки */
 .apic-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 /* ревью №2 — адрес API в поле только для чтения (secretField), замок рядом. */
 .apic-urlrow > .apic-keyfield { flex: 1 1 280px; min-width: 0; }

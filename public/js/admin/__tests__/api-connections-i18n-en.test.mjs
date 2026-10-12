@@ -10,7 +10,7 @@ import { mk, walk, onRpc, reset, tick, settingsFixture, KEY_VALUE, SECRET_VALUE 
 localStorage.setItem('admin.lang', 'en');   // после стенда (он ставит 'ru'), до видов: язык выбирается при загрузке i18n.js
 const { getLang } = await import('../i18n.js');
 const { renderApiConnections } = await import('../views/api-connections.js');
-const { openNewConnection, openHandover } = await import('../views/api-connection-new.js');
+const { openNewConnection, openHandover, handoverText } = await import('../views/api-connection-new.js');
 const { openConnectionCard } = await import('../views/api-connection-card.js');
 
 const CYR = /[А-Яа-яЁё]/;
@@ -79,4 +79,22 @@ test('en: отказ «филиал на сайте без адреса» — п
   assert.ok(text.includes('the building “Chilanzar”'), 'фраза сервера не переведена: ' + text.slice(0, 300));
   assert.ok(text.includes('Open “Branches”'));
   document.body.children.length = 0;
+});
+
+// API_DOCS_V1 — на английском экране ссылка ведёт на английскую страницу
+// документации, а «Скопировать всё» — с английскими строками и «<key>».
+test('en: документация — английская страница; «Скопировать всё» — Documentation и Check the key с <key>', async () => {
+  reset();
+  const fx = fixture();
+  onRpc('api_settings_get', () => fx);
+  onRpc('api_journal_list', () => []);
+  const root = mk('div');
+  await renderApiConnections(root, {});
+  await tick();
+  const a = walk(root).find((n) => n.attrs && n.attrs['data-apic-act'] === 'docs');
+  assert.deepEqual([a.attrs.href, a.attrs.title], ['https://api.easymed.uz/docs/en', 'Opens in a new tab']);
+  const text = handoverText({ clinic: 'Clinic Demo', baseUrl: fx.base_url, key: KEY_VALUE, secret: '', scopes: ['clinic'] });
+  assert.ok(text.includes('Documentation: https://api.easymed.uz/docs/en'));
+  assert.ok(text.includes('Check the key: curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <key>"'));
+  assert.ok(!/[А-Яа-яЁё]/.test(text), 'кириллица в тексте для отправки: ' + text);
 });

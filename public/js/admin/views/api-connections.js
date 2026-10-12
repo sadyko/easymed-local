@@ -17,7 +17,7 @@ import { h, Icon, PageHead, Tag, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { refreshClinicBrand } from '../clinic-context.js';
 import { API_HOST, KIND_INFO, normalizeSlug, slugProblem } from '../../shared/api-connections.js';
-import { rpc, shapeSettings, copyText, secretField, permChips, expiryTag, journalTable, addressBlock } from './api-ui.js';
+import { rpc, shapeSettings, copyText, secretField, permChips, expiryTag, journalTable, addressBlock, docsLink } from './api-ui.js';
 import { openNewConnection } from './api-connection-new.js';
 import { openConnectionCard } from './api-connection-card.js';
 
@@ -32,7 +32,8 @@ export async function renderApiConnections(container, { onNavigate = null, paylo
   refs = { root: h('div', { class: 'fade-in apic' }), body: h('div', { class: 'apic-stack' }), onNavigate };
   state.editSlug = false;
   container.appendChild(refs.root);
-  refs.root.appendChild(PageHead({ title: 'API и подключения', subtitle: SUBTITLE }));
+  // API_DOCS_V1 — документация для партнёров: публичная страница, не экран программы (решение владельца 21).
+  refs.root.appendChild(PageHead({ title: 'API и подключения', subtitle: SUBTITLE, right: docsLink() }));
   refs.root.appendChild(refs.body);
   // CLINIC_API_STEP7_V1 (ревью №3) — оболочка держит экран в кэше и второй раз его
   // не рисует: следующий переход с connection_id приходит сюда. Список

@@ -306,3 +306,48 @@ test('«Компания: Просмотр»: кнопки нет — строк
     assert.ok(textOf(root).includes('Адрес для партнёров заполняет администратор или тот, кому выдано изменение «Компании».'));
   } finally { perms.setFullAccess('Admin'); }
 });
+
+// API_DOCS_V1 — решение владельца 21: документация — публичная страница
+// api.easymed.uz/docs; экран даёт на неё ссылку в шапке, своей страницы нет.
+test('API_DOCS_V1: в шапке — «Документация для партнёров» в новой вкладке; у администратора, на «Просмотре» и в филиале', async () => {
+  for (const over of [{}, { can: { view: true, edit: false, admin: false } }, { building_role: 'secondary' }]) {
+    reset();
+    const root = await open(over);
+    const a = byAttr(root, 'data-apic-act', 'docs');
+    assert.equal(a.length, 1, JSON.stringify(over));
+    assert.deepEqual([a[0].tagName, a[0].attrs.href, a[0].attrs.target, a[0].attrs.rel, a[0].className],
+      ['A', 'https://api.easymed.uz/docs', '_blank', 'noopener noreferrer', 'btn btn-outline btn-sm']);
+    assert.ok(textOf(a[0]).includes('Документация для партнёров'));
+    assert.ok(!rpcNames().some((n) => /doc/i.test(n)), 'документацию программа у своего сервера не спрашивает');
+  }
+});
+
+// API_DOCS_V1 — на «Просмотре» оболочка монтирует экран в рамке «только просмотр»
+// (view-only.js): открыть документацию — не правка, ссылка помечена viewOk, как
+// «Скопировать» и «Открыть «Компанию»», и рамка её не глотает.
+test('API_DOCS_V1: рамка «только просмотр» не глотает «Документация для партнёров»', async () => {
+  reset();
+  const { perms, root, host } = await pageInFrame({ 'settings.company': 'view' });
+  try {
+    assert.ok(String(host.className).includes('is-view-only'), 'стенд не тот: экран не в рамке');
+    const a = byAttr(root, 'data-apic-act', 'docs')[0];
+    assert.ok(a, 'нет ссылки на документацию в рамке');
+    assert.equal(a.dataset.viewOk, '1', 'ссылку на документацию перехватит рамка «только просмотр»');
+    let stopped = false;
+    let prevented = false;
+    const ev = { type: 'click', target: a, currentTarget: host, preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } };
+    for (const fn of host._l.click || []) fn(ev);   // перехват рамки идёт первым (capture)
+    assert.deepEqual([stopped, prevented], [false, false], 'рамка «только просмотр» проглотила ссылку на документацию');
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+// API_DOCS_V1 — ширина телефона: шапка .page-head не переносится, и на 360 px ссылка
+// «Документация для партнёров» уходила за край (страница 435 px, Chromium). Шапка
+// экрана переносит ссылку под заголовок; колонка заголовка не шире родителя.
+test('API_DOCS_V1, телефон: шапка экрана переносит «Документация для партнёров» под заголовок', async () => {
+  const fs = await import('node:fs');
+  const css = fs.readFileSync(new URL('../../../css/admin-views.css', import.meta.url), 'utf8');
+  assert.match(css, /\n\.apic > \.page-head \{[^}]*flex-wrap: wrap/, 'шапка не переносит ссылку на документацию');
+  assert.match(css, /\n\.apic > \.page-head > div:first-child \{[^}]*min-width: 0/, 'колонка заголовка шире родителя на телефоне');
+  assert.match(css, /\na\.btn\[data-apic-act="docs"\] \{[^}]*text-decoration: none/, 'ссылка-кнопка подчёркнута, как текстовая ссылка');
+});
