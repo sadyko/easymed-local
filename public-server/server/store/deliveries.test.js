@@ -3,7 +3,8 @@
 // попыток для клиники.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deliverDue, purgeDeliveries, RETRY_MINUTES, createHostBreaker, pendingCount, PENDING_PER_CLINIC_MAX } from './deliveries.js';
+import { deliverDue, purgeDeliveries, RETRY_MINUTES, MAX_ATTEMPTS, DELIVERY_WINDOW_MS, createHostBreaker, endpointOf, pendingCount, PENDING_PER_CLINIC_MAX }
+  from './deliveries.js';
 import { applyEvents } from './requests.js';
 import { admitClinic } from './clinics.js';
 import { deliveryLogSince } from './logs.js';
@@ -102,10 +103,8 @@ test('честная очередь: 40 уведомлений одной кли
   const sent = [];
   const r = await deliverDue(db, { now: NOW, send: tarpitSend(sent), breaker: createHostBreaker() });
   assert.ok(sent.includes(HEALTHY), 'чужая клиника — в первой же волне');
-  assert.equal(sent.filter((u) => u === TARPIT).length, 1, 'на зависший адрес — одна настоящая отправка');
+  assert.equal(sent.filter((u) => u === TARPIT).length, 2, 'на зависший адрес — не больше двух отправок за волну (потолок адреса)');
   assert.deepEqual(r, { attempts: 3, delivered: 1, failed: 0, retrying: 2 });
-  assert.deepEqual(db.prepare("SELECT last_error AS e FROM deliveries WHERE url = ? AND attempts = 1 ORDER BY id").all(TARPIT).map((x) => x.e),
-    ['timeout', 'host_down'], 'второе на тот же адрес — без отправки, попытка засчитана');
 });
 
 test('честная очередь внутри клиники: её же другой партнёр не ждёт, пока разберётся зависший', async () => {
@@ -117,18 +116,38 @@ test('честная очередь внутри клиники: её же др�
   assert.ok(sent.includes(HEALTHY));
 });
 
-test('отказавший адрес отдыхает минуту без отправок, его попытки идут своим чередом; потом снова пробуем', async () => {
+test('отказавший адрес: две неудачи подряд — отдых без отправок; отсрочка не тратит попыток; отдых растёт 15 → 30 с', async () => {
   const { db } = testDb();
   queue(db, 'c-a', TARPIT, 10, NOW - 60000);
   const breaker = createHostBreaker();
   const sent = [];
   await deliverDue(db, { now: NOW, send: tarpitSend(sent), breaker });
-  assert.equal(sent.length, 1);
+  assert.equal(sent.length, 2, 'две неудачи подряд — адрес отдыхает');
   const r2 = await deliverDue(db, { now: NOW + 5000, send: tarpitSend(sent), breaker });
-  assert.equal(sent.length, 1, 'через 5 секунд — ни одной отправки на отказавший адрес');
-  assert.equal(r2.attempts, 8, 'все подошедшие строки отдыхающего хоста — попыткой без отправки, по своему расписанию, а не по две за волну');
-  await deliverDue(db, { now: NOW + 61000, send: tarpitSend(sent), breaker });
-  assert.equal(sent.length, 2, 'через минуту — снова одна настоящая попытка');
+  assert.equal(sent.length, 2, 'в отдых — ни одной отправки');
+  assert.deepEqual([r2.attempts, r2.retrying], [0, 8], 'подошедшие строки отложены до конца отдыха — попытки не тратятся (проверка исправлений 8b, A)');
+  assert.deepEqual(db.prepare('SELECT attempts, last_error, next_at FROM deliveries WHERE id = 3').get(),
+    { attempts: 0, last_error: 'host_down', next_at: isoOf(NOW + 15000) });
+  assert.equal((await deliverDue(db, { now: NOW + 10000, send: tarpitSend(sent), breaker })).retrying, 0, 'в отдых ничего не подходит');
+  await deliverDue(db, { now: NOW + 15000, send: tarpitSend(sent), breaker });
+  assert.equal(sent.length, 3, 'после отдыха — одна попытка; снова неудача — снова отдых');
+  assert.equal(db.prepare('SELECT next_at FROM deliveries WHERE id = 4').get().next_at, isoOf(NOW + 45000), 'второй отдых — 30 с');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM delivery_log WHERE error = 'host_down'").get().n, 8, 'в журнал — одна строка на переход строки в отсрочку');
+});
+
+test('случайный обрыв у живого адреса не отправляет его отдыхать; первый ответ сбрасывает счёт неудач', () => {
+  const b = createHostBreaker();
+  b.fail('h:443', NOW);
+  assert.equal(b.isDown('h:443', NOW), false);
+  b.ok('h:443');
+  b.fail('h:443', NOW);
+  assert.equal(b.isDown('h:443', NOW), false, 'после ответа — снова с нуля');
+  b.fail('h:443', NOW);
+  assert.deepEqual([b.isDown('h:443', NOW + 14999), b.until('h:443')], [true, NOW + 15000]);
+  b.fail('h:443', NOW);
+  b.fail('h:443', NOW);
+  b.fail('h:443', NOW);
+  assert.equal(b.until('h:443'), NOW + 60000, 'отдых — не больше минуты');
 });
 
 test('одновременно — не больше четырёх отправок и не больше одной на адрес; волна берёт всех по очереди', async () => {
@@ -158,4 +177,56 @@ test('для приёма событий: сколько у клиники жд�
   db.prepare("UPDATE deliveries SET state = 'delivered' WHERE id = 1").run();
   assert.equal(pendingCount(db, 'c-a'), 2);
   assert.ok(PENDING_PER_CLINIC_MAX >= 1000);
+});
+
+// ── Отдых хоста — отсрочка, а не попытка (проверка исправлений 8b, A) ──
+const PARTNER = 'https://hooks.partner.uz/easymed';
+function seeded(seed) {
+  let s = seed;
+  return () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
+}
+async function simulate(db, { minutes, feedMinutes, perMin, send, url = () => PARTNER, clinics = 4 }) {
+  const breaker = createHostBreaker();
+  const ins = db.prepare(`INSERT INTO deliveries (clinic_id, connection_id, event_id, event, url, body, signature, next_at, created_at, updated_at)
+                          VALUES (?, 1, ?, 'booking.offered_other_time', ?, '{}', ?, ?, ?, ?)`);
+  let n = 0;
+  for (let now = NOW; now < NOW + minutes * 60000; now += 5000) {
+    if (now < NOW + feedMinutes * 60000 && (now - NOW) % 60000 === 0) {
+      for (let i = 0; i < perMin; i += 1) { const c = 'c' + (n % clinics); ins.run(c, 'ev' + n, url(c), SIG, isoOf(now), isoOf(now), isoOf(now)); n += 1; }
+    }
+    await deliverDue(db, { now, send, breaker });
+  }
+  const by = (s) => db.prepare('SELECT COUNT(*) AS n FROM deliveries WHERE state = ?').get(s).n;
+  return { total: n, delivered: by('delivered'), failed: by('failed'), pending: by('pending') };
+}
+
+test('случайные обрывы у партнёра (1 из 8) при 12 уведомлениях в минуту: отдых не сжигает попытки — всё доставлено', async () => {
+  const { db } = testDb();
+  const rnd = seeded(7);
+  const r = await simulate(db, { minutes: 240, feedMinutes: 120, perMin: 12, send: async () => (rnd() < 1 / 8 ? { status: 0, error: 'timeout' } : { status: 200 }) });
+  assert.deepEqual(r, { total: 1440, delivered: 1440, failed: 0, pending: 0 });
+});
+
+test('всегда лежащий адрес: строки кончаются «не доставлено» по возрасту — не позже окна расписания 1/5/10/30/60', async () => {
+  const { db } = testDb();
+  let sends = 0;
+  const r = await simulate(db, { minutes: 180, feedMinutes: 10, perMin: 5, send: async () => { sends += 1; return { status: 0, error: 'connect' }; } });
+  assert.deepEqual(r, { total: 50, delivered: 0, failed: 50, pending: 0 });
+  const life = db.prepare('SELECT MAX(julianday(updated_at) - julianday(created_at)) * 1440 AS m FROM deliveries').get().m;
+  assert.ok(life <= DELIVERY_WINDOW_MS / 60000 + 2, 'дольше окна не живёт: ' + life);
+  assert.ok(sends <= 200, 'отправок на лежащий адрес — около одной в минуту отдыха, а не по каждой строке: ' + sends);
+  const perRow = db.prepare("SELECT MAX(n) AS m FROM (SELECT delivery_id, COUNT(*) AS n FROM delivery_log WHERE error = 'host_down' GROUP BY delivery_id)").get().m;
+  assert.ok(perRow <= MAX_ATTEMPTS + 1, 'строк «host_down» в журнале на доставку — не больше попыток: ' + perRow);
+});
+
+test('неверный порт одной клиники на хосте партнёра не усыпляет сам адрес партнёра для других клиник', async () => {
+  const { db } = testDb();
+  const BAD = 'https://hooks.partner.uz:8443/x';
+  const r = await simulate(db, { minutes: 150, feedMinutes: 30, perMin: 4, url: (c) => (c === 'c0' ? BAD : PARTNER),
+    send: async ({ url }) => (url === BAD ? { status: 0, error: 'timeout' } : { status: 200 }) });
+  assert.equal(r.failed, 30, 'не доходят только уведомления с неверным портом');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE url = ? AND state = 'delivered' AND attempts = 1").get(PARTNER).n, 90);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM delivery_log l JOIN deliveries d ON d.id = l.delivery_id WHERE d.url = ? AND l.error = 'host_down'").get(PARTNER).n, 0);
+  assert.equal(endpointOf(BAD), 'hooks.partner.uz:8443');
+  assert.equal(endpointOf(PARTNER), 'hooks.partner.uz:443');
 });
