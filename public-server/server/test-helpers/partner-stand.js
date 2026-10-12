@@ -56,8 +56,13 @@ export function slotsFixture(at = NOW) {
 
 export const SCOPES_ALL = ['clinic', 'branches', 'doctors', 'services', 'packages', 'slots', 'requests', 'appointments', 'cancel'];
 
-/** Стенд: { base, db, key, clock, setClock, conn(over), close, clinicId }. */
-export async function partnerStand({ scopes = SCOPES_ALL, connection = {}, requireHttps = false, trustProxy = false, limiter = createLimiter() } = {}) {
+/**
+ * Стенд: { base, db, key, clock, setClock, conn(over), close, clinicId }.
+ * API_DOCS_V1 — snapshot, slots, baseUrl: мир примеров документации
+ * (test-helpers/docs-world.js) вместо мира тестов 8b.
+ */
+export async function partnerStand({ scopes = SCOPES_ALL, connection = {}, requireHttps = false, trustProxy = false, limiter = createLimiter(),
+  snapshot = snapshotFixture(), slots = slotsFixture(), baseUrl = 'https://api.test' } = {}) {
   const { db, dir } = testDb();
   const vendor = testVendor();
   const clinic = testClinic(vendor);
@@ -73,9 +78,9 @@ export async function partnerStand({ scopes = SCOPES_ALL, connection = {}, requi
     saveKeys(db, clinic.clinicId, { generated_at: isoOf(keysAt), box_key: clinic.identity.boxPublic, connections: [conn(over)] }, keysAt);
   };
   setConnection({});
-  saveSnapshot(db, clinic.clinicId, snapshotFixture(), NOW);
-  saveSlots(db, clinic.clinicId, slotsFixture(), NOW);
-  const ctx = { db, dataDir: dir, now: () => clock, offsetMin: OFFSET, baseUrl: 'https://api.test', requireHttps, limiter };
+  saveSnapshot(db, clinic.clinicId, snapshot, NOW);
+  saveSlots(db, clinic.clinicId, slots, NOW);
+  const ctx = { db, dataDir: dir, now: () => clock, offsetMin: OFFSET, baseUrl, requireHttps, limiter };
   const srv = await serve('/:slug/v1', partnerRouter(ctx), { trustProxy });
   const get = (p, { headers = {}, auth = true } = {}) =>
     fetch(srv.base + p, { headers: { ...(auth ? { Authorization: 'Bearer ' + key } : {}), ...headers } });
