@@ -41,7 +41,7 @@
 | Р5 | **Ключей на странице нет:** в командах — переменная оболочки `$EASYMED_KEY`, в тексте — обрезанные `em_live_…` / `em_whsec_…`. Подпись уведомления в примере посчитана секретом `example-secret` (не похож на секрет программы) — проверочный пример для кода партнёра. Страж страницы ищет всё, что похоже на ключ (`KEY_RE`, `SECRET_RE`, `em_…` от 8 знаков), страж репозитория `no-real-api-keys` — как прежде. | Правило шага 7: ключ не лежит в исходниках; публичная страница — тем более. |
 | Р6 | **Страница:** HTML5, `lang`, один `h1`, разделы `section` + `h2` с якорями, адреса — `h3`, «Перейти к тексту», таблицы с `th scope="col"` в прокручиваемой обёртке (`role="region"`, `tabindex="0"`), код — `pre tabindex="0"`; сетка `minmax(0,1fr)` (на 320 px ничего не вылезает — проверено), содержание сбоку от 960 px; шкала шрифтов программы; контраст ≥ 4.5:1 в светлой и тёмной теме; `@media print` без навигации, со ссылками в скобках. Заголовки: `Cache-Control: public, max-age=300`, ETag (express), `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `Content-Language`. Страница строится при первом запросе языка (~2 мс) и держится в памяти (80–90 КБ на язык). | «Самодостаточная, без CDN, без JS, доступная, с телефона, на печать». Ошибка построения страницы — `500` только у `/docs`, а не падение службы при запуске. Новая страница видна не позже чем через 5 минут после выпуска. |
 | Р7 | **Срок не забранной заявки — из настроек службы:** `createPublicServer` получает `uncollectedMaxMs` (из `PUBLIC_UNCOLLECTED_MAX_HOURS`, `index.js`), страница называет его («24 часа» → «48 часов», если поменяли). Адрес в командах и ссылках ответов — `ctx.baseUrl` (`PUBLIC_BASE_URL`). | Страница описывает **этот** сервер, а не умолчание. |
-| Р8 | **Программа клиники:**<br>• `shared/api-connections.js`: `API_DOCS_PATH`, `API_DOCS_URL`, `apiDocsUrl(lang)` (`/docs`, `/docs/uz`, `/docs/en`), `curlCommand()` — одна форма команды на страницу и «Скопировать всё»;<br>• шапка «API и подключения» — ссылка-кнопка «Документация для партнёров» (`Icon('Doc')`, новая вкладка, `rel="noopener noreferrer"`) — у любого права и в филиале;<br>• окно «Что передать подключению» — та же ссылка в «Что ещё знать»;<br>• текст «Скопировать всё» — строки «Документация: …» (страница на языке экрана) и «Проверить ключ: curl …» с подстановкой `<ключ>`; адрес — первый открытый ключу раздел чтения (`clinic`, `branches`, `doctors`, `services`, `packages`), иначе `reference/specialties` (открыт любому ключу). | Решение 21 и пункты шага 7. Правило шага 7 о секрете не меняется: ключ — только своей строкой «Ключ: …» (её копирует сам администратор кнопкой «Скопировать всё»); команду пересылают и вставляют в чаты и терминалы — в ней ключа нет. Команда в одну строку работает и в bash, и в cmd Windows. |
+| Р8 | **Программа клиники:**<br>• `shared/api-connections.js`: `API_DOCS_PATH`, `API_DOCS_URL`, `apiDocsUrl(lang)` (`/docs`, `/docs/uz`, `/docs/en`), `curlCommand()` — одна форма команды на страницу и «Скопировать всё»;<br>• шапка «API и подключения» — ссылка-кнопка «Документация для партнёров» (`Icon('Doc')`, новая вкладка, `rel="noopener noreferrer"`) — у любого права и в филиале;<br>• окно «Что передать подключению» — та же ссылка в «Что ещё знать»;<br>• текст «Скопировать всё» — строки «Документация: …» (страница на языке экрана) и «Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): curl …» с подстановкой `<ключ>`; адрес — первый открытый ключу раздел чтения (`clinic`, `branches`, `doctors`, `services`, `packages`), иначе `reference/specialties` (открыт любому ключу). | Решение 21 и пункты шага 7. Правило шага 7 о секрете не меняется: ключ — только своей строкой «Ключ: …» (её копирует сам администратор кнопкой «Скопировать всё»); команду пересылают и вставляют в чаты и терминалы — в ней ключа нет. Команда в одну строку работает в bash, zsh, cmd и PowerShell 7. В Windows PowerShell 5.1 (терминал Windows по умолчанию) curl — это Invoke-WebRequest: там пишут curl.exe; строка «Проверить ключ» говорит это (ревью шага 9, п. 7). |
 | Р9 | **Где страница не повторяет макет** (описан сервер):<br>• онлайн-запись — всегда `pending` без `hold_until`; срок держания (30 минут по часам работы клиники) появляется, когда клиника приняла заявку (решения 18–19); «сразу `booked`» нет (шаг 7, пункт 11);<br>• отмена записанной — `booked` с `cancel_requested: true`, пока клиника не отменит визит;<br>• события — все семь словаря шага 7, со статусом и полями, которые шлёт клиника; статусы — с `offered`, `declined`, `expired`, `closed`; причины;<br>• `503` — «клиника временно недоступна», без «не продлена»;<br>• `occurred_at` уведомления — в UTC (так шлёт клиника);<br>• `no_show` партнёрам сейчас не сообщается, `arrived` — только с включённым событием (сказано прямо);<br>• поля пациента — объектом `patient` (верхний уровень тоже принимается — сказано). | Требование задачи: где сервер и макет расходятся, документация — о сервере. Каждое такое место держит страж (примеры и пробы на настоящем сервере, сверка с кодом клиники). |
 | Р10 | **nginx (`DEPLOY.md`):** по `http` только `/docs`, `/docs/uz`, `/docs/en` перенаправляются на `https` (`301`); всё прочее по `http` — по-прежнему `444`. Проверка после установки — две строки `curl -sI`. | Ссылку набирают руками; ключей на этих адресах нет. |
 | Р11 | **Контакт Easy-Med** на странице — постоянная `DOCS_CONTACT` (`hello@easymed.uz`, этот адрес уже есть в программе). | Вопрос владельцу 1: какой адрес показать разработчикам партнёров. Смена — одна строка. |
@@ -287,7 +287,7 @@ diff --git a/public/js/shared/api-connections.test.js b/public/js/shared/api-con
 diff --git a/public/js/shared/api-connections.js b/public/js/shared/api-connections.js
 --- a/public/js/shared/api-connections.js
 +++ b/public/js/shared/api-connections.js
-@@ -258,3 +258,29 @@ export function keyExpiryState(expiresAt, now = Date.now()) {
+@@ -258,3 +258,33 @@ export function keyExpiryState(expiresAt, now = Date.now()) {
    if (t <= now) return 'expired';
    return t - now <= EXPIRY_WARN_DAYS * 86400000 ? 'soon' : 'ok';
  }
@@ -310,7 +310,11 @@ diff --git a/public/js/shared/api-connections.js b/public/js/shared/api-connecti
 + * Команда curl к API клиники — одна форма на документацию и «Скопировать всё».
 + * key — то, что встанет после «Bearer »: подстановка ($EASYMED_KEY, <ключ>), а
 + * не сам ключ. body — объект, уходит JSON. Многострочная — для bash
-+ * (документация); oneLine — в одну строку: GET без тела понимают и bash, и cmd.
++ * (документация); oneLine — в одну строку: GET без тела понимают bash, zsh, cmd
++ * и PowerShell 7. В Windows PowerShell 5.1 (терминал Windows по умолчанию)
++ * «curl» — это Invoke-WebRequest, и строка падает на -H ещё до запроса: там
++ * пишут curl.exe. Команда остаётся «curl» (curl.exe нет на macOS и Linux), а
++ * «Скопировать всё» говорит про curl.exe в строке «Проверить ключ» (ревью шага 9, п. 7).
 + */
 +export function curlCommand({ method = 'GET', url, key, body = undefined, oneLine = false } = {}) {
 +  const parts = ['curl' + (method === 'GET' ? '' : ' -X ' + method) + ' "' + url + '"', '-H "Authorization: Bearer ' + key + '"'];
@@ -320,7 +324,7 @@ diff --git a/public/js/shared/api-connections.js b/public/js/shared/api-connecti
 ```
 
 - [ ] **Step 4:** `node --test public/js/shared/api-connections.test.js` → **12 тестов** зелёные (и с `force-en.mjs`); сторожа А — зелёные.
-- [ ] **Step 5: коммит** «Документация API для партнёров: адрес публичной страницы api.easymed.uz/docs и её языков, одна форма команды curl для страницы и «Скопировать всё» — подстановка вместо ключа, тело JSON с апострофом для bash, одна строка для bash и cmd» — оба файла (точным блобом, если в клоне правят и другие шаги).
+- [ ] **Step 5: коммит** «Документация API для партнёров: адрес публичной страницы api.easymed.uz/docs и её языков, одна форма команды curl для страницы и «Скопировать всё» — подстановка вместо ключа, тело JSON с апострофом для bash, одна строка для bash и cmd» — оба файла. *(Коммит `fd6b7632` вышел с этой формулировкой; ревью шага 9, п. 7 уточнило: одна строка работает в bash, zsh, cmd и PowerShell 7, в Windows PowerShell 5.1 — curl.exe, и «Проверить ключ» это говорит — `9e66a223`.)* (точным блобом, если в клоне правят и другие шаги).
 
 ---
 
@@ -1057,7 +1061,7 @@ export const SECTIONS = Object.freeze([
 ]);
 ```
 
-- [ ] **Step 5:** `node --test public-server/server/docs/drift.test.js` → **10 тестов** зелёные (и с `force-en.mjs`); сторожа А — зелёные.
+- [ ] **Step 5:** `node --test public-server/server/docs/drift.test.js` → **10 тестов** (после ревью шага 9 — **12**: переходы статусов, цифры руками) зелёные (и с `force-en.mjs`); сторожа А — зелёные.
 - [ ] **Step 6: проверка поломкой** (ничего не коммитить, после — вернуть файл как был, `git diff --stat` пуст по этим файлам): в `routes/partner-read.js` перед `r.get('/reference/geo'` вписать `r.get('/news', scope('clinic'), (req, res) => res.json({}));` → тест «адреса» красный; в `lib/errors.js` добавить код `holiday` → тест «коды ошибок» красный. Вернуть оба файла правкой назад (не `git checkout`).
 - [ ] **Step 7: коммит** «Документация API: текст страницы на ru / uz / en и её числа из постоянных сервера; страж — адреса сервера партнёров, права, статусы, причины, события (как их шлёт клиника), коды ошибок, причины полей и ритм клиники — те же, что в коде; пример проверки подписи принимает подпись клиники» — три файла.
 
@@ -1915,7 +1919,7 @@ const CSS = [
 ].join('');
 ```
 
-- [ ] **Step 4:** `node --test public-server/server/docs/render.test.js public-server/server/docs/page-curl.http.test.js` → **10 тестов** зелёные (и с `force-en.mjs`); сторожа А — зелёные.
+- [ ] **Step 4:** `node --test public-server/server/docs/render.test.js public-server/server/docs/page-curl.http.test.js` → **10 тестов** (после полировки таблиц и ревью шага 9 — **12**) зелёные (и с `force-en.mjs`); сторожа А — зелёные.
 - [ ] **Step 5: посмотреть глазами** — сохранить три страницы и открыть в браузере (Chrome, Edge):
   - `node --input-type=module -e "import { renderDocs } from './public-server/server/docs/render.js'; import fs from 'node:fs'; for (const l of ['ru','uz','en']) fs.writeFileSync(process.env.TEMP + '/easymed-docs-' + l + '.html', renderDocs({ lang: l }));"` — из корня клона;
   - ширина 1280 и 390 (инструменты разработчика, режим телефона), светлая и тёмная тема, «Печать» → предпросмотр: ничего не вылезает по ширине, таблицы прокручиваются внутри рамки, код — тоже;
@@ -2178,7 +2182,7 @@ diff --git a/public-server/DEPLOY.md b/public-server/DEPLOY.md
 ````
 
 - [ ] **Step 6:** `node --check public-server/server/index.js` → без вывода; `node --test public-server/server/routes/docs.http.test.js public-server/server/app.test.js public-server/server/e2e.clinic.test.js` → **11 тестов** зелёные (4 новых; приложение — 5 и сквозной прогон 8b — 2, как прежде; на `e8f4ead3` сквозной прогон был одним тестом — 10); с `force-en.mjs` — то же; сторожа А — зелёные.
-- [ ] **Step 7: все тесты службы** — из корня клона (bash): `node --test $(git ls-files -co --exclude-standard public-server | grep '\.test\.js$')` → **161 тест** в 28 файлах (132 теста 8b + 29 новых; на `e8f4ead3` — 160), зелёные и с `force-en.mjs`.
+- [ ] **Step 7: все тесты службы** — из корня клона (bash): `node --test $(git ls-files -co --exclude-standard public-server | grep '\.test\.js$')` → **161 тест** в 28 файлах (132 теста 8b + 29 новых; на `e8f4ead3` — 160; после полировки таблиц и ревью шага 9 — **165**), зелёные и с `force-en.mjs`.
 - [ ] **Step 8: коммит** «Документация API: адрес https://api.easymed.uz/docs на публичном сервере — русская по умолчанию, /docs/uz и /docs/en, один адрес на страницу (/docs/ru и ?lang — 301), без ключа, кэш 5 минут с ETag, CSP без скриптов; адрес сервера и срок не забранной заявки — из настроек службы; nginx: http /docs ведёт на https» — пять файлов.
 
 ---
@@ -2220,8 +2224,8 @@ diff --git a/public/js/admin/__tests__/api-connection-new.test.mjs b/public/js/a
 +  const base = { clinic: 'Клиника Демо', baseUrl: 'https://api.easymed.uz/klinika-demo/v1/', key: KEY_VALUE, secret: '' };
 +  const lines = handoverText({ ...base, scopes: ['doctors', 'slots', 'appointments'] }).split('\n');
 +  assert.ok(lines.includes('Документация: https://api.easymed.uz/docs'));
-+  const cmd = lines.filter((l) => l.startsWith('Проверить ключ: '));
-+  assert.deepEqual(cmd, ['Проверить ключ: curl "https://api.easymed.uz/klinika-demo/v1/doctors" -H "Authorization: Bearer <ключ>"']);
++  const cmd = lines.filter((l) => l.startsWith('Проверить ключ'));
++  assert.deepEqual(cmd, ['Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): curl "https://api.easymed.uz/klinika-demo/v1/doctors" -H "Authorization: Bearer <ключ>"']);
 +  assert.ok(lines.includes('Ключ: ' + KEY_VALUE), 'ключ — своей строкой');
 +  assert.equal(lines.filter((l) => l.includes(KEY_VALUE)).length, 1, 'ключ — только в строке «Ключ»');
 +  assert.ok(handoverText({ ...base, scopes: ['requests'] }).includes('/klinika-demo/v1/reference/specialties"'), 'без права чтения — справочник: он открыт любому ключу');
@@ -2241,7 +2245,7 @@ diff --git a/public/js/admin/__tests__/api-connection-new.test.mjs b/public/js/a
 +    ['A', 'https://api.easymed.uz/docs', '_blank', 'noopener noreferrer', 'Откроется в новой вкладке']);
 +  assert.ok(textOf(a[0]).includes('Документация для партнёров'));
 +  const text = byAttr(m, 'aria-label', 'Текст для отправки')[0].value;
-+  assert.ok(text.includes('Проверить ключ: curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <ключ>"'));
++  assert.ok(text.includes('Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <ключ>"'));
 +});
 ```
 
@@ -2333,7 +2337,7 @@ diff --git a/public/js/admin/views/api-connection-new.js b/public/js/admin/views
    lines.push(trf('Разрешено: {list}', { list: allowed.join(', ') }));
 +  lines.push(trf('Документация: {url}', { url: apiDocsUrl(getLang()) }));
 +  const url = String(baseUrl || '').replace(/\/?$/, '/') + probePath(scopes);
-+  lines.push(trf('Проверить ключ: {cmd}', { cmd: curlCommand({ url, key: tr('<ключ>'), oneLine: true }) }));
++  lines.push(trf('Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): {cmd}', { cmd: curlCommand({ url, key: tr('<ключ>'), oneLine: true }) }));
    lines.push(tr('Работать начнёт, когда в Easy-Med включат публичный сервер.'));
    return lines.join('\n');
  }
@@ -2365,12 +2369,12 @@ diff --git a/public/js/admin/views/api-connection-new.js b/public/js/admin/views
   "Документация для партнёров": {"en":"Documentation for partners","ru":"Документация для партнёров","uz":"Hamkorlar uchun hujjatlar"},   // API_DOCS_V1
   "Откроется в новой вкладке": {"en":"Opens in a new tab","ru":"Откроется в новой вкладке","uz":"Yangi varaqda ochiladi"},   // API_DOCS_V1
   "Документация: {url}": {"en":"Documentation: {url}","ru":"Документация: {url}","uz":"Hujjatlar: {url}"},   // API_DOCS_V1
-  "Проверить ключ: {cmd}": {"en":"Check the key: {cmd}","ru":"Проверить ключ: {cmd}","uz":"Kalitni tekshirish: {cmd}"},   // API_DOCS_V1
+  "Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): {cmd}": {"en":"Check the key (in Windows PowerShell, type curl.exe instead of curl): {cmd}","ru":"Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): {cmd}","uz":"Kalitni tekshirish (Windows PowerShell oynasida curl o‘rniga curl.exe yozing): {cmd}"},   // API_DOCS_V1 — ревью шага 9, п. 7
   "<ключ>": {"en":"<key>","ru":"<ключ>","uz":"<kalit>"},   // API_DOCS_V1
   // /API_DOCS_V1
 ```
 
-- [ ] **Step 6:** `node --experimental-vm-modules --test public/js/admin/__tests__/api-connection-new.test.mjs public/js/admin/__tests__/api-connection-card.test.mjs` → зелёные (`api-connection-new` — **8 тестов**); с `force-en.mjs` — то же; сторожа Б — зелёные.
+- [ ] **Step 6:** `node --experimental-vm-modules --test public/js/admin/__tests__/api-connection-new.test.mjs public/js/admin/__tests__/api-connection-card.test.mjs` → зелёные (`api-connection-new` — **8 тестов**; после ревью шага 9, п. 7 — **9**: тест статьи словаря с подсказкой curl.exe, `9e66a223`); с `force-en.mjs` — то же; сторожа Б — зелёные.
 - [ ] **Step 7: коммит** «API и подключения: в «Скопировать всё» — ссылка на документацию для партнёров на языке экрана и команда проверки ключа curl с подстановкой <ключ> (ключ — только своей строкой); раздел — первый открытый ключу, иначе справочник; в окне «Что передать» — ссылка «Документация для партнёров» в новой вкладке» — четыре файла (`i18n-strings.js` и `api-ui.js` — точным блобом, если в клоне правят и другие шаги).
 
 ---
@@ -2443,7 +2447,7 @@ diff --git a/public/js/admin/__tests__/api-connections-i18n-en.test.mjs b/public
 +  assert.deepEqual([a.attrs.href, a.attrs.title], ['https://api.easymed.uz/docs/en', 'Opens in a new tab']);
 +  const text = handoverText({ clinic: 'Clinic Demo', baseUrl: fx.base_url, key: KEY_VALUE, secret: '', scopes: ['clinic'] });
 +  assert.ok(text.includes('Documentation: https://api.easymed.uz/docs/en'));
-+  assert.ok(text.includes('Check the key: curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <key>"'));
++  assert.ok(text.includes('Check the key (in Windows PowerShell, type curl.exe instead of curl): curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <key>"'));
 +  assert.ok(!/[А-Яа-яЁё]/.test(text), 'кириллица в тексте для отправки: ' + text);
 +});
 ```
@@ -2476,7 +2480,7 @@ diff --git a/public/js/admin/views/api-connections.js b/public/js/admin/views/ap
    // не рисует: следующий переход с connection_id приходит сюда. Список
 ```
 
-- [ ] **Step 4:** те же тесты → зелёные: `api-connections` — **19 тестов**, `api-connections-i18n-en` — **3 теста**; с `force-en.mjs` — то же; плюс `api-connection-new.test.mjs`, `api-connection-card.test.mjs` и сторожа Б — зелёные.
+- [ ] **Step 4:** те же тесты → зелёные: `api-connections` — **19 тестов** (по коду — **21**: сборщик Б добавил два теста сверх плана — рамка «только просмотр» не глотает ссылку, правила CSS телефона; `878671e1`), `api-connections-i18n-en` — **3 теста**; с `force-en.mjs` — то же; плюс `api-connection-new.test.mjs`, `api-connection-card.test.mjs` и сторожа Б — зелёные.
 - [ ] **Step 5: коммит** «API и подключения: в шапке экрана — ссылка «Документация для партнёров» на публичную страницу api.easymed.uz/docs на языке экрана, в новой вкладке — у любого права и в филиале; своей страницы документации в программе нет (решение владельца 21)» — три файла.
 
 ---
@@ -2511,6 +2515,26 @@ diff --git a/public/js/admin/views/api-connections.js b/public/js/admin/views/ap
 
 ---
 
+## Ревью шага 9 (2026-10-12)
+
+Ревью выгрузки `878671e1` (отчёт контролёра `scratchpad/step9-review-report.md`, повторы `zz-d9-*`): 7 подтверждённых находок (3 важных, 4 мелких), 6 опровергнутых. До ревью, по просьбе контролёра, — полировка таблиц на телефоне: уже 600 px строка таблицы — блоком, над значением — подпись столбца (`data-label`, только CSS); на широком экране и в печати — таблица (`23ee01e4`).
+
+| # | Находка | Исправление | Коммит |
+|---|---|---|---|
+| 1 | **Важное.** «Статусы заявки» пропускали переходы сервера: `offered` → `expired`, `declined`, снова `offered`; «перезвоните» `new` → `booked` сразу. `expired` винил клинику и тогда, когда пациент не ответил на другое время. | Переходы — данные `content.js FLOWS`; страница рисует их по строке на статус-источник. `expired` — и «пациент не ответил до `offer_until`». Страж `drift.test.js` «переходы статусов»: каждый переход кода есть на странице — действия клиники (`bookingActions`), истечение (`expireDue`), запись по карточке и судьба визита (`visit-events.js`), ответы партнёра (`partnerCancel`, `partnerAnswerOffer`), закрытие сервером (`closeOverdue`). | `82322dfa` |
+| 2 | **Важное.** Страница обещала закрытие любой заявки без ответа, а забранная «перезвоните» живёт `new` / `accepted` до стирания через 90 дней (так задумано, 8b Р7). | Только текст: сервер закрывает лишь `not_collected` и `not_processed`; забранная «перезвоните» — без срока, пока по ней не запишут визит (клиника ищет запись 30 дней — `CLINIC_LIMITS.callbackBookDays`, страж сверяет с `RECHECK_CALLBACK_DAYS`); итоговые статусы и когда перестать спрашивать; уведомления; `404` после 90 дней. | `82322dfa` |
+| 3 | **Важное.** Страж событий не видел `emit(…, EV.x, 'статус')` без полей; порог `>= 14` равнялся сегодняшнему счёту. | Разбор — с необязательными полями, во всех рабочих файлах `server/services`; число разобранных обязано равняться числу вызовов `enqueueEvent` / `emit`. Мутация ревью (`no_show` как `appointment.cancelled`) — красная в двух стражах. | `82322dfa` |
+| 4 | Поля пациента на верхнем уровне `POST /requests` возвращаются в ошибке как `name`, `phone`, `comment`. | Заметка у адреса; вторая строка поля в таблице (`FIELD_ERRORS.top`); страж записывает обе пары; пробы стража — и верхним уровнем. | `82322dfa` |
+| 5 | `/slots` без `date` отдаёт `days: [{date, slots}]` — на странице этого не было. | Заметка на трёх языках и пример `slots-days` (`generated.js` пересобран). | `82322dfa` |
+| 6 | Числа словами в тексте («сутки», «60 секунд», «пяти», «четырёх», «UTC+5», «раз в минуту»); `Allow-Methods` проверялся по началу. | Из кода: `MEDIA_MAX_AGE_SEC` (`routes/partner.js`; проба стража по настоящему файлу), `WINDOW_MS` (таблица лимитов «в минуту» — страж: окно — минута), `API_GROUPS.length`, специальности (`snapshot.js` — страж), `DEFAULT_TZ_OFFSET_MIN` (`config.js`), обновление свободного времени (`SLOTS_EVERY_MS`). `Allow-Methods` — ровно `GET, POST, DELETE, OPTIONS`. Страж «цифр руками в тексте нет». | `82322dfa` |
+| 7 | Сборщик Б. Строка «Проверить ключ» падала в Windows PowerShell 5.1 (`curl` — это Invoke-WebRequest). | «Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): curl …» на трёх языках; команда остаётся `curl` (на macOS и Linux `curl.exe` нет); описание `curlCommand`, Р8 и блоки задач 1, 6, 7 поправлены. | `9e66a223` |
+
+**Проверка поломкой:** 8 мутаций кода — окно лимитов 30 с, литерал кэша мимо постоянной, `PATCH` в `Allow-Methods`, лишний переход в `expireDue`, `partnerCancel`, `bookingActions`, `closeOverdue`, новая причина поля — каждая красная. Повторы ревью (35 файлов, 110 тестов; утверждавшие дефект — перевёрнуты) зелёные как есть и на en-US.
+
+**Счёт тестов после ревью:** `drift.test.js` — 12, `render.test.js` — 8 (с `page-curl` — 12), все тесты службы — **165 в 28 файлах** (161 плана + 1 полировки + 3 ревью); `api-connection-new` — 9, `api-connections` — 21, `api-connections-i18n-en` — 3, общий модуль `api-connections` — 12. Блоки кода задач 2–5 описывают код до полировки и ревью; итоговый код — в репозитории.
+
+---
+
 ## Вопросы владельцу
 
 **Вопрос 1. Какой адрес Easy-Med показать разработчикам партнёров внизу страницы?** Страница публичная: её читают программисты med24, clinics.uz и других. Внизу написано: «Ключ, права и адрес клиники выдаёт сама клиника. Вопросы по API — …».
@@ -2524,7 +2548,8 @@ diff --git a/public/js/admin/views/api-connections.js b/public/js/admin/views/ap
 - Страница открыта всем, как и решено: в ней нет данных ни одной клиники и ни одного пациента — примеры показывают выдуманную клинику «Шифо» на март 2030 года.
 - По умолчанию страница русская; узбекская и английская — по кнопке вверху. Программа клиники даёт ссылку на страницу на языке своего экрана.
 - Страница честно говорит, что партнёр **не** узнаёт: «не пришёл» сейчас партнёрам не сообщается вовсе (статус остаётся «записан»); «пришёл» — только если клиника сама включила подключению это событие (врачебная тайна); заявку, на которую клиника не ответила, сервер закрывает без уведомления — партнёр видит это, спросив статус.
-- В тексте «Скопировать всё» появились две строки: ссылка на документацию и команда проверки ключа. Сам ключ в команду не подставляется — только словом «<ключ>»: команду часто пересылают в чатах.
+- В тексте «Скопировать всё» появились две строки: ссылка на документацию и команда проверки ключа. Сам ключ в команду не подставляется — только словом «<ключ>»: команду часто пересылают в чатах. В Windows PowerShell строка подсказывает писать curl.exe вместо curl (ревью шага 9, п. 7).
+- Заявку «перезвоните», которую клиника уже забрала, сервер сам не закрывает: она остаётся «новая» или «в работе», пока по ней не запишут визит. Страница говорит партнёрам, какие статусы итоговые и когда перестать спрашивать статус (ревью шага 9, п. 2).
 
 ---
 
