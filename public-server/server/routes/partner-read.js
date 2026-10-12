@@ -21,6 +21,10 @@ import { localParts, msOf, partnerTime } from '../lib/time.js';
 import { scope } from './partner-auth.js';
 
 export const STALE_AFTER_MS = 10 * 60000;
+// Проверка исправлений 8b, C: время и снимок, которые сервер не принимает (велики),
+// не обновляются, хотя клиника на связи. Неизменное клиника шлёт раз в 15 минут,
+// её часы — в пределах ±15 минут от сервера: старше 35 минут — уже не свежее.
+export const STALE_DATA_MS = 35 * 60000;
 const WEEK = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const MEDIA_REF_RE = /^media\/[0-9a-f]{64}\.(png|jpg|jpeg|webp)$/;
 
@@ -60,7 +64,8 @@ function namesDeep(v, lang) {
 export function readRoutes(r, ctx) {
   const mediaUrl = (clinic, ref) => (MEDIA_REF_RE.test(str(ref)) ? ctx.baseUrl + '/' + clinic.slug + '/v1/' + ref : null);
   const asOf = (clinic) => partnerTime(clinic.last_seen_at, ctx.offsetMin);
-  const stale = (clinic) => ctx.now() - (msOf(clinic.last_seen_at) || 0) > STALE_AFTER_MS;
+  const stale = (clinic) => ctx.now() - (msOf(clinic.last_seen_at) || 0) > STALE_AFTER_MS
+    || ctx.now() - Math.min(msOf(clinic.slots_at) || 0, msOf(clinic.snapshot_at) || 0) > STALE_DATA_MS;
   const bad = (req, res, field, reason) => sendError(req, res, 'invalid_field', { field, reason });
   const langOk = (req, res) => {
     if (req.query.lang !== undefined && !langOf(req)) { bad(req, res, 'lang', 'unknown'); return false; }

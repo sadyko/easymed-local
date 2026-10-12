@@ -397,3 +397,27 @@ test('рр-3: очередь прочитана до срока предложе
   assert.equal(r.db.prepare('SELECT status FROM api_requests WHERE id = ?').get(id).status, 'pending');
   assert.ok(!r.fake.state.events.some((e) => e.event === 'booking.declined'), 'партнёр не получал «истекло»');
 });
+
+test('проверка исправлений 8b, C: сервер не принял снимок или время по размеру (413) — причина too_large; то же содержимое не шлётся каждый такт, после 15 минут — снова', async () => {
+  const r = rig();
+  const sent = { snapshot: 0, slots: 0 };
+  const fetchImpl = async (url, o) => {
+    const p = new URL(String(url)).pathname;
+    if (p === '/_sync/v1/snapshot' || p === '/_sync/v1/slots') {
+      sent[p.slice('/_sync/v1/'.length)] += 1;
+      return { ok: false, status: 413, text: async () => JSON.stringify({ error: { code: 'too_large' } }), body: null };
+    }
+    return r.opts.fetchImpl(url, o);
+  };
+  r.tick(2 * 60000);   // 09:02 — до следующего начала окна (09:15) свободное время не меняется
+  await quietWarns(async () => { await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); });
+  const st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.deepEqual([st.state, st.last_error], ['error', 'too_large'], 'экран получает свою причину, а не «ошибка сервера»');
+  assert.deepEqual(sent, { snapshot: 1, slots: 1 });
+  r.tick(61000);
+  await quietWarns(async () => { await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); });
+  assert.deepEqual(sent, { snapshot: 1, slots: 1 }, 'не принятое по размеру не гоняется каждый такт');
+  r.tick(15 * 60000);
+  await quietWarns(async () => { await syncOnce(r.db, r.dataDir, { ...r.opts, fetchImpl }); });
+  assert.deepEqual(sent, { snapshot: 2, slots: 2 }, 'раз в 15 минут — снова (вдруг сервер уже принимает)');
+});

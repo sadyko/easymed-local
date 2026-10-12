@@ -131,7 +131,7 @@ server {
   server_name api.easymed.uz;
   ssl_certificate     /etc/letsencrypt/live/api.easymed.uz/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/api.easymed.uz/privkey.pem;
-  client_max_body_size 5m;
+  client_max_body_size 5m;              # снимок и время клиники — до 4 МБ (routes/sync.js SNAPSHOT_MAX_BYTES), остальное меньше
   access_log off;                       # без адресов с параметрами и IP в журнале nginx; журнал запросов — в базе службы
   location / {
     proxy_pass http://easymed_public;   # без пути после адреса: путь и query доходят байт в байт (подпись клиники)

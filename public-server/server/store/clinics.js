@@ -125,14 +125,45 @@ export function saveKeys(db, clinicId, body, now) {
 }
 
 /**
- * Потолки снимка и времени (ревью 8b, C5). Списки — только объекты (не `[]`:
- * 4 МБ пустых массивов разбираются в ~50 МБ кучи) и не длиннее потолка; тело
- * снимка и времени — не больше 2 МБ (routes/sync.js). Большая клиника — сотни
- * врачей и тысячи услуг — укладывается с запасом.
+ * Потолки снимка и времени (ревью 8b, C5; проверка исправлений 8b, C и E).
+ * Списки — только объекты и не длиннее потолка; начала окон и строка свободы —
+ * строки. Тело снимка и времени — не больше 4 МБ (routes/sync.js
+ * SNAPSHOT_MAX_BYTES) и не больше PARSE_CONTAINERS_MAX объектов и списков
+ * (parseBounded): 4 МБ пустых `{}` разбирались бы в ~90 МБ кучи. Клиника
+ * размера дизайна (40 врачей × 30 дней, 2000 услуг) — ~0,75 МБ снимка и
+ * ~0,6 МБ времени, ~15 тыс. объектов; 200 врачей × 30 дней — ~3 МБ времени.
  */
 export const SNAPSHOT_LIMITS = Object.freeze({ branches: 200, doctors: 1000, services: 10000, packages: 2000,
   slotDoctors: 1000, slotDays: 62, slotStarts: 288 });
+export const PARSE_CONTAINERS_MAX = 100000;
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** Сколько объектов и списков в тексте JSON (скобки внутри строк не считаются). */
+export function containersOf(text) {
+  let n = 0;
+  let inStr = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text.charCodeAt(i);
+    if (inStr) {
+      if (ch === 92) i += 1;            // \ — следующий знак экранирован
+      else if (ch === 34) inStr = false;
+    } else if (ch === 34) inStr = true;
+    else if (ch === 123 || ch === 91) n += 1;   // { [
+  }
+  return n;
+}
+
+/**
+ * Разбор тела клиники с потолком объектов и списков (проверка исправлений 8b, E):
+ * сверх PARSE_CONTAINERS_MAX — не разбирается вовсе.
+ * @returns {{value:any} | {error:'too_large'|'bad_json'}}
+ */
+export function parseBounded(text) {
+  const s = String(text == null ? '' : text);
+  if (!s.length) return { value: {} };
+  if (containersOf(s) > PARSE_CONTAINERS_MAX) return { error: 'too_large' };
+  try { return { value: JSON.parse(s) }; } catch { return { error: 'bad_json' }; }
+}
 
 function snapshotProblem(snap) {
   for (const k of ['branches', 'doctors', 'services', 'packages']) {
@@ -155,9 +186,11 @@ function slotsProblem(slots) {
     if (d.days.length > SNAPSHOT_LIMITS.slotDays) return 'too_large';
     for (const day of d.days) {
       if (!isObj(day)) return 'bad_request';
+      if (day.free != null && typeof day.free !== 'string') return 'bad_request';
       if (day.starts == null) continue;
       if (!Array.isArray(day.starts)) return 'bad_request';
       if (day.starts.length > SNAPSHOT_LIMITS.slotStarts) return 'too_large';
+      if (!day.starts.every((x) => typeof x === 'string')) return 'bad_request';
     }
   }
   return null;
@@ -218,13 +251,19 @@ export function resolveSlug(db, slug, now) {
 //
 // Ревью 8b, C5: одна запись на (клиника, вид), и она верна, пока текст в базе
 // тот же (второй снимок в ту же секунду раньше не доходил до партнёров до
-// 15 минут); потолок — по размеру текста (знаков), а не по числу записей:
-// текст длиннее PARSE_CACHE_ENTRY_MAX разбирается на каждый запрос и не
-// хранится, всего — не больше PARSE_CACHE_TOTAL_MAX, давние уходят первыми.
-export const PARSE_CACHE_ENTRY_MAX = 512 * 1024;
-export const PARSE_CACHE_TOTAL_MAX = 16 * 1024 * 1024;
-const cache = new Map();   // 'клиника:вид' → {text, value}; порядок вставки — давность
+// 15 минут).
+// Проверка исправлений 8b, E: потолок — по ОЦЕНКЕ КУЧИ разобранного (5 байт
+// на знак текста — так выходит на настоящих снимках — плюс 32 байта на объект
+// или список), всего не больше PARSE_CACHE_HEAP_MAX — четверть кучи службы
+// (160 МБ); давние уходят первыми. Тело клиники ограничено 4 МБ и
+// PARSE_CONTAINERS_MAX, так что любая запись (оценка до ~23 МБ) кэшируется:
+// снимок и время большой клиники разбираются раз на изменение, а не на каждый
+// запрос /slots.
+export const PARSE_CACHE_HEAP_MAX = 40 * 1024 * 1024;
+const heapOf = (text) => text.length * 5 + containersOf(text) * 32;
+const cache = new Map();   // 'клиника:вид' → {text, value, heap}; порядок вставки — давность
 let cacheChars = 0;
+let cacheHeap = 0;
 function parsedOf(clinic, kind) {
   const text = clinic && clinic[kind];
   if (!text) return null;
@@ -234,22 +273,26 @@ function parsedOf(clinic, kind) {
     cache.delete(key);
     if (hit.text === text) { cache.set(key, hit); return hit.value; }
     cacheChars -= hit.text.length;
+    cacheHeap -= hit.heap;
   }
   let v = null;
   try { v = JSON.parse(text); } catch { v = null; }
-  if (text.length <= PARSE_CACHE_ENTRY_MAX) {
-    while (cache.size && cacheChars + text.length > PARSE_CACHE_TOTAL_MAX) {
+  const heap = heapOf(text);
+  if (heap <= PARSE_CACHE_HEAP_MAX) {
+    while (cache.size && cacheHeap + heap > PARSE_CACHE_HEAP_MAX) {
       const [k0, e0] = cache.entries().next().value;
       cache.delete(k0);
       cacheChars -= e0.text.length;
+      cacheHeap -= e0.heap;
     }
-    cache.set(key, { text, value: v });
+    cache.set(key, { text, value: v, heap });
     cacheChars += text.length;
+    cacheHeap += heap;
   }
   return v;
 }
-/** Для тестов и наблюдения: записей и знаков текста в кэше разобранного. */
-export const parseCacheStats = () => ({ entries: cache.size, bytes: cacheChars });
+/** Для тестов и наблюдения: записей, знаков текста и оценка кучи кэша разобранного. */
+export const parseCacheStats = () => ({ entries: cache.size, bytes: cacheChars, heap: cacheHeap });
 export const snapshotOf = (clinic) => parsedOf(clinic, 'snapshot');
 export const slotsOf = (clinic) => parsedOf(clinic, 'slots');
 

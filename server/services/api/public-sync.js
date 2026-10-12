@@ -162,6 +162,9 @@ async function call(ctx, method, p, body, { raw = null, type = 'application/json
   if (res.status === 401 || res.status === 403) throw new SyncFail('unauthorized');
   if (res.status === 503) throw new SyncFail('paused');
   if (res.status === 409) throw new SyncFail((json && json.error && json.error.code) || 'conflict');
+  // Проверка исправлений 8b, C: сервер не принял тело по размеру — своя причина
+  // (экран 8d скажет понятнее, чем «ошибка сервера»).
+  if (res.status === 413) throw new SyncFail('too_large');
   if (!res.ok) throw new SyncFail('server_error');
   return json || {};
 }
@@ -176,6 +179,19 @@ async function pushKeys(ctx, state) {
   await call(ctx, 'PUT', '/keys', keys);
   saveState(ctx.db, { keys_hash: hash, keys_at: isoOf(ctx.now()) });
   return true;
+}
+
+/**
+ * Проверка исправлений 8b, C: сервер не принял снимок или время по размеру —
+ * запомнить их отпечаток, как отправленный: то же содержимое не гоняется каждый
+ * такт (мегабайты каждые 15 секунд), а уходит снова, когда изменится или раз в
+ * 15 минут (HEARTBEAT_MS). Причина too_large остаётся на экране.
+ */
+async function tooLargeRemembered(send, remember) {
+  try { return await send(); } catch (e) {
+    if (e instanceof SyncFail && e.reason === 'too_large') remember();
+    throw e;
+  }
 }
 
 async function pushSnapshot(ctx, state) {
@@ -198,7 +214,7 @@ async function pushSnapshot(ctx, state) {
       }
     }
   }
-  await call(ctx, 'PUT', '/snapshot', snapshot);
+  await tooLargeRemembered(() => call(ctx, 'PUT', '/snapshot', snapshot), () => saveState(ctx.db, { snapshot_hash: hash, snapshot_at: isoOf(ctx.now()) }));
   saveState(ctx.db, { snapshot_hash: hash, snapshot_at: isoOf(ctx.now()) });
   return true;
 }
@@ -210,7 +226,7 @@ async function pushSlots(ctx, state, force) {
   const hash = contentHash(slots);
   const stale = !state.slots_at || ctx.now() - Date.parse(state.slots_at) >= HEARTBEAT_MS;
   if (hash === state.slots_hash && !stale) { saveState(ctx.db, { slots_at: isoOf(ctx.now()) }); return false; }
-  await call(ctx, 'PUT', '/slots', slots);
+  await tooLargeRemembered(() => call(ctx, 'PUT', '/slots', slots), () => saveState(ctx.db, { slots_hash: hash, slots_at: isoOf(ctx.now()) }));
   saveState(ctx.db, { slots_hash: hash, slots_at: isoOf(ctx.now()) });
   return true;
 }

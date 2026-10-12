@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { admitClinic, saveKeys, saveSnapshot, saveSlots, resolveSlug, snapshotOf, slotsOf, connectionByHash, originAllowedForClinic, markUsed, clinicRow,
-  parseCacheStats, SNAPSHOT_LIMITS, PARSE_CACHE_ENTRY_MAX, PARSE_CACHE_TOTAL_MAX }
+  parseCacheStats, SNAPSHOT_LIMITS, PARSE_CACHE_HEAP_MAX, PARSE_CONTAINERS_MAX, containersOf, parseBounded }
   from './clinics.js';
 import { missingMedia, putMedia, mediaFile, gcMedia, MEDIA_QUOTA_FILES, MEDIA_QUOTA_BYTES } from './media.js';
 import { testDb, testVendor, testClinic, NOW } from '../test-helpers/fixture.js';
@@ -166,12 +166,29 @@ test('ревью 8b, C5: снимок и время — только объек�
   assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: { days: Array(SNAPSHOT_LIMITS.slotDays + 1).fill({}) } } }, NOW),
     { error: 'too_large' });
   assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: [] } }, NOW), { error: 'bad_request' });
-  // Большой снимок разбирается, но в кэш не ложится.
-  const big = { ...snap('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(PARSE_CACHE_ENTRY_MAX) } };
+  // Проверка исправлений 8b, E: начала окон и строка свободы — строки, а не объекты.
+  assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: { days: [{ date: '2030-03-12', starts: [{}], free: '1' }] } } }, NOW),
+    { error: 'bad_request' });
+  assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: { days: [{ date: '2030-03-12', starts: ['09:00'], free: [] }] } } }, NOW),
+    { error: 'bad_request' });
+  // Большой снимок (1 МБ) разбирается один раз и держится в кэше — /slots не разбирает его на каждый запрос;
+  // кэш ограничен оценкой кучи.
+  const big = { ...snap('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(1024 * 1024) } };
   assert.deepEqual(saveSnapshot(db, c.clinicId, big, NOW + 1000), { ok: true });
-  assert.equal(snapshotOf(clinicRow(db, c.clinicId)).clinic.about.length, PARSE_CACHE_ENTRY_MAX);
-  assert.ok(parseCacheStats().bytes < PARSE_CACHE_ENTRY_MAX, 'текст больше PARSE_CACHE_ENTRY_MAX не кэшируется');
-  assert.ok(parseCacheStats().bytes <= PARSE_CACHE_TOTAL_MAX);
+  const first = snapshotOf(clinicRow(db, c.clinicId));
+  assert.equal(first.clinic.about.length, 1024 * 1024);
+  assert.equal(snapshotOf(clinicRow(db, c.clinicId)), first, 'второго разбора нет');
+  assert.ok(parseCacheStats().heap <= PARSE_CACHE_HEAP_MAX);
+});
+
+test('проверка исправлений 8b, E: тело клиники — не больше PARSE_CONTAINERS_MAX объектов и списков, счёт не путается в строках', () => {
+  assert.equal(containersOf('{"a":[1,{"b":"{[x]}"}],"c":"\\"{"}'), 3);
+  const bomb = '{"x":[' + Array(PARSE_CONTAINERS_MAX).fill('{}').join(',') + ']}';
+  assert.deepEqual(parseBounded(bomb), { error: 'too_large' }, 'не разбирается вовсе');
+  assert.deepEqual(parseBounded('{"a":1}'), { value: { a: 1 } });
+  assert.deepEqual(parseBounded(''), { value: {} });
+  assert.deepEqual(parseBounded('{не json'), { error: 'bad_json' });
+  assert.ok(PARSE_CACHE_HEAP_MAX <= 40 * 1024 * 1024, 'кэш — не больше четверти кучи службы (160 МБ)');
 });
 
 test('ревью 8b, C7: у клиники свой потолок файлов — по числу и по байтам; повтор того же файла не считается дважды', () => {

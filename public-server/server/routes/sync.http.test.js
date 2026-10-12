@@ -11,6 +11,8 @@ import { recordAccess } from '../store/logs.js';
 import { PENDING_PER_CLINIC_MAX } from '../store/deliveries.js';
 import { testDb, testVendor, testClinic, serve, syncCall, signedHeaders, NOW } from '../test-helpers/fixture.js';
 import { MEDIA_QUOTA_FILES } from '../store/media.js';
+import { PARSE_CONTAINERS_MAX } from '../store/clinics.js';
+import { partnerStand } from '../test-helpers/partner-stand.js';
 import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { openSealed } from '../../../server/services/api/sync-identity.js';
 import { isoOf } from '../lib/time.js';
@@ -139,11 +141,38 @@ test('C1: сжатое тело клиники — 415 без распаковк
   const pad = 'x'.repeat(1536 * 1024);
   const events = await syncCall(s.base, c, 'POST', '/_sync/v1/events', { events: [], pad }, { time });
   assert.deepEqual([events.status, events.json.error.code], [413, 'too_large'], 'события — до 1 МБ');
-  const snap = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: pad } };
-  assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', snap, { time })).json, { ok: true }, 'снимок — до 2 МБ');
-  const huge = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(2304 * 1024) } };
+  const snap = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(3 * 1024 * 1024) } };
+  assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', snap, { time })).json, { ok: true },
+    'проверка исправлений 8b, C: снимок — до 4 МБ (большая клиника по SNAPSHOT_LIMITS)');
+  const huge = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(4352 * 1024) } };
   const tooBig = await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', huge, { time });
-  assert.deepEqual([tooBig.status, tooBig.json.error.code], [413, 'too_large'], 'ревью 8b, C5: снимок больше 2 МБ — 413');
+  assert.deepEqual([tooBig.status, tooBig.json.error.code], [413, 'too_large'], 'снимок больше 4 МБ — 413');
+});
+
+test('проверка исправлений 8b, E: тело из сотен тысяч пустых объектов — 413 без разбора, в базу не попадает', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const c = testClinic(vendor);
+  assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/keys', keys(c), { time })).json, { ok: true });
+  const head = '{"version":1,"generated_at":"' + time + '","slug":"bomb","clinic":{"x":[';
+  const bomb = Buffer.from(head + Array(PARSE_CONTAINERS_MAX).fill('{}').join(',') + ']},"doctors":[]}');
+  const r = await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', bomb, { time });
+  assert.deepEqual([r.status, r.json.error.code], [413, 'too_large']);
+  assert.equal(clinicRow(s.db, c.clinicId).snapshot, null);
+  const ev = Buffer.from('{"events":[' + Array(PARSE_CONTAINERS_MAX).fill('{}').join(',') + ']}');
+  assert.equal((await syncCall(s.base, c, 'POST', '/_sync/v1/events', ev, { time })).status, 413, 'и на остальных адресах канала');
+});
+
+test('проверка исправлений 8b, C: /slots — stale, когда присланное время или снимок старше 35 минут, даже если клиника на связи', async (t) => {
+  const p = await partnerStand();
+  t.after(p.close);
+  const slots = async () => (await (await p.get('/shifo/v1/slots?doctor_id=7')).json()).stale;
+  assert.equal(await slots(), false);
+  p.setClock(NOW + 40 * 60000);
+  p.db.prepare('UPDATE clinics SET last_seen_at = ?').run(isoOf(NOW + 40 * 60000));   // клиника на связи, но время ей не принимают
+  assert.equal(await slots(), true, 'время 40 минут не обновлялось — stale');
+  p.db.prepare('UPDATE clinics SET slots_at = ?, snapshot_at = ?').run(isoOf(NOW + 30 * 60000), isoOf(NOW + 26 * 60000));
+  assert.equal(await slots(), false, 'неизменное время клиника шлёт раз в 15 минут — 10–14 минут не повод');
 });
 
 test('ревью 8b, C8: очередь уведомлений клиники полна — ответ протокола прежний ({accepted}), пропуск считается', async (t) => {

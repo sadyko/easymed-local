@@ -26,13 +26,14 @@
 // устаревшая и истёкшая лицензия — store/clinics.js admissionOf, без записи) →
 // тело → подпись → запись клиники. Сжатое тело не распаковывается (415):
 // клиника 8a не сжимает, а распаковка до проверки делала из 4 КБ gzip 4 МБ в
-// памяти. Предел тела — свой у адреса: снимку и времени — 2 МБ (ревью 8b, C5:
-// большая клиника укладывается с запасом; списки ограничены store/clinics.js
-// SNAPSHOT_LIMITS), файлу — 2 МБ, остальному — 1 МБ.
+// памяти. Предел тела — свой у адреса: снимку и времени — 4 МБ (проверка
+// исправлений 8b, C: 200 врачей по записи × 30 дней — ~3 МБ времени), файлу —
+// 2 МБ, остальному — 1 МБ. Любое тело JSON — не больше PARSE_CONTAINERS_MAX
+// объектов и списков (store/clinics.js parseBounded, проверка исправлений 8b, E).
 import express from 'express';
 import { verifyClinicHeaders, verifyClinicSignature } from '../clinic-auth.js';
 import { licenceStanding } from '../licence-gate.js';
-import { admitClinic, admissionOf, saveKeys, saveSnapshot, saveSlots } from '../store/clinics.js';
+import { admitClinic, admissionOf, saveKeys, saveSnapshot, saveSlots, parseBounded } from '../store/clinics.js';
 import { missingMedia, putMedia, MEDIA_MAX_BYTES } from '../store/media.js';
 import { inboxItems, ackInbox, applyEvents } from '../store/requests.js';
 import { accessSince, deliveryLogSince } from '../store/logs.js';
@@ -41,7 +42,7 @@ import { sendError } from '../lib/errors.js';
 export const SYNC_LIMIT_PER_MIN = 600;
 const MEDIA_RE = /^([0-9a-f]{64})\.([a-z]{3,4})$/;
 const raw = (limit) => express.raw({ type: () => true, limit, inflate: false });
-export const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
+export const SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
 const BODY = { big: raw(SNAPSHOT_MAX_BYTES), media: raw(MEDIA_MAX_BYTES), small: raw('1mb') };
 const bodyFor = (p) => (/^\/(?:snapshot|slots)\/?$/.test(p) ? BODY.big : /^\/media\/[^/]+$/.test(p) ? BODY.media : BODY.small);
 
@@ -90,10 +91,10 @@ export function syncRouter(ctx) {
     return next();
   });
 
-  const parse = (req) => { try { return JSON.parse(req.raw.length ? req.raw.toString('utf8') : '{}'); } catch { return undefined; } };
   const withJson = (fn) => (req, res) => {
-    const body = parse(req);
-    if (body === undefined) return sendError(req, res, 'bad_json');
+    const parsed = parseBounded(req.raw.toString('utf8'));
+    if (parsed.error) return sendError(req, res, parsed.error);
+    const body = parsed.value;
     const out = fn(req, body, ctx.now());
     if (out && out.error) return sendError(req, res, out.error);
     return res.json(out && out.payload ? out.payload : { ok: true });
