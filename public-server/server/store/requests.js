@@ -44,6 +44,8 @@ export const PLAIN_ITEM_MAX_MS = 7 * DAY;
 export const REQUEST_KEEP_MS = 90 * DAY;
 export const EVENTS_SEEN_KEEP_MS = 30 * DAY;
 export const INBOX_PAGE = 100;
+/** Отданное клинике в GET /inbox уборка не закрывает столько времени — клиника подтверждает в том же такте (ревью 8b, C11). */
+export const HANDED_OUT_GRACE_MS = 10 * 60000;
 export const BODY_MAX = 16384;
 
 /** Статусы для партнёра (дизайн §7 + closed этого сервера). */
@@ -211,9 +213,14 @@ export function floorInboxCursor(db, nowMs) {
  * базы сервера может быть впереди (ревью 8b, C3); повтор клиника узнаёт по
  * номеру заявки.
  */
-export function inboxItems(db, clinicId, after, limit = INBOX_PAGE) {
-  return db.prepare('SELECT * FROM inbox WHERE clinic_id = ? ORDER BY cursor LIMIT ?')
-    .all(clinicId, Math.min(limit, INBOX_PAGE))
+export function inboxItems(db, clinicId, after, { limit = INBOX_PAGE, now = null } = {}) {
+  const rows = db.prepare('SELECT * FROM inbox WHERE clinic_id = ? ORDER BY cursor LIMIT ?').all(clinicId, Math.min(limit, INBOX_PAGE));
+  // Отдано клинике (now — из канала клиники): уборка подождёт подтверждения (C11).
+  if (now != null && rows.length) {
+    const mark = db.prepare('UPDATE inbox SET handed_out_at = ? WHERE cursor = ?');
+    db.transaction(() => { for (const r of rows) mark.run(isoOf(now), r.cursor); })();
+  }
+  return rows
     .map((r) => {
       let data = {};
       try { data = JSON.parse(r.data); } catch { data = {}; }
@@ -228,6 +235,8 @@ export function inboxItems(db, clinicId, after, limit = INBOX_PAGE) {
  * POST /_sync/v1/inbox/ack {cursor, held} — клиника применила всё до курсора.
  * Элементы до курсора стираются ЦЕЛИКОМ вместе с шифротекстом (решение 16);
  * held — заявки, которые клиника держит, и до какого мгновения (решения 18–19).
+ * Заявку, которую сервер закрыл сам (not_collected / not_processed), а клиника
+ * всё же забрала и держит, held оживляет (ревью 8b, C11): клиника — правда.
  * @returns {{ok:true, deleted:number} | {error:'bad_request'}}
  */
 export function ackInbox(db, clinicId, cursor, held, now) {
@@ -242,11 +251,13 @@ export function ackInbox(db, clinicId, cursor, held, now) {
                                answered_at = CASE WHEN kind = 'request' THEN COALESCE(answered_at, ?) ELSE answered_at END
                              WHERE id = ? AND clinic_id = ?`);
     for (const r of delivered) mark.run(at, at, r.request_id, clinicId);
-    const hold = db.prepare(`UPDATE requests SET hold_until = ?, answered_at = COALESCE(answered_at, ?), updated_at = ?
-                             WHERE id = ? AND clinic_id = ? AND status = 'pending'`);
+    const hold = db.prepare(`UPDATE requests SET status = 'pending', reason = NULL, hold_until = ?, delivered_at = COALESCE(delivered_at, ?),
+                               answered_at = COALESCE(answered_at, ?), updated_at = ?
+                             WHERE id = ? AND clinic_id = ? AND kind = 'appointment'
+                               AND (status = 'pending' OR (status = 'closed' AND reason IN ('not_collected', 'not_processed')))`);
     for (const h of Array.isArray(held) ? held.slice(0, 1000) : []) {
       const until = msOf(h && h.hold_until);
-      if (until != null && h && typeof h.request_id === 'string') hold.run(isoOf(until), at, at, h.request_id, clinicId);
+      if (until != null && h && typeof h.request_id === 'string') hold.run(isoOf(until), at, at, at, h.request_id, clinicId);
     }
     deleted = db.prepare('DELETE FROM inbox WHERE clinic_id = ? AND cursor <= ?').run(clinicId, c).changes;
   })();
@@ -367,13 +378,15 @@ export function closeOverdue(db, now, { uncollectedMaxMs = UNCOLLECTED_MAX_MS } 
                                  AND hold_until IS NULL AND delivered_at <= ?`).run(at, isoOf(now - ANSWER_TIMEOUT_MS)).changes;
     // plainBefore не позже sealedBefore (срок без данных — не короче), поэтому
     // кандидаты — всё, что старше sealedBefore.
-    const old = db.prepare('SELECT cursor, clinic_id, type, request_id, received_at FROM inbox WHERE received_at <= ?').all(sealedBefore);
+    const old = db.prepare('SELECT cursor, clinic_id, type, request_id, received_at, handed_out_at FROM inbox WHERE received_at <= ?').all(sealedBefore);
+    const handedSince = isoOf(now - HANDED_OUT_GRACE_MS);
     const close = db.prepare(`UPDATE requests SET status = 'closed', reason = 'not_collected', updated_at = ?
                               WHERE id = ? AND clinic_id = ? AND status IN ('new', 'pending')`);
     const del = db.prepare('DELETE FROM inbox WHERE cursor = ?');
     for (const it of old) {
       if (NEW_TYPES.includes(it.type)) {
         if (it.received_at > sealedBefore) continue;
+        if (it.handed_out_at && it.handed_out_at > handedSince) continue;   // клиника забрала и подтверждает (C11)
         notCollected += close.run(at, it.request_id, it.clinic_id).changes;
       } else if (it.received_at > plainBefore) continue;
       del.run(it.cursor);

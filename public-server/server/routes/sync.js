@@ -116,7 +116,7 @@ export function syncRouter(ctx) {
   }));
   r.get('/inbox', (req, res) => {
     const id = req.clinic.clinic_id;
-    const out = { items: inboxItems(ctx.db, id, req.query.after) };
+    const out = { items: inboxItems(ctx.db, id, req.query.after, { now: ctx.now() }) };
     out.last_used = Object.fromEntries(ctx.db.prepare('SELECT id, last_used_at FROM connections WHERE clinic_id = ? AND last_used_at IS NOT NULL')
       .all(id).map((c) => [String(c.id), c.last_used_at]));
     if (req.query.access_after !== undefined) out.access = accessSince(ctx.db, id, req.query.access_after);

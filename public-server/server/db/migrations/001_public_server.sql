@@ -95,6 +95,8 @@ CREATE INDEX requests_status ON requests (clinic_id, status);
 
 -- Очередь заявок клинике (GET /_sync/v1/inbox). sealed — данные пациента,
 -- запечатанные box_key клиники; строка стирается при подтверждении курсора.
+-- handed_out_at — когда элемент последний раз отдан клинике: уборка не
+-- закрывает отданное, пока клиника его подтверждает (ревью 8b, C11).
 CREATE TABLE inbox (
   cursor        INTEGER PRIMARY KEY AUTOINCREMENT,
   clinic_id     TEXT NOT NULL REFERENCES clinics (clinic_id) ON DELETE CASCADE,
@@ -103,7 +105,8 @@ CREATE TABLE inbox (
   connection_id INTEGER NOT NULL,
   received_at   TEXT NOT NULL,
   data          TEXT NOT NULL DEFAULT '{}',
-  sealed        TEXT
+  sealed        TEXT,
+  handed_out_at TEXT
 );
 CREATE INDEX inbox_clinic ON inbox (clinic_id, cursor);
 

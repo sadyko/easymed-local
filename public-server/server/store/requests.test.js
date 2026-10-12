@@ -321,3 +321,26 @@ test('ревью 8b, C10: отказ партнёра от другого вре
   assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'cancelled', 'клиника применит отказ к своему предложению — обе стороны «отменено»');
   assert.deepEqual(inboxItems(s.db, s.c.clinicId, '').filter((i) => i.type === 'offer.decline').length, 1, 'отказ доходит до клиники');
 });
+
+test('ревью 8b, C11: заявку, отданную клинике в GET, уборка не закрывает, пока ждёт подтверждения; поздний held оживляет закрытую сервером', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const cb = createRequest(s.db, { clinic: s.clinic(), connectionId: 3, kind: 'request', patient: PATIENT, now: NOW }).row;
+  const DAY = 86400000;
+  const items = inboxItems(s.db, s.c.clinicId, '', { now: NOW + DAY - 5000 });   // клиника вернулась за 5 секунд до срока
+  assert.equal(items.length, 2);
+  assert.deepEqual(closeOverdue(s.db, NOW + DAY + 1000), { not_processed: 0, not_collected: 0 }, 'отдано клинике — не закрывать, пока она подтверждает');
+  assert.deepEqual(ackInbox(s.db, s.c.clinicId, items.at(-1).cursor, [{ request_id: a.id, hold_until: isoOf(NOW + DAY + 1800000) }], NOW + DAY + 2000),
+    { ok: true, deleted: 2 });
+  assert.deepEqual([requestRow(s.db, s.c.clinicId, a.id).status, requestRow(s.db, s.c.clinicId, a.id).hold_until], ['pending', isoOf(NOW + DAY + 1800000)]);
+  assert.equal(requestRow(s.db, s.c.clinicId, cb.id).status, 'new');
+  // Отдано, но подтверждения нет дольше запаса — закрывается как обычно.
+  const b = appt(s, { externalId: 'med-2', startAt: isoOf(START + 3600000) }).row;
+  inboxItems(s.db, s.c.clinicId, '', { now: NOW + 1000 });
+  assert.deepEqual(closeOverdue(s.db, NOW + DAY + 1000), { not_processed: 0, not_collected: 1 });
+  // Клиника всё же подтвердила позже и держит время — заявка оживает.
+  ackInbox(s.db, s.c.clinicId, '0', [{ request_id: b.id, hold_until: isoOf(NOW + DAY + 1800000) }], NOW + DAY + 3000);
+  const rb = requestRow(s.db, s.c.clinicId, b.id);
+  assert.deepEqual([rb.status, rb.reason, rb.hold_until], ['pending', null, isoOf(NOW + DAY + 1800000)]);
+  assert.ok(rb.delivered_at);
+});
