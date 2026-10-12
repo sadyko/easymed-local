@@ -121,3 +121,22 @@ test('файлы: только чего нет; отпечаток и вид с�
   assert.deepEqual(gcMedia(db, dir, NOW + 2 * 86400000), { rows: 1, files: 1 });
   assert.equal(fs.existsSync(f.file), false);
 });
+
+test('ревью 8b, C4: уборка файлов не держит снимки в памяти — файл из снимка отмечается свежим и в следующие сутки не проверяется', () => {
+  const { db, dir } = testDb();
+  const c = testClinic(vendor);
+  admitClinic(db, auth(c), NOW);
+  const png = fakePng(32, 32);
+  const sha = crypto.createHash('sha256').update(png).digest('hex');
+  putMedia(db, dir, c.clinicId, sha, 'png', png, NOW);
+  const gone = fakePng(16, 16);
+  const shaGone = crypto.createHash('sha256').update(gone).digest('hex');
+  putMedia(db, dir, c.clinicId, shaGone, 'png', gone, NOW);
+  saveSnapshot(db, c.clinicId, { ...snap('shifo'), clinic: { logo: { square: 'media/' + sha + '.png' } } }, NOW);
+  const later = NOW + 2 * 86400000;
+  assert.deepEqual(gcMedia(db, dir, later), { rows: 1, files: 1 }, 'на снимок не ссылается — стёрт с файлом');
+  const row = db.prepare('SELECT stored_at FROM media WHERE sha256 = ?').get(sha);
+  assert.equal(row.stored_at, isoOf(later), 'на снимок ссылается — отмечен свежим: следующие сутки уборка его не берёт');
+  assert.deepEqual(gcMedia(db, dir, later + 60000), { rows: 0, files: 0 });
+  assert.ok(mediaFile(db, dir, clinicRow(db, c.clinicId), sha, 'png'));
+});

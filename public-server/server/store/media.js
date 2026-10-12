@@ -61,15 +61,24 @@ export function mediaFile(db, dataDir, clinic, sha, ext) {
   return fs.existsSync(file) ? { file, type: MEDIA_TYPES[ext] } : null;
 }
 
-/** Уборка: строки, на которые снимок не ссылается дольше суток, и файлы без строк. */
+/**
+ * Уборка: строки, на которые снимок не ссылается дольше суток, и файлы без строк.
+ *
+ * Ревью 8b, C4: снимок в память процесса не попадает — ссылку проверяет сама
+ * SQLite (instr), а файл, на который снимок ссылается, отмечается свежим
+ * (stored_at) и следующие сутки уборкой не проверяется. Прежде каждая строка
+ * тянула в JS весь снимок своей клиники каждую минуту: 12 клиник × 40 фото при
+ * снимке ~200 КБ роняли процесс по памяти (160 МБ) раз в минуту.
+ */
 export function gcMedia(db, dataDir, now) {
   const old = isoOf(now - KEEP_UNREFERENCED_MS);
-  const rows = db.prepare('SELECT m.clinic_id, m.sha256, m.ext, c.snapshot FROM media m JOIN clinics c ON c.clinic_id = m.clinic_id WHERE m.stored_at < ?').all(old);
-  const del = db.prepare('DELETE FROM media WHERE clinic_id = ? AND sha256 = ?');
+  const referenced = `EXISTS (SELECT 1 FROM clinics c WHERE c.clinic_id = media.clinic_id
+                        AND instr(c.snapshot, '"media/' || media.sha256 || '.' || media.ext || '"') > 0)`;
   let rowsGone = 0;
-  for (const r of rows) {
-    if (!String(r.snapshot || '').includes('"media/' + r.sha256 + '.' + r.ext + '"')) { del.run(r.clinic_id, r.sha256); rowsGone += 1; }
-  }
+  db.transaction(() => {
+    db.prepare(`UPDATE media SET stored_at = ? WHERE stored_at < ? AND ${referenced}`).run(isoOf(now), old);
+    rowsGone = db.prepare('DELETE FROM media WHERE stored_at < ?').run(old).changes;
+  })();
   let filesGone = 0;
   const dir = mediaDir(dataDir);
   if (fs.existsSync(dir)) {
