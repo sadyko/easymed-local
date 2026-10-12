@@ -47,7 +47,8 @@ sudoedit /etc/easymed-public.env    # вставить строки ниже
 ```
 
 ```ini
-PUBLIC_PORT=8095
+# 8096: порт 8095 на этой машине — у сервера лицензий (easymed-cp, docs/HANDOVER.md)
+PUBLIC_PORT=8096
 PUBLIC_BIND=127.0.0.1
 PUBLIC_DATA_DIR=/var/lib/easymed-public
 PUBLIC_BASE_URL=https://api.easymed.uz
@@ -63,8 +64,26 @@ PUBLIC_SELF_IPS=45.77.242.169
 # токен для /_metrics (пусто — адреса нет)
 PUBLIC_METRICS_TOKEN=
 PUBLIC_WEBHOOKS=1
-# пусто — открытый ключ производителя, вшитый в программу (server/services/control/licence.js)
+# пусто — открытый ключ производителя, вшитый в программу (server/services/control/licence.js) —
+# НАСТОЯЩИЙ ключ сервера лицензий (8c сверил: 46de4fe9…696a). Другой ключ служба примет только
+# вместе с PUBLIC_ALLOW_FOREIGN_LICENCE_KEY=1 — это стенд, не api.easymed.uz (licence-key.js)
 PUBLIC_LICENCE_PUBLIC_KEY=
+# список производителя (не оплачено, выключено, отозванные ключи) — PUBLIC_LICENCE_V1, шаг 8c.
+# Сервер лицензий на этой же машине (easymed-cp, 127.0.0.1:8095) — берём напрямую, без DNS и TLS.
+PUBLIC_FEED_URL=http://127.0.0.1:8095/cp/v1/public-feed
+# тот же токен, что EASYMED_CP_FEED_TOKEN у easymed-cp (не короче 32 знаков: openssl rand -hex 24)
+PUBLIC_FEED_TOKEN=
+PUBLIC_FEED_EVERY_SEC=60
+```
+
+На сервере лицензий (`easymed-cp`) — та же строка токена в его окружении, затем перезапуск:
+
+```bash
+sudo systemctl edit easymed-cp     # [Service] Environment=EASYMED_CP_FEED_TOKEN=<тот же токен>
+sudo systemctl restart easymed-cp
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8095/cp/v1/public-feed                                   # 401
+curl -s -H "Authorization: Bearer <токен>" http://127.0.0.1:8095/cp/v1/public-feed | head -c 200; echo   # {"payload":{"kind":"easymed-public-feed",...
+journalctl -u easymed-cp --since "5 min ago" | grep "Signing key"                                           # Signing key: the production vendor key.
 ```
 
 ## Служба — `/etc/systemd/system/easymed-public.service`
@@ -125,7 +144,7 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 
 ```nginx
-upstream easymed_public { server 127.0.0.1:8095; keepalive 16; }
+upstream easymed_public { server 127.0.0.1:8096; keepalive 16; }
 server {
   listen 443 ssl http2;
   server_name api.easymed.uz;
@@ -162,11 +181,23 @@ curl -sI https://api.easymed.uz/docs | head -1             # HTTP/2 200 — до
 curl -sI http://api.easymed.uz/docs | grep -i ^location    # location: https://api.easymed.uz/docs
 systemctl show easymed-public -p MemoryCurrent -p MemoryMax
 journalctl -u easymed-public --since "10 min ago"          # тел запросов и данных пациентов здесь нет
+journalctl -u easymed-public --since "10 min ago" | grep "Licence key"   # Licence key: the production vendor key compiled into the app (46de4fe9a62a7f1349bdd3658be1696a).
+curl -s -H "Authorization: Bearer <PUBLIC_METRICS_TOKEN>" http://127.0.0.1:8096/_metrics | grep -o '"feed_[a-z_]*":[^,]*'   # feed_age_s меньше 120, feed_error ""
 ```
+
+- Строки `WARNING: licence key … is NOT the production vendor key` и `WARNING: PUBLIC_FEED_TOKEN is not set` на api.easymed.uz быть не должно.
 
 Наблюдение — 8c:
 - `/_health` раз в минуту, сообщение в Telegram при сбое;
-- `/_metrics` с токеном: очередь заявок, не доставленные уведомления, клиники на связи.
+- `/_metrics` с токеном: очередь заявок, не доставленные уведомления, клиники на связи;
+- PUBLIC_LICENCE_V1: `feed_age_s` больше 600 (список производителя не обновлялся 10 минут) или `feed_error` не пустой — сообщение: отметка «не оплачено» и срочный отзыв ключей не доходят до партнёров. «Не оплачено» публичный сервер узнаёт только из списка (неоплаченной клинике сервер лицензий новой лицензии не выдаёт — решение контролёра 8c): без списка партнёры видят её до конца её последней лицензии (до 14 дней).
+
+### Включение клиники (PUBLIC_LICENCE_V1)
+
+1. Клиника настроила «API и подключения» (имя в адресе, хоть одно подключение) — её экран «API» пишет «ждём включения Easy-Med».
+2. Панель `settings.easymed.uz/cp/` → клиника → карточка **Online booking / API** → переключатель. Строка «Clinic's API key» показывает принятый ключ (первый принимается сам).
+3. Не позже чем через час (ближайшая сверка) в лицензии клиники — отпечаток ключа; через 15 секунд обмен пошёл, строка карточки «Clinic's licence…» говорит «online booking on». Проверка: `curl -s -H "Authorization: Bearer <ключ партнёра>" https://api.easymed.uz/<имя клиники>/v1/clinic` → 200.
+4. Выключение — тот же переключатель: партнёрам «временно недоступна» в пределах минуты (список производителя), обмен клиники замолкает со следующей сверки.
 
 ## Восстановление базы из копии
 
