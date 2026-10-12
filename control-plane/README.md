@@ -140,6 +140,46 @@ database (migration `005_relay_blobs.sql`), not on disk, so there is no nginx
 | `EASYMED_CP_MAX_RELAY_BYTES` | 12 MB | The largest encrypted catalogue accepted |
 | `EASYMED_CP_RELAY_RETENTION_DAYS` | 30 | A blob untouched (neither uploaded nor downloaded) for this long is deleted. Swept on every upload — there is no scheduler |
 
+## Online booking and the public server (`/cp/v1/public-feed`)
+
+PUBLIC_LICENCE_V1 (step 8c of the clinic API). The public server
+`api.easymed.uz` (`public-server/`) never calls this service while serving a
+request: it recognises a clinic by its **signed licence**, which since 8c can
+carry two more fields —
+
+- `subscription: 'active'` — on every licence a paid clinic gets;
+- `api_sync_key` — the fingerprint of the clinic's own signing key for the
+  public server, only while **Online booking / API** is switched on for the
+  clinic in the panel. Without it the clinic's exchange stays silent.
+
+An **unpaid** clinic still gets no licence at all, exactly as before 8c
+(`licence: null`): it runs out its current one on the usual 14-day ladder, and
+nothing it shows changes. Checked against the released clinic code itself
+(`control-plane/server/services/checkin-v3160-clinic.test.js` loads v3.16.0
+from its tag) —
+an "unpaid" licence with the same expiry was tried and dropped, because a
+v3.16.0 clinic notices it (module and name changes made while unpaid reached
+it; a hand-issued longer licence was cut back to 14 days).
+
+Partners learn about "unpaid" from the **vendor-signed feed** instead, which
+the public server pulls from `GET /cp/v1/public-feed` once a minute (owner
+decision 17: partners stop seeing a clinic at the first "unpaid" — here,
+within a minute, even while the clinic is offline). The feed lists clinics
+partners must not see (unpaid, retired, deleted, switched off, no accepted
+key) and revoked keys (partner keys by SHA-256, clinic sync keys by
+fingerprint — added in the clinic's page of the panel). It holds clinic ids and
+key fingerprints only. Signed with the licence key over different bytes
+(`server/services/control/vendor-feed.js`), so a feed can never pass as a
+licence.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `EASYMED_CP_FEED_TOKEN` | none | The same string as `PUBLIC_FEED_TOKEN` on the public server. Without it the endpoint answers 404 and the public server cannot learn about unpaid clinics or revoked keys. Minimum 32 characters; a shorter one is ignored, with a loud line in the log |
+
+At boot the control plane says whether `EASYMED_SIGNING_KEY` is the production
+key compiled into every clinic (`Signing key: the production vendor key.`) or
+warns loudly that it is not — expected only on a development machine.
+
 ## Development
 
 From the repository root:

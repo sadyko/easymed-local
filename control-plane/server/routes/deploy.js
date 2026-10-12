@@ -133,7 +133,9 @@ function configuredToken(env = process.env) {
 // `Authorization: Bearer <token>` and nothing else. The scheme is compared
 // case-insensitively (RFC 7235 says it is case-insensitive) but the token
 // itself never is.
-function bearerToken(header) {
+// Exported (PUBLIC_LICENCE_V1) for routes/public-feed.js — the same bearer
+// rules for the second token-guarded endpoint, never a second copy.
+export function bearerToken(header) {
   const m = /^Bearer[ \t]+(\S+)$/i.exec(String(header || ''));
   return m ? m[1] : null;
 }
@@ -152,7 +154,7 @@ function bearerToken(header) {
  * published format), so a wrong-length guess still pays for one full
  * comparison before being refused.
  */
-function tokenMatches(given, expected) {
+export function tokenMatches(given, expected) {
   const a = Buffer.from(String(given ?? ''), 'utf8');
   const b = Buffer.from(expected, 'utf8');
   if (a.length !== b.length) {

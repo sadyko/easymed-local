@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb } from './db/connection.js';
 import { migrate } from './db/migrate.js';
-import { ensureSigningKey } from './services/signing.js';
+import { ensureSigningKey, signingKeyIsProduction } from './services/signing.js';
 import { bootstrapVendorAdmin } from './services/vendor-auth.js';
 import { createApp } from './app.js';
 
@@ -33,6 +33,20 @@ try {
   console.error('Set EASYMED_SIGNING_KEY to the path of the vendor private key.');
   console.error('To create one:  node ../scripts/make-licence.mjs keygen');
   process.exit(1);
+}
+
+// PUBLIC_LICENCE_V1 — a key that is not the production one is fine on a dev
+// machine and a disaster on settings.easymed.uz: no real clinic and not the
+// public server would accept anything this process signs. Said loudly, once.
+if (!signingKeyIsProduction()) {
+  console.warn('');
+  console.warn('  WARNING: EASYMED_SIGNING_KEY is NOT the production vendor key compiled into');
+  console.warn('  every clinic (server/services/control/licence.js). Real clinics and the public');
+  console.warn('  server api.easymed.uz will reject every licence and feed this process signs.');
+  console.warn('  Expected only on a development machine.');
+  console.warn('');
+} else {
+  console.log('Signing key: the production vendor key.');
 }
 
 const db = openDb(path.join(DATA_DIR, 'registry.db'));

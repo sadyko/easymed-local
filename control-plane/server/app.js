@@ -9,6 +9,7 @@ import { deployRoutes, DEPLOY_MOUNT } from './routes/deploy.js';
 import { relayRoutes, RELAY_MOUNT } from './routes/relay.js';   // BRANCH_SYNC_RELAY_V1
 import { relayTokenRouter, RELAY_TOKEN_MOUNT } from './routes/relay-token.js';   // BRANCH_IDENTITY_V1
 import { branchRouter } from './routes/branch.js';   // BRANCH_SELF_SERVICE_V1
+import { publicFeedRoutes, PUBLIC_FEED_MOUNT } from './routes/public-feed.js';   // PUBLIC_LICENCE_V1
 
 // control-plane/server/app.js -> control-plane/ -> control-plane/public
 const CONTROL_PLANE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -61,6 +62,12 @@ export function createApp(db) {
   // to. See routes/relay.js — the whole point of that file is that this service
   // stores bytes it cannot read.
   app.use(RELAY_MOUNT, relayRoutes(db));
+
+  // PUBLIC_LICENCE_V1 — the public server's feed (clinics hidden from partners,
+  // revoked keys), a bearer-token GET with no body. Above attachVendorUser for
+  // the reason deploy is: a vendor session must buy nothing here. See
+  // routes/public-feed.js.
+  app.use(PUBLIC_FEED_MOUNT, publicFeedRoutes(db));
 
   app.use('/cp', express.json({ limit: '100kb' }));
   // VENDOR_LOGIN_V1 — resolves the vendor session cookie into req.vendorUser
