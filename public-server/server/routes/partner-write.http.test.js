@@ -117,3 +117,21 @@ test('права записи: без «Отмена записи» — 403; л�
   assert.equal(last.status, 429, 'тридцать первая запись за минуту');
   assert.ok(Number(last.headers.get('retry-after')) >= 1);
 });
+
+test('ревью 8b, C9: ответ на другое время — на то предложение, которое видел партнёр (offered_start), иначе 409 offer_changed', async (t) => {
+  const s = await partnerStand();
+  t.after(s.close);
+  const id = (await json(await s.send('POST', '/shifo/v1/appointments', appt()))).body.request_id;
+  ackInbox(s.db, s.clinicId, '1', [{ request_id: id, hold_until: isoOf(NOW + 1800000) }], NOW);
+  const offer = (seq, start) => ({ seq, event: 'booking.offered_other_time', status: 'offered', webhook_url: '', signature: '',
+    body: JSON.stringify({ event_id: 'ev_' + seq, event: 'booking.offered_other_time', request_id: id, status: 'offered', offered_start: start,
+      offer_until: '2030-03-11T09:30:00+05:00' }) });
+  applyEvents(s.db, s.clinicId, [offer(1, '2030-03-12T10:00:00+05:00')], NOW);
+  applyEvents(s.db, s.clinicId, [offer(2, '2030-03-12T14:00:00+05:00')], NOW);
+  const stale = await json(await s.send('POST', '/shifo/v1/appointments/' + id + '/accept', { offered_start: '2030-03-12T10:00:00+05:00' }));
+  assert.deepEqual([stale.status, stale.body.error.code], [409, 'offer_changed']);
+  const bad = await json(await s.send('POST', '/shifo/v1/appointments/' + id + '/decline', { offered_start: 'завтра' }));
+  assert.deepEqual([bad.status, bad.body.error.field, bad.body.error.reason], [400, 'offered_start', 'format']);
+  const ok = await json(await s.send('POST', '/shifo/v1/appointments/' + id + '/accept', { offered_start: '2030-03-12T14:00:00+05:00' }));
+  assert.deepEqual([ok.status, ok.body.status, ok.body.start], [200, 'pending', '2030-03-12T14:00:00+05:00']);
+});

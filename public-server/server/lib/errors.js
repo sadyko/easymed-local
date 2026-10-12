@@ -29,6 +29,7 @@ export const ERRORS = Object.freeze({
   slug_taken:         { status: 409, ru: 'Это имя в адресе занято другой клиникой.', uz: 'Manzildagi bu nom boshqa klinika tomonidan band.', en: 'This address name is taken by another clinic.' },
   not_cancellable:    { status: 409, ru: 'Эту запись отменить уже нельзя.', uz: 'Bu yozuvni endi bekor qilib bo‘lmaydi.', en: 'This appointment can no longer be cancelled.' },
   not_offered:        { status: 409, ru: 'Клиника не предлагала другое время по этой записи.', uz: 'Klinika bu yozuv bo‘yicha boshqa vaqt taklif qilmagan.', en: 'The clinic has not offered another time for this appointment.' },
+  offer_changed:      { status: 409, ru: 'Клиника уже предложила другое время — запросите заявку заново.', uz: 'Klinika allaqachon boshqa vaqt taklif qildi — arizani qayta so‘rang.', en: 'The clinic has already offered a different time — request the appointment again.' },
   offer_expired:      { status: 409, ru: 'Срок ответа на предложенное время истёк.', uz: 'Taklif qilingan vaqtga javob berish muddati tugagan.', en: 'The time to answer the offered slot has passed.' },
   too_large:          { status: 413, ru: 'Запрос слишком большой.', uz: 'So‘rov juda katta.', en: 'The request is too large.' },
   unsupported_encoding: { status: 415, ru: 'Сжатое тело запроса не принимается — пришлите без Content-Encoding.', uz: 'Siqilgan so‘rov tanasi qabul qilinmaydi — Content-Encoding siz yuboring.', en: 'Compressed request bodies are not accepted — send without Content-Encoding.' },

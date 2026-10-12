@@ -160,10 +160,17 @@ export function partnerCancel(db, row, now) {
  * POST /appointments/{id}/accept|decline — ответ партнёра на «другое время».
  * Согласие — снова pending на предложенном времени (срок держания назначит
  * клиника при приёме ответа и сообщит в held); отказ — cancelled.
- * @returns {{row:object} | {error:'not_offered'|'offer_expired'}}
+ *
+ * Ревью 8b, C9: ответ — на то предложение, которое видел партнёр. Прислал он
+ * offered_start (мгновение, offeredStart) и оно не то, что предлагается сейчас, —
+ * offer_changed. В элемент очереди уходит offered_start, на который ответ, —
+ * клиника может сверить его со своим предложением, а сервер снимает согласие,
+ * если раньше клиники пришло её новое предложение (applyStatus).
+ * @returns {{row:object} | {error:'not_offered'|'offer_expired'|'offer_changed'}}
  */
-export function partnerAnswerOffer(db, row, accept, now) {
+export function partnerAnswerOffer(db, row, accept, now, { offeredStart = null } = {}) {
   if (row.status !== 'offered') return { error: 'not_offered' };
+  if (offeredStart != null && offeredStart !== msOf(row.offered_start)) return { error: 'offer_changed' };
   if (accept && !(msOf(row.offer_until) > now)) return { error: 'offer_expired' };
   db.transaction(() => {
     if (accept) {
@@ -172,7 +179,8 @@ export function partnerAnswerOffer(db, row, accept, now) {
     } else {
       touch(db, row.id, { status: 'cancelled', offered_start: null, offer_until: null, hold_until: null }, now);
     }
-    enqueue(db, { clinicId: row.clinic_id, type: accept ? 'offer.accept' : 'offer.decline', requestId: row.id, connectionId: row.connection_id, now });
+    enqueue(db, { clinicId: row.clinic_id, type: accept ? 'offer.accept' : 'offer.decline', requestId: row.id, connectionId: row.connection_id, now,
+      data: { offered_start: row.offered_start } });
   })();
   return { row: requestRow(db, row.clinic_id, row.id) };
 }
@@ -253,6 +261,21 @@ function applyStatus(db, clinicId, body, now) {
     return row;
   }
   const iso = (v) => { const t = msOf(v); return t == null ? null : isoOf(t); };
+  if (body.status === 'offered') {
+    // Ревью 8b, C9. Согласие партнёра ещё в очереди, а клиника предлагает
+    // снова: то же время — согласие в пути, заявка остаётся pending; другое —
+    // согласие на прежнее время снимается (клиника шлёт события раньше, чем
+    // забирает очередь), и партнёр отвечает на новое предложение.
+    const offered = iso(body.offered_start);
+    const accepts = db.prepare("SELECT cursor, data FROM inbox WHERE clinic_id = ? AND request_id = ? AND type = 'offer.accept'").all(clinicId, row.id);
+    const answered = (it) => { try { return JSON.parse(it.data).offered_start; } catch { return null; } };
+    if (row.status === 'pending' && accepts.some((it) => answered(it) === offered)) {
+      touch(db, row.id, { answered_at: row.answered_at || at }, now);
+      return row;
+    }
+    const drop = db.prepare('DELETE FROM inbox WHERE cursor = ?');
+    for (const it of accepts) if (answered(it) !== offered) drop.run(it.cursor);
+  }
   const fields = { status: body.status, answered_at: row.answered_at || at,
     reason: ['declined', 'expired'].includes(body.status) ? String(body.reason || '').slice(0, 32) || null : null };
   if (body.start) fields.start_at = iso(body.start) || row.start_at;

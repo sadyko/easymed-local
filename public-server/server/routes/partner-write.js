@@ -175,9 +175,18 @@ export function writeRoutes(r, ctx) {
     return out.error ? sendError(req, res, out.error) : res.json(publicRequest(out.row, ctx.offsetMin));
   }));
 
+  // Ревью 8b, C9: offered_start в теле (необязательно) — предложение, на которое
+  // отвечает партнёр; не то, что предлагается сейчас, — 409 offer_changed.
   for (const [action, accept] of [['accept', true], ['decline', false]]) {
     r.post('/appointments/:id/' + action, scope('appointments'), handle((req, res) => {
-      const out = partnerAnswerOffer(ctx.db, own(req, 'appointment'), accept, ctx.now());
+      const row = own(req, 'appointment');
+      const seen = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body.offered_start : undefined;
+      let offeredStart = null;
+      if (seen != null && seen !== '') {
+        offeredStart = msOfPartner(seen, ctx.offsetMin);
+        if (offeredStart == null) throw field('offered_start', 'format');
+      }
+      const out = partnerAnswerOffer(ctx.db, row, accept, ctx.now(), { offeredStart });
       return out.error ? sendError(req, res, out.error) : res.json(publicRequest(out.row, ctx.offsetMin));
     }));
   }

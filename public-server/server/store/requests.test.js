@@ -263,3 +263,33 @@ test('ревью 8b, C8: очередь уведомлений клиники п
   s.db.prepare("UPDATE deliveries SET state = 'delivered' WHERE id = 1").run();
   assert.deepEqual(applyEvents(s.db, s.c.clinicId, [event(2, a, 'booking.declined', 'declined', { reason: 'slot_taken' }, hook)], NOW), { accepted: [2], queue_full: 0 });
 });
+
+test('ревью 8b, C9: клиника предложила другое время, пока согласие партнёра на прежнее ехало к ней — согласие снято, партнёр видит новое предложение', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const offerAt = (seq, startIso) => event(seq, a, 'booking.offered_other_time', 'offered', { offered_start: startIso, offer_until: isoOf(NOW + 1800000) });
+  applyEvents(s.db, s.c.clinicId, [offerAt(1, '2030-03-12T07:00:00Z')], NOW);
+  const off = requestRow(s.db, s.c.clinicId, a.id);
+  assert.deepEqual(partnerAnswerOffer(s.db, off, true, NOW + 1000, { offeredStart: Date.parse('2030-03-12T09:00:00Z') }), { error: 'offer_changed' },
+    'партнёр отвечает на другое предложение — 409');
+  const acc = partnerAnswerOffer(s.db, off, true, NOW + 1000, { offeredStart: Date.parse('2030-03-12T07:00:00Z') });
+  assert.equal(acc.row.status, 'pending');
+  const [item] = inboxItems(s.db, s.c.clinicId, '').filter((i) => i.type === 'offer.accept');
+  assert.equal(item.data.offered_start, '2030-03-12T07:00:00Z', 'клиника видит, на какое предложение ответ');
+  // Регистратор тем временем предложил 14:00: событие приходит раньше, чем клиника заберёт очередь.
+  applyEvents(s.db, s.c.clinicId, [offerAt(2, '2030-03-12T09:00:00Z')], NOW + 2000);
+  assert.deepEqual(inboxItems(s.db, s.c.clinicId, '').filter((i) => i.type === 'offer.accept'), [], 'согласие на прежнее время не дойдёт до нового предложения');
+  const now = requestRow(s.db, s.c.clinicId, a.id);
+  assert.deepEqual([now.status, now.offered_start], ['offered', '2030-03-12T09:00:00Z']);
+});
+
+test('ревью 8b, C9: то же предложение ещё раз, пока согласие на него в очереди, — согласие остаётся, статус pending', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const offer = (seq) => event(seq, a, 'booking.offered_other_time', 'offered', { offered_start: '2030-03-12T07:00:00Z', offer_until: isoOf(NOW + 1800000) });
+  applyEvents(s.db, s.c.clinicId, [offer(1)], NOW);
+  partnerAnswerOffer(s.db, requestRow(s.db, s.c.clinicId, a.id), true, NOW + 1000);
+  applyEvents(s.db, s.c.clinicId, [offer(2)], NOW + 2000);
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'pending');
+  assert.equal(inboxItems(s.db, s.c.clinicId, '').filter((i) => i.type === 'offer.accept').length, 1);
+});
