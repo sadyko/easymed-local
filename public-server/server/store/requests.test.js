@@ -293,3 +293,31 @@ test('ревью 8b, C9: то же предложение ещё раз, пок�
   assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'pending');
   assert.equal(inboxItems(s.db, s.c.clinicId, '').filter((i) => i.type === 'offer.accept').length, 1);
 });
+
+test('ревью 8b, C10: «другое время» от клиники, не дошедшей до отмены или отказа партнёра, отмену не перебивает — время свободно', () => {
+  const s = setup();
+  const a = appt(s).row;
+  partnerCancel(s.db, a, NOW);
+  applyEvents(s.db, s.c.clinicId, [event(1, a, 'booking.offered_other_time', 'offered', { offered_start: '2030-03-12T07:00:00Z', offer_until: isoOf(NOW + 1800000) })],
+    NOW + 1000);
+  applyEvents(s.db, s.c.clinicId, [event(2, a, 'booking.confirmed', 'pending')], NOW + 2000);
+  const r = requestRow(s.db, s.c.clinicId, a.id);
+  assert.deepEqual([r.status, r.offered_start], ['cancelled', null], 'отмена партнёра сильнее предложения в пути');
+  assert.equal(queueOverlaps(s.db, s.c.clinicId, 7, Date.parse('2030-03-12T07:00:00Z'), 15, NOW + 3000), false, 'призрачное предложение время не держит');
+  assert.deepEqual(partnerAnswerOffer(s.db, r, true, NOW + 3000), { error: 'not_offered' });
+  applyEvents(s.db, s.c.clinicId, [event(3, a, 'appointment.created', 'booked', { start: '2030-03-12T10:00:00+05:00' })], NOW + 4000);
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'booked', 'клиника записала до отмены — это итог, а не «в пути»');
+});
+
+test('ревью 8b, C10: отказ партнёра от другого времени держится как отмена — новое предложение клиники в пути его не перебивает', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const offer = (seq, start) => event(seq, a, 'booking.offered_other_time', 'offered', { offered_start: start, offer_until: isoOf(NOW + 1800000) });
+  applyEvents(s.db, s.c.clinicId, [offer(1, '2030-03-12T07:00:00Z')], NOW);
+  const r = partnerAnswerOffer(s.db, requestRow(s.db, s.c.clinicId, a.id), false, NOW + 1000).row;
+  assert.equal(r.status, 'cancelled');
+  assert.ok(r.cancel_requested_at, 'отказ отмечен как отмена партнёром');
+  applyEvents(s.db, s.c.clinicId, [offer(2, '2030-03-12T09:00:00Z')], NOW + 2000);
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'cancelled', 'клиника применит отказ к своему предложению — обе стороны «отменено»');
+  assert.deepEqual(inboxItems(s.db, s.c.clinicId, '').filter((i) => i.type === 'offer.decline').length, 1, 'отказ доходит до клиники');
+});

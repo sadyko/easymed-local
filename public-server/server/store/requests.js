@@ -50,6 +50,8 @@ export const BODY_MAX = 16384;
 export const PARTNER_STATUSES = Object.freeze(['new', 'accepted', 'pending', 'offered', 'booked', 'declined', 'expired',
   'cancelled', 'arrived', 'no_show', 'closed']);
 const NEW_TYPES = Object.freeze(['request.new', 'appointment.new']);
+/** Итоги клиники, которые сильнее отмены партнёром, ещё не дошедшей до неё. */
+const CLINIC_OUTCOMES = Object.freeze(['booked', 'cancelled', 'arrived', 'no_show']);
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 /** Номер заявки: rq_ + 24 знака латиницы и цифр (клиника ждёт ^rq_[A-Za-z0-9]{6,37}$). */
@@ -177,7 +179,9 @@ export function partnerAnswerOffer(db, row, accept, now, { offeredStart = null }
       touch(db, row.id, { status: 'pending', start_at: row.offered_start, offered_start: null, offer_until: null, hold_until: null,
         delivered_at: null, answered_at: null }, now);
     } else {
-      touch(db, row.id, { status: 'cancelled', offered_start: null, offer_until: null, hold_until: null }, now);
+      // Отказ держится как отмена партнёром (ревью 8b, C10): предложение
+      // клиники, отправленное до того, как она его увидела, его не перебьёт.
+      touch(db, row.id, { status: 'cancelled', offered_start: null, offer_until: null, hold_until: null, cancel_requested_at: isoOf(now) }, now);
     }
     enqueue(db, { clinicId: row.clinic_id, type: accept ? 'offer.accept' : 'offer.decline', requestId: row.id, connectionId: row.connection_id, now,
       data: { offered_start: row.offered_start } });
@@ -254,9 +258,11 @@ function applyStatus(db, clinicId, body, now) {
   const row = typeof body.request_id === 'string' ? requestRow(db, clinicId, body.request_id) : null;
   if (!row || !PARTNER_STATUSES.includes(body.status)) return row;
   const at = isoOf(now);
-  // Партнёр уже отменил, а клиника, не дойдя до отмены в очереди, отпустила время
-  // («истекло» / отказ): для партнёра заявка остаётся отменённой.
-  if (row.cancel_requested_at && row.status === 'cancelled' && ['declined', 'expired'].includes(body.status)) {
+  // Партнёр уже отменил (или отказался от другого времени), а клиника, не дойдя
+  // до этого в очереди, отпустила время («истекло» / отказ) или предложила другое
+  // (ревью 8b, C10): для партнёра заявка остаётся отменённой, время свободно.
+  // Итог клиники — записан, отменён, пришёл, не пришёл — сильнее.
+  if (row.cancel_requested_at && row.status === 'cancelled' && !CLINIC_OUTCOMES.includes(body.status)) {
     touch(db, row.id, { answered_at: row.answered_at || at }, now);
     return row;
   }
