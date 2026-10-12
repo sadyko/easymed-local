@@ -7,8 +7,8 @@
 // партнёра никогда не ждёт ни клинику, ни сеть — только свою базу.
 import fs from 'node:fs';
 import path from 'node:path';
-import { createPublicKey } from 'node:crypto';
 import { readConfig, SERVICE_ROOT } from './config.js';
+import { resolveLicenceKey } from './licence-key.js';
 import { openDb } from './db/connection.js';
 import { migrate } from './db/migrate.js';
 import { createPublicServer } from './app.js';
@@ -23,13 +23,14 @@ try { cfg = readConfig(); } catch (e) {
 const version = JSON.parse(fs.readFileSync(path.join(SERVICE_ROOT, 'package.json'), 'utf8')).version;
 fs.mkdirSync(cfg.dataDir, { recursive: true, mode: 0o700 });
 
-let licencePublicKey = null;
-if (cfg.licenceKeyPath) {
-  try { licencePublicKey = createPublicKey(fs.readFileSync(cfg.licenceKeyPath, 'utf8')); } catch {
-    console.error('Публичный сервер не запущен: PUBLIC_LICENCE_PUBLIC_KEY — не открытый ключ Ed25519 (' + cfg.licenceKeyPath + ')');
-    process.exit(1);
-  }
+// PUBLIC_LICENCE_V1 — ключ лицензий: вшитый ключ производителя, чужой — только
+// на стенде с PUBLIC_ALLOW_FOREIGN_LICENCE_KEY=1 (licence-key.js).
+let licence;
+try { licence = resolveLicenceKey({ path: cfg.licenceKeyPath, allowForeign: cfg.allowForeignLicenceKey }); } catch (e) {
+  console.error('Публичный сервер не запущен: ' + e.message);
+  process.exit(1);
 }
+const licencePublicKey = licence.key;
 
 const db = openDb(path.join(cfg.dataDir, 'public.db'));
 migrate(db);
@@ -43,7 +44,8 @@ ctx.jobs = jobs;
 
 const server = app.listen(cfg.port, cfg.bind, () => {
   console.log('Easy-Med public server ' + version + ' is running on ' + cfg.bind + ':' + cfg.port + ' (data: ' + cfg.dataDir + ')');
-  if (!licencePublicKey) console.log('Licence key: the vendor key compiled into the app (server/services/control/licence.js).');
+  if (licence.source === 'compiled') console.log('Licence key: the production vendor key compiled into the app (' + licence.fingerprint + ').');
+  else console.warn('WARNING: licence key ' + licence.fingerprint + ' is NOT the production vendor key — a test stand only (PUBLIC_ALLOW_FOREIGN_LICENCE_KEY=1).');
 });
 server.requestTimeout = 20000;
 server.headersTimeout = 10000;

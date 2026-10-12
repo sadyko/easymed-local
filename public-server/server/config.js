@@ -21,6 +21,18 @@ export const DEFAULT_SYNC_SKEW_MIN = 15;
 /** Смещение времени ответов — Ташкент, UTC+5 (PUBLIC_TZ_OFFSET_MIN); документация называет его отсюда (API_DOCS_V1). */
 export const DEFAULT_TZ_OFFSET_MIN = 300;
 
+// PUBLIC_LICENCE_V1 (шаг 8c):
+//   • DEFAULT_PORT — 8096, не 8095: на 45.77.242.169 порт 8095 уже занят
+//     сервером лицензий (easymed-cp, docs/HANDOVER.md, «Panel»), и служба с
+//     прежним умолчанием не запустилась бы (EADDRINUSE);
+//   • список производителя (клиники, скрытые от партнёров, отозванные ключи) —
+//     GET <PUBLIC_FEED_URL> с токеном PUBLIC_FEED_TOKEN (= EASYMED_CP_FEED_TOKEN
+//     сервера лицензий), раз в PUBLIC_FEED_EVERY_SEC секунд. Нет токена — список
+//     не забирается (журнал службы говорит об этом при запуске).
+export const DEFAULT_PORT = 8096;
+export const DEFAULT_FEED_URL = 'https://settings.easymed.uz/cp/v1/public-feed';
+export const DEFAULT_FEED_EVERY_SEC = 60;
+
 function int(env, name, def, min, max) {
   const raw = env[name];
   if (raw == null || String(raw).trim() === '') return def;
@@ -38,14 +50,16 @@ function trustProxyOf(raw) {
 /**
  * @returns {{port:number, bind:string, dataDir:string, baseUrl:string, licenceKeyPath:string, trustProxy:(string|false),
  *   requireHttps:boolean, offsetMin:number, syncSkewMs:number, uncollectedMaxMs:number, selfIps:string[], metricsToken:string,
- *   webhooks:boolean}}
+ *   webhooks:boolean, allowForeignLicenceKey:boolean, feedUrl:string, feedToken:string, feedEveryMs:number}}
  */
 export function readConfig(env = process.env, { root = SERVICE_ROOT } = {}) {
   const dataRaw = String(env.PUBLIC_DATA_DIR || '').trim();
   const base = String(env.PUBLIC_BASE_URL || 'https://api.easymed.uz').trim().replace(/\/+$/, '');
   if (!/^https?:\/\/[^\s/]+$/.test(base)) throw new Error('PUBLIC_BASE_URL: ожидается адрес вида https://api.easymed.uz');
+  const feedUrl = String(env.PUBLIC_FEED_URL || DEFAULT_FEED_URL).trim();
+  if (!/^https?:\/\/[^\s/]+\/\S*$/.test(feedUrl)) throw new Error('PUBLIC_FEED_URL: ожидается адрес вида https://settings.easymed.uz/cp/v1/public-feed');
   return {
-    port: int(env, 'PUBLIC_PORT', 8095, 1, 65535),
+    port: int(env, 'PUBLIC_PORT', DEFAULT_PORT, 1, 65535),
     bind: String(env.PUBLIC_BIND || '127.0.0.1').trim(),
     dataDir: dataRaw ? path.resolve(root, dataRaw) : path.join(root, 'data'),
     baseUrl: base,
@@ -58,5 +72,10 @@ export function readConfig(env = process.env, { root = SERVICE_ROOT } = {}) {
     selfIps: String(env.PUBLIC_SELF_IPS || '').split(',').map((s) => s.trim()).filter(Boolean),
     metricsToken: String(env.PUBLIC_METRICS_TOKEN || '').trim(),
     webhooks: String(env.PUBLIC_WEBHOOKS ?? '1').trim() !== '0',
+    // PUBLIC_LICENCE_V1 — чужой ключ лицензий только на стенде (licence-key.js).
+    allowForeignLicenceKey: String(env.PUBLIC_ALLOW_FOREIGN_LICENCE_KEY || '').trim() === '1',
+    feedUrl,
+    feedToken: String(env.PUBLIC_FEED_TOKEN || '').trim(),
+    feedEveryMs: int(env, 'PUBLIC_FEED_EVERY_SEC', DEFAULT_FEED_EVERY_SEC, 10, 3600) * 1000,
   };
 }
