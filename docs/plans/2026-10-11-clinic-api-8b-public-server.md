@@ -161,7 +161,7 @@
   - `ops.js`.
 - **`server/test-helpers/`:** `fixture.js`, `partner-stand.js`.
 
-Всего — 52 файла: 21 файл тестов (86 тестов; было 84 — решение 20 добавило тест настроек и тест очереди), 26 модулей, 2 стенда, миграция, `package.json`, `DEPLOY.md`. После ревью — 57 файлов, 23 файла тестов, 131 тест (раздел «Ревью и исправления» в конце плана).
+Всего — 52 файла: 21 файл тестов (86 тестов; было 84 — решение 20 добавило тест настроек и тест очереди), 26 модулей, 2 стенда, миграция, `package.json`, `DEPLOY.md`. После ревью — 57 файлов, 23 файла тестов, 132 теста (раздел «Ревью и исправления» в конце плана).
 
 ---
 
@@ -6394,6 +6394,36 @@ test('настоящая клиника и настоящий публичный
   await sync();
   assert.equal((await partner('GET', '/shifo/v1/doctors')).status, 503, 'старая лицензия без отметки «не оплачено» не снимает её');
 });
+
+test('проверка исправлений 8b: здоровая клиника с неизменным временем — партнёр не видит stale вечером и ночью; клиника замолчала — stale', async (t) => {
+  const s = bookingSeed();
+  s.db.prepare('UPDATE api_connections SET scopes = ?, key_expires_at = NULL WHERE id = ?').run(JSON.stringify([...SCOPES]), s.connId);
+  const dataDir = tmpDir('em-pub-e2e-quiet-');
+  const keyPath = path.join(dataDir, SYNC_KEY_FILE);
+  const identity = loadSyncIdentity({ keyPath, create: true });
+  const vendor = testVendor();
+  fs.writeFileSync(path.join(dataDir, 'licence.dat'), signTestLicence(vendor, {
+    clinic_id: 'c-000777', clinic_name: 'Шифо', modules: [], valid_until: '2030-04-01T00:00:00Z', issued_at: '2030-03-10T00:00:00Z', nonce: 'q',
+    api_sync_key: identity.fingerprint }));
+  fs.writeFileSync(path.join(dataDir, 'control.json'), JSON.stringify({ clinic_id: 'c-000777' }));
+  const EVENING = localAt('2030-03-11', '19:00');   // приём кончился — свободное время до полуночи не меняется
+  const off = -new Date(EVENING).getTimezoneOffset();
+  let clock = EVENING;
+  const pub = testDb();
+  const { app } = createPublicServer({ db: pub.db, dataDir: pub.dir, now: () => clock, licencePublicKey: vendor.publicKey, offsetMin: off,
+    baseUrl: 'https://api.test', requireHttps: false, trustProxy: false, version: 'e2e' });
+  const server = await listen(app);
+  t.after(() => new Promise((r) => server.close(r)));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  const sync = () => syncOnce(s.db, dataDir, { fetchImpl: globalThis.fetch, env: { EASYMED_PUBLIC_URL: base }, now: () => clock, keyPath,
+    kekPath: s.kekPath, storageDir: path.join(dataDir, 'storage') });
+  const stale = async () => (await (await fetch(base + '/shifo/v1/slots?doctor_id=7', { headers: { Authorization: 'Bearer ' + s.key } })).json()).stale;
+  assert.equal((await sync()).ok, true);
+  for (let m = 1; m <= 50; m += 1) { clock += 60000; assert.equal((await sync()).ok, true); }   // 50 минут обычной работы, раз в минуту
+  assert.equal(await stale(), false, 'неизменное время клиника присылает раз в 15 минут — для партнёра оно свежее');
+  clock += 11 * 60000;   // клиника замолчала
+  assert.equal(await stale(), true, 'клиника молчит дольше 10 минут — stale');
+});
 ```
 
 - [ ] **Step 2: стражи** `public-server/server/no-plaintext.guard.test.js`:
@@ -6786,7 +6816,8 @@ test('исходники: вызовы журнала не получают те
   - клиника 8a подтверждает каждый такт, в котором разобрала хоть один элемент (даже если курсор не сдвинулся);
   - ответ `/events` прежний: `{accepted}`.
 - **Ответы на другое время** (`offer.accept`, `offer.decline`) несут `data.offered_start`. Клиника 8a сверяет его только у согласия; отказ — отмена партнёром в любом случае.
-- **Клиника 8a:** 413 — своя причина `too_large` (текст экрана — 8d); отпечаток не принятого по размеру снимка или времени запоминается — снова через 15 минут или при изменении.
+- **Клиника 8a:** 413 — своя причина `too_large` (текст экрана — 8d); отпечаток не принятого по размеру снимка или времени запоминается с пометкой «не принят» — снова через 15 минут или при изменении, а до тех пор причина держится на экране.
+- **Клиника 8a:** неизменное время уходит раз в 15 минут (минутная проверка «изменилось ли» не сдвигает срок повтора) — на это опирается `stale` по возрасту в `/slots` (35 минут).
 - **Миграция `001`** изменена на месте: служба ещё нигде не стоит. Страж схемы обновлён.
 - **`/_metrics`** — новые плоские числа:
   - `deliveries_queue_full`;
@@ -6794,7 +6825,7 @@ test('исходники: вызовы журнала не получают те
 
 **Итог по файлам:** служба — 57 файлов (было 52):
 - новые: `store/access-journal.js` и его тест, `server/lockfile.test.js`, `scripts/lock-from-root.mjs`, `package-lock.json`;
-- 23 файла тестов, 131 тест — зелёные как есть и с `force-en.mjs`.
+- 23 файла тестов, 132 теста — зелёные как есть и с `force-en.mjs`.
 
 ### Проверка исправлений (A–G)
 
@@ -6809,6 +6840,13 @@ test('исходники: вызовы журнала не получают те
 | E | важная / малая | Тело из 2 МБ `{}` при полном кэше роняло службу (160 МБ кучи) | Не больше 100 тыс. объектов и списков в теле (сверх — 413 без разбора); кэш по оценке кучи ≤ 40 МБ; начала окон — строки | `8be19c84` |
 | F | малая | Бюджет журнала запросов — один на все клиники: два занятых ключа вытесняли журнал остальных | Бюджет на клинику, запас для 401 без ключа, общий потолок — только защита диска, отметка `SKIP` для 8d; `/_metrics` — `access_skipped_over_clinic` | `52d5159a` (Б), `0deb6420` |
 | G | малая | Потолок файлов считал фото, которых в снимке уже нет: новые фото переснятых врачей — отказ до суток | По числу — 2 × (врачи + 2); сверх — сначала убираются не используемые снимком старше 10 минут | `85309d9b` |
+
+### Узкая проверка (после A–G)
+
+| # | Важность | Что было | Что сделано | Коммит |
+|---|---|---|---|---|
+| 1 | малая | После 413 следующие такты шли по ветке «не изменилось»: экран клиники снова говорил «Работает», хотя у сервера нет снимка или времени | Отпечаток не принятого — с пометкой «не принят»; такт с тем же содержимым снова называет `too_large` | `716424f2` |
+| 2 | важная | Минутная проверка времени сдвигала `slots_at` клиники — неизменное время не уходило вовсе, и при `stale` по возрасту (35 минут) партнёры видели работающие клиники несвежими каждый тихий вечер | «Проверили» и «отправили» — разные мгновения: неизменное время уходит раз в 15 минут. Сквозной тест: клиника 50 минут на связи без изменений — `stale: false`; молчит 11 минут — `stale: true` | `c467fe5b` |
 
 ### Новые файлы службы
 
