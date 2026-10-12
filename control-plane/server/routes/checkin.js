@@ -22,7 +22,10 @@ export function checkinRoutes(db) {
   const r = Router();
 
   r.post('/', (req, res) => {
-    const { install_token, version, fingerprint, module_requests, stats, update_result } = req.body || {};
+    // PUBLIC_LICENCE_V1 — api_sync_public_key (the clinic sends it since 8a) is
+    // the OPEN half of its public-server signing key; checkIn() keeps only its
+    // fingerprint. A private key never travels here.
+    const { install_token, version, fingerprint, module_requests, stats, update_result, api_sync_public_key } = req.body || {};
 
     // signLicence runs INSIDE checkIn(), but only AFTER the check-in itself
     // has already committed (see checkIn's own doc comment) — so if it throws
@@ -44,6 +47,7 @@ export function checkinRoutes(db) {
       moduleRequests: module_requests,
       stats,
       updateResult: update_result,
+      apiSyncPublicKey: api_sync_public_key,
     }, { signLicence });
 
     if (!result) {

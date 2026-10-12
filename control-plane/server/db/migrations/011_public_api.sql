@@ -1,7 +1,7 @@
 -- 011_public_api.sql — PUBLIC_LICENCE_V1, шаг 8c API клиники: сервер лицензий
 -- включает клинике онлайн-запись (публичный сервер api.easymed.uz), вписывает в
--- подписанную лицензию отпечаток её ключа обмена и отметку оплаты, ведёт срочный
--- отзыв ключей. Данных пациентов здесь нет и не будет (страж
+-- подписанную лицензию отпечаток её ключа обмена и «active» (неоплаченной
+-- лицензии нет, как до 8c — план 8c Р14), ведёт срочный отзыв ключей. Данных пациентов здесь нет и не будет (страж
 -- server/services/api/no-patient-data-to-vendor.test.js): только флаг, отпечатки
 -- ключей и сроки выданной лицензии.
 
@@ -18,9 +18,9 @@ ALTER TABLE clinics ADD COLUMN api_sync_key_accepted_at TEXT;
 ALTER TABLE clinics ADD COLUMN api_sync_key_seen TEXT;
 ALTER TABLE clinics ADD COLUMN api_sync_key_seen_at TEXT;
 -- Последняя выданная лицензия: issued_at — нижняя граница следующей (у каждой
--- выдачи issued_at строго больше), valid_until — потолок лицензии «не оплачено»
--- (она не продлевает срок), subscription и api_sync_key — что сейчас сказано
--- клинике (панель показывает, дошло ли включение).
+-- выдачи issued_at строго больше); valid_until, subscription и api_sync_key —
+-- что сейчас сказано клинике (панель показывает, дошло ли включение).
+-- Неоплаченной лицензия не выдаётся, и эти колонки не трогаются (Р14).
 ALTER TABLE clinics ADD COLUMN licence_issued_at TEXT;
 ALTER TABLE clinics ADD COLUMN licence_valid_until TEXT;
 ALTER TABLE clinics ADD COLUMN licence_subscription TEXT;

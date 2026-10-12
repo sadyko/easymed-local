@@ -40,6 +40,12 @@ import { COUNTER_NAMES } from '../../../server/services/control/metrics.js';
 // file's job is DB plumbing (read the clinic's ring/pin, read the releases
 // table, count outcomes); rings.js's job is deciding what those facts mean.
 import { offerFor, shouldHalt } from './rings.js';
+// PUBLIC_LICENCE_V1 (step 8c of the clinic API) — the clinic's sync key for the
+// public server, the online-booking switch and "active" in the signed licence
+// (an unpaid clinic still gets no licence at all — services/public-api.js
+// licenceTerms). The fingerprint formula is the clinic's own (one definition).
+import { syncKeyFingerprint } from '../../../server/services/api/sync-identity.js';
+import { noteSyncKey, isRevoked, licenceTerms, recordIssued } from './public-api.js';
 
 // Advisory bounds, mirroring enrollment.js's own MAX_FINGERPRINT_LEN (same
 // reasoning: these are evidence, not credentials, so an absurd value is
@@ -255,7 +261,9 @@ function normaliseUpdateResult(input) {
 // in the registry) is treated as NOT entitled: fail closed, the same way the
 // rest of this project treats "can't tell" as "locked" rather than guessing
 // in the clinic's favour.
-function isEntitled(subscription, subscriptionUntil, now = new Date()) {
+// Exported (PUBLIC_LICENCE_V1) for the public-server feed and the panel's "what
+// partners see" — the same rule decides re-arming and partner visibility.
+export function isEntitled(subscription, subscriptionUntil, now = new Date()) {
   if (subscription !== 'active') return false;
   if (subscriptionUntil === null || subscriptionUntil === undefined || subscriptionUntil === '') return true;
   const until = parseDateOnly(subscriptionUntil);
@@ -280,11 +288,15 @@ function isEntitled(subscription, subscriptionUntil, now = new Date()) {
  *   update attempt succeeded. Optional forever, same as `stats` — an old clinic that never sends this checks in
  *   exactly as before. Never verified/interpreted beyond version+ok (see normaliseUpdateResult); only ever used to
  *   move this file's own outcome counters and, via rings.js:shouldHalt, to freeze a release from further offers.
+ * @param {*} [args.apiSyncPublicKey] PUBLIC_LICENCE_V1 — the OPEN half of the clinic's public-server signing key
+ *   (base64 DER SPKI, sent since 8a). Only its fingerprint is stored. Optional forever; garbage is ignored.
  * @param {object} [hooks]
- * @param {function({clinicId:string, clinicName:string, modules:string[]}): {payload:object, sig:string}} [hooks.signLicence]
+ * @param {function({clinicId:string, clinicName:string, modules:string[], subscription:'active', apiSyncKey:?string,
+ *   issuedAfter?:string}): {payload:object, sig:string}} [hooks.signLicence]
  *   Called ONLY when the clinic is currently entitled to a fresh licence
- *   (rule 5), and ONLY after the check-in below has already committed (rule
- *   2) — if it throws, the throw propagates straight to the caller, but the
+ *   (rule 5) — PUBLIC_LICENCE_V1 keeps that unchanged: an unpaid clinic gets
+ *   no licence, exactly as before — and ONLY after the check-in below has
+ *   already committed (rule 2) — if it throws, the throw propagates straight to the caller, but the
  *   checkins row (and everything else this call wrote) is already durable.
  * @returns {{licence: object|null, subscription: 'active'|'unpaid', collect: string[], update: object|null} | null}
  *   null means unknown, inactive, or malformed token (rule 1) — the caller
@@ -295,7 +307,7 @@ function isEntitled(subscription, subscriptionUntil, now = new Date()) {
  *   for the single newest release this clinic is eligible for (rings.js:offerFor),
  *   or null when there is nothing to offer.
  */
-export function checkIn(db, { installToken, version, fingerprint, moduleRequests, stats, updateResult } = {}, { signLicence } = {}) {
+export function checkIn(db, { installToken, version, fingerprint, moduleRequests, stats, updateResult, apiSyncPublicKey } = {}, { signLicence } = {}) {
   const token = normaliseToken(installToken);
   if (!token) return null; // malformed/missing — never worth a DB round-trip, same outward shape as "unknown"
 
@@ -309,6 +321,8 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
   const normStats = normaliseStats(stats);
   // UPDATE_DELIVERY_V1 — same reasoning: pure, outside the transaction.
   const normUpdateResult = normaliseUpdateResult(updateResult);
+  // PUBLIC_LICENCE_V1 — pure too: '' for absent or garbage, never a throw.
+  const syncFp = syncKeyFingerprint(apiSyncPublicKey);
 
   // ATOMICITY — as with enrollment.js's own transaction, this is not about
   // concurrent-request locking: better-sqlite3 is fully synchronous and Node
@@ -322,7 +336,9 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
     // same identifying SELECT, not a second query) purely so rings.js:offerFor
     // has what it needs; neither column affects rule 1's identification/entitlement logic.
     const clinic = db.prepare(
-      `SELECT clinic_id, name, subscription, subscription_until, last_fingerprint, collect_set, ring, pinned_version
+      `SELECT clinic_id, name, subscription, subscription_until, last_fingerprint, collect_set, ring, pinned_version,
+              api_enabled, api_sync_key, api_sync_key_accepted_at, api_sync_key_seen, api_sync_key_seen_at,
+              licence_issued_at
        FROM clinics WHERE install_token = ? AND active = 1`
     ).get(token);
     // Rule 1 — unknown, inactive, and (handled above) malformed tokens are
@@ -366,6 +382,12 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
        SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), last_version = ?, last_fingerprint = ?
        WHERE clinic_id = ?`
     ).run(normVersion, normFingerprint, clinic.clinic_id);
+
+    // PUBLIC_LICENCE_V1 — the sync key: recorded (and accepted if it is the
+    // clinic's first), like last_fingerprint, inside this same transaction.
+    // A revoked key never reaches a licence, whatever the columns say.
+    const sync = noteSyncKey(db, clinic, syncFp);
+    const apiSyncKey = sync.apiSyncKey && !isRevoked(db, 'sync_key', sync.apiSyncKey) ? sync.apiSyncKey : null;
 
     // Rule 6 — deduplicated per (clinic_id, module_key) while status='open'.
     // No unique index enforces this in THIS schema (unlike the clinic-side
@@ -494,6 +516,9 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
       modules,
       collectSet: clinic.collect_set,
       update,
+      apiEnabled: !!clinic.api_enabled,
+      apiSyncKey,
+      licenceIssuedAt: clinic.licence_issued_at,
     };
   });
 
@@ -513,9 +538,20 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
   // its licence renewal below either.
   pruneCheckins(db);
   const eligible = isEntitled(recorded.subscription, recorded.subscriptionUntil);
-  const licence = eligible && signLicence
-    ? signLicence({ clinicId: recorded.clinicId, clinicName: recorded.clinicName, modules: recorded.modules })
+  // PUBLIC_LICENCE_V1 — entitled: re-armed for 14 days, as always, now also
+  // saying "active" and (switch on) the accepted sync key, with issued_at
+  // strictly after the last one this clinic was given. Unpaid: nothing,
+  // exactly as before 8c (plan 8c R14) — partners stop seeing it through the
+  // public-server feed (routes/public-feed.js), the clinic's own countdown and
+  // everything it shows stay untouched (checkin-v3160-clinic.test.js).
+  const terms = licenceTerms({
+    entitled: eligible, apiEnabled: recorded.apiEnabled, apiSyncKey: recorded.apiSyncKey,
+    lastIssuedAt: recorded.licenceIssuedAt,
+  });
+  const licence = terms && signLicence
+    ? signLicence({ clinicId: recorded.clinicId, clinicName: recorded.clinicName, modules: recorded.modules, ...terms })
     : null;
+  if (licence) recordIssued(db, recorded.clinicId, licence.payload);
 
   return {
     licence,

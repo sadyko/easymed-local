@@ -359,14 +359,16 @@ test('PUBLIC_LICENCE_V1: a wrong subscription word or a malformed sync key is a 
   }
 });
 
-test('PUBLIC_LICENCE_V1: notAfter only ever shortens valid_until; a malformed one is refused', () => {
+// Decision R14 (2026-10-12): an unpaid clinic gets NO licence, exactly as
+// before 8c — so there is no "shortened" licence either, and no way for a
+// caller to pick or cap an expiry. A notAfter on the caller's object is
+// ignored like valid_until is.
+test('PUBLIC_LICENCE_V1: a caller cannot cap or choose valid_until — notAfter is ignored, always now + days', () => {
   useKey(generateKeyPairSync('ed25519').privateKey);
-  const soon = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
-  assert.equal(signLicence({ clinicId: 'c-1', modules: [], notAfter: soon }).payload.valid_until, soon);
-  const far = new Date(Date.now() + 400 * 24 * 3600 * 1000).toISOString();
-  const capped = Date.parse(signLicence({ clinicId: 'c-1', modules: [], notAfter: far }).payload.valid_until);
-  assert.ok(Math.abs(capped - (Date.now() + 14 * 24 * 3600 * 1000)) < 60_000, 'a later notAfter never lengthens the 14 days');
-  assert.throws(() => signLicence({ clinicId: 'c-1', modules: [], notAfter: 'tomorrow' }), /notAfter/);
+  for (const notAfter of [new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString(), 'tomorrow', 42]) {
+    const until = Date.parse(signLicence({ clinicId: 'c-1', modules: [], notAfter }).payload.valid_until);
+    assert.ok(Math.abs(until - (Date.now() + 14 * 24 * 3600 * 1000)) < 60_000, String(notAfter));
+  }
 });
 
 test('PUBLIC_LICENCE_V1: issued_at is strictly after issuedAfter even when the vendor clock is behind it', () => {

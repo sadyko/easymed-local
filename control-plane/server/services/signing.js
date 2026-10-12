@@ -187,7 +187,7 @@ function normaliseModules(modules) {
   return Array.from(set).sort();
 }
 
-function computeValidUntil(days, notAfter) {
+function computeValidUntil(days) {
   const n = Number(days);
   // NaN is a bug (a typo'd config, an unparsed form field), not a testing
   // tool — it must never reach new Date(), which would turn it into an
@@ -203,15 +203,6 @@ function computeValidUntil(days, notAfter) {
   const until = new Date(Date.now() + n * DAY_MS);
   if (Number.isNaN(until.getTime())) {
     throw new Error(`signLicence: days ${n} works out to a date outside what a computer can represent.`);
-  }
-  // PUBLIC_LICENCE_V1 — notAfter can only SHORTEN a licence, never lengthen it:
-  // the "unpaid" licence carries the payment mark to the public server without
-  // re-arming the clinic's 14 days (services/public-api.js licenceTerms). It is
-  // still not an API for choosing an expiry: the result is min(days, notAfter).
-  if (notAfter !== undefined && notAfter !== null) {
-    const cap = typeof notAfter === 'string' ? Date.parse(notAfter) : NaN;
-    if (!Number.isFinite(cap)) throw new Error(`signLicence: notAfter must be an ISO date string, got ${JSON.stringify(notAfter)}.`);
-    if (cap < until.getTime()) return new Date(cap).toISOString();
   }
   return until.toISOString();
 }
@@ -246,15 +237,15 @@ const SYNC_KEY_FP_RE = /^[0-9a-f]{32}$/;
  * @param {string}  [args.clinicName]
  * @param {string[]} [args.modules]
  * @param {number}  [args.days=14]
- * @param {'active'|'unpaid'} [args.subscription] PUBLIC_LICENCE_V1 — the payment mark, signed (owner decision 17:
- *   the public server hides an unpaid clinic from partners). Omitted — the classic six-key payload, as the CLI signs.
+ * @param {'active'|'unpaid'} [args.subscription] PUBLIC_LICENCE_V1 — the payment mark, signed. Check-in only ever
+ *   asks for 'active': an unpaid clinic gets no licence at all (plan 8c R14; the public server learns "unpaid" from
+ *   the vendor feed). Omitted — the classic six-key payload, as the CLI signs.
  * @param {string|null} [args.apiSyncKey] PUBLIC_LICENCE_V1 — the clinic's accepted sync-key fingerprint (32 hex);
  *   present only when online booking is switched on for the clinic. Omitted/null — no field.
- * @param {string}  [args.notAfter]    PUBLIC_LICENCE_V1 — valid_until is min(now + days, notAfter); can only shorten.
  * @param {string}  [args.issuedAfter] PUBLIC_LICENCE_V1 — the last issued_at given to this clinic; the new one is later.
  * @returns {{payload: object, sig: string}}
  */
-export function signLicence({ clinicId, clinicName, modules, days = 14, subscription, apiSyncKey, notAfter, issuedAfter }) {
+export function signLicence({ clinicId, clinicName, modules, days = 14, subscription, apiSyncKey, issuedAfter }) {
   if (subscription !== undefined && !SUBSCRIPTIONS.has(subscription)) {
     throw new Error(`signLicence: subscription must be "active" or "unpaid", got ${JSON.stringify(subscription)}.`);
   }
@@ -269,8 +260,8 @@ export function signLicence({ clinicId, clinicName, modules, days = 14, subscrip
     // passed in — any other field on the caller's object (including a
     // `valid_until` of its own) is simply ignored by the destructuring above.
     // Accepting a caller-supplied expiry would turn this function into an API
-    // for forging licences of any length. (notAfter can only shorten it.)
-    valid_until: computeValidUntil(days, notAfter),
+    // for forging licences of any length.
+    valid_until: computeValidUntil(days),
     issued_at:   computeIssuedAt(issuedAfter),
     nonce:       randomBytes(8).toString('hex'), // matches the CLI's nonce shape; makes every issuance unique
   };
