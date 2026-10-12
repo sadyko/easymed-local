@@ -161,7 +161,7 @@
   - `ops.js`.
 - **`server/test-helpers/`:** `fixture.js`, `partner-stand.js`.
 
-Всего — 52 файла: 21 файл тестов (86 тестов; было 84 — решение 20 добавило тест настроек и тест очереди), 26 модулей, 2 стенда, миграция, `package.json`, `DEPLOY.md`. После ревью — 57 файлов, 23 файла тестов, 119 тестов (раздел «Ревью и исправления» в конце плана).
+Всего — 52 файла: 21 файл тестов (86 тестов; было 84 — решение 20 добавило тест настроек и тест очереди), 26 модулей, 2 стенда, миграция, `package.json`, `DEPLOY.md`. После ревью — 57 файлов, 23 файла тестов, 131 тест (раздел «Ревью и исправления» в конце плана).
 
 ---
 
@@ -1417,7 +1417,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { admitClinic, saveKeys, saveSnapshot, saveSlots, resolveSlug, snapshotOf, slotsOf, connectionByHash, originAllowedForClinic, markUsed, clinicRow,
-  parseCacheStats, SNAPSHOT_LIMITS, PARSE_CACHE_ENTRY_MAX, PARSE_CACHE_TOTAL_MAX }
+  parseCacheStats, SNAPSHOT_LIMITS, PARSE_CACHE_HEAP_MAX, PARSE_CONTAINERS_MAX, containersOf, parseBounded }
   from './clinics.js';
 import { missingMedia, putMedia, mediaFile, gcMedia, MEDIA_QUOTA_FILES, MEDIA_QUOTA_BYTES } from './media.js';
 import { testDb, testVendor, testClinic, NOW } from '../test-helpers/fixture.js';
@@ -1577,12 +1577,29 @@ test('ревью 8b, C5: снимок и время — только объек�
   assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: { days: Array(SNAPSHOT_LIMITS.slotDays + 1).fill({}) } } }, NOW),
     { error: 'too_large' });
   assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: [] } }, NOW), { error: 'bad_request' });
-  // Большой снимок разбирается, но в кэш не ложится.
-  const big = { ...snap('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(PARSE_CACHE_ENTRY_MAX) } };
+  // Проверка исправлений 8b, E: начала окон и строка свободы — строки, а не объекты.
+  assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: { days: [{ date: '2030-03-12', starts: [{}], free: '1' }] } } }, NOW),
+    { error: 'bad_request' });
+  assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: { days: [{ date: '2030-03-12', starts: ['09:00'], free: [] }] } } }, NOW),
+    { error: 'bad_request' });
+  // Большой снимок (1 МБ) разбирается один раз и держится в кэше — /slots не разбирает его на каждый запрос;
+  // кэш ограничен оценкой кучи.
+  const big = { ...snap('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(1024 * 1024) } };
   assert.deepEqual(saveSnapshot(db, c.clinicId, big, NOW + 1000), { ok: true });
-  assert.equal(snapshotOf(clinicRow(db, c.clinicId)).clinic.about.length, PARSE_CACHE_ENTRY_MAX);
-  assert.ok(parseCacheStats().bytes < PARSE_CACHE_ENTRY_MAX, 'текст больше PARSE_CACHE_ENTRY_MAX не кэшируется');
-  assert.ok(parseCacheStats().bytes <= PARSE_CACHE_TOTAL_MAX);
+  const first = snapshotOf(clinicRow(db, c.clinicId));
+  assert.equal(first.clinic.about.length, 1024 * 1024);
+  assert.equal(snapshotOf(clinicRow(db, c.clinicId)), first, 'второго разбора нет');
+  assert.ok(parseCacheStats().heap <= PARSE_CACHE_HEAP_MAX);
+});
+
+test('проверка исправлений 8b, E: тело клиники — не больше PARSE_CONTAINERS_MAX объектов и списков, счёт не путается в строках', () => {
+  assert.equal(containersOf('{"a":[1,{"b":"{[x]}"}],"c":"\\"{"}'), 3);
+  const bomb = '{"x":[' + Array(PARSE_CONTAINERS_MAX).fill('{}').join(',') + ']}';
+  assert.deepEqual(parseBounded(bomb), { error: 'too_large' }, 'не разбирается вовсе');
+  assert.deepEqual(parseBounded('{"a":1}'), { value: { a: 1 } });
+  assert.deepEqual(parseBounded(''), { value: {} });
+  assert.deepEqual(parseBounded('{не json'), { error: 'bad_json' });
+  assert.ok(PARSE_CACHE_HEAP_MAX <= 40 * 1024 * 1024, 'кэш — не больше четверти кучи службы (160 МБ)');
 });
 
 test('ревью 8b, C7: у клиники свой потолок файлов — по числу и по байтам; повтор того же файла не считается дважды', () => {
@@ -1599,6 +1616,21 @@ test('ревью 8b, C7: у клиники свой потолок файлов 
   assert.equal(fs.existsSync(dir + '/media/' + files[2].sha), false, 'сверх потолка на диск не пишется');
   assert.deepEqual(putMedia(db, dir, c.clinicId, files[2].sha, 'png', files[2].b, NOW, { quotaFiles: 10, quotaBytes: files[0].b.length + files[1].b.length }),
     { error: 'media_quota' }, 'сверх потолка байтов');
+});
+
+test('проверка исправлений 8b, G: потолок файлов не считает фото, которых в нынешнем снимке уже нет (старше 10 минут), — они убираются, и новый файл принимается', () => {
+  const { db, dir } = testDb();
+  const c = testClinic(vendor);
+  admitClinic(db, auth(c), NOW);
+  const f = [fakePng(8, 8), fakePng(9, 9), fakePng(10, 10), fakePng(11, 11)].map((b) => ({ b, sha: crypto.createHash('sha256').update(b).digest('hex') }));
+  const quota = { quotaFiles: 2, quotaBytes: 1024 * 1024 };
+  putMedia(db, dir, c.clinicId, f[0].sha, 'png', f[0].b, NOW - 3600000, quota);   // в снимке
+  putMedia(db, dir, c.clinicId, f[1].sha, 'png', f[1].b, NOW - 3600000, quota);   // заменённое фото — снимок на него больше не ссылается
+  saveSnapshot(db, c.clinicId, { ...snap('shifo'), clinic: { logo: { square: 'media/' + f[0].sha + '.png' } } }, NOW - 1000);
+  assert.deepEqual(putMedia(db, dir, c.clinicId, f[2].sha, 'png', f[2].b, NOW, quota), { ok: true }, 'старое неиспользуемое убрано — новое принято');
+  assert.deepEqual(missingMedia(db, c.clinicId, [f[0].sha, f[1].sha, f[2].sha]), [f[1].sha]);
+  assert.deepEqual(putMedia(db, dir, c.clinicId, f[3].sha, 'png', f[3].b, NOW + 1000, quota), { error: 'media_quota' },
+    'свежее (только что прислано, снимок ещё впереди) и то, что в снимке, не убираются');
 });
 ```
 
@@ -1735,14 +1767,45 @@ export function saveKeys(db, clinicId, body, now) {
 }
 
 /**
- * Потолки снимка и времени (ревью 8b, C5). Списки — только объекты (не `[]`:
- * 4 МБ пустых массивов разбираются в ~50 МБ кучи) и не длиннее потолка; тело
- * снимка и времени — не больше 2 МБ (routes/sync.js). Большая клиника — сотни
- * врачей и тысячи услуг — укладывается с запасом.
+ * Потолки снимка и времени (ревью 8b, C5; проверка исправлений 8b, C и E).
+ * Списки — только объекты и не длиннее потолка; начала окон и строка свободы —
+ * строки. Тело снимка и времени — не больше 4 МБ (routes/sync.js
+ * SNAPSHOT_MAX_BYTES) и не больше PARSE_CONTAINERS_MAX объектов и списков
+ * (parseBounded): 4 МБ пустых `{}` разбирались бы в ~90 МБ кучи. Клиника
+ * размера дизайна (40 врачей × 30 дней, 2000 услуг) — ~0,75 МБ снимка и
+ * ~0,6 МБ времени, ~15 тыс. объектов; 200 врачей × 30 дней — ~3 МБ времени.
  */
 export const SNAPSHOT_LIMITS = Object.freeze({ branches: 200, doctors: 1000, services: 10000, packages: 2000,
   slotDoctors: 1000, slotDays: 62, slotStarts: 288 });
+export const PARSE_CONTAINERS_MAX = 100000;
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** Сколько объектов и списков в тексте JSON (скобки внутри строк не считаются). */
+export function containersOf(text) {
+  let n = 0;
+  let inStr = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text.charCodeAt(i);
+    if (inStr) {
+      if (ch === 92) i += 1;            // \ — следующий знак экранирован
+      else if (ch === 34) inStr = false;
+    } else if (ch === 34) inStr = true;
+    else if (ch === 123 || ch === 91) n += 1;   // { [
+  }
+  return n;
+}
+
+/**
+ * Разбор тела клиники с потолком объектов и списков (проверка исправлений 8b, E):
+ * сверх PARSE_CONTAINERS_MAX — не разбирается вовсе.
+ * @returns {{value:any} | {error:'too_large'|'bad_json'}}
+ */
+export function parseBounded(text) {
+  const s = String(text == null ? '' : text);
+  if (!s.length) return { value: {} };
+  if (containersOf(s) > PARSE_CONTAINERS_MAX) return { error: 'too_large' };
+  try { return { value: JSON.parse(s) }; } catch { return { error: 'bad_json' }; }
+}
 
 function snapshotProblem(snap) {
   for (const k of ['branches', 'doctors', 'services', 'packages']) {
@@ -1765,9 +1828,11 @@ function slotsProblem(slots) {
     if (d.days.length > SNAPSHOT_LIMITS.slotDays) return 'too_large';
     for (const day of d.days) {
       if (!isObj(day)) return 'bad_request';
+      if (day.free != null && typeof day.free !== 'string') return 'bad_request';
       if (day.starts == null) continue;
       if (!Array.isArray(day.starts)) return 'bad_request';
       if (day.starts.length > SNAPSHOT_LIMITS.slotStarts) return 'too_large';
+      if (!day.starts.every((x) => typeof x === 'string')) return 'bad_request';
     }
   }
   return null;
@@ -1828,13 +1893,19 @@ export function resolveSlug(db, slug, now) {
 //
 // Ревью 8b, C5: одна запись на (клиника, вид), и она верна, пока текст в базе
 // тот же (второй снимок в ту же секунду раньше не доходил до партнёров до
-// 15 минут); потолок — по размеру текста (знаков), а не по числу записей:
-// текст длиннее PARSE_CACHE_ENTRY_MAX разбирается на каждый запрос и не
-// хранится, всего — не больше PARSE_CACHE_TOTAL_MAX, давние уходят первыми.
-export const PARSE_CACHE_ENTRY_MAX = 512 * 1024;
-export const PARSE_CACHE_TOTAL_MAX = 16 * 1024 * 1024;
-const cache = new Map();   // 'клиника:вид' → {text, value}; порядок вставки — давность
+// 15 минут).
+// Проверка исправлений 8b, E: потолок — по ОЦЕНКЕ КУЧИ разобранного (5 байт
+// на знак текста — так выходит на настоящих снимках — плюс 32 байта на объект
+// или список), всего не больше PARSE_CACHE_HEAP_MAX — четверть кучи службы
+// (160 МБ); давние уходят первыми. Тело клиники ограничено 4 МБ и
+// PARSE_CONTAINERS_MAX, так что любая запись (оценка до ~23 МБ) кэшируется:
+// снимок и время большой клиники разбираются раз на изменение, а не на каждый
+// запрос /slots.
+export const PARSE_CACHE_HEAP_MAX = 40 * 1024 * 1024;
+const heapOf = (text) => text.length * 5 + containersOf(text) * 32;
+const cache = new Map();   // 'клиника:вид' → {text, value, heap}; порядок вставки — давность
 let cacheChars = 0;
+let cacheHeap = 0;
 function parsedOf(clinic, kind) {
   const text = clinic && clinic[kind];
   if (!text) return null;
@@ -1844,22 +1915,26 @@ function parsedOf(clinic, kind) {
     cache.delete(key);
     if (hit.text === text) { cache.set(key, hit); return hit.value; }
     cacheChars -= hit.text.length;
+    cacheHeap -= hit.heap;
   }
   let v = null;
   try { v = JSON.parse(text); } catch { v = null; }
-  if (text.length <= PARSE_CACHE_ENTRY_MAX) {
-    while (cache.size && cacheChars + text.length > PARSE_CACHE_TOTAL_MAX) {
+  const heap = heapOf(text);
+  if (heap <= PARSE_CACHE_HEAP_MAX) {
+    while (cache.size && cacheHeap + heap > PARSE_CACHE_HEAP_MAX) {
       const [k0, e0] = cache.entries().next().value;
       cache.delete(k0);
       cacheChars -= e0.text.length;
+      cacheHeap -= e0.heap;
     }
-    cache.set(key, { text, value: v });
+    cache.set(key, { text, value: v, heap });
     cacheChars += text.length;
+    cacheHeap += heap;
   }
   return v;
 }
-/** Для тестов и наблюдения: записей и знаков текста в кэше разобранного. */
-export const parseCacheStats = () => ({ entries: cache.size, bytes: cacheChars });
+/** Для тестов и наблюдения: записей, знаков текста и оценка кучи кэша разобранного. */
+export const parseCacheStats = () => ({ entries: cache.size, bytes: cacheChars, heap: cacheHeap });
 export const snapshotOf = (clinic) => parsedOf(clinic, 'snapshot');
 export const slotsOf = (clinic) => parsedOf(clinic, 'slots');
 
@@ -1902,14 +1977,25 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isoOf } from '../lib/time.js';
+import { SNAPSHOT_LIMITS } from './clinics.js';
 
 export const MEDIA_MAX_BYTES = 2 * 1024 * 1024;   // как snapshot.js клиники
 // Потолок файлов одной клиники (ревью 8b, C7): диск машины общий (Symptex, n8n —
 // решение 16), а не связанные со снимком файлы живут сутки. Логотипы и фото
 // сотен врачей укладываются с запасом; сверх — 409 media_quota (клиника 8a
 // пропускает файл, пишет код в журнал и шлёт снимок дальше — 8d покажет код).
-export const MEDIA_QUOTA_FILES = 500;
+// Проверка исправлений 8b, G: по числу — два комплекта (фото всех врачей снимка
+// и два логотипа): клиника, переснявшая всех врачей, шлёт новые фото раньше
+// снимка, пока старые ещё в нём; диск держит потолок байтов.
+export const MEDIA_QUOTA_FILES = 2 * (SNAPSHOT_LIMITS.doctors + 2);
 export const MEDIA_QUOTA_BYTES = 200 * 1024 * 1024;
+// Проверка исправлений 8b, G: сверх потолка сначала убираются файлы этой клиники,
+// на которые нынешний снимок не ссылается и которые старше MEDIA_PRUNE_AFTER_MS
+// (только что присланные ждут своего снимка — он уходит после файлов). Байты на
+// диске убирает уборка (gcMedia) в течение минуты.
+export const MEDIA_PRUNE_AFTER_MS = 10 * 60000;
+const REFERENCED = `EXISTS (SELECT 1 FROM clinics c WHERE c.clinic_id = media.clinic_id
+                     AND instr(c.snapshot, '"media/' || media.sha256 || '.' || media.ext || '"') > 0)`;
 export const MEDIA_TYPES = Object.freeze({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' });
 const SHA_RE = /^[0-9a-f]{64}$/;
 const KEEP_UNREFERENCED_MS = 86400000;
@@ -1936,8 +2022,13 @@ export function putMedia(db, dataDir, clinicId, sha, ext, buf, now, { quotaFiles
   if (!SHA_RE.test(sha) || !MEDIA_TYPES[ext] || !Buffer.isBuffer(buf) || !buf.length) return { error: 'bad_request' };
   if (buf.length > MEDIA_MAX_BYTES) return { error: 'too_large' };
   if (crypto.createHash('sha256').update(buf).digest('hex') !== sha || !looksLike(ext, buf)) return { error: 'bad_request' };
-  const held = db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM media WHERE clinic_id = ? AND sha256 <> ?').get(clinicId, sha);
-  if (held.n + 1 > quotaFiles || held.b + buf.length > quotaBytes) return { error: 'media_quota' };
+  const heldOf = () => db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM media WHERE clinic_id = ? AND sha256 <> ?').get(clinicId, sha);
+  const over = (h) => h.n + 1 > quotaFiles || h.b + buf.length > quotaBytes;
+  if (over(heldOf())) {
+    db.prepare(`DELETE FROM media WHERE clinic_id = ? AND sha256 <> ? AND stored_at < ? AND NOT ${REFERENCED}`)
+      .run(clinicId, sha, isoOf(now - MEDIA_PRUNE_AFTER_MS));
+    if (over(heldOf())) return { error: 'media_quota' };
+  }
   const dir = mediaDir(dataDir);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, sha);
@@ -1972,11 +2063,9 @@ export function mediaFile(db, dataDir, clinic, sha, ext) {
  */
 export function gcMedia(db, dataDir, now) {
   const old = isoOf(now - KEEP_UNREFERENCED_MS);
-  const referenced = `EXISTS (SELECT 1 FROM clinics c WHERE c.clinic_id = media.clinic_id
-                        AND instr(c.snapshot, '"media/' || media.sha256 || '.' || media.ext || '"') > 0)`;
   let rowsGone = 0;
   db.transaction(() => {
-    db.prepare(`UPDATE media SET stored_at = ? WHERE stored_at < ? AND ${referenced}`).run(isoOf(now), old);
+    db.prepare(`UPDATE media SET stored_at = ? WHERE stored_at < ? AND ${REFERENCED}`).run(isoOf(now), old);
     rowsGone = db.prepare('DELETE FROM media WHERE stored_at < ?').run(old).changes;
   })();
   let filesGone = 0;
@@ -2377,6 +2466,17 @@ test('ревью 8b, C10: предложение клиники, не дошед
   applyEvents(s.db, s.c.clinicId, [event(6, a, 'booking.declined', 'expired', { reason: 'expired' }, hook)], NOW + 3000);
   assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE request_id = ?").get(a.id).n, 1, '«истекло» после отмены уходит, как и прежде');
 });
+
+test('проверка исправлений 8b, D: элемент, который клиника забирает каждый такт и не подтверждает, — запас 10 минут от ПЕРВОЙ выдачи, потом закрыт и стёрт', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const DAY = 86400000;
+  inboxItems(s.db, s.c.clinicId, '', { now: NOW + DAY - 60000 });
+  for (let m = 1; m <= 12; m += 1) inboxItems(s.db, s.c.clinicId, '', { now: NOW + DAY + m * 60000 });   // опрос каждую минуту
+  assert.deepEqual(closeOverdue(s.db, NOW + DAY + 12 * 60000), { not_processed: 0, not_collected: 1 }, 'не держится вечно повторными выдачами');
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 0, 'шифротекст стёрт');
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).reason, 'not_collected');
+});
 ```
 
 - [ ] **Step 2:** `node --test public-server/server/store/requests.test.js` → падает: `ERR_MODULE_NOT_FOUND` (`store/requests.js`).
@@ -2649,9 +2749,11 @@ export function floorInboxCursor(db, nowMs) {
  */
 export function inboxItems(db, clinicId, after, { limit = INBOX_PAGE, now = null } = {}) {
   const rows = db.prepare('SELECT * FROM inbox WHERE clinic_id = ? ORDER BY cursor LIMIT ?').all(clinicId, Math.min(limit, INBOX_PAGE));
-  // Отдано клинике (now — из канала клиники): уборка подождёт подтверждения (C11).
+  // Отдано клинике (now — из канала клиники): уборка подождёт подтверждения (C11)
+  // HANDED_OUT_GRACE_MS от ПЕРВОЙ выдачи (проверка исправлений 8b, D): элемент,
+  // который клиника забирает каждый такт и не подтверждает, не держится вечно.
   if (now != null && rows.length) {
-    const mark = db.prepare('UPDATE inbox SET handed_out_at = ? WHERE cursor = ?');
+    const mark = db.prepare('UPDATE inbox SET handed_out_at = COALESCE(handed_out_at, ?) WHERE cursor = ?');
     db.transaction(() => { for (const r of rows) mark.run(isoOf(now), r.cursor); })();
   }
   return rows
@@ -2875,6 +2977,8 @@ import { recordAccess } from '../store/logs.js';
 import { PENDING_PER_CLINIC_MAX } from '../store/deliveries.js';
 import { testDb, testVendor, testClinic, serve, syncCall, signedHeaders, NOW } from '../test-helpers/fixture.js';
 import { MEDIA_QUOTA_FILES } from '../store/media.js';
+import { PARSE_CONTAINERS_MAX } from '../store/clinics.js';
+import { partnerStand } from '../test-helpers/partner-stand.js';
 import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { openSealed } from '../../../server/services/api/sync-identity.js';
 import { isoOf } from '../lib/time.js';
@@ -3003,11 +3107,38 @@ test('C1: сжатое тело клиники — 415 без распаковк
   const pad = 'x'.repeat(1536 * 1024);
   const events = await syncCall(s.base, c, 'POST', '/_sync/v1/events', { events: [], pad }, { time });
   assert.deepEqual([events.status, events.json.error.code], [413, 'too_large'], 'события — до 1 МБ');
-  const snap = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: pad } };
-  assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', snap, { time })).json, { ok: true }, 'снимок — до 2 МБ');
-  const huge = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(2304 * 1024) } };
+  const snap = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(3 * 1024 * 1024) } };
+  assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', snap, { time })).json, { ok: true },
+    'проверка исправлений 8b, C: снимок — до 4 МБ (большая клиника по SNAPSHOT_LIMITS)');
+  const huge = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(4352 * 1024) } };
   const tooBig = await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', huge, { time });
-  assert.deepEqual([tooBig.status, tooBig.json.error.code], [413, 'too_large'], 'ревью 8b, C5: снимок больше 2 МБ — 413');
+  assert.deepEqual([tooBig.status, tooBig.json.error.code], [413, 'too_large'], 'снимок больше 4 МБ — 413');
+});
+
+test('проверка исправлений 8b, E: тело из сотен тысяч пустых объектов — 413 без разбора, в базу не попадает', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const c = testClinic(vendor);
+  assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/keys', keys(c), { time })).json, { ok: true });
+  const head = '{"version":1,"generated_at":"' + time + '","slug":"bomb","clinic":{"x":[';
+  const bomb = Buffer.from(head + Array(PARSE_CONTAINERS_MAX).fill('{}').join(',') + ']},"doctors":[]}');
+  const r = await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', bomb, { time });
+  assert.deepEqual([r.status, r.json.error.code], [413, 'too_large']);
+  assert.equal(clinicRow(s.db, c.clinicId).snapshot, null);
+  const ev = Buffer.from('{"events":[' + Array(PARSE_CONTAINERS_MAX).fill('{}').join(',') + ']}');
+  assert.equal((await syncCall(s.base, c, 'POST', '/_sync/v1/events', ev, { time })).status, 413, 'и на остальных адресах канала');
+});
+
+test('проверка исправлений 8b, C: /slots — stale, когда присланное время или снимок старше 35 минут, даже если клиника на связи', async (t) => {
+  const p = await partnerStand();
+  t.after(p.close);
+  const slots = async () => (await (await p.get('/shifo/v1/slots?doctor_id=7')).json()).stale;
+  assert.equal(await slots(), false);
+  p.setClock(NOW + 40 * 60000);
+  p.db.prepare('UPDATE clinics SET last_seen_at = ?').run(isoOf(NOW + 40 * 60000));   // клиника на связи, но время ей не принимают
+  assert.equal(await slots(), true, 'время 40 минут не обновлялось — stale');
+  p.db.prepare('UPDATE clinics SET slots_at = ?, snapshot_at = ?').run(isoOf(NOW + 30 * 60000), isoOf(NOW + 26 * 60000));
+  assert.equal(await slots(), false, 'неизменное время клиника шлёт раз в 15 минут — 10–14 минут не повод');
 });
 
 test('ревью 8b, C8: очередь уведомлений клиники полна — ответ протокола прежний ({accepted}), пропуск считается', async (t) => {
@@ -3074,13 +3205,14 @@ test('ревью 8b, C7: потолок файлов клиники — 409 medi
 // устаревшая и истёкшая лицензия — store/clinics.js admissionOf, без записи) →
 // тело → подпись → запись клиники. Сжатое тело не распаковывается (415):
 // клиника 8a не сжимает, а распаковка до проверки делала из 4 КБ gzip 4 МБ в
-// памяти. Предел тела — свой у адреса: снимку и времени — 2 МБ (ревью 8b, C5:
-// большая клиника укладывается с запасом; списки ограничены store/clinics.js
-// SNAPSHOT_LIMITS), файлу — 2 МБ, остальному — 1 МБ.
+// памяти. Предел тела — свой у адреса: снимку и времени — 4 МБ (проверка
+// исправлений 8b, C: 200 врачей по записи × 30 дней — ~3 МБ времени), файлу —
+// 2 МБ, остальному — 1 МБ. Любое тело JSON — не больше PARSE_CONTAINERS_MAX
+// объектов и списков (store/clinics.js parseBounded, проверка исправлений 8b, E).
 import express from 'express';
 import { verifyClinicHeaders, verifyClinicSignature } from '../clinic-auth.js';
 import { licenceStanding } from '../licence-gate.js';
-import { admitClinic, admissionOf, saveKeys, saveSnapshot, saveSlots } from '../store/clinics.js';
+import { admitClinic, admissionOf, saveKeys, saveSnapshot, saveSlots, parseBounded } from '../store/clinics.js';
 import { missingMedia, putMedia, MEDIA_MAX_BYTES } from '../store/media.js';
 import { inboxItems, ackInbox, applyEvents } from '../store/requests.js';
 import { accessSince, deliveryLogSince } from '../store/logs.js';
@@ -3089,7 +3221,7 @@ import { sendError } from '../lib/errors.js';
 export const SYNC_LIMIT_PER_MIN = 600;
 const MEDIA_RE = /^([0-9a-f]{64})\.([a-z]{3,4})$/;
 const raw = (limit) => express.raw({ type: () => true, limit, inflate: false });
-export const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
+export const SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
 const BODY = { big: raw(SNAPSHOT_MAX_BYTES), media: raw(MEDIA_MAX_BYTES), small: raw('1mb') };
 const bodyFor = (p) => (/^\/(?:snapshot|slots)\/?$/.test(p) ? BODY.big : /^\/media\/[^/]+$/.test(p) ? BODY.media : BODY.small);
 
@@ -3138,10 +3270,10 @@ export function syncRouter(ctx) {
     return next();
   });
 
-  const parse = (req) => { try { return JSON.parse(req.raw.length ? req.raw.toString('utf8') : '{}'); } catch { return undefined; } };
   const withJson = (fn) => (req, res) => {
-    const body = parse(req);
-    if (body === undefined) return sendError(req, res, 'bad_json');
+    const parsed = parseBounded(req.raw.toString('utf8'));
+    if (parsed.error) return sendError(req, res, parsed.error);
+    const body = parsed.value;
     const out = fn(req, body, ctx.now());
     if (out && out.error) return sendError(req, res, out.error);
     return res.json(out && out.payload ? out.payload : { ok: true });
@@ -3794,7 +3926,8 @@ test('настоящая отправка фона: адрес самой маш
 // попыток для клиники.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deliverDue, purgeDeliveries, RETRY_MINUTES, createHostBreaker, pendingCount, PENDING_PER_CLINIC_MAX } from './deliveries.js';
+import { deliverDue, purgeDeliveries, RETRY_MINUTES, MAX_ATTEMPTS, DELIVERY_WINDOW_MS, createHostBreaker, endpointOf, pendingCount, PENDING_PER_CLINIC_MAX }
+  from './deliveries.js';
 import { applyEvents } from './requests.js';
 import { admitClinic } from './clinics.js';
 import { deliveryLogSince } from './logs.js';
@@ -3893,10 +4026,8 @@ test('честная очередь: 40 уведомлений одной кли
   const sent = [];
   const r = await deliverDue(db, { now: NOW, send: tarpitSend(sent), breaker: createHostBreaker() });
   assert.ok(sent.includes(HEALTHY), 'чужая клиника — в первой же волне');
-  assert.equal(sent.filter((u) => u === TARPIT).length, 1, 'на зависший адрес — одна настоящая отправка');
+  assert.equal(sent.filter((u) => u === TARPIT).length, 2, 'на зависший адрес — не больше двух отправок за волну (потолок адреса)');
   assert.deepEqual(r, { attempts: 3, delivered: 1, failed: 0, retrying: 2 });
-  assert.deepEqual(db.prepare("SELECT last_error AS e FROM deliveries WHERE url = ? AND attempts = 1 ORDER BY id").all(TARPIT).map((x) => x.e),
-    ['timeout', 'host_down'], 'второе на тот же адрес — без отправки, попытка засчитана');
 });
 
 test('честная очередь внутри клиники: её же другой партнёр не ждёт, пока разберётся зависший', async () => {
@@ -3908,18 +4039,38 @@ test('честная очередь внутри клиники: её же др�
   assert.ok(sent.includes(HEALTHY));
 });
 
-test('отказавший адрес отдыхает минуту без отправок, его попытки идут своим чередом; потом снова пробуем', async () => {
+test('отказавший адрес: две неудачи подряд — отдых без отправок; отсрочка не тратит попыток; отдых растёт 15 → 30 с', async () => {
   const { db } = testDb();
   queue(db, 'c-a', TARPIT, 10, NOW - 60000);
   const breaker = createHostBreaker();
   const sent = [];
   await deliverDue(db, { now: NOW, send: tarpitSend(sent), breaker });
-  assert.equal(sent.length, 1);
+  assert.equal(sent.length, 2, 'две неудачи подряд — адрес отдыхает');
   const r2 = await deliverDue(db, { now: NOW + 5000, send: tarpitSend(sent), breaker });
-  assert.equal(sent.length, 1, 'через 5 секунд — ни одной отправки на отказавший адрес');
-  assert.equal(r2.attempts, 8, 'все подошедшие строки отдыхающего хоста — попыткой без отправки, по своему расписанию, а не по две за волну');
-  await deliverDue(db, { now: NOW + 61000, send: tarpitSend(sent), breaker });
-  assert.equal(sent.length, 2, 'через минуту — снова одна настоящая попытка');
+  assert.equal(sent.length, 2, 'в отдых — ни одной отправки');
+  assert.deepEqual([r2.attempts, r2.retrying], [0, 8], 'подошедшие строки отложены до конца отдыха — попытки не тратятся (проверка исправлений 8b, A)');
+  assert.deepEqual(db.prepare('SELECT attempts, last_error, next_at FROM deliveries WHERE id = 3').get(),
+    { attempts: 0, last_error: 'host_down', next_at: isoOf(NOW + 15000) });
+  assert.equal((await deliverDue(db, { now: NOW + 10000, send: tarpitSend(sent), breaker })).retrying, 0, 'в отдых ничего не подходит');
+  await deliverDue(db, { now: NOW + 15000, send: tarpitSend(sent), breaker });
+  assert.equal(sent.length, 3, 'после отдыха — одна попытка; снова неудача — снова отдых');
+  assert.equal(db.prepare('SELECT next_at FROM deliveries WHERE id = 4').get().next_at, isoOf(NOW + 45000), 'второй отдых — 30 с');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM delivery_log WHERE error = 'host_down'").get().n, 8, 'в журнал — одна строка на переход строки в отсрочку');
+});
+
+test('случайный обрыв у живого адреса не отправляет его отдыхать; первый ответ сбрасывает счёт неудач', () => {
+  const b = createHostBreaker();
+  b.fail('h:443', NOW);
+  assert.equal(b.isDown('h:443', NOW), false);
+  b.ok('h:443');
+  b.fail('h:443', NOW);
+  assert.equal(b.isDown('h:443', NOW), false, 'после ответа — снова с нуля');
+  b.fail('h:443', NOW);
+  assert.deepEqual([b.isDown('h:443', NOW + 14999), b.until('h:443')], [true, NOW + 15000]);
+  b.fail('h:443', NOW);
+  b.fail('h:443', NOW);
+  b.fail('h:443', NOW);
+  assert.equal(b.until('h:443'), NOW + 60000, 'отдых — не больше минуты');
 });
 
 test('одновременно — не больше четырёх отправок и не больше одной на адрес; волна берёт всех по очереди', async () => {
@@ -3949,6 +4100,58 @@ test('для приёма событий: сколько у клиники жд�
   db.prepare("UPDATE deliveries SET state = 'delivered' WHERE id = 1").run();
   assert.equal(pendingCount(db, 'c-a'), 2);
   assert.ok(PENDING_PER_CLINIC_MAX >= 1000);
+});
+
+// ── Отдых хоста — отсрочка, а не попытка (проверка исправлений 8b, A) ──
+const PARTNER = 'https://hooks.partner.uz/easymed';
+function seeded(seed) {
+  let s = seed;
+  return () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
+}
+async function simulate(db, { minutes, feedMinutes, perMin, send, url = () => PARTNER, clinics = 4 }) {
+  const breaker = createHostBreaker();
+  const ins = db.prepare(`INSERT INTO deliveries (clinic_id, connection_id, event_id, event, url, body, signature, next_at, created_at, updated_at)
+                          VALUES (?, 1, ?, 'booking.offered_other_time', ?, '{}', ?, ?, ?, ?)`);
+  let n = 0;
+  for (let now = NOW; now < NOW + minutes * 60000; now += 5000) {
+    if (now < NOW + feedMinutes * 60000 && (now - NOW) % 60000 === 0) {
+      for (let i = 0; i < perMin; i += 1) { const c = 'c' + (n % clinics); ins.run(c, 'ev' + n, url(c), SIG, isoOf(now), isoOf(now), isoOf(now)); n += 1; }
+    }
+    await deliverDue(db, { now, send, breaker });
+  }
+  const by = (s) => db.prepare('SELECT COUNT(*) AS n FROM deliveries WHERE state = ?').get(s).n;
+  return { total: n, delivered: by('delivered'), failed: by('failed'), pending: by('pending') };
+}
+
+test('случайные обрывы у партнёра (1 из 8) при 12 уведомлениях в минуту: отдых не сжигает попытки — всё доставлено', async () => {
+  const { db } = testDb();
+  const rnd = seeded(7);
+  const r = await simulate(db, { minutes: 240, feedMinutes: 120, perMin: 12, send: async () => (rnd() < 1 / 8 ? { status: 0, error: 'timeout' } : { status: 200 }) });
+  assert.deepEqual(r, { total: 1440, delivered: 1440, failed: 0, pending: 0 });
+});
+
+test('всегда лежащий адрес: строки кончаются «не доставлено» по возрасту — не позже окна расписания 1/5/10/30/60', async () => {
+  const { db } = testDb();
+  let sends = 0;
+  const r = await simulate(db, { minutes: 180, feedMinutes: 10, perMin: 5, send: async () => { sends += 1; return { status: 0, error: 'connect' }; } });
+  assert.deepEqual(r, { total: 50, delivered: 0, failed: 50, pending: 0 });
+  const life = db.prepare('SELECT MAX(julianday(updated_at) - julianday(created_at)) * 1440 AS m FROM deliveries').get().m;
+  assert.ok(life <= DELIVERY_WINDOW_MS / 60000 + 2, 'дольше окна не живёт: ' + life);
+  assert.ok(sends <= 200, 'отправок на лежащий адрес — около одной в минуту отдыха, а не по каждой строке: ' + sends);
+  const perRow = db.prepare("SELECT MAX(n) AS m FROM (SELECT delivery_id, COUNT(*) AS n FROM delivery_log WHERE error = 'host_down' GROUP BY delivery_id)").get().m;
+  assert.ok(perRow <= MAX_ATTEMPTS + 1, 'строк «host_down» в журнале на доставку — не больше попыток: ' + perRow);
+});
+
+test('неверный порт одной клиники на хосте партнёра не усыпляет сам адрес партнёра для других клиник', async () => {
+  const { db } = testDb();
+  const BAD = 'https://hooks.partner.uz:8443/x';
+  const r = await simulate(db, { minutes: 150, feedMinutes: 30, perMin: 4, url: (c) => (c === 'c0' ? BAD : PARTNER),
+    send: async ({ url }) => (url === BAD ? { status: 0, error: 'timeout' } : { status: 200 }) });
+  assert.equal(r.failed, 30, 'не доходят только уведомления с неверным портом');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE url = ? AND state = 'delivered' AND attempts = 1").get(PARTNER).n, 90);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM delivery_log l JOIN deliveries d ON d.id = l.delivery_id WHERE d.url = ? AND l.error = 'host_down'").get(PARTNER).n, 0);
+  assert.equal(endpointOf(BAD), 'hooks.partner.uz:8443');
+  assert.equal(endpointOf(PARTNER), 'hooks.partner.uz:443');
 });
 ```
 
@@ -4044,27 +4247,39 @@ export function makeSender({ selfIps = [], timeoutMs = WEBHOOK_TIMEOUT_MS, resol
 // ЧЕСТНАЯ ОЧЕРЕДЬ (проверка 8b, C8). Один зависший адрес партнёра (10 секунд
 // на попытку) не должен задерживать уведомления остальных — иначе «другое
 // время» другой клиники доходит позже, чем на него можно ответить (30 минут):
+//   • адрес считается по хосту И порту (endpointOf): неверный порт одной клиники
+//     на хосте партнёра не трогает сам адрес партнёра;
 //   • волна берёт подошедшие строки по кругу: сначала первую строку каждой пары
-//     «клиника — адрес», потом вторую…; на один хост — не больше
+//     «клиника — адрес», потом вторую…; на один адрес — не больше
 //     PER_HOST_PER_WAVE строк в волне;
 //   • отправки идут непрерывно, до PARALLEL одновременно и не больше одной на
-//     хост — медленный хост занимает один поток, а не всю волну;
-//   • хост, не ответивший соединением (timeout, connect, tls, DNS, запрещённый
-//     адрес), отдыхает HOST_BACKOFF_MS: его подошедшие строки получают попытку
-//     «host_down» без отправки и ждут своего следующего срока, как после неудачи;
+//     адрес — медленный адрес занимает один поток, а не всю волну;
+//   • адрес, не ответивший соединением (timeout, connect, tls, DNS, запрещённый
+//     адрес) HOST_TRIP_AFTER раз подряд, отдыхает 15 → 30 → 60 с (до
+//     HOST_BACKOFF_MS; первый ответ адреса сбрасывает счёт). Его подошедшие строки ОТКЛАДЫВАЮТСЯ до
+//     конца отдыха — без отправки и БЕЗ траты попытки (проверка исправлений 8b,
+//     A: засчитанные «пропуски» сжигали расписание, и уведомления кончались «не
+//     доставлено», ни разу не уйдя); в журнал — одна строка «host_down» на
+//     переход строки в отсрочку;
+//   • конец доставки — по попыткам (MAX_ATTEMPTS) ИЛИ по возрасту: строка живёт
+//     не дольше DELIVERY_WINDOW_MS (всё расписание 1+5+10+30+60 минут и минута
+//     запаса) — адрес, лежащий всегда, не держит строки бесконечно;
 //   • сколько у клиники ждёт доставки — pendingCount: потолок очереди клиники
 //     (PENDING_PER_CLINIC_MAX) держит приём событий (store/requests.js applyEvents).
 import { appendDeliveryLog } from './logs.js';
 import { checkWebhookUrl } from '../lib/webhook-send.js';
-import { isoOf } from '../lib/time.js';
+import { isoOf, msOf } from '../lib/time.js';
 
 export const RETRY_MINUTES = Object.freeze([1, 5, 10, 30, 60]);
 export const MAX_ATTEMPTS = RETRY_MINUTES.length + 1;
+export const DELIVERY_WINDOW_MS = (RETRY_MINUTES.reduce((a, b) => a + b, 0) + 1) * 60000;
 export const DELIVERY_KEEP_MS = 30 * 86400000;
 export const WAVE_LIMIT = 20;
 export const PARALLEL = 4;
 export const PER_HOST_PER_WAVE = 2;
 export const HOST_BACKOFF_MS = 60000;
+export const HOST_BACKOFF_FIRST_MS = 15000;
+export const HOST_TRIP_AFTER = 2;
 export const PENDING_PER_CLINIC_MAX = 2000;
 const CANDIDATES = 400;
 const DOWN_PER_WAVE = 200;
@@ -4075,24 +4290,40 @@ export function hostOf(url) {
   try { return new URL(String(url)).hostname.toLowerCase(); } catch { return ''; }
 }
 
-/** Отдых отказавших хостов: хост → до какого мгновения не слать. Не больше max хостов. */
-export function createHostBreaker({ backoffMs = HOST_BACKOFF_MS, max = 10000 } = {}) {
-  const down = new Map();
+/** Адрес для отдыха и очереди: «хост:порт» (https по умолчанию — 443); негодный адрес — ''. */
+export function endpointOf(url) {
+  try {
+    const u = new URL(String(url));
+    return u.hostname.toLowerCase() + ':' + (u.port || '443');
+  } catch { return ''; }
+}
+
+/**
+ * Отдых отказавших адресов. Адрес отдыхает после HOST_TRIP_AFTER неудач
+ * соединения ПОДРЯД — случайный обрыв у живого партнёра (1 из 8) отдыха не
+ * вызывает и пропускную способность не режет; отдых растёт 15 → 30 → 60 с
+ * (HOST_BACKOFF_MS) и сбрасывается первым же ответом адреса (любой код).
+ * Не больше max адресов в памяти.
+ */
+export function createHostBreaker({ tripAfter = HOST_TRIP_AFTER, firstMs = HOST_BACKOFF_FIRST_MS, backoffMs = HOST_BACKOFF_MS, max = 10000 } = {}) {
+  const state = new Map();
   return {
-    isDown(host, now) {
-      const until = down.get(host);
-      if (until === undefined) return false;
-      if (until > now) return true;
-      down.delete(host);
-      return false;
+    isDown: (key, now) => { const s = state.get(key); return !!s && s.until > now; },
+    /** Конец отдыха адреса (мгновение) или null. */
+    until: (key) => { const s = state.get(key); return s && s.until ? s.until : null; },
+    /** Неудача соединения: после tripAfter подряд — отдых. */
+    fail(key, now) {
+      if (!key) return;
+      const s = state.get(key) || { fails: 0, until: 0 };
+      state.delete(key);
+      if (state.size >= max) state.delete(state.keys().next().value);
+      s.fails += 1;
+      if (s.fails >= tripAfter) s.until = now + Math.min(backoffMs, firstMs * 2 ** (s.fails - tripAfter));
+      state.set(key, s);
     },
-    trip(host, now) {
-      if (!host) return;
-      down.delete(host);
-      if (down.size >= max) down.delete(down.keys().next().value);
-      down.set(host, now + backoffMs);
-    },
-    size: () => down.size,
+    /** Адрес ответил — счёт неудач и отдых сброшены. */
+    ok: (key) => { state.delete(key); },
+    size: () => state.size,
   };
 }
 const processBreaker = createHostBreaker();
@@ -4102,30 +4333,47 @@ export function pendingCount(db, clinicId) {
   return db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE clinic_id = ? AND state = 'pending'").get(clinicId).n;
 }
 
+const logOf = (d, e) => ({ clinicId: d.clinic_id, deliveryId: d.id, connectionId: d.connection_id, requestId: d.request_id, eventId: d.event_id,
+  event: d.event, ...e });
+
 function record(db, d, r, now, out) {
-  const attempt = d.attempts + 1;
-  const ok = r.status >= 200 && r.status < 300;
-  const final = ok ? 'delivered' : attempt >= MAX_ATTEMPTS || r.error === 'bad_url' ? 'failed' : null;
-  const nextAt = final ? null : isoOf(now + RETRY_MINUTES[attempt - 1] * 60000);
   const at = isoOf(now);
+  const born = msOf(d.created_at) ?? now;
+  const deadline = born + DELIVERY_WINDOW_MS;
+  // Адрес отдыхает: отсрочка до конца отдыха, попытка не тратится.
+  if (r.error === 'host_down' && now < deadline) {
+    const nextAt = isoOf(Math.max(now + 1000, Math.min(r.until || now + HOST_BACKOFF_MS, deadline)));
+    db.transaction(() => {
+      db.prepare('UPDATE deliveries SET next_at = ?, last_error = ?, updated_at = ? WHERE id = ?').run(nextAt, 'host_down', at, d.id);
+      if (d.last_error !== 'host_down') {
+        appendDeliveryLog(db, logOf(d, { attempt: d.attempts, code: null, error: 'host_down', at, nextAt, final: null }));
+      }
+    })();
+    out.retrying += 1;
+    return;
+  }
+  const sent = r.error !== 'host_down';
+  const attempt = sent ? d.attempts + 1 : d.attempts;
+  const ok = r.status >= 200 && r.status < 300;
+  const final = ok ? 'delivered'
+    : attempt >= MAX_ATTEMPTS || r.error === 'bad_url' || now >= deadline ? 'failed' : null;
+  const nextAt = final ? null : isoOf(Math.max(now + 1000, Math.min(now + RETRY_MINUTES[attempt - 1] * 60000, deadline)));
   db.transaction(() => {
     db.prepare(`UPDATE deliveries SET attempts = ?, state = ?, next_at = ?, last_code = ?, last_error = ?, updated_at = ?,
                   body = CASE WHEN ? = 1 THEN NULL ELSE body END WHERE id = ?`)
       .run(attempt, final || 'pending', nextAt, r.status || null, r.error || null, at, final ? 1 : 0, d.id);
-    appendDeliveryLog(db, { clinicId: d.clinic_id, deliveryId: d.id, connectionId: d.connection_id, requestId: d.request_id, eventId: d.event_id,
-      event: d.event, attempt, code: r.status || null, error: r.error || null, at, nextAt, final });
+    appendDeliveryLog(db, logOf(d, { attempt, code: r.status || null, error: r.error || null, at, nextAt, final }));
   })();
-  out.attempts += 1;
+  if (sent) out.attempts += 1;
   if (final === 'delivered') out.delivered += 1;
   else if (final === 'failed') out.failed += 1;
   else out.retrying += 1;
 }
 
 /**
- * Строки волны: по кругу пар «клиника — адрес», не больше perHost на хост, не
- * больше limit. Строки отдыхающего хоста отправки не стоят — они идут сверх
- * limit (до DOWN_PER_WAVE) и получают попытку «host_down» в свой срок, а не
- * отстают от расписания 1/5/10/30/60.
+ * Строки волны: по кругу пар «клиника — адрес», не больше perHost на адрес, не
+ * больше limit. Строки отдыхающего адреса отправки не стоят — они идут сверх
+ * limit (до DOWN_PER_WAVE) и откладываются до конца отдыха.
  */
 function pickWave(db, now, limit, perHost, breaker) {
   const candidates = db.prepare(`SELECT id, url FROM (
@@ -4136,7 +4384,7 @@ function pickWave(db, now, limit, perHost, breaker) {
   const ids = [];
   const down = [];
   for (const c of candidates) {
-    const h = hostOf(c.url);
+    const h = endpointOf(c.url);
     if (h && breaker.isDown(h, now)) { if (down.length < DOWN_PER_WAVE) down.push(c.id); continue; }
     const n = perHostCount.get(h) || 0;
     if (n >= perHost || ids.length >= limit) continue;
@@ -4150,16 +4398,17 @@ function pickWave(db, now, limit, perHost, breaker) {
 /**
  * Одна волна доставки (честная очередь — см. начало файла). send({url, headers,
  * body}) → {status, error?} (lib/webhook-send.js makeSender в работе; в тестах —
- * подделка). breaker — отдых хостов между волнами (по умолчанию — один на процесс).
+ * подделка). breaker — отдых адресов между волнами (по умолчанию — один на процесс).
+ * attempts — настоящие отправки; отложенные строки — в retrying.
  * @returns {Promise<{attempts:number, delivered:number, failed:number, retrying:number}>}
  */
 export async function deliverDue(db, { now = Date.now(), send, limit = WAVE_LIMIT, parallel = PARALLEL, perHost = PER_HOST_PER_WAVE,
   breaker = processBreaker } = {}) {
-  const wave = pickWave(db, now, limit, perHost, breaker).map((d) => ({ d, host: hostOf(d.url) }));
+  const wave = pickWave(db, now, limit, perHost, breaker).map((d) => ({ d, host: endpointOf(d.url) }));
   const out = { attempts: 0, delivered: 0, failed: 0, retrying: 0 };
   const one = async ({ d, host }) => {
     if (checkWebhookUrl(d.url)) return { status: 0, error: 'bad_url' };
-    if (breaker.isDown(host, now)) return { status: 0, error: 'host_down' };
+    if (breaker.isDown(host, now)) return { status: 0, error: 'host_down', until: breaker.until(host) };
     let r;
     try {
       r = await send({ url: d.url, body: d.body || '', headers: {
@@ -4167,10 +4416,12 @@ export async function deliverDue(db, { now = Date.now(), send, limit = WAVE_LIMI
       } });
     } catch { r = null; }
     if (!r || typeof r !== 'object') return { status: 0, error: 'send_failed' };
-    if (!Number(r.status) && HOST_DOWN_ERRORS.has(r.error)) breaker.trip(host, now);
-    return r;
+    if (Number(r.status)) breaker.ok(host);
+    else if (HOST_DOWN_ERRORS.has(r.error)) breaker.fail(host, now);
+    // Ответ отправки — только код и вид ошибки: отсрочку «host_down» даёт лишь отдых.
+    return { status: Number(r.status) || 0, ...(r.error && r.error !== 'host_down' ? { error: String(r.error) } : {}) };
   };
-  // Непрерывный пул: до parallel отправок сразу, на один хост — по одной.
+  // Непрерывный пул: до parallel отправок сразу, на один адрес — по одной.
   // Сбой записи в базу (база закрыта) — отказ всей волны, как раньше, а не
   // необработанное исключение: такт фона его ловит (jobs.js).
   await new Promise((resolve, reject) => {
@@ -4752,6 +5003,10 @@ import { localParts, msOf, partnerTime } from '../lib/time.js';
 import { scope } from './partner-auth.js';
 
 export const STALE_AFTER_MS = 10 * 60000;
+// Проверка исправлений 8b, C: время и снимок, которые сервер не принимает (велики),
+// не обновляются, хотя клиника на связи. Неизменное клиника шлёт раз в 15 минут,
+// её часы — в пределах ±15 минут от сервера: старше 35 минут — уже не свежее.
+export const STALE_DATA_MS = 35 * 60000;
 const WEEK = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const MEDIA_REF_RE = /^media\/[0-9a-f]{64}\.(png|jpg|jpeg|webp)$/;
 
@@ -4791,7 +5046,8 @@ function namesDeep(v, lang) {
 export function readRoutes(r, ctx) {
   const mediaUrl = (clinic, ref) => (MEDIA_REF_RE.test(str(ref)) ? ctx.baseUrl + '/' + clinic.slug + '/v1/' + ref : null);
   const asOf = (clinic) => partnerTime(clinic.last_seen_at, ctx.offsetMin);
-  const stale = (clinic) => ctx.now() - (msOf(clinic.last_seen_at) || 0) > STALE_AFTER_MS;
+  const stale = (clinic) => ctx.now() - (msOf(clinic.last_seen_at) || 0) > STALE_AFTER_MS
+    || ctx.now() - Math.min(msOf(clinic.slots_at) || 0, msOf(clinic.snapshot_at) || 0) > STALE_DATA_MS;
   const bad = (req, res, field, reason) => sendError(req, res, 'invalid_field', { field, reason });
   const langOk = (req, res) => {
     if (req.query.lang !== undefined && !langOf(req)) { bad(req, res, 'lang', 'unknown'); return false; }
@@ -5410,7 +5666,8 @@ test('/_health — без ключа, только «жив»; /_metrics — б�
   assert.equal((await fetch(s.base + '/_metrics', { headers: { Authorization: 'Bearer wrong-TESTONLY' } })).status, 401);
   const m = await (await fetch(s.base + '/_metrics', { headers: { Authorization: 'Bearer m-TESTONLY' } })).json();
   assert.equal(m.clinics, 0);
-  for (const k of ['deliveries_queue_full', 'access_skipped_rate_limited', 'access_skipped_keyless', 'access_skipped_over_key_day', 'access_skipped_over_total']) {
+  for (const k of ['deliveries_queue_full', 'access_skipped_rate_limited', 'access_skipped_keyless', 'access_skipped_over_key_day', 'access_skipped_over_total',
+    'access_skipped_over_clinic']) {
     assert.equal(m[k], 0, k + ' — ревью 8b, C6/C8: пропущенное считается');
   }
   assert.ok(Object.values(m).every((v) => v === null || ['number', 'string'].includes(typeof v)), 'только числа и время');
@@ -5532,6 +5789,7 @@ export function metrics(db, now, jobs = null, { counters = null, accessJournal =
     access_skipped_keyless: skipped.keyless || 0,
     access_skipped_over_key_day: skipped.over_key_day || 0,
     access_skipped_over_total: skipped.over_total || 0,
+    access_skipped_over_clinic: skipped.over_clinic || 0,   // бюджет журнала клиники выбран (проверка исправлений 8b, F)
     jobs: jobs ? jobs.status() : null,
   };
 }
@@ -5886,7 +6144,7 @@ server {
   server_name api.easymed.uz;
   ssl_certificate     /etc/letsencrypt/live/api.easymed.uz/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/api.easymed.uz/privkey.pem;
-  client_max_body_size 5m;
+  client_max_body_size 5m;              # снимок и время клиники — до 4 МБ (routes/sync.js SNAPSHOT_MAX_BYTES), остальное меньше
   access_log off;                       # без адресов с параметрами и IP в журнале nginx; журнал запросов — в базе службы
   location / {
     proxy_pass http://easymed_public;   # без пути после адреса: путь и query доходят байт в байт (подпись клиники)
@@ -6454,7 +6712,7 @@ test('исходники: вызовы журнала не получают те
 
 ## Ревью и исправления (2026-10-12)
 
-Проверка безопасности службы после задач 1–12 (снимок кода `08f1f64b`): **13 находок** — 1 критичная, 8 важных, 4 малых. Ни одна не раскрывает данных пациента. Все исправлены на этой ветке, каждая — тестом сначала. Блоки кода выше сведены с итоговым кодом.
+Проверка безопасности службы после задач 1–12 (снимок кода `08f1f64b`): **13 находок** — 1 критичная, 8 важных, 4 малых. Ни одна не раскрывает данных пациента. Все исправлены на этой ветке, каждая — тестом сначала. Повторная проверка исправлений нашла в них ещё 7 недочётов (A–G) — исправлены тоже (раздел «Проверка исправлений» ниже). Блоки кода выше сведены с итоговым кодом.
 
 **Как читать блоки после ревью:**
 - блоки — итоговый код, а не код в момент своей задачи;
@@ -6470,13 +6728,13 @@ test('исходники: вызовы журнала не получают те
 | C2 | важная | После восстановления базы клиники новые события с прежними номерами получали «принято» и терялись | `events_seen.identity` — sha256 вида и тела события. Тот же номер с другим содержимым — новое событие | `3e995d6b` |
 | C3 | важная | После восстановления или пересборки `public.db` курсор очереди шёл назад: заявки прятались за курсором клиники, подтверждение стирало чужое | Курсоры не меньше часов запуска (`floorInboxCursor`). Очередь отдаётся с самого старого неподтверждённого, без отсечения по курсору клиники. DEPLOY.md — восстановление и что теряется | `cbf40fdf` |
 | C4 | важная | Уборка файлов тянула весь снимок клиники в память на каждую строку каждую минуту — падение по памяти | Ссылку проверяет SQLite (`instr`). Файл из снимка отмечается свежим и сутки не проверяется | `660ac6da` |
-| C5 | важная | Кэш разобранного снимка — по числу записей и по метке до секунды: память и второй снимок в ту же секунду не доходил до партнёров | Кэш по клинике и виду, пока текст тот же; ограничен размером. Потолки списков, тело снимка и времени — до 2 МБ | `67d69607` |
+| C5 | важная | Кэш разобранного снимка — по числу записей и по метке до секунды: память и второй снимок в ту же секунду не доходил до партнёров | Кэш по клинике и виду, пока текст тот же; ограничен размером. Потолки списков. Тело снимка и времени — до 4 МБ и не больше 100 тыс. объектов (после проверки исправлений, C и E) | `67d69607`, `8be19c84` |
 | C6 | важная | Отказы партнёрам (каждый 429, запросы без ключа) становились строками журнала — наполнение общего диска | 429 — только счётчик. Без ключа строкой — только 401. Потолки строк в сутки на подключение и всего | `737e3d5a` (Б) |
-| C7 | важная | Файлы снимка без потолка на клинику — до ~1,2 ГБ в минуту на общий диск | Потолок 500 файлов и 200 МБ на клинику, сверх — 409 `media_quota` | `2f693abc` |
+| C7 | важная | Файлы снимка без потолка на клинику — до ~1,2 ГБ в минуту на общий диск | Потолок файлов и байтов на клинику, сверх — 409 `media_quota`; неиспользуемое снимком убирается раньше отказа (проверка исправлений, G) | `2f693abc`, `85309d9b` |
 | C8 | важная | Одна общая очередь уведомлений: зависший адрес одного партнёра задерживал всех дальше 30-минутного окна предложения | Честная волна по парам «клиника — адрес», пул из четырёх, отдых отказавшего хоста (Б). Потолок 2000 ждущих уведомлений на клинику: сверх — событие принимается и меняет статус, уведомление считается в `queue_full` (А) | `eb2d1950` (Б), `3108c8a6` (А) |
-| C9 | важная | Согласие или отказ партнёра ложились на то предложение клиники, что есть сейчас, — записывалось время, на которое партнёр не соглашался | В теле accept/decline — `offered_start` того предложения, которое видел партнёр; не то — 409 `offer_changed`. Элемент очереди несёт `offered_start`. Новое предложение клиники снимает устаревшее согласие на сервере. Клиника 8a не применяет ответ на прежнее предложение | `f40f83ca`, `a99a90d3` (сторона клиники) |
+| C9 | важная | Согласие или отказ партнёра ложились на то предложение клиники, что есть сейчас, — записывалось время, на которое партнёр не соглашался | В теле accept/decline — `offered_start` того предложения, которое видел партнёр; не то — 409 `offer_changed`. Элемент очереди несёт `offered_start`. Новое предложение клиники снимает устаревшее согласие на сервере. Клиника 8a не применяет согласие на прежнее предложение; отказ клиника применяет как отмену партнёром (проверка исправлений, B) | `f40f83ca`, `a99a90d3`, `1520025c` (сторона клиники) |
 | C10 | малая | Событие «другое время» в пути переписывало отмену партнёра: живое предложение до уборки и занятое время | Отмена и отказ партнёра сильнее «другого времени» и «ждёт» в пути; итоги клиники (записан, отменён, пришёл, не пришёл) — сильнее отмены. Отказ держится как отмена. О таком предложении партнёр уведомления не получает | `8f92447c`, `f7f03959` |
-| C11 | малая | Уборка закрывала «не забрана» между GET очереди и подтверждением клиники | Отданное в GET 10 минут не закрывается (`inbox.handed_out_at`). Поздний `held` оживляет заявку, закрытую сервером | `33580f94` |
+| C11 | малая | Уборка закрывала «не забрана» между GET очереди и подтверждением клиники | Отданное в GET 10 минут от первой выдачи не закрывается (`inbox.handed_out_at`). Поздний `held` оживляет заявку, закрытую сервером | `33580f94`, `32806681` |
 | C12 | малая | Сайт партнёра не видел Retry-After; 429 потолка по IP без CORS | `Access-Control-Expose-Headers: Retry-After`. CORS на 429 по IP — только сайту, которому по этому имени уже отвечали | `ab951195` (Б) |
 | C13 | малая | `npm ci --omit=dev` из DEPLOY.md не работал: у службы не было package-lock.json | `public-server/package-lock.json` из корневого lock без сети (`scripts/lock-from-root.mjs`), страж `server/lockfile.test.js`. DEPLOY.md — команды целиком | `6f2c7423` |
 
@@ -6495,24 +6753,28 @@ test('исходники: вызовы журнала не получают те
   - о «другом времени», на которое партнёр уже не может ответить (он отменил или отказался), уведомления нет;
   - «истекло» и отказ после отмены — уходят.
 - **CORS:** `Access-Control-Expose-Headers: Retry-After`.
-- **Статус `closed` и `/slots`** — без изменений (см. «Решения плана», Р7, Р9).
+- **`/slots`:** `stale: true` — клиника молчит дольше 10 минут (Р9) **или** присланные ею время или снимок старше 35 минут (сервер их не принимает, например по размеру).
+- **Статус `closed`** — без изменений (см. «Решения плана», Р7).
+- **Уведомления:** адрес, не отвечающий соединением, отдыхает — уведомления к нему откладываются, а не тратят повторы; доставка кончается после шести настоящих попыток или через 107 минут от события.
 
 ### Потолки и сроки, введённые ревью
 
 | Что | Значение | Где |
 |---|---|---|
-| Тело канала клиники: снимок и время | 2 МБ | `routes/sync.js` `SNAPSHOT_MAX_BYTES` |
+| Тело канала клиники: снимок и время | 4 МБ (200 врачей × 30 дней — ~3 МБ времени); nginx `client_max_body_size 5m` | `routes/sync.js` `SNAPSHOT_MAX_BYTES` |
+| Тело канала клиники: объекты и списки | не больше 100 000 (клиника размера дизайна — ~15 тыс.); сверх — 413 без разбора | `store/clinics.js` `PARSE_CONTAINERS_MAX`, `parseBounded` |
 | Тело канала клиники: файл | 2 МБ | `store/media.js` `MEDIA_MAX_BYTES` |
 | Тело канала клиники: остальное | 1 МБ | `routes/sync.js` |
 | Сжатое тело (Content-Encoding) | не принимается, 415 | `routes/sync.js` |
 | Списки снимка | зданий 200, врачей 1000, услуг 10 000, пакетов 2000 | `store/clinics.js` `SNAPSHOT_LIMITS` |
-| Время | врачей 1000, дней 62, начал в дне 288 | `store/clinics.js` `SNAPSHOT_LIMITS` |
-| Кэш разобранного снимка и времени | запись до 512 К знаков, всего 16 М знаков | `store/clinics.js` |
-| Файлы клиники | 500 файлов и 200 МБ | `store/media.js` `MEDIA_QUOTA_FILES`, `MEDIA_QUOTA_BYTES` |
+| Время | врачей 1000, дней 62, начал в дне 288; начала и строка свободы — строки | `store/clinics.js` `SNAPSHOT_LIMITS` |
+| Кэш разобранного снимка и времени | по оценке кучи (5 байт на знак + 32 на объект), всего не больше 40 МБ; любая допустимая запись кэшируется | `store/clinics.js` `PARSE_CACHE_HEAP_MAX` |
+| Файлы клиники | 2004 файла (2 × (врачи снимка + 2)) и 200 МБ; сверх — сначала убираются не используемые снимком старше 10 минут | `store/media.js` `MEDIA_QUOTA_FILES`, `MEDIA_QUOTA_BYTES`, `MEDIA_PRUNE_AFTER_MS` |
 | Ждущие уведомления клиники | 2000 | `store/deliveries.js` `PENDING_PER_CLINIC_MAX` |
-| Волна доставки | 20 строк, 4 одновременно, на хост — 2 строки и 1 отправка, отдых хоста 60 с | `store/deliveries.js` |
-| Журнал запросов | 20 000 строк в сутки на подключение, 1000 без ключа на клинику, 1 000 000 всего | `store/access-journal.js` |
-| Отданное клинике не закрывается уборкой | 10 минут | `store/requests.js` `HANDED_OUT_GRACE_MS` |
+| Волна доставки | 20 строк, 4 одновременно, на адрес (хост:порт) — 2 строки и 1 отправка; отдых адреса после 2 неудач соединения подряд — 15 → 30 → 60 с, строки откладываются без траты попыток; окно доставки 107 минут | `store/deliveries.js` |
+| Журнал запросов | 5000 строк в сутки на подключение, 1000 без ключа на клинику; бюджет клиники на 30 дней — min(200 000, 2 000 000 / число клиник), из него 10 % — запас для 401 без ключа; 2 000 000 всего — защита диска; где журнал неполон — строка-отметка `SKIP` | `store/access-journal.js` |
+| Отданное клинике не закрывается уборкой | 10 минут от первой выдачи | `store/requests.js` `HANDED_OUT_GRACE_MS` |
+| `/slots` — stale, если время или снимок старше | 35 минут | `routes/partner-read.js` `STALE_DATA_MS` |
 
 ### Протокол клиники и база
 
@@ -6520,24 +6782,41 @@ test('исходники: вызовы журнала не получают те
 - **Очередь:**
   - `GET /_sync/v1/inbox` отдаёт самые старые неподтверждённые элементы, `after` больше не отсекает;
   - курсоры не меньше часов запуска службы;
-  - `inbox.handed_out_at` — когда элемент отдан клинике;
+  - `inbox.handed_out_at` — когда элемент впервые отдан клинике;
+  - клиника 8a подтверждает каждый такт, в котором разобрала хоть один элемент (даже если курсор не сдвинулся);
   - ответ `/events` прежний: `{accepted}`.
-- **Ответы на другое время** (`offer.accept`, `offer.decline`) несут `data.offered_start`.
+- **Ответы на другое время** (`offer.accept`, `offer.decline`) несут `data.offered_start`. Клиника 8a сверяет его только у согласия; отказ — отмена партнёром в любом случае.
+- **Клиника 8a:** 413 — своя причина `too_large` (текст экрана — 8d); отпечаток не принятого по размеру снимка или времени запоминается — снова через 15 минут или при изменении.
 - **Миграция `001`** изменена на месте: служба ещё нигде не стоит. Страж схемы обновлён.
 - **`/_metrics`** — новые плоские числа:
   - `deliveries_queue_full`;
-  - `access_skipped_rate_limited`, `access_skipped_keyless`, `access_skipped_over_key_day`, `access_skipped_over_total`.
+  - `access_skipped_rate_limited`, `access_skipped_keyless`, `access_skipped_over_key_day`, `access_skipped_over_total`, `access_skipped_over_clinic`.
 
 **Итог по файлам:** служба — 57 файлов (было 52):
 - новые: `store/access-journal.js` и его тест, `server/lockfile.test.js`, `scripts/lock-from-root.mjs`, `package-lock.json`;
-- 23 файла тестов, 119 тестов — зелёные как есть и с `force-en.mjs`.
+- 23 файла тестов, 131 тест — зелёные как есть и с `force-en.mjs`.
+
+### Проверка исправлений (A–G)
+
+Повторная проверка коммитов ревью (до `85b7c0ff`): 7 недочётов, все внесены самими исправлениями; данных пациента ни один не раскрывает.
+
+| # | Важность | Что было | Что сделано | Коммит |
+|---|---|---|---|---|
+| A | важная | Отдых адреса партнёра тратил попытки: уведомления кончались «не доставлено», ни разу не уйдя; неверный порт одной клиники усыплял весь хост | Отдых — отсрочка без траты попыток; конец — шесть настоящих попыток или 107 минут; отдых после 2 неудач подряд, 15 → 30 → 60 с; адрес — хост и порт | `308a5d27` (Б) |
+| B | важная | Отказ партнёра клиника отбрасывала как ответ на прежнее предложение, если регистратор успел предложить новое: сервер «отменено», клиника держала время, потом «истекло» | Отказ — отмена партнёром на клинике (как `appointment.cancel`); сверка с нынешним предложением — только у согласия | `1520025c` |
+| C | важная | Потолок тела 2 МБ отказывал клиникам, которые SNAPSHOT_LIMITS обещали принять; клиника слала отказанное каждые 15 секунд, партнёр видел замёрзшее время со `stale: false` | Снимок и время — до 4 МБ (вместе с E); клиника: 413 → `too_large`, отпечаток отказанного запоминается; `/slots` — stale по возрасту времени и снимка | `8be19c84` |
+| D | важная / малая | После восстановления `public.db` элемент с курсором, равным сохранённому у клиники, отдавался каждый такт, не подтверждался и не стирался | Запас уборки — от первой выдачи; клиника подтверждает каждый такт, в котором разобрала хоть один элемент | `32806681` |
+| E | важная / малая | Тело из 2 МБ `{}` при полном кэше роняло службу (160 МБ кучи) | Не больше 100 тыс. объектов и списков в теле (сверх — 413 без разбора); кэш по оценке кучи ≤ 40 МБ; начала окон — строки | `8be19c84` |
+| F | малая | Бюджет журнала запросов — один на все клиники: два занятых ключа вытесняли журнал остальных | Бюджет на клинику, запас для 401 без ключа, общий потолок — только защита диска, отметка `SKIP` для 8d; `/_metrics` — `access_skipped_over_clinic` | `52d5159a` (Б), `0deb6420` |
+| G | малая | Потолок файлов считал фото, которых в снимке уже нет: новые фото переснятых врачей — отказ до суток | По числу — 2 × (врачи + 2); сверх — сначала убираются не используемые снимком старше 10 минут | `85309d9b` |
 
 ### Новые файлы службы
 
 Журнал запросов партнёров — что становится строкой (C6, сборщик Б) — `public-server/server/store/access-journal.js`:
 
 ```js
-// PUBLIC_SERVER_V1 — ЧТО ПОПАДАЕТ В ЖУРНАЛ ЗАПРОСОВ ПАРТНЁРОВ (проверка 8b, C6).
+// PUBLIC_SERVER_V1 — ЧТО ПОПАДАЕТ В ЖУРНАЛ ЗАПРОСОВ ПАРТНЁРОВ (проверка 8b, C6;
+// проверка исправлений 8b, F).
 //
 // Журнал запросов (store/logs.js recordAccess, 30 дней) — для клиники: кто и
 // что спрашивал её ключом. Писать в него КАЖДЫЙ запрос значило бы дать любому из
@@ -6548,46 +6827,97 @@ test('исходники: вызовы журнала не получают те
 //     важно знать; их и так не больше 30 в минуту с IP — лимит неверных ключей),
 //     прочие отказы без ключа (503, 400 https) — только счётчик;
 //   • в сутки (UTC) на одно подключение — не больше perKeyPerDay строк, на
-//     запросы без ключа одной клиники — не больше keylessPerDay: ключ сайта
-//     клиники по сути публичный, так что потолок нужен и строкам с ключом;
-//   • всего строк — не больше totalMax (уборка 30 дней освобождает место).
-// Счёт суток держится в памяти, а при первом за сутки запросе подключения
-// берётся из базы — перезапуск службы потолок не обнуляет.
+//     запросы без ключа одной клиники — не больше keylessPerDay;
+//   • У КАЖДОЙ КЛИНИКИ — СВОЙ БЮДЖЕТ строк на весь срок хранения (30 дней):
+//     min(ACCESS_CLINIC_MAX, ACCESS_TOTAL_MAX / число клиник). Занятые ключи одной
+//     клиники (ключ сайта по сути публичный) больше не вытесняют журнал других;
+//     доля KEYLESS_SHARE бюджета — запас только для 401 без ключа (неверный ключ
+//     клиника видит, даже когда её ключи выбрали свою часть);
+//   • общий потолок ACCESS_TOTAL_MAX — только защита диска: сумма бюджетов его
+//     не превышает, и до него доходит лишь то, что пишется мимо бюджетов;
+//   • где журнал неполон — одна строка-отметка за сутки на подключение и
+//     причину: method 'SKIP', status 0, path — причина ('key_day', 'keyless_day',
+//     'clinic_budget', 'total'), at — с какого мига. Клиника получает её тем же
+//     каналом, что журнал (GET /_sync/v1/inbox?access_after=…; экраны — 8d).
+//     Отметки — тоже строки клиники и считаются в её бюджет (их не больше
+//     «подключения + 1» на причину в сутки — доли процента бюджета).
+// Счёт суток и счёт клиники держатся в памяти, а при первом запросе берутся из
+// базы (перезапуск службы потолки не обнуляет); счёт клиники у потолка
+// пересчитывается не чаще раза в RECOUNT_MS — уборка 30 дней освобождает место.
 import { isoOf } from '../lib/time.js';
+import { recordAccess } from './logs.js';
 
-export const ACCESS_PER_KEY_PER_DAY = 20000;
+export const ACCESS_PER_KEY_PER_DAY = 5000;
 export const ACCESS_KEYLESS_PER_DAY = 1000;
-export const ACCESS_TOTAL_MAX = 1000000;
+export const ACCESS_CLINIC_MAX = 200000;
+export const ACCESS_TOTAL_MAX = 2000000;
+export const KEYLESS_SHARE = 0.1;
+export const RECOUNT_MS = 60000;
+export const SKIP_METHOD = 'SKIP';
 
 /**
- * @param {{perKeyPerDay?:number, keylessPerDay?:number, totalMax?:number}} [o]
+ * @param {{perKeyPerDay?:number, keylessPerDay?:number, clinicMax?:number, totalMax?:number}} [o]
  * @returns {{admit:(db:object, e:{clinicId:string, connectionId:(number|null), status:number, now:number})=>boolean,
- *   stats:()=>{rate_limited:number, keyless:number, over_key_day:number, over_total:number}}}
+ *   stats:()=>{rate_limited:number, keyless:number, over_key_day:number, over_clinic:number, over_total:number}}}
  */
 export function createAccessJournal({ perKeyPerDay = ACCESS_PER_KEY_PER_DAY, keylessPerDay = ACCESS_KEYLESS_PER_DAY,
-  totalMax = ACCESS_TOTAL_MAX } = {}) {
-  const counts = new Map();
+  clinicMax = ACCESS_CLINIC_MAX, totalMax = ACCESS_TOTAL_MAX } = {}) {
+  const dayCounts = new Map();
+  const marked = new Set();
+  const clinicRows = new Map();
+  let clinicsSeen = { n: 0, at: -Infinity };
   let day = '';
-  const skipped = { rate_limited: 0, keyless: 0, over_key_day: 0, over_total: 0 };
+  const skipped = { rate_limited: 0, keyless: 0, over_key_day: 0, over_clinic: 0, over_total: 0 };
+  const stale = (at, now) => Math.abs(now - at) >= RECOUNT_MS;
 
   // Строки уходят только уборкой по возрасту (с начала), так что номер последней
   // минус номер первой — их число; два поиска по ключу таблицы, без перебора.
   const total = (db) => db.prepare('SELECT (SELECT MAX(id) FROM access_log) - (SELECT MIN(id) FROM access_log) + 1 AS n').get().n || 0;
-  const today = (db, clinicId, connectionId, since) =>
-    db.prepare('SELECT COUNT(*) AS n FROM access_log WHERE clinic_id = ? AND connection_id IS ? AND at >= ?').get(clinicId, connectionId, since).n;
+  const today = (db, clinicId, connectionId, since) => db.prepare(
+    'SELECT COUNT(*) AS n FROM access_log WHERE clinic_id = ? AND connection_id IS ? AND at >= ? AND status > 0').get(clinicId, connectionId, since).n;
+  // Строки клиники — по индексу access_log_clinic.
+  const clinicCount = (db, clinicId, now, refresh) => {
+    let c = clinicRows.get(clinicId);
+    if (!c || (refresh && stale(c.at, now))) {
+      c = { n: db.prepare('SELECT COUNT(*) AS n FROM access_log WHERE clinic_id = ?').get(clinicId).n, at: now };
+      clinicRows.set(clinicId, c);
+    }
+    return c;
+  };
+  const budget = (db, now) => {
+    if (stale(clinicsSeen.at, now)) clinicsSeen = { n: db.prepare('SELECT COUNT(*) AS n FROM clinics').get().n, at: now };
+    return Math.max(1, Math.min(clinicMax, Math.floor(totalMax / Math.max(1, clinicsSeen.n))));
+  };
+
+  function refuse(db, reason, counter, { clinicId, connectionId, now }) {
+    skipped[counter] += 1;
+    const mark = [day, clinicId, connectionId == null ? '' : connectionId, reason].join('|');
+    if (!marked.has(mark)) {
+      marked.add(mark);
+      recordAccess(db, { clinicId, connectionId, at: isoOf(now), method: SKIP_METHOD, path: reason, status: 0 });
+    }
+    return false;
+  }
 
   function admit(db, { clinicId, connectionId = null, status, now }) {
     if (status === 429) { skipped.rate_limited += 1; return false; }
     const keyless = connectionId == null;
     if (keyless && status !== 401) { skipped.keyless += 1; return false; }
     const d = isoOf(now).slice(0, 10);
-    if (d !== day) { day = d; counts.clear(); }
-    const k = clinicId + '\n' + (keyless ? '' : connectionId);
-    let n = counts.get(k);
-    if (n === undefined) n = today(db, clinicId, keyless ? null : connectionId, d + 'T00:00:00Z');
-    if (n >= (keyless ? keylessPerDay : perKeyPerDay)) { counts.set(k, n); skipped.over_key_day += 1; return false; }
-    if (total(db) >= totalMax) { counts.set(k, n); skipped.over_total += 1; return false; }
-    counts.set(k, n + 1);
+    if (d !== day) { day = d; dayCounts.clear(); marked.clear(); }
+    const e = { clinicId, connectionId: keyless ? null : connectionId, now };
+    const k = clinicId + '|' + (keyless ? '' : connectionId);
+    let n = dayCounts.get(k);
+    if (n === undefined) { n = today(db, clinicId, e.connectionId, d + 'T00:00:00Z'); dayCounts.set(k, n); }
+    if (n >= (keyless ? keylessPerDay : perKeyPerDay)) return refuse(db, keyless ? 'keyless_day' : 'key_day', 'over_key_day', e);
+    const b = budget(db, now);
+    const limit = keyless ? b : b - Math.ceil(b * KEYLESS_SHARE);
+    let c = clinicCount(db, clinicId, now, false);
+    if (c.n >= limit) c = clinicCount(db, clinicId, now, true);
+    if (c.n >= limit) return refuse(db, 'clinic_budget', 'over_clinic', e);
+    if (total(db) >= totalMax) return refuse(db, 'total', 'over_total', e);
+    dayCounts.set(k, n + 1);
+    c.n += 1;
     return true;
   }
 
@@ -6599,27 +6929,36 @@ export function createAccessJournal({ perKeyPerDay = ACCESS_PER_KEY_PER_DAY, key
 
 ```js
 // PUBLIC_SERVER_V1 — что попадает в журнал запросов партнёров (проверка 8b,
-// C6): 429 и отказы без ключа, кроме 401, — только счётчики; строк одного ключа
-// и строк без ключа в сутки — не больше потолка; всего строк — не больше потолка;
-// после перезапуска счёт суток берётся из базы.
+// C6, и проверка исправлений 8b, F): 429 и отказы без ключа, кроме 401, — только
+// счётчики; строк одного ключа и строк без ключа в сутки — не больше потолка;
+// у каждой клиники — свой бюджет строк за 30 дней хранения (одни клиники не
+// вытесняют другие), общий потолок — только защита диска; где журнал неполон —
+// одна строка-отметка «SKIP» для 8d; после перезапуска счёт берётся из базы.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createAccessJournal } from './access-journal.js';
-import { recordAccess } from './logs.js';
+import { createAccessJournal, ACCESS_CLINIC_MAX, ACCESS_TOTAL_MAX, ACCESS_PER_KEY_PER_DAY, KEYLESS_SHARE } from './access-journal.js';
+import { recordAccess, accessSince } from './logs.js';
 import { testDb, NOW } from '../test-helpers/fixture.js';
 import { isoOf } from '../lib/time.js';
 
 const C = 'c-000777';
 const DAY = 86400000;
-function write(db, j, connectionId, status, now) {
-  const ok = j.admit(db, { clinicId: C, connectionId, status, now });
-  if (ok) recordAccess(db, { clinicId: C, connectionId, at: isoOf(now), method: 'GET', path: '/shifo/v1/clinic', status });
+function clinics(db, ...ids) {
+  for (const id of ids) db.prepare("INSERT INTO clinics (clinic_id, key_fp, first_seen_at, last_seen_at) VALUES (?, 'f', ?, ?)").run(id, isoOf(NOW), isoOf(NOW));
+}
+function write(db, j, connectionId, status, now, clinicId = C) {
+  const ok = j.admit(db, { clinicId, connectionId, status, now });
+  if (ok) recordAccess(db, { clinicId, connectionId, at: isoOf(now), method: 'GET', path: '/shifo/v1/clinic', status });
   return ok;
 }
-const rows = (db) => db.prepare('SELECT COUNT(*) AS n FROM access_log').get().n;
+const rows = (db) => db.prepare('SELECT COUNT(*) AS n FROM access_log WHERE status > 0').get().n;
+const real = (db, clinicId) => db.prepare('SELECT COUNT(*) AS n FROM access_log WHERE clinic_id = ? AND status > 0').get(clinicId).n;
+const marks = (db) => db.prepare('SELECT clinic_id AS c, connection_id AS k, path FROM access_log WHERE status = 0 ORDER BY id').all()
+  .map((m) => [m.c, m.k, m.path]);
 
 test('429 — никогда строкой; без ключа — только 401; с ключом — любой ответ', () => {
   const { db } = testDb();
+  clinics(db, C);
   const j = createAccessJournal();
   assert.equal(write(db, j, 3, 429, NOW), false);
   assert.equal(write(db, j, null, 429, NOW), false);
@@ -6628,12 +6967,14 @@ test('429 — никогда строкой; без ключа — только 
   assert.equal(write(db, j, null, 401, NOW), true);
   for (const s of [200, 401, 403, 404, 409, 503]) assert.equal(write(db, j, 3, s, NOW), true, String(s));
   assert.equal(rows(db), 7);
-  assert.deepEqual(j.stats(), { rate_limited: 2, keyless: 2, over_key_day: 0, over_total: 0 });
+  assert.deepEqual(marks(db), [], 'отказы по виду запроса — не неполнота журнала');
+  assert.deepEqual(j.stats(), { rate_limited: 2, keyless: 2, over_key_day: 0, over_clinic: 0, over_total: 0 });
 });
 
-test('потолок в сутки: на ключ и отдельно на запросы без ключа; новые сутки — снова пишется', () => {
+test('потолок в сутки на ключ и на запросы без ключа; где журнал неполон — одна отметка SKIP за сутки, её видит клиника', () => {
   const { db } = testDb();
-  const j = createAccessJournal({ perKeyPerDay: 5, keylessPerDay: 3, totalMax: 1000 });
+  clinics(db, C);
+  const j = createAccessJournal({ perKeyPerDay: 5, keylessPerDay: 3 });
   let wrote = 0;
   for (let i = 0; i < 10; i += 1) wrote += write(db, j, 3, 200, NOW + i) ? 1 : 0;
   assert.equal(wrote, 5);
@@ -6641,30 +6982,66 @@ test('потолок в сутки: на ключ и отдельно на за�
   wrote = 0;
   for (let i = 0; i < 10; i += 1) wrote += write(db, j, null, 401, NOW + i) ? 1 : 0;
   assert.equal(wrote, 3);
+  assert.deepEqual(marks(db), [[C, 3, 'key_day'], [C, null, 'keyless_day']], 'одна отметка на ключ и причину за сутки');
+  const exported = accessSince(db, C, 0).filter((r) => r.status === 0);
+  assert.deepEqual(exported.map((r) => [r.method, r.path, r.connection_id, r.at]), [['SKIP', 'key_day', 3, isoOf(NOW + 5)], ['SKIP', 'keyless_day', null, isoOf(NOW + 3)]],
+    'клиника получает отметку «журнал неполон с …» тем же каналом, что журнал (8d)');
   assert.equal(write(db, j, 3, 200, NOW + DAY), true, 'следующие сутки (UTC)');
   assert.equal(j.stats().over_key_day, 12);
 });
 
-test('после перезапуска счёт суток — из базы, а не с нуля', () => {
+test('после перезапуска счёт суток — из базы, а не с нуля (отметки не считаются)', () => {
   const { db } = testDb();
-  const first = createAccessJournal({ perKeyPerDay: 5, keylessPerDay: 2, totalMax: 1000 });
-  for (let i = 0; i < 5; i += 1) write(db, first, 3, 200, NOW + i);
+  clinics(db, C);
+  const first = createAccessJournal({ perKeyPerDay: 5, keylessPerDay: 2 });
+  for (let i = 0; i < 6; i += 1) write(db, first, 3, 200, NOW + i);
   for (let i = 0; i < 2; i += 1) write(db, first, null, 401, NOW + i);
-  const again = createAccessJournal({ perKeyPerDay: 5, keylessPerDay: 2, totalMax: 1000 });
+  const again = createAccessJournal({ perKeyPerDay: 5, keylessPerDay: 2 });
   assert.equal(write(db, again, 3, 200, NOW + 100), false);
   assert.equal(write(db, again, null, 401, NOW + 100), false);
   assert.equal(write(db, again, 3, 200, NOW + DAY), true);
+  assert.equal(write(db, again, 4, 200, NOW + 100), true, 'отметка ключа 3 не съела счёт ключа 4');
 });
 
-test('всего строк — не больше потолка; уборка освобождает место', () => {
+test('у каждой клиники свой бюджет: два занятых ключа клиники А не вытесняют журнал клиники Б; 401 без ключа — в запасе', () => {
   const { db } = testDb();
-  const j = createAccessJournal({ perKeyPerDay: 1000, keylessPerDay: 1000, totalMax: 4 });
-  let wrote = 0;
-  for (let i = 0; i < 10; i += 1) wrote += write(db, j, 1 + (i % 3), 200, NOW + i) ? 1 : 0;
-  assert.equal(wrote, 4);
-  assert.equal(j.stats().over_total, 6);
-  db.prepare('DELETE FROM access_log WHERE id <= 2').run();
-  assert.equal(write(db, j, 1, 200, NOW + 20), true);
+  clinics(db, 'c-a', 'c-b');
+  const j = createAccessJournal({ perKeyPerDay: 1000, keylessPerDay: 100, totalMax: 200 });   // 200 строк на 2 клиники — по 100, из них 10 — запас для 401
+  for (let d = 0; d < 3; d += 1) for (let i = 0; i < 60; i += 1) for (const k of [1, 2]) write(db, j, k, 200, NOW + d * DAY + i, 'c-a');
+  assert.equal(real(db, 'c-a'), 90, 'клиника А — в пределах своего бюджета без запаса');
+  assert.equal(write(db, j, null, 401, NOW + 3 * DAY, 'c-a'), true, 'неверный ключ у клиники А всё ещё виден ей — запас');
+  for (let i = 0; i < 5; i += 1) assert.equal(write(db, j, 1, 200, NOW + 3 * DAY + i, 'c-b'), true, 'клиника Б пишет своё');
+  assert.equal(write(db, j, null, 401, NOW + 3 * DAY, 'c-b'), true);
+  assert.equal(real(db, 'c-b'), 6);
+  assert.ok(marks(db).some(([c, k, p]) => c === 'c-a' && k === 1 && p === 'clinic_budget'), 'клиника А видит, с какого мига её журнал неполон');
+  assert.equal(j.stats().over_total, 0, 'общий потолок — только защита диска, до него не доходит');
+  assert.ok(j.stats().over_clinic > 0);
+});
+
+test('бюджет клиники освобождается уборкой: пересчёт из базы — не чаще раза в минуту', () => {
+  const { db } = testDb();
+  clinics(db, C);
+  const j = createAccessJournal({ perKeyPerDay: 1000, totalMax: 10 });   // одна клиника: 10, из них 9 — с ключом
+  for (let i = 0; i < 9; i += 1) assert.equal(write(db, j, 3, 200, NOW + i), true);
+  assert.equal(write(db, j, 3, 200, NOW + 10), false);
+  db.prepare('DELETE FROM access_log WHERE id <= 5 AND status > 0').run();
+  assert.equal(write(db, j, 3, 200, NOW + 30000), false, 'полминуты — ещё по памяти');
+  assert.equal(write(db, j, 3, 200, NOW + 61000), true, 'через минуту — пересчёт, место есть');
+});
+
+test('общий потолок — защита диска: строки сверх него не пишутся, клиника получает отметку', () => {
+  const { db } = testDb();
+  clinics(db, C);
+  for (let i = 0; i < 10; i += 1) recordAccess(db, { clinicId: 'c-x', connectionId: 1, at: isoOf(NOW), method: 'GET', path: '/x/v1/clinic', status: 200 });
+  const j = createAccessJournal({ totalMax: 10 });
+  assert.equal(write(db, j, 3, 200, NOW), false);
+  assert.deepEqual(marks(db), [[C, 3, 'total']]);
+  assert.equal(j.stats().over_total, 1);
+});
+
+test('потолки по умолчанию: общий потолок держит полный бюджет хотя бы десяти клиник; один ключ не выбирает бюджет клиники за неделю', () => {
+  assert.ok(ACCESS_TOTAL_MAX >= 10 * ACCESS_CLINIC_MAX);
+  assert.ok(ACCESS_PER_KEY_PER_DAY * 7 < ACCESS_CLINIC_MAX * (1 - KEYLESS_SHARE));
 });
 ```
 
