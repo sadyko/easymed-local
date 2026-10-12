@@ -145,7 +145,12 @@ server {
     proxy_send_timeout 25s;
   }
 }
-server { listen 80; server_name api.easymed.uz; return 444; }   # http не принимаем: ключ уже ушёл бы открытым
+server {
+  listen 80;
+  server_name api.easymed.uz;
+  location ~ ^/docs(/(uz|en))?/?$ { return 301 https://$host$request_uri; }   # документация — открытая страница: http ведёт на https
+  location / { return 444; }            # остальное по http не принимаем: ключ уже ушёл бы открытым
+}
 ```
 
 ## Проверка после установки
@@ -153,6 +158,8 @@ server { listen 80; server_name api.easymed.uz; return 444; }   # http не пр
 ```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now easymed-public
 curl -s https://api.easymed.uz/_health                     # {"status":"ok",...}
+curl -sI https://api.easymed.uz/docs | head -1             # HTTP/2 200 — документация для партнёров (API_DOCS_V1)
+curl -sI http://api.easymed.uz/docs | grep -i ^location    # location: https://api.easymed.uz/docs
 systemctl show easymed-public -p MemoryCurrent -p MemoryMax
 journalctl -u easymed-public --since "10 min ago"          # тел запросов и данных пациентов здесь нет
 ```
