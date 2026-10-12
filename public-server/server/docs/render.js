@@ -65,9 +65,14 @@ export function renderDocs({ lang = 'ru', base = SAMPLE.base, uncollectedMaxMs }
   const label = (ru) => (lang === 'ru' ? ru : (LABELS[ru] && LABELS[ru][lang]) || ru);
   const code = (s) => '<code>' + esc(s) + '</code>';
   const pre = (s) => '<pre tabindex="0"><code>' + esc(s) + '</code></pre>';
-  const table = (head, rows, name) => '<div class="tw" role="region" tabindex="0" aria-label="' + esc(name) + '"><table>'
-    + '<thead><tr>' + head.map((h) => '<th scope="col">' + ti(h) + '</th>').join('') + '</tr></thead><tbody>'
-    + rows.map((r) => '<tr>' + r.map((c) => '<td>' + c + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+  // У каждой ячейки — подпись её столбца (data-label, текст заголовка без разметки):
+  // на телефоне строка таблицы — блоком с подписями над значениями (CSS, уже 600 px).
+  const table = (head, rows, name) => {
+    const labels = head.map((h) => ti(h).replace(/<[^>]+>/g, ''));
+    return '<div class="tw" role="region" tabindex="0" aria-label="' + esc(name) + '"><table>'
+      + '<thead><tr>' + head.map((h) => '<th scope="col">' + ti(h) + '</th>').join('') + '</tr></thead><tbody>'
+      + rows.map((r) => '<tr>' + r.map((c, i) => '<td data-label="' + labels[i] + '">' + c + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+  };
   const epOf = (id) => ENDPOINTS.find((e) => e.id === id);
   // В таблицах путь переносится только после «/».
   const epName = (e) => '<code>' + esc(e.method + ' ' + e.path).split('/').join('/<wbr>') + '</code>';
@@ -214,6 +219,12 @@ const CSS = [
   '.ex-h{font-size:13.5px;font-weight:600;color:var(--muted);margin:16px 0 0}',
   '.tw{overflow-x:auto;margin:8px 0 16px;border:1px solid var(--line);border-radius:8px}table{border-collapse:collapse;width:100%;font-size:13.5px}',
   'th,td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line)}th{background:var(--soft);font-weight:600}tbody tr:last-child td{border-bottom:0}td code{overflow-wrap:normal}',
+  // Телефон (уже 600 px, только экран): строка таблицы — блоком, над значением — подпись
+  // столбца; заголовки скрыты только глазу. Широкий экран и печать — обычная таблица.
+  '@media screen and (max-width:599.98px){.tw{position:relative}.tw table,.tw thead,.tw tbody,.tw tr,.tw th,.tw td{display:block}',
+  '.tw thead{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}',
+  '.tw tr{padding:6px 0;border-bottom:1px solid var(--line)}.tw tbody tr:last-child{border-bottom:0}',
+  '.tw td{border-bottom:0;padding:3px 12px}.tw td::before{content:attr(data-label);display:block;font-size:12.5px;font-weight:600;color:var(--muted)}}',
   'dl.kv{display:grid;grid-template-columns:minmax(0,1fr);gap:2px 16px}@media (min-width:640px){dl.kv{grid-template-columns:150px minmax(0,1fr)}}',
   'dl.kv dt{font-weight:600}dl.kv dd{margin:0 0 10px}',
   'footer{border-top:1px solid var(--line);padding:16px;color:var(--muted);font-size:13.5px;max-width:1180px;margin:0 auto}',

@@ -60,6 +60,36 @@ test('телефон и печать: колонка сужается до эк�
   }
 });
 
+// API_DOCS_V1 — таблицы на телефоне: уже 600 px строка таблицы — блоком, над каждым
+// значением — подпись его столбца (data-label, только CSS); на широком экране и в
+// печати — обычная таблица. Глазами (Playwright, 320 и 360 px) проверено, что ни
+// одна таблица не прокручивается вбок и «Что делать» видно сразу.
+test('таблицы на телефоне: у каждой ячейки — подпись своего столбца; уже 600 px строка — блоком с подписями, на широком экране и в печати — таблица', () => {
+  for (const [lang, html] of Object.entries(pages)) {
+    const tables = [...html.matchAll(/<table>([\s\S]*?)<\/table>/g)].map((m) => m[1]);
+    assert.ok(tables.length >= 20, lang + ': таблиц ' + tables.length);
+    let cells = 0;
+    for (const tb of tables) {
+      const head = [...tb.matchAll(/<th scope="col">([\s\S]*?)<\/th>/g)].map((m) => m[1].replace(/<[^>]+>/g, ''));
+      const rows = [.../<tbody>([\s\S]*)<\/tbody>/.exec(tb)[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map((m) => m[1]);
+      assert.ok(head.length >= 2 && rows.length >= 1, lang + ': ' + head.join(' | '));
+      for (const row of rows) {
+        const labels = [...row.matchAll(/<td(?: data-label="([^"]*)")?>/g)].map((m) => m[1]);
+        assert.deepEqual(labels, head, lang + ': подпись ячейки — заголовок её столбца');
+        cells += labels.length;
+      }
+    }
+    assert.ok(cells >= 300, lang + ': ячеек ' + cells);
+  }
+  const css = /<style>([\s\S]*?)<\/style>/.exec(pages.ru)[1];
+  const narrow = /@media screen and \(max-width:599\.98px\)\{((?:[^{}]*\{[^{}]*\})*)\}/.exec(css);
+  assert.ok(narrow, 'узкий экран — своя таблица, печать — нет (media screen)');
+  for (const s of ['.tw table,.tw thead,.tw tbody,.tw tr,.tw th,.tw td{display:block}', '.tw thead{position:absolute', 'clip-path:inset(50%)',
+    '.tw td::before{content:attr(data-label)']) assert.ok(narrow[1].includes(s), s);
+  assert.ok(!/display:none/.test(narrow[1]), 'заголовки скрыты только глазу — программа чтения с экрана их читает');
+  assert.ok(!css.replace(narrow[0], '').includes('data-label'), 'на широком экране и в печати подписей над ячейками нет');
+});
+
 test('ни ключа, ни секрета: только переменная $EASYMED_KEY и обрезанные em_live_… / em_whsec_…', () => {
   for (const html of Object.values(pages)) {
     for (const w of html.split(/[\s"'<>`]+/)) assert.ok(!KEY_RE.test(w) && !SECRET_RE.test(w), 'похоже на ключ: ' + w.slice(0, 12));
