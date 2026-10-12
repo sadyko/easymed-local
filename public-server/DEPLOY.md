@@ -16,17 +16,35 @@
 
 ## Пользователь, папки, зависимости
 
+На своей машине, в клоне репозитория (`<коммит>` — тег или хеш выпуска службы):
+
+```bash
+git -c core.autocrlf=false archive --format=tar.gz -o easymed-public.tar.gz <коммит>
+scp easymed-public.tar.gz root@45.77.242.169:/tmp/
+```
+
+На сервере (Node 24 уже стоит; `npm ci` берёт пакеты из реестра npm):
+
 ```bash
 sudo useradd --system --home /var/lib/easymed-public --shell /usr/sbin/nologin easymed-public
 sudo install -d -o easymed-public -g easymed-public -m 700 /var/lib/easymed-public
-sudo install -d -o root -g root -m 755 /opt/easymed-public
-# код: выгрузка тега/коммита в /opt/easymed-public/repo (git archive | tar -x), владелец root, только чтение
-cd /opt/easymed-public/repo/public-server && sudo npm ci --omit=dev   # better-sqlite3 для Linux x64, Node 24
+sudo install -d -o root -g root -m 755 /opt/easymed-public /opt/easymed-public/repo
+sudo tar -xzf /tmp/easymed-public.tar.gz -C /opt/easymed-public/repo && sudo rm -f /tmp/easymed-public.tar.gz
+cd /opt/easymed-public/repo/public-server && sudo npm ci --omit=dev
+sudo -u easymed-public node --input-type=module -e "import D from 'better-sqlite3'; new D(':memory:'); console.log('better-sqlite3 ok')"
 ```
+
+- `npm ci` ставит ровно `public-server/package-lock.json` — те же версии, что в корне репозитория и в тестах. Lock выводится из корневого без сети: `node public-server/scripts/lock-from-root.mjs` (после смены версий express или better-sqlite3 в корне; страж — `public-server/server/lockfile.test.js`).
+- better-sqlite3 13 везёт готовую сборку для linux-x64 — компилятор и python не нужны.
 
 ## Настройки — `/etc/easymed-public.env`
 
-Права на файл: владелец `root`, режим `640`, группа `easymed-public`.
+Права на файл: владелец `root`, режим `640`, группа `easymed-public`:
+
+```bash
+sudo install -m 640 -o root -g easymed-public /dev/null /etc/easymed-public.env
+sudoedit /etc/easymed-public.env    # вставить строки ниже
+```
 
 ```ini
 PUBLIC_PORT=8095
@@ -50,6 +68,10 @@ PUBLIC_LICENCE_PUBLIC_KEY=
 ```
 
 ## Служба — `/etc/systemd/system/easymed-public.service`
+
+```bash
+sudoedit /etc/systemd/system/easymed-public.service    # вставить содержимое ниже
+```
 
 ```ini
 [Unit]
@@ -96,6 +118,12 @@ WantedBy=multi-user.target
 
 Только на этот процесс, мимо старого шлюза. Вопрос 2 (Cloudflare) решает 8c. Если включат прокси Cloudflare, `PUBLIC_TRUST_PROXY` и `set_real_ip_from` нужно настроить на адреса Cloudflare. Иначе «Разрешённые IP» и лимиты будут считать адреса Cloudflare, а не партнёров.
 
+```bash
+sudoedit /etc/nginx/sites-available/api.easymed.uz    # вставить содержимое ниже; сертификат Let's Encrypt — до этого шага (8c)
+sudo ln -s /etc/nginx/sites-available/api.easymed.uz /etc/nginx/sites-enabled/api.easymed.uz
+sudo nginx -t && sudo systemctl reload nginx
+```
+
 ```nginx
 upstream easymed_public { server 127.0.0.1:8095; keepalive 16; }
 server {
@@ -135,7 +163,15 @@ journalctl -u easymed-public --since "10 min ago"          # тел запрос
 
 ## Восстановление базы из копии
 
-- Только при **остановленной** службе: `sudo systemctl stop easymed-public`, заменить `/var/lib/easymed-public/public.db` (файлы `public.db-wal` и `public.db-shm` убрать), `sudo systemctl start easymed-public`.
+- Только при **остановленной** службе (`<копия>` — файл резервной копии):
+
+```bash
+sudo systemctl stop easymed-public
+sudo rm -f /var/lib/easymed-public/public.db-wal /var/lib/easymed-public/public.db-shm
+sudo install -o easymed-public -g easymed-public -m 600 <копия> /var/lib/easymed-public/public.db
+sudo systemctl start easymed-public
+```
+
 - **Заявки, принятые после снятия копии, теряются**: их статус и запечатанные данные были только в заменённой базе, а клиники их, может быть, ещё не забрали. Партнёр на `GET /requests/{id}` получит 404 — пусть позвонит в клинику. Код этого не исправит; копию снимать часто, но хранить не дольше суток.
 - Статусы остальных заявок — как на момент копии, пока клиника не пришлёт по ним новое событие.
 - Курсоры очереди при запуске поднимаются до часов сервера (`floorInboxCursor`), поэтому клиники, чей курсор ушёл вперёд, новые заявки получают; уже принятое клиника по номеру заявки узнаёт как повтор.
