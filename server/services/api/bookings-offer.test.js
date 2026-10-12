@@ -363,7 +363,7 @@ test('рр-3: пока обмен стоит, предложение держи�
   assert.equal(expireDue(s.db, { now: LATER + 60000, kekPath: s.kekPath }), 1, 'предложенное время прошло — истекло');
 });
 
-test('ревью 8b, C9 (сторона клиники): ответ партнёра на прежнее предложение, когда клиника уже предложила другое, — не применяется; без offered_start — как прежде', async () => {
+async function reoffered() {
   const s = bookingSeed();
   const id = await pending(s);
   const LATEST = localAt('2030-03-12', '16:00');
@@ -371,14 +371,34 @@ test('ревью 8b, C9 (сторона клиники): ответ партнё
   offerOtherTime(s.db, { id, start: new Date(LATEST).toISOString() }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
   const answer2 = (type, offeredMs, nowMs) => ingestItem(s.db, { type, cursor: '9', public_id: 'rq_test0001', connection_id: s.connId,
     received_at: new Date(nowMs).toISOString(), data: offeredMs == null ? {} : { offered_start: new Date(offeredMs).toISOString() } }, { now: nowMs, kekPath: s.kekPath });
+  return { s, id, LATEST, answer2 };
+}
+
+test('ревью 8b, C9 (сторона клиники): согласие на прежнее предложение, когда клиника уже предложила другое, — не применяется; без offered_start — как прежде', async () => {
+  const { s, id, LATEST, answer2 } = await reoffered();
   const staleAccept = await answer2('offer.accept', LATER, NOW + 2 * 60000);
   assert.deepEqual([staleAccept.applied, staleAccept.stale, staleAccept.status], [false, true, 'offered']);
-  const staleDecline = await answer2('offer.decline', LATER, NOW + 3 * 60000);
-  assert.deepEqual([staleDecline.applied, staleDecline.stale], [false, true]);
   const row = one(s.db, 'SELECT * FROM api_requests WHERE id = ?', id);
   assert.deepEqual([row.status, Date.parse(row.offered_start)], ['offered', LATEST], 'новое предложение ждёт ответа партнёра');
   assert.equal(free(s, LATEST), false, 'новое предложенное время по-прежнему держится');
   const ok = await answer2('offer.accept', LATEST, NOW + 4 * 60000);
   assert.deepEqual([ok.applied, ok.status], [true, 'pending']);
   assert.equal(Date.parse(one(s.db, 'SELECT start_at FROM api_requests WHERE id = ?', id).start_at), LATEST);
+});
+
+test('проверка исправлений 8b, B: отказ партнёра — отмена, даже если клиника тем временем предложила другое время: обе стороны «отменено», время свободно', async () => {
+  const { s, id, LATEST, answer2 } = await reoffered();
+  const declined = await answer2('offer.decline', LATER, NOW + 3 * 60000);
+  assert.deepEqual([declined.applied, declined.status], [true, 'cancelled'], 'сервер уже показывает партнёру «отменено» — клиника тоже');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'cancelled');
+  assert.equal(free(s, LATEST), true, 'новое предложенное время освобождено');
+  assert.equal(expireDue(s.db, { now: NOW + 40 * 60000, kekPath: s.kekPath }), 0, 'позже «истекло» по этой заявке не будет');
+  // Ждущая (клиника ещё не предлагала) — отказ партнёра тоже отменяет и освобождает время.
+  const s2 = bookingSeed();
+  const id2 = await pending(s2);
+  const r2 = await ingestItem(s2.db, { type: 'offer.decline', cursor: '9', public_id: 'rq_test0001', connection_id: s2.connId,
+    received_at: new Date(NOW + 60000).toISOString(), data: {} }, { now: NOW + 60000, kekPath: s2.kekPath });
+  assert.deepEqual([r2.applied, r2.status], [true, 'cancelled']);
+  assert.equal(free(s2, START), true);
+  assert.equal(one(s2.db, 'SELECT status FROM api_requests WHERE id = ?', id2).status, 'cancelled');
 });

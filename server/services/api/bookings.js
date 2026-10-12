@@ -275,17 +275,20 @@ export async function ingestItem(db, raw, { now = Date.now(), kekPath = null } =
   }
   const row = byPublicId(db, v.public_id);
   if (!row || row.connection_id !== conn.id) return { applied: false, problem: 'unknown_request' };
-  if (v.type === 'appointment.cancel') return partnerCancel(db, row, { now, kekPath });
-  // Ревью 8b, C9: партнёр ответил на предложение, которого у клиники уже нет
-  // (регистратор с тех пор предложил другое время), — ответ устарел: заявка не
-  // меняется, партнёр увидит новое предложение и ответит на него. Без
+  // Отказ от другого времени — отмена партнёром (проверка исправлений 8b, B):
+  // публичный сервер уже показывает партнёру «отменено» и предложения клиники в
+  // пути ему не отдаёт, так что и клиника отменяет — даже если регистратор тем
+  // временем предложил новое время. Ждущая заявка тоже отменяется, время свободно.
+  if (v.type === 'appointment.cancel' || v.type === 'offer.decline') return partnerCancel(db, row, { now, kekPath });
+  // Ревью 8b, C9: партнёр согласился на предложение, которого у клиники уже нет
+  // (регистратор с тех пор предложил другое время), — согласие устарело: заявка
+  // не меняется, партнёр увидит новое предложение и ответит на него. Без
   // offered_start (прежний сервер) — как прежде.
   if (v.offered_start && Date.parse(v.offered_start) !== Date.parse(row.offered_start || '')) {
-    console.warn('[public-api] заявка', row.public_id, '— ответ партнёра на прежнее предложение, не применён');
+    console.warn('[public-api] заявка', row.public_id, '— согласие партнёра на прежнее предложение, не применено');
     return { applied: false, stale: true, id: row.id, status: row.status };
   }
-  if (v.type === 'offer.accept') return partnerAcceptOffer(db, row, { now, kekPath, answeredAt: v.received_at ? Date.parse(v.received_at) : null });
-  return partnerDeclineOffer(db, row, { now });
+  return partnerAcceptOffer(db, row, { now, kekPath, answeredAt: v.received_at ? Date.parse(v.received_at) : null });
 }
 
 // ─── ПОДТВЕРЖДЕНИЕ ──────────────────────────────────────────────────────────
@@ -625,16 +628,6 @@ function partnerAcceptOffer(db, row, { now, kekPath, answeredAt = null }) {
     cardToDay(db, row, localDayOf(db, row.offered_start));   // I5
   })();
   return { applied: true, id: row.id, status: 'pending', hold_until: isoOf(untilMs) };
-}
-
-/** Партнёр отказался от другого времени: заявка отменена, время свободно. */
-function partnerDeclineOffer(db, row, { now }) {
-  if (row.status !== 'offered') return { applied: false, id: row.id, status: row.status };
-  db.transaction(() => {
-    releaseHolds(db, row.id, 'cancelled', now);
-    setStatus(db, row.id, { status: 'cancelled' }, now);
-  })();
-  return { applied: true, id: row.id, status: 'cancelled' };
 }
 
 // ─── ДЛЯ ЭКРАНА ─────────────────────────────────────────────────────────────

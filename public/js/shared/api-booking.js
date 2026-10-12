@@ -234,8 +234,9 @@ export function parseInboxItem(item) {
     const answered = msOf(it.received_at);
     const value = answered == null ? base : { ...base, received_at: isoOf(answered) };
     // Ревью 8b, C9: ответ на другое время несёт offered_start предложения, на
-    // которое отвечает партнёр (публичный сервер 8b), — клиника сверит его со
-    // своим нынешним предложением. Нет поля или мусор — как прежде.
+    // которое отвечает партнёр (публичный сервер 8b): согласие клиника сверяет
+    // со своим нынешним предложением; отказ — отмена в любом случае
+    // (services/api/bookings.js). Нет поля или мусор — как прежде.
     if (type === 'offer.accept' || type === 'offer.decline') {
       const offered = msOf(it.data && typeof it.data === 'object' ? it.data.offered_start : null);
       if (offered != null) value.offered_start = isoOf(offered);
