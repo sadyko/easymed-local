@@ -11,7 +11,8 @@ import { generateKeyPairSync, sign as cryptoSign, verify as cryptoVerify } from 
 import { canonical } from '../../../server/services/control/canonical.js';
 import { verifyLicence } from '../../../server/services/control/licence.js';
 
-import { signLicence, loadSigningKey, ensureSigningKey } from './signing.js';
+import { signLicence, loadSigningKey, ensureSigningKey, signFeed, signingKeyIsProduction } from './signing.js';
+import { makeFeedPayload, verifyFeed } from '../../../server/services/control/vendor-feed.js';
 
 // --- test helpers -----------------------------------------------------------
 
@@ -329,4 +330,63 @@ test('the signed payload is flat — no field can become an object or array-of-o
   // And canonical() — which recurses unboundedly and can blow the stack on a
   // deeply nested payload — must handle it trivially.
   assert.doesNotThrow(() => canonical(payload));
+});
+
+// --- PUBLIC_LICENCE_V1: payment mark, sync key, issued_at order, the feed -----
+
+test('PUBLIC_LICENCE_V1: subscription and apiSyncKey are signed in — eight keys; the clinic verifier accepts them', () => {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  useKey(privateKey);
+  const doc = signLicence({ clinicId: 'c-1', clinicName: 'X', modules: ['crm'], subscription: 'unpaid', apiSyncKey: 'ab'.repeat(16) });
+  assert.deepEqual(Object.keys(doc.payload).sort(),
+    ['api_sync_key', 'clinic_id', 'clinic_name', 'issued_at', 'modules', 'nonce', 'subscription', 'valid_until']);
+  const r = verifyLicence(JSON.stringify(doc), { publicKey, clinicId: 'c-1' });
+  assert.equal(r.ok, true);
+  assert.equal(r.licence.subscription, 'unpaid');
+  assert.equal(r.licence.api_sync_key, 'ab'.repeat(16));
+  const noKey = signLicence({ clinicId: 'c-1', clinicName: 'X', modules: [], subscription: 'active', apiSyncKey: null });
+  assert.equal('api_sync_key' in noKey.payload, false, 'null — no field, the switch is off');
+  assert.equal(noKey.payload.subscription, 'active');
+});
+
+test('PUBLIC_LICENCE_V1: a wrong subscription word or a malformed sync key is a caller bug — refused, never signed', () => {
+  useKey(generateKeyPairSync('ed25519').privateKey);
+  for (const subscription of ['paid', '', 'ACTIVE', null]) {
+    assert.throws(() => signLicence({ clinicId: 'c-1', modules: [], subscription }), /subscription/);
+  }
+  for (const apiSyncKey of ['AB'.repeat(16), 'ab'.repeat(15), 'ab'.repeat(32), 42, {}]) {
+    assert.throws(() => signLicence({ clinicId: 'c-1', modules: [], apiSyncKey }), /apiSyncKey/);
+  }
+});
+
+test('PUBLIC_LICENCE_V1: notAfter only ever shortens valid_until; a malformed one is refused', () => {
+  useKey(generateKeyPairSync('ed25519').privateKey);
+  const soon = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
+  assert.equal(signLicence({ clinicId: 'c-1', modules: [], notAfter: soon }).payload.valid_until, soon);
+  const far = new Date(Date.now() + 400 * 24 * 3600 * 1000).toISOString();
+  const capped = Date.parse(signLicence({ clinicId: 'c-1', modules: [], notAfter: far }).payload.valid_until);
+  assert.ok(Math.abs(capped - (Date.now() + 14 * 24 * 3600 * 1000)) < 60_000, 'a later notAfter never lengthens the 14 days');
+  assert.throws(() => signLicence({ clinicId: 'c-1', modules: [], notAfter: 'tomorrow' }), /notAfter/);
+});
+
+test('PUBLIC_LICENCE_V1: issued_at is strictly after issuedAfter even when the vendor clock is behind it', () => {
+  useKey(generateKeyPairSync('ed25519').privateKey);
+  const ahead = new Date(Date.now() + 3_600_000).toISOString();
+  const doc = signLicence({ clinicId: 'c-1', modules: [], issuedAfter: ahead });
+  assert.equal(Date.parse(doc.payload.issued_at), Date.parse(ahead) + 1);
+  const past = new Date(Date.now() - 3_600_000).toISOString();
+  assert.ok(Math.abs(Date.parse(signLicence({ clinicId: 'c-1', modules: [], issuedAfter: past }).payload.issued_at) - Date.now()) < 60_000);
+  assert.throws(() => signLicence({ clinicId: 'c-1', modules: [], issuedAfter: 'yesterday' }), /issuedAfter/);
+});
+
+test('PUBLIC_LICENCE_V1: signFeed verifies with the shared feed verifier; a throwaway key is not the production key', () => {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  useKey(privateKey);
+  const payload = makeFeedPayload({ issuedAt: new Date().toISOString(), clinicsOff: ['c-1'], partnerKeysRevoked: ['cd'.repeat(32)] });
+  const doc = signFeed(payload);
+  const r = verifyFeed(JSON.stringify(doc), { publicKey });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.feed.clinics_off, ['c-1']);
+  assert.equal(verifyLicence(JSON.stringify(doc), { publicKey, clinicId: 'c-1' }).ok, false, 'a feed is never a licence');
+  assert.equal(signingKeyIsProduction(), false);
 });

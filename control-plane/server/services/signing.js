@@ -12,8 +12,12 @@
 // see its own header comment.
 
 import fs from 'node:fs';
-import { createPrivateKey, sign, randomBytes } from 'node:crypto';
+import { createPrivateKey, createPublicKey, sign, randomBytes } from 'node:crypto';
 import { canonical } from '../../../server/services/control/canonical.js';
+// PUBLIC_LICENCE_V1 — список производителя для публичного сервера: те же байты
+// подписи, что проверяет public-server/server/store/feed.js, — одно определение.
+import { feedMessage } from '../../../server/services/control/vendor-feed.js';
+import { vendorPublicKey } from '../../../server/services/control/licence.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -111,6 +115,21 @@ export function ensureSigningKey() {
   getSigningKey(); // throws with a clear message if unset, unreadable, or unparseable
 }
 
+/**
+ * PUBLIC_LICENCE_V1 — is the configured private key the half of the public key
+ * compiled into every clinic (server/services/control/licence.js)? If not, every
+ * licence and every public-server feed this process signs is rejected — by
+ * every real clinic and by api.easymed.uz — silently, two weeks later. The
+ * entry point logs a loud warning when this is false (a local dev control plane
+ * with a throwaway key is legitimate, so it is a warning, not a refusal).
+ * Compares public halves only; key material never leaves this function.
+ * @returns {boolean}
+ */
+export function signingKeyIsProduction() {
+  const der = (k) => k.export({ format: 'der', type: 'spki' });
+  return der(createPublicKey(getSigningKey())).equals(der(vendorPublicKey()));
+}
+
 // clinic_id is the identity a signed licence is FOR. Get it wrong and the
 // licence is either useless (verifies for nobody) or ambiguous. Never
 // coerced — a number or object here is a caller bug to reject, not a value to
@@ -168,7 +187,7 @@ function normaliseModules(modules) {
   return Array.from(set).sort();
 }
 
-function computeValidUntil(days) {
+function computeValidUntil(days, notAfter) {
   const n = Number(days);
   // NaN is a bug (a typo'd config, an unparsed form field), not a testing
   // tool — it must never reach new Date(), which would turn it into an
@@ -185,8 +204,35 @@ function computeValidUntil(days) {
   if (Number.isNaN(until.getTime())) {
     throw new Error(`signLicence: days ${n} works out to a date outside what a computer can represent.`);
   }
+  // PUBLIC_LICENCE_V1 — notAfter can only SHORTEN a licence, never lengthen it:
+  // the "unpaid" licence carries the payment mark to the public server without
+  // re-arming the clinic's 14 days (services/public-api.js licenceTerms). It is
+  // still not an API for choosing an expiry: the result is min(days, notAfter).
+  if (notAfter !== undefined && notAfter !== null) {
+    const cap = typeof notAfter === 'string' ? Date.parse(notAfter) : NaN;
+    if (!Number.isFinite(cap)) throw new Error(`signLicence: notAfter must be an ISO date string, got ${JSON.stringify(notAfter)}.`);
+    if (cap < until.getTime()) return new Date(cap).toISOString();
+  }
   return until.toISOString();
 }
+
+// PUBLIC_LICENCE_V1 — issued_at strictly increases per clinic: the public
+// server keeps the NEWEST licence it has seen (by issued_at) and refuses older
+// ones with another key (licence_outdated). Two issues in the same millisecond,
+// or a vendor clock stepped backwards, must still produce a strictly later
+// issued_at than the last one this clinic was given.
+function computeIssuedAt(issuedAfter) {
+  let t = Date.now();
+  if (issuedAfter !== undefined && issuedAfter !== null) {
+    const last = typeof issuedAfter === 'string' ? Date.parse(issuedAfter) : NaN;
+    if (!Number.isFinite(last)) throw new Error(`signLicence: issuedAfter must be an ISO date string, got ${JSON.stringify(issuedAfter)}.`);
+    if (last >= t) t = last + 1;
+  }
+  return new Date(t).toISOString();
+}
+
+const SUBSCRIPTIONS = new Set(['active', 'unpaid']);
+const SYNC_KEY_FP_RE = /^[0-9a-f]{32}$/;
 
 /**
  * Sign a licence document for one clinic. Byte-compatible with
@@ -200,9 +246,21 @@ function computeValidUntil(days) {
  * @param {string}  [args.clinicName]
  * @param {string[]} [args.modules]
  * @param {number}  [args.days=14]
+ * @param {'active'|'unpaid'} [args.subscription] PUBLIC_LICENCE_V1 — the payment mark, signed (owner decision 17:
+ *   the public server hides an unpaid clinic from partners). Omitted — the classic six-key payload, as the CLI signs.
+ * @param {string|null} [args.apiSyncKey] PUBLIC_LICENCE_V1 — the clinic's accepted sync-key fingerprint (32 hex);
+ *   present only when online booking is switched on for the clinic. Omitted/null — no field.
+ * @param {string}  [args.notAfter]    PUBLIC_LICENCE_V1 — valid_until is min(now + days, notAfter); can only shorten.
+ * @param {string}  [args.issuedAfter] PUBLIC_LICENCE_V1 — the last issued_at given to this clinic; the new one is later.
  * @returns {{payload: object, sig: string}}
  */
-export function signLicence({ clinicId, clinicName, modules, days = 14 }) {
+export function signLicence({ clinicId, clinicName, modules, days = 14, subscription, apiSyncKey, notAfter, issuedAfter }) {
+  if (subscription !== undefined && !SUBSCRIPTIONS.has(subscription)) {
+    throw new Error(`signLicence: subscription must be "active" or "unpaid", got ${JSON.stringify(subscription)}.`);
+  }
+  if (apiSyncKey !== undefined && apiSyncKey !== null && (typeof apiSyncKey !== 'string' || !SYNC_KEY_FP_RE.test(apiSyncKey))) {
+    throw new Error('signLicence: apiSyncKey must be 32 lowercase hex characters.');
+  }
   const payload = {
     clinic_id:   normaliseClinicId(clinicId),
     clinic_name: normaliseClinicName(clinicName),
@@ -211,11 +269,17 @@ export function signLicence({ clinicId, clinicName, modules, days = 14 }) {
     // passed in — any other field on the caller's object (including a
     // `valid_until` of its own) is simply ignored by the destructuring above.
     // Accepting a caller-supplied expiry would turn this function into an API
-    // for forging licences of any length.
-    valid_until: computeValidUntil(days),
-    issued_at:   new Date().toISOString(),
+    // for forging licences of any length. (notAfter can only shorten it.)
+    valid_until: computeValidUntil(days, notAfter),
+    issued_at:   computeIssuedAt(issuedAfter),
     nonce:       randomBytes(8).toString('hex'), // matches the CLI's nonce shape; makes every issuance unique
   };
+  // PUBLIC_LICENCE_V1 — two optional fields. A clinic's verifier signs-checks
+  // the whole payload and ignores fields it does not know (licence.js returns
+  // the payload; state.js reads only modules, valid_until and clinic_name), so
+  // an old clinic takes such a licence exactly like a six-key one.
+  if (subscription !== undefined) payload.subscription = subscription;
+  if (apiSyncKey !== undefined && apiSyncKey !== null) payload.api_sync_key = apiSyncKey;
 
   const key = getSigningKey();
   let sig;
@@ -228,4 +292,23 @@ export function signLicence({ clinicId, clinicName, modules, days = 14 }) {
     throw new Error('signLicence: failed to sign the payload with the configured key.');
   }
   return { payload, sig };
+}
+
+/**
+ * PUBLIC_LICENCE_V1 — sign the public-server feed (clinics hidden from partners,
+ * revoked keys). Same vendor key as licences, different bytes:
+ * feedMessage() prefixes the FEED_CONTEXT, so a feed signature can never be
+ * passed off as a licence signature or the other way round
+ * (server/services/control/vendor-feed.js). The payload comes from
+ * makeFeedPayload() — this function signs, it does not decide.
+ * @param {object} payload
+ * @returns {{payload: object, sig: string}}
+ */
+export function signFeed(payload) {
+  const key = getSigningKey();
+  try {
+    return { payload, sig: sign(null, feedMessage(payload), key).toString('base64') };
+  } catch {
+    throw new Error('signFeed: failed to sign the feed with the configured key.');
+  }
 }
