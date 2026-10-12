@@ -42,7 +42,9 @@ const { app, ctx } = createPublicServer({
 // PUBLIC_LICENCE_V1 — список производителя: без токена не забирается (и это
 // видно в журнале и в /_metrics: feed_issued_at пуст).
 const feed = cfg.feedToken ? { holder: ctx.feed, url: cfg.feedUrl, token: cfg.feedToken, publicKey: licencePublicKey } : null;
-if (!feed) console.warn('WARNING: PUBLIC_FEED_TOKEN is not set — unpaid clinics and revoked keys reach this server only through clinic licences.');
+// Неоплаченной клинике сервер лицензий новой лицензии не выдаёт (решение контролёра 8c):
+// «не оплачено» и ключи партнёров, заблокированные в панели, сюда доходят только списком.
+if (!feed) console.warn('WARNING: PUBLIC_FEED_TOKEN is not set — unpaid clinics stay visible to partners until their last licence ends, and keys blocked in the vendor panel are not enforced here.');
 const jobs = startJobs({ db, dataDir: cfg.dataDir, send: makeSender({ selfIps: cfg.selfIps }), webhooks: cfg.webhooks, limiter: ctx.limiter,
   uncollectedMaxMs: cfg.uncollectedMaxMs, feed, feedEveryMs: cfg.feedEveryMs });
 ctx.jobs = jobs;
