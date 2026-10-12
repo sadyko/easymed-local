@@ -10,14 +10,25 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isoOf } from '../lib/time.js';
+import { SNAPSHOT_LIMITS } from './clinics.js';
 
 export const MEDIA_MAX_BYTES = 2 * 1024 * 1024;   // как snapshot.js клиники
 // Потолок файлов одной клиники (ревью 8b, C7): диск машины общий (Symptex, n8n —
 // решение 16), а не связанные со снимком файлы живут сутки. Логотипы и фото
 // сотен врачей укладываются с запасом; сверх — 409 media_quota (клиника 8a
 // пропускает файл, пишет код в журнал и шлёт снимок дальше — 8d покажет код).
-export const MEDIA_QUOTA_FILES = 500;
+// Проверка исправлений 8b, G: по числу — два комплекта (фото всех врачей снимка
+// и два логотипа): клиника, переснявшая всех врачей, шлёт новые фото раньше
+// снимка, пока старые ещё в нём; диск держит потолок байтов.
+export const MEDIA_QUOTA_FILES = 2 * (SNAPSHOT_LIMITS.doctors + 2);
 export const MEDIA_QUOTA_BYTES = 200 * 1024 * 1024;
+// Проверка исправлений 8b, G: сверх потолка сначала убираются файлы этой клиники,
+// на которые нынешний снимок не ссылается и которые старше MEDIA_PRUNE_AFTER_MS
+// (только что присланные ждут своего снимка — он уходит после файлов). Байты на
+// диске убирает уборка (gcMedia) в течение минуты.
+export const MEDIA_PRUNE_AFTER_MS = 10 * 60000;
+const REFERENCED = `EXISTS (SELECT 1 FROM clinics c WHERE c.clinic_id = media.clinic_id
+                     AND instr(c.snapshot, '"media/' || media.sha256 || '.' || media.ext || '"') > 0)`;
 export const MEDIA_TYPES = Object.freeze({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' });
 const SHA_RE = /^[0-9a-f]{64}$/;
 const KEEP_UNREFERENCED_MS = 86400000;
@@ -44,8 +55,13 @@ export function putMedia(db, dataDir, clinicId, sha, ext, buf, now, { quotaFiles
   if (!SHA_RE.test(sha) || !MEDIA_TYPES[ext] || !Buffer.isBuffer(buf) || !buf.length) return { error: 'bad_request' };
   if (buf.length > MEDIA_MAX_BYTES) return { error: 'too_large' };
   if (crypto.createHash('sha256').update(buf).digest('hex') !== sha || !looksLike(ext, buf)) return { error: 'bad_request' };
-  const held = db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM media WHERE clinic_id = ? AND sha256 <> ?').get(clinicId, sha);
-  if (held.n + 1 > quotaFiles || held.b + buf.length > quotaBytes) return { error: 'media_quota' };
+  const heldOf = () => db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM media WHERE clinic_id = ? AND sha256 <> ?').get(clinicId, sha);
+  const over = (h) => h.n + 1 > quotaFiles || h.b + buf.length > quotaBytes;
+  if (over(heldOf())) {
+    db.prepare(`DELETE FROM media WHERE clinic_id = ? AND sha256 <> ? AND stored_at < ? AND NOT ${REFERENCED}`)
+      .run(clinicId, sha, isoOf(now - MEDIA_PRUNE_AFTER_MS));
+    if (over(heldOf())) return { error: 'media_quota' };
+  }
   const dir = mediaDir(dataDir);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, sha);
@@ -80,11 +96,9 @@ export function mediaFile(db, dataDir, clinic, sha, ext) {
  */
 export function gcMedia(db, dataDir, now) {
   const old = isoOf(now - KEEP_UNREFERENCED_MS);
-  const referenced = `EXISTS (SELECT 1 FROM clinics c WHERE c.clinic_id = media.clinic_id
-                        AND instr(c.snapshot, '"media/' || media.sha256 || '.' || media.ext || '"') > 0)`;
   let rowsGone = 0;
   db.transaction(() => {
-    db.prepare(`UPDATE media SET stored_at = ? WHERE stored_at < ? AND ${referenced}`).run(isoOf(now), old);
+    db.prepare(`UPDATE media SET stored_at = ? WHERE stored_at < ? AND ${REFERENCED}`).run(isoOf(now), old);
     rowsGone = db.prepare('DELETE FROM media WHERE stored_at < ?').run(old).changes;
   })();
   let filesGone = 0;

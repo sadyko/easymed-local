@@ -206,3 +206,18 @@ test('ревью 8b, C7: у клиники свой потолок файлов 
   assert.deepEqual(putMedia(db, dir, c.clinicId, files[2].sha, 'png', files[2].b, NOW, { quotaFiles: 10, quotaBytes: files[0].b.length + files[1].b.length }),
     { error: 'media_quota' }, 'сверх потолка байтов');
 });
+
+test('проверка исправлений 8b, G: потолок файлов не считает фото, которых в нынешнем снимке уже нет (старше 10 минут), — они убираются, и новый файл принимается', () => {
+  const { db, dir } = testDb();
+  const c = testClinic(vendor);
+  admitClinic(db, auth(c), NOW);
+  const f = [fakePng(8, 8), fakePng(9, 9), fakePng(10, 10), fakePng(11, 11)].map((b) => ({ b, sha: crypto.createHash('sha256').update(b).digest('hex') }));
+  const quota = { quotaFiles: 2, quotaBytes: 1024 * 1024 };
+  putMedia(db, dir, c.clinicId, f[0].sha, 'png', f[0].b, NOW - 3600000, quota);   // в снимке
+  putMedia(db, dir, c.clinicId, f[1].sha, 'png', f[1].b, NOW - 3600000, quota);   // заменённое фото — снимок на него больше не ссылается
+  saveSnapshot(db, c.clinicId, { ...snap('shifo'), clinic: { logo: { square: 'media/' + f[0].sha + '.png' } } }, NOW - 1000);
+  assert.deepEqual(putMedia(db, dir, c.clinicId, f[2].sha, 'png', f[2].b, NOW, quota), { ok: true }, 'старое неиспользуемое убрано — новое принято');
+  assert.deepEqual(missingMedia(db, c.clinicId, [f[0].sha, f[1].sha, f[2].sha]), [f[1].sha]);
+  assert.deepEqual(putMedia(db, dir, c.clinicId, f[3].sha, 'png', f[3].b, NOW + 1000, quota), { error: 'media_quota' },
+    'свежее (только что прислано, снимок ещё впереди) и то, что в снимке, не убираются');
+});
