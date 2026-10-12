@@ -142,3 +142,13 @@ test('M2 (ревью 8a): ответ партнёра (отмена, согла�
   assert.deepEqual(r, { ok: true, value: { type: 'offer.accept', cursor: '19', public_id: 'rq_e2a9f0c1', connection_id: 3, received_at: '2026-10-11T09:10:00Z' } });
   assert.equal('received_at' in parseInboxItem({ type: 'offer.decline', cursor: '20', public_id: 'rq_e2a9f0c1', connection_id: 3, received_at: 'вчера' }).value, false);
 });
+
+test('ревью 8b, C9 (сторона клиники): ответ на другое время несёт offered_start предложения, на которое отвечает партнёр, если сервер его прислал', () => {
+  const base = { cursor: '21', public_id: 'rq_e2a9f0c1', connection_id: 3, received_at: '2026-10-11T09:10:00Z' };
+  assert.equal(parseInboxItem({ ...base, type: 'offer.accept', data: { offered_start: '2026-10-12T09:00:00.000Z' } }).value.offered_start, '2026-10-12T09:00:00Z');
+  assert.equal(parseInboxItem({ ...base, type: 'offer.decline', data: { offered_start: '2026-10-12T14:00:00+05:00' } }).value.offered_start, '2026-10-12T09:00:00Z');
+  assert.equal('offered_start' in parseInboxItem({ ...base, type: 'offer.accept', data: { offered_start: 'вчера' } }).value, false, 'мусор — как без поля');
+  assert.equal('offered_start' in parseInboxItem({ ...base, type: 'offer.accept', data: {} }).value, false);
+  assert.equal('offered_start' in parseInboxItem({ ...base, type: 'appointment.cancel', data: { offered_start: '2026-10-12T09:00:00Z' } }).value, false,
+    'только ответы на другое время');
+});

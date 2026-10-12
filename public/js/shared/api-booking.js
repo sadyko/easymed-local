@@ -232,7 +232,15 @@ export function parseInboxItem(item) {
     // Ревью 8a, M2: когда публичный сервер принял ответ партнёра — по нему судят,
     // успел ли партнёр согласиться в срок предложения (клиника могла быть без связи).
     const answered = msOf(it.received_at);
-    return { ok: true, value: answered == null ? base : { ...base, received_at: isoOf(answered) } };
+    const value = answered == null ? base : { ...base, received_at: isoOf(answered) };
+    // Ревью 8b, C9: ответ на другое время несёт offered_start предложения, на
+    // которое отвечает партнёр (публичный сервер 8b), — клиника сверит его со
+    // своим нынешним предложением. Нет поля или мусор — как прежде.
+    if (type === 'offer.accept' || type === 'offer.decline') {
+      const offered = msOf(it.data && typeof it.data === 'object' ? it.data.offered_start : null);
+      if (offered != null) value.offered_start = isoOf(offered);
+    }
+    return { ok: true, value };
   }
 
   const received = msOf(it.received_at);

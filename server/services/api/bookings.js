@@ -276,6 +276,14 @@ export async function ingestItem(db, raw, { now = Date.now(), kekPath = null } =
   const row = byPublicId(db, v.public_id);
   if (!row || row.connection_id !== conn.id) return { applied: false, problem: 'unknown_request' };
   if (v.type === 'appointment.cancel') return partnerCancel(db, row, { now, kekPath });
+  // Ревью 8b, C9: партнёр ответил на предложение, которого у клиники уже нет
+  // (регистратор с тех пор предложил другое время), — ответ устарел: заявка не
+  // меняется, партнёр увидит новое предложение и ответит на него. Без
+  // offered_start (прежний сервер) — как прежде.
+  if (v.offered_start && Date.parse(v.offered_start) !== Date.parse(row.offered_start || '')) {
+    console.warn('[public-api] заявка', row.public_id, '— ответ партнёра на прежнее предложение, не применён');
+    return { applied: false, stale: true, id: row.id, status: row.status };
+  }
   if (v.type === 'offer.accept') return partnerAcceptOffer(db, row, { now, kekPath, answeredAt: v.received_at ? Date.parse(v.received_at) : null });
   return partnerDeclineOffer(db, row, { now });
 }

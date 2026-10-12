@@ -362,3 +362,23 @@ test('рр-3: пока обмен стоит, предложение держи�
   assert.equal(expireDue(s.db, { now: NOW + 3 * 3600000, kekPath: s.kekPath }), 0, 'обмен стоит, начало впереди — ждём ответа');
   assert.equal(expireDue(s.db, { now: LATER + 60000, kekPath: s.kekPath }), 1, 'предложенное время прошло — истекло');
 });
+
+test('ревью 8b, C9 (сторона клиники): ответ партнёра на прежнее предложение, когда клиника уже предложила другое, — не применяется; без offered_start — как прежде', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  const LATEST = localAt('2030-03-12', '16:00');
+  offerOtherTime(s.db, { id, start: new Date(LATER).toISOString() }, s.reg, { now: NOW, kekPath: s.kekPath });
+  offerOtherTime(s.db, { id, start: new Date(LATEST).toISOString() }, s.reg, { now: NOW + 60000, kekPath: s.kekPath });
+  const answer2 = (type, offeredMs, nowMs) => ingestItem(s.db, { type, cursor: '9', public_id: 'rq_test0001', connection_id: s.connId,
+    received_at: new Date(nowMs).toISOString(), data: offeredMs == null ? {} : { offered_start: new Date(offeredMs).toISOString() } }, { now: nowMs, kekPath: s.kekPath });
+  const staleAccept = await answer2('offer.accept', LATER, NOW + 2 * 60000);
+  assert.deepEqual([staleAccept.applied, staleAccept.stale, staleAccept.status], [false, true, 'offered']);
+  const staleDecline = await answer2('offer.decline', LATER, NOW + 3 * 60000);
+  assert.deepEqual([staleDecline.applied, staleDecline.stale], [false, true]);
+  const row = one(s.db, 'SELECT * FROM api_requests WHERE id = ?', id);
+  assert.deepEqual([row.status, Date.parse(row.offered_start)], ['offered', LATEST], 'новое предложение ждёт ответа партнёра');
+  assert.equal(free(s, LATEST), false, 'новое предложенное время по-прежнему держится');
+  const ok = await answer2('offer.accept', LATEST, NOW + 4 * 60000);
+  assert.deepEqual([ok.applied, ok.status], [true, 'pending']);
+  assert.equal(Date.parse(one(s.db, 'SELECT start_at FROM api_requests WHERE id = ?', id).start_at), LATEST);
+});
