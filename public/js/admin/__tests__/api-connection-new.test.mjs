@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { reset, onRpc, calls, clip, textOf, byAttr, buttonByText, tick, modal, rpcNames, settingsFixture,
   KEY_VALUE, SECRET_VALUE } from './api-harness.mjs';
 
-const { openNewConnection, handoverText } = await import('../views/api-connection-new.js');
+const { openNewConnection, handoverText, openHandover, probePath } = await import('../views/api-connection-new.js');
 const KEY2 = 'em_live_TESTONLYtestonlyTESTONLYtest2222';
 
 function draftServer() {
@@ -117,4 +117,35 @@ test('создание включённого: филиал на сайте бе
   assert.equal(field(m, 'apic-f-active').attrs.checked, undefined, '«Подключение включено» не снято');
   buttonByText(m, /Открыть «Филиалы»/).click();
   assert.deepEqual(nav, [['settings', { section: 'branches' }]]);
+});
+
+// API_DOCS_V1 — решение владельца 21: в «Скопировать всё» — ссылка на публичную
+// документацию и команда проверки ключа. В команде — подстановка «<ключ>», сам
+// ключ — только своей строкой «Ключ: …», как в шаге 7.
+test('API_DOCS_V1: «Скопировать всё» — ссылка на документацию и команда проверки; в команде — <ключ>, не ключ', () => {
+  const base = { clinic: 'Клиника Демо', baseUrl: 'https://api.easymed.uz/klinika-demo/v1/', key: KEY_VALUE, secret: '' };
+  const lines = handoverText({ ...base, scopes: ['doctors', 'slots', 'appointments'] }).split('\n');
+  assert.ok(lines.includes('Документация: https://api.easymed.uz/docs'));
+  const cmd = lines.filter((l) => l.startsWith('Проверить ключ: '));
+  assert.deepEqual(cmd, ['Проверить ключ: curl "https://api.easymed.uz/klinika-demo/v1/doctors" -H "Authorization: Bearer <ключ>"']);
+  assert.ok(lines.includes('Ключ: ' + KEY_VALUE), 'ключ — своей строкой');
+  assert.equal(lines.filter((l) => l.includes(KEY_VALUE)).length, 1, 'ключ — только в строке «Ключ»');
+  assert.ok(handoverText({ ...base, scopes: ['requests'] }).includes('/klinika-demo/v1/reference/specialties"'), 'без права чтения — справочник: он открыт любому ключу');
+  assert.ok(handoverText({ ...base, scopes: ['clinic', 'doctors'] }).includes('/klinika-demo/v1/clinic"'));
+  assert.equal(probePath(['packages', 'branches']), 'branches', 'порядок — как права на экране');
+  assert.ok(handoverText({ ...base, baseUrl: 'https://api.easymed.uz/klinika-demo/v1', scopes: ['clinic'] }).includes('/v1/clinic"'), 'адрес без «/» в конце');
+});
+
+test('API_DOCS_V1: окно «Что передать» — «Документация для партнёров» открывает публичную страницу в новой вкладке', () => {
+  reset();
+  const fx = settingsFixture();
+  openHandover({ settings: fx, connection: fx.connections[1], key: KEY_VALUE, baseUrl: fx.base_url });
+  const m = modal('conn-key');
+  const a = byAttr(m, 'data-apic-act', 'docs');
+  assert.equal(a.length, 1);
+  assert.deepEqual([a[0].tagName, a[0].attrs.href, a[0].attrs.target, a[0].attrs.rel, a[0].attrs.title],
+    ['A', 'https://api.easymed.uz/docs', '_blank', 'noopener noreferrer', 'Откроется в новой вкладке']);
+  assert.ok(textOf(a[0]).includes('Документация для партнёров'));
+  const text = byAttr(m, 'aria-label', 'Текст для отправки')[0].value;
+  assert.ok(text.includes('Проверить ключ: curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <ключ>"'));
 });

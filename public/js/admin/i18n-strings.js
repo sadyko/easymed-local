@@ -11902,4 +11902,11 @@ export const STRINGS = {
   "Номера заявок:": {"en":"Request numbers:","ru":"Номера заявок:","uz":"Ariza raqamlari:"},   // PUBLIC_API_V1
   // PUBLIC_API_V1 — ревью 8a, I7: подтверждение не переносит чужую запись пациента
   "У пациента на этот день уже есть запись ({start}, врач {doctor}) — подтверждение перенесло бы её на время онлайн-записи. Предложите партнёру другое время или, договорившись с пациентом, перенесите ту запись на другой день.": {"en":"The patient already has a booking on this day ({start}, doctor {doctor}) — confirming would move it to the online booking time. Offer the partner another time, or agree with the patient and move that booking to another day.","ru":"У пациента на этот день уже есть запись ({start}, врач {doctor}) — подтверждение перенесло бы её на время онлайн-записи. Предложите партнёру другое время или, договорившись с пациентом, перенесите ту запись на другой день.","uz":"Bemorning bu kunda yozuvi bor ({start}, shifokor {doctor}) — tasdiqlash uni onlayn yozilish vaqtiga ko‘chirib yuboradi. Hamkorga boshqa vaqt taklif qiling yoki bemor bilan kelishib, o‘sha yozuvni boshqa kunga ko‘chiring."},   // PUBLIC_API_V1
+  // API_DOCS_V1 — документация для партнёров: ссылка на публичную страницу api.easymed.uz/docs и команда проверки ключа в «Скопировать всё» (решение владельца 21)
+  "Документация для партнёров": {"en":"Documentation for partners","ru":"Документация для партнёров","uz":"Hamkorlar uchun hujjatlar"},   // API_DOCS_V1
+  "Откроется в новой вкладке": {"en":"Opens in a new tab","ru":"Откроется в новой вкладке","uz":"Yangi varaqda ochiladi"},   // API_DOCS_V1
+  "Документация: {url}": {"en":"Documentation: {url}","ru":"Документация: {url}","uz":"Hujjatlar: {url}"},   // API_DOCS_V1
+  "Проверить ключ: {cmd}": {"en":"Check the key: {cmd}","ru":"Проверить ключ: {cmd}","uz":"Kalitni tekshirish: {cmd}"},   // API_DOCS_V1
+  "<ключ>": {"en":"<key>","ru":"<ключ>","uz":"<kalit>"},   // API_DOCS_V1
+  // /API_DOCS_V1
 };

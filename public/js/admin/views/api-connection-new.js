@@ -8,10 +8,10 @@
 // у сервера (shared/api-connections.js), до запроса. После «Создать» — окно
 // «Что передать подключению» с «Скопировать всё».
 import { h, Icon, clear, toast } from '../ui.js';
-import { tr, trf } from '../i18n.js';
-import { DEFAULTS, READ_SCOPES, WRITE_SCOPES, SCOPE_INFO, normalizeConnection, connectionProblems } from '../../shared/api-connections.js';
+import { tr, trf, getLang } from '../i18n.js';
+import { DEFAULTS, READ_SCOPES, WRITE_SCOPES, SCOPE_INFO, normalizeConnection, connectionProblems, apiDocsUrl, curlCommand } from '../../shared/api-connections.js';
 import { rpc, secretField, section, fieldBox, kindPicker, basicsFields, accessSections, hooksSection, securityFields,
-  activeField, openModal, addressBlock, isAddressRefusal, permChips, copyText } from './api-ui.js';
+  activeField, openModal, addressBlock, isAddressRefusal, permChips, copyText, docsLink } from './api-ui.js';
 
 const KEY_HINT = 'Ключ создан сам. Скопируйте его и передайте вместе с адресом API. Он сохранится, когда вы нажмёте «Создать подключение и ключ»; позже его можно открыть в карточке подключения — видят его только администраторы.';
 const defaultsOf = (k) => { const d = DEFAULTS[k] || DEFAULTS.partner; return { scopes: [...d.scopes], webhook_events: [...d.events], rate_limit: d.rate_limit, key_ttl: d.key_ttl }; };
@@ -78,7 +78,20 @@ export async function openNewConnection({ settings, onCreated = null, onNavigate
   return m;
 }
 
-/** Текст «Скопировать всё»: одним сообщением всё, что нужно подключению. */
+// API_DOCS_V1 — первый запрос для проверки ключа: раздел, который ключу открыт
+// (иначе 403), без обязательных параметров; справочник открыт любому ключу.
+const PROBE_PATHS = Object.freeze({ clinic: 'clinic', branches: 'branches', doctors: 'doctors', services: 'services', packages: 'packages' });
+export function probePath(scopes) {
+  const s = READ_SCOPES.find((k) => PROBE_PATHS[k] && (scopes || []).includes(k));
+  return s ? PROBE_PATHS[s] : 'reference/specialties';
+}
+
+/**
+ * Текст «Скопировать всё»: одним сообщением всё, что нужно подключению.
+ * API_DOCS_V1 (решение владельца 21) — ссылка на документацию на языке экрана и
+ * команда проверки ключа. В команде — подстановка «<ключ>», а не сам ключ: ключ
+ * одной строкой выше, а команду пересылают и вставляют в терминалы и чаты.
+ */
 export function handoverText({ clinic, baseUrl, key, secret, scopes }) {
   const allowed = [...READ_SCOPES, ...WRITE_SCOPES].filter((k) => (scopes || []).includes(k)).map((k) => tr(SCOPE_INFO[k].label));
   const lines = [trf('Подключение к API клиники «{clinic}»', { clinic }), trf('Адрес API: {url}', { url: baseUrl })];
@@ -86,6 +99,9 @@ export function handoverText({ clinic, baseUrl, key, secret, scopes }) {
   lines.push(tr('Передавайте ключ в каждом запросе: Authorization: Bearer <ключ>'));
   if (secret) lines.push(trf('Секрет для проверки уведомлений: {secret}', { secret }));
   lines.push(trf('Разрешено: {list}', { list: allowed.join(', ') }));
+  lines.push(trf('Документация: {url}', { url: apiDocsUrl(getLang()) }));
+  const url = String(baseUrl || '').replace(/\/?$/, '/') + probePath(scopes);
+  lines.push(trf('Проверить ключ: {cmd}', { cmd: curlCommand({ url, key: tr('<ключ>'), oneLine: true }) }));
   lines.push(tr('Работать начнёт, когда в Easy-Med включат публичный сервер.'));
   return lines.join('\n');
 }
@@ -94,7 +110,7 @@ export function handoverText({ clinic, baseUrl, key, secret, scopes }) {
 export function openHandover({ settings, connection: c, key, secret = '', baseUrl, rotated = false }) {
   const withSecret = !!(secret && c.webhook_url);
   const text = handoverText({ clinic: settings.clinic_name, baseUrl, key, secret: withSecret ? secret : '', scopes: c.scopes });
-  const area = h('textarea', { class: 'apic-handover cell-mono', readonly: 'readonly', rows: '7', translate: 'no', 'aria-label': 'Текст для отправки' });
+  const area = h('textarea', { class: 'apic-handover cell-mono', readonly: 'readonly', rows: '9', translate: 'no', 'aria-label': 'Текст для отправки' });
   area.value = text;
   const lead = rotated
     ? 'Новый ключ сохранён, прежний больше не подходит. Отправьте подключению новый ключ — проще всего кнопкой «Скопировать всё».'
@@ -110,7 +126,8 @@ export function openHandover({ settings, connection: c, key, secret = '', baseUr
       // («Сайт клиники», «Сайт»): tr() до подстановки в фразу.
       h('dt', null, 'Заявки в CRM'), h('dd', null, trf('с источником «{label}»', { label: tr(c.crm_source_label) })),
       h('dt', null, 'Как передавать ключ'), h('dd', null, h('code', { translate: 'no' }, 'Authorization: Bearer <ключ>')),
-      h('dt', null, 'Ключ потом'), h('dd', null, 'Его можно открыть и скопировать в карточке подключения, вкладка «Ключ».'))),
+      h('dt', null, 'Ключ потом'), h('dd', null, 'Его можно открыть и скопировать в карточке подключения, вкладка «Ключ».'),
+      h('dt', null, 'Документация'), h('dd', null, docsLink('ghost')))),
     fieldBox('Текст для отправки', area, null, null));
   const copyAll = h('button', { class: 'btn btn-primary', type: 'button', 'data-apic-act': 'copy-all' }, Icon('Copy', { size: 15 }), ' ', 'Скопировать всё');
   copyAll.addEventListener('click', async () => {

@@ -11,11 +11,11 @@
 // в сети Easy-Med открывают по http — тогда значение выделяется для Ctrl+C.
 import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, toast, fmtDate, fmtDateTime } from '../ui.js';
-import { tr, trf } from '../i18n.js';
+import { tr, trf, getLang } from '../i18n.js';
 import { isRouteAllowed, settingsTileAllows } from '../permissions.js';   // CLINIC_API_STEP7_V1 (ревью слияния №2) — дорога к адресу по праву
 import {
   KINDS, KIND_INFO, READ_SCOPES, WRITE_SCOPES, SCOPE_INFO, EVENTS, EVENT_INFO, RATE_LIMITS, KEY_TTLS, KEY_TTL_LABEL,
-  NAME_MAX, CONTACT_MAX, keyExpiryState,
+  NAME_MAX, CONTACT_MAX, keyExpiryState, apiDocsUrl,
 } from '../../shared/api-connections.js';
 
 export async function rpc(name, args = {}) {
@@ -44,6 +44,16 @@ export function shapeSettings(raw) {
     can: { view: !!can.view, edit: !!can.edit, admin: !!can.admin, reveal: can.reveal === undefined ? !!can.admin : !!can.reveal },
     connections: Array.isArray(r.connections) ? r.connections : [],
   };
+}
+
+/**
+ * API_DOCS_V1 — ссылка на документацию для партнёров (решение владельца 21): одна
+ * публичная страница api.easymed.uz/docs на языке экрана, в новой вкладке. Своей
+ * страницы документации в программе нет.
+ */
+export function docsLink(variant = 'outline') {
+  return h('a', { class: 'btn btn-' + variant + ' btn-sm', href: apiDocsUrl(getLang()), target: '_blank', rel: 'noopener noreferrer',
+    'data-apic-act': 'docs', title: 'Откроется в новой вкладке' }, Icon('Doc', { size: 14 }), ' ', 'Документация для партнёров');
 }
 
 export async function copyText(text) {
