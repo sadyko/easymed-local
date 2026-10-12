@@ -37,9 +37,14 @@ migrate(db);
 const { app, ctx } = createPublicServer({
   db, dataDir: cfg.dataDir, licencePublicKey, offsetMin: cfg.offsetMin, baseUrl: cfg.baseUrl, requireHttps: cfg.requireHttps,
   trustProxy: cfg.trustProxy, skewMs: cfg.syncSkewMs, metricsToken: cfg.metricsToken, version, uncollectedMaxMs: cfg.uncollectedMaxMs,
+  licenceKeySource: licence.source,
 });
+// PUBLIC_LICENCE_V1 — список производителя: без токена не забирается (и это
+// видно в журнале и в /_metrics: feed_issued_at пуст).
+const feed = cfg.feedToken ? { holder: ctx.feed, url: cfg.feedUrl, token: cfg.feedToken, publicKey: licencePublicKey } : null;
+if (!feed) console.warn('WARNING: PUBLIC_FEED_TOKEN is not set — unpaid clinics and revoked keys reach this server only through clinic licences.');
 const jobs = startJobs({ db, dataDir: cfg.dataDir, send: makeSender({ selfIps: cfg.selfIps }), webhooks: cfg.webhooks, limiter: ctx.limiter,
-  uncollectedMaxMs: cfg.uncollectedMaxMs });
+  uncollectedMaxMs: cfg.uncollectedMaxMs, feed, feedEveryMs: cfg.feedEveryMs });
 ctx.jobs = jobs;
 
 const server = app.listen(cfg.port, cfg.bind, () => {

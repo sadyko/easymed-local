@@ -19,18 +19,22 @@ import { createLimiter } from './lib/rate-limit.js';
 import { errorHandler, sendError } from './lib/errors.js';
 import { DEFAULT_SKEW_MS } from './clinic-auth.js';
 import { floorInboxCursor, UNCOLLECTED_MAX_MS } from './store/requests.js';
+import { loadFeed } from './store/feed.js';
 
 /**
  * @param {{db, dataDir:string, now?:()=>number, licencePublicKey?:object|null, offsetMin?:number, baseUrl?:string,
  *   requireHttps?:boolean, trustProxy?:(string|boolean), skewMs?:number, metricsToken?:string, version?:string,
- *   limiter?:object, log?:Console, uncollectedMaxMs?:number}} o
+ *   limiter?:object, log?:Console, uncollectedMaxMs?:number, feed?:object, licenceKeySource?:('compiled'|'override')}} o
+ *   feed — список производителя (store/feed.js); по умолчанию — последний принятый из базы.
  * @returns {{app:import('express').Express, ctx:object}}
  */
 export function createPublicServer({ db, dataDir, now = () => Date.now(), licencePublicKey = null, offsetMin = 300,
   baseUrl = 'https://api.easymed.uz', requireHttps = true, trustProxy = 'loopback', skewMs = DEFAULT_SKEW_MS, metricsToken = '',
-  version = '0.0.0', limiter = createLimiter(), log = console, uncollectedMaxMs = UNCOLLECTED_MAX_MS }) {
+  version = '0.0.0', limiter = createLimiter(), log = console, uncollectedMaxMs = UNCOLLECTED_MAX_MS, feed = null, licenceKeySource = 'compiled' }) {
   // uncollectedMaxMs — срок не забранной заявки из настроек: документация называет его (API_DOCS_V1).
-  const ctx = { db, dataDir, now, licencePublicKey, offsetMin, baseUrl, requireHttps, skewMs, metricsToken, version, limiter, uncollectedMaxMs, jobs: null };
+  const ctx = { db, dataDir, now, licencePublicKey, offsetMin, baseUrl, requireHttps, skewMs, metricsToken, version, limiter, uncollectedMaxMs, jobs: null,
+    // PUBLIC_LICENCE_V1 — клиники, скрытые от партнёров, и отозванные ключи (store/feed.js).
+    feed: feed || loadFeed(db, { publicKey: licencePublicKey }), licenceKeySource };
   // Курсоры очереди не идут назад после восстановления базы (ревью 8b, C3).
   floorInboxCursor(db, now());
   const app = express();

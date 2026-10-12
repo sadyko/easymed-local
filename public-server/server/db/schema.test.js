@@ -23,6 +23,8 @@ const EXPECTED = {
   delivery_log: ['id', 'clinic_id', 'delivery_id', 'connection_id', 'request_id', 'event_id', 'event', 'attempt', 'code',
     'error', 'at', 'next_at', 'final'],
   access_log: ['id', 'clinic_id', 'connection_id', 'at', 'method', 'path', 'status', 'ip', 'ms'],
+  // PUBLIC_LICENCE_V1 — последний принятый список производителя (номера клиник и отпечатки ключей).
+  vendor_feed: ['id', 'issued_at', 'doc', 'received_at'],
   schema_migrations: ['name', 'applied_at'],
 };
 
@@ -30,7 +32,7 @@ test('миграции ложатся на пустую базу и повтор
   const db = openDb(':memory:');
   migrate(db);
   migrate(db);
-  assert.deepEqual(db.prepare('SELECT name FROM schema_migrations').all().map((r) => r.name), ['001_public_server.sql']);
+  assert.deepEqual(db.prepare('SELECT name FROM schema_migrations').all().map((r) => r.name), ['001_public_server.sql', '002_vendor_feed.sql']);
   assert.equal(db.pragma('secure_delete', { simple: true }), 1, 'стёртое затирается');
   db.close();
 });

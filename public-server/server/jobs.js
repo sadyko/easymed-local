@@ -1,5 +1,6 @@
-// PUBLIC_SERVER_V1 — ФОН: доставка уведомлений (каждые 5 секунд) и уборка
-// (каждую минуту). Таймеры unref, такт не перекрывает себя и никогда не
+// PUBLIC_SERVER_V1 — ФОН: доставка уведомлений (каждые 5 секунд), уборка
+// (каждую минуту) и — PUBLIC_LICENCE_V1 — список производителя с сервера
+// лицензий (раз в PUBLIC_FEED_EVERY_SEC). Таймеры unref, такт не перекрывает себя и никогда не
 // бросает наружу (по образцу опроса телефонии клиники): упавший такт пишет
 // в журнал тип ошибки и стек без сообщения и ждёт следующего.
 //
@@ -16,6 +17,7 @@ import { purgeDeliveries, deliverDue } from './store/deliveries.js';
 import { gcMedia } from './store/media.js';
 import { safeStack } from './lib/errors.js';
 import { isoOf } from './lib/time.js';
+import { pullFeed } from './store/feed.js';
 
 export function runMaintenance(db, dataDir, now, limiter = null, { uncollectedMaxMs = UNCOLLECTED_MAX_MS } = {}) {
   const closed = closeOverdue(db, now, { uncollectedMaxMs });
@@ -31,12 +33,15 @@ export function runMaintenance(db, dataDir, now, limiter = null, { uncollectedMa
 
 /**
  * @param {{db, dataDir:string, now?:()=>number, send:(msg:object)=>Promise<{status:number, error?:string}>, webhooks?:boolean,
- *   limiter?:object, uncollectedMaxMs?:number, deliverEveryMs?:number, maintainEveryMs?:number, log?:Console}} o
+ *   limiter?:object, uncollectedMaxMs?:number, deliverEveryMs?:number, maintainEveryMs?:number, log?:Console,
+ *   feed?:{holder:object, url:string, token:string, publicKey?:object|null, fetchImpl?:typeof fetch}|null, feedEveryMs?:number}} o
+ *   feed — PUBLIC_LICENCE_V1: забирать список производителя (store/feed.js); null — не забирать.
  */
 export function startJobs({ db, dataDir, now = () => Date.now(), send, webhooks = true, limiter = null, uncollectedMaxMs = UNCOLLECTED_MAX_MS,
-  deliverEveryMs = 5000, maintainEveryMs = 60000, log = console }) {
-  const state = { deliveries_at: null, maintenance_at: null, last_error: '', last_error_at: null };
+  deliverEveryMs = 5000, maintainEveryMs = 60000, log = console, feed = null, feedEveryMs = 60000 }) {
+  const state = { deliveries_at: null, maintenance_at: null, feed_at: null, last_error: '', last_error_at: null };
   let delivering = false;
+  let pulling = false;
   const fail = (what, e) => {
     state.last_error = what;
     state.last_error_at = isoOf(now());
@@ -58,13 +63,29 @@ export function startJobs({ db, dataDir, now = () => Date.now(), send, webhooks 
       return r;
     } catch (e) { fail('maintenance', e); return null; }
   }
+  // PUBLIC_LICENCE_V1 — список производителя: такт не перекрывает себя; сбой
+  // сети или подписи — причина в feed.holder.error, прежний список остаётся.
+  async function feedTick() {
+    if (!feed || pulling) return null;
+    pulling = true;
+    try {
+      const r = await pullFeed(db, feed.holder, { url: feed.url, token: feed.token, publicKey: feed.publicKey || null,
+        fetchImpl: feed.fetchImpl || globalThis.fetch, now: now() });
+      state.feed_at = isoOf(now());
+      return r;
+    } catch (e) { fail('feed', e); return null; } finally { pulling = false; }
+  }
   const timers = [];
   if (webhooks) timers.push(setInterval(() => { deliverTick(); }, deliverEveryMs));
   timers.push(setInterval(maintainTick, maintainEveryMs));
+  if (feed) {
+    timers.push(setTimeout(() => { feedTick(); }, 1000));   // первый — сразу после запуска
+    timers.push(setInterval(() => { feedTick(); }, feedEveryMs));
+  }
   for (const t of timers) if (t.unref) t.unref();
   return {
-    deliverTick, maintainTick,
-    status: () => ({ ...state, webhooks }),
+    deliverTick, maintainTick, feedTick,
+    status: () => ({ ...state, webhooks, feed: !!feed }),
     stop() { for (const t of timers) clearInterval(t); },
   };
 }

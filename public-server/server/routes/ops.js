@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import { sendError } from '../lib/errors.js';
 import { isoOf } from '../lib/time.js';
+import { feedMetrics } from '../store/feed.js';
 
 const sameToken = (a, b) => {
   const x = Buffer.from(String(a));
@@ -19,7 +20,7 @@ const sameToken = (a, b) => {
  * Числа для наблюдения. extra — счётчики процесса (ревью 8b, C6 и C8):
  * пропущенные уведомления (очередь клиники полна) и не записанные в журнал запросы.
  */
-export function metrics(db, now, jobs = null, { counters = null, accessJournal = null } = {}) {
+export function metrics(db, now, jobs = null, { counters = null, accessJournal = null, feed = null, licenceKeySource = 'compiled' } = {}) {
   const skipped = accessJournal ? accessJournal.stats() : {};
   const n = (sql, ...args) => db.prepare(sql).get(...args).n;
   const day = isoOf(now - 86400000);
@@ -42,6 +43,10 @@ export function metrics(db, now, jobs = null, { counters = null, accessJournal =
     access_skipped_over_key_day: skipped.over_key_day || 0,
     access_skipped_over_total: skipped.over_total || 0,
     access_skipped_over_clinic: skipped.over_clinic || 0,   // бюджет журнала клиники выбран (проверка исправлений 8b, F)
+    // PUBLIC_LICENCE_V1 — свежесть списка производителя (тревога наблюдения: feed_age_s > 600)
+    // и каким ключом проверяются лицензии ('compiled' — вшитым ключом производителя).
+    ...feedMetrics(feed, now),
+    licence_key: licenceKeySource,
     jobs: jobs ? jobs.status() : null,
   };
 }
@@ -57,7 +62,8 @@ export function opsRouter(ctx) {
     if (!ctx.metricsToken) return sendError(req, res, 'not_found');
     const m = /^Bearer\s+(\S+)$/i.exec(String(req.get('authorization') || ''));
     if (!m || !sameToken(m[1], ctx.metricsToken)) return sendError(req, res, 'invalid_key');
-    return res.json(metrics(ctx.db, ctx.now(), ctx.jobs || null, { counters: ctx.counters || null, accessJournal: ctx.accessJournal || null }));
+    return res.json(metrics(ctx.db, ctx.now(), ctx.jobs || null, { counters: ctx.counters || null, accessJournal: ctx.accessJournal || null,
+      feed: ctx.feed || null, licenceKeySource: ctx.licenceKeySource || 'compiled' }));
   });
   return r;
 }
