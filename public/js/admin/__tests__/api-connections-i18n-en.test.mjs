@@ -95,6 +95,7 @@ test('en: документация — английская страница; «
   assert.deepEqual([a.attrs.href, a.attrs.title], ['https://api.easymed.uz/docs/en', 'Opens in a new tab']);
   const text = handoverText({ clinic: 'Clinic Demo', baseUrl: fx.base_url, key: KEY_VALUE, secret: '', scopes: ['clinic'] });
   assert.ok(text.includes('Documentation: https://api.easymed.uz/docs/en'));
-  assert.ok(text.includes('Check the key: curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <key>"'));
+  // ревью шага 9, п. 7 — подсказка для Windows PowerShell до команды
+  assert.ok(text.split('\n').includes('Check the key (in Windows PowerShell, type curl.exe instead of curl): curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <key>"'), text);
   assert.ok(!/[А-Яа-яЁё]/.test(text), 'кириллица в тексте для отправки: ' + text);
 });

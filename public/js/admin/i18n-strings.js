@@ -11906,7 +11906,7 @@ export const STRINGS = {
   "Документация для партнёров": {"en":"Documentation for partners","ru":"Документация для партнёров","uz":"Hamkorlar uchun hujjatlar"},   // API_DOCS_V1
   "Откроется в новой вкладке": {"en":"Opens in a new tab","ru":"Откроется в новой вкладке","uz":"Yangi varaqda ochiladi"},   // API_DOCS_V1
   "Документация: {url}": {"en":"Documentation: {url}","ru":"Документация: {url}","uz":"Hujjatlar: {url}"},   // API_DOCS_V1
-  "Проверить ключ: {cmd}": {"en":"Check the key: {cmd}","ru":"Проверить ключ: {cmd}","uz":"Kalitni tekshirish: {cmd}"},   // API_DOCS_V1
+  "Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): {cmd}": {"en":"Check the key (in Windows PowerShell, type curl.exe instead of curl): {cmd}","ru":"Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): {cmd}","uz":"Kalitni tekshirish (Windows PowerShell oynasida curl o‘rniga curl.exe yozing): {cmd}"},   // API_DOCS_V1 — ревью шага 9, п. 7
   "<ключ>": {"en":"<key>","ru":"<ключ>","uz":"<kalit>"},   // API_DOCS_V1
   // /API_DOCS_V1
 };

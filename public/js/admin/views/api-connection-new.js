@@ -101,7 +101,11 @@ export function handoverText({ clinic, baseUrl, key, secret, scopes }) {
   lines.push(trf('Разрешено: {list}', { list: allowed.join(', ') }));
   lines.push(trf('Документация: {url}', { url: apiDocsUrl(getLang()) }));
   const url = String(baseUrl || '').replace(/\/?$/, '/') + probePath(scopes);
-  lines.push(trf('Проверить ключ: {cmd}', { cmd: curlCommand({ url, key: tr('<ключ>'), oneLine: true }) }));
+  // Ревью шага 9, п. 7: в Windows PowerShell 5.1 (терминал Windows по умолчанию)
+  // «curl» — это Invoke-WebRequest, строка падает на -H; curl.exe её понимает, но
+  // на macOS и Linux его нет. Команда — «curl», подсказка для PowerShell — до неё:
+  // от «curl» до конца строки — ровно команда.
+  lines.push(trf('Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): {cmd}', { cmd: curlCommand({ url, key: tr('<ключ>'), oneLine: true }) }));
   lines.push(tr('Работать начнёт, когда в Easy-Med включат публичный сервер.'));
   return lines.join('\n');
 }

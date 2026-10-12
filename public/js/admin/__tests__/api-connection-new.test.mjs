@@ -122,12 +122,13 @@ test('создание включённого: филиал на сайте бе
 // API_DOCS_V1 — решение владельца 21: в «Скопировать всё» — ссылка на публичную
 // документацию и команда проверки ключа. В команде — подстановка «<ключ>», сам
 // ключ — только своей строкой «Ключ: …», как в шаге 7.
+const CHECK_RU = 'Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): ';   // ревью шага 9, п. 7
 test('API_DOCS_V1: «Скопировать всё» — ссылка на документацию и команда проверки; в команде — <ключ>, не ключ', () => {
   const base = { clinic: 'Клиника Демо', baseUrl: 'https://api.easymed.uz/klinika-demo/v1/', key: KEY_VALUE, secret: '' };
   const lines = handoverText({ ...base, scopes: ['doctors', 'slots', 'appointments'] }).split('\n');
   assert.ok(lines.includes('Документация: https://api.easymed.uz/docs'));
-  const cmd = lines.filter((l) => l.startsWith('Проверить ключ: '));
-  assert.deepEqual(cmd, ['Проверить ключ: curl "https://api.easymed.uz/klinika-demo/v1/doctors" -H "Authorization: Bearer <ключ>"']);
+  const cmd = lines.filter((l) => l.startsWith('Проверить ключ'));
+  assert.deepEqual(cmd, [CHECK_RU + 'curl "https://api.easymed.uz/klinika-demo/v1/doctors" -H "Authorization: Bearer <ключ>"']);
   assert.ok(lines.includes('Ключ: ' + KEY_VALUE), 'ключ — своей строкой');
   assert.equal(lines.filter((l) => l.includes(KEY_VALUE)).length, 1, 'ключ — только в строке «Ключ»');
   assert.ok(handoverText({ ...base, scopes: ['requests'] }).includes('/klinika-demo/v1/reference/specialties"'), 'без права чтения — справочник: он открыт любому ключу');
@@ -147,5 +148,29 @@ test('API_DOCS_V1: окно «Что передать» — «Документа
     ['A', 'https://api.easymed.uz/docs', '_blank', 'noopener noreferrer', 'Откроется в новой вкладке']);
   assert.ok(textOf(a[0]).includes('Документация для партнёров'));
   const text = byAttr(m, 'aria-label', 'Текст для отправки')[0].value;
-  assert.ok(text.includes('Проверить ключ: curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <ключ>"'));
+  assert.ok(text.includes(CHECK_RU + 'curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <ключ>"'));
+});
+
+// API_DOCS_V1 (ревью шага 9, п. 7) — в Windows PowerShell 5.1 (терминал Windows по
+// умолчанию) «curl» — это Invoke-WebRequest: строка падает на -H ещё до запроса.
+// curl.exe ту же строку понимает и в PowerShell, и в cmd, но на macOS и Linux его
+// нет, а разработчик партнёра часто на них. Поэтому команда остаётся «curl», а
+// подсказка для PowerShell стоит в той же строке ДО команды: выделить от «curl» до
+// конца строки — ровно команда, подсказка в терминал не попадёт.
+test('API_DOCS_V1 (ревью шага 9, п. 7): «Проверить ключ» — подсказка curl.exe для Windows PowerShell до команды, на трёх языках', async () => {
+  const { STRINGS } = await import('../i18n-strings.js');
+  const e = STRINGS[CHECK_RU + '{cmd}'];
+  assert.ok(e, 'нет статьи словаря');
+  for (const lang of ['ru', 'uz', 'en']) {
+    assert.match(e[lang], /Windows PowerShell/, lang);
+    assert.match(e[lang], /curl\.exe/, lang);
+    assert.ok(e[lang].endsWith('): {cmd}'), lang + ': команда — не хвост строки: ' + e[lang]);
+  }
+  assert.ok(!/[А-Яа-яЁё]/.test(e.uz + e.en), 'кириллица в uz/en: ' + e.uz + ' | ' + e.en);
+  assert.equal(STRINGS['Проверить ключ: {cmd}'], undefined, 'прежняя статья без подсказки осталась в словаре');
+  const { curlCommand } = await import('../../shared/api-connections.js');
+  const line = handoverText({ clinic: 'Клиника Демо', baseUrl: 'https://api.easymed.uz/klinika-demo/v1/', key: KEY_VALUE, secret: '', scopes: ['clinic'] })
+    .split('\n').find((l) => l.startsWith('Проверить ключ'));
+  assert.equal(line, CHECK_RU + curlCommand({ url: 'https://api.easymed.uz/klinika-demo/v1/clinic', key: '<ключ>', oneLine: true }));
+  assert.ok(line.slice(CHECK_RU.length).startsWith('curl "'), 'команда — «curl», не «curl.exe»: на macOS и Linux curl.exe нет');
 });

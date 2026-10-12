@@ -277,7 +277,11 @@ const shQuote = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
  * Команда curl к API клиники — одна форма на документацию и «Скопировать всё».
  * key — то, что встанет после «Bearer »: подстановка ($EASYMED_KEY, <ключ>), а
  * не сам ключ. body — объект, уходит JSON. Многострочная — для bash
- * (документация); oneLine — в одну строку: GET без тела понимают и bash, и cmd.
+ * (документация); oneLine — в одну строку: GET без тела понимают bash, zsh, cmd
+ * и PowerShell 7. В Windows PowerShell 5.1 (терминал Windows по умолчанию)
+ * «curl» — это Invoke-WebRequest, и строка падает на -H ещё до запроса: там
+ * пишут curl.exe. Команда остаётся «curl» (curl.exe нет на macOS и Linux), а
+ * «Скопировать всё» говорит про curl.exe в строке «Проверить ключ» (ревью шага 9, п. 7).
  */
 export function curlCommand({ method = 'GET', url, key, body = undefined, oneLine = false } = {}) {
   const parts = ['curl' + (method === 'GET' ? '' : ' -X ' + method) + ' "' + url + '"', '-H "Authorization: Bearer ' + key + '"'];
