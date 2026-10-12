@@ -10,6 +10,7 @@ import { clinicRow } from '../store/clinics.js';
 import { recordAccess } from '../store/logs.js';
 import { PENDING_PER_CLINIC_MAX } from '../store/deliveries.js';
 import { testDb, testVendor, testClinic, serve, syncCall, signedHeaders, NOW } from '../test-helpers/fixture.js';
+import { MEDIA_QUOTA_FILES } from '../store/media.js';
 import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { openSealed } from '../../../server/services/api/sync-identity.js';
 import { isoOf } from '../lib/time.js';
@@ -159,4 +160,19 @@ test('ревью 8b, C8: очередь уведомлений клиники п
     webhook_url: 'https://med24.uz/hooks', signature: 'sha256=' + 'a'.repeat(64) }] }, { time });
   assert.deepEqual(r.json, { accepted: [7] });
   assert.equal(s.ctx.counters.queue_full, 1);
+});
+
+test('ревью 8b, C7: потолок файлов клиники — 409 media_quota (клиника 8a показывает код), файл не пишется', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const c = testClinic(vendor);
+  await syncCall(s.base, c, 'PUT', '/_sync/v1/keys', keys(c), { time });
+  s.db.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+                INSERT INTO media (clinic_id, sha256, ext, bytes, stored_at) SELECT ?, printf('%064x', i), 'png', 10, ? FROM n`)
+    .run(MEDIA_QUOTA_FILES, c.clinicId, time);
+  const png = fakePng(12, 12);
+  const sha = crypto.createHash('sha256').update(png).digest('hex');
+  const r = await syncCall(s.base, c, 'PUT', '/_sync/v1/media/' + sha + '.png', png, { time, type: 'image/png' });
+  assert.deepEqual([r.status, r.json.error.code], [409, 'media_quota']);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM media WHERE sha256 = ?').get(sha).n, 0);
 });

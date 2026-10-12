@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import { admitClinic, saveKeys, saveSnapshot, saveSlots, resolveSlug, snapshotOf, slotsOf, connectionByHash, originAllowedForClinic, markUsed, clinicRow,
   parseCacheStats, SNAPSHOT_LIMITS, PARSE_CACHE_ENTRY_MAX, PARSE_CACHE_TOTAL_MAX }
   from './clinics.js';
-import { missingMedia, putMedia, mediaFile, gcMedia } from './media.js';
+import { missingMedia, putMedia, mediaFile, gcMedia, MEDIA_QUOTA_FILES, MEDIA_QUOTA_BYTES } from './media.js';
 import { testDb, testVendor, testClinic, NOW } from '../test-helpers/fixture.js';
 import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { isoOf } from '../lib/time.js';
@@ -172,4 +172,20 @@ test('ревью 8b, C5: снимок и время — только объек�
   assert.equal(snapshotOf(clinicRow(db, c.clinicId)).clinic.about.length, PARSE_CACHE_ENTRY_MAX);
   assert.ok(parseCacheStats().bytes < PARSE_CACHE_ENTRY_MAX, 'текст больше PARSE_CACHE_ENTRY_MAX не кэшируется');
   assert.ok(parseCacheStats().bytes <= PARSE_CACHE_TOTAL_MAX);
+});
+
+test('ревью 8b, C7: у клиники свой потолок файлов — по числу и по байтам; повтор того же файла не считается дважды', () => {
+  const { db, dir } = testDb();
+  const c = testClinic(vendor);
+  admitClinic(db, auth(c), NOW);
+  assert.ok(MEDIA_QUOTA_FILES >= 200 && MEDIA_QUOTA_BYTES >= 100 * 1024 * 1024, 'фото сотен врачей укладываются');
+  const files = [fakePng(8, 8), fakePng(9, 9), fakePng(10, 10)].map((b) => ({ b, sha: crypto.createHash('sha256').update(b).digest('hex') }));
+  const quota = { quotaFiles: 2, quotaBytes: 1024 * 1024 };
+  assert.deepEqual(putMedia(db, dir, c.clinicId, files[0].sha, 'png', files[0].b, NOW, quota), { ok: true });
+  assert.deepEqual(putMedia(db, dir, c.clinicId, files[1].sha, 'png', files[1].b, NOW, quota), { ok: true });
+  assert.deepEqual(putMedia(db, dir, c.clinicId, files[1].sha, 'png', files[1].b, NOW, quota), { ok: true }, 'тот же файл — не новый');
+  assert.deepEqual(putMedia(db, dir, c.clinicId, files[2].sha, 'png', files[2].b, NOW, quota), { error: 'media_quota' }, 'третий файл — сверх потолка');
+  assert.equal(fs.existsSync(dir + '/media/' + files[2].sha), false, 'сверх потолка на диск не пишется');
+  assert.deepEqual(putMedia(db, dir, c.clinicId, files[2].sha, 'png', files[2].b, NOW, { quotaFiles: 10, quotaBytes: files[0].b.length + files[1].b.length }),
+    { error: 'media_quota' }, 'сверх потолка байтов');
 });

@@ -25,6 +25,7 @@ export const ERRORS = Object.freeze({
   not_found:          { status: 404, ru: 'Не найдено или скрыто клиникой.', uz: 'Topilmadi yoki klinika tomonidan yashirilgan.', en: 'Not found or hidden by the clinic.' },
   clinic_not_found:   { status: 404, ru: 'Клиники с таким адресом нет.', uz: 'Bunday manzilli klinika yo‘q.', en: 'No clinic at this address.' },
   slot_taken:         { status: 409, ru: 'Это время уже занято — запросите /slots заново.', uz: 'Bu vaqt band — /slots ni qayta so‘rang.', en: 'This time is already taken — request /slots again.' },
+  media_quota:        { status: 409, ru: 'У клиники слишком много файлов на сервере — файл не принят.', uz: 'Klinikaning serverdagi fayllari juda ko‘p — fayl qabul qilinmadi.', en: 'The clinic has too many files on the server — the file was not accepted.' },
   slug_taken:         { status: 409, ru: 'Это имя в адресе занято другой клиникой.', uz: 'Manzildagi bu nom boshqa klinika tomonidan band.', en: 'This address name is taken by another clinic.' },
   not_cancellable:    { status: 409, ru: 'Эту запись отменить уже нельзя.', uz: 'Bu yozuvni endi bekor qilib bo‘lmaydi.', en: 'This appointment can no longer be cancelled.' },
   not_offered:        { status: 409, ru: 'Клиника не предлагала другое время по этой записи.', uz: 'Klinika bu yozuv bo‘yicha boshqa vaqt taklif qilmagan.', en: 'The clinic has not offered another time for this appointment.' },

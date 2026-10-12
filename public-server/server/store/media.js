@@ -12,6 +12,12 @@ import path from 'node:path';
 import { isoOf } from '../lib/time.js';
 
 export const MEDIA_MAX_BYTES = 2 * 1024 * 1024;   // как snapshot.js клиники
+// Потолок файлов одной клиники (ревью 8b, C7): диск машины общий (Symptex, n8n —
+// решение 16), а не связанные со снимком файлы живут сутки. Логотипы и фото
+// сотен врачей укладываются с запасом; сверх — 409 media_quota (клиника 8a
+// пропускает файл, пишет код в журнал и шлёт снимок дальше — 8d покажет код).
+export const MEDIA_QUOTA_FILES = 500;
+export const MEDIA_QUOTA_BYTES = 200 * 1024 * 1024;
 export const MEDIA_TYPES = Object.freeze({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' });
 const SHA_RE = /^[0-9a-f]{64}$/;
 const KEEP_UNREFERENCED_MS = 86400000;
@@ -33,11 +39,13 @@ export function missingMedia(db, clinicId, hashes) {
   return list.filter((h) => !has.get(clinicId, h));
 }
 
-/** PUT /media/<sha256>.<ext>. → {ok} | {error:'bad_request'|'too_large'} */
-export function putMedia(db, dataDir, clinicId, sha, ext, buf, now) {
+/** PUT /media/<sha256>.<ext>. → {ok} | {error:'bad_request'|'too_large'|'media_quota'} */
+export function putMedia(db, dataDir, clinicId, sha, ext, buf, now, { quotaFiles = MEDIA_QUOTA_FILES, quotaBytes = MEDIA_QUOTA_BYTES } = {}) {
   if (!SHA_RE.test(sha) || !MEDIA_TYPES[ext] || !Buffer.isBuffer(buf) || !buf.length) return { error: 'bad_request' };
   if (buf.length > MEDIA_MAX_BYTES) return { error: 'too_large' };
   if (crypto.createHash('sha256').update(buf).digest('hex') !== sha || !looksLike(ext, buf)) return { error: 'bad_request' };
+  const held = db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM media WHERE clinic_id = ? AND sha256 <> ?').get(clinicId, sha);
+  if (held.n + 1 > quotaFiles || held.b + buf.length > quotaBytes) return { error: 'media_quota' };
   const dir = mediaDir(dataDir);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, sha);
