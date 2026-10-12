@@ -31,6 +31,7 @@ import { resolveSlug, connectionByHash, originAllowedForClinic, markUsed, snapsh
 import { recordAccess } from '../store/logs.js';
 import { createAccessJournal } from '../store/access-journal.js';
 import { licenceStanding } from '../licence-gate.js';
+import { feedBlocksClinic, feedRevokedPartnerKey } from '../store/feed.js';
 import { ipAllowed, clientIp } from '../lib/net-guard.js';
 import { sendError } from '../lib/errors.js';
 import { isoOf, msOf } from '../lib/time.js';
@@ -133,7 +134,12 @@ export function clinicGate(ctx) {
       });
     }
     if (ctx.requireHttps && !req.secure) return sendError(req, res, 'https_required');
-    if (licenceStanding(clinic, now) !== 'active') return sendError(req, res, 'licence_lapsed', { phone: phoneOf(clinic) });
+    // PUBLIC_LICENCE_V1 — и по списку производителя (store/feed.js): не оплачено,
+    // выключено, снята, ключ обмена отозван — даже если клиника без связи и
+    // предъявила бы старую лицензию. Ответ тот же: «временно недоступна».
+    if (licenceStanding(clinic, now) !== 'active' || feedBlocksClinic(ctx.feed, clinic)) {
+      return sendError(req, res, 'licence_lapsed', { phone: phoneOf(clinic) });
+    }
     if (now - (msOf(clinic.last_seen_at) || 0) > CLINIC_SILENT_MAX_MS) return sendError(req, res, 'clinic_offline', { phone: phoneOf(clinic) });
     return next();
   };
@@ -168,7 +174,9 @@ export function requireKey(ctx) {
       return sendError(req, res, 'invalid_key');
     }
     req.conn = conn;
-    if (!conn.active) return sendError(req, res, 'key_disabled');
+    // PUBLIC_LICENCE_V1 — срочный отзыв из панели производителя (store/feed.js):
+    // ключ выключен, что бы ни присылала клиника в PUT /keys.
+    if (!conn.active || feedRevokedPartnerKey(ctx.feed, conn.key_hash)) return sendError(req, res, 'key_disabled');
     if (conn.key_expires_at && (msOf(conn.key_expires_at) || 0) <= now) return sendError(req, res, 'key_expired');
     if (!ipAllowed(conn.ip_allow, req.ipAddr)) return sendError(req, res, 'ip_not_allowed');
     const origin = req.get('origin');

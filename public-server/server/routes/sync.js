@@ -37,6 +37,7 @@ import { admitClinic, admissionOf, saveKeys, saveSnapshot, saveSlots, parseBound
 import { missingMedia, putMedia, MEDIA_MAX_BYTES } from '../store/media.js';
 import { inboxItems, ackInbox, applyEvents } from '../store/requests.js';
 import { accessSince, deliveryLogSince } from '../store/logs.js';
+import { feedRevokedSyncKey } from '../store/feed.js';
 import { sendError } from '../lib/errors.js';
 
 export const SYNC_LIMIT_PER_MIN = 600;
@@ -67,6 +68,9 @@ export function syncRouter(ctx) {
     const now = ctx.now();
     const auth = verifyClinicHeaders({ headers: req.headers }, { licencePublicKey: ctx.licencePublicKey || null, now, skewMs: ctx.skewMs });
     if (!auth.ok) return sendError(req, res, auth.code, auth.server_time ? { server_time: auth.server_time } : {});
+    // PUBLIC_LICENCE_V1 — ключ обмена отозван в панели производителя (ПК украден):
+    // лицензия с его отпечатком ещё жива, но говорить за клинику он больше не может.
+    if (feedRevokedSyncKey(ctx.feed, auth.fingerprint)) return sendError(req, res, 'invalid_signature');
     const pre = admissionOf(ctx.db, auth);
     if (!pre.ok) return sendError(req, res, pre.code);
     if (licenceStanding(pre.licence, now) === 'lapsed') return sendError(req, res, 'licence_lapsed');
