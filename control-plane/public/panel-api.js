@@ -70,6 +70,12 @@ export const cp = {
   counters: () => request('GET', '/admin/counters'),
   setCollect: (id, names) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/collect`, { names }),
 
+  // PUBLIC_LICENCE_V1 — "Online booking / API" and key revocation (routes/admin-public-api.js)
+  setApi: (id, enabled) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/api`, { enabled }),
+  acceptSyncKey: (id, fingerprint) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/api/accept-key`, { fingerprint }),
+  addRevocation: (id, payload) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/revocations`, payload),
+  removeRevocation: (id, rid) => request('DELETE', `/admin/clinics/${encodeURIComponent(id)}/revocations/${encodeURIComponent(rid)}`),
+
   requests: () => request('GET', '/admin/requests'),
   grantRequest: (id) => request('POST', `/admin/requests/${encodeURIComponent(id)}/grant`, {}),
 };

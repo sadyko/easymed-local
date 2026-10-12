@@ -222,6 +222,11 @@ export function attentionReasons(clinic, now = new Date()) {
     out.push('far behind on updates');
   }
 
+  // PUBLIC_LICENCE_V1 — the clinic's online-booking key changed (a new computer,
+  // a reinstall — or a copied install_token). Nothing happens until a human
+  // accepts it on the clinic's page, so the board must say so.
+  if (clinic.api_key_pending) out.push('new API key waiting');
+
   return out;
 }
 
@@ -280,4 +285,59 @@ export function formatRetiredAt(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return 'date unknown';
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+// --- PUBLIC_LICENCE_V1: the "Online booking / API" card ----------------------
+//
+// What partners (med24.uz, Symptex, the clinic's own site) get for this clinic,
+// in the owner's words. The code comes from the server (services/public-api.js
+// partnersSee — the same rule that builds the public server's feed).
+const PARTNERS_SEE = {
+  visible: { label: 'Partners see this clinic', tone: 'ok' },
+  off:     { label: 'Hidden from partners — online booking is switched off', tone: 'muted' },
+  no_key:  { label: "Hidden from partners — waiting for the clinic's API key", tone: 'warn' },
+  unpaid:  { label: 'Hidden from partners — they get "temporarily unavailable" (unpaid)', tone: 'danger' },
+  retired: { label: 'Hidden from partners — clinic retired', tone: 'danger' },
+};
+export function partnersSeeText(code) {
+  return PARTNERS_SEE[code] || { label: 'Unknown — reload the page', tone: 'danger' };
+}
+
+/** "46de4fe9…696a" — enough to read out on the phone and compare. */
+export function shortFp(fp) {
+  if (typeof fp !== 'string' || !fp) return '—';
+  return fp.length > 12 ? fp.slice(0, 8) + '…' + fp.slice(-4) : fp;
+}
+
+/** What the clinic's computer was last told, in one line. */
+export function licenceLine(licence) {
+  if (!licence || !licence.issued_at) return 'No licence issued with these settings yet — the clinic has not checked in since.';
+  const paid = licence.subscription === 'unpaid' ? 'unpaid' : 'paid';
+  const api = licence.api_sync_key ? `online booking on (key ${shortFp(licence.api_sync_key)})` : 'online booking off';
+  return `Clinic's licence, issued ${formatRetiredAt(licence.issued_at)} ${String(licence.issued_at).slice(11, 16)} UTC: ${paid}, ${api}.`;
+}
+
+// The partner-key shape, mirrored from public/js/shared/api-connections.js
+// KEY_RE (the panel is served from control-plane/public and cannot import it).
+// panel-public-api.test.js pins the two sources equal.
+export const PARTNER_KEY_RE = new RegExp('^em_live_[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789]{32}$');
+const HASH_RE = /^[0-9a-fA-F]{64}$/;
+
+/**
+ * What the owner pasted into "Block a partner key": the key itself (to be
+ * hashed HERE, in the browser — the key never travels to the server), its
+ * SHA-256, or neither.
+ * @returns {{kind:'key', value:string} | {kind:'hash', value:string} | {kind:'bad'}}
+ */
+export function revocationInput(text) {
+  const v = typeof text === 'string' ? text.trim() : '';
+  if (PARTNER_KEY_RE.test(v)) return { kind: 'key', value: v };
+  if (HASH_RE.test(v)) return { kind: 'hash', value: v.toLowerCase() };
+  return { kind: 'bad' };
+}
+
+/** SHA-256 hex of a string, in the browser (crypto.subtle) — the same digest as the clinic's keyHash(). */
+export async function sha256Hex(text) {
+  const buf = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(text)));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }

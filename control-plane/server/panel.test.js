@@ -317,3 +317,14 @@ test('a 401 from the admin API carries the standard {error:{code,message}} shape
   assert.equal(body.error.code, 'unauthorized');
   assert.ok(body.error.message);
 });
+
+// PUBLIC_LICENCE_V1 — the "Online booking / API" card is a module of its own;
+// it must be served exactly like the rest of the panel (no session, no-cache).
+test('static: GET /cp/panel-api-card.js serves the card module with no-cache', async (t) => {
+  const { server } = await harness(t);
+  const res = await fetch(`http://127.0.0.1:${server.address().port}/cp/panel-api-card.js`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') || '', /javascript/);
+  assert.equal(res.headers.get('cache-control'), 'no-cache');
+  assert.match(await res.text(), /export function renderApiCard/);
+});

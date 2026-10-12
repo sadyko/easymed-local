@@ -15,6 +15,7 @@ import {
   subscriptionBadge, subscriptionUntilPayload, codeGroups,
   counterCheckedState, statsRows, retireConfirmText,
 } from './panel-logic.js';
+import { renderApiCard } from './panel-api-card.js';   // PUBLIC_LICENCE_V1
 
 const FALLBACK_NOTE = "Changes apply at this clinic's next check-in — not instantly.";
 
@@ -102,6 +103,8 @@ export async function renderClinicDetail(root, clinicId) {
             <div class="form-err" id="dt-sub-err"></div>
           </div>
 
+          <div class="card" id="dt-api-card"></div>
+
           <div class="card">
             <h2>Retire</h2>
             ${clinic.active
@@ -135,10 +138,18 @@ export async function renderClinicDetail(root, clinicId) {
     paintModules();
     paintStats();
     paintCheckins();
+    renderApiCard(root.querySelector('#dt-api-card'), clinic);   // PUBLIC_LICENCE_V1
     wireSubscriptionForm();
     wireRetire();
     wireUnlock();
     wireStats();
+  }
+
+  // PUBLIC_LICENCE_V1 — the server decides "what partners see" (payment, retire,
+  // switch, key); after a change elsewhere on this page, ask it again. A failed
+  // refresh keeps the old card — the next page load is correct anyway.
+  async function refreshApi() {
+    try { clinic.api = (await cp.clinic(clinic.id)).clinic.api; } catch { /* keep what we have */ }
   }
 
   // --- modules ---------------------------------------------------------
@@ -287,6 +298,7 @@ export async function renderClinicDetail(root, clinicId) {
         const res = await cp.setSubscription(clinic.id, payload);
         clinic.subscription = payload.subscription;
         clinic.subscription_until = payload.subscription_until;
+        await refreshApi();   // PUBLIC_LICENCE_V1 — "what partners see" follows the payment mark
         ok.textContent = res.note || 'Saved.';
         // The header badge is drawn from `clinic` at initial paint() time only —
         // repaint so it reflects the just-saved subscription immediately rather
@@ -317,6 +329,7 @@ export async function renderClinicDetail(root, clinicId) {
       try {
         const res = await cp.retire(clinic.id);
         clinic.active = false;
+        await refreshApi();   // PUBLIC_LICENCE_V1
         toast(res.note || 'Clinic retired.', 'ok');
         paint();
       } catch (e) {

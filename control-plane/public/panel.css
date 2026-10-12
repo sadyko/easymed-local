@@ -333,3 +333,18 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
                       border-radius: 8px; padding: 9px 12px; font-size: 13px; color: var(--ink);
                       font-family: ui-monospace, Menlo, Consolas, monospace; user-select: all;
                       overflow-wrap: break-word; }
+
+/* --- PUBLIC_LICENCE_V1: "Online booking / API" card ---------------------- */
+/* Two more badge tones; both pairs are ≥ 4.5:1 (amber-ink on attention-ring,
+   ink-2 on bg-3 — the same tokens the board and inputs already use). The
+   badge may wrap here: its sentence is longer than a status word. */
+.badge.warn  { background: var(--attention-ring); color: var(--amber-ink); white-space: normal; }
+.badge.muted { background: var(--bg-3); color: var(--ink-2); white-space: normal; }
+#dt-api-card .badge { white-space: normal; line-height: 1.4; }
+.api-fp { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; white-space: nowrap; }
+#dt-api-card .muted { color: var(--ink-3); }
+/* The card's "Blocked keys" table is a table.t (min-width 760px). A grid column
+   (min-width: auto) would grow to fit it — at 360 px the page scrolled sideways
+   to 828 px, at 1280 the card's column took 800 px and squeezed the other one.
+   Letting the columns shrink keeps the table scrolling inside its .table-wrap. */
+.detail-grid > div { min-width: 0; }
