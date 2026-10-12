@@ -125,13 +125,53 @@ export function saveKeys(db, clinicId, body, now) {
 }
 
 /**
+ * Потолки снимка и времени (ревью 8b, C5). Списки — только объекты (не `[]`:
+ * 4 МБ пустых массивов разбираются в ~50 МБ кучи) и не длиннее потолка; тело
+ * снимка и времени — не больше 2 МБ (routes/sync.js). Большая клиника — сотни
+ * врачей и тысячи услуг — укладывается с запасом.
+ */
+export const SNAPSHOT_LIMITS = Object.freeze({ branches: 200, doctors: 1000, services: 10000, packages: 2000,
+  slotDoctors: 1000, slotDays: 62, slotStarts: 288 });
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+function snapshotProblem(snap) {
+  for (const k of ['branches', 'doctors', 'services', 'packages']) {
+    const list = snap[k];
+    if (list == null) continue;
+    if (!Array.isArray(list)) return 'bad_request';
+    if (list.length > SNAPSHOT_LIMITS[k]) return 'too_large';
+    if (!list.every(isObj)) return 'bad_request';
+  }
+  return null;
+}
+
+function slotsProblem(slots) {
+  const doctors = Object.values(slots.doctors);
+  if (doctors.length > SNAPSHOT_LIMITS.slotDoctors) return 'too_large';
+  for (const d of doctors) {
+    if (!isObj(d)) return 'bad_request';
+    if (d.days == null) continue;
+    if (!Array.isArray(d.days)) return 'bad_request';
+    if (d.days.length > SNAPSHOT_LIMITS.slotDays) return 'too_large';
+    for (const day of d.days) {
+      if (!isObj(day)) return 'bad_request';
+      if (day.starts == null) continue;
+      if (!Array.isArray(day.starts)) return 'bad_request';
+      if (day.starts.length > SNAPSHOT_LIMITS.slotStarts) return 'too_large';
+    }
+  }
+  return null;
+}
+
+/**
  * PUT /_sync/v1/snapshot — снимок и имя в адресе. Имя занято другой клиникой
  * (или её прежним именем в течение 30 дней) — slug_taken. Своё прежнее имя
  * работает ещё SLUG_ALIAS_DAYS дней (макет: «старый адрес работает 30 дней»).
  */
 export function saveSnapshot(db, clinicId, snap, now) {
   if (!snap || typeof snap !== 'object' || typeof snap.clinic !== 'object' || snap.clinic === null) return { error: 'bad_request' };
-  for (const k of ['branches', 'doctors', 'services', 'packages']) if (snap[k] != null && !Array.isArray(snap[k])) return { error: 'bad_request' };
+  const problem = snapshotProblem(snap);
+  if (problem) return { error: problem };
   const slug = normalizeSlug(snap.slug);
   if (slugProblem(slug)) return { error: 'bad_slug' };
   const row = clinicRow(db, clinicId);
@@ -155,6 +195,8 @@ export function saveSnapshot(db, clinicId, snap, now) {
 /** PUT /_sync/v1/slots — свободное время («1» — свободно), без имён. */
 export function saveSlots(db, clinicId, slots, now) {
   if (!slots || typeof slots !== 'object' || !slots.doctors || typeof slots.doctors !== 'object' || Array.isArray(slots.doctors)) return { error: 'bad_request' };
+  const problem = slotsProblem(slots);
+  if (problem) return { error: problem };
   const row = clinicRow(db, clinicId);
   if (!notOlder(slots.generated_at, row.slots_at)) return { ok: true, ignored: true };
   db.prepare('UPDATE clinics SET slots = ?, slots_at = ? WHERE clinic_id = ?').run(JSON.stringify(slots), isoOf(msOf(slots.generated_at) || now), clinicId);
@@ -171,21 +213,43 @@ export function resolveSlug(db, slug, now) {
   return alias ? clinicRow(db, alias.clinic_id) : null;
 }
 
-// Разобранные снимок и время — в памяти по (клиника, дата сборки): снимок
-// большой клиники — сотни килобайт, разбирать его на каждый запрос незачем.
-const CACHE_MAX = 32;
-const cache = new Map();
+// Разобранные снимок и время — в памяти: снимок большой клиники — сотни
+// килобайт, разбирать его на каждый запрос незачем.
+//
+// Ревью 8b, C5: одна запись на (клиника, вид), и она верна, пока текст в базе
+// тот же (второй снимок в ту же секунду раньше не доходил до партнёров до
+// 15 минут); потолок — по размеру текста (знаков), а не по числу записей:
+// текст длиннее PARSE_CACHE_ENTRY_MAX разбирается на каждый запрос и не
+// хранится, всего — не больше PARSE_CACHE_TOTAL_MAX, давние уходят первыми.
+export const PARSE_CACHE_ENTRY_MAX = 512 * 1024;
+export const PARSE_CACHE_TOTAL_MAX = 16 * 1024 * 1024;
+const cache = new Map();   // 'клиника:вид' → {text, value}; порядок вставки — давность
+let cacheChars = 0;
 function parsedOf(clinic, kind) {
   const text = clinic && clinic[kind];
   if (!text) return null;
-  const key = clinic.clinic_id + ':' + kind + ':' + clinic[kind + '_at'];
-  if (cache.has(key)) return cache.get(key);
+  const key = clinic.clinic_id + ':' + kind;
+  const hit = cache.get(key);
+  if (hit) {
+    cache.delete(key);
+    if (hit.text === text) { cache.set(key, hit); return hit.value; }
+    cacheChars -= hit.text.length;
+  }
   let v = null;
   try { v = JSON.parse(text); } catch { v = null; }
-  if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
-  cache.set(key, v);
+  if (text.length <= PARSE_CACHE_ENTRY_MAX) {
+    while (cache.size && cacheChars + text.length > PARSE_CACHE_TOTAL_MAX) {
+      const [k0, e0] = cache.entries().next().value;
+      cache.delete(k0);
+      cacheChars -= e0.text.length;
+    }
+    cache.set(key, { text, value: v });
+    cacheChars += text.length;
+  }
   return v;
 }
+/** Для тестов и наблюдения: записей и знаков текста в кэше разобранного. */
+export const parseCacheStats = () => ({ entries: cache.size, bytes: cacheChars });
 export const snapshotOf = (clinic) => parsedOf(clinic, 'snapshot');
 export const slotsOf = (clinic) => parsedOf(clinic, 'slots');
 

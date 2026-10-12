@@ -26,8 +26,9 @@
 // устаревшая и истёкшая лицензия — store/clinics.js admissionOf, без записи) →
 // тело → подпись → запись клиники. Сжатое тело не распаковывается (415):
 // клиника 8a не сжимает, а распаковка до проверки делала из 4 КБ gzip 4 МБ в
-// памяти. Предел тела — свой у адреса: 4 МБ только снимку и времени, файлу — 2 МБ,
-// остальному — 1 МБ.
+// памяти. Предел тела — свой у адреса: снимку и времени — 2 МБ (ревью 8b, C5:
+// большая клиника укладывается с запасом; списки ограничены store/clinics.js
+// SNAPSHOT_LIMITS), файлу — 2 МБ, остальному — 1 МБ.
 import express from 'express';
 import { verifyClinicHeaders, verifyClinicSignature } from '../clinic-auth.js';
 import { licenceStanding } from '../licence-gate.js';
@@ -40,7 +41,8 @@ import { sendError } from '../lib/errors.js';
 export const SYNC_LIMIT_PER_MIN = 600;
 const MEDIA_RE = /^([0-9a-f]{64})\.([a-z]{3,4})$/;
 const raw = (limit) => express.raw({ type: () => true, limit, inflate: false });
-const BODY = { big: raw('4mb'), media: raw(MEDIA_MAX_BYTES), small: raw('1mb') };
+export const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
+const BODY = { big: raw(SNAPSHOT_MAX_BYTES), media: raw(MEDIA_MAX_BYTES), small: raw('1mb') };
 const bodyFor = (p) => (/^\/(?:snapshot|slots)\/?$/.test(p) ? BODY.big : /^\/media\/[^/]+$/.test(p) ? BODY.media : BODY.small);
 
 /**

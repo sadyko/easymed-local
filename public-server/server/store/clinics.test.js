@@ -5,7 +5,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { admitClinic, saveKeys, saveSnapshot, saveSlots, resolveSlug, snapshotOf, connectionByHash, originAllowedForClinic, markUsed, clinicRow }
+import { admitClinic, saveKeys, saveSnapshot, saveSlots, resolveSlug, snapshotOf, slotsOf, connectionByHash, originAllowedForClinic, markUsed, clinicRow,
+  parseCacheStats, SNAPSHOT_LIMITS, PARSE_CACHE_ENTRY_MAX, PARSE_CACHE_TOTAL_MAX }
   from './clinics.js';
 import { missingMedia, putMedia, mediaFile, gcMedia } from './media.js';
 import { testDb, testVendor, testClinic, NOW } from '../test-helpers/fixture.js';
@@ -139,4 +140,36 @@ test('ревью 8b, C4: уборка файлов не держит снимк�
   assert.equal(row.stored_at, isoOf(later), 'на снимок ссылается — отмечен свежим: следующие сутки уборка его не берёт');
   assert.deepEqual(gcMedia(db, dir, later + 60000), { rows: 0, files: 0 });
   assert.ok(mediaFile(db, dir, clinicRow(db, c.clinicId), sha, 'png'));
+});
+
+test('ревью 8b, C5: второй снимок в ту же секунду партнёры видят сразу — разобранное держится по тексту, а не по отметке времени', () => {
+  const { db } = testDb();
+  const c = testClinic(vendor);
+  admitClinic(db, auth(c), NOW);
+  saveSnapshot(db, c.clinicId, { ...snap('shifo'), doctors: [{ id: 7 }, { id: 8 }] }, NOW);
+  assert.equal(snapshotOf(clinicRow(db, c.clinicId)).doctors.length, 2);
+  assert.deepEqual(saveSnapshot(db, c.clinicId, { ...snap('shifo'), doctors: [{ id: 8 }] }, NOW + 300), { ok: true }, 'та же секунда generated_at');
+  assert.deepEqual(snapshotOf(clinicRow(db, c.clinicId)).doctors.map((d) => d.id), [8], 'скрытый врач больше не показывается');
+  saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), slot_minutes: 15, doctors: { 7: { reception: 'booking', days: [] } } }, NOW);
+  assert.ok(slotsOf(clinicRow(db, c.clinicId)).doctors[7]);
+  saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), slot_minutes: 15, doctors: {} }, NOW + 300);
+  assert.deepEqual(slotsOf(clinicRow(db, c.clinicId)).doctors, {});
+});
+
+test('ревью 8b, C5: снимок и время — только объекты в списках и не больше потолков; кэш разобранного ограничен байтами', () => {
+  const { db } = testDb();
+  const c = testClinic(vendor);
+  admitClinic(db, auth(c), NOW);
+  assert.deepEqual(saveSnapshot(db, c.clinicId, { ...snap('shifo'), services: [[], []] }, NOW), { error: 'bad_request' }, 'в списке — не объекты');
+  const many = Array.from({ length: SNAPSHOT_LIMITS.services + 1 }, (_, i) => ({ id: i + 1 }));
+  assert.deepEqual(saveSnapshot(db, c.clinicId, { ...snap('shifo'), services: many }, NOW), { error: 'too_large' });
+  assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: { days: Array(SNAPSHOT_LIMITS.slotDays + 1).fill({}) } } }, NOW),
+    { error: 'too_large' });
+  assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: [] } }, NOW), { error: 'bad_request' });
+  // Большой снимок разбирается, но в кэш не ложится.
+  const big = { ...snap('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(PARSE_CACHE_ENTRY_MAX) } };
+  assert.deepEqual(saveSnapshot(db, c.clinicId, big, NOW + 1000), { ok: true });
+  assert.equal(snapshotOf(clinicRow(db, c.clinicId)).clinic.about.length, PARSE_CACHE_ENTRY_MAX);
+  assert.ok(parseCacheStats().bytes < PARSE_CACHE_ENTRY_MAX, 'текст больше PARSE_CACHE_ENTRY_MAX не кэшируется');
+  assert.ok(parseCacheStats().bytes <= PARSE_CACHE_TOTAL_MAX);
 });

@@ -139,7 +139,10 @@ test('C1: сжатое тело клиники — 415 без распаковк
   const events = await syncCall(s.base, c, 'POST', '/_sync/v1/events', { events: [], pad }, { time });
   assert.deepEqual([events.status, events.json.error.code], [413, 'too_large'], 'события — до 1 МБ');
   const snap = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: pad } };
-  assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', snap, { time })).json, { ok: true }, 'снимок — до 4 МБ');
+  assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', snap, { time })).json, { ok: true }, 'снимок — до 2 МБ');
+  const huge = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(2304 * 1024) } };
+  const tooBig = await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', huge, { time });
+  assert.deepEqual([tooBig.status, tooBig.json.error.code], [413, 'too_large'], 'ревью 8b, C5: снимок больше 2 МБ — 413');
 });
 
 test('ревью 8b, C8: очередь уведомлений клиники полна — ответ протокола прежний ({accepted}), пропуск считается', async (t) => {
