@@ -155,3 +155,25 @@ test('DOCTOR_PROFILE_V1: «Свободное время» — на стольк
   assert.match(e.uz, /7, 14 yoki 30/);
   assert.match(e.en, /7, 14 or 30/);
 });
+
+// API_DOCS_V1 — решение владельца 21: документация — одна публичная страница
+// публичного сервера; программа клиники ссылается на неё и даёт пример запроса.
+test('API_DOCS_V1: адрес документации и её языков; curl — подстановка ключа, тело JSON, одна строка для «Скопировать всё»', async () => {
+  const { API_DOCS_URL, API_DOCS_PATH, apiDocsUrl, curlCommand } = await import('./api-connections.js');
+  assert.equal(API_DOCS_PATH, '/docs');
+  assert.equal(API_DOCS_URL, 'https://api.easymed.uz/docs');
+  assert.deepEqual(['ru', 'uz', 'en', 'de', undefined].map((l) => apiDocsUrl(l)),
+    ['https://api.easymed.uz/docs', 'https://api.easymed.uz/docs/uz', 'https://api.easymed.uz/docs/en', 'https://api.easymed.uz/docs', 'https://api.easymed.uz/docs']);
+  assert.equal(curlCommand({ url: 'https://api.easymed.uz/shifo/v1/clinic', key: '<ключ>', oneLine: true }),
+    'curl "https://api.easymed.uz/shifo/v1/clinic" -H "Authorization: Bearer <ключ>"');
+  const post = curlCommand({ method: 'POST', url: 'https://api.easymed.uz/shifo/v1/requests', key: '$EASYMED_KEY', body: { name: "O'g'il", n: 1 } });
+  assert.deepEqual(post.split('\n'), [
+    'curl -X POST "https://api.easymed.uz/shifo/v1/requests" \\',
+    '  -H "Authorization: Bearer $EASYMED_KEY" \\',
+    '  -H "Content-Type: application/json" \\',
+    "  -d '{",
+    '  "name": "O' + "'\\''" + 'g' + "'\\''" + 'il",',
+    '  "n": 1',
+    "}'",
+  ], 'апостроф в теле закрывает и снова открывает одинарные кавычки bash');
+});

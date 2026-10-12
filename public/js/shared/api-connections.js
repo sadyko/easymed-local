@@ -258,3 +258,29 @@ export function keyExpiryState(expiresAt, now = Date.now()) {
   if (t <= now) return 'expired';
   return t - now <= EXPIRY_WARN_DAYS * 86400000 ? 'soon' : 'ok';
 }
+
+// ---- документация для партнёров (API_DOCS_V1) --------------------------------------
+// Решение владельца 21 (2026-10-12): документация — одна публичная страница
+// публичного сервера, одна на все клиники и всегда по текущему коду
+// (public-server/server/routes/docs.js). В программе клиники — только ссылка на
+// неё и пример запроса в тексте «Скопировать всё».
+export const API_DOCS_PATH = '/docs';
+export const API_DOCS_URL = 'https://' + API_HOST + API_DOCS_PATH;
+export const API_DOCS_LANGS = Object.freeze(['ru', 'uz', 'en']);
+/** Страница на языке lang: русская — /docs, узбекская и английская — /docs/uz, /docs/en. */
+export function apiDocsUrl(lang = 'ru') {
+  return API_DOCS_LANGS.includes(lang) && lang !== 'ru' ? API_DOCS_URL + '/' + lang : API_DOCS_URL;
+}
+
+const shQuote = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+/**
+ * Команда curl к API клиники — одна форма на документацию и «Скопировать всё».
+ * key — то, что встанет после «Bearer »: подстановка ($EASYMED_KEY, <ключ>), а
+ * не сам ключ. body — объект, уходит JSON. Многострочная — для bash
+ * (документация); oneLine — в одну строку: GET без тела понимают и bash, и cmd.
+ */
+export function curlCommand({ method = 'GET', url, key, body = undefined, oneLine = false } = {}) {
+  const parts = ['curl' + (method === 'GET' ? '' : ' -X ' + method) + ' "' + url + '"', '-H "Authorization: Bearer ' + key + '"'];
+  if (body !== undefined) parts.push('-H "Content-Type: application/json"', '-d ' + shQuote(JSON.stringify(body, null, oneLine ? 0 : 2)));
+  return parts.join(oneLine ? ' ' : ' \\\n  ');
+}
