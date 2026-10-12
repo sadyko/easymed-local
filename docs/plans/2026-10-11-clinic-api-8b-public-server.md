@@ -61,7 +61,7 @@
 
 **Метка плана и коммитов:** `CLINIC_API_STEP8B_V1`. Сообщение коммита кончается скобкой `(PUBLIC_SERVER_V1, CLINIC_API_STEP8B_V1)`.
 
-**Ответы на вопросы плана (2026-10-12):** вопрос 1 — владелец выбрал **сутки** (решение 20 спецификации, а не рекомендованные 7 суток): не забранная клиникой заявка через сутки закрыта для партнёра (`closed`, `not_collected`), шифротекст стёрт; вопрос 2 — **15 минут** (решение контролёра). Оба срока — именованные постоянные `config.js` (`DEFAULT_UNCOLLECTED_MAX_HOURS`, `DEFAULT_SYNC_SKEW_MIN`) с настройками `PUBLIC_UNCOLLECTED_MAX_HOURS`, `PUBLIC_SYNC_SKEW_MIN`. Правило «клиника молчит 7 суток — 503» не меняется. Блоки кода ниже — по ответам (см. «Вопросы владельцу»).
+**Ответы на вопросы плана (2026-10-12):** вопрос 1 — владелец выбрал **сутки** (решение 20 спецификации, а не рекомендованные 7 суток): не забранная клиникой заявка через сутки закрыта для партнёра (`closed`, `not_collected`), шифротекст стёрт; вопрос 2 — **15 минут** (решение контролёра). Оба срока — именованные постоянные `config.js` (`DEFAULT_UNCOLLECTED_MAX_HOURS`, `DEFAULT_SYNC_SKEW_MIN`) с настройками `PUBLIC_UNCOLLECTED_MAX_HOURS`, `PUBLIC_SYNC_SKEW_MIN`. Правило «клиника молчит 7 суток — 503» не меняется. Блоки кода ниже — по ответам (см. «Вопросы владельцу») и после проверки безопасности — итоговый код (раздел «Ревью и исправления» в конце плана: находки C1–C13, новые коды ошибок, потолки).
 
 ---
 
@@ -161,7 +161,7 @@
   - `ops.js`.
 - **`server/test-helpers/`:** `fixture.js`, `partner-stand.js`.
 
-Всего — 52 файла: 21 файл тестов (86 тестов; было 84 — решение 20 добавило тест настроек и тест очереди), 26 модулей, 2 стенда, миграция, `package.json`, `DEPLOY.md`.
+Всего — 52 файла: 21 файл тестов (86 тестов; было 84 — решение 20 добавило тест настроек и тест очереди), 26 модулей, 2 стенда, миграция, `package.json`, `DEPLOY.md`. После ревью — 57 файлов, 23 файла тестов, 119 тестов (раздел «Ревью и исправления» в конце плана).
 
 ---
 
@@ -437,8 +437,8 @@ const EXPECTED = {
   requests: ['id', 'clinic_id', 'connection_id', 'kind', 'external_id', 'doctor_id', 'branch_id', 'service_id', 'package_id',
     'consultation', 'start_at', 'duration_min', 'status', 'reason', 'hold_until', 'offered_start', 'offer_until',
     'cancel_requested_at', 'created_at', 'delivered_at', 'answered_at', 'updated_at'],
-  inbox: ['cursor', 'clinic_id', 'type', 'request_id', 'connection_id', 'received_at', 'data', 'sealed'],
-  events_seen: ['clinic_id', 'seq', 'received_at'],
+  inbox: ['cursor', 'clinic_id', 'type', 'request_id', 'connection_id', 'received_at', 'data', 'sealed', 'handed_out_at'],
+  events_seen: ['clinic_id', 'seq', 'identity', 'received_at'],
   deliveries: ['id', 'clinic_id', 'connection_id', 'request_id', 'event_id', 'event', 'url', 'body', 'signature', 'attempts',
     'state', 'next_at', 'last_code', 'last_error', 'created_at', 'updated_at'],
   delivery_log: ['id', 'clinic_id', 'delivery_id', 'connection_id', 'request_id', 'event_id', 'event', 'attempt', 'code',
@@ -818,6 +818,8 @@ CREATE INDEX requests_status ON requests (clinic_id, status);
 
 -- Очередь заявок клинике (GET /_sync/v1/inbox). sealed — данные пациента,
 -- запечатанные box_key клиники; строка стирается при подтверждении курсора.
+-- handed_out_at — когда элемент последний раз отдан клинике: уборка не
+-- закрывает отданное, пока клиника его подтверждает (ревью 8b, C11).
 CREATE TABLE inbox (
   cursor        INTEGER PRIMARY KEY AUTOINCREMENT,
   clinic_id     TEXT NOT NULL REFERENCES clinics (clinic_id) ON DELETE CASCADE,
@@ -826,14 +828,19 @@ CREATE TABLE inbox (
   connection_id INTEGER NOT NULL,
   received_at   TEXT NOT NULL,
   data          TEXT NOT NULL DEFAULT '{}',
-  sealed        TEXT
+  sealed        TEXT,
+  handed_out_at TEXT
 );
 CREATE INDEX inbox_clinic ON inbox (clinic_id, cursor);
 
--- Принятые события клиники (POST /_sync/v1/events) — повтор того же seq ничего не меняет.
+-- Принятые события клиники (POST /_sync/v1/events) — повтор того же seq с тем
+-- же содержимым (identity — sha256 вида и тела события) ничего не меняет. Тот же
+-- seq с другим содержимым — новое событие: клиника восстановила базу из копии,
+-- и номера пошли заново (ревью 8b, C2).
 CREATE TABLE events_seen (
   clinic_id   TEXT NOT NULL,
   seq         INTEGER NOT NULL,
+  identity    TEXT NOT NULL,
   received_at TEXT NOT NULL,
   PRIMARY KEY (clinic_id, seq)
 );
@@ -1000,11 +1007,14 @@ export const ERRORS = Object.freeze({
   not_found:          { status: 404, ru: 'Не найдено или скрыто клиникой.', uz: 'Topilmadi yoki klinika tomonidan yashirilgan.', en: 'Not found or hidden by the clinic.' },
   clinic_not_found:   { status: 404, ru: 'Клиники с таким адресом нет.', uz: 'Bunday manzilli klinika yo‘q.', en: 'No clinic at this address.' },
   slot_taken:         { status: 409, ru: 'Это время уже занято — запросите /slots заново.', uz: 'Bu vaqt band — /slots ni qayta so‘rang.', en: 'This time is already taken — request /slots again.' },
+  media_quota:        { status: 409, ru: 'У клиники слишком много файлов на сервере — файл не принят.', uz: 'Klinikaning serverdagi fayllari juda ko‘p — fayl qabul qilinmadi.', en: 'The clinic has too many files on the server — the file was not accepted.' },
   slug_taken:         { status: 409, ru: 'Это имя в адресе занято другой клиникой.', uz: 'Manzildagi bu nom boshqa klinika tomonidan band.', en: 'This address name is taken by another clinic.' },
   not_cancellable:    { status: 409, ru: 'Эту запись отменить уже нельзя.', uz: 'Bu yozuvni endi bekor qilib bo‘lmaydi.', en: 'This appointment can no longer be cancelled.' },
   not_offered:        { status: 409, ru: 'Клиника не предлагала другое время по этой записи.', uz: 'Klinika bu yozuv bo‘yicha boshqa vaqt taklif qilmagan.', en: 'The clinic has not offered another time for this appointment.' },
+  offer_changed:      { status: 409, ru: 'Клиника уже предложила другое время — запросите заявку заново.', uz: 'Klinika allaqachon boshqa vaqt taklif qildi — arizani qayta so‘rang.', en: 'The clinic has already offered a different time — request the appointment again.' },
   offer_expired:      { status: 409, ru: 'Срок ответа на предложенное время истёк.', uz: 'Taklif qilingan vaqtga javob berish muddati tugagan.', en: 'The time to answer the offered slot has passed.' },
   too_large:          { status: 413, ru: 'Запрос слишком большой.', uz: 'So‘rov juda katta.', en: 'The request is too large.' },
+  unsupported_encoding: { status: 415, ru: 'Сжатое тело запроса не принимается — пришлите без Content-Encoding.', uz: 'Siqilgan so‘rov tanasi qabul qilinmaydi — Content-Encoding siz yuboring.', en: 'Compressed request bodies are not accepted — send without Content-Encoding.' },
   rate_limited:       { status: 429, ru: 'Превышен лимит запросов — подождите столько секунд, сколько в Retry-After.', uz: 'So‘rovlar chegarasi oshdi — Retry-After dagi soniyalar qadar kuting.', en: 'Rate limit exceeded — wait as many seconds as Retry-After says.' },
   internal:           { status: 500, ru: 'Ошибка сервера.', uz: 'Server xatosi.', en: 'Server error.' },
   licence_lapsed:     { status: 503, ru: 'Клиника временно недоступна. Позвоните в клинику.', uz: 'Klinika vaqtincha mavjud emas. Klinikaga qo‘ng‘iroq qiling.', en: 'The clinic is temporarily unavailable. Please call the clinic.' },
@@ -1044,6 +1054,7 @@ export function errorHandler(log = console) {
     if (res.headersSent) return next(err);
     if (err && err.type === 'entity.parse.failed') return sendError(req, res, 'bad_json');
     if (err && err.type === 'entity.too.large') return sendError(req, res, 'too_large');
+    if (err && err.type === 'encoding.unsupported') return sendError(req, res, 'unsupported_encoding');
     const status = Number(err && (err.status || err.statusCode));
     if (status >= 400 && status < 500) {
       log.warn('[public-server] client error', status, (err && (err.type || err.code)) || '');
@@ -1186,7 +1197,7 @@ test('состояние: срок вышел — lapsed; «не оплачен�
 // ключа, время и подпись запроса. Подделка любой части — отказ с кодом.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyClinicRequest, keyFingerprint } from './clinic-auth.js';
+import { verifyClinicRequest, verifyClinicHeaders, verifyClinicSignature, keyFingerprint } from './clinic-auth.js';
 import { testVendor, testClinic, signedHeaders, NOW } from './test-helpers/fixture.js';
 
 const vendor = testVendor();
@@ -1233,6 +1244,17 @@ test('часы клиники дальше допуска — clock_skew со в
   assert.equal(late.server_time, '2030-03-11T04:00:00Z');
   assert.equal(verifyClinicRequest(req(c, { at: new Date(NOW + 14 * 60000).toISOString() }), opts).ok, true);
   assert.equal(verifyClinicRequest(req(c, { at: new Date(NOW - 50 * 60000).toISOString() }), { ...opts, skewMs: 3600000 }).ok, true);
+});
+
+test('ревью 8b, C1: заголовки проверяются без тела, подпись — отдельно', () => {
+  const c = testClinic(vendor);
+  const r = req(c);
+  const pre = verifyClinicHeaders({ headers: r.headers }, opts);
+  assert.equal(pre.ok, true);
+  assert.equal(pre.fingerprint, c.identity.fingerprint);
+  assert.equal(verifyClinicHeaders({ headers: { ...r.headers, 'x-easymed-licence': '' } }, opts).code, 'licence_invalid');
+  assert.equal(verifyClinicSignature(r), true);
+  assert.equal(verifyClinicSignature({ ...r, body: Buffer.from('{"a":2}') }), false);
 });
 ```
 
@@ -1317,14 +1339,19 @@ export function keyFingerprint(signPublicB64) {
 
 const fail = (code, extra = {}) => ({ ok: false, code, ...extra });
 
+const headerOf = (headers) => (k) => String((headers && headers[k]) || '');
+
 /**
- * @param {{method:string, url:string, headers:object, body:Buffer}} req url — путь с query, как пришёл (originalUrl)
+ * Шаги 1–3 — только заголовки, без тела (ревью 8b, C1): тело запроса читается
+ * лишь после них, так что чужой без лицензии клиники не заставит сервер
+ * принимать и распаковывать мегабайты.
+ * @param {{headers:object}} req
  * @param {{licencePublicKey?:import('node:crypto').KeyObject|null, now:number, skewMs?:number}} opts
  * @returns {{ok:true, clinicId:string, fingerprint:string, licence:{issued_at:string, valid_until:string, subscription:string}}
  *   | {ok:false, code:string, server_time?:string}}
  */
-export function verifyClinicRequest({ method, url, headers, body }, { licencePublicKey = null, now, skewMs = DEFAULT_SKEW_MS }) {
-  const h = (k) => String((headers && headers[k]) || '');
+export function verifyClinicHeaders({ headers }, { licencePublicKey = null, now, skewMs = DEFAULT_SKEW_MS }) {
+  const h = headerOf(headers);
   const clinicId = h('x-easymed-clinic');
   if (!CLINIC_ID_RE.test(clinicId)) return fail('invalid_signature');
   const lic = h('x-easymed-licence');
@@ -1333,12 +1360,8 @@ export function verifyClinicRequest({ method, url, headers, body }, { licencePub
   if (!v.ok) return fail('licence_invalid');
   const fingerprint = keyFingerprint(h('x-easymed-key'));
   if (!fingerprint || v.licence.api_sync_key !== fingerprint) return fail('invalid_signature');
-  const time = h('x-easymed-time');
-  const t = Date.parse(time);
+  const t = Date.parse(h('x-easymed-time'));
   if (!Number.isFinite(t) || Math.abs(t - now) > skewMs) return fail('clock_skew', { server_time: isoOf(now) });
-  const ok = verifyRequest(h('x-easymed-key'), { method: String(method).toUpperCase(), path: url, time, body: body || Buffer.alloc(0) },
-    h('x-easymed-signature'));
-  if (!ok) return fail('invalid_signature');
   return {
     ok: true, clinicId, fingerprint,
     licence: {
@@ -1347,6 +1370,26 @@ export function verifyClinicRequest({ method, url, headers, body }, { licencePub
       subscription: subscriptionOf(v.licence),
     },
   };
+}
+
+/** Шаг 4 — подпись запроса ключом из заголовка (его отпечаток уже сверен с лицензией). */
+export function verifyClinicSignature({ method, url, headers, body }) {
+  const h = headerOf(headers);
+  return verifyRequest(h('x-easymed-key'), { method: String(method).toUpperCase(), path: url, time: h('x-easymed-time'), body: body || Buffer.alloc(0) },
+    h('x-easymed-signature'));
+}
+
+/**
+ * Все четыре шага.
+ * @param {{method:string, url:string, headers:object, body:Buffer}} req url — путь с query, как пришёл (originalUrl)
+ * @param {{licencePublicKey?:import('node:crypto').KeyObject|null, now:number, skewMs?:number}} opts
+ * @returns {{ok:true, clinicId:string, fingerprint:string, licence:{issued_at:string, valid_until:string, subscription:string}}
+ *   | {ok:false, code:string, server_time?:string}}
+ */
+export function verifyClinicRequest(req, opts) {
+  const pre = verifyClinicHeaders(req, opts);
+  if (!pre.ok) return pre;
+  return verifyClinicSignature(req) ? pre : fail('invalid_signature');
 }
 ```
 
@@ -1373,9 +1416,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { admitClinic, saveKeys, saveSnapshot, saveSlots, resolveSlug, snapshotOf, connectionByHash, originAllowedForClinic, markUsed, clinicRow }
+import { admitClinic, saveKeys, saveSnapshot, saveSlots, resolveSlug, snapshotOf, slotsOf, connectionByHash, originAllowedForClinic, markUsed, clinicRow,
+  parseCacheStats, SNAPSHOT_LIMITS, PARSE_CACHE_ENTRY_MAX, PARSE_CACHE_TOTAL_MAX }
   from './clinics.js';
-import { missingMedia, putMedia, mediaFile, gcMedia } from './media.js';
+import { missingMedia, putMedia, mediaFile, gcMedia, MEDIA_QUOTA_FILES, MEDIA_QUOTA_BYTES } from './media.js';
 import { testDb, testVendor, testClinic, NOW } from '../test-helpers/fixture.js';
 import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { isoOf } from '../lib/time.js';
@@ -1489,6 +1533,73 @@ test('файлы: только чего нет; отпечаток и вид с�
   assert.deepEqual(gcMedia(db, dir, NOW + 2 * 86400000), { rows: 1, files: 1 });
   assert.equal(fs.existsSync(f.file), false);
 });
+
+test('ревью 8b, C4: уборка файлов не держит снимки в памяти — файл из снимка отмечается свежим и в следующие сутки не проверяется', () => {
+  const { db, dir } = testDb();
+  const c = testClinic(vendor);
+  admitClinic(db, auth(c), NOW);
+  const png = fakePng(32, 32);
+  const sha = crypto.createHash('sha256').update(png).digest('hex');
+  putMedia(db, dir, c.clinicId, sha, 'png', png, NOW);
+  const gone = fakePng(16, 16);
+  const shaGone = crypto.createHash('sha256').update(gone).digest('hex');
+  putMedia(db, dir, c.clinicId, shaGone, 'png', gone, NOW);
+  saveSnapshot(db, c.clinicId, { ...snap('shifo'), clinic: { logo: { square: 'media/' + sha + '.png' } } }, NOW);
+  const later = NOW + 2 * 86400000;
+  assert.deepEqual(gcMedia(db, dir, later), { rows: 1, files: 1 }, 'на снимок не ссылается — стёрт с файлом');
+  const row = db.prepare('SELECT stored_at FROM media WHERE sha256 = ?').get(sha);
+  assert.equal(row.stored_at, isoOf(later), 'на снимок ссылается — отмечен свежим: следующие сутки уборка его не берёт');
+  assert.deepEqual(gcMedia(db, dir, later + 60000), { rows: 0, files: 0 });
+  assert.ok(mediaFile(db, dir, clinicRow(db, c.clinicId), sha, 'png'));
+});
+
+test('ревью 8b, C5: второй снимок в ту же секунду партнёры видят сразу — разобранное держится по тексту, а не по отметке времени', () => {
+  const { db } = testDb();
+  const c = testClinic(vendor);
+  admitClinic(db, auth(c), NOW);
+  saveSnapshot(db, c.clinicId, { ...snap('shifo'), doctors: [{ id: 7 }, { id: 8 }] }, NOW);
+  assert.equal(snapshotOf(clinicRow(db, c.clinicId)).doctors.length, 2);
+  assert.deepEqual(saveSnapshot(db, c.clinicId, { ...snap('shifo'), doctors: [{ id: 8 }] }, NOW + 300), { ok: true }, 'та же секунда generated_at');
+  assert.deepEqual(snapshotOf(clinicRow(db, c.clinicId)).doctors.map((d) => d.id), [8], 'скрытый врач больше не показывается');
+  saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), slot_minutes: 15, doctors: { 7: { reception: 'booking', days: [] } } }, NOW);
+  assert.ok(slotsOf(clinicRow(db, c.clinicId)).doctors[7]);
+  saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), slot_minutes: 15, doctors: {} }, NOW + 300);
+  assert.deepEqual(slotsOf(clinicRow(db, c.clinicId)).doctors, {});
+});
+
+test('ревью 8b, C5: снимок и время — только объекты в списках и не больше потолков; кэш разобранного ограничен байтами', () => {
+  const { db } = testDb();
+  const c = testClinic(vendor);
+  admitClinic(db, auth(c), NOW);
+  assert.deepEqual(saveSnapshot(db, c.clinicId, { ...snap('shifo'), services: [[], []] }, NOW), { error: 'bad_request' }, 'в списке — не объекты');
+  const many = Array.from({ length: SNAPSHOT_LIMITS.services + 1 }, (_, i) => ({ id: i + 1 }));
+  assert.deepEqual(saveSnapshot(db, c.clinicId, { ...snap('shifo'), services: many }, NOW), { error: 'too_large' });
+  assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: { days: Array(SNAPSHOT_LIMITS.slotDays + 1).fill({}) } } }, NOW),
+    { error: 'too_large' });
+  assert.deepEqual(saveSlots(db, c.clinicId, { generated_at: isoOf(NOW), doctors: { 7: [] } }, NOW), { error: 'bad_request' });
+  // Большой снимок разбирается, но в кэш не ложится.
+  const big = { ...snap('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(PARSE_CACHE_ENTRY_MAX) } };
+  assert.deepEqual(saveSnapshot(db, c.clinicId, big, NOW + 1000), { ok: true });
+  assert.equal(snapshotOf(clinicRow(db, c.clinicId)).clinic.about.length, PARSE_CACHE_ENTRY_MAX);
+  assert.ok(parseCacheStats().bytes < PARSE_CACHE_ENTRY_MAX, 'текст больше PARSE_CACHE_ENTRY_MAX не кэшируется');
+  assert.ok(parseCacheStats().bytes <= PARSE_CACHE_TOTAL_MAX);
+});
+
+test('ревью 8b, C7: у клиники свой потолок файлов — по числу и по байтам; повтор того же файла не считается дважды', () => {
+  const { db, dir } = testDb();
+  const c = testClinic(vendor);
+  admitClinic(db, auth(c), NOW);
+  assert.ok(MEDIA_QUOTA_FILES >= 200 && MEDIA_QUOTA_BYTES >= 100 * 1024 * 1024, 'фото сотен врачей укладываются');
+  const files = [fakePng(8, 8), fakePng(9, 9), fakePng(10, 10)].map((b) => ({ b, sha: crypto.createHash('sha256').update(b).digest('hex') }));
+  const quota = { quotaFiles: 2, quotaBytes: 1024 * 1024 };
+  assert.deepEqual(putMedia(db, dir, c.clinicId, files[0].sha, 'png', files[0].b, NOW, quota), { ok: true });
+  assert.deepEqual(putMedia(db, dir, c.clinicId, files[1].sha, 'png', files[1].b, NOW, quota), { ok: true });
+  assert.deepEqual(putMedia(db, dir, c.clinicId, files[1].sha, 'png', files[1].b, NOW, quota), { ok: true }, 'тот же файл — не новый');
+  assert.deepEqual(putMedia(db, dir, c.clinicId, files[2].sha, 'png', files[2].b, NOW, quota), { error: 'media_quota' }, 'третий файл — сверх потолка');
+  assert.equal(fs.existsSync(dir + '/media/' + files[2].sha), false, 'сверх потолка на диск не пишется');
+  assert.deepEqual(putMedia(db, dir, c.clinicId, files[2].sha, 'png', files[2].b, NOW, { quotaFiles: 10, quotaBytes: files[0].b.length + files[1].b.length }),
+    { error: 'media_quota' }, 'сверх потолка байтов');
+});
 ```
 
 - [ ] **Step 2:** `node --test public-server/server/store/clinics.test.js` → падает: `ERR_MODULE_NOT_FOUND` (`store/clinics.js`).
@@ -1553,6 +1664,20 @@ export function admitClinic(db, auth, now) {
   return { ok: true, clinic: clinicRow(db, auth.clinicId) };
 }
 
+/**
+ * То же решение, что admitClinic, но ничего не пишет: канал клиники отвечает
+ * licence_outdated и 503 licence_lapsed ДО чтения тела и до проверки подписи
+ * (ревью 8b, C1), а записывает клинику только после подписи.
+ * @returns {{ok:true, licence:{licence_valid_until:string, licence_subscription:string}} | {ok:false, code:'licence_outdated'}}
+ */
+export function admissionOf(db, auth) {
+  const row = clinicRow(db, auth.clinicId);
+  const presented = { licence_valid_until: auth.licence.valid_until, licence_subscription: auth.licence.subscription };
+  if (!row || (msOf(auth.licence.issued_at) || 0) >= (msOf(row.licence_issued_at) || 0)) return { ok: true, licence: presented };
+  if (row.key_fp !== auth.fingerprint) return { ok: false, code: 'licence_outdated' };
+  return { ok: true, licence: row };
+}
+
 /** Присланное не старше сохранённого (повтор старого запроса не откатывает). */
 const notOlder = (generatedAt, storedAt) => !storedAt || (msOf(generatedAt) || 0) >= (msOf(storedAt) || 0);
 
@@ -1610,13 +1735,53 @@ export function saveKeys(db, clinicId, body, now) {
 }
 
 /**
+ * Потолки снимка и времени (ревью 8b, C5). Списки — только объекты (не `[]`:
+ * 4 МБ пустых массивов разбираются в ~50 МБ кучи) и не длиннее потолка; тело
+ * снимка и времени — не больше 2 МБ (routes/sync.js). Большая клиника — сотни
+ * врачей и тысячи услуг — укладывается с запасом.
+ */
+export const SNAPSHOT_LIMITS = Object.freeze({ branches: 200, doctors: 1000, services: 10000, packages: 2000,
+  slotDoctors: 1000, slotDays: 62, slotStarts: 288 });
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+function snapshotProblem(snap) {
+  for (const k of ['branches', 'doctors', 'services', 'packages']) {
+    const list = snap[k];
+    if (list == null) continue;
+    if (!Array.isArray(list)) return 'bad_request';
+    if (list.length > SNAPSHOT_LIMITS[k]) return 'too_large';
+    if (!list.every(isObj)) return 'bad_request';
+  }
+  return null;
+}
+
+function slotsProblem(slots) {
+  const doctors = Object.values(slots.doctors);
+  if (doctors.length > SNAPSHOT_LIMITS.slotDoctors) return 'too_large';
+  for (const d of doctors) {
+    if (!isObj(d)) return 'bad_request';
+    if (d.days == null) continue;
+    if (!Array.isArray(d.days)) return 'bad_request';
+    if (d.days.length > SNAPSHOT_LIMITS.slotDays) return 'too_large';
+    for (const day of d.days) {
+      if (!isObj(day)) return 'bad_request';
+      if (day.starts == null) continue;
+      if (!Array.isArray(day.starts)) return 'bad_request';
+      if (day.starts.length > SNAPSHOT_LIMITS.slotStarts) return 'too_large';
+    }
+  }
+  return null;
+}
+
+/**
  * PUT /_sync/v1/snapshot — снимок и имя в адресе. Имя занято другой клиникой
  * (или её прежним именем в течение 30 дней) — slug_taken. Своё прежнее имя
  * работает ещё SLUG_ALIAS_DAYS дней (макет: «старый адрес работает 30 дней»).
  */
 export function saveSnapshot(db, clinicId, snap, now) {
   if (!snap || typeof snap !== 'object' || typeof snap.clinic !== 'object' || snap.clinic === null) return { error: 'bad_request' };
-  for (const k of ['branches', 'doctors', 'services', 'packages']) if (snap[k] != null && !Array.isArray(snap[k])) return { error: 'bad_request' };
+  const problem = snapshotProblem(snap);
+  if (problem) return { error: problem };
   const slug = normalizeSlug(snap.slug);
   if (slugProblem(slug)) return { error: 'bad_slug' };
   const row = clinicRow(db, clinicId);
@@ -1640,6 +1805,8 @@ export function saveSnapshot(db, clinicId, snap, now) {
 /** PUT /_sync/v1/slots — свободное время («1» — свободно), без имён. */
 export function saveSlots(db, clinicId, slots, now) {
   if (!slots || typeof slots !== 'object' || !slots.doctors || typeof slots.doctors !== 'object' || Array.isArray(slots.doctors)) return { error: 'bad_request' };
+  const problem = slotsProblem(slots);
+  if (problem) return { error: problem };
   const row = clinicRow(db, clinicId);
   if (!notOlder(slots.generated_at, row.slots_at)) return { ok: true, ignored: true };
   db.prepare('UPDATE clinics SET slots = ?, slots_at = ? WHERE clinic_id = ?').run(JSON.stringify(slots), isoOf(msOf(slots.generated_at) || now), clinicId);
@@ -1656,21 +1823,43 @@ export function resolveSlug(db, slug, now) {
   return alias ? clinicRow(db, alias.clinic_id) : null;
 }
 
-// Разобранные снимок и время — в памяти по (клиника, дата сборки): снимок
-// большой клиники — сотни килобайт, разбирать его на каждый запрос незачем.
-const CACHE_MAX = 32;
-const cache = new Map();
+// Разобранные снимок и время — в памяти: снимок большой клиники — сотни
+// килобайт, разбирать его на каждый запрос незачем.
+//
+// Ревью 8b, C5: одна запись на (клиника, вид), и она верна, пока текст в базе
+// тот же (второй снимок в ту же секунду раньше не доходил до партнёров до
+// 15 минут); потолок — по размеру текста (знаков), а не по числу записей:
+// текст длиннее PARSE_CACHE_ENTRY_MAX разбирается на каждый запрос и не
+// хранится, всего — не больше PARSE_CACHE_TOTAL_MAX, давние уходят первыми.
+export const PARSE_CACHE_ENTRY_MAX = 512 * 1024;
+export const PARSE_CACHE_TOTAL_MAX = 16 * 1024 * 1024;
+const cache = new Map();   // 'клиника:вид' → {text, value}; порядок вставки — давность
+let cacheChars = 0;
 function parsedOf(clinic, kind) {
   const text = clinic && clinic[kind];
   if (!text) return null;
-  const key = clinic.clinic_id + ':' + kind + ':' + clinic[kind + '_at'];
-  if (cache.has(key)) return cache.get(key);
+  const key = clinic.clinic_id + ':' + kind;
+  const hit = cache.get(key);
+  if (hit) {
+    cache.delete(key);
+    if (hit.text === text) { cache.set(key, hit); return hit.value; }
+    cacheChars -= hit.text.length;
+  }
   let v = null;
   try { v = JSON.parse(text); } catch { v = null; }
-  if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
-  cache.set(key, v);
+  if (text.length <= PARSE_CACHE_ENTRY_MAX) {
+    while (cache.size && cacheChars + text.length > PARSE_CACHE_TOTAL_MAX) {
+      const [k0, e0] = cache.entries().next().value;
+      cache.delete(k0);
+      cacheChars -= e0.text.length;
+    }
+    cache.set(key, { text, value: v });
+    cacheChars += text.length;
+  }
   return v;
 }
+/** Для тестов и наблюдения: записей и знаков текста в кэше разобранного. */
+export const parseCacheStats = () => ({ entries: cache.size, bytes: cacheChars });
 export const snapshotOf = (clinic) => parsedOf(clinic, 'snapshot');
 export const slotsOf = (clinic) => parsedOf(clinic, 'slots');
 
@@ -1715,6 +1904,12 @@ import path from 'node:path';
 import { isoOf } from '../lib/time.js';
 
 export const MEDIA_MAX_BYTES = 2 * 1024 * 1024;   // как snapshot.js клиники
+// Потолок файлов одной клиники (ревью 8b, C7): диск машины общий (Symptex, n8n —
+// решение 16), а не связанные со снимком файлы живут сутки. Логотипы и фото
+// сотен врачей укладываются с запасом; сверх — 409 media_quota (клиника 8a
+// пропускает файл, пишет код в журнал и шлёт снимок дальше — 8d покажет код).
+export const MEDIA_QUOTA_FILES = 500;
+export const MEDIA_QUOTA_BYTES = 200 * 1024 * 1024;
 export const MEDIA_TYPES = Object.freeze({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' });
 const SHA_RE = /^[0-9a-f]{64}$/;
 const KEEP_UNREFERENCED_MS = 86400000;
@@ -1736,11 +1931,13 @@ export function missingMedia(db, clinicId, hashes) {
   return list.filter((h) => !has.get(clinicId, h));
 }
 
-/** PUT /media/<sha256>.<ext>. → {ok} | {error:'bad_request'|'too_large'} */
-export function putMedia(db, dataDir, clinicId, sha, ext, buf, now) {
+/** PUT /media/<sha256>.<ext>. → {ok} | {error:'bad_request'|'too_large'|'media_quota'} */
+export function putMedia(db, dataDir, clinicId, sha, ext, buf, now, { quotaFiles = MEDIA_QUOTA_FILES, quotaBytes = MEDIA_QUOTA_BYTES } = {}) {
   if (!SHA_RE.test(sha) || !MEDIA_TYPES[ext] || !Buffer.isBuffer(buf) || !buf.length) return { error: 'bad_request' };
   if (buf.length > MEDIA_MAX_BYTES) return { error: 'too_large' };
   if (crypto.createHash('sha256').update(buf).digest('hex') !== sha || !looksLike(ext, buf)) return { error: 'bad_request' };
+  const held = db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM media WHERE clinic_id = ? AND sha256 <> ?').get(clinicId, sha);
+  if (held.n + 1 > quotaFiles || held.b + buf.length > quotaBytes) return { error: 'media_quota' };
   const dir = mediaDir(dataDir);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, sha);
@@ -1764,15 +1961,24 @@ export function mediaFile(db, dataDir, clinic, sha, ext) {
   return fs.existsSync(file) ? { file, type: MEDIA_TYPES[ext] } : null;
 }
 
-/** Уборка: строки, на которые снимок не ссылается дольше суток, и файлы без строк. */
+/**
+ * Уборка: строки, на которые снимок не ссылается дольше суток, и файлы без строк.
+ *
+ * Ревью 8b, C4: снимок в память процесса не попадает — ссылку проверяет сама
+ * SQLite (instr), а файл, на который снимок ссылается, отмечается свежим
+ * (stored_at) и следующие сутки уборкой не проверяется. Прежде каждая строка
+ * тянула в JS весь снимок своей клиники каждую минуту: 12 клиник × 40 фото при
+ * снимке ~200 КБ роняли процесс по памяти (160 МБ) раз в минуту.
+ */
 export function gcMedia(db, dataDir, now) {
   const old = isoOf(now - KEEP_UNREFERENCED_MS);
-  const rows = db.prepare('SELECT m.clinic_id, m.sha256, m.ext, c.snapshot FROM media m JOIN clinics c ON c.clinic_id = m.clinic_id WHERE m.stored_at < ?').all(old);
-  const del = db.prepare('DELETE FROM media WHERE clinic_id = ? AND sha256 = ?');
+  const referenced = `EXISTS (SELECT 1 FROM clinics c WHERE c.clinic_id = media.clinic_id
+                        AND instr(c.snapshot, '"media/' || media.sha256 || '.' || media.ext || '"') > 0)`;
   let rowsGone = 0;
-  for (const r of rows) {
-    if (!String(r.snapshot || '').includes('"media/' + r.sha256 + '.' + r.ext + '"')) { del.run(r.clinic_id, r.sha256); rowsGone += 1; }
-  }
+  db.transaction(() => {
+    db.prepare(`UPDATE media SET stored_at = ? WHERE stored_at < ? AND ${referenced}`).run(isoOf(now), old);
+    rowsGone = db.prepare('DELETE FROM media WHERE stored_at < ?').run(old).changes;
+  })();
   let filesGone = 0;
   const dir = mediaDir(dataDir);
   if (fs.existsSync(dir)) {
@@ -1808,12 +2014,13 @@ export function gcMedia(db, dataDir, now) {
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequest, requestRow, inboxItems, ackInbox, queueOverlaps, partnerCancel, partnerAnswerOffer, applyEvents,
-  closeOverdue, purgeRequests, newRequestId } from './requests.js';
+  closeOverdue, purgeRequests, newRequestId, floorInboxCursor } from './requests.js';
 import { admitClinic, saveKeys, clinicRow } from './clinics.js';
 import { openSealed } from '../../../server/services/api/sync-identity.js';
 import { parseInboxItem } from '../../../public/js/shared/api-booking.js';
 import { testDb, testVendor, testClinic, NOW } from '../test-helpers/fixture.js';
 import { isoOf } from '../lib/time.js';
+import { PENDING_PER_CLINIC_MAX } from './deliveries.js';
 
 const vendor = testVendor();
 const START = Date.parse('2030-03-12T05:00:00Z');
@@ -1954,8 +2161,9 @@ test('события клиники: статус, повтор seq, испор�
   assert.equal(d[0].url, 'https://med24.uz/hooks');
   assert.equal(d[0].body, offer.body, 'тело — байт в байт как подписала клиника');
   assert.equal(d[0].connection_id, 3);
-  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [event(1, a, 'booking.confirmed', 'booked')], NOW).accepted, [1]);
-  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'declined', 'повтор seq ничего не меняет');
+  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [offer], NOW).accepted, [1]);
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'declined', 'повтор seq с тем же телом ничего не меняет');
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 1, 'и второго уведомления нет');
   applyEvents(s.db, s.c.clinicId, [event(4, a, 'booking.confirmed', 'booked', { start: '2030-03-12T10:00:00+05:00', branch_id: 1 })], NOW);
   const b = requestRow(s.db, s.c.clinicId, a.id);
   assert.deepEqual([b.status, b.reason, b.start_at, b.branch_id], ['booked', null, '2030-03-12T05:00:00Z', 1]);
@@ -2012,6 +2220,162 @@ test('уборка: статусы старше 90 дней, номера соб
   applyEvents(s.db, s.c.clinicId, [{ seq: 1, event: 'x', body: '' }], NOW);
   assert.deepEqual(purgeRequests(s.db, NOW + 31 * 86400000), { requests: 0, events: 1 });
   assert.deepEqual(purgeRequests(s.db, NOW + 91 * 86400000), { requests: 1, events: 0 });
+});
+
+test('ревью 8b, C2: базу клиники восстановили — новое событие с прежним номером применяется; точный повтор — нет', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const hook = { webhook_url: 'https://med24.uz/hooks', signature: 'sha256=' + 'a'.repeat(64) };
+  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [event(1, a, 'booking.confirmed', 'booked', {}, hook)], NOW).accepted, [1]);
+  // Клиника восстановила свою базу из копии: номера событий пошли заново.
+  const after = event(1, a, 'appointment.cancelled', 'cancelled', {}, hook);
+  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [after], NOW + 1000).accepted, [1]);
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'cancelled', 'новое событие с прежним номером не потеряно');
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 2, 'и уведомление о нём встало в очередь');
+  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [after], NOW + 2000).accepted, [1]);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 2, 'точный повтор (ответ сервера потерялся) — без второго уведомления');
+});
+
+test('ревью 8b, C3: базу сервера восстановили или собрали заново — курсор очереди не идёт назад, клиника получает всё неподтверждённое', () => {
+  const s = setup();
+  appt(s);
+  appt(s, { externalId: 'med-2', startAt: isoOf(START + 3600000) });
+  const held = inboxItems(s.db, s.c.clinicId, '');
+  const clinicCursor = held.at(-1).cursor;
+  // База сервера собрана заново: очереди нет, счётчик курсоров — с нуля.
+  s.db.prepare('DELETE FROM inbox').run();
+  s.db.prepare("UPDATE sqlite_sequence SET seq = 0 WHERE name = 'inbox'").run();
+  floorInboxCursor(s.db, NOW + 60000);   // запуск службы
+  const fresh = appt(s, { externalId: 'med-3', startAt: isoOf(START + 7200000) }).row;
+  const items = inboxItems(s.db, s.c.clinicId, clinicCursor);
+  assert.deepEqual(items.map((i) => i.public_id), [fresh.id], 'курсор клиники впереди — новая заявка всё равно отдаётся');
+  assert.ok(Number(items[0].cursor) > Number(clinicCursor), 'курсор не пошёл назад');
+  assert.deepEqual(ackInbox(s.db, s.c.clinicId, items[0].cursor, [], NOW + 61000), { ok: true, deleted: 1 });
+  floorInboxCursor(s.db, NOW);   // повторный запуск с часами раньше — не откатывает
+  appt(s, { externalId: 'med-4', startAt: isoOf(START + 10800000) });
+  const [next] = inboxItems(s.db, s.c.clinicId, '');
+  assert.ok(Number(next.cursor) > Number(items[0].cursor), 'запуск с отставшими часами курсор не откатывает');
+});
+
+test('ревью 8b, C8: очередь уведомлений клиники полна — событие принято и применено, уведомление пропущено и сосчитано', () => {
+  const s = setup();
+  const a = appt(s).row;
+  s.db.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+                INSERT INTO deliveries (clinic_id, event_id, event, url, body, signature, next_at, created_at, updated_at)
+                SELECT ?, 'ev_' || i, 'booking.confirmed', 'https://med24.uz/h', '{}', 's', ?, ?, ? FROM n`)
+    .run(PENDING_PER_CLINIC_MAX, s.c.clinicId, isoOf(NOW), isoOf(NOW), isoOf(NOW));
+  const hook = { webhook_url: 'https://med24.uz/hooks', signature: 'sha256=' + 'a'.repeat(64) };
+  const r = applyEvents(s.db, s.c.clinicId, [event(1, a, 'booking.confirmed', 'booked', {}, hook)], NOW);
+  assert.deepEqual(r, { accepted: [1], queue_full: 1 });
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'booked', 'статус партнёру всё равно обновлён — он увидит его в GET /requests/{id}');
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, PENDING_PER_CLINIC_MAX, 'сверх потолка строк нет');
+  s.db.prepare("UPDATE deliveries SET state = 'delivered' WHERE id = 1").run();
+  assert.deepEqual(applyEvents(s.db, s.c.clinicId, [event(2, a, 'booking.declined', 'declined', { reason: 'slot_taken' }, hook)], NOW), { accepted: [2], queue_full: 0 });
+});
+
+test('ревью 8b, C9: клиника предложила другое время, пока согласие партнёра на прежнее ехало к ней — согласие снято, партнёр видит новое предложение', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const offerAt = (seq, startIso) => event(seq, a, 'booking.offered_other_time', 'offered', { offered_start: startIso, offer_until: isoOf(NOW + 1800000) });
+  applyEvents(s.db, s.c.clinicId, [offerAt(1, '2030-03-12T07:00:00Z')], NOW);
+  const off = requestRow(s.db, s.c.clinicId, a.id);
+  assert.deepEqual(partnerAnswerOffer(s.db, off, true, NOW + 1000, { offeredStart: Date.parse('2030-03-12T09:00:00Z') }), { error: 'offer_changed' },
+    'партнёр отвечает на другое предложение — 409');
+  const acc = partnerAnswerOffer(s.db, off, true, NOW + 1000, { offeredStart: Date.parse('2030-03-12T07:00:00Z') });
+  assert.equal(acc.row.status, 'pending');
+  const [item] = inboxItems(s.db, s.c.clinicId, '').filter((i) => i.type === 'offer.accept');
+  assert.equal(item.data.offered_start, '2030-03-12T07:00:00Z', 'клиника видит, на какое предложение ответ');
+  // Регистратор тем временем предложил 14:00: событие приходит раньше, чем клиника заберёт очередь.
+  applyEvents(s.db, s.c.clinicId, [offerAt(2, '2030-03-12T09:00:00Z')], NOW + 2000);
+  assert.deepEqual(inboxItems(s.db, s.c.clinicId, '').filter((i) => i.type === 'offer.accept'), [], 'согласие на прежнее время не дойдёт до нового предложения');
+  const now = requestRow(s.db, s.c.clinicId, a.id);
+  assert.deepEqual([now.status, now.offered_start], ['offered', '2030-03-12T09:00:00Z']);
+});
+
+test('ревью 8b, C9: то же предложение ещё раз, пока согласие на него в очереди, — согласие остаётся, статус pending', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const offer = (seq) => event(seq, a, 'booking.offered_other_time', 'offered', { offered_start: '2030-03-12T07:00:00Z', offer_until: isoOf(NOW + 1800000) });
+  applyEvents(s.db, s.c.clinicId, [offer(1)], NOW);
+  partnerAnswerOffer(s.db, requestRow(s.db, s.c.clinicId, a.id), true, NOW + 1000);
+  applyEvents(s.db, s.c.clinicId, [offer(2)], NOW + 2000);
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'pending');
+  assert.equal(inboxItems(s.db, s.c.clinicId, '').filter((i) => i.type === 'offer.accept').length, 1);
+});
+
+test('ревью 8b, C10: «другое время» от клиники, не дошедшей до отмены или отказа партнёра, отмену не перебивает — время свободно', () => {
+  const s = setup();
+  const a = appt(s).row;
+  partnerCancel(s.db, a, NOW);
+  applyEvents(s.db, s.c.clinicId, [event(1, a, 'booking.offered_other_time', 'offered', { offered_start: '2030-03-12T07:00:00Z', offer_until: isoOf(NOW + 1800000) })],
+    NOW + 1000);
+  applyEvents(s.db, s.c.clinicId, [event(2, a, 'booking.confirmed', 'pending')], NOW + 2000);
+  const r = requestRow(s.db, s.c.clinicId, a.id);
+  assert.deepEqual([r.status, r.offered_start], ['cancelled', null], 'отмена партнёра сильнее предложения в пути');
+  assert.equal(queueOverlaps(s.db, s.c.clinicId, 7, Date.parse('2030-03-12T07:00:00Z'), 15, NOW + 3000), false, 'призрачное предложение время не держит');
+  assert.deepEqual(partnerAnswerOffer(s.db, r, true, NOW + 3000), { error: 'not_offered' });
+  applyEvents(s.db, s.c.clinicId, [event(3, a, 'appointment.created', 'booked', { start: '2030-03-12T10:00:00+05:00' })], NOW + 4000);
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'booked', 'клиника записала до отмены — это итог, а не «в пути»');
+});
+
+test('ревью 8b, C10: отказ партнёра от другого времени держится как отмена — новое предложение клиники в пути его не перебивает', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const offer = (seq, start) => event(seq, a, 'booking.offered_other_time', 'offered', { offered_start: start, offer_until: isoOf(NOW + 1800000) });
+  applyEvents(s.db, s.c.clinicId, [offer(1, '2030-03-12T07:00:00Z')], NOW);
+  const r = partnerAnswerOffer(s.db, requestRow(s.db, s.c.clinicId, a.id), false, NOW + 1000).row;
+  assert.equal(r.status, 'cancelled');
+  assert.ok(r.cancel_requested_at, 'отказ отмечен как отмена партнёром');
+  applyEvents(s.db, s.c.clinicId, [offer(2, '2030-03-12T09:00:00Z')], NOW + 2000);
+  assert.equal(requestRow(s.db, s.c.clinicId, a.id).status, 'cancelled', 'клиника применит отказ к своему предложению — обе стороны «отменено»');
+  assert.deepEqual(inboxItems(s.db, s.c.clinicId, '').filter((i) => i.type === 'offer.decline').length, 1, 'отказ доходит до клиники');
+});
+
+test('ревью 8b, C11: заявку, отданную клинике в GET, уборка не закрывает, пока ждёт подтверждения; поздний held оживляет закрытую сервером', () => {
+  const s = setup();
+  const a = appt(s).row;
+  const cb = createRequest(s.db, { clinic: s.clinic(), connectionId: 3, kind: 'request', patient: PATIENT, now: NOW }).row;
+  const DAY = 86400000;
+  const items = inboxItems(s.db, s.c.clinicId, '', { now: NOW + DAY - 5000 });   // клиника вернулась за 5 секунд до срока
+  assert.equal(items.length, 2);
+  assert.deepEqual(closeOverdue(s.db, NOW + DAY + 1000), { not_processed: 0, not_collected: 0 }, 'отдано клинике — не закрывать, пока она подтверждает');
+  assert.deepEqual(ackInbox(s.db, s.c.clinicId, items.at(-1).cursor, [{ request_id: a.id, hold_until: isoOf(NOW + DAY + 1800000) }], NOW + DAY + 2000),
+    { ok: true, deleted: 2 });
+  assert.deepEqual([requestRow(s.db, s.c.clinicId, a.id).status, requestRow(s.db, s.c.clinicId, a.id).hold_until], ['pending', isoOf(NOW + DAY + 1800000)]);
+  assert.equal(requestRow(s.db, s.c.clinicId, cb.id).status, 'new');
+  // Отдано, но подтверждения нет дольше запаса — закрывается как обычно.
+  const b = appt(s, { externalId: 'med-2', startAt: isoOf(START + 3600000) }).row;
+  inboxItems(s.db, s.c.clinicId, '', { now: NOW + 1000 });
+  assert.deepEqual(closeOverdue(s.db, NOW + DAY + 1000), { not_processed: 0, not_collected: 1 });
+  // Клиника всё же подтвердила позже и держит время — заявка оживает.
+  ackInbox(s.db, s.c.clinicId, '0', [{ request_id: b.id, hold_until: isoOf(NOW + DAY + 1800000) }], NOW + DAY + 3000);
+  const rb = requestRow(s.db, s.c.clinicId, b.id);
+  assert.deepEqual([rb.status, rb.reason, rb.hold_until], ['pending', null, isoOf(NOW + DAY + 1800000)]);
+  assert.ok(rb.delivered_at);
+});
+
+test('ревью 8b, C10: предложение клиники, не дошедшей до отмены или отказа партнёра, партнёру не уходит — ответить на него нельзя', () => {
+  const s = setup();
+  const hook = { webhook_url: 'https://med24.uz/hooks', signature: 'sha256=' + 'a'.repeat(64) };
+  const offer = (seq, row, start) => event(seq, row, 'booking.offered_other_time', 'offered', { offered_start: start, offer_until: isoOf(NOW + 1800000) }, hook);
+  const a = appt(s).row;
+  partnerCancel(s.db, a, NOW);
+  applyEvents(s.db, s.c.clinicId, [offer(1, a, '2030-03-12T07:00:00Z')], NOW + 1000);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 0, 'после отмены — без уведомления о предложении');
+  const b = appt(s, { externalId: 'med-2', startAt: isoOf(START + 3600000) }).row;
+  applyEvents(s.db, s.c.clinicId, [offer(2, b, '2030-03-12T08:00:00Z')], NOW);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 1, 'обычное предложение уведомляется');
+  partnerAnswerOffer(s.db, requestRow(s.db, s.c.clinicId, b.id), false, NOW + 1000);
+  applyEvents(s.db, s.c.clinicId, [offer(3, b, '2030-03-12T09:00:00Z')], NOW + 2000);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n, 1, 'после отказа — без уведомления о новом предложении');
+  const c = appt(s, { externalId: 'med-3', startAt: isoOf(START + 7200000) }).row;
+  applyEvents(s.db, s.c.clinicId, [offer(4, c, '2030-03-12T10:00:00Z')], NOW);
+  partnerAnswerOffer(s.db, requestRow(s.db, s.c.clinicId, c.id), true, NOW + 1000);
+  applyEvents(s.db, s.c.clinicId, [offer(5, c, '2030-03-12T10:00:00Z')], NOW + 2000);
+  assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE request_id = ?").get(c.id).n, 1,
+    'то же предложение, пока согласие на него в очереди, — второго уведомления нет');
+  applyEvents(s.db, s.c.clinicId, [event(6, a, 'booking.declined', 'expired', { reason: 'expired' }, hook)], NOW + 3000);
+  assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE request_id = ?").get(a.id).n, 1, '«истекло» после отмены уходит, как и прежде');
 });
 ```
 
@@ -2102,6 +2466,7 @@ import { sealFor } from '../../../server/services/api/sync-identity.js';
 import { EVENTS, webhookUrlProblem } from '../../../public/js/shared/api-connections.js';
 import { isoOf, msOf } from '../lib/time.js';
 import { DEFAULT_UNCOLLECTED_MAX_HOURS } from '../config.js';
+import { pendingCount, PENDING_PER_CLINIC_MAX } from './deliveries.js';
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -2113,12 +2478,16 @@ export const PLAIN_ITEM_MAX_MS = 7 * DAY;
 export const REQUEST_KEEP_MS = 90 * DAY;
 export const EVENTS_SEEN_KEEP_MS = 30 * DAY;
 export const INBOX_PAGE = 100;
+/** Отданное клинике в GET /inbox уборка не закрывает столько времени — клиника подтверждает в том же такте (ревью 8b, C11). */
+export const HANDED_OUT_GRACE_MS = 10 * 60000;
 export const BODY_MAX = 16384;
 
 /** Статусы для партнёра (дизайн §7 + closed этого сервера). */
 export const PARTNER_STATUSES = Object.freeze(['new', 'accepted', 'pending', 'offered', 'booked', 'declined', 'expired',
   'cancelled', 'arrived', 'no_show', 'closed']);
 const NEW_TYPES = Object.freeze(['request.new', 'appointment.new']);
+/** Итоги клиники, которые сильнее отмены партнёром, ещё не дошедшей до неё. */
+const CLINIC_OUTCOMES = Object.freeze(['booked', 'cancelled', 'arrived', 'no_show']);
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 /** Номер заявки: rq_ + 24 знака латиницы и цифр (клиника ждёт ^rq_[A-Za-z0-9]{6,37}$). */
@@ -2229,27 +2598,63 @@ export function partnerCancel(db, row, now) {
  * POST /appointments/{id}/accept|decline — ответ партнёра на «другое время».
  * Согласие — снова pending на предложенном времени (срок держания назначит
  * клиника при приёме ответа и сообщит в held); отказ — cancelled.
- * @returns {{row:object} | {error:'not_offered'|'offer_expired'}}
+ *
+ * Ревью 8b, C9: ответ — на то предложение, которое видел партнёр. Прислал он
+ * offered_start (мгновение, offeredStart) и оно не то, что предлагается сейчас, —
+ * offer_changed. В элемент очереди уходит offered_start, на который ответ, —
+ * клиника может сверить его со своим предложением, а сервер снимает согласие,
+ * если раньше клиники пришло её новое предложение (applyStatus).
+ * @returns {{row:object} | {error:'not_offered'|'offer_expired'|'offer_changed'}}
  */
-export function partnerAnswerOffer(db, row, accept, now) {
+export function partnerAnswerOffer(db, row, accept, now, { offeredStart = null } = {}) {
   if (row.status !== 'offered') return { error: 'not_offered' };
+  if (offeredStart != null && offeredStart !== msOf(row.offered_start)) return { error: 'offer_changed' };
   if (accept && !(msOf(row.offer_until) > now)) return { error: 'offer_expired' };
   db.transaction(() => {
     if (accept) {
       touch(db, row.id, { status: 'pending', start_at: row.offered_start, offered_start: null, offer_until: null, hold_until: null,
         delivered_at: null, answered_at: null }, now);
     } else {
-      touch(db, row.id, { status: 'cancelled', offered_start: null, offer_until: null, hold_until: null }, now);
+      // Отказ держится как отмена партнёром (ревью 8b, C10): предложение
+      // клиники, отправленное до того, как она его увидела, его не перебьёт.
+      touch(db, row.id, { status: 'cancelled', offered_start: null, offer_until: null, hold_until: null, cancel_requested_at: isoOf(now) }, now);
     }
-    enqueue(db, { clinicId: row.clinic_id, type: accept ? 'offer.accept' : 'offer.decline', requestId: row.id, connectionId: row.connection_id, now });
+    enqueue(db, { clinicId: row.clinic_id, type: accept ? 'offer.accept' : 'offer.decline', requestId: row.id, connectionId: row.connection_id, now,
+      data: { offered_start: row.offered_start } });
   })();
   return { row: requestRow(db, row.clinic_id, row.id) };
 }
 
-/** GET /_sync/v1/inbox — элементы после курсора, по порядку, как их ждёт parseInboxItem клиники. */
-export function inboxItems(db, clinicId, after, limit = INBOX_PAGE) {
-  return db.prepare('SELECT * FROM inbox WHERE clinic_id = ? AND cursor > ? ORDER BY cursor LIMIT ?')
-    .all(clinicId, Number(after) || 0, Math.min(limit, INBOX_PAGE))
+/**
+ * Запуск службы: счётчик курсоров очереди — не меньше часов (мс). Клиника
+ * хранит последний подтверждённый курсор навсегда; восстановленная из копии или
+ * собранная заново база начала бы курсоры с меньших чисел — новые заявки прятались
+ * бы за курсором клиники, а её подтверждение стирало бы чужие (ревью 8b, C3).
+ * Часы запуска всегда больше любого прежнего курсора (не больше одной заявки в
+ * миллисекунду с прошлого запуска).
+ */
+export function floorInboxCursor(db, nowMs) {
+  const floor = Math.floor(nowMs);
+  const r = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'inbox'").get();
+  if (!r) db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('inbox', ?)").run(floor);
+  else if (Number(r.seq) < floor) db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'inbox'").run(floor);
+}
+
+/**
+ * GET /_sync/v1/inbox — самые старые неподтверждённые элементы клиники, по
+ * порядку, как их ждёт parseInboxItem клиники. Курсор клиники (after) не
+ * отсекает: подтверждённое уже стёрто, а курсор клиники после восстановления
+ * базы сервера может быть впереди (ревью 8b, C3); повтор клиника узнаёт по
+ * номеру заявки.
+ */
+export function inboxItems(db, clinicId, after, { limit = INBOX_PAGE, now = null } = {}) {
+  const rows = db.prepare('SELECT * FROM inbox WHERE clinic_id = ? ORDER BY cursor LIMIT ?').all(clinicId, Math.min(limit, INBOX_PAGE));
+  // Отдано клинике (now — из канала клиники): уборка подождёт подтверждения (C11).
+  if (now != null && rows.length) {
+    const mark = db.prepare('UPDATE inbox SET handed_out_at = ? WHERE cursor = ?');
+    db.transaction(() => { for (const r of rows) mark.run(isoOf(now), r.cursor); })();
+  }
+  return rows
     .map((r) => {
       let data = {};
       try { data = JSON.parse(r.data); } catch { data = {}; }
@@ -2264,6 +2669,8 @@ export function inboxItems(db, clinicId, after, limit = INBOX_PAGE) {
  * POST /_sync/v1/inbox/ack {cursor, held} — клиника применила всё до курсора.
  * Элементы до курсора стираются ЦЕЛИКОМ вместе с шифротекстом (решение 16);
  * held — заявки, которые клиника держит, и до какого мгновения (решения 18–19).
+ * Заявку, которую сервер закрыл сам (not_collected / not_processed), а клиника
+ * всё же забрала и держит, held оживляет (ревью 8b, C11): клиника — правда.
  * @returns {{ok:true, deleted:number} | {error:'bad_request'}}
  */
 export function ackInbox(db, clinicId, cursor, held, now) {
@@ -2278,29 +2685,55 @@ export function ackInbox(db, clinicId, cursor, held, now) {
                                answered_at = CASE WHEN kind = 'request' THEN COALESCE(answered_at, ?) ELSE answered_at END
                              WHERE id = ? AND clinic_id = ?`);
     for (const r of delivered) mark.run(at, at, r.request_id, clinicId);
-    const hold = db.prepare(`UPDATE requests SET hold_until = ?, answered_at = COALESCE(answered_at, ?), updated_at = ?
-                             WHERE id = ? AND clinic_id = ? AND status = 'pending'`);
+    const hold = db.prepare(`UPDATE requests SET status = 'pending', reason = NULL, hold_until = ?, delivered_at = COALESCE(delivered_at, ?),
+                               answered_at = COALESCE(answered_at, ?), updated_at = ?
+                             WHERE id = ? AND clinic_id = ? AND kind = 'appointment'
+                               AND (status = 'pending' OR (status = 'closed' AND reason IN ('not_collected', 'not_processed')))`);
     for (const h of Array.isArray(held) ? held.slice(0, 1000) : []) {
       const until = msOf(h && h.hold_until);
-      if (until != null && h && typeof h.request_id === 'string') hold.run(isoOf(until), at, at, h.request_id, clinicId);
+      if (until != null && h && typeof h.request_id === 'string') hold.run(isoOf(until), at, at, at, h.request_id, clinicId);
     }
     deleted = db.prepare('DELETE FROM inbox WHERE clinic_id = ? AND cursor <= ?').run(clinicId, c).changes;
   })();
   return { ok: true, deleted };
 }
 
-/** Статус заявки по событию клиники (тело — белый список webhookBody клиники). */
+/**
+ * Статус заявки по событию клиники (тело — белый список webhookBody клиники).
+ * → {row, quiet}: quiet — уведомление партнёру не ставить: событие предлагает
+ * то, на что партнёр ответить уже не может (ревью 8b, C10).
+ */
 function applyStatus(db, clinicId, body, now) {
   const row = typeof body.request_id === 'string' ? requestRow(db, clinicId, body.request_id) : null;
-  if (!row || !PARTNER_STATUSES.includes(body.status)) return row;
+  if (!row || !PARTNER_STATUSES.includes(body.status)) return { row, quiet: false };
   const at = isoOf(now);
-  // Партнёр уже отменил, а клиника, не дойдя до отмены в очереди, отпустила время
-  // («истекло» / отказ): для партнёра заявка остаётся отменённой.
-  if (row.cancel_requested_at && row.status === 'cancelled' && ['declined', 'expired'].includes(body.status)) {
+  // Партнёр уже отменил (или отказался от другого времени), а клиника, не дойдя
+  // до этого в очереди, отпустила время («истекло» / отказ) или предложила другое
+  // (ревью 8b, C10): для партнёра заявка остаётся отменённой, время свободно.
+  // Итог клиники — записан, отменён, пришёл, не пришёл — сильнее.
+  if (row.cancel_requested_at && row.status === 'cancelled' && !CLINIC_OUTCOMES.includes(body.status)) {
     touch(db, row.id, { answered_at: row.answered_at || at }, now);
-    return row;
+    // «Другое время» или «ждёт» партнёру, который уже отменил или отказался, —
+    // без уведомления: принять его нельзя (409 not_offered). «Истекло» и отказ —
+    // уходят, как прежде: они лишь подтверждают, что время свободно.
+    return { row, quiet: ['offered', 'pending'].includes(body.status) };
   }
   const iso = (v) => { const t = msOf(v); return t == null ? null : isoOf(t); };
+  if (body.status === 'offered') {
+    // Ревью 8b, C9. Согласие партнёра ещё в очереди, а клиника предлагает
+    // снова: то же время — согласие в пути, заявка остаётся pending; другое —
+    // согласие на прежнее время снимается (клиника шлёт события раньше, чем
+    // забирает очередь), и партнёр отвечает на новое предложение.
+    const offered = iso(body.offered_start);
+    const accepts = db.prepare("SELECT cursor, data FROM inbox WHERE clinic_id = ? AND request_id = ? AND type = 'offer.accept'").all(clinicId, row.id);
+    const answered = (it) => { try { return JSON.parse(it.data).offered_start; } catch { return null; } };
+    if (row.status === 'pending' && accepts.some((it) => answered(it) === offered)) {
+      touch(db, row.id, { answered_at: row.answered_at || at }, now);
+      return { row, quiet: true };   // партнёр уже согласился на это время — второго уведомления нет
+    }
+    const drop = db.prepare('DELETE FROM inbox WHERE cursor = ?');
+    for (const it of accepts) if (answered(it) !== offered) drop.run(it.cursor);
+  }
   const fields = { status: body.status, answered_at: row.answered_at || at,
     reason: ['declined', 'expired'].includes(body.status) ? String(body.reason || '').slice(0, 32) || null : null };
   if (body.start) fields.start_at = iso(body.start) || row.start_at;
@@ -2310,7 +2743,7 @@ function applyStatus(db, clinicId, body, now) {
   else Object.assign(fields, { offered_start: null, offer_until: null });
   if (body.status !== 'pending' && body.status !== 'offered') fields.hold_until = null;
   touch(db, row.id, fields, now);
-  return requestRow(db, clinicId, row.id);
+  return { row: requestRow(db, clinicId, row.id), quiet: false };
 }
 
 const SIGNATURE_RE = /^sha256=[0-9a-f]{64}$/;
@@ -2321,26 +2754,44 @@ const SIGNATURE_RE = /^sha256=[0-9a-f]{64}$/;
  * повторяет непринятое каждый такт, так что одно отвергнутое навсегда
  * остановило бы все следующие (public-sync.js pushEvents).
  * Есть адрес и подпись клиники — уведомление встаёт в очередь доставки.
- * @returns {{accepted:number[]}}
+ *
+ * Повтор — тот же seq С ТЕМ ЖЕ содержимым (клиника повторяет непринятое байт в
+ * байт). Тот же seq с другим содержимым — новое событие: клиника восстановила
+ * свою базу из копии, и номера api_outbox пошли заново (ревью 8b, C2); иначе
+ * подтверждения, отказы и отмены после восстановления пропадали бы молча.
+ *
+ * Потолок очереди уведомлений клиники (ревью 8b, C8): ждёт доставки
+ * PENDING_PER_CLINIC_MAX — событие принимается и применяется (партнёр увидит
+ * статус в GET /requests/{id}), а уведомление пропускается и считается в queue_full.
+ * @returns {{accepted:number[], queue_full:number}}
  */
 export function applyEvents(db, clinicId, events, now) {
   const accepted = [];
+  let pending = null;
+  let queueFull = 0;
   const at = isoOf(now);
-  const seen = db.prepare('SELECT 1 FROM events_seen WHERE clinic_id = ? AND seq = ?');
+  const seen = db.prepare('SELECT identity FROM events_seen WHERE clinic_id = ? AND seq = ?');
   for (const e of Array.isArray(events) ? events.slice(0, 500) : []) {
     const seq = Number(e && e.seq);
     if (!Number.isInteger(seq) || seq <= 0) continue;
-    if (seen.get(clinicId, seq)) { accepted.push(seq); continue; }
+    const identity = crypto.createHash('sha256').update(String(e.event == null ? '' : e.event) + '\n' + (typeof e.body === 'string' ? e.body : ''))
+      .digest('hex');
+    const prev = seen.get(clinicId, seq);
+    if (prev && prev.identity === identity) { accepted.push(seq); continue; }
     db.transaction(() => {
-      db.prepare('INSERT INTO events_seen (clinic_id, seq, received_at) VALUES (?, ?, ?)').run(clinicId, seq, at);
+      db.prepare('INSERT OR REPLACE INTO events_seen (clinic_id, seq, identity, received_at) VALUES (?, ?, ?, ?)').run(clinicId, seq, identity, at);
       const raw = typeof e.body === 'string' && e.body.length <= BODY_MAX ? e.body : '';
       let body = null;
       try { body = raw ? JSON.parse(raw) : null; } catch { body = null; }
       if (!body || typeof body !== 'object' || !EVENTS.includes(e.event) || body.event !== e.event) return;
-      const row = applyStatus(db, clinicId, body, now);
+      const { row, quiet } = applyStatus(db, clinicId, body, now);
+      if (quiet) return;
       const url = String(e.webhook_url || '');
       const signature = String(e.signature || '');
       if (!url || !SIGNATURE_RE.test(signature) || webhookUrlProblem(url)) return;
+      if (pending === null) pending = pendingCount(db, clinicId);
+      if (pending >= PENDING_PER_CLINIC_MAX) { queueFull += 1; return; }
+      pending += 1;
       db.prepare(`INSERT INTO deliveries (clinic_id, connection_id, request_id, event_id, event, url, body, signature, next_at, created_at, updated_at)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(clinicId, row ? row.connection_id : null, String(body.request_id || '') || null, String(body.event_id || '').slice(0, 64), e.event,
@@ -2348,7 +2799,7 @@ export function applyEvents(db, clinicId, events, now) {
     })();
     accepted.push(seq);
   }
-  return { accepted };
+  return { accepted, queue_full: queueFull };
 }
 
 /**
@@ -2369,13 +2820,15 @@ export function closeOverdue(db, now, { uncollectedMaxMs = UNCOLLECTED_MAX_MS } 
                                  AND hold_until IS NULL AND delivered_at <= ?`).run(at, isoOf(now - ANSWER_TIMEOUT_MS)).changes;
     // plainBefore не позже sealedBefore (срок без данных — не короче), поэтому
     // кандидаты — всё, что старше sealedBefore.
-    const old = db.prepare('SELECT cursor, clinic_id, type, request_id, received_at FROM inbox WHERE received_at <= ?').all(sealedBefore);
+    const old = db.prepare('SELECT cursor, clinic_id, type, request_id, received_at, handed_out_at FROM inbox WHERE received_at <= ?').all(sealedBefore);
+    const handedSince = isoOf(now - HANDED_OUT_GRACE_MS);
     const close = db.prepare(`UPDATE requests SET status = 'closed', reason = 'not_collected', updated_at = ?
                               WHERE id = ? AND clinic_id = ? AND status IN ('new', 'pending')`);
     const del = db.prepare('DELETE FROM inbox WHERE cursor = ?');
     for (const it of old) {
       if (NEW_TYPES.includes(it.type)) {
         if (it.received_at > sealedBefore) continue;
+        if (it.handed_out_at && it.handed_out_at > handedSince) continue;   // клиника забрала и подтверждает (C11)
         notCollected += close.run(at, it.request_id, it.clinic_id).changes;
       } else if (it.received_at > plainBefore) continue;
       del.run(it.cursor);
@@ -2414,11 +2867,14 @@ export function purgeRequests(db, now) {
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { syncRouter } from './sync.js';
 import { createRequest } from '../store/requests.js';
 import { clinicRow } from '../store/clinics.js';
 import { recordAccess } from '../store/logs.js';
-import { testDb, testVendor, testClinic, serve, syncCall, NOW } from '../test-helpers/fixture.js';
+import { PENDING_PER_CLINIC_MAX } from '../store/deliveries.js';
+import { testDb, testVendor, testClinic, serve, syncCall, signedHeaders, NOW } from '../test-helpers/fixture.js';
+import { MEDIA_QUOTA_FILES } from '../store/media.js';
 import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { openSealed } from '../../../server/services/api/sync-identity.js';
 import { isoOf } from '../lib/time.js';
@@ -2512,6 +2968,78 @@ test('только https: без него канал не открывается
   const r = await syncCall(s.base, c, 'GET', '/_sync/v1/inbox?after=', undefined, { time });
   assert.deepEqual([r.status, r.json.error.code], [400, 'https_required']);
 });
+
+// Ревью 8b, C1: тело читается только после проверки заголовков (лицензия,
+// отпечаток ключа, часы, состояние лицензии), сжатое тело не распаковывается
+// (415), предел тела — свой у каждого адреса.
+test('C1: до проверки заголовков тело не читается — чужой не заставит распаковывать и держать мегабайты', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const c = testClinic(vendor);
+  const big = Buffer.alloc(5 * 1024 * 1024, 0x20);
+  const plain = await fetch(s.base + '/_sync/v1/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: big });
+  assert.equal(plain.status, 401, 'без подписи — 401, а не 413: тело не читали');
+  const bomb = zlib.gzipSync(big);
+  const gz = await fetch(s.base + '/_sync/v1/events', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' }, body: bomb });
+  assert.equal(gz.status, 401, 'сжатое без подписи — 401 до распаковки');
+  const late = signedHeaders(c, { method: 'POST', path: '/_sync/v1/events', body: big, time: isoOf(NOW - 3600000) });
+  const skew = await fetch(s.base + '/_sync/v1/events', { method: 'POST', headers: late, body: big });
+  assert.deepEqual([skew.status, (await skew.json()).error.code], [401, 'clock_skew']);
+  const lapsed = testClinic(vendor, { clinicId: 'c-000779', validUntil: '2030-03-01T00:00:00Z' });
+  const lh = signedHeaders(lapsed, { method: 'POST', path: '/_sync/v1/events', body: big, time });
+  const l = await fetch(s.base + '/_sync/v1/events', { method: 'POST', headers: lh, body: big });
+  assert.deepEqual([l.status, (await l.json()).error.code], [503, 'licence_lapsed']);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM clinics').get().n, 0, 'до проверки подписи клиника не записывается');
+});
+
+test('C1: сжатое тело клиники — 415 без распаковки; предел тела — свой у адреса', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const c = testClinic(vendor);
+  const raw = zlib.gzipSync(Buffer.from(JSON.stringify({ events: [] })));
+  const h = { ...signedHeaders(c, { method: 'POST', path: '/_sync/v1/events', body: raw, time }), 'Content-Encoding': 'gzip' };
+  const gz = await fetch(s.base + '/_sync/v1/events', { method: 'POST', headers: h, body: raw });
+  assert.deepEqual([gz.status, (await gz.json()).error.code], [415, 'unsupported_encoding']);
+  const pad = 'x'.repeat(1536 * 1024);
+  const events = await syncCall(s.base, c, 'POST', '/_sync/v1/events', { events: [], pad }, { time });
+  assert.deepEqual([events.status, events.json.error.code], [413, 'too_large'], 'события — до 1 МБ');
+  const snap = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: pad } };
+  assert.deepEqual((await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', snap, { time })).json, { ok: true }, 'снимок — до 2 МБ');
+  const huge = { ...snapshot('shifo'), clinic: { name: { ru: 'Шифо' }, about: 'x'.repeat(2304 * 1024) } };
+  const tooBig = await syncCall(s.base, c, 'PUT', '/_sync/v1/snapshot', huge, { time });
+  assert.deepEqual([tooBig.status, tooBig.json.error.code], [413, 'too_large'], 'ревью 8b, C5: снимок больше 2 МБ — 413');
+});
+
+test('ревью 8b, C8: очередь уведомлений клиники полна — ответ протокола прежний ({accepted}), пропуск считается', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const c = testClinic(vendor);
+  await syncCall(s.base, c, 'PUT', '/_sync/v1/keys', keys(c), { time });
+  s.db.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+                INSERT INTO deliveries (clinic_id, event_id, event, url, body, signature, next_at, created_at, updated_at)
+                SELECT ?, 'ev_' || i, 'booking.confirmed', 'https://med24.uz/h', '{}', 's', ?, ?, ? FROM n`)
+    .run(PENDING_PER_CLINIC_MAX, c.clinicId, time, time, time);
+  const body = JSON.stringify({ event_id: 'ev_x', event: 'booking.confirmed', request_id: 'rq_nonexistent00', status: 'booked' });
+  const r = await syncCall(s.base, c, 'POST', '/_sync/v1/events', { events: [{ seq: 7, event: 'booking.confirmed', status: 'booked', body,
+    webhook_url: 'https://med24.uz/hooks', signature: 'sha256=' + 'a'.repeat(64) }] }, { time });
+  assert.deepEqual(r.json, { accepted: [7] });
+  assert.equal(s.ctx.counters.queue_full, 1);
+});
+
+test('ревью 8b, C7: потолок файлов клиники — 409 media_quota (клиника 8a показывает код), файл не пишется', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const c = testClinic(vendor);
+  await syncCall(s.base, c, 'PUT', '/_sync/v1/keys', keys(c), { time });
+  s.db.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+                INSERT INTO media (clinic_id, sha256, ext, bytes, stored_at) SELECT ?, printf('%064x', i), 'png', 10, ? FROM n`)
+    .run(MEDIA_QUOTA_FILES, c.clinicId, time);
+  const png = fakePng(12, 12);
+  const sha = crypto.createHash('sha256').update(png).digest('hex');
+  const r = await syncCall(s.base, c, 'PUT', '/_sync/v1/media/' + sha + '.png', png, { time, type: 'image/png' });
+  assert.deepEqual([r.status, r.json.error.code], [409, 'media_quota']);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM media WHERE sha256 = ?').get(sha).n, 0);
+});
 ```
 
 - [ ] **Step 2:** `node --test public-server/server/routes/sync.http.test.js` → падает: `ERR_MODULE_NOT_FOUND` (`routes/sync.js`).
@@ -2539,19 +3067,31 @@ test('только https: без него канал не открывается
 // (попытки доставки уведомлений); last_used — «последний запрос» подключений.
 //
 // ТЕЛО ЧИТАЕТСЯ СЫРЫМ: подпись клиники — от sha256 точных байтов тела, поэтому
-// сначала байты (express.raw, не больше 4 МБ), потом проверка, потом разбор.
+// сначала байты (express.raw), потом подпись, потом разбор.
+//
+// ПОРЯДОК (ревью 8b, C1): потолок по IP → https → заголовки без тела (лицензия
+// производителя, отпечаток ключа, часы — clinic-auth.js verifyClinicHeaders;
+// устаревшая и истёкшая лицензия — store/clinics.js admissionOf, без записи) →
+// тело → подпись → запись клиники. Сжатое тело не распаковывается (415):
+// клиника 8a не сжимает, а распаковка до проверки делала из 4 КБ gzip 4 МБ в
+// памяти. Предел тела — свой у адреса: снимку и времени — 2 МБ (ревью 8b, C5:
+// большая клиника укладывается с запасом; списки ограничены store/clinics.js
+// SNAPSHOT_LIMITS), файлу — 2 МБ, остальному — 1 МБ.
 import express from 'express';
-import { verifyClinicRequest } from '../clinic-auth.js';
+import { verifyClinicHeaders, verifyClinicSignature } from '../clinic-auth.js';
 import { licenceStanding } from '../licence-gate.js';
-import { admitClinic, saveKeys, saveSnapshot, saveSlots } from '../store/clinics.js';
-import { missingMedia, putMedia } from '../store/media.js';
+import { admitClinic, admissionOf, saveKeys, saveSnapshot, saveSlots } from '../store/clinics.js';
+import { missingMedia, putMedia, MEDIA_MAX_BYTES } from '../store/media.js';
 import { inboxItems, ackInbox, applyEvents } from '../store/requests.js';
 import { accessSince, deliveryLogSince } from '../store/logs.js';
 import { sendError } from '../lib/errors.js';
 
 export const SYNC_LIMIT_PER_MIN = 600;
-const BODY_LIMIT = '4mb';
 const MEDIA_RE = /^([0-9a-f]{64})\.([a-z]{3,4})$/;
+const raw = (limit) => express.raw({ type: () => true, limit, inflate: false });
+export const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
+const BODY = { big: raw(SNAPSHOT_MAX_BYTES), media: raw(MEDIA_MAX_BYTES), small: raw('1mb') };
+const bodyFor = (p) => (/^\/(?:snapshot|slots)\/?$/.test(p) ? BODY.big : /^\/media\/[^/]+$/.test(p) ? BODY.media : BODY.small);
 
 /**
  * @param {{db, dataDir:string, now:()=>number, licencePublicKey?:object|null, skewMs?:number, requireHttps?:boolean,
@@ -2559,6 +3099,8 @@ const MEDIA_RE = /^([0-9a-f]{64})\.([a-z]{3,4})$/;
  */
 export function syncRouter(ctx) {
   const r = express.Router();
+  // Пропущенные уведомления (очередь клиники полна — ревью 8b, C8): только счётчик для /_metrics.
+  if (!ctx.counters) ctx.counters = { queue_full: 0 };
   // Потолок по IP — ДО чтения тела: чужой без подписи не заставит сервер
   // принимать мегабайты в память раз за разом.
   r.use((req, res, next) => {
@@ -2567,14 +3109,23 @@ export function syncRouter(ctx) {
     const hit = ctx.limiter.hit('syncip:' + ip, SYNC_LIMIT_PER_MIN, ctx.now());
     return hit.ok ? next() : sendError(req, res, 'rate_limited', {}, { 'Retry-After': hit.retryAfterSec });
   });
-  r.use(express.raw({ type: () => true, limit: BODY_LIMIT }));
   r.use((req, res, next) => {
     if (ctx.requireHttps && !req.secure) return sendError(req, res, 'https_required');
     const now = ctx.now();
-    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    const auth = verifyClinicRequest({ method: req.method, url: req.originalUrl, headers: req.headers, body },
-      { licencePublicKey: ctx.licencePublicKey || null, now, skewMs: ctx.skewMs });
+    const auth = verifyClinicHeaders({ headers: req.headers }, { licencePublicKey: ctx.licencePublicKey || null, now, skewMs: ctx.skewMs });
     if (!auth.ok) return sendError(req, res, auth.code, auth.server_time ? { server_time: auth.server_time } : {});
+    const pre = admissionOf(ctx.db, auth);
+    if (!pre.ok) return sendError(req, res, pre.code);
+    if (licenceStanding(pre.licence, now) === 'lapsed') return sendError(req, res, 'licence_lapsed');
+    req.clinicAuth = auth;
+    return next();
+  });
+  r.use((req, res, next) => bodyFor(req.path)(req, res, next));
+  r.use((req, res, next) => {
+    const now = ctx.now();
+    const auth = req.clinicAuth;
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!verifyClinicSignature({ method: req.method, url: req.originalUrl, headers: req.headers, body })) return sendError(req, res, 'invalid_signature');
     const adm = admitClinic(ctx.db, auth, now);
     if (!adm.ok) return sendError(req, res, adm.code);
     if (licenceStanding(adm.clinic, now) === 'lapsed') return sendError(req, res, 'licence_lapsed');
@@ -2606,10 +3157,14 @@ export function syncRouter(ctx) {
     const out = putMedia(ctx.db, ctx.dataDir, req.clinic.clinic_id, m[1], m[2], req.raw, ctx.now());
     return out.error ? sendError(req, res, out.error) : res.json({ ok: true });
   });
-  r.post('/events', withJson((req, body, now) => ({ payload: applyEvents(ctx.db, req.clinic.clinic_id, body.events, now) })));
+  r.post('/events', withJson((req, body, now) => {
+    const out = applyEvents(ctx.db, req.clinic.clinic_id, body.events, now);
+    if (out.queue_full) ctx.counters.queue_full = (ctx.counters.queue_full || 0) + out.queue_full;
+    return { payload: { accepted: out.accepted } };   // ответ протокола — как у поддельного сервера 8a
+  }));
   r.get('/inbox', (req, res) => {
     const id = req.clinic.clinic_id;
-    const out = { items: inboxItems(ctx.db, id, req.query.after) };
+    const out = { items: inboxItems(ctx.db, id, req.query.after, { now: ctx.now() }) };
     out.last_used = Object.fromEntries(ctx.db.prepare('SELECT id, last_used_at FROM connections WHERE clinic_id = ? AND last_used_at IS NOT NULL')
       .all(id).map((c) => [String(c.id), c.last_used_at]));
     if (req.query.access_after !== undefined) out.access = accessSince(ctx.db, id, req.query.access_after);
@@ -3239,7 +3794,7 @@ test('настоящая отправка фона: адрес самой маш
 // попыток для клиники.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deliverDue, purgeDeliveries, RETRY_MINUTES } from './deliveries.js';
+import { deliverDue, purgeDeliveries, RETRY_MINUTES, createHostBreaker, pendingCount, PENDING_PER_CLINIC_MAX } from './deliveries.js';
 import { applyEvents } from './requests.js';
 import { admitClinic } from './clinics.js';
 import { deliveryLogSince } from './logs.js';
@@ -3312,6 +3867,88 @@ test('уборка: законченные старше 30 дней', async () =
   await deliverDue(s.db, { now: NOW, send: async () => ({ status: 204 }) });
   assert.equal(purgeDeliveries(s.db, NOW + 29 * 86400000), 0);
   assert.equal(purgeDeliveries(s.db, NOW + 31 * 86400000), 1);
+});
+
+// ── Честная очередь (проверка 8b, C8): зависший адрес не держит чужие уведомления ──
+const TARPIT = 'https://hooks.tarpit.uz/h';
+const HEALTHY = 'https://med24.uz/hooks';
+const later = (ms) => new Promise((r) => setTimeout(r, ms));
+function queue(db, clinicId, url, n, from) {
+  const ins = db.prepare(`INSERT INTO deliveries (clinic_id, connection_id, event_id, event, url, body, signature, next_at, created_at, updated_at)
+                          VALUES (?, 1, ?, 'booking.declined', ?, '{}', ?, ?, ?, ?)`);
+  for (let i = 0; i < n; i += 1) ins.run(clinicId, clinicId + '-' + url.length + '-' + from + '-' + i, url, SIG, isoOf(from + i), isoOf(NOW), isoOf(NOW));
+}
+function tarpitSend(sent) {
+  return async ({ url }) => {
+    sent.push(url);
+    if (url === TARPIT) { await later(30); return { status: 0, error: 'timeout' }; }
+    return { status: 200 };
+  };
+}
+
+test('честная очередь: 40 уведомлений одной клиники на зависший адрес не задерживают другую клинику — та же волна', async () => {
+  const { db } = testDb();
+  queue(db, 'c-a', TARPIT, 40, NOW - 60000);
+  queue(db, 'c-b', HEALTHY, 1, NOW - 1000);
+  const sent = [];
+  const r = await deliverDue(db, { now: NOW, send: tarpitSend(sent), breaker: createHostBreaker() });
+  assert.ok(sent.includes(HEALTHY), 'чужая клиника — в первой же волне');
+  assert.equal(sent.filter((u) => u === TARPIT).length, 1, 'на зависший адрес — одна настоящая отправка');
+  assert.deepEqual(r, { attempts: 3, delivered: 1, failed: 0, retrying: 2 });
+  assert.deepEqual(db.prepare("SELECT last_error AS e FROM deliveries WHERE url = ? AND attempts = 1 ORDER BY id").all(TARPIT).map((x) => x.e),
+    ['timeout', 'host_down'], 'второе на тот же адрес — без отправки, попытка засчитана');
+});
+
+test('честная очередь внутри клиники: её же другой партнёр не ждёт, пока разберётся зависший', async () => {
+  const { db } = testDb();
+  queue(db, 'c-a', TARPIT, 30, NOW - 60000);
+  queue(db, 'c-a', HEALTHY, 1, NOW - 1000);
+  const sent = [];
+  await deliverDue(db, { now: NOW, send: tarpitSend(sent), breaker: createHostBreaker() });
+  assert.ok(sent.includes(HEALTHY));
+});
+
+test('отказавший адрес отдыхает минуту без отправок, его попытки идут своим чередом; потом снова пробуем', async () => {
+  const { db } = testDb();
+  queue(db, 'c-a', TARPIT, 10, NOW - 60000);
+  const breaker = createHostBreaker();
+  const sent = [];
+  await deliverDue(db, { now: NOW, send: tarpitSend(sent), breaker });
+  assert.equal(sent.length, 1);
+  const r2 = await deliverDue(db, { now: NOW + 5000, send: tarpitSend(sent), breaker });
+  assert.equal(sent.length, 1, 'через 5 секунд — ни одной отправки на отказавший адрес');
+  assert.equal(r2.attempts, 8, 'все подошедшие строки отдыхающего хоста — попыткой без отправки, по своему расписанию, а не по две за волну');
+  await deliverDue(db, { now: NOW + 61000, send: tarpitSend(sent), breaker });
+  assert.equal(sent.length, 2, 'через минуту — снова одна настоящая попытка');
+});
+
+test('одновременно — не больше четырёх отправок и не больше одной на адрес; волна берёт всех по очереди', async () => {
+  const { db } = testDb();
+  for (let h = 0; h < 10; h += 1) queue(db, 'c-' + h, 'https://h' + h + '.partner.uz/x', 2, NOW - 60000 + h);
+  let now = 0;
+  let peak = 0;
+  let hostPeak = 0;
+  const per = new Map();
+  const send = async ({ url }) => {
+    now += 1; peak = Math.max(peak, now);
+    per.set(url, (per.get(url) || 0) + 1); hostPeak = Math.max(hostPeak, per.get(url));
+    await later(5);
+    now -= 1; per.set(url, per.get(url) - 1);
+    return { status: 200 };
+  };
+  const r = await deliverDue(db, { now: NOW, send, breaker: createHostBreaker() });
+  assert.equal(r.delivered, 20);
+  assert.equal(peak, 4);
+  assert.equal(hostPeak, 1);
+});
+
+test('для приёма событий: сколько у клиники ждёт доставки, и потолок очереди', () => {
+  const { db } = testDb();
+  queue(db, 'c-a', HEALTHY, 3, NOW);
+  queue(db, 'c-b', HEALTHY, 1, NOW);
+  db.prepare("UPDATE deliveries SET state = 'delivered' WHERE id = 1").run();
+  assert.equal(pendingCount(db, 'c-a'), 2);
+  assert.ok(PENDING_PER_CLINIC_MAX >= 1000);
 });
 ```
 
@@ -3403,6 +4040,20 @@ export function makeSender({ selfIps = [], timeoutMs = WEBHOOK_TIMEOUT_MS, resol
 //   • тело уведомления стирается, как только доставка кончилась: хранить его
 //     дальше незачем (в нём нет данных пациента, но и пользы нет).
 // Каждая попытка — строка журнала доставок для клиники (8d: вкладка «Уведомления»).
+//
+// ЧЕСТНАЯ ОЧЕРЕДЬ (проверка 8b, C8). Один зависший адрес партнёра (10 секунд
+// на попытку) не должен задерживать уведомления остальных — иначе «другое
+// время» другой клиники доходит позже, чем на него можно ответить (30 минут):
+//   • волна берёт подошедшие строки по кругу: сначала первую строку каждой пары
+//     «клиника — адрес», потом вторую…; на один хост — не больше
+//     PER_HOST_PER_WAVE строк в волне;
+//   • отправки идут непрерывно, до PARALLEL одновременно и не больше одной на
+//     хост — медленный хост занимает один поток, а не всю волну;
+//   • хост, не ответивший соединением (timeout, connect, tls, DNS, запрещённый
+//     адрес), отдыхает HOST_BACKOFF_MS: его подошедшие строки получают попытку
+//     «host_down» без отправки и ждут своего следующего срока, как после неудачи;
+//   • сколько у клиники ждёт доставки — pendingCount: потолок очереди клиники
+//     (PENDING_PER_CLINIC_MAX) держит приём событий (store/requests.js applyEvents).
 import { appendDeliveryLog } from './logs.js';
 import { checkWebhookUrl } from '../lib/webhook-send.js';
 import { isoOf } from '../lib/time.js';
@@ -3410,6 +4061,46 @@ import { isoOf } from '../lib/time.js';
 export const RETRY_MINUTES = Object.freeze([1, 5, 10, 30, 60]);
 export const MAX_ATTEMPTS = RETRY_MINUTES.length + 1;
 export const DELIVERY_KEEP_MS = 30 * 86400000;
+export const WAVE_LIMIT = 20;
+export const PARALLEL = 4;
+export const PER_HOST_PER_WAVE = 2;
+export const HOST_BACKOFF_MS = 60000;
+export const PENDING_PER_CLINIC_MAX = 2000;
+const CANDIDATES = 400;
+const DOWN_PER_WAVE = 200;
+const HOST_DOWN_ERRORS = new Set(['timeout', 'connect', 'tls', 'dns_failed', 'no_address', 'blocked_address']);
+
+/** Хост адреса уведомления в нижнем регистре; негодный адрес — ''. */
+export function hostOf(url) {
+  try { return new URL(String(url)).hostname.toLowerCase(); } catch { return ''; }
+}
+
+/** Отдых отказавших хостов: хост → до какого мгновения не слать. Не больше max хостов. */
+export function createHostBreaker({ backoffMs = HOST_BACKOFF_MS, max = 10000 } = {}) {
+  const down = new Map();
+  return {
+    isDown(host, now) {
+      const until = down.get(host);
+      if (until === undefined) return false;
+      if (until > now) return true;
+      down.delete(host);
+      return false;
+    },
+    trip(host, now) {
+      if (!host) return;
+      down.delete(host);
+      if (down.size >= max) down.delete(down.keys().next().value);
+      down.set(host, now + backoffMs);
+    },
+    size: () => down.size,
+  };
+}
+const processBreaker = createHostBreaker();
+
+/** Сколько уведомлений клиники ждёт доставки (для потолка очереди при приёме событий). */
+export function pendingCount(db, clinicId) {
+  return db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE clinic_id = ? AND state = 'pending'").get(clinicId).n;
+}
 
 function record(db, d, r, now, out) {
   const attempt = d.attempts + 1;
@@ -3431,27 +4122,80 @@ function record(db, d, r, now, out) {
 }
 
 /**
- * Одна волна доставки: подошедшие по времени, не больше limit, по parallel
- * одновременно. send({url, headers, body}) → {status, error?} (lib/webhook-send.js
- * makeSender в работе; в тестах — подделка).
+ * Строки волны: по кругу пар «клиника — адрес», не больше perHost на хост, не
+ * больше limit. Строки отдыхающего хоста отправки не стоят — они идут сверх
+ * limit (до DOWN_PER_WAVE) и получают попытку «host_down» в свой срок, а не
+ * отстают от расписания 1/5/10/30/60.
+ */
+function pickWave(db, now, limit, perHost, breaker) {
+  const candidates = db.prepare(`SELECT id, url FROM (
+                                   SELECT id, url, next_at, ROW_NUMBER() OVER (PARTITION BY clinic_id, url ORDER BY next_at, id) AS rn
+                                   FROM deliveries WHERE state = 'pending' AND next_at <= ?)
+                                 WHERE rn <= ? ORDER BY rn, next_at, id LIMIT ?`).all(isoOf(now), limit, CANDIDATES);
+  const perHostCount = new Map();
+  const ids = [];
+  const down = [];
+  for (const c of candidates) {
+    const h = hostOf(c.url);
+    if (h && breaker.isDown(h, now)) { if (down.length < DOWN_PER_WAVE) down.push(c.id); continue; }
+    const n = perHostCount.get(h) || 0;
+    if (n >= perHost || ids.length >= limit) continue;
+    perHostCount.set(h, n + 1);
+    ids.push(c.id);
+  }
+  const get = db.prepare('SELECT * FROM deliveries WHERE id = ?');
+  return [...ids, ...down].map((id) => get.get(id)).filter(Boolean);
+}
+
+/**
+ * Одна волна доставки (честная очередь — см. начало файла). send({url, headers,
+ * body}) → {status, error?} (lib/webhook-send.js makeSender в работе; в тестах —
+ * подделка). breaker — отдых хостов между волнами (по умолчанию — один на процесс).
  * @returns {Promise<{attempts:number, delivered:number, failed:number, retrying:number}>}
  */
-export async function deliverDue(db, { now = Date.now(), send, limit = 20, parallel = 4 } = {}) {
-  const due = db.prepare("SELECT * FROM deliveries WHERE state = 'pending' AND next_at <= ? ORDER BY next_at, id LIMIT ?").all(isoOf(now), limit);
+export async function deliverDue(db, { now = Date.now(), send, limit = WAVE_LIMIT, parallel = PARALLEL, perHost = PER_HOST_PER_WAVE,
+  breaker = processBreaker } = {}) {
+  const wave = pickWave(db, now, limit, perHost, breaker).map((d) => ({ d, host: hostOf(d.url) }));
   const out = { attempts: 0, delivered: 0, failed: 0, retrying: 0 };
-  const one = async (d) => {
+  const one = async ({ d, host }) => {
     if (checkWebhookUrl(d.url)) return { status: 0, error: 'bad_url' };
+    if (breaker.isDown(host, now)) return { status: 0, error: 'host_down' };
+    let r;
     try {
-      return await send({ url: d.url, body: d.body || '', headers: {
+      r = await send({ url: d.url, body: d.body || '', headers: {
         'Content-Type': 'application/json', 'X-EasyMed-Signature': d.signature, 'X-EasyMed-Event': d.event, 'X-EasyMed-Event-Id': d.event_id,
       } });
-    } catch { return { status: 0, error: 'send_failed' }; }
+    } catch { r = null; }
+    if (!r || typeof r !== 'object') return { status: 0, error: 'send_failed' };
+    if (!Number(r.status) && HOST_DOWN_ERRORS.has(r.error)) breaker.trip(host, now);
+    return r;
   };
-  for (let i = 0; i < due.length; i += parallel) {
-    const batch = due.slice(i, i + parallel);
-    const results = await Promise.all(batch.map(one));
-    batch.forEach((d, k) => record(db, d, results[k] || { status: 0, error: 'send_failed' }, now, out));
-  }
+  // Непрерывный пул: до parallel отправок сразу, на один хост — по одной.
+  // Сбой записи в базу (база закрыта) — отказ всей волны, как раньше, а не
+  // необработанное исключение: такт фона его ловит (jobs.js).
+  await new Promise((resolve, reject) => {
+    const busy = new Set();
+    let active = 0;
+    let failure = null;
+    const pump = () => {
+      if (failure) { if (!active) reject(failure); return; }
+      if (!wave.length && !active) { resolve(); return; }
+      while (active < parallel) {
+        const i = wave.findIndex((w) => !busy.has(w.host));
+        if (i < 0) break;
+        const w = wave.splice(i, 1)[0];
+        active += 1;
+        busy.add(w.host);
+        one(w).catch(() => ({ status: 0, error: 'send_failed' })).then((r) => {
+          try { record(db, w.d, r, now, out); } catch (e) { failure = failure || e; }
+          active -= 1;
+          busy.delete(w.host);
+          pump();
+        });
+      }
+    };
+    pump();
+  });
   return out;
 }
 
@@ -3586,6 +4330,7 @@ import { admitClinic, saveSnapshot, clinicRow } from '../store/clinics.js';
 import { putMedia } from '../store/media.js';
 import { fakePng } from '../../../server/test-helpers/fake-png.js';
 import { isoOf } from '../lib/time.js';
+import { createLimiter } from '../lib/rate-limit.js';
 
 const json = async (res) => ({ status: res.status, body: await res.json(), headers: res.headers });
 
@@ -3691,6 +4436,24 @@ test('лимит ключа: сверх rate_limit в минуту — 429 с Re
   assert.equal(last.status, 429, 'перебор ключей с одного адреса');
 });
 
+test('CORS: Retry-After виден браузеру; 429 потолка по IP — с CORS только для сайта, уже получавшего ответ по этому имени', async (t) => {
+  const real = createLimiter();
+  let ipBlocked = false;
+  const limiter = { hit: (k, lim, now) => (ipBlocked && k.startsWith('ip:') ? { ok: false, retryAfterSec: 9 } : real.hit(k, lim, now)), sweep: real.sweep };
+  const s = await partnerStand({ limiter, connection: { rate_limit: 1 } });
+  t.after(s.close);
+  const site = { Origin: 'https://med24.uz' };
+  const hdr = (r) => [r.status, r.headers.get('access-control-allow-origin'), r.headers.get('access-control-expose-headers'), r.headers.get('retry-after')];
+  assert.deepEqual(hdr(await s.get('/shifo/v1/clinic', { headers: site })), [200, 'https://med24.uz', 'Retry-After', null]);
+  const keyLimit = hdr(await s.get('/shifo/v1/clinic', { headers: site }));
+  assert.deepEqual(keyLimit.slice(0, 3), [429, 'https://med24.uz', 'Retry-After']);
+  assert.ok(Number(keyLimit[3]) >= 1);
+  ipBlocked = true;
+  assert.deepEqual(hdr(await s.get('/shifo/v1/clinic', { headers: site })), [429, 'https://med24.uz', 'Retry-After', '9'], 'потолок по IP — браузер читает Retry-After');
+  assert.deepEqual(hdr(await s.get('/shifo/v1/clinic', { headers: { Origin: 'https://evil.example' } })).slice(0, 2), [429, null]);
+  assert.deepEqual(hdr(await s.get('/nikto/v1/clinic', { headers: site })).slice(0, 2), [429, null], 'имя без подтверждённого сайта — без CORS: перебор имён ничего не узнаёт');
+});
+
 test('503: «не оплачено» в лицензии, срок вышел, клиника молчит 7 суток — «временно недоступна» с телефоном клиники', async (t) => {
   const s = await partnerStand();
   t.after(s.close);
@@ -3744,6 +4507,18 @@ test('журнал запросов: известный путь и параме
   assert.ok(s.db.prepare('SELECT last_used_at FROM connections').get().last_used_at, '«последний запрос» отмечен');
 });
 
+test('журнал запросов не растёт от отказов: 429 — только счётчик; без ключа — только 401, не больше лимита неверных ключей', async (t) => {
+  const s = await partnerStand({ connection: { rate_limit: 2 } });
+  t.after(s.close);
+  for (let i = 0; i < 3; i += 1) await (await s.get('/shifo/v1/clinic')).arrayBuffer();
+  for (let i = 0; i < 40; i += 1) await (await s.get('/shifo/v1/clinic', { auth: false })).arrayBuffer();
+  const rows = s.db.prepare('SELECT connection_id, status FROM access_log ORDER BY id').all();
+  assert.deepEqual(rows.filter((r) => r.connection_id === 3).map((r) => r.status), [200, 200], 'третий запрос ключа — 429, строки нет');
+  assert.equal(rows.filter((r) => r.connection_id === null).length, 30, 'без ключа — 30 строк 401 в минуту с IP, дальше 429 без строк');
+  assert.ok(rows.every((r) => r.status !== 429));
+  assert.equal(s.ctx.accessJournal.stats().rate_limited, 11);
+});
+
 test('только https: за nginx — X-Forwarded-Proto: https; иначе 400', async (t) => {
   const s = await partnerStand({ requireHttps: true, trustProxy: 'loopback' });
   t.after(s.close);
@@ -3780,13 +4555,16 @@ test('только https: за nginx — X-Forwarded-Proto: https; иначе 40
 //   8. права раздела — 403 forbidden_scope.
 // Журнал запросов (30 дней): путь — по списку известных адресов, параметры — по
 // списку и по виду значения; присланного сверх этого в журнал не попадает.
-import { KEY_RE } from '../../../public/js/shared/api-connections.js';
+// Что вообще становится строкой (429 — нет, без ключа — только 401, потолки в
+// сутки и всего) — store/access-journal.js (проверка 8b, C6).
+import { KEY_RE, normalizeSlug } from '../../../public/js/shared/api-connections.js';
 import { API_GROUPS } from '../../../public/js/shared/service-public.js';
 import { GEO_REGION_CODES, GEO_DISTRICT_CODES } from '../../../public/js/shared/geo-codes.js';
 import { SPECIALTY_ROWS } from '../../../public/js/shared/specialty-list.js';
 import { keyHash } from '../../../server/services/api/secret-box.js';
 import { resolveSlug, connectionByHash, originAllowedForClinic, markUsed, snapshotOf } from '../store/clinics.js';
 import { recordAccess } from '../store/logs.js';
+import { createAccessJournal } from '../store/access-journal.js';
 import { licenceStanding } from '../licence-gate.js';
 import { ipAllowed, clientIp } from '../lib/net-guard.js';
 import { sendError } from '../lib/errors.js';
@@ -3824,32 +4602,67 @@ export function logPath(slug, req) {
   return '/' + slug + '/v1' + known + (q.length ? '?' + q.join('&') : '');
 }
 
+// CORS (проверка 8b, C12): Retry-After — не «простой» заголовок ответа, без
+// Access-Control-Expose-Headers скрипт сайта его не прочтёт. 429 потолка по IP
+// отвечает ДО поиска клиники (иначе перебор имён шёл бы без лимита), поэтому
+// сайт на нём узнаётся только по памяти: этому сайту по этому имени уже
+// отвечали с CORS за последние CORS_SEEN_MS. Новое имя или чужой сайт — без
+// CORS: перебор имён по заголовкам ничего не узнаёт.
+export const CORS_SEEN_MS = 10 * 60000;
+const CORS_SEEN_MAX = 5000;
+function corsHeaders(res, origin) {
+  res.set('Access-Control-Allow-Origin', origin);
+  res.set('Access-Control-Expose-Headers', 'Retry-After');
+  res.set('Vary', 'Origin');
+}
+function seenOrigins() {
+  const seen = new Map();
+  return {
+    has: (k, now) => (seen.get(k) || 0) > now,
+    add(k, now) {
+      seen.delete(k);
+      if (seen.size >= CORS_SEEN_MAX) seen.delete(seen.keys().next().value);
+      seen.set(k, now + CORS_SEEN_MS);
+    },
+  };
+}
+
 const phoneOf = (clinic) => { const s = snapshotOf(clinic); return String((s && s.clinic && s.clinic.phone) || ''); };
 
 /** Потолок по IP, клиника по имени в адресе, https, состояние клиники, журнал запросов. */
 export function clinicGate(ctx) {
+  // Один на приложение: счётчики пропущенного — для наблюдения (ctx.accessJournal.stats()).
+  const journal = ctx.accessJournal || (ctx.accessJournal = createAccessJournal());
+  const corsSeen = seenOrigins();
   return (req, res, next) => {
     const now = ctx.now();
     req.ipAddr = clientIp(req.ip);
+    const origin = req.get('origin');
+    const seenKey = normalizeSlug(req.params.slug) + ' ' + origin;
     // Потолок — до поиска клиники: перебор имён в адресе тоже упирается в лимит.
     if (ctx.limiter) {
       const hit = ctx.limiter.hit('ip:' + req.ipAddr, IP_LIMIT_PER_MIN, now);
-      if (!hit.ok) return sendError(req, res, 'rate_limited', {}, { 'Retry-After': hit.retryAfterSec });
+      if (!hit.ok) {
+        if (origin && corsSeen.has(seenKey, now)) corsHeaders(res, origin);
+        return sendError(req, res, 'rate_limited', {}, { 'Retry-After': hit.retryAfterSec });
+      }
     }
     const clinic = resolveSlug(ctx.db, req.params.slug, now);
     if (!clinic) return sendError(req, res, 'clinic_not_found');
     req.clinic = clinic;
-    const origin = req.get('origin');
     if (origin && originAllowedForClinic(ctx.db, clinic.clinic_id, origin)) {
-      res.set('Access-Control-Allow-Origin', origin);
-      res.set('Vary', 'Origin');
+      corsHeaders(res, origin);
+      corsSeen.add(seenKey, now);
     }
     if (req.method !== 'OPTIONS' && !/^\/media\//.test(req.path)) {
       const t0 = Date.now();
       const path = logPath(clinic.slug, req);   // сейчас, пока путь — внутри маршрутизатора
       res.on('finish', () => {
         try {
-          recordAccess(ctx.db, { clinicId: clinic.clinic_id, connectionId: req.conn ? req.conn.id : null, at: isoOf(ctx.now()),
+          const connectionId = req.conn ? req.conn.id : null;
+          const at = ctx.now();
+          if (!journal.admit(ctx.db, { clinicId: clinic.clinic_id, connectionId, status: res.statusCode, now: at })) return;
+          recordAccess(ctx.db, { clinicId: clinic.clinic_id, connectionId, at: isoOf(at),
             method: req.method, path, status: res.statusCode, ip: req.ipAddr, ms: Date.now() - t0 });
         } catch { /* журнал не роняет ответ */ }
       });
@@ -4304,6 +5117,24 @@ test('права записи: без «Отмена записи» — 403; л�
   assert.equal(last.status, 429, 'тридцать первая запись за минуту');
   assert.ok(Number(last.headers.get('retry-after')) >= 1);
 });
+
+test('ревью 8b, C9: ответ на другое время — на то предложение, которое видел партнёр (offered_start), иначе 409 offer_changed', async (t) => {
+  const s = await partnerStand();
+  t.after(s.close);
+  const id = (await json(await s.send('POST', '/shifo/v1/appointments', appt()))).body.request_id;
+  ackInbox(s.db, s.clinicId, '1', [{ request_id: id, hold_until: isoOf(NOW + 1800000) }], NOW);
+  const offer = (seq, start) => ({ seq, event: 'booking.offered_other_time', status: 'offered', webhook_url: '', signature: '',
+    body: JSON.stringify({ event_id: 'ev_' + seq, event: 'booking.offered_other_time', request_id: id, status: 'offered', offered_start: start,
+      offer_until: '2030-03-11T09:30:00+05:00' }) });
+  applyEvents(s.db, s.clinicId, [offer(1, '2030-03-12T10:00:00+05:00')], NOW);
+  applyEvents(s.db, s.clinicId, [offer(2, '2030-03-12T14:00:00+05:00')], NOW);
+  const stale = await json(await s.send('POST', '/shifo/v1/appointments/' + id + '/accept', { offered_start: '2030-03-12T10:00:00+05:00' }));
+  assert.deepEqual([stale.status, stale.body.error.code], [409, 'offer_changed']);
+  const bad = await json(await s.send('POST', '/shifo/v1/appointments/' + id + '/decline', { offered_start: 'завтра' }));
+  assert.deepEqual([bad.status, bad.body.error.field, bad.body.error.reason], [400, 'offered_start', 'format']);
+  const ok = await json(await s.send('POST', '/shifo/v1/appointments/' + id + '/accept', { offered_start: '2030-03-12T14:00:00+05:00' }));
+  assert.deepEqual([ok.status, ok.body.status, ok.body.start], [200, 'pending', '2030-03-12T14:00:00+05:00']);
+});
 ```
 
 - [ ] **Step 2:** `node --test public-server/server/routes/partner-write.http.test.js` → падает: 404 на `POST /appointments` (`assert … 404 !== 201`) — адресов записи ещё нет.
@@ -4487,9 +5318,18 @@ export function writeRoutes(r, ctx) {
     return out.error ? sendError(req, res, out.error) : res.json(publicRequest(out.row, ctx.offsetMin));
   }));
 
+  // Ревью 8b, C9: offered_start в теле (необязательно) — предложение, на которое
+  // отвечает партнёр; не то, что предлагается сейчас, — 409 offer_changed.
   for (const [action, accept] of [['accept', true], ['decline', false]]) {
     r.post('/appointments/:id/' + action, scope('appointments'), handle((req, res) => {
-      const out = partnerAnswerOffer(ctx.db, own(req, 'appointment'), accept, ctx.now());
+      const row = own(req, 'appointment');
+      const seen = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body.offered_start : undefined;
+      let offeredStart = null;
+      if (seen != null && seen !== '') {
+        offeredStart = msOfPartner(seen, ctx.offsetMin);
+        if (offeredStart == null) throw field('offered_start', 'format');
+      }
+      const out = partnerAnswerOffer(ctx.db, row, accept, ctx.now(), { offeredStart });
       return out.error ? sendError(req, res, out.error) : res.json(publicRequest(out.row, ctx.offsetMin));
     }));
   }
@@ -4570,6 +5410,9 @@ test('/_health — без ключа, только «жив»; /_metrics — б�
   assert.equal((await fetch(s.base + '/_metrics', { headers: { Authorization: 'Bearer wrong-TESTONLY' } })).status, 401);
   const m = await (await fetch(s.base + '/_metrics', { headers: { Authorization: 'Bearer m-TESTONLY' } })).json();
   assert.equal(m.clinics, 0);
+  for (const k of ['deliveries_queue_full', 'access_skipped_rate_limited', 'access_skipped_keyless', 'access_skipped_over_key_day', 'access_skipped_over_total']) {
+    assert.equal(m[k], 0, k + ' — ревью 8b, C6/C8: пропущенное считается');
+  }
   assert.ok(Object.values(m).every((v) => v === null || ['number', 'string'].includes(typeof v)), 'только числа и время');
   const off = await up();
   t.after(off.close);
@@ -4628,6 +5471,16 @@ test('фон: доставка не перекрывает себя, сбой �
     assert.equal(logs.length, 1);
   } finally { jobs.stop(); }
 });
+
+test('ревью 8b, C3: запуск службы поднимает счётчик курсоров очереди до часов — после восстановления базы он не идёт назад', async (t) => {
+  const s = await up();
+  t.after(s.close);
+  const c = testClinic(s.vendor);
+  await syncCall(s.base, c, 'PUT', '/_sync/v1/keys', { generated_at: isoOf(NOW), box_key: c.identity.boxPublic, connections: [] }, { time: isoOf(NOW) });
+  createRequest(s.db, { clinic: clinicRow(s.db, c.clinicId), connectionId: 3, kind: 'request', patient: { name: 'Имя', phone: '+998901234567', comment: '' }, now: NOW });
+  const r = await syncCall(s.base, c, 'GET', '/_sync/v1/inbox?after=', undefined, { time: isoOf(NOW) });
+  assert.ok(Number(r.json.items[0].cursor) > NOW, 'курсор — не меньше часов запуска');
+});
 ```
 
 - [ ] **Step 2:** `node --test public-server/server/app.test.js` → падает: `ERR_MODULE_NOT_FOUND` (`app.js`).
@@ -4653,8 +5506,12 @@ const sameToken = (a, b) => {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 
-/** Числа для наблюдения. */
-export function metrics(db, now, jobs = null) {
+/**
+ * Числа для наблюдения. extra — счётчики процесса (ревью 8b, C6 и C8):
+ * пропущенные уведомления (очередь клиники полна) и не записанные в журнал запросы.
+ */
+export function metrics(db, now, jobs = null, { counters = null, accessJournal = null } = {}) {
+  const skipped = accessJournal ? accessJournal.stats() : {};
   const n = (sql, ...args) => db.prepare(sql).get(...args).n;
   const day = isoOf(now - 86400000);
   return {
@@ -4670,6 +5527,11 @@ export function metrics(db, now, jobs = null) {
     access_24h: n('SELECT COUNT(*) AS n FROM access_log WHERE at >= ?', day),
     errors_5xx_24h: n('SELECT COUNT(*) AS n FROM access_log WHERE at >= ? AND status >= 500', day),
     rss_mb: Math.round(process.memoryUsage().rss / 1048576),
+    deliveries_queue_full: (counters && counters.queue_full) || 0,
+    access_skipped_rate_limited: skipped.rate_limited || 0,
+    access_skipped_keyless: skipped.keyless || 0,
+    access_skipped_over_key_day: skipped.over_key_day || 0,
+    access_skipped_over_total: skipped.over_total || 0,
     jobs: jobs ? jobs.status() : null,
   };
 }
@@ -4685,7 +5547,7 @@ export function opsRouter(ctx) {
     if (!ctx.metricsToken) return sendError(req, res, 'not_found');
     const m = /^Bearer\s+(\S+)$/i.exec(String(req.get('authorization') || ''));
     if (!m || !sameToken(m[1], ctx.metricsToken)) return sendError(req, res, 'invalid_key');
-    return res.json(metrics(ctx.db, ctx.now(), ctx.jobs || null));
+    return res.json(metrics(ctx.db, ctx.now(), ctx.jobs || null, { counters: ctx.counters || null, accessJournal: ctx.accessJournal || null }));
   });
   return r;
 }
@@ -4787,6 +5649,7 @@ import { opsRouter } from './routes/ops.js';
 import { createLimiter } from './lib/rate-limit.js';
 import { errorHandler, sendError } from './lib/errors.js';
 import { DEFAULT_SKEW_MS } from './clinic-auth.js';
+import { floorInboxCursor } from './store/requests.js';
 
 /**
  * @param {{db, dataDir:string, now?:()=>number, licencePublicKey?:object|null, offsetMin?:number, baseUrl?:string,
@@ -4798,6 +5661,8 @@ export function createPublicServer({ db, dataDir, now = () => Date.now(), licenc
   baseUrl = 'https://api.easymed.uz', requireHttps = true, trustProxy = 'loopback', skewMs = DEFAULT_SKEW_MS, metricsToken = '',
   version = '0.0.0', limiter = createLimiter(), log = console }) {
   const ctx = { db, dataDir, now, licencePublicKey, offsetMin, baseUrl, requireHttps, skewMs, metricsToken, version, limiter, jobs: null };
+  // Курсоры очереди не идут назад после восстановления базы (ревью 8b, C3).
+  floorInboxCursor(db, now());
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', trustProxy);
@@ -4906,17 +5771,35 @@ process.on('SIGINT', shutdown);
 
 ## Пользователь, папки, зависимости
 
+На своей машине, в клоне репозитория (`<коммит>` — тег или хеш выпуска службы):
+
+```bash
+git -c core.autocrlf=false archive --format=tar.gz -o easymed-public.tar.gz <коммит>
+scp easymed-public.tar.gz root@45.77.242.169:/tmp/
+```
+
+На сервере (Node 24 уже стоит; `npm ci` берёт пакеты из реестра npm):
+
 ```bash
 sudo useradd --system --home /var/lib/easymed-public --shell /usr/sbin/nologin easymed-public
 sudo install -d -o easymed-public -g easymed-public -m 700 /var/lib/easymed-public
-sudo install -d -o root -g root -m 755 /opt/easymed-public
-# код: выгрузка тега/коммита в /opt/easymed-public/repo (git archive | tar -x), владелец root, только чтение
-cd /opt/easymed-public/repo/public-server && sudo npm ci --omit=dev   # better-sqlite3 для Linux x64, Node 24
+sudo install -d -o root -g root -m 755 /opt/easymed-public /opt/easymed-public/repo
+sudo tar -xzf /tmp/easymed-public.tar.gz -C /opt/easymed-public/repo && sudo rm -f /tmp/easymed-public.tar.gz
+cd /opt/easymed-public/repo/public-server && sudo npm ci --omit=dev
+sudo -u easymed-public node --input-type=module -e "import D from 'better-sqlite3'; new D(':memory:'); console.log('better-sqlite3 ok')"
 ```
+
+- `npm ci` ставит ровно `public-server/package-lock.json` — те же версии, что в корне репозитория и в тестах. Lock выводится из корневого без сети: `node public-server/scripts/lock-from-root.mjs` (после смены версий express или better-sqlite3 в корне; страж — `public-server/server/lockfile.test.js`).
+- better-sqlite3 13 везёт готовую сборку для linux-x64 — компилятор и python не нужны.
 
 ## Настройки — `/etc/easymed-public.env`
 
-Права на файл: владелец `root`, режим `640`, группа `easymed-public`.
+Права на файл: владелец `root`, режим `640`, группа `easymed-public`:
+
+```bash
+sudo install -m 640 -o root -g easymed-public /dev/null /etc/easymed-public.env
+sudoedit /etc/easymed-public.env    # вставить строки ниже
+```
 
 ```ini
 PUBLIC_PORT=8095
@@ -4940,6 +5823,10 @@ PUBLIC_LICENCE_PUBLIC_KEY=
 ```
 
 ## Служба — `/etc/systemd/system/easymed-public.service`
+
+```bash
+sudoedit /etc/systemd/system/easymed-public.service    # вставить содержимое ниже
+```
 
 ```ini
 [Unit]
@@ -4986,6 +5873,12 @@ WantedBy=multi-user.target
 
 Только на этот процесс, мимо старого шлюза. Вопрос 2 (Cloudflare) решает 8c. Если включат прокси Cloudflare, `PUBLIC_TRUST_PROXY` и `set_real_ip_from` нужно настроить на адреса Cloudflare. Иначе «Разрешённые IP» и лимиты будут считать адреса Cloudflare, а не партнёров.
 
+```bash
+sudoedit /etc/nginx/sites-available/api.easymed.uz    # вставить содержимое ниже; сертификат Let's Encrypt — до этого шага (8c)
+sudo ln -s /etc/nginx/sites-available/api.easymed.uz /etc/nginx/sites-enabled/api.easymed.uz
+sudo nginx -t && sudo systemctl reload nginx
+```
+
 ```nginx
 upstream easymed_public { server 127.0.0.1:8095; keepalive 16; }
 server {
@@ -5022,6 +5915,21 @@ journalctl -u easymed-public --since "10 min ago"          # тел запрос
 Наблюдение — 8c:
 - `/_health` раз в минуту, сообщение в Telegram при сбое;
 - `/_metrics` с токеном: очередь заявок, не доставленные уведомления, клиники на связи.
+
+## Восстановление базы из копии
+
+- Только при **остановленной** службе (`<копия>` — файл резервной копии):
+
+```bash
+sudo systemctl stop easymed-public
+sudo rm -f /var/lib/easymed-public/public.db-wal /var/lib/easymed-public/public.db-shm
+sudo install -o easymed-public -g easymed-public -m 600 <копия> /var/lib/easymed-public/public.db
+sudo systemctl start easymed-public
+```
+
+- **Заявки, принятые после снятия копии, теряются**: их статус и запечатанные данные были только в заменённой базе, а клиники их, может быть, ещё не забрали. Партнёр на `GET /requests/{id}` получит 404 — пусть позвонит в клинику. Код этого не исправит; копию снимать часто, но хранить не дольше суток.
+- Статусы остальных заявок — как на момент копии, пока клиника не пришлёт по ним новое событие.
+- Курсоры очереди при запуске поднимаются до часов сервера (`floorInboxCursor`), поэтому клиники, чей курсор ушёл вперёд, новые заявки получают; уже принятое клиника по номеру заявки узнаёт как повтор.
 ````
 
 - [ ] **Step 5: проверки.**
@@ -5541,3 +6449,357 @@ test('исходники: вызовы журнала не получают те
 - **Спецификация и дизайн — у каждого пункта задача или строка «Не входит»:**
   - решения 4 → 2, 9; 5 → 9 (отпечаток), 8 (подпись клиники); 6 → 7; 7 → 9; 16 → 1, 4, 11, 12; 17 → 2, 3, 9, 12; 18–19 → 4, 10;
   - дизайн §1 → 1, 4; §2 → 9 (`stale`, 7 суток), 10; §3 → 4, 5; §4 → 2, 3; §7 → 4; §8 → 8; §9 → 6, 9; §10 → 5; §13 риск 1 → 12.
+
+---
+
+## Ревью и исправления (2026-10-12)
+
+Проверка безопасности службы после задач 1–12 (снимок кода `08f1f64b`): **13 находок** — 1 критичная, 8 важных, 4 малых. Ни одна не раскрывает данных пациента. Все исправлены на этой ветке, каждая — тестом сначала. Блоки кода выше сведены с итоговым кодом.
+
+**Как читать блоки после ревью:**
+- блоки — итоговый код, а не код в момент своей задачи;
+- `store/requests.js` (задача 4) теперь берёт потолок очереди уведомлений из `store/deliveries.js` (задача 8). Поэтому проигрыш плана по задачам в прежнем порядке на задаче 4 не пройдёт; итоговое дерево проходит;
+- `routes/partner.js` по-прежнему: блок задачи 9 + diff задачи 10 дают ровно закоммиченный файл;
+- новые файлы службы — блоками в конце этого раздела, кроме `public-server/package-lock.json`: его выводит `scripts/lock-from-root.mjs`.
+
+### Находки и исправления
+
+| # | Важность | Что было | Что сделано | Коммит |
+|---|---|---|---|---|
+| C1 | критичная | Канал клиники читал и распаковывал тело (gzip до 4 МБ) до проверки подписи: ~160 КБ чужого трафика роняли службу по памяти | Сначала заголовки (лицензия, отпечаток ключа, часы, устаревшая и истёкшая лицензия — без записи в базу), потом тело, подпись, запись клиники. Сжатое тело — 415. Предел тела — свой у адреса | `b2dbe219` |
+| C2 | важная | После восстановления базы клиники новые события с прежними номерами получали «принято» и терялись | `events_seen.identity` — sha256 вида и тела события. Тот же номер с другим содержимым — новое событие | `3e995d6b` |
+| C3 | важная | После восстановления или пересборки `public.db` курсор очереди шёл назад: заявки прятались за курсором клиники, подтверждение стирало чужое | Курсоры не меньше часов запуска (`floorInboxCursor`). Очередь отдаётся с самого старого неподтверждённого, без отсечения по курсору клиники. DEPLOY.md — восстановление и что теряется | `cbf40fdf` |
+| C4 | важная | Уборка файлов тянула весь снимок клиники в память на каждую строку каждую минуту — падение по памяти | Ссылку проверяет SQLite (`instr`). Файл из снимка отмечается свежим и сутки не проверяется | `660ac6da` |
+| C5 | важная | Кэш разобранного снимка — по числу записей и по метке до секунды: память и второй снимок в ту же секунду не доходил до партнёров | Кэш по клинике и виду, пока текст тот же; ограничен размером. Потолки списков, тело снимка и времени — до 2 МБ | `67d69607` |
+| C6 | важная | Отказы партнёрам (каждый 429, запросы без ключа) становились строками журнала — наполнение общего диска | 429 — только счётчик. Без ключа строкой — только 401. Потолки строк в сутки на подключение и всего | `737e3d5a` (Б) |
+| C7 | важная | Файлы снимка без потолка на клинику — до ~1,2 ГБ в минуту на общий диск | Потолок 500 файлов и 200 МБ на клинику, сверх — 409 `media_quota` | `2f693abc` |
+| C8 | важная | Одна общая очередь уведомлений: зависший адрес одного партнёра задерживал всех дальше 30-минутного окна предложения | Честная волна по парам «клиника — адрес», пул из четырёх, отдых отказавшего хоста (Б). Потолок 2000 ждущих уведомлений на клинику: сверх — событие принимается и меняет статус, уведомление считается в `queue_full` (А) | `eb2d1950` (Б), `3108c8a6` (А) |
+| C9 | важная | Согласие или отказ партнёра ложились на то предложение клиники, что есть сейчас, — записывалось время, на которое партнёр не соглашался | В теле accept/decline — `offered_start` того предложения, которое видел партнёр; не то — 409 `offer_changed`. Элемент очереди несёт `offered_start`. Новое предложение клиники снимает устаревшее согласие на сервере. Клиника 8a не применяет ответ на прежнее предложение | `f40f83ca`, `a99a90d3` (сторона клиники) |
+| C10 | малая | Событие «другое время» в пути переписывало отмену партнёра: живое предложение до уборки и занятое время | Отмена и отказ партнёра сильнее «другого времени» и «ждёт» в пути; итоги клиники (записан, отменён, пришёл, не пришёл) — сильнее отмены. Отказ держится как отмена. О таком предложении партнёр уведомления не получает | `8f92447c`, `f7f03959` |
+| C11 | малая | Уборка закрывала «не забрана» между GET очереди и подтверждением клиники | Отданное в GET 10 минут не закрывается (`inbox.handed_out_at`). Поздний `held` оживляет заявку, закрытую сервером | `33580f94` |
+| C12 | малая | Сайт партнёра не видел Retry-After; 429 потолка по IP без CORS | `Access-Control-Expose-Headers: Retry-After`. CORS на 429 по IP — только сайту, которому по этому имени уже отвечали | `ab951195` (Б) |
+| C13 | малая | `npm ci --omit=dev` из DEPLOY.md не работал: у службы не было package-lock.json | `public-server/package-lock.json` из корневого lock без сети (`scripts/lock-from-root.mjs`), страж `server/lockfile.test.js`. DEPLOY.md — команды целиком | `6f2c7423` |
+
+### Для документации API (шаг 9)
+
+- **Новые коды ошибок:**
+  - `offer_changed` — 409, партнёру: клиника уже предложила другое время, запросите заявку заново;
+  - `media_quota` — 409, канал клиники: файлов клиники на сервере слишком много. Клиника 8a пропускает файл, пишет код в журнал и шлёт снимок дальше; 8d показывает код на экране;
+  - `unsupported_encoding` — 415, канал клиники: сжатое тело не принимается.
+- **Необязательное поле** `offered_start` в теле `POST /appointments/{id}/accept` и `…/decline`:
+  - время предложения, на которое отвечает партнёр, как его вернул `GET /requests/{id}`;
+  - не совпало с нынешним предложением — 409 `offer_changed`;
+  - не время — 400 `invalid_field`, `field: offered_start`, `reason: format`;
+  - без поля — как прежде.
+- **Уведомления:**
+  - о «другом времени», на которое партнёр уже не может ответить (он отменил или отказался), уведомления нет;
+  - «истекло» и отказ после отмены — уходят.
+- **CORS:** `Access-Control-Expose-Headers: Retry-After`.
+- **Статус `closed` и `/slots`** — без изменений (см. «Решения плана», Р7, Р9).
+
+### Потолки и сроки, введённые ревью
+
+| Что | Значение | Где |
+|---|---|---|
+| Тело канала клиники: снимок и время | 2 МБ | `routes/sync.js` `SNAPSHOT_MAX_BYTES` |
+| Тело канала клиники: файл | 2 МБ | `store/media.js` `MEDIA_MAX_BYTES` |
+| Тело канала клиники: остальное | 1 МБ | `routes/sync.js` |
+| Сжатое тело (Content-Encoding) | не принимается, 415 | `routes/sync.js` |
+| Списки снимка | зданий 200, врачей 1000, услуг 10 000, пакетов 2000 | `store/clinics.js` `SNAPSHOT_LIMITS` |
+| Время | врачей 1000, дней 62, начал в дне 288 | `store/clinics.js` `SNAPSHOT_LIMITS` |
+| Кэш разобранного снимка и времени | запись до 512 К знаков, всего 16 М знаков | `store/clinics.js` |
+| Файлы клиники | 500 файлов и 200 МБ | `store/media.js` `MEDIA_QUOTA_FILES`, `MEDIA_QUOTA_BYTES` |
+| Ждущие уведомления клиники | 2000 | `store/deliveries.js` `PENDING_PER_CLINIC_MAX` |
+| Волна доставки | 20 строк, 4 одновременно, на хост — 2 строки и 1 отправка, отдых хоста 60 с | `store/deliveries.js` |
+| Журнал запросов | 20 000 строк в сутки на подключение, 1000 без ключа на клинику, 1 000 000 всего | `store/access-journal.js` |
+| Отданное клинике не закрывается уборкой | 10 минут | `store/requests.js` `HANDED_OUT_GRACE_MS` |
+
+### Протокол клиники и база
+
+- **`events_seen.identity`:** повтор события — тот же номер с тем же содержимым.
+- **Очередь:**
+  - `GET /_sync/v1/inbox` отдаёт самые старые неподтверждённые элементы, `after` больше не отсекает;
+  - курсоры не меньше часов запуска службы;
+  - `inbox.handed_out_at` — когда элемент отдан клинике;
+  - ответ `/events` прежний: `{accepted}`.
+- **Ответы на другое время** (`offer.accept`, `offer.decline`) несут `data.offered_start`.
+- **Миграция `001`** изменена на месте: служба ещё нигде не стоит. Страж схемы обновлён.
+- **`/_metrics`** — новые плоские числа:
+  - `deliveries_queue_full`;
+  - `access_skipped_rate_limited`, `access_skipped_keyless`, `access_skipped_over_key_day`, `access_skipped_over_total`.
+
+**Итог по файлам:** служба — 57 файлов (было 52):
+- новые: `store/access-journal.js` и его тест, `server/lockfile.test.js`, `scripts/lock-from-root.mjs`, `package-lock.json`;
+- 23 файла тестов, 119 тестов — зелёные как есть и с `force-en.mjs`.
+
+### Новые файлы службы
+
+Журнал запросов партнёров — что становится строкой (C6, сборщик Б) — `public-server/server/store/access-journal.js`:
+
+```js
+// PUBLIC_SERVER_V1 — ЧТО ПОПАДАЕТ В ЖУРНАЛ ЗАПРОСОВ ПАРТНЁРОВ (проверка 8b, C6).
+//
+// Журнал запросов (store/logs.js recordAccess, 30 дней) — для клиники: кто и
+// что спрашивал её ключом. Писать в него КАЖДЫЙ запрос значило бы дать любому из
+// интернета наполнять общий диск машины (Symptex, n8n — решение 16): одним IP —
+// до 1200 строк в минуту. Поэтому строкой становится не всё:
+//   • 429 (любой лимит) — никогда: только счётчик (stats().rate_limited);
+//   • без ключа — только 401 (кто-то стучится неверным ключом — клинике это
+//     важно знать; их и так не больше 30 в минуту с IP — лимит неверных ключей),
+//     прочие отказы без ключа (503, 400 https) — только счётчик;
+//   • в сутки (UTC) на одно подключение — не больше perKeyPerDay строк, на
+//     запросы без ключа одной клиники — не больше keylessPerDay: ключ сайта
+//     клиники по сути публичный, так что потолок нужен и строкам с ключом;
+//   • всего строк — не больше totalMax (уборка 30 дней освобождает место).
+// Счёт суток держится в памяти, а при первом за сутки запросе подключения
+// берётся из базы — перезапуск службы потолок не обнуляет.
+import { isoOf } from '../lib/time.js';
+
+export const ACCESS_PER_KEY_PER_DAY = 20000;
+export const ACCESS_KEYLESS_PER_DAY = 1000;
+export const ACCESS_TOTAL_MAX = 1000000;
+
+/**
+ * @param {{perKeyPerDay?:number, keylessPerDay?:number, totalMax?:number}} [o]
+ * @returns {{admit:(db:object, e:{clinicId:string, connectionId:(number|null), status:number, now:number})=>boolean,
+ *   stats:()=>{rate_limited:number, keyless:number, over_key_day:number, over_total:number}}}
+ */
+export function createAccessJournal({ perKeyPerDay = ACCESS_PER_KEY_PER_DAY, keylessPerDay = ACCESS_KEYLESS_PER_DAY,
+  totalMax = ACCESS_TOTAL_MAX } = {}) {
+  const counts = new Map();
+  let day = '';
+  const skipped = { rate_limited: 0, keyless: 0, over_key_day: 0, over_total: 0 };
+
+  // Строки уходят только уборкой по возрасту (с начала), так что номер последней
+  // минус номер первой — их число; два поиска по ключу таблицы, без перебора.
+  const total = (db) => db.prepare('SELECT (SELECT MAX(id) FROM access_log) - (SELECT MIN(id) FROM access_log) + 1 AS n').get().n || 0;
+  const today = (db, clinicId, connectionId, since) =>
+    db.prepare('SELECT COUNT(*) AS n FROM access_log WHERE clinic_id = ? AND connection_id IS ? AND at >= ?').get(clinicId, connectionId, since).n;
+
+  function admit(db, { clinicId, connectionId = null, status, now }) {
+    if (status === 429) { skipped.rate_limited += 1; return false; }
+    const keyless = connectionId == null;
+    if (keyless && status !== 401) { skipped.keyless += 1; return false; }
+    const d = isoOf(now).slice(0, 10);
+    if (d !== day) { day = d; counts.clear(); }
+    const k = clinicId + '\n' + (keyless ? '' : connectionId);
+    let n = counts.get(k);
+    if (n === undefined) n = today(db, clinicId, keyless ? null : connectionId, d + 'T00:00:00Z');
+    if (n >= (keyless ? keylessPerDay : perKeyPerDay)) { counts.set(k, n); skipped.over_key_day += 1; return false; }
+    if (total(db) >= totalMax) { counts.set(k, n); skipped.over_total += 1; return false; }
+    counts.set(k, n + 1);
+    return true;
+  }
+
+  return { admit, stats: () => ({ ...skipped }) };
+}
+```
+
+его тест — `public-server/server/store/access-journal.test.js`:
+
+```js
+// PUBLIC_SERVER_V1 — что попадает в журнал запросов партнёров (проверка 8b,
+// C6): 429 и отказы без ключа, кроме 401, — только счётчики; строк одного ключа
+// и строк без ключа в сутки — не больше потолка; всего строк — не больше потолка;
+// после перезапуска счёт суток берётся из базы.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createAccessJournal } from './access-journal.js';
+import { recordAccess } from './logs.js';
+import { testDb, NOW } from '../test-helpers/fixture.js';
+import { isoOf } from '../lib/time.js';
+
+const C = 'c-000777';
+const DAY = 86400000;
+function write(db, j, connectionId, status, now) {
+  const ok = j.admit(db, { clinicId: C, connectionId, status, now });
+  if (ok) recordAccess(db, { clinicId: C, connectionId, at: isoOf(now), method: 'GET', path: '/shifo/v1/clinic', status });
+  return ok;
+}
+const rows = (db) => db.prepare('SELECT COUNT(*) AS n FROM access_log').get().n;
+
+test('429 — никогда строкой; без ключа — только 401; с ключом — любой ответ', () => {
+  const { db } = testDb();
+  const j = createAccessJournal();
+  assert.equal(write(db, j, 3, 429, NOW), false);
+  assert.equal(write(db, j, null, 429, NOW), false);
+  assert.equal(write(db, j, null, 503, NOW), false, 'без ключа и не 401 — счётчик');
+  assert.equal(write(db, j, null, 400, NOW), false);
+  assert.equal(write(db, j, null, 401, NOW), true);
+  for (const s of [200, 401, 403, 404, 409, 503]) assert.equal(write(db, j, 3, s, NOW), true, String(s));
+  assert.equal(rows(db), 7);
+  assert.deepEqual(j.stats(), { rate_limited: 2, keyless: 2, over_key_day: 0, over_total: 0 });
+});
+
+test('потолок в сутки: на ключ и отдельно на запросы без ключа; новые сутки — снова пишется', () => {
+  const { db } = testDb();
+  const j = createAccessJournal({ perKeyPerDay: 5, keylessPerDay: 3, totalMax: 1000 });
+  let wrote = 0;
+  for (let i = 0; i < 10; i += 1) wrote += write(db, j, 3, 200, NOW + i) ? 1 : 0;
+  assert.equal(wrote, 5);
+  assert.equal(write(db, j, 4, 200, NOW), true, 'другой ключ — свой счёт');
+  wrote = 0;
+  for (let i = 0; i < 10; i += 1) wrote += write(db, j, null, 401, NOW + i) ? 1 : 0;
+  assert.equal(wrote, 3);
+  assert.equal(write(db, j, 3, 200, NOW + DAY), true, 'следующие сутки (UTC)');
+  assert.equal(j.stats().over_key_day, 12);
+});
+
+test('после перезапуска счёт суток — из базы, а не с нуля', () => {
+  const { db } = testDb();
+  const first = createAccessJournal({ perKeyPerDay: 5, keylessPerDay: 2, totalMax: 1000 });
+  for (let i = 0; i < 5; i += 1) write(db, first, 3, 200, NOW + i);
+  for (let i = 0; i < 2; i += 1) write(db, first, null, 401, NOW + i);
+  const again = createAccessJournal({ perKeyPerDay: 5, keylessPerDay: 2, totalMax: 1000 });
+  assert.equal(write(db, again, 3, 200, NOW + 100), false);
+  assert.equal(write(db, again, null, 401, NOW + 100), false);
+  assert.equal(write(db, again, 3, 200, NOW + DAY), true);
+});
+
+test('всего строк — не больше потолка; уборка освобождает место', () => {
+  const { db } = testDb();
+  const j = createAccessJournal({ perKeyPerDay: 1000, keylessPerDay: 1000, totalMax: 4 });
+  let wrote = 0;
+  for (let i = 0; i < 10; i += 1) wrote += write(db, j, 1 + (i % 3), 200, NOW + i) ? 1 : 0;
+  assert.equal(wrote, 4);
+  assert.equal(j.stats().over_total, 6);
+  db.prepare('DELETE FROM access_log WHERE id <= 2').run();
+  assert.equal(write(db, j, 1, 200, NOW + 20), true);
+});
+```
+
+package-lock.json службы из корневого (C13) — `public-server/scripts/lock-from-root.mjs`:
+
+```js
+// PUBLIC_SERVER_V1 — package-lock.json службы из корневого package-lock.json
+// (ревью 8b, C13). Без сети и без npm: берутся ровно те версии, адреса и
+// отпечатки, что стоят в корне и прогнаны тестами. Из корневого lock
+// выбираются пакеты, до которых доходит поиск Node от зависимостей
+// public-server/package.json, — с теми же путями node_modules, так что каждая
+// зависимость находится так же, как в корне.
+//
+// Запуск из корня репозитория (после смены версий express / better-sqlite3 в
+// корне): node public-server/scripts/lock-from-root.mjs
+// Страж: public-server/server/lockfile.test.js.
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** Путь пакета dep, который найдёт Node из пакета по пути from ('' — корень). */
+function resolveFrom(all, from, dep) {
+  let dir = from;
+  for (;;) {
+    const cand = (dir ? dir + '/' : '') + 'node_modules/' + dep;
+    if (all[cand]) return cand;
+    if (!dir) return null;
+    const i = dir.lastIndexOf('/node_modules/');
+    dir = i < 0 ? '' : dir.slice(0, i);
+  }
+}
+
+/**
+ * @param {{packages:Object<string, object>}} root корневой package-lock.json (lockfileVersion 3)
+ * @param {{name:string, version:string, dependencies:Object<string,string>, engines?:object}} pkg public-server/package.json
+ */
+export function lockFromRoot(root, pkg) {
+  const all = root && root.packages;
+  if (!all) throw new Error('корневой package-lock.json без packages (нужен lockfileVersion 3)');
+  const reached = new Map();   // путь → дошли ли по обязательной зависимости
+  const queue = [];
+  const visit = (from, deps, optional) => {
+    for (const dep of Object.keys(deps || {})) {
+      const p = resolveFrom(all, from, dep);
+      if (!p) {
+        if (optional) continue;
+        throw new Error('в корневом lock нет ' + dep + ' (нужен ' + (from || 'public-server') + ')');
+      }
+      const was = reached.get(p);
+      if (was === undefined || (was === false && !optional)) { reached.set(p, !optional); queue.push(p); }
+    }
+  };
+  visit('', pkg.dependencies, false);
+  while (queue.length) {
+    const p = queue.shift();
+    const e = all[p];
+    const required = reached.get(p);
+    visit(p, e.dependencies, !required);
+    visit(p, e.optionalDependencies, true);
+    const peers = Object.keys(e.peerDependencies || {}).filter((d) => !(e.peerDependenciesMeta && e.peerDependenciesMeta[d] && e.peerDependenciesMeta[d].optional));
+    visit(p, Object.fromEntries(peers.map((d) => [d, e.peerDependencies[d]])), !required);
+  }
+  const packages = {
+    '': { name: pkg.name, version: pkg.version, dependencies: { ...pkg.dependencies }, ...(pkg.engines ? { engines: { ...pkg.engines } } : {}) },
+  };
+  for (const p of [...reached.keys()].sort()) {
+    const { dev, devOptional, optional, peer, ...rest } = all[p];
+    packages[p] = { ...rest, ...(reached.get(p) ? {} : { optional: true }) };
+  }
+  return { name: pkg.name, version: pkg.version, lockfileVersion: 3, requires: true, packages };
+}
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const service = path.dirname(HERE);
+  const read = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
+  const lock = lockFromRoot(read(path.join(service, '..', 'package-lock.json')), read(path.join(service, 'package.json')));
+  fs.writeFileSync(path.join(service, 'package-lock.json'), JSON.stringify(lock, null, 2) + '\n');
+  console.log('public-server/package-lock.json:', Object.keys(lock.packages).length - 1, 'пакетов');
+}
+```
+
+страж lock (C13) — `public-server/server/lockfile.test.js`:
+
+```js
+// PUBLIC_SERVER_V1 — ревью 8b, C13: DEPLOY.md ставит зависимости службы
+// командой `npm ci --omit=dev` внутри public-server/, а npm ci без своего
+// package-lock.json не работает (корневой lock npm здесь не берёт — в корне нет
+// workspaces). Lock службы выводится из корневого package-lock.json (те же
+// версии, что прогнаны тестами), без сети: public-server/scripts/lock-from-root.mjs.
+// Страж: lock есть, совпадает с выводом из корневого, его корень — ровно
+// зависимости package.json, у каждого пакета есть адрес и отпечаток, и каждая
+// зависимость находится внутри lock тем же поиском, что у Node.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { lockFromRoot } from '../scripts/lock-from-root.mjs';
+
+const SERVICE = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const REPO = path.dirname(SERVICE);
+const read = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
+
+test('у службы свой package-lock.json — тот, что выводится из корневого (без сети)', () => {
+  const file = path.join(SERVICE, 'package-lock.json');
+  assert.ok(fs.existsSync(file), 'public-server/package-lock.json — без него `npm ci --omit=dev` из DEPLOY.md падает (EUSAGE)');
+  const lock = read(file);
+  const pkg = read(path.join(SERVICE, 'package.json'));
+  const root = read(path.join(REPO, 'package-lock.json'));
+  assert.deepEqual(lock, lockFromRoot(root, pkg), 'lock устарел — node public-server/scripts/lock-from-root.mjs');
+  assert.deepEqual(lock.packages[''].dependencies, pkg.dependencies);
+  for (const name of Object.keys(pkg.dependencies)) {
+    assert.equal(lock.packages['node_modules/' + name].version, root.packages['node_modules/' + name].version, name + ' — та же версия, что в корне');
+  }
+});
+
+test('каждый пакет lock — с адресом и отпечатком; каждая его зависимость находится внутри lock', () => {
+  const lock = read(path.join(SERVICE, 'package-lock.json'));
+  const has = (p) => Object.prototype.hasOwnProperty.call(lock.packages, p);
+  for (const [p, e] of Object.entries(lock.packages)) {
+    if (p === '') continue;
+    assert.ok(e.version && e.resolved && e.integrity, p);
+    assert.ok(!e.dev && !e.devOptional, p + ': в службе нет пакетов для разработки');
+    for (const dep of Object.keys(e.dependencies || {})) {
+      let dir = p;
+      let found = false;
+      for (;;) {
+        if (has(dir + '/node_modules/' + dep)) { found = true; break; }
+        const i = dir.lastIndexOf('/node_modules/');
+        if (i < 0) break;
+        dir = dir.slice(0, i);
+      }
+      assert.ok(found || has('node_modules/' + dep) || (e.optionalDependencies && dep in e.optionalDependencies), p + ' → ' + dep);
+    }
+  }
+});
+```
