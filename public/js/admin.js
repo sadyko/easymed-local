@@ -48,6 +48,7 @@ import { renderUpdates } from './admin/views/updates.js';   // UPDATE_DELIVERY_V
 // header records what moved where); these are the two new halves.
 import { renderSubscription } from './admin/views/subscription.js?v=split1';   // SETTINGS_SPLIT_V1
 import { renderClinicData }   from './admin/views/clinic-data.js?v=split1';    // SETTINGS_SPLIT_V1
+import { renderLanAddress }   from './admin/views/lan-address.js';             // LAN_ADDRESS_V1 — «Адрес в сети»
 import { offerIsCurrent, formatRuHour } from './admin/updates-logic.js';   // UPDATE_DELIVERY_V1
 
 import { renderDashboard }    from './admin/views/dashboard.js?v=owndash2';
@@ -298,6 +299,7 @@ const CRUMBS = {
     // ALWAYS_ALLOWED in permissions.js, so naming them here grants nothing.
     subscription:  ['Insights', 'Settings', 'Подписка'],
     'clinic-data': ['Insights', 'Settings', 'Данные клиники'],
+    'lan-address': ['Insights', 'Settings', 'Адрес в сети'],   // LAN_ADDRESS_V1 — ALWAYS_ALLOWED, как 'clinic-data'
     'reference-lists': ['Insights', 'Settings', 'Справочники'],   // REFERENCE_LISTS_V1
 };
 
@@ -312,7 +314,9 @@ const CRUMBS = {
 // that reason (server/services/control/gate.js). Before the split the last two
 // were reachable only because they were cards on 'updates'; the exemption
 // followed them rather than being quietly dropped.
-const LOCKOUT_EXEMPT = new Set(['activation', 'updates', 'subscription', 'clinic-data']);
+// LAN_ADDRESS_V1 — 'lan-address': клиника с просроченной лицензией всё равно должна
+// находить свой сервер; его RPC — READ_ONLY / ALWAYS_ALLOWED на сервере (gate.js).
+const LOCKOUT_EXEMPT = new Set(['activation', 'updates', 'subscription', 'clinic-data', 'lan-address']);
 
 const PLACEHOLDERS = new Set([]);   // PHARMACY_V1 — pharmacy is now a real view
 
@@ -712,6 +716,7 @@ const PARENT_OF = {
     'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
     'departments': 'settings',   // DEPARTMENTS_V1
     'subscription': 'settings', 'clinic-data': 'settings',
+    'lan-address': 'settings',   // LAN_ADDRESS_V1
     'reference-lists': 'settings',   // REFERENCE_LISTS_V1
     // Пациенты
     'patient-card': 'patients', 'appointments': 'patients',
@@ -1284,6 +1289,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'updates':       return void await renderUpdates(viewRoot, ctx);   // UPDATE_DELIVERY_V1 — reachable from the banner + Settings; readable by anyone, actions gate themselves inside the view
             case 'subscription':  return void await renderSubscription(viewRoot, ctx);   // SETTINGS_SPLIT_V1 — подписка и модули
             case 'clinic-data':   return void await renderClinicData(viewRoot, ctx);     // SETTINGS_SPLIT_V1 — резервные копии и опасная зона
+            case 'lan-address':   return void await renderLanAddress(viewRoot, ctx);     // LAN_ADDRESS_V1 — адрес сервера в сети и имя <имя>.local
             case 'reference-lists': return void await renderReferenceLists(viewRoot, ctx);   // REFERENCE_LISTS_V1 — справочники с кодами, только просмотр
         }
         // Settings drilldown:  settings:<section_key>

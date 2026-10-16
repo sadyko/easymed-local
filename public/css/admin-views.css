@@ -7971,3 +7971,36 @@ table.pkg-tbl thead th.pkg-r { text-align: right; }
     .apib-cand { flex-wrap: wrap; }
 }
 /* /PUBLIC_API_V1 */
+
+/* LAN_ADDRESS_V1 — экран «Адрес в сети» (views/lan-address.js). Размеры — ступени
+   шкалы (12.5 / 13.5 / 15 / 17, type-scale.test.mjs); на 360 px всё в одну колонку,
+   длинные адреса и команда переносятся, а не растягивают страницу. */
+.lan-wrap { max-width: 760px; }
+.lan-body { display: flex; flex-direction: column; gap: 14px; }
+.lan-card { display: flex; flex-direction: column; gap: 10px; padding: 18px 20px; min-width: 0; }
+.lan-h { display: flex; align-items: center; gap: 6px; margin: 0; font-size: var(--fs-3); font-weight: 700; color: var(--ink-900); }
+.lan-p { margin: 0; font-size: var(--fs-2); line-height: 1.5; color: var(--ink-700); overflow-wrap: anywhere; }
+.lan-p.muted { color: var(--ink-500); }
+.lan-note { color: var(--warn-700); }
+.lan-warn { border-color: var(--warn-500); background: var(--warn-50); }
+.lan-warn-head { display: flex; align-items: flex-start; gap: 8px; color: var(--warn-700); }
+.lan-warn-head h3 { margin: 0; font-size: var(--fs-3); font-weight: 700; color: var(--ink-900); line-height: 1.4; overflow-wrap: anywhere; }
+.lan-name-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.lan-kv { display: grid; grid-template-columns: minmax(130px, 210px) minmax(0, 1fr); gap: 8px 14px; margin: 0; font-size: var(--fs-2); align-items: center; }
+.lan-kv + .lan-kv { padding-top: 10px; border-top: 1px solid var(--ink-100); }
+.lan-kv dt { color: var(--ink-500); }
+.lan-kv dd { margin: 0; min-width: 0; color: var(--ink-900); overflow-wrap: anywhere; }
+.lan-copyrow { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.lan-code { flex: 1 1 220px; min-width: 0; padding: 6px 10px; border-radius: 6px; background: var(--ink-50);
+    font-family: var(--font-mono); font-size: var(--fs-1); white-space: pre-wrap; word-break: break-all; user-select: all; color: var(--ink-900); }
+.lan-copy { flex: none; }
+.lan-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.lan-steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-2); line-height: 1.5; color: var(--ink-700); }
+.lan-steps li { overflow-wrap: anywhere; }
+.lan-routers { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+@media (max-width: 560px) {
+    .lan-card { padding: 14px 14px; }
+    .lan-kv { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
+    .lan-kv dd + dt { margin-top: 8px; }
+}
+/* /LAN_ADDRESS_V1 */

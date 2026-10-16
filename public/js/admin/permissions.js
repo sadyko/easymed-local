@@ -95,7 +95,10 @@ const MODULE_GROUPS = NAV_MODULES;
 // Modules that bypass role gating entirely. Empty: every module (Dashboard
 // included) is controlled by the role's permission list. A restricted user
 // lands on their first allowed module (see admin.js firstAllowedView()).
-const ALWAYS_ALLOWED = new Set(['specialties', 'updates', 'subscription', 'clinic-data']);
+const ALWAYS_ALLOWED = new Set(['specialties', 'updates', 'subscription', 'clinic-data', 'lan-address']);
+// lan-address: LAN_ADDRESS_V1 — адрес сервера знает любой сотрудник (он набирает его
+// в браузере); «Скрыть» и выключатель имени экран показывает только администратору,
+// и сервер проверяет это сам (rpc/lan-address.js).
 // specialties: global read-only reference; viewable by any role, add is super-admin-gated (SPECIALTIES_VIEW_V1)
 // updates: UPDATE_DELIVERY_V1 — the approval screen is readable by any role;
 // the RPCs behind it (update_status/update_approve/update_cancel) gate the
