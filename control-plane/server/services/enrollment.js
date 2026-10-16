@@ -12,7 +12,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { ALPHABET } from '../../../server/services/control/unlock.js';
-import { clearSyncKeyCandidates } from './public-api.js';   // PUBLIC_LICENCE_V1
+import { clearSyncKeysOfOldInstall } from './public-api.js';   // PUBLIC_LICENCE_V1
 
 // Same alphabet, same reason, as the telephone-unlock codes: both are read
 // aloud over a phone (this one by whoever is setting the clinic up, reading
@@ -294,11 +294,13 @@ export function redeemEnrollmentCode(db, { code, fingerprint } = {}, { beforeCom
     db.prepare(
       `UPDATE clinics SET enrollment_code = NULL, install_token = ?, last_fingerprint = ? WHERE clinic_id = ?`
     ).run(installToken, fp, row.clinic_id);
-    // PUBLIC_LICENCE_V1 (step 8c review, item 1) — a new install starts with no
-    // online-booking keys waiting: whatever the previous install_token brought
-    // in (a real new PC and a copy of control.json, say) is void now that the
-    // token is. This is the "re-enrol" that lifts a refused «Accept new key».
-    clearSyncKeyCandidates(db, row.clinic_id);
+    // PUBLIC_LICENCE_V1 (step 8c review, item 1; re-check F3) — a new install
+    // starts with a clean slate: whatever the previous install_token brought in
+    // (a real new PC and a copy of control.json, say) is void now that the
+    // token is, and so are previously replaced keys — a PC the clinic returns
+    // to is a new key again, accepted with its code. This is the "re-enrol"
+    // that lifts a refused «Accept new key». Blocks stay blocks.
+    clearSyncKeysOfOldInstall(db, row.clinic_id);
 
     return {
       clinic_id: row.clinic_id,

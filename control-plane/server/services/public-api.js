@@ -180,9 +180,15 @@ export function restoreUnblockedSyncKey(db, clinicId, fp) {
   return true;
 }
 
-/** Новая регистрация установки: ключи, ждавшие при прежнем install_token, больше не в счёт. */
-export function clearSyncKeyCandidates(db, clinicId) {
-  db.prepare("DELETE FROM sync_keys_seen WHERE clinic_id = ? AND state = 'candidate'").run(clinicId);
+/**
+ * Новая регистрация установки — чистый лист (перепроверка 8c, F3): ключи,
+ * ждавшие при прежнем install_token, и прежние (сменённые) ключи больше не в
+ * счёт. Так вернувшийся ПК (A → B → A; файл ключа переживает регистрацию) —
+ * снова новый кандидат и принимается по своему коду. Остаётся только принятый
+ * ключ; блокировки (revocations) остаются блокировками.
+ */
+export function clearSyncKeysOfOldInstall(db, clinicId) {
+  db.prepare("DELETE FROM sync_keys_seen WHERE clinic_id = ? AND state IN ('candidate', 'replaced')").run(clinicId);
 }
 
 /**

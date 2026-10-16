@@ -162,6 +162,38 @@ test('перепроверка 8c, F1: новый ключ с кодом при�
   assert.equal(row(db2).api_sync_key, FP2);
 });
 
+// Перепроверка 8c, F3: клиника вернулась на прежний ПК (A → B → A). Файл ключа
+// переживает новую регистрацию, а прежний ключ — «replaced», кнопкой его не
+// принять. Новая регистрация установки начинает с чистого листа: её ключ —
+// новый кандидат, принимается по своему коду; заблокированные остаются заблокированными.
+test('перепроверка 8c, F3: новая регистрация стирает и ждущие, и прежние ключи — вернувшийся ПК принимается по своему коду; блокировки остаются', () => {
+  const db = freshDb();
+  noteSyncKey(db, row(db), FP1, NOW);                        // ПК A
+  noteSyncKey(db, row(db), FP2, NOW + 1000);                 // ПК B
+  assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: FP2, code: code(FP2) }, NOW + 2000), { ok: true });
+  noteSyncKey(db, row(db), FP3, NOW + 2500);                 // чужой ключ — заблокирован
+  db.prepare("INSERT INTO revocations (clinic_id, kind, value) VALUES ('c-1', 'sync_key', ?)").run(FP3);
+  noteSyncKey(db, row(db), FP1, NOW + 3000);                 // B сломался, клиника снова на A
+  assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: FP1, code: code(FP1) }, NOW), { error: 'not_pending' }, 'без новой регистрации — нет');
+  assert.ok(redeemEnrollmentCode(db, { code: reissueEnrollmentCode(db, { clinicId: 'c-1' }) }));
+  assert.deepEqual(states(db), { [FP2]: 'accepted' }, 'остался только принятый');
+  noteSyncKey(db, row(db), FP1, NOW + 4000);
+  noteSyncKey(db, row(db), FP3, NOW + 4000);
+  assert.deepEqual(syncKeyCandidates(db, row(db)).map((k) => [k.fp, k.revoked]), [[FP1, false], [FP3, true]]);
+  assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: FP3, code: code(FP3) }, NOW), { error: 'revoked' }, 'блокировка пережила регистрацию');
+});
+
+test('перепроверка 8c, F3: после новой регистрации вернувшийся ПК — единственный новый ключ — принимается', () => {
+  const db = freshDb();
+  noteSyncKey(db, row(db), FP1, NOW);
+  noteSyncKey(db, row(db), FP2, NOW + 1000);
+  assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: FP2, code: code(FP2) }, NOW + 2000), { ok: true });
+  assert.ok(redeemEnrollmentCode(db, { code: reissueEnrollmentCode(db, { clinicId: 'c-1' }) }));
+  noteSyncKey(db, row(db), FP1, NOW + 3000);
+  assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: FP1, code: code(FP1) }, NOW + 4000), { ok: true });
+  assert.deepEqual(states(db), { [FP1]: 'accepted', [FP2]: 'replaced' });
+});
+
 test('ключ, принятый у другой клиники, сам не принимается и кнопкой тоже — один ключ, одна клиника', () => {
   const db = freshDb();
   noteSyncKey(db, row(db), FP1, NOW);
