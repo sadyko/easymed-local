@@ -31,7 +31,7 @@ function pendingHtml(api) {
   const live = api.candidates.filter((k) => !k.revoked);
   const row = (k, i) => `
       <div class="form-actions" data-cand-i="${esc(String(i))}"><span class="muted">New key, first seen ${esc(fmtDateTime(k.first_seen))}, last check-in ${esc(fmtDateTime(k.last_seen))}${k.revoked ? ' — blocked' : ''}${k.other_clinic ? ` — already the key of clinic ${esc(k.other_clinic)}` : ''}</span>
-        ${k.revoked ? '' : '<button class="btn danger small" type="button" data-block-candidate>Block this key</button>'}</div>`;
+        ${k.revoked || k.other_clinic ? '' : '<button class="btn danger small" type="button" data-block-candidate>Block this key</button>'}</div>`;
   if (api.key_competing) {
     return `
       <div class="legacy-note">${esc(String(api.candidates.length))} different new keys from this clinic's install since its key was last accepted — possible copy of the clinic's data. Nothing can be accepted: re-enrol the clinic (a new enrollment code), then accept the key of the re-enrolled computer. Until then online booking keeps the old key.</div>

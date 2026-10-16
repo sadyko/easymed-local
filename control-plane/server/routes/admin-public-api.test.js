@@ -307,3 +307,51 @@ test('перепроверка 8c, раунд 3 (R3-4): прежний ключ 
   assert.deepEqual(blk.body.api.revocations.map((r) => r.code), [code(a.fp)]);
   assert.deepEqual(blk.body.api.former_keys, [], 'заблокированный — в «Blocked keys»');
 });
+
+// Перепроверка 8c, раунд 3 (R3-5): прежний ПК клиники c-1 с её папкой данных
+// перевезли в филиал c-2 — его ключ K теперь ПРИНЯТЫЙ ключ c-2. Страница c-1 не
+// должна его блокировать: c-2 отрезало бы, а на странице c-2 блокировки не видно
+// и снять её оттуда нельзя. Отказ 409 с именем той клиники — блокировать там.
+const OTHER_CLINIC_KEY = /This key is now the current key of «Branch» — block it on that clinic's page\./;
+
+async function movedToBranch(t, { reEnrol }) {
+  const s = await harness(t);
+  const tok2 = redeemEnrollmentCode(s.db, { code: createEnrollmentCode(s.db, { clinicId: 'c-2', name: 'Branch' }) }).install_token;
+  const k = syncKey();
+  const b = syncKey();
+  s.checkin(k.b64);
+  s.checkin(b.b64);
+  assert.equal((await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: b.fp, code: code(b.fp) })).status, 200);
+  if (reEnrol) redeemEnrollmentCode(s.db, { code: reissueEnrollmentCode(s.db, { clinicId: 'c-1' }) });
+  const c2 = () => checkIn(s.db, { installToken: tok2, apiSyncPublicKey: k.b64 }, { signLicence });
+  c2();
+  assert.equal(s.db.prepare("SELECT api_sync_key FROM clinics WHERE clinic_id = 'c-2'").get().api_sync_key, k.fp);
+  return { s, k, c2 };
+}
+
+test('перепроверка 8c, раунд 3 (R3-5): ключ, принятый сейчас у другой клиники, со страницы этой не блокируется — 409 с именем той клиники (после новой регистрации)', async (t) => {
+  const { s, k, c2 } = await movedToBranch(t, { reEnrol: true });
+  const byValue = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', value: k.fp });
+  assert.deepEqual([byValue.status, byValue.body.error.code], [409, 'conflict']);
+  assert.match(byValue.body.error.message, OTHER_CLINIC_KEY);
+  const former = (await s.call('GET', '/clinics/c-1')).body.clinic.api.former_keys;
+  assert.deepEqual(former.map((f) => [f.code, f.other_clinic, f.other_clinic_name]), [[code(k.fp), 'c-2', 'Branch']]);
+  const byId = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', former_id: former[0].id });
+  assert.equal(byId.status, 409);
+  assert.match(byId.body.error.message, OTHER_CLINIC_KEY);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM revocations').get().n, 0);
+  s.db.prepare("UPDATE clinics SET api_enabled = 1 WHERE clinic_id = 'c-2'").run();
+  assert.equal(c2().licence.payload.api_sync_key, k.fp, 'c-2 не отрезана');
+});
+
+test('перепроверка 8c, раунд 3 (R3-5): то же без новой регистрации — по отпечатку и по id строки', async (t) => {
+  const { s, k } = await movedToBranch(t, { reEnrol: false });
+  const byValue = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', value: k.fp });
+  assert.equal(byValue.status, 409);
+  assert.match(byValue.body.error.message, OTHER_CLINIC_KEY);
+  const rowId = s.db.prepare("SELECT id FROM sync_keys_seen WHERE clinic_id = 'c-1' AND fp = ?").get(k.fp).id;
+  assert.equal((await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', key_id: rowId })).status, 409);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM revocations').get().n, 0);
+  // На странице самой c-2 этот ключ блокируется как обычно.
+  assert.equal((await s.call('POST', '/clinics/c-2/revocations', { kind: 'sync_key', value: k.fp })).status, 201);
+});

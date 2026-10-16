@@ -15,7 +15,7 @@
 // наружу из клиники — только отпечатки ключей).
 import { isEntitled } from '../services/checkin.js';
 import {
-  partnersSee, acceptPendingSyncKey, isRevoked, isoSeconds, SYNC_FP_RE, KEY_HASH_RE,
+  partnersSee, acceptPendingSyncKey, isRevoked, isoSeconds, SYNC_FP_RE, KEY_HASH_RE, keyOwner,
   syncKeyCandidates, replacedKeysSeen, keyCode, normaliseKeyCode, restoreUnblockedSyncKey, formerSyncKeys, formerKeysOf,
 } from '../services/public-api.js';
 import { KEY_RE } from '../../../public/js/shared/api-connections.js';
@@ -175,6 +175,17 @@ export function registerPublicApiRoutes(r, db) {
     if (kind === 'sync_key' && !formerSyncKeys(db, c.clinic_id).has(v)
       && !db.prepare('SELECT 1 FROM sync_keys_seen WHERE clinic_id = ? AND fp = ?').get(c.clinic_id, v)) {
       return fail(res, 400, 'bad_request', "This is not one of this clinic's API keys.");
+    }
+    // Round 3 (R3-5) — a key that is now ANOTHER clinic's accepted key (an old
+    // computer moved there with its data folder) is blocked on that clinic's
+    // page only: blocking it here would cut that clinic off, and its own page
+    // would neither show the block nor be able to lift it.
+    if (kind === 'sync_key') {
+      const owner = keyOwner(db, v, c.clinic_id);
+      if (owner) {
+        const name = (db.prepare('SELECT name FROM clinics WHERE clinic_id = ?').get(owner) || {}).name || owner;
+        return fail(res, 409, 'conflict', `This key is now the current key of «${name}» — block it on that clinic's page.`);
+      }
     }
     if (note !== undefined && note !== null && typeof note !== 'string') return fail(res, 400, 'bad_request', 'note must be text.');
     const text = typeof note === 'string' && note.trim() ? note.trim().slice(0, NOTE_MAX) : null;

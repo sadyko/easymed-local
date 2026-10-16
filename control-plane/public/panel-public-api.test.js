@@ -153,3 +153,23 @@ test('перепроверка 8c, раунд 3: карточка показыв
   assert.match(card, /cp\.addRevocation\(clinic\.id, \{ kind: 'sync_key', former_id: f\.id/);
   assert.doesNotMatch(card, /\bf\.fp\b/);
 });
+
+// Перепроверка 8c, раунд 3 (R3-5): ключ, который сейчас принят у другой
+// клиники, на этой карточке не блокируется — подпись «now the current key of
+// «…»; block it on that clinic's page» вместо кнопки (сервер всё равно ответит 409).
+test('перепроверка 8c, раунд 3: прежний или новый ключ, принятый сейчас у другой клиники, — без кнопки «Block this key», с её именем', async () => {
+  const { renderApiCard } = await import('./panel-api-card.js');
+  const el = () => ({ addEventListener() {}, value: '', textContent: '', focus() {}, disabled: false, checked: false });
+  const box = { innerHTML: '', querySelector: () => el(), querySelectorAll: () => [] };
+  const at = '2026-10-12T10:00:00Z';
+  renderApiCard(box, { id: 'c-1', name: 'Шифо', api: {
+    enabled: true, sync_key: 'bb'.repeat(16), sync_key_code: 'bbbb-bbbb', sync_key_accepted_at: at,
+    candidates: [{ id: 9, first_seen: at, last_seen: at, revoked: false, other_clinic: 'c-3' }],
+    key_pending: true, key_competing: false, replaced_seen: [], seen_key_revoked: false, partners_see: 'visible', licence: null,
+    former_keys: [{ id: 3, code: '46de-4fe9', last_accepted_at: at, replaced_at: at, other_clinic: 'c-2', other_clinic_name: 'Branch' }],
+    revocations: [],
+  } });
+  assert.match(box.innerHTML, /now the current key of «Branch»; block it on that clinic's page/);
+  assert.doesNotMatch(box.innerHTML, /data-block-former/);
+  assert.doesNotMatch(box.innerHTML, /data-block-candidate/, 'и у нового ключа, принятого у другой клиники, кнопки нет');
+});
