@@ -7657,6 +7657,10 @@ a.btn[data-apic-act="docs"] { text-decoration: none; }   /* ссылка-кно�
 .apic-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 0; }
 .apic-facts dt { font-size: 12.5px; color: var(--ink-500); }
 .apic-facts dd { margin: 2px 0 0; font-size: 13.5px; display: flex; gap: 6px; align-items: flex-start; }
+/* PUBLIC_LICENCE_V1 — ревью 8c: код ключа обмена под строкой «Публичный сервер» — своей строкой, на 360 px переносится; код не рвётся (его читают вслух). */
+.apic-keycode { display: block; margin-top: 6px; overflow-wrap: anywhere; }
+.apic-keycode code { font-family: var(--font-mono); font-size: 13.5px; font-weight: 600; white-space: nowrap; color: var(--ink-900); }
+.apic-keycode-hint { display: block; font-size: 12.5px; color: var(--ink-500); }
 .apic-note { display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--info-50); color: var(--ink-700); font-size: 13.5px; }
 .apic-note.ok { background: var(--ok-50); }
 .apic-note.warn { background: var(--warn-50); }

@@ -439,7 +439,23 @@ async function performSync(db, dataDir, opts) {
 const skippedOf = (st) => ({ sealed: Number(st.skipped_sealed) || 0, failed: Number(st.skipped_failed) || 0, last_at: st.skipped_last_at || null, last_ids: parseIds(st.skipped_last_ids) });
 const parseIds = (v) => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
 
-/** Для экрана «API»: идёт ли обмен и что с ним. */
+/**
+ * PUBLIC_LICENCE_V1 — ревью 8c: код ключа обмена для звонка в Easy-Med — первые
+ * 8 hex отпечатка ключа подписи клиники (sync-identity.js), «xxxx-xxxx», нижний
+ * регистр: «46de4fe9a62a…» → «46de-4fe9». Договор с панелью сервера лицензий:
+ * клиника сменила компьютер — новый ключ ждёт «Accept new key»; сотрудник
+ * Easy-Med вводит код, который клиника читает ему по телефону, и сервер
+ * лицензий сверяет его с началом отпечатка нового ключа (код нового ключа
+ * панель не показывает; принятый — в том же виде). Не отпечаток (32 hex) — ''.
+ */
+export function keyCodeOf(fingerprint) {
+  return typeof fingerprint === 'string' && /^[0-9a-f]{32}$/.test(fingerprint) ? fingerprint.slice(0, 4) + '-' + fingerprint.slice(4, 8) : '';
+}
+
+/**
+ * Для экрана «API»: идёт ли обмен и что с ним. PUBLIC_LICENCE_V1 — и код ключа
+ * обмена (key_code, keyCodeOf): только он — ни ключа, ни отпечатка целиком.
+ */
 export function syncStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_FILE) } = {}) {
   const st = readState(db) || {};
   let pendingEvents = 0;
@@ -455,7 +471,7 @@ export function syncStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_
   if (!local && keyBroken) {
     return {
       state: 'error', reason: 'key_broken', last_ok_at: st.last_ok_at || null, last_error: 'key_broken', last_error_at: st.last_error_at || null,
-      pending_events: pendingEvents, waiting_requests: waiting, skipped: skippedOf(st),
+      pending_events: pendingEvents, waiting_requests: waiting, skipped: skippedOf(st), key_code: '',
     };
   }
   const state = local ? 'off' : vendor ? 'waiting_vendor' : st.last_error && (!st.last_ok_at || st.last_error_at >= st.last_ok_at) ? 'error' : st.last_ok_at ? 'ok' : 'starting';
@@ -465,6 +481,7 @@ export function syncStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_
     pending_events: pendingEvents, waiting_requests: waiting,
     // C1: пропущенные элементы очереди — до сброса администратором.
     skipped: skippedOf(st),
+    key_code: identity ? keyCodeOf(identity.fingerprint) : '',   // PUBLIC_LICENCE_V1 — ревью 8c
   };
 }
 

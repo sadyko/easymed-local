@@ -14,7 +14,7 @@ import { bookingSeed, localAt } from '../../test-helpers/api-booking-seed.js';
 import { fakePublicServer } from '../../test-helpers/fake-public-server.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
 import { loadSyncIdentity, SYNC_KEY_FILE } from './sync-identity.js';
-import { syncOnce, syncStatus, publicBaseUrl, assertPublicUrlIsTestSafe, DEFAULT_PUBLIC_URL } from './public-sync.js';
+import { syncOnce, syncStatus, publicBaseUrl, assertPublicUrlIsTestSafe, DEFAULT_PUBLIC_URL, keyCodeOf } from './public-sync.js';
 import { confirmBooking } from './bookings.js';
 import { isoOf } from '../../../public/js/shared/api-booking.js';
 
@@ -457,4 +457,63 @@ test('проверка исправлений 8b: неизменное врем�
   assert.equal(slots, 2, 'через 15 минут — снова, хотя ничего не изменилось');
   const st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
   assert.equal(st.state, 'ok');
+});
+
+// ─── PUBLIC_LICENCE_V1 — РЕВЬЮ 8c: КОД КЛЮЧА ОБМЕНА ДЛЯ ЗВОНКА В EASY-MED ──────
+// Клиника сменила компьютер — новый ключ ждёт «Accept new key» в панели. Сотрудник
+// Easy-Med спрашивает код, который клиника видит у себя, и вводит его в панели;
+// сервер лицензий сверяет его с началом отпечатка нового ключа: первые 8 hex
+// отпечатка (sync-identity.js), «xxxx-xxxx» — договор со сборщиком А. Экрану —
+// только код: ни открытой половины, ни отпечатка целиком, ни закрытого.
+
+const STATUS_KEYS = ['key_code', 'last_error', 'last_error_at', 'last_ok_at', 'pending_events', 'reason', 'skipped', 'state', 'waiting_requests'];
+const codeOf = (fp) => fp.slice(0, 4) + '-' + fp.slice(4, 8);
+function onlyTheCode(st, identity, why) {
+  assert.deepEqual(Object.keys(st).sort(), STATUS_KEYS, why + ': ответ экрану — ровно эти поля');
+  const json = JSON.stringify(st);
+  for (const secret of [identity.signPublic, identity.boxPublic, identity.fingerprint, identity.fingerprint.slice(8)]) {
+    assert.ok(!json.includes(secret), why + ': в ответе экрану нет ключа и отпечатка целиком');
+  }
+  assert.doesNotMatch(json, /PRIVATE|BEGIN|"sign|"box/, why);
+}
+
+test('PUBLIC_LICENCE_V1, ревью 8c: keyCodeOf — первые 8 hex отпечатка как «xxxx-xxxx»; не отпечаток — пусто', () => {
+  assert.equal(keyCodeOf('46de4fe9a62a7f1349bdd3658be1696a'), '46de-4fe9', 'пример договора с панелью');
+  for (const bad of ['', null, undefined, 42, {}, '46de4fe9', '46DE4FE9A62A7F1349BDD3658BE1696A', 'zz'.repeat(16), '46de4fe9a62a7f1349bdd3658be1696a0']) {
+    assert.equal(keyCodeOf(bad), '', String(bad));
+  }
+});
+
+test('PUBLIC_LICENCE_V1, ревью 8c: код ключа обмена — в состоянии «ждём Easy-Med», «работает» и «ошибка»; это начало отпечатка ключа клиники; больше ничего о ключе', async () => {
+  const off = rig({ enabled: false });
+  let st = syncStatus(off.db, off.dataDir, { keyPath: off.keyPath });
+  assert.deepEqual([st.state, st.key_code], ['waiting_vendor', codeOf(off.identity.fingerprint)]);
+  assert.match(st.key_code, /^[0-9a-f]{4}-[0-9a-f]{4}$/);
+  assert.ok(off.identity.fingerprint.startsWith(st.key_code.replace('-', '')), 'код — начало отпечатка, который сервер лицензий вписывает в лицензию');
+  onlyTheCode(st, off.identity, 'waiting_vendor');
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.deepEqual([st.state, st.key_code], ['ok', codeOf(r.identity.fingerprint)]);
+  onlyTheCode(st, r.identity, 'ok');
+  r.fake.state.offline = true;
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.deepEqual([st.state, st.reason, st.key_code], ['error', 'offline', codeOf(r.identity.fingerprint)]);
+  onlyTheCode(st, r.identity, 'error');
+});
+
+test('PUBLIC_LICENCE_V1, ревью 8c: нет файла ключа или он испорчен — кода нет (пусто), поля те же', async () => {
+  const r = rig();
+  fs.rmSync(r.keyPath);
+  fs.rmSync(r.keyPath + '.bak', { force: true });
+  let st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.equal(st.key_code, '');
+  assert.deepEqual(Object.keys(st).sort(), STATUS_KEYS);
+  fs.writeFileSync(r.keyPath, 'испорчено');
+  fs.writeFileSync(r.keyPath + '.bak', 'испорчено');
+  st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  assert.deepEqual([st.state, st.reason, st.key_code], ['error', 'key_broken', '']);
+  assert.deepEqual(Object.keys(st).sort(), STATUS_KEYS);
 });

@@ -99,3 +99,30 @@ test('en: документация — английская страница; «
   assert.ok(text.split('\n').includes('Check the key (in Windows PowerShell, type curl.exe instead of curl): curl "https://api.easymed.uz/klinika-demo/v1/clinic" -H "Authorization: Bearer <key>"'), text);
   assert.ok(!/[А-Яа-яЁё]/.test(text), 'кириллица в тексте для отправки: ' + text);
 });
+
+// PUBLIC_LICENCE_V1 — ревью 8c: строка «Публичный сервер» с кодом ключа обмена на
+// английском — «Exchange key code: 46de-4fe9» и подсказка, ни одной кириллической
+// буквы; код тот же, что на русском (его читают вслух сотруднику Easy-Med).
+test('en: код ключа обмена — «Exchange key code: 46de-4fe9» и подсказка, без кириллицы — «waiting», «ok», «error»', async () => {
+  const fx = fixture();
+  for (const sync of [
+    { state: 'waiting_vendor', reason: 'not_enabled', last_ok_at: null, pending_events: 0, waiting_requests: 0, key_code: '46de-4fe9' },
+    { state: 'ok', reason: '', last_ok_at: '2030-03-11T04:00:00Z', last_error: '', waiting_requests: 1, pending_events: 0, key_code: '46de-4fe9' },
+    { state: 'error', reason: 'offline', last_ok_at: '2030-03-11T04:00:00Z', last_error: 'offline', last_error_at: '2030-03-11T05:00:00Z', key_code: '46de-4fe9' },
+  ]) {
+    reset();
+    onRpc('api_settings_get', () => fx);
+    onRpc('api_journal_list', () => []);
+    onRpc('api_sync_status', () => sync);
+    const root = mk('div');
+    await renderApiConnections(root, {});
+    await tick();
+    const out = [];
+    leaks(root, 'page:' + sync.state, out);
+    assert.deepEqual(out, [], 'кириллица на английском экране:\n' + out.join('\n'));
+    const el = walk(root).find((n) => n.attrs && n.attrs['data-apic-keycode']);
+    const text = walk(el).map((n) => n._t || '').join('');
+    assert.ok(text.includes('Exchange key code: 46de-4fe9'), text);
+    assert.ok(text.includes('Easy-Med will ask for this code if you have changed the computer.'), text);
+  }
+});

@@ -4,7 +4,12 @@
 // подписи, кандидаты по номеру семьи, действия; доска — только видимые карточки.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { bookingSeed, localAt, apptItem } from '../../test-helpers/api-booking-seed.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+import { loadSyncIdentity, SYNC_KEY_FILE } from '../api/sync-identity.js';
+import { setDataDir } from '../control/config.js';
 import { ingestItem } from '../api/bookings.js';
 import { RPC } from './index.js';
 import { isReadOnlyRpc } from '../control/gate.js';
@@ -90,6 +95,27 @@ test('состояние обмена — строке «API: Просмотр»
   assert.equal(typeof st.state, 'string');
   assert.equal(st.waiting_requests, 1);
   assert.equal((await refusal(() => apiSyncStatus(s.db, {}, s.reg))).status, 403);
+});
+
+// PUBLIC_LICENCE_V1 — ревью 8c: ответ RPC несёт код ключа обмена («xxxx-xxxx» —
+// первые 8 hex отпечатка) для звонка в Easy-Med и ничего больше о ключе: ни
+// открытой половины, ни отпечатка целиком, ни закрытого. Папка данных — своя,
+// временная (getDataDir RPC), с настоящим файлом ключа клиники.
+test('PUBLIC_LICENCE_V1: api_sync_status — код ключа обмена и ровно прежние поля; ключа в ответе нет', async (t) => {
+  const s = await withBooking();
+  const dir = tmpDir('em-rpc-keycode-');
+  const identity = loadSyncIdentity({ keyPath: path.join(dir, SYNC_KEY_FILE), create: true });
+  setDataDir(dir);
+  t.after(() => setDataDir(null));
+  const st = apiSyncStatus(s.db, {}, s.admin);
+  assert.deepEqual(Object.keys(st).sort(),
+    ['key_code', 'last_error', 'last_error_at', 'last_ok_at', 'pending_events', 'reason', 'skipped', 'state', 'waiting_requests']);
+  assert.equal(st.key_code, identity.fingerprint.slice(0, 4) + '-' + identity.fingerprint.slice(4, 8));
+  const json = JSON.stringify(st);
+  for (const secret of [identity.signPublic, identity.boxPublic, identity.fingerprint]) assert.ok(!json.includes(secret));
+  assert.doesNotMatch(json, /PRIVATE|BEGIN/);
+  const raw = fs.readFileSync(path.join(dir, SYNC_KEY_FILE), 'utf8');
+  for (const v of Object.values(JSON.parse(raw))) if (typeof v === 'string' && v.length > 8) assert.ok(!json.includes(v), 'содержимое файла ключа');
 });
 
 // ─── РЕВЬЮ 8a, I2: «CRM: просмотр» НЕ РЕШАЕТ; КНОПКИ — ТОЛЬКО ТОМУ, КТО РЕШАЕТ ─

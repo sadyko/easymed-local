@@ -204,7 +204,22 @@ export function publicServerFact(sync) {
       text = when ? trf('С {when} обмен идёт с ошибкой: {why}.', { when, why }) : trf('Обмен идёт с ошибкой: {why}.', { why });
     }
   }
-  return h('div', { 'data-apic-sync': st || 'off' }, h('dt', null, 'Публичный сервер'), h('dd', null, Icon(icon, { size: 15 }), h('span', null, text)));
+  return h('div', { 'data-apic-sync': st || 'off' }, h('dt', null, 'Публичный сервер'),
+    h('dd', null, Icon(icon, { size: 15 }), h('span', null, text, keyCodeLine(sync))));
+}
+// PUBLIC_LICENCE_V1 — ревью 8c: код ключа обмена (api_sync_status key_code — первые
+// 8 hex отпечатка, «46de-4fe9»). Клиника сменила компьютер — новый ключ ждёт
+// подтверждения в панели Easy-Med; сотрудник спросит этот код и введёт его в
+// панели, сервер лицензий сверит. Только у «ждём Easy-Med», «работает» и
+// «ошибка»; не код — ничего.
+// Код — отдельным элементом без перевода (его читают вслух буква в букву).
+const KEY_CODE_STATES = new Set(['waiting_vendor', 'ok', 'error']);
+export function keyCodeLine(sync) {
+  const code = sync && typeof sync.key_code === 'string' && /^[0-9a-f]{4}-[0-9a-f]{4}$/.test(sync.key_code) ? sync.key_code : '';
+  if (!code || !KEY_CODE_STATES.has(sync.state)) return null;
+  return h('span', { class: 'apic-keycode', 'data-apic-keycode': code },
+    h('span', null, 'Код ключа обмена:'), ' ', h('code', { translate: 'no' }, document.createTextNode(code)),
+    h('span', { class: 'apic-keycode-hint' }, 'Easy-Med спросит этот код, если вы меняли компьютер.'));
 }
 function slugEditor(s) {
   if (!s.can.admin) return h('p', { class: 'hint' }, 'Имя клиники в адресе ещё не задано — его задаёт администратор.');
