@@ -22,7 +22,6 @@ import { moveTasksWithLead } from './tasks-follow.js';   // CRM_UNIFY_V1 — з�
 // CRM_UNIFY_V1 — canEditCrm перенесён в crm/visibility.js (круг импорта с
 // tasks-follow.js); отсюда он по-прежнему экспортируется для старых вызовов.
 import { canEditCrm } from './visibility.js';
-import { crmWonCardLines } from './visit-link.js';   // CRM_LINK_ALL_V1 (R6)
 export { canEditCrm };
 
 const LINE_KEYS = ['status', 'scheduled_date', 'doctor_id', 'service_id', 'visit_id', 'consultation_type_id'];
@@ -202,8 +201,6 @@ export function mirrorAfter(db, ctx, meta, body, user, { insertedId = null } = {
           .run(values.doctor_id || null, ...ctx.ids);
       }
       for (const v of ctx.visits) mirrorVisit(db, v, { actorId });
-      // CRM_LINK_ALL_V1 (R6) — визит, закрывший карточку на стойке: его услуги — на карточке.
-      for (const v of ctx.visits) crmWonCardLines(db, v);
       return;
     }
 

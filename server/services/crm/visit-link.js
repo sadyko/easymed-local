@@ -104,10 +104,12 @@
 //   карточку — учёт воронки; строки визита и касса живут по своим правилам
 //   (booking-mirror.js: замена строки зеркала строкой регистратуры и разбор
 //   при первом счёте — при любом статусе строки заявки).
-//   CRM_LINK_ALL_V1 (R6, дефект G4) — карточка «Пришёл», которую закрыла
-//   стойка, видит услуги ЭТОГО визита: crmWonCardLines пишет каждую строку
-//   визита строкой карточки 'done' (визит → карточка; деньги не меняются) — в
-//   конце deskArrive, после сверки двери /api/db и после cashier_line_add.
+//   CRM_LINK_ALL_V1 (R6, дефект G4; редакция 2) — карточка «Пришёл», которую
+//   закрыла стойка, видит услуги ЭТОГО визита списком «Записи пациента»
+//   (crm_card_bookings) — по привязке записи; строк 'done' из визита не
+//   пишется (они были доказательством прихода до прихода — двойной счёт).
+//   P-7: визит держит строка ДРУГОЙ карточки — закрытая стойкой карточка
+//   получает привязку для воронки (source 'patient'), если у визита её нет.
 //
 // ВНЕ ВИДИМОСТИ ТОГО, КТО ЗАПИСЫВАЕТ, И НИЧЕГО НАРУЖУ: оператор Б записал
 // пациента оператора А — карточка А двигается, а функция не возвращает ничего,
@@ -124,7 +126,7 @@ import { openStageKeys, scheduledStageKey, wonStageKey, windowHours, SEED_NO_SHO
 // ли карточка в окне» (inWindowSql) и одно решение по новому обращению.
 import { contactDecision, reopenLead, inWindowSql, windowArg, leadInWindow, firstStageKey, liveKeys } from './contact-window.js';   // CRM_LINK_ALL_V1 — liveKeys (шаг C′)
 import { missedRecentlySql, missedRecentlyArgs } from './contact-window.js';   // CRM_UNIFY_V1 (финальное ревью) — одно правило опоздания
-import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL, cardDateOf, mirrorVisit, lineKey } from './booking-mirror.js';   // CRM_LINK_ALL_V1 — lineKey (crmWonCardLines)
+import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL, cardDateOf, mirrorVisit } from './booking-mirror.js';
 import { crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';
 import { hasAnyRole } from '../roles.js';   // CRM_UNIFY_V1 — стойка (deskArrival)
 // CRM_UNIFY_V1 (финальное ревью, B) — «может вести карточку»: одно правило
@@ -418,51 +420,8 @@ function deskArrive(db, v, user) {
       } catch { /* сборка без 186 — возвращать будет нечего */ }
     }
   })();
-  crmWonCardLines(db, v.id);   // CRM_LINK_ALL_V1 (R6) — услуги, уже лежащие в визите, — на карточку
-}
-
-/**
- * CRM_LINK_ALL_V1 (R6, дефект G4) — УСЛУГИ ВИЗИТА, ЗАКРЫВШЕГО КАРТОЧКУ, — НА
- * КАРТОЧКЕ. Стойка (быстрая регистрация, мастер «сейчас») закрывает карточку
- * в «Пришёл» раньше, чем в визите появляются строки; зеркало закрытую карточку
- * не пишет (booking-mirror.js шаг 3), и карточка оставалась пустой. Здесь —
- * только карточка, которая ДЕРЖИТ этот визит (requestOfVisit: строкой или
- * привязкой), только в конверсии (wonStageKey) и только визит сегодняшнего
- * местного дня своего здания: каждая строка визита-услуги, на которую не
- * ссылается ни одна строка заявки, получает строку карточки 'done' с
- * visit_service_id (инвариант: 'done' — только услуга, которая в визите).
- * Карточка остаётся «Пришёл»; другие карточки не трогаются никогда; деньги не
- * меняются (визит → карточка). Зовут: стойка (deskArrive), дверь /api/db после
- * сверки (booking-mirror-db.js), касса (cashier_line_add). Не бросает.
- * @returns {number} сколько строк карточки заведено
- */
-export function crmWonCardLines(db, visitId) {
-  try {
-    const v = visitRow(db, visitId);
-    if (!v || v.sync_origin != null || !v.patient_id || v.day !== today(db)) return 0;
-    if (!PRE_ARRIVAL.includes(v.status) && !ARRIVED_STATUSES.includes(v.status)) return 0;
-    const rid = requestOfVisit(db, v.id);
-    if (!rid) return 0;
-    const card = db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(rid);
-    if (!card || card.status !== wonStageKey(db)) return 0;
-    const held = db.prepare('SELECT 1 FROM crm_request_services WHERE visit_service_id = ? LIMIT 1');
-    const add = db.prepare(`INSERT INTO crm_request_services
-                              (request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id, visit_service_id, visit_service_auto)
-                            VALUES (?, ?, ?, ?, 'done', ?, ?, ?, 0)`);
-    return db.transaction(() => {
-      let n = 0;
-      for (const x of db.prepare(`SELECT * FROM visit_services WHERE visit_id = ? AND status <> 'cancelled'
-                                     AND clinic_item_id IS NULL AND sync_origin IS NULL ORDER BY id`).all(v.id)) {
-        if (!lineKey(x) || held.get(x.id)) continue;
-        add.run(rid, x.service_id ?? null, x.service_id != null ? null : x.consultation_type_id, v.day, x.doctor_id || null, v.id, x.id);
-        n++;
-      }
-      return n;
-    })();
-  } catch (e) {
-    console.error('[crm-link] услуги визита', visitId, 'не показаны на карточке:', e && e.message);   // CRM_LINK_ALL_V1
-    return 0;
-  }
+  // CRM_LINK_ALL_V1 (редакция 2) — строк «оказана» из визита здесь больше нет (crmWonCardLines
+  // удалён): услуги визита карточка показывает списком «Записи пациента» (crm_card_bookings).
 }
 
 /**
@@ -629,6 +588,17 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
       db.prepare(`INSERT OR REPLACE INTO crm_booking_links (visit_id, request_id, source, created_by, created_request)
                   VALUES (?, ?, ?, ?, ?)`)
         .run(v.id, pick[0], source, uid, pick[1] === 'created' ? 1 : 0);
+    }
+  } else if (desk) {
+    // CRM_LINK_ALL_V1 (редакция 2, P-7) — КАРТОЧКА, КОТОРУЮ ЗАКРЫЛА СТОЙКА, ВСЕГДА
+    //    ВИДИТ СВОЙ ВИЗИТ. Визит держит строка другой карточки (шаг A — например,
+    //    строка этого дня у прошлой «Пришёл»), и привязки шаг F не пишет: закрытая
+    //    стойкой карточка получает привязку только для воронки ('patient'), если у
+    //    визита её ещё нет (одна привязка на визит; прежнюю не заменяем).
+    const closed = [...touched].find(([id, via]) => id !== held && ['patient', 'live', 'phone'].includes(via));
+    if (closed) {
+      db.prepare(`INSERT OR IGNORE INTO crm_booking_links (visit_id, request_id, source, created_by, created_request)
+                  VALUES (?, ?, 'patient', ?, 0)`).run(v.id, closed[0], uid);
     }
   }
 
