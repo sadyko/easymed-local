@@ -93,7 +93,10 @@ test('страница клиники подключает карточку; к�
 // несколько новых ключей — принять нечего.
 test('карточка: принять новый ключ — только набранным кодом; кода нового ключа на экране нет; рядом «Block this key»; несколько новых — «possible copy»', () => {
   const card = fs.readFileSync(path.join(HERE, 'panel-api-card.js'), 'utf8');
-  assert.match(card, /cp\.acceptSyncKey\(clinic\.id, only\.fp, codeInput\.value\)/);
+  // Перепроверка 8c, F4: новый ключ — по непрозрачному id; отпечатка карточка не знает.
+  assert.match(card, /cp\.acceptSyncKey\(clinic\.id, only\.id, codeInput\.value\)/);
+  assert.match(card, /cp\.addRevocation\(clinic\.id, \{ kind: 'sync_key', key_id: k\.id/);
+  assert.doesNotMatch(card, /\b(only|k|r)\.fp\b/, 'карточка не обращается к отпечатку нового или прежнего ключа');
   // Перепроверка 8c, F1: звонить по номеру из своих записей, а не по тому, что даёт звонящий.
   assert.match(card, /Phone the clinic on the number in your records \(not one the caller gives\) and ask them to read the key code from Settings → API; accept only if it matches\./);
   assert.match(card, /data-block-candidate/);
@@ -102,5 +105,5 @@ test('карточка: принять новый ключ — только на
   assert.doesNotMatch(card, /keyCode\((c|cand|only|k)\.fp\)[^\n]*candidates|candidates[^\n]*keyCode\(/, 'код кандидата не рисуется');
   assert.match(card, /licenceLine\(api\.licence, api\.partners_see\)/);
   const api = fs.readFileSync(path.join(HERE, 'panel-api.js'), 'utf8');
-  assert.match(api, /acceptSyncKey: \(id, fingerprint, code\) => request\('POST', `[^`]*\/api\/accept-key`, \{ fingerprint, code \}\)/);
+  assert.match(api, /acceptSyncKey: \(id, keyId, code\) => request\('POST', `[^`]*\/api\/accept-key`, \{ key_id: keyId, code \}\)/);
 });

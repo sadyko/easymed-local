@@ -74,7 +74,7 @@ export function renderApiCard(box, clinic) {
     const rows = api.revocations.map((r) => `
       <tr data-rid="${esc(String(r.id))}">
         <td>${r.kind === 'partner_key' ? 'Partner key' : 'Clinic API key'}</td>
-        <td class="muted api-fp">${esc(r.kind === 'partner_key' ? shortFp(r.value) : keyCode(r.value))}</td>
+        <td class="muted api-fp">${esc(r.kind === 'partner_key' ? shortFp(r.value) : (r.code || '—'))}</td>
         <td>${esc(r.note || '—')}</td>
         <td class="muted">${esc(fmtDateTime(r.created_at))} · ${esc(r.created_by || '—')}</td>
         <td><button class="btn small" type="button" data-unblock>Unblock</button></td>
@@ -141,7 +141,7 @@ export function renderApiCard(box, clinic) {
           codeInput.focus();
           return;
         }
-        act(() => cp.acceptSyncKey(clinic.id, only.fp, codeInput.value), 'Accepted.');
+        act(() => cp.acceptSyncKey(clinic.id, only.id, codeInput.value), 'Accepted.');
       });
     }
 
@@ -150,7 +150,7 @@ export function renderApiCard(box, clinic) {
         const k = clinic.api.candidates[Number(btn.closest('[data-cand-i]').dataset.candI)];
         if (!k) return;
         if (!confirm(`Block this new key for "${clinic.name}"? It can never be accepted then — if it turns out to be the clinic's own new computer, the clinic will have to be re-enrolled.`)) return;
-        act(() => cp.addRevocation(clinic.id, { kind: 'sync_key', value: k.fp, note: 'new key blocked from the panel' }), 'Blocked.');
+        act(() => cp.addRevocation(clinic.id, { kind: 'sync_key', key_id: k.id, note: 'new key blocked from the panel' }), 'Blocked.');
       });
     });
 
@@ -159,7 +159,7 @@ export function renderApiCard(box, clinic) {
         const r = clinic.api.replaced_seen[Number(btn.closest('[data-replaced-i]').dataset.replacedI)];
         if (!r) return;
         if (!confirm(`Block the previously replaced key ${r.code}? The current key keeps working.`)) return;
-        act(() => cp.addRevocation(clinic.id, { kind: 'sync_key', value: r.fp, note: 'previously replaced key blocked from the panel' }), 'Blocked.');
+        act(() => cp.addRevocation(clinic.id, { kind: 'sync_key', key_id: r.id, note: 'previously replaced key blocked from the panel' }), 'Blocked.');
       });
     });
 

@@ -83,7 +83,7 @@ test('сверка помнит КАЖДЫЙ ключ, пришедший с у�
   noteSyncKey(db, row(db), FP2, NOW + 5000);
   assert.deepEqual(states(db), { [FP1]: 'accepted', [FP2]: 'candidate' });
   const [c] = syncKeyCandidates(db, row(db));
-  assert.deepEqual(c, { fp: FP2, code: '2222-2222', first_seen: '2026-10-12T10:00:01Z', last_seen: '2026-10-12T10:00:05Z', revoked: false, other_clinic: null });
+  assert.deepEqual(c, { id: 2, fp: FP2, code: '2222-2222', first_seen: '2026-10-12T10:00:01Z', last_seen: '2026-10-12T10:00:05Z', revoked: false, other_clinic: null });
 });
 
 test('acceptPendingSyncKey: единственный новый ключ — только с кодом, который клиника прочла с экрана; принятый прежде становится «прежним», а не «новым»', () => {

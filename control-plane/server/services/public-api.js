@@ -134,13 +134,13 @@ export function noteSyncKey(db, clinic, fp, now = new Date()) {
  * одному на ключ, старые первыми. revoked — заблокирован: ждать не может, но
  * СОРЕВНОВАЛСЯ (блокировка копии не открывает «Accept» без новой регистрации).
  * other_clinic — этот ключ уже принят у другой клиники.
- * @returns {{fp:string, code:string, first_seen:string, last_seen:string, revoked:boolean, other_clinic:string|null}[]}
+ * @returns {{id:number, fp:string, code:string, first_seen:string, last_seen:string, revoked:boolean, other_clinic:string|null}[]}
  */
 export function syncKeyCandidates(db, clinic) {
   return db.prepare(
-    "SELECT fp, first_seen, last_seen FROM sync_keys_seen WHERE clinic_id = ? AND state = 'candidate' AND fp <> ? ORDER BY first_seen, fp",
+    "SELECT id, fp, first_seen, last_seen FROM sync_keys_seen WHERE clinic_id = ? AND state = 'candidate' AND fp <> ? ORDER BY first_seen, fp",
   ).all(clinic.clinic_id, clinic.api_sync_key || '').map((r) => ({
-    fp: r.fp, code: keyCode(r.fp), first_seen: r.first_seen, last_seen: r.last_seen,
+    id: r.id, fp: r.fp, code: keyCode(r.fp), first_seen: r.first_seen, last_seen: r.last_seen,
     revoked: isRevoked(db, 'sync_key', r.fp), other_clinic: keyOwner(db, r.fp, clinic.clinic_id),
   }));
 }
@@ -153,14 +153,14 @@ export function syncKeyPending(db, clinic) {
 /**
  * Прежде принятые ключи, которые снова сверялись после того, как их сменили:
  * старый ПК ещё работает — или у кого-то его копия. «Прежний», не «новый».
- * @returns {{fp:string, code:string, last_seen:string, replaced_at:string}[]}
+ * @returns {{id:number, fp:string, code:string, last_seen:string, replaced_at:string}[]}
  */
 export function replacedKeysSeen(db, clinic) {
   return db.prepare(
-    "SELECT fp, last_seen, state_at FROM sync_keys_seen WHERE clinic_id = ? AND state IN ('accepted', 'replaced') AND fp <> ? AND last_seen >= state_at ORDER BY last_seen DESC, fp",
+    "SELECT id, fp, last_seen, state_at FROM sync_keys_seen WHERE clinic_id = ? AND state IN ('accepted', 'replaced') AND fp <> ? AND last_seen >= state_at ORDER BY last_seen DESC, fp",
   ).all(clinic.clinic_id, clinic.api_sync_key || '')
     .filter((r) => !isRevoked(db, 'sync_key', r.fp))
-    .map((r) => ({ fp: r.fp, code: keyCode(r.fp), last_seen: r.last_seen, replaced_at: r.state_at }));
+    .map((r) => ({ id: r.id, fp: r.fp, code: keyCode(r.fp), last_seen: r.last_seen, replaced_at: r.state_at }));
 }
 
 /**

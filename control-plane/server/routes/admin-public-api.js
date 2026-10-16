@@ -37,23 +37,27 @@ const CLINIC_COLUMNS = `clinic_id, active, subscription, subscription_until, api
 /**
  * Блок «Online booking / API» для GET /clinics/:id и ответов этих маршрутов.
  * partners_see — то же правило, что решает список производителя (routes/public-feed.js).
- * candidates — новые ключи после последнего принятия, БЕЗ кода: код оператор
- * узнаёт от клиники и набирает сам (ревью 8c, п. 1); key_competing — их больше
- * одного, принять нельзя; replaced_seen — прежние ключи, которые снова сверялись.
+ * candidates — новые ключи после последнего принятия: ни кода, ни ОТПЕЧАТКА
+ * (первые 8 hex отпечатка — это и есть код; перепроверка 8c, F4) — только
+ * непрозрачный id строки, по нему панель принимает и блокирует; код оператор
+ * узнаёт от клиники и набирает сам. key_competing — их больше одного, принять
+ * нельзя; replaced_seen — прежние ключи (их код известен — они были приняты),
+ * которые снова сверялись. В revocations у ключа обмена нет value; code — только
+ * у ключа, который был принятым (F5: код не принятого ни разу ключа не выдаётся).
  */
 export function apiViewOf(db, c, now = new Date()) {
   const candidates = syncKeyCandidates(db, c);
+  const everAccepted = new Set(db.prepare("SELECT fp FROM sync_keys_seen WHERE clinic_id = ? AND state IN ('accepted', 'replaced')")
+    .all(c.clinic_id).map((r) => r.fp).concat(c.api_sync_key ? [c.api_sync_key] : []));
   return {
     enabled: !!c.api_enabled,
     sync_key: c.api_sync_key || null,
     sync_key_code: c.api_sync_key ? keyCode(c.api_sync_key) : null,
     sync_key_accepted_at: c.api_sync_key_accepted_at || null,
-    sync_key_seen: c.api_sync_key_seen || null,
-    sync_key_seen_at: c.api_sync_key_seen_at || null,
-    candidates: candidates.map(({ fp, first_seen, last_seen, revoked, other_clinic }) => ({ fp, first_seen, last_seen, revoked, other_clinic })),
+    candidates: candidates.map(({ id, first_seen, last_seen, revoked, other_clinic }) => ({ id, first_seen, last_seen, revoked, other_clinic })),
     key_pending: candidates.some((k) => !k.revoked),
     key_competing: candidates.length > 1,
-    replaced_seen: replacedKeysSeen(db, c),
+    replaced_seen: replacedKeysSeen(db, c).map(({ id, code, last_seen, replaced_at }) => ({ id, code, last_seen, replaced_at })),
     seen_key_revoked: isRevoked(db, 'sync_key', c.api_sync_key_seen),
     partners_see: partnersSee(c, { entitled: isEntitled(c.subscription, c.subscription_until, now) }),
     licence: c.licence_issued_at ? {
@@ -62,8 +66,17 @@ export function apiViewOf(db, c, now = new Date()) {
     } : null,
     revocations: db.prepare(
       'SELECT id, kind, value, note, created_at, created_by FROM revocations WHERE clinic_id = ? AND removed_at IS NULL ORDER BY id DESC',
-    ).all(c.clinic_id),
+    ).all(c.clinic_id).map((r) => (r.kind === 'sync_key'
+      ? { ...r, value: null, code: everAccepted.has(r.value) ? keyCode(r.value) : null }
+      : { ...r, code: null })),
   };
+}
+
+/** Строка ключа этой клиники по непрозрачному id из панели (F4) — или null. */
+function keyRowById(db, clinicId, id) {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return db.prepare('SELECT fp FROM sync_keys_seen WHERE id = ? AND clinic_id = ?').get(n, clinicId) || null;
 }
 
 const clinicOf = (db, id) => db.prepare(`SELECT ${CLINIC_COLUMNS} FROM clinics WHERE clinic_id = ?`).get(id);
@@ -83,9 +96,17 @@ export function registerPublicApiRoutes(r, db) {
   r.post('/clinics/:id/api/accept-key', (req, res) => {
     const c = clinicOf(db, req.params.id);
     if (!c) return fail(res, 404, 'not_found', 'Clinic not found.');
-    const fingerprint = String((req.body && req.body.fingerprint) || '');
-    if (!SYNC_FP_RE.test(fingerprint)) return fail(res, 400, 'bad_request', 'fingerprint must be the 32-character key fingerprint shown on this page.');
-    const code = req.body && req.body.code;
+    // The panel names the new key by its opaque id (F4 — it never learns the
+    // fingerprint); API clients and tests may still name it by fingerprint.
+    const body = req.body || {};
+    let fingerprint = String(body.fingerprint || '');
+    if (body.key_id !== undefined && body.key_id !== null) {
+      const k = keyRowById(db, c.clinic_id, body.key_id);
+      if (!k) return fail(res, 409, 'conflict', 'This key is no longer waiting for this clinic — reload the page and check again.');
+      fingerprint = k.fp;
+    }
+    if (!SYNC_FP_RE.test(fingerprint)) return fail(res, 400, 'bad_request', 'Say which new key to accept (key_id from this page).');
+    const code = body.code;
     if (!normaliseKeyCode(code)) {
       return fail(res, 400, 'bad_request', 'Type the key code the clinic reads out from Settings → API (8 characters, like ab12-cd34).');
     }
@@ -112,9 +133,16 @@ export function registerPublicApiRoutes(r, db) {
   r.post('/clinics/:id/revocations', (req, res) => {
     const c = clinicOf(db, req.params.id);
     if (!c) return fail(res, 404, 'not_found', 'Clinic not found.');
-    const { kind, value, note } = req.body || {};
+    const { kind, value, note, key_id: keyId } = req.body || {};
     if (kind !== 'partner_key' && kind !== 'sync_key') return fail(res, 400, 'bad_request', 'kind must be "partner_key" or "sync_key".');
-    const raw = typeof value === 'string' ? value.trim() : '';
+    // F4 — «Block this key» on a new (or previously replaced) key sends its
+    // opaque id; the fingerprint is looked up here, never sent to the page.
+    let byId = null;
+    if (kind === 'sync_key' && keyId !== undefined && keyId !== null) {
+      byId = keyRowById(db, c.clinic_id, keyId);
+      if (!byId) return fail(res, 400, 'bad_request', "This is not one of this clinic's API keys.");
+    }
+    const raw = byId ? byId.fp : (typeof value === 'string' ? value.trim() : '');
     if (KEY_RE.test(raw)) {
       // The key itself, not its fingerprint. Refused, never stored, never echoed.
       return fail(res, 400, 'bad_request', 'Send the SHA-256 of the key, not the key itself — the panel computes it in your browser.');

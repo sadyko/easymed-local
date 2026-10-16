@@ -29,6 +29,8 @@ function syncKey() {
 }
 /** Код ключа, который клиника читает с экрана «Настройки → API»: первые 8 hex, «xxxx-xxxx». */
 const code = (fp) => fp.slice(0, 4) + '-' + fp.slice(4, 8);
+/** Непрозрачный id строки ключа — им панель обращается к новому ключу, не зная его отпечатка. */
+const keyIdOf = (s, fp) => s.db.prepare("SELECT id FROM sync_keys_seen WHERE clinic_id = 'c-1' AND fp = ?").get(fp).id;
 
 async function harness(t) {
   const db = openDb(':memory:');
@@ -53,8 +55,8 @@ async function harness(t) {
 test('карточка клиники: блок «Online booking / API» — выключено, ключа нет, лицензии 8c нет, блокировок нет', async (t) => {
   const s = await harness(t);
   const d = await s.call('GET', '/clinics/c-1');
-  assert.deepEqual(d.body.clinic.api, { enabled: false, sync_key: null, sync_key_code: null, sync_key_accepted_at: null, sync_key_seen: null,
-    sync_key_seen_at: null, candidates: [], key_pending: false, key_competing: false, replaced_seen: [], seen_key_revoked: false,
+  assert.deepEqual(d.body.clinic.api, { enabled: false, sync_key: null, sync_key_code: null, sync_key_accepted_at: null,
+    candidates: [], key_pending: false, key_competing: false, replaced_seen: [], seen_key_revoked: false,
     partners_see: 'off', licence: null, revocations: [] });
   const list = await s.call('GET', '/clinics');
   assert.deepEqual([list.body.clinics[0].api_enabled, list.body.clinics[0].api_key_pending, list.body.clinics[0].api_key_competing], [false, false, false]);
@@ -82,9 +84,9 @@ test('новый ПК: ключ ждёт подтверждения, доска 
   s.checkin(a.b64);
   s.checkin(b.b64);
   const d = (await s.call('GET', '/clinics/c-1')).body.clinic.api;
-  assert.deepEqual([d.sync_key, d.sync_key_code, d.sync_key_seen, d.key_pending, d.key_competing], [a.fp, code(a.fp), b.fp, true, false]);
-  assert.deepEqual(d.candidates.map((c) => [c.fp, c.revoked]), [[b.fp, false]]);
-  assert.equal('code' in d.candidates[0], false, 'код нового ключа панель не показывает — его читает клиника');
+  assert.deepEqual([d.sync_key, d.sync_key_code, d.key_pending, d.key_competing], [a.fp, code(a.fp), true, false]);
+  assert.deepEqual(d.candidates.map((c) => [c.id, c.revoked]), [[keyIdOf(s, b.fp), false]]);
+  assert.equal('code' in d.candidates[0] || 'fp' in d.candidates[0], false, 'ни кода, ни отпечатка нового ключа панель не получает — код читает клиника');
   assert.equal((await s.call('GET', '/clinics')).body.clinics[0].api_key_pending, true);
   assert.equal((await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: 'не отпечаток', code: code(b.fp) })).status, 400);
   const noCode = await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: b.fp });
@@ -97,12 +99,13 @@ test('новый ПК: ключ ждёт подтверждения, доска 
   assert.match(mismatch.body.error.message, /does not match/);
   assert.ok(!JSON.stringify(mismatch.body).includes(code(b.fp)) && !JSON.stringify(mismatch.body).includes(b.fp.slice(0, 8)), 'верный код ответ не подсказывает');
   assert.equal(s.db.prepare("SELECT api_sync_key FROM clinics WHERE clinic_id = 'c-1'").get().api_sync_key, a.fp);
-  const ok = await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: b.fp, code: code(b.fp).toUpperCase() });
+  const ok = await s.call('POST', '/clinics/c-1/api/accept-key', { key_id: d.candidates[0].id, code: code(b.fp).toUpperCase() });
   assert.deepEqual([ok.status, ok.body.api.sync_key, ok.body.api.key_pending], [200, b.fp, false]);
   assert.equal((await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: b.fp, code: code(b.fp) })).status, 409, 'ждущего больше нет');
   s.checkin(a.b64);   // старый ПК ещё работает
   const after = (await s.call('GET', '/clinics/c-1')).body.clinic.api;
-  assert.deepEqual([after.key_pending, after.candidates, after.replaced_seen.map((k) => [k.fp, k.code])], [false, [], [[a.fp, code(a.fp)]]]);
+  assert.deepEqual([after.key_pending, after.candidates, after.replaced_seen.map((k) => [k.id, k.code])], [false, [], [[keyIdOf(s, a.fp), code(a.fp)]]]);
+  assert.equal('fp' in after.replaced_seen[0], false);
 });
 
 test('ревью 8c: два разных новых ключа с одной установки — «Accept» отказывает с верным кодом любого, блокировка одного не открывает его; доска это показывает', async (t) => {
@@ -115,16 +118,19 @@ test('ревью 8c: два разных новых ключа с одной у�
   s.checkin(copy.b64);
   const d = (await s.call('GET', '/clinics/c-1')).body.clinic.api;
   // Пришли в одну секунду — порядок по отпечатку; сравниваем без порядка.
-  assert.deepEqual([d.key_pending, d.key_competing, d.candidates.map((c) => c.fp).sort()], [true, true, [b.fp, copy.fp].sort()]);
+  assert.deepEqual([d.key_pending, d.key_competing, d.candidates.map((c) => c.id).sort()], [true, true, [keyIdOf(s, b.fp), keyIdOf(s, copy.fp)].sort()]);
   assert.equal((await s.call('GET', '/clinics')).body.clinics[0].api_key_competing, true);
   for (const k of [b, copy]) {
     const r = await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: k.fp, code: code(k.fp) });
     assert.deepEqual([r.status, r.body.error.code], [409, 'conflict']);
     assert.match(r.body.error.message, /2 different new keys .*possible copy.*re-enrol/s);
   }
-  const blocked = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', value: copy.fp, note: 'copy' });
+  // «Block this key» у нового ключа шлёт его id — отпечаток сервер находит сам.
+  const blocked = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', key_id: keyIdOf(s, copy.fp), note: 'copy' });
   assert.equal(blocked.status, 201);
-  assert.deepEqual(Object.fromEntries(blocked.body.api.candidates.map((c) => [c.fp, c.revoked])), { [b.fp]: false, [copy.fp]: true });
+  assert.equal(s.db.prepare("SELECT value FROM revocations WHERE kind = 'sync_key'").get().value, copy.fp);
+  assert.deepEqual(Object.fromEntries(blocked.body.api.candidates.map((c) => [c.id, c.revoked])), { [keyIdOf(s, b.fp)]: false, [keyIdOf(s, copy.fp)]: true });
+  assert.deepEqual(blocked.body.api.revocations.map((r) => [r.kind, r.value, r.code]), [['sync_key', null, null]], 'ни отпечатка, ни кода не принятого ни разу ключа');
   assert.equal(blocked.body.api.key_competing, true);
   assert.equal((await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: b.fp, code: code(b.fp) })).status, 409, 'без новой регистрации — никак');
   assert.equal(s.db.prepare("SELECT api_sync_key FROM clinics WHERE clinic_id = 'c-1'").get().api_sync_key, a.fp);
@@ -151,7 +157,37 @@ test('заблокировать ключ обмена можно только �
   const r = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', value: stranger.fp });
   assert.equal(r.status, 400);
   assert.match(r.body.error.message, /not one of this clinic's API keys/);
+  // По id — только строка этой клиники.
+  createEnrollmentCode(s.db, { clinicId: 'c-2', name: 'Другая' });
+  s.db.prepare("INSERT INTO sync_keys_seen (clinic_id, fp, first_seen, last_seen, state, state_at) VALUES ('c-2', ?, 'x', 'x', 'candidate', 'x')").run(stranger.fp);
+  const otherId = s.db.prepare("SELECT id FROM sync_keys_seen WHERE clinic_id = 'c-2'").get().id;
+  for (const key_id of [otherId, 9999, 'x']) {
+    const byId = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', key_id });
+    assert.equal(byId.status, 400, String(key_id));
+  }
   assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM revocations').get().n, 0);
+});
+
+// Перепроверка 8c, F4: отпечаток нового ключа — это и его код (первые 8 hex).
+// Его не должно быть ни в одном ответе панели — иначе код читается в DevTools.
+test('перепроверка 8c, F4: ни один ответ панели не несёт отпечатка нового ключа — ни карточка, ни доска, ни ответы на действия', async (t) => {
+  const s = await harness(t);
+  const a = syncKey();
+  const b = syncKey();
+  s.checkin(a.b64);
+  s.checkin(b.b64);
+  const secret = b.fp.slice(0, 8);
+  const answers = [
+    await s.call('GET', '/clinics/c-1'),
+    await s.call('GET', '/clinics'),
+    await s.call('POST', '/clinics/c-1/api', { enabled: true }),
+    await s.call('POST', '/clinics/c-1/api/accept-key', { key_id: keyIdOf(s, b.fp), code: '0000-0000' }),
+  ];
+  const blk = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', key_id: keyIdOf(s, b.fp) });
+  answers.push(blk, await s.call('DELETE', '/clinics/c-1/revocations/' + blk.body.id));
+  for (const r of answers) assert.ok(!JSON.stringify(r.body).includes(secret), JSON.stringify(r.body).slice(0, 120));
+  const gone = await s.call('POST', '/clinics/c-1/api/accept-key', { key_id: 9999, code: code(b.fp) });
+  assert.deepEqual([gone.status, gone.body.error.code], [409, 'conflict'], 'ключа с таким id у клиники нет — перезагрузить страницу');
 });
 
 test('блокировка ключа партнёра: только SHA-256; сам ключ — отказ без следа; повтор — «уже»; снять — один раз', async (t) => {
