@@ -7992,7 +7992,7 @@ table.pkg-tbl thead th.pkg-r { text-align: right; }
 .lan-kv dd { margin: 0; min-width: 0; color: var(--ink-900); overflow-wrap: anywhere; }
 .lan-copyrow { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .lan-code { flex: 1 1 220px; min-width: 0; padding: 6px 10px; border-radius: 6px; background: var(--ink-50);
-    font-family: var(--font-mono); font-size: var(--fs-1); white-space: pre-wrap; word-break: break-all; user-select: all; color: var(--ink-900); }
+    font-family: var(--font-mono); font-size: var(--fs-1); white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; color: var(--ink-900); }
 .lan-copy { flex: none; }
 .lan-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .lan-steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-2); line-height: 1.5; color: var(--ink-700); }

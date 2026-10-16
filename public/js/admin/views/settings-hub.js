@@ -350,7 +350,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
             // LAN_ADDRESS_V1 — адрес сервера в сети: роутер клиники после перезапуска выдаёт
             // этому ПК новый номер, и другие компьютеры и анализаторы его теряют. Своя плитка,
             // а не карточка в «Системе»: «Система» — «только версия и что нового» (SETTINGS_SPLIT_V1).
-            { label: 'Адрес в сети',        desc: 'Адрес сервера в сети, имя для других компьютеров и как закрепить адрес в роутере', icon: 'Globe', live: true, action: nav('lan-address'), route: 'lan-address' },
+            { label: 'Адрес в сети',        desc: 'Адрес сервера и имя в сети для других компьютеров', icon: 'Globe', live: true, action: nav('lan-address'), route: 'lan-address' },
         ],
     },
     {
