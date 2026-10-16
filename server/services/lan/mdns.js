@@ -174,9 +174,13 @@ export function createMdnsResponder({
     if (!m) return;
     const list = ifaces();
     const mine = list.map((i) => i.address);
-    if (mine.includes(rinfo.address)) return;           // своё же (multicast-петля)
     const name = fqdn().toLowerCase();
     if (m.qr) {
+      // Ответ со своего же адреса — наше объявление вернулось петлёй multicast:
+      // не конфликт. ВОПРОС со своего адреса — другое дело: это служба DNS-клиента
+      // Windows на этом же ПК (браузер сервера открыл <имя>.local), ему отвечаем.
+      // Свои пробы сюда не попадают: пока идёт проба, на вопросы мы не отвечаем.
+      if (mine.includes(rinfo.address)) return;
       for (const a of m.answers) {
         if (a.type === TYPE_A && a.address && a.name.toLowerCase() === name && !mine.includes(a.address)) { onConflict(a.address); return; }
       }

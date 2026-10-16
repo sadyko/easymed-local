@@ -183,6 +183,15 @@ test('свои же пакеты (multicast-петля) и ответ с наш�
   assert.equal(r.status().name, 'easymed.local');
 });
 
+test('вопрос с адреса самого сервера (браузер на этом же ПК спросил через службу Windows) — ответ есть', async (t) => {
+  const { r, sock } = await fakeResponder(t);
+  await until(() => r.status().state === 'active');
+  sock.sent.length = 0;
+  sock.emit('message', buildQuery('easymed.local', { type: TYPE_A }), fromLan('192.168.1.156'));
+  assert.equal(sock.sent.length, 1);
+  assert.deepEqual(sock.sent[0].m.answers.map((a) => a.address), ['192.168.1.156']);
+});
+
 test('все имена easymed … easymed-9 заняты — состояние conflict, на запросы молчит', async (t) => {
   const { r, sock } = await fakeResponder(t);
   const origSend = sock.send.bind(sock);
