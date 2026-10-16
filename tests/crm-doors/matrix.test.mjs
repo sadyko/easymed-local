@@ -107,7 +107,6 @@ const DECIDED = {
   '2-S2-boss': { rule: 'R1 (D1)', owner: 'lines', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B","30@D2:pending/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
   '2-S3-reg': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '2-S3-boss': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '3b-S3-reg': { rule: 'R2 (D1)', owner: 'moved', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '4-today-S2': { rule: 'R1 (D1) + D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@D:pending/B","30@T:pending/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
   '4-today-S2-pay': { rule: 'R1 (D1)', owner: 'came+lines', cell: {"stage":"came","date":"T","lines":["30@D:pending/B","30@T:done/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
   '4-future-S2': { rule: 'R1 (D1)', owner: 'lines', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B","30@D2:pending/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
@@ -119,7 +118,18 @@ const DECIDED = {
   // Task 2 — R5 (D4)
   '2-S1p-reg': { rule: 'R5 (D4)', owner: 'lines', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '4-today-S1p': { rule: 'R5 (D4) + D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '3b-S1p-reg': { rule: 'R5 (D4)', owner: 'moved', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  // Task 3 — R6 (G4)
+  '3b-S1-reg': { rule: 'R6 (G4)', owner: 'lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3b-S1-boss': { rule: 'R6 (G4)', owner: 'lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3b-S2-reg': { rule: 'R6 (G4)', owner: 'lines', cell: {"stage":"came","date":"D","lines":["30@D:pending/B","30@T:done/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '3a-S1p-reg': { rule: 'R6 (G4)', owner: 'lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3a-S3p-reg': { rule: 'R6 (G4)', owner: 'lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3c-S2-reg': { rule: 'R6 (G4)', owner: 'lines', cell: {"stage":"came","date":"D","lines":["30@D:pending/B","30@T:done/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '7-fast-S2T-other': { rule: 'R6 (G4)', owner: 'lines', cell: {"stage":"came","date":"T","lines":["30@T:done/V","40@T:done/V"],"link":"none","cards":1,"visits":1,"vs":[30,40]} },
+  '3b-S3-reg': { rule: 'R2 (D1) + R6 (G4)', owner: 'lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3b-S1p-reg': { rule: 'R5 (D4) + R6 (G4)', owner: 'lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  // intermediate until Task 6 (R7b): the G7 twin is in the visit twice, so R6 shows it twice on the card too — its GAP stays todo
+  '7-fast-S2Tcal-same': { rule: 'R6 (G4), before R7b', owner: null, cell: {"stage":"came","date":"T","lines":["30@T:done/V","30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30,30]} },
 };
 
 const rows = [];

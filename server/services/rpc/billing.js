@@ -9,6 +9,7 @@ import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
 import { crmInvoiceEvidence, crmVisitEvidence } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 (разбор ревью M6, M1) — строки записи из заявки CRM.
 import { pruneAutoLinesOnInvoice, syncLineFromVisit, mirrorVisit, mirrorCashierLine } from '../crm/booking-mirror.js';
+import { crmWonCardLines } from '../crm/visit-link.js';   // CRM_LINK_ALL_V1 (R6)
 import { invoiceStatusFor, idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 // PAY_BASIS_PERFORMED_V1 — «what will the invoice charge for this line» is one
 // function, shared with the doctor's pay (rpc/reports.js): own price over the
@@ -1687,6 +1688,7 @@ export function addServiceToVisitInvoice(db, args, user, { rpc = 'cashier_line_a
   if (!out.repeated) {
     mirrorVisit(db, visitId, { actorId: user && user.id });   // CRM_CALENDAR_MIRROR_V1
     mirrorCashierLine(db, out.line.id);                       // ревью — строка в счёте тоже доходит до заявки
+    crmWonCardLines(db, visitId);                             // CRM_LINK_ALL_V1 (R6) — и до карточки «Пришёл» этого визита
   }
   return out;
 }
