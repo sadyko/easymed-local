@@ -36,6 +36,7 @@ import { lineUnitPrice } from '../domain/pricing.js';
 import { servicePriceQuote } from '../rpc/service-price-quote.js';
 import { hasAnyRole } from '../roles.js';
 import { EVIDENCE_SERVICE_STATUSES } from './visit-status.js';
+import { displayLinkSql } from './display-links.js';   // CRM_LINK_ALL_V1 (ред. 2) — привязки «только для воронки»
 
 /** Статусы визита, у которого пациент ещё не пришёл. Словарь — миграция 003. */
 export const PRE_ARRIVAL = Object.freeze(['scheduled', 'confirmed']);
@@ -140,15 +141,20 @@ export function dayVisitMovableFor(db, visitId, doctorId) {
   return lines.every((l) => (l.doctor_id == null ? visitDocOk : Number(l.doctor_id) === doc));
 }
 
-/** Заявка, которой принадлежит запись: по её строкам, иначе по привязке. */
-export function requestOfVisit(db, visitId) {
+/**
+ * Заявка, которой принадлежит запись: по её строкам, иначе по привязке.
+ * CRM_LINK_ALL_V1 (редакция 2) — привязку «только для воронки» (crm/display-links.js:
+ * шаг C′, телефон) зеркало не видит: по ней услуги записи в карточку не пишутся.
+ * display: true — видит и её (шаг связи crm/visit-link.js, ступень и дата).
+ */
+export function requestOfVisit(db, visitId, { display = false } = {}) {
   const byLine = db.prepare(`SELECT MIN(request_id) AS r FROM crm_request_services
                               WHERE visit_id = ? AND status <> 'cancelled'`).get(visitId);
   if (byLine && byLine.r) return byLine.r;
   try {
     // Заявку могли удалить (администратор) — привязка к ней ничего не значит.
     const l = db.prepare(`SELECT b.request_id FROM crm_booking_links b
-                            JOIN crm_requests r ON r.id = b.request_id WHERE b.visit_id = ?`).get(visitId);
+                            JOIN crm_requests r ON r.id = b.request_id WHERE b.visit_id = ?${display ? '' : ` AND NOT ${displayLinkSql('b')}`}`).get(visitId);
     return l ? l.request_id : null;
   } catch { return null; }
 }
@@ -686,7 +692,8 @@ export function cancellableBookingsOf(db, requestId) {
                                    WHERE request_id = ? AND status = 'pending' AND visit_id IS NOT NULL`)
     .all(requestId).map((r) => r.id));
   try {
-    for (const r of db.prepare('SELECT visit_id AS id FROM crm_booking_links WHERE request_id = ?').all(requestId)) ids.add(r.id);
+    // CRM_LINK_ALL_V1 (редакция 2) — запись, привязанную только для воронки, «Отказ» не отменяет никогда.
+    for (const r of db.prepare(`SELECT visit_id AS id FROM crm_booking_links b WHERE b.request_id = ? AND NOT ${displayLinkSql('b')}`).all(requestId)) ids.add(r.id);
   } catch { /* сборка без 187 */ }
   const day = today(db);
   const out = [];

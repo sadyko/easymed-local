@@ -153,7 +153,7 @@ import { getDataDir } from '../control/config.js';
 import { crmVisitStatus } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 — запись календаря и заявка CRM — одна запись.
 import { mirrorVisit, mirrorReschedule, dayVisitMovableFor } from '../crm/booking-mirror.js';
-import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
+import { crmLinkVisit, crmDisplayLinkMoved } from '../crm/visit-link.js';   // CRM_UNIFY_V1 · CRM_LINK_ALL_V1 (ред. 2) — crmDisplayLinkMoved
 // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
 import { localDate } from '../domain/day.js';
 // PUBLIC_API_V1 — время, удержанное онлайн-записью без карты, занимает врача
@@ -1262,6 +1262,7 @@ export async function calendarBook(db, args, user, deps = {}) {
   } else if (BUSY_STATUSES.includes(status)
       && (existing.visit_date !== out.visit.visit_date || Number(existing.doctor_id || 0) !== Number(out.visit.doctor_id || 0))) {
     mirrorReschedule(db, out.visit.id, { oldDoctorId: existing.doctor_id });
+    crmDisplayLinkMoved(db, out.visit.id);   // CRM_LINK_ALL_V1 (ред. 2) — дата карточки, привязанной для воронки
   }
   mirrorVisit(db, out.visit.id, { actorId: user && user.id });
 

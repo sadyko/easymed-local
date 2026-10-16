@@ -132,6 +132,7 @@ import { hasAnyRole } from '../roles.js';   // CRM_UNIFY_V1 — стойка (de
 import { canOwnLead } from './tasks-follow.js';
 import { today } from '../domain/day.js';
 import { phoneLikePattern, digitsOf } from '../../../public/js/admin/views/crm-phone-match.js';
+import { displayLinkSql } from './display-links.js';   // CRM_LINK_ALL_V1 (ред. 2) — привязки «только для воронки»
 
 // CRM_UNIFY_V1 (задача 6) — срок колл-центра CALLCENTER_ATTACH_DAYS (30 дней по
 // created_at) заменён окном повторного обращения (contact-window.js, шаг E).
@@ -464,6 +465,27 @@ export function crmWonCardLines(db, visitId) {
   }
 }
 
+/**
+ * CRM_LINK_ALL_V1 (редакция 2) — ПЕРЕНОС ЗАПИСИ, ПРИВЯЗАННОЙ ТОЛЬКО ДЛЯ ВОРОНКИ.
+ * Услуг такой записи в карточке нет (её строки зеркало не пишет), поэтому
+ * перенос в календаре (mirrorReschedule) карточку не видит. Дату карточки ведёт
+ * одно правило — cardDateOf (ближайший записанный день, и по такой привязке):
+ * открытая карточка получает её и после переноса. Ступень не меняется,
+ * updated_at не двигается (не контакт с пациентом). Не бросает.
+ */
+export function crmDisplayLinkMoved(db, visitId) {
+  try {
+    const l = db.prepare(`SELECT b.request_id AS id, r.status, r.scheduled_date FROM crm_booking_links b
+                            JOIN crm_requests r ON r.id = b.request_id
+                           WHERE b.visit_id = ? AND ${displayLinkSql('b')}`).get(Number(visitId));
+    if (!l || !openStageKeys(db).includes(l.status)) return;
+    const when = cardDateOf(db, l.id, l.scheduled_date ?? null);
+    if (when !== l.scheduled_date) db.prepare('UPDATE crm_requests SET scheduled_date = ? WHERE id = ?').run(when, l.id);
+  } catch (e) {
+    console.error('[crm-link] перенос записи', visitId, 'не отражён в дате карточки:', e && e.message);   // CRM_LINK_ALL_V1
+  }
+}
+
 /** @returns {boolean} взял ли визит хоть одну строку (шаг A) */
 function linkTx(db, v, user, { undated, arrived, desk }) {
   const open = openStageKeys(db);
@@ -504,8 +526,9 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   // визиту идёт дальше по всем шагам: карточку другого дня закрывает и она.
   if (arrived && !desk) return touched.size > 0;
 
-  // B. Заявка, которая уже держит визит.
-  const held = requestOfVisit(db, v.id);
+  // B. Заявка, которая уже держит визит. CRM_LINK_ALL_V1 (редакция 2) — и привязкой
+  //    «только для воронки» (C′, телефон): ступень и дата идут по ней, услуги — нет.
+  const held = requestOfVisit(db, v.id, { display: true });
   if (held && !touched.has(held)) touched.set(held, 'held');
 
   // C. Открытые заявки пациента, ждущие этот приход. CRM_UNIFY_V1 (Р8; ревью

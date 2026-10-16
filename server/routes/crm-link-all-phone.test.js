@@ -10,7 +10,9 @@ import { link, vsOf, calendarBook, deskRegister } from '../test-helpers/crm-link
 
 const D = localDay(3);
 
-test('CRM_LINK_ALL_V1 R5: календарь регистратуры — карточка по телефону получает пациента, привязку и услугу визита; её строка в визит не идёт', async () => {
+// CRM_LINK_ALL_V1 (редакция 2) — привязка по телефону только для воронки: услуга визита в карточку
+// строкой не копируется (её показывает список «Записи пациента»).
+test('CRM_LINK_ALL_V1 R5: календарь регистратуры — карточка по телефону получает пациента и привязку для воронки; строки визита не копируются, её строка в визит не идёт', async () => {
   const t = await startCrmApp();
   try {
     const rid = addLead(t.db, { patient: null, phone: '909092638', name: '909092638' });
@@ -18,8 +20,8 @@ test('CRM_LINK_ALL_V1 R5: календарь регистратуры — кар
     const vid = await calendarBook(t, 'reg', D);
     assert.equal(t.lead(rid).patient_id, 77);
     assert.deepEqual(link(t, vid), { request_id: rid, source: 'phone' });
-    assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.status, l.visit_id]), [[40, 'pending', null], [30, 'pending', vid]],
-      'карточка не показывает услугу визита или её строка взяла визит');
+    assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.status, l.visit_id]), [[40, 'pending', null]],
+      'строка визита скопирована в карточку или её строка взяла визит');
     assert.deepEqual(vsOf(t, vid).map((x) => x.service_id), [30], 'строка карточки по телефону попала в визит (общий номер — не общий счёт)');
     assert.equal(t.lead(rid).status, 'scheduled');
   } finally { t.close(); }

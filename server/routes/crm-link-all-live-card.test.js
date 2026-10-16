@@ -10,7 +10,9 @@ const D = localDay(3);
 const D2 = localDay(5);
 
 // ─── R1 + R2 (решение D1) ──────────────────────────────────────────────────
-test('CRM_LINK_ALL_V1 R1: регистратура записывает на ДРУГОЙ день — живая карточка держит визит, его услуга на карточке, строка своего дня не тронута', async () => {
+// CRM_LINK_ALL_V1 (редакция 2) — «показывать, а не копировать»: привязка C′ только для воронки,
+// услуга визита в карточку строкой не копируется (её показывает список «Записи пациента»).
+test('CRM_LINK_ALL_V1 R1: регистратура записывает на ДРУГОЙ день — живая карточка держит визит (привязка для воронки), строки визита не копируются, строка своего дня не тронута', async () => {
   const t = await startCrmApp();
   try {
     const rid = addLead(t.db, { assigned: 3, date: D });
@@ -18,7 +20,7 @@ test('CRM_LINK_ALL_V1 R1: регистратура записывает на Д�
     const vid = await calendarBook(t, 'reg', D2);
     assert.deepEqual(link(t, vid), { request_id: rid, source: 'patient' }, 'визит другого дня не привязан к живой карточке');
     assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.scheduled_date, l.status, l.visit_id]),
-      [[30, D, 'pending', null], [30, D2, 'pending', vid]], 'карточка не показывает услугу визита или тронула строку своего дня');
+      [[30, D, 'pending', null]], 'строка визита скопирована в карточку или тронута строка своего дня');
     const c = t.lead(rid);
     assert.equal(c.status, 'scheduled');
     assert.equal(c.scheduled_date, D2, 'дата карточки — ближайший записанный день (cardDateOf)');
@@ -37,7 +39,7 @@ test('CRM_LINK_ALL_V1 R1: карточка без движения дольше 
     assert.equal(c.scheduled_date, D);
     assert.ok(Date.parse(c.updated_at) > Date.now() - 3600e3, 'запись после окна — контакт: updated_at не сдвинулся');
     assert.deepEqual(undoOf(t, vid, rid), { prev_status: 'recall', set_status: 'scheduled' }, 'discard_empty_visit вернёт не ту ступень');
-    assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.visit_id]), [[30, vid]]);
+    assert.deepEqual(linesOf(t.db, rid), [], 'CRM_LINK_ALL_V1 (ред. 2) — строка визита скопирована в карточку');
   } finally { t.close(); }
 });
 
@@ -108,7 +110,7 @@ test('CRM_LINK_ALL_V1 R1: врач записывает «Повторный в�
     addLine(t.db, rid, { svc: 40, day: D });
     const vid = await calendarBook(t, 'doc', D2);
     assert.equal(link(t, vid).request_id, rid);
-    assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.visit_id]), [[40, null], [30, vid]]);
+    assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.visit_id]), [[40, null]], 'CRM_LINK_ALL_V1 (ред. 2) — строка визита скопирована в карточку');
     t.db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Без Карточки','+998 91 000 00 01')").run();
     const v2 = await calendarBook(t, 'doc', D2, { pid: 78, hour: 15 });
     assert.equal(link(t, v2), null);

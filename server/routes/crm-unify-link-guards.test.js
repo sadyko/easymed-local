@@ -283,9 +283,10 @@ test('строка без даты не встаёт в запись кален�
     const vid = b.json.data.visit.id;
     const add = await t.rpc('booking_lines_add', 'reg', { visit_id: vid, patient_id: 77, lines: [{ service_id: 40 }] });
     assert.equal(add.status, 200, add.text);
+    // CRM_LINK_ALL_V1 (редакция 2) — привязка для воронки: анализ визита в карточку не копируется.
     // CRM_LINK_ALL_V1 (D1, R1) — живая карточка держит и эту запись: анализ визита — на
     // карточке, карточка «Записан»; строка «когда придёт» по-прежнему ждёт (не в смете анализа).
-    assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.visit_id]), [[30, null], [40, vid]], 'строка «когда придёт» встала в чужую запись или анализ не на карточке');
+    assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.visit_id]), [[30, null]], 'строка «когда придёт» встала в чужую запись или анализ скопирован в карточку');
     assert.ok(!vsOf(t.db, vid).some((x) => x.service_id === 30), 'консультация без даты попала в смету анализа');
     assert.equal(t.lead(rid).status, 'scheduled');
     const e = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: D2, doctor_id: 10 });
