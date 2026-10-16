@@ -64,6 +64,8 @@ import { loadBoard, periodBounds, periodStart, dayStart, dayEnd, CLOSED_ALL_TIME
 import { leadSources, toggleLeadSource, leadHasAnySource, sourceTally, MAX_LEAD_SOURCES } from '../crm-sources.js';
 // PUBLIC_API_V1 — заявки и онлайн-запись из API: окно в карточке и строка на доске.
 import { apiBookingBox, apiBoardLine, loadApiMarks } from './crm-api-booking.js';
+import { cardBookingsBox } from './crm-card-bookings.js';   // CRM_LINK_ALL_V1 (ред. 2) — «Записи пациента»
+import { setCalendarFocus } from './calendar-focus.js';   // CRM_LINK_ALL_V1 (ред. 2) — «Открыть в календаре»
 
 // CRM_CONFIG_V1 — воронка перестала быть константой.
 //
@@ -3200,6 +3202,17 @@ async function paint() {
                     onChanged: (out) => {
                         if (out && out.status === 'confirmed') { close(); paint(); return; }
                         loadApiMarks().then((m) => { state.apiMarks = m; paintBody(); });
+                    },
+                }) : null,
+                // CRM_LINK_ALL_V1 (редакция 2) — «Записи пациента»: визиты карточки (строкой или
+                // привязкой) с услугами, без цен — услуги записей в карточку не копируются.
+                // Править запись — в календаре: «Открыть в календаре» — на день записи.
+                (isEdit && r.id != null) ? cardBookingsBox(r.id, {
+                    onOpenCalendar: (b) => {
+                        setCalendarFocus({ day: b.day, visitId: b.visit_id });
+                        close();
+                        const nav = typeof window !== 'undefined' && window.easymed && window.easymed.navigate;
+                        if (nav) nav('appointments');
                     },
                 }) : null,
                 // CRM_REASSIGN_V1 — «кто ведёт» стоит сразу за «откуда пришла»:

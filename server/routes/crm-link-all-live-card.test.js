@@ -25,6 +25,10 @@ test('CRM_LINK_ALL_V1 R1: регистратура записывает на Д�
     assert.equal(c.status, 'scheduled');
     assert.equal(c.scheduled_date, D2, 'дата карточки — ближайший записанный день (cardDateOf)');
     assert.equal(vsOf(t, vid).length, 1, 'в визите вторая строка');
+    // CRM_LINK_ALL_V1 (ред. 2) — визит виден в «Записях пациента» карточки (crm_card_bookings).
+    const bk = await t.rpc('crm_card_bookings', 'boss', { request_id: rid });
+    assert.equal(bk.status, 200, bk.text);
+    assert.deepEqual(bk.json.data.bookings.map((b) => [b.visit_id, b.day, b.services.map((s) => s.name)]), [[vid, D2, ['Консультация терапевта']]]);
   } finally { t.close(); }
 });
 

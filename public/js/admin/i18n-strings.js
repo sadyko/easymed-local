@@ -3,6 +3,10 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CRM_LINK_ALL_V1 (ред. 2) — «Записи пациента» в карточке CRM (views/crm-card-bookings.js)
+  "Записи пациента": {"en":"Patient’s bookings","ru":"Записи пациента","uz":"Bemor yozuvlari"},   // CRM_LINK_ALL_V1
+  "Открыть в календаре": {"en":"Open in the calendar","ru":"Открыть в календаре","uz":"Kalendarda ochish"},   // CRM_LINK_ALL_V1
+  "Записи пациента не загрузились: {msg}": {"en":"The patient’s bookings did not load: {msg}","ru":"Записи пациента не загрузились: {msg}","uz":"Bemor yozuvlari yuklanmadi: {msg}"},   // CRM_LINK_ALL_V1
   // CLINIC_PROFILE_V1 (полировка по макету) — пометка у пустых UZ / EN (views/company-fields.js triGroup)
   "нет перевода": {"en":"no translation","ru":"нет перевода","uz":"tarjima yo‘q"},   // CLINIC_PROFILE_V1
   // CLINIC_PROFILE_V1 (полировка по макету) — «канал @имя» в нижней строке предпросмотра (views/company-preview.js)

@@ -22,6 +22,10 @@ test('CRM_LINK_ALL_V1 R6 (ред. 2): быстрая регистрация зв
     assert.equal(inv.status, 200, inv.text);
     assert.equal(Number(t.db.prepare('SELECT total_amount FROM invoices WHERE visit_id = ?').get(vid).total_amount), 140000);
     assert.deepEqual(cardLines(t, rid), [], 'счёт завёл на карточке строки');
+    const bk = await t.rpc('crm_card_bookings', 'boss', { request_id: rid });
+    assert.equal(bk.status, 200, bk.text);
+    assert.deepEqual(bk.json.data.bookings.map((b) => [b.visit_id, b.services.map((s) => s.name)]), [[vid, ['Консультация терапевта', 'Анализ крови']]],
+      'карточка, которую закрыла стойка, не показывает услуги своего визита');
   } finally { t.close(); }
 });
 

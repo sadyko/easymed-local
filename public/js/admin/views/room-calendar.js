@@ -66,6 +66,7 @@
 // 5» соседа в нашей базе означал бы случайную местную комнату, поэтому при
 // выбранном чужом филиале ось кабинетов честно говорит, что её нет.
 import { supabase } from '../../supabase.js';
+import { takeCalendarFocus } from './calendar-focus.js';   // CRM_LINK_ALL_V1 (ред. 2) — день записи из карточки CRM
 import { h, Icon, clear, toast, initials, avColor, Avatar } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { loadPatientById } from '../data.js';
@@ -203,9 +204,12 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
     // шаг сетки переживают перезагрузку, потому что это устройство рабочего
     // места, а не вопрос к одной картинке (разбор — в rcal-layout.js).
     const stored = readWorkingSet(safeStorage());
+    // CRM_LINK_ALL_V1 (редакция 2) — «Открыть в календаре» из карточки CRM: день записи (один раз).
+    const focus = takeCalendarFocus();
+    const startDay = (focus && focus.day) || todayIso();
     const state = {
         resType: stored.resType, napr: '', q: '', step: stored.step, period: stored.period,
-        dayIso: todayIso(), showCancelled: false,
+        dayIso: startDay, showCancelled: false,   // CRM_LINK_ALL_V1 — startDay
         // «Работают сегодня» из референса: рейка и сетка оставляют только тех,
         // у кого на открытый день ЕСТЬ рабочее окно (ответ сервера, не догадка).
         onlyWorking: false,
@@ -217,8 +221,8 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         // должно терять набор соседней оси.
         storedSel: stored.selected,
         // Мини-месяц: какой месяц открыт и его записи ОДНИМ ответом на месяц.
-        miniYear: isoToLocalDay(todayIso()).getFullYear(),
-        miniMonth: isoToLocalDay(todayIso()).getMonth(),
+        miniYear: isoToLocalDay(startDay).getFullYear(),
+        miniMonth: isoToLocalDay(startDay).getMonth(),
         monthKeyLoaded: '', monthItems: [],
         // CROSS_BRANCH_CALENDAR_V1. branch — БУКВА выбранного здания ('' = все).
         // cross — то, что про эти записи знает только сервер (см. шапку).
