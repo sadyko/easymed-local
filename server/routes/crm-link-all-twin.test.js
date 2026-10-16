@@ -100,3 +100,41 @@ test('CRM_LINK_ALL_V1 R7b: визит соседнего здания и мус�
     assert.equal(t.db.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(vid).n, 2);
   } finally { t.close(); }
 });
+
+// ─── CRM_LINK_ALL_V1 (редакция 2) — R7a + R7b вместе (повтор recheck t7-r7a-r7b-interplay) ─────
+// Строка записи X (колл-центр) и строка регистратора той же услуги. Новый экран прицепляет строку
+// регистратора к строке записи: вставки нет, сеть R7b не срабатывает, счёт на X — одна
+// консультация. Старый экран вставляет Y: X уходит (R7b), счёт на Y — тоже одна. Набор [X, Y]
+// после вставки Y — отказ кассы, а не двойной счёт.
+test('CRM_LINK_ALL_V1 ред. 2 (R7a + R7b): новый экран — строка регистратора прицеплена к строке записи: вставки нет, счёт на строку записи, одна консультация', async () => {
+  const t = await startCrmApp();
+  try {
+    addLead(t.db, {});
+    const bid = await callcenterBook(t, TODAY, { hour: 23 });
+    const x = vsOf(t, bid)[0].id;
+    const ev = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: new Date().toISOString(), doctor_id: 10, visit_type: 'outpatient', desk: true });
+    assert.equal(ev.json.data.visit.id, bid);
+    const inv = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: bid, visit_service_ids: [x], discount_amount: 0, payer_id: null });
+    assert.equal(inv.status, 200, inv.text);
+    assert.deepEqual(vsOf(t, bid).map((r) => r.id), [x]);
+    assert.equal(Number(t.db.prepare('SELECT total_amount FROM invoices WHERE visit_id = ?').get(bid).total_amount), 100000);
+  } finally { t.close(); }
+});
+
+test('CRM_LINK_ALL_V1 ред. 2 (R7a + R7b): старый экран вставил ту же услугу — строка записи уходит, счёт на строку экрана; набор [X, Y] — отказ, двойного счёта нет', async () => {
+  const t = await startCrmApp();
+  try {
+    addLead(t.db, {});
+    const bid = await callcenterBook(t, TODAY, { hour: 23 });
+    const x = vsOf(t, bid)[0].id;
+    await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: new Date().toISOString(), doctor_id: 10, visit_type: 'outpatient', desk: true });
+    const y = await addVisitLine(t, 'reg', bid);
+    assert.deepEqual(vsOf(t, bid).map((r) => r.id), [y]);
+    const both = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: bid, visit_service_ids: [x, y], discount_amount: 0, payer_id: null });
+    assert.equal(both.status, 400, 'набор со снятой строкой записи выставлен');
+    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM invoices WHERE visit_id = ?').get(bid).n, 0);
+    const inv = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: bid, visit_service_ids: [y], discount_amount: 0, payer_id: null });
+    assert.equal(inv.status, 200, inv.text);
+    assert.equal(Number(t.db.prepare('SELECT total_amount FROM invoices WHERE visit_id = ?').get(bid).total_amount), 100000);
+  } finally { t.close(); }
+});

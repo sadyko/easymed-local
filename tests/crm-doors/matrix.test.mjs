@@ -145,6 +145,10 @@ const DECIDED = {
   // Task 6 — R7b (G7)
   '7-fast-S2Tcal-same': { rule: 'R7b (G7)', owner: 'nodup', cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '7-wiz-S2Tcal-same': { rule: 'R7b (G7)', owner: 'nodup', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  // Task 7 — R7a (G7): the new screens' call sequences (CRM_LINK_ALL_V1, редакция 2: no second insert of a booked row)
+  '7-fast-S2Tcal-r7a': { rule: 'R7a (G7)', owner: 'nodup', cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '7-fast-S2Tcal-r7a-drop': { rule: 'R7a (G7) · ред. 2: показывается списком', owner: 'came+shown', cell: {"stage":"came","date":"T","lines":[],"link":"card","cards":1,"visits":1,"vs":[40]} },
+  '7-wiz-S2Tcal-r7a': { rule: 'R7a (G7)', owner: 'nodup', cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
 };
 
 const rows = [];
