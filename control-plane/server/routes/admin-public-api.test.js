@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/vendor-auth.js';
-import { createEnrollmentCode, redeemEnrollmentCode } from '../services/enrollment.js';
+import { createEnrollmentCode, redeemEnrollmentCode, reissueEnrollmentCode } from '../services/enrollment.js';
 import { checkIn } from '../services/checkin.js';
 import { signLicence } from '../services/signing.js';
 import { noteSyncKey } from '../services/public-api.js';
@@ -257,4 +257,25 @@ test('перепроверка 8c, F2: если после блокировки 
   assert.equal((await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: b.fp, code: code(b.fp) })).status, 200);
   const un = await s.call('DELETE', '/clinics/c-1/revocations/' + blk.body.id);
   assert.deepEqual([un.status, un.body.api.sync_key], [200, b.fp]);
+});
+
+// Перепроверка 8c, раунд 2 (п. 3 и 5): после новой регистрации прежний ключ
+// клиники (ПК A сменили на B, потом A украли) по-прежнему можно заблокировать
+// по отпечатку, и в «Blocked keys» у него — его код, а не «new key (blocked)».
+test('перепроверка 8c, раунд 2: прежний ключ после новой регистрации блокируется по отпечатку и сохраняет свой код в «Blocked keys»', async (t) => {
+  const s = await harness(t);
+  const a = syncKey();
+  const b = syncKey();
+  const c3 = syncKey();
+  s.checkin(a.b64);
+  s.checkin(b.b64);
+  assert.equal((await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: b.fp, code: code(b.fp) })).status, 200);
+  s.checkin(c3.b64);
+  const early = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', value: c3.fp });   // никогда не принятый
+  assert.equal(early.status, 201);
+  redeemEnrollmentCode(s.db, { code: reissueEnrollmentCode(s.db, { clinicId: 'c-1' }) });
+  const blocked = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', value: a.fp, note: 'ПК A украден' });
+  assert.equal(blocked.status, 201, blocked.body && blocked.body.error && blocked.body.error.message);
+  const byKind = Object.fromEntries(blocked.body.api.revocations.map((r) => [r.note || 'early', r.code]));
+  assert.deepEqual(byKind, { 'ПК A украден': code(a.fp), early: null }, 'у прежнего — код, у ни разу не принятого — нет');
 });

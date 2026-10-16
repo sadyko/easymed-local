@@ -194,6 +194,27 @@ test('перепроверка 8c, F3: после новой регистрац�
   assert.deepEqual(states(db), { [FP1]: 'accepted', [FP2]: 'replaced' });
 });
 
+// Перепроверка 8c, раунд 2 (п. 1): новая регистрация стирала прежние ключи —
+// и проверка «тот же код, что у ключа клиники» их забывала. История принятых
+// ключей (sync_keys_history) не стирается никогда: вернувшийся ключ (тот же
+// ПОЛНЫЙ отпечаток) принимается по своему коду, подобранный под тот же КОД —
+// нет, и до регистрации, и после.
+const history = (db, clinicId = 'c-1') => db.prepare('SELECT fp FROM sync_keys_history WHERE clinic_id = ? ORDER BY fp').all(clinicId).map((r) => r.fp);
+
+test('перепроверка 8c, раунд 2: история принятых ключей переживает новую регистрацию — ключ, подобранный под код прежнего ключа, отклоняется и после неё', () => {
+  const db = freshDb();
+  noteSyncKey(db, row(db), FP1, NOW);                        // ПК A — принят сам
+  noteSyncKey(db, row(db), FP2, NOW + 1000);                 // ПК B
+  assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: FP2, code: code(FP2) }, NOW + 2000), { ok: true });
+  assert.deepEqual(history(db), [FP1, FP2]);
+  assert.ok(redeemEnrollmentCode(db, { code: reissueEnrollmentCode(db, { clinicId: 'c-1' }) }));
+  assert.deepEqual(history(db), [FP1, FP2], 'регистрация историю не трогает');
+  const ground = FP1.slice(0, 8) + 'ef'.repeat(12);          // под код прежнего ключа A, отпечаток другой
+  noteSyncKey(db, row(db), ground, NOW + 3000);
+  assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: ground, code: code(FP1) }, NOW + 4000), { error: 'same_code' });
+  assert.equal(row(db).api_sync_key, FP2);
+});
+
 test('ключ, принятый у другой клиники, сам не принимается и кнопкой тоже — один ключ, одна клиника', () => {
   const db = freshDb();
   noteSyncKey(db, row(db), FP1, NOW);

@@ -86,10 +86,29 @@ export function keyOwner(db, fp, exceptClinicId) {
   return r ? r.clinic_id : null;
 }
 
-/** Ключ стал принятым: прежний принятый — «replaced» (его сменили), этот — «accepted». */
+/**
+ * Ключ стал принятым: прежний принятый — «replaced» (его сменили), этот —
+ * «accepted» и навсегда в истории принятых ключей клиники (sync_keys_history —
+ * её не стирает и новая регистрация; перепроверка 8c, раунд 2).
+ */
 function markAccepted(db, clinicId, fp, at) {
   db.prepare("UPDATE sync_keys_seen SET state = 'replaced', state_at = ? WHERE clinic_id = ? AND state = 'accepted' AND fp <> ?").run(at, clinicId, fp);
   db.prepare("UPDATE sync_keys_seen SET state = 'accepted', state_at = ? WHERE clinic_id = ? AND fp = ?").run(at, clinicId, fp);
+  db.prepare('INSERT OR IGNORE INTO sync_keys_history (clinic_id, fp, first_accepted_at) VALUES (?, ?, ?)').run(clinicId, fp, at);
+}
+
+/**
+ * Все ключи, которые у клиники когда-либо были приняты (нынешний, прежние,
+ * в том числе стёртые новой регистрацией из sync_keys_seen): их коды клиника
+ * знает, их можно заблокировать по отпечатку, их код печатается в «Blocked keys».
+ * @returns {Set<string>}
+ */
+export function formerSyncKeys(db, clinicId) {
+  const own = new Set(db.prepare('SELECT fp FROM sync_keys_history WHERE clinic_id = ?').all(clinicId).map((r) => r.fp));
+  for (const r of db.prepare("SELECT fp FROM sync_keys_seen WHERE clinic_id = ? AND state IN ('accepted', 'replaced')").all(clinicId)) own.add(r.fp);
+  const c = db.prepare('SELECT api_sync_key FROM clinics WHERE clinic_id = ?').get(clinicId);
+  if (c && c.api_sync_key) own.add(c.api_sync_key);
+  return own;
 }
 
 /**
@@ -215,11 +234,11 @@ export function acceptPendingSyncKey(db, clinicId, { fingerprint, code } = {}, n
   // key it ALREADY uses. A copy of its install_token can grind an Ed25519 key
   // with the same first 8 hex (2^32 tries — hours on an ordinary machine) and
   // be the only new key. So a new key whose code equals the code of any key
-  // this clinic has had accepted (now or before) is refused, whatever was typed.
+  // this clinic has had accepted (now or before — round 2: before a
+  // re-enrolment too) is refused, whatever was typed — unless it IS that key
+  // (same full fingerprint): a clinic that went back to a former computer.
   const prefix = only.fp.slice(0, 8);
-  const own = db.prepare("SELECT fp FROM sync_keys_seen WHERE clinic_id = ? AND state IN ('accepted', 'replaced')").all(clinicId)
-    .map((r) => r.fp).concat(c.api_sync_key ? [c.api_sync_key] : []);
-  if (own.some((fp) => fp !== only.fp && fp.slice(0, 8) === prefix)) return { error: 'same_code' };
+  if ([...formerSyncKeys(db, clinicId)].some((fp) => fp !== only.fp && fp.slice(0, 8) === prefix)) return { error: 'same_code' };
   if (typed !== prefix) return { error: 'code_mismatch' };
   if (only.other_clinic) return { error: 'shared', clinicId: only.other_clinic };
   const at = isoSeconds(now);

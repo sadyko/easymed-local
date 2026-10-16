@@ -16,7 +16,7 @@
 import { isEntitled } from '../services/checkin.js';
 import {
   partnersSee, acceptPendingSyncKey, isRevoked, isoSeconds, SYNC_FP_RE, KEY_HASH_RE,
-  syncKeyCandidates, replacedKeysSeen, keyCode, normaliseKeyCode, restoreUnblockedSyncKey,
+  syncKeyCandidates, replacedKeysSeen, keyCode, normaliseKeyCode, restoreUnblockedSyncKey, formerSyncKeys,
 } from '../services/public-api.js';
 import { KEY_RE } from '../../../public/js/shared/api-connections.js';
 
@@ -47,8 +47,8 @@ const CLINIC_COLUMNS = `clinic_id, active, subscription, subscription_until, api
  */
 export function apiViewOf(db, c, now = new Date()) {
   const candidates = syncKeyCandidates(db, c);
-  const everAccepted = new Set(db.prepare("SELECT fp FROM sync_keys_seen WHERE clinic_id = ? AND state IN ('accepted', 'replaced')")
-    .all(c.clinic_id).map((r) => r.fp).concat(c.api_sync_key ? [c.api_sync_key] : []));
+  // Round 2 — including keys accepted before a re-enrolment (sync_keys_history).
+  const everAccepted = formerSyncKeys(db, c.clinic_id);
   return {
     enabled: !!c.api_enabled,
     sync_key: c.api_sync_key || null,
@@ -155,8 +155,10 @@ export function registerPublicApiRoutes(r, db) {
     }
     // Step 8c review — a clinic's page blocks only that clinic's own keys: a
     // fingerprint this install never presented (a typo, another clinic's key)
-    // is refused instead of silently cutting off some other clinic.
-    if (kind === 'sync_key' && v !== c.api_sync_key
+    // is refused instead of silently cutting off some other clinic. Its own
+    // keys include every key it ever had accepted (round 2: a computer
+    // replaced before a re-enrolment, reported stolen afterwards).
+    if (kind === 'sync_key' && !formerSyncKeys(db, c.clinic_id).has(v)
       && !db.prepare('SELECT 1 FROM sync_keys_seen WHERE clinic_id = ? AND fp = ?').get(c.clinic_id, v)) {
       return fail(res, 400, 'bad_request', "This is not one of this clinic's API keys.");
     }
