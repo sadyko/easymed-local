@@ -22,15 +22,23 @@
 //   • заведена раньше Y (id меньше), 'added', без счёта, без детей (результаты,
 //     документы, талон), не товар — vsFree; количество 1 у обеих;
 //   • та же услуга (sameService: тот же ключ; у услуги с врачом — тот же врач,
-//     или у X врача нет);
+//     или у X врача нет). CRM_LINK_ALL_V1 (повторное ревью денег, S1) — правило
+//     взято из public/js/shared/same-service.js: его же берут окна регистрации,
+//     прицепляя свою строку к строке записи, — правило одно, и экран не пропустит
+//     вторую строку, под которой сеть уберёт строку записи из его счёта. Оно равно
+//     sameService зеркала во всех клетках (server/routes/crm-link-all-twin.test.js);
 //   • её поставила ЗАПИСЬ: завёл пользователь «только колл-центр»
 //     (isCallcenterUser — booking_lines_add), или её держит строка заявки как
 //     строку зеркала (visit_service_auto = 1).
 // После замены строка Y — строка регистратуры (auto = 0, завёл регистратор):
 // вторая вставка той же услуги — настоящий повтор, и он остаётся вторым.
 // Выставленное, оплаченное и начатое не трогается никогда. Не бросает.
-import { visitRow, PRE_ARRIVAL, lineKey, sameService, isCallcenterUser, vsFree, relinkHeld, deleteVs } from './booking-mirror.js';
+import { visitRow, PRE_ARRIVAL, lineKey, isCallcenterUser, vsFree, relinkHeld, deleteVs } from './booking-mirror.js';
+import { sameBookedService } from '../../../public/js/shared/same-service.js';
 import { today } from '../domain/day.js';
+
+/** Строка visit_services в форме правила «та же услуга» (shared/same-service.js). */
+const lineOf = (r) => ({ serviceId: r.service_id ?? null, consultationTypeId: r.service_id == null ? (r.consultation_type_id ?? null) : null, doctorId: r.doctor_id ?? null });
 
 function creatorIsCallcenter(db, userId) {
   if (!userId) return false;
@@ -55,13 +63,15 @@ export function retireBookedTwin(db, vsId) {
     if (!v || v.sync_origin != null) return null;
     const pre = PRE_ARRIVAL.includes(v.status);
     if (!pre && !(v.status === 'arrived' && v.day === today(db))) return null;
+    const svc = y.service_id != null ? db.prepare('SELECT requires_doctor FROM services WHERE id = ?').get(y.service_id) : null;
+    const needsDoctor = !!(svc && Number(svc.requires_doctor));
     const autoHeld = db.prepare(`SELECT 1 FROM crm_request_services
                                   WHERE visit_service_id = ? AND visit_service_auto = 1 AND status <> 'cancelled' LIMIT 1`);
     const x = db.prepare(`SELECT * FROM visit_services
                            WHERE visit_id = ? AND id < ? AND status = 'added' AND invoice_item_id IS NULL
                              AND clinic_item_id IS NULL AND sync_origin IS NULL AND COALESCE(quantity, 1) = 1
                            ORDER BY id`).all(v.id, y.id)
-      .find((c) => sameService(db, c, y) && vsFree(db, c) && (creatorIsCallcenter(db, c.created_by) || !!autoHeld.get(c.id)));
+      .find((c) => sameBookedService(lineOf(c), lineOf(y), { needsDoctor }) && vsFree(db, c) && (creatorIsCallcenter(db, c.created_by) || !!autoHeld.get(c.id)));
     if (!x) return null;
     db.transaction(() => {
       relinkHeld(db, x.id, y.id);

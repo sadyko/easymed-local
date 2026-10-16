@@ -14,6 +14,7 @@
 // Одно чтение на оба окна. Без DOM. Бросает при отказе сервера (пустой ответ
 // неотличим от «записи нет»).
 import { supabase } from '../../supabase.js';
+import { screenTakesBooked } from '../../shared/same-service.js';   // CRM_LINK_ALL_V1 (ревью денег S1) — одно правило с сетью R7b
 
 const isPosInt = (v) => Number.isInteger(Number(v)) && Number(v) > 0;
 const pad = (n) => String(n).padStart(2, '0');
@@ -38,7 +39,7 @@ export function localSlot(iso) {
  * @returns {Promise<{visit: {id:number, status:string, visit_date:string}|null,
  *   rows: Array<{vsId:number, serviceId:number|null, consultationTypeId:number|null, doctorId:number|null,
  *                quantity:number, unitPrice:number, billed:boolean, name:string, service:object|null,
- *                consultation:object|null, when:string|null}>}>}
+ *                consultation:object|null, when:string|null, needsDoctor:boolean}>}>}
  */
 export async function loadTodayBooking(patientId, { now = new Date() } = {}) {
   if (!isPosInt(patientId)) return { visit: null, rows: [] };
@@ -70,26 +71,32 @@ export async function loadTodayBooking(patientId, { now = new Date() } = {}) {
         service: svc,
         consultation: ct,
         when: localSlot(l.scheduled_at || visit.visit_date),
+        // CRM_LINK_ALL_V1 (ревью денег S1) — услуге нужен врач: правило «та же услуга» сравнивает его только
+        // тогда. Вид приёма — всегда; у услуги каталога requires_doctor добавляет окно из своего каталога
+        // (вложенная выборка services его не отдаёт — «unknown embed column»).
+        needsDoctor: l.service_id == null && l.consultation_type_id != null,
       };
     });
   return { visit, rows };
 }
 
 /**
- * CRM_LINK_ALL_V1 (редакция 2) — СТРОКА ЭКРАНА — ТА ЖЕ УСЛУГА, ЧТО СТРОКА ЗАПИСИ `b`:
- * та же услуга каталога (или тот же вид приёма), и врач тот же — или у одной из
- * двух его нет (то же правило, что у сети R7b, crm/booked-twin.js sameService).
+ * CRM_LINK_ALL_V1 (редакция 2) — СТРОКА ЭКРАНА — ТА ЖЕ УСЛУГА, ЧТО СТРОКА ЗАПИСИ `b`.
  * Такая строка не вставляется второй: она и есть строка записи (окна прицепляют
  * её к записи), иначе сеть R7b убрала бы строку записи, которую экран выставляет
  * в счёт.
- * @param {{serviceId?:number|null, consultationTypeId?:number|null, doctorId?:number|null}} line
+ * CRM_LINK_ALL_V1 (повторное ревью денег, S1) — правило ОДНО с сетью R7b
+ * (shared/same-service.js): у услуги, которой врач не нужен, врач не сравнивается
+ * (ЭКГ у исполнителя 11 — та же ЭКГ, что записана к исполнителю 10); у услуги с
+ * врачом — тот же врач, или у строки записи его нет; строка, врач которой ещё не
+ * выбран, — тоже строка записи.
+ * @param {{serviceId?:number|null, consultationTypeId?:number|null, doctorId?:number|null, needsDoctor?:boolean}} line
+ * @param {{serviceId?:number|null, consultationTypeId?:number|null, doctorId?:number|null, needsDoctor?:boolean}} b
+ *   needsDoctor — услуге нужен врач (services.requires_doctor); довольно у одной из двух
  */
 export function isBookedTwin(line, b) {
   if (!line || !b) return false;
-  if (b.serviceId != null) { if (Number(line.serviceId) !== Number(b.serviceId)) return false; }
-  else if (b.consultationTypeId != null) { if (Number(line.consultationTypeId) !== Number(b.consultationTypeId)) return false; }
-  else return false;
-  return line.doctorId == null || b.doctorId == null || Number(line.doctorId) === Number(b.doctorId);
+  return screenTakesBooked(line, b, { needsDoctor: !!(line.needsDoctor || b.needsDoctor) });
 }
 
 /** Подпись строки «из записи»: статус записи словами (переводит вызывающий через tr). */

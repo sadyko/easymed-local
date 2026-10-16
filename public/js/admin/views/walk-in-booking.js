@@ -205,7 +205,9 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
     // в одном наборе — отказ ДО визита: вставка второй убрала бы строку записи (сеть
     // R7b, crm/booked-twin.js), а её номер уже идёт в счёт. Экран такой набор не
     // собирает (строка той же услуги прицепляется к строке записи).
-    const keyOf = (l) => { const ident = lineIdentity(l.service) || {}; return { serviceId: ident.service_id ?? null, consultationTypeId: ident.consultation_type_id ?? null, doctorId: lineDoctorOf(l) }; };
+    // CRM_LINK_ALL_V1 (повторное ревью денег, S1) — правило одно с сетью R7b (shared/same-service.js):
+    // у услуги без врача исполнитель не сравнивается — ЭКГ у другого исполнителя та же ЭКГ.
+    const keyOf = (l) => { const ident = lineIdentity(l.service) || {}; return { serviceId: ident.service_id ?? null, consultationTypeId: ident.consultation_type_id ?? null, doctorId: lineDoctorOf(l), needsDoctor: !!Number(l.service && l.service.requires_doctor) }; };
     const bookedKeys = items.filter((l) => isPosInt(l.bookedVsId)).map(keyOf);
     const twin = items.find((l) => !isPosInt(l.bookedVsId) && bookedKeys.some((b) => isBookedTwin(keyOf(l), b)));
     if (twin) throw new Error(trf('«{name}» уже из записи — вторая строка не нужна.', { name: (twin.service && twin.service.name) || '' }));

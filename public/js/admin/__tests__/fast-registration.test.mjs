@@ -1402,3 +1402,50 @@ test('CRM_LINK_ALL_V1 ред. 2: записанную на сегодня усл
   assert.equal(dlg.state.rows.length, 2, 'другая услуга не добавилась');
   dlg.close();
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINK_ALL_V1 (повторное ревью денег, S1) — «ТА ЖЕ УСЛУГА» У ЭКРАНА И У СЕРВЕРА — ОДНО ПРАВИЛО.
+// Сеть R7b (crm/booked-twin.js) у услуги БЕЗ врача врача не сравнивает: анализ с другим
+// исполнителем для неё — та же услуга, и вставка такой строки убирает строку записи. Экран
+// сравнивал врача всегда — пропускал вторую строку и выставлял счёт на строку записи, которой
+// уже нет («Строка услуги № … не найдена»). Теперь экран берёт правило сервера
+// (shared/same-service.js): та же строка «из записи», второй строки нет.
+// ═══════════════════════════════════════════════════════════════════════════
+const LAB_BOOKED = { id: 556, service_id: 2, consultation_type_id: null, doctor_id: 8, quantity: 1, unit_price: 40000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 2, name: 'Общий анализ крови', price: 40000 } };
+const CONSULT_BOOKED = { id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } };
+async function saveAndCalls(dlg) {
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(150);
+  const ins = calls.filter((c) => c.kind === 'insert' && c.table === 'visit_services').map((c) => c.body);
+  const inv = calls.find((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit');
+  return { ins, invIds: inv ? inv.body.visit_service_ids : null };
+}
+const totalRowText = (dlg) => textOf(walk(dlg.table).find((n) => n.tagName === 'TR' && textOf(n).includes('Итого')) || dlg.table).replace(/\s+/g, ' ');
+
+for (const order of ['patient-first', 'service-first']) {
+  test(`CRM_LINK_ALL_V1 (ревью денег S1, ${order}): анализ «из записи» (исполнитель 8) и тот же анализ с исполнителем 7 — одна строка записи: вставки нет, счёт на строку записи`, async () => {
+    reset();
+    patientRows = [KARIMOVA];
+    visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+    vsRows = [LAB_BOOKED];
+    const dlg = openFastRegistrationDialog({});
+    await tick(40);
+    if (order === 'service-first') dlg.state.addLine(SERVICES[1], { id: 7 });
+    await pickKarimova(dlg);
+    toasts.length = 0;
+    if (order === 'patient-first') {
+      dlg.state.addLine(SERVICES[1], { id: 7 });
+      assert.ok(toasts.some((m) => m.includes('уже из записи')), 'нет подсказки: ' + JSON.stringify(toasts));
+    }
+    const labRows = dlg.state.rows.filter((r) => Number(r.service.id) === 2);
+    assert.equal(labRows.length, 1, 'анализ стоит двумя строками: ' + JSON.stringify(dlg.state.rows.map((r) => [r.service.id, r.doctorId, r.booked && r.booked.vsId])));
+    assert.ok(labRows[0].booked && labRows[0].booked.vsId === 556, 'строка — не строка записи');
+    assert.equal(labRows[0].doctorId, 8, 'экран показывает не исполнителя строки записи');
+    const { ins, invIds } = await saveAndCalls(dlg);
+    assert.equal(ins.filter((b) => Number(b.service_id) === 2).length, 0, 'анализ вставлен второй строкой — сеть R7b убрала бы строку записи из счёта');
+    assert.deepEqual(invIds, [556], 'счёт не на строку записи');
+    dlg.close();
+  });
+}
+

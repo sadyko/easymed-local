@@ -791,7 +791,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // врач — записи. Строка того же вида, но к другому врачу — другая запись, её не трогаем.
             const inCart = wiz.cart.find(c => String(c.svc.id) === String(svc.id));
             if (inCart) {
-                if (inCart.booked || !isBookedTwin({ serviceId: Number(svc.id), doctorId: inCart.doctorId ?? null }, r)) continue;
+                if (inCart.booked || !isBookedTwin({ serviceId: Number(svc.id), doctorId: inCart.doctorId ?? null, needsDoctor: !!Number(svc.requires_doctor) }, r)) continue;   // CRM_LINK_ALL_V1 (ревью денег S1) — правило сети R7b
                 inCart.booked = { vsId: r.vsId, visitId: b.visit.id, status: b.visit.status, when: r.when };
                 inCart.qty = r.quantity || 1;
                 if (r.doctorId) inCart.doctorId = r.doctorId;

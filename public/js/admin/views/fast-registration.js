@@ -570,28 +570,30 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         countEl.textContent = String(state.rows.length);
     }
 
-    /** CRM_LINK_ALL_V1 (редакция 2) — ключ строки таблицы для правила isBookedTwin. */
+    /**
+     * CRM_LINK_ALL_V1 (редакция 2) — ключ строки таблицы для правила isBookedTwin.
+     * CRM_LINK_ALL_V1 (повторное ревью денег, S1) — и нужен ли услуге врач: правило
+     * «та же услуга» одно с сетью R7b (shared/same-service.js) и сравнивает врача
+     * только у услуги, без врача которой не бывает.
+     */
     function rowKey(service, doctorId) {
         const consult = !!(service && service.__consult);
         return {
             serviceId: consult ? null : Number(service && service.id),
             consultationTypeId: consult ? Number(service.consultation_type_id) : null,
             doctorId: doctorId != null ? Number(doctorId) : (consult && service.__consultDoctorId ? Number(service.__consultDoctorId) : null),
+            needsDoctor: consult || !!Number(service && service.requires_doctor),
         };
     }
     const bookedKeyOf = (row) => ({ ...rowKey(row.service, row.doctorId) });
+    /** Строка «из записи», которой эта услуга (с этим врачом) уже стоит в таблице. */
+    const bookedRowOf = (service, doctorId) => {
+        const key = rowKey(service, doctorId);
+        return state.rows.find((r) => r.booked && isBookedTwin(key, bookedKeyOf(r))) || null;
+    };
 
-    function addLine(service, doctor) {
-        if (!service || service.id == null) return null;
-        // CRM_LINK_ALL_V1 (редакция 2) — записанную на сегодня услугу второй строкой не
-        // добавляют: строка «из записи» уже регистрирует её (вставка второй убрала бы
-        // строку записи — сеть R7b — а её номер идёт в счёт).
-        const key = rowKey(service, doctor && doctor.id != null ? doctor.id : null);
-        const bookedTwin = state.rows.find((r) => r.booked && isBookedTwin(key, bookedKeyOf(r)));
-        if (bookedTwin) {
-            toast(trf('«{name}» уже из записи — вторая строка не нужна.', { name: service.name || '' }), 'info');
-            return bookedTwin;
-        }
+    /** Строка в таблицу без проверок (их делает addLine; строки записи ставит showBookedRows). */
+    function pushRow(service, doctor) {
         const row = {
             service,
             doctorId: doctor && doctor.id != null ? Number(doctor.id) : null,
@@ -601,6 +603,20 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             sel: null,
         };
         state.rows.push(row);
+        return row;
+    }
+
+    function addLine(service, doctor) {
+        if (!service || service.id == null) return null;
+        // CRM_LINK_ALL_V1 (редакция 2) — записанную на сегодня услугу второй строкой не
+        // добавляют: строка «из записи» уже регистрирует её (вставка второй убрала бы
+        // строку записи — сеть R7b — а её номер идёт в счёт).
+        const bookedTwin = bookedRowOf(service, doctor && doctor.id != null ? doctor.id : null);
+        if (bookedTwin) {
+            toast(trf('«{name}» уже из записи — вторая строка не нужна.', { name: service.name || '' }), 'info');
+            return bookedTwin;
+        }
+        const row = pushRow(service, doctor);
         paintTable();
         return row;
     }
@@ -708,10 +724,18 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             if (!service) continue;
             // CRM_LINK_ALL_V1 (редакция 2) — услуга уже в таблице (регистратор добавил её до
             // выбора пациента): строка записи прицепляется к ней, второй строки нет.
-            const twin = state.rows.find((x) => !x.booked && isBookedTwin(rowKey(x.service, x.doctorId), r));
-            const row = twin || addLine(service, r.doctorId ? { id: r.doctorId } : null);
-            if (row && twin && r.doctorId) row.doctorId = r.doctorId;   // врач записи — строка уже в визите
-            if (row) row.booked = { vsId: r.vsId, status: b.visit.status, unitPrice: r.unitPrice };
+            // CRM_LINK_ALL_V1 (повторное ревью денег, S1) — правило «та же услуга» — одно с сетью
+            // R7b (shared/same-service.js): у услуги без врача исполнитель не сравнивается.
+            const bk = rowKey(service, r.doctorId);
+            const twin = state.rows.find((x) => !x.booked && isBookedTwin(rowKey(x.service, x.doctorId), bk));
+            // Своя строка записи — без проверки addLine: две строки записи одной услуги
+            // (два исполнителя) — две строки визита, обе уже в нём.
+            const row = twin || pushRow(service, r.doctorId ? { id: r.doctorId } : null);
+            if (twin && r.doctorId && Number(twin.doctorId) !== Number(r.doctorId)) {
+                twin.doctorId = r.doctorId;   // врач записи — строка уже в визите
+                twin.doctor = null;
+            }
+            row.booked = { vsId: r.vsId, status: b.visit.status, unitPrice: r.unitPrice };
         }
         const billed = b.rows.filter((r) => r.billed).map((r) => r.name).filter(Boolean);
         if (billed.length) {

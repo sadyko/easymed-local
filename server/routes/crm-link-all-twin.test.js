@@ -138,3 +138,58 @@ test('CRM_LINK_ALL_V1 ред. 2 (R7a + R7b): старый экран встав�
     assert.equal(Number(t.db.prepare('SELECT total_amount FROM invoices WHERE visit_id = ?').get(bid).total_amount), 100000);
   } finally { t.close(); }
 });
+
+// CRM_LINK_ALL_V1 (повторное ревью денег, S1) — «ТА ЖЕ УСЛУГА» — ОДНО ПРАВИЛО У ЭКРАНА И У СЕТИ R7b.
+// Экран (booked-rows.js isBookedTwin) сравнивал врача всегда, сеть (sameService зеркала) у услуги
+// без врача врача не сравнивает: ЭКГ записи у исполнителя 10 и ЭКГ экрана у исполнителя 11 экран
+// считал разными и вставлял вторую, сеть убирала строку записи, а экран выставлял её в счёт (400
+// «Строка услуги № … не найдена»). Теперь правило одно — shared/same-service.js: сеть R7b берёт
+// его, и оно совпадает с sameService зеркала во всех клетках; экран прицепляет строку всегда,
+// когда сеть убрала бы строку записи.
+test('CRM_LINK_ALL_V1 (ревью денег S1): shared/same-service.js = sameService зеркала во всех клетках (услуга без врача, с врачом, вид приёма; врач пуст / тот же / другой); экран прицепляет строку всегда, когда сеть убрала бы строку записи', async () => {
+  const t = await startCrmApp((db) => {
+    db.prepare("INSERT INTO services (id, name, price, type, requires_doctor, duration_minutes) VALUES (50, 'ЭКГ', 50000, 'procedure', 0, 15)").run();
+    db.prepare("INSERT INTO consultation_types (id, name, price) VALUES (5, 'Первичный приём', 100000)").run();
+  });
+  try {
+    const { sameService } = await import('../services/crm/booking-mirror.js');
+    const { sameBookedService } = await import('../../public/js/shared/same-service.js');
+    const { isBookedTwin } = await import('../../public/js/admin/views/booked-rows.js');
+    const needs = (r) => r.service_id == null
+      || !!Number((t.db.prepare('SELECT requires_doctor FROM services WHERE id = ?').get(r.service_id) || {}).requires_doctor);
+    const key = (r) => ({ serviceId: r.service_id ?? null, consultationTypeId: r.consultation_type_id ?? null, doctorId: r.doctor_id, needsDoctor: needs(r) });
+    const kinds = [{ service_id: 50 }, { service_id: 30 }, { service_id: 40 }, { service_id: null, consultation_type_id: 5 }];
+    const docs = [null, 10, 11];
+    let cells = 0;
+    for (const kx of kinds) for (const ky of kinds) for (const dx of docs) for (const dy of docs) {
+      const x = { consultation_type_id: null, ...kx, doctor_id: dx };
+      const y = { consultation_type_id: null, ...ky, doctor_id: dy };
+      const server = sameService(t.db, x, y);
+      const label = JSON.stringify({ booked: x, line: y });
+      assert.equal(sameBookedService(key(x), key(y), { needsDoctor: needs(y) }), server, 'правило расходится с сетью R7b: ' + label);
+      if (server) assert.equal(isBookedTwin(key(y), key(x)), true, 'экран вставит вторую строку, а сеть уберёт строку записи: ' + label);
+      cells++;
+    }
+    assert.equal(cells, 144);
+    // M2-S1: ЭКГ записи у исполнителя 10, строка экрана у исполнителя 11 — одна услуга и для экрана
+    assert.equal(isBookedTwin({ serviceId: 50, doctorId: 11, needsDoctor: false }, { serviceId: 50, doctorId: 10, needsDoctor: false }), true);
+    // консультация у другого врача — другая запись (разбор ревью I1) — и для экрана
+    assert.equal(isBookedTwin({ serviceId: 30, doctorId: 11, needsDoctor: true }, { serviceId: 30, doctorId: 10, needsDoctor: true }), false);
+  } finally { t.close(); }
+});
+
+test('CRM_LINK_ALL_V1 (ревью денег S1): сеть R7b на правиле shared/same-service.js — ЭКГ записи (исполнитель 10) уходит под ЭКГ стойки (исполнитель 11), консультация другого врача — нет', async () => {
+  const t = await startCrmApp((db) => {
+    db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (11, 'nurse', 'x', 'Петрова', 'doctor', 1)").run();
+    db.prepare("INSERT INTO services (id, name, price, type, requires_doctor, duration_minutes) VALUES (50, 'ЭКГ', 50000, 'procedure', 0, 15)").run();
+  });
+  try {
+    const ekg = await callcenterBook(t, TODAY, { hour: 22, svc: 50, doctor: 10 });
+    const y = await addVisitLine(t, 'reg', ekg, { svc: 50, doctor: 11 });
+    assert.deepEqual(vsOf(t, ekg).map((r) => r.id), [y], 'вторая ЭКГ в визите');
+    const consult = await callcenterBook(t, localDay(1), { hour: 12, svc: 30, doctor: 10 });
+    const x = vsOf(t, consult)[0].id;
+    const y2 = await addVisitLine(t, 'reg', consult, { svc: 30, doctor: 11 });
+    assert.deepEqual(vsOf(t, consult).map((r) => r.id), [x, y2], 'консультация другого врача заменила запись');
+  } finally { t.close(); }
+});
