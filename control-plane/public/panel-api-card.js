@@ -71,10 +71,14 @@ export function renderApiCard(box, clinic) {
         <div class="form-actions"><button class="btn danger small" type="button" data-block-replaced>Block this key</button></div></div>`).join('');
     const seenBlocked = api.seen_key_revoked
       ? '<div class="legacy-note">The key this clinic sends is blocked. Its exchange with the public server is refused.</div>' : '';
+    // Re-check F5 — a clinic API key that was never accepted has no code here
+    // (the server does not send one): printing it would let an operator Unblock
+    // it and accept it with the code just read off this table.
     const rows = api.revocations.map((r) => `
       <tr data-rid="${esc(String(r.id))}">
         <td>${r.kind === 'partner_key' ? 'Partner key' : 'Clinic API key'}</td>
-        <td class="muted api-fp">${esc(r.kind === 'partner_key' ? shortFp(r.value) : (r.code || '—'))}</td>
+        ${r.kind === 'partner_key' ? `<td class="muted api-fp">${esc(shortFp(r.value))}</td>`
+          : r.code ? `<td class="muted api-fp">${esc(r.code)}</td>` : '<td class="muted">new key (blocked)</td>'}
         <td>${esc(r.note || '—')}</td>
         <td class="muted">${esc(fmtDateTime(r.created_at))} · ${esc(r.created_by || '—')}</td>
         <td><button class="btn small" type="button" data-unblock>Unblock</button></td>

@@ -107,3 +107,27 @@ test('карточка: принять новый ключ — только на
   const api = fs.readFileSync(path.join(HERE, 'panel-api.js'), 'utf8');
   assert.match(api, /acceptSyncKey: \(id, keyId, code\) => request\('POST', `[^`]*\/api\/accept-key`, \{ key_id: keyId, code \}\)/);
 });
+
+// Перепроверка 8c, F5: таблица «Blocked keys» печатала код заблокированного
+// НОВОГО ключа; после «Unblock» его принимали по коду, только что прочитанному
+// с этой же карточки. Код ключа, который ни разу не был принятым, не печатается.
+test('перепроверка 8c, F5: «Blocked keys» — у не принятого ни разу ключа «new key (blocked)», а не код; у бывшего принятого — его код', async () => {
+  const { renderApiCard } = await import('./panel-api-card.js');
+  const el = () => ({ addEventListener() {}, value: '', textContent: '', focus() {}, disabled: false, checked: false });
+  const box = { innerHTML: '', querySelector: () => el(), querySelectorAll: () => [] };
+  const at = '2026-10-12T10:00:00Z';
+  renderApiCard(box, { id: 'c-1', name: 'Шифо', api: {
+    enabled: true, sync_key: null, sync_key_code: null, sync_key_accepted_at: null,
+    candidates: [{ id: 7, first_seen: at, last_seen: at, revoked: true, other_clinic: null }],
+    key_pending: false, key_competing: false, replaced_seen: [], seen_key_revoked: true, partners_see: 'no_key', licence: null,
+    revocations: [
+      { id: 2, kind: 'sync_key', value: null, code: null, note: 'copy', created_at: at, created_by: 'vendor' },
+      { id: 1, kind: 'sync_key', value: null, code: '46de-4fe9', note: 'PC stolen', created_at: at, created_by: 'vendor' },
+    ],
+  } });
+  const rows = box.innerHTML.match(/<tr data-rid="\d+">[\s\S]*?<\/tr>/g);
+  assert.equal(rows.length, 2);
+  assert.match(rows[0], /new key \(blocked\)/);
+  assert.match(rows[1], /46de-4fe9/);
+  assert.doesNotMatch(rows[0], /[0-9a-f]{4}-[0-9a-f]{4}/, 'у нового ключа — никакого кода');
+});
