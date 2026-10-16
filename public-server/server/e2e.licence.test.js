@@ -166,7 +166,8 @@ test('сервер лицензий ↔ клиника ↔ публичный с
   await checkin();
   assert.equal(licence().api_sync_key, identity.fingerprint);
   const pending = (await panel('GET', '/clinics/c-000777')).body.clinic.api;
-  assert.deepEqual([pending.key_pending, pending.sync_key_seen], [true, fresh.fingerprint]);
+  //    Перепроверка 8c, F4: панель не несёт отпечатка нового ключа — один кандидат, без соперников.
+  assert.deepEqual([pending.key_pending, pending.key_competing, pending.candidates.length], [true, false, 1]);
   assert.equal((await panel('GET', '/clinics')).body.clinics[0].api_key_pending, true);
   //    Ревью 8c: сотрудник Easy-Med вводит код, который клиника читает со своего экрана «API» (api_sync_status key_code).
   const code = syncStatus(s.db, dataDir, { keyPath }).key_code;
