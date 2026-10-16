@@ -168,27 +168,31 @@ export function createMdnsResponder({
     rename();
   }
 
+  // Порядок проверок — ради цены: в сети клиники mDNS-пакетов много (принтеры,
+  // телефоны, Chromecast), а опрос сетевых карт (os.networkInterfaces) на Windows
+  // не бесплатен. Карты читаются только для пакета, где есть НАШЕ имя.
   function onMessage(msg, rinfo) {
     if (stopped || !rinfo) return;
     const m = parseMessage(msg);
     if (!m) return;
-    const list = ifaces();
-    const mine = list.map((i) => i.address);
     const name = fqdn().toLowerCase();
     if (m.qr) {
+      const claims = m.answers.filter((a) => a.type === TYPE_A && a.address && a.name.toLowerCase() === name);
+      if (!claims.length) return;
       // Ответ со своего же адреса — наше объявление вернулось петлёй multicast:
       // не конфликт. ВОПРОС со своего адреса — другое дело: это служба DNS-клиента
       // Windows на этом же ПК (браузер сервера открыл <имя>.local), ему отвечаем.
       // Свои пробы сюда не попадают: пока идёт проба, на вопросы мы не отвечаем.
+      const mine = ifaces().map((i) => i.address);
       if (mine.includes(rinfo.address)) return;
-      for (const a of m.answers) {
-        if (a.type === TYPE_A && a.address && a.name.toLowerCase() === name && !mine.includes(a.address)) { onConflict(a.address); return; }
-      }
+      const other = claims.find((a) => !mine.includes(a.address));
+      if (other) onConflict(other.address);
       return;
     }
     if (state !== 'active') return;
     const q = m.questions.find((x) => x.name.toLowerCase() === name && (x.type === TYPE_A || x.type === TYPE_ANY) && (x.qclass === 1 || x.qclass === 255));
     if (!q) return;
+    const list = ifaces();
     const local = list.filter((i) => sameSubnet(i.address, rinfo.address, i.netmask));
     const use = local.length ? local : list;
     if (!use.length) return;

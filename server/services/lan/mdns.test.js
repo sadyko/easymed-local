@@ -192,6 +192,18 @@ test('вопрос с адреса самого сервера (браузер �
   assert.deepEqual(sock.sent[0].m.answers.map((a) => a.address), ['192.168.1.156']);
 });
 
+test('чужие пакеты (принтеры, телефоны, Chromecast) не стоят опроса сетевых карт — только пакеты о нашем имени', async (t) => {
+  let reads = 0;
+  const { r, sock } = await fakeResponder(t, {}, { getInterfaces: () => { reads++; return HERE; } });
+  await until(() => r.status().state === 'active');
+  const before = reads;
+  for (let i = 0; i < 50; i++) {
+    sock.emit('message', buildQuery('printer.local', { type: TYPE_A }), fromLan('192.168.1.30'));
+    sock.emit('message', buildResponse({ name: 'chromecast.local', addresses: ['192.168.1.40'] }), fromLan('192.168.1.40'));
+  }
+  assert.equal(reads, before);
+});
+
 test('все имена easymed … easymed-9 заняты — состояние conflict, на запросы молчит', async (t) => {
   const { r, sock } = await fakeResponder(t);
   const origSend = sock.send.bind(sock);
