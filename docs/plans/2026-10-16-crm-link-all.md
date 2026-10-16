@@ -49,6 +49,7 @@ R7b comes before R7a on purpose: the matrix replays the browser's calls of today
   - I7 «не бросает»: CRM hooks never fail a booking, a registration or a payment (errors go to the log);
   - I8 nothing about another operator's card leaks into a response.
 - **UI rules (Task 7; Task 5 has no visible change):** every new string in ru/uz/en in `public/js/admin/i18n-strings.js` (no Cyrillic in uz/en values), type-scale font sizes already used in the file (12.5px / 13.5px), icons only via `Icon()`, no emoji, works at 360 px (no fixed widths wider than the row; chips wrap).
+- **Where the code in this plan comes from:** every code block was run on a throw-away prototype in this clone on 2026-10-16 (then reverted). The prototype is kept for reference only, in scratch: `crm-link-all-prototype.patch` (tracked files) and `crm-link-all-prototype-new-files.tar` (new files) — it carries temporary `CLA_OFF` toggles (`// PROTOTYPE TOGGLE`) used to measure each intermediate state; never apply it as is. The plan, not the patch, is the source of truth.
 - **Lesson baked in:** `server/services/crm/booking-mirror.js` has defeated four fix rounds on twin lines. This plan changes NO rule inside it: Task 6 only adds `export` to `vsFree`, `deleteVs`, `relinkHeld`. Any task that finds itself editing a mirror function body must stop and report.
 
 ---
