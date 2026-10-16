@@ -8,6 +8,7 @@ import { supabase } from '../supabase.js';
 import { h, Icon } from './ui.js';
 import { tr, trf } from './i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openUploadModal } from './verify-banner.js?v=vb2';
+import { isAdminActor } from './admin-actor.js';   // LAN_ADDRESS_V1 — смена адреса сервера — только администратору
 
 let _styled = false;
 function injectStyles() {
@@ -64,7 +65,26 @@ async function loadState(clinic) {
             .select('id,name,phone,address').eq('id', clinic.id).limit(1);
         co = data && data[0];
     } catch (e) { /* нет строки — нет и напоминания */ }
-    return { co, inpatient: await loadInpatient() };
+    return { co, inpatient: await loadInpatient(), lan: await loadLanChange() };
+}
+
+// LAN_ADDRESS_V1 — «Адрес сервера изменился». Роутер клиники после перезапуска
+// выдал серверу новый адрес, и другие компьютеры и анализаторы могут его не
+// находить. Условие считает СЕРВЕР (data/lan-address.json, services/lan/state.js):
+// смена хранится, пока администратор не скрыл её, и возвращается со следующей
+// сменой. Поэтому крестик здесь гасит не только баннер этого браузера (как у
+// прочих), а саму смену — на сервере (onDismiss → lan_address_dismiss), и колокол
+// гаснет у всех администраторов. Не администратору статус даже не запрашивается:
+// закрепить адрес в роутере — его работа, а полоса поперёк экрана регистратуры
+// была бы шумом. Ошибка — тишина: подсказка, не операция.
+async function loadLanChange() {
+    if (!isAdminActor()) return null;
+    try {
+        const { data, error } = await supabase.rpc('lan_address_status', {});
+        if (error || !data) return null;
+        const c = data.change;
+        return c && Array.isArray(c.from) && Array.isArray(c.to) && c.at ? c : null;
+    } catch (e) { return null; }
 }
 
 // ===========================================================================
@@ -173,8 +193,15 @@ function filedBy(row, me) {
 }
 
 function buildNotifs(clinic, st) {
-    const { co, inpatient } = st;
+    const { co, inpatient, lan } = st;
     const list = [];
+    // LAN_ADDRESS_V1 — id с моментом смены: следующая смена — новое уведомление.
+    if (lan) list.push({ id: 'lan-address:' + lan.at, sev: 'warn', icon: 'Warning',
+        title: tr('Адрес сервера изменился'),
+        message: trf('Адрес сервера изменился: было {from}, стало {to}.', { from: lan.from.join(', '), to: lan.to.join(', ') })
+            + ' ' + tr('Другие компьютеры и анализаторы могут не находить сервер. Закрепите адрес в роутере.'),
+        ctaLabel: tr('Как это сделать'), onCta: () => nav('lan-address'),
+        onDismiss: () => supabase.rpc('lan_address_dismiss', { at: lan.at }) });
     // NOTIF_POLICY_V2 (owner, 2026-07-21): напоминание срабатывает только по реально
     // ПРОЧИТАННОЙ и действительно неполной строке.
     if (co && !companyComplete(co)) list.push({ id: 'company', sev: 'info', icon: 'Building',
@@ -260,8 +287,21 @@ export function stopNotificationsPolling() {
     if (_timer) { clearInterval(_timer); _timer = null; }
 }
 
+// LAN_ADDRESS_V1 — экран «Адрес в сети» скрыл смену или выключил имя: перерисовать
+// колокол и баннер сразу, а не через минуту (событие 'em:lan-address').
+let _lastClinic = null;
+let _lanBound = false;
+function bindLanRefresh() {
+    if (_lanBound || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+    _lanBound = true;
+    window.addEventListener('em:lan-address', () => {
+        if (_lastClinic) renderNotifications(_lastClinic, { poll: false }).catch(() => { /* подсказка, не операция */ });
+    });
+}
+
 export async function renderNotifications(clinic, opts = {}) {
     const poll = opts.poll !== false;
+    _lastClinic = clinic; bindLanRefresh();   // LAN_ADDRESS_V1
     injectStyles(); bindOutsideClose();
     // Перерисовка НЕ ВЫРЫВАЕТ ОТКРЫТЫЙ СПИСОК ИЗ-ПОД РУКИ: paintBell чистит
     // mount, а выпадающий список лежит в нём же. ТИК ТАЙМЕРА, попавший на
@@ -328,6 +368,11 @@ function paintBanners(notifs, clinic, dism) {
             h('button', { class: 'nbn-cta', type: 'button', onclick: n.onCta }, n.ctaLabel),
             h('button', { class: 'nbn-x', type: 'button', title: 'Скрыть', onclick: () => {
                 const d = getDismissed(clinic); if (!d.includes(n.id)) d.push(n.id); setDismissed(clinic, d); row.remove();
+                // LAN_ADDRESS_V1 — условие, которое хранит сервер, скрывается на сервере;
+                // потом колокол перерисовывается и теряет строку тоже.
+                if (typeof n.onDismiss === 'function') {
+                    Promise.resolve().then(n.onDismiss).then(() => renderNotifications(clinic, { poll: false })).catch(() => { /* подсказка */ });
+                }
                 if (!document.querySelector('#em-notif-banners .em-nbn')) document.getElementById('em-notif-banners')?.remove();
             } }, '×'));
         return row;

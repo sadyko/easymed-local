@@ -106,6 +106,8 @@ export async function renderLanAddress(root) {
             if (error) throw error;
             st = data || st;
             if (okText) toast(okText, 'ok');
+            // Баннер и колокол (notifications.js) перерисуются сразу, не через минуту.
+            try { window.dispatchEvent(new CustomEvent('em:lan-address')); } catch { /* нет окна — нечего обновлять */ }
         } catch (e) {
             toast(e && e.message ? tr(String(e.message)) : tr('Ошибка'), 'fail');
         } finally {
