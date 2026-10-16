@@ -392,17 +392,20 @@ test('C4c: звонок вчера (без строк и даты), запись
 });
 
 // P3 — карточка без строк и без даты «ждёт» прихода только в окне — на ЛЮБОЙ двери.
-test('C4e: «Новый лид» 90 дней без строк и даты — ни регистрация без стойки, ни запись, ни оплата его не трогают', async () => {
+// CRM_LINK_ALL_V1 (решение владельца D1, R1) — правило изменено: живая карточка
+// пациента держит ЛЮБУЮ его запись, любой давности. Давняя — сначала в начало
+// воронки, затем «Записан»; оплата визита закрывает её «Пришёл».
+test('C4e (CRM_LINK_ALL_V1, D1): «Новый лид» 90 дней без строк и даты — регистрация без стойки возвращает его в начало и записывает, оплата закрывает', async () => {
   const t = await startCrmApp(seed);
   try {
     const rid = addLead(t.db, { updated: daysAgoIso(90), name: '90d lead' });
     const { inv } = await walkIn(t, [[50, null]], { desk: false });
-    assert.equal(t.lead(rid).status, 'in_process', 'регистрация взяла старую карточку о другом обращении');
+    assert.equal(t.lead(rid).status, 'scheduled', 'живая карточка не взяла регистрацию (D1)');
     const b = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 10, start: at(D, 10), duration_minutes: 30 });
     assert.equal(b.status, 200, b.text);
-    assert.equal(t.lead(rid).status, 'in_process', 'запись взяла старую карточку о другом обращении');
+    assert.equal(t.lead(rid).status, 'scheduled');
     await pay(t, inv);
-    assert.equal(t.lead(rid).status, 'in_process', 'оплата закрыла старую карточку о другом обращении');
+    assert.equal(t.lead(rid).status, 'came', 'оплата визита карточки не закрыла её');
   } finally { t.close(); }
 });
 

@@ -147,7 +147,9 @@ test('P5 (A-P5): записан пять дней назад на вчера, п
   }
 });
 
-test('A-P5: пропущенный день давнее окна — поздний приход через мастер визита карточку не поднимает', async () => {
+// CRM_LINK_ALL_V1 (решение владельца D1, R1) — правило изменено: давний «Не пришёл» — живая
+// карточка; регистрация мастером её берёт (в начало, затем «Записан»), оплата закрывает.
+test('A-P5 (CRM_LINK_ALL_V1, D1): пропущенный день давнее окна — регистрация мастером берёт давнюю «Не пришёл», оплата закрывает её «Пришёл»', async () => {
   const t = await startCrmApp();
   try {
     const d = localDay(-10);
@@ -156,11 +158,12 @@ test('A-P5: пропущенный день давнее окна — поздн
     assert.deepEqual(crmNoShowSweep(t.db), [rid]);
     const e = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: nowIso(), doctor_id: 10, visit_type: 'outpatient' });
     const vid = e.json.data.visit.id;
+    assert.equal(t.lead(rid).status, 'scheduled', 'живая «Не пришёл» не взяла запись (D1)');
     const ins = await t.dbq('reg', { table: 'visit_services', op: 'insert', returning: true, single: 'single',
       values: { visit_id: vid, service_id: 40, quantity: 1, unit_price: 40000, total: 40000, status: 'added' } });
     const inv = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: vid, visit_service_ids: [ins.json.data.id], discount_amount: 0, payer_id: null });
     await t.rpc('record_payment', 'kassa', { invoice_id: inv.json.data.invoice.id, amount: 40000, method: 'cash' });
-    assert.equal(t.lead(rid).status, 'no_show');
+    assert.equal(t.lead(rid).status, 'came');
   } finally { t.close(); }
 });
 

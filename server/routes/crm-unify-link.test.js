@@ -75,14 +75,17 @@ test('запись оператора Б двигает карточку опе�
   } finally { t.close(); }
 });
 
-test('карточку, ждущую ДРУГОЙ день, сегодняшняя запись не двигает', async () => {
+// CRM_LINK_ALL_V1 (решение владельца D1, R1) — правило изменено: запись на другой день — та же
+// живая карточка: привязка, «Записан», дата — записанный день; строка своего дня ждёт.
+test('карточку, ждущую ДРУГОЙ день, запись на день D держит (CRM_LINK_ALL_V1, D1): «Записан», строка D2 ждёт', async () => {
   const t = await startCrmApp();
   try {
     const rid = addLead(t.db, { date: D2 });
     addLine(t.db, rid, { svc: 40, day: D2 });
     const b = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 10, start: at(D, 9), duration_minutes: 30 });
     assert.equal(b.status, 200, b.text);
-    assert.equal(t.lead(rid).status, 'in_process');
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['scheduled', D]);
+    assert.deepEqual(t.db.prepare('SELECT request_id, source FROM crm_booking_links WHERE visit_id = ?').get(b.json.data.visit.id), { request_id: rid, source: 'patient' });
     assert.deepEqual(linesOf(t.db, rid).map((l) => l.visit_id), [null]);
   } finally { t.close(); }
 });

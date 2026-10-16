@@ -95,6 +95,29 @@ const EXPECT = {
   "9-S1cal-pay": {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]},
 };
 
+// ═══ CRM_LINK_ALL_V1 — DECIDED CELLS ═══════════════════════════════════════
+// A cell whose rule an owner decision (D1–D4) or a defect fix (G4, G7) changed.
+// `cell` replaces EXPECT[id] (today's behaviour above stays as the frozen record);
+// `owner` names the OWNER predicate the cell must meet (null — an intermediate cell of a
+// later task: the cell is pinned, its GAP stays todo); `rule` cites the decision.
+// A GAP todo of a decided cell runs as a REAL test. Each task adds its own cells.
+const DECIDED = {
+  // Task 1 — R1 + R2 (D1)
+  '2-S2-reg': { rule: 'R1 (D1)', owner: 'lines', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B","30@D2:pending/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '2-S2-boss': { rule: 'R1 (D1)', owner: 'lines', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B","30@D2:pending/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '2-S3-reg': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '2-S3-boss': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3b-S3-reg': { rule: 'R2 (D1)', owner: 'moved', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '4-today-S2': { rule: 'R1 (D1) + D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@D:pending/B","30@T:pending/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '4-today-S2-pay': { rule: 'R1 (D1)', owner: 'came+lines', cell: {"stage":"came","date":"T","lines":["30@D:pending/B","30@T:done/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '4-future-S2': { rule: 'R1 (D1)', owner: 'lines', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B","30@D2:pending/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '4-today-S3': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '4-today-S3-pay': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '4-future-S3': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D2","lines":["30@D2:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '6-S2-doc': { rule: 'R1 (D1)', owner: 'lines', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B","c5@D2:pending/V"],"link":"card","cards":1,"visits":2,"vs":["c5"]} },
+  '6-S3-doc': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D2","lines":["c5@D2:pending/V"],"link":"card","cards":1,"visits":1,"vs":["c5"]} },
+};
+
 const rows = [];
 after(() => {
   const w = (s, n) => String(s).padEnd(n);
@@ -117,6 +140,8 @@ const OWNER = {
   'came+lines': (o) => o.stage === 'came' && o.lines.some((l) => l.endsWith('/V')),
   nodup: (o) => new Set(o.vs).size === o.vs.length,
   approved: (o) => o.stage === 'approved',
+  // CRM_LINK_ALL_V1 (D2) — a later slot today is a booking: the card shows the visit and waits in the booked column.
+  booked: (o) => o.stage === 'scheduled' && o.lines.some((l) => l.endsWith('/V')),
 };
 const OWNER_TEXT = {
   lines: 'the card shows the visit\'s services as its lines',
@@ -125,16 +150,24 @@ const OWNER_TEXT = {
   'came+lines': 'the card goes to «Пришёл» AND shows the visit',
   nodup: 'no service twice in the visit',
   approved: '«Подтверждён» in the calendar moves the card to «Подтверждён»',
+  booked: 'a later slot today stays a booking: «Записан» with the visit on the card (D2)',
 };
 
 for (const sc of SCENARIOS) {
   const name = `DOOR ${sc.door} / ${sc.state} (${sc.who}) [${sc.id}]: ${sc.desc}`;
+  const dec = DECIDED[sc.id] || null;
   test(name, async () => {
     const o = await observe(sc);
     rows.push({ id: sc.id, o });
-    assert.deepEqual(o, EXPECT[sc.id], 'today\'s behaviour changed');
+    assert.deepEqual(o, dec ? dec.cell : EXPECT[sc.id], dec ? `CRM_LINK_ALL_V1 ${dec.rule}: decided cell` : 'today\'s behaviour changed');
+    if (dec && dec.owner) assert.ok(OWNER[dec.owner](o), `CRM_LINK_ALL_V1 ${dec.rule}: ${OWNER_TEXT[dec.owner]}`);
   });
-  if (sc.gap) {
+  if (sc.gap && dec && dec.owner) {
+    test(`GAP→${dec.rule}: DOOR ${sc.door} / ${sc.state} (${sc.who}) [${sc.id}]: ${OWNER_TEXT[dec.owner]}`, async () => {
+      const o = await observe(sc);
+      assert.ok(OWNER[dec.owner](o), 'CRM_LINK_ALL_V1 decided expectation not met: ' + JSON.stringify(o));
+    });
+  } else if (sc.gap) {
     test.todo(`GAP: DOOR ${sc.door} / ${sc.state} (${sc.who}) [${sc.id}]: ${OWNER_TEXT[sc.gap.expect]} — ${sc.gap.reason}`, async () => {
       const o = await observe(sc);
       assert.ok(OWNER[sc.gap.expect](o), 'owner expectation not met: ' + JSON.stringify(o));

@@ -45,6 +45,12 @@
 //      возвращённая в начало воронки (история внутри) и записанная; открытой
 //      нет, закрытая в окне — новой нет, закрытую не трогаем, привязки нет
 //      (Р5); иначе новая («Звонок», оператор — он же);
+//   C′. CRM_LINK_ALL_V1 (решение владельца D1, R1/R2; между C и D) — ни A, ни
+//      B, ни C ничего не нашли: ЖИВАЯ карточка пациента (liveKeys — открытые и
+//      сидовая «Не пришёл») держит запись любого дня, любой роли, любой
+//      давности, и на стойке тоже: двигавшаяся последней; после окна — сначала
+//      reopenLead (contactDecision, как у E). Закрытые — никогда. Только запись
+//      на сегодня или позже. До E доходит только пациент без живой карточки;
 //   F. привязка записи (crm_booking_links) — для C и E, не для телефона;
 //   G. ступень: только из живых колонок и только вперёд — в «Колонку записи»
 //      (scheduledStageKey); дата заявки — cardDateOf (booking-mirror.js), ОДНО
@@ -110,7 +116,7 @@
 import { openStageKeys, scheduledStageKey, wonStageKey, windowHours, SEED_NO_SHOW_STAGE } from './config.js';
 // CRM_UNIFY_V1 (задача 6) — окно повторного обращения: одно правило «двигалась
 // ли карточка в окне» (inWindowSql) и одно решение по новому обращению.
-import { contactDecision, reopenLead, inWindowSql, windowArg, leadInWindow, firstStageKey } from './contact-window.js';
+import { contactDecision, reopenLead, inWindowSql, windowArg, leadInWindow, firstStageKey, liveKeys } from './contact-window.js';   // CRM_LINK_ALL_V1 — liveKeys (шаг C′)
 import { missedRecentlySql, missedRecentlyArgs } from './contact-window.js';   // CRM_UNIFY_V1 (финальное ревью) — одно правило опоздания
 import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL, cardDateOf, mirrorVisit } from './booking-mirror.js';
 import { crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';
@@ -471,6 +477,30 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
     if (take) touched.set(r.id, 'patient');
   }
 
+  // C′. CRM_LINK_ALL_V1 (R1, R2; решение владельца D1) — ЖИВАЯ КАРТОЧКА
+  //    ПАЦИЕНТА ДЕРЖИТ ЛЮБУЮ ЕГО ЗАПИСЬ: любой день, любая роль, любая
+  //    давность, и стойка тоже. Ни A, ни B, ни C не нашли карточку — визит
+  //    берёт живая карточка пациента (открытые колонки и сидовая «Не пришёл»,
+  //    liveKeys) тем же решением, что шаг E колл-центра (contactDecision):
+  //    из нескольких — двигавшаяся последней (updated_at, иначе created_at;
+  //    равные — больший id); не двигалась в окне и ничего не ждёт — сначала
+  //    возврат в начало воронки (reopenLead, история внутри), потом G.
+  //    Закрытые («Пришёл», «Отказ»…) не берутся никогда. Только запись на
+  //    сегодня или позже: правка визита прошлого дня — история, не обращение.
+  const prevOf = new Map();
+  if (!touched.size && v.day >= today(db)) {
+    const liveIds = db.prepare(`SELECT id FROM crm_requests WHERE patient_id = ? AND status IN (${holes(liveKeys(db))})`)
+      .all(v.patient_id, ...liveKeys(db)).map((r) => r.id);
+    const d = liveIds.length ? contactDecision(db, liveIds) : null;
+    if (d && (d.action === 'same' || d.action === 'reopen')) {
+      if (d.action === 'reopen') {
+        prevOf.set(d.lead.id, db.prepare('SELECT status, scheduled_date FROM crm_requests WHERE id = ?').get(d.lead.id));
+        reopenLead(db, d.lead.id);
+      }
+      touched.set(d.lead.id, 'live');
+    }
+  }
+
   // D. По телефону — одна заявка, только patient_id (на стойке — тем же
   //    правилом deskCloses). Строки карточки по телефону визит не берут — ни
   //    здесь, ни на стойке: правило денег (общий номер — не общий счёт).
@@ -488,7 +518,8 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   //    reopen — карточка возвращается в начало воронки, а G записывает её; след
   //    отмены помнит ступень ДО возврата (prevOf). closed — закрытая карточка в
   //    окне: новой нет, закрытую не трогаем, привязки нет (Р5).
-  const prevOf = new Map();
+  //    CRM_LINK_ALL_V1 — живую карточку уже взял шаг C′: сюда доходит только
+  //    пациент без живой карточки (решение — closed или new).
   if (!touched.size && callcenter && !desk) {   // CRM_UNIFY_V1 — !desk
     const all = db.prepare('SELECT id FROM crm_requests WHERE patient_id = ?').all(v.patient_id);
     const d = contactDecision(db, all);
@@ -510,13 +541,15 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
     }
   }
 
-  // F. Привязка записи — для C и E (A держит визит строками, D — только пациент).
+  // F. Привязка записи — для C, C′ и E (A держит визит строками, D — только пациент).
+  //    CRM_LINK_ALL_V1 — и C′ (source 'patient').
   if (!held) {
-    const pick = [...touched].find(([, via]) => via === 'patient' || via === 'callcenter' || via === 'created');
+    const pick = [...touched].find(([, via]) => ['patient', 'live', 'callcenter', 'created'].includes(via));
     if (pick) {
+      const source = callcenter ? 'callcenter' : pick[1] === 'live' ? 'patient' : 'match';   // CRM_LINK_ALL_V1
       db.prepare(`INSERT OR REPLACE INTO crm_booking_links (visit_id, request_id, source, created_by, created_request)
                   VALUES (?, ?, ?, ?, ?)`)
-        .run(v.id, pick[0], callcenter ? 'callcenter' : 'match', uid, pick[1] === 'created' ? 1 : 0);
+        .run(v.id, pick[0], source, uid, pick[1] === 'created' ? 1 : 0);
     }
   }
 

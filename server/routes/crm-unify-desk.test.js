@@ -152,7 +152,11 @@ test('стойка: колл-центру, врачу, будущему дню �
   } finally { t.close(); }
 });
 
-test('стойка: карточку, ждущую другой день, ни врач с desk, ни регистратура без desk не двигают', async () => {
+// CRM_LINK_ALL_V1 (решение владельца D1, R1) — правило изменено: живая карточка
+// держит любую запись пациента. Врачу desk по-прежнему не верят (не «Пришёл»), но
+// сегодняшний визит — запись этой карточки: «Записан», дата — ближайший записанный
+// день (сегодня); строка дня D остаётся ждать своего дня.
+test('стойка (CRM_LINK_ALL_V1, D1): карточку, ждущую другой день, врач с desk и регистратура без desk записывают, а не закрывают', async () => {
   for (const [who, args] of [['doc', { desk: true }], ['reg', {}]]) {
     const t = await startCrmApp();
     try {
@@ -160,7 +164,8 @@ test('стойка: карточку, ждущую другой день, ни �
       addLine(t.db, rid, { svc: 40, day: D });
       const r = await t.rpc('ensure_visit', who, { patient_id: 77, date: nowIso(), doctor_id: 10, ...args });
       assert.equal(r.status, 200, r.text);
-      assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['in_process', D], who);
+      assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['scheduled', TODAY], who);
+      assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.visit_id]), [[40, null]], who + ': строка дня D взяла сегодняшний визит');
     } finally { t.close(); }
   }
 });
@@ -440,7 +445,9 @@ test('R5: старая карточка, привязанная к этому в
 // раньше окна назад): записанный три недели назад и опоздавший на день — «Пришёл».
 // Давний — и давно двигался, и давно пропустил.
 test('стойка: «Не пришёл» в пределах окна (пришёл на день позже) — «Пришёл»; давний «Не пришёл» — не трогается', async () => {
-  for (const [ago, date, want] of [[0, -1, 'came'], [1, -1, 'came'], [21, -1, 'came'], [10, -10, 'no_show']]) {
+  // CRM_LINK_ALL_V1 (D1, R2) — давний «Не пришёл» — живая карточка: стойка возвращает её
+  // в начало и закрывает «Пришёл» (прежде — «не трогается»).
+  for (const [ago, date, want] of [[0, -1, 'came'], [1, -1, 'came'], [21, -1, 'came'], [10, -10, 'came']]) {
     const t = await startCrmApp();
     try {
       const rid = addLead(t.db, { status: 'no_show', date: localDay(date), updated: daysAgoIso(ago) });
@@ -532,10 +539,12 @@ test('R7: desk — только true или "true"; день — только с
       addLine(t.db, rid, { svc: 40, day: D });
       const r = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: nowIso(), doctor_id: 10, desk: val });
       assert.equal(r.status, 200, r.text);
-      assert.equal(t.lead(rid).status, (val === true || val === 'true') ? 'came' : 'in_process', JSON.stringify(val));
+      // CRM_LINK_ALL_V1 (D1) — без desk это запись живой карточки: «Записан» (прежде — не трогалась).
+      assert.equal(t.lead(rid).status, (val === true || val === 'true') ? 'came' : 'scheduled', JSON.stringify(val));
     } finally { t.close(); }
   }
-  for (const [date, want] of [[at(localDay(1), 10), 'in_process'], [at(localDay(-1), 10), 'in_process'], [TODAY, 'came'],
+  // CRM_LINK_ALL_V1 (D1) — завтра: запись живой карточки («Записан»); вчера: правка истории — карточку не берёт.
+  for (const [date, want] of [[at(localDay(1), 10), 'scheduled'], [at(localDay(-1), 10), 'in_process'], [TODAY, 'came'],
     [at(TODAY, 0, 5), 'came'], [at(TODAY, 23, 55), 'came']]) {
     const t = await startCrmApp();
     try {
