@@ -123,9 +123,10 @@ export async function calendarPickerBook(t, who, day, { hour = 12, svc = 30, doc
  *      status:'added', price_tier, doctor_id, scheduled_at}                        — visit-wizard.js:2773
  *   3. (pay now) rpc create_invoice_for_visit {visit_id, visit_service_ids, discount_amount, payer_id:null}
  *      — visit-wizard.js:2809; cash is then taken at the cashier: record_payment (cashier-desk.js:1961) */
-export async function wizardRegister(t, who, whenIso, { book = true, pay = false, svc = 30, doctor = 10, pid = PID } = {}) {
+export async function wizardRegister(t, who, whenIso, { book = true, pay = false, desk = false, svc = 30, doctor = 10, pid = PID } = {}) {
+  // CRM_LINK_ALL_V1 (R3) — desk: true — мастер на сегодня «сейчас» (visit-wizard.js, wizard-desk.js isDeskNow).
   const ev = ok(await t.rpc('ensure_visit', who, { patient_id: pid, date: whenIso, doctor_id: doctor, visit_type: 'outpatient',
-    referral_source_id: null, branch_id: 1, notes: null,
+    referral_source_id: null, branch_id: 1, notes: null, ...(desk ? { desk: true } : {}),
     ...(book ? { book: { doctor_id: doctor, service_id: svc, start: whenIso, duration_minutes: 30 } } : {}) }), 'ensure_visit');
   const vid = ev.visit.id;
   const vsId = await addVisitLine(t, who, vid, { svc, doctor, scheduledAt: book ? whenIso : null, status: true });

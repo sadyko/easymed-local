@@ -1126,3 +1126,37 @@ test('OWN_PRICE_TIER_RATIO_V1: мастер — второй визит у вр�
   assert.deepEqual([sent.unit_price, sent.price_tier], [60000, 'secondary']);
   assert.equal(DB.prepare('SELECT total_amount FROM invoices').get().total_amount, 60000);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINK_ALL_V1 (R3; решение владельца D2) — МАСТЕР НА СЕГОДНЯ «СЕЙЧАС» — ПРИХОД
+// К СТОЙКЕ. День без слота (услуга без врача «на дату», живая очередь) на сегодня
+// — ensure_visit уходит с desk: true, как у быстрой регистрации; запись на другой
+// день — без desk. Правило — views/wizard-desk.js (isDeskNow), сервер проверяет сам.
+// ═══════════════════════════════════════════════════════════════════════════
+test('CRM_LINK_ALL_V1 R3: мастер — анализ без врача на сегодня: ensure_visit с desk: true и без book', async () => {
+  seed({});
+  DB.prepare("INSERT INTO services (id, name, price, type, is_lab, requires_doctor) VALUES (22,'Анализ крови',40000,'lab',1,0)").run();
+  document.body.children.length = 0;
+  TOASTS.length = 0; RPC.length = 0;
+  const { openVisitWizard } = await import('../views/visit-wizard.js');
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, { presetServiceIds: [22] });
+  await flush(20);
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev, 'мастер не дошёл до ensure_visit: ' + JSON.stringify(TOASTS));
+  assert.equal(ev.body.desk, true, 'регистрация «сейчас» не сказала серверу, что пациент у стойки');
+  assert.ok(!ev.body.book, 'анализ без врача ушёл записью на время');
+});
+
+test('CRM_LINK_ALL_V1 R3: мастер — приём со слотом: desk уходит ровно тогда, когда слот сегодня и не позже чем через 30 минут', async () => {
+  const { isDeskNow } = await import('../views/wizard-desk.js');
+  await openWizardReady();
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev && ev.body.book, 'мастер не дошёл до записи с book: ' + JSON.stringify(TOASTS));
+  const start = Date.parse(ev.body.book.start);
+  const ymd = (ms) => { const d = new Date(ms); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const want = isDeskNow({ dayIso: ymd(start), todayIso: ymd(Date.now()), headStartMs: start, nowMs: Date.now() });
+  assert.equal(ev.body.desk === true, want, 'desk: ' + ev.body.desk + ', слот ' + ev.body.book.start);
+  if (!want) assert.ok(!('desk' in ev.body), 'запись позже сегодня или на другой день ушла как приход к стойке');
+});

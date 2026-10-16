@@ -18,6 +18,7 @@ import { localDate } from '../domain/day.js';
 // записи сверяются с строками заявки (crm/booking-mirror.js).
 import { mirrorVisit, dayVisitMovableFor } from '../crm/booking-mirror.js';
 import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
+import { DESK_NOW_MINUTES } from '../../../public/js/admin/views/wizard-desk.js';   // CRM_LINK_ALL_V1 (R3) — одно правило «сейчас» с мастером
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -147,7 +148,8 @@ function parseBook(book) {
 
 // args: { patient_id, date (ISO datetime or YYYY-MM-DD), doctor_id?,
 //         visit_type?, referral_source_id?, branch_id?, notes?,
-//         desk?: true (CRM_UNIFY_V1 — регистрация на стойке, только без book),
+//         desk?: true (CRM_UNIFY_V1 — регистрация на стойке; CRM_LINK_ALL_V1 (R3) — с book
+//                      верится, только если слот начинается не позже чем через 30 минут),
 //         book?: { doctor_id, start, duration_minutes?, service_id?, room_id?,
 //                  emergency?, emergency_reason? } }
 // Returns { visit, created, booked, emergency?, cross_branch? }.
@@ -217,6 +219,11 @@ export async function ensureVisit(db, args, user, internal = {}) {
   //     проверять нечего. Решает это экран (headTimedLine в visit-wizard.js),
   //     и это единственная честная причина сюда не прийти.
   const book = parseBook(args && args.book);
+  // CRM_LINK_ALL_V1 (R3; решение D2) — мастер на сегодня «сейчас» шлёт desk и с
+  // записью на время: верим, только если слот начинается не позже чем через
+  // DESK_NOW_MINUTES минут (то же правило, что у экрана, wizard-desk.js).
+  // Остальное (роль, сегодняшний день) проверяет шаг связи (deskArrival).
+  const deskBooked = desk && !!book && book.startMs <= Date.now() + DESK_NOW_MINUTES * 60000;
   // BILLING_AUDIT_FIX_V1 (A1, A8) — визит дня ищется по МЕСТНОМУ дню и только
   // среди СВОИХ визитов: визит, приехавший из соседнего здания (sync_origin),
   // здесь не правится (BRANCH_MONEY_GUARD_V1 — ни счёт, ни услугу в нём не
@@ -329,7 +336,7 @@ export async function ensureVisit(db, args, user, internal = {}) {
     // пациента держит именно он, и в смете регистратуры они нужны. CRM_UNIFY_V1:
     // до прихода — как запись («Записан»); визит уже «Пришёл» — строки берут
     // его и закрываются правилом прихода (crm/visit-link.js).
-    crmLinkVisit(db, out.visit.id, user, { undated: true });   // CRM_UNIFY_V1
+    crmLinkVisit(db, out.visit.id, user, { undated: true, desk: deskBooked });   // CRM_UNIFY_V1 · CRM_LINK_ALL_V1 (R3)
     mirrorVisit(db, out.visit.id, { actorId: user && user.id });   // CRM_CALENDAR_MIRROR_V1
     const doctor = out.visit.doctor_id
       ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(out.visit.doctor_id)
@@ -401,7 +408,7 @@ export async function ensureVisit(db, args, user, internal = {}) {
   }
   // CRM_UNIFY_V1 — запись связывается с заявкой пациента (crm/visit-link.js);
   // затем строки записи и заявки сверяются.
-  crmLinkVisit(db, out.visit.id, user, { undated: true });   // CRM_UNIFY_V1
+  crmLinkVisit(db, out.visit.id, user, { undated: true, desk: deskBooked });   // CRM_UNIFY_V1 · CRM_LINK_ALL_V1 (R3)
   mirrorVisit(db, out.visit.id, { actorId: user && user.id });
   return { ...out, booked: true };
 }

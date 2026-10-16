@@ -348,8 +348,9 @@ export function deskCloses(db, requestId, v, hours = windowHours(db)) {
  * CRM_UNIFY_V1 (Р1) — ВЕРИТЬ ЛИ «ПАЦИЕНТ У СТОЙКИ». desk приходит из браузера,
  * поэтому сервер проверяет сам: прислал его регистратор или администратор
  * (основная или дополнительная роль), и визит — сегодняшнего местного дня.
- * Колл-центру, врачу, будущему и прошедшему дню — нет. Без book решает дверь
- * (ensure_visit передаёт desk только без записи на время).
+ * Колл-центру, врачу, будущему и прошедшему дню — нет. Без book решает дверь;
+ * с book ensure_visit передаёт desk, только если слот начинается не позже чем
+ * через 30 минут (CRM_LINK_ALL_V1 R3 — мастер визита «сейчас», wizard-desk.js).
  */
 export function deskArrival(db, v, user, desk) {
   return desk === true && !!v && v.day === today(db) && hasAnyRole(user, DESK_ROLES);

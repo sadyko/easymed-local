@@ -1,6 +1,6 @@
 // Prints the observed cell of every scenario (optionally filtered by id prefix).
 import { start, cell } from './helpers.mjs';
-import { SCENARIOS } from './scenarios-789.mjs';
+import { SCENARIOS } from './scenarios-link-all.mjs';   // CRM_LINK_ALL_V1 — the frozen doors + the plan's scenarios
 const pre = process.argv[2] || '';
 for (const sc of SCENARIOS.filter((s) => s.id.startsWith(pre))) {
   const t = await start();

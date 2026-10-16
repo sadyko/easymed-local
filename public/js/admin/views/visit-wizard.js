@@ -51,6 +51,7 @@ import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../s
 // CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
 // доказывает событие (отметка, платёж, начатая работа), и видит его сервер.
 import { pendingCrmLines } from '../crm-lines.js';
+import { isDeskNow } from './wizard-desk.js';   // CRM_LINK_ALL_V1 (R3) — «сейчас» у стойки: одно правило с сервером
 // CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на три двери:
 // у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
 import { readEnsureVisit } from '../ensure-visit-answer.js';
@@ -2691,6 +2692,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         duration_minutes: lineDuration(timedHead),
                     };
                     if (emgReason) { evArgs.book.emergency = true; evArgs.book.emergency_reason = emgReason; }
+                }
+                // CRM_LINK_ALL_V1 (R3; решение владельца D2) — регистрация на СЕГОДНЯ «сейчас»
+                // (живая очередь, услуги без времени или слот не позже чем через 30 минут) —
+                // приход к стойке, как быстрая регистрация: карточка CRM сразу «Пришёл».
+                // Слот позже сегодня — запись («Записан»). Сервер верит desk только
+                // регистратуре и администратору и проверяет слот сам (ensure_visit).
+                if (isDeskNow({ dayIso: day, todayIso: isoDay(Date.now()), headStartMs: timedHead ? new Date(timedHead.when).getTime() : null, nowMs: Date.now() })) {
+                    evArgs.desk = true;
                 }
                 const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', evArgs);
                 if (evErr) {

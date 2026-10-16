@@ -19,7 +19,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { start, cell } from './helpers.mjs';
-import { SCENARIOS } from './scenarios-789.mjs';
+import { SCENARIOS } from './scenarios-link-all.mjs';   // CRM_LINK_ALL_V1 — the frozen doors + the plan's scenarios
 
 // Observed at HEAD e8b4aab4 (2026-10-16) — today's behaviour, one entry per cell.
 const EXPECT = {
@@ -132,6 +132,18 @@ const DECIDED = {
   '7-fast-S2Tcal-same': { rule: 'R6 (G4), before R7b', owner: null, cell: {"stage":"came","date":"T","lines":["30@T:done/V","30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30,30]} },
   // Task 4 — R4 (D3)
   '8-S2-confirmed': { rule: 'R4 (D3)', owner: 'approved', cell: {"stage":"approved","date":"D","lines":["30@D:pending/V"],"link":"none","cards":1,"visits":1,"vs":[30]} },
+  // Task 5 — R3 (D2)
+  '4-today-S1': { rule: 'D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '5-S1p-crm-wizard': { rule: 'D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '7-wiz-S2T-same': { rule: 'D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"none","cards":1,"visits":1,"vs":[30]} },
+  '7-wiz-S2T-earlier': { rule: 'D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"none","cards":1,"visits":1,"vs":[30]} },
+  '4-now-S1': { rule: 'R3 (D2) + R6', owner: 'came+lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '4-now-S2': { rule: 'R3 (D2) + R6', owner: 'came+lines', cell: {"stage":"came","date":"D","lines":["30@D:pending/B","30@T:done/V"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '4-now-S3': { rule: 'R3 (D2) + R2 + R6', owner: 'came+lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '4-now-S4': { rule: 'R3 (D2): no card — still no card (owner decision 2)', owner: 'nodup', cell: {"stage":null,"date":null,"lines":[],"link":"none","cards":0,"visits":1,"vs":[30]} },
+  '4-now-S1p': { rule: 'R3 (D2) + R5 + R6', owner: 'came+lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '5-S1p-crm-wizard-now': { rule: 'R3 (D2) + R6', owner: 'came+lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '7-wiz-S2T-now': { rule: 'R3 (D2)', owner: 'came+lines', cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"none","cards":1,"visits":1,"vs":[30]} },
 };
 
 const rows = [];

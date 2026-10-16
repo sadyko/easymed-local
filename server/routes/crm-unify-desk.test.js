@@ -128,12 +128,16 @@ test('стойка: администратор и регистратура до�
   }
 });
 
-test('стойка: колл-центру, врачу, будущему дню и записи на время desk не верят; без desk сегодня — «Записан»', async () => {
+// CRM_LINK_ALL_V1 (решение владельца D2, R3) — правило изменено: запись на время СЕГОДНЯ со
+// слотом не позже чем через 30 минут (и уже начавшимся) — тоже приход к стойке (мастер «сейчас»);
+// слот позже — запись. Слот через 3 часа — всегда «позже» (или уже завтра).
+test('стойка: колл-центру, врачу, будущему дню и записи на время позже 30 минут desk не верят; без desk сегодня — «Записан»', async () => {
+  const later = new Date(Date.now() + 3 * 3600e3).toISOString();
   for (const [who, date, extra] of [
     ['cc', nowIso(), {}],
     ['doc', nowIso(), {}],
     ['reg', at(D, 10), {}],
-    ['reg', at(TODAY, 9), { book: { doctor_id: 10, service_id: 30, start: at(TODAY, 9), duration_minutes: 30 } }],
+    ['reg', later, { book: { doctor_id: 10, service_id: 30, start: later, duration_minutes: 30 } }],
   ]) {
     const t = await startCrmApp();
     try {
