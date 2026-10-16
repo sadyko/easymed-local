@@ -69,6 +69,15 @@ export function renderApiCard(box, clinic) {
     const replaced = api.replaced_seen.map((r, i) => `
       <div class="legacy-note" data-replaced-i="${esc(String(i))}">A previously replaced key, <span class="api-fp">${esc(r.code)}</span>, checked in again ${esc(fmtDateTime(r.last_seen))} — the old computer is still running, or someone has a copy of it. It is not accepted. If the clinic really went back to that computer, re-enrol the clinic, then accept the key with the code it reads out.
         <div class="form-actions"><button class="btn danger small" type="button" data-block-replaced>Block this key</button></div></div>`).join('');
+    // Round 3 (R3-4) — the clinic's former keys (from the server's history of
+    // accepted keys; codes of keys that WERE accepted only), so a lost or
+    // stolen old computer can be blocked even after a re-enrolment.
+    const formerRows = (api.former_keys || []).map((f, i) => `
+      <div class="form-actions" data-former-i="${esc(String(i))}"><span class="muted">Former key <span class="api-fp">${esc(f.code)}</span> — accepted ${esc(fmtDateTime(f.last_accepted_at))}${f.replaced_at ? `, replaced ${esc(fmtDateTime(f.replaced_at))}` : ''}${f.other_clinic ? ` — now the current key of «${esc(f.other_clinic_name || f.other_clinic)}»; block it on that clinic's page` : ''}</span>
+        ${f.other_clinic ? '' : '<button class="btn danger small" type="button" data-block-former>Block this key</button>'}</div>`).join('');
+    const former = formerRows ? `
+      <h3 class="stats-subhead">Former keys</h3>${formerRows}
+      <div class="next-checkin-note">Keys this clinic used before. Block one if that computer was lost or stolen.</div>` : '';
     const seenBlocked = api.seen_key_revoked
       ? '<div class="legacy-note">The key this clinic sends is blocked. Its exchange with the public server is refused.</div>' : '';
     // Re-check F5 — a clinic API key that was never accepted has no code here
@@ -95,7 +104,7 @@ export function renderApiCard(box, clinic) {
       <h3 class="stats-subhead">Clinic's API key</h3>
       <div class="form-actions">${keyLine}
         ${api.sync_key ? '<button class="btn danger small" id="api-block-sync" type="button">Block this key</button>' : ''}</div>
-      ${pending}${replaced}${seenBlocked}
+      ${pending}${replaced}${seenBlocked}${former}
 
       <h3 class="stats-subhead">Blocked keys</h3>
       ${rows ? `<div class="table-wrap"><table class="t"><thead><tr><th>Kind</th><th>Key</th><th>Why</th><th>Blocked</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
@@ -155,6 +164,15 @@ export function renderApiCard(box, clinic) {
         if (!k) return;
         if (!confirm(`Block this new key for "${clinic.name}"? It can never be accepted then — if it turns out to be the clinic's own new computer, the clinic will have to be re-enrolled.`)) return;
         act(() => cp.addRevocation(clinic.id, { kind: 'sync_key', key_id: k.id, note: 'new key blocked from the panel' }), 'Blocked.');
+      });
+    });
+
+    box.querySelectorAll('[data-former-i] [data-block-former]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const f = (clinic.api.former_keys || [])[Number(btn.closest('[data-former-i]').dataset.formerI)];
+        if (!f) return;
+        if (!confirm(`Block the former key ${f.code} of "${clinic.name}"? Do this if that computer was lost or stolen. The current key keeps working.`)) return;
+        act(() => cp.addRevocation(clinic.id, { kind: 'sync_key', former_id: f.id, note: 'former key blocked from the panel' }), 'Blocked.');
       });
     });
 

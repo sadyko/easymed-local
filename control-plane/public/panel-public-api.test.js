@@ -134,3 +134,22 @@ test('перепроверка 8c, F5: «Blocked keys» — у не принят
   assert.match(rows[1], /46de-4fe9/);
   assert.doesNotMatch(rows[0], /[0-9a-f]{4}-[0-9a-f]{4}/, 'у нового ключа — никакого кода');
 });
+
+// Перепроверка 8c, раунд 3 (R3-4): прежние ключи клиники (из истории — только
+// те, что БЫЛИ приняты) — на карточке кодом и датами, с «Block this key» по id строки истории.
+test('перепроверка 8c, раунд 3: карточка показывает прежние ключи кодом и датами, «Block this key» шлёт former_id', async () => {
+  const { renderApiCard } = await import('./panel-api-card.js');
+  const el = () => ({ addEventListener() {}, value: '', textContent: '', focus() {}, disabled: false, checked: false });
+  const box = { innerHTML: '', querySelector: () => el(), querySelectorAll: () => [] };
+  const at = '2026-10-12T10:00:00Z';
+  renderApiCard(box, { id: 'c-1', name: 'Шифо', api: {
+    enabled: true, sync_key: 'bb'.repeat(16), sync_key_code: 'bbbb-bbbb', sync_key_accepted_at: at,
+    candidates: [], key_pending: false, key_competing: false, replaced_seen: [], seen_key_revoked: false, partners_see: 'visible', licence: null,
+    former_keys: [{ id: 3, code: '46de-4fe9', last_accepted_at: at, replaced_at: at, other_clinic: null, other_clinic_name: null }],
+    revocations: [],
+  } });
+  assert.match(box.innerHTML, /data-former-i="0"[^<]*>[\s\S]{0,300}46de-4fe9[\s\S]{0,300}data-block-former/);
+  const card = fs.readFileSync(path.join(HERE, 'panel-api-card.js'), 'utf8');
+  assert.match(card, /cp\.addRevocation\(clinic\.id, \{ kind: 'sync_key', former_id: f\.id/);
+  assert.doesNotMatch(card, /\bf\.fp\b/);
+});

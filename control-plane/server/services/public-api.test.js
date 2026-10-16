@@ -7,7 +7,7 @@ import { migrate } from '../db/migrate.js';
 import { createEnrollmentCode, reissueEnrollmentCode, redeemEnrollmentCode } from './enrollment.js';
 import {
   licenceTerms, noteSyncKey, acceptPendingSyncKey, syncKeyPending, partnersSee, recordIssued, isRevoked, isoSeconds,
-  NEW_SYNC_KEY_NEEDS_CONFIRMATION, keyCode, normaliseKeyCode, syncKeyCandidates, replacedKeysSeen, keyOwner,
+  NEW_SYNC_KEY_NEEDS_CONFIRMATION, keyCode, normaliseKeyCode, syncKeyCandidates, replacedKeysSeen, keyOwner, formerKeysOf,
 } from './public-api.js';
 
 const FP1 = '11'.repeat(16);
@@ -213,6 +213,34 @@ test('перепроверка 8c, раунд 2: история принятых
   noteSyncKey(db, row(db), ground, NOW + 3000);
   assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: ground, code: code(FP1) }, NOW + 4000), { error: 'same_code' });
   assert.equal(row(db).api_sync_key, FP2);
+});
+
+// Перепроверка 8c, раунд 3 (R3-4): после новой регистрации прежний ключ есть
+// только в истории — карточка должна его показать (код, когда принят и когда
+// сменён), чтобы его можно было заблокировать из панели. Только ключи, которые
+// БЫЛИ приняты; нынешний, заблокированные, ждущие и уже показанные
+// «прежние, снова сверяющиеся» — не здесь.
+test('перепроверка 8c, раунд 3: прежние ключи из истории — с кодом и датами; без нынешнего, заблокированных и ждущих', () => {
+  const db = freshDb();
+  const hist = () => db.prepare('SELECT id, fp, first_accepted_at, last_accepted_at, replaced_at FROM sync_keys_history ORDER BY id').all();
+  noteSyncKey(db, row(db), FP1, NOW);
+  noteSyncKey(db, row(db), FP2, NOW + 1000);
+  assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: FP2, code: code(FP2) }, NOW + 2000), { ok: true });
+  assert.deepEqual(hist(), [
+    { id: 1, fp: FP1, first_accepted_at: '2026-10-12T10:00:00Z', last_accepted_at: '2026-10-12T10:00:00Z', replaced_at: '2026-10-12T10:00:02Z' },
+    { id: 2, fp: FP2, first_accepted_at: '2026-10-12T10:00:02Z', last_accepted_at: '2026-10-12T10:00:02Z', replaced_at: null },
+  ]);
+  assert.ok(redeemEnrollmentCode(db, { code: reissueEnrollmentCode(db, { clinicId: 'c-1' }) }));
+  assert.deepEqual(formerKeysOf(db, row(db)), [{ id: 1, fp: FP1, code: '1111-1111', last_accepted_at: '2026-10-12T10:00:00Z',
+    replaced_at: '2026-10-12T10:00:02Z', other_clinic: null, other_clinic_name: null }]);
+  noteSyncKey(db, row(db), FP1, NOW + 3000);                 // вернулся и ждёт — не «прежний», а новый
+  assert.deepEqual(formerKeysOf(db, row(db)), []);
+  // Принят снова — у него новая дата принятия, у сменённого B — дата смены.
+  assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: FP1, code: code(FP1) }, NOW + 4000), { ok: true });
+  assert.deepEqual(hist().map((h) => [h.fp, h.last_accepted_at, h.replaced_at]),
+    [[FP1, '2026-10-12T10:00:04Z', null], [FP2, '2026-10-12T10:00:02Z', '2026-10-12T10:00:04Z']]);
+  db.prepare("INSERT INTO revocations (clinic_id, kind, value) VALUES ('c-1', 'sync_key', ?)").run(FP2);
+  assert.deepEqual(formerKeysOf(db, row(db)), [], 'заблокированный — в «Blocked keys», не здесь');
 });
 
 test('ключ, принятый у другой клиники, сам не принимается и кнопкой тоже — один ключ, одна клиника', () => {

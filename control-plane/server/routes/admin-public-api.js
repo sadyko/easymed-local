@@ -16,7 +16,7 @@
 import { isEntitled } from '../services/checkin.js';
 import {
   partnersSee, acceptPendingSyncKey, isRevoked, isoSeconds, SYNC_FP_RE, KEY_HASH_RE,
-  syncKeyCandidates, replacedKeysSeen, keyCode, normaliseKeyCode, restoreUnblockedSyncKey, formerSyncKeys,
+  syncKeyCandidates, replacedKeysSeen, keyCode, normaliseKeyCode, restoreUnblockedSyncKey, formerSyncKeys, formerKeysOf,
 } from '../services/public-api.js';
 import { KEY_RE } from '../../../public/js/shared/api-connections.js';
 
@@ -58,6 +58,8 @@ export function apiViewOf(db, c, now = new Date()) {
     key_pending: candidates.some((k) => !k.revoked),
     key_competing: candidates.length > 1,
     replaced_seen: replacedKeysSeen(db, c).map(({ id, code, last_seen, replaced_at }) => ({ id, code, last_seen, replaced_at })),
+    // Round 3 (R3-4) — the clinic's former keys (from the history), by history id, without fingerprints.
+    former_keys: formerKeysOf(db, c).map(({ fp, ...f }) => f),
     seen_key_revoked: isRevoked(db, 'sync_key', c.api_sync_key_seen),
     partners_see: partnersSee(c, { entitled: isEntitled(c.subscription, c.subscription_until, now) }),
     licence: c.licence_issued_at ? {
@@ -77,6 +79,13 @@ function keyRowById(db, clinicId, id) {
   const n = Number(id);
   if (!Number.isInteger(n) || n <= 0) return null;
   return db.prepare('SELECT fp FROM sync_keys_seen WHERE id = ? AND clinic_id = ?').get(n, clinicId) || null;
+}
+
+/** Строка истории принятых ключей этой клиники по id из панели (раунд 3, R3-4) — или null. */
+function historyRowById(db, clinicId, id) {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return db.prepare('SELECT fp FROM sync_keys_history WHERE id = ? AND clinic_id = ?').get(n, clinicId) || null;
 }
 
 const clinicOf = (db, id) => db.prepare(`SELECT ${CLINIC_COLUMNS} FROM clinics WHERE clinic_id = ?`).get(id);
@@ -133,13 +142,18 @@ export function registerPublicApiRoutes(r, db) {
   r.post('/clinics/:id/revocations', (req, res) => {
     const c = clinicOf(db, req.params.id);
     if (!c) return fail(res, 404, 'not_found', 'Clinic not found.');
-    const { kind, value, note, key_id: keyId } = req.body || {};
+    const { kind, value, note, key_id: keyId, former_id: formerId } = req.body || {};
     if (kind !== 'partner_key' && kind !== 'sync_key') return fail(res, 400, 'bad_request', 'kind must be "partner_key" or "sync_key".');
     // F4 — «Block this key» on a new (or previously replaced) key sends its
     // opaque id; the fingerprint is looked up here, never sent to the page.
+    // Round 3 (R3-4) — a former key (from the history: after a re-enrolment
+    // it is nowhere else) is sent by its history id, a namespace of its own.
     let byId = null;
     if (kind === 'sync_key' && keyId !== undefined && keyId !== null) {
       byId = keyRowById(db, c.clinic_id, keyId);
+      if (!byId) return fail(res, 400, 'bad_request', "This is not one of this clinic's API keys.");
+    } else if (kind === 'sync_key' && formerId !== undefined && formerId !== null) {
+      byId = historyRowById(db, c.clinic_id, formerId);
       if (!byId) return fail(res, 400, 'bad_request', "This is not one of this clinic's API keys.");
     }
     const raw = byId ? byId.fp : (typeof value === 'string' ? value.trim() : '');

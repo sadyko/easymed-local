@@ -56,7 +56,7 @@ test('карточка клиники: блок «Online booking / API» — в�
   const s = await harness(t);
   const d = await s.call('GET', '/clinics/c-1');
   assert.deepEqual(d.body.clinic.api, { enabled: false, sync_key: null, sync_key_code: null, sync_key_accepted_at: null,
-    candidates: [], key_pending: false, key_competing: false, replaced_seen: [], seen_key_revoked: false,
+    candidates: [], key_pending: false, key_competing: false, replaced_seen: [], former_keys: [], seen_key_revoked: false,
     partners_see: 'off', licence: null, revocations: [] });
   const list = await s.call('GET', '/clinics');
   assert.deepEqual([list.body.clinics[0].api_enabled, list.body.clinics[0].api_key_pending, list.body.clinics[0].api_key_competing], [false, false, false]);
@@ -278,4 +278,32 @@ test('перепроверка 8c, раунд 2: прежний ключ пос�
   assert.equal(blocked.status, 201, blocked.body && blocked.body.error && blocked.body.error.message);
   const byKind = Object.fromEntries(blocked.body.api.revocations.map((r) => [r.note || 'early', r.code]));
   assert.deepEqual(byKind, { 'ПК A украден': code(a.fp), early: null }, 'у прежнего — код, у ни разу не принятого — нет');
+});
+
+// Перепроверка 8c, раунд 3 (R3-4): после новой регистрации прежний ключ (ПК A
+// сменили на B, потом A украли) виден на карточке своим кодом и блокируется из
+// панели — по непрозрачному id строки истории, как новые ключи (F4), не по отпечатку.
+test('перепроверка 8c, раунд 3 (R3-4): прежний ключ после новой регистрации — на карточке кодом, блокируется из панели по своему id', async (t) => {
+  const s = await harness(t);
+  const a = syncKey();
+  const b = syncKey();
+  s.checkin(a.b64);
+  s.checkin(b.b64);
+  assert.equal((await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: b.fp, code: code(b.fp) })).status, 200);
+  redeemEnrollmentCode(s.db, { code: reissueEnrollmentCode(s.db, { clinicId: 'c-1' }) });
+  const api = (await s.call('GET', '/clinics/c-1')).body.clinic.api;
+  assert.deepEqual(api.former_keys.map((f) => [f.code, f.other_clinic, 'fp' in f]), [[code(a.fp), null, false]]);
+  assert.ok(api.former_keys[0].last_accepted_at && api.former_keys[0].replaced_at);
+  const formerId = api.former_keys[0].id;
+  // Свои пространства id: номер строки истории в key_id и чужая строка истории — 400.
+  createEnrollmentCode(s.db, { clinicId: 'c-2', name: 'Другая' });
+  const otherId = Number(s.db.prepare("INSERT INTO sync_keys_history (clinic_id, fp, first_accepted_at, last_accepted_at) VALUES ('c-2', ?, 'x', 'x')")
+    .run('dd'.repeat(16)).lastInsertRowid);
+  assert.equal((await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', former_id: otherId })).status, 400);
+  assert.equal((await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', former_id: 'x' })).status, 400);
+  const blk = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', former_id: formerId, note: 'ПК A украден' });
+  assert.equal(blk.status, 201, blk.body && blk.body.error && blk.body.error.message);
+  assert.equal(s.db.prepare("SELECT value FROM revocations WHERE kind = 'sync_key'").get().value, a.fp);
+  assert.deepEqual(blk.body.api.revocations.map((r) => r.code), [code(a.fp)]);
+  assert.deepEqual(blk.body.api.former_keys, [], 'заблокированный — в «Blocked keys»');
 });

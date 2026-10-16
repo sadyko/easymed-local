@@ -89,12 +89,37 @@ export function keyOwner(db, fp, exceptClinicId) {
 /**
  * Ключ стал принятым: прежний принятый — «replaced» (его сменили), этот —
  * «accepted» и навсегда в истории принятых ключей клиники (sync_keys_history —
- * её не стирает и новая регистрация; перепроверка 8c, раунд 2).
+ * её не стирает и новая регистрация; перепроверка 8c, раунд 2). В истории —
+ * когда ключ приняли последний раз, а у прежнего нынешнего — когда его сменили
+ * (раунд 3: карточка показывает прежние ключи с этими датами).
  */
 function markAccepted(db, clinicId, fp, at) {
   db.prepare("UPDATE sync_keys_seen SET state = 'replaced', state_at = ? WHERE clinic_id = ? AND state = 'accepted' AND fp <> ?").run(at, clinicId, fp);
   db.prepare("UPDATE sync_keys_seen SET state = 'accepted', state_at = ? WHERE clinic_id = ? AND fp = ?").run(at, clinicId, fp);
-  db.prepare('INSERT OR IGNORE INTO sync_keys_history (clinic_id, fp, first_accepted_at) VALUES (?, ?, ?)').run(clinicId, fp, at);
+  db.prepare('UPDATE sync_keys_history SET replaced_at = ? WHERE clinic_id = ? AND fp <> ? AND replaced_at IS NULL').run(at, clinicId, fp);
+  db.prepare(`INSERT INTO sync_keys_history (clinic_id, fp, first_accepted_at, last_accepted_at) VALUES (?, ?, ?, ?)
+              ON CONFLICT (clinic_id, fp) DO UPDATE SET last_accepted_at = excluded.last_accepted_at, replaced_at = NULL`).run(clinicId, fp, at, at);
+}
+
+/**
+ * Перепроверка 8c, раунд 3 (R3-4) — прежние ключи клиники для карточки: из
+ * истории (только ключи, которые БЫЛИ приняты), с кодом и датами, кроме
+ * нынешнего, заблокированных (они — в «Blocked keys»), ждущих (вернувшийся
+ * ключ — новый, его код не показывается) и уже показанных как «прежний, снова
+ * сверяется». id — строки истории: по нему панель блокирует ключ, не зная
+ * отпечатка. other_clinic — ключ сейчас принятый у другой клиники.
+ */
+export function formerKeysOf(db, clinic) {
+  const skip = new Set([clinic.api_sync_key || '',
+    ...syncKeyCandidates(db, clinic).map((k) => k.fp), ...replacedKeysSeen(db, clinic).map((k) => k.fp)]);
+  return db.prepare('SELECT id, fp, last_accepted_at, replaced_at FROM sync_keys_history WHERE clinic_id = ? ORDER BY id DESC').all(clinic.clinic_id)
+    .filter((h) => !skip.has(h.fp) && !isRevoked(db, 'sync_key', h.fp))
+    .map((h) => {
+      const other = keyOwner(db, h.fp, clinic.clinic_id);
+      const name = other ? db.prepare('SELECT name FROM clinics WHERE clinic_id = ?').get(other).name : null;
+      return { id: h.id, fp: h.fp, code: keyCode(h.fp), last_accepted_at: h.last_accepted_at, replaced_at: h.replaced_at,
+        other_clinic: other, other_clinic_name: name };
+    });
 }
 
 /**
