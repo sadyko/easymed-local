@@ -28,6 +28,7 @@ import { crmUnifyRepair } from './services/crm/unify-repair.js';   // CRM_UNIFY_
 import { scheduleCrmTaskRehome } from './services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 import { preserveLegacyLogo } from './services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1
 import { schedulePublicSync } from './services/api/public-sync.js';   // PUBLIC_API_V1
+import { startLanAddress } from './services/lan/index.js';   // LAN_ADDRESS_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -411,6 +412,16 @@ if (isMain) {
   // имени в адресе и подключений и пока Easy-Med не включил клинике публичный
   // сервер (отпечаток ключа в лицензии — services/api/public-sync.js).
   try { schedulePublicSync(db, DATA_DIR); } catch (e) { console.warn('[public-api]', e && e.message); }
+
+  // LAN_ADDRESS_V1 — «всегда IP». Роутер клиники после перезапуска выдаёт этому
+  // ПК новый адрес (192.168.1.147 → .156), и остальные компьютеры и анализаторы
+  // теряют сервер. Здесь: сравнить адрес с прошлым запуском (data/lan-address.json
+  // — смена видна администратору баннером и на экране «Адрес в сети») и поднять
+  // ответчик имени <имя>.local на UDP 5353 (services/lan/mdns.js), чтобы ссылка
+  // http://<имя>.local:<порт> пережила смену номера. Не await и не бросает:
+  // занятый 5353 или запрет multicast — строка в журнал, клиника работает.
+  // EASYMED_MDNS=0 выключает имя; под node --test оно выключено само.
+  startLanAddress(db, DATA_DIR, { port: PORT }).catch((e) => console.warn('[lan]', e && e.message));
 }
 
 function lanAddresses() {

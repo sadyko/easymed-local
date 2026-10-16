@@ -77,6 +77,7 @@ import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss
 import { lisServiceCounts } from './lis.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — контроль, калибровка, запросы у прибора за сегодня
 import { lisDeviceAdd } from './lis.js';   // LIS_VENDOR_EXACT_V1 — D2: «Добавить» найденный прибор — только с моделью или «общим HL7»
 import { lisProxyGet, lisProxySet } from './lis-proxy.js';   // LIS_PROXY_V1 — карточка «LIS Proxy»
+import { lanAddressStatus, lanAddressDismiss, lanAddressMdns } from './lan-address.js';   // LAN_ADDRESS_V1 — «Адрес в сети»
 import { apiSettingsGet, apiSlugSave, apiConnectionDraft, apiConnectionCreate, apiConnectionUpdate, apiConnectionReveal,
   apiConnectionRegenerate, apiConnectionDelete, apiJournalList } from './api-connections.js';   // CLINIC_API_STEP7_V1
 import { apiBookingList, apiBookingCandidates, apiBookingConfirm, apiBookingOffer, apiBookingDecline, apiRequestAccept, apiBoardMarks, apiSyncStatus, apiSyncSkippedAck } from './api-bookings.js';   // PUBLIC_API_V1
@@ -617,6 +618,11 @@ export const RPC = {
   lis_device_add:           (db, args, user) => lisDeviceAdd(db, args, user),   // LIS_VENDOR_EXACT_V1 — D2: запись, НЕ в READ_ONLY_RPCS
   lis_proxy_get:            (db, args, user) => lisProxyGet(db, args, user),   // LIS_PROXY_V1 — чтение (gate.js)
   lis_proxy_set:            (db, args, user) => lisProxySet(db, args, user),   // LIS_PROXY_V1 — запись, НЕ в READ_ONLY_RPCS
+  // LAN_ADDRESS_V1 — «Адрес в сети»: статус — чтение (READ_ONLY_RPCS); скрыть смену и выключатель имени —
+  // файл этого ПК, не данные клиники (ALWAYS_ALLOWED_RPCS, gate.js); оба — только администратор.
+  lan_address_status:       (db, args, user) => lanAddressStatus(db, args, user),
+  lan_address_dismiss:      (db, args, user) => lanAddressDismiss(db, args, user),
+  lan_address_mdns:         (db, args, user) => lanAddressMdns(db, args, user),
   // CLINIC_API_STEP7_V1 — «API и подключения». Чтение (READ_ONLY_RPCS): api_settings_get,
   // api_journal_list; остальное — записи. Значения ключей — только администратору.
   api_settings_get:          (db, args, user) => apiSettingsGet(db, args, user),

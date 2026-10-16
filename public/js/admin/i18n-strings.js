@@ -11912,4 +11912,9 @@ export const STRINGS = {
   "Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): {cmd}": {"en":"Check the key (in Windows PowerShell, type curl.exe instead of curl): {cmd}","ru":"Проверить ключ (в Windows PowerShell пишите curl.exe вместо curl): {cmd}","uz":"Kalitni tekshirish (Windows PowerShell oynasida curl o‘rniga curl.exe yozing): {cmd}"},   // API_DOCS_V1 — ревью шага 9, п. 7
   "<ключ>": {"en":"<key>","ru":"<ключ>","uz":"<kalit>"},   // API_DOCS_V1
   // /API_DOCS_V1
+  // LAN_ADDRESS_V1 — «Адрес в сети» (сообщения сервера rpc/lan-address.js и экран views/lan-address.js)
+  "Это меняет только администратор.": {"en":"Only an administrator can change this.","ru":"Это меняет только администратор.","uz":"Buni faqat administrator o‘zgartiradi."},   // LAN_ADDRESS_V1
+  "Не указано, какую смену адреса скрыть.": {"en":"It is not specified which address change to hide.","ru":"Не указано, какую смену адреса скрыть.","uz":"Qaysi manzil o‘zgarishini yashirish ko‘rsatilmagan."},   // LAN_ADDRESS_V1
+  "Укажите: включить или выключить имя в сети.": {"en":"Specify whether to turn the network name on or off.","ru":"Укажите: включить или выключить имя в сети.","uz":"Ko‘rsating: tarmoqdagi nomni yoqish yoki o‘chirish."},   // LAN_ADDRESS_V1
+  // /LAN_ADDRESS_V1
 };

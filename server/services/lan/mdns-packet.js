@@ -86,16 +86,17 @@ export function parseMessage(buf) {
 
 function encodeName(name) {
   const parts = String(name || '').split('.').filter(Boolean);
-  if (!parts.length) throw new Error('mdns: пустое имя');
+  // Ошибки сборки — для программиста (ответчик строит имя сам), экрану не уходят.
+  if (!parts.length) throw new RangeError('mdns: пустое имя: ' + JSON.stringify(name));
   const out = [];
   for (const p of parts) {
     const b = Buffer.from(p, 'latin1');
-    if (b.length > 63) throw new Error('mdns: метка длиннее 63: ' + p);
+    if (b.length > 63) throw new RangeError('mdns: метка длиннее 63: ' + p);
     out.push(Buffer.from([b.length]), b);
   }
   out.push(Buffer.from([0]));
   const buf = Buffer.concat(out);
-  if (buf.length > 255) throw new Error('mdns: имя длиннее 255');
+  if (buf.length > 255) throw new RangeError('mdns: имя длиннее 255: ' + name);
   return buf;
 }
 
@@ -107,7 +108,7 @@ function header(id, flags, qd, an) {
 }
 
 function aRecord(nameBuf, address, legacy) {
-  if (!IPV4_RE.test(String(address))) throw new Error('mdns: не IPv4: ' + address);
+  if (!IPV4_RE.test(String(address))) throw new RangeError('mdns: не IPv4: ' + address);
   const r = Buffer.alloc(14);
   r.writeUInt16BE(TYPE_A, 0);
   r.writeUInt16BE(legacy ? CLASS_IN : (0x8000 | CLASS_IN), 2);   // cache-flush — только в multicast
