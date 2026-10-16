@@ -16,7 +16,7 @@
 import { isEntitled } from '../services/checkin.js';
 import {
   partnersSee, acceptPendingSyncKey, isRevoked, isoSeconds, SYNC_FP_RE, KEY_HASH_RE,
-  syncKeyCandidates, replacedKeysSeen, keyCode, normaliseKeyCode,
+  syncKeyCandidates, replacedKeysSeen, keyCode, normaliseKeyCode, restoreUnblockedSyncKey,
 } from '../services/public-api.js';
 import { KEY_RE } from '../../../public/js/shared/api-connections.js';
 
@@ -150,9 +150,13 @@ export function registerPublicApiRoutes(r, db) {
   r.delete('/clinics/:id/revocations/:rid', (req, res) => {
     const c = clinicOf(db, req.params.id);
     if (!c) return fail(res, 404, 'not_found', 'Clinic not found.');
-    const row = db.prepare('SELECT id FROM revocations WHERE id = ? AND clinic_id = ? AND removed_at IS NULL').get(Number(req.params.rid) || 0, c.clinic_id);
+    const row = db.prepare('SELECT id, kind, value FROM revocations WHERE id = ? AND clinic_id = ? AND removed_at IS NULL').get(Number(req.params.rid) || 0, c.clinic_id);
     if (!row) return fail(res, 404, 'not_found', 'This block is not active for this clinic.');
-    db.prepare('UPDATE revocations SET removed_at = ?, removed_by = ? WHERE id = ?').run(isoSeconds(), req.vendorUser.username, row.id);
+    db.transaction(() => {
+      db.prepare('UPDATE revocations SET removed_at = ?, removed_by = ? WHERE id = ?').run(isoSeconds(), req.vendorUser.username, row.id);
+      // Re-check F2 — the clinic's accepted key, blocked by mistake, comes back accepted.
+      if (row.kind === 'sync_key') restoreUnblockedSyncKey(db, c.clinic_id, row.value);
+    })();
     return res.json({ ok: true, note: REVOKE_NOTE, api: apiViewOf(db, clinicOf(db, c.clinic_id)) });
   });
 }

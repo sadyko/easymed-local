@@ -194,3 +194,31 @@ test('блокировка ключа обмена: принятый ключ у
   const d = (await s.call('GET', '/clinics/c-1')).body.clinic.api;
   assert.deepEqual([d.sync_key, d.key_pending], [null, true], 'новый ключ после кражи — только подтверждением');
 });
+
+// Перепроверка 8c, F2: принятый ключ заблокировали по ошибке и сняли блокировку —
+// прежде клиника оставалась без онлайн-записи навсегда (ключ не «новый» и не
+// «принятый»). Теперь снятие блокировки возвращает его принятым, как до неё.
+test('перепроверка 8c, F2: заблокированный по ошибке принятый ключ после снятия блокировки — снова принятый, лицензия снова с ним', async (t) => {
+  const s = await harness(t);
+  await s.call('POST', '/clinics/c-1/api', { enabled: true });
+  const a = syncKey();
+  s.checkin(a.b64);
+  const blk = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', value: a.fp, note: 'по ошибке' });
+  assert.equal(blk.body.api.sync_key, null);
+  assert.equal('api_sync_key' in s.checkin(a.b64).licence.payload, false, 'пока заблокирован — лицензия без ключа');
+  const un = await s.call('DELETE', '/clinics/c-1/revocations/' + blk.body.id);
+  assert.deepEqual([un.status, un.body.api.sync_key, un.body.api.key_pending, un.body.api.partners_see], [200, a.fp, false, 'visible']);
+  assert.equal(s.checkin(a.b64).licence.payload.api_sync_key, a.fp, 'следующая лицензия — снова с ключом');
+});
+
+test('перепроверка 8c, F2: если после блокировки принят другой ключ, снятие блокировки старого его не возвращает', async (t) => {
+  const s = await harness(t);
+  const a = syncKey();
+  const b = syncKey();
+  s.checkin(a.b64);
+  const blk = await s.call('POST', '/clinics/c-1/revocations', { kind: 'sync_key', value: a.fp, note: 'ПК украден' });
+  s.checkin(b.b64);
+  assert.equal((await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: b.fp, code: code(b.fp) })).status, 200);
+  const un = await s.call('DELETE', '/clinics/c-1/revocations/' + blk.body.id);
+  assert.deepEqual([un.status, un.body.api.sync_key], [200, b.fp]);
+});

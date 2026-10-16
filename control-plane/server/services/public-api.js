@@ -163,6 +163,23 @@ export function replacedKeysSeen(db, clinic) {
     .map((r) => ({ fp: r.fp, code: keyCode(r.fp), last_seen: r.last_seen, replaced_at: r.state_at }));
 }
 
+/**
+ * Перепроверка 8c, F2 — сняли блокировку с ключа, который был ПРИНЯТЫМ, когда
+ * его блокировали (строка осталась 'accepted', другой ключ с тех пор не принят):
+ * он снова принятый, как до блокировки. Без этого клиника оставалась без
+ * онлайн-записи навсегда: ключ не «новый» (его не принять кнопкой) и не
+ * принятый. Ключ, принятый у другой клиники, не возвращается.
+ * @returns {boolean} вернулся ли ключ
+ */
+export function restoreUnblockedSyncKey(db, clinicId, fp) {
+  const c = db.prepare('SELECT api_sync_key FROM clinics WHERE clinic_id = ?').get(clinicId);
+  if (!c || c.api_sync_key || !fp || isRevoked(db, 'sync_key', fp)) return false;
+  if (!db.prepare("SELECT 1 FROM sync_keys_seen WHERE clinic_id = ? AND fp = ? AND state = 'accepted'").get(clinicId, fp)) return false;
+  if (keyOwner(db, fp, clinicId)) return false;
+  db.prepare('UPDATE clinics SET api_sync_key = ? WHERE clinic_id = ?').run(fp, clinicId);
+  return true;
+}
+
 /** Новая регистрация установки: ключи, ждавшие при прежнем install_token, больше не в счёт. */
 export function clearSyncKeyCandidates(db, clinicId) {
   db.prepare("DELETE FROM sync_keys_seen WHERE clinic_id = ? AND state = 'candidate'").run(clinicId);
