@@ -120,3 +120,25 @@ evidence (F1: a CRM cancel leaves the line in the bill, 140 000 instead of 100 0
 - **Task 7 (R7a) re-planned** with the interplay fix: a booked row arriving for a service already in the
   registration table is attached to that row (no second row), as the wizard already does; Task 6 never deletes a
   booked line whose id the screen is invoicing.
+
+### Revision 2b — funnel / privacy review of Tasks 1–3 (repros `zz-funnel-*.test.js`, notes `crm-link-review/funnel/NOTES.md`)
+
+Gone with «show, don't copy»: the cancel/re-adopt double bill (funnel 2), the phantom pending line (part of 3),
+'done' before arrival (5), wrong-card / leftover 'done' rows (8a). Further rules:
+- **P-1 (HIGH, privacy) — API cards follow only their own booking.** C′ never takes a card created by an API
+  connection (a card with an `api_requests` row: partner, Symptex, the clinic site). Defence in depth: the partner
+  event and status paths (`api/visit-events.js`, `api/bookings.js`) ignore display links ('patient', 'phone').
+  Otherwise a doctor's unrelated follow-up was reported to the partner, and the partner's cancel cancelled it.
+- **P-2 — the lead that brought the patient wins.** The phone step D runs BEFORE C′: a fresh patient-less lead that
+  waits for this visit and passes the strict sole-owner rule gets it, not an old card.
+- **P-3 — cancelling a display-linked visit puts the card back.** If the card is still in the stage that link set
+  and has no other live booking, its previous stage and date return (crm_booking_undo trail). Otherwise nothing.
+- **P-4 — «Не пришёл» only when nothing else is booked.** A card moves to «Не пришёл» from a visit only if it has no
+  other live booking today or later (lines or links of any kind).
+- **P-5 — a visit that already shows arrival is an arrival.** When C′ (or P-2) links a today's visit that already
+  passes `cameSurely` (paid, started service, «Пришёл» mark), the card takes the arrival path («Пришёл»), never
+  «Записан».
+- **P-6 — the phone card's own lines never enter that visit.** Step A skips the lines of a card that holds a 'phone'
+  link to this visit (closes the old call-centre calendar path `calendar_book` → `booking_lines_add`, D4).
+- **P-7 — the desk-closed card always shows its visit.** If the arrival visit is held through another card's line,
+  the card the desk closed gets a display link too, so «Записи пациента» lists the visit on both.
