@@ -116,6 +116,10 @@ const DECIDED = {
   '4-future-S3': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D2","lines":["30@D2:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '6-S2-doc': { rule: 'R1 (D1)', owner: 'lines', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B","c5@D2:pending/V"],"link":"card","cards":1,"visits":2,"vs":["c5"]} },
   '6-S3-doc': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D2","lines":["c5@D2:pending/V"],"link":"card","cards":1,"visits":1,"vs":["c5"]} },
+  // Task 2 — R5 (D4)
+  '2-S1p-reg': { rule: 'R5 (D4)', owner: 'lines', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '4-today-S1p': { rule: 'R5 (D4) + D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3b-S1p-reg': { rule: 'R5 (D4)', owner: 'moved', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
 };
 
 const rows = [];

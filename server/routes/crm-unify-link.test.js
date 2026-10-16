@@ -24,7 +24,9 @@ test('calendar_book: строки заявки этого дня берут ви
   } finally { t.close(); }
 });
 
-test('по телефону: лид из звонка без пациента получает пациента — и только его; строки и визит не трогаются', async () => {
+// CRM_LINK_ALL_V1 (решение владельца D4, R5) — правило изменено: карточка по телефону ещё и
+// привязана к записи (source 'phone') — её видно в записи; её строки и счёт не трогаются.
+test('по телефону (CRM_LINK_ALL_V1, D4): лид из звонка без пациента получает пациента и привязку записи; его строки и счёт не трогаются', async () => {
   const t = await startCrmApp();
   try {
     const rid = addLead(t.db, { patient: null, phone: '909092638', assigned: 4, name: '909092638' });
@@ -37,7 +39,7 @@ test('по телефону: лид из звонка без пациента п
     assert.deepEqual(linesOf(t.db, rid).map((l) => l.visit_id), [null], 'совпадение по телефону привязало строку к визиту');
     assert.equal(t.db.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(vid).n, 0,
       'совпадение по телефону поставило услугу в счёт');
-    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_booking_links WHERE visit_id = ?').get(vid).n, 0);
+    assert.deepEqual(t.db.prepare('SELECT request_id, source FROM crm_booking_links WHERE visit_id = ?').get(vid), { request_id: rid, source: 'phone' });
   } finally { t.close(); }
 });
 

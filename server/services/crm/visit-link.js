@@ -35,10 +35,12 @@
 //      владельцы ключа — ровно {записанный} (patientIdsWithPhoneKey: все номера
 //      карт, экстренный контакт, опекуны, связи опекунства и «Родственники»).
 //      Второй номер записанного (phone_secondary) заявок не
-//      ищет: обычно это номер родственника. Пишется ТОЛЬКО patient_id и ступень:
-//      ни строк, ни visit_id, ни привязки. Но следующая дверь (ensure_visit,
-//      booking_lines_add) уже видит карточку пациента и ведёт её строки в его
-//      счёт — поэтому единственность номера и есть защита денег;
+//      ищет: обычно это номер родственника. Пишется patient_id и ступень; строк
+//      и visit_id этот вызов карточке не даёт. CRM_LINK_ALL_V1 (решение
+//      владельца D4, R5) — и привязка записи (F, source 'phone'): по ней
+//      зеркало пишет услуги ВИЗИТА в карточку (визит → карточка). Следующая
+//      дверь (ensure_visit, booking_lines_add) уже видит карточку пациента и
+//      ведёт её строки в его счёт — поэтому единственность номера и есть защита денег;
 //   E. нет и такой — только «чистый» колл-центр, по ОКНУ ПОВТОРНОГО ОБРАЩЕНИЯ
 //      (CRM_UNIFY_V1, задача 6; решение владельца 4, contact-window.js):
 //      открытая карточка пациента в окне — та же; после окна — та же,
@@ -51,7 +53,7 @@
 //      давности, и на стойке тоже: двигавшаяся последней; после окна — сначала
 //      reopenLead (contactDecision, как у E). Закрытые — никогда. Только запись
 //      на сегодня или позже. До E доходит только пациент без живой карточки;
-//   F. привязка записи (crm_booking_links) — для C и E, не для телефона;
+//   F. привязка записи (crm_booking_links) — для C, C′, E и (CRM_LINK_ALL_V1, R5) телефона;
 //   G. ступень: только из живых колонок и только вперёд — в «Колонку записи»
 //      (scheduledStageKey); дата заявки — cardDateOf (booking-mirror.js), ОДНО
 //      правило со сверкой зеркала (ревью 3, D4): ближайший с сегодняшнего дня
@@ -504,6 +506,10 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   // D. По телефону — одна заявка, только patient_id (на стойке — тем же
   //    правилом deskCloses). Строки карточки по телефону визит не берут — ни
   //    здесь, ни на стойке: правило денег (общий номер — не общий счёт).
+  //    CRM_LINK_ALL_V1 (R5; решение D4) — но ВИЗИТ карточка видит: привязка
+  //    записи (шаг F, source 'phone'), и зеркало пишет услуги визита в
+  //    карточку (визит → карточка). Её прежние строки в визит не идут: шаг A
+  //    этого вызова прошёл до того, как карточка стала карточкой пациента.
   if (!touched.size) {
     const id = phoneLeadFor(db, v.patient_id, open, v.day, { undated, accept: desk ? closes : null });   // CRM_UNIFY_V1
     if (id) {
@@ -541,12 +547,12 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
     }
   }
 
-  // F. Привязка записи — для C, C′ и E (A держит визит строками, D — только пациент).
-  //    CRM_LINK_ALL_V1 — и C′ (source 'patient').
+  // F. Привязка записи — для C, C′, D и E (A держит визит строками).
+  //    CRM_LINK_ALL_V1 — и C′ (source 'patient'), и телефон D (source 'phone', R5).
   if (!held) {
-    const pick = [...touched].find(([, via]) => ['patient', 'live', 'callcenter', 'created'].includes(via));
+    const pick = [...touched].find(([, via]) => ['patient', 'live', 'phone', 'callcenter', 'created'].includes(via));
     if (pick) {
-      const source = callcenter ? 'callcenter' : pick[1] === 'live' ? 'patient' : 'match';   // CRM_LINK_ALL_V1
+      const source = pick[1] === 'phone' ? 'phone' : callcenter ? 'callcenter' : pick[1] === 'live' ? 'patient' : 'match';   // CRM_LINK_ALL_V1
       db.prepare(`INSERT OR REPLACE INTO crm_booking_links (visit_id, request_id, source, created_by, created_request)
                   VALUES (?, ?, ?, ?, ?)`)
         .run(v.id, pick[0], source, uid, pick[1] === 'created' ? 1 : 0);
