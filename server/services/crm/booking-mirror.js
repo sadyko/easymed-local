@@ -96,7 +96,7 @@ function beforeArrival(db, v) {
  * Строка визита «свободна»: её можно снять, перенести или заменить, ничего не
  * потеряв. Всё остальное — уже работа или деньги.
  */
-function vsFree(db, vs) {
+export function vsFree(db, vs) {   // CRM_LINK_ALL_V1 — экспорт для crm/booked-twin.js (правило не меняется)
   if (!vs) return false;
   if (vs.status !== 'added' || vs.invoice_item_id != null) return false;
   if (vs.sync_origin != null || vs.clinic_item_id != null) return false;
@@ -244,12 +244,12 @@ export function insertBookingLine(db, { visit, serviceId = null, consultationTyp
 // стойке строки этого визита закрыты, а строка визита — та же услуга, и ссылка
 // на ушедшую строку визита никому не нужна. Снятые ('cancelled') не переходят:
 // снятая строка на чужой строке визита велела бы сверке снять и её.
-function relinkHeld(db, fromId, toId) {
+export function relinkHeld(db, fromId, toId) {   // CRM_LINK_ALL_V1 — экспорт для crm/booked-twin.js
   db.prepare(`UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0
                WHERE visit_service_id = ? AND status <> 'cancelled'`).run(toId, fromId);
 }
 
-function deleteVs(db, id) {
+export function deleteVs(db, id) {   // CRM_LINK_ALL_V1 — экспорт для crm/booked-twin.js
   try { db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(id); } catch { /* нет таблицы */ }
   db.prepare('DELETE FROM visit_services WHERE id = ?').run(id);
 }

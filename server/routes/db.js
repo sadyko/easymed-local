@@ -28,6 +28,7 @@ import { PROXY_MODEL_REQUIRED } from '../services/rpc/lis.js';   // LIS_PROXY_V1
 import { PROXY_MODELS } from '../../public/js/shared/lisproxy-models.js';   // LIS_PROXY_V1 (ревью, Р21)
 // CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
+import { retireBookedTwin } from '../services/crm/booked-twin.js';   // CRM_LINK_ALL_V1 (R7b)
 import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 import { geoCodeRefusal } from '../services/geo-codes-guard.js';   // REFERENCE_LISTS_V1 (полировка) — коды географии не меняются
 import { stampWriteBody, stampUpdateRefusal } from '../services/domain/package-lines.js';   // SERVICES_PACKAGES_V1 — цена пакета на строке при записи
@@ -581,6 +582,10 @@ export function dbRoutes(db, { storageDir = null } = {}) {
         if (meta.table === 'visit_services' && hasEvidenceStatus(req.body)) {
           crmServiceEvidence(db, [Number(info.lastInsertRowid)]);
         }
+        // CRM_LINK_ALL_V1 (R7b, дефект G7) — строка регистратуры занимает место строки
+        // записи той же услуги (колл-центр, зеркало CRM): второй копии в визите нет.
+        // До сверки зеркала: сверка видит уже одну строку.
+        if (meta.table === 'visit_services') retireBookedTwin(db, Number(info.lastInsertRowid));
         mirrorAfter(db, mirror, meta, req.body, req.user, { insertedId: Number(info.lastInsertRowid) });   // CRM_CALENDAR_MIRROR_V1
         rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
         if (!meta.returning) return res.json({ data: null });
