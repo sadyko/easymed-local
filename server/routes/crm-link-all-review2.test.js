@@ -251,3 +251,31 @@ test('CRM_LINK_ALL_V1 (ревью воронки G-2): «Подтверждён�
     assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['approved', D7]);
   } finally { t.close(); }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F-6 — ЗАПИСЬ, ЗАВЕДЁННАЯ СРАЗУ «ПОДТВЕРЖДЁН», — КАК ПОДТВЕРЖДЕНИЕ ПОСЛЕ ЗАПИСИ
+// ═══════════════════════════════════════════════════════════════════════════
+test('CRM_LINK_ALL_V1 (ревью воронки F-6): колл-центр завёл запись сразу «Подтверждён» — карточка в «Подтверждён», как после подтверждения записанной', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { assigned: 3 });
+    const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, service_id: 30, start: at(D3, 12), duration_minutes: 30, status: 'confirmed' });
+    assert.equal(b.status, 200, b.text);
+    assert.deepEqual(link(t, b.json.data.visit.id), { request_id: rid, source: 'callcenter' });
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['approved', D3], 'запись «Подтверждён» оставила карточку «Записан»');
+  } finally { t.close(); }
+});
+
+test('CRM_LINK_ALL_V1 (ревью воронки F-6): регистратура завела запись сразу «Подтверждён» на карточку C′ — карточка «Подтверждён»; отмена возвращает её', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = displayCard(t);
+    const b = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 10, service_id: 30, start: at(D3, 12), duration_minutes: 30, status: 'confirmed' });
+    assert.equal(b.status, 200, b.text);
+    const vid = b.json.data.visit.id;
+    assert.deepEqual(link(t, vid), { request_id: rid, source: 'patient' });
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['approved', D3]);
+    assert.equal((await mark(t, vid, D3, 12, 'cancelled')).status, 200);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['recall', D10]);
+  } finally { t.close(); }
+});

@@ -1248,7 +1248,10 @@ export async function calendarBook(db, args, user, deps = {}) {
   // ЗА ТРАНЗАКЦИЕЙ, А НЕ В НЕЙ: заявка не вправе отменить запись. Хук молчит
   // при любой ошибке, но даже так его место — после того, как визит уже
   // сохранён.
-  crmVisitStatus(db, { visitId: out.visit.id, from: existing ? existing.status : null, to: status });
+  // CRM_LINK_ALL_V1 (повторное ревью воронки, F-6) — НОВАЯ запись: сначала связь с
+  // карточкой (ниже), потом её статус. Запись, заведённая сразу «Подтверждён», шла в
+  // правило статуса раньше, чем карточка её держала, — и карточка оставалась «Записан».
+  if (existing) crmVisitStatus(db, { visitId: out.visit.id, from: existing.status, to: status });
 
   // CRM_CALENDAR_MIRROR_V1 (2026-09-27) — ЗАЯВКА ВИДИТ ТО ЖЕ, ЧТО КАЛЕНДАРЬ.
   //
@@ -1259,6 +1262,7 @@ export async function calendarBook(db, args, user, deps = {}) {
   // заявка не вправе отказать в записи.
   if (!existing) {
     crmLinkVisit(db, out.visit.id, user);   // CRM_UNIFY_V1
+    crmVisitStatus(db, { visitId: out.visit.id, from: null, to: status });   // CRM_LINK_ALL_V1 (F-6) — после связи
   } else if (BUSY_STATUSES.includes(status)
       && (existing.visit_date !== out.visit.visit_date || Number(existing.doctor_id || 0) !== Number(out.visit.doctor_id || 0))) {
     mirrorReschedule(db, out.visit.id, { oldDoctorId: existing.doctor_id });
