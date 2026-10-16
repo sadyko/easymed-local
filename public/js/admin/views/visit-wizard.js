@@ -1107,7 +1107,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     },
                     // DOC_FIRST_V1 — без врача нет и планировщика.
                     // DATE_ONLY_V1 — услуге без врача время не нужно: только дата.
-                }, headRow, !inCart ? null : (s.requires_doctor ? schedulePanel(inCart) : datePanel(inCart))));
+                }, headRow, !inCart ? null : (inCart.booked ? bookedPanel(inCart) : s.requires_doctor ? schedulePanel(inCart) : datePanel(inCart))));   // CRM_LINK_ALL_V1 — bookedPanel
             }
             // CATALOG_PAGE_V1 — «хвост» списка за кнопкой: сколько показано,
             // сколько осталось. Порция та же — PAGE_SIZE.
@@ -1126,6 +1126,26 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             }
             // DATE_ONLY_V1 — услуга без врача (лаборатория, забор, справка) не
             // занимает слот в расписании: у неё есть только ДЕНЬ, без времени.
+            // CRM_LINK_ALL_V1 (повторное ревью денег, S2 / S2c) — СТРОКА «ИЗ ЗАПИСИ»: ДЕНЬ,
+            // ВРЕМЯ И ВРАЧ — КАК В КАЛЕНДАРЕ. Мастер её не вставляет второй раз (её номер
+            // идёт в счёт и в талон), поэтому менять их здесь нельзя: другой день оставлял
+            // строку в визите записи и вставлял вторую (две услуги), другой врач — счёт и
+            // талон на строку прежнего врача. Перенос и смена врача — в календаре.
+            function bookedPanel(line) {
+                const doc = line.doctorId ? wiz.doctors.find(d => String(d.id) === String(line.doctorId)) : null;
+                const when = line.when ? new Date(line.when) : null;
+                const dayTxt = when ? (when.getDate() + ' ' + monthName(when.getMonth()) + (line.dateOnly ? '' : ', ' + fmtSlot(when.getTime()))) : '—';
+                return h('div', {
+                    'data-booked-locked': String(line.booked.vsId),
+                    style: { display: 'flex', alignItems: 'center', gap: '6px 10px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed var(--ink-150, var(--ink-200))', fontSize: '12.5px' },
+                },
+                    h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700, color: 'var(--ink-800)' } },
+                        Icon('Lock', { size: 12 }), dayTxt),
+                    doc ? h('span', { style: { fontWeight: 600, color: 'var(--ink-800)' } }, doc.full_name || doc.username || '') : null,
+                    h('span', { class: 'muted' }, tr('Перенос записи — в календаре')),
+                    doc ? h('span', { class: 'muted' }, tr('Врач записи — чтобы сменить, уберите строку и добавьте услугу заново')) : null);
+            }
+
             function datePanel(line) {
                 const dateInp = h('input', {
                     type: 'date', value: (line.when || '').slice(0, 10) || isoDay(line.ui.day),
@@ -2237,7 +2257,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const wait = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px', padding: '9px 10px', background: 'var(--warn-50, #fffbeb)', border: '1px solid var(--warn-200, #fde68a)', borderRadius: '10px' } },
                     h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--warn-700, #a16207)' } },
                         trf('Выберите врача — {n} услуг(и) ждут', { n: pendingDoc })));
-                for (const c of wiz.cart.filter(x => x.svc.requires_doctor && !x.doctorId)) {
+                for (const c of wiz.cart.filter(x => x.svc.requires_doctor && !x.doctorId && !x.booked)) {   // CRM_LINK_ALL_V1 — врач записи не меняется
                     const pool = doctorsForService(c.svc.id);
                     const sel = h('select', {
                         style: { width: '100%', padding: '6px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', background: 'var(--white,#fff)' },
@@ -2842,6 +2862,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const coveredVsIds = [];   // COVERAGE_SPLIT_V1 — строки за счёт контрагента
                 for (const c of lines) {
                     // CRM_LINK_ALL_V1 (R7a) — строка «из записи» уже в этом визите: второй не вставляем.
+                    // CRM_LINK_ALL_V1 (повторное ревью денег, S2) — строка «из записи» живёт в визите
+                    // записи; визит дня оказался другим — отказ словами, а не вторая строка.
+                    if (c.booked && Number(c.booked.visitId) !== Number(visit.id)) {
+                        throw new Error(tr('Запись пациента на сегодня — другой визит. Откройте визит из календаря.'));
+                    }
                     if (c.booked && Number(c.booked.visitId) === Number(visit.id)) {
                         const bid = Number(c.booked.vsId);
                         vsIds.push(bid);
