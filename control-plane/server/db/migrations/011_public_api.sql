@@ -49,21 +49,3 @@ CREATE TABLE revocations (
 -- Одна действующая запись на ключ; снятых может быть сколько угодно.
 CREATE UNIQUE INDEX revocations_live ON revocations (kind, value) WHERE removed_at IS NULL;
 CREATE INDEX revocations_clinic ON revocations (clinic_id, created_at DESC);
-
--- Каждый ключ обмена, который предъявила установка клиники (ревью шага 8c,
--- п. 1). Одной ячейки «последний присланный» (api_sync_key_seen) мало: копия
--- control.json, сверившаяся ПОСЛЕ настоящего нового ПК, заняла бы её, и «Accept
--- new key» принял бы ключ копии. Здесь — строка на ключ: candidate — пришёл,
--- не принят; accepted — принят; replaced — был принят, его сменил другой.
--- Больше одного кандидата после последнего принятия — принять нельзя ни одного,
--- только новая регистрация установки (она стирает кандидатов). Только отпечатки
--- и время — ни ключей, ни данных пациентов.
-CREATE TABLE sync_keys_seen (
-  clinic_id   TEXT NOT NULL,
-  fp          TEXT NOT NULL CHECK (length(fp) = 32 AND fp NOT GLOB '*[^0-9a-f]*'),
-  first_seen  TEXT NOT NULL,
-  last_seen   TEXT NOT NULL,
-  state       TEXT NOT NULL DEFAULT 'candidate' CHECK (state IN ('candidate', 'accepted', 'replaced')),
-  state_at    TEXT NOT NULL,
-  PRIMARY KEY (clinic_id, fp)
-);
