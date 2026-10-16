@@ -89,3 +89,34 @@ line instead of adding a second row. Real repeats (quantity) are untouched; bill
 - Full suite green in ru and en-US (force-en preload). ru/uz/en for every new UI string, type-scale fonts, `Icon()`
   only, no emoji, 360 px.
 - Marker CRM_LINK_ALL_V1 in code comments, tests and commit messages.
+
+## Revision 2 (controller decision, 2026-10-16, after the money review of Tasks 1–3) — SHOW, DON'T COPY
+
+The money review (`scratchpad/crm-link-review/tree/server/routes/zz-money-*.test.js`) proved three double-bill
+paths, all born from COPYING a booking's services onto the card as card lines: the copy-mirror
+(booking-mirror.js) then treats them as the card's own lines — adopts them into the next visit (F5: a C′ booking
+dragged onto the card's wish day → 2 consultations, 200 000), returns them to waiting on cancel and re-adopts them
+(F2: 2 consultations / 140 000 instead of 40 000), and 'done' rows written before arrival count as arrival
+evidence (F1: a CRM cancel leaves the line in the bill, 140 000 instead of 100 000; F4: blocks the homeFor merge,
+200 000). The copy-mirror has defeated four fix rounds before (CRM_TWIN_LINE). So the new doors do not copy:
+
+- **Display links.** Links written by the new rules — C′ (`crm_booking_links.source = 'patient'`, R1/R2) and the
+  phone match (`'phone'`, R5) — are DISPLAY-ONLY: `requestOfVisit` and every other copy-mirror lookup ignore them,
+  so no visit line is copied onto the card and no card line is adopted into the visit because of them. They still
+  drive the funnel: stage forward (G), card date (`cardDateOf`), arrival / «Не пришёл» / cancel / «Подтверждён»
+  moves, the no-show sweep and the arrival catch-up — stage and date only, never services.
+- **R6 replaced.** `crmWonCardLines` (Task 3) is removed: no 'done' rows. The services of a desk-closed visit show
+  through the card's booking list (below).
+- **The card shows its bookings read-only.** New RPC `crm_card_bookings(request_id)` — caller must be able to see
+  the card (same row scope as crm_requests) — returns every live or past visit linked to the card by ANY link or
+  line: day/time, doctor, visit status, and its services (name, quantity, line status; no prices). The CRM card shows
+  them in a section «Записи пациента» with status chips (Записан / Подтверждён / Пришёл / Не пришёл / Отменён) and
+  «Открыть в календаре». Editing a booking happens in the calendar; the card's own lines (wishes, call-centre
+  bookings made from the card) keep working exactly as today.
+- **Copy-mirror unchanged** for the links it already served (call-centre bookings and step-C matches). Its
+  pre-existing twin paths (zz-money-mech: cancel → re-adopt, on old code too) remain the separate CRM_TWIN_LINE
+  item, which must be designed and fixed before CRM_UNIFY_V1 / CRM_LINK_ALL_V1 are released.
+- **Kept:** Task 4 (R4), Task 5 (R3), Task 6 (R7b booked-twin) — re-reviewed.
+- **Task 7 (R7a) re-planned** with the interplay fix: a booked row arriving for a service already in the
+  registration table is attached to that row (no second row), as the wizard already does; Task 6 never deletes a
+  booked line whose id the screen is invoicing.
