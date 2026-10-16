@@ -149,6 +149,10 @@ const DECIDED = {
   '7-fast-S2Tcal-r7a': { rule: 'R7a (G7)', owner: 'nodup', cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '7-fast-S2Tcal-r7a-drop': { rule: 'R7a (G7) · ред. 2: показывается списком', owner: 'came+shown', cell: {"stage":"came","date":"T","lines":[],"link":"card","cards":1,"visits":1,"vs":[40]} },
   '7-wiz-S2Tcal-r7a': { rule: 'R7a (G7)', owner: 'nodup', cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  // CRM_TWIN_LINE — отменённая запись регистратуры (шаг C, 'match') не оставляет карточке ждущей копии
+  // своих услуг: копия «30@D:pending» садилась в следующую запись того же дня (вторая консультация,
+  // консультация-фантом в записи анализа).
+  '8-S1cal-cancel': { rule: 'CRM_TWIN_LINE', owner: 'noecho', cell: {"stage":"in_process","date":"-","lines":[],"link":"card","cards":1,"visits":0,"vs":[30]} },
 };
 
 const rows = [];
@@ -189,6 +193,8 @@ const OWNER = {
   shown: (o) => !!o.view && o.view.services.length === o.vs.length,
   'booked+shown': (o) => o.stage === 'scheduled' && !!o.view && o.view.services.length === o.vs.length,
   'came+shown': (o) => o.stage === 'came' && !!o.view && o.view.services.length === o.vs.length,
+  // CRM_TWIN_LINE — у карточки нет ждущей копии услуг отменённой записи.
+  noecho: (o) => !o.lines.some((l) => l.includes(':pending')),
 };
 const OWNER_TEXT = {
   lines: 'the card shows the visit\'s services as its lines',
@@ -201,6 +207,7 @@ const OWNER_TEXT = {
   shown: 'the card shows the visit and all its services in «Записи пациента» (ред. 2: shown, not copied)',
   'booked+shown': 'a later slot today stays a booking: «Записан», the visit in «Записи пациента» (D2; ред. 2)',
   'came+shown': 'the card goes to «Пришёл» AND shows the visit in «Записи пациента» (ред. 2)',
+  noecho: 'a cancelled registrar booking leaves no waiting copy of its services on the card (CRM_TWIN_LINE)',
 };
 
 for (const sc of SCENARIOS) {

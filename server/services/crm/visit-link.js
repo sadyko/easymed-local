@@ -133,7 +133,7 @@ import { openStageKeys, scheduledStageKey, wonStageKey, windowHours, SEED_NO_SHO
 import { contactDecision, reopenLead, inWindowSql, windowArg, leadInWindow, firstStageKey, liveKeys } from './contact-window.js';   // CRM_LINK_ALL_V1 — liveKeys (шаг C′)
 import { missedRecentlySql, missedRecentlyArgs } from './contact-window.js';   // CRM_UNIFY_V1 (финальное ревью) — одно правило опоздания
 import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL, cardDateOf, mirrorVisit } from './booking-mirror.js';
-import { crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';
+import { crmVisitStatus, ARRIVED_STATUSES, settleStaleCopies } from './visit-status.js';   // CRM_LINK_ALL_V1 (CRM_TWIN_LINE) — settleStaleCopies
 import { hasAnyRole } from '../roles.js';   // CRM_UNIFY_V1 — стойка (deskArrival)
 // CRM_UNIFY_V1 (финальное ревью, B) — «может вести карточку»: одно правило
 // с /api/db (tasks-follow.js); шаг E не делает хозяином того, кто не может.
@@ -494,6 +494,7 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   } catch { phoneCard = null; }   // сборка без 189
   for (const r of mine) {
     if (phoneCard != null && Number(r.id) === phoneCard) continue;   // CRM_LINK_ALL_V1 (P-6)
+    settleStaleCopies(db, r.id);   // CRM_LINK_ALL_V1 (CRM_TWIN_LINE) — строки, отпущенные отменой до правки
     if ((live.has(r.status) ? linkAny : linkDated).run(v.id, r.id, v.day).changes) touched.set(r.id, 'lines');
   }
 
