@@ -593,7 +593,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     };
 
     /** Строка в таблицу без проверок (их делает addLine; строки записи ставит showBookedRows). */
-    function pushRow(service, doctor) {
+    function pushRow(service, doctor, pkg = null) {
         const row = {
             service,
             doctorId: doctor && doctor.id != null ? Number(doctor.id) : null,
@@ -602,21 +602,30 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             doctor: doctor || null,
             sel: null,
         };
+        if (pkg) row.package = pkg;
         state.rows.push(row);
         return row;
     }
 
-    function addLine(service, doctor) {
+    /**
+     * @param {object|null} [pkg] — пакет строки (PACKAGES_V1, cartPackage).
+     *   CRM_LINK_ALL_V1 (повторное ревью денег, S3) — на строку «из записи» пакет не
+     *   ложится: её не вставляют второй раз, значит и package_id ей не дать, а экран
+     *   обещал бы цену пакета, которой счёт не возьмёт.
+     */
+    function addLine(service, doctor, pkg = null) {
         if (!service || service.id == null) return null;
         // CRM_LINK_ALL_V1 (редакция 2) — записанную на сегодня услугу второй строкой не
         // добавляют: строка «из записи» уже регистрирует её (вставка второй убрала бы
         // строку записи — сеть R7b — а её номер идёт в счёт).
         const bookedTwin = bookedRowOf(service, doctor && doctor.id != null ? doctor.id : null);
         if (bookedTwin) {
-            toast(trf('«{name}» уже из записи — вторая строка не нужна.', { name: service.name || '' }), 'info');
+            toast(pkg
+                ? trf('Уже из записи — по цене записи, без пакета: {names}', { names: service.name || '' })
+                : trf('«{name}» уже из записи — вторая строка не нужна.', { name: service.name || '' }), 'info');
             return bookedTwin;
         }
-        const row = pushRow(service, doctor);
+        const row = pushRow(service, doctor, pkg);
         paintTable();
         return row;
     }
@@ -634,11 +643,16 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         // PACKAGES_V1 — строка помнит свой пакет: сервер выставит её со скидкой
         // пакета (и проверит срок), а таблица подпишет, откуда строка.
         // SERVICES_PACKAGES_V1 — строка помнит пакет и цену услуги в нём (cartPackage).
+        // CRM_LINK_ALL_V1 (повторное ревью денег, S3) — услуга, уже стоящая строкой «из
+        // записи», пакетом не добавляется и пакета не получает: строка записи идёт в счёт
+        // по своей цене (её не вставляют второй раз). Тост называет такие услуги.
+        const asBooked = [];
         for (const s of services) {
-            const row = addLine(s, null);
-            if (row) row.package = cartPackage(template, s.id);
+            if (bookedRowOf(s, null)) { asBooked.push(s.name || ''); continue; }
+            addLine(s, null, cartPackage(template, s.id));
         }
         paintTable();
+        if (asBooked.length) toast(trf('Уже из записи — по цене записи, без пакета: {names}', { names: asBooked.join(', ') }), 'info');
         if (missing) toast(trf('Пакет: {n} услуг(и) не найдено в каталоге', { n: missing }), 'warn');
         return services.length;
     }
@@ -671,9 +685,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 ctaLabel: 'Готово',
                 onPick: (p) => {
                     if (!p || !p.service) return;
-                    const row = addLine(p.service, p.doctor || null);
                     // PACKAGES_V1 — строка из пакета, выбранного в каталоге.
-                    if (row && p.package) { row.package = p.package; paintTable(); }
+                    // CRM_LINK_ALL_V1 (ревью денег S3) — пакет ставит addLine: строке «из записи» — нет.
+                    addLine(p.service, p.doctor || null, p.package || null);
                 },
             });
         } catch (e) {
@@ -715,6 +729,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         }
         if (!b || !b.visit || !state.patient || state.patient.id !== patientId) return;
         state.bookedVisitId = b.visit.id;
+        const unpacked = [];   // CRM_LINK_ALL_V1 (ревью денег S3) — пакет снят со строки, ставшей строкой записи
         for (const r of b.rows) {
             if (r.billed) continue;
             const service = r.consultationTypeId != null
@@ -735,8 +750,11 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 twin.doctorId = r.doctorId;   // врач записи — строка уже в визите
                 twin.doctor = null;
             }
+            // CRM_LINK_ALL_V1 (ревью денег S3) — пакет на строку записи не ложится (её не вставляют).
+            if (twin && twin.package) { delete twin.package; unpacked.push(service.name || ''); }
             row.booked = { vsId: r.vsId, status: b.visit.status, unitPrice: r.unitPrice };
         }
+        if (unpacked.length) toast(trf('Уже из записи — по цене записи, без пакета: {names}', { names: unpacked.join(', ') }), 'info');
         const billed = b.rows.filter((r) => r.billed).map((r) => r.name).filter(Boolean);
         if (billed.length) {
             bookedNote.textContent = trf('По записи уже в счёте: {names}', { names: billed.join(', ') });

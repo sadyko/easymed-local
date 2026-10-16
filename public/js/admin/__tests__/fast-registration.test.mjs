@@ -1449,3 +1449,35 @@ for (const order of ['patient-first', 'service-first']) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINK_ALL_V1 (повторное ревью денег, S3) — ПАКЕТ НА СТРОКУ «ИЗ ЗАПИСИ» НЕ ЛОЖИТСЯ.
+// Строка записи уже в визите, сохранение её не вставляет второй раз — значит и пакета (package_id)
+// ей не дать: экран обещал «в пакете 90 000», а счёт брал 112 000. Теперь записанная услуга
+// пакетом пропускается (тост её называет), пакетная строка, к которой прицепилась запись,
+// пакет теряет — та же подсказка. Сумма на экране = сумма счёта.
+// ═══════════════════════════════════════════════════════════════════════════
+for (const order of ['patient-first', 'package-first']) {
+  test(`CRM_LINK_ALL_V1 (ревью денег S3, ${order}): пакет на услугу «из записи» не ложится — строка записи по своей цене, тост называет услугу, экран и счёт — одна сумма`, async () => {
+    reset();
+    patientRows = [KARIMOVA];
+    visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+    vsRows = [CONSULT_BOOKED];
+    const dlg = openFastRegistrationDialog({});
+    await tick(40);
+    toasts.length = 0;
+    if (order === 'package-first') dlg.state.applyTemplate(OSEN(20));
+    await pickKarimova(dlg);
+    if (order === 'patient-first') dlg.state.applyTemplate(OSEN(20));
+    const rows = dlg.state.rows.filter((r) => Number(r.service.id) === 1);
+    assert.equal(rows.length, 1, 'приём стоит двумя строками');
+    assert.ok(rows[0].booked && rows[0].booked.vsId === 555, 'строка — не строка записи');
+    assert.ok(!rows[0].package, 'строка записи помнит пакет: ' + JSON.stringify(rows[0].package));
+    assert.ok(!textOf(dlg.table).includes('в пакете'), 'экран обещает цену пакета, а счёт её не даст');
+    assert.ok(toasts.some((m) => m.includes('без пакета') && m.includes('Приём терапевта')), 'тост не называет услугу: ' + JSON.stringify(toasts));
+    assert.ok(totalRowText(dlg).includes('112 000'), 'Итого — не цена строки записи: ' + totalRowText(dlg));
+    const { ins, invIds } = await saveAndCalls(dlg);
+    assert.equal(ins.length, 0, 'строка вставлена: ' + JSON.stringify(ins));
+    assert.deepEqual(invIds, [555], 'счёт не на строку записи');
+    dlg.close();
+  });
+}

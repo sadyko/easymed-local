@@ -1,4 +1,4 @@
-// CRM_LINK_ALL_V1 (2026-10-16, повторное ревью денег S1) — СТРОКИ «ИЗ ЗАПИСИ» НА НАСТОЯЩЕМ СЕРВЕРЕ.
+// CRM_LINK_ALL_V1 (2026-10-16, повторное ревью денег S1 / S3) — СТРОКИ «ИЗ ЗАПИСИ» НА НАСТОЯЩЕМ СЕРВЕРЕ.
 //
 // Экранные проверки быстрой регистрации (fast-registration.test.mjs) идут через фальшивый
 // транспорт: он не знает ни сети R7b (crm/booked-twin.js — вставка строки той же услуги убирает
@@ -8,6 +8,8 @@
 //   • S1 — «та же услуга» у экрана и у сервера — одно правило (shared/same-service.js): набор
 //     «строка записи + строка той же услуги» отказывается до первой записи; экран прицепляет
 //     такую строку к строке записи, и счёт выставляется на неё — она цела;
+//   • S3 — пакет на строку «из записи» не ложится; сумма, обещанная экраном до записи, равна
+//     счёту, выставленному сервером по этому сохранению.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -126,6 +128,8 @@ const { startCrmApp, localDay } = await import('../../../../server/test-helpers/
 const { callcenterBook, vsOf } = await import('../../../../server/test-helpers/crm-link-all.js');
 const { openFastRegistrationDialog } = await import('../views/fast-registration.js');
 const { registerWalkIn } = await import('../views/walk-in-booking.js');
+const { attachPackagePrices } = await import('../views/service-templates.js');
+const { supabase } = await import('../../supabase.js');
 const { setFullAccess } = await import('../permissions.js');
 
 const TODAY = localDay(0);
@@ -182,6 +186,18 @@ async function save(dlg) {
   assert.ok(dlg.state.result && dlg.state.result.invoice, 'сохранение не дошло до счёта: ' + JSON.stringify(toasts));
   return dlg.state.result;
 }
+/** Что экран обещал ДО записи: по строке — «в пакете N», а без пакета — цена строки. */
+function promisedOf(dlg) {
+  const body = walk(dlg.table).find((n) => n.tagName === 'TBODY');
+  const trs = (body ? body.children : []).filter((n) => n.tagName === 'TR');
+  return trs.reduce((sum, tr) => {
+    const pkg = walk(tr).find((n) => n.attrs && n.attrs['data-package-line'] !== undefined);
+    const m = pkg && /в пакете\s+([\d\s  ]+)/.exec(textOf(pkg));
+    if (m) return sum + digits(m[1]);
+    const cells = (tr.children || []).filter((c) => c.tagName === 'TD' && hasClass(c, 'cell-strong'));
+    return sum + digits(textOf(cells[cells.length - 1] || tr));
+  }, 0);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CRM_LINK_ALL_V1 (повторное ревью денег, S1) — НАБОР «СТРОКА ЗАПИСИ + СТРОКА ТОЙ ЖЕ УСЛУГИ»
@@ -229,3 +245,42 @@ test('CRM_LINK_ALL_V1 (ревью денег S1, настоящий сервер
   } finally { t.close(); }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINK_ALL_V1 (повторное ревью денег, S3) — ЧТО ЭКРАН ОБЕЩАЛ, ТО СЧЁТ И ВЗЯЛ. Пакет «Осень»
+// (консультация + анализ, −20 %) на пациента, у которого консультация записана на сегодня:
+// консультация — строка записи по своей цене (пакета ей не дать — её не вставляют второй раз),
+// анализ — по цене пакета. Сумма, обещанная экраном до записи, равна счёту, который настоящий
+// сервер выставил по этому сохранению.
+// ═══════════════════════════════════════════════════════════════════════════
+for (const order of ['patient-first', 'package-first']) {
+  test(`CRM_LINK_ALL_V1 (ревью денег S3, настоящий сервер, ${order}): пакет и строка «из записи» — сумма экрана до записи = сумма счёта`, async () => {
+    const t = await live((db) => {
+      db.prepare(`INSERT INTO service_templates (id, name, service_ids, active, discount_percent, is_package, discount_mode, discount_value)
+                  VALUES (12, 'Осень', '[30,40]', 1, 20, 1, 'percent', 20)`).run();
+    });
+    try {
+      const vid = await callcenterBook(t, TODAY, { hour: 23, svc: 30, doctor: 10 });
+      const x = vsOf(t, vid).find((r) => r.service_id === 30);
+      const { data: tpls } = await supabase.from('service_templates').select('*').eq('id', 12);
+      const [tpl] = await attachPackagePrices(supabase, tpls);
+      assert.ok(tpl && tpl.package_calc, 'раскладка пакета не посчиталась');
+      const dlg = openFastRegistrationDialog({});
+      await waitCatalog(dlg);
+      toasts.length = 0;
+      if (order === 'package-first') dlg.state.applyTemplate(tpl);
+      await pickPatient(dlg);
+      if (order === 'patient-first') dlg.state.applyTemplate(tpl);
+      const consult = dlg.state.rows.filter((r) => Number(r.service.id) === 30);
+      assert.equal(consult.length, 1, 'консультация стоит двумя строками');
+      assert.ok(consult[0].booked && consult[0].booked.vsId === x.id && !consult[0].package, 'строка записи с пакетом: ' + JSON.stringify(consult[0].package));
+      assert.ok(toasts.some((m) => m.includes('без пакета') && m.includes('Консультация терапевта')), 'тост не называет услугу: ' + JSON.stringify(toasts));
+      const promised = promisedOf(dlg);
+      const res = await save(dlg);
+      const inv = t.db.prepare('SELECT total_amount FROM invoices WHERE id = ?').get(res.invoice.id);
+      assert.equal(Number(inv.total_amount), promised, `экран обещал ${promised}, счёт взял ${inv.total_amount}`);
+      assert.equal(promised, 100000 + 32000, 'консультация по цене записи + анализ по цене пакета');
+      assert.deepEqual(vsOf(t, vid).filter((r) => r.service_id === 30).map((r) => r.id), [x.id], 'консультация вставлена второй раз');
+      dlg.close();
+    } finally { t.close(); }
+  });
+}
