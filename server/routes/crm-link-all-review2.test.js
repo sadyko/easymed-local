@@ -89,3 +89,36 @@ test('CRM_LINK_ALL_V1 (ревью приватности PRIV-3): у карто�
     assert.deepEqual(link(t, v2), { request_id: rid2, source: 'patient' });
   } finally { t.close(); }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIV-3b — СТУПЕНЬ КАРТОЧКИ ДВИГАЮТ ТОЛЬКО ВИЗИТЫ ЕЁ ПАЦИЕНТА
+// ═══════════════════════════════════════════════════════════════════════════
+test('CRM_LINK_ALL_V1 (ревью приватности PRIV-3b): карточку C′ перевели на пациента 78 — приход пациента 77 её не закрывает', async () => {
+  const t = await startCrmApp(seed78);
+  try {
+    const rid = addLead(t.db, { assigned: 3, updated: daysAgoIso(10), status: 'recall' });   // давняя — C′ возвращает её
+    const v = await calendarBook(t, 'reg', TODAY, { hour: 18 });
+    assert.equal(link(t, v) && link(t, v).request_id, rid);
+    assert.equal((await relink(t, rid, 78, { status: 'in_process' })).status, 200);
+    assert.equal((await mark(t, v, TODAY, 18, 'arrived')).status, 200);
+    assert.equal(t.lead(rid).status, 'in_process', 'приход пациента 77 закрыл карточку пациента 78');
+  } finally { t.close(); }
+});
+
+for (const to of ['arrived', 'confirmed', 'no_show', 'cancelled']) {
+  test(`CRM_LINK_ALL_V1 (ревью приватности PRIV-3b, ${to}): запись колл-центра (строка и привязка), карточку перевели на пациента 78 — «${to}» визита 77 ступень и дату карточки не трогает`, async () => {
+    const t = await startCrmApp(seed78);
+    try {
+      const rid = addLead(t.db, { assigned: 3 });
+      const day = to === 'no_show' ? TODAY : D3;
+      const v = await callcenterBook(t, day, { hour: to === 'no_show' ? 8 : 12 });
+      assert.equal(t.lead(rid).status, 'scheduled');
+      assert.equal((await relink(t, rid, 78, { status: 'in_process', scheduled_date: D7 })).status, 200);
+      const before = t.lead(rid);
+      if (to === 'cancelled' || to === 'arrived') assert.equal((await mark(t, v, D3, 12, 'confirmed')).status, 200);
+      assert.equal((await mark(t, v, day, to === 'no_show' ? 8 : 12, to)).status, 200);
+      const after = t.lead(rid);
+      assert.deepEqual([after.status, after.scheduled_date], [before.status, before.scheduled_date], `«${to}» визита пациента 77 сдвинул карточку пациента 78`);
+    } finally { t.close(); }
+  });
+}

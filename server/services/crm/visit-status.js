@@ -74,7 +74,7 @@ function linesOf(db, visitId) {
 
 function parentsOf(db, requestIds) {
   const holes = requestIds.map(() => '?').join(',');
-  return db.prepare(`SELECT id, status, scheduled_date FROM crm_requests WHERE id IN (${holes})`).all(...requestIds);
+  return db.prepare(`SELECT id, status, scheduled_date, patient_id FROM crm_requests WHERE id IN (${holes})`).all(...requestIds);
 }
 
 // CRM_UNIFY_V1 (ревью задач 5–6, I-5) — ЧТО ИЗ ЭТОГО ДВИЖЕНИЕ КАРТОЧКИ.
@@ -270,7 +270,13 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
 
     const lines = linesOf(db, id);
     const requestIds = [...new Set(lines.map((l) => l.request_id).filter(Boolean))];
-    const parents = requestIds.length ? parentsOf(db, requestIds) : [];
+    // CRM_LINK_ALL_V1 (повторное ревью приватности, PRIV-3b) — СТУПЕНЬ КАРТОЧКИ ДВИГАЮТ
+    // ТОЛЬКО ВИЗИТЫ ЕЁ ПАЦИЕНТА. Карточку перевели на другого пациента (оператор понял,
+    // что она о другом человеке) — строки и привязки к визитам прежнего остались, и его
+    // приход, неявка, подтверждение и отмена двигали карточку чужого человека. Карточка
+    // без пациента не движется ничем из этого.
+    const own = (p) => p.patient_id != null && Number(p.patient_id) === Number(visit.patient_id);
+    const parents = (requestIds.length ? parentsOf(db, requestIds) : []).filter(own);
     // CRM_UNIFY_V1 (Р9) — и карточки, привязанные к визиту только записью
     // (crm_booking_links, без строк): их закрывает приход, и (задача 5) в «Не
     // пришёл» их уводит неявка — иначе запись из календаря без строк заявки не
@@ -279,8 +285,8 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     let linked = [];
     if (ARRIVED_STATUSES.includes(now) || now === 'no_show' || now === 'cancelled' || now === 'confirmed') {   // CRM_LINK_ALL_V1 — и подтверждение
       try {
-        linked = db.prepare(`SELECT r.id, r.status, r.scheduled_date, b.source FROM crm_booking_links b
-                               JOIN crm_requests r ON r.id = b.request_id WHERE b.visit_id = ?`).all(id);
+        linked = db.prepare(`SELECT r.id, r.status, r.scheduled_date, r.patient_id, b.source FROM crm_booking_links b
+                               JOIN crm_requests r ON r.id = b.request_id WHERE b.visit_id = ?`).all(id).filter(own);   // PRIV-3b
       } catch { linked = []; }   // сборка без 187
     }
     // Приход обязан дойти до заявки БЕЗ СТРОК, поэтому выходим раньше времени
