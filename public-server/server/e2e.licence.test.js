@@ -25,7 +25,7 @@ import { bookingSeed } from '../../server/test-helpers/api-booking-seed.js';
 import { tmpDir } from '../../server/test-helpers/tmpdir.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
 import { loadSyncIdentity, SYNC_KEY_FILE } from '../../server/services/api/sync-identity.js';
-import { syncOnce } from '../../server/services/api/public-sync.js';
+import { syncOnce, syncStatus } from '../../server/services/api/public-sync.js';
 import { runCheckin, __setPublicKeyForTests as checkinKey } from '../../server/services/control/checkin.js';
 import { controlState, __setPublicKeyForTests as stateKey } from '../../server/services/control/state.js';
 import { keyHash } from '../../server/services/api/secret-box.js';
@@ -168,7 +168,10 @@ test('сервер лицензий ↔ клиника ↔ публичный с
   const pending = (await panel('GET', '/clinics/c-000777')).body.clinic.api;
   assert.deepEqual([pending.key_pending, pending.sync_key_seen], [true, fresh.fingerprint]);
   assert.equal((await panel('GET', '/clinics')).body.clinics[0].api_key_pending, true);
-  assert.equal((await panel('POST', '/clinics/c-000777/api/accept-key', { fingerprint: fresh.fingerprint })).status, 200);
+  //    Ревью 8c: сотрудник Easy-Med вводит код, который клиника читает со своего экрана «API» (api_sync_status key_code).
+  const code = syncStatus(s.db, dataDir, { keyPath }).key_code;
+  assert.equal(code, fresh.fingerprint.slice(0, 4) + '-' + fresh.fingerprint.slice(4, 8));
+  assert.equal((await panel('POST', '/clinics/c-000777/api/accept-key', { fingerprint: fresh.fingerprint, code })).status, 200);
   await checkin();
   assert.equal(licence().api_sync_key, fresh.fingerprint);
   assert.equal((await sync()).ok, true);
