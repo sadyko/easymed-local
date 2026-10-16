@@ -678,10 +678,15 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   // CRM_LINK_ALL_V1 (редакция 2б, P-3) — след записи, привязанной только для воронки,
   // живёт, пока запись до прихода: её отмена возвращает карточке прежние ступень и дату
   // (visit-status.js). Остальные следы — сутки, как прежде (discard_empty_visit).
+  // CRM_LINK_ALL_V1 (повторное ревью воронки, G-1b) — и следы карточки, у которой есть
+  // живая запись «только для воронки»: отмена последней из них возвращает САМЫЙ РАННИЙ
+  // след её привязок, даже если первую отменили дни назад.
   try {
     db.prepare(`DELETE FROM crm_booking_undo WHERE created_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 day')
                   AND visit_id NOT IN (SELECT b.visit_id FROM crm_booking_links b JOIN visits x ON x.id = b.visit_id
-                                        WHERE ${displayLinkSql('b')} AND x.status IN ('scheduled', 'confirmed'))`).run();
+                                        WHERE ${displayLinkSql('b')} AND x.status IN ('scheduled', 'confirmed'))
+                  AND request_id NOT IN (SELECT b.request_id FROM crm_booking_links b JOIN visits x ON x.id = b.visit_id
+                                          WHERE ${displayLinkSql('b')} AND x.status IN ('scheduled', 'confirmed'))`).run();
   } catch { /* сборка без 186 */ }
   return [...touched.values()].includes('lines');
 }

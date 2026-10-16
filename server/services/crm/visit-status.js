@@ -422,26 +422,44 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     const byLine = new Set(parents.map((p) => p.id));
     // CRM_LINK_ALL_V1 (редакция 2б, P-3) — ОТМЕНА ЗАПИСИ, ПРИВЯЗАННОЙ ТОЛЬКО ДЛЯ
     // ВОРОНКИ (C′, телефон), ВОЗВРАЩАЕТ КАРТОЧКУ: если карточка всё ещё в той
-    // ступени, которую поставила эта привязка (последний след crm_booking_undo), и
-    // другой живой записи у неё нет — ей возвращаются прежние ступень и дата
-    // (первый след: до возврата в начало воронки). Иначе — ничего: ступень
-    // поставил человек или у карточки есть другая запись.
+    // ступени, которую поставили её привязки (последний след crm_booking_undo), и
+    // другой живой записи у неё нет — ей возвращаются прежние ступень и дата.
+    // Иначе ступень не меняется: её поставил человек или у карточки есть другая запись.
+    // CRM_LINK_ALL_V1 (повторное ревью воронки, G-1a / G-1b) — следы — ВСЕХ записей
+    // карточки по её привязкам (любого вида), а не одной этой записи: две записи,
+    // отменённые по порядку записи, оставляли карточку «Записан» с датой отменённого дня
+    // и без единой живой записи (первая отмена — «есть другая запись», вторая находила
+    // только свой след «Записан» → «Записан», а то и никакого — запись поверх «Записан»
+    // ступени не меняет и следа не пишет). Теперь:
+    //   • живая запись осталась — дата карточки по оставшимся живым записям (cardDateOf);
+    //   • не осталось — возвращается САМЫЙ РАННИЙ след её записей (ступень и дата до
+    //     первой из них), в любом порядке отмен; следы потрачены.
     const displayOnly = new Set(linked.filter((l) => isDisplaySource(l.source) && !byLine.has(l.id)).map((l) => l.id));
     const trailOf = (rid) => {
-      try { return db.prepare('SELECT * FROM crm_booking_undo WHERE visit_id = ? AND request_id = ? ORDER BY id').all(id, rid); }
-      catch { return []; }   // сборка без 186
+      try {
+        return db.prepare(`SELECT u.* FROM crm_booking_undo u
+                             WHERE u.request_id = ? AND u.visit_id IN (SELECT b.visit_id FROM crm_booking_links b
+                                                                        WHERE b.request_id = u.request_id)
+                             ORDER BY u.id`).all(rid);
+      } catch { return []; }   // сборка без 186
     };
     for (const p of withLinked()) {
       // Выигранную и проигранную заявку отмена визита не трогает вовсе:
       // «Пришёл» — это факт прошлого, и отменённая запись его не отменяет.
       if (!open.includes(p.status)) continue;
       if (displayOnly.has(p.id)) {   // CRM_LINK_ALL_V1 (P-3)
-        if (lineBooked.get(p.id) || otherLink(p.id)) continue;
+        if (lineBooked.get(p.id) || otherLink(p.id)) {
+          writeParent(quiet, p, p.status, cardDateOf(db, p.id, p.scheduled_date ?? null));   // G-1a — дата по живым записям
+          continue;
+        }
         const trail = trailOf(p.id);
         const last = trail[trail.length - 1];
         if (!last || last.set_status !== p.status) continue;
         writeParent(quiet, p, trail[0].prev_status, trail[0].prev_scheduled_date ?? null);   // I-5 — отмена не движение
-        try { db.prepare('DELETE FROM crm_booking_undo WHERE visit_id = ? AND request_id = ?').run(id, p.id); } catch { /* сборка без 186 */ }
+        try {
+          const spent = db.prepare('DELETE FROM crm_booking_undo WHERE id = ?');
+          for (const u of trail) spent.run(u.id);   // G-1b — следы этих привязок потрачены
+        } catch { /* сборка без 186 */ }
         continue;
       }
       const left = pendingLeft.get(p.id);
@@ -450,14 +468,14 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
       // Заявка на три дня, у которой отменили один, остаётся записанной: два
       // других слота никуда не делись.
       const stillBooked = !!lineBooked.get(p.id) || otherLink(p.id);
-      // Дата. Осталась живая запись — у карточки со строками ближайшая ждущая
-      // строка (как раньше), у привязанной только записью — ближайший
-      // записанный день (cardDateOf). CRM_UNIFY_V1 (финальное ревью, A-I4) —
+      // Дата. Осталась живая запись — ближайший записанный день (cardDateOf).
+      // CRM_LINK_ALL_V1 (повторное ревью воронки, G-1) — и у карточки со строками:
+      // ближайшая ждущая строка — это и строка отменённого дня (она ждёт записи
+      // заново), и карточка оставалась на отменённом дне. CRM_UNIFY_V1 (финальное ревью, A-I4) —
       // живой записи не осталось — дата СТИРАЕТСЯ в любой открытой колонке:
       // иначе карточка «Подтверждён» с датой отменённого приёма наутро уходила
       // в «Не пришёл». Ждущие строки свои даты сохраняют.
-      const when = !stillBooked ? null
-        : byLine.has(p.id) ? ((left && left.next) || null) : cardDateOf(db, p.id, (left && left.next) || null);
+      const when = !stillBooked ? null : cardDateOf(db, p.id, (left && left.next) || null);   // G-1
       const undo = scheduled && p.status === scheduled && !stillBooked && first;
       writeParent(quiet, p, undo ? first : p.status, when);   // CRM_UNIFY_V1 (ревью, I-5) — отмена не движение
     }

@@ -122,3 +122,89 @@ for (const to of ['arrived', 'confirmed', 'no_show', 'cancelled']) {
     } finally { t.close(); }
   });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// G-1 — ОТМЕНА: ДАТА — ПО ОСТАВШИМСЯ ЖИВЫМ ЗАПИСЯМ; ЖИВЫХ НЕТ — КАРТОЧКЕ ВОЗВРАЩАЕТСЯ
+// САМЫЙ РАННИЙ СЛЕД ЕЁ ПРИВЯЗОК, В ЛЮБОМ ПОРЯДКЕ ОТМЕН
+// ═══════════════════════════════════════════════════════════════════════════
+test('CRM_LINK_ALL_V1 (ревью воронки G-1a): две записи регистратуры (C′), отменили первую — дата карточки на оставшейся записи', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = displayCard(t);
+    const v1 = await calendarBook(t, 'reg', D3);
+    await calendarBook(t, 'reg', D7, { svc: 30, doctor: 10, hour: 15 });
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['scheduled', D3]);
+    assert.equal((await mark(t, v1, D3, 12, 'cancelled')).status, 200);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['scheduled', D7], 'дата карточки — на отменённом дне');
+  } finally { t.close(); }
+});
+
+for (const order of ['first-then-second', 'second-then-first']) {
+  test(`CRM_LINK_ALL_V1 (ревью воронки G-1b/G-1c, ${order}): обе записи C′ отменены — карточке возвращаются «Перезвонить» и прежняя дата, проход «Не пришёл» её не трогает`, async () => {
+    const t = await startCrmApp();
+    try {
+      const rid = displayCard(t);
+      const v1 = await calendarBook(t, 'reg', D3);
+      const v2 = await calendarBook(t, 'reg', D7, { svc: 30, doctor: 10, hour: 15 });
+      const seq = order === 'first-then-second' ? [[v1, D3, 12], [v2, D7, 15]] : [[v2, D7, 15], [v1, D3, 12]];
+      for (const [v, d, h] of seq) assert.equal((await mark(t, v, d, h, 'cancelled')).status, 200);
+      assert.equal(liveBookings(t, rid).length, 0);
+      assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['recall', D10], 'карточка не вернулась туда, где была до записей');
+      crmNoShowSweep(t.db, { day: localDay(4) });
+      assert.equal(t.lead(rid).status, 'recall');
+    } finally { t.close(); }
+  });
+}
+
+test('CRM_LINK_ALL_V1 (ревью воронки G-1): ступень, которую поставил человек, отмена не откатывает — дата по живой записи', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = displayCard(t);
+    const v1 = await calendarBook(t, 'reg', D3);
+    await calendarBook(t, 'reg', D7, { svc: 30, doctor: 10, hour: 15 });
+    t.db.prepare("UPDATE crm_requests SET status = 'in_process' WHERE id = ?").run(rid);   // оператор передвинул сам
+    assert.equal((await mark(t, v1, D3, 12, 'cancelled')).status, 200);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['in_process', D7]);
+  } finally { t.close(); }
+});
+
+test('CRM_LINK_ALL_V1 (ревью воронки G-1b): отмены в разные дни — след первой записи живёт, пока у карточки есть живая запись «только для воронки»; вторая отмена через два дня возвращает «Перезвонить» и прежнюю дату', async () => {
+  const t = await startCrmApp((db) => db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (79, 'Третий', '+998 90 333 44 55')").run());
+  try {
+    const rid = displayCard(t);
+    const v1 = await calendarBook(t, 'reg', D3);
+    const v2 = await calendarBook(t, 'reg', D7, { svc: 30, doctor: 10, hour: 15 });
+    assert.equal((await mark(t, v1, D3, 12, 'cancelled')).status, 200);
+    t.db.prepare('UPDATE crm_booking_undo SET created_at = ?').run(daysAgoIso(2));   // прошло два дня
+    await calendarBook(t, 'reg', localDay(5), { pid: 79 });   // любая запись чистит старые следы
+    assert.equal((await mark(t, v2, D7, 15, 'cancelled')).status, 200);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['recall', D10], 'след первой записи вычищен — карточка осталась «Записан»');
+  } finally { t.close(); }
+});
+
+// F-1a / F-1b — то же для карточки, которую первую запись берёт шаг C (ждёт без даты), а вторую — C′.
+test('CRM_LINK_ALL_V1 (ревью воронки F-1a): записи шагом C и C′, отменили первую — дата карточки на оставшейся записи', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { status: 'in_process', updated: daysAgoIso(1), assigned: 3 });
+    const v1 = await calendarBook(t, 'reg', D3);
+    await calendarBook(t, 'reg', D7, { svc: 40, doctor: 10 });
+    assert.equal((await mark(t, v1, D3, 12, 'cancelled')).status, 200);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['scheduled', D7], 'дата карточки — на отменённом дне');
+  } finally { t.close(); }
+});
+
+test('CRM_LINK_ALL_V1 (ревью воронки F-1b): записи шагом C и C′, отменили обе — карточка не «Записан» без записи: возвращается «В работе», проход «Не пришёл» её не трогает', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { status: 'in_process', updated: daysAgoIso(1), assigned: 3 });
+    const v1 = await calendarBook(t, 'reg', D3);
+    const v2 = await calendarBook(t, 'reg', D7, { svc: 40, doctor: 10 });
+    assert.equal((await mark(t, v1, D3, 12, 'cancelled')).status, 200);
+    assert.equal((await mark(t, v2, D7, 12, 'cancelled')).status, 200);
+    assert.equal(liveBookings(t, rid).length, 0);
+    assert.equal(t.lead(rid).status, 'in_process', 'карточка «Записан», хотя все записи отменены');
+    crmNoShowSweep(t.db, { day: localDay(4) });
+    assert.equal(t.lead(rid).status, 'in_process');
+  } finally { t.close(); }
+});
