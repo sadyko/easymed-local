@@ -20,6 +20,12 @@
 // Видит тот, кто видит карточку: то же правило строк, что у /api/db для
 // crm_requests (crm/visibility.js leadVisible). Чужая карточка — «не найдена»,
 // без подробностей (I8). Только чтение.
+//
+// CRM_LINK_ALL_V1 (повторное ревью приватности, PRIV-3) — ТОЛЬКО ВИЗИТЫ ПАЦИЕНТА
+// КАРТОЧКИ. Оператор перевёл карточку на другого пациента — визиты прежнего (врач,
+// услуги) она больше не показывает, чем бы их ни держала (строкой, привязкой). Карточка
+// без пациента записей не показывает. Привязки «только для воронки» к чужим визитам при
+// смене пациента снимает сама база (миграция 246).
 import { canRead } from '../../db/schema-registry.js';
 import { effectiveRoles } from '../roles.js';
 import { leadVisible } from '../crm/visibility.js';
@@ -49,8 +55,9 @@ export function crmCardBookings(db, args, user) {
   if (!canRead('crm_requests', effectiveRoles(user))) throw new RpcError('Заявки CRM вам недоступны.', 403);
   const rid = Number(args && args.request_id);
   if (!Number.isInteger(rid) || rid <= 0) throw new RpcError('Заявка не найдена.', 400);
-  const lead = db.prepare('SELECT id, assigned_to FROM crm_requests WHERE id = ?').get(rid);
+  const lead = db.prepare('SELECT id, assigned_to, patient_id FROM crm_requests WHERE id = ?').get(rid);
   if (!lead || !leadVisible(db, user, lead.assigned_to)) throw new RpcError('Заявка не найдена.', 404);
+  if (lead.patient_id == null) return { request_id: rid, bookings: [] };   // CRM_LINK_ALL_V1 (PRIV-3)
 
   let links = '';
   try { db.prepare('SELECT 1 FROM crm_booking_links LIMIT 1').get(); links = 'UNION SELECT visit_id FROM crm_booking_links WHERE request_id = @rid'; }
@@ -62,8 +69,9 @@ export function crmCardBookings(db, args, user) {
                     UNION SELECT vs.visit_id FROM crm_request_services l JOIN visit_services vs ON vs.id = l.visit_service_id
                            WHERE l.request_id = @rid AND l.status <> 'cancelled'
                     ${links})
+       AND v.patient_id = @pid   -- CRM_LINK_ALL_V1 (PRIV-3) — только визиты пациента карточки
      ORDER BY v.visit_date DESC, v.id DESC
-     LIMIT ${CARD_BOOKINGS_MAX}`).all({ rid });
+     LIMIT ${CARD_BOOKINGS_MAX}`).all({ rid, pid: lead.patient_id });
   const lines = db.prepare(`
     SELECT x.quantity, x.status, COALESCE(s.name, ct.name_ru, ct.name, '') AS name
       FROM visit_services x
