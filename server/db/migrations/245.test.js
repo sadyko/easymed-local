@@ -39,7 +39,10 @@ const req = (db, over = {}) => {
 test('245: четыре таблицы, строка состояния одна; прежние таблицы и визиты не тронуты', () => {
   const db = dbBefore245();
   const before = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
-  migrate(db);
+  // CRM_LINK_ALL_V1 (мигр. 247) — «после» — ровно миграция 245, а не все, что легли позже.
+  const upTo245 = tmpDir('em-mig245-only-');
+  for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && parseInt(x, 10) <= 245)) fs.copyFileSync(path.join(DIR, f), path.join(upTo245, f));
+  migrate(db, upTo245);
   const after = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
   const added = after.filter((t) => !before.some((b) => b.name === t.name)).map((t) => t.name).sort();
   assert.deepEqual(added, ['api_outbox', 'api_requests', 'api_sync_state', 'slot_holds']);

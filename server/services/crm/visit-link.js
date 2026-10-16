@@ -625,10 +625,18 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
     //    строка этого дня у прошлой «Пришёл»), и привязки шаг F не пишет: закрытая
     //    стойкой карточка получает привязку только для воронки ('patient'), если у
     //    визита её ещё нет (одна привязка на визит; прежнюю не заменяем).
+    //    CRM_LINK_ALL_V1 (повторное ревью воронки, F-10) — привязка у визита одна
+    //    (PRIMARY KEY visit_id): когда визит держит ПРИВЯЗКА другой карточки (колл-центр
+    //    записал из своей), второй не бывает, и закрытая стойкой карточка не видела ничего.
+    //    Поэтому карточке пишется и строка показа (crm_card_visit_views, миграция 247) —
+    //    её читает только «Записи пациента» (crm_card_bookings); ступень, дату, строки и
+    //    деньги она не двигает.
     const closed = [...touched].find(([id, via]) => id !== held && ['patient', 'live', 'phone'].includes(via));
     if (closed) {
       db.prepare(`INSERT OR IGNORE INTO crm_booking_links (visit_id, request_id, source, created_by, created_request)
                   VALUES (?, ?, 'patient', ?, 0)`).run(v.id, closed[0], uid);
+      try { db.prepare('INSERT OR IGNORE INTO crm_card_visit_views (request_id, visit_id) VALUES (?, ?)').run(closed[0], v.id); }
+      catch { /* сборка без 247 */ }
     }
   }
 

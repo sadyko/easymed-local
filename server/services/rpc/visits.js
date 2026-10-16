@@ -493,6 +493,7 @@ export function discardEmptyVisit(db, args, user) {
     try {
       const own = db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ? AND created_request = 1').get(visitId);
       db.prepare('DELETE FROM crm_booking_links WHERE visit_id = ?').run(visitId);
+      try { db.prepare('DELETE FROM crm_card_visit_views WHERE visit_id = ?').run(visitId); } catch { /* сборка без 247 */ }   // CRM_LINK_ALL_V1 (F-10)
       if (own) {
         const busy = db.prepare(`SELECT 1 FROM crm_request_services WHERE request_id = ? AND status <> 'cancelled'
                                     AND (visit_id IS NULL OR visit_id <> ?) LIMIT 1`).get(own.request_id, visitId)

@@ -322,6 +322,12 @@ export function crmMergeLeads(db, args, user) {
     // переезжают так же: запись без строк иначе держалась бы за удалённую карточку.
     try { db.prepare(`UPDATE crm_booking_links SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds); }
     catch { /* сборка без 187 */ }
+    // CRM_LINK_ALL_V1 (F-10) — и визиты, которые карточки только показывают (мигр. 247):
+    // у оставшейся визит один раз, остатки проигравших — прочь.
+    try {
+      db.prepare(`UPDATE OR IGNORE crm_card_visit_views SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
+      db.prepare(`DELETE FROM crm_card_visit_views WHERE request_id IN (${lh})`).run(...mergeIds);
+    } catch { /* сборка без 247 */ }
     // PUBLIC_API_V1 (ревью 8a, I6) — заявки партнёров из API (мигр. 245) идут за
     // карточкой. Иначе удаление проигравшей обнулило бы ссылку (ON DELETE SET
     // NULL): заявка пропала бы с доски, подтверждение — 403, а её удержание

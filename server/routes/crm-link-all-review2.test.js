@@ -19,6 +19,7 @@ import { startCrmApp, localDay, at, daysAgoIso, addLead, addLine } from '../test
 import { link, calendarBook, callcenterBook, deskRegister } from '../test-helpers/crm-link-all.js';
 import { crmNoShowSweep } from '../services/crm/no-show.js';
 import { crmCardBookings } from '../services/rpc/crm-card-bookings.js';
+import { crmMergeLeads } from '../services/rpc/crm-merge.js';
 import { openStageKeys } from '../services/crm/config.js';
 
 const TODAY = localDay(0);
@@ -277,5 +278,64 @@ test('CRM_LINK_ALL_V1 (ревью воронки F-6): регистратура 
     assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['approved', D3]);
     assert.equal((await mark(t, vid, D3, 12, 'cancelled')).status, 200);
     assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['recall', D10]);
+  } finally { t.close(); }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F-10 — КАРТОЧКА, КОТОРУЮ ЗАКРЫЛА СТОЙКА, ВИДИТ ВИЗИТ, ДАЖЕ КОГДА ЕГО ДЕРЖИТ ПРИВЯЗКА
+// ДРУГОЙ КАРТОЧКИ (crm_card_visit_views — только для показа)
+// ═══════════════════════════════════════════════════════════════════════════
+test('CRM_LINK_ALL_V1 (ревью воронки F-10): визит держит привязка карточки X (колл-центр), стойка закрыла карточку Y — Y видит визит в «Записях пациента», привязка X не тронута', async () => {
+  const t = await startCrmApp();
+  try {
+    const X = addLead(t.db, { assigned: 3, name: 'X' });
+    const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, service_id: 30, start: at(TODAY, 23), duration_minutes: 30, status: 'scheduled' });
+    assert.equal(b.status, 200, b.text);
+    const vid = b.json.data.visit.id;
+    assert.deepEqual(link(t, vid), { request_id: X, source: 'callcenter' });
+    const Y = addLead(t.db, { assigned: 4, name: 'Y', date: TODAY });   // карточка второго оператора ждёт сегодня
+    const { vid: dv } = await deskRegister(t, 'reg', { items: [{ svc: 30, doctor: 10 }] });
+    assert.equal(dv, vid, 'второй визит на день');
+    assert.equal(t.lead(Y).status, 'came', 'стойка не закрыла карточку Y');
+    assert.ok(shown(t, Y).includes(vid), 'карточка, которую закрыла стойка, не видит визита');
+    assert.deepEqual(link(t, vid), { request_id: X, source: 'callcenter' }, 'привязку X заменили');
+    assert.ok(shown(t, X).includes(vid));
+  } finally { t.close(); }
+});
+
+test('CRM_LINK_ALL_V1 (ревью воронки F-10): строка показа — только показ: отмена визита карточку Y не двигает; карточка, переведённая на другого пациента, визита не видит', async () => {
+  const t = await startCrmApp(seed78);
+  try {
+    addLead(t.db, { assigned: 3, name: 'X' });
+    const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, service_id: 30, start: at(TODAY, 23), duration_minutes: 30, status: 'scheduled' });
+    const vid = b.json.data.visit.id;
+    const Y = addLead(t.db, { assigned: 4, name: 'Y', date: TODAY });
+    await deskRegister(t, 'reg', { items: [{ svc: 30, doctor: 10 }] });
+    assert.equal(t.lead(Y).status, 'came');
+    assert.equal(t.db.prepare('SELECT COUNT(*) AS n FROM crm_card_visit_views WHERE request_id = ? AND visit_id = ?').get(Y, vid).n, 1);
+    t.db.prepare("UPDATE crm_requests SET status = 'in_process' WHERE id = ?").run(Y);   // человек вернул в работу
+    assert.equal((await mark(t, vid, TODAY, 23, 'cancelled')).status, 200);
+    assert.equal(t.lead(Y).status, 'in_process', 'строка показа двигает ступень');
+    t.db.prepare('UPDATE crm_requests SET patient_id = 78 WHERE id = ?').run(Y);
+    assert.ok(!shown(t, Y).includes(vid), 'карточка пациента 78 видит визит пациента 77');
+  } finally { t.close(); }
+});
+
+test('CRM_LINK_ALL_V1 (ревью воронки F-10): слияние карточек переносит строки показа на оставшуюся — визит виден один раз', async () => {
+  const t = await startCrmApp();
+  try {
+    const X = addLead(t.db, { assigned: 3, name: 'X' });
+    const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, service_id: 30, start: at(TODAY, 23), duration_minutes: 30, status: 'scheduled' });
+    const vid = b.json.data.visit.id;
+    const Y = addLead(t.db, { assigned: 4, name: 'Y', date: TODAY });
+    await deskRegister(t, 'reg', { items: [{ svc: 30, doctor: 10 }] });
+    assert.ok(shown(t, Y).includes(vid));
+    const Z = addLead(t.db, { assigned: 4, name: 'Z' });
+    t.db.prepare('INSERT INTO crm_card_visit_views (request_id, visit_id) VALUES (?, ?)').run(Z, vid);   // уже показывает тот же визит
+    const m = crmMergeLeads(t.db, { keep_id: Z, merge_ids: [Y] }, BOSS);
+    assert.ok(m, 'слияние не прошло');
+    assert.deepEqual(t.db.prepare('SELECT request_id FROM crm_card_visit_views WHERE visit_id = ? ORDER BY request_id').all(vid).map((r) => r.request_id), [Z]);
+    assert.deepEqual(shown(t, Z).filter((v) => v === vid), [vid]);
+    assert.ok(t.lead(X), 'карточка X пропала');
   } finally { t.close(); }
 });

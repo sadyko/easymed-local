@@ -62,6 +62,10 @@ export function crmCardBookings(db, args, user) {
   let links = '';
   try { db.prepare('SELECT 1 FROM crm_booking_links LIMIT 1').get(); links = 'UNION SELECT visit_id FROM crm_booking_links WHERE request_id = @rid'; }
   catch { links = ''; }   // сборка без 187
+  // CRM_LINK_ALL_V1 (повторное ревью воронки, F-10) — и визиты, которые карточка только
+  // показывает (стойка закрыла её, а визит держит привязка другой карточки; миграция 247).
+  try { db.prepare('SELECT 1 FROM crm_card_visit_views LIMIT 1').get(); links += ' UNION SELECT visit_id FROM crm_card_visit_views WHERE request_id = @rid'; }
+  catch { /* сборка без 247 */ }
   const visits = db.prepare(`
     SELECT v.id, v.status, v.visit_date, v.doctor_id, ${localDate('v.visit_date')} AS day, u.full_name AS doctor_name
       FROM visits v LEFT JOIN users u ON u.id = v.doctor_id
