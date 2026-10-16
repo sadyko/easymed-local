@@ -67,7 +67,12 @@ test('CRM_LINK_ALL_V1 R4: только вперёд — «Пришёл», «Не
   } finally { t.close(); }
 });
 
-test('CRM_LINK_ALL_V1 R4: подтверждённую запись отменили — карточка остаётся «Подтверждён», дата стёрта (правило A-I4 не меняется)', async () => {
+// CRM_LINK_ALL_V1 (повторное ревью воронки, F-2a) — прежде здесь стояло «карточка остаётся
+// «Подтверждён», дата стёрта»: так карточка без единой записи висела в «Подтверждён» навсегда.
+// «Подтверждён» поставила сама запись (R4) — её отмена возвращает карточку, как отмена из
+// «Записан» (до R4 так и было). Карточку, которую передвинул человек, — нет (A-I4,
+// crm-unify-final-status.test.js).
+test('CRM_LINK_ALL_V1 R4 (F-2a): подтверждённую запись отменили — карточка в первой открытой колонке, дата стёрта', async () => {
   const t = await startCrmApp();
   try {
     const rid = addLead(t.db, { assigned: 3 });
@@ -76,7 +81,7 @@ test('CRM_LINK_ALL_V1 R4: подтверждённую запись отмени
     assert.equal(t.lead(rid).status, 'approved');
     const r = await mark(t, vid, 'cancelled');
     assert.equal(r.status, 200, r.text);
-    assert.equal(t.lead(rid).status, 'approved');
+    assert.notEqual(t.lead(rid).status, 'approved', 'карточка «Подтверждён» на отменённой записи');
     assert.equal(t.lead(rid).scheduled_date, null, 'дата отменённого приёма осталась — наутро проход унёс бы карточку в «Не пришёл»');
   } finally { t.close(); }
 });

@@ -208,3 +208,46 @@ test('CRM_LINK_ALL_V1 (ревью воронки F-1b): записи шагом 
     assert.equal(t.lead(rid).status, 'in_process');
   } finally { t.close(); }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// G-2 / F-2a — ОТМЕНА ПОСЛЕ «ПОДТВЕРЖДЁН» — КАК ОТМЕНА ИЗ «ЗАПИСАН»
+// ═══════════════════════════════════════════════════════════════════════════
+test('CRM_LINK_ALL_V1 (ревью воронки F-2a): карточка колл-центра — «Подтверждён» в календаре, потом отмена — карточка в первой открытой колонке, без даты (как до R4)', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { assigned: 3 });
+    const v = await callcenterBook(t, D3, { svc: 30, doctor: 10 });
+    assert.equal((await mark(t, v, D3, 12, 'confirmed')).status, 200);
+    assert.equal(t.lead(rid).status, 'approved');
+    assert.equal((await mark(t, v, D3, 12, 'cancelled')).status, 200);
+    assert.equal(liveBookings(t, rid).length, 0);
+    assert.notEqual(t.lead(rid).status, 'approved', 'карточка «Подтверждён» на отменённой записи');
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], [openStageKeys(t.db)[0], null]);
+  } finally { t.close(); }
+});
+
+test('CRM_LINK_ALL_V1 (ревью воронки G-2): запись C′ — «Подтверждён», потом отмена — карточке возвращаются «Перезвонить» и прежняя дата; проход «Не пришёл» её не трогает', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = displayCard(t);
+    const v = await calendarBook(t, 'reg', D3);
+    assert.equal((await mark(t, v, D3, 12, 'confirmed')).status, 200);
+    assert.equal(t.lead(rid).status, 'approved');
+    assert.equal((await mark(t, v, D3, 12, 'cancelled')).status, 200);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['recall', D10]);
+    crmNoShowSweep(t.db, { day: localDay(4) });
+    assert.equal(t.lead(rid).status, 'recall');
+  } finally { t.close(); }
+});
+
+test('CRM_LINK_ALL_V1 (ревью воронки G-2): «Подтверждён», отменили одну из двух записей C′ — карточка остаётся «Подтверждён», дата на живой записи', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = displayCard(t);
+    const v1 = await calendarBook(t, 'reg', D3);
+    const v2 = await calendarBook(t, 'reg', D7, { svc: 30, doctor: 10, hour: 15 });
+    assert.equal((await mark(t, v2, D7, 15, 'confirmed')).status, 200);
+    assert.equal((await mark(t, v1, D3, 12, 'cancelled')).status, 200);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['approved', D7]);
+  } finally { t.close(); }
+});

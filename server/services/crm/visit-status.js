@@ -404,6 +404,18 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     // видит. Закрытые (done) не трогаются: там пациент уже был.
     db.prepare("UPDATE crm_request_services SET visit_id = NULL WHERE visit_id = ? AND status = 'pending'").run(id);
     const first = open[0] || null;
+    // CRM_LINK_ALL_V1 (повторное ревью воронки, G-2 / F-2a) — «КОЛОНКА ПОДТВЕРЖДЕНИЯ» ДЛЯ
+    // ОТМЕНЫ — ТА ЖЕ «КОЛОНКА ЗАПИСИ». R4 двигает записанную карточку в «Подтверждён»; её
+    // отмена искала карточку в «Записан» и не находила — карточка оставалась «Подтверждён»
+    // без единой записи (проход «Не пришёл» её не трогает: отменённый день — не неявка).
+    // Карточка колл-центра — назад в первую открытую колонку, как до R4; привязанная только
+    // для воронки — к следу P-3 / G-1 (запись поставила «Записан», подтверждение — дальше).
+    // Только когда отменили ПОДТВЕРЖДЁННУЮ запись (from = 'confirmed'): тогда «Подтверждён»
+    // поставила она (R4). Карточку, которую в «Подтверждён» передвинул человек (запись
+    // «Записан»), отмена по-прежнему не откатывает — только стирает дату (A-I4).
+    const confirmedKey = confirmedStageKey(db);
+    const viaConfirm = norm(from) === 'confirmed';
+    const bookedLike = (status) => !!status && (status === scheduled || (viaConfirm && !!confirmedKey && status === confirmedKey));
     // CRM_UNIFY_V1 (ревью, M-1) — и карточки, привязанные к визиту только
     // записью (crm_booking_links): иначе отменённая запись календаря оставляла
     // карточку «Записан», и наутро проход уносил её в «Не пришёл». Занятым днём
@@ -454,7 +466,7 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
         }
         const trail = trailOf(p.id);
         const last = trail[trail.length - 1];
-        if (!last || last.set_status !== p.status) continue;
+        if (!last || !(last.set_status === p.status || (last.set_status === scheduled && bookedLike(p.status)))) continue;   // G-2
         writeParent(quiet, p, trail[0].prev_status, trail[0].prev_scheduled_date ?? null);   // I-5 — отмена не движение
         try {
           const spent = db.prepare('DELETE FROM crm_booking_undo WHERE id = ?');
@@ -476,7 +488,7 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
       // иначе карточка «Подтверждён» с датой отменённого приёма наутро уходила
       // в «Не пришёл». Ждущие строки свои даты сохраняют.
       const when = !stillBooked ? null : cardDateOf(db, p.id, (left && left.next) || null);   // G-1
-      const undo = scheduled && p.status === scheduled && !stillBooked && first;
+      const undo = scheduled && bookedLike(p.status) && !stillBooked && first;   // CRM_LINK_ALL_V1 (F-2a) — и «Подтверждён»
       writeParent(quiet, p, undo ? first : p.status, when);   // CRM_UNIFY_V1 (ревью, I-5) — отмена не движение
     }
   } catch (e) {
