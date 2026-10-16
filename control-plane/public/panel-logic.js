@@ -224,8 +224,11 @@ export function attentionReasons(clinic, now = new Date()) {
 
   // PUBLIC_LICENCE_V1 — the clinic's online-booking key changed (a new computer,
   // a reinstall — or a copied install_token). Nothing happens until a human
-  // accepts it on the clinic's page, so the board must say so.
-  if (clinic.api_key_pending) out.push('new API key waiting');
+  // accepts it on the clinic's page, so the board must say so. Several new
+  // keys from one install (step 8c review) cannot be accepted at all — that is
+  // a possible copy of the clinic's data, and the board says that instead.
+  if (clinic.api_key_competing) out.push('several new API keys — possible copy');
+  else if (clinic.api_key_pending) out.push('new API key waiting');
 
   return out;
 }
@@ -303,18 +306,39 @@ export function partnersSeeText(code) {
   return PARTNERS_SEE[code] || { label: 'Unknown — reload the page', tone: 'danger' };
 }
 
-/** "46de4fe9…696a" — enough to read out on the phone and compare. */
+/** "46de4fe9…696a" — a partner key's SHA-256, short enough to recognise. */
 export function shortFp(fp) {
   if (typeof fp !== 'string' || !fp) return '—';
   return fp.length > 12 ? fp.slice(0, 8) + '…' + fp.slice(-4) : fp;
 }
 
-/** What the clinic's computer was last told, in one line. */
-export function licenceLine(licence) {
-  if (!licence || !licence.issued_at) return 'No licence issued with these settings yet — the clinic has not checked in since.';
-  const paid = licence.subscription === 'unpaid' ? 'unpaid' : 'paid';
-  const api = licence.api_sync_key ? `online booking on (key ${shortFp(licence.api_sync_key)})` : 'online booking off';
-  return `Clinic's licence, issued ${formatRetiredAt(licence.issued_at)} ${String(licence.issued_at).slice(11, 16)} UTC: ${paid}, ${api}.`;
+/**
+ * The clinic's API (sync) key code: the first 8 hex of its fingerprint as
+ * "xxxx-xxxx" — the same code the clinic's own Settings → API screen shows and
+ * the server computes (control-plane/server/services/public-api.js keyCode;
+ * panel-public-api.test.js pins the two equal). Read out on the phone.
+ */
+export function keyCode(fp) {
+  if (typeof fp !== 'string' || !/^[0-9a-f]{32}$/.test(fp)) return '—';
+  return fp.slice(0, 4) + '-' + fp.slice(4, 8);
+}
+
+/**
+ * What the clinic's computer was last told, in one line. partnersSee (the
+ * server's code, apiViewOf.partners_see) matters because an unpaid or retired
+ * clinic is issued no licence at all (plan 8c R14): without it the card would
+ * say "has not checked in" about a clinic that checks in every hour.
+ */
+export function licenceLine(licence, partnersSee) {
+  if (!licence || !licence.issued_at) {
+    if (partnersSee === 'unpaid') return 'No licence is issued while the clinic is unpaid (the clinic keeps the one it has).';
+    if (partnersSee === 'retired') return 'No licence is issued to a retired clinic.';
+    return 'No licence issued with these settings yet — the clinic has not checked in since.';
+  }
+  const api = licence.api_sync_key ? `online booking on (key ${keyCode(licence.api_sync_key)})` : 'online booking off';
+  const when = `issued ${formatRetiredAt(licence.issued_at)} ${String(licence.issued_at).slice(11, 16)} UTC`;
+  if (partnersSee === 'unpaid') return `Clinic's last licence, ${when}: ${api}. No new licence is issued while the clinic is unpaid.`;
+  return `Clinic's licence, ${when}: ${api}.`;
 }
 
 // The partner-key shape, mirrored from public/js/shared/api-connections.js

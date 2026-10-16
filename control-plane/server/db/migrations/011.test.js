@@ -49,3 +49,21 @@ test('011: удаление клиники не стирает историю е
   db.prepare("DELETE FROM clinics WHERE clinic_id = 'c-1'").run();
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM revocations').get().n, 1);
 });
+
+// PUBLIC_LICENCE_V1 (ревью 8c, п. 1) — каждый отпечаток ключа обмена, который
+// принесла сверка этой установки, помнится отдельно: «Принять новый ключ»
+// видит, сколько разных ключей пришло с тех пор, как ключ принимали последний раз.
+test('011: sync_keys_seen — по строке на ключ клиники, только 32 hex, три состояния', () => {
+  const db = freshDb();
+  const add = (clinic, fp, state = 'candidate') => db.prepare(
+    "INSERT INTO sync_keys_seen (clinic_id, fp, first_seen, last_seen, state, state_at) VALUES (?, ?, '2026-10-12T10:00:00Z', '2026-10-12T10:00:00Z', ?, '2026-10-12T10:00:00Z')",
+  ).run(clinic, fp, state);
+  add('c-1', FP);
+  add('c-2', FP, 'accepted');
+  add('c-1', 'cd'.repeat(16), 'replaced');
+  assert.throws(() => add('c-1', FP), /UNIQUE|PRIMARY/);
+  for (const [fp, state] of [['AB'.repeat(16), 'candidate'], ['ab'.repeat(15), 'candidate'], ['zz'.repeat(16), 'candidate'], ['ef'.repeat(16), 'new']]) {
+    assert.throws(() => add('c-1', fp, state), /CHECK/, fp + ' ' + state);
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM sync_keys_seen').get().n, 3);
+});

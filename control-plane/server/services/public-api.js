@@ -29,6 +29,21 @@
 // в панели (NEW_SYNC_KEY_NEEDS_CONFIRMATION, вопрос владельцу 1 плана 8c): копия
 // install_token не должна молча забирать онлайн-записи клиники вместе с данными
 // пациентов. Отозванный ключ не принимается никогда.
+//
+// РЕВЬЮ 8c, п. 1. Одна ячейка «последний присланный ключ» позволяла принять ключ
+// копии: копия control.json, сверившаяся ПОСЛЕ настоящего нового ПК, занимала её,
+// оператор звонил в клинику («да, мы сменили компьютер») и нажимал «Accept» —
+// записи пациентов уходили копии, настоящий ПК получал invalid_signature.
+// Теперь:
+//   • каждый ключ, пришедший с установки, — своя строка sync_keys_seen;
+//   • «Accept new key» принимает ЕДИНСТВЕННОГО кандидата и только с кодом
+//     ключа, который клиника читает со своего экрана «Настройки → API»
+//     (keyCode: первые 8 hex, «xxxx-xxxx»); панель этот код не показывает;
+//   • больше одного кандидата после последнего принятия (в том числе
+//     заблокированные) — принять нельзя никакой: только новая регистрация
+//     установки, она стирает кандидатов (enrollment.js redeemEnrollmentCode);
+//   • прежде принятый ключ, если снова сверяется, — «прежний», не «новый»;
+//   • один ключ — одна клиника: ключ, принятый у другой, не принимается.
 import { SYNC_FP_RE, KEY_HASH_RE } from '../../../server/services/control/vendor-feed.js';
 
 export { SYNC_FP_RE, KEY_HASH_RE };
@@ -49,9 +64,40 @@ export function isRevoked(db, kind, value) {
 }
 
 /**
- * Сверка принесла отпечаток ключа обмена клиники. Записать, когда он появился;
- * принять, если это первый ключ клиники (или подтверждение выключено).
- * Внутри транзакции сверки: только простые UPDATE, неверный отпечаток — ничего.
+ * Код ключа обмена для телефона: первые 8 hex отпечатка, «xxxx-xxxx». Договор
+ * с экраном клиники «Настройки → API и подключения» (тот же код; syncStatus
+ * key_code) и с панелью (panel-logic.js keyCode). '' — не отпечаток.
+ */
+export function keyCode(fp) {
+  const s = typeof fp === 'string' ? fp : '';
+  return SYNC_FP_RE.test(s) ? s.slice(0, 4) + '-' + s.slice(4, 8) : '';
+}
+
+/** Код, набранный оператором со слов клиники: регистр, пробелы и дефисы не важны. '' — не код. */
+export function normaliseKeyCode(text) {
+  const s = typeof text === 'string' ? text.toLowerCase().replace(/[\s-]/g, '') : '';
+  return /^[0-9a-f]{8}$/.test(s) ? s : '';
+}
+
+/** Клиника (кроме exceptClinicId), у которой этот ключ уже принят, — или null. Один ключ — одна клиника. */
+export function keyOwner(db, fp, exceptClinicId) {
+  if (!fp) return null;
+  const r = db.prepare('SELECT clinic_id FROM clinics WHERE api_sync_key = ? AND clinic_id <> ? LIMIT 1').get(fp, exceptClinicId || '');
+  return r ? r.clinic_id : null;
+}
+
+/** Ключ стал принятым: прежний принятый — «replaced» (его сменили), этот — «accepted». */
+function markAccepted(db, clinicId, fp, at) {
+  db.prepare("UPDATE sync_keys_seen SET state = 'replaced', state_at = ? WHERE clinic_id = ? AND state = 'accepted' AND fp <> ?").run(at, clinicId, fp);
+  db.prepare("UPDATE sync_keys_seen SET state = 'accepted', state_at = ? WHERE clinic_id = ? AND fp = ?").run(at, clinicId, fp);
+}
+
+/**
+ * Сверка принесла отпечаток ключа обмена клиники. Запомнить его (каждый ключ —
+ * своя строка sync_keys_seen) и когда он появился; принять, если это первый
+ * ключ клиники (или подтверждение выключено), не отозван и не принят у другой
+ * клиники. Внутри транзакции сверки: только простые INSERT/UPDATE, неверный
+ * отпечаток — ничего.
  * @param {{clinic_id:string, api_sync_key:?string, api_sync_key_accepted_at:?string, api_sync_key_seen:?string, api_sync_key_seen_at:?string}} clinic
  * @param {string} fp '' — клиника ключа не прислала (старая версия, API не настроен)
  * @returns {{apiSyncKey: string|null, changed: boolean}} принятый ключ после записи; changed — пришёл не тот, что в прошлый раз
@@ -62,9 +108,17 @@ export function noteSyncKey(db, clinic, fp, now = new Date()) {
   const at = isoSeconds(now);
   const changed = clinic.api_sync_key_seen !== fp;
   const seenAt = changed ? at : (clinic.api_sync_key_seen_at || at);
-  const revoked = isRevoked(db, 'sync_key', fp);
-  const accept = !revoked && fp !== accepted && (!clinic.api_sync_key_accepted_at || !NEW_SYNC_KEY_NEEDS_CONFIRMATION);
+  db.prepare(`INSERT INTO sync_keys_seen (clinic_id, fp, first_seen, last_seen, state, state_at) VALUES (?, ?, ?, ?, 'candidate', ?)
+              ON CONFLICT (clinic_id, fp) DO UPDATE SET last_seen = excluded.last_seen`).run(clinic.clinic_id, fp, at, at, at);
+  if (fp === accepted) {
+    // Принятый другим путём (до этой таблицы) — пусть и строка это говорит.
+    db.prepare("UPDATE sync_keys_seen SET state = 'accepted' WHERE clinic_id = ? AND fp = ? AND state = 'candidate'").run(clinic.clinic_id, fp);
+  }
+  const accept = fp !== accepted && !isRevoked(db, 'sync_key', fp)
+    && (!clinic.api_sync_key_accepted_at || !NEW_SYNC_KEY_NEEDS_CONFIRMATION)
+    && !keyOwner(db, fp, clinic.clinic_id);
   if (accept) {
+    markAccepted(db, clinic.clinic_id, fp, at);
     db.prepare('UPDATE clinics SET api_sync_key = ?, api_sync_key_accepted_at = ?, api_sync_key_seen = ?, api_sync_key_seen_at = ? WHERE clinic_id = ?')
       .run(fp, at, fp, seenAt, clinic.clinic_id);
     return { apiSyncKey: fp, changed };
@@ -75,23 +129,72 @@ export function noteSyncKey(db, clinic, fp, now = new Date()) {
   return { apiSyncKey: accepted, changed };
 }
 
-/** Новый ключ ждёт подтверждения: пришёл, не принят, не отозван. */
+/**
+ * Ключи, пришедшие с установки после последнего принятия и не принятые, — по
+ * одному на ключ, старые первыми. revoked — заблокирован: ждать не может, но
+ * СОРЕВНОВАЛСЯ (блокировка копии не открывает «Accept» без новой регистрации).
+ * other_clinic — этот ключ уже принят у другой клиники.
+ * @returns {{fp:string, code:string, first_seen:string, last_seen:string, revoked:boolean, other_clinic:string|null}[]}
+ */
+export function syncKeyCandidates(db, clinic) {
+  return db.prepare(
+    "SELECT fp, first_seen, last_seen FROM sync_keys_seen WHERE clinic_id = ? AND state = 'candidate' AND fp <> ? ORDER BY first_seen, fp",
+  ).all(clinic.clinic_id, clinic.api_sync_key || '').map((r) => ({
+    fp: r.fp, code: keyCode(r.fp), first_seen: r.first_seen, last_seen: r.last_seen,
+    revoked: isRevoked(db, 'sync_key', r.fp), other_clinic: keyOwner(db, r.fp, clinic.clinic_id),
+  }));
+}
+
+/** Новый ключ ждёт подтверждения: есть незаблокированный кандидат. */
 export function syncKeyPending(db, clinic) {
-  const seen = clinic.api_sync_key_seen || null;
-  return !!seen && seen !== (clinic.api_sync_key || null) && !isRevoked(db, 'sync_key', seen);
+  return syncKeyCandidates(db, clinic).some((k) => !k.revoked);
 }
 
 /**
- * «Принять новый ключ» в панели. fingerprint — тот, что видел человек: если с
- * тех пор клиника прислала другой, ничего не принимается.
- * @returns {{ok:true} | {error:'not_pending'|'changed'|'revoked'}}
+ * Прежде принятые ключи, которые снова сверялись после того, как их сменили:
+ * старый ПК ещё работает — или у кого-то его копия. «Прежний», не «новый».
+ * @returns {{fp:string, code:string, last_seen:string, replaced_at:string}[]}
  */
-export function acceptPendingSyncKey(db, clinicId, fingerprint, now = new Date()) {
-  const c = db.prepare('SELECT clinic_id, api_sync_key, api_sync_key_seen FROM clinics WHERE clinic_id = ?').get(clinicId);
-  if (!c || !c.api_sync_key_seen || c.api_sync_key_seen === c.api_sync_key) return { error: 'not_pending' };
-  if (c.api_sync_key_seen !== fingerprint) return { error: 'changed' };
+export function replacedKeysSeen(db, clinic) {
+  return db.prepare(
+    "SELECT fp, last_seen, state_at FROM sync_keys_seen WHERE clinic_id = ? AND state IN ('accepted', 'replaced') AND fp <> ? AND last_seen >= state_at ORDER BY last_seen DESC, fp",
+  ).all(clinic.clinic_id, clinic.api_sync_key || '')
+    .filter((r) => !isRevoked(db, 'sync_key', r.fp))
+    .map((r) => ({ fp: r.fp, code: keyCode(r.fp), last_seen: r.last_seen, replaced_at: r.state_at }));
+}
+
+/** Новая регистрация установки: ключи, ждавшие при прежнем install_token, больше не в счёт. */
+export function clearSyncKeyCandidates(db, clinicId) {
+  db.prepare("DELETE FROM sync_keys_seen WHERE clinic_id = ? AND state = 'candidate'").run(clinicId);
+}
+
+/**
+ * «Accept new key» в панели. Принимается только ЕДИНСТВЕННЫЙ кандидат после
+ * последнего принятия, только тот, что был на экране (fingerprint), и только
+ * когда code — код, который клиника прочла со своего экрана, — совпал с ним.
+ * @param {{fingerprint?:string, code?:string}} o
+ * @returns {{ok:true} | {error:'not_pending'|'changed'|'revoked'|'bad_code'|'code_mismatch'}
+ *   | {error:'competing', count:number} | {error:'shared', clinicId:string}}
+ */
+export function acceptPendingSyncKey(db, clinicId, { fingerprint, code } = {}, now = new Date()) {
+  const c = db.prepare('SELECT clinic_id, api_sync_key FROM clinics WHERE clinic_id = ?').get(clinicId);
+  if (!c) return { error: 'not_pending' };
   if (isRevoked(db, 'sync_key', fingerprint)) return { error: 'revoked' };
-  db.prepare('UPDATE clinics SET api_sync_key = ?, api_sync_key_accepted_at = ? WHERE clinic_id = ?').run(fingerprint, isoSeconds(now), clinicId);
+  const all = syncKeyCandidates(db, c);
+  const live = all.filter((k) => !k.revoked);
+  if (!live.length) return { error: 'not_pending' };
+  if (all.length > 1) return { error: 'competing', count: all.length };
+  const [only] = live;
+  if (only.fp !== fingerprint) return { error: 'changed' };
+  const typed = normaliseKeyCode(code);
+  if (!typed) return { error: 'bad_code' };
+  if (typed !== only.fp.slice(0, 8)) return { error: 'code_mismatch' };
+  if (only.other_clinic) return { error: 'shared', clinicId: only.other_clinic };
+  const at = isoSeconds(now);
+  db.transaction(() => {
+    markAccepted(db, clinicId, only.fp, at);
+    db.prepare('UPDATE clinics SET api_sync_key = ?, api_sync_key_accepted_at = ? WHERE clinic_id = ?').run(only.fp, at, clinicId);
+  })();
   return { ok: true };
 }
 

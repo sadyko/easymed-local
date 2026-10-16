@@ -72,7 +72,7 @@ export const cp = {
 
   // PUBLIC_LICENCE_V1 — "Online booking / API" and key revocation (routes/admin-public-api.js)
   setApi: (id, enabled) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/api`, { enabled }),
-  acceptSyncKey: (id, fingerprint) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/api/accept-key`, { fingerprint }),
+  acceptSyncKey: (id, fingerprint, code) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/api/accept-key`, { fingerprint, code }),
   addRevocation: (id, payload) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/revocations`, payload),
   removeRevocation: (id, rid) => request('DELETE', `/admin/clinics/${encodeURIComponent(id)}/revocations/${encodeURIComponent(rid)}`),
 

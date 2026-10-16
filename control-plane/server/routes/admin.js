@@ -14,7 +14,13 @@ import { compareVersions } from '../../../scripts/build-bundle.mjs';
 // PUBLIC_LICENCE_V1 — "Online booking / API" and emergency key revocation
 // (step 8c): routes on this same router, behind the same requireVendor.
 import { PUBLIC_API_ROUTE_TABLE, registerPublicApiRoutes, apiViewOf } from './admin-public-api.js';
-import { syncKeyPending } from '../services/public-api.js';
+import { syncKeyCandidates } from '../services/public-api.js';
+
+/** PUBLIC_LICENCE_V1 — the board's two key flags from one look at the clinic's new keys. */
+function apiKeyFlags(db, c) {
+  const keys = syncKeyCandidates(db, c);
+  return { api_key_pending: keys.some((k) => !k.revoked), api_key_competing: keys.length > 1 };
+}
 
 // CONTROL_PLANE_V1 — the vendor's own admin API, behind vendor login. This is
 // the part of the control plane the owner actually touches: today they would
@@ -344,9 +350,10 @@ export function adminRoutes(db) {
       latest_stats: statsByClinic.get(c.clinic_id)?.stats ?? null,
       latest_stats_at: statsByClinic.get(c.clinic_id)?.at ?? null,
       versions_behind: versionsBehind(offerable, c.last_version),
-      // PUBLIC_LICENCE_V1 — the board flags "new API key waiting" (panel-logic.js attentionReasons).
+      // PUBLIC_LICENCE_V1 — the board flags "new API key waiting" and, since the
+      // step 8c review, "several new API keys — possible copy" (panel-logic.js attentionReasons).
       api_enabled: !!c.api_enabled,
-      api_key_pending: syncKeyPending(db, c),
+      ...apiKeyFlags(db, c),
     }));
     res.json({ clinics });
   });

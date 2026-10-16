@@ -15,7 +15,8 @@
 // наружу из клиники — только отпечатки ключей).
 import { isEntitled } from '../services/checkin.js';
 import {
-  partnersSee, syncKeyPending, acceptPendingSyncKey, isRevoked, isoSeconds, SYNC_FP_RE, KEY_HASH_RE,
+  partnersSee, acceptPendingSyncKey, isRevoked, isoSeconds, SYNC_FP_RE, KEY_HASH_RE,
+  syncKeyCandidates, replacedKeysSeen, keyCode, normaliseKeyCode,
 } from '../services/public-api.js';
 import { KEY_RE } from '../../../public/js/shared/api-connections.js';
 
@@ -36,15 +37,23 @@ const CLINIC_COLUMNS = `clinic_id, active, subscription, subscription_until, api
 /**
  * Блок «Online booking / API» для GET /clinics/:id и ответов этих маршрутов.
  * partners_see — то же правило, что решает список производителя (routes/public-feed.js).
+ * candidates — новые ключи после последнего принятия, БЕЗ кода: код оператор
+ * узнаёт от клиники и набирает сам (ревью 8c, п. 1); key_competing — их больше
+ * одного, принять нельзя; replaced_seen — прежние ключи, которые снова сверялись.
  */
 export function apiViewOf(db, c, now = new Date()) {
+  const candidates = syncKeyCandidates(db, c);
   return {
     enabled: !!c.api_enabled,
     sync_key: c.api_sync_key || null,
+    sync_key_code: c.api_sync_key ? keyCode(c.api_sync_key) : null,
     sync_key_accepted_at: c.api_sync_key_accepted_at || null,
     sync_key_seen: c.api_sync_key_seen || null,
     sync_key_seen_at: c.api_sync_key_seen_at || null,
-    key_pending: syncKeyPending(db, c),
+    candidates: candidates.map(({ fp, first_seen, last_seen, revoked, other_clinic }) => ({ fp, first_seen, last_seen, revoked, other_clinic })),
+    key_pending: candidates.some((k) => !k.revoked),
+    key_competing: candidates.length > 1,
+    replaced_seen: replacedKeysSeen(db, c),
     seen_key_revoked: isRevoked(db, 'sync_key', c.api_sync_key_seen),
     partners_see: partnersSee(c, { entitled: isEntitled(c.subscription, c.subscription_until, now) }),
     licence: c.licence_issued_at ? {
@@ -76,10 +85,24 @@ export function registerPublicApiRoutes(r, db) {
     if (!c) return fail(res, 404, 'not_found', 'Clinic not found.');
     const fingerprint = String((req.body && req.body.fingerprint) || '');
     if (!SYNC_FP_RE.test(fingerprint)) return fail(res, 400, 'bad_request', 'fingerprint must be the 32-character key fingerprint shown on this page.');
-    const out = acceptPendingSyncKey(db, c.clinic_id, fingerprint);
+    const code = req.body && req.body.code;
+    if (!normaliseKeyCode(code)) {
+      return fail(res, 400, 'bad_request', 'Type the key code the clinic reads out from Settings → API (8 characters, like ab12-cd34).');
+    }
+    const out = acceptPendingSyncKey(db, c.clinic_id, { fingerprint, code });
     if (out.error === 'not_pending') return fail(res, 409, 'conflict', 'No new key is waiting for this clinic.');
+    if (out.error === 'competing') {
+      return fail(res, 409, 'conflict', `${out.count} different new keys arrived from this clinic's install since its key was last accepted — possible copy of the clinic's data. Nothing can be accepted: re-enrol the clinic (a new enrollment code), then accept the key of the re-enrolled computer.`);
+    }
     if (out.error === 'changed') return fail(res, 409, 'conflict', 'The clinic has sent another key since this page was loaded — reload the page and check again.');
     if (out.error === 'revoked') return fail(res, 409, 'conflict', 'This key is blocked. Unblock it first if it really is the clinic.');
+    if (out.error === 'code_mismatch') {
+      return fail(res, 409, 'conflict', "The code the clinic read out does not match the new key. Do not accept it — ask them to read the key code from Settings → API again; if it still differs, the new key is not theirs.");
+    }
+    if (out.error === 'shared') {
+      return fail(res, 409, 'conflict', `This key is already the accepted key of clinic ${out.clinicId} — one key belongs to one clinic. The clinic's computer must make its own key (re-enrol it).`);
+    }
+    if (out.error) return fail(res, 400, 'bad_request', 'Type the key code the clinic reads out from Settings → API (8 characters, like ab12-cd34).');
     return res.json({ ok: true, note: SWITCH_NOTE, api: apiViewOf(db, clinicOf(db, c.clinic_id)) });
   });
 
@@ -98,6 +121,13 @@ export function registerPublicApiRoutes(r, db) {
       return fail(res, 400, 'bad_request', kind === 'partner_key'
         ? 'value must be the SHA-256 of the partner key (64 hex characters).'
         : 'value must be the sync key fingerprint (32 hex characters).');
+    }
+    // Step 8c review — a clinic's page blocks only that clinic's own keys: a
+    // fingerprint this install never presented (a typo, another clinic's key)
+    // is refused instead of silently cutting off some other clinic.
+    if (kind === 'sync_key' && v !== c.api_sync_key
+      && !db.prepare('SELECT 1 FROM sync_keys_seen WHERE clinic_id = ? AND fp = ?').get(c.clinic_id, v)) {
+      return fail(res, 400, 'bad_request', "This is not one of this clinic's API keys.");
     }
     if (note !== undefined && note !== null && typeof note !== 'string') return fail(res, 400, 'bad_request', 'note must be text.');
     const text = typeof note === 'string' && note.trim() ? note.trim().slice(0, NOTE_MAX) : null;

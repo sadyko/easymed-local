@@ -7,10 +7,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  partnersSeeText, shortFp, licenceLine, revocationInput, sha256Hex, PARTNER_KEY_RE, attentionReasons,
+  partnersSeeText, shortFp, licenceLine, revocationInput, sha256Hex, PARTNER_KEY_RE, attentionReasons, keyCode,
 } from './panel-logic.js';
 import { KEY_RE } from '../../public/js/shared/api-connections.js';
 import { newApiKey, keyHash } from '../../server/services/api/secret-box.js';
+import { keyCode as serverKeyCode } from '../server/services/public-api.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,13 +25,27 @@ test('что видят партнёры: каждый код сервера —
   assert.equal(partnersSeeText('что-то').tone, 'danger');
 });
 
-test('короткий отпечаток и строка лицензии', () => {
-  assert.equal(shortFp('46de4fe9a62a7f1349bdd3658be1696a'), '46de4fe9…696a');
+test('код ключа обмена: «xxxx-xxxx» — тот же, что считает сервер лицензий и показывает экран клиники «Настройки → API»', () => {
+  const fp = '46de4fe9a62a7f1349bdd3658be1696a';
+  assert.equal(keyCode(fp), '46de-4fe9');
+  assert.equal(keyCode(fp), serverKeyCode(fp));
+  assert.equal(keyCode(null), '—');
+  assert.equal(shortFp(fp), '46de4fe9…696a', 'короткий отпечаток — для SHA-256 ключей партнёров');
   assert.equal(shortFp(null), '—');
+});
+
+// Ревью 8c, п. 2: по Р14 неоплаченной лицензия не выдаётся — карточка не должна
+// говорить «клиника не сверялась», когда та сверяется каждый час.
+test('строка лицензии: у неоплаченной — «не выдаётся, пока не оплачено», а не «не сверялась»; ключ — кодом «xxxx-xxxx»', () => {
   assert.match(licenceLine(null), /has not checked in since/);
-  assert.equal(licenceLine({ issued_at: '2026-10-12T10:05:00.000Z', subscription: 'unpaid', api_sync_key: '46de4fe9a62a7f1349bdd3658be1696a' }),
-    "Clinic's licence, issued 12 Oct 2026 10:05 UTC: unpaid, online booking on (key 46de4fe9…696a).");
-  assert.match(licenceLine({ issued_at: '2026-10-12T10:05:00.000Z', subscription: 'active', api_sync_key: null }), /paid, online booking off\.$/);
+  assert.match(licenceLine(null, 'visible'), /has not checked in since/);
+  assert.equal(licenceLine(null, 'unpaid'), 'No licence is issued while the clinic is unpaid (the clinic keeps the one it has).');
+  assert.equal(licenceLine(null, 'retired'), 'No licence is issued to a retired clinic.');
+  const lic = { issued_at: '2026-10-12T10:05:00.000Z', subscription: 'active', api_sync_key: '46de4fe9a62a7f1349bdd3658be1696a' };
+  assert.equal(licenceLine(lic, 'visible'), "Clinic's licence, issued 12 Oct 2026 10:05 UTC: online booking on (key 46de-4fe9).");
+  assert.equal(licenceLine({ ...lic, api_sync_key: null }, 'off'), "Clinic's licence, issued 12 Oct 2026 10:05 UTC: online booking off.");
+  assert.equal(licenceLine(lic, 'unpaid'),
+    "Clinic's last licence, issued 12 Oct 2026 10:05 UTC: online booking on (key 46de-4fe9). No new licence is issued while the clinic is unpaid.");
 });
 
 test('вставленное: ключ партнёра — считать отпечаток здесь; отпечаток — как есть (строчными); прочее — нет', () => {
@@ -50,6 +65,7 @@ test('доска: новый ключ обмена — причина «нужн
   const live = { last_seen_at: new Date().toISOString(), subscription: 'active', subscription_until: null, versions_behind: 0, active: true };
   assert.deepEqual(attentionReasons(live), []);
   assert.deepEqual(attentionReasons({ ...live, api_key_pending: true }), ['new API key waiting']);
+  assert.deepEqual(attentionReasons({ ...live, api_key_pending: true, api_key_competing: true }), ['several new API keys — possible copy']);
 });
 
 // Таблица блокировок — table.t (min-width 760px). Колонка сетки страницы клиники
@@ -70,4 +86,20 @@ test('страница клиники подключает карточку; к�
   const card = fs.readFileSync(path.join(HERE, 'panel-api-card.js'), 'utf8');
   assert.match(card, /parsed\.kind === 'key' \? await sha256Hex\(parsed\.value\) : parsed\.value/);
   assert.doesNotMatch(card, /addRevocation\([^)]*parsed\.value\s*[,}]/, 'сырое значение не уходит в addRevocation');
+});
+
+// Ревью 8c, п. 1: «Accept new key» — только по коду, который клиника прочла;
+// код нового ключа на экране панели не показывается; рядом — «Block this key»;
+// несколько новых ключей — принять нечего.
+test('карточка: принять новый ключ — только набранным кодом; кода нового ключа на экране нет; рядом «Block this key»; несколько новых — «possible copy»', () => {
+  const card = fs.readFileSync(path.join(HERE, 'panel-api-card.js'), 'utf8');
+  assert.match(card, /cp\.acceptSyncKey\(clinic\.id, only\.fp, codeInput\.value\)/);
+  assert.match(card, /Ask the clinic to read the key code from Settings → API; accept only if it matches\./);
+  assert.match(card, /data-block-candidate/);
+  assert.match(card, /possible copy/);
+  assert.match(card, /previously replaced/);
+  assert.doesNotMatch(card, /keyCode\((c|cand|only|k)\.fp\)[^\n]*candidates|candidates[^\n]*keyCode\(/, 'код кандидата не рисуется');
+  assert.match(card, /licenceLine\(api\.licence, api\.partners_see\)/);
+  const api = fs.readFileSync(path.join(HERE, 'panel-api.js'), 'utf8');
+  assert.match(api, /acceptSyncKey: \(id, fingerprint, code\) => request\('POST', `[^`]*\/api\/accept-key`, \{ fingerprint, code \}\)/);
 });
