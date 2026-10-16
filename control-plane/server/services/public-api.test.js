@@ -140,6 +140,28 @@ test('заблокированный кандидат не ждёт и не пр
   assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: FP3, code: code(FP3) }, NOW), { error: 'competing', count: 2 });
 });
 
+// Перепроверка 8c, F1. Клиника, НЕ менявшая ПК, читает код своего принятого
+// ключа. Копия install_token может подобрать ключ Ed25519 с теми же первыми
+// 8 hex (2^32 попыток — часы на обычной машине) и стать единственным новым:
+// совпадение с кодом принятого или прежнего ключа — отказ, а не «принято».
+test('перепроверка 8c, F1: новый ключ с кодом принятого или прежнего ключа клиники не принимается, даже с этим кодом', () => {
+  const db = freshDb();
+  noteSyncKey(db, row(db), FP1, NOW);
+  const ground = FP1.slice(0, 8) + 'ab'.repeat(12);     // подобран под код FP1
+  noteSyncKey(db, row(db), ground, NOW + 1000);
+  assert.deepEqual(acceptPendingSyncKey(db, 'c-1', { fingerprint: ground, code: code(FP1) }, NOW), { error: 'same_code' });
+  assert.equal(row(db).api_sync_key, FP1);
+
+  const db2 = freshDb();
+  noteSyncKey(db2, row(db2), FP1, NOW);
+  noteSyncKey(db2, row(db2), FP2, NOW + 1000);
+  assert.deepEqual(acceptPendingSyncKey(db2, 'c-1', { fingerprint: FP2, code: code(FP2) }, NOW + 2000), { ok: true });
+  const ground2 = FP1.slice(0, 8) + 'cd'.repeat(12);    // под код прежнего (сменённого) ключа
+  noteSyncKey(db2, row(db2), ground2, NOW + 3000);
+  assert.deepEqual(acceptPendingSyncKey(db2, 'c-1', { fingerprint: ground2, code: code(ground2) }, NOW), { error: 'same_code' });
+  assert.equal(row(db2).api_sync_key, FP2);
+});
+
 test('ключ, принятый у другой клиники, сам не принимается и кнопкой тоже — один ключ, одна клиника', () => {
   const db = freshDb();
   noteSyncKey(db, row(db), FP1, NOW);

@@ -12,6 +12,7 @@ import { hashPassword } from '../services/vendor-auth.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../services/enrollment.js';
 import { checkIn } from '../services/checkin.js';
 import { signLicence } from '../services/signing.js';
+import { noteSyncKey } from '../services/public-api.js';
 import { createApp } from '../app.js';
 import { listen } from '../test-helpers/listen.js';
 import { newApiKey, keyHash } from '../../../server/services/api/secret-box.js';
@@ -126,6 +127,21 @@ test('ревью 8c: два разных новых ключа с одной у�
   assert.deepEqual(Object.fromEntries(blocked.body.api.candidates.map((c) => [c.fp, c.revoked])), { [b.fp]: false, [copy.fp]: true });
   assert.equal(blocked.body.api.key_competing, true);
   assert.equal((await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: b.fp, code: code(b.fp) })).status, 409, 'без новой регистрации — никак');
+  assert.equal(s.db.prepare("SELECT api_sync_key FROM clinics WHERE clinic_id = 'c-1'").get().api_sync_key, a.fp);
+});
+
+// Перепроверка 8c, F1: подобрать ключ Ed25519 под 8 hex принятого ключа нельзя
+// в тесте (2^32 попыток), поэтому подобранный отпечаток подаётся в noteSyncKey —
+// ту же функцию, которой сверка передаёт отпечаток присланного ключа.
+test('перепроверка 8c, F1: новый ключ с кодом ключа, которым клиника уже пользуется, — 409 «the clinic has not changed computers»', async (t) => {
+  const s = await harness(t);
+  const a = syncKey();
+  s.checkin(a.b64);
+  const ground = a.fp.slice(0, 8) + 'f'.repeat(24);
+  s.db.transaction(() => noteSyncKey(s.db, s.db.prepare("SELECT * FROM clinics WHERE clinic_id = 'c-1'").get(), ground))();
+  const r = await s.call('POST', '/clinics/c-1/api/accept-key', { fingerprint: ground, code: code(a.fp) });
+  assert.deepEqual([r.status, r.body.error.code], [409, 'conflict']);
+  assert.match(r.body.error.message, /This is the code of the key the clinic already uses — the clinic has not changed computers\. Do not accept; this new key may be a copy\. Block it, and re-enrol the clinic if in doubt\./);
   assert.equal(s.db.prepare("SELECT api_sync_key FROM clinics WHERE clinic_id = 'c-1'").get().api_sync_key, a.fp);
 });
 

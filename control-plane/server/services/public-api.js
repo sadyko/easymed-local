@@ -173,7 +173,7 @@ export function clearSyncKeyCandidates(db, clinicId) {
  * последнего принятия, только тот, что был на экране (fingerprint), и только
  * когда code — код, который клиника прочла со своего экрана, — совпал с ним.
  * @param {{fingerprint?:string, code?:string}} o
- * @returns {{ok:true} | {error:'not_pending'|'changed'|'revoked'|'bad_code'|'code_mismatch'}
+ * @returns {{ok:true} | {error:'not_pending'|'changed'|'revoked'|'bad_code'|'same_code'|'code_mismatch'}
  *   | {error:'competing', count:number} | {error:'shared', clinicId:string}}
  */
 export function acceptPendingSyncKey(db, clinicId, { fingerprint, code } = {}, now = new Date()) {
@@ -188,7 +188,16 @@ export function acceptPendingSyncKey(db, clinicId, { fingerprint, code } = {}, n
   if (only.fp !== fingerprint) return { error: 'changed' };
   const typed = normaliseKeyCode(code);
   if (!typed) return { error: 'bad_code' };
-  if (typed !== only.fp.slice(0, 8)) return { error: 'code_mismatch' };
+  // Re-check F1 — a clinic that never changed computers reads the code of the
+  // key it ALREADY uses. A copy of its install_token can grind an Ed25519 key
+  // with the same first 8 hex (2^32 tries — hours on an ordinary machine) and
+  // be the only new key. So a new key whose code equals the code of any key
+  // this clinic has had accepted (now or before) is refused, whatever was typed.
+  const prefix = only.fp.slice(0, 8);
+  const own = db.prepare("SELECT fp FROM sync_keys_seen WHERE clinic_id = ? AND state IN ('accepted', 'replaced')").all(clinicId)
+    .map((r) => r.fp).concat(c.api_sync_key ? [c.api_sync_key] : []);
+  if (own.some((fp) => fp !== only.fp && fp.slice(0, 8) === prefix)) return { error: 'same_code' };
+  if (typed !== prefix) return { error: 'code_mismatch' };
   if (only.other_clinic) return { error: 'shared', clinicId: only.other_clinic };
   const at = isoSeconds(now);
   db.transaction(() => {

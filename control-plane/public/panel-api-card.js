@@ -41,7 +41,7 @@ function pendingHtml(api) {
   const i = api.candidates.indexOf(live[0]);
   return `
       <div class="legacy-note">A new key arrived — a new computer, a reinstall, or someone with a copy of the clinic's data. Until it is accepted, online booking keeps the old key.
-        Ask the clinic to read the key code from Settings → API; accept only if it matches.</div>
+        Phone the clinic on the number in your records (not one the caller gives) and ask them to read the key code from Settings → API; accept only if it matches.</div>
       ${row(live[0], i)}
       <div class="form-row">
         <label for="api-accept-code">Key code the clinic reads out</label>

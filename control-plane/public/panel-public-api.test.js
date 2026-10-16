@@ -94,7 +94,8 @@ test('страница клиники подключает карточку; к�
 test('карточка: принять новый ключ — только набранным кодом; кода нового ключа на экране нет; рядом «Block this key»; несколько новых — «possible copy»', () => {
   const card = fs.readFileSync(path.join(HERE, 'panel-api-card.js'), 'utf8');
   assert.match(card, /cp\.acceptSyncKey\(clinic\.id, only\.fp, codeInput\.value\)/);
-  assert.match(card, /Ask the clinic to read the key code from Settings → API; accept only if it matches\./);
+  // Перепроверка 8c, F1: звонить по номеру из своих записей, а не по тому, что даёт звонящий.
+  assert.match(card, /Phone the clinic on the number in your records \(not one the caller gives\) and ask them to read the key code from Settings → API; accept only if it matches\./);
   assert.match(card, /data-block-candidate/);
   assert.match(card, /possible copy/);
   assert.match(card, /previously replaced/);

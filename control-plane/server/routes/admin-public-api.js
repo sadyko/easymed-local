@@ -96,6 +96,9 @@ export function registerPublicApiRoutes(r, db) {
     }
     if (out.error === 'changed') return fail(res, 409, 'conflict', 'The clinic has sent another key since this page was loaded — reload the page and check again.');
     if (out.error === 'revoked') return fail(res, 409, 'conflict', 'This key is blocked. Unblock it first if it really is the clinic.');
+    if (out.error === 'same_code') {
+      return fail(res, 409, 'conflict', 'This is the code of the key the clinic already uses — the clinic has not changed computers. Do not accept; this new key may be a copy. Block it, and re-enrol the clinic if in doubt.');
+    }
     if (out.error === 'code_mismatch') {
       return fail(res, 409, 'conflict', "The code the clinic read out does not match the new key. Do not accept it — ask them to read the key code from Settings → API again; if it still differs, the new key is not theirs.");
     }
