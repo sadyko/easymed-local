@@ -15,6 +15,7 @@
 //     уведомления: такого события в словаре нет); приход, доказанный позже,
 //     поднимает «Не пришёл» в «Пришёл».
 import { PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { displayLinkSql } from '../crm/display-links.js';   // CRM_LINK_ALL_V1 (ред. 2б, P-1) — привязки «только для воронки» партнёру не сообщаются
 import { cameSurely } from '../crm/no-show.js';   // повторная проверка 8a, п. 6 — строгое правило прихода CRM
 import { localDate } from '../domain/day.js';
 import { EV, isoOf, localIso } from '../../../public/js/shared/api-booking.js';
@@ -47,13 +48,15 @@ function update(db, id, fields, now) {
  * его заявке. Не по visits.created_at: это настоящие часы, а сверка живёт во
  * времени такта. Оставшаяся щель: будущий визит родственника на слитой
  * карточке всё ещё может быть принят за запись по заявке.
+ * CRM_LINK_ALL_V1 (редакция 2б, P-1) — привязка «только для воронки» (C′, телефон)
+ * записью по заявке не бывает никогда: о таком визите партнёру не сообщается.
  */
 function bookedVisitOfCard(db, crmRequestId, receivedAt) {
   return db.prepare(`
     SELECT v.* FROM visits v
      WHERE v.status IN (${PRE_ARRIVAL.map(() => '?').join(', ')}) AND v.sync_origin IS NULL
        AND ${localDate('v.visit_date')} >= ${localDate('?')}
-       AND (v.id IN (SELECT visit_id FROM crm_booking_links WHERE request_id = ?)
+       AND (v.id IN (SELECT b.visit_id FROM crm_booking_links b WHERE b.request_id = ? AND NOT ${displayLinkSql('b')})   -- CRM_LINK_ALL_V1 (P-1)
             OR v.id IN (SELECT visit_id FROM crm_request_services WHERE request_id = ? AND visit_id IS NOT NULL))
      ORDER BY v.visit_date, v.id LIMIT 1`).get(...PRE_ARRIVAL, receivedAt, crmRequestId, crmRequestId) || null;
 }
