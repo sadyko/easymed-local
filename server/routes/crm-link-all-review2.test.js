@@ -339,3 +339,17 @@ test('CRM_LINK_ALL_V1 (ревью воронки F-10): слияние карт�
     assert.ok(t.lead(X), 'карточка X пропала');
   } finally { t.close(); }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F-3 — «НЕ ПРИШЁЛ» ПРОПУЩЕН (P-4): ДАТА КАРТОЧКИ — НА ЖИВОЙ ЗАПИСИ
+// ═══════════════════════════════════════════════════════════════════════════
+test('CRM_LINK_ALL_V1 (ревью воронки F-3): «Не пришёл» на запись регистратуры (C′), у карточки запись колл-центра через неделю — карточка «Записан» с датой живой записи', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { assigned: 3 });
+    await callcenterBook(t, D7, { svc: 30, doctor: 10 });
+    const v0 = await calendarBook(t, 'reg', TODAY, { hour: 8, svc: 40, doctor: 10 });
+    assert.equal((await mark(t, v0, TODAY, 8, 'no_show')).status, 200);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['scheduled', D7], 'дата карточки — на пропущенном визите');
+  } finally { t.close(); }
+});

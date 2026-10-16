@@ -391,7 +391,13 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
         // дошедшую — тем более (пациент был, визит ему потом отменили —
         // конверсия от этого не исчезает).
         if (!open.includes(p.status)) continue;
-        if (otherAhead.get({ vid: id, day: dayNow, rid: p.id })) continue;   // CRM_LINK_ALL_V1 (P-4)
+        // CRM_LINK_ALL_V1 (P-4) — другая живая запись впереди: ступень остаётся.
+        // CRM_LINK_ALL_V1 (повторное ревью воронки, F-3) — а дата уходит с пропущенного визита
+        // на живую запись (cardDateOf — то же правило, что у шага связи и отмены).
+        if (otherAhead.get({ vid: id, day: dayNow, rid: p.id })) {
+          writeParent(quiet, p, p.status, cardDateOf(db, p.id, p.scheduled_date ?? null));
+          continue;
+        }
         writeParent(quiet, p, noShow, p.scheduled_date);   // CRM_UNIFY_V1 (ревью, I-5) — не движение
       }
       return;
