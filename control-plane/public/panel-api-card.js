@@ -67,7 +67,7 @@ export function renderApiCard(box, clinic) {
       : '<span class="muted">none accepted</span>';
     const pending = pendingHtml(api);
     const replaced = api.replaced_seen.map((r, i) => `
-      <div class="legacy-note" data-replaced-i="${esc(String(i))}">A previously replaced key, <span class="api-fp">${esc(r.code)}</span>, checked in again ${esc(fmtDateTime(r.last_seen))} — the old computer is still running, or someone has a copy of it. It is not accepted and cannot be.
+      <div class="legacy-note" data-replaced-i="${esc(String(i))}">A previously replaced key, <span class="api-fp">${esc(r.code)}</span>, checked in again ${esc(fmtDateTime(r.last_seen))} — the old computer is still running, or someone has a copy of it. It is not accepted. If the clinic really went back to that computer, re-enrol the clinic, then accept the key with the code it reads out.
         <div class="form-actions"><button class="btn danger small" type="button" data-block-replaced>Block this key</button></div></div>`).join('');
     const seenBlocked = api.seen_key_revoked
       ? '<div class="legacy-note">The key this clinic sends is blocked. Its exchange with the public server is refused.</div>' : '';

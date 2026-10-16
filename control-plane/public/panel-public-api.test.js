@@ -102,6 +102,9 @@ test('карточка: принять новый ключ — только на
   assert.match(card, /data-block-candidate/);
   assert.match(card, /possible copy/);
   assert.match(card, /previously replaced/);
+  // Перепроверка 8c, раунд 2, п. 4: после новой регистрации прежний ключ принимается по коду (F3) — «cannot be» было неправдой.
+  assert.match(card, /It is not accepted\. If the clinic really went back to that computer, re-enrol the clinic, then accept the key with the code it reads out\./);
+  assert.doesNotMatch(card, /cannot be\./);
   assert.doesNotMatch(card, /keyCode\((c|cand|only|k)\.fp\)[^\n]*candidates|candidates[^\n]*keyCode\(/, 'код кандидата не рисуется');
   assert.match(card, /licenceLine\(api\.licence, api\.partners_see\)/);
   const api = fs.readFileSync(path.join(HERE, 'panel-api.js'), 'utf8');
