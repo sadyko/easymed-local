@@ -7,6 +7,13 @@ States: S1 = call card ≤72h, no date, no lines · S1p = same but phone only (n
 S2 = card booked by call centre from the card for day D (+3) with consultation 30 / doctor 10 ·
 S3 = open card, last activity 5 days ago · S4 = no card.
 
+CRM_LINK_ALL_V1, редакция 2 («показывать, а не копировать», docs/specs/2026-10-16-crm-link-all-doors-design.md):
+the frozen EXPECT cells stay as the record of HEAD e8b4aab4; a cell whose rule a decision changed lives in
+`DECIDED` (matrix.test.mjs) with the observed cell and the owner predicate it must meet. Links of step C′ and the
+phone match are display-only — the card no longer gets copied lines (`lines` stays the card's own lines); what the
+card SHOWS is read from RPC `crm_card_bookings` («Записи пациента») into a non-enumerable `view`, and the display
+predicates `shown` / `booked+shown` / `came+shown` replace `lines` / `booked` / `came+lines` for those cells.
+
 Cell legend: lines = what the card shows (svc@day:status/visit; V = this door's visit, B = S2 booking) ·
 link = crm_booking_links row for V → card · stage = card's final stage · dup = second visit / duplicate line.
 

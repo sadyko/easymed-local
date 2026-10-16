@@ -103,31 +103,31 @@ const EXPECT = {
 // A GAP todo of a decided cell runs as a REAL test. Each task adds its own cells.
 const DECIDED = {
   // Task 1 — R1 + R2 (D1)
-  '2-S2-reg': { rule: 'R1 (D1) · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
-  '2-S2-boss': { rule: 'R1 (D1) · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '2-S2-reg': { rule: 'R1 (D1) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '2-S2-boss': { rule: 'R1 (D1) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
   '2-S3-reg': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '2-S3-boss': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '4-today-S2': { rule: 'R1 (D1) + D2: a slot later today is a booking · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"scheduled","date":"T","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
-  '4-today-S2-pay': { rule: 'R1 (D1) · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"came","date":"T","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
-  '4-future-S2': { rule: 'R1 (D1) · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '4-today-S2': { rule: 'R1 (D1) + D2: a slot later today is a booking · ред. 2: показывается списком', owner: 'booked+shown', cell: {"stage":"scheduled","date":"T","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '4-today-S2-pay': { rule: 'R1 (D1) · ред. 2: показывается списком', owner: 'came+shown', cell: {"stage":"came","date":"T","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '4-future-S2': { rule: 'R1 (D1) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
   '4-today-S3': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"T","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '4-today-S3-pay': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"came","date":"T","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '4-future-S3': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D2","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '6-S2-doc': { rule: 'R1 (D1) · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":["c5"]} },
+  '6-S2-doc': { rule: 'R1 (D1) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"scheduled","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":["c5"]} },
   '6-S3-doc': { rule: 'R1 (D1)', owner: 'moved', cell: {"stage":"scheduled","date":"D2","lines":[],"link":"card","cards":1,"visits":1,"vs":["c5"]} },
   // Task 2 — R5 (D4)
-  '2-S1p-reg': { rule: 'R5 (D4) · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"scheduled","date":"D","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '4-today-S1p': { rule: 'R5 (D4) + D2: a slot later today is a booking · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"scheduled","date":"T","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '2-S1p-reg': { rule: 'R5 (D4) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"scheduled","date":"D","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '4-today-S1p': { rule: 'R5 (D4) + D2: a slot later today is a booking · ред. 2: показывается списком', owner: 'booked+shown', cell: {"stage":"scheduled","date":"T","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
   // Task 3 — R6 (G4)
-  '3b-S1-reg': { rule: 'R6 (G4) · ред. 2: без строк «оказана», список записей — Rev-5', owner: null, cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '3b-S1-boss': { rule: 'R6 (G4) · ред. 2: без строк «оказана», список записей — Rev-5', owner: null, cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '3b-S2-reg': { rule: 'R6 (G4) · ред. 2: без строк «оказана», список записей — Rev-5', owner: null, cell: {"stage":"came","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
-  '3a-S1p-reg': { rule: 'R6 (G4) · ред. 2: без строк «оказана», список записей — Rev-5', owner: null, cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '3a-S3p-reg': { rule: 'R6 (G4) · ред. 2: без строк «оказана», список записей — Rev-5', owner: null, cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '3c-S2-reg': { rule: 'R6 (G4) · ред. 2: без строк «оказана», список записей — Rev-5', owner: null, cell: {"stage":"came","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
-  '7-fast-S2T-other': { rule: 'R6 (G4) · ред. 2: без строк «оказана», список записей — Rev-5', owner: null, cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"none","cards":1,"visits":1,"vs":[30,40]} },
-  '3b-S3-reg': { rule: 'R2 (D1) + R6 (G4) · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '3b-S1p-reg': { rule: 'R5 (D4) + R6 (G4) · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3b-S1-reg': { rule: 'R6 (G4) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3b-S1-boss': { rule: 'R6 (G4) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3b-S2-reg': { rule: 'R6 (G4) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"came","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '3a-S1p-reg': { rule: 'R6 (G4) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3a-S3p-reg': { rule: 'R6 (G4) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3c-S2-reg': { rule: 'R6 (G4) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"came","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '7-fast-S2T-other': { rule: 'R6 (G4) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"none","cards":1,"visits":1,"vs":[30,40]} },
+  '3b-S3-reg': { rule: 'R2 (D1) + R6 (G4) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '3b-S1p-reg': { rule: 'R5 (D4) + R6 (G4) · ред. 2: показывается списком', owner: 'shown', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
   // Task 4 — R4 (D3)
   '8-S2-confirmed': { rule: 'R4 (D3)', owner: 'approved', cell: {"stage":"approved","date":"D","lines":["30@D:pending/V"],"link":"none","cards":1,"visits":1,"vs":[30]} },
   // Task 5 — R3 (D2)
@@ -135,12 +135,12 @@ const DECIDED = {
   '5-S1p-crm-wizard': { rule: 'D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '7-wiz-S2T-same': { rule: 'D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"none","cards":1,"visits":1,"vs":[30]} },
   '7-wiz-S2T-earlier': { rule: 'D2: a slot later today is a booking', owner: 'booked', cell: {"stage":"scheduled","date":"T","lines":["30@T:pending/V"],"link":"none","cards":1,"visits":1,"vs":[30]} },
-  '4-now-S1': { rule: 'R3 (D2) + R6 · ред. 2: без строк «оказана», список записей — Rev-5', owner: null, cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '4-now-S2': { rule: 'R3 (D2) + R6 · ред. 2: без строк «оказана», список записей — Rev-5', owner: null, cell: {"stage":"came","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
-  '4-now-S3': { rule: 'R3 (D2) + R2 + R6 · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '4-now-S1': { rule: 'R3 (D2) + R6 · ред. 2: показывается списком', owner: 'came+shown', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '4-now-S2': { rule: 'R3 (D2) + R6 · ред. 2: показывается списком', owner: 'came+shown', cell: {"stage":"came","date":"D","lines":["30@D:pending/B"],"link":"card","cards":1,"visits":2,"vs":[30]} },
+  '4-now-S3': { rule: 'R3 (D2) + R2 + R6 · ред. 2: показывается списком', owner: 'came+shown', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '4-now-S4': { rule: 'R3 (D2): no card — still no card (owner decision 2)', owner: 'nodup', cell: {"stage":null,"date":null,"lines":[],"link":"none","cards":0,"visits":1,"vs":[30]} },
-  '4-now-S1p': { rule: 'R3 (D2) + R5 + R6 · ред. 2: без копии строк, список записей — Rev-5', owner: null, cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
-  '5-S1p-crm-wizard-now': { rule: 'R3 (D2) + R6 · ред. 2: без строк «оказана», список записей — Rev-5', owner: null, cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '4-now-S1p': { rule: 'R3 (D2) + R5 + R6 · ред. 2: показывается списком', owner: 'came+shown', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
+  '5-S1p-crm-wizard-now': { rule: 'R3 (D2) + R6 · ред. 2: показывается списком', owner: 'came+shown', cell: {"stage":"came","date":"-","lines":[],"link":"card","cards":1,"visits":1,"vs":[30]} },
   '7-wiz-S2T-now': { rule: 'R3 (D2)', owner: 'came+lines', cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"none","cards":1,"visits":1,"vs":[30]} },
   // Task 6 — R7b (G7)
   '7-fast-S2Tcal-same': { rule: 'R7b (G7)', owner: 'nodup', cell: {"stage":"came","date":"T","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
@@ -158,7 +158,17 @@ async function observe(sc) {
   const t = await start();
   try {
     const ctx = await sc.run(t);
-    return cell(t, ctx.rid, ctx);
+    const o = cell(t, ctx.rid, ctx);
+    // CRM_LINK_ALL_V1 (редакция 2, «показывать, а не копировать») — что карточка ПОКАЗЫВАЕТ в
+    // «Записях пациента» (RPC crm_card_bookings, как экран): запись V этой двери или null. Свойство
+    // не перечисляемое — замороженная форма клетки (EXPECT/DECIDED) не меняется.
+    let view = null;
+    if (ctx.rid && ctx.vid) {
+      const r = await t.rpc('crm_card_bookings', 'boss', { request_id: ctx.rid });
+      if (r.status === 200) view = (r.json.data.bookings || []).find((b) => b.visit_id === ctx.vid) || null;
+    }
+    Object.defineProperty(o, 'view', { value: view, enumerable: false });
+    return o;
   } finally { t.close(); }
 }
 
@@ -171,6 +181,10 @@ const OWNER = {
   approved: (o) => o.stage === 'approved',
   // CRM_LINK_ALL_V1 (D2) — a later slot today is a booking: the card shows the visit and waits in the booked column.
   booked: (o) => o.stage === 'scheduled' && o.lines.some((l) => l.endsWith('/V')),
+  // CRM_LINK_ALL_V1 (редакция 2) — карточка показывает визит списком «Записи пациента» со всеми его услугами.
+  shown: (o) => !!o.view && o.view.services.length === o.vs.length,
+  'booked+shown': (o) => o.stage === 'scheduled' && !!o.view && o.view.services.length === o.vs.length,
+  'came+shown': (o) => o.stage === 'came' && !!o.view && o.view.services.length === o.vs.length,
 };
 const OWNER_TEXT = {
   lines: 'the card shows the visit\'s services as its lines',
@@ -180,6 +194,9 @@ const OWNER_TEXT = {
   nodup: 'no service twice in the visit',
   approved: '«Подтверждён» in the calendar moves the card to «Подтверждён»',
   booked: 'a later slot today stays a booking: «Записан» with the visit on the card (D2)',
+  shown: 'the card shows the visit and all its services in «Записи пациента» (ред. 2: shown, not copied)',
+  'booked+shown': 'a later slot today stays a booking: «Записан», the visit in «Записи пациента» (D2; ред. 2)',
+  'came+shown': 'the card goes to «Пришёл» AND shows the visit in «Записи пациента» (ред. 2)',
 };
 
 for (const sc of SCENARIOS) {
