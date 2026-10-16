@@ -130,6 +130,8 @@ const DECIDED = {
   '3b-S1p-reg': { rule: 'R5 (D4) + R6 (G4)', owner: 'lines', cell: {"stage":"came","date":"-","lines":["30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30]} },
   // intermediate until Task 6 (R7b): the G7 twin is in the visit twice, so R6 shows it twice on the card too — its GAP stays todo
   '7-fast-S2Tcal-same': { rule: 'R6 (G4), before R7b', owner: null, cell: {"stage":"came","date":"T","lines":["30@T:done/V","30@T:done/V"],"link":"card","cards":1,"visits":1,"vs":[30,30]} },
+  // Task 4 — R4 (D3)
+  '8-S2-confirmed': { rule: 'R4 (D3)', owner: 'approved', cell: {"stage":"approved","date":"D","lines":["30@D:pending/V"],"link":"none","cards":1,"visits":1,"vs":[30]} },
 };
 
 const rows = [];

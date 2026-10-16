@@ -51,6 +51,22 @@ export function bookedStageKey(stages, chosen = null) {
   return c.length ? c[c.length - 1] : null;
 }
 
+/**
+ * CRM_LINK_ALL_V1 (R4; решение владельца D3) — «КОЛОНКА ПОДТВЕРЖДЕНИЯ»: первая
+ * ВИДИМАЯ открытая колонка ПОСЛЕ «Колонки записи» и ДО конверсии (у клиник —
+ * сидовая «Подтверждён»). null — такой нет: отметка «Подтверждён» в календаре
+ * карточку тогда не двигает.
+ */
+export function confirmedStageKeyOf(stages, bookedKey) {
+  const list = ordered(stages);
+  const wonAt = list.findIndex((s) => s.kind === 'won');
+  const before = wonAt >= 0 ? list.slice(0, wonAt) : list;
+  const at = bookedKey ? before.findIndex((s) => s.key === bookedKey) : -1;
+  if (at < 0) return null;
+  const next = before.slice(at + 1).find((s) => s.kind === 'open' && isActive(s));
+  return next ? next.key : null;
+}
+
 /** Воронка с конверсией на `key`: вид won — ей, прежняя конверсия — открытая. Вход не меняется. */
 export function withConversion(stages, key) {
   return (Array.isArray(stages) ? stages : []).filter(Boolean).map((s) => {

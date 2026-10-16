@@ -13,7 +13,7 @@
 // live. Every guard below is one such way to lose the board.
 
 // CRM_UNIFY_V1 — «Колонка записи» и «Колонка конверсии»: одно правило с экраном.
-import { bookedStageKey, bookedStageCandidates, conversionRefusal } from '../../../public/js/shared/crm-booked-stage.js';
+import { bookedStageKey, bookedStageCandidates, conversionRefusal, confirmedStageKeyOf } from '../../../public/js/shared/crm-booked-stage.js';   // CRM_LINK_ALL_V1 — confirmedStageKeyOf
 import { rpcT } from '../server-message.js';   // CRM_UNIFY_V1 — отказ с числом карточек переводится на экране
 import { apiSourceKey } from '../../../public/js/shared/api-connections.js';   // CLINIC_API_STEP7_V1
 
@@ -259,6 +259,23 @@ export function scheduledStageKey(db) {
   try { stages = listStages(db); } catch (e) { stages = []; }
   if (!stages.length) return SEED_SCHEDULED_STAGE;
   return bookedStageKey(stages, readCrmSettings(db).booked_stage);
+}
+
+/** CRM_LINK_ALL_V1 (R4) — сидовая «Подтверждён» (миграция 077). */
+export const SEED_CONFIRMED_STAGE = 'approved';
+
+/**
+ * CRM_LINK_ALL_V1 (R4; решение владельца D3) — «КОЛОНКА ПОДТВЕРЖДЕНИЯ»: одно
+ * правило с экраном (public/js/shared/crm-booked-stage.js confirmedStageKeyOf) —
+ * первая видимая открытая колонка после «Колонки записи» и до «Пришёл».
+ * Пустой или нечитаемый справочник — сидовая «Подтверждён» (как scheduledStageKey).
+ * null — некуда: отметка «Подтверждён» карточку не двигает.
+ */
+export function confirmedStageKey(db) {
+  let stages = [];
+  try { stages = listStages(db); } catch (e) { stages = []; }
+  if (!stages.length) return SEED_CONFIRMED_STAGE;
+  return confirmedStageKeyOf(stages, scheduledStageKey(db));
 }
 
 // --------------------------------------------------------------------------

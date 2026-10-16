@@ -31,7 +31,7 @@
 // отметке прихода: воронка — это учёт работы колл-центра, а не условие приёма
 // пациента. Любая ошибка попадает в лог и там остаётся.
 
-import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, windowHours, SEED_NO_SHOW_STAGE } from './config.js';   // CRM_UNIFY_V1 — windowHours
+import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, windowHours, SEED_NO_SHOW_STAGE, confirmedStageKey } from './config.js';   // CRM_UNIFY_V1 — windowHours · CRM_LINK_ALL_V1 — confirmedStageKey
 // CLINIC_DAY_V1 — «сегодня» и «день визита» — местные дни клиники, теми же
 // словами, какими их считают касса, дневник и документы.
 import { localDate } from '../domain/day.js';
@@ -214,7 +214,12 @@ function liftMissed(db, { patientId, day, won, write }) {
  *                откатывается из «Записан» в первую открытую колонку, если
  *                занятых дней у неё больше не осталось.
  *
- * Всё остальное ('scheduled', 'confirmed' и возврат назад) заявку не трогает.
+ *   confirmed  — CRM_LINK_ALL_V1 (решение владельца D3, R4): карточка, которая
+ *                держит визит, едет ВПЕРЁД в «Колонку подтверждения» (config.js
+ *                confirmedStageKey) — только из «Колонки записи» и колонок до неё.
+ *                Приходом это не является: строки ждут.
+ *
+ * Всё остальное ('scheduled' и возврат назад) заявку не трогает.
  *
  * @param {object} db
  * @param {{visitId:number, from:?string, to:string, catchUp?:boolean}} p — from/to:
@@ -235,7 +240,8 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     // Статус не менялся — не меняется и заявка. Это и есть защита от повтора:
     // «пришёл» поверх «пришёл» не должен пересчитывать ничего второй раз.
     if (!now || now === norm(from)) return;
-    if (!ARRIVED_STATUSES.includes(now) && now !== 'no_show' && now !== 'cancelled') return;
+    // CRM_LINK_ALL_V1 (R4) — и 'confirmed': «Подтверждён» в календаре двигает карточку вперёд.
+    if (!ARRIVED_STATUSES.includes(now) && now !== 'no_show' && now !== 'cancelled' && now !== 'confirmed') return;
 
     const visit = db.prepare(`
       -- FINAL_MONEY_FIX_V1 (M6) — день визита МЕСТНЫЙ (как ensure_visit и
@@ -270,7 +276,7 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     // узнавала ни о том, ни о другом.
     // CRM_UNIFY_V1 (ревью, M-1) — и отмена: симметрично приходу и неявке.
     let linked = [];
-    if (ARRIVED_STATUSES.includes(now) || now === 'no_show' || now === 'cancelled') {
+    if (ARRIVED_STATUSES.includes(now) || now === 'no_show' || now === 'cancelled' || now === 'confirmed') {   // CRM_LINK_ALL_V1 — и подтверждение
       try {
         linked = db.prepare(`SELECT r.id, r.status, r.scheduled_date FROM crm_booking_links b
                                JOIN crm_requests r ON r.id = b.request_id WHERE b.visit_id = ?`).all(id);
@@ -330,6 +336,27 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
       // стоит в «Пришёл» и живой не считается — второй раз её не тронут.
       settleLineless(db, { patientId: visit.patient_id, day: visit.day, open, won, write });
       liftMissed(db, { patientId: visit.patient_id, day: visit.day, won, write });   // CRM_UNIFY_V1 (ревью, I-1)
+      return;
+    }
+
+    // CRM_LINK_ALL_V1 (R4; решение владельца D3) — «ПОДТВЕРЖДЁН» В КАЛЕНДАРЕ
+    // ДВИГАЕТ КАРТОЧКУ ВПЕРЁД, в «Колонку подтверждения» (config.js
+    // confirmedStageKey): карточки, чьи строки держат визит, и привязанные к нему
+    // записью. Только из «Колонки записи» и открытых колонок до неё; из колонки
+    // после неё, из «Пришёл» и проигрышных — никогда. Дата не меняется.
+    // updated_at не двигается (переход по отметке календаря, I-5). Визит
+    // соседнего здания — не наш (I5).
+    if (now === 'confirmed') {
+      if (visit.sync_origin != null) return;
+      const confirmed = confirmedStageKey(db);
+      const confAt = confirmed ? open.indexOf(confirmed) : -1;
+      const bookedAt = scheduled ? open.indexOf(scheduled) : -1;
+      if (confAt < 0 || bookedAt < 0) return;
+      for (const p of withLinked()) {
+        const at = open.indexOf(p.status);
+        if (at < 0 || at > bookedAt || at >= confAt) continue;
+        writeParent(quiet, p, confirmed, p.scheduled_date);
+      }
       return;
     }
 
