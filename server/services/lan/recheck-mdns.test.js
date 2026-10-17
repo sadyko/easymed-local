@@ -185,3 +185,13 @@ test('R3: one neighbour sending 25 plain-DNS (legacy) queries per second starves
   console.log('# R3 replies to attacker', sock.sent.filter((s) => s.address === '192.168.1.66').length, 'to legit', toLegit.length);
   assert.equal(toLegit.length, 1, 'legit plain-DNS client unanswered');
 });
+
+test('R6: neighbour filter — subnet broadcast / network address as source are not neighbours (no unicast reply to .255/.0)', async (t) => {
+  const { sock } = await one(t, () => [IF('Ethernet', '192.168.1.156')]);
+  for (const src of ['192.168.1.255', '192.168.1.0', '255.255.255.255', '0.0.0.0', '224.0.0.251']) {
+    sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 3 }), { address: src, port: 40001 });
+  }
+  const uni = sock.sent.filter((s) => s.address !== '224.0.0.251').map((s) => s.address);
+  console.log('# R6 unicast replies to:', JSON.stringify(uni));
+  assert.deepEqual(uni, []);
+});

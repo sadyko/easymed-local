@@ -273,3 +273,19 @@ test('«обычные» ответы: не больше 20 в секунду о
   sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 100 }), fromLan('192.168.1.66', 40100));
   assert.equal(sock.sent.filter((s) => s.address === '192.168.1.66').length, 21, 'через секунду — снова');
 });
+
+test('сосед — не адрес сети (.0) и не широковещательный (.255) своей подсети: ни ответа, ни притязания (и для /22)', async (t) => {
+  const wide = [{ adapter: 'Ethernet', address: '10.4.1.77', netmask: '255.255.252.0', mac: 'a4:bb:6d:12:34:56' }];
+  const { r, sock } = await fakeResponder(t, {}, { getInterfaces: () => wide });
+  await until(() => r.status().state === 'active');
+  sock.sent.length = 0;
+  for (const src of ['10.4.0.0', '10.4.3.255']) {
+    sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 3 }), fromLan(src, 40001));
+    sock.emit('message', buildResponse({ name: 'easymed.local', addresses: ['10.4.1.5'] }), fromLan(src));
+  }
+  await wait(20);
+  assert.equal(sock.sent.length, 0);
+  assert.equal(r.status().name, 'easymed.local');
+  sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 4 }), fromLan('10.4.2.255', 40002));   // обычный адрес внутри /22
+  assert.equal(sock.sent.length, 1);
+});

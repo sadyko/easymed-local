@@ -313,10 +313,21 @@ export function createMdnsResponder({
   // Карты, через которые отправитель — наш сосед: его подсеть; свой же адрес — эта
   // карта (служба DNS-клиента Windows на этом ПК); петля 127/8 — все карты (это сам
   // ПК; снаружи пакет с 127/8 Windows не пропускает). Иначе null — не сосед.
+  // Адрес сети (все биты хоста — 0) и широковещательный (все — 1) своей подсети соседом
+  // не бывают: ответ на них ушёл бы всей сети (повторная перепроверка 2026-10-17, R5).
+  // Для /31 и /32 таких адресов нет.
   function neighbourIfaces(list, src) {
     const s = String(src || '');
     if (/^127\./.test(s)) return list;
-    const local = list.filter((i) => i.address === s || sameSubnet(i.address, s, i.netmask));
+    const n = ipNum(s);
+    const local = list.filter((i) => {
+      if (i.address === s) return true;
+      if (!sameSubnet(i.address, s, i.netmask)) return false;
+      const host = ~ipNum(i.netmask) >>> 0;
+      if (host <= 1) return true;
+      const bits = (n & host) >>> 0;
+      return bits !== 0 && bits !== host;
+    });
     return local.length ? local : null;
   }
 
