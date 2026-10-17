@@ -494,64 +494,68 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     // если она есть: две записи, отменённые в любом порядке, возвращают ступень до первой, G-1b);
     // след записи «Не пришёл» и пришедшей — история, не возвращается (иначе отмена новой записи
     // стирала неявку и ход человека).
+    // Записи карточки — привязкой любого вида или её ждущей строкой.
+    const ofCard = (alias, rid) => `(${alias} IN (SELECT visit_id FROM crm_booking_links WHERE request_id = ${rid})
+                               OR ${alias} IN (SELECT visit_id FROM crm_request_services WHERE request_id = ${rid} AND status = 'pending' AND visit_id IS NOT NULL))`;
     const trailOf = (rid) => {
       try {
         return db.prepare(`SELECT u.* FROM crm_booking_undo u
-                             WHERE u.request_id = ? AND u.visit_id IN (SELECT b.visit_id FROM crm_booking_links b
-                                                                        WHERE b.request_id = u.request_id)
-                               AND (u.visit_id = ? OR EXISTS (SELECT 1 FROM visits tv WHERE tv.id = u.visit_id AND ${awaitingVisitSql('tv')}))
+                             WHERE u.request_id = ?
+                               AND (u.visit_id = ? OR EXISTS (SELECT 1 FROM visits tv WHERE tv.id = u.visit_id AND ${awaitingVisitSql('tv')}
+                                                                 AND ${ofCard('tv.id', 'u.request_id')}))
                              ORDER BY u.id`).all(rid, id);
       } catch { return []; }   // сборка без 186
     };
     // След этой записи после отмены: переходит к ближайшей живой записи карточки (привязкой любого
-    // вида) или уходит. Восстановление ниже тратит следы само.
+    // вида или строкой) или уходит. Восстановление ниже тратит следы само.
     const passTrail = (rid) => {
       try {
-        const next = db.prepare(`SELECT b.visit_id FROM crm_booking_links b JOIN visits v ON v.id = b.visit_id
-                                  WHERE b.request_id = ? AND b.visit_id <> ? AND ${awaitingVisitSql('v')}
-                                  ORDER BY v.visit_date, v.id LIMIT 1`).get(rid, id);
+        const next = db.prepare(`SELECT v.id AS visit_id FROM visits v
+                                  WHERE v.id <> ? AND ${awaitingVisitSql('v')} AND ${ofCard('v.id', '?')}
+                                  ORDER BY v.visit_date, v.id LIMIT 1`).get(id, rid, rid);
         if (next) db.prepare('UPDATE crm_booking_undo SET visit_id = ? WHERE visit_id = ? AND request_id = ?').run(next.visit_id, id, rid);
         else db.prepare('DELETE FROM crm_booking_undo WHERE visit_id = ? AND request_id = ?').run(id, rid);
       } catch { /* сборка без 186/187 */ }
     };
+    // CRM_ONE_WAY_V1 (O10; решение контролёра 2026-10-17, R4) — ОДНО ПРАВИЛО ДЛЯ ЛЮБОЙ ЗАПИСИ КАРТОЧКИ
+    // (привязка колл-центра, шага C 'match', «только для воронки», строка карточки):
+    //   • у карточки осталась живая запись — ступень та же, дата — по оставшимся записям (cardDateOf);
+    //   • живых записей не осталось — СЛЕД её записей (crm_booking_undo): карточка всё ещё в той
+    //     ступени, что поставили записи, — ей возвращаются ступень и дата до первой из них (следы
+    //     потрачены); её передвинул человек или «Не пришёл» — ступень не трогается, дата
+    //     пересчитывается (cardDateOf: ближайшая ждущая строка, иначе пусто);
+    //   • следа нет вовсе: привязка «только для воронки» — ничего (P-3); иначе (карточку завела сама
+    //     запись колл-центра, базы до следа) — прежнее правило: из «Записан» / «Подтверждён» — в первую
+    //     открытую колонку, дата стирается (A-I4).
     for (const p of withLinked()) {
       // Выигранную и проигранную заявку отмена визита не трогает вовсе:
       // «Пришёл» — это факт прошлого, и отменённая запись его не отменяет.
       if (!open.includes(p.status)) { passTrail(p.id); continue; }
-      if (displayOnly.has(p.id)) {   // CRM_LINK_ALL_V1 (P-3)
-        if (lineBooked.get(p.id) || otherLink(p.id)) {
-          writeParent(quiet, p, p.status, cardDateOf(db, p.id, p.scheduled_date ?? null));   // G-1a — дата по живым записям
-          passTrail(p.id);   // CRM_ONE_WAY_V1 (O10) — след переходит к живой записи
-          continue;
-        }
-        const trail = trailOf(p.id);
-        const last = trail[trail.length - 1];
-        // CRM_ONE_WAY_V1 (O10) — карточка не в той ступени, что поставила запись (её передвинул
-        // человек, «Не пришёл»): ступень не возвращается, а след этой записи уходит (G1a).
-        if (!last || !(last.set_status === p.status || (last.set_status === scheduled && bookedLike(p.status)))) { passTrail(p.id); continue; }   // G-2
-        writeParent(quiet, p, trail[0].prev_status, trail[0].prev_scheduled_date ?? null);   // I-5 — отмена не движение
-        try {
-          const spent = db.prepare('DELETE FROM crm_booking_undo WHERE id = ?');
-          for (const u of trail) spent.run(u.id);   // G-1b — следы этих привязок потрачены
-        } catch { /* сборка без 186 */ }
+      const left = pendingLeft.get(p.id);
+      if (lineBooked.get(p.id) || otherLink(p.id)) {
+        writeParent(quiet, p, p.status, cardDateOf(db, p.id, (left && left.next) || null));   // G-1 — дата по живым записям
+        passTrail(p.id);   // след переходит к живой записи
         continue;
       }
-      const left = pendingLeft.get(p.id);
-      // Назад в первую открытую колонку — только если заявка стоит в
-      // «Записан» и ПОСЛЕ отмены у неё не осталось ни одного занятого дня.
-      // Заявка на три дня, у которой отменили один, остаётся записанной: два
-      // других слота никуда не делись.
-      const stillBooked = !!lineBooked.get(p.id) || otherLink(p.id);
-      // Дата. Осталась живая запись — ближайший записанный день (cardDateOf).
-      // CRM_LINK_ALL_V1 (повторное ревью воронки, G-1) — и у карточки со строками:
-      // ближайшая ждущая строка — это и строка отменённого дня (она ждёт записи
-      // заново), и карточка оставалась на отменённом дне. CRM_UNIFY_V1 (финальное ревью, A-I4) —
-      // живой записи не осталось — дата СТИРАЕТСЯ в любой открытой колонке:
-      // иначе карточка «Подтверждён» с датой отменённого приёма наутро уходила
-      // в «Не пришёл». Ждущие строки свои даты сохраняют.
-      const when = !stillBooked ? null : cardDateOf(db, p.id, (left && left.next) || null);   // G-1
-      const undo = scheduled && bookedLike(p.status) && !stillBooked && first;   // CRM_LINK_ALL_V1 (F-2a) — и «Подтверждён»
-      writeParent(quiet, p, undo ? first : p.status, when);   // CRM_UNIFY_V1 (ревью, I-5) — отмена не движение
+      const trail = trailOf(p.id);
+      const last = trail[trail.length - 1];
+      if (last) {
+        if (last.set_status === p.status || (last.set_status === scheduled && bookedLike(p.status))) {   // G-2
+          writeParent(quiet, p, trail[0].prev_status, trail[0].prev_scheduled_date ?? null);   // I-5 — отмена не движение
+          try {
+            const spent = db.prepare('DELETE FROM crm_booking_undo WHERE id = ?');
+            for (const u of trail) spent.run(u.id);   // G-1b — следы этих записей потрачены
+          } catch { /* сборка без 186 */ }
+          continue;
+        }
+        // Человек передвинул карточку или «Не пришёл»: ступень его, дата — по тому, что осталось (G1a).
+        writeParent(quiet, p, p.status, cardDateOf(db, p.id, null));
+        passTrail(p.id);
+        continue;
+      }
+      if (displayOnly.has(p.id)) { passTrail(p.id); continue; }   // CRM_LINK_ALL_V1 (P-3) — без следа ничего
+      const undo = scheduled && bookedLike(p.status) && first;   // CRM_LINK_ALL_V1 (F-2a) — и «Подтверждён»
+      writeParent(quiet, p, undo ? first : p.status, null);   // CRM_UNIFY_V1 (A-I4) — дата стирается
       passTrail(p.id);   // CRM_ONE_WAY_V1 (O10)
     }
   } catch (e) {

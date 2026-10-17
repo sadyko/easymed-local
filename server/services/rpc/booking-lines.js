@@ -24,14 +24,16 @@
 // После записи визит связывается с карточкой (crm/visit-link.js): запись колл-центра без
 // карточки её получает. CRM_ONE_WAY_V1 — услуги записи живут только в визите: в карточку они
 // не копируются (O2), карточка показывает их списком «Записи пациента»; желание карточки той же
-// услуги указывает на добавленную строку (O1, crm/one-way.js), а не заводит вторую.
+// услуги указывает на добавленную строку (O1, crm/one-way.js), а не заводит вторую. Решение владельца
+// (R2): услугу, которую добавил колл-центр, карточка держит строкой записи (указатель на эту строку
+// визита, не копия) — отмена записи вернёт её в карточку без дня (O4).
 import { hasAnyRole } from '../roles.js';
 import { today } from '../domain/day.js';
 import {
   isPreArrival, visitHasWork, insertBookingLine, arrivedByEvidence, lineKey,
-  bookingLineRefusal,
+  bookingLineRefusal, isCallcenterUser,
 } from '../crm/booking-mirror.js';
-import { adoptWishes, releaseOrphans } from '../crm/one-way.js';   // CRM_ONE_WAY_V1
+import { adoptWishes, releaseOrphans, bookLinesOnCard } from '../crm/one-way.js';   // CRM_ONE_WAY_V1
 import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
 import { localDate } from '../domain/day.js';
 
@@ -123,6 +125,9 @@ export function bookingLinesAdd(db, args, user) {
   // строки заявки — сами.
   crmLinkVisit(db, visitId, user);   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 — желания этого дня указывают на эти строки (O1)
   adoptWishes(db, visitId, out.added.map((a) => a.id));   // CRM_ONE_WAY_V1 — и желание «когда придёт» той же услуги
+  // CRM_ONE_WAY_V1 (решение владельца R2) — услуга, которую колл-центр добавил к записи в календаре, —
+  // строка записи карточки, держащей визит: отмена вернёт её в карточку без дня (O4).
+  bookLinesOnCard(db, visitId, out.added.map((a) => a.id), { callcenter: isCallcenterUser(user) });
   return out;
 }
 

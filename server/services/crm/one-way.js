@@ -41,7 +41,7 @@ import {
   visitRow, PRE_ARRIVAL, lineKey, vsFree, visitHasWork, insertBookingLine, bookingLineRefusal,
   relinkHeld, deleteVs, requestOfVisit, sameService, touchRequest, beforeArrival, repriceOwnLine,
 } from './booking-mirror.js';
-import { openStageKeys } from './config.js';
+import { openStageKeys, SEED_NO_SHOW_STAGE } from './config.js';
 import { sameBookedService } from '../../../public/js/shared/same-service.js';
 
 const holes = (a) => a.map(() => '?').join(',');
@@ -280,12 +280,69 @@ export function adoptWishes(db, visitId, vsIds = null) {
 }
 
 /**
+ * Решение владельца (2026-10-17, к открытому вопросу R2) — УСЛУГА, ДОБАВЛЕННАЯ В ЗАПИСЬ КОЛЛ-ЦЕНТРА, —
+ * СТРОКА ЗАПИСИ КАРТОЧКИ. Колл-центр добавил услугу к записи в КАЛЕНДАРЕ (booking_lines_add
+ * пользователем «только колл-центр») — к визиту, который держит карточка (строкой или привязкой
+ * колл-центра / шага C; привязка «только для воронки» строк не даёт — O9); или кто угодно добавил услугу в запись, которую карточка держит ПРИВЯЗКОЙ КОЛЛ-ЦЕНТРА
+ * (crm_booking_links.source = 'callcenter'), — у карточки появляется строка записи, указывающая на эту
+ * строку визита (не копия: одна строка визита, один счёт). Тогда отмена записи возвращает её в карточку
+ * без дня, как и её собственные строки (O4). Своя запись регистратуры (шаг C, C′) — только история:
+ * её услуги карточка видит «Записями пациента» (O2).
+ * Только запись своего здания до прихода, только живая карточка того же пациента; строка визита, на
+ * которую уже указывает строка карточки (желание, другая карточка), не дублируется. Не бросает.
+ * @param {number[]|null} vsIds — добавленные строки визита (null — все строки визита)
+ * @returns {number} сколько строк записи заведено
+ */
+export function bookLinesOnCard(db, visitId, vsIds = null, { callcenter = false } = {}) {
+  try {
+    const v = visitRow(db, visitId);
+    if (!beforeArrival(db, v) || v.sync_origin != null) return 0;
+    let rid = null;
+    // Привязка «только для воронки» (C′, телефон) строк не даёт никогда (O9, ред. 2: «Отказ» и партнёр
+    // её не видят) — только карточка, держащая запись строкой или привязкой колл-центра / шага C.
+    if (callcenter) rid = requestOfVisit(db, v.id);
+    if (!rid) {
+      try {
+        const l = db.prepare("SELECT request_id FROM crm_booking_links WHERE visit_id = ? AND source = 'callcenter'").get(v.id);
+        rid = l ? l.request_id : null;
+      } catch { rid = null; }   // сборка без 187/189
+    }
+    if (!rid) return 0;
+    const card = db.prepare('SELECT id, status, patient_id FROM crm_requests WHERE id = ?').get(rid);
+    if (!card || card.patient_id == null || Number(card.patient_id) !== Number(v.patient_id)) return 0;
+    if (![...openStageKeys(db), SEED_NO_SHOW_STAGE].includes(card.status)) return 0;
+    const pick = vsIds == null ? null : new Set(ids(vsIds));
+    const held = db.prepare("SELECT 1 FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled' LIMIT 1");
+    const ins = db.prepare(`INSERT INTO crm_request_services
+                              (request_id, service_id, consultation_type_id, doctor_id, scheduled_date, status, visit_id, visit_service_id, visit_service_auto)
+                            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 0)`);
+    let n = 0;
+    db.transaction(() => {
+      for (const x of db.prepare('SELECT * FROM visit_services WHERE visit_id = ? ORDER BY id').all(v.id)) {
+        if (pick && !pick.has(Number(x.id))) continue;
+        if (!lineKey(x) || x.clinic_item_id != null || x.sync_origin != null || x.status === 'cancelled') continue;
+        if (held.get(x.id)) continue;
+        ins.run(card.id, x.service_id ?? null, x.service_id != null ? null : (x.consultation_type_id ?? null), x.doctor_id ?? null, v.day, v.id, x.id);
+        n++;
+      }
+    })();
+    if (n) touchRequest(db, card.id);
+    return n;
+  } catch (e) {
+    console.error('[crm-one-way] услуги записи колл-центра', visitId, 'не стали строками карточки:', e && e.message);   // CRM_ONE_WAY_V1
+    return 0;
+  }
+}
+
+/**
  * В визит встали строки человека (/api/db, касса): сначала строка желания уступает (O1),
- * потом желание, которое сбылось, указывает на свою строку. Не бросает.
+ * потом желание, которое сбылось, указывает на свою строку; строка в записи, которую карточка
+ * держит привязкой колл-центра, — строка записи этой карточки (решение владельца R2). Не бросает.
  */
 export function onVisitLinesAdded(db, visitId, vsIds = null) {
   wishYields(db, visitId);
   adoptWishes(db, visitId, vsIds);
+  bookLinesOnCard(db, visitId, vsIds);
 }
 
 // ─── O3 / O4 / O5: отпустить и вернуть ─────────────────────────────────────

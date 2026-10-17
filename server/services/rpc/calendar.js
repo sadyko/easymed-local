@@ -153,7 +153,7 @@ import { getDataDir } from '../control/config.js';
 import { crmVisitStatus } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 · CRM_ONE_WAY_V1 — запись календаря и карточка CRM: услуги записи живут
 // только в визите; перенос ведёт за собой строки записи карточки (crm/one-way.js followVisitMove, O6).
-import { dayVisitMovableFor } from '../crm/booking-mirror.js';
+import { dayVisitMovableFor, requestOfVisit } from '../crm/booking-mirror.js';
 import { followVisitMove } from '../crm/one-way.js';
 import { crmLinkVisit, crmBookingMoved } from '../crm/visit-link.js';   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 — crmBookingMoved (дата карточки при переносе)
 // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
@@ -1255,8 +1255,10 @@ export async function calendarBook(db, args, user, deps = {}) {
   if (existing) crmVisitStatus(db, { visitId: out.visit.id, from: existing.status, to: status });
   // CRM_ONE_WAY_V1 (O5) — ОШИБОЧНУЮ ОТМЕНУ ОТМЕНИЛИ: строки карточки уже снова указывают на
   // строки визита (crmVisitStatus → restoreReleased); ступень и дату карточки ставит шаг связи
-  // — как при записи (шаг B находит карточку, шаг G двигает её вперёд).
-  if (existing && existing.status === 'cancelled' && BUSY_STATUSES.includes(status)) crmLinkVisit(db, out.visit.id, user);
+  // — как при записи (шаг B находит карточку, шаг G двигает её вперёд). Только если визит держит
+  // карточка: восстановление записи без карточки новой карточки не заводит (шаг E колл-центра).
+  if (existing && existing.status === 'cancelled' && BUSY_STATUSES.includes(status)
+      && requestOfVisit(db, out.visit.id, { display: true })) crmLinkVisit(db, out.visit.id, user);
 
   // CRM_CALENDAR_MIRROR_V1 (2026-09-27) — ЗАЯВКА ВИДИТ ТО ЖЕ, ЧТО КАЛЕНДАРЬ.
   //

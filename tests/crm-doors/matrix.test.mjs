@@ -159,14 +159,11 @@ const DECIDED = {
 // docs/specs/2026-10-17-crm-one-way-booking-design.md. Клетки, где карточка держала КОПИЮ строки
 // визита (зеркало записи копировало услуги календаря, регистратуры и кассы в карточку), — O2:
 // копий больше нет, карточка показывает визит списком «Записи пациента». Меняется только
-// колонка lines (строки визита vs, ступень, дата, привязка — те же); `owner` 'booked' (строка
+// колонка lines (строки визита vs, ступень, дата, привязка — те же); решение владельца R2 — услуги, которые
+// колл-центр добавил в календаре (двери 2-cc, 7-S2Tcal), — строки записи карточки, клетки как прежде; `owner` 'booked' (строка
 // карточки на визите) заменён на 'booked+shown' (визит в «Записях пациента»). 8-S2-cancel — O4:
 // строка карточки после отмены ждёт без дня.
 const ONE_WAY = {
-  '2-S1-cc': { rule: 'O2', lines: [] },
-  '2-S2-cc': { rule: 'O2', lines: ['30@D:pending/B'] },
-  '2-S3-cc': { rule: 'O2', lines: [] },
-  '2-S4-cc': { rule: 'O2', lines: [] },
   '2-S1-reg': { rule: 'O2', lines: [] },
   '2-S1-boss': { rule: 'O2', lines: [] },
   '2-S2same-reg': { rule: 'O2', lines: ['30@D:pending/V'] },
@@ -175,10 +172,9 @@ const ONE_WAY = {
   '4-future-S1': { rule: 'O2', lines: [] },
   '5-S1p-crm-wizard': { rule: 'O2', lines: [], owner: 'booked+shown' },
   '6-S1-doc': { rule: 'O2', lines: [] },
-  '7-fast-S2Tcal-same': { rule: 'O2', lines: [] },
-  '7-wiz-S2Tcal-same': { rule: 'O2', lines: [] },
-  '7-fast-S2Tcal-r7a': { rule: 'O2', lines: [] },
-  '7-wiz-S2Tcal-r7a': { rule: 'O2', lines: [] },
+  // решение владельца R2 — услуга колл-центра (booking_lines_add) — строка записи карточки; регистратура сняла
+  // её (booking_line_remove) — строка ждёт в карточке без дня (O3)
+  '7-fast-S2Tcal-r7a-drop': { rule: 'O3 (R2)', lines: ['30@-:pending'] },
   '8-S2-cancel': { rule: 'O4', lines: ['30@-:pending'] },
   '8-S1cal-arrived': { rule: 'O2', lines: [] },
   '9-S2T-addline': { rule: 'O2', lines: ['30@T:done/V'] },

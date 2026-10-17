@@ -2,8 +2,8 @@
 // Колл-центр записал на сегодня в календаре (booking_lines_add), регистратура оформила ту же
 // услугу — дверь /api/db: строка регистратуры занимает место строки записи (crm/booked-twin.js).
 // Повтор, другой врач, количество, счёт и работа — не трогаются.
-// CRM_ONE_WAY_V1 (O2) — строки записи колл-центра из календаря в карточку не копируются: прежние
-// ожидания «строка карточки на строке регистратуры» сменились на «у карточки строк нет».
+// CRM_ONE_WAY_V1 (решение владельца R2) — услуга колл-центра в календаре — строка записи карточки; сеть
+// R7b переводит её на строку регистратуры (relinkHeld), второй строки визита нет.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startCrmApp, localDay, addLead } from '../test-helpers/crm-unify-app.js';
@@ -22,7 +22,7 @@ test('CRM_LINK_ALL_V1 R7b: запись колл-центра на сегодн�
     const { vid, ids } = await deskRegister(t, 'reg');
     assert.equal(vid, bid, 'второй визит на день (I6)');
     assert.deepEqual(vsOf(t, vid).map((x) => x.id), ids, 'в визите две консультации или не та строка');
-    assert.deepEqual(cardLines(t, rid), [], 'CRM_ONE_WAY_V1 (O2) — копии в карточке нет');
+    assert.deepEqual(cardLines(t, rid).map((l) => [l.service_id, l.status, l.visit_service_id]), [[30, 'done', ids[0]]]);
     const inv = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: vid, visit_service_ids: ids, discount_amount: 0, payer_id: null });
     assert.equal(inv.status, 200, inv.text);
     assert.equal(Number(t.db.prepare('SELECT total_amount FROM invoices WHERE visit_id = ?').get(vid).total_amount), 100000, 'двойной счёт');
@@ -36,7 +36,7 @@ test('CRM_LINK_ALL_V1 R7b: мастер на записанный слот — �
     const bid = await callcenterBook(t, TODAY, { hour: 23 });
     const y = await addVisitLine(t, 'reg', bid);
     assert.deepEqual(vsOf(t, bid).map((x) => x.id), [y]);
-    assert.deepEqual(cardLines(t, rid), [], 'CRM_ONE_WAY_V1 (O2) — копии в карточке нет');
+    assert.deepEqual(cardLines(t, rid).map((l) => [l.service_id, l.status, l.visit_service_id]), [[30, 'pending', y]]);
   } finally { t.close(); }
 });
 

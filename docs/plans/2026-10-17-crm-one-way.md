@@ -48,6 +48,30 @@ New columns (migration 246, rewritten): `crm_request_services.released_from_visi
 7c. **Card date on any move** (repro F-9): `crmDisplayLinkMoved` becomes `crmBookingMoved` — every open card that holds the moved visit (any link kind or a booked line, same patient) gets `cardDateOf`, quietly (no stage change, no `updated_at`). `followVisitMove` no longer calls `touchRequest`.
 7. **Card edit attach validates the patient:** a card line written through `/api/db` with a `visit_id` is attached (O1) only if the visit is the card patient's own-building live visit; otherwise its `visit_id` is cleared (the old mirror inserted lines into any visit id the browser sent).
 
+### Owner and controller decisions after the first hand-back (2026-10-17)
+
+- **R2 (owner) — call-centre services in the calendar come back to the card after a cancel.** A service the call
+  centre adds to a booking in the calendar (`booking_lines_add` by a pure call-centre user, on a visit the card holds
+  by a booked line or a call-centre / step-C link), or ANY service added to a booking the card holds through a
+  call-centre link (`crm_booking_links.source = 'callcenter'`: registrar's line via /api/db, cashier line), becomes a
+  **booked line of that card** when added (`one-way.js bookLinesOnCard`: a pointer to the visit line, not a copy —
+  one visit line, one bill). O4 then releases it undated on cancel, like the card's own lines. A registrar's own
+  calendar booking (step C `match`, C′) stays history-only (`crm_card_bookings`); display links never give lines (O9).
+  Tests: `crm-one-way.test.js` R2 test, M1/M7 scenarios; the cells and tests that expected these lines before
+  CRM_ONE_WAY_V1 expect them again (table below).
+- **Partner «arrived» (owner).** A partner is told «arrived» only after a payment or a started service — never on a
+  free, unpaid desk registration (`api/visit-events.js` already uses `cameSurely`). The ported repro
+  `server/services/api/crm-one-way-tw-s8z-deskarrive.test.js` asserts it (not arrived the same day or the next day;
+  a started service → arrived).
+- **R4 (controller) — one cancel rule for every link kind.** After all of a card's bookings are cancelled, its stage and
+  date follow the O10 trail for EVERY link kind (`match`, call-centre, display, a booked line): back to the stage and
+  date before them only if the card is still in the stage those bookings set; otherwise only the date is recomputed
+  (`cardDateOf`). No trail at all: a display link — nothing (P-3); otherwise (a card the booking itself created) — the
+  old rule (first open column, date erased). The trail of a card's bookings includes visits held by its booked lines.
+  Test: `crm-one-way.test.js` R4 test.
+- **Restore guard.** `calendar_book` re-links a restored (cancelled → scheduled/confirmed) visit only when a card holds
+  it, so a restore never creates a call-centre card (step E).
+
 ---
 
 ## Responsibility map — `server/services/crm/booking-mirror.js` (and its satellites)
@@ -284,7 +308,8 @@ Release = `UPDATE crm_request_services SET released_from_visit_id = V, released_
 | `server/services/crm/visit-status.test.js` | отмена одного дня из трёх | O4 | the cancelled day's line is undated, the card date is the remaining day (2026-08-10, not 08-09) |
 | `server/services/rpc/cashier-head.test.js` | CRM: смена врача … добавленная кассой строка … | O2, O3 | the cashier's line is not copied; the cashier removing a booked line → the card line is a released undated wish |
 | `server/db/migrations/246.test.js` | rewritten | O10 | no trigger; columns; repair tables; old-246 database upgrade |
-| `tests/crm-doors/matrix.test.mjs` | 20 cells (`ONE_WAY` map) | O2 ×19, O4 ×1 | only the `lines` column; owner `booked` → `booked+shown` for 4-today-S1 and 5-S1p-crm-wizard; `vs`, stage, date, link unchanged in every cell; 110/110 ru and en |
+| `tests/crm-doors/matrix.test.mjs` | 13 cells (`ONE_WAY` map) | O2 ×11, O4 ×1, O3 (R2) ×1 | only the `lines` column; owner `booked` → `booked+shown` for 4-today-S1 and 5-S1p-crm-wizard; `vs`, stage, date, link unchanged in every cell. After R2 the call-centre calendar cells (2-S1…S4-cc, 7-*-S2Tcal-same, 7-*-S2Tcal-r7a) expect their original lines again (booked lines, not copies); 7-fast-S2Tcal-r7a-drop: the booked line removed by the registrar waits undated (O3) |
+| after R2 | `crm-calendar-mirror` 2, 7, 13; `crm-link-all-display` «запись колл-центра из живой карточки»; `crm-link-all-twin` R7b ×2; `crm-unify-link` booking_lines_add | R2 | back to booked lines on the card (pointers): 2 and 13 as before CRM_ONE_WAY_V1 (13 removes through the card's cross, O3); 7 — the re-added calendar line is a booked line, removed in the calendar it waits undated (O3) |
 
 Kept green by code, not by changing the test: `crm-calendar-mirror` R-I5 (a pre-arrival visit with an invoice gets no new line from a wish — it sits at arrival), R-M8 (call-centre report, reading 7b), `crm-unify-desk-money` C2c/C2g (unplaceable and frozen wishes hold the visit; arrival places them), `visits.test.js` CRM_REAL_BOOKING_V1 ×9 (a wish without a service still holds the visit).
 
@@ -317,7 +342,24 @@ Rules (one transaction; `crm_one_way_repair.done_at` set at the end; a second ca
 - [ ] Step 2 — run `repros` set; for each failing test decide per the classification (`scratchpad/crm-one-way/REPRO-CLASSIFY.md`): one-way expectation (edit with the O-rule in a comment) or obsolete (delete the test; listed in the table below with the reason).
 - [ ] Step 3 — run (ru, en); commit `crm-oneway-6`.
 
-#### Repro outcome table (filled in by Task 6)
+#### Repro outcome table (Task 6)
+
+Classification of every repro test: `scratchpad/crm-one-way/REPRO-CLASSIFY.md` (172 tests). Ported files keep the
+original assertions unless a row below says otherwise; every changed assertion carries a `CRM_ONE_WAY_V1 (O…)`
+comment; every removed test leaves a `CRM_ONE_WAY_V1 — УБРАН: <reason>` line in the ported file.
+
+| set → ported to | tests | outcome |
+|---|---|---|
+| r1 `repros-r1/*` → `server/routes/crm-one-way-r1-*.test.js` (12 files) | 40 | pass as-is except: **F2b** (funnel-a) and **ZZ-WON E1** (money-wonlines-edges) — CHANGE O2/P-7: the desk-closed card has no copied line, it shows the visit in `crm_card_bookings`; **B8** (funnel-b) — CHANGE: `crmWonCardLines` assert removed (function removed in ред. 2), the sync-visit no-op stays |
+| r1 obsolete | 3 | **E1** (`zz-funnel-e`, file not ported) — its premise (paid invoice without a payments row) fails on every build; superseded by r2 `f2-r1e` (ported). **ZZ-MONEY B1** (`zz-money-billed`, not ported) — asserted on the card copy `ml` of the visit line, which O2 no longer creates. **ZZ-WON E2** — exercised `crmWonCardLines` (removed) |
+| r2 `repros-r2/*` → `server/routes/crm-one-way-r2-*.test.js` (14 files) | 79 | pass as-is (F-9 needs reading 7c — card date follows a moved `match` booking quietly); **M2-S2** — the wizard's booked row has no date field since fix S2 (bea1f11d), so the repro now asserts that (still one analysis for the patient) |
+| r2 obsolete | 4 | **M2-I3-residual** — asserted the opposite of owner decision D4/R5 (a phone-matched card becomes the patient's card; its wish of another day sits in that day's booking) — not a one-way change. **M2-S1** — its precondition (the screen lets a second ЭКГ row through) was removed by fix S1 (ff71a63f); the S1-control stays. **M2-S2c ×2** — the booked row of the wizard has no doctor field since fix S2c (bea1f11d) |
+| r3 `repros-r3/zz-r3-funnel` → `crm-one-way-r3-funnel.test.js` | 8 | G1a, G1b, G1c, G1d, G1e, TRIG-a, TRIG-c pass (O10, Task 4); **TRIG-b** obsolete — measured the cost of the 246 trigger, which is dropped. Plus a new O10 read-privacy test |
+| r3 `zz-r3-money` → `crm-one-way-r3-money.test.js` | 8 | M1, M2, M8 ×2, M8-ctl ×3 pass (M1/M2/M8/M8-ctl-match failed before); **M7** — owner decision R2: the operator's calendar consultation is a booked line of the card, the cancel returns it undated (the repro's own assertion, title updated); **M6** obsolete (refuted in the review: no write path for a visit line's quantity) |
+| r3 `zz-r3-same` → `crm-one-way-r3-same.test.js` | 1 | pass (`sameService` stays exported) |
+| 8a `crm-twin-repros` → `server/services/api/crm-one-way-tw-*.test.js` | donesticky, verify-2-0, s8z-cardsave, s8z-mergeline, s8z-verify-api-flow-0-0, s8z-deskarrive | pass as ported; **s8z-deskarrive** rewritten per the owner's decision (a free unpaid desk registration is not «arrived» for the partner; a started service is) |
+| 8a `zz-s8y-verify-1-0` → `server/services/crm/crm-one-way-tw-verify-1-0.test.js` | 3 | two cards / merged — CHANGE O6: the /api/db door refuses the move of a booked line (`BOOKED_LINE_LOCKED`), each day keeps one consultation; control (one card, two identical wishes) — one consultation (reading 7a; failed under the first one-way draft, finding R1) |
+| 8a obsolete | mergedcard, mergedsvc, shared, shared-log, verify-0-0, verify-0-1, verify-0-1b, verify-1-1, verify-2-1 | each moved a booked card line with raw SQL and then called `mirrorVisit` to make the mirror carry its visit line — both the move (O6, refused) and the reconcile (retired) no longer exist. Their money questions (one line per day, ×N and packages kept, shared line, merge) are answered by `booking-mirror-twin.test.js` (todos 3–5 and the merge variant) and `crm-one-way-tw-verify-1-0`. verify-2-1 pinned a since-fixed buggy outcome |
 
 ### Task 7 — Card UI
 

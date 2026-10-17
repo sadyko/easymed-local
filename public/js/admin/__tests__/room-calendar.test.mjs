@@ -1085,6 +1085,8 @@ test('ЗАПИСЬ С НЕСКОЛЬКИМИ УСЛУГАМИ: карточка 
 // колл-центра снимает и добавляет услугу прямо в окне записи — настоящими RPC
 // booking_line_remove / booking_lines_add, — и та же правка оказывается в
 // заявке CRM (сервер, booking-mirror.js). Проверяется база, а не вид окна.
+// CRM_ONE_WAY_V1 (решение владельца R2) — услуга, которую колл-центр добавил к записи в календаре, —
+// строка записи карточки (указатель на строку визита, не копия): отмена вернёт её в карточку без дня.
 test('ОКНО ПРИЁМА: колл-центр снимает и добавляет услугу записи — заявка CRM следует', async () => {
   document.body.children.length = 0;
   const prevRole = USER.role;
@@ -1120,6 +1122,8 @@ test('ОКНО ПРИЁМА: колл-центр снимает и добавл�
       'анализу приписан врач записи');
     assert.equal(DB.prepare("SELECT COUNT(*) n FROM crm_request_services WHERE request_id = 77 AND service_id = 22 AND status = 'pending' AND visit_id = 55").get().n, 1,
       'добавленная в календаре услуга не появилась в заявке');
+    assert.equal(DB.prepare("SELECT visit_service_id FROM crm_request_services WHERE request_id = 77 AND service_id = 22").get().visit_service_id,
+      DB.prepare('SELECT id FROM visit_services WHERE visit_id = 55 AND service_id = 22').get().id, 'строка карточки не указывает на строку визита');
   } finally {
     USER.role = prevRole;
     delete window.easymed;

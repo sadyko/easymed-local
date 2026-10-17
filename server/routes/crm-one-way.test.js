@@ -41,8 +41,10 @@ test('CRM_ONE_WAY_V1 (повтор M1): консультация колл-цен
     const rid = addLead(t.db, { assigned: 3 });
     const v1 = await callcenterBook(t, D3, { svc: 30, doctor: 10 });
     assert.deepEqual(link(t, v1), { request_id: rid, source: 'callcenter' });
-    assert.deepEqual(cardLines(t, rid), [], 'O2 — строки календаря в карточку не копируются');
+    // решение владельца R2 — консультация колл-центра — строка записи карточки (указатель на строку визита)
+    assert.deepEqual(cardLines(t, rid).map((l) => [l.service_id, l.visit_id]), [[30, v1]]);
     assert.equal((await cancel(t, v1, D3, 12)).status, 200);
+    assert.deepEqual(cardLines(t, rid).map((l) => [l.service_id, l.scheduled_date, l.visit_id]), [[30, null, null]], 'O4 — назад в карточку без дня');
     const v2 = await calendarBook(t, 'reg', D3, { hour: 15, svc: 30, doctor: 11 });
     assert.deepEqual(vsAll(t, v2).map((x) => [x.service_id, x.doctor_id]), [[30, 11]]);
     assert.deepEqual(vsAll(t, v1).map((x) => [x.service_id, x.doctor_id]), [[30, 10]], 'отменённая запись — история, строка при ней');
@@ -108,7 +110,7 @@ for (const via of ['addLine', 'desk']) {
   });
 }
 
-test('CRM_ONE_WAY_V1 (повтор M7, O2): колл-центр добавил консультацию в календаре к визиту, который карточка ждала; запись отменили — копии в карточке не было и нет, услуга видна в «Записях пациента» как отменённая запись', async () => {
+test('CRM_ONE_WAY_V1 (повтор M7, решение владельца R2): колл-центр добавил консультацию в календаре к визиту, который карточка ждала, — строка записи карточки; запись отменили — консультация в карточке без дня, строки визита не тронуты', async () => {
   const t = await startCrmApp(seed);
   try {
     const rid = addLead(t.db, { assigned: 3, updated: daysAgoIso(1) });
@@ -116,10 +118,11 @@ test('CRM_ONE_WAY_V1 (повтор M7, O2): колл-центр добавил �
     assert.deepEqual(link(t, v1), { request_id: rid, source: 'match' });
     const add = await t.rpc('booking_lines_add', 'cc', { visit_id: v1, patient_id: 77, lines: [{ service_id: 30, doctor_id: 10, scheduled_at: at(D2, 12) }] });
     assert.equal(add.status, 200, add.text);
-    assert.deepEqual(cardLines(t, rid), []);
+    // анализ — своя запись регистратуры (только история, O2); консультация — услуга колл-центра (R2)
+    assert.deepEqual(cardLines(t, rid).map((l) => [l.service_id, l.visit_id]), [[30, v1]]);
     const before = vsAll(t, v1);
     assert.equal((await cancel(t, v1, D2, 12)).status, 200);
-    assert.deepEqual(cardLines(t, rid), []);
+    assert.deepEqual(cardLines(t, rid).map((l) => [l.service_id, l.scheduled_date, l.visit_id, l.status]), [[30, null, null, 'pending']]);
     assert.deepEqual(vsAll(t, v1), before, 'строки отменённого визита — история');
     assert.deepEqual(await cardBookings(t, rid), [{ visit_id: v1, status: 'cancelled', services: ['Анализ крови', 'Консультация терапевта'] }]);
   } finally { t.close(); }
@@ -236,5 +239,57 @@ test('CRM_ONE_WAY_V1 (O5): запись карточки отменили по �
     assert.deepEqual([l.visit_id, l.visit_service_id, l.scheduled_date, l.released_from_visit_id], [v, x, D3, null]);
     assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['scheduled', D3]);
     assert.deepEqual(money(t), before);
+  } finally { t.close(); }
+});
+
+// ── Решения владельца 2026-10-17 (R2) и контролёра (R4) ─────────────────────
+
+test('CRM_ONE_WAY_V1 (решение владельца R2): услуга, добавленная в запись, которую карточка держит привязкой колл-центра, — строка записи карточки; отмена возвращает её без дня. Своя запись регистратуры — только история', async () => {
+  const t = await startCrmApp(seed);
+  try {
+    // запись колл-центра (привязка 'callcenter'); регистратура дописывает анализ своей дверью
+    const rid = addLead(t.db, { assigned: 3 });
+    const v1 = await callcenterBook(t, D3, { svc: 30, doctor: 10 });
+    assert.deepEqual(link(t, v1), { request_id: rid, source: 'callcenter' });
+    const lab = await addVisitLine(t, 'reg', v1, { svc: 40, doctor: null });
+    assert.deepEqual(cardLines(t, rid).map((l) => [l.service_id, l.visit_service_id]),
+      [[30, vsAll(t, v1).length && t.db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND service_id = 30').get(v1).id], [40, lab]]);
+    const before = money(t);
+    assert.equal((await cancel(t, v1, D3, 12)).status, 200);
+    assert.deepEqual(cardLines(t, rid).map((l) => [l.service_id, l.scheduled_date, l.visit_id]), [[30, null, null], [40, null, null]], 'O4 — обе услуги в карточке без дня');
+    assert.deepEqual(money(t).vs, before.vs, 'строки отменённого визита — история');
+    // своя запись регистратуры (шаг C 'match') — её услуги карточке строками не становятся
+    const rid2 = addLead(t.db, { assigned: 3, updated: daysAgoIso(1), name: 'Вторая' });
+    const v2 = await calendarBook(t, 'reg', D2, { hour: 12, svc: 30, doctor: 10 });
+    assert.equal(link(t, v2).request_id, rid2);
+    assert.equal(link(t, v2).source, 'match');
+    await addVisitLine(t, 'reg', v2, { svc: 40, doctor: null });
+    assert.deepEqual(cardLines(t, rid2), [], 'запись регистратуры скопирована в карточку');
+  } finally { t.close(); }
+});
+
+test('CRM_ONE_WAY_V1 (решение контролёра R4): карточка без строк, две записи регистратуры (шаг C), обе отменили — ступень и дата до первой записи; человек передвинул карточку — ступень его, дата пересчитана', async () => {
+  const t = await startCrmApp(seed);
+  try {
+    const D10 = localDay(10);
+    const rid = addLead(t.db, { status: 'recall', date: D10, updated: daysAgoIso(1), assigned: 3 });
+    const v1 = await calendarBook(t, 'reg', D3, { hour: 12 });
+    const v2 = await calendarBook(t, 'reg', localDay(7), { hour: 15 });
+    assert.equal(link(t, v1).request_id, rid);
+    assert.equal(t.lead(rid).status, 'scheduled');
+    assert.equal((await cancel(t, v1, D3, 12)).status, 200);
+    assert.equal(t.lead(rid).status, 'scheduled', 'вторая запись жива — карточка записана');
+    assert.equal((await cancel(t, v2, localDay(7), 15)).status, 200);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['recall', D10], 'карточка не вернулась туда, где была до записей');
+    void v2;
+    // человек передвинул карточку, пока запись жила, — отмена ступень не трогает
+    const rid2 = addLead(t.db, { status: 'recall', date: D10, updated: daysAgoIso(1), assigned: 3, name: 'Вторая' });
+    t.db.prepare("UPDATE crm_requests SET status = 'stopped' WHERE id = ?").run(rid);   // первая — в сторону
+    const v3 = await calendarBook(t, 'reg', D3, { hour: 16 });
+    assert.equal(link(t, v3).request_id, rid2);
+    const up = await t.dbq('cc', { table: 'crm_requests', op: 'update', values: { status: 'in_process' }, filters: [{ col: 'id', op: 'eq', val: rid2 }] });
+    assert.equal(up.status, 200, up.text);
+    assert.equal((await cancel(t, v3, D3, 16)).status, 200);
+    assert.deepEqual([t.lead(rid2).status, t.lead(rid2).scheduled_date], ['in_process', null], 'отмена переписала ход человека');
   } finally { t.close(); }
 });
