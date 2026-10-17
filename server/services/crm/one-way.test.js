@@ -116,6 +116,28 @@ test('CRM_ONE_WAY_V1 O5: ошибочную отмену отменили — н
   assert.equal(money(db, v).length, 2, 'строки визита не менялись');
 });
 
+// Ревью r4 (п. 2, 4) — восстановление и сразу «Пришёл»; строка, державшая визит без строки визита
+// (I5), снова держит его; строку, отпущенную снятием её строки визита в другом окне (O3), — нет.
+test('CRM_ONE_WAY_V1 O5 (ревью r4): державшая визит без строки — снова держит его, и на «Пришёл» тоже; отпущенная снятием строки визита — нет', () => {
+  const db = clinic(); const rid = card(db); const v = visit(db);
+  const lHeld = wish(db, rid, { svc: 41 });
+  db.prepare('UPDATE crm_request_services SET visit_id = ?, visit_service_id = NULL WHERE id = ?').run(v, lHeld);   // I5: ждёт прихода
+  const lGone = wish(db, rid, { svc: 40 }); const xGone = attach(db, v, lGone);
+  db.prepare('DELETE FROM visit_services WHERE id = ?').run(xGone);
+  releaseOrphans(db, v);   // O3: строку визита убрали в другом окне
+  const before = money(db, v);
+  db.prepare("UPDATE visits SET status = 'cancelled' WHERE id = ?").run(v);
+  releaseCancelled(db, v);
+  assert.deepEqual([line(db, lHeld).visit_id, line(db, lHeld).released_from_visit_id, line(db, lHeld).released_held], [null, v, 1]);
+  assert.deepEqual([line(db, lGone).released_from_visit_id, line(db, lGone).released_held], [v, 0]);
+  db.prepare("UPDATE visits SET status = 'arrived' WHERE id = ?").run(v);
+  assert.equal(restoreReleased(db, v), 1, 'восстановление на «Пришёл» не вернуло державшую строку');
+  const h = line(db, lHeld);
+  assert.deepEqual([h.visit_id, h.visit_service_id, h.scheduled_date, h.released_from_visit_id, h.released_held], [v, null, DAY, null, 0]);
+  assert.deepEqual([line(db, lGone).visit_id, line(db, lGone).released_from_visit_id], [null, v], 'убранная человеком строка вернулась в запись');
+  assert.deepEqual(money(db, v), before, 'восстановление тронуло строки визита');
+});
+
 test('CRM_ONE_WAY_V1 O3: строку визита сняли в другом окне — строка записи отпущена (без дня, отметка визита), чужие строки не тронуты', () => {
   const db = clinic(); const rid = card(db); const v = visit(db);
   const l1 = wish(db, rid, { svc: 40 }); const l2 = wish(db, rid, { svc: 41 });

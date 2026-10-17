@@ -94,7 +94,7 @@ export function wishHome(db, v, line) {
 
 const POINT = `UPDATE crm_request_services
                   SET visit_id = ?, visit_service_id = ?, visit_service_auto = ?, scheduled_date = ?,
-                      released_from_visit_id = NULL, released_vs_id = NULL
+                      released_from_visit_id = NULL, released_vs_id = NULL, released_held = 0
                 WHERE id = ?`;
 
 /**
@@ -348,7 +348,7 @@ export function onVisitLinesAdded(db, visitId, vsIds = null) {
 // ─── O3 / O4 / O5: отпустить и вернуть ─────────────────────────────────────
 
 const RELEASE = `UPDATE crm_request_services
-                    SET released_from_visit_id = ?, released_vs_id = ?, scheduled_date = NULL,
+                    SET released_from_visit_id = ?, released_vs_id = ?, released_held = ?, scheduled_date = NULL,
                         visit_id = NULL, visit_service_id = NULL
                   WHERE id = ?`;
 
@@ -404,7 +404,7 @@ export function releaseOrphans(db, visitId) {
        WHERE l.visit_id = ? AND l.status = 'pending' AND l.visit_service_id IS NOT NULL
          AND (vs.id IS NULL OR vs.visit_id <> l.visit_id OR vs.status = 'cancelled')`).all(V);
     if (!rows.length) return 0;
-    db.transaction(() => { for (const r of rows) db.prepare(RELEASE).run(V, null, r.id); })();
+    db.transaction(() => { for (const r of rows) db.prepare(RELEASE).run(V, null, 0, r.id); })();
     touchCardsOf(db, rows.map((r) => r.request_id));
     return rows.length;
   } catch (e) {
@@ -419,7 +419,7 @@ export function releaseOrphans(db, visitId) {
  */
 export function releaseVisitLine(db, vsId, visitId) {
   const rows = db.prepare("SELECT id, request_id FROM crm_request_services WHERE visit_service_id = ? AND status = 'pending'").all(Number(vsId));
-  for (const r of rows) db.prepare(RELEASE).run(Number(visitId) || null, null, r.id);
+  for (const r of rows) db.prepare(RELEASE).run(Number(visitId) || null, null, 0, r.id);
   return rows.map((r) => r.request_id);
 }
 
@@ -429,39 +429,53 @@ export function releaseVisitLine(db, vsId, visitId) {
  * визита и строки визита (released_vs_id — для O5). Строки самого визита остаются в нём
  * как были (история; не едут, в счёт не идут). Закрытые приходом ('done') — история, не
  * трогаются. Зовётся из правила отмены (crm/visit-status.js) в его транзакции.
+ * Ревью r4 (п. 4) — строка, которая держала визит БЕЗ строки визита (I5: счёт до прихода, она
+ * ждала прихода; хирургия), отпускается с отметкой released_held (миграция 248): ошибочную
+ * отмену отменят — она снова будет держать визит и сядет в него при приходе (O5).
  */
 export function releaseCancelled(db, visitId) {
   const V = Number(visitId);
   const rows = db.prepare(`
-    SELECT l.id, l.request_id,
+    SELECT l.id, l.request_id, (l.visit_service_id IS NULL) AS held,
            CASE WHEN vs.id IS NOT NULL AND vs.visit_id = l.visit_id AND vs.status <> 'cancelled' THEN vs.id END AS keep
       FROM crm_request_services l
       LEFT JOIN visit_services vs ON vs.id = l.visit_service_id
      WHERE l.visit_id = ? AND l.status = 'pending'`).all(V);
-  for (const r of rows) db.prepare(RELEASE).run(V, r.keep ?? null, r.id);
+  for (const r of rows) db.prepare(RELEASE).run(V, r.keep ?? null, Number(r.held) ? 1 : 0, r.id);
   return rows.length;
 }
 
 /**
- * O5 — ОТМЕНУ ОТМЕНИЛИ (ошибочная отмена, визит снова «Записан» / «Подтверждён»): желания,
- * отпущенные этим визитом и с тех пор не тронутые (без дня, без визита, с отметкой), снова
- * указывают на свои строки визита — те никуда не уезжали. Строку визита, которой больше нет
- * (или снятую), желание не получает: остаётся отпущенным. Не бросает.
+ * O5 — ОТМЕНУ ОТМЕНИЛИ (ошибочная отмена; визит снова «Записан», «Подтверждён» — или сразу
+ * «Пришёл», ревью r4 п. 2): желания, отпущенные этим визитом и с тех пор не тронутые (без дня,
+ * без визита, с отметкой), снова указывают на свои строки визита — те никуда не уезжали. Строку
+ * визита, которой больше нет (или снятую), желание не получает: остаётся отпущенным. Строка,
+ * которая держала визит без строки визита (released_held, ревью r4 п. 4), снова держит его —
+ * сядет в визит при приходе (attachHeldLines). Зовётся ДО правила прихода: пришедший визит
+ * закрывает уже вернувшиеся строки. Не бросает.
  */
 export function restoreReleased(db, visitId) {
   try {
     const v = visitRow(db, visitId);
-    if (!v || !PRE_ARRIVAL.includes(v.status)) return 0;
+    if (!v || v.status === 'cancelled') return 0;
+    const untouched = `l.released_from_visit_id = ? AND l.status = 'pending' AND l.visit_id IS NULL
+                         AND (l.scheduled_date IS NULL OR l.scheduled_date = '')`;
     const rows = db.prepare(`
       SELECT l.id, l.request_id, l.released_vs_id, l.visit_service_auto FROM crm_request_services l
         JOIN visit_services vs ON vs.id = l.released_vs_id AND vs.visit_id = ? AND vs.status <> 'cancelled'
-       WHERE l.released_from_visit_id = ? AND l.status = 'pending' AND l.visit_id IS NULL
-         AND (l.scheduled_date IS NULL OR l.scheduled_date = '')`).all(v.id, v.id);
-    if (!rows.length) return 0;
+       WHERE ${untouched}`).all(v.id, v.id);
+    const held = db.prepare(`SELECT l.id FROM crm_request_services l
+                               WHERE ${untouched} AND l.released_held = 1 AND l.released_vs_id IS NULL`).all(v.id);
+    if (!rows.length && !held.length) return 0;
+    const hold = db.prepare(`UPDATE crm_request_services
+                                SET visit_id = ?, visit_service_id = NULL, visit_service_auto = 0, scheduled_date = ?,
+                                    released_from_visit_id = NULL, released_vs_id = NULL, released_held = 0
+                              WHERE id = ?`);
     db.transaction(() => {
       for (const r of rows) db.prepare(POINT).run(v.id, r.released_vs_id, Number(r.visit_service_auto) ? 1 : 0, v.day, r.id);
+      for (const r of held) hold.run(v.id, v.day, r.id);
     })();
-    return rows.length;
+    return rows.length + held.length;
   } catch (e) {
     console.error('[crm-one-way] отпущенные строки визита', visitId, 'не возвращены:', e && e.message);   // CRM_ONE_WAY_V1
     return 0;
@@ -480,7 +494,7 @@ export function clearReleaseOnEdit(db, before, values) {
   for (const [id, r] of before) {
     if (r.released_from_visit_id == null) continue;
     if (!keys.some((k) => String(values[k] ?? '') !== String(r[k] ?? ''))) continue;
-    n += db.prepare('UPDATE crm_request_services SET released_from_visit_id = NULL, released_vs_id = NULL WHERE id = ?').run(Number(id)).changes;
+    n += db.prepare('UPDATE crm_request_services SET released_from_visit_id = NULL, released_vs_id = NULL, released_held = 0 WHERE id = ?').run(Number(id)).changes;
   }
   return n;
 }
