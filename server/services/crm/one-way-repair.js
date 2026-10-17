@@ -46,6 +46,9 @@
 //      строка становится отпущенным желанием без дня с отметкой этого визита. Привязка «только для
 //      воронки» (C′, телефон) строк карточки не брала никогда (O9) — её отменённый визит не доказательство.
 //      Ревью r5 (п. 4): у карточки на этот день есть живая запись (отменённую записали заново) — не трогается.
+//      Ревью r6 (B): у услуги, которой нужен врач (и у консультации по виду приёма), — только желание без врача или
+//      врача отменённой записи (врач её строки визита, у строки без врача — врач визита; для visits.service_id —
+//      врач визита); желание другого названного врача сохраняет свой день.
 //      Ревью r6 (A): «запись этого дня» — и запись, которую перенесли на другой день и потом отменили: её след
 //      (crm_booking_undo.set_scheduled_date) помнит день, на который её поставили.
 //      Ревью r5 (п. 3): только желание, чья услуга была в отменённом визите (его строка визита с тем же ключом
@@ -60,6 +63,8 @@ import { localDate } from '../domain/day.js';
 import { displayLinkSql } from './display-links.js';
 
 const COPY_GAP_SECONDS = 2;
+// Ревью r6 (B) — строке карточки l нужен врач: консультация по виду приёма всегда, услуга — по services.requires_doctor.
+const NEEDS_DOCTOR = "(l.service_id IS NULL OR EXISTS (SELECT 1 FROM services sd WHERE sd.id = l.service_id AND COALESCE(sd.requires_doctor, 0) = 1))";
 const RACED = Symbol('crm-one-way-repair-raced');
 
 export function crmOneWayRepair(db) {
@@ -146,11 +151,16 @@ export function crmOneWayRepair(db) {
                                       AND ${displayLinkSql('b')})
                    -- ревью r5 (п. 3): услуга желания была в отменённом визите (строка визита того же ключа услуги;
                    -- у записи календаря v3.16 строк визита нет — её услуга только в visits.service_id)…
-                   AND ((l.service_id IS NOT NULL AND w.service_id = l.service_id)
+                   -- ревью r6 (B): у услуги, которой нужен врач, и у консультации по виду приёма — только желание без
+                   -- врача или врача этой записи (врач её строки визита, у строки без врача — врач визита; для
+                   -- visits.service_id — врач визита)
+                   AND ((l.service_id IS NOT NULL AND w.service_id = l.service_id
+                         AND (l.doctor_id IS NULL OR NOT ${NEEDS_DOCTOR} OR w.doctor_id = l.doctor_id))
                         OR EXISTS (SELECT 1 FROM visit_services vs WHERE vs.visit_id = w.id
                                     AND ((l.service_id IS NOT NULL AND vs.service_id = l.service_id)
                                          OR (l.service_id IS NULL AND l.consultation_type_id IS NOT NULL
-                                             AND vs.service_id IS NULL AND vs.consultation_type_id = l.consultation_type_id))))
+                                             AND vs.service_id IS NULL AND vs.consultation_type_id = l.consultation_type_id))
+                                    AND (l.doctor_id IS NULL OR NOT ${NEEDS_DOCTOR} OR COALESCE(vs.doctor_id, w.doctor_id) = l.doctor_id)))
                    -- …и желание было до отмены: время отмены — последняя правка отменённого визита (calendar_book
                    -- ставит updated_at), без неё — время записи по её следу или привязке (ещё раньше отмены);
                    -- времени нет — не отпускается

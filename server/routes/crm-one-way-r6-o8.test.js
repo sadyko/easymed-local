@@ -42,3 +42,20 @@ test('CRM_ONE_WAY_V1 (повтор r6) — R6-RD-MOVE: запись календ
     assert.deepEqual(vsAll(t, v2).map((x) => [x.service_id, x.doctor_id]), [[30, 11]], 'отменённая консультация врача 10 села в запись к врачу 11');
   } finally { t.close(); }
 });
+
+test('CRM_ONE_WAY_V1 (повтор r6) — R6-RD-DOC: отменённая запись v3.16 была консультацией врача 10; отдельное желание карточки «консультация у Петрова» (11) того дня исправление не отпускает', async () => {
+  const t = await startCrmApp(seed);
+  try {
+    const rid = addLead(t.db, { assigned: 3, status: 'in_process' });
+    const v = craft(t, rid, { day: D3, doctor: 10 });
+    t.db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by, created_at) VALUES (?, 30, 10, 1, 100000, 100000, 'added', 3, '2026-10-10T09:00:00Z')").run(v);
+    const w10 = wishAt(t, rid, { day: D3, doctor: 10 });
+    const w11 = wishAt(t, rid, { day: D3, doctor: 11 });
+    const out = crmOneWayRepair(t.db);
+    const st = (id) => t.db.prepare('SELECT scheduled_date, released_from_visit_id FROM crm_request_services WHERE id = ?').get(id);
+    console.log('R6-RD-DOC repair:', JSON.stringify(out.counts), 'w10', JSON.stringify(st(w10)), 'w11', JSON.stringify(st(w11)));
+    assert.deepEqual([st(w10).scheduled_date, st(w10).released_from_visit_id], [null, v], 'желание врача отменённой записи не отпущено');
+    assert.equal(st(w11).scheduled_date, D3, 'желание врача 11 (в отменённой записи его не было) потеряло день');
+    assert.equal(st(w11).released_from_visit_id, null);
+  } finally { t.close(); }
+});
