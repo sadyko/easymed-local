@@ -444,16 +444,23 @@ export function releaseVisitLine(db, vsId, visitId) {
  * Ревью r4 (п. 4) — строка, которая держала визит БЕЗ строки визита (I5: счёт до прихода, она
  * ждала прихода; хирургия), отпускается с отметкой released_held (миграция 248): ошибочную
  * отмену отменят — она снова будет держать визит и сядет в него при приходе (O5).
+ * Ревью r4 (п. 1, 5, 6) — КОПИЯ ПРЕЖНЕГО ЗЕРКАЛА (legacy_copy, отметка исправления O8) в карточку
+ * не возвращается: она снимается ('cancelled', ссылки остаются историей). Иначе копия стала бы
+ * вторым желанием той же услуги рядом с желанием оператора.
  */
 export function releaseCancelled(db, visitId) {
   const V = Number(visitId);
   const rows = db.prepare(`
-    SELECT l.id, l.request_id, (l.visit_service_id IS NULL) AS held,
+    SELECT l.id, l.request_id, (l.visit_service_id IS NULL) AS held, COALESCE(l.legacy_copy, 0) AS copy,
            CASE WHEN vs.id IS NOT NULL AND vs.visit_id = l.visit_id AND vs.status <> 'cancelled' THEN vs.id END AS keep
       FROM crm_request_services l
       LEFT JOIN visit_services vs ON vs.id = l.visit_service_id
      WHERE l.visit_id = ? AND l.status = 'pending'`).all(V);
-  for (const r of rows) db.prepare(RELEASE).run(V, r.keep ?? null, Number(r.held) ? 1 : 0, r.id);
+  const drop = db.prepare("UPDATE crm_request_services SET status = 'cancelled' WHERE id = ?");
+  for (const r of rows) {
+    if (Number(r.copy)) { drop.run(r.id); continue; }   // O8 — копия прежнего зеркала
+    db.prepare(RELEASE).run(V, r.keep ?? null, Number(r.held) ? 1 : 0, r.id);
+  }
   return rows.length;
 }
 

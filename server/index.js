@@ -195,9 +195,10 @@ if (isMain) {
     const repaired = crmUnifyRepair(db);
     if (repaired.summary) console.log('  ' + repaired.summary);
   } catch (e) { console.warn('[crm-unify-repair]', e && e.message); }
-  // CRM_ONE_WAY_V1 (O8) — строки карточек на одно направление: копии зеркала уходят, строки
-  // отменённых записей ждут без дня (миграция 246, crm/one-way-repair.js). Тоже один раз, до
-  // первого прохода «Не пришёл» и до первой записи.
+  // CRM_ONE_WAY_V1 (O8) — строки карточек на одно направление: ничего не удаляется (решение
+  // контролёра, ревью r4) — копии зеркала отмечены (legacy_copy), строки отменённых записей ждут
+  // без дня (миграции 246, 248, crm/one-way-repair.js). Тоже один раз, до первого прохода «Не
+  // пришёл» и до первой записи.
   try {
     const oneWay = crmOneWayRepair(db);
     if (oneWay.summary) console.log('  ' + oneWay.summary);

@@ -60,6 +60,15 @@ date; nothing is added to any visit automatically until the operator books again
 - **O8 Upgrade repair (one-off, logged, conservative).** Existing mirror-made card lines (auto = 1) that point at a
   visit line are deleted (the display shows the visit). Booked lines whose visit is cancelled become released
   undated wishes (O4). A line an operator created is never deleted. Counts go to a repair log; the one-off runs once.
+  *Revised 2026-10-17 (controller decision on adversarial review r4, items 1, 5, 6) — the repair DELETES NOTHING.*
+  On real old databases the 0–2 s "copy" rule deleted a call-centre calendar line (a booked line of the card by
+  owner decision R2) and an operator wish saved 1 s after the registrar line. Now: (a) lines that point at a visit
+  line stay booked lines and are marked by origin — a call-centre-held visit (R2) or an operator wish older than the
+  visit line is released undated by a later cancel; a copy on a registrar/'match'-held visit (only the 0–2 s rule
+  decides this) gets `legacy_copy = 1` and a later cancel cancels it instead of releasing it; (b) a dated wish with no
+  pointer whose card has evidence of a cancelled booking that day (`crm_booking_undo` or `crm_booking_links` to a
+  cancelled visit on that date) becomes a released undated wish (`released_from_visit_id` = that visit). Every row
+  decided on is logged; visit lines and invoices are never touched; still once, in one transaction (migration 248).
 - **O9 Unchanged:** display links and CRM_LINK_ALL rules P-1…P-7 (they never copy); «Отказ» cancels call-centre
   bookings (cancellableBookingsOf); owner decisions (registrar never works in CRM; no card for walk-ins;
   «Пришёл»/«Отказ» closed forever; 72-hour window; «Не пришёл» reopenable); a card's STAGE never decides SERVICES.

@@ -326,6 +326,23 @@ Kept green by code, not by changing the test: `crm-calendar-mirror` R-I5 (a pre-
 
 **Files:** create `server/services/crm/one-way-repair.js`, `one-way-repair.test.js`; modify `server/index.js` (after `crmUnifyRepair`, before the no-show schedule).
 
+**Revised in review r4 (controller decision, items 1, 5, 6): the repair deletes nothing** — rules as implemented
+(`server/services/crm/one-way-repair.js`, migration 248 `legacy_copy` / `released_held`):
+1. Lines pointing at a visit line, by origin. *Copy* = `visit_service_auto = 0`, created 0–2 s after its visit line,
+   and the visit is NOT held by a call-centre link of this card. Live visit: copy → `legacy_copy = 1` (`marked_copy`;
+   a later cancel cancels it), anything else → kept as a booked line (`kept_booked`, log only; a later cancel
+   releases it undated). Cancelled visit: copy → `status = 'cancelled'` (`cancelled_copy`), else released undated
+   (`released`). Pointer-only line into a cancelled visit: copy → `cancelled_copy`, same day → `released_stale`,
+   another day → pointer cleared (`cleared_stale`). Pointer into a live visit with no hold → `cleared_moved`; held
+   visit ≠ pointer's visit → `released_cross`. 'done' copies → log only (`kept_done`).
+2. Pending line holding a cancelled visit without a visit line → released with `released_held = 1` (`released`).
+3. Dated pointer-less wish whose card has a cancelled booking that day (`crm_booking_undo` / `crm_booking_links`)
+   → released undated with `released_from_visit_id` = that visit (`released_dated`).
+4. Never: deleting rows, visit_services, invoices, payments, card stages/dates; lines with status 'cancelled'.
+Tests: `one-way-repair.test.js` (4), `server/routes/crm-one-way-r4-o8.test.js` (H2, H3) and the old-database upgrade
+`server/routes/crm-one-way-r4-o8-old.test.js` (5, needs `CRM_O8_OLD_DB` = the review's `r4/olddb` or `r4/v316db`).
+
+*Superseded first version (kept for the record):*
 Rules (one transaction; `crm_one_way_repair.done_at` set at the end; a second call does nothing):
 1. **Mirror copies → deleted** (log `deleted_copy`): pending/done card line with `visit_service_auto = 0`, `visit_id = vs.visit_id`, created **0–2 s after its visit line** (`julianday(l.created_at) - julianday(vs.created_at)` in [0, 2/86400]) — the step-3 / cashier copy is inserted in the same request as the visit line; an operator's line is saved by the card window (always without a visit) and can only come later. Ambiguous lines (older, or later than 2 s) are kept as booked lines and logged `kept_ambiguous`.
 2. **Booked lines of a cancelled visit → released undated wishes** (log `released`): pending, `visit_id` = a cancelled visit.
