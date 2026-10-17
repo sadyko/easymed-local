@@ -89,7 +89,7 @@ export function arrivedByEvidence(db, visitId) {
 }
 
 /** До прихода по статусу И по доказательствам. */
-function beforeArrival(db, v) {
+export function beforeArrival(db, v) {   // CRM_ONE_WAY_V1 — экспорт для crm/one-way.js
   return isPreArrival(v) && !arrivedByEvidence(db, v.id);
 }
 
