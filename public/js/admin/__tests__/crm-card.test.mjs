@@ -153,6 +153,7 @@ let BOARD_CFG = null;
 let CFG_FAIL = false;
 let LINES_HOLD = null;
 let LINES_ERROR = false;
+let LINES_SAVE_ERROR = null;   // CRM_ONE_WAY_V1 (ревью r4, п. 8) — отказ двери /api/db на правку или вставку строки заявки
 // CRM_UNIFY_V1 — SWEEP_LINES (что видело ночное сметание) убран вместе с самим
 // сметанием: «Не пришёл» ставит сервер (server/services/crm/no-show.js).
 // CRM_REAL_BOOKING_V1 — ВИЗИТЫ, читаемые карточкой: из них подставляется время
@@ -231,6 +232,9 @@ globalThis.fetch = async (url, opts) => {
     if (body && body.table === 'users' && body.op === 'select'
         && (body.filters || []).some((f) => f.col === 'role' && f.op === 'eq' && f.val === 'doctor')) {
       return jsonOk(DOCTORS);
+    }
+    if (LINES_SAVE_ERROR && body && body.table === 'crm_request_services' && (body.op === 'update' || body.op === 'insert')) {
+      return { ok: false, json: async () => ({ error: LINES_SAVE_ERROR }) };
     }
     if (body && body.table === 'crm_request_services' && body.op === 'select') {
       // CRM_REAL_BOOKING_V1 — задержка и отказ касаются ТОЛЬКО выборки строк
@@ -1589,6 +1593,50 @@ test('CRM_ONE_WAY_V1 (O4): строка, отпущенная отменой з�
   assert.deepStrictEqual(CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'insert'), [], 'строка вписана заново — отметка отпуска потеряна');
   SERVICES = []; REQ_LINES = []; DOCTORS = [];
   window.easymed.state.user = null;
+});
+
+// CRM_ONE_WAY_V1 (ревью r4, п. 8) — отказ двери в тосте карточки на узбекском и английском экране: шаблон
+// тоста переводился, а подставленный текст сервера оставался русским.
+test('CRM_ONE_WAY_V1 (ревью r4): отказ сервера «услуга уже записана» в тосте карточки — на языке экрана, без кириллицы (uz, en)', async () => {
+  const { setLang } = await import('../i18n.js');
+  const { BOOKED_LINE_LOCKED } = await import('../../../../server/services/crm/one-way.js');
+  const prefix = { uz: 'Ariza xizmatlari saqlanmadi:', en: "The request's services were not saved:" };
+  // setLang шлёт событие окна — у стенда его нет; заглушка только на время теста, язык — назад в любом случае.
+  const hadDispatch = typeof window.dispatchEvent === 'function';
+  const hadEvent = typeof globalThis.CustomEvent === 'function';
+  if (!hadDispatch) window.dispatchEvent = () => true;
+  if (!hadEvent) globalThis.CustomEvent = class { constructor(type, o) { this.type = type; Object.assign(this, o || {}); } };
+  try {
+  for (const lang of ['uz', 'en']) {
+    forgetSlots();
+    SERVICES = [DOC_SVC];
+    DOCTORS = [DOCTOR];
+    REQ_LINES = [{ id: 931, service_id: DOC_SVC.id, scheduled_date: null, status: 'pending', doctor_id: DOCTOR.id, visit_id: null, released_from_visit_id: 555 }];
+    const modal = await openRequest({
+      id: 1, status: 'in_process', service_id: DOC_SVC.id, scheduled_date: null,
+      full_name: 'Каримова Азиза', phone: UZ_RAW,
+      patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+    }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+    await tick(30);
+    const d = dateInputs(modal).pop();
+    d.value = LAB_DAY; fire(d);
+    LINES_SAVE_ERROR = { code: 'conflict', message: BOOKED_LINE_LOCKED };
+    TOASTS.length = 0;
+    setLang(lang);
+    try { await saveRequest(modal); } finally { setLang('ru'); LINES_SAVE_ERROR = null; }
+    const shown = TOASTS.find((t) => t.startsWith(prefix[lang]));
+    assert.ok(shown, lang + ': тоста об отказе нет: ' + JSON.stringify(TOASTS));
+    assert.doesNotMatch(shown, /[А-Яа-яЁё]/, lang + ': кириллица в тосте: ' + shown);
+    SERVICES = []; REQ_LINES = []; DOCTORS = [];
+    window.easymed.state.user = null;
+  }
+  } finally {
+    setLang('ru');
+    LINES_SAVE_ERROR = null; SERVICES = []; REQ_LINES = []; DOCTORS = [];
+    window.easymed.state.user = null;
+    if (!hadDispatch) delete window.dispatchEvent;
+    if (!hadEvent) delete globalThis.CustomEvent;
+  }
 });
 
 test('CRM_ONE_WAY_V1 (O3): новая услуга на день записи уходит в эту запись (visit_id записи)', async () => {

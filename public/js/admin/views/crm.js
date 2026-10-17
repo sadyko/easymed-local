@@ -2529,7 +2529,9 @@ async function paint() {
                 if (insErr) throw new Error(insErr.message || insErr);
                 await reloadLines(requestId);   // номера новых строк — чтобы повторное сохранение не вписало их снова
             } catch (e) {
-                toast(trf('Услуги заявки не сохранились: {msg}', { msg: (e && e.message) || e }), 'fail');
+                // CRM_ONE_WAY_V1 (ревью r4, п. 8) — текст отказа сервера (BOOKED_LINE_LOCKED и др.) — тоже
+                // переводом: шаблон переводит trf, подставленное сообщение — tr (словарь, шаблоны сервера).
+                toast(trf('Услуги заявки не сохранились: {msg}', { msg: tr((e && e.message) || String(e)) }), 'fail');
             }
         }
 
@@ -2962,7 +2964,7 @@ async function paint() {
                         .eq('request_id', requestId).eq('scheduled_date', day).eq('status', 'pending');
                     if (linkErr) {
                         toast(trf('Запись на {day} сохранена, но строки не связаны с визитом: {msg}',
-                            { day: human, msg: linkErr.message || linkErr }), 'fail');
+                            { day: human, msg: tr(linkErr.message || String(linkErr)) }), 'fail');   // ревью r4, п. 8
                     }
                 }
                 if (touched) {
@@ -3023,7 +3025,7 @@ async function paint() {
                         await setVisitStatus(v, 'cancelled');
                         toast(trf('Старый приём на {d} отменён.', { d: day }), 'ok');
                     } catch (e) {
-                        toast(trf('Старый приём на {d} отменить не удалось: {msg}', { d: day, msg: (e && e.message) || e }), 'fail');
+                        toast(trf('Старый приём на {d} отменить не удалось: {msg}', { d: day, msg: tr((e && e.message) || String(e)) }), 'fail');   // ревью r4, п. 8
                     }
                 }
             }
