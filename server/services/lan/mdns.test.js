@@ -163,13 +163,21 @@ test('две сетевые карты: спросившему — адрес и
   assert.deepEqual(sock.sent.at(-1).m.answers.map((a) => a.address), ['192.168.0.20', '192.168.1.156']);
 });
 
-test('во время работы чужой сервер назвался тем же именем: меньший адрес остаётся и объявляет себя, больший — easymed-2', async (t) => {
-  const { r, sock } = await fakeResponder(t);
+test('во время работы чужой сервер назвался тем же именем: меньший адрес остаётся (и объявляет себя — не чаще раза в секунду), больший — easymed-2', async (t) => {
+  let clock = 1000000;
+  const { r, sock } = await fakeResponder(t, {}, { now: () => clock });
   await until(() => r.status().state === 'active');
+  clock += 5000;   // с первого объявления прошло больше секунды
   sock.sent.length = 0;
   sock.emit('message', buildResponse({ name: 'easymed.local', addresses: ['192.168.1.200'] }), fromLan('192.168.1.200'));
+  await until(() => sock.sent.some((s) => s.m.qr));
   assert.equal(r.status().name, 'easymed.local', '.156 меньше .200 — имя остаётся');
-  assert.ok(sock.sent.some((s) => s.m.qr && s.m.answers.some((a) => a.name === 'easymed.local' && a.address === '192.168.1.156')), 'объявил себя сразу');
+  assert.ok(sock.sent.some((s) => s.m.qr && s.m.answers.some((a) => a.name === 'easymed.local' && a.address === '192.168.1.156')), 'объявил себя');
+  // Ещё притязание в ту же секунду — объявления нет (ограничитель), имя то же.
+  sock.sent.length = 0;
+  sock.emit('message', buildResponse({ name: 'easymed.local', addresses: ['192.168.1.200'] }), fromLan('192.168.1.200'));
+  await wait(30);
+  assert.equal(sock.sent.filter((s) => s.m.qr).length, 0);
   sock.emit('message', buildResponse({ name: 'easymed.local', addresses: ['192.168.1.100'] }), fromLan('192.168.1.100'));
   await until(() => r.status().state === 'active' && r.status().name === 'easymed-2.local');
   assert.equal(r.status().suffixed, true);
