@@ -337,7 +337,8 @@ Kept green by code, not by changing the test: `crm-calendar-mirror` R-I5 (a pre-
    visit ≠ pointer's visit → `released_cross`. 'done' copies → log only (`kept_done`).
 2. Pending line holding a cancelled visit without a visit line → released with `released_held = 1` (`released`).
 3. Dated pointer-less wish whose card has a cancelled booking that day (`crm_booking_undo` / `crm_booking_links`)
-   → released undated with `released_from_visit_id` = that visit (`released_dated`).
+   → released undated with `released_from_visit_id` = that visit (`released_dated`). A booking linked to the card only for display (C′, phone —
+   `patient` / `phone` links) is not evidence: such links never took card lines (O9).
 4. Never: deleting rows, visit_services, invoices, payments, card stages/dates; lines with status 'cancelled'.
 Tests: `one-way-repair.test.js` (4), `server/routes/crm-one-way-r4-o8.test.js` (H2, H3) and the old-database upgrade
 `server/routes/crm-one-way-r4-o8-old.test.js` (5, needs `CRM_O8_OLD_DB` = the review's `r4/olddb` or `r4/v316db`).
@@ -405,6 +406,39 @@ Narrow sets only (the owner runs the whole suite); `LIS_ENABLED=0`; en-US with t
 - New rule tests: `one-way.test.js` 13, `crm-one-way.test.js` 13, `one-way-repair.test.js` 3, `246.test.js` 2.
 - Playwright (own server, random port, in-memory DB, temp licensed data dir): card lines at 360 px (ru/uz/en) and 1280 px — locked day of a booked line with «Перенос записи — в календаре», released note, no emoji, type scale, `Icon()`; rows wrap at 360 px. The modal's form column overflows by ~33 px at 360 px on HEAD too (pre-existing, not part of this work).
 - Marker sweep: every changed or new file carries CRM_ONE_WAY_V1; no code calls `mirrorVisit`, `mirrorCashierLine`, `placeHeldLines`, `settleStaleCopies`, `mirrorReschedule`, `releaseCancelledLines` or `crmWonCardLines`.
+
+### Adversarial review r4 of 065bc16a (2026-10-17) — fixes, test-first
+
+Every repro of the review is a real test in the clone; each item was committed separately (messages
+`crm-oneway-r4-<n>`).
+
+| item | rule | change | tests |
+|---|---|---|---|
+| 2 | O5 | A mistaken cancel can be undone by **any** status, «Пришёл» included. `restoreReleased` runs before the arrival rule (`visit-status.js`). Before this, a cancelled → arrived visit left the delivered service as «назначьте новую дату» and the card never closed. | H1 (`crm-one-way-r4-money-a`), `one-way.test.js` |
+| 4 | O5 / I5 | A line that held the visit **without** a visit line is released with `released_held = 1` (migration 248). A restore makes it hold the visit again, so the arrival places it. A line released because a human removed its visit line (O3) is not brought back. | M5 (`-money-c`), `one-way.test.js` |
+| 3 | O1 | "Same service" now works both ways. A doctor-less side matches any doctor in `sameAsWish`, adoption and yield. The visit line's doctor never changes, and the own doctor's line is taken first. | M1, D1, S1 (`-money-b`), `one-way.test.js` |
+| 7 | O10 / R4 | A cancel recomputes or clears the card date **only** when that date is the cancelled booking's day. That day includes the day the booking was moved from in the same `calendar_book` call (`fromVisitDate`), found by the falsification check. | F1 (`-funnel`), `crm-one-way.test.js` (2) |
+| 8 | UI i18n | The card's refusal toasts translate the server text too (`tr` inside `trf`; 3 sites in `crm.js`). | `crm-card.test.mjs`: real save with a door refusal, uz and en |
+| 1+5+6 | O8 | The repair **deletes nothing** (controller decision). Rules are in Task 5, "Revised in review r4". A cancelled booking linked only for display (C′, phone) is not evidence for rule 3 (falsification check). | `one-way-repair.test.js` (4), H2/H3 (`-o8`), old databases (`-o8-old`, 5 tests, `CRM_O8_OLD_DB`) |
+| P1 | privacy | Passes unchanged; ported. | `-privacy` |
+| optional | UI | In «Даты приёма», the service rows and «Одна дата для всех» wrap at 360 px; the 1280 px layout is unchanged. | `crm-card.test.mjs`; Playwright `crm-one-way/ui/sheet-ui.mjs` (scratchpad) at 360 px ru/uz/en: nothing past the sheet's edge |
+
+Known limit (by decision): O8 can only use the 0–2 s rule to tell a mirror copy from an operator wish. In the
+review's old-D database, the operator's analysis wish (saved 1 s after the registrar line) is therefore marked
+`legacy_copy`. The repair keeps it, but a later cancel of that registrar booking cancels it instead of releasing it.
+
+Verification after r4 (narrow sets; `LIS_ENABLED=0`; disk guard 120 MB):
+
+| set | ru | en-US |
+|---|---|---|
+| wide CRM (incl. every ported repro, migrations 246–248) | 1145: 1138 pass, 0 fail, 5 skipped (old-database test without `CRM_O8_OLD_DB`), 2 todo | same |
+| door matrix | 110/110 | 110/110 |
+| money (cashier*, billing*) | 243/243 | 243/243 |
+| client harnesses | 419/419 | 419/419 |
+| server guards | 38/38 | 38/38 |
+| UI guards | 43/43 | 43/43 |
+| repro ports (`crm-one-way-r*`, services/crm and services/api ports) | 161: 156 pass, 5 skipped (same file) | same |
+| O8 upgrade of the review's old databases (`CRM_O8_OLD_DB` = `r4/olddb`; `r4/v316db`) | 5/5; 5/5 | 5/5; 5/5 |
 
 ---
 
