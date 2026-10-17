@@ -278,7 +278,10 @@ test('отмена одного дня из трёх: заявка остаёт�
   assert.equal(line(db, d1).visit_id, null);
   const row = reqRow(db, rid);
   assert.equal(row.status, 'scheduled', 'второй день никуда не делся — заявка всё ещё записана');
-  assert.equal(row.scheduled_date, '2026-08-09', 'дата обязана остаться ближайшей ждущей строкой');
+  // CRM_ONE_WAY_V1 (O4) — ОБНОВЛЕНО НАМЕРЕННО: строка отменённого дня вернулась в карточку без
+  // дня, и ближайшая ждущая строка — второй день.
+  assert.equal(db.prepare('SELECT scheduled_date FROM crm_request_services WHERE id = ?').get(d1).scheduled_date, null, 'строка отменённого дня сохранила день');
+  assert.equal(row.scheduled_date, '2026-08-10', 'дата обязана стать днём оставшейся записи');
   db.close();
 });
 

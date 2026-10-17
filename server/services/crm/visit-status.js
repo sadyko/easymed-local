@@ -40,7 +40,10 @@ import { inWindowSql, windowArg, missedRecentlySql, missedRecentlyArgs } from '.
 // CRM_UNIFY_V1 — приход ставит в визит строки, которые визит держит, а в нём их
 // нет (вызов во время прихода, не при загрузке модуля: booking-mirror.js сам
 // берёт отсюда EVIDENCE_SERVICE_STATUSES).
-import { placeHeldLines, cardDateOf } from './booking-mirror.js';   // CRM_UNIFY_V1 (ревью, M-1) — cardDateOf
+import { cardDateOf } from './booking-mirror.js';   // CRM_UNIFY_V1 (ревью, M-1) — cardDateOf
+// CRM_ONE_WAY_V1 — строки карточки: приход сажает в визит строки, державшие его без строки
+// визита (O1); отмена отпускает строки записи в карточку без дня (O4); ошибочная отмена — назад (O5).
+import { attachHeldLines, releaseCancelled, restoreReleased } from './one-way.js';
 import { isDisplaySource } from './display-links.js';   // CRM_LINK_ALL_V1 (ред. 2б, P-3) — привязки «только для воронки»
 
 /** Статусы визита, означающие «пациент здесь». Словарь — из миграции 003. */
@@ -190,86 +193,13 @@ function liftMissed(db, { patientId, day, won, write }) {
   for (const p of reqs) writeParent(write, p, won, p.scheduled_date);
 }
 
-/**
- * CRM_LINK_ALL_V1 (2026-10-16) — CRM_TWIN_LINE: ОТМЕНЁННАЯ ЗАПИСЬ НЕ ДАЁТ ВТОРОЙ УСЛУГИ.
- *
- * Отмена отпускала строку карточки (visit_id → NULL), но оставляла ей строку визита
- * отменённой записи ('added', свободную). Следующая запись того же дня брала строку
- * карточки по дате (crm/visit-link.js, шаг A), и сверка зеркала ПЕРЕНОСИЛА ту строку в
- * новый визит; экран добавлял свою — две консультации в счёте, а запись другой услуги
- * получала консультацию-фантом. Правила зеркала не меняются; меняется то, с чем строка
- * карточки уходит из отменённой записи. Строки этого визита, ждущие ('pending'):
- *
- *   • ЭХО ЧУЖОЙ ЗАПИСИ — снимается ('cancelled'). Визит карточка держит привязкой шага C
- *     ('match': регистратура записала сама, карточка лишь ждала этот день), а её строка —
- *     копия строки регистратуры (visit_service_auto = 0, строка визита — в ЭТОМ визите),
- *     заведённая сверкой при записи или после неё (created_at не раньше визита). Карточка
- *     такой услуги не просила: запись отменили — нет и копии.
- *   • ЖЕЛАНИЕ КАРТОЧКИ, ВЗЯВШЕЕ СТРОКУ РЕГИСТРАТУРЫ (та же привязка, строка старше визита)
- *     — ждёт снова, но без строки отменённого визита: следующая запись заведёт или возьмёт
- *     свою (homeFor), и строка экрана той же услуги займёт её место (сеть R7b).
- *   • ЗАПИСЬ КАРТОЧКИ (колл-центр из карточки или её строки взяли визит) — ждёт снова и
- *     везёт свою строку визита, как прежде (курс ×N, пакет и цена регистратуры переживают
- *     повторную запись); строка регистратуры в ней (visit_service_auto = 0) становится
- *     строкой записи (auto = 1): строка экрана той же услуги в новой записи займёт её
- *     место, а не встанет второй.
- *   • СТРОКА ЗЕРКАЛА (visit_service_auto = 1 — её завела сверка по желанию карточки) —
- *     желание ждёт снова, без неё: везти нечего (цена — прайс, количество — 1), а поехав,
- *     она вставала второй рядом со строкой, которую новая запись уже завела по желанию
- *     другой карточки того же дня (две консультации).
- *   • Прочее — как прежде: ждёт снова (visit_id → NULL).
- */
-const LINE_DROP = "UPDATE crm_request_services SET status = 'cancelled' WHERE id = ?";
-const LINE_BARE = 'UPDATE crm_request_services SET visit_id = NULL, visit_service_id = NULL, visit_service_auto = 0 WHERE id = ?';
-const LINE_CARRY = 'UPDATE crm_request_services SET visit_id = NULL, visit_service_auto = 1 WHERE id = ?';
-
-/** Строка регистратуры отменённой записи w у строки карточки l (visit_service_auto = 0): что с ней. */
-function settleCopy(db, l, w) {
-  let viaMatch = false;
-  try {
-    viaMatch = !!db.prepare("SELECT 1 FROM crm_booking_links WHERE visit_id = ? AND request_id = ? AND source = 'match'").get(w.id, l.request_id);
-  } catch { /* сборка без 187 */ }
-  if (!viaMatch) db.prepare(LINE_CARRY).run(l.id);
-  else if (String(l.created_at) >= String(w.created_at)) db.prepare(LINE_DROP).run(l.id);
-  else db.prepare(LINE_BARE).run(l.id);
-}
-
-function releaseCancelledLines(db, visitId) {
-  const w = db.prepare('SELECT id, created_at FROM visits WHERE id = ?').get(visitId);
-  const lines = db.prepare(`SELECT l.id, l.request_id, l.visit_service_auto, l.created_at, vs.visit_id AS vs_visit
-                              FROM crm_request_services l LEFT JOIN visit_services vs ON vs.id = l.visit_service_id
-                             WHERE l.visit_id = ? AND l.status = 'pending'`).all(visitId);
-  const free = db.prepare('UPDATE crm_request_services SET visit_id = NULL WHERE id = ?');
-  for (const l of lines) {
-    const inThis = !!w && Number(l.vs_visit) === Number(visitId);
-    if (inThis && !Number(l.visit_service_auto)) settleCopy(db, l, w);
-    else if (inThis) db.prepare(LINE_BARE).run(l.id);   // строка зеркала (auto = 1): её не везут — новая запись заведёт свою или возьмёт общую
-    else free.run(l.id);
-  }
-}
-
-/**
- * CRM_LINK_ALL_V1 (CRM_TWIN_LINE) — СТРОКИ, ОТПУЩЕННЫЕ ОТМЕНОЙ ДО ЭТОЙ ПРАВКИ. Прежняя
- * отмена оставляла ждущей строке карточки строку регистратуры отменённого визита
- * (visit_service_auto = 0) — такие строки ещё лежат в базах клиник. Шаг A связи
- * (crm/visit-link.js) перед тем, как строки карточки возьмут визит, разбирает их тем же
- * правилом, что и отмена теперь (settleCopy). Строки, которые разобрала новая отмена, сюда
- * не попадают: копия чужой записи снята, остальные — без строки или со строкой записи
- * (auto = 1). Не бросает.
- */
-export function settleStaleCopies(db, requestId) {
-  try {
-    const rows = db.prepare(`SELECT l.id, l.request_id, l.created_at, w.id AS w_id, w.created_at AS w_created
-                               FROM crm_request_services l
-                               JOIN visit_services vs ON vs.id = l.visit_service_id
-                               JOIN visits w ON w.id = vs.visit_id AND w.status = 'cancelled'
-                              WHERE l.request_id = ? AND l.status = 'pending' AND COALESCE(l.visit_service_auto, 0) = 0
-                                AND (l.visit_id IS NULL OR l.visit_id = w.id)`).all(requestId);
-    for (const r of rows) settleCopy(db, r, { id: r.w_id, created_at: r.w_created });
-  } catch (e) {
-    console.error('[crm] старые строки отменённой записи карточки', requestId, 'не разобраны:', e && e.message);
-  }
-}
+// CRM_ONE_WAY_V1 — ЗДЕСЬ БЫЛИ releaseCancelledLines / settleCopy / settleStaleCopies
+// (CRM_LINK_ALL_V1, CRM_TWIN_LINE, d6630801): отмена разбирала строки карточки — копию чужой
+// записи снимала, желание отпускала без строки, строку записи везла дальше. Везти больше
+// нечего: строки визита из карточки не копируются (O2), и отмена просто отпускает строки
+// записи в карточку без дня (crm/one-way.js releaseCancelled, O4). Старые ссылки на строки
+// отменённых визитов перезаписывает посадка желания (attachWish), а разовое исправление
+// при установке (crm/one-way-repair.js, O8) их снимает.
 
 /**
  * ЧТО ДЕЛАЕТ СМЕНА СТАТУСА ВИЗИТА С ЗАЯВКАМИ, ЧЬИ СТРОКИ ЕГО ДЕРЖАТ.
@@ -277,7 +207,7 @@ export function settleStaleCopies(db, requestId) {
  *   arrived    — строки этого визита закрываются ('done'), и заявка становится
  *                конверсией. CRM_UNIFY_V1 (инвариант) — закрывается только
  *                строка, чья услуга В ВИЗИТЕ: сначала строки без строки визита
- *                встают в визит (placeHeldLines), не встали — ждут. CRM_UNIFY_V1 — ПЕРВЫЙ ПРИХОД ЗАКРЫВАЕТ КАРТОЧКУ
+ *                встают в визит (attachHeldLines, CRM_ONE_WAY_V1), не встали — ждут. CRM_UNIFY_V1 — ПЕРВЫЙ ПРИХОД ЗАКРЫВАЕТ КАРТОЧКУ
  *                (решение владельца 1, Р8): «Пришёл» ставится сразу, даже если
  *                у заявки остались строки на другие дни, — они остаются в
  *                карточке и в календаре как записи (прежде заявка на три дня
@@ -292,7 +222,9 @@ export function settleStaleCopies(db, requestId) {
  *                Строки остаются со своим visit_id: неявка — это факт об
  *                этой записи, и он не стирается. Записать такую строку заново
  *                можно (см. crmLinkVisit, шаг A: мёртвый визит не держит — CRM_UNIFY_V1).
- *   cancelled  — строки снимаются со слота и снова ждут записи; заявка
+ *   cancelled  — CRM_ONE_WAY_V1 (O4): строки записи возвращаются в карточку БЕЗ ДНЯ
+ *                (отпущенные: сами в визит не садятся, день назначает оператор);
+ *                строки визита остаются в нём как история; заявка
  *                откатывается из «Записан» в первую открытую колонку, если
  *                занятых дней у неё больше не осталось.
  *
@@ -309,7 +241,7 @@ export function settleStaleCopies(db, requestId) {
  *        работы здесь нет. catchUp (CRM_UNIFY_V1, 2026-10-10) — зовёт
  *        догоняющий проход (crm/no-show.js crmArrivalCatchUp), переход делает
  *        сам сервер: строки, которых нет в визите, в визит НЕ ставятся
- *        (placeHeldLines — деньги проходу трогать нельзя; такая строка ждёт, как
+ *        (attachHeldLines — деньги проходу трогать нельзя; такая строка ждёт, как
  *        любая непоставленная), и updated_at не двигается (ревью, I-5: переход
  *        сервера — не контакт с пациентом, как у прохода «Не пришёл» и разового
  *        исправления).
@@ -322,6 +254,11 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     // Статус не менялся — не меняется и заявка. Это и есть защита от повтора:
     // «пришёл» поверх «пришёл» не должен пересчитывать ничего второй раз.
     if (!now || now === norm(from)) return;
+    // CRM_ONE_WAY_V1 (O5) — ОТМЕНУ ОТМЕНИЛИ: визит снова «Записан» / «Подтверждён». Строки,
+    // отпущенные этой отменой и с тех пор не тронутые, снова указывают на свои строки визита
+    // (те никуда не уезжали). Ступень карточки двигает шаг связи (calendar_book зовёт
+    // crmLinkVisit), подтверждение — ниже, как всегда.
+    if (norm(from) === 'cancelled' && (now === 'scheduled' || now === 'confirmed')) restoreReleased(db, id);
     // CRM_LINK_ALL_V1 (R4) — и 'confirmed': «Подтверждён» в календаре двигает карточку вперёд.
     if (!ARRIVED_STATUSES.includes(now) && now !== 'no_show' && now !== 'cancelled' && now !== 'confirmed') return;
 
@@ -396,9 +333,9 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
         // CRM_UNIFY_V1 (проверка ревью задачи 3, N1/P2) — СНАЧАЛА УСЛУГИ:
         // строки, которые визит держит, а в визите их нет (взяли после прихода
         // или при счёте), встают в визит 'added' — касса видит их в «Ждут
-        // счёта» (booking-mirror.js placeHeldLines). CRM_UNIFY_V1 (2026-10-10) —
+        // счёта» (crm/one-way.js attachHeldLines). CRM_UNIFY_V1 (2026-10-10) —
         // кроме догоняющего прохода (catchUp): он денег не трогает.
-        if (!catchUp) placeHeldLines(db, id);
+        if (!catchUp) attachHeldLines(db, id);   // CRM_ONE_WAY_V1 (O1) — прежде placeHeldLines
         // ИНВАРИАНТ (решение контролёра) — ЕДИНСТВЕННОЕ МЕСТО, ГДЕ СТРОКА
         // ЗАЯВКИ СТАНОВИТСЯ 'done': только строка, чья услуга ДЕЙСТВИТЕЛЬНО в
         // визите (строка визита visit_service_id этого визита). Поставить её в
@@ -486,11 +423,11 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
 
     // ЗАПИСЬ ОТМЕНЕНА — СЛОТ ВОЗВРАЩАЕТСЯ ЗАЯВКЕ, А НЕ ПРОПАДАЕТ ВМЕСТЕ С НЕЙ.
     //
-    // Строки снимаются с отменённого визита и снова становятся «ждущими без
-    // слота»: их можно записать заново, и подстановка сметы их по-прежнему
-    // видит. Закрытые (done) не трогаются: там пациент уже был.
-    // CRM_LINK_ALL_V1 (CRM_TWIN_LINE) — какие именно и с чем (releaseCancelledLines).
-    releaseCancelledLines(db, id);
+    // CRM_ONE_WAY_V1 (O4) — строки снимаются с отменённого визита и возвращаются в
+    // карточку БЕЗ ДНЯ: ни запись того же дня, ни подстановка сметы, ни опция «без даты»
+    // регистрации их сами не берут — записать снова может только оператор. Строки визита
+    // остаются в отменённом визите (история). Закрытые (done) не трогаются: там пациент уже был.
+    releaseCancelled(db, id);   // CRM_ONE_WAY_V1 (O4) — назад в карточку без дня
     const first = open[0] || null;
     // CRM_LINK_ALL_V1 (повторное ревью воронки, G-2 / F-2a) — «КОЛОНКА ПОДТВЕРЖДЕНИЯ» ДЛЯ
     // ОТМЕНЫ — ТА ЖЕ «КОЛОНКА ЗАПИСИ». R4 двигает записанную карточку в «Подтверждён»; её

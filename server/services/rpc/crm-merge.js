@@ -46,7 +46,8 @@ import { effectiveRoles } from '../roles.js';
 import { canSeeAllLeads, leadVisible } from '../crm/visibility.js';
 import { listStages } from '../crm/config.js';
 // V3120_FIX — после слияния одна услуга записи — одна строка (booking-mirror.js).
-import { lineKey, mirrorVisit } from '../crm/booking-mirror.js';
+import { lineKey } from '../crm/booking-mirror.js';
+import { removeFromBooking } from '../crm/one-way.js';   // CRM_ONE_WAY_V1 (O3) — снятый дубль уносит свою свободную строку визита
 // CRM_MULTI_SOURCE_V1 — источники оставленной: объединение всех сливаемых.
 import { unionLeadSources } from '../crm/sources.js';
 // CRM_UNIFY_V1 — задачи идут за карточкой: при слиянии — к оператору оставшейся;
@@ -60,9 +61,11 @@ import { moveTasksWithLead, canOwnLead } from '../crm/tasks-follow.js';
  * в смету обе (двойной счёт). Ждущие строки с одинаковыми визитом, услугой (или
  * видом приёма), врачом и днём сводятся к одной: остаётся самая ранняя,
  * остальные отменяются. Записанные визиты возвращаются для сверки зеркала.
+ * CRM_ONE_WAY_V1 — `removed` (если передан) получает { lineId, vsId } снятых строк записи:
+ * их свободные строки визита уходят правилом O3 (crm/one-way.js removeFromBooking).
  * @returns {number[]} визиты, чьи строки задеты
  */
-export function cancelDuplicateLines(db, requestId) {
+export function cancelDuplicateLines(db, requestId, removed = null) {
   const rows = db.prepare(`SELECT id, service_id, consultation_type_id, doctor_id, visit_id, visit_service_id,
                                   COALESCE(NULLIF(scheduled_date, ''), '') AS day
                              FROM crm_request_services
@@ -82,6 +85,7 @@ export function cancelDuplicateLines(db, requestId) {
     const key = [r.visit_id || '', k, r.doctor_id || '', r.day].join('|');
     if (!seen.has(key)) { seen.set(key, r.id); continue; }
     cancel.run(r.id);
+    if (removed && r.visit_service_id) removed.push({ lineId: r.id, vsId: r.visit_service_id });   // CRM_ONE_WAY_V1
     if (repoint) repoint.run(seen.get(key), r.id);
     if (r.visit_id) visits.add(r.visit_id);
     if (r.visit_service_id) {
@@ -303,6 +307,7 @@ export function crmMergeLeads(db, args, user) {
 
   const lh = mergeIds.map(() => '?').join(',');
   const touchedVisits = new Set();
+  const removedLines = [];   // CRM_ONE_WAY_V1 — снятые дубли строк записи
   db.transaction(() => {
     // 1. Строки услуг и задачи — ПЕРЕЕЗЖАЮТ. Удаление заявки ниже уносит
     //    свои строки каскадом (ON DELETE CASCADE), поэтому переезд обязан
@@ -312,7 +317,7 @@ export function crmMergeLeads(db, args, user) {
     //    кто оставшуюся карточку по-прежнему может вести.
     db.prepare(`UPDATE crm_request_services SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
     // V3120_FIX — переехавшие строки не удваивают услугу (см. cancelDuplicateLines).
-    for (const v of cancelDuplicateLines(db, keepId)) touchedVisits.add(v);
+    for (const v of cancelDuplicateLines(db, keepId, removedLines)) touchedVisits.add(v);
     // CRM_UNIFY_V1 — задачи идут за карточкой: открытые задачи оператора каждой
     // карточки, без исполнителя и тех, кто оставшуюся вести не может, — к
     // оператору оставшейся (newOwner выше; он же — patch.assigned_to ниже).
@@ -378,10 +383,10 @@ export function crmMergeLeads(db, args, user) {
                 VALUES (?, ?, ?, ?, ?)`)
       .run(keepId, JSON.stringify(mergeIds), JSON.stringify(snapshot), user && user.id != null ? Number(user.id) : null, actorName);
   })();
-  // V3120_FIX — снятая дублем строка уносит свою свободную строку визита (зеркало
-  // записи, шаг 1): двойной счёт не доживает до кассы. За транзакцией и молча —
-  // как у всех хуков зеркала.
-  for (const v of touchedVisits) mirrorVisit(db, v, { actorId: user && user.id });
+  // V3120_FIX — снятая дублем строка уносит свою свободную строку визита: двойной счёт не
+  // доживает до кассы. CRM_ONE_WAY_V1 — правилом O3 (строку визита, которую держит
+  // оставленная строка, не трогает). За транзакцией и молча.
+  removeFromBooking(db, removedLines);
 
   return {
     kept_id: keepId,

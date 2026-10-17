@@ -73,11 +73,14 @@ export function sameAsWish(db, wish, x) {
  * O1 — КУДА ЖЕЛАНИЕ САДИТСЯ В ВИЗИТЕ v, НЕ ЗАВОДЯ ВТОРОЙ СТРОКИ:
  *   1. строка той же услуги, на которую не указывает ни одна живая строка карточки
  *      (её поставила регистратура, колл-центр в календаре, касса — раньше нас);
- *   2. строка той же услуги, на которую указывают только живые строки ДРУГИХ карточек
- *      (вторая карточка того же человека на ту же консультацию — счёт один);
- * null — нужна новая строка. Строку, на которую уже указывает другая строка ЭТОЙ ЖЕ
- * карточки, желание не делит: две строки одной карточки (анализ натощак и через два
- * часа) — две услуги.
+ *   2. строка той же услуги, на которую уже указывают живые строки карточек — и другой
+ *      (вторая карточка того же человека на ту же консультацию), и ЭТОЙ ЖЕ (два одинаковых
+ *      желания, карточки после слияния, отпущенное желание, которому назначили день записи
+ *      той же услуги): счёт один. Прежнее правило зеркала (homeFor); «две строки одной
+ *      карточки — две услуги» пробовали (e0e6f44e) и вернули (9140fbe6): два одинаковых
+ *      желания давали 300 000 вместо 150 000. Два анализа одного дня ставит регистратура —
+ *      строками визита, а не желаниями;
+ * null — нужна новая строка.
  */
 export function wishHome(db, v, line) {
   const rows = db.prepare(`SELECT * FROM visit_services WHERE visit_id = ? AND status <> 'cancelled'
@@ -86,9 +89,7 @@ export function wishHome(db, v, line) {
   if (!rows.length) return null;
   const holders = db.prepare("SELECT id, request_id FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled' AND id <> ?");
   const free = rows.find((x) => !holders.all(x.id, line.id).length);
-  if (free) return Number(free.id);
-  const shared = rows.find((x) => holders.all(x.id, line.id).every((h) => Number(h.request_id) !== Number(line.request_id)));
-  return shared ? Number(shared.id) : null;
+  return Number((free || rows[0]).id);
 }
 
 const POINT = `UPDATE crm_request_services
@@ -104,14 +105,19 @@ const POINT = `UPDATE crm_request_services
  * получает (BRANCH_MONEY_GUARD_V1) — желание только указывает на уже приехавшую строку.
  * Старая ссылка строки на строку отменённого визита (отмена до CRM_ONE_WAY_V1)
  * перезаписывается: строка отменённого визита остаётся там, где была, — она история.
+ * Разбор ревью (I5) — визит ДО ПРИХОДА, по которому уже выставлен счёт или начата работа:
+ * строки визита ведёт касса, и новую строку желание сюда не ставит (только указывает на
+ * готовую) — она сядет при приходе (attachHeldLines). Пришедшему визиту — ставит: касса
+ * видит её в «Ждут счёта».
  * Зовётся внутри транзакции звонящего. @returns {number|null} id строки визита
  */
-export function attachWish(db, v, line, { actorId = null } = {}) {
+export function attachWish(db, v, line, { actorId = null, arrival = false } = {}) {
   if (!v || !line || !lineKey(line)) return null;
   let vsId = wishHome(db, v, line);
   let auto = 0;
   if (!vsId) {
     if (v.sync_origin != null) return null;
+    if (!arrival && beforeArrival(db, v) && visitHasWork(db, v.id)) return null;   // I5 — до прихода при счёте строки ставит касса
     if (bookingLineRefusal(db, { serviceId: line.service_id, consultationTypeId: line.consultation_type_id })) return null;
     vsId = insertBookingLine(db, {
       visit: v, serviceId: line.service_id, consultationTypeId: line.consultation_type_id,
@@ -123,10 +129,20 @@ export function attachWish(db, v, line, { actorId = null } = {}) {
   return vsId;
 }
 
-/** O1 — несколько желаний в один визит, по порядку строк. @returns {number} сколько село */
-export function attachWishes(db, v, lines, opts = {}) {
+/**
+ * O1 — несколько желаний в один визит, по порядку строк. holdUnplaced (шаг связи) — строка,
+ * которой в визит садиться нечем (без услуги) или нельзя (хирургия, снятое с продажи), всё
+ * равно держит визит (visit_id, без строки визита), как держала до CRM_ONE_WAY_V1: карточка
+ * знает свой записанный день, а приход такую строку не закрывает — она ждёт (правило 'done').
+ * @returns {number} сколько строк взяли визит
+ */
+export function attachWishes(db, v, lines, { holdUnplaced = false, ...opts } = {}) {
   let n = 0;
-  for (const l of lines || []) if (attachWish(db, v, l, opts)) n++;
+  const hold = db.prepare('UPDATE crm_request_services SET visit_id = ?, visit_service_id = NULL WHERE id = ?');
+  for (const l of lines || []) {
+    if (attachWish(db, v, l, opts)) { n++; continue; }
+    if (holdUnplaced && v.sync_origin == null) { hold.run(v.id, l.id); n++; }
+  }
   return n;
 }
 
@@ -144,7 +160,7 @@ export function attachHeldLines(db, visitId, { actorId = null } = {}) {
     const lines = db.prepare(`SELECT * FROM crm_request_services
                                WHERE visit_id = ? AND status = 'pending' AND visit_service_id IS NULL ORDER BY id`).all(v.id);
     if (!lines.length) return 0;
-    return db.transaction(() => attachWishes(db, v, lines, { actorId }))();
+    return db.transaction(() => attachWishes(db, v, lines, { actorId, arrival: true }))();   // приход: и при счёте
   } catch (e) {
     console.error('[crm-one-way] строки, державшие визит', visitId, 'не сели в визит:', e && e.message);   // CRM_ONE_WAY_V1
     return 0;
@@ -420,7 +436,8 @@ export function clearReleaseOnEdit(db, before, values) {
  * строки визита. Здесь только их видимые поля: день строки записи — день визита; врач строк,
  * стоявших на прежнем враче записи, — новый; свободные строки визита на прежнем враче едут
  * с ним (цена переоценивается только у строки CRM — M5). Прежнее правило календаря
- * (mirrorReschedule), только у записи до прихода, привязанной к карточке. Не бросает.
+ * (mirrorReschedule), только у записи до прихода, привязанной к карточке. Дату карточки
+ * ставит crmBookingMoved (crm/visit-link.js). Не бросает.
  */
 export function followVisitMove(db, visitId, { oldDoctorId = null } = {}) {
   try {
@@ -439,7 +456,8 @@ export function followVisitMove(db, visitId, { oldDoctorId = null } = {}) {
           repriceOwnLine(db, vs.id);
         }
       }
-      touchCardsOf(db, lines.map((l) => l.request_id));
+      // Дата карточки — crm/visit-link.js crmBookingMoved (тихо: ступень и updated_at не
+      // трогаются — перенос не контакт с пациентом; повтор ревью F-9).
     })();
   } catch (e) {
     console.error('[crm-one-way] перенос записи', visitId, 'не отражён в карточке:', e && e.message);   // CRM_ONE_WAY_V1
@@ -501,6 +519,10 @@ export function attachCardLines(db, lineIds, { actorId = null } = {}) {
           } catch { /* сборка без 189 */ }
         }
         if (ok && attachWish(db, v, l, { actorId })) { n++; touched.push(l.request_id); continue; }
+        // Визит свой, но строке в нём сесть нельзя (хирургия, снятое с продажи, при счёте до
+        // прихода) — строка держит визит без строки визита, как до CRM_ONE_WAY_V1: сядет при
+        // приходе (attachHeldLines) или будет ждать. Чужой или мёртвый визит — не держит.
+        if (ok) { touched.push(l.request_id); continue; }
         db.prepare('UPDATE crm_request_services SET visit_id = NULL WHERE id = ?').run(l.id);
       }
     })();

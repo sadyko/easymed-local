@@ -591,7 +591,7 @@ test('консультацию ведёт только врач; исполни�
   void vs;
 });
 
-test('CRM: смена врача доходит до заявки; добавленная кассой строка попадает в заявку; снятая — снимается', () => {
+test('CRM: смена врача доходит до заявки; CRM_ONE_WAY_V1 — строка кассы в заявку не копируется (O2); снятая кассой строка записи ждёт в заявке без дня (O3)', () => {
   const { db, vs, vid, invoiceId, USG, CONS } = clinic();
   setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
   const req = Number(db.prepare("INSERT INTO crm_requests (full_name) VALUES ('Пациент')").run().lastInsertRowid);
@@ -601,12 +601,11 @@ test('CRM: смена врача доходит до заявки; добавл�
   assert.equal(db.prepare('SELECT doctor_id FROM crm_request_services WHERE id = ?').get(crmLine).doctor_id, DOC2);
   const add = call('cashier_line_add', db, { invoice_id: invoiceId, service_id: USG, doctor_id: DOC2 }, cashier);
   const mirrored = db.prepare('SELECT * FROM crm_request_services WHERE visit_service_id = ?').get(add.line.id);
-  assert.ok(mirrored, 'строка, добавленная кассой, не дошла до заявки');
-  assert.equal(mirrored.request_id, req);
-  assert.equal(mirrored.doctor_id, DOC2);
-  call('cashier_line_remove', db, { visit_service_id: add.line.id }, cashier);
-  const gone = db.prepare('SELECT status, visit_service_id FROM crm_request_services WHERE id = ?').get(mirrored.id);
-  assert.ok(!gone || gone.status === 'cancelled' || gone.visit_service_id == null, 'снятая строка осталась в заявке живой');
+  assert.equal(mirrored, undefined, 'строка кассы скопирована в заявку (CRM_ONE_WAY_V1, O2)');
+  call('cashier_line_remove', db, { visit_service_id: vs }, cashier);
+  const left = db.prepare('SELECT status, visit_id, visit_service_id, scheduled_date, released_from_visit_id FROM crm_request_services WHERE id = ?').get(crmLine);
+  assert.deepEqual({ ...left }, { status: 'pending', visit_id: null, visit_service_id: null, scheduled_date: null, released_from_visit_id: vid },
+    'снятая кассой строка записи: ждёт в заявке без дня, сама в визит не вернётся');
 });
 
 test('журнал: удаление отменённого счёта журнал не стирает; строки журнала кассы не держат пустой визит', async () => {

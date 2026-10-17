@@ -31,7 +31,7 @@
 // заявки (crm/booking-mirror.js) — по тем же ценам, что у регистратуры.
 import { firstStageKey } from '../crm/contact-window.js';
 import { displayLinkSql } from '../crm/display-links.js';   // CRM_LINK_ALL_V1 (ред. 2б, P-1)
-import { dayVisitMovableFor, visitHasWork, PRE_ARRIVAL, mirrorVisit } from '../crm/booking-mirror.js';
+import { dayVisitMovableFor, visitHasWork, PRE_ARRIVAL } from '../crm/booking-mirror.js';
 import { crmLinkVisit } from '../crm/visit-link.js';   // повторная проверка 8a — доведение прерванного подтверждения
 import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';
 import { findPatientsByPhone } from '../telegram/documents.js';
@@ -472,8 +472,8 @@ function recoverConfirming(db, { now, kekPath }) {
     // строки по заявке. Доводим тем же путём, что ensure_visit: связь и зеркало
     // (обе не бросают и повтор не удваивают).
     if (visit) {
+      // CRM_ONE_WAY_V1 (O1) — строки заявки садятся в визит в шаге связи; сверки зеркала больше нет.
       crmLinkVisit(db, visit.id, SYSTEM_BOOKER, { undated: true });
-      mirrorVisit(db, visit.id, { actorId: null });
     }
   }
   return expired;

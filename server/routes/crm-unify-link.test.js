@@ -124,7 +124,9 @@ test('booking_lines_add колл-центра к записи регистрат
     const add = await t.rpc('booking_lines_add', 'cc', { visit_id: vid, patient_id: 77, lines: [{ service_id: 40 }] });
     assert.equal(add.status, 200, add.text);
     assert.equal(t.db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(vid).request_id, old);
-    assert.deepEqual(linesOf(t.db, old).map((l) => [l.service_id, l.visit_id]), [[40, vid]], 'строка визита не отразилась в карточке');
+    // CRM_ONE_WAY_V1 (O2) — строка визита в карточку не копируется: карточка держит запись привязкой
+    // и показывает её услуги списком «Записи пациента».
+    assert.deepEqual(linesOf(t.db, old), [], 'строка визита скопирована в карточку');
   } finally { t.close(); }
 });
 

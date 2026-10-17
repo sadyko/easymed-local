@@ -43,6 +43,9 @@ New columns (migration 246, rewritten): `crm_request_services.released_from_visi
 4. **O3 remove of a shared visit line** (two cards point at one line): the line is deleted only when no OTHER live card line points at it — the other card's booking still wants it (today's step-1 rule; no money moves).
 5. **Adoption is kept** (`adoptPendingLine`, CRM_UNIFY_V1 A-C2): a human line landing in a visit is pointed at by the holding card's same-service wish dated that day or undated — never by a released wish. It never inserts a visit line; it stops the next registration from billing the same consultation again.
 6. **Wish yields is kept** (`yieldAutoLine` / `replaceAutoTwins` / `pruneAutoLinesOnInvoice` / R7b): when a human line of the same service lands next to a still-free O1-made line, the O1 line is withdrawn and the wish points at the human line (its quantity, package, price). This is O1's "a wish never produces a second line next to a same-service line", applied when the human line comes second.
+7a. **O1 "a free line of the same service" includes a line the SAME card already points at** (amended after the repro classification, risk R1): two identical wishes of one card, cards after a merge, or a released wish dated onto a day where the card already booked that service point at the one line — 150 000, not 300 000 (round-8a repro `zz-s8y-verify-1-0` control; the "same card = two lines" rule was tried in e0e6f44e and reverted in 9140fbe6). Two analyses of one day are entered by the registrar as visit lines, not as wishes.
+7b. **The call-centre report** (`rpc/callcenter.js` «Что спрашивают», «Спрос по группам») counted the mirror's copies of the call centre's calendar bookings (`booking_lines_add`). Without copies (O2) it counts the card lines plus the visit lines of the card's call-centre bookings (`crm_booking_links.source = 'callcenter'`) that no card line points at — each visit line once.
+7c. **Card date on any move** (repro F-9): `crmDisplayLinkMoved` becomes `crmBookingMoved` — every open card that holds the moved visit (any link kind or a booked line, same patient) gets `cardDateOf`, quietly (no stage change, no `updated_at`). `followVisitMove` no longer calls `touchRequest`.
 7. **Card edit attach validates the patient:** a card line written through `/api/db` with a `visit_id` is attached (O1) only if the visit is the card patient's own-building live visit; otherwise its `visit_id` is cleared (the old mirror inserted lines into any visit id the browser sent).
 
 ---
@@ -85,6 +88,8 @@ New columns (migration 246, rewritten): `crm_request_services.released_from_visi
 | 32 | booking-mirror-db.js `mirrorAfter` card doctor change → free visit line follows + reprice | **obsolete (O7, reading 3)** | refused for booked lines |
 | 33 | booked-twin.js `retireBookedTwin` (R7b) | kept | unchanged |
 | 34 | display-links.js | kept (O9) | unchanged |
+| 35 | (hidden) the mirror's copies fed the call-centre report «Что спрашивают» | **replaced** (reading 7b) | `rpc/callcenter.js` reads the booking's visit lines |
+| 36 | (hidden) the copies kept a lineless card's date in step with a moved booking (`touchRequest`) | **replaced** (reading 7c) | `crmBookingMoved` for every link kind |
 
 ### Door table — every `mirrorVisit` / mirror call and its replacement
 
@@ -260,19 +265,28 @@ Release = `UPDATE crm_request_services SET released_from_visit_id = V, released_
 | todo 4 — card B's consultation moved onto card A's booked day (and after merging A and B) | was 2 | move refused; remove (×) + add on A's day → **1 consultation** (O3 remove + O1 point); merge → one line (removeFromBooking of the duplicate) |
 | todo 5 — a shared line (two duplicate cards) moved by one of them onto a booked day | was 2 | move refused; remove (×) keeps the shared line (other card holds it), add on the booked day points at the existing line → **each day one line** |
 
-#### Existing tests whose expectations change (filled in during Task 3/4 from the runs; each with its O-rule)
+#### Existing tests whose expectations change (Task 3, definitive — from the ru/en runs)
 
-Predicted (grep of mirror internals and card-copy assertions; the definitive list is written here when Task 3 and Task 4 finish):
-- `server/services/crm/booking-mirror-twin.test.js` — table above (O2, O4).
-- `server/routes/crm-calendar-mirror.test.js` — card copies of calendar lines (O2), card-window moves (O6 refusal), cancel returns lines without day (O4).
-- `server/routes/crm-calendar-v3120.test.js`, `crm-lines-v3120-final.test.js` — auto-line / move semantics (O6, reading 6).
-- `server/routes/crm-link-all-twin-line.test.js` — d6630801 drop/bare/carry → O4 release.
-- `server/routes/crm-link-all-no-done.test.js`, `crm-unify-final-status.test.js`, `crm-unify-desk-money.test.js` — copied 'done'/pending card lines (O2).
-- `server/services/crm/visit-status.test.js`, `no-show.test.js` — cancel keeps the day / released lines (O4); `placeHeldLines` → `attachHeldLines`.
-- `server/services/rpc/cashier-head.test.js` — `mirrorCashierLine` copies (O2); cashier remove → released wish (O3).
-- `server/db/migrations/246.test.js` — trigger dropped (O10).
-- `server/routes/crm-link-all-review2.test.js` / privacy tests that expect the trigger to drop links (O10: read-time filter instead).
-- `tests/crm-doors/matrix.test.mjs` — cells whose `lines` held a mirror copy of the door's visit line (O2); `vs` columns must stay identical.
+| file | tests | O-rule | change |
+|---|---|---|---|
+| `server/services/crm/booking-mirror-twin.test.js` | 4 tests + 5 todos | O2, O4, O6, O3 | table above; `regAdd` calls `onVisitLinesAdded` (what /api/db does) instead of `mirrorVisit` |
+| `server/routes/crm-calendar-mirror.test.js` | 2, 2б, 13 | O2 | calendar / registrar lines are not copied into the card; the card shows them via `crm_card_bookings` |
+| same | 4 | O6 | the card's move of a booked line → 409; the visit is moved in the calendar instead and the card lines follow (day) |
+| same | 7 | O3, O2, O4 | a line removed in the calendar → the card line is a released undated wish; a re-added calendar line is not copied, the released line does not sit on it |
+| same | 8, R-C1, R-M1 | O6 | doctor / service change of a booked line from the card → 409 (R-M1 keeps the reverse: `change_unpaid_service` → the card line follows, O7) |
+| same | R-I1, R-I3 (этот день) | O2 | the registrar's second line is not copied into the card |
+| `server/routes/crm-link-all-display.test.js` | «запись колл-центра из живой карточки … по-прежнему зеркалится» | O2 | no card line; `crm_card_bookings` lists the booking with its service |
+| `server/routes/crm-link-all-twin.test.js` | two R7b tests | O2 | card line assertions → «no copy on the card»; money assertions (one line, 100 000) unchanged |
+| `server/routes/crm-link-all-twin-line.test.js` | three «база до правки» tests | O2 | the legacy row is built by the helper itself (no copies exist to rewind); money expectations unchanged — step A skips a line released by the old cancel |
+| `server/routes/crm-unify-final-status.test.js` | two A-C2 tests | O2 | the analysis is not copied (2 card lines, not 3); `mirrorCashierLine` → `onVisitLinesAdded` (adoption kept) |
+| `server/routes/crm-unify-link.test.js` | booking_lines_add … находит открытую карточку | O2 | the link stays, no card copy |
+| `server/routes/crm-link-all-review2.test.js` | two PRIV-3 tests | O10 | display links survive a patient change; `crm_card_bookings` still hides the other patient's visit |
+| `server/services/crm/visit-status.test.js` | отмена одного дня из трёх | O4 | the cancelled day's line is undated, the card date is the remaining day (2026-08-10, not 08-09) |
+| `server/services/rpc/cashier-head.test.js` | CRM: смена врача … добавленная кассой строка … | O2, O3 | the cashier's line is not copied; the cashier removing a booked line → the card line is a released undated wish |
+| `server/db/migrations/246.test.js` | rewritten | O10 | no trigger; columns; repair tables; old-246 database upgrade |
+| `tests/crm-doors/matrix.test.mjs` | 20 cells (`ONE_WAY` map) | O2 ×19, O4 ×1 | only the `lines` column; owner `booked` → `booked+shown` for 4-today-S1 and 5-S1p-crm-wizard; `vs`, stage, date, link unchanged in every cell; 110/110 ru and en |
+
+Kept green by code, not by changing the test: `crm-calendar-mirror` R-I5 (a pre-arrival visit with an invoice gets no new line from a wish — it sits at arrival), R-M8 (call-centre report, reading 7b), `crm-unify-desk-money` C2c/C2g (unplaceable and frozen wishes hold the visit; arrival places them), `visits.test.js` CRM_REAL_BOOKING_V1 ×9 (a wish without a service still holds the visit).
 
 ### Task 4 — O10 funnel
 

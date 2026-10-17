@@ -3,6 +3,10 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CRM_ONE_WAY_V1 — услуги записи живут только в визите: строку записи из карточки не переносят (отказ двери
+  // /api/db, crm/one-way.js), отпущенная отменой строка ждёт новой даты (views/crm.js)
+  "Услуга уже записана: перенос, смену врача и услуги делают в календаре, а убрать услугу из записи можно крестиком в карточке.": {"en":"The service is already booked: rescheduling, changing the doctor or the service is done in the calendar; to remove the service from the booking, use the cross on the card.","ru":"Услуга уже записана: перенос, смену врача и услуги делают в календаре, а убрать услугу из записи можно крестиком в карточке.","uz":"Xizmat allaqachon yozilgan: ko‘chirish, shifokor yoki xizmatni almashtirish kalendarda bajariladi, xizmatni yozuvdan olib tashlash uchun kartochkadagi xochchani bosing."},   // CRM_ONE_WAY_V1
+  "Запись отменена — назначьте услуге новую дату": {"en":"The booking was cancelled — set a new date for the service","ru":"Запись отменена — назначьте услуге новую дату","uz":"Yozuv bekor qilindi — xizmatga yangi sana belgilang"},   // CRM_ONE_WAY_V1
   // CRM_LINK_ALL_V1 (R7a) — строки «из записи» в быстрой регистрации и мастере визита (views/booked-rows.js)
   "из записи": {"en":"from the booking","ru":"из записи","uz":"yozuvdan"},   // CRM_LINK_ALL_V1
   "По записи уже в счёте: {names}": {"en":"Already on an invoice from the booking: {names}","ru":"По записи уже в счёте: {names}","uz":"Yozuv bo‘yicha allaqachon hisobda: {names}"},   // CRM_LINK_ALL_V1

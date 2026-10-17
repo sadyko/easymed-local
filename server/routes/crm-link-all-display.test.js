@@ -83,13 +83,17 @@ test('CRM_LINK_ALL_V1 ред. 2: «Отказ» в CRM не отменяет з�
   } finally { t.close(); }
 });
 
-test('CRM_LINK_ALL_V1 ред. 2: запись колл-центра из живой карточки (C′ для колл-центра — прежняя привязка «callcenter») по-прежнему зеркалится', async () => {
+test('CRM_LINK_ALL_V1 ред. 2: запись колл-центра из живой карточки (C′ для колл-центра — прежняя привязка «callcenter»); CRM_ONE_WAY_V1 (O2) — услуги записи карточка показывает, а не копирует', async () => {
   const t = await startCrmApp();
   try {
     const rid = addLead(t.db, { assigned: 3 });
     const vid = await callcenterBook(t, D);
     assert.deepEqual(link(t, vid), { request_id: rid, source: 'callcenter' });
-    assert.deepEqual(allLines(t, rid).map((l) => [l.service_id, l.visit_id]), [[30, vid]], 'строка записи колл-центра не дошла до карточки');
+    // CRM_ONE_WAY_V1 (O2) — прежде зеркало копировало строку записи в карточку; теперь карточка её показывает.
+    assert.deepEqual(allLines(t, rid), [], 'строка визита скопирована в карточку');
+    const cb = await t.rpc('crm_card_bookings', 'cc', { request_id: rid });
+    assert.equal(cb.status, 200, cb.text);
+    assert.deepEqual(cb.json.data.bookings.map((b) => [b.visit_id, b.services.map((s) => s.name)]), [[vid, ['Консультация терапевта']]]);
   } finally { t.close(); }
 });
 

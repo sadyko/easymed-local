@@ -1,4 +1,9 @@
-// CRM_CALENDAR_MIRROR_V1 — ДВЕРЬ /api/db ТОЖЕ ЗЕРКАЛИТ.
+// CRM_CALENDAR_MIRROR_V1 — ДВЕРЬ /api/db ТОЖЕ ЗЕРКАЛИЛА.
+// CRM_ONE_WAY_V1 (2026-10-17) — зеркала нет (crm/booking-mirror.js): эта дверь зовёт правила
+// одного направления (crm/one-way.js) — строка человека в визите (строка CRM уступает, желание
+// сбывается), строку визита сняли (строки записи — отпущенные желания), карточка убрала услугу
+// из своей записи (O3), добавила услугу в свою запись (O1), строку записи из карточки не
+// переносят (O6). Прежний текст ниже — о том, почему правило стоит в этой двери.
 //
 // Строки визита вставляют, правят и удаляют ЧЕТЫРЕ экрана (мастер записи,
 // окно визита, кабинет врача, счёт визита), строки заявки — карточка CRM. Все
@@ -12,10 +17,13 @@
 // молчит при любой ошибке: запись в базу уже состоялась.
 import { compile } from '../../db/query-compiler.js';
 import {
-  mirrorVisit, visitsOfLines, isRefusalStage, cancellableBookingsOf, isEmptyBooking, PRE_ARRIVAL, repriceOwnLine,
+  visitsOfLines, isRefusalStage, cancellableBookingsOf, isEmptyBooking, syncLineFromVisit,
 } from './booking-mirror.js';
+// CRM_ONE_WAY_V1 — правила одного направления (O1, O3, O4, O6, O7).
+import {
+  onVisitLinesAdded, releaseOrphans, removeFromBooking, attachCardLines, clearReleaseOnEdit, bookedLineEditRefusal,
+} from './one-way.js';
 import { calendarBook } from '../rpc/calendar.js';
-import { localDate } from '../domain/day.js';
 // V3120_FIX — работа над неоплаченной услугой и право «CRM: изменение».
 import { unpaidWorkRefusal, FREE_MOVES } from '../visit-status-guard.js';
 import { moveTasksWithLead } from './tasks-follow.js';   // CRM_UNIFY_V1 — задачи идут за карточкой
@@ -140,8 +148,22 @@ export function mirrorBefore(db, meta, body, user) {
     } else if (meta.table === 'crm_request_services' && meta.op === 'update') {
       ctx.ids = targetIds(db, body, user);
       const values = (body && body.values) || {};
-      ctx.refusal = lockedLineRefusal(db, ctx.ids, values);
+      ctx.refusal = lockedLineRefusal(db, ctx.ids, values)
+        // CRM_ONE_WAY_V1 (O6, O3) — день, врач, услуга и визит строки записи из карточки не меняются.
+        || bookedLineEditRefusal(db, ctx.ids, values);
+      if (ctx.refusal) return ctx;
       for (const v of visitsOfLines(db, ctx.ids)) ctx.visits.add(v);
+      // CRM_ONE_WAY_V1 — строки до правки: правка дня, врача или услуги снимает отметку
+      // отпуска (O4); строка записи, которую снимают, уносит свою свободную строку визита (O3).
+      if (ctx.ids.length) {
+        ctx.before = new Map(db.prepare(`SELECT * FROM crm_request_services WHERE id IN (${holes(ctx.ids)})`)
+          .all(...ctx.ids).map((r) => [r.id, r]));
+        if (values.status === 'cancelled') {
+          ctx.removed = [...ctx.before.values()]
+            .filter((r) => r.status === 'pending' && r.visit_id != null && r.visit_service_id != null)
+            .map((r) => ({ lineId: r.id, vsId: r.visit_service_id }));
+        }
+      }
       if (values.status === 'cancelled' && ctx.ids.length) {
         // Отмена, снявшая последнюю услугу записанного дня, отменяет и саму
         // запись — но только ту, на которой строка стояла (а не ту, с которой
@@ -195,47 +217,41 @@ export function mirrorAfter(db, ctx, meta, body, user, { insertedId = null } = {
         for (const r of rows) if (r && r.visit_id) ctx.visits.add(Number(r.visit_id));
       }
       // Врача строки визита сменили в окне визита — строка заявки следует за ним.
+      // CRM_ONE_WAY_V1 (O7) — и услугу: строка записи указывает на строку визита.
       if (meta.op === 'update' && Object.prototype.hasOwnProperty.call(values, 'doctor_id') && ctx.ids.length) {
         db.prepare(`UPDATE crm_request_services SET doctor_id = ?
                      WHERE visit_service_id IN (${holes(ctx.ids)}) AND status = 'pending'`)
           .run(values.doctor_id || null, ...ctx.ids);
       }
-      for (const v of ctx.visits) mirrorVisit(db, v, { actorId });
+      if (meta.op === 'update' && ['service_id', 'consultation_type_id'].some((k) => Object.prototype.hasOwnProperty.call(values, k))) {
+        for (const id of ctx.ids) syncLineFromVisit(db, id);
+      }
+      // CRM_ONE_WAY_V1 — строка человека встала в визит: строка CRM той же услуги уступает ей,
+      // сбывшееся желание указывает на неё (O1). Строку сняли или правили — строки записи, чья
+      // строка визита исчезла или снята, — отпущенные желания без дня (O3).
+      for (const v of ctx.visits) {
+        if (meta.op === 'insert' || meta.op === 'upsert') onVisitLinesAdded(db, v, insertedId ? [insertedId] : null);
+        else releaseOrphans(db, v);
+      }
       return;
     }
 
     if (meta.table === 'crm_request_services') {
-      if (meta.op === 'insert') {
-        for (const r of rows) if (r && r.visit_id) ctx.visits.add(Number(r.visit_id));
-        if (insertedId) {
-          const row = db.prepare('SELECT visit_id FROM crm_request_services WHERE id = ?').get(insertedId);
-          if (row && row.visit_id) ctx.visits.add(row.visit_id);
-        }
-      }
+      // CRM_ONE_WAY_V1 — врача строки записи из карточки не меняют (отказ в mirrorBefore):
+      // прежнее «свободная строка визита следует за врачом строки заявки» больше не нужно.
       if (meta.op === 'update') {
-        for (const v of visitsOfLines(db, ctx.ids)) ctx.visits.add(v);
-        // Врача строки заявки сменили в карточке — свободная строка визита
-        // следует за ним. Цена меняется только у строки, заведённой зеркалом
-        // (M5, booking-mirror.js isOwnLine); чужую пересчитает касса.
-        if (Object.prototype.hasOwnProperty.call(values, 'doctor_id') && ctx.ids.length) {
-          const linked = db.prepare(`
-            SELECT vs.*, v.patient_id, ${localDate('v.visit_date')} AS day, v.status AS visit_status, v.sync_origin AS visit_origin
-              FROM crm_request_services l
-              JOIN visit_services vs ON vs.id = l.visit_service_id
-              JOIN visits v ON v.id = vs.visit_id
-             WHERE l.id IN (${holes(ctx.ids)}) AND l.status = 'pending'`).all(...ctx.ids);
-          for (const vs of linked) {
-            const doc = values.doctor_id || null;
-            if (Number(vs.doctor_id || 0) === Number(doc || 0)) continue;
-            if (!PRE_ARRIVAL.includes(vs.visit_status) || vs.visit_origin != null) continue;
-            if (vs.status !== 'added' || vs.invoice_item_id != null || vs.sync_origin != null) continue;
-            if (vs.service_id == null && vs.consultation_type_id == null) continue;
-            db.prepare('UPDATE visit_services SET doctor_id = ? WHERE id = ?').run(doc, vs.id);
-            repriceOwnLine(db, vs.id);
-          }
-        }
+        removeFromBooking(db, ctx.removed || []);              // O3 — карточка убрала услугу из своей записи
+        clearReleaseOnEdit(db, ctx.before, values);           // O4 — правка снимает отметку отпуска
+        attachCardLines(db, ctx.ids, { actorId });            // O1 — строке дали визит: садится в него
       }
-      for (const v of ctx.visits) mirrorVisit(db, v, { actorId });
+      if (meta.op === 'insert') {
+        // O1 / O3 — новая строка на день записи карточки (окно карточки шлёт visit_id этой записи).
+        const reqIds = [...new Set(rows.map((r) => Number(r && r.request_id)).filter((n) => Number.isInteger(n) && n > 0))];
+        const fresh = reqIds.length ? db.prepare(`SELECT id FROM crm_request_services WHERE request_id IN (${holes(reqIds)})
+                                                   AND status = 'pending' AND visit_id IS NOT NULL AND visit_service_id IS NULL`)
+          .all(...reqIds).map((r) => r.id) : [];
+        attachCardLines(db, insertedId ? [insertedId, ...fresh] : fresh, { actorId });
+      }
       for (const id of ctx.cancelVisits) {
         if (!isEmptyBooking(db, id)) continue;
         const v = db.prepare('SELECT id, visit_date FROM visits WHERE id = ?').get(id);

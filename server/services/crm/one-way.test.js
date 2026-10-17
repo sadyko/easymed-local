@@ -64,11 +64,11 @@ test('CRM_ONE_WAY_V1 O1: строка той же услуги уже в виз�
   assert.deepEqual([line(db, l).visit_service_id, line(db, l).visit_service_auto], [x, 0]);
 });
 
-test('CRM_ONE_WAY_V1 O1: два желания ОДНОЙ карточки на одну услугу (натощак и через два часа) — две строки', () => {
+test('CRM_ONE_WAY_V1 O1: два одинаковых желания ОДНОЙ карточки (дубль, карточки после слияния) — одна строка, счёт один', () => {
   const db = clinic(); const rid = card(db); const v = visit(db);
-  attach(db, v, wish(db, rid, { svc: 40 }));
-  attach(db, v, wish(db, rid, { svc: 40 }));
-  assert.equal(money(db, v).length, 2);
+  const x = attach(db, v, wish(db, rid, { ct: 1, doctor: 7 }));
+  assert.equal(attach(db, v, wish(db, rid, { ct: 1, doctor: 7 })), x);
+  assert.deepEqual(money(db, v).map((r) => r.unit_price), [150000], 'было бы 300 000 (повтор ревью zz-s8y-verify-1-0, контроль)');
 });
 
 test('CRM_ONE_WAY_V1 O1: две карточки на одну консультацию у одного врача — одна строка, обе указывают на неё', () => {

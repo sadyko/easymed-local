@@ -155,6 +155,36 @@ const DECIDED = {
   '8-S1cal-cancel': { rule: 'CRM_TWIN_LINE', owner: 'noecho', cell: {"stage":"in_process","date":"-","lines":[],"link":"card","cards":1,"visits":0,"vs":[30]} },
 };
 
+// ═══ CRM_ONE_WAY_V1 (2026-10-17) — УСЛУГИ ЗАПИСИ ЖИВУТ ТОЛЬКО В ВИЗИТЕ ════════════════════════
+// docs/specs/2026-10-17-crm-one-way-booking-design.md. Клетки, где карточка держала КОПИЮ строки
+// визита (зеркало записи копировало услуги календаря, регистратуры и кассы в карточку), — O2:
+// копий больше нет, карточка показывает визит списком «Записи пациента». Меняется только
+// колонка lines (строки визита vs, ступень, дата, привязка — те же); `owner` 'booked' (строка
+// карточки на визите) заменён на 'booked+shown' (визит в «Записях пациента»). 8-S2-cancel — O4:
+// строка карточки после отмены ждёт без дня.
+const ONE_WAY = {
+  '2-S1-cc': { rule: 'O2', lines: [] },
+  '2-S2-cc': { rule: 'O2', lines: ['30@D:pending/B'] },
+  '2-S3-cc': { rule: 'O2', lines: [] },
+  '2-S4-cc': { rule: 'O2', lines: [] },
+  '2-S1-reg': { rule: 'O2', lines: [] },
+  '2-S1-boss': { rule: 'O2', lines: [] },
+  '2-S2same-reg': { rule: 'O2', lines: ['30@D:pending/V'] },
+  '4-today-S1': { rule: 'O2', lines: [], owner: 'booked+shown' },
+  '4-today-S1-pay': { rule: 'O2', lines: [] },
+  '4-future-S1': { rule: 'O2', lines: [] },
+  '5-S1p-crm-wizard': { rule: 'O2', lines: [], owner: 'booked+shown' },
+  '6-S1-doc': { rule: 'O2', lines: [] },
+  '7-fast-S2Tcal-same': { rule: 'O2', lines: [] },
+  '7-wiz-S2Tcal-same': { rule: 'O2', lines: [] },
+  '7-fast-S2Tcal-r7a': { rule: 'O2', lines: [] },
+  '7-wiz-S2Tcal-r7a': { rule: 'O2', lines: [] },
+  '8-S2-cancel': { rule: 'O4', lines: ['30@-:pending'] },
+  '8-S1cal-arrived': { rule: 'O2', lines: [] },
+  '9-S2T-addline': { rule: 'O2', lines: ['30@T:done/V'] },
+  '9-S1cal-pay': { rule: 'O2', lines: [] },
+};
+
 const rows = [];
 after(() => {
   const w = (s, n) => String(s).padEnd(n);
@@ -212,7 +242,11 @@ const OWNER_TEXT = {
 
 for (const sc of SCENARIOS) {
   const name = `DOOR ${sc.door} / ${sc.state} (${sc.who}) [${sc.id}]: ${sc.desc}`;
-  const dec = DECIDED[sc.id] || null;
+  const dec0 = DECIDED[sc.id] || null;
+  const ow = ONE_WAY[sc.id] || null;   // CRM_ONE_WAY_V1
+  const base = dec0 ? dec0.cell : EXPECT[sc.id];
+  const dec = ow ? { rule: (dec0 ? dec0.rule + ' · ' : '') + 'CRM_ONE_WAY_V1 ' + ow.rule, owner: ow.owner || (dec0 && dec0.owner) || null,
+    cell: { ...base, lines: ow.lines } } : dec0;
   test(name, async () => {
     const o = await observe(sc);
     rows.push({ id: sc.id, o });

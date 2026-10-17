@@ -219,17 +219,40 @@ export function callcenterReport(db, args, user) {
   // CRM_CALENDAR_MIRROR_V1 (разбор ревью M8) — строка заявки бывает и
   // консультацией по виду приёма (service_id NULL, миграция 188): она
   // называется своим видом приёма и считается отдельно от «—».
+  // CRM_ONE_WAY_V1 (план, чтение 7b) — СПРОС = СТРОКИ КАРТОЧЕК + УСЛУГИ ЗАПИСЕЙ КОЛЛ-ЦЕНТРА.
+  // Колл-центр записывает и из календаря (booking_lines_add): прежде зеркало копировало эти
+  // услуги в карточку строками, и отчёт видел их через crm_request_services. Копий больше нет
+  // (услуги записи живут только в визите), поэтому строки визитов записей колл-центра
+  // (crm_booking_links.source = 'callcenter'), на которые не указывает ни одна строка карточки,
+  // читаются сами. Каждая строка визита — один раз.
+  let demandSql = `
+    SELECT cs.service_id AS sid, CASE WHEN cs.service_id IS NULL THEN cs.consultation_type_id END AS ctid,
+           CASE WHEN cs.visit_service_id IS NOT NULL THEN 'v' || cs.visit_service_id ELSE 'l' || cs.id END AS k
+      FROM crm_request_services cs
+      JOIN crm_requests r ON r.id = cs.request_id
+     ${where} AND cs.status <> 'cancelled'   -- V3120_FIX — снятая строка (правка карточки, слияние) — не спрос`;
+  let demandArgs = [...p];
+  try {
+    db.prepare('SELECT 1 FROM crm_booking_links LIMIT 1').get();
+    demandSql += `
+    UNION ALL
+    SELECT vs.service_id, CASE WHEN vs.service_id IS NULL THEN vs.consultation_type_id END, 'v' || vs.id
+      FROM crm_booking_links b
+      JOIN crm_requests r ON r.id = b.request_id
+      JOIN visit_services vs ON vs.visit_id = b.visit_id
+     ${where} AND COALESCE(b.source, '') = 'callcenter' AND vs.status <> 'cancelled' AND vs.clinic_item_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM crm_request_services x WHERE x.visit_service_id = vs.id)`;
+    demandArgs = [...p, ...p];
+  } catch { /* сборка без 187 */ }
   const topServices = db.prepare(`
     SELECT COALESCE(s.name, ct.name_ru, ct.name, '—') AS name,
            -- V3120_FINAL — строку визита, которую делят две карточки одного
            -- человека (CRM_ONE_LINE), спрос считает ОДИН раз.
-           COUNT(DISTINCT CASE WHEN cs.visit_service_id IS NOT NULL THEN 'v' || cs.visit_service_id ELSE 'l' || cs.id END) AS count
-      FROM crm_request_services cs
-      JOIN crm_requests r ON r.id = cs.request_id
-      LEFT JOIN services s ON s.id = cs.service_id
-      LEFT JOIN consultation_types ct ON ct.id = cs.consultation_type_id AND cs.service_id IS NULL
-     ${where} AND cs.status <> 'cancelled'   -- V3120_FIX — снятая строка (правка карточки, слияние) — не спрос
-     GROUP BY cs.service_id, cs.consultation_type_id ORDER BY count DESC LIMIT 12`).all(...p);
+           COUNT(DISTINCT d.k) AS count
+      FROM (${demandSql}) d
+      LEFT JOIN services s ON s.id = d.sid
+      LEFT JOIN consultation_types ct ON ct.id = d.ctid AND d.sid IS NULL
+     GROUP BY d.sid, d.ctid ORDER BY count DESC LIMIT 12`).all(...demandArgs);
   if (!topServices.length) {
     // Ни одной строки услуг — падаем на service_id самой заявки, иначе у клиники
     // без crm_request_services блок пустой, хотя услуга в заявке названа.
@@ -269,14 +292,13 @@ export function callcenterReport(db, args, user) {
 
   // M8 — консультация по виду приёма — группа «Консультации» (type
   // 'consultation'), а не «Без группы».
+  // CRM_ONE_WAY_V1 — тот же спрос, что у topServices (строки карточек + услуги записей колл-центра).
   let byServiceType = byGroupName(db.prepare(`
-    SELECT CASE WHEN cs.service_id IS NULL AND cs.consultation_type_id IS NOT NULL THEN 'consultation' ELSE s.type END AS type,
-           s.is_lab AS is_lab, COUNT(*) AS count
-      FROM crm_request_services cs
-      JOIN crm_requests r ON r.id = cs.request_id
-      LEFT JOIN services s      ON s.id = cs.service_id
-     ${where} AND cs.status <> 'cancelled'   -- V3120_FIX — как у topServices
-     GROUP BY 1, s.is_lab`).all(...p));
+    SELECT CASE WHEN d.sid IS NULL AND d.ctid IS NOT NULL THEN 'consultation' ELSE s.type END AS type,
+           s.is_lab AS is_lab, COUNT(DISTINCT d.k) AS count
+      FROM (${demandSql}) d
+      LEFT JOIN services s      ON s.id = d.sid
+     GROUP BY 1, s.is_lab`).all(...demandArgs));
   if (!byServiceType.length) {
     // Та же подстраховка, что и у topServices: клиника без строк услуг всё
     // равно называет услугу в самой заявке.

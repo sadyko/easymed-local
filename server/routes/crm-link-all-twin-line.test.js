@@ -103,8 +103,21 @@ test('CRM_TWIN_LINE: желание карточки без даты взяло 
 
 // Строки, которые прежняя отмена оставила со строкой визита отменённой записи (базы клиник до
 // правки): шаг A связи разбирает их тем же правилом, прежде чем они возьмут новую запись.
-const asBefore = (t, vid) => t.db.prepare(`UPDATE crm_request_services SET status = 'pending', visit_id = NULL, visit_service_auto = 0
-                                            WHERE visit_service_id IN (SELECT id FROM visit_services WHERE visit_id = ?)`).run(vid);
+// CRM_ONE_WAY_V1 — копий строк визита в карточке больше нет (O2), поэтому строку «как до
+// правки» (копию строки регистратуры: день отменённой записи, ссылка на её строку визита)
+// заводим сами. Шаг A такую строку не берёт (она отпущена прежней отменой), разовое
+// исправление (O8) снимает с неё ссылку.
+const asBefore = (t, vid) => {
+  const link = t.db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(vid);
+  const rid = link ? link.request_id : t.db.prepare('SELECT id FROM crm_requests ORDER BY id LIMIT 1').get().id;
+  const day = t.db.prepare("SELECT date(visit_date, 'localtime') AS d FROM visits WHERE id = ?").get(vid).d;
+  let changes = 0;
+  for (const x of t.db.prepare('SELECT * FROM visit_services WHERE visit_id = ?').all(vid)) {
+    changes += t.db.prepare(`INSERT INTO crm_request_services (request_id, service_id, doctor_id, scheduled_date, status, visit_service_id, visit_service_auto)
+                             VALUES (?, ?, ?, ?, 'pending', ?, 0)`).run(rid, x.service_id, x.doctor_id, day, x.id).changes;
+  }
+  return { changes };
+};
 test('CRM_TWIN_LINE (база до правки, C1): строка карточки со строкой отменённой записи — новая запись того же дня с консультацией: одна, счёт 100 000', async () => {
   const t = await startCrmApp();
   try {
