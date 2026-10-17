@@ -46,6 +46,8 @@
 //      строка становится отпущенным желанием без дня с отметкой этого визита. Привязка «только для
 //      воронки» (C′, телефон) строк карточки не брала никогда (O9) — её отменённый визит не доказательство.
 //      Ревью r5 (п. 4): у карточки на этот день есть живая запись (отменённую записали заново) — не трогается.
+//      Ревью r6 (A): «запись этого дня» — и запись, которую перенесли на другой день и потом отменили: её след
+//      (crm_booking_undo.set_scheduled_date) помнит день, на который её поставили.
 //      Ревью r5 (п. 3): только желание, чья услуга была в отменённом визите (его строка визита с тем же ключом
 //      услуги или, у записи календаря v3.16 без строк визита, его visits.service_id) и которое заведено ДО отмены (created_at строки ≤ updated_at отменённого визита — calendar_book
 //      ставит его при отмене; без него — время записи по следу или привязке); время отмены неизвестно — не
@@ -131,7 +133,13 @@ export function crmOneWayRepair(db) {
       for (const l of db.prepare(`
         SELECT l.id, l.request_id, l.visit_id, l.visit_service_id, l.scheduled_date,
                (SELECT MAX(w.id) FROM visits w
-                 WHERE w.status = 'cancelled' AND ${localDate('w.visit_date')} = date(l.scheduled_date)
+                 WHERE w.status = 'cancelled'
+                   -- день записи — день визита; ревью r6 (A): или день записи по её следу — запись перенесли
+                   -- (D3 → D5) и потом отменили, а след помнит день, на который её поставили
+                   AND (${localDate('w.visit_date')} = date(l.scheduled_date)
+                        OR EXISTS (SELECT 1 FROM crm_booking_undo ud WHERE ud.visit_id = w.id AND ud.request_id = l.request_id
+                                    AND ud.set_scheduled_date IS NOT NULL AND ud.set_scheduled_date <> ''
+                                    AND date(ud.set_scheduled_date) = date(l.scheduled_date)))
                    AND (w.id IN (SELECT u.visit_id FROM crm_booking_undo u WHERE u.request_id = l.request_id)
                         OR w.id IN (SELECT b.visit_id FROM crm_booking_links b WHERE b.request_id = l.request_id))
                    AND NOT EXISTS (SELECT 1 FROM crm_booking_links b WHERE b.visit_id = w.id AND b.request_id = l.request_id

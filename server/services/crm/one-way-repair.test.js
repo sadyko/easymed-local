@@ -187,6 +187,30 @@ test('CRM_ONE_WAY_V1 O8 (ревью r4, r5): датированное желан
   assert.deepEqual(logOf(db).filter(([, a]) => a === 'released_dated').map(([id]) => id), [sameDay, byTrail, byVisitService]);
 });
 
+// Ревью r6 (A) — запись перенесли на другой день и потом отменили: день записи помнит её след
+// (crm_booking_undo.set_scheduled_date). Остальные условия правила 3 — те же.
+test('CRM_ONE_WAY_V1 O8 (ревью r6): перенесённая и отменённая запись — день записи по её следу; без следа дня и с другой услугой — не отпускается', () => {
+  const { db, rid, newCard, visit, cline, linkTo } = base();
+  const undo = (vid, r, day) => db.prepare("INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, set_status, set_scheduled_date) VALUES (?, ?, 'in_process', 'scheduled', ?)").run(vid, r, day);
+  const m = visit('2026-10-25', 'cancelled');   // запись была на 21-е, её перенесли на 25-е и отменили
+  db.prepare('UPDATE visits SET service_id = 30 WHERE id = ?').run(m);
+  linkTo(m, rid, 'callcenter');
+  undo(m, rid, '2026-10-21');
+  const moved = cline({ day: '2026-10-21' });
+  const otherService = cline({ svc: 40, day: '2026-10-21' });
+  const card2 = newCard();   // привязка без следа: дня записи до переноса не знает никто
+  const m2 = visit('2026-10-25', 'cancelled');
+  db.prepare('UPDATE visits SET service_id = 30 WHERE id = ?').run(m2);
+  linkTo(m2, card2, 'callcenter');
+  const noTrail = cline({ rid: card2, day: '2026-10-21' });
+  const out = crmOneWayRepair(db);
+  assert.deepEqual([row(db, moved).scheduled_date, row(db, moved).released_from_visit_id], [null, m], 'день перенесённой записи по следу не узнан');
+  for (const [id, day] of [[otherService, '2026-10-21'], [noTrail, '2026-10-21']]) {
+    assert.deepEqual([row(db, id).scheduled_date, row(db, id).released_from_visit_id], [day, null], 'отпущено без доказательства: ' + id);
+  }
+  assert.equal(out.counts.released_dated, 1);
+});
+
 test('CRM_ONE_WAY_V1 O8: исправление проходит один раз — отметка и итог; второй вызов ничего не делает', () => {
   const { db, visit, vline, cline } = base();
   const v = visit('2026-10-20');
