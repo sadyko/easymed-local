@@ -1,0 +1,326 @@
+# CRM_ONE_WAY_V1 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A booked service exists only as a visit line. The CRM card holds wishes and pointers ("booked lines") into the visit; the two-way copy mirror (`mirrorVisit`, CRM_CALENDAR_MIRROR_V1) is retired, so cancel / restore / move can no longer double a bill or lose a service.
+
+**Architecture:** One new module `server/services/crm/one-way.js` holds every rule O1–O7 (attach a wish, a wish's line yields to a human line, adoption, O3 remove/release, O4 release, O5 restore, O6 follow). `booking-mirror.js` keeps only the shared helpers (pricing, "free line", same-service keys, card date, «Отказ»). Every door that called `mirrorVisit` calls the one-way function that matches what it did (door table below). The funnel fixes of round 3 (O10) live in `visit-status.js`. The upgrade repair (O8) is a one-off like `unify-repair.js`. The card UI (`views/crm.js`) stops re-inserting lines on save, locks the day/doctor of booked lines and acts on the visit for add/remove.
+
+**Tech Stack:** Node 24 ESM, express 5, better-sqlite3, vanilla-JS SPA (`public/js/admin/`), `node:test` (`node --experimental-vm-modules --test`), dictionary `public/js/admin/i18n-strings.js` (ru/uz/en), Playwright (own server, random port, temp data dir).
+
+**Spec (the contract):** `docs/specs/2026-10-17-crm-one-way-booking-design.md` (O1–O10). Display links and P-1…P-7: `docs/specs/2026-10-16-crm-link-all-doors-design.md` (Revision 2/2b) — unchanged (O9).
+
+---
+
+## Ground rules (read once)
+
+- **Clone:** `C:\Users\user\Desktop\implementation workflow\easymed.crm`, branch `feat/crm-link-all`, base `c20fb960`, `core.autocrlf=false`, own `node_modules`. **Never push.** Never touch `easymed.local`, `easymed.api5`, `:8000`, `:8712`. Disk C: ~1 GB free: no repo copies; delete temp dirs.
+- **LF only**; marker **CRM_ONE_WAY_V1** in every comment, test title and commit message of this work.
+- **Commits:** Russian message in `scratchpad/msgs/crm-oneway-<n>.txt`, ending `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`; `git diff --cached --name-only` empty before `git add <named files>`; `git commit -F <file>`.
+- **Runs (narrow only — the owner runs the whole suite):** `scratchpad/crm-one-way/run.sh <set> <ru|en> <tag>` with sets `wide` (all CRM server tests: `server/services/crm/*.test.js`, `server/routes/crm-*.test.js`, visits/calendar/callcenter/cashier-head/crm-merge/visit-lines RPC tests, `server/services/api/*.test.js`, migrations 246/247, `crm-lines-scope`), `money` (cashier*/billing*), `matrix` (`tests/crm-doors/matrix.test.mjs`), `client` (crm/fast-registration/walk-in/wizard/room-calendar/service-picker harnesses), `repros` (ported repros), `files "<list>"`. `LIS_ENABLED=0` always; en-US = `--import …/scratchpad/force-en.mjs`.
+- **Progress:** `scratchpad/crm-one-way/PROGRESS.md` after every step.
+- **Money check in every scenario test:** compare `visit_services` rows (id, service, quantity, unit_price, status) and invoice totals before/after; only the single intended line may appear or disappear.
+
+---
+
+## Data model (CRM_ONE_WAY_V1)
+
+| card line (`crm_request_services`, status `pending`) | `visit_id` | `visit_service_id` | `released_from_visit_id` |
+|---|---|---|---|
+| **wish** (dated or undated) | NULL | NULL | NULL |
+| **released wish** (O3/O4: booking cancelled or its visit line removed elsewhere) | NULL | NULL | the visit; `scheduled_date` NULL |
+| **booked line** | V | X (X.visit_id = V) | NULL |
+
+`visit_service_auto = 1` keeps its meaning from migration 187: **the visit line X was made by the CRM for this wish** (O1 insert). It is what lets X yield to a human line of the same service (wish yields) and to the registration screen's line (R7b).
+
+New columns (migration 246, rewritten): `crm_request_services.released_from_visit_id INTEGER`, `crm_request_services.released_vs_id INTEGER` (the visit line to point back at on O5 restore; no FK, like `visit_service_id` in 187). Repair log tables `crm_one_way_repair` (one row: done_at, summary) and `crm_one_way_repair_log` (one row per change). The 246 trigger `crm_requests_patient_display_links` is dropped (`DROP TRIGGER IF EXISTS` — dev databases of this branch ran the old file).
+
+### Resolved readings of the spec (decided here; each is the conservative reading)
+
+1. **O2/O8 "mirror-made card lines (visit_service_auto = 1)" — the column means the opposite.** In the code, `visit_service_auto = 1` marks a card line that is an **operator's wish** whose *visit line* the mirror made (`mirrorVisitTx` step 2 `linkLine.run(id, 1, …)`). Card lines the mirror *copied from the visit* (step 3 insert, `mirrorCashierLine`) carry `visit_service_auto = 0`. Deleting `auto = 1` lines would delete operator-created lines, which O8 forbids. So: O2 stops the step-3 / cashier copies (auto = 0 copies); O8 deletes only lines identifiable as copies (rule in Task 5); `auto = 1` lines are kept as booked lines (they ARE the one-way model).
+2. **O10 "live booking … or that shows arrival".** Read as: a live booking is a visit that still awaits the patient — status `scheduled`/`confirmed`, day ≥ today, and not already an arrival (`status = 'arrived'` or `cameSurely`). An arrival is history. The literal reading ("an arrived visit is live") keeps the card «Записан» in round-3 repro G1c (`zz-r3-funnel` G1c) — the acceptance requires G1c to pass.
+3. **O6 "the CRM moves no line"** also applies to the card window: a booked line's day, doctor, service and visit cannot be changed from the card (server refusal + locked fields). Moving a booking is done in the calendar (lines move with the visit); removing a service from a booking is the card's × (O3). This is what makes the three move-path twin todos real tests (Task 3).
+4. **O3 remove of a shared visit line** (two cards point at one line): the line is deleted only when no OTHER live card line points at it — the other card's booking still wants it (today's step-1 rule; no money moves).
+5. **Adoption is kept** (`adoptPendingLine`, CRM_UNIFY_V1 A-C2): a human line landing in a visit is pointed at by the holding card's same-service wish dated that day or undated — never by a released wish. It never inserts a visit line; it stops the next registration from billing the same consultation again.
+6. **Wish yields is kept** (`yieldAutoLine` / `replaceAutoTwins` / `pruneAutoLinesOnInvoice` / R7b): when a human line of the same service lands next to a still-free O1-made line, the O1 line is withdrawn and the wish points at the human line (its quantity, package, price). This is O1's "a wish never produces a second line next to a same-service line", applied when the human line comes second.
+7. **Card edit attach validates the patient:** a card line written through `/api/db` with a `visit_id` is attached (O1) only if the visit is the card patient's own-building live visit; otherwise its `visit_id` is cleared (the old mirror inserted lines into any visit id the browser sent).
+
+---
+
+## Responsibility map — `server/services/crm/booking-mirror.js` (and its satellites)
+
+| # | Responsibility today | Verdict | Where it goes |
+|---|---|---|---|
+| 1 | `PRE_ARRIVAL`, `visitRow`, `isPreArrival`, `arrivedByEvidence`, `beforeArrival` | kept | booking-mirror.js (shared helpers; `beforeArrival` exported for one-way.js) |
+| 2 | `vsFree`, `visitHasWork`, `dayVisitMovableFor` | kept | booking-mirror.js |
+| 3 | `requestOfVisit` (lines, else non-display link) | kept | step B of crmLinkVisit, adoption scope, O6 gate |
+| 4 | `lineKey`, `matchKey`, `sameService` | kept | O1 compares with `sameBookedService` (shared/same-service.js — equal to `sameService` in every cell, `crm-link-all-twin.test.js`) |
+| 5 | `bookingLineRefusal`, `priceFor`, `insertBookingLine` | kept | O1 insert, O3 add, `booking_lines_add` |
+| 6 | `relinkHeld`, `deleteVs` | kept | R7b, prune, wish yields |
+| 7 | `cardDateOf` | kept, changed (O10) | links and lines count only visits of the card's patient |
+| 8 | `touchRequest` (card stage/date from its lines) | kept | after a card-edit attach (O3 add) and after O6 follow |
+| 9 | `mirrorVisit` (reconcile entry, called by 14 doors) | **retired** | each door calls the one-way rule it needs (door table) |
+| 10 | step 1 — cancelled card line → delete its free visit line | **replaced by O3** | `removeFromBooking` — only at the card's own edit (/api/db) and card merge, never on a later pass (round-3 M8: restore emptied the visit) |
+| 11 | step 2a — visit line vanished → card line cancelled | **replaced by O3** | `releaseOrphans` — the booked line becomes a released undated wish |
+| 12 | step 2b — card changed the service → replace the visit line | **replaced by O3** | refused at /api/db (`bookedLineEditRefusal`); remove (×) + add instead |
+| 13 | step 2c — card moved the line to another day → move the visit line | **obsolete (O6)** | refused; the calendar moves bookings |
+| 14 | step 2d — `homeFor` + insert one visit line | **replaced by O1** | `attachWish` (`wishHome`) in crmLinkVisit step A |
+| 15 | step 3 — copy a visit line into a new card line | **obsolete (O2)** | — (the card shows the visit via `crm_card_bookings`) |
+| 16 | step 3 — `autoLineFor`/`yieldAutoLine` (mirror line yields to the registrar's) | kept (reading 6) | `wishYields` |
+| 17 | step 3 / cashier — `adoptPendingLine` | kept (reading 5) | `adoptWishes` (+ never a released wish) |
+| 18 | after arrival — `placeHeldLines` | **replaced by O1** | attach happens at step A; `attachHeldLines` attaches legacy "held without visit line" rows at arrival |
+| 19 | after arrival — `replaceAutoTwins` | kept | `wishYields` |
+| 20 | `mirrorReschedule` (calendar move → card lines' day/doctor; free lines follow the doctor; reprice own) | kept as **O6 follow** | `followVisitMove` |
+| 21 | `isCallcenterUser`, `cancellableBookingsOf`, `isRefusalStage`, `isEmptyBooking` | kept (O9) | `cancellableBookingsOf` + patient filter (O10 read-time privacy) |
+| 22 | `visitsOfLines` | kept | mirrorBefore |
+| 23 | `isOwnLine`, `repriceOwn`, `repriceOwnLine` | kept | O6 follow reprices only O1-made lines |
+| 24 | `syncLineFromVisit` (visit line's service/doctor replaced → booked line follows) | kept (**O7**) | billing doors |
+| 25 | `pruneAutoLinesOnInvoice` | kept (reading 6) | `issueVisitInvoice` |
+| 26 | `mirrorCashierLine` (copy a cashier line into the card) | **obsolete (O2)** except adoption | `onVisitLinesAdded` |
+| 27 | visit-status.js `releaseCancelledLines` / `settleCopy` (d6630801: drop echo / bare / carry) | **replaced by O4** | `releaseCancelled` (every pending line → released undated wish) |
+| 28 | visit-status.js `settleStaleCopies` (stale pointers of the old cancel) | **obsolete** | `attachWish` overwrites any stale pointer; O8 repair clears them |
+| 29 | visit-status.js arrival `placeHeldLines` | **replaced** | `attachHeldLines` (same money effect, legacy rows only) |
+| 30 | booking-mirror-db.js `mirrorBefore` refusals (read-only CRM, insert status, 'done' guard, unpaid work, `lockedLineRefusal`), `cancelVisits` (last service of a booked day cancels the empty booking), «Отказ», tasks follow | kept | + `bookedLineEditRefusal`, + snapshot for marker clearing |
+| 31 | booking-mirror-db.js `mirrorAfter` doctor follow (visit line doctor → card line doctor) | kept (**O7**) | |
+| 32 | booking-mirror-db.js `mirrorAfter` card doctor change → free visit line follows + reprice | **obsolete (O7, reading 3)** | refused for booked lines |
+| 33 | booked-twin.js `retireBookedTwin` (R7b) | kept | unchanged |
+| 34 | display-links.js | kept (O9) | unchanged |
+
+### Door table — every `mirrorVisit` / mirror call and its replacement
+
+| Door (file) | Today | CRM_ONE_WAY_V1 |
+|---|---|---|
+| `ensure_visit` ×3 (`rpc/visits.js:297,340,412`) | crmLinkVisit + mirrorVisit | crmLinkVisit only (step A attaches) |
+| `discard_empty_visit` (`rpc/visits.js:485`) | lines → visit_id NULL | also `visit_service_id`/auto cleared |
+| `calendar_book` day-visit move (`rpc/calendar.js:1109`) | crmLinkVisit + mirrorVisit | crmLinkVisit only |
+| `calendar_book` existing (`:1267-1271`) | crmVisitStatus; mirrorReschedule + crmDisplayLinkMoved; mirrorVisit | crmVisitStatus (O4/O5 inside); followVisitMove + crmDisplayLinkMoved; **no reconcile** |
+| `calendar_book` new | crmLinkVisit; crmVisitStatus | unchanged |
+| `booking_lines_add` (`rpc/booking-lines.js:122`) | crmLinkVisit + mirrorVisit (copies the lines into the card) | crmLinkVisit + `adoptWishes(V, added)` — no copies (O2) |
+| `booking_line_remove` (`:149`) | mirrorVisit (card line cancelled) | `releaseOrphans(V)` (O3) |
+| `remove_own_visit_line` (`rpc/visit-lines.js:75`) | mirrorVisit | `releaseOrphans(V)` |
+| `/api/db` visit_services insert/upsert (`booking-mirror-db.js:203`) | retireBookedTwin; mirrorVisit | retireBookedTwin; `onVisitLinesAdded(V, ids)` = wishYields + adoptWishes |
+| `/api/db` visit_services update/delete | mirrorVisit | doctor/service follow (O7); `releaseOrphans(V)` |
+| `/api/db` card line insert/update (`:238`) | mirrorVisit | refusal for booked-line moves; `removeFromBooking` for cancelled; `attachCardLines` for lines given a `visit_id`; marker clearing |
+| cashier line remove (`rpc/billing.js:1213,1246`) | card line cancelled; mirrorVisit | `releaseVisitLine(vsId)` in the transaction (O3) |
+| cashier line add (`rpc/billing.js:1688-1689`) | mirrorVisit + mirrorCashierLine | `onVisitLinesAdded(V, [id])` |
+| first invoice (`rpc/billing.js:457`) | pruneAutoLinesOnInvoice | unchanged |
+| service/doctor change (`rpc/billing.js:1346,1586,1989`) | syncLineFromVisit | unchanged (O7) |
+| card merge (`rpc/crm-merge.js:384`) | mirrorVisit on touched visits | `removeFromBooking` for the duplicate lines it cancelled |
+| API booking recovery (`api/bookings.js:476`) | crmLinkVisit + mirrorVisit | crmLinkVisit only |
+| desk (`crm/visit-link.js deskArrive`) | mirrorVisit, then arrival rule | arrival rule only (attach happened in step A) |
+| arrival (`crm/visit-status.js` arrived) | placeHeldLines | `attachHeldLines` (not on catch-up) |
+| cancel (`crm/visit-status.js` cancelled) | releaseCancelledLines | `releaseCancelled` (O4) + O10 trail |
+| restore cancelled → scheduled/confirmed | nothing (the final mirrorVisit rebuilt/deleted lines) | `restoreReleased` (O5), then crmLinkVisit (stage) |
+
+---
+
+## File map
+
+- Create `server/services/crm/one-way.js` — O1/O3/O4/O5/O6/O7 rules (functions named in the tables above).
+- Create `server/services/crm/one-way.test.js` — unit-level rules on an in-memory DB.
+- Create `server/services/crm/one-way-repair.js` + `one-way-repair.test.js` — O8.
+- Create `server/routes/crm-one-way.test.js` — door scenarios through the real app (`test-helpers/crm-unify-app.js`, `crm-link-all.js`) incl. M1, M2, C1, M7, M8, O3 add/remove, O5, move refusal; every scenario compares visit_services and invoices.
+- Rewrite `server/db/migrations/246_crm_card_patient_links.sql` → `246_crm_one_way.sql` + `246.test.js`.
+- Modify `server/services/crm/booking-mirror.js` (retire rows 9–20, 26), `booking-mirror-db.js`, `visit-link.js`, `visit-status.js`, `no-show.js` (patient filter), `rpc/visits.js`, `rpc/calendar.js`, `rpc/booking-lines.js`, `rpc/visit-lines.js`, `rpc/billing.js`, `rpc/crm-merge.js`, `api/bookings.js`, `rpc/crm-card-bookings.js` (released visits stay listed), `db/schema-registry.js` (read `released_from_visit_id`), `server/index.js` (repair at start).
+- Modify `server/services/crm/booking-mirror-twin.test.js` (todos → tests; changed expectations).
+- Modify client `public/js/admin/views/crm.js` (card lines), `public/js/admin/i18n-strings.js`, client harness `public/js/admin/__tests__/crm-card.test.mjs`.
+- Port repros into `server/routes/crm-one-way-r1-*.test.js`, `crm-one-way-r2-*.test.js`, `crm-one-way-r3-*.test.js`, `server/services/crm/crm-one-way-tw-*.test.js` / `server/services/api/crm-one-way-tw-*.test.js` (paths keep the repros' relative imports).
+- Modify `tests/crm-doors/matrix.test.mjs` EXPECT only where a cell expected a mirror copy.
+
+---
+
+## Tasks
+
+- [ ] **Task 0 — Plan, baseline.** This file; baseline runs `base0` of `wide`, `matrix`, `money`, `client` (ru) recorded in PROGRESS.md. Commit the plan.
+- [ ] **Task 1 — Migration 246 (one-way schema), registry.**
+- [ ] **Task 2 — `one-way.js` rules (unit tests first).**
+- [ ] **Task 3 — Retire the mirror: every door rewired; twin todos → real tests; door scenarios (M1, M2, C1, M7, M8, O3, O5); existing tests and matrix cells adjusted (list below).**
+- [ ] **Task 4 — O10 funnel: trail per booking, live booking, read-time privacy (G1a–e, TRIG-a).**
+- [ ] **Task 5 — O8 upgrade repair (one-off, logged).**
+- [ ] **Task 6 — Port all repros (r1, r2, r3, crm-twin-repros) with one-way expectations / obsolete list.**
+- [ ] **Task 7 — Card UI: wishes and booked lines, O3 add/remove from the card, released wishes, ru/uz/en; client harness; Playwright at 360 px.**
+- [ ] **Task 8 — Verification (narrow sets ru + en-US), counts in this plan, PROGRESS.md.**
+
+---
+
+### Task 1 — Migration 246 (one-way schema), registry
+
+**Files:** delete `server/db/migrations/246_crm_card_patient_links.sql`; create `server/db/migrations/246_crm_one_way.sql`; rewrite `server/db/migrations/246.test.js`; modify `server/db/schema-registry.js` (crm_request_services read columns).
+
+- [ ] Step 1 — failing test `246.test.js`:
+
+```js
+// CRM_ONE_WAY_V1 (мигр. 246, переписана до выпуска) — разметка отпущенных строк, журнал разового исправления,
+// триггер прежней 246 снят (O10: приватность — при чтении).
+test('мигр. 246: колонки отпуска строки, журнал исправления; триггера смены пациента нет', () => {
+  const db = openDb(':memory:'); migrate(db);
+  const cols = db.prepare('PRAGMA table_info(crm_request_services)').all().map((c) => c.name);
+  assert.ok(cols.includes('released_from_visit_id') && cols.includes('released_vs_id'));
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'crm_one_way_repair'").get());
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'crm_one_way_repair_log'").get());
+  assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'crm_requests_patient_display_links'").get(), undefined);
+  // смена пациента привязки не снимает (77 → 78 → 77 не теряет привязку C′)
+  … insert card 77, visit 77, link 'patient'; UPDATE patient 78; UPDATE patient 77 → link still there.
+});
+test('мигр. 246 поверх прежней 246 (база ветки): триггер снят, колонки есть', () => { … create the old trigger by hand, mark the old name applied, migrate → trigger gone });
+```
+
+- [ ] Step 2 — run `run.sh files ru t1 "server/db/migrations/246.test.js"` → FAIL (no columns).
+- [ ] Step 3 — `246_crm_one_way.sql`:
+
+```sql
+-- CRM_ONE_WAY_V1 (2026-10-17) — услуги записи живут только в визите. …(header: why, columns, no FK on purpose)
+DROP TRIGGER IF EXISTS crm_requests_patient_display_links;
+ALTER TABLE crm_request_services ADD COLUMN released_from_visit_id INTEGER;
+ALTER TABLE crm_request_services ADD COLUMN released_vs_id INTEGER;
+CREATE INDEX IF NOT EXISTS idx_crm_req_services_released ON crm_request_services(released_from_visit_id);
+CREATE TABLE IF NOT EXISTS crm_one_way_repair (id INTEGER PRIMARY KEY CHECK (id = 1), done_at TEXT, summary TEXT);
+INSERT OR IGNORE INTO crm_one_way_repair (id, done_at, summary) VALUES (1, NULL, NULL);
+CREATE TABLE IF NOT EXISTS crm_one_way_repair_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, line_id INTEGER, request_id INTEGER, visit_id INTEGER, visit_service_id INTEGER,
+  action TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')));
+```
+  On a branch DB that already applied the old 246, `ALTER … ADD COLUMN` is new too (the old file only made the trigger) — no collision.
+- [ ] Step 4 — registry read columns of `crm_request_services` += `released_from_visit_id` (not writable).
+- [ ] Step 5 — run 246.test.js, 247.test.js, `server/db/migration-order.test.js`, `server/db/schema-registry*.test.js` → PASS. Commit `crm-oneway-1`.
+
+### Task 2 — `server/services/crm/one-way.js` (rules, unit tests first)
+
+**Files:** create `one-way.js`, `one-way.test.js`.
+
+Functions (all never throw except where noted; each runs inside the caller's transaction or opens its own):
+
+```js
+export function sameAsWish(db, wish, x)            // sameBookedService(lineOf(wish), lineOf(x), { needsDoctor })
+export function wishHome(db, v, line)              // O1 target: unheld same-service line → line held only by OTHER cards → null
+export function attachWish(db, v, line, { actorId }) // O1: point (auto 0) or insert one line (auto 1); refusal/foreign → null, line untouched
+export function attachWishes(db, v, lines, opts)   // loop; returns count attached
+export function attachHeldLines(db, visitId, opts) // legacy: visit_id = V AND visit_service_id IS NULL → attachWish
+export function wishYields(db, visitId)            // ex replaceAutoTwins/yieldAutoLine (pre-arrival or arrived, own building)
+export function adoptWishes(db, visitId, vsIds)    // ex adoptPendingLine, + released_from_visit_id IS NULL
+export function onVisitLinesAdded(db, visitId, vsIds) // wishYields + adoptWishes + touchRequest
+export function removeFromBooking(db, pairs)       // O3 card remove: [{lineId, vsId}] → delete free vs if no other live holder
+export function releaseOrphans(db, visitId)        // O3 elsewhere: booked lines whose vs is gone/cancelled/moved → released wish
+export function releaseVisitLine(db, vsId)         // O3 for one removed line (cashier), before/after the DELETE
+export function releaseCancelled(db, visitId)      // O4
+export function restoreReleased(db, visitId)       // O5
+export function followVisitMove(db, visitId, { oldDoctorId }) // O6 (ex mirrorReschedule)
+export function bookedLineEditRefusal(db, ids, values) // O6/O3: change of day/doctor/service/visit of a booked line → message
+export function attachCardLines(db, lineIds, opts) // card edit: lines with visit_id and no vs → validate patient/visit → attachWish, else clear visit_id
+```
+
+Release = `UPDATE crm_request_services SET released_from_visit_id = V, released_vs_id = <X if X is V's live line else NULL>, scheduled_date = NULL, visit_id = NULL, visit_service_id = NULL WHERE id = ?` (`visit_service_auto` kept so O5 restores it). Restore = released wish with `visit_id IS NULL AND (scheduled_date IS NULL OR '') AND released_from_visit_id = V` and `released_vs_id` a live line of V → `visit_id = V, visit_service_id = released_vs_id, scheduled_date = V's day, released_* = NULL`.
+
+- [ ] Step 1 — failing unit tests in `one-way.test.js` (in-memory DB, `migrate`, users/services/patients seeded like `booking-mirror-twin.test.js` `clinic()`):
+  1. `attachWish` inserts exactly one 'added' line for a wish (price = catalogue), card line → booked (auto 1, day = visit day).
+  2. a registrar's same-service line already in the visit → the wish points at it, no insert (auto 0); visit_services unchanged.
+  3. two wishes of ONE card for the same service (glucose fasting + 2 h) → two lines.
+  4. two cards, same consultation (doctor 7) → one line, both point at it.
+  5. consultation wish for doctor 7 vs a doctor-8 line → insert (different booking, review I1).
+  6. surgery wish (`type = 'other'`) → not attached, card line unchanged.
+  7. `releaseCancelled`: booked lines → released (day NULL, visit NULL, vs NULL, marker V, released_vs_id X); the visit's lines unchanged.
+  8. `restoreReleased`: points back at X with the visit's day; an operator-dated released line (marker cleared) is not restored.
+  9. `releaseOrphans`: vs deleted → released, marker V, released_vs_id NULL; other card lines untouched.
+  10. `removeFromBooking`: free vs deleted; vs held by another card's live line → kept; billed vs → kept.
+  11. `wishYields`: O1 line ×1 + registrar line ×2 of the same service → the O1 line deleted, the wish points at the ×2 line (2 units).
+  12. `adoptWishes`: undated wish adopts the registrar's line; a released wish never does.
+  13. `bookedLineEditRefusal`: day/doctor/service/visit change of a booked line → refusal text; same values → null; wish → null.
+- [ ] Step 2 — run → FAIL (module missing).
+- [ ] Step 3 — implement `one-way.js` (move code of `yieldAutoLine`, `autoLineFor`, `replaceAutoTwins`, `adoptPendingLine`, `mirrorReschedule` from booking-mirror.js; write the rest).
+- [ ] Step 4 — run → PASS (ru, en). Commit `crm-oneway-2` (module unused yet; nothing else changes).
+
+### Task 3 — Retire the mirror; every door rewired
+
+**Files:** booking-mirror.js, booking-mirror-db.js, visit-link.js, visit-status.js, rpc/visits.js, rpc/calendar.js, rpc/booking-lines.js, rpc/visit-lines.js, rpc/billing.js, rpc/crm-merge.js, api/bookings.js, routes/db.js (if the insert path needs the ids), booking-mirror-twin.test.js, new `server/routes/crm-one-way.test.js`, plus the existing tests listed under "Existing tests whose expectations change".
+
+- [ ] Step 1 — failing tests:
+  - `booking-mirror-twin.test.js`: the five CRM_TWIN_LINE todos become tests (one-way expectations below) and the four passing tests change per O2/O4 (below). Helper `regAdd` no longer calls `mirrorVisit`; it calls `onVisitLinesAdded` (what `/api/db` does).
+  - `server/routes/crm-one-way.test.js` (real app): **M1** call-centre consultation doctor 10 cancelled, registrar rebooks the same day with doctor 11 → the new visit holds only doctor 11's consultation, 100 000; **M2** cancelled consultation does not appear in an analysis-only visit that day; **C1** cancel + rebook the same consultation by the registrar → one consultation; **M8** registrar consultation on a 'match' visit, cancel, «Записан» again → the visit keeps its line and the card points at it again (O5); **M7** call centre adds services in the calendar to a 'match' visit, cancel → the card has no copies before or after (O2), the visit's lines unchanged; **O3 add** — card adds an analysis to its booking (insert with visit_id) → one visit line + booked line; **O3 remove** — card × on a booked consultation → the free line leaves the visit, empty booking is cancelled; **O3 elsewhere** — calendar removes the line → card line is a released undated wish; **O4** — cancel → released wishes; a same-day rebooking and a desk registration (`undated`) do not take them; after the operator dates one, the next booking takes it; **move refusal** — /api/db update of a booked line's day/doctor/visit → 400 with the message, nothing changes. Each test snapshots `visit_services` + `invoices` before/after.
+- [ ] Step 2 — run → FAIL.
+- [ ] Step 3 — implement:
+  - visit-link.js step A: select per live card (P-6 skip kept) `pending` lines with (`visit_id IS NULL` or dead visit or (`visit_id = V AND visit_service_id IS NULL`)) and (`date(scheduled_date) = V.day` or, with `undated` on live cards, `scheduled_date` empty AND `released_from_visit_id IS NULL`) → `attachWishes`; `settleStaleCopies` call removed; `deskArrive` without `mirrorVisit`.
+  - visit-status.js: arrival → `attachHeldLines` (not on catch-up) then the 'done' rule; cancel → `releaseCancelled`; `from = 'cancelled'` and `to ∈ {scheduled, confirmed}` → `restoreReleased` (the stage move is crmLinkVisit's, called by calendar_book for a restore); `releaseCancelledLines`, `settleCopy`, `settleStaleCopies` deleted.
+  - doors per the door table; booking-mirror.js: delete `mirrorVisit`, `mirrorVisitTx`, `placeHeldLines`, `homeFor`, `adoptPendingLine`, `autoLineFor`, `yieldAutoLine`, `replaceAutoTwins`, `mirrorReschedule`, `mirrorCashierLine`; header rewritten (CRM_ONE_WAY_V1: what stayed and why).
+  - booking-mirror-db.js: `mirrorBefore` adds `bookedLineEditRefusal` after `lockedLineRefusal`, snapshots target rows (`ctx.before`), collects `{lineId, vsId}` of lines being cancelled (`ctx.removed`); `mirrorAfter`: visit_services insert → `onVisitLinesAdded`; update → O7 follow (doctor; service via `syncLineFromVisit`) + `releaseOrphans`; delete → `releaseOrphans`; card insert/update → `removeFromBooking(ctx.removed)`, `attachCardLines`, marker clearing (`released_* = NULL` where day/doctor/service changed), `cancelVisits` as today.
+  - calendar.js restore: `existing.status = 'cancelled'` and the new status is scheduled/confirmed → after `crmVisitStatus` call `crmLinkVisit(db, id, user)` (step B finds the holding card; step G moves it forward as at booking).
+- [ ] Step 4 — run the new tests, `wide`, `money`, `matrix` (ru); adjust ONLY the expectations listed below (each edit carries a `CRM_ONE_WAY_V1 (O…)` comment); any other failure is a bug to fix, not an expectation to change.
+- [ ] Step 5 — run the same sets in en-US. Commit `crm-oneway-3`.
+
+#### Twin tests (booking-mirror-twin.test.js) — one-way expectations
+
+| test | before | CRM_ONE_WAY_V1 |
+|---|---|---|
+| one card, two glucose lines (registrar), cancel + rebook | new visit has 2 | **0 in the new visit; both stay in the cancelled one** — the registrar's lines were never the card's (O2: no copies), the cancelled visit keeps its lines (O4) |
+| registrar ×2 injection (call booking), site card wants injection (later), cancel + rebook | 2 | **1** (the site card's wish, catalogue price) — the ×2 line stays in the cancelled visit (O4); nothing doubled |
+| package line, site card wants the same analysis, cancel + rebook | the package line | **one line, catalogue price** — the package line stays in the cancelled visit (O4), the site's wish books one line (O1) |
+| two cards, one consultation, cancel 15:00, rebook 10:00 | 1 | **1**, held by the site card's wish; the call card's line is a released undated wish (O4) |
+| todo 1 — site (earlier) wants injection, registrar ×2 on the call booking, cancel + rebook | was 3 | **1, never 3** (O4 + O1) |
+| todo 2 — site wants analysis, package line on the call booking, cancel + rebook | was both | **one line** (O1); the package line stays with the cancelled visit |
+| todo 3 — card moves a ×10 course onto a day where another card holds ×1 | was 11 | **move refused** («Перенос записи — в календаре»), ×10 stays on its visit, ×1 on the other (O6); via the calendar instead → ×10 moves with its visit, still one line, 10 units |
+| todo 4 — card B's consultation moved onto card A's booked day (and after merging A and B) | was 2 | move refused; remove (×) + add on A's day → **1 consultation** (O3 remove + O1 point); merge → one line (removeFromBooking of the duplicate) |
+| todo 5 — a shared line (two duplicate cards) moved by one of them onto a booked day | was 2 | move refused; remove (×) keeps the shared line (other card holds it), add on the booked day points at the existing line → **each day one line** |
+
+#### Existing tests whose expectations change (filled in during Task 3/4 from the runs; each with its O-rule)
+
+Predicted (grep of mirror internals and card-copy assertions; the definitive list is written here when Task 3 and Task 4 finish):
+- `server/services/crm/booking-mirror-twin.test.js` — table above (O2, O4).
+- `server/routes/crm-calendar-mirror.test.js` — card copies of calendar lines (O2), card-window moves (O6 refusal), cancel returns lines without day (O4).
+- `server/routes/crm-calendar-v3120.test.js`, `crm-lines-v3120-final.test.js` — auto-line / move semantics (O6, reading 6).
+- `server/routes/crm-link-all-twin-line.test.js` — d6630801 drop/bare/carry → O4 release.
+- `server/routes/crm-link-all-no-done.test.js`, `crm-unify-final-status.test.js`, `crm-unify-desk-money.test.js` — copied 'done'/pending card lines (O2).
+- `server/services/crm/visit-status.test.js`, `no-show.test.js` — cancel keeps the day / released lines (O4); `placeHeldLines` → `attachHeldLines`.
+- `server/services/rpc/cashier-head.test.js` — `mirrorCashierLine` copies (O2); cashier remove → released wish (O3).
+- `server/db/migrations/246.test.js` — trigger dropped (O10).
+- `server/routes/crm-link-all-review2.test.js` / privacy tests that expect the trigger to drop links (O10: read-time filter instead).
+- `tests/crm-doors/matrix.test.mjs` — cells whose `lines` held a mirror copy of the door's visit line (O2); `vs` columns must stay identical.
+
+### Task 4 — O10 funnel
+
+**Files:** visit-status.js (cancel branch), booking-mirror.js `cardDateOf` / `cancellableBookingsOf`, no-show.js sweep `bookingsOf`, visit-status.js `liftMissed` links, `server/routes/crm-one-way-funnel.test.js`.
+
+- [ ] Step 1 — failing tests = round-3 funnel repros ported as real tests: G1a (human move survives), G1b (no-show not erased), G1c (arrived booking is history: human date returns), G1d/G1e (a past unmarked 'scheduled' visit is not a live booking), TRIG-a (77 → 78 → 77 keeps the display link; cancel returns the card), TRIG-c (patient merge keeps it), and the privacy read filter (card moved to 78 → its date, no-show sweep and «Отказ» ignore 77's visits).
+- [ ] Step 2 — run → FAIL.
+- [ ] Step 3 — implement: `LIVE_BOOKING_SQL(alias)` = status scheduled/confirmed, local day ≥ today, no arrival (`status <> 'arrived'`, no paid invoice, no evidence line); used by `lineBooked`, `otherLink`, P-4 `otherAhead`; trail = this visit's entries + entries of the card's other LIVE bookings; restore only if the card still stands in the stage the booking set (kept rule); without restore this visit's entries move to the earliest other live display booking of the card (keeps G-1b), else are deleted; patient filters: `cardDateOf` (links and lines join `x.patient_id = r.patient_id`), sweep `bookingsOf`, `cancellableBookingsOf`, `liftMissed` links.
+- [ ] Step 4 — run funnel tests + `wide` + `matrix` (ru, en). Commit `crm-oneway-4`.
+
+### Task 5 — O8 upgrade repair
+
+**Files:** create `server/services/crm/one-way-repair.js`, `one-way-repair.test.js`; modify `server/index.js` (after `crmUnifyRepair`, before the no-show schedule).
+
+Rules (one transaction; `crm_one_way_repair.done_at` set at the end; a second call does nothing):
+1. **Mirror copies → deleted** (log `deleted_copy`): pending/done card line with `visit_service_auto = 0`, `visit_id = vs.visit_id`, created **0–2 s after its visit line** (`julianday(l.created_at) - julianday(vs.created_at)` in [0, 2/86400]) — the step-3 / cashier copy is inserted in the same request as the visit line; an operator's line is saved by the card window (always without a visit) and can only come later. Ambiguous lines (older, or later than 2 s) are kept as booked lines and logged `kept_ambiguous`.
+2. **Booked lines of a cancelled visit → released undated wishes** (log `released`): pending, `visit_id` = a cancelled visit.
+3. **Stale pointers of the old cancel** (log `cleared_stale`): pending, `visit_id IS NULL`, `visit_service_id` into a cancelled visit: pointer cleared; if the line's day is still the cancelled visit's day → released (O4); if the operator gave it another day → a plain dated wish.
+4. Never: visit_services, invoices, payments, card stages; lines with status 'cancelled'; operator lines (rule 1 only deletes 0–2 s copies).
+- [ ] Step 1 — failing tests: each rule + run-once + "no visit_services/invoices change" snapshot + an operator line attached to a registrar line minutes later is kept.
+- [ ] Step 2–4 — implement, run (ru, en), commit `crm-oneway-5`.
+
+### Task 6 — Port the repros
+
+**Files:** `server/routes/crm-one-way-r1-<name>.test.js` (from `crm-link-review/repros-r1`), `crm-one-way-r2-<name>.test.js` (`repros-r2`), `crm-one-way-r3-<name>.test.js` (`tree3/server/routes/zz-r3-*`), `server/services/crm/crm-one-way-tw-<name>.test.js` and `server/services/api/crm-one-way-tw-<name>.test.js` (`crm-twin-repros`).
+
+- [ ] Step 1 — copy each file (titles prefixed `CRM_ONE_WAY_V1 —`), fix imports of retired functions (`mirrorVisit` → `onVisitLinesAdded` where the repro simulated `/api/db`; `crmWonCardLines` → obsolete).
+- [ ] Step 2 — run `repros` set; for each failing test decide per the classification (`scratchpad/crm-one-way/REPRO-CLASSIFY.md`): one-way expectation (edit with the O-rule in a comment) or obsolete (delete the test; listed in the table below with the reason).
+- [ ] Step 3 — run (ru, en); commit `crm-oneway-6`.
+
+#### Repro outcome table (filled in by Task 6)
+
+### Task 7 — Card UI
+
+**Files:** `public/js/admin/views/crm.js` (loading lines, `paintPicked`, `saveLines`, schedule sheet, `bookDays`), `public/js/admin/i18n-strings.js`, `server/services/rpc/crm-card-bookings.js`, `public/js/admin/__tests__/crm-card.test.mjs`.
+
+- [ ] Step 1 — failing client tests (fake supabase of `crm-card.test.mjs`): saving a card without edits sends no insert and no cancel of existing wishes; an edited wish is updated in place (same id); a removed booked line is cancelled by id; a new service dated on a booked day is inserted with that booking's `visit_id`; a booked line shows «Записан: …» and its date/doctor inputs are disabled with «Перенос записи — в календаре»; a released wish shows «Запись отменена — назначьте дату заново»; «Применить ко всем» skips booked lines.
+- [ ] Step 2 — server: `crm_card_bookings` also lists visits named by `released_from_visit_id` (so a cancelled booking stays visible as «Отменён»); test in `crm-link-all-card-bookings.test.js` style.
+- [ ] Step 3 — implement; i18n ru/uz/en for every new string; type scale (12.5 / 13.5 px), `Icon()`, no emoji.
+- [ ] Step 4 — client harness + server test (ru, en); Playwright on an own server (random port, temp data dir, removed after): card with a booked line + a wish + a released wish at 360 px and 1280 px, screenshot check (no horizontal scroll). Commit `crm-oneway-7`.
+
+### Task 8 — Verification
+
+- [ ] `wide`, `money`, `matrix`, `client`, `repros`, migrations, guards (`server/i18n-server-messages.test.js`, `server/app-test-hygiene.test.js`, `scripts/build-bundle.test.js`, `server/db/migration-order.test.js`) in ru and en-US; counts into this plan; marker sweep (`grep -rn CRM_ONE_WAY_V1`); `grep -rn "mirrorVisit\|mirrorCashierLine\|placeHeldLines\|settleStaleCopies" server public` → no code use. Final commit `crm-oneway-8` (plan update).
+
+---
+
+## Self-review
+
+- Spec coverage: O1 (Task 2 attachWish, Task 3 step A), O2 (Task 3 — copies removed at booking_lines_add, step 3, cashier), O3 (Task 2/3 removeFromBooking, releaseOrphans, attachCardLines, refusal; Task 7 UI), O4 (releaseCancelled, step A filter), O5 (restoreReleased + calendar restore), O6 (followVisitMove, refusal), O7 (attachHeldLines/'done', syncLineFromVisit, doctor follow), O8 (Task 5), O9 (unchanged code paths; matrix), O10 (Task 1 trigger, Task 4). Acceptance: twin todos (Task 3 table), repros (Task 6), matrix 110/110 (Task 3/4), money snapshots (every scenario), ru/en (every task), UI (Task 7).
+- Readings 1–7 above are the only places where the spec text and the code disagreed; none moves money.
