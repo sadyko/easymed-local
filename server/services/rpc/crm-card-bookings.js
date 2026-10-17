@@ -24,8 +24,10 @@
 // CRM_LINK_ALL_V1 (повторное ревью приватности, PRIV-3) — ТОЛЬКО ВИЗИТЫ ПАЦИЕНТА
 // КАРТОЧКИ. Оператор перевёл карточку на другого пациента — визиты прежнего (врач,
 // услуги) она больше не показывает, чем бы их ни держала (строкой, привязкой). Карточка
-// без пациента записей не показывает. Привязки «только для воронки» к чужим визитам при
-// смене пациента снимает сама база (миграция 246).
+// без пациента записей не показывает. CRM_ONE_WAY_V1 (O10) — привязки при смене пациента
+// остаются (триггер мигр. 246 снят): чужой визит отсекает только это чтение (v.patient_id).
+// CRM_ONE_WAY_V1 (O4) — и отменённая запись, отпустившая строки карточки без дня
+// (released_from_visit_id), остаётся в списке «Отменён».
 import { canRead } from '../../db/schema-registry.js';
 import { effectiveRoles } from '../roles.js';
 import { leadVisible } from '../crm/visibility.js';
@@ -72,6 +74,10 @@ export function crmCardBookings(db, args, user) {
      WHERE v.id IN (SELECT visit_id FROM crm_request_services WHERE request_id = @rid AND status <> 'cancelled' AND visit_id IS NOT NULL
                     UNION SELECT vs.visit_id FROM crm_request_services l JOIN visit_services vs ON vs.id = l.visit_service_id
                            WHERE l.request_id = @rid AND l.status <> 'cancelled'
+                    -- CRM_ONE_WAY_V1 (O4) — отменённая запись, отпустившая строки карточки без дня, остаётся в
+                    -- списке «Отменён» со своими услугами: оператор видит, что было записано
+                    UNION SELECT released_from_visit_id FROM crm_request_services
+                           WHERE request_id = @rid AND status <> 'cancelled' AND released_from_visit_id IS NOT NULL
                     ${links})
        AND v.patient_id = @pid   -- CRM_LINK_ALL_V1 (PRIV-3) — только визиты пациента карточки
      ORDER BY v.visit_date DESC, v.id DESC

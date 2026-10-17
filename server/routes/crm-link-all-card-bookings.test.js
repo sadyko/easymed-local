@@ -91,3 +91,19 @@ test('CRM_LINK_ALL_V1 ред. 2: чужую карточку не видно —
     assert.throws(() => crmCardBookings(t.db, { request_id: rid }, { id: 99, role: 'cashier', extra_roles: [] }), /не найдена/, 'правило строк crm_requests: чужая карточка не видна');
   } finally { t.close(); }
 });
+
+// CRM_ONE_WAY_V1 (O4) — отмена отпускает строки карточки без дня и без визита; запись, которую карточка
+// держала только строкой, остаётся в «Записях пациента» как «Отменён» с её услугами.
+test('CRM_ONE_WAY_V1 (O4): запись, которую карточка держала строкой, отменили — в «Записях пациента» она «Отменён» с услугами', async () => {
+  const t = await startCrmApp();
+  try {
+    const rid = addLead(t.db, { assigned: 3 });
+    addLine(t.db, rid, { svc: 40, day: D });
+    const b = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 10, service_id: 30, start: at(D, 12), duration_minutes: 30, status: 'scheduled' });
+    assert.equal(b.status, 200, b.text);
+    const vid = b.json.data.visit.id;
+    assert.equal(t.db.prepare('SELECT 1 FROM crm_booking_links WHERE visit_id = ?').get(vid), undefined, 'карточка держит запись привязкой, а не строкой');
+    assert.equal((await t.rpc('calendar_book', 'reg', { visit_id: vid, start: at(D, 12), status: 'cancelled' })).status, 200);
+    assert.deepEqual((await list(t, 'cc', rid)).map(brief), [{ day: D, status: 'cancelled', doctor: 'Иванов', services: [['Анализ крови', 1, 'added']] }]);
+  } finally { t.close(); }
+});

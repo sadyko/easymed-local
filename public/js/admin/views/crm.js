@@ -1780,6 +1780,19 @@ async function paint() {
         // отменяет только строки без записи, и снятая услуга молча оставалась
         // бы в календаре. Сервер, увидев отмену, снимает её и со строк записи.
         const bookedLineIds = new Set();
+        // CRM_ONE_WAY_V1 — ВСЕ строки, приехавшие из базы (и желания): сохранение правит их НА МЕСТЕ,
+        // отменяет только убранные и вставляет только новые. Прежняя «замена набора» (отменить все
+        // строки без записи и вписать заново) теряла отметку отпущенной строки (released_from_visit_id)
+        // и сбрасывала ей дату заведения — а по отметке сервер знает, что строку отпустила отмена
+        // записи и сама она ни в какой визит не садится (O4).
+        const loadedLineIds = new Set();
+        /**
+         * CRM_ONE_WAY_V1 — СТРОКА ЗАПИСИ: указывает на услугу живого визита. Её день, врач и время —
+         * день, врач и время визита; правит их календарь (O6: «Перенос записи — в календаре»), а
+         * карточка может только убрать услугу из записи крестиком (O3). Визит отменён или «Не
+         * пришёл» — строка уже не запись (отменённую сервер и так отпускает без дня).
+         */
+        const isBookedLine = (p) => !!(p && p.line_id && p.visit_id && p.status !== 'done' && !p.visit_dead);
         // CRM_LINKS_V1 — доехали ли строки услуг заявки из базы (см. primaryDate).
         let linesLoaded = !r;
         let svcChosen = r ? (r.service_id || null) : null;
@@ -2032,14 +2045,24 @@ async function paint() {
             paintSvcChips();   // CRM_SERVICE_FILTER_V1 — счётчики следуют за выбором
             if (!picked.length) return;
             for (const p of picked) {
-                const dateInp = h('input', { type: 'date', value: p.date || '',
-                    style: { width: '150px', padding: '6px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px' } });
+                // CRM_ONE_WAY_V1 (O6) — у строки записи день — день визита: поле заперто, перенос — в календаре.
+                const booked = isBookedLine(p);
+                const dateInp = h('input', { type: 'date', value: p.date || '', disabled: booked || undefined,
+                    'data-line-locked': booked ? '' : undefined, title: booked ? tr('Перенос записи — в календаре') : undefined,
+                    style: { width: '150px', maxWidth: '100%', padding: '6px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px' } });
                 dateInp.addEventListener('change', () => { p.date = dateInp.value; syncPrimary(); });
-                pickedList.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', background: 'var(--teal-25, #f0faf9)', border: '1px solid var(--teal-200, #b2dfdb)', borderRadius: '10px' } },
-                    h('div', { style: { flex: 1, minWidth: 0 } },
+                // CRM_ONE_WAY_V1 — строка переносится: на узком экране (360 px) название, запись и подсказки
+                // занимают всю ширину, поле дня и крестик — строкой ниже, а не сжимают название до слога.
+                pickedList.appendChild(h('div', { 'data-picked-line': p.line_id ? String(p.line_id) : '', style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', padding: '7px 10px', background: 'var(--teal-25, #f0faf9)', border: '1px solid var(--teal-200, #b2dfdb)', borderRadius: '10px' } },
+                    h('div', { style: { flex: '1 1 180px', minWidth: 0 } },
                         h('div', { style: { fontSize: '13.5px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
                         h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум'),
-                        bookedLabel(p) ? h('div', { 'data-booked': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)', fontWeight: 600 } }, bookedLabel(p)) : null),
+                        bookedLabel(p) ? h('div', { 'data-booked': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)', fontWeight: 600 } }, bookedLabel(p)) : null,
+                        // CRM_ONE_WAY_V1 — где правят строку записи и что стало с отпущенной.
+                        booked ? h('div', { class: 'muted', 'data-booked-hint': '', style: { fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px' } },
+                            Icon('Calendar', { size: 12 }), tr('Перенос записи — в календаре')) : null,
+                        (!booked && p.released && !p.date) ? h('div', { 'data-released': '', style: { fontSize: '12.5px', color: 'var(--warn-700, #b45309)', display: 'flex', alignItems: 'center', gap: '4px' } },
+                            Icon('Warning', { size: 12 }), tr('Запись отменена — назначьте услуге новую дату')) : null),
                     dateInp,
                     h('button', { type: 'button', title: 'Убрать услугу',
                         style: { border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--crit-500, #ef4444)', fontSize: '17px', lineHeight: 1, padding: '0 2px' },
@@ -2139,7 +2162,7 @@ async function paint() {
                 supabase.from('crm_request_services')
                     // CRM_REAL_BOOKING_V1 — id и visit_id: строка, которая уже
                     // держит слот, переписыванию набора не подлежит (saveLines).
-                    .select('id, service_id, scheduled_date, status, doctor_id, visit_id, consultation_type_id')
+                    .select('id, service_id, scheduled_date, status, doctor_id, visit_id, consultation_type_id, released_from_visit_id')   // CRM_ONE_WAY_V1 — отпущенная строка
                     .eq('request_id', r.id).neq('status', 'cancelled')
                     .then(async ({ data: lines, error }) => {
                         const consults = await consultsP;
@@ -2167,7 +2190,9 @@ async function paint() {
                             // уже держит время врача.
                             if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null, status: ln.status || 'pending',
                                 line_id: ln.id || null, visit_id: ln.visit_id || null,
+                                released: ln.released_from_visit_id != null,   // CRM_ONE_WAY_V1 (O4)
                                 booked_date: ln.scheduled_date || '', booked_doctor_id: ln.doctor_id || null });
+                            if (ln.id) loadedLineIds.add(String(ln.id));   // CRM_ONE_WAY_V1
                             if (sv && ln.id && ln.visit_id && ln.status === 'pending') bookedLineIds.add(String(ln.id));
                             // CRM_CALENDAR_MIRROR_V1 — консультация по виду приёма.
                             if (!sv && ln.service_id == null && ln.consultation_type_id != null) {
@@ -2177,7 +2202,9 @@ async function paint() {
                                     price: consultPriceOf({ consultation_type_id: ln.consultation_type_id, doctor_id: ln.doctor_id }),   // CLINIC_API_FIX_V1 — как в кассе
                                     date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null, status: ln.status || 'pending',
                                     line_id: ln.id || null, visit_id: ln.visit_id || null,
+                                    released: ln.released_from_visit_id != null,   // CRM_ONE_WAY_V1 (O4)
                                     booked_date: ln.scheduled_date || '', booked_doctor_id: ln.doctor_id || null });
+                                if (ln.id) loadedLineIds.add(String(ln.id));   // CRM_ONE_WAY_V1
                                 if (ln.id && ln.visit_id && ln.status === 'pending') bookedLineIds.add(String(ln.id));
                             }
                         }
@@ -2451,56 +2478,56 @@ async function paint() {
             // (visit_id: null) и записывается заново ниже; сам визит остаётся
             // календарю: отменять запись вправе тот, кто её видит, а не
             // редактор заявки.
-            const linked = writable.filter((p) => p.line_id && p.visit_id);
-            const plain = writable.filter((p) => !(p.line_id && p.visit_id));
-            // CRM_CALENDAR_MIRROR_V1 — записанные строки, которых в карточке больше нет.
+            // CRM_ONE_WAY_V1 — СТРОКИ ПРАВЯТСЯ НА МЕСТЕ (docs/specs/2026-10-17-crm-one-way-booking-design.md):
+            //   • строка записи (isBookedLine) — день, врач и время у неё визитные, из карточки их не
+            //     меняют (O6); убрали крестиком — отменяется по номеру, и сервер снимает её свободную
+            //     строку визита (O3);
+            //   • желание (без визита, и отпущенное отменой) — правится по номеру, только если день или
+            //     врач изменились (правка дня снимает отметку отпуска на сервере); убранное — отменяется;
+            //   • новая услуга — вставка; на день, где у карточки уже есть запись, — сразу в эту запись
+            //     (visit_id записи: сервер сажает её одной строкой визита, O3 «добавить в запись»).
+            // Прежняя «замена набора» (отменить все строки без визита и вписать заново) больше не нужна.
             const kept = new Set(picked.filter((p) => p.line_id).map((p) => String(p.line_id)));
-            const dropped = [...bookedLineIds].filter((id) => !kept.has(id));
+            const dropped = [...new Set([...bookedLineIds, ...loadedLineIds])].filter((id) => !kept.has(id));
+            const wishes = writable.filter((p) => p.line_id && !isBookedLine(p));
+            const fresh = writable.filter((p) => !p.line_id);
+            const bookingOfDay = (day) => {
+                const b = day ? picked.find((q) => isBookedLine(q) && String(q.date || '') === String(day)) : null;
+                return b ? b.visit_id : null;
+            };
             try {
                 if (dropped.length) {
                     const { error } = await supabase.from('crm_request_services')
                         .update({ status: 'cancelled' }).in('id', dropped.map(Number)).eq('status', 'pending');
                     if (error) throw new Error(error.message || error);
-                    for (const id of dropped) bookedLineIds.delete(id);
+                    for (const id of dropped) { bookedLineIds.delete(id); loadedLineIds.delete(id); }
                 }
-                await supabase.from('crm_request_services')
-                    .update({ status: 'cancelled' })
-                    .eq('request_id', requestId).eq('status', 'pending')
-                    .is('visit_id', null);
-                for (const p of linked) {
-                    const moved = String(p.date || '') !== String(p.booked_date || '');
-                    const patch = {
+                for (const p of wishes) {
+                    const changed = String(p.date || '') !== String(p.booked_date || '')
+                        || String(p.doctor_id || '') !== String(p.booked_doctor_id || '');
+                    if (!changed) continue;
+                    const { error } = await supabase.from('crm_request_services')
+                        .update({ scheduled_date: p.date || null, doctor_id: p.doctor_id || null }).eq('id', p.line_id);   // CRM_LINE_DOCTOR_V1
+                    if (error) throw new Error(error.message || error);
+                    p.booked_date = p.date || ''; p.booked_doctor_id = p.doctor_id || null;
+                    if (p.date) p.released = false;
+                }
+                if (!fresh.length) return;
+                // CRM_LINKS_V1 — выполненные строки не вписываются заново.
+                const { error: insErr } = await supabase.from('crm_request_services').insert(fresh.map(p => {
+                    const visit = bookingOfDay(p.date);
+                    return {
+                        request_id: requestId,
+                        service_id: p.service_id,
+                        ...(p.consultation_type_id ? { consultation_type_id: p.consultation_type_id } : {}),   // CRM_CALENDAR_MIRROR_V1
                         scheduled_date: p.date || null,
                         doctor_id: p.doctor_id || null,   // CRM_LINE_DOCTOR_V1
-                        ...(moved ? { visit_id: null } : {}),
+                        status: 'pending',
+                        ...(visit ? { visit_id: visit } : {}),   // CRM_ONE_WAY_V1 (O3) — в запись этого дня
                     };
-                    const { error } = await supabase.from('crm_request_services')
-                        .update(patch).eq('id', p.line_id);
-                    if (error) throw new Error(error.message || error);
-                    if (moved) {
-                        // CRM_REAL_BOOKING_V1 — СТАРЫЙ ПРИЁМ НЕ ИСЧЕЗАЕТ САМ.
-                        // Строку со своего визита мы сняли, а сам визит остался
-                        // держать время врача и уже ничем с заявкой не связан:
-                        // найти его можно было бы только глазами. Запоминаем —
-                        // и после удачной записи нового дня спрашиваем, отменять
-                        // ли старый (см. offerCancelSuperseded).
-                        if (p.visit_id) supersededVisits.push({ visitId: p.visit_id, fromDate: p.booked_date || '', toDate: p.date || '' });
-                        p.visit_id = null; p.booked_date = p.date || '';
-                    }
-                }
-                if (!plain.length) return;
-                // CRM_LINKS_V1 — выполненные строки не вписываются заново.
-                // Отменялись только pending (это верно), а вставлялся ВЕСЬ
-                // набор: у оплаченной услуги появлялся второй, «ждущий»
-                // двойник, и регистратура подставляла её в смету ещё раз.
-                await supabase.from('crm_request_services').insert(plain.map(p => ({
-                    request_id: requestId,
-                    service_id: p.service_id,
-                    ...(p.consultation_type_id ? { consultation_type_id: p.consultation_type_id } : {}),   // CRM_CALENDAR_MIRROR_V1
-                    scheduled_date: p.date || null,
-                    doctor_id: p.doctor_id || null,   // CRM_LINE_DOCTOR_V1
-                    status: 'pending',
-                })));
+                }));
+                if (insErr) throw new Error(insErr.message || insErr);
+                await reloadLines(requestId);   // номера новых строк — чтобы повторное сохранение не вписало их снова
             } catch (e) {
                 toast(trf('Услуги заявки не сохранились: {msg}', { msg: (e && e.message) || e }), 'fail');
             }
@@ -2521,9 +2548,10 @@ async function paint() {
         async function reloadLines(requestId) {
             if (!requestId) return;
             const { data, error } = await supabase.from('crm_request_services')
-                .select('id, service_id, scheduled_date, status, doctor_id, visit_id, consultation_type_id')
+                .select('id, service_id, scheduled_date, status, doctor_id, visit_id, consultation_type_id, released_from_visit_id')
                 .eq('request_id', requestId).neq('status', 'cancelled');
             if (error || !data) return;
+            const taken = new Set();   // CRM_ONE_WAY_V1 — одна строка базы — одной строке окна
             for (const p of picked) {
                 // Ключ сопоставления — услуга, день И ВРАЧ: одну и ту же услугу
                 // в один день назначают двум разным врачам (второе мнение,
@@ -2531,12 +2559,15 @@ async function paint() {
                 // Полностью одинаковые строки (та же услуга, тот же день, тот же
                 // врач) этим ключом всё равно не различить — их и в окне нельзя
                 // завести две: addPicked() не пускает одну услугу дважды.
-                const ln = data.find((x) => String(x.service_id ?? '') === String(p.service_id ?? '')
+                const ln = data.find((x) => !taken.has(x.id) && String(x.service_id ?? '') === String(p.service_id ?? '')
                     && String(x.consultation_type_id ?? '') === String(p.consultation_type_id ?? '')
                     && String(x.scheduled_date || '') === String(p.date || '')
                     && String(x.doctor_id || '') === String(p.doctor_id || ''));
                 if (!ln) continue;
+                taken.add(ln.id);
                 p.line_id = ln.id || null;
+                if (ln.id) loadedLineIds.add(String(ln.id));   // CRM_ONE_WAY_V1
+                p.released = ln.released_from_visit_id != null;
                 // CLINIC_API_FIX_V1 (ревью 5c03462) — визит сменился: прежняя подпись записи
                 // (booked_at) о нём уже неправда; новую подставит prefillBookedTimes.
                 if (String(p.visit_id || '') !== String(ln.visit_id || '')) delete p.booked_at;
@@ -2572,6 +2603,8 @@ async function paint() {
             const byId = new Map(data.map((v) => [String(v.id), v]));
             for (const p of picked) {
                 const v = p.visit_id ? byId.get(String(p.visit_id)) : null;
+                // CRM_ONE_WAY_V1 — строка визита «Не пришёл» (след неявки) — уже не запись: правится.
+                p.visit_dead = !!(v && (v.status === 'cancelled' || v.status === 'no_show'));
                 const d = v && v.visit_date ? new Date(v.visit_date) : null;
                 if (!d || Number.isNaN(d.getTime())) continue;
                 // CRM_CALENDAR_MIRROR_V1 — карточка показывает ЗАПИСЬ: день, час и
@@ -2657,8 +2690,13 @@ async function paint() {
             const paintRows = () => {
                 clear(rows);
                 for (const p of picked) {
-                    const inp = h('input', { type: 'date', value: p.date || '',
-                        style: { width: '155px', flex: '0 0 auto', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' } });
+                    // CRM_ONE_WAY_V1 (O6) — строку записи на другой день и к другому врачу этим окном не
+                    // переносят (это перенос строки между визитами): день и врач заперты. Время того же дня
+                    // меняется, как прежде, — это перенос самого визита (calendar_book), строки едут с ним.
+                    const locked = isBookedLine(p);
+                    const inp = h('input', { type: 'date', value: p.date || '', disabled: locked || undefined,
+                        'data-line-locked': locked ? '' : undefined, title: locked ? tr('Перенос записи — в календаре') : undefined,
+                        style: { width: '155px', maxWidth: '100%', flex: '0 0 auto', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' } });
                     inputs.set(String(p.service_id), inp);
 
                     // CRM_REAL_BOOKING_V1 — ВРЕМЯ СТРОКИ, НАЗВАННОЕ СЕРВЕРОМ.
@@ -2741,7 +2779,7 @@ async function paint() {
                     const priceEl = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум');
                     if (needsDoctor(p)) {
                         const pool = doctorsForService(p.service_id, p);
-                        const sel = h('select', { style: { width: '210px', flex: '0 0 auto', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', background: 'var(--white,#fff)' } },
+                        const sel = h('select', { disabled: locked || undefined, style: { width: '210px', maxWidth: '100%', flex: '0 0 auto', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', background: 'var(--white,#fff)' } },
                             h('option', { value: '' }, '— выберите врача —'),
                             ...pool.map(d => h('option', { value: String(d.id), selected: String(p.doctor_id || '') === String(d.id) },
                                 d.full_name + (d.specialty ? ' · ' + d.specialty : ''))));
@@ -2995,7 +3033,7 @@ async function paint() {
             const applyAll = h('button', { class: 'btn btn-outline btn-sm', type: 'button',
                 onclick: () => {
                     if (!allInp.value) { toast('Выберите дату.', 'fail'); return; }
-                    for (const p of picked) { p.date = allInp.value; setLineTime(p, p.time); }
+                    for (const p of picked) { if (isBookedLine(p)) continue; p.date = allInp.value; setLineTime(p, p.time); }   // CRM_ONE_WAY_V1 — запись не переносится
                     // Перерисовываем целиком: у каждой строки сменился день, а
                     // значит и список свободного времени у её врача.
                     paintRows();
