@@ -342,7 +342,10 @@ Kept green by code, not by changing the test: `crm-calendar-mirror` R-I5 (a pre-
    service was in the cancelled visit (a visit line of that visit with the same service key) and that was created
    before the cancel (`created_at` ≤ the cancelled visit's `updated_at`, which `calendar_book` sets on cancel; if that
    is empty, the booking time from its trail or link; no time → not released); never when the card holds a live booking
-   that day.
+   that day. Review r6: "that day" is also the day a booking was moved FROM before it was cancelled
+   (`crm_booking_undo.set_scheduled_date`). For a service that needs a doctor, and for consultation-by-type keys, only a
+   wish with no doctor, or with the cancelled booking's doctor, is released. That doctor is the doctor of its visit
+   line, or the visit's doctor when the line has none or the evidence is `visits.service_id`.
 4. Never: deleting rows, visit_services, invoices, payments, card stages/dates; lines with status 'cancelled'.
 Tests: `one-way-repair.test.js` (4), `server/routes/crm-one-way-r4-o8.test.js` (H2, H3) and the old-database upgrade
 `server/routes/crm-one-way-r4-o8-old.test.js` (5, needs `CRM_O8_OLD_DB` = the review's `r4/olddb` or `r4/v316db`).
@@ -468,6 +471,30 @@ Verification after r5 (narrow sets; `LIS_ENABLED=0`; disk guard 120 MB):
 | UI guards | 43/43 | 43/43 |
 | repro ports | 174: 165 pass, 9 skipped (same files) | same |
 | O8 on the review's old databases (`crm-one-way-r4-o8-old` + `crm-one-way-r5-o8-all`; `r4/olddb`; `r4/v316db`) | 9/9; 9/9 | 9/9; 9/9 |
+
+### Adversarial review r6 of ee134121 (2026-10-17) — fixes, test-first
+
+Only O8 rule 3 (the one-off upgrade repair) changed; nothing else.
+
+| item | change | tests |
+|---|---|---|
+| A | Rule 3 also finds a booking that was moved (D3 → D5) and then cancelled. The booking's day comes from the visit's day OR its undo trail (`set_scheduled_date` = the wish's day). All other conditions stay: the service was in the cancelled visit, the wish was created before the cancel, and the card has no live booking that day. | R6-RD-MOVE (`crm-one-way-r6-o8`), `one-way-repair.test.js` |
+| B | For a service that needs a doctor, and for consultation-by-type keys, rule 3 releases only a wish with no doctor or with the cancelled booking's doctor. That doctor is the doctor of its visit line, or the visit's doctor when the line has none or the evidence is `visits.service_id`. A wish for another named doctor keeps its day. Services that need no doctor are unaffected. | R6-RD-DOC, `one-way-repair.test.js` |
+
+**Accepted limits for 3.17.0 (controller decision, no code):**
+- **R6-SYM-ORD:** three cards ask for the same consultation-by-type on one day, one with no doctor, one with doctor 10, one with doctor 11.
+  - The visit's total depends on the order in which the cards are booked. A doctor-less wish booked first makes a doctor-less line (the type's general price), and the first named doctor then shares it. A named doctor booked first makes that doctor's line.
+  - No line is ever shared by two named doctors, and nothing is billed twice. Only the price of the shared line (general or doctor's) and its doctor field depend on the order.
+- **R6-SYM-MOVE** (from before this work; O6 follow = the old `mirrorReschedule`): a doctor-10 visit holds consultations of doctor 10 and doctor 11 (two cards). When the calendar moves the visit to doctor 11, the free line of the old doctor follows the move, so the visit shows two doctor-11 consultations.
+
+Verification after r6 (narrow sets with a private TEMP per run; `LIS_ENABLED=0`):
+
+| set | ru | en-US |
+|---|---|---|
+| O8 sets (`one-way-repair.test.js`, migrations 246/248, repros r4/r5/r6 O8) | 17/17 | 17/17 |
+| O8 on the review's old databases (`crm-one-way-r4-o8-old` + `crm-one-way-r5-o8-all`; `CRM_O8_OLD_DB` = `r4/olddb`; `r4/v316db`) | 9/9; 9/9 | 9/9; 9/9 |
+| wide CRM (incl. every ported repro) | 1164: 1153 pass, 0 fail, 9 skipped (old-database tests without `CRM_O8_OLD_DB`), 2 todo | same |
+| door matrix | 110/110 | 110/110 |
 
 ---
 
