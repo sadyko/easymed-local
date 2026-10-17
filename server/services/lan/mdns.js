@@ -251,7 +251,12 @@ export function createMdnsResponder({
         if (mine.includes(c.address)) continue;
         // Притязание считается, только если адрес — из подсети нашей карты: только
         // там наши компьютеры могли бы получить чужой адрес вместо нашего.
-        const mineIf = list.find((i) => sameSubnet(i.address, c.address, i.netmask));
+        // «Наш» адрес в этой подсети — НАИМЕНЬШИЙ из наших там, как и «их» — наименьший
+        // из их притязаний: иначе сервер с двумя картами в одной подсети (кабель .30 и
+        // Wi-Fi .5) сравнивал бы первую по имени карту и вместе с соседом уходил на
+        // следующее имя (повторная перепроверка 2026-10-17, R1).
+        const mineIf = list.filter((i) => sameSubnet(i.address, c.address, i.netmask))
+          .sort((x, y) => ipNum(x.address) - ipNum(y.address))[0];
         if (mineIf) onConflict(c.address, mineIf);
       }
       return;
