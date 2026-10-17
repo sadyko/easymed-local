@@ -71,6 +71,7 @@ import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 import { openTemplatePickerModal } from './template-picker-modal.js?v=tpl1';   // TEMPLATE_PICKER_V1
 import { resolveTemplate, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1; SERVICES_PACKAGES_V1 — cartPackage
 import { registerWalkIn, walkInRoleRefusal, walkInLinesRefusal } from './walk-in-booking.js?v=wib1';
+import { loadTodayBooking, bookedStatusLabel, isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»
 import { surgeryBedRefusal, isSurgeryPick, SURGERY_NEEDS_BED_TEXT } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1   // WALK_IN_BOOKING_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        // DOCTOR_POOL_V1
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
@@ -189,6 +190,10 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         // этом состоянии допишет строки в тот же визит дня, поэтому «Сохранить»
         // больше нет (см. toStalledState).
         stalled: false,
+        // CRM_LINK_ALL_V1 (R7a) — запись пациента на сегодня: визит записи и строки,
+        // которые регистратор убрал (снимутся с визита при сохранении).
+        bookedVisitId: null,
+        dropBooked: [],
         addLine, applyTemplate, removeLine,
     };
     // Была ли карта заведена ЗДЕСЬ. Для найденного пациента без услуг «Пациент
@@ -292,6 +297,12 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     // до него её суммы не существует. После — она стоит под таблицей строкой:
     // «Итого» это уже сумма счёта, и без этой строки разница между ней и
     // ценами строк выглядела бы ошибкой сложения.
+    // CRM_LINK_ALL_V1 (R7a) — строки записи, уже стоящие в счёте: в таблице их нет
+    // (выставлять их второй раз нельзя), но регистратор должен их видеть.
+    const bookedNote = h('div', {
+        class: 'muted', 'data-booked-billed': '',
+        style: { display: 'none', padding: '8px 14px 0', fontSize: '12.5px', overflowWrap: 'anywhere' },
+    });
     const discountLine = h('div', {
         class: 'muted',
         style: { display: 'none', padding: '8px 14px 10px', fontSize: '12.5px', textAlign: 'right' },
@@ -304,7 +315,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             h('h3', null, Icon('Receipt', { size: 14 }), ' ', tr('Услуги'), ' ', countEl),
             h('span', { class: 'grow' }),
             printBtn, addPackagesBtn, addServicesBtn),
-        table, discountLine);
+        table, bookedNote, discountLine);
 
     // ── главное действие: «Сохранить» В ШАПКЕ БЛОКА РЕКВИЗИТОВ ─────────────
     // На образце владельца «Сохранить» стоит справа в шапке карточки
@@ -402,6 +413,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         const line = savedLine(i);
         const row = state.rows[i];
         if (line && Number.isFinite(Number(line.unitPrice))) return Number(line.unitPrice);
+        // CRM_LINK_ALL_V1 (R7a) — строка «из записи»: её цена уже в визите.
+        if (row && row.booked && Number.isFinite(Number(row.booked.unitPrice))) return Number(row.booked.unitPrice);
         // SERVICES_PACKAGES_V1 — строка пакета: цена услуги без скидки, по которой считалась раскладка.
         if (row && row.package && row.package.full != null && row.package.price != null) return Number(row.package.full);
         return Number(row && row.service.price) || 0;
@@ -464,6 +477,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         sel.value = row.doctorId == null ? '' : String(row.doctorId);
         sel.addEventListener('change', () => { row.doctorId = sel.value ? Number(sel.value) : null; });
         if (state.result) sel.disabled = true;
+        // CRM_LINK_ALL_V1 (R7a) — врач строки «из записи» — врач записи: строка уже в визите.
+        if (row.booked) { sel.disabled = true; sel.title = tr('Врач записи — чтобы сменить, уберите строку и добавьте услугу заново'); }
         row.sel = sel;
         return h('td', null, sel);
     }
@@ -512,6 +527,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             tbody.appendChild(h('tr', null,
                 h('td', { class: 'muted' }, String(i + 1)),
                 h('td', { class: 'cell-strong' }, row.service.name || '—',
+                    // CRM_LINK_ALL_V1 (R7a) — строка уже в визите записи: подпись и статус записи.
+                    row.booked ? h('div', { 'data-booked-row': String(row.booked.vsId), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' } },
+                        Icon('Calendar', { size: 12 }), tr('из записи') + ' · ' + tr(bookedStatusLabel(row.booked.status))) : null,
                     // PACKAGES_V1 — из какого пакета строка и его скидка (её
                     // применит сервер в счёте; итог после записи — уже со скидкой).
                     // CLINIC_API_FIX_V1 (ревью итога) — «пакет» по тому же правилу,
@@ -552,8 +570,30 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         countEl.textContent = String(state.rows.length);
     }
 
-    function addLine(service, doctor) {
-        if (!service || service.id == null) return null;
+    /**
+     * CRM_LINK_ALL_V1 (редакция 2) — ключ строки таблицы для правила isBookedTwin.
+     * CRM_LINK_ALL_V1 (повторное ревью денег, S1) — и нужен ли услуге врач: правило
+     * «та же услуга» одно с сетью R7b (shared/same-service.js) и сравнивает врача
+     * только у услуги, без врача которой не бывает.
+     */
+    function rowKey(service, doctorId) {
+        const consult = !!(service && service.__consult);
+        return {
+            serviceId: consult ? null : Number(service && service.id),
+            consultationTypeId: consult ? Number(service.consultation_type_id) : null,
+            doctorId: doctorId != null ? Number(doctorId) : (consult && service.__consultDoctorId ? Number(service.__consultDoctorId) : null),
+            needsDoctor: consult || !!Number(service && service.requires_doctor),
+        };
+    }
+    const bookedKeyOf = (row) => ({ ...rowKey(row.service, row.doctorId) });
+    /** Строка «из записи», которой эта услуга (с этим врачом) уже стоит в таблице. */
+    const bookedRowOf = (service, doctorId) => {
+        const key = rowKey(service, doctorId);
+        return state.rows.find((r) => r.booked && isBookedTwin(key, bookedKeyOf(r))) || null;
+    };
+
+    /** Строка в таблицу без проверок (их делает addLine; строки записи ставит showBookedRows). */
+    function pushRow(service, doctor, pkg = null) {
         const row = {
             service,
             doctorId: doctor && doctor.id != null ? Number(doctor.id) : null,
@@ -562,12 +602,38 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             doctor: doctor || null,
             sel: null,
         };
+        if (pkg) row.package = pkg;
         state.rows.push(row);
+        return row;
+    }
+
+    /**
+     * @param {object|null} [pkg] — пакет строки (PACKAGES_V1, cartPackage).
+     *   CRM_LINK_ALL_V1 (повторное ревью денег, S3) — на строку «из записи» пакет не
+     *   ложится: её не вставляют второй раз, значит и package_id ей не дать, а экран
+     *   обещал бы цену пакета, которой счёт не возьмёт.
+     */
+    function addLine(service, doctor, pkg = null) {
+        if (!service || service.id == null) return null;
+        // CRM_LINK_ALL_V1 (редакция 2) — записанную на сегодня услугу второй строкой не
+        // добавляют: строка «из записи» уже регистрирует её (вставка второй убрала бы
+        // строку записи — сеть R7b — а её номер идёт в счёт).
+        const bookedTwin = bookedRowOf(service, doctor && doctor.id != null ? doctor.id : null);
+        if (bookedTwin) {
+            toast(pkg
+                ? trf('Уже из записи — по цене записи, без пакета: {names}', { names: service.name || '' })
+                : trf('«{name}» уже из записи — вторая строка не нужна.', { name: service.name || '' }), 'info');
+            return bookedTwin;
+        }
+        const row = pushRow(service, doctor, pkg);
         paintTable();
         return row;
     }
 
     function removeLine(i) {
+        // CRM_LINK_ALL_V1 (R7a) — строка «из записи» снимется с визита при сохранении.
+        const gone = state.rows[i];
+        if (gone && gone.booked) state.dropBooked.push(gone.booked.vsId);
         state.rows.splice(i, 1);
         paintTable();
     }
@@ -577,11 +643,16 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         // PACKAGES_V1 — строка помнит свой пакет: сервер выставит её со скидкой
         // пакета (и проверит срок), а таблица подпишет, откуда строка.
         // SERVICES_PACKAGES_V1 — строка помнит пакет и цену услуги в нём (cartPackage).
+        // CRM_LINK_ALL_V1 (повторное ревью денег, S3) — услуга, уже стоящая строкой «из
+        // записи», пакетом не добавляется и пакета не получает: строка записи идёт в счёт
+        // по своей цене (её не вставляют второй раз). Тост называет такие услуги.
+        const asBooked = [];
         for (const s of services) {
-            const row = addLine(s, null);
-            if (row) row.package = cartPackage(template, s.id);
+            if (bookedRowOf(s, null)) { asBooked.push(s.name || ''); continue; }
+            addLine(s, null, cartPackage(template, s.id));
         }
         paintTable();
+        if (asBooked.length) toast(trf('Уже из записи — по цене записи, без пакета: {names}', { names: asBooked.join(', ') }), 'info');
         if (missing) toast(trf('Пакет: {n} услуг(и) не найдено в каталоге', { n: missing }), 'warn');
         return services.length;
     }
@@ -614,9 +685,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 ctaLabel: 'Готово',
                 onPick: (p) => {
                     if (!p || !p.service) return;
-                    const row = addLine(p.service, p.doctor || null);
                     // PACKAGES_V1 — строка из пакета, выбранного в каталоге.
-                    if (row && p.package) { row.package = p.package; paintTable(); }
+                    // CRM_LINK_ALL_V1 (ревью денег S3) — пакет ставит addLine: строке «из записи» — нет.
+                    addLine(p.service, p.doctor || null, p.package || null);
                 },
             });
         } catch (e) {
@@ -633,7 +704,67 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     // Пациент
     // =======================================================================
     /** Взять готовую карту (найденную поиском, созданную или выбранную в дубликатах). */
+    /** CRM_LINK_ALL_V1 (R7a) — убрать строки «из записи» прежнего пациента. */
+    function clearBookedRows() {
+        state.rows = state.rows.filter((r) => !r.booked);
+        state.dropBooked = [];
+        state.bookedVisitId = null;
+        bookedNote.textContent = '';
+        bookedNote.style.display = 'none';
+        paintTable();
+    }
+
+    /**
+     * CRM_LINK_ALL_V1 (R7a; дефект G7) — ЗАПИСЬ НА СЕГОДНЯ — ГОТОВЫЕ СТРОКИ. Визит
+     * дня пациента уже держит строки записи: они встают в таблицу «из записи», и
+     * сохранение регистрирует ИХ (второй строки нет, счёт — на них). Строки, уже
+     * стоящие в счёте, — только подписью под таблицей.
+     */
+    async function showBookedRows(patientId) {
+        let b;
+        try { b = await loadTodayBooking(patientId); }
+        catch (e) {
+            toast(trf('Запись пациента на сегодня не загрузилась: {msg}', { msg: (e && e.message) || e }), 'warn');
+            return;
+        }
+        if (!b || !b.visit || !state.patient || state.patient.id !== patientId) return;
+        state.bookedVisitId = b.visit.id;
+        const unpacked = [];   // CRM_LINK_ALL_V1 (ревью денег S3) — пакет снят со строки, ставшей строкой записи
+        for (const r of b.rows) {
+            if (r.billed) continue;
+            const service = r.consultationTypeId != null
+                ? { id: 'c|' + (r.doctorId || '') + '|' + r.consultationTypeId, __consult: true, consultation_type_id: r.consultationTypeId,
+                    __consultDoctorId: r.doctorId, name: r.name, price: r.unitPrice, requires_doctor: 1 }
+                : ((state.catalog || []).find((s) => Number(s.id) === r.serviceId) || r.service);
+            if (!service) continue;
+            // CRM_LINK_ALL_V1 (редакция 2) — услуга уже в таблице (регистратор добавил её до
+            // выбора пациента): строка записи прицепляется к ней, второй строки нет.
+            // CRM_LINK_ALL_V1 (повторное ревью денег, S1) — правило «та же услуга» — одно с сетью
+            // R7b (shared/same-service.js): у услуги без врача исполнитель не сравнивается.
+            const bk = rowKey(service, r.doctorId);
+            const twin = state.rows.find((x) => !x.booked && isBookedTwin(rowKey(x.service, x.doctorId), bk));
+            // Своя строка записи — без проверки addLine: две строки записи одной услуги
+            // (два исполнителя) — две строки визита, обе уже в нём.
+            const row = twin || pushRow(service, r.doctorId ? { id: r.doctorId } : null);
+            if (twin && r.doctorId && Number(twin.doctorId) !== Number(r.doctorId)) {
+                twin.doctorId = r.doctorId;   // врач записи — строка уже в визите
+                twin.doctor = null;
+            }
+            // CRM_LINK_ALL_V1 (ревью денег S3) — пакет на строку записи не ложится (её не вставляют).
+            if (twin && twin.package) { delete twin.package; unpacked.push(service.name || ''); }
+            row.booked = { vsId: r.vsId, status: b.visit.status, unitPrice: r.unitPrice };
+        }
+        if (unpacked.length) toast(trf('Уже из записи — по цене записи, без пакета: {names}', { names: unpacked.join(', ') }), 'info');
+        const billed = b.rows.filter((r) => r.billed).map((r) => r.name).filter(Boolean);
+        if (billed.length) {
+            bookedNote.textContent = trf('По записи уже в счёте: {names}', { names: billed.join(', ') });
+            bookedNote.style.display = '';
+        }
+        paintTable();
+    }
+
     async function usePatient(p, { load = false } = {}) {
+        clearBookedRows();   // CRM_LINK_ALL_V1 (R7a)
         if (!p) {
             state.patient = null;
             pickedBar.style.display = 'none';
@@ -649,6 +780,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         pickedBar.style.display = '';
         searchResults.style.display = 'none';
         setPatientFormEnabled(false);
+        await showBookedRows(chosen.id);   // CRM_LINK_ALL_V1 (R7a)
         return chosen;
     }
 
@@ -785,7 +917,11 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         try {
             res = await registerWalkIn({
                 patientId: patient.id,
-                lines: state.rows.map((r) => ({ service: r.service, doctorId: r.doctorId, packageId: r.package ? r.package.id : null })),
+                // CRM_LINK_ALL_V1 (R7a) — строки «из записи» регистрируются как есть, убранные снимаются.
+                lines: state.rows.map((r) => ({ service: r.service, doctorId: r.doctorId, packageId: r.package ? r.package.id : null,
+                    bookedVsId: r.booked ? r.booked.vsId : null, bookedUnitPrice: r.booked ? r.booked.unitPrice : null })),
+                dropVsIds: state.dropBooked,
+                bookedVisitId: state.bookedVisitId,
                 referralSourceId: referralSel.value || null,
                 createdBy: (currentUser() || {}).id || null,
                 // WALK_IN_ROLE_GATE_V1 — тот же человек, что уходит в

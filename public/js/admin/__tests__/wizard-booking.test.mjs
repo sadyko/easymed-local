@@ -1126,3 +1126,215 @@ test('OWN_PRICE_TIER_RATIO_V1: мастер — второй визит у вр�
   assert.deepEqual([sent.unit_price, sent.price_tier], [60000, 'secondary']);
   assert.equal(DB.prepare('SELECT total_amount FROM invoices').get().total_amount, 60000);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINK_ALL_V1 (R3; решение владельца D2) — МАСТЕР НА СЕГОДНЯ «СЕЙЧАС» — ПРИХОД
+// К СТОЙКЕ. День без слота (услуга без врача «на дату», живая очередь) на сегодня
+// — ensure_visit уходит с desk: true, как у быстрой регистрации; запись на другой
+// день — без desk. Правило — views/wizard-desk.js (isDeskNow), сервер проверяет сам.
+// ═══════════════════════════════════════════════════════════════════════════
+test('CRM_LINK_ALL_V1 R3: мастер — анализ без врача на сегодня: ensure_visit с desk: true и без book', async () => {
+  seed({});
+  DB.prepare("INSERT INTO services (id, name, price, type, is_lab, requires_doctor) VALUES (22,'Анализ крови',40000,'lab',1,0)").run();
+  document.body.children.length = 0;
+  TOASTS.length = 0; RPC.length = 0;
+  const { openVisitWizard } = await import('../views/visit-wizard.js');
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, { presetServiceIds: [22] });
+  await flush(20);
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev, 'мастер не дошёл до ensure_visit: ' + JSON.stringify(TOASTS));
+  assert.equal(ev.body.desk, true, 'регистрация «сейчас» не сказала серверу, что пациент у стойки');
+  assert.ok(!ev.body.book, 'анализ без врача ушёл записью на время');
+});
+
+test('CRM_LINK_ALL_V1 R3: мастер — приём со слотом: desk уходит ровно тогда, когда слот сегодня и не позже чем через 30 минут', async () => {
+  const { isDeskNow } = await import('../views/wizard-desk.js');
+  await openWizardReady();
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev && ev.body.book, 'мастер не дошёл до записи с book: ' + JSON.stringify(TOASTS));
+  const start = Date.parse(ev.body.book.start);
+  const ymd = (ms) => { const d = new Date(ms); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const want = isDeskNow({ dayIso: ymd(start), todayIso: ymd(Date.now()), headStartMs: start, nowMs: Date.now() });
+  assert.equal(ev.body.desk === true, want, 'desk: ' + ev.body.desk + ', слот ' + ev.body.book.start);
+  if (!want) assert.ok(!('desk' in ev.body), 'запись позже сегодня или на другой день ушла как приход к стойке');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINK_ALL_V1 (R7a; дефект G7) — МАСТЕР: СТРОКИ «ИЗ ЗАПИСИ». У пациента
+// запись на сегодня — её строка встаёт в смету сама, с подписью; мастер не
+// вставляет её второй раз и слот записи заново не занимает (book: не уходит).
+// ═══════════════════════════════════════════════════════════════════════════
+test('CRM_LINK_ALL_V1 R7a: мастер — строка записи на сегодня «из записи»: второй строки нет, слот записи не перезаписывается', async () => {
+  const { isDeskNow } = await import('../views/wizard-desk.js');
+  seed({});
+  DB.prepare('UPDATE services SET requires_doctor = 1 WHERE id = 21').run();
+  const slot = new Date(); slot.setHours(23, 0, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status, created_by) VALUES (3, 7, ?, 30, 'scheduled', 1)").run(slot.toISOString()).lastInsertRowid);
+  const vs = Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, 21, 7, 1, 100000, 100000, 'added', 'primary', 1)").run(vid).lastInsertRowid);
+  document.body.children.length = 0;
+  TOASTS.length = 0; RPC.length = 0;
+  const { openVisitWizard } = await import('../views/visit-wizard.js');
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, {});
+  await flush(30);
+  const ov = document.body.children.find(isWizard);
+  assert.ok(ov && walk(ov).some((n) => n.attrs && n.attrs['data-booked-line'] === String(vs)), 'строка записи не встала в смету «из записи»: ' + JSON.stringify(TOASTS));
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev, 'мастер не дошёл до ensure_visit: ' + JSON.stringify(TOASTS));
+  assert.ok(!ev.body.book, 'мастер заново занимает слот записи');
+  const today = isoOf(new Date());
+  assert.equal(ev.body.desk === true, isDeskNow({ dayIso: today, todayIso: today, headStartMs: slot.getTime(), nowMs: Date.now() }), 'desk не по правилу «сейчас» для слота записи');
+  assert.deepEqual(DB.prepare('SELECT id FROM visit_services WHERE visit_id = ? ORDER BY id').all(vid).map((r) => r.id), [vs], 'строка записи вставлена второй раз');
+  assert.equal(DB.prepare('SELECT COUNT(*) n FROM visits WHERE patient_id = 3').get().n, 1, 'второй визит на день');
+});
+
+// CRM_LINK_ALL_V1 (редакция 2, R7a + R7b) — МАСТЕР: УСЛУГА УЖЕ В СМЕТЕ (направление врача,
+// подстановка), А ЕЁ ЗАПИСЬ НА СЕГОДНЯ В ВИЗИТЕ — строка сметы становится строкой «из записи»
+// (второй строки нет, вставки нет); шаблон с записанной услугой не прибавляет ей количество.
+test('CRM_LINK_ALL_V1 ред. 2: мастер — услуга уже в смете, её запись на сегодня — одна строка «из записи», вставки нет', async () => {
+  seed({});
+  DB.prepare('UPDATE services SET requires_doctor = 1 WHERE id = 21').run();
+  const slot = new Date(); slot.setHours(23, 0, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status, created_by) VALUES (3, 7, ?, 30, 'scheduled', 1)").run(slot.toISOString()).lastInsertRowid);
+  const vs = Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, 21, 7, 1, 100000, 100000, 'added', 'primary', 1)").run(vid).lastInsertRowid);
+  document.body.children.length = 0;
+  TOASTS.length = 0; RPC.length = 0;
+  const { openVisitWizard } = await import('../views/visit-wizard.js');
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, { presetServiceIds: [21] });
+  await flush(30);
+  const ov = document.body.children.find(isWizard);
+  assert.ok(ov && walk(ov).some((n) => n.attrs && n.attrs['data-booked-line'] === String(vs)), 'строка сметы не стала строкой записи: ' + JSON.stringify(TOASTS));
+  await pressUntilCreate();
+  assert.deepEqual(DB.prepare('SELECT id FROM visit_services WHERE visit_id = ? ORDER BY id').all(vid).map((r) => r.id), [vs], 'вторая строка той же услуги вставлена');
+});
+
+test('CRM_LINK_ALL_V1 ред. 2: мастер — шаблон с записанной на сегодня процедурой не прибавляет строке записи количество', async () => {
+  seed({});
+  DB.prepare("INSERT INTO services (id, name, price, type, requires_doctor) VALUES (23,'Инъекция внутримышечная',20000,'procedure',0)").run();
+  DB.prepare("INSERT INTO service_templates (name, service_ids) VALUES ('Уколы', '[23]')").run();
+  const slot = new Date(); slot.setHours(23, 0, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status, created_by) VALUES (3, NULL, ?, 30, 'scheduled', 1)").run(slot.toISOString()).lastInsertRowid);
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, 23, NULL, 1, 20000, 20000, 'added', 'primary', 1)").run(vid);
+  document.body.children.length = 0;
+  TOASTS.length = 0; RPC.length = 0;
+  const { openVisitWizard } = await import('../views/visit-wizard.js');
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, {});
+  await flush(30);
+  const ov = document.body.children.find(isWizard);
+  const tplBtn = walk(ov).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Выбрать шаблон'));
+  assert.ok(tplBtn, 'нет кнопки «Выбрать шаблон»');
+  tplBtn.click();
+  await flush(30);
+  const pick = walk(document.body).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Уколы'));
+  assert.ok(pick, 'шаблон не показан');
+  pick.click();
+  await flush(20);
+  assert.ok(TOASTS.some((m) => m.includes('уже из записи')), 'количество строки записи прибавлено молча: ' + JSON.stringify(TOASTS));
+});
+
+// CRM_LINK_ALL_V1 (редакция 2, R7a) — строка записи, уже стоящая в счёте (предоплата), в смету не
+// подставляется — ни из записи, ни из карточки CRM (её строка держит тот же визит): иначе мастер
+// вставил бы и выставил ту же услугу второй раз.
+test('CRM_LINK_ALL_V1 ред. 2: мастер — строка записи уже в счёте не подставляется в смету и из карточки CRM: второй строки нет', async () => {
+  seed({});
+  DB.prepare('UPDATE services SET requires_doctor = 1 WHERE id = 21').run();
+  DB.prepare("INSERT INTO services (id, name, price, type, is_lab, requires_doctor) VALUES (22,'Анализ крови',40000,'lab',1,0)").run();
+  const slot = new Date(); slot.setHours(23, 0, 0, 0);
+  const today = isoOf(new Date());
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status, created_by) VALUES (3, 7, ?, 30, 'scheduled', 1)").run(slot.toISOString()).lastInsertRowid);
+  const ins = DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, ?, ?, 1, ?, ?, 'added', 'primary', 1)");
+  const vs21 = Number(ins.run(vid, 21, 7, 100000, 100000).lastInsertRowid);
+  const vs22 = Number(ins.run(vid, 22, null, 40000, 40000).lastInsertRowid);
+  await getRpc('create_invoice_for_visit')(DB, { visit_id: vid, visit_service_ids: [vs22], discount_amount: 0, payer_id: null }, USER);
+  const rid = Number(DB.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id) VALUES ('Иванов Иван', '+998 90 000 00 03', 'in_process', 3)").run().lastInsertRowid);
+  const line = DB.prepare("INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status, doctor_id, visit_id, visit_service_id) VALUES (?, ?, ?, 'pending', ?, ?, ?)");
+  line.run(rid, 21, today, 7, vid, vs21);
+  line.run(rid, 22, today, null, vid, vs22);
+  document.body.children.length = 0;
+  TOASTS.length = 0; RPC.length = 0;
+  const { openVisitWizard } = await import('../views/visit-wizard.js');
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, {});
+  await flush(30);
+  const ov = document.body.children.find(isWizard);
+  assert.ok(ov && walk(ov).some((n) => n.attrs && n.attrs['data-booked-line'] === String(vs21)), 'строка записи не встала в смету');
+  assert.ok(!TOASTS.some((m) => /заявки колл-центра.*Анализ крови/.test(m)), 'оплаченный анализ подставлен из карточки CRM: ' + JSON.stringify(TOASTS));
+  await pressUntilCreate();
+  assert.deepEqual(DB.prepare("SELECT id FROM visit_services WHERE visit_id = ? AND status <> 'cancelled' ORDER BY id").all(vid).map((r) => r.id), [vs21, vs22], 'анализ, уже стоящий в счёте, вставлен второй раз');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINK_ALL_V1 (повторное ревью денег, S2 / S2c) — СТРОКА «ИЗ ЗАПИСИ» В МАСТЕРЕ: ДЕНЬ, ВРЕМЯ И
+// ВРАЧ — КАК В КАЛЕНДАРЕ. Строку записи мастер не вставляет второй раз (её номер идёт в счёт), поэтому
+// сменить у неё день или врача здесь нельзя: перенос дня оставлял строку в визите записи и вставлял
+// вторую в другой день (два анализа), смена врача выставляла счёт и талон на строку прежнего врача.
+// Перенос и смена врача — в календаре (подсказка); строка показывает своё время и врача.
+// ═══════════════════════════════════════════════════════════════════════════
+const lineRowsOf = (svc) => DB.prepare(`SELECT vs.id, vs.visit_id, vs.doctor_id FROM visit_services vs JOIN visits v ON v.id = vs.visit_id
+                                        WHERE v.patient_id = 3 AND vs.service_id = ? AND vs.status <> 'cancelled' ORDER BY vs.id`).all(svc);
+
+test('CRM_LINK_ALL_V1 (ревью денег S2): мастер — у анализа «из записи» день не меняется (подсказка «Перенос записи — в календаре»); один анализ, вставки нет', async () => {
+  seed({});
+  DB.prepare("INSERT INTO services (id, name, price, type, is_lab, requires_doctor) VALUES (22,'Анализ крови',40000,'lab',1,0)").run();
+  const slot = new Date(); slot.setHours(23, 0, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status, created_by) VALUES (3, NULL, ?, 30, 'scheduled', 1)").run(slot.toISOString()).lastInsertRowid);
+  const vs = Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, 22, NULL, 1, 40000, 40000, 'added', 'primary', 1)").run(vid).lastInsertRowid);
+  document.body.children.length = 0;
+  TOASTS.length = 0; RPC.length = 0;
+  const { openVisitWizard } = await import('../views/visit-wizard.js');
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, {});
+  await flush(30);
+  const ov = document.body.children.find(isWizard);
+  assert.ok(ov && walk(ov).some((n) => n.attrs && n.attrs['data-booked-line'] === String(vs)), 'строки записи нет в смете: ' + JSON.stringify(TOASTS));
+  const dateInp = walk(ov).find((n) => n.tagName === 'INPUT' && n.attrs && n.attrs.type === 'date' && !('disabled' in n.attrs));
+  assert.ok(!dateInp, 'у строки записи можно сменить день');
+  assert.ok(textOf(ov).includes('Перенос записи — в календаре'), 'нет подсказки, где переносят запись');
+  await pressUntilCreate();
+  assert.deepEqual(lineRowsOf(22).map((r) => r.id), [vs], 'анализ вставлен второй раз');
+});
+
+for (const mode of ['live_queue', 'timed']) {
+  test(`CRM_LINK_ALL_V1 (ревью денег S2c, ${mode}): мастер — у консультации «из записи» врач не меняется; счёт — на строку записанного врача, его же видит экран`, async () => {
+    seed({ from: '00:00', to: '23:59' });
+    DB.prepare('UPDATE services SET requires_doctor = 1 WHERE id = 21').run();
+    const wh = DB.prepare('SELECT working_hours FROM users WHERE id = 7').get().working_hours;
+    DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours, scheduling_mode) VALUES (8,'doc8','x','Сидоров Сидор','doctor',1,'терапевт',?,?)")
+      .run(wh, mode === 'live_queue' ? 'live_queue' : 'slots');
+    const slot = new Date(); slot.setHours(23, 30, 0, 0);
+    const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status, created_by) VALUES (3, 7, ?, 30, 'scheduled', 1)").run(slot.toISOString()).lastInsertRowid);
+    const vs = Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by, scheduled_at) VALUES (?, 21, 7, 1, 100000, 100000, 'added', 'primary', 1, ?)").run(vid, slot.toISOString()).lastInsertRowid);
+    document.body.children.length = 0;
+    TOASTS.length = 0; RPC.length = 0;
+    const { openVisitWizard } = await import('../views/visit-wizard.js');
+    await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, {});
+    await flush(30);
+    const ov = document.body.children.find(isWizard);
+    assert.ok(ov && walk(ov).some((n) => n.attrs && n.attrs['data-booked-line'] === String(vs)), 'строки записи нет в смете: ' + JSON.stringify(TOASTS));
+    const docInp = walk(ov).find((n) => n.tagName === 'INPUT' && n.getAttribute('placeholder') === 'Врач — поиск…');
+    assert.ok(!docInp, 'у строки записи можно сменить врача');
+    assert.ok(textOf(ov).includes('Петров Пётр'), 'строка записи не называет своего врача');
+    await pressUntilCreate();
+    const invoiced = RPC.filter((c) => c.name === 'create_invoice_for_visit').flatMap((c) => c.body.visit_service_ids || []);
+    assert.deepEqual(invoiced, [vs], 'счёт не на строку записи');
+    assert.deepEqual(lineRowsOf(21).map((r) => [r.id, r.doctor_id]), [[vs, 7]], 'консультация вставлена второй раз или врач строки сменился');
+  });
+}
+
+test('CRM_LINK_ALL_V1 (ревью денег S2, защита): строка «из записи» и визит дня — не визит записи: мастер отказывает словами, ничего не вставляя', async () => {
+  seed({});
+  DB.prepare("INSERT INTO services (id, name, price, type, is_lab, requires_doctor) VALUES (22,'Анализ крови',40000,'lab',1,0)").run();
+  const slot = new Date(); slot.setHours(23, 0, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status, created_by) VALUES (3, NULL, ?, 30, 'scheduled', 1)").run(slot.toISOString()).lastInsertRowid);
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, 22, NULL, 1, 40000, 40000, 'added', 'primary', 1)").run(vid);
+  const other = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status, created_by) VALUES (3, NULL, ?, 30, 'scheduled', 1)").run(slot.toISOString()).lastInsertRowid);
+  document.body.children.length = 0;
+  TOASTS.length = 0; RPC.length = 0;
+  const { openVisitWizard } = await import('../views/visit-wizard.js');
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, {});
+  await flush(30);
+  ENSURE_OVERRIDE = { visit: DB.prepare('SELECT * FROM visits WHERE id = ?').get(other), created: false };
+  try { await pressUntilCreate(); } finally { ENSURE_OVERRIDE = null; }
+  assert.deepEqual(lineRowsOf(22).map((r) => r.visit_id), [vid], 'строка записи вставлена в другой визит');
+  assert.ok(TOASTS.some((m) => m.includes('другой визит')), 'нет отказа словами: ' + JSON.stringify(TOASTS));
+});

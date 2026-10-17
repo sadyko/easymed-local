@@ -206,13 +206,15 @@ test('W1 (I-5, I-3): проход «Не пришёл» по карточке 20
   assert.ok(row(db, rid).updated_at > old, 'новое обращение не отмечено движением');
 });
 
-test('W1b (I-5): давняя карточка после прохода — посторонний приход на стойку её не закрывает', () => {
+// CRM_LINK_ALL_V1 (решение владельца D1, R2) — правило изменено: «Не пришёл» любой давности —
+// живая карточка пациента; стойка возвращает её в начало и закрывает «Пришёл».
+test('W1b (CRM_LINK_ALL_V1, D1): давняя карточка после прохода — приход на стойку её закрывает', () => {
   const db = freshDb();
   const old = agoIso(200); const oldDay = old.slice(0, 10);
   const v1 = visit(db, oldDay); const rid = lead(db, { date: oldDay, updated: old }); line(db, rid, v1, oldDay);
   assert.deepEqual(crmNoShowSweep(db), [rid]);
   crmLinkVisit(db, visit(db, T0), REG, { desk: true });
-  assert.equal(st(db, rid), 'no_show', 'приход сегодня закрыл карточку двухсотдневной давности');
+  assert.equal(st(db, rid), 'came', 'живая карточка двухсотдневной давности не взяла приход (D1)');
 });
 
 test('I-5: пришёл на день позже записи (проход уже поставил «Не пришёл») — стойка закрывает карточку', () => {
@@ -253,7 +255,8 @@ test('I-3: «Не пришёл» в окне — запись (не колл-ц�
   assert.deepEqual(contactDecision(db2, [r2]).action, 'same');
 });
 
-test('I-3: «Не пришёл» за окном — запись колл-центра возвращает её в начало и записывает; давний «Не пришёл» запись регистратуры не трогает', () => {
+// CRM_LINK_ALL_V1 (D1, R1) — вторая половина изменена: запись регистратуры — так же, как колл-центра.
+test('I-3 (CRM_LINK_ALL_V1, D1): «Не пришёл» за окном — запись колл-центра и запись регистратуры возвращают её в начало и записывают', () => {
   const db = freshDb();
   const rid = lead(db, { status: 'no_show', date: day(-20), updated: agoIso(20) });
   crmLinkVisit(db, visit(db, T), CC);
@@ -262,7 +265,8 @@ test('I-3: «Не пришёл» за окном — запись колл-це�
   const db2 = freshDb();
   const r2 = lead(db2, { status: 'no_show', date: day(-20), updated: agoIso(20) });
   crmLinkVisit(db2, visit(db2, T), REG);
-  assert.equal(st(db2, r2), 'no_show');
+  assert.equal(st(db2, r2), 'scheduled');
+  assert.equal(cards(db2), 1, 'регистратура завела карточку');
 });
 
 test('I-3: «Отказ» и «Пришёл» по-прежнему закрыты: звонок в окне — без дубля, карточка не тронута', () => {

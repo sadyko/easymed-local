@@ -18,7 +18,7 @@
 //     void_dispensed_visit_item, иначе остаток разойдётся;
 //   • БЕЗ ДОКУМЕНТОВ И РЕЗУЛЬТАТОВ по строке.
 import { hasAnyRole } from '../roles.js';
-import { mirrorVisit } from '../crm/booking-mirror.js';   // CRM_CALENDAR_MIRROR_V1
+import { releaseOrphans } from '../crm/one-way.js';   // CRM_ONE_WAY_V1 (O3)
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -71,8 +71,9 @@ export function removeOwnVisitLine(db, args, user) {
     return { visitId: row.visit_id };
   });
   const { visitId } = run();
-  // CRM_CALENDAR_MIRROR_V1 — снятая до прихода услуга снимается и в заявке.
-  mirrorVisit(db, visitId, { actorId: user && user.id });
+  // CRM_CALENDAR_MIRROR_V1 · CRM_ONE_WAY_V1 (O3) — строки записи снятой услуги не удаляются:
+  // ждут в карточке без дня (отпущенные), сами ни в какой визит не садятся.
+  releaseOrphans(db, visitId);
   return { removed: true, id };
 }
 

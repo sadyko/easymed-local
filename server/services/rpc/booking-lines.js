@@ -21,14 +21,19 @@
 //   • консультация по виду приёма — строкой service_id NULL + consultation_type_id,
 //     цена по ценам врача (BILLING_AUDIT_FIX_V1 B7), миграция 188.
 //
-// После записи строки сверяются с заявкой (crm/booking-mirror.js): запись
-// колл-центра без заявки её получает, строки заявки появляются сами.
+// После записи визит связывается с карточкой (crm/visit-link.js): запись колл-центра без
+// карточки её получает. CRM_ONE_WAY_V1 — услуги записи живут только в визите: в карточку они
+// не копируются (O2), карточка показывает их списком «Записи пациента»; желание карточки той же
+// услуги указывает на добавленную строку (O1, crm/one-way.js), а не заводит вторую. Решение владельца
+// (R2): услугу, которую добавил колл-центр, карточка держит строкой записи (указатель на эту строку
+// визита, не копия) — отмена записи вернёт её в карточку без дня (O4).
 import { hasAnyRole } from '../roles.js';
 import { today } from '../domain/day.js';
 import {
-  isPreArrival, visitHasWork, insertBookingLine, mirrorVisit, arrivedByEvidence, lineKey,
-  bookingLineRefusal,
+  isPreArrival, visitHasWork, insertBookingLine, arrivedByEvidence, lineKey,
+  bookingLineRefusal, isCallcenterUser,
 } from '../crm/booking-mirror.js';
+import { adoptWishes, releaseOrphans, bookLinesOnCard } from '../crm/one-way.js';   // CRM_ONE_WAY_V1
 import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
 import { localDate } from '../domain/day.js';
 
@@ -118,8 +123,11 @@ export function bookingLinesAdd(db, args, user) {
   const out = run();
   // Запись связывается с заявкой пациента (колл-центру без неё — новая),
   // строки заявки — сами.
-  crmLinkVisit(db, visitId, user);   // CRM_UNIFY_V1
-  mirrorVisit(db, visitId, { actorId: user && user.id });
+  crmLinkVisit(db, visitId, user);   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 — желания этого дня указывают на эти строки (O1)
+  adoptWishes(db, visitId, out.added.map((a) => a.id));   // CRM_ONE_WAY_V1 — и желание «когда придёт» той же услуги
+  // CRM_ONE_WAY_V1 (решение владельца R2) — услуга, которую колл-центр добавил к записи в календаре, —
+  // строка записи карточки, держащей визит: отмена вернёт её в карточку без дня (O4).
+  bookLinesOnCard(db, visitId, out.added.map((a) => a.id), { callcenter: isCallcenterUser(user) });
   return out;
 }
 
@@ -146,6 +154,6 @@ export function bookingLineRemove(db, args, user) {
     return row.visit_id;
   });
   const visitId = run();
-  mirrorVisit(db, visitId, { actorId: user && user.id });
+  releaseOrphans(db, visitId);   // CRM_ONE_WAY_V1 (O3) — строки записи снятой услуги ждут в карточке без дня
   return { removed: true, id };
 }

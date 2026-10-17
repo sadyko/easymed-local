@@ -265,20 +265,25 @@ test('отмена: строки возвращаются к ожиданию, �
   db.close();
 });
 
+// CRM_ONE_WAY_V1 (O10) — ОБНОВЛЕНО НАМЕРЕННО: дни записи — будущие. Живая запись — та, что ЖДЁТ
+// пациента (сегодня или позже, без прихода); прошедший визит, так и оставшийся «Записан», записью не держит.
 test('отмена одного дня из трёх: заявка остаётся записанной', () => {
   const db = freshDb();
-  const v1 = addVisit(db, '2026-08-09T09:00:00Z');
-  const v2 = addVisit(db, '2026-08-10T09:00:00Z');
-  const rid = addReq(db, { date: '2026-08-09' });
-  const d1 = addLine(db, rid, { date: '2026-08-09', visit: v1 });
-  addLine(db, rid, { date: '2026-08-10', visit: v2 });
+  const v1 = addVisit(db, '2030-08-09T09:00:00Z');
+  const v2 = addVisit(db, '2030-08-10T09:00:00Z');
+  const rid = addReq(db, { date: '2030-08-09' });
+  const d1 = addLine(db, rid, { date: '2030-08-09', visit: v1 });
+  addLine(db, rid, { date: '2030-08-10', visit: v2 });
 
   crmVisitStatus(db, { visitId: v1, from: 'scheduled', to: 'cancelled' });
 
   assert.equal(line(db, d1).visit_id, null);
   const row = reqRow(db, rid);
   assert.equal(row.status, 'scheduled', 'второй день никуда не делся — заявка всё ещё записана');
-  assert.equal(row.scheduled_date, '2026-08-09', 'дата обязана остаться ближайшей ждущей строкой');
+  // CRM_ONE_WAY_V1 (O4) — ОБНОВЛЕНО НАМЕРЕННО: строка отменённого дня вернулась в карточку без
+  // дня, и ближайшая ждущая строка — второй день.
+  assert.equal(db.prepare('SELECT scheduled_date FROM crm_request_services WHERE id = ?').get(d1).scheduled_date, null, 'строка отменённого дня сохранила день');
+  assert.equal(row.scheduled_date, '2030-08-10', 'дата обязана стать днём оставшейся записи');
   db.close();
 });
 
@@ -310,7 +315,9 @@ test('отмена: закрытую строку и дошедшую заявк
 
 // ─── ГРАНИЦЫ ───────────────────────────────────────────────────────────────
 
-test('подтверждение и перенос заявку не трогают: конверсия — это приход', () => {
+// CRM_LINK_ALL_V1 (решение владельца D3, R4) — правило изменено: «Подтверждён» двигает карточку
+// вперёд в «Подтверждён»; приходом оно по-прежнему не является — строка ждёт.
+test('подтверждение (CRM_LINK_ALL_V1, D3): карточка — в «Подтверждён», но это не приход: строка ждёт', () => {
   const db = freshDb();
   const vid = addVisit(db);
   const rid = addReq(db, { date: '2026-08-09' });
@@ -318,8 +325,7 @@ test('подтверждение и перенос заявку не трога�
 
   crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'confirmed' });
 
-  assert.equal(reqRow(db, rid).status, 'scheduled',
-    '«подтверждён по телефону» объявлено приходом: человек всё ещё дома');
+  assert.equal(reqRow(db, rid).status, 'approved', '«Подтверждён» в календаре не дошёл до карточки (D3)');
   assert.equal(line(db, lid).status, 'pending');
   db.close();
 });

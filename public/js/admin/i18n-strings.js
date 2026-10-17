@@ -3,6 +3,25 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CRM_ONE_WAY_V1 — услуги записи живут только в визите: строку записи из карточки не переносят (отказ двери
+  // /api/db, crm/one-way.js), отпущенная отменой строка ждёт новой даты (views/crm.js)
+  "Услуга уже записана: перенос, смену врача и услуги делают в календаре, а убрать услугу из записи можно крестиком в карточке.": {"en":"The service is already booked: rescheduling, changing the doctor or the service is done in the calendar; to remove the service from the booking, use the cross on the card.","ru":"Услуга уже записана: перенос, смену врача и услуги делают в календаре, а убрать услугу из записи можно крестиком в карточке.","uz":"Xizmat allaqachon yozilgan: ko‘chirish, shifokor yoki xizmatni almashtirish kalendarda bajariladi, xizmatni yozuvdan olib tashlash uchun kartochkadagi xochchani bosing."},   // CRM_ONE_WAY_V1
+  "Запись отменена — назначьте услуге новую дату": {"en":"The booking was cancelled — set a new date for the service","ru":"Запись отменена — назначьте услуге новую дату","uz":"Yozuv bekor qilindi — xizmatga yangi sana belgilang"},   // CRM_ONE_WAY_V1
+  // CRM_LINK_ALL_V1 (R7a) — строки «из записи» в быстрой регистрации и мастере визита (views/booked-rows.js)
+  "из записи": {"en":"from the booking","ru":"из записи","uz":"yozuvdan"},   // CRM_LINK_ALL_V1
+  "По записи уже в счёте: {names}": {"en":"Already on an invoice from the booking: {names}","ru":"По записи уже в счёте: {names}","uz":"Yozuv bo‘yicha allaqachon hisobda: {names}"},   // CRM_LINK_ALL_V1
+  "Услугу из записи снять не удалось: {msg}": {"en":"Could not remove the booked service: {msg}","ru":"Услугу из записи снять не удалось: {msg}","uz":"Yozuvdagi xizmatni olib tashlab bo‘lmadi: {msg}"},   // CRM_LINK_ALL_V1
+  "Запись пациента на сегодня не загрузилась: {msg}": {"en":"The patient’s booking for today did not load: {msg}","ru":"Запись пациента на сегодня не загрузилась: {msg}","uz":"Bemorning bugungi yozuvi yuklanmadi: {msg}"},   // CRM_LINK_ALL_V1
+  "Врач записи — чтобы сменить, уберите строку и добавьте услугу заново": {"en":"The booking’s doctor — to change it, remove the row and add the service again","ru":"Врач записи — чтобы сменить, уберите строку и добавьте услугу заново","uz":"Yozuv shifokori — o‘zgartirish uchun qatorni olib tashlang va xizmatni qayta qo‘shing"},   // CRM_LINK_ALL_V1
+  "Запись пациента на сегодня — другой визит. Откройте визит из календаря.": {"en":"The patient’s booking for today is a different visit. Open the visit from the calendar.","ru":"Запись пациента на сегодня — другой визит. Откройте визит из календаря.","uz":"Bemorning bugungi yozuvi — boshqa tashrif. Tashrifni kalendardan oching."},   // CRM_LINK_ALL_V1
+  "Из записи на сегодня: {names}": {"en":"From today’s booking: {names}","ru":"Из записи на сегодня: {names}","uz":"Bugungi yozuvdan: {names}"},   // CRM_LINK_ALL_V1
+  "Перенос записи — в календаре": {"en":"Reschedule the booking in the calendar","ru":"Перенос записи — в календаре","uz":"Yozuvni ko‘chirish — kalendarda"},   // CRM_LINK_ALL_V1 (ревью денег S2)
+  "Уже из записи — по цене записи, без пакета: {names}": {"en":"Already in today’s booking — at the booking price, without the package: {names}","ru":"Уже из записи — по цене записи, без пакета: {names}","uz":"Bugungi yozuvda bor — yozuv narxida, paketsiz: {names}"},   // CRM_LINK_ALL_V1 (ревью денег S3)
+  "«{name}» уже из записи — вторая строка не нужна.": {"en":"“{name}” is already in the booking — no second row is needed.","ru":"«{name}» уже из записи — вторая строка не нужна.","uz":"«{name}» allaqachon yozuvda — ikkinchi qator kerak emas."},   // CRM_LINK_ALL_V1 (ред. 2)
+  // CRM_LINK_ALL_V1 (ред. 2) — «Записи пациента» в карточке CRM (views/crm-card-bookings.js)
+  "Записи пациента": {"en":"Patient’s bookings","ru":"Записи пациента","uz":"Bemor yozuvlari"},   // CRM_LINK_ALL_V1
+  "Открыть в календаре": {"en":"Open in the calendar","ru":"Открыть в календаре","uz":"Kalendarda ochish"},   // CRM_LINK_ALL_V1
+  "Записи пациента не загрузились: {msg}": {"en":"The patient’s bookings did not load: {msg}","ru":"Записи пациента не загрузились: {msg}","uz":"Bemor yozuvlari yuklanmadi: {msg}"},   // CRM_LINK_ALL_V1
   // CLINIC_PROFILE_V1 (полировка по макету) — пометка у пустых UZ / EN (views/company-fields.js triGroup)
   "нет перевода": {"en":"no translation","ru":"нет перевода","uz":"tarjima yo‘q"},   // CLINIC_PROFILE_V1
   // CLINIC_PROFILE_V1 (полировка по макету) — «канал @имя» в нижней строке предпросмотра (views/company-preview.js)

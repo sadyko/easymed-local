@@ -500,3 +500,61 @@ test('CRM_UNIFY_V1: «пришёл сейчас» закрывает карто�
   assert.deepEqual(one('SELECT status, visit_id FROM crm_request_services WHERE id = ?', line), { status: 'pending', visit_id: null },
     'строка другого дня закрылась сегодняшним приходом');
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINK_ALL_V1 (R7a; дефект G7) — СТРОКИ «ИЗ ЗАПИСИ». Пациент записан на
+// сегодня: строки записи уже в визите дня. Регистрация их не вставляет второй
+// раз — счёт выставляется на них; убранная регистратором строка записи
+// снимается с визита (booking_line_remove) ДО визита.
+// ═══════════════════════════════════════════════════════════════════════════
+test('CRM_LINK_ALL_V1 R7a: строка «из записи» не вставляется второй раз — счёт на строку записи; убранная снимается до визита', async () => {
+  seed();
+  const at = new Date(); at.setHours(23, 0, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (?, ?, ?, 'scheduled', 1)").run(PATIENT, DOCTOR, at.toISOString()).lastInsertRowid);
+  const ins = DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, ?, ?, 1, ?, ?, 'added', 'primary', 1)");
+  const keep = Number(ins.run(vid, CONSULT, DOCTOR, 100000, 100000).lastInsertRowid);
+  const drop = Number(ins.run(vid, LAB, null, 40000, 40000).lastInsertRowid);
+  const drops = [drop];
+  const out = await registerWalkIn({
+    patientId: PATIENT,
+    lines: [{ service: svc(CONSULT), doctorId: DOCTOR, bookedVsId: keep, bookedUnitPrice: 100000 }],
+    dropVsIds: drops, bookedVisitId: vid, createdBy: USER.id,
+  });
+  assert.equal(out.visit.id, vid, 'регистрация завела второй визит');
+  assert.deepEqual(all('SELECT id FROM visit_services WHERE visit_id = ? ORDER BY id', vid).map((r) => r.id), [keep], 'вторая строка или убранная строка осталась');
+  assert.deepEqual(drops, [], 'снятая строка осталась в списке — повтор снимал бы её второй раз');
+  assert.equal(out.items.length, 1);
+  assert.equal(out.invoice.total_amount, 100000);
+  assert.deepEqual(out.lines.map((l) => l.visitServiceId), [keep]);
+});
+
+test('CRM_LINK_ALL_V1 R7a: строка «из записи» другого визита — отказ словами, счёта нет', async () => {
+  seed();
+  await assert.rejects(registerWalkIn({
+    patientId: PATIENT,
+    lines: [{ service: svc(CONSULT), doctorId: DOCTOR, bookedVsId: 999, bookedUnitPrice: 1 }],
+    bookedVisitId: 12345, createdBy: USER.id,
+  }), /другой визит/);
+  assert.equal(countOf('invoices'), 0);
+  assert.equal(countOf('visit_services'), 0);
+});
+
+// CRM_LINK_ALL_V1 (редакция 2, R7a + R7b) — СТРОКА «ИЗ ЗАПИСИ» И ВТОРАЯ СТРОКА ТОЙ ЖЕ УСЛУГИ.
+// Экран (быстрая регистрация) их не собирает — строка той же услуги прицепляется к строке
+// записи; если такой набор всё же пришёл (старый экран), цепочка отказывает ДО визита: иначе
+// сеть R7b (crm/booked-twin.js) убрала бы строку записи, которую экран выставляет в счёт.
+test('CRM_LINK_ALL_V1 ред. 2: строка «из записи» и вторая строка той же услуги — отказ словами до визита, ничего не записано', async () => {
+  seed();
+  const at = new Date(); at.setHours(23, 0, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (?, ?, ?, 'scheduled', 1)").run(PATIENT, DOCTOR, at.toISOString()).lastInsertRowid);
+  const keep = Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, ?, ?, 1, 100000, 100000, 'added', 'primary', 1)").run(vid, CONSULT, DOCTOR).lastInsertRowid);
+  const visitsBefore = countOf('visits');
+  await assert.rejects(registerWalkIn({
+    patientId: PATIENT,
+    lines: [{ service: svc(CONSULT), doctorId: DOCTOR, bookedVsId: keep, bookedUnitPrice: 100000 }, { service: svc(CONSULT), doctorId: DOCTOR }],
+    bookedVisitId: vid, createdBy: USER.id,
+  }), /уже из записи/);
+  assert.equal(countOf('visits'), visitsBefore, 'отказ после визита');
+  assert.deepEqual(all('SELECT id FROM visit_services WHERE visit_id = ?', vid).map((r) => r.id), [keep]);
+  assert.equal(countOf('invoices'), 0);
+});

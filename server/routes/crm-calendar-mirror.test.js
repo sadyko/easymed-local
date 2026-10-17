@@ -6,6 +6,14 @@
 // Всё через НАСТОЯЩИЕ двери — /api/db и /api/rpc под настоящими ролями, — а не
 // через функции: строки записи пишут пять экранов, и правило, проверенное на
 // функции, ничего не говорит о том, соблюдает ли его дверь.
+//
+// CRM_ONE_WAY_V1 (2026-10-17) — ОЖИДАНИЯ ОБНОВЛЕНЫ НАМЕРЕННО (docs/plans/2026-10-17-crm-one-way.md):
+// услуги записи живут только в визите. Из календаря в карточку ничего не копируется (O2) —
+// карточка показывает их списком «Записи пациента» (crm_card_bookings); строку визита сняли в
+// календаре — строка карточки ждёт без дня (O3); день, врач и услуга записанной строки из
+// карточки не меняются — это делает календарь (O6). Каждое изменённое ожидание помечено.
+// Решение владельца (R2, 2026-10-17): услугу, которую колл-центр добавил к записи в календаре, карточка
+// держит строкой записи (указатель на строку визита, не копия) — отмена вернёт её в карточку без дня.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
@@ -127,8 +135,10 @@ test('2. колл-центр записывает из календаря С У�
     assert.equal(req[0].status, 'scheduled');
     assert.equal(req[0].assigned_to, 3, 'заявку ведёт не тот, кто записал');
     assert.equal(req[0].scheduled_date, D);
+    // CRM_ONE_WAY_V1 (решение владельца R2) — услуги, добавленные колл-центром, — строки записи карточки: указатели на строки визита.
     const lines = linesOf(t.db, req[0].id);
     assert.deepEqual(lines.map((l) => [l.service_id, l.visit_id, l.status]), [[30, visitId, 'pending'], [40, visitId, 'pending']]);
+    assert.deepEqual(lines.map((l) => l.visit_service_id), vsOf(t.db, visitId).map((x) => x.id));
     const links = await t.rpc('crm_visit_links', 'reg', { visit_ids: [visitId] });
     assert.equal(links.json.data[0].request_id, req[0].id, 'календарь не знает, что запись из заявки');
     // Повтор той же услуги — не вторая строка.
@@ -154,7 +164,9 @@ test('2б. запись из календаря привязывается к о
     assert.equal(ins.status, 200, JSON.stringify(ins.json));
     assert.equal(t.db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 1, 'регистратура завела лишнюю заявку');
     assert.equal(reqRow(t.db, rid).status, 'scheduled');
-    assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.visit_id]), [[30, visitId]]);
+    // CRM_ONE_WAY_V1 (O2) — строка регистратуры не копируется в карточку; карточка держит запись привязкой.
+    assert.deepEqual(linesOf(t.db, rid), []);
+    assert.equal(t.db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(visitId).request_id, rid);
   } finally { t.close(); }
 });
 
@@ -193,20 +205,19 @@ test('4. перенос в CRM → календарь: строки визита
     assert.equal(same.status, 200, JSON.stringify(same.json));
     assert.equal(same.json.data.booked, true, 'перенос времени отказан как «визит дня занят»');
     assert.equal(same.json.data.moved, true);
-    // Другой день: карточка снимает строки со старой записи (как saveLines) и записывает новый день.
+    // CRM_ONE_WAY_V1 (O6) — другой день из карточки не ставят: строку записи карточка не
+    // переносит (отказ двери). Перенос — в календаре: визит едет со своими строками, строки
+    // карточки следуют за ним (день записи).
     for (const l of linesOf(t.db, rid)) {
       const up = await t.dbq('cc', { table: 'crm_request_services', op: 'update',
         values: { scheduled_date: D2, doctor_id: l.doctor_id, visit_id: null }, filters: [{ col: 'id', op: 'eq', val: l.id }] });
-      assert.equal(up.status, 200, JSON.stringify(up.json));
+      assert.equal(up.status, 409, JSON.stringify(up.json));
     }
-    const b = await t.rpc('ensure_visit', 'cc', { patient_id: 77, date: at(D2, 10), doctor_id: 10,
-      book: { doctor_id: 10, service_id: 30, start: at(D2, 10), duration_minutes: 30 } });
-    assert.equal(b.status, 200, JSON.stringify(b.json));
-    const v2 = b.json.data.visit.id;
-    assert.notEqual(v2, visitId);
-    assert.deepEqual(vsOf(t.db, v2).map((x) => x.id).sort(), before, 'строки визита завелись заново вместо переезда');
-    assert.equal(vsOf(t.db, visitId).length, 0, 'на старой записи остались услуги');
-    assert.ok(linesOf(t.db, rid).every((l) => l.visit_id === v2));
+    const mv = await t.rpc('calendar_book', 'reg', { visit_id: visitId, start: at(D2, 10) });
+    assert.equal(mv.status, 200, JSON.stringify(mv.json));
+    assert.deepEqual(vsOf(t.db, visitId).map((x) => x.id).sort(), before, 'строки визита не уехали с визитом');
+    assert.ok(linesOf(t.db, rid).every((l) => l.visit_id === visitId && l.scheduled_date === D2));
+    assert.equal(reqRow(t.db, rid).scheduled_date, D2);
   } finally { t.close(); }
 });
 
@@ -240,16 +251,22 @@ test('7. услуги, добавленные и снятые в календа�
     const lab = vsOf(t.db, visitId).find((x) => x.service_id === 40);
     const del = await t.dbq('reg', { table: 'visit_services', op: 'delete', filters: [{ col: 'id', op: 'eq', val: lab.id }] });
     assert.equal(del.status, 200, JSON.stringify(del.json));
-    assert.equal(linesOf(t.db, rid).find((l) => l.service_id === 40).status, 'cancelled', 'снятая в календаре услуга ждёт в заявке');
-    // Колл-центр возвращает её из календаря.
+    // CRM_ONE_WAY_V1 (O3) — снятая в календаре услуга не снимается в карточке: строка ждёт там
+    // без дня (отпущенная) и сама ни в какую запись не вернётся.
+    const lab40 = linesOf(t.db, rid).find((l) => l.service_id === 40);
+    assert.deepEqual([lab40.status, lab40.scheduled_date, lab40.visit_id, lab40.released_from_visit_id], ['pending', null, null, visitId]);
+    // Колл-центр возвращает её из календаря — строкой визита и новой строкой записи карточки (решение владельца R2);
+    // отпущенная строка на неё не садится (O4).
     const add = await t.rpc('booking_lines_add', 'cc', { visit_id: visitId, lines: [{ service_id: 40 }] });
     assert.equal(add.status, 200, JSON.stringify(add.json));
-    const pending = linesOf(t.db, rid).filter((l) => l.status === 'pending');
-    assert.deepEqual(pending.map((l) => l.service_id).sort(), [30, 40]);
-    // …и снимает её своей дверью.
+    assert.deepEqual(linesOf(t.db, rid).filter((l) => l.visit_id === visitId).map((l) => [l.service_id, l.visit_service_id]),
+      [[30, vsOf(t.db, visitId).find((x) => x.service_id === 30).id], [40, add.json.data.added[0].id]]);
+    assert.deepEqual(vsOf(t.db, visitId).map((x) => x.service_id), [30, 40]);
+    // …и снимает её своей дверью: строка записи карточки ждёт без дня (O3), строк визита — одна.
     const rm = await t.rpc('booking_line_remove', 'cc', { visit_service_id: add.json.data.added[0].id });
     assert.equal(rm.status, 200, JSON.stringify(rm.json));
-    assert.deepEqual(linesOf(t.db, rid).filter((l) => l.status === 'pending').map((l) => l.service_id), [30]);
+    assert.deepEqual(vsOf(t.db, visitId).map((x) => x.service_id), [30]);
+    assert.deepEqual(linesOf(t.db, rid).filter((l) => l.status === 'pending').map((l) => [l.service_id, l.visit_id]), [[30, visitId], [40, null], [40, null]]);
   } finally { t.close(); }
 });
 
@@ -262,11 +279,12 @@ test('8. правка строк в CRM до прихода отражается
     assert.equal(c1.status, 200, JSON.stringify(c1.json));
     assert.deepEqual(vsOf(t.db, visitId).map((x) => x.service_id), [30], 'снятая в заявке услуга осталась в записи');
     assert.equal(t.db.prepare('SELECT status FROM visits WHERE id = ?').get(visitId).status, 'scheduled');
-    // Врача строки сменили в карточке — строка визита следует.
+    // CRM_ONE_WAY_V1 (O6) — врача строки записи из карточки не меняют (отказ): врача визита и
+    // строки меняют календарь и окно визита.
     const con = linesOf(t.db, rid).find((l) => l.service_id === 30);
     const d = await t.dbq('cc', { table: 'crm_request_services', op: 'update', values: { doctor_id: 11 }, filters: [{ col: 'id', op: 'eq', val: con.id }] });
-    assert.equal(d.status, 200);
-    assert.equal(vsOf(t.db, visitId)[0].doctor_id, 11);
+    assert.equal(d.status, 409);
+    assert.equal(vsOf(t.db, visitId)[0].doctor_id, 10);
     const c2 = await t.dbq('cc', { table: 'crm_request_services', op: 'update', values: { status: 'cancelled' }, filters: [{ col: 'id', op: 'eq', val: con.id }] });
     assert.equal(c2.status, 200);
     assert.equal(vsOf(t.db, visitId).length, 0);
@@ -382,14 +400,15 @@ test('13. колл-центр записывает консультацию по
     assert.equal(vs[0].consultation_type_id, 5);
     assert.equal(vs[0].unit_price, 120000, 'цена консультации не по цене врача');
     const req = t.db.prepare('SELECT id FROM crm_requests WHERE patient_id = 77').get();
+    // CRM_ONE_WAY_V1 (решение владельца R2) — консультация колл-центра — строка записи карточки (указатель на строку визита).
     const lines = linesOf(t.db, req.id);
     assert.deepEqual(lines.map((l) => [l.service_id, l.consultation_type_id, l.visit_service_id, l.doctor_id]), [[null, 5, vs[0].id, 10]]);
     // Повтор того же вида — не вторая строка.
     const dup = await t.rpc('booking_lines_add', 'cc', { visit_id: visitId, lines: [{ consultation_type_id: 5, doctor_id: 10 }] });
     assert.equal(dup.json.data.added.length, 0);
-    // Снятие в заявке снимает и в записи.
+    // Снятие в карточке (крестик) снимает и в записи (O3).
     const c = await t.dbq('cc', { table: 'crm_request_services', op: 'update', values: { status: 'cancelled' }, filters: [{ col: 'id', op: 'eq', val: lines[0].id }] });
-    assert.equal(c.status, 200);
+    assert.equal(c.status, 200, JSON.stringify(c.json));
     assert.equal(t.db.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(visitId).n, 0);
   } finally { t.close(); }
 });
@@ -428,10 +447,11 @@ test('R-C1. дверь строк заявки не ставит в запись
       assert.equal(r.status, 200, JSON.stringify(r.json));
       assert.equal(vsRows(t.db, visitId, sid).length, 0, 'зеркало поставило в амбулаторную запись услугу ' + sid);
     }
-    // Замена услуги строки на хирургию — тоже нет.
+    // Замена услуги строки на хирургию — тоже нет. CRM_ONE_WAY_V1 (O6) — услугу записанной
+    // строки из карточки не меняют вовсе (отказ двери).
     const lab = linesOf(t.db, rid).find((l) => l.service_id === 40);
     const up = await t.dbq('cc', { table: 'crm_request_services', op: 'update', values: { service_id: 50 }, filters: [{ col: 'id', op: 'eq', val: lab.id }] });
-    assert.equal(up.status, 200);
+    assert.equal(up.status, 409);
     assert.equal(vsRows(t.db, visitId, 50).length, 0, 'замена строки заявки поставила хирургию');
   } finally { t.close(); }
 });
@@ -448,7 +468,8 @@ test('R-I1. та же услуга у ДРУГОГО врача — вторая
     assert.ok(rows.some((x) => x.id === booked.id && x.doctor_id === 10));
     const lines = linesOf(t.db, rid).filter((l) => l.service_id === 30 && l.status === 'pending');
     assert.equal(lines.find((l) => l.doctor_id === 10).visit_service_id, booked.id, 'строка заявки к Иванову перепривязана к чужому врачу');
-    assert.ok(lines.some((l) => l.doctor_id === 11), 'приём у Петрова не появился в заявке');
+    // CRM_ONE_WAY_V1 (O2) — приём у Петрова в карточку не копируется (виден в «Записях пациента»).
+    assert.ok(!lines.some((l) => l.doctor_id === 11));
   } finally { t.close(); }
 });
 
@@ -504,7 +525,7 @@ test('R-I3. заявка на ЭТОТ день цепляется и к зап�
     assert.ok(link, 'заявка на этот день не привязалась к записи регистратуры');
     assert.equal(link.request_id, rid);
     await t.dbq('reg', { table: 'visit_services', op: 'insert', values: { visit_id: visitId, service_id: 40, quantity: 1, unit_price: 40000, total: 40000, status: 'added' } });
-    assert.equal(linesOf(t.db, rid).length, 1);
+    assert.equal(linesOf(t.db, rid).length, 0, 'CRM_ONE_WAY_V1 (O2) — строка регистратуры в карточку не копируется');
     const up = await t.dbq('cc', { table: 'crm_requests', op: 'update', values: { status: 'stopped' }, filters: [{ col: 'id', op: 'eq', val: rid }] });
     assert.equal(up.status, 200);
     assert.equal(t.db.prepare('SELECT status FROM visits WHERE id = ?').get(visitId).status, 'scheduled', 'отказ в CRM отменил запись регистратуры');
@@ -544,13 +565,14 @@ test('R-M1. смена услуги строки — в обе стороны', 
     t.db.prepare("INSERT INTO services (id, name, price, type) VALUES (60,'УЗИ',150000,'imaging')").run();
     t.db.prepare("INSERT INTO services (id, name, price, type, is_lab) VALUES (61,'Глюкоза',20000,'lab',1)").run();
     const lab = linesOf(t.db, rid).find((l) => l.service_id === 40);
+    // CRM_ONE_WAY_V1 (O6) — услугу записанной строки из карточки не меняют (отказ двери): запись не тронута.
     const up = await t.dbq('cc', { table: 'crm_request_services', op: 'update', values: { service_id: 60 }, filters: [{ col: 'id', op: 'eq', val: lab.id }] });
-    assert.equal(up.status, 200);
-    assert.equal(vsRows(t.db, visitId, 40).length, 0, 'прежняя услуга осталась в записи');
-    assert.equal(vsRows(t.db, visitId, 60).length, 1, 'новой услуги нет в записи');
-    // Обратно: замена в карте пациента.
-    const vs60 = vsRows(t.db, visitId, 60)[0];
-    const ch = await t.rpc('change_unpaid_service', 'boss', { visit_service_id: vs60.id, new_service_id: 61 });
+    assert.equal(up.status, 409);
+    assert.equal(vsRows(t.db, visitId, 40).length, 1);
+    assert.equal(vsRows(t.db, visitId, 60).length, 0);
+    // Обратно: замена в карте пациента — строка карточки следует за строкой визита (O7).
+    const vs40 = vsRows(t.db, visitId, 40)[0];
+    const ch = await t.rpc('change_unpaid_service', 'boss', { visit_service_id: vs40.id, new_service_id: 61 });
     assert.equal(ch.status, 200, JSON.stringify(ch.json));
     const line = linesOf(t.db, rid).find((l) => l.id === lab.id);
     assert.equal(line.service_id, 61, 'заявка не узнала о замене услуги в записи');

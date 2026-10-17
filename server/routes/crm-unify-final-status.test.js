@@ -4,6 +4,8 @@
 //   A-C2 — сверка зеркала (booking-mirror.js шаг 3, касса — mirrorCashierLine)
 //          берёт ждущую строку карточки той же услуги, а не заводит вторую:
 //          иначе исходная строка оставалась ждать и садилась в следующий визит;
+//          CRM_ONE_WAY_V1 — правило осталось (crm/one-way.js adoptWishes, дверь /api/db и
+//          касса — onVisitLinesAdded), а копий строк визита в карточке больше нет (O2);
 //   A-I3 — поздний приход по давнему визиту (результат анализа сегодня) не
 //          закрывает карточку, заведённую ПОСЛЕ дня визита;
 //   A-I4 — отменённая запись без другой живой записи стирает дату карточки в
@@ -16,7 +18,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startCrmApp, localDay, at, addLead, addLine } from '../test-helpers/crm-unify-app.js';
 import { crmNoShowSweep } from '../services/crm/no-show.js';
-import { mirrorCashierLine } from '../services/crm/booking-mirror.js';
+import { onVisitLinesAdded } from '../services/crm/one-way.js';   // CRM_ONE_WAY_V1 — прежде mirrorCashierLine
 
 const TODAY = localDay(0);
 const nowIso = () => new Date().toISOString();
@@ -147,7 +149,9 @@ test('P5 (A-P5): записан пять дней назад на вчера, п
   }
 });
 
-test('A-P5: пропущенный день давнее окна — поздний приход через мастер визита карточку не поднимает', async () => {
+// CRM_LINK_ALL_V1 (решение владельца D1, R1) — правило изменено: давний «Не пришёл» — живая
+// карточка; регистрация мастером её берёт (в начало, затем «Записан»), оплата закрывает.
+test('A-P5 (CRM_LINK_ALL_V1, D1): пропущенный день давнее окна — регистрация мастером берёт давнюю «Не пришёл», оплата закрывает её «Пришёл»', async () => {
   const t = await startCrmApp();
   try {
     const d = localDay(-10);
@@ -156,11 +160,12 @@ test('A-P5: пропущенный день давнее окна — поздн
     assert.deepEqual(crmNoShowSweep(t.db), [rid]);
     const e = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: nowIso(), doctor_id: 10, visit_type: 'outpatient' });
     const vid = e.json.data.visit.id;
+    assert.equal(t.lead(rid).status, 'scheduled', 'живая «Не пришёл» не взяла запись (D1)');
     const ins = await t.dbq('reg', { table: 'visit_services', op: 'insert', returning: true, single: 'single',
       values: { visit_id: vid, service_id: 40, quantity: 1, unit_price: 40000, total: 40000, status: 'added' } });
     const inv = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: vid, visit_service_ids: [ins.json.data.id], discount_amount: 0, payer_id: null });
     await t.rpc('record_payment', 'kassa', { invoice_id: inv.json.data.invoice.id, amount: 40000, method: 'cash' });
-    assert.equal(t.lead(rid).status, 'no_show');
+    assert.equal(t.lead(rid).status, 'came');
   } finally { t.close(); }
 });
 
@@ -217,8 +222,9 @@ test('A-C2: строка без врача берёт строку визита 
     assert.deepEqual([byId.get(undated).visit_id, byId.get(undated).visit_service_id, byId.get(undated).scheduled_date],
       [vid, consult.json.data.id, localDay(1)], 'строка «когда придёт» без врача не взяла консультацию');
     assert.deepEqual([byId.get(later).visit_id, byId.get(later).visit_service_id], [null, null], 'строка другого дня уехала в этот визит');
-    assert.equal(rows.length, 3, 'анализ этого визита не отражён своей строкой');
-    assert.equal(rows.find((l) => ![undated, later].includes(l.id)).visit_service_id, lab.json.data.id);
+    // CRM_ONE_WAY_V1 (O2) — анализ регистратуры в карточку не копируется (виден в «Записях пациента»).
+    assert.equal(rows.length, 2, 'анализ этого визита скопирован в карточку');
+    assert.ok(lab.json.data.id);
   } finally { t.close(); }
 });
 
@@ -234,8 +240,7 @@ test('A-C2: строка, добавленная кассой сразу в сч
     const inv = Number(t.db.prepare("INSERT INTO invoices (visit_id, patient_id, total_amount, paid_amount, status) VALUES (?, 77, 40000, 0, 'unpaid')").run(vid).lastInsertRowid);
     const item = Number(t.db.prepare("INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price) VALUES (?, 40, 'Анализ', 1, 40000)").run(inv).lastInsertRowid);
     const x = Number(t.db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, invoice_item_id) VALUES (?, 40, 1, 40000, 40000, 'queued', ?)").run(vid, item).lastInsertRowid);
-    const id = mirrorCashierLine(t.db, x);
-    assert.equal(id, undated, 'касса завела вторую строку заявки');
+    onVisitLinesAdded(t.db, vid, [x]);   // CRM_ONE_WAY_V1 — то, что зовёт касса (cashier_line_add)
     const rows = linesOfReq(t.db, rid);
     assert.equal(rows.length, 1);
     assert.deepEqual([rows[0].visit_id, rows[0].visit_service_id], [vid, x]);

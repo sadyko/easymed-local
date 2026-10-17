@@ -153,6 +153,7 @@ let BOARD_CFG = null;
 let CFG_FAIL = false;
 let LINES_HOLD = null;
 let LINES_ERROR = false;
+let LINES_SAVE_ERROR = null;   // CRM_ONE_WAY_V1 (ревью r4, п. 8) — отказ двери /api/db на правку или вставку строки заявки
 // CRM_UNIFY_V1 — SWEEP_LINES (что видело ночное сметание) убран вместе с самим
 // сметанием: «Не пришёл» ставит сервер (server/services/crm/no-show.js).
 // CRM_REAL_BOOKING_V1 — ВИЗИТЫ, читаемые карточкой: из них подставляется время
@@ -231,6 +232,9 @@ globalThis.fetch = async (url, opts) => {
     if (body && body.table === 'users' && body.op === 'select'
         && (body.filters || []).some((f) => f.col === 'role' && f.op === 'eq' && f.val === 'doctor')) {
       return jsonOk(DOCTORS);
+    }
+    if (LINES_SAVE_ERROR && body && body.table === 'crm_request_services' && (body.op === 'update' || body.op === 'insert')) {
+      return { ok: false, json: async () => ({ error: LINES_SAVE_ERROR }) };
     }
     if (body && body.table === 'crm_request_services' && body.op === 'select') {
       // CRM_REAL_BOOKING_V1 — задержка и отказ касаются ТОЛЬКО выборки строк
@@ -746,6 +750,27 @@ test('«Записать на дату»: дата из окна дат доез
     'заявка сохранилась без даты записи: карточка останется без метки, а ночная автоматика «Не пришёл» никогда не сработает');
   assert.strictEqual(row.values.status, 'scheduled',
     'записанная заявка осталась в «В обработке» — в воронке нет ни одного «записан»');
+  window.easymed.state.user = null;
+});
+
+// CRM_ONE_WAY_V1 (ревью r4) — строки окна «Даты приёма» переносятся на узком экране (360 px): на телефоне
+// название услуги сжималось в столбик по букве, а поля уходили за край окна. Браузерная проверка —
+// scratchpad crm-one-way/ui/sheet-ui.mjs (ru/uz/en 360 px: ничего за краем окна; 1280 px — одна строка).
+test('CRM_ONE_WAY_V1 (ревью r4): окно «Даты приёма» — строка услуги и «Одна дата для всех» переносятся, название не сжимается', async () => {
+  const modal = await openBookable();
+  const sheet = await openScheduleSheet(modal);
+  const inputs = dateInputs(sheet);
+  assert.ok(inputs.length >= 2, 'в окне «Даты приёма» нет полей даты');
+  const allRow = inputs[0].parentNode;
+  const lineRow = inputs[inputs.length - 1].parentNode;
+  for (const [what, row] of [['одна дата для всех', allRow], ['строка услуги', lineRow]]) {
+    assert.ok(row && row.style, what + ': нет строки');
+    assert.strictEqual(row.style.flexWrap, 'wrap', what + ': поля не переносятся на узком экране');
+  }
+  assert.strictEqual(lineRow.children[0].style.flex, '1 1 180px', 'название услуги сжимается вместо переноса полей');
+  for (const el of [inputs[0], inputs[inputs.length - 1]]) assert.strictEqual(el.style.maxWidth, '100%', 'поле даты шире окна');
+  const cancel = walk(sheet).find((n) => n.tagName === 'BUTTON' && textOf(n) === 'Отмена');
+  if (cancel) cancel.click();
   window.easymed.state.user = null;
 });
 
@@ -1523,7 +1548,12 @@ test('расписание не ответило — время вписывае
 // заново. Безобидно, пока строка была пожеланием; со слотом — нет: отменённая
 // строка уносит с собой ссылку на визит, и в сетке остаётся приём, которого
 // в заявке больше нет.
-test('записанная строка не отменяется и не вписывается заново — она правится на месте', async () => {
+// CRM_ONE_WAY_V1 — ОБНОВЛЕНО НАМЕРЕННО (docs/plans/2026-10-17-crm-one-way.md, задача 7). Прежде сохранение
+// «заменяло набор»: отменяло все строки без визита и вписывало их заново, а строку записи правило на
+// месте её днём и врачом; перенос строки записи на другой день снимал её с визита. Теперь строки
+// правятся НА МЕСТЕ (по номеру, только изменённое), а у строки записи день и врач — визитные: поле дня
+// заперто, перенос — в календаре (O6), убрать — крестиком (O3).
+test('CRM_ONE_WAY_V1: сохранение карточки со строкой записи ничего не отменяет, не вписывает заново и строку записи не правит', async () => {
   forgetSlots();
   SERVICES = [DOC_SVC];
   DOCTORS = [DOCTOR];
@@ -1537,29 +1567,13 @@ test('записанная строка не отменяется и не впи
   CALLS.length = 0;
   await saveRequest(modal);
 
-  const cancel = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'update'
-    && c.values && c.values.status === 'cancelled');
-  assert.ok(cancel, 'отмена несвязанных строк пропала вовсе');
-  assert.deepStrictEqual((cancel.filters || []).find((f) => f.col === 'visit_id'),
-    { col: 'visit_id', op: 'is', val: null },
-    'отменяются ВСЕ ждущие строки, включая занявшие слот: запись осталась бы в календаре сиротой');
-
-  const inPlace = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'update'
-    && c.values && 'scheduled_date' in c.values);
-  assert.ok(inPlace, 'записанная строка не правится вовсе — её день и врач с карточки не доедут');
-  assert.deepStrictEqual((inPlace.filters || []).find((f) => f.col === 'id'), { col: 'id', op: 'eq', val: 901 });
-  assert.ok(!('visit_id' in inPlace.values),
-    'строка, оставшаяся в своём дне, потеряла визит: ' + JSON.stringify(inPlace.values));
-
-  const ins = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'insert');
-  assert.strictEqual(ins, undefined,
-    'записанная строка вписана заново — у занятого слота появился ждущий двойник: ' + JSON.stringify(ins && ins.values));
-
+  const lineWrites = CALLS.filter((c) => c.table === 'crm_request_services' && c.op !== 'select');
+  assert.deepStrictEqual(lineWrites, [], 'строки заявки переписаны без правки: ' + JSON.stringify(lineWrites));
   SERVICES = []; REQ_LINES = []; DOCTORS = [];
   window.easymed.state.user = null;
 });
 
-test('записанную строку перенесли на другой день — она снимается со своего визита', async () => {
+test('CRM_ONE_WAY_V1 (O6): у строки записи поле дня в карточке заперто — перенос записи в календаре', async () => {
   forgetSlots();
   SERVICES = [DOC_SVC];
   DOCTORS = [DOCTOR];
@@ -1569,22 +1583,109 @@ test('записанную строку перенесли на другой д�
     full_name: 'Каримова Азиза', phone: UZ_RAW,
     patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
   }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
-
-  // День правится в самой карточке — тем же полем, что и человеком.
   const d = dateInputs(modal).pop();
   assert.ok(d, 'у строки услуги в карточке пропало поле даты');
-  d.value = LAB_DAY; fire(d);
+  assert.ok(d.hasAttribute('disabled'), 'день строки записи можно сменить в карточке — строка уехала бы с визита');
+  assert.ok(/Перенос записи — в календаре/.test(textOf(modal)), 'карточка не говорит, где переносят запись');
+  SERVICES = []; REQ_LINES = []; DOCTORS = [];
+  window.easymed.state.user = null;
+});
 
+test('CRM_ONE_WAY_V1 (O4): строка, отпущенная отменой записи, — без дня и с подсказкой; день, назначенный оператором, правит её на месте', async () => {
+  forgetSlots();
+  SERVICES = [DOC_SVC];
+  DOCTORS = [DOCTOR];
+  REQ_LINES = [{ id: 931, service_id: DOC_SVC.id, scheduled_date: null, status: 'pending', doctor_id: DOCTOR.id, visit_id: null, released_from_visit_id: 555 }];
+  const modal = await openRequest({
+    id: 1, status: 'in_process', service_id: DOC_SVC.id, scheduled_date: null,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  await tick(30);
+  assert.ok(/Запись отменена — назначьте услуге новую дату/.test(textOf(modal)), 'отпущенная строка не названа: ' + textOf(modal).slice(0, 300));
+  const d = dateInputs(modal).pop();
+  assert.ok(!d.hasAttribute('disabled'), 'день отпущенной строки нельзя назначить');
+  d.value = LAB_DAY; fire(d);
   CALLS.length = 0;
   await saveRequest(modal);
+  const upd = CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'update');
+  assert.deepStrictEqual(upd.map((c) => [c.values, (c.filters || []).find((x) => x.col === 'id')]),
+    [[{ scheduled_date: LAB_DAY, doctor_id: DOCTOR.id }, { col: 'id', op: 'eq', val: 931 }]], 'строка не правится на месте: ' + JSON.stringify(upd));
+  assert.deepStrictEqual(CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'insert'), [], 'строка вписана заново — отметка отпуска потеряна');
+  SERVICES = []; REQ_LINES = []; DOCTORS = [];
+  window.easymed.state.user = null;
+});
 
-  const moved = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'update'
-    && c.values && 'scheduled_date' in c.values);
-  assert.ok(moved, 'перенос строки не дошёл до базы');
-  assert.strictEqual(moved.values.scheduled_date, LAB_DAY);
-  assert.strictEqual(moved.values.visit_id, null,
-    'строка уехала на другой день, но держит прежний визит: заявка обещает приём, которого в тот день нет');
+// CRM_ONE_WAY_V1 (ревью r4, п. 8) — отказ двери в тосте карточки на узбекском и английском экране: шаблон
+// тоста переводился, а подставленный текст сервера оставался русским.
+test('CRM_ONE_WAY_V1 (ревью r4): отказ сервера «услуга уже записана» в тосте карточки — на языке экрана, без кириллицы (uz, en)', async () => {
+  const { setLang } = await import('../i18n.js');
+  const { BOOKED_LINE_LOCKED } = await import('../../../../server/services/crm/one-way.js');
+  const prefix = { uz: 'Ariza xizmatlari saqlanmadi:', en: "The request's services were not saved:" };
+  // setLang шлёт событие окна — у стенда его нет; заглушка только на время теста, язык — назад в любом случае.
+  const hadDispatch = typeof window.dispatchEvent === 'function';
+  const hadEvent = typeof globalThis.CustomEvent === 'function';
+  if (!hadDispatch) window.dispatchEvent = () => true;
+  if (!hadEvent) globalThis.CustomEvent = class { constructor(type, o) { this.type = type; Object.assign(this, o || {}); } };
+  try {
+  for (const lang of ['uz', 'en']) {
+    forgetSlots();
+    SERVICES = [DOC_SVC];
+    DOCTORS = [DOCTOR];
+    REQ_LINES = [{ id: 931, service_id: DOC_SVC.id, scheduled_date: null, status: 'pending', doctor_id: DOCTOR.id, visit_id: null, released_from_visit_id: 555 }];
+    const modal = await openRequest({
+      id: 1, status: 'in_process', service_id: DOC_SVC.id, scheduled_date: null,
+      full_name: 'Каримова Азиза', phone: UZ_RAW,
+      patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+    }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+    await tick(30);
+    const d = dateInputs(modal).pop();
+    d.value = LAB_DAY; fire(d);
+    LINES_SAVE_ERROR = { code: 'conflict', message: BOOKED_LINE_LOCKED };
+    TOASTS.length = 0;
+    setLang(lang);
+    try { await saveRequest(modal); } finally { setLang('ru'); LINES_SAVE_ERROR = null; }
+    const shown = TOASTS.find((t) => t.startsWith(prefix[lang]));
+    assert.ok(shown, lang + ': тоста об отказе нет: ' + JSON.stringify(TOASTS));
+    assert.doesNotMatch(shown, /[А-Яа-яЁё]/, lang + ': кириллица в тосте: ' + shown);
+    SERVICES = []; REQ_LINES = []; DOCTORS = [];
+    window.easymed.state.user = null;
+  }
+  } finally {
+    setLang('ru');
+    LINES_SAVE_ERROR = null; SERVICES = []; REQ_LINES = []; DOCTORS = [];
+    window.easymed.state.user = null;
+    if (!hadDispatch) delete window.dispatchEvent;
+    if (!hadEvent) delete globalThis.CustomEvent;
+  }
+});
 
+test('CRM_ONE_WAY_V1 (O3): новая услуга на день записи уходит в эту запись (visit_id записи)', async () => {
+  forgetSlots();
+  SERVICES = [DOC_SVC, LAB_SVC];
+  DOCTORS = [DOCTOR];
+  REQ_LINES = [{ id: 901, service_id: DOC_SVC.id, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: DOCTOR.id, visit_id: 555 }];
+  const modal = await openRequest({
+    id: 1, status: 'scheduled', service_id: DOC_SVC.id, scheduled_date: BOOK_DAY,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  await tick(30);
+  const inp = walk(modal).find((n) => n.tagName === 'INPUT' && /Поиск услуги/.test(String(n.getAttribute('placeholder') || '')));
+  assert.ok(inp, 'нет поиска услуги');
+  inp.value = 'Анализ';
+  fire(inp, 'focus');
+  const opt = walk(modal).filter((n) => n.tagName === 'DIV' && textOf(n).startsWith(LAB_SVC.name)).pop();   // самая вложенная — строка выдачи
+  assert.ok(opt, 'анализа нет в выдаче поиска');
+  opt.dispatchEvent({ type: 'mousedown', target: opt, currentTarget: opt, preventDefault() {} });
+  const d = dateInputs(modal).pop();
+  assert.ok(!d.hasAttribute('disabled'), 'у новой услуги поле дня заперто');
+  d.value = BOOK_DAY; fire(d);
+  CALLS.length = 0;
+  await saveRequest(modal);
+  const ins = CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'insert').flatMap((c) => [].concat(c.values));
+  assert.deepStrictEqual(ins.map((v) => [v.service_id, v.scheduled_date, v.visit_id]), [[LAB_SVC.id, BOOK_DAY, 555]],
+    'новая услуга дня записи не ушла в эту запись: ' + JSON.stringify(ins));
   SERVICES = []; REQ_LINES = []; DOCTORS = [];
   window.easymed.state.user = null;
 });
@@ -1814,40 +1915,25 @@ test('оператор выбрал другое время — уходит з�
 // (visit_id: null) — и прежний приём оставался в календаре держать время врача,
 // и уже ничем с заявкой не связанный: найти его можно было только глазами.
 
-async function moveBookedDay({ answer }) {
-  CONFIRM_ANSWER = answer;
+// CRM_ONE_WAY_V1 (O6) — ОБНОВЛЕНО НАМЕРЕННО: строку записи окно дат на другой день больше не переносит
+// (день заперт), поэтому и спрашивать «отменить старый приём?» нечего: визит переносят в календаре, и
+// строки записи едут вместе с ним. Прежние два теста («согласились» / «отказались») — о переносе строки.
+test('CRM_ONE_WAY_V1 (O6): в окне дат день и врач строки записи заперты — о старом приёме не спрашивают', async () => {
   CONFIRMS.length = 0;
   VISITS = [bookedVisit('09:30')];
   const { sheet } = await doctorSheet({ lines: [BOOKED_LINE] });
   await tick(60);
-  await fillRow(sheet, 0, LAB_DAY, DOCTOR.id);
-  const sel = timeSelects(sheet)[0];
-  assert.ok(sel, 'после переноса дня пропало поле времени');
-  sel.value = '09:00'; fire(sel);
+  const d = rowDates(sheet)[0];
+  assert.ok(d && d.hasAttribute('disabled'), 'день строки записи в окне дат можно сменить');
+  const doc = doctorSelects(sheet)[0];
+  assert.ok(doc && doc.hasAttribute('disabled'), 'врача строки записи в окне дат можно сменить');
   CALLS.length = 0; TOASTS.length = 0;
   ENSURE_PLAN = []; ENSURE_N = 0;
   saveSheet(sheet);
   await tick(200);
+  assert.deepStrictEqual(rpcOf('calendar_book'), [], 'отменён приём, которого никто не переносил');
+  assert.deepStrictEqual(CONFIRMS, [], 'спросили о старом приёме без переноса');
   VISITS = [];
-  return rpcOf('calendar_book');
-}
-
-test('согласились — старый приём отменяется той же дверью, что и весь календарь', async () => {
-  const cancels = await moveBookedDay({ answer: true });
-  assert.ok(CONFIRMS.length, 'про старый приём не спросили вовсе — он остался бы висеть молча');
-  assert.ok(/09:30/.test(CONFIRMS[0]), 'в вопросе не названо время старого приёма: ' + CONFIRMS[0]);
-  assert.strictEqual(cancels.length, 1,
-    'старый приём не отменён: он держит время врача, и связи с заявкой у него больше нет — ' + JSON.stringify(cancels.map((c) => c.body)));
-  assert.strictEqual(cancels[0].body.visit_id, 555);
-  assert.strictEqual(cancels[0].body.status, 'cancelled');
-  window.easymed.state.user = null;
-});
-
-test('отказались — старый приём остаётся, и об этом сказано вслух', async () => {
-  const cancels = await moveBookedDay({ answer: false });
-  assert.deepStrictEqual(cancels, [], 'приём отменили, не спросив согласия');
-  assert.ok(someToast(/остаётся в календаре/),
-    'старый приём оставили висеть молча — регистратура найдёт его только глазами: ' + JSON.stringify(TOASTS));
   window.easymed.state.user = null;
 });
 
@@ -2145,9 +2231,10 @@ test('в одном дне врач по записи и врач с живой 
   // CLINIC_API_FIX_V1 (ревью 385bb51) — врач визита — врач слота, а строка живой
   // очереди того же дня ложится в тот же визит.
   assert.strictEqual(ev[0].body.doctor_id, DOCTOR.id, 'визит дня заведён не к врачу, который держит слот');
-  const lqLine = CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'insert')
-    .flatMap((c) => [].concat(c.values)).find((v) => v.doctor_id === LQ_DOCTOR.id);
-  assert.ok(lqLine, 'строка живой очереди не записана в заявку');
+  // CRM_ONE_WAY_V1 — строки заявки правятся на месте: строка живой очереди — правка строки 915.
+  const lqUpd = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'update' && c.values && c.values.doctor_id === LQ_DOCTOR.id);
+  assert.ok(lqUpd, 'строка живой очереди не записана в заявку');
+  const lqLine = { request_id: 1, status: 'pending', ...lqUpd.values };
   const link = visitLinks();
   assert.strictEqual(link.length, 1, 'визит не проставлен строкам дня: ' + JSON.stringify(link));
   assert.strictEqual(link[0].values.visit_id, 555);
@@ -2179,7 +2266,8 @@ test('врач с живой очередью на будущий день: ви
   const row = savedRow();
   assert.ok(row, 'заявка не сохранилась');
   assert.strictEqual(row.values.scheduled_date, FUTURE_DAY, 'заявка сохранилась без даты');
-  const ins = CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'insert');
+  // CRM_ONE_WAY_V1 — строка заявки правится на месте (по номеру), а не вписывается заново.
+  const ins = CALLS.filter((c) => c.table === 'crm_request_services' && (c.op === 'insert' || c.op === 'update'));
   assert.ok(ins.some((c) => [].concat(c.values).some((v) => v.doctor_id === LQ_DOCTOR.id && v.scheduled_date === FUTURE_DAY)),
     'строка заявки потеряла врача или день: ' + JSON.stringify(ins.map((c) => c.values)));
   window.easymed.state.user = null;
@@ -2261,21 +2349,22 @@ async function switchDoctor(sheet, idx, doctorId) {
   await tick(60);
 }
 
-test('общий день: строку второго врача перевели в живую очередь — визит держит первая строка, сохранение проходит', async () => {
+// CRM_ONE_WAY_V1 (O6) — ОБНОВЛЕНО НАМЕРЕННО: врача строки записи окно дат больше не меняет (врач
+// заперт; сервер такую правку отказывает), поэтому перевод строки записи к врачу живой очереди
+// делается в календаре. Прежний тест ждал правки строки 902.
+test('CRM_ONE_WAY_V1 (O6): общий день — врач второй строки записи заперт, сохранение её не трогает', async () => {
   VISITS = [Object.assign(bookedVisit('15:00'), { doctor_id: DOCTOR.id, status: 'scheduled' })];
   const { sheet } = await doctorSheet({ doctors: [DOCTOR, DOC_NO_ROW, LQ_DOCTOR], lines: sharedDayLines() });
   await tick(60);
-  await switchDoctor(sheet, 1, LQ_DOCTOR.id);
-
+  const sel = doctorSelects(sheet)[1];
+  assert.ok(sel && sel.hasAttribute('disabled'), 'врача строки записи можно сменить в окне дат');
   CALLS.length = 0; TOASTS.length = 0; RPC.length = 0;
   saveSheet(sheet);
   await tick(150);
-
-  assert.ok(!someToast(QUEUE_REFUSAL), 'ложный отказ: у Сидорова записи нет, визит держит строка Петрова — ' + JSON.stringify(TOASTS));
   const moved = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'update'
     && (c.filters || []).some((f) => f.col === 'id' && String(f.val) === '902'));
-  assert.ok(moved && moved.values.doctor_id === LQ_DOCTOR.id, 'строка не перешла к врачу с живой очередью: ' + JSON.stringify(moved));
-  assert.strictEqual(rpcOf('ensure_visit').length, 0, 'визит дня тронут, хотя запись Петрова не менялась');
+  assert.strictEqual(moved, undefined, 'строка записи правлена из карточки: ' + JSON.stringify(moved));
+  assert.strictEqual(rpcOf('ensure_visit').length, 0, 'визит дня тронут, хотя запись не менялась');
   VISITS = [];
   window.easymed.state.user = null;
 });
@@ -2298,22 +2387,22 @@ test('общий день: строку врача визита перевели
   window.easymed.state.user = null;
 });
 
-test('перевод в живую очередь вместе с переносом дня не отказывается — о старом приёме спрашивает перенос', async () => {
+// CRM_ONE_WAY_V1 (O6) — ОБНОВЛЕНО НАМЕРЕННО: перенос дня строки записи из окна дат больше невозможен
+// (день заперт) — прежний тест «перевод в живую очередь вместе с переносом дня» ждал, что строка снимется
+// со старого визита. Остался отказ «живой очереди» без переноса (тесты выше и ниже).
+test('CRM_ONE_WAY_V1 (O6): строку записи нельзя перенести на другой день окном дат — строка не снимается с визита', async () => {
   VISITS = [Object.assign(bookedVisit('15:00'), { doctor_id: DOCTOR.id, status: 'scheduled' })];
   CONFIRM_ANSWER = false; CONFIRMS.length = 0;
   const { sheet } = await doctorSheet({ doctors: [DOCTOR, LQ_DOCTOR], lines: [BOOKED_LINE] });
   await tick(60);
-  await fillRow(sheet, 0, FUTURE_DAY, LQ_DOCTOR.id);
-
+  assert.ok(rowDates(sheet)[0].hasAttribute('disabled'), 'день строки записи можно сменить');
   CALLS.length = 0; TOASTS.length = 0; RPC.length = 0;
   saveSheet(sheet);
   await tick(150);
-
-  assert.ok(!someToast(QUEUE_REFUSAL), 'перенос дня отказан, хотя старый приём снимает и называет сам перенос: ' + JSON.stringify(TOASTS));
   const detach = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'update'
     && (c.filters || []).some((f) => f.col === 'id' && String(f.val) === '901'));
-  assert.ok(detach && detach.values.visit_id === null, 'перенесённая строка не снята со старого визита: ' + JSON.stringify(detach));
-  assert.ok(CONFIRMS.some((t) => /Старый приём на 05[.]10/.test(t)), 'о старом приёме не спросили: ' + JSON.stringify(CONFIRMS));
+  assert.strictEqual(detach, undefined, 'строка записи снята с визита из карточки: ' + JSON.stringify(detach));
+  assert.deepStrictEqual(CONFIRMS, []);
   VISITS = [];
   window.easymed.state.user = null;
 });

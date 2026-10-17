@@ -51,6 +51,8 @@ import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../s
 // CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
 // доказывает событие (отметка, платёж, начатая работа), и видит его сервер.
 import { pendingCrmLines } from '../crm-lines.js';
+import { isDeskNow } from './wizard-desk.js';   // CRM_LINK_ALL_V1 (R3) — «сейчас» у стойки: одно правило с сервером
+import { loadTodayBooking, bookedStatusLabel, isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»
 // CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на три двери:
 // у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
 import { readEnsureVisit } from '../ensure-visit-answer.js';
@@ -198,6 +200,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         payersError: null,   // PAYER_LOAD_V2 — «не загрузились» ≠ «не заведены»
         cardPayerId: null,   // REFERRAL_BILL_V1 (дополнение 29.09) — плательщик в карте пациента (patients.payer_id)
         cart: [],            // [{ svc, qty }]
+        dropBooked: [],      // CRM_LINK_ALL_V1 (R7a) — visit_service_id строк «из записи», которые убрали
+        bookedTodaySvc: null, // CRM_LINK_ALL_V1 (ред. 2) — услуги, уже стоящие в визите записи на сегодня
         search: '',
         cat: 'Все',
         // CATALOG_PAGE_V1 — каталог бывает на 500+ услуг, и отрисовка всех строк
@@ -749,6 +753,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // Совпадение по дате — обязательное: услуга, записанная на пятницу, не
     // должна подставиться пациенту, который зашёл во вторник. В любой другой
     // день смета открывается пустой, как и раньше.
+    await prefillFromBooking();   // CRM_LINK_ALL_V1 (R7a) — сначала то, что уже в визите записи
     await prefillFromCrm();
 
     // ЗДЕСЬ БЫЛА closeCrmLines() — «услуги оформлены, значит заявка дошла».
@@ -756,6 +761,64 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // намерение. Строки закрывает сервер, когда увидит ДОКАЗАТЕЛЬСТВО прихода —
     // отметку «пришёл», платёж по счёту визита или начатую работу
     // (server/services/crm/visit-status.js). Мастер их только подставляет.
+
+    // CRM_LINK_ALL_V1 (R7a; дефект G7) — ЗАПИСЬ НА СЕГОДНЯ — ГОТОВЫЕ СТРОКИ. Визит
+    // дня пациента уже держит строки записи (календарь, колл-центр, карточка CRM):
+    // они встают в смету «из записи», и мастер регистрирует ИХ — второй строки той
+    // же услуги не вставляет (createVisit). Только сегодня и только услуги
+    // каталога; консультация по виду приёма остаётся в визите и ждёт кассу.
+    async function prefillFromBooking() {
+        const dayIso = String(wiz.when || '').slice(0, 10);
+        if (!patient.id || dayIso !== isoDay(Date.now())) return;
+        let b;
+        try { b = await loadTodayBooking(patient.id); }
+        catch (e) {
+            toast(trf('Запись пациента на сегодня не загрузилась: {msg}', { msg: (e && e.message) || e }), 'warn');
+            return;
+        }
+        if (!b || !b.visit) return;
+        // CRM_LINK_ALL_V1 (редакция 2) — услуги, которые уже стоят в визите записи (и уже в
+        // счёте), подстановка из карточки CRM (prefillFromCrm) второй строкой не берёт.
+        wiz.bookedTodaySvc = new Set(b.rows.filter((r) => r.serviceId != null).map((r) => Number(r.serviceId)));
+        const names = [];
+        for (const r of b.rows) {
+            if (r.billed || r.serviceId == null) continue;
+            const svc = wiz.services.find(sv => Number(sv.id) === r.serviceId);
+            if (!svc) continue;
+            const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+            // CRM_LINK_ALL_V1 (редакция 2) — услуга уже в смете (направление врача, подстановка):
+            // строка сметы становится строкой записи — второй строки нет, вставки нет, время и
+            // врач — записи. Строка того же вида, но к другому врачу — другая запись, её не трогаем.
+            const inCart = wiz.cart.find(c => String(c.svc.id) === String(svc.id));
+            if (inCart) {
+                if (inCart.booked || !isBookedTwin({ serviceId: Number(svc.id), doctorId: inCart.doctorId ?? null, needsDoctor: !!Number(svc.requires_doctor) }, r)) continue;   // CRM_LINK_ALL_V1 (ревью денег S1) — правило сети R7b
+                inCart.booked = { vsId: r.vsId, visitId: b.visit.id, status: b.visit.status, when: r.when };
+                inCart.qty = r.quantity || 1;
+                if (r.doctorId) inCart.doctorId = r.doctorId;
+                inCart.ui = { ...(inCart.ui || {}), day: d0.getTime() };
+                if (!svc.requires_doctor) { inCart.dateOnly = true; inCart.when = isoDay(d0.getTime()) + 'T00:00'; }
+                else inCart.when = r.when;
+                inCart.booked.when = inCart.when;
+                names.push(svc.name);
+                continue;
+            }
+            const line = { svc, qty: r.quantity || 1, doctorId: r.doctorId, when: r.when, ui: { day: d0.getTime(), pickDoc: false },
+                booked: { vsId: r.vsId, visitId: b.visit.id, status: b.visit.status, when: r.when } };
+            if (!svc.requires_doctor) { line.dateOnly = true; line.when = isoDay(d0.getTime()) + 'T00:00'; line.booked.when = line.when; }
+            wiz.cart.push(line);
+            names.push(svc.name);
+        }
+        if (!names.length) return;
+        refreshTiers();
+        paint();
+        toast(trf('Из записи на сегодня: {names}', { names: names.join(', ') }), 'ok');
+    }
+
+    /** CRM_LINK_ALL_V1 (R7a) — убрать строку сметы; строка «из записи» снимется с визита при записи. */
+    function removeCartLine(c) {
+        if (c && c.booked) wiz.dropBooked.push(c.booked.vsId);
+        wiz.cart = wiz.cart.filter(x => x !== c);
+    }
 
     async function prefillFromCrm() {
         // День, на который открыт мастер (по умолчанию — сегодня).
@@ -787,6 +850,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const svc = wiz.services.find(sv => String(sv.id) === String(ln.service_id));
                 if (!svc) continue;                                  // услуга удалена из каталога после звонка
                 if (wiz.cart.some(c => String(c.svc.id) === String(svc.id))) continue;
+                if (wiz.bookedTodaySvc && wiz.bookedTodaySvc.has(Number(svc.id))) continue;   // CRM_LINK_ALL_V1 (ред. 2) — уже в визите записи
                 addToCart(svc);
                 const line = wiz.cart.find(c => c.svc.id === svc.id);
                 if (line) {
@@ -1018,7 +1082,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         ? h('button', {
                             class: 'btn btn-sm', type: 'button',
                             style: { borderRadius: '999px', minWidth: '80px', color: 'var(--crit-600, #dc2626)', fontWeight: 700 },
-                            onclick: () => { wiz.cart = wiz.cart.filter(x => x !== inCart); repaintRail(); repaintCatalog(); },
+                            onclick: () => { removeCartLine(inCart); repaintRail(); repaintCatalog(); },   // CRM_LINK_ALL_V1 (R7a)
                         }, 'убрать')
                         : h('button', {
                             class: 'btn btn-primary btn-sm', type: 'button',
@@ -1043,7 +1107,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     },
                     // DOC_FIRST_V1 — без врача нет и планировщика.
                     // DATE_ONLY_V1 — услуге без врача время не нужно: только дата.
-                }, headRow, !inCart ? null : (s.requires_doctor ? schedulePanel(inCart) : datePanel(inCart))));
+                }, headRow, !inCart ? null : (inCart.booked ? bookedPanel(inCart) : s.requires_doctor ? schedulePanel(inCart) : datePanel(inCart))));   // CRM_LINK_ALL_V1 — bookedPanel
             }
             // CATALOG_PAGE_V1 — «хвост» списка за кнопкой: сколько показано,
             // сколько осталось. Порция та же — PAGE_SIZE.
@@ -1062,6 +1126,26 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             }
             // DATE_ONLY_V1 — услуга без врача (лаборатория, забор, справка) не
             // занимает слот в расписании: у неё есть только ДЕНЬ, без времени.
+            // CRM_LINK_ALL_V1 (повторное ревью денег, S2 / S2c) — СТРОКА «ИЗ ЗАПИСИ»: ДЕНЬ,
+            // ВРЕМЯ И ВРАЧ — КАК В КАЛЕНДАРЕ. Мастер её не вставляет второй раз (её номер
+            // идёт в счёт и в талон), поэтому менять их здесь нельзя: другой день оставлял
+            // строку в визите записи и вставлял вторую (две услуги), другой врач — счёт и
+            // талон на строку прежнего врача. Перенос и смена врача — в календаре.
+            function bookedPanel(line) {
+                const doc = line.doctorId ? wiz.doctors.find(d => String(d.id) === String(line.doctorId)) : null;
+                const when = line.when ? new Date(line.when) : null;
+                const dayTxt = when ? (when.getDate() + ' ' + monthName(when.getMonth()) + (line.dateOnly ? '' : ', ' + fmtSlot(when.getTime()))) : '—';
+                return h('div', {
+                    'data-booked-locked': String(line.booked.vsId),
+                    style: { display: 'flex', alignItems: 'center', gap: '6px 10px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed var(--ink-150, var(--ink-200))', fontSize: '12.5px' },
+                },
+                    h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700, color: 'var(--ink-800)' } },
+                        Icon('Lock', { size: 12 }), dayTxt),
+                    doc ? h('span', { style: { fontWeight: 600, color: 'var(--ink-800)' } }, doc.full_name || doc.username || '') : null,
+                    h('span', { class: 'muted' }, tr('Перенос записи — в календаре')),
+                    doc ? h('span', { class: 'muted' }, tr('Врач записи — чтобы сменить, уберите строку и добавьте услугу заново')) : null);
+            }
+
             function datePanel(line) {
                 const dateInp = h('input', {
                     type: 'date', value: (line.when || '').slice(0, 10) || isoDay(line.ui.day),
@@ -1353,6 +1437,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             .filter(t => !taken.some(b => t < b.e && b.s < t + durMs));
     }
 
+    /** CRM_LINK_ALL_V1 (R7a) — строка «из записи» с прежним временем: её слот уже занят записью. */
+    function bookedKeepsSlot(c) {
+        return !!(c && c.booked && c.when === c.booked.when);
+    }
+
     /** Строка дня, которая ЗАНИМАЕТ ВРЕМЯ ВРАЧА: с врачом, со слотом, не живая очередь. */
     function headTimedLine(lines) {
         return (lines || [])
@@ -1377,7 +1466,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         forgetSlots();   // пока заполняли смету, время могли занять
         const out = new Map();
         for (const [day, lines] of [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
-            const head = headTimedLine(lines);
+            const head = headTimedLine(lines.filter(c => !bookedKeepsSlot(c)));   // CRM_LINK_ALL_V1 (R7a) — слот записи уже её
             if (!head) continue;
             const dur = lineDuration(head);
             const start = new Date(head.when);
@@ -1424,6 +1513,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
     async function autoPickSlot(line) {
         await loadBusy(line);   // прогреть у сервера 14 дней автоподбора
+        if (line.booked) return;   // CRM_LINK_ALL_V1 (ред. 2) — у строки «из записи» время записи
         const d0 = new Date(); d0.setHours(0, 0, 0, 0);
         for (let i = 0; i < 14; i++) {
             const day = d0.getTime() + i * 86400000;
@@ -1457,6 +1547,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
     function addToCart(svc) {
         const item = wiz.cart.find(c => c.svc.id === svc.id);
+        if (item && item.booked) {
+            // CRM_LINK_ALL_V1 (редакция 2) — строка «из записи» уже в визите: ни второй строки,
+            // ни прибавленного количества (его некому было бы выставить).
+            toast(trf('«{name}» уже из записи — вторая строка не нужна.', { name: svc.name }), 'info');
+            return;
+        }
         if (item) {
             if (!isMultiQty(svc)) {
                 toast(trf('«{name}» уже в смете — эту услугу можно добавить только один раз за визит.', { name: svc.name }), 'info');
@@ -2131,7 +2227,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 // (SINGLE_PER_VISIT_V1 по-прежнему действует: без счётчика = 1).
                 list.appendChild(h('div', { class: 'row', style: { gap: '8px', padding: '9px 0', borderBottom: '1px solid var(--ink-50)' } },
                     h('span', { style: { flex: 1, minWidth: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, c.svc.name),
-                    ...(isMultiQty(c.svc) ? [
+                    // CRM_LINK_ALL_V1 (R7a) — строка уже в визите записи: подпись и статус записи.
+                    c.booked ? h('span', { 'data-booked-line': String(c.booked.vsId), style: { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12.5px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-50, #e8f3f2)', borderRadius: '999px', padding: '1px 7px', whiteSpace: 'nowrap' } },
+                        Icon('Calendar', { size: 12 }), tr('из записи') + ' · ' + tr(bookedStatusLabel(c.booked.status))) : null,
+                    ...(isMultiQty(c.svc) && !c.booked ? [
                         stepBtn('−', () => { c.qty = Math.max(1, c.qty - 1); repaintRail(); }),
                         h('span', { class: 'num', style: { fontSize: '13.5px', minWidth: '20px', textAlign: 'center' } }, String(c.qty)),
                         stepBtn('+', () => { c.qty += 1; repaintRail(); }),
@@ -2140,7 +2239,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     h('span', { class: 'num', style: { fontSize: '13.5px', fontWeight: 700, whiteSpace: 'nowrap' } }, fmtPrice(cartLinePrice(c) * c.qty), ' сум'),
                     h('button', {
                         type: 'button', title: 'Убрать',
-                        onclick: () => { wiz.cart = wiz.cart.filter(x => x !== c); repaintRail(); if (wiz.step === 1) paint(); },
+                        onclick: () => { removeCartLine(c); repaintRail(); if (wiz.step === 1) paint(); },   // CRM_LINK_ALL_V1 (R7a)
                         style: { border: 'none', background: 'none', cursor: 'pointer', color: 'var(--crit-500, #ef4444)', display: 'flex' },
                     }, Icon('X', { size: 13 })),
                 ));
@@ -2158,7 +2257,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const wait = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px', padding: '9px 10px', background: 'var(--warn-50, #fffbeb)', border: '1px solid var(--warn-200, #fde68a)', borderRadius: '10px' } },
                     h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--warn-700, #a16207)' } },
                         trf('Выберите врача — {n} услуг(и) ждут', { n: pendingDoc })));
-                for (const c of wiz.cart.filter(x => x.svc.requires_doctor && !x.doctorId)) {
+                for (const c of wiz.cart.filter(x => x.svc.requires_doctor && !x.doctorId && !x.booked)) {   // CRM_LINK_ALL_V1 — врач записи не меняется
                     const pool = doctorsForService(c.svc.id);
                     const sel = h('select', {
                         style: { width: '100%', padding: '6px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', background: 'var(--white,#fff)' },
@@ -2612,6 +2711,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // сервер ловит её только на строке услуги, когда визит уже заведён.
             const noBed = await surgeryBedRefusal(patient.id, wiz.cart.map(c => c.svc));
             if (noBed) { toast(noBed, 'fail'); wiz.creating = false; repaintRail(); return; }
+            // CRM_LINK_ALL_V1 (R7a) — убранные строки записи снимаются с визита, как в
+            // календаре (booking_line_remove), до первой записи мастера.
+            for (const id of wiz.dropBooked.slice()) {
+                const { error: dropErr } = await supabase.rpc('booking_line_remove', { visit_service_id: Number(id) });
+                if (dropErr) { toast(trf('Услугу из записи снять не удалось: {msg}', { msg: dropErr.message || dropErr }), 'fail'); wiz.creating = false; repaintRail(); return; }
+                wiz.dropBooked.splice(wiz.dropBooked.indexOf(id), 1);
+            }
             const emergencyByDay = await gateDaySlots(byDay);
             if (!emergencyByDay) {   // отказались от экстренной записи
                 toast(tr('Запись не сохранена — время занято.'), 'info');
@@ -2673,7 +2779,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 //     Проверять тоже нечего.
                 // Последние два отсекает headTimedLine — там же, где решается,
                 // что считать «временем визита».
-                const timedHead = headTimedLine(lines);
+                // CRM_LINK_ALL_V1 (R7a) — строка «из записи» с прежним временем слот не
+                // занимает заново (он уже её); «сейчас» ли это — решает и её время.
+                const timedHead = headTimedLine(lines.filter(c => !bookedKeepsSlot(c)));
+                const bookedHead = headTimedLine(lines.filter(c => bookedKeepsSlot(c)));
                 const emgReason = emergencyByDay.get(day) || null;
                 const evArgs = {
                     patient_id: patient.id, date: earliest,
@@ -2691,6 +2800,15 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         duration_minutes: lineDuration(timedHead),
                     };
                     if (emgReason) { evArgs.book.emergency = true; evArgs.book.emergency_reason = emgReason; }
+                }
+                // CRM_LINK_ALL_V1 (R3; решение владельца D2) — регистрация на СЕГОДНЯ «сейчас»
+                // (живая очередь, услуги без времени или слот не позже чем через 30 минут) —
+                // приход к стойке, как быстрая регистрация: карточка CRM сразу «Пришёл».
+                // Слот позже сегодня — запись («Записан»). Сервер верит desk только
+                // регистратуре и администратору и проверяет слот сам (ensure_visit).
+                const deskHead = timedHead || bookedHead;   // CRM_LINK_ALL_V1 (R7a)
+                if (isDeskNow({ dayIso: day, todayIso: isoDay(Date.now()), headStartMs: deskHead ? new Date(deskHead.when).getTime() : null, nowMs: Date.now() })) {
+                    evArgs.desk = true;
                 }
                 const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', evArgs);
                 if (evErr) {
@@ -2743,6 +2861,29 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const vsIds = [];
                 const coveredVsIds = [];   // COVERAGE_SPLIT_V1 — строки за счёт контрагента
                 for (const c of lines) {
+                    // CRM_LINK_ALL_V1 (R7a) — строка «из записи» уже в этом визите: второй не вставляем.
+                    // CRM_LINK_ALL_V1 (повторное ревью денег, S2) — строка «из записи» живёт в визите
+                    // записи; визит дня оказался другим — отказ словами, а не вторая строка.
+                    if (c.booked && Number(c.booked.visitId) !== Number(visit.id)) {
+                        throw new Error(tr('Запись пациента на сегодня — другой визит. Откройте визит из календаря.'));
+                    }
+                    if (c.booked && Number(c.booked.visitId) === Number(visit.id)) {
+                        const bid = Number(c.booked.vsId);
+                        vsIds.push(bid);
+                        visitsWithLines.add(visit.id);
+                        lineByVsId.set(bid, c);
+                        const bDoc0 = c.doctorId ? wiz.doctors.find(x => String(x.id) === String(c.doctorId)) : null;
+                        booked.push({
+                            visit_service_id: bid,
+                            visit,
+                            service: { id: c.svc.id, name: c.svc.name, room_id: c.svc.room_id ?? null, department_id: c.svc.department_id ?? null },
+                            doctor: c.doctorId ? { id: Number(c.doctorId), name: (bDoc0 && (bDoc0.full_name || bDoc0.username)) || '' } : null,
+                            price: cartLinePrice(c),
+                            scheduled_at: c.when ? new Date(c.when).toISOString() : null,
+                        });
+                        if (isCovered(c)) coveredVsIds.push(bid);
+                        continue;
+                    }
                     const row = {
                         visit_id: visit.id,
                         service_id: c.svc.id,

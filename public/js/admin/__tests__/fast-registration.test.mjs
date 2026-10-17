@@ -135,6 +135,9 @@ let patientRows = [];        // чем отвечает выборка по pati
 // оформляет услуги само, минуя подстановку, и обязано её закрыть.
 let crmRequests = [];
 let crmLines = [];
+// CRM_LINK_ALL_V1 (R7a) — запись пациента на сегодня: чем отвечают выборки visits и visit_services.
+let visitRows = [];
+let vsRows = [];
 // { table, message, nth? } — отказ вставки. nth — номер вставки В ЭТУ таблицу
 // (1 — первая): цепочка вставляет строки услуг по одной, и «упала ВТОРАЯ» —
 // это отдельный случай, где часть строк уже лежит в базе.
@@ -219,6 +222,8 @@ globalThis.fetch = async (url, opts = {}) => {
     const rows = table === 'patients' ? patientRows
       : table === 'crm_requests' ? crmRequests
       : table === 'crm_request_services' ? crmLines
+      : table === 'visits' ? visitRows
+      : table === 'visit_services' ? vsRows
       : table === 'services' ? SERVICES
       : table === 'users' ? DOCTORS
       : table === 'referral_sources' ? SOURCES
@@ -248,6 +253,7 @@ function reset() {
   ensureAnswer = null;
   patientRows = []; insertFail = null; quoteFail = null; queueFail = null; focused = null;
   crmRequests = []; crmLines = [];
+  visitRows = []; vsRows = [];
   quotes = null; invoiceTotal = 152000; queueTickets = null; holdRpc = null;
   document.body.children.length = 0;
   // Окна прошлой проверки с экрана сняты — их слушатели Escape тоже.
@@ -1264,3 +1270,214 @@ test('визит дня с работой: услуги НЕ записаны, �
   assert.strictEqual(dialogs('fast-registration').length, 1, 'окно закрылось после отказа');
   dlg.close();
 });
+
+// ===========================================================================
+// CRM_LINK_ALL_V1 (R7a; дефект G7) — СТРОКИ «ИЗ ЗАПИСИ». У найденного пациента
+// запись на сегодня: её строки встают в таблицу сами, с подписью и статусом
+// записи; сохранение не вставляет их второй раз, счёт — на строки записи;
+// убранная строка записи снимается с визита до визита; строка, уже стоящая в
+// счёте, — только подписью под таблицей.
+// ===========================================================================
+const KARIMOVA = { id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова', first_name: 'Азиза', middle_name: '', phone: '+998901112233', date_of_birth: '1990-04-01' };
+const todayAt = (hh) => { const d = new Date(); d.setHours(hh, 0, 0, 0); return d.toISOString(); };
+async function pickKarimova(dlg) {
+  dlg.searchInput.value = 'Кари';
+  dlg.searchInput.fireInput();
+  await tick(600);
+  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  await tick(80);
+}
+
+test('CRM_LINK_ALL_V1 R7a: запись на сегодня — строка «из записи» в таблице; сохранение не вставляет её второй раз, счёт — на строку записи', async () => {
+  reset();
+  patientRows = [KARIMOVA];
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  await pickKarimova(dlg);
+  assert.equal(rowsOf(dlg).filter((r) => textOf(r).includes('Приём терапевта')).length, 1, 'строка записи не встала в таблицу');
+  assert.ok(textOf(dlg.table).includes('из записи') && textOf(dlg.table).includes('Записан'), 'нет подписи «из записи · Записан»');
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+  assert.equal(calls.filter((c) => c.kind === 'insert' && c.table === 'visit_services').length, 0, 'строка записи вставлена второй раз');
+  const inv = calls.find((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit');
+  assert.ok(inv, 'счёт не выставлен');
+  assert.deepEqual(inv.body.visit_service_ids, [555], 'счёт не на строку записи');
+  dlg.close();
+});
+
+test('CRM_LINK_ALL_V1 R7a: убранная строка записи снимается с визита (booking_line_remove) ДО визита; новая строка вставляется', async () => {
+  reset();
+  patientRows = [KARIMOVA];
+  visitRows = [{ id: 77, status: 'confirmed', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  await pickKarimova(dlg);
+  assert.ok(textOf(dlg.table).includes('Подтверждён'), 'статус записи не показан');
+  dlg.state.removeLine(0);
+  dlg.state.addLine(SERVICES[1], null);
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+  const names = calls.filter((c) => c.kind === 'rpc').map((c) => c.name);
+  assert.ok(names.indexOf('booking_line_remove') >= 0 && names.indexOf('booking_line_remove') < names.indexOf('ensure_visit'),
+    'строка записи не снята до визита: ' + names.join(', '));
+  assert.deepEqual(calls.find((c) => c.name === 'booking_line_remove').body, { visit_service_id: 555 });
+  const ins = calls.filter((c) => c.kind === 'insert' && c.table === 'visit_services');
+  assert.equal(ins.length, 1);
+  assert.equal(ins[0].body.service_id, 2);
+  dlg.close();
+});
+
+test('CRM_LINK_ALL_V1 R7a: строка записи уже в счёте — в таблице её нет, подпись под таблицей её называет', async () => {
+  reset();
+  patientRows = [KARIMOVA];
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 556, service_id: 2, consultation_type_id: null, doctor_id: null, quantity: 1, unit_price: 40000, status: 'added', invoice_item_id: 9, clinic_item_id: null, scheduled_at: null, services: { id: 2, name: 'Общий анализ крови', price: 40000 } }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  await pickKarimova(dlg);
+  assert.equal(dlg.state.rows.length, 0, 'строка в счёте встала в таблицу — её выставили бы второй раз');
+  const note = walk(dlg.card).find((n) => n.attrs && n.attrs['data-booked-billed'] !== undefined);
+  assert.ok(note && note.textContent.includes('Общий анализ крови'), 'подписи о строке в счёте нет');
+  dlg.close();
+});
+
+test('CRM_LINK_ALL_V1 R7a: «Сменить» убирает строки записи прежнего пациента', async () => {
+  reset();
+  patientRows = [KARIMOVA];
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  await pickKarimova(dlg);
+  assert.equal(dlg.state.rows.length, 1);
+  btnByText(dlg.card, 'Сменить').click();
+  await tick(20);
+  assert.equal(dlg.state.rows.length, 0, 'строки записи прежнего пациента остались');
+  assert.deepEqual(dlg.state.dropBooked, []);
+  dlg.close();
+});
+
+// CRM_LINK_ALL_V1 (редакция 2, R7a + R7b) — СТРОКА ЗАПИСИ И СТРОКА ТОЙ ЖЕ УСЛУГИ В ТАБЛИЦЕ.
+// Регистратор уже добавил услугу, а у пациента она записана на сегодня: строка записи
+// прицепляется к его строке (вторая строка не появляется); добавить записанную услугу ещё раз —
+// нельзя (подсказка). Иначе сеть R7b убрала бы строку записи, которую экран выставляет в счёт.
+test('CRM_LINK_ALL_V1 ред. 2: услуга уже в таблице, запись на неё на сегодня — одна строка «из записи», вставки нет, счёт на строку записи', async () => {
+  reset();
+  patientRows = [KARIMOVA];
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  dlg.state.addLine(SERVICES[0], null);
+  await pickKarimova(dlg);
+  assert.equal(dlg.state.rows.length, 1, 'строка записи встала второй строкой той же услуги');
+  assert.ok(dlg.state.rows[0].booked && dlg.state.rows[0].booked.vsId === 555, 'строка регистратора не стала строкой записи');
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+  assert.equal(calls.filter((c) => c.kind === 'insert' && c.table === 'visit_services').length, 0, 'вторая строка той же услуги вставлена');
+  assert.deepEqual(calls.find((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit').body.visit_service_ids, [555]);
+  dlg.close();
+});
+
+test('CRM_LINK_ALL_V1 ред. 2: записанную на сегодня услугу второй раз не добавить — одна строка и подсказка', async () => {
+  reset();
+  patientRows = [KARIMOVA];
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  await pickKarimova(dlg);
+  assert.equal(dlg.state.rows.length, 1);
+  toasts.length = 0;
+  dlg.state.addLine(SERVICES[0], { id: 7 });
+  assert.equal(dlg.state.rows.length, 1, 'записанная услуга добавилась второй строкой');
+  assert.ok(toasts.some((m) => m.includes('уже из записи')), 'нет подсказки: ' + JSON.stringify(toasts));
+  dlg.state.addLine(SERVICES[1], null);
+  assert.equal(dlg.state.rows.length, 2, 'другая услуга не добавилась');
+  dlg.close();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINK_ALL_V1 (повторное ревью денег, S1) — «ТА ЖЕ УСЛУГА» У ЭКРАНА И У СЕРВЕРА — ОДНО ПРАВИЛО.
+// Сеть R7b (crm/booked-twin.js) у услуги БЕЗ врача врача не сравнивает: анализ с другим
+// исполнителем для неё — та же услуга, и вставка такой строки убирает строку записи. Экран
+// сравнивал врача всегда — пропускал вторую строку и выставлял счёт на строку записи, которой
+// уже нет («Строка услуги № … не найдена»). Теперь экран берёт правило сервера
+// (shared/same-service.js): та же строка «из записи», второй строки нет.
+// ═══════════════════════════════════════════════════════════════════════════
+const LAB_BOOKED = { id: 556, service_id: 2, consultation_type_id: null, doctor_id: 8, quantity: 1, unit_price: 40000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 2, name: 'Общий анализ крови', price: 40000 } };
+const CONSULT_BOOKED = { id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } };
+async function saveAndCalls(dlg) {
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(150);
+  const ins = calls.filter((c) => c.kind === 'insert' && c.table === 'visit_services').map((c) => c.body);
+  const inv = calls.find((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit');
+  return { ins, invIds: inv ? inv.body.visit_service_ids : null };
+}
+const totalRowText = (dlg) => textOf(walk(dlg.table).find((n) => n.tagName === 'TR' && textOf(n).includes('Итого')) || dlg.table).replace(/\s+/g, ' ');
+
+for (const order of ['patient-first', 'service-first']) {
+  test(`CRM_LINK_ALL_V1 (ревью денег S1, ${order}): анализ «из записи» (исполнитель 8) и тот же анализ с исполнителем 7 — одна строка записи: вставки нет, счёт на строку записи`, async () => {
+    reset();
+    patientRows = [KARIMOVA];
+    visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+    vsRows = [LAB_BOOKED];
+    const dlg = openFastRegistrationDialog({});
+    await tick(40);
+    if (order === 'service-first') dlg.state.addLine(SERVICES[1], { id: 7 });
+    await pickKarimova(dlg);
+    toasts.length = 0;
+    if (order === 'patient-first') {
+      dlg.state.addLine(SERVICES[1], { id: 7 });
+      assert.ok(toasts.some((m) => m.includes('уже из записи')), 'нет подсказки: ' + JSON.stringify(toasts));
+    }
+    const labRows = dlg.state.rows.filter((r) => Number(r.service.id) === 2);
+    assert.equal(labRows.length, 1, 'анализ стоит двумя строками: ' + JSON.stringify(dlg.state.rows.map((r) => [r.service.id, r.doctorId, r.booked && r.booked.vsId])));
+    assert.ok(labRows[0].booked && labRows[0].booked.vsId === 556, 'строка — не строка записи');
+    assert.equal(labRows[0].doctorId, 8, 'экран показывает не исполнителя строки записи');
+    const { ins, invIds } = await saveAndCalls(dlg);
+    assert.equal(ins.filter((b) => Number(b.service_id) === 2).length, 0, 'анализ вставлен второй строкой — сеть R7b убрала бы строку записи из счёта');
+    assert.deepEqual(invIds, [556], 'счёт не на строку записи');
+    dlg.close();
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINK_ALL_V1 (повторное ревью денег, S3) — ПАКЕТ НА СТРОКУ «ИЗ ЗАПИСИ» НЕ ЛОЖИТСЯ.
+// Строка записи уже в визите, сохранение её не вставляет второй раз — значит и пакета (package_id)
+// ей не дать: экран обещал «в пакете 90 000», а счёт брал 112 000. Теперь записанная услуга
+// пакетом пропускается (тост её называет), пакетная строка, к которой прицепилась запись,
+// пакет теряет — та же подсказка. Сумма на экране = сумма счёта.
+// ═══════════════════════════════════════════════════════════════════════════
+for (const order of ['patient-first', 'package-first']) {
+  test(`CRM_LINK_ALL_V1 (ревью денег S3, ${order}): пакет на услугу «из записи» не ложится — строка записи по своей цене, тост называет услугу, экран и счёт — одна сумма`, async () => {
+    reset();
+    patientRows = [KARIMOVA];
+    visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+    vsRows = [CONSULT_BOOKED];
+    const dlg = openFastRegistrationDialog({});
+    await tick(40);
+    toasts.length = 0;
+    if (order === 'package-first') dlg.state.applyTemplate(OSEN(20));
+    await pickKarimova(dlg);
+    if (order === 'patient-first') dlg.state.applyTemplate(OSEN(20));
+    const rows = dlg.state.rows.filter((r) => Number(r.service.id) === 1);
+    assert.equal(rows.length, 1, 'приём стоит двумя строками');
+    assert.ok(rows[0].booked && rows[0].booked.vsId === 555, 'строка — не строка записи');
+    assert.ok(!rows[0].package, 'строка записи помнит пакет: ' + JSON.stringify(rows[0].package));
+    assert.ok(!textOf(dlg.table).includes('в пакете'), 'экран обещает цену пакета, а счёт её не даст');
+    assert.ok(toasts.some((m) => m.includes('без пакета') && m.includes('Приём терапевта')), 'тост не называет услугу: ' + JSON.stringify(toasts));
+    assert.ok(totalRowText(dlg).includes('112 000'), 'Итого — не цена строки записи: ' + totalRowText(dlg));
+    const { ins, invIds } = await saveAndCalls(dlg);
+    assert.equal(ins.length, 0, 'строка вставлена: ' + JSON.stringify(ins));
+    assert.deepEqual(invIds, [555], 'счёт не на строку записи');
+    dlg.close();
+  });
+}

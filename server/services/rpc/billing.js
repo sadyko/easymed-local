@@ -8,7 +8,8 @@ import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
 // здесь: заочно деньги у окна не появляются. См. шапку crm/visit-status.js.
 import { crmInvoiceEvidence, crmVisitEvidence } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 (разбор ревью M6, M1) — строки записи из заявки CRM.
-import { pruneAutoLinesOnInvoice, syncLineFromVisit, mirrorVisit, mirrorCashierLine } from '../crm/booking-mirror.js';
+import { pruneAutoLinesOnInvoice, syncLineFromVisit } from '../crm/booking-mirror.js';
+import { onVisitLinesAdded, releaseVisitLine } from '../crm/one-way.js';   // CRM_ONE_WAY_V1 — касса и строки записи карточки
 import { invoiceStatusFor, idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 // PAY_BASIS_PERFORMED_V1 — «what will the invoice charge for this line» is one
 // function, shared with the doctor's pay (rpc/reports.js): own price over the
@@ -1207,11 +1208,10 @@ export function removeUnpaidService(db, args, user, { rpc = 'remove_unpaid_servi
       : [];
 
     db.prepare('DELETE FROM visit_services WHERE id = ?').run(vsId);
-    // CASHIER_HEAD_V1 (ревью) — строка заявки CRM, державшая снятую строку,
-    // больше ничего не ждёт.
-    try {
-      db.prepare("UPDATE crm_request_services SET status = 'cancelled' WHERE visit_service_id = ? AND status = 'pending'").run(vsId);
-    } catch { /* таблицы нет в этой сборке */ }
+    // CASHIER_HEAD_V1 (ревью) · CRM_ONE_WAY_V1 (O3) — строка записи карточки, державшая
+    // снятую строку, не снимается: она ждёт в карточке без дня (отпущенная) и сама в визит
+    // не вернётся — записать снова может только оператор.
+    try { releaseVisitLine(db, vsId, vs.visit_id); } catch { /* таблицы нет в этой сборке */ }
 
     let invoiceDeleted = false;
     let invoice = null;
@@ -1243,7 +1243,7 @@ export function removeUnpaidService(db, args, user, { rpc = 'remove_unpaid_servi
   });
 
   const out = run();
-  if (visitId && !out.repeated) mirrorVisit(db, visitId, { actorId: user && user.id });   // CASHIER_HEAD_V1 (ревью) — заявка CRM узнаёт о снятой строке
+  // CASHIER_HEAD_V1 (ревью) · CRM_ONE_WAY_V1 — карточка узнала о снятой строке в транзакции выше.
   return out;
 }
 
@@ -1685,8 +1685,9 @@ export function addServiceToVisitInvoice(db, args, user, { rpc = 'cashier_line_a
   });
   const out = run();
   if (!out.repeated) {
-    mirrorVisit(db, visitId, { actorId: user && user.id });   // CRM_CALENDAR_MIRROR_V1
-    mirrorCashierLine(db, out.line.id);                       // ревью — строка в счёте тоже доходит до заявки
+    // CRM_ONE_WAY_V1 — строка кассы в карточку не копируется (O2); строка CRM той же услуги
+    // уступает ей, сбывшееся желание карточки указывает на неё.
+    onVisitLinesAdded(db, visitId, [out.line.id]);
   }
   return out;
 }

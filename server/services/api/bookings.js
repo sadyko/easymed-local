@@ -30,7 +30,8 @@
 // Деньги не трогаются: визит и его строки заводят ensure_visit и зеркало
 // заявки (crm/booking-mirror.js) — по тем же ценам, что у регистратуры.
 import { firstStageKey } from '../crm/contact-window.js';
-import { dayVisitMovableFor, visitHasWork, PRE_ARRIVAL, mirrorVisit } from '../crm/booking-mirror.js';
+import { displayLinkSql } from '../crm/display-links.js';   // CRM_LINK_ALL_V1 (ред. 2б, P-1)
+import { dayVisitMovableFor, visitHasWork, PRE_ARRIVAL } from '../crm/booking-mirror.js';
 import { crmLinkVisit } from '../crm/visit-link.js';   // повторная проверка 8a — доведение прерванного подтверждения
 import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';
 import { findPatientsByPhone } from '../telegram/documents.js';
@@ -471,8 +472,8 @@ function recoverConfirming(db, { now, kekPath }) {
     // строки по заявке. Доводим тем же путём, что ensure_visit: связь и зеркало
     // (обе не бросают и повтор не удваивают).
     if (visit) {
+      // CRM_ONE_WAY_V1 (O1) — строки заявки садятся в визит в шаге связи; сверки зеркала больше нет.
       crmLinkVisit(db, visit.id, SYSTEM_BOOKER, { undated: true });
-      mirrorVisit(db, visit.id, { actorId: null });
     }
   }
   return expired;
@@ -531,7 +532,8 @@ function expireRow(db, row, { now, kekPath }) {
 function visitCarriesOther(db, visitId, crmRequestId) {
   const own = crmRequestId || 0;
   if (db.prepare("SELECT 1 FROM crm_request_services WHERE visit_id = ? AND status <> 'cancelled' AND request_id <> ? LIMIT 1").get(visitId, own)) return true;
-  try { return !!db.prepare('SELECT 1 FROM crm_booking_links WHERE visit_id = ? AND request_id <> ?').get(visitId, own); } catch { return false; }
+  // CRM_LINK_ALL_V1 (редакция 2б, P-1) — привязка «только для воронки» другой карточки записи не несёт.
+  try { return !!db.prepare(`SELECT 1 FROM crm_booking_links b WHERE b.visit_id = ? AND b.request_id <> ? AND NOT ${displayLinkSql('b')}`).get(visitId, own); } catch { return false; }
 }
 
 async function partnerCancel(db, row, { now, kekPath }) {

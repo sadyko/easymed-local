@@ -41,7 +41,14 @@
  * 'primary' (первичный приём) — то есть возможной переплатой пациента.
  * Вызывающий обязан сказать об этом видимо, а не проглотить ответ молча.
  *
- * lines: [{ service: {id, price, requires_doctor, name}, doctorId: number|null }]
+ * lines: [{ service: {id, price, requires_doctor, name}, doctorId: number|null,
+ *           bookedVsId?: number, bookedUnitPrice?: number }]
+ *   CRM_LINK_ALL_V1 (R7a) — bookedVsId: строка «из записи» — она УЖЕ в визите дня
+ *   (views/booked-rows.js): её не вставляют второй раз, в счёт идёт она сама.
+ * dropVsIds: [visit_service_id] — строки записи, которые регистратор убрал: они
+ *   снимаются с визита (booking_line_remove, как в календаре) ДО визита; снятая
+ *   удаляется из массива — повтор нажатия её не снимает второй раз.
+ * bookedVisitId: визит записи, которому принадлежат bookedVsId.
  * → { visit, invoice, items, queue: Map(visit_service_id → row),
  *     lines: [{ visitServiceId, serviceId, doctorId, unitPrice, tier }],
  *     quoteError?: string, queueError?: string }
@@ -54,6 +61,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 // у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
 import { readEnsureVisit } from '../ensure-visit-answer.js';
 import { lineIdentity, isConsultPick, consultDoctorId, surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога
+import { isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (ред. 2) — строка той же услуги, что строка записи
 
 const isPosInt = (v) => {
     const n = Number(v);
@@ -182,7 +190,7 @@ async function quoteTiers(patientId, serviceIds, visitId, doctorIds = {}) {
     }
 }
 
-export async function registerWalkIn({ patientId, lines, referralSourceId = null, createdBy = null, actorRole = null, now = () => new Date() } = {}) {
+export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedVisitId = null, referralSourceId = null, createdBy = null, actorRole = null, now = () => new Date() } = {}) {
     const pid = Number(patientId);
     const items = (Array.isArray(lines) ? lines : []).filter(Boolean);
     // WALK_IN_ROLE_GATE_V1 — раньше всего остального: роль решает, дойдёт ли
@@ -193,6 +201,27 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ ДО визита.
     const noBed = await surgeryBedRefusal(pid, items.map((l) => l.service));
     if (noBed) throw new Error(noBed);
+    // CRM_LINK_ALL_V1 (редакция 2) — строка «из записи» и вторая строка той же услуги
+    // в одном наборе — отказ ДО визита: вставка второй убрала бы строку записи (сеть
+    // R7b, crm/booked-twin.js), а её номер уже идёт в счёт. Экран такой набор не
+    // собирает (строка той же услуги прицепляется к строке записи).
+    // CRM_LINK_ALL_V1 (повторное ревью денег, S1) — правило одно с сетью R7b (shared/same-service.js):
+    // у услуги без врача исполнитель не сравнивается — ЭКГ у другого исполнителя та же ЭКГ.
+    const keyOf = (l) => { const ident = lineIdentity(l.service) || {}; return { serviceId: ident.service_id ?? null, consultationTypeId: ident.consultation_type_id ?? null, doctorId: lineDoctorOf(l), needsDoctor: !!Number(l.service && l.service.requires_doctor) }; };
+    const bookedKeys = items.filter((l) => isPosInt(l.bookedVsId)).map(keyOf);
+    const twin = items.find((l) => !isPosInt(l.bookedVsId) && bookedKeys.some((b) => isBookedTwin(keyOf(l), b)));
+    if (twin) throw new Error(trf('«{name}» уже из записи — вторая строка не нужна.', { name: (twin.service && twin.service.name) || '' }));
+
+    // CRM_LINK_ALL_V1 (R7a) — строки записи, которые регистратор убрал, снимаются
+    // с визита до всего остального — той же дверью, что в календаре
+    // (booking_line_remove: только «в смете», без счёта и работы).
+    const drops = Array.isArray(dropVsIds) ? dropVsIds : [];
+    for (const id of drops.slice()) {
+        if (!isPosInt(id)) continue;
+        const { error } = await supabase.rpc('booking_line_remove', { visit_service_id: Number(id) });
+        if (error) throw new Error(trf('Услугу из записи снять не удалось: {msg}', { msg: msgOf(error) }));
+        drops.splice(drops.indexOf(id), 1);
+    }
 
     // 1. Филиал — тот же первый действующий, что берёт мастер визита.
     const { data: branchRows } = await supabase.from('branches').select('id').eq('active', true).order('id').limit(1);
@@ -233,11 +262,17 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     // Перенос — успех, о котором вызывающий говорит вслух (movedNote).
     const answer = readEnsureVisit(ev);
     if (answer.busy) throw new Error(answer.text);
+    // CRM_LINK_ALL_V1 (R7a) — строки «из записи» принадлежат визиту записи; визит дня
+    // у пациента один (ensure_visit), иначе это уже не та запись.
+    if (items.some((l) => isPosInt(l.bookedVsId)) && isPosInt(bookedVisitId) && Number(bookedVisitId) !== Number(visit.id)) {
+        throw new Error(tr('Запись пациента на сегодня — другой визит. Откройте визит из календаря.'));
+    }
 
     // 3. Тариф визита — до вставки строк: слово тарифа пишется В САМУЮ СТРОКУ,
     //    и касса потом считает цену по нему.
     // Консультация тарифа не спрашивает: её цена — цена врача по типу приёма.
-    const serviceIds = [...new Set(items.filter((l) => !isConsultPick(l.service)).map((l) => Number(l.service.id)))];
+    // CRM_LINK_ALL_V1 (R7a) — строки «из записи» уже в визите со своей ценой: тариф не спрашивают.
+    const serviceIds = [...new Set(items.filter((l) => !isConsultPick(l.service) && !isPosInt(l.bookedVsId)).map((l) => Number(l.service.id)))];
     const doctorIds = {};
     for (const l of items) {
         if (isConsultPick(l.service)) continue;
@@ -260,6 +295,15 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
         const svc = line.service;
         const consult = isConsultPick(svc);
         const ident = lineIdentity(svc);
+        // CRM_LINK_ALL_V1 (R7a) — строка «из записи»: второй строки нет, в счёт идёт она.
+        if (isPosInt(line.bookedVsId)) {
+            const bookedId = Number(line.bookedVsId);
+            const unit = Number(line.bookedUnitPrice);
+            vsIds.push(bookedId);
+            saved.push({ visitServiceId: bookedId, serviceId: ident.service_id, consultationTypeId: ident.consultation_type_id,
+                doctorId: lineDoctorOf(line), unitPrice: Number.isFinite(unit) ? unit : (Number(svc.price) || 0), tier: null });
+            continue;
+        }
         const q = consult ? null : (quotes[svc.id] != null ? quotes[svc.id] : quotes[String(svc.id)]);
         const quoted = q && Number.isFinite(Number(q.price)) ? Number(q.price) : null;
         const unitPrice = quoted === null ? (Number(svc.price) || 0) : quoted;

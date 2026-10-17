@@ -81,7 +81,7 @@ export const REGISTRY = {
     // visit_service_id: CRM_CALENDAR_MIRROR_V1 (mig 187) — строка визита, которая
     // отвечает этой строке заявки. Ставит только сервер (crm/booking-mirror.js),
     // поэтому в записи колонки нет.
-    read:  { roles: ALL_STAFF, columns: ['id','request_id','service_id','scheduled_date','status','note','doctor_id','created_at','visit_id','visit_service_id','consultation_type_id'] },   // consultation_type_id: CRM_CALENDAR_MIRROR_V1 (mig 188) — консультация по виду приёма
+    read:  { roles: ALL_STAFF, columns: ['id','request_id','service_id','scheduled_date','status','note','doctor_id','created_at','visit_id','visit_service_id','consultation_type_id','released_from_visit_id'] },   // consultation_type_id: CRM_CALENDAR_MIRROR_V1 (mig 188) — консультация по виду приёма; released_from_visit_id: CRM_ONE_WAY_V1 (mig 246) — запись отменили, строка ждёт новой даты (пишет только сервер)
     // CALLCENTER_ROLE_V1 — «Сохранить и записать» writes the dated lines here,
     // and re-booking cancels the superseded ones by UPDATE, so the call centre
     // needs insert+update. It never deletes: saveLines() cancels, so that a line

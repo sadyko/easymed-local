@@ -151,9 +151,11 @@ import { getDataDir } from '../control/config.js';
 // CRM_REAL_BOOKING_V1 — смена статуса визита это событие ЗАЯВКИ: пришёл,
 // не пришёл, отменили. Правило живёт в crm/visit-status.js, здесь только дверь.
 import { crmVisitStatus } from '../crm/visit-status.js';
-// CRM_CALENDAR_MIRROR_V1 — запись календаря и заявка CRM — одна запись.
-import { mirrorVisit, mirrorReschedule, dayVisitMovableFor } from '../crm/booking-mirror.js';
-import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
+// CRM_CALENDAR_MIRROR_V1 · CRM_ONE_WAY_V1 — запись календаря и карточка CRM: услуги записи живут
+// только в визите; перенос ведёт за собой строки записи карточки (crm/one-way.js followVisitMove, O6).
+import { dayVisitMovableFor, requestOfVisit } from '../crm/booking-mirror.js';
+import { followVisitMove } from '../crm/one-way.js';
+import { crmLinkVisit, crmBookingMoved } from '../crm/visit-link.js';   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 — crmBookingMoved (дата карточки при переносе)
 // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
 import { localDate } from '../domain/day.js';
 // PUBLIC_API_V1 — время, удержанное онлайн-записью без карты, занимает врача
@@ -1105,8 +1107,7 @@ export async function calendarBook(db, args, user, deps = {}) {
         }, user, deps);
         // Как у ensure_visit после записи: связь с заявкой пациента
         // (crm/visit-link.js — одно правило), затем сверка.
-        crmLinkVisit(db, moved.visit.id, user);   // CRM_UNIFY_V1
-        mirrorVisit(db, moved.visit.id, { actorId: user && user.id });
+        crmLinkVisit(db, moved.visit.id, user);   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 (O1) — сверки зеркала больше нет
         return { ...moved, moved: true };
       }
       const doc = dayVisit.doctor_id ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(dayVisit.doctor_id) : null;
@@ -1248,7 +1249,16 @@ export async function calendarBook(db, args, user, deps = {}) {
   // ЗА ТРАНЗАКЦИЕЙ, А НЕ В НЕЙ: заявка не вправе отменить запись. Хук молчит
   // при любой ошибке, но даже так его место — после того, как визит уже
   // сохранён.
-  crmVisitStatus(db, { visitId: out.visit.id, from: existing ? existing.status : null, to: status });
+  // CRM_LINK_ALL_V1 (повторное ревью воронки, F-6) — НОВАЯ запись: сначала связь с
+  // карточкой (ниже), потом её статус. Запись, заведённая сразу «Подтверждён», шла в
+  // правило статуса раньше, чем карточка её держала, — и карточка оставалась «Записан».
+  if (existing) crmVisitStatus(db, { visitId: out.visit.id, from: existing.status, to: status, fromVisitDate: existing.visit_date });   // CRM_ONE_WAY_V1 (ревью r4, п. 7) — день до правки
+  // CRM_ONE_WAY_V1 (O5) — ОШИБОЧНУЮ ОТМЕНУ ОТМЕНИЛИ: строки карточки уже снова указывают на
+  // строки визита (crmVisitStatus → restoreReleased); ступень и дату карточки ставит шаг связи
+  // — как при записи (шаг B находит карточку, шаг G двигает её вперёд). Только если визит держит
+  // карточка: восстановление записи без карточки новой карточки не заводит (шаг E колл-центра).
+  if (existing && existing.status === 'cancelled' && BUSY_STATUSES.includes(status)
+      && requestOfVisit(db, out.visit.id, { display: true })) crmLinkVisit(db, out.visit.id, user);
 
   // CRM_CALENDAR_MIRROR_V1 (2026-09-27) — ЗАЯВКА ВИДИТ ТО ЖЕ, ЧТО КАЛЕНДАРЬ.
   //
@@ -1259,11 +1269,14 @@ export async function calendarBook(db, args, user, deps = {}) {
   // заявка не вправе отказать в записи.
   if (!existing) {
     crmLinkVisit(db, out.visit.id, user);   // CRM_UNIFY_V1
+    crmVisitStatus(db, { visitId: out.visit.id, from: null, to: status });   // CRM_LINK_ALL_V1 (F-6) — после связи
   } else if (BUSY_STATUSES.includes(status)
       && (existing.visit_date !== out.visit.visit_date || Number(existing.doctor_id || 0) !== Number(out.visit.doctor_id || 0))) {
-    mirrorReschedule(db, out.visit.id, { oldDoctorId: existing.doctor_id });
+    followVisitMove(db, out.visit.id, { oldDoctorId: existing.doctor_id });   // CRM_ONE_WAY_V1 (O6)
+    crmBookingMoved(db, out.visit.id);   // CRM_LINK_ALL_V1 (ред. 2) · CRM_ONE_WAY_V1 — дата каждой карточки этой записи
   }
-  mirrorVisit(db, out.visit.id, { actorId: user && user.id });
+  // CRM_ONE_WAY_V1 — сверки зеркала (mirrorVisit) после записи больше нет: она удаляла строку
+  // восстановленного визита (повтор ревью M8) и возила строки между визитами.
 
   out.emergency = !!(conflict && emergency);
   out.day = dayIso;

@@ -21,8 +21,11 @@ const followUp = (t, door, vid, day) => (door === 'ensure_visit'
 //    видит карточку пациента и ведёт её строки в запись. Поэтому «номер у ОДНОЙ
 //    карты» и есть защита денег: ошибка в нём ставит услуги в чужой счёт.
 
+// CRM_LINK_ALL_V1 (редакция 2б, P-6) — правило изменено: карточка, которая держит визит привязкой
+// по телефону, своих строк в ЭТОТ визит не ведёт и на следующей двери (общий семейный номер — не
+// общий счёт, D4). Её строки ждут своей записи; другие визиты пациента — как прежде.
 for (const door of ['ensure_visit', 'booking_lines_add']) {
-  test(`по телефону, номер у одной карты: следующая дверь (${door}) ведёт строки карточки в запись`, async () => {
+  test(`по телефону, номер у одной карты (CRM_LINK_ALL_V1, P-6): следующая дверь (${door}) строки карточки в эту запись не ведёт`, async () => {
     const t = await startCrmApp();
     try {
       const rid = addLead(t.db, { patient: null, phone: '909092638', assigned: 4, name: '909092638' });
@@ -34,8 +37,8 @@ for (const door of ['ensure_visit', 'booking_lines_add']) {
       assert.deepEqual(linesOf(t.db, rid).map((l) => l.visit_id), [null], 'первая дверь: совпадение по телефону взяло строку');
       const r = await followUp(t, door, vid, D);
       assert.equal(r.status, 200, r.text);
-      assert.deepEqual(linesOf(t.db, rid).filter((l) => l.service_id === 40).map((l) => l.visit_id), [vid]);
-      assert.ok(vsOf(t.db, vid).some((x) => x.service_id === 40), 'строка карточки не встала в запись');
+      assert.deepEqual(linesOf(t.db, rid).filter((l) => l.service_id === 40).map((l) => l.visit_id), [null], 'строка карточки по телефону взяла запись на следующей двери');
+      assert.ok(!vsOf(t.db, vid).some((x) => x.service_id === 40), 'строка карточки по телефону встала в запись (счёт)');
     } finally { t.close(); }
   });
 }
@@ -283,9 +286,12 @@ test('строка без даты не встаёт в запись кален�
     const vid = b.json.data.visit.id;
     const add = await t.rpc('booking_lines_add', 'reg', { visit_id: vid, patient_id: 77, lines: [{ service_id: 40 }] });
     assert.equal(add.status, 200, add.text);
-    assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.visit_id]), [[30, null]], 'строка «когда придёт» встала в чужую запись');
+    // CRM_LINK_ALL_V1 (редакция 2) — привязка для воронки: анализ визита в карточку не копируется.
+    // CRM_LINK_ALL_V1 (D1, R1) — живая карточка держит и эту запись: анализ визита — на
+    // карточке, карточка «Записан»; строка «когда придёт» по-прежнему ждёт (не в смете анализа).
+    assert.deepEqual(linesOf(t.db, rid).map((l) => [l.service_id, l.visit_id]), [[30, null]], 'строка «когда придёт» встала в чужую запись или анализ скопирован в карточку');
     assert.ok(!vsOf(t.db, vid).some((x) => x.service_id === 30), 'консультация без даты попала в смету анализа');
-    assert.equal(t.lead(rid).status, 'in_process');
+    assert.equal(t.lead(rid).status, 'scheduled');
     const e = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: D2, doctor_id: 10 });
     assert.equal(e.status, 200, e.text);
     assert.deepEqual(linesOf(t.db, rid).filter((l) => l.service_id === 30).map((l) => l.visit_id), [vid]);

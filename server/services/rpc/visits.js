@@ -14,10 +14,11 @@ import { calendarSlots, calendarBook } from './calendar.js';
 import { DEFAULT_DURATION_MIN, serviceDurationMinutes, formatHhmm } from './slot-engine.js';
 // BILLING_AUDIT_FIX_V1 (A1) — день визита считается в МЕСТНОМ времени клиники.
 import { localDate } from '../domain/day.js';
-// CRM_CALENDAR_MIRROR_V1 — запись и заявка — одна запись: строки услуг
-// записи сверяются с строками заявки (crm/booking-mirror.js).
-import { mirrorVisit, dayVisitMovableFor } from '../crm/booking-mirror.js';
+// CRM_CALENDAR_MIRROR_V1 · CRM_ONE_WAY_V1 — строки заявки садятся в визит в шаге связи
+// (crm/visit-link.js → crm/one-way.js attachWish); сверки зеркала больше нет.
+import { dayVisitMovableFor } from '../crm/booking-mirror.js';
 import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
+import { DESK_NOW_MINUTES } from '../../../public/js/admin/views/wizard-desk.js';   // CRM_LINK_ALL_V1 (R3) — одно правило «сейчас» с мастером
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -147,7 +148,8 @@ function parseBook(book) {
 
 // args: { patient_id, date (ISO datetime or YYYY-MM-DD), doctor_id?,
 //         visit_type?, referral_source_id?, branch_id?, notes?,
-//         desk?: true (CRM_UNIFY_V1 — регистрация на стойке, только без book),
+//         desk?: true (CRM_UNIFY_V1 — регистрация на стойке; CRM_LINK_ALL_V1 (R3) — с book
+//                      верится, только если слот начинается не позже чем через 30 минут),
 //         book?: { doctor_id, start, duration_minutes?, service_id?, room_id?,
 //                  emergency?, emergency_reason? } }
 // Returns { visit, created, booked, emergency?, cross_branch? }.
@@ -217,6 +219,11 @@ export async function ensureVisit(db, args, user, internal = {}) {
   //     проверять нечего. Решает это экран (headTimedLine в visit-wizard.js),
   //     и это единственная честная причина сюда не прийти.
   const book = parseBook(args && args.book);
+  // CRM_LINK_ALL_V1 (R3; решение D2) — мастер на сегодня «сейчас» шлёт desk и с
+  // записью на время: верим, только если слот начинается не позже чем через
+  // DESK_NOW_MINUTES минут (то же правило, что у экрана, wizard-desk.js).
+  // Остальное (роль, сегодняшний день) проверяет шаг связи (deskArrival).
+  const deskBooked = desk && !!book && book.startMs <= Date.now() + DESK_NOW_MINUTES * 60000;
   // BILLING_AUDIT_FIX_V1 (A1, A8) — визит дня ищется по МЕСТНОМУ дню и только
   // среди СВОИХ визитов: визит, приехавший из соседнего здания (sync_origin),
   // здесь не правится (BRANCH_MONEY_GUARD_V1 — ни счёт, ни услугу в нём не
@@ -281,13 +288,8 @@ export async function ensureVisit(db, args, user, internal = {}) {
   const out = run();
   if (!book) {
     // CRM_UNIFY_V1 — строки «без даты» берёт только ensure_visit; desk — только здесь, без записи на время.
+    // CRM_ONE_WAY_V1 (O1) — строки заявки, которые визит взял, садятся в него в этом же шаге.
     crmLinkVisit(db, out.visit.id, user, { undated: true, desk });
-    // CRM_CALENDAR_MIRROR_V1 — строки заявки, которые визит только что взял,
-    // становятся строками визита (до прихода). CRM_UNIFY_V1 — на стойке (desk)
-    // шаг связи сам зовёт зеркало ДО правила прихода (ревью задачи 3, R1/R2);
-    // здесь после прихода остаётся только замена строк зеркала строками
-    // регистратуры.
-    mirrorVisit(db, out.visit.id, { actorId: user && user.id });
     return { ...out, booked: false };
   }
 
@@ -329,8 +331,7 @@ export async function ensureVisit(db, args, user, internal = {}) {
     // пациента держит именно он, и в смете регистратуры они нужны. CRM_UNIFY_V1:
     // до прихода — как запись («Записан»); визит уже «Пришёл» — строки берут
     // его и закрываются правилом прихода (crm/visit-link.js).
-    crmLinkVisit(db, out.visit.id, user, { undated: true });   // CRM_UNIFY_V1
-    mirrorVisit(db, out.visit.id, { actorId: user && user.id });   // CRM_CALENDAR_MIRROR_V1
+    crmLinkVisit(db, out.visit.id, user, { undated: true, desk: deskBooked });   // CRM_UNIFY_V1 · CRM_LINK_ALL_V1 (R3) · CRM_ONE_WAY_V1 (O1)
     const doctor = out.visit.doctor_id
       ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(out.visit.doctor_id)
       : null;
@@ -400,9 +401,8 @@ export async function ensureVisit(db, args, user, internal = {}) {
     }
   }
   // CRM_UNIFY_V1 — запись связывается с заявкой пациента (crm/visit-link.js);
-  // затем строки записи и заявки сверяются.
-  crmLinkVisit(db, out.visit.id, user, { undated: true });   // CRM_UNIFY_V1
-  mirrorVisit(db, out.visit.id, { actorId: user && user.id });
+  // CRM_ONE_WAY_V1 (O1) — строки заявки этого дня садятся в визит там же.
+  crmLinkVisit(db, out.visit.id, user, { undated: true, desk: deskBooked });   // CRM_UNIFY_V1 · CRM_LINK_ALL_V1 (R3)
   return { ...out, booked: true };
 }
 
@@ -475,7 +475,8 @@ export function discardEmptyVisit(db, args, user) {
     // CRM_UNIFY_V1 (ревью задачи 3, R6) — и снова ждут: закрыть строку пустого
     // визита ('done') мог только приход на стойке по этому же визиту, а визита
     // больше нет. Ступени, которые сменил этот приход, вернул след выше.
-    db.prepare(`UPDATE crm_request_services SET visit_id = NULL,
+    // CRM_ONE_WAY_V1 — и без строки визита: визита нет, строки снова желания своих дней.
+    db.prepare(`UPDATE crm_request_services SET visit_id = NULL, visit_service_id = NULL, visit_service_auto = 0,
                        status = CASE WHEN status = 'done' THEN 'pending' ELSE status END
                  WHERE visit_id = ?`).run(visitId);
     // CRM_CALENDAR_MIRROR_V1 — и привязка записи к заявке уходит вместе с ней.
@@ -486,6 +487,7 @@ export function discardEmptyVisit(db, args, user) {
     try {
       const own = db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ? AND created_request = 1').get(visitId);
       db.prepare('DELETE FROM crm_booking_links WHERE visit_id = ?').run(visitId);
+      try { db.prepare('DELETE FROM crm_card_visit_views WHERE visit_id = ?').run(visitId); } catch { /* сборка без 247 */ }   // CRM_LINK_ALL_V1 (F-10)
       if (own) {
         const busy = db.prepare(`SELECT 1 FROM crm_request_services WHERE request_id = ? AND status <> 'cancelled'
                                     AND (visit_id IS NULL OR visit_id <> ?) LIMIT 1`).get(own.request_id, visitId)
