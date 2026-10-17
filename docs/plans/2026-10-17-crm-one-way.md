@@ -160,15 +160,15 @@ New columns (migration 246, rewritten): `crm_request_services.released_from_visi
 
 ## Tasks
 
-- [ ] **Task 0 — Plan, baseline.** This file; baseline runs `base0` of `wide`, `matrix`, `money`, `client` (ru) recorded in PROGRESS.md. Commit the plan.
-- [ ] **Task 1 — Migration 246 (one-way schema), registry.**
-- [ ] **Task 2 — `one-way.js` rules (unit tests first).**
-- [ ] **Task 3 — Retire the mirror: every door rewired; twin todos → real tests; door scenarios (M1, M2, C1, M7, M8, O3, O5); existing tests and matrix cells adjusted (list below).**
-- [ ] **Task 4 — O10 funnel: trail per booking, live booking, read-time privacy (G1a–e, TRIG-a).**
-- [ ] **Task 5 — O8 upgrade repair (one-off, logged).**
-- [ ] **Task 6 — Port all repros (r1, r2, r3, crm-twin-repros) with one-way expectations / obsolete list.**
-- [ ] **Task 7 — Card UI: wishes and booked lines, O3 add/remove from the card, released wishes, ru/uz/en; client harness; Playwright at 360 px.**
-- [ ] **Task 8 — Verification (narrow sets ru + en-US), counts in this plan, PROGRESS.md.**
+- [x] **Task 0 — Plan, baseline.** This file; baseline runs `base0` of `wide`, `matrix`, `money`, `client` (ru) recorded in PROGRESS.md. Commit the plan.
+- [x] **Task 1 — Migration 246 (one-way schema), registry.**
+- [x] **Task 2 — `one-way.js` rules (unit tests first).**
+- [x] **Task 3 — Retire the mirror: every door rewired; twin todos → real tests; door scenarios (M1, M2, C1, M7, M8, O3, O5); existing tests and matrix cells adjusted (list below).**
+- [x] **Task 4 — O10 funnel: trail per booking, live booking, read-time privacy (G1a–e, TRIG-a).**
+- [x] **Task 5 — O8 upgrade repair (one-off, logged).**
+- [x] **Task 6 — Port all repros (r1, r2, r3, crm-twin-repros) with one-way expectations / obsolete list.**
+- [x] **Task 7 — Card UI: wishes and booked lines, O3 add/remove from the card, released wishes, ru/uz/en; client harness; Playwright at 360 px.**
+- [x] **Task 8 — Verification (narrow sets ru + en-US), counts in this plan, PROGRESS.md.**
 
 ---
 
@@ -370,9 +370,24 @@ comment; every removed test leaves a `CRM_ONE_WAY_V1 — УБРАН: <reason>` l
 - [ ] Step 3 — implement; i18n ru/uz/en for every new string; type scale (12.5 / 13.5 px), `Icon()`, no emoji.
 - [ ] Step 4 — client harness + server test (ru, en); Playwright on an own server (random port, temp data dir, removed after): card with a booked line + a wish + a released wish at 360 px and 1280 px, screenshot check (no horizontal scroll). Commit `crm-oneway-7`.
 
-### Task 8 — Verification
+### Task 8 — Verification (done 2026-10-17)
 
-- [ ] `wide`, `money`, `matrix`, `client`, `repros`, migrations, guards (`server/i18n-server-messages.test.js`, `server/app-test-hygiene.test.js`, `scripts/build-bundle.test.js`, `server/db/migration-order.test.js`) in ru and en-US; counts into this plan; marker sweep (`grep -rn CRM_ONE_WAY_V1`); `grep -rn "mirrorVisit\|mirrorCashierLine\|placeHeldLines\|settleStaleCopies" server public` → no code use. Final commit `crm-oneway-8` (plan update).
+Narrow sets only (the owner runs the whole suite); `LIS_ENABLED=0`; en-US with the force-en preload; disk guard 120 MB.
+
+| set | ru | en-US |
+|---|---|---|
+| wide CRM (`server/services/crm/*`, `server/routes/crm-*` incl. all ported repros, visits/calendar/callcenter/cashier-head/crm-merge/visit-lines, `server/services/api/*`, migrations 246/247, crm-lines-scope) | 1125: 1123 pass, 0 fail, 2 todo (not twin todos) | same |
+| door matrix `tests/crm-doors/matrix.test.mjs` | 110/110 | 110/110 |
+| money (cashier*, billing*) | 243/243 | 243/243 |
+| client harnesses (crm*, fast-registration, walk-in, wizard, room-calendar, service-picker-crm) | 417/417 (room-calendar re-run 31/31 after the R2 fix) | 417/417 |
+| server guards (i18n-server-messages, app-test-hygiene, build-bundle, migration-order) | 38/38 | 38/38 |
+| UI guards (i18n-coverage, i18n-uz-quality, icons, server-messages-i18n, type-scale) | 43/43 | 43/43 |
+
+- Twin file: 9 real tests (the 5 CRM_TWIN_LINE todos and 4 older tests), 0 todo.
+- Ported repros passing: r1 37, r2 75, round-3 16 (money 8, same 1, funnel 7 + 1 new O10 privacy test), 8a 18 — 146; obsolete with reasons in the repro table: r1 3, r2 4, round-3 2, 8a 9 files.
+- New rule tests: `one-way.test.js` 13, `crm-one-way.test.js` 13, `one-way-repair.test.js` 3, `246.test.js` 2.
+- Playwright (own server, random port, in-memory DB, temp licensed data dir): card lines at 360 px (ru/uz/en) and 1280 px — locked day of a booked line with «Перенос записи — в календаре», released note, no emoji, type scale, `Icon()`; rows wrap at 360 px. The modal's form column overflows by ~33 px at 360 px on HEAD too (pre-existing, not part of this work).
+- Marker sweep: every changed or new file carries CRM_ONE_WAY_V1; no code calls `mirrorVisit`, `mirrorCashierLine`, `placeHeldLines`, `settleStaleCopies`, `mirrorReschedule`, `releaseCancelledLines` or `crmWonCardLines`.
 
 ---
 
