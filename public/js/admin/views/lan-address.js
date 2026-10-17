@@ -15,7 +15,10 @@
 // «только версия и что нового» (SETTINGS_SPLIT_V1).
 //
 // Кнопки «Скрыть» и «Выключить имя» — только администратору; сервер проверяет
-// сам (rpc/lan-address.js). Все строки — через tr()/trf() (ru/uz/en).
+// сам (rpc/lan-address.js). Остальным (перепроверка 2026-10-17, решение 9) —
+// адрес и имя, чтобы открыть верную ссылку, без MAC, сетевых карт, шагов роутера
+// и команды брандмауэра: сервер им этого и не отдаёт. Все строки — через
+// tr()/trf() (ru/uz/en).
 import { h, Icon, Tag, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { supabase } from '../../supabase.js';
@@ -122,7 +125,9 @@ export async function renderLanAddress(root) {
         return h('div', { class: 'card lan-card lan-warn', role: 'alert' },
             h('div', { class: 'lan-warn-head' }, Icon('Warning', { size: 17 }),
                 h('h3', null, trf('Адрес сервера изменился: было {from}, стало {to}.', { from: c.from.join(', '), to: c.to.join(', ') }))),
-            h('p', { class: 'lan-p' }, tr('Другие компьютеры и анализаторы могут не находить сервер. Закрепите адрес в роутере — как это сделать, написано ниже.')),
+            h('p', { class: 'lan-p' }, st.can_manage
+                ? tr('Другие компьютеры и анализаторы могут не находить сервер. Закрепите адрес в роутере — как это сделать, написано ниже.')
+                : tr('Другие компьютеры и анализаторы могут не находить сервер. Сообщите администратору: адрес нужно закрепить в роутере.')),
             st.can_manage
                 ? h('div', { class: 'lan-actions' }, h('button', { class: 'btn btn-outline btn-sm', type: 'button',
                     onclick: () => act('lan_address_dismiss', { at: c.at }, tr('Скрыто до следующей смены адреса')) }, tr('Скрыть до следующей смены адреса')))
@@ -142,11 +147,14 @@ export async function renderLanAddress(root) {
         }
         for (const a of list) {
             const url = 'http://' + a.address + ':' + st.port;
-            card.appendChild(h('dl', { class: 'lan-kv' },
+            const rows = [
                 ...kv(tr('Адрес'), copyRow(a.address, tr('Адрес'))),
                 ...kv(tr('Открыть с другого компьютера'), copyRow(url, tr('Открыть с другого компьютера'))),
-                ...kv(tr('Сетевая карта'), h('span', { translate: 'no' }, a.adapter)),
-                ...kv(tr('Физический адрес (MAC)'), a.mac ? copyRow(a.mac, tr('Физический адрес (MAC)')) : h('span', { class: 'muted' }, '—'))));
+            ];
+            if (st.can_manage) rows.push(
+                ...kv(tr('Сетевая карта'), h('span', { translate: 'no' }, a.adapter || '—')),
+                ...kv(tr('Физический адрес (MAC)'), a.mac ? copyRow(a.mac, tr('Физический адрес (MAC)')) : h('span', { class: 'muted' }, '—')));
+            card.appendChild(h('dl', { class: 'lan-kv' }, ...rows));
         }
         return card;
     }
@@ -167,12 +175,16 @@ export async function renderLanAddress(root) {
         if (n.state === 'conflict') card.appendChild(h('p', { class: 'lan-p lan-note' }, tr('Все имена заняты другими компьютерами — имя в сети не работает. Задайте другое «имя в адресе» в разделе «API».')));
         if (n.reason === 'no_multicast') card.appendChild(h('p', { class: 'lan-p lan-note' }, tr('Сетевая карта не пропускает групповые запросы — другие компьютеры могут не находить имя.')));
         if (n.state === 'off' && n.reason === 'env_off') card.appendChild(h('p', { class: 'lan-p muted' }, tr('Имя в сети выключено настройкой запуска этого компьютера (EASYMED_MDNS=0).')));
+        if (!st.can_manage) {
+            card.appendChild(h('p', { class: 'lan-p muted' }, tr('Если имя не открывается — откройте Easy-Med по адресу-числу и сообщите администратору.')));
+            return card;
+        }
         card.appendChild(h('p', { class: 'lan-p muted' }, tr('Имя берётся из «имени в адресе» (Настройки → API); если оно не задано — easymed.')));
         card.appendChild(h('p', { class: 'lan-p muted' }, tr('Анализаторы указывают адрес сервера числом — имя им не поможет. Для них адрес нужно закрепить в роутере.')));
         card.appendChild(h('p', { class: 'lan-p' }, tr('Если имя не открывается на других компьютерах — на этом компьютере один раз выполните от имени администратора:')));
         card.appendChild(copyRow(FIREWALL_CMD, tr('команда')));
         card.appendChild(h('p', { class: 'lan-p muted' }, tr('Правило действует, когда сеть клиники в Windows отмечена как «Частная» (Параметры → Сеть и Интернет → свойства подключения).')));
-        if (st.can_manage && n.reason !== 'env_off') {
+        if (n.reason !== 'env_off') {
             const on = st.mdns_enabled !== false;
             card.appendChild(h('div', { class: 'lan-actions' }, h('button', { class: 'btn btn-outline btn-sm', type: 'button',
                 onclick: () => act('lan_address_mdns', { enabled: !on }, on ? tr('Имя в сети выключено') : tr('Имя в сети включено')) },
@@ -208,7 +220,7 @@ export async function renderLanAddress(root) {
         if (st.change) body.appendChild(changeCard(st.change));
         body.appendChild(addressCard());
         body.appendChild(nameCard());
-        body.appendChild(routerCard());
+        if (st.can_manage) body.appendChild(routerCard());
     }
 
     if (await load()) paint();

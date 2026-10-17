@@ -126,10 +126,19 @@ test('администратор скрывает предупреждение �
   assert.ok(!textOf(root).includes('Адрес сервера изменился'), 'предупреждение ушло');
 });
 
-test('не администратор: адрес и инструкция видны, кнопок «Скрыть» и выключателя нет — только «Копировать»', async () => {
-  const root = await mount(status({ can_manage: false }));
+// Перепроверка, решение 9: не администратору — адрес и имя (чтобы открыть верную ссылку),
+// но не MAC, не шаги роутера и не команда брандмауэра; сервер их ему и не отдаёт.
+const STAFF = () => status({ can_manage: false, addresses: [{ address: '192.168.1.156' }], router_hint: undefined, remembered: undefined });
+test('не администратор: адрес, ссылка и имя видны; MAC, карта, шаги роутера и команда брандмауэра — нет; кнопки только «Копировать»', async () => {
+  const root = await mount(STAFF());
   const t = textOf(root);
   assert.ok(t.includes('Адрес сервера изменился'));
+  assert.ok(t.includes('http://192.168.1.156:8000'));
+  assert.ok(t.includes('http://easymed.local:8000'));
+  assert.ok(t.includes('Сообщите администратору'), 'что делать сотруднику');
+  for (const hidden of ['Физический адрес', 'Сетевая карта', 'Как закрепить адрес в роутере', 'ipconfig', 'netsh', 'TP-Link', 'написано ниже']) {
+    assert.ok(!t.includes(hidden), 'не администратору видно: ' + hidden);
+  }
   assert.ok(buttons(root).length > 0);
   assert.ok(buttons(root).every((b) => /Копировать/.test(textOf(b))), buttons(root).map(textOf).join(' | '));
 });

@@ -2,8 +2,11 @@
 // баннер администратора «Адрес сервера изменился».
 //
 //   lan_address_status  — адреса этого ПК, смена «было → стало», имя в сети.
-//                         Чтение (READ_ONLY_RPCS): адрес сервера знает любой
-//                         сотрудник — он набирает его в браузере.
+//                         Чтение (READ_ONLY_RPCS): адрес сервера и имя знает
+//                         любой сотрудник — он набирает их в браузере. MAC, имена
+//                         сетевых карт, маска и подсказка роутера — только
+//                         администратору (перепроверка 2026-10-17, решение 9):
+//                         закреплять адрес в роутере — его работа.
 //   lan_address_dismiss — «Скрыть до следующей смены»; только администратор.
 //   lan_address_mdns    — имя в сети: включить / выключить; только администратор.
 // Оба пишут файл data/lan-address.json этого ПК, а не данные клиники, поэтому
@@ -29,7 +32,10 @@ function requireAdmin(user) {
 
 export function lanAddressStatus(db, args, user) {
   requireUser(user);
-  return { ...lanStatus(db, getDataDir()), can_manage: hasAnyRole(user, ['admin']) };
+  const s = lanStatus(db, getDataDir());
+  if (hasAnyRole(user, ['admin'])) return { ...s, can_manage: true };
+  return { addresses: s.addresses.map((a) => ({ address: a.address })), port: s.port, change: s.change,
+    name: s.name, mdns_enabled: s.mdns_enabled, can_manage: false };
 }
 
 export function lanAddressDismiss(db, args, user) {

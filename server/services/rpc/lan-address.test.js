@@ -50,10 +50,10 @@ test('зарегистрированы: статус — чтение (и при
   assert.equal(isAlwaysAllowedRpc('lan_address_mdns'), true);
 });
 
-test('статус: адреса с картой и MAC как в ipconfig, порт, ссылка по имени, подсказка роутера; смены нет', async (t) => {
+test('статус администратору: адреса с картой и MAC как в ipconfig, порт, ссылка по имени, подсказка роутера; смены нет', async (t) => {
   const { db, dir } = world(t);
   await start(db, dir);
-  const s = lanAddressStatus(db, {}, REGISTRAR);
+  const s = lanAddressStatus(db, {}, ADMIN);
   assert.deepEqual(s.addresses, [{ adapter: 'Ethernet', address: '192.168.1.156', netmask: '255.255.255.0', mac: 'A4-BB-6D-12-34-56' }]);
   assert.equal(s.port, 8000);
   assert.equal(s.change, null);
@@ -61,9 +61,21 @@ test('статус: адреса с картой и MAC как в ipconfig, по
   // Под node --test ответчик не поднимается: имя показано, состояние — «выключено (тест)».
   assert.deepEqual(s.name, { base: 'easymed', current: 'easymed.local', url: 'http://easymed.local:8000', state: 'off', reason: 'test', suffixed: false });
   assert.equal(s.mdns_enabled, true);
-  assert.equal(s.can_manage, false);
-  assert.equal(lanAddressStatus(db, {}, ADMIN).can_manage, true);
+  assert.equal(s.can_manage, true);
   assert.equal(lanAddressStatus(db, {}, DOCTOR_ADMIN).can_manage, true, 'админ с основной ролью врача — тоже админ');
+  assert.ok(lanAddressStatus(db, {}, DOCTOR_ADMIN).addresses[0].mac);
+});
+
+test('статус не администратору (перепроверка, решение 9): адрес и имя — да; MAC, имя карты, маска и подсказка роутера — нет', async (t) => {
+  const { db, dir } = world(t);
+  await start(db, dir);
+  const s = lanAddressStatus(db, {}, REGISTRAR);
+  assert.deepEqual(s.addresses, [{ address: '192.168.1.156' }]);
+  assert.equal(s.can_manage, false);
+  assert.equal(s.name.url, 'http://easymed.local:8000');
+  assert.equal('router_hint' in s, false);
+  assert.equal('remembered' in s, false);
+  assert.ok(!/A4-BB|Ethernet|255\.255/.test(JSON.stringify(s)), JSON.stringify(s));
 });
 
 test('без входа статус не отдаётся', (t) => {
