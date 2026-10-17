@@ -753,6 +753,27 @@ test('«Записать на дату»: дата из окна дат доез
   window.easymed.state.user = null;
 });
 
+// CRM_ONE_WAY_V1 (ревью r4) — строки окна «Даты приёма» переносятся на узком экране (360 px): на телефоне
+// название услуги сжималось в столбик по букве, а поля уходили за край окна. Браузерная проверка —
+// scratchpad crm-one-way/ui/sheet-ui.mjs (ru/uz/en 360 px: ничего за краем окна; 1280 px — одна строка).
+test('CRM_ONE_WAY_V1 (ревью r4): окно «Даты приёма» — строка услуги и «Одна дата для всех» переносятся, название не сжимается', async () => {
+  const modal = await openBookable();
+  const sheet = await openScheduleSheet(modal);
+  const inputs = dateInputs(sheet);
+  assert.ok(inputs.length >= 2, 'в окне «Даты приёма» нет полей даты');
+  const allRow = inputs[0].parentNode;
+  const lineRow = inputs[inputs.length - 1].parentNode;
+  for (const [what, row] of [['одна дата для всех', allRow], ['строка услуги', lineRow]]) {
+    assert.ok(row && row.style, what + ': нет строки');
+    assert.strictEqual(row.style.flexWrap, 'wrap', what + ': поля не переносятся на узком экране');
+  }
+  assert.strictEqual(lineRow.children[0].style.flex, '1 1 180px', 'название услуги сжимается вместо переноса полей');
+  for (const el of [inputs[0], inputs[inputs.length - 1]]) assert.strictEqual(el.style.maxWidth, '100%', 'поле даты шире окна');
+  const cancel = walk(sheet).find((n) => n.tagName === 'BUTTON' && textOf(n) === 'Отмена');
+  if (cancel) cancel.click();
+  window.easymed.state.user = null;
+});
+
 // CRM_UNIFY_V1 — «Колонка записи» — явная настройка «CRM-канбан»: доска берёт
 // её из crm_config_get (settings.booked_stage) по тому же правилу, что сервер
 // (public/js/shared/crm-booked-stage.js), а не угадывает. Воронка — сидовая

@@ -2709,7 +2709,7 @@ async function paint() {
                     // который разговаривает по телефону. `token` отсекает
                     // опоздавший ответ: врача и дату успевают сменить дважды,
                     // пока едет первый.
-                    const timeCell = h('div', { style: { width: '150px', flex: '0 0 auto' } });
+                    const timeCell = h('div', { style: { width: '150px', maxWidth: '100%', flex: '0 0 auto' } });
                     const note = (t) => h('div', { class: 'muted', style: { fontSize: '12.5px' } }, t);
                     let token = 0;
                     const paintTime = async () => {
@@ -2797,12 +2797,13 @@ async function paint() {
                         });
                         docCell = sel;
                     } else {
-                        docCell = h('span', { class: 'muted', style: { width: '210px', flex: '0 0 auto', fontSize: '12.5px' } }, 'врач не требуется');
+                        docCell = h('span', { class: 'muted', style: { width: '210px', maxWidth: '100%', flex: '0 0 auto', fontSize: '12.5px' } }, 'врач не требуется');
                     }
 
                     const bad = failedDays.has(p.date);
-                    rows.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 11px', border: '1px solid ' + (bad ? 'var(--crit-400, #f87171)' : 'var(--ink-100)'), borderRadius: '10px' } },
-                        h('div', { style: { flex: 1, minWidth: 0 } },
+                    // CRM_ONE_WAY_V1 (ревью r4) — на узком экране поля строки переносятся, а не сжимают название в столбик.
+                    rows.appendChild(h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', padding: '9px 11px', border: '1px solid ' + (bad ? 'var(--crit-400, #f87171)' : 'var(--ink-100)'), borderRadius: '10px' } },
+                        h('div', { style: { flex: '1 1 180px', minWidth: 0 } },
                             h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
                                 h('span', { style: { fontSize: '13.5px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
                                 // CRM_REAL_BOOKING_V1 — у строки есть настоящий слот.
@@ -3031,7 +3032,7 @@ async function paint() {
             }
 
             const allInp = h('input', { type: 'date',
-                style: { width: '160px', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' } });
+                style: { width: '160px', maxWidth: '100%', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' } });
             const applyAll = h('button', { class: 'btn btn-outline btn-sm', type: 'button',
                 onclick: () => {
                     if (!allInp.value) { toast('Выберите дату.', 'fail'); return; }
@@ -3080,8 +3081,8 @@ async function paint() {
                 h('div', { class: 'modal-body', style: { display: 'block', maxHeight: '62vh', overflowY: 'auto' } },
                     h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
                         'Назначьте дату и время каждой услуге. Время предлагает расписание врача — записанный слот сразу виден в календаре.'),
-                    h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 11px', marginBottom: '12px', background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
-                        h('span', { style: { flex: 1, fontSize: '13.5px', fontWeight: 600 } }, 'Одна дата для всех'),
+                    h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', padding: '9px 11px', marginBottom: '12px', background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)', borderRadius: '10px' } },   // CRM_ONE_WAY_V1 (ревью r4) — переносится на узком экране
+                        h('span', { style: { flex: '1 1 160px', fontSize: '13.5px', fontWeight: 600 } }, 'Одна дата для всех'),
                         allInp, applyAll),
                     rows),
                 h('footer', { class: 'modal-foot' },
