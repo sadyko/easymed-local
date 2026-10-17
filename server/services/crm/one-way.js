@@ -76,7 +76,7 @@ export function sameAsWish(db, wish, x) {
   return sameBookedService(w, o, opts) || (o.doctorId == null && sameBookedService(o, w, opts));
 }
 
-/** То же для строк в форме базы (sameService зеркала), в обе стороны — ревью r4, п. 3. */
+/** То же для строк в форме базы (sameService зеркала), в обе стороны — ревью r4, п. 3 (усыновление желания). */
 const sameEither = (db, a, x) => sameService(db, a, x) || (x.doctor_id == null && sameService(db, x, a));
 
 /**
@@ -186,7 +186,7 @@ function autoLineFor(db, V, x) {
   return db.prepare(`SELECT * FROM crm_request_services
                       WHERE visit_id = ? AND status <> 'cancelled'
                         AND visit_service_auto = 1 AND visit_service_id IS NOT NULL AND visit_service_id <> ?
-                      ORDER BY id`).all(V, x.id).find((l) => sameEither(db, l, x));   // ревью r4, п. 3
+                      ORDER BY id`).all(V, x.id).find((l) => sameService(db, l, x));   // ревью r5, п. 2 — в одну сторону, как R7b
 }
 
 /**
@@ -197,6 +197,10 @@ function autoLineFor(db, V, x) {
 function yieldAutoLine(db, V, x, auto) {
   const old = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(auto.visit_service_id);
   if (!old || old.visit_id !== V || !vsFree(db, old)) return false;
+  // Ревью r5 (п. 2) — правило сети R7b (crm/booked-twin.js retireBookedTwin): строка записи с названным врачом
+  // уступает только строке того же врача (или когда врача нет у неё самой) — строке без врача не уступает
+  // никогда: иначе визит терял врача записи и его цену.
+  if (!sameBookedService(lineOf(old), lineOf(x), { needsDoctor: needsDoctorOf(db, old) })) return false;
   db.prepare('UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0 WHERE id = ?').run(x.id, auto.id);
   relinkHeld(db, old.id, x.id);
   deleteVs(db, old.id);

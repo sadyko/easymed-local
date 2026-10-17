@@ -196,6 +196,25 @@ test('CRM_ONE_WAY_V1 O1: строка CRM ×1 уступает строке ре
   assert.deepEqual([line(db, l).visit_service_id, line(db, l).visit_service_auto], [y, 0]);
 });
 
+// Ревью r5 (п. 2) — правило сети R7b (retireBookedTwin): строка записи с названным врачом не уступает строке без
+// врача — только строке того же врача (или когда врача нет у неё самой). Иначе терялись врач и его цена.
+test('CRM_ONE_WAY_V1 O1 (ревью r5): строка CRM «у врача 8» не уступает консультации регистратуры без врача; строке врача 8 — уступает', () => {
+  const db = clinic(); const rid = card(db); const v = visit(db);
+  const l = wish(db, rid, { ct: 1, doctor: 8 });
+  const x = attach(db, v, l);
+  assert.equal(db.prepare('SELECT doctor_id FROM visit_services WHERE id = ?').get(x).doctor_id, 8);
+  const ct = (doctor) => Number(db.prepare(`INSERT INTO visit_services (visit_id, consultation_type_id, doctor_id, quantity, unit_price, total, status, created_by)
+    VALUES (?, 1, ?, 1, 150000, 150000, 'added', 2)`).run(v, doctor).lastInsertRowid);
+  const noDoc = ct(null);
+  assert.equal(wishYields(db, v), 0, 'строка врача 8 уступила строке без врача');
+  assert.deepEqual(money(db, v).map((r) => r.id), [x, noDoc]);
+  assert.deepEqual([line(db, l).visit_service_id, line(db, l).visit_service_auto], [x, 1]);
+  db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = ?").run(noDoc);
+  const same = ct(8);
+  assert.equal(wishYields(db, v), 1, 'строка врача 8 не уступила строке того же врача');
+  assert.equal(line(db, l).visit_service_id, same);
+});
+
 test('CRM_ONE_WAY_V1: желание без дня сбывается строкой регистратуры (усыновление); отпущенное — никогда', () => {
   const db = clinic(); const rid = card(db); const v = visit(db);
   attach(db, v, wish(db, rid, { svc: 40 }));   // карточка держит визит строкой
