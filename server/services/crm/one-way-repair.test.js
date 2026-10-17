@@ -122,17 +122,36 @@ test('CRM_ONE_WAY_V1 O8 (ревью r4): строки отменённой за�
   assert.equal(logOf(db).length, 7);
 });
 
-test('CRM_ONE_WAY_V1 O8 (ревью r4): датированное желание без ссылки, чья карточка отменила запись того дня (привязка или след), — отпущенное желание этого визита; без такой отмены — не тронуто', () => {
-  const { db, rid, newCard, visit, cline, linkTo } = base();
+test('CRM_ONE_WAY_V1 O8 (ревью r4, r5): датированное желание без ссылки, чья карточка отменила запись того дня (привязка или след), с его услугой и до отмены, — отпущенное желание этого визита; иначе — не тронуто', () => {
+  const { db, rid, newCard, visit, vline, cline, linkTo } = base();
   const c = visit('2026-10-20', 'cancelled');
   linkTo(c, rid, 'callcenter');
+  vline(c, 30);   // ревью r5 (п. 3): услуга желания была в отменённой записи
+  db.prepare("UPDATE visits SET updated_at = '2026-10-05T10:00:00Z' WHERE id = ?").run(c);   // время отмены
   const sameDay = cline({ day: '2026-10-20' });
+  const otherService = cline({ svc: 40, day: '2026-10-20' });                              // анализа в той записи не было
+  const lateWish = cline({ day: '2026-10-20', at: '2026-10-06T09:00:00Z' });               // заведено после отмены
   const otherDay = cline({ day: '2026-10-23' });
   const undated = cline({ svc: 40 });
   const card2 = newCard();
   const c2 = visit('2026-10-24', 'cancelled');
   db.prepare("INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, set_status) VALUES (?, ?, 'in_process', 'scheduled')").run(c2, card2);
+  vline(c2, 40);
   const byTrail = cline({ rid: card2, svc: 40, day: '2026-10-24' });
+  // время отмены неизвестно (updated_at пуст — у старых строк), желание заведено после записи — не отпускается
+  const card6 = newCard();
+  const c6 = visit('2026-10-28', 'cancelled');
+  db.prepare("INSERT INTO crm_booking_links (visit_id, request_id, source, created_at) VALUES (?, ?, 'callcenter', '2026-09-30T00:00:00Z')").run(c6, card6);
+  vline(c6, 30);
+  db.prepare("UPDATE visits SET updated_at = '' WHERE id = ?").run(c6);
+  const unknownTime = cline({ rid: card6, day: '2026-10-28' });
+  // v3.16: запись календаря держит свою услугу только в visits.service_id (строк визита нет) — это тоже «услуга записи»
+  const card7 = newCard();
+  const c7 = visit('2026-10-29', 'cancelled');
+  linkTo(c7, card7, 'callcenter');
+  db.prepare('UPDATE visits SET service_id = 30 WHERE id = ?').run(c7);
+  const byVisitService = cline({ rid: card7, day: '2026-10-29' });
+  const notThatService = cline({ rid: card7, svc: 40, day: '2026-10-29' });
   const card3 = newCard();
   const stranger = cline({ rid: card3, day: '2026-10-20' });   // у этой карточки отменённой записи того дня нет
   const live = visit('2026-10-24');
@@ -144,6 +163,13 @@ test('CRM_ONE_WAY_V1 O8 (ревью r4): датированное желание
   linkTo(c4, card4, 'patient');
   db.prepare("INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, set_status) VALUES (?, ?, 'in_process', 'scheduled')").run(c4, card4);
   const displayDay = cline({ rid: card4, day: '2026-10-26' });
+  // ревью r5 (п. 4): отменённую запись записали заново на тот же день — у карточки живая запись этого дня
+  const card5 = newCard();
+  const c5 = visit('2026-10-27', 'cancelled');
+  linkTo(c5, card5, 'callcenter');
+  const v5 = visit('2026-10-27');
+  linkTo(v5, card5, 'callcenter');
+  const rebooked = cline({ rid: card5, day: '2026-10-27' });
   const rows = count(db);
   const out = crmOneWayRepair(db);
   assert.equal(count(db), rows);
@@ -151,12 +177,14 @@ test('CRM_ONE_WAY_V1 O8 (ревью r4): датированное желание
   assert.deepEqual([s.status, s.scheduled_date, s.visit_id, s.released_from_visit_id, s.released_vs_id], ['pending', null, null, c, null]);
   const t2 = row(db, byTrail);
   assert.deepEqual([t2.scheduled_date, t2.released_from_visit_id], [null, c2]);
-  for (const [id, day] of [[otherDay, '2026-10-23'], [stranger, '2026-10-20'], [liveDay, '2026-10-24'], [displayDay, '2026-10-26']]) {
+  for (const [id, day] of [[otherDay, '2026-10-23'], [stranger, '2026-10-20'], [liveDay, '2026-10-24'], [displayDay, '2026-10-26'], [rebooked, '2026-10-27'],
+    [otherService, '2026-10-20'], [lateWish, '2026-10-20'], [unknownTime, '2026-10-28'], [notThatService, '2026-10-29']]) {
     assert.deepEqual([row(db, id).scheduled_date, row(db, id).released_from_visit_id], [day, null], 'тронуто желание без отменённой записи своего дня: ' + id);
   }
   assert.equal(row(db, undated).released_from_visit_id, null);
-  assert.equal(out.counts.released_dated, 2);
-  assert.deepEqual(logOf(db).filter(([, a]) => a === 'released_dated').map(([id]) => id), [sameDay, byTrail]);
+  assert.deepEqual([row(db, byVisitService).scheduled_date, row(db, byVisitService).released_from_visit_id], [null, c7], 'услуга записи v3.16 (visits.service_id) не узнана');
+  assert.equal(out.counts.released_dated, 3);
+  assert.deepEqual(logOf(db).filter(([, a]) => a === 'released_dated').map(([id]) => id), [sameDay, byTrail, byVisitService]);
 });
 
 test('CRM_ONE_WAY_V1 O8: исправление проходит один раз — отметка и итог; второй вызов ничего не делает', () => {

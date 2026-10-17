@@ -338,7 +338,11 @@ Kept green by code, not by changing the test: `crm-calendar-mirror` R-I5 (a pre-
 2. Pending line holding a cancelled visit without a visit line → released with `released_held = 1` (`released`).
 3. Dated pointer-less wish whose card has a cancelled booking that day (`crm_booking_undo` / `crm_booking_links`)
    → released undated with `released_from_visit_id` = that visit (`released_dated`). A booking linked to the card only for display (C′, phone —
-   `patient` / `phone` links) is not evidence: such links never took card lines (O9).
+   `patient` / `phone` links) is not evidence: such links never took card lines (O9). Review r5: only a wish whose
+   service was in the cancelled visit (a visit line of that visit with the same service key) and that was created
+   before the cancel (`created_at` ≤ the cancelled visit's `updated_at`, which `calendar_book` sets on cancel; if that
+   is empty, the booking time from its trail or link; no time → not released); never when the card holds a live booking
+   that day.
 4. Never: deleting rows, visit_services, invoices, payments, card stages/dates; lines with status 'cancelled'.
 Tests: `one-way-repair.test.js` (4), `server/routes/crm-one-way-r4-o8.test.js` (H2, H3) and the old-database upgrade
 `server/routes/crm-one-way-r4-o8-old.test.js` (5, needs `CRM_O8_OLD_DB` = the review's `r4/olddb` or `r4/v316db`).
@@ -439,6 +443,31 @@ Verification after r4 (narrow sets; `LIS_ENABLED=0`; disk guard 120 MB):
 | UI guards | 43/43 | 43/43 |
 | repro ports (`crm-one-way-r*`, services/crm and services/api ports) | 161: 156 pass, 5 skipped (same file) | same |
 | O8 upgrade of the review's old databases (`CRM_O8_OLD_DB` = `r4/olddb`; `r4/v316db`) | 5/5; 5/5 | 5/5; 5/5 |
+
+### Adversarial review r5 of 0ee5356f (2026-10-17) — fixes, test-first
+
+| item | rule | change | tests |
+|---|---|---|---|
+| 1 (money) | O1 | A visit line of a service that needs a doctor is shared only by wishes whose named doctors agree (the same doctor, or none named). A doctor-less line is claimed by at most one named doctor; a wish naming another doctor gets its own line (`wishHome`). | R5-SYM-a/b (`crm-one-way-r5-same`), `one-way.test.js` |
+| 2 | O1 / R7b | A CRM line with a named doctor yields only to a line of the same doctor, or when it has no doctor itself — the `retireBookedTwin` rule. Yield is one-way again; adoption stays symmetric. | R5-SYM-c, `one-way.test.js` |
+| 3 | O8 rule 3 | Release only a wish whose service was in the cancelled visit and that was created before the cancel. | R5-RD-a (`crm-one-way-r5-o8`), `one-way-repair.test.js` |
+| 4 | O8 rule 3 | Never release when the card holds a live booking that day. | R5-RD-b, `one-way-repair.test.js` |
+
+Re-checked and passing as ported: R5-UC, R5-DATE-a, R5-RD-c, R5-LC. The narrow-run script now gives every run its
+own temp dir (TEMP/TMP), so it never deletes another suite's em-* dirs in %TEMP%.
+
+Verification after r5 (narrow sets; `LIS_ENABLED=0`; disk guard 120 MB):
+
+| set | ru | en-US |
+|---|---|---|
+| wide CRM (incl. every ported repro) | 1160: 1149 pass, 0 fail, 9 skipped (old-database tests without `CRM_O8_OLD_DB`), 2 todo | same |
+| door matrix | 110/110 | 110/110 |
+| money (cashier*, billing*) | 243/243 | 243/243 |
+| client harnesses | 419/419 | 419/419 |
+| server guards | 38/38 | 38/38 |
+| UI guards | 43/43 | 43/43 |
+| repro ports | 174: 165 pass, 9 skipped (same files) | same |
+| O8 on the review's old databases (`crm-one-way-r4-o8-old` + `crm-one-way-r5-o8-all`; `r4/olddb`; `r4/v316db`) | 9/9; 9/9 | 9/9; 9/9 |
 
 ---
 

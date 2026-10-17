@@ -35,6 +35,10 @@ date; nothing is added to any visit automatically until the operator books again
   card's never-booked undated wishes) attach to it: if the visit already has a free line of the same service
   (public/js/shared/same-service.js rule) the wish points at it; otherwise exactly one visit line is inserted for it.
   A wish never produces a second line next to a same-service line.
+  *Reviews r4/r5:* same service matches both ways (a side with no doctor matches any doctor), but a line of a service
+  that needs a doctor is shared only by wishes whose named doctors agree, and a doctor-less line is claimed by at most
+  one named doctor (two named doctors = two consultations). A CRM line with a named doctor yields only to a line of
+  the same doctor (R7b rule).
 - **O2 Nothing is copied from the visit to the card.** No mirror-made card lines (`visit_service_auto = 1`) are
   created any more. The card shows the visit's services through «Записи пациента» (crm_card_bookings, already
   built) and its booked lines.
@@ -69,6 +73,8 @@ date; nothing is added to any visit automatically until the operator books again
   pointer whose card has evidence of a cancelled booking that day (`crm_booking_undo` or `crm_booking_links` to a
   cancelled visit on that date) becomes a released undated wish (`released_from_visit_id` = that visit). Every row
   decided on is logged; visit lines and invoices are never touched; still once, in one transaction (migration 248).
+  *Review r5:* (b) releases only a wish whose service was in that cancelled visit and that existed before the cancel,
+  and never when the card holds a live booking that day.
 - **O9 Unchanged:** display links and CRM_LINK_ALL rules P-1…P-7 (they never copy); «Отказ» cancels call-centre
   bookings (cancellableBookingsOf); owner decisions (registrar never works in CRM; no card for walk-ins;
   «Пришёл»/«Отказ» closed forever; 72-hour window; «Не пришёл» reopenable); a card's STAGE never decides SERVICES.

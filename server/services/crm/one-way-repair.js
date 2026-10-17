@@ -45,6 +45,11 @@
 //      (crm_booking_undo) или её привязка (crm_booking_links) на отменённый визит этого дня;
 //      строка становится отпущенным желанием без дня с отметкой этого визита. Привязка «только для
 //      воронки» (C′, телефон) строк карточки не брала никогда (O9) — её отменённый визит не доказательство.
+//      Ревью r5 (п. 4): у карточки на этот день есть живая запись (отменённую записали заново) — не трогается.
+//      Ревью r5 (п. 3): только желание, чья услуга была в отменённом визите (его строка визита с тем же ключом
+//      услуги или, у записи календаря v3.16 без строк визита, его visits.service_id) и которое заведено ДО отмены (created_at строки ≤ updated_at отменённого визита — calendar_book
+//      ставит его при отмене; без него — время записи по следу или привязке); время отмены неизвестно — не
+//      отпускается. Анализ, который оператор добавил на тот день после отмены консультации, остаётся желанием дня.
 // НИКОГДА: удаление строк; строки визитов, счета, платежи, ступени и даты карточек; снятые строки
 // ('cancelled'). Каждая строка, о которой принято решение, — строка crm_one_way_repair_log; итог —
 // отметка crm_one_way_repair и одна строка журнала сервера. Правки, журнал и отметка — одна
@@ -130,10 +135,30 @@ export function crmOneWayRepair(db) {
                    AND (w.id IN (SELECT u.visit_id FROM crm_booking_undo u WHERE u.request_id = l.request_id)
                         OR w.id IN (SELECT b.visit_id FROM crm_booking_links b WHERE b.request_id = l.request_id))
                    AND NOT EXISTS (SELECT 1 FROM crm_booking_links b WHERE b.visit_id = w.id AND b.request_id = l.request_id
-                                      AND ${displayLinkSql('b')})) AS w_id
+                                      AND ${displayLinkSql('b')})
+                   -- ревью r5 (п. 3): услуга желания была в отменённом визите (строка визита того же ключа услуги;
+                   -- у записи календаря v3.16 строк визита нет — её услуга только в visits.service_id)…
+                   AND ((l.service_id IS NOT NULL AND w.service_id = l.service_id)
+                        OR EXISTS (SELECT 1 FROM visit_services vs WHERE vs.visit_id = w.id
+                                    AND ((l.service_id IS NOT NULL AND vs.service_id = l.service_id)
+                                         OR (l.service_id IS NULL AND l.consultation_type_id IS NOT NULL
+                                             AND vs.service_id IS NULL AND vs.consultation_type_id = l.consultation_type_id))))
+                   -- …и желание было до отмены: время отмены — последняя правка отменённого визита (calendar_book
+                   -- ставит updated_at), без неё — время записи по её следу или привязке (ещё раньше отмены);
+                   -- времени нет — не отпускается
+                   AND l.created_at IS NOT NULL
+                   AND julianday(l.created_at) <= julianday(COALESCE(NULLIF(w.updated_at, ''),
+                         (SELECT MAX(u.created_at) FROM crm_booking_undo u WHERE u.visit_id = w.id AND u.request_id = l.request_id),
+                         (SELECT b.created_at FROM crm_booking_links b WHERE b.visit_id = w.id AND b.request_id = l.request_id)))) AS w_id
           FROM crm_request_services l
          WHERE l.status = 'pending' AND l.visit_id IS NULL AND l.visit_service_id IS NULL
            AND l.released_from_visit_id IS NULL AND l.scheduled_date IS NOT NULL AND l.scheduled_date <> ''
+           -- ревью r5 (п. 4): у карточки на этот день есть живая запись (её заново записали) — желание её дня
+           AND NOT EXISTS (SELECT 1 FROM visits lv
+                            WHERE lv.status NOT IN ('cancelled', 'no_show') AND ${localDate('lv.visit_date')} = date(l.scheduled_date)
+                              AND (lv.id IN (SELECT b.visit_id FROM crm_booking_links b WHERE b.request_id = l.request_id)
+                                   OR lv.id IN (SELECT o.visit_id FROM crm_request_services o
+                                                 WHERE o.request_id = l.request_id AND o.status <> 'cancelled' AND o.visit_id IS NOT NULL)))
          ORDER BY l.id`).all()) {
         if (!l.w_id) continue;
         note(l, 'released_dated', `day ${String(l.scheduled_date).slice(0, 10)}, cancelled visit ${l.w_id}`);
