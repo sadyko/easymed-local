@@ -324,3 +324,25 @@ test('CRM_ONE_WAY_V1 (ревью r4, п. 7): дата карточки, пост
     assert.equal(t.lead(rid).scheduled_date, D9, 'отмена последней записи стёрла дату человека');
   } finally { t.close(); }
 });
+
+// Ревью r4 (п. 7, проверка опровержением) — «день отменённой записи» — и день, с которого запись сняли тем же
+// вызовом (календарь отменяет и переносит одним calendar_book): дата карточки — дата записи, а не человека.
+test('CRM_ONE_WAY_V1 (ревью r4, п. 7): отмена с переносом одним вызовом — карточка как после простой отмены (дата записи не остаётся)', async () => {
+  const run = async (moveTo) => {
+    const t = await startCrmApp(seed);
+    try {
+      const rid = addLead(t.db, { assigned: 3 });
+      addLine(t.db, rid, { svc: 30, day: D3, doctor: 10 });
+      const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, service_id: 30, start: at(D3, 12), duration_minutes: 30, status: 'scheduled' });
+      assert.equal(b.status, 200, b.text);
+      const v = b.json.data.visit.id;
+      assert.equal(t.lead(rid).scheduled_date, D3);
+      const c = await t.rpc('calendar_book', 'reg', { visit_id: v, start: at(moveTo, 12), status: 'cancelled' });
+      assert.equal(c.status, 200, c.text);
+      return [t.lead(rid).status, t.lead(rid).scheduled_date];
+    } finally { t.close(); }
+  };
+  const plain = await run(D3);
+  assert.notEqual(plain[1], D3, 'простая отмена оставила дату записи');
+  assert.deepEqual(await run(D2), plain, 'отмена с переносом оставила карточке день отменённой записи');
+});

@@ -1252,7 +1252,7 @@ export async function calendarBook(db, args, user, deps = {}) {
   // CRM_LINK_ALL_V1 (повторное ревью воронки, F-6) — НОВАЯ запись: сначала связь с
   // карточкой (ниже), потом её статус. Запись, заведённая сразу «Подтверждён», шла в
   // правило статуса раньше, чем карточка её держала, — и карточка оставалась «Записан».
-  if (existing) crmVisitStatus(db, { visitId: out.visit.id, from: existing.status, to: status });
+  if (existing) crmVisitStatus(db, { visitId: out.visit.id, from: existing.status, to: status, fromVisitDate: existing.visit_date });   // CRM_ONE_WAY_V1 (ревью r4, п. 7) — день до правки
   // CRM_ONE_WAY_V1 (O5) — ОШИБОЧНУЮ ОТМЕНУ ОТМЕНИЛИ: строки карточки уже снова указывают на
   // строки визита (crmVisitStatus → restoreReleased); ступень и дату карточки ставит шаг связи
   // — как при записи (шаг B находит карточку, шаг G двигает её вперёд). Только если визит держит

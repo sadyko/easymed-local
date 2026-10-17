@@ -261,7 +261,7 @@ function liftMissed(db, { patientId, day, won, write }) {
  *        сервера — не контакт с пациентом, как у прохода «Не пришёл» и разового
  *        исправления).
  */
-export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) {
+export function crmVisitStatus(db, { visitId, from, to, catchUp = false, fromVisitDate = null } = {}) {
   try {
     const id = Number(visitId);
     if (!Number.isInteger(id) || id <= 0) return;
@@ -533,7 +533,13 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     // Ревью r4 (п. 7) — ДАТУ ЧЕЛОВЕКА ОТМЕНА НЕ ТРОГАЕТ: во всех ветках выше дата карточки
     // пересчитывается или стирается, только когда она — день отменённой записи. Оператор, пока запись
     // жила, перенёс карточку в «Перезвонить» на D7 — отмена оставляет и ступень, и D7.
-    const humanDate = (p) => !!p.scheduled_date && String(p.scheduled_date).slice(0, 10) !== visit.day;
+    // День записи — и день, с которого её сняли тем же вызовом (календарь отменяет и переносит одним
+    // calendar_book: fromVisitDate — визит до правки).
+    const bookingDays = new Set([visit.day]);
+    if (fromVisitDate) {
+      try { const d = db.prepare(`SELECT ${localDate('?')} AS d`).get(String(fromVisitDate)).d; if (d) bookingDays.add(d); } catch { /* дата не разобралась */ }
+    }
+    const humanDate = (p) => !!p.scheduled_date && !bookingDays.has(String(p.scheduled_date).slice(0, 10));
     const dateAfter = (p, computed) => (humanDate(p) ? p.scheduled_date : computed);
     for (const p of withLinked()) {
       // Выигранную и проигранную заявку отмена визита не трогает вовсе:
