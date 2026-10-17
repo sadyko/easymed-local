@@ -111,8 +111,11 @@ test('инструкция роутера: ipconfig /all, страница ро�
 test('брандмауэр и анализаторы сказаны прямо: команда netsh для UDP 5353, «анализаторам имя не поможет»', async () => {
   const t = textOf(await mount(status()));
   assert.ok(t.includes('Если имя не открывается на других компьютерах'));
-  assert.ok(t.includes('netsh advfirewall firewall add rule name="EasyMed (network name)" dir=in action=allow protocol=UDP localport=5353 remoteip=localsubnet profile=private,domain'), 'правило — только своя подсеть и частная сеть');
-  assert.ok(t.includes('отмечена как «Частная»'));
+  // Только своя подсеть (remoteip=localsubnet); без profile=private,domain: сеть клиники
+  // в Windows часто отмечена «Общедоступной», и правило тогда молча не действовало бы.
+  assert.ok(t.includes('netsh advfirewall firewall add rule name="EasyMed (network name)" dir=in action=allow protocol=UDP localport=5353 remoteip=localsubnet'), 'правило — только своя подсеть');
+  assert.ok(!t.includes('profile='), 'правило не привязано к профилю сети');
+  assert.ok(!t.includes('Частная'), 'требования «частной» сети нет');
   assert.ok(t.includes('Анализаторы указывают адрес сервера числом'));
 });
 
@@ -186,6 +189,7 @@ test('две сетевые карты — обе с MAC, и подсказка,
 test('английский экран — по-английски, без кириллицы в словах экрана', async () => {
   setLang('en');
   const t = textOf(await mount(status()));
+  assert.ok(t.includes('localport=5353 remoteip=localsubnet') && !t.includes('profile=') && !/Private/.test(t), 'en: та же команда, без профиля');
   assert.ok(t.includes('Server address changed: was 192.168.1.147, now 192.168.1.156.'), t.slice(0, 300));
   assert.ok(t.includes('How to fix the address in the router'));
   const cyr = t.match(/[А-Яа-яЁё][А-Яа-яЁё ]*/g) || [];
@@ -197,6 +201,7 @@ test('узбекский экран — без кириллицы', async () => 
   const t = textOf(await mount(status({ name: { base: 'easymed', current: 'easymed-2.local', url: 'http://easymed-2.local:8000', state: 'active', reason: 'no_multicast', suffixed: true } })));
   const cyr = t.match(/[А-Яа-яЁё][А-Яа-яЁё ]*/g) || [];
   assert.deepEqual(cyr, [], 'кириллица на узбекском экране: ' + cyr.join(' | '));
+  assert.ok(t.includes('localport=5353 remoteip=localsubnet') && !t.includes('profile=') && !/Private|Xususiy/.test(t), 'uz: та же команда, без профиля');
 });
 
 test('иконки — только Icon(), эмодзи в исходнике экрана нет', () => {

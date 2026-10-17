@@ -23,9 +23,11 @@ import { h, Icon, Tag, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { supabase } from '../../supabase.js';
 
-// Только своя подсеть и только «частная»/доменная сеть: имя нужно компьютерам клиники,
-// а не интернету и не сети кафе (перепроверка 2026-10-17).
-const FIREWALL_CMD = 'netsh advfirewall firewall add rule name="EasyMed (network name)" dir=in action=allow protocol=UDP localport=5353 remoteip=localsubnet profile=private,domain';
+// Только своя подсеть (remoteip=localsubnet): имя нужно компьютерам клиники, а не
+// интернету (перепроверка 2026-10-17). Без привязки к профилю сети: сеть клиники в
+// Windows часто отмечена «Общедоступной», и правило с profile=private,domain там
+// молча не действовало бы, а своя подсеть и так ограничивает его сетью клиники.
+const FIREWALL_CMD = 'netsh advfirewall firewall add rule name="EasyMed (network name)" dir=in action=allow protocol=UDP localport=5353 remoteip=localsubnet';
 
 /** Выделить текст, чтобы его скопировали Ctrl+C (по http в сети буфер обмена браузер не даёт). */
 function selectContents(el) {
@@ -183,7 +185,6 @@ export async function renderLanAddress(root) {
         card.appendChild(h('p', { class: 'lan-p muted' }, tr('Анализаторы указывают адрес сервера числом — имя им не поможет. Для них адрес нужно закрепить в роутере.')));
         card.appendChild(h('p', { class: 'lan-p' }, tr('Если имя не открывается на других компьютерах — на этом компьютере один раз выполните от имени администратора:')));
         card.appendChild(copyRow(FIREWALL_CMD, tr('команда')));
-        card.appendChild(h('p', { class: 'lan-p muted' }, tr('Правило действует, когда сеть клиники в Windows отмечена как «Частная» (Параметры → Сеть и Интернет → свойства подключения).')));
         if (n.reason !== 'env_off') {
             const on = st.mdns_enabled !== false;
             card.appendChild(h('div', { class: 'lan-actions' }, h('button', { class: 'btn btn-outline btn-sm', type: 'button',
