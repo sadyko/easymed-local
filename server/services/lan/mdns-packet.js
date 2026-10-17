@@ -9,6 +9,12 @@
 //
 // Разбор никогда не бросает: в сеть клиники может прийти что угодно, и плохой
 // пакет — это null, а не упавший сервер.
+//
+// ЦЕНА ОГРАНИЧЕНА (перепроверка 2026-10-17). Пакет 64 КБ из 65 535 вопросов-указателей
+// на одно имя в 255 байт разбирался целиком — 4 мс основного потока на пакет, в 740 раз
+// дороже обычного. Теперь — не больше 16 записей в разделе и 4 КБ разобранных имён на
+// пакет; остальное не читается (truncated: true). Ответчику нужен один вопрос или одна
+// A-запись с нашим именем; настоящий пакет Easy-Med несёт одну-две.
 
 export const TYPE_A = 1;
 export const TYPE_ANY = 255;
@@ -18,6 +24,8 @@ const RESPONSE_FLAGS = 0x8400;   // QR + AA: ответ владельца им�
 const TTL_MULTICAST = 120;       // RFC 6762 §10: записи с именем хоста — 120 с
 const TTL_LEGACY = 10;           // RFC 6762 §6.7: обычному DNS-клиенту — не больше 10 с
 const IPV4_RE = /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+export const MAX_RECORDS = 16;     // записей одного раздела, которые вообще читаются
+const NAME_BUDGET = 4096;          // байт разобранных имён на пакет
 
 class Bad extends Error {}
 
@@ -50,26 +58,33 @@ const u16 = (buf, off) => { if (off + 2 > buf.length) throw new Bad('u16'); retu
 const u32 = (buf, off) => { if (off + 4 > buf.length) throw new Bad('u32'); return buf.readUInt32BE(off); };
 
 /**
- * → { id, flags, qr, questions: [{ name, type, qclass, qu }],
+ * → { id, flags, qr, truncated, questions: [{ name, type, qclass, qu }],
  *     answers: [{ name, type, rclass, flush, ttl, address? }] } | null
- * Записи authority/additional не разбираются: ответчику они не нужны.
+ * Записи authority/additional не разбираются: ответчику они не нужны. Больше
+ * MAX_RECORDS записей раздела или NAME_BUDGET байт имён — остальное не читается;
+ * если не дочитаны вопросы, ответы не ищутся вовсе (их место неизвестно).
  */
 export function parseMessage(buf) {
   if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
   try {
     const id = u16(buf, 0), flags = u16(buf, 2);
     const qd = u16(buf, 4), an = u16(buf, 6);
-    let off = 12;
+    let off = 12, budget = NAME_BUDGET, truncated = false;
     const questions = [];
+    const answers = [];
+    const result = () => ({ id, flags, qr: (flags & FLAG_QR) !== 0, truncated, questions, answers });
     for (let i = 0; i < qd; i++) {
+      if (i >= MAX_RECORDS || budget <= 0) { truncated = true; return result(); }
       const n = readName(buf, off);
+      budget -= n.name.length + 1;
       const type = u16(buf, n.next), cls = u16(buf, n.next + 2);
       questions.push({ name: n.name, type, qclass: cls & 0x7fff, qu: (cls & 0x8000) !== 0 });
       off = n.next + 4;
     }
-    const answers = [];
     for (let i = 0; i < an; i++) {
+      if (i >= MAX_RECORDS || budget <= 0) { truncated = true; break; }
       const n = readName(buf, off);
+      budget -= n.name.length + 1;
       const type = u16(buf, n.next), cls = u16(buf, n.next + 2), ttl = u32(buf, n.next + 4);
       const rdlen = u16(buf, n.next + 8), rd = n.next + 10;
       if (rd + rdlen > buf.length) throw new Bad('rdata');
@@ -78,7 +93,7 @@ export function parseMessage(buf) {
       answers.push(rec);
       off = rd + rdlen;
     }
-    return { id, flags, qr: (flags & FLAG_QR) !== 0, questions, answers };
+    return result();
   } catch {
     return null;   // Bad (наши проверки) или RangeError буфера — пакет просто не наш
   }

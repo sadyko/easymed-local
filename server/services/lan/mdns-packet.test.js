@@ -81,3 +81,27 @@ test('сборка не принимает плохое имя и плохой �
   assert.throws(() => buildResponse({ name: 'a'.repeat(64) + '.local', addresses: ['10.0.0.1'] }));
   assert.throws(() => buildResponse({ name: 'easymed.local', addresses: ['999.1.1.1'] }));
 });
+
+test('перепроверка: в пакете больше 16 вопросов — разбираются первые 16, остальное не читается (цена ограничена)', () => {
+  const qs = [];
+  for (let i = 0; i < 40; i++) qs.push(...[0x01, 0x61 + (i % 26), 0x05, ...Buffer.from('local'), 0x00, 0x00, 0x01, 0x00, 0x01]);
+  const m = parseMessage(Buffer.from([...hdr(0, 0, 40, 0), ...qs]));
+  assert.equal(m.questions.length, 16);
+  assert.equal(m.truncated, true);
+  assert.deepEqual(m.answers, []);
+});
+
+test('перепроверка: больше 16 ответов — первые 16; бюджет разобранных имён (4 КБ) — дальше не читается', () => {
+  const ans = [];
+  for (let i = 0; i < 30; i++) ans.push(...NAME, 0x00, 0x01, 0x80, 0x01, 0, 0, 0, 0x78, 0, 4, 192, 168, 1, i + 1);
+  const m = parseMessage(Buffer.from([...hdr(0, 0x8400, 0, 30), ...ans]));
+  assert.equal(m.answers.length, 16);
+  assert.equal(m.truncated, true);
+  // Имена по 255 байт через указатель: 16 вопросов × 255 = 4080 — укладывается; 17-го не было бы и так.
+  const lab = (n) => [n, ...Buffer.alloc(n, 0x61)];
+  const long = [...lab(63), ...lab(63), ...lab(63), ...lab(62), 0x00, 0x00, 0x01, 0x00, 0x01];
+  const ptrs = []; for (let i = 0; i < 20; i++) ptrs.push(0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01);
+  const m2 = parseMessage(Buffer.from([...hdr(0, 0, 21, 0), ...long, ...ptrs]));
+  assert.ok(m2.questions.length <= 16);
+  assert.equal(m2.truncated, true);
+});
