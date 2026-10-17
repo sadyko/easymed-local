@@ -79,6 +79,28 @@ test('CRM_ONE_WAY_V1 O1: две карточки на одну консульт�
   assert.equal(money(db, v).length, 1);
 });
 
+// Ревью r4 (п. 3) — правило «та же услуга» в обе стороны: сторона без врача совпадает с любым врачом.
+test('CRM_ONE_WAY_V1 O1 (ревью r4): консультация без врача в визите — желание «у Иванова» указывает на неё; врач строки визита не меняется; усыновление — так же', () => {
+  const db = clinic(); const rid = card(db); const v = visit(db);
+  const ct = (doctor) => Number(db.prepare(`INSERT INTO visit_services (visit_id, consultation_type_id, doctor_id, quantity, unit_price, total, status, created_by)
+    VALUES (?, 1, ?, 1, 150000, 150000, 'added', 2)`).run(v, doctor).lastInsertRowid);
+  const x = ct(null);
+  const before = money(db, v);
+  const l = wish(db, rid, { ct: 1, doctor: 8 });
+  assert.equal(attach(db, v, l), x, 'вторая консультация в визите');
+  assert.deepEqual(money(db, v), before);
+  assert.equal(db.prepare('SELECT doctor_id FROM visit_services WHERE id = ?').get(x).doctor_id, null, 'врач строки визита сменился');
+  assert.equal(line(db, l).doctor_id, 8, 'врач желания сменился');
+  // усыновление: регистратура добавила консультацию без врача в визит, который держит карточка
+  const v2 = visit(db, { day: '2030-03-13' });
+  const lab = wish(db, rid, { svc: 40, day: '2030-03-13' }); attach(db, v2, lab);
+  const w2 = wish(db, rid, { ct: 1, doctor: 8, day: '2030-03-13' });
+  const y = Number(db.prepare(`INSERT INTO visit_services (visit_id, consultation_type_id, doctor_id, quantity, unit_price, total, status, created_by)
+    VALUES (?, 1, NULL, 1, 150000, 150000, 'added', 2)`).run(v2).lastInsertRowid);
+  assert.equal(adoptWishes(db, v2, [y]), 1, 'желание с врачом не узнало консультацию без врача');
+  assert.deepEqual([line(db, w2).visit_id, line(db, w2).visit_service_id], [v2, y]);
+});
+
 test('CRM_ONE_WAY_V1 O1: консультация у другого врача — другая запись (своя строка); хирургия в запись не садится', () => {
   const db = clinic(); const a = card(db); const v = visit(db);
   attach(db, v, wish(db, a, { ct: 1, doctor: 7 }));

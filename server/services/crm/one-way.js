@@ -64,10 +64,20 @@ function needsDoctorOf(db, row) {
  * O1 — строка визита `x` — та же услуга, что желание `wish`: то же правило, что у сети
  * R7b и окон регистрации (sameBookedService; равно sameService зеркала во всех клетках —
  * server/routes/crm-link-all-twin.test.js). Желание без врача — та же услуга у любого врача.
+ * Ревью r4 (п. 3) — И НАОБОРОТ: строка визита без врача — та же услуга, что желание с врачом
+ * (две карточки: «консультация» и «консультация у Иванова» на один день давали две консультации
+ * в одном визите). Сторона без врача совпадает с любым врачом другой; врач строки визита при
+ * этом не меняется никогда — желание только указывает на неё.
  */
 export function sameAsWish(db, wish, x) {
-  return sameBookedService(lineOf(wish), lineOf(x), { needsDoctor: needsDoctorOf(db, wish) });
+  const w = lineOf(wish);
+  const o = lineOf(x);
+  const opts = { needsDoctor: needsDoctorOf(db, wish) };
+  return sameBookedService(w, o, opts) || (o.doctorId == null && sameBookedService(o, w, opts));
 }
+
+/** То же для строк в форме базы (sameService зеркала), в обе стороны — ревью r4, п. 3. */
+const sameEither = (db, a, x) => sameService(db, a, x) || (x.doctor_id == null && sameService(db, x, a));
 
 /**
  * O1 — КУДА ЖЕЛАНИЕ САДИТСЯ В ВИЗИТЕ v, НЕ ЗАВОДЯ ВТОРОЙ СТРОКИ:
@@ -83,9 +93,11 @@ export function sameAsWish(db, wish, x) {
  * null — нужна новая строка.
  */
 export function wishHome(db, v, line) {
+  const own = (x) => (String(x.doctor_id ?? '') === String(line.doctor_id ?? '') ? 0 : 1);   // сначала строка своего врача
   const rows = db.prepare(`SELECT * FROM visit_services WHERE visit_id = ? AND status <> 'cancelled'
                               AND clinic_item_id IS NULL ORDER BY id`).all(v.id)
-    .filter((x) => lineKey(x) && sameAsWish(db, line, x));
+    .filter((x) => lineKey(x) && sameAsWish(db, line, x))
+    .sort((a, b) => own(a) - own(b));
   if (!rows.length) return null;
   const holders = db.prepare("SELECT id, request_id FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled' AND id <> ?");
   const free = rows.find((x) => !holders.all(x.id, line.id).length);
@@ -174,7 +186,7 @@ function autoLineFor(db, V, x) {
   return db.prepare(`SELECT * FROM crm_request_services
                       WHERE visit_id = ? AND status <> 'cancelled'
                         AND visit_service_auto = 1 AND visit_service_id IS NOT NULL AND visit_service_id <> ?
-                      ORDER BY id`).all(V, x.id).find((l) => sameService(db, l, x));
+                      ORDER BY id`).all(V, x.id).find((l) => sameEither(db, l, x));   // ревью r4, п. 3
 }
 
 /**
@@ -241,7 +253,7 @@ function adoptOne(db, reqId, v, x) {
             OR NOT EXISTS (SELECT 1 FROM visits w WHERE w.id = l.visit_id AND w.status NOT IN ('cancelled', 'no_show')))
        AND (l.scheduled_date IS NULL OR l.scheduled_date = '' OR date(l.scheduled_date) = date(?))
      ORDER BY (l.scheduled_date IS NULL OR l.scheduled_date = ''), l.id`).all(reqId, v.id, v.day)
-    .find((l) => sameService(db, l, x));
+    .find((l) => sameEither(db, l, x));   // ревью r4, п. 3
   if (!cand) return null;
   db.prepare(POINT).run(v.id, x.id, 0, v.day, cand.id);
   return Number(cand.id);
