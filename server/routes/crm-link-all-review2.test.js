@@ -1,8 +1,9 @@
 // CRM_LINK_ALL_V1 (2026-10-16) — ПОВТОРНОЕ РЕВЬЮ ВОРОНКИ И ПРИВАТНОСТИ (раунд 2, 56aba5e7).
 // Повторы ревью (zz-f2-privacy, zz-f2-funnel, zz-f2-funnel2) — настоящими тестами, каждый
 // со своей правкой:
-//   • PRIV-3  — карточка, у которой сменили пациента, не показывает визиты прежнего; привязки
-//               «только для воронки» к чужим визитам при смене пациента снимаются;
+//   • PRIV-3  — карточка, у которой сменили пациента, не показывает визиты прежнего;
+//               CRM_ONE_WAY_V1 (O10) — привязки при смене пациента остаются, чужие визиты
+//               отсекает чтение (триггер мигр. 246 снят);
 //   • PRIV-3b — ступень двигают только визиты пациента карточки;
 //   • G-1     — отмена: дата карточки — по оставшимся живым записям (cardDateOf); живых не
 //               осталось — карточке возвращается самый ранний след её привязок, в любом
@@ -45,7 +46,7 @@ const displayCard = (t, { stale = false } = {}) => {
 // PRIV-3 — СМЕНИЛИ ПАЦИЕНТА КАРТОЧКИ — ЧУЖИХ ВИЗИТОВ ОНА НЕ ПОКАЗЫВАЕТ
 // ═══════════════════════════════════════════════════════════════════════════
 for (const via of ['match', 'patient']) {
-  test(`CRM_LINK_ALL_V1 (ревью приватности PRIV-3, ${via}): карточке сменили пациента 77 → 78 — «Записи пациента» без визита 77 (врач, услуги)${via === 'patient' ? ', привязка «только для воронки» к нему снята' : ''}`, async () => {
+  test(`CRM_LINK_ALL_V1 (ревью приватности PRIV-3, ${via}): карточке сменили пациента 77 → 78 — «Записи пациента» без визита 77 (врач, услуги); CRM_ONE_WAY_V1 (O10) — привязка остаётся, чужой визит отсекает чтение`, async () => {
     const t = await startCrmApp(seed78);
     try {
       // match — карточка ждёт без даты (шаг C); patient — её берёт только C′
@@ -58,12 +59,14 @@ for (const via of ['match', 'patient']) {
       const r = await t.rpc('crm_card_bookings', 'cc', { request_id: rid });
       assert.equal(r.status, 200, r.text);
       assert.deepEqual(r.json.data.bookings, [], 'карточка пациента 78 показывает визит пациента 77: ' + r.text);
-      if (via === 'patient') assert.equal(link(t, v), null, 'привязка для воронки к визиту прежнего пациента осталась');
+      // CRM_ONE_WAY_V1 (O10) — триггер мигр. 246 снят: привязка остаётся (77 → 78 → 77 её не теряет),
+      // «Записи пациента» её не показывают — визит не пациента карточки.
+      assert.deepEqual(link(t, v), { request_id: rid, source: via });
     } finally { t.close(); }
   });
 }
 
-test('CRM_LINK_ALL_V1 (ревью приватности PRIV-3): у карточки без пациента записей нет; привязка к визиту нового пациента остаётся, к визиту прежнего — снимается', async () => {
+test('CRM_LINK_ALL_V1 (ревью приватности PRIV-3) · CRM_ONE_WAY_V1 (O10): у карточки без пациента записей нет; карточка показывает только визиты своего пациента — привязки при смене пациента остаются', async () => {
   const t = await startCrmApp(seed78);
   try {
     const rid = displayCard(t);
@@ -75,13 +78,13 @@ test('CRM_LINK_ALL_V1 (ревью приватности PRIV-3): у карто�
     const vcc = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'scheduled', 3)").run(at(localDay(5), 10)).lastInsertRowid);
     t.db.prepare("INSERT INTO crm_booking_links (visit_id, request_id, source) VALUES (?, ?, 'callcenter')").run(vcc, rid);
     assert.equal((await relink(t, rid, 78)).status, 200);
-    assert.equal(link(t, v77), null);
+    assert.deepEqual(link(t, v77), { request_id: rid, source: 'patient' }, 'CRM_ONE_WAY_V1 (O10) — привязка остаётся, её отсекает чтение');
     assert.deepEqual(link(t, v78), { request_id: rid, source: 'phone' });
     assert.deepEqual(link(t, vcc), { request_id: rid, source: 'callcenter' });
     assert.deepEqual(shown(t, rid), [v78], 'карточка 78 показывает не свои визиты');
     t.db.prepare('UPDATE crm_requests SET patient_id = NULL WHERE id = ?').run(rid);
     assert.deepEqual(shown(t, rid), [], 'карточка без пациента показывает визиты');
-    assert.equal(link(t, v78), null, 'карточке без пациента осталась привязка для воронки');
+    assert.deepEqual(link(t, v78), { request_id: rid, source: 'phone' }, 'CRM_ONE_WAY_V1 (O10) — привязка остаётся');
     // правка карточки без смены пациента привязок не трогает
     const rid2 = addLead(t.db, { assigned: 3, updated: daysAgoIso(1), name: 'Вторая' });
     const v2 = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'scheduled', 2)").run(at(localDay(6), 10)).lastInsertRowid);
