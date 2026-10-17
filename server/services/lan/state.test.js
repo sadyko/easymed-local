@@ -25,7 +25,7 @@ test('первый запуск: запоминает адрес, смены н�
   const dir = tmpDir(t);
   const r = recordAddresses(dir, { interfaces: PC('192.168.1.147'), now: T1 });
   assert.equal(r.changed, false);
-  assert.deepEqual(readLanState(dir), { addresses: ['192.168.1.147'], cards: [{ key: 'a4:bb:6d:12:34:56', adapter: 'Ethernet', addresses: ['192.168.1.147'] }], seen_at: T1.toISOString(), change: null, dismissed_at: null, mdns_enabled: true });
+  assert.deepEqual(readLanState(dir), { addresses: ['192.168.1.147'], cards: [{ key: 'a4:bb:6d:12:34:56', adapter: 'Ethernet', addresses: ['192.168.1.147'], seen_at: T1.toISOString() }], seen_at: T1.toISOString(), change: null, dismissed_at: null, mdns_enabled: true });
   assert.ok(fs.existsSync(path.join(dir, LAN_FILE)));
 });
 
@@ -102,4 +102,30 @@ test('выключатель имени в сети хранится в том �
   assert.equal(readLanState(dir).mdns_enabled, false, 'запись адреса не включает имя обратно');
   setMdnsEnabled(dir, true);
   assert.equal(readLanState(dir).mdns_enabled, true);
+});
+
+test('повторная перепроверка R3: настоящая карта, которой нет 30 дней, забывается; случайный MAC (Wi-Fi) не помнится вовсе', (t) => {
+  const dir = tmpDir(t);
+  const day = (n) => new Date(Date.UTC(2026, 9, 1) + n * 86400000);
+  const eth = { 'Ethernet': [v4('192.168.1.156')] };
+  recordAddresses(dir, { interfaces: { ...eth, 'Wi-Fi': [v4('192.168.1.160', 'd8:5e:d3:01:02:03')] }, now: day(0) });
+  recordAddresses(dir, { interfaces: eth, now: day(1) });
+  assert.equal(readLanState(dir).cards.length, 2, 'Wi-Fi выключен — помнится');
+  recordAddresses(dir, { interfaces: eth, now: day(31) });
+  assert.deepEqual(readLanState(dir).cards.map((c) => c.key), ['a4:bb:6d:12:34:56'], 'нет 30 дней — забыт');
+  // Случайный («локально назначенный») MAC — пропал, значит не вернётся тем же: не помнить.
+  recordAddresses(dir, { interfaces: { ...eth, 'Wi-Fi': [v4('192.168.1.170', 'a6:11:22:33:44:01')] }, now: day(32) });
+  recordAddresses(dir, { interfaces: eth, now: day(33) });
+  assert.deepEqual(readLanState(dir).cards.map((c) => c.key), ['a4:bb:6d:12:34:56']);
+});
+
+test('повторная перепроверка R3: такт раз в минуту не пишет файл, пока ничего не изменилось (метка «видели» — не чаще раза в сутки)', (t) => {
+  const dir = tmpDir(t);
+  const file = path.join(dir, LAN_FILE);
+  recordAddresses(dir, { interfaces: PC('192.168.1.147'), now: T1 });
+  const m1 = fs.statSync(file).mtimeMs;
+  fs.utimesSync(file, new Date(m1 / 1000 * 1000 - 60000), new Date(m1 - 60000));
+  const m2 = fs.statSync(file).mtimeMs;
+  recordAddresses(dir, { interfaces: PC('192.168.1.147'), now: new Date(T1.getTime() + 60000) });
+  assert.equal(fs.statSync(file).mtimeMs, m2, 'минута спустя без изменений — файл не переписан');
 });

@@ -108,6 +108,21 @@ test('инструкция роутера: ipconfig /all, страница ро�
   assert.ok(t.includes('Впишите физический адрес A4-BB-6D-12-34-56 и адрес 192.168.1.156'));
 });
 
+test('повторная перепроверка R3: MAC карты случайный (Windows для Wi-Fi) — первый шаг роутера: выключить «Случайные аппаратные адреса»', async () => {
+  const rnd = await mount(status({ change: null, addresses: [{ adapter: 'Wi-Fi', address: '192.168.1.152', netmask: '255.255.255.0', mac: 'A6-11-22-33-44-01' }] }));
+  const t = textOf(rnd);
+  assert.ok(t.includes('«Случайные аппаратные адреса»'), t.slice(-600));
+  assert.ok(t.indexOf('Случайные аппаратные адреса') < t.indexOf('ipconfig /all'), 'это первый шаг — до ipconfig');
+  const real = textOf(await mount(status({ change: null })));
+  assert.ok(!real.includes('Случайные аппаратные адреса'), 'у настоящего MAC подсказки нет');
+  setLang('en');
+  const en = textOf(await mount(status({ change: null, addresses: [{ adapter: 'Wi-Fi', address: '192.168.1.152', netmask: '255.255.255.0', mac: 'A6-11-22-33-44-01' }] })));
+  assert.ok(en.includes('Random hardware addresses') && !/[А-Яа-яЁё]/.test(en), en.slice(-600));
+  setLang('uz');
+  const uz = textOf(await mount(status({ change: null, addresses: [{ adapter: 'Wi-Fi', address: '192.168.1.152', netmask: '255.255.255.0', mac: 'A6-11-22-33-44-01' }] })));
+  assert.ok(uz.includes('Random hardware addresses') && !/[А-Яа-яЁё]/.test(uz), uz.slice(-600));
+});
+
 test('брандмауэр и анализаторы сказаны прямо: команда netsh для UDP 5353, «анализаторам имя не поможет»', async () => {
   const t = textOf(await mount(status()));
   assert.ok(t.includes('Если имя не открывается на других компьютерах'));

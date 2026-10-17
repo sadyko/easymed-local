@@ -85,3 +85,30 @@ test('PARSER caps: crafted packets cost within ~10x of a normal multi-record mDN
   console.log('# CPU share at 100 Mbit/s flood: crafted %s%%, crafted2 %s%%', ((12.5e6 / crafted.length) * c.us / 1e4).toFixed(0), ((12.5e6 / crafted2.length) * c2.us / 1e4).toFixed(1));
   assert.ok(c.us < 10 * n.us && c2.us < 10 * n.us, `crafted ${c.us.toFixed(2)} / ${c2.us.toFixed(2)} us vs normal ${n.us.toFixed(2)} us`);
 });
+
+test('MAC-RANDOM: Wi-Fi "random hardware address: change daily" — router gives a new IP with each new MAC -> the real address change must be reported', (t) => {
+  const dir = tmp(t);
+  recordAddresses(dir, { interfaces: { 'Wi-Fi': [v4('192.168.1.147', 'a6:11:22:33:44:01')] }, now: day(1) });
+  const r = recordAddresses(dir, { interfaces: { 'Wi-Fi': [v4('192.168.1.152', 'ce:55:66:77:88:02')] }, now: day(2) });
+  console.log('# MAC-RANDOM changed=%s change=%j', r.changed, readLanState(dir).change);
+  assert.equal(r.changed, true, 'clinic PCs lost .147 -> .152 but no warning');
+});
+
+test('MAC-RANDOM: remembered cards grow by one per rotation, forever', (t) => {
+  const dir = tmp(t);
+  for (let d = 1; d <= 30; d++) {
+    const mac = 'a6:00:00:00:00:' + String(d).padStart(2, '0');
+    recordAddresses(dir, { interfaces: { 'Wi-Fi': [v4('192.168.1.' + (100 + d), mac)] }, now: day(d) });
+  }
+  const n = readLanState(dir).cards.length;
+  console.log('# cards remembered after 30 daily rotations:', n, 'file bytes', fs.statSync(path.join(dir, 'lan-address.json')).size);
+  assert.ok(n <= 3, 'cards ' + n);
+});
+
+test('SWAP: server moved from Wi-Fi to the cable (Wi-Fi off) — the address the clinic used (.147) is gone -> must warn', (t) => {
+  const dir = tmp(t);
+  recordAddresses(dir, { interfaces: { 'Wi-Fi': [v4('192.168.1.147', 'd8:5e:d3:01:02:03')] }, now: day(1) });
+  const r = recordAddresses(dir, { interfaces: { 'Ethernet': [v4('192.168.1.160', 'a4:bb:6d:12:34:56')] }, now: day(2) });
+  console.log('# SWAP changed=%s', r.changed);
+  assert.equal(r.changed, true);
+});

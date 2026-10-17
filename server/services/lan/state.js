@@ -11,8 +11,13 @@
 //
 // Смена — когда ТА ЖЕ карта получила другой адрес (перепроверка 2026-10-17:
 // подключение и отключение VPN, хот-спота, Wi-Fi позже кабеля давали ложное
-// «адрес изменился»). Карта, которой сейчас нет, не забывается: вернётся с другим
-// адресом — это смена. Прежние адреса вернулись — предупреждение снимается само.
+// «адрес изменился») ИЛИ когда ни одного из адресов прошлой записи больше нет
+// (повторная перепроверка, R3: Wi-Fi со случайным MAC получает новый MAC и новый
+// адрес каждый день; сервер переставили с Wi-Fi .147 на кабель .160 — компьютеры
+// клиники знали только .147). Карта, которой сейчас нет, помнится 30 дней: вернётся
+// с другим адресом — это смена; карта со случайным («локально назначенным») MAC не
+// помнится вовсе — тем же MAC она не вернётся. Прежние адреса вернулись —
+// предупреждение снимается само.
 //
 // «Скрыть» (dismissed_at = change.at) действует до СЛЕДУЮЩЕЙ смены: новая смена —
 // новый change.at, и предупреждение возвращается само. Без смены прежний change
@@ -27,6 +32,12 @@ import { realLanInterfaces, lanCards, detectChange } from './interfaces.js';
 
 export const LAN_FILE = 'lan-address.json';
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const FORGET_AFTER_MS = 30 * DAY_MS;
+// Второй бит первого октета MAC — «локально назначенный»: так выглядят случайные
+// аппаратные адреса Windows (x2, x6, xA, xE), а не адрес самой карты.
+export const isRandomMac = (key) => /^[0-9a-f][26ae]:/i.test(String(key || ''));
 
 const ips = (v) => (Array.isArray(v) ? v.filter((a) => typeof a === 'string' && IPV4_RE.test(a)) : null);
 const iso = (v) => (typeof v === 'string' && v && !Number.isNaN(Date.parse(v)) ? v : null);
@@ -44,7 +55,7 @@ function normCards(v) {
     if (!c || typeof c !== 'object' || typeof c.key !== 'string' || !c.key) continue;
     const addresses = ips(c.addresses);
     if (!addresses || !addresses.length) continue;
-    out.push({ key: c.key, adapter: typeof c.adapter === 'string' ? c.adapter : '', addresses });
+    out.push({ key: c.key, adapter: typeof c.adapter === 'string' ? c.adapter : '', addresses, seen_at: iso(c.seen_at) });
   }
   return out;
 }
@@ -100,10 +111,23 @@ export function recordAddresses(dataDir, { interfaces = os.networkInterfaces(), 
   const d = detectChange(prev.cards, cur);
   if (d.skip) return { changed: false, state: prev };
   const present = cur.flatMap((c) => c.addresses);
-  // Карты, которых сейчас нет, помнятся: вернётся Wi-Fi с другим адресом — смена.
-  const cards = [...cur, ...prev.cards.filter((p) => !cur.some((c) => c.key === p.key))];
+  const at = now.toISOString(), t = now.getTime();
+  // «Видели» у карты, которая есть сейчас, обновляется не чаще раза в сутки: такт раз
+  // в минуту не должен переписывать файл ради метки.
+  const seenOf = (c) => {
+    const p = prev.cards.find((x) => x.key === c.key);
+    const s = p && p.seen_at && t - Date.parse(p.seen_at) < DAY_MS ? p.seen_at : at;
+    return { ...c, seen_at: s };
+  };
+  // Карты, которых сейчас нет, помнятся 30 дней (вернётся Wi-Fi с другим адресом —
+  // смена); со случайным MAC — не помнятся.
+  const absent = prev.cards.filter((p) => !cur.some((c) => c.key === p.key)
+    && !isRandomMac(p.key) && t - Date.parse(p.seen_at || prev.seen_at || at) < FORGET_AFTER_MS);
+  const cards = [...cur.map(seenOf), ...absent];
+  // Ни одного адреса прошлой записи больше нет — смена, даже если сменилась сама карта.
+  const lostAll = prev.addresses.length > 0 && !prev.addresses.some((x) => present.includes(x));
+  if (!d.changed && lostAll) { d.changed = true; d.from = prev.addresses; d.to = present; }
   let change = prev.change, dismissed = prev.dismissed_at;
-  const at = now.toISOString();
   // Старые адреса вернулись (роутер отдал прежний, Wi-Fi поднялся с тем же) — компьютеры
   // снова находят сервер: предупреждение снимается, и возврат сам сменой не считается.
   const back = change && change.from.length && change.from.every((x) => present.includes(x));
