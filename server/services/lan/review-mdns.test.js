@@ -165,3 +165,59 @@ test('OFF-SUBNET: ответ никогда не несёт адресов чу�
   sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 8 }), { address: '10.0.0.77', port: 40000 });
   assert.deepEqual(sock.sent.map((s) => [s.address, s.m.answers.map((a) => a.address)]), [['10.0.0.77', ['10.0.0.5']]]);
 });
+
+test('SPOOF: 12 поддельных притязаний «A 0.0.0.0» — не конфликт: имя остаётся, такт его не теряет', async (t) => {
+  const { r, sock } = await one(t);
+  for (let n = 0; n < 12; n++) {
+    const name = r.status().name;
+    sock.emit('message', buildResponse({ name, addresses: ['0.0.0.0'] }), { address: '192.168.1.66', port: 5353 });
+    await wait(15);
+  }
+  for (let i = 0; i < 3; i++) { r.refresh(); await wait(30); }
+  assert.notEqual(r.status().state, 'conflict', 'stuck in conflict after 12 spoofed packets: ' + JSON.stringify(r.status()));
+  assert.equal(r.status().name, 'easymed.local');
+});
+
+test('все имена заняты настоящим соседом — состояние conflict без «null.local»; сосед ушёл — такт (refresh) пробует имя заново и берёт его', async (t) => {
+  const sock = new FakeSocket();
+  let hostile = true;
+  const orig = sock.send.bind(sock);
+  sock.send = (buf, port, address, cb) => {
+    orig(buf, port, address, cb);
+    const m = parseMessage(buf);
+    if (hostile && m && !m.qr && m.questions[0]) {
+      setImmediate(() => sock.emit('message', buildResponse({ name: m.questions[0].name, addresses: ['192.168.1.20'] }), { address: '192.168.1.20', port: 5353 }));
+    }
+  };
+  const r = createMdnsResponder({ baseName: 'easymed', getInterfaces: () => [IF('Ethernet', '192.168.1.156')], probeIntervalMs: 2,
+    createSocket: () => sock, log: () => {}, retryAfterMs: 60000 });
+  t.after(() => r.stop());
+  await r.start();
+  assert.ok(await until(() => r.status().state === 'conflict', 3000));
+  assert.deepEqual(r.status(), { base: 'easymed', name: null, state: 'conflict', reason: '', suffixed: true });
+  hostile = false;
+  r.refresh();
+  assert.ok(await until(() => r.status().state === 'active', 1000), JSON.stringify(r.status()));
+  assert.equal(r.status().name, 'easymed.local');
+});
+
+test('конфликт сам повторяет пробу через retryAfterMs (RFC 6762 §8.1 — отступить и попробовать позже, а не сдаться навсегда)', async (t) => {
+  const sock = new FakeSocket();
+  let hostile = true;
+  const orig = sock.send.bind(sock);
+  sock.send = (buf, port, address, cb) => {
+    orig(buf, port, address, cb);
+    const m = parseMessage(buf);
+    if (hostile && m && !m.qr && m.questions[0]) {
+      setImmediate(() => sock.emit('message', buildResponse({ name: m.questions[0].name, addresses: ['192.168.1.20'] }), { address: '192.168.1.20', port: 5353 }));
+    }
+  };
+  const r = createMdnsResponder({ baseName: 'easymed', getInterfaces: () => [IF('Ethernet', '192.168.1.156')], probeIntervalMs: 2,
+    createSocket: () => sock, log: () => {}, retryAfterMs: 60 });
+  t.after(() => r.stop());
+  await r.start();
+  assert.ok(await until(() => r.status().state === 'conflict', 3000));
+  hostile = false;
+  assert.ok(await until(() => r.status().state === 'active', 1000), JSON.stringify(r.status()));
+  assert.equal(r.status().name, 'easymed.local');
+});

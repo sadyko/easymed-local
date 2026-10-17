@@ -128,7 +128,9 @@ export function lanStatus(db, dataDir) {
   let name;
   if (responder) {
     const r = responder.status();
-    name = { base: r.base, current: r.name, state: r.state, reason: r.reason || '', suffixed: !!r.suffixed };
+    // Ссылку показываем только на настоящее имя: в конфликте его нет (никогда «null.local»).
+    const ok = r.state !== 'conflict' && typeof r.name === 'string' && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.local$/.test(r.name) && r.name !== 'null.local';
+    name = { base: r.base, current: ok ? r.name : null, state: r.state, reason: r.reason || '', suffixed: !!r.suffixed };
   } else {
     const off = (state, reason) => ({ base, current: base + '.local', state, reason, suffixed: false });
     if (!allowed.ok) name = off('off', allowed.reason);
@@ -136,7 +138,7 @@ export function lanStatus(db, dataDir) {
     else if (lastFailure) name = off('failed', 'error');
     else name = off('off', 'not_started');
   }
-  name.url = 'http://' + name.current + ':' + c.port;
+  name.url = name.current ? 'http://' + name.current + ':' + c.port : null;
   const first = ifs[0] || {};
   return {
     addresses: ifs.map((i) => ({ adapter: i.adapter, address: i.address, netmask: i.netmask, mac: formatMac(i.mac) })),

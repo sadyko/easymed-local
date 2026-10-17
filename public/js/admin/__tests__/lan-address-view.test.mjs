@@ -158,6 +158,14 @@ test('порт 5353 не открылся / нет сети — честные �
   assert.ok(t.includes('Этот компьютер сейчас не подключён к сети'));
 });
 
+test('все имена заняты (conflict): ссылки нет и нигде не написано «null», сказано, что делать', async () => {
+  const root = await mount(status({ change: null, name: { base: 'easymed', current: null, url: null, state: 'conflict', reason: '', suffixed: true } }));
+  const t = textOf(root);
+  assert.ok(!/null/.test(t), t.slice(0, 200));
+  assert.ok(t.includes('имя занято'));
+  assert.ok(t.includes('Все имена заняты другими компьютерами'));
+});
+
 test('две сетевые карты — обе с MAC, и подсказка, адрес какой из них закреплять', async () => {
   const t = textOf(await mount(status({ change: null, addresses: [
     { adapter: 'Ethernet', address: '192.168.0.20', netmask: '255.255.255.0', mac: 'D8-5E-D3-01-02-03' },

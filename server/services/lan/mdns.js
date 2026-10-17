@@ -92,6 +92,7 @@ export function createMdnsResponder({
   log = (m) => console.warn(m),
   createSocket = (o) => dgram.createSocket(o),
   conflictWindowMs = probeIntervalMs,   // сколько ждать притязаний с других карт того же сервера
+  retryAfterMs = 60 * 1000,             // все имена заняты — через сколько пробовать снова (RFC 6762 §8.1)
   now = () => Date.now(),
 } = {}) {
   let base = normalizeBase(baseName);
@@ -188,12 +189,16 @@ export function createMdnsResponder({
     tick();
   }
 
+  // Все имена заняты — не сдаваться навсегда (перепроверка 2026-10-17: девять
+  // поддельных пакетов выключали имя до перезапуска): отступить и через
+  // retryAfterMs (и на каждом такте refresh) пробовать имя с начала.
   function rename() {
     attempt++;
     if (!nextName(base, attempt)) {
-      gen++;
+      const my = ++gen;
       state = 'conflict';
-      logOnce('conflict:' + base, `все имена ${base}.local … ${nextName(base, MAX_ATTEMPT)}.local заняты другими компьютерами — имя в сети не работает`);
+      logOnce('conflict:' + base, `все имена ${base}.local … ${nextName(base, MAX_ATTEMPT)}.local заняты другими компьютерами — имя в сети пока не работает, попробую позже`);
+      later(() => { if (my === gen && state === 'conflict' && !stopped) { attempt = 0; beginProbe(); } }, retryAfterMs);
       return;
     }
     beginProbe();
@@ -226,7 +231,7 @@ export function createMdnsResponder({
   // телефоны, Chromecast), а опрос сетевых карт (os.networkInterfaces) на Windows
   // не бесплатен. Карты читаются только для пакета, где есть НАШЕ имя.
   function onMessage(msg, rinfo) {
-    if (stopped || !rinfo) return;
+    if (stopped || !rinfo || state === 'conflict') return;
     const m = parseMessage(msg);
     if (!m) return;
     const name = fqdn().toLowerCase();
@@ -350,9 +355,11 @@ export function createMdnsResponder({
       if (!bound || stopped) return;
       const key = reload().map((i) => i.address).join(',');
       joinAll();
+      if (state === 'conflict') { attempt = 0; beginProbe(); return; }
       if (state === 'active' && key && key !== announcedKey) announce();
     },
     port: () => boundPort,
-    status: () => ({ base, name: fqdn(), state, reason, suffixed: attempt > 0 }),
+    // В конфликте имени нет: null, а не «null.local».
+    status: () => ({ base, name: state === 'conflict' ? null : fqdn(), state, reason, suffixed: attempt > 0 }),
   };
 }
