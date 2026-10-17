@@ -91,15 +91,24 @@ const sameEither = (db, a, x) => sameService(db, a, x) || (x.doctor_id == null &
  *      желания давали 300 000 вместо 150 000. Два анализа одного дня ставит регистратура —
  *      строками визита, а не желаниями;
  * null — нужна новая строка.
+ * Ревью r5 (п. 1) — ВРАЧИ ДОЛЖНЫ СОГЛАСОВАТЬСЯ: строку визита услуги, которой нужен врач, делят только
+ * желания, чьи названные врачи совпадают (тот же врач или врач не назван). Строку без врача может занять
+ * не больше одного названного врача: «у Иванова» и «у Петрова» в один день — две консультации, а не одна
+ * строка без врача на двоих (одна консультация в счёте за двух врачей). Желанию с другим врачом — своя строка.
  */
 export function wishHome(db, v, line) {
   const own = (x) => (String(x.doctor_id ?? '') === String(line.doctor_id ?? '') ? 0 : 1);   // сначала строка своего врача
+  const holders = db.prepare("SELECT id, request_id, doctor_id FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled' AND id <> ?");
+  const named = (d) => (d == null || d === '' ? null : Number(d));
+  const mine = named(line.doctor_id);
+  const needs = needsDoctorOf(db, line);
+  const agrees = (x) => !needs || mine == null
+    || [named(x.doctor_id), ...holders.all(x.id, line.id).map((h) => named(h.doctor_id))].every((d) => d == null || d === mine);
   const rows = db.prepare(`SELECT * FROM visit_services WHERE visit_id = ? AND status <> 'cancelled'
                               AND clinic_item_id IS NULL ORDER BY id`).all(v.id)
-    .filter((x) => lineKey(x) && sameAsWish(db, line, x))
+    .filter((x) => lineKey(x) && sameAsWish(db, line, x) && agrees(x))
     .sort((a, b) => own(a) - own(b));
   if (!rows.length) return null;
-  const holders = db.prepare("SELECT id, request_id FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled' AND id <> ?");
   const free = rows.find((x) => !holders.all(x.id, line.id).length);
   return Number((free || rows[0]).id);
 }
