@@ -240,6 +240,7 @@ export function createMdnsResponder({
       const list = ifaces();
       const mine = list.map((i) => i.address);
       if (mine.includes(rinfo.address)) return;
+      if (!neighbourIfaces(list, rinfo.address)) return;   // притязание не из нашей сети — не наше дело
       for (const c of claims) {
         if (mine.includes(c.address)) continue;
         // Притязание считается, только если адрес — из подсети нашей карты: только
@@ -252,10 +253,11 @@ export function createMdnsResponder({
     if (state !== 'active') return;
     const q = m.questions.find((x) => x.name.toLowerCase() === name && (x.type === TYPE_A || x.type === TYPE_ANY) && (x.qclass === 1 || x.qclass === 255));
     if (!q) return;
-    const list = ifaces();
-    const local = list.filter((i) => sameSubnet(i.address, rinfo.address, i.netmask));
-    const use = local.length ? local : list;
-    if (!use.length) return;
+    // Только соседям и только их подсетью: вопрос не из наших подсетей (8.8.8.8 через
+    // проброс порта, VPN) остаётся без ответа, и адресов другой сети никто не получает
+    // (перепроверка 2026-10-17: «обычный» вопрос с 8.8.8.8 получал оба адреса сервера).
+    const use = neighbourIfaces(ifaces(), rinfo.address);
+    if (!use || !use.length) return;
     const addresses = use.map((i) => i.address);
     if (rinfo.port !== boundPort) {
       // Обычный DNS-клиент (nslookup, программа) спросил со своего порта — RFC 6762 §6.7.
@@ -268,6 +270,16 @@ export function createMdnsResponder({
     if (!allowMc('ans', own, joinMulticast ? use[0].address : '*')) return;   // этот ответ в эту сеть уже ушёл меньше секунды назад
     if (joinMulticast) { try { sock.setMulticastInterface(use[0].address); } catch { /* как есть */ } }
     rawSend(buildResponse({ name: own, addresses }), t.port, t.address);
+  }
+
+  // Карты, через которые отправитель — наш сосед: его подсеть; свой же адрес — эта
+  // карта (служба DNS-клиента Windows на этом ПК); петля 127/8 — все карты (это сам
+  // ПК; снаружи пакет с 127/8 Windows не пропускает). Иначе null — не сосед.
+  function neighbourIfaces(list, src) {
+    const s = String(src || '');
+    if (/^127\./.test(s)) return list;
+    const local = list.filter((i) => i.address === s || sameSubnet(i.address, s, i.netmask));
+    return local.length ? local : null;
   }
 
   function fail(e) {

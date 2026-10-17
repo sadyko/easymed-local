@@ -11966,5 +11966,6 @@ export const STRINGS = {
   "Адрес сервера изменился": {"en":"Server address changed","ru":"Адрес сервера изменился","uz":"Server manzili o‘zgardi"},   // LAN_ADDRESS_V1
   "Другие компьютеры и анализаторы могут не находить сервер. Закрепите адрес в роутере.": {"en":"Other computers and analyzers may not find the server. Fix the address in the router.","ru":"Другие компьютеры и анализаторы могут не находить сервер. Закрепите адрес в роутере.","uz":"Boshqa kompyuterlar va analizatorlar serverni topa olmasligi mumkin. Manzilni routerda biriktiring."},   // LAN_ADDRESS_V1
   "Как это сделать": {"en":"How to do it","ru":"Как это сделать","uz":"Qanday qilish kerak"},   // LAN_ADDRESS_V1
+  "Правило действует, когда сеть клиники в Windows отмечена как «Частная» (Параметры → Сеть и Интернет → свойства подключения).": {"en":"The rule applies when the clinic network is marked as \"Private\" in Windows (Settings → Network & Internet → connection properties).","ru":"Правило действует, когда сеть клиники в Windows отмечена как «Частная» (Параметры → Сеть и Интернет → свойства подключения).","uz":"Qoida klinika tarmog‘i Windows’da «Private» (Xususiy) deb belgilanganda ishlaydi (Settings → Network & Internet → ulanish xususiyatlari)."},   // LAN_ADDRESS_V1
   // /LAN_ADDRESS_V1
 };

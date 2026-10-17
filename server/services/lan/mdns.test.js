@@ -153,14 +153,15 @@ test('вопрос с порта 5353 (Windows, Bonjour) — ответ multicas
   assert.deepEqual(sock.sent[0].m.answers.map((a) => [a.address, a.flush, a.ttl]), [['192.168.1.156', true, 120]]);
 });
 
-test('две сетевые карты: спросившему — адрес из его подсети; из чужой подсети — все', async (t) => {
+test('две сетевые карты: спросившему — адрес из его подсети; из чужой подсети — молчание (перепроверка: не раздавать адреса чужим сетям)', async (t) => {
   const two = [{ adapter: 'Ethernet', address: '192.168.0.20', netmask: '255.255.255.0', mac: '' }, ...HERE];
   const { r, sock } = await fakeResponder(t, {}, { getInterfaces: () => two });
   await until(() => r.status().state === 'active');
   sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 1 }), fromLan('192.168.0.33', 50000));
   assert.deepEqual(sock.sent.at(-1).m.answers.map((a) => a.address), ['192.168.0.20']);
+  const n = sock.sent.length;
   sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 2 }), fromLan('10.0.0.9', 50000));
-  assert.deepEqual(sock.sent.at(-1).m.answers.map((a) => a.address), ['192.168.0.20', '192.168.1.156']);
+  assert.equal(sock.sent.length, n, 'вопрос не из наших подсетей — без ответа');
 });
 
 test('во время работы чужой сервер назвался тем же именем: меньший адрес остаётся (и объявляет себя — не чаще раза в секунду), больший — easymed-2', async (t) => {

@@ -152,3 +152,16 @@ test('чужие имена и типы — без ответа (лишняя м
   }
   assert.equal(sock.sent.length, 0, JSON.stringify(sock.sent.map((s) => s.m && s.m.answers)));
 });
+
+test('OFF-SUBNET: «обычный» вопрос с 8.8.8.8:40000 (не наша подсеть) — без ответа (RFC 6762 §11, §6.7)', async (t) => {
+  const { sock } = await one(t, [IF('Ethernet', '192.168.1.156'), IF('Ethernet 2', '10.0.0.5')]);
+  sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 77 }), { address: '8.8.8.8', port: 40000 });
+  sock.emit('message', buildQuery('easymed.local', { type: TYPE_A }), { address: '172.16.9.9', port: 5353 });
+  assert.equal(sock.sent.length, 0, 'answered an off-subnet source: ' + JSON.stringify(sock.sent.map((u) => [u.address, u.m && u.m.answers.map((a) => a.address)])));
+});
+
+test('OFF-SUBNET: ответ никогда не несёт адресов чужих подсетей — спросившему из 10.0.0.x только 10.0.0.5', async (t) => {
+  const { sock } = await one(t, [IF('Ethernet', '192.168.1.156'), IF('Ethernet 2', '10.0.0.5')]);
+  sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 8 }), { address: '10.0.0.77', port: 40000 });
+  assert.deepEqual(sock.sent.map((s) => [s.address, s.m.answers.map((a) => a.address)]), [['10.0.0.77', ['10.0.0.5']]]);
+});

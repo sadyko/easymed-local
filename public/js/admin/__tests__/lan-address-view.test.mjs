@@ -111,7 +111,8 @@ test('инструкция роутера: ipconfig /all, страница ро�
 test('брандмауэр и анализаторы сказаны прямо: команда netsh для UDP 5353, «анализаторам имя не поможет»', async () => {
   const t = textOf(await mount(status()));
   assert.ok(t.includes('Если имя не открывается на других компьютерах'));
-  assert.ok(t.includes('netsh advfirewall firewall add rule name="EasyMed (network name)" dir=in action=allow protocol=UDP localport=5353'));
+  assert.ok(t.includes('netsh advfirewall firewall add rule name="EasyMed (network name)" dir=in action=allow protocol=UDP localport=5353 remoteip=localsubnet profile=private,domain'), 'правило — только своя подсеть и частная сеть');
+  assert.ok(t.includes('отмечена как «Частная»'));
   assert.ok(t.includes('Анализаторы указывают адрес сервера числом'));
 });
 
