@@ -187,6 +187,77 @@ test('CRM_ONE_WAY_V1 O8 (ревью r4, r5): датированное желан
   assert.deepEqual(logOf(db).filter(([, a]) => a === 'released_dated').map(([id]) => id), [sameDay, byTrail, byVisitService]);
 });
 
+// Ревью r6 (A) — запись перенесли на другой день и потом отменили: день записи помнит её след
+// (crm_booking_undo.set_scheduled_date). Остальные условия правила 3 — те же.
+test('CRM_ONE_WAY_V1 O8 (ревью r6): перенесённая и отменённая запись — день записи по её следу; без следа дня и с другой услугой — не отпускается', () => {
+  const { db, rid, newCard, visit, cline, linkTo } = base();
+  const undo = (vid, r, day) => db.prepare("INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, set_status, set_scheduled_date) VALUES (?, ?, 'in_process', 'scheduled', ?)").run(vid, r, day);
+  const m = visit('2026-10-25', 'cancelled');   // запись была на 21-е, её перенесли на 25-е и отменили
+  db.prepare('UPDATE visits SET service_id = 30 WHERE id = ?').run(m);
+  linkTo(m, rid, 'callcenter');
+  undo(m, rid, '2026-10-21');
+  const moved = cline({ day: '2026-10-21' });
+  const otherService = cline({ svc: 40, day: '2026-10-21' });
+  const card2 = newCard();   // привязка без следа: дня записи до переноса не знает никто
+  const m2 = visit('2026-10-25', 'cancelled');
+  db.prepare('UPDATE visits SET service_id = 30 WHERE id = ?').run(m2);
+  linkTo(m2, card2, 'callcenter');
+  const noTrail = cline({ rid: card2, day: '2026-10-21' });
+  const out = crmOneWayRepair(db);
+  assert.deepEqual([row(db, moved).scheduled_date, row(db, moved).released_from_visit_id], [null, m], 'день перенесённой записи по следу не узнан');
+  for (const [id, day] of [[otherService, '2026-10-21'], [noTrail, '2026-10-21']]) {
+    assert.deepEqual([row(db, id).scheduled_date, row(db, id).released_from_visit_id], [day, null], 'отпущено без доказательства: ' + id);
+  }
+  assert.equal(out.counts.released_dated, 1);
+});
+
+// Ревью r6 (B) — у услуги, которой нужен врач (и у консультации по виду приёма), отпускается только желание врача
+// отменённой записи (врач её строки визита; доказательство visits.service_id — врач визита) или без врача.
+test('CRM_ONE_WAY_V1 O8 (ревью r6): правило 3 и врач — отпущено желание врача отменённой записи или без врача; желание другого названного врача сохраняет день; анализу врач не нужен', () => {
+  const { db, rid, newCard, visit, linkTo } = base();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (8, 'doc8', 'x', 'Врач 8', 'doctor', 1)").run();
+  db.prepare("INSERT INTO services (id, name, price, type, requires_doctor) VALUES (31, 'Консультация кардиолога', 120000, 'consultation', 1)").run();
+  db.prepare("INSERT INTO consultation_types (id, name, price, active) VALUES (1, 'Первичный приём', 150000, 1)").run();
+  const wishOf = (r, { svc = null, ct = null, doctor = null, day }) => Number(db.prepare(`INSERT INTO crm_request_services
+    (request_id, service_id, consultation_type_id, doctor_id, scheduled_date, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', '2026-10-01T09:00:00Z')`)
+    .run(r, svc, ct, doctor, day).lastInsertRowid);
+  const vlineOf = (vid, { svc = null, ct = null, doctor = null }) => db.prepare(`INSERT INTO visit_services
+    (visit_id, service_id, consultation_type_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, ?, ?, ?, 1, 100, 100, 'added', 2)`).run(vid, svc, ct, doctor);
+  // запись врача 7 со строками визита: кардиолог, приём по виду, анализ
+  const c = visit('2026-10-30', 'cancelled');
+  linkTo(c, rid, 'callcenter');
+  vlineOf(c, { svc: 31, doctor: 7 }); vlineOf(c, { ct: 1, doctor: 7 }); vlineOf(c, { svc: 40 });
+  const s7 = wishOf(rid, { svc: 31, doctor: 7, day: '2026-10-30' });
+  const s8 = wishOf(rid, { svc: 31, doctor: 8, day: '2026-10-30' });
+  const sNone = wishOf(rid, { svc: 31, day: '2026-10-30' });
+  const ct7 = wishOf(rid, { ct: 1, doctor: 7, day: '2026-10-30' });
+  const ct8 = wishOf(rid, { ct: 1, doctor: 8, day: '2026-10-30' });
+  const lab8 = wishOf(rid, { svc: 40, doctor: 8, day: '2026-10-30' });
+  // запись v3.16 без строк визита: услуга и врач — в самом визите (врач 7)
+  const card2 = newCard();
+  const c2 = visit('2026-10-31', 'cancelled');
+  db.prepare('UPDATE visits SET service_id = 31 WHERE id = ?').run(c2);
+  linkTo(c2, card2, 'callcenter');
+  const v7 = wishOf(card2, { svc: 31, doctor: 7, day: '2026-10-31' });
+  const v8 = wishOf(card2, { svc: 31, doctor: 8, day: '2026-10-31' });
+  // строка визита без врача в визите врача 7 — врач строки тот же, что у визита
+  const card3 = newCard();
+  const c3 = visit('2026-11-01', 'cancelled');
+  linkTo(c3, card3, 'callcenter');
+  vlineOf(c3, { svc: 31 });
+  const n7 = wishOf(card3, { svc: 31, doctor: 7, day: '2026-11-01' });
+  const n8 = wishOf(card3, { svc: 31, doctor: 8, day: '2026-11-01' });
+  const out = crmOneWayRepair(db);
+  const released = (id) => row(db, id).released_from_visit_id;
+  for (const [id, w] of [[s7, c], [sNone, c], [ct7, c], [lab8, c], [v7, c2], [n7, c3]]) {
+    assert.deepEqual([row(db, id).scheduled_date, released(id)], [null, w], 'желание врача отменённой записи не отпущено: ' + id);
+  }
+  for (const [id, day] of [[s8, '2026-10-30'], [ct8, '2026-10-30'], [v8, '2026-10-31'], [n8, '2026-11-01']]) {
+    assert.deepEqual([row(db, id).scheduled_date, released(id)], [day, null], 'отпущено желание другого врача: ' + id);
+  }
+  assert.equal(out.counts.released_dated, 6);
+});
+
 test('CRM_ONE_WAY_V1 O8: исправление проходит один раз — отметка и итог; второй вызов ничего не делает', () => {
   const { db, visit, vline, cline } = base();
   const v = visit('2026-10-20');

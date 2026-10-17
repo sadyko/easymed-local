@@ -74,7 +74,9 @@ date; nothing is added to any visit automatically until the operator books again
   cancelled visit on that date) becomes a released undated wish (`released_from_visit_id` = that visit). Every row
   decided on is logged; visit lines and invoices are never touched; still once, in one transaction (migration 248).
   *Review r5:* (b) releases only a wish whose service was in that cancelled visit and that existed before the cancel,
-  and never when the card holds a live booking that day.
+  and never when the card holds a live booking that day. *Review r6:* "that day" includes the day a moved booking was
+  made for (its undo trail). For a service that needs a doctor, only a wish with no doctor or with that booking's
+  doctor is released.
 - **O9 Unchanged:** display links and CRM_LINK_ALL rules P-1…P-7 (they never copy); «Отказ» cancels call-centre
   bookings (cancellableBookingsOf); owner decisions (registrar never works in CRM; no card for walk-ins;
   «Пришёл»/«Отказ» closed forever; 72-hour window; «Не пришёл» reopenable); a card's STAGE never decides SERVICES.
