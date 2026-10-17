@@ -218,7 +218,8 @@ export function crmNoShowSweep(db, { day = null } = {}) {
        WHERE v.id IN (SELECT visit_id FROM crm_request_services
                        WHERE request_id = ? AND status = 'pending' AND visit_id IS NOT NULL
                       ${links ? 'UNION SELECT visit_id FROM crm_booking_links WHERE request_id = ?' : ''})
-         AND v.${LIVE_VISIT_SQL}`);
+         AND v.${LIVE_VISIT_SQL}
+         AND v.patient_id = (SELECT patient_id FROM crm_requests WHERE id = ?)`);   // CRM_ONE_WAY_V1 (O10) — визиты пациента карточки
     const cameOn = presentOn(db);
     // CRM_UNIFY_V1 (финальное ревью, A-I4) — отменённый в этот день визит пациента.
     const cancelledOn = db.prepare(`SELECT 1 FROM visits WHERE patient_id = ? AND ${localDate('visit_date')} = date(?)
@@ -227,7 +228,7 @@ export function crmNoShowSweep(db, { day = null } = {}) {
     const write = db.prepare('UPDATE crm_requests SET status = ? WHERE id = ? AND status = ?');
     db.transaction(() => {
       for (const L of leads) {
-        const books = links ? bookingsOf.all(L.id, L.id) : bookingsOf.all(L.id);
+        const books = links ? bookingsOf.all(L.id, L.id, L.id) : bookingsOf.all(L.id, L.id);
         let miss;
         if (books.length) {
           miss = books.every((b) => b.day < d0 && !cameBy(db, b))

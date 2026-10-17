@@ -265,13 +265,15 @@ test('отмена: строки возвращаются к ожиданию, �
   db.close();
 });
 
+// CRM_ONE_WAY_V1 (O10) — ОБНОВЛЕНО НАМЕРЕННО: дни записи — будущие. Живая запись — та, что ЖДЁТ
+// пациента (сегодня или позже, без прихода); прошедший визит, так и оставшийся «Записан», записью не держит.
 test('отмена одного дня из трёх: заявка остаётся записанной', () => {
   const db = freshDb();
-  const v1 = addVisit(db, '2026-08-09T09:00:00Z');
-  const v2 = addVisit(db, '2026-08-10T09:00:00Z');
-  const rid = addReq(db, { date: '2026-08-09' });
-  const d1 = addLine(db, rid, { date: '2026-08-09', visit: v1 });
-  addLine(db, rid, { date: '2026-08-10', visit: v2 });
+  const v1 = addVisit(db, '2030-08-09T09:00:00Z');
+  const v2 = addVisit(db, '2030-08-10T09:00:00Z');
+  const rid = addReq(db, { date: '2030-08-09' });
+  const d1 = addLine(db, rid, { date: '2030-08-09', visit: v1 });
+  addLine(db, rid, { date: '2030-08-10', visit: v2 });
 
   crmVisitStatus(db, { visitId: v1, from: 'scheduled', to: 'cancelled' });
 
@@ -281,7 +283,7 @@ test('отмена одного дня из трёх: заявка остаёт�
   // CRM_ONE_WAY_V1 (O4) — ОБНОВЛЕНО НАМЕРЕННО: строка отменённого дня вернулась в карточку без
   // дня, и ближайшая ждущая строка — второй день.
   assert.equal(db.prepare('SELECT scheduled_date FROM crm_request_services WHERE id = ?').get(d1).scheduled_date, null, 'строка отменённого дня сохранила день');
-  assert.equal(row.scheduled_date, '2026-08-10', 'дата обязана стать днём оставшейся записи');
+  assert.equal(row.scheduled_date, '2030-08-10', 'дата обязана стать днём оставшейся записи');
   db.close();
 });
 

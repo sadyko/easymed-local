@@ -274,16 +274,21 @@ export function deleteVs(db, id) {   // CRM_LINK_ALL_V1 — экспорт дл�
  */
 export function cardDateOf(db, requestId, fallback = null) {
   const day = today(db);
-  const live = "x.status NOT IN ('cancelled', 'no_show')";
+  // CRM_ONE_WAY_V1 (O10) — записанный день — визит, который ЖДЁТ пациента (не пришедший), и
+  // только визит пациента карточки: карточку перевели на другого пациента — визиты прежнего её
+  // дату не ставят (приватность при чтении, триггер мигр. 246 снят).
+  const live = "x.status IN ('scheduled', 'confirmed') AND x.patient_id = (SELECT patient_id FROM crm_requests WHERE id = @rid)"
+    + " AND NOT EXISTS (SELECT 1 FROM invoices dpi WHERE dpi.visit_id = x.id AND dpi.paid_amount > 0)"
+    + " AND NOT EXISTS (SELECT 1 FROM visit_services dps WHERE dps.visit_id = x.id AND dps.status IN ('collected', 'in_progress', 'resulted', 'completed'))";
   const booked = db.prepare(`
     SELECT MIN(d) AS d FROM (
       SELECT l.scheduled_date AS d FROM crm_request_services l
         JOIN visits x ON x.id = l.visit_id AND ${live}
-       WHERE l.request_id = ? AND l.status = 'pending' AND date(l.scheduled_date) >= date(?)
+       WHERE l.request_id = @rid AND l.status = 'pending' AND date(l.scheduled_date) >= date(@day)
       UNION ALL
       SELECT ${localDate('x.visit_date')} AS d FROM crm_booking_links b
         JOIN visits x ON x.id = b.visit_id AND ${live}
-       WHERE b.request_id = ? AND ${localDate('x.visit_date')} >= date(?))`).get(requestId, day, requestId, day);
+       WHERE b.request_id = @rid AND ${localDate('x.visit_date')} >= date(@day))`).get({ rid: requestId, day });
   if (booked && booked.d) return booked.d;
   const next = db.prepare(`SELECT MIN(scheduled_date) AS d FROM crm_request_services
                             WHERE request_id = ? AND status = 'pending' AND date(scheduled_date) >= date(?)`).get(requestId, day);
@@ -360,9 +365,12 @@ export function cancellableBookingsOf(db, requestId) {
   } catch { /* сборка без 187 */ }
   const day = today(db);
   const out = [];
+  const card = db.prepare('SELECT patient_id FROM crm_requests WHERE id = ?').get(requestId);
   for (const id of ids) {
     const v = visitRow(db, id);
     if (!isPreArrival(v) || v.day < day) continue;
+    // CRM_ONE_WAY_V1 (O10) — только записи пациента карточки (карточку могли перевести на другого).
+    if (!card || card.patient_id == null || Number(card.patient_id) !== Number(v.patient_id)) continue;
     if (visitHasWork(db, id)) continue;
     const creator = db.prepare('SELECT u.role, u.extra_roles FROM visits x JOIN users u ON u.id = x.created_by WHERE x.id = ?').get(id);
     if (!creator) continue;

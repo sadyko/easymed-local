@@ -46,6 +46,21 @@ import { cardDateOf } from './booking-mirror.js';   // CRM_UNIFY_V1 (ревью,
 import { attachHeldLines, releaseCancelled, restoreReleased } from './one-way.js';
 import { isDisplaySource } from './display-links.js';   // CRM_LINK_ALL_V1 (ред. 2б, P-3) — привязки «только для воронки»
 
+/**
+ * CRM_ONE_WAY_V1 (O10; повторы ревью раунда 3 G1c–G1e) — ЖИВАЯ ЗАПИСЬ: визит, который ЖДЁТ
+ * пациента — «Записан» или «Подтверждён», день сегодня или позже, и прихода по нему не видно
+ * (оплаты, работы над услугой). Прошедший визит, так и оставшийся 'scheduled' (отметку «Не
+ * пришёл» в клинике никто не ставит, проход меняет только карточку), записью больше не
+ * держит; визит, на котором видно приход, — история, а не запись. Одно правило для отмены
+ * («осталась ли у карточки запись»), «Не пришёл» (P-4) и следа отмены. `x` — алиас визитов.
+ */
+export function awaitingVisitSql(x) {
+  return `${x}.status IN ('scheduled', 'confirmed') AND ${localDate(`${x}.visit_date`)} >= date('now','localtime')
+    AND NOT EXISTS (SELECT 1 FROM invoices aw_i WHERE aw_i.visit_id = ${x}.id AND aw_i.paid_amount > 0)
+    AND NOT EXISTS (SELECT 1 FROM visit_services aw_s WHERE aw_s.visit_id = ${x}.id
+                       AND aw_s.status IN ('collected', 'in_progress', 'resulted', 'completed'))`;
+}
+
 /** Статусы визита, означающие «пациент здесь». Словарь — из миграции 003. */
 export const ARRIVED_STATUSES = Object.freeze(['arrived']);
 
@@ -397,9 +412,10 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
       // другой живой записи на сегодня или позже — строкой или привязкой любого
       // вида. Иначе неявка на запись регистратуры (C′) уносила карточку с живой
       // записью колл-центра на следующей неделе.
+      // CRM_ONE_WAY_V1 (O10) — «живая» — ждущая пациента (awaitingVisitSql).
       const otherAhead = db.prepare(`
         SELECT 1 FROM visits x
-         WHERE x.id <> @vid AND x.status NOT IN ('cancelled', 'no_show') AND ${localDate('x.visit_date')} >= date(@day)
+         WHERE x.id <> @vid AND ${awaitingVisitSql('x')} AND ${localDate('x.visit_date')} >= date(@day)
            AND (x.id IN (SELECT visit_id FROM crm_request_services WHERE request_id = @rid AND status = 'pending' AND visit_id IS NOT NULL)
                 OR x.id IN (SELECT visit_id FROM crm_booking_links WHERE request_id = @rid))
          LIMIT 1`);
@@ -447,15 +463,16 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     // считается и другая живая запись по привязке.
     let otherLink = () => false;
     try {
+      // CRM_ONE_WAY_V1 (O10) — живая запись ждёт пациента: прошедший 'scheduled' и пришедший — нет (G1c–G1e).
       const q = db.prepare(`SELECT 1 FROM crm_booking_links b JOIN visits v ON v.id = b.visit_id
-                             WHERE b.request_id = ? AND b.visit_id <> ? AND v.status NOT IN ('cancelled', 'no_show') LIMIT 1`);
+                             WHERE b.request_id = ? AND b.visit_id <> ? AND ${awaitingVisitSql('v')} LIMIT 1`);
       otherLink = (rid) => !!q.get(rid, id);
     } catch { /* сборка без 187 */ }
     // CRM_UNIFY_V1 (финальное ревью, A-I4) — «занятый день» — строка, которая
     // держит ЖИВОЙ визит (визит «Не пришёл» свою строку держит как след, но
     // записью уже не является).
     const lineBooked = db.prepare(`SELECT 1 FROM crm_request_services l JOIN visits v ON v.id = l.visit_id
-                                    WHERE l.request_id = ? AND l.status = 'pending' AND v.status NOT IN ('cancelled', 'no_show') LIMIT 1`);
+                                    WHERE l.request_id = ? AND l.status = 'pending' AND ${awaitingVisitSql('v')} LIMIT 1`);   // CRM_ONE_WAY_V1 (O10)
     const byLine = new Set(parents.map((p) => p.id));
     // CRM_LINK_ALL_V1 (редакция 2б, P-3) — ОТМЕНА ЗАПИСИ, ПРИВЯЗАННОЙ ТОЛЬКО ДЛЯ
     // ВОРОНКИ (C′, телефон), ВОЗВРАЩАЕТ КАРТОЧКУ: если карточка всё ещё в той
@@ -472,26 +489,46 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     //   • не осталось — возвращается САМЫЙ РАННИЙ след её записей (ступень и дата до
     //     первой из них), в любом порядке отмен; следы потрачены.
     const displayOnly = new Set(linked.filter((l) => isDisplaySource(l.source) && !byLine.has(l.id)).map((l) => l.id));
+    // CRM_ONE_WAY_V1 (O10; повторы G1a–G1c) — СЛЕД — ЭТОЙ ЗАПИСИ И ЖИВЫХ ЗАПИСЕЙ КАРТОЧКИ. След записи,
+    // которую отменили раньше, уходит в миг её отмены (ниже — переходит к живой записи карточки,
+    // если она есть: две записи, отменённые в любом порядке, возвращают ступень до первой, G-1b);
+    // след записи «Не пришёл» и пришедшей — история, не возвращается (иначе отмена новой записи
+    // стирала неявку и ход человека).
     const trailOf = (rid) => {
       try {
         return db.prepare(`SELECT u.* FROM crm_booking_undo u
                              WHERE u.request_id = ? AND u.visit_id IN (SELECT b.visit_id FROM crm_booking_links b
                                                                         WHERE b.request_id = u.request_id)
-                             ORDER BY u.id`).all(rid);
+                               AND (u.visit_id = ? OR EXISTS (SELECT 1 FROM visits tv WHERE tv.id = u.visit_id AND ${awaitingVisitSql('tv')}))
+                             ORDER BY u.id`).all(rid, id);
       } catch { return []; }   // сборка без 186
+    };
+    // След этой записи после отмены: переходит к ближайшей живой записи карточки (привязкой любого
+    // вида) или уходит. Восстановление ниже тратит следы само.
+    const passTrail = (rid) => {
+      try {
+        const next = db.prepare(`SELECT b.visit_id FROM crm_booking_links b JOIN visits v ON v.id = b.visit_id
+                                  WHERE b.request_id = ? AND b.visit_id <> ? AND ${awaitingVisitSql('v')}
+                                  ORDER BY v.visit_date, v.id LIMIT 1`).get(rid, id);
+        if (next) db.prepare('UPDATE crm_booking_undo SET visit_id = ? WHERE visit_id = ? AND request_id = ?').run(next.visit_id, id, rid);
+        else db.prepare('DELETE FROM crm_booking_undo WHERE visit_id = ? AND request_id = ?').run(id, rid);
+      } catch { /* сборка без 186/187 */ }
     };
     for (const p of withLinked()) {
       // Выигранную и проигранную заявку отмена визита не трогает вовсе:
       // «Пришёл» — это факт прошлого, и отменённая запись его не отменяет.
-      if (!open.includes(p.status)) continue;
+      if (!open.includes(p.status)) { passTrail(p.id); continue; }
       if (displayOnly.has(p.id)) {   // CRM_LINK_ALL_V1 (P-3)
         if (lineBooked.get(p.id) || otherLink(p.id)) {
           writeParent(quiet, p, p.status, cardDateOf(db, p.id, p.scheduled_date ?? null));   // G-1a — дата по живым записям
+          passTrail(p.id);   // CRM_ONE_WAY_V1 (O10) — след переходит к живой записи
           continue;
         }
         const trail = trailOf(p.id);
         const last = trail[trail.length - 1];
-        if (!last || !(last.set_status === p.status || (last.set_status === scheduled && bookedLike(p.status)))) continue;   // G-2
+        // CRM_ONE_WAY_V1 (O10) — карточка не в той ступени, что поставила запись (её передвинул
+        // человек, «Не пришёл»): ступень не возвращается, а след этой записи уходит (G1a).
+        if (!last || !(last.set_status === p.status || (last.set_status === scheduled && bookedLike(p.status)))) { passTrail(p.id); continue; }   // G-2
         writeParent(quiet, p, trail[0].prev_status, trail[0].prev_scheduled_date ?? null);   // I-5 — отмена не движение
         try {
           const spent = db.prepare('DELETE FROM crm_booking_undo WHERE id = ?');
@@ -515,6 +552,7 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
       const when = !stillBooked ? null : cardDateOf(db, p.id, (left && left.next) || null);   // G-1
       const undo = scheduled && bookedLike(p.status) && !stillBooked && first;   // CRM_LINK_ALL_V1 (F-2a) — и «Подтверждён»
       writeParent(quiet, p, undo ? first : p.status, when);   // CRM_UNIFY_V1 (ревью, I-5) — отмена не движение
+      passTrail(p.id);   // CRM_ONE_WAY_V1 (O10)
     }
   } catch (e) {
     console.error('[crm] заявки по визиту', visitId, 'не пересчитаны:', e && e.message);
