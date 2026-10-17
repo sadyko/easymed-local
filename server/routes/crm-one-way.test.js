@@ -293,3 +293,34 @@ test('CRM_ONE_WAY_V1 (решение контролёра R4): карточка 
     assert.deepEqual([t.lead(rid2).status, t.lead(rid2).scheduled_date], ['in_process', null], 'отмена переписала ход человека');
   } finally { t.close(); }
 });
+
+// Ревью r4 (п. 7) — дата карточки пересчитывается или стирается отменой, только когда она — день отменённой
+// записи. Дату, которую поставил человек, не трогает ни отмена при живой второй записи, ни отмена последней.
+test('CRM_ONE_WAY_V1 (ревью r4, п. 7): дата карточки, поставленная человеком, переживает отмены записей; дата дня отменённой записи — пересчитывается', async () => {
+  const t = await startCrmApp(seed);
+  try {
+    const D7 = localDay(7);
+    const D9 = localDay(9);
+    const rid = addLead(t.db, { assigned: 3 });
+    addLine(t.db, rid, { svc: 30, day: D3, doctor: 10 });
+    addLine(t.db, rid, { svc: 40, day: D2 });
+    addLine(t.db, rid, { svc: 40, day: D7 });
+    const book = async (day, svc) => {
+      const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, service_id: svc, start: at(day, 12), duration_minutes: 30, status: 'scheduled' });
+      assert.equal(b.status, 200, b.text);
+      return b.json.data.visit.id;
+    };
+    const v3 = await book(D3, 30);
+    const v5 = await book(D2, 40);
+    const v7 = await book(D7, 40);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['scheduled', D3]);
+    assert.equal((await cancel(t, v3, D3, 12)).status, 200);
+    assert.equal(t.lead(rid).scheduled_date, D2, 'дата дня отменённой записи не пересчитана по живым');
+    const up = await t.dbq('cc', { table: 'crm_requests', op: 'update', values: { scheduled_date: D9 }, filters: [{ col: 'id', op: 'eq', val: rid }] });
+    assert.equal(up.status, 200, up.text);
+    assert.equal((await cancel(t, v5, D2, 12)).status, 200);
+    assert.deepEqual([t.lead(rid).status, t.lead(rid).scheduled_date], ['scheduled', D9], 'отмена при живой записи переписала дату человека');
+    assert.equal((await cancel(t, v7, D7, 12)).status, 200);
+    assert.equal(t.lead(rid).scheduled_date, D9, 'отмена последней записи стёрла дату человека');
+  } finally { t.close(); }
+});

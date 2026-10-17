@@ -530,13 +530,18 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
     //   • следа нет вовсе: привязка «только для воронки» — ничего (P-3); иначе (карточку завела сама
     //     запись колл-центра, базы до следа) — прежнее правило: из «Записан» / «Подтверждён» — в первую
     //     открытую колонку, дата стирается (A-I4).
+    // Ревью r4 (п. 7) — ДАТУ ЧЕЛОВЕКА ОТМЕНА НЕ ТРОГАЕТ: во всех ветках выше дата карточки
+    // пересчитывается или стирается, только когда она — день отменённой записи. Оператор, пока запись
+    // жила, перенёс карточку в «Перезвонить» на D7 — отмена оставляет и ступень, и D7.
+    const humanDate = (p) => !!p.scheduled_date && String(p.scheduled_date).slice(0, 10) !== visit.day;
+    const dateAfter = (p, computed) => (humanDate(p) ? p.scheduled_date : computed);
     for (const p of withLinked()) {
       // Выигранную и проигранную заявку отмена визита не трогает вовсе:
       // «Пришёл» — это факт прошлого, и отменённая запись его не отменяет.
       if (!open.includes(p.status)) { passTrail(p.id); continue; }
       const left = pendingLeft.get(p.id);
       if (lineBooked.get(p.id) || otherLink(p.id)) {
-        writeParent(quiet, p, p.status, cardDateOf(db, p.id, (left && left.next) || null));   // G-1 — дата по живым записям
+        writeParent(quiet, p, p.status, dateAfter(p, cardDateOf(db, p.id, (left && left.next) || null)));   // G-1 — дата по живым записям
         passTrail(p.id);   // след переходит к живой записи
         continue;
       }
@@ -544,7 +549,7 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
       const last = trail[trail.length - 1];
       if (last) {
         if (last.set_status === p.status || (last.set_status === scheduled && bookedLike(p.status))) {   // G-2
-          writeParent(quiet, p, trail[0].prev_status, trail[0].prev_scheduled_date ?? null);   // I-5 — отмена не движение
+          writeParent(quiet, p, trail[0].prev_status, dateAfter(p, trail[0].prev_scheduled_date ?? null));   // I-5 — отмена не движение
           try {
             const spent = db.prepare('DELETE FROM crm_booking_undo WHERE id = ?');
             for (const u of trail) spent.run(u.id);   // G-1b — следы этих записей потрачены
@@ -552,13 +557,13 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false } = {}) 
           continue;
         }
         // Человек передвинул карточку или «Не пришёл»: ступень его, дата — по тому, что осталось (G1a).
-        writeParent(quiet, p, p.status, cardDateOf(db, p.id, null));
+        writeParent(quiet, p, p.status, dateAfter(p, cardDateOf(db, p.id, null)));   // ревью r4, п. 7
         passTrail(p.id);
         continue;
       }
       if (displayOnly.has(p.id)) { passTrail(p.id); continue; }   // CRM_LINK_ALL_V1 (P-3) — без следа ничего
       const undo = scheduled && bookedLike(p.status) && first;   // CRM_LINK_ALL_V1 (F-2a) — и «Подтверждён»
-      writeParent(quiet, p, undo ? first : p.status, null);   // CRM_UNIFY_V1 (A-I4) — дата стирается
+      writeParent(quiet, p, undo ? first : p.status, dateAfter(p, null));   // CRM_UNIFY_V1 (A-I4) — дата стирается (день записи)
       passTrail(p.id);   // CRM_ONE_WAY_V1 (O10)
     }
   } catch (e) {
