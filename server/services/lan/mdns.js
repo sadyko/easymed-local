@@ -108,6 +108,7 @@ export function createMdnsResponder({
   const lastMc = new Map();          // запись|карта → когда отправлена multicast
   let legacyAt = 0, legacyN = 0;     // окно «обычных» ответов
   let pending = null;                // притязания на наше имя в текущем окне
+  let settle = null;                 // завершить ещё не завершённый start()
 
   const fqdn = () => nextName(base, attempt) + '.local';
   const logOnce = (key, msg) => { if (logged.has(key)) return; logged.add(key); try { log('[mdns] ' + msg); } catch { /* журнал не важнее сервера */ } };
@@ -298,6 +299,13 @@ export function createMdnsResponder({
   function joinAll() {
     if (!joinMulticast) return;
     let failed = 0;
+    // Карта пропала — выйти из группы на её адресе и забыть его: вернётся — войдёт заново.
+    const now = new Set(ifaces().map((i) => i.address));
+    for (const addr of [...joined]) {
+      if (now.has(addr)) continue;
+      try { sock.dropMembership(group, addr); } catch { /* адреса уже нет — система сняла сама */ }
+      joined.delete(addr);
+    }
     for (const it of ifaces()) {
       if (joined.has(it.address)) continue;
       try { sock.addMembership(group, it.address); joined.add(it.address); }
@@ -311,7 +319,10 @@ export function createMdnsResponder({
     start() {
       stopped = false;
       state = 'starting'; reason = '';
-      return new Promise((resolve) => {
+      return new Promise((done) => {
+        // stop() до привязки сокета (включили и тут же выключили) тоже завершает обещание.
+        const resolve = () => { if (settle === resolve) settle = null; done(); };
+        settle = resolve;
         try { sock = createSocket({ type: 'udp4', reuseAddr: true }); }
         catch (e) { fail(e); resolve(); return; }
         sock.on('error', (e) => {
@@ -338,6 +349,7 @@ export function createMdnsResponder({
     },
     stop() {
       stopped = true; gen++;
+      if (settle) settle();
       for (const t of timers) clearTimeout(t);
       timers.clear();
       try { if (sock) sock.close(); } catch { /* уже закрыт */ }

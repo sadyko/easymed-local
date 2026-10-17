@@ -221,3 +221,30 @@ test('конфликт сам повторяет пробу через retryAfte
   assert.ok(await until(() => r.status().state === 'active', 1000), JSON.stringify(r.status()));
   assert.equal(r.status().name, 'easymed.local');
 });
+
+test('start() и сразу stop() (включили и тут же выключили) — обещание start() завершается', async () => {
+  const r = createMdnsResponder({ baseName: 'easymed', port: 0, bindAddress: '127.0.0.1', joinMulticast: false,
+    announceTo: { address: '127.0.0.1', port: 9 }, getInterfaces: () => [], log: () => {} });
+  const p = r.start();
+  r.stop();
+  const res = await Promise.race([p.then(() => 'settled'), new Promise((x) => setTimeout(() => x('hung'), 500))]);
+  assert.equal(res, 'settled');
+});
+
+test('карта пропала — её членство в группе снимается (и вернувшаяся карта входит заново)', async (t) => {
+  let list = [IF('Ethernet', '192.168.1.156'), IF('Wi-Fi', '192.168.0.20')];
+  const sock = new FakeSocket();
+  const joins = [], drops = [];
+  sock.addMembership = (g, a) => joins.push(a);
+  sock.dropMembership = (g, a) => drops.push(a);
+  const r = createMdnsResponder({ baseName: 'easymed', getInterfaces: () => list, probeIntervalMs: 2, createSocket: () => sock, log: () => {} });
+  t.after(() => r.stop());
+  await r.start();
+  assert.deepEqual(joins.sort(), ['192.168.0.20', '192.168.1.156']);
+  list = [IF('Ethernet', '192.168.1.156')];
+  r.refresh();
+  assert.deepEqual(drops, ['192.168.0.20']);
+  list = [IF('Ethernet', '192.168.1.156'), IF('Wi-Fi', '192.168.0.20')];
+  r.refresh();
+  assert.deepEqual(joins.filter((a) => a === '192.168.0.20').length, 2);
+});
