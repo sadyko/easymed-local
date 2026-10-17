@@ -138,6 +138,12 @@ test('CRM_ONE_WAY_V1 O8 (ревью r4): датированное желание
   const live = visit('2026-10-24');
   linkTo(live, card3, 'match');
   const liveDay = cline({ rid: card3, day: '2026-10-24' });
+  // привязка «только для воронки» строк карточки не брала никогда (O9) — её отмена не доказательство
+  const card4 = newCard();
+  const c4 = visit('2026-10-26', 'cancelled');
+  linkTo(c4, card4, 'patient');
+  db.prepare("INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, set_status) VALUES (?, ?, 'in_process', 'scheduled')").run(c4, card4);
+  const displayDay = cline({ rid: card4, day: '2026-10-26' });
   const rows = count(db);
   const out = crmOneWayRepair(db);
   assert.equal(count(db), rows);
@@ -145,7 +151,7 @@ test('CRM_ONE_WAY_V1 O8 (ревью r4): датированное желание
   assert.deepEqual([s.status, s.scheduled_date, s.visit_id, s.released_from_visit_id, s.released_vs_id], ['pending', null, null, c, null]);
   const t2 = row(db, byTrail);
   assert.deepEqual([t2.scheduled_date, t2.released_from_visit_id], [null, c2]);
-  for (const [id, day] of [[otherDay, '2026-10-23'], [stranger, '2026-10-20'], [liveDay, '2026-10-24']]) {
+  for (const [id, day] of [[otherDay, '2026-10-23'], [stranger, '2026-10-20'], [liveDay, '2026-10-24'], [displayDay, '2026-10-26']]) {
     assert.deepEqual([row(db, id).scheduled_date, row(db, id).released_from_visit_id], [day, null], 'тронуто желание без отменённой записи своего дня: ' + id);
   }
   assert.equal(row(db, undated).released_from_visit_id, null);

@@ -43,12 +43,14 @@
 //      прежняя «голая» отмена оставляла строке день и снимала визит — и строка садилась в любую
 //      следующую запись того дня (повтор O8-B). Доказательство отмены — след записи карточки
 //      (crm_booking_undo) или её привязка (crm_booking_links) на отменённый визит этого дня;
-//      строка становится отпущенным желанием без дня с отметкой этого визита.
+//      строка становится отпущенным желанием без дня с отметкой этого визита. Привязка «только для
+//      воронки» (C′, телефон) строк карточки не брала никогда (O9) — её отменённый визит не доказательство.
 // НИКОГДА: удаление строк; строки визитов, счета, платежи, ступени и даты карточек; снятые строки
 // ('cancelled'). Каждая строка, о которой принято решение, — строка crm_one_way_repair_log; итог —
 // отметка crm_one_way_repair и одна строка журнала сервера. Правки, журнал и отметка — одна
 // транзакция: упало — ничего, повтор при следующем запуске; отметка стоит — второй раз ничего.
 import { localDate } from '../domain/day.js';
+import { displayLinkSql } from './display-links.js';
 
 const COPY_GAP_SECONDS = 2;
 const RACED = Symbol('crm-one-way-repair-raced');
@@ -126,7 +128,9 @@ export function crmOneWayRepair(db) {
                (SELECT MAX(w.id) FROM visits w
                  WHERE w.status = 'cancelled' AND ${localDate('w.visit_date')} = date(l.scheduled_date)
                    AND (w.id IN (SELECT u.visit_id FROM crm_booking_undo u WHERE u.request_id = l.request_id)
-                        OR w.id IN (SELECT b.visit_id FROM crm_booking_links b WHERE b.request_id = l.request_id))) AS w_id
+                        OR w.id IN (SELECT b.visit_id FROM crm_booking_links b WHERE b.request_id = l.request_id))
+                   AND NOT EXISTS (SELECT 1 FROM crm_booking_links b WHERE b.visit_id = w.id AND b.request_id = l.request_id
+                                      AND ${displayLinkSql('b')})) AS w_id
           FROM crm_request_services l
          WHERE l.status = 'pending' AND l.visit_id IS NULL AND l.visit_service_id IS NULL
            AND l.released_from_visit_id IS NULL AND l.scheduled_date IS NOT NULL AND l.scheduled_date <> ''
