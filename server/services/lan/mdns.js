@@ -46,6 +46,12 @@ export const DEFAULT_BASE = 'easymed';
 const MAX_ATTEMPT = 8;   // easymed, easymed-2 … easymed-9
 const RATE_MS = 1000;    // RFC 6762 §6: одна и та же запись в одну сеть — не чаще раза в секунду
 const LEGACY_PER_SEC = 20;
+// Пакет с нашим именем перечитывает карты, если список старше секунды: после продления
+// DHCP (.147 → .156) ответ не должен нести старый адрес до следующего такта, а сервер,
+// запущенный раньше DHCP, — молчать минуту (повторная перепроверка 2026-10-17, R2).
+// Не чаще раза в секунду — ~1 мс os.networkInterfaces() в секунду, и только когда
+// кто-то спрашивает нас или спорит с нами.
+const IFACE_MAX_AGE_MS = 1000;
 
 /**
  * Можно ли поднимать ответчик. EASYMED_MDNS=0|off|false|no — выключено всегда.
@@ -104,7 +110,7 @@ export function createMdnsResponder({
   const logged = new Set();
   const joined = new Set();
   let announcedKey = '';
-  let cache = null;                  // список карт: запуск и refresh(), не каждый пакет
+  let cache = null, cacheAt = 0;     // список карт: запуск, refresh() и пакет с нашим именем — не чаще раза в секунду
   const lastMc = new Map();          // запись|карта → когда отправлена multicast
   let legacyAt = 0, legacyN = 0;     // окно «обычных» ответов
   let pending = null;                // притязания на наше имя в текущем окне
@@ -118,8 +124,21 @@ export function createMdnsResponder({
     timers.add(t);
   };
   const readIfaces = () => { try { const l = getInterfaces(); return Array.isArray(l) ? l : []; } catch { return []; } };
-  const reload = () => { cache = readIfaces(); return cache; };
+  const reload = () => { cache = readIfaces(); cacheAt = now(); return cache; };
   const ifaces = () => cache || reload();
+  const keyOf = (l) => l.map((i) => i.address).join(',');
+  // Для пакета, где есть наше имя: список не старше секунды; адреса сменились — войти
+  // в группу на новых картах и объявить себя новым адресом (cache-flush у соседей).
+  function freshIfaces() {
+    if (cache && now() - cacheAt < IFACE_MAX_AGE_MS) return cache;
+    const before = cache ? keyOf(cache) : null;
+    reload();
+    if (bound && before !== keyOf(cache)) {
+      joinAll();
+      if (state === 'active' && cache.length) announce();
+    }
+    return cache;
+  }
   // Не чаще раза в секунду на запись (имя) и карту — отдельно для объявлений
   // ('ann') и ответов на вопросы ('ans'): вопрос через 20 мс после объявления
   // (Windows не помнит объявлений, о которых не спрашивала) всё равно получит ответ.
@@ -243,7 +262,7 @@ export function createMdnsResponder({
       // не конфликт. ВОПРОС со своего адреса — другое дело: это служба DNS-клиента
       // Windows на этом же ПК (браузер сервера открыл <имя>.local), ему отвечаем.
       // Свои пробы сюда не попадают: пока идёт проба, на вопросы мы не отвечаем.
-      const list = ifaces();
+      const list = freshIfaces();
       const mine = list.map((i) => i.address);
       if (mine.includes(rinfo.address)) return;
       if (!neighbourIfaces(list, rinfo.address)) return;   // притязание не из нашей сети — не наше дело
@@ -267,7 +286,7 @@ export function createMdnsResponder({
     // Только соседям и только их подсетью: вопрос не из наших подсетей (8.8.8.8 через
     // проброс порта, VPN) остаётся без ответа, и адресов другой сети никто не получает
     // (перепроверка 2026-10-17: «обычный» вопрос с 8.8.8.8 получал оба адреса сервера).
-    const use = neighbourIfaces(ifaces(), rinfo.address);
+    const use = neighbourIfaces(freshIfaces(), rinfo.address);
     if (!use || !use.length) return;
     const addresses = use.map((i) => i.address);
     if (rinfo.port !== boundPort) {

@@ -246,3 +246,16 @@ test('stop() закрывает сокет и больше не отвечает
   assert.equal(sock.closed, true);
   assert.equal(r.status().state, 'stopped');
 });
+
+test('карты перечитываются пакетом с нашим именем не чаще раза в секунду, а чужие пакеты их не трогают', async (t) => {
+  let clock = 5000000, reads = 0;
+  const { r, sock } = await fakeResponder(t, {}, { now: () => clock, getInterfaces: () => { reads++; return HERE; } });
+  await until(() => r.status().state === 'active');
+  clock += 2000;   // список постарел
+  const before = reads;
+  for (let i = 0; i < 100; i++) {
+    sock.emit('message', buildQuery('easymed.local', { type: TYPE_A }), fromLan('192.168.1.30'));
+    sock.emit('message', buildQuery('printer.local', { type: TYPE_A }), fromLan('192.168.1.30'));
+  }
+  assert.equal(reads - before, 1);
+});

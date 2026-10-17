@@ -156,3 +156,22 @@ test('R7: forged claim from a neighbour with a plausible lower on-subnet address
   await wait(400);
   console.log('# R7 after one forged plausible claim:', JSON.stringify(r.status()));
 });
+
+test('R2: DHCP renewal .147 -> .156 between 60-s ticks: an answer must not carry the old address', async (t) => {
+  let NET = [IF('Ethernet', '192.168.1.147')];
+  const { sock } = await one(t, () => NET);
+  NET = [IF('Ethernet', '192.168.1.156')];       // renewal; refresh() not yet called by the minute tick
+  sock.emit('message', buildQuery('easymed.local', { type: TYPE_A }), { address: '192.168.1.40', port: 5353 });
+  const a = sock.sent.flatMap((s) => (s.m ? s.m.answers.map((x) => x.address) : []));
+  console.log('# R2 answer after renewal:', JSON.stringify(a));
+  assert.ok(!a.includes('192.168.1.147'), 'stale answer ' + JSON.stringify(a) + ' (cache-flush TTL 120 s on the client)');
+});
+
+test('R2b: started before DHCP (no address) -> address arrives -> answers before the next 60-s tick', async (t) => {
+  let NET = [];
+  const { sock } = await one(t, () => NET);
+  NET = [IF('Ethernet', '192.168.1.156')];
+  sock.emit('message', buildQuery('easymed.local', { type: TYPE_A }), { address: '192.168.1.40', port: 5353 });
+  console.log('# R2b answers:', sock.sent.length);
+  assert.ok(sock.sent.length > 0, 'no answer until refresh()');
+});
