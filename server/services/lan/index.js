@@ -20,6 +20,7 @@ let ctx = null;
 let responder = null;
 let lastFailure = null;
 const loggedOnce = new Set();
+let lastChangeLogged = '';   // какую смену уже написали в журнал окна
 
 function baseNameOf(db) {
   try { return normalizeBase(readSlug(db)); } catch { return DEFAULT_BASE; }
@@ -35,7 +36,11 @@ function recordNow() {
   const r = recordAddresses(ctx.dataDir, { interfaces: interfacesOf(ctx) });
   if (r.error) logOnce('write', '[lan] не удалось запомнить адрес этого ПК: ' + r.error);
   if (r.changed && r.state.change) {
-    // Не logOnce: каждая смена — своя строка в журнале окна Easy-Med.
+    // Каждая НОВАЯ смена — своя строка в журнале окна; та же самая (файл не записался,
+    // и такт снова видит «было → стало») — не каждую минуту (перепроверка 2026-10-17).
+    const key = r.state.change.from.join(',') + '>' + r.state.change.to.join(',');
+    if (key === lastChangeLogged) return;
+    lastChangeLogged = key;
     try {
       ctx.log(`  Адрес сервера в сети изменился: было ${r.state.change.from.join(', ')}, стало ${r.state.change.to.join(', ')}.`);
       ctx.log('  Другие компьютеры и анализаторы могут не находить сервер — закрепите адрес в роутере (Настройки → Адрес в сети).');
@@ -111,7 +116,7 @@ export function stopLanAddress() {
   if (ctx && ctx.timer) clearInterval(ctx.timer);
   if (responder) { try { responder.stop(); } catch { /* уже */ } }
   responder = null; ctx = null; lastFailure = null;
-  loggedOnce.clear();
+  loggedOnce.clear(); lastChangeLogged = '';
 }
 
 /**

@@ -119,3 +119,20 @@ test('Wi-Fi вернулся с ДРУГИМ адресом — это смен�
   recordAddresses(dir, { interfaces: wifi('192.168.1.160'), now: at(4) });
   assert.equal(visibleChange(readLanState(dir)), null, 'старый адрес вернулся — компьютеры снова находят сервер');
 });
+
+// ---- журнал -------------------------------------------------------------------
+import { tickLanAddress } from './index.js';
+import { LAN_FILE } from './state.js';
+test('папку данных нельзя записать, адрес сменился — такт раз в минуту не пишет смену в журнал каждую минуту', async (t) => {
+  const dir = tmp(t);
+  let NET = { 'Ethernet': [v4('192.168.1.147')] };
+  const logs = [];
+  await startLanAddress(null, dir, { getInterfaces: () => NET, tickMs: 0, port: 8000, log: (m) => logs.push(m), env: { EASYMED_MDNS: '0' } });
+  t.after(() => stopLanAddress());
+  assert.deepEqual(readLanState(dir).addresses, ['192.168.1.147']);
+  // запись больше не удаётся: имя временного файла занято папкой (вместо папки «только для чтения»)
+  fs.mkdirSync(path.join(dir, LAN_FILE + '.tmp-' + process.pid));
+  NET = { 'Ethernet': [v4('192.168.1.156')] };
+  for (let i = 0; i < 10; i++) tickLanAddress();   // десять минут
+  assert.ok(logs.length <= 3, 'log lines: ' + logs.length + ' ' + JSON.stringify(logs.slice(0, 4)));
+});
