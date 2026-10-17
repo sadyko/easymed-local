@@ -3,7 +3,7 @@
 // чистые данные: тест не зависит от сетевых карт машины, на которой идёт.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { realLanInterfaces, lanAddressList, detectChange, formatMac, routerHint } from './interfaces.js';
+import { realLanInterfaces, lanAddressList, lanCards, detectChange, formatMac, routerHint } from './interfaces.js';
 
 const v4 = (address, mac, extra = {}) => ({ address, netmask: '255.255.255.0', family: 'IPv4', mac, internal: false, cidr: address + '/24', ...extra });
 const v6 = (address, mac) => ({ address, netmask: 'ffff:ffff:ffff:ffff::', family: 'IPv6', mac, internal: false, scopeid: 0, cidr: address + '/64' });
@@ -59,25 +59,62 @@ test('мусор на входе не роняет: null, не-объект, к�
   assert.deepEqual(realLanInterfaces({ a: [{ family: 'IPv4', address: 'не адрес', internal: false }] }), []);
 });
 
-test('смена адреса: .147 → .156 — смена, было/стало', () => {
-  assert.deepEqual(detectChange(['192.168.1.147'], ['192.168.1.156']),
+// Перепроверка 2026-10-17: смена — когда ТА ЖЕ карта (тот же MAC) получила другой адрес.
+// Карта появилась или исчезла (VPN, хот-спот, Wi-Fi позже кабеля) — не смена.
+const card = (key, ...addresses) => ({ key, adapter: key, addresses });
+const ETH = 'a4:bb:6d:12:34:56', WIFI = 'd8:5e:d3:01:02:03';
+
+test('смена адреса: та же карта .147 → .156 — смена, было/стало', () => {
+  assert.deepEqual(detectChange([card(ETH, '192.168.1.147')], [card(ETH, '192.168.1.156')]),
     { changed: true, skip: false, from: ['192.168.1.147'], to: ['192.168.1.156'] });
 });
 
-test('не смена: тот же адрес; добавился второй (старый работает); первый запуск', () => {
-  assert.equal(detectChange(['192.168.1.147'], ['192.168.1.147']).changed, false);
-  assert.equal(detectChange(['192.168.1.147'], ['10.0.0.5', '192.168.1.147']).changed, false);
-  assert.deepEqual(detectChange([], ['192.168.1.147']), { changed: false, skip: false, from: [], to: ['192.168.1.147'] });
-  assert.deepEqual(detectChange(undefined, ['192.168.1.147']), { changed: false, skip: false, from: [], to: ['192.168.1.147'] });
+test('не смена: тот же адрес; у карты добавился второй адрес; первый запуск', () => {
+  assert.equal(detectChange([card(ETH, '192.168.1.147')], [card(ETH, '192.168.1.147')]).changed, false);
+  assert.equal(detectChange([card(ETH, '192.168.1.147')], [card(ETH, '192.168.1.147', '10.0.0.5')]).changed, false);
+  assert.deepEqual(detectChange([], [card(ETH, '192.168.1.147')]), { changed: false, skip: false, from: [], to: [] });
+  assert.deepEqual(detectChange(undefined, [card(ETH, '192.168.1.147')]), { changed: false, skip: false, from: [], to: [] });
 });
 
-test('пропала одна из двух карт — смена (тот, кто ходил на неё, сервер потерял)', () => {
-  assert.deepEqual(detectChange(['192.168.0.20', '192.168.1.145'], ['192.168.1.145']),
-    { changed: true, skip: false, from: ['192.168.0.20', '192.168.1.145'], to: ['192.168.1.145'] });
+test('карта исчезла или появилась (Wi-Fi выключен, VPN, вторая карта) — не смена: адрес оставшейся прежний', () => {
+  assert.equal(detectChange([card(ETH, '192.168.1.145'), card(WIFI, '192.168.0.20')], [card(ETH, '192.168.1.145')]).changed, false);
+  assert.equal(detectChange([card(ETH, '192.168.1.145')], [card(ETH, '192.168.1.145'), card(WIFI, '192.168.0.20')]).changed, false);
 });
 
 test('сейчас адреса нет (кабель выдернут при запуске) — не смена и не запоминать', () => {
-  assert.deepEqual(detectChange(['192.168.1.147'], []), { changed: false, skip: true, from: ['192.168.1.147'], to: [] });
+  assert.deepEqual(detectChange([card(ETH, '192.168.1.147')], []), { changed: false, skip: true, from: [], to: [] });
+});
+
+test('карты по ключу: MAC (одна карта — несколько адресов), без MAC — по имени карты', () => {
+  const ifaces = { 'Ethernet': [v4('192.168.1.156', ETH), v4('10.0.0.5', ETH)], 'Wi-Fi': [v4('192.168.0.20', '')] };
+  assert.deepEqual(lanCards(realLanInterfaces(ifaces)), [
+    { key: 'a4:bb:6d:12:34:56', adapter: 'Ethernet', addresses: ['10.0.0.5', '192.168.1.156'] },
+    { key: 'name:Wi-Fi', adapter: 'Wi-Fi', addresses: ['192.168.0.20'] },
+  ]);
+});
+
+test('не сеть клиники никогда: MAC из нулей (WireGuard, PPP), хот-спот 192.168.137.x, Default Switch и WSL, AnyConnect/Forti/GlobalProtect по MAC', () => {
+  const ifaces = {
+    'Ethernet': [v4('192.168.1.156', ETH)],
+    'clinic-hq': [v4('10.8.0.2', '00:00:00:00:00:00')],
+    'Подключение по локальной сети* 10': [v4('192.168.137.1', '1a:2b:3c:4d:5e:6f')],
+    'vEthernet (Default Switch)': [v4('172.20.48.1', '00:15:5d:aa:bb:cc', { netmask: '255.255.240.0' })],
+    'vEthernet (WSL)': [v4('172.27.0.1', '00:15:5d:dd:ee:ff', { netmask: '255.255.240.0' })],
+    'Ethernet 5': [v4('10.20.0.3', '00:05:9a:3c:7a:00')],   // Cisco AnyConnect
+    'Ethernet 6': [v4('10.21.0.3', '00:09:0f:fe:00:01')],   // FortiClient
+    'Ethernet 7': [v4('10.22.0.3', '02:50:41:00:00:01')],   // GlobalProtect (PANGP)
+  };
+  assert.deepEqual(lanAddressList(ifaces), ['192.168.1.156']);
+  // Без кабеля — пусто, а не «что есть»: туннели и хот-спот — не адрес сервера для клиники.
+  delete ifaces.Ethernet;
+  assert.deepEqual(lanAddressList(ifaces), []);
+});
+
+test('сервер внутри виртуальной машины (MAC VMware/VirtualBox/Hyper-V гостя) — его карта и есть сеть клиники', () => {
+  assert.deepEqual(lanAddressList({ 'Ethernet0': [v4('192.168.1.80', '00:0c:29:11:22:33')] }), ['192.168.1.80']);
+  assert.deepEqual(lanAddressList({ 'Ethernet': [v4('192.168.1.81', '08:00:27:11:22:33')] }), ['192.168.1.81']);
+  // …но при настоящей карте рядом предпочитается настоящая.
+  assert.deepEqual(lanAddressList({ 'Ethernet': [v4('192.168.1.82', ETH)], 'Ethernet 2': [v4('192.168.56.10', '08:00:27:11:22:33')] }), ['192.168.1.82']);
 });
 
 test('MAC — как «Физический адрес» в ipconfig /all', () => {

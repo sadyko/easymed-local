@@ -13,29 +13,52 @@
 
 const IPV4_RE = /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 
-// Имена виртуальных и туннельных карт. На них «адрес сервера» искать нельзя:
-// 192.168.56.1 VirtualBox или 172.27.x.x WSL другие компьютеры клиники не видят,
-// а подсказать их человеку — отправить его настраивать роутер не на тот адрес.
-const VIRTUAL_NAME_RE = /virtualbox|vbox|vmware|vmnet|hyper-v|vethernet|\bwsl\b|docker|\btap\b|tap-|\btun\b|wireguard|\bwg\d|openvpn|tailscale|zerotier|hamachi|radmin|vpn|bluetooth|npcap|loopback|pseudo-interface|teredo|isatap/i;
-// MAC виртуальных карт, когда имя переименовано («Ethernet 3»): VMware, VirtualBox,
-// Hyper-V, Docker, TAP-Windows (OpenVPN).
-const VIRTUAL_MAC_PREFIXES = ['00:05:69', '00:0c:29', '00:1c:14', '00:50:56', '08:00:27', '0a:00:27', '00:15:5d', '02:42:', '00:ff:'];
+// ДВА СОРТА «НЕ ТОЙ» КАРТЫ (перепроверка 2026-10-17).
+//
+// НИКОГДА не сеть клиники — отбрасываются всегда: туннели и VPN (WireGuard и
+// встроенный PPP/IKEv2 Windows отдают MAC из нулей и любое имя, которое дал
+// человек: «clinic-hq», «Офис»; AnyConnect, FortiClient, GlobalProtect зовутся
+// «Ethernet N» — узнаются по MAC), сети «внутри» ПК (VirtualBox Host-Only, VMnet1/8
+// VMware, Default Switch и WSL Hyper-V — две последние получают новую подсеть при
+// каждом запуске), Docker, Bluetooth, мобильный хот-спот Windows (192.168.137.x).
+// Их подключение и отключение — не «адрес сервера изменился».
+//
+// ВОЗМОЖНО сеть клиники — берутся, только если настоящих карт нет: Hyper-V
+// vEthernet с внешним коммутатором и карты гостя виртуальной машины (MAC VMware,
+// VirtualBox, Hyper-V): Easy-Med, запущенный внутри ВМ, видит сеть только так.
+const NEVER_NAME_RE = /virtualbox|vbox|vmware|vmnet|default switch|\bwsl\b|docker|\btap\b|tap-|\btun\b|wireguard|\bwg\d|openvpn|tailscale|zerotier|hamachi|radmin|vpn|anyconnect|fortinet|forticlient|pangp|globalprotect|bluetooth|npcap|loopback|pseudo-interface|teredo|isatap/i;
+const NEVER_MAC_PREFIXES = [
+  '00:00:00:00:00:00',   // туннели: WireGuard/Wintun, PPP/IKEv2
+  '00:ff:',              // TAP-Windows (OpenVPN)
+  '00:05:9a',            // Cisco AnyConnect
+  '00:09:0f',            // FortiClient
+  '02:50:41',            // GlobalProtect (PANGP)
+  '02:42:',              // Docker
+  '0a:00:27',            // VirtualBox Host-Only (сторона хоста)
+  '00:50:56:c0:00',      // VMware VMnet1/VMnet8 (сторона хоста)
+];
+const MAYBE_NAME_RE = /hyper-v|vethernet/i;
+const MAYBE_MAC_PREFIXES = ['00:05:69', '00:0c:29', '00:1c:14', '00:50:56', '08:00:27', '00:15:5d'];
 
 const isIpv4 = (a) => typeof a === 'string' && IPV4_RE.test(a);
 const isLinkLocal = (a) => a.startsWith('169.254.');   // APIPA: адрес «сам себе», роутер его не выдавал
+const isHotspot = (a) => a.startsWith('192.168.137.');  // «Мобильный хот-спот» / общий доступ Windows (ICS)
 
-function looksVirtual(adapter, mac) {
-  if (VIRTUAL_NAME_RE.test(adapter)) return true;
+function neverLan(adapter, mac, address) {
   const m = String(mac || '').toLowerCase();
-  return VIRTUAL_MAC_PREFIXES.some((p) => m.startsWith(p));
+  return NEVER_NAME_RE.test(adapter) || NEVER_MAC_PREFIXES.some((p) => m.startsWith(p)) || isHotspot(address);
+}
+function maybeVirtual(adapter, mac) {
+  const m = String(mac || '').toLowerCase();
+  return MAYBE_NAME_RE.test(adapter) || MAYBE_MAC_PREFIXES.some((p) => m.startsWith(p));
 }
 
 /**
  * Адреса IPv4 этого ПК, которыми его видят другие компьютеры клиники:
  * [{ adapter, address, netmask, mac }], по имени карты, затем по адресу.
- * Виртуальные/VPN-карты отброшены; если после отбора не осталось ничего (сервер
- * сам на Hyper-V с внешним коммутатором) — берутся все IPv4: подсказка «адреса
- * нет» при живой сети хуже подсказки с виртуальной картой. Никогда не бросает.
+ * Туннели, VPN, хот-спот и сети «внутри» ПК отброшены всегда; карты, которые
+ * МОГУТ быть сетью клиники (vEthernet внешнего коммутатора, ВМ-гость), — только
+ * когда настоящих нет. Никогда не бросает.
  */
 export function realLanInterfaces(interfaces) {
   if (!interfaces || typeof interfaces !== 'object') return [];
@@ -52,8 +75,9 @@ export function realLanInterfaces(interfaces) {
         mac: typeof it.mac === 'string' ? it.mac : '' });
     }
   }
-  const real = all.filter((x) => !looksVirtual(x.adapter, x.mac));
-  const out = real.length ? real : all;
+  const lan = all.filter((x) => !neverLan(x.adapter, x.mac, x.address));
+  const real = lan.filter((x) => !maybeVirtual(x.adapter, x.mac));
+  const out = real.length ? real : lan;
   return out.sort((a, b) => (a.adapter < b.adapter ? -1 : a.adapter > b.adapter ? 1 : ipNum(a.address) - ipNum(b.address)));
 }
 
@@ -77,18 +101,42 @@ export function sameSubnet(a, b, mask) {
 }
 
 /**
- * Сменился ли адрес с прошлого запуска.
- *   нет текущих адресов (кабель выдернут при запуске) → skip: не смена и не запоминать;
- *   прошлых нет (первый запуск) → не смена;
- *   хотя бы один прежний адрес пропал → смена: кто ходил на него, сервер потерял.
- *   Добавившийся рядом новый адрес — не смена: старый по-прежнему работает.
+ * Карты: [{ key, adapter, addresses }] — ключ MAC (у карты может быть несколько
+ * адресов), без MAC — имя карты. Порядок — по имени карты.
+ */
+export function lanCards(list) {
+  const byKey = new Map();
+  for (const x of Array.isArray(list) ? list : []) {
+    const mac = String(x.mac || '').toLowerCase();
+    const key = /^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$/.test(mac) ? mac : 'name:' + x.adapter;
+    const c = byKey.get(key) || { key, adapter: x.adapter, addresses: [] };
+    if (!c.addresses.includes(x.address)) c.addresses.push(x.address);
+    byKey.set(key, c);
+  }
+  return [...byKey.values()]
+    .map((c) => ({ ...c, addresses: c.addresses.sort((a, b) => ipNum(a) - ipNum(b)) }))
+    .sort((a, b) => (a.adapter < b.adapter ? -1 : a.adapter > b.adapter ? 1 : 0));
+}
+
+/**
+ * Сменился ли адрес с прошлого запуска (prev, cur — lanCards).
+ *   нет текущих карт (кабель выдернут при запуске) → skip: не смена и не запоминать;
+ *   смена — когда ТА ЖЕ карта (тот же MAC) потеряла адрес, который у неё был: кто
+ *   ходил на него, сервер потерял. Карта появилась или исчезла (VPN, хот-спот,
+ *   Wi-Fi позже кабеля) — не смена: адреса оставшихся карт прежние
+ *   (перепроверка 2026-10-17). from/to — адреса изменившихся карт.
  */
 export function detectChange(prev, cur) {
-  const from = Array.isArray(prev) ? prev.filter(isIpv4) : [];
-  const to = Array.isArray(cur) ? cur.filter(isIpv4) : [];
-  if (!to.length) return { changed: false, skip: true, from, to };
-  const lost = from.filter((a) => !to.includes(a));
-  return { changed: lost.length > 0, skip: false, from, to };
+  const before = Array.isArray(prev) ? prev : [];
+  const now = Array.isArray(cur) ? cur : [];
+  if (!now.length) return { changed: false, skip: true, from: [], to: [] };
+  const from = [], to = [];
+  for (const c of now) {
+    const p = before.find((x) => x && x.key === c.key);
+    if (!p || !Array.isArray(p.addresses)) continue;
+    if (p.addresses.some((a) => !c.addresses.includes(a))) { from.push(...p.addresses); to.push(...c.addresses); }
+  }
+  return { changed: from.length > 0, skip: false, from, to };
 }
 
 /** MAC так, как его показывает ipconfig /all («Физический адрес»): A4-BB-6D-12-34-56. */

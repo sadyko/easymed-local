@@ -5,9 +5,14 @@
 // копия, принесённая с другого ПК) не должно «вспоминать» чужой адрес, а связь
 // зданий (branch-sync) не должна его возить. Тот же приём, что data/lisproxy.json.
 //
-//   { v: 1, addresses: ['192.168.1.156'], seen_at,
-//     change: { from: ['192.168.1.147'], to: ['192.168.1.156'], at } | null,
-//     dismissed_at, mdns_enabled }
+//   { v: 1, addresses: ['192.168.1.156'],            — адреса карт, которые есть сейчас
+//     cards: [{ key: 'a4:bb:…', adapter, addresses }], — все запомненные карты (по MAC)
+//     seen_at, change: { from, to, at } | null, dismissed_at, mdns_enabled }
+//
+// Смена — когда ТА ЖЕ карта получила другой адрес (перепроверка 2026-10-17:
+// подключение и отключение VPN, хот-спота, Wi-Fi позже кабеля давали ложное
+// «адрес изменился»). Карта, которой сейчас нет, не забывается: вернётся с другим
+// адресом — это смена. Прежние адреса вернулись — предупреждение снимается само.
 //
 // «Скрыть» (dismissed_at = change.at) действует до СЛЕДУЮЩЕЙ смены: новая смена —
 // новый change.at, и предупреждение возвращается само. Без смены прежний change
@@ -18,7 +23,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { lanAddressList, detectChange } from './interfaces.js';
+import { realLanInterfaces, lanCards, detectChange } from './interfaces.js';
 
 export const LAN_FILE = 'lan-address.json';
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
@@ -30,6 +35,18 @@ function normChange(c) {
   if (!c || typeof c !== 'object') return null;
   const from = ips(c.from), to = ips(c.to), at = iso(c.at);
   return from && to && at ? { from, to, at } : null;
+}
+
+function normCards(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const c of v) {
+    if (!c || typeof c !== 'object' || typeof c.key !== 'string' || !c.key) continue;
+    const addresses = ips(c.addresses);
+    if (!addresses || !addresses.length) continue;
+    out.push({ key: c.key, adapter: typeof c.adapter === 'string' ? c.adapter : '', addresses });
+  }
+  return out;
 }
 
 function readRaw(dataDir) {
@@ -45,6 +62,7 @@ export function readLanState(dataDir) {
   const v = readRaw(dataDir);
   return {
     addresses: ips(v.addresses) || [],
+    cards: normCards(v.cards),
     seen_at: iso(v.seen_at),
     change: normChange(v.change),
     dismissed_at: iso(v.dismissed_at),
@@ -70,29 +88,34 @@ export function visibleChange(state) {
 }
 
 /**
- * Запуск (и такт раз в минуту): сравнить адреса сейчас с запомненными и
- * запомнить. Пишет только когда набор адресов изменился (или это первый
- * запуск) — такт не трогает диск зря. Не бросает: ошибка записи — в .error.
- * → { changed, state, error? }
+ * Запуск (и такт раз в минуту): сравнить карты сейчас с запомненными и
+ * запомнить. Пишет только когда что-то изменилось (или это первый запуск) —
+ * такт не трогает диск зря. Не бросает: ошибка записи — в .error.
+ * → { changed, state, error? } (changed — новая смена, о которой сказать)
  */
 export function recordAddresses(dataDir, { interfaces = os.networkInterfaces(), now = new Date() } = {}) {
   const prev = readLanState(dataDir);
   let cur;
-  try { cur = lanAddressList(interfaces); } catch { cur = []; }
-  const d = detectChange(prev.addresses, cur);
+  try { cur = lanCards(realLanInterfaces(interfaces)); } catch { cur = []; }
+  const d = detectChange(prev.cards, cur);
   if (d.skip) return { changed: false, state: prev };
-  const same = prev.addresses.length === d.to.length && prev.addresses.every((a, i) => a === d.to[i]);
-  if (same && prev.seen_at) return { changed: false, state: prev };
+  const present = cur.flatMap((c) => c.addresses);
+  // Карты, которых сейчас нет, помнятся: вернётся Wi-Fi с другим адресом — смена.
+  const cards = [...cur, ...prev.cards.filter((p) => !cur.some((c) => c.key === p.key))];
+  let change = prev.change, dismissed = prev.dismissed_at;
   const at = now.toISOString();
-  const next = {
-    ...prev,
-    addresses: d.to,
-    seen_at: at,
-    ...(d.changed ? { change: { from: d.from, to: d.to, at }, dismissed_at: null } : {}),
-  };
+  // Старые адреса вернулись (роутер отдал прежний, Wi-Fi поднялся с тем же) — компьютеры
+  // снова находят сервер: предупреждение снимается, и возврат сам сменой не считается.
+  const back = change && change.from.length && change.from.every((x) => present.includes(x));
+  if (back) { change = null; dismissed = null; }
+  else if (d.changed) { change = { from: d.from, to: d.to, at }; dismissed = null; }
+  const same = JSON.stringify(cards) === JSON.stringify(prev.cards) && JSON.stringify(present) === JSON.stringify(prev.addresses)
+    && change === prev.change && prev.seen_at;
+  if (same) return { changed: false, state: prev };
+  const next = { ...prev, addresses: present, cards, seen_at: at, change, dismissed_at: dismissed };
   try { writeState(dataDir, next); }
-  catch (e) { return { changed: d.changed, state: next, error: e && e.message ? e.message : String(e) }; }
-  return { changed: d.changed, state: next };
+  catch (e2) { return { changed: !back && d.changed, state: next, error: e2 && e2.message ? e2.message : String(e2) }; }
+  return { changed: !back && d.changed, state: next };
 }
 
 /**

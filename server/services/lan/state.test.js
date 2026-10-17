@@ -18,14 +18,14 @@ const T1 = new Date('2026-10-16T08:00:00Z'), T2 = new Date('2026-10-17T08:00:00Z
 
 test('нет файла — пустая память, имя в сети включено по умолчанию', (t) => {
   const s = readLanState(tmpDir(t));
-  assert.deepEqual(s, { addresses: [], seen_at: null, change: null, dismissed_at: null, mdns_enabled: true });
+  assert.deepEqual(s, { addresses: [], cards: [], seen_at: null, change: null, dismissed_at: null, mdns_enabled: true });
 });
 
 test('первый запуск: запоминает адрес, смены нет', (t) => {
   const dir = tmpDir(t);
   const r = recordAddresses(dir, { interfaces: PC('192.168.1.147'), now: T1 });
   assert.equal(r.changed, false);
-  assert.deepEqual(readLanState(dir), { addresses: ['192.168.1.147'], seen_at: T1.toISOString(), change: null, dismissed_at: null, mdns_enabled: true });
+  assert.deepEqual(readLanState(dir), { addresses: ['192.168.1.147'], cards: [{ key: 'a4:bb:6d:12:34:56', adapter: 'Ethernet', addresses: ['192.168.1.147'] }], seen_at: T1.toISOString(), change: null, dismissed_at: null, mdns_enabled: true });
   assert.ok(fs.existsSync(path.join(dir, LAN_FILE)));
 });
 
@@ -80,7 +80,7 @@ test('испорченный файл — пустая память, не иск
   assert.equal(r.changed, false);
   assert.deepEqual(readLanState(dir).addresses, ['192.168.1.147']);
   fs.writeFileSync(path.join(dir, LAN_FILE), JSON.stringify({ addresses: 'x', change: { from: 5 }, mdns_enabled: 'нет' }));
-  assert.deepEqual(readLanState(dir), { addresses: [], seen_at: null, change: null, dismissed_at: null, mdns_enabled: true });
+  assert.deepEqual(readLanState(dir), { addresses: [], cards: [], seen_at: null, change: null, dismissed_at: null, mdns_enabled: true });
 });
 
 test('папку данных нельзя записать — recordAddresses не бросает (запуск сервера важнее подсказки)', (t) => {
