@@ -175,3 +175,13 @@ test('R2b: started before DHCP (no address) -> address arrives -> answers before
   console.log('# R2b answers:', sock.sent.length);
   assert.ok(sock.sent.length > 0, 'no answer until refresh()');
 });
+
+test('R3: one neighbour sending 25 plain-DNS (legacy) queries per second starves every other plain-DNS client', async (t) => {
+  const { sock } = await one(t, () => [IF('Ethernet', '192.168.1.156')]);
+  const q = buildQuery('easymed.local', { type: TYPE_A, id: 1 });
+  for (let i = 0; i < 25; i++) sock.emit('message', q, { address: '192.168.1.66', port: 40000 + i });
+  sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 2 }), { address: '192.168.1.40', port: 51000 });
+  const toLegit = sock.sent.filter((s) => s.address === '192.168.1.40');
+  console.log('# R3 replies to attacker', sock.sent.filter((s) => s.address === '192.168.1.66').length, 'to legit', toLegit.length);
+  assert.equal(toLegit.length, 1, 'legit plain-DNS client unanswered');
+});

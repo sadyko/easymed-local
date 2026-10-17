@@ -112,7 +112,7 @@ export function createMdnsResponder({
   let announcedKey = '';
   let cache = null, cacheAt = 0;     // список карт: запуск, refresh() и пакет с нашим именем — не чаще раза в секунду
   const lastMc = new Map();          // запись|карта → когда отправлена multicast
-  let legacyAt = 0, legacyN = 0;     // окно «обычных» ответов
+  const legacy = new Map();          // источник → { at, n }: окно «обычных» ответов на КАЖДЫЙ адрес
   let pending = null;                // притязания на наше имя в текущем окне
   let settle = null;                 // завершить ещё не завершённый start()
 
@@ -149,10 +149,18 @@ export function createMdnsResponder({
     lastMc.set(key, t);
     return true;
   }
-  function allowLegacy() {
+  // Не больше LEGACY_PER_SEC ответов в секунду ОДНОМУ спросившему: один шумный сосед не
+  // оставляет без ответа остальных (повторная перепроверка 2026-10-17, R4). Таблица
+  // источников сбрасывается, если выросла больше 256 (соседей столько не бывает).
+  function allowLegacy(src) {
     const t = now();
-    if (t - legacyAt >= 1000) { legacyAt = t; legacyN = 0; }
-    return ++legacyN <= LEGACY_PER_SEC;
+    let w = legacy.get(src);
+    if (!w || t - w.at >= 1000) {
+      if (!w && legacy.size >= 256) legacy.clear();
+      w = { at: t, n: 0 };
+      legacy.set(src, w);
+    }
+    return ++w.n <= LEGACY_PER_SEC;
   }
 
   function rawSend(buf, p, address) {
@@ -291,7 +299,7 @@ export function createMdnsResponder({
     const addresses = use.map((i) => i.address);
     if (rinfo.port !== boundPort) {
       // Обычный DNS-клиент (nslookup, программа) спросил со своего порта — RFC 6762 §6.7.
-      if (!allowLegacy()) return;
+      if (!allowLegacy(rinfo.address)) return;
       rawSend(buildResponse({ id: m.id, name: fqdn(), addresses, legacy: true, question: q }), rinfo.port, rinfo.address);
       return;
     }

@@ -259,3 +259,17 @@ test('карты перечитываются пакетом с нашим им�
   }
   assert.equal(reads - before, 1);
 });
+
+test('«обычные» ответы: не больше 20 в секунду одному спросившему, остальным — как обычно', async (t) => {
+  let clock = 9000000;
+  const { r, sock } = await fakeResponder(t, {}, { now: () => clock });
+  await until(() => r.status().state === 'active');
+  sock.sent.length = 0;
+  for (let i = 0; i < 30; i++) sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: i }), fromLan('192.168.1.66', 40000 + i));
+  sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 99 }), fromLan('192.168.1.40', 51000));
+  assert.equal(sock.sent.filter((s) => s.address === '192.168.1.66').length, 20);
+  assert.equal(sock.sent.filter((s) => s.address === '192.168.1.40').length, 1);
+  clock += 1000;
+  sock.emit('message', buildQuery('easymed.local', { type: TYPE_A, id: 100 }), fromLan('192.168.1.66', 40100));
+  assert.equal(sock.sent.filter((s) => s.address === '192.168.1.66').length, 21, 'через секунду — снова');
+});
