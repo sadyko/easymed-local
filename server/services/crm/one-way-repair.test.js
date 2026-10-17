@@ -144,6 +144,13 @@ test('CRM_ONE_WAY_V1 O8 (ревью r4): датированное желание
   linkTo(c4, card4, 'patient');
   db.prepare("INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, set_status) VALUES (?, ?, 'in_process', 'scheduled')").run(c4, card4);
   const displayDay = cline({ rid: card4, day: '2026-10-26' });
+  // ревью r5 (п. 4): отменённую запись записали заново на тот же день — у карточки живая запись этого дня
+  const card5 = newCard();
+  const c5 = visit('2026-10-27', 'cancelled');
+  linkTo(c5, card5, 'callcenter');
+  const v5 = visit('2026-10-27');
+  linkTo(v5, card5, 'callcenter');
+  const rebooked = cline({ rid: card5, day: '2026-10-27' });
   const rows = count(db);
   const out = crmOneWayRepair(db);
   assert.equal(count(db), rows);
@@ -151,7 +158,7 @@ test('CRM_ONE_WAY_V1 O8 (ревью r4): датированное желание
   assert.deepEqual([s.status, s.scheduled_date, s.visit_id, s.released_from_visit_id, s.released_vs_id], ['pending', null, null, c, null]);
   const t2 = row(db, byTrail);
   assert.deepEqual([t2.scheduled_date, t2.released_from_visit_id], [null, c2]);
-  for (const [id, day] of [[otherDay, '2026-10-23'], [stranger, '2026-10-20'], [liveDay, '2026-10-24'], [displayDay, '2026-10-26']]) {
+  for (const [id, day] of [[otherDay, '2026-10-23'], [stranger, '2026-10-20'], [liveDay, '2026-10-24'], [displayDay, '2026-10-26'], [rebooked, '2026-10-27']]) {
     assert.deepEqual([row(db, id).scheduled_date, row(db, id).released_from_visit_id], [day, null], 'тронуто желание без отменённой записи своего дня: ' + id);
   }
   assert.equal(row(db, undated).released_from_visit_id, null);
