@@ -902,9 +902,11 @@ const confirmedCodes = (s) => new Set(s.analytes.filter(confirmedCode).map((a) =
  * номера лабораторный, не старше 7 дней (ревью 3.17.1, M2), прибор известен, у
  * заказа есть визит и orderSide(order) — отказ.
  * Кандидаты — заказы визита не старше 7 дней (M1). Внутри материала:
- *   — открытые оплаченные невыданные, у которых код сообщения (у рабочего
- *     списка — общий код друг с другом), — два и больше: «неоднозначно» (M1);
- *     один — он;
+ *   — одна строка сообщения подходит к подтверждённому коду двух и больше
+ *     открытых оплаченных невыданных заказов (у рабочего списка — общий
+ *     подтверждённый код): «неоднозначно» (M1), названы эти заказы;
+ *   — иначе открытый оплаченный невыданный, к которому подходит сообщение
+ *     (новейший первым; другие придут к нему заказами визита, D3);
  *   — иначе открытый оплаченный невыданный, потом не оплаченный, потом
  *     выданный; при равных — новейший.
  * @param {object[]|null} observations  строки прибора сообщения; null — сообщения
@@ -927,15 +929,22 @@ function tubeAnchor(db, order, ctx, observations = null) {
     if (hit.length !== 1) return { ambiguous: anchorAmbiguousText(order, materialsWhy(groups)) };
     pool = hit;
   }
-  // Ревью 3.17.1, M1 (b) — одни и те же анализы в нескольких открытых заказах.
+  // Ревью 3.17.1, M1 (b) — одни и те же анализы в нескольких открытых заказах:
+  // одна строка сообщения (у рабочего списка — один подтверждённый код)
+  // подходит к двум и больше открытым оплаченным заказам материала. Разные
+  // услуги одной пробирки (ТТГ, Т4 св., Т3 св. одним сообщением CL-900i; ОАК и
+  // лейкоформула) — не «одни и те же»: их делит D3 (planTube), как прежде.
   const open = pool[0].filter((s) => s.closed === '');
+  const lineHits = (obs, s) => planObservations([obs], s.analytes).taken.length > 0;
   const twins = observations
-    ? open.filter(hitBy)
+    ? open.filter((s) => observations.some((obs) => lineHits(obs, s) && open.some((o) => o !== s && lineHits(obs, o))))
     : open.filter((s) => open.some((o) => o !== s && [...confirmedCodes(o)].some((c) => confirmedCodes(s).has(c))));
   if (twins.length > 1) return { ambiguous: anchorAmbiguousText(order, twinsWhy(twins)) };
   const rank = (s) => (s.closed === '' ? 0 : s.closed === 'unpaid' ? 1 : 2);
-  // sort устойчив: при равных — порядок отбора, новейший первым.
-  const { order: anchor, closed, ...side } = twins[0] || [...pool[0]].sort((a, b) => rank(a) - rank(b))[0];
+  // Открытый оплаченный, к которому подходит сообщение, — новейший первым;
+  // другие такие же придут к нему заказами визита (D3). Нет — по рангу; sort
+  // устойчив: при равных — порядок отбора, новейший первым.
+  const { order: anchor, closed, ...side } = open.find(hitBy) || [...pool[0]].sort((a, b) => rank(a) - rank(b))[0];
   return { order: anchor, side };
 }
 

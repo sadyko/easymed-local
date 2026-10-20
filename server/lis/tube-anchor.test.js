@@ -473,6 +473,64 @@ test('M1: два открытых ОАК визита в сроке, код со
   }
 });
 
+// Разные услуги одной пробирки, все тесты — одним сообщением (пробы ревью
+// 3.17.1, probe8): CL-900i — номер в OBR-2; BC-5300 — в OBR-3.
+const CL3 = (sample) => seg('MSH|^~\\&|||||20261020||ORU^R01|1|P|2.3.1||||0', `OBR|1|${sample}|12|`,
+  'OBX|1|NM|TSH|TSH|1.2|||N|||F', 'OBX|2|NM|FT4|FT4|15.1|||N|||F', 'OBX|3|NM|FT3|FT3|4.4|||N|||F');
+const HEME2 = (sample) => seg('MSH|^~\\&|BC-5300|Mindray|||20261020||ORU^R01|1|P|2.3.1', `OBR|1||${sample}|00001^Automated Count^99MRC`,
+  'OBX|1|NM|6690-2^WBC^LN||6.2|||N|||F', 'OBX|2|NM|770-8^NEU%^LN||55.0|||N|||F');
+/** Визит 70: № 52 без панели и услуги svcs ([имя, код, материал]) № 60, 61… — панели на приборе № 1 (profile). */
+function oneTubeClinic(profile, svcs) {
+  const db = freshDb();
+  db.exec(`INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, discovered, added, model_confirmed)
+             VALUES (1, 'Анализатор', '${profile}', 'mllp', '10.0.0.43', NULL, 1, 0, 1, 1);
+           INSERT INTO patients (id, full_name) VALUES (7, 'Рахмонкулов');
+           INSERT INTO visits (id, patient_id, visit_date, status) VALUES (70, 7, ${NOW}, 'scheduled');
+           INSERT INTO services (id, name, is_lab, specimen) VALUES (21, 'Время свертываемости крови (Корел)', 1, NULL);
+           INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (52, 70, 21, 'queued', ${NOW});`);
+  svcs.forEach(([name, code, specimen], i) => {
+    db.exec(`INSERT INTO services (id, name, is_lab, specimen) VALUES (${30 + i}, '${name}', 1, '${specimen}');
+             INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (${60 + i}, 70, ${30 + i}, 'queued', ${NOW});`);
+    bindPanel(db, { id: 30 + i, serviceId: 30 + i, deviceId: 1, name, lines: [[code, name, code]] });
+  });
+  return db;
+}
+
+test('M1: разные услуги одной пробирки одним сообщением — не «одни и те же»: CL-900i ТТГ, Т4 св., Т3 св.; BC-5300 ОАК и лейкоформула — все бланки заполнены', () => {
+  for (const sample of ['00000052', 'LAB-000052']) {
+    const cl = oneTubeClinic('mindray-cl-900i', [['ТТГ', 'TSH', 'Сыворотка'], ['Т4 св.', 'FT4', 'Сыворотка'], ['Т3 св.', 'FT3', 'Сыворотка']]);
+    ingestMessage(cl, CL3(sample), '10.0.0.43', 1);
+    assert.equal(lastRow(cl).status, 'applied', 'CL-900i ' + sample + ': ' + lastRow(cl).detail);
+    assert.deepEqual([blank(cl, 60), blank(cl, 61), blank(cl, 62)], [{ 'ТТГ': '1.2' }, { 'Т4 св.': '15.1' }, { 'Т3 св.': '4.4' }], 'CL-900i ' + sample);
+    assert.deepEqual([...worklistLines(cl, { deviceId: 1, orderId: 52 }).codes].sort(), ['FT3', 'FT4', 'TSH'], 'рабочий список — все три');
+    cl.close();
+
+    const hem = oneTubeClinic('mindray-bc-5300', [['Общий анализ крови', 'WBC', 'Кровь'], ['Лейкоформула', 'NEU%', 'Кровь']]);
+    ingestMessage(hem, HEME2(sample), '10.0.0.9', 1);
+    assert.equal(lastRow(hem).status, 'applied', 'BC-5300 ' + sample + ': ' + lastRow(hem).detail);
+    assert.deepEqual([blank(hem, 60), blank(hem, 61)], [{ 'Общий анализ крови': '6.2' }, { 'Лейкоформула': '55.0' }], 'BC-5300 ' + sample);
+    hem.close();
+  }
+});
+
+test('M1: два открытых ОАК с общим WBC и отдельная лейкоформула — «неоднозначно», названы только два ОАК, ничего не записано', () => {
+  const db = oneTubeClinic('mindray-bc-5300', [['Общий анализ крови', 'WBC', 'Кровь'], ['Общий анализ крови (стационар)', 'WBC', 'Кровь'], ['Лейкоформула', 'NEU%', 'Кровь']]);
+  const NAMED = /одни и те же анализы этого прибора — в нескольких открытых заказах визита \(«Общий анализ крови» \(№ 60\), «Общий анализ крови \(стационар\)» \(№ 61\)\)/;
+  for (const sample of ['00000052', 'LAB-000052']) {
+    ingestMessage(db, HEME2(sample), '10.0.0.9', 1);
+    const m = lastRow(db);
+    assert.equal(m.status, 'unmatched', sample + ': ' + m.detail);
+    assert.match(m.detail, NAMED);
+    assert.ok(!m.detail.includes('№ 62'), 'лейкоформула не названа: ' + m.detail);
+  }
+  const w = worklistLines(db, { deviceId: 1, orderId: 52 });
+  assert.equal(w.ok, false);
+  assert.match(w.why, NAMED);
+  assert.ok(!w.why.includes('№ 62'), w.why);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_results').get().c, 0);
+  db.close();
+});
+
 test('M1: заказ визита старше 7 дней — не кандидат: проба — в сегодняшний ОАК; только старый ОАК — прежний отказ', () => {
   for (const sample of ['00000052', 'LAB-000052']) {
     const db = datedClinic({ visitDays: 20, rows: [[52, 21, 'queued', 0], [53, 26, 'queued', 20], [60, 26, 'queued', 0]] });
