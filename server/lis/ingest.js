@@ -1169,12 +1169,36 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
     record({ ...base, status: 'unmatched', detail: 'заказ по номеру пробы не найден' });
     return 'AA';
   }
+  // Панель, прибор, модель, подтверждения заказа пробирки — orderSide (выше).
+  // LAB_TUBE_ANCHOR_V1 — читается ДО правила голых цифр и ворот (только
+  // чтение): ворота заказа номера не должны держать пробирку визита —
+  // неоплаченная первая услуга, которую этот прибор не кормит, не мешает
+  // оплаченному ОАК; правило голых цифр судит заказ, куда ляжет результат.
+  const sender = deviceId ? db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(deviceId) : null;
+  const ctx = { deviceId, sender, profile, messageModel: guessProfile({ app: head.app, facility: head.facility }) };
+  let x = orderSide(db, order, ctx);
+  // LAB_TUBE_ANCHOR_V1 (решение владельца 2026-10-20) — заказ номера этот прибор
+  // не кормит, а одна этикетка визита несёт номер ПЕРВОЙ услуги: проба идёт в
+  // заказ того же визита, который прибор кормит (tubeAnchor), и дальше всё —
+  // правило голых цифр, ворота, N2, D3, D7, серия — как если бы номер указывал
+  // на него; в журнале номер — как прислал прибор. «Лабораторная» ниже — у
+  // заказа номера (нелабораторный заказ пробирку не ищет). Не выбрать —
+  // «неоднозначно», не пишется ничего; строка при заказе номера — как у прочих
+  // отказов (этикетка LAB- и номер человека). Кормить нечего — прежний отказ
+  // ниже. «Привязать» — так же: человек набирает номер «Проба» карточки, а это
+  // тоже номер первой услуги.
+  const anchor = order.is_lab && !x.ok && deviceId && order.visit_id != null ? tubeAnchor(db, order, ctx, observations) : null;
+  const moved = anchor && anchor.order ? anchor : null;
   // Голые цифры — только для открытого заказа последних 7 дней (решение
   // владельца 2026-10-01). Отказ НЕ привязывает сообщение к найденному заказу
   // (visit_service_id = NULL): скорее всего это чужой пациент, и лента не
   // должна показывать его имя рядом с пробой. Лаборант может «Привязать».
+  // LAB_TUBE_ANCHOR_V1 (решение владельца 2026-10-20) — судится заказ, в который
+  // ляжет результат: при пробирке визита — найденный (выданная «Время
+  // свертываемости» не держит открытый ОАК; выданный или старый ОАК —
+  // отказ), иначе — заказ номера, как прежде. Номер в тексте — как прислан.
   if (!pick.lab && !manual) {
-    const refusal = bareIdRefusal(db, order, pick.value);
+    const refusal = bareIdRefusal(db, moved ? moved.order : order, pick.value);
     if (refusal) {
       record({ ...base, status: 'unmatched', detail: refusal });
       return 'AA';
@@ -1192,33 +1216,16 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       detail: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' });
     return 'AA';
   }
-  // Панель, прибор, модель, подтверждения заказа пробирки — orderSide (выше).
-  // LAB_TUBE_ANCHOR_V1 — читается ДО ворот (только чтение): ворота заказа номера
-  // не должны держать пробирку визита — неоплаченная первая услуга, которую
-  // этот прибор не кормит, не мешает оплаченному ОАК.
-  const sender = deviceId ? db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(deviceId) : null;
-  const ctx = { deviceId, sender, profile, messageModel: guessProfile({ app: head.app, facility: head.facility }) };
-  let x = orderSide(db, order, ctx);
-  // LAB_TUBE_ANCHOR_V1 (решение владельца 2026-10-20) — заказ номера этот прибор
-  // не кормит, а одна этикетка визита несёт номер ПЕРВОЙ услуги: проба идёт в
-  // заказ того же визита, который прибор кормит (tubeAnchor), и дальше всё —
-  // ворота, N2, D3, D7, серия — как если бы номер указывал на него; в журнале
-  // номер — как прислал прибор. Правило голых цифр и «лабораторная» выше — у
-  // заказа номера. Не выбрать — «неоднозначно», не пишется ничего; строка при
-  // заказе номера — как у прочих отказов (этикетка LAB- и номер человека).
-  // Кормить нечего — прежний отказ ниже. «Привязать» — так же: человек набирает
-  // номер «Проба» карточки, а это тоже номер первой услуги.
-  if (!x.ok && deviceId && order.visit_id != null) {
-    const t = tubeAnchor(db, order, ctx, observations);
-    if (t && t.ambiguous) {
-      record({ ...base, visitServiceId: linkId, status: 'unmatched', detail: t.ambiguous });
-      return 'AA';
-    }
-    if (t) {
-      order = t.order;
-      x = t.side;
-      linkId = pick.lab || manual ? order.id : null;
-    }
+  // LAB_TUBE_ANCHOR_V1 — пробирка визита (выше): не выбрать — «неоднозначно»;
+  // найдена — дальше идёт она.
+  if (anchor && anchor.ambiguous) {
+    record({ ...base, visitServiceId: linkId, status: 'unmatched', detail: anchor.ambiguous });
+    return 'AA';
+  }
+  if (moved) {
+    order = moved.order;
+    x = moved.side;
+    linkId = pick.lab || manual ? order.id : null;
   }
   // LIS_REAL_ANALYZERS_V1 (ревью R7, п. 1) — ворота лаборатории, те же, что у
   // ручного ввода: неоплаченный, отменённый, возвращённый заказ прибор не
@@ -1494,28 +1501,30 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
 // LAB_TUBE_ANCHOR_V1 (решение владельца 2026-10-20) — заказ номера этот прибор не
 // кормит: тесты — заказа визита, который кормит (tubeAnchor), как у приёма.
 // Сообщения ещё нет — материал по кодам не выбрать: несколько материалов —
-// «неоднозначно». Правило голых цифр (bare) — у заказа номера; ворота и «выдан» —
-// у найденного заказа.
+// «неоднозначно». Правило голых цифр (bare), ворота и «выдан» — у найденного
+// заказа; не найден — у заказа номера, как прежде.
 export function worklistLines(db, { deviceId, orderId, bare = false, shown = '' } = {}) {
   let order = orderId ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
                                       JOIN services s ON s.id = vs.service_id WHERE vs.id = ?`).get(orderId) : null;
   if (!order) return { ok: false, why: 'заказ по номеру пробы не найден' };
-  if (bare) {
-    const refusal = bareIdRefusal(db, order, shown || String(orderId));
-    if (refusal) return { ok: false, why: refusal };
-  }
-  if (!order.is_lab) return { ok: false, why: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' };
-  // LAB_TUBE_ANCHOR_V1 — прибор и orderSide — до ворот (только чтение), как у приёма.
+  // LAB_TUBE_ANCHOR_V1 — прибор, orderSide и пробирка визита — до правила голых
+  // цифр и ворот (только чтение), как у приёма.
   const sender = deviceId ? db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(deviceId) : null;
   const ctx = sender ? { deviceId, sender, profile: getProfile(sender.profile), messageModel: null } : null;
   let own = ctx ? orderSide(db, order, ctx) : null;
-  if (own && !own.ok && order.visit_id != null) {
-    const t = tubeAnchor(db, order, ctx);
-    if (t && t.ambiguous) return { ok: false, why: t.ambiguous };
-    if (t) {
-      order = t.order;
-      own = t.side;
-    }
+  const anchor = own && !own.ok && order.is_lab && order.visit_id != null ? tubeAnchor(db, order, ctx) : null;
+  const moved = anchor && anchor.order ? anchor : null;
+  // LAB_TUBE_ANCHOR_V1 — правило голых цифр судит заказ, тесты которого уйдут:
+  // при пробирке визита — найденный, иначе — заказ номера, как прежде.
+  if (bare) {
+    const refusal = bareIdRefusal(db, moved ? moved.order : order, shown || String(orderId));
+    if (refusal) return { ok: false, why: refusal };
+  }
+  if (!order.is_lab) return { ok: false, why: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' };
+  if (anchor && anchor.ambiguous) return { ok: false, why: anchor.ambiguous };
+  if (moved) {
+    order = moved.order;
+    own = moved.side;
   }
   const gate = gateRefusal(order);
   if (gate) return { ok: false, why: gate };

@@ -123,17 +123,46 @@ test('рабочий список (worklistLines) по номеру первой
   db.close();
 });
 
-test('номер голыми цифрами: правило голых цифр — у заказа номера (выдан — отказ, как прежде); LAB- — к ОАК', () => {
-  const db = ownerClinic({ status: { 52: 'completed' } });
-  ingestMessage(db, BC20('000052'), '10.0.0.12', 1);
-  const m = lastRow(db);
-  assert.deepEqual([m.status, m.visit_service_id], ['unmatched', null], m.detail);
-  assert.match(m.detail, /указывает на заказ № 52, который закрыт \(статус «выдан»\)/);
-  assert.equal(anyResults(db, 57), 0);
-  assert.match(worklistLines(db, { deviceId: 1, orderId: 52, bare: true, shown: '00000052' }).why, /закрыт \(статус «выдан»\)/);
-  ingestMessage(db, BC20('LAB-000052'), '10.0.0.12', 1);
-  assert.deepEqual([lastRow(db).status, lastRow(db).visit_service_id], ['applied', 57], lastRow(db).detail);
-  db.close();
+// Правило голых цифр (открыт, не старше 7 дней) судит заказ, в который ляжет
+// результат: при пробирке визита — найденный заказ, иначе — заказ номера.
+const aMonthAgo = "datetime('now', '-30 days')";
+const BARE_57 = (why) => new RegExp('^номер пробы «(000052|00000052)» без префикса LAB- указывает на заказ № 57, который ' + why);
+
+test('номер голыми цифрами: «Время свертываемости» выдана, ОАК открыт — 000052 и 00000052 в ОАК', () => {
+  for (const sample of ['000052', '00000052']) {
+    const db = ownerClinic({ status: { 52: 'completed' } });
+    ingestMessage(db, BC20(sample), '10.0.0.12', 1);
+    const m = lastRow(db);
+    assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['applied', 57, sample], m.detail);
+    assert.deepEqual(blank(db, 57), { 'Лейкоциты': '6.20' });
+    assert.deepEqual(worklistLines(db, { deviceId: 1, orderId: 52, bare: true, shown: sample }).codes, ['WBC'], sample);
+    db.close();
+  }
+});
+
+test('номер голыми цифрами: сам ОАК выдан или старше 7 дней — отказ правила голых цифр, ничего не записано; LAB- — как прежде', () => {
+  const closed = ownerClinic({ status: { 57: 'completed' } });
+  closed.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, verified_at) VALUES (57, 'Лейкоциты', '5.0', " + NOW + ')').run();
+  // Стационарный визит: ОАК назначен месяц назад, «Время свертываемости» — сегодня.
+  const old = ownerClinic();
+  old.prepare(`UPDATE visits SET visit_date = ${aMonthAgo} WHERE id = 70`).run();
+  old.prepare(`UPDATE visit_services SET created_at = ${aMonthAgo} WHERE id <> 52`).run();
+  for (const [db, why, label] of [[closed, 'закрыт \\(статус «выдан»\\)', 'выдан'], [old, 'датирован .* старше 7 дней', 'старше 7 дней']]) {
+    for (const sample of ['000052', '00000052']) {
+      ingestMessage(db, BC20(sample, '7.70'), '10.0.0.12', 1);
+      const m = lastRow(db);
+      assert.deepEqual([m.status, m.visit_service_id], ['unmatched', null], label + ' ' + sample + ': ' + m.detail);
+      assert.match(m.detail, BARE_57(why), label);
+      assert.notEqual(blank(db, 57)['Лейкоциты'], '7.70', label);
+      assert.match(worklistLines(db, { deviceId: 1, orderId: 52, bare: true, shown: sample }).why, BARE_57(why), label);
+    }
+  }
+  ingestMessage(closed, BC20('LAB-000052', '7.70'), '10.0.0.12', 1);
+  assert.deepEqual([lastRow(closed).status, lastRow(closed).visit_service_id, blank(closed, 57)], ['superseded', 57, { 'Лейкоциты': '5.0' }], 'D7 — как прежде');
+  ingestMessage(old, BC20('LAB-000052', '7.70'), '10.0.0.12', 1);
+  assert.deepEqual([lastRow(old).status, lastRow(old).visit_service_id, blank(old, 57)], ['applied', 57, { 'Лейкоциты': '7.70' }], 'этикетке LAB- возраст не судья');
+  closed.close();
+  old.close();
 });
 
 // ── 2. Кормить нечего — прежний отказ ─────────────────────────────────────
@@ -230,6 +259,25 @@ test('BS-200, два материала: рабочий список по ном
   assert.deepEqual(worklistLines(db, { deviceId: 1, orderId: 52 }).codes, ['GLU', 'CREA'], 'один материал — его коды');
   assert.equal(worklistLines(db, { deviceId: 1, orderId: 52 }).specimen, 'Сыворотка');
   db.close();
+});
+
+test('номер голыми цифрами: пробирки визита нет или «неоднозначно» — правило у заказа номера, первым, как прежде', () => {
+  const none = ownerClinic({ status: { 52: 'completed' }, cbcPanel: false });
+  ingestMessage(none, BC20('000052'), '10.0.0.12', 1);
+  assert.deepEqual([lastRow(none).status, lastRow(none).visit_service_id], ['unmatched', null]);
+  assert.match(lastRow(none).detail, /^номер пробы «000052» без префикса LAB- указывает на заказ № 52, который закрыт/);
+  assert.match(worklistLines(none, { deviceId: 1, orderId: 52, bare: true, shown: '00000052' }).why, /указывает на заказ № 52, который закрыт/);
+  none.close();
+
+  const two = twoMaterialClinic();
+  two.prepare("UPDATE visit_services SET status = 'completed' WHERE id = 52").run();
+  bs(two, '000052', 'CREA', '80');
+  assert.deepEqual([lastRow(two).status, lastRow(two).visit_service_id], ['unmatched', null]);
+  assert.match(lastRow(two).detail, /^номер пробы «000052» без префикса LAB- указывает на заказ № 52, который закрыт/, 'не «неоднозначно»');
+  assert.match(worklistLines(two, { deviceId: 1, orderId: 52, bare: true, shown: '00000052' }).why, /указывает на заказ № 52, который закрыт/);
+  bs(two, '000052', 'GLU', '5.1');
+  assert.deepEqual([lastRow(two).visit_service_id, blank(two, 60)], [60, { 'Глюкоза': '5.1' }], 'один материал по коду — найденный заказ открыт');
+  two.close();
 });
 
 // ── 4. Оплата и выбор заказа ──────────────────────────────────────────────
