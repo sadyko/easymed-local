@@ -21,6 +21,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ingestMessage, worklistLines } from './ingest.js';
 import { ORDER_NOT_FOUND, replyText } from './lisproxy.js';
+import { lisMessageAttach } from '../services/rpc/lis.js';   // ревью 3.17.1, L1 — «Привязать»
 import { freshDb, seedLisProxyClinic, bindPanel, startProxyApp, post, fixture, lastRow, blank } from '../test-helpers/lisproxy-clinic.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
@@ -140,28 +141,32 @@ test('номер голыми цифрами: «Время свертываем�
   }
 });
 
-test('номер голыми цифрами: сам ОАК выдан или старше 7 дней — отказ правила голых цифр, ничего не записано; LAB- — как прежде', () => {
+test('номер голыми цифрами: сам ОАК выдан или старше 7 дней — отказ, ничего не записано', () => {
+  // Выдан: пробирка визита — он, правило голых цифр отказывает; этикетка LAB- — D7.
   const closed = ownerClinic({ status: { 57: 'completed' } });
   closed.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, verified_at) VALUES (57, 'Лейкоциты', '5.0', " + NOW + ')').run();
-  // Стационарный визит: ОАК назначен месяц назад, «Время свертываемости» — сегодня.
-  const old = ownerClinic();
-  old.prepare(`UPDATE visits SET visit_date = ${aMonthAgo} WHERE id = 70`).run();
-  old.prepare(`UPDATE visit_services SET created_at = ${aMonthAgo} WHERE id <> 52`).run();
-  for (const [db, why, label] of [[closed, 'закрыт \\(статус «выдан»\\)', 'выдан'], [old, 'датирован .* старше 7 дней', 'старше 7 дней']]) {
-    for (const sample of ['000052', '00000052']) {
-      ingestMessage(db, BC20(sample, '7.70'), '10.0.0.12', 1);
-      const m = lastRow(db);
-      assert.deepEqual([m.status, m.visit_service_id], ['unmatched', null], label + ' ' + sample + ': ' + m.detail);
-      assert.match(m.detail, BARE_57(why), label);
-      assert.notEqual(blank(db, 57)['Лейкоциты'], '7.70', label);
-      assert.match(worklistLines(db, { deviceId: 1, orderId: 52, bare: true, shown: sample }).why, BARE_57(why), label);
-    }
+  for (const sample of ['000052', '00000052']) {
+    ingestMessage(closed, BC20(sample, '7.70'), '10.0.0.12', 1);
+    const m = lastRow(closed);
+    assert.deepEqual([m.status, m.visit_service_id], ['unmatched', null], sample + ': ' + m.detail);
+    assert.match(m.detail, BARE_57('закрыт \\(статус «выдан»\\)'));
+    assert.match(worklistLines(closed, { deviceId: 1, orderId: 52, bare: true, shown: sample }).why, BARE_57('закрыт \\(статус «выдан»\\)'));
   }
   ingestMessage(closed, BC20('LAB-000052', '7.70'), '10.0.0.12', 1);
   assert.deepEqual([lastRow(closed).status, lastRow(closed).visit_service_id, blank(closed, 57)], ['superseded', 57, { 'Лейкоциты': '5.0' }], 'D7 — как прежде');
-  ingestMessage(old, BC20('LAB-000052', '7.70'), '10.0.0.12', 1);
-  assert.deepEqual([lastRow(old).status, lastRow(old).visit_service_id, blank(old, 57)], ['applied', 57, { 'Лейкоциты': '7.70' }], 'этикетке LAB- возраст не судья');
   closed.close();
+  // Старше 7 дней (стационарный визит: ОАК назначен месяц назад, «Время
+  // свертываемости» — сегодня): ОАК — не пробирка визита (ревью 3.17.1, M1) —
+  // прежний отказ заказа номера при любом виде номера.
+  const old = ownerClinic();
+  old.prepare(`UPDATE visits SET visit_date = ${aMonthAgo} WHERE id = 70`).run();
+  old.prepare(`UPDATE visit_services SET created_at = ${aMonthAgo} WHERE id <> 52`).run();
+  for (const [sample, link] of [['000052', null], ['00000052', null], ['LAB-000052', 52]]) {
+    ingestMessage(old, BC20(sample, '7.70'), '10.0.0.12', 1);
+    assert.deepEqual([lastRow(old).status, lastRow(old).visit_service_id, lastRow(old).detail], ['unmapped', link, NO_PANEL_52], sample);
+  }
+  assert.deepEqual(worklistLines(old, { deviceId: 1, orderId: 52, bare: true, shown: '00000052' }), { ok: false, why: NO_PANEL_52 });
+  assert.equal(anyResults(old, 57), 0);
   old.close();
 });
 
@@ -305,21 +310,22 @@ test('оплата: первая услуга не оплачена, ОАК оп
   }
 });
 
-test('выбор заказа одного материала: открытый оплаченный раньше неоплаченного и выданного, при равных — меньший номер', () => {
-  const second = (db, status) => {
-    db.exec(`INSERT INTO services (id, name, is_lab, specimen) VALUES (27, 'Общий анализ крови (стационар)', 1, 'Кровь');
-             INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (58, 70, 27, '${status}', ${NOW});`);
-    bindPanel(db, { id: 27, serviceId: 27, deviceId: 1, name: 'ОАК стационар', lines: [['WBC', 'Лейкоциты', 'WBC']] });
-  };
+/** Второй ОАК визита 70 — № 58 «Общий анализ крови (стационар)», панель на гематологии № 1. */
+const secondCbc = (db, status) => {
+  db.exec(`INSERT INTO services (id, name, is_lab, specimen) VALUES (27, 'Общий анализ крови (стационар)', 1, 'Кровь');
+           INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (58, 70, 27, '${status}', ${NOW});`);
+  bindPanel(db, { id: 27, serviceId: 27, deviceId: 1, name: 'ОАК стационар', lines: [['WBC', 'Лейкоциты', 'WBC']] });
+};
+
+test('выбор заказа одного материала: открытый оплаченный раньше неоплаченного и выданного; при равных — новейший', () => {
   const cases = [
     [{ 57: 'added' }, 'queued', 58],
     [{ 57: 'completed' }, 'queued', 58],
-    [{}, 'queued', 57],
     [{}, 'added', 57],
   ];
   for (const [status, s58, want] of cases) {
     const db = ownerClinic({ status });
-    second(db, s58);
+    secondCbc(db, s58);
     if (status[57] === 'completed') db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, verified_at) VALUES (57, 'Лейкоциты', '5.0', " + NOW + ')').run();
     ingestMessage(db, BC20('LAB-000052', '7.10'), '10.0.0.12', 1);
     const label = JSON.stringify(status) + ' 58:' + s58 + ' — ' + lastRow(db).detail;
@@ -329,6 +335,13 @@ test('выбор заказа одного материала: открытый 
     assert.notEqual(blank(db, other)['Лейкоциты'], '7.10', label);
     db.close();
   }
+  // Оба не оплачены — ничего не пишется (ворота); строка лотка — при новейшем.
+  const db = ownerClinic({ status: { 57: 'added' } });
+  secondCbc(db, 'added');
+  ingestMessage(db, BC20('LAB-000052'), '10.0.0.12', 1);
+  assert.deepEqual([lastRow(db).status, lastRow(db).visit_service_id], ['unmatched', 58], lastRow(db).detail);
+  assert.match(lastRow(db).detail, /^заказ ещё не оплачен/);
+  db.close();
 });
 
 // ── 6. Заказ номера кормит сам прибор — как прежде ────────────────────────
@@ -398,4 +411,141 @@ test('LIS Proxy: два материала на bs200 — рабочий спи�
     db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (140, 55, 13, 'queued', ${NOW})`).run();
     bindPanel(db, { id: 13, serviceId: 13, deviceId: 1, name: 'Моча', lines: [['UPRO', 'Белок мочи', 'UPRO']] });
   });
+});
+
+// ── 7. Ревью выпуска 3.17.1 ───────────────────────────────────────────────
+// M1 — заказ визита ищется только среди заказов последних 7 дней, новейшие
+// первыми; одни и те же анализы в двух открытых заказах — «неоднозначно».
+// M2 — заказ номера старше 7 дней другого заказа не ищет. L1 — «Привязать»
+// судит по заказу, в который легла проба. L2 — «неоднозначно» — после ворот
+// оплаты и N2 заказа номера.
+
+const LAB = { role: 'lab' };
+const daysAgo = (d) => `strftime('%Y-%m-%dT%H:%M:%SZ','now','-${d} days')`;
+const UNPAID_TEXT = 'заказ ещё не оплачен — результат прибора можно «Привязать» после оплаты';
+const NOT_ADDED = 'прибор ещё не добавлен — «Анализаторы» → «Добавить прибор» → «Найдены в сети» → «Добавить»';
+/** След, по которому касса не даёт удалить строку услуги (rpc/billing.js assertNotPerformed). */
+const cashierTrace = (db, id) => db.prepare(`SELECT (EXISTS(SELECT 1 FROM lab_results WHERE visit_service_id = ?)
+  OR EXISTS(SELECT 1 FROM lab_device_messages WHERE visit_service_id = ?)) AS t`).get(id, id).t;
+
+/**
+ * Визит 70 по дням: rows — [номер, услуга, статус, создан дней назад]; услуги —
+ * 21 «Время свертываемости крови (Корел)» (без панели) и 26 «Общий анализ крови»
+ * (Кровь, панель на BC-20 № 1, WBC). visitDays — день визита, дней назад.
+ */
+function datedClinic({ visitDays = 0, rows }) {
+  const db = freshDb();
+  db.exec(`
+    INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, discovered, added, model_confirmed)
+      VALUES (1, 'BC-20', 'mindray-bc-20', 'mllp', '10.0.0.12', NULL, 1, 0, 1, 1);
+    INSERT INTO patients (id, full_name) VALUES (7, 'Рахмонкулов');
+    INSERT INTO visits (id, patient_id, visit_date, status) VALUES (70, 7, ${daysAgo(visitDays)}, 'scheduled');
+    INSERT INTO services (id, name, is_lab, specimen) VALUES (21, 'Время свертываемости крови (Корел)', 1, NULL), (26, 'Общий анализ крови', 1, 'Кровь');
+  `);
+  for (const [id, svc, status, days] of rows) {
+    db.exec(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (${id}, 70, ${svc}, '${status}', ${daysAgo(days)})`);
+  }
+  bindPanel(db, { id: 26, serviceId: 26, deviceId: 1, name: 'ОАК', lines: [['WBC', 'Лейкоциты', 'WBC']] });
+  return db;
+}
+const TWINS = [/^неоднозначно: номер пробы — заказ № 52 «Время свертываемости крови \(Корел\)»/, /одни и те же анализы/,
+  /«Общий анализ крови» \(№ 53\)/, /«Общий анализ крови» \(№ 60\)/, /«Печать этикетки»/, /«Привязать»/];
+
+test('M1: два открытых ОАК визита в сроке, код сообщения у обоих — «неоднозначно», ничего не записано; «Привязать» к нужному — в него', () => {
+  for (const [s53, draft] of [['resulted', '5.00'], ['queued', null]]) {
+    for (const [sample, link] of [['00000052', null], ['LAB-000052', 52]]) {
+      const db = datedClinic({ rows: [[52, 21, 'queued', 1], [53, 26, s53, 1], [60, 26, 'queued', 0]] });
+      if (draft) db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source) VALUES (53, 'Лейкоциты', ?, 'analyzer')").run(draft);
+      ingestMessage(db, BC20(sample, '9.90'), '10.0.0.12', 1);
+      const m = lastRow(db);
+      const label = s53 + ' ' + sample + ': ' + m.detail;
+      assert.deepEqual([m.status, m.visit_service_id], ['unmatched', link], label);
+      for (const re of TWINS) assert.match(m.detail, re, label);
+      assert.deepEqual([blank(db, 53), blank(db, 60)], [draft ? { 'Лейкоциты': draft } : {}, {}], label);
+      const w = worklistLines(db, { deviceId: 1, orderId: 52 });
+      assert.equal(w.ok, false, 'рабочий список');
+      for (const re of TWINS) assert.match(w.why, re, 'рабочий список');
+      lisMessageAttach(db, { id: m.id, visit_service_id: 60 }, LAB);
+      assert.deepEqual([lastRow(db).status, lastRow(db).visit_service_id, blank(db, 60)], ['applied', 60, { 'Лейкоциты': '9.90' }], label);
+      assert.deepEqual(blank(db, 53), draft ? { 'Лейкоциты': draft } : {}, label + ': вчерашний ОАК не тронут');
+      db.close();
+    }
+  }
+});
+
+test('M1: заказ визита старше 7 дней — не кандидат: проба — в сегодняшний ОАК; только старый ОАК — прежний отказ', () => {
+  for (const sample of ['00000052', 'LAB-000052']) {
+    const db = datedClinic({ visitDays: 20, rows: [[52, 21, 'queued', 0], [53, 26, 'queued', 20], [60, 26, 'queued', 0]] });
+    ingestMessage(db, BC20(sample, '9.90'), '10.0.0.12', 1);
+    assert.deepEqual([lastRow(db).status, lastRow(db).visit_service_id], ['applied', 60], sample + ': ' + lastRow(db).detail);
+    assert.deepEqual([blank(db, 53), blank(db, 60)], [{}, { 'Лейкоциты': '9.90' }], sample);
+    db.close();
+  }
+  const db = datedClinic({ visitDays: 20, rows: [[52, 21, 'queued', 0], [53, 26, 'queued', 20]] });
+  ingestMessage(db, BC20('LAB-000052'), '10.0.0.12', 1);
+  assert.deepEqual([lastRow(db).status, lastRow(db).visit_service_id, lastRow(db).detail], ['unmapped', 52, NO_PANEL_52]);
+  ingestMessage(db, BC20('00000052'), '10.0.0.12', 1);
+  assert.deepEqual([lastRow(db).status, lastRow(db).visit_service_id, lastRow(db).detail], ['unmapped', null, NO_PANEL_52]);
+  assert.deepEqual(worklistLines(db, { deviceId: 1, orderId: 52 }), { ok: false, why: NO_PANEL_52 });
+  assert.equal(anyResults(db, 53), 0);
+  db.close();
+});
+
+test('M2: заказ номера старше 7 дней (долгий визит) — другой заказ визита не ищется: прежние отказы и тексты', () => {
+  for (const s52 of ['completed', 'queued']) {
+    const db = datedClinic({ visitDays: 20, rows: [[52, 21, s52, 20], [53, 26, 'completed', 20], [60, 26, 'queued', 0]] });
+    db.prepare(`INSERT INTO lab_results (visit_service_id, parameter, value, source, verified_at) VALUES (53, 'Лейкоциты', '5.00', 'analyzer', ${daysAgo(20)})`).run();
+    for (const sample of ['00000052', '000052']) {
+      ingestMessage(db, BC20(sample, '9.90'), '10.0.0.12', 1);
+      assert.deepEqual([lastRow(db).status, lastRow(db).visit_service_id], ['unmatched', null], s52 + ' ' + sample);
+      assert.match(lastRow(db).detail, /^номер пробы «0+52» без префикса LAB- указывает на заказ № 52, который .*старше 7 дней/, s52 + ' ' + sample);
+    }
+    ingestMessage(db, BC20('LAB-000052', '9.90'), '10.0.0.12', 1);
+    const m = lastRow(db);
+    assert.deepEqual([m.status, m.visit_service_id, m.detail], ['unmapped', 52, NO_PANEL_52], s52 + ' LAB-');
+    ingestMessage(db, m.raw, m.peer, 1, { touch: false, sampleIdOverride: 52 });
+    assert.deepEqual([lastRow(db).visit_service_id, lastRow(db).detail], [52, NO_PANEL_52 + '; привязано вручную'], s52 + ' вручную');
+    assert.deepEqual(worklistLines(db, { deviceId: 1, orderId: 52 }),
+      { ok: false, why: s52 === 'completed' ? 'результат заказа уже выдан' : NO_PANEL_52 }, s52 + ' рабочий список');
+    assert.match(worklistLines(db, { deviceId: 1, orderId: 52, bare: true, shown: '00000052' }).why, /указывает на заказ № 52, который .*старше 7 дней/);
+    assert.deepEqual([blank(db, 60), statusOf(db, 60)], [{}, 'queued'], s52 + ': сегодняшний ОАК не тронут');
+    db.close();
+  }
+});
+
+test('L1: строка лотка при заказе № 52 (как до исправления) → «Привязать» 52: значения в ОАК, журнал называет ОАК, касса может удалить № 52', () => {
+  const db = ownerClinic({ status: { 52: 'added' }, cbcPanel: false });
+  ingestMessage(db, BC20('LAB-000052'), '10.0.0.12', 1);
+  const old = lastRow(db);
+  assert.deepEqual([old.status, old.visit_service_id], ['unmatched', 52], old.detail);
+  assert.equal(cashierTrace(db, 52), 1, 'до «Привязать» строка лотка держит № 52');
+  bindPanel(db, { id: 26, serviceId: 26, deviceId: 1, name: 'ОАК', lines: [['WBC', 'Лейкоциты', 'WBC']] });
+  const out = lisMessageAttach(db, { id: old.id, visit_service_id: 52 }, LAB);
+  assert.equal(out.status, 'applied', out.detail);
+  assert.deepEqual(blank(db, 57), { 'Лейкоциты': '6.20' });
+  assert.deepEqual([lastRow(db).status, lastRow(db).visit_service_id], ['applied', 57]);
+  const was = db.prepare('SELECT * FROM lab_device_messages WHERE id = ?').get(old.id);
+  assert.equal(was.visit_service_id, null, 'прежняя строка ушла с № 52');
+  assert.ok(was.resolved_at, 'разобрана');
+  assert.ok(was.detail.includes('перепривязано к заказу № 57 (был заказ № 52)'), was.detail);
+  assert.equal(cashierTrace(db, 52), 0, 'касса может удалить неоплаченный № 52');
+  assert.equal(statusOf(db, 52), 'added');
+  db.close();
+});
+
+test('L2: «неоднозначно» — после ворот оплаты и N2 заказа номера: их тексты прежние, ничего не записано', () => {
+  const unpaid = twoMaterialClinic();
+  unpaid.prepare("UPDATE visit_services SET status = 'added' WHERE id = 52").run();
+  bs(unpaid, 'LAB-000052', 'CREA', '80');
+  assert.deepEqual([lastRow(unpaid).status, lastRow(unpaid).visit_service_id, lastRow(unpaid).detail], ['unmatched', 52, UNPAID_TEXT]);
+  assert.deepEqual(worklistLines(unpaid, { deviceId: 1, orderId: 52 }), { ok: false, why: UNPAID_TEXT });
+  assert.equal(unpaid.prepare('SELECT COUNT(*) c FROM lab_results').get().c, 0);
+  unpaid.close();
+
+  const found = twoMaterialClinic();
+  found.prepare('UPDATE lab_devices SET added = 0 WHERE id = 1').run();
+  bs(found, 'LAB-000052', 'CREA', '80');
+  assert.deepEqual([lastRow(found).status, lastRow(found).visit_service_id, lastRow(found).detail], ['unmatched', 52, NOT_ADDED]);
+  assert.equal(found.prepare('SELECT COUNT(*) c FROM lab_results').get().c, 0);
+  found.close();
 });

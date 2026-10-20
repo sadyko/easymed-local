@@ -185,22 +185,34 @@ const dmy = (ymd) => (/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || '')) ? ymd.slice(
  * читается как UTC — как везде.
  */
 function bareIdRefusal(db, order, number) {
+  const { day, recent } = orderAge(db, order.id);
+  const open = OPEN_LAB_STATUSES.has(order.status);
+  if (open && recent) return null;
+  const why = [];
+  if (!open) why.push('закрыт (статус «' + (STATUS_WORDS[order.status] || order.status) + '»)');
+  if (!recent) why.push('датирован ' + dmy(day) + ' (позднейшее из: создан, записан, визит) — старше ' + BARE_ID_MAX_AGE_DAYS + ' дней');
+  return 'номер пробы «' + number + '» без префикса LAB- указывает на заказ № ' + order.id + ', который '
+    + why.join(' и ') + ' — возможно, это номер места в штативе прибора, а не номер пробирки; '
+    + 'если проба этого заказа — нажмите «Привязать»';
+}
+
+/**
+ * День заказа и срок правила голых цифр (bareIdRefusal выше: ревью R1, п. 4;
+ * R2, п. 4): day — позднейшее из «создан», «записан», «день визита», не позже
+ * сегодняшнего местного дня ('' — не известен); recent — не старше
+ * BARE_ID_MAX_AGE_DAYS дней. LAB_TUBE_ANCHOR_V1 (ревью выпуска 3.17.1, M1 и M2)
+ * — вынесено из bareIdRefusal: тем же сроком при любом виде номера судятся
+ * заказ номера и заказы визита, среди которых ищется пробирка.
+ */
+function orderAge(db, orderId) {
   const t = today(db);
   const row = db.prepare(`SELECT ${localDate('vs.created_at')} AS c, ${localDate('vs.scheduled_at')} AS s, ${localDate('v.visit_date')} AS v,
                                  date(?, ?) AS cutoff
                             FROM visit_services vs LEFT JOIN visits v ON v.id = vs.visit_id
                            WHERE vs.id = ?`)
-    .get(t, '-' + BARE_ID_MAX_AGE_DAYS + ' days', order.id);
-  if (row) row.day = [row.c, row.s, row.v].filter((d) => d && d <= t).sort().pop() || '';
-  const open = OPEN_LAB_STATUSES.has(order.status);
-  const recent = !!(row && row.day && row.day >= row.cutoff);
-  if (open && recent) return null;
-  const why = [];
-  if (!open) why.push('закрыт (статус «' + (STATUS_WORDS[order.status] || order.status) + '»)');
-  if (!recent) why.push('датирован ' + dmy(row && row.day) + ' (позднейшее из: создан, записан, визит) — старше ' + BARE_ID_MAX_AGE_DAYS + ' дней');
-  return 'номер пробы «' + number + '» без префикса LAB- указывает на заказ № ' + order.id + ', который '
-    + why.join(' и ') + ' — возможно, это номер места в штативе прибора, а не номер пробирки; '
-    + 'если проба этого заказа — нажмите «Привязать»';
+    .get(t, '-' + BARE_ID_MAX_AGE_DAYS + ' days', orderId);
+  const day = row ? [row.c, row.s, row.v].filter((d) => d && d <= t).sort().pop() || '' : '';
+  return { day, recent: !!(row && day && day >= row.cutoff) };
 }
 
 /** Строка журнала у сообщения, прогнанного «Привязать» с номером человека. */
@@ -789,7 +801,7 @@ export function specimenKey(specimen) {
  * заказов нет (вызывающий не спрашивает).
  */
 function siblingSides(db, order, ctx) {
-  return visitLabSides(db, order, ctx, specimenKey(order.service_specimen));   // LIS_PROXY_V1 (ревью C1)
+  return visitLabSides(db, order, ctx, { material: specimenKey(order.service_specimen) });   // LIS_PROXY_V1 (ревью C1)
 }
 
 /**
@@ -798,15 +810,19 @@ function siblingSides(db, order, ctx) {
  * (specimenKey): только заказы этого материала; null — любого.
  * LAB_TUBE_ANCHOR_V1 — вынесено из siblingSides: тот же отбор (статусы,
  * orderSide, подтверждённый код) ищет и пробирку визита (tubeAnchor ниже) — там
- * без материала заказа номера.
+ * без материала заказа номера. repick (ревью выпуска 3.17.1, M1) — для неё же:
+ * новейшие заказы первыми (у долгого стационарного визита в SIBLINGS_MAX
+ * попадают свежие) и только не старше BARE_ID_MAX_AGE_DAYS дней (orderAge):
+ * вчерашний черновик ОАК и анализ прошлой недели — не пробирка сегодняшнего
+ * номера. D3 (siblingSides) — как прежде: по возрастанию номера, без срока.
  */
-function visitLabSides(db, order, ctx, material) {
+function visitLabSides(db, order, ctx, { material = null, repick = false } = {}) {
   if (order.visit_id == null) return [];
   const out = [];
   const rows = db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
                              JOIN services s ON s.id = vs.service_id
                             WHERE vs.visit_id = ? AND vs.id <> ? AND s.is_lab = 1
-                            ORDER BY vs.id LIMIT ?`).all(order.visit_id, order.id, SIBLINGS_MAX);   // service_specimen: LIS_PROXY_V1 (ревью C1)
+                            ORDER BY vs.id ${repick ? 'DESC' : 'ASC'} LIMIT ?`).all(order.visit_id, order.id, SIBLINGS_MAX);   // service_specimen: LIS_PROXY_V1 (ревью C1)
   for (const o of rows) {
     // LIS_PROXY_V1 (ревью C1) — одна пробирка — заказы ОДНОГО материала: проба
     // мочи не заполняет «Биохимию» сыворотки (и не переписывает её 5.1 своими
@@ -819,6 +835,7 @@ function visitLabSides(db, order, ctx, material) {
     else if (o.status === 'completed') closed = 'released';
     else if (!OPEN_PAID_STATUSES.has(o.status)) continue;
     else if (isReleased(db, o.id)) closed = 'released';
+    if (repick && !orderAge(db, o.id).recent) continue;   // LAB_TUBE_ANCHOR_V1 (ревью 3.17.1, M1)
     const side = orderSide(db, o, ctx);
     if (!side.ok || !side.analytes.some(confirmedCode)) continue;
     out.push({ order: o, ...side, closed });
@@ -845,46 +862,80 @@ function visitLabSides(db, order, ctx, material) {
 // ничего: угадывать нельзя, моча легла бы в бланк сыворотки. Дальше приём идёт
 // ровно так, как если бы номер указывал на найденный заказ. Заказ номера прибор
 // кормит сам — всё как прежде (C1, D3, D7, серия).
+// Ревью выпуска 3.17.1: M1 — пробирка ищется только среди заказов визита не
+// старше 7 дней (срок правила голых цифр, orderAge), новейшие первыми; у
+// одного материала одни и те же анализы этого прибора в двух открытых
+// оплаченных заказах (вчерашний ОАК и сегодняшний) — «неоднозначно»: меньший
+// номер дописывал бы вчерашний бланк. M2 — заказ номера старше 7 дней пробирку
+// не ищет (старая пробирка долгого визита, прогнанная снова, не ложится в
+// сегодняшний ОАК): у него прежний путь и прежние тексты.
 
 /** LAB_TUBE_ANCHOR_V1 — материал словами для «неоднозначно» (ключи specimenKey; прочее — сам текст). */
 const SPECIMEN_WORDS = { urine: 'моча', plasma: 'плазма', serum: 'сыворотка', blood: 'кровь', '': 'материал не указан' };
 
-/** LAB_TUBE_ANCHOR_V1 — пробирку визита не выбрать: заказы по материалам и что делать. */
-function anchorAmbiguousText(order, groups) {
-  const name = (o) => '«' + (o.service_name || o.service_id) + '» (№ ' + o.id + ')';
-  const parts = [...groups].map(([k, sides]) => (SPECIMEN_WORDS[k] || k) + ': ' + sides.map((s) => name(s.order)).join(', '));
+/** LAB_TUBE_ANCHOR_V1 — заказ визита словами: «услуга» (№ N). Списки — по возрастанию номера. */
+const orderWords = (o) => '«' + (o.service_name || o.service_id) + '» (№ ' + o.id + ')';
+const byId = (sides) => [...sides].sort((a, b) => a.order.id - b.order.id);
+
+/**
+ * LAB_TUBE_ANCHOR_V1 — пробирку визита не выбрать: почему (why — заказы по
+ * материалам или одинаковые анализы) и что делать.
+ */
+function anchorAmbiguousText(order, why) {
   return 'неоднозначно: номер пробы — заказ № ' + order.id + ' «' + (order.service_name || order.service_id) + '», его панель этот прибор не кормит,'
-    + ' а заказы визита, которые он кормит, — из разного материала (' + parts.join('; ') + '): чья это пробирка, не понять;'
+    + ' а ' + why + ': чья это пробирка, не понять;'
     + ' печатайте этикетку каждой пробирки из строки её услуги («Печать этикетки») или привяжите пробу кнопкой «Привязать»';
 }
+const materialsWhy = (groups) => 'заказы визита, которые он кормит, — из разного материала ('
+  + [...groups].map(([k, sides]) => [k, byId(sides)]).sort((a, b) => a[1][0].order.id - b[1][0].order.id)
+    .map(([k, sides]) => (SPECIMEN_WORDS[k] || k) + ': ' + sides.map((s) => orderWords(s.order)).join(', ')).join('; ') + ')';
+/** Ревью 3.17.1, M1 (c) — одинаковые анализы в нескольких открытых заказах: какие. */
+const twinsWhy = (sides) => 'одни и те же анализы этого прибора — в нескольких открытых заказах визита ('
+  + byId(sides).map((s) => orderWords(s.order)).join(', ') + ')';
+
+/** Подтверждённые коды бланка заказа (как их сравнивает приём). */
+const confirmedCodes = (s) => new Set(s.analytes.filter(confirmedCode).map((a) => codeKey(a.device_code)));
 
 /**
  * LAB_TUBE_ANCHOR_V1 — заказ визита, в который идёт проба, когда заказ её номера
- * (order) этот прибор не кормит. Вызывающий спрашивает, только если прибор
- * известен, у заказа есть визит и orderSide(order) — отказ.
- * Порядок внутри материала: открытый оплаченный невыданный, потом не оплаченный,
- * потом выданный; при равных — меньший номер заказа.
+ * (order) этот прибор не кормит. Вызывающий спрашивает, только если заказ
+ * номера лабораторный, не старше 7 дней (ревью 3.17.1, M2), прибор известен, у
+ * заказа есть визит и orderSide(order) — отказ.
+ * Кандидаты — заказы визита не старше 7 дней (M1). Внутри материала:
+ *   — открытые оплаченные невыданные, у которых код сообщения (у рабочего
+ *     списка — общий код друг с другом), — два и больше: «неоднозначно» (M1);
+ *     один — он;
+ *   — иначе открытый оплаченный невыданный, потом не оплаченный, потом
+ *     выданный; при равных — новейший.
  * @param {object[]|null} observations  строки прибора сообщения; null — сообщения
  *        нет (рабочий список): несколько материалов — «неоднозначно»
  * @returns {{order:object, side:object} | {ambiguous:string} | null}
  *   side — orderSide найденного заказа; null — кормить нечего (прежний отказ).
  */
 function tubeAnchor(db, order, ctx, observations = null) {
-  const groups = new Map();   // ключ материала → заказы визита, в порядке номеров
-  for (const s of visitLabSides(db, order, ctx, null)) {
+  const groups = new Map();   // ключ материала → заказы визита, новейшие первыми
+  for (const s of visitLabSides(db, order, ctx, { repick: true })) {
     const k = specimenKey(s.order.service_specimen);
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(s);
   }
   if (!groups.size) return null;
+  const hitBy = (s) => !!observations && planObservations(observations, s.analytes).taken.length > 0;
   let pool = [...groups.values()];
   if (pool.length > 1) {
-    const hit = observations ? pool.filter((g) => g.some((s) => planObservations(observations, s.analytes).taken.length > 0)) : [];
-    if (hit.length !== 1) return { ambiguous: anchorAmbiguousText(order, groups) };
+    const hit = pool.filter((g) => g.some(hitBy));
+    if (hit.length !== 1) return { ambiguous: anchorAmbiguousText(order, materialsWhy(groups)) };
     pool = hit;
   }
+  // Ревью 3.17.1, M1 (b) — одни и те же анализы в нескольких открытых заказах.
+  const open = pool[0].filter((s) => s.closed === '');
+  const twins = observations
+    ? open.filter(hitBy)
+    : open.filter((s) => open.some((o) => o !== s && [...confirmedCodes(o)].some((c) => confirmedCodes(s).has(c))));
+  if (twins.length > 1) return { ambiguous: anchorAmbiguousText(order, twinsWhy(twins)) };
   const rank = (s) => (s.closed === '' ? 0 : s.closed === 'unpaid' ? 1 : 2);
-  const { order: anchor, closed, ...side } = [...pool[0]].sort((a, b) => rank(a) - rank(b) || a.order.id - b.order.id)[0];
+  // sort устойчив: при равных — порядок отбора, новейший первым.
+  const { order: anchor, closed, ...side } = twins[0] || [...pool[0]].sort((a, b) => rank(a) - rank(b))[0];
   return { order: anchor, side };
 }
 
@@ -1187,7 +1238,11 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // отказов (этикетка LAB- и номер человека). Кормить нечего — прежний отказ
   // ниже. «Привязать» — так же: человек набирает номер «Проба» карточки, а это
   // тоже номер первой услуги.
-  const anchor = order.is_lab && !x.ok && deviceId && order.visit_id != null ? tubeAnchor(db, order, ctx, observations) : null;
+  // Ревью выпуска 3.17.1, M2 — только у заказа номера не старше 7 дней (orderAge),
+  // при любом виде номера: старая пробирка долгого визита, прогнанная снова, не
+  // ложится в сегодняшний ОАК — у неё прежний путь и прежние тексты.
+  const anchor = order.is_lab && !x.ok && deviceId && order.visit_id != null && orderAge(db, order.id).recent
+    ? tubeAnchor(db, order, ctx, observations) : null;
   const moved = anchor && anchor.order ? anchor : null;
   // Голые цифры — только для открытого заказа последних 7 дней (решение
   // владельца 2026-10-01). Отказ НЕ привязывает сообщение к найденному заказу
@@ -1216,17 +1271,16 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       detail: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' });
     return 'AA';
   }
-  // LAB_TUBE_ANCHOR_V1 — пробирка визита (выше): не выбрать — «неоднозначно»;
-  // найдена — дальше идёт она.
-  if (anchor && anchor.ambiguous) {
-    record({ ...base, visitServiceId: linkId, status: 'unmatched', detail: anchor.ambiguous });
-    return 'AA';
-  }
+  // LAB_TUBE_ANCHOR_V1 — пробирка визита (выше) найдена — дальше идёт она.
+  // «Неоднозначно» — ниже, на месте отказа orderSide заказа номера.
   if (moved) {
     order = moved.order;
     x = moved.side;
     linkId = pick.lab || manual ? order.id : null;
   }
+  // Ревью выпуска 3.17.1, L1 — какой заказ приём взял на деле: «Привязать»
+  // (rpc/lis.js) судит по нему, а не по номеру, который набрал человек.
+  if (opts.report) opts.report.orderId = order.id;
   // LIS_REAL_ANALYZERS_V1 (ревью R7, п. 1) — ворота лаборатории, те же, что у
   // ручного ввода: неоплаченный, отменённый, возвращённый заказ прибор не
   // заполняет и в «результаты внесены» не переводит (иначе после этого
@@ -1253,6 +1307,13 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
     return 'AA';
   }
 
+  // LAB_TUBE_ANCHOR_V1 (ревью выпуска 3.17.1, L2) — пробирку визита не выбрать:
+  // «неоднозначно» — после ворот оплаты и N2 заказа номера (их тексты прежние),
+  // вместо его отказа orderSide. Не пишется ничего.
+  if (anchor && anchor.ambiguous) {
+    record({ ...base, visitServiceId: linkId, status: 'unmatched', detail: anchor.ambiguous });
+    return 'AA';
+  }
   // Отказ orderSide (прочитан выше, до ворот) — в лоток, с прежними словами.
   if (!x.ok) {
     record({ ...base, visitServiceId: linkId, status: x.status, detail: x.detail });
@@ -1512,7 +1573,8 @@ export function worklistLines(db, { deviceId, orderId, bare = false, shown = '' 
   const sender = deviceId ? db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(deviceId) : null;
   const ctx = sender ? { deviceId, sender, profile: getProfile(sender.profile), messageModel: null } : null;
   let own = ctx ? orderSide(db, order, ctx) : null;
-  const anchor = own && !own.ok && order.is_lab && order.visit_id != null ? tubeAnchor(db, order, ctx) : null;
+  // Ревью выпуска 3.17.1, M2 — только у заказа номера не старше 7 дней, как у приёма.
+  const anchor = own && !own.ok && order.is_lab && order.visit_id != null && orderAge(db, order.id).recent ? tubeAnchor(db, order, ctx) : null;
   const moved = anchor && anchor.order ? anchor : null;
   // LAB_TUBE_ANCHOR_V1 — правило голых цифр судит заказ, тесты которого уйдут:
   // при пробирке визита — найденный, иначе — заказ номера, как прежде.
@@ -1521,7 +1583,6 @@ export function worklistLines(db, { deviceId, orderId, bare = false, shown = '' 
     if (refusal) return { ok: false, why: refusal };
   }
   if (!order.is_lab) return { ok: false, why: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' };
-  if (anchor && anchor.ambiguous) return { ok: false, why: anchor.ambiguous };
   if (moved) {
     order = moved.order;
     own = moved.side;
@@ -1530,6 +1591,8 @@ export function worklistLines(db, { deviceId, orderId, bare = false, shown = '' 
   if (gate) return { ok: false, why: gate };
   if (order.status === 'completed' || isReleased(db, order.id)) return { ok: false, why: 'результат заказа уже выдан' };
   if (!sender) return { ok: false, why: 'прибор не найден' };
+  // Ревью 3.17.1, L2 — «неоднозначно» — после ворот заказа номера, на месте его отказа orderSide.
+  if (anchor && anchor.ambiguous) return { ok: false, why: anchor.ambiguous };
   if (!own.ok) return { ok: false, why: own.detail };
   const sides = [own, ...siblingSides(db, order, ctx).filter((s) => !s.closed)];
   const seen = new Set();

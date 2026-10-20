@@ -240,11 +240,18 @@ export function lisMessageAttach(db, args, user) {
     const report = {};
     const code = ingestMessage(db, msg.raw, msg.peer, msg.device_id, { touch: false, sampleIdOverride: vsId, report });
     const accepted = report.status === 'applied' || (report.status === 'unmapped' && report.written > 0);
-    const linkedElsewhere = msg.visit_service_id != null && Number(msg.visit_service_id) !== vsId;
+    // LAB_TUBE_ANCHOR_V1 (ревью выпуска 3.17.1, L1) — человек набрал номер «Проба»
+    // карточки (номер первой услуги визита), а приём положил пробу в заказ
+    // визита, который кормит прибор (ingest.js tubeAnchor; report.orderId):
+    // принятая проба судится по НЕМУ — прежняя строка уходит с первой услуги
+    // (её след больше не держит кассу), в журнале — номер заказа, где значения.
+    // Не принял — как прежде, по набранному номеру.
+    const toId = accepted && report.orderId != null ? Number(report.orderId) : vsId;
+    const linkedElsewhere = msg.visit_service_id != null && Number(msg.visit_service_id) !== toId;
     if (linkedElsewhere && !accepted) {
       throw new LisError('Привязка не сделана: этот заказ пробу не принял — значения в прежнем заказе не тронуты, строка осталась в лотке. Проверьте номер заказа.', 409);
     }
-    const back = takeBackValues(db, msg, vsId);
+    const back = takeBackValues(db, msg, toId);
     const rec = db.prepare('SELECT id, status, detail FROM lab_device_messages WHERE id > ? ORDER BY id DESC LIMIT 1').get(before);
     resolveMessage(db, id);
     let detail = rec ? rec.detail || '' : '';
