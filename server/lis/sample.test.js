@@ -518,7 +518,9 @@ test('R1 п. 8: не наша этикетка (не «LAB-» и 6+ цифр) �
 // впереди принимает только переадресатор COM (MSH-4 = LabPC; кадр — его
 // buildOru, analyzers\forwarder\hl7-oru.js): старая гематология Mindray
 // дополняет номер нулями до ширины своего поля (8 знаков, mindray-legacy.js).
-// Прибор по сети пишет номер как набрали: «00000123» — не номер с этикетки.
+// Прибор по сети пишет номер как набрали: «0000000123» — не номер с этикетки.
+// LAB_BARCODE_DIGITS_V1 (2026-10-20) — а «00000123» (ровно 8 цифр) — штрихкод
+// новой этикетки: принимается и по сети.
 test('R1 п. 8: голые цифры с ведущими нулями (переадресатор шлёт 8 знаков) — правило голых цифр, как прежде', () => {
   const db = clinic();
   ingestMessage(db, seg(
@@ -531,11 +533,17 @@ test('R1 п. 8: голые цифры с ведущими нулями (пере
   db.close();
 
   const net = clinic();
-  ingestMessage(net, HEM('', '00000123'), '10.0.0.9', 1);
-  assert.deepEqual([last(net).status, last(net).visit_service_id], ['unmatched', null], 'прибор по сети: «00000123» — не номер с этикетки');
+  ingestMessage(net, HEM('', '0000000123'), '10.0.0.9', 1);
+  assert.deepEqual([last(net).status, last(net).visit_service_id], ['unmatched', null], 'прибор по сети: «0000000123» — не номер с этикетки');
   assert.match(last(net).detail, /не номер с этикетки Easy-Med/);
   assert.equal(results(net).length, 0);
   net.close();
+
+  const label = clinic();
+  ingestMessage(label, HEM('', '00000123'), '10.0.0.9', 1);
+  assert.equal(last(label).visit_service_id, 123, 'прибор по сети: «00000123» — штрихкод новой этикетки: ' + last(label).detail);
+  assert.equal(results(label).length, 1);
+  label.close();
 });
 
 // П. 11 — у строки BS-200 нет профиля или он чужой: провод — по тому, как
@@ -755,7 +763,7 @@ function decoys({ ids, profile, analytes }) {
 /** Заказы, которых коснулась проба: значения в бланке или строка лотка, привязанная к заказу. */
 const touched = (db, ids) => ids.filter((id) => results(db, id).length > 0
   || db.prepare('SELECT COUNT(*) c FROM lab_device_messages WHERE visit_service_id = ?').get(id).c > 0);
-const SHORT = (n) => 'номер пробы «' + n + '» короче 6 цифр — на приборе вводите номер с этикетки Easy-Med (6 цифр, например 000123)'
+const SHORT = (n) => 'номер пробы «' + n + '» короче 6 цифр — на приборе вводите номер с этикетки Easy-Med (8 цифр под штрихкодом, например 00000123)'
   + ' или сканируйте её; эту пробу привяжите кнопкой «Привязать»';
 
 // A1000 — вывод кодировщика программы прибора клиники (AutoLumo1000 1.0.7;
@@ -874,7 +882,7 @@ test('п. 4: номер с этикетки (6 цифр, как под штри�
     ['mindray-cl-900i', [['TSH', 'ТТГ', 'TSH']], (s) => CL(s, '10')],
   ];
   for (const [profile, analytes, msg] of cases) {
-    for (const sample of ['000123', 'LAB-000123']) {
+    for (const sample of ['000123', 'LAB-000123', '00000123']) {   // 00000123: LAB_BARCODE_DIGITS_V1 — штрихкод новой этикетки
       const db = decoys({ ids: [123, 1, 7, 10], profile, analytes });
       ingestMessage(db, msg(sample), '10.0.0.9', 1);
       assert.deepEqual([last(db).status, last(db).visit_service_id], ['applied', 123], profile + ' ' + sample + ': ' + last(db).detail);
@@ -883,12 +891,18 @@ test('п. 4: номер с этикетки (6 цифр, как под штри�
       db.close();
     }
   }
-  // Заказ № 1234567 печатается без дополнения — так и принимается; «01234567» — нет.
+  // Заказ № 1234567: под прежней этикеткой LAB- — без дополнения («1234567»), штрихкод
+  // новой — 8 цифр («01234567», LAB_BARCODE_DIGITS_V1); нули сверх того («001234567») — нет.
+  for (const sample of ['1234567', '01234567']) {
+    const big = decoys({ ids: [1234567], profile: 'mindray-bc-5300', analytes: [['WBC', 'Лейкоциты', 'WBC']] });
+    ingestMessage(big, BC5300(sample), '10.0.0.9', 1);
+    assert.equal(last(big).visit_service_id, 1234567, sample + ': ' + last(big).detail);
+    big.close();
+  }
   const big = decoys({ ids: [1234567], profile: 'mindray-bc-5300', analytes: [['WBC', 'Лейкоциты', 'WBC']] });
-  ingestMessage(big, BC5300('1234567'), '10.0.0.9', 1);
-  assert.equal(last(big).visit_service_id, 1234567, last(big).detail);
-  ingestMessage(big, BC5300('01234567', '7.1'), '10.0.0.9', 1);
+  ingestMessage(big, BC5300('001234567', '7.1'), '10.0.0.9', 1);
   assert.deepEqual([last(big).status, last(big).visit_service_id], ['unmatched', null]);
+  assert.match(last(big).detail, /не номер с этикетки Easy-Med/);
   big.close();
 });
 

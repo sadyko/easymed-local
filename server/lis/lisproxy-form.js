@@ -7,6 +7,7 @@
 // анализатора». Поэтому значение превращается в минимальный ORU^R01 и идёт тем
 // же входом, что у своего порта (receive.js), — правила владельца не дублируются.
 import { decimalPoint, trimZeros, isNoResult, FORWARDER_FACILITY, LISPROXY_APP } from './wire.js';   // LISPROXY_APP: ревью I2/I3
+import { BARCODE_DIGITS, labelBarcodeNumber } from './wire.js';   // LAB_BARCODE_DIGITS_V1 — штрихкод этикетки: 8 цифр
 
 /** MSH-3 синтетического сообщения: постоянное. Имя анализатора в прокси — свободный текст, а модель по MSH-3 угадывает приём (discover.js guessProfile). */
 export const PROXY_APP = LISPROXY_APP;   // ревью I2/I3 — по нему (и MSH-4 LabPC) wire.js выбирает провод lisproxy* по модели строки
@@ -82,14 +83,21 @@ const AUTOLUMO_CUT = [/^B-(\d{6})$/i, /^-([1-9]\d{6})$/];
  * Номер пробирки из поля barcode прокси (раздел 3.5).
  * @param {string} raw
  * @param {{autolumo?: boolean}} [o]  модель строки прибора — AutoLumo A1000
- * @returns {{ok:true, barcode:string, restored:boolean, shown:string} | {ok:false, barcode:'', restored:false, shown:string, why:string}}
+ * @returns {{ok:true, barcode:string, restored:boolean, shown:string, orderId:number, bare:boolean} | {ok:false, barcode:'', restored:false, shown:string, why:string}}
+ *   orderId — номер заказа; bare — штрихкод из одних цифр (LAB_BARCODE_DIGITS_V1): в приёме — правило голых цифр
  */
 export function normaliseProxyBarcode(raw, { autolumo = false } = {}) {
   const s = t(raw);
   const lab = LAB_LABEL.exec(s);
-  if (lab) return { ok: true, barcode: 'LAB-' + lab[1], restored: false, shown: s };
+  if (lab) return { ok: true, barcode: 'LAB-' + lab[1], restored: false, shown: s, orderId: parseInt(lab[1], 10), bare: false };
+  // LAB_BARCODE_DIGITS_V1 (решение владельца 2026-10-20) — штрихкод новой этикетки:
+  // ровно 8 цифр, как напечатано («00000123»). Идёт в приём голыми цифрами (bare):
+  // там — правило «открытый заказ последних 7 дней», как у прибора без прокси.
+  // AutoLumo оставляет последние 8 знаков — эти 8 цифр он отдаёт целиком.
+  const digits = labelBarcodeNumber(s);
+  if (digits != null) return { ok: true, barcode: s, restored: false, shown: s, orderId: digits, bare: true };
   const cut = AUTOLUMO_CUT.map((re) => re.exec(s)).find(Boolean);
-  if (cut && autolumo) return { ok: true, barcode: 'LAB-' + cut[1], restored: true, shown: s };
+  if (cut && autolumo) return { ok: true, barcode: 'LAB-' + cut[1], restored: true, shown: s, orderId: parseInt(cut[1], 10), bare: false };
   return { ok: false, barcode: '', restored: false, shown: s, why: notTubeReason(s, !!cut) };
 }
 
@@ -98,8 +106,8 @@ function notTubeReason(s, looksCut) {
   if (!s) return head + ' — анализатор не передал номер пробы';
   if (s.includes('^')) return head + ' — проверьте тип анализатора в LIS Proxy (BC-20/BC-5300 путают поле)';
   if (/^\d+$/.test(s)) {
-    return head + ' — похоже на номер пациента или места, а не пробирки: на анализаторе сканируйте этикетку LAB- в поле штрихкода,'
-      + ' номер пациента не заполняйте; пробу привяжите кнопкой «Привязать»';
+    return head + ' — похоже на номер пациента или места, а не пробирки: на анализаторе сканируйте этикетку Easy-Med'
+      + ' (' + BARCODE_DIGITS + ' цифр под штрихкодом) в поле штрихкода, номер пациента не заполняйте; пробу привяжите кнопкой «Привязать»';
   }
   if (looksCut) return head + ' — похоже на обрезанную этикетку AutoLumo: если это AutoLumo A1000, выберите эту модель у прибора в «Анализаторах»';
   return head + ' — проверьте настройку штрихкода на анализаторе и тип анализатора в LIS Proxy; если это проба вашего заказа — нажмите «Привязать»';
@@ -114,7 +122,7 @@ export function hl7Stamp(d = new Date()) {
 /**
  * Одно значение — одно ORU^R01 провода forwarder (wire.js: MSH-4 = LabPC; номер
  * — OBR-3, код — OBX-3, значение — OBX-5 целиком). barcode — уже нормализованный
- * номер «LAB-…» или '' (не номер пробирки). Код — одним компонентом: сравнение
+ * номер «LAB-…», штрихкод из 8 цифр (LAB_BARCODE_DIGITS_V1) или '' (не номер пробирки). Код — одним компонентом: сравнение
  * идёт по компоненту 1 или 2 (match.js), а текст лотка показывает OBX-3 целиком.
  */
 export function buildOru({ code = '', res = '', unit = '', norms = '', flag = '', barcode = '', controlId = '1', now = new Date() } = {}) {

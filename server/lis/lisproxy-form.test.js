@@ -45,15 +45,16 @@ test('мусор: пустое и «*», служебные строки Mindray
 });
 
 test('штрихкод: LAB- как есть, обрезка AutoLumo — только у AutoLumo, прочее — не номер пробирки с причиной', () => {
-  assert.deepEqual(normaliseProxyBarcode(' lab-000123 '), { ok: true, barcode: 'LAB-000123', restored: false, shown: 'lab-000123' });
+  assert.deepEqual(normaliseProxyBarcode(' lab-000123 '), { ok: true, barcode: 'LAB-000123', restored: false, shown: 'lab-000123', orderId: 123, bare: false });
   assert.equal(normaliseProxyBarcode('LAB-1234567').barcode, 'LAB-1234567');
-  assert.deepEqual(normaliseProxyBarcode('B-000777', { autolumo: true }), { ok: true, barcode: 'LAB-000777', restored: true, shown: 'B-000777' });
+  assert.deepEqual(normaliseProxyBarcode('B-000777', { autolumo: true }), { ok: true, barcode: 'LAB-000777', restored: true, shown: 'B-000777', orderId: 777, bare: false });
   assert.equal(normaliseProxyBarcode('-1234567', { autolumo: true }).barcode, 'LAB-1234567');
   const cut = normaliseProxyBarcode('B-000777');
   assert.equal(cut.ok, false);
   assert.match(cut.why, /обрезанную этикетку AutoLumo/);
   for (const [raw, re] of [
-    ['900001', /номер пациента или места/], ['12345678', /номер пациента или места/], ['PATNUM9', /проверьте настройку штрихкода/],
+    ['900001', /номер пациента или места/], ['1234567', /номер пациента или места/], ['0000000123', /номер пациента или места/],
+    ['000000123', /номер пациента или места/], ['00000000', /номер пациента или места/], ['PATNUM9', /проверьте настройку штрихкода/],
     ['Therapy^^12', /BC-20\/BC-5300 путают поле/], ['6690-2^WBC^LN', /BC-20\/BC-5300/], ['', /\(пусто\) — анализатор не передал номер пробы/],
     ['LAB-123', /проверьте настройку штрихкода/], ['ORU^R01', /путают поле/], ['ALL', /проверьте настройку/],
   ]) {
@@ -62,6 +63,17 @@ test('штрихкод: LAB- как есть, обрезка AutoLumo — тол
     assert.ok(r.why.startsWith(PROXY_NOT_TUBE + ': ' + (raw || '(пусто)')), r.why);
     assert.match(r.why, re, raw);
   }
+});
+
+// LAB_BARCODE_DIGITS_V1 (решение владельца 2026-10-20) — штрихкод новой этикетки:
+// ровно 8 цифр, как напечатано; в приём — голыми цифрами (bare), там правило
+// «открытый заказ последних 7 дней». У AutoLumo и без него — одинаково.
+test('штрихкод из 8 цифр (новая этикетка) — номер пробирки, голыми цифрами', () => {
+  for (const autolumo of [false, true]) {
+    assert.deepEqual(normaliseProxyBarcode(' 00000123 ', { autolumo }), { ok: true, barcode: '00000123', restored: false, shown: '00000123', orderId: 123, bare: true });
+    assert.deepEqual(normaliseProxyBarcode('01234567', { autolumo }), { ok: true, barcode: '01234567', restored: false, shown: '01234567', orderId: 1234567, bare: true });
+  }
+  assert.equal(normaliseProxyBarcode('LAB-000123').bare, false, 'прежняя этикетка — как была');
 });
 
 test('buildOru: провод forwarder, номер из OBR-3, код одним компонентом, модели по MSH-3 нет; экранирование не ломает поля', () => {

@@ -31,6 +31,7 @@ import { crmServiceEvidence } from '../services/crm/visit-status.js';
 import { readResult, pickMessageSample, wireFor, wireDecision } from './wire.js';   // pickMessageSample: LIS_REAL_ANALYZERS_V1, ревью R1, п. 1; wireDecision: ревью R2, п. 12
 import { decimalPoint } from './wire.js';   // LIS_VENDOR_EXACT_V1 (D0) — десятичная запятая на любом проводе
 import { readEnvelope } from './wire.js';
+import { BARCODE_DIGITS, labelBarcodeNumber } from './wire.js';   // LAB_BARCODE_DIGITS_V1 — штрихкод этикетки: 8 цифр
 import { forwarderLike } from './wire.js';   // LIS_PROXY_V1 (ревью I2/I3)   // LIS_VENDOR_EXACT_V1 (п. 6) — служебное сообщение к пациенту не идёт и при прямом вызове
 import { planTube, tubeOutcome, heldChangeText, resentText } from './match.js';   // LIS_VENDOR_EXACT_V1 — D3 (пробирка — услуги визита) и N1 (повтор)
 import { getProfile } from './profiles/index.js';
@@ -94,17 +95,22 @@ export const PLAIN_NUMBER_MIN_DIGITS = 6;
  * иначе — причина словами для «Необработанных». Не цифры — не сюда (wire.js
  * pickSampleId их уже отказал: «не этикетка Easy-Med»).
  */
+// LAB_BARCODE_DIGITS_V1 (решение владельца 2026-10-20) — штрихкод этикетки теперь
+// одни цифры, 8 знаков («00000123», wire.js labelBarcodeNumber): так, как
+// напечатано, — и 8 цифр, и прежние 6 («000123» — номер под штрихкодом прежней
+// этикетки LAB-, его набирают руками). Порог PLAIN_NUMBER_MIN_DIGITS — прежний.
 function plainNumberRefusal(value, wire) {
   const s = String(value == null ? '' : value).trim();
   if (!/^\d+$/.test(s)) return null;
   const n = PLAIN_NUMBER_MIN_DIGITS;
   if (s.length < n) {
-    return 'номер пробы «' + s + '» короче ' + n + ' цифр — на приборе вводите номер с этикетки Easy-Med (' + n
-      + ' цифр, например 000123) или сканируйте её; эту пробу привяжите кнопкой «Привязать»';
+    return 'номер пробы «' + s + '» короче ' + n + ' цифр — на приборе вводите номер с этикетки Easy-Med (' + BARCODE_DIGITS
+      + ' цифр под штрихкодом, например 00000123) или сканируйте её; эту пробу привяжите кнопкой «Привязать»';
   }
-  if (!forwarderLike(wire) && s !== String(parseInt(s, 10)).padStart(n, '0')) {   // forwarderLike: LIS_PROXY_V1 — и провода lisproxy*
-    return 'номер пробы «' + s + '» — не номер с этикетки Easy-Med: на этикетке номер заказа из ' + n
-      + ' цифр без лишних нулей впереди (например 000123), а это, возможно, свой штрихкод пробирки — на приборе'
+  const asPrinted = s === String(parseInt(s, 10)).padStart(n, '0') || labelBarcodeNumber(s) != null;
+  if (!forwarderLike(wire) && !asPrinted) {   // forwarderLike: LIS_PROXY_V1 — и провода lisproxy*
+    return 'номер пробы «' + s + '» — не номер с этикетки Easy-Med: на этикетке номер заказа из ' + BARCODE_DIGITS
+      + ' цифр (например 00000123; на прежних этикетках — LAB- и ' + n + ' цифр), а это, возможно, свой штрихкод пробирки — на приборе'
       + ' вводите номер с этикетки Easy-Med или сканируйте её; эту пробу привяжите кнопкой «Привязать»';
   }
   return null;
@@ -1045,7 +1051,12 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // пациента (PID-2), и правило голых цифр ниже заполнило бы бланк ДРУГОГО
   // пациента. Вход прокси (lisproxy.js) такое сюда не пускает; это стена на
   // случай любого другого пути. Номер, названный человеком («Привязать»), — как прежде.
-  if (proxy && !manual && !pick.lab) {
+  // LAB_BARCODE_DIGITS_V1 (решение владельца 2026-10-20) — и штрихкод новой
+  // этикетки: ровно 8 цифр, как напечатано («00000123», wire.js
+  // labelBarcodeNumber); номер пациента без нулей впереди так не выглядит.
+  // Дальше — правило голых цифр, как у прибора без прокси: заказ открыт и не
+  // старше 7 дней (номер, набранный нулями до 8 цифр, отсекает только оно).
+  if (proxy && !manual && !pick.lab && labelBarcodeNumber(pick.value) == null) {
     record({ ...base, status: 'unmatched', detail: PROXY_NOT_TUBE + ': ' + (pick.sampleId || '(пусто)') + ' — заказ не ищется; пробу привяжите кнопкой «Привязать»' });
     return 'AA';
   }
@@ -1375,10 +1386,18 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
 //     прогонит тесты других услуг пробирки. Повторы кода — один раз.
 // @returns {{ok:true, codes:string[], patient:{date_of_birth:string|null, gender:string|null}, specimen:string}
 //          | {ok:false, why:string}}
-export function worklistLines(db, { deviceId, orderId } = {}) {
+// LAB_BARCODE_DIGITS_V1 (решение владельца 2026-10-20) — bare: номер пришёл
+// штрихкодом из одних цифр (не этикеткой LAB-) — тесты отдаются только по
+// правилу голых цифр приёма (bareIdRefusal: открытый заказ последних 7 дней):
+// иначе анализатор получил бы тесты заказа, результат которого приём не примет.
+export function worklistLines(db, { deviceId, orderId, bare = false, shown = '' } = {}) {
   const order = orderId ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
                                         JOIN services s ON s.id = vs.service_id WHERE vs.id = ?`).get(orderId) : null;
   if (!order) return { ok: false, why: 'заказ по номеру пробы не найден' };
+  if (bare) {
+    const refusal = bareIdRefusal(db, order, shown || String(orderId));
+    if (refusal) return { ok: false, why: refusal };
+  }
   if (!order.is_lab) return { ok: false, why: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' };
   const gate = gateRefusal(order);
   if (gate) return { ok: false, why: gate };

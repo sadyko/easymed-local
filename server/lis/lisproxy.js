@@ -173,7 +173,7 @@ function handleOrder(db, { id, peer, body }) {
     if (!bc.ok) why = bc.why;
     else {
       sampleId = bc.barcode;
-      const w = worklistLines(db, { deviceId: d.id, orderId: Number(bc.barcode.slice(4)) });
+      const w = worklistLines(db, { deviceId: d.id, orderId: bc.orderId, bare: bc.bare, shown: bc.barcode });   // LAB_BARCODE_DIGITS_V1 — и штрихкод из 8 цифр
       if (!w.ok) why = w.why;
       else entries = worklistEntries({ barcode: bc.barcode, codes: w.codes, patient: w.patient, specimen: w.specimen });
       if (w.ok && !(w.patient && w.patient.date_of_birth)) why = 'дата рождения не указана — прибор получит пустую дату';

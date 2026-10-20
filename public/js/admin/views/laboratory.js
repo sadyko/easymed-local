@@ -26,7 +26,8 @@
 // «Документы» tab derives «Результаты анализов» entries from lab_results
 // (PATIENT_DOCS_CLINICAL_V1) — no duplicate visit_documents row is written.
 //
-// Accession barcodes: LAB-<visit_service id, 6 digits> via lab-barcode.js
+// Accession number on screens and documents: LAB-<visit_service id, 6 digits>; the
+// tube label's barcode is the id alone, 8 digits (LAB_BARCODE_DIGITS_V1), via lab-barcode.js
 // (Code128-B, CSP-safe); reports print through the branded printableSheet.
 
 import { supabase } from '../../supabase.js';
@@ -61,7 +62,7 @@ import { IN_BED_STATUSES } from '../../shared/admission-status.js';
 import { pastelFor } from '../pastel.js';
 import { fitViewport } from './dash-kpi.js';
 import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
-         namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
+         namedRangeCell, ageYears, labBarcodeValue, labScanNumber } from './lab-doc.js?v=labshared1';   // LAB_BARCODE_DIGITS_V1
 import { analyteIndex, resolveAnalyte, resolveAnalyteWhy, nk } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
 import { branchSyncButton } from './branch-sync-button.js';   // BRANCH_SYNC_HOURLY_V1
 import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — только подпись, поведение очереди то же
@@ -824,9 +825,13 @@ function paintRows() {
     clear(refs.list);
     const f = FILTERS.find(x => x.key === state.filter) || FILTERS[0];
     const q = state.search.trim().toLowerCase();
+    // LAB_BARCODE_DIGITS_V1 — скан этикетки (цифры, LAB- или «ДФИ-» русской
+    // раскладки) находит этот заказ; обычный поиск (ID карты из цифр) — как прежде.
+    const scanned = labScanNumber(state.search);
     const visible = state.rows.filter(r => {
         if (!f.match(r.status)) return false;
         if (!q) return true;
+        if (scanned != null && Number(r.id) === scanned) return true;
         const info = state.patientMap[r.visit_id] || {};
         const p = info.patient || {};
         return (p.full_name || '').toLowerCase().includes(q)
@@ -1150,7 +1155,7 @@ async function advance(r, values, okMsg) {
 
 function printLabel(r, patient) {
     printBarcodeLabel({
-        code: accession(r),
+        code: labBarcodeValue(r.id),   // LAB_BARCODE_DIGITS_V1 — только цифры номера заказа
         patientName: patient.full_name || '',
         mrn: patient.mrn || '',
         dateStr: (r.sample_collected_at || nowIso()).slice(0, 16).replace('T', ' '),
@@ -1262,7 +1267,7 @@ function collectDialog(r, patient) {
         m.close();
         if (printCb.checked) {
             printBarcodeLabel({
-                code: accession(r),
+                code: labBarcodeValue(r.id),   // LAB_BARCODE_DIGITS_V1 — только цифры номера заказа
                 patientName: patient.full_name || '',
                 mrn: patient.mrn || '',
                 dateStr: stamp.slice(0, 16).replace('T', ' '),

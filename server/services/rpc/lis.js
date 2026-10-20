@@ -325,7 +325,7 @@ function positiveIntArg(v, { label = false } = {}) {
   let n = NaN;
   if (typeof v === 'number') n = v;
   else if (typeof v === 'string' && /^\s*\d+\s*$/.test(v)) n = Number(v.trim());
-  else if (label && typeof v === 'string') { const m = /^\s*LAB-(\d+)\s*$/i.exec(v); if (m) n = Number(m[1]); }
+  else if (label && typeof v === 'string') { const m = /^\s*(?:LAB|ДФИ)-(\d+)\s*$/iu.exec(v); if (m) n = Number(m[1]); }   // ДФИ-: LAB_BARCODE_DIGITS_V1 — прежняя этикетка, отсканированная на русской раскладке
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 

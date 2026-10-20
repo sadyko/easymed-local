@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { labFlagFor, labPosFor, fmtDMY, labSexRu, labRefLines, labRefText, rangeText, labFlagCell, isNumericValue,
-         buildAnalyteIndex, resolveAnalyteWhy, namedRangeCell, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate } from '../views/lab-doc.js';
+         buildAnalyteIndex, resolveAnalyteWhy, namedRangeCell, matchResultsToAnalytes, labAccession, labBarcodeValue, labScanNumber, labIssueDates, labMaxDate } from '../views/lab-doc.js';
 
 // ── Флаг ─────────────────────────────────────────────────────────────────────
 test('прямые флаги переводятся один в один', () => {
@@ -319,6 +319,38 @@ test('пустая панель или нет результатов — про�
 test('Заявка № — всегда формат LAB-xxxxxx', () => {
     assert.equal(labAccession(501), 'LAB-000501');
     assert.equal(labAccession(7), 'LAB-000007');
+});
+
+// LAB_BARCODE_DIGITS_V1 — штрих-код этикетки: только 8 цифр номера заказа, без LAB-.
+// Сканер-клавиатура на компьютере с русской раскладкой печатал «LAB-» как «ДФИ-».
+// 8, а не 6: AutoLumo A1000 берёт номер пробы не короче 8 знаков.
+test('штрих-код этикетки — только 8 цифр номера заказа, без LAB-', () => {
+    assert.equal(labBarcodeValue(501), '00000501');
+    assert.equal(labBarcodeValue(7), '00000007');
+    assert.equal(labBarcodeValue(1234567), '01234567');
+    assert.match(labBarcodeValue(42), /^\d{8}$/);
+});
+
+test('поиск по скану: цифры, LAB- и LAB- в русской раскладке дают один номер заказа', () => {
+    assert.equal(labScanNumber('00000501'), 501);     // новая этикетка
+    assert.equal(labScanNumber(labBarcodeValue(501)), 501);
+    assert.equal(labScanNumber('000501'), 501);
+    assert.equal(labScanNumber('LAB-000501'), 501);
+    assert.equal(labScanNumber('lab-000501'), 501);
+    assert.equal(labScanNumber('ДФИ-000501'), 501);   // старая этикетка, отсканированная в русской раскладке
+    assert.equal(labScanNumber('дфи-000501'), 501);
+    assert.equal(labScanNumber('  000501  '), 501);
+    assert.equal(labScanNumber('1234567'), 1234567);
+});
+
+test('поиск по скану: не номер заказа — null, обычный поиск остаётся', () => {
+    assert.equal(labScanNumber(''), null);
+    assert.equal(labScanNumber('12345'), null);        // меньше 6 цифр — не этикетка
+    assert.equal(labScanNumber('Иванов'), null);
+    assert.equal(labScanNumber('ОАК'), null);
+    assert.equal(labScanNumber('LAB-123'), null);      // Easy-Med так не печатает
+    assert.equal(labScanNumber('ABCDE-000501'), null); // чужой префикс — не наша этикетка
+    assert.equal(labScanNumber(null), null);
 });
 
 test('Приём: забор, а без забора — день визита', () => {
