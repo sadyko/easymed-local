@@ -24,7 +24,7 @@ const I18N = {
     en: {
         sidebar: {
             newPatient: 'New patient',
-            sections: { Clinical: 'Clinical', Operations: 'Operations', Insights: 'Insights', Soon: 'Soon' },
+            sections: { Clinical: 'Clinical', Operations: 'Operations', Settings: 'Settings', Insights: 'Insights', Soon: 'Soon' },   // NAV_GROUPS_V1 — Settings
             nav: {
                 patients:     'Patients',
                 appointments: 'Reception',
@@ -129,7 +129,7 @@ const I18N = {
     ru: {
         sidebar: {
             newPatient: 'Новый пациент',
-            sections: { Clinical: 'Клиника', Operations: 'Операции', Insights: 'Аналитика', Soon: 'Скоро' },
+            sections: { Clinical: 'Клиника', Operations: 'Операции', Settings: 'Настройки', Insights: 'Аналитика', Soon: 'Скоро' },   // NAV_GROUPS_V1
             nav: {
                 patients:     'Пациенты',
                 appointments: 'Регистратура',
@@ -224,7 +224,7 @@ const I18N = {
     uz: {
         sidebar: {
             newPatient: 'Yangi bemor',
-            sections: { Clinical: 'Klinika', Operations: 'Operatsiyalar', Insights: 'Tahlil', Soon: 'Tez orada' },
+            sections: { Clinical: 'Klinika', Operations: 'Operatsiyalar', Settings: 'Sozlamalar', Insights: 'Tahlil', Soon: 'Tez orada' },   // NAV_GROUPS_V1
             nav: {
                 patients:     'Bemorlar',
                 appointments: 'Registratura',

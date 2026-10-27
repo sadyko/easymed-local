@@ -7,6 +7,7 @@ try { document.title = (document.title || 'Easy-Med') + ' · b2107a'; } catch (e
 import { supabase, pingSupabase } from './supabase.js';
 import { SECTIONS } from './admin/sections.js?v=rolecmp1';
 import { h, Icon, clear, initials } from './admin/ui.js';
+import { activeSectionOf, isNavSectionOpen, setNavSectionOpen } from './admin/nav-fold.js?v=navfold1';   // NAV_GROUPS_V1 — свёрнутые группы меню
 import { dateWords } from './shared/date-words.js';   // SIDEBAR_CLOCK_V1 — дата словами под часами
 import { phoneInput } from './admin/phone-input.js?v=ph1';
 // UI_ENHANCE_V1 — родные <select> и поля даты становятся полями программы.
@@ -118,10 +119,32 @@ import { renderCaseOverview } from './admin/views/case-overview.js?v=co1';   // 
 // Clinical → Operations → Analytics (Procurement sits under Operations with the
 // cashier desks; Dashboard/Reports/Settings form the Analytics block at the
 // bottom). Visits are reached per-patient; the services catalog lives in Settings.
+// NAV_GROUPS_V1 (2026-10-17) — ЧЕТЫРЕ ГРУППЫ, ТРИ ИЗ НИХ СВЁРНУТЫ.
+//
+// Владелец прислал снимок меню — 17 пунктов под тремя заголовками, колонка
+// прокручивалась — и новый порядок дословно: «Block Clinical … Money Section
+// (it should be Folded) … Operations (it should be Folded) … Settings (it
+// should be Folded) … Reports (it should be Folded)», а следом: «All of them
+// should fit, and no need for scrolling». Посмотрев на dev, тем же днём: «put
+// the cashier and head cashier to operations» — группа «Деньги» ушла в
+// «Операции». Дизайн и принятые без него решения —
+// docs/specs/2026-10-17-sidebar-groups-design.md.
+//
+// Запись-заголовок с флагом — { section: 'Operations', fold: true } — группа,
+// которую можно свернуть щелчком по заголовку. NAV_UNFOLDED_V1 (2026-10-27,
+// владелец: «make this unfolded»): при загрузке страницы все группы раскрыты;
+// щелчок сворачивает до перезагрузки, группа открытого экрана раскрыта всегда
+// (renderSidebar, admin/nav-fold.js). Группа без флага («Клиника») раскрыта
+// всегда, и заголовок у неё не кнопка.
+//
+// Порядок пунктов — порядок владельца, и он же порядок firstAllowedView():
+// «первый доступный пункт меню» считается по этому списку. Видимое
+// следствие перестановки: роль без клинических и операционных пунктов, у
+// которой открыты только дашборд и настройки (и это не администратор),
+// начинает теперь с «Настроек», потому что их группа стоит раньше «Аналитики».
 const NAV = [
     { section: 'Clinical' },
     { id: 'patients', label: 'Patients', icon: 'Patients' },
-    { id: 'crm',      label: 'CRM · Заявки', icon: 'Headset', badgeKind: 'alert' },   // CRM_V1; badge — CRM_DEDUP_SEARCH_TASKS_V1: просроченные задачи, красным
     { id: 'consultation', label: 'My services', icon: 'Stethoscope' },   // DOCTOR_WORKSPACE_V1 — easymed's provider queue (was the simplified doctor-room stand-in; that route still works, just unlisted)
     // QUEUE_BOARD_V1 — доска номеров по назначениям. Стоит сразу под кабинетом
     // врача: отвечает на вопрос «кто ко мне ещё стоит», а номера для неё
@@ -176,8 +199,30 @@ const NAV = [
     // же работу. Ветка `case 'beds'` в renderViewInner тоже цела: это пол под
     // маршрутом, чтобы адрес никогда не проваливался в «неизвестный экран».
     { id: 'patient-documents', label: 'Documents', icon: 'Doc' },   // PATIENT_DOCUMENTS_V1
+    { section: 'Operations', fold: true },
+    // NAV_GROUPS_V1 — CRM стоял вторым пунктом «Клиники»; владелец перенёс его
+    // в «Операции» (17.10). Бейдж и обработчик счётчика не менялись.
+    { id: 'crm',      label: 'CRM · Заявки', icon: 'Headset', badgeKind: 'alert' },   // CRM_V1; badge — CRM_DEDUP_SEARCH_TASKS_V1: просроченные задачи, красным
+    // TELEGRAM_CHAT_V1 — переписка с пациентами это работа стойки, а не приём:
+    // её ведут регистратура и call-центр, поэтому раздел живёт в «Операциях».
+    // TELEGRAM_CHAT_BADGE_V1 — непрочитанные пациентские сообщения — это работа,
+    // которая ждёт: значок красный, как у остальных «требует действия».
+    { id: 'telegram-chat', label: 'Чат с пациентами', icon: 'Msg', badgeKind: 'alert' },
+    // NAV_GROUPS_V1 — касса и старший кассир сначала получили свою группу
+    // «Деньги» (список владельца утром 17.10); посмотрев на dev, владелец тем
+    // же днём сказал «put the cashier and head cashier to operations» — группы
+    // «Деньги» больше нет, оба пункта стоят здесь, за чатом, как стояли до
+    // перестановки.
+    // CASHIER_UNPAID_BADGE_V1 — деньги, которые ждут: красный, как у чата выше,
+    // потому что неоплаченный счёт — это работа кассира, а не справка.
+    { id: 'cashier-shifts', label: 'Cashier', icon: 'Wallet', badgeKind: 'alert' },   // CASHIER_LOCAL_V1 — Касса (module key 'cashier')
+    { id: 'cashier-head', label: 'Head cashier', icon: 'Coins' },   // CASHIER_LOCAL_V1 — Старший кассир (key 'cashier-head')
+    { id: 'inventory', label: 'Procurement', icon: 'Pill' },   // INVENTORY_UI_V1 — Закупки
     // MY_STOCK_V1 (2026-09-23) — ДВА ЛИЧНЫХ ЭКРАНА, И ОНИ СТОЯТ ПОСЛЕДНИМИ В
-    // КЛИНИЧЕСКОМ БЛОКЕ НАМЕРЕННО.
+    // СВОЕЙ ГРУППЕ НАМЕРЕННО. Группа была «Клиника»; NAV_GROUPS_V1 (17.10) —
+    // владелец поставил «Мои запасы» в «Операции», и «Мой отдел» едет следом:
+    // оба выдаются одной галочкой, а в списке владельца он не назван только
+    // потому, что у администратора без отдела этого пункта нет.
     //
     // «Мои запасы» — свой подотчёт: что выдали, кто выдал, сколько осталось,
     // что списано на пациентов (решение владельца 23.09). «Мой отдел» ведёт на
@@ -193,25 +238,20 @@ const NAV = [
     // главный врач вместо дашборда).
     { id: 'my-stock', label: 'My stock', icon: 'Layers' },   // MY_STOCK_V1
     { id: 'my-department', label: 'My department', icon: 'Building' },   // MY_STOCK_V1
-    { section: 'Operations' },
-    // TELEGRAM_CHAT_V1 — переписка с пациентами это работа стойки, а не приём:
-    // её ведут регистратура и call-центр, поэтому раздел живёт в «Операциях».
-    // TELEGRAM_CHAT_BADGE_V1 — непрочитанные пациентские сообщения — это работа,
-    // которая ждёт: значок красный, как у остальных «требует действия».
-    { id: 'telegram-chat', label: 'Чат с пациентами', icon: 'Msg', badgeKind: 'alert' },
-    // CASHIER_UNPAID_BADGE_V1 — деньги, которые ждут: красный, как у чата выше,
-    // потому что неоплаченный счёт — это работа кассира, а не справка.
-    { id: 'cashier-shifts', label: 'Cashier', icon: 'Wallet', badgeKind: 'alert' },   // CASHIER_LOCAL_V1 — Касса (module key 'cashier')
-    { id: 'cashier-head', label: 'Head cashier', icon: 'Coins' },   // CASHIER_LOCAL_V1 — Старший кассир (key 'cashier-head')
-    { id: 'inventory', label: 'Procurement', icon: 'Pill' },   // INVENTORY_UI_V1 — Закупки
+    // NAV_GROUPS_V1 — группа из одного пункта, так попросил владелец
+    // («Settings (it should be Folded): Setting»). Заголовок и пункт зовутся
+    // одинаково; бейдж обновления остаётся на пункте.
+    { section: 'Settings', fold: true },
+    { id: 'settings', label: 'Settings', icon: 'Settings', badgeKind: 'alert' },   // SETTINGS_HUB_V1 + UPDATE_BADGE_V1
     // NAV_SECTION_KEY_V1 — раздел зовут 'Insights', а не 'Analytics': заголовок
     // переводится через t('sidebar.sections.' + section), и словарь (i18n.js)
     // знает Insights. С именем 'Analytics' третий заголовок меню выводил
     // английское слово во всех трёх языках. То же имя стоит первым в CRUMBS.
-    { section: 'Insights' },
+    // NAV_GROUPS_V1 — владелец назвал группу «Reports», но заголовок «Отчёты»
+    // над пунктом «Отчёты» дублирует, а «Аналитика» уже переведена на три языка.
+    { section: 'Insights', fold: true },
     { id: 'dashboard', label: 'Dashboard', icon: 'Dashboard' },
     { id: 'reports-hub', label: 'Reports', icon: 'Chart' },   // REPORTS_HUB_V1
-    { id: 'settings', label: 'Settings', icon: 'Settings', badgeKind: 'alert' },   // SETTINGS_HUB_V1 + UPDATE_BADGE_V1
 ];
 
 // Live nav badges — populated by loadNavCounts() from Supabase. Updated on
@@ -1338,6 +1378,36 @@ const PLACEHOLDER_META = {
 // ---------------------------------------------------------------------------
 // Sidebar render
 // ---------------------------------------------------------------------------
+// NAV_GROUPS_V1 — «этот пункт меню выделен?» Вынесено из renderSidebar без
+// изменения смысла: та же проверка нужна второй раз — найти группу открытого
+// экрана (navItemOwns ниже) до того, как нарисован её заголовок.
+function navItemActive(item) {
+    return state.view === item.id
+        || (item.id === 'settings' && settingsMenuOwns(state.view))   // CLINIC_PROFILE_V1 (полировка) — все подэкраны «Настроек»
+        || (item.id === 'reports'  && state.view.startsWith('report'))
+        || (item.id === 'consultation' && state.view === 'service-workspace');
+}
+
+// NAV_GROUPS_V1 — «этот пункт меню несёт открытый экран?» Шире подсветки:
+// журнал движений (stock-log) не подсвечивает «Закупки», но его группа
+// «Операции» обязана быть раскрыта, пока он открыт, — иначе человек стоит
+// внутри свёрнутой группы. Родство — из PARENT_OF (parentViewOf), то же, что
+// знает кнопка «назад»; отчёты (report:*) — у «Отчётов». Подсветку пункта это
+// НЕ меняет: navItemActive выше остался прежним.
+function navItemOwns(item) {
+    return navItemActive(item)
+        || parentViewOf(state.view) === item.id
+        || (item.id === 'reports-hub' && String(state.view).startsWith('report'));
+}
+
+// NAV_GROUPS_V1 — группы, свёрнутые щелчком в ЭТОЙ загрузке страницы.
+// NAV_UNFOLDED_V1 (2026-10-27) — владелец, посмотрев на три свёрнутых заголовка:
+// «make this unfolded». Теперь по умолчанию всё раскрыто (меню и так входит в
+// окно без прокрутки, лишние разделы прячет «Видимость разделов»), а щелчок по
+// заголовку сворачивает группу до перезагрузки. Нарочно не localStorage, как и
+// у «Настроек» (SETTINGS_HUB_LIST_V1). Группа открытого экрана раскрыта всегда.
+const navClosed = new Set();
+
 function renderSidebar() {
     clear(sidebarEl);
 
@@ -1348,6 +1418,10 @@ function renderSidebar() {
     // 'registration' route itself is untouched — bookmarks, deep links and
     // every onNavigate('registration') caller still open it.
 
+    // NAV_GROUPS_V1 — группа, в которой лежит открытый экран, рисуется
+    // раскрытой, что бы ни было свёрнуто. Считается ДО цикла: заголовок группы
+    // рождается раньше её пунктов.
+    const activeSection = activeSectionOf(NAV, navItemOwns);
     let currentHeaderEl = null;   // pending section header, appended lazily
     let currentNav = null;
     let currentNavHasItems = false;
@@ -1359,27 +1433,25 @@ function renderSidebar() {
             const navEl = h('div', { class: 'nav' });
             currentNav = navEl;
             currentNavHasItems = false;
-            if (item.section === 'Soon') {
-                // COMING_SOON_V1 — the parked-modules section is a collapsible
-                // accordion: the chevron toggles it and the state persists.
-                // Default collapsed (parked modules stay tucked away).
-                const collapsed = localStorage.getItem('easymed_soon_collapsed') !== '0';
-                if (collapsed) navEl.style.display = 'none';
-                const chevEl = h('span', { class: 'nav-soon-chevron', style: {
-                        marginLeft: 'auto', display: 'inline-flex',
-                        transition: 'transform .18s ease',
-                        transform: collapsed ? 'rotate(-90deg)' : 'none' } },
-                    Icon('ChevronDown', { size: 14 }));
-                currentHeaderEl = h('div', { class: 'nav-section nav-section--toggle', style: {
-                        display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none' },
-                    onclick: () => {
-                        const willCollapse = navEl.style.display !== 'none';
-                        navEl.style.display = willCollapse ? 'none' : '';
-                        chevEl.style.transform = willCollapse ? 'rotate(-90deg)' : 'none';
-                        try { localStorage.setItem('easymed_soon_collapsed', willCollapse ? '1' : '0'); } catch (e) {}
-                    } },
-                    h('span', null, t('sidebar.sections.' + item.section, item.section)),
-                    chevEl);
+            if (item.fold) {
+                // NAV_GROUPS_V1 — свёрнутая группа. Здесь стоял аккордеон для
+                // секции 'Soon' (COMING_SOON_V1, easymed_soon_collapsed), которой
+                // в NAV давно не было, — мёртвый код; эта ветка его заменяет.
+                // Заголовок — КНОПКА (клавиатура и aria-expanded сами собой),
+                // список прячется классом, а не inline-style: на рейке 68px
+                // заголовков нет, и там CSS показывает пункты всех групп.
+                const key = item.section;
+                const open = isNavSectionOpen(item, { closed: navClosed, activeSection });
+                const header = h('button', { class: 'nav-section nav-section--toggle', type: 'button',
+                        onclick: () => {
+                            const willOpen = navEl.classList.contains('nav--folded');
+                            if (willOpen) navClosed.delete(key); else navClosed.add(key);
+                            setNavSectionOpen(header, navEl, willOpen);
+                        } },
+                    h('span', { class: 'nav-section-title' }, t('sidebar.sections.' + key, key)),
+                    h('span', { class: 'nav-section-chev' }, Icon('ChevronDown', { size: 14 })));
+                setNavSectionOpen(header, navEl, open);
+                currentHeaderEl = header;
             } else {
                 currentHeaderEl = h('div', { class: 'nav-section' },
                     t('sidebar.sections.' + item.section, item.section));
@@ -1401,9 +1473,7 @@ function renderSidebar() {
             sidebarEl.appendChild(currentNav);
             currentNavHasItems = true;
         }
-        const active = state.view === item.id || (item.id === 'settings' && settingsMenuOwns(state.view))   // CLINIC_PROFILE_V1 (полировка) — все подэкраны «Настроек»
-                                              || (item.id === 'reports'  && state.view.startsWith('report'))
-                                              || (item.id === 'consultation' && state.view === 'service-workspace');
+        const active = navItemActive(item);   // NAV_GROUPS_V1 — та же проверка, что ищет группу открытого экрана
         const badgeText = formatBadge(navCounts[item.id]);
         // LICENCE_CORE_V1 — an unbought module stays VISIBLE and gets a lock mark.
         // Hiding it would hide what the clinic could buy, and nobody asks for a
