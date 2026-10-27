@@ -397,6 +397,17 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
 
 let hubQuery = '';
 
+// SETTINGS_HUB_LIST_V1 (2026-10-16, владелец по снимку сетки 3×3: «make groups
+// as a list and foldable, default view is folded») — группы идут списком, одна
+// под другой, и каждая сворачивается щелчком по своей шапке.
+//
+// Здесь — названия групп, которые человек раскрыл. При загрузке страницы
+// пусто: всё свёрнуто, как просил владелец. Живёт в памяти модуля, как
+// hubQuery, а НЕ в localStorage — нарочно: возврат из справочника в хаб
+// (backToHub -> repaint -> renderHub) не закрывает группу, из которой только
+// что ушли, а перезагрузка страницы снова сворачивает всё.
+const openGroups = new Set();
+
 // «N разделов» — Russian needs 3 plural forms, so build the count outside tr()
 // (which keys on whole source strings and cannot interpolate).
 function sectionsLabel(n) {
@@ -412,8 +423,19 @@ function sectionsLabel(n) {
 
 function renderHub(container) {
     const searchInp = h('input', { type: 'search', class: 'set-search', placeholder: 'Поиск настроек…', value: hubQuery });
-    const grid = h('div', { class: 'set-grid' });
-    searchInp.addEventListener('input', () => { hubQuery = searchInp.value; renderGrid(grid); });
+    const list = h('div', { class: 'set-list' });
+    // SETTINGS_HUB_LIST_V1 — одна кнопка на все группы. Подпись и видимость
+    // пересчитывает renderList(): пока хоть одна показанная группа свёрнута —
+    // «Развернуть все», иначе «Свернуть все»; во время поиска кнопки нет,
+    // потому что найденное и так раскрыто.
+    const foldAll = h('button', { type: 'button', class: 'btn btn-ghost btn-sm set-fold-all' }, 'Развернуть все');
+    foldAll.addEventListener('click', () => {
+        const shown = visibleGroups();
+        if (shown.every(v => openGroups.has(v.group.title))) openGroups.clear();
+        else for (const v of shown) openGroups.add(v.group.title);
+        renderList(list, foldAll);
+    });
+    searchInp.addEventListener('input', () => { hubQuery = searchInp.value; renderList(list, foldAll); });
 
     container.appendChild(h('div', { class: 'fade-in' },
         h('div', { class: 'page-head' },
@@ -421,47 +443,83 @@ function renderHub(container) {
                 h('h1', { class: 'page-title' }, 'Настройки'),
                 h('p', { class: 'page-subtitle' }, 'Управление данными клиники — услуги, пользователи, плательщики, филиалы, направления и многое другое.'),
             ),
-            searchInp,
+            h('div', { class: 'page-head-actions' }, foldAll, searchInp),
         ),
-        grid,
+        list,
     ));
-    renderGrid(grid);
+    renderList(list, foldAll);
 }
 
-function renderGrid(grid) {
-    clear(grid);
+// Группы с их видимыми строками, в порядке объявления GROUPS.
+// ROLE_REPORTS_SETTINGS_V1 — сначала права, потом поиск: плитка, которой
+// роль не видит, не находится и поиском, а «N разделов» считает видимые.
+// Сортировки по числу разделов больше нет (SETTINGS_HUB_LIST_V1): она держала
+// карточки одной строки СЕТКИ близкими по высоте, а у списка строк сетки нет —
+// порядок владельца из GROUPS и есть порядок на экране.
+function visibleGroups() {
     const q = hubQuery.trim().toLowerCase();
     // Search both the Russian source strings and what is actually on screen, so
     // typing "patients" finds Пациенты while the app is in English.
     const haystack = (it) => [it.label, it.desc, tr(it.label), tr(it.desc || '')].join(' ').toLowerCase();
     const match = (it) => !q || haystack(it).includes(q);
-    // Cards in a grid row stretch to the tallest one, so order by section count
-    // (desc) to keep each row's cards close in size — otherwise a 1-section card
-    // lands beside a 5-section one and grows four empty rows of padding. Sort is
-    // stable, so same-sized groups keep their declaration order (easymed's).
-    // ROLE_REPORTS_SETTINGS_V1 — сначала права, потом поиск: плитка, которой
-    // роль не видит, не находится и поиском, а «N разделов» считает видимые.
-    const visible = GROUPS
+    return GROUPS
         .map(group => ({ group, items: group.items.filter(tileVisible).filter(match) }))
-        .filter(x => x.items.length)
-        .sort((a, b) => b.items.length - a.items.length);
-    if (!visible.length) { grid.appendChild(h('div', { class: 'empty set-empty' }, 'Ничего не найдено.')); return; }
-    for (const v of visible) grid.appendChild(buildGroupCard(v.group, v.items));
+        .filter(x => x.items.length);
 }
 
-function buildGroupCard(group, items) {
+function renderList(list, foldAll) {
+    clear(list);
+    const searching = !!hubQuery.trim();
+    const shown = visibleGroups();
+    const syncFoldAll = () => {
+        foldAll.hidden = searching || !shown.length;
+        foldAll.textContent = tr(shown.every(v => openGroups.has(v.group.title)) ? 'Свернуть все' : 'Развернуть все');
+    };
+    syncFoldAll();
+    if (!shown.length) { list.appendChild(h('div', { class: 'empty set-empty' }, 'Ничего не найдено.')); return; }
+    shown.forEach((v, i) => {
+        const title = v.group.title;
+        list.appendChild(buildGroupCard(v.group, v.items, {
+            // Во время поиска каждая найденная группа раскрыта: свёрнутый
+            // результат поиска бесполезен. Пустой запрос возвращает прежнее.
+            open: searching || openGroups.has(title),
+            id: 'set-group-' + i,
+            onToggle: (isOpen) => { if (isOpen) openGroups.add(title); else openGroups.delete(title); syncFoldAll(); },
+        }));
+    });
+}
+
+// Шапка — настоящая <button>: клавиатура, фокус и Enter/Space достаются даром.
+// Сворачивание — на месте, без перерисовки списка: перерисовка убила бы
+// кнопку под пальцем (фокус улетел бы в body) и стёрла бы живой статус
+// обновления, который paintUpdateStatus() уже вписал в строку «Система».
+// Строки свёрнутой группы остаются в DOM под `hidden` — по ним же читают хаб
+// тесты и ищет свою строку статус обновления.
+function buildGroupCard(group, items, { open, id, onToggle }) {
     const c = group.color || { bg: 'var(--ink-50)', fg: 'var(--ink-600)' };
-    return h('div', { class: 'card set-card' },
-        h('div', { class: 'set-card-head' },
-            h('span', { class: 'set-card-ico', style: { background: c.bg, color: c.fg } }, Icon(group.icon, { size: 17 })),
-            h('div', null,
-                h('div', { class: 'set-card-title' }, group.title),
-                // Counts what is on screen, so it stays honest while searching.
-                h('div', { class: 'set-card-sub' }, sectionsLabel(items.length)),
-            ),
+    const body = h('div', { class: 'set-card-body', id }, ...items.map(buildItemRow));
+    body.hidden = !open;
+    const head = h('button', {
+        type: 'button', class: 'set-card-head', title: 'Свернуть или развернуть',
+        'aria-expanded': open ? 'true' : 'false', 'aria-controls': id,
+    },
+        h('span', { class: 'set-card-ico', style: { background: c.bg, color: c.fg } }, Icon(group.icon, { size: 17 })),
+        h('div', { class: 'set-card-txt' },
+            h('div', { class: 'set-card-title' }, group.title),
+            // Counts what is on screen, so it stays honest while searching.
+            h('div', { class: 'set-card-sub' }, sectionsLabel(items.length)),
         ),
-        h('div', { class: 'set-card-body' }, ...items.map(buildItemRow)),
+        h('span', { class: 'set-card-chev' }, Icon('ChevronDown', { size: 16 })),
     );
+    const card = h('div', { class: 'card set-card' + (open ? ' is-open' : '') }, head, body);
+    head.addEventListener('click', () => {
+        const isOpen = body.hidden;          // было свёрнуто -> раскрываем
+        body.hidden = !isOpen;
+        head.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        card.classList.toggle('is-open', isOpen);
+        onToggle(isOpen);
+    });
+    return card;
 }
 
 function buildItemRow(item) {

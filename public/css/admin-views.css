@@ -3939,38 +3939,52 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    (PWA_INSTALL_FAB_V1). Кнопки больше нет — устанавливают значком Chrome
    в адресной строке (см. public/js/admin.js, тот же маркер). */
 
-/* ============================ SETTINGS_HUB_V4 — «Настройки» landing ============================
-   The hub used to be built from ad-hoc inline styles with a `minmax(640px, 1fr)`
-   track, so on a normal clinic monitor it collapsed to ONE full-width column:
-   every row stretched edge-to-edge with the chevron marooned on the right.
-   Real classes fixed that.
-   Cards stretch to the tallest in their grid row (grid's default `align-items`),
-   so a 2-section card never sits half-height next to a 3-section one; the JS
-   additionally orders groups by section count so each row holds similarly sized
-   cards and the leftover space stays small.
+/* ============================ SETTINGS_HUB_LIST_V1 — «Настройки» landing ============================
+   SETTINGS_HUB_V4 history, kept because it still shapes this block: the hub
+   was once built from inline styles with a `minmax(640px, 1fr)` track, so on a
+   normal clinic monitor it collapsed to ONE full-width column — every row
+   stretched edge-to-edge with the chevron marooned on the right. V4 answered
+   with a fixed 3 / 2 / 1-column grid of group cards (explicit counts, not
+   `auto-fill`, so the same page looked the same on every monitor), and the JS
+   sorted groups by section count so the cards of one grid row matched in
+   height.
 
-   Three fixed columns, not `auto-fill`: with a track minimum the count is
-   whatever the arithmetic happens to allow at that window width, so the same
-   page showed two columns on one monitor and three on another. Explicit counts
-   with breakpoints mean the layout is the same everywhere and only steps down
-   when the cards genuinely stop fitting. minmax(0,1fr) — not 1fr — so a long
-   section name shrinks its card instead of widening the whole track. */
-.set-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-@media (max-width: 1360px) { .set-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 820px)  { .set-grid { grid-template-columns: minmax(0, 1fr); } }
+   SETTINGS_HUB_LIST_V1 (2026-10-16, owner: «make groups as a list and
+   foldable, default view is folded»): the groups are now a single-column LIST
+   of cards, each folded to its header until clicked. The card grid is gone and
+   with it the height-balancing sort. The first cut kept an open group's rows
+   in 3 / 2 / 1 columns so as not to bring back the edge-to-edge row V4 had
+   fought; the owner looked at it on dev the same day and asked for the rows
+   to be a list too («make them as a list too»). So one section per line, full
+   width, chevron at the row's right end — that is the requested look now, not
+   the old accident.
+
+   The header is a real <button>, so every browser default on it (border,
+   grey background, centred bold text, inherited font) is reset here rather
+   than inherited from .btn, which it is not. `[hidden]` on the body has to be
+   restated: `display: flex` below is an author rule and would otherwise beat
+   the user-agent `[hidden] { display: none }`. */
+.set-list { display: flex; flex-direction: column; gap: 10px; }
 .set-search { width: 280px; max-width: 42vw; }
+/* Same trap as .field[hidden] in admin.css: .btn's own display beats [hidden]. */
+.set-fold-all[hidden] { display: none; }
 .set-card { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
-/* align-items:flex-start, not center: a title long enough to wrap («Управление
-   пользователями и сотрудниками» in a third-width card) would otherwise drag
-   the icon off the first line. min-width:0 lets the text block shrink instead
-   of pushing the card wider than its track. */
-.set-card-head { display: flex; align-items: flex-start; gap: 11px; padding: 14px 16px 10px; }
-.set-card-head > div { min-width: 0; }
+.set-card-head { display: flex; align-items: center; gap: 11px; width: 100%; padding: 12px 16px;
+    border: 0; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer;
+    transition: background-color 120ms ease; }
+.set-card-head:hover { background: var(--ink-25); }
+.set-card-head:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; background: var(--ink-25); }
+.set-card.is-open .set-card-head { border-bottom: 1px solid var(--ink-100); }
 .set-card-ico { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; flex: 0 0 34px; }
+/* min-width:0 lets the text block shrink instead of pushing the card wider. */
+.set-card-txt { flex: 1; min-width: 0; }
 .set-card-title { font-size: 13.5px; font-weight: 700; color: var(--ink-900); line-height: 1.25;
     overflow-wrap: anywhere; }
 .set-card-sub { font-size: 12.5px; color: var(--ink-500); margin-top: 1px; }
-.set-card-body { padding: 0 8px 10px; flex: 1; }
+.set-card-chev { flex: 0 0 16px; display: flex; color: var(--ink-400); transition: transform 150ms ease; }
+.set-card.is-open .set-card-chev { transform: rotate(180deg); }
+.set-card-body { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px 10px; }
+.set-card-body[hidden] { display: none; }
 
 .set-row { display: flex; align-items: center; gap: 11px; padding: 8px; border-radius: 9px; }
 .set-row-ico { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: 0 0 30px;
@@ -3991,9 +4005,9 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .set-row-soon .set-row-name  { color: var(--ink-500); }
 .set-row-soon .set-soon-tag  { font-weight: 400; color: var(--ink-400); }
 
-.set-empty { grid-column: 1 / -1; padding: 28px; }
+.set-empty { padding: 28px; }
 @media (max-width: 560px) { .set-search { width: 100%; max-width: none; } }
-/* ============================ end SETTINGS_HUB_V4 ============================ */
+/* ============================ end SETTINGS_HUB_LIST_V1 ============================ */
 
 /* ============================ IMPORTER_UI_V2 — Excel import dialog ============================
    The dialog opened as a near-empty full-screen sheet for two reasons, both in
