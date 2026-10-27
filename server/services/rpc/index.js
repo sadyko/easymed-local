@@ -16,6 +16,8 @@ import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary, reportChoices, payPeriodClose, payPeriodReopen, payPeriodStatus } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
+import { referralsRepresentatives, referralsAssignRepresentative, referralsInternal, referralsActivity, referralsSourceDetail, referralsDoctorDetail } from './referrals.js';   // REFERRALS_CRM_V1 — «Реферирование» под CRM
+import { doctorBotSettingsGet, doctorBotSettingsSave, doctorBotTokenClear, doctorBotTestConnection, doctorBotStats, doctorBotLinksList, doctorBotLinkRevoke } from './doctor-bot.js';   // REFERRALS_CRM_V1 — бот для врачей-источников
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice, cashierRefunds } from './cashier.js';   // cashierRefunds: CASHIER_PAID_SWAP_V1
 import { cashierUnbilled } from './cashier.js';   // REFERRAL_BILL_V1 — «Ждут счёта» кассы
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit, admissionReferralDefault,
@@ -236,6 +238,22 @@ export const RPC = {
   doctor_inpatient_share:   (db, args, user) => doctorInpatientShare(db, args, user),  // INPATIENT_SHARE_V1 — стационарная доля для кабинета врача
   doctor_referral_reward:   (db, args, user) => doctorReferralReward(db, args, user),  // REPORTS_V2 — вознаграждение за направления для кабинета врача (то же, что отчёт «Рефералы»)
   doctor_pay_summary:       (db, args, user) => doctorPaySummary(db, args, user),      // PAY_BASIS_PERFORMED_V1 — вся выплата врача для кабинета, строками отчётов
+  // REFERRALS_CRM_V1 — экран «Реферирование» под CRM (docs/specs/2026-10-26-referrals-crm-design.md):
+  // представители и внешние врачи, внутренние врачи, активность, «Подробнее».
+  referrals_representatives:        (db, args, user) => referralsRepresentatives(db, args, user),
+  referrals_assign_representative:  (db, args, user) => referralsAssignRepresentative(db, args, user),
+  referrals_internal:               (db, args, user) => referralsInternal(db, args, user),
+  referrals_activity:               (db, args, user) => referralsActivity(db, args, user),
+  referrals_source_detail:          (db, args, user) => referralsSourceDetail(db, args, user),
+  referrals_doctor_detail:          (db, args, user) => referralsDoctorDetail(db, args, user),
+  // REFERRALS_CRM_V1 — Telegram-бот для врачей-источников (вкладка «Реферирование → Telegram-бот»), администратору.
+  doctor_bot_settings_get:          (db, args, user) => doctorBotSettingsGet(db, args, user),
+  doctor_bot_settings_save:         (db, args, user) => doctorBotSettingsSave(db, args, user),
+  doctor_bot_token_clear:           (db, args, user) => doctorBotTokenClear(db, args, user),
+  doctor_bot_test_connection:       (db, args, user) => doctorBotTestConnection(db, args, user),
+  doctor_bot_stats:                 (db, args, user) => doctorBotStats(db, args, user),
+  doctor_bot_links_list:            (db, args, user) => doctorBotLinksList(db, args, user),
+  doctor_bot_link_revoke:           (db, args, user) => doctorBotLinkRevoke(db, args, user),
   // PAY_PERIOD_CLOSE_V1 — закрытие месяца оплаты врачей (запись строк выплаты),
   // открытие обратно (только администратор) и какие месяцы закрыты.
   pay_period_close:         (db, args, user) => payPeriodClose(db, args, user),

@@ -94,6 +94,7 @@ import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=jrn1';   // ROO
 import { renderDepartments } from './admin/views/departments.js?v=dept1';   // DEPARTMENTS_V1 — отделы: руководитель, команда, помещения, снабжение
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
+import { renderReferrals }        from './admin/views/referrals.js?v=ref1';   // REFERRALS_CRM_V1 — «Реферирование» под CRM
 import { renderMetaSettings }      from './admin/views/meta-settings.js?v=meta1';   // META_LEADS_V1 — Meta Lead Ads -> CRM
 import { renderTelegramDeeplinks } from './admin/views/telegram-deeplinks.js?v=tgdl1';   // TG_DEEPLINK_V1 — ссылки для рекламы в Telegram
 import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing
@@ -204,6 +205,11 @@ const NAV = [
     // NAV_GROUPS_V1 — CRM стоял вторым пунктом «Клиники»; владелец перенёс его
     // в «Операции» (17.10). Бейдж и обработчик счётчика не менялись.
     { id: 'crm',      label: 'CRM · Заявки', icon: 'Headset', badgeKind: 'alert' },   // CRM_V1; badge — CRM_DEDUP_SEARCH_TASKS_V1: просроченные задачи, красным
+    // REFERRALS_NAV_V1 (2026-10-26) — владелец, увидев экран кнопкой в шапке CRM:
+    // «referirovanie should not be inside of CRM it should be separate section in
+    // operation block». Свой пункт меню и свой ключ прав `referrals` (NAV_MODULES,
+    // permission-catalog), сразу за CRM — рядом с заявками, но не внутри них.
+    { id: 'referrals', label: 'Referrals', icon: 'Target' },
     // TELEGRAM_CHAT_V1 — переписка с пациентами это работа стойки, а не приём:
     // её ведут регистратура и call-центр, поэтому раздел живёт в «Операциях».
     // TELEGRAM_CHAT_BADGE_V1 — непрочитанные пациентские сообщения — это работа,
@@ -325,6 +331,7 @@ const CRUMBS = {
     'telegram-deeplinks': ['Insights', 'Settings', 'Ссылки для рекламы в Telegram'],   // TG_DEEPLINK_V1
     'departments': ['Insights', 'Settings', 'Отделы'],   // DEPARTMENTS_V1
     'crm-settings': ['Insights', 'Settings', 'CRM-канбан'],   // CRM_CONFIG_V1
+    referrals:      ['Operations', 'Реферирование'],   // REFERRALS_NAV_V1 — пункт меню, не подэкран CRM
     'telegram-chat': ['Insights', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1
     'consultation-types': ['Insights', 'Settings', 'Консультации врачей'],   // CONSULTATION_TYPES_RESTORE
     'doctor-pay': ['Insights', 'Settings', 'Зарплата врачей'],   // DOCTOR_PAY_BULK_V1
@@ -447,6 +454,10 @@ function firstAllowedView() {
 // иначе один и тот же раздел жил бы в двух смонтированных копиях сразу.
 const LEGACY_ROUTES = {
     'lab-settings': { view: 'labs', sub: 'panels' },
+    // REFERRALS_CRM_V1 — справочники источников переехали из «Настроек» во вкладки
+    // «Реферирования»: закладка на старый маршрут ведёт в нужную вкладку.
+    'settings:referral_sources': { view: 'referrals', sub: 'sources' },
+    'settings:referral_source_categories': { view: 'referrals', sub: 'categories' },
     beds: { view: 'admissions', sub: 'beds' },
     // ROLE_HOME_V1 — журнал «Визиты» удалён; старая закладка «#visits» ведёт в
     // картотеку, откуда визит и открывают (карта пациента → «Визиты»).
@@ -1266,6 +1277,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             // картотеки. Внутри «Пациентов» та же доска живёт вкладкой.
             case 'queue':         return void await renderQueue(viewRoot, ctx);
             case 'crm':           return void await renderCrm(viewRoot, ctx);   // CRM_V1
+            case 'referrals':     return void await renderReferrals(viewRoot, ctx);   // REFERRALS_NAV_V1 — «Реферирование», пункт группы «Операции»
             case 'docs-archive':  return void await renderDocsArchive(viewRoot, ctx);   // CLINICAL_DOCS_ARCHIVE_V1
             case 'admissions':    return void await renderInpatient(viewRoot, ctx);   // INPATIENT_ONE_SECTION_V1 — заявки · койки · госпитализации одним разделом
             case 'case-file':     return void await renderCaseWorkspace(viewRoot, ctx);   // CASE_WORKSPACE_V1

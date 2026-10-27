@@ -703,6 +703,8 @@ async function paint() {
             canSeeAllLeads() ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-crm-duplicates-open': '',
                 onclick: () => openCrmDuplicates({ onMerged: () => paint() }) }, Icon('Copy', { size: 13 }), ' ', 'Дубликаты') : null,
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => reportModal() }, Icon('Chart', { size: 13 }), ' Отчёт'),
+            // REFERRALS_NAV_V1 — «Реферирование» было кнопкой здесь полдня; владелец:
+            // «should not be inside of CRM» — теперь это свой пункт в «Операциях».
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => exportExcel() }, Icon('Download', { size: 13 }), ' Excel'),
             crmReadOnly() ? null : h('button', { class: 'btn btn-primary', type: 'button', onclick: () => requestModal(null) },
                 Icon('Plus', { size: 14 }), ' Новая заявка')),   // V3120_FIX — просмотру не предлагаем

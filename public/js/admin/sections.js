@@ -903,36 +903,41 @@ export const SECTIONS = {
     },
 
     // ============== REFERRALS GROUP ==============
+    // REFERRALS_CRM_V1 (2026-10-26) — описание для общего импортёра и экспорта
+    // (section-import-export.js): кнопки «Шаблон / Импорт / Экспорт» во вкладке
+    // «Реферирование → Врачи-источники». Прежний текст был облачным (type,
+    // contact_person, notes — таких колонок в базе нет, и шаблон целил мимо).
+    // Колонки — живые (мигр. 058, 120, 121, 252): ФИО одной колонкой name, как
+    // его читают регистрация и отчёты; код присваивает триггер, в шаблоне его
+    // нет; active в insert реестр не принимает (новая строка всегда активна).
+    // Экран редактирования — LOOKUP_CONFIG в views/settings-hub.js, не этот список.
     referral_sources: {
         group: 'Referrals',
         label: 'Source list',
         table: 'referral_sources',
-        orderBy: { column: 'name', ascending: true },
-        searchColumns: ['name', 'contact_person', 'phone'],
+        orderBy: { column: 'code', ascending: true },
+        searchColumns: ['name', 'phone', 'workplace'],
         fkLookups: ['referral_source_categories'],
         columns: [
-            { key: 'name',                  label: 'Name' },
-            { key: 'category_id',           label: 'Category', lookup: 'referral_source_categories' },
-            { key: 'type',                  label: 'Type' },
-            { key: 'contact_person',        label: 'Contact' },
-            { key: 'phone',                 label: 'Phone' },
-            { key: 'active',                label: 'Status', type: 'bool' },
+            { key: 'code',         label: 'Code' },
+            { key: 'name',         label: 'Full name' },
+            { key: 'phone',        label: 'Phone' },
+            { key: 'workplace',    label: 'Workplace' },
+            { key: 'district',     label: 'District' },
+            { key: 'specialty',    label: 'Specialty' },
+            { key: 'category_id',  label: 'Category', lookup: 'referral_source_categories' },
+            { key: 'active',       label: 'Status', type: 'bool' },
         ],
         fields: [
-            { key: 'name',                  label: 'Name', type: 'text', required: true },
-            { key: 'category_id',           label: 'Category', type: 'fk', source: 'referral_source_categories' },
-            { key: 'type',                  label: 'Type', type: 'select',
-              options: [['doctor','Doctor'], ['clinic','Clinic'], ['online','Online'],
-                        ['walk_in','Walk-in'], ['advertisement','Advertisement'], ['other','Other']] },
-            { key: 'contact_person',        label: 'Contact person', type: 'text' },
-            { key: 'phone',                 label: 'Phone', type: 'phone' },
-            // REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — вознаграждение задаётся в
-            // «Настройках → Направления»: стандартная ставка на КАТЕГОРИИ, своя —
-            // в карточке источника. Здесь его нет намеренно: прежние поля
-            // commission_mode / commission_rates писали в колонки, которых в этой
-            // базе никогда не было, то есть выбор в них просто пропадал.
-            { key: 'notes',                 label: 'Notes', type: 'textarea' },
-            { key: 'active',                label: 'Active', type: 'bool', default: true },
+            { key: 'name',         label: 'Full name', type: 'text', required: true },
+            { key: 'phone',        label: 'Phone', type: 'phone' },
+            { key: 'workplace',    label: 'Workplace', type: 'text' },
+            { key: 'district',     label: 'District', type: 'text' },
+            { key: 'specialty',    label: 'Specialty', type: 'text' },
+            { key: 'category_id',  label: 'Category', type: 'fk', source: 'referral_source_categories' },
+            { key: 'payment_type', label: 'Payment type (cash / card / transfer)', type: 'select',
+              options: [['cash', 'Cash'], ['card', 'Card'], ['transfer', 'Bank transfer']] },
+            { key: 'card_number',  label: 'Card number', type: 'text' },
         ],
     },
 
@@ -943,14 +948,13 @@ export const SECTIONS = {
         orderBy: { column: 'name', ascending: true },
         searchColumns: ['name'],
         columns: [
-            { key: 'name',        label: 'Name' },
-            { key: 'description', label: 'Description' },
-            { key: 'active',      label: 'Status', type: 'bool' },
+            { key: 'name',             label: 'Name' },
+            { key: 'standard_percent', label: 'Standard, %', type: 'number' },
+            { key: 'active',           label: 'Status', type: 'bool' },
         ],
         fields: [
-            { key: 'name',        label: 'Category name (e.g. Internal staff, Online channels)', type: 'text', required: true },
-            { key: 'description', label: 'Description', type: 'textarea' },
-            { key: 'active',      label: 'Active', type: 'bool', default: true },
+            { key: 'name',             label: 'Category name', type: 'text', required: true },
+            { key: 'standard_percent', label: 'Standard, %', type: 'number' },
         ],
     },
 

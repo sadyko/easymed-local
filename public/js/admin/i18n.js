@@ -60,6 +60,7 @@ const I18N = {
                 // t('sidebar.nav.' + item.id), и camelCase здесь ничего не
                 // находит (та же ошибка, что INPATIENT_NAV_KEYS_V1 выше).
                 crm:                 'CRM · Requests',
+                referrals:           'Referrals',   // REFERRALS_NAV_V1
                 queue:               'Queue',
                 'telegram-chat':     'Patient chat',
                 'patient-documents': 'Documents',
@@ -155,6 +156,7 @@ const I18N = {
                 'kitchen-sheet': 'Порционник',   // KITCHEN_SHEET_V1
                 discharge:    'Выписки',   // TWO_STEP_DISCHARGE_V1
                 crm:                 'CRM · Заявки',   // SIDEBAR_NAV_KEYS_V1
+                referrals:           'Реферирование',   // REFERRALS_NAV_V1
                 queue:               'Очередь',
                 'telegram-chat':     'Чат с пациентами',
                 'patient-documents': 'Документы',
@@ -250,6 +252,7 @@ const I18N = {
                 'kitchen-sheet': 'Porsiyalar varaqasi',   // KITCHEN_SHEET_V1
                 discharge:    'Chiqarishlar',   // TWO_STEP_DISCHARGE_V1
                 crm:                 'CRM · Arizalar',   // SIDEBAR_NAV_KEYS_V1
+                referrals:           'Yo‘naltirish',   // REFERRALS_NAV_V1
                 queue:               'Navbat',
                 'telegram-chat':     'Bemorlar bilan chat',
                 'patient-documents': 'Hujjatlar',

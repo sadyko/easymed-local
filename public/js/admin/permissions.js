@@ -81,6 +81,7 @@ export const NAV_MODULES = [
         // открывает чтение переписки, «Редактирование» — ответ пациенту от
         // имени клиники.
         { key: 'telegram-chat', label: 'Чат с пациентами', desc: 'Переписка в Telegram-боте: читать (Просмотр) и отвечать (Редактирование)' },
+        { key: 'referrals',    label: 'Реферирование', desc: 'Представители и внешние врачи, внутренние врачи-направители, активность; деньги — с правом «Отчёты → Рефералы», бот для врачей — администратору' },   // REFERRALS_NAV_V1
     ] },
     { group: 'Администрирование', items: [
         { key: 'settings', label: 'Настройки', desc: 'Вся конфигурация клиники' },
@@ -1035,6 +1036,7 @@ export function isModuleAllowed(navId) {
     // тот класс ошибки, который чинила 055. Приём тот же, что у
     // 'cashier-shifts' → 'cashier' строкой выше.
     if (navId === 'admissions') return _effective.has('admissions') || _effective.has('beds');
+    if (navId === 'referrals') return _effective.has('referrals');   // REFERRALS_NAV_V1 — только явный ключ, CRM его не открывает
     // CASE_WORKSPACE_V1 — история болезни это ЭКРАН раздела «Стационар», а не
     // отдельный раздел: ключ у них один, по тому же доводу, что у листа
     // назначений ниже. Лечащий врач ведёт её из кабинета, поэтому
@@ -1213,6 +1215,11 @@ export function isRouteAllowed(view) {
     // сервер (admin-only crm_config_save) отказывает второй раз, независимо от
     // этой строки.
     if (view === 'crm-settings') return false;
+    // REFERRALS_NAV_V1 — «Реферирование» — свой пункт меню и свой ключ прав
+    // (NAV_MODULES / permission-catalog `referrals`); правка источников — ключи
+    // settings.referral_sources, деньги — reports.referrals (сервер отдаёт их только
+    // с этим правом). Полдня было подэкраном CRM — владелец вынес в «Операции».
+    if (view === 'referrals') return isModuleAllowed('referrals');
     if (view === 'doctor-pay') return _effective.has('doctor-pay') || _effective.has('settings:doctor_pay') || _effective.has('settings');   // DOCTOR_PAY_BULK_V1
     if (view === 'cashier-settings') return _effective.has('cashier-settings') || _effective.has('settings:cashiers') || _effective.has('settings');   // CASHIER_SHIFT_MODE_V1
     // ROOMS_SETUP_V1 — «Помещения» пишет в те же таблицы, что разделы Rooms /

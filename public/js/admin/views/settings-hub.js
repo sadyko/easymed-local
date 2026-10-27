@@ -146,6 +146,23 @@ function openSection(key) {
 }
 function backToHub()      { state.section = null; state.readOnly = false; repaint(); }
 
+// REFERRALS_CRM_V1 (2026-10-26) — справочник внутри чужого экрана («Реферирование» →
+// «Врачи-источники» / «Категории источников»): тот же редактор, те же права
+// (SECTION_GRANT), без кнопки «К плиткам настроек»; extraActions — кнопки хозяина
+// в шапке карточки (Шаблон / Импорт / Экспорт). Роли без права на раздел —
+// честная строка вместо таблицы, как и у плитки раньше.
+export async function renderLookupEditor(container, key, { embedded = true, extraActions = null } = {}) {
+    const lvl = sectionLevel(key);
+    clear(container);
+    if (lvl === 'none') {
+        container.appendChild(h('div', { class: 'empty', style: { padding: '30px' } }, tr('Этот раздел настроек недоступен вашей роли.')));
+        return;
+    }
+    refs.container = container;
+    state = { section: key, readOnly: lvl !== 'edit' && lvl !== 'delete', embedded, extraActions };
+    await renderEditor(container, key);
+}
+
 const nav = (route) => () => { if (refs.onNavigate) refs.onNavigate(route); };
 // SETTINGS_SPLIT_V1 — navSub() lived here for one caller, «Подписка», which
 // opened '#updates/subscription' back when subscription was a card inside
@@ -841,6 +858,10 @@ const LOOKUP_CONFIG = {
         modalWidth: '920px', modalCols: '1fr 1fr',
         embed: 'referral_source_categories(name)',
         filterRow: true,   // LOOKUP_COLUMN_FILTERS_V1 — с мигр. 117 здесь ещё и все врачи клиники
+        // REFERRALS_CRM_V1 — врачи клиники (doctor_id, строка от триггера) в списке
+        // внешних врачей не показываются: у них своя вкладка «Внутренние врачи», а
+        // править их источник можно из карточки сотрудника.
+        rowFilter: (r) => r.doctor_id == null,
 
         columns: [
             { key: 'code', label: 'Номер' },
@@ -848,6 +869,7 @@ const LOOKUP_CONFIG = {
             { key: 'phone', label: 'Телефон' },
             { key: 'workplace', label: 'Место работы' },
             { key: 'district', label: 'Район' },
+            { key: 'specialty', label: 'Специальность' },   // REFERRALS_CRM_V1 — колонка снимка владельца (мигр. 252)
             { key: 'referral_source_categories', label: 'Категория', embed: true },
         ],
         fields: [
@@ -858,6 +880,7 @@ const LOOKUP_CONFIG = {
             { key: 'phone',       label: 'Телефон', type: 'phone' },
             { key: 'workplace',   label: 'Место работы', type: 'text' },
             { key: 'district',    label: 'Район', type: 'text' },
+            { key: 'specialty',   label: 'Специальность', type: 'text' },   // REFERRALS_CRM_V1
             { key: 'payment_type', label: 'Тип оплаты', type: 'select',
               options: [['cash', 'Наличные'], ['card', 'На карту'], ['transfer', 'Перечислением']] },
             { key: 'card_number', label: 'Номер карты', type: 'text' },
@@ -896,10 +919,15 @@ const LOOKUP_CONFIG = {
         ],
         // `name` — производная колонка: её не показываем, но она NOT NULL и
         // остаётся тем, что видят все остальные экраны.
-        beforeSave(payload) {
+        beforeSave(payload, { isEdit, row } = {}) {
             const full = [payload.last_name, payload.first_name, payload.middle_name]
                 .map(v => (v || '').trim()).filter(Boolean).join(' ');
-            if (!full) return 'Укажите хотя бы имя источника.';
+            // REFERRALS_CRM_V1 — строка, пришедшая импортом, несёт ФИО одной колонкой
+            // name и пустые части: правка такой строки без частей оставляет имя как есть.
+            if (!full) {
+                if (isEdit && row && row.name) { payload.name = row.name; return; }
+                return 'Укажите хотя бы имя источника.';
+            }
             payload.name = full;
         },
     },
@@ -1210,9 +1238,12 @@ async function renderEditor(container, key) {
         // APPBAR_BACK_V1 — это возврат ВНУТРИ раздела (из справочника к плиткам),
         // а не к другому экрану, поэтому кнопка остаётся здесь. Была
         // по-английски посреди русского экрана — теперь на языке интерфейса.
-        h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' }, onclick: backToHub },
+        state.embedded ? null : h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' }, onclick: backToHub },   // REFERRALS_CRM_V1 — внутри чужого экрана возврата к плиткам нет
             Icon('ChevronLeft', { size: 14 }), ' ', tr('К плиткам настроек')),
-        h('div', { class: 'page-head' },
+        // REFERRALS_CRM_V1 — внутри чужого экрана своего имени у справочника нет: оболочка
+        // поднимает первый h1 в верхнюю строку, и вкладка «Активность» показывала бы
+        // имя соседней вкладки «Категории источников».
+        state.embedded ? null : h('div', { class: 'page-head' },
             h('div', null, h('h1', { class: 'page-title' }, cfg.title)),
         ),
         // CASHBACK_BY_GROUP_V1 / CARD_SALE_V1 — пояснение справочника одной
@@ -1222,6 +1253,7 @@ async function renderEditor(container, key) {
             h('div', { class: 'card-header' },
                 h('h3', null, Icon(cfg.icon, { size: 16 }), ' ', cfg.title),
                 grantCols ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr(cfg.grantHint || 'Цены и проценты меняет роль с правом «Цены и проценты».')) : null,
+                ...(Array.isArray(state.extraActions) ? state.extraActions : []),   // REFERRALS_CRM_V1 — кнопки хозяина вкладки (Шаблон / Импорт / Экспорт)
                 addBtn,
             ),
             h('table', { class: 'tbl' },
@@ -1250,7 +1282,7 @@ async function renderEditor(container, key) {
             const cols = cfg.embed ? '*, ' + cfg.embed : '*';
             const { data, error } = await supabase.from(cfg.table).select(cols).order(cfg.orderBy || 'name').limit(500);
             if (error) { toast(`Failed to load ${cfg.title.toLowerCase()}: ` + (error.message || error), 'fail'); allRows = []; paintRows([]); return; }
-            allRows = data || [];
+            allRows = cfg.rowFilter ? (data || []).filter(cfg.rowFilter) : (data || []);   // REFERRALS_CRM_V1 — rowFilter
             paintRows(visibleRows());
         } catch (e) {
             toast(`Failed to load ${cfg.title.toLowerCase()}: ` + (e && e.message || e), 'fail');

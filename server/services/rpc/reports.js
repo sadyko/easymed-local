@@ -2820,7 +2820,7 @@ function allReferralLines(db, args, ctx) {
 //   • изменение после закрытия — строкой «Где: Корректировка» у того же
 //     получателя в первом открытом месяце (у сотрудника в «Зарплатах врачей» —
 //     в колонке «Корректировки»).
-function referralReportLines(db, args, ctx) {
+export function referralReportLines(db, args, ctx) {   // REFERRALS_CRM_V1 — читает rpc/referrals.js: те же строки, что отчёт «Рефералы»
   const live = allReferralLines(db, args, ctx);
   const closed = closedMonthMap(db);
   if (!closed.size) return live;

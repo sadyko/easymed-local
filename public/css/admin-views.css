@@ -8233,3 +8233,32 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
 }
 /* ============================ end TG_BROADCAST_FILTERS_V1 ============================ */
 
+/* REFERRALS_CRM_V1 (2026-10-26) — «Реферирование» под CRM: плитки чисел, строка
+   фильтров, группы представителей, кнопка «Подробнее» как на снимке владельца. */
+.ref-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 12px; margin-bottom: 14px; }   /* 158px: шесть плиток «Внутренних врачей» в одну строку при 1366px */
+.ref-kpi { background: var(--white); border: 1px solid var(--ink-100); border-radius: 12px; padding: 14px 16px; }
+.ref-kpi-value { font-size: 20px; font-weight: 700; line-height: 1.2; }
+.ref-kpi-label { font-size: 12.5px; margin-top: 2px; }
+.ref-kpi.is-ok .ref-kpi-value { color: var(--ok-700, #2e8b52); }
+.ref-kpi.is-warn { background: #fdf7e6; border-color: #f3dfa6; }
+.ref-kpi.is-warn .ref-kpi-value { color: #b07d1f; }
+.ref-kpi.is-crit .ref-kpi-value { color: var(--crit-700, #b03a3a); }
+.ref-filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+.ref-filters-search { flex: 1 1 260px; display: flex; align-items: center; gap: 8px; background: var(--white); border: 1px solid var(--ink-200); border-radius: 10px; padding: 0 12px; height: 38px; color: var(--ink-400); }
+.ref-filters-search input { flex: 1; border: 0; outline: 0; background: transparent; font: inherit; font-size: 13.5px; height: 100%; color: var(--ink-900); }
+.ref-period { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.ref-date, .ref-select { height: 38px; padding: 0 10px; border: 1px solid var(--ink-200); border-radius: 10px; background: var(--white); font: inherit; font-size: 13.5px; color: var(--ink-900); }
+.ref-select { min-width: 180px; }
+.ref-group-head { width: 100%; display: flex; align-items: center; gap: 12px; padding: 14px 18px; background: transparent; border: 0; border-bottom: 1px solid var(--ink-100); text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.ref-group-chev { display: inline-flex; color: var(--ink-400); transition: transform var(--dur-2) var(--ease-out); }
+.ref-group-title { flex: 1; }
+.ref-group-stats { display: flex; gap: 22px; }
+.ref-stat { text-align: right; }
+.ref-stat-value { font-weight: 700; font-size: 13.5px; }
+.ref-stat-label { font-size: 12.5px; }
+.ref-detail-stats { display: flex; gap: 24px; margin-bottom: 12px; }
+.ref-tbl th.num, .ref-tbl td.num { text-align: right; }
+.ref-actions { display: flex; gap: 6px; justify-content: flex-end; white-space: nowrap; }
+.ref-btn-more { background: #f2a93b; color: #fff; border-color: #f2a93b; }
+.ref-btn-more:hover { background: #e0962a; color: #fff; }
+@media (max-width: 900px) { .ref-group-stats { display: none; } }

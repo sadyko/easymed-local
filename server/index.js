@@ -11,6 +11,7 @@ import { processPendingAction, pruneBackupsByKind, scheduleDailyBackups } from '
 import { bootstrapAdmin } from './services/auth.js';
 import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
+import { startDoctorBot } from './services/doctor-bot/index.js';   // REFERRALS_CRM_V1 — второй бот: для врачей-источников
 import { schedulePolling } from './services/telephony/poller.js';   // TELEPHONY_V1
 import { schedulePolling as scheduleMetaPolling } from './services/meta/poller.js';   // META_LEADS_V1 — опрос заявок из рекламы Meta
 import { startLisListeners } from './lis/index.js';   // LIS_INGEST_V1
@@ -254,6 +255,7 @@ if (isMain) {
   // и молчит, пока администратор его не включил. Все ошибки цикл ловит внутри:
   // недоступный Telegram не должен мешать регистратуре работать.
   startTelegramBot(db);
+  startDoctorBot(db);   // REFERRALS_CRM_V1 — свой поллер, свой токен; молчит, пока бот не включён
 
   // TELEPHONY_V1 — the Binotel call poller, in this same process for the same
   // one-`npm start` reason as the bot above. Its tick decides for itself
