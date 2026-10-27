@@ -16,6 +16,7 @@
 import crypto from 'node:crypto';
 import { SCOPES, normalizeSlug, slugProblem } from '../../../public/js/shared/api-connections.js';
 import { isoOf, msOf } from '../lib/time.js';
+import { ringHashOf } from './pbx-events.js';   // CALL_RING_V1
 
 export const SLUG_ALIAS_DAYS = 30;
 const DAY = 86400000;
@@ -112,8 +113,12 @@ export function saveKeys(db, clinicId, body, now) {
   const list = body.connections.map(connectionOf).filter(Boolean);
   if (new Set(list.map((c) => c.key_hash)).size !== list.length || new Set(list.map((c) => c.id)).size !== list.length) return { error: 'bad_request' };
   const used = new Map(db.prepare('SELECT id, last_used_at FROM connections WHERE clinic_id = ?').all(clinicId).map((r) => [r.id, r.last_used_at]));
+  // CALL_RING_V1 — секрет адреса событий станции приезжает в том же теле и
+  // хранится ХЕШЕМ (как key_hash подключений): по нему routes/pbx.js узнаёт
+  // вебхук onlinePBX этой клиники. Нет или не 32 hex — '' (адреса нет).
+  const ringHash = ringHashOf(body.ring_token);
   db.transaction(() => {
-    db.prepare('UPDATE clinics SET box_key = ?, keys_at = ? WHERE clinic_id = ?').run(String(body.box_key), isoOf(msOf(body.generated_at) || now), clinicId);
+    db.prepare('UPDATE clinics SET box_key = ?, keys_at = ?, ring_hash = ? WHERE clinic_id = ?').run(String(body.box_key), isoOf(msOf(body.generated_at) || now), ringHash, clinicId);
     db.prepare('DELETE FROM connections WHERE clinic_id = ?').run(clinicId);
     const ins = db.prepare(`INSERT INTO connections (clinic_id, id, kind, active, key_hash, scopes, rate_limit, key_expires_at, ip_allow, origins, last_used_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);

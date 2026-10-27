@@ -1572,7 +1572,10 @@ async function paint() {
     }
 
     // ---------------- ЗАЯВКА: создание / редактирование ----------------
-    function requestModal(r) {
+    // CALL_RING_V1 — prefill: новая заявка с уже подставленным номером (панель
+    // «Телефон», блок «Звонит», незнакомый номер). Только для НОВОЙ заявки: у
+    // существующей номер свой.
+    function requestModal(r, prefill = null) {
         const isEdit = !!r;
         const overlay = h('div', { class: 'modal' });
         const close = () => overlay.remove();
@@ -1582,7 +1585,7 @@ async function paint() {
         // существующего пациента, тогда лид привязывается (patient_id), а не дублируется.
         let linkedPatient = (r && r.patient_id && r.patients)
             ? { id: r.patients.id, full_name: r.patients.full_name, mrn: r.patients.mrn, phone: r.phone } : null;
-        const phoneInp = phoneInput('phone', '+998 … или без кода', { value: r ? r.phone : '' });
+        const phoneInp = phoneInput('phone', '+998 … или без кода', { value: r ? r.phone : ((prefill && prefill.phone) || '') });   // CALL_RING_V1 — номер звонящего
         const nameInp = h('input', {
             type: 'text', value: r ? (r.full_name || '') : '', placeholder: 'Фамилия Имя — или найдите пациента клиники…', autocomplete: 'off',
             style: { width: '100%', boxSizing: 'border-box', padding: '10px 12px 10px 32px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px', outline: 'none' },

@@ -9,7 +9,8 @@ import { migrate } from './migrate.js';
 
 const EXPECTED = {
   clinics: ['clinic_id', 'slug', 'key_fp', 'box_key', 'licence_issued_at', 'licence_valid_until', 'licence_subscription',
-    'first_seen_at', 'last_seen_at', 'keys_at', 'snapshot', 'snapshot_at', 'slots', 'slots_at'],
+    'first_seen_at', 'last_seen_at', 'keys_at', 'snapshot', 'snapshot_at', 'slots', 'slots_at',
+    'ring_hash'],   // CALL_RING_V1 — хеш секрета адреса событий станции (сам секрет — у клиники)
   slug_aliases: ['slug', 'clinic_id', 'until_at'],
   connections: ['clinic_id', 'id', 'kind', 'active', 'key_hash', 'scopes', 'rate_limit', 'key_expires_at', 'ip_allow', 'origins', 'last_used_at'],
   media: ['clinic_id', 'sha256', 'ext', 'bytes', 'stored_at'],
@@ -25,6 +26,10 @@ const EXPECTED = {
   access_log: ['id', 'clinic_id', 'connection_id', 'at', 'method', 'path', 'status', 'ip', 'ms'],
   // PUBLIC_LICENCE_V1 — последний принятый список производителя (номера клиник и отпечатки ключей).
   vendor_feed: ['id', 'issued_at', 'doc', 'received_at'],
+  // CALL_RING_V1 — события станции о живом звонке клиники на десять минут: номера
+  // звонка (caller/callee), событие, направление, время; keys — имена полей
+  // непонятного события без значений. Имён пациентов здесь нет и не будет.
+  pbx_events: ['id', 'clinic_id', 'uuid', 'event', 'direction', 'caller', 'callee', 'at', 'received_at', 'keys'],
   schema_migrations: ['name', 'applied_at'],
 };
 
@@ -32,7 +37,7 @@ test('миграции ложатся на пустую базу и повтор
   const db = openDb(':memory:');
   migrate(db);
   migrate(db);
-  assert.deepEqual(db.prepare('SELECT name FROM schema_migrations').all().map((r) => r.name), ['001_public_server.sql', '002_vendor_feed.sql']);
+  assert.deepEqual(db.prepare('SELECT name FROM schema_migrations').all().map((r) => r.name), ['001_public_server.sql', '002_vendor_feed.sql', '003_pbx_events.sql']);
   assert.equal(db.pragma('secure_delete', { simple: true }), 1, 'стёртое затирается');
   db.close();
 });

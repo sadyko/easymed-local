@@ -168,6 +168,7 @@ function paint() {
         if (p) {
             refs.body.appendChild(pbxConnectionCard(p));
             refs.body.appendChild(pbxPollingCard(p));
+            if (p.kind === 'onlinepbx') refs.body.appendChild(ringAddressCard());   // CALL_RING_V1 — адрес событий звонков для кабинета станции
         }
     }
     // Маршрут стоит ПОСЛЕ подключения и опроса и ПЕРЕД журналом: правила
@@ -863,6 +864,72 @@ function webhooksCard() {
 // Оба приезжают одним вызовом telephony_dispositions, уже с текущим правилом
 // в каждой строке — склеивать два ответа в браузере значит однажды нарисовать
 // правило напротив чужого исхода.
+// CALL_RING_V1 — адрес, на который onlinePBX присылает события «начало / ответ /
+// конец звонка»: по ним панель «Телефон» показывает блок «Звонит» в момент
+// звонка. Адрес грузится ПОСЛЕ отрисовки карточки (лишний вызов не задерживает
+// экран) и честно говорит, через что работает: публичный сервер Easy-Med
+// (клиника за NAT) или прямой адрес клиники (если она доступна из интернета).
+function relayReasonText(reason) {
+    if (reason === 'not_enrolled') return 'Клиника ещё не зарегистрирована у Easy-Med: адрес через публичный сервер появится после регистрации.';
+    if (reason === 'not_enabled') return 'Easy-Med ещё не включил обмен с публичным сервером для этой клиники — обратитесь в Easy-Med.';
+    if (reason === 'key_broken') return 'Файл ключа обмена повреждён — обратитесь в Easy-Med.';
+    return 'Обмен с публичным сервером сейчас недоступен.';
+}
+
+function ringAddressCard() {
+    const body = h('div', { style: { padding: '18px' }, 'data-ring-card': '' },
+        h('div', { class: 'muted', style: { fontSize: '13.5px' } }, 'Загружаем…'));
+    const addrRow = (label, url, attr) => h('div', { style: { marginTop: '10px' } },
+        h('div', { style: { fontWeight: '600', marginBottom: '4px' } }, label),
+        h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
+            h('input', { readonly: '', value: url, class: 'cell-mono', [attr]: '',
+                style: { flex: '1', height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '12.5px' },
+                onclick: (e) => e.target.select() }),
+            h('button', { class: 'btn btn-sm', type: 'button',
+                onclick: () => { navigator.clipboard.writeText(url).then(() => toast('Адрес скопирован.', 'success')); } },
+                'Копировать')));
+    const paintInfo = (info) => {
+        clear(body);
+        body.appendChild(h('div', { style: { fontSize: '13.5px', lineHeight: '1.6' } },
+            'Станция присылает события «начало звонка», «начавшийся разговор» и «завершение звонка», и панель «Телефон» показывает входящего с именем пациента через 1–3 секунды после начала звонка на трубке.'));
+        if (info.relay_ready) {
+            body.appendChild(addrRow('Адрес для кабинета onlinePBX', info.relay_url, 'data-ring-relay-url'));
+            body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', lineHeight: '1.6' } },
+                'В кабинете onlinePBX: Сервисы → Интеграция → Webhooks → «Добавить», вставьте адрес и отметьте три события. Адрес ведёт на публичный сервер Easy-Med: клиника заберёт события сама.'));
+        } else {
+            body.appendChild(h('div', { class: 'muted', style: { fontSize: '13.5px', marginTop: '10px', lineHeight: '1.6' }, 'data-ring-reason': info.relay_reason || '' },
+                relayReasonText(info.relay_reason)));
+            if (info.direct_url) {
+                body.appendChild(addrRow('Прямой адрес клиники (нужен доступ из интернета)', info.direct_url, 'data-ring-direct-url'));
+            } else {
+                body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', lineHeight: '1.6' } },
+                    'Прямой адрес появится, если указать публичный адрес клиники в настройках вебхуков Binotel (плитка Binotel): он нужен, только когда клиника доступна из интернета.'));
+            }
+        }
+        const rotate = h('button', { class: 'btn btn-sm', type: 'button', 'data-ring-rotate': '',
+            onclick: async () => {
+                if (!window.confirm(tr('Сгенерировать новый адрес? Прежний перестанет работать — его нужно будет заменить в кабинете станции.'))) return;
+                await run(rotate, async () => {
+                    const next = await rpc('telephony_ring_token_rotate', {});
+                    toast('Адрес обновлён — замените его в кабинете станции.', 'success');
+                    paintInfo(next);
+                });
+            } }, 'Сгенерировать заново');
+        body.appendChild(h('div', { style: { marginTop: '12px' } }, rotate));
+    };
+    (async () => {
+        try { paintInfo(await rpc('telephony_ring_info', {})); }
+        catch (e) {
+            clear(body);
+            body.appendChild(h('div', { class: 'muted', style: { fontSize: '13.5px' } },
+                isNotImplemented(e) ? 'Сервер старее экрана: обновите программу, чтобы получать события звонков.' : trf('Адрес недоступен: {msg}', { msg: (e && e.message) || '' })));
+        }
+    })();
+    return h('div', { class: 'card', style: { marginBottom: '16px' } },
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Bell', { size: 16 }), ' ', tr('События звонков — блок «Звонит»'))),
+        body);
+}
+
 function routingCard() {
     refs.routingBody = h('div');
     paintRouting();

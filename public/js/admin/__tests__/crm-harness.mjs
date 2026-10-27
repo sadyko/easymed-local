@@ -139,6 +139,8 @@ globalThis.fetch = async (url, opts) => {
     if (name === 'telephony_phone_me') return jsonOk(S.phoneMe || { id: 7, full_name: 'Админ', extension: '', line: 'onlinepbx', seen_extensions: [], may_dial: true, may_log: true, may_hear: true });
     if (name === 'telephony_call_log') return jsonOk({ may_hear: S.phoneMe ? !!S.phoneMe.may_hear : true, may_dial: S.phoneMe ? !!S.phoneMe.may_dial : true, calls: S.callLog || [] });
     if (name === 'telephony_extensions') return jsonOk({ extensions: S.extensions || [], error: '' });
+    // CALL_RING_V1 — что звонит сейчас: S.live — массив живых звонков (или функция).
+    if (name === 'telephony_live') return jsonOk({ calls: typeof S.live === 'function' ? S.live() : (S.live || []), source: S.liveSource || 'relay', reason: '' });
     if (name === 'telephony_my_extension') return jsonOk({ ok: true, extension: body.extension });
     if (name === 'telephony_dial') {
       if (S.dialError) return { ok: false, json: async () => ({ error: { message: S.dialError } }) };

@@ -13,6 +13,7 @@ import { attachControl } from './services/control/gate.js';   // LICENCE_CORE_V1
 import { setDataDir } from './services/control/config.js';   // LICENCE_CORE_V1
 import { recordEvent } from './services/ops-log.js';   // OPS_EVENTS_V1
 import { telephonyWebhooks } from './services/telephony/webhooks.js';   // TELEPHONY_V1
+import { ringWebhook } from './services/telephony/ring-webhook.js';   // CALL_RING_V1 — события станции «звонок начался / ответили / закончился» прямо на клинику
 import { branchSyncRoutes } from './routes/branch-sync.js';   // BRANCH_SYNC_V1
 import { lisProxyRoutes } from './routes/lisproxy.js';   // LIS_PROXY_V1
 
@@ -126,6 +127,11 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // req.control from attachControl above, the vendor source-IP allowlist and
   // the Company ID check), and every refusal is a non-advertising 404.
   app.use('/api/telephony/binotel', telephonyWebhooks(db));
+  // CALL_RING_V1 — прямой приём событий onlinePBX для клиники с публичным адресом:
+  // тот же слот и те же причины (станция cookie не шлёт; ворота — секрет адреса и
+  // модуль колл-центра; любой отказ — неразличимый 404). Клиника за NAT получает
+  // те же события через публичный сервер (telephony/live.js).
+  app.use('/api/telephony/pbx', ringWebhook(db));
 
   // BRANCH_SYNC_V1 — раздача справочника другому ФИЛИАЛУ той же клиники.
   // Стоит здесь же и по той же причине, что вебхуки выше: запрос приходит от

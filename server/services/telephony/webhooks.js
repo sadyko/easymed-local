@@ -20,6 +20,8 @@ import express, { Router } from 'express';
 import { readSettingsRow } from './settings.js';
 import { recordCall } from './poller.js';
 import { findPatientsByPhone } from '../telegram/documents.js';
+import { noteEvent } from './live.js';   // CALL_RING_V1 — «кто звонит» — это и «звонит сейчас» для панели «Телефон»
+import { ringFromBinotelSettings } from './pbx-event.js';
 
 // The vendor's published webhook source addresses.
 //
@@ -136,6 +138,10 @@ function handle(db, req, res, allowedIps) {
 // assignedToEmployeeNumber / assignedToEmployeeEmail / linkToCrmUrl), sent as
 // JSON in the docs' response structure.
 function callSettings(db, row, body, res) {
+  // CALL_RING_V1 — тот же запрос станции говорит панели «Телефон», что звонок
+  // идёт прямо сейчас (telephony/live.js). Отказ здесь не должен стоить станции
+  // ответа с именем — в try.
+  try { noteEvent(db, ringFromBinotelSettings(body)); } catch (e) { console.warn('[ring] Binotel «кто звонит»:', e && e.message); }
   const matches = findPatientsByPhone(db, String(body.externalNumber || ''), 1);
   if (!matches.length) {
     // Unknown caller: a generic empty-name answer, never an error — the PBX

@@ -38,6 +38,7 @@ import { missingMedia, putMedia, MEDIA_MAX_BYTES } from '../store/media.js';
 import { inboxItems, ackInbox, applyEvents } from '../store/requests.js';
 import { accessSince, deliveryLogSince } from '../store/logs.js';
 import { feedRevokedSyncKey } from '../store/feed.js';
+import { pbxEventsSince, waitForPbxEvent, PBX_WAIT_MAX_SEC } from '../store/pbx-events.js';   // CALL_RING_V1
 import { sendError } from '../lib/errors.js';
 
 export const SYNC_LIMIT_PER_MIN = 600;
@@ -129,6 +130,21 @@ export function syncRouter(ctx) {
     return res.json(out);
   });
   r.post('/inbox/ack', withJson((req, body, now) => ackInbox(ctx.db, req.clinic.clinic_id, body.cursor, body.held, now)));
+  // CALL_RING_V1 — живые события станции (routes/pbx.js) ДЛИННЫМ ОПРОСОМ: пусто
+  // — держим запрос до wait секунд (не больше 20) и отвечаем, как только событие
+  // этой клиники легло. Один запрос в 20 секунд в тишине не теснит лимит обмена;
+  // звонок доезжает до клиники за доли секунды. after — номер последнего
+  // забранного события; пустой — свежие за полторы минуты.
+  r.get('/pbx-events', async (req, res) => {
+    const id = req.clinic.clinic_id;
+    const wait = Math.max(0, Math.min(PBX_WAIT_MAX_SEC, Number(req.query.wait) || 0));
+    let items = pbxEventsSince(ctx.db, id, req.query.after, ctx.now());
+    if (!items.length && wait > 0) {
+      await waitForPbxEvent(id, wait * 1000);
+      items = pbxEventsSince(ctx.db, id, req.query.after, ctx.now());
+    }
+    return res.json({ items });
+  });
   r.use((req, res) => sendError(req, res, 'not_found'));
   return r;
 }

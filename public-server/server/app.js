@@ -12,6 +12,7 @@
 // запросов партнёров — в базе, без тел (store/logs.js).
 import express from 'express';
 import { syncRouter } from './routes/sync.js';
+import { pbxRouter } from './routes/pbx.js';   // CALL_RING_V1
 import { partnerRouter } from './routes/partner.js';
 import { opsRouter } from './routes/ops.js';
 import { docsRouter } from './routes/docs.js';
@@ -47,6 +48,7 @@ export function createPublicServer({ db, dataDir, now = () => Date.now(), licenc
   });
   app.use(opsRouter(ctx));
   app.use(docsRouter(ctx));
+  app.use('/_pbx/v1', pbxRouter(ctx));   // CALL_RING_V1 — вебхук станции о живом звонке клиники
   app.use('/_sync/v1', syncRouter(ctx));
   app.use('/:slug/v1', partnerRouter(ctx));
   app.use((req, res) => sendError(req, res, 'not_found'));

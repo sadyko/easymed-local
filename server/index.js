@@ -31,6 +31,7 @@ import { scheduleCrmTaskRehome } from './services/crm/tasks-follow.js';   // CRM
 import { preserveLegacyLogo } from './services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1
 import { schedulePublicSync } from './services/api/public-sync.js';   // PUBLIC_API_V1
 import { startLanAddress } from './services/lan/index.js';   // LAN_ADDRESS_V1
+import { scheduleLivePull } from './services/telephony/live.js';   // CALL_RING_V1 — длинный опрос живых событий станции, пока панели «Телефон» спрашивают
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -419,6 +420,9 @@ if (isMain) {
   // занятый 5353 или запрет multicast — строка в журнал, клиника работает.
   // EASYMED_MDNS=0 выключает имя; под node --test оно выключено само.
   startLanAddress(db, DATA_DIR, { port: PORT }).catch((e) => console.warn('[lan]', e && e.message));
+  // CALL_RING_V1 — живые события станции тем же каналом обмена; без спроса от
+  // панелей в сеть не ходит. Отказ — не причина не поднять сервер.
+  try { scheduleLivePull(db, DATA_DIR); } catch (e) { console.warn('[ring]', e && e.message); }
 }
 
 function lanAddresses() {

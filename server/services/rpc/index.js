@@ -74,6 +74,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
          telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording,
          telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
 import { telephonyPhoneMe, telephonyMyExtension, telephonyExtensions, telephonyCallLog } from './phone.js';   // CRM_PHONE_V1 — панель «Телефон» в CRM (бывший EasyPhone)
+import { telephonyLive, telephonyRingInfo, telephonyRingTokenRotate } from './ring.js';   // CALL_RING_V1 — «Звонит»: что звонит сейчас, адрес событий станции
 import { metaSettingsGet, metaSettingsSave, metaConnect, metaTokenClear, metaPollNow, metaLeadsRecent } from './meta.js';   // META_LEADS_V1
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners, lisDeviceDelete } from './lis.js';   // LIS_INGEST_V1, LIS_MINDRAY_CODES_V1, LIS_ANALYZER_LIST_V1
 import { lisServiceCounts } from './lis.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — контроль, калибровка, запросы у прибора за сегодня
@@ -689,6 +690,11 @@ export const RPC = {
   telephony_my_extension:    (db, args, user) => telephonyMyExtension(db, args, user),
   telephony_extensions:      (db, args, user) => telephonyExtensions(db, args, user),
   telephony_call_log:        (db, args, user) => telephonyCallLog(db, args, user),
+  // CALL_RING_V1 — «Звонит»: что звонит сейчас (сам вопрос — спрос на опрос
+  // станции), адрес для кабинета станции и смена его секрета (rpc/ring.js).
+  telephony_live:            (db, args, user) => telephonyLive(db, args, user),
+  telephony_ring_info:       (db, args, user) => telephonyRingInfo(db, args, user),
+  telephony_ring_token_rotate: (db, args, user) => telephonyRingTokenRotate(db, args, user),
   // CALL_RECORDING_V1 — звонки этого человека с записями разговоров.
   crm_lead_calls:            (db, args, user) => crmLeadCalls(db, args, user),
   // CALLCENTER_SHIFT_V1 — разбор звонков по операторам за период.

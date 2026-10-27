@@ -135,7 +135,7 @@ export function vendorBlocker(dataDir, identity) {
 
 // ─── ЗАПРОСЫ ────────────────────────────────────────────────────────────────
 
-async function call(ctx, method, p, body, { raw = null, type = 'application/json' } = {}) {
+export async function call(ctx, method, p, body, { raw = null, type = 'application/json' } = {}) {   // CALL_RING_V1 — экспорт: тем же разговором идёт длинный опрос живых событий (telephony/live.js)
   const payload = raw != null ? raw : (body === undefined ? '' : JSON.stringify(body));
   const full = SYNC_PREFIX + p;
   const time = isoOf(ctx.now());
@@ -171,8 +171,17 @@ async function call(ctx, method, p, body, { raw = null, type = 'application/json
 
 // ─── ЧАСТИ ТАКТА ────────────────────────────────────────────────────────────
 
+// CALL_RING_V1 — секрет адреса, на который станция шлёт события звонка
+// (telephony_settings.ring_token, мигр. 248). Едет в теле ключей: публичный
+// сервер хранит его хеш и узнаёт по нему вебхук onlinePBX для этой клиники.
+// До миграции (или без строки настроек) — пусто: адреса нет.
+function ringTokenOf(db) {
+  try { return String((db.prepare('SELECT ring_token FROM telephony_settings WHERE id = 1').get() || {}).ring_token || ''); }
+  catch { return ''; }
+}
+
 async function pushKeys(ctx, state) {
-  const keys = { ...buildKeys(ctx.db, { now: ctx.now() }), box_key: ctx.identity.boxPublic };
+  const keys = { ...buildKeys(ctx.db, { now: ctx.now() }), box_key: ctx.identity.boxPublic, ring_token: ringTokenOf(ctx.db) };
   const hash = contentHash(keys);
   const stale = !state.keys_at || ctx.now() - Date.parse(state.keys_at) >= HEARTBEAT_MS;
   if (hash === state.keys_hash && !stale) return false;
@@ -370,9 +379,39 @@ export async function syncOnce(db, dataDir, opts = {}) {
   } finally { inFlight = false; }
 }
 
-async function performSync(db, dataDir, opts) {
+/**
+ * CALL_RING_V1 — контекст подписанного разговора с публичным сервером БЕЗ такта
+ * обмена: его же берёт длинный опрос живых событий станции (telephony/live.js),
+ * чтобы не держать второй ключ, вторую лицензию и второй адрес. Вернёт
+ * { blocked: причина }, когда говорить нельзя: 'key_broken' (оба файла ключа
+ * испорчены), 'not_enrolled' / 'not_enabled' (vendorBlocker). localBlocker (имя
+ * в адресе, подключения партнёров) здесь НЕ спрашивается: живым событиям он не
+ * нужен, такт обмена проверяет его сам. createKey: false — не заводить ключ ради
+ * опроса (его заводит такт обмена); без ключа — 'not_enrolled'.
+ */
+export function buildSyncContext(db, dataDir, opts = {}) {
   const { fetchImpl = globalThis.fetch, env = process.env, now = () => Date.now(), keyPath = path.join(dataDir, SYNC_KEY_FILE),
-    kekPath = null, storageDir = path.join(dataDir, 'storage'), ingestImpl = ingestItem } = opts;
+    kekPath = null, storageDir = path.join(dataDir, 'storage'), ingestImpl = ingestItem, createKey = true } = opts;
+  let identity;
+  try { identity = loadSyncIdentity({ keyPath, create: createKey }); } catch (e) {
+    if (!(e instanceof SyncIdentityError)) throw e;
+    return { blocked: 'key_broken' };
+  }
+  if (!identity) return { blocked: 'not_enrolled' };
+  const vendor = vendorBlocker(dataDir, identity);
+  if (vendor) return { blocked: vendor };
+
+  assertPublicUrlIsTestSafe(env, fetchImpl);
+  const control = readJson(path.join(dataDir, 'control.json'));
+  return {
+    db, fetchImpl, now, kekPath, storageDir, identity, ingest: ingestImpl,
+    base: publicBaseUrl(env), clinicId: control.clinic_id,
+    licenceB64: Buffer.from(readText(path.join(dataDir, 'licence.dat')) || '', 'utf8').toString('base64'),
+  };
+}
+
+async function performSync(db, dataDir, opts) {
+  const { now = () => Date.now(), kekPath = null } = opts;
   // Своя работа — всегда: истечение удержаний и судьба визитов (партнёр узнает,
   // когда связь будет).
   expireDue(db, { now: now(), kekPath });
@@ -380,26 +419,16 @@ async function performSync(db, dataDir, opts) {
 
   const local = localBlocker(db);
   if (local) return { ok: false, reason: local };
+  const ctx = buildSyncContext(db, dataDir, opts);
   // Ревью 8a, M4: испорчены оба файла ключа — не «ждём Easy-Med» и не общая
   // ошибка, а «ключ повреждён — обратитесь в Easy-Med»: само не заживёт (сверка
   // не отдаёт открытый ключ, пока файл испорчен).
-  let identity;
-  try { identity = loadSyncIdentity({ keyPath, create: true }); } catch (e) {
-    if (!(e instanceof SyncIdentityError)) throw e;
+  if (ctx.blocked === 'key_broken') {
     console.warn('[public-api] файл ключа обмена повреждён — обратитесь в Easy-Med');
     saveState(db, { last_error: 'key_broken', last_error_at: isoOf(now()) });
     return { ok: false, reason: 'key_broken' };
   }
-  const vendor = vendorBlocker(dataDir, identity);
-  if (vendor) return { ok: false, reason: vendor };
-
-  assertPublicUrlIsTestSafe(env, fetchImpl);
-  const control = readJson(path.join(dataDir, 'control.json'));
-  const ctx = {
-    db, fetchImpl, now, kekPath, storageDir, identity, ingest: ingestImpl,
-    base: publicBaseUrl(env), clinicId: control.clinic_id,
-    licenceB64: Buffer.from(readText(path.join(dataDir, 'licence.dat')) || '', 'utf8').toString('base64'),
-  };
+  if (ctx.blocked) return { ok: false, reason: ctx.blocked };
   saveState(db, { last_poll_at: isoOf(now()) });
   // Ревью 8a, I3: снимок (с файлами) и время — каждый в своём try: их отказ
   // записывается причиной и не останавливает события и очередь. Ключи, события
