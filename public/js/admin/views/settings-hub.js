@@ -294,6 +294,10 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
             // затирались при следующей загрузке.
             { label: 'Документы',           desc: 'Как выглядят печатные документы',             icon: 'Doc',      live: true, action: nav('documents'), route: 'documents' },
             { label: 'Скидки пациентов',    desc: 'Промокоды и сертификаты: срок, группа пациентов, услуги', icon: 'Coins',    live: true, action: () => openSection('patient_discounts'), section: 'patient_discounts' },
+            // NAV_VISIBILITY_V1 (2026-10-26, владелец: «build visibility setting of functions from
+            // here, only setting block can not be unvisible») — какие разделы меню есть в
+            // этой клинике. Только администратор (isRouteAllowed → false для ролей).
+            { label: 'Видимость разделов', desc: 'Какие разделы меню показывать в этой клинике; «Настройки» скрыть нельзя', icon: 'Filter', live: true, action: nav('visibility-settings'), route: 'visibility-settings' },
             // TELEGRAM_BOT_V1 — токен бота и режимы выдачи документов пациентам.
             // Раздел админский: isRouteAllowed('telegram-settings') пускает только
             // полный доступ, остальные упрутся в отказ на самом экране.

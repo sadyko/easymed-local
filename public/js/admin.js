@@ -95,6 +95,8 @@ import { renderDepartments } from './admin/views/departments.js?v=dept1';   // D
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
 import { renderReferrals }        from './admin/views/referrals.js?v=ref1';   // REFERRALS_CRM_V1 — «Реферирование» под CRM
+import { renderNavVisibility } from './admin/views/nav-visibility.js?v=navvis1';   // NAV_VISIBILITY_V1 — «Настройки → Видимость разделов»
+import { isHiddenView, normalizeHidden } from './admin/nav-visibility-logic.js?v=navvis1';   // NAV_VISIBILITY_V1
 import { renderMetaSettings }      from './admin/views/meta-settings.js?v=meta1';   // META_LEADS_V1 — Meta Lead Ads -> CRM
 import { renderTelegramDeeplinks } from './admin/views/telegram-deeplinks.js?v=tgdl1';   // TG_DEEPLINK_V1 — ссылки для рекламы в Telegram
 import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing
@@ -332,6 +334,7 @@ const CRUMBS = {
     'departments': ['Insights', 'Settings', 'Отделы'],   // DEPARTMENTS_V1
     'crm-settings': ['Insights', 'Settings', 'CRM-канбан'],   // CRM_CONFIG_V1
     referrals:      ['Operations', 'Реферирование'],   // REFERRALS_NAV_V1 — пункт меню, не подэкран CRM
+    'visibility-settings': ['Insights', 'Settings', 'Видимость разделов'],   // NAV_VISIBILITY_V1
     'telegram-chat': ['Insights', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1
     'consultation-types': ['Insights', 'Settings', 'Консультации врачей'],   // CONSULTATION_TYPES_RESTORE
     'doctor-pay': ['Insights', 'Settings', 'Зарплата врачей'],   // DOCTOR_PAY_BULK_V1
@@ -435,6 +438,7 @@ function firstAllowedView() {
         // MY_STOCK_V1 — личный экран домашним не бывает ни у кого: сюда
         // приходят посмотреть на себя, а не начать смену. См. PERSONAL_VIEWS.
         if (PERSONAL_VIEWS.has(item.id)) continue;
+        if (navHidden.has(item.id)) continue;   // NAV_VISIBILITY_V1 — скрытый раздел домом не бывает
         if (isModuleAllowed(item.id)) return item.id;
     }
     return 'dashboard';   // unreachable in practice (super admin sees all)
@@ -770,6 +774,7 @@ const PARENT_OF = {
     'api-settings': 'settings', 'telegram-settings': 'settings', 'telephony-settings': 'settings', 'meta-settings': 'settings',
     'telegram-deeplinks': 'settings',   // TG_DEEPLINK_V1
     'crm-settings': 'settings', 'doctor-pay': 'settings',
+    'visibility-settings': 'settings',   // NAV_VISIBILITY_V1 — плитка «Основного»
     'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
     'departments': 'settings',   // DEPARTMENTS_V1
     'subscription': 'settings', 'clinic-data': 'settings',
@@ -1220,6 +1225,17 @@ async function renderViewInner(viewRoot, viewName, ctx) {
         await renderLockedModule(viewRoot, viewName);
         return;
     }
+    // NAV_VISIBILITY_V1 — раньше прав: роль без права увидела бы «нет доступа» там,
+    // где раздела в клинике просто нет.
+    if (navHiddenFor(viewName)) {
+        // Своя заглушка, не renderPlaceholder: тот дописывает к имени слово «module» (экран «скоро»).
+        viewRoot.appendChild(h('div', { class: 'fade-in' },
+            h('div', { class: 'empty', style: { padding: '40px 20px' } },
+                h('p', { style: { fontWeight: '600' } }, 'Раздел скрыт'),
+                h('p', { class: 'muted', style: { fontSize: '13.5px', marginTop: '6px' } }, 'Этот раздел скрыт в «Настройки → Видимость разделов». Администратор может вернуть его там.'),
+                h('button', { class: 'btn btn-outline', type: 'button', style: { marginTop: '14px' }, onclick: () => navigate(firstAllowedView()) }, 'На главную'))));
+        return;
+    }
     if (!isRouteAllowed(viewName)) {
         viewRoot.appendChild(accessDenied());
         return;
@@ -1278,6 +1294,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'queue':         return void await renderQueue(viewRoot, ctx);
             case 'crm':           return void await renderCrm(viewRoot, ctx);   // CRM_V1
             case 'referrals':     return void await renderReferrals(viewRoot, ctx);   // REFERRALS_NAV_V1 — «Реферирование», пункт группы «Операции»
+            case 'visibility-settings': return void await renderNavVisibility(viewRoot, ctx);   // NAV_VISIBILITY_V1 — только полный доступ (isRouteAllowed)
             case 'docs-archive':  return void await renderDocsArchive(viewRoot, ctx);   // CLINICAL_DOCS_ARCHIVE_V1
             case 'admissions':    return void await renderInpatient(viewRoot, ctx);   // INPATIENT_ONE_SECTION_V1 — заявки · койки · госпитализации одним разделом
             case 'case-file':     return void await renderCaseWorkspace(viewRoot, ctx);   // CASE_WORKSPACE_V1
@@ -1424,6 +1441,35 @@ function navItemOwns(item) {
 // у «Настроек» (SETTINGS_HUB_LIST_V1). Группа открытого экрана раскрыта всегда.
 const navClosed = new Set();
 
+// NAV_VISIBILITY_V1 (2026-10-26) — разделы, скрытые для всей клиники («Настройки →
+// Основное → Видимость разделов»). Владелец: «build visibility setting of
+// functions … only setting block can not be unvisible». Не права и не лицензия:
+// скрытый пункт исчезает из меню у всех, прямая ссылка показывает «раздел
+// скрыт», домашним экраном он не бывает. Список грузится в onAuthed ДО первой
+// отрисовки меню; экран настроек меняет его на лету через setNavHidden.
+const navHidden = new Set();
+function navHiddenFor(view) {
+    return isHiddenView(view, navHidden, parentViewOf);
+}
+async function loadNavVisibility() {
+    try {
+        const { data, error } = await supabase.rpc('nav_visibility_get', {});
+        if (error) throw new Error(error.message || 'nav_visibility_get');
+        navHidden.clear();
+        for (const id of normalizeHidden(data && data.hidden)) navHidden.add(id);
+    } catch (e) {
+        // Сервер старше миграции 254 или сеть: меню показывает всё — честнее, чем спрятать лишнее.
+        console.warn('[nav] visibility:', (e && e.message) || e);
+    }
+}
+function setNavHidden(list) {
+    navHidden.clear();
+    for (const id of normalizeHidden(list)) navHidden.add(id);
+    renderSidebar();
+    // Администратор только что спрятал раздел, в котором стоит сам, — уводим домой.
+    if (navHiddenFor(state.view)) navigate(firstAllowedView());
+}
+
 function renderSidebar() {
     clear(sidebarEl);
 
@@ -1476,6 +1522,7 @@ function renderSidebar() {
         }
         // Hide modules the active role can't access (super admin = all).
         if (!isModuleAllowed(item.id)) continue;
+        if (navHidden.has(item.id)) continue;   // NAV_VISIBILITY_V1 — скрыто для всей клиники
         // QUEUE_ONE_ENTRY_V1 — пункт, который для этой роли уже есть вкладкой
         // внутри другого раздела, вторым входом не рисуется.
         if (item.foldsInto && isModuleAllowed(item.foldsInto)) continue;
@@ -2938,6 +2985,7 @@ async function onAuthed(userRow, { fresh = false } = {}) {
     await initBranchContext(supabase, userRow);
     state.user = actorFromUser(userRow);
     await applyActorPermissions(state.user);
+    await loadNavVisibility();   // NAV_VISIBILITY_V1 — до первой отрисовки меню
     startApp({ fresh });
     renderLicenceBanner();   // LICENCE_CORE_V1 — after the shell exists, so `.app` is there to mount above
     // CRM_PHONE_V1 — «Телефон» в верхней панели рядом с «Обновить» (владелец, по
@@ -3094,7 +3142,7 @@ function startApp({ fresh = false } = {}) {
     // НАСТОЯЩИМ таблицам, а не по своей копии: копия разошлась бы с ними в
     // тот день, когда добавят новый экран, — то есть ровно тогда, когда тест
     // и нужен.
-    window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading };
+    window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading, setNavHidden };   // setNavHidden — NAV_VISIBILITY_V1
     watchSectionHeadings();   // ONE_NAME_PER_SCREEN_V1
     startUiEnhance();         // UI_ENHANCE_V1 — списки и календари в виде программы
     paintUserCard();
