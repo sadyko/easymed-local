@@ -8197,3 +8197,23 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
 .cph-topbtn.ring .cph-dot { background: var(--crit-500); animation: cph-pulse 1s infinite; }
 /* /CRM_PHONE_V1 */
 
+/* ============================ CRM_LEAD_WIDE_V1 — окно заявки в две колонки ============================
+   2026-10-17, владелец: «Make the pop up wider and put task and recordings on
+   the right side». У сохранённой заявки (.is-wide) окно 1120px, тело — две
+   колонки: слева сама заявка (ФИО, телефон, источник, оператор, услуги,
+   комментарий, метки), справа — задачи и «Звонки по этому номеру» с плеером
+   записи. Правая колонка уже левой (420px): в ней списки, а не поля ввода.
+   Новая заявка (без .is-wide) задач и звонков не имеет: окно остаётся узким,
+   пустая правая колонка скрыта. Уже 1100px окна — колонки встают друг под
+   другом в прежнем порядке, ничего не теряется. */
+.crm-lead-body.is-wide { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); gap: 14px 28px; align-items: start; }
+.crm-lead-col { display: grid; gap: 14px; align-content: start; min-width: 0; }
+.crm-lead-body:not(.is-wide) .crm-lead-side { display: none; }
+.crm-lead-body.is-wide .crm-lead-side { padding-left: 24px; border-left: 1px solid var(--ink-100); }
+.crm-lead-body.is-wide .crm-lead-side audio { width: 100%; }
+@media (max-width: 1100px) {
+    .crm-lead-body.is-wide { grid-template-columns: minmax(0, 1fr); }
+    .crm-lead-body.is-wide .crm-lead-side { padding-left: 0; border-left: 0; }
+}
+/* ============================ end CRM_LEAD_WIDE_V1 ============================ */
+

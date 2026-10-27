@@ -3230,7 +3230,12 @@ async function paint() {
             await paint();
         });
 
-        overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '720px', maxWidth: 'calc(100vw - 32px)' } },
+        // CRM_LEAD_WIDE_V1 (2026-10-17, владелец: «Make the pop up wider and put
+        // task and recordings on the right side») — у сохранённой заявки окно
+        // шире и в две колонки: слева — сама заявка (кто, откуда, что нужно),
+        // справа — что по ней делать (задачи) и что уже было (звонки с
+        // записями). Новая заявка задач и звонков не имеет — остаётся узкой.
+        overlay.appendChild(h('div', { class: 'modal-card modal-compact crm-lead-card' + (isEdit ? ' is-wide' : ''), style: { width: isEdit ? '1120px' : '720px', maxWidth: 'calc(100vw - 32px)' } },
             h('header', { class: 'modal-head' },
                 h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
                     h('span', { style: { width: '34px', height: '34px', borderRadius: '10px', background: 'var(--teal-50, #e0f2f1)', color: 'var(--teal-700, #00796b)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 } },
@@ -3240,7 +3245,9 @@ async function paint() {
                         h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } },
                             isEdit ? trf('Создана {when}', { when: fmtDateTime(r.created_at) }) : 'Найдите пациента клиники или зафиксируйте нового'))),
                 h('button', { class: 'modal-close', onclick: close }, '×')),
-            h('div', { class: 'modal-body' },
+            h('div', { class: 'modal-body crm-lead-body' + (isEdit ? ' is-wide' : '') },
+              // CRM_LEAD_WIDE_V1 — левая колонка: сама заявка.
+              h('div', { class: 'crm-lead-col crm-lead-main' },
                 field('ФИО', nameWrap, { required: true }),
                 (contactRow = h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-start' } },
                     h('div', { style: { flex: 1 } }, field('Телефон', phoneWrap, { required: true })),
@@ -3283,6 +3290,10 @@ async function paint() {
                 field('Комментарий', noteInp),
                 // CRM_HEAD_MERGE_TAGS_V1 — метки, если клиника их завела.
                 tagsBox ? field('Метки', tagsBox) : null,
+              ),
+              // CRM_LEAD_WIDE_V1 — правая колонка: задачи и звонки с записями.
+              // У новой заявки пуста и скрыта стилем (.crm-lead-body:not(.is-wide)).
+              h('div', { class: 'crm-lead-col crm-lead-side' },
                 // CRM_DEDUP_SEARCH_TASKS_V1 — «ЗАДАЧИ»: что и когда сделать по этой
                 // заявке и кто отвечает. Только у сохранённой заявки: задаче
                 // нужна заявка, к которой она привязана.
@@ -3302,6 +3313,7 @@ async function paint() {
                 // ещё нет номера, по которому искать, а пустая рамка «звонков
                 // нет» на каждом создании — шум.
                 isEdit ? callsBlock : null,
+              ),
             ),
             h('footer', { class: 'modal-foot' },
                 // CRM_CONVERT_V1 — конверсия одной кнопкой: интересующая услуга
