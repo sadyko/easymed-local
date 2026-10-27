@@ -54,7 +54,7 @@ test('colorLabel: Russian names for the swatches; an unknown token still names i
 test('the undeletable rows mirror the server’s list exactly — the screen must not offer a button that always 409s', () => {
     // server/services/crm/config.js: UNDELETABLE_STAGE_KEYS / _SOURCE_KEYS.
     assert.deepEqual(UNDELETABLE_STAGE_KEYS, ['in_process']);
-    assert.deepEqual(UNDELETABLE_SOURCE_KEYS, ['call', 'telephony']);
+    assert.deepEqual(UNDELETABLE_SOURCE_KEYS, ['call', 'telephony', 'meta_ads']);   // META_LEADS_V1 — источник заявок из рекламы Meta
     assert.equal(LABEL_MAX, 64, 'та же длина, что normLabel обрезает на сервере');
 });
 

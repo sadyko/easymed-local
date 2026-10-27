@@ -73,6 +73,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
          telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording,
          telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
+import { metaSettingsGet, metaSettingsSave, metaConnect, metaTokenClear, metaPollNow, metaLeadsRecent } from './meta.js';   // META_LEADS_V1
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners, lisDeviceDelete } from './lis.js';   // LIS_INGEST_V1, LIS_MINDRAY_CODES_V1, LIS_ANALYZER_LIST_V1
 import { lisServiceCounts } from './lis.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — контроль, калибровка, запросы у прибора за сегодня
 import { lisDeviceAdd } from './lis.js';   // LIS_VENDOR_EXACT_V1 — D2: «Добавить» найденный прибор — только с моделью или «общим HL7»
@@ -651,6 +652,15 @@ export const RPC = {
   lis_message_attach:       (db, args, user) => lisMessageAttach(db, args, user),
   lis_message_dismiss:      (db, args, user) => lisMessageDismiss(db, args, user),
 
+  // META_LEADS_V1 — Настройки → «Коммерческие инструменты» → «Meta: заявки из
+  // рекламы». Как телефония: токен границу RPC не пересекает (token_set и хвост),
+  // meta_connect и meta_poll_now — async, обычный 402-гейт.
+  meta_settings_get:        (db, args, user) => metaSettingsGet(db, args, user),
+  meta_settings_save:       (db, args, user) => metaSettingsSave(db, args, user),
+  meta_connect:             (db, args, user) => metaConnect(db, args, user),
+  meta_token_clear:         (db, args, user) => metaTokenClear(db, args, user),
+  meta_poll_now:            (db, args, user) => metaPollNow(db, args, user),
+  meta_leads_recent:        (db, args, user) => metaLeadsRecent(db, args, user),
   telephony_settings_get:   (db, args, user) => telephonySettingsGet(db, args, user),
   telephony_settings_save:  (db, args, user) => telephonySettingsSave(db, args, user),
   telephony_test:           (db, args, user) => telephonyTest(db, args, user),

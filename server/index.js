@@ -12,6 +12,7 @@ import { bootstrapAdmin } from './services/auth.js';
 import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
 import { schedulePolling } from './services/telephony/poller.js';   // TELEPHONY_V1
+import { schedulePolling as scheduleMetaPolling } from './services/meta/poller.js';   // META_LEADS_V1 — опрос заявок из рекламы Meta
 import { startLisListeners } from './lis/index.js';   // LIS_INGEST_V1
 import { createApp } from './app.js';
 import { setDataDir, setAppVersion } from './services/control/config.js';   // SUPERVISED_INSTALL_V1 / UPDATE_DELIVERY_V1
@@ -260,6 +261,12 @@ if (isMain) {
   // one settings read every 30 seconds and nothing else. unref'd timers —
   // it can never hold a shutdown open.
   schedulePolling(db);
+
+  // META_LEADS_V1 — опрос заявок из рекламы Meta (Lead Ads), в этом же процессе
+  // по той же причине «один npm start». Проход сам решает, делать ли что-то
+  // (включено + модуль crm + сохранённый токен): выключенная интеграция стоит
+  // одного чтения настроек в две минуты. Таймеры unref — остановку не держат.
+  scheduleMetaPolling(db);
 
   // LIS_INGEST_V1 — слушатели анализаторов, в этом же процессе по той же
   // причине «один npm start», что бот и опрос телефонии выше. Клиника без

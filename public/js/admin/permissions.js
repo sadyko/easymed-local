@@ -895,6 +895,7 @@ const SETTINGS_ROUTE_TILE = {
     'telephony-settings': 'settings.telephony',
     'telegram-settings': 'settings.telegram',
     'api-settings': 'settings.api',
+    'meta-settings': 'settings.meta',   // META_LEADS_V1
 };
 
 // Настроенный уровень плитки — или null, если роль его не настраивала.
@@ -1184,6 +1185,10 @@ export function isRouteAllowed(view) {
     // что здесь остаются только настроенные роли — им отказ. Сервер отказывает
     // второй раз, независимо от этой строки.
     if (view === 'telegram-settings') return false;
+    // META_LEADS_V1 — то же правило: токен Meta открывает заявки всей страницы
+    // клиники. Настроенная роль без ключа settings.meta — отказ; сервер
+    // (rpc/meta.js) отказывает второй раз, независимо от этой строки.
+    if (view === 'meta-settings') return false;
     // TELEPHONY_V1 — то же правило, что у Telegram-бота строкой выше: ключ и
     // secret Binotel открывают журнал звонков всей клиники, настроенным ролям
     // тут делать нечего. Полный доступ (_effective === null) уже пропущен выше;

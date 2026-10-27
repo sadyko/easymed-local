@@ -47,7 +47,12 @@ export const DEFAULT_PROVIDER = 'binotel';
 //   telephony          is what lead-from-call.js writes as the source of a
 //                      lead created from a phone call.
 export const UNDELETABLE_STAGE_KEYS = Object.freeze(['in_process']);
-export const UNDELETABLE_SOURCE_KEYS = Object.freeze(['call', 'telephony']);
+//   meta_ads           is what services/meta/leads.js writes as the source of a
+//                      lead that came from a Meta (Facebook / Instagram) ad form
+//                      (META_LEADS_V1). The row is created on the first lead;
+//                      deleting it afterwards would turn every next lead into
+//                      a foreign-key error inside the poller.
+export const UNDELETABLE_SOURCE_KEYS = Object.freeze(['call', 'telephony', 'meta_ads']);
 
 // CLINIC_API_STEP7_V1 — ИСТОЧНИКИ ПОДКЛЮЧЕНИЙ API (спецификация: «API-источники
 // защищены как «Звонок»: сохранение списка источников их не удаляет и не

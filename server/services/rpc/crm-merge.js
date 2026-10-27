@@ -339,6 +339,12 @@ export function crmMergeLeads(db, args, user) {
     // держало бы врача до истечения. Страж — crm-merge-coverage.test.js.
     try { db.prepare(`UPDATE api_requests SET crm_request_id = ? WHERE crm_request_id IN (${lh})`).run(keepId, ...mergeIds); }
     catch { /* база до мигр. 245 */ }
+    // META_LEADS_V1 — журнал заявок из рекламы Meta (мигр. 246) идёт за
+    // карточкой по той же причине: ON DELETE SET NULL отвязал бы запись, и
+    // таблица «Последние заявки» потеряла бы ссылку на карточку. Повтор заявки
+    // при этом невозможен: leadgen_id в журнале остаётся.
+    try { db.prepare(`UPDATE meta_leads SET crm_request_id = ? WHERE crm_request_id IN (${lh})`).run(keepId, ...mergeIds); }
+    catch { /* база до мигр. 246 */ }
     // 2. Метки — объединение: у карточки метка либо есть, либо нет.
     if (hasTags) {
       db.prepare(`INSERT OR IGNORE INTO crm_request_tags (request_id, tag_key)

@@ -107,7 +107,7 @@ export function colorLabel(token) {
 //                      from a phone call.
 // All three can still be renamed, recoloured, reordered and hidden.
 export const UNDELETABLE_STAGE_KEYS = ['in_process'];
-export const UNDELETABLE_SOURCE_KEYS = ['call', 'telephony'];
+export const UNDELETABLE_SOURCE_KEYS = ['call', 'telephony', 'meta_ads'];   // META_LEADS_V1 — источник заявок из рекламы Meta (services/meta/leads.js)
 // The reason, in the owner's language, shown where the delete button would be.
 export const UNDELETABLE_STAGE_REASON = 'Подставляется новым заявкам по умолчанию — можно скрыть, но не удалить.';
 export const UNDELETABLE_SOURCE_REASON = 'На него ссылается сама система — можно скрыть, но не удалить.';

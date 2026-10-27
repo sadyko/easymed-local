@@ -283,6 +283,7 @@ test('каждая строка справочника называет пров
   // (`adminDefault`): без него строка открылась бы всем в день обновления.
   const byKey = new Map(catalogRows().map((r) => [r.key, r]));
   const ADMIN_DEFAULT = ['settings.telegram', 'settings.telephony', 'settings.crm', 'settings.api', 'settings.roles', 'reports.telegram',
+    'settings.meta',   // META_LEADS_V1 — токен Meta, правило Telegram-бота
     'settings.employees', 'settings.doctor_rates', 'settings.patient_discounts', 'settings.payer_policies', 'settings.payment_providers', 'settings.cashback_rules',
     'settings.service_types.money', 'settings.consultation_types.money', 'settings.patient_categories.money', 'settings.rooms.money',
     'settings.referral_sources.money', 'settings.referral_source_categories.money', 'settings.employees.money',
@@ -312,6 +313,6 @@ test('каждая строка справочника называет пров
   // JOURNALS_V1_ACCESS — девятая группа «Журналы» (журнал услуг и реестр стационарных пациентов).
   assert.equal(CATALOG.find((s) => s.key === 'reports').windows.length, 9, 'девять групп отчётов: «Журналы» — после «По услугам», Telegram-бот — последняя');
   // PACKAGES_V1 — двадцать шестая плитка «Пакеты услуг» и её «Цены и проценты».
-  assert.equal(CATALOG.find((s) => s.key === 'settings').windows.length, 26, 'плитки хаба настроек');
+  assert.equal(CATALOG.find((s) => s.key === 'settings').windows.length, 27, 'плитки хаба настроек');   // META_LEADS_V1 — + settings.meta
   assert.equal(CATALOG.find((s) => s.key === 'settings').actions.length, 8, '«Цены и проценты» у восьми плиток');
 });

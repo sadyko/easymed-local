@@ -92,6 +92,7 @@ import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=jrn1';   // ROO
 import { renderDepartments } from './admin/views/departments.js?v=dept1';   // DEPARTMENTS_V1 — отделы: руководитель, команда, помещения, снабжение
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
+import { renderMetaSettings }      from './admin/views/meta-settings.js?v=meta1';   // META_LEADS_V1 — Meta Lead Ads -> CRM
 import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing
 import { renderTelegramChat } from './admin/views/telegram-chat.js?v=tgc4';   // TELEGRAM_CHAT_V1
 import { renderConsultationTypes } from './admin/views/consultation-types.js?v=ct5';   // CONSULTATION_TYPES_RESTORE
@@ -278,6 +279,7 @@ const CRUMBS = {
     'api-settings': ['Insights', 'Settings', 'API'],   // CLINIC_API_V1
     'telegram-settings': ['Insights', 'Settings', 'Telegram-бот'],   // TELEGRAM_BOT_V1
     'telephony-settings': ['Insights', 'Settings', 'Телефония'],   // TELEPHONY_V1
+    'meta-settings': ['Insights', 'Settings', 'Meta: заявки из рекламы'],   // META_LEADS_V1
     'departments': ['Insights', 'Settings', 'Отделы'],   // DEPARTMENTS_V1
     'crm-settings': ['Insights', 'Settings', 'CRM-канбан'],   // CRM_CONFIG_V1
     'telegram-chat': ['Insights', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1
@@ -1274,6 +1276,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             // ADMIN_ROWS_GRANTABLE_V1 — на «Просмотре» экран монтируется в рамку «только просмотр».
             case 'telegram-settings': return void await renderWithViewOnly(viewRoot, 'settings.telegram', (root) => renderTelegramSettings(root, ctx));   // TELEGRAM_BOT_V1
             case 'telephony-settings': return void await renderWithViewOnly(viewRoot, 'settings.telephony', (root) => renderTelephonySettings(root, ctx));   // TELEPHONY_V1
+            case 'meta-settings': return void await renderWithViewOnly(viewRoot, 'settings.meta', (root) => renderMetaSettings(root, ctx));   // META_LEADS_V1
             case 'crm-settings': return void await renderWithViewOnly(viewRoot, 'settings.crm', (root) => renderCrmSettings(root, ctx));   // CRM_CONFIG_V1
             case 'telegram-chat': return void await renderTelegramChat(viewRoot, ctx);   // TELEGRAM_CHAT_V1
             case 'doctor-pay': return void await renderDoctorPay(viewRoot, ctx);   // DOCTOR_PAY_BULK_V1
