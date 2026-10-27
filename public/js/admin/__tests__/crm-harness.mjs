@@ -88,7 +88,10 @@ export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTa
   countFor: null,
   // PUBLIC_API_V1 — заявки из API: строки доски (api_board_marks), окно карточки
   // (api_booking_list — массив или функция по телу), кандидаты и подтверждение.
-  apiMarks: {}, apiItems: [], apiCandidates: [] };
+  apiMarks: {}, apiItems: [], apiCandidates: [],
+  // CRM_PHONE_V1 — панель «Телефон»: ответ telephony_phone_me (null — администратор
+  // со всеми правами), журнал telephony_call_log, трубки станции, отказ набора.
+  phoneMe: null, callLog: [], extensions: [], dialError: null };
 export const CALLS = [];
 export const RPC = [];
 const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
@@ -132,6 +135,15 @@ globalThis.fetch = async (url, opts) => {
     if (name === 'api_booking_list') return jsonOk({ items: typeof S.apiItems === 'function' ? S.apiItems(body) : (S.apiItems || []) });   // PUBLIC_API_V1
     if (name === 'api_booking_candidates') return jsonOk({ items: S.apiCandidates || [] });   // PUBLIC_API_V1
     if (name === 'api_booking_confirm') return jsonOk({ id: body.id, status: 'confirmed', visit_id: 1, already: false });   // PUBLIC_API_V1
+    // CRM_PHONE_V1 — панель «Телефон»: кто я, журнал, трубки станции, набор, своя трубка.
+    if (name === 'telephony_phone_me') return jsonOk(S.phoneMe || { id: 7, full_name: 'Админ', extension: '', line: 'onlinepbx', seen_extensions: [], may_dial: true, may_log: true, may_hear: true });
+    if (name === 'telephony_call_log') return jsonOk({ may_hear: S.phoneMe ? !!S.phoneMe.may_hear : true, may_dial: S.phoneMe ? !!S.phoneMe.may_dial : true, calls: S.callLog || [] });
+    if (name === 'telephony_extensions') return jsonOk({ extensions: S.extensions || [], error: '' });
+    if (name === 'telephony_my_extension') return jsonOk({ ok: true, extension: body.extension });
+    if (name === 'telephony_dial') {
+      if (S.dialError) return { ok: false, json: async () => ({ error: { message: S.dialError } }) };
+      return jsonOk({ ok: true, provider: 'onlinepbx', call_id: 'c-new' });
+    }
     if (name === 'crm_merge_leads') {
       if (S.mergeError) return { ok: false, json: async () => ({ error: { message: S.mergeError } }) };
       return jsonOk({ kept_id: body.keep_id, merged_ids: body.merge_ids });

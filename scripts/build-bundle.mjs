@@ -61,10 +61,9 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));   // sc
 export const ALLOWLIST = Object.freeze([
   'server',
   'public',
-  // EASYPHONE_V1 — вторая программа поставки (рабочее место телефонии, свой
-  // порт). Без этой строки она просто НЕ ДОЕХАЛА БЫ до клиник: список
-  // разрешающий, и всё, чего в нём нет, молча остаётся дома.
-  'phone',
+  // CRM_PHONE_V1 — здесь стояла 'phone' (EasyPhone, вторая программа поставки на
+  // своём порту, EASYPHONE_V1). Рабочее место телефониста переехало внутрь
+  // public/ (панель CRM), и отдельной папке ехать больше незачем.
   'install',
   'package.json',
   'package-lock.json',

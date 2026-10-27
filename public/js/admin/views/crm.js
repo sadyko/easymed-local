@@ -26,6 +26,7 @@ import { filterServicePool, serviceGroupCounts } from './service-search.js';   /
 // другой модуль, то есть вторая копия окна со своим состоянием.
 import { openQuickPatientModal } from './quick-patient-modal.js?v=qp1';
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
+import { registerCrmPhoneHooks } from './crm-phone.js';   // CRM_PHONE_V1 — панель «Телефон» (кнопка в верхней панели) берёт у доски заявки и окно карточки
 import { canView, canEdit, isRouteAllowed } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev» · LIVE_AUDIT_FIX_V1 — isRouteAllowed
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
 import { stageKeysFrom } from '../crm-stages.js';   // CRM_LINKS_V1 — ступени по виду, а не по имени
@@ -678,6 +679,11 @@ async function paint() {
         display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap', flex: '1 1 auto', minWidth: '0',
     } });
 
+    // CRM_PHONE_V1 — панель «Телефон» (кнопка в верхней панели, views/crm-phone.js)
+    // называет набранный номер по заявке с этой доски и открывает карточку тем же
+    // окном, что доска. Регистрируется на каждой отрисовке: requestModal живёт в
+    // этой же области видимости.
+    registerCrmPhoneHooks({ leads: () => state.rows, openLead: (r) => requestModal(r), newLead: (p) => requestModal(null, p) });   // CALL_RING_V1 — newLead: «Новая заявка» с номером звонящего
     root.appendChild(h('div', { class: 'page-head' },
         h('div', null,
             h('h1', { class: 'page-title' }, 'CRM · Заявки'),
@@ -1239,6 +1245,10 @@ async function paint() {
         //
         // В EasyMed остаётся ровно то, ради чего сюда приходит клиника:
         // КАРТОЧКИ заявок и ЗАПИСИ разговоров в них.
+        //
+        // CRM_PHONE_V1 (2026-10-17) — рабочее место вернулось внутрь: панель
+        // «Телефон» в шапке этой доски (crm-phone.js). Кнопки на карточках при
+        // этом НЕ возвращаются: звонят из панели — там своя трубка и журнал.
         return [
             ...(take ? [take] : []),
             h('div', { class: 'crm-move' }, sel,

@@ -131,15 +131,15 @@ function canonicalIp(host) {
 
 /**
  * LIS_REAL_ANALYZERS_V1_DIAL — порты, которые слушает сам Easy-Med: порты LIS
- * (переданные — или LIS_PORT / 2575 и поднятые сейчас), HTTP (PORT, 8000) и
- * EasyPhone (EASYPHONE_PORT, иначе HTTP + 20 — server/index.js). Звонок на свой
- * адрес с таким портом — петля на себя.
+ * (переданные — или LIS_PORT / 2575 и поднятые сейчас) и HTTP (PORT, 8000).
+ * Звонок на свой адрес с таким портом — петля на себя.
+ * CRM_PHONE_V1 — порта EasyPhone (HTTP + 20) здесь больше нет: второй сервер
+ * снят, телефония — панель CRM на том же HTTP.
  */
 export function selfPorts(lisPorts) {
   const http = Number(process.env.PORT || 8000);
-  const phone = Number(process.env.EASYPHONE_PORT) || (http + 20);
   const lis = Array.isArray(lisPorts) ? lisPorts : [Number(process.env.LIS_PORT) || DEFAULT_PORT, ...running.map((s) => s.port)];
-  return [...new Set([...lis, http, phone].filter((p) => Number.isInteger(p) && p > 0))];
+  return [...new Set([...lis, http].filter((p) => Number.isInteger(p) && p > 0))];
 }
 
 /** Адрес этого компьютера: петля 127/8, ::1 и адреса его сетевых карт. */

@@ -383,7 +383,7 @@ test('CRM_UNIFY_V1: красный счётчик открывает «Зада�
 test('CRM_UNIFY_V1: меню — счётчик считает тем отбором, с которым откроет «Задачи»; значок открывает вид', () => {
   const HERE = path.dirname(fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(HERE, '..', '..', 'admin.js'), 'utf8');
-  assert.match(src, /import \{ renderCrm, openCrmTasks \}\s+from '\.\/admin\/views\/crm\.js\?v=crr1'/, 'другой спецификатор — второй экземпляр модуля доски');
+  assert.match(src, /import \{ renderCrm, openCrmTasks \}\s+from '\.\/admin\/views\/crm\.js\?v=phone1'/, 'другой спецификатор — второй экземпляр модуля доски');   // CRM_PHONE_V1 — штамп phone1
   const start = src.indexOf('async function loadNavCounts');
   const body = src.slice(start, src.indexOf('\n}\n', start));
   assert.match(body, /state\.crmTaskWho = lifted \? 'all' : 'me'/);

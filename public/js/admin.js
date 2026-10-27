@@ -69,7 +69,8 @@ import { renderReport }       from './admin/views/report.js';
 import { renderLaboratory }   from './admin/views/laboratory.js?v=labwords14';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head · LIS_MINDRAY_CODES_V1 — штамп · LIS_ANALYZER_LIST_V1 · LIS_DISCOVERY_FIX_V1 (экран) · LIS_REAL_ANALYZERS_V1 (экран; ревью R3–R7 — штамп)
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned2';
 import { renderQueue }       from './admin/views/queue.js?v=q7';   // QUEUE_BOARD_V1
-import { renderCrm, openCrmTasks } from './admin/views/crm.js?v=crr1';   // CRM_UNIFY_V1 — openCrmTasks (спецификатор прежний: другой ?v — второй экземпляр модуля) · CALL_RECORDING_REASONS_V1 — «Прослушать»: причина словами и повтор, пока запись готовится · CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию) · ROLES_SAVE_TRUTH_V1 — «Прослушать» по can_listen · CRM_MULTI_SOURCE_V1 — несколько источников у заявки и в фильтре
+import { mountPhoneButton } from './admin/views/crm-phone.js';   // CRM_PHONE_V1 — «Телефон» в верхней панели рядом с «Обновить»: наборник и журнал звонков панелью справа (бывший EasyPhone)
+import { renderCrm, openCrmTasks } from './admin/views/crm.js?v=phone1';   // CRM_PHONE_V1 — доска отдаёт панели «Телефон» заявки и окно карточки (phone1) · CRM_UNIFY_V1 — openCrmTasks (спецификатор прежний: другой ?v — второй экземпляр модуля) · CALL_RECORDING_REASONS_V1 — «Прослушать»: причина словами и повтор, пока запись готовится · CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию) · ROLES_SAVE_TRUTH_V1 — «Прослушать» по can_listen · CRM_MULTI_SOURCE_V1 — несколько источников у заявки и в фильтре
 import { overdueTaskCount } from './admin/views/crm-tasks.js';   // CRM_DEDUP_SEARCH_TASKS_V1 — красный счётчик просроченных задач у пункта CRM
 import { renderDocsArchive }  from './admin/views/docs-archive.js?v=pa1';   // CLINICAL_DOCS_ARCHIVE_V1 — restored after concurrent clobber; PRINT_AUTO_V1 — pa1 «Открыть» только показывает
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=jrn9';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder; JOURNALS_V1 — журналы (jrn1 карточки, jrn2 окно выбора услуг, jrn3 обрезка заключения, jrn4 «Печать», jrn5 «Скачать Excel» снова доступна, jrn6 печать и поиск окна выбора); JOURNALS_V1_RJ2C — jrn7 предел выбора и печати, выбор у каждого сотрудника, jrn8 «Итого — по всем строкам» на печати; JOURNALS_V1_ALL — jrn9 ничего не выбрано — все услуги
@@ -2853,9 +2854,13 @@ async function onAuthed(userRow, { fresh = false } = {}) {
     await applyActorPermissions(state.user);
     startApp({ fresh });
     renderLicenceBanner();   // LICENCE_CORE_V1 — after the shell exists, so `.app` is there to mount above
-    // EASYPHONE_V1 — панели набора здесь больше нет: звонки живут в отдельной
-    // программе EasyPhone (своё окно, свой порт). Владелец: «remove calling
-    // from the easymed. but leave the cards and the audios only».
+    // CRM_PHONE_V1 — «Телефон» в верхней панели рядом с «Обновить» (владелец, по
+    // снимку 2026-10-17): кнопка открывает панель наборника и журнала поверх любого
+    // экрана (views/crm-phone.js) — то, что было отдельной программой EasyPhone
+    // (EASYPHONE_V1, порт 8020). Ставится ПОСЛЕ прав (applyActorPermissions выше):
+    // у роли без права звонить и без журнала кнопки нет вовсе. Идемпотентна, как и
+    // баннер лицензии; при смене языка ставится заново (onLangChange ниже).
+    mountPhoneButton({ onNavigate: navigate, shiftTarget: viewRoot });
     // UPDATE_DELIVERY_V1 — fire-and-forget, same posture as boot()'s own
     // renderNotifications() call: a check that cannot run (offline, RPC
     // error) must never block login or surface as an error to the clinic.
@@ -3026,6 +3031,7 @@ function startApp({ fresh = false } = {}) {
         // асинхронные — их отказ ловится отдельно.
         const step = (name, fn) => { try { fn(); } catch (e) { console.warn('[lang] ' + name, e); } };
         step('topbar', applyTopbarLang);
+        step('phone', () => mountPhoneButton({ onNavigate: navigate, shiftTarget: viewRoot }));   // CRM_PHONE_V1 — подпись «Телефон» на новом языке
         step('sidebar', renderSidebar);
         step('title', renderSectionTitle);
         step('crumbs', renderCrumbs);

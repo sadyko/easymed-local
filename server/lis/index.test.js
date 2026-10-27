@@ -311,7 +311,7 @@ test('BS-200 по проводу: находка с моделью mindray-bs-20
 // ── LIS_REAL_ANALYZERS_V1_DIAL — Easy-Med подключается к прибору сам ────────
 // Строка прибора с dial = 1: слушатели её порт не берут, а клиент звонит на
 // адрес и порт строки. Поддельный анализатор-сервер — 127.0.0.1, порт 0; номер
-// берётся заново, если совпал с портом самого Easy-Med (LIS, HTTP, EasyPhone):
+// берётся заново, если совпал с портом самого Easy-Med (LIS, HTTP):
 // такой адрес клиент по правилу «нет петли на себя» и не тронет.
 async function fakeAnalyzer() {
   for (;;) {
@@ -440,14 +440,15 @@ test('адрес не из локальной сети, имя вместо IP, 
   });
 });
 
-test('selfPorts: порты LIS, HTTP и EasyPhone', () => {
+// CRM_PHONE_V1 — порта EasyPhone (HTTP + 20) в списке больше нет: второй сервер снят.
+test('selfPorts: порты LIS и HTTP, без порта EasyPhone', () => {
   const prev = [process.env.PORT, process.env.EASYPHONE_PORT];
   try {
     process.env.PORT = '8100';
-    delete process.env.EASYPHONE_PORT;
-    assert.deepEqual(selfPorts([2575]).sort((a, b) => a - b), [2575, 8100, 8120]);
-    process.env.EASYPHONE_PORT = '9000';
-    assert.ok(selfPorts([]).includes(9000));
+    process.env.EASYPHONE_PORT = '9000';   // переменная прежней программы ничего не значит
+    assert.deepEqual(selfPorts([2575]).sort((a, b) => a - b), [2575, 8100]);
+    assert.ok(!selfPorts([]).includes(8120), 'HTTP + 20 — больше не наш порт');
+    assert.ok(!selfPorts([]).includes(9000));
   } finally {
     if (prev[0] === undefined) delete process.env.PORT; else process.env.PORT = prev[0];
     if (prev[1] === undefined) delete process.env.EASYPHONE_PORT; else process.env.EASYPHONE_PORT = prev[1];

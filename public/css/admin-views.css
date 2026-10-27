@@ -8018,3 +8018,171 @@ table.pkg-tbl thead th.pkg-r { text-align: right; }
     .lan-kv dd + dt { margin-top: 8px; }
 }
 /* /LAN_ADDRESS_V1 */
+/* ============================================================================
+   CRM_PHONE_V1 (2026-10-17) — «Телефон» внутри EasyMed: кнопка в верхней панели
+   рядом с «Обновить» (владелец, по снимку) и выдвижная панель справа по образцу
+   владельца («EasyMed Telephony.html»). Шкала цветов, шрифт и ступени кегля —
+   EasyMed (TYPE_SCALE_V1: 12.5 / 13.5 / 15 / 17 / 20 / 24 / 30 / 40), не мокапа:
+   панель должна читаться частью той же программы. Классы cph-*.
+   ============================================================================ */
+/* кнопка в верхней панели — той же высоты и скругления, что «Обновить» рядом */
+.cph-topbtn { height: 32px; padding: 0 12px 0 10px; border-radius: 9px; border: 1px solid var(--ink-200); background: var(--white); color: var(--ink-700); display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; flex: 0 0 auto; white-space: nowrap; transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out); }
+.cph-topbtn:hover { background: var(--ink-50); border-color: var(--ink-300); }
+.cph-topbtn.on { background: var(--primary-50); border-color: var(--primary-300); color: var(--primary-700); }
+.cph-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-300); flex: 0 0 auto; }
+.cph-dot.on { background: var(--ok-500); }
+@media (max-width: 900px) { .cph-topbtn-t { display: none; } .cph-topbtn { padding: 0 9px; } }
+
+/* Экран уступает место панели: сдвиг, а не наложение — иначе крайняя колонка
+   канбана пряталась бы под панелью. Панель стоит в 12px от правого края шириной
+   360px; поле справа — 388px. На узком окне сдвига нет, панель поверх. */
+.view-root.crm-phone-shift { padding-right: 388px; transition: padding-right .32s cubic-bezier(.2,.8,.2,1); }
+/* и верхняя панель — иначе язык и меню учётной записи прячутся за панелью.
+   Селектор повторяет силу правила SHELL_REGIONS_V1 (.app .main > #topbar.appbar),
+   иначе проигрывает ему. */
+body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: padding-right .32s cubic-bezier(.2,.8,.2,1); }
+@media (max-width: 1100px) {
+    .view-root.crm-phone-shift { padding-right: var(--content-pad, 28px); }
+    body.cph-open .app .main > #topbar.appbar { padding-right: var(--content-pad, 24px); }
+}
+
+.cph-drawer {
+    position: fixed; top: 12px; right: 12px; bottom: 12px; width: 360px; max-width: calc(100vw - 24px);
+    background: var(--white); border-radius: 20px; z-index: 60;
+    box-shadow: -18px 0 50px rgba(11, 20, 24, .14), 0 30px 80px rgba(11, 20, 24, .12), 0 0 0 1px rgba(11, 20, 24, .06);
+    display: flex; flex-direction: column; overflow: hidden;
+    transform: translateX(0); opacity: 1;
+    transition: transform .32s cubic-bezier(.2,.8,.2,1), opacity .25s;
+}
+.cph-drawer.cph-closed { transform: translateX(calc(100% + 24px)); opacity: 0; pointer-events: none; }
+
+/* --- телефон (верх) --- */
+.cph-phone { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 14px 20px 16px; display: flex; flex-direction: column; border-bottom: 1px solid var(--ink-100); position: relative; }
+.cph-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cph-head .grow { flex: 1; }
+.cph-st { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border-radius: 999px; background: var(--ink-50); font-size: 12.5px; font-weight: 700; color: var(--ink-600); white-space: nowrap; flex: 0 0 auto; }
+.cph-st i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-300); }
+.cph-st.ok i { background: var(--ok-500); }
+.cph-st.wait i { background: var(--warn-500); animation: cph-pulse 1s infinite; }
+.cph-st.end i { background: var(--crit-500); }
+.cph-st.off i { background: var(--ink-300); }
+@keyframes cph-pulse { 50% { opacity: .25; } }
+.cph-ext { font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-500); background: none; border: 0; padding: 4px 6px; border-radius: 8px; cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.cph-ext:hover { background: var(--ink-50); color: var(--ink-900); }
+.cph-ext[disabled] { cursor: default; }
+.cph-ext[disabled]:hover { background: none; color: var(--ink-500); }
+.cph-ic { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--ink-600); background: var(--ink-50); border: 0; cursor: pointer; flex: 0 0 auto; }
+.cph-ic:hover { background: var(--ink-100); color: var(--ink-900); }
+.cph-body { display: flex; flex-direction: column; min-height: 0; }
+
+.cph-disp { min-height: 88px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; margin-top: 6px; }
+.cph-num { font-size: 30px; font-weight: 500; letter-spacing: .01em; min-height: 40px; text-align: center; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink-900); font-variant-numeric: tabular-nums; }
+.cph-num.ph0 { color: var(--ink-400); font-size: 15px; font-weight: 500; min-height: auto; white-space: normal; }
+.cph-who { font-size: 13.5px; font-weight: 600; color: var(--primary-700); min-height: 18px; display: flex; align-items: center; gap: 6px; }
+.cph-pad { display: grid; grid-template-columns: repeat(3, 62px); gap: 10px 24px; justify-content: center; margin-top: 4px; }
+.cph-k { width: 62px; height: 62px; border-radius: 50%; border: 0; background: var(--ink-50); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: background .12s; color: var(--ink-900); font: inherit; }
+.cph-k:hover { background: var(--ink-100); }
+.cph-k:active { background: var(--ink-200); }
+.cph-k b { font-size: 24px; font-weight: 500; line-height: 1; }
+.cph-k small { font-size: 12.5px; font-weight: 700; letter-spacing: .08em; color: var(--ink-400); margin-top: 1px; min-height: 12px; line-height: 1; transform: scale(.78); }
+.cph-crow { display: grid; grid-template-columns: repeat(3, 62px); gap: 24px; justify-content: center; margin-top: 12px; align-items: center; }
+.cph-call { width: 62px; height: 62px; border-radius: 50%; border: 0; background: var(--ok-500); display: grid; place-items: center; color: #fff; cursor: pointer; box-shadow: 0 8px 20px rgba(16, 185, 129, .35); }
+.cph-call:hover { background: var(--ok-700); }
+.cph-call[disabled] { opacity: .45; cursor: default; box-shadow: none; }
+.cph-bk { width: 62px; height: 62px; border: 0; background: none; display: grid; place-items: center; color: var(--ink-400); border-radius: 50%; cursor: pointer; }
+.cph-bk:hover { color: var(--ink-900); background: var(--ink-50); }
+.cph-bk.hide { visibility: hidden; }
+.cph-hint { font-size: 12.5px; color: var(--ink-500); text-align: center; margin-top: 10px; min-height: 18px; line-height: 1.4; }
+.cph-msg-bad { margin-top: 8px; padding: 9px 12px; border-radius: 10px; background: var(--crit-50); color: var(--crit-700); font-size: 13.5px; line-height: 1.4; }
+
+/* карточка звонка */
+.cph-inc { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.cph-ava { width: 80px; height: 80px; border-radius: 50%; background: linear-gradient(160deg, var(--ink-200), var(--ink-400)); display: grid; place-items: center; color: #fff; font-size: 30px; font-weight: 600; margin-top: 10px; position: relative; }
+.cph-ava.ring::before, .cph-ava.ring::after { content: ""; position: absolute; inset: -8px; border-radius: 50%; border: 2px solid rgba(16, 185, 129, .45); animation: cph-ring 1.6s infinite; }
+.cph-ava.ring::after { animation-delay: .8s; }
+@keyframes cph-ring { from { transform: scale(.9); opacity: 1; } to { transform: scale(1.35); opacity: 0; } }
+.cph-inc-name { font-size: 24px; font-weight: 600; letter-spacing: -.01em; margin: 14px 0 0; color: var(--ink-900); }
+.cph-pn { font-size: 13.5px; color: var(--ink-400); margin-top: 3px; }
+.cph-tm { font-size: 15px; font-weight: 500; margin-top: 10px; color: var(--ink-600); min-height: 20px; line-height: 1.4; max-width: 300px; }
+.cph-sum { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; justify-content: center; }
+.cph-sum .cph-audio { width: 100%; height: 34px; }
+
+/* выбор трубки */
+.cph-pick { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.cph-label { font-size: 12.5px; color: var(--ink-500); font-weight: 600; }
+.cph-select { width: 100%; height: 38px; padding: 0 10px; font: inherit; font-size: 13.5px; border: 1px solid var(--ink-200); border-radius: 9px; background: var(--white); color: var(--ink-900); }
+.cph-pick .cph-hint { text-align: left; margin-top: 0; }
+.cph-pick .cph-sum { justify-content: flex-start; margin-top: 4px; }
+
+/* --- журнал (низ) --- */
+.cph-hist { flex: 1 0 240px; min-height: 240px; display: flex; flex-direction: column; background: var(--ink-25); }
+.cph-hsh { padding: 12px 16px 10px; display: flex; flex-direction: column; gap: 9px; }
+.cph-hsh-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cph-hsh h3 { font-size: 15px; font-weight: 700; margin: 0; color: var(--ink-900); }
+.cph-cnt { font-size: 12.5px; color: var(--ink-400); font-weight: 600; white-space: nowrap; }
+.cph-srch { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border-radius: 10px; background: var(--ink-100); color: var(--ink-400); }
+.cph-q { border: 0; background: none; outline: none; flex: 1; font: inherit; font-size: 13.5px; color: var(--ink-900); min-width: 0; }
+.cph-seg { display: grid; grid-template-columns: repeat(4, 1fr); background: var(--ink-100); border-radius: 10px; padding: 2px; }
+.cph-seg button { height: 28px; border: 0; border-radius: 8px; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-600); background: none; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
+.cph-seg button.on { background: var(--white); color: var(--ink-900); box-shadow: 0 1px 3px rgba(0, 0, 0, .1); }
+.cph-live { display: flex; align-items: center; gap: 8px; margin: 0 10px 6px; padding: 9px 12px; border-radius: 12px; background: var(--ok-50); color: var(--ok-700); font-size: 13.5px; font-weight: 600; }
+.cph-live[hidden] { display: none; }
+.cph-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok-500); animation: cph-pulse 1.4s infinite; flex: 0 0 auto; }
+.cph-live-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cph-list { flex: 1; overflow-y: auto; padding: 0 8px 14px; }
+.cph-grp { font-size: 12.5px; font-weight: 700; color: var(--ink-400); letter-spacing: .06em; text-transform: uppercase; padding: 12px 10px 6px; position: sticky; top: 0; background: var(--ink-25); z-index: 1; }
+.cph-rw { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto 34px; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 12px; cursor: pointer; }
+.cph-rw:hover, .cph-rw.open { background: var(--white); box-shadow: 0 0 0 1px var(--ink-100); }
+.cph-rw:focus-visible { outline: 2px solid var(--primary-400); outline-offset: 1px; }
+.cph-dir { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--ink-100); color: var(--ink-600); }
+.cph-dir.miss { background: var(--crit-50); color: var(--crit-700); }
+.cph-dir.out { background: var(--primary-50); color: var(--primary-700); }
+.cph-rw-main { min-width: 0; }
+.cph-n { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-900); }
+.cph-n.miss { color: var(--crit-700); }
+.cph-s { font-size: 12.5px; color: var(--ink-400); display: flex; gap: 6px; align-items: center; white-space: nowrap; overflow: hidden; }
+.cph-s em { font-style: normal; font-weight: 700; }
+.cph-s em.in { color: var(--ok-700); }
+.cph-s em.miss { color: var(--crit-700); }
+.cph-s em.out { color: var(--ink-600); }
+.cph-tt { text-align: right; font-size: 12.5px; color: var(--ink-400); line-height: 1.35; white-space: nowrap; }
+.cph-tt b { display: block; font-size: 12.5px; font-weight: 500; color: var(--ink-600); font-variant-numeric: tabular-nums; }
+.cph-cbk { width: 34px; height: 34px; border-radius: 50%; border: 0; display: grid; place-items: center; color: var(--ok-700); background: var(--ok-50); cursor: pointer; }
+.cph-cbk:hover { background: var(--ok-500); color: #fff; }
+.cph-x { margin: 2px 10px 6px 50px; padding: 8px 10px; border-radius: 10px; background: var(--white); box-shadow: 0 0 0 1px var(--ink-100); font-size: 12.5px; }
+.cph-x-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; }
+.cph-x .cph-sum { margin-top: 8px; justify-content: flex-start; }
+.cph-note { margin: 10px 10px 0; font-size: 12.5px; color: var(--ink-500); line-height: 1.4; }
+.cph-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 40px 20px; text-align: center; color: var(--ink-400); font-size: 13.5px; line-height: 1.4; }
+.cph-empty i { width: 50px; height: 50px; border-radius: 50%; background: var(--ink-100); display: grid; place-items: center; color: var(--ink-500); margin-bottom: 4px; }
+.cph-empty b { font-size: 15px; color: var(--ink-900); font-weight: 700; }
+
+/* --- вкладка на краю и пилюля --- */
+.cph-edge { position: fixed; right: 0; top: 50%; transform: translateY(-50%); width: 42px; height: 118px; border-radius: 14px 0 0 14px; background: var(--white); border: 0; box-shadow: 0 10px 30px rgba(11, 20, 24, .12), 0 0 0 1px var(--ink-100); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; z-index: 59; color: var(--ok-700); cursor: pointer; }
+.cph-edge[hidden] { display: none; }
+.cph-edge span { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12.5px; font-weight: 700; color: var(--ink-600); letter-spacing: .04em; }
+.cph-mini { position: fixed; right: 20px; bottom: 20px; display: flex; align-items: center; gap: 12px; height: 54px; padding: 0 18px; border-radius: 999px; border: 0; background: var(--ink-900); color: #fff; box-shadow: 0 14px 36px rgba(0, 0, 0, .25); z-index: 61; cursor: pointer; text-align: left; font: inherit; }
+.cph-mini[hidden] { display: none; }
+.cph-mini-t { font-size: 13.5px; font-weight: 700; }
+.cph-mini-s { font-size: 12.5px; color: #9fe5b4; font-variant-numeric: tabular-nums; }
+
+/* невысокие окна — клавиши мельче, журналу остаётся место */
+@media (max-height: 820px) {
+    .cph-k, .cph-call, .cph-bk { width: 54px; height: 54px; }
+    .cph-pad, .cph-crow { grid-template-columns: repeat(3, 54px); gap: 8px 26px; }
+    .cph-k b { font-size: 20px; }
+    .cph-disp { min-height: 72px; }
+    .cph-ava { width: 66px; height: 66px; font-size: 24px; }
+}
+@media (max-height: 700px) {
+    .cph-k, .cph-call, .cph-bk { width: 46px; height: 46px; }
+    .cph-pad, .cph-crow { grid-template-columns: repeat(3, 46px); gap: 6px 28px; }
+    .cph-k b { font-size: 20px; }
+    .cph-k small { display: none; }
+    .cph-num { font-size: 24px; min-height: 30px; }
+    .cph-disp { min-height: 54px; margin-top: 2px; }
+    .cph-phone { padding: 10px 16px 12px; }
+    .cph-hist { flex-basis: 200px; min-height: 200px; }
+}
+/* /CRM_PHONE_V1 */
+
