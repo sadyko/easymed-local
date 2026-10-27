@@ -896,6 +896,7 @@ const SETTINGS_ROUTE_TILE = {
     'telegram-settings': 'settings.telegram',
     'api-settings': 'settings.api',
     'meta-settings': 'settings.meta',   // META_LEADS_V1
+    'telegram-deeplinks': 'settings.telegram',   // TG_DEEPLINK_V1 — ссылки для рекламы: то же окно, что настройки бота
 };
 
 // Настроенный уровень плитки — или null, если роль его не настраивала.
@@ -1189,6 +1190,11 @@ export function isRouteAllowed(view) {
     // клиники. Настроенная роль без ключа settings.meta — отказ; сервер
     // (rpc/meta.js) отказывает второй раз, независимо от этой строки.
     if (view === 'meta-settings') return false;
+    // TG_DEEPLINK_V1 — ссылки для рекламы меняют то, что бот отвечает людям с
+    // рекламы, и заводят карточки в CRM: окно «Telegram-бот» в «Ролях»
+    // (SETTINGS_ROUTE_TILE выше) или администратор; ненастроенной роли — нет.
+    // Сервер (rpc/deeplinks.js) отказывает второй раз, независимо от этой строки.
+    if (view === 'telegram-deeplinks') return false;
     // TELEPHONY_V1 — то же правило, что у Telegram-бота строкой выше: ключ и
     // secret Binotel открывают журнал звонков всей клиники, настроенным ролям
     // тут делать нечего. Полный доступ (_effective === null) уже пропущен выше;

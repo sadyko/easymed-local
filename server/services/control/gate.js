@@ -77,6 +77,7 @@ const READ_ONLY_RPCS = new Set([
   'telegram_settings_get', 'telegram_links_list', 'telegram_deliveries_list',
   'telegram_stats', 'telegram_broadcast_status', 'telegram_broadcast_history',
   'telegram_chats_list', 'telegram_chat_messages', 'telegram_chat_unread',
+  'telegram_deeplinks_list',   // TG_DEEPLINK_V1 — ссылки для рекламы: таблица и счётчики; чтение
   // UPDATE_DELIVERY_V1 — the approval screen's own status read; it changes
   // nothing, only reports the offer/approval/schedule/last result.
   'update_status',

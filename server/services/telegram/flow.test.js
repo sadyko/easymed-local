@@ -74,6 +74,15 @@ test('свой подтверждённый номер связывает чат
 
   await handleUpdate(db, TOKEN, contactMsg(600, 600, 600, PHONE_A), deps);
 
+  // TG_DEEPLINK_V1 (2026-10-26) — T.linked читался, но не был определён с
+  // импорта easymed.old: подтверждение номера уходило БЕЗ текста, Telegram
+  // отвечал 400, и список пациентов не приходил. Ловушка вместо сети это
+  // пропускала; теперь каждое отправленное сообщение обязано иметь текст.
+  for (const m of sent.filter((x) => x.method === 'sendMessage')) {
+    assert.ok(typeof m.params.text === 'string' && m.params.text.length, 'sendMessage без текста: ' + JSON.stringify(m.params));
+  }
+  assert.match(sent.find((x) => x.method === 'sendMessage').params.text, /Номер подтверждён/);
+
   const link = activeLink(db, 600);
   assert.ok(link, 'связка создана');
   assert.equal(link.phone, '998901112233', 'номер сохраняется цифрами');

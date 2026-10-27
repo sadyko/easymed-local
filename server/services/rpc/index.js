@@ -76,6 +76,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
 import { telephonyPhoneMe, telephonyMyExtension, telephonyExtensions, telephonyCallLog } from './phone.js';   // CRM_PHONE_V1 — панель «Телефон» в CRM (бывший EasyPhone)
 import { telephonyLive, telephonyRingInfo, telephonyRingTokenRotate } from './ring.js';   // CALL_RING_V1 — «Звонит»: что звонит сейчас, адрес событий станции
 import { metaSettingsGet, metaSettingsSave, metaConnect, metaTokenClear, metaPollNow, metaLeadsRecent } from './meta.js';   // META_LEADS_V1
+import { telegramDeeplinksList, telegramDeeplinkSave, telegramDeeplinkDelete } from './deeplinks.js';   // TG_DEEPLINK_V1 — ссылки для рекламы в Telegram
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners, lisDeviceDelete } from './lis.js';   // LIS_INGEST_V1, LIS_MINDRAY_CODES_V1, LIS_ANALYZER_LIST_V1
 import { lisServiceCounts } from './lis.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — контроль, калибровка, запросы у прибора за сегодня
 import { lisDeviceAdd } from './lis.js';   // LIS_VENDOR_EXACT_V1 — D2: «Добавить» найденный прибор — только с моделью или «общим HL7»
@@ -582,6 +583,11 @@ export const RPC = {
   telegram_broadcast_status:      (db, args, user) => telegramBroadcastStatus(db, args, user),
   telegram_broadcast_history:     (db, args, user) => telegramBroadcastHistory(db, args, user),
   telegram_broadcast_options:     (db, args, user) => telegramBroadcastOptions(db, args, user),   // TG_BROADCAST_FILTERS_V1 — справочники фильтров
+  // TG_DEEPLINK_V1 — Настройки → «Коммерческие инструменты» → «Ссылки для
+  // рекламы в Telegram»: окно «Telegram-бот» в «Ролях», просмотр и изменение.
+  telegram_deeplinks_list:        (db, args, user) => telegramDeeplinksList(db, args, user),
+  telegram_deeplink_save:         (db, args, user) => telegramDeeplinkSave(db, args, user),
+  telegram_deeplink_delete:       (db, args, user) => telegramDeeplinkDelete(db, args, user),
 
   // TELEGRAM_CHAT_V1 — «Чат с пациентами» в левом меню. Единственные RPC бота,
   // которые НЕ admin-only: раздел выдаётся ролям, и его уровень (viewer /

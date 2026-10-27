@@ -345,6 +345,12 @@ export function crmMergeLeads(db, args, user) {
     // при этом невозможен: leadgen_id в журнале остаётся.
     try { db.prepare(`UPDATE meta_leads SET crm_request_id = ? WHERE crm_request_id IN (${lh})`).run(keepId, ...mergeIds); }
     catch { /* база до мигр. 246 */ }
+    // TG_DEEPLINK_V1 — заявки по рекламным ссылкам Telegram (мигр. 251) идут за
+    // карточкой так же: счётчик «Заявки» у ссылки — это строки этого журнала, и
+    // слияние карточек не должно отвязывать их (ON DELETE SET NULL сработал бы
+    // только при удалении, но перенос — явный, чтобы ссылка вела на живую карточку).
+    try { db.prepare(`UPDATE telegram_deeplink_leads SET crm_request_id = ? WHERE crm_request_id IN (${lh})`).run(keepId, ...mergeIds); }
+    catch { /* база до мигр. 251 */ }
     // 2. Метки — объединение: у карточки метка либо есть, либо нет.
     if (hasTags) {
       db.prepare(`INSERT OR IGNORE INTO crm_request_tags (request_id, tag_key)

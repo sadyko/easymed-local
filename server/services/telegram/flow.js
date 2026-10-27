@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDataDir } from '../control/config.js';   // SUPERVISED_INSTALL_V1
 import { clinicNames } from './setup.js';   // CLINIC_PROFILE_V1 — узбекское название клиники в узбекской строке
+import { parseStart, onStart as deeplinkStart, onCallback as deeplinkCallback, takePendingLead, onContactForLead } from './deeplinks.js';   // TG_DEEPLINK_V1 — ссылки для рекламы
 
 // Корень проекта считаем от расположения модуля, а не от process.cwd():
 // сервер могут запустить ярлыком из любой папки, и тогда cwd указывает мимо.
@@ -33,6 +34,14 @@ const KIND_LABEL = {
 // сотрудников и печатные бланки остаются русскими — там читатель другой.
 const T = {
   shareBtn: '📱 Raqamni yuborish · Отправить номер',
+
+  // TG_DEEPLINK_V1 (2026-10-26) — эта фраза ЧИТАЛАСЬ в handleContact с самого
+  // импорта easymed.old, но в словаре её не было: sendMessage уходил без text,
+  // Telegram отвечал 400 «message text is empty», и список пациентов после
+  // подтверждения номера не показывался. Тесты не ловили: ловушка вместо сети
+  // принимает что угодно. Теперь фраза есть, и flow.test.js проверяет, что бот
+  // не отправляет пустых сообщений.
+  linked: ['✅ Raqam tasdiqlandi.', 'Номер подтверждён.'].join('\n'),
 
   needContact: ['👇 Hujjatlarni olish uchun telefon raqamingizni tasdiqlang.',
                 '👇 Чтобы получить документы, подтвердите номер телефона.'].join('\n'),
@@ -135,6 +144,16 @@ const contactKeyboard = {
   resize_keyboard: true, one_time_keyboard: true,
 };
 
+// TG_DEEPLINK_V1 — что deeplinks.js получает от этого модуля: ответ с записью в
+// ленту и две клавиатуры. Параметром, а не импортом — deeplinks.js не
+// импортирует flow.js, цикла модулей нет.
+const botApi = {
+  reply: (...a) => reply(...a),
+  log: (...a) => logMessage(...a),
+  get contactKeyboard() { return contactKeyboard; },
+  get menuKeyboard() { return menuKeyboard; },
+};
+
 // ---------------------------------------------------------------------------
 // Ограничение частоты — на чат
 // ---------------------------------------------------------------------------
@@ -211,6 +230,14 @@ async function handleMessage(db, token, msg, deps) {
   if (msg.text) logMessage(db, chatId, 'in', msg.text, { kind: 'text', tgMessageId: msg.message_id });
 
   if (msg.contact) return handleContact(db, token, msg, deps);
+
+  // TG_DEEPLINK_V1 — «/start <ключ>» из рекламной ссылки разбирается ДО
+  // проверки привязки: человек пришёл по рекламе и ещё не пациент. Активная
+  // ссылка отвечает сама; чужой или выключенный ключ — обычное приветствие.
+  const started = parseStart(msg.text);
+  if (started.isStart && started.param) {
+    if (await deeplinkStart(db, token, chatId, msg.from, started.param, deps, botApi)) return;
+  }
 
   const link = activeLink(db, chatId);
   if (!link) {
@@ -294,6 +321,13 @@ async function handleContact(db, token, msg, deps) {
       .run(String(chatId), phone, String(fromId), (msg.from.username || ''), name);
   }
 
+  // TG_DEEPLINK_V1 — номер прислали в ответ на «Оставить заявку» по рекламной
+  // ссылке: карточка в CRM и благодарность. Связка номера уже заведена выше
+  // (человек мог оказаться и пациентом), а список пациентов не показываем —
+  // он пришёл не за документами, и «никого не нашли» было бы неправдой.
+  const pendingLead = takePendingLead(db, chatId);
+  if (pendingLead && await onContactForLead(db, token, chatId, msg.from, pendingLead, phone, deps, botApi)) return;
+
   const link = activeLink(db, chatId);
   await reply(db, token, chatId, T.linked, { reply_markup: menuKeyboard }, deps);
   return showPatients(db, token, chatId, link, deps);
@@ -344,6 +378,16 @@ async function handleCallback(db, token, cq, deps) {
   if (!chatId) return;
 
   const link = activeLink(db, chatId);
+
+  // TG_DEEPLINK_V1 — кнопки под ответом рекламной ссылки работают и без
+  // привязки: «показать другой ответ» и «оставить заявку» — для тех, кто
+  // пришёл с рекламы. Привязанному заявка заводится сразу (номер известен).
+  if (data.startsWith('dl:')) {
+    await ackQuietly(token, cq.id, '', deps);
+    if (link) touch(db, chatId);
+    return deeplinkCallback(db, token, chatId, cq.from, data, deps, botApi, link);
+  }
+
   if (!link) {
     await ackQuietly(token, cq.id, '', deps);
     return reply(db, token, chatId, greeting(db), { reply_markup: contactKeyboard }, deps);

@@ -95,6 +95,7 @@ import { renderDepartments } from './admin/views/departments.js?v=dept1';   // D
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
 import { renderMetaSettings }      from './admin/views/meta-settings.js?v=meta1';   // META_LEADS_V1 — Meta Lead Ads -> CRM
+import { renderTelegramDeeplinks } from './admin/views/telegram-deeplinks.js?v=tgdl1';   // TG_DEEPLINK_V1 — ссылки для рекламы в Telegram
 import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing
 import { renderTelegramChat } from './admin/views/telegram-chat.js?v=tgc4';   // TELEGRAM_CHAT_V1
 import { renderConsultationTypes } from './admin/views/consultation-types.js?v=ct5';   // CONSULTATION_TYPES_RESTORE
@@ -321,6 +322,7 @@ const CRUMBS = {
     'telegram-settings': ['Insights', 'Settings', 'Telegram-бот'],   // TELEGRAM_BOT_V1
     'telephony-settings': ['Insights', 'Settings', 'Телефония'],   // TELEPHONY_V1
     'meta-settings': ['Insights', 'Settings', 'Meta: заявки из рекламы'],   // META_LEADS_V1
+    'telegram-deeplinks': ['Insights', 'Settings', 'Ссылки для рекламы в Telegram'],   // TG_DEEPLINK_V1
     'departments': ['Insights', 'Settings', 'Отделы'],   // DEPARTMENTS_V1
     'crm-settings': ['Insights', 'Settings', 'CRM-канбан'],   // CRM_CONFIG_V1
     'telegram-chat': ['Insights', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1
@@ -754,7 +756,8 @@ const PARENT_OF = {
     // Настройки и всё, что открывается с их плиток
     'employees': 'settings', 'documents': 'settings', 'documents-settings': 'settings',
     'services': 'settings', 'consultation-types': 'settings', 'discounts-settings': 'settings',
-    'api-settings': 'settings', 'telegram-settings': 'settings', 'telephony-settings': 'settings',
+    'api-settings': 'settings', 'telegram-settings': 'settings', 'telephony-settings': 'settings', 'meta-settings': 'settings',
+    'telegram-deeplinks': 'settings',   // TG_DEEPLINK_V1
     'crm-settings': 'settings', 'doctor-pay': 'settings',
     'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
     'departments': 'settings',   // DEPARTMENTS_V1
@@ -1318,6 +1321,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'telegram-settings': return void await renderWithViewOnly(viewRoot, 'settings.telegram', (root) => renderTelegramSettings(root, ctx));   // TELEGRAM_BOT_V1
             case 'telephony-settings': return void await renderWithViewOnly(viewRoot, 'settings.telephony', (root) => renderTelephonySettings(root, ctx));   // TELEPHONY_V1
             case 'meta-settings': return void await renderWithViewOnly(viewRoot, 'settings.meta', (root) => renderMetaSettings(root, ctx));   // META_LEADS_V1
+            case 'telegram-deeplinks': return void await renderWithViewOnly(viewRoot, 'settings.telegram', (root) => renderTelegramDeeplinks(root, ctx));   // TG_DEEPLINK_V1 — окно «Telegram-бот» в «Ролях»
             case 'crm-settings': return void await renderWithViewOnly(viewRoot, 'settings.crm', (root) => renderCrmSettings(root, ctx));   // CRM_CONFIG_V1
             case 'telegram-chat': return void await renderTelegramChat(viewRoot, ctx);   // TELEGRAM_CHAT_V1
             case 'doctor-pay': return void await renderDoctorPay(viewRoot, ctx);   // DOCTOR_PAY_BULK_V1
