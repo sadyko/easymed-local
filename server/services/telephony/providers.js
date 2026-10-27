@@ -22,6 +22,7 @@
 // тестом: запрос с фильтром по kind молча потеряет «Мои Звонки».
 import { pbxAuthShared, pbxCall, pbxHistory, normalizeDomain } from './onlinepbx.js';   // ONLINEPBX_KEY_SHARE_V1 — pbxAuthShared
 import { mzHistory, normalizeMzDomain } from './moizvonki.js';   // MOIZVONKI_V1
+import { ensureMoizvonkiRouting } from './moizvonki-routing.js';   // MOIZVONKI_V2 — свои правила «звонок → заявка»
 
 export class ProviderError extends Error {
   constructor(message, status = 400) { super(message); this.message = message; this.status = status; }
@@ -152,6 +153,9 @@ export function saveProvider(db, args = {}, userId = null) {
     db.prepare(`UPDATE telephony_providers SET name=@name, enabled=@enabled, config=@config, secret=@secret,
         poll_interval_sec=@poll, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=@id`)
       .run({ id: existing.id, name, enabled: enabled ? 1 : 0, config: JSON.stringify(cfg), secret: JSON.stringify(sec), poll });
+    // MOIZVONKI_V2 — у «Моих Звонков» свои правила «звонок → заявка»; заводятся
+    // при сохранении подключения, чтобы карточка правил показывала их сразу.
+    if (kind === 'moizvonki') ensureMoizvonkiRouting(db);
     return rowToPublic(getProviderRow(db, existing.id));
   }
   // kind ЗАПОЛНЯЕТСЯ ЛЕГЕНДОЙ: старый CHECK принимает только 'onlinepbx', а
@@ -159,6 +163,7 @@ export function saveProvider(db, args = {}, userId = null) {
   const info = db.prepare(`INSERT INTO telephony_providers (kind, vendor, name, enabled, config, secret, poll_interval_sec)
       VALUES ('onlinepbx', @vendor, @name, @enabled, @config, @secret, @poll)`)
     .run({ vendor: kind, name, enabled: enabled ? 1 : 0, config: JSON.stringify(cfg), secret: JSON.stringify(sec), poll });
+  if (kind === 'moizvonki') ensureMoizvonkiRouting(db);   // MOIZVONKI_V2
   return rowToPublic(getProviderRow(db, info.lastInsertRowid));
 }
 
@@ -257,7 +262,10 @@ export async function testProvider(db, args = {}, { pbxHistoryImpl = pbxHistory,
     if (!mzDomain || !userName || !apiKey) return { ok: false, reason: 'bad_credentials', message: testMessage('bad_credentials', 'moizvonki') };
     const r = await mzHistoryImpl(mzDomain, Math.floor(Date.now() / 1000) - 60, { userName, apiKey });
     if (!r.ok) return { ok: false, reason: r.reason, message: testMessage(r.reason, 'moizvonki') };
-    const list = r.data && (Array.isArray(r.data.calls) ? r.data.calls : (Array.isArray(r.data.result) ? r.data.result : []));
+    // MOIZVONKI_V2 — calls.list отвечает полем results; прежние имена оставлены
+    // на случай старого кабинета.
+    const dd = r.data || {};
+    const list = Array.isArray(dd.results) ? dd.results : (Array.isArray(dd.calls) ? dd.calls : (Array.isArray(dd.result) ? dd.result : []));
     return { ok: true, calls_last_minute: list.length };
   }
 

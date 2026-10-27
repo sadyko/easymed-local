@@ -139,3 +139,79 @@ test('nextDelayMs: самый частый из включённых; никог
   db.prepare('UPDATE telephony_providers SET poll_interval_sec = 10').run();
   assert.equal(nextDelayMs(db), 10_000);
 });
+
+// MOIZVONKI_V2 — опрос «Моих Звонков»: calls.list по курсору db_call_id.
+const MZ_CALL = (over = {}) => ({
+  direction: 0, user_account: 'reg@clinic.uz', user_id: 7, client_number: '+998 90 111-22-33', client_name: '',
+  start_time: 1789372800, answer_time: 1789372812, end_time: 1789372900, upload_time: 1789373000, duration: 88,
+  src_number: '+998711234567', src_id: 3, src_slot: 0, recording: 'https://clinic.moizvonki.ru/rec/a.mp3',
+  answered: 1, db_call_id: 1224, event_pbx_call_id: '1.1789372800', ...over,
+});
+
+test('poll: включённые «Мои Звонки» опрашиваются по calls.list — сначала за сутки по дате, затем from_id от последнего db_call_id; звонки ложатся в журнал с провайдером', async () => {
+  const db = fresh();
+  const p = saveProvider(db, { kind: 'moizvonki', enabled: true, config: { domain: 'clinic.moizvonki.ru', user_name: 'boss@clinic.uz' }, secret: { api_key: 'TESTONLY-key' } });
+  db.prepare("INSERT INTO patients (full_name, phone) VALUES ('Иванов Иван', '+998901112233')").run();
+  const seen = [];
+  const mzListImpl = async (domain, cursor, o) => {
+    seen.push({ domain, cursor, userName: o.userName, apiKey: o.apiKey });
+    return { ok: true, truncated: false, data: [
+      MZ_CALL(),
+      MZ_CALL({ db_call_id: 1225, direction: 1, answered: 0, answer_time: 0, duration: 0, end_time: 1789372920, start_time: 1789372900, recording: '', client_number: '+998909999999' }),
+      { client_number: 'мусор без времени' },
+    ] };
+  };
+  await pollOnce(db, { hasModule: () => true, mzListImpl, fetchImpl: async () => { throw new Error('binotel must not be polled while disabled'); } });
+
+  const rows = db.prepare('SELECT general_call_id, provider, provider_id, call_type, external_number, internal_number, disposition, billsec, waitsec, patient_id, source, recording_url FROM calls ORDER BY started_at').all();
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].general_call_id, 'moizvonki:1224');
+  assert.equal(rows[0].provider, 'moizvonki');
+  assert.equal(rows[0].provider_id, p.id);
+  assert.equal(rows[0].source, 'poll');
+  assert.equal(rows[0].external_number, '+998901112233', 'номер приведён к формату клиники в recordCall');
+  assert.equal(rows[0].internal_number, 'reg@clinic.uz', '«кто» у «Моих Звонков» — почта сотрудника');
+  assert.equal(rows[0].disposition, 'ANSWER');
+  assert.equal(rows[0].billsec, 88);
+  assert.equal(rows[0].waitsec, 12);
+  assert.equal(rows[0].recording_url, 'https://clinic.moizvonki.ru/rec/a.mp3');
+  assert.ok(rows[0].patient_id, 'пациент найден по номеру тем же матчером');
+  assert.equal(rows[1].general_call_id, 'moizvonki:1225');
+  assert.equal(rows[1].call_type, 1);
+  assert.equal(rows[1].disposition, 'NOANSWER');
+  const row = getProviderRow(db, p.id);
+  assert.ok(row.last_poll_at);
+  assert.equal(row.last_error, '');
+  assert.equal(row.last_call_at, '2026-09-14T08:01:40Z');
+
+  // Первый проход — по дате, сутки назад; подпись — из настроек провайдера.
+  assert.equal(seen[0].domain, 'clinic.moizvonki.ru');
+  assert.equal(seen[0].userName, 'boss@clinic.uz');
+  assert.equal(seen[0].apiKey, 'TESTONLY-key');
+  assert.ok(!seen[0].cursor.fromId, 'первый раз нет известного db_call_id');
+  const dayAgo = Math.floor(Date.now() / 1000) - 24 * 60 * 60;
+  assert.ok(Math.abs(seen[0].cursor.fromDate - dayAgo) < 30, 'from_date — сутки назад: ' + seen[0].cursor.fromDate);
+
+  // Второй проход — from_id от последнего db_call_id этого провайдера + 1; дублей нет.
+  await pollOnce(db, { hasModule: () => true, mzListImpl });
+  assert.equal(seen[1].cursor.fromId, 1226);
+  assert.ok(!seen[1].cursor.fromDate);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM calls').get().n, 2);
+});
+
+test('poll: отказ «Моих Звонков» — last_error провайдера словом; усечённый обход — too_many_calls, но звонки записаны', async () => {
+  const db = fresh();
+  const p = saveProvider(db, { kind: 'moizvonki', enabled: true, config: { domain: 'clinic.moizvonki.ru', user_name: 'boss@clinic.uz' }, secret: { api_key: 'TESTONLY-key' } });
+  await pollOnce(db, { hasModule: () => true, mzListImpl: async () => ({ ok: false, reason: 'bad_credentials', data: [] }) });
+  assert.equal(getProviderRow(db, p.id).last_error, 'bad_credentials');
+  await pollOnce(db, { hasModule: () => true, mzListImpl: async () => ({ ok: true, truncated: true, data: [MZ_CALL()] }) });
+  assert.equal(getProviderRow(db, p.id).last_error, 'too_many_calls');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM calls').get().n, 1);
+  await pollOnce(db, { hasModule: () => true, mzListImpl: async () => ({ ok: true, truncated: false, data: [] }) });
+  assert.equal(getProviderRow(db, p.id).last_error, '', 'удачный проход стирает ошибку');
+  // Выключенный провайдер не опрашивается.
+  saveProvider(db, { id: p.id, enabled: false });
+  let called = 0;
+  await pollOnce(db, { hasModule: () => true, mzListImpl: async () => { called++; return { ok: true, data: [] }; } });
+  assert.equal(called, 0);
+});

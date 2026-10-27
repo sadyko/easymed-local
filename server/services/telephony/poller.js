@@ -24,7 +24,9 @@ import { leadFromCall } from '../crm/lead-from-call.js';
 // тиком, каждый своим клиентом, и складываются в ТУ ЖЕ таблицу звонков тем же
 // recordCall'ом: журнал, пациент по номеру и «звонок → заявка» одни на всех.
 import { pbxHistory, normalizePbxCall } from './onlinepbx.js';
-import { pbxOptions, recordProviderPoll, noteProviderCall, providerKind } from './providers.js';
+import { mzListCalls, normalizeMzCall, normalizeMzDomain } from './moizvonki.js';   // MOIZVONKI_V2 — история «Моих Звонков»
+import { ensureMoizvonkiRouting } from './moizvonki-routing.js';   // MOIZVONKI_V2 — свои правила «звонок → заявка»
+import { pbxOptions, recordProviderPoll, noteProviderCall, providerKind, providerConfig, providerSecrets } from './providers.js';
 import { recordingUrlOf } from './recording.js';   // CALL_RECORDING_V1
 import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';   // UZ_PHONE_V1
 
@@ -172,6 +174,8 @@ export function recordCall(db, d, source, provider = null) {
         call_type: row.call_type,
         // …а звонок между добавочными (onlinePBX 'local') — никакой.
         internal: !!(d && d.internal),
+        // MOIZVONKI_V2 — чей это звонок: правило ищется сначала по его провайдеру.
+        provider: provider && provider.kind ? String(provider.kind) : null,
       });
     } catch (e) {
       console.warn('[telephony] lead not created for call:', e && e.message);
@@ -255,13 +259,16 @@ async function pollBinotel(db, { fetchImpl, timeoutMs, maxBytes } = {}) {
 // TELEPHONY_PROVIDERS_V1 — каждый включённый провайдер опрашивается своим
 // курсором: MAX(started_at) ЕГО звонков минус перекрытие. Отказ одного
 // провайдера — его last_error; соседям и Binotel он не мешает.
-async function pollProviders(db, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImpl = pbxHistory } = {}) {
+async function pollProviders(db, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImpl = pbxHistory, mzListImpl = mzListCalls } = {}) {
   let rows = [];
   try { rows = db.prepare('SELECT * FROM telephony_providers WHERE enabled = 1 ORDER BY id').all(); } catch { return; }
   for (const p of rows) {
     // MOIZVONKI_V1 — вид берётся из vendor, а не из kind: в kind у ВСЕХ строк
     // стоит 'onlinepbx' из-за старого CHECK (миграция 135). По kind опрос
     // полез бы в onlinePBX за историей «Моих Звонков».
+    // MOIZVONKI_V2 — «Мои Звонки» опрашиваются своей веткой: у них нет АТС и
+    // нет курсора по времени, зато есть сквозной db_call_id.
+    if (providerKind(p) === 'moizvonki') { await pollMoizvonki(db, p, { fetchImpl, timeoutMs, maxBytes, mzListImpl }); continue; }
     if (providerKind(p) !== 'onlinepbx') continue;
     try {
       const o = pbxOptions(db, p, { fetchImpl, timeoutMs, maxBytes });
@@ -283,6 +290,49 @@ async function pollProviders(db, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImp
       console.warn('[telephony] provider poll failed:', p.id, e && e.message);
       try { recordProviderPoll(db, p.id, { ok: false, error: 'server_error' }); } catch {}
     }
+  }
+}
+
+// MOIZVONKI_V2 (2026-10-17, владелец: «Build here integration with Moi Zvonki
+// too») — ОПРОС «МОИХ ЗВОНКОВ». До этого провайдер умел только проверку связи
+// и звонок по клику: история не забиралась, и звонки с телефонов сотрудников
+// не попадали ни в журнал, ни в CRM.
+//
+// Курсор — db_call_id, а не время: приложение на телефоне без сети отправляет
+// звонок позже, и по start_time такой звонок был бы уже «старше курсора», а
+// db_call_id ему выдают при загрузке в кабинет. Последний известный id берём
+// из нашего же журнала (general_call_id вида 'moizvonki:<id>' у звонков
+// ЭТОГО провайдера); первый запуск — сутки назад по дате, как у остальных.
+// Что бы ни ответил сервис, увиденные звонки подшиваются (recordCall
+// идемпотентен по general_call_id), а итог прохода — слово в last_error.
+async function pollMoizvonki(db, p, { fetchImpl, timeoutMs, maxBytes, mzListImpl = mzListCalls } = {}) {
+  try {
+    const cfg = providerConfig(p);
+    const sec = providerSecrets(p);
+    const domain = normalizeMzDomain(cfg.domain);
+    const userName = String(cfg.user_name || '').trim();
+    const apiKey = String(sec.api_key || '').trim();
+    if (!domain || !userName || !apiKey) { recordProviderPoll(db, p.id, { ok: false, error: 'bad_credentials' }); return; }
+    // Правила «звонок → заявка» вендора — до первого recordCall этого прохода:
+    // заводятся кодом, а не миграцией (см. moizvonki-routing.js).
+    ensureMoizvonkiRouting(db);
+    const last = db.prepare(`
+      SELECT MAX(CAST(substr(general_call_id, 11) AS INTEGER)) AS m FROM calls
+       WHERE provider_id = ? AND general_call_id GLOB 'moizvonki:[0-9]*'
+         AND instr(substr(general_call_id, 11), '.') = 0`).get(p.id).m;
+    const cursor = last ? { fromId: Number(last) + 1 } : { fromDate: Math.floor(Date.now() / 1000) - FIRST_WINDOW_SEC };
+    const r = await mzListImpl(domain, cursor, { userName, apiKey, fetchImpl, timeoutMs, maxBytes });
+    for (const c of (Array.isArray(r.data) ? r.data : [])) {
+      const norm = normalizeMzCall(c);
+      if (!norm) continue;
+      try { recordCall(db, norm, 'poll', { id: p.id, kind: 'moizvonki' }); }
+      catch (e) { console.warn('[telephony] moizvonki call not recorded:', e && e.message); }
+    }
+    if (!r.ok) { recordProviderPoll(db, p.id, { ok: false, error: r.reason }); return; }
+    recordProviderPoll(db, p.id, { ok: !r.truncated, error: r.truncated ? 'too_many_calls' : '' });
+  } catch (e) {
+    console.warn('[telephony] moizvonki poll failed:', p.id, e && e.message);
+    try { recordProviderPoll(db, p.id, { ok: false, error: 'server_error' }); } catch {}
   }
 }
 

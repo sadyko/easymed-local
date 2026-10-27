@@ -238,6 +238,9 @@ const REASON_LABELS = {
     server_error:    'Ошибка на стороне АТС',
     bad_response:    'Непонятный ответ АТС',
     rate_limited:    'АТС просит реже',
+    // MOIZVONKI_V2 — обход истории упёрся в предел страниц за один проход:
+    // звонки записаны, но самые старые из пачки могли не попасть.
+    too_many_calls:  'Звонков слишком много за один проход',
 };
 export function reasonLabel(code) {
     if (typeof code !== 'string' || code.trim() === '') return DASH;

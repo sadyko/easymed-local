@@ -477,3 +477,51 @@ test('CRM_UNIFY_V1: правило звонка «не создавать» — 
   recordCall(db, call({ callType: 0 }), 'poll');
   assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(id).status, 'recall');
 });
+
+// --------------------------------------------------------------------------
+// MOIZVONKI_V2 — правила ПО ПРОВАЙДЕРУ ЗВОНКА, а не только по основному провайдеру
+// клиники: входящий «Моих Звонков» открывает карточку по своим строкам (мигр. 247),
+// даже если правила Binotel выключены; onlinePBX без своих строк — как раньше,
+// по правилам основного провайдера.
+// --------------------------------------------------------------------------
+import { normalizeMzCall } from '../telephony/moizvonki.js';
+import { ensureMoizvonkiRouting } from '../telephony/moizvonki-routing.js';
+
+// Правила вендора заводит код (опрос / сохранение провайдера), не миграция.
+const freshMz = () => { const db = fresh(); ensureMoizvonkiRouting(db); return db; };
+
+const MZ = (over = {}) => normalizeMzCall({
+  direction: 0, user_account: 'reg@clinic.uz', client_number: '+998 90 777-66-55', start_time: 1755950400,
+  answer_time: 1755950410, end_time: 1755950500, duration: 90, answered: 1, db_call_id: 500, recording: '', ...over,
+});
+
+test('MOIZVONKI_V2: отвеченный входящий «Моих Звонков» — карточка в первой открытой колонке, пропущенный — в «Перезвонить», даже если правила Binotel выключены', () => {
+  const db = freshMz();
+  db.prepare("UPDATE crm_call_routing SET action = 'ignore', stage_key = NULL WHERE provider = 'binotel'").run();
+  assert.equal(recordCall(db, MZ(), 'poll', { id: null, kind: 'moizvonki' }), true);
+  assert.equal(recordCall(db, MZ({ db_call_id: 501, client_number: '+998901112233', answered: 0, answer_time: 0, duration: 0 }), 'poll', { id: null, kind: 'moizvonki' }), true);
+  const rows = leads(db);
+  assert.equal(rows.length, 2, 'две карточки: отвеченный и пропущенный');
+  assert.equal(rows[0].status, 'in_process');
+  assert.equal(rows[0].phone, '+998907776655');
+  assert.equal(rows[1].status, 'recall');
+  assert.equal(rows[1].source, 'telephony');
+});
+
+test('MOIZVONKI_V2: у провайдера без своих строк (onlinePBX) — правила основного провайдера, как раньше', () => {
+  const db = fresh();
+  const pbx = normalizePbxCall({ uuid: 'u-mz-1', accountcode: 'inbound', caller_id_number: '998905554433', destination_number: '101', start_stamp: 1755950400, duration: 40, user_talk_time: 30 });
+  assert.equal(recordCall(db, pbx, 'poll', { id: null, kind: 'onlinepbx' }), true);
+  assert.equal(leads(db).length, 1, 'ANSWER по правилам binotel → карточка');
+  db.prepare("UPDATE crm_call_routing SET action = 'ignore', stage_key = NULL WHERE provider = 'binotel' AND disposition = 'ANSWER'").run();
+  const pbx2 = normalizePbxCall({ uuid: 'u-mz-2', accountcode: 'inbound', caller_id_number: '998905554400', destination_number: '101', start_stamp: 1755950500, duration: 40, user_talk_time: 30 });
+  recordCall(db, pbx2, 'poll', { id: null, kind: 'onlinepbx' });
+  assert.equal(leads(db).length, 1, 'правило основного провайдера выключено — карточки нет');
+});
+
+test('MOIZVONKI_V2: повторный звонок того же человека в окне — карточка одна (правило повторного обращения не отменено)', () => {
+  const db = freshMz();
+  recordCall(db, MZ(), 'poll', { id: null, kind: 'moizvonki' });
+  recordCall(db, MZ({ db_call_id: 777, start_time: 1755950900, answer_time: 0, answered: 0, duration: 0 }), 'poll', { id: null, kind: 'moizvonki' });
+  assert.equal(leads(db).length, 1);
+});

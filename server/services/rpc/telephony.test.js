@@ -148,7 +148,14 @@ test('dispositions — DOCUMENTED only: the vendor list is offered before a sing
   // Migration 077 seeds Binotel's published vocabulary. Its whole point is
   // that a rule can be set for an outcome BEFORE it happens for the first
   // time — so an install with no call history is not an empty screen.
-  assert.equal(rows.length, db.prepare('SELECT COUNT(*) AS n FROM crm_call_routing').get().n);
+  // MOIZVONKI_V2 (мигр. 247) — у «Моих Звонков» свои строки; без provider
+  // список — по основному провайдеру клиники (Binotel), его строки и считаем.
+  assert.equal(rows.length, db.prepare("SELECT COUNT(*) AS n FROM crm_call_routing WHERE provider = 'binotel'").get().n);
+  // Строки вендора заводит сохранение провайдера «Мои Звонки» (moizvonki-routing.js).
+  telephonyProviderSave(db, { kind: 'moizvonki', config: { domain: 'clinic.moizvonki.ru', user_name: 'a@b.uz' }, secret: { api_key: 'TESTONLY' } }, admin);
+  const mz = telephonyDispositions(db, { provider: 'moizvonki' }, admin);
+  const mzRules = mz.filter((r) => r.documented);
+  assert.deepEqual(mzRules.map((r) => [r.disposition, r.action, r.stage_key]), [['ANSWER', 'create', 'in_process'], ['NOANSWER', 'create', 'recall']]);
   assert.ok(rows.every((r) => r.documented && r.seen_count === 0 && r.last_seen_at === null));
   const m = byCode(rows);
   assert.equal(m.ANSWER.action, 'create');
@@ -394,4 +401,27 @@ test('recent calls carry provider and provider_id so the log can name the PBX', 
   const rows = telephonyRecentCalls(db, {}, admin);
   assert.deepEqual(rows.map((c) => [c.general_call_id, c.provider, c.provider_id]),
     [['onlinepbx:u', 'onlinepbx', pid], ['1', 'binotel', null]]);
+});
+
+// MOIZVONKI_V2 — журнал звонков по одному провайдеру: экран «Мои Звонки» в
+// «Коммерческих инструментах» показывает только свои звонки.
+test('telephony_recent_calls: без аргументов — 20 последних всех линий; provider_id — только этого провайдера; limit ограничен', () => {
+  const db = fresh();
+  // provider_id — внешний ключ на telephony_providers: строки провайдеров нужны настоящие.
+  db.prepare(`INSERT INTO telephony_providers (id, kind, vendor, name, enabled, config, secret, poll_interval_sec)
+              VALUES (7, 'onlinepbx', 'moizvonki', 'Мои Звонки', 1, '{}', '{}', 30), (8, 'onlinepbx', 'onlinepbx', 'Офис', 1, '{}', '{}', 30)`).run();
+  const ins = db.prepare(`INSERT INTO calls (general_call_id, started_at, call_type, external_number, internal_number, disposition, source, provider, provider_id)
+                          VALUES (?, ?, 0, '+998901234567', 'x', 'ANSWER', 'poll', ?, ?)`);
+  for (let i = 0; i < 25; i++) ins.run('b' + i, '2026-10-01T10:' + String(i).padStart(2, '0') + ':00Z', 'binotel', null);
+  ins.run('moizvonki:1', '2026-10-02T09:00:00Z', 'moizvonki', 7);
+  ins.run('moizvonki:2', '2026-10-02T09:05:00Z', 'moizvonki', 7);
+  ins.run('onlinepbx:u1', '2026-10-02T09:06:00Z', 'onlinepbx', 8);
+  const all = telephonyRecentCalls(db, {}, admin);
+  assert.equal(all.length, 20, 'по умолчанию двадцать');
+  assert.equal(all[0].general_call_id, 'onlinepbx:u1', 'новые вперёд');
+  const mz = telephonyRecentCalls(db, { provider_id: 7 }, admin);
+  assert.deepEqual(mz.map((r) => r.general_call_id), ['moizvonki:2', 'moizvonki:1']);
+  assert.equal(telephonyRecentCalls(db, { provider_id: 7, limit: 1 }, admin).length, 1);
+  assert.equal(telephonyRecentCalls(db, { limit: 500 }, admin).length, 28, 'предел — сто, а звонков всего 28');
+  assert.throws(() => telephonyRecentCalls(db, { provider_id: 7 }, registrar), (e) => e.status === 403);
 });

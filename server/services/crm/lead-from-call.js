@@ -105,10 +105,16 @@ export function leadFromCall(db, call) {
   // telephony_settings.provider records. A row is keyed by (provider,
   // disposition), so 'ANSWER' can mean different things to different vendors.
   const settings = readSettingsRow(db);
-  const provider = (settings && settings.provider) || 'binotel';
+  const mainProvider = (settings && settings.provider) || 'binotel';
 
-  const rule = db.prepare('SELECT action, stage_key FROM crm_call_routing WHERE provider = ? AND disposition = ?')
-    .get(provider, disposition);
+  // MOIZVONKI_V2 (владелец: «when call comes from moi zvonki, it should also
+  // open new lead card») — СНАЧАЛА правило провайдера самого звонка (recordCall
+  // передаёт его вид), и только без такой строки — правило основного
+  // провайдера, как было. «Мои Звонки» получили свои строки миграцией 247;
+  // onlinePBX своих не имеет и по-прежнему живёт по правилам основного.
+  const byProvider = db.prepare('SELECT action, stage_key FROM crm_call_routing WHERE provider = ? AND disposition = ?');
+  const own = call.provider ? String(call.provider).trim().toLowerCase() : '';
+  const rule = (own && own !== mainProvider ? byProvider.get(own, disposition) : null) || byProvider.get(mainProvider, disposition);
   // No rule at all = a disposition the vendor invented after this install was
   // set up. Silence, not a guess: inventing leads from an unknown vocabulary
   // is how a board fills with cards nobody asked for.

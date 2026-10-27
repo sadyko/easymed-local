@@ -122,16 +122,23 @@ export async function telephonyTest(db, args, user, { binotelCallImpl = binotelC
 // Last 20 by call time — the settings screen's proof-of-life list. `raw`
 // stays server-side on purpose: it is vendor diagnostics, not something to
 // ship to a browser with every refresh.
-export function telephonyRecentCalls(db, _args, user) {
+// MOIZVONKI_V2 — необязательные provider_id и limit: экран «Мои Звонки» в
+// «Коммерческих инструментах» показывает журнал только своего провайдера.
+// Без аргументов — как раньше: 20 последних звонков всех линий.
+export function telephonyRecentCalls(db, args, user) {
   requireLevel(db, user, 'view');
+  const a = args || {};
+  const lim = Math.min(100, Math.max(1, Number(a.limit) || 20));
+  const pid = a.provider_id != null && a.provider_id !== '' && Number.isFinite(Number(a.provider_id)) ? Number(a.provider_id) : null;
   return db.prepare(`
     SELECT c.id, c.general_call_id, c.started_at, c.call_type, c.external_number,
            c.internal_number, c.waitsec, c.billsec, c.disposition, c.is_new_call,
            c.patient_id, p.full_name AS patient_name, c.source, c.provider, c.provider_id
       FROM calls c
       LEFT JOIN patients p ON p.id = c.patient_id
+     ${pid != null ? 'WHERE c.provider_id = @pid' : ''}
      ORDER BY c.started_at DESC, c.id DESC
-     LIMIT 20`).all();
+     LIMIT @lim`).all(pid != null ? { pid, lim } : { lim });
 }
 
 // TELEPHONY_ROUTING_V1 — «Звонки → заявки»: which call outcomes exist at all,
@@ -147,9 +154,12 @@ export function telephonyRecentCalls(db, _args, user) {
 // every row, and merging two replies in the browser is how a rule ends up
 // drawn next to the wrong outcome. The merge is a join — it belongs where the
 // tables are.
-export function telephonyDispositions(db, _args, user) {
+export function telephonyDispositions(db, args, user) {
   requireLevel(db, user, 'view');
-  return listDispositions(db);
+  // MOIZVONKI_V2 — необязательный provider: экран «Мои Звонки» читает и правит
+  // СВОИ правила (мигр. 247), не трогая правила основного провайдера.
+  const prov = args && typeof args.provider === 'string' && /^[a-z0-9_]{1,32}$/.test(args.provider.trim()) ? args.provider.trim() : undefined;
+  return listDispositions(db, prov);
 }
 
 // ---------------------------------------------------------------------------
