@@ -487,23 +487,89 @@ export function openBroadcastModal({ onDone } = {}) {
     document.addEventListener('keydown', onKey);
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
-    // display:block — .modal-body по умолчанию grid с растягиванием строк, а
-    // здесь обычный вертикальный поток полей (см. .imx-body).
-    const box = h('div', { class: 'modal-body', style: { display: 'block' } });
+    // TG_BROADCAST_FILTERS_V1 (2026-10-17, владелец: «make the pop up wide and
+    // to the right side put detailed filters») — тело окна в две колонки:
+    // слева сообщение и картинка (обычный вертикальный поток, как .imx-body),
+    // справа — подробные фильтры «Кому» и живой счётчик получателей.
+    const main = h('div', { class: 'tg-bc-main' });
+    const side = h('div', { class: 'tg-bc-side' });
+    const box = h('div', { class: 'modal-body tg-bc-body', style: { display: 'grid' } }, main, side);
 
     const ru = h('textarea', { rows: '4', placeholder: 'Текст на русском', style: { width: '100%' } });
     const uz = h('textarea', { rows: '3', placeholder: 'Matn o‘zbek tilida (ixtiyoriy)', style: { width: '100%' } });
-    const from = h('input', { type: 'date', style: { width: '100%' } });
-    const to = h('input', { type: 'date', style: { width: '100%' } });
-    const unpaid = h('input', { type: 'checkbox' });
+    const from = h('input', { type: 'date', style: { width: '100%' }, 'data-bc-filter': 'visited_from' });
+    const to = h('input', { type: 'date', style: { width: '100%' }, 'data-bc-filter': 'visited_to' });
+    const notSince = h('input', { type: 'date', style: { width: '100%' }, 'data-bc-filter': 'not_visited_since' });
+    const unpaid = h('input', { type: 'checkbox', 'data-bc-filter': 'unpaid' });
+    // Выпадающие списки заполняются справочниками сервера (telegram_broadcast_options);
+    // до их прихода и без них окно работает: даты, пол, возраст и долг — локальные поля.
+    const anySel = (name, anyLabel) => h('select', { style: { width: '100%' }, 'data-bc-filter': name }, h('option', { value: '' }, anyLabel));
+    const doctorSel = anySel('doctor_id', '— любой врач —');
+    const serviceTypeSel = anySel('service_type_id', '— любой тип —');
+    const serviceSel = anySel('service_id', '— любая услуга —');
+    const categorySel = anySel('category_id', '— любая категория —');
+    const branchSel = anySel('branch_id', '— любой филиал —');
+    const genderSel = h('select', { style: { width: '100%' }, 'data-bc-filter': 'gender' },
+        h('option', { value: '' }, 'Все'), h('option', { value: 'female' }, 'Женщины'), h('option', { value: 'male' }, 'Мужчины'));
+    const ageFrom = h('input', { type: 'number', min: '0', max: '130', step: '1', style: { width: '100%' }, 'data-bc-filter': 'age_from' });
+    const ageTo = h('input', { type: 'number', min: '0', max: '130', step: '1', style: { width: '100%' }, 'data-bc-filter': 'age_to' });
+    const filterInputs = [from, to, notSince, doctorSel, serviceTypeSel, serviceSel, categorySel, branchSel, genderSel, ageFrom, ageTo, unpaid];
 
     const filters = () => {
         const f = {};
         if (from.value) f.visited_from = from.value;
         if (to.value) f.visited_to = to.value;
+        if (notSince.value) f.not_visited_since = notSince.value;
+        if (doctorSel.value) f.doctor_id = Number(doctorSel.value);
+        if (serviceTypeSel.value) f.service_type_id = Number(serviceTypeSel.value);
+        if (serviceSel.value) f.service_id = Number(serviceSel.value);
+        if (categorySel.value) f.category_id = Number(categorySel.value);
+        if (branchSel.value) f.branch_id = Number(branchSel.value);
+        if (genderSel.value) f.gender = genderSel.value;
+        if (ageFrom.value !== '' && ageFrom.value != null) f.age_from = Number(ageFrom.value);
+        if (ageTo.value !== '' && ageTo.value != null) f.age_to = Number(ageTo.value);
         if (unpaid.checked) f.unpaid = true;
         return f;
     };
+
+    // Живой счётчик: любое изменение фильтра пересчитывает получателей через
+    // полсекунды; ответ на устаревший набор фильтров отбрасывается по номеру.
+    let previewSeq = 0, previewTimer = null;
+    const schedulePreview = () => { clearTimeout(previewTimer); previewTimer = setTimeout(refreshPreview, 500); };
+    async function refreshPreview() {
+        const seq = ++previewSeq;
+        try {
+            const p = await rpc('telegram_broadcast_preview', { filters: filters() });
+            if (seq !== previewSeq) return;
+            state.preview = p;
+            paintPreview();
+        } catch (e) {
+            if (seq !== previewSeq) return;
+            clear(result);
+            result.appendChild(h('div', { class: 'muted' }, trf('Не удалось посчитать получателей: {msg}', { msg: e.message })));
+        }
+    }
+    for (const el of filterInputs) el.addEventListener('change', schedulePreview);
+    const resetBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => {
+        for (const el of filterInputs) {
+            if (el.getAttribute('type') === 'checkbox') el.checked = false; else el.value = '';
+        }
+        schedulePreview();
+    } }, 'Сбросить фильтры');
+    const branchField = h('div', { class: 'field' }, h('label', null, 'Филиал'), branchSel);
+    const fillSelect = (select, rows, label) => { for (const r of (Array.isArray(rows) ? rows : [])) select.appendChild(h('option', { value: String(r.id) }, label(r))); };
+    (async () => {
+        try {
+            const o = await rpc('telegram_broadcast_options');
+            fillSelect(doctorSel, o.doctors, (d) => d.full_name + (d.specialty ? ' · ' + d.specialty : ''));
+            fillSelect(serviceTypeSel, o.service_types, (t) => t.name);
+            fillSelect(serviceSel, o.services, (s) => s.name);
+            fillSelect(categorySel, o.categories, (c) => c.name);
+            fillSelect(branchSel, o.branches, (b) => b.name);
+            // Один филиал — фильтр не о чем: прячем, чтобы не предлагать выбор без выбора.
+            if (!(o.branches && o.branches.length > 1)) branchField.style.display = 'none';
+        } catch (e) { /* справочники — удобство; даты, пол, возраст и долг работают и без них */ }
+    })();
 
     // TELEGRAM_BROADCAST_IMG_V1 — путь загруженной картинки внутри корзины
     // telegram-media (без имени корзины). null — рассылка без баннера, то есть
@@ -529,21 +595,32 @@ export function openBroadcastModal({ onDone } = {}) {
     ru.addEventListener('input', syncCounter);
     uz.addEventListener('input', syncCounter);
 
-    box.appendChild(section('Сообщение',
+    main.appendChild(section('Сообщение',
         h('div', { class: 'field' }, h('label', null, 'Текст на русском'), ru),
         h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', null, 'Тот же текст по-узбекски'), uz),
         hint('Узбекский текст уходит тем же сообщением, следом за русским.'),
         counter));
 
-    box.appendChild(section('Картинка 16:9 · необязательно', imageField()));
+    main.appendChild(section('Картинка 16:9 · необязательно', imageField()));
 
-    box.appendChild(section('Кому',
-        h('div', { style: { display: 'grid', gap: '10px', gridTemplateColumns: '1fr 1fr' } },
-            h('div', { class: 'field' }, h('label', null, 'Приходил с'), from),
+    // TG_BROADCAST_FILTERS_V1 — подробные фильтры справа. Все условия — пересечение.
+    const grid2 = (a, b) => h('div', { style: { display: 'grid', gap: '10px', gridTemplateColumns: '1fr 1fr' } }, a, b);
+    side.appendChild(section('Кому',
+        hint('Бот пишет только тем, кто открыл его сам. Фильтры сужают этот список, а не расширяют.'),
+        grid2(h('div', { class: 'field' }, h('label', null, 'Приходил с'), from),
             h('div', { class: 'field' }, h('label', null, 'по'), to)),
+        h('div', { class: 'field' }, h('label', null, 'Не приходил с'), notSince),
+        h('div', { class: 'field' }, h('label', null, 'Врач'), doctorSel),
+        grid2(h('div', { class: 'field' }, h('label', null, 'Тип услуги'), serviceTypeSel),
+            h('div', { class: 'field' }, h('label', null, 'Услуга'), serviceSel)),
+        grid2(h('div', { class: 'field' }, h('label', null, 'Категория пациента'), categorySel),
+            h('div', { class: 'field' }, h('label', null, 'Пол'), genderSel)),
+        grid2(h('div', { class: 'field' }, h('label', null, 'Возраст от'), ageFrom),
+            h('div', { class: 'field' }, h('label', null, 'до'), ageTo)),
+        branchField,
         h('div', { class: 'field checkbox', style: { marginTop: '6px' } },
             unpaid, h('label', null, 'Только с неоплаченным счётом')),
-        hint('Бот пишет только тем, кто открыл его сам. Фильтры сужают этот список, а не расширяют.')));
+        h('div', { class: 'row', style: { marginTop: '8px' } }, resetBtn)));
 
     // ── Загрузка картинки ────────────────────────────────────────────────────
     // Кадрирование и сжатие делает image-16x9.js; здесь только сцена: пустая
@@ -700,7 +777,9 @@ export function openBroadcastModal({ onDone } = {}) {
         });
     } }, Icon('Send', { size: 13 }), ' Отправить');
 
-    box.appendChild(result);
+    // TG_BROADCAST_FILTERS_V1 — получатели живут под фильтрами, в правой колонке.
+    side.appendChild(section('Получатели', result));
+    result.appendChild(h('div', { class: 'muted' }, 'Считаем получателей…'));
 
     function paintPreview() {
         clear(result);
@@ -741,7 +820,7 @@ export function openBroadcastModal({ onDone } = {}) {
         }
     }
 
-    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '620px' } },
+    overlay.appendChild(h('div', { class: 'modal-card modal-compact tg-bc-card', style: { width: '1100px', maxWidth: 'calc(100vw - 32px)' } },   // TG_BROADCAST_FILTERS_V1 — было 620px
         h('header', { class: 'modal-head', style: { gap: '12px' } },
             // Плитка с иконкой — та же, что в шапке отчёта: два входа в одну
             // тему бота должны выглядеть роднёй, а не двумя разными экранами.
@@ -760,6 +839,7 @@ export function openBroadcastModal({ onDone } = {}) {
 
     document.body.appendChild(overlay);
     syncCounter();
+    schedulePreview();   // TG_BROADCAST_FILTERS_V1 — число получателей видно сразу, до любого фильтра
     ru.focus();
     return overlay;
 }

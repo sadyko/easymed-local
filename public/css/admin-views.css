@@ -8217,3 +8217,18 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
 }
 /* ============================ end CRM_LEAD_WIDE_V1 ============================ */
 
+/* ============================ TG_BROADCAST_FILTERS_V1 — окно рассылки в две колонки ============================
+   2026-10-17, владелец: «make the pop up wide and to the right side put
+   detailed filters». Окно 1100px; слева сообщение и картинка, справа —
+   подробные фильтры «Кому» и живой счётчик получателей. Правая колонка
+   фиксированной ширины (440px): в ней поля формы, которым не нужна вся
+   ширина. Уже 1100px окна — колонки друг под другом в прежнем порядке. */
+.tg-bc-body { grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 0 28px; align-items: start; }
+.tg-bc-main, .tg-bc-side { min-width: 0; }
+.tg-bc-side { padding-left: 24px; border-left: 1px solid var(--ink-100); }
+@media (max-width: 1100px) {
+    .tg-bc-body { grid-template-columns: minmax(0, 1fr); }
+    .tg-bc-side { padding-left: 0; border-left: 0; }
+}
+/* ============================ end TG_BROADCAST_FILTERS_V1 ============================ */
+

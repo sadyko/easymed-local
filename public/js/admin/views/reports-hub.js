@@ -238,7 +238,7 @@ export const REPORT_DEFS = [
         icon:  'Bot',
         title: 'Telegram-бот',
         desc:  'Сколько пациентов подключилось к боту, какой это охват и как он рос по неделям.',
-        open:  () => import('./telegram-report.js?v=tgr5').then(m => m.openTelegramReport()),
+        open:  () => import('./telegram-report.js?v=tgr6').then(m => m.openTelegramReport()),
     },
 ];
 

@@ -80,7 +80,7 @@ function broadcastButton() {
     const btn = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
         btn.disabled = true;
         try {
-            const m = await import('./telegram-report.js?v=tgr5');
+            const m = await import('./telegram-report.js?v=tgr6');
             m.openBroadcastModal();
         } catch (e) {
             toast(trf('Не удалось открыть форму рассылки: {msg}', { msg: e.message || e }), 'error');

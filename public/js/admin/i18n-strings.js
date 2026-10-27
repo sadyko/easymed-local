@@ -12146,4 +12146,17 @@ export const STRINGS = {
   "Файл ключа обмена повреждён — обратитесь в Easy-Med.": {"en":"The exchange key file is damaged — contact Easy-Med.","ru":"Файл ключа обмена повреждён — обратитесь в Easy-Med.","uz":"Almashinuv kaliti fayli buzilgan — Easy-Med ga murojaat qiling."},
   "Обмен с публичным сервером сейчас недоступен.": {"en":"The public-server exchange is unavailable right now.","ru":"Обмен с публичным сервером сейчас недоступен.","uz":"Ochiq server bilan almashinuv hozir mavjud emas."},
   // /CRM_PHONE_V1
+  // TG_BROADCAST_FILTERS_V1 — подробные фильтры окна рассылки
+  "Женщины": {"en":"Women","ru":"Женщины","uz":"Ayollar"},
+  "Мужчины": {"en":"Men","ru":"Мужчины","uz":"Erkaklar"},
+  "Не приходил с": {"en":"Has not visited since","ru":"Не приходил с","uz":"Shu sanadan beri kelmagan"},
+  "Не удалось посчитать получателей: {msg}": {"en":"Could not count the recipients: {msg}","ru":"Не удалось посчитать получателей: {msg}","uz":"Qabul qiluvchilarni hisoblab bo‘lmadi: {msg}"},
+  "Получатели": {"en":"Recipients","ru":"Получатели","uz":"Qabul qiluvchilar"},
+  "Считаем получателей…": {"en":"Counting recipients…","ru":"Считаем получателей…","uz":"Qabul qiluvchilar hisoblanmoqda…"},
+  "— любая категория —": {"en":"— any category —","ru":"— любая категория —","uz":"— istalgan toifa —"},
+  "— любая услуга —": {"en":"— any service —","ru":"— любая услуга —","uz":"— istalgan xizmat —"},
+  "— любой врач —": {"en":"— any doctor —","ru":"— любой врач —","uz":"— istalgan shifokor —"},
+  "— любой тип —": {"en":"— any type —","ru":"— любой тип —","uz":"— istalgan tur —"},
+  "— любой филиал —": {"en":"— any branch —","ru":"— любой филиал —","uz":"— istalgan filial —"},
+  // /TG_BROADCAST_FILTERS_V1
 };

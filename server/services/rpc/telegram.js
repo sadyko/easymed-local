@@ -17,7 +17,7 @@ import { setupBot } from '../telegram/setup.js';   // TELEGRAM_BOT_SETUP_V1
 import { wakeTelegramBot } from '../telegram/index.js';
 import { findPatientsByPhone, digitsOf } from '../telegram/documents.js';
 import { uzLocalDigits, MIN_PHONE_DIGITS } from '../../../public/js/admin/views/crm-phone-match.js';   // TELEGRAM_PATIENT_BADGE_V1
-import { botStats, previewAudience, startBroadcast, broadcastStatus, broadcastHistory } from '../telegram/broadcast.js';
+import { botStats, previewAudience, startBroadcast, broadcastStatus, broadcastHistory, broadcastOptions } from '../telegram/broadcast.js';   // TG_BROADCAST_FILTERS_V1 — broadcastOptions
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -322,6 +322,13 @@ export function telegramStats(db, _args, user) {
 export function telegramBroadcastPreview(db, args, user) {
   requireReach(db, user);
   return previewAudience(db, (args && args.filters) || {});
+}
+
+// TG_BROADCAST_FILTERS_V1 — справочники для подробных фильтров окна рассылки.
+// Те же ворота, что у предпросмотра: списки врачей и услуг — часть той же задачи.
+export function telegramBroadcastOptions(db, _args, user) {
+  requireReach(db, user);
+  return broadcastOptions(db);
 }
 
 // Отправка. Подтверждение числом получателей проверяется ЗДЕСЬ, а не только в

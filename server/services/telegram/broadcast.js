@@ -100,35 +100,110 @@ export function botStats(db) {
 // Возвращает [{link, patients}] — связки, у которых ХОТЯ БЫ ОДИН пациент
 // проходит фильтр. Заблокировавшие бота и отвязанные исключены всегда.
 export function resolveAudience(db, filters = {}) {
+  const f = normalizeFilters(filters);
   const links = db.prepare(
     'SELECT * FROM telegram_links WHERE revoked_at IS NULL AND blocked_at IS NULL ORDER BY id').all();
 
   const out = [];
   for (const link of links) {
     const patients = findPatientsByPhone(db, link.phone);
-    const matching = patients.filter((p) => matchesFilters(db, p.id, filters));
+    const matching = patients.filter((p) => matchesFilters(db, p.id, f));
     if (matching.length) out.push({ link, patients: matching });
   }
   return out;
 }
 
+// TG_BROADCAST_FILTERS_V1 (2026-10-17, владелец: «make the pop up wide and to
+// the right side put detailed filters») — СЛОВАРЬ ФИЛЬТРОВ ЗАКРЫТ. Фильтры
+// приходят из браузера как есть и попадают в SQL параметрами, но ключ вне
+// словаря или мусор в значении молча отбрасываются: лучше чуть более широкая
+// рассылка, которую видно в предпросмотре числом, чем 500 на «мусор в поле».
+// Ровно этот же нормализованный вид сохраняется в telegram_broadcasts.filters.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const GENDERS = new Set(['male', 'female', 'other']);
+export function normalizeFilters(filters) {
+  const src = filters && typeof filters === 'object' ? filters : {};
+  const out = {};
+  const posInt = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
+  for (const k of ['doctor_id', 'category_id', 'branch_id', 'service_id', 'service_type_id']) {
+    const n = posInt(src[k]);
+    if (n) out[k] = n;
+  }
+  for (const k of ['visited_from', 'visited_to', 'not_visited_since']) {
+    const v = String(src[k] == null ? '' : src[k]).trim();
+    if (DATE_RE.test(v)) out[k] = v;
+  }
+  const g = String(src.gender == null ? '' : src.gender).trim().toLowerCase();
+  if (GENDERS.has(g)) out.gender = g;
+  for (const k of ['age_from', 'age_to']) {
+    if (src[k] === '' || src[k] == null) continue;
+    const n = Number(src[k]);
+    if (Number.isInteger(n) && n >= 0 && n <= 130) out[k] = n;
+  }
+  if (src.unpaid === true || src.unpaid === 1 || src.unpaid === '1' || src.unpaid === 'true') out.unpaid = true;
+  return out;
+}
+
+// Полных лет на сегодня; null — даты рождения нет или она не читается.
+function ageYears(dob) {
+  const t = Date.parse(String(dob || ''));
+  if (!Number.isFinite(t)) return null;
+  const d = new Date(t), now = new Date();
+  let age = now.getUTCFullYear() - d.getUTCFullYear();
+  const m = now.getUTCMonth() - d.getUTCMonth();
+  if (m < 0 || (m === 0 && now.getUTCDate() < d.getUTCDate())) age -= 1;
+  return age >= 0 ? age : null;
+}
+
+// Каждый фильтр — своё условие, все вместе — пересечение. Пациент без даты
+// рождения в выборку по возрасту не попадает: «не знаем» — не «подходит».
 function matchesFilters(db, patientId, f) {
-  const noFilters = !f || (!f.visited_from && !f.visited_to && !f.unpaid && !f.doctor_id);
-  if (noFilters) return true;
+  if (!f || !Object.keys(f).length) return true;
+  const any = (sql, params) => db.prepare(sql).get(params).c > 0;
 
   if (f.visited_from || f.visited_to) {
     const from = f.visited_from || '0000-01-01';
     const to = f.visited_to || '9999-12-31';
-    const n = db.prepare(
-      'SELECT COUNT(*) c FROM visits WHERE patient_id = ? AND visit_date BETWEEN ? AND ?')
-      .get(patientId, from, to).c;
-    if (!n) return false;
+    if (!any('SELECT COUNT(*) c FROM visits WHERE patient_id = @p AND visit_date BETWEEN @from AND @to', { p: patientId, from, to })) return false;
   }
-
+  // «Не приходил с даты»: ни одного визита начиная с неё — и те, кто не был никогда, тоже подходят.
+  if (f.not_visited_since) {
+    if (any('SELECT COUNT(*) c FROM visits WHERE patient_id = @p AND visit_date >= @d', { p: patientId, d: f.not_visited_since })) return false;
+  }
   if (f.doctor_id) {
-    const n = db.prepare('SELECT COUNT(*) c FROM visits WHERE patient_id = ? AND doctor_id = ?')
-      .get(patientId, Number(f.doctor_id)).c;
-    if (!n) return false;
+    if (!any('SELECT COUNT(*) c FROM visits WHERE patient_id = @p AND doctor_id = @d', { p: patientId, d: f.doctor_id })) return false;
+  }
+  if (f.gender) {
+    if (!any('SELECT COUNT(*) c FROM patients WHERE id = @p AND gender = @g', { p: patientId, g: f.gender })) return false;
+  }
+  if (f.category_id) {
+    if (!any('SELECT COUNT(*) c FROM patients WHERE id = @p AND category_id = @c', { p: patientId, c: f.category_id })) return false;
+  }
+  // Филиал — где пациент заведён или где он хоть раз был.
+  if (f.branch_id) {
+    if (!any(`SELECT COUNT(*) c FROM (
+                SELECT 1 FROM patients WHERE id = @p AND branch_id = @b
+                UNION ALL SELECT 1 FROM visits WHERE patient_id = @p AND branch_id = @b)`, { p: patientId, b: f.branch_id })) return false;
+  }
+  if (f.age_from != null || f.age_to != null) {
+    const row = db.prepare('SELECT date_of_birth FROM patients WHERE id = ?').get(patientId);
+    const age = ageYears(row && row.date_of_birth);
+    if (age == null) return false;
+    if (f.age_from != null && age < f.age_from) return false;
+    if (f.age_to != null && age > f.age_to) return false;
+  }
+  // Услуга — строкой визита (visit_services) или услугой самого визита.
+  if (f.service_id) {
+    if (!any(`SELECT COUNT(*) c FROM visits v
+               WHERE v.patient_id = @p AND (v.service_id = @s
+                  OR EXISTS (SELECT 1 FROM visit_services vs WHERE vs.visit_id = v.id AND vs.service_id = @s))`, { p: patientId, s: f.service_id })) return false;
+  }
+  if (f.service_type_id) {
+    if (!any(`SELECT COUNT(*) c FROM visits v
+               WHERE v.patient_id = @p AND (
+                  EXISTS (SELECT 1 FROM services s0 WHERE s0.id = v.service_id AND s0.type_id = @t)
+                  OR EXISTS (SELECT 1 FROM visit_services vs JOIN services s ON s.id = vs.service_id
+                              WHERE vs.visit_id = v.id AND s.type_id = @t))`, { p: patientId, t: f.service_type_id })) return false;
   }
 
   if (f.unpaid) {
@@ -142,6 +217,21 @@ function matchesFilters(db, patientId, f) {
     if (!n) return false;
   }
   return true;
+}
+
+// TG_BROADCAST_FILTERS_V1 — справочники для выпадающих списков окна рассылки,
+// одним вызовом: врачи, категории пациентов, филиалы, типы услуг и услуги.
+// Каждый список терпим к базе без таблицы (пусто, не 500) — окно обязано
+// открыться и без них.
+export function broadcastOptions(db) {
+  const q = (sql) => { try { return db.prepare(sql).all().map((r) => ({ ...r })); } catch { return []; } };
+  return {
+    doctors: q('SELECT id, full_name, specialty FROM users WHERE is_doctor = 1 AND COALESCE(is_active, 1) = 1 ORDER BY full_name'),
+    categories: q('SELECT id, name FROM patient_categories WHERE COALESCE(active, 1) = 1 ORDER BY name'),
+    branches: q('SELECT id, name FROM branches WHERE COALESCE(active, 1) = 1 ORDER BY id'),
+    service_types: q('SELECT id, name FROM service_types WHERE COALESCE(active, 1) = 1 ORDER BY id'),
+    services: q('SELECT id, name, type_id FROM services WHERE COALESCE(active, 1) = 1 ORDER BY name'),
+  };
 }
 
 // Предпросмотр: точное число получателей и несколько имён — чтобы человек
@@ -184,7 +274,7 @@ export function startBroadcast(db, token, { textRu, textUz = '', filters = {}, u
   const bc = db.prepare(
     `INSERT INTO telegram_broadcasts (text_ru, text_uz, filters, audience_count, created_by, image_path)
      VALUES (?,?,?,?,?,?) RETURNING id`)
-    .get(String(textRu || ''), String(textUz || ''), JSON.stringify(filters || {}), audience.length, userId,
+    .get(String(textRu || ''), String(textUz || ''), JSON.stringify(normalizeFilters(filters)), audience.length, userId,
          imagePath || null);
 
   const addTarget = db.prepare(

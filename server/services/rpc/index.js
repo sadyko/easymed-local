@@ -67,7 +67,7 @@ import { roomAssignDoctors } from './rooms.js';   // ROOMS_SETUP_V1
 import { updateMyDoctorProfile } from './doctor-profile.js';   // RPC_PORT_V1
 import { roomsSetupDelete } from './rooms-delete.js';   // ROOMS_DELETE_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
-import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
+import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramBroadcastOptions, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
 import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions,
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
@@ -581,6 +581,7 @@ export const RPC = {
   telegram_broadcast_send:        (db, args, user) => telegramBroadcastSend(db, args, user),
   telegram_broadcast_status:      (db, args, user) => telegramBroadcastStatus(db, args, user),
   telegram_broadcast_history:     (db, args, user) => telegramBroadcastHistory(db, args, user),
+  telegram_broadcast_options:     (db, args, user) => telegramBroadcastOptions(db, args, user),   // TG_BROADCAST_FILTERS_V1 — справочники фильтров
 
   // TELEGRAM_CHAT_V1 — «Чат с пациентами» в левом меню. Единственные RPC бота,
   // которые НЕ admin-only: раздел выдаётся ролям, и его уровень (viewer /
