@@ -315,3 +315,23 @@ test('shapeProviders: the contract shape → safe cards; anything thinner → no
         assert.deepEqual(shapeProviders(bad), { kinds: [], providers: [] }, `input=${JSON.stringify(bad)}`);
     }
 });
+
+// MOIZVONKI_IN_TELEPHONY_V1 — the Moizvonki tile's routing rows.
+test('routingRowsFor: «Мои Звонки» — ровно два своих исхода, чужие наблюдённые не показываются; остальные виды — как есть', async () => {
+    const { routingRowsFor, mzOutcomeLabel, MZ_OUTCOMES } = await import('./telephony-logic.js');
+    const rows = [
+        { disposition: 'BUSY',   seen_count: 2, last_seen_at: null, documented: false, action: 'ignore', stage_key: null },
+        { disposition: 'ANSWER', seen_count: 4, last_seen_at: null, documented: true,  action: 'create', stage_key: 'in_process' },
+    ];
+    const mz = routingRowsFor('moizvonki', rows);
+    assert.deepEqual(mz.map((r) => r.disposition), MZ_OUTCOMES, 'порядок и состав — два исхода «Моих Звонков»');
+    assert.equal(mz[0].stage_key, 'in_process', 'строка сервера взята как есть');
+    assert.equal(mz[1].action, 'ignore', 'исход без строки — «не создавать», как и поступает leadFromCall');
+    assert.equal(mz[1].documented, true, 'оба исхода вендорские — значка «новое» у них нет');
+    assert.strictEqual(routingRowsFor('onlinepbx', rows), rows, 'общие правила не трогаются');
+    assert.strictEqual(routingRowsFor(null, rows), rows);
+    assert.deepEqual(routingRowsFor('moizvonki', undefined).map((r) => r.action), ['ignore', 'ignore'], 'пустой ответ сервера — две пустые строки, не падение');
+    assert.equal(mzOutcomeLabel('ANSWER'), 'Отвеченный входящий');
+    assert.equal(mzOutcomeLabel('noanswer'), 'Пропущенный входящий');
+    assert.equal(mzOutcomeLabel('BUSY'), 'BUSY', 'незнакомый код называет себя');
+});

@@ -328,6 +328,32 @@ export function shapeDispositions(data) {
         });
 }
 
+// MOIZVONKI_IN_TELEPHONY_V1 (2026-10-17) — owner, looking at the Telephony
+// screen: «remove the moi zvonki from commercial setting and bring here, as all
+// telephony stuff should be done in here». The separate «Мои Звонки» screen
+// (MOIZVONKI_V2) is gone; its per-provider lead rules live in the Telephony
+// routing card while the Moizvonki tile is selected.
+//
+// telephony_dispositions({ provider: 'moizvonki' }) merges the OBSERVED
+// dispositions of every call in the clinic, so BUSY and friends — Binotel's —
+// would show up under a provider that only ever says answered or not. The card
+// therefore shows exactly Moizvonki's two outcomes, present in the reply or
+// not; a missing one is «creates nothing», which is what leadFromCall does
+// without a rule row.
+export const MZ_OUTCOMES = ['ANSWER', 'NOANSWER'];
+export function routingRowsFor(kind, rows) {
+    if (kind !== 'moizvonki') return rows;
+    const list = Array.isArray(rows) ? rows : [];
+    return MZ_OUTCOMES.map((code) => list.find((r) => r && r.disposition === code)
+        || { disposition: code, seen_count: 0, last_seen_at: null, documented: true, action: 'ignore', stage_key: null });
+}
+// Moizvonki has no PBX dispositions — a call was answered or it was not — so
+// the generic «Ответили / Не ответили» reads thin next to a rule about leads.
+const MZ_OUTCOME_LABELS = { ANSWER: 'Отвеченный входящий', NOANSWER: 'Пропущенный входящий' };
+export function mzOutcomeLabel(code) {
+    return MZ_OUTCOME_LABELS[String(code || '').toUpperCase()] || String(code || '');
+}
+
 /** last_poll_at / last_call_at status values — one door for the view, same tolerant parsing as the call table. */
 export function statusTime(v) {
     return timeLabel(v);

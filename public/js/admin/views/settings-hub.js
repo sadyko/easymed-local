@@ -397,17 +397,37 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
             { label: 'Кэшбэк',                     desc: 'Сколько возвращать пациенту и за что',         icon: 'Coins', live: true, action: () => openSection('cashback_rules'), section: 'cashback_rules' },
         ],
     },
-    {
-        title: 'Направления', icon: 'MapPin', color: { bg: '#e3f4f7', fg: '#1f7f95' },
-        items: [
-            { label: 'Список источников',          desc: 'Откуда приходят пациенты',              icon: 'MapPin', live: true, action: () => openSection('referral_sources'), section: 'referral_sources' },
-            { label: 'Категории источников',       desc: 'Как сгруппированы источники',         icon: 'Folder', live: true, action: () => openSection('referral_source_categories'), section: 'referral_source_categories' },
-        ],
-    },
+    // REFERRALS_CRM_V1 (2026-10-26) — группы «Направления» здесь больше нет. Владелец:
+    // «Referal external doctors are in setting now and it should be bring here» —
+    // «Список источников» и «Категории источников» живут во вкладках экрана
+    // «Реферирование» под CRM (views/referrals-sources.js) тем же редактором
+    // (renderLookupEditor ниже, LOOKUP_CONFIG не менялся). Старые маршруты
+    // settings:referral_sources / settings:referral_source_categories ведут туда
+    // (LEGACY_ROUTES в admin.js). Ключи прав остались прежними.
     {
         title: 'Зарплата врача', icon: 'Coins', color: { bg: '#fbeae9', fg: '#b0453b' },
         items: [
             { label: 'Ставки врачей', desc: 'Процент врача по каждой услуге', icon: 'Coins', live: true, action: () => openSection('doctor_rates'), section: 'doctor_rates' },
+        ],
+    },
+    // META_LEADS_V1_HUB (2026-10-16, владелец: «in setting block build separate
+    // setting block of commercial instruments after salary of doctors, there
+    // start to build integration») — группа для инструментов продаж и рекламы,
+    // ПОСЛЕДНЯЯ, сразу после «Зарплата врача». Первая плитка — Meta (Facebook
+    // и Instagram): заявки из рекламных форм сами попадают в CRM. Следующие
+    // инструменты (Google Ads и т. п.) — плитками сюда же, не новыми группами.
+    {
+        title: 'Коммерческие инструменты', icon: 'Megaphone', color: { bg: '#e7f0fb', fg: '#2f5fb3' },
+        items: [
+            { label: 'Meta: заявки из рекламы', desc: 'Facebook и Instagram: заявки из рекламных форм сами попадают в CRM', icon: 'Megaphone', live: true, action: nav('meta-settings'), route: 'meta-settings' },
+            // TG_DEEPLINK_V1 (2026-10-26, владелец: «and here generation of Deeplink,
+            // sample is provided in the photo — go on now») — ссылка на бота для
+            // каждого объявления; право — окно «Telegram-бот» в «Ролях».
+            { label: 'Ссылки для рекламы в Telegram', desc: 'Своя ссылка на бота для каждого объявления: ответ, файл, кнопка «Оставить заявку», счётчики переходов и заявок', icon: 'Link', live: true, action: nav('telegram-deeplinks'), route: 'telegram-deeplinks' },
+            // MOIZVONKI_V2 ставил здесь вторую плитку — «Мои Звонки: звонки с телефонов».
+            // MOIZVONKI_IN_TELEPHONY_V1 (2026-10-17): владелец, увидев «Телефонию»
+            // с плитками Binotel и onlinePBX, — «all telephony stuff should be done in
+            // here». Провайдер и его правила живут там; плитки и маршрута здесь нет.
         ],
     },
 ];

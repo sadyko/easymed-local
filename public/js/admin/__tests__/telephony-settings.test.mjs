@@ -759,3 +759,100 @@ test('журнал: колонка «АТС» называет провайде�
   assert.ok(text.includes('АТС'), 'шапка колонки');
   assert.ok(text.includes('onlinePBX') && text.includes('Binotel'));
 });
+
+// ===========================================================================
+// MOIZVONKI_IN_TELEPHONY_V1 (2026-10-17) — «Мои Звонки» как плитка «Телефонии».
+// Владелец: «remove the moi zvonki from commercial setting and bring here, as
+// all telephony stuff should be done in here». Отдельного экрана больше нет;
+// всё, что он умел, обязано быть здесь при выбранной плитке.
+// ===========================================================================
+const MZ = {
+  id: 9, kind: 'moizvonki', kind_label: 'Мои Звонки', name: 'Мои Звонки', enabled: false, poll_interval_sec: 60,
+  last_poll_at: null, last_call_at: null, last_error: '', updated_at: null,
+  config: { domain: 'clinic.moizvonki.ru', user_name: 'boss@clinic.uz' }, secret_set: { api_key: true }, authorized: false,
+};
+// Ответ telephony_dispositions({ provider: 'moizvonki' }): listDispositions
+// подмешивает исходы, НАБЛЮДЁННЫЕ у всех звонков клиники, — BUSY здесь чужой.
+const MZ_DISPOSITIONS = [
+  { disposition: 'ANSWER',   seen_count: 4, last_seen_at: '2026-10-17T07:00:00Z', documented: true,  action: 'create', stage_key: 'in_process' },
+  { disposition: 'NOANSWER', seen_count: 1, last_seen_at: null,                   documented: true,  action: 'create', stage_key: 'recall' },
+  { disposition: 'BUSY',     seen_count: 2, last_seen_at: null,                   documented: false, action: 'ignore', stage_key: null },
+];
+function resetWithMz() {
+  resetServer();
+  provListRespond = () => jsonOk({ kinds: [{ kind: 'onlinepbx', label: 'onlinePBX' }, { kind: 'moizvonki', label: 'Мои Звонки' }], providers: [PBX, MZ] });
+  // lastDispBody уже записан роутером fetch к моменту ответа.
+  dispRespond = () => jsonOk(JSON.parse(JSON.stringify(lastDispBody && lastDispBody.provider === 'moizvonki' ? MZ_DISPOSITIONS : DISPOSITIONS)));
+}
+
+test('плитка «Мои Звонки»: статус по api_key, свои правила с provider и двумя исходами, «Как подключить»; обратно к Binotel — общие', async () => {
+  resetWithMz();
+  const root = await render();
+  const mz = findTileByText(root, /Мои Звонки/);
+  assert.ok(mz, 'плитка «Моих Звонков» в ряду провайдеров');
+  assert.ok(textOf(mz).includes('Выключен'), 'ключ api_key сохранён — «Выключен», а не «Не настроен»: ' + textOf(mz));
+  assert.deepStrictEqual(lastDispBody, {}, 'пока раскрыт Binotel — общие правила');
+  let text = textOf(root);
+  assert.ok(text.includes('У «Моих Звонков» свои правила'), 'общая карточка честно говорит, что «Мои Звонки» в ней не участвуют');
+  assert.ok(!text.includes('Как подключить'), 'инструкция «Моих Звонков» не показывается под Binotel');
+
+  mz.click();
+  await tick();
+  assert.deepStrictEqual(lastDispBody, { provider: 'moizvonki' }, 'смена плитки перечитала правила ИХ провайдера');
+  text = textOf(root);
+  assert.ok(text.includes('Адрес кабинета «Моих Звонков»') && text.includes('Ключ API из личного кабинета: сохранён (заменить)'), 'подключение — поля «Моих Звонков»');
+  assert.ok(text.includes('забирает новые звонки из кабинета «Моих Звонков»'), 'подводка опроса — про кабинет, не про АТС');
+  assert.ok(text.includes('Отвеченный входящий') && text.includes('Пропущенный входящий'), 'два исхода по-русски');
+  assert.ok(!text.includes('BUSY') && !text.includes('WHATSAPP-IN'), 'чужие наблюдённые исходы под «Моими Звонками» не показываются');
+  assert.ok(!text.includes('Правила общие для всех подключённых АТС.'), 'подводка общих правил спрятана');
+  assert.ok(text.includes('Правила остальных линий — у их плиток выше.'));
+  assert.ok(text.includes('Как подключить') && text.includes('moizvonki.ru') && text.includes('«Проверить подключение», затем «Сохранить подключение»'),
+    'инструкция с бывшего экрана — здесь, и называет кнопки этого экрана');
+
+  const save = findButtonByText(root, /Сохранить маршрут/);
+  assert.ok(save, 'кнопка сохранения правил');
+  save.click();
+  await tick();
+  assert.strictEqual(cfgSaveCalls, 1);
+  assert.deepStrictEqual(lastCfgSaveBody.routing.map((r) => [r.provider, r.disposition, r.action, r.stage_key]),
+    [['moizvonki', 'ANSWER', 'create', 'in_process'], ['moizvonki', 'NOANSWER', 'create', 'recall']],
+    'сохраняются ровно две строки провайдера moizvonki — правила Binotel не тронуты');
+
+  findTileByText(root, /Binotel/).click();
+  await tick();
+  assert.deepStrictEqual(lastDispBody, {}, 'вернулись к Binotel — снова общие правила');
+  text = textOf(root);
+  assert.ok(text.includes('WHATSAPP-IN') && text.includes('Правила общие для всех подключённых АТС.'), 'общая карточка вернулась целиком');
+  assert.ok(!text.includes('Как подключить'));
+});
+
+test('подключение «Моих Звонков»: без адреса кабинета или почты сотрудника на сервер не уходит — и ошибка называет своё поле', async () => {
+  resetWithMz();
+  const root = await render();
+  findTileByText(root, /Мои Звонки/).click();
+  await tick();
+  const domain = findInputByPlaceholder(root, /moizvonki\.ru/);
+  const mail = findInputByPlaceholder(root, /registratura@/);
+  assert.ok(domain && mail, 'поля адреса и почты на экране');
+  assert.strictEqual(domain.value, 'clinic.moizvonki.ru');
+  assert.strictEqual(mail.value, 'boss@clinic.uz');
+  const save = findButtonByText(root, /Сохранить подключение/);
+
+  domain.value = '';
+  save.click(); await tick();
+  assert.strictEqual(provSaveCalls, 0);
+  assert.strictEqual(lastToast(), 'Введите адрес кабинета.', 'не «домен АТС»: у кабинета нет АТС');
+
+  domain.value = 'clinic.moizvonki.ru';
+  mail.value = '';
+  save.click(); await tick();
+  assert.strictEqual(provSaveCalls, 0);
+  assert.strictEqual(lastToast(), 'Введите почту сотрудника.');
+
+  mail.value = 'boss@clinic.uz';
+  save.click(); await tick();
+  assert.strictEqual(provSaveCalls, 1, 'с обоими полями — ушло');
+  assert.deepStrictEqual(lastProvSaveBody.config, { domain: 'clinic.moizvonki.ru', user_name: 'boss@clinic.uz' });
+  assert.strictEqual(lastProvSaveBody.id, 9);
+  assert.ok(!('secret' in lastProvSaveBody), 'пустой ключ не отправляется — сохранённый остаётся');
+});

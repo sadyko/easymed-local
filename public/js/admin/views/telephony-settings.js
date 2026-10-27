@@ -48,6 +48,7 @@ import {
     DASH, secretPlaceholder, normalizeInterval, webhookUrl, shapeCalls,
     statusTime, textOrDash, isNotImplemented, shapeDispositions, pluralRu,
     providerLabel, providerStatus, reasonLabel, shapeProviders,
+    routingRowsFor, mzOutcomeLabel,   // MOIZVONKI_IN_TELEPHONY_V1
 } from '../telephony-logic.js';
 // Плитка провайдера несёт устойчивый пастельный оттенок по своему виду —
 // тот же приём, что у карточек врачей: Binotel всегда одного цвета.
@@ -67,6 +68,7 @@ const state = {
     // видимые колонки канбана для выпадающего списка (crm_config_get).
     // null = ещё грузится, [] = загрузилось и пусто — разные экраны.
     routing: null, stages: [], routingError: null,
+    routingFor: undefined,   // MOIZVONKI_IN_TELEPHONY_V1 — чьи правила в карточке: 'moizvonki' или null (общие); undefined до первой загрузки
     // TELEPHONY_PROVIDERS_V1 — карточки провайдеров кроме Binotel. kinds —
     // какие виды сервер умеет подключать; providers — заведённые строки;
     // selected — чья плитка раскрыта: 'binotel', id строки или 'new' (черновик
@@ -145,6 +147,7 @@ export async function renderTelephonySettings(container, { onNavigate } = {}) {
     state.routing = null;
     state.stages = [];
     state.routingError = null;
+    state.routingFor = undefined;   // MOIZVONKI_IN_TELEPHONY_V1
     paint();
     // Журнал и маршрут грузятся ПОСЛЕ отрисовки настроек и перекрашивают
     // только свои карточки: полный paint() здесь стёр бы ключ, который
@@ -168,6 +171,7 @@ function paint() {
         if (p) {
             refs.body.appendChild(pbxConnectionCard(p));
             refs.body.appendChild(pbxPollingCard(p));
+            if (p.kind === 'moizvonki') refs.body.appendChild(mzHelpCard());   // MOIZVONKI_IN_TELEPHONY_V1
             if (p.kind === 'onlinepbx') refs.body.appendChild(ringAddressCard());   // CALL_RING_V1 — адрес событий звонков для кабинета станции
         }
     }
@@ -179,6 +183,15 @@ function paint() {
     // обе карточки отвечают на вопрос «что программа делает сама», и обе нужны
     // только когда связь уже работает.
     refs.body.appendChild(dialLineCard());
+    // MOIZVONKI_IN_TELEPHONY_V1 — правила «Звонки → заявки» зависят от плитки:
+    // у «Моих Звонков» свои строки (их ищет leadFromCall по провайдеру звонка),
+    // у остальных — общие. Переключили плитку между этими двумя мирами —
+    // карточка перечитывается; между Binotel и onlinePBX — нет, словарь один.
+    const want = routingKind();
+    if (state.routingFor !== undefined && want !== state.routingFor) {
+        state.routing = null; state.routingError = null;
+        loadRouting();
+    }
     refs.body.appendChild(routingCard());
     refs.body.appendChild(callsCard());
 }
@@ -250,7 +263,10 @@ function providersCard() {
     for (const p of state.providers) {
         grid.appendChild(providerTile({
             key: p.id, kind: p.kind, name: p.name, kindLabel: p.kind_label,
-            status: providerStatus({ enabled: p.enabled, configured: !!(p.domain && p.auth_key_set), last_error: p.last_error }),
+            // MOIZVONKI_IN_TELEPHONY_V1 — secret_set_any, не auth_key_set: секрет
+            // «Моих Звонков» зовётся api_key, и их плитка с сохранённым ключом
+            // показывала «Не настроен».
+            status: providerStatus({ enabled: p.enabled, configured: !!(p.domain && p.secret_set_any), last_error: p.last_error }),
             lastCall: p.last_call_at, lastError: p.last_error,
         }));
     }
@@ -381,6 +397,9 @@ const CONNECTION_FIELDS = {
         extraPlaceholder: 'например, registratura@clinic.uz',
         extraHint: 'У «Моих Звонков» нет АТС: команда уходит на смартфон этого сотрудника, и звонит его сим-карта.',
         testNeedsExtra: true,
+        // MOIZVONKI_IN_TELEPHONY_V1 — «домен АТС» у кабинета без АТС читался как чужая ошибка.
+        domainRequired: 'Введите адрес кабинета.',
+        extraRequired: 'Введите почту сотрудника.',
     },
 };
 const connFields = (kind) => CONNECTION_FIELDS[kind] || CONNECTION_FIELDS.onlinepbx;
@@ -451,7 +470,8 @@ function pbxConnectionCard(p) {
 
     const saveBtn = h('button', { class: 'btn btn-primary', type: 'button',
         onclick: async () => {
-            if (!domainInput.value.trim()) return toast('Введите домен АТС.', 'warn');
+            if (!domainInput.value.trim()) return toast(F.domainRequired || 'Введите домен АТС.', 'warn');
+            if (F.extraRequired && !extInput.value.trim()) return toast(F.extraRequired, 'warn');   // MOIZVONKI_IN_TELEPHONY_V1 — без почты опрос не включится
             if (!p && !keyInput.value.trim()) return toast('Введите ключ API.', 'warn');
             await run(saveBtn, async () => {
                 const saved = await rpc('telephony_provider_save', payload());
@@ -534,7 +554,9 @@ function pbxPollingCard(p) {
         } });
     card.appendChild(checkField('Опрос включён', enabled));
     card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px 26px' } },
-        'Сохраняется сразу. Система сама опрашивает АТС и записывает новые звонки в журнал.'));
+        p.kind === 'moizvonki'   // MOIZVONKI_IN_TELEPHONY_V1 — у кабинета без АТС своя фраза
+            ? 'Сохраняется сразу. Сервер клиники сам забирает новые звонки из кабинета «Моих Звонков» и записывает их в журнал; пропущенные и отвеченные становятся заявками CRM по правилам «Звонки → заявки».'
+            : 'Сохраняется сразу. Система сама опрашивает АТС и записывает новые звонки в журнал.'));
 
     const intInput = h('input', {
         type: 'number', min: '10', step: '1', style: { width: '120px' },
@@ -864,6 +886,38 @@ function webhooksCard() {
 // Оба приезжают одним вызовом telephony_dispositions, уже с текущим правилом
 // в каждой строке — склеивать два ответа в браузере значит однажды нарисовать
 // правило напротив чужого исхода.
+// MOIZVONKI_IN_TELEPHONY_V1 — выбранная строка провайдера (плитка Binotel и
+// черновик «new» — null).
+function selectedProvider() {
+    return state.providers.find((x) => x.id === state.selected) || null;
+}
+// Чьи правила показывает карточка «Звонки → заявки»: 'moizvonki' при плитке
+// «Моих Звонков», иначе null — общие правила основного провайдера.
+function routingKind() {
+    const p = selectedProvider();
+    return p && p.kind === 'moizvonki' ? 'moizvonki' : null;
+}
+
+// MOIZVONKI_IN_TELEPHONY_V1 — инструкция с бывшего отдельного экрана: у
+// «Моих Звонков» нет АТС, и человек должен поставить приложение на телефоны
+// сотрудников — без этого «подключение» ничего не подключает.
+function mzHelpCard() {
+    const card = h('div', { style: { padding: '18px' } });
+    card.appendChild(h('ol', { style: { margin: '0 0 0 18px', lineHeight: '1.8' } },
+        h('li', null, trf('Зарегистрируйте кабинет на {site} и заведите сотрудников, чьи телефоны принимают звонки пациентов.', { site: 'moizvonki.ru' })),
+        h('li', null, 'Установите приложение «Мои Звонки» на их Android-телефоны и войдите под учётной записью каждого сотрудника: приложение само отправляет звонки в кабинет.'),
+        h('li', null, 'В кабинете откройте «Настройки → Интеграция» и скопируйте ключ API.'),
+        h('li', null, 'Вставьте выше адрес кабинета, почту сотрудника-руководителя (ему видны звонки всех) и ключ, нажмите «Проверить подключение», затем «Сохранить подключение».'),
+        h('li', null, 'Включите «Опрос включён». Звонки появятся в журнале в течение интервала опроса; пропущенные и отвеченные станут заявками CRM по правилам «Звонки → заявки» ниже.')));
+    card.appendChild(h('div', { class: 'muted', style: { marginTop: '14px', fontSize: '13.5px' } },
+        'Публичный адрес и webhook не нужны: сервер клиники сам спрашивает кабинет «Моих Звонков». Если телефон сотрудника был без сети, звонок приедет позже — программа заберёт его по сквозному номеру, а не по времени, и ничего не пропустит.'));
+    card.appendChild(h('div', { class: 'muted', style: { marginTop: '8px', fontSize: '13.5px' } },
+        'Ключ API открывает журнал звонков всех сотрудников кабинета. Не пересылайте его в чатах: на сервере он хранится в закрытой части подключения и в браузер не возвращается.'));
+    return h('div', { class: 'card', style: { marginBottom: '16px' } },
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Help', { size: 16 }), ' ', tr('Как подключить'))),
+        card);
+}
+
 // CALL_RING_V1 — адрес, на который onlinePBX присылает события «начало / ответ /
 // конец звонка»: по ним панель «Телефон» показывает блок «Звонит» в момент
 // звонка. Адрес грузится ПОСЛЕ отрисовки карточки (лишний вызов не задерживает
@@ -934,21 +988,29 @@ function routingCard() {
     refs.routingBody = h('div');
     paintRouting();
     return h('div', { class: 'card', style: { marginBottom: '16px' } },
-        h('div', { class: 'card-header' }, h('h3', null, Icon('Headset', { size: 16 }), ' ', tr('Звонки → заявки'))),
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Headset', { size: 16 }), ' ', tr('Звонки → заявки'),
+            routingKind() === 'moizvonki' ? [' · ', providerLabel('moizvonki')] : null)),   // MOIZVONKI_IN_TELEPHONY_V1
         refs.routingBody);
 }
 
 async function loadRouting() {
+    // MOIZVONKI_IN_TELEPHONY_V1 — при плитке «Моих Звонков» читаются их строки
+    // (RPC принимает provider с 2026-10-17); ответ, догнавший уже другую
+    // плитку, выбрасывается — иначе правила Binotel легли бы под заголовок
+    // «Мои Звонки».
+    const kind = routingKind();
+    state.routingFor = kind;
     try {
         // Один заход, два вопроса: какие исходы бывают (со своими правилами)
         // и в какие колонки их вообще можно класть. Колонки живут в CRM и
         // читаются её же RPC — второй список колонок здесь разошёлся бы с
         // доской в первый же раз, когда владелец переименует колонку.
         const [disp, cfg] = await Promise.all([
-            rpc('telephony_dispositions', {}),
+            rpc('telephony_dispositions', kind ? { provider: kind } : {}),   // MOIZVONKI_IN_TELEPHONY_V1
             rpc('crm_config_get', {}),
         ]);
-        state.routing = shapeDispositions(disp);
+        if (state.routingFor !== kind) return;   // MOIZVONKI_IN_TELEPHONY_V1 — ответ устарел
+        state.routing = routingRowsFor(kind, shapeDispositions(disp));
         // Только видимые: правило, ведущее в скрытую колонку, сервер и так
         // отказывается сохранять (saveRouting) — заявка легла бы туда, где её
         // никто не увидит, что для клиники неотличимо от потерянной заявки.
@@ -981,11 +1043,20 @@ function paintRouting() {
         return;
     }
 
-    box.appendChild(h('div', { class: 'muted tel-route-note', style: { padding: '18px 18px 0' } },
-        'Телефония сообщает, чем закончился каждый звонок. Здесь решается, из каких звонков система сама делает заявку и в какую колонку её кладёт.',
+    // MOIZVONKI_IN_TELEPHONY_V1 — у «Моих Звонков» своя подводка и свои строки;
+    // у общих правил — честная оговорка, что «Мои Звонки» в них не входят.
         // Один словарь на всех: исход любой АТС переводится в эти же слова,
         // поэтому правило задаётся один раз, а не на каждого провайдера.
-        state.providers.length ? [' ', 'Правила общие для всех подключённых АТС.'] : null));
+    const mz = state.routingFor === 'moizvonki';
+    const mzExists = state.providers.some((x) => x.kind === 'moizvonki');
+    const pbxExists = state.providers.some((x) => x.kind !== 'moizvonki');
+    box.appendChild(h('div', { class: 'muted tel-route-note', style: { padding: '18px 18px 0' } },
+        mz
+            ? ['Каждый входящий звонок с телефонов сотрудников открывает карточку заявки по этим правилам; второй звонок того же человека в ближайшие три дня дописывается в его открытую карточку, а не заводит новую. Запись разговора остаётся в карточке — в её журнале звонков есть «Прослушать».',
+                ' ', 'Правила остальных линий — у их плиток выше.']
+            : ['Телефония сообщает, чем закончился каждый звонок. Здесь решается, из каких звонков система сама делает заявку и в какую колонку её кладёт.',
+                pbxExists ? [' ', 'Правила общие для всех подключённых АТС.'] : null,
+                mzExists ? [' ', 'У «Моих Звонков» свои правила: выберите их плитку выше.'] : null]));
 
     if (!state.routing.length) {
         // Ни одного звонка и ни одного правила: у свежей установки такого не
@@ -1006,7 +1077,7 @@ function paintRouting() {
         // возвращает сырым кодом — и тогда строка ниже его не повторяет.
         // Три SMS-* правила все называются «SMS» и различаются ТОЛЬКО кодом,
         // поэтому для известных исходов код обязателен.
-        const ru = dispositionRu(r.disposition);
+        const ru = state.routingFor === 'moizvonki' ? mzOutcomeLabel(r.disposition) : dispositionRu(r.disposition);   // MOIZVONKI_IN_TELEPHONY_V1
         const nameIsCode = ru === r.disposition;
         // Список действий управляет списком колонок: у «не создавать» колонки
         // нет, и поле выключается, а не притворяется, что выбор ещё важен.
@@ -1065,7 +1136,7 @@ function paintRouting() {
                 // Какая АТС — из настроек этого же экрана: строка правила
                 // ключуется по (provider, disposition), и второй вендор
                 // когда-нибудь — это данные, а не миграция.
-                provider: (state.s && state.s.provider) || 'binotel',
+                provider: state.routingFor || (state.s && state.s.provider) || 'binotel',   // MOIZVONKI_IN_TELEPHONY_V1 — свои строки у «Моих Звонков»
                 disposition: r.disposition,
                 action: r.action,
                 // «Не создавать» колонку не хранит: правилу, которое ничего не
