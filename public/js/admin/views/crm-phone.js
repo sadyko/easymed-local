@@ -1187,9 +1187,12 @@ function sayRing() {
 // Звонок телефона Easy-Med станция видит тоже и прислала бы его блоком «Звонит» —
 // и во время звонка, и сразу после «Отклонить» / «Завершить» (её события
 // запаздывают). Такие входящие с тем же номером прячем (ringHidden чистится сам,
-// когда звонок уходит из ленты станции); после конца — ещё HUSH_MS.
+// когда звонок уходит из ленты станции); после конца — ещё HUSH_MS, но только
+// пока телефон готов: тогда настоящий перезвон зазвонит в нём самом. Связь с АТС
+// пропала или телефон выключили — перезвон здесь не зазвонит, и станция
+// показывает его как обычно.
 function hushLive() {
-    const hush = P.spHush && Date.now() < P.spHush.until ? P.spHush.tail : '';
+    const hush = P.spHush && Date.now() < P.spHush.until && softState().state === SP.READY ? P.spHush.tail : '';
     const tails = [P.spNum, hush].filter(Boolean);
     if (!tails.length) return;
     for (const c of P.live) {
@@ -1283,8 +1286,8 @@ function softCallEnded() {
     P.spWho = new Map();   // следующий звонок с этого номера спросит заново: карту могли завести
     // Станция ещё покажет этот звонок («звонит», «разговор идёт») — молчим о нём.
     P.spHush = P.spNum ? { tail: P.spNum, until: Date.now() + ((P.ctx && P.ctx.spHushMs) || HUSH_MS) } : null;
-    hushLive();
     P.spNum = '';
+    hushLive();
     if (P.spSay) clearTimeout(P.spSay);
     P.spSay = null;
     if (P.els) P.els.spLive.textContent = '';   // следующий входящий объявится заново

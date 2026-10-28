@@ -25,6 +25,8 @@ import { S, RPC, mk, walk, textOf, byAttr, hasClass, tick, TOASTS } from './crm-
 const { resetCrmPhone, mountPhoneButton } = await import('../views/crm-phone.js');
 const { setSoftphoneForTests, reasonText, endText } = await import('../softphone-browser.js');
 const { setLang } = await import('../i18n.js');
+const { ICON_BODIES } = await import('../icon-paths.js');
+const { ICON_MAP } = await import('../icon-map.js');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUB = path.resolve(HERE, '..', '..', '..');   // …/public
@@ -359,15 +361,19 @@ test('разговор: таймер 00:00 → 01:05, «Микрофон вык�
     Date.now = realNow;
   }
   // «Микрофон выкл.» — подпись постоянная; состояние — aria-pressed, значок и строка под таймером.
+  const MIC = ICON_BODIES[ICON_MAP.Mic];
+  const MIC_OFF = ICON_BODIES[ICON_MAP.MicOff];
   const mute = one(d, 'data-cph-sp-mute');
   assert.match(textOf(mute), /Микрофон выкл\./);
   assert.equal(mute.getAttribute('aria-pressed'), 'false');
+  assert.ok(textOf(mute).includes(MIC) && !textOf(mute).includes(MIC_OFF), 'микрофон работает — значок должен быть «микрофон»');
   assert.equal(byAttr(d, 'data-cph-sp-muted').length, 0);
   mute.click();
   assert.deepEqual(fake.calls.filter((c) => c[0] === 'setMuted'), [['setMuted', true]]);
   const muted = one(d, 'data-cph-sp-mute');
   assert.match(textOf(muted), /Микрофон выкл\./, 'подпись кнопки-переключателя не должна меняться');
   assert.equal(muted.getAttribute('aria-pressed'), 'true');
+  assert.ok(textOf(muted).includes(MIC_OFF) && !textOf(muted).includes(MIC), 'микрофон выключен — значок должен быть перечёркнутым');
   assert.ok(textOf(one(d, 'data-cph-sp-muted')).endsWith('Микрофон выключен — собеседник вас не слышит.'));
   muted.click();
   assert.deepEqual(fake.calls.filter((c) => c[0] === 'setMuted').pop(), ['setMuted', false]);
@@ -637,6 +643,25 @@ test('после тишины новый звонок станции с того
   assert.ok(one(d, 'data-cph-ring'), 'новый звонок станции спрятан навсегда');
 });
 
+test('тишина после звонка — только при готовом телефоне: связь пропала или телефон выключили — перезвон того же номера станция показывает', async () => {
+  const ends = [
+    ['связь пропала', { state: 'connecting', reason: 'network', call: null, lastEnd: { direction: 'in', cause: 'Connection Error', media: null } }],
+    ['телефон выключили', { ...IDLE }],
+  ];
+  for (const [why, after] of ends) {
+    const fake = fakePhone();
+    const { btn } = await shell({ fake, ctx: { spHushMs: 5000 } });
+    const d = await open(btn);
+    fake.push({ state: 'in_call', call: call({ startedAt: Date.now() }) });
+    await tick(30);
+    fake.push(after);
+    await tick(30);
+    S.live = [STATION({ uuid: 'cb1', updated: Date.now() })];   // пациент перезванивает внутри окна тишины
+    await tick(80);
+    assert.ok(one(d, 'data-cph-ring'), why + ': перезвон спрятан, хотя телефон Easy-Med его не примет');
+  }
+});
+
 test('«Завершить»: блок «Звонит» станции «Разговор идёт» о том же звонке не всплывает', async () => {
   const fake = fakePhone();
   const { btn } = await shell({ fake, live: [STATION({ uuid: 'r3', state: 'answered', was_answered: true, patient: null })] });
@@ -736,11 +761,12 @@ test('читалка экрана: входящий объявляется од�
   fake.push({ state: 'ringing', call: call() });
   await tick(60);
   assert.equal(textOf(live()), 'Входящий звонок: Каримова Азиза');
-  live().textContent = '';
+  live().textContent = 'уже объявлено';
   fake.push({ state: 'ringing', call: call() });
   await tick(60);
-  assert.equal(textOf(live()), '', 'тот же звонок объявлен второй раз');
+  assert.equal(textOf(live()), 'уже объявлено', 'тот же звонок объявлен второй раз');
   fake.push({ state: 'ready', call: null });
+  assert.equal(textOf(live()), '', 'звонок кончился, а объявление осталось — следующий такой же не прозвучит');
   fake.push({ state: 'error', reason: 'mic_denied' });
   const ids = String(toggle(d).getAttribute('aria-describedby') || '').split(/\s+/);
   const reason = one(d, 'data-cph-sp-reason');
