@@ -104,7 +104,7 @@ function unitStarts(box) {
 }
 
 /** Строки таблицы: заголовок (thead или ведущие строки из одних th) и строки данных. */
-function tableParts(table) {
+export function tableParts(table) {
     let thead = null;
     const rows = [];
     for (let n = table.firstChild; n; n = n.nextSibling) {
@@ -447,6 +447,33 @@ function edgeItem(struct, atEnd) {
     }
     const its = elementKids(struct);
     return (atEnd ? its[its.length - 1] : its[0]) || null;
+}
+
+/**
+ * DOC_RICH_FORMAT_V1 (T3) — ВСЕ ПОЛОВИНЫ разрезанного целого (таблицы,
+ * списка) по порядку страниц: оригинал и его копии [data-cont-split] в
+ * следующих частях поля. Те же правила пары, что у слияния (leadCopy /
+ * tailPartner), — значит, ровно то, что слияние соберёт в одно целое.
+ * Неразрезанное — [struct].
+ */
+export function splitChain(struct, parts) {
+    const list = (parts || []).filter(Boolean);
+    const partOf = (el) => list.findIndex((p) => p === el || (p.contains && p.contains(el)));
+    let cur = struct;
+    let i = partOf(cur);
+    if (i < 0 || !isEl(cur)) return [struct];
+    for (let guard = 0; guard < 500 && i > 0 && cur.hasAttribute(CONT_SPLIT) && leadCopy(list[i]) === cur; guard += 1) {
+        const p = tailPartner(list[i - 1], cur);
+        if (!p) break;
+        cur = p; i -= 1;
+    }
+    const out = [cur];
+    for (let j = i; j < list.length - 1; j += 1) {
+        const c = leadCopy(list[j + 1]);
+        if (!c || tagOf(c) !== tagOf(cur) || tailPartner(list[j], c) !== out[out.length - 1]) break;
+        out.push(c);
+    }
+    return out;
 }
 
 /**

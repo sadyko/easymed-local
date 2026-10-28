@@ -42,6 +42,7 @@ import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from
 import { sanitizeStoredHtml, richHasContent, textBreaks } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком
 import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
 import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark, gapCaret, edgeHop, breakLines, keepMarks } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
+import { TBL_MAX_ROWS, TBL_MAX_COLS, insertTable, tableChain, tableHasText, cellStep, cellCaret, addRow, canRemoveRow, removeRow, addColumn, removeColumn, deleteTable, insertCellBreak } from './blank-table.js';   // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в бланке
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -6547,6 +6548,8 @@ function _wireBlankEditing(ctx, frame) {
         '.svc .si,.recs li{display:flex;align-items:baseline;gap:6px;}' +   // REC_RM_INLINE_V1 — «Удалить» stays on the SAME line, pinned right
         '.recs li::before{content:"•";color:var(--accent,#1a7f77);}' +
         '.bk-recrm:hover{background:#fee2e2;opacity:1;}' +
+        // DOC_RICH_FORMAT_V1 (T3) — панель оформления, панель таблицы и выбор размера на бумагу не идут
+        '@media print{[data-bk-fmt],[data-bk-tbl],[data-bk-tblpick]{display:none !important;}}' +
         '@media print{.bk-add,.bk-rm,.bk-ctl,.bk-icd,.bk-recrm,[data-ws-actions]{display:none !important;}}';
     doc.head.appendChild(st);
     try { doc.body.style.zoom = wsState.docZoom || 1; } catch (e) {}   // DOC_ZOOM_V1 — keep zoom across re-renders
@@ -6650,12 +6653,16 @@ function _wireBlankEditing(ctx, frame) {
             fbBtn('foreColor', '<span style="color:#4dabf7">A</span>', '#1971c2') +
             fbBtn('hiliteColor', '<span style="background:#fff3bf;color:#111;padding:0 3px;border-radius:2px">A</span>', '#fff3bf') +
             fbBtn('fontSize:5', 'A+', '') + fbBtn('fontSize:2', 'A-', '') +
-            fbBtn('insertUnorderedList', '•') + fbBtn('insertOrderedList', '1.') + fbBtn('removeFormat', '⌫');
+            fbBtn('insertUnorderedList', '•') + fbBtn('insertOrderedList', '1.') + fbBtn('removeFormat', '⌫') +
+            // DOC_RICH_FORMAT_V1 (T3, F6) — «Таблица»: выбор размера, вставка в курсор
+            `<button type="button" data-cmd="table" title="${escapeHtml(tr('Таблица'))}" aria-label="${escapeHtml(tr('Таблица'))}" style="border:0;background:transparent;color:#fff;cursor:pointer;padding:4px 8px;border-radius:5px;vertical-align:middle;line-height:0;">${_TBL_ICON}</button>`;
         doc.body.appendChild(fbar);
+        const _tbl = _blankWireTables(doc);   // DOC_RICH_FORMAT_V1 (T3) — выбор размера, панель таблицы, Tab и Enter в ячейке
         fbar.addEventListener('mousedown', (e) => {
             const b = e.target.closest('[data-cmd]'); if (!b) return;
             e.preventDefault();
             const raw = b.getAttribute('data-cmd');
+            if (raw === 'table') { _tbl.openPicker(b); return; }   // DOC_RICH_FORMAT_V1 (T3)
             _styleWithCss();   // DOC_RICH_FORMAT_V1 (F4)
             try {
                 if (raw.indexOf('fontSize:') === 0) doc.execCommand('fontSize', false, raw.split(':')[1]);
@@ -6663,7 +6670,7 @@ function _wireBlankEditing(ctx, frame) {
             } catch (_) {}
             const sel = doc.getSelection(); const n = sel && sel.anchorNode;
             const host = n && (n.nodeType === 1 ? n : n.parentElement);
-            const fld = host && host.closest('[data-field]');
+            const fld = host && host.closest('[data-field],[data-cont-of]');   // DOC_RICH_FORMAT_V1 (T3) — и продолжение на следующей странице
             if (fld) _syncBlankField(ctx, fld);
         });
         let _fbHideT = null;
@@ -6674,14 +6681,18 @@ function _wireBlankEditing(ctx, frame) {
             fbar.style.display = 'block';
             fbar.style.left = Math.max(6, r.left + sx) + 'px';
             fbar.style.top = Math.max(6, r.top + sy - 38) + 'px';
+            // DOC_RICH_FORMAT_V1 (T3) — в строке простого текста («Диагноз», телефон) таблицы нет
+            const tb = fbar.querySelector('[data-cmd="table"]');
+            if (tb) tb.style.display = _TBL_OFF.has(fld.getAttribute('data-field') || fld.getAttribute('data-cont-of')) ? 'none' : '';
         };
+        // DOC_RICH_FORMAT_V1 (T3) — панель и для продолжения раздела на следующей странице ([data-cont-of])
         doc.addEventListener('focusin', (e) => {
-            const fld = e.target && e.target.closest && e.target.closest('[data-field]');
+            const fld = e.target && e.target.closest && e.target.closest('[data-field],[data-cont-of]');
             if (fld) { clearTimeout(_fbHideT); showFbar(fld); }
         });
         doc.addEventListener('focusout', () => { _fbHideT = setTimeout(() => { fbar.style.display = 'none'; }, 250); });
         fbar.addEventListener('mousedown', () => { clearTimeout(_fbHideT); }, true);
-        doc.addEventListener('scroll', () => { const a = doc.activeElement; const fld = a && a.closest && a.closest('[data-field]'); if (fld && fbar.style.display !== 'none') showFbar(fld); }, true);
+        doc.addEventListener('scroll', () => { const a = doc.activeElement; const fld = a && a.closest && a.closest('[data-field],[data-cont-of]'); if (fld && fbar.style.display !== 'none') showFbar(fld); }, true);
     }
     // PAPER_ACTIONS_BLANK_V1 — inject «Повторный визит» + «Заявка на госпитализацию» into the WYSIWYG
     // sheet, right under the last section (recommendations), just above the signature/М.П. block.
@@ -7026,6 +7037,259 @@ function _blankWireSplitEdges(doc) {
     doc.addEventListener('mouseup', () => { setTimeout(() => snap('stay', -1, null), 0); });
 }
 export const wireSplitEdges = (doc) => _blankWireSplitEdges(doc);   // DOC_RICH_FORMAT_V1 (ревью T2) — экспорт для проверки (headless Chrome)
+
+// ===========================================================================
+// DOC_RICH_FORMAT_V1 (T3, правило F6) — ТАБЛИЦА В БЛАНКЕ. Владелец: «простая
+// таблица», без объединения ячеек.
+//   - «Таблица» в панели оформления: сетка выбора размера (наведение — строки ×
+//     столбцы, до 15 × 8, подпись «3 × 4») и поля чисел для клавиатуры;
+//     вставка в курсор (blank-table.js insertTable): первая строка —
+//     заголовок, под таблицей — абзац, курсор — в первой ячейке заголовка.
+//   - Курсор в ячейке (поля или его продолжения на следующей странице) —
+//     панель под таблицей: «+ строка», «+ столбец», «− строка», «− столбец»,
+//     «Удалить таблицу». Разрезанная по страницам таблица — одна таблица:
+//     операции идут по всем её половинам. После каждой — событие input:
+//     форма получает поле целиком, раскладка по страницам — заново.
+//   - Tab / Shift+Tab — следующая / предыдущая ячейка (через половины, повтор
+//     заголовка пропускается), Tab в последней ячейке — новая строка; Enter в
+//     ячейке — перенос строки в ней. Вне таблицы Tab — как был.
+//   - Пока документ загружается (поле не правится) — ни панели, ни вставки.
+// ===========================================================================
+const _TBL_OFF = new Set(['primary_diagnosis', 'doctor_phone', 'icd10']);   // строки простого текста — без таблиц
+const _TBL_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>';
+function _blankHostOf(node) {
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    return el && el.closest ? el.closest('[data-field],[data-cont-of]') : null;
+}
+const _blankKeyOf = (host) => host.getAttribute('data-field') || host.getAttribute('data-cont-of');
+const _blankPartsOf = (doc, key) => [...doc.querySelectorAll('[data-field="' + key + '"]'), ...doc.querySelectorAll('[data-cont-of="' + key + '"]')];
+const _blankTablesOn = (host) => !!host && host.getAttribute('contenteditable') === 'true' && !_TBL_OFF.has(_blankKeyOf(host));
+function _blankPutCaret(doc, at) {
+    if (!at || !at.node) return;
+    const host = _blankHostOf(at.node);
+    try { if (host && doc.activeElement !== host && host.focus) host.focus({ preventScroll: true }); } catch (e) { /* без фокуса выделение всё равно ставится */ }
+    try {
+        const r = doc.createRange();
+        r.setStart(at.node, at.offset); r.collapse(true);
+        const s = doc.getSelection(); s.removeAllRanges(); s.addRange(r);
+    } catch (e) { /* курсор — по возможности */ }
+}
+// Событие input на части поля: форма получает поле целиком (_syncBlankField), бланк раскладывается заново.
+function _blankFireInput(host) {
+    if (!host) return;
+    try {
+        const E = (host.ownerDocument.defaultView && host.ownerDocument.defaultView.Event) || Event;
+        host.dispatchEvent(new E('input', { bubbles: true }));
+    } catch (e) { /* без события форма догонит на следующем вводе */ }
+}
+// Ячейка под курсором — в правимой части поля с таблицами; повтор заголовка — не ячейка.
+function _blankCaretCell(doc) {
+    const s = doc.getSelection();
+    const n = s && s.rangeCount ? s.anchorNode : null;
+    const el = n && (n.nodeType === 1 ? n : n.parentElement);
+    const cell = el && el.closest ? el.closest('td,th') : null;
+    if (!cell || cell.closest('[data-cont-head]')) return null;
+    const host = _blankHostOf(cell);
+    if (!_blankTablesOn(host)) return null;
+    return { cell, host, key: _blankKeyOf(host) };
+}
+
+function _blankWireTables(doc) {
+    const sx = () => doc.documentElement.scrollLeft || doc.body.scrollLeft || 0;
+    const sy = () => doc.documentElement.scrollTop || doc.body.scrollTop || 0;
+    const font = 'font:600 12.5px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;';
+
+    // ─── выбор размера ─────────────────────────────────────────────────────────
+    const pick = doc.createElement('div');
+    pick.setAttribute('data-bk-tblpick', '');
+    pick.setAttribute('role', 'dialog');
+    pick.setAttribute('aria-label', tr('Размер таблицы'));
+    pick.style.cssText = 'position:absolute;display:none;z-index:100000;background:#fff;border:1px solid #d3d9de;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:10px 12px;color:#1f2d34;' + font;
+    const grid = doc.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(' + TBL_MAX_COLS + ',16px);gap:3px;';
+    for (let r = 1; r <= TBL_MAX_ROWS; r += 1) {
+        for (let c = 1; c <= TBL_MAX_COLS; c += 1) {
+            const cell = doc.createElement('div');
+            cell.setAttribute('data-r', String(r));
+            cell.setAttribute('data-c', String(c));
+            cell.style.cssText = 'width:16px;height:16px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:3px;background:#fff;cursor:pointer;';
+            grid.appendChild(cell);
+        }
+    }
+    const lbl = doc.createElement('div');
+    lbl.setAttribute('data-bk-tblsize', '');
+    lbl.style.cssText = 'margin:8px 0;text-align:center;';
+    const num = (label, max) => {
+        const l = doc.createElement('label');
+        l.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin-right:8px;';
+        const t = doc.createElement('span'); t.textContent = label;
+        const i = doc.createElement('input');
+        i.type = 'number'; i.min = '1'; i.max = String(max);
+        i.style.cssText = 'width:48px;padding:3px 4px;border:1px solid #cbd5e1;border-radius:6px;' + font;
+        l.appendChild(t); l.appendChild(i);
+        return [l, i];
+    };
+    const [rowsL, rowsI] = num(tr('Строки'), TBL_MAX_ROWS);
+    const [colsL, colsI] = num(tr('Столбцы'), TBL_MAX_COLS);
+    const ins = doc.createElement('button');
+    ins.type = 'button';
+    ins.setAttribute('data-bk-tblins', '');
+    ins.textContent = tr('Вставить таблицу');
+    ins.style.cssText = 'display:block;width:100%;margin-top:8px;padding:6px 10px;border:1px solid #167873;border-radius:8px;background:#167873;color:#fff;cursor:pointer;' + font;
+    const row2 = doc.createElement('div');
+    row2.appendChild(rowsL); row2.appendChild(colsL);
+    pick.appendChild(grid); pick.appendChild(lbl); pick.appendChild(row2); pick.appendChild(ins);
+    doc.body.appendChild(pick);
+    let size = [3, 4];
+    let saved = null;
+    const clampN = (v, max) => Math.max(1, Math.min(max, Math.floor(Number(v) || 1)));
+    const setSize = (r, c, fromInputs) => {
+        size = [clampN(r, TBL_MAX_ROWS), clampN(c, TBL_MAX_COLS)];
+        for (const cell of grid.children) {
+            const on = Number(cell.getAttribute('data-r')) <= size[0] && Number(cell.getAttribute('data-c')) <= size[1];
+            cell.style.background = on ? '#d7efed' : '#fff';
+            cell.style.borderColor = on ? '#4eb0aa' : '#cbd5e1';
+        }
+        lbl.textContent = size[0] + ' × ' + size[1];
+        if (!fromInputs) { rowsI.value = String(size[0]); colsI.value = String(size[1]); }
+    };
+    const closePicker = () => { pick.style.display = 'none'; };
+    const insertNow = () => {
+        const s = saved;
+        closePicker();
+        if (!s) return;
+        const host = _blankHostOf(s.node);
+        if (!host || !host.isConnected || !_blankTablesOn(host)) return;
+        const res = insertTable(host, s.node, s.offset, size[0], size[1]);
+        _blankPutCaret(doc, res.caret);
+        _blankFireInput(host);
+    };
+    grid.addEventListener('mouseover', (e) => { const c = e.target.closest && e.target.closest('[data-r]'); if (c) setSize(c.getAttribute('data-r'), c.getAttribute('data-c')); });
+    grid.addEventListener('mousedown', (e) => { const c = e.target.closest && e.target.closest('[data-r]'); if (!c) return; e.preventDefault(); setSize(c.getAttribute('data-r'), c.getAttribute('data-c')); insertNow(); });
+    for (const i of [rowsI, colsI]) {
+        i.addEventListener('input', () => setSize(rowsI.value, colsI.value, true));
+        // Enter поля числа — вставка; дальше по документу событие не идёт (курсор уже в новой ячейке)
+        i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); insertNow(); } else if (e.key === 'Escape') { e.stopPropagation(); closePicker(); } });
+    }
+    ins.addEventListener('click', (e) => { e.preventDefault(); insertNow(); });
+    pick.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePicker(); });
+    doc.addEventListener('mousedown', (e) => { if (pick.style.display !== 'none' && !pick.contains(e.target) && !(e.target.closest && e.target.closest('[data-cmd="table"]'))) closePicker(); }, true);
+    const openPicker = (btn) => {
+        const s = doc.getSelection();
+        const r0 = s && s.rangeCount ? s.getRangeAt(0) : null;
+        const host = r0 && _blankHostOf(r0.startContainer);
+        if (!host || !_blankTablesOn(host)) return;
+        saved = { node: r0.startContainer, offset: r0.startOffset };   // курсор врача: поля чисел заберут фокус
+        setSize(3, 4);
+        const b = btn.getBoundingClientRect();
+        const docH = doc.documentElement.scrollHeight;   // до показа: окно не должно удлинять лист
+        pick.style.left = Math.max(6, b.left + sx() - 120) + 'px';
+        pick.style.top = (b.bottom + sy() + 6) + 'px';
+        pick.style.display = 'block';
+        // у конца листа места снизу нет — окно открывается вверх от кнопки
+        if (b.bottom + sy() + 6 + pick.offsetHeight > docH) pick.style.top = Math.max(6, b.top + sy() - pick.offsetHeight - 6) + 'px';
+    };
+
+    // ─── панель таблицы ────────────────────────────────────────────────────────
+    const panel = doc.createElement('div');
+    panel.setAttribute('data-bk-tbl', '');
+    panel.style.cssText = 'position:absolute;display:none;z-index:99998;background:#111827;border-radius:8px;padding:3px;box-shadow:0 6px 18px rgba(0,0,0,.28);white-space:nowrap;';
+    const OPS = [
+        ['row+', tr('+ строка'), tr('Добавить строку ниже')],
+        ['col+', tr('+ столбец'), tr('Добавить столбец справа')],
+        ['row-', tr('− строка'), tr('Удалить строку')],
+        ['col-', tr('− столбец'), tr('Удалить столбец')],
+        ['del', tr('Удалить таблицу'), tr('Удалить таблицу')],
+    ];
+    for (const [op, label, title] of OPS) {
+        const b = doc.createElement('button');
+        b.type = 'button';
+        b.setAttribute('data-tbl', op);
+        b.textContent = label;
+        b.title = title;
+        b.style.cssText = 'border:0;background:transparent;color:' + (op === 'del' ? '#fca5a5' : '#fff') + ';cursor:pointer;padding:6px 9px;border-radius:5px;' + font;
+        panel.appendChild(b);
+    }
+    doc.body.appendChild(panel);
+    const refresh = () => {
+        const cc = _blankCaretCell(doc);
+        if (!cc) { panel.style.display = 'none'; return; }
+        // под таблицей, по правому краю: левая часть строки под ней (абзац для продолжения) свободна для щелчка
+        const t = cc.cell.closest('table');
+        const r = t.getBoundingClientRect();
+        panel.style.display = 'block';
+        panel.style.left = Math.max(6, r.right + sx() - panel.offsetWidth) + 'px';
+        panel.style.top = (r.bottom + sy() + 6) + 'px';
+        const rb = panel.querySelector('[data-tbl="row-"]');
+        const can = canRemoveRow(cc.cell, _blankPartsOf(doc, cc.key));
+        rb.disabled = !can;
+        rb.style.opacity = can ? '1' : '.4';
+        rb.title = can ? tr('Удалить строку') : tr('Строку заголовка не удалить, пока в таблице есть строки');
+    };
+    doc.addEventListener('selectionchange', refresh);
+    const run = (op) => {
+        const cc = _blankCaretCell(doc);
+        if (!cc) return;
+        const parts = _blankPartsOf(doc, cc.key);
+        const ask = () => !tableHasText(tableChain(cc.cell, parts)) || confirm(tr('Удалить таблицу вместе с текстом в ней?'));
+        let at = null;
+        if (op === 'row+') at = addRow(cc.cell, parts);
+        else if (op === 'col+') at = addColumn(cc.cell, parts);
+        else if (op === 'row-') {
+            // последняя строка таблицы — вместе с ней уходит и таблица
+            const left = tableChain(cc.cell, parts).reduce((n, t) => n + [...t.querySelectorAll('tr')].filter((r) => !r.closest('[data-cont-head]')).length, 0);
+            if (left <= 1 && !ask()) return;
+            at = removeRow(cc.cell, parts);
+        }
+        else if (op === 'col-') {
+            const one = tableChain(cc.cell, parts).every((t) => [...t.querySelectorAll('tr')].every((tr0) => tr0.children.length <= 1));
+            if (one && !ask()) return;
+            at = removeColumn(cc.cell, parts);
+        } else if (op === 'del') { if (!ask()) return; at = deleteTable(cc.cell, parts); }
+        if (!at) return;
+        _blankPutCaret(doc, at);
+        _blankFireInput(_blankHostOf(at.node) || cc.host);
+        refresh();
+    };
+    panel.addEventListener('mousedown', (e) => {
+        const b = e.target.closest && e.target.closest('[data-tbl]');
+        if (!b) return;
+        e.preventDefault();   // выделение остаётся в ячейке
+        if (!b.disabled) run(b.getAttribute('data-tbl'));
+    });
+
+    // ─── клавиши в ячейке ──────────────────────────────────────────────────────
+    doc.addEventListener('keydown', (e) => {
+        if ((e.key !== 'Tab' && e.key !== 'Enter') || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+        if (e.target && e.target.closest && e.target.closest('[data-bk-tblpick],[data-bk-tbl]')) return;   // клавиши окна размера и панели — их
+        const cc = _blankCaretCell(doc);
+        if (!cc) return;   // вне таблицы — как было
+        if (e.key === 'Enter') {
+            if (e.shiftKey) return;   // Shift+Enter браузер и так переносит строку
+            e.preventDefault();
+            let ok = false;
+            try { ok = doc.execCommand('insertLineBreak'); } catch (err) { ok = false; }
+            if (!ok) {
+                const s = doc.getSelection();
+                _blankPutCaret(doc, insertCellBreak(s.anchorNode, s.anchorOffset));
+                _blankFireInput(cc.host);
+            }
+            return;
+        }
+        e.preventDefault();
+        const parts = _blankPartsOf(doc, cc.key);
+        const next = cellStep(cc.cell, parts, e.shiftKey);
+        if (next) { _blankPutCaret(doc, cellCaret(next, true)); return; }
+        if (e.shiftKey) return;   // первая ячейка — дальше некуда
+        const at = addRow(cc.cell, parts);   // Tab в последней ячейке — новая строка
+        if (!at) return;
+        const first = at.node.parentNode && at.node.parentNode.firstElementChild;
+        _blankPutCaret(doc, cellCaret(first || at.node));
+        _blankFireInput(_blankHostOf(at.node) || cc.host);
+    });
+    return { openPicker };
+}
+export const wireTables = (doc) => _blankWireTables(doc);   // DOC_RICH_FORMAT_V1 (T3) — экспорт для проверки (headless Chrome)
 
 // Продолжение поля на следующей странице: обёртка с видом блока (.sec) и поле
 // [data-cont-of] с видом раздела (.sec-b), которое правит то же поле формы.

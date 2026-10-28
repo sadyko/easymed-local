@@ -11989,4 +11989,21 @@ export const STRINGS = {
   "Если имя не открывается — откройте Easy-Med по адресу-числу и сообщите администратору.": {"en":"If the name does not open, open Easy-Med by the numeric address and tell the administrator.","ru":"Если имя не открывается — откройте Easy-Med по адресу-числу и сообщите администратору.","uz":"Agar nom ochilmasa — Easy-Med’ni raqamli manzil orqali oching va administratorga xabar bering."},   // LAN_ADDRESS_V1
   "Физический адрес этого компьютера — случайный: Windows меняет его для этой сети Wi-Fi, и резервирование по нему не сработает. Сначала выключите «Случайные аппаратные адреса» (Параметры → Сеть и Интернет → Wi-Fi → свойства этой сети) и откройте этот экран снова — физический адрес станет постоянным.": {"en":"This computer’s physical address is random: Windows changes it for this Wi-Fi network, so a reservation by it will not work. First turn off \"Random hardware addresses\" (Settings → Network & Internet → Wi-Fi → this network’s properties) and open this screen again — the physical address will become permanent.","ru":"Физический адрес этого компьютера — случайный: Windows меняет его для этой сети Wi-Fi, и резервирование по нему не сработает. Сначала выключите «Случайные аппаратные адреса» (Параметры → Сеть и Интернет → Wi-Fi → свойства этой сети) и откройте этот экран снова — физический адрес станет постоянным.","uz":"Bu kompyuterning fizik manzili tasodifiy: Windows uni shu Wi-Fi tarmog‘i uchun o‘zgartiradi, shuning uchun u bo‘yicha band qilish ishlamaydi. Avval «Random hardware addresses» (Tasodifiy apparat manzillari) ni o‘chiring (Settings → Network & Internet → Wi-Fi → shu tarmoq xususiyatlari) va bu ekranni qayta oching — fizik manzil doimiy bo‘ladi."},   // LAN_ADDRESS_V1
   // /LAN_ADDRESS_V1
+  // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в документе кабинета врача (views/service-workspace.js _blankWireTables)
+  "Размер таблицы": {"en":"Table size","ru":"Размер таблицы","uz":"Jadval o‘lchami"},   // DOC_RICH_FORMAT_V1
+  "Строки": {"en":"Rows","ru":"Строки","uz":"Qatorlar"},   // DOC_RICH_FORMAT_V1
+  "Столбцы": {"en":"Columns","ru":"Столбцы","uz":"Ustunlar"},   // DOC_RICH_FORMAT_V1
+  "Вставить таблицу": {"en":"Insert table","ru":"Вставить таблицу","uz":"Jadval qo‘shish"},   // DOC_RICH_FORMAT_V1
+  "+ строка": {"en":"+ row","ru":"+ строка","uz":"+ qator"},   // DOC_RICH_FORMAT_V1
+  "+ столбец": {"en":"+ column","ru":"+ столбец","uz":"+ ustun"},   // DOC_RICH_FORMAT_V1
+  "− строка": {"en":"− row","ru":"− строка","uz":"− qator"},   // DOC_RICH_FORMAT_V1
+  "− столбец": {"en":"− column","ru":"− столбец","uz":"− ustun"},   // DOC_RICH_FORMAT_V1
+  "Удалить таблицу": {"en":"Delete table","ru":"Удалить таблицу","uz":"Jadvalni o‘chirish"},   // DOC_RICH_FORMAT_V1
+  "Добавить строку ниже": {"en":"Add a row below","ru":"Добавить строку ниже","uz":"Pastga qator qo‘shish"},   // DOC_RICH_FORMAT_V1
+  "Добавить столбец справа": {"en":"Add a column to the right","ru":"Добавить столбец справа","uz":"O‘ngga ustun qo‘shish"},   // DOC_RICH_FORMAT_V1
+  "Удалить строку": {"en":"Delete the row","ru":"Удалить строку","uz":"Qatorni o‘chirish"},   // DOC_RICH_FORMAT_V1
+  "Удалить столбец": {"en":"Delete the column","ru":"Удалить столбец","uz":"Ustunni o‘chirish"},   // DOC_RICH_FORMAT_V1
+  "Строку заголовка не удалить, пока в таблице есть строки": {"en":"The header row cannot be deleted while the table has rows","ru":"Строку заголовка не удалить, пока в таблице есть строки","uz":"Jadvalda qatorlar bor ekan, sarlavha qatorini o‘chirib bo‘lmaydi"},   // DOC_RICH_FORMAT_V1
+  "Удалить таблицу вместе с текстом в ней?": {"en":"Delete the table together with its text?","ru":"Удалить таблицу вместе с текстом в ней?","uz":"Jadval ichidagi matn bilan birga o‘chirilsinmi?"},   // DOC_RICH_FORMAT_V1
+  // /DOC_RICH_FORMAT_V1
 };
