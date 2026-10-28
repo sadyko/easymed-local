@@ -40,6 +40,7 @@ import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   /
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 import { sanitizeStoredHtml, htmlToText, richIsEmpty, hasMarkup } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком
+import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -6790,12 +6791,20 @@ function _syncBlankField(ctx, el) {
     if (ctx) resetSaveBtn(ctx);
     else { const b = document.querySelector('[data-save-btn]'); if (b) { wsState.saved = false; } }
 }
-// DOC_RICH_FORMAT_V1 (F1) — разметка поля бланка для формы: части по порядку,
-// каждая очищена (sanitizeStoredHtml). Продолжение на следующей странице
-// (A4_TEXT_SPLIT_V1; до T2 разбивка держит в нём строки текста) дописывается
-// своим блоком <div>. Пустые теги — пусто (F8).
-function _blankFieldHtml(parts) {
-    const html = parts.map((p, i) => {
+// DOC_RICH_FORMAT_V1 (F1) — разметка поля бланка для формы, очищенная
+// (sanitizeStoredHtml). Пустые теги — пусто (F8).
+// DOC_RICH_FORMAT_V1 (T2, F5) — поле, разделённое по страницам, уходит в форму
+// ОДНИМ ЦЕЛЫМ: копии частей сливаются тем же joinCont, что и перед разбивкой
+// (blank-split.js), — каждый список и таблица один раз, повтор заголовка и
+// метки продолжения и курсора выброшены. Живые части не трогаются: курсор
+// врача остаётся, где был. Склейка «часть + <div>продолжение</div>» (T1) давала
+// два списка и два заголовка таблицы; она осталась только запасным путём —
+// если копию собрать нельзя (без настоящего DOM).
+// Экспорт — для проверки.
+export function _blankFieldHtml(parts) {
+    let src = parts[0] || null;
+    if (parts.length > 1) { try { src = mergedFieldClone(parts); } catch (e) { src = null; } }
+    const html = src ? _blankPartHtml(parts[0], src) : parts.map((p, i) => {
         const part = _blankPartHtml(p);
         return i === 0 || !part ? part : '<div>' + part + '</div>';
     }).join('');
@@ -6804,8 +6813,10 @@ function _blankFieldHtml(parts) {
 // В поле с pre-wrap (простой текст бланка) «\n» — видимая строка: Chrome пишет
 // его там на Shift+Enter, и innerText видел его строкой. В разметку он уходит
 // <br>; в поле .rich (white-space:normal) «\n» — пробел и остаётся как есть.
-function _blankPartHtml(p) {
-    const html = sanitizeStoredHtml(p.innerHTML || '');
+// DOC_RICH_FORMAT_V1 (T2) — разметку можно взять у слитой копии (src), а
+// pre-wrap — только у живого поля p: у копии вне документа стиля нет.
+function _blankPartHtml(p, src = p) {
+    const html = sanitizeStoredHtml(src.innerHTML || '');
     if (!_blankPreWrap(p)) return html;
     return html.split(/(<[^<>]*>)/).map((s, i) => (i % 2 ? s : s.replace(/\r?\n/g, '<br>'))).join('');
 }
@@ -6830,6 +6841,15 @@ function _blankPreWrap(p) {
 // re-split on every run keeps it idempotent; the caret is saved and restored.
 // Non-text blocks transfer whole; absolutes (watermark/stamp) are ignored.
 // ===========================================================================
+// DOC_RICH_FORMAT_V1 (T2, F5) — поле С ОФОРМЛЕНИЕМ (список, таблица, жирный,
+// цвет) делится не строками innerText, а узлами (blank-split.js): между
+// блоками, пунктами списка, строками таблицы; продолжение — тот же список (ol
+// продолжает нумерацию) и та же таблица с повтором заголовка; обёртка
+// продолжения помечена data-cont-mode="rich". Слияние перед каждым проходом
+// возвращает узлы (joinCont), курсор — меткой в DOM. Такое продолжение делится
+// и дальше — длинный список или таблица идут на третью страницу. Простой текст
+// (только строки) делится прежним алгоритмом, слово в слово.
+// ===========================================================================
 const _A4 = { PAGE: 1123, MB: 48, MT: 56 };
 
 function _blankSaveCaret(doc) {
@@ -6842,6 +6862,10 @@ function _blankSaveCaret(doc) {
         const key = fieldEl.getAttribute('data-field') || fieldEl.getAttribute('data-cont-of');
         // global text offset across all parts of this field
         const parts = [...doc.querySelectorAll('[data-field="' + key + '"], [data-cont-of="' + key + '"]')];
+        // DOC_RICH_FORMAT_V1 (T2, F5) — у поля с оформлением узлы переезжают
+        // между частями, и смещение по тексту после этого указывает не туда:
+        // курсор помечается в самом DOM и едет вместе со своим текстом.
+        if (parts.some(fieldIsRich)) return insertCaretMark(sel.anchorNode, sel.anchorOffset) ? { key, mark: true } : null;
         let off = 0, found = false;
         for (const part of parts) {
             const walker = doc.createTreeWalker(part, 4 /* TEXT */);
@@ -6858,6 +6882,17 @@ function _blankSaveCaret(doc) {
 }
 function _blankRestoreCaret(doc, caret) {
     if (!caret) return;
+    // DOC_RICH_FORMAT_V1 (T2) — метка снимается всегда (и при сбое прохода), курсор — туда, где она стоит.
+    if (caret.mark) {
+        try {
+            const at = takeCaretMark(doc.body || doc.documentElement);
+            if (!at) return;
+            const r = doc.createRange();
+            r.setStart(at.node, at.offset); r.collapse(true);
+            const sel = doc.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        } catch (e) { /* caret restore is best-effort */ }
+        return;
+    }
     try {
         const parts = [...doc.querySelectorAll('[data-field="' + caret.key + '"], [data-cont-of="' + caret.key + '"]')];
         let off = caret.off;
@@ -6899,23 +6934,68 @@ function _paginateBlank(doc, ctx) {
     const sheet = doc.querySelector('.sheet');
     if (!sheet) return;
     const caret = _blankSaveCaret(doc);
-    // 1) merge continuations back into their primary field, drop separators
-    for (const cont of [...doc.querySelectorAll('[data-cont-wrap]')]) {
-        const key = cont.getAttribute('data-cont-wrap');
-        const contB = cont.querySelector('[data-cont-of]');
-        const primary = doc.querySelector('[data-field="' + key + '"]');
-        const t = contB ? String(contB.innerText || '') : '';
-        if (primary && t) primary.innerText = String(primary.innerText || '') + '\n' + t;
-        cont.remove();
-    }
-    for (const g of [...doc.querySelectorAll('.bk-pagesep')]) g.remove();
+    try {
+        // 1) merge continuations back into their primary field, drop separators
+        //    (document order: a field continued over pages 2 and 3 joins back in order)
+        for (const cont of [...doc.querySelectorAll('[data-cont-wrap]')]) {
+            const key = cont.getAttribute('data-cont-wrap');
+            const contB = cont.querySelector('[data-cont-of]');
+            const primary = doc.querySelector('[data-field="' + key + '"]');
+            if (primary && contB) _blankMergePart(primary, contB, cont.getAttribute('data-cont-mode'));
+            cont.remove();
+        }
+        for (const g of [...doc.querySelectorAll('.bk-pagesep')]) g.remove();
 
-    // 2) multi-pass split/transfer until stable (long docs need page 3, 4, …)
-    const view = doc.defaultView;
-    for (let pass = 0; pass < 6; pass++) {
-        if (!_blankPaginatePass(doc, sheet, view)) break;
+        // 2) multi-pass split/transfer until stable (long docs need page 3, 4, …)
+        const view = doc.defaultView;
+        for (let pass = 0; pass < 6; pass++) {
+            if (!_blankPaginatePass(doc, sheet, view)) break;
+        }
+    } finally {
+        _blankRestoreCaret(doc, caret);   // DOC_RICH_FORMAT_V1 (T2) — метка курсора не остаётся в DOM и при сбое
     }
-    _blankRestoreCaret(doc, caret);
+}
+export const paginateBlank = (doc) => _paginateBlank(doc, null);   // DOC_RICH_FORMAT_V1 (T2) — экспорт для проверки (headless Chrome)
+
+// DOC_RICH_FORMAT_V1 (T2, F5) — продолжение возвращается в поле. Простой текст с
+// обеих сторон (продолжение строками, data-cont-mode="text") — прежним
+// innerText, слово в слово; есть оформление — узлами (joinCont): разрезанный
+// список и таблица снова одни, повтор заголовка выброшен. Пустое продолжение
+// (врач стёр всё на следующей странице) строк не добавляет.
+function _blankMergePart(primary, contB, mode) {
+    if (mode !== 'rich' && !fieldIsRich(primary) && !fieldIsRich(contB)) {
+        const t = String(contB.innerText || '');
+        if (t) primary.innerText = String(primary.innerText || '') + '\n' + t;
+        return;
+    }
+    if (!contIsBlank(contB)) joinCont(primary, contB, mode === 'rich' ? 'rich' : 'text');
+}
+
+// Продолжение поля на следующей странице: обёртка с видом блока (.sec) и поле
+// [data-cont-of] с видом раздела (.sec-b), которое правит то же поле формы.
+// DOC_RICH_FORMAT_V1 (T2) — режим разреза (data-cont-mode) решает, как его
+// слить; правится продолжение, только если правится само поле (пока строка
+// загружается, поле заперто — и продолжение тоже).
+function _blankContWrap(doc, b, fieldEl, key, mode) {
+    const wrap = doc.createElement('div');
+    wrap.setAttribute('data-cont-wrap', key);
+    wrap.setAttribute('data-cont-mode', mode);
+    wrap.className = b.className;   // same .sec look
+    const contB = doc.createElement('div');
+    contB.className = fieldEl.className;   // .sec-b styling
+    contB.setAttribute('data-cont-of', key);
+    contB.setAttribute('contenteditable', fieldEl.getAttribute('contenteditable') === 'true' ? 'true' : 'false');
+    contB.addEventListener('input', () => _syncBlankField(null, contB));
+    wrap.appendChild(contB);
+    return wrap;
+}
+// Разрыв страницы после блока b и продолжение за ним.
+function _blankPlaceCont(doc, sheet, b, wrap, contentBottom, page, _z) {
+    const realBottom = (b.getBoundingClientRect().bottom - sheet.getBoundingClientRect().top) / _z;
+    const fill = Math.max(0, contentBottom - realBottom);
+    const sep = _blankMakeSep(doc, fill, page + 1);
+    b.parentNode.insertBefore(sep, b.nextSibling);
+    sep.parentNode.insertBefore(wrap, sep.nextSibling);
 }
 
 function _blankPaginatePass(doc, sheet, view) {
@@ -6937,40 +7017,50 @@ function _blankPaginatePass(doc, sheet, view) {
         // ---- the block crosses the boundary ----
         const field = b.querySelector ? b.querySelector('[data-field]') : null;
         const fieldKey = field && field.getAttribute('data-field');
-        const lines = field ? String(field.innerText || '').split('\n') : [];
         const avail = contentBottom - top;
-        if (field && fieldKey && fieldKey !== 'primary_diagnosis' && lines.length > 1 && avail > 70) {
-            // split: keep the lines that fit, continue the rest on the next page
-            const all = lines.slice();
-            let lo = 1, hi = all.length - 1, k = 0;
-            while (lo <= hi) {
-                const mid = (lo + hi) >> 1;
-                field.innerText = all.slice(0, mid).join('\n');
-                const hNow = b.getBoundingClientRect().height / _z;
-                if (top + hNow <= contentBottom) { k = mid; lo = mid + 1; } else { hi = mid - 1; }
+        // DOC_RICH_FORMAT_V1 (T2, F5) — поле с оформлением делится узлами; его
+        // продолжение (data-cont-mode="rich") — тоже, даже если в нём самом
+        // оформления нет. Меряет вёрстка: fits — блок с оставшейся частью поля,
+        // tooTall — блок на месте разреза (выше целой страницы — остаётся, где
+        // был). Не влезло ничего — поле не тронуто, и блок ниже переносится
+        // целиком, как раньше. Без оформления — прежний алгоритм строк (else).
+        const contRich = !field && b.getAttribute && b.getAttribute('data-cont-mode') === 'rich' && b.querySelector ? b.querySelector('[data-cont-of]') : null;
+        const richEl = field || contRich;
+        if (richEl && (contRich || fieldIsRich(field))) {
+            const rKey = field ? fieldKey : contRich.getAttribute('data-cont-of');
+            if (rKey && rKey !== 'primary_diagnosis' && avail > 70) {
+                const wrap = _blankContWrap(doc, b, richEl, rKey, 'rich');
+                const fits = () => top + b.getBoundingClientRect().height / _z <= contentBottom;
+                const tooTall = (n) => !!(n && n.nodeType === 1 && n.getBoundingClientRect().height / _z > PAGE - MB - MT - 80);
+                if (splitRichField(richEl, wrap.firstChild, { fits, tooTall })) {
+                    _blankPlaceCont(doc, sheet, b, wrap, contentBottom, page, _z);
+                    page += 1; changed = true;
+                    continue;
+                }
             }
-            if (k >= 1) {
-                field.innerText = all.slice(0, k).join('\n');
-                const rest = all.slice(k).join('\n');
-                const wrap = doc.createElement('div');
-                wrap.setAttribute('data-cont-wrap', fieldKey);
-                wrap.className = b.className;   // same .sec look
-                const contB = doc.createElement('div');
-                contB.className = field.className;   // .sec-b styling
-                contB.setAttribute('data-cont-of', fieldKey);
-                contB.setAttribute('contenteditable', 'true');
-                contB.innerText = rest;
-                contB.addEventListener('input', () => _syncBlankField(null, contB));
-                wrap.appendChild(contB);
-                const realBottom = (b.getBoundingClientRect().bottom - sheet.getBoundingClientRect().top) / _z;
-                const fill = Math.max(0, contentBottom - realBottom);
-                const sep = _blankMakeSep(doc, fill, page + 1);
-                b.parentNode.insertBefore(sep, b.nextSibling);
-                sep.parentNode.insertBefore(wrap, sep.nextSibling);
-                page += 1; changed = true;
-                continue;
+        } else {
+            const lines = field ? String(field.innerText || '').split('\n') : [];
+            if (field && fieldKey && fieldKey !== 'primary_diagnosis' && lines.length > 1 && avail > 70) {
+                // split: keep the lines that fit, continue the rest on the next page
+                const all = lines.slice();
+                let lo = 1, hi = all.length - 1, k = 0;
+                while (lo <= hi) {
+                    const mid = (lo + hi) >> 1;
+                    field.innerText = all.slice(0, mid).join('\n');
+                    const hNow = b.getBoundingClientRect().height / _z;
+                    if (top + hNow <= contentBottom) { k = mid; lo = mid + 1; } else { hi = mid - 1; }
+                }
+                if (k >= 1) {
+                    field.innerText = all.slice(0, k).join('\n');
+                    const rest = all.slice(k).join('\n');
+                    const wrap = _blankContWrap(doc, b, field, fieldKey, 'text');
+                    wrap.firstChild.innerText = rest;
+                    _blankPlaceCont(doc, sheet, b, wrap, contentBottom, page, _z);
+                    page += 1; changed = true;
+                    continue;
+                }
+                field.innerText = all.join('\n');   // nothing fit — fall through to transfer
             }
-            field.innerText = all.join('\n');   // nothing fit — fall through to transfer
         }
         if (bh > PAGE - MB - MT - 80) {   // unsplittable oversize: let it flow
             while (top + bh > page * PAGE - MB) page += 1;

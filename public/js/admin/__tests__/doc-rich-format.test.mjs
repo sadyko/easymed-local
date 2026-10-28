@@ -159,7 +159,7 @@ test('F1/F2: список, набранный в бланке, ложится в
     assert.equal(field(ctx, 'physical_exam').innerHTML, '');
 });
 
-test('F1: перевод строки в поле с pre-wrap — строка (<br>); поле .rich — как есть; продолжение на следующей странице дописывается блоком', async () => {
+test('F1: перевод строки в поле с pre-wrap — строка (<br>); поле .rich — как есть; без настоящего DOM продолжение дописывается блоком (запасной путь)', async () => {
     const ctx = await opened(2, notesOf({ physical_exam: 'черновик', hpi: 'черновик' }));
     // Shift+Enter в pre-wrap Chrome пишет «\n», и раньше innerText видел строку
     typeInBlank(ctx, 'physical_exam', 'строка1\nстрока2 <b>жирно</b>');
@@ -168,7 +168,10 @@ test('F1: перевод строки в поле с pre-wrap — строка (
     el.classList.add('rich');   // white-space:normal — «\n» там пробел
     typeInBlank(ctx, 'hpi', 'а\nб <b>в</b>');
     assert.equal(field(ctx, 'hpi').innerHTML, 'а\nб <b>в</b>');
-    // A4_TEXT_SPLIT_V1 — до T2 продолжение держит строки текстом; части склеиваются по порядку
+    // A4_TEXT_SPLIT_V1 — части склеиваются по порядку. DOC_RICH_FORMAT_V1 (T2): в
+    // браузере копии частей СЛИВАЮТСЯ (один список, одна таблица) — это проверяет
+    // doc-rich-split.test.mjs на DOM с узлами. У El этого стенда нет cloneNode,
+    // и здесь виден запасной путь T1: продолжение своим <div>, без потерь.
     const doc = frameDoc(ctx);
     const cont = new El('div');
     cont.setAttribute('data-cont-of', 'physical_exam');
