@@ -143,6 +143,12 @@ test('активность: статусы по окнам 30 / 90, окно N �
   assert.equal(referralsActivity(db, { days: 14 }, admin).days, 30, 'незнакомое окно — 30');
   assert.deepEqual(referralsActivity(db, { representative_id: 4 }, admin).sources.map((s) => s.id), [A]);
   assert.deepEqual(referralsActivity(db, { representative_id: 'none' }, admin).sources.map((s) => s.id), [B]);
+
+  // FIX_318_V1 (M2) — «Telegram» у врача — только подтверждённое подключение.
+  const l = Number(db.prepare("INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone) VALUES (?, '800', '998912098887')").run(A).lastInsertRowid);
+  assert.equal(referralsActivity(db, {}, admin).sources.find((s) => s.id === A).telegram, false, 'ждёт подтверждения — ещё не подключён');
+  db.prepare("UPDATE doctor_bot_links SET status = 'confirmed' WHERE id = ?").run(l);
+  assert.equal(referralsActivity(db, {}, admin).sources.find((s) => s.id === A).telegram, true);
 });
 
 test('подробнее: визиты источника за период с услугами и пациентом; направления врача', () => {

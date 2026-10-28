@@ -69,7 +69,7 @@ test('охват и подключённые: внешние активные, �
   const src = db.prepare('INSERT INTO referral_sources (name, first_name, phone, active) VALUES (?,?,?,?)');
   src.run('А', 'А', '+998901111111', 1); src.run('Б', 'Б', '', 1); src.run('В', 'В', '+998902222222', 1); src.run('Г', 'Г', '+998903333333', 0);
   const A = db.prepare("SELECT id FROM referral_sources WHERE name = 'А'").get().id;
-  db.prepare("INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, tg_name) VALUES (?, '800', '998901111111', 'Доктор А')").run(A);
+  db.prepare("INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, tg_name, status) VALUES (?, '800', '998901111111', 'Доктор А', 'confirmed')").run(A);
   const link = db.prepare('SELECT id FROM doctor_bot_links').get().id;
   db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (3, 'd', 'x', 'doctor')").run();
   db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (10, 'П', '+998900000001')").run();
@@ -77,11 +77,12 @@ test('охват и подключённые: внешние активные, �
   db.prepare("INSERT INTO doctor_bot_notifications (visit_id, referral_source_id, link_id, chat_id, text, viewed_at) VALUES (100, ?, ?, '800', 'x', strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(A, link);
 
   const s = doctorBotStats(db, {}, admin);
-  assert.deepEqual(s, { doctors_active: 3, with_phone: 2, connected: 1, without_phone: 1, notifications_30d: 1, viewed_30d: 1 });
+  assert.deepEqual(s, { doctors_active: 3, with_phone: 2, connected: 1, pending: 0, without_phone: 1, notifications_30d: 1, viewed_30d: 1 });
   const list = doctorBotLinksList(db, {}, admin);
   assert.equal(list.length, 1);
   assert.equal(list[0].source_name, 'А');
   assert.equal(list[0].tg_name, 'Доктор А');
+  assert.equal(list[0].status, 'confirmed');
   assert.equal(list[0].notifications, 1);
   assert.ok(list[0].last_notified_at);
 
@@ -90,4 +91,102 @@ test('охват и подключённые: внешние активные, �
   assert.deepEqual(doctorBotLinkRevoke(db, { id: link }, admin), { id: link, revoked: false }, 'повторно — уже отозвана');
   assert.equal(doctorBotLinksList(db, {}, admin).length, 0);
   assert.equal(doctorBotStats(db, {}, admin).connected, 0);
+});
+
+// ---------------------------------------------------------------------------
+// FIX_318_V1 — ревью 3.18.0 (бот для врачей-источников)
+// ---------------------------------------------------------------------------
+import { doctorBotLinkConfirm, doctorBotLinkReject } from './doctor-bot.js';
+import { botConfig } from '../doctor-bot/index.js';
+import { SAME_BOT_MESSAGE, botIdOfToken } from '../doctor-bot/settings.js';
+import { encryptToken, loadOrCreateKey } from '../telegram/crypto.js';
+import { setDataDir } from '../control/config.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+
+// Ключ шифрования токенов — во временной папке данных: data/ клиники тесты не трогают.
+function withDataDir(fn) {
+  return async () => {
+    setDataDir(tmpDir('em-docbot-'));
+    try { await fn(); } finally { setDataDir(null); }
+  };
+}
+const neverFetch = { fetchImpl: async () => { throw new Error('в сеть ходить не должны'); } };
+
+test('M1: токен пациентского бота (getMe().id = telegram_settings.bot_id) — отказ понятным текстом, токен не сохранён, бот не включён', withDataDir(async () => {
+  const db = fresh();
+  db.prepare("UPDATE telegram_settings SET bot_id = '42' WHERE id = 1").run();   // пациентский бот — @clinic_doctors_bot с id 42 из okMe
+  await assert.rejects(() => doctorBotSettingsSave(db, { bot_token: TOKEN }, admin, okMe),
+    (e) => e instanceof RpcError && e.status === 400 && e.message === SAME_BOT_MESSAGE);
+  const s = doctorBotSettingsGet(db, {}, admin);
+  assert.deepEqual([s.has_token, s.enabled], [false, false], 'токен пациентского бота не остаётся в настройках бота для врачей');
+}));
+
+test('M1: тот же бот узнаётся по токену ещё до Telegram (номер бота — начало токена), даже если у пациентского бота нет bot_id', withDataDir(async () => {
+  const db = fresh();
+  assert.equal(botIdOfToken(TOKEN), '1234567890');
+  db.prepare('UPDATE telegram_settings SET bot_token_enc = ?, bot_id = \'\' WHERE id = 1').run(encryptToken('1234567890:AAEpatientpatientpatientpatient0000', loadOrCreateKey()));
+  await assert.rejects(() => doctorBotSettingsSave(db, { bot_token: TOKEN }, admin, neverFetch), (e) => e.status === 400 && e.message === SAME_BOT_MESSAGE);
+  assert.equal(doctorBotSettingsGet(db, {}, admin).has_token, false);
+}));
+
+test('M1: пациентский бот стал тем же ботом позже — проверка связи отказывает и выключает бот для врачей; поллер его не запускает', withDataDir(async () => {
+  const db = fresh();
+  await doctorBotSettingsSave(db, { bot_token: TOKEN }, admin, okMe);
+  assert.equal(doctorBotSettingsGet(db, {}, admin).enabled, true);
+  assert.ok(botConfig(db), 'свой бот — поллер работает');
+  db.prepare("UPDATE telegram_settings SET bot_id = '1234567890' WHERE id = 1").run();
+  assert.equal(botConfig(db), null, 'тот же бот, что пациентский, — поллер не запускается (два поллера одного токена отнимают друг у друга сообщения)');
+  db.prepare("UPDATE telegram_settings SET bot_id = '42' WHERE id = 1").run();
+  const t = await doctorBotTestConnection(db, {}, admin, okMe);
+  assert.equal(t.ok, false);
+  assert.equal(t.error, SAME_BOT_MESSAGE);
+  assert.equal(t.settings.enabled, false, 'бот для врачей выключен');
+}));
+
+test('M2: ожидающие подключения — в списке со статусом и хвостом номера; подтвердить и отклонить может только администратор; подтверждённое считается подключённым', () => {
+  const db = fresh();
+  const src = db.prepare('INSERT INTO referral_sources (name, first_name, phone, active) VALUES (?,?,?,?)');
+  const A = Number(src.run('Набиев Ойбек', 'Ойбек', '+998 90 310 65 70', 1).lastInsertRowid);
+  const B = Number(src.run('Абдурахманова Дилара', 'Дилара', '998912098887', 1).lastInsertRowid);
+  const ins = db.prepare("INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, tg_name) VALUES (?, ?, ?, ?)");
+  const la = Number(ins.run(A, '800', '998903106570', 'Ойбек').lastInsertRowid);
+  const lb = Number(ins.run(B, '801', '998912098887', 'Дилара').lastInsertRowid);
+  const list = doctorBotLinksList(db, {}, admin);
+  assert.deepEqual(list.map((l) => [l.source_name, l.status, l.phone_tail]).sort(), [['Абдурахманова Дилара', 'pending', '8887'], ['Набиев Ойбек', 'pending', '6570']]);
+  assert.ok(list.every((l) => l.linked_at), 'дата заявки');
+  assert.deepEqual(doctorBotStats(db, {}, admin).connected, 0);
+  assert.deepEqual(doctorBotStats(db, {}, admin).pending, 2);
+
+  assert.throws(() => doctorBotLinkConfirm(db, { id: la }, registrar), (e) => e.status === 403);
+  assert.throws(() => doctorBotLinkReject(db, { id: lb }, registrar), (e) => e.status === 403);
+  assert.throws(() => doctorBotLinkConfirm(db, { id: 'x' }, admin), (e) => e.status === 400);
+  assert.deepEqual(doctorBotLinkConfirm(db, { id: la }, admin), { id: la, confirmed: true });
+  const row = db.prepare('SELECT status, confirmed_by, confirmed_at FROM doctor_bot_links WHERE id = ?').get(la);
+  assert.equal(row.status, 'confirmed');
+  assert.equal(row.confirmed_by, 1);
+  assert.ok(row.confirmed_at);
+  assert.throws(() => doctorBotLinkConfirm(db, { id: la }, admin), (e) => e.status === 409, 'уже подтверждено');
+
+  assert.deepEqual(doctorBotLinkReject(db, { id: lb }, admin), { id: lb, rejected: true });
+  const rej = db.prepare('SELECT status, revoked_at, revoked_by FROM doctor_bot_links WHERE id = ?').get(lb);
+  assert.equal(rej.status, 'rejected');
+  assert.ok(rej.revoked_at);
+  assert.equal(rej.revoked_by, 1);
+  assert.throws(() => doctorBotLinkConfirm(db, { id: lb }, admin), (e) => e.status === 409, 'отклонённое не подтверждается');
+
+  const s = doctorBotStats(db, {}, admin);
+  assert.deepEqual([s.connected, s.pending], [1, 0]);
+  for (const n of ['doctor_bot_link_confirm', 'doctor_bot_link_reject']) assert.equal(typeof getRpc(n), 'function', n);
+});
+
+test('M2: подтвердить нельзя, если врача выключили или номер в справочнике уже другой', () => {
+  const db = fresh();
+  db.prepare('DROP TRIGGER doctor_bot_links_source_changed').run();   // проверка самого подтверждения, без отзыва триггером
+  const A = Number(db.prepare("INSERT INTO referral_sources (name, first_name, phone, active) VALUES ('А', 'А', '+998903106570', 1)").run().lastInsertRowid);
+  const l = Number(db.prepare("INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone) VALUES (?, '800', '998903106570')").run(A).lastInsertRowid);
+  db.prepare("UPDATE referral_sources SET phone = '+998911111111' WHERE id = ?").run(A);
+  assert.throws(() => doctorBotLinkConfirm(db, { id: l }, admin), (e) => e.status === 409);
+  db.prepare("UPDATE referral_sources SET phone = '+998903106570', active = 0 WHERE id = ?").run(A);
+  assert.throws(() => doctorBotLinkConfirm(db, { id: l }, admin), (e) => e.status === 409);
+  assert.equal(db.prepare('SELECT status FROM doctor_bot_links WHERE id = ?').get(l).status, 'pending');
 });

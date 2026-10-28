@@ -39,11 +39,52 @@ export async function renderReferralsBot(host) {
             kpi(String(t.doctors_active ?? '…'), 'Активных врачей'),
             kpi(String(t.with_phone ?? '…'), 'С телефоном в базе'),
             kpi(String(t.connected ?? '…'), 'Подключили бота', { accent: 'ok' }),
+            // FIX_318_V1 (M2) — подключения, которые ждут администратора.
+            kpi(String(t.pending ?? '…'), 'Ждут подтверждения', { accent: t.pending > 0 ? 'warn' : '' }),
             kpi(String(t.without_phone ?? '…'), 'Без телефона — не смогут подключиться', { accent: t.without_phone > 0 ? 'warn' : '' }),
             kpi(String(t.notifications_30d ?? '…'), 'Уведомлений за 30 дней'),
             kpi(String(t.viewed_30d ?? '…'), 'Из них просмотрено'),
         ));
+        const pending = pendingCard();
+        if (pending) refs.body.appendChild(pending);
         refs.body.appendChild(linksCard());
+    }
+
+    // FIX_318_V1 (M2, ревью 3.18.0) — ПОДКЛЮЧЕНИЕ — ТОЛЬКО С СОГЛАСИЯ КЛИНИКИ.
+    // Врач прислал номер из Telegram — подключение ждёт здесь; администратор
+    // сверяет врача (имя, номер в справочнике, последние цифры присланного
+    // номера) и подтверждает или отклоняет. До подтверждения бот ему ничего не
+    // присылает (server/services/doctor-bot/notify.js).
+    function pendingCard() {
+        const pending = (state.links || []).filter((l) => l.status === 'pending');
+        if (!pending.length) return null;
+        const act = (l, name, okText) => async (ev) => {
+            const btn = ev && ev.currentTarget;
+            if (btn) btn.disabled = true;
+            try { await rpc(name, { id: l.id }); toast(okText, 'success'); await reloadStats(); }
+            catch (e) { toast((e && e.message) || tr('Не удалось сохранить.'), 'error'); if (btn) btn.disabled = false; }
+        };
+        const columns = [
+            { label: 'Врач', value: (l) => nameCell(l.source_name, subline(['№ ' + (l.source_code || ''), l.source_phone])) },
+            { label: 'Номер из Telegram', value: (l) => (l.phone_tail ? '…' + l.phone_tail : '—') },
+            { label: 'Telegram', value: (l) => subline([l.tg_name, l.tg_username ? '@' + l.tg_username : '']) || '—' },
+            { label: 'Отправил номер', value: (l) => dmy(l.linked_at) },
+            { label: '', value: (l) => h('div', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end' } },
+                h('button', { class: 'btn btn-sm btn-primary', type: 'button', 'data-bot-confirm': l.id,
+                    onclick: act(l, 'doctor_bot_link_confirm', 'Подключение подтверждено — врач будет получать уведомления.') }, tr('Подтвердить')),
+                h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-bot-reject': l.id,
+                    onclick: async (ev) => {
+                        if (!window.confirm(tr('Отклонить подключение? Врач не будет получать уведомления, пока не отправит номер снова и вы не подтвердите.'))) return;
+                        await act(l, 'doctor_bot_link_reject', 'Подключение отклонено.')(ev);
+                    } }, tr('Отклонить'))) },
+        ];
+        return h('div', { class: 'card', style: { marginBottom: '16px' }, 'data-bot-pending': '' },
+            h('div', { class: 'card-header' },
+                h('h3', null, Icon('Clock', { size: 16 }), ' ', tr('Ожидают подтверждения')),
+                h('span', { class: 'muted' }, String(pending.length))),
+            h('p', { class: 'muted', style: { margin: '0', padding: '12px 18px 0', fontSize: '13.5px' } },
+                'Врач прислал номер из Telegram. Сверьте имя и последние цифры номера и подтвердите — до подтверждения бот ему ничего не присылает.'),
+            simpleTable(columns, pending));
     }
 
     function statusTag() {
@@ -98,6 +139,9 @@ export async function renderReferralsBot(host) {
         card.appendChild(h('p', { style: { margin: '0', fontSize: '13.5px' } },
             h('b', null, 'Как подключиться врачу.'), ' ',
             'Врач открывает бота, нажимает «Start» и отправляет свой номер кнопкой. Номер должен совпадать с телефоном врача во вкладке «Врачи-источники». После этого, когда направленный им пациент придёт (визит отмечен «пришёл»), бот пришлёт ФИО пациента и список услуг — без цен. Сообщение уходит через 2 минуты после последней добавленной услуги, о каждом визите один раз; о визитах до подключения врача бот не пишет.'));
+        // FIX_318_V1 (M2) — подтверждение администратором и «о каком визите пишет».
+        card.appendChild(h('p', { style: { margin: '6px 0 0', fontSize: '13.5px' } },
+            'Подключение начинает работать после вашего подтверждения (список «Ожидают подтверждения» ниже). Номер, указанный у двух врачей, не подключается. Бот пишет только о визитах, в которых этот врач указан направившим, и замолкает, если врача выключить или сменить ему номер.'));
 
         const actions = h('div', { class: 'row', style: { gap: '8px', marginTop: '14px', flexWrap: 'wrap' } });
         const testBtn = h('button', { class: 'btn', type: 'button', disabled: !s.has_token,
@@ -139,7 +183,7 @@ export async function renderReferralsBot(host) {
     }
 
     function linksCard() {
-        const links = state.links || [];
+        const links = (state.links || []).filter((l) => l.status === 'confirmed');   // FIX_318_V1 (M2) — ждущие — в своей карточке
         const columns = [
             { label: 'Врач', value: (l) => nameCell(l.source_name, subline(['№ ' + (l.source_code || ''), l.source_phone])) },
             { label: 'Telegram', value: (l) => subline([l.tg_name, l.tg_username ? '@' + l.tg_username : '']) || '—' },

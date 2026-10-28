@@ -220,8 +220,9 @@ export function referralsInternal(db, args, user) {
 // ---------------------------------------------------------------------------
 function botLinkedSourceIds(db) {
   // Таблица появляется миграцией 253 (бот врачей): до неё — никто не подключён.
+  // FIX_318_V1 (M2) — подключён — только ПОДТВЕРЖДЁННЫЙ администратором (мигр. 257).
   try {
-    return new Set(db.prepare('SELECT referral_source_id FROM doctor_bot_links WHERE revoked_at IS NULL').all()
+    return new Set(db.prepare("SELECT referral_source_id FROM doctor_bot_links WHERE revoked_at IS NULL AND status = 'confirmed'").all()
       .map((r) => r.referral_source_id));
   } catch { return new Set(); }
 }
