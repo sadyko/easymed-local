@@ -24,8 +24,12 @@ const { hashPassword } = authService;
 
 // Ровно то, что отдаёт сессия. Новый ключ — сознательное решение: дописать
 // сюда и убедиться, что он не секрет (пароль, деньги, личные данные).
-const SESSION_KEYS = ['custom_role_code', 'department_id', 'extra_roles', 'full_name', 'id', 'is_active',
+// ADMIN_ACT_AS_V1 — acting_admin: null или {id, full_name} администратора,
+// работающего от имени сотрудника (routes/act-as.test.js). Это не колонка users:
+// его ставит сессия, поэтому в списке колонок (SESSION_USER_COLUMNS) его нет.
+const SESSION_KEYS = ['acting_admin', 'custom_role_code', 'department_id', 'extra_roles', 'full_name', 'id', 'is_active',
   'is_doctor', 'must_change_password', 'role', 'username'];
+const SESSION_COLUMN_KEYS = SESSION_KEYS.filter((k) => k !== 'acting_admin');   // ADMIN_ACT_AS_V1
 
 // логин, роль, is_doctor, специальность
 const PEOPLE = [
@@ -126,7 +130,7 @@ test('LOGIN_ROLES_V1: ответ входа — тот же, что /me и staff
 test('LOGIN_ROLES_V1: один список колонок сессии на все чтения — и он совпадает с формой ответа', () => {
   const { SESSION_USER_COLUMNS } = authService;
   assert.ok(Array.isArray(SESSION_USER_COLUMNS), 'services/auth.js экспортирует SESSION_USER_COLUMNS');
-  assert.deepEqual([...SESSION_USER_COLUMNS].sort(), SESSION_KEYS, 'publicUser отдаёт ровно прочитанные колонки');
+  assert.deepEqual([...SESSION_USER_COLUMNS].sort(), SESSION_COLUMN_KEYS, 'publicUser отдаёт ровно прочитанные колонки (и acting_admin сессии)');   // ADMIN_ACT_AS_V1
   assert.ok(!SESSION_USER_COLUMNS.includes('password_hash'), 'хэш пароля в общий список не входит: его читает только вход');
 });
 

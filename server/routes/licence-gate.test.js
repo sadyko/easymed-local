@@ -256,6 +256,35 @@ test('a lapsed clinic cannot delete a staff account', async (t) => {
   assert.equal(res.status, 402, 'deleting a staff account is a write and must be blocked');
 });
 
+// ADMIN_ACT_AS_V1 (R7) — /api/auth/act-as лицензией не закрыт, как и весь
+// /api/auth: администратор входит от имени сотрудника и, главное, ВОЗВРАЩАЕТСЯ к
+// своей учётной записи и при заблокированной лицензии (иначе он застрял бы в
+// чужой сессии, не имея права оплатить).
+test('ADMIN_ACT_AS_V1: a lapsed clinic can still act as an employee and return', async (t) => {
+  const { app, db, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  const info = db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
+    .run('nurse3', 'x', 'Nurse Three', 'nurse');
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+  const start = await post(server, cookie, '/api/auth/act-as', { user_id: Number(info.lastInsertRowid) });
+  assert.equal(start.status, 200, 'acting as an employee is not a licence-gated write');
+  const me = await (await request(server, cookie, 'GET', '/api/auth/me')).json();
+  assert.equal(me.user.id, Number(info.lastInsertRowid));
+  // The tab sends the act-as number it was built for (X-Em-Act-As, security review).
+  const write = await fetch(`http://127.0.0.1:${server.address().port}/api/db`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie, 'X-Em-Act-As': String(me.act_as_id) },
+    body: JSON.stringify({ table: 'visit_services', op: 'update', values: { status: 'completed' },
+      filters: [{ col: 'id', op: 'eq', val: 1 }] }),   // правка, которую медсестре пускает реестр
+  });
+  assert.equal(write.status, 402, 'acting does not lift the licence gate');
+  const back = await request(server, cookie, 'DELETE', '/api/auth/act-as');
+  assert.equal(back.status, 200, 'returning to your own account must work on a locked clinic');
+  const after = await (await request(server, cookie, 'GET', '/api/auth/me')).json();
+  assert.equal(after.user.username, 'admin');
+  assert.equal(after.user.acting_admin, null);
+});
+
 test('a lapsed clinic can still list staff', async (t) => {
   const { app, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
   const server = await listen(app); t.after(() => server.close());

@@ -42,6 +42,7 @@ import { sanitizeStoredHtml } from '../../shared/rich-text.js';   // CASE_DOC_A4
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { titleSheetPrintSection, titleSheetPrintCss, papersSummary } from './title-sheet-print.js';   // TITLE_SHEET_V1 / INPATIENT_DOCS_V1
+import { lockSignButton, refuseSignWhileActing } from '../act-as-client.js';   // ADMIN_ACT_AS_V1 (ревью-2) — «Собрать историю» от имени
 
 // ---------------------------------------------------------------------------
 // Словарь названий
@@ -823,10 +824,12 @@ export function caseDocsView({ state, onDoc, onAssemble = null, activeKind = nul
         // вторая такая же кнопка в подвале списка шагов означала бы, что их две
         // разные — а она одна.
         if (onAssemble) {
-            foot.appendChild(h('button', {
+            // ADMIN_ACT_AS_V1 (ревью-2) — сборка подшивает историю в карту документом
+            // врача (сервер от имени отказывает, R3): кнопка неактивна с подсказкой.
+            foot.appendChild(lockSignButton(h('button', {
                 class: 'btn btn-sm', type: 'button', style: { justifySelf: 'start' },
                 onclick: () => onAssemble(),
-            }, Icon('Print', { size: 13 }), ' ', tr('Собрать историю болезни')));
+            }, Icon('Print', { size: 13 }), ' ', tr('Собрать историю болезни'))));
         }
         box.appendChild(head);
         box.appendChild(list);
@@ -997,6 +1000,8 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
         // на бумагу они идут РАЗМЕТКОЙ: экранированный HTML печатался бы
         // тегами вместо жирного и списков. Диагноз — простой текст, он и
         // экранируется. Санитария та же, что на сервере при сохранении.
+        // DOC_RICH_FORMAT_V1 (F3) — у списков и таблиц раздела на бумаге свои
+        // правила (стили листа ниже): отступ и маркер внутри раздела, рамки ячеек.
         // CASE_DOC_FREE_SEC_V1 — подпись раздела берётся ИЗ ДОКУМЕНТА, если он
         // её переименовал: бумага обязана читаться так, как её писали, а не так,
         // как разделы называются сегодня.
@@ -1052,6 +1057,11 @@ h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
 .part .pl { min-width: 150px; color: #55636d; }
 .part .pv { flex: 1; white-space: pre-wrap; }
 .part .pv.empty { color: #7a8892; font-style: italic; }
+/* DOC_RICH_FORMAT_V1 (F3): lists and tables of the sections on paper */
+.part .pv ul, .part .pv ol { margin: 2px 0 4px; padding-left: 22px; white-space: normal; }
+.part .pv table.a4-tbl, .part .pv table.a4-restbl { width: 100%; border-collapse: collapse; margin: 4px 0; white-space: normal; }
+.part .pv table.a4-tbl th, .part .pv table.a4-tbl td, .part .pv table.a4-restbl th, .part .pv table.a4-restbl td { border: 1px solid #b9c1cc; padding: 3px 7px; text-align: left; vertical-align: top; }
+.part .pv table.a4-tbl th, .part .pv table.a4-restbl th { background: #f1f4f7; font-weight: 700; }
 .sign { margin-top: 6px; font-size: 12px; color: #55636d; text-align: right; }
 ${titleSheetPrintCss()}
 </style></head><body>
@@ -1082,6 +1092,10 @@ ${body
  * и записал, поэтому бумага и карта не могут разойтись.
  */
 export async function assembleCaseFile(admissionId) {
+    // ADMIN_ACT_AS_V1 (ревью-2) — от имени сотрудника историю не подшивают (R3:
+    // сервер откажет). «Только печати» без подшивания нет намеренно — см. выше:
+    // напечатанная история, которой нет в карте, и есть то, от чего защищает порядок.
+    if (refuseSignWhileActing()) return null;
     const { data, error } = await supabase.rpc('admission_case_file_save', { admission_id: admissionId });
     if (error) { toast(error.message || tr('Не удалось собрать историю болезни.'), 'fail'); return null; }
 

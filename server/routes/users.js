@@ -3,7 +3,8 @@ import { hashPassword, validPassword } from '../services/auth.js';
 import { VALID_ROLES, PRIMARY_ROLES } from '../services/roles.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { isAdminUser, grantAllowsAdminOr } from '../services/grants.js';   // ADMIN_ROWS_GRANTABLE_V1
-import { roleExceedsActor, isAdminRoleCode } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1
+import { roleExceedsActor, isAdminRoleCode, isAdminAccount } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1 · ADMIN_ACT_AS_V1 (isAdminAccount — общий со входом от имени)
+import { ACT_AS_MESSAGES } from '../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 (R6)
 // DOCTOR_PUBLIC_PROFILE_V1 — публичный профиль врача: те же проверки, что у
 // «Моего профиля» врача (rpc/doctor-profile.js), и тот же вид для экранов.
 import { cleanProfileFields, publicProfileOf, specialtyCountOf } from '../services/rpc/doctor-profile.js';   // DOCTOR_PROFILE_V1 — specialtyCountOf
@@ -399,6 +400,9 @@ export function resolveCustomRole(db, body, sentRole) {
 export function employeeView(u) {
   return {
     id: u.id, username: u.username, full_name: u.full_name, role: u.role, is_active: !!u.is_active,
+    // ADMIN_ACT_AS_V1 (R2) — временный пароль: сотрудник ещё не входил, и
+    // «Войти как сотрудник» экран ему не предлагает (сервер отказал бы targetNew).
+    must_change_password: !!u.must_change_password,
     extra_roles: parseJsonArray(u.extra_roles),
     custom_role_code: u.custom_role_code || null,   // CUSTOM_ROLES_V1
     first_name: u.first_name, last_name: u.last_name, middle_name: u.middle_name,
@@ -589,12 +593,9 @@ function stripMoney(view) {
   return view;
 }
 
-/** Учётная запись администратора: основной, дополнительной ролью или своей ролью на её основе. */
-function isAdminAccount(db, u) {
-  if (!u) return false;
-  if (u.role === 'admin' || parseJsonArray(u.extra_roles).includes('admin')) return true;
-  return !!(u.custom_role_code && isAdminRoleCode(db, u.custom_role_code));
-}
+// ADMIN_ACT_AS_V1 — isAdminAccount («учётная запись администратора: основной,
+// дополнительной ролью или своей ролью на её основе») переехал в
+// services/role-guard.js без изменений: им же проверяет вход от имени (R2, R4).
 
 /**
  * Администратор ПО СОХРАНЁННОЙ роли — так, как его видит сервер (isAdminUser):
@@ -711,6 +712,11 @@ export function userRoutes(db) {
     const managed = mainClinicRow(user);
     if (managed) return res.status(409).json({ error: { code: 'conflict', message: managed } });
     const { full_name, role, is_active, password } = req.body || {};
+    // ADMIN_ACT_AS_V1 (R6) — пароль сотрудника от его имени не меняется: вход
+    // от имени держится на сессии администратора, а не на пароле сотрудника.
+    if (password !== undefined && req.user.acting_admin && user.id === req.user.id) {
+      return forbid(res, ACT_AS_MESSAGES.passwordWhileActing);
+    }
 
     // is_active must be a real boolean: `0`/`null`/`""` would slip past the
     // self-protection check below, and `"false"` would truthy-coerce to 1.

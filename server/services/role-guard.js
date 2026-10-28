@@ -73,6 +73,23 @@ export function isAdminRoleCode(db, code) {
   return !!(c && c.base_role === 'admin');
 }
 
+/**
+ * Учётная запись администратора: основной, дополнительной ролью или своей ролью на её основе.
+ * ADMIN_ACT_AS_V1 — перенесено сюда из routes/users.js без изменения правила: им же
+ * пользуется вход от имени (R2 — нельзя войти как администратор; R4 — сотрудник,
+ * ставший администратором, недоступен). extra_roles — строка JSON из базы или массив.
+ */
+export function isAdminAccount(db, u) {
+  if (!u) return false;
+  let extras = u.extra_roles;
+  if (!Array.isArray(extras)) {
+    try { extras = extras ? JSON.parse(extras) : []; } catch { extras = []; }
+    if (!Array.isArray(extras)) extras = [];
+  }
+  if (u.role === 'admin' || extras.includes('admin')) return true;
+  return !!(u.custom_role_code && isAdminRoleCode(db, u.custom_role_code));
+}
+
 // Уровень ключа, выведенный из старых полей ролей человека (как его рисует экран).
 function derivedLevel(db, user, key) {
   let best = 'none';

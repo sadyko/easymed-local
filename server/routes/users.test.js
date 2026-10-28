@@ -743,3 +743,21 @@ test('EMPLOYEE_CARD_SAVE_V1: нетронутое ФИО (двойной/нер�
     }
   } finally { server.close(); }
 });
+
+// ADMIN_ACT_AS_V1 (R2) — экран «Сотрудники» не предлагает «Войти как
+// сотрудник» тому, кто ещё не входил (временный пароль): для этого список
+// несёт must_change_password. Самого пароля и его хеша в ответе нет.
+test('GET /api/users несёт must_change_password (вход от имени не входившего — нельзя); хеша пароля нет', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    db.prepare("INSERT INTO users (username, password_hash, full_name, role, must_change_password) VALUES ('fresh', 'x', 'Новичок', 'nurse', 1), ('old', 'x', 'Старожил', 'nurse', 0)").run();
+    const res = await fetch(base + '/api/users', { headers: { Cookie: admin } });
+    assert.equal(res.status, 200);
+    const { users } = await res.json();
+    const by = (u) => users.find((x) => x.username === u);
+    assert.equal(by('fresh').must_change_password, true);
+    assert.equal(by('old').must_change_password, false);
+    assert.ok(users.every((u) => !('password_hash' in u)), 'хеш пароля не уходит на экран');
+  } finally { server.close(); }
+});

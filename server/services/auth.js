@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { recordEvent } from './ops-log.js';   // OPS_EVENTS_V1
+import { actAsEndCause, ACT_AS_MAX_MS } from './act-as-rules.js';   // ADMIN_ACT_AS_V1
+import { ACT_AS_END } from '../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1
 
 export const SESSION_TTL_HOURS = 12;
 
@@ -92,9 +94,12 @@ export const SESSION_USER_COLUMNS = Object.freeze([
   'is_doctor',              // ADMIN_DOCTOR_LOCAL_V1 — врач по флагу, а не по роли
 ]);
 const LOGIN_USER_SQL = `SELECT password_hash, ${SESSION_USER_COLUMNS.join(', ')} FROM users WHERE username = ?`;
+// ADMIN_ACT_AS_V1 — и вход от имени: сотрудник, запись журнала и начало (мигр. 255).
 const SESSION_USER_SQL = `SELECT ${SESSION_USER_COLUMNS.map((c) => 'u.' + c).join(', ')}, `
-  + 's.expires_at AS session_expires_at, s.last_seen_at AS session_seen_at '
+  + 's.expires_at AS session_expires_at, s.last_seen_at AS session_seen_at, '
+  + 's.act_as_user_id, s.act_as_id, s.act_as_started_at '
   + 'FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?';
+const ACT_AS_TARGET_SQL = `SELECT ${SESSION_USER_COLUMNS.join(', ')} FROM users WHERE id = ?`;   // ADMIN_ACT_AS_V1
 
 export function login(db, username, password, { ip = '' } = {}) {
   const name = String(username || '').trim().toLowerCase();
@@ -146,8 +151,73 @@ function noteFailure(name) {
   return locked ? 'locked' : 'invalid';
 }
 
-export function logout(db, sid) {
-  if (sid) db.prepare('DELETE FROM sessions WHERE id = ?').run(sid);
+// ADMIN_ACT_AS_V1 — выход (и вход другого человека в этом браузере, который
+// заменяет сессию) закрывает открытую запись журнала входа от имени причиной
+// «Вышел»; истёкшая сессия — «Сессия завершена» (sessionUser ниже). Прочие
+// удаления сессий (отключение, сброс пароля, уборка при запуске) закрывает
+// триггер мигр. 255.
+export function logout(db, sid, { reason = ACT_AS_END.logout } = {}) {
+  if (!sid) return;
+  try {
+    const s = db.prepare('SELECT act_as_id FROM sessions WHERE id = ?').get(sid);
+    if (s && s.act_as_id != null) closeActAs(db, s.act_as_id, reason);
+  } catch { /* таблица сессий без колонок входа от имени — закрывать нечего */ }
+  db.prepare('DELETE FROM sessions WHERE id = ?').run(sid);
+}
+
+/**
+ * ADMIN_ACT_AS_V1 — закрыть открытую запись журнала входа от имени с причиной.
+ * Вход от имени не длится дольше ACT_AS_MAX_HOURS: запись, которую закрывают
+ * позже предела (кто бы это ни заметил), закрывается «Истекло» ровно в начало
+ * + предел (то же правило — у триггера мигр. 255). Закрытая запись не
+ * переписывается. Возвращает записанную причину или null.
+ */
+export function closeActAs(db, actAsId, reason, nowMs = Date.now()) {
+  const row = db.prepare('SELECT started_at FROM act_as_sessions WHERE id = ? AND ended_at IS NULL').get(actAsId);
+  if (!row) return null;
+  const limit = Date.parse(row.started_at) + ACT_AS_MAX_MS;
+  const expired = Number.isFinite(limit) && nowMs >= limit;
+  const end = expired ? ACT_AS_END.expired : reason;
+  db.prepare('UPDATE act_as_sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL')
+    .run(isoSeconds(expired ? limit : nowMs), end, actAsId);
+  return end;
+}
+
+// ADMIN_ACT_AS_V1 — СЕССИЯ, В КОТОРОЙ АДМИНИСТРАТОР РАБОТАЕТ ОТ ИМЕНИ СОТРУДНИКА.
+//
+// Отдаётся СОТРУДНИК (права, меню, проверки и штампы created_by — его) и рядом
+// acting_admin: { id, full_name } администратора. Оба читаются заново на каждом
+// запросе, и на каждом же запросе спрашивается, не кончился ли вход от имени
+// (services/act-as-rules.js actAsEndCause): кончился — запись журнала
+// закрывается с причиной, сотрудник снимается с сессии, и отдаётся сам
+// администратор. Номер записи журнала остаётся в сессии (act_as_id без
+// act_as_user_id) — так сервер помнит, что экран ещё не знает о конце: до
+// «Вернуться» (DELETE /api/auth/act-as) запросы API получают 409 act_as_ended
+// (middleware/act-as.js), и ни одна запись, задуманная от имени сотрудника, не
+// уходит от имени администратора.
+//
+// state (необязательный) получает actAsId — номер открытой записи журнала (для
+// журнала действий) — или actAsEnded — причину конца, о которой экран не знает.
+function actingView(db, sid, row, admin, state) {
+  if (row.act_as_user_id == null) {
+    if (state) state.actAsEnded = endReasonOf(db, row.act_as_id);
+    return admin;
+  }
+  const target = db.prepare(ACT_AS_TARGET_SQL).get(row.act_as_user_id);
+  const cause = actAsEndCause(db, { admin, target, startedAt: row.act_as_started_at });
+  if (cause) {
+    closeActAs(db, row.act_as_id, cause);
+    db.prepare('UPDATE sessions SET act_as_user_id = NULL, act_as_started_at = NULL WHERE id = ?').run(sid);
+    if (state) state.actAsEnded = endReasonOf(db, row.act_as_id);
+    return admin;
+  }
+  if (state) state.actAsId = row.act_as_id;
+  return { ...publicUser(target), acting_admin: { id: admin.id, full_name: admin.full_name } };
+}
+
+function endReasonOf(db, actAsId) {
+  const r = db.prepare('SELECT end_reason FROM act_as_sessions WHERE id = ?').get(actAsId);
+  return (r && r.end_reason) || ACT_AS_END.session;
 }
 
 // V3120_FINAL (I5) — { background: true }: запрос, который экран шлёт сам
@@ -156,7 +226,8 @@ export function logout(db, sid) {
 // (public/js/shared/user-activity.js). Такой запрос сессию ПРОВЕРЯЕТ, но не
 // ПРОДЛЕВАЕТ: иначе опрос каждые 20 секунд держал её вечно, и правило
 // «SESSION_IDLE_HOURS без работы — выход» не срабатывало никогда.
-export function sessionUser(db, sid, { background = false } = {}) {
+// ADMIN_ACT_AS_V1 — { state }: см. actingView выше.
+export function sessionUser(db, sid, { background = false, state = null } = {}) {
   if (!sid) return null;
   const row = db.prepare(
     // CUSTOM_ROLES_V1 — код своей роли едет вместе с ролью: по нему экран
@@ -184,13 +255,14 @@ export function sessionUser(db, sid, { background = false } = {}) {
   const idle = SESSION_IDLE_HOURS > 0 && row.session_seen_at
     && row.session_seen_at <= isoSeconds(now - SESSION_IDLE_HOURS * 3600 * 1000);
   if (row.session_expires_at <= isoSeconds(now) || !row.is_active || idle) {
-    logout(db, sid);
+    logout(db, sid, { reason: ACT_AS_END.session });   // ADMIN_ACT_AS_V1 — сессия администратора кончилась
     return null;
   }
   if (!background && row.session_seen_at <= isoSeconds(now - TOUCH_EVERY_MS)) {
     try { db.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').run(isoSeconds(now), sid); } catch { /* отметка — не повод отказать */ }
   }
-  return publicUser(row);
+  const user = publicUser(row);
+  return row.act_as_id == null ? user : actingView(db, sid, row, user, state);   // ADMIN_ACT_AS_V1
 }
 
 // MULTI_ROLE_SERVER_V1 — extra_roles rides along because the ACL layer
@@ -225,7 +297,11 @@ export function publicUser(u) {
            // лицензию сессия НЕ отдаёт: по ним оболочка угадывала бы врача и в
            // медсестре со специальностью. Колонку выбирает каждое чтение сессии
            // — через общий SESSION_USER_COLUMNS (LOGIN_ROLES_V1).
-           is_doctor: !!u.is_doctor };
+           is_doctor: !!u.is_doctor,
+           // ADMIN_ACT_AS_V1 — администратор, работающий от имени этого
+           // сотрудника: { id, full_name } ставит sessionUser (actingView), во
+           // всех прочих случаях — null (вход, /me без входа от имени, staffById).
+           acting_admin: null };
 }
 
 // FIRST_RUN_PASSWORD_V1 — the well-known default the first-run admin starts

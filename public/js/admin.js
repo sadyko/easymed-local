@@ -30,6 +30,9 @@ import {
 } from './admin/auth.js?v=admdoc3';
 // PASSWORD_CHANGE_V2 — «Сменить пароль» в меню аватара: одно окно, POST /api/auth/change-password
 import { openChangeOwnPasswordModal } from './admin/password-change.js';
+// ADMIN_ACT_AS_V1 — администратор работает от имени сотрудника: полоса вверху,
+// «Вернуться» в окне аватара, возврат после авто-конца (409 act_as_ended).
+import { renderActAsBanner, actAsAccountBlock, isActingNow, installActAsEndedGuard, endActAs, actAsEnding, setTabActAs } from './admin/act-as-client.js';
 import { t, tr, trf, getLang, setLang, onLangChange } from './admin/i18n.js?v=pathway1';   // TS_TAB_I18N_V1 — tr() for tab labels; trf() — I18N_COVERAGE_V1 (перевод СНАЧАЛА, подстановка ПОТОМ)
 // ACCESS_DENIED_ONE_PLACE_V1 — отказ рисуется одним помощником на всё приложение
 // (его же зовёт окно заведения пациента, у которого своего маршрута нет).
@@ -2335,8 +2338,15 @@ function renderAccountControls() {
         if (saved) applyPreview(saved, { persist: false });
     }
 
+    // ADMIN_ACT_AS_V1 — работа от имени сотрудника: кто на самом деле за
+    // компьютером и «Вернуться к своей учётной записи» — первыми в окне.
+    const actAs = actAsAccountBlock(state.user);
+    if (actAs) wrap.appendChild(actAs);
+
     // Self-service password change — available to every signed-in user.
-    wrap.appendChild(h('button', {
+    // ADMIN_ACT_AS_V1 (R6) — кроме работы от имени: пароль сотрудника не
+    // меняется (сервер отказывает passwordWhileActing), кнопки нет вовсе.
+    if (!isActingNow(state.user)) wrap.appendChild(h('button', {
         class: 'btn btn-outline',
         style: { width: '100%', justifyContent: 'center', fontSize: '12.5px' },
         onclick: () => { document.getElementById('user-popover')?.setAttribute('hidden', ''); openChangeOwnPasswordModal(); },
@@ -2910,6 +2920,11 @@ function showPendingReview(clinic) {
 // Boot
 // ---------------------------------------------------------------------------
 async function boot() {
+    // ADMIN_ACT_AS_V1 — ДО первого запроса: вход от имени, кончившийся сам
+    // (R4), сервер выдаёт 409 act_as_ended на любой запрос — фоновые тоже.
+    // Обёртка над fetch страницы ловит его один раз: причина, «Вернуться»,
+    // перезагрузка (act-as-client.js).
+    installActAsEndedGuard(window);
     setStatus('connecting', true);
     pingSupabase().then(ok => setStatus(ok ? 'connected' : 'notConnected', ok));
 
@@ -2922,6 +2937,18 @@ async function boot() {
 
     const userRow = await rehydrateUserFromSession();
     if (!userRow) { showLogin(); return; }
+    // ADMIN_ACT_AS_V1 (ревью-2) — экран собирается по ЭТОМУ /me: его номер входа
+    // от имени и есть номер вкладки (X-Em-Act-As), поверх номера из раннего /me
+    // проверки связи — между ними другая вкладка могла войти или вернуться.
+    setTabActAs(userRow.act_as_id);
+    // ADMIN_ACT_AS_V1 — /me сказал, что вход от имени кончился сам: причина,
+    // «Вернуться», перезагрузка под администратором. Оболочку не рисуем —
+    // через мгновение страница соберётся заново. Возврат мог начаться и раньше
+    // (409 от запроса выше) — тогда тоже ждём перезагрузки.
+    if (userRow.act_as_ended || actAsEnding()) {
+        if (userRow.act_as_ended) await endActAs(userRow.act_as_ended.reason);
+        return;
+    }
 
     // LICENCE_CORE_V1 — fetched before onAuthed() paints the shell, so the sidebar
     // is never drawn with a module open and then corrected a frame later.
@@ -2988,6 +3015,9 @@ async function onAuthed(userRow, { fresh = false } = {}) {
     await loadNavVisibility();   // NAV_VISIBILITY_V1 — до первой отрисовки меню
     startApp({ fresh });
     renderLicenceBanner();   // LICENCE_CORE_V1 — after the shell exists, so `.app` is there to mount above
+    // ADMIN_ACT_AS_V1 — «Вы работаете от имени …» над `.app`, тем же приёмом,
+    // что полоса лицензии; без входа от имени — ничего.
+    renderActAsBanner(state.user);
     // CRM_PHONE_V1 — «Телефон» в верхней панели рядом с «Обновить» (владелец, по
     // снимку 2026-10-17): кнопка открывает панель наборника и журнала поверх любого
     // экрана (views/crm-phone.js) — то, что было отдельной программой EasyPhone
@@ -3042,6 +3072,9 @@ function renderLicenceBanner() {
 // listener. Safe to fire before any login too: licenceState() reads as 'ok'
 // with nothing set, so this simply no-ops.
 onLangChange(() => renderLicenceBanner());
+// ADMIN_ACT_AS_V1 — полоса «Вы работаете от имени …» на новом языке. До входа
+// пользователя нет — ничего не рисуется.
+onLangChange(() => renderActAsBanner(state.user));
 
 // UPDATE_DELIVERY_V1 (Task 6) — the quiet update banner, mounted the same way
 // as #licence-banner just above (a sibling inserted right above `.app`).

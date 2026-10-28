@@ -30,6 +30,8 @@ import { openVisitBillModal } from './visit-bill.js?v=ownrep3';   // REFBILL_REV
 import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» с карты пациента
 import { caseFilePrintHtml } from './case-docs.js?v=cw1';   // PATIENT_HISTORY_TAB_V1 — печать подшитой истории тем же бланком
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // PATIENT_HISTORY_TAB_V1
+import { notesDocData } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — лист приёма из подписанной записи
+import { dateNumeric } from '../../shared/date-words.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — день подписи местной датой
 import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW_V1 — сумма долга у имени
 import { todayIso } from '../../shared/month-grid.js?v=mg1';   // DATE_LIMITS_V1 — местный день, а не UTC
 import { outcomeTitle } from './discharge.js';   // PATIENT_HISTORY_TAB_V1 — исход словами
@@ -1702,26 +1704,25 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // истории visit_services.notes: покрывает документы, подписанные до
         // включения архива, и любой будущий сбой архивации. Дубликаты
         // отсекаются по visit_service_id (архивная строка выигрывает).
-        const FIELD_RU = {
-            complaint: 'Жалобы', anamnesis: 'Анамнез', objective: 'Объективный статус',
-            diagnosis: 'Диагноз', dx: 'Диагноз', icd10: 'Код МКБ-10', therapy: 'Терапия',
-            recommendations: 'Рекомендации', follow_up: 'Повторный приём',
-            referral: 'Направление', instrumental: 'Инструментальные данные', doctor_phone: 'Телефон врача',
-        };
-        /* i18n-exempt-start: печать «Заключения врача» — печатный документ, намеренно русский */
-        /* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
+        // DOC_RICH_FORMAT_V1 (ревью T1) — ПЕЧАТЬ ТАКОЙ ЗАПИСИ — ЛИСТ ПРИЁМА С ДАННЫМИ
+        // ПАЦИЕНТА. Раньше сюда шёл bodyHtml без данных: оформленный бланк
+        // «Заключение» его не читает и брал ОБРАЗЕЦ — на бумагу выходил чужой
+        // пациент «Алиев Бобур». К тому же поля записи вставлялись в лист сырыми,
+        // без очистки. Теперь — тот же лист, что у кабинета и архива: данные из
+        // подписанной записи (shared/cabinet-doc.js, notesDocData), шапка — этот
+        // пациент, врач записи, услуга и день подписи.
         function printWsDoc(d, view = null) {   // PRINT_AUTO_V1
-            const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
-            const blocks = Object.entries(d.fields || {})
-                .filter(([, v]) => String(v || '').replace(/<[^>]*>/g, '').trim())
-                .map(([k, v]) => `<div style="margin:10px 0"><div style="font-size:11px;font-weight:700;letter-spacing:.05em;color:#178;text-transform:uppercase">${esc(FIELD_RU[k] || k)}</div><div style="font-size:13.5px;margin-top:3px">${v}</div></div>`)
-                .join('');
-            const bodyHtml = `<h3 style="margin:0 0 4px">Заключение врача</h3>
-<div style="color:#667;font-size:12px;margin-bottom:8px">${esc(patient.full_name || '')} · ${esc(patient.mrn || '')}${d.doctorName ? ' · Врач: ' + esc(d.doctorName) : ''} · ${esc(String(d.created_at || '').slice(0, 10).split('-').reverse().join('.'))}</div>
-${blocks || '<div style="color:#889;font-size:13px">Документ подписан без заполненных разделов.</div>'}`;
-            /* type-scale-exempt-end */
-            /* i18n-exempt-end */
-            printableSheet({ type: 'conclusion', title: d.title, bodyHtml, ...view });   // PRINT_AUTO_V1
+            const data = notesDocData(d.fields, {
+                head: {
+                    title: d.title || '',
+                    patientName: patient.full_name || '', mrn: patient.mrn || '', phone: patient.phone || '',
+                    dob: fmtDMY(patient.date_of_birth), sex: labSexRu(patient.gender),
+                    doctorName: d.doctorName || '', service: d.service || '',
+                    issueDate: d.created_at ? dateNumeric(d.created_at) : '',
+                },
+                diagnoses: d.diagnoses || [], prescriptions: d.prescriptions || [],
+            });
+            printableSheet({ type: 'conclusion', title: d.title, data, ...view });   // PRINT_AUTO_V1
         }
         // PATIENT_TAB_ACCESS_V1 — список документов приезжает вместе с картой
         // (rpc patient_card), через дверь вкладки «Документы»; отдельного
@@ -1749,6 +1750,9 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                             created_at: last.savedAt || '',
                             fields: last.fields || {},
                             doctorName: (r.users && r.users.full_name) || last.byName || '',
+                            // DOC_RICH_FORMAT_V1 (ревью T1) — диагнозы и рецепт записи — на лист приёма
+                            diagnoses: (p && Array.isArray(p.diagnoses)) ? p.diagnoses : [],
+                            prescriptions: (p && Array.isArray(p.prescriptions)) ? p.prescriptions : [],
                         });
                     }
                 }

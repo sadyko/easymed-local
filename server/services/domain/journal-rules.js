@@ -6,6 +6,7 @@
 // диагноз и какое заключение. Модуль чистый — его проверяет таблица примеров
 // (journal-rules.test.js), без базы и без экрана.
 import { admissionDiagnosisText } from './admission-facts.js';
+import { htmlToText, hasMarkup } from '../../../public/js/shared/rich-text.js';   // DOC_RICH_FORMAT_V1
 
 /** Год рождения — первые четыре знака даты, если это год. */
 export function birthYear(dob) {
@@ -224,7 +225,9 @@ const DIAG_CONCLUSION_FIELDS = ['conclusion'];
 export function conclusionOfDoc(doc) {
   for (const k of (doc && doc.doc_type === 'diag' ? DIAG_CONCLUSION_FIELDS : CONCLUSION_FIELDS)) {   // CABINET_FIX_V1_R3 (F2)
     const v = doc ? doc[k] : null;
-    const s = String(v == null ? '' : v).trim();
+    // DOC_RICH_FORMAT_V1 (F2) — «Заключение» протокола в архиве бывает разметкой врача
+    // (список, жирный, таблица результата): журнал — текст. Прежний текст — как был.
+    const s = (doc && doc.rich && hasMarkup(v)) ? htmlToText(v) : String(v == null ? '' : v).trim();   // ревью T1 — разметка только у снимка с меткой rich
     if (s) return s;
   }
   return doc ? diagnosisOfBody(doc) : '';

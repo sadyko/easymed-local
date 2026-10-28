@@ -47,7 +47,14 @@ export async function rehydrateUserFromSession() {
     const { data } = await supabase.auth.getUser();
     const user = data && data.user;
     if (!user || user.is_active === false) return null;
-    return user;
+    // ADMIN_ACT_AS_V1 — вход от имени кончился сам (R4), а экран об этом ещё
+    // не знает: причина едет рядом с пользователем, и admin.js boot() называет
+    // её и возвращается (act-as-client.js endActAs), не рисуя оболочку.
+    // Ревью-2 — act_as_id: номер вкладки от ЭТОГО /me, по которому собирается
+    // экран; admin.js boot() ставит его поверх раннего (act-as-client.js setTabActAs).
+    const actAsId = Number.isInteger(data.act_as_id) && data.act_as_id > 0 ? data.act_as_id : 0;
+    if (data.act_as_ended) return { ...user, act_as_ended: data.act_as_ended, act_as_id: actAsId };
+    return { ...user, act_as_id: actAsId };
 }
 
 // PASSWORD_CHANGE_V2 (2026-09-23) — здесь жили облачный сброс пароля при
@@ -132,6 +139,14 @@ export function actorFromUser(u) {
         // остаётся по основной роли: область видимости (scopedDoctorId,
         // scopedProviderId) этим не меняется.
         extra_roles: roleListOf(u.extra_roles),
+        // ADMIN_ACT_AS_V1 — администратор работает от имени этого сотрудника:
+        // { id, full_name } администратора (server/services/auth.js
+        // sessionUser), иначе null. По нему экран рисует полосу «Вы работаете
+        // от имени …», запирает подпись документов врача (R3) и пишет в журналы
+        // клиники «сотрудник (от имени: адм. …)» (shared/act-as.js).
+        acting_admin: (u.acting_admin && u.acting_admin.id != null)
+            ? { id: u.acting_admin.id, full_name: u.acting_admin.full_name || '' }
+            : null,
     };
 }
 

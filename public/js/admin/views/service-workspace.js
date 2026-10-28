@@ -30,6 +30,9 @@ import { canDelete as canDeleteRole, patientTabCanEdit } from '../permissions.js
 import { insertRow, currentUser } from '../data.js';   // AURORA_CONSULT_TOOLBAR_V1 + AURORA_CONSULT_TEMPLATES_V1
 import { currentClinicId } from '../tenant-tables.js';   // AURORA_CONSULT_TOOLBAR_V1
 import { isAdminActor } from '../admin-actor.js';   // CABINET_FIX_V1_TPL — администратор правит любой шаблон
+// ADMIN_ACT_AS_V1 (R3) — подпись заключения от чужого имени: «Завершить приём»
+// неактивна с подсказкой; «Сохранить» и «Черновик» работают (черновик не подписан).
+import { lockSignButton, refuseSignWhileActing, isActingNow } from '../act-as-client.js';
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
 import { renderDesignedVariant } from './doc-variants.js?v=cabr3';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3
@@ -39,6 +42,10 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
+import { sanitizeStoredHtml, richHasContent, textBreaks } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком
+import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
+import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark, gapCaret, edgeHop, breakLines, keepMarks, clearSplitIds } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
+import { TBL_MAX_ROWS, TBL_MAX_COLS, insertTable, tableChain, tableHasText, cellStep, cellCaret, addRow, canRemoveRow, removeRow, addColumn, removeColumn, deleteTable, insertCellBreak, normalizePasted, beforeTable, rowHasText, columnHasText, stripPastedSplit } from './blank-table.js';   // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в бланке
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -963,9 +970,10 @@ export function soapForm(ctx) {
     } }, Icon('Check', { size: 14 }), ' Сохранить');
 
     // WS_FULLWIDTH_V1 — «Завершить приём» (close consultation) moved to the doc bar, right after «Сохранить».
-    const finishBtn = h('button', { class: 'btn btn-primary', type: 'button', 'data-ws-finish': '',
+    // ADMIN_ACT_AS_V1 (R3) — это подпись (и переподпись): от чужого имени неактивна.
+    const finishBtn = lockSignButton(h('button', { class: 'btn btn-primary', type: 'button', 'data-ws-finish': '',
         style: { background: 'var(--ok-600, #16a34a)', borderColor: 'var(--ok-600, #16a34a)' },
-        onclick: () => tryFinish(ctx) }, Icon('Check', { size: 14 }), ' Завершить приём');
+        onclick: () => tryFinish(ctx) }, Icon('Check', { size: 14 }), ' Завершить приём'));
 
     // DOC_ZOOM_V1 — document zoom control (− 100% +).
     const _zoomBtn = (sym, tip, delta) => h('button', { class: 'btn btn-outline btn-sm', type: 'button', title: tip,
@@ -1233,9 +1241,9 @@ function rightColumn(ctx) {
             h('button', { class: 'btn btn-outline', type: 'button', 'data-ws-pause': '',
                 style: { minHeight: '34px', fontSize: '13.5px' }, onclick: () => pauseAndLeave(ctx) },
                 Icon('Pause', { size: 13 }), ' Пауза'),
-            h('button', { class: 'ws-bigaction is-finish', type: 'button', 'data-ws-finish': '',
+            lockSignButton(h('button', { class: 'ws-bigaction is-finish', type: 'button', 'data-ws-finish': '',   // ADMIN_ACT_AS_V1 (R3)
                 style: { flex: '1', minHeight: '34px', fontSize: '13.5px' }, onclick: () => tryFinish(ctx) },
-                Icon('Check', { size: 14 }), ' Завершить приём'),
+                Icon('Check', { size: 14 }), ' Завершить приём')),
         ),
 
         // WS_PATIENTCARD_PANEL_V1 — patient info card right after the main actions (no vitals).
@@ -2136,10 +2144,11 @@ export async function fillServiceConclusion(body, row) {   // CABINET_FIX_V1_R4 
     }
     const f = latest.fields || {};
     const _dxF = entryDx(f, payload && payload.diagnoses);   // CABINET_FIX_V1_R2 — код больше не в поле врача · CABINET_FIX_V1_R3 (F8) — код подписанной записи, а не нынешний
+    // DOC_RICH_FORMAT_V1 (F2) — поля записи — разметка врача: сводка показывает текст без тегов.
     body.append(
-        snapshotKv('Жалобы',            f.chief_complaint   || '—', true),
-        snapshotKv('Анамнез',           f.hpi               || '—', true),
-        snapshotKv('Осмотр',            f.physical_exam     || '—', true),
+        snapshotKv('Жалобы',            _blankStrip(f.chief_complaint) || '—', true),
+        snapshotKv('Анамнез',           _blankStrip(f.hpi)             || '—', true),
+        snapshotKv('Осмотр',            _blankStrip(f.physical_exam)   || '—', true),
         h('div', { class: 'row', style: { gap: '12px', marginTop: '6px' } },
             h('div', { style: { flex: 2 } }, snapshotKv('Основной диагноз', _dxF || '—')),
             h('div', { style: { flex: 1 } }, snapshotKv('МКБ-10',           f.icd10             || '—')),
@@ -2151,9 +2160,12 @@ export async function fillServiceConclusion(body, row) {   // CABINET_FIX_V1_R4 
     );
     const _parts = [];
     /* i18n-exempt-start: HTML сводки уходит В ДОКУМЕНТ, не в интерфейс */
-    if (f.physical_exam)        _parts.push('Осмотр: ' + esc(f.physical_exam));
+    // DOC_RICH_FORMAT_V1 (F2) — текст поля, а не разметка: esc(разметки) давал «&lt;br&gt;» в документе.
+    // Строки (пункты списка, строки таблицы) — через «; », как у диагноза: сводка — одна строка.
+    const _exT = _blankStrip(f.physical_exam), _recT = _blankStrip(f.recommendations_text);
+    if (_exT)                   _parts.push('Осмотр: ' + esc(_exT).replace(/\s*\n+\s*/g, '; '));
     if (_dxF)                   _parts.push('Диагноз: ' + esc(_dxF).replace(/\n/g, '; '));
-    if (f.recommendations_text) _parts.push('Рекомендации: ' + esc(f.recommendations_text));
+    if (_recT)                  _parts.push('Рекомендации: ' + esc(_recT).replace(/\s*\n+\s*/g, '; '));
     /* i18n-exempt-end */
     return { html: _parts.length ? '<div>' + _parts.join('. ') + '</div>' : null };
 }
@@ -2431,7 +2443,9 @@ export function collectFields(ctx, opts = {}) {
         const keepDx = k === 'primary_diagnosis' && el.classList.contains('a4-input') && textOf(el.innerHTML);
         if (el.closest('.a4-sec-off') && !always.has(k) && !keepDx) continue;   // WS_FLEX_DOC_V1 — removed sections don't save/print
         if (el.classList.contains('a4-input')) {
-            out[k] = (el.innerHTML || '').trim();
+            // DOC_RICH_FORMAT_V1 (F1) — в запись уходит очищенная разметка (те же правила,
+            // что у бланка и сервера) — и из бланка, и из формы, где врач пишет прямо в поле.
+            out[k] = sanitizeStoredHtml(el.innerHTML || '');
         } else {
             out[k] = (el.value ?? '').trim();
         }
@@ -2462,8 +2476,14 @@ export function applyFields(ctx, fields, opts = {}) {
             // different clinician on the same tenant, so any markup MUST be sanitized
             // before it re-enters the live DOM — otherwise a stored SOAP field is a
             // stored-XSS sink. (STORED_XSS_HARDEN_V1)
-            // CABINET_FIX_V1_R2 — opts.sanitized: значение уже очищено (шаблон: и текст поля, и шаблон прошли sanitizeRichHtml).
-            if (/<[a-z!\/]/i.test(v)) el.innerHTML = opts.sanitized ? v : sanitizeRichHtml(v); else el.textContent = v;
+            // CABINET_FIX_V1_R2 — opts.sanitized: значение уже очищено (шаблон: и текст поля, и шаблон прошли очистку).
+            // DOC_RICH_FORMAT_V1 (F1) — очистка — общая sanitizeStoredHtml (rich-text.js): те же правила,
+            // что у бланка, печати, архива и сервера.
+            // DOC_RICH_FORMAT_V1 (ревью T1, HIGH 2) — значение записи ВСЕГДА разметка: collectFields
+            // пишет innerHTML. Прежняя ветка textContent для значения без тегов клала «SpO2 &lt;95%»
+            // текстом — врач видел «&lt;», и каждое сохранение экранировало ещё раз (&amp;lt;…).
+            // Прежний простой текст («SpO2 <95%», «AT&T») очистка экранирует сама — показ тот же.
+            el.innerHTML = opts.sanitized ? v : sanitizeStoredHtml(v);
         } else {
             el.value = fields[k];
         }
@@ -3868,22 +3888,11 @@ function historyRow(item, isFirst, ctx, originalIdx) {
 // CABINET_FIX_V1_R3 (F8) — диагнозы строки передаются явно («Вставить
 // результаты» — из записей чужой строки); код — всегда тот, что в записи.
 // Экспорт — для проверки.
+// CABINET_FIX_V1_R4 (п. 6) — диагноз записи с её кодом — основной этой записи, каким бы он ни был в строке сейчас;
+// кода записи нет среди диагнозов строки (его сняли) — строка кода как есть, затем текст.
+// DOC_RICH_FORMAT_V1 (ревью T1) — правило в shared/cabinet-doc.js (entryDxText): его зовёт и карта пациента.
 export function entryDx(f, diagnoses = wsState.payload && wsState.payload.diagnoses) {
-    const ff = f || {};
-    const code = String(ff.icd10 || '').trim();
-    // CABINET_FIX_V1_R4 (п. 6) — диагноз записи с её кодом — основной этой записи, каким бы он ни был в строке сейчас.
-    const list = (diagnoses || []).filter((d) => code && d && d.code === code).map((d) => ({ ...d, type: 'main' }));
-    const parts = dxParts(ff.primary_diagnosis, list);
-    if (code && !list.length) {
-        // CABINET_FIX_V1_R4 (п. 6) — кода записи нет среди диагнозов строки (его сняли):
-        // строка кода как есть, затем текст; у записи до ревью 2 код уже стоит первой строкой текста.
-        const t = parts.text;
-        const first = t ? t.split('\n')[0].trim() : '';
-        // CABINET_FIX_V1_R5 (E) — код — до границы: «J20» не «съедает» строку «J20.9 — …».
-        if (first.startsWith(code) && !/[0-9A-Za-zА-Яа-яЁё.]/.test(first.charAt(code.length))) return t;
-        return [code, t].filter(Boolean).join('\n');
-    }
-    return parts.full || (code || '');
+    return entryDxText(f, diagnoses);
 }
 function historyMeta(item) {
     if (item.kind === 'signed') {
@@ -3913,7 +3922,7 @@ function historyMeta(item) {
     return {
         icon: 'Doc', bg: 'var(--primary-50)', fg: 'var(--primary-700)',
         title: 'Draft saved',
-        subtitle: (item.fields?.chief_complaint || '').trim() || null,
+        subtitle: _blankStrip(item.fields?.chief_complaint).replace(/\s*\n+\s*/g, ' ') || null,   // DOC_RICH_FORMAT_V1 (ревью T1) — текст, а не разметка
     };
 }
 
@@ -4166,6 +4175,9 @@ async function handleSave(ctx, btnEl) {
 // поля (и сам показывает, чего не хватает); если сохранение не прошло —
 // финализация не запускается.
 async function tryFinish(ctx) {
+    // ADMIN_ACT_AS_V1 (R3) — «Завершить приём» — это подпись: от чужого имени —
+    // отказ словами до любой записи (кнопка и так неактивна; это вторая дверь).
+    if (refuseSignWhileActing()) return;
     // CABINET_FIX_V1_R3 (F11) — двойной щелчок: второй, пока первый сохраняет и подписывает, — ничего.
     if (ctx.__finishing || LINE_SIGNING.has(Number(ctx.visitServiceId))) return;   // CABINET_FIX_V1_R4 — замок строки
     ctx.__finishing = true;
@@ -4527,7 +4539,8 @@ const canManage = (t) => isMine(t) || isAdminActor();
 // CABINET_FIX_V1_TPL (E) — причина отказа сервера, а не голое «Не удалось сохранить».
 const errText = (e) => String((e && (e.message || e.error)) || e || '').trim() || tr('нет ответа сервера');
 // Пустая редактируемая область — это <br> или пробелы: не текст шаблона.
-const tplHasText = (v) => /\S/.test(String(v || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '));
+// DOC_RICH_FORMAT_V1 (T3) — таблица (и пустая — бланк для заполнения) — содержание раздела шаблона.
+const tplHasText = (v) => /\S/.test(String(v || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ')) || /<table\b/i.test(String(v || ''));
 
 function tplDate(ts) { try { return new Date(ts).toLocaleDateString('ru-RU'); } catch (e) { return ''; } }
 
@@ -4556,6 +4569,15 @@ export function tplDraftFrom(t) {
     const extra = {};
     for (const [k, v] of Object.entries((t.body && typeof t.body === 'object') ? t.body : {})) if (!(k in body)) extra[k] = v;
     return { id: t.id, name: t.name || '', scope: t.scope || 'private', doc_type: dt, body, extra };
+}
+/**
+ * DOC_RICH_FORMAT_V1 (T4) — значение раздела шаблона из редактора: разметка,
+ * очищенная правилами хранения (rich-text.js, как поле документа), с таблицей
+ * a4-tbl; раздел без текста и без таблицы — пусто. Экспорт — для проверки.
+ */
+export function tplSecValue(el) {
+    const v = sanitizeStoredHtml(el ? el.innerHTML : '');
+    return richHasContent(v) ? v : '';
 }
 /**
  * CABINET_FIX_V1_R1 — тело шаблона к сохранению: разделы редактора с текстом
@@ -4599,7 +4621,9 @@ export function tplApply(ctx, t, profile = null) {
     if (!profile && refuseWhileLoading(ctx)) return false;   // CABINET_FIX_V1_R4 (п. 3) — незагруженный лист вставок не принимает
     // Sanitize cross-authored (esp. shared) template HTML before it enters the live editor.
     const _src = (t && t.body) || {}, _clean = {};
-    for (const _k of Object.keys(_src)) _clean[_k] = sanitizeRichHtml(_src[_k]);
+    // DOC_RICH_FORMAT_V1 — правила хранения (rich-text.js): список и таблица шаблона доходят до бланка.
+    // Ревью T1 (MEDIUM 3): редактор шаблона — pre-wrap, «\n» в нём — строка; в документе — <br>.
+    for (const _k of Object.keys(_src)) _clean[_k] = textBreaks(sanitizeStoredHtml(_src[_k]));
     // CASE_DOC_TEMPLATES_V1 — вставляет тот, кто открыл: у документа истории
     // болезни свои разделы, и applyFields кабинета их не знает.
     if (profile && typeof profile.apply === 'function') { profile.apply(_clean); return null; }
@@ -4620,7 +4644,8 @@ export function tplApply(ctx, t, profile = null) {
     for (const k of Object.keys(fields)) {
         const el = ctx.container && ctx.container.querySelector('.a4-input[data-field="' + k + '"]');
         const cur = el ? String(el.innerHTML || '').trim() : '';
-        if (textOf(cur)) fields[k] = cur + '<br><br>' + fields[k];
+        // DOC_RICH_FORMAT_V1 (ревью T3) — пустая таблица — тоже содержание раздела: шаблон дописывается, а не заменяет её
+        if (textOf(cur) || richHasContent(sanitizeStoredHtml(cur))) fields[k] = cur + '<br><br>' + fields[k];
     }
     applyFields(ctx, fields, { template: true, sanitized: true });
     wsState.saved = false;
@@ -4658,9 +4683,37 @@ export function openTemplateLibraryModal(ctx, profile = null) {
 
     const backdrop = h('div', { class: 'modal-backdrop' });
     const modal    = h('div', { class: 'modal' });
-    const close = () => { backdrop.remove(); modal.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    backdrop.addEventListener('click', close);
+    // DOC_RICH_FORMAT_V1 (T4) — таблица в разделах шаблона: тот же набор, что у
+    // бланка (окно размера, панель, Tab/Enter, отмена, приведение вставки), на
+    // странице кабинета; снимается вместе с окном.
+    let tblApi = null;
+    const close = () => {
+        backdrop.remove(); modal.remove(); document.removeEventListener('keydown', onKey);
+        if (tblApi) { tblApi.dispose(); tblApi = null; }
+    };
+    // DOC_RICH_FORMAT_V1 (ревью T4) — черновик с правками не пропадает молча: Escape, щелчок
+    // мимо окна и «×» спрашивают «Закрыть без сохранения?». Правки — отличие от снимка
+    // черновика при открытии формы (то, что ушло бы в шаблон); «Отмена» формы — осознанный
+    // отказ, без вопроса.
+    const draftSnaps = new WeakMap();
+    const draftSnap = (d) => JSON.stringify([String(d.name || '').trim(), d.scope, Number(d.doc_type), tplSaveBody(d)]);
+    const draftDirty = () => {
+        const d = tplState.draft;
+        if (!d || (tplState.mode !== 'new' && tplState.mode !== 'edit') || !draftSnaps.has(d)) return false;
+        return draftSnaps.get(d) !== draftSnap(d);
+    };
+    const requestClose = () => {
+        if (draftDirty() && !confirm(tr('Шаблон не сохранён. Закрыть без сохранения?'))) return;
+        close();
+    };
+    // ревью T4 (MEDIUM) — Escape набора таблицы (из окна размера или панели, при открытом одном
+    // из них, с курсором в ячейке таблицы раздела) скрывает их, а не окно шаблонов с черновиком
+    const onKey = (e) => {
+        if (e.key !== 'Escape' || e.defaultPrevented) return;
+        if (tblApi && tblApi.escapeOwned(e)) { tblApi.hideUi(); return; }
+        requestClose();
+    };
+    backdrop.addEventListener('click', requestClose);
 
     const listEl   = h('div', { class: 'tplm-list' });
     const detailEl = h('div', { class: 'tplm-detail' });
@@ -4704,7 +4757,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
     const card = h('div', { class: 'modal-card tplm-card' },
         h('header', { class: 'modal-head' },
             h('h2', { style: { margin: 0 } }, Icon('Doc', { size: 16 }), ' ', manage ? 'Шаблоны документов' : 'Шаблоны заключений'),
-            h('button', { class: 'modal-close', type: 'button', onclick: close }, '×'),
+            h('button', { class: 'modal-close', type: 'button', onclick: requestClose }, '×'),   // DOC_RICH_FORMAT_V1 (ревью T4)
         ),
         h('div', { class: 'tplm-bar' },
             h('div', { class: 'tplm-search' }, Icon('Search', { size: 14 }), searchIn),
@@ -4720,6 +4773,8 @@ export function openTemplateLibraryModal(ctx, profile = null) {
     document.body.appendChild(backdrop);
     document.body.appendChild(modal);
     document.addEventListener('keydown', onKey);
+    // после onKey: его Escape видит окно размера ещё открытым
+    tblApi = _blankWireTables(document, _tblEnvTemplate(document));
 
     // ---- paint: LEFT list ------------------------------------------------
     function paintList() {
@@ -4756,6 +4811,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
 
     // ---- paint: RIGHT detail (view | new | edit) -------------------------
     function paintDetail() {
+        if (tblApi) tblApi.hideUi();   // DOC_RICH_FORMAT_V1 (T4) — разделы уходят, панель таблицы — с ними
         clear(detailEl);
         if (tplState.mode === 'new' || tplState.mode === 'edit') { paintForm(); return; }
         const sel = tplState.rows.find(r => r.id === tplState.selId);
@@ -4793,9 +4849,12 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             any = true;
             const body = h('div', { class: 'tplm-sec-b' });
             // CABINET_FIX_V1_TPL — форматирование шаблона видно, как в документе:
-            // тело очищено тем же sanitizeRichHtml, что и при вставке. Раньше
+            // тело очищено тем же, что и при вставке. Раньше
             // HTML показывался текстом — «Почки<br>норма».
-            body.innerHTML = sanitizeRichHtml(v);
+            // DOC_RICH_FORMAT_V1 — очистка хранения (rich-text.js): видно ровно то, что вставится.
+            // T4 — просмотр рисует разметку (white-space: normal, списки и таблица — как в
+            // документе); строки прежнего простого текста («\n») — <br>, как при вставке.
+            body.innerHTML = textBreaks(sanitizeStoredHtml(v));
             secWrap.appendChild(h('div', { class: 'tplm-sec' },
                 h('div', { class: 'tplm-sec-l' }, tr(_labels[k] || k)),
                 body,
@@ -4807,6 +4866,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
     // ---- paint: form (new | edit) ----------------------------------------
     function paintForm() {
         const d = tplState.draft;
+        if (!draftSnaps.has(d)) draftSnaps.set(d, draftSnap(d));   // DOC_RICH_FORMAT_V1 (ревью T4) — черновик, каким открыт
         const nameIn = h('input', { class: 'tplm-input', value: d.name,
             placeholder: 'Например: Контрольный осмотр после операции',
             oninput: () => { d.name = nameIn.value; } });
@@ -4817,21 +4877,91 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             'data-sv': val }, Icon(ic, { size: 14 }), ' ' + ru);
 
         const secFields = h('div', { class: 'tplm-form-secs' });
+        let lastBox = null;   // DOC_RICH_FORMAT_V1 (T4) — раздел, где врач был последним
         function paintSecFields() {
             clear(secFields);
+            lastBox = null;
+            fmtPlain(null);
+            if (tblApi) tblApi.hideUi();
             const _T = tplTypeOf(d.doc_type);
             for (const k of _T.keys) {
                 // CABINET_FIX_V1_TPL — раздел правится как документ, с его
                 // форматированием (HTML не вырезается и не показывается тегами).
+                // DOC_RICH_FORMAT_V1 (T4) — раздел как поле документа: white-space normal
+                // (Enter — новая строка-блок, список и таблица — как на листе), растёт
+                // с текстом (прокручивается окно, а не раздел); строки прежнего
+                // простого текста — <br>. Хранится очищенная разметка (tplSecValue);
+                // раздел, который не правили, остаётся в шаблоне как был.
                 const ed = h('div', { class: 'tplm-textarea', 'data-tpl-sec': k, contentEditable: 'true',
                     'data-ph': tr('Текст секции…'),
-                    style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '260px', overflowY: 'auto' },
-                    oninput: (e) => { d.body[k] = e.currentTarget.innerHTML; } });
-                ed.innerHTML = sanitizeRichHtml(d.body[k] || '');
+                    style: { whiteSpace: 'normal', overflowWrap: 'anywhere' },
+                    onfocus: (e) => { lastBox = e.currentTarget; fmtPlain(lastBox); },
+                    oninput: (e) => { tplSecSync(e.currentTarget, k); } });
+                ed.innerHTML = textBreaks(sanitizeStoredHtml(d.body[k] || ''));   // DOC_RICH_FORMAT_V1
+                if (!richHasContent(ed.innerHTML)) ed.classList.add('is-empty');
                 secFields.appendChild(h('div', { class: 'tplm-field' },
                     h('label', null, _T.labels[k] || k), ed));
             }
         }
+        // раздел → черновик: очищенная разметка; пустой раздел — пусто (и подсказка видна)
+        function tplSecSync(box, k) {
+            if (!box) return;
+            const key = k || box.getAttribute('data-tpl-sec');
+            d.body[key] = tplSecValue(box);
+            box.classList.toggle('is-empty', !d.body[key]);
+        }
+
+        // DOC_RICH_FORMAT_V1 (T4) — ПАНЕЛЬ ОФОРМЛЕНИЯ РАЗДЕЛОВ. Одна, над разделами,
+        // прилипает к верху окна при прокрутке. Не плавающая, как на листе: врач
+        // видит её сразу, не выделяя текст (владелец не нашёл, где оформлять и
+        // где таблица), и она не закрывает соседний раздел. Кнопки — те же, что у
+        // документа (_fmtButtonsHtml). Действует на раздел с курсором; курсора в
+        // разделе нет — на последний, где врач был (или первый), курсор — в конец.
+        // Ревью T4 (LOW) — «Заключение» диагностики (primary_diagnosis) лист рисует
+        // простым текстом: в нём панель погашена, с подсказкой, и таблицы нет.
+        const fmtBar = h('div', { class: 'tplm-fmt', 'data-tpl-fmt': '', role: 'toolbar', 'aria-label': 'Оформление текста' });
+        fmtBar.innerHTML = _fmtButtonsHtml() + '<span class="tplm-fmt-hint">' + escapeHtml(tr('В заключении — только текст')) + '</span>';
+        const plainBox = (box) => !!box && _TBL_OFF.has(box.getAttribute('data-tpl-sec'));
+        function fmtPlain(box) {
+            const plain = plainBox(box);
+            fmtBar.classList.toggle('is-plain', plain);
+            for (const b of fmtBar.querySelectorAll('[data-cmd]')) { if (plain) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled'); }
+        }
+        const fmtBox = () => {
+            const s = typeof document.getSelection === 'function' ? document.getSelection() : null;
+            const n = s && s.rangeCount ? s.anchorNode : null;
+            const el = n && (n.nodeType === 1 ? n : n.parentElement);
+            const inBox = el && el.closest ? el.closest('[data-tpl-sec]') : null;
+            if (inBox && _within(secFields, inBox)) {
+                if (document.activeElement !== inBox) {   // клавиатура: фокус на кнопке — вернуть его, не теряя выделения
+                    const r = s.getRangeAt(0).cloneRange();
+                    try { inBox.focus({ preventScroll: true }); s.removeAllRanges(); s.addRange(r); } catch (e) { /* по возможности */ }
+                }
+                return inBox;
+            }
+            const box = (lastBox && lastBox.isConnected && _within(secFields, lastBox)) ? lastBox : secFields.querySelector('[data-tpl-sec]');
+            if (!box) return null;
+            try {
+                box.focus({ preventScroll: true });
+                const r = document.createRange(); r.selectNodeContents(box); r.collapse(false);
+                s.removeAllRanges(); s.addRange(r);
+            } catch (e) { /* курсор — по возможности */ }
+            return box;
+        };
+        const fmtPress = (e) => {
+            const b = e.target && e.target.closest ? e.target.closest('[data-cmd]') : null;
+            if (!b) return;
+            e.preventDefault();   // выделение остаётся в разделе
+            const box = fmtBox();
+            if (!box) return;
+            if (plainBox(box)) { fmtPlain(box); return; }   // ревью T4 — «Заключение»: только текст
+            const raw = b.getAttribute('data-cmd');
+            if (raw === 'table') { if (tblApi) tblApi.openPicker(b); return; }
+            _fmtRun(document, raw, b.getAttribute('data-val'));
+            tplSecSync(box);
+        };
+        fmtBar.addEventListener('mousedown', fmtPress);
+        fmtBar.addEventListener('click', (e) => { if (e.detail === 0) fmtPress(e); });   // Enter / пробел на кнопке
         paintSecFields();
 
         const fromDoc = canReadDoc ? h('button', { class: 'btn btn-outline btn-sm', type: 'button',
@@ -4871,6 +5001,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             fromDoc ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
                 fromDoc,
                 h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'или заполните секции вручную')) : null,
+            fmtBar,   // DOC_RICH_FORMAT_V1 (T4)
             secFields,
         ));
     }
@@ -5180,10 +5311,12 @@ export function lostOnResign(prev, next, { diagnoses = [] } = {}) {
     return RESIGN_FIELDS.filter(([k]) => textOf(prev[k]) && !has(k)).map(([, label]) => tr(label));
 }
 // CABINET_FIX_V1_R3 (F11) — пока подпись «в пути», «Завершить приём» не нажать второй раз.
+// ADMIN_ACT_AS_V1 (R3) — от чужого имени кнопка остаётся неактивной и после «в пути».
 function setSignBusy(ctx, on) {
     const root = ctx && ctx.container;
     if (!root || typeof root.querySelectorAll !== 'function') return;
-    for (const b of root.querySelectorAll('[data-ws-finish]')) b.disabled = !!on;
+    const locked = isActingNow();
+    for (const b of root.querySelectorAll('[data-ws-finish]')) b.disabled = !!on || locked;
 }
 /**
  * CABINET_FIX_V1_R2 (ревью 2, п. 3) — ПОДПИСЬ СОБИРАЕТ ВСЁ ДО ПЕРВОГО ОЖИДАНИЯ.
@@ -5200,6 +5333,9 @@ function setSignBusy(ctx, on) {
  * отказывает словами — и ничего не пишет. Экспорт signDocument — для проверки.
  */
 async function handleSignFinalize(ctx) {
+    // ADMIN_ACT_AS_V1 (R3) — подпись и переподпись от чужого имени — отказ до
+    // любой записи (сервер отказал бы sign_while_acting сам).
+    if (refuseSignWhileActing()) return;
     if (!ctx.visitServiceId) { toast('Услуга не привязана — откройте из «Мои услуги».', 'fail'); return; }
     const vsKey = Number(ctx.visitServiceId);
     // CABINET_FIX_V1_R3 (F11) · CABINET_FIX_V1_R4 — второй щелчок, пока подпись строки «в пути» (в любом её экране), — ничего.
@@ -5236,7 +5372,9 @@ async function handleSignFinalize(ctx) {
     const diagImages = (wsState.diagImages || []).slice();
     const _base = buildBlankData(ctx);
     const _docData = docType === 'diag' ? diagDocData(_base, { editor: false, images: diagImages }) : Object.assign(_base, { __editor: false });   // = docSnapshot
-    const _conclText = String(_base.conclusionText || '').trim();
+    // DOC_RICH_FORMAT_V1 (F2) — visits.conclusion — текст (панель вставки истории болезни,
+    // «Заключение» в «Документах»): из поля, а не из снимка, где оно может быть разметкой.
+    const _conclText = _blankStrip(fields.conclusion_text);
     const visitId = ctx.visitId;
     const serviceName = ctx.serviceName;
     // DOC_AMEND_AUDIT_V1 — re-signing an already-signed document creates a NEW version (the
@@ -5373,6 +5511,7 @@ export const deleteHistoryEntry = (ctx, item) => handleDeleteEntry(ctx, item);  
 export const diagAddImages = (ctx, files) => _diagAddImages(ctx, files);          // CABINET_FIX_V1_R5 — экспорт для проверки
 export const addDiagnosisEntry = (ctx, d) => addDiagnosis(ctx, d);                // CABINET_FIX_V1_R6 — экспорт для проверки
 export const removeDiagnosisEntry = (ctx, idx) => removeDiagnosis(ctx, idx);      // CABINET_FIX_V1_R6 — экспорт для проверки
+export const historyRowMeta = (item) => historyMeta(item);                        // DOC_RICH_FORMAT_V1 (ревью T1) — экспорт для проверки
 export const removePrescriptionEntry = (ctx, idx) => removePrescription(ctx, idx); // CABINET_FIX_V1_R6 — экспорт для проверки
 export const removeOwnServiceEntry = (ctx, idx) => removeOwnService(ctx, idx);    // CABINET_FIX_V1_R6 — экспорт для проверки
 export const openSnapshot = (ctx, item) => openSnapshotModal(ctx, item);           // CABINET_FIX_V1_R7 — экспорт для проверки
@@ -5465,10 +5604,10 @@ function openSnapshotModal(ctx, item) {
         ].filter(Boolean));
     } else {
         const f = item.fields || {};
-        body.append(
-            snapshotKv('Жалобы',            f.chief_complaint  || '—', true),
-            snapshotKv('Анамнез',           f.hpi              || '—', true),
-            snapshotKv('Осмотр',            f.physical_exam    || '—', true),
+        body.append(   // DOC_RICH_FORMAT_V1 (F2) — поля записи — разметка врача: в окне — текст без тегов
+            snapshotKv('Жалобы',            _blankStrip(f.chief_complaint) || '—', true),
+            snapshotKv('Анамнез',           _blankStrip(f.hpi)             || '—', true),
+            snapshotKv('Осмотр',            _blankStrip(f.physical_exam)   || '—', true),
             h('div', { class: 'row', style: { gap: '12px', marginTop: '6px' } },
                 h('div', { style: { flex: '2' } }, snapshotKv('Основной диагноз', entryDx(f) || '—')),   // CABINET_FIX_V1_R2
                 h('div', { style: { flex: '1' } }, snapshotKv('МКБ-10',           f.icd10             || '—')),
@@ -6161,42 +6300,11 @@ function escapeHtml(s) {
     ));
 }
 
-// Sanitize doctor-authored rich text (the A4 contentEditable SOAP fields are
-// stored/printed as raw innerHTML). The print document is written into a
-// same-origin window.open(''), so any <script>/on*=/javascript: a doctor
-// pastes would execute with the app's origin. We parse in an inert document,
-// drop dangerous nodes/attrs, and serialize the cleaned HTML. (PRINT_XSS_SANITIZE_V1)
-function sanitizeRichHtml(input) {
-    // Like sanitizeHtml but KEEPS inline style (preserves doctor formatting: colour/highlight/bold).
-    // Strips script/dangerous elements, on* handlers, dangerous style values, and js:/data:/vbscript: URLs.
-    // Used when a (possibly cross-authored, esp. shared) template body enters the live editor.
-    const raw = String(input ?? '');
-    if (!raw) return '';
-    let doc;
-    try { doc = new DOMParser().parseFromString('<div id="__sx_rsani">' + raw + '</div>', 'text/html'); }
-    catch (e) { return escapeHtml(raw); }
-    const root = doc.getElementById('__sx_rsani');
-    if (!root) return escapeHtml(raw);
-    const BAD_TAGS = new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','LINK','META','BASE','FORM','INPUT','BUTTON','TEXTAREA','SVG','MATH','NOSCRIPT','NOEMBED','NOFRAMES','TEMPLATE','XMP','PLAINTEXT']);   // CABINET_FIX_V1_R3 — + NOSCRIPT и прочие «сырые» элементы: разобранные без скриптов, они меняют смысл при вставке (mXSS)
-    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
-    const kill = [];
-    let node = walker.nextNode();
-    while (node) {
-        if (BAD_TAGS.has(node.tagName)) { kill.push(node); }
-        else {
-            for (const attr of Array.from(node.attributes)) {
-                const name = attr.name.toLowerCase();
-                const val = (attr.value || '').replace(/\s/g, '').toLowerCase();
-                if (name.startsWith('on')) { node.removeAttribute(attr.name); continue; }
-                if (name === 'style') { if (/(javascript|vbscript|expression|url\()/i.test(val)) node.removeAttribute(attr.name); continue; }
-                if ((name === 'href' || name === 'src' || name === 'xlink:href' || name === 'formaction') && /^(javascript|data|vbscript):/.test(val)) node.removeAttribute(attr.name);
-            }
-        }
-        node = walker.nextNode();
-    }
-    kill.forEach(n => n.remove());
-    return root.innerHTML;
-}
+// PRINT_XSS_SANITIZE_V1 — разметка разделов врача (открытие записи, шаблоны,
+// бланк, печать, архив) чистится общей sanitizeStoredHtml (shared/rich-text.js,
+// список разрешённого, без DOM). DOC_RICH_FORMAT_V1 — прежний sanitizeRichHtml
+// (DOMParser, «всё, кроме опасного») убран: у формы, бланка и сервера правила
+// должны быть одни, иначе оформление, прошедшее одну очистку, теряется в другой.
 
 function sanitizeHtml(input) {
     const raw = String(input ?? '');
@@ -6254,32 +6362,39 @@ const _BLANK_FIELD_MAP = [
 // «кодтекст». Теперь начало блока после текста — тоже новая строка, конец
 // блока перед следующим блоком — одна (а не две), пустой блок (<div><br></div>)
 // — одна пустая строка. Экспорт — для проверки.
+// DOC_RICH_FORMAT_V1 (F2, F8) — ТЕКСТ ПОЛЯ для текстовых мест (диагноз, dxParts,
+// entryDx, visits.conclusion, сводки). Правило строк переехало в общую htmlToText
+// (rich-text.js) — у сервера (журнал) и кабинета оно одно; там же списки и
+// таблицы (ячейки — табуляцией). Сначала очистка: «<» прежнего простого текста
+// («SpO2 <95%, ЧСС > 90») не принимается за тег и не съедается.
+// DOC_RICH_FORMAT_V1 (ревью T1) — правило живёт в shared/cabinet-doc.js (fieldText):
+// его зовёт и карта пациента.
 export function _blankStrip(x) {
-    return String(x || '')
-        .replace(/<(div|p|li)\b[^<>]*>\s*<br\s*\/?>\s*<\/\1>/gi, '\u0002\u0001')
-        .replace(/<br\s*\/?>\s*(?=<(?:div|p|li)\b|\u0002)/gi, '')   // CABINET_FIX_V1_R4 (п. 9) — <br> перед блоком — не лишняя пустая строка
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<(div|p|li)\b[^<>]*>/gi, '\u0002').replace(/<\/(div|p|li)>/gi, '\u0001')
-        .replace(/\u0001\u0002/g, '\n').replace(/[\u0001\u0002]/g, '\n')
-        .replace(/<[^<>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')   // CABINET_FIX_V1_R2 — «"» в названии МКБ
-        .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\n{3,}/g, '\n\n').trim();
+    return fieldText(x);
+}
+/**
+ * DOC_RICH_FORMAT_V1 (F1) — РАЗДЕЛ ДЛЯ ЛИСТА: оформление врача — очищенной
+ * разметкой; набранное без оформления (только строки: <br>, <div>, <p>) —
+ * текстом, как раньше (лист рисует его pre-wrap, архив и журнал читают его как
+ * прежде). Пустые теги — пусто (F8). Экспорт — для проверки.
+ * Ревью T1: «\n» разметки — <br> (шаблон из pre-wrap редактора); таблица — даже
+ * пустая — содержание (T3). Правило — shared/cabinet-doc.js (richForSheet).
+ */
+export function _blankRich(x) {
+    return richForSheet(x);
 }
 function _mainDxText(diagnoses = wsState.payload && wsState.payload.diagnoses) {
-    const m = (diagnoses || []).find(d => d && d.type === 'main');
-    return m ? ((m.code ? m.code + ' — ' : '') + (m.name || '')).trim() : '';
+    return mainDxText(diagnoses);
 }
 /**
  * CABINET_FIX_V1_R2 (ревью 2, п. 2) — «Диагноз» строки целиком: основной
  * диагноз (код — название) своей строкой и текст врача. Запись до ревью 2,
  * где код стоял первой строкой поля врача, не даёт его дважды.
  * → { auto, text, full }. Экспорт — для проверки.
+ * DOC_RICH_FORMAT_V1 (ревью T1) — правило в shared/cabinet-doc.js: и для карты пациента.
  */
 export function dxParts(primaryDiagnosis, diagnoses) {
-    const auto = _mainDxText(diagnoses || []);
-    let text = _blankStrip(primaryDiagnosis);
-    const lines = text.split('\n');
-    if (auto && lines[0].replace(/\s+/g, ' ').trim() === auto.replace(/\s+/g, ' ').trim()) text = lines.slice(1).join('\n').trim();
-    return { auto, text, full: [auto, text].filter(Boolean).join('\n') };
+    return dxPartsCore(primaryDiagnosis, diagnoses);
 }
 /**
  * CABINET_FIX_V1_R1 (ревью п. 7) — кто подписывает документ: имя и специальность
@@ -6309,6 +6424,10 @@ function buildBlankData(ctx) {
     const svc = p.__service || {};
     const data = {
         __editor: true,
+        // DOC_RICH_FORMAT_V1 (ревью T1, LOW 5) — разделы снимка могут быть разметкой. Лист читает
+        // разметку только у снимка с этой меткой: в архиве до T1 разделы — текст, и набранное
+        // буквально «Hb <b>ниже</b>» в нём — текст, а не жирный.
+        rich: 1,
         title: 'Заключение приёма',
         patientName: `${p.lastName || ''} ${p.firstName || ''} ${p.middle || ''}`.trim() || p.fullName || '',
         mrn: p.mrn || '', phone: p.phone || '',
@@ -6322,9 +6441,12 @@ function buildBlankData(ctx) {
         diagnoses: (wsState.payload && wsState.payload.diagnoses || []).map(x => ({ code: x.code, name: x.name, type: x.type, typeLabel: DX_TYPE_RU[x.type] || '' })),
         referrals: (wsState.recommendations || []).map(rec => ({ id: rec.id, name: rec.__service_name, note: rec.__doctor_name || '' })),   // REC_RM_INLINE_V1 — id lets the editor delete a line
     };
-    data.complaint = _blankStrip(f.chief_complaint); data.hpi = _blankStrip(f.hpi);
-    data.labs = _blankStrip(f.labs_text); data.instrumental = _blankStrip(f.instrumental_text);
-    data.exam = _blankStrip(f.physical_exam);
+    // DOC_RICH_FORMAT_V1 (F1) — разделы, которые врач пишет текстом, идут на лист
+    // (экран, печать, архив, Telegram) очищенной разметкой, если в них есть
+    // оформление; «Диагноз», МКБ-10 и телефон — текстом, как раньше.
+    data.complaint = _blankRich(f.chief_complaint); data.hpi = _blankRich(f.hpi);
+    data.labs = _blankRich(f.labs_text); data.instrumental = _blankRich(f.instrumental_text);
+    data.exam = _blankRich(f.physical_exam);
     // CABINET_FIX_V1_R2 (ревью 2, п. 2) — «Диагноз» = основной диагноз своей
     // строкой (dxAuto, рисуется отдельным узлом) + текст врача (dxText). В поле
     // врача кода нет; запись до ревью 2 с кодом первой строкой не печатает его дважды.
@@ -6332,9 +6454,9 @@ function buildBlankData(ctx) {
     data.dxAuto = _dx.auto;
     data.dxText = _dx.text;
     data.dx = _dx.full;   // DX_SAVE_FIX_V1
-    data.icd10 = _blankStrip(f.icd10); data.therapy = _blankStrip(f.therapy_text);
-    data.recsText = _blankStrip(f.recommendations_text);
-    data.conclusionText = _blankStrip(f.conclusion_text);
+    data.icd10 = _blankStrip(f.icd10); data.therapy = _blankRich(f.therapy_text);
+    data.recsText = _blankRich(f.recommendations_text);
+    data.conclusionText = _blankRich(f.conclusion_text);   // DOC_RICH_FORMAT_V1 — в visits.conclusion уходит текст (handleSignFinalize)
     // WS_DOCPHONE_V1 — doctor phone shows on the sheet only when «Тел. врача» is toggled on.
     data.doctorPhone = wsState.docPhone ? (_blankStrip(f.doctor_phone) || (wsState.wsDoctorKnown ? wsState.wsDoctorPhone : (me().phone || ''))) : '';   // DOC_PHONE_SOURCE_V1 — consultation doctor's own phone
     data.showDoctor = wsState.docDoctorInfo !== false;   // DOC_DOCTOR_TOGGLE_V1
@@ -6378,6 +6500,7 @@ export function diagDocData(base, { editor = false, images = [] } = {}) {
         // бумаге и в архиве исследования (раньше терялись при подписи).
         prescriptions: (b.prescriptions || []).slice(),
         diagnoses: (b.diagnoses || []).slice(),
+        ...(b.rich ? { rich: 1 } : {}),   // DOC_RICH_FORMAT_V1 (ревью T1) — «Описание» может быть разметкой
     };
 }
 function setBlankMode(ctx, on) {
@@ -6552,6 +6675,8 @@ function _wireBlankEditing(ctx, frame) {
         '.svc .si,.recs li{display:flex;align-items:baseline;gap:6px;}' +   // REC_RM_INLINE_V1 — «Удалить» stays on the SAME line, pinned right
         '.recs li::before{content:"•";color:var(--accent,#1a7f77);}' +
         '.bk-recrm:hover{background:#fee2e2;opacity:1;}' +
+        // DOC_RICH_FORMAT_V1 (T3) — панель оформления, панель таблицы и выбор размера на бумагу не идут
+        '@media print{[data-bk-fmt],[data-bk-tbl],[data-bk-tblpick]{display:none !important;}}' +
         '@media print{.bk-add,.bk-rm,.bk-ctl,.bk-icd,.bk-recrm,[data-ws-actions]{display:none !important;}}';
     doc.head.appendChild(st);
     try { doc.body.style.zoom = wsState.docZoom || 1; } catch (e) {}   // DOC_ZOOM_V1 — keep zoom across re-renders
@@ -6562,6 +6687,14 @@ function _wireBlankEditing(ctx, frame) {
         el.setAttribute('contenteditable', _loading ? 'false' : 'true');
         el.addEventListener('input', () => _syncBlankField(ctx, el));
     }
+    _blankNormalizeFields(doc);   // DOC_RICH_FORMAT_V1 (ревью r3) — таблицы из шаблона и прежних записей — простые, до раскладки
+    _blankWireSplitEdges(doc);   // DOC_RICH_FORMAT_V1 (ревью T2) — курсор не уходит в промежуток между половинами таблицы/списка
+    // DOC_RICH_FORMAT_V1 (F4) — цвет, подсветка и A+/A− ложатся <span style>, а не
+    // <font>: так их пропускает очистка хранения. Флаг документа — ставится при
+    // каждом начале правки (и перед командой панели): перерисовка пишет новый документ.
+    const _styleWithCss = () => { try { doc.execCommand('styleWithCSS', false, true); } catch (e) { /* <font> переведёт очистка */ } };
+    _styleWithCss();
+    doc.addEventListener('focusin', _styleWithCss);
     if (_loading && doc.body) {
         const note = doc.createElement('div');
         note.className = 'bk-loading';
@@ -6642,25 +6775,18 @@ function _wireBlankEditing(ctx, frame) {
         const fbar = doc.createElement('div');
         fbar.setAttribute('data-bk-fmt', '');
         fbar.style.cssText = 'position:absolute;display:none;z-index:99999;background:#111827;border-radius:8px;padding:3px;box-shadow:0 6px 18px rgba(0,0,0,.28);white-space:nowrap;';
-        const fbBtn = (cmd, label, val) => `<button type="button" data-cmd="${cmd}"${val ? ` data-val="${val}"` : ''} style="border:0;background:transparent;color:#fff;font:600 13.5px/1 Arial,sans-serif;cursor:pointer;padding:5px 8px;border-radius:5px;">${label}</button>`;
-        fbar.innerHTML =
-            fbBtn('bold', tr('<b>Ж</b>')) + fbBtn('italic', tr('<i>К</i>')) + fbBtn('underline', tr('<u>Ч</u>')) + fbBtn('strikeThrough', tr('<s>З</s>')) +
-            fbBtn('foreColor', '<span style="color:#4dabf7">A</span>', '#1971c2') +
-            fbBtn('hiliteColor', '<span style="background:#fff3bf;color:#111;padding:0 3px;border-radius:2px">A</span>', '#fff3bf') +
-            fbBtn('fontSize:5', 'A+', '') + fbBtn('fontSize:2', 'A-', '') +
-            fbBtn('insertUnorderedList', '•') + fbBtn('insertOrderedList', '1.') + fbBtn('removeFormat', '⌫');
+        fbar.innerHTML = _fmtButtonsHtml();   // DOC_RICH_FORMAT_V1 (T4) — те же кнопки, что у разделов шаблона
         doc.body.appendChild(fbar);
+        const _tbl = _blankWireTables(doc);   // DOC_RICH_FORMAT_V1 (T3) — выбор размера, панель таблицы, Tab и Enter в ячейке
         fbar.addEventListener('mousedown', (e) => {
             const b = e.target.closest('[data-cmd]'); if (!b) return;
             e.preventDefault();
             const raw = b.getAttribute('data-cmd');
-            try {
-                if (raw.indexOf('fontSize:') === 0) doc.execCommand('fontSize', false, raw.split(':')[1]);
-                else doc.execCommand(raw, false, b.getAttribute('data-val') || null);
-            } catch (_) {}
+            if (raw === 'table') { _tbl.openPicker(b); return; }   // DOC_RICH_FORMAT_V1 (T3)
+            _fmtRun(doc, raw, b.getAttribute('data-val'));   // DOC_RICH_FORMAT_V1 (F4, T4) — styleWithCSS и команда
             const sel = doc.getSelection(); const n = sel && sel.anchorNode;
             const host = n && (n.nodeType === 1 ? n : n.parentElement);
-            const fld = host && host.closest('[data-field]');
+            const fld = host && host.closest('[data-field],[data-cont-of]');   // DOC_RICH_FORMAT_V1 (T3) — и продолжение на следующей странице
             if (fld) _syncBlankField(ctx, fld);
         });
         let _fbHideT = null;
@@ -6671,14 +6797,18 @@ function _wireBlankEditing(ctx, frame) {
             fbar.style.display = 'block';
             fbar.style.left = Math.max(6, r.left + sx) + 'px';
             fbar.style.top = Math.max(6, r.top + sy - 38) + 'px';
+            // DOC_RICH_FORMAT_V1 (T3) — в строке простого текста («Диагноз», телефон) таблицы нет
+            const tb = fbar.querySelector('[data-cmd="table"]');
+            if (tb) tb.style.display = _TBL_OFF.has(fld.getAttribute('data-field') || fld.getAttribute('data-cont-of')) ? 'none' : '';
         };
+        // DOC_RICH_FORMAT_V1 (T3) — панель и для продолжения раздела на следующей странице ([data-cont-of])
         doc.addEventListener('focusin', (e) => {
-            const fld = e.target && e.target.closest && e.target.closest('[data-field]');
+            const fld = e.target && e.target.closest && e.target.closest('[data-field],[data-cont-of]');
             if (fld) { clearTimeout(_fbHideT); showFbar(fld); }
         });
         doc.addEventListener('focusout', () => { _fbHideT = setTimeout(() => { fbar.style.display = 'none'; }, 250); });
         fbar.addEventListener('mousedown', () => { clearTimeout(_fbHideT); }, true);
-        doc.addEventListener('scroll', () => { const a = doc.activeElement; const fld = a && a.closest && a.closest('[data-field]'); if (fld && fbar.style.display !== 'none') showFbar(fld); }, true);
+        doc.addEventListener('scroll', () => { const a = doc.activeElement; const fld = a && a.closest && a.closest('[data-field],[data-cont-of]'); if (fld && fbar.style.display !== 'none') showFbar(fld); }, true);
     }
     // PAPER_ACTIONS_BLANK_V1 — inject «Повторный визит» + «Заявка на госпитализацию» into the WYSIWYG
     // sheet, right under the last section (recommendations), just above the signature/М.П. block.
@@ -6767,18 +6897,62 @@ function _syncBlankField(ctx, el) {
     const key = el.getAttribute('data-field') || el.getAttribute('data-cont-of');
     if (!key) return;
     // A4_TEXT_SPLIT_V1 — the field may be split across pages: join every part in order.
+    // DOC_RICH_FORMAT_V1 — основная часть и её продолжения двумя запросами: продолжения
+    // всегда стоят после основной части, порядок тот же.
     const doc = el.ownerDocument;
-    const parts = [...doc.querySelectorAll('[data-field="' + key + '"], [data-cont-of="' + key + '"]')];
+    const parts = [...doc.querySelectorAll('[data-field="' + key + '"]'), ...doc.querySelectorAll('[data-cont-of="' + key + '"]')];
     const txt = parts.map(p => String(p.innerText || '')).join('\n').replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n');
     const root = (ctx && ctx.container) || document;   // continuations created by the paginator pass ctx=null
     const host = root.querySelector(`.a4-input[data-field="${key}"]`) || root.querySelector(`[data-field="${key}"]`);
     if (host) {
-        if (host.classList && host.classList.contains('a4-input')) host.innerHTML = escapeHtml(txt.trim()).replace(/\n/g, '<br>');
+        // DOC_RICH_FORMAT_V1 (F1) — в форму уходит очищенная РАЗМЕТКА (списки, жирный,
+        // цвет, таблица результата), а не innerText. «Диагноз» — строка простого текста, как раньше.
+        if (host.classList && host.classList.contains('a4-input')) host.innerHTML = key === 'primary_diagnosis' ? escapeHtml(txt.trim()).replace(/\n/g, '<br>') : _blankFieldHtml(parts);
         else host.value = txt.trim();
     }
     wsState.saved = false;
     if (ctx) resetSaveBtn(ctx);
     else { const b = document.querySelector('[data-save-btn]'); if (b) { wsState.saved = false; } }
+}
+// DOC_RICH_FORMAT_V1 (F1) — разметка поля бланка для формы, очищенная
+// (sanitizeStoredHtml). Пустые теги — пусто (F8).
+// DOC_RICH_FORMAT_V1 (T2, F5) — поле, разделённое по страницам, уходит в форму
+// ОДНИМ ЦЕЛЫМ: копии частей сливаются тем же joinCont, что и перед разбивкой
+// (blank-split.js), — каждый список и таблица один раз, повтор заголовка и
+// метки продолжения и курсора выброшены. Живые части не трогаются: курсор
+// врача остаётся, где был. Склейка «часть + <div>продолжение</div>» (T1) давала
+// два списка и два заголовка таблицы; она осталась только запасным путём —
+// если копию собрать нельзя (без настоящего DOM).
+// Экспорт — для проверки.
+export function _blankFieldHtml(parts) {
+    let src = parts[0] || null;
+    if (parts.length > 1) { try { src = mergedFieldClone(parts); } catch (e) { src = null; } }
+    const html = src ? _blankPartHtml(parts[0], src) : parts.map((p, i) => {
+        const part = _blankPartHtml(p);
+        return i === 0 || !part ? part : '<div>' + part + '</div>';
+    }).join('');
+    return richHasContent(html) ? html : '';   // DOC_RICH_FORMAT_V1 (T3) — пустая таблица — содержание, не стирается
+}
+// В поле с pre-wrap (простой текст бланка) «\n» — видимая строка: Chrome пишет
+// его там на Shift+Enter, и innerText видел его строкой. В разметку он уходит
+// <br>; в поле .rich (white-space:normal) «\n» — пробел и остаётся как есть.
+// DOC_RICH_FORMAT_V1 (T2) — разметку можно взять у слитой копии (src), а
+// pre-wrap — только у живого поля p: у копии вне документа стиля нет.
+// DOC_RICH_FORMAT_V1 (ревью T3, HIGH 2) — правило textBreaks (rich-text.js):
+// пробелы и переводы строк МЕЖДУ тегами блоков и таблицы — не строки (вставка из
+// Excel и Word: «<tr>\n  <td>»); раньше каждый становился <br>, и перед
+// таблицей вырастало пустое место на страницу.
+function _blankPartHtml(p, src = p) {
+    const html = sanitizeStoredHtml(src.innerHTML || '');
+    if (!_blankPreWrap(p)) return html;
+    return textBreaks(html);
+}
+function _blankPreWrap(p) {
+    try {
+        const view = p.ownerDocument && p.ownerDocument.defaultView;
+        if (view && view.getComputedStyle) return /^(pre|pre-wrap|pre-line|break-spaces)$/.test(view.getComputedStyle(p).whiteSpace);
+    } catch (e) { /* без окна — по классу варианта */ }
+    return !(p.classList && p.classList.contains('rich'));
 }
 
 
@@ -6794,7 +6968,16 @@ function _syncBlankField(ctx, el) {
 // re-split on every run keeps it idempotent; the caret is saved and restored.
 // Non-text blocks transfer whole; absolutes (watermark/stamp) are ignored.
 // ===========================================================================
-const _A4 = { PAGE: 1123, MB: 48, MT: 56 };
+// DOC_RICH_FORMAT_V1 (T2, F5) — поле С ОФОРМЛЕНИЕМ (список, таблица, жирный,
+// цвет) делится не строками innerText, а узлами (blank-split.js): между
+// блоками, пунктами списка, строками таблицы; продолжение — тот же список (ol
+// продолжает нумерацию) и та же таблица с повтором заголовка; обёртка
+// продолжения помечена data-cont-mode="rich". Слияние перед каждым проходом
+// возвращает узлы (joinCont), курсор — меткой в DOM. Такое продолжение делится
+// и дальше — длинный список или таблица идут на третью страницу. Простой текст
+// (только строки) делится прежним алгоритмом, слово в слово.
+// ===========================================================================
+const _A4 = { PAGE: 1123, MB: 48, MT: 56, MAX_PARTS: 200 };   // MAX_PARTS — ревью T2: предел продолжений на одну раскладку
 
 function _blankSaveCaret(doc) {
     try {
@@ -6806,6 +6989,10 @@ function _blankSaveCaret(doc) {
         const key = fieldEl.getAttribute('data-field') || fieldEl.getAttribute('data-cont-of');
         // global text offset across all parts of this field
         const parts = [...doc.querySelectorAll('[data-field="' + key + '"], [data-cont-of="' + key + '"]')];
+        // DOC_RICH_FORMAT_V1 (T2, F5) — у поля с оформлением узлы переезжают
+        // между частями, и смещение по тексту после этого указывает не туда:
+        // курсор помечается в самом DOM и едет вместе со своим текстом.
+        if (parts.some(fieldIsRich)) return insertCaretMark(sel.anchorNode, sel.anchorOffset) ? { key, mark: true } : null;
         let off = 0, found = false;
         for (const part of parts) {
             const walker = doc.createTreeWalker(part, 4 /* TEXT */);
@@ -6822,6 +7009,17 @@ function _blankSaveCaret(doc) {
 }
 function _blankRestoreCaret(doc, caret) {
     if (!caret) return;
+    // DOC_RICH_FORMAT_V1 (T2) — метка снимается всегда (и при сбое прохода), курсор — туда, где она стоит.
+    if (caret.mark) {
+        try {
+            const at = takeCaretMark(doc.body || doc.documentElement);
+            if (!at) return;
+            const r = doc.createRange();
+            r.setStart(at.node, at.offset); r.collapse(true);
+            const sel = doc.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        } catch (e) { /* caret restore is best-effort */ }
+        return;
+    }
     try {
         const parts = [...doc.querySelectorAll('[data-field="' + caret.key + '"], [data-cont-of="' + caret.key + '"]')];
         let off = caret.off;
@@ -6862,31 +7060,609 @@ function _blankFlowBlocks(sheet) {
 function _paginateBlank(doc, ctx) {
     const sheet = doc.querySelector('.sheet');
     if (!sheet) return;
+    // DOC_RICH_FORMAT_V1 (ревью T3) — окно размера и панель таблицы при раскладке закрываются:
+    // таблица уезжает, панель вернётся по курсору (selectionchange)
+    for (const ui of doc.querySelectorAll('[data-bk-tblpick],[data-bk-tbl]')) ui.style.display = 'none';
     const caret = _blankSaveCaret(doc);
-    // 1) merge continuations back into their primary field, drop separators
-    for (const cont of [...doc.querySelectorAll('[data-cont-wrap]')]) {
-        const key = cont.getAttribute('data-cont-wrap');
-        const contB = cont.querySelector('[data-cont-of]');
-        const primary = doc.querySelector('[data-field="' + key + '"]');
-        const t = contB ? String(contB.innerText || '') : '';
-        if (primary && t) primary.innerText = String(primary.innerText || '') + '\n' + t;
-        cont.remove();
-    }
-    for (const g of [...doc.querySelectorAll('.bk-pagesep')]) g.remove();
+    try {
+        // 1) merge continuations back into their primary field, drop separators
+        //    (document order: a field continued over pages 2 and 3 joins back in order)
+        for (const cont of [...doc.querySelectorAll('[data-cont-wrap]')]) {
+            const key = cont.getAttribute('data-cont-wrap');
+            const contB = cont.querySelector('[data-cont-of]');
+            const primary = doc.querySelector('[data-field="' + key + '"]');
+            if (primary && contB) _blankMergePart(primary, contB, cont.getAttribute('data-cont-mode'));
+            cont.remove();
+        }
+        for (const g of [...doc.querySelectorAll('.bk-pagesep')]) g.remove();
+        // DOC_RICH_FORMAT_V1 (ревью T3) — метки пары нужны только для слияния; новые поставит разрез
+        clearSplitIds(doc.body || doc.documentElement);
 
-    // 2) multi-pass split/transfer until stable (long docs need page 3, 4, …)
-    const view = doc.defaultView;
-    for (let pass = 0; pass < 6; pass++) {
-        if (!_blankPaginatePass(doc, sheet, view)) break;
+        // 2) multi-pass split/transfer until stable (long docs need page 3, 4, …)
+        // DOC_RICH_FORMAT_V1 (ревью T2, LOW) — продолжение с оформлением делится
+        // в том же проходе (500 пунктов, 300 строк таблицы — все страницы);
+        // предел — 200 частей на раскладку, чтобы сбой вёрстки не зациклил её.
+        const view = doc.defaultView;
+        const budget = { parts: _A4.MAX_PARTS };
+        for (let pass = 0; pass < 6; pass++) {
+            if (!_blankPaginatePass(doc, sheet, view, budget)) break;
+        }
+    } finally {
+        _blankRestoreCaret(doc, caret);   // DOC_RICH_FORMAT_V1 (T2) — метка курсора не остаётся в DOM и при сбое
     }
-    _blankRestoreCaret(doc, caret);
+}
+export const paginateBlank = (doc) => _paginateBlank(doc, null);   // DOC_RICH_FORMAT_V1 (T2) — экспорт для проверки (headless Chrome)
+
+// DOC_RICH_FORMAT_V1 (T2, F5) — продолжение возвращается в поле. Простой текст с
+// обеих сторон (продолжение строками, data-cont-mode="text") — прежним
+// innerText, слово в слово; есть оформление — узлами (joinCont): разрезанный
+// список и таблица снова одни, повтор заголовка выброшен. Пустое продолжение
+// (врач стёр всё на следующей странице) строк не добавляет.
+function _blankMergePart(primary, contB, mode) {
+    if (mode !== 'rich' && !fieldIsRich(primary) && !fieldIsRich(contB)) {
+        const t = String(contB.innerText || '');
+        if (t) primary.innerText = String(primary.innerText || '') + '\n' + t;
+        return;
+    }
+    // ревью T2 — курсор врача в пустом продолжении не пропадает вместе с ним
+    if (contIsBlank(contB)) keepMarks(contB, primary);
+    else joinCont(primary, contB, mode === 'rich' ? 'rich' : 'text');
 }
 
-function _blankPaginatePass(doc, sheet, view) {
+// DOC_RICH_FORMAT_V1 (ревью T2, MEDIUM 1) — КРАЯ ПОЛОВИН ТАБЛИЦЫ И СПИСКА.
+// Повтор заголовка на странице 2 не правится (contenteditable=false), и ↑ из
+// первой строки данных выводил курсор из таблицы — в начало продолжения; ↓ из
+// последней строки страницы 1 — за таблицу; так же щелчок справа от неё.
+// Набранное там вставало между половинами. После стрелки (и щелчка) курсор,
+// оказавшийся в таком промежутке, переходит в соседнюю половину: ↑/← — в
+// последнюю строку (пункт) предыдущей страницы, ↓/→ — в первую строку данных
+// (пункт) следующей; ↑/↓ — в ту же колонку; щелчок — в свою половину.
+// Части поля — разные правимые области, и стрелка между ними не ходит: на
+// краю половины (последний пункт страницы 1, первый — страницы 2) она курсор
+// не двигает — тогда тот же шаг через шов (edgeHop).
+function _blankWireSplitEdges(doc) {
+    const DIR = { ArrowUp: 'back', ArrowLeft: 'back', ArrowDown: 'fwd', ArrowRight: 'fwd' };
+    const snap = (dir, col, was) => {
+        try {
+            const sel = doc.getSelection();
+            if (!sel || !sel.rangeCount || !sel.isCollapsed || !sel.anchorNode) return;
+            const n = sel.anchorNode;
+            const el = n.nodeType === 1 ? n : n.parentElement;
+            const host = el && el.closest && el.closest('[data-field],[data-cont-of]');
+            if (!host) return;
+            const key = host.getAttribute('data-field') || host.getAttribute('data-cont-of');
+            const parts = [...doc.querySelectorAll('[data-field="' + key + '"]'), ...doc.querySelectorAll('[data-cont-of="' + key + '"]')];
+            if (parts.length < 2) return;
+            let at = gapCaret(parts, n, sel.anchorOffset, dir, col);
+            if (!at && was && was.node === n && was.offset === sel.anchorOffset && dir !== 'stay') at = edgeHop(parts, n, dir, col);
+            if (!at) return;
+            if (at.host !== host) { try { at.host.focus({ preventScroll: true }); } catch (e) { /* без фокуса выделение всё равно ставится */ } }
+            const r = doc.createRange();
+            r.setStart(at.node, at.offset); r.collapse(true);
+            sel.removeAllRanges(); sel.addRange(r);
+        } catch (e) { /* курсор — по возможности */ }
+    };
+    const NAV = new Set(['Home', 'End', 'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+    doc.addEventListener('keydown', (e) => {
+        const dir = DIR[e.key];
+        if (e.shiftKey || e.isComposing) return;   // Shift — выделение, не курсор
+        // ревью r3 (MEDIUM 1) — Ctrl+End, Home/End, PageUp/PageDown, Ctrl/Alt+стрелки: сразу после
+        // сдвига курсора (а не после паузы selectionchange — следующая буква пришла бы раньше)
+        if (!dir || e.ctrlKey || e.metaKey || e.altKey) { if (NAV.has(e.key)) setTimeout(() => snap('stay', -1, null), 0); return; }
+        let col = -1;
+        let was = null;
+        try {
+            const s = doc.getSelection();
+            const a = s && s.anchorNode;
+            if (a && s.isCollapsed) was = { node: a, offset: s.anchorOffset };
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                const cel = a && (a.nodeType === 1 ? a : a.parentElement);
+                const td = cel && cel.closest && cel.closest('td,th');
+                if (td && td.parentElement) col = [...td.parentElement.children].indexOf(td);
+            }
+        } catch (err) { /* без колонки — крайняя ячейка */ }
+        setTimeout(() => snap(dir, col, was), 0);   // после того, как браузер сдвинул курсор (или не сдвинул)
+    }, true);
+    // ревью r3 (MEDIUM 1) — в промежуток ведут не только стрелки: Ctrl+End, Home/End, PageUp/PageDown,
+    // Ctrl+стрелки, щелчок. Любой сдвиг курсора (selectionchange — на следующем шаге, не во время
+    // набора IME) проверяется: курсор в промежутке — в свою половину.
+    let selT = null;
+    let composing = false;
+    doc.addEventListener('compositionstart', () => { composing = true; });
+    doc.addEventListener('compositionend', () => { composing = false; });
+    doc.addEventListener('selectionchange', () => {
+        if (composing) return;
+        clearTimeout(selT);
+        selT = setTimeout(() => { if (!composing) snap('stay', -1, null); }, 0);
+    });
+}
+export const wireSplitEdges = (doc) => _blankWireSplitEdges(doc);   // DOC_RICH_FORMAT_V1 (ревью T2) — экспорт для проверки (headless Chrome)
+
+// ===========================================================================
+// DOC_RICH_FORMAT_V1 (T3, правило F6) — ТАБЛИЦА В БЛАНКЕ. Владелец: «простая
+// таблица», без объединения ячеек.
+//   - «Таблица» в панели оформления: сетка выбора размера (наведение — строки ×
+//     столбцы, до 15 × 8, подпись «3 × 4») и поля чисел для клавиатуры;
+//     вставка в курсор (blank-table.js insertTable): первая строка —
+//     заголовок, под таблицей — абзац, курсор — в первой ячейке заголовка.
+//   - Курсор в ячейке (поля или его продолжения на следующей странице) —
+//     панель под таблицей: «+ строка», «+ столбец», «− строка», «− столбец»,
+//     «Удалить таблицу». Разрезанная по страницам таблица — одна таблица:
+//     операции идут по всем её половинам. После каждой — событие input:
+//     форма получает поле целиком, раскладка по страницам — заново.
+//   - Tab / Shift+Tab — следующая / предыдущая ячейка (через половины, повтор
+//     заголовка пропускается), Tab в последней ячейке — новая строка; Enter в
+//     ячейке — перенос строки в ней. Вне таблицы Tab — как был.
+//   - Пока документ загружается (поле не правится) — ни панели, ни вставки.
+// ===========================================================================
+const _TBL_OFF = new Set(['primary_diagnosis', 'doctor_phone', 'icd10']);   // строки простого текста — без таблиц
+// DOC_RICH_FORMAT_V1 (T4) — КНОПКИ ПАНЕЛИ ОФОРМЛЕНИЯ: одни для бланка (плавающая
+// панель в iframe) и для разделов окна шаблонов (панель над разделами).
+function _fmtButtonsHtml() {
+    const fbBtn = (cmd, label, val) => `<button type="button" data-cmd="${cmd}"${val ? ` data-val="${val}"` : ''} style="border:0;background:transparent;color:#fff;font:600 13.5px/1 Arial,sans-serif;cursor:pointer;padding:5px 8px;border-radius:5px;">${label}</button>`;
+    return fbBtn('bold', tr('<b>Ж</b>')) + fbBtn('italic', tr('<i>К</i>')) + fbBtn('underline', tr('<u>Ч</u>')) + fbBtn('strikeThrough', tr('<s>З</s>')) +
+        fbBtn('foreColor', '<span style="color:#4dabf7">A</span>', '#1971c2') +
+        fbBtn('hiliteColor', '<span style="background:#fff3bf;color:#111;padding:0 3px;border-radius:2px">A</span>', '#fff3bf') +
+        fbBtn('fontSize:5', 'A+', '') + fbBtn('fontSize:2', 'A-', '') +
+        fbBtn('insertUnorderedList', '•') + fbBtn('insertOrderedList', '1.') + fbBtn('removeFormat', '⌫') +
+        // DOC_RICH_FORMAT_V1 (T3, F6) — «Таблица»: выбор размера, вставка в курсор
+        `<button type="button" data-cmd="table" title="${escapeHtml(tr('Таблица'))}" aria-label="${escapeHtml(tr('Таблица'))}" style="border:0;background:transparent;color:#fff;cursor:pointer;padding:4px 8px;border-radius:5px;vertical-align:middle;line-height:0;">${_TBL_ICON}</button>`;
+}
+// Команда кнопки: цвет и размер — <span style> (styleWithCSS), их пропускает очистка хранения (F4).
+function _fmtRun(doc, raw, val) {
+    try { doc.execCommand('styleWithCSS', false, true); } catch (e) { /* <font> переведёт очистка */ }
+    try {
+        if (String(raw).indexOf('fontSize:') === 0) doc.execCommand('fontSize', false, String(raw).split(':')[1]);
+        else doc.execCommand(raw, false, val || null);
+    } catch (e) { /* команда браузера — по возможности */ }
+}
+const _TBL_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>';
+function _blankHostOf(node) {
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    return el && el.closest ? el.closest('[data-field],[data-cont-of]') : null;
+}
+const _blankKeyOf = (host) => host.getAttribute('data-field') || host.getAttribute('data-cont-of');
+const _blankPartsOf = (doc, key) => [...doc.querySelectorAll('[data-field="' + key + '"]'), ...doc.querySelectorAll('[data-cont-of="' + key + '"]')];
+const _blankTablesOn = (host) => !!host && host.getAttribute('contenteditable') === 'true' && !_TBL_OFF.has(_blankKeyOf(host));
+// Ревью r3 (MEDIUM 2) — таблица в обёртке (шаблон, прежняя запись, а не вставка) приводится к
+// простой ОДИН раз при показе бланка, целиком, до раскладки: разрезанную половину набор уже не
+// трогает (normalizePasted пропускает её), и пара половин не рвётся. Шаблон («Использовать»)
+// перерисовывает бланк — и тоже проходит здесь. Форма не трогается: содержание то же.
+function _blankNormalizeFields(doc) {
+    for (const el of doc.querySelectorAll('[data-field]')) {
+        if (_TBL_OFF.has(el.getAttribute('data-field')) || !el.querySelector || !el.querySelector('table')) continue;
+        try { normalizePasted(el); } catch (e) { /* поле остаётся как есть */ }
+    }
+}
+export const normalizeFields = (doc) => _blankNormalizeFields(doc);   // DOC_RICH_FORMAT_V1 (ревью r3) — экспорт для проверки (headless Chrome)
+// DOC_RICH_FORMAT_V1 (T4) — ГДЕ РАБОТАЕТ ТАБЛИЦА. Один набор (окно размера,
+// панель, Tab/Enter, отмена, приведение вставки) для двух мест:
+//   - бланк кабинета (iframe): части поля [data-field] и продолжения
+//     [data-cont-of], отмена — с раскладкой по страницам заново;
+//   - разделы окна шаблонов ([data-tpl-sec], страница кабинета, не iframe):
+//     раздел — одна часть, страниц нет; окно размера и панель — position:fixed
+//     над окном шаблонов.
+function _tblEnvBlank(doc) {
+    return {
+        hostOf: _blankHostOf,
+        keyOf: _blankKeyOf,
+        partsOf: (key) => _blankPartsOf(doc, key),
+        tablesOn: _blankTablesOn,
+        fixed: false,
+        restore: (key, html) => {
+            const primary = doc.querySelector('[data-field="' + key + '"]');
+            if (!primary) return null;
+            for (const w of [...doc.querySelectorAll('[data-cont-wrap="' + key + '"]')]) w.remove();
+            primary.innerHTML = html;
+            _paginateBlank(doc, null);
+            return primary;
+        },
+    };
+}
+function _tblEnvTemplate(doc) {
+    const hostOf = (node) => {
+        const el = node && (node.nodeType === 1 ? node : node.parentElement);
+        return el && el.closest ? el.closest('[data-tpl-sec]') : null;
+    };
+    return {
+        hostOf,
+        keyOf: (host) => host.getAttribute('data-tpl-sec'),
+        partsOf: (key) => [...doc.querySelectorAll('[data-tpl-sec="' + key + '"]')],
+        // ревью T4 (LOW) — «Заключение» диагностики (primary_diagnosis) — строка простого текста, как на листе
+        tablesOn: (host) => !!host && host.getAttribute('contenteditable') === 'true' && !_TBL_OFF.has(host.getAttribute('data-tpl-sec')),
+        fixed: true,
+        // видимая часть окна шаблонов (правая половина прокручивается): панель таблицы — в её пределах
+        clipOf: (host) => { const v = host && host.closest ? host.closest('.tplm-detail') : null; return v ? v.getBoundingClientRect() : null; },
+        restore: (key, html) => {
+            const box = doc.querySelector('[data-tpl-sec="' + key + '"]');
+            if (box) box.innerHTML = html;
+            return box;
+        },
+    };
+}
+function _blankPutCaret(doc, env, at) {
+    if (!at || !at.node) return;
+    const host = env.hostOf(at.node);
+    try { if (host && doc.activeElement !== host && host.focus) host.focus({ preventScroll: true }); } catch (e) { /* без фокуса выделение всё равно ставится */ }
+    try {
+        const r = doc.createRange();
+        r.setStart(at.node, at.offset); r.collapse(true);
+        const s = doc.getSelection(); s.removeAllRanges(); s.addRange(r);
+    } catch (e) { /* курсор — по возможности */ }
+}
+// Событие input на части поля: форма получает поле целиком (_syncBlankField), бланк раскладывается заново.
+function _blankFireInput(host) {
+    if (!host) return;
+    try {
+        const E = (host.ownerDocument.defaultView && host.ownerDocument.defaultView.Event) || Event;
+        host.dispatchEvent(new E('input', { bubbles: true }));
+    } catch (e) { /* без события форма догонит на следующем вводе */ }
+}
+// n — внутри box (или сам box)
+function _within(box, n) {
+    for (let x = n; x; x = x.parentNode || x.parentElement) if (x === box) return true;
+    return false;
+}
+// Ячейка под курсором — в правимой части поля с таблицами; повтор заголовка — не ячейка.
+function _blankCaretCell(doc, env) {
+    const s = typeof doc.getSelection === 'function' ? doc.getSelection() : null;
+    const n = s && s.rangeCount ? s.anchorNode : null;
+    const el = n && (n.nodeType === 1 ? n : n.parentElement);
+    const cell = el && el.closest ? el.closest('td,th') : null;
+    if (!cell || cell.closest('[data-cont-head]')) return null;
+    const host = env.hostOf(cell);
+    if (!env.tablesOn(host)) return null;
+    return { cell, host, key: env.keyOf(host) };
+}
+
+function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
+    // окно шаблонов — position:fixed (координаты окна), бланк — absolute (с прокруткой документа)
+    const sx = () => (env.fixed ? 0 : doc.documentElement.scrollLeft || doc.body.scrollLeft || 0);
+    const sy = () => (env.fixed ? 0 : doc.documentElement.scrollTop || doc.body.scrollTop || 0);
+    const pos = env.fixed ? 'position:fixed;' : 'position:absolute;';
+    const font = 'font:600 12.5px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;';
+    // DOC_RICH_FORMAT_V1 (T4) — подписки снимаются (окно шаблонов закрывается, документ страницы остаётся)
+    const subs = [];
+    const on = (target, type, fn, opts) => { if (!target || !target.addEventListener) return; target.addEventListener(type, fn, opts); subs.push([target, type, fn, opts]); };
+
+    // ─── выбор размера ─────────────────────────────────────────────────────────
+    const pick = doc.createElement('div');
+    pick.setAttribute('data-bk-tblpick', '');
+    pick.setAttribute('role', 'dialog');
+    pick.setAttribute('aria-label', tr('Размер таблицы'));
+    pick.style.cssText = pos + 'display:none;z-index:100000;background:#fff;border:1px solid #d3d9de;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:10px 12px;color:#1f2d34;' + font;
+    const grid = doc.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(' + TBL_MAX_COLS + ',16px);gap:3px;';
+    for (let r = 1; r <= TBL_MAX_ROWS; r += 1) {
+        for (let c = 1; c <= TBL_MAX_COLS; c += 1) {
+            const cell = doc.createElement('div');
+            cell.setAttribute('data-r', String(r));
+            cell.setAttribute('data-c', String(c));
+            cell.style.cssText = 'width:16px;height:16px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:3px;background:#fff;cursor:pointer;';
+            grid.appendChild(cell);
+        }
+    }
+    const lbl = doc.createElement('div');
+    lbl.setAttribute('data-bk-tblsize', '');
+    lbl.style.cssText = 'margin:8px 0;text-align:center;';
+    const num = (label, max) => {
+        const l = doc.createElement('label');
+        l.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin-right:8px;';
+        const t = doc.createElement('span'); t.textContent = label;
+        const i = doc.createElement('input');
+        i.type = 'number'; i.min = '1'; i.max = String(max);
+        i.style.cssText = 'width:48px;padding:3px 4px;border:1px solid #cbd5e1;border-radius:6px;' + font;
+        l.appendChild(t); l.appendChild(i);
+        return [l, i];
+    };
+    const [rowsL, rowsI] = num(tr('Строки'), TBL_MAX_ROWS);
+    const [colsL, colsI] = num(tr('Столбцы'), TBL_MAX_COLS);
+    const ins = doc.createElement('button');
+    ins.type = 'button';
+    ins.setAttribute('data-bk-tblins', '');
+    ins.textContent = tr('Вставить таблицу');
+    ins.style.cssText = 'display:block;width:100%;margin-top:8px;padding:6px 10px;border:1px solid #167873;border-radius:8px;background:#167873;color:#fff;cursor:pointer;' + font;
+    const row2 = doc.createElement('div');
+    row2.appendChild(rowsL); row2.appendChild(colsL);
+    pick.appendChild(grid); pick.appendChild(lbl); pick.appendChild(row2); pick.appendChild(ins);
+    doc.body.appendChild(pick);
+    let size = [3, 4];
+    let saved = null;
+    const clampN = (v, max) => Math.max(1, Math.min(max, Math.floor(Number(v) || 1)));
+    const setSize = (r, c, fromInputs) => {
+        size = [clampN(r, TBL_MAX_ROWS), clampN(c, TBL_MAX_COLS)];
+        for (const cell of grid.children) {
+            const on = Number(cell.getAttribute('data-r')) <= size[0] && Number(cell.getAttribute('data-c')) <= size[1];
+            cell.style.background = on ? '#d7efed' : '#fff';
+            cell.style.borderColor = on ? '#4eb0aa' : '#cbd5e1';
+        }
+        lbl.textContent = size[0] + ' × ' + size[1];
+        if (!fromInputs) { rowsI.value = String(size[0]); colsI.value = String(size[1]); }
+    };
+    const closePicker = () => { pick.style.display = 'none'; };
+    const insertNow = () => {
+        const s = saved;
+        closePicker();
+        if (!s) return;
+        const host = env.hostOf(s.node);
+        if (!host || !host.isConnected || !env.tablesOn(host)) return;
+        // ревью T3 (HIGH 1) — части поля: из половины разрезанной таблицы или списка — после всего целого
+        const res = insertTable(host, s.node, s.offset, size[0], size[1], env.partsOf(env.keyOf(host)));
+        _blankPutCaret(doc, env, res.caret);
+        forgetUndo();   // ревью r3 — новая таблица: прежняя отмена уже не про неё
+        _blankFireInput(res.host || host);
+    };
+    grid.addEventListener('mouseover', (e) => { const c = e.target.closest && e.target.closest('[data-r]'); if (c) setSize(c.getAttribute('data-r'), c.getAttribute('data-c')); });
+    grid.addEventListener('mousedown', (e) => { const c = e.target.closest && e.target.closest('[data-r]'); if (!c) return; e.preventDefault(); setSize(c.getAttribute('data-r'), c.getAttribute('data-c')); insertNow(); });
+    // ревью T4 (MEDIUM) — Escape окна размера — его: закрыть окно, курсор — туда, где был; дальше
+    // событие не идёт (в окне шаблонов Escape документа закрыл бы окно вместе с черновиком)
+    const escPicker = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        closePicker();
+        if (saved) _blankPutCaret(doc, env, saved);
+    };
+    for (const i of [rowsI, colsI]) {
+        i.addEventListener('input', () => setSize(rowsI.value, colsI.value, true));
+        // Enter поля числа — вставка; дальше по документу событие не идёт (курсор уже в новой ячейке)
+        i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); insertNow(); } else if (e.key === 'Escape') escPicker(e); });
+    }
+    ins.addEventListener('click', (e) => { e.preventDefault(); insertNow(); });
+    pick.addEventListener('keydown', (e) => { if (e.key === 'Escape') escPicker(e); });
+    on(doc, 'mousedown', (e) => { if (pick.style.display !== 'none' && !pick.contains(e.target) && !(e.target.closest && e.target.closest('[data-cmd="table"]'))) closePicker(); }, true);
+    const openPicker = (btn) => {
+        const s = doc.getSelection();
+        const r0 = s && s.rangeCount ? s.getRangeAt(0) : null;
+        const host = r0 && env.hostOf(r0.startContainer);
+        if (!host || !env.tablesOn(host)) return;
+        saved = { node: r0.startContainer, offset: r0.startOffset };   // курсор врача: поля чисел заберут фокус
+        setSize(3, 4);
+        const b = btn.getBoundingClientRect();
+        const docH = env.fixed ? (doc.defaultView ? doc.defaultView.innerHeight : 800) : doc.documentElement.scrollHeight;   // до показа: окно не должно удлинять лист
+        pick.style.left = Math.max(6, b.left + sx() - 120) + 'px';
+        pick.style.top = (b.bottom + sy() + 6) + 'px';
+        pick.style.display = 'block';
+        // у конца листа места снизу нет — окно открывается вверх от кнопки
+        if (b.bottom + sy() + 6 + pick.offsetHeight > docH) pick.style.top = Math.max(6, b.top + sy() - pick.offsetHeight - 6) + 'px';
+    };
+
+    // ─── панель таблицы ────────────────────────────────────────────────────────
+    const panel = doc.createElement('div');
+    panel.setAttribute('data-bk-tbl', '');
+    panel.style.cssText = pos + 'display:none;z-index:99998;background:#111827;border-radius:8px;padding:3px;box-shadow:0 6px 18px rgba(0,0,0,.28);white-space:nowrap;';
+    const OPS = [
+        ['row+', tr('+ строка'), tr('Добавить строку ниже')],
+        ['col+', tr('+ столбец'), tr('Добавить столбец справа')],
+        ['row-', tr('− строка'), tr('Удалить строку')],
+        ['col-', tr('− столбец'), tr('Удалить столбец')],
+        ['del', tr('Удалить таблицу'), tr('Удалить таблицу')],
+    ];
+    for (const [op, label, title] of OPS) {
+        const b = doc.createElement('button');
+        b.type = 'button';
+        b.setAttribute('data-tbl', op);
+        b.textContent = label;
+        b.title = title;
+        b.style.cssText = 'border:0;background:transparent;color:' + (op === 'del' ? '#fca5a5' : '#fff') + ';cursor:pointer;padding:6px 9px;border-radius:5px;' + font;
+        panel.appendChild(b);
+    }
+    doc.body.appendChild(panel);
+    const shown = () => pick.style.display === 'block' || panel.style.display === 'block';   // окно размера или панель на экране
+    const refresh = () => {
+        const cc = _blankCaretCell(doc, env);
+        if (!cc) { panel.style.display = 'none'; return; }
+        // под таблицей, по правому краю: левая часть строки под ней (абзац для продолжения) свободна для щелчка
+        const t = cc.cell.closest('table');
+        const r = t.getBoundingClientRect();
+        // T4 — окно шаблонов: панель — в видимой части окна (прокрученная из вида таблица — без панели;
+        // под таблицей у нижнего края — прижата к краю, не поверх кнопок окна)
+        const clip = env.clipOf ? env.clipOf(cc.host) : null;
+        if (clip && (r.bottom < clip.top || r.top > clip.bottom)) { panel.style.display = 'none'; return; }
+        panel.style.display = 'block';
+        panel.style.left = Math.max(6, r.right + sx() - panel.offsetWidth) + 'px';
+        panel.style.top = (clip ? Math.max(clip.top, Math.min(r.bottom + 6, clip.bottom - panel.offsetHeight - 4)) : r.bottom + sy() + 6) + 'px';
+        const rb = panel.querySelector('[data-tbl="row-"]');
+        const can = canRemoveRow(cc.cell, env.partsOf(cc.key));
+        rb.disabled = !can;
+        rb.style.opacity = can ? '1' : '.4';
+        rb.title = can ? tr('Удалить строку') : tr('Строку заголовка не удалить, пока в таблице есть строки');
+    };
+    on(doc, 'selectionchange', refresh);
+    // T4 — окно и панель position:fixed: прокрутка окна шаблонов уводит таблицу — панель за ней
+    // (ушла из вида — скрыта, вернулась — снова под таблицей), окно размера закрывается
+    if (env.fixed) on(doc, 'scroll', (e) => { if (pick.contains(e.target)) return; closePicker(); refresh(); }, true);
+
+    // ─── отмена последней операции ─────────────────────────────────────────────
+    // Ревью T3 (MEDIUM 3) — операции таблицы меняют узлы мимо истории правки
+    // браузера, и Ctrl+Z их не возвращал. Перед операцией запоминается поле
+    // целиком; «Отменить действие» в панели (несколько секунд) и Ctrl+Z (пока
+    // врач ничего не набрал) возвращают его.
+    let undo = null;
+    let undoT = null;
+    const undoBtn = doc.createElement('button');
+    undoBtn.type = 'button';
+    undoBtn.setAttribute('data-tbl', 'undo');
+    undoBtn.textContent = tr('Отменить действие');
+    undoBtn.title = tr('Вернуть таблицу, как была до последней операции');
+    undoBtn.style.cssText = 'display:none;border:0;border-left:1px solid #374151;background:transparent;color:#99f6e4;cursor:pointer;padding:6px 9px;border-radius:0 5px 5px 0;' + font;
+    panel.appendChild(undoBtn);
+    const forgetUndo = () => { undo = null; clearTimeout(undoT); undoBtn.style.display = 'none'; };
+    const restoreUndo = () => {
+        const u = undo;
+        forgetUndo();
+        const primary = u ? env.restore(u.key, u.html) : null;   // бланк — с раскладкой заново, шаблон — раздел целиком
+        if (!primary) return;
+        const t = primary.querySelector('table') || primary;
+        _blankPutCaret(doc, env, cellCaret(t.querySelector('td,th') || primary));
+        _blankFireInput(primary);
+    };
+    const run = (op) => {
+        if (op === 'undo') { restoreUndo(); return; }
+        const cc = _blankCaretCell(doc, env);
+        if (!cc) return;
+        const parts = env.partsOf(cc.key);
+        const askTable = () => (tableHasText(tableChain(cc.cell, parts)) ? tr('Удалить таблицу вместе с текстом в ней?') : null);
+        let question = null;
+        let act = null;
+        if (op === 'row+') act = () => addRow(cc.cell, parts);
+        else if (op === 'col+') act = () => addColumn(cc.cell, parts);
+        else if (op === 'row-') {
+            // последняя строка таблицы — вместе с ней уходит и таблица; строка с текстом — с вопросом (ревью T3)
+            const left = tableChain(cc.cell, parts).reduce((n, t) => n + [...t.querySelectorAll('tr')].filter((r) => !r.closest('[data-cont-head]')).length, 0);
+            question = left <= 1 ? askTable() : (rowHasText(cc.cell) ? tr('Удалить строку вместе с текстом в ней?') : null);
+            act = () => removeRow(cc.cell, parts);
+        } else if (op === 'col-') {
+            const one = tableChain(cc.cell, parts).every((t) => [...t.querySelectorAll('tr')].every((tr0) => tr0.children.length <= 1));
+            question = one ? askTable() : (columnHasText(cc.cell, parts) ? tr('Удалить столбец вместе с текстом в нём?') : null);
+            act = () => removeColumn(cc.cell, parts);
+        } else if (op === 'del') { question = askTable(); act = () => deleteTable(cc.cell, parts); }
+        if (!act) return;
+        const go = () => {
+            if (!cc.cell.isConnected) return;
+            const before = (() => { try { return mergedFieldClone(parts).innerHTML; } catch (e) { return null; } })();
+            const at = act();
+            if (!at) { refresh(); return; }
+            _blankPutCaret(doc, env, at);
+            _blankFireInput(env.hostOf(at.node) || cc.host);
+            if (before != null) {
+                undo = { key: cc.key, html: before };
+                undoBtn.style.display = '';
+                clearTimeout(undoT);
+                undoT = setTimeout(() => { undoBtn.style.display = 'none'; }, 8000);
+            }
+            refresh();
+        };
+        if (!question) { go(); return; }
+        // ревью r3 — вопрос открывается не из mousedown: окно поверх нажатой кнопки мыши оставляло
+        // «залипшее» выделение. После «Отмена» курсор — в ту же ячейку, панель — на месте.
+        setTimeout(() => {
+            if (confirm(question)) { go(); return; }
+            if (cc.cell.isConnected) _blankPutCaret(doc, env, cellCaret(cc.cell, true));
+            refresh();
+        }, 0);
+    };
+    panel.addEventListener('mousedown', (e) => {
+        const b = e.target.closest && e.target.closest('[data-tbl]');
+        if (!b) return;
+        e.preventDefault();   // выделение остаётся в ячейке
+        if (!b.disabled) run(b.getAttribute('data-tbl'));
+    });
+    // ревью T4 (MEDIUM) — Escape на кнопке панели — скрыть панель, дальше не идёт
+    panel.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideUi(); } });
+    // набранное врачом после операции — отмена уже не про неё (наши события input — не isTrusted)
+    on(doc, 'input', (e) => { if (e.isTrusted) forgetUndo(); });
+
+    // ─── вставка из Excel и Word ───────────────────────────────────────────────
+    // Ревью T3 (MEDIUM 1) — вставленная таблица приводится к простой: на уровне
+    // поля (без обёрток Word), без объединений ячеек, с классом a4-tbl. Вставку
+    // через execCommand браузер помечает пустым inputType — проверяется любой
+    // настоящий ввод в поле с таблицей (приведённая таблица — проверка дешёвая).
+    // Ревью r3 (LOW) — половина со страницы 2, вставленная в раздел, — без меток разреза и start копии.
+    on(doc, 'input', (e) => {
+        if (!e.isTrusted) return;
+        const host = env.hostOf(e.target);
+        if (!host || !env.tablesOn(host)) return;
+        let changed = 0;
+        try {
+            changed += stripPastedSplit(host);
+            if (host.querySelector('table')) changed += normalizePasted(host);
+        } catch (err) { return; }
+        if (changed) { forgetUndo(); _blankFireInput(host); }
+    });
+
+    // ─── скрыть панели ─────────────────────────────────────────────────────────
+    const hideUi = () => { panel.style.display = 'none'; closePicker(); };
+    on(doc.defaultView, 'blur', hideUi);
+    // ревью T4 — Escape, который что-то скрыл, помечен обработанным: окно шаблонов его не берёт
+    on(doc, 'keydown', (e) => { if (e.key !== 'Escape') return; if (shown()) e.preventDefault(); hideUi(); });
+
+    // ─── клавиши в ячейке ──────────────────────────────────────────────────────
+    on(doc, 'keydown', (e) => {
+        // Ctrl+Z сразу после операции таблицы — вернуть её (история браузера её не знает);
+        // ревью r3 — только в том же разделе: в другом Ctrl+Z — свой, браузера
+        if (undo && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && String(e.key).toLowerCase() === 'z') {
+            const s0 = doc.getSelection();
+            const h0 = s0 && s0.rangeCount ? env.hostOf(s0.anchorNode) : null;
+            if (h0 && env.keyOf(h0) === undo.key) { e.preventDefault(); restoreUndo(); return; }
+        }
+        if ((e.key !== 'Tab' && e.key !== 'Enter') || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+        if (e.target && e.target.closest && e.target.closest('[data-bk-tblpick],[data-bk-tbl]')) return;   // клавиши окна размера и панели — их
+        const cc = _blankCaretCell(doc, env);
+        if (!cc) return;   // вне таблицы — как было
+        if (e.key === 'Enter') {
+            if (e.shiftKey) return;   // Shift+Enter браузер и так переносит строку
+            e.preventDefault();
+            let ok = false;
+            try { ok = doc.execCommand('insertLineBreak'); } catch (err) { ok = false; }
+            if (!ok) {
+                const s = doc.getSelection();
+                _blankPutCaret(doc, env, insertCellBreak(s.anchorNode, s.anchorOffset));
+                _blankFireInput(cc.host);
+            }
+            return;
+        }
+        e.preventDefault();
+        const parts = env.partsOf(cc.key);
+        const next = cellStep(cc.cell, parts, e.shiftKey);
+        if (next) { _blankPutCaret(doc, env, cellCaret(next, true)); return; }
+        if (e.shiftKey) { _blankPutCaret(doc, env, beforeTable(cc.cell, parts)); return; }   // ревью T3 — первая ячейка: курсор перед таблицей
+        const at = addRow(cc.cell, parts);   // Tab в последней ячейке — новая строка
+        if (!at) return;
+        const first = at.node.parentNode && at.node.parentNode.firstElementChild;
+        _blankPutCaret(doc, env, cellCaret(first || at.node));
+        forgetUndo();   // ревью r3 — строка от Tab: прежняя отмена уже не про неё
+        _blankFireInput(env.hostOf(at.node) || cc.host);
+    });
+    const dispose = () => {
+        for (const [t, type, fn, opts] of subs) { try { t.removeEventListener(type, fn, opts); } catch (e) { /* уже снято */ } }
+        subs.length = 0;
+        clearTimeout(undoT);
+        pick.remove(); panel.remove();
+    };
+    // ревью T4 (MEDIUM) — Escape — дело набора таблицы, если он из окна размера или панели, если
+    // одно из них открыто или курсор в ячейке таблицы: окно шаблонов тогда не закрывается
+    const escapeOwned = (e) => {
+        const t = e && e.target;
+        return _within(pick, t) || _within(panel, t) || shown() || !!_blankCaretCell(doc, env);
+    };
+    return { openPicker, dispose, hideUi, escapeOwned };
+}
+export const wireTables = (doc) => _blankWireTables(doc);   // DOC_RICH_FORMAT_V1 (T3) — экспорт для проверки (headless Chrome)
+export const templateTableEnv = (doc) => _tblEnvTemplate(doc);   // DOC_RICH_FORMAT_V1 (ревью T4) — экспорт для проверки
+
+// Продолжение поля на следующей странице: обёртка с видом блока (.sec) и поле
+// [data-cont-of] с видом раздела (.sec-b), которое правит то же поле формы.
+// DOC_RICH_FORMAT_V1 (T2) — режим разреза (data-cont-mode) решает, как его
+// слить; правится продолжение, только если правится само поле (пока строка
+// загружается, поле заперто — и продолжение тоже).
+function _blankContWrap(doc, b, fieldEl, key, mode) {
+    const wrap = doc.createElement('div');
+    wrap.setAttribute('data-cont-wrap', key);
+    wrap.setAttribute('data-cont-mode', mode);
+    wrap.className = b.className;   // same .sec look
+    const contB = doc.createElement('div');
+    contB.className = fieldEl.className;   // .sec-b styling
+    contB.setAttribute('data-cont-of', key);
+    contB.setAttribute('contenteditable', fieldEl.getAttribute('contenteditable') === 'true' ? 'true' : 'false');
+    contB.addEventListener('input', () => _syncBlankField(null, contB));
+    wrap.appendChild(contB);
+    return wrap;
+}
+// Разрыв страницы после блока b и продолжение за ним.
+function _blankPlaceCont(doc, sheet, b, wrap, contentBottom, page, _z) {
+    const realBottom = (b.getBoundingClientRect().bottom - sheet.getBoundingClientRect().top) / _z;
+    const fill = Math.max(0, contentBottom - realBottom);
+    const sep = _blankMakeSep(doc, fill, page + 1);
+    b.parentNode.insertBefore(sep, b.nextSibling);
+    sep.parentNode.insertBefore(wrap, sep.nextSibling);
+}
+
+function _blankPaginatePass(doc, sheet, view, budget = { parts: _A4.MAX_PARTS }) {
     const { PAGE, MB, MT } = _A4;
     const _z = wsState.docZoom || 1;   // DOC_ZOOM_V1 — getBoundingClientRect is in zoomed px; divide to get layout px so page breaks match the real page bottom
     let page = 1, changed = false;
-    for (const b of _blankFlowBlocks(sheet)) {
+    const blocks = _blankFlowBlocks(sheet);
+    for (let bi = 0; bi < blocks.length; bi++) {
+        const b = blocks[bi];
         if (b.classList && b.classList.contains('bk-pagesep')) continue;
         const cs = view.getComputedStyle(b);
         if (cs.position === 'absolute' || cs.position === 'fixed' || cs.display === 'none') continue;
@@ -6901,40 +7677,54 @@ function _blankPaginatePass(doc, sheet, view) {
         // ---- the block crosses the boundary ----
         const field = b.querySelector ? b.querySelector('[data-field]') : null;
         const fieldKey = field && field.getAttribute('data-field');
-        const lines = field ? String(field.innerText || '').split('\n') : [];
         const avail = contentBottom - top;
-        if (field && fieldKey && fieldKey !== 'primary_diagnosis' && lines.length > 1 && avail > 70) {
-            // split: keep the lines that fit, continue the rest on the next page
-            const all = lines.slice();
-            let lo = 1, hi = all.length - 1, k = 0;
-            while (lo <= hi) {
-                const mid = (lo + hi) >> 1;
-                field.innerText = all.slice(0, mid).join('\n');
-                const hNow = b.getBoundingClientRect().height / _z;
-                if (top + hNow <= contentBottom) { k = mid; lo = mid + 1; } else { hi = mid - 1; }
+        // DOC_RICH_FORMAT_V1 (T2, F5) — поле с оформлением делится узлами; его
+        // продолжение (data-cont-mode="rich") — тоже, даже если в нём самом
+        // оформления нет. Меряет вёрстка: fits — блок с оставшейся частью поля,
+        // tooTall — блок на месте разреза (выше целой страницы — остаётся, где
+        // был). Не влезло ничего — поле не тронуто, и блок ниже переносится
+        // целиком, как раньше. Без оформления — прежний алгоритм строк (else).
+        const contRich = !field && b.getAttribute && b.getAttribute('data-cont-mode') === 'rich' && b.querySelector ? b.querySelector('[data-cont-of]') : null;
+        const richEl = field || contRich;
+        if (richEl && (contRich || fieldIsRich(field))) {
+            const rKey = field ? fieldKey : contRich.getAttribute('data-cont-of');
+            if (rKey && rKey !== 'primary_diagnosis' && avail > 70 && budget.parts > 0) {
+                // ревью T2 (MEDIUM 2) — простой текст с «\n» (pre-wrap), где выделили слово:
+                // строки — <br>, иначе всё поле — одна «строка» и не делится
+                if (_blankPreWrap(richEl)) breakLines(richEl);
+                const wrap = _blankContWrap(doc, b, richEl, rKey, 'rich');
+                const fits = () => top + b.getBoundingClientRect().height / _z <= contentBottom;
+                const tooTall = (n) => !!(n && n.nodeType === 1 && n.getBoundingClientRect().height / _z > PAGE - MB - MT - 80);
+                if (splitRichField(richEl, wrap.firstChild, { fits, tooTall })) {
+                    _blankPlaceCont(doc, sheet, b, wrap, contentBottom, page, _z);
+                    page += 1; changed = true; budget.parts -= 1;
+                    blocks.splice(bi + 1, 0, wrap);   // ревью T2 (LOW) — продолжение — следующим, в этом же проходе
+                    continue;
+                }
             }
-            if (k >= 1) {
-                field.innerText = all.slice(0, k).join('\n');
-                const rest = all.slice(k).join('\n');
-                const wrap = doc.createElement('div');
-                wrap.setAttribute('data-cont-wrap', fieldKey);
-                wrap.className = b.className;   // same .sec look
-                const contB = doc.createElement('div');
-                contB.className = field.className;   // .sec-b styling
-                contB.setAttribute('data-cont-of', fieldKey);
-                contB.setAttribute('contenteditable', 'true');
-                contB.innerText = rest;
-                contB.addEventListener('input', () => _syncBlankField(null, contB));
-                wrap.appendChild(contB);
-                const realBottom = (b.getBoundingClientRect().bottom - sheet.getBoundingClientRect().top) / _z;
-                const fill = Math.max(0, contentBottom - realBottom);
-                const sep = _blankMakeSep(doc, fill, page + 1);
-                b.parentNode.insertBefore(sep, b.nextSibling);
-                sep.parentNode.insertBefore(wrap, sep.nextSibling);
-                page += 1; changed = true;
-                continue;
+        } else {
+            const lines = field ? String(field.innerText || '').split('\n') : [];
+            if (field && fieldKey && fieldKey !== 'primary_diagnosis' && lines.length > 1 && avail > 70) {
+                // split: keep the lines that fit, continue the rest on the next page
+                const all = lines.slice();
+                let lo = 1, hi = all.length - 1, k = 0;
+                while (lo <= hi) {
+                    const mid = (lo + hi) >> 1;
+                    field.innerText = all.slice(0, mid).join('\n');
+                    const hNow = b.getBoundingClientRect().height / _z;
+                    if (top + hNow <= contentBottom) { k = mid; lo = mid + 1; } else { hi = mid - 1; }
+                }
+                if (k >= 1) {
+                    field.innerText = all.slice(0, k).join('\n');
+                    const rest = all.slice(k).join('\n');
+                    const wrap = _blankContWrap(doc, b, field, fieldKey, 'text');
+                    wrap.firstChild.innerText = rest;
+                    _blankPlaceCont(doc, sheet, b, wrap, contentBottom, page, _z);
+                    page += 1; changed = true;
+                    continue;
+                }
+                field.innerText = all.join('\n');   // nothing fit — fall through to transfer
             }
-            field.innerText = all.join('\n');   // nothing fit — fall through to transfer
         }
         if (bh > PAGE - MB - MT - 80) {   // unsplittable oversize: let it flow
             while (top + bh > page * PAGE - MB) page += 1;

@@ -23,6 +23,7 @@ import { searchArg } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M
 // откуда его взяли (одно правило на сервер, rpc/inventory.js).
 import { restoreSources } from './inventory.js';
 import { voidReleasedDoseLines } from './treatment-orders.js';   // V3120_FINAL (S1) — снятая доза не остаётся к оплате
+import { actingActorName } from '../../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 — «сотрудник (от имени: адм. …)» в журнале счёта
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -739,7 +740,7 @@ export function voidInvoice(db, args, user) {
     db.prepare(`
       INSERT INTO invoice_audit_log (invoice_id, invoice_number, visit_id, action, from_status, to_status, amount, refund_amount, actor_user_id, actor_name, actor_role, reason, notes)
       VALUES (?, ?, ?, 'void', ?, 'void', 0, 0, ?, ?, ?, ?, ?)`)
-      .run(invoiceId, invoice.invoice_number || null, invoice.visit_id || null, invoice.status, user.id, actor.full_name || null, actor.role || null, reason, note || null);
+      .run(invoiceId, invoice.invoice_number || null, invoice.visit_id || null, invoice.status, user.id, actingActorName(user, actor.full_name || null), actor.role || null, reason, note || null);   // ADMIN_ACT_AS_V1 — имя «от имени»
 
     // ADM_LINE_RELEASE_V1 — inpatient lines must be released too. Voiding used
     // to touch visit_services only, so an admission's lines kept pointing at the

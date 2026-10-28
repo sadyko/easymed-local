@@ -38,6 +38,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDataDir } from '../control/config.js';
 import { patientFileRefusal, refusalText } from '../../../public/js/shared/patient-file-limits.js';
+import { refuseSignWhileActing, refuseDoctorDocWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документ врача в карте)
 
 const SECTION = 'patients';
 
@@ -476,6 +477,11 @@ export function patientCardSavePatient(db, args, user) {
  *      которым отказывает браузер и маршрут хранилища.
  */
 export function patientCardAddDocument(db, args, user) {
+  // ADMIN_ACT_AS_V1 (ревью безопасности, HIGH 2) — документ врача (заключение,
+  // протокол …) от чужого имени в карту не кладут: его отдают пациенту с автором-врачом.
+  // Ревью-2 (LOW 1) — и документ с текстом любого вида: карта открывает его бланком заключения.
+  const docRow = args && args.row && typeof args.row === 'object' ? args.row : {};
+  refuseDoctorDocWhileActing(user, docRow.doc_type, docRow.body);
   const roles = requireCard(db, user);
   requireEdit(db, user, 'docs');
   const id = patientId(args);
@@ -672,6 +678,9 @@ function docHasContent(body, depth = 0) {
   return false;
 }
 export function visitDocumentArchive(db, args, user) {
+  // ADMIN_ACT_AS_V1 (R3) — копия ПОДПИСАННОГО документа приёма (её пишет сама
+  // подпись, после записи notes): от чужого имени документ не подписывают.
+  refuseSignWhileActing(user);
   const roles = effectiveRoles(user);
   // V3121_ROLES — роль проверяется ПОСЛЕ того, как известна строка: подписывает
   // её исполнитель, кем бы он ни был (см. SIGN_FREE_LINE_ROLES ниже).

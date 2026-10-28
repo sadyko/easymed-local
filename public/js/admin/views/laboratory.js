@@ -46,6 +46,9 @@ import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
 // LAB_ONE_CLINIC_V1 — «лаборатория обслуживает всю клинику / только своё здание».
 import { scopeQuery, normalizeLabScope, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT } from './lab-scope.js';
 import { isAdminActor } from '../admin-actor.js';   // настройку клиники меняет администратор (сервер требует того же)
+// ADMIN_ACT_AS_V1 (R3) — «Проверить и выдать» (verified_by) — подпись лаборанта:
+// от чужого имени кнопки неактивны с подсказкой, сервер отказывает сам.
+import { lockSignButton, refuseSignWhileActing } from '../act-as-client.js';
 
 // LIVE_AUDIT_FIX_V1 — ЗЕРКАЛО СЕРВЕРА. Результаты пишет и подтверждает только
 // лаборатория или администратор (rpc/lab.js WRITE_ROLES, реестр lab_results).
@@ -1029,8 +1032,9 @@ function labGroupCard(g) {
             'Печать штрих-кода образца', () => printLabel(rows[0], patient)] : null,
     ].filter(Boolean);
     // Главная — первой слева: порядок ряда и есть подсказка «начни отсюда».
+    // ADMIN_ACT_AS_V1 (R3) — «Подтвердить» (проверить и выдать всё) от чужого имени неактивна.
     const actions = defs.filter(d => d[0] === primary).concat(defs.filter(d => d[0] !== primary))
-        .map(d => act(d[0], d[1], d[2], d[3], d[4]));
+        .map(d => (d[0] === 'verify' ? lockSignButton(act(d[0], d[1], d[2], d[3], d[4])) : act(d[0], d[1], d[2], d[3], d[4])));
 
     // LAB_QUEUE_ROWS_V1 (2026-09-15) — owner: «make list like this, and show
     // as accordion the list of the services when pressed. small lists». One
@@ -1132,7 +1136,7 @@ function actionButtons(r, patient, results) {
         if (canWriteLabResults()) btns.push(step('Результаты…', 'Edit', () => openResultsModal(r, patient)));   // LIVE_AUDIT_FIX_V1
     } else if (r.status === 'resulted') {
         if (canWriteLabResults()) {   // LIVE_AUDIT_FIX_V1
-            btns.push(step('Проверить и выдать', 'Check', () => verifyDialog(r, patient, results)));
+            btns.push(lockSignButton(step('Проверить и выдать', 'Check', () => verifyDialog(r, patient, results))));   // ADMIN_ACT_AS_V1 (R3)
             btns.push(iconBtn('Edit', 'Изменить результаты', () => openResultsModal(r, patient)));
         }
     } else if (r.status === 'completed') {
@@ -1177,6 +1181,7 @@ function printLabel(r, patient) {
 // actual gate.
 // -----------------------------------------------------------------------------
 async function verifyGroup(g) {
+    if (refuseSignWhileActing()) return;   // ADMIN_ACT_AS_V1 (R3) — от чужого имени не выдаётся
     const panels = g.rows.filter(r => r.status === 'resulted');
     if (!panels.length) { toast('Нет результатов для подтверждения.', 'fail'); return; }
 
@@ -1911,9 +1916,10 @@ async function openPatientWorksheet(g, patient) {
 // «Проверить и выдать»
 // -----------------------------------------------------------------------------
 function verifyDialog(r, patient, results) {
+    if (refuseSignWhileActing()) return;   // ADMIN_ACT_AS_V1 (R3) — от чужого имени не выдаётся
     if (!results.length) { toast('Сначала внесите результаты.', 'fail'); return; }
     const printCb = h('input', { type: 'checkbox', checked: true });
-    const okBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Подтвердить и выдать');
+    const okBtn = lockSignButton(h('button', { class: 'btn btn-primary', type: 'button' }, 'Подтвердить и выдать'));   // ADMIN_ACT_AS_V1 (R3)
 
     const rows = results.map(x => h('div', { class: 'row', style: { gap: '10px', padding: '6px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '12.5px' } },
         h('span', { style: { flex: 1, fontWeight: 600 } }, x.parameter || '—'),

@@ -228,3 +228,45 @@ test('отозванный документ остаётся в списке, п
   await tick();
   assert.deepEqual(opened, [], 'отозванный документ всё ещё открывается');
 });
+
+// DOC_RICH_FORMAT_V1 (ревью T1) — «Заключение приёма», которого нет в архиве
+// (подписано до архива или архив не записался — WS_DERIVED_DOCS_V1), печаталось
+// ОБРАЗЦОМ: в бланк шёл bodyHtml без данных, и на бумаге был чужой пациент
+// «Алиев Бобур». Теперь — лист приёма с данными этого пациента и записи.
+test('«Заключение приёма» из записи кабинета печатается этим пациентом и его записью, не образцом', async () => {
+  const notes = JSON.stringify({
+    __service_workspace_v1: 1, current: null,
+    diagnoses: [{ code: 'J20.9', name: 'Острый бронхит', type: 'main' }],
+    prescriptions: [{ name: 'Амброксол', dose: '30 мг', freq: '3 раза в день', dur: '5 дней' }],
+    history: [{ kind: 'signed', savedAt: '2026-10-01T08:00:00.000Z', byName: 'Каримов Алишер', fields: {
+      chief_complaint: '<b>Кашель</b> три дня', physical_exam: '<ul><li>Хрипов нет</li><li>ЧДД 18</li></ul>',
+      primary_diagnosis: 'Средней тяжести', icd10: 'J20.9', recommendations_text: 'Питьё<img src=x onerror=alert(1)>',
+    } }],
+  });
+  calls = []; opened = [];
+  payload = { ...payloadWith([]), doc_notes: [{ id: 501, notes, services: { name: 'Приём терапевта' }, users: { full_name: 'Каримов Алишер' } }] };
+  setFullAccess('Администратор');
+  const printed = [];
+  const prevOpen = globalThis.window.open;
+  globalThis.window.open = () => ({ document: { open() {}, write(s) { printed.push(String(s)); }, close() {} } });
+  try {
+    const box = mk('div');
+    renderPatientCard(box, { onNavigate() {}, payload: { id: 1 } });
+    await tick();
+    openDocsTab(box);
+    await tick();
+    const link = walk(box).find((n) => n.tagName === 'A' && textOf(n).includes('Заключение приёма'));
+    assert.ok(link, 'нет строки «Заключение приёма» из записи кабинета: ' + textOf(box).slice(0, 300));
+    link.click();
+    await tick();
+  } finally {
+    globalThis.window.open = prevOpen;
+  }
+  assert.equal(printed.length, 1, 'лист не открылся');
+  const html = printed[0].replace(/<style[\s\S]*?<\/style>/g, '').replace(/<script[\s\S]*?<\/script>/g, '');
+  assert.ok(html.includes('Эргашев'), 'на листе не этот пациент');
+  assert.ok(!/Алиев Бобур|О\. Юсупов|Периодические головные боли|Рахимов/.test(html), 'на листе образец');
+  assert.ok(html.includes('<ul><li>Хрипов нет</li><li>ЧДД 18</li></ul>') && html.includes('<b>Кашель</b>'), 'разделы записи без оформления');
+  assert.ok(html.includes('J20.9 — Острый бронхит') && html.includes('Амброксол') && html.includes('Каримов'), 'диагноз, рецепт, врач записи');
+  assert.ok(!/<img|onerror/.test(html), 'поле записи вставлено без очистки');
+});

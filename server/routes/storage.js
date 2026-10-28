@@ -8,6 +8,7 @@ import { grantAllowsAdminOr, isAdminUser } from '../services/grants.js';   // V3
 import { LOGO_BUCKET, LOGO_KINDS, logoRefusal } from '../../public/js/shared/clinic-logo-rules.js';   // CLINIC_PROFILE_V1
 import { readIdentity } from '../services/branch-sync/identity.js';   // CLINIC_PROFILE_V1
 import { tableWriteAllowed } from '../db/write-grant.js';   // CLINIC_PROFILE_V1 — логотип пишет тот, кто вправе записать doc_settings
+import { actAsRecheck } from '../services/act-as.js';   // ADMIN_ACT_AS_V1 (ревью, LOW 7)
 
 // Local file storage — the offline stand-in for Supabase Storage. Objects live
 // on disk under <storageDir>/<bucket>/<path>. Buckets are an allow-list; every
@@ -369,6 +370,14 @@ export function storageRoutes(storageDir, db = null) {
     // lapsed clinic must not be able to create a document any more than it can
     // insert a row — gated first, before touching the filesystem at all.
     if (req.control?.locked) return lockedResponse(res, req.control);
+    // ADMIN_ACT_AS_V1 (ревью безопасности, LOW 7) — сессия прочитана ДО тела (до
+    // 20 МБ), а пока оно шло, вход от имени мог смениться («Вернуться», другая
+    // вкладка, 2 часа): прежде всех проверок права и записи файла — ещё раз
+    // (services/act-as.js actAsRecheck).
+    if (db) {
+      const drift = actAsRecheck(db, req);
+      if (drift) return res.status(drift.status).json({ error: drift.error });
+    }
     const abs = safeResolve(storageDir, req.params.bucket, req.params.rest);
     if (!abs) return badPath(res);
     if (segmentsOf(req.params.rest).some(badSegment)) return refuse(res, 400, 'bad_file_name', BAD_NAME);

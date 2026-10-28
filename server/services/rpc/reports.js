@@ -4557,6 +4557,7 @@ function journalFacts(db, lines, { from, to, idsJson }) {
     SELECT d.visit_service_id AS vs_id, d.doc_type,   -- CABINET_FIX_V1_R3 (F2) — у исследования заключение — conclusion
            ${DOC_TEXT_SQL('d.body', '$.conclusion')} AS conclusion,           -- JOURNALS_V1_RJ1 — только текст
            ${DOC_TEXT_SQL('d.body', '$.conclusionText')} AS conclusionText,   -- JOURNALS_V1_RJ1
+           ${DOC_TEXT_SQL('d.body', '$.rich')} AS rich,                       -- DOC_RICH_FORMAT_V1 (ревью T1) — разделы снимка — разметка
            ${DOC_TEXT_SQL('d.body', '$.dx')} AS dx,                           -- JOURNALS_V1_RJ1
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.diagnoses') END AS diagnoses   -- JOURNALS_V1_CONCLUSION: «Диагноз», если «Заключение» пусто; описание — не заключение
       FROM visit_documents d
