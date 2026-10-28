@@ -13,6 +13,7 @@ import { expectedResponse } from '../services/control/unlock.js';
 import { createApp } from '../app.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
 import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
+import * as GATE from '../services/control/gate.js';   // FIX_318_V1 (ADMIN_ACT_AS_V1) — списки ворот и isReadRpc
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
 __setPublicKeyForTests(publicKey);
@@ -532,4 +533,92 @@ test('a clinic that stopped paying IS told about the subscription', async (t) =>
   const body = await res.json();
   assert.equal(body.error.reason, 'unpaid');
   assert.match(body.error.message, /Подписка не активна/);
+});
+
+// FIX_318_V1 (ADMIN_ACT_AS_V1) — ЧТЕНИЯ ВЫПУСКА 3.18.0 ПРОХОДЯТ БЛОКИРОВКУ.
+//
+// Выпуск 3.18.0 добавил около двадцати RPC, а в READ_ONLY_RPCS попал один
+// (telegram_deeplinks_list). Ворота закрыты по умолчанию, поэтому остальные
+// чтения при заблокированной лицензии отвечали 402: оболочка не получала
+// список скрытых разделов (nav_visibility_get) и показывала ВСЕ разделы, панель
+// «Телефон» и «Реферирование» рисовали ошибку. Тот же список читает журнал
+// входа от имени (services/act-as.js): чтение не из списка считалось записью.
+// Разбор каждого RPC — по его коду (rpc/*.js).
+const READS_318 = [
+  'nav_visibility_get',                                            // NAV_VISIBILITY_V1 — SELECT списка
+  'telegram_broadcast_options',                                    // TG_BROADCAST_FILTERS_V1 — справочники фильтров
+  'referrals_representatives', 'referrals_internal', 'referrals_activity',
+  'referrals_source_detail', 'referrals_doctor_detail',            // REFERRALS_CRM_V1 — только SELECT
+  'doctor_bot_settings_get', 'doctor_bot_stats', 'doctor_bot_links_list',   // REFERRALS_CRM_V1 — бот врачей: чтения
+  'meta_settings_get', 'meta_leads_recent',                        // META_LEADS_V1 — настройки без токена, журнал заявок
+  'telephony_phone_me', 'telephony_call_log', 'telephony_extensions',       // CRM_PHONE_V1 — кто я, журнал, трубки станции
+  'telephony_live',                                                // CALL_RING_V1 — живые звонки из памяти процесса
+];
+// Изменены в 3.18.0 (MOIZVONKI_V2) и только читают, но экран «Телефония» при
+// блокировке закрыт намеренно (TELEPHONY_ROUTING_V1, rpc/index.js): ворота — 402,
+// журнал входа от имени — «только чтение».
+const LOCKED_READS_318 = ['telephony_recent_calls', 'telephony_dispositions'];
+const WRITES_318 = [
+  'nav_visibility_save', 'referrals_assign_representative',
+  'doctor_bot_settings_save', 'doctor_bot_token_clear', 'doctor_bot_test_connection', 'doctor_bot_link_revoke',
+  'meta_settings_save', 'meta_connect', 'meta_token_clear', 'meta_poll_now',
+  'telegram_deeplink_save', 'telegram_deeplink_delete',
+  'telephony_my_extension',
+  'telephony_ring_info',          // рождает секрет адреса при первом взгляде (UPDATE telephony_settings)
+  'telephony_ring_token_rotate',
+];
+
+test('FIX_318_V1: чтения 3.18.0 — в READ_ONLY_RPCS, записи 3.18.0 — нет и не в ALWAYS_ALLOWED', () => {
+  for (const n of READS_318) assert.equal(GATE.isReadOnlyRpc(n), true, n + ' — чтение');
+  for (const n of WRITES_318) {
+    assert.equal(GATE.isReadOnlyRpc(n), false, n + ' — запись');
+    assert.equal(GATE.isAlwaysAllowedRpc(n), false, n + ' не должен проходить сквозь блокировку');
+  }
+});
+
+test('FIX_318_V1: заблокированная клиника получает ответ на каждое чтение 3.18.0, записи 3.18.0 — 402', async (t) => {
+  const { app, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+  for (const rpc of READS_318) {
+    const res = await post(server, cookie, `/api/rpc/${rpc}`, {});
+    assert.notEqual(res.status, 402, `${rpc} — чтение, а заблокированной клинике отказано`);
+    assert.notEqual(res.status, 501, `${rpc} — имени нет среди RPC (опечатка в списке?)`);
+    assert.ok(res.status < 500, `${rpc} — ${res.status}`);
+  }
+  for (const rpc of [...WRITES_318, ...LOCKED_READS_318]) {
+    const res = await post(server, cookie, `/api/rpc/${rpc}`, {});
+    assert.equal(res.status, 402, `${rpc} — закрыт при блокировке`);
+  }
+});
+
+test('FIX_318_V1: при заблокированной лицензии скрытые разделы остаются скрытыми (nav_visibility_get отвечает)', async (t) => {
+  const { app, db, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  db.prepare("INSERT INTO nav_visibility (nav_id) VALUES ('inpatient'), ('kitchen')").run();
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+  const res = await post(server, cookie, '/api/rpc/nav_visibility_get', {});
+  assert.equal(res.status, 200, 'без ответа оболочка показывала бы все разделы');
+  assert.deepEqual((await res.json()).data.hidden, ['inpatient', 'kitchen']);
+});
+
+// Журнал входа от имени считает «чтением» и те RPC из ALWAYS_ALLOWED_RPCS,
+// которые ничего не меняют: licence_status (оболочка спрашивает его на каждом
+// экране) и backup_list. Ворота лицензии от этого не меняются.
+test('FIX_318_V1: isReadRpc — READ_ONLY_RPCS и чтения из ALWAYS_ALLOWED_RPCS; ворота прежние', () => {
+  assert.equal(typeof GATE.isReadRpc, 'function', 'gate.js должен отдавать isReadRpc');
+  for (const n of ['licence_status', 'backup_list']) {
+    assert.equal(GATE.isAlwaysAllowedRpc(n), true, n + ' — в ALWAYS_ALLOWED_RPCS');
+    assert.equal(GATE.isReadOnlyRpc(n), false, n + ' — ворота прежние: место в ALWAYS_ALLOWED_RPCS');
+    assert.equal(GATE.isReadRpc(n), true, n + ' — чтение для журнала');
+  }
+  for (const n of READS_318) assert.equal(GATE.isReadRpc(n), true, n);
+  for (const n of [...LOCKED_READS_318, 'telephony_settings_get', 'telephony_providers_list']) {
+    assert.equal(GATE.isReadOnlyRpc(n), false, n + ' — экран «Телефония» при блокировке закрыт намеренно');
+    assert.equal(GATE.isReadRpc(n), true, n + ' — для журнала это чтение');
+  }
+  for (const n of ['licence_unlock', 'licence_enroll', 'module_request', 'update_approve', 'update_cancel', 'update_check_now',
+    'backup_create', 'backup_restore', 'factory_reset', 'lan_address_dismiss', 'lan_address_mdns', ...WRITES_318, 'some_future_rpc']) {
+    assert.equal(GATE.isReadRpc(n), false, n + ' — запись');
+  }
 });

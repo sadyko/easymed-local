@@ -216,6 +216,39 @@ const READ_ONLY_RPCS = new Set([
   // чтение его прошлых рецептов. Клиника с просроченной лицензией рецепт не
   // сохранит (запись), но подсказки при наборе названия — только чтение.
   'rx_my_drugs',   // RX_TEMPLATES_V1
+  // FIX_318_V1 (ADMIN_ACT_AS_V1) — ЧТЕНИЯ ВЫПУСКА 3.18.0. Каждое разобрано по
+  // своему коду: только SELECT (или память процесса, или запрос к станции без
+  // записи в базу). Без них клиника с просроченной лицензией теряла скрытие
+  // разделов меню (оболочка без ответа показывает ВСЕ разделы), панель
+  // «Телефон» в CRM и экран «Реферирование» рисовали ошибку, а журнал входа от
+  // имени (services/act-as.js, isReadRpc ниже) считал их записями.
+  // Записи 3.18.0 — *_save, *_clear, *_revoke, *_rotate, meta_connect,
+  // meta_poll_now, doctor_bot_test_connection, telephony_my_extension,
+  // telephony_ring_info (рождает секрет адреса при первом взгляде) — сюда НЕ
+  // входят. Список и разбор — FIX_318_V1 в routes/licence-gate.test.js.
+  'nav_visibility_get',   // NAV_VISIBILITY_V1 — список скрытых разделов меню
+  'telegram_broadcast_options',   // TG_BROADCAST_FILTERS_V1 — справочники фильтров рассылки
+  'referrals_representatives', 'referrals_internal', 'referrals_activity',   // REFERRALS_CRM_V1 — «Реферирование»
+  'referrals_source_detail', 'referrals_doctor_detail',
+  'doctor_bot_settings_get', 'doctor_bot_stats', 'doctor_bot_links_list',   // REFERRALS_CRM_V1 — бот для врачей-источников
+  'meta_settings_get', 'meta_leads_recent',   // META_LEADS_V1 — настройки (без токена) и журнал заявок
+  // CRM_PHONE_V1 / CALL_RING_V1 — панель «Телефон» в CRM: кто я, журнал
+  // звонков (прошлое клиники — его читают и при блокировке), трубки станции
+  // (запрос к станции, база не меняется), что звонит сейчас (память процесса;
+  // вопрос лишь продлевает спрос на опрос). Панель спрашивает telephony_live
+  // раз в 2 секунды — с 402 она краснела ошибкой у каждого оператора.
+  'telephony_phone_me', 'telephony_call_log', 'telephony_extensions', 'telephony_live',
+]);
+
+// FIX_318_V1 (ADMIN_ACT_AS_V1) — ЧИТАЮТ, НО ВОРОТА ИХ НАМЕРЕННО НЕ ПУСКАЮТ.
+// Экран «Телефония» в настройках (TELEPHONY_ROUTING_V1, rpc/index.js): у
+// клиники с просроченной лицензией нет опроса звонков, и настраивать ей
+// нечего — решение прежнее, его здесь не меняют. Но журнал входа от имени
+// спрашивает другое — «изменил ли человек что-нибудь», — и для него это
+// чтения. telephony_recent_calls и telephony_dispositions изменены в 3.18.0
+// (MOIZVONKI_V2: провайдер и предел) и по-прежнему только читают.
+const LOCKED_READS = new Set([
+  'telephony_settings_get', 'telephony_providers_list', 'telephony_recent_calls', 'telephony_dispositions',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay
@@ -260,8 +293,24 @@ const ALWAYS_ALLOWED_RPCS = new Set([
   'lan_address_dismiss', 'lan_address_mdns',
 ]);
 
+// FIX_318_V1 (ADMIN_ACT_AS_V1) — те RPC из ALWAYS_ALLOWED_RPCS, что ничего не
+// меняют в данных клиники. Воротам это не нужно (их пускает ALWAYS_ALLOWED);
+// это нужно журналу входа от имени: licence_status оболочка спрашивает на
+// каждом экране, и он не должен считаться записью. (licence_status при
+// блокировке заводит код для звонка в control_state — служебная отметка
+// лицензии, а не действие человека.)
+const ALWAYS_ALLOWED_READS = new Set(['licence_status', 'backup_list']);
+
 export function isReadOnlyRpc(name) { return READ_ONLY_RPCS.has(name); }
 export function isAlwaysAllowedRpc(name) { return ALWAYS_ALLOWED_RPCS.has(name); }
+/**
+ * FIX_318_V1 — RPC только читает (журнал входа от имени): READ_ONLY_RPCS, чтения
+ * из ALWAYS_ALLOWED_RPCS и чтения, закрытые воротами намеренно (LOCKED_READS).
+ * Воротам лицензии не нужен: они спрашивают isReadOnlyRpc / isAlwaysAllowedRpc.
+ */
+export function isReadRpc(name) {
+  return READ_ONLY_RPCS.has(name) || LOCKED_READS.has(name) || (ALWAYS_ALLOWED_READS.has(name) && ALWAYS_ALLOWED_RPCS.has(name));
+}
 
 /** Resolved once per request, after the user is known and before any route can write. */
 export function attachControl(db, dataDir) {
