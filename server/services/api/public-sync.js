@@ -180,14 +180,56 @@ function ringTokenOf(db) {
   catch { return ''; }
 }
 
-async function pushKeys(ctx, state) {
-  const keys = { ...buildKeys(ctx.db, { now: ctx.now() }), box_key: ctx.identity.boxPublic, ring_token: ringTokenOf(ctx.db) };
+// FIX_318_V1 (C3) — тело ключей ОДНИМ местом: его шлёт pushKeys, и по его же
+// отпечатку ringRelayStatus узнаёт, дошёл ли нынешний секрет адреса станции до
+// публичного сервера (keys_hash пишется только после принятого PUT /keys).
+function keysBody(db, identity, now) {
+  return { ...buildKeys(db, { now }), box_key: identity.boxPublic, ring_token: ringTokenOf(db) };
+}
+const keysEmpty = (keys) => !keys.ring_token && !(Array.isArray(keys.connections) && keys.connections.length);
+
+async function pushKeys(ctx, state, { keysOnly = false } = {}) {
+  const keys = keysBody(ctx.db, ctx.identity, ctx.now());
   const hash = contentHash(keys);
   const stale = !state.keys_at || ctx.now() - Date.parse(state.keys_at) >= HEARTBEAT_MS;
   if (hash === state.keys_hash && !stale) return false;
   await call(ctx, 'PUT', '/keys', keys);
-  saveState(ctx.db, { keys_hash: hash, keys_at: isoOf(ctx.now()) });
+  // FIX_318_V1 (C3) — такт «только ключи» (API партнёров не настроено) донёс
+  // пустые ключи: сервер больше не держит ни ключей партнёров, ни секрета адреса
+  // станции. Помнится «ничего не отправлено» (''), и такт перестаёт ходить в сеть
+  // (keysWanted), пока не появится, что сказать.
+  saveState(ctx.db, { keys_hash: keysOnly && keysEmpty(keys) ? '' : hash, keys_at: isoOf(ctx.now()) });
   return true;
+}
+
+/**
+ * FIX_318_V1 (C3) — нужен ли такт «только ключи», когда API партнёров не
+ * настроено (localBlocker: нет имени в адресе или подключений): есть секрет
+ * адреса станции, или сервер ещё держит прежние ключи (последнее подключение
+ * удалили — ключ партнёра надо отозвать и там).
+ */
+function keysWanted(db, state) {
+  return !!ringTokenOf(db) || !!(state && state.keys_hash);
+}
+
+/**
+ * FIX_318_V1 (C3) — такт без API партнёров: только ключи (секрет адреса станции
+ * и отзыв ключей партнёров). Снимка, времени, событий и очереди здесь нет — у
+ * клиники нет ни имени в адресе, ни подключений. Итог такта — прежняя причина
+ * localBlocker (экран «API» по-прежнему «выключен»); неудача ключей —
+ * keys_error и last_error (экран «Телефония» называет её).
+ */
+async function keysOnlySync(ctx, local) {
+  try {
+    await pushKeys(ctx, readState(ctx.db) || {}, { keysOnly: true });
+    const st = readState(ctx.db) || {};
+    if (st.last_error) saveState(ctx.db, { last_error: '', last_error_at: null });
+    return { ok: false, reason: local };
+  } catch (e) {
+    if (!(e instanceof SyncFail)) throw e;
+    saveState(ctx.db, { last_error: e.reason, last_error_at: isoOf(ctx.now()) });
+    return { ok: false, reason: local, keys_error: e.reason };
+  }
 }
 
 /**
@@ -418,7 +460,14 @@ async function performSync(db, dataDir, opts) {
   syncVisitOutcomes(db, { now: now(), kekPath });
 
   const local = localBlocker(db);
-  if (local) return { ok: false, reason: local };
+  // FIX_318_V1 (C3) — ключи нужны не только API партнёров: в них едет секрет
+  // адреса станции (CALL_RING_V1), и только ими сервер узнаёт, что ключ партнёра
+  // удалён. Поэтому без имени в адресе и подключений такт всё равно доносит
+  // ключи, если есть что сказать (keysWanted); ради адреса станции он и заводит
+  // ключ обмена (buildSyncContext, createKey) — без ключа Easy-Med не смог бы
+  // включить клинике обмен. Второе здание молчит: ключи клиники шлёт главное.
+  if (local === 'not_main') return { ok: false, reason: local };
+  if (local && !keysWanted(db, readState(db))) return { ok: false, reason: local };
   const ctx = buildSyncContext(db, dataDir, opts);
   // Ревью 8a, M4: испорчены оба файла ключа — не «ждём Easy-Med» и не общая
   // ошибка, а «ключ повреждён — обратитесь в Easy-Med»: само не заживёт (сверка
@@ -428,7 +477,8 @@ async function performSync(db, dataDir, opts) {
     saveState(db, { last_error: 'key_broken', last_error_at: isoOf(now()) });
     return { ok: false, reason: 'key_broken' };
   }
-  if (ctx.blocked) return { ok: false, reason: ctx.blocked };
+  if (ctx.blocked) return { ok: false, reason: local || ctx.blocked };
+  if (local) return keysOnlySync(ctx, local);   // FIX_318_V1 (C3)
   saveState(db, { last_poll_at: isoOf(now()) });
   // Ревью 8a, I3: снимок (с файлами) и время — каждый в своём try: их отказ
   // записывается причиной и не останавливает события и очередь. Ключи, события
@@ -512,6 +562,46 @@ export function syncStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_
     skipped: skippedOf(st),
     key_code: identity ? keyCodeOf(identity.fingerprint) : '',   // PUBLIC_LICENCE_V1 — ревью 8c
   };
+}
+
+/**
+ * FIX_318_V1 (C3) — ДОШЁЛ ЛИ СЕКРЕТ АДРЕСА СТАНЦИИ ДО ПУБЛИЧНОГО СЕРВЕРА. Экран
+ * «Телефония» говорил «готово», глядя только на лицензию, а секрет мог ещё не
+ * уйти (или не уходить вовсе): станция получала 404 на новый адрес, прежний
+ * продолжал работать. Теперь «готово» — только когда последние ПРИНЯТЫЕ
+ * сервером ключи (keys_hash) — это ключи с нынешним секретом. Иначе — что
+ * мешает, по порядку:
+ *   not_main     — второе здание: адрес передаёт главное;
+ *   not_enrolled — нет control.json или licence.dat (установка не
+ *                  зарегистрирована у Easy-Med);
+ *   key_broken   — файл ключа обмена испорчен;
+ *   no_sync_key  — ключа обмена ещё нет: такт заведёт его сам (секунды);
+ *   not_enabled  — Easy-Med не включил клинике обмен (в лицензии нет отпечатка
+ *                  ключа); key_code — код ключа, который клиника называет Easy-Med;
+ *   no_token     — секрета адреса ещё нет;
+ *   pending      — ещё не дошёл; error — последняя неудача обмена (offline,
+ *                  unauthorized, paused, server_error…), если была.
+ * После восстановления базы сервера отпечаток верен до ближайшего повтора
+ * ключей (не дольше 15 минут, HEARTBEAT_MS).
+ * @returns {{ready:boolean, reason:string, error:string, key_code:string}}
+ */
+export function ringRelayStatus(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_FILE) } = {}) {
+  const out = (reason, extra = {}) => ({ ready: false, reason, error: '', key_code: '', ...extra });
+  if (localBlocker(db) === 'not_main') return out('not_main');
+  let identity = null;
+  try { identity = loadSyncIdentity({ keyPath }); } catch (e) {
+    if (e instanceof SyncIdentityError) return out(vendorBlocker(dataDir, null) === 'not_enrolled' ? 'not_enrolled' : 'key_broken');
+    throw e;
+  }
+  const vendor = vendorBlocker(dataDir, identity);
+  if (vendor === 'not_enrolled') return out('not_enrolled');
+  if (!identity) return out('no_sync_key');
+  const code = keyCodeOf(identity.fingerprint);
+  if (vendor) return out(vendor, { key_code: code });
+  if (!ringTokenOf(db)) return out('no_token', { key_code: code });
+  const st = readState(db) || {};
+  if (st.keys_hash && contentHash(keysBody(db, identity, Date.now())) === st.keys_hash) return { ready: true, reason: '', error: '', key_code: code };
+  return out('pending', { error: String(st.last_error || ''), key_code: code });
 }
 
 /**

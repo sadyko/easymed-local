@@ -14,15 +14,17 @@ import { bookingSeed, localAt } from '../../test-helpers/api-booking-seed.js';
 import { fakePublicServer } from '../../test-helpers/fake-public-server.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
 import { loadSyncIdentity, SYNC_KEY_FILE } from './sync-identity.js';
-import { syncOnce, syncStatus, publicBaseUrl, assertPublicUrlIsTestSafe, DEFAULT_PUBLIC_URL, keyCodeOf } from './public-sync.js';
+import { syncOnce, syncStatus, publicBaseUrl, assertPublicUrlIsTestSafe, DEFAULT_PUBLIC_URL, keyCodeOf, ringRelayStatus } from './public-sync.js';
 import { confirmBooking } from './bookings.js';
+import { deleteConnection } from './connections.js';   // FIX_318_V1 (C3)
+import { seed } from '../../test-helpers/api-connections-seed.js';   // FIX_318_V1 (C3)
 import { isoOf } from '../../../public/js/shared/api-booking.js';
 
 const NOW = localAt('2030-03-11', '09:00');
 const START = localAt('2030-03-12', '10:00');
 
-function rig({ enabled = true, extra = {} } = {}) {
-  const s = bookingSeed();
+function rig({ enabled = true, extra = {}, api = true } = {}) {
+  const s = api ? bookingSeed() : seed();   // FIX_318_V1 (C3): api: false — клиника без имени в адресе и подключений
   const dataDir = tmpDir('em-psync-');
   const keyPath = path.join(dataDir, SYNC_KEY_FILE);
   const identity = loadSyncIdentity({ keyPath, create: true });
@@ -502,6 +504,113 @@ test('PUBLIC_LICENCE_V1, ревью 8c: код ключа обмена — в с
   st = syncStatus(r.db, r.dataDir, { keyPath: r.keyPath });
   assert.deepEqual([st.state, st.reason, st.key_code], ['error', 'offline', codeOf(r.identity.fingerprint)]);
   onlyTheCode(st, r.identity, 'error');
+});
+
+// ─── FIX_318_V1 (C3) — секрет адреса станции и отзыв ключей партнёров без API партнёров ───
+//
+// Ключи (PUT /keys) несут не только подключения партнёров, но и секрет адреса
+// станции (CALL_RING_V1), и только ими публичный сервер узнаёт, что ключ
+// партнёра удалён. Раньше они уходили лишь после localBlocker (имя в адресе и
+// хоть одно подключение): клиника без API партнёров меняла адрес станции — экран
+// говорил «готово», а сервер знал прежний секрет; удалённое последнее
+// подключение оставалось действующим на сервере.
+const RING_A = 'a1'.repeat(16);
+const RING_B = 'b2'.repeat(16);
+const setRing = (db, t) => db.prepare('UPDATE telephony_settings SET ring_token = ? WHERE id = 1').run(t);
+
+test('FIX_318_V1 (C3): без API партнёров секрет адреса станции всё равно уходит на сервер; «готово» — только когда дошёл', async () => {
+  const r = rig({ api: false });   // ни имени в адресе, ни подключений — API партнёров не настраивали
+  const st = () => ringRelayStatus(r.db, r.dataDir, { keyPath: r.keyPath });
+  // Ни секрета, ни прежних ключей — сказать серверу нечего: в сеть ни одного запроса (как раньше).
+  assert.deepEqual(await syncOnce(r.db, r.dataDir, r.opts), { ok: false, reason: 'no_slug' });
+  assert.deepEqual(r.fake.state.calls, []);
+  assert.deepEqual([st().ready, st().reason], [false, 'no_token']);
+  setRing(r.db, RING_A);
+  assert.deepEqual([st().ready, st().reason], [false, 'pending'], 'секрет ещё не ушёл, а экран говорит «готово»');
+  const out = await syncOnce(r.db, r.dataDir, r.opts);
+  assert.equal(out.reason, 'no_slug', 'экран «API» по-прежнему «выключен»');
+  assert.deepEqual(r.fake.state.calls, ['PUT /_sync/v1/keys'], 'кроме ключей — ничего: снимка и очереди без API нет');
+  assert.equal(r.fake.state.keys.at(-1).ring_token, RING_A);
+  assert.deepEqual(r.fake.state.keys.at(-1).connections, []);
+  assert.equal(r.fake.state.keys.at(-1).box_key, r.identity.boxPublic);
+  assert.deepEqual(st(), { ready: true, reason: '', error: '', key_code: keyCodeOf(r.identity.fingerprint) });
+  // Сменили адрес — «ещё не дошёл», пока такт не донесёт; донёс — «готово».
+  setRing(r.db, RING_B);
+  assert.deepEqual([st().ready, st().reason], [false, 'pending']);
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.equal(r.fake.state.keys.at(-1).ring_token, RING_B);
+  assert.equal(st().ready, true);
+  // Ничего не изменилось — молчит; нет связи — экран называет причину.
+  r.fake.state.calls.length = 0;
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.deepEqual(r.fake.state.calls, []);
+  setRing(r.db, RING_A);
+  r.fake.state.offline = true;
+  r.tick(15000);
+  const off = await syncOnce(r.db, r.dataDir, r.opts);
+  assert.deepEqual(off, { ok: false, reason: 'no_slug', keys_error: 'offline' });
+  assert.deepEqual([st().ready, st().reason, st().error], [false, 'pending', 'offline']);
+  r.fake.state.offline = false;
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.deepEqual([st().ready, st().error], [true, '']);
+});
+
+// Через экран последнее подключение не исчезает: имя в адресе заводит подключение
+// сайта, а его удалить нельзя — тогда такт обычный, и отзыв уходит им. Здесь —
+// установка без подключения сайта (имя в адресе старше него или строка правлена
+// рукой): localBlocker говорит no_connections, и раньше такт молчал.
+test('FIX_318_V1 (C3): удалили последнее подключение — отзыв ключа всё равно уходит на сервер; дальше обмен молчит', async () => {
+  const r = rig();
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.ok(r.fake.state.keys.at(-1).connections.some((c) => c.id === r.connId));
+  r.db.prepare(`UPDATE api_connections SET deleted_at = '2030-03-11T04:00:00Z', active = 0, key_hash = '', key_sealed = '', key_tail = '',
+      secret_sealed = '', secret_tail = '' WHERE kind = 'site'`).run();
+  deleteConnection(r.db, r.connId, r.actor, { confirm: true });
+  r.fake.state.calls.length = 0;
+  r.tick(15000);
+  assert.deepEqual(await syncOnce(r.db, r.dataDir, r.opts), { ok: false, reason: 'no_connections' });
+  assert.deepEqual(r.fake.state.calls, ['PUT /_sync/v1/keys'], 'удалённый ключ партнёра остался действующим на сервере');
+  assert.deepEqual(r.fake.state.keys.at(-1).connections, []);
+  r.fake.state.calls.length = 0;
+  r.tick(15000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  r.tick(16 * 60000);
+  await syncOnce(r.db, r.dataDir, r.opts);
+  assert.deepEqual(r.fake.state.calls, [], 'серверу больше нечего сказать — обмен не ходит в сеть');
+});
+
+test('FIX_318_V1 (C3): клиника без ключа обмена — ключ заводится ради адреса станции (без сети), экран называет, чего ждать; второе здание — ничего', async () => {
+  const s = bookingSeed();
+  s.db.prepare("UPDATE api_settings SET slug = '' WHERE id = 1").run();
+  const dataDir = tmpDir('em-psync-ring-');
+  const keyPath = path.join(dataDir, SYNC_KEY_FILE);
+  fs.writeFileSync(path.join(dataDir, 'control.json'), JSON.stringify({ clinic_id: 'c-000777', install_token: 'TESTONLY' }));
+  fs.writeFileSync(path.join(dataDir, 'licence.dat'), JSON.stringify({ payload: { clinic_id: 'c-000777', valid_until: '2030-04-01T00:00:00Z', modules: [] }, sig: 'AAAA' }));
+  const calls = [];
+  const opts = { fetchImpl: async (u) => { calls.push(String(u)); throw new TypeError('must not reach the network'); },
+    env: { EASYMED_PUBLIC_URL: 'https://api.test.local' }, now: () => NOW, keyPath, kekPath: s.kekPath };
+  const st = () => ringRelayStatus(s.db, dataDir, { keyPath });
+  await syncOnce(s.db, dataDir, opts);
+  assert.equal(fs.existsSync(keyPath), false, 'без адреса станции ключ обмена заводиться не должен');
+  setRing(s.db, RING_A);
+  assert.deepEqual([st().ready, st().reason], [false, 'no_sync_key']);
+  await syncOnce(s.db, dataDir, opts);
+  assert.equal(fs.existsSync(keyPath), true, 'ключ обмена так и не появился — Easy-Med не сможет включить обмен');
+  assert.deepEqual(calls, []);
+  const id = loadSyncIdentity({ keyPath });
+  assert.deepEqual(st(), { ready: false, reason: 'not_enabled', error: '', key_code: keyCodeOf(id.fingerprint) });
+  fs.rmSync(path.join(dataDir, 'licence.dat'));
+  assert.equal(st().reason, 'not_enrolled');
+  // Второе здание: адрес станции передаёт главное — здесь ни ключа, ни сети.
+  const r = rig();
+  setRing(r.db, RING_A);
+  r.db.prepare("UPDATE branch_identity SET role = 'secondary' WHERE id = 1").run();
+  assert.deepEqual(await syncOnce(r.db, r.dataDir, r.opts), { ok: false, reason: 'not_main' });
+  assert.deepEqual(r.fake.state.calls, []);
+  assert.equal(ringRelayStatus(r.db, r.dataDir, { keyPath: r.keyPath }).reason, 'not_main');
 });
 
 test('PUBLIC_LICENCE_V1, ревью 8c: нет файла ключа или он испорчен — кода нет (пусто), поля те же', async () => {

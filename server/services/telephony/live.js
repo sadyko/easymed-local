@@ -136,7 +136,9 @@ export async function pullOnce(ctx, { callImpl = syncCall, now = Date.now } = {}
 export function liveSource(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_FILE) } = {}) {
   let identity = null;
   try { identity = loadSyncIdentity({ keyPath, create: false }); } catch { identity = null; }
-  const reason = identity ? vendorBlocker(dataDir, identity) : 'not_enrolled';
+  // FIX_318_V1 (C3) — нет ключа обмена у зарегистрированной установки — не «не
+  // зарегистрирована», а «ключа ещё нет» (его заводит такт обмена ради адреса станции).
+  const reason = identity ? vendorBlocker(dataDir, identity) : (vendorBlocker(dataDir, null) === 'not_enrolled' ? 'not_enrolled' : 'no_sync_key');
   if (!reason) return { source: 'relay', reason: '' };
   const row = readSettingsRow(db) || {};
   if (row.ring_token && row.public_base_url) return { source: 'direct', reason };
