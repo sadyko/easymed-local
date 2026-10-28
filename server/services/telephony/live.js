@@ -44,10 +44,11 @@ export const PULL_BACKOFF_MS = 10_000;
 const calls = new Map();   // uuid → живой звонок
 let lastDemandAt = 0;
 let cursor = '';           // номер последнего забранного события публичного сервера
-let unknownLogged = 0;
+const unknownLogged = new Set();   // FIX_318_V1 (C6): имена непонятных событий, уже записанные в журнал
+const UNKNOWN_LOG_MAX = 50;
 
 /** Для стендов: забыть всё, как после перезапуска сервера. */
-export function resetLive() { calls.clear(); lastDemandAt = 0; cursor = ''; unknownLogged = 0; }
+export function resetLive() { calls.clear(); lastDemandAt = 0; cursor = ''; unknownLogged.clear(); }
 
 export function demandLive(now = Date.now()) { lastDemandAt = now; }
 export function liveDemanded(now = Date.now()) { return lastDemandAt > 0 && now - lastDemandAt < DEMAND_TTL_MS; }
@@ -83,7 +84,13 @@ export function noteEvent(db, ev, now = Date.now()) {
   if (!ev) return null;
   if (ev.unknown) {
     // Имена полей — без значений: по ним уточняется схема станции, номера пациентов в журнал не попадают.
-    if (unknownLogged < 3) { unknownLogged++; console.warn('[ring] непонятное событие станции; поля: ' + (ev.keys || []).join(', ')); }
+    // FIX_318_V1 (C6) — и имя события (pbx-event.js unknownName: без номеров), один раз на имя:
+    // по этим строкам имена событий сверяются на настоящей станции.
+    const name = String(ev.name || '');
+    if (!unknownLogged.has(name) && unknownLogged.size < UNKNOWN_LOG_MAX) {
+      unknownLogged.add(name);
+      console.warn('[ring] событие станции «' + name + '» не распознано — пропущено; поля: ' + (ev.keys || []).join(', '));
+    }
     return null;
   }
   prune(now);

@@ -75,6 +75,27 @@ test('исходящий: номер пациента — callee; непонят
   assert.equal(liveCalls(T0).length, 1);
 });
 
+// FIX_318_V1 (C6) — непонятное событие пропускается, а его имя пишется в журнал
+// ОДИН раз (по имени): по нему схема станции сверяется на настоящих событиях.
+test('FIX_318_V1: непонятное событие — в журнал один раз на имя (имя и поля, без значений); состояние не меняется', () => {
+  resetLive();
+  const db = fresh();
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(' '));
+  try {
+    for (let i = 0; i < 3; i++) assert.equal(noteEvent(db, { unknown: true, keys: ['event', 'uuid', 'caller'], name: 'call_missed' }, T0), null);
+    noteEvent(db, { unknown: true, keys: ['event'], name: 'pending' }, T0);
+    noteEvent(db, { unknown: true, keys: ['event'], name: 'call_missed' }, T0);
+  } finally { console.warn = orig; }
+  assert.equal(warns.length, 2, warns.join('\n'));
+  assert.match(warns[0], /call_missed/);
+  assert.match(warns[0], /event, uuid, caller/);
+  assert.match(warns[1], /pending/);
+  assert.equal(liveCalls(T0).length, 0);
+  resetLive();
+});
+
 test('спрос панели живёт 30 секунд', () => {
   resetLive();
   assert.equal(liveDemanded(T0), false, 'без единого вопроса спроса нет');

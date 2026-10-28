@@ -22,7 +22,9 @@
 //
 // ЧТО ХРАНИТСЯ. Только номера, событие, направление, время — на десять минут
 // (store/pbx-events.js). Непонятное событие — 200 (станция не должна
-// повторять его 7 раз) и строка 'unknown' с именами полей для разбора схемы.
+// повторять его 7 раз) и строка 'unknown' с именами полей и — FIX_318_V1 (C6)
+// — именем события ('event=<имя>') для разбора схемы. Имена событий onlinePBX
+// не сверены с настоящей станцией: см. шапку server/services/telephony/pbx-event.js.
 import express from 'express';
 import { sendError } from '../lib/errors.js';
 import { normalizePbxEvent } from '../../../server/services/telephony/pbx-event.js';
@@ -69,7 +71,10 @@ export function pbxRouter(ctx) {
     const ev = normalizePbxEvent(req.body, { now });
     if (!ev) return sendError(req, res, 'bad_request');
     if (ev.unknown) {
-      insertPbxEvent(ctx.db, clinic.clinic_id, { uuid: 'unknown:' + isoOf(now), event: 'unknown', direction: '', caller: '', callee: '', at: isoOf(now) }, now, ev.keys);
+      // FIX_318_V1 (C6) — и имя события (pbx-event.js unknownName: без номеров): по нему
+      // имена событий onlinePBX сверяются с настоящей станцией. Клинике не выдаётся.
+      const keys = ev.name ? [...ev.keys.slice(0, 39), 'event=' + ev.name] : ev.keys;
+      insertPbxEvent(ctx.db, clinic.clinic_id, { uuid: 'unknown:' + isoOf(now), event: 'unknown', direction: '', caller: '', callee: '', at: isoOf(now) }, now, keys);
       return res.json({ ok: true, ignored: true });
     }
     insertPbxEvent(ctx.db, clinic.clinic_id, ev, now);

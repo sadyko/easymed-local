@@ -42,8 +42,8 @@ test('без uuid событие всё равно живёт: ключ соби
   assert.match(a.uuid, /^syn:/);
 });
 
-test('непонятное событие не теряется молча: unknown с ИМЕНАМИ полей (без значений); пустое — null', () => {
-  assert.deepEqual(normalizePbxEvent({ event: 'weird_thing', uuid: 'x', caller: '998901112233' }, { now: NOW }), { unknown: true, keys: ['event', 'uuid', 'caller'] });
+test('непонятное событие не теряется молча: unknown с ИМЕНАМИ полей (без значений) и именем события; пустое — null', () => {
+  assert.deepEqual(normalizePbxEvent({ event: 'weird_thing', uuid: 'x', caller: '998901112233' }, { now: NOW }), { unknown: true, keys: ['event', 'uuid', 'caller'], name: 'weird_thing' });
   assert.equal(normalizePbxEvent(null, { now: NOW }), null);
   assert.equal(normalizePbxEvent('строка', { now: NOW }), null);
   assert.equal(normalizePbxEvent({}, { now: NOW }), null);
@@ -60,6 +60,38 @@ test('Binotel «кто звонит» (apiCallSettings) → ring/in с его ж
   assert.deepEqual(ringFromBinotelSettings({ requestType: 'apiCallSettings', externalNumber: '0501112233', internalNumber: '101', generalCallID: 'g-1' }, { now: NOW }),
     { uuid: 'binotel:g-1', event: RING, direction: 'in', caller: '0501112233', callee: '101', at: '2026-10-17T07:00:00Z' });
   assert.equal(ringFromBinotelSettings({ requestType: 'apiCallSettings' }, { now: NOW }), null, 'без номера звонящего показывать нечего');
+});
+
+// FIX_318_V1 (C6) — имена событий угадывались по подстрокам: «call_missed»
+// (есть «call») читался как «звонит», «pending» (есть «end») — как «конец».
+// Теперь — только известные имена; остальное — unknown с именем (по нему
+// схема сверяется на настоящей станции), а не догадка.
+test('FIX_318_V1: имена событий — только известные; call_missed, pending и прочие — unknown с именем, не угадываются', () => {
+  for (const name of ['call_missed', 'pending', 'weird_thing', 'call_transfer', 'record_ready', 'calling', 'ended_by_timeout']) {
+    const ev = normalizePbxEvent({ event: name, uuid: 'x', caller: '998901112233' }, { now: NOW });
+    assert.equal(ev.unknown, true, name + ' угадан как ' + ev.event);
+    assert.equal(ev.name, name);
+    assert.deepEqual(ev.keys, ['event', 'uuid', 'caller']);
+  }
+  const kind = (event) => normalizePbxEvent({ event, uuid: 'a', caller: '998901112233', callee: '101' }, { now: NOW }).event;
+  assert.equal(kind('CALL_START'), RING, 'регистр не важен');
+  assert.equal(kind('call-answered'), ANSWER, 'дефис — как подчёркивание');
+  assert.equal(kind(' hangup '), END);
+  assert.equal(kind('Завершение звонка'), END, 'названия событий кабинета onlinePBX по-русски');
+  assert.equal(kind('Начавшийся разговор'), ANSWER);
+  assert.equal(kind('начало  звонка'), RING);
+  // Имя непонятного события — без номеров и не длиннее 40 знаков.
+  assert.equal(normalizePbxEvent({ event: '998901112233', uuid: 'x' }, { now: NOW }).name, '?');
+  assert.equal(normalizePbxEvent({ event: 'x'.repeat(100), uuid: 'x' }, { now: NOW }).name.length, 40);
+});
+
+test('FIX_318_V1: время вне диапазона дат, мусор и дальше суток от приёма — время приёма, без исключения (раньше огромное число — 400 станции)', () => {
+  for (const date of [1e20, '1e300', -5, 'Infinity', '9999-99-99', SEC + 3 * 86400, SEC - 3 * 86400, String(1e16), 8.64e15 + 1]) {
+    let ev;
+    assert.doesNotThrow(() => { ev = normalizePbxEvent({ event: 'call_start', uuid: 'u', caller: '998901112233', date }, { now: NOW }); }, String(date));
+    assert.equal(ev.at, '2026-10-17T07:00:00Z', String(date));
+  }
+  assert.equal(normalizePbxEvent({ event: 'call_start', uuid: 'u', date: SEC + 3600 }, { now: NOW }).at, '2026-10-17T08:00:00Z', 'в пределах суток — время станции');
 });
 
 test('FIX_318_V1: Binotel «звонок завершён» → end того же binotel:<id>; разговор был — answered; без id — null', () => {

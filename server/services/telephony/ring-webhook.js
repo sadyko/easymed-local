@@ -40,8 +40,8 @@ export function ringWebhook(db, { now = Date.now } = {}) {
     // Тот же вопрос, что задаёт опрос звонков каждый такт: req.control — ответ
     // attachControl на этот запрос (порядок монтажа в app.js).
     if (!req.control || !req.control.has('callcenter')) return res.status(404).json(NOT_FOUND);
-    const ev = normalizePbxEvent(req.body, { now: now() });
-    try { noteEvent(db, ev, now()); } catch (e) { console.warn('[ring] событие станции не разобралось:', e && e.message); }
+    // FIX_318_V1 (C6) — разбор тоже в try: сбой разбора (раньше — огромная дата) не должен стоить станции 404 на верный адрес.
+    try { noteEvent(db, normalizePbxEvent(req.body, { now: now() }), now()); } catch (e) { console.warn('[ring] событие станции не разобралось:', e && e.message); }
     return res.json({ ok: true });
   });
 

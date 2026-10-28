@@ -34,6 +34,27 @@ test('чужой секрет, чужая клиника, GET — один и т
   assert.deepEqual([items[0].uuid, items[0].event, items[0].direction, items[0].caller, items[0].callee], ['u-1', 'ring', 'in', '998901112233', '101']);
 });
 
+// FIX_318_V1 (C6) — огромная дата роняла разбор (RangeError → 400, станция
+// повторяла событие 7 раз); «call_missed» угадывался как «звонит», «pending» — как
+// «конец». Теперь: дата вне диапазона — время приёма; неизвестное имя — 200
+// ignored, клинике не выдаётся, имя — в строке unknown для сверки схемы.
+test('FIX_318_V1: дата вне диапазона — 200 и событие со временем приёма; call_missed и pending — 200 ignored, клинике не выдаются, имя — в строке unknown', async (t) => {
+  const s = await stand();
+  t.after(s.close);
+  const big = await s.post('c-000777/' + TOKEN, JSON.stringify({ ...EV, uuid: 'u-big', date: 1e20 }));
+  assert.equal(big.status, 200);
+  const items = pbxEventsSince(s.db, 'c-000777', '', NOW);
+  assert.deepEqual(items.map((x) => [x.uuid, x.at]), [['u-big', isoOf(NOW)]]);
+  for (const event of ['call_missed', 'pending']) {
+    const r = await s.post('c-000777/' + TOKEN, JSON.stringify({ ...EV, uuid: 'u-' + event, event }));
+    assert.deepEqual([r.status, await r.json()], [200, { ok: true, ignored: true }], event);
+  }
+  assert.deepEqual(pbxEventsSince(s.db, 'c-000777', '', NOW).map((x) => x.uuid), ['u-big'], 'непонятное событие уехало клинике');
+  const keys = s.db.prepare("SELECT keys FROM pbx_events WHERE event = 'unknown'").all().map((x) => JSON.parse(x.keys));
+  assert.ok(keys.some((k) => k.includes('event=call_missed')), JSON.stringify(keys));
+  assert.ok(!JSON.stringify(keys).includes('998901112233'), 'номер в строке unknown');
+});
+
 // FIX_318_V1 (C1) — onlinePBX шлёт вебхуки ВСЕХ клиник с одних и тех же адресов:
 // общий потолок по IP отдавал клинике B 429 из-за событий клиники A. Теперь по
 // IP считаются только неверные секреты и чужие адреса; верный секрет — потолок
@@ -74,7 +95,7 @@ test('form-urlencoded — то же событие; непонятное — 200
   const weird = await s.post('c-000777/' + TOKEN, JSON.stringify({ event: 'weird', uuid: 'u-3', caller: '998901112233' }));
   assert.deepEqual([weird.status, await weird.json()], [200, { ok: true, ignored: true }]);
   assert.equal(pbxEventsSince(s.db, 'c-000777', '', NOW).length, 1, 'непонятное событие уехало клинике');
-  assert.equal(s.db.prepare("SELECT keys FROM pbx_events WHERE event = 'unknown'").get().keys, '["event","uuid","caller"]');
+  assert.equal(s.db.prepare("SELECT keys FROM pbx_events WHERE event = 'unknown'").get().keys, '["event","uuid","caller","event=weird"]');
   assert.equal((await s.post('c-000777/' + TOKEN, '{}')).status, 400);
   assert.equal((await s.post('c-000777/' + TOKEN, JSON.stringify({ ...EV, pad: 'x'.repeat(20000) }))).status, 413);
 });

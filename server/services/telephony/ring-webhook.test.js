@@ -59,6 +59,19 @@ test('модуль колл-центра не куплен — 404; пустой
   try { assert.equal((await t.post('', JSON.stringify(EV))).status, 404); assert.equal((await t.post('x', JSON.stringify(EV))).status, 404); } finally { await t.close(); }
 });
 
+// FIX_318_V1 (C6) — огромная дата роняла разбор (RangeError) мимо try — станция
+// получала 404 на верный адрес; «call_missed» угадывался как «звонит».
+test('FIX_318_V1: дата вне диапазона — 200 и звонок со временем приёма; call_missed — 200 и ничего в состоянии', async () => {
+  const s = await stand();
+  try {
+    const big = await s.post(TOKEN, JSON.stringify({ ...EV, uuid: 'u-9', date: 1e20 }));
+    assert.equal(big.status, 200);
+    assert.equal(liveCalls()[0].uuid, 'u-9');
+    assert.equal((await s.post(TOKEN, JSON.stringify({ ...EV, uuid: 'u-10', event: 'call_missed' }))).status, 200);
+    assert.deepEqual(liveCalls().map((c) => c.uuid), ['u-9'], 'call_missed показан звонящим');
+  } finally { await s.close(); }
+});
+
 test('тело больше 16 КБ — 413, не 500', async () => {
   const s = await stand();
   try {

@@ -16,25 +16,44 @@
 //
 // ПОЧЕМУ РАЗБОР ТЕРПИМЫЙ. Официальной схемы вебхуков onlinePBX в открытом
 // доступе нет; по сторонним коннекторам известны поля event, direction, uuid,
-// caller, callee, date, gateway. Поэтому: событие и направление — по
-// подстрокам (и по-русски тоже), номера — по нескольким именам полей, время —
-// unix-секунды, миллисекунды или ISO. Непонятное событие НЕ теряется молча: оно
-// возвращается как { unknown: true, keys } — имена полей без значений, чтобы по
-// журналу сервера (клиника) или по колонке keys (публичный сервер) можно было
-// уточнить схему на первых настоящих событиях, не глядя на номера пациентов.
+// caller, callee, date, gateway. Поэтому: направление — по подстрокам (и
+// по-русски тоже), номера — по нескольким именам полей, время — unix-секунды,
+// миллисекунды или ISO. Непонятное событие НЕ теряется молча: оно
+// возвращается как { unknown: true, keys, name } — имена полей без значений и
+// имя события, чтобы по журналу сервера (клиника) или по колонке keys
+// (публичный сервер) можно было уточнить схему на первых настоящих событиях, не
+// глядя на номера пациентов.
+//
+// FIX_318_V1 (C6) — ИМЯ СОБЫТИЯ — ТОЛЬКО ИЗ СПИСКА, НЕ ПО ПОДСТРОКАМ. Подстроки
+// угадывали: «call_missed» (есть «call») читался как «звонит» — панель
+// показывала пропущенный звонок звонящим; «pending» (есть «end») — как «конец».
+// Теперь имя сверяется со списком EVENT_NAMES целиком (регистр, пробелы и
+// дефисы не важны); всё остальное — unknown: пропускается, клиника пишет его
+// имя в журнал один раз (live.js), публичный сервер — в строку unknown.
+//
+// !!! ИМЕНА СОБЫТИЙ НЕ СВЕРЕНЫ С НАСТОЯЩЕЙ СТАНЦИЕЙ. Список ниже собран из
+// сторонних коннекторов и названий в кабинете onlinePBX («начало звонка»,
+// «начавшийся разговор», «завершение звонка»), а не из документации и не с
+// живой станции. До выпуска клиникам — подключить вебхук настоящего кабинета
+// onlinePBX, сделать входящий (ответить), входящий (не ответить), исходящий и
+// посмотреть имена: журнал клиники («[ring] событие станции … не распознано»)
+// или строки event = 'unknown' публичного сервера (keys: 'event=<имя>').
+// Пропущенное нужное имя — дописать сюда (тест pbx-event.test.js).
 import { dialableNumber } from './dial.js';
 
 export const RING = 'ring';
 export const ANSWER = 'answer';
 export const END = 'end';
 
-// Порядок важен: «call_end» содержит «call», а «call_answer» — тоже. Сначала
-// конец, потом ответ, потом начало.
-const EVENT_RULES = [
-  [/hangup|end|finish|complet|stop|close|заверш|конец|положил/i, END],
-  [/answer|talk|connect|bridge|accept|разговор|ответ|принят/i, ANSWER],
-  [/start|ring|new|begin|incoming|dial|call|начал|звон|вызов/i, RING],
-];
+const EVENT_NAMES = new Map([
+  ...['call_start', 'call_started', 'start', 'call_ring', 'call_ringing', 'ring', 'ringing', 'call_incoming', 'incoming',
+    'call_new', 'new_call', 'call_begin', 'начало звонка', 'входящий звонок'].map((n) => [n, RING]),
+  ...['call_answer', 'call_answered', 'answer', 'answered', 'call_talk', 'talk', 'call_connected', 'connected',
+    'call_bridge', 'bridge', 'начавшийся разговор', 'начало разговора'].map((n) => [n, ANSWER]),
+  ...['call_end', 'call_ended', 'end', 'call_hangup', 'hangup', 'call_finish', 'call_finished', 'finish',
+    'call_completed', 'completed', 'call_stop', 'завершение звонка', 'конец звонка'].map((n) => [n, END]),
+]);
+const DAY_MS = 86_400_000;
 
 const pick = (body, names) => {
   for (const n of names) {
@@ -46,19 +65,39 @@ const pick = (body, names) => {
 
 const isoOf = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-/** Время события: unix-секунды, миллисекунды, ISO или «дата время»; мусор — время приёма. */
+/**
+ * Время события: unix-секунды, миллисекунды, ISO или «дата время»; мусор — время приёма.
+ * FIX_318_V1 (C6) — и время вне диапазона дат (огромное число: new Date бросал
+ * RangeError, станция получала 400 и повторяла событие), и дальше суток от
+ * приёма (часы станции врут) — время приёма, без исключения.
+ */
 export function eventTime(raw, now) {
-  if (raw === undefined || raw === null || raw === '') return isoOf(now);
+  const fallback = isoOf(now);
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  let ms = NaN;
   const n = Number(raw);
-  if (Number.isFinite(n) && n > 0) return isoOf(n < 1e11 ? n * 1000 : n);
-  const t = Date.parse(String(raw).replace(' ', 'T'));
-  return Number.isFinite(t) ? isoOf(t) : isoOf(now);
+  if (Number.isFinite(n)) { if (n > 0) ms = n < 1e11 ? n * 1000 : n; }
+  else { const t = Date.parse(String(raw).replace(' ', 'T')); if (Number.isFinite(t)) ms = t; }
+  if (!Number.isFinite(ms) || Math.abs(ms - now) > DAY_MS) return fallback;
+  return isoOf(ms);
 }
 
+// FIX_318_V1 (C6) — имя события для сверки со списком: регистр, лишние пробелы и дефисы не важны.
+const nameKey = (raw) => String(raw == null ? '' : raw).trim().toLowerCase().replace(/\s+/g, ' ');
 function eventKind(raw) {
-  const s = String(raw || '');
-  for (const [re, kind] of EVENT_RULES) if (re.test(s)) return kind;
-  return '';
+  const k = nameKey(raw);
+  return EVENT_NAMES.get(k) || EVENT_NAMES.get(k.replace(/[\s-]+/g, '_')) || '';
+}
+/**
+ * Имя непонятного события — для журнала и строки unknown: только буквы, цифры и
+ * «_ . - :», не длиннее 40; похожее на номер (5+ цифр подряд) или с иными
+ * знаками — '?': в журнал не должно попасть ничего, кроме имени.
+ */
+function unknownName(raw) {
+  const k = nameKey(raw);
+  if (!k) return '';
+  if (/\d{5,}/.test(k) || /[^\p{L}\p{N} _.\-:]/u.test(k)) return '?';
+  return k.slice(0, 40);
 }
 
 function directionOf(raw, caller, callee) {
@@ -74,14 +113,15 @@ function directionOf(raw, caller, callee) {
 
 /**
  * Событие onlinePBX (или любой станции с похожими полями) → один вид.
- * @returns {{uuid:string, event:string, direction:string, caller:string, callee:string, at:string} | {unknown:true, keys:string[]} | null}
+ * @returns {{uuid:string, event:string, direction:string, caller:string, callee:string, at:string} | {unknown:true, keys:string[], name:string} | null}
  */
 export function normalizePbxEvent(body, { now = Date.now() } = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const keys = Object.keys(body);
   if (!keys.length) return null;
-  const event = eventKind(pick(body, ['event', 'type', 'status', 'action', 'state']));
-  if (!event) return { unknown: true, keys };
+  const rawName = pick(body, ['event', 'type', 'status', 'action', 'state']);
+  const event = eventKind(rawName);
+  if (!event) return { unknown: true, keys, name: unknownName(rawName) };   // FIX_318_V1 (C6) — и имя: по нему сверяется схема
   const caller = dialableNumber(pick(body, ['caller', 'from', 'caller_id_number', 'caller_number', 'src', 'phone', 'external_number', 'externalNumber']));
   const callee = dialableNumber(pick(body, ['callee', 'to', 'destination_number', 'called', 'dst', 'internal_number', 'internalNumber']));
   const at = eventTime(pick(body, ['date', 'time', 'timestamp', 'start_stamp', 'created_at']), now);
