@@ -19,13 +19,13 @@
 // ОДНА ВКЛАДКА — ОДИН ТЕЛЕФОН: замок Web Locks «easymed-softphone». Вторая
 // вкладка говорит «в другой вкладке» и стоит в очереди за замком: закрыли
 // первую — вторая входит сама; выключили в первой — гаснет и вторая
-// (переключатель один на компьютер).
+// (переключатель один на все вкладки сотрудника).
 
 export const SP = Object.freeze({
   OFF: 'off', CONNECTING: 'connecting', READY: 'ready', RINGING: 'ringing',
   CALLING: 'calling', IN_CALL: 'in_call', ERROR: 'error', OTHER_TAB: 'other_tab',
 });
-/** Переключатель «Принимать звонки в Easy-Med» — помнит этот компьютер (localStorage). */
+/** Переключатель «Принимать звонки в Easy-Med» — localStorage; у каждого сотрудника свой (ключ дополняет хранилище softphone-browser.js). */
 export const SP_FLAG = 'easymed.softphone.on';
 const LOCK = 'easymed-softphone';
 // Причины registrationFailed «сеть или АТС не ответили» — показываем «переподключаемся».
@@ -118,7 +118,7 @@ export function createSoftphone({
   }
   // Другая вкладка держит телефон — встаём в очередь. Замок придёт сюда, когда
   // ту вкладку закроют (или её включение не удалось), и включение продолжится
-  // само. Переключатель общий для всех вкладок компьютера (localStorage): если
+  // само. Переключатель общий для всех вкладок сотрудника (localStorage): если
   // там телефон ВЫКЛЮЧИЛИ, флага уже нет — эта вкладка не подхватывает, а гаснет.
   function waitLock(g) {
     const ac = new AbortController();
@@ -327,10 +327,12 @@ export function createSoftphone({
     return track(Promise.resolve().then(() => start(g)));
   }
 
-  function disable() {
+  // keepWanted — выход и вход от имени (задача 8): телефон останавливается так же,
+  // а выбор «принимать звонки» остаётся до следующего входа этого сотрудника.
+  function disable({ keepWanted = false } = {}) {
     gen++;
     inflight = null;
-    safe(() => storage.removeItem(SP_FLAG));
+    if (!keepWanted) safe(() => storage.removeItem(SP_FLAG));
     const s = session; session = null;
     if (s) safe(() => s.terminate());
     dropUa();

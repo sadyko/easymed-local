@@ -229,6 +229,100 @@ test('«Вернуться»: DELETE → перезагрузка; 401 (сесс
     assert.equal(toastMsgs.length, 1);
 });
 
+// ─── SOFTPHONE_V1 (задача 8) — телефон Easy-Med при входе от имени и возврате ─
+// Идёт звонок — спросить «Завершить звонок и продолжить?»; «Отмена» — ни
+// запроса, ни выключения; согласие — запрос, затем телефон выключается (выбор
+// сотрудника «принимать звонки» остаётся) и страница перезагружается. Без
+// звонка — без вопроса. Сервер отказал — звонок не трогаем.
+const SB = await import('../softphone-browser.js');
+const PHONE_Q = 'Идёт разговор. Завершить звонок и продолжить?';
+function phoneAt(busy) {
+    const f = { disables: [], busy: () => busy, disable: (o) => { f.disables.push({ o, reloadsBefore: RELOADS }); } };
+    SB.setSoftphoneForTests(f);
+    return f;
+}
+// Подтверждение входа — да; вопрос о звонке — answer.
+function answerPhone(answer) { window.confirm = (m) => { CONFIRMS.push(String(m)); return String(m) === PHONE_Q ? answer : true; }; }
+const keepConfirm = window.confirm;
+
+test('вход от имени во время звонка: вопрос; «Отмена» — без запроса и выключения; «ОК» — вход, телефон выключен до перезагрузки, выбор остаётся', async () => {
+    const target = { id: 3, full_name: 'Иванова А.' };
+    try {
+        reset(); setUser(ADMIN);
+        const ph = phoneAt(true);
+        answerPhone(false);
+        SERVER = async () => ({ status: 200, body: { ok: true, user: ACTING, acting_admin: ACTING.acting_admin } });
+        assert.equal(await AA.startActAs(target), false);
+        assert.ok(CONFIRMS.includes(PHONE_Q), 'о звонке не спросили');
+        assert.equal(CALLS.length, 0, '«Отмена», а вход начался');
+        assert.deepEqual(ph.disables, []);
+        assert.equal(RELOADS, 0);
+
+        reset(); setUser(ADMIN);
+        answerPhone(true);
+        assert.equal(await AA.startActAs(target), true);
+        assert.deepEqual(CALLS.map((c) => [c.method, c.url]), [['POST', '/api/auth/act-as']]);
+        assert.deepEqual(ph.disables, [{ o: { keepWanted: true }, reloadsBefore: 0 }], 'телефон не выключен перед перезагрузкой');
+        assert.equal(RELOADS, 1);
+
+        // Сервер отказал — звонок не трогаем.
+        reset(); setUser(ADMIN);
+        const ph2 = phoneAt(true);
+        answerPhone(true);
+        SERVER = async () => ({ status: 400, body: { error: { code: 'bad_request', message: ACT_AS_MESSAGES.targetNew } } });
+        assert.equal(await AA.startActAs(target), false);
+        assert.deepEqual(ph2.disables, [], 'вход не удался, а звонок оборван');
+    } finally {
+        window.confirm = keepConfirm;
+        SB.setSoftphoneForTests(null);
+    }
+});
+
+test('вход от имени и возврат без звонка: без вопроса о звонке, телефон выключен с выбором сотрудника', async () => {
+    try {
+        reset(); setUser(ADMIN);
+        const ph = phoneAt(false);
+        SERVER = async () => ({ status: 200, body: { ok: true, user: ACTING, acting_admin: ACTING.acting_admin } });
+        assert.equal(await AA.startActAs({ id: 3, full_name: 'Иванова А.' }), true);
+        assert.ok(!CONFIRMS.includes(PHONE_Q));
+        assert.deepEqual(ph.disables, [{ o: { keepWanted: true }, reloadsBefore: 0 }]);
+
+        reset(); setUser(ACTING);
+        const back = phoneAt(false);
+        SERVER = async () => ({ status: 200, body: { ok: true, user: ADMIN, acting_admin: null } });
+        assert.equal(await AA.stopActAs(), true);
+        assert.deepEqual(CONFIRMS, []);
+        assert.deepEqual(back.disables, [{ o: { keepWanted: true }, reloadsBefore: 0 }]);
+        assert.equal(RELOADS, 1);
+    } finally {
+        SB.setSoftphoneForTests(null);
+    }
+});
+
+test('возврат к своей учётной записи во время звонка: вопрос; «Отмена» — остаёмся; «ОК» — телефон выключен, возврат', async () => {
+    try {
+        reset(); setUser(ACTING);
+        const ph = phoneAt(true);
+        answerPhone(false);
+        SERVER = async () => ({ status: 200, body: { ok: true, user: ADMIN, acting_admin: null } });
+        assert.equal(await AA.stopActAs(), false);
+        assert.deepEqual(CONFIRMS, [PHONE_Q]);
+        assert.equal(CALLS.length, 0);
+        assert.deepEqual(ph.disables, []);
+        assert.equal(RELOADS, 0);
+
+        reset(); setUser(ACTING);
+        answerPhone(true);
+        assert.equal(await AA.stopActAs(), true);
+        assert.deepEqual(CALLS.map((c) => [c.method, c.url]), [['DELETE', '/api/auth/act-as']]);
+        assert.deepEqual(ph.disables, [{ o: { keepWanted: true }, reloadsBefore: 0 }]);
+        assert.equal(RELOADS, 1);
+    } finally {
+        window.confirm = keepConfirm;
+        SB.setSoftphoneForTests(null);
+    }
+});
+
 // ─── полоса и окно аватара ──────────────────────────────────────────────────
 
 test('полоса вверху: «Вы работаете от имени: имя (роль) · все действия записываются · Вернуться» — над .app, одна; без входа от имени — нет', async () => {

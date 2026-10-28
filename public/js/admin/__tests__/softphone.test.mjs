@@ -845,6 +845,28 @@ test('disable — разговор завершён, UA остановлен, ф
   assert.equal(d.locks.held, false);
 });
 
+// Задача 8 — выход и вход от имени: телефон выключается чисто (номер выходит из
+// АТС), а выбор сотрудника «принимать звонки» остаётся до его следующего входа.
+test('disable({ keepWanted: true }) — всё как у disable(), только флаг остаётся', async () => {
+  const { sp, ua, store, media, d } = await ready();
+  const s = new FakeSession('incoming', '111');
+  ua.emit('newRTCSession', { originator: 'remote', session: s });
+  sp.answer(); s.emit('confirmed');
+  sp.disable({ keepWanted: true });
+  assert.equal(s.done.at(-1)[0], 'terminate', 'разговор не завершён');
+  assert.equal(ua.stopped, true, 'UA не остановлен');
+  assert.deepEqual(media.log.at(-1), ['detach']);
+  assert.deepEqual(sp.get(), { state: SP.OFF, reason: '', message: '', extension: '', call: null, lastEnd: null });
+  assert.equal(store.get(SP_FLAG), '1', 'флаг снят');
+  assert.equal(sp.wanted(), true);
+  await tick();
+  assert.equal(d.locks.held, false, 'замок не отпущен');
+  ua.emit('registered');
+  assert.equal(sp.get().state, SP.OFF, 'события после выключения не будят телефон');
+  sp.disable();
+  assert.equal(store.has(SP_FLAG), false, 'обычный disable() флаг снимает');
+});
+
 test('одна вкладка: B ждёт, пока A не выключит, и сама входит', async () => {
   const locks = makeLocks();
   const A = deps({ locks });

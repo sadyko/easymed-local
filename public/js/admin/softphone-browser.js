@@ -11,8 +11,9 @@
 //   • замок вкладки — Web Locks; в старом браузере без них замок даётся сразу
 //     (одна вкладка — один телефон там не гарантируется, но телефон работает);
 //   • звук собеседника — один скрытый <audio> на страницу;
-//   • флаг «включён» и выбранная гарнитура — localStorage (ошибки хранилища
-//     глотаются: приватный режим не должен ронять телефон);
+//   • флаг «включён» (свой у каждого сотрудника) и выбранная гарнитура (у
+//     компьютера) — localStorage (ошибки хранилища глотаются: приватный режим
+//     не должен ронять телефон);
 //   • RPC — тот же supabase.rpc, что у всех экранов.
 //
 // ОДИН ТЕЛЕФОН НА СТРАНИЦУ: getSoftphone() создаёт его при первом вызове.
@@ -30,7 +31,7 @@
 // настоящий браузер, в стендах подставной (как у browserMedia).
 import { supabase } from '../supabase.js';
 import { tr } from './i18n.js';
-import { createSoftphone } from './softphone.js';
+import { createSoftphone, SP_FLAG } from './softphone.js';
 
 const DEVICE_KEY = 'easymed.softphone.';
 const OFF = Object.freeze({ state: 'off', reason: '', message: '', extension: '', call: null, lastEnd: null });
@@ -61,11 +62,35 @@ export function saveDevice(kind, id) {
   } catch { /* приватный режим */ }
 }
 
-const storage = {
-  getItem(k) { try { return localStorage.getItem(k); } catch { return null; } },
-  setItem(k, v) { try { localStorage.setItem(k, v); } catch { /* приватный режим */ } },
-  removeItem(k) { try { localStorage.removeItem(k); } catch { /* приватный режим */ } },
-};
+// ПЕРЕКЛЮЧАТЕЛЬ — У КАЖДОГО СОТРУДНИКА (задача 8, решение владельца «Switch per
+// operator»). За компьютером клиники сменяются люди: выбор одного не должен
+// включать телефон другому. Поэтому флаг включения хранится с номером
+// сотрудника, вошедшего на этой странице (window.easymed.state.user — оболочка,
+// до неё window.CURRENT_USER), а номер читается при каждом обращении. Сотрудник
+// неизвестен (до входа) — флага нет: не читается и не пишется. Гарнитура
+// (easymed.softphone.in / out) — у компьютера, её ключи не трогаем. Вкладки
+// одного сотрудника видят один и тот же флаг — замок вкладки (softphone.js
+// waitLock) работает как прежде.
+function operatorId() {
+  try {
+    const w = typeof window !== 'undefined' ? window : null;
+    const u = w && ((w.easymed && w.easymed.state && w.easymed.state.user) || w.CURRENT_USER);
+    return u && u.id != null && String(u.id) !== '' ? String(u.id) : '';
+  } catch { return ''; }
+}
+/** Ключ в localStorage: флаг включения — с номером сотрудника; '' — сотрудник неизвестен. */
+function keyOf(k) {
+  if (k !== SP_FLAG) return k;
+  const uid = operatorId();
+  return uid ? SP_FLAG + '.' + uid : '';
+}
+
+/** Хранилище телефона (createSoftphone({ storage })): ошибки хранилища глотаются, флаг — свой у сотрудника. */
+export const softphoneStorage = Object.freeze({
+  getItem(k) { const key = keyOf(k); if (!key) return null; try { return localStorage.getItem(key); } catch { return null; } },
+  setItem(k, v) { const key = keyOf(k); if (!key) return; try { localStorage.setItem(key, v); } catch { /* приватный режим */ } },
+  removeItem(k) { const key = keyOf(k); if (!key) return; try { localStorage.removeItem(key); } catch { /* приватный режим */ } },
+});
 
 /** JsSIP из vendor — по требованию: import() грузит бандл один раз. */
 export function loadJsSIP() {
@@ -170,18 +195,48 @@ export function getSoftphone() {
     rpc: (name, args) => supabase.rpc(name, args),
     media: media(),
     locks: browserLocks(navigator),
-    storage,
+    storage: softphoneStorage,
     inputId: () => savedDevice('in'),
   });
   // Динамик, выбранный в прошлый раз, — сразу: первый же звонок звучит в нём.
   const out = savedDevice('out');
   if (out) media().setSink(out);
+  // Закрыть или перезагрузить страницу во время звонка — браузер спрашивает
+  // (задача 8): иначе разговор с пациентом обрывался бы молча. Один раз — вместе
+  // с телефоном страницы.
+  try { window.addEventListener('beforeunload', onLeave); } catch { /* без окна — нечего стеречь */ }
   return instance;
+}
+function onLeave(e) {
+  const sp = peekSoftphone();
+  if (!sp || typeof sp.busy !== 'function' || !sp.busy()) return;
+  e.preventDefault();
+  e.returnValue = '';
 }
 
 /** Телефон страницы, если он уже есть (или подмена); сам не создаёт. */
 export function peekSoftphone() {
   return override || instance;
+}
+
+// ── Выход и вход от имени (задача 8) ────────────────────────────────────────
+// Оба кончаются перезагрузкой страницы. Идёт звонок — сначала спросить
+// (window.confirm — так спрашивает вся программа, и «Войти как сотрудник» тоже);
+// дальше телефон выключается чисто — номер выходит из АТС, — а выбор
+// сотрудника «принимать звонки» остаётся до его следующего входа. Телефона на
+// странице нет — ничего не создаём и не спрашиваем.
+
+/** Идёт звонок — спросить question (ключ словаря), можно ли его завершить; звонка нет — да. */
+export function confirmEndCall(question) {
+  const sp = peekSoftphone();
+  if (!sp || typeof sp.busy !== 'function' || !sp.busy()) return true;
+  try { return !!window.confirm(tr(question)); } catch { return true; }
+}
+/** Перед перезагрузкой (выход, вход от имени и возврат): выключить телефон, выбор сотрудника оставить. */
+export function releasePhone() {
+  const sp = peekSoftphone();
+  if (!sp || typeof sp.disable !== 'function') return;
+  try { sp.disable({ keepWanted: true }); } catch { /* перезагрузка всё равно его снимет */ }
 }
 
 /** Подмена для стендов: getSoftphone()/peekSoftphone() отдают её; null — снять. */

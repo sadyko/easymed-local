@@ -12399,6 +12399,9 @@ export const STRINGS = {
   "Слушайте запись…": {"en":"Listen to the recording…","ru":"Слушайте запись…","uz":"Yozuvni tinglang…"},
   "Готово. Если себя не слышно — выберите другой микрофон или динамик.": {"en":"Done. If you could not hear yourself, choose another microphone or speaker.","ru":"Готово. Если себя не слышно — выберите другой микрофон или динамик.","uz":"Tayyor. O‘zingizni eshitmagan bo‘lsangiz, boshqa mikrofon yoki dinamikni tanlang."},
   "Проверить гарнитуру можно после разговора.": {"en":"You can test the headset after the call.","ru":"Проверить гарнитуру можно после разговора.","uz":"Garniturani suhbatdan keyin tekshirish mumkin."},
+  // SOFTPHONE_V1 (задача 8) — выход и вход от имени во время звонка (auth.js signOutAndReload, act-as-client.js)
+  "Идёт разговор. Завершить звонок и выйти?": {"en":"A call is in progress. End the call and log out?","ru":"Идёт разговор. Завершить звонок и выйти?","uz":"Suhbat davom etmoqda. Qo‘ng‘iroqni yakunlab, chiqasizmi?"},
+  "Идёт разговор. Завершить звонок и продолжить?": {"en":"A call is in progress. End the call and continue?","ru":"Идёт разговор. Завершить звонок и продолжить?","uz":"Suhbat davom etmoqda. Qo‘ng‘iroqni yakunlab, davom etasizmi?"},
   // /SOFTPHONE_V1
   // /CRM_PHONE_V1
   // TG_BROADCAST_FILTERS_V1 — подробные фильтры окна рассылки

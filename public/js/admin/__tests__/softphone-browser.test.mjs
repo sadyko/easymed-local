@@ -220,7 +220,8 @@ test('getSoftphone() в браузере: настоящий телефон, о�
   const gum = [];
   let gumError = null;
   const keep = { window: globalThis.window, document: globalThis.document, navigator: globalThis.navigator, fetch: globalThis.fetch };
-  globalThis.window = { isSecureContext: false, MediaStream: FakeStream, dispatchEvent() {}, addEventListener() {} };
+  // Вошедший сотрудник — флаг включения хранится с его номером (задача 8).
+  globalThis.window = { isSecureContext: false, MediaStream: FakeStream, dispatchEvent() {}, addEventListener() {}, easymed: { state: { user: { id: 5 } } } };
   globalThis.document = doc;
   setNavigator({ languages: ['ru'], mediaDevices: { getUserMedia: async (c) => { gum.push(c); if (gumError) throw gumError; return { getTracks: () => [] }; } } }); // без navigator.locks
   const rpcs = [];
@@ -237,12 +238,12 @@ test('getSoftphone() в браузере: настоящий телефон, о�
     assert.equal(sp.get().state, 'off');
     assert.equal(sp.wanted(), false);
 
-    // http без настройки компьютера → «insecure»; флаг включения запомнен в localStorage.
+    // http без настройки компьютера → «insecure»; флаг включения запомнен в localStorage — у сотрудника.
     await sp.enable();
     assert.equal(sp.get().state, 'error');
     assert.equal(sp.get().reason, 'insecure');
     assert.equal(sp.wanted(), true);
-    assert.equal(store.get('easymed.softphone.on'), '1');
+    assert.equal(store.get('easymed.softphone.on.5'), '1');
 
     // Микрофон — через navigator.mediaDevices, выбранный в панели (localStorage).
     globalThis.window.isSecureContext = true;

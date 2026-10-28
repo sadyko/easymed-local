@@ -109,6 +109,19 @@ async function readJson(res) {
     try { return await res.json(); } catch (_) { return {}; }
 }
 
+// SOFTPHONE_V1 (задача 8) — телефон Easy-Med при входе от имени и возврате: обе
+// дороги кончаются перезагрузкой. Идёт звонок — спросить, можно ли его завершить
+// («Отмена» — ничего не делаем); после ответа сервера телефон выключается чисто,
+// а выбор «принимать звонки» остаётся у своего сотрудника (вернулся
+// администратор — его телефон включится сам). Модуль телефона — динамически.
+const PHONE_QUESTION = 'Идёт разговор. Завершить звонок и продолжить?';
+async function phoneMayGo() {
+    try { return (await import('./softphone-browser.js')).confirmEndCall(PHONE_QUESTION); } catch (_) { return true; }
+}
+async function releasePhone() {
+    try { (await import('./softphone-browser.js')).releasePhone(); } catch (_) { /* перезагрузка всё равно снимет */ }
+}
+
 /**
  * «Войти как сотрудник»: подтверждение → POST /api/auth/act-as → перезагрузка
  * (программа собирается заново уже под сотрудником). Отказ сервера — его же
@@ -120,6 +133,7 @@ export async function startActAs(target, { adminName } = {}) {
     const me = shellUser();
     const admin = adminName || (me && (me.full_name || me.username)) || '';
     if (!window.confirm(actAsConfirmText(name, admin))) return false;
+    if (!(await phoneMayGo())) return false;   // SOFTPHONE_V1 — идёт звонок, «Отмена»
     let res;
     try {
         res = await fetch(API, {
@@ -136,6 +150,7 @@ export async function startActAs(target, { adminName } = {}) {
         toast((json && json.error && json.error.message) || 'Не удалось войти от имени сотрудника.', 'fail');
         return false;
     }
+    await releasePhone();   // SOFTPHONE_V1 — сервер согласился: звонок завершаем перед перезагрузкой
     reloadPage();
     return true;
 }
@@ -146,6 +161,7 @@ export async function startActAs(target, { adminName } = {}) {
  * щелчок); 401 — сессии уже нет, перезагрузка приведёт ко входу.
  */
 export async function stopActAs() {
+    if (!(await phoneMayGo())) return false;   // SOFTPHONE_V1 — идёт звонок, «Отмена»
     let res;
     try {
         res = await fetch(API, { method: 'DELETE', credentials: 'same-origin' });
@@ -158,6 +174,7 @@ export async function stopActAs() {
         toast((json && json.error && json.error.message) || 'Не удалось вернуться к своей учётной записи — попробуйте ещё раз.', 'fail');
         return false;
     }
+    await releasePhone();   // SOFTPHONE_V1
     reloadPage();
     return true;
 }
