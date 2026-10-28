@@ -19,6 +19,7 @@ import { constraintRefusal, errorBody } from '../services/server-message.js';   
 import { notesWriteRefusal, storedIsCabinet, NOTES_BASE_KEY, NOTES_CONFLICT_MESSAGE, notesCompatValue, signedEntryAdded } from '../services/domain/cabinet-notes.js';   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6 · ADMIN_ACT_AS_V1 (signedEntryAdded)
 import { ACT_AS_SIGN_REFUSAL, isDoctorDocType, actingActorName } from '../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документы врача, имя в журналах)
 import { actAsRecheck } from '../services/act-as.js';   // ADMIN_ACT_AS_V1 (ревью, LOW 7)
+import { docBodyGiven } from '../services/act-as-sign.js';   // ADMIN_ACT_AS_V1 (ревью-2, LOW 1)
 // CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
@@ -302,6 +303,13 @@ export function signWhileActingRefusal(db, meta, body, user) {   // ADMIN_ACT_AS
   if (VERIFY_TABLES.has(meta.table) && rows.some((r) => r.verified_by != null || r.verified_at != null)) return true;
   if (meta.table === 'visit_documents') {   // ревью безопасности (HIGH 2)
     if (rows.some((r) => isDoctorDocType(r.doc_type))) return true;
+    // Ревью-2 (LOW 1) — ТЕКСТ документа (body) любого вида, хоть «заметки», хоть
+    // без вида: архив и карта открывают его бланком заключения, под
+    // «Консультацией», с автором-врачом. Новый — только без текста; правка
+    // текста (и его стирание) — нет. Экраны, которым это нужно от имени
+    // сотрудника, текст в visit_documents через эту дверь не пишут.
+    if (meta.op === 'insert' && rows.some((r) => docBodyGiven(r.body))) return true;
+    if (meta.op !== 'insert' && rows.some((r) => Object.prototype.hasOwnProperty.call(r, 'body'))) return true;
     if (meta.op === 'insert') return false;
     try {
       const filters = meta.op === 'upsert'

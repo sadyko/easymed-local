@@ -43,6 +43,7 @@ import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — 
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагнозы списком
 import { setupA4Fit } from './a4-paginate.js';   // FORM_003_ONE_PAGE_V1
 import { setupA4Sheets } from './a4-sheets.js';   // A4_SHEETS_V1 — документ отдельными листами
+import { lockSignButton } from '../act-as-client.js';   // ADMIN_ACT_AS_V1 (ревью-2) — «Собрать историю» от имени
 
 const state = {
     admissionId: null,
@@ -489,15 +490,17 @@ function diagnosisCard() {
 // scrolling options».
 
 // Сборка истории — из списка документов, поэтому и кнопка под ним.
-function assembleFor(root, onNavigate) {
-    return h('button', {
+// ADMIN_ACT_AS_V1 (ревью-2) — от имени сотрудника неактивна с подсказкой R3:
+// сборка подшивает историю в карту документом врача. Экспорт — для проверки.
+export function assembleFor(root, onNavigate) {
+    return lockSignButton(h('button', {
         class: 'btn btn-primary cw-assemble', type: 'button',
         onclick: async () => {
             const saved = await assembleCaseFile(state.admissionId);
             // Подшили — значит список «сколько оформлено» мог измениться.
             if (saved) { await load(); paint(root, onNavigate); }
         },
-    }, Icon('Doc', { size: 14 }), ' ', tr('Собрать историю'));
+    }, Icon('Doc', { size: 14 }), ' ', tr('Собрать историю')));
 }
 
 function paintRail(rail, root, onNavigate) {

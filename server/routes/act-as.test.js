@@ -747,7 +747,9 @@ test('ревью HIGH 2: документ врача в visit_documents от и�
       assert.equal(r.json.error.message, ACT_AS_SIGN_REFUSAL, t);
     }
     const before = db.prepare('SELECT COUNT(*) n FROM visit_documents').get().n;
-    const note = await ins('note');
+    // Заметка без текста документа (body) — не документ врача (с текстом — ревью-2, ниже).
+    const note = await db_(base, boss, { table: 'visit_documents', op: 'insert', returning: true, single: 'single',
+      values: { doc_type: 'note', title: 'Документ', patient_id: 1, visit_id: 1, visit_service_id: 7 } });
     assert.equal(note.status, 200, 'заметка — не документ врача: ' + JSON.stringify(note.json));
     const noteId = note.json.data.id;
     const toProtocol = await db_(base, boss, { table: 'visit_documents', op: 'update', values: { doc_type: 'protocol' }, filters: [{ col: 'id', op: 'eq', val: noteId }] });
@@ -765,12 +767,56 @@ test('ревью HIGH 2: документ врача в visit_documents от и�
       assert.equal(r.status, 403, 'patient_card_doc_add ' + t);
       assert.equal(r.json.error.code, 'sign_while_acting');
     }
-    const plain = await rpc(base, boss, 'patient_card_doc_add', { patient_id: 1, row: { doc_type: 'note', title: 'Заметка', body: { a: 1 } } });
+    const plain = await rpc(base, boss, 'patient_card_doc_add', { patient_id: 1, row: { doc_type: 'note', title: 'Заметка' } });
     assert.notEqual(plain.json.error && plain.json.error.code, 'sign_while_acting', 'заметка через карту — не R3');
     const cf = await rpc(base, boss, 'admission_case_file_save', { admission_id: 1 });
     assert.equal(cf.status, 403, 'история болезни (case_file) от имени');
     assert.equal(cf.json.error.code, 'sign_while_acting');
     assert.equal(db.prepare("SELECT COUNT(*) n FROM visit_documents WHERE doc_type IN ('protocol','conclusion','diag','case_file','lab') AND created_by = ? AND id <> ?").get(DOC, ownId).n, 0);
+  } finally { server.close(); }
+});
+
+test('ревью-2 LOW 1: текст документа (body) в visit_documents от имени — 403 R3 при любом виде (заметка, без вида): архив открывает его бланком заключения; без текста — можно', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    await actAs(base, boss, DOC);
+    const ins = (values) => db_(base, boss, { table: 'visit_documents', op: 'insert', returning: true, single: 'single',
+      values: { title: 'Заключение', patient_id: 1, visit_id: 1, visit_service_id: 7, ...values } });
+    for (const values of [{ doc_type: 'note', body: { conclusion: 'здоров' } }, { body: { conclusion: 'здоров' } }, { doc_type: 'upload', body: 'текст' }, { doc_type: 'note', body: [1] }]) {
+      const r = await ins(values);
+      assert.equal(r.status, 403, JSON.stringify(values));
+      assert.equal(r.json.error.code, 'sign_while_acting', JSON.stringify(values));
+      assert.equal(r.json.error.message, ACT_AS_SIGN_REFUSAL);
+    }
+    const arr = await db_(base, boss, { table: 'visit_documents', op: 'insert', values: [{ doc_type: 'note', title: 'a', patient_id: 1 }, { doc_type: 'note', title: 'b', patient_id: 1, body: { x: 1 } }] });
+    assert.equal(arr.status, 403, 'пачка, где у одной строки текст');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_documents').get().n, 0, 'ничего не записано');
+
+    // Без текста — можно: заметка-название, пустой текст.
+    const plainNote = await ins({ doc_type: 'note' });
+    assert.equal(plainNote.status, 200, JSON.stringify(plainNote.json));
+    for (const empty of [null, '', {}]) assert.equal((await ins({ doc_type: 'note', body: empty })).status, 200, 'пустой текст: ' + JSON.stringify(empty));
+    const id = plainNote.json.data.id;
+    // Правка: текст — нельзя (и стереть тоже), название — можно.
+    for (const body of [{ conclusion: 'здоров' }, null]) {
+      const r = await db_(base, boss, { table: 'visit_documents', op: 'update', values: { body }, filters: [{ col: 'id', op: 'eq', val: id }] });
+      assert.equal(r.status, 403, 'правка текста: ' + JSON.stringify(body));
+      assert.equal(r.json.error.code, 'sign_while_acting');
+    }
+    assert.equal((await db_(base, boss, { table: 'visit_documents', op: 'update', values: { title: 'Заметка' }, filters: [{ col: 'id', op: 'eq', val: id }] })).status, 200);
+    // Та же дверь в карте пациента: текст — нельзя, название (и файл — «upload») — как прежде.
+    const card = await rpc(base, boss, 'patient_card_doc_add', { patient_id: 1, row: { doc_type: 'note', title: 'Заключение', body: { conclusion: 'здоров' } } });
+    assert.equal(card.status, 403);
+    assert.equal(card.json.error.code, 'sign_while_acting');
+    const cardPlain = await rpc(base, boss, 'patient_card_doc_add', { patient_id: 1, row: { doc_type: 'upload', title: 'Скан' } });
+    assert.notEqual(cardPlain.json.error && cardPlain.json.error.code, 'sign_while_acting');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM visit_documents WHERE body IS NOT NULL AND body <> '' AND body <> '{}'").get().n, 0, 'документа с текстом от имени нет');
+
+    // Сам врач — как прежде: заметка с текстом.
+    await back(base, boss);
+    const doc = await login(base, 'doc');
+    assert.equal((await db_(base, doc, { table: 'visit_documents', op: 'insert', values: { doc_type: 'note', title: 'Своё', patient_id: 1, body: { a: 1 } } })).status, 200);
   } finally { server.close(); }
 });
 

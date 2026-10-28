@@ -14,7 +14,7 @@ import { createInvoiceForVisit } from './rpc/billing.js';
 import { procedureComplete } from './rpc/procedures.js';
 import { admissionReviewSave } from './rpc/inpatient-reviews.js';
 import { visitDocumentArchive } from './rpc/patient-card.js';
-import { refuseSignWhileActing } from './act-as-sign.js';
+import { refuseSignWhileActing, refuseDoctorDocWhileActing, docBodyGiven } from './act-as-sign.js';
 import { actingActorName, isActing, ACT_AS_SIGN_REFUSAL, ACT_AS_END, ACT_AS_MAX_HOURS, ACT_AS_MESSAGES } from '../../public/js/shared/act-as.js';
 import { STRINGS } from '../../public/js/admin/i18n-strings.js';
 import { signedEntryAdded } from './domain/cabinet-notes.js';
@@ -54,6 +54,15 @@ test('refuseSignWhileActing: от имени — 403 sign_while_acting с тек
   assert.doesNotThrow(() => refuseSignWhileActing({ id: 3, role: 'doctor', acting_admin: null }));
   assert.doesNotThrow(() => refuseSignWhileActing({ id: 3, role: 'doctor' }));
   assert.doesNotThrow(() => refuseSignWhileActing(null));
+});
+
+test('ревью-2: текст документа визита — есть или нет (docBodyGiven); документ с текстом от имени — отказ R3', () => {
+  for (const v of [{ a: 1 }, [1], 'текст', '{"a":1}', '"x"', 0, false]) assert.equal(docBodyGiven(v), true, JSON.stringify(v));
+  for (const v of [undefined, null, '', '   ', {}, [], '{}', '[]', 'null', '""']) assert.equal(docBodyGiven(v), false, JSON.stringify(v));
+  assert.throws(() => refuseDoctorDocWhileActing(acting({ id: 3 }), 'note', { a: 1 }), isSignRefusal);
+  assert.throws(() => refuseDoctorDocWhileActing(acting({ id: 3 }), 'protocol', null), isSignRefusal);
+  assert.doesNotThrow(() => refuseDoctorDocWhileActing(acting({ id: 3 }), 'upload', null));
+  assert.doesNotThrow(() => refuseDoctorDocWhileActing({ id: 3 }, 'note', { a: 1 }), 'без входа от имени — как прежде');
 });
 
 test('правило записей кабинета: подпись новая или изменённая — да; прежние подписи, черновики, чужой текст — нет', () => {

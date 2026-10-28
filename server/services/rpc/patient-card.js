@@ -479,7 +479,9 @@ export function patientCardSavePatient(db, args, user) {
 export function patientCardAddDocument(db, args, user) {
   // ADMIN_ACT_AS_V1 (ревью безопасности, HIGH 2) — документ врача (заключение,
   // протокол …) от чужого имени в карту не кладут: его отдают пациенту с автором-врачом.
-  refuseDoctorDocWhileActing(user, args && args.row && typeof args.row === 'object' ? args.row.doc_type : null);
+  // Ревью-2 (LOW 1) — и документ с текстом любого вида: карта открывает его бланком заключения.
+  const docRow = args && args.row && typeof args.row === 'object' ? args.row : {};
+  refuseDoctorDocWhileActing(user, docRow.doc_type, docRow.body);
   const roles = requireCard(db, user);
   requireEdit(db, user, 'docs');
   const id = patientId(args);

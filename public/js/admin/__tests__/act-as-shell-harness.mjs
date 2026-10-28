@@ -169,14 +169,24 @@ export async function bootShell({ meBody }) {
         const make = () => ({ ok: status >= 200 && status < 300, status, json: async () => JSON.parse(JSON.stringify(body)), clone: () => make() });
         return make();
     };
+    // Ревью-2 (вкладки) — заголовки запроса (номер вкладки X-Em-Act-As) и /me,
+    // который может ответить по-разному на первый и следующие вызовы (meBody — функция номера вызова).
+    const headersOf = (hs) => {
+        const out = {};
+        if (!hs) return out;
+        if (typeof hs.forEach === 'function' && !Array.isArray(hs)) hs.forEach((v, k) => { out[String(k).toLowerCase()] = String(v); });
+        else for (const [k, v] of (Array.isArray(hs) ? hs : Object.entries(hs))) out[String(k).toLowerCase()] = String(v);
+        return out;
+    };
+    let meCalls = 0;
     const transport = async (url, opts = {}) => {
         const u = String(url);
         let body = null;
         try { body = opts.body && typeof opts.body === 'string' ? JSON.parse(opts.body) : null; } catch (_) { body = null; }
-        CALLS.push({ url: u, method: opts.method || 'GET', body });
+        CALLS.push({ url: u, method: opts.method || 'GET', body, headers: headersOf(opts.headers) });
         const custom = server({ url: u, method: opts.method || 'GET', body });
         if (custom) return reply(custom.status, custom.body);
-        if (u.startsWith('/api/auth/me')) return reply(200, meBody);
+        if (u.startsWith('/api/auth/me')) return reply(200, typeof meBody === 'function' ? meBody(meCalls++) : meBody);
         if (u.startsWith('/api/auth/act-as')) return reply(200, { ok: true });
         if (u.startsWith('/api/rpc/')) return reply(200, { data: null });
         if (u.startsWith('/api/db')) return reply(200, { data: body && body.op && body.op !== 'select' ? null : [], count: 0 });

@@ -21,7 +21,31 @@ export function refuseSignWhileActing(user) {
   throw e;
 }
 
-/** Ревью безопасности (HIGH 2) — то же для документа визита вида, который составляет врач (shared/act-as.js). */
-export function refuseDoctorDocWhileActing(user, docType) {
-  if (isDoctorDocType(docType)) refuseSignWhileActing(user);
+/**
+ * Ревью-2 (LOW 1) — есть ли у документа визита ТЕКСТ (visit_documents.body):
+ * не null, не пустая строка, не пустой объект или список (строкой JSON — тоже).
+ * Архив документов и карта пациента открывают текст неизвестного вида бланком
+ * заключения, под «Консультацией», — от имени такой документ не пишут.
+ */
+export function docBodyGiven(body) {
+  let v = body;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return false;
+    try { v = JSON.parse(s); } catch { return true; }
+    if (typeof v === 'string') return v.trim() !== '';
+  }
+  if (v === undefined || v === null) return false;
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === 'object') return Object.keys(v).length > 0;
+  return true;
+}
+
+/**
+ * Ревью безопасности (HIGH 2) — то же для документа визита вида, который
+ * составляет врач (shared/act-as.js), и (ревью-2) для любого документа с
+ * текстом. Файл без текста (вид «upload») и название — можно.
+ */
+export function refuseDoctorDocWhileActing(user, docType, body) {
+  if (isDoctorDocType(docType) || docBodyGiven(body)) refuseSignWhileActing(user);
 }

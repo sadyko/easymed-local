@@ -42,6 +42,7 @@ import { sanitizeStoredHtml } from '../../shared/rich-text.js';   // CASE_DOC_A4
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { titleSheetPrintSection, titleSheetPrintCss, papersSummary } from './title-sheet-print.js';   // TITLE_SHEET_V1 / INPATIENT_DOCS_V1
+import { lockSignButton, refuseSignWhileActing } from '../act-as-client.js';   // ADMIN_ACT_AS_V1 (ревью-2) — «Собрать историю» от имени
 
 // ---------------------------------------------------------------------------
 // Словарь названий
@@ -823,10 +824,12 @@ export function caseDocsView({ state, onDoc, onAssemble = null, activeKind = nul
         // вторая такая же кнопка в подвале списка шагов означала бы, что их две
         // разные — а она одна.
         if (onAssemble) {
-            foot.appendChild(h('button', {
+            // ADMIN_ACT_AS_V1 (ревью-2) — сборка подшивает историю в карту документом
+            // врача (сервер от имени отказывает, R3): кнопка неактивна с подсказкой.
+            foot.appendChild(lockSignButton(h('button', {
                 class: 'btn btn-sm', type: 'button', style: { justifySelf: 'start' },
                 onclick: () => onAssemble(),
-            }, Icon('Print', { size: 13 }), ' ', tr('Собрать историю болезни')));
+            }, Icon('Print', { size: 13 }), ' ', tr('Собрать историю болезни'))));
         }
         box.appendChild(head);
         box.appendChild(list);
@@ -1082,6 +1085,10 @@ ${body
  * и записал, поэтому бумага и карта не могут разойтись.
  */
 export async function assembleCaseFile(admissionId) {
+    // ADMIN_ACT_AS_V1 (ревью-2) — от имени сотрудника историю не подшивают (R3:
+    // сервер откажет). «Только печати» без подшивания нет намеренно — см. выше:
+    // напечатанная история, которой нет в карте, и есть то, от чего защищает порядок.
+    if (refuseSignWhileActing()) return null;
     const { data, error } = await supabase.rpc('admission_case_file_save', { admission_id: admissionId });
     if (error) { toast(error.message || tr('Не удалось собрать историю болезни.'), 'fail'); return null; }
 

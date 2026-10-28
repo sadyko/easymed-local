@@ -216,3 +216,54 @@ test('uz/en: подсказка R3 на кнопках — на языке эк�
   }
   setLang('ru');
 });
+
+// --- ревью-2: «Собрать историю» — подшить историю болезни в карту ------------
+// Сборка СНАЧАЛА сохраняет историю в карту (admission_case_file_save, документ
+// врача 'case_file'), и только потом печатает — сервер от имени отказывает.
+// Кнопка неактивна с подсказкой R3; отдельной «только печати» нет намеренно:
+// напечатанная история, которой нет в карте, — то, от чего сборка и защищает.
+const D = (kind, over) => Object.assign({
+  kind, group: 'required', applies: true, required: true, state: 'pending',
+  due_rule: 'clock', due_at: '2026-10-28T08:00:00Z', period_hours: null, periods_missing: 0,
+  entries: 0, block: null, review_id: null, published_at: null, author_name: '',
+  revisions: [], revision_count: 0, draft_id: null, has_draft: false,
+}, over);
+const CASE_STATE = {
+  admission_id: 7, status: 'active', now: '2026-10-28T09:00:00Z', base_at: '2026-10-28T07:00:00Z', base_source: 'admitted',
+  surgical: false, surgical_from: null,
+  items: [D('primary', { state: 'published', published_at: '2026-10-28T08:00:00Z', author_name: 'Иванова А.', review_id: 1, revision_count: 1 })],
+  other: [], progress: { done: 1, total: 1, overdue: 0, draft: 0 }, next_kind: null,
+  discharge_gate: { blocked: false, blocking: [], incomplete: [] },
+};
+
+test('ревью-2: «Собрать историю болезни» (список документов) и «Собрать историю» (рабочий экран) — от имени неактивны с подсказкой R3; без входа от имени — как были', async () => {
+  const { caseDocsView } = await import('../views/case-docs.js');
+  const { assembleFor } = await import('../views/case-workspace.js');
+  const DOC = { id: 3, full_name: 'Иванова А.', role: 'doctor', is_doctor: true, extra_roles: [], acting_admin: null };
+  const collect = () => [
+    ...buttonWith(caseDocsView({ state: CASE_STATE, onDoc() {}, onAssemble() {} }), /Собрать историю/),
+    ...buttonWith(assembleFor(mk('div'), () => {}), /Собрать историю/),
+  ];
+  window.easymed.state.user = ACTING(DOC);
+  let bs = collect();
+  assert.equal(bs.length, 2, 'обе кнопки сборки на месте');
+  assert.ok(bs.every(locked), 'от имени — неактивны с подсказкой R3');
+  window.easymed.state.user = DOC;
+  bs = collect();
+  assert.ok(bs.every((b) => b.disabled !== true && b.getAttribute('title') === null), 'без входа от имени — как были');
+  window.easymed.state.user = LAB;
+});
+
+test('ревью-2: сборка истории от имени — отказ словами R3 без запроса; без входа от имени — запрос уходит', async () => {
+  const { assembleCaseFile } = await import('../views/case-docs.js');
+  const DOC = { id: 3, full_name: 'Иванова А.', role: 'doctor', is_doctor: true, extra_roles: [], acting_admin: null };
+  window.easymed.state.user = ACTING(DOC);
+  RPCS.length = 0; toasts.length = 0;
+  assert.equal(await assembleCaseFile(7), null);
+  assert.ok(!RPCS.includes('admission_case_file_save'), 'запрос сборки не ушёл');
+  assert.ok(toasts.includes(ACT_AS_SIGN_REFUSAL), toasts.join(' | '));
+  window.easymed.state.user = DOC;
+  await assembleCaseFile(7);
+  assert.ok(RPCS.includes('admission_case_file_save'), 'без входа от имени — как прежде');
+  window.easymed.state.user = LAB;
+});

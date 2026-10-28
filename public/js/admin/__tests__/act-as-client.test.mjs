@@ -523,6 +523,30 @@ test('ревью MEDIUM 3: номер — из /me самой страницы (
     assert.equal(CALLS[CALLS.length - 1].headers['x-em-act-as'], '0', 'без сессии — без входа от имени');
 });
 
+test('ревью-2: номер вкладки ставит /me, по которому собран экран (rehydrate несёт act_as_id), — поверх раннего', async () => {
+    reset();
+    AA.__resetActAsForTests();
+    AA.installActAsEndedGuard(globalThis);
+    let n = 0;
+    SERVER = async (c) => (c.url === '/api/auth/me' ? (n++ === 0 ? { status: 200, body: { user: ADMIN, act_as_id: 0 } } : { status: 200, body: { user: ACTING, act_as_id: 7 } })
+        : { status: 200, body: { data: null } });
+    await (await fetch('/api/auth/me')).json();   // проверка связи при загрузке — первый /me
+    const { rehydrateUserFromSession } = await import('../auth.js');
+    const row = await rehydrateUserFromSession();   // экран собирается по этому
+    assert.equal(row.id, 3);
+    assert.equal(row.act_as_id, 7, 'rehydrate несёт номер вкладки');
+    AA.setTabActAs(row.act_as_id);   // так делает admin.js boot()
+    await fetch('/api/db', { method: 'POST', body: '{}' });
+    assert.equal(CALLS[CALLS.length - 1].headers['x-em-act-as'], '7');
+    AA.setTabActAs(null);
+    await fetch('/api/db', { method: 'POST', body: '{}' });
+    assert.equal(CALLS[CALLS.length - 1].headers['x-em-act-as'], '0', 'нет номера в ответе — без входа от имени');
+    const { makeAuthBridge } = await import('../../db-auth.js');
+    const bridge = makeAuthBridge({ fetch: async () => reply(200, { user: ACTING, act_as_id: 7 }), base: '/api/auth' });
+    assert.equal((await bridge.getUser()).data.act_as_id, 7, 'db-auth getUser отдаёт act_as_id');
+    AA.__resetActAsForTests();
+});
+
 test('ревью MEDIUM 3: 409 act_as_changed — одно предупреждение (на языке экрана), одна перезагрузка, без «Вернуться»', async () => {
     for (const lang of ['ru', 'en']) {
         reset();

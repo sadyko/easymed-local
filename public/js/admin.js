@@ -31,7 +31,7 @@ import {
 import { openChangeOwnPasswordModal } from './admin/password-change.js';
 // ADMIN_ACT_AS_V1 — администратор работает от имени сотрудника: полоса вверху,
 // «Вернуться» в окне аватара, возврат после авто-конца (409 act_as_ended).
-import { renderActAsBanner, actAsAccountBlock, isActingNow, installActAsEndedGuard, endActAs, actAsEnding } from './admin/act-as-client.js';
+import { renderActAsBanner, actAsAccountBlock, isActingNow, installActAsEndedGuard, endActAs, actAsEnding, setTabActAs } from './admin/act-as-client.js';
 import { t, tr, trf, getLang, setLang, onLangChange } from './admin/i18n.js?v=pathway1';   // TS_TAB_I18N_V1 — tr() for tab labels; trf() — I18N_COVERAGE_V1 (перевод СНАЧАЛА, подстановка ПОТОМ)
 // ACCESS_DENIED_ONE_PLACE_V1 — отказ рисуется одним помощником на всё приложение
 // (его же зовёт окно заведения пациента, у которого своего маршрута нет).
@@ -2800,6 +2800,10 @@ async function boot() {
 
     const userRow = await rehydrateUserFromSession();
     if (!userRow) { showLogin(); return; }
+    // ADMIN_ACT_AS_V1 (ревью-2) — экран собирается по ЭТОМУ /me: его номер входа
+    // от имени и есть номер вкладки (X-Em-Act-As), поверх номера из раннего /me
+    // проверки связи — между ними другая вкладка могла войти или вернуться.
+    setTabActAs(userRow.act_as_id);
     // ADMIN_ACT_AS_V1 — /me сказал, что вход от имени кончился сам: причина,
     // «Вернуться», перезагрузка под администратором. Оболочку не рисуем —
     // через мгновение страница соберётся заново. Возврат мог начаться и раньше

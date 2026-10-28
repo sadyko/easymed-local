@@ -296,6 +296,16 @@ const asTabNumber = (json) => {
     return Number.isInteger(n) && n > 0 ? n : 0;
 };
 
+/**
+ * Ревью-2 — номер вкладки от /me, ПО КОТОРОМУ СОБРАН ЭКРАН (admin.js boot после
+ * rehydrateUserFromSession), поверх раннего: загрузка спрашивает /me дважды
+ * (проверка связи, потом восстановление сессии), и между ними другая вкладка
+ * могла войти от имени или вернуться. Нет номера в ответе — 0.
+ */
+export function setTabActAs(id) {
+    tabActAs = asTabNumber({ act_as_id: id });
+}
+
 /** Номер вкладки (ждёт первый /me, если его ещё нет); null — сервер недоступен, без номера. */
 function waitTabActAs(orig, target) {
     if (tabActAs != null) return Promise.resolve(tabActAs);

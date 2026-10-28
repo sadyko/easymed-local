@@ -50,8 +50,11 @@ export async function rehydrateUserFromSession() {
     // ADMIN_ACT_AS_V1 — вход от имени кончился сам (R4), а экран об этом ещё
     // не знает: причина едет рядом с пользователем, и admin.js boot() называет
     // её и возвращается (act-as-client.js endActAs), не рисуя оболочку.
-    if (data.act_as_ended) return { ...user, act_as_ended: data.act_as_ended };
-    return user;
+    // Ревью-2 — act_as_id: номер вкладки от ЭТОГО /me, по которому собирается
+    // экран; admin.js boot() ставит его поверх раннего (act-as-client.js setTabActAs).
+    const actAsId = Number.isInteger(data.act_as_id) && data.act_as_id > 0 ? data.act_as_id : 0;
+    if (data.act_as_ended) return { ...user, act_as_ended: data.act_as_ended, act_as_id: actAsId };
+    return { ...user, act_as_id: actAsId };
 }
 
 // PASSWORD_CHANGE_V2 (2026-09-23) — здесь жили облачный сброс пароля при
