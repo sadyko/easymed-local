@@ -554,8 +554,11 @@ export function breakLines(el) {
 // Тег рядом с текстовым узлом — край блока или таблицы (как BLOCK_EDGE_RE в
 // textBreaks): сосед-блок, начало/конец блока-родителя, начало/конец поля.
 const EDGE = new Set(['P', 'DIV', 'UL', 'OL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD', 'H3', 'H4']);
+// Соседние текстовые узлы — один отрезок текста (как в строке textBreaks): сквозь
+// пробельных соседей ищется ближайший тег.
 function edgeAt(t, root, side) {
-    const sib = side === 'prev' ? t.previousSibling : t.nextSibling;
+    let sib = side === 'prev' ? t.previousSibling : t.nextSibling;
+    while (isText(sib) && !/\S/.test(sib.data)) sib = side === 'prev' ? sib.previousSibling : sib.nextSibling;
     if (sib) return isEl(sib) && EDGE.has(tagOf(sib));
     const p = t.parentNode;
     return p === root || EDGE.has(tagOf(p));

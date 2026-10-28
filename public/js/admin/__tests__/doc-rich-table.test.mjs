@@ -472,3 +472,72 @@ test('ревью T3 (MEDIUM 3, LOW): текст в строке и столбц�
     at = TB.beforeTable(h.querySelector('th'), [h]);
     assert.deepEqual([at.node, at.offset], [h, 0], 'над таблицей ничего — место перед ней');
 });
+
+// ═══ ревью r3 ═══════════════════════════════════════════════════════════════
+// MEDIUM 2 — таблица в обёртке (шаблон, прежняя запись), разрезанная по страницам:
+// набор на странице 2 поднимал только копию — пара рвалась, в форме три таблицы.
+test('ревью r3 (MEDIUM 2): приведение не трогает половины разрезанной таблицы и их обёртки — пара цела; до разреза — поднимает', () => {
+    const { doc, f } = setup('<div>ОАК</div><div>' + TBL(9) + '</div>');
+    const cont = doc.createElement('div');
+    assert.ok(SPLIT.splitRichField(f, cont, { fits: capFits(f, 6) }));
+    placeCont(doc, cont);
+    assert.equal(TB.normalizePasted(cont), 0, 'копия поднята из обёртки');
+    assert.equal(TB.normalizePasted(f), 0, 'оригинал поднят из обёртки');
+    assert.deepEqual(widths(mergedDiv([f, cont])), ['3,3,3,3,3,3,3,3,3,3']);
+    // то же поле при показе бланка (до раскладки) — приводится: таблица на уровне поля
+    const { f: g } = setup('<div>ОАК</div><div>' + TBL(9) + '</div>');
+    assert.equal(TB.normalizePasted(g), 1);
+    assert.equal(g.querySelector('table').parentNode, g);
+});
+
+// LOW — Excel с объединениями в простом (pre-wrap) разделе: пробелы между ячейками
+// оставались соседними текстовыми узлами, и breakLines делал из них <br> в строке.
+test('ревью r3 (LOW): пробелы между тегами сетки — выброшены при приведении; соседние пробельные узлы — не <br>', () => {
+    const XL = '<table>' + NL + ' <tr>' + NL + '  <td colspan=2>Группа А</td>' + NL + '  <td>Норма</td>' + NL + ' </tr>' + NL
+        + ' <tr>' + NL + '  <td>Hb</td>' + NL + '  <td>1</td>' + NL + '  <td>120</td>' + NL + ' </tr>' + NL + '</table>';
+    const { f } = setup('Анализы' + XL, 'physical_exam', 'sec-b');
+    TB.normalizePasted(f);
+    for (const tr of f.querySelectorAll('tr')) assert.ok(tr.childNodes.every((n) => n.nodeType === 1), 'в строке остался текст: ' + tr.outerHTML);
+    assert.equal(SPLIT.breakLines(f), 0);
+    assert.ok(!/<tr>\s*<br>|<\/td>\s*<br>/.test(WS._blankFieldHtml([f])));
+    // без приведения: несколько пробельных узлов подряд внутри строки — тоже не строки
+    const doc = miniDocument();
+    const g = el(doc, '<div class="sec-b" data-field="x"><table><tbody><tr><td>a</td><td>b</td></tr></tbody></table></div>');
+    const tr = g.querySelector('tr');
+    tr.insertBefore(doc.createTextNode(NL + '  '), tr.firstChild);
+    tr.insertBefore(doc.createTextNode(NL + '  '), tr.firstChild);
+    tr.appendChild(doc.createTextNode(NL + ' '));
+    assert.equal(SPLIT.breakLines(g), 0, 'соседние пробельные узлы стали <br>');
+});
+
+// LOW — копия половины со страницы 2, вставленная в другой раздел: метки и start копии не переезжают.
+test('ревью r3 (LOW): вставленная в раздел половина со страницы 2 — без меток разреза и без start копии; в продолжении — не трогается', () => {
+    const { doc, f } = setup('<div>Рекомендации</div>', 'recommendations_text');
+    f.appendChild(el(doc, '<ol data-split-id="s1x" data-cont-split="1" start="25"><li>Назначение 25</li></ol>'));
+    f.appendChild(el(doc, '<table class="a4-tbl" data-cont-split="1"><thead data-cont-head="1" contenteditable="false"><tr><th>A</th></tr></thead><tbody data-cont-split="1"><tr><td>1</td></tr></tbody></table>'));
+    f.appendChild(el(doc, '<ol start="3"><li>со своим началом</li></ol>'));
+    assert.ok(TB.stripPastedSplit(f) > 0);
+    HIDE_ATTRS.delete('data-split-id');
+    try {
+        assert.equal(f.innerHTML, '<div>Рекомендации</div><ol><li>Назначение 25</li></ol><table class="a4-tbl"><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table><ol start="3"><li>со своим началом</li></ol>');
+    } finally { HIDE_ATTRS.add('data-split-id'); }
+    // в продолжении копия — настоящая, её разбирает слияние
+    const { f: g, cont, parts } = splitTable(8, 5);
+    void g; void parts;
+    assert.equal(TB.stripPastedSplit(cont), 0);
+    assert.ok(cont.querySelector('[data-cont-split]'));
+});
+
+test('ревью r3: бланк приводит таблицы полей при показе (до раскладки); привязка к курсору — и на selectionchange (Ctrl+End, PageDown, щелчок)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'views', 'service-workspace.js'), 'utf8');
+    const start = src.indexOf('function _wireBlankEditing(');
+    const normAt = src.indexOf('_blankNormalizeFields(doc)', start);
+    const fitAt = src.indexOf('const fit = () => { try { _paginateBlank(doc, ctx)', start);
+    assert.ok(start > -1 && normAt > start && fitAt > normAt, 'приведение полей — не при показе бланка или после раскладки');
+    const edges = src.slice(src.indexOf('function _blankWireSplitEdges('), src.indexOf('export const wireSplitEdges'));
+    assert.match(edges, /addEventListener\('selectionchange'[\s\S]*snap\('stay'/, 'промежуток проверяется только после стрелок без модификаторов');
+    assert.match(edges, /compositionstart/);
+});

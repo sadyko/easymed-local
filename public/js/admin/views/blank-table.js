@@ -19,7 +19,7 @@
 // Здесь только узлы; кнопки, панель и клавиши — в service-workspace.js.
 // Ни document, ни window: модуль проверяется в Node (__tests__/mini-dom.mjs).
 
-import { CONT_HEAD, splitChain, tableParts } from './blank-split.js';
+import { CONT_HEAD, CONT_SPLIT, SPLIT_ID, splitChain, tableParts } from './blank-split.js';
 
 export const TBL_MAX_ROWS = 15;
 export const TBL_MAX_COLS = 8;
@@ -153,14 +153,69 @@ export function normalizePasted(host) {
     let n = 0;
     for (const t of [...host.querySelectorAll('table')]) {
         if (!host.contains(t) || closestUpTo(t.parentNode, LIFT_STOP, host)) continue;   // вложенная (в ячейке, в пункте) — как есть
+        // ревью r3 (MEDIUM 2) — половина разрезанной таблицы (или её обёртка) не трогается: подъём
+        // одной половины рвёт пару. Поле приводится целиком при показе бланка, до раскладки.
+        if (splitMarked(t, host)) continue;
         const classed = /\ba4-(tbl|restbl)\b/.test(t.getAttribute('class') || '');
-        if (t.parentNode === host && classed && !needsGrid(t)) continue;
+        if (t.parentNode === host && classed && !needsGrid(t) && !wsInGrid(t)) continue;
         liftToHost(host, t);
         squareGrid(t);
+        dropGridWs(t);
         if (!classed) t.setAttribute('class', ((t.getAttribute('class') || '') + ' ' + TBL_CLASS).trim());
         n += 1;
     }
     return n;
+}
+/**
+ * Ревью r3 (LOW) — половина со страницы 2 (список, таблица), скопированная и
+ * вставленная в раздел, несла метки разреза и start копии: в разделе продолжений
+ * нет, и метки там — всегда чужие. Снимаются (у ol — и start, он был номером
+ * продолжения, а не своим). Внешний start (вставка из Word) не трогается.
+ * @returns {number} сколько элементов поправлено
+ */
+export function stripPastedSplit(host) {
+    if (!host || !host.querySelectorAll || !host.hasAttribute || !host.hasAttribute('data-field')) return 0;
+    let n = 0;
+    for (const e of [...host.querySelectorAll('[' + CONT_SPLIT + ']')]) {
+        e.removeAttribute(CONT_SPLIT);
+        e.removeAttribute(SPLIT_ID);
+        if (tagOf(e) === 'OL') e.removeAttribute('start');
+        n += 1;
+    }
+    for (const e of [...host.querySelectorAll('[' + CONT_HEAD + ']')]) {
+        e.removeAttribute(CONT_HEAD);
+        e.removeAttribute('contenteditable');
+        n += 1;
+    }
+    return n;
+}
+function splitMarked(t, host) {
+    for (let e = t; e && e !== host; e = e.parentNode) if (isEl(e) && (e.hasAttribute(SPLIT_ID) || e.hasAttribute(CONT_SPLIT))) return true;
+    return false;
+}
+// Пробелы и переводы строк между тегами таблицы (Excel: «<tr>\n  <td>») — не
+// содержание: в простом (pre-wrap) поле они становились <br> внутри строки (ревью r3).
+const GRID = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR']);
+function wsInGrid(t) {
+    const walk = (e) => {
+        for (let n = e.firstChild; n; n = n.nextSibling) {
+            if (isText(n) && !/\S/.test(n.data)) return true;
+            if (GRID.has(tagOf(n)) && walk(n)) return true;
+        }
+        return false;
+    };
+    return walk(t);
+}
+function dropGridWs(t) {
+    const walk = (e) => {
+        for (let n = e.firstChild; n;) {
+            const nx = n.nextSibling;
+            if (isText(n) && !/\S/.test(n.data)) e.removeChild(n);
+            else if (GRID.has(tagOf(n))) walk(n);
+            n = nx;
+        }
+    };
+    walk(t);
 }
 // Объединения ячеек или строки разной длины — сетку надо выровнять.
 function needsGrid(t) {
