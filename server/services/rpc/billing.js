@@ -47,6 +47,7 @@ import { markRefundRelease, refundedLineIds, clearRefundRelease } from '../domai
 // INPATIENT_MONEY_FIX_V1 — строку проживания счёт узнаёт по той же метке, что
 // акт и проживание (одна копия на сервер и браузер).
 import { ACCOMMODATION_NOTE_PREFIX, ACCOMMODATION_LABEL } from '../../../public/js/shared/accommodation-line.js';
+import { actingActorName } from '../../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 — «сотрудник (от имени: адм. …)» в журнале счёта
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -1460,7 +1461,7 @@ function lineAudit(db, { inv, number, visitId, action, fromStatus, toStatus, amo
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(inv ? inv.id : null, number || (inv && inv.invoice_number) || null, visitId || null, action,
       fromStatus || null, toStatus || null, round2(Number(amount) || 0), round2(Number(refundAmount) || 0),   // CASHIER_PAID_SWAP_V1 — сколько вернули
-      actor ? actor.id : null, actor ? actor.full_name || null : null, actor ? actor.role || null : null, reason || null, notes || null);
+      actor ? actor.id : null, actor ? actingActorName(user, actor.full_name || null) : null, actor ? actor.role || null : null, reason || null, notes || null);   // ADMIN_ACT_AS_V1 — номер сотрудника, имя «от имени»
 }
 
 // Кто оказывает услуги: те роли, чьё имя печатает чек как исполнителя
@@ -2451,7 +2452,7 @@ export function refundInvoiceLine(db, args, user) {
       INSERT INTO invoice_audit_log (invoice_id, invoice_number, visit_id, action, from_status, to_status, amount, refund_amount, actor_user_id, actor_name, actor_role, reason, notes)
       VALUES (?, ?, ?, 'refund_line', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(inv.id, inv.invoice_number || null, inv.visit_id || null, inv.status, final.status, lineValue, refundAmt,
-        user.id, actor.full_name || null, actor.role || null, reason || null,
+        user.id, actingActorName(user, actor.full_name || null), actor.role || null, reason || null,   // ADMIN_ACT_AS_V1 — имя «от имени»
         'Возвращена услуга: ' + (lineName || '—') + (vs ? (performed ? ' (работа сделана — осталась в визите невыставленной)' : ' (снята с визита)') : ''));
 
     return {

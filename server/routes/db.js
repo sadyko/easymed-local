@@ -16,7 +16,8 @@ import { targetBranches } from '../services/branch-targets.js';   // CLINIC_API_
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
-import { notesWriteRefusal, storedIsCabinet, NOTES_BASE_KEY, NOTES_CONFLICT_MESSAGE, notesCompatValue } from '../services/domain/cabinet-notes.js';   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6
+import { notesWriteRefusal, storedIsCabinet, NOTES_BASE_KEY, NOTES_CONFLICT_MESSAGE, notesCompatValue, signedEntryAdded } from '../services/domain/cabinet-notes.js';   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6 · ADMIN_ACT_AS_V1 (signedEntryAdded)
+import { ACT_AS_SIGN_REFUSAL } from '../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 (R3)
 // CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
@@ -244,24 +245,28 @@ function takeNotesBase(body) {   // CABINET_FIX_V1_R5
 }   // CABINET_FIX_V1_R5
 // CABINET_FIX_V1_R6 — out.rewrite: запись одной строки без основы (вкладка 3.15.0),   // CABINET_FIX_V1_R6
 // к которой сервер добавляет сохранённую заметку медсестры (notesCompatValue).   // CABINET_FIX_V1_R6
+// ADMIN_ACT_AS_V1 — строки visit_services, которые заденет запись notes, с их
+// сохранёнными notes: { rows, picked } или null (не прочитаны). picked — выбраны
+// отбором правки, а не одним номером. Общая выборка правила «сравнить и
+// заменить» (refuseNotesWrite) и запрета подписи от чужого имени (R3) — ниже.
+function notesTargetRows(db, meta, body, user, values) {   // CABINET_FIX_V1_R5 · ADMIN_ACT_AS_V1 (вынесено без изменений)
+  const byId = db.prepare('SELECT id, notes FROM visit_services WHERE id = ?');   // CABINET_FIX_V1_R5
+  const f = Array.isArray(body.filters) ? body.filters : [];   // CABINET_FIX_V1_R5
+  if (meta.op === 'upsert') return { rows: values.id != null ? byId.all(values.id) : [], picked: false };   // CABINET_FIX_V1_R5
+  if (f.length === 1 && f[0] && f[0].col === 'id' && f[0].op === 'eq') return { rows: byId.all(f[0].val), picked: false };   // CABINET_FIX_V1_R5
+  try {   // CABINET_FIX_V1_R5
+    const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user, { db });   // CABINET_FIX_V1_R5
+    return { rows: db.prepare(sel.sql).all(...sel.params).map((r) => byId.get(r.id)).filter(Boolean), picked: true };   // CABINET_FIX_V1_R5
+  } catch { return null; }   // CABINET_FIX_V1_R5
+}
 export function refuseNotesWrite(db, meta, body, user, base, out = null) {   // CABINET_FIX_V1_R5 — экспорт для проверки · CABINET_FIX_V1_R6
   if (!meta || meta.table !== 'visit_services' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;   // CABINET_FIX_V1_R5
   const values = body && body.values && !Array.isArray(body.values) ? body.values : null;   // CABINET_FIX_V1_R5
   if (!values || !Object.prototype.hasOwnProperty.call(values, 'notes')) return null;   // CABINET_FIX_V1_R5
-  const byId = db.prepare('SELECT id, notes FROM visit_services WHERE id = ?');   // CABINET_FIX_V1_R5
-  const f = Array.isArray(body.filters) ? body.filters : [];   // CABINET_FIX_V1_R5
-  let rows = [];   // CABINET_FIX_V1_R5
-  if (meta.op === 'upsert') {   // CABINET_FIX_V1_R5
-    if (values.id != null) rows = byId.all(values.id);   // CABINET_FIX_V1_R5
-  } else if (f.length === 1 && f[0] && f[0].col === 'id' && f[0].op === 'eq') {   // CABINET_FIX_V1_R5
-    rows = byId.all(f[0].val);   // CABINET_FIX_V1_R5
-  } else {   // CABINET_FIX_V1_R5
-    try {   // CABINET_FIX_V1_R5
-      const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user, { db });   // CABINET_FIX_V1_R5
-      rows = db.prepare(sel.sql).all(...sel.params).map((r) => byId.get(r.id)).filter(Boolean);   // CABINET_FIX_V1_R5
-    } catch { return { reason: 'unread', message: 'Записи строки не прочитаны — правка не выполнена.' }; }   // CABINET_FIX_V1_R5
-    if (rows.length > 1 && rows.some((r) => storedIsCabinet(r.notes))) return { reason: 'multi', message: NOTES_CONFLICT_MESSAGE };   // CABINET_FIX_V1_R5
-  }   // CABINET_FIX_V1_R5
+  const got = notesTargetRows(db, meta, body, user, values);   // ADMIN_ACT_AS_V1 — общая выборка
+  if (!got) return { reason: 'unread', message: 'Записи строки не прочитаны — правка не выполнена.' };   // CABINET_FIX_V1_R5
+  const rows = got.rows;   // CABINET_FIX_V1_R5
+  if (got.picked && rows.length > 1 && rows.some((r) => storedIsCabinet(r.notes))) return { reason: 'multi', message: NOTES_CONFLICT_MESSAGE };   // CABINET_FIX_V1_R5
   for (const r of rows) {   // CABINET_FIX_V1_R5
     const refusal = notesWriteRefusal(r.notes, values.notes, base);   // CABINET_FIX_V1_R5
     if (refusal) return refusal;   // CABINET_FIX_V1_R5
@@ -272,6 +277,39 @@ export function refuseNotesWrite(db, meta, body, user, base, out = null) {   // 
   }   // CABINET_FIX_V1_R6
   return null;   // CABINET_FIX_V1_R5
 }   // CABINET_FIX_V1_R5
+
+// ADMIN_ACT_AS_V1 (R3) — ПОДПИСЬ ДОКУМЕНТА ВРАЧА ОТ ЧУЖОГО ИМЕНИ: true — отказ.
+// Две подписи идут табличным путём, и экран ставит их сам:
+//   • заключение приёма — подписанная версия (kind 'signed') в
+//     visit_services.notes: отказ, если она новая или изменённая (переподпись
+//     тоже); черновик и перенесённые как были подписи — можно;
+//   • «Проверить и выдать» лаборатории — verified_by / verified_at у
+//     lab_results и visit_services (и одна отметка времени — это выдача).
+// Строки правки — та же выборка, что у refuseNotesWrite; не прочитаны —
+// любая подпись в записи считается новой.
+const VERIFY_TABLES = new Set(['lab_results', 'visit_services']);   // ADMIN_ACT_AS_V1
+export function signWhileActingRefusal(db, meta, body, user) {   // ADMIN_ACT_AS_V1 — экспорт для проверки
+  if (!user || !user.acting_admin || !meta) return false;
+  if (meta.op !== 'insert' && meta.op !== 'update' && meta.op !== 'upsert') return false;
+  const v = body && body.values;
+  const rows = (Array.isArray(v) ? v : [v]).filter((r) => r && typeof r === 'object');
+  if (VERIFY_TABLES.has(meta.table) && rows.some((r) => r.verified_by != null || r.verified_at != null)) return true;
+  if (meta.table !== 'visit_services') return false;
+  const withNotes = rows.filter((r) => Object.prototype.hasOwnProperty.call(r, 'notes'));
+  if (!withNotes.length) return false;
+  if (meta.op === 'insert') return withNotes.some((r) => signedEntryAdded(null, r.notes));
+  if (meta.op === 'upsert') {
+    const byId = db.prepare('SELECT notes FROM visit_services WHERE id = ?');
+    return withNotes.some((r) => {
+      const stored = r.id != null ? byId.get(r.id) : null;
+      return signedEntryAdded(stored ? stored.notes : null, r.notes);
+    });
+  }
+  const values = withNotes[0];
+  const got = notesTargetRows(db, meta, body, user, values);
+  if (!got) return signedEntryAdded(null, values.notes);
+  return got.rows.some((s) => signedEntryAdded(s.notes, values.notes));
+}
 
 /**
  * CRM_REAL_BOOKING_V1 — РАБОТА НАД ПАЦИЕНТОМ ДОКАЗЫВАЕТ, ЧТО ОН ПРИШЁЛ.
@@ -331,6 +369,14 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     // nothing. Placed after compile() so we know the operation, and before
     // execution so nothing has touched the database yet.
     if (req.control?.locked && compiled.meta.op !== 'select') return lockedResponse(res, req.control);
+
+    // ADMIN_ACT_AS_V1 (R3) — подписать документ врача от чужого имени нельзя:
+    // администратор, работающий от имени сотрудника, не подписывает заключение
+    // приёма и не выдаёт результаты лаборатории (signWhileActingRefusal). До
+    // остальных проверок — отказ называет именно эту причину.
+    if (signWhileActingRefusal(db, compiled.meta, req.body, req.user)) {
+      return res.status(403).json({ error: { code: 'sign_while_acting', message: ACT_AS_SIGN_REFUSAL } });
+    }
 
     // STAFF_SYNC_V1 (ревью Фазы 3, I3) — ТАБЛИЦЫ ГЛАВНОЙ КЛИНИКИ В ФИЛИАЛЕ
     // ТОЛЬКО ДЛЯ ЧТЕНИЯ.

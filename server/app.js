@@ -15,6 +15,7 @@ import { recordEvent } from './services/ops-log.js';   // OPS_EVENTS_V1
 import { telephonyWebhooks } from './services/telephony/webhooks.js';   // TELEPHONY_V1
 import { branchSyncRoutes } from './routes/branch-sync.js';   // BRANCH_SYNC_V1
 import { lisProxyRoutes } from './routes/lisproxy.js';   // LIS_PROXY_V1
+import { actAsGuard } from './middleware/act-as.js';   // ADMIN_ACT_AS_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -117,6 +118,10 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
     res.json({ ok: true });
   });
   app.use((req, res, next) => (req.__userAttached ? next() : attachUserOnce(req, res, next)));   // CABINET_FIX_V1_R6 — уже положен (двери кабинета выше) — не перечитывать
+  // ADMIN_ACT_AS_V1 — сразу после пользователя: журнал действий администратора,
+  // работающего от имени сотрудника, и 409 act_as_ended после авто-конца
+  // (middleware/act-as.js). Тела /api/db, /api/rpc, /api/users уже разобраны выше.
+  app.use(actAsGuard(db));
   app.use(attachControl(db, dataDir));   // LICENCE_CORE_V1
   app.use('/api/auth', authRoutes(db));
   // TELEPHONY_V1 — Binotel's webhook receivers, in /api/auth's slot: BEFORE

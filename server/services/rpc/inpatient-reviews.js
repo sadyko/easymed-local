@@ -64,6 +64,7 @@ import { hasAnyRole, effectiveRoles } from '../roles.js';
 import { requireGrant } from '../grants.js';
 import { titleSheetCaseItem, sheetView } from './title-sheet.js';   // TITLE_SHEET_V1
 import { sanitizeStoredHtml, htmlToText } from '../../../public/js/shared/rich-text.js';   // CASE_DOC_A4_V1
+import { refuseSignWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3)
 
 export { RpcError };
 
@@ -429,6 +430,9 @@ export function reviewSections(row) {
 }
 
 export function admissionReviewSave(db, args, user) {
+  // ADMIN_ACT_AS_V1 (R3) — записи стационара (осмотр, обход, эпикриз …) от
+  // чужого имени не создают, не правят и не публикуют: автор записи — врач.
+  refuseSignWhileActing(user);
   const a = args || {};
   const kind = str(a.kind, 20, 'primary') || 'primary';
   // CASE_DOC_SET_V2 — род проверяется по НАБОРУ КЛИНИКИ: свой род, заведённый в

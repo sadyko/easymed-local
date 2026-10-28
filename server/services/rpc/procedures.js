@@ -43,6 +43,7 @@ import { hasColumn } from '../domain/buildings.js';
 // CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
 import { crmServiceEvidence } from '../crm/visit-status.js';
 import { mergeNurseNote, nurseNoteOf } from '../domain/cabinet-notes.js';   // CABINET_FIX_V1_R5 (B) — заметка медсестры не стирает документ кабинета
+import { refuseSignWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3)
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -333,6 +334,9 @@ export function procedureAssign(db, args, user) {
  * счёту, а не медсестре (см. комментарий в proceduresList).
  */
 export function procedureComplete(db, args, user) {
+  // ADMIN_ACT_AS_V1 (R3) — подтверждение процедуры — подпись исполнителя
+  // (verified_by): от чужого имени её не ставят, обе ветки (кабинетная, палатная).
+  refuseSignWhileActing(user);
   requireRole(user, DONE_ROLES, 'Отметка о выполнении');
   const kind = args && args.kind;
   const id = args && args.id;

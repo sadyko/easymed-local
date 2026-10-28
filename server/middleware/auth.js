@@ -23,7 +23,15 @@ export function attachUser(db) {
   return (req, res, next) => {
     req.sessionId = parseCookies(req.headers.cookie)[SESSION_COOKIE] || null;
     // V3120_FINAL (I5) — фоновый запрос экрана сессию не продлевает.
-    req.user = sessionUser(db, req.sessionId, { background: req.headers['x-em-background'] === '1' });
+    // ADMIN_ACT_AS_V1 — администратор работает от имени сотрудника: req.user —
+    // СОТРУДНИК с acting_admin, req.actAs — { id: запись журнала } для журнала
+    // действий или { ended: причина } — вход от имени кончился сам, а экран ещё
+    // не знает (middleware/act-as.js отвечает 409 до «Вернуться»).
+    const state = {};
+    req.user = sessionUser(db, req.sessionId, { background: req.headers['x-em-background'] === '1', state });
+    req.actAs = state.actAsId != null || state.actAsEnded
+      ? { id: state.actAsId != null ? state.actAsId : null, ended: state.actAsEnded || null }
+      : null;
     next();
   };
 }

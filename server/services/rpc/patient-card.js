@@ -38,6 +38,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDataDir } from '../control/config.js';
 import { patientFileRefusal, refusalText } from '../../../public/js/shared/patient-file-limits.js';
+import { refuseSignWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3)
 
 const SECTION = 'patients';
 
@@ -672,6 +673,9 @@ function docHasContent(body, depth = 0) {
   return false;
 }
 export function visitDocumentArchive(db, args, user) {
+  // ADMIN_ACT_AS_V1 (R3) — копия ПОДПИСАННОГО документа приёма (её пишет сама
+  // подпись, после записи notes): от чужого имени документ не подписывают.
+  refuseSignWhileActing(user);
   const roles = effectiveRoles(user);
   // V3121_ROLES — роль проверяется ПОСЛЕ того, как известна строка: подписывает
   // её исполнитель, кем бы он ни был (см. SIGN_FREE_LINE_ROLES ниже).
