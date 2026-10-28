@@ -7,18 +7,19 @@
 // гарнитуру компьютера, без «сначала зазвонит ваша трубка».
 //
 // ЗДЕСЬ — только состояние телефона и JsSIP. Браузер (сама библиотека,
-// микрофон, замок вкладки, звук собеседника, хранилище, RPC) приходит снаружи
-// из softphone-browser.js, поэтому модуль без DOM и проверяется подставным
-// JsSIP (__tests__/softphone.test.mjs). Слов для экрана здесь нет: причины —
-// коды, слова к ним подбирает панель crm-phone.js.
+// микрофон, замок вкладки, звук собеседника, хранилище, RPC, таймер) приходит
+// снаружи из softphone-browser.js, поэтому модуль без DOM и проверяется
+// подставным JsSIP (__tests__/softphone.test.mjs). Слов для экрана здесь нет:
+// причины — коды, слова к ним подбирает панель crm-phone.js.
 //
 // ПАРОЛЬ АТС живёт только внутри JsSIP UA этой вкладки: в состояние, журнал и
 // хранилище не попадает. Текст ошибок JsSIP наружу тоже не идёт: в ошибке
 // настройки JsSIP повторяет значение поля, то есть и пароль.
 //
 // ОДНА ВКЛАДКА — ОДИН ТЕЛЕФОН: замок Web Locks «easymed-softphone». Вторая
-// вкладка говорит «в другой вкладке» и стоит в очереди за замком: закрыли или
-// выключили первую — вторая входит сама.
+// вкладка говорит «в другой вкладке» и стоит в очереди за замком: закрыли
+// первую — вторая входит сама; выключили в первой — гаснет и вторая
+// (переключатель один на компьютер).
 
 export const SP = Object.freeze({
   OFF: 'off', CONNECTING: 'connecting', READY: 'ready', RINGING: 'ringing',
@@ -27,18 +28,37 @@ export const SP = Object.freeze({
 /** Переключатель «Принимать звонки в Easy-Med» — помнит этот компьютер (localStorage). */
 export const SP_FLAG = 'easymed.softphone.on';
 const LOCK = 'easymed-softphone';
-// Причины registrationFailed, после которых JsSIP переподключается и входит сам.
+// Причины registrationFailed «сеть или АТС не ответили» — показываем «переподключаемся».
 // Всё остальное (неверный пароль, отказ, нет такого номера…) — ошибка, её называем.
-const NETWORK_CAUSES = new Set(['Connection Error', 'Request Timeout']);
-const IDLE = Object.freeze({ state: SP.OFF, reason: '', message: '', extension: '', call: null });
+const NETWORK_CAUSES = new Set(['Connection Error', 'Request Timeout', 'Unavailable']);
+// После этих JsSIP сам НЕ повторяет: сокет жив, а REGISTER остался без ответа
+// (или АТС ответила «недоступно»). Повторяет он только после переподключения
+// сокета, а сокет может так и не упасть — запись в АТС истечёт (600 с), и
+// входящие перестанут приходить. Поэтому повторяем сами.
+const RETRY_CAUSES = new Set(['Request Timeout', 'Unavailable']);
+const RETRY_MS = 30000;
+const IDLE = Object.freeze({ state: SP.OFF, reason: '', message: '', extension: '', call: null, lastEnd: null });
+const KEYS = Object.keys(IDLE);
 
-export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = () => Date.now(), inputId = () => '' }) {
+/** Ошибка getUserMedia → код (те же коды, что у причин включения). */
+function micCode(name) {
+  if (name === 'NotAllowedError') return 'mic_denied';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'no_mic';
+  return 'mic_error';
+}
+
+export function createSoftphone({
+  loadJsSIP, rpc, media, locks, storage, now = () => Date.now(), inputId = () => '',
+  setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (t) => clearTimeout(t),
+}) {
   let st = IDLE;
   let line = { state: SP.CONNECTING, reason: '', message: '' }; // что говорит вход в АТС; звонок рисуется поверх
   let ua = null;            // JsSIP UA этой вкладки — в нём и только в нём пароль
   let domain = '';
   let session = null;       // текущий звонок (JsSIP RTCSession)
+  let lastEndOf = null;     // сессия, чей итог сейчас в st.lastEnd
   let dialing = '';         // номер, пока идёт ua.call(): JsSIP шлёт newRTCSession изнутри
+  let retry = null;         // таймер повторного входа (один на телефон)
   let gen = 0;              // поколение включения: после disable() старые ожидания ничего не делают
   let inflight = null;      // идущее включение — второе enable() ждёт его же
   let lockRelease = null;   // отпустить замок, который держит эта вкладка
@@ -49,7 +69,9 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
 
   const safe = (fn) => { try { return fn(); } catch { return undefined; } };
   function set(patch) {
-    st = Object.freeze({ ...st, ...patch });
+    const next = { ...st, ...patch };
+    if (KEYS.every((k) => next[k] === st[k])) return; // ничего не поменялось — экран не будим
+    st = Object.freeze(next);
     for (const fn of [...subs]) { try { fn(st); } catch (e) { console.warn('[softphone] listener', e); } }
   }
   const setCall = (state, patch) => set({ state, call: Object.freeze({ ...st.call, ...patch }) });
@@ -58,10 +80,11 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
     if (!session) set({ ...line, call: null }); // во время звонка экран показывает звонок
   }
 
-  // Микрофон — выбранный в панели (Task 7), иначе любой.
+  // Микрофон — выбранный в панели, иначе любой. ideal, не exact: гарнитуру
+  // отключили — браузер берёт обычный микрофон, а не роняет звонок.
   function audio() {
     const id = safe(inputId) || '';
-    return { audio: id ? { deviceId: { exact: id } } : true, video: false };
+    return { audio: id ? { deviceId: { ideal: id } } : true, video: false };
   }
   // Без внешнего STUN: у клиники может не быть пути к нему, и JsSIP ждал бы сбора адресов.
   const callOpts = () => ({ mediaConstraints: audio(), pcConfig: { iceServers: [] } });
@@ -107,7 +130,7 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
         const flag = safe(() => storage.getItem(SP_FLAG)); // undefined — хранилище недоступно, не мешаем
         if (flag !== undefined && flag !== '1') { set(IDLE); return undefined; }
         const h = hold(lock, g);
-        if (h) track(proceed(g));
+        if (h) track(Promise.resolve().then(() => proceed(g)));
         return h;
       });
       lockGone = Promise.resolve(p).catch(() => {}); // отмена отвечает AbortError — это не ошибка
@@ -115,6 +138,8 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
   }
 
   // ── Включение ──────────────────────────────────────────────────────────────
+  // Идущее включение запоминается ДО первого шага (шаги — с микрозадачи):
+  // подписчик, позвавший enable() из первого же уведомления, получит то же обещание.
   function track(p) {
     inflight = p;
     const clear = () => { if (inflight === p) inflight = null; };
@@ -127,12 +152,19 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
     set({ state: SP.ERROR, reason, message, call: null });
     return false;
   }
+  function stopRetry() {
+    if (retry === null) return;
+    const t = retry; retry = null;
+    safe(() => clearTimer(t));
+  }
   function dropUa() {
+    stopRetry();
     const u = ua; ua = null;
     if (u) safe(() => u.stop());
   }
 
   async function start(g) {
+    if (g !== gen) return; // выключили, не успев начать
     dropUa(); // повтор после ошибки входа: прежний UA останавливаем, свой замок оставляем
     if (!lockRelease) {
       const got = await tryLock(g);
@@ -153,16 +185,14 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
       stream = await media.getUserMedia(audio());
     } catch (e) {
       const name = (e && e.name) || '';
-      const reason = name === 'NotAllowedError' ? 'mic_denied'
-        : (name === 'NotFoundError' || name === 'OverconstrainedError') ? 'no_mic' // выбранную гарнитуру отключили — тоже «нет микрофона»
-          : 'mic_error';
-      return quit(g, reason, String((e && e.message) || name));
+      return quit(g, micCode(name), String((e && e.message) || name));
     }
     safe(() => { for (const t of stream.getTracks()) t.stop(); }); // это была проба — микрофон сразу закрываем
     return g === gen;
   }
 
   async function proceed(g) {
+    if (g !== gen) return;
     set({ ...IDLE, state: SP.CONNECTING });
     if (!(await micOk(g))) return;
     let res;
@@ -202,7 +232,7 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
   // События остановленного UA не слушаем: после stop() JsSIP ещё шлёт unregistered/disconnected.
   function listen(u) {
     const mine = () => ua === u;
-    u.on('registered', () => { if (mine()) setLine(SP.READY); });
+    u.on('registered', () => { if (!mine()) return; stopRetry(); setLine(SP.READY); });
     // Связь пропала — JsSIP переподключится и войдёт сам. Отказ АТС этим не затираем:
     // после registrationFailed JsSIP сразу шлёт и unregistered.
     const lost = () => { if (mine() && line.state !== SP.ERROR) setLine(SP.CONNECTING, 'network'); };
@@ -211,8 +241,16 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
     u.on('registrationFailed', (e) => {
       if (!mine()) return;
       const cause = String((e && e.cause) || '');
-      if (NETWORK_CAUSES.has(cause)) setLine(SP.CONNECTING, 'network');
-      else setLine(SP.ERROR, 'register_failed', cause);
+      stopRetry();
+      if (!NETWORK_CAUSES.has(cause)) { setLine(SP.ERROR, 'register_failed', cause); return; }
+      setLine(SP.CONNECTING, 'network');
+      if (!RETRY_CAUSES.has(cause)) return; // сокет упал — JsSIP войдёт сам после переподключения
+      retry = setTimer(() => {
+        retry = null;
+        // Сокет лежит — не шлём: send() сразу провалится 'Connection Error', а
+        // после переподключения JsSIP войдёт сам.
+        if (mine() && safe(() => u.isConnected()) && !safe(() => u.isRegistered())) safe(() => u.register());
+      }, RETRY_MS);
     });
     u.on('newRTCSession', (e) => { if (mine()) onSession(e); });
   }
@@ -235,16 +273,26 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
     hooked.add(pc);
     pc.addEventListener('track', () => { if (session === s) attach(pc); });
   }
-  function finish(s) {
+  // Итог звонка (lastEnd) — чтобы звонок не обрывался молча: панель пишет
+  // строку по cause JsSIP ('Busy', 'Canceled', 'User Denied Media Access'…).
+  function finish(s, e, micErr = '') {
     if (session !== s) return; // конец чужой («занято») или уже снятой сессии
+    const direction = st.call ? st.call.direction : '';
     session = null;
+    lastEndOf = s;
     safe(() => media.detachRemote());
-    set(ua ? { ...line, call: null } : IDLE);
+    const cause = String((e && e.cause) || '');
+    const lastEnd = Object.freeze({
+      direction, cause,
+      media: micErr ? micCode(micErr) : cause === 'User Denied Media Access' ? 'mic_denied' : null,
+    });
+    set(ua ? { ...line, call: null, lastEnd } : { ...IDLE, lastEnd });
   }
 
   function wire(s, direction, number) {
     session = s;
-    set({ state: direction === 'in' ? SP.RINGING : SP.CALLING, reason: '', message: '', call: Object.freeze({ direction, number, startedAt: null, muted: false }) });
+    lastEndOf = null;
+    set({ state: direction === 'in' ? SP.RINGING : SP.CALLING, reason: '', message: '', lastEnd: null, call: Object.freeze({ direction, number, startedAt: null, muted: false }) });
     // Исходящий: JsSIP создаёт соединение и шлёт 'peerconnection' ещё внутри ua.call(),
     // раньше, чем сюда успевают подписаться, — поэтому смотрим session.connection сразу.
     // Входящий: соединение появится при ответе — с событием 'peerconnection'.
@@ -257,8 +305,16 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
     };
     s.on('accepted', up);
     s.on('confirmed', up);
-    s.on('ended', () => finish(s));
-    s.on('failed', () => finish(s));
+    // Микрофон не открылся: JsSIP шлёт failed с cause 'User Denied Media Access'
+    // на ЛЮБУЮ ошибку getUserMedia и только ПОСЛЕ него — getusermediafailed с
+    // самой ошибкой. Поэтому итог уточняем задним числом.
+    let micErr = '';
+    s.on('getusermediafailed', (err) => {
+      micErr = String((err && err.name) || 'Error');
+      if (lastEndOf === s && st.lastEnd) set({ lastEnd: Object.freeze({ ...st.lastEnd, media: micCode(micErr) }) });
+    });
+    s.on('ended', (ev) => finish(s, ev, micErr));
+    s.on('failed', (ev) => finish(s, ev, micErr));
   }
 
   // ── Действия ───────────────────────────────────────────────────────────────
@@ -267,7 +323,8 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
     if (inflight) return inflight;                              // включение уже идёт
     if (lockWait) return Promise.resolve();                     // ждём замок другой вкладки
     if (ua && st.state !== SP.ERROR) return Promise.resolve();  // уже включён
-    return track(start(++gen));
+    const g = ++gen;
+    return track(Promise.resolve().then(() => start(g)));
   }
 
   function disable() {
@@ -298,6 +355,7 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
   function answer() {
     if (session && st.state === SP.RINGING) { const s = session; safe(() => s.answer(callOpts())); }
   }
+  // JsSIP шлёт failed/ended прямо из terminate(); бросает — звонок уже кончился.
   function decline() {
     if (!session || st.state !== SP.RINGING) return;
     const s = session;
@@ -306,14 +364,14 @@ export function createSoftphone({ loadJsSIP, rpc, media, locks, storage, now = (
   function hangup() {
     if (!session) return;
     const s = session;
-    try { s.terminate(); } catch { finish(s); } // JsSIP бросает, если звонок уже кончился
+    try { s.terminate(); } catch { finish(s); }
   }
   // «Микрофон выкл.» — только в разговоре: до ответа у JsSIP ещё нет соединения.
   function setMuted(on) {
     if (!session || !st.call || st.state !== SP.IN_CALL) return;
     const s = session;
     try { if (on) s.mute({ audio: true }); else s.unmute({ audio: true }); } catch { return; }
-    setCall(st.state, { muted: !!on });
+    if (st.call.muted !== !!on) setCall(st.state, { muted: !!on });
   }
 
   return {

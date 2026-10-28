@@ -6,10 +6,27 @@ import { createSoftphone, SP, SP_FLAG } from '../softphone.js';
 
 const tick = () => new Promise((r) => setImmediate(r));
 
+const settle = async (n = 6) => { for (let i = 0; i < n; i++) await tick(); };
+
 class Emitter { constructor() { this.h = {}; } on(n, f) { (this.h[n] ||= []).push(f); return this; } emit(n, e) { for (const f of this.h[n] || []) f(e); } }
+// terminate() — как у JsSIP: до ответа сразу 'failed' (входящий — Rejected,
+// исходящий — Canceled), в разговоре — 'ended' (Terminated); у завершённой
+// сессии — InvalidStateError.
 class FakeSession extends Emitter {
-  constructor(dir, number) { super(); this.direction = dir; this.remote_identity = { uri: { user: number } }; this.done = []; }
-  answer(o) { this.done.push(['answer', o]); } terminate(o) { this.done.push(['terminate', o]); } mute(o) { this.done.push(['mute', o]); } unmute(o) { this.done.push(['unmute', o]); }
+  constructor(dir, number) { super(); this.direction = dir; this.remote_identity = { uri: { user: number } }; this.done = []; this.status = 'new'; }
+  emit(n, e) {
+    if (n === 'accepted' || n === 'confirmed') this.status = 'confirmed';
+    if (n === 'ended' || n === 'failed') this.status = 'terminated';
+    super.emit(n, e);
+  }
+  answer(o) { this.done.push(['answer', o]); }
+  terminate(o) {
+    this.done.push(['terminate', o]);
+    if (this.status === 'terminated') throw Object.assign(new Error('Invalid status: 8'), { name: 'InvalidStateError' });
+    if (this.status === 'confirmed') this.emit('ended', { originator: 'local', cause: 'Terminated' });
+    else this.emit('failed', { originator: 'local', cause: this.direction === 'incoming' ? 'Rejected' : 'Canceled' });
+  }
+  mute(o) { this.done.push(['mute', o]); } unmute(o) { this.done.push(['unmute', o]); }
 }
 class FakePC {
   constructor() { this.l = {}; }
@@ -19,7 +36,8 @@ class FakePC {
 }
 function makeJsSIP({ withConnection = false } = {}) {
   const made = [];
-  class UA extends Emitter { constructor(cfg) { super(); this.cfg = cfg; this.started = false; made.push(this); } start() { this.started = true; } stop() { this.stopped = true; }
+  class UA extends Emitter { constructor(cfg) { super(); this.cfg = cfg; this.started = false; this.connected = true; this.isReg = false; this.registers = 0; made.push(this); } start() { this.started = true; } stop() { this.stopped = true; }
+    isConnected() { return this.connected; } isRegistered() { return this.isReg; } register() { this.registers++; }
     call(target, o) { const s = new FakeSession('outgoing', target); s.target = target; s.opts = o; if (withConnection) s.connection = new FakePC(); this.lastCall = s; return s; } }
   class WebSocketInterface { constructor(url) { this.url = url; } }
   return { JsSIP: { UA, WebSocketInterface }, made };
@@ -41,26 +59,31 @@ function makeMedia(over = {}) {
 // Замок по образцу Web Locks: ifAvailable → null, если занят; обычный запрос ждёт
 // очереди; signal снимает запрос из очереди (запрос отвечает AbortError); замок
 // держится, пока не решится обещание, которое вернул обработчик; обещание самого
-// request() решается, когда замок уже отпущен.
+// request() решается, когда замок уже отпущен. Обработчик, как в браузере,
+// зовётся НЕ внутри request(), а позже (setImmediate).
 // closeHolder() — вкладку, что держит замок, закрыли: браузер отпускает её замок сам.
 function makeLocks() {
-  let held = false; let close = null; const queue = [];
+  let held = false; let close = null; let requested = 0; const queue = [];
   const grant = (item) => {
     held = true;
     const closed = new Promise((r) => { close = r; });
     const done = (fn) => (v) => { held = false; close = null; const next = queue.shift(); if (next) grant(next); fn(v); };
-    Promise.race([Promise.resolve(item.cb({ name: 'easymed-softphone' })), closed]).then(done(item.resolve), done(item.reject));
+    setImmediate(() => {
+      Promise.race([Promise.resolve().then(() => item.cb({ name: 'easymed-softphone' })), closed]).then(done(item.resolve), done(item.reject));
+    });
   };
   return {
     get held() { return held; },
     get queued() { return queue.length; },
+    get requested() { return requested; },
     closeHolder() { if (close) close(); },
     request(name, opts, cb) {
       if (typeof opts === 'function') { cb = opts; opts = {}; }
+      requested++;
       return new Promise((resolve, reject) => {
         const item = { cb, resolve, reject };
         if (!held) { grant(item); return; }
-        if (opts.ifAvailable) { Promise.resolve(cb(null)).then(resolve, reject); return; }
+        if (opts.ifAvailable) { setImmediate(() => Promise.resolve().then(() => cb(null)).then(resolve, reject)); return; }
         queue.push(item);
         opts.signal?.addEventListener('abort', () => {
           const i = queue.indexOf(item);
@@ -71,14 +94,29 @@ function makeLocks() {
   };
 }
 
+// Подставные часы для повторного входа: таймеры не идут сами, fire() запускает.
+function makeTimers() {
+  const list = new Map(); let id = 0;
+  return {
+    setTimer: (fn, ms) => { const t = ++id; list.set(t, { fn, ms }); return t; },
+    clearTimer: (t) => { list.delete(t); },
+    get count() { return list.size; },
+    get delays() { return [...list.values()].map((x) => x.ms); },
+    fire() { const all = [...list.values()]; list.clear(); for (const x of all) x.fn(); },
+  };
+}
+
 function deps(over = {}, { withConnection = false } = {}) {
   const { JsSIP, made } = makeJsSIP({ withConnection });
   const store = new Map();
   const media = makeMedia();
   const calls = { rpc: [], load: 0 };
+  const timers = makeTimers();
   return {
-    made, store, media, calls, JsSIP,
+    made, store, media, calls, JsSIP, timers,
     d: {
+      setTimer: timers.setTimer,
+      clearTimer: timers.clearTimer,
       loadJsSIP: async () => { calls.load++; return JsSIP; },
       rpc: async (name, args) => { calls.rpc.push([name, args]); return name === 'telephony_webrtc_me' ? { data: { ...CREDS }, error: null } : { data: null, error: { message: 'x' } }; },
       media,
@@ -143,7 +181,7 @@ test('незащищённый адрес — ошибка insecure, в АТС �
 });
 
 test('микрофон запрещён / не найден / другое — свои причины, замок отпущен', async () => {
-  for (const [name, reason] of [['NotAllowedError', 'mic_denied'], ['NotFoundError', 'no_mic'], ['NotReadableError', 'mic_error']]) {
+  for (const [name, reason] of [['NotAllowedError', 'mic_denied'], ['NotFoundError', 'no_mic'], ['OverconstrainedError', 'no_mic'], ['NotReadableError', 'mic_error']]) {
     const err = Object.assign(new Error(name), { name });
     const { d, made } = deps({ media: makeMedia({ getUserMedia: async () => { throw err; } }) });
     const sp = createSoftphone(d);
@@ -165,6 +203,32 @@ test('сервер отказал (нет номера) — ошибка server 
   assert.equal(made.length, 0);
   await tick();
   assert.equal(d.locks.held, false);
+});
+
+test('RPC бросил (нет сети до сервера) — ошибка server, замок отпущен', async () => {
+  const { d, made, calls } = deps({ rpc: async () => { throw new Error('Failed to fetch'); } });
+  const sp = createSoftphone(d);
+  await sp.enable();
+  assert.deepEqual([sp.get().state, sp.get().reason, sp.get().message], [SP.ERROR, 'server', 'Failed to fetch']);
+  assert.equal(made.length, 0);
+  assert.equal(calls.load, 0);
+  await tick();
+  assert.equal(d.locks.held, false);
+});
+
+test('сервер вернул неполные данные входа — ошибка server, в АТС не входим', async () => {
+  for (const missing of ['ws_url', 'user', 'sip_domain']) {
+    const creds = { ...CREDS };
+    delete creds[missing];
+    const { d, made, calls } = deps({ rpc: async () => ({ data: creds, error: null }) });
+    const sp = createSoftphone(d);
+    await sp.enable();
+    assert.deepEqual([sp.get().state, sp.get().reason], [SP.ERROR, 'server'], missing);
+    assert.equal(made.length, 0, missing);
+    assert.equal(calls.load, 0, missing);
+    await tick();
+    assert.equal(d.locks.held, false, missing);
+  }
 });
 
 test('библиотека не загрузилась — load_failed, замок отпущен', async () => {
@@ -211,12 +275,97 @@ test('двойное enable() без ожидания — один UA, без л
   assert.equal(made.length, 1, 'включённый телефон не входит второй раз');
 });
 
+// Двойной щелчок по переключателю: замок ещё не пришёл, а телефон уже выключили.
+async function untilRequested(locks) {
+  for (let i = 0; i < 50 && !locks.requested; i++) await Promise.resolve();
+  assert.equal(locks.requested, 1, 'запрос замка ушёл');
+}
+
+test('enable(); disable() сразу — off, UA нет, замок свободен, в очереди пусто', async () => {
+  const { d, made, calls } = deps();
+  const sp = createSoftphone(d);
+  sp.enable(); sp.disable();
+  await settle();
+  assert.equal(sp.get().state, SP.OFF);
+  assert.equal(made.length, 0);
+  assert.equal(calls.rpc.length, 0);
+  assert.equal(d.locks.held, false);
+  assert.equal(d.locks.queued, 0);
+});
+
+test('enable(); disable(), пока ответ замка в пути — замок отдан сразу, UA нет', async () => {
+  const { d, made, calls } = deps();
+  const sp = createSoftphone(d);
+  sp.enable();
+  await untilRequested(d.locks);
+  assert.equal(d.locks.held, true, 'замок выдан, обработчик ещё не позван');
+  sp.disable();
+  await settle();
+  assert.equal(sp.get().state, SP.OFF);
+  assert.equal(made.length, 0);
+  assert.equal(calls.rpc.length, 0);
+  assert.equal(d.locks.held, false);
+  assert.equal(d.locks.queued, 0);
+});
+
+test('enable(); disable(); enable() — ровно один UA, без «другой вкладки»', async () => {
+  for (const inFlight of [false, true]) {
+    const { d, made } = deps();
+    const sp = createSoftphone(d);
+    const seen = [];
+    sp.subscribe((s) => seen.push(s.state));
+    sp.enable();
+    if (inFlight) await untilRequested(d.locks);
+    sp.disable();
+    const p = sp.enable();
+    await p;
+    await settle();
+    assert.equal(made.length, 1, 'inFlight=' + inFlight);
+    assert.equal(made[0].started, true);
+    assert.equal(seen.includes(SP.OTHER_TAB), false, 'inFlight=' + inFlight);
+    assert.equal(sp.get().state, SP.CONNECTING);
+    assert.equal(d.locks.held, true);
+  }
+});
+
+test('disable() и снова enable(), пока первое включение ждёт сервер — новое включение, один UA', async () => {
+  const answers = [];
+  const { d, made } = deps({ rpc: () => new Promise((r) => { answers.push(r); }) });
+  const sp = createSoftphone(d);
+  sp.enable();
+  await settle();
+  assert.equal(answers.length, 1);
+  sp.disable();
+  const p = sp.enable();
+  await settle();
+  assert.equal(answers.length, 2, 'второе включение дошло до сервера само');
+  answers[0]({ data: { ...CREDS }, error: null });
+  answers[1]({ data: { ...CREDS }, error: null });
+  await p;
+  await settle();
+  assert.equal(made.length, 1);
+  assert.equal(sp.get().state, SP.CONNECTING);
+});
+
+test('подписчик зовёт enable() из первого уведомления — то же включение', async () => {
+  const { sp, ua, made } = await ready();
+  ua.emit('registrationFailed', { cause: 'Authentication Error' }); // повтор пойдёт со своим замком — без ожиданий
+  let inner = null;
+  sp.subscribe((s) => { if (s.state === SP.CONNECTING && !inner) inner = sp.enable(); });
+  const outer = sp.enable();
+  await outer;
+  await settle();
+  assert.equal(inner, outer);
+  assert.equal(made.length, 2);
+  assert.equal(sp.get().state, SP.CONNECTING);
+});
+
 test('disable() пока enable() ждёт сервер — UA не создан, состояние off, замок отпущен', async () => {
   let answer;
   const { d, made, calls } = deps({ rpc: () => new Promise((r) => { answer = r; }) });
   const sp = createSoftphone(d);
   const p = sp.enable();
-  await tick();
+  await settle();
   assert.equal(typeof answer, 'function', 'дошли до RPC');
   sp.disable();
   answer({ data: { ...CREDS }, error: null });
@@ -235,7 +384,8 @@ test('disable() пока грузится JsSIP — UA не создан и не
   d.loadJsSIP = () => new Promise((r) => { loaded = () => r(JsSIP); });
   const sp = createSoftphone(d);
   const p = sp.enable();
-  await tick();
+  await settle();
+  assert.equal(typeof loaded, 'function', 'дошли до загрузки JsSIP');
   sp.disable();
   loaded();
   await p;
@@ -275,9 +425,9 @@ test('входящий: звонит → принять → разговор →
   assert.equal(sp.busy(), true);
   sp.hangup();
   assert.equal(s.done.at(-1)[0], 'terminate');
-  s.emit('ended');
   assert.equal(sp.get().state, SP.READY);
   assert.equal(sp.get().call, null);
+  assert.deepEqual(sp.get().lastEnd, { direction: 'in', cause: 'Terminated', media: null });
   assert.equal(sp.busy(), false);
 });
 
@@ -321,9 +471,76 @@ test('входящий: отклонить — 603; второй входящи�
   assert.equal(sp.get().state, SP.RINGING, 'конец чужой сессии не трогает текущий звонок');
   sp.decline();
   assert.deepEqual(a.done[0], ['terminate', { status_code: 603, reason_phrase: 'Decline' }]);
-  a.emit('failed', { cause: 'Rejected' });
-  assert.equal(sp.get().state, SP.READY);
+  assert.equal(sp.get().state, SP.READY, 'JsSIP шлёт failed прямо из terminate()');
   assert.equal(sp.get().call, null);
+  assert.deepEqual(sp.get().lastEnd, { direction: 'in', cause: 'Rejected', media: null });
+});
+
+test('входящий, пока наш исходящий ещё звонит, — 486, исходящий не тронут', async () => {
+  const { sp, ua } = await ready();
+  sp.call('901112233');
+  const out = ua.lastCall;
+  const inc = new FakeSession('incoming', '222');
+  ua.emit('newRTCSession', { originator: 'remote', session: inc });
+  assert.deepEqual(inc.done, [['terminate', { status_code: 486, reason_phrase: 'Busy Here' }]]);
+  assert.deepEqual(out.done, []);
+  assert.equal(sp.get().state, SP.CALLING);
+  assert.deepEqual(sp.get().call, { direction: 'out', number: '901112233', startedAt: null, muted: false });
+  out.emit('confirmed');
+  assert.equal(sp.get().state, SP.IN_CALL);
+});
+
+test('decline() / hangup(): terminate() бросил — всё равно «готов»', async () => {
+  for (const act of ['decline', 'hangup']) {
+    const { sp, ua, media } = await ready();
+    const s = new FakeSession('incoming', '111');
+    s.terminate = () => { throw Object.assign(new Error('Invalid status: 8'), { name: 'InvalidStateError' }); };
+    ua.emit('newRTCSession', { originator: 'remote', session: s });
+    if (act === 'hangup') { sp.answer(); s.emit('confirmed'); }
+    sp[act]();
+    assert.equal(sp.get().state, SP.READY, act);
+    assert.equal(sp.get().call, null, act);
+    assert.deepEqual(media.log.at(-1), ['detach'], act);
+  }
+});
+
+test('итог звонка (lastEnd): занято, отбой, микрофон; новый звонок сбрасывает', async () => {
+  const { sp, ua } = await ready();
+  sp.call('901112233');
+  ua.lastCall.emit('failed', { originator: 'remote', cause: 'Busy' });
+  assert.equal(sp.get().state, SP.READY);
+  assert.deepEqual(sp.get().lastEnd, { direction: 'out', cause: 'Busy', media: null });
+  const s = new FakeSession('incoming', '111');
+  ua.emit('newRTCSession', { originator: 'remote', session: s });
+  assert.equal(sp.get().lastEnd, null, 'новый звонок — итог прошлого убран');
+  s.emit('failed', { originator: 'remote', cause: 'Canceled' });
+  assert.deepEqual(sp.get().lastEnd, { direction: 'in', cause: 'Canceled', media: null });
+});
+
+test('ответили, а микрофона не дали — «готов», lastEnd.media mic_denied; getusermediafailed уточняет', async () => {
+  const { sp, ua } = await ready();
+  // JsSIP: getUserMedia внутри answer() не удался → сначала failed, потом getusermediafailed с ошибкой.
+  const failingAnswer = (s, gumName) => {
+    s.answer = (o) => {
+      s.done.push(['answer', o]);
+      s.emit('failed', { originator: 'local', cause: 'User Denied Media Access' });
+      if (gumName) s.emit('getusermediafailed', Object.assign(new Error(gumName), { name: gumName }));
+    };
+    return s;
+  };
+  const cases = [[null, 'mic_denied'], ['NotAllowedError', 'mic_denied'], ['NotFoundError', 'no_mic'], ['OverconstrainedError', 'no_mic'], ['NotReadableError', 'mic_error']];
+  const sessions = [];
+  for (const [gumName, want] of cases) {
+    const s = failingAnswer(new FakeSession('incoming', '111'), gumName);
+    sessions.push(s);
+    ua.emit('newRTCSession', { originator: 'remote', session: s });
+    sp.answer();
+    assert.equal(sp.get().state, SP.READY, String(gumName));
+    assert.equal(sp.get().call, null);
+    assert.deepEqual(sp.get().lastEnd, { direction: 'in', cause: 'User Denied Media Access', media: want }, String(gumName));
+  }
+  sessions[0].emit('getusermediafailed', Object.assign(new Error('x'), { name: 'NotFoundError' }));
+  assert.equal(sp.get().lastEnd.media, 'mic_error', 'запоздалая ошибка прошлого звонка не трогает итог последнего');
 });
 
 test('answer() и decline() — только пока звонит', async () => {
@@ -401,10 +618,10 @@ test('call() — только когда «готов» и есть цифры',
   assert.equal(sp.call('901112244'), false, 'уже звоним');
 });
 
-test('answer() и call(): pcConfig без STUN и выбранный микрофон', async () => {
+test('answer() и call(): pcConfig без STUN и выбранный микрофон (ideal — отключили гарнитуру, берётся обычный)', async () => {
   const { sp, ua, media } = await ready({ inputId: () => 'mic-2' });
-  const want = { mediaConstraints: { audio: { deviceId: { exact: 'mic-2' } }, video: false }, pcConfig: { iceServers: [] } };
-  assert.deepEqual(media.log[0], ['gum', { audio: { deviceId: { exact: 'mic-2' } }, video: false }], 'проверка — тем же микрофоном');
+  const want = { mediaConstraints: { audio: { deviceId: { ideal: 'mic-2' } }, video: false }, pcConfig: { iceServers: [] } };
+  assert.deepEqual(media.log[0], ['gum', { audio: { deviceId: { ideal: 'mic-2' } }, video: false }], 'проверка — тем же микрофоном');
   const s = new FakeSession('incoming', '111');
   ua.emit('newRTCSession', { originator: 'remote', session: s });
   sp.answer();
@@ -435,6 +652,24 @@ test('звук собеседника: исходящий — connection уже 
   s.emit('ended');
   assert.deepEqual(media.log.at(-1), ['detach']);
   assert.equal(sp.get().state, SP.READY);
+});
+
+test('звук собеседника: запоздалый track от соединения прошлого звонка не включает звук', async () => {
+  const { sp, ua, media } = await ready({}, { withConnection: true });
+  sp.call('901112233');
+  const first = ua.lastCall;
+  first.emit('confirmed');
+  first.emit('ended');
+  media.log.length = 0;
+  first.connection.fire('track', { track: {} });
+  assert.deepEqual(media.log, [], 'после конца звонка');
+  sp.call('901112244');
+  const second = ua.lastCall;
+  media.log.length = 0;
+  first.connection.fire('track', { track: {} });
+  assert.deepEqual(media.log, [], 'во время следующего звонка');
+  second.connection.fire('track', { track: {} });
+  assert.deepEqual(media.log, [['attach', second.connection]]);
 });
 
 test('звук собеседника: входящий — peerconnection при ответе, затем track', async () => {
@@ -474,7 +709,7 @@ test('отказ АТС, а следом unregistered (так шлёт JsSIP) �
 });
 
 test('registrationFailed из-за сети — переподключаемся, не ошибка', async () => {
-  for (const cause of ['Connection Error', 'Request Timeout']) {
+  for (const cause of ['Connection Error', 'Request Timeout', 'Unavailable']) {
     const { d, made } = deps();
     const sp = createSoftphone(d);
     await sp.enable();
@@ -483,6 +718,58 @@ test('registrationFailed из-за сети — переподключаемся
     made[0].emit('registered');
     assert.equal(sp.get().state, SP.READY, cause);
   }
+});
+
+// B1: REGISTER остался без ответа при живом сокете — JsSIP сам не повторяет
+// (только после переподключения сокета), запись в АТС истекает, входящих нет.
+test('повторный вход: Request Timeout / Unavailable — через 30 с register(), если сокет жив и не вошли', async () => {
+  for (const cause of ['Request Timeout', 'Unavailable']) {
+    const { sp, ua, timers } = await ready();
+    ua.emit('registrationFailed', { cause });
+    assert.deepEqual(timers.delays, [30000], cause);
+    assert.equal(ua.registers, 0, 'не сразу');
+    timers.fire();
+    assert.equal(ua.registers, 1, cause);
+    assert.equal(timers.count, 0);
+    assert.equal(sp.get().state, SP.CONNECTING);
+  }
+});
+
+test('повторный вход: сокет лежит или уже вошли — register() не зовём', async () => {
+  const a = await ready();
+  a.ua.emit('registrationFailed', { cause: 'Request Timeout' });
+  a.ua.connected = false;
+  a.timers.fire();
+  assert.equal(a.ua.registers, 0, 'сокет лежит — JsSIP войдёт сам при переподключении');
+  const b = await ready();
+  b.ua.emit('registrationFailed', { cause: 'Request Timeout' });
+  b.ua.isReg = true;
+  b.timers.fire();
+  assert.equal(b.ua.registers, 0, 'уже вошли');
+});
+
+test('повторный вход: registered и disable() снимают таймер; таймер всегда один', async () => {
+  const a = await ready();
+  a.ua.emit('registrationFailed', { cause: 'Request Timeout' });
+  a.ua.emit('registrationFailed', { cause: 'Request Timeout' });
+  assert.equal(a.timers.count, 1, 'один таймер');
+  a.ua.emit('registered');
+  assert.equal(a.timers.count, 0, 'вошли — таймер снят');
+  a.ua.emit('registrationFailed', { cause: 'Request Timeout' });
+  a.timers.fire();
+  a.ua.emit('registrationFailed', { cause: 'Request Timeout' });
+  assert.equal(a.timers.count, 1, 'второй тайм-аут — снова таймер');
+  a.sp.disable();
+  assert.equal(a.timers.count, 0, 'выключили — таймер снят');
+
+  const b = await ready();
+  b.ua.emit('registrationFailed', { cause: 'Request Timeout' });
+  b.ua.emit('registrationFailed', { cause: 'Authentication Error' });
+  assert.equal(b.timers.count, 0, 'отказ АТС — повторять нечего');
+
+  const c = await ready();
+  c.ua.emit('registrationFailed', { cause: 'Connection Error' });
+  assert.equal(c.timers.count, 0, 'сокет упал — JsSIP войдёт сам после переподключения');
 });
 
 test('связь пропала во время разговора — разговор не прерывается, после него — переподключаемся', async () => {
@@ -514,6 +801,12 @@ test('после ошибки входа enable() начинает заново:
   assert.equal(sp.get().state, SP.CONNECTING);
   ua.emit('registered');
   assert.equal(sp.get().state, SP.CONNECTING, 'события старого UA не слушаем');
+  ua.emit('registrationFailed', { cause: 'Authentication Error' });
+  assert.equal(sp.get().state, SP.CONNECTING, 'и отказ старого UA тоже');
+  const stale = new FakeSession('incoming', '111');
+  ua.emit('newRTCSession', { originator: 'remote', session: stale });
+  assert.equal(sp.get().state, SP.CONNECTING, 'и звонок через старый UA');
+  assert.deepEqual(stale.done, []);
   made[1].emit('registered');
   assert.equal(sp.get().state, SP.READY);
   assert.equal(d.locks.held, true);
@@ -543,7 +836,7 @@ test('disable — разговор завершён, UA остановлен, ф
   assert.equal(store.has(SP_FLAG), false);
   assert.equal(sp.wanted(), false);
   assert.deepEqual(media.log.at(-1), ['detach']);
-  assert.deepEqual(sp.get(), { state: SP.OFF, reason: '', message: '', extension: '', call: null });
+  assert.deepEqual(sp.get(), { state: SP.OFF, reason: '', message: '', extension: '', call: null, lastEnd: null });
   s.emit('ended');
   ua.emit('unregistered', {});
   ua.emit('disconnected', {});
@@ -570,7 +863,7 @@ test('одна вкладка: B ждёт, пока A не выключит, и 
   await b.enable();
   assert.equal(locks.queued, 1, 'повторное enable() не ставит второй запрос');
   a.disable();
-  await tick(); await tick();
+  await settle();
   assert.equal(typeof answerB, 'function', 'B получил замок и дошёл до сервера');
   assert.equal(b.get().state, SP.CONNECTING);
   const seen = [];
@@ -604,7 +897,7 @@ test('одна вкладка, общее хранилище: вкладку A �
   await b.enable();
   assert.equal(b.get().state, SP.OTHER_TAB);
   locks.closeHolder(); // вкладку A закрыли, флаг на компьютере остался
-  await tick(); await tick();
+  await settle();
   assert.equal(B.made.length, 1);
   assert.equal(B.made[0].started, true);
   assert.equal(b.get().state, SP.CONNECTING);
@@ -622,7 +915,7 @@ test('одна вкладка, общее хранилище: в A телефо�
   await b.enable();
   assert.equal(b.get().state, SP.OTHER_TAB);
   a.disable(); // переключатель — один на компьютер
-  await tick(); await tick();
+  await settle();
   assert.equal(B.made.length, 0);
   assert.equal(B.calls.rpc.length, 0);
   assert.equal(b.get().state, SP.OFF);
@@ -646,7 +939,7 @@ test('одна вкладка: B выключили, пока он ждал, —
   assert.equal(locks.queued, 0, 'запрос в очереди отменён');
   assert.equal(b.get().state, SP.OFF);
   a.disable();
-  await tick(); await tick();
+  await settle();
   assert.equal(B.made.length, 0);
   assert.equal(locks.held, false);
 });
@@ -697,4 +990,33 @@ test('состояние нельзя испортить снаружи', async 
   assert.throws(() => { st.state = SP.OFF; }, TypeError);
   assert.throws(() => { st.call.number = '0'; }, TypeError);
   assert.equal(sp.get().state, SP.RINGING);
+  s.emit('failed', { cause: 'Canceled' });
+  assert.throws(() => { sp.get().lastEnd.cause = 'x'; }, TypeError);
+});
+
+test('без перемен — без уведомления', async () => {
+  const { sp, ua } = await ready();
+  const seen = [];
+  sp.subscribe((s) => seen.push(s.state));
+  ua.emit('registered');
+  ua.emit('registered');
+  assert.deepEqual(seen, [], 'уже «готов»');
+  ua.emit('disconnected');
+  ua.emit('unregistered', {});
+  assert.deepEqual(seen, [SP.CONNECTING], 'дважды «переподключаемся» — одно уведомление');
+  sp.disable();
+  sp.disable();
+  assert.deepEqual(seen, [SP.CONNECTING, SP.OFF]);
+});
+
+test('«Микрофон выкл.» дважды — одно уведомление', async () => {
+  const { sp, ua } = await ready();
+  const s = new FakeSession('incoming', '111');
+  ua.emit('newRTCSession', { originator: 'remote', session: s });
+  sp.answer(); s.emit('confirmed');
+  let n = 0;
+  sp.subscribe(() => { n++; });
+  sp.setMuted(true);
+  sp.setMuted(true);
+  assert.equal(n, 1);
 });
