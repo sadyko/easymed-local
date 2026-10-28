@@ -492,6 +492,8 @@ function paintStatus() {
     else if (ring && ring.call.state === 'answered') { cls = 'ok'; label = 'Разговор идёт'; }
     else if (P.card && P.card.phase === 'ringing') { cls = 'wait'; label = 'Трубка звонит'; }
     else if (P.card) { cls = 'end'; label = 'Звонок завершён'; }
+    // SOFTPHONE_V1 — телефон Easy-Med включён, но не готов: «Готов» здесь был бы неправдой.
+    else if (SP_PILL[softState().state]) { [cls, label] = SP_PILL[softState().state]; }
     else if (P.me && !P.me.line) { cls = 'off'; label = 'Линия не настроена'; }
     P.els.status.className = 'cph-st ' + cls;
     P.els.statusText.textContent = tr(label);
@@ -962,6 +964,8 @@ const SP_WORDS = {
 };
 const SP_TONE = { ready: 'ready', ringing: 'ready', calling: 'ready', in_call: 'ready', connecting: 'wait', other_tab: 'wait', error: 'error' };
 const SP_STATUS = { ringing: 'Звонит', calling: 'Вызов…', in_call: 'Разговор идёт' };   // пилюля состояния во время звонка
+// Пилюля, когда телефон включён, но не готов: [стиль пилюли, слово]. Стили — те же, что у звонков станции.
+const SP_PILL = { connecting: ['wait', 'Подключение…'], error: ['end', 'Телефон не включился'], other_tab: ['off', 'В другой вкладке'] };
 const SP_ACTING = 'Принимать звонки от чужого имени нельзя — вернитесь к своей учётной записи.';
 const SP_NO_NUMBER = 'Номер для телефона в Easy-Med назначает администратор в карточке сотрудника.';
 const SP_PICK = 'Администратор назначил вам номер {n} — выберите его в «Моя трубка», чтобы принимать звонки в Easy-Med.';
@@ -1398,7 +1402,10 @@ function fillDevices(sel, list, kind, note) {
     if (!hasDefault) sel.appendChild(h('option', { value: '' }, 'По умолчанию'));
     for (const d of list) sel.appendChild(h('option', { value: d.id }, d.label));
     const found = !saved || DEV_PSEUDO.has(saved) || list.some((d) => d.id === saved);
-    const value = found && saved ? saved : (hasDefault ? 'default' : '');
+    let value = found && saved ? saved : (hasDefault ? 'default' : '');
+    // Сохранённого 'default'/'communications' в списке нет (повторял устройство) —
+    // «По умолчанию», а не пустое поле с несуществующим вариантом.
+    if (![...sel.children].some((o) => o.getAttribute('value') === value)) value = '';
     for (const o of [...sel.children]) if (o.getAttribute('value') === value) o.setAttribute('selected', '');
     sel.value = value;
     note.textContent = found ? '' : tr(DEV_MISSING[kind]);

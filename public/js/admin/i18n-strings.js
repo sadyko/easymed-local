@@ -12405,6 +12405,9 @@ export const STRINGS = {
   "Не удалось записать с микрофона. Выберите другой микрофон и повторите проверку.": {"en":"Could not record from the microphone. Choose another microphone and test again.","ru":"Не удалось записать с микрофона. Выберите другой микрофон и повторите проверку.","uz":"Mikrofondan yozib bo‘lmadi. Boshqa mikrofonni tanlang va qayta tekshiring."},
   "Проверка прервана.": {"en":"The test was interrupted.","ru":"Проверка прервана.","uz":"Tekshiruv to‘xtatildi."},
   "Выбор гарнитуры сохраняется сразу.": {"en":"The headset choice is saved immediately.","ru":"Выбор гарнитуры сохраняется сразу.","uz":"Garnitura tanlovi darhol saqlanadi."},
+  // SOFTPHONE_V1 — пилюля состояния в шапке панели, когда телефон включён, но не готов (views/crm-phone.js SP_PILL)
+  "Подключение…": {"en":"Connecting…","ru":"Подключение…","uz":"Ulanmoqda…"},
+  "В другой вкладке": {"en":"In another tab","ru":"В другой вкладке","uz":"Boshqa varaqda"},
   // SOFTPHONE_V1 (задача 8) — выход и вход от имени во время звонка (auth.js signOutAndReload, act-as-client.js)
   "Идёт разговор. Завершить звонок и выйти?": {"en":"A call is in progress. End the call and log out?","ru":"Идёт разговор. Завершить звонок и выйти?","uz":"Suhbat davom etmoqda. Qo‘ng‘iroqni yakunlab, chiqasizmi?"},
   "Идёт разговор. Завершить звонок и продолжить?": {"en":"A call is in progress. End the call and continue?","ru":"Идёт разговор. Завершить звонок и продолжить?","uz":"Suhbat davom etmoqda. Qo‘ng‘iroqni yakunlab, davom etasizmi?"},

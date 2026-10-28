@@ -126,6 +126,45 @@ test('закрыть или перезагрузить страницу во в�
   }
 });
 
+// ── Вкладку закрыли или перезагрузили — номер выходит из АТС ─────────────────
+// pagehide приходит уже после того, как человек согласился уйти (beforeunload
+// выше): телефон выключается, пока соединение с АТС ещё открыто, — JsSIP
+// успевает сказать «выхожу» (REGISTER expires=0). Выбор «принимать звонки»
+// остаётся: после перезагрузки телефон включится сам, а вторая вкладка
+// подхватит его, если первую закрыли.
+test('вкладку закрыли или перезагрузили — телефон выключается с выбором сотрудника; выключенный не трогаем; обработчик один', async () => {
+  B.getSoftphone(); B.getSoftphone();
+  const hides = listeners.filter(([t]) => t === 'pagehide');
+  assert.equal(hides.length, 1, 'обработчик pagehide не один');
+  const fire = () => hides[0][1]({ type: 'pagehide', persisted: false });
+  try {
+    for (const state of ['ready', 'ringing', 'in_call', 'connecting', 'error', 'other_tab']) {
+      const fake = fakePhone(false);
+      fake.get = () => ({ state });
+      B.setSoftphoneForTests(fake);
+      fire();
+      assert.deepEqual(fake.disables, [{ keepWanted: true }], state);
+    }
+    const off = fakePhone(false);
+    off.get = () => ({ state: 'off' });
+    B.setSoftphoneForTests(off);
+    fire();
+    assert.deepEqual(off.disables, [], 'выключенный телефон выключают ещё раз');
+  } finally {
+    B.setSoftphoneForTests(null);
+  }
+  // Настоящий телефон страницы: включён (ошибка адреса) → выключен, флаг сотрудника цел.
+  const sp = B.getSoftphone();
+  user(3);
+  await sp.enable();
+  assert.notEqual(sp.get().state, 'off');
+  fire();
+  assert.equal(sp.get().state, 'off');
+  assert.equal(store.get(SP_FLAG + '.3'), '1', 'после перезагрузки телефон не включится сам');
+  sp.disable();
+  user(null);
+});
+
 // ── Выход ────────────────────────────────────────────────────────────────────
 const { signOutAndReload } = await import('../auth.js');
 

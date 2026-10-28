@@ -145,7 +145,7 @@ test('onDeviceChange: подписка на devicechange и отписка; бе
 // ── Проверка гарнитуры ───────────────────────────────────────────────────────
 /** Подставной браузер для проверки: микрофон, запись, проигрывание, ручные «секунды». */
 function testEnv({ gumError = null, busy = false, recorder = true, data = 'chunk', startsInactive = false } = {}) {
-  const e = { gum: [], stopped: 0, recStops: 0, revoked: [], audios: [], ticks: [], cleared: [], timeouts: [], phases: [], subs: new Set(), busy };
+  const e = { gum: [], stopped: 0, recStops: 0, revoked: [], audios: [], ticks: [], cleared: [], timeouts: [], clearedTimeouts: [], phases: [], subs: new Set(), busy };
   const track = { stop: () => { e.stopped++; } };
   e.env = {
     nav: { mediaDevices: { getUserMedia: async (c) => { e.gum.push(c); if (gumError) throw gumError; return { getTracks: () => [track] }; } } },
@@ -164,7 +164,7 @@ function testEnv({ gumError = null, busy = false, recorder = true, data = 'chunk
     },
     setInterval: (fn) => { e.ticks.push(fn); return e.ticks.length; },
     clearInterval: (t) => { e.cleared.push(t); },
-    setTimeout: (fn) => { e.timeouts.push(fn); return e.timeouts.length; }, clearTimeout: () => {},
+    setTimeout: (fn) => { e.timeouts.push(fn); return e.timeouts.length; }, clearTimeout: (h) => { e.clearedTimeouts.push(h); },
     // Телефон страницы: busy() по заказу, подписчики — как у настоящего.
     phone: { busy: () => e.busy, subscribe: (fn) => { e.subs.add(fn); return () => e.subs.delete(fn); } },
   };
@@ -277,6 +277,7 @@ test('прервали через AbortSignal (ушли с экрана) во в
   ac.abort();
   assert.equal(await run, false);
   assert.equal(t.audios[0].paused, true, 'запись играет дальше');
+  assert.ok(t.clearedTimeouts.includes(t.timeouts.length), 'срок проигрывания остался взведённым после прерывания');
   assert.deepEqual(t.phases.at(-1), ['cancelled']);
   assert.deepEqual(t.revoked, ['blob:test']);
 });

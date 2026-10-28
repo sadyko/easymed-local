@@ -205,6 +205,12 @@ export function getSoftphone() {
   // (задача 8): иначе разговор с пациентом обрывался бы молча. Один раз — вместе
   // с телефоном страницы.
   try { window.addEventListener('beforeunload', onLeave); } catch { /* без окна — нечего стеречь */ }
+  // Вкладку закрыли или перезагрузили — номер выходит из АТС, пока соединение
+  // ещё открыто (JsSIP шлёт REGISTER expires=0). pagehide приходит уже после
+  // согласия уйти, вопрос beforeunload ему не мешает. Выбор «принимать звонки»
+  // остаётся: после перезагрузки телефон включится сам, а вторая вкладка этого
+  // сотрудника подхватит его, когда первую закрыли.
+  try { window.addEventListener('pagehide', onHide); } catch { /* без окна — нечего снимать */ }
   return instance;
 }
 function onLeave(e) {
@@ -212,6 +218,14 @@ function onLeave(e) {
   if (!sp || typeof sp.busy !== 'function' || !sp.busy()) return;
   e.preventDefault();
   e.returnValue = '';
+}
+function onHide() {
+  const sp = peekSoftphone();
+  if (!sp || typeof sp.get !== 'function' || typeof sp.disable !== 'function') return;
+  try {
+    const s = sp.get();
+    if (s && s.state !== 'off') sp.disable({ keepWanted: true });
+  } catch { /* страница уходит — молча */ }
 }
 
 /** Телефон страницы, если он уже есть (или подмена); сам не создаёт. */
@@ -411,10 +425,10 @@ export async function micTest(ms = 5000, onPhase = () => {}, over) {
     if (cancelled) { say('cancelled'); return false; }
     say('playing');
     await new Promise((resolve) => {
-      wake = resolve;
       // 'ended' не пришёл — не висим: звук останавливаем по сроку.
       const safety = env.setTimeout(() => { try { el.pause(); } catch { /* пусть */ } resolve(); }, ms + 3000);
       const end = () => { env.clearTimeout(safety); resolve(); };
+      wake = end;   // прервали — срок тоже снимаем
       el.onended = end;
       el.onerror = end;
       try { Promise.resolve(el.play()).catch(end); } catch { end(); }

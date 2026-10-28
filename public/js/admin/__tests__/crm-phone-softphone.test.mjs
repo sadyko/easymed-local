@@ -157,6 +157,28 @@ test('не включился из-за адреса без защиты: при
   assert.equal(byAttr(d, 'data-cph-sp-setup').length, 0);
 });
 
+test('пилюля состояния в шапке: телефон включён, но не готов — так и сказано, а не «Готов»', async () => {
+  const fake = fakePhone();
+  const { btn } = await shell({ fake });
+  const d = await open(btn);
+  const pill = () => one(d, 'data-cph-status');
+  assert.equal(textOf(pill()), 'Готов');
+  const cases = [
+    [{ state: 'connecting', reason: '' }, 'Подключение…', 'wait'],
+    [{ state: 'connecting', reason: 'network' }, 'Подключение…', 'wait'],
+    [{ state: 'error', reason: 'mic_denied' }, 'Телефон не включился', 'end'],
+    [{ state: 'other_tab', reason: 'other_tab' }, 'В другой вкладке', 'off'],
+    [{ state: 'ready', reason: '' }, 'Готов', 'ok'],
+  ];
+  for (const [patch, word, cls] of cases) {
+    fake.push(patch);
+    assert.equal(textOf(pill()), word, patch.state + '/' + patch.reason);
+    assert.ok(hasClass(pill(), cls), patch.state + ': стиль пилюли ' + pill().className);
+  }
+  fake.push({ ...IDLE });
+  assert.equal(textOf(pill()), 'Готов', 'телефон выключен — пилюля по-старому');
+});
+
 test('телефон включён в другой вкладке — так и сказано, с объяснением, как пользоваться им здесь', async () => {
   const fake = fakePhone();
   const { btn } = await shell({ fake });
@@ -965,6 +987,12 @@ test('сохранён «default» / «communications» браузера — э�
     try {
       const { d } = await headsetShell();
       assert.equal(byAttr(d, 'data-cph-sp-dev-note').filter((n) => !n.hidden).length, 0, id + ': ложное «не найден»');
+      // Такой записи в списке нет (она повторяет устройство) — поле не пустое, а «По умолчанию».
+      for (const attr of ['data-cph-sp-mic', 'data-cph-sp-out']) {
+        const sel = one(d, attr);
+        assert.equal(sel.value, '', id + ': поле показывает несуществующий вариант (пустое)');
+        assert.ok(sel.children[0].hasAttribute('selected') && sel.children[0].getAttribute('value') === '', id + ': не отмечено «По умолчанию»');
+      }
     } finally {
       forgetDevices();
     }
