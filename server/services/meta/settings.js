@@ -59,6 +59,50 @@ export function publicSettings(db) {
 }
 
 /**
+ * Свежий список форм страницы поверх прежнего: снятые галочки переживают
+ * обновление, новая форма приходит отмеченной, пропавшая уходит.
+ */
+function mergeForms(prevJson, forms) {
+  const keep = new Map(parseForms(prevJson).map((f) => [f.id, f.selected]));
+  return (Array.isArray(forms) ? forms : []).filter((f) => f && f.id != null).map((f) => ({
+    id: String(f.id), name: String(f.name || ''), status: String(f.status || ''),
+    leads_count: Number(f.leads_count) || 0,
+    selected: keep.has(String(f.id)) ? keep.get(String(f.id)) : true,
+  }));
+}
+
+/**
+ * FIX_318_V1 (H1) — список форм, прочитанный опросом (режим «все»): тем же
+ * слиянием, что и проверка связи, но без токенов — экран видит новую форму
+ * страницы, не нажимая «Проверить связь». Возвращает формы после слияния.
+ */
+export function refreshForms(db, forms) {
+  const merged = mergeForms((readSettingsRow(db) || {}).forms_json, forms);
+  db.prepare('UPDATE meta_settings SET forms_json = ? WHERE id = 1').run(JSON.stringify(merged));
+  return merged;
+}
+
+// ---------------------------------------------------------------------------
+// FIX_318_V1 (H1) — ОТМЕТКА ОПРОСА У КАЖДОЙ ФОРМЫ (meta_form_cursors, мигр. 256).
+// Отметка — время самой свежей подшитой заявки формы (секунды Unix). Форма без
+// отметки читается от meta_settings.since_ts («забирать с»), который опрос
+// больше не двигает. Отметка двигается только вперёд.
+// ---------------------------------------------------------------------------
+export function readFormCursors(db) {
+  try {
+    return new Map(db.prepare('SELECT form_id, since_ts FROM meta_form_cursors').all().map((r) => [String(r.form_id), Number(r.since_ts) || 0]));
+  } catch { return new Map(); }   // база без миграции 256 — отметок нет, все формы от since_ts
+}
+
+export function advanceFormCursor(db, formId, sinceTs) {
+  const t = Number(sinceTs);
+  if (!formId || !Number.isFinite(t)) return;
+  db.prepare(`INSERT INTO meta_form_cursors (form_id, since_ts, updated_at) VALUES (?, ?, ${NOW_SQL})
+              ON CONFLICT(form_id) DO UPDATE SET since_ts = MAX(since_ts, excluded.since_ts), updated_at = excluded.updated_at`)
+    .run(String(formId), Math.floor(t));
+}
+
+/**
  * Проверенное подключение: токены — печатью, страница и формы — открыто.
  * Снятые галочки прежнего списка переживают обновление; форма, которой у
  * страницы больше нет, из списка уходит (её нечего опрашивать).
@@ -66,17 +110,18 @@ export function publicSettings(db) {
 export function storeConnection(db, { token, pageToken = '', page, forms = [], expiresAt = null }, { kekPath } = {}) {
   if (typeof token !== 'string' || !token.trim()) throw new SettingsError('Пустой токен не сохраняется.');
   const kek = loadKek({ kekPath, create: true });   // файл ключа — до записи в базу
-  const prev = parseForms((readSettingsRow(db) || {}).forms_json);
-  const keep = new Map(prev.map((f) => [f.id, f.selected]));
-  const merged = (Array.isArray(forms) ? forms : []).filter((f) => f && f.id != null).map((f) => ({
-    id: String(f.id), name: String(f.name || ''), status: String(f.status || ''),
-    leads_count: Number(f.leads_count) || 0,
-    selected: keep.has(String(f.id)) ? keep.get(String(f.id)) : true,
-  }));
+  const merged = mergeForms((readSettingsRow(db) || {}).forms_json, forms);
+  // FIX_318_V1 (L3) — опрос, который выключил САМ недействительный токен
+  // (recordPoll: enabled = 0 и слово bad_token), проверенный токен включает
+  // обратно: клиника вставила новый токен и ждёт заявок, а не второй галочки.
+  // Выключенный человеком (слова bad_token нет) остаётся выключенным.
   db.prepare(`UPDATE meta_settings SET
       token_sealed = @token_sealed, token_tail = @token_tail, page_token_sealed = @page_token_sealed,
       page_id = @page_id, page_name = @page_name, token_checked_at = ${NOW_SQL}, token_expires_at = @expires,
-      forms_json = @forms_json, updated_at = ${NOW_SQL}
+      forms_json = @forms_json,
+      enabled = CASE WHEN enabled = 0 AND last_error = 'bad_token' THEN 1 ELSE enabled END,
+      last_error = CASE WHEN last_error = 'bad_token' THEN '' ELSE last_error END,
+      updated_at = ${NOW_SQL}
     WHERE id = 1`).run({
     token_sealed: seal(token.trim(), kek), token_tail: tailOf(token.trim()),
     page_token_sealed: pageToken ? seal(String(pageToken), kek) : '',
@@ -145,11 +190,16 @@ export function formsToPoll(db) {
 
 /** Удалить токен: интеграция выключается, страница и формы забываются. Журнал заявок остаётся. */
 export function clearToken(db, userId = null) {
-  db.prepare(`UPDATE meta_settings SET
-      enabled = 0, token_sealed = '', token_tail = '', page_token_sealed = '', page_id = '', page_name = '',
-      token_checked_at = NULL, token_expires_at = NULL, forms_json = '[]', last_error = '',
-      updated_by = @userId, updated_at = ${NOW_SQL}
-    WHERE id = 1`).run({ userId });
+  db.transaction(() => {
+    db.prepare(`UPDATE meta_settings SET
+        enabled = 0, token_sealed = '', token_tail = '', page_token_sealed = '', page_id = '', page_name = '',
+        token_checked_at = NULL, token_expires_at = NULL, forms_json = '[]', last_error = '',
+        updated_by = @userId, updated_at = ${NOW_SQL}
+      WHERE id = 1`).run({ userId });
+    // FIX_318_V1 (H1) — отметки форм забываются вместе с формами: новый токен
+    // может открыть другую страницу.
+    try { db.prepare('DELETE FROM meta_form_cursors').run(); } catch { /* база без миграции 256 */ }
+  })();
   return publicSettings(db);
 }
 
@@ -172,11 +222,21 @@ export function recordPoll(db, { ok, error = '', sinceTs = null } = {}) {
     WHERE id = 1`).run({ ok: ok ? 1 : 0, since: sinceTs == null ? null : Number(sinceTs), word });
 }
 
-/** Сдвинуть курсор назад на N дней (кнопка «Забрать заявки за последние N дней»). */
+/**
+ * Сдвинуть курсор назад на N дней (кнопка «Забрать заявки за последние N дней»).
+ * FIX_318_V1 (H1) — назад, но не вперёд: и нижняя граница новых форм, и
+ * отметка каждой формы — не позже «N дней назад». Отметку, которая и так
+ * старше (форма давно отказывает), кнопка не двигает вперёд — иначе «забрать
+ * за 3 дня» пропустило бы заявки, которых форма ещё не отдала.
+ */
 export function rewindSince(db, days) {
   const d = intAtLeast(days, 1, 'Число дней — целое число от 1 до 90.');
   if (d > 90) throw new SettingsError('Meta хранит заявки не дольше 90 дней.');
   const ts = Math.floor(Date.now() / 1000) - d * 86400;
-  db.prepare(`UPDATE meta_settings SET since_ts = @ts, updated_at = ${NOW_SQL} WHERE id = 1`).run({ ts });
+  db.transaction(() => {
+    db.prepare(`UPDATE meta_settings SET since_ts = CASE WHEN since_ts > 0 AND since_ts < @ts THEN since_ts ELSE @ts END,
+                updated_at = ${NOW_SQL} WHERE id = 1`).run({ ts });
+    try { db.prepare('UPDATE meta_form_cursors SET since_ts = MIN(since_ts, ?)').run(ts); } catch { /* база без миграции 256 */ }
+  })();
   return ts;
 }

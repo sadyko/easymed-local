@@ -26,6 +26,7 @@
 import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';
 import { contactDecision, firstStageKey, reopenLead } from '../crm/contact-window.js';
 import { leadsForPhone } from '../crm/lead-from-call.js';
+import { patientIdForPhone } from '../crm/patient-by-phone.js';   // FIX_318_V1 (L3) — пациент по номеру, правилом звонка
 
 export const META_SOURCE_KEY = 'meta_ads';
 export const META_SOURCE_LABEL = 'Meta (Facebook / Instagram)';
@@ -167,10 +168,12 @@ export function fileLead(db, lead) {
       insertJournal(db, lead, { status: 'merged', crmId: decision.lead.id });
       return { status: 'merged', crm_request_id: decision.lead.id };
     }
-    const crmId = Number(db.prepare(`INSERT INTO crm_requests (full_name, phone, source, sources, status, note)
-                                     VALUES (?, ?, ?, ?, ?, ?)`)
+    // FIX_318_V1 (L3) — новая карточка находит пациента по номеру тем же
+    // правилом, что карточка звонка (crm/patient-by-phone.js).
+    const crmId = Number(db.prepare(`INSERT INTO crm_requests (full_name, phone, source, sources, status, note, patient_id)
+                                     VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .run(lead.full_name || 'Заявка Meta', lead.phone || '', META_SOURCE_KEY, JSON.stringify([META_SOURCE_KEY]),
-        firstStageKey(db) || 'in_process', note).lastInsertRowid);
+        firstStageKey(db) || 'in_process', note, patientIdForPhone(db, lead.phone)).lastInsertRowid);
     insertJournal(db, lead, { status: 'created', crmId });
     return { status: 'created', crm_request_id: crmId };
   })();
