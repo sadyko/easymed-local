@@ -593,6 +593,19 @@ function stripMoney(view) {
   return view;
 }
 
+// SOFTPHONE_V1 (миграция 259, решение владельца «Only admin assigns») — номер
+// из карточки сотрудника становится НАЗНАЧЕННЫМ: на нём телефон Easy-Med входит
+// в АТС, а браузер получает пароль SIP номера. Назначает тот, кто правит карточку
+// («Сотрудники → Изменение»), но не в своей карточке — иначе это тот же
+// самовыбор, что «Моя трубка». Администратор в своей — назначает: решение и
+// есть его. От имени сотрудника req.user — сотрудник, и правило то же, что у
+// него самого. Само поле pbx_extension_assigned из запроса не читается никогда
+// (parseEmployeeFields его не знает); пустой номер стирает и назначение.
+function assignExtension(ef, mayAssign) {
+  if (mayAssign && ef.pbx_extension !== undefined) ef.pbx_extension_assigned = ef.pbx_extension;
+  return ef;
+}
+
 // ADMIN_ACT_AS_V1 — isAdminAccount («учётная запись администратора: основной,
 // дополнительной ролью или своей ролью на её основе») переехал в
 // services/role-guard.js без изменений: им же проверяет вход от имени (R2, R4).
@@ -676,7 +689,7 @@ export function userRoutes(db) {
 
     const parsed = parseEmployeeFields(req.body, db, undefined, 0);   // CLINIC_API_FIX_V1 — новому сотруднику фото не ставится
     if (!parsed.ok) return bad(res, parsed.message, parsed.field);   // DOCTOR_PROFILE_V1 — с полем отказа
-    const ef = parsed.fields;
+    const ef = assignExtension(parsed.fields, true);   // SOFTPHONE_V1 — заводят всегда другого человека
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
     if (specs.list) ef.specialty = primarySpecialtyName(specs.list);   // CLINIC_API_FIX_V1 — как основная строка
@@ -788,7 +801,8 @@ export function userRoutes(db) {
 
     const parsed = parseEmployeeFields(req.body, db, user.role, user.id);   // CLINIC_API_FIX_V1 — фото только из папки этого сотрудника
     if (!parsed.ok) return bad(res, parsed.message, parsed.field);   // DOCTOR_PROFILE_V1 — с полем отказа
-    const ef = parsed.fields;
+    // SOFTPHONE_V1 — своя карточка не-администратора номер для телефона не назначает.
+    const ef = assignExtension(parsed.fields, isAdminUser(req.user) || user.id !== req.user.id);
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
     if (specs.list) ef.specialty = primarySpecialtyName(specs.list);   // CLINIC_API_FIX_V1 — как основная строка

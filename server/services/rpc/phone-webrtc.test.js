@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { telephonyWebrtcMe, telephonyCaller } from './phone.js';
+import { telephonyWebrtcMe, telephonyCaller, telephonyMyExtension, telephonyPhoneMe } from './phone.js';
 import { RpcError } from './telephony.js';
 import { getRpc } from './index.js';
 import { isReadOnlyRpc, isReadRpc, isAlwaysAllowedRpc } from '../control/gate.js';
@@ -22,13 +22,15 @@ const PASSWORD = 'p'.repeat(32);
 
 // Оператор (набор + журнал), врач (ничего), лаборант (только журнал). Права —
 // явно: миграция 141 уже записала ролям свои значения, проверяем ровно то, что выдали.
-function seed({ ext = '108', line = true, enabled = 1 } = {}) {
+// assigned — номер, назначенный оператору в карточке сотрудника (по умолчанию — его же).
+function seed({ ext = '108', assigned = ext, line = true, enabled = 1 } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   setGrants(db, 'registrar', { 'crm.dial': 'edit', 'crm.calls': 'view' });
   setGrants(db, 'doctor', { 'crm.dial': 'none', 'crm.calls': 'none' });
   setGrants(db, 'lab', { 'crm.dial': 'none', 'crm.calls': 'view' });
-  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, pbx_extension) VALUES (1,'op','x','Оператор','registrar',?)").run(ext);
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, pbx_extension, pbx_extension_assigned) VALUES (1,'op','x','Оператор','registrar',?,?)")
+    .run(ext, assigned);
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (2,'doc','x','Врач','doctor')").run();
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, pbx_extension) VALUES (3,'lab','x','Лаборант','lab','109')").run();
   if (line) {
@@ -87,6 +89,47 @@ test('только свой номер: запрос не перенаправи
   const r = await telephonyWebrtcMe(db, { num: '999', extension: '999', user_id: 2, id: 2 }, OP, { pbxCallImpl: pbx.impl });
   assert.equal(r.extension, '108');
   assert.equal(pbx.calls[0].params.num, '108', 'станцию спросили про номер из запроса');
+});
+
+// РЕШЕНИЕ ВЛАДЕЛЬЦА («Only admin assigns»). Браузер получает пароль SIP номера —
+// а он работает в любой SIP-программе и после увольнения. Поэтому телефон Easy-Med
+// включается только на номере, который назначен в карточке сотрудника; «Моя
+// трубка» по-прежнему выбирает трубку для «Позвонить», но не для входа в АТС.
+test('номер, выбранный себе в «Моя трубка», а не назначенный, — 403, станцию не спрашивают (кража чужого номера)', async () => {
+  const db = seed();   // назначен 108
+  const pbx = fakePbx({ ok: true, data: [{ num: '107', enabled: true, webrtc: { host: 'pbx38631.onpbx.ru:8082', user: '107', password: 'q'.repeat(32) } }] });
+  telephonyMyExtension(db, { extension: '107' }, OP);   // «Моя трубка» — чужой номер 107
+  await assert.rejects(telephonyWebrtcMe(db, {}, OP, { pbxCallImpl: pbx.impl }),
+    refused(403, /администратор назначил вам в карточке сотрудника/));
+  assert.equal(pbx.calls.length, 0, 'станцию спросили о пароле номера, которого администратор не назначал');
+  assert.equal(db.prepare('SELECT pbx_extension_assigned FROM users WHERE id = 1').get().pbx_extension_assigned, '108',
+    '«Моя трубка» переписала назначенный номер');
+  // Вернулся на свой 108 — телефон работает.
+  telephonyMyExtension(db, { extension: '108' }, OP);
+  const ok = fakePbx(OK_108);
+  assert.equal((await telephonyWebrtcMe(db, {}, OP, { pbxCallImpl: ok.impl })).password, PASSWORD);
+  assert.equal(ok.calls[0].params.num, '108');
+});
+
+test('номер не назначен вовсе — 403, станцию не спрашивают', async () => {
+  const pbx = fakePbx(OK_108);
+  await assert.rejects(telephonyWebrtcMe(seed({ assigned: null }), {}, OP, { pbxCallImpl: pbx.impl }), refused(403, /администратор назначил/));
+  await assert.rejects(telephonyWebrtcMe(seed({ assigned: '  ' }), {}, OP, { pbxCallImpl: pbx.impl }), refused(403, /администратор назначил/));
+  assert.equal(pbx.calls.length, 0);
+  // Назначенный с пробелами по краям — тот же номер.
+  const ok = fakePbx(OK_108);
+  assert.equal((await telephonyWebrtcMe(seed({ assigned: ' 108 ' }), {}, OP, { pbxCallImpl: ok.impl })).extension, '108');
+});
+
+test('«кто я» говорит, на каком номере включается телефон Easy-Med', () => {
+  assert.equal(telephonyPhoneMe(seed(), {}, OP).softphone_extension, '108');
+  assert.equal(telephonyPhoneMe(seed({ assigned: null }), {}, OP).softphone_extension, '');
+  const db = seed({ ext: '107', assigned: '108' });
+  const me = telephonyPhoneMe(db, {}, OP);
+  assert.equal(me.extension, '107');
+  assert.equal(me.softphone_extension, '108', 'панель не узнает, почему телефон выключен');
+  // Журнал без набора видит «кто я» — номер для телефона ему ни к чему, но и не секрет.
+  assert.equal(typeof telephonyPhoneMe(db, {}, LAB).softphone_extension, 'string');
 });
 
 test('станция не дала webrtc номеру — 409 со словами, пароль не придуман', async () => {

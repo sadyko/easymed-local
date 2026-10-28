@@ -55,12 +55,16 @@ export function telephonyPhoneMe(db, _args, user) {
   const dial = mayDial(db, user);
   const log = mayLog(db, user);
   if (!dial && !log) throw new RpcError(DENY_WORKPLACE, 403);
-  const me = db.prepare('SELECT id, full_name, pbx_extension FROM users WHERE id = ?').get(user && user.id ? user.id : 0) || {};
+  const me = db.prepare('SELECT id, full_name, pbx_extension, pbx_extension_assigned FROM users WHERE id = ?').get(user && user.id ? user.id : 0) || {};
   const via = dialProvider(db);
   return {
     id: me.id ?? null,
     full_name: me.full_name || '',
     extension: me.pbx_extension || '',
+    // SOFTPHONE_V1 — номер, назначенный в карточке сотрудника: только на нём
+    // включается телефон Easy-Med. Панель по нему объясняет, почему выключатель
+    // не работает («Моя трубка» на другом номере или номер не назначен).
+    softphone_extension: String(me.pbx_extension_assigned || '').trim(),
     line: via ? via.kind : null,
     // Живые трубки из журнала — из них оператор выбирает свою, если станция молчит.
     seen_extensions: dial ? candidateExtensions(db, 12) : [],
@@ -88,6 +92,7 @@ const SP_NO_EXT = 'Сначала выберите свой внутренний
 const SP_ACTING = 'Принимать звонки от чужого имени нельзя — вернитесь к своей учётной записи.';
 const SP_NO_WEBRTC = 'АТС не дала этому внутреннему номеру вход из браузера — включите его в кабинете onlinePBX или выберите другой номер.';
 const SP_NO_LINE = 'Линия onlinePBX не подключена («Настройки → Телефония»).';
+const SP_NOT_ASSIGNED = 'Телефон Easy-Med включается только на внутреннем номере, который администратор назначил вам в карточке сотрудника.';
 
 // Адрес АТС для браузера — только *.onpbx.ru с портом или без: политика страницы
 // (CSP в app.js) пускает лишь wss://*.onpbx.ru:*, и другой адрес браузер молча не
@@ -109,6 +114,11 @@ function pbxUsers(data) {
  * Номер — из users.pbx_extension (не из запроса): чужой номер — чужие звонки.
  * Пароль не пишется ни в журнал, ни в базу: он только уходит владельцу номера.
  *
+ * И только номер, НАЗНАЧЕННЫЙ в карточке сотрудника (pbx_extension_assigned,
+ * миграция 259; решение владельца «Only admin assigns»): «Моя трубка» сотрудник
+ * выбирает сам, а пароль SIP работает в любой SIP-программе и после увольнения.
+ * Выбран не назначенный номер — отказ, и станцию о пароле не спрашивают.
+ *
  * Отказ станции — 400 словами клиники (dialMessage), как у «Позвонить»
  * (telephonyDial): маршрут RPC прячет всё, что 500 и выше, за «Ошибка сервера»,
  * и оператор не узнал бы, что дело в станции. Текст станции (comment) не
@@ -117,9 +127,10 @@ function pbxUsers(data) {
 export async function telephonyWebrtcMe(db, _args, user, { pbxCallImpl = pbxCall } = {}) {
   if (user && user.acting_admin) throw new RpcError(SP_ACTING, 403);
   if (!mayDial(db, user)) throw new RpcError(DENY_DIAL, 403);
-  const me = db.prepare('SELECT pbx_extension FROM users WHERE id = ?').get(user.id) || {};
+  const me = db.prepare('SELECT pbx_extension, pbx_extension_assigned FROM users WHERE id = ?').get(user.id) || {};
   const ext = String(me.pbx_extension || '').trim();
   if (!ext) throw new RpcError(SP_NO_EXT, 400);
+  if (ext !== String(me.pbx_extension_assigned || '').trim()) throw new RpcError(SP_NOT_ASSIGNED, 403);
   const line = (listProviders(db) || []).find((p) => p.enabled && p.kind === 'onlinepbx');
   if (!line) throw new RpcError(SP_NO_LINE, 400);
   const row = getProviderRow(db, line.id);
