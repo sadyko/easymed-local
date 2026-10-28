@@ -594,12 +594,14 @@ test('FIX_318_V1: заблокированная клиника получает
 
 test('FIX_318_V1: при заблокированной лицензии скрытые разделы остаются скрытыми (nav_visibility_get отвечает)', async (t) => {
   const { app, db, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
-  db.prepare("INSERT INTO nav_visibility (nav_id) VALUES ('inpatient'), ('kitchen')").run();
+  // Настоящие id пунктов меню (nav-visibility-logic.js NAV_IDS): «Стационар» — admissions,
+  // «Кухонный лист» — kitchen-sheet. Чужие id сервер при чтении отбрасывает (FIX_318_V1, B3).
+  db.prepare("INSERT INTO nav_visibility (nav_id) VALUES ('admissions'), ('kitchen-sheet')").run();
   const server = await listen(app); t.after(() => server.close());
   const cookie = await login(server, password);
   const res = await post(server, cookie, '/api/rpc/nav_visibility_get', {});
   assert.equal(res.status, 200, 'без ответа оболочка показывала бы все разделы');
-  assert.deepEqual((await res.json()).data.hidden, ['inpatient', 'kitchen']);
+  assert.deepEqual((await res.json()).data.hidden, ['admissions', 'kitchen-sheet']);
 });
 
 // Журнал входа от имени считает «чтением» и те RPC из ALWAYS_ALLOWED_RPCS,
