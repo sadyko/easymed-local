@@ -77,6 +77,47 @@ test('карточка сотрудника назначает номер: за�
   } finally { server.close(); }
 });
 
+// Поле номера в карточке — НАЗНАЧЕННЫЙ номер, и карточка шлёт его при каждом
+// сохранении (views/employees.js). Назначение — только когда его поменяли: иначе
+// сохранение ради телефона или ставок молча назначило бы номер, выбранный самим
+// сотрудником в «Моя трубка», — и сбросило бы ему этот выбор.
+test('сохранение карточки с прежним назначенным номером не трогает ни выбор сотрудника, ни назначение', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    db.prepare("UPDATE users SET pbx_extension = '107', pbx_extension_assigned = '108' WHERE id = ?").run(PLAIN);
+    const list = await call(base, boss, 'GET', '/api/users');
+    const plain = list.json.users.find((u) => u.id === PLAIN);
+    assert.equal(plain.pbx_extension_assigned, '108', 'карточке не из чего показать назначенный номер');
+    assert.equal(plain.pbx_extension, '107');
+    assert.equal(list.json.users.find((u) => u.id === REG).pbx_extension_assigned, '', 'не назначен — пустая строка');
+    // Тело — как у карточки: все поля, номер — назначенный, без изменений.
+    const card = { last_name: 'Plain', first_name: 'Nurse', middle_name: '', phone: '+998901112233', email: '', staff_type: 'mid_low',
+      scheduling_mode: 'schedulable', pbx_extension: plain.pbx_extension_assigned, department_id: null, specialty: '', doctor_category: '',
+      hire_date: '', specialties: [], license_number: '', license_expiry_date: '', branch_id: null, employment_type: '', salary_type: '',
+      salary_fixed: 0, salary_percent: 0, working_hours: '{}', service_rates: [], referral_rates: [], inpatient_rates: [],
+      inpatient_referral_pct: 0, inpatient_referral_fixed: 0, role: 'nurse', custom_role_code: '', extra_roles: [], is_active: true };
+    const saved = await call(base, boss, 'PATCH', '/api/users/' + PLAIN, card);
+    assert.equal(saved.status, 200, JSON.stringify(saved.json));
+    assert.deepEqual(cols(db, PLAIN), { pbx_extension: '107', pbx_extension_assigned: '108' },
+      'сохранение карточки назначило самовыбранный номер или сбросило выбор сотрудника');
+    assert.equal(db.prepare('SELECT phone FROM users WHERE id = ?').get(PLAIN).phone, '+998901112233', 'остальное сохранилось');
+    // Пробелы по краям — тот же номер.
+    assert.equal((await call(base, boss, 'PATCH', '/api/users/' + PLAIN, { pbx_extension: ' 108 ' })).status, 200);
+    assert.deepEqual(cols(db, PLAIN), { pbx_extension: '107', pbx_extension_assigned: '108' });
+    // Поменяли номер — назначение: обе колонки.
+    assert.equal((await call(base, boss, 'PATCH', '/api/users/' + PLAIN, { ...card, pbx_extension: '107' })).status, 200);
+    assert.deepEqual(cols(db, PLAIN), { pbx_extension: '107', pbx_extension_assigned: '107' });
+    // Стёрли — обе пусты.
+    assert.equal((await call(base, boss, 'PATCH', '/api/users/' + PLAIN, { ...card, pbx_extension: '' })).status, 200);
+    assert.deepEqual(cols(db, PLAIN), { pbx_extension: null, pbx_extension_assigned: null });
+    // Не назначен, а сотрудник выбрал себе 107: карточка с пустым полем ничего не стирает.
+    db.prepare("UPDATE users SET pbx_extension = '107' WHERE id = ?").run(PLAIN);
+    assert.equal((await call(base, boss, 'PATCH', '/api/users/' + PLAIN, { ...card, pbx_extension: '' })).status, 200);
+    assert.deepEqual(cols(db, PLAIN), { pbx_extension: '107', pbx_extension_assigned: null });
+  } finally { server.close(); }
+});
+
 test('назначенный номер нельзя прислать полем: ни администратору, ни кому-то ещё', async () => {
   const { db, server, base } = await startServer();
   try {
@@ -102,6 +143,11 @@ test('свою карточку не-администратор правит, н
     db.prepare("UPDATE users SET pbx_extension_assigned = '105' WHERE id = ?").run(HEAD);
     assert.equal((await call(base, head, 'PATCH', '/api/users/' + HEAD, { pbx_extension: '' })).status, 200);
     assert.deepEqual(cols(db, HEAD), { pbx_extension: null, pbx_extension_assigned: '105' });
+    // Своя карточка с прежним (назначенным) номером в поле — выбор в «Моя трубка» цел.
+    db.prepare("UPDATE users SET pbx_extension = '107' WHERE id = ?").run(HEAD);
+    assert.equal((await call(base, head, 'PATCH', '/api/users/' + HEAD, { pbx_extension: '105', phone: '+998905556677' })).status, 200);
+    assert.deepEqual(cols(db, HEAD), { pbx_extension: '107', pbx_extension_assigned: '105' },
+      'сохранение своей карточки сбросило выбор сотрудника на назначенный номер');
     // Чужая карточка — назначение, как у администратора.
     assert.equal((await call(base, head, 'PATCH', '/api/users/' + PLAIN, { pbx_extension: '110' })).status, 200);
     assert.deepEqual(cols(db, PLAIN), { pbx_extension: '110', pbx_extension_assigned: '110' });

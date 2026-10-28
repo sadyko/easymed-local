@@ -477,7 +477,10 @@ function openEditor(user, root) {
             ...employeeNameParts(user),
             phone: user.phone || '', email: user.email || '',
             staff_type: user.staff_type || (user.is_doctor ? 'doctor' : ''), scheduling_mode: user.scheduling_mode || 'schedulable',
-            pbx_extension: user.pbx_extension || '',   // CALL_FROM_CRM_V1
+            // CALL_FROM_CRM_V1 → SOFTPHONE_V1: поле — НАЗНАЧЕННЫЙ номер (на нём включается
+            // телефон Easy-Med); сервер назначает, только если его поменяли
+            // (routes/users.js assignExtension). Сервер до 259 поля не знает — тогда номер.
+            pbx_extension: user.pbx_extension_assigned !== undefined ? (user.pbx_extension_assigned || '') : (user.pbx_extension || ''),
             department_id: user.department_id != null ? String(user.department_id) : '',
             is_doctor: !!user.is_doctor, specialty: user.specialty || '', doctor_category: user.doctor_category || '', hire_date: user.hire_date || '',
             // MULTI_SPECIALTY_V1 — the list from the server (primary first); an old record has only the column
@@ -508,6 +511,10 @@ function openEditor(user, root) {
         } : {}),
     };
     if (!emp.public_profile) emp.public_profile = {};
+    // SOFTPHONE_V1 — номер, который сотрудник выбрал себе сам в «Моя трубка»: если
+    // он не назначенный, под полем — пометка (телефон Easy-Med на нём не включится).
+    const ownExtension = user ? String(user.pbx_extension || '').trim() : '';
+    const selfPickedOther = !!ownExtension && ownExtension !== String(emp.pbx_extension || '').trim();
     const profilePatch = {};
     let paneRepaint = null;   // DOCTOR_PROFILE_V1 — перерисовка заполненности «Публичного профиля» (задача 14)
     // CLINIC_API_FIX_V1 — профиль, с которым карточка открылась. В PATCH уходят
@@ -853,6 +860,9 @@ function openEditor(user, root) {
                 // SOFTPHONE_V1 — номер из карточки и есть назначенный: только на нём
                 // телефон Easy-Med входит в АТС (routes/users.js assignExtension).
                 hint('На этом номере сотрудник сможет принимать звонки прямо в Easy-Med.'),
+                // SOFTPHONE_V1 — выбор «Моя трубка» не назначенный: сохранение карточки
+                // его не назначит. Пустой ветки нет — append() написал бы «null» (NULL_IN_APPEND_V1).
+                ...(selfPickedOther ? [hint(trf('Сотрудник сам выбрал в «Моя трубка» номер {n} — телефон Easy-Med на нём не включится. Чтобы назначить его, впишите его здесь и сохраните.', { n: ownExtension }))] : []),
                 hint('Пациент в любом случае видит номер клиники: что он увидит, решает сама АТС, а не это поле.'));
         } else if (active === 'job') {
             body.append(head('Должность', 'Роль, отдел и должность в клинике.'), statusBox,   // EMPLOYEE_CARD_SAVE_V1

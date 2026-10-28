@@ -413,6 +413,8 @@ export function employeeView(u) {
     salary_fixed: u.salary_fixed, salary_percent: u.salary_percent,
     staff_type: u.staff_type, scheduling_mode: u.scheduling_mode, branch_id: u.branch_id,
     pbx_extension: u.pbx_extension || '',   // CALL_FROM_CRM_V1 — внутренний номер на АТС
+    // SOFTPHONE_V1 (мигр. 259) — назначенный номер: поле карточки; на нём включается телефон Easy-Med.
+    pbx_extension_assigned: u.pbx_extension_assigned || '',
     public_profile: publicProfileOf(u),     // DOCTOR_PUBLIC_PROFILE_V1
     // DOCTOR_PROFILE_V1 (мигр. 243) — показ на сайте и у партнёров, срок записи, счётчик очереди.
     is_public: Number(u.is_public) === 1,
@@ -601,8 +603,20 @@ function stripMoney(view) {
 // есть его. От имени сотрудника req.user — сотрудник, и правило то же, что у
 // него самого. Само поле pbx_extension_assigned из запроса не читается никогда
 // (parseEmployeeFields его не знает); пустой номер стирает и назначение.
-function assignExtension(ef, mayAssign) {
-  if (mayAssign && ef.pbx_extension !== undefined) ef.pbx_extension_assigned = ef.pbx_extension;
+//
+// ПОЛЕ КАРТОЧКИ — НАЗНАЧЕННЫЙ НОМЕР, и карточка шлёт его при каждом сохранении.
+// Поэтому при правке (row — строка до правки) номер, равный назначенному, — это
+// «поле не трогали»: ни назначения, ни выбора сотрудника в «Моя трубка» такое
+// сохранение не меняет (иначе правка телефона или ставок молча назначила бы
+// самовыбранный номер или сбросила бы выбор). Другой номер — назначение (обе
+// колонки); у того, кто назначать не вправе, — только pbx_extension, как раньше.
+function assignExtension(ef, mayAssign, row = null) {
+  if (ef.pbx_extension === undefined) return ef;
+  if (row && (ef.pbx_extension || '') === String(row.pbx_extension_assigned || '').trim()) {
+    delete ef.pbx_extension;
+    return ef;
+  }
+  if (mayAssign) ef.pbx_extension_assigned = ef.pbx_extension;
   return ef;
 }
 
@@ -802,7 +816,7 @@ export function userRoutes(db) {
     const parsed = parseEmployeeFields(req.body, db, user.role, user.id);   // CLINIC_API_FIX_V1 — фото только из папки этого сотрудника
     if (!parsed.ok) return bad(res, parsed.message, parsed.field);   // DOCTOR_PROFILE_V1 — с полем отказа
     // SOFTPHONE_V1 — своя карточка не-администратора номер для телефона не назначает.
-    const ef = assignExtension(parsed.fields, isAdminUser(req.user) || user.id !== req.user.id);
+    const ef = assignExtension(parsed.fields, isAdminUser(req.user) || user.id !== req.user.id, user);
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
     if (specs.list) ef.specialty = primarySpecialtyName(specs.list);   // CLINIC_API_FIX_V1 — как основная строка
