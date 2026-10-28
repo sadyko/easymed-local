@@ -299,3 +299,115 @@ test('broadcastOptions — врачи, категории, филиалы, ти�
   assert.throws(() => telegramBroadcastOptions(db, {}, { id: 2, role: 'registrar' }), (e) => e.status === 403);
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// FIX_318_V1 (M4) — ревью 3.18.0, повтор R5: отменённый и неявочный визит
+// считались приходом («Приходил с», врач, услуга, тип, филиал) и мешали «Не
+// приходил с»; даты сравнивались в UTC против местных, и визит в день «по»
+// выпадал. Визит «пришёл» в 06:00Z — это 11:00 по Ташкенту того же дня.
+// ---------------------------------------------------------------------------
+import { startBroadcast, clearAudienceCache, AUDIENCE_CACHE_MS } from './broadcast.js';
+import { telegramBroadcastPreview } from '../rpc/telegram.js';
+
+test('M4: отменённый и «не пришёл» — не приход ни для одного фильтра визитов и не мешают «Не приходил с»', () => {
+  const { db, a } = seedDetailed();
+  db.prepare('DELETE FROM visit_services').run();
+  db.prepare('DELETE FROM visits').run();
+  const v = db.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, branch_id, status) VALUES (?, '2026-08-10T06:00:00Z', 7, 2, ?)");
+  const c = v.run(a, 'cancelled').lastInsertRowid;
+  const n = v.run(a, 'no_show').lastInsertRowid;
+  db.prepare('INSERT INTO visit_services (visit_id, service_id) VALUES (?, 501), (?, 501)').run(c, n);
+  db.prepare('UPDATE patients SET branch_id = 1 WHERE id = ?').run(a);
+  assert.deepEqual(chats(db, { visited_from: '2026-08-01', visited_to: '2026-08-20' }), [], '«Приходил с»: отменённый — не приход');
+  assert.deepEqual(chats(db, { doctor_id: 7 }), []);
+  assert.deepEqual(chats(db, { service_id: 501 }), []);
+  assert.deepEqual(chats(db, { service_type_id: 2 }), []);
+  assert.deepEqual(chats(db, { branch_id: 2 }), ['200'], 'филиал 2 — только b, заведённый там; отменённый визит a в филиале 2 не в счёт');
+  assert.deepEqual(chats(db, { not_visited_since: '2026-08-01' }), ['100', '200'], 'отменённый визит не мешает «Не приходил с»');
+  db.close();
+});
+
+test('M4: визит в день «по» входит — сравнение по местному дню визита (localDate), а не по строке UTC', () => {
+  const { db, a } = seed();
+  db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, '2026-08-31T06:00:00Z', 'arrived')").run(a);
+  assert.deepEqual(resolveAudience(db, { visited_from: '2026-08-01', visited_to: '2026-08-31' }).map((x) => x.link.chat_id), ['100']);
+  assert.deepEqual(resolveAudience(db, { visited_from: '2026-08-31', visited_to: '2026-08-31' }).map((x) => x.link.chat_id), ['100'], 'один день');
+  assert.deepEqual(resolveAudience(db, { not_visited_since: '2026-08-31' }).map((x) => x.link.chat_id), ['200'], '«Не приходил с» в тот же день — приходил');
+  db.close();
+});
+
+// ---------------------------------------------------------------------------
+// FIX_318_V1 (H2) — живой счётчик морозил сервер: на каждую связку — полный
+// проход картотеки LIKE '%9%9%…'. Теперь номер → карты строится ОДНИМ проходом,
+// фильтры — одним запросом с параметрами. Правило «тот же номер» — прежнее
+// (findPatientsByPhone): цифры карты содержат местные цифры номера связки,
+// активные карты первыми, не больше 20 на номер.
+// ---------------------------------------------------------------------------
+import { findPatientsByPhone } from './documents.js';
+
+test('H2: отбор совпадает с прежним правилом findPatientsByPhone — семья на номере, архивная карта, два номера в поле, разные написания', () => {
+  const { db, a, b } = seed();
+  const pat = db.prepare('INSERT INTO patients (full_name, phone, active) VALUES (?,?,?)');
+  const kid = pat.run('Алиев Ребёнок', '998901112233', 1).lastInsertRowid;           // тот же номер, другое написание
+  const old = pat.run('Алиев Архив', '+998 (90) 111-22-33', 0).lastInsertRowid;        // архивная карта — тоже видна, последней
+  const two = pat.run('Два Номера', '+998 91 444 55 66, +998 93 000 00 01', 1).lastInsertRowid;
+  pat.run('Чужой', '+998 90 111 22 34', 1);                                             // отличается последней цифрой
+  db.prepare("INSERT INTO telegram_links (chat_id, phone, tg_name) VALUES ('500', '901112233', 'без кода')").run();
+  db.prepare("INSERT INTO telegram_links (chat_id, phone, tg_name) VALUES ('600', '123', 'короткий')").run();
+  const aud = resolveAudience(db, {});
+  const byChat = Object.fromEntries(aud.map((x) => [x.link.chat_id, x.patients.map((p) => Number(p.id))]));
+  for (const l of db.prepare('SELECT * FROM telegram_links WHERE revoked_at IS NULL AND blocked_at IS NULL').all()) {
+    const want = findPatientsByPhone(db, l.phone).map((p) => Number(p.id));
+    assert.deepEqual(byChat[l.chat_id] || [], want, 'чат ' + l.chat_id + ' — то же, что findPatientsByPhone');
+  }
+  assert.deepEqual(byChat['100'], [Number(kid), Number(a), Number(old)], 'активные первыми (новые выше), архивная — последней');
+  assert.deepEqual(byChat['200'], [Number(two), Number(b)]);
+  assert.equal(byChat['600'], undefined, 'короткий номер никого не находит');
+  assert.equal(botStats(db).cards_reachable, 5, 'статистика бота — тем же отбором');
+  db.close();
+});
+
+test('H2: 15 000 карт и 1 500 чатов — отбор с фильтром быстрее полутора секунд (прежде — секунды на каждый вызов)', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const ph = (i) => '+99890' + String(1000000 + i).slice(-7);
+  const insP = db.prepare('INSERT INTO patients (full_name, phone, gender) VALUES (?, ?, ?)');
+  const insV = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, '2026-08-10T06:00:00Z', 'arrived')");
+  db.transaction(() => { for (let i = 0; i < 15000; i++) insV.run(insP.run('P' + i, ph(i), i % 2 ? 'male' : 'female').lastInsertRowid); })();
+  const insL = db.prepare('INSERT INTO telegram_links (chat_id, phone, tg_name) VALUES (?, ?, ?)');
+  db.transaction(() => { for (let i = 0; i < 1500; i++) insL.run(String(1000 + i), ph(i * 7 % 15000).replace('+', ''), 'x'); })();
+  const t0 = Date.now();
+  const all = previewAudience(db, {});
+  const women = previewAudience(db, { gender: 'female', visited_from: '2026-08-01', visited_to: '2026-08-31' });
+  const ms = Date.now() - t0;
+  assert.equal(all.count, 1500);
+  assert.equal(women.count, 1500 - [...Array(1500).keys()].filter((i) => ((i * 7) % 15000) % 2).length);
+  assert.ok(ms < 1500, `два предпросмотра заняли ${ms} мс`);
+  db.close();
+});
+
+test('H2: предпросмотр с cache — повтор в пределах окна не считает заново; fresh — считает; RPC: живой счётчик — из кэша, перед отправкой — fresh', () => {
+  const { db } = seed();
+  clearAudienceCache(db);
+  assert.ok(AUDIENCE_CACHE_MS > 0 && AUDIENCE_CACHE_MS <= 15000, 'кэш — коротко');
+  assert.equal(previewAudience(db, {}, 8, { cache: true }).count, 2);
+  db.prepare("INSERT INTO patients (full_name, phone) VALUES ('Новый', '+998 94 000 00 02')").run();
+  db.prepare("INSERT INTO telegram_links (chat_id, phone, tg_name) VALUES ('700', '998940000002', 'Новый')").run();
+  assert.equal(previewAudience(db, {}, 8, { cache: true }).count, 2, 'в окне кэша — прежнее число');
+  assert.equal(telegramBroadcastPreview(db, { filters: {} }, admin).count, 2, 'живой счётчик экрана — из кэша');
+  assert.equal(telegramBroadcastPreview(db, { filters: {}, fresh: true }, admin).count, 3, 'перед отправкой экран просит свежее число');
+  assert.equal(previewAudience(db, {}).count, 3, 'без cache — всегда заново');
+  assert.equal(resolveAudience(db, {}).length, 3, 'отбор для отправки кэша не знает');
+  db.close();
+});
+
+test('H2: startBroadcast берёт уже посчитанную аудиторию, а не считает её второй раз', async () => {
+  const { db } = seed();
+  const audience = resolveAudience(db, {}).filter((x) => x.link.chat_id === '200');
+  const { deps } = harness();
+  const r = startBroadcast(db, 'tok', { textRu: 'Привет', filters: {}, audience }, deps);
+  assert.equal(r.audience_count, 1);
+  assert.deepEqual(db.prepare('SELECT chat_id FROM telegram_broadcast_targets WHERE broadcast_id = ?').all(r.id).map((t) => t.chat_id), ['200']);
+  await new Promise((res) => setTimeout(res, 120));   // фоновая отправка одному адресату
+  db.close();
+});

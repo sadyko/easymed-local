@@ -17,7 +17,7 @@ import { setupBot } from '../telegram/setup.js';   // TELEGRAM_BOT_SETUP_V1
 import { wakeTelegramBot } from '../telegram/index.js';
 import { findPatientsByPhone, digitsOf } from '../telegram/documents.js';
 import { uzLocalDigits, MIN_PHONE_DIGITS } from '../../../public/js/admin/views/crm-phone-match.js';   // TELEGRAM_PATIENT_BADGE_V1
-import { botStats, previewAudience, startBroadcast, broadcastStatus, broadcastHistory, broadcastOptions } from '../telegram/broadcast.js';   // TG_BROADCAST_FILTERS_V1 — broadcastOptions
+import { botStats, previewAudience, startBroadcast, broadcastStatus, broadcastHistory, broadcastOptions, resolveAudience } from '../telegram/broadcast.js';   // TG_BROADCAST_FILTERS_V1 — broadcastOptions; FIX_318_V1 (H2) — resolveAudience
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -319,9 +319,13 @@ export function telegramStats(db, _args, user) {
   return botStats(db);
 }
 
+// FIX_318_V1 (H2) — живой счётчик окна рассылки — из короткого кэша
+// (broadcast.js AUDIENCE_CACHE_MS); fresh: true — число, которое администратор
+// сейчас подтвердит перед отправкой, считается заново.
 export function telegramBroadcastPreview(db, args, user) {
   requireReach(db, user);
-  return previewAudience(db, (args && args.filters) || {});
+  const a = args || {};
+  return previewAudience(db, a.filters || {}, 8, { cache: a.fresh !== true });
 }
 
 // TG_BROADCAST_FILTERS_V1 — справочники для подробных фильтров окна рассылки.
@@ -342,7 +346,10 @@ export function telegramBroadcastSend(db, args, user) {
   if (textRu.length > 3500) throw new RpcError('Сообщение длиннее 3500 символов — Telegram его не примет.', 400);
 
   const filters = a.filters || {};
-  const actual = previewAudience(db, filters).count;
+  // FIX_318_V1 (H2) — отбор считается ОДИН раз: им сверяется подтверждённое
+  // число, и его же получает startBroadcast (прежде — два полных расчёта).
+  const audience = resolveAudience(db, filters);
+  const actual = audience.length;
   if (!actual) throw new RpcError('Под эти условия не подходит ни один подключённый пациент.', 400);
 
   // Число, которое подтвердил администратор, должно совпасть с текущим. Если
@@ -370,6 +377,7 @@ export function telegramBroadcastSend(db, args, user) {
       textRu, textUz: String(a.text_uz || ''), filters,
       userId: user && user.id ? user.id : null,
       imagePath,
+      audience,   // FIX_318_V1 (H2)
     });
   } catch (e) {
     // Пропавшая картинка — это ошибка администратора, а не сбой сервера:

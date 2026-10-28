@@ -1,8 +1,10 @@
 // TG_BROADCAST_FILTERS_V1 — окно «Сообщение пациентам» в поддельном DOM:
 //   * две колонки: слева сообщение и картинка, справа «Кому» и «Получатели»;
 //   * выпадающие списки заполняются справочниками telegram_broadcast_options;
-//   * число получателей считается сразу при открытии и пересчитывается при
-//     любом изменении фильтра — с полным набором фильтров в запросе;
+//   * FIX_318_V1 (H2) — число получателей НЕ считается при открытии (этот
+//     расчёт морозил сервер), а после изменения фильтра (с задержкой, одним
+//     запросом с полным набором фильтров) или по кнопке; перед отправкой —
+//     свежее число (fresh: true), мимо кэша сервера;
 //   * «Сбросить фильтры» очищает всё и пересчитывает без условий.
 //
 // Fake-DOM harness — copied from __tests__/meta-settings-view.test.mjs.
@@ -90,7 +92,7 @@ globalThis.fetch = async (url, opts) => {
 
 const { openBroadcastModal } = await import('../views/telegram-report.js');
 
-test('окно открывается в две колонки, справочники заполняют списки, получатели считаются сразу', async () => {
+test('окно открывается в две колонки, справочники заполняют списки; получатели при открытии не считаются', async () => {
   calls.length = 0;
   const overlay = openBroadcastModal({});
   await tick(DEBOUNCE_SETTLE_MS);
@@ -105,10 +107,39 @@ test('окно открывается в две колонки, справочн
   assert.ok(calls.some((c) => c.name === 'telegram_broadcast_options'), 'справочники запрошены');
   const doctorSel = byAttr(overlay, 'data-bc-filter', 'doctor_id')[0];
   assert.ok(doctorSel.children.some((o) => o.attrs.value === '7' && textOf(o).includes('Врач Один')), 'врач в списке');
+  assert.ok(!calls.some((c) => c.name === 'telegram_broadcast_preview'), 'FIX_318_V1 (H2): при открытии сервер не считает получателей');
+  assert.ok(sideText.includes('Число получателей появится, когда вы измените фильтр или нажмёте «Показать получателей».'), sideText.slice(-200));
+  // По кнопке — сразу, без условий.
+  const btn = walk(overlay).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Показать получателей'));
+  btn.click();
+  await tick(60);
   const first = calls.find((c) => c.name === 'telegram_broadcast_preview');
-  assert.ok(first, 'получатели посчитаны при открытии');
+  assert.ok(first, 'по кнопке посчитано');
   assert.deepStrictEqual(first.body.filters, {}, 'без условий');
-  assert.ok(sideText.includes('Получателей: 3'), sideText.slice(-200));
+  assert.ok(!first.body.fresh, 'кнопка предпросмотра может взять число из кэша сервера');
+  assert.ok(textOf(byClass(overlay, 'tg-bc-side')[0]).includes('Получателей: 3'));
+  overlay.remove();
+});
+
+test('FIX_318_V1 (H2): «Отправить» сверяет свежее число (fresh: true) и отправляет с подтверждённым числом', async () => {
+  calls.length = 0;
+  const overlay = openBroadcastModal({});
+  await tick(DEBOUNCE_SETTLE_MS);
+  const ru = walk(overlay).find((n) => n.tagName === 'TEXTAREA');
+  ru.value = 'Клиника работает до 18:00';
+  const prevPrompt = globalThis.prompt;
+  globalThis.prompt = () => '3';
+  try {
+    const send = walk(overlay).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Отправить'));
+    send.click();
+    await tick(80);
+  } finally { globalThis.prompt = prevPrompt; }
+  const previews = calls.filter((c) => c.name === 'telegram_broadcast_preview');
+  assert.equal(previews.length, 1);
+  assert.equal(previews[0].body.fresh, true, 'перед отправкой — мимо кэша');
+  const sent = calls.find((c) => c.name === 'telegram_broadcast_send');
+  assert.ok(sent, 'отправка ушла');
+  assert.equal(sent.body.confirm_count, 3);
   overlay.remove();
 });
 
@@ -141,6 +172,7 @@ test('изменение фильтров пересчитывает получ�
   const after = calls.filter((c) => c.name === 'telegram_broadcast_preview');
   assert.equal(after.length, 2);
   assert.deepStrictEqual(after[1].body.filters, {});
+  assert.ok(!after[0].body.fresh && !after[1].body.fresh, 'живой счётчик — из кэша сервера');
   assert.equal(unpaid.checked, false);
   overlay.remove();
 });
