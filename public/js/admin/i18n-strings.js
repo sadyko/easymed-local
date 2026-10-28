@@ -12487,6 +12487,8 @@ export const STRINGS = {
   // /NAV_VISIBILITY_V1
   // FIX_318_V1 — меню, видимость разделов, плитки «Настроек» (группа B ревью 3.18.0)
   "Скрыть можно только раздел бокового меню; «Настройки» и их страницы скрыть нельзя.": {"en":"Only a side-menu section can be hidden; “Settings” and its pages cannot be hidden.","ru":"Скрыть можно только раздел бокового меню; «Настройки» и их страницы скрыть нельзя.","uz":"Faqat yon menyu bo‘limini yashirish mumkin; «Sozlamalar» va uning sahifalarini yashirib bo‘lmaydi."},
+  "Вместе с разделом скроются и экраны внутри него: {list}. Ссылки на них из других разделов будут открывать «Раздел скрыт».": {"en":"The screens inside this section will be hidden with it: {list}. Links to them from other sections will open “Section hidden”.","ru":"Вместе с разделом скроются и экраны внутри него: {list}. Ссылки на них из других разделов будут открывать «Раздел скрыт».","uz":"Bo‘lim bilan birga uning ichidagi ekranlar ham yashiriladi: {list}. Boshqa bo‘limlardagi ularga havolalar «Bo‘lim yashirilgan» sahifasini ochadi."},
+  "Приём пациента": {"en":"Patient visit","ru":"Приём пациента","uz":"Bemorni qabul qilish"},
   // /FIX_318_V1
   // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в документе кабинета врача (views/service-workspace.js _blankWireTables)
   "Размер таблицы": {"en":"Table size","ru":"Размер таблицы","uz":"Jadval o‘lchami"},   // DOC_RICH_FORMAT_V1

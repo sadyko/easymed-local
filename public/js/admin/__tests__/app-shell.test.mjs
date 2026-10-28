@@ -1083,6 +1083,37 @@ test('FIX_318_V1: скрыли «Дашборд», стоя на нём, — а�
     }
 });
 
+// ===========================================================================
+// 14. FIX_318_V1 (B4) — СКРЫТЫЕ «ПАЦИЕНТЫ» ПРЯЧУТ СВОИ ЭКРАНЫ, НО НЕ «ОЧЕРЕДЬ».
+//
+// «Очередь» в меню — вкладка «Пациентов» (foldsInto), и пункт рисовался, только
+// если «Пациентов» в меню нет по ПРАВАМ. Скрытые «Пациенты» уносили из меню и
+// «Очередь», хотя её никто не скрывал. А экрану видимости оболочка теперь
+// называет, что ещё уйдёт вместе с разделом (PARENT_OF).
+// ===========================================================================
+test('FIX_318_V1: «Пациенты» скрыты — «Очередь» остаётся в меню; оболочка называет подэкраны раздела', async () => {
+    await perms_setFull();
+    assert.deepEqual([...shell().subViewsOf('patients')].sort(), ['appointments', 'docs-archive', 'patient-card', 'registration'],
+        'подэкраны «Пациентов» не те, что прячет PARENT_OF');
+    assert.deepEqual(shell().subViewsOf('settings'), [], '«Настройки» не скрываются — и подэкранов для предупреждения у них нет');
+    assert.equal(shell().subViewsOf('admissions').includes('beds'), false, 'старый адрес-пересылка назван экраном');
+    try {
+        shell().setNavHidden(['patients']);
+        await settle(60);
+        await go('labs');
+        assert.equal(navItemFor('Пациенты'), undefined);
+        assert.ok(navItemFor('Очередь'), '«Очередь» пропала из меню вместе со скрытыми «Пациентами»');
+        await go('queue');
+        assert.equal(shell().state.view, 'queue');
+        assert.ok(!labelOf(shownPane()).includes('Раздел скрыт'), 'сама «Очередь» не скрыта');
+    } finally {
+        shell().setNavHidden([]);
+        await settle(40);
+    }
+    await go('patients');
+    assert.equal(navItemFor('Очередь'), undefined, 'вернули «Пациентов» — дубль «Очереди» в меню');
+});
+
 test('глушим таймеры экранов, чтобы прогон завершался', () => {
     for (const id of appIntervals) clearInterval(id);
     appIntervals.clear();

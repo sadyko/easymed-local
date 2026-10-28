@@ -22,6 +22,31 @@ async function rpc(name, args = {}) {
 }
 const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 
+// FIX_318_V1 (B4) — подэкраны раздела знает оболочка (window.easymed.subViewsOf —
+// из её PARENT_OF), подписи — здесь. Названия: у кого есть своё имя в меню
+// (sidebar.nav.*: «Регистратура», «Документы», «Лист назначений»…), то и берём;
+// у трёх экранов своего имени нет — для них подпись ниже; остальным — заголовок
+// раздела оболочки (лист CRUMBS, переведён — app-shell.test.mjs это стережёт).
+const SUB_LABEL = {
+    'patient-card': 'Карта пациента',
+    registration: 'Регистрация пациента',
+    'service-workspace': 'Приём пациента',
+    'case-file': 'История болезни',
+};
+function subViewsOf(id) {
+    const fn = typeof window !== 'undefined' && window.easymed && window.easymed.subViewsOf;
+    const list = typeof fn === 'function' ? fn(id) : [];
+    return Array.isArray(list) ? list : [];
+}
+function subViewLabel(id) {
+    if (SUB_LABEL[id]) return tr(SUB_LABEL[id]);
+    const key = 'sidebar.nav.' + id;
+    const own = t(key, null);
+    if (own && own !== key) return own;
+    const titleFor = typeof window !== 'undefined' && window.easymed && window.easymed.sectionTitleFor;
+    return tr(typeof titleFor === 'function' ? titleFor(id, null) : id);
+}
+
 export async function renderNavVisibility(container, ctx = {}) {
     clear(container);
     const root = h('div', { class: 'fade-in navvis' });
@@ -55,13 +80,15 @@ export async function renderNavVisibility(container, ctx = {}) {
                 const locked = !canHide(it.id);
                 const hidden = state.hidden.includes(it.id);
                 const cb = h('input', { type: 'checkbox', checked: locked || !hidden, disabled: locked, 'data-nav-toggle': it.id,
-                    onchange: () => { state.hidden = withHidden(state.hidden, it.id, !cb.checked); paintRowTag(row, it.id); paintFoot(); } });
+                    onchange: () => { state.hidden = withHidden(state.hidden, it.id, !cb.checked); paintRowTag(row, it.id); paintRowWarn(row, it.id); paintFoot(); } });
                 const row = h('div', { class: 'navvis-row', 'data-nav-row': it.id },
                     h('div', { class: 'navvis-row-main' },
                         checkField(t('sidebar.nav.' + it.id, it.label), cb),
                         it.foldsInto ? h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 0 26px' } },
-                            'У большинства ролей этот пункт — вкладка внутри другого раздела, отдельной строки в меню у них нет.') : null),
+                            'У большинства ролей этот пункт — вкладка внутри другого раздела, отдельной строки в меню у них нет.') : null,
+                        h('div', { class: 'navvis-row-warn' })),
                     h('div', { class: 'navvis-row-tag' }, locked ? Tag(tr('всегда'), { kind: 'ok' }) : (hidden ? Tag(tr('скрыт'), { kind: 'warn' }) : null)));
+                paintRowWarn(row, it.id);
                 return row;
             });
             body.appendChild(h('div', { class: 'card', style: { marginBottom: '14px' } },
@@ -77,6 +104,21 @@ export async function renderNavVisibility(container, ctx = {}) {
         if (!slot) return;
         clear(slot);
         if (state.hidden.includes(id)) slot.appendChild(Tag(tr('скрыт'), { kind: 'warn' }));
+    }
+
+    // FIX_318_V1 (B4) — снятый раздел уносит и экраны внутри себя (PARENT_OF
+    // оболочки): скрытые «Пациенты» — карту пациента, регистрацию,
+    // «Регистратуру», архив документов, и ссылки на них из CRM и блока «Звонит»
+    // открывают «Раздел скрыт». Говорим это у самой галочки, до сохранения.
+    function paintRowWarn(row, id) {
+        const slot = row.querySelector ? row.querySelector('.navvis-row-warn') : null;
+        if (!slot) return;
+        clear(slot);
+        if (!state.hidden.includes(id)) return;
+        const labels = [...new Set(subViewsOf(id).map(subViewLabel))];
+        if (!labels.length) return;
+        slot.appendChild(h('div', { 'data-nav-warn': id, role: 'note', style: { fontSize: '12.5px', margin: '2px 0 6px 26px', color: 'var(--warn-800)' } },
+            trf('Вместе с разделом скроются и экраны внутри него: {list}. Ссылки на них из других разделов будут открывать «Раздел скрыт».', { list: labels.join(', ') })));
     }
 
     function paintFoot() {

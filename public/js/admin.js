@@ -816,6 +816,17 @@ export function parentViewOf(view) {
     return PARENT_OF[view] || (String(view).startsWith('settings:') ? 'settings' : null);
 }
 
+// FIX_318_V1 (B4) — экраны, которые скрываются ВМЕСТЕ с пунктом меню (isHiddenView
+// прячет подэкран по родителю из PARENT_OF). Экран «Видимость разделов» называет
+// их до сохранения: скрытые «Пациенты» уносят карту пациента, регистрацию,
+// «Регистратуру» и архив документов, и ссылки на них из CRM и «Звонит» ведут в
+// «Раздел скрыт». Адреса-пересылки (LEGACY_ROUTES) своих экранов не имеют и не
+// называются; у «Настроек» подэкранов для предупреждения нет — они не скрываются.
+function subViewsOf(id) {
+    if (!id || id === 'settings') return [];
+    return Object.keys(PARENT_OF).filter((v) => PARENT_OF[v] === id && !LEGACY_ROUTES[v]);
+}
+
 // CLINIC_PROFILE_V1 / REFERENCE_LISTS_V1 (полировка по макету, 2026-10-10) —
 // ПУНКТ «НАСТРОЙКИ» ВЫДЕЛЕН, ПОКА ОТКРЫТ ЛЮБОЙ ИХ ПОДЭКРАН.
 //
@@ -1555,7 +1566,10 @@ function renderSidebar() {
         if (navHidden.has(item.id)) continue;   // NAV_VISIBILITY_V1 — скрыто для всей клиники
         // QUEUE_ONE_ENTRY_V1 — пункт, который для этой роли уже есть вкладкой
         // внутри другого раздела, вторым входом не рисуется.
-        if (item.foldsInto && isModuleAllowed(item.foldsInto)) continue;
+        // FIX_318_V1 (B4) — если этот раздел скрыт для клиники, вкладки внутри
+        // него не видно, и пункт остаётся единственным входом: «Очередь» не
+        // уходит из меню вместе со скрытыми «Пациентами».
+        if (item.foldsInto && isModuleAllowed(item.foldsInto) && !navHidden.has(item.foldsInto)) continue;
         if (currentNav && !currentNavHasItems) {
             if (currentHeaderEl) sidebarEl.appendChild(currentHeaderEl);
             sidebarEl.appendChild(currentNav);
@@ -3204,7 +3218,8 @@ function startApp({ fresh = false } = {}) {
     // и нужен.
     // isNavHidden — FIX_318_V1: «скрыт ли экран» для сводки прав (role-reach.js
     // landingScreen) и плиток «Настроек», тем же правилом, что у меню.
-    window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading, setNavHidden, isNavHidden: navHiddenFor };   // setNavHidden — NAV_VISIBILITY_V1
+    // subViewsOf — FIX_318_V1 (B4): что скроется вместе с пунктом меню.
+    window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading, setNavHidden, isNavHidden: navHiddenFor, subViewsOf };   // setNavHidden — NAV_VISIBILITY_V1
     watchSectionHeadings();   // ONE_NAME_PER_SCREEN_V1
     startUiEnhance();         // UI_ENHANCE_V1 — списки и календари в виде программы
     paintUserCard();
