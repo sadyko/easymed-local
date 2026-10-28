@@ -65,6 +65,9 @@ export function telephonyPhoneMe(db, _args, user) {
     // включается телефон Easy-Med. Панель по нему объясняет, почему выключатель
     // не работает («Моя трубка» на другом номере или номер не назначен).
     softphone_extension: String(me.pbx_extension_assigned || '').trim(),
+    // SOFTPHONE_V1 (M1) — телефон Easy-Med входит только в onlinePBX: у клиники на
+    // Binotel или «Моих Звонках» выключателя нет вовсе. Та же линия, что у входа.
+    softphone_available: !!onlinePbxLine(db),
     line: via ? via.kind : null,
     // Живые трубки из журнала — из них оператор выбирает свою, если станция молчит.
     seen_extensions: dial ? candidateExtensions(db, 12) : [],
@@ -109,6 +112,61 @@ function pbxUsers(data) {
   return Object.values(data);
 }
 
+// Включённая линия onlinePBX — одна на вход телефона Easy-Med, «кто я» и трубки станции.
+function onlinePbxLine(db) {
+  return (listProviders(db) || []).find((p) => p.enabled && p.kind === 'onlinepbx') || null;
+}
+
+// SOFTPHONE_V1 (M10) — «выключен» станция пишет по-разному: 0, «0», false, «false».
+const PBX_OFF = new Set(['0', 'false']);
+const pbxUserOff = (u) => u.enabled === false || u.enabled === 0 || PBX_OFF.has(String(u.enabled).trim().toLowerCase());
+
+// SOFTPHONE_V1 (I1) — временные беды станции (нет связи, «реже», ошибка станции,
+// неразборчивый ответ, неизвестная причина — её dialMessage и называет ошибкой
+// станции) несут код STATION_UNAVAILABLE: routes/rpc.js отдаёт его в error.code, и
+// браузер повторит вход сам, с паузой. Неверный ключ и прочие постоянные отказы
+// этого кода не несут — повтор их не вылечит.
+export const STATION_UNAVAILABLE = 'station_unavailable';
+const PBX_PERMANENT = new Set(['bad_credentials', 'not_auth']);
+
+// SOFTPHONE_V1 (M5) — ОДИН ВОПРОС К СТАНЦИИ НА ОПЕРАТОРА В МИНУТУ.
+// Каждая загрузка страницы у каждого оператора спрашивала user/get.json. Когда
+// ключ подключения протух, одновременные загрузки (перезапуск сервера, «обновить»
+// у всей смены) каждая выпускали новый ключ (new=true) и выбивали его друг у
+// друга — «драка за ключ» из ONLINEPBX_KEY_SHARE_V1 (telephony/onlinepbx.js).
+// Поэтому удачный ответ живёт WEBRTC_CACHE_MS в памяти процесса под ключом
+// «оператор + выбранный номер + назначенный + линия», а одновременные вопросы с
+// тем же ключом ждут один ответ станции. Только память: в базу и журнал кэш не
+// пишется никогда (в нём пароль трубки); любой отказ оператору очищает его кэш;
+// неудача станции не кэшируется. WeakMap по базе — у каждой базы (и стенда) свой.
+export const WEBRTC_CACHE_MS = 60_000;
+const webrtcCache = new WeakMap();   // db → { done: Map(userId → {key, at, value}), flight: Map(key → Promise) }
+function webrtcCacheOf(db) {
+  let c = webrtcCache.get(db);
+  if (!c) { c = { done: new Map(), flight: new Map() }; webrtcCache.set(db, c); }
+  return c;
+}
+
+// Один вопрос станции о своём номере → { extension, user, password, ws_url, sip_domain }.
+async function askStationWebrtc(db, line, ext, pbxCallImpl) {
+  const row = getProviderRow(db, line.id);
+  // Поля — СТРОКОЙ через запятую: массивом onlinePBX webrtc не отдаёт (проверено 2026-10-28).
+  const r = await pbxCallImpl(providerConfig(row).domain, 'user/get.json', { num: ext, fields: 'num,name,enabled,webrtc' }, pbxOptions(db, row));
+  if (!r || !r.ok) {
+    const reason = r && r.reason;
+    const err = new RpcError(dialMessage(reason), 400);
+    if (!PBX_PERMANENT.has(reason)) err.code = STATION_UNAVAILABLE;
+    throw err;
+  }
+  // Только запись СВОЕГО номера: станция может прислать и чужие — их пароли не наши.
+  const u = pbxUsers(r.data).find((x) => x && typeof x === 'object' && String(x.num) === ext);
+  const w = u && !pbxUserOff(u) ? u.webrtc : null;
+  if (!w || !w.host || !w.user || !w.password) throw new RpcError(SP_NO_WEBRTC, 409);
+  const host = String(w.host);
+  if (!PBX_WS_HOST.test(host)) throw new RpcError(SP_NO_WEBRTC, 409);
+  return { extension: ext, user: String(w.user), password: String(w.password), ws_url: 'wss://' + host, sip_domain: host.replace(/:\d+$/, '') };
+}
+
 /**
  * SOFTPHONE_V1 — вход телефона Easy-Med в АТС под СВОИМ внутренним номером.
  * Номер — из users.pbx_extension (не из запроса): чужой номер — чужие звонки.
@@ -124,34 +182,48 @@ function pbxUsers(data) {
  * и оператор не узнал бы, что дело в станции. Текст станции (comment) не
  * пересказывается: перевести его нечем, а причина и так названа.
  */
-export async function telephonyWebrtcMe(db, _args, user, { pbxCallImpl = pbxCall } = {}) {
-  if (user && user.acting_admin) throw new RpcError(SP_ACTING, 403);
-  if (!mayDial(db, user)) throw new RpcError(DENY_DIAL, 403);
-  const me = db.prepare('SELECT pbx_extension, pbx_extension_assigned FROM users WHERE id = ?').get(user.id) || {};
-  const ext = String(me.pbx_extension || '').trim();
-  if (!ext) throw new RpcError(SP_NO_EXT, 400);
-  if (ext !== String(me.pbx_extension_assigned || '').trim()) throw new RpcError(SP_NOT_ASSIGNED, 403);
-  const line = (listProviders(db) || []).find((p) => p.enabled && p.kind === 'onlinepbx');
-  if (!line) throw new RpcError(SP_NO_LINE, 400);
-  const row = getProviderRow(db, line.id);
-  // Поля — СТРОКОЙ через запятую: массивом onlinePBX webrtc не отдаёт (проверено 2026-10-28).
-  const r = await pbxCallImpl(providerConfig(row).domain, 'user/get.json', { num: ext, fields: 'num,name,enabled,webrtc' }, pbxOptions(db, row));
-  if (!r || !r.ok) throw new RpcError(dialMessage(r && r.reason), 400);
-  // Только запись СВОЕГО номера: станция может прислать и чужие — их пароли не наши.
-  const u = pbxUsers(r.data).find((x) => x && typeof x === 'object' && String(x.num) === ext);
-  const w = u && u.enabled !== false ? u.webrtc : null;
-  if (!w || !w.host || !w.user || !w.password) throw new RpcError(SP_NO_WEBRTC, 409);
-  const host = String(w.host);
-  if (!PBX_WS_HOST.test(host)) throw new RpcError(SP_NO_WEBRTC, 409);
-  return { extension: ext, user: String(w.user), password: String(w.password), ws_url: 'wss://' + host, sip_domain: host.replace(/:\d+$/, '') };
+export async function telephonyWebrtcMe(db, _args, user, { pbxCallImpl = pbxCall, now = Date.now } = {}) {
+  const uid = user && user.id;
+  try {
+    if (user && user.acting_admin) throw new RpcError(SP_ACTING, 403);
+    if (!mayDial(db, user)) throw new RpcError(DENY_DIAL, 403);
+    const me = db.prepare('SELECT pbx_extension, pbx_extension_assigned FROM users WHERE id = ?').get(uid) || {};
+    const ext = String(me.pbx_extension || '').trim();
+    if (!ext) throw new RpcError(SP_NO_EXT, 400);
+    const assigned = String(me.pbx_extension_assigned || '').trim();
+    if (ext !== assigned) throw new RpcError(SP_NOT_ASSIGNED, 403);
+    const line = onlinePbxLine(db);
+    if (!line) throw new RpcError(SP_NO_LINE, 400);
+    // M5 — проверки выше идут на КАЖДЫЙ вопрос; из кэша — только ответ станции.
+    const key = [uid, ext, assigned, line.id].join('|');
+    const cache = webrtcCacheOf(db);
+    const hit = cache.done.get(uid);
+    if (hit && hit.key === key && now() - hit.at < WEBRTC_CACHE_MS) return { ...hit.value };
+    let flight = cache.flight.get(key);
+    if (!flight) {
+      flight = askStationWebrtc(db, line, ext, pbxCallImpl).finally(() => cache.flight.delete(key));
+      cache.flight.set(key, flight);
+    }
+    const value = await flight;
+    cache.done.set(uid, { key, at: now(), value });
+    return { ...value };
+  } catch (e) {
+    const cache = webrtcCache.get(db);
+    if (cache) cache.done.delete(uid);   // любой отказ — кэш этого оператора пуст
+    throw e;
+  }
 }
 
 /**
  * SOFTPHONE_V1 — кто звонит на мой телефон Easy-Med: пациент и открытая заявка
- * по номеру, тем же поиском, что у «Звонит». Дверь — как у telephony_live.
+ * по номеру, тем же поиском, что у «Звонит».
+ *
+ * M4 — ДВЕРЬ — ТОЛЬКО ПРАВО НАБОРА. Спрашивает это лишь телефон Easy-Med, а по
+ * любому номеру ответ — имя пациента и номер его карты. Право «Журнал звонков»
+ * такого поиска не открывает: журнал показывает только тех, кто звонил.
  */
 export function telephonyCaller(db, args, user) {
-  if (!mayDial(db, user) && !mayLog(db, user)) throw new RpcError(DENY_WORKPLACE, 403);
+  if (!mayDial(db, user)) throw new RpcError(DENY_DIAL, 403);
   const number = String((args && args.number) || '').replace(/[^\d+]/g, '');
   if (!number) return { patient: null, lead: null };
   return callerInfo(db, number);
@@ -165,7 +237,7 @@ export function telephonyCaller(db, args, user) {
  */
 export async function telephonyExtensions(db, _args, user, { pbxCallImpl = pbxCall } = {}) {
   if (!mayDial(db, user)) throw new RpcError(DENY_DIAL, 403);
-  const line = (listProviders(db) || []).find((p) => p.enabled && p.kind === 'onlinepbx');
+  const line = onlinePbxLine(db);
   if (!line) return { extensions: [], error: '' };
   const row = getProviderRow(db, line.id);
   const r = await pbxCallImpl(providerConfig(row).domain, 'user/get.json', {}, pbxOptions(db, row));

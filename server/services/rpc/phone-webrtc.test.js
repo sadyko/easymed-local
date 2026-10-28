@@ -132,6 +132,20 @@ test('«кто я» говорит, на каком номере включае�
   assert.equal(typeof telephonyPhoneMe(db, {}, LAB).softphone_extension, 'string');
 });
 
+// SOFTPHONE_V1 (M1) — телефон Easy-Med работает только через onlinePBX: у клиники на
+// Binotel или «Моих Звонках» переключателя не должно быть вовсе.
+test('«кто я»: softphone_available — есть ли включённая линия onlinePBX', () => {
+  assert.equal(telephonyPhoneMe(seed(), {}, OP).softphone_available, true);
+  assert.equal(telephonyPhoneMe(seed({ line: false }), {}, OP).softphone_available, false);
+  assert.equal(telephonyPhoneMe(seed({ enabled: 0 }), {}, OP).softphone_available, false);
+  // «Мои Звонки» живут в той же таблице (kind onlinepbx, vendor moizvonki) — это не onlinePBX.
+  const mz = seed({ line: false });
+  mz.prepare(`INSERT INTO telephony_providers (kind, vendor, name, enabled, config, secret, poll_interval_sec)
+              VALUES ('onlinepbx', 'moizvonki', 'Мои Звонки', 1, '{"domain":"clinic.moizvonki.ru"}', '{}', 30)`).run();
+  assert.equal(telephonyPhoneMe(mz, {}, OP).softphone_available, false, '«Мои Звонки» приняты за onlinePBX');
+  assert.equal(typeof telephonyPhoneMe(seed(), {}, LAB).softphone_available, 'boolean');
+});
+
 test('станция не дала webrtc номеру — 409 со словами, пароль не придуман', async () => {
   const pbx = fakePbx({ ok: true, data: [{ num: '108', enabled: true }] });
   await assert.rejects(telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: pbx.impl }), refused(409, /браузер/));
@@ -141,6 +155,19 @@ test('станция не дала webrtc номеру — 409 со словам
   await assert.rejects(telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: off.impl }), refused(409, /браузер/));
   const empty = fakePbx({ ok: true, data: [] });
   await assert.rejects(telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: empty.impl }), refused(409, /браузер/));
+});
+
+// SOFTPHONE_V1 (M10) — станция пишет «выключен» по-разному: числом, строкой, словом.
+test('номер выключен на станции (0, «0», false, «false») — 409, пароль не отдаётся', async () => {
+  for (const enabled of [0, '0', false, 'false']) {
+    const pbx = fakePbx({ ok: true, data: [{ num: '108', enabled, webrtc: { host: 'pbx38631.onpbx.ru:8082', user: '108', password: PASSWORD } }] });
+    await assert.rejects(telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: pbx.impl }),
+      (e) => refused(409, /браузер/)(e) && !e.message.includes(PASSWORD), 'enabled = ' + JSON.stringify(enabled));
+  }
+  for (const enabled of [1, '1', true, 'true', undefined]) {
+    const pbx = fakePbx({ ok: true, data: [{ num: '108', enabled, webrtc: { host: 'pbx38631.onpbx.ru:8082', user: '108', password: PASSWORD } }] });
+    assert.equal((await telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: pbx.impl })).password, PASSWORD, 'enabled = ' + JSON.stringify(enabled));
+  }
 });
 
 test('webrtc другого номера в ответе не отдаётся: пароль трубки 107 владельцу 108 не уходит', async () => {
@@ -167,6 +194,97 @@ test('станция ответила ошибкой — отказ с её пр
     (e) => e.status < 500 && e.message === DIAL_MESSAGES.server_error);
 });
 
+// SOFTPHONE_V1 (I1) — временная беда станции (нет связи, «реже», ошибка, неразборчиво)
+// несёт код station_unavailable: браузер повторит вход сам, с паузой. Постоянный отказ
+// (ключ не подошёл, номер не назначен, нет линии, нет webrtc…) — без него: повтор не поможет.
+test('временный отказ станции — код station_unavailable; постоянные отказы — без него', async () => {
+  for (const reason of ['offline', 'rate_limited', 'bad_response', 'server_error', 'something_new', undefined]) {
+    const pbx = fakePbx({ ok: false, reason });
+    await assert.rejects(telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: pbx.impl }),
+      (e) => e instanceof RpcError && e.status === 400 && e.code === 'station_unavailable', 'reason = ' + reason);
+  }
+  const notTransient = (e) => e instanceof RpcError && e.code !== 'station_unavailable';
+  const bad = fakePbx({ ok: false, reason: 'bad_credentials' });
+  await assert.rejects(telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: bad.impl }), notTransient);
+  const ok = fakePbx(OK_108);
+  await assert.rejects(telephonyWebrtcMe(seed({ assigned: null }), {}, OP, { pbxCallImpl: ok.impl }), notTransient);
+  await assert.rejects(telephonyWebrtcMe(seed({ ext: null }), {}, OP, { pbxCallImpl: ok.impl }), notTransient);
+  await assert.rejects(telephonyWebrtcMe(seed(), {}, { ...OP, acting_admin: { id: 9 } }, { pbxCallImpl: ok.impl }), notTransient);
+  await assert.rejects(telephonyWebrtcMe(seed({ line: false }), {}, OP, { pbxCallImpl: ok.impl }), notTransient);
+  await assert.rejects(telephonyWebrtcMe(seed(), {}, DOC, { pbxCallImpl: ok.impl }), notTransient);
+  const none = fakePbx({ ok: true, data: [{ num: '108', enabled: true }] });
+  await assert.rejects(telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: none.impl }), notTransient);
+});
+
+// SOFTPHONE_V1 (M5) — перезагрузки страниц у всех операторов разом не должны каждая
+// спрашивать станцию: при протухшем ключе одновременные запросы выпускали бы новый
+// ключ наперегонки и выбивали друг друга (ONLINEPBX_KEY_SHARE_V1). Успешный ответ
+// живёт в памяти процесса минуту; одновременные вопросы ждут один ответ станции.
+function deferredPbx(reply) {
+  const calls = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const impl = async (domain, path, params) => { calls.push(params); await gate; return typeof reply === 'function' ? reply(params) : reply; };
+  return { impl, calls, release };
+}
+const webrtcFor = (num) => ({ ok: true, data: [{ num, enabled: true, webrtc: { host: 'pbx38631.onpbx.ru:8082', user: num, password: PASSWORD } }] });
+
+test('кэш входа: одновременные вопросы — один запрос к станции; повтор за минуту — без станции', async () => {
+  const db = seed();
+  let t = 1_000_000;
+  const now = () => t;
+  const pbx = deferredPbx(OK_108);
+  const a = telephonyWebrtcMe(db, {}, OP, { pbxCallImpl: pbx.impl, now });
+  const b = telephonyWebrtcMe(db, {}, OP, { pbxCallImpl: pbx.impl, now });
+  await new Promise((r) => setImmediate(r));
+  pbx.release();
+  const [ra, rb] = await Promise.all([a, b]);
+  assert.equal(pbx.calls.length, 1, 'два одновременных входа — два запроса к станции');
+  assert.equal(ra.password, PASSWORD);
+  assert.deepEqual(ra, rb);
+  ra.password = 'испорчено';   // ответ — копия: правка вызывающим не портит кэш
+  t += 59_000;
+  const again = fakePbx(OK_108);
+  assert.equal((await telephonyWebrtcMe(db, {}, OP, { pbxCallImpl: again.impl, now })).password, PASSWORD);
+  assert.equal(again.calls.length, 0, 'повтор в пределах минуты снова спросил станцию');
+  t += 2_000;   // минута прошла
+  const later = fakePbx(OK_108);
+  await telephonyWebrtcMe(db, {}, OP, { pbxCallImpl: later.impl, now });
+  assert.equal(later.calls.length, 1, 'после минуты станцию не спросили заново');
+});
+
+test('кэш входа: другой назначенный номер — не старый ответ; отказ очищает кэш; неудача не кэшируется', async () => {
+  const db = seed();
+  let t = 5_000_000;
+  const now = () => t;
+  await telephonyWebrtcMe(db, {}, OP, { pbxCallImpl: fakePbx(OK_108).impl, now });
+  // Администратор назначил 109, оператор выбрал его — старый ответ (108) не годится.
+  db.prepare("UPDATE users SET pbx_extension = '109', pbx_extension_assigned = '109' WHERE id = 1").run();
+  const p109 = fakePbx(webrtcFor('109'));
+  const r = await telephonyWebrtcMe(db, {}, OP, { pbxCallImpl: p109.impl, now });
+  assert.equal(p109.calls.length, 1, 'новый номер получил чужой (прежний) ответ из кэша');
+  assert.equal(r.extension, '109');
+  assert.equal(r.user, '109');
+  // Отказ (здесь — вход от чужого имени) очищает кэш: следующий вход снова спросит станцию.
+  await assert.rejects(telephonyWebrtcMe(db, {}, { ...OP, acting_admin: { id: 9 } }, { pbxCallImpl: p109.impl, now }), refused(403));
+  const after = fakePbx(webrtcFor('109'));
+  await telephonyWebrtcMe(db, {}, OP, { pbxCallImpl: after.impl, now });
+  assert.equal(after.calls.length, 1, 'после отказа вход взят из кэша');
+  // Неудача станции не кэшируется — ни для одновременных, ни для следующего вопроса.
+  const db2 = seed();
+  const down = deferredPbx({ ok: false, reason: 'offline' });
+  const x = telephonyWebrtcMe(db2, {}, OP, { pbxCallImpl: down.impl, now });
+  const y = telephonyWebrtcMe(db2, {}, OP, { pbxCallImpl: down.impl, now });
+  await new Promise((res) => setImmediate(res));
+  down.release();
+  await assert.rejects(x, (e) => e.code === 'station_unavailable');
+  await assert.rejects(y, (e) => e.code === 'station_unavailable');
+  assert.equal(down.calls.length, 1, 'одновременные неудачные входы — два запроса к станции');
+  const up = fakePbx(OK_108);
+  assert.equal((await telephonyWebrtcMe(db2, {}, OP, { pbxCallImpl: up.impl, now })).password, PASSWORD);
+  assert.equal(up.calls.length, 1, 'неудача станции осталась в кэше');
+});
+
 test('пароль не пишется ни в базу, ни в журнал сервера', async () => {
   const db = seed();
   const pbx = fakePbx(OK_108);
@@ -190,7 +308,7 @@ test('пароль не пишется ни в базу, ни в журнал с
   }
 });
 
-test('кто звонит: пациент и заявка по номеру; дверь — право набора или журнала', () => {
+test('кто звонит: пациент и заявка по номеру; дверь — только право набора', () => {
   const db = seed();
   const pid = db.prepare("INSERT INTO patients (full_name, phone, mrn) VALUES ('Каримова Азиза', '+998 90 111 22 33', 'A-12')").run().lastInsertRowid;
   const lid = db.prepare("INSERT INTO crm_requests (full_name, phone, status, source) VALUES ('Заявка Тестовая', '+998 90 111 22 33', 'in_process', 'call')").run().lastInsertRowid;
@@ -201,8 +319,10 @@ test('кто звонит: пациент и заявка по номеру; д�
   assert.equal(r.lead.id, lid);
   // Номер как его прислала станция — с плюсом и пробелами — тот же человек.
   assert.equal(telephonyCaller(db, { number: '+998 (90) 111-22-33' }, OP).patient.id, pid);
-  // Только журнал — тоже можно: входящий видит и тот, кто смотрит журнал.
-  assert.equal(telephonyCaller(db, { number: '998901112233' }, LAB).patient.id, pid);
+  // SOFTPHONE_V1 (M4) — только журнал — НЕТ: «кто звонит» спрашивает лишь телефон
+  // Easy-Med (право набора), а по любому номеру он отдаёт имя пациента и номер карты.
+  assert.throws(() => telephonyCaller(db, { number: '998901112233' }, LAB), refused(403, /«Позвонить пациенту»/),
+    'право «Журнал звонков» открыло поиск пациента по любому номеру');
   assert.throws(() => telephonyCaller(db, { number: '998901112233' }, DOC), refused(403));
   assert.deepEqual(telephonyCaller(db, { number: '' }, OP), { patient: null, lead: null });
   assert.deepEqual(telephonyCaller(db, {}, OP), { patient: null, lead: null });

@@ -3,7 +3,9 @@
 //
 // Файл пишет политику браузера OverrideSecurityRestrictionsOnInsecureOrigin,
 // чтобы на компьютерах клиники (http://10.x.x.x:8000 — не «защищённый» адрес)
-// появился значок «Установить» в адресной строке. Что здесь проверяется:
+// появился значок «Установить» в адресной строке, и (SOFTPHONE_V1) политику
+// AutoplayAllowlist — звонок телефона Easy-Med слышен и до первого щелчка на
+// странице. Что здесь проверяется:
 //
 //   * ФАЙЛ ДОЕДЕТ И ЗАПУСТИТСЯ: загрузочная часть — чистый ASCII (cmd читает
 //     её в кодовой странице консоли), без BOM, строки CRLF и правило
@@ -50,6 +52,12 @@ const POLICY = 'OverrideSecurityRestrictionsOnInsecureOrigin';
 const CHROME = 'Google\\Chrome\\' + POLICY;
 const EDGE = 'Microsoft\\Edge\\' + POLICY;
 const YANDEX = 'YandexBrowser\\' + POLICY;
+// SOFTPHONE_V1 (I5) — звук звонка телефона Easy-Med до первого щелчка на странице:
+// политика AutoplayAllowlist для того же адреса, тот же вид списка.
+const AUTOPLAY = 'AutoplayAllowlist';
+const CHROME_AP = 'Google\\Chrome\\' + AUTOPLAY;
+const EDGE_AP = 'Microsoft\\Edge\\' + AUTOPLAY;
+const YANDEX_AP = 'YandexBrowser\\' + AUTOPLAY;
 
 // ---------------------------------------------------------------------------
 // PowerShell и cmd.
@@ -280,6 +288,7 @@ test('добавить, повторить, сохранить чужое, от�
   dropTestKey();
   // Чужие значения в списке Chrome — с дыркой в номерах и с не-числовым именем.
   seed(CHROME, { 1: 'http://other.example:9000', 3: '*.corp.example', note: 'не наше' });
+  seed(CHROME_AP, { 1: '[*.]example.edu' });   // SOFTPHONE_V1 (I5) — чужой адрес автозвука
 
   // 1. Добавить (меню: Enter = «1»; адрес — голый IP).
   let r = runSetup('\n10.4.1.36\n');
@@ -291,10 +300,16 @@ test('добавить, повторить, сохранить чужое, от�
   assert.match(r.out, /Закройте ВСЕ окна браузера/);
   assert.match(r.out, /Управляется вашей/);
   assert.match(r.out, /http:\/\/10\.4\.1\.36:8000\/admin/);
+  assert.match(r.out, /звонок телефона Easy-Med/i, 'не сказано, что звонок теперь слышен без щелчка');
+  assert.match(r.out, /AutoplayAllowlist/);
   const added = dump();
   assert.deepEqual(added[CHROME], { 1: 'http://other.example:9000', 3: '*.corp.example', note: 'не наше', 4: 'http://10.4.1.36:8000' });
   assert.deepEqual(added[EDGE], { 1: 'http://10.4.1.36:8000' });
   assert.deepEqual(added[YANDEX], { 1: 'http://10.4.1.36:8000' });
+  // SOFTPHONE_V1 (I5) — тот же адрес в списке автозвука; чужое цело.
+  assert.deepEqual(added[CHROME_AP], { 1: '[*.]example.edu', 2: 'http://10.4.1.36:8000' });
+  assert.deepEqual(added[EDGE_AP], { 1: 'http://10.4.1.36:8000' });
+  assert.deepEqual(added[YANDEX_AP], { 1: 'http://10.4.1.36:8000' });
 
   // 2. Повтор тем же адресом в другой записи — ничего не двоится и не меняется.
   r = runSetup('1\nhttp://10.4.1.36:8000/admin.html\n');
@@ -312,6 +327,8 @@ test('добавить, повторить, сохранить чужое, от�
   const two = dump();
   assert.equal(two[CHROME][5], 'http://10.4.1.37:8000');
   assert.equal(two[EDGE][2], 'http://10.4.1.37:8000');
+  assert.equal(two[CHROME_AP][3], 'http://10.4.1.37:8000');
+  assert.equal(two[EDGE_AP][2], 'http://10.4.1.37:8000');
 
   // 4. Отмена из меню — уходит только наш адрес; чужое и второй сервер целы.
   r = runSetup('2\n10.4.1.36:8000\n');
@@ -320,6 +337,8 @@ test('добавить, повторить, сохранить чужое, от�
   const afterUndo = dump();
   assert.deepEqual(afterUndo[CHROME], { 1: 'http://other.example:9000', 3: '*.corp.example', note: 'не наше', 5: 'http://10.4.1.37:8000' });
   assert.deepEqual(afterUndo[EDGE], { 2: 'http://10.4.1.37:8000' });
+  assert.deepEqual(afterUndo[CHROME_AP], { 1: '[*.]example.edu', 3: 'http://10.4.1.37:8000' });
+  assert.deepEqual(afterUndo[EDGE_AP], { 2: 'http://10.4.1.37:8000' });
 
   // 5. Отмена ключом /remove — без меню; опустевшие подразделы удалены,
   //    подраздел Chrome с чужими значениями — нет.
@@ -330,6 +349,9 @@ test('добавить, повторить, сохранить чужое, от�
   assert.deepEqual(final[CHROME], { 1: 'http://other.example:9000', 3: '*.corp.example', note: 'не наше' });
   assert.equal(final[EDGE], undefined, 'пустой подраздел Edge должен быть удалён');
   assert.equal(final[YANDEX], undefined, 'пустой подраздел Яндекса должен быть удалён');
+  assert.deepEqual(final[CHROME_AP], { 1: '[*.]example.edu' }, 'отмена тронула чужой адрес автозвука');
+  assert.equal(final[EDGE_AP], undefined, 'пустой подраздел автозвука Edge должен быть удалён');
+  assert.equal(final[YANDEX_AP], undefined, 'пустой подраздел автозвука Яндекса должен быть удалён');
 
   // 6. Повторная отмена — честно «не было», ничего не ломает.
   r = runSetup('2\n10.4.1.37\n');
@@ -337,6 +359,20 @@ test('добавить, повторить, сохранить чужое, от�
   assert.match(r.out, /этого адреса там не было/);
   assert.match(r.out, /менять нечего/);
   assert.deepEqual(dump(), final);
+});
+
+// SOFTPHONE_V1 (I5) — компьютер, настроенный прежней версией файла (только значок
+// установки): повторный запуск дописывает лишь автозвук, установку не двоит.
+test('прежняя настройка (только значок установки): повторный запуск дописывает автозвук', { skip: SKIP_WIN }, () => {
+  dropTestKey();
+  for (const k of [CHROME, EDGE, YANDEX]) seed(k, { 1: 'http://10.4.1.36:8000' });
+  const r = runSetup('1\n10.4.1.36\n');
+  assert.equal(r.status, 0, r.out + r.err);
+  assert.match(r.out, /Google Chrome — готово/, 'дописанный автозвук не назван изменением');
+  const d = dump();
+  for (const k of [CHROME, EDGE, YANDEX]) assert.deepEqual(d[k], { 1: 'http://10.4.1.36:8000' }, k + ' — адрес установки задвоился');
+  for (const k of [CHROME_AP, EDGE_AP, YANDEX_AP]) assert.deepEqual(d[k], { 1: 'http://10.4.1.36:8000' }, k);
+  dropTestKey();
 });
 
 test('ввод оборвался — выход с кодом 1, в реестре ничего', { skip: SKIP_WIN }, () => {

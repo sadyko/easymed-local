@@ -7,6 +7,8 @@ rem  the EasyMed server on the clinic network (http://10.x.x.x:8000), which the
 rem  browser otherwise refuses: a plain-http LAN address is not a "secure
 rem  context". The fix is the browser policy
 rem  OverrideSecurityRestrictionsOnInsecureOrigin, written machine-wide.
+rem  SOFTPHONE_V1: the same address also goes into the AutoplayAllowlist
+rem  policy, so the Easy-Med phone ring sounds before the first click.
 rem
 rem  THIS PART IS ASCII ON PURPOSE. cmd.exe reads a batch file in the console
 rem  codepage (866 on a Russian Windows), so Russian text here would turn into
@@ -64,6 +66,18 @@ exit /b %ERRORLEVEL%
 # реестра New-Item -Force на существующем разделе пересоздаёт его ПУСТЫМ —
 # то есть стёр бы чужие адреса и чужие политики.
 #
+# SOFTPHONE_V1 — ЗВУК ЗВОНКА ДО ПЕРВОГО ЩЕЛЧКА. Телефон Easy-Med звонит через
+# Web Audio, а Chrome после свежего запуска держит звук страницы на паузе, пока
+# человек по ней не щёлкнет: после перезагрузки звонок мог быть беззвучным.
+# Тот же адрес поэтому пишется и во вторую политику-список — AutoplayAllowlist
+# (разрешить автовоспроизведение звука на этих адресах), тем же видом и теми же
+# правилами (номера, чужое не трогаем, отмена убирает только наш адрес):
+#   HKLM\SOFTWARE\Policies\Google\Chrome\AutoplayAllowlist
+#   HKLM\SOFTWARE\Policies\Microsoft\Edge\AutoplayAllowlist
+#   HKLM\SOFTWARE\Policies\YandexBrowser\AutoplayAllowlist
+# Chrome и Edge: «AutoplayAllowlist», тип list, шаблоны адресов («http://10.4.1.36:8000»
+# — годный шаблон); Яндекс повторяет имена Chrome — не проверено, как и выше.
+#
 # Проверка без настоящего реестра: переменная EM_SETUP_TEST_RUN=<имя> (или
 # скрытый ключ /selftest) — пишем в HKCU\Software\EasyMedSetupTest\<имя> и
 # прав администратора не просим. EM_SETUP_LIBONLY=1 — только объявить функции (для проверки
@@ -76,6 +90,8 @@ try { [Console]::InputEncoding  = New-Object System.Text.UTF8Encoding($false) } 
 try { $OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch {}
 
 $EmPolicyName  = 'OverrideSecurityRestrictionsOnInsecureOrigin'
+# SOFTPHONE_V1 — вторая политика-список с тем же адресом: звонок без щелчка.
+$EmPolicies    = @($EmPolicyName, 'AutoplayAllowlist')
 $EmDefaultPort = 8000
 $EmBrowsers = @(
     @{ Name = 'Google Chrome';  Key = 'Google\Chrome';  Unverified = $false },
@@ -301,6 +317,7 @@ function Invoke-EmSetup {
     Say '  ============================================================' 'Cyan'
     Say 'Файл разрешает браузеру установить EasyMed как приложение:'
     Say 'значок «Установить» появится справа в адресной строке.'
+    Say 'И звонок телефона Easy-Med будет слышен сразу, без щелчка на странице.'
     Say
 
     if ($test) {
@@ -351,16 +368,26 @@ function Invoke-EmSetup {
         if ($mode -eq 'add') {
             Say ('Разрешаю адрес ' + $origin + ':')
             foreach ($b in $EmBrowsers) {
-                $r = Add-EmOrigin $hive ($base + '\' + $b.Key + '\' + $EmPolicyName) $origin
+                # Обе политики; «готово», если дописана хоть одна (прежняя
+                # настройка без автозвука получает только его).
+                $added = 0
+                foreach ($p in $EmPolicies) {
+                    $r = Add-EmOrigin $hive ($base + '\' + $b.Key + '\' + $p) $origin
+                    if ($r.Status -eq 'added') { $added++ }
+                }
                 $note = if ($b.Unverified) { ' (поддержка в Яндекс Браузере не проверена)' } else { '' }
-                if ($r.Status -eq 'added') { $changed++; Say ('   ' + $b.Name + ' — готово' + $note) 'Green' }
+                if ($added -gt 0) { $changed++; Say ('   ' + $b.Name + ' — готово' + $note) 'Green' }
                 else { Say ('   ' + $b.Name + ' — уже было, ничего не менял' + $note) }
             }
         } else {
             Say ('Убираю адрес ' + $origin + ':')
             foreach ($b in $EmBrowsers) {
-                $r = Remove-EmOrigin $hive ($base + '\' + $b.Key + '\' + $EmPolicyName) $origin
-                if ($r.Removed -gt 0) { $changed++; Say ('   ' + $b.Name + ' — убрано') 'Green' }
+                $removed = 0
+                foreach ($p in $EmPolicies) {
+                    $r = Remove-EmOrigin $hive ($base + '\' + $b.Key + '\' + $p) $origin
+                    $removed += $r.Removed
+                }
+                if ($removed -gt 0) { $changed++; Say ('   ' + $b.Name + ' — убрано') 'Green' }
                 else { Say ('   ' + $b.Name + ' — этого адреса там не было') }
             }
         }
@@ -371,7 +398,7 @@ function Invoke-EmSetup {
         Wait-EmClose $test
         return 3
     } finally { $hive.Close() }
-    Say ('Записано в реестр: ' + $shown + '\<браузер>\' + $EmPolicyName)
+    Say ('Записано в реестр: ' + $shown + '\<браузер>\ — ' + ($EmPolicies -join ' и '))
 
     Say
     if ($mode -eq 'add') {
@@ -381,6 +408,8 @@ function Invoke-EmSetup {
         Say '   3. Справа в адресной строке появится значок «Установить»'
         Say '      (монитор со стрелкой) — нажмите его и подтвердите.'
         Say '   Значка нет? Перезагрузите компьютер и откройте EasyMed ещё раз.'
+        Say '   4. Звонок телефона Easy-Med теперь слышен и до первого щелчка'
+        Say '      на странице — даже сразу после перезагрузки компьютера.'
         Say
         Say 'В меню браузера теперь может быть надпись «Управляется вашей'
         Say 'организацией» — так и должно быть: это и есть эта настройка.'
