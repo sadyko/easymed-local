@@ -21,6 +21,11 @@
 - **ICE.** `call()` and `answer()` pass `pcConfig: { iceServers: [] }`: no public STUN, since clinics may have no route to it.
 - **One tab.** It works through Web Locks. A tab that finds the lock taken shows `other_tab`, then queues a waiting request (abortable) and takes over by itself when the other tab lets go.
 - **Retries.** `enable()` is idempotent while in flight, `disable()` during `enable()` wins, and `registrationFailed` with 'Connection Error' or 'Request Timeout' means `network`, not `register_failed`.
+- **Phone on but not ready.** When the switch is on but the state is not READY (connecting / error / other_tab), «Позвонить» does NOT fall back to the station call (`call/now`). It refuses with the reason in words. The spec says: the station call is used only while the phone is OFF.
+- **Per-employee switch.** The switch belongs to each employee, not the computer: the flag `easymed.softphone.on.<user id>`. Headset choices stay per computer.
+- **Logout, act-as, closing the tab.** Logout and act-as call `disable({ keepWanted: true })`: the phone stops, the employee's choice is kept. Closing the tab does the same on `pagehide`, so the number signs out of the PBX. During a call, logout, act-as and closing the tab ask first.
+- **Station «Звонит» after a phone call.** It is hidden only while the phone is READY: during the call and for 15 s after it.
+- **Final review findings closed before release.** «кто звонит» requires the dial right; `softphone_available` hides the switch when there is no onlinePBX line; temporary PBX failures carry a code and are retried by the browser with backoff; logout stops the phone in every tab; the setup file allows the ring sound (AutoplayAllowlist). Branch buildings (staff managed by the main building cannot get a phone number at a branch) and changing the SIP password when an employee leaves are the owner's decisions.
 
 **Tech Stack:** Node 24 ESM, express 5, better-sqlite3, node:test; vanilla-JS SPA with `h()`/`Icon()`/`tr()`; JsSIP 3.13.9 (MIT) bundled with esbuild into `public/js/vendor/jssip-3.13.9.mjs`.
 
