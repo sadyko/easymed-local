@@ -14,7 +14,7 @@
 /** R4 — вход от имени длится не дольше стольких часов с начала. */
 export const ACT_AS_MAX_HOURS = 2;
 
-/** R4 — причины конца (act_as_sessions.end_reason; CHECK мигр. 249 — тот же список). */
+/** R4 — причины конца (act_as_sessions.end_reason; CHECK мигр. 255 — тот же список). */
 export const ACT_AS_END = Object.freeze({
   returned: 'Вернулся',               // «Вернуться к своей учётной записи»
   logout: 'Вышел',                    // выход (и вход другого человека в этом браузере)

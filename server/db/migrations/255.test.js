@@ -1,4 +1,4 @@
-// ADMIN_ACT_AS_V1 (мигр. 249) — вход администратора от имени сотрудника:
+// ADMIN_ACT_AS_V1 (мигр. 255) — вход администратора от имени сотрудника:
 // три колонки sessions (кто, какая запись журнала, с какого времени), журнал
 // act_as_sessions/act_as_actions и триггер, закрывающий запись журнала при
 // любом удалении сессии. Дверь /api/db этих таблиц не знает: журнал читает
@@ -11,7 +11,7 @@ import { REGISTRY } from '../schema-registry.js';
 
 const cols = (db, t) => new Map(db.prepare(`PRAGMA table_info(${t})`).all().map((c) => [c.name, c]));
 
-test('мигр. 249: колонки sessions, таблицы журнала и их индексы', () => {
+test('мигр. 255: колонки sessions, таблицы журнала и их индексы', () => {
   const db = openDb(':memory:');
   migrate(db);
   const s = cols(db, 'sessions');
@@ -32,7 +32,7 @@ test('мигр. 249: колонки sessions, таблицы журнала и �
   assert.ok(!('act_as_sessions' in REGISTRY) && !('act_as_actions' in REGISTRY), 'дверь /api/db журнала не знает');
 });
 
-test('мигр. 249: причины конца и виды действий — только из списка', () => {
+test('мигр. 255: причины конца и виды действий — только из списка', () => {
   const db = openDb(':memory:');
   migrate(db);
   const ins = db.prepare('INSERT INTO act_as_sessions (admin_id, target_id, ended_at, end_reason) VALUES (1, 2, ?, ?)');
@@ -47,7 +47,7 @@ test('мигр. 249: причины конца и виды действий — 
   assert.throws(() => act.run('files', 'x'), /CHECK/);
 });
 
-test('мигр. 249: удаление сессии закрывает открытую запись журнала — «Сессия завершена», после 2 часов — «Истекло» ровно в +2 ч', () => {
+test('мигр. 255: удаление сессии закрывает открытую запись журнала — «Сессия завершена», после 2 часов — «Истекло» ровно в +2 ч', () => {
   const db = openDb(':memory:');
   migrate(db);
   db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (1, 'a', 'x', 'admin'), (2, 'b', 'x', 'nurse')").run();

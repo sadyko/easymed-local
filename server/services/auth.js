@@ -94,7 +94,7 @@ export const SESSION_USER_COLUMNS = Object.freeze([
   'is_doctor',              // ADMIN_DOCTOR_LOCAL_V1 — врач по флагу, а не по роли
 ]);
 const LOGIN_USER_SQL = `SELECT password_hash, ${SESSION_USER_COLUMNS.join(', ')} FROM users WHERE username = ?`;
-// ADMIN_ACT_AS_V1 — и вход от имени: сотрудник, запись журнала и начало (мигр. 249).
+// ADMIN_ACT_AS_V1 — и вход от имени: сотрудник, запись журнала и начало (мигр. 255).
 const SESSION_USER_SQL = `SELECT ${SESSION_USER_COLUMNS.map((c) => 'u.' + c).join(', ')}, `
   + 's.expires_at AS session_expires_at, s.last_seen_at AS session_seen_at, '
   + 's.act_as_user_id, s.act_as_id, s.act_as_started_at '
@@ -155,7 +155,7 @@ function noteFailure(name) {
 // заменяет сессию) закрывает открытую запись журнала входа от имени причиной
 // «Вышел»; истёкшая сессия — «Сессия завершена» (sessionUser ниже). Прочие
 // удаления сессий (отключение, сброс пароля, уборка при запуске) закрывает
-// триггер мигр. 249.
+// триггер мигр. 255.
 export function logout(db, sid, { reason = ACT_AS_END.logout } = {}) {
   if (!sid) return;
   try {
@@ -169,7 +169,7 @@ export function logout(db, sid, { reason = ACT_AS_END.logout } = {}) {
  * ADMIN_ACT_AS_V1 — закрыть открытую запись журнала входа от имени с причиной.
  * Вход от имени не длится дольше ACT_AS_MAX_HOURS: запись, которую закрывают
  * позже предела (кто бы это ни заметил), закрывается «Истекло» ровно в начало
- * + предел (то же правило — у триггера мигр. 249). Закрытая запись не
+ * + предел (то же правило — у триггера мигр. 255). Закрытая запись не
  * переписывается. Возвращает записанную причину или null.
  */
 export function closeActAs(db, actAsId, reason, nowMs = Date.now()) {
