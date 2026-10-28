@@ -73,13 +73,22 @@ const ROLE_WORD = {
  * настроек (круговая зависимость), а молча разойтись с ней — обещать не тот
  * экран. actorRoleCodes() внутри previewRole() отвечает именем ПРЕДПРОСМОТРЕННОЙ
  * роли (rememberRoles), так что «admin» здесь — та роль, что на экране.
+ *
+ * FIX_318_V1 (B1) — скрытые в «Видимости разделов» разделы домом не бывают, и
+ * дашборд администратора тоже. `isHidden` отвечает «скрыт ли экран»; по
+ * умолчанию спрашивается оболочка (window.easymed.isNavHidden — то же правило,
+ * что у меню). Нет оболочки — ничего не скрыто.
  */
-export function landingScreen(navIds) {
-    if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard')) return { id: 'dashboard', kind: 'nav' };
+function shellHidden(id) {
+    const fn = typeof window !== 'undefined' && window.easymed && window.easymed.isNavHidden;
+    return typeof fn === 'function' ? !!fn(id) : false;
+}
+export function landingScreen(navIds, { isHidden = shellHidden } = {}) {
+    if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard') && !isHidden('dashboard')) return { id: 'dashboard', kind: 'nav' };
     // MY_STOCK_V1 — личные экраны пропускаются здесь ровно так же, как в
     // оболочке (PERSONAL_VIEWS): иначе сводка обещала бы владельцу, что дом
     // кассира с отделом — «Мои запасы», и обещала бы это уверенным голосом.
-    for (const id of navIds) if (!PERSONAL_VIEWS.has(id) && isModuleAllowed(id)) return { id, kind: 'nav' };
+    for (const id of navIds) if (!PERSONAL_VIEWS.has(id) && !isHidden(id) && isModuleAllowed(id)) return { id, kind: 'nav' };
     return null;
 }
 

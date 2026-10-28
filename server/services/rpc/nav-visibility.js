@@ -6,7 +6,7 @@
 // пунктов меню, «Настройки» — никогда. Сохранение заменяет список целиком: что
 // на экране, то и в базе.
 import { isAdminUser } from '../grants.js';
-import { normalizeHidden, isNavIdLike, NEVER_HIDDEN } from '../../../public/js/admin/nav-visibility-logic.js';
+import { normalizeHidden, isNavIdLike, canHide, NEVER_HIDDEN } from '../../../public/js/admin/nav-visibility-logic.js';
 
 export class RpcError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -29,6 +29,13 @@ export function navVisibilitySave(db, args, user) {
   }
   const bad = raw.filter((v) => !isNavIdLike(v));
   if (bad.length) throw new RpcError('Непонятный идентификатор раздела: ' + bad.map((v) => JSON.stringify(v)).join(', '), 400);
+  // FIX_318_V1 (B3) — только пункты бокового меню. Подэкран «Настроек» («Видимость
+  // разделов», «Сотрудники», «Система») или выдуманный id прямым вызовом мимо
+  // экрана — отказ, а не молчаливое «сохранено»: иначе можно было спрятать
+  // экран, на котором видимость возвращают.
+  if (raw.some((v) => !canHide(v))) {
+    throw new RpcError('Скрыть можно только раздел бокового меню; «Настройки» и их страницы скрыть нельзя.', 400);
+  }
   const hidden = normalizeHidden(raw);
   const uid = user && user.id ? user.id : null;
   db.transaction(() => {

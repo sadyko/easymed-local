@@ -16,7 +16,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { activeSectionOf, isNavSectionOpen, setNavSectionOpen } from '../nav-fold.js';
+import { activeSectionOf, isNavSectionOpen, setNavSectionOpen, navFitsOpen, groupBadge } from '../nav-fold.js';   // navFitsOpen, groupBadge — FIX_318_V1
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const read = (rel) => fs.readFileSync(path.join(HERE, '..', '..', '..', '..', rel), 'utf8');
@@ -130,7 +130,9 @@ test('renderSidebar: свёрнутая группа — кнопка с шев�
         .split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n');
     assert.match(body, /if \(item\.fold\)/, 'ветка свёрнутой группы читает флаг fold');
     assert.match(body, /h\('button', \{ class: 'nav-section nav-section--toggle'/, 'заголовок свёрнутой группы — кнопка');
-    assert.match(body, /isNavSectionOpen\(item, \{ closed: navClosed, activeSection \}\)/);   // NAV_UNFOLDED_V1
+    // NAV_UNFOLDED_V1 + FIX_318_V1 (B2) — щелчок запоминается в обе стороны
+    // (closed / opened), короткое окно (compact) сворачивает по умолчанию.
+    assert.match(body, /isNavSectionOpen\(item, \{ closed: navClosed, opened: navOpened, activeSection, compact: navCompact \}\)/);
     assert.match(body, /activeSectionOf\(NAV, navItemOwns\)/, 'группа открытого экрана считается до цикла');
     assert.ok(!/easymed_soon_collapsed|=== 'Soon'/.test(body), 'мёртвый аккордеон Soon остался');
     assert.ok(!/localStorage/.test(body), 'состояние групп не пишется в localStorage (решение спека)');
@@ -151,5 +153,66 @@ test('CSS: плотность меню задана через .sidebar .nav-ite
     assert.match(scoped, /padding-top: 7px;/);
     assert.match(scoped, /padding-bottom: 7px;/);
     assert.match(MAIN_CSS, /\.sidebar-body \.nav \{ display: flex; flex-direction: column; gap: 1px; \}/);
-    assert.match(MAIN_CSS, /@media \(max-height: 760px\) \{[\s\S]*?\.sidebar \.nav-item \{ padding-top: 5px; padding-bottom: 5px; \}/, 'ступень для ноутбука 768p');
+    // FIX_318_V1 (B2) — ступень поднята с 760px до 800px (1440×900 с панелями
+    // браузера, 1366×768 во весь экран) и добавлена вторая, 680px (1366×768 в
+    // браузере, окно ~657px), — по замеру в браузере.
+    assert.match(MAIN_CSS, /@media \(max-height: 800px\) \{[\s\S]*?\.sidebar \.nav-item \{ padding-top: 5px; padding-bottom: 5px; \}/, 'ступень для ноутбука 768p и окна 900p');
+    assert.match(MAIN_CSS, /@media \(max-height: 680px\) \{[\s\S]*?\.sidebar \.nav-item \{ padding-top: 4px; padding-bottom: 4px; \}/, 'ступень для окна браузера на 768p');
+    assert.ok(!/@media \(max-height: 760px\)/.test(MAIN_CSS), 'старая ступень 760px осталась рядом с новой');
+});
+
+// ===========================================================================
+// FIX_318_V1 (B2) — «БЕЗ ПРОКРУТКИ» ДОЛЖНО БЫТЬ ПРАВДОЙ И НА НОУТБУКЕ.
+//
+// NAV_UNFOLDED_V1 раскрыл все группы, а ступень max-height:760px считалась под
+// СВЁРНУТЫЕ группы: на 1366×768 (окно ~657px) меню прокручивалось, на 1280×720 и
+// 1440×900 — тоже. Теперь: если раскрытое меню не входит в окно (compact),
+// группы без открытого экрана по умолчанию свёрнуты. Щелчок человека — в обе
+// стороны — сильнее умолчания.
+// ===========================================================================
+test('FIX_318_V1: isNavSectionOpen на коротком окне — свёрнута по умолчанию; группа экрана и раскрытая щелчком — раскрыты', () => {
+    const ops = { section: 'Operations', fold: true };
+    const clinical = { section: 'Clinical' };
+    assert.equal(isNavSectionOpen(ops, { compact: true }), false, 'не входит в окно — сворачиваемая группа свёрнута');
+    assert.equal(isNavSectionOpen(clinical, { compact: true }), true, '«Клиника» не сворачивается никогда');
+    assert.equal(isNavSectionOpen(ops, { compact: true, activeSection: 'Operations' }), true, 'группа открытого экрана раскрыта');
+    assert.equal(isNavSectionOpen(ops, { compact: true, opened: new Set(['Operations']) }), true, 'раскрыта щелчком — выбор человека сильнее');
+    assert.equal(isNavSectionOpen(ops, { compact: false, closed: new Set(['Operations']) }), false, 'свёрнута щелчком на высоком окне');
+    assert.equal(isNavSectionOpen(ops, { compact: false }), true, 'входит в окно — раскрыта (NAV_UNFOLDED_V1)');
+});
+
+test('FIX_318_V1: navFitsOpen меряет меню с РАСКРЫТЫМИ группами и возвращает классы на место; без раскладки — null', () => {
+    const navEl = (items) => {
+        const cls = new Set();
+        return { items, cls, classList: { contains: (c) => cls.has(c), toggle: (c, on) => { if (on) cls.add(c); else cls.delete(c); } } };
+    };
+    const ops = navEl(7), ins = navEl(2);
+    ops.cls.add('nav--folded');   // свёрнута сейчас
+    const groups = [{ navEl: ops }, { navEl: ins }];
+    const body = (client) => ({
+        clientHeight: client,
+        get scrollHeight() { return 300 + groups.reduce((n, g) => n + (g.navEl.cls.has('nav--folded') ? 0 : g.navEl.items * 30), 0); },
+    });
+    assert.equal(navFitsOpen(body(500), groups), false, '300 + 9×30 = 570 не входит в 500');
+    assert.ok(ops.cls.has('nav--folded') && !ins.cls.has('nav--folded'), 'замер не вернул классы на место');
+    assert.equal(navFitsOpen(body(600), groups), true);
+    assert.equal(navFitsOpen(body(0), groups), null, 'нет раскладки (вкладка скрыта, тест без DOM) — не решаем');
+    assert.equal(navFitsOpen(null, groups), null);
+});
+
+// FIX_318_V1 (B6) — у свёрнутой группы заголовок несёт сумму счётчиков её
+// пунктов: просроченные задачи CRM, неоплаченные счета, непрочитанный чат,
+// обновление в «Настройках» не прячутся в свёрнутой группе.
+test('FIX_318_V1: groupBadge — сумма счётчиков пунктов; красная, если красен хоть один ненулевой', () => {
+    assert.equal(groupBadge([]), null);
+    assert.equal(groupBadge([{ count: 0, alert: true }, { count: null, alert: true }]), null, 'ничего не ждёт — бейджа нет');
+    assert.deepEqual(groupBadge([{ count: 3, alert: true }, { count: 2, alert: false }]), { total: 5, alert: true });
+    assert.deepEqual(groupBadge([{ count: 4, alert: false }]), { total: 4, alert: false });
+    assert.deepEqual(groupBadge([{ count: 0, alert: true }, { count: 4, alert: false }]), { total: 4, alert: false });
+});
+
+test('FIX_318_V1: CSS — бейдж заголовка виден только у свёрнутой группы и не на рейке', () => {
+    assert.match(MAIN_CSS, /^\.nav-section-badge \{[^}]*display: none;/m, 'у раскрытой группы бейдж заголовка дублировал бы бейджи пунктов');
+    assert.match(MAIN_CSS, /^\.nav-section--folded \.nav-section-badge \{[^}]*display: inline-flex;/m);
+    assert.match(MAIN_CSS, /^\.nav-section-badge\.alert \{/m, 'красный бейдж заголовка');
 });

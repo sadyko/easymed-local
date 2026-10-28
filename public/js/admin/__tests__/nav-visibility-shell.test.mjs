@@ -50,3 +50,16 @@ test('маршрут visibility-settings: крошки, родитель «На�
     const next = hub.indexOf("title: 'Системные настройки'");
     assert.ok(tile > basics && tile < next, 'плитка стоит в группе «Основное»');
 });
+
+// FIX_318_V1 (B3) — список пунктов меню, по которому сервер проверяет «что можно
+// скрыть», живёт в чистом модуле (admin.js сервер импортировать не может). Он
+// обязан совпадать с NAV оболочки — иначе новый пункт меню нельзя будет скрыть,
+// а удалённый останется скрываемым.
+test('FIX_318_V1: NAV_IDS логики видимости совпадает с NAV оболочки, в том же порядке', async () => {
+    const { NAV_IDS } = await import('../nav-visibility-logic.js');
+    const at = SHELL.indexOf('const NAV = [');
+    const block = SHELL.slice(at, SHELL.indexOf('\n];', at));
+    const shellIds = [...exec(block).matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]);
+    assert.ok(shellIds.length >= 15, 'NAV не разобран');
+    assert.deepEqual([...NAV_IDS], shellIds);
+});

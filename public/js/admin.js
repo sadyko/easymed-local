@@ -7,7 +7,7 @@ try { document.title = (document.title || 'Easy-Med') + ' · b2107a'; } catch (e
 import { supabase, pingSupabase } from './supabase.js';
 import { SECTIONS } from './admin/sections.js?v=rolecmp1';
 import { h, Icon, clear, initials } from './admin/ui.js';
-import { activeSectionOf, isNavSectionOpen, setNavSectionOpen } from './admin/nav-fold.js?v=navfold1';   // NAV_GROUPS_V1 — свёрнутые группы меню
+import { activeSectionOf, isNavSectionOpen, setNavSectionOpen, navFitsOpen, groupBadge } from './admin/nav-fold.js?v=navfold1';   // NAV_GROUPS_V1 — свёрнутые группы меню; navFitsOpen, groupBadge — FIX_318_V1
 import { dateWords } from './shared/date-words.js';   // SIDEBAR_CLOCK_V1 — дата словами под часами
 import { phoneInput } from './admin/phone-input.js?v=ph1';
 // UI_ENHANCE_V1 — родные <select> и поля даты становятся полями программы.
@@ -33,7 +33,13 @@ import { openChangeOwnPasswordModal } from './admin/password-change.js';
 // ADMIN_ACT_AS_V1 — администратор работает от имени сотрудника: полоса вверху,
 // «Вернуться» в окне аватара, возврат после авто-конца (409 act_as_ended).
 import { renderActAsBanner, actAsAccountBlock, isActingNow, installActAsEndedGuard, endActAs, actAsEnding, setTabActAs } from './admin/act-as-client.js';
-import { t, tr, trf, getLang, setLang, onLangChange } from './admin/i18n.js?v=pathway1';   // TS_TAB_I18N_V1 — tr() for tab labels; trf() — I18N_COVERAGE_V1 (перевод СНАЧАЛА, подстановка ПОТОМ)
+// FIX_318_V1 (B7) — словарь без строки запроса, ровно тем адресом, каким его берут
+// экраны ('../i18n.js'). С '?v=pathway1' это был ВТОРОЙ модуль со своим текущим
+// языком: кнопка языка вверху переключала только копию оболочки, меню выходило
+// смешанным, а экраны оставались на прежнем языке до перезагрузки. JS отдаётся
+// с no-cache, так что строка запроса ради свежести здесь не нужна.
+// Страж — __tests__/app-shell.test.mjs («ни один модуль … со строкой запроса»).
+import { t, tr, trf, getLang, setLang, onLangChange } from './admin/i18n.js';   // TS_TAB_I18N_V1 — tr() for tab labels; trf() — I18N_COVERAGE_V1 (перевод СНАЧАЛА, подстановка ПОТОМ)
 // ACCESS_DENIED_ONE_PLACE_V1 — отказ рисуется одним помощником на всё приложение
 // (его же зовёт окно заведения пациента, у которого своего маршрута нет).
 import { accessDeniedPanel } from './admin/access-denied.js';
@@ -142,7 +148,9 @@ import { renderCaseOverview } from './admin/views/case-overview.js?v=co1';   // 
 // владелец: «make this unfolded»): при загрузке страницы все группы раскрыты;
 // щелчок сворачивает до перезагрузки, группа открытого экрана раскрыта всегда
 // (renderSidebar, admin/nav-fold.js). Группа без флага («Клиника») раскрыта
-// всегда, и заголовок у неё не кнопка.
+// всегда, и заголовок у неё не кнопка. FIX_318_V1 (B2) — если раскрытое меню не
+// входит в окно (ноутбук), по умолчанию раскрыта только группа открытого экрана
+// (fitSidebar ниже).
 //
 // Порядок пунктов — порядок владельца, и он же порядок firstAllowedView():
 // «первый доступный пункт меню» считается по этому списку. Видимое
@@ -434,8 +442,12 @@ const searchEl  = document.getElementById('topbar-search');
 // «кому выдан дашборд»: главный врач с открытым дашбордом всё равно начинает с
 // первого пункта меню — так сказал владелец, и это же правило повторяет сводка
 // прав (role-reach.js landingScreen, прикрыто тестом, читающим этот файл).
+// FIX_318_V1 (B1) — скрытый в «Видимости разделов» дашборд домом администратора
+// не бывает: раньше он отдавался ДО проверки скрытых, и администратор входил в
+// «Раздел скрыт», а «На главную» возвращала его туда же. Та же проверка — в
+// role-reach.js landingScreen (сводка прав обещает тот же экран).
 function firstAllowedView() {
-    if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard')) return 'dashboard';
+    if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard') && !navHidden.has('dashboard')) return 'dashboard';
     for (const item of NAV) {
         if (item.section) continue;
         // MY_STOCK_V1 — личный экран домашним не бывает ни у кого: сюда
@@ -806,6 +818,17 @@ export function parentViewOf(view) {
     return PARENT_OF[view] || (String(view).startsWith('settings:') ? 'settings' : null);
 }
 
+// FIX_318_V1 (B4) — экраны, которые скрываются ВМЕСТЕ с пунктом меню (isHiddenView
+// прячет подэкран по родителю из PARENT_OF). Экран «Видимость разделов» называет
+// их до сохранения: скрытые «Пациенты» уносят карту пациента, регистрацию,
+// «Регистратуру» и архив документов, и ссылки на них из CRM и «Звонит» ведут в
+// «Раздел скрыт». Адреса-пересылки (LEGACY_ROUTES) своих экранов не имеют и не
+// называются; у «Настроек» подэкранов для предупреждения нет — они не скрываются.
+function subViewsOf(id) {
+    if (!id || id === 'settings') return [];
+    return Object.keys(PARENT_OF).filter((v) => PARENT_OF[v] === id && !LEGACY_ROUTES[v]);
+}
+
 // CLINIC_PROFILE_V1 / REFERENCE_LISTS_V1 (полировка по макету, 2026-10-10) —
 // ПУНКТ «НАСТРОЙКИ» ВЫДЕЛЕН, ПОКА ОТКРЫТ ЛЮБОЙ ИХ ПОДЭКРАН.
 //
@@ -845,9 +868,11 @@ function settingsMenuOwns(view) {
 // органу управления, который ведёт в отказ, лучше не существовать.
 export function backTargetOf(parent) {
     if (!parent) return null;
-    if (isRouteAllowed(parent)) return parent;
+    // FIX_318_V1 (B1) — скрытый раздел — такой же тупик, как закрытый: «назад»
+    // в «Раздел скрыт» не ведёт.
+    if (isRouteAllowed(parent) && !navHiddenFor(parent)) return parent;
     const home = firstAllowedView();
-    return home && isRouteAllowed(home) ? home : null;
+    return home && isRouteAllowed(home) && !navHiddenFor(home) ? home : null;
 }
 
 function renderBackControl() {
@@ -1232,11 +1257,15 @@ async function renderViewInner(viewRoot, viewName, ctx) {
     // где раздела в клинике просто нет.
     if (navHiddenFor(viewName)) {
         // Своя заглушка, не renderPlaceholder: тот дописывает к имени слово «module» (экран «скоро»).
+        // FIX_318_V1 (B1) — «На главную» только туда, где можно работать: кнопка,
+        // ведущая на этот же скрытый экран, водила бы по кругу.
+        const home = firstAllowedView();
+        const canGoHome = home !== viewName && !navHiddenFor(home);
         viewRoot.appendChild(h('div', { class: 'fade-in' },
             h('div', { class: 'empty', style: { padding: '40px 20px' } },
                 h('p', { style: { fontWeight: '600' } }, 'Раздел скрыт'),
                 h('p', { class: 'muted', style: { fontSize: '13.5px', marginTop: '6px' } }, 'Этот раздел скрыт в «Настройки → Видимость разделов». Администратор может вернуть его там.'),
-                h('button', { class: 'btn btn-outline', type: 'button', style: { marginTop: '14px' }, onclick: () => navigate(firstAllowedView()) }, 'На главную'))));
+                canGoHome ? h('button', { class: 'btn btn-outline', type: 'button', style: { marginTop: '14px' }, onclick: () => navigate(home) }, 'На главную') : null)));
         return;
     }
     if (!isRouteAllowed(viewName)) {
@@ -1438,11 +1467,44 @@ function navItemOwns(item) {
 
 // NAV_GROUPS_V1 — группы, свёрнутые щелчком в ЭТОЙ загрузке страницы.
 // NAV_UNFOLDED_V1 (2026-10-27) — владелец, посмотрев на три свёрнутых заголовка:
-// «make this unfolded». Теперь по умолчанию всё раскрыто (меню и так входит в
-// окно без прокрутки, лишние разделы прячет «Видимость разделов»), а щелчок по
+// «make this unfolded». Теперь по умолчанию всё раскрыто (на высоком окне меню
+// входит без прокрутки, лишние разделы прячет «Видимость разделов»), а щелчок по
 // заголовку сворачивает группу до перезагрузки. Нарочно не localStorage, как и
 // у «Настроек» (SETTINGS_HUB_LIST_V1). Группа открытого экрана раскрыта всегда.
 const navClosed = new Set();
+// FIX_318_V1 (B2) — «всё меню входит в окно» было неправдой на ноутбуке: на
+// 1366×768 (окно ~657px) раскрытое меню прокручивалось, на 1280×720 и
+// 1440×900 — тоже. Поэтому умолчание зависит от окна: раскрытое меню входит —
+// группы раскрыты (NAV_UNFOLDED_V1); не входит (navCompact) — раскрыта только
+// группа открытого экрана. Щелчок человека сильнее умолчания и теперь
+// запоминается в обе стороны: navOpened — раскрытые щелчком, navClosed —
+// свёрнутые. Решает fitSidebar() замером после каждой отрисовки и при смене
+// размера окна; navFoldGroups / navFoldActive — что нарисовала последняя.
+const navOpened = new Set();
+let navCompact = false;
+let navFoldGroups = [];
+let navFoldActive = null;
+
+function fitSidebar() {
+    // На рейке 68px заголовков нет, пункты всех групп видны значками — мерить
+    // там нечего; замер после раскрытия колонки (wireSidebarCollapse).
+    const app = document.querySelector('.app');
+    if (app && app.classList.contains('sidebar-collapsed')) return;
+    const fits = navFitsOpen(sidebarEl, navFoldGroups);
+    if (fits === null || fits === !navCompact) return;
+    navCompact = !fits;
+    for (const g of navFoldGroups) {
+        setNavSectionOpen(g.header, g.navEl, isNavSectionOpen(g.item, { closed: navClosed, opened: navOpened, activeSection: navFoldActive, compact: navCompact }));
+    }
+}
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    let fitQueued = false;
+    window.addEventListener('resize', () => {
+        if (fitQueued) return;
+        fitQueued = true;
+        requestAnimationFrame(() => { fitQueued = false; fitSidebar(); });
+    });
+}
 
 // NAV_VISIBILITY_V1 (2026-10-26) — разделы, скрытые для всей клиники («Настройки →
 // Основное → Видимость разделов»). Владелец: «build visibility setting of
@@ -1466,11 +1528,36 @@ async function loadNavVisibility() {
     }
 }
 function setNavHidden(list) {
+    const before = new Set(navHidden);
     navHidden.clear();
     for (const id of normalizeHidden(list)) navHidden.add(id);
     renderSidebar();
     // Администратор только что спрятал раздел, в котором стоит сам, — уводим домой.
-    if (navHiddenFor(state.view)) navigate(firstAllowedView());
+    const leaving = navHiddenFor(state.view);
+    if (leaving) navigate(firstAllowedView());
+    // FIX_318_V1 (B1, B5) — кэш панелей. Панель, смонтированная до смены
+    // списка, показывалась бы при возврате как была: скрытый дашборд открывался
+    // бы по прямому адресу целиком, возвращённый раздел — заглушкой «Раздел
+    // скрыт», а хаб «Настроек» держал бы плитку «Товары и препараты» ссылкой в
+    // скрытые «Закупки». Список поменялся — все панели, кроме открытой,
+    // снимаются и при следующем заходе отрисуются заново (меняет его
+    // администратор, редко, так что потерянные фильтры здесь дешевле вранья).
+    const changed = before.size !== navHidden.size || [...navHidden].some((id) => !before.has(id));
+    if (!changed) return;
+    for (const pane of [...state.panes]) {
+        if (pane.key === state.activeKey) {
+            // Открытая панель перерисовывается на месте; экран «Видимость
+            // разделов» (он и зовёт setNavHidden) перерисовывает себя сам, а
+            // панель, в которую только что увели, только что и нарисована.
+            if (!leaving && pane.view !== 'visibility-settings') {
+                const r = renderViewInto(pane);
+                if (r && typeof r.catch === 'function') r.catch((e) => console.warn('[nav] visibility re-render', e));
+            }
+            continue;
+        }
+        state.panes.splice(state.panes.indexOf(pane), 1);
+        try { pane.root.remove(); } catch (_) {}
+    }
 }
 
 function renderSidebar() {
@@ -1490,6 +1577,10 @@ function renderSidebar() {
     let currentHeaderEl = null;   // pending section header, appended lazily
     let currentNav = null;
     let currentNavHasItems = false;
+    // FIX_318_V1 (B2, B6) — сворачиваемые группы этой отрисовки: замер окна
+    // (fitSidebar) и сумма счётчиков на заголовке (groupBadge).
+    const foldGroups = [];
+    let currentGroup = null;
     for (const item of NAV) {
         if (item.section) {
             // Defer rendering the section header + nav container until we know
@@ -1498,6 +1589,7 @@ function renderSidebar() {
             const navEl = h('div', { class: 'nav' });
             currentNav = navEl;
             currentNavHasItems = false;
+            currentGroup = null;
             if (item.fold) {
                 // NAV_GROUPS_V1 — свёрнутая группа. Здесь стоял аккордеон для
                 // секции 'Soon' (COMING_SOON_V1, easymed_soon_collapsed), которой
@@ -1506,17 +1598,22 @@ function renderSidebar() {
                 // список прячется классом, а не inline-style: на рейке 68px
                 // заголовков нет, и там CSS показывает пункты всех групп.
                 const key = item.section;
-                const open = isNavSectionOpen(item, { closed: navClosed, activeSection });
+                const open = isNavSectionOpen(item, { closed: navClosed, opened: navOpened, activeSection, compact: navCompact });
+                const chev = h('span', { class: 'nav-section-chev' }, Icon('ChevronDown', { size: 14 }));
                 const header = h('button', { class: 'nav-section nav-section--toggle', type: 'button',
                         onclick: () => {
                             const willOpen = navEl.classList.contains('nav--folded');
-                            if (willOpen) navClosed.delete(key); else navClosed.add(key);
+                            // FIX_318_V1 (B2) — выбор человека в обе стороны: раскрытая
+                            // щелчком на коротком окне не сворачивается при переходе.
+                            if (willOpen) { navClosed.delete(key); navOpened.add(key); }
+                            else { navOpened.delete(key); navClosed.add(key); }
                             setNavSectionOpen(header, navEl, willOpen);
                         } },
                     h('span', { class: 'nav-section-title' }, t('sidebar.sections.' + key, key)),
-                    h('span', { class: 'nav-section-chev' }, Icon('ChevronDown', { size: 14 })));
+                    chev);
                 setNavSectionOpen(header, navEl, open);
                 currentHeaderEl = header;
+                currentGroup = { item, header, navEl, chev, counts: [] };
             } else {
                 currentHeaderEl = h('div', { class: 'nav-section' },
                     t('sidebar.sections.' + item.section, item.section));
@@ -1528,12 +1625,17 @@ function renderSidebar() {
         if (navHidden.has(item.id)) continue;   // NAV_VISIBILITY_V1 — скрыто для всей клиники
         // QUEUE_ONE_ENTRY_V1 — пункт, который для этой роли уже есть вкладкой
         // внутри другого раздела, вторым входом не рисуется.
-        if (item.foldsInto && isModuleAllowed(item.foldsInto)) continue;
+        // FIX_318_V1 (B4) — если этот раздел скрыт для клиники, вкладки внутри
+        // него не видно, и пункт остаётся единственным входом: «Очередь» не
+        // уходит из меню вместе со скрытыми «Пациентами».
+        if (item.foldsInto && isModuleAllowed(item.foldsInto) && !navHidden.has(item.foldsInto)) continue;
         if (currentNav && !currentNavHasItems) {
             if (currentHeaderEl) sidebarEl.appendChild(currentHeaderEl);
             sidebarEl.appendChild(currentNav);
             currentNavHasItems = true;
+            if (currentGroup) foldGroups.push(currentGroup);   // FIX_318_V1 — только нарисованные группы
         }
+        if (currentGroup) currentGroup.counts.push({ count: navCounts[item.id], alert: item.badgeKind === 'alert' });   // FIX_318_V1 (B6)
         if (!currentNav) {
             currentNav = h('div', { class: 'nav' });
             sidebarEl.appendChild(currentNav);
@@ -1567,6 +1669,20 @@ function renderSidebar() {
         ));
     }
     sidebarEl.appendChild(sidebarClock());
+    // FIX_318_V1 (B6) — сумма счётчиков группы на её заголовке. Свёрнутая
+    // «Операции» прятала красные счётчики (просроченные задачи CRM, неоплаченные
+    // счета, непрочитанный чат), а бейдж обновления у «Настроек» уходил в
+    // свёрнутую группу. Виден бейдж заголовка только у СВЁРНУТОЙ группы
+    // (admin.css .nav-section--folded .nav-section-badge): у раскрытой он
+    // повторял бы счётчики пунктов под ним. Щелчок по заголовку меняет только
+    // класс — бейдж появляется и прячется без перерисовки.
+    for (const g of foldGroups) {
+        const b = groupBadge(g.counts);
+        if (b) g.header.insertBefore(h('span', { class: 'nav-section-badge' + (b.alert ? ' alert' : '') }, formatBadge(b.total)), g.chev);
+    }
+    navFoldGroups = foldGroups;
+    navFoldActive = activeSection;
+    fitSidebar();   // FIX_318_V1 (B2)
 }
 
 /**
@@ -3154,6 +3270,7 @@ function wireSidebarCollapse() {
         // спрашивает сам.
         pulseFade(document.querySelector('.sidebar'));
         try { localStorage.setItem('easymed_sidebar_collapsed', on ? '1' : '0'); } catch (_) {}
+        if (!on) fitSidebar();   // FIX_318_V1 (B2) — на рейке замер пропускался; меню снова с заголовками
     };
     const toggle = () => setCollapsed(!app.classList.contains('sidebar-collapsed'));
     // APP_RELOAD_BTN_V1 — the topbar reload button is wired here (not via inline
@@ -3175,7 +3292,13 @@ function startApp({ fresh = false } = {}) {
     // НАСТОЯЩИМ таблицам, а не по своей копии: копия разошлась бы с ними в
     // тот день, когда добавят новый экран, — то есть ровно тогда, когда тест
     // и нужен.
-    window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading, setNavHidden };   // setNavHidden — NAV_VISIBILITY_V1
+    // isNavHidden — FIX_318_V1: «скрыт ли экран» для сводки прав (role-reach.js
+    // landingScreen) и плиток «Настроек», тем же правилом, что у меню.
+    // subViewsOf — FIX_318_V1 (B4): что скроется вместе с пунктом меню.
+    // refreshNav — FIX_318_V1 (B6): его ставит модуль при загрузке (SERVICE_SCOPE_V1),
+    // а эта строка затирала объект целиком, и CRM, чат, склад, отделы звали
+    // refreshNav впустую — счётчики ждали двадцатисекундного опроса.
+    window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading, setNavHidden, isNavHidden: navHiddenFor, subViewsOf, refreshNav: loadNavCounts };   // setNavHidden — NAV_VISIBILITY_V1
     watchSectionHeadings();   // ONE_NAME_PER_SCREEN_V1
     startUiEnhance();         // UI_ENHANCE_V1 — списки и календари в виде программы
     paintUserCard();

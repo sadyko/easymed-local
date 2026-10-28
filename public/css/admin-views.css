@@ -6656,7 +6656,7 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    время по стрелкам — да. */
 .sidebar-collapsed .nav-clock { justify-content: center; padding: 14px 4px 12px; }
 .sidebar-collapsed .nav-clock-txt { display: none; }
-@media (max-height: 760px) { .nav-clock { padding-top: 4px; padding-bottom: 4px; } }   /* NAV_GROUPS_V1 — см. admin.css */
+@media (max-height: 800px) { .nav-clock { padding-top: 4px; padding-bottom: 4px; } }   /* NAV_GROUPS_V1 — см. admin.css; FIX_318_V1 (B2) — ступень 800px, как там */
 /* ORDER_FROM_STOCK_V1 — подсказки склада в назначении стоят ПОД полем имени,
    поверх формы: список, толкающий поля вниз, уводит из-под курсора то, во что
    метились. */

@@ -22,12 +22,14 @@ const store = new Map();
 globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => { store.set(k, String(v)); }, removeItem: (k) => { store.delete(k); }, clear: () => store.clear() };
 globalThis.localStorage.setItem('admin.lang', 'ru');
 const setCalls = [];
+// FIX_318_V1 (B4) — подэкраны разделов, как их отдаёт оболочка (PARENT_OF в admin.js).
+const SUBVIEWS = { patients: ['patient-card', 'appointments', 'registration', 'docs-archive'], admissions: ['case-file'] };
 const NAV = [
   { section: 'Clinical' }, { id: 'patients', label: 'Patients', icon: 'Patients' }, { id: 'queue', label: 'Очередь', icon: 'Clock', foldsInto: 'patients' }, { id: 'admissions', label: 'Inpatient ward', icon: 'Bed' },
   { section: 'Operations', fold: true }, { id: 'crm', label: 'CRM · Заявки', icon: 'Headset' }, { id: 'referrals', label: 'Referrals', icon: 'Target' },
   { section: 'Settings', fold: true }, { id: 'settings', label: 'Settings', icon: 'Settings' },
 ];
-globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener(){}, easymed: { state: { user: { id: 1, role: 'admin' } }, NAV, setNavHidden: (l) => { setCalls.push(l); } }, confirm: () => true };
+globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener(){}, easymed: { state: { user: { id: 1, role: 'admin' } }, NAV, setNavHidden: (l) => { setCalls.push(l); }, subViewsOf: (id) => SUBVIEWS[id] || [] }, confirm: () => true };
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
 globalThis.requestAnimationFrame=(fn)=>fn();
 
@@ -96,4 +98,34 @@ test('снятая галочка → сохранение шлёт полный
   const c2 = calls.filter((x) => x.name === 'nav_visibility_save').pop();
   assert.deepStrictEqual(c2.body, { hidden: [] });
   assert.ok(textOf(root).includes('Скрыто разделов: 0'));
+});
+
+// FIX_318_V1 (B4) — «Пациенты» прячут не только список: карту пациента,
+// регистрацию, «Регистратуру» и архив документов (PARENT_OF), и ссылки на них из
+// CRM и блока «Звонит» открывают «Раздел скрыт». Экран обязан сказать это до
+// сохранения, а не после.
+test('FIX_318_V1: снятый раздел с подэкранами — предупреждение, что ещё скроется вместе с ним', async () => {
+  hiddenOnServer = ['admissions'];   // тест выше сохранил пустой список
+  const root = await mount();
+  const warn = (id) => byAttr(root, 'data-nav-warn').find((n) => n.attrs['data-nav-warn'] === id);
+  assert.ok(warn('admissions'), 'скрытый на сервере стационар без предупреждения о своих экранах');
+  assert.ok(textOf(warn('admissions')).includes('История болезни'));
+  assert.equal(warn('patients'), undefined, 'предупреждение у раздела, который не скрыт');
+  assert.equal(warn('crm'), undefined, 'у раздела без подэкранов предупреждать не о чем');
+
+  const p = toggle(root, 'patients');
+  p.checked = false;
+  p.dispatchEvent({ type: 'change' });
+  await tick();
+  const w = warn('patients');
+  assert.ok(w, 'сняли «Пациентов» — предупреждения нет');
+  for (const label of ['Карта пациента', 'Регистрация пациента', 'Регистратура', 'Документы']) {
+    assert.ok(textOf(w).includes(label), 'в предупреждении не названо: ' + label + ' — ' + textOf(w));
+  }
+  assert.ok(textOf(w).includes('Раздел скрыт'), 'не сказано, что ссылки на эти экраны откроют заглушку');
+
+  p.checked = true;
+  p.dispatchEvent({ type: 'change' });
+  await tick();
+  assert.equal(warn('patients'), undefined, 'вернули галочку — предупреждение осталось');
 });

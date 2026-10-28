@@ -195,3 +195,37 @@ test('«Развернуть все» раскрывает все группы �
   assert.ok(cards(root).every(isFolded), 'все группы снова свёрнуты');
   assert.strictEqual(textOf(btn).trim(), 'Развернуть все');
 });
+
+// FIX_318_V1 (B5) — плитка, ведущая в раздел, который скрыт в «Видимости
+// разделов» («Товары и препараты» → «Закупки»), открывала «Раздел скрыт».
+// Теперь она неактивна и говорит почему; вернули раздел — снова ссылка.
+test('FIX_318_V1: плитка скрытого раздела неактивна и объясняет, где его вернуть', async () => {
+  setFullAccess('Администратор');
+  const went = [];
+  const rowOf = (root, label) => byClass(root, 'set-row').find((r) => textOf(byClass(r, 'set-row-name')[0] || mk('div')).includes(label));
+  const easymed = globalThis.window.easymed;
+  try {
+    easymed.isNavHidden = (v) => v === 'inventory';
+    const root = mk('div');
+    await renderSettingsHub(root, { onNavigate: (r) => went.push(r) });
+    await tick();
+    const row = rowOf(root, 'Товары и препараты');
+    assert.ok(row, 'плитка «Товары и препараты» пропала — её надо показать неактивной, а не убрать молча');
+    assert.ok(!String(row.className).split(/\s+/).includes('set-row-link'), 'плитка скрытого раздела осталась ссылкой');
+    assert.equal(row.attrs['aria-disabled'], 'true');
+    assert.ok(textOf(row).includes('Видимость разделов'), 'не сказано, где вернуть раздел: ' + textOf(row));
+    row.click();
+    assert.deepStrictEqual(went, [], 'щелчок по неактивной плитке увёл в «Раздел скрыт»');
+    // Соседние плитки не тронуты.
+    assert.ok(String(rowOf(root, 'Список услуг').className).includes('set-row-link'));
+
+    easymed.isNavHidden = () => false;
+    const root2 = mk('div');
+    await renderSettingsHub(root2, { onNavigate: (r) => went.push(r) });
+    await tick();
+    const row2 = rowOf(root2, 'Товары и препараты');
+    assert.ok(String(row2.className).includes('set-row-link'), 'раздел вернули — плитка всё ещё неактивна');
+    row2.click();
+    assert.deepStrictEqual(went, ['inventory']);
+  } finally { delete easymed.isNavHidden; }
+});

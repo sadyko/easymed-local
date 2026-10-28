@@ -997,6 +997,227 @@ test('кэшированная панель «API и подключения»: �
     }
 });
 
+// ===========================================================================
+// 12. FIX_318_V1 (B7) — ЯЗЫК МЕНЯЕТСЯ ЦЕЛИКОМ, А НЕ ПОЛОВИНОЙ ЭКРАНА.
+//
+// admin.js импортировал './admin/i18n.js?v=pathway1'. Со строкой запроса это
+// ОТДЕЛЬНЫЙ модуль ESM — второй словарь со своим текущим языком, — а экраны
+// импортируют '../i18n.js' без неё. Кнопка EN вверху переключала только копию
+// оболочки: меню выходило смешанным (h() пропускает подпись через tr() второй
+// копии, и «Patients» превращалось обратно в «Пациенты»), а плитки «Настроек»
+// оставались русскими до перезагрузки страницы.
+// ===========================================================================
+const hasCls = (n, c) => String((n && n.className) || '').split(/\s+/).includes(c);
+const shownPane = () => panes().find((p) => p.style.display !== 'none');
+
+test('FIX_318_V1: ни один модуль приложения не берёт i18n.js со строкой запроса', () => {
+    const bad = [];
+    (function walk(dir) {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            const p = path.join(dir, e.name);
+            if (e.isDirectory()) { if (e.name !== '__tests__' && e.name !== 'vendor') walk(p); continue; }
+            if (!/\.m?js$/.test(e.name) || /\.test\.m?js$/.test(e.name)) continue;
+            const src = fs.readFileSync(p, 'utf8');
+            for (const m of src.matchAll(/(?:from\s*|import\s*\(\s*)['"]([^'"]*\/i18n\.js\?[^'"]*)['"]/g)) bad.push(path.relative(PUB, p) + ': ' + m[1]);
+        }
+    })(path.join(PUB, 'js'));
+    assert.deepEqual(bad, [], 'второй экземпляр словаря — второй текущий язык:\n  ' + bad.join('\n  '));
+});
+
+test('FIX_318_V1: кнопка языка вверху переводит и меню, и открытый экран — без перезагрузки', async () => {
+    await perms_setFull();
+    await go('settings');
+    const btn = (code) => LANG_EL.children.find((b) => b.dataset.lang === code);
+    const press = async (code) => { LANG_EL.dispatchEvent({ type: 'click', target: { closest: () => btn(code) } }); await settle(120); };
+    const CYR = /[А-Яа-яЁё]/;
+    const menuLabels = () => descendants(SIDEBAR)
+        .filter((n) => hasCls(n, 'nav-item') || hasCls(n, 'nav-section-title') || (hasCls(n, 'nav-section') && !hasCls(n, 'nav-section--toggle')))
+        .map(labelOf);
+    const paneText = () => labelOf(shownPane());
+    try {
+        await press('en');
+        const mixed = menuLabels().filter((l) => CYR.test(l));
+        assert.deepEqual(mixed, [], 'меню после EN осталось смешанным');
+        assert.ok(menuLabels().includes('Patients'), 'пункт «Пациенты» не перевёлся: ' + menuLabels().join(' | '));
+        assert.equal(TITLE_EL.textContent, 'Settings', 'заголовок раздела не перевёлся');
+        assert.ok(paneText().includes('Employees'), 'плитки «Настроек» остались на прежнем языке');
+        assert.ok(!paneText().includes('Сотрудники'), 'на экране «Настроек» осталась русская плитка');
+        assert.ok(String(btn('en').className).includes('on'), 'переключатель не отметил EN');
+
+        await press('ru');
+        assert.ok(menuLabels().includes('Пациенты'), 'обратно на русский меню не вернулось');
+        assert.ok(paneText().includes('Сотрудники'), 'обратно на русский экран не вернулся');
+        assert.equal(TITLE_EL.textContent, 'Настройки');
+    } finally {
+        if (!String(btn('ru').className).includes('on')) await press('ru');
+    }
+});
+
+// ===========================================================================
+// 13. FIX_318_V1 (B1) — СКРЫТЫЙ «ДАШБОРД» НЕ БЫВАЕТ ДОМОМ АДМИНИСТРАТОРА.
+//
+// firstAllowedView() отдавал администратору 'dashboard' раньше проверки
+// скрытых: администратор входил в «Раздел скрыт», а «На главную» и «назад»
+// возвращали его туда же — по кругу.
+// ===========================================================================
+test('FIX_318_V1: скрыли «Дашборд», стоя на нём, — администратор уходит в первый открытый раздел, «На главную» не водит по кругу', async () => {
+    await perms_setFull();
+    try {
+        await go('dashboard');
+        shell().setNavHidden(['dashboard']);
+        await settle(80);
+        assert.equal(shell().state.view, 'patients', 'администратора оставили на скрытом дашборде: ' + shell().state.view);
+        assert.equal(navItemFor('Дашборд'), undefined, 'скрытый пункт остался в меню');
+
+        // Прямой адрес — заглушка, и её «На главную» ведёт в открытый раздел.
+        await go('dashboard');
+        assert.ok(labelOf(shownPane()).includes('Раздел скрыт'), 'по прямому адресу скрытый раздел открылся');
+        const home = descendants(shownPane()).find((n) => n.tagName === 'BUTTON' && labelOf(n).includes('На главную'));
+        assert.ok(home, 'на заглушке нет «На главную»');
+        home.click();
+        await settle(80);
+        assert.equal(shell().state.view, 'patients', '«На главную» вернула на скрытый дашборд');
+    } finally {
+        shell().setNavHidden([]);
+        await settle(40);
+    }
+});
+
+// ===========================================================================
+// 14. FIX_318_V1 (B4) — СКРЫТЫЕ «ПАЦИЕНТЫ» ПРЯЧУТ СВОИ ЭКРАНЫ, НО НЕ «ОЧЕРЕДЬ».
+//
+// «Очередь» в меню — вкладка «Пациентов» (foldsInto), и пункт рисовался, только
+// если «Пациентов» в меню нет по ПРАВАМ. Скрытые «Пациенты» уносили из меню и
+// «Очередь», хотя её никто не скрывал. А экрану видимости оболочка теперь
+// называет, что ещё уйдёт вместе с разделом (PARENT_OF).
+// ===========================================================================
+test('FIX_318_V1: «Пациенты» скрыты — «Очередь» остаётся в меню; оболочка называет подэкраны раздела', async () => {
+    await perms_setFull();
+    assert.deepEqual([...shell().subViewsOf('patients')].sort(), ['appointments', 'docs-archive', 'patient-card', 'registration'],
+        'подэкраны «Пациентов» не те, что прячет PARENT_OF');
+    assert.deepEqual(shell().subViewsOf('settings'), [], '«Настройки» не скрываются — и подэкранов для предупреждения у них нет');
+    assert.equal(shell().subViewsOf('admissions').includes('beds'), false, 'старый адрес-пересылка назван экраном');
+    try {
+        shell().setNavHidden(['patients']);
+        await settle(60);
+        await go('labs');
+        assert.equal(navItemFor('Пациенты'), undefined);
+        assert.ok(navItemFor('Очередь'), '«Очередь» пропала из меню вместе со скрытыми «Пациентами»');
+        await go('queue');
+        assert.equal(shell().state.view, 'queue');
+        assert.ok(!labelOf(shownPane()).includes('Раздел скрыт'), 'сама «Очередь» не скрыта');
+    } finally {
+        shell().setNavHidden([]);
+        await settle(40);
+    }
+    await go('patients');
+    assert.equal(navItemFor('Очередь'), undefined, 'вернули «Пациентов» — дубль «Очереди» в меню');
+});
+
+// FIX_318_V1 (B5) — хаб «Настроек» из кэша панелей тоже узнаёт о новом списке:
+// иначе плитка «Товары и препараты» после скрытия «Закупок» оставалась ссылкой
+// в «Раздел скрыт», пока страницу не перезагрузят.
+test('FIX_318_V1: скрыли «Закупки» — плитка «Товары и препараты» в «Настройках» неактивна и без перезагрузки', async () => {
+    await perms_setFull();
+    const tile = () => descendants(shownPane()).find((n) => n.attrs && n.attrs['data-tile-hidden'] === 'inventory');
+    try {
+        await go('settings');
+        assert.equal(tile(), undefined, 'подготовка: «Закупки» не скрыты');
+        await go('labs');
+        shell().setNavHidden(['inventory']);
+        await settle(60);
+        await go('settings');
+        assert.ok(tile(), 'хаб из кэша показывает плитку скрытых «Закупок» ссылкой');
+    } finally {
+        shell().setNavHidden([]);
+        await settle(40);
+    }
+    await go('labs');
+    await go('settings');
+    assert.equal(tile(), undefined, 'вернули «Закупки» — плитка осталась неактивной');
+});
+
+// ===========================================================================
+// 15. FIX_318_V1 (B2, B6) — МЕНЮ НА КОРОТКОМ ОКНЕ И СЧЁТЧИКИ СВЁРНУТЫХ ГРУПП.
+//
+// B2: все группы раскрыты (NAV_UNFOLDED_V1), а на ноутбуке 1366×768 меню
+// прокручивалось. Теперь, если раскрытое меню не входит в окно, группы без
+// открытого экрана свёрнуты; щелчок человека сильнее умолчания.
+// B6: свёрнутая «Операции» прятала красные счётчики (просроченные задачи CRM,
+// неоплаченные счета, чат), а бейдж обновления на «Настройках» уходил в
+// свёрнутую группу. Теперь заголовок свёрнутой группы несёт их сумму.
+// Раскладки в fake-DOM нет — высоту колонки считаем сами: заголовок 23px,
+// строка 29px, часы 50px; окно — clientHeight.
+// ===========================================================================
+test('FIX_318_V1: короткое окно — группы без открытого экрана свёрнуты, щелчок сильнее умолчания, у свёрнутой группы — сумма счётчиков', async () => {
+    await perms_setFull();
+    const head = (title) => descendants(SIDEBAR).find((n) => hasCls(n, 'nav-section--toggle') && labelOf(n).startsWith(title));
+    const folded = (title) => hasCls(head(title), 'nav-section--folded');
+    const badgeOf = (title) => descendants(head(title)).find((n) => hasCls(n, 'nav-section-badge')) || null;
+    const height = () => SIDEBAR.children.reduce((n, c) => n + (hasCls(c, 'nav-section') ? 23
+        : hasCls(c, 'nav') ? (hasCls(c, 'nav--folded') ? 0 : c.children.length * 29) : 50), 0);
+    let client = 500;
+    Object.defineProperty(SIDEBAR, 'clientHeight', { get: () => client, configurable: true });
+    Object.defineProperty(SIDEBAR, 'scrollHeight', { get: height, configurable: true });
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => {
+        const u = String(url);
+        const ok = (body) => ({ ok: true, status: 200, json: async () => body });
+        if (u.startsWith('/api/rpc/update_status')) return ok({ data: { current_version: '3.18.0', offer: { version: '3.18.1' }, approved: false } });
+        if (u.startsWith('/api/rpc/telegram_chat_unread')) return ok({ data: { unread: 3 } });
+        if (u.startsWith('/api/db')) {
+            let b = {}; try { b = JSON.parse(opts.body || '{}'); } catch (_) {}
+            if (b.table === 'invoices') return ok({ data: [], count: 2 });
+        }
+        return prevFetch(url, opts);
+    };
+    try {
+        assert.equal(typeof shell().refreshNav, 'function', 'экраны зовут window.easymed.refreshNav после действий — оболочка его потеряла');
+        await go('labs'); await settle(80);
+        await go('patients'); await settle(80);
+        assert.equal(folded('Операции'), true, 'меню не входит в окно — «Операции» без открытого экрана должны быть свёрнуты');
+        assert.equal(folded('Настройки'), true);
+        assert.equal(folded('Аналитика'), true);
+        assert.ok(height() <= client, 'свернули, а меню всё равно не входит: ' + height() + ' > ' + client);
+
+        // B6 — сумма счётчиков на заголовке свёрнутой группы.
+        const ops = badgeOf('Операции');
+        assert.ok(ops, 'у свёрнутых «Операций» нет бейджа — красные счётчики спрятаны');
+        assert.equal(labelOf(ops), '5', 'чат 3 + касса 2');
+        assert.ok(hasCls(ops, 'alert'), 'сумма красных счётчиков — красная');
+        const upd = badgeOf('Настройки');
+        assert.ok(upd && hasCls(upd, 'alert'), 'бейдж обновления ушёл в свёрнутые «Настройки»');
+        assert.equal(badgeOf('Аналитика'), null, 'у группы без счётчиков бейджа нет');
+
+        // Группа открытого экрана раскрыта.
+        await go('cashier-shifts');
+        assert.equal(folded('Операции'), false, 'экран кассы открыт, а его группа свёрнута');
+        assert.equal(folded('Аналитика'), true);
+
+        // Щелчок человека сильнее умолчания — и переживает переходы.
+        head('Аналитика').click();
+        assert.equal(folded('Аналитика'), false);
+        await go('patients');
+        assert.equal(folded('Аналитика'), false, 'раскрытая щелчком группа свернулась сама при переходе');
+        assert.equal(folded('Операции'), true);
+
+        // Окно выросло — всё раскрыто, кроме свёрнутого щелчком.
+        head('Аналитика').click();
+        client = 2000;
+        await go('labs');
+        assert.equal(folded('Операции'), false, 'меню входит в окно — группы раскрыты (NAV_UNFOLDED_V1)');
+        assert.equal(folded('Настройки'), false);
+        assert.equal(folded('Аналитика'), true, 'свёрнутая щелчком группа раскрылась сама');
+        head('Аналитика').click();
+        assert.equal(folded('Аналитика'), false);
+    } finally {
+        globalThis.fetch = prevFetch;
+        delete SIDEBAR.clientHeight;
+        delete SIDEBAR.scrollHeight;
+        await go('patients');
+    }
+});
+
 test('глушим таймеры экранов, чтобы прогон завершался', () => {
     for (const id of appIntervals) clearInterval(id);
     appIntervals.clear();
