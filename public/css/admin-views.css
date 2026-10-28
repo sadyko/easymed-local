@@ -2391,7 +2391,8 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .tplm-secs { display: flex; flex-direction: column; gap: 13px; }
 .tplm-sec-l { font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
     color: var(--primary-600); margin-bottom: 3px; }
-.tplm-sec-b { font-size: 13.5px; color: var(--ink-700); line-height: 1.5; white-space: pre-wrap; }
+/* DOC_RICH_FORMAT_V1 (T4) — просмотр рисует разметку шаблона (строки прежнего текста — <br>) */
+.tplm-sec-b { font-size: 13.5px; color: var(--ink-700); line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
 
 /* form */
 .tplm-form { display: flex; flex-direction: column; gap: 13px; }
@@ -2403,6 +2404,29 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .tplm-input:focus, .tplm-textarea:focus { outline: none; border-color: var(--primary-600);
     box-shadow: 0 0 0 3px var(--primary-50); }
 .tplm-textarea { resize: vertical; line-height: 1.45; min-height: 48px; }
+/* DOC_RICH_FORMAT_V1 (T4) — раздел шаблона как поле документа: растёт с текстом,
+   подсказка пустого раздела, списки и таблица — как на листе; панель оформления
+   над разделами прилипает к верху окна (top: -16px — поверх верхнего отступа
+   .tplm-detail: текст разделов не просвечивает над панелью). */
+.tplm-form-secs .tplm-textarea { position: relative; min-height: 72px; }
+.tplm-textarea:empty::before, .tplm-textarea.is-empty::before { content: attr(data-ph); position: absolute; left: 11px; top: 8px;
+    color: var(--ink-400); pointer-events: none; }
+.tplm-textarea ul, .tplm-textarea ol, .tplm-sec-b ul, .tplm-sec-b ol { margin: 3px 0 5px; padding-left: 22px; }
+.tplm-textarea ul, .tplm-sec-b ul { list-style: disc outside; }
+.tplm-textarea ol, .tplm-sec-b ol { list-style: decimal outside; }
+.tplm-textarea li ul, .tplm-sec-b li ul { list-style-type: circle; }
+.tplm-textarea li, .tplm-sec-b li { margin: 1px 0; padding-left: 2px; }
+.tplm-textarea table.a4-tbl, .tplm-textarea table.a4-restbl, .tplm-sec-b table.a4-tbl, .tplm-sec-b table.a4-restbl {
+    width: 100%; border-collapse: collapse; margin: 5px 0; }
+.tplm-textarea table.a4-tbl th, .tplm-textarea table.a4-tbl td, .tplm-textarea table.a4-restbl th, .tplm-textarea table.a4-restbl td,
+.tplm-sec-b table.a4-tbl th, .tplm-sec-b table.a4-tbl td, .tplm-sec-b table.a4-restbl th, .tplm-sec-b table.a4-restbl td {
+    border: 1px solid #b9c1cc; padding: 3px 7px; text-align: left; vertical-align: top; }
+.tplm-textarea table.a4-tbl th, .tplm-textarea table.a4-restbl th, .tplm-sec-b table.a4-tbl th, .tplm-sec-b table.a4-restbl th {
+    background: #f1f4f7; font-weight: 700; }
+.tplm-fmt { position: sticky; top: -16px; z-index: 3; align-self: flex-start; display: flex; flex-wrap: wrap; align-items: center;
+    gap: 1px; background: #111827; border-radius: 8px; padding: 3px; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
+.tplm-fmt button:hover { background: rgba(255,255,255,.12) !important; }
+.tplm-fmt button:focus-visible { outline: 2px solid #99f6e4; outline-offset: -2px; }
 .tplm-scopepick { display: flex; gap: 8px; }
 .tplm-scopepick .tplm-scopebtn { flex: 1; display: inline-flex; align-items: center; justify-content: center;
     gap: 7px; padding: 9px; border: 1px solid var(--ink-200); border-radius: var(--r-sm);

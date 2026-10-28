@@ -224,7 +224,9 @@ test('B: «Документы» открывают ту же библиотек�
     // правка разделов — редактируемая область с HTML, а не textarea с вырезанными тегами
     const ws = code(WS_SRC);
     assert.match(ws, /'data-tpl-sec': k, contentEditable: 'true'/, 'разделы шаблона снова textarea');
-    assert.match(ws, /d\.body\[k\] = e\.currentTarget\.innerHTML/, 'правка раздела не хранит HTML');
+    // DOC_RICH_FORMAT_V1 (T4) — хранится очищенная разметка раздела (tplSecValue), а не сырой innerHTML
+    assert.match(ws, /oninput: \(e\) => \{ tplSecSync\(e\.currentTarget, k\); \}/, 'правка раздела не хранит HTML');
+    assert.match(ws, /d\.body\[key\] = tplSecValue\(box\)/, 'правка раздела не хранит HTML');
     assert.ok(!/body\.innerHTML = esc\(v\)/.test(ws), 'просмотр шаблона показывает теги текстом');
 });
 

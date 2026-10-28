@@ -4571,6 +4571,15 @@ export function tplDraftFrom(t) {
     return { id: t.id, name: t.name || '', scope: t.scope || 'private', doc_type: dt, body, extra };
 }
 /**
+ * DOC_RICH_FORMAT_V1 (T4) — значение раздела шаблона из редактора: разметка,
+ * очищенная правилами хранения (rich-text.js, как поле документа), с таблицей
+ * a4-tbl; раздел без текста и без таблицы — пусто. Экспорт — для проверки.
+ */
+export function tplSecValue(el) {
+    const v = sanitizeStoredHtml(el ? el.innerHTML : '');
+    return richHasContent(v) ? v : '';
+}
+/**
  * CABINET_FIX_V1_R1 — тело шаблона к сохранению: разделы редактора с текстом
  * плюс ВСЕ прочие ключи, с которыми шаблон пришёл (и разделы прежнего рода,
  * если род сменили в редакторе). Ничего не выбрасывается. Экспорт — для проверки.
@@ -4674,8 +4683,20 @@ export function openTemplateLibraryModal(ctx, profile = null) {
 
     const backdrop = h('div', { class: 'modal-backdrop' });
     const modal    = h('div', { class: 'modal' });
-    const close = () => { backdrop.remove(); modal.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    // DOC_RICH_FORMAT_V1 (T4) — таблица в разделах шаблона: тот же набор, что у
+    // бланка (окно размера, панель, Tab/Enter, отмена, приведение вставки), на
+    // странице кабинета; снимается вместе с окном.
+    let tblApi = null;
+    const close = () => {
+        backdrop.remove(); modal.remove(); document.removeEventListener('keydown', onKey);
+        if (tblApi) { tblApi.dispose(); tblApi = null; }
+    };
+    // Escape при открытом окне размера таблицы закрывает только его — не окно шаблонов с черновиком
+    const onKey = (e) => {
+        if (e.key !== 'Escape') return;
+        if (tblApi && tblApi.picking()) { tblApi.hideUi(); return; }
+        close();
+    };
     backdrop.addEventListener('click', close);
 
     const listEl   = h('div', { class: 'tplm-list' });
@@ -4736,6 +4757,8 @@ export function openTemplateLibraryModal(ctx, profile = null) {
     document.body.appendChild(backdrop);
     document.body.appendChild(modal);
     document.addEventListener('keydown', onKey);
+    // после onKey: его Escape видит окно размера ещё открытым
+    tblApi = _blankWireTables(document, _tblEnvTemplate(document));
 
     // ---- paint: LEFT list ------------------------------------------------
     function paintList() {
@@ -4772,6 +4795,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
 
     // ---- paint: RIGHT detail (view | new | edit) -------------------------
     function paintDetail() {
+        if (tblApi) tblApi.hideUi();   // DOC_RICH_FORMAT_V1 (T4) — разделы уходят, панель таблицы — с ними
         clear(detailEl);
         if (tplState.mode === 'new' || tplState.mode === 'edit') { paintForm(); return; }
         const sel = tplState.rows.find(r => r.id === tplState.selId);
@@ -4812,7 +4836,9 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             // тело очищено тем же, что и при вставке. Раньше
             // HTML показывался текстом — «Почки<br>норма».
             // DOC_RICH_FORMAT_V1 — очистка хранения (rich-text.js): видно ровно то, что вставится.
-            body.innerHTML = sanitizeStoredHtml(v);
+            // T4 — просмотр рисует разметку (white-space: normal, списки и таблица — как в
+            // документе); строки прежнего простого текста («\n») — <br>, как при вставке.
+            body.innerHTML = textBreaks(sanitizeStoredHtml(v));
             secWrap.appendChild(h('div', { class: 'tplm-sec' },
                 h('div', { class: 'tplm-sec-l' }, tr(_labels[k] || k)),
                 body,
@@ -4834,22 +4860,82 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             'data-sv': val }, Icon(ic, { size: 14 }), ' ' + ru);
 
         const secFields = h('div', { class: 'tplm-form-secs' });
+        let lastBox = null;   // DOC_RICH_FORMAT_V1 (T4) — раздел, где врач был последним
         function paintSecFields() {
             clear(secFields);
+            lastBox = null;
+            if (tblApi) tblApi.hideUi();
             const _T = tplTypeOf(d.doc_type);
             for (const k of _T.keys) {
                 // CABINET_FIX_V1_TPL — раздел правится как документ, с его
                 // форматированием (HTML не вырезается и не показывается тегами).
+                // DOC_RICH_FORMAT_V1 (T4) — раздел как поле документа: white-space normal
+                // (Enter — новая строка-блок, список и таблица — как на листе), растёт
+                // с текстом (прокручивается окно, а не раздел); строки прежнего
+                // простого текста — <br>. Хранится очищенная разметка (tplSecValue);
+                // раздел, который не правили, остаётся в шаблоне как был.
                 const ed = h('div', { class: 'tplm-textarea', 'data-tpl-sec': k, contentEditable: 'true',
                     'data-ph': tr('Текст секции…'),
-                    style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '260px', overflowY: 'auto' },
-                    oninput: (e) => { d.body[k] = e.currentTarget.innerHTML; } });
-                ed.innerHTML = sanitizeStoredHtml(d.body[k] || '');   // DOC_RICH_FORMAT_V1
+                    style: { whiteSpace: 'normal', overflowWrap: 'anywhere' },
+                    onfocus: (e) => { lastBox = e.currentTarget; },
+                    oninput: (e) => { tplSecSync(e.currentTarget, k); } });
+                ed.innerHTML = textBreaks(sanitizeStoredHtml(d.body[k] || ''));   // DOC_RICH_FORMAT_V1
+                if (!richHasContent(ed.innerHTML)) ed.classList.add('is-empty');
                 secFields.appendChild(h('div', { class: 'tplm-field' },
                     h('label', null, _T.labels[k] || k), ed));
             }
         }
+        // раздел → черновик: очищенная разметка; пустой раздел — пусто (и подсказка видна)
+        function tplSecSync(box, k) {
+            if (!box) return;
+            const key = k || box.getAttribute('data-tpl-sec');
+            d.body[key] = tplSecValue(box);
+            box.classList.toggle('is-empty', !d.body[key]);
+        }
         paintSecFields();
+
+        // DOC_RICH_FORMAT_V1 (T4) — ПАНЕЛЬ ОФОРМЛЕНИЯ РАЗДЕЛОВ. Одна, над разделами,
+        // прилипает к верху окна при прокрутке. Не плавающая, как на листе: врач
+        // видит её сразу, не выделяя текст (владелец не нашёл, где оформлять и
+        // где таблица), и она не закрывает соседний раздел. Кнопки — те же, что у
+        // документа (_fmtButtonsHtml). Действует на раздел с курсором; курсора в
+        // разделе нет — на последний, где врач был (или первый), курсор — в конец.
+        const fmtBar = h('div', { class: 'tplm-fmt', 'data-tpl-fmt': '', role: 'toolbar', 'aria-label': 'Оформление текста' });
+        fmtBar.innerHTML = _fmtButtonsHtml();
+        const fmtBox = () => {
+            const s = typeof document.getSelection === 'function' ? document.getSelection() : null;
+            const n = s && s.rangeCount ? s.anchorNode : null;
+            const el = n && (n.nodeType === 1 ? n : n.parentElement);
+            const inBox = el && el.closest ? el.closest('[data-tpl-sec]') : null;
+            if (inBox && secFields.contains(inBox)) {
+                if (document.activeElement !== inBox) {   // клавиатура: фокус на кнопке — вернуть его, не теряя выделения
+                    const r = s.getRangeAt(0).cloneRange();
+                    try { inBox.focus({ preventScroll: true }); s.removeAllRanges(); s.addRange(r); } catch (e) { /* по возможности */ }
+                }
+                return inBox;
+            }
+            const box = (lastBox && lastBox.isConnected && secFields.contains(lastBox)) ? lastBox : secFields.querySelector('[data-tpl-sec]');
+            if (!box) return null;
+            try {
+                box.focus({ preventScroll: true });
+                const r = document.createRange(); r.selectNodeContents(box); r.collapse(false);
+                s.removeAllRanges(); s.addRange(r);
+            } catch (e) { /* курсор — по возможности */ }
+            return box;
+        };
+        const fmtPress = (e) => {
+            const b = e.target && e.target.closest ? e.target.closest('[data-cmd]') : null;
+            if (!b) return;
+            e.preventDefault();   // выделение остаётся в разделе
+            const box = fmtBox();
+            if (!box) return;
+            const raw = b.getAttribute('data-cmd');
+            if (raw === 'table') { if (tblApi) tblApi.openPicker(b); return; }
+            _fmtRun(document, raw, b.getAttribute('data-val'));
+            tplSecSync(box);
+        };
+        fmtBar.addEventListener('mousedown', fmtPress);
+        fmtBar.addEventListener('click', (e) => { if (e.detail === 0) fmtPress(e); });   // Enter / пробел на кнопке
 
         const fromDoc = canReadDoc ? h('button', { class: 'btn btn-outline btn-sm', type: 'button',
             onclick: () => { d.body = { ...tplBlankBody(d.doc_type), ...tplCollectDocBody(ctx, d.doc_type, profile) }; paintSecFields(); toast('Заполнено из текущего документа', 'ok'); } },
@@ -4888,6 +4974,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             fromDoc ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
                 fromDoc,
                 h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'или заполните секции вручную')) : null,
+            fmtBar,   // DOC_RICH_FORMAT_V1 (T4)
             secFields,
         ));
     }
@@ -6661,15 +6748,7 @@ function _wireBlankEditing(ctx, frame) {
         const fbar = doc.createElement('div');
         fbar.setAttribute('data-bk-fmt', '');
         fbar.style.cssText = 'position:absolute;display:none;z-index:99999;background:#111827;border-radius:8px;padding:3px;box-shadow:0 6px 18px rgba(0,0,0,.28);white-space:nowrap;';
-        const fbBtn = (cmd, label, val) => `<button type="button" data-cmd="${cmd}"${val ? ` data-val="${val}"` : ''} style="border:0;background:transparent;color:#fff;font:600 13.5px/1 Arial,sans-serif;cursor:pointer;padding:5px 8px;border-radius:5px;">${label}</button>`;
-        fbar.innerHTML =
-            fbBtn('bold', tr('<b>Ж</b>')) + fbBtn('italic', tr('<i>К</i>')) + fbBtn('underline', tr('<u>Ч</u>')) + fbBtn('strikeThrough', tr('<s>З</s>')) +
-            fbBtn('foreColor', '<span style="color:#4dabf7">A</span>', '#1971c2') +
-            fbBtn('hiliteColor', '<span style="background:#fff3bf;color:#111;padding:0 3px;border-radius:2px">A</span>', '#fff3bf') +
-            fbBtn('fontSize:5', 'A+', '') + fbBtn('fontSize:2', 'A-', '') +
-            fbBtn('insertUnorderedList', '•') + fbBtn('insertOrderedList', '1.') + fbBtn('removeFormat', '⌫') +
-            // DOC_RICH_FORMAT_V1 (T3, F6) — «Таблица»: выбор размера, вставка в курсор
-            `<button type="button" data-cmd="table" title="${escapeHtml(tr('Таблица'))}" aria-label="${escapeHtml(tr('Таблица'))}" style="border:0;background:transparent;color:#fff;cursor:pointer;padding:4px 8px;border-radius:5px;vertical-align:middle;line-height:0;">${_TBL_ICON}</button>`;
+        fbar.innerHTML = _fmtButtonsHtml();   // DOC_RICH_FORMAT_V1 (T4) — те же кнопки, что у разделов шаблона
         doc.body.appendChild(fbar);
         const _tbl = _blankWireTables(doc);   // DOC_RICH_FORMAT_V1 (T3) — выбор размера, панель таблицы, Tab и Enter в ячейке
         fbar.addEventListener('mousedown', (e) => {
@@ -6677,11 +6756,7 @@ function _wireBlankEditing(ctx, frame) {
             e.preventDefault();
             const raw = b.getAttribute('data-cmd');
             if (raw === 'table') { _tbl.openPicker(b); return; }   // DOC_RICH_FORMAT_V1 (T3)
-            _styleWithCss();   // DOC_RICH_FORMAT_V1 (F4)
-            try {
-                if (raw.indexOf('fontSize:') === 0) doc.execCommand('fontSize', false, raw.split(':')[1]);
-                else doc.execCommand(raw, false, b.getAttribute('data-val') || null);
-            } catch (_) {}
+            _fmtRun(doc, raw, b.getAttribute('data-val'));   // DOC_RICH_FORMAT_V1 (F4, T4) — styleWithCSS и команда
             const sel = doc.getSelection(); const n = sel && sel.anchorNode;
             const host = n && (n.nodeType === 1 ? n : n.parentElement);
             const fld = host && host.closest('[data-field],[data-cont-of]');   // DOC_RICH_FORMAT_V1 (T3) — и продолжение на следующей странице
@@ -7094,6 +7169,26 @@ export const wireSplitEdges = (doc) => _blankWireSplitEdges(doc);   // DOC_RICH_
 //   - Пока документ загружается (поле не правится) — ни панели, ни вставки.
 // ===========================================================================
 const _TBL_OFF = new Set(['primary_diagnosis', 'doctor_phone', 'icd10']);   // строки простого текста — без таблиц
+// DOC_RICH_FORMAT_V1 (T4) — КНОПКИ ПАНЕЛИ ОФОРМЛЕНИЯ: одни для бланка (плавающая
+// панель в iframe) и для разделов окна шаблонов (панель над разделами).
+function _fmtButtonsHtml() {
+    const fbBtn = (cmd, label, val) => `<button type="button" data-cmd="${cmd}"${val ? ` data-val="${val}"` : ''} style="border:0;background:transparent;color:#fff;font:600 13.5px/1 Arial,sans-serif;cursor:pointer;padding:5px 8px;border-radius:5px;">${label}</button>`;
+    return fbBtn('bold', tr('<b>Ж</b>')) + fbBtn('italic', tr('<i>К</i>')) + fbBtn('underline', tr('<u>Ч</u>')) + fbBtn('strikeThrough', tr('<s>З</s>')) +
+        fbBtn('foreColor', '<span style="color:#4dabf7">A</span>', '#1971c2') +
+        fbBtn('hiliteColor', '<span style="background:#fff3bf;color:#111;padding:0 3px;border-radius:2px">A</span>', '#fff3bf') +
+        fbBtn('fontSize:5', 'A+', '') + fbBtn('fontSize:2', 'A-', '') +
+        fbBtn('insertUnorderedList', '•') + fbBtn('insertOrderedList', '1.') + fbBtn('removeFormat', '⌫') +
+        // DOC_RICH_FORMAT_V1 (T3, F6) — «Таблица»: выбор размера, вставка в курсор
+        `<button type="button" data-cmd="table" title="${escapeHtml(tr('Таблица'))}" aria-label="${escapeHtml(tr('Таблица'))}" style="border:0;background:transparent;color:#fff;cursor:pointer;padding:4px 8px;border-radius:5px;vertical-align:middle;line-height:0;">${_TBL_ICON}</button>`;
+}
+// Команда кнопки: цвет и размер — <span style> (styleWithCSS), их пропускает очистка хранения (F4).
+function _fmtRun(doc, raw, val) {
+    try { doc.execCommand('styleWithCSS', false, true); } catch (e) { /* <font> переведёт очистка */ }
+    try {
+        if (String(raw).indexOf('fontSize:') === 0) doc.execCommand('fontSize', false, String(raw).split(':')[1]);
+        else doc.execCommand(raw, false, val || null);
+    } catch (e) { /* команда браузера — по возможности */ }
+}
 const _TBL_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>';
 function _blankHostOf(node) {
     const el = node && (node.nodeType === 1 ? node : node.parentElement);
@@ -7113,9 +7208,53 @@ function _blankNormalizeFields(doc) {
     }
 }
 export const normalizeFields = (doc) => _blankNormalizeFields(doc);   // DOC_RICH_FORMAT_V1 (ревью r3) — экспорт для проверки (headless Chrome)
-function _blankPutCaret(doc, at) {
+// DOC_RICH_FORMAT_V1 (T4) — ГДЕ РАБОТАЕТ ТАБЛИЦА. Один набор (окно размера,
+// панель, Tab/Enter, отмена, приведение вставки) для двух мест:
+//   - бланк кабинета (iframe): части поля [data-field] и продолжения
+//     [data-cont-of], отмена — с раскладкой по страницам заново;
+//   - разделы окна шаблонов ([data-tpl-sec], страница кабинета, не iframe):
+//     раздел — одна часть, страниц нет; окно размера и панель — position:fixed
+//     над окном шаблонов.
+function _tblEnvBlank(doc) {
+    return {
+        hostOf: _blankHostOf,
+        keyOf: _blankKeyOf,
+        partsOf: (key) => _blankPartsOf(doc, key),
+        tablesOn: _blankTablesOn,
+        fixed: false,
+        restore: (key, html) => {
+            const primary = doc.querySelector('[data-field="' + key + '"]');
+            if (!primary) return null;
+            for (const w of [...doc.querySelectorAll('[data-cont-wrap="' + key + '"]')]) w.remove();
+            primary.innerHTML = html;
+            _paginateBlank(doc, null);
+            return primary;
+        },
+    };
+}
+function _tblEnvTemplate(doc) {
+    const hostOf = (node) => {
+        const el = node && (node.nodeType === 1 ? node : node.parentElement);
+        return el && el.closest ? el.closest('[data-tpl-sec]') : null;
+    };
+    return {
+        hostOf,
+        keyOf: (host) => host.getAttribute('data-tpl-sec'),
+        partsOf: (key) => [...doc.querySelectorAll('[data-tpl-sec="' + key + '"]')],
+        tablesOn: (host) => !!host && host.getAttribute('contenteditable') === 'true',
+        fixed: true,
+        // видимая часть окна шаблонов (правая половина прокручивается): панель таблицы — в её пределах
+        clipOf: (host) => { const v = host && host.closest ? host.closest('.tplm-detail') : null; return v ? v.getBoundingClientRect() : null; },
+        restore: (key, html) => {
+            const box = doc.querySelector('[data-tpl-sec="' + key + '"]');
+            if (box) box.innerHTML = html;
+            return box;
+        },
+    };
+}
+function _blankPutCaret(doc, env, at) {
     if (!at || !at.node) return;
-    const host = _blankHostOf(at.node);
+    const host = env.hostOf(at.node);
     try { if (host && doc.activeElement !== host && host.focus) host.focus({ preventScroll: true }); } catch (e) { /* без фокуса выделение всё равно ставится */ }
     try {
         const r = doc.createRange();
@@ -7132,28 +7271,33 @@ function _blankFireInput(host) {
     } catch (e) { /* без события форма догонит на следующем вводе */ }
 }
 // Ячейка под курсором — в правимой части поля с таблицами; повтор заголовка — не ячейка.
-function _blankCaretCell(doc) {
+function _blankCaretCell(doc, env) {
     const s = doc.getSelection();
     const n = s && s.rangeCount ? s.anchorNode : null;
     const el = n && (n.nodeType === 1 ? n : n.parentElement);
     const cell = el && el.closest ? el.closest('td,th') : null;
     if (!cell || cell.closest('[data-cont-head]')) return null;
-    const host = _blankHostOf(cell);
-    if (!_blankTablesOn(host)) return null;
-    return { cell, host, key: _blankKeyOf(host) };
+    const host = env.hostOf(cell);
+    if (!env.tablesOn(host)) return null;
+    return { cell, host, key: env.keyOf(host) };
 }
 
-function _blankWireTables(doc) {
-    const sx = () => doc.documentElement.scrollLeft || doc.body.scrollLeft || 0;
-    const sy = () => doc.documentElement.scrollTop || doc.body.scrollTop || 0;
+function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
+    // окно шаблонов — position:fixed (координаты окна), бланк — absolute (с прокруткой документа)
+    const sx = () => (env.fixed ? 0 : doc.documentElement.scrollLeft || doc.body.scrollLeft || 0);
+    const sy = () => (env.fixed ? 0 : doc.documentElement.scrollTop || doc.body.scrollTop || 0);
+    const pos = env.fixed ? 'position:fixed;' : 'position:absolute;';
     const font = 'font:600 12.5px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;';
+    // DOC_RICH_FORMAT_V1 (T4) — подписки снимаются (окно шаблонов закрывается, документ страницы остаётся)
+    const subs = [];
+    const on = (target, type, fn, opts) => { if (!target || !target.addEventListener) return; target.addEventListener(type, fn, opts); subs.push([target, type, fn, opts]); };
 
     // ─── выбор размера ─────────────────────────────────────────────────────────
     const pick = doc.createElement('div');
     pick.setAttribute('data-bk-tblpick', '');
     pick.setAttribute('role', 'dialog');
     pick.setAttribute('aria-label', tr('Размер таблицы'));
-    pick.style.cssText = 'position:absolute;display:none;z-index:100000;background:#fff;border:1px solid #d3d9de;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:10px 12px;color:#1f2d34;' + font;
+    pick.style.cssText = pos + 'display:none;z-index:100000;background:#fff;border:1px solid #d3d9de;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:10px 12px;color:#1f2d34;' + font;
     const grid = doc.createElement('div');
     grid.style.cssText = 'display:grid;grid-template-columns:repeat(' + TBL_MAX_COLS + ',16px);gap:3px;';
     for (let r = 1; r <= TBL_MAX_ROWS; r += 1) {
@@ -7207,11 +7351,11 @@ function _blankWireTables(doc) {
         const s = saved;
         closePicker();
         if (!s) return;
-        const host = _blankHostOf(s.node);
-        if (!host || !host.isConnected || !_blankTablesOn(host)) return;
+        const host = env.hostOf(s.node);
+        if (!host || !host.isConnected || !env.tablesOn(host)) return;
         // ревью T3 (HIGH 1) — части поля: из половины разрезанной таблицы или списка — после всего целого
-        const res = insertTable(host, s.node, s.offset, size[0], size[1], _blankPartsOf(doc, _blankKeyOf(host)));
-        _blankPutCaret(doc, res.caret);
+        const res = insertTable(host, s.node, s.offset, size[0], size[1], env.partsOf(env.keyOf(host)));
+        _blankPutCaret(doc, env, res.caret);
         forgetUndo();   // ревью r3 — новая таблица: прежняя отмена уже не про неё
         _blankFireInput(res.host || host);
     };
@@ -7224,16 +7368,16 @@ function _blankWireTables(doc) {
     }
     ins.addEventListener('click', (e) => { e.preventDefault(); insertNow(); });
     pick.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePicker(); });
-    doc.addEventListener('mousedown', (e) => { if (pick.style.display !== 'none' && !pick.contains(e.target) && !(e.target.closest && e.target.closest('[data-cmd="table"]'))) closePicker(); }, true);
+    on(doc, 'mousedown', (e) => { if (pick.style.display !== 'none' && !pick.contains(e.target) && !(e.target.closest && e.target.closest('[data-cmd="table"]'))) closePicker(); }, true);
     const openPicker = (btn) => {
         const s = doc.getSelection();
         const r0 = s && s.rangeCount ? s.getRangeAt(0) : null;
-        const host = r0 && _blankHostOf(r0.startContainer);
-        if (!host || !_blankTablesOn(host)) return;
+        const host = r0 && env.hostOf(r0.startContainer);
+        if (!host || !env.tablesOn(host)) return;
         saved = { node: r0.startContainer, offset: r0.startOffset };   // курсор врача: поля чисел заберут фокус
         setSize(3, 4);
         const b = btn.getBoundingClientRect();
-        const docH = doc.documentElement.scrollHeight;   // до показа: окно не должно удлинять лист
+        const docH = env.fixed ? (doc.defaultView ? doc.defaultView.innerHeight : 800) : doc.documentElement.scrollHeight;   // до показа: окно не должно удлинять лист
         pick.style.left = Math.max(6, b.left + sx() - 120) + 'px';
         pick.style.top = (b.bottom + sy() + 6) + 'px';
         pick.style.display = 'block';
@@ -7244,7 +7388,7 @@ function _blankWireTables(doc) {
     // ─── панель таблицы ────────────────────────────────────────────────────────
     const panel = doc.createElement('div');
     panel.setAttribute('data-bk-tbl', '');
-    panel.style.cssText = 'position:absolute;display:none;z-index:99998;background:#111827;border-radius:8px;padding:3px;box-shadow:0 6px 18px rgba(0,0,0,.28);white-space:nowrap;';
+    panel.style.cssText = pos + 'display:none;z-index:99998;background:#111827;border-radius:8px;padding:3px;box-shadow:0 6px 18px rgba(0,0,0,.28);white-space:nowrap;';
     const OPS = [
         ['row+', tr('+ строка'), tr('Добавить строку ниже')],
         ['col+', tr('+ столбец'), tr('Добавить столбец справа')],
@@ -7263,21 +7407,28 @@ function _blankWireTables(doc) {
     }
     doc.body.appendChild(panel);
     const refresh = () => {
-        const cc = _blankCaretCell(doc);
+        const cc = _blankCaretCell(doc, env);
         if (!cc) { panel.style.display = 'none'; return; }
         // под таблицей, по правому краю: левая часть строки под ней (абзац для продолжения) свободна для щелчка
         const t = cc.cell.closest('table');
         const r = t.getBoundingClientRect();
+        // T4 — окно шаблонов: панель — в видимой части окна (прокрученная из вида таблица — без панели;
+        // под таблицей у нижнего края — прижата к краю, не поверх кнопок окна)
+        const clip = env.clipOf ? env.clipOf(cc.host) : null;
+        if (clip && (r.bottom < clip.top || r.top > clip.bottom)) { panel.style.display = 'none'; return; }
         panel.style.display = 'block';
         panel.style.left = Math.max(6, r.right + sx() - panel.offsetWidth) + 'px';
-        panel.style.top = (r.bottom + sy() + 6) + 'px';
+        panel.style.top = (clip ? Math.max(clip.top, Math.min(r.bottom + 6, clip.bottom - panel.offsetHeight - 4)) : r.bottom + sy() + 6) + 'px';
         const rb = panel.querySelector('[data-tbl="row-"]');
-        const can = canRemoveRow(cc.cell, _blankPartsOf(doc, cc.key));
+        const can = canRemoveRow(cc.cell, env.partsOf(cc.key));
         rb.disabled = !can;
         rb.style.opacity = can ? '1' : '.4';
         rb.title = can ? tr('Удалить строку') : tr('Строку заголовка не удалить, пока в таблице есть строки');
     };
-    doc.addEventListener('selectionchange', refresh);
+    on(doc, 'selectionchange', refresh);
+    // T4 — окно и панель position:fixed: прокрутка окна шаблонов уводит таблицу — панель за ней
+    // (ушла из вида — скрыта, вернулась — снова под таблицей), окно размера закрывается
+    if (env.fixed) on(doc, 'scroll', (e) => { if (pick.contains(e.target)) return; closePicker(); refresh(); }, true);
 
     // ─── отмена последней операции ─────────────────────────────────────────────
     // Ревью T3 (MEDIUM 3) — операции таблицы меняют узлы мимо истории правки
@@ -7297,20 +7448,17 @@ function _blankWireTables(doc) {
     const restoreUndo = () => {
         const u = undo;
         forgetUndo();
-        const primary = u && doc.querySelector('[data-field="' + u.key + '"]');
+        const primary = u ? env.restore(u.key, u.html) : null;   // бланк — с раскладкой заново, шаблон — раздел целиком
         if (!primary) return;
-        for (const w of [...doc.querySelectorAll('[data-cont-wrap="' + u.key + '"]')]) w.remove();
-        primary.innerHTML = u.html;
-        _paginateBlank(doc, null);
         const t = primary.querySelector('table') || primary;
-        _blankPutCaret(doc, cellCaret(t.querySelector('td,th') || primary));
+        _blankPutCaret(doc, env, cellCaret(t.querySelector('td,th') || primary));
         _blankFireInput(primary);
     };
     const run = (op) => {
         if (op === 'undo') { restoreUndo(); return; }
-        const cc = _blankCaretCell(doc);
+        const cc = _blankCaretCell(doc, env);
         if (!cc) return;
-        const parts = _blankPartsOf(doc, cc.key);
+        const parts = env.partsOf(cc.key);
         const askTable = () => (tableHasText(tableChain(cc.cell, parts)) ? tr('Удалить таблицу вместе с текстом в ней?') : null);
         let question = null;
         let act = null;
@@ -7332,8 +7480,8 @@ function _blankWireTables(doc) {
             const before = (() => { try { return mergedFieldClone(parts).innerHTML; } catch (e) { return null; } })();
             const at = act();
             if (!at) { refresh(); return; }
-            _blankPutCaret(doc, at);
-            _blankFireInput(_blankHostOf(at.node) || cc.host);
+            _blankPutCaret(doc, env, at);
+            _blankFireInput(env.hostOf(at.node) || cc.host);
             if (before != null) {
                 undo = { key: cc.key, html: before };
                 undoBtn.style.display = '';
@@ -7347,7 +7495,7 @@ function _blankWireTables(doc) {
         // «залипшее» выделение. После «Отмена» курсор — в ту же ячейку, панель — на месте.
         setTimeout(() => {
             if (confirm(question)) { go(); return; }
-            if (cc.cell.isConnected) _blankPutCaret(doc, cellCaret(cc.cell, true));
+            if (cc.cell.isConnected) _blankPutCaret(doc, env, cellCaret(cc.cell, true));
             refresh();
         }, 0);
     };
@@ -7358,7 +7506,7 @@ function _blankWireTables(doc) {
         if (!b.disabled) run(b.getAttribute('data-tbl'));
     });
     // набранное врачом после операции — отмена уже не про неё (наши события input — не isTrusted)
-    doc.addEventListener('input', (e) => { if (e.isTrusted) forgetUndo(); });
+    on(doc, 'input', (e) => { if (e.isTrusted) forgetUndo(); });
 
     // ─── вставка из Excel и Word ───────────────────────────────────────────────
     // Ревью T3 (MEDIUM 1) — вставленная таблица приводится к простой: на уровне
@@ -7366,10 +7514,10 @@ function _blankWireTables(doc) {
     // через execCommand браузер помечает пустым inputType — проверяется любой
     // настоящий ввод в поле с таблицей (приведённая таблица — проверка дешёвая).
     // Ревью r3 (LOW) — половина со страницы 2, вставленная в раздел, — без меток разреза и start копии.
-    doc.addEventListener('input', (e) => {
+    on(doc, 'input', (e) => {
         if (!e.isTrusted) return;
-        const host = _blankHostOf(e.target);
-        if (!host || !_blankTablesOn(host)) return;
+        const host = env.hostOf(e.target);
+        if (!host || !env.tablesOn(host)) return;
         let changed = 0;
         try {
             changed += stripPastedSplit(host);
@@ -7380,21 +7528,21 @@ function _blankWireTables(doc) {
 
     // ─── скрыть панели ─────────────────────────────────────────────────────────
     const hideUi = () => { panel.style.display = 'none'; closePicker(); };
-    try { doc.defaultView.addEventListener('blur', hideUi); } catch (e) { /* без окна — нечего */ }
-    doc.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideUi(); });
+    on(doc.defaultView, 'blur', hideUi);
+    on(doc, 'keydown', (e) => { if (e.key === 'Escape') hideUi(); });
 
     // ─── клавиши в ячейке ──────────────────────────────────────────────────────
-    doc.addEventListener('keydown', (e) => {
+    on(doc, 'keydown', (e) => {
         // Ctrl+Z сразу после операции таблицы — вернуть её (история браузера её не знает);
         // ревью r3 — только в том же разделе: в другом Ctrl+Z — свой, браузера
         if (undo && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && String(e.key).toLowerCase() === 'z') {
             const s0 = doc.getSelection();
-            const h0 = s0 && s0.rangeCount ? _blankHostOf(s0.anchorNode) : null;
-            if (h0 && _blankKeyOf(h0) === undo.key) { e.preventDefault(); restoreUndo(); return; }
+            const h0 = s0 && s0.rangeCount ? env.hostOf(s0.anchorNode) : null;
+            if (h0 && env.keyOf(h0) === undo.key) { e.preventDefault(); restoreUndo(); return; }
         }
         if ((e.key !== 'Tab' && e.key !== 'Enter') || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
         if (e.target && e.target.closest && e.target.closest('[data-bk-tblpick],[data-bk-tbl]')) return;   // клавиши окна размера и панели — их
-        const cc = _blankCaretCell(doc);
+        const cc = _blankCaretCell(doc, env);
         if (!cc) return;   // вне таблицы — как было
         if (e.key === 'Enter') {
             if (e.shiftKey) return;   // Shift+Enter браузер и так переносит строку
@@ -7403,24 +7551,31 @@ function _blankWireTables(doc) {
             try { ok = doc.execCommand('insertLineBreak'); } catch (err) { ok = false; }
             if (!ok) {
                 const s = doc.getSelection();
-                _blankPutCaret(doc, insertCellBreak(s.anchorNode, s.anchorOffset));
+                _blankPutCaret(doc, env, insertCellBreak(s.anchorNode, s.anchorOffset));
                 _blankFireInput(cc.host);
             }
             return;
         }
         e.preventDefault();
-        const parts = _blankPartsOf(doc, cc.key);
+        const parts = env.partsOf(cc.key);
         const next = cellStep(cc.cell, parts, e.shiftKey);
-        if (next) { _blankPutCaret(doc, cellCaret(next, true)); return; }
-        if (e.shiftKey) { _blankPutCaret(doc, beforeTable(cc.cell, parts)); return; }   // ревью T3 — первая ячейка: курсор перед таблицей
+        if (next) { _blankPutCaret(doc, env, cellCaret(next, true)); return; }
+        if (e.shiftKey) { _blankPutCaret(doc, env, beforeTable(cc.cell, parts)); return; }   // ревью T3 — первая ячейка: курсор перед таблицей
         const at = addRow(cc.cell, parts);   // Tab в последней ячейке — новая строка
         if (!at) return;
         const first = at.node.parentNode && at.node.parentNode.firstElementChild;
-        _blankPutCaret(doc, cellCaret(first || at.node));
+        _blankPutCaret(doc, env, cellCaret(first || at.node));
         forgetUndo();   // ревью r3 — строка от Tab: прежняя отмена уже не про неё
-        _blankFireInput(_blankHostOf(at.node) || cc.host);
+        _blankFireInput(env.hostOf(at.node) || cc.host);
     });
-    return { openPicker };
+    const dispose = () => {
+        for (const [t, type, fn, opts] of subs) { try { t.removeEventListener(type, fn, opts); } catch (e) { /* уже снято */ } }
+        subs.length = 0;
+        clearTimeout(undoT);
+        pick.remove(); panel.remove();
+    };
+    const picking = () => pick.style.display !== 'none';
+    return { openPicker, dispose, hideUi, picking };
 }
 export const wireTables = (doc) => _blankWireTables(doc);   // DOC_RICH_FORMAT_V1 (T3) — экспорт для проверки (headless Chrome)
 
