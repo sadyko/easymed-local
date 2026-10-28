@@ -923,11 +923,29 @@ function mzHelpCard() {
 // звонка. Адрес грузится ПОСЛЕ отрисовки карточки (лишний вызов не задерживает
 // экран) и честно говорит, через что работает: публичный сервер Easy-Med
 // (клиника за NAT) или прямой адрес клиники (если она доступна из интернета).
+//
+// FIX_318_V1 (C3) — «готово» значит «публичный сервер принял секрет адреса»
+// (сервер: api/public-sync.js ringRelayStatus). Пока не принял (pending) —
+// адрес виден, но рядом сказано, что он ещё не действует, и почему не дошёл в
+// прошлый раз. Каждая причина называет, что делать. C4 — не администратору
+// адрес не приходит вовсе (secrets_hidden): видно лишь, что он есть и работает ли.
 function relayReasonText(reason) {
     if (reason === 'not_enrolled') return 'Клиника ещё не зарегистрирована у Easy-Med: адрес через публичный сервер появится после регистрации.';
     if (reason === 'not_enabled') return 'Easy-Med ещё не включил обмен с публичным сервером для этой клиники — обратитесь в Easy-Med.';
     if (reason === 'key_broken') return 'Файл ключа обмена повреждён — обратитесь в Easy-Med.';
+    if (reason === 'no_sync_key') return 'Программа готовит ключ обмена с публичным сервером — нажмите «Проверить снова» через минуту.';
+    if (reason === 'not_main') return 'Это здание — не главное: адрес через публичный сервер передаёт главное здание. Откройте этот экран там.';
+    if (reason === 'no_token') return 'Адрес событий станции ещё не создан: его создаёт администратор, открыв этот экран.';
+    if (reason === 'pending') return 'Адрес ещё не передан на публичный сервер: пока он не дойдёт, станция получает отказ. Программа передаёт его сама каждые 15 секунд — нажмите «Проверить снова» через минуту.';
     return 'Обмен с публичным сервером сейчас недоступен.';
+}
+// Последняя неудача обмена (api_sync_state.last_error) — словами, с тем, что делать.
+function relayErrorText(error) {
+    if (!error) return '';
+    if (error === 'offline') return 'Последняя попытка: нет связи с публичным сервером — проверьте интернет на этом компьютере.';
+    if (error === 'unauthorized') return 'Последняя попытка: публичный сервер не принял ключ обмена — обратитесь в Easy-Med.';
+    if (error === 'paused') return 'Последняя попытка: обмен приостановлен (срок лицензии) — обратитесь в Easy-Med.';
+    return 'Последняя попытка не удалась — программа повторит сама.';
 }
 
 function ringAddressCard() {
@@ -942,17 +960,44 @@ function ringAddressCard() {
             h('button', { class: 'btn btn-sm', type: 'button',
                 onclick: () => { navigator.clipboard.writeText(url).then(() => toast('Адрес скопирован.', 'success')); } },
                 'Копировать')));
+    const note = (text, extra = {}) => h('div', { class: 'muted', style: { fontSize: '13.5px', marginTop: '10px', lineHeight: '1.6' }, ...extra }, text);
+    // FIX_318_V1 (C3) — причина, последняя неудача и код ключа для Easy-Med.
+    const reasonBlock = (info) => {
+        body.appendChild(note(relayReasonText(info.relay_reason), { 'data-ring-reason': info.relay_reason || '' }));
+        if (info.relay_reason === 'pending' && relayErrorText(info.relay_error)) body.appendChild(note(relayErrorText(info.relay_error), { 'data-ring-error': info.relay_error }));
+        if (info.relay_reason === 'not_enabled' && info.key_code) {
+            body.appendChild(note(trf('Назовите Easy-Med код ключа обмена: {code}. После включения адрес заработает со следующей сверкой лицензии (до часа).', { code: info.key_code }), { 'data-ring-key-code': info.key_code }));
+        }
+        if (info.relay_reason === 'pending' || info.relay_reason === 'no_sync_key' || info.relay_reason === 'not_enabled') {
+            const again = h('button', { class: 'btn btn-sm', type: 'button', 'data-ring-recheck': '', style: { marginTop: '8px' },
+                onclick: async () => { await run(again, async () => { paintInfo(await rpc('telephony_ring_info', {})); }); } }, 'Проверить снова');
+            body.appendChild(h('div', null, again));
+        }
+    };
     const paintInfo = (info) => {
         clear(body);
         body.appendChild(h('div', { style: { fontSize: '13.5px', lineHeight: '1.6' } },
             'Станция присылает события «начало звонка», «начавшийся разговор» и «завершение звонка», и панель «Телефон» показывает входящего с именем пациента через 1–3 секунды после начала звонка на трубке.'));
+        // FIX_318_V1 (C4) — не администратору: есть ли адрес и работает ли он, без самого адреса и без смены.
+        if (info.secrets_hidden) {
+            body.appendChild(note(info.ring_token_set
+                ? 'Адрес событий станции настроен. В адресе — секрет: увидеть и сменить его может только администратор.'
+                : 'Адрес событий станции ещё не создан: его создаёт администратор, открыв этот экран.', { 'data-ring-hidden': '' }));
+            if (!info.ring_token_set) return;
+            if (info.relay_ready) body.appendChild(note('Адрес через публичный сервер Easy-Med работает.', { 'data-ring-reason': '' }));
+            else reasonBlock(info);
+            return;
+        }
         if (info.relay_ready) {
             body.appendChild(addrRow('Адрес для кабинета onlinePBX', info.relay_url, 'data-ring-relay-url'));
             body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', lineHeight: '1.6' } },
                 'В кабинете onlinePBX: Сервисы → Интеграция → Webhooks → «Добавить», вставьте адрес и отметьте три события. Адрес ведёт на публичный сервер Easy-Med: клиника заберёт события сама.'));
+        } else if (info.relay_reason === 'pending' && info.relay_url) {
+            // FIX_318_V1 (C3) — адрес верный, но сервер его ещё не знает: вписать в кабинет можно уже сейчас.
+            body.appendChild(addrRow('Адрес для кабинета onlinePBX', info.relay_url, 'data-ring-relay-url'));
+            reasonBlock(info);
         } else {
-            body.appendChild(h('div', { class: 'muted', style: { fontSize: '13.5px', marginTop: '10px', lineHeight: '1.6' }, 'data-ring-reason': info.relay_reason || '' },
-                relayReasonText(info.relay_reason)));
+            reasonBlock(info);
             if (info.direct_url) {
                 body.appendChild(addrRow('Прямой адрес клиники (нужен доступ из интернета)', info.direct_url, 'data-ring-direct-url'));
             } else {

@@ -140,3 +140,51 @@ test('сервер старее экрана (RPC не знаком) — чес�
   assert.ok(/Сервер старее экрана/.test(textOf(card)), textOf(card));
   assert.strictEqual(byAttr(card, 'data-ring-rotate').length, 0);
 });
+
+// FIX_318_V1 (C3) — «готово» значит «публичный сервер принял секрет». Пока не
+// принял — адрес виден (его можно вписать в кабинет заранее), но рядом сказано,
+// что он ещё не действует, почему не дошёл в прошлый раз, и есть «Проверить снова».
+const RELAY = 'https://api.easymed.uz/_pbx/v1/c-000777/' + TOKEN;
+const BASE = { ring_token: TOKEN, relay_url: RELAY, direct_url: '', relay_ready: false, relay_reason: '', relay_error: '', key_code: '', clinic_id: 'c-000777', ring_token_set: true, secrets_hidden: false };
+
+test('FIX_318_V1 (C3): адрес ещё не дошёл до публичного сервера — адрес, предупреждение и причина последней попытки; «Проверить снова» спрашивает заново', async () => {
+  let delivered = false;   // экран может спросить адрес не один раз (плитка уже выбрана прошлым тестом) — состояние, а не счёт
+  const { card } = await openPbx(() => jsonOk(delivered ? { ...BASE, relay_ready: true } : { ...BASE, relay_reason: 'pending', relay_error: 'offline' }));
+  assert.strictEqual(byAttr(card, 'data-ring-relay-url')[0].value, RELAY);
+  assert.ok(/ещё не передан на публичный сервер/.test(textOf(card)), textOf(card));
+  assert.ok(/нет связи с публичным сервером/.test(textOf(card)), textOf(card));
+  assert.strictEqual(byAttr(card, 'data-ring-reason')[0].attrs['data-ring-reason'], 'pending');
+  delivered = true;
+  const before = ringCalls;
+  byAttr(card, 'data-ring-recheck')[0].click();
+  await tick(60);
+  assert.strictEqual(ringCalls, before + 1, '«Проверить снова» не спросил сервер');
+  assert.ok(/Сервисы → Интеграция → Webhooks/.test(textOf(card)));
+  assert.strictEqual(byAttr(card, 'data-ring-recheck').length, 0, 'готовый адрес — проверять нечего');
+});
+
+test('FIX_318_V1 (C3): Easy-Med не включил обмен — код ключа обмена для звонка; ключа ещё нет — «программа готовит ключ»; второе здание — «откройте в главном»', async () => {
+  const a = await openPbx({ ...BASE, relay_url: '', relay_reason: 'not_enabled', key_code: '46de-4fe9' });
+  assert.ok(/Easy-Med ещё не включил обмен/.test(textOf(a.card)));
+  assert.ok(/46de-4fe9/.test(textOf(a.card)), 'код ключа обмена не назван');
+  const b = await openPbx({ ...BASE, relay_url: '', relay_reason: 'no_sync_key' });
+  assert.ok(/готовит ключ обмена/.test(textOf(b.card)), textOf(b.card));
+  assert.strictEqual(byAttr(b.card, 'data-ring-recheck').length, 1);
+  const c = await openPbx({ ...BASE, relay_url: '', relay_reason: 'not_main' });
+  assert.ok(/главно/.test(textOf(c.card)), textOf(c.card));
+});
+
+// FIX_318_V1 (C4) — адрес событий станции — секрет: не-администратор с доступом
+// к разделу видит, что адрес есть и работает ли он, но не сам адрес.
+test('FIX_318_V1 (C4): не администратору — ни адреса, ни «Сгенерировать заново»; видно, что адрес настроен и в каком он состоянии', async () => {
+  const hidden = { ...BASE, ring_token: '', relay_url: '', key_code: '', secrets_hidden: true };
+  const a = await openPbx({ ...hidden, relay_ready: true });
+  assert.strictEqual(byAttr(a.card, 'data-ring-relay-url').length, 0);
+  assert.strictEqual(byAttr(a.card, 'data-ring-direct-url').length, 0);
+  assert.strictEqual(byAttr(a.card, 'data-ring-rotate').length, 0);
+  assert.ok(/только администратор/.test(textOf(a.card)), textOf(a.card));
+  assert.ok(/работает/.test(textOf(a.card)), textOf(a.card));
+  const b = await openPbx({ ...hidden, ring_token_set: false });
+  assert.ok(/ещё не создан/.test(textOf(b.card)), textOf(b.card));
+  assert.strictEqual(byAttr(b.card, 'data-ring-rotate').length, 0);
+});
