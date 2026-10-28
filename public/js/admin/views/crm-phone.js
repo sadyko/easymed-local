@@ -51,7 +51,7 @@ import { askRecordingUntilReady, recordingMessage, RECORDING_WAITING, RECORDING_
 import { MIN_DIGITS, POLL_MS, DIAL_CARD_TTL_MS, digitsOf, tail9, cleanTyped, groupTyped, canDial, outcomeOf, talkLabel,
          timeLabel, groupCalls, filterCalls, justCalled, matchDialed, initialsOf, whoIs } from '../crm-phone-logic.js';
 // CALL_RING_V1 — блок «Звонит»: какой живой звонок показать, как назвать, когда пискнуть.
-import { pickRinging, ringLabel, ringWord, beepDue, audioContextOf, ringTone } from '../crm-ring-logic.js';
+import { pickRinging, ringLabel, ringWord, beepDue, audioContextOf, ringTone, BEEP_EVERY_MS } from '../crm-ring-logic.js';
 // SOFTPHONE_V1 — телефон Easy-Med: его состояние (softphone.js), браузер и слова причин (softphone-browser.js).
 import { getSoftphone, reasonText, endText } from '../softphone-browser.js';
 import { SP } from '../softphone.js';
@@ -94,8 +94,11 @@ const P = {
     lastBeepAt: 0, muted: false, audio: null, audioArmed: false,
     // SOFTPHONE_V1 — телефон Easy-Med этой страницы и подписка на него; включали
     // ли его сами после загрузки (один раз за страницу); подпись строки
-    // переключателя (та же картина — строку не перерисовываем).
+    // переключателя (та же картина — строку не перерисовываем). Звонок: кто звонит
+    // (telephony_caller по номеру, до конца звонка), сигнал входящего, таймер
+    // разговора и его элемент, обновление журнала после звонка, прошлое состояние.
     sp: null, spUnsub: null, spAutoTried: false, spRowSig: '',
+    spWho: new Map(), spRing: null, spTick: null, spRefresh: null, spLast: 'off',
 };
 const LIVE_POLL_MS = 2000;
 const MUTE_KEY = 'easymed.phone.mute';
@@ -138,7 +141,8 @@ function hasAudio(el) {
 // и это выглядело как «кнопка не работает».
 const busyWithAudio = () => Date.now() < P.holdUntil || !!(P.els && hasAudio(P.els.list));
 const leadsOf = () => (H.leads ? (H.leads() || []) : []);
-const inCard = () => !!P.card;
+// SOFTPHONE_V1 — звонок телефона Easy-Med — тоже «карточка»: свернуть — в пилюлю, клавиши не набирают.
+const inCard = () => !!P.card || !!softCall();
 
 // Открыть карточку заявки из панели: сначала перейти в CRM (чтобы за окном была
 // доска, а не касса), потом — то же окно, что открывает сама доска.
@@ -194,7 +198,8 @@ export function resetCrmPhone() {
         card: null, expanded: null, holdUntil: 0, msg: '',
         live: [], liveSource: 'off', ringSig: '', outSig: '', ringHidden: new Set(), ringSeen: new Map(), ringToasted: new Set(),
         lastBeepAt: 0, muted: false, audio: null, audioArmed: false,
-        sp: null, spUnsub: null, spAutoTried: false, spRowSig: '' });
+        sp: null, spUnsub: null, spAutoTried: false, spRowSig: '',
+        spWho: new Map(), spRing: null, spTick: null, spRefresh: null, spLast: 'off' });
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +305,10 @@ function teardown() {
     if (P.spUnsub) P.spUnsub();
     P.spUnsub = null;
     P.sp = null;
+    stopSoftRing();
+    stopSoftTick();
+    if (P.spRefresh) clearTimeout(P.spRefresh);
+    P.spRefresh = null;
 }
 
 // Раз в семь секунд: карточка звонка без ответа журнала пережила свой срок —
@@ -376,6 +385,16 @@ async function dial(number) {
     const phone = cleanTyped(number);
     if (!P.mayDial || !canDial(phone) || !P.els) return;
     P.msg = '';
+    // SOFTPHONE_V1 — телефон Easy-Med включён: звоним через гарнитуру этого
+    // компьютера, станция трубку оператора не поднимает. Идёт звонок — второго не
+    // начинаем ни так, ни этак (иначе «Перезвонить» из журнала молча ушло бы на трубку).
+    if (softCall()) { toast(tr('Сначала завершите текущий звонок.'), 'warn'); return; }
+    if (softState().state === SP.READY) {
+        if (P.sp.call(phone)) { P.typed = ''; P.card = null; P.expanded = null; P.pick = false; }
+        else P.msg = tr('Звонок не начался. Попробуйте ещё раз.');
+        paintPhone(); paintChrome();
+        return;
+    }
     const btn = P.els.body.querySelector('[data-cph-call]');
     if (btn) btn.setAttribute('disabled', '');
     const { error } = await supabase.rpc('telephony_dial', { phone });
@@ -405,8 +424,13 @@ function paintChrome() {
     P.els.edge.hidden = show || P.min;
     P.els.mini.hidden = !P.min;
     const ring = currentRing();
-    const ringing = !!(ring && ring.call.state === 'ringing');
-    if (P.min && ringing) {
+    const liveRinging = !!(ring && ring.call.state === 'ringing');
+    const sc = softCall();   // SOFTPHONE_V1 — звонок телефона Easy-Med важнее звонка станции
+    const ringing = liveRinging || !!(sc && sc.state === SP.RINGING);
+    if (P.min && sc) {
+        P.els.miniText.textContent = softName(sc);
+        P.els.miniSub.textContent = softLine(sc);
+    } else if (P.min && liveRinging) {
         P.els.miniText.textContent = ringLabel(ring.call);
         P.els.miniSub.textContent = tr('Звонит');
     } else if (P.min && P.card) {
@@ -428,7 +452,9 @@ function paintStatus() {
     if (!P.els) return;
     let cls = 'ok', label = 'Готов';
     const ring = currentRing();
-    if (ring && ring.call.state === 'ringing') { cls = 'wait'; label = 'Звонит'; }   // CALL_RING_V1
+    const sc = softCall();
+    if (sc) { cls = sc.state === SP.IN_CALL ? 'ok' : 'wait'; label = SP_STATUS[sc.state]; }   // SOFTPHONE_V1
+    else if (ring && ring.call.state === 'ringing') { cls = 'wait'; label = 'Звонит'; }   // CALL_RING_V1
     else if (ring && ring.call.state === 'answered') { cls = 'ok'; label = 'Разговор идёт'; }
     else if (P.card && P.card.phase === 'ringing') { cls = 'wait'; label = 'Трубка звонит'; }
     else if (P.card) { cls = 'end'; label = 'Звонок завершён'; }
@@ -466,9 +492,14 @@ function paintSeg() {
 function paintPhone() {
     if (!P.els) return;
     clear(P.els.body);
+    P.els.spTimer = null;
+    const sc = softCall();
     const ring = currentRing();
     // CALL_RING_V1 — входящий звонок важнее всего остального на этой половине панели.
-    if (ring) paintRing(ring);
+    // SOFTPHONE_V1 — а звонок телефона Easy-Med важнее и блока «Звонит» станции:
+    // это тот же звонок, только с кнопками, которые здесь действительно работают.
+    if (sc) paintSoftCall(sc);
+    else if (ring) paintRing(ring);
     else if (P.pick && P.mayDial) paintPicker();
     else if (P.card) paintCard();
     else paintIdle();
@@ -494,6 +525,7 @@ function paintIdle() {
     const del = h('button', { class: 'cph-bk' + (P.typed ? '' : ' hide'), type: 'button', 'data-cph-del': '', title: 'Стереть', onclick: erase }, Icon('ChevronLeft', { size: 22 }));
     let hint = '';
     if (!P.mayDial && P.me) hint = DENY_DIAL;
+    else if (canDial(P.typed) && softState().state === SP.READY) hint = 'Звонок пойдёт через гарнитуру этого компьютера';   // SOFTPHONE_V1
     else if (canDial(P.typed)) hint = 'Сначала зазвонит ваша трубка — снимите её, и пойдёт вызов пациенту';
     else if (P.typed) hint = 'Наберите номер целиком';
     put(body,
@@ -759,7 +791,8 @@ function onLiveChanged() {
             P.ringToasted.add(u);
             toast(trf('Звонит: {who}', { who: ringLabel(ring.call) }), 'info');
         }
-        if (beepDue(ring.call, now, { muted: P.muted, foreign: ring.foreign, lastBeepAt: P.lastBeepAt, firstSeenAt: P.ringSeen.get(u) })) {
+        // SOFTPHONE_V1 — звонит телефон Easy-Med: сигнал подаёт он (startSoftRing), второй писк поверх не нужен.
+        if (!softCall() && beepDue(ring.call, now, { muted: P.muted, foreign: ring.foreign, lastBeepAt: P.lastBeepAt, firstSeenAt: P.ringSeen.get(u) })) {
             if (ringTone(P.audio)) P.lastBeepAt = now;
         }
     }
@@ -876,6 +909,7 @@ const SP_WORDS = {
     ringing: 'Входящий звонок', calling: 'Вызов…', in_call: 'Разговор идёт', error: 'Телефон не включился',
 };
 const SP_TONE = { ready: 'ready', ringing: 'ready', calling: 'ready', in_call: 'ready', connecting: 'wait', other_tab: 'wait', error: 'error' };
+const SP_STATUS = { ringing: 'Звонит', calling: 'Вызов…', in_call: 'Разговор идёт' };   // пилюля состояния во время звонка
 const SP_ACTING = 'Принимать звонки от чужого имени нельзя — вернитесь к своей учётной записи.';
 const SP_NO_NUMBER = 'Номер для телефона в Easy-Med назначает администратор в карточке сотрудника.';
 const SP_PICK = 'Администратор назначил вам номер {n} — выберите его в «Моя трубка», чтобы принимать звонки в Easy-Med.';
@@ -920,7 +954,24 @@ function softToggle() {
     paintSoftRow();
 }
 
+// Телефон сменил состояние. Входящий звонит — панель открывается сама (даже
+// закрытая: звонок важнее того, что оператор делал), спрашиваем, кто звонит, и
+// подаём сигнал; разговор — таймер раз в секунду; звонок кончился — журнал через
+// 4 секунды (как после «Позвонить»: строка звонка доезжает до станции не сразу).
 function onSoftChange() {
+    const s = softState();
+    const was = P.spLast;
+    P.spLast = s.state;
+    const sc = softCall();
+    if (sc) lookupCaller(digitsOf(sc.call.number));
+    if (sc && sc.state === SP.RINGING) {
+        if (!P.open) openDrawer();
+        startSoftRing();
+    } else {
+        stopSoftRing();
+    }
+    if (s.state === SP.IN_CALL) startSoftTick(); else stopSoftTick();
+    if (SP_CALL.has(was) && !sc) softCallEnded();
     if (P.els) { paintPhone(); paintChrome(); }
 }
 
@@ -961,4 +1012,145 @@ function paintSoftRow() {
             : null,
         hint ? h('div', { class: 'cph-sp-hint', id: 'cph-sp-hint', 'data-cph-sp-hint': '' }, hint) : null,
         end ? h('div', { class: 'cph-sp-end', 'data-cph-sp-end': '' }, end) : null);
+}
+
+// ---------------------------------------------------------------------------
+// SOFTPHONE_V1 — звонок телефона Easy-Med: входящий, вызов, разговор
+// ---------------------------------------------------------------------------
+//
+// Кнопки — те, что владелец взял в первую версию: «Принять» / «Отклонить»,
+// таймер, «Микрофон выкл.», «Завершить», имя звонящего и «Открыть карту».
+// Тонового набора, удержания и перевода нет — и кнопок для них нет.
+
+/** Звонок телефона Easy-Med, если он идёт (звонит, вызов, разговор); иначе null. */
+function softCall() {
+    const s = softState();
+    return s.call && SP_CALL.has(s.state) ? s : null;
+}
+
+/** Длительность разговора: мм:сс, с часа — ч:мм:сс. */
+function clockOf(startedAt) {
+    const t = startedAt ? Math.max(0, Math.floor((Date.now() - Number(startedAt)) / 1000)) : 0;
+    const p2 = (n) => String(n).padStart(2, '0');
+    const hh = Math.floor(t / 3600);
+    return (hh ? hh + ':' : '') + p2(Math.floor((t % 3600) / 60)) + ':' + p2(t % 60);
+}
+/** Строка под именем: «Входящий звонок», «Вызов…» или время разговора. */
+function softLine(s) {
+    if (s.state === SP.RINGING) return tr('Входящий звонок');
+    if (s.state === SP.CALLING) return tr('Вызов…');
+    return clockOf(s.call.startedAt);
+}
+
+// Кто звонит — один запрос на номер, пока идёт звонок (повторное «звонит» о том
+// же номере сервер не спрашивает). Ответ пришёл, а звонок уже кончился — молчим.
+function lookupCaller(digits) {
+    if (!digits || P.spWho.has(digits)) return;
+    const seen = { done: false, data: null };
+    const map = P.spWho;
+    map.set(digits, seen);
+    Promise.resolve(supabase.rpc('telephony_caller', { number: digits }))
+        .then((r) => { seen.data = r && !r.error ? r.data || null : null; })
+        .catch(() => {})
+        .finally(() => { seen.done = true; if (P.spWho === map && P.els && softCall()) paintPhone(); });
+}
+/** Пациент или заявка с этим номером: ответ сервера, пока его нет — то, что знает сама панель. */
+function softWho(digits) {
+    const seen = P.spWho.get(digits);
+    const d = (seen && seen.data) || {};
+    if (d.patient && d.patient.full_name) return { name: d.patient.full_name, patient: d.patient, lead: d.lead || null };
+    if (d.lead && d.lead.full_name) return { name: d.lead.full_name, patient: null, lead: d.lead };
+    const w = whoIs(digits, { leads: leadsOf(), calls: P.calls });
+    if (w) return { name: w.name, patient: w.kind === 'patient' && w.patient_id ? { id: w.patient_id, full_name: w.name } : null, lead: w.kind === 'lead' ? w.lead : null };
+    return { name: '', patient: null, lead: null, unknown: !!(seen && seen.done) };
+}
+function softName(s) {
+    const digits = digitsOf(s.call.number);
+    return softWho(digits).name || formatPhone(digits) || s.call.number || '—';
+}
+
+function paintSoftCall(s) {
+    const c = s.call;
+    const digits = digitsOf(c.number);
+    const who = softWho(digits);
+    const ringing = s.state === SP.RINGING;
+    const chips = [];
+    if (who.patient && who.patient.mrn) chips.push(h('span', { class: 'cph-chip t' }, trf('Карта {mrn}', { mrn: who.patient.mrn })));
+    if (who.lead) chips.push(h('span', { class: 'cph-chip' }, 'Заявка на доске'));
+    if (who.unknown) chips.push(h('span', { class: 'cph-chip' }, 'Номер не знаком'));
+    // Карта НЕ открывается сама (решение владельца, как у блока «Звонит») — кнопкой.
+    const links = [];
+    if (who.patient && P.ctx && typeof P.ctx.onNavigate === 'function' && isRouteAllowed('patient-card')) {
+        links.push(h('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-cph-sp-patient': '',
+            onclick: () => P.ctx.onNavigate('patient-card', { id: who.patient.id, full_name: who.patient.full_name || '' }) }, Icon('User', { size: 13 }), 'Открыть карту'));
+    }
+    if (who.lead) {
+        links.push(h('button', { class: 'btn btn-sm', type: 'button', 'data-cph-sp-lead': '', onclick: () => openLeadById(who.lead.id) },
+            Icon('Headset', { size: 13 }), 'Открыть заявку'));
+    }
+    if (who.unknown && c.direction === 'in') {
+        links.push(h('button', { class: 'btn btn-sm', type: 'button', 'data-cph-sp-new': '', onclick: () => newLeadFor(c.number) },
+            Icon('Plus', { size: 13 }), 'Новая заявка'));
+    }
+    // Круглая кнопка с подписью под ней — как клавиши наборника.
+    const round = (attr, tone, icon, label, onclick, extra = {}) => h('button', { class: 'cph-sp-btn' + (tone ? ' ' + tone : ''), type: 'button', [attr]: '', onclick, ...extra },
+        h('i', { 'aria-hidden': 'true' }, Icon(icon, { size: 24 })), h('span', null, label));
+    const acts = ringing
+        ? [round('data-cph-sp-answer', 'ok', 'Phone', 'Принять', () => P.sp.answer()),
+            round('data-cph-sp-decline', 'crit', 'PhoneOff', 'Отклонить', () => P.sp.decline())]
+        // «Микрофон выкл.» — только в разговоре: до ответа выключать нечего.
+        : [round('data-cph-sp-mute', '', c.muted ? 'Mic' : 'MicOff', c.muted ? 'Микрофон вкл.' : 'Микрофон выкл.', () => P.sp.setMuted(!c.muted),
+            { 'aria-pressed': c.muted ? 'true' : 'false', disabled: s.state !== SP.IN_CALL }),
+            round('data-cph-sp-hangup', 'crit', 'PhoneOff', 'Завершить', () => P.sp.hangup())];
+    P.els.spTimer = h('div', { class: 'cph-tm cph-sp-tm ' + s.state, ...(ringing ? {} : { 'data-cph-sp-timer': '' }) }, softLine(s));
+    put(P.els.body, h('div', { class: 'cph-inc cph-sp', 'data-cph-sp-card': s.state },
+        h('div', { class: 'cph-ava' + (ringing ? ' ring' : '') }, who.name ? initialsOf(who.name) : '#'),
+        h('h2', { class: 'cph-inc-name' }, softName(s)),
+        h('div', { class: 'cph-pn' }, who.name ? formatPhone(digits) : (c.direction === 'in' ? 'Входящий' : 'Исходящий')),
+        P.els.spTimer,
+        chips.length ? h('div', { class: 'cph-chips' }, ...chips) : null,
+        h('div', { class: 'cph-sp-acts' }, ...acts),
+        links.length ? h('div', { class: 'cph-sum' }, ...links) : null));
+}
+
+// Сигнал входящего — тот же двойной писк, что у блока «Звонит» (crm-ring-logic.js),
+// каждые 2 секунды, пока звонит; колокольчик панели его выключает. Контекст звука
+// обычно рождается с первым жестом (armAudio). После перезагрузки страницы с
+// включённым телефоном жеста ещё не было — создаём сами: браузер может оставить
+// контекст «приостановленным», и тогда писк зазвучит с первым щелчком по странице
+// (armAudio его будит); панель при этом открыта и пульсирует — звонок виден.
+function startSoftRing() {
+    if (P.spRing) return;
+    const beep = () => {
+        if (P.muted) return;
+        if (!P.audio) P.audio = audioContextOf(typeof window !== 'undefined' ? window : null);
+        ringTone(P.audio);
+    };
+    beep();
+    P.spRing = setInterval(beep, BEEP_EVERY_MS);
+    if (P.spRing && typeof P.spRing.unref === 'function') P.spRing.unref();
+}
+function stopSoftRing() { if (P.spRing) clearInterval(P.spRing); P.spRing = null; }
+
+// Таймер разговора: раз в секунду меняется только его строка (и пилюля), а не
+// вся карточка — кнопки не мигают и не теряют фокус.
+function startSoftTick() {
+    if (P.spTick) return;
+    P.spTick = setInterval(() => {
+        const sc = softCall();
+        if (!sc || !P.els) return;
+        const line = softLine(sc);
+        if (P.els.spTimer) P.els.spTimer.textContent = line;
+        if (P.min) P.els.miniSub.textContent = line;
+    }, (P.ctx && P.ctx.spTickMs) || 1000);
+    if (P.spTick && typeof P.spTick.unref === 'function') P.spTick.unref();
+}
+function stopSoftTick() { if (P.spTick) clearInterval(P.spTick); P.spTick = null; }
+
+function softCallEnded() {
+    P.spWho = new Map();   // следующий звонок с этого номера спросит заново: карту могли завести
+    if (P.min && !inCard()) P.min = false;   // пилюле больше нечего показывать
+    if (P.spRefresh) clearTimeout(P.spRefresh);
+    P.spRefresh = setTimeout(() => { P.spRefresh = null; loadCalls().catch(() => {}); }, (P.ctx && P.ctx.spRefreshMs) || 4000);
+    if (P.spRefresh && typeof P.spRefresh.unref === 'function') P.spRefresh.unref();
 }

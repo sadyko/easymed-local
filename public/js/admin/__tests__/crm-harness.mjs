@@ -91,7 +91,9 @@ export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTa
   apiMarks: {}, apiItems: [], apiCandidates: [],
   // CRM_PHONE_V1 — панель «Телефон»: ответ telephony_phone_me (null — администратор
   // со всеми правами), журнал telephony_call_log, трубки станции, отказ набора.
-  phoneMe: null, callLog: [], extensions: [], dialError: null };
+  phoneMe: null, callLog: [], extensions: [], dialError: null,
+  // SOFTPHONE_V1 — ответ telephony_caller «кто звонит» (объект или функция по телу).
+  caller: null };
 export const CALLS = [];
 export const RPC = [];
 const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
@@ -142,6 +144,7 @@ globalThis.fetch = async (url, opts) => {
     // CALL_RING_V1 — что звонит сейчас: S.live — массив живых звонков (или функция).
     if (name === 'telephony_live') return jsonOk({ calls: typeof S.live === 'function' ? S.live() : (S.live || []), source: S.liveSource || 'relay', reason: '' });
     if (name === 'telephony_my_extension') return jsonOk({ ok: true, extension: body.extension });
+    if (name === 'telephony_caller') return jsonOk(typeof S.caller === 'function' ? S.caller(body) : (S.caller || { patient: null, lead: null }));   // SOFTPHONE_V1
     if (name === 'telephony_dial') {
       if (S.dialError) return { ok: false, json: async () => ({ error: { message: S.dialError } }) };
       return jsonOk({ ok: true, provider: 'onlinepbx', call_id: 'c-new' });

@@ -12374,6 +12374,13 @@ export const STRINGS = {
   "Скачать файл настройки компьютера": {"en":"Download the computer setup file","ru":"Скачать файл настройки компьютера","uz":"Kompyuterni sozlash faylini yuklab olish"},
   "Номер для телефона в Easy-Med назначает администратор в карточке сотрудника.": {"en":"The number for the Easy-Med phone is assigned by the administrator in the employee card.","ru":"Номер для телефона в Easy-Med назначает администратор в карточке сотрудника.","uz":"Easy-Med telefoni uchun raqamni administrator xodim kartochkasida belgilaydi."},
   "Администратор назначил вам номер {n} — выберите его в «Моя трубка», чтобы принимать звонки в Easy-Med.": {"en":"The administrator assigned you number {n} — choose it in «My handset» to take calls in Easy-Med.","ru":"Администратор назначил вам номер {n} — выберите его в «Моя трубка», чтобы принимать звонки в Easy-Med.","uz":"Administrator sizga {n} raqamini belgilagan — Easy-Med’da qo‘ng‘iroqlarni qabul qilish uchun uni «Mening trubkam»da tanlang."},
+  // SOFTPHONE_V1 — панель «Телефон»: входящий, разговор, исходящий через гарнитуру (views/crm-phone.js paintSoftCall, dial)
+  "Микрофон выкл.": {"en":"Mute","ru":"Микрофон выкл.","uz":"Mikrofonni o‘chirish"},
+  "Микрофон вкл.": {"en":"Unmute","ru":"Микрофон вкл.","uz":"Mikrofonni yoqish"},
+  "Завершить": {"en":"End","ru":"Завершить","uz":"Yakunlash"},
+  "Звонок пойдёт через гарнитуру этого компьютера": {"en":"The call will go through this computer’s headset","ru":"Звонок пойдёт через гарнитуру этого компьютера","uz":"Qo‘ng‘iroq shu kompyuterning garniturasi orqali o‘tadi"},
+  "Сначала завершите текущий звонок.": {"en":"First end the current call.","ru":"Сначала завершите текущий звонок.","uz":"Avval joriy qo‘ng‘iroqni yakunlang."},
+  "Звонок не начался. Попробуйте ещё раз.": {"en":"The call did not start. Try again.","ru":"Звонок не начался. Попробуйте ещё раз.","uz":"Qo‘ng‘iroq boshlanmadi. Qayta urinib ko‘ring."},
   // /SOFTPHONE_V1
   // /CRM_PHONE_V1
   // TG_BROADCAST_FILTERS_V1 — подробные фильтры окна рассылки

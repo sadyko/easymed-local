@@ -343,6 +343,8 @@ test('NO_EXACT_MATCH совпадает с пометками «~» в само�
 const DRAWN_HERE = [
     'Bed', 'Bot', 'Coins', 'Flask', 'Key', 'Megaphone', 'PhoneIn', 'PhoneMissed',
     'PhoneOut', 'Pill', 'Pulse', 'Rocket', 'Stethoscope', 'Target',
+    // SOFTPHONE_V1 — кнопки телефона Easy-Med: «Отклонить»/«Завершить», «Микрофон вкл./выкл.».
+    'PhoneOff', 'Mic', 'MicOff',
 ];
 
 test('свои иконки нарисованы по правилам набора: 24x24, currentColor, без заливок и id', () => {

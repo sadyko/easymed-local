@@ -8,15 +8,23 @@
 // виден, когда он неактивен и почему (подсказка строкой, а не только в title),
 // что включается само (флаг этого компьютера) и что нет, причина словами и
 // ссылка на файл настройки компьютера, итог последнего звонка.
+//
+// Задача 6 — звонок: входящий сам открывает панель и показывает, кто звонит
+// (telephony_caller, один запрос на звонок), «Принять» / «Отклонить» / «Открыть
+// карту»; разговор — таймер, «Микрофон выкл.», «Завершить»; «Позвонить» при
+// включённом телефоне идёт через гарнитуру, а не через telephony_dial; карточка
+// телефона важнее блока «Звонит»; сигнал звонка слушается колокольчика панели;
+// на узбекском и английском экране — ни одной кириллической буквы.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { S, RPC, mk, textOf, byAttr, hasClass, tick } from './crm-harness.mjs';
+import { S, RPC, mk, walk, textOf, byAttr, hasClass, tick, TOASTS } from './crm-harness.mjs';
 
 const { resetCrmPhone, mountPhoneButton } = await import('../views/crm-phone.js');
 const { setSoftphoneForTests, reasonText, endText } = await import('../softphone-browser.js');
+const { setLang } = await import('../i18n.js');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUB = path.resolve(HERE, '..', '..', '..');   // …/public
@@ -53,16 +61,21 @@ function fakePhone({ wanted = false } = {}) {
   return f;
 }
 
+// Кто звонит — ответ telephony_caller на стенде.
+const CALLER = { patient: { id: 5, full_name: 'Каримова Азиза', mrn: 'A-12' }, lead: null };
+const call = (over) => ({ direction: 'in', number: '998901112233', startedAt: null, muted: false, ...over });
+
 const NAV = [];
-async function shell({ fake, user = ADMIN, me = ME, live = [] } = {}) {
+const CTX = { livePollMs: 25, spTickMs: 20, spRefreshMs: 30 };
+async function shell({ fake, user = ADMIN, me = ME, live = [], calls = [], caller = CALLER } = {}) {
   resetCrmPhone();
   setSoftphoneForTests(fake);
-  RPC.length = 0; NAV.length = 0;
+  RPC.length = 0; NAV.length = 0; TOASTS.length = 0;
   window.easymed.state.user = user;
-  S.leads = []; S.phoneMe = me; S.callLog = []; S.extensions = []; S.dialError = null; S.live = live;
+  S.leads = []; S.phoneMe = me; S.callLog = calls; S.extensions = []; S.dialError = null; S.live = live; S.caller = caller;
   document.body.children.length = 0;
   const viewRoot = mk('div');
-  const btn = mountPhoneButton({ onNavigate: (v, p) => NAV.push([v, p]), shiftTarget: viewRoot, livePollMs: 25, spTickMs: 20 });
+  const btn = mountPhoneButton({ onNavigate: (v, p) => NAV.push([v, p]), shiftTarget: viewRoot, ...CTX });
   await tick(40);
   return { viewRoot, btn };
 }
@@ -192,7 +205,7 @@ test('флаг этого компьютера и всё можно: телеф�
   assert.equal(fake.count('enable'), 1, 'телефон не включился после перезагрузки страницы');
   assert.equal(drawer(), undefined, 'ради включения телефона панель не нужна');
   await open(btn);
-  mountPhoneButton({ onNavigate: () => {}, shiftTarget: viewRoot, livePollMs: 25, spTickMs: 20 });   // смена языка
+  mountPhoneButton({ onNavigate: () => {}, shiftTarget: viewRoot, ...CTX });   // смена языка
   await tick(40);
   assert.equal(fake.count('enable'), 1, 'включение повторилось');
   assert.equal(fake.listeners(), 1, 'панель подписалась на телефон дважды');
@@ -244,4 +257,263 @@ test('итог звонка («Занято.») — строкой под пер
   // Обычный конец разговора — без строки.
   fake.push({ state: 'ready', call: null, lastEnd: { direction: 'out', cause: 'Terminated', media: null } });
   assert.equal(byAttr(d, 'data-cph-sp-end').length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Задача 6 — входящий, разговор, исходящий через гарнитуру
+// ---------------------------------------------------------------------------
+const key = (d, k) => byAttr(d, 'data-k').find((b) => b.getAttribute('data-k') === k).click();
+const callerAsks = () => RPC.filter((r) => r.name === 'telephony_caller');
+
+test('входящий: закрытая панель открывается сама; карточка называет пациента (telephony_caller), «Принять», «Отклонить», «Открыть карту»', async () => {
+  const fake = fakePhone();
+  const { btn } = await shell({ fake });
+  const d = await open(btn);
+  fake.push({ state: 'ready', extension: '108' });
+  one(d, 'data-cph-close').click();
+  assert.ok(String(d.className).includes('cph-closed'));
+  fake.push({ state: 'ringing', call: call() });
+  assert.ok(!String(d.className).includes('cph-closed'), 'панель не открылась на входящий');
+  assert.equal(btn.getAttribute('aria-pressed'), 'true');
+  await tick(40);
+  const card = one(d, 'data-cph-sp-card');
+  assert.ok(card, 'карточки входящего нет');
+  assert.equal(card.getAttribute('data-cph-sp-card'), 'ringing');
+  assert.match(textOf(card), /Каримова Азиза/);
+  assert.match(textOf(card), /\+998 90 111 22 33/);
+  assert.match(textOf(card), /Входящий звонок/);
+  assert.match(textOf(card), /Карта A-12/);
+  assert.deepEqual(callerAsks().map((r) => r.body), [{ number: '998901112233' }]);
+  assert.equal(byAttr(d, 'data-k').length, 0, 'клавиатура поверх входящего');
+  assert.match(textOf(one(d, 'data-cph-status')), /Звонит/);
+  assert.equal(byAttr(d, 'data-cph-sp-hangup').length, 0, '«Завершить» до ответа');
+  one(d, 'data-cph-sp-answer').click();
+  assert.equal(fake.count('answer'), 1);
+  one(d, 'data-cph-sp-decline').click();
+  assert.equal(fake.count('decline'), 1);
+  one(d, 'data-cph-sp-patient').click();
+  assert.deepEqual(NAV, [['patient-card', { id: 5, full_name: 'Каримова Азиза' }]]);
+  assert.equal(fake.count('answer'), 1, '«Открыть карту» ответила на звонок');
+});
+
+test('входящий, а панель ещё ни разу не открывали: она появляется сама, с карточкой звонка', async () => {
+  const fake = fakePhone({ wanted: true });
+  const { btn } = await shell({ fake });
+  assert.equal(drawer(), undefined);
+  fake.push({ state: 'ready', extension: '108' });
+  fake.push({ state: 'ringing', call: call() });
+  const d = drawer();
+  assert.ok(d, 'панели нет');
+  assert.ok(!String(d.className).includes('cph-closed'), 'панель закрыта');
+  assert.equal(btn.getAttribute('aria-pressed'), 'true');
+  await tick(40);
+  assert.equal(one(d, 'data-cph-sp-card').getAttribute('data-cph-sp-card'), 'ringing');
+  assert.match(textOf(one(d, 'data-cph-sp-card')), /Каримова Азиза/);
+});
+
+test('незнакомый номер: номер вместо имени, «Номер не знаком», без «Открыть карту»', async () => {
+  const fake = fakePhone();
+  const { btn } = await shell({ fake, caller: { patient: null, lead: null } });
+  const d = await open(btn);
+  fake.push({ state: 'ringing', call: call({ number: '998935550199' }) });
+  await tick(40);
+  const card = one(d, 'data-cph-sp-card');
+  assert.match(textOf(card), /\+998 93 555 01 99/);
+  assert.match(textOf(card), /Номер не знаком/);
+  assert.equal(byAttr(d, 'data-cph-sp-patient').length, 0);
+});
+
+test('повторное «звонит» о том же номере не спрашивает telephony_caller снова', async () => {
+  const fake = fakePhone();
+  const { btn } = await shell({ fake });
+  const d = await open(btn);
+  fake.push({ state: 'ringing', call: call() });
+  await tick(40);
+  fake.push({ state: 'ringing', call: call() });
+  fake.push({ state: 'ringing', reason: '', call: call() });
+  await tick(40);
+  assert.equal(callerAsks().length, 1, 'кто звонит — спросили ' + callerAsks().length + ' раза');
+  assert.match(textOf(one(d, 'data-cph-sp-card')), /Каримова Азиза/);
+});
+
+test('разговор: таймер 00:00 → 01:05, «Микрофон выкл.» ↔ «Микрофон вкл.», «Завершить»; конец разговора — журнал обновляется', async () => {
+  const fake = fakePhone();
+  const { btn } = await shell({ fake });
+  const d = await open(btn);
+  const realNow = Date.now;
+  const base = realNow();
+  try {
+    Date.now = () => base;
+    fake.push({ state: 'ringing', call: call() });
+    fake.push({ state: 'in_call', call: call({ startedAt: base }) });
+    const card = one(d, 'data-cph-sp-card');
+    assert.equal(card.getAttribute('data-cph-sp-card'), 'in_call');
+    assert.equal(textOf(one(d, 'data-cph-sp-timer')), '00:00');
+    assert.match(textOf(one(d, 'data-cph-status')), /Разговор идёт/);
+    assert.equal(byAttr(d, 'data-cph-sp-answer').length, 0, '«Принять» в разговоре');
+    Date.now = () => base + 65000;
+    await tick(60);   // таймер панели — раз в spTickMs
+    assert.equal(textOf(one(d, 'data-cph-sp-timer')), '01:05');
+  } finally {
+    Date.now = realNow;
+  }
+  const mute = one(d, 'data-cph-sp-mute');
+  assert.match(textOf(mute), /Микрофон выкл\./);
+  assert.equal(mute.getAttribute('aria-pressed'), 'false');
+  mute.click();
+  assert.deepEqual(fake.calls.filter((c) => c[0] === 'setMuted'), [['setMuted', true]]);
+  const muted = one(d, 'data-cph-sp-mute');
+  assert.match(textOf(muted), /Микрофон вкл\./);
+  assert.equal(muted.getAttribute('aria-pressed'), 'true');
+  muted.click();
+  assert.deepEqual(fake.calls.filter((c) => c[0] === 'setMuted').pop(), ['setMuted', false]);
+  one(d, 'data-cph-sp-hangup').click();
+  assert.equal(fake.count('hangup'), 1);
+  // Звонок кончился: карточка уходит, журнал спрашивается снова (через spRefreshMs).
+  const logBefore = RPC.filter((r) => r.name === 'telephony_call_log').length;
+  fake.push({ state: 'ready', call: null, lastEnd: { direction: 'in', cause: 'Terminated', media: null } });
+  assert.equal(byAttr(d, 'data-cph-sp-card').length, 0);
+  assert.equal(byAttr(d, 'data-k').length, 12, 'после разговора нет клавиатуры');
+  await tick(80);
+  assert.ok(RPC.filter((r) => r.name === 'telephony_call_log').length > logBefore, 'журнал не обновился после звонка');
+});
+
+test('исходящий при включённом телефоне: «Позвонить» уходит в телефон, а не в telephony_dial; подсказка — про гарнитуру; «Перезвонить» из журнала — туда же', async () => {
+  const fake = fakePhone();
+  const CALLS = [{ id: 1, started_at: new Date().toISOString(), call_type: 0, external_number: '998977012345', internal_number: '108', billsec: 30, disposition: 'ANSWER',
+    patient_id: null, patient_name: null, patient_mrn: null, operator_name: null, recording_url: null, has_recording: false }];
+  const { btn } = await shell({ fake, calls: CALLS });
+  const d = await open(btn);
+  fake.push({ state: 'ready', extension: '108' });
+  for (const k of '998901112233') key(d, k);
+  assert.equal(textOf(one(d, 'data-cph-hint')), 'Звонок пойдёт через гарнитуру этого компьютера');
+  one(d, 'data-cph-call').click();
+  await tick(40);
+  assert.deepEqual(fake.calls.filter((c) => c[0] === 'call'), [['call', '998901112233']]);
+  assert.equal(RPC.filter((r) => r.name === 'telephony_dial').length, 0, 'набор ушёл и в станцию');
+  assert.equal(byAttr(d, 'data-cph-card').length, 0, 'карточка «Сначала зазвонит ваша трубка» при звонке через гарнитуру');
+  fake.push({ state: 'calling', call: call({ direction: 'out' }) });
+  const card = one(d, 'data-cph-sp-card');
+  assert.equal(card.getAttribute('data-cph-sp-card'), 'calling');
+  assert.equal(textOf(one(d, 'data-cph-sp-timer')), 'Вызов…');
+  assert.ok(one(d, 'data-cph-sp-hangup'), 'нечем сбросить исходящий');
+  // Пока идёт звонок, «Перезвонить» из журнала не набирает ни так, ни этак.
+  one(d, 'data-cph-cb').click();
+  await tick(20);
+  assert.equal(fake.count('call'), 1);
+  assert.equal(RPC.filter((r) => r.name === 'telephony_dial').length, 0);
+  assert.ok(TOASTS.some((t) => /Сначала завершите текущий звонок/.test(t)), 'отказ без слов');
+  fake.push({ state: 'ready', call: null, lastEnd: { direction: 'out', cause: 'Canceled', media: null } });
+  one(d, 'data-cph-cb').click();
+  await tick(20);
+  assert.deepEqual(fake.calls.filter((c) => c[0] === 'call').pop(), ['call', '998977012345']);
+  assert.equal(RPC.filter((r) => r.name === 'telephony_dial').length, 0);
+});
+
+test('телефон выключен — «Позвонить» по-старому: telephony_dial и «Сначала зазвонит ваша трубка»', async () => {
+  const fake = fakePhone();
+  const { btn } = await shell({ fake });
+  const d = await open(btn);
+  for (const k of '998901112233') key(d, k);
+  assert.match(textOf(one(d, 'data-cph-hint')), /Сначала зазвонит ваша трубка/);
+  one(d, 'data-cph-call').click();
+  await tick(40);
+  assert.deepEqual(RPC.find((r) => r.name === 'telephony_dial').body, { phone: '998901112233' });
+  assert.equal(fake.count('call'), 0);
+  assert.equal(one(d, 'data-cph-card').getAttribute('data-cph-card'), 'ringing');
+});
+
+test('карточка телефона Easy-Med важнее блока «Звонит» станции', async () => {
+  const fake = fakePhone();
+  const live = [{ uuid: 'r1', direction: 'in', state: 'ringing', was_answered: false, caller: '998901112233', callee: '108', number: '998901112233',
+    since: new Date().toISOString(), updated: Date.now(), patient: CALLER.patient, lead: null }];
+  const { btn } = await shell({ fake, live });
+  const d = await open(btn);
+  await tick(60);
+  assert.ok(one(d, 'data-cph-ring'), 'блок «Звонит» станции не нарисовался — проверять нечего');
+  fake.push({ state: 'ringing', call: call() });
+  await tick(60);
+  assert.ok(one(d, 'data-cph-sp-card'), 'карточки телефона нет');
+  assert.equal(byAttr(d, 'data-cph-ring').length, 0, 'блок «Звонит» поверх телефона Easy-Med');
+});
+
+test('сигнал входящего: звучит сразу и слушается колокольчика панели; без звонка — тишина', async () => {
+  let tones = 0;
+  class FakeAudio {
+    constructor() { this.state = 'running'; this.currentTime = 0; this.destination = {}; }
+    createOscillator() { tones++; return { type: '', frequency: { value: 0 }, connect: (g) => g, start() {}, stop() {} }; }
+    createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: () => ({}) }; }
+  }
+  window.AudioContext = FakeAudio;
+  try {
+    const fake = fakePhone();
+    const { btn } = await shell({ fake });
+    const d = await open(btn);
+    fake.push({ state: 'ready', extension: '108' });
+    assert.equal(tones, 0);
+    fake.push({ state: 'ringing', call: call() });
+    assert.ok(tones > 0, 'входящий без звука');
+    fake.push({ state: 'in_call', call: call({ startedAt: Date.now() }) });
+    const after = tones;
+    await tick(40);
+    assert.equal(tones, after, 'сигнал звучит и в разговоре');
+    // Колокольчик выключен — входящий без сигнала.
+    one(d, 'data-cph-mute').click();
+    fake.push({ state: 'ready', call: null });
+    tones = 0;
+    fake.push({ state: 'ringing', call: call({ number: '998935550199' }) });
+    assert.equal(tones, 0, 'звук выключен, а сигнал звучит');
+  } finally {
+    delete window.AudioContext;
+    localStorage.removeItem('easymed.phone.mute');
+  }
+});
+
+test('узбекский и английский экран: строка телефона и карточка звонка без кириллицы', async () => {
+  const CYR = /[А-Яа-яЁёҚқҒғЎўҲҳ]/;
+  const leaks = (root) => walk(root).filter((n) => n.tagName !== 'SVG').flatMap((n) => [n._t || '', ...['title', 'aria-label'].map((a) => (n.attrs && n.attrs[a]) || '')])
+    .filter((s) => CYR.test(s));
+  const latin = { ...ADMIN, full_name: 'Admin' };
+  // setLang шлёт событие окну — в стенде окна-события нет.
+  const keep = { dispatch: window.dispatchEvent, CE: globalThis.CustomEvent };
+  window.dispatchEvent = () => true;
+  if (!globalThis.CustomEvent) globalThis.CustomEvent = class { constructor(t, o) { this.type = t; Object.assign(this, o || {}); } };
+  try {
+    for (const lang of ['uz', 'en']) {
+      setLang(lang);
+      const fake = fakePhone();
+      const { btn } = await shell({ fake, user: latin, me: { ...ME, full_name: 'Admin' },
+        caller: { patient: { id: 5, full_name: 'Karimova Aziza', mrn: 'A-12' }, lead: null } });
+      const d = await open(btn);
+      const found = [];
+      const look = (where) => { for (const s of leaks(one(d, 'data-cph-sp-row'))) found.push(where + ' row: ' + s); for (const s of leaks(one(d, 'data-cph-body'))) found.push(where + ' body: ' + s); };
+      look('off');
+      for (const patch of [{ state: 'connecting', reason: 'network' }, { state: 'ready' }, { state: 'error', reason: 'insecure' }, { state: 'other_tab', reason: 'other_tab' },
+        { state: 'ready', reason: '', lastEnd: { direction: 'out', cause: 'Busy', media: null } }]) {
+        fake.push(patch);
+        look(patch.state + (patch.reason ? '/' + patch.reason : ''));
+      }
+      fake.push({ state: 'ringing', reason: '', lastEnd: null, call: call() });
+      await tick(40);
+      look('ringing');
+      fake.push({ state: 'in_call', call: call({ startedAt: Date.now() }) });
+      look('in_call');
+      fake.push({ state: 'calling', call: call({ direction: 'out', number: '998935550199' }) });
+      await tick(40);
+      look('calling');
+      // Нельзя включить — подсказки.
+      for (const [me, user] of [[{ ...ME, full_name: 'Admin', softphone_extension: '' }, latin], [{ ...ME, full_name: 'Admin', extension: '107' }, latin],
+        [{ ...ME, full_name: 'Admin' }, { ...latin, acting_admin: { id: 1, full_name: 'Boss' } }]]) {
+        const f2 = fakePhone();
+        const s2 = await shell({ fake: f2, me, user });
+        const d2 = await open(s2.btn);
+        for (const s of leaks(one(d2, 'data-cph-sp-row'))) found.push('hint: ' + s);
+      }
+      assert.deepEqual(found, [], lang + ': кириллица на экране');
+    }
+  } finally {
+    setLang('ru');
+    window.dispatchEvent = keep.dispatch;
+    globalThis.CustomEvent = keep.CE;
+  }
 });

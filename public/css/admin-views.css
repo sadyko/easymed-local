@@ -8277,6 +8277,26 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
 .cph-sp-setup:hover { text-decoration: underline; }
 .cph-sp-hint { font-size: 12.5px; color: var(--ink-500); line-height: 1.4; }
 .cph-sp-end { font-size: 12.5px; font-weight: 600; color: var(--ink-600); }
+/* SOFTPHONE_V1 — карточка звонка телефона Easy-Med: круглые кнопки с подписью
+   под ними (размер — как у клавиш наборника), таймер цифрами одной ширины. */
+.cph-sp .cph-sp-tm { font-variant-numeric: tabular-nums; }
+.cph-sp .cph-sp-tm.ringing { color: var(--ok-700); font-weight: 600; }
+.cph-sp .cph-sp-tm.in_call { color: var(--primary-700); font-weight: 600; }
+.cph-sp-acts { display: flex; justify-content: center; gap: 32px; margin-top: 18px; }
+.cph-sp-btn { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-600); cursor: pointer; }
+.cph-sp-btn i { width: 62px; height: 62px; border-radius: 50%; display: grid; place-items: center; background: var(--ink-50); color: var(--ink-700); transition: background var(--dur-1) var(--ease-out); }
+.cph-sp-btn:hover i { background: var(--ink-100); }
+.cph-sp-btn.ok i { background: var(--ok-500); color: var(--white); }
+.cph-sp-btn.ok:hover i { background: var(--ok-700); }
+.cph-sp-btn.crit i { background: var(--crit-500); color: var(--white); }
+.cph-sp-btn.crit:hover i { background: var(--crit-700); }
+.cph-sp-btn[aria-pressed="true"] i { background: var(--ink-900); color: var(--white); }
+.cph-sp-btn:disabled { cursor: default; opacity: .45; }
+.cph-sp-btn:disabled:hover i { background: var(--ink-50); }
+.cph-sp-btn:focus-visible { outline: none; }
+.cph-sp-btn:focus-visible i { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+@media (max-height: 820px) { .cph-sp-btn i { width: 54px; height: 54px; } }
+@media (max-height: 700px) { .cph-sp-btn i { width: 46px; height: 46px; } .cph-sp-acts { margin-top: 12px; } }
 /* /CRM_PHONE_V1 */
 
 /* ============================ CRM_LEAD_WIDE_V1 — окно заявки в две колонки ============================

@@ -54,3 +54,6 @@ coolicons — общий интерфейсный набор. Медицинск
 | `Interface/Key` | `Interface/Lock_Open` (открытый замок) |
 | `Interface/Target` | `Interface/Radio_Fill` (точка в кольце) |
 | `System/Bot` | `System/Code` (угловые скобки) |
+| `Communication/Phone_Hang_Up` | — (в наборе нет; «Отклонить» и «Завершить» телефона Easy-Med) |
+| `Media/Microphone` | `User/User_Voice` (человек с волнами) |
+| `Media/Microphone_Off` | — (в наборе нет; «Микрофон выкл.» телефона Easy-Med) |

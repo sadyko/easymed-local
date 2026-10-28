@@ -7,9 +7,10 @@
 //
 // ДВА НАБОРА. Путь ищется сначала в easymed/ (нарисовано здесь, ORIGIN.md),
 // потом в coolicons/ (вендоренный набор, CC BY 4.0). Строки ниже с папкой
-// Medical/ и имена Phone_In, Phone_Out, Phone_Missed, Megaphone, Coins, Key,
-// Target, Bot — свои: в coolicons таких файлов нет вовсе, так что «сначала
-// easymed» здесь не перехват, а единственное место, где рисунок есть.
+// Medical/ и имена Phone_In, Phone_Out, Phone_Missed, Phone_Hang_Up, Megaphone,
+// Microphone, Microphone_Off, Coins, Key, Target, Bot — свои: в coolicons таких
+// файлов нет вовсе, так что «сначала easymed» здесь не перехват, а
+// единственное место, где рисунок есть.
 //
 // Почему таблица, а не «имя = имя файла»: код зовёт иконки по смыслу («Касса»,
 // «Стационар»), набор называет их по рисунку («Credit_Card_01», «Moving_Desk»).
@@ -53,6 +54,9 @@ export const ICON_MAP = Object.freeze({
     PhoneIn:      'Communication/Phone_In',
     PhoneOut:     'Communication/Phone_Out',
     PhoneMissed:  'Communication/Phone_Missed',
+    // SOFTPHONE_V1 — «Отклонить» и «Завершить» у телефона Easy-Med: трубка, положенная
+    //   на рычаг (своя, в coolicons такой нет).
+    PhoneOff:     'Communication/Phone_Hang_Up',
     Megaphone:    'Communication/Megaphone',
 
     // --- правка ---
@@ -121,6 +125,11 @@ export const ICON_MAP = Object.freeze({
 
     // --- медиа ---
     Headset:      'Media/Headphones',
+    // SOFTPHONE_V1 — «Микрофон вкл.» / «Микрофон выкл.» телефона Easy-Med. Микрофона
+    //   в coolicons нет (раньше здесь стоял «человек с волнами» User_Voice,
+    //   помеченный «~»), — нарисован свой, и перечёркнутый к нему.
+    Mic:          'Media/Microphone',
+    MicOff:       'Media/Microphone_Off',
     Image:        'Media/Image_01',
     Pause:        'Media/Pause',
     Stop:         'Media/Stop',
@@ -157,8 +166,6 @@ export const ICON_MAP = Object.freeze({
     ID:           'User/User_Card_ID',
     Patients:     'User/Users',
     User:         'User/User_01',
-    // ~ Микрофона нет (иконка в коде есть, ни один экран её не зовёт).
-    Mic:          'User/User_Voice',
 
     // --- предупреждения ---
     Help:         'Warning/Circle_Help',
@@ -178,5 +185,5 @@ export const ICON_MAP = Object.freeze({
  * мест, где решение принято за владельца и он вправе его отменить.
  */
 export const NO_EXACT_MATCH = Object.freeze([
-    'Contrast', 'Lungs', 'Mic', 'Sparkles', 'Thermo',
+    'Contrast', 'Lungs', 'Sparkles', 'Thermo',
 ]);
