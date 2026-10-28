@@ -133,7 +133,8 @@ Expected: PASS.
 - Modify: `server/services/rpc/index.js` (register)
 - Modify: `server/services/control/gate.js` (`telephony_caller` → `READ_ONLY_RPCS`)
 - Modify: `public/js/admin/i18n-strings.js` (3 refusal texts)
-- Test: `server/services/rpc/phone-webrtc.test.js`
+- Modify: `server/app.js` (CSP `connect-src`: add `wss://*.onpbx.ru:*`; without it the browser blocks the WebSocket to the PBX)
+- Test: `server/services/rpc/phone-webrtc.test.js`, plus one CSP assertion (see Step 3b)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -286,10 +287,26 @@ In `server/services/control/gate.js`, add `'telephony_caller'` to `READ_ONLY_RPC
 
 Add the three texts plus «Линия onlinePBX не подключена («Настройки → Телефония»).» to `i18n-strings.js` with uz/en (no Cyrillic in uz/en). The server-messages guard tells you the format.
 
+- [ ] **Step 3b: Let the page reach the PBX — CSP.** `server/app.js` sends `connect-src 'self'` (V3120_FIX M6), and that blocks `new WebSocket('wss://pbx38631.onpbx.ru:8082')`. Widen it to the onlinePBX domain family only:
+
+```js
+    "connect-src 'self' wss://*.onpbx.ru:*",
+```
+
+Add one line to the M6 comment above the list: «• SOFTPHONE_V1 — плюс wss к onlinePBX (*.onpbx.ru): телефон Easy-Med входит в АТС из браузера; другие внешние адреса закрыты по-прежнему.»
+
+Test it first, next to the existing CSP check in `server/routes/storage-v3120.test.js` (`assert.match(csp, /connect-src 'self'/)`):
+
+```js
+  // SOFTPHONE_V1 — телефон Easy-Med: только wss к onlinePBX, ни http, ни чужие домены.
+  const connect = csp.split(';').map((s) => s.trim()).find((s) => s.startsWith('connect-src'));
+  assert.equal(connect, "connect-src 'self' wss://*.onpbx.ru:*");
+```
+
 - [ ] **Step 4: Run tests and watch them pass**
 
 ```bash
-LIS_ENABLED=0 node --test server/services/rpc/phone-webrtc.test.js server/services/rpc/phone.test.js server/routes/licence-gate.test.js server/services/rpc/client-rpc-coverage.test.js
+LIS_ENABLED=0 node --test server/routes/storage-v3120.test.js server/services/rpc/phone-webrtc.test.js server/services/rpc/phone.test.js server/routes/licence-gate.test.js server/services/rpc/client-rpc-coverage.test.js
 node --experimental-vm-modules --test public/js/admin/__tests__/server-messages-i18n.test.mjs public/js/admin/__tests__/i18n-coverage.test.mjs public/js/admin/__tests__/i18n-uz-quality.test.mjs
 ```
 
