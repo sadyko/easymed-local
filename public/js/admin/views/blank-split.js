@@ -44,14 +44,24 @@ const SECTION = new Set(['THEAD', 'TBODY', 'TFOOT']);
 const NEST = new Set(['DIV', 'P', 'BLOCKQUOTE']);
 // Метка курсора здесь сломала бы разметку (span прямо в списке, строке таблицы, <br>).
 const NO_MARK_IN = new Set(['UL', 'OL', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'BR', 'HR', 'IMG']);
+// Разрезанное целое, у которого есть «половины» на соседних страницах.
+const STRUCT = new Set(['TABLE', 'UL', 'OL']);
+// Абзацные блоки: набранное между половинами таблицы или списка (ревью T2).
+const PARA = new Set(['DIV', 'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE']);
 
 const isEl = (n) => !!n && n.nodeType === 1;
 const isText = (n) => !!n && n.nodeType === 3;
 const tagOf = (n) => (isEl(n) ? String(n.tagName).toUpperCase() : '');
 const isBr = (n) => tagOf(n) === 'BR';
 const isBlock = (n) => BLOCK.has(tagOf(n));
-// «Ничего»: пустой текст, комментарий — не строка и не блок.
-const isNothing = (n) => !n || (!isEl(n) && !isText(n)) || (isText(n) && n.data === '');
+// DOC_RICH_FORMAT_V1 (ревью T2, HIGH) — метка курсора — «ничего» для разреза и
+// слияния: она не строка, не блок и не сосед половины. Иначе курсор на уровне
+// поля (↓ из последней ячейки, щелчок справа от таблицы) сам становился
+// «последним блоком» части, слияние не узнавало пару, и таблица навсегда
+// делилась надвое — в форме две таблицы, у ol нумерация с 1.
+const isMark = (n) => isEl(n) && n.hasAttribute(CARET_MARK);
+// «Ничего»: пустой текст, комментарий, метка курсора — не строка и не блок.
+const isNothing = (n) => !n || (!isEl(n) && !isText(n)) || (isText(n) && n.data === '') || isMark(n);
 const isWs = (n) => isText(n) && /^[ \t\r\n]+$/.test(n.data);
 const isInline = (n) => !isNothing(n) && !isBlock(n);
 
@@ -66,7 +76,7 @@ function elementKids(box) { const out = []; for (let n = box.firstChild; n; n = 
 export function fieldIsRich(el) {
     if (!el) return false;
     for (let n = el.firstChild; n; n = n.nextSibling) {
-        if (!isEl(n)) continue;
+        if (!isEl(n) || isMark(n)) continue;   // ревью T2 — метка курсора не оформление
         if (!LINES_ONLY.has(tagOf(n)) || fieldIsRich(n)) return true;
     }
     return false;
@@ -76,16 +86,18 @@ export function fieldIsRich(el) {
  * Начала «строк» контейнера по порядку: блок — сам себе строка; строчное
  * (текст, жирный, цвет…) — до <br> включительно. Пробел между блоками строкой
  * не считается: он остаётся с предыдущим блоком, а перед строчным — начинает его.
+ * Метка курсора (ревью T2) — так же: перед строкой она едет с ней, перед блоком
+ * остаётся с предыдущим; ни строкой, ни блоком она не бывает.
  */
 function unitStarts(box) {
     const out = [];
     let inRun = false;
-    let ws = null;
+    let lead = null;
     for (let n = box.firstChild; n; n = n.nextSibling) {
+        if (isMark(n) || isWs(n)) { if (!inRun && !lead) lead = n; continue; }
         if (isNothing(n)) continue;
-        if (isBlock(n)) { out.push(n); inRun = false; ws = null; continue; }
-        if (isWs(n)) { if (!inRun && !ws) ws = n; continue; }
-        if (!inRun) { out.push(ws || n); inRun = true; ws = null; }
+        if (isBlock(n)) { out.push(n); inRun = false; lead = null; continue; }
+        if (!inRun) { out.push(lead || n); inRun = true; lead = null; }
         if (isBr(n)) inRun = false;
     }
     return out;
@@ -228,23 +240,252 @@ function headCopy(table) {
  * Между строчными частями ставится <br>: в режиме 'text' (части простого
  * текста — строки, как «\n» раньше) — всегда; в режиме 'rich' — только если
  * <br> в конце первой части стёрт правкой.
+ *
+ * DOC_RICH_FORMAT_V1 (ревью T2, MEDIUM 1) — между половинами таблицы или
+ * списка могли набрать текст или нажать Enter (за половиной на странице 1,
+ * перед продолжением на странице 2). Пару это не прячет: слияние смотрит сквозь
+ * такое (текст, строчное, абзацы без списков и таблиц); пустое выбрасывается,
+ * написанное встаёт после целой таблицы или списка. Метка курсора оттуда — в
+ * шов: в конец последней ячейки (пункта) страницы 1 или в начало первой
+ * ячейки (пункта) страницы 2 — курсор остаётся на той же странице.
  */
 export function joinCont(target, src, mode = 'rich') {
     if (!target || !src) return;
+    const copy = leadCopy(src);
+    const partner = copy ? tailPartner(target, copy) : null;
+    if (copy && partner) {
+        const tail = [];
+        while (partner.nextSibling) tail.push(target.removeChild(partner.nextSibling));
+        const lead = [];
+        while (src.firstChild && src.firstChild !== copy) lead.push(src.removeChild(src.firstChild));
+        for (const h of elementKids(copy)) if (h.hasAttribute(CONT_HEAD)) copy.removeChild(h);
+        for (const m of tail) if (isMark(m)) putMark(m, partner, true);
+        for (const m of lead) if (isMark(m)) putMark(m, copy, false);
+        joinCont(partner, copy, 'rich');
+        copy.remove();
+        for (const n of tail) if (!isMark(n) && !isEmptyStray(n)) target.appendChild(n);
+        // набранное на странице 1 и на странице 2 — разные строки
+        const kept = lead.filter((n) => !isMark(n) && !isEmptyStray(n));
+        const tl = lastReal(target);
+        if (kept.length && isInline(kept[0]) && isInline(tl) && !isBr(tl)) target.appendChild(target.ownerDocument.createElement('br'));
+        for (const n of kept) target.appendChild(n);
+    } else if (copy) unmark(copy);
     const first = firstReal(src);
     const last = lastReal(target);
     if (first && last && isInline(first) && isInline(last) && (mode === 'text' || !isBr(last))) {
         target.appendChild(target.ownerDocument.createElement('br'));
     }
-    if (isEl(first) && first.hasAttribute(CONT_SPLIT)) {
-        if (isEl(last) && tagOf(last) === tagOf(first)) {
-            while (src.firstChild && src.firstChild !== first) target.appendChild(src.firstChild);
-            for (const h of elementKids(first)) if (h.hasAttribute(CONT_HEAD)) first.removeChild(h);
-            joinCont(last, first, 'rich');
-            first.remove();
-        } else unmark(first);
+    while (src.firstChild) {
+        const n = src.firstChild;
+        if (isEl(n) && n.hasAttribute(CONT_SPLIT)) unmark(n);   // копия не в начале — своё целое, без меток
+        target.appendChild(n);
     }
-    while (src.firstChild) target.appendChild(src.firstChild);
+}
+// Набранное между половинами: текст, строчное, <br>, абзац без списков и таблиц.
+// Копия половины (CONT_SPLIT) — никогда не «между».
+function isStray(n) {
+    if (isNothing(n) || isText(n)) return true;
+    if (!isEl(n) || n.hasAttribute(CONT_SPLIT)) return false;
+    if (!isBlock(n)) return true;
+    return PARA.has(tagOf(n)) && !hasStruct(n);
+}
+function hasStruct(el) {
+    for (const k of elementKids(el)) if (STRUCT.has(tagOf(k)) || hasStruct(k)) return true;
+    return false;
+}
+function isEmptyStray(n) {
+    if (isMark(n)) return false;
+    if (isNothing(n) || isBr(n) || isWs(n)) return true;
+    if (!isEl(n)) return false;
+    return !String(n.textContent || '').trim() && !hasStruct(n) && !findMarks(n).length;
+}
+// Копия-половина в начале продолжения (перед ней может стоять набранное).
+function leadCopy(src) {
+    for (let n = src.firstChild; n; n = n.nextSibling) {
+        if (isEl(n) && n.hasAttribute(CONT_SPLIT)) return n;
+        if (!isStray(n)) return null;
+    }
+    return null;
+}
+// Её оригинал в конце части: у таблицы и списка — сквозь набранное после них;
+// у div/p/tbody — только последний блок (их строки — сами «набранное»).
+function tailPartner(target, copy) {
+    const tag = tagOf(copy);
+    if (!STRUCT.has(tag)) { const l = lastReal(target); return isEl(l) && tagOf(l) === tag ? l : null; }
+    for (let n = target.lastChild; n; n = n.previousSibling) {
+        if (isEl(n) && tagOf(n) === tag) return n;
+        if (!isStray(n)) return null;
+    }
+    return null;
+}
+// Ячейка (пункт) на краю таблицы или списка: последняя строка/пункт или первая
+// строка данных/пункт; col — колонка (−1 — крайняя по направлению).
+function edgeBox(struct, atEnd, col = -1) {
+    let box = struct;
+    for (let i = 0; i < 64 && isEl(box); i += 1) {
+        const t = tagOf(box);
+        let next = null;
+        if (t === 'TABLE') {
+            const { head, body } = tableParts(box);
+            const rows = body.length ? body : head;
+            const row = atEnd ? rows[rows.length - 1] : rows[0];
+            if (row) {
+                const cells = elementKids(row).filter((c) => tagOf(c) === 'TD' || tagOf(c) === 'TH');
+                next = cells.length ? cells[col >= 0 ? Math.min(col, cells.length - 1) : (atEnd ? cells.length - 1 : 0)] : row;
+            }
+        } else if (t === 'UL' || t === 'OL') {
+            const its = elementKids(box);
+            next = (atEnd ? its[its.length - 1] : its[0]) || null;
+        }
+        if (!next) return box;
+        box = next;
+    }
+    return box;
+}
+function putMark(m, struct, atEnd) {
+    const box = edgeBox(struct, atEnd);
+    if (!atEnd) { box.insertBefore(m, box.firstChild); return; }
+    const lc = box.lastChild;
+    if (isBr(lc)) box.insertBefore(m, lc); else box.appendChild(m);
+}
+// Курсор на краю ячейки: в её первом/последнем тексте.
+function caretIn(box, atEnd) {
+    const texts = [];
+    const walk = (e) => { for (let n = e.firstChild; n; n = n.nextSibling) { if (isText(n) && n.data !== '') texts.push(n); else if (isEl(n) && !isMark(n)) walk(n); } };
+    walk(box);
+    if (!texts.length) return { node: box, offset: 0 };
+    const t = atEnd ? texts[texts.length - 1] : texts[0];
+    return { node: t, offset: atEnd ? t.data.length : 0 };
+}
+function topIndex(host, node) {
+    let n = node;
+    while (n && n.parentNode !== host) n = n.parentNode;
+    if (!n) return -1;
+    let i = 0;
+    for (let k = host.firstChild; k && k !== n; k = k.nextSibling) i += 1;
+    return i;
+}
+function indexIn(host, child) { let i = 0; for (let k = host.firstChild; k && k !== child; k = k.nextSibling) i += 1; return i; }
+
+/**
+ * DOC_RICH_FORMAT_V1 (ревью T2, MEDIUM 1) — КУРСОР В ПРОМЕЖУТКЕ МЕЖДУ ПОЛОВИНАМИ.
+ * Заголовок продолжения не правится (contenteditable=false), и ↑ из первой строки
+ * страницы 2 выводит курсор из таблицы — в начало продолжения; ↓ из последней
+ * строки страницы 1 — за таблицу. Набранное там встало бы между половинами.
+ * Если курсор (node, offset) стоит в таком промежутке, вернуть место в
+ * соседней части: dir 'back' (↑/←) — в последнюю строку (пункт) предыдущей
+ * части, 'fwd' (↓/→) — в первую строку данных (пункт) следующей, 'stay'
+ * (щелчок) — в свою половину; col — колонка таблицы (−1 — крайняя ячейка).
+ * @returns {{node: Node, offset: number, host: Element}|null}
+ */
+export function gapCaret(parts, node, offset, dir = 'stay', col = -1) {
+    const list = (parts || []).filter(Boolean);
+    const i = list.findIndex((p) => p === node || (p.contains && p.contains(node)));
+    if (i < 0 || !node) return null;
+    const host = list[i];
+    const pos = node === host ? Number(offset) || 0 : topIndex(host, node);
+    // за половиной, которая продолжается в следующей части
+    const tailS = lastReal(host);
+    const next = list[i + 1];
+    const nextC = next && firstReal(next);
+    if (isEl(tailS) && STRUCT.has(tagOf(tailS)) && isEl(nextC) && nextC.hasAttribute(CONT_SPLIT) && tagOf(nextC) === tagOf(tailS)
+        && !tailS.contains(node) && pos > indexIn(host, tailS)) {
+        return dir === 'fwd' ? { ...caretIn(edgeBox(nextC, false, col), false), host: next } : { ...caretIn(edgeBox(tailS, true, col), true), host };
+    }
+    // перед продолжением половины в начале этой части
+    const headC = firstReal(host);
+    const prev = list[i - 1];
+    const prevS = prev && lastReal(prev);
+    if (i > 0 && isEl(headC) && headC.hasAttribute(CONT_SPLIT) && STRUCT.has(tagOf(headC)) && isEl(prevS) && tagOf(prevS) === tagOf(headC)
+        && !headC.contains(node) && (node === host ? pos <= indexIn(host, headC) : pos < indexIn(host, headC))) {
+        return dir === 'back' ? { ...caretIn(edgeBox(prevS, true, col), true), host: prev } : { ...caretIn(edgeBox(headC, false, col), false), host };
+    }
+    return null;
+}
+
+/**
+ * DOC_RICH_FORMAT_V1 (ревью T2, MEDIUM 1) — ШАГ ЧЕРЕЗ ШОВ. Части поля — разные
+ * правимые области, и стрелка браузера между ними не ходит: в первом пункте
+ * продолжения ↑ и ← на краю курсор не двигают, в последнем пункте половины на
+ * странице 1 ↓ и → — тоже. Если стрелка курсор не сдвинула и он стоит в
+ * крайней строке (пункте) половины, у которой есть пара, — место в соседней
+ * части: 'back' — последняя строка (пункт) предыдущей, 'fwd' — первая строка
+ * данных (пункт) следующей; col — колонка (−1 — крайняя ячейка).
+ * @returns {{node: Node, offset: number, host: Element}|null}
+ */
+export function edgeHop(parts, node, dir, col = -1) {
+    const list = (parts || []).filter(Boolean);
+    const i = list.findIndex((p) => p === node || (p.contains && p.contains(node)));
+    if (i < 0 || !node) return null;
+    const host = list[i];
+    if (dir === 'back' && i > 0) {
+        const c = firstReal(host);
+        const prev = list[i - 1];
+        const p = lastReal(prev);
+        if (isEl(c) && c.hasAttribute(CONT_SPLIT) && STRUCT.has(tagOf(c)) && isEl(p) && tagOf(p) === tagOf(c)) {
+            const edge = edgeItem(c, false);
+            if (edge && edge.contains(node)) return { ...caretIn(edgeBox(p, true, col), true), host: prev };
+        }
+    }
+    if (dir === 'fwd' && i < list.length - 1) {
+        const s = lastReal(host);
+        const next = list[i + 1];
+        const n = firstReal(next);
+        if (isEl(s) && STRUCT.has(tagOf(s)) && isEl(n) && n.hasAttribute(CONT_SPLIT) && tagOf(n) === tagOf(s)) {
+            const edge = edgeItem(s, true);
+            if (edge && edge.contains(node)) return { ...caretIn(edgeBox(n, false, col), false), host: next };
+        }
+    }
+    return null;
+}
+// Крайняя строка таблицы (данных — у начала) или крайний пункт списка.
+function edgeItem(struct, atEnd) {
+    if (tagOf(struct) === 'TABLE') {
+        const { head, body } = tableParts(struct);
+        const rows = body.length ? body : head;
+        return (atEnd ? rows[rows.length - 1] : rows[0]) || null;
+    }
+    const its = elementKids(struct);
+    return (atEnd ? its[its.length - 1] : its[0]) || null;
+}
+
+/**
+ * Метки курсора из `from` — в конец `to` (пустое продолжение выбрасывается при
+ * слиянии, а курсор врача в нём не должен пропасть).
+ */
+export function keepMarks(from, to) {
+    if (!from || !to) return;
+    for (const m of findMarks(from)) to.appendChild(m);
+}
+
+/**
+ * DOC_RICH_FORMAT_V1 (ревью T2, MEDIUM 2) — «\n» текста поля pre-wrap — <br>.
+ * Лист рисует простой текст раздела одним текстовым узлом с «\n» (pre-wrap);
+ * стоит врачу выделить слово жирным, поле — разметка, и разрезу не за что
+ * зацепиться: «строк» в нём одна. На экране «\n» и <br> в pre-wrap — одно и то
+ * же, и форма пишет «\n» таких полей <br> (то же правило) — поле не меняется.
+ * @returns {number} сколько <br> поставлено
+ */
+export function breakLines(el) {
+    if (!el) return 0;
+    const doc = el.ownerDocument;
+    const texts = [];
+    const walk = (e) => { for (let n = e.firstChild; n; n = n.nextSibling) { if (isText(n)) { if (n.data.indexOf('\n') > -1) texts.push(n); } else if (isEl(n) && !isMark(n)) walk(n); } };
+    walk(el);
+    let made = 0;
+    for (const t of texts) {
+        const p = t.parentNode;
+        const ref = t.nextSibling;
+        const pieces = t.data.split(/\r?\n/);
+        t.data = pieces[0];
+        for (let k = 1; k < pieces.length; k += 1) {
+            p.insertBefore(doc.createElement('br'), ref);
+            made += 1;
+            if (pieces[k]) p.insertBefore(doc.createTextNode(pieces[k]), ref);
+        }
+        if (!t.data) p.removeChild(t);
+    }
+    return made;
 }
 // Копия, которой не с чем слиться, становится обычным блоком: метки сняты у неё
 // и у вложенных копий; заголовок таблицы остаётся (он теперь её собственный).

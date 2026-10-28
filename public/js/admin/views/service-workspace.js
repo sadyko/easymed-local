@@ -41,7 +41,7 @@ import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — фла�
 import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 import { sanitizeStoredHtml, richHasContent, textBreaks } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком
 import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
-import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
+import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark, gapCaret, edgeHop, breakLines, keepMarks } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -6557,6 +6557,7 @@ function _wireBlankEditing(ctx, frame) {
         el.setAttribute('contenteditable', _loading ? 'false' : 'true');
         el.addEventListener('input', () => _syncBlankField(ctx, el));
     }
+    _blankWireSplitEdges(doc);   // DOC_RICH_FORMAT_V1 (ревью T2) — курсор не уходит в промежуток между половинами таблицы/списка
     // DOC_RICH_FORMAT_V1 (F4) — цвет, подсветка и A+/A− ложатся <span style>, а не
     // <font>: так их пропускает очистка хранения. Флаг документа — ставится при
     // каждом начале правки (и перед командой панели): перерисовка пишет новый документ.
@@ -6845,7 +6846,7 @@ function _blankPreWrap(p) {
 // и дальше — длинный список или таблица идут на третью страницу. Простой текст
 // (только строки) делится прежним алгоритмом, слово в слово.
 // ===========================================================================
-const _A4 = { PAGE: 1123, MB: 48, MT: 56 };
+const _A4 = { PAGE: 1123, MB: 48, MT: 56, MAX_PARTS: 200 };   // MAX_PARTS — ревью T2: предел продолжений на одну раскладку
 
 function _blankSaveCaret(doc) {
     try {
@@ -6942,9 +6943,13 @@ function _paginateBlank(doc, ctx) {
         for (const g of [...doc.querySelectorAll('.bk-pagesep')]) g.remove();
 
         // 2) multi-pass split/transfer until stable (long docs need page 3, 4, …)
+        // DOC_RICH_FORMAT_V1 (ревью T2, LOW) — продолжение с оформлением делится
+        // в том же проходе (500 пунктов, 300 строк таблицы — все страницы);
+        // предел — 200 частей на раскладку, чтобы сбой вёрстки не зациклил её.
         const view = doc.defaultView;
+        const budget = { parts: _A4.MAX_PARTS };
         for (let pass = 0; pass < 6; pass++) {
-            if (!_blankPaginatePass(doc, sheet, view)) break;
+            if (!_blankPaginatePass(doc, sheet, view, budget)) break;
         }
     } finally {
         _blankRestoreCaret(doc, caret);   // DOC_RICH_FORMAT_V1 (T2) — метка курсора не остаётся в DOM и при сбое
@@ -6963,8 +6968,64 @@ function _blankMergePart(primary, contB, mode) {
         if (t) primary.innerText = String(primary.innerText || '') + '\n' + t;
         return;
     }
-    if (!contIsBlank(contB)) joinCont(primary, contB, mode === 'rich' ? 'rich' : 'text');
+    // ревью T2 — курсор врача в пустом продолжении не пропадает вместе с ним
+    if (contIsBlank(contB)) keepMarks(contB, primary);
+    else joinCont(primary, contB, mode === 'rich' ? 'rich' : 'text');
 }
+
+// DOC_RICH_FORMAT_V1 (ревью T2, MEDIUM 1) — КРАЯ ПОЛОВИН ТАБЛИЦЫ И СПИСКА.
+// Повтор заголовка на странице 2 не правится (contenteditable=false), и ↑ из
+// первой строки данных выводил курсор из таблицы — в начало продолжения; ↓ из
+// последней строки страницы 1 — за таблицу; так же щелчок справа от неё.
+// Набранное там вставало между половинами. После стрелки (и щелчка) курсор,
+// оказавшийся в таком промежутке, переходит в соседнюю половину: ↑/← — в
+// последнюю строку (пункт) предыдущей страницы, ↓/→ — в первую строку данных
+// (пункт) следующей; ↑/↓ — в ту же колонку; щелчок — в свою половину.
+// Части поля — разные правимые области, и стрелка между ними не ходит: на
+// краю половины (последний пункт страницы 1, первый — страницы 2) она курсор
+// не двигает — тогда тот же шаг через шов (edgeHop).
+function _blankWireSplitEdges(doc) {
+    const DIR = { ArrowUp: 'back', ArrowLeft: 'back', ArrowDown: 'fwd', ArrowRight: 'fwd' };
+    const snap = (dir, col, was) => {
+        try {
+            const sel = doc.getSelection();
+            if (!sel || !sel.rangeCount || !sel.isCollapsed || !sel.anchorNode) return;
+            const n = sel.anchorNode;
+            const el = n.nodeType === 1 ? n : n.parentElement;
+            const host = el && el.closest && el.closest('[data-field],[data-cont-of]');
+            if (!host) return;
+            const key = host.getAttribute('data-field') || host.getAttribute('data-cont-of');
+            const parts = [...doc.querySelectorAll('[data-field="' + key + '"]'), ...doc.querySelectorAll('[data-cont-of="' + key + '"]')];
+            if (parts.length < 2) return;
+            let at = gapCaret(parts, n, sel.anchorOffset, dir, col);
+            if (!at && was && was.node === n && was.offset === sel.anchorOffset && dir !== 'stay') at = edgeHop(parts, n, dir, col);
+            if (!at) return;
+            if (at.host !== host) { try { at.host.focus({ preventScroll: true }); } catch (e) { /* без фокуса выделение всё равно ставится */ } }
+            const r = doc.createRange();
+            r.setStart(at.node, at.offset); r.collapse(true);
+            sel.removeAllRanges(); sel.addRange(r);
+        } catch (e) { /* курсор — по возможности */ }
+    };
+    doc.addEventListener('keydown', (e) => {
+        const dir = DIR[e.key];
+        if (!dir || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+        let col = -1;
+        let was = null;
+        try {
+            const s = doc.getSelection();
+            const a = s && s.anchorNode;
+            if (a && s.isCollapsed) was = { node: a, offset: s.anchorOffset };
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                const cel = a && (a.nodeType === 1 ? a : a.parentElement);
+                const td = cel && cel.closest && cel.closest('td,th');
+                if (td && td.parentElement) col = [...td.parentElement.children].indexOf(td);
+            }
+        } catch (err) { /* без колонки — крайняя ячейка */ }
+        setTimeout(() => snap(dir, col, was), 0);   // после того, как браузер сдвинул курсор (или не сдвинул)
+    }, true);
+    doc.addEventListener('mouseup', () => { setTimeout(() => snap('stay', -1, null), 0); });
+}
+export const wireSplitEdges = (doc) => _blankWireSplitEdges(doc);   // DOC_RICH_FORMAT_V1 (ревью T2) — экспорт для проверки (headless Chrome)
 
 // Продолжение поля на следующей странице: обёртка с видом блока (.sec) и поле
 // [data-cont-of] с видом раздела (.sec-b), которое правит то же поле формы.
@@ -6993,11 +7054,13 @@ function _blankPlaceCont(doc, sheet, b, wrap, contentBottom, page, _z) {
     sep.parentNode.insertBefore(wrap, sep.nextSibling);
 }
 
-function _blankPaginatePass(doc, sheet, view) {
+function _blankPaginatePass(doc, sheet, view, budget = { parts: _A4.MAX_PARTS }) {
     const { PAGE, MB, MT } = _A4;
     const _z = wsState.docZoom || 1;   // DOC_ZOOM_V1 — getBoundingClientRect is in zoomed px; divide to get layout px so page breaks match the real page bottom
     let page = 1, changed = false;
-    for (const b of _blankFlowBlocks(sheet)) {
+    const blocks = _blankFlowBlocks(sheet);
+    for (let bi = 0; bi < blocks.length; bi++) {
+        const b = blocks[bi];
         if (b.classList && b.classList.contains('bk-pagesep')) continue;
         const cs = view.getComputedStyle(b);
         if (cs.position === 'absolute' || cs.position === 'fixed' || cs.display === 'none') continue;
@@ -7023,13 +7086,17 @@ function _blankPaginatePass(doc, sheet, view) {
         const richEl = field || contRich;
         if (richEl && (contRich || fieldIsRich(field))) {
             const rKey = field ? fieldKey : contRich.getAttribute('data-cont-of');
-            if (rKey && rKey !== 'primary_diagnosis' && avail > 70) {
+            if (rKey && rKey !== 'primary_diagnosis' && avail > 70 && budget.parts > 0) {
+                // ревью T2 (MEDIUM 2) — простой текст с «\n» (pre-wrap), где выделили слово:
+                // строки — <br>, иначе всё поле — одна «строка» и не делится
+                if (_blankPreWrap(richEl)) breakLines(richEl);
                 const wrap = _blankContWrap(doc, b, richEl, rKey, 'rich');
                 const fits = () => top + b.getBoundingClientRect().height / _z <= contentBottom;
                 const tooTall = (n) => !!(n && n.nodeType === 1 && n.getBoundingClientRect().height / _z > PAGE - MB - MT - 80);
                 if (splitRichField(richEl, wrap.firstChild, { fits, tooTall })) {
                     _blankPlaceCont(doc, sheet, b, wrap, contentBottom, page, _z);
-                    page += 1; changed = true;
+                    page += 1; changed = true; budget.parts -= 1;
+                    blocks.splice(bi + 1, 0, wrap);   // ревью T2 (LOW) — продолжение — следующим, в этом же проходе
                     continue;
                 }
             }

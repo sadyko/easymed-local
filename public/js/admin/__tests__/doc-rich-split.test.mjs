@@ -20,7 +20,7 @@ import { htmlToText, sanitizeStoredHtml } from '../../shared/rich-text.js';
 
 installFakeDom();
 const SPLIT = await import('../views/blank-split.js');
-const { fieldIsRich, blankCuts, splitAt, joinCont, splitRichField, firstAtom, insertCaretMark, takeCaretMark, mergedFieldClone, contIsBlank } = SPLIT;
+const { fieldIsRich, blankCuts, splitAt, joinCont, splitRichField, firstAtom, insertCaretMark, takeCaretMark, mergedFieldClone, contIsBlank, gapCaret, breakLines, keepMarks } = SPLIT;
 const WS = await import('../views/service-workspace.js');
 
 const linesOf = (e) => { const t = htmlToText(e.innerHTML); return t ? t.split('\n').length : 0; };
@@ -381,4 +381,196 @@ test('F5: набранное в продолжении — в том же спи
     cont.innerHTML = '<ol data-cont-split="1" start="6"><li>x</li></ol>';
     placeCont(doc, cont);
     assert.equal(WS._blankFieldHtml([f, cont]), '<p>текст</p><ol><li>x</li></ol>');
+});
+
+// ═══ ревью T2 ═══════════════════════════════════════════════════════════════
+// HIGH — метка курсора сама становилась «последним блоком» поля: курсор на
+// уровне поля сразу за половиной таблицы (↓ из последней ячейки, щелчок справа)
+// или перед её продолжением (↑ из первой строки страницы 2) — и слияние не
+// узнавало пару: продолжение становилось своей таблицей с настоящим
+// заголовком, в форме — две таблицы, у ol — нумерация с 1.
+const mark = (n) => !!n && n.nodeType === 1 && n.hasAttribute('data-caret-mark');
+const cellOfMark = (root) => { const m = root.querySelector('[data-caret-mark]'); return m && m.parentNode; };
+
+test('ревью T2 (HIGH, M1): метка курсора за половиной таблицы на странице 1 — слияние узнаёт пару; метка — в последней ячейке страницы 1', () => {
+    const { f, cont } = setup('<div><b>ОАК:</b></div>' + RESTBL(1, 10));
+    const before = f.innerHTML;
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
+    const m = insertCaretMark(f, f.childNodes.length);   // курсор (поле, 2): за таблицей
+    assert.ok(mark(m) && m.previousSibling.tagName === 'TABLE');
+    // форма — до слияния: одна таблица
+    assert.equal(mergedFieldClone([f, cont]).innerHTML, before);
+    joinCont(f, cont, 'rich');
+    assert.equal(f.querySelectorAll('table').length, 1);
+    assert.equal(count(f.innerHTML, /<thead/g), 1);
+    assert.equal(cellOfMark(f).tagName, 'TD');
+    assert.equal(cellOfMark(f).parentNode.textContent, 'П440 г/л', 'метка — в последней строке страницы 1');
+    // новый разрез: метка остаётся на странице 1
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
+    const at = takeCaretMark(f);
+    assert.ok(at && at.node.data === '40 г/л' && at.offset === 6, JSON.stringify(at && [at.node.data, at.offset]));
+    joinCont(f, cont, 'rich');
+    assert.equal(f.innerHTML, before);
+});
+
+test('ревью T2 (HIGH, M2): метка перед продолжением таблицы на странице 2 — одна таблица, метка в первой ячейке страницы 2', () => {
+    const { f, cont } = setup('<div><b>ОАК:</b></div>' + RESTBL(1, 10));
+    const before = f.innerHTML;
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
+    insertCaretMark(cont, 0);
+    assert.equal(mergedFieldClone([f, cont]).innerHTML, before);
+    joinCont(f, cont, 'rich');
+    assert.equal(f.querySelectorAll('table').length, 1);
+    assert.equal(cellOfMark(f).textContent, 'П5');
+    assert.ok(mark(cellOfMark(f).firstChild), 'метка — в начале ячейки');
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
+    assert.ok(cont.querySelector('[data-caret-mark]'), 'метка уехала на страницу 2 с первой строкой');
+    const at = takeCaretMark(cont);
+    assert.deepEqual([at.node.data, at.offset], ['П5', 0]);
+});
+
+test('ревью T2 (HIGH, M3): ol и метка за его половиной — один ol, нумерация продолжается, повторные проходы те же', () => {
+    const { f, cont } = setup('<ol>' + items(1, 12) + '</ol>');
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 5) }));
+    insertCaretMark(f, f.childNodes.length);
+    const pass = () => { joinCont(f, cont, 'rich'); assert.equal(f.querySelectorAll('ol').length, 1); splitRichField(f, cont, { fits: capFits(f, 5) }); return cont.firstChild.getAttribute('start'); };
+    assert.equal(pass(), '6');
+    assert.equal(pass(), '6');
+    assert.equal(cellOfMark(f).textContent, 'Пункт 5');
+    takeCaretMark(f);
+    joinCont(f, cont, 'rich');
+    assert.equal(f.innerHTML, '<ol>' + items(1, 12) + '</ol>');
+});
+
+test('ревью T2 (HIGH): метка между блоками — не блок и не место разреза перед блоком; список не делится надвое ни при какой высоте', () => {
+    const html = '<ul>' + items(1, 8) + '</ul>' + range(1, 6).map((i) => 'строка ' + i + '<br>').join('');
+    const total = linesOf(setup(html).f);
+    for (let cap = 1; cap <= total; cap += 1) {
+        const { f, cont } = setup(html);
+        insertCaretMark(f, 1);   // курсор (поле, 1): сразу за списком
+        const before = f.innerHTML;
+        splitRichField(f, cont, { fits: capFits(f, cap) });
+        joinCont(f, cont, 'rich');
+        assert.equal(f.innerHTML, before, 'cap ' + cap);
+        assert.equal(f.querySelectorAll('ul').length, 1, 'cap ' + cap);
+    }
+    assert.equal(fieldIsRich(el(miniDocument(), '<div>текст<span data-caret-mark="1"></span></div>')), false, 'метка — не оформление');
+});
+
+// MEDIUM 1 — между половинами набрали текст или нажали Enter: слияние всё равно
+// узнаёт пару; пустое выбрасывается, написанное — после целой таблицы/списка.
+test('ревью T2 (MEDIUM 1): текст, пустая строка, абзац между половинами — одна таблица и один список; написанное — после них', () => {
+    let { doc, f, cont } = setup('<div><b>ОАК:</b></div>' + RESTBL(1, 10));
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
+    f.appendChild(doc.createTextNode('ПОСЛЕ'));        // набрано за половиной на странице 1
+    f.appendChild(el(doc, '<div><br></div>'));          // Enter
+    cont.insertBefore(doc.createTextNode('ДО'), cont.firstChild);   // набрано перед продолжением на странице 2
+    placeCont(doc, cont);
+    const stored = WS._blankFieldHtml([f, cont]);
+    assert.equal(count(stored, /<table/g), 1, stored.slice(0, 200));
+    assert.equal(count(stored, /<thead/g), 1);
+    assert.ok(stored.endsWith('</table>ПОСЛЕ<br>ДО'), stored.slice(-60));
+    joinCont(f, cont, 'rich');
+    assert.equal(f.querySelectorAll('table').length, 1);
+    assert.ok(!/<div><br><\/div>/.test(f.innerHTML), 'пустая строка между половинами осталась');
+    assert.ok(f.innerHTML.endsWith('</table>ПОСЛЕ<br>ДО'), f.innerHTML.slice(-60));
+    // список и абзац между половинами
+    ({ doc, f, cont } = setup('<ul>' + items(1, 8) + '</ul>'));
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 4) }));
+    f.appendChild(el(doc, '<div>Абзац</div>'));
+    joinCont(f, cont, 'rich');
+    assert.equal(f.innerHTML, '<ul>' + items(1, 8) + '</ul><div>Абзац</div>');
+    // оригинала нет — продолжение своё, порядок как был
+    ({ doc, f, cont } = setup('<p>x</p>' + RESTBL(1, 10)));
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
+    f.removeChild(f.querySelector('table'));
+    f.appendChild(doc.createTextNode('т'));
+    joinCont(f, cont, 'rich');
+    assert.equal(f.querySelectorAll('table').length, 1);
+    assert.ok(/^<p>x<\/p>т<table class="a4-restbl"><thead>/.test(f.innerHTML), f.innerHTML.slice(0, 80));
+    assert.ok(!/data-cont|contenteditable/.test(f.innerHTML));
+});
+
+test('ревью T2 (MEDIUM 1): курсор в промежутке между половинами — в соседнюю часть (↑/← назад, ↓/→ вперёд) или в свою (щелчок)', () => {
+    const { doc, f, cont } = setup('<div><b>ОАК:</b></div>' + RESTBL(1, 10));
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
+    placeCont(doc, cont);
+    const parts = [f, cont];
+    const at = (a) => a && [a.node.nodeType === 3 ? a.node.data : a.node.tagName, a.offset, a.host === f ? 'f' : a.host === cont ? 'cont' : '?'];
+    // страница 2, ↑ из первой строки данных: курсор (продолжение, 0) — в ту же колонку последней строки страницы 1
+    assert.deepEqual(at(gapCaret(parts, cont, 0, 'back', 1)), ['40 г/л', 6, 'f']);
+    assert.deepEqual(at(gapCaret(parts, cont, 0, 'back', -1)), ['40 г/л', 6, 'f'], '← — конец последней ячейки');
+    assert.deepEqual(at(gapCaret(parts, cont, 0, 'stay', -1)), ['П5', 0, 'cont']);
+    // страница 1, ↓ из последней строки: курсор (поле, 2) — в ту же колонку первой строки данных страницы 2
+    assert.deepEqual(at(gapCaret(parts, f, 2, 'fwd', 1)), ['50 г/л', 0, 'cont']);
+    assert.deepEqual(at(gapCaret(parts, f, 2, 'fwd', -1)), ['П5', 0, 'cont'], '→ — начало первой ячейки');
+    assert.deepEqual(at(gapCaret(parts, f, 2, 'stay', -1)), ['40 г/л', 6, 'f']);
+    // не промежуток
+    const td = f.querySelector('td');
+    assert.equal(gapCaret(parts, td.firstChild, 1, 'fwd', 0), null, 'в ячейке');
+    assert.equal(gapCaret(parts, f, 0, 'back', 0), null, 'перед подписью таблицы');
+    assert.equal(gapCaret([f], f, 2, 'fwd', 0), null, 'таблица не продолжается');
+    // список
+    const L = setup('<ol>' + items(1, 8) + '</ol>');
+    assert.ok(splitRichField(L.f, L.cont, { fits: capFits(L.f, 4) }));
+    placeCont(L.doc, L.cont);
+    assert.deepEqual(at(gapCaret([L.f, L.cont], L.f, 1, 'fwd', -1)).slice(0, 2), ['Пункт 5', 0]);
+    assert.deepEqual(at(gapCaret([L.f, L.cont], L.cont, 0, 'back', -1)).slice(0, 2), ['Пункт 4', 7]);
+});
+
+test('ревью T2 (MEDIUM 1): стрелка на краю половины не сдвинула курсор (другая правимая область) — шаг в соседнюю часть', () => {
+    const { doc, f, cont } = setup('<div><b>ОАК:</b></div>' + RESTBL(1, 10));
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
+    placeCont(doc, cont);
+    const parts = [f, cont];
+    const at = (a) => a && [a.node.nodeType === 3 ? a.node.data : a.node.tagName, a.offset, a.host === f ? 'f' : 'cont'];
+    const lastRow = [...f.querySelectorAll('tr')].pop();
+    const firstRow = cont.querySelector('tbody').firstChild;
+    // ↓ в последней строке страницы 1 — в ту же колонку первой строки страницы 2; → — в её начало
+    assert.deepEqual(at(SPLIT.edgeHop(parts, lastRow.lastChild.firstChild, 'fwd', 1)), ['50 г/л', 0, 'cont']);
+    assert.deepEqual(at(SPLIT.edgeHop(parts, lastRow.lastChild.firstChild, 'fwd', -1)), ['П5', 0, 'cont']);
+    // ↑ в первой строке данных страницы 2 — в последнюю строку страницы 1; ← — в конец её последней ячейки
+    assert.deepEqual(at(SPLIT.edgeHop(parts, firstRow.firstChild.firstChild, 'back', 0)), ['П4', 2, 'f']);
+    assert.deepEqual(at(SPLIT.edgeHop(parts, firstRow.firstChild.firstChild, 'back', -1)), ['40 г/л', 6, 'f']);
+    // не край: строка в середине, направление от шва, подпись над таблицей
+    assert.equal(SPLIT.edgeHop(parts, f.querySelector('tbody').children[1].firstChild.firstChild, 'fwd', 0), null);
+    assert.equal(SPLIT.edgeHop(parts, lastRow.lastChild.firstChild, 'back', 0), null);
+    assert.equal(SPLIT.edgeHop(parts, f.querySelector('b').firstChild, 'fwd', 0), null);
+    // список: последний пункт страницы 1 ↔ первый пункт страницы 2
+    const L = setup('<ol>' + items(1, 8) + '</ol>');
+    assert.ok(splitRichField(L.f, L.cont, { fits: capFits(L.f, 4) }));
+    placeCont(L.doc, L.cont);
+    const lp = [L.f, L.cont];
+    assert.deepEqual(at(SPLIT.edgeHop(lp, L.f.querySelectorAll('li')[3].firstChild, 'fwd', -1)).slice(0, 2), ['Пункт 5', 0]);
+    assert.deepEqual(at(SPLIT.edgeHop(lp, L.cont.querySelector('li').firstChild, 'back', -1)).slice(0, 2), ['Пункт 4', 7]);
+    assert.equal(SPLIT.edgeHop(lp, L.f.querySelectorAll('li')[2].firstChild, 'fwd', -1), null);
+});
+
+// MEDIUM 2 — простое поле с оформлением: лист рисует «\n»-текст pre-wrap одним
+// текстовым узлом, и разрезу внутри него не за что было зацепиться.
+test('ревью T2 (MEDIUM 2): перевод строки поля pre-wrap — <br> перед разрезом; простое поле с жирным словом делится по строкам', () => {
+    const NL = String.fromCharCode(10);
+    const { f, cont } = setup(['Строка 1', '<b>Строка</b> 2', 'Строка 3', 'Строка 4'].join(NL), 'physical_exam', 'sec-b');
+    assert.equal(blankCuts(f).length, 0, 'до: одна «строка» на всё поле');
+    assert.equal(breakLines(f), 3);
+    assert.equal(f.innerHTML, 'Строка 1<br><b>Строка</b> 2<br>Строка 3<br>Строка 4');
+    assert.equal(blankCuts(f).length, 3);
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 2) }));
+    assert.equal(f.innerHTML, 'Строка 1<br><b>Строка</b> 2<br>');
+    assert.equal(cont.innerHTML, 'Строка 3<br>Строка 4');
+    const doc = miniDocument();
+    const g = el(doc, '<div>' + NL + 'а<b>x' + NL + 'y</b>' + NL + '</div>');
+    breakLines(g);
+    assert.equal(g.innerHTML, '<br>а<b>x<br>y</b><br>');
+    assert.equal(breakLines(g), 0, 'второй раз — нечего');
+});
+
+test('ревью T2: пустое продолжение с меткой курсора — метка не теряется (в конец поля)', () => {
+    const doc = miniDocument();
+    const f = el(doc, '<div><ul><li>а</li></ul></div>');
+    const c = el(doc, '<div><span data-caret-mark="1"></span><br></div>');
+    assert.ok(contIsBlank(c));
+    keepMarks(c, f);
+    assert.equal(f.innerHTML, '<ul><li>а</li></ul><span data-caret-mark="1"></span>');
+    assert.equal(c.innerHTML, '<br>');
 });
