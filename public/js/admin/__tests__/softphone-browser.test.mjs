@@ -277,7 +277,7 @@ const RU_REASONS = {
   mic_denied: 'Браузер не дал микрофон: разрешите его значком слева от адреса страницы и включите телефон снова.',
   no_mic: 'Микрофон не найден: подключите гарнитуру и включите телефон снова.',
   mic_error: 'Микрофон не открылся. Проверьте гарнитуру и включите телефон снова.',
-  other_tab: 'Телефон работает в другой вкладке Easy-Med.',
+  other_tab: 'Телефон включён в другой вкладке Easy-Med. Чтобы пользоваться им здесь, выключите его в той вкладке.',
   register_failed: 'АТС не приняла вход вашего внутреннего номера. Попросите администратора проверить номер в карточке сотрудника или попробуйте позже.',
   network: 'Нет связи с АТС — переподключаемся…',
   load_failed: 'Не удалось загрузить телефон. Обновите страницу.',
@@ -350,7 +350,9 @@ test('узбекский и английский экран: причины и �
     }
     setLang('en');
     assert.equal(B.endText(end('out', C.BUSY)), 'Busy.');
-    assert.equal(B.reasonText('other_tab'), 'The phone is running in another Easy-Med tab.');
+    assert.equal(B.reasonText('other_tab'), 'The phone is turned on in another Easy-Med tab. To use it here, turn it off in that tab.');
+    setLang('uz');
+    assert.equal(B.reasonText('other_tab'), 'Telefon boshqa Easy-Med varag‘ida yoqilgan. Undan shu yerda foydalanish uchun o‘sha varaqda uni o‘chiring.');
   } finally {
     setLang('ru');
   }

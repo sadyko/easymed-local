@@ -12348,7 +12348,7 @@ export const STRINGS = {
   "Браузер не дал микрофон: разрешите его значком слева от адреса страницы и включите телефон снова.": {"en":"The browser did not allow the microphone: allow it with the icon to the left of the page address and turn the phone on again.","ru":"Браузер не дал микрофон: разрешите его значком слева от адреса страницы и включите телефон снова.","uz":"Brauzer mikrofonga ruxsat bermadi: sahifa manzilining chap tomonidagi belgi orqali ruxsat bering va telefonni qayta yoqing."},
   "Микрофон не найден: подключите гарнитуру и включите телефон снова.": {"en":"No microphone found: connect a headset and turn the phone on again.","ru":"Микрофон не найден: подключите гарнитуру и включите телефон снова.","uz":"Mikrofon topilmadi: garniturani ulang va telefonni qayta yoqing."},
   "Микрофон не открылся. Проверьте гарнитуру и включите телефон снова.": {"en":"The microphone did not open. Check the headset and turn the phone on again.","ru":"Микрофон не открылся. Проверьте гарнитуру и включите телефон снова.","uz":"Mikrofon ochilmadi. Garniturani tekshiring va telefonni qayta yoqing."},
-  "Телефон работает в другой вкладке Easy-Med.": {"en":"The phone is running in another Easy-Med tab.","ru":"Телефон работает в другой вкладке Easy-Med.","uz":"Telefon boshqa Easy-Med varag‘ida ishlamoqda."},
+  "Телефон включён в другой вкладке Easy-Med. Чтобы пользоваться им здесь, выключите его в той вкладке.": {"en":"The phone is turned on in another Easy-Med tab. To use it here, turn it off in that tab.","ru":"Телефон включён в другой вкладке Easy-Med. Чтобы пользоваться им здесь, выключите его в той вкладке.","uz":"Telefon boshqa Easy-Med varag‘ida yoqilgan. Undan shu yerda foydalanish uchun o‘sha varaqda uni o‘chiring."},
   "АТС не приняла вход вашего внутреннего номера. Попросите администратора проверить номер в карточке сотрудника или попробуйте позже.": {"en":"The PBX did not accept the sign-in of your extension. Ask the administrator to check the number in your employee card, or try again later.","ru":"АТС не приняла вход вашего внутреннего номера. Попросите администратора проверить номер в карточке сотрудника или попробуйте позже.","uz":"ATS ichki raqamingiz bilan kirishni qabul qilmadi. Administratordan xodim kartangizdagi raqamni tekshirishni so‘rang yoki keyinroq qayta urinib ko‘ring."},
   "Нет связи с АТС — переподключаемся…": {"en":"No connection to the PBX — reconnecting…","ru":"Нет связи с АТС — переподключаемся…","uz":"ATS bilan aloqa yo‘q — qayta ulanmoqda…"},
   "Не удалось загрузить телефон. Обновите страницу.": {"en":"Could not load the phone. Reload the page.","ru":"Не удалось загрузить телефон. Обновите страницу.","uz":"Telefonni yuklab bo‘lmadi. Sahifani yangilang."},
@@ -12364,6 +12364,16 @@ export const STRINGS = {
   "Связь с АТС прервалась.": {"en":"The connection to the PBX was lost.","ru":"Связь с АТС прервалась.","uz":"ATS bilan aloqa uzildi."},
   "Пропущенный звонок.": {"en":"Missed call.","ru":"Пропущенный звонок.","uz":"O‘tkazib yuborilgan qo‘ng‘iroq."},
   "Звонок оборвался.": {"en":"The call was cut off.","ru":"Звонок оборвался.","uz":"Qo‘ng‘iroq uzilib qoldi."},
+  // SOFTPHONE_V1 — панель «Телефон»: переключатель «Принимать звонки в Easy-Med» и состояние (views/crm-phone.js paintSoftRow)
+  "Принимать звонки в Easy-Med": {"en":"Take calls in Easy-Med","ru":"Принимать звонки в Easy-Med","uz":"Qo‘ng‘iroqlarni Easy-Med’da qabul qilish"},
+  "Телефон Easy-Med включён": {"en":"The Easy-Med phone is on","ru":"Телефон Easy-Med включён","uz":"Easy-Med telefoni yoqilgan"},
+  "Подключение к АТС…": {"en":"Connecting to the PBX…","ru":"Подключение к АТС…","uz":"ATSga ulanmoqda…"},
+  "Телефон включён в другой вкладке": {"en":"The phone is on in another tab","ru":"Телефон включён в другой вкладке","uz":"Telefon boshqa varaqda yoqilgan"},
+  "Вызов…": {"en":"Calling…","ru":"Вызов…","uz":"Chaqirilmoqda…"},
+  "Телефон не включился": {"en":"The phone did not turn on","ru":"Телефон не включился","uz":"Telefon yoqilmadi"},
+  "Скачать файл настройки компьютера": {"en":"Download the computer setup file","ru":"Скачать файл настройки компьютера","uz":"Kompyuterni sozlash faylini yuklab olish"},
+  "Номер для телефона в Easy-Med назначает администратор в карточке сотрудника.": {"en":"The number for the Easy-Med phone is assigned by the administrator in the employee card.","ru":"Номер для телефона в Easy-Med назначает администратор в карточке сотрудника.","uz":"Easy-Med telefoni uchun raqamni administrator xodim kartochkasida belgilaydi."},
+  "Администратор назначил вам номер {n} — выберите его в «Моя трубка», чтобы принимать звонки в Easy-Med.": {"en":"The administrator assigned you number {n} — choose it in «My handset» to take calls in Easy-Med.","ru":"Администратор назначил вам номер {n} — выберите его в «Моя трубка», чтобы принимать звонки в Easy-Med.","uz":"Administrator sizga {n} raqamini belgilagan — Easy-Med’da qo‘ng‘iroqlarni qabul qilish uchun uni «Mening trubkam»da tanlang."},
   // /SOFTPHONE_V1
   // /CRM_PHONE_V1
   // TG_BROADCAST_FILTERS_V1 — подробные фильтры окна рассылки

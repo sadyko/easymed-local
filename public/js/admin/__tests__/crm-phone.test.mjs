@@ -18,13 +18,20 @@ const perms = await import('../permissions.js');
 const ADMIN = { id: 7, full_name: 'Админ', role: 'admin', is_admin: true };
 const now = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
+// Времена звонков не пересекают полночь, в какой бы час ни шёл прогон: «сегодня»
+// — не раньше начала сегодняшних суток (а первый — ещё и моложе двух минут, для
+// «Только что звонили»), «вчера» — вчерашний полдень по местному времени. Было
+// «сейчас − 26 часов», и с 00:00 до 02:00 звонок уезжал в «Ранее».
+const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
+const today = (ago) => Math.max(now - ago, dayStart.getTime());
+const yesterdayNoon = new Date(now); yesterdayNoon.setDate(yesterdayNoon.getDate() - 1); yesterdayNoon.setHours(12, 0, 0, 0);
 // В порядке сервера: от свежего к старому.
 const CALLS = [
-  { id: 2, started_at: iso(now - 60000), call_type: 0, external_number: '998935550112', internal_number: '', billsec: 0, disposition: 'NOANSWER',
+  { id: 2, started_at: iso(today(60000)), call_type: 0, external_number: '998935550112', internal_number: '', billsec: 0, disposition: 'NOANSWER',
     patient_id: null, patient_name: null, patient_mrn: null, operator_name: null, recording_url: null, has_recording: false },
-  { id: 1, started_at: iso(now - 5 * 60000), call_type: 0, external_number: '998901112233', internal_number: '101', billsec: 42, disposition: 'ANSWER',
+  { id: 1, started_at: iso(today(5 * 60000)), call_type: 0, external_number: '998901112233', internal_number: '101', billsec: 42, disposition: 'ANSWER',
     patient_id: 5, patient_name: 'Каримова Азиза', patient_mrn: 'A-12', operator_name: 'Лола', recording_url: null, has_recording: true },
-  { id: 3, started_at: iso(now - 26 * 3600000), call_type: 1, external_number: '998977012345', internal_number: '101', billsec: 96, disposition: 'ANSWER',
+  { id: 3, started_at: iso(yesterdayNoon.getTime()), call_type: 1, external_number: '998977012345', internal_number: '101', billsec: 96, disposition: 'ANSWER',
     patient_id: 6, patient_name: 'Юсупова Малика', patient_mrn: null, operator_name: 'Лола', recording_url: null, has_recording: true },
 ];
 const LEAD = { id: 11, full_name: 'Заявка Тестовая', phone: '+998 90 123 45 67', status: 'in_process', source: 'call', created_at: iso(now), assigned_to: 7, users: { full_name: 'Админ' } };

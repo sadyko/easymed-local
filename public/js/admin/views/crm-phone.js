@@ -21,6 +21,15 @@
 // читается как «не работает» (ROLES_SAVE_TRUTH_V1). Об этом сказано владельцу
 // до начала работы, и он ответил «go on».
 //
+// SOFTPHONE_V1 (2026-10-29) — ТЕПЕРЬ И ТРУБКА. Владелец: «can we build a
+// softphone in the easymed inside?». Переключатель «Принимать звонки в
+// Easy-Med» входит в АТС внутренним номером оператора прямо из этой вкладки
+// (softphone.js, JsSIP): входящий звонит здесь — «Принять» / «Отклонить»,
+// разговор — таймер, «Микрофон выкл.», «Завершить»; «Позвонить» идёт через
+// гарнитуру компьютера. Без переключателя всё по-старому. Эти кнопки теперь
+// честные — они делают то, что написано. Удержания, перевода и тонового набора
+// по-прежнему нет (решение владельца для первой версии). Раздел — внизу файла.
+//
 // ЖИЗНЬ ПАНЕЛИ. Состояние — в памяти модуля до перезагрузки страницы. Панель,
 // вкладка на краю и пилюля живут на document.body и переходов между разделами
 // не замечают: телефонист ходит по картотеке и кассе, а трубка остаётся под
@@ -43,6 +52,10 @@ import { MIN_DIGITS, POLL_MS, DIAL_CARD_TTL_MS, digitsOf, tail9, cleanTyped, gro
          timeLabel, groupCalls, filterCalls, justCalled, matchDialed, initialsOf, whoIs } from '../crm-phone-logic.js';
 // CALL_RING_V1 — блок «Звонит»: какой живой звонок показать, как назвать, когда пискнуть.
 import { pickRinging, ringLabel, ringWord, beepDue, audioContextOf, ringTone } from '../crm-ring-logic.js';
+// SOFTPHONE_V1 — телефон Easy-Med: его состояние (softphone.js), браузер и слова причин (softphone-browser.js).
+import { getSoftphone, reasonText, endText } from '../softphone-browser.js';
+import { SP } from '../softphone.js';
+import { isActingNow } from '../act-as-client.js';
 
 // Зеркало PHONE_ROLES сервера (rpc/phone.js): прежнее поведение для ролей, которым
 // ключи ещё не настраивали. Список повторён, а не спрошен: кнопка решается ДО
@@ -79,6 +92,10 @@ const P = {
     // звук и его контекст (рождается после первого жеста пользователя).
     live: [], liveSource: 'off', liveTimer: null, ringSig: '', ringHidden: new Set(), ringSeen: new Map(), ringToasted: new Set(),
     lastBeepAt: 0, muted: false, audio: null, audioArmed: false,
+    // SOFTPHONE_V1 — телефон Easy-Med этой страницы и подписка на него; включали
+    // ли его сами после загрузки (один раз за страницу); подпись строки
+    // переключателя (та же картина — строку не перерисовываем).
+    sp: null, spUnsub: null, spAutoTried: false, spRowSig: '',
 };
 const LIVE_POLL_MS = 2000;
 const MUTE_KEY = 'easymed.phone.mute';
@@ -149,6 +166,11 @@ export function mountPhoneButton(ctx = {}) {
     P.muted = readMuted();
     startLivePoll(ctx.livePollMs || LIVE_POLL_MS);
     armAudio();
+    // SOFTPHONE_V1 — телефон Easy-Med слушаем с этой же минуты: входящий должен
+    // открыть панель и тому, кто её ещё не открывал. Переключатель был включён на
+    // этом компьютере — узнаём, можно ли, и включаем сами (loadMe → softAfterMe).
+    softWire();
+    if (!P.me && P.sp.wanted()) loadMe().then(() => { if (P.els) paintAll(); }).catch(() => {});
     P.btnDot = h('span', { class: 'cph-dot' + (P.me && P.me.line ? ' on' : ''), 'aria-hidden': 'true' });
     P.btn = h('button', {
         id: BTN_ID, class: 'cph-topbtn' + (P.open ? ' on' : ''), type: 'button', 'data-crm-phone': '',
@@ -171,7 +193,8 @@ export function resetCrmPhone() {
         me: null, calls: [], mayDial: false, mayLog: false, mayHear: false, logError: '', seg: 'all', query: '',
         card: null, expanded: null, holdUntil: 0, msg: '',
         live: [], liveSource: 'off', ringSig: '', outSig: '', ringHidden: new Set(), ringSeen: new Map(), ringToasted: new Set(),
-        lastBeepAt: 0, muted: false, audio: null, audioArmed: false });
+        lastBeepAt: 0, muted: false, audio: null, audioArmed: false,
+        sp: null, spUnsub: null, spAutoTried: false, spRowSig: '' });
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +227,9 @@ function mount() {
     els.ext = h('button', { class: 'cph-ext', type: 'button', 'data-cph-ext': '', title: 'Моя трубка: выбрать внутренний номер',
         onclick: () => { if (!P.mayDial) return; P.pick = !P.pick; paintPhone(); } });
     els.body = h('div', { class: 'cph-body', 'data-cph-body': '' });
+    // SOFTPHONE_V1 — строка телефона Easy-Med под строкой состояния (paintSoftRow).
+    els.spRow = h('div', { class: 'cph-sp-row', 'data-cph-sp-row': '' });
+    els.spRow.hidden = true;
     els.phone = h('section', { class: 'cph-phone' },
         h('div', { class: 'cph-head' }, els.status, els.ext, h('span', { class: 'grow' }),
             // CALL_RING_V1 — звук звонка: выключается здесь, выбор помнит этот браузер.
@@ -211,6 +237,7 @@ function mount() {
                 'aria-pressed': P.muted ? 'true' : 'false', onclick: toggleMute }, Icon('Bell', { size: 15 }))),
             h('button', { class: 'cph-ic', type: 'button', title: 'Свернуть', 'data-cph-min': '', onclick: minimize }, Icon('Minus', { size: 15 })),
             h('button', { class: 'cph-ic', type: 'button', title: 'Закрыть', 'data-cph-close': '', onclick: closeDrawer }, Icon('X', { size: 15 }))),
+        els.spRow,
         els.body);
 
     els.cnt = h('span', { class: 'cph-cnt', 'data-cph-cnt': '' });
@@ -248,6 +275,8 @@ function mount() {
     document.body.appendChild(els.mini);
     P.els = els;
     P.mounted = true;
+    P.spRowSig = '';
+    softWire();
     P.onKey = onKey;
     document.addEventListener('keydown', P.onKey);
     P.timer = setInterval(tick, POLL_MS);
@@ -267,6 +296,10 @@ function teardown() {
     P.els = null;
     P.mounted = false;
     P.expanded = null;
+    // SOFTPHONE_V1 — отписаться, но телефон НЕ останавливать: он живёт, пока жива страница.
+    if (P.spUnsub) P.spUnsub();
+    P.spUnsub = null;
+    P.sp = null;
 }
 
 // Раз в семь секунд: карточка звонка без ответа журнала пережила свой срок —
@@ -292,6 +325,7 @@ async function loadMe() {
     P.mayDial = !!P.me.may_dial;
     P.mayLog = !!P.me.may_log;
     P.mayHear = !!P.me.may_hear;
+    softAfterMe();   // SOFTPHONE_V1 — включить сам (флаг этого компьютера) или выключить, если теперь нельзя
 }
 
 async function loadCalls() {
@@ -417,6 +451,7 @@ function paintStatus() {
         P.els.ext.textContent = '…';
     }
     if (P.btnDot) P.btnDot.className = 'cph-dot' + (P.me && P.me.line ? ' on' : '');
+    paintSoftRow();   // SOFTPHONE_V1
 }
 
 function paintSeg() {
@@ -523,6 +558,9 @@ function paintPicker() {
         if (error) { toast(error.message || String(error), 'fail'); return; }
         if (P.me) P.me.extension = ext;
         P.pick = false;
+        // SOFTPHONE_V1 — телефон Easy-Med работает только на назначенном номере:
+        // ушли с него — телефон выключается; вернулись — включится, если был включён.
+        softAfterMe();
         toast(ext ? trf('Готово: звонки будут поднимать трубку {ext}.', { ext }) : tr('Готово: номер не задан — программа подберёт живую трубку сама.'), 'ok');
         paintPhone();
     } }, 'Запомнить');
@@ -816,4 +854,111 @@ function paintRing({ call: c, others, foreign }) {
         chips.length ? h('div', { class: 'cph-chips' }, ...chips) : null,
         others ? h('div', { class: 'cph-hint' }, trf('и ещё {n}', { n: others })) : null,
         h('div', { class: 'cph-sum' }, ...actions)));
+}
+
+// ---------------------------------------------------------------------------
+// SOFTPHONE_V1 — телефон Easy-Med: переключатель и состояние
+// ---------------------------------------------------------------------------
+//
+// КОМУ. Строка видна тому, у кого есть право набора. Включить можно только на
+// номере, который администратор назначил в карточке сотрудника
+// (softphone_extension), и только пока в «Моя трубка» выбран именно он; от
+// чужого имени — нельзя вовсе. Почему нельзя — строкой под переключателем, а не
+// подсказкой под мышью: оператор у телефона мышью над ним не водит.
+//
+// ПАМЯТЬ. Переключатель помнит этот компьютер (флаг телефона в localStorage):
+// был включён — после перезагрузки страницы телефон включается сам, один раз,
+// если всё ещё можно. Снятие панели телефон не останавливает.
+const SP_OFF = Object.freeze({ state: 'off', reason: '', message: '', extension: '', call: null, lastEnd: null });
+const SP_CALL = new Set([SP.RINGING, SP.CALLING, SP.IN_CALL]);
+const SP_WORDS = {
+    ready: 'Телефон Easy-Med включён', connecting: 'Подключение к АТС…', other_tab: 'Телефон включён в другой вкладке',
+    ringing: 'Входящий звонок', calling: 'Вызов…', in_call: 'Разговор идёт', error: 'Телефон не включился',
+};
+const SP_TONE = { ready: 'ready', ringing: 'ready', calling: 'ready', in_call: 'ready', connecting: 'wait', other_tab: 'wait', error: 'error' };
+const SP_ACTING = 'Принимать звонки от чужого имени нельзя — вернитесь к своей учётной записи.';
+const SP_NO_NUMBER = 'Номер для телефона в Easy-Med назначает администратор в карточке сотрудника.';
+const SP_PICK = 'Администратор назначил вам номер {n} — выберите его в «Моя трубка», чтобы принимать звонки в Easy-Med.';
+// Файл настройки компьютера (PC_SETUP_INSTALL_V1): public/setup/ отдаёт express.static.
+const SP_SETUP_FILE = 'EasyMed-ustanovka.cmd';
+
+/** Подписаться на телефон страницы — один раз (кнопка ставится заново при смене языка). */
+function softWire() {
+    if (P.sp) return;
+    P.sp = getSoftphone();
+    P.spUnsub = P.sp.subscribe(onSoftChange);
+}
+const softState = () => (P.sp ? P.sp.get() : SP_OFF);
+
+/** Можно ли включить телефон Easy-Med; hint — почему нельзя (строкой на экране). */
+function softAllowed() {
+    if (!P.me || !P.mayDial) return { ok: false, hint: '' };
+    if (isActingNow()) return { ok: false, hint: tr(SP_ACTING) };
+    const n = String(P.me.softphone_extension || '');
+    if (!n) return { ok: false, hint: tr(SP_NO_NUMBER) };
+    if (String(P.me.extension || '') !== n) return { ok: false, hint: trf(SP_PICK, { n }) };
+    return { ok: true, hint: '' };
+}
+
+/** После «кто я» и смены трубки: нельзя — выключить; можно и флаг стоит — включить сам, один раз за страницу. */
+function softAfterMe() {
+    if (!P.sp || !P.me) return;
+    const on = P.sp.get().state !== SP.OFF;
+    if (!softAllowed().ok) { if (on) P.sp.disable(); return; }
+    if (!on && !P.spAutoTried && P.sp.wanted()) {
+        P.spAutoTried = true;
+        Promise.resolve(P.sp.enable()).catch(() => {});
+    }
+}
+
+function softToggle() {
+    if (!P.sp) return;
+    if (P.sp.get().state !== SP.OFF) P.sp.disable();
+    else if (softAllowed().ok) Promise.resolve(P.sp.enable()).catch(() => {});
+    // Браузер уже перевернул флажок сам — рисуем правду, что бы ни ответил телефон.
+    P.spRowSig = '';
+    paintSoftRow();
+}
+
+function onSoftChange() {
+    if (P.els) { paintPhone(); paintChrome(); }
+}
+
+// Строка под строкой состояния: переключатель, слово состояния, причина,
+// ссылка на файл настройки компьютера, «почему нельзя», итог прошлого звонка.
+function paintSoftRow() {
+    const row = P.els && P.els.spRow;
+    if (!row) return;
+    const s = softState();
+    const show = !!(P.me && P.mayDial);
+    const allow = softAllowed();
+    const on = s.state !== SP.OFF;
+    const reason = show && on ? reasonText(s.reason, s.message) : '';
+    const hint = show && !on ? allow.hint : '';
+    const end = show && !SP_CALL.has(s.state) ? endText(s.lastEnd) : '';
+    const word = on ? SP_WORDS[s.state] || '' : '';
+    // Та же картина — не перерисовываем: переключатель не теряет фокус клавиатуры.
+    // Слова — переведёнными: сменили язык — строка перерисуется.
+    const sig = [show, s.state, tr(word), reason, allow.ok, hint, end].join('|');
+    if (sig === P.spRowSig) return;
+    P.spRowSig = sig;
+    clear(row);
+    row.hidden = !show;
+    if (!show) return;
+    const sw = h('input', {
+        type: 'checkbox', role: 'switch', class: 'cph-sp-sw', 'data-cph-sp-toggle': '',
+        checked: on, disabled: !allow.ok && !on, 'aria-describedby': hint ? 'cph-sp-hint' : null, onclick: softToggle,
+    });
+    sw.checked = on;
+    put(row,
+        h('div', { class: 'cph-sp-top' },
+            h('label', { class: 'cph-sp-lbl' }, sw, h('span', null, 'Принимать звонки в Easy-Med')),
+            word ? h('span', { class: 'cph-sp-st ' + (SP_TONE[s.state] || ''), 'data-cph-sp-state': s.state }, word) : null),
+        reason ? h('div', { class: 'cph-sp-reason' + (s.state === SP.ERROR ? '' : ' info'), 'data-cph-sp-reason': s.reason }, reason) : null,
+        on && s.reason === 'insecure'
+            ? h('a', { class: 'cph-sp-setup', href: '/setup/' + SP_SETUP_FILE, download: SP_SETUP_FILE, 'data-cph-sp-setup': '' },
+                Icon('Download', { size: 13 }), 'Скачать файл настройки компьютера')
+            : null,
+        hint ? h('div', { class: 'cph-sp-hint', id: 'cph-sp-hint', 'data-cph-sp-hint': '' }, hint) : null,
+        end ? h('div', { class: 'cph-sp-end', 'data-cph-sp-end': '' }, end) : null);
 }
