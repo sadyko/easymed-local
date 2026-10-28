@@ -117,10 +117,18 @@ export function liveCalls(now = Date.now()) {
 /**
  * Один длинный опрос публичного сервера: события после курсора, ждать до 20 с.
  * Бросает то же, что call() (SyncFail с причиной) — цикл решает, когда повторить.
+ *
+ * FIX_318_V1 (C6) — базу публичного сервера восстановили из копии: номера
+ * событий пошли заново с меньших, и «после нашего курсора» не пришло бы уже
+ * никогда. Сервер видит, что курсор больше его последнего выданного номера,
+ * отдаёт свежие (за полторы минуты) и говорит cursor_reset: курсор становится
+ * номером последнего пришедшего, а без событий — пустым. Сам номер сервер не
+ * называет: он общий на все клиники. Прежний сервер флага не шлёт — как раньше.
  */
 export async function pullOnce(ctx, { callImpl = syncCall, now = Date.now } = {}) {
   const res = await callImpl(ctx, 'GET', '/pbx-events?after=' + encodeURIComponent(cursor) + '&wait=' + PULL_WAIT_SEC);
   const items = Array.isArray(res && res.items) ? res.items : [];
+  if (res && res.cursor_reset === true) cursor = '';
   for (const it of items) {
     if (it && it.id !== undefined && it.id !== null) cursor = String(it.id);
     noteEvent(ctx.db, it, now());

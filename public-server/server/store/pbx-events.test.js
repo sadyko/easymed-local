@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { testDb, NOW } from '../test-helpers/fixture.js';
-import { ringHashOf, clinicByRingToken, insertPbxEvent, pbxEventsSince, waitForPbxEvent, PBX_TTL_MS, PBX_FRESH_MS } from './pbx-events.js';
+import { ringHashOf, clinicByRingToken, insertPbxEvent, pbxEventsSince, waitForPbxEvent, PBX_TTL_MS, PBX_FRESH_MS, pbxLastId, pbxCursorAhead } from './pbx-events.js';
 import { saveKeys } from './clinics.js';
 import { isoOf } from '../lib/time.js';
 import { runMaintenance } from '../jobs.js';   // FIX_318_V1 (C6)
@@ -72,6 +72,29 @@ test('saveKeys кладёт хеш секрета; без секрета — п�
   assert.equal(db.prepare("SELECT ring_hash FROM clinics WHERE clinic_id = 'c-000777'").get().ring_hash, ringHashOf(TOKEN));
   assert.deepEqual(saveKeys(db, 'c-000777', { ...body, generated_at: isoOf(NOW + 1000) }, NOW + 1000), { ok: true, connections: 0 });
   assert.equal(db.prepare("SELECT ring_hash FROM clinics WHERE clinic_id = 'c-000777'").get().ring_hash, '', 'снятый секрет остался на сервере');
+});
+
+// FIX_318_V1 (C6) — базу сервера восстановили из копии: номера событий пошли с
+// меньших, а курсор клиники — прежний, больший. Курсор больше последнего
+// выданного номера — читается как пустой (свежие), и номер этот сервер отдаёт.
+test('FIX_318_V1: курсор клиники больше последнего номера сервера (база восстановлена) — выдаются свежие и cursor_reset; свой курсор — как прежде', () => {
+  const { db } = testDb();
+  clinic(db);
+  assert.equal(pbxLastId(db), 0, 'пустой ящик — ноль');
+  assert.equal(pbxCursorAhead(db, '5'), true);
+  assert.equal(pbxCursorAhead(db, ''), false, 'пустой курсор — не «впереди»');
+  const a = insertPbxEvent(db, 'c-000777', ev('u1'), NOW);
+  const b = insertPbxEvent(db, 'c-000777', ev('u2'), NOW + 1000);
+  assert.equal(pbxLastId(db), b.id);
+  assert.equal(pbxCursorAhead(db, String(b.id)), false);
+  assert.equal(pbxCursorAhead(db, String(b.id + 500)), true);
+  assert.deepEqual(pbxEventsSince(db, 'c-000777', String(b.id + 500), NOW + 2000).map((r) => r.id), [a.id, b.id],
+    'курсор из будущего — событий нет никогда');
+  assert.deepEqual(pbxEventsSince(db, 'c-000777', String(b.id), NOW + 2000), [], 'свой же курсор — как прежде, пусто');
+  // Стёрто уборкой — номер не забывается (AUTOINCREMENT): курсор клиники остаётся годным.
+  db.prepare('DELETE FROM pbx_events').run();
+  assert.equal(pbxLastId(db), b.id);
+  assert.equal(pbxCursorAhead(db, String(b.id)), false, 'после уборки свой курсор стал «из будущего»');
 });
 
 // FIX_318_V1 (C6) — десять минут хранения номеров были обещанием, которое

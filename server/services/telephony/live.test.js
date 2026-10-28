@@ -101,6 +101,38 @@ test('длинный опрос: первый — с пустым курсоро
   assert.equal(seen[1], 'GET /pbx-events?after=42&wait=20');
 });
 
+// FIX_318_V1 (C6) — базу публичного сервера восстановили из копии: номера событий
+// пошли заново с меньших, а курсор клиники остался прежним, большим, — новые
+// события «старше курсора» не приезжали никогда. Сервер видит курсор больше
+// своего последнего номера и говорит cursor_reset (с свежими событиями или без).
+test('FIX_318_V1: сервер говорит cursor_reset (его база восстановлена) — курсор сбрасывается или становится номером свежего события; без флага — как раньше', async () => {
+  resetLive();
+  const db = fresh();
+  const seen = [];
+  const answers = [
+    { items: [{ id: 500, ...ring('p1', '998901112233') }] },
+    { items: [], cursor_reset: true },
+    { items: [{ id: 38, ...ring('p2', '998907778899') }] },
+    { items: [{ id: 12, ...ring('p3', '998935550112') }], cursor_reset: true },
+    { items: [] },
+  ];
+  const callImpl = async (_ctx, method, p) => { seen.push(p); return answers.shift(); };
+  const ctx = { db };
+  await pullOnce(ctx, { callImpl, now: () => T0 });
+  assert.equal(liveCursor(), '500');
+  await pullOnce(ctx, { callImpl, now: () => T0 + 1000 });
+  assert.equal(liveCursor(), '', 'курсор больше последнего номера сервера остался — новые события не приедут');
+  await pullOnce(ctx, { callImpl, now: () => T0 + 2000 });
+  assert.equal(seen[2], '/pbx-events?after=&wait=20');
+  assert.equal(liveCursor(), '38');
+  await pullOnce(ctx, { callImpl, now: () => T0 + 3000 });
+  assert.equal(liveCursor(), '12', 'со свежими событиями курсор — номер последнего из них');
+  await pullOnce(ctx, { callImpl, now: () => T0 + 4000 });
+  assert.equal(liveCursor(), '12', 'ответ без флага сбросил курсор');
+  assert.ok(liveCalls(T0 + 4000).some((c) => c.uuid === 'p3'));
+  resetLive();
+});
+
 test('источник: без ключа обмена — off; с публичным адресом и токеном — direct; причина — как у обмена', () => {
   resetLive();
   const db = fresh();
