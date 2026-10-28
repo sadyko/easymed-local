@@ -553,6 +553,7 @@ const READS_318 = [
   'meta_settings_get', 'meta_leads_recent',                        // META_LEADS_V1 — настройки без токена, журнал заявок
   'telephony_phone_me', 'telephony_call_log', 'telephony_extensions',       // CRM_PHONE_V1 — кто я, журнал, трубки станции
   'telephony_live',                                                // CALL_RING_V1 — живые звонки из памяти процесса
+  'telephony_caller',                                              // SOFTPHONE_V1 — «кто звонит»: пациент и заявка по номеру
 ];
 // Изменены в 3.18.0 (MOIZVONKI_V2) и только читают, но экран «Телефония» при
 // блокировке закрыт намеренно (TELEPHONY_ROUTING_V1, rpc/index.js): ворота — 402,
@@ -566,6 +567,10 @@ const WRITES_318 = [
   'telephony_my_extension',
   'telephony_ring_info',          // рождает секрет адреса при первом взгляде (UPDATE telephony_settings)
   'telephony_ring_token_rotate',
+  // SOFTPHONE_V1 — вход в АТС базу не меняет, но выдаёт пароль трубки: при
+  // блокировке закрыт, как экран «Телефония», а журнал входа от имени считает
+  // его действием, не чтением.
+  'telephony_webrtc_me',
 ];
 
 test('FIX_318_V1: чтения 3.18.0 — в READ_ONLY_RPCS, записи 3.18.0 — нет и не в ALWAYS_ALLOWED', () => {
@@ -623,4 +628,31 @@ test('FIX_318_V1: isReadRpc — READ_ONLY_RPCS и чтения из ALWAYS_ALLOW
     'backup_create', 'backup_restore', 'factory_reset', 'lan_address_dismiss', 'lan_address_mdns', ...WRITES_318, 'some_future_rpc']) {
     assert.equal(GATE.isReadRpc(n), false, n + ' — запись');
   }
+});
+
+// SOFTPHONE_V1 — ТЕЛЕФОН EASY-MED ПРИ БЛОКИРОВКЕ, ЧЕРЕЗ НАСТОЯЩИЙ МАРШРУТ. «Кто
+// звонит» — чтение: имя пациента по номеру приходит и при просроченной лицензии.
+// Вход в АТС (пароль трубки) — закрыт, как экран «Телефония»: 402 воротами, а не
+// отказом самого вызова (у лицензированной клиники тот же запрос доходит до него).
+test('SOFTPHONE_V1: при блокировке «кто звонит» отвечает, вход в АТС — 402 воротами', async (t) => {
+  const { app, db, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  const pid = db.prepare("INSERT INTO patients (full_name, phone, mrn) VALUES ('Каримова Азиза', '+998 90 111 22 33', 'A-12')").run().lastInsertRowid;
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+  const who = await post(server, cookie, '/api/rpc/telephony_caller', { number: '998901112233' });
+  assert.equal(who.status, 200, '«кто звонит» закрылся при блокировке');
+  assert.equal((await who.json()).data.patient.id, pid);
+  const sip = await post(server, cookie, '/api/rpc/telephony_webrtc_me', {});
+  assert.equal(sip.status, 402, 'вход в АТС прошёл сквозь блокировку лицензии');
+  assert.equal((await sip.json()).error.code, 'licence_locked');
+});
+
+test('SOFTPHONE_V1: у лицензированной клиники вход в АТС доходит до самого вызова (не 402)', async (t) => {
+  const { app, password } = harness({ validUntil: '2099-01-01T00:00:00Z' });
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+  const sip = await post(server, cookie, '/api/rpc/telephony_webrtc_me', {});
+  // У администратора стенда нет внутреннего номера — отказ словами самого вызова.
+  assert.equal(sip.status, 400);
+  assert.match((await sip.json()).error.message, /внутренний номер/);
 });

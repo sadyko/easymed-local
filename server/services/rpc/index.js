@@ -728,8 +728,9 @@ export const RPC = {
   telephony_extensions:      (db, args, user) => telephonyExtensions(db, args, user),
   telephony_call_log:        (db, args, user) => telephonyCallLog(db, args, user),
   // SOFTPHONE_V1 — телефон Easy-Med: вход своего номера в АТС и «кто звонит».
-  // «Кто звонит» — в READ_ONLY_RPCS; вход в АТС при блокировке закрыт, как экран
-  // «Телефония» (LOCKED_READS в control/gate.js).
+  // «Кто звонит» — в READ_ONLY_RPCS; вход в АТС (пароль трубки) — ни в одном
+  // списке control/gate.js: при блокировке закрыт, как экран «Телефония», а журнал
+  // входа от имени считает его действием.
   telephony_webrtc_me:       (db, args, user) => telephonyWebrtcMe(db, args, user),
   telephony_caller:          (db, args, user) => telephonyCaller(db, args, user),
   // CALL_RING_V1 — «Звонит»: что звонит сейчас (сам вопрос — спрос на опрос

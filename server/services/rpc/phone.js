@@ -89,6 +89,21 @@ const SP_ACTING = 'Принимать звонки от чужого имени 
 const SP_NO_WEBRTC = 'АТС не дала этому внутреннему номеру вход из браузера — включите его в кабинете onlinePBX или выберите другой номер.';
 const SP_NO_LINE = 'Линия onlinePBX не подключена («Настройки → Телефония»).';
 
+// Адрес АТС для браузера — только *.onpbx.ru с портом или без: политика страницы
+// (CSP в app.js) пускает лишь wss://*.onpbx.ru:*, и другой адрес браузер молча не
+// откроет — а пароль трубки к тому времени уже ушёл бы.
+const PBX_WS_HOST = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.onpbx\.ru(:\d{1,5})?$/i;
+
+// Записи трубок из ответа user/get.json. Обычно — массив; объектом (по номеру,
+// одна запись или {data:[…]}) — разбираем так же: свой номер ищется по num.
+function pbxUsers(data) {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return [];
+  if (Array.isArray(data.data)) return data.data;
+  if (data.num !== undefined) return [data];
+  return Object.values(data);
+}
+
 /**
  * SOFTPHONE_V1 — вход телефона Easy-Med в АТС под СВОИМ внутренним номером.
  * Номер — из users.pbx_extension (не из запроса): чужой номер — чужие звонки.
@@ -112,10 +127,11 @@ export async function telephonyWebrtcMe(db, _args, user, { pbxCallImpl = pbxCall
   const r = await pbxCallImpl(providerConfig(row).domain, 'user/get.json', { num: ext, fields: 'num,name,enabled,webrtc' }, pbxOptions(db, row));
   if (!r || !r.ok) throw new RpcError(dialMessage(r && r.reason), 400);
   // Только запись СВОЕГО номера: станция может прислать и чужие — их пароли не наши.
-  const u = (Array.isArray(r.data) ? r.data : []).find((x) => x && String(x.num) === ext);
+  const u = pbxUsers(r.data).find((x) => x && typeof x === 'object' && String(x.num) === ext);
   const w = u && u.enabled !== false ? u.webrtc : null;
   if (!w || !w.host || !w.user || !w.password) throw new RpcError(SP_NO_WEBRTC, 409);
   const host = String(w.host);
+  if (!PBX_WS_HOST.test(host)) throw new RpcError(SP_NO_WEBRTC, 409);
   return { extension: ext, user: String(w.user), password: String(w.password), ws_url: 'wss://' + host, sip_domain: host.replace(/:\d+$/, '') };
 }
 

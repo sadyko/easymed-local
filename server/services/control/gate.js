@@ -249,10 +249,10 @@ const READ_ONLY_RPCS = new Set([
 // чтения. telephony_recent_calls и telephony_dispositions изменены в 3.18.0
 // (MOIZVONKI_V2: провайдер и предел) и по-прежнему только читают.
 // SOFTPHONE_V1 — telephony_webrtc_me (вход своего номера в АТС из браузера)
-// базу не меняет, но телефон при блокировке закрыт, как экран «Телефония».
+// нарочно НИ В ОДНОМ списке: при блокировке закрыт, как экран «Телефония», а
+// для журнала входа от имени это действие — он выдаёт пароль трубки.
 const LOCKED_READS = new Set([
   'telephony_settings_get', 'telephony_providers_list', 'telephony_recent_calls', 'telephony_dispositions',
-  'telephony_webrtc_me',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

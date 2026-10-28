@@ -172,7 +172,51 @@ test('регистрация RPC и ворота лицензии', () => {
   assert.equal(isReadOnlyRpc('telephony_caller'), true, '«кто звонит» — чтение, при блокировке отвечает');
   assert.equal(isReadOnlyRpc('telephony_webrtc_me'), false, 'при блокировке телефон закрыт, как экран «Телефония»');
   assert.equal(isAlwaysAllowedRpc('telephony_webrtc_me'), false);
-  // Журнал входа от имени: оба — чтения (база не меняется), хотя вход в АТС ворота не пускают.
+  // Журнал входа от имени: «кто звонит» — чтение; вход в АТС — действие (выдаёт пароль трубки).
   assert.equal(isReadRpc('telephony_caller'), true);
-  assert.equal(isReadRpc('telephony_webrtc_me'), true);
+  assert.equal(isReadRpc('telephony_webrtc_me'), false, 'вход в АТС — действие, журнал входа от имени его считает');
+});
+
+// Политика страницы пускает только wss://*.onpbx.ru:* — другой адрес браузер молча
+// не откроет, а пароль трубки уже ушёл бы. Чужой адрес — тот же отказ, без пароля.
+test('адрес АТС не из *.onpbx.ru — 409 со словами, пароль не отдаётся', async () => {
+  const leak = 'z'.repeat(32);
+  for (const host of ['evil.example.com:8082', 'onpbx.ru:8082', 'pbx38631.onpbx.ru.evil.com', 'pbx38631.onpbx.ru:8082/x',
+    'user@pbx38631.onpbx.ru', 'pbx38631.onpbx.ru:', 'pbx38631.onpbx.ru:123456', 'pbx 1.onpbx.ru', 'pbx38631.onpbx.ru:8082?x=1',
+    'pbx38631.onpbx.ru:8082\n']) {
+    const pbx = fakePbx({ ok: true, data: [{ num: '108', enabled: true, webrtc: { host, user: '108', password: leak } }] });
+    await assert.rejects(telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: pbx.impl }),
+      (e) => refused(409, /браузер/)(e) && !e.message.includes(leak), JSON.stringify(host));
+  }
+  // Без порта и с несколькими уровнями — свой адрес.
+  for (const [host, domain] of [['pbx38631.onpbx.ru', 'pbx38631.onpbx.ru'], ['a-1.b.onpbx.ru:443', 'a-1.b.onpbx.ru']]) {
+    const pbx = fakePbx({ ok: true, data: [{ num: '108', enabled: true, webrtc: { host, user: '108', password: PASSWORD } }] });
+    const r = await telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: pbx.impl });
+    assert.equal(r.ws_url, 'wss://' + host);
+    assert.equal(r.sip_domain, domain);
+  }
+});
+
+// Станция может прислать data объектом — по номеру или с вложенным data: ищем так же,
+// и так же только СВОЙ номер.
+test('ответ станции объектом (по номеру или {data:[…]}) — тот же поиск своего номера', async () => {
+  const w108 = { host: 'pbx38631.onpbx.ru:8082', user: '108', password: PASSWORD };
+  const w107 = { host: 'pbx38631.onpbx.ru:8082', user: '107', password: 'q'.repeat(32) };
+  for (const data of [
+    { 107: { num: '107', enabled: true, webrtc: w107 }, 108: { num: '108', enabled: true, webrtc: w108 } },
+    { data: [{ num: '107', enabled: true, webrtc: w107 }, { num: 108, enabled: true, webrtc: w108 }] },
+    { num: '108', enabled: true, webrtc: w108 },
+  ]) {
+    const pbx = fakePbx({ ok: true, data });
+    const r = await telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: pbx.impl });
+    assert.equal(r.user, '108');
+    assert.equal(r.password, PASSWORD);
+  }
+  // Объектом, но своего номера нет — чужой пароль не отдаётся.
+  for (const data of [{ 107: { num: '107', enabled: true, webrtc: w107 } }, { data: [{ num: '107', enabled: true, webrtc: w107 }] },
+    { num: '107', enabled: true, webrtc: w107 }, 'текст', null]) {
+    const pbx = fakePbx({ ok: true, data });
+    await assert.rejects(telephonyWebrtcMe(seed(), {}, OP, { pbxCallImpl: pbx.impl }),
+      (e) => refused(409, /браузер/)(e) && !e.message.includes('q'.repeat(32)));
+  }
 });
