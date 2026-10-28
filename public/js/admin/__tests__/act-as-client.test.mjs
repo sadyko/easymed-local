@@ -267,6 +267,47 @@ test('полоса вверху: «Вы работаете от имени: им
     assert.equal(document.getElementById('act-as-banner'), null);
 });
 
+// FIX_318_V1 (ADMIN_ACT_AS_V1) — полоса стоит над .app в общем потоке, а .app,
+// колонка меню и область содержимого рассчитаны на 100vh: экран во всю высоту
+// съезжал на высоту полосы (49 px), страница прокручивалась, низ меню
+// обрезался. Теперь полоса сообщает свою высоту: класс has-act-as-banner и
+// --act-as-h на body, и CSS отнимает её от 100vh (admin-views.css).
+test('FIX_318_V1: полоса оставляет экрану окно — has-act-as-banner и --act-as-h на body; без входа от имени — ни того, ни другого', () => {
+    reset();
+    const vars = new Map();
+    body.style.setProperty = (k, v) => { vars.set(k, String(v)); };
+    body.style.removeProperty = (k) => { vars.delete(k); };
+    const had = Object.getOwnPropertyDescriptor(F.prototype, 'offsetHeight');
+    Object.defineProperty(F.prototype, 'offsetHeight', { configurable: true, get() { return this.id === 'act-as-banner' ? 49 : 0; } });
+    try {
+        AA.renderActAsBanner(ACTING);
+        assert.ok(body.classList.contains('has-act-as-banner'), 'класс на body');
+        assert.equal(vars.get('--act-as-h'), '49px', 'высота полосы — в переменной');
+        AA.renderActAsBanner(ACTING);   // повтор (смена языка) — то же
+        assert.equal(body.className.split(/\s+/).filter((c) => c === 'has-act-as-banner').length, 1);
+        assert.equal(vars.get('--act-as-h'), '49px');
+        AA.renderActAsBanner(ADMIN);   // вернулись — экран снова во всё окно
+        assert.equal(body.classList.contains('has-act-as-banner'), false);
+        assert.equal(vars.has('--act-as-h'), false);
+    } finally {
+        if (had) Object.defineProperty(F.prototype, 'offsetHeight', had); else delete F.prototype.offsetHeight;
+        delete body.style.setProperty; delete body.style.removeProperty;
+    }
+});
+
+test('FIX_318_V1: CSS — с полосой .app, колонка меню и область содержимого отнимают --act-as-h от 100vh', async () => {
+    const fs = await import('node:fs');
+    const css = fs.readFileSync(new URL('../../../css/admin-views.css', import.meta.url), 'utf8');
+    const rule = (sel) => {
+        const at = css.indexOf(sel + ' {');
+        assert.ok(at >= 0, 'нет правила ' + sel);
+        return css.slice(at, css.indexOf('}', at));
+    };
+    assert.match(rule('body.has-act-as-banner .app'), /min-height:\s*calc\(100vh - var\(--act-as-h, 0px\)\)/);
+    assert.match(rule('body.has-act-as-banner .sidebar'), /height:\s*calc\(100vh - var\(--act-as-h, 0px\)\)/);
+    assert.match(rule('body.has-act-as-banner .main'), /min-height:\s*calc\(100vh - var\(--act-as-h, 0px\) - var\(--shell-gap\) \* 2\)/);
+});
+
 test('окно аватара: кто работает на самом деле и «Вернуться»; без входа от имени — ничего', () => {
     reset();
     assert.equal(AA.actAsAccountBlock(ADMIN), null);

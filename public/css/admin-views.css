@@ -4743,6 +4743,15 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 #act-as-banner .aab-back:hover { background: #ede9fe; }
 #act-as-banner .aab-back:focus-visible { outline: 2px solid var(--purple-500, #8b5cf6); outline-offset: 2px; }
 #act-as-banner .aab-back:disabled { opacity: .6; cursor: default; }
+/* FIX_318_V1 (ADMIN_ACT_AS_V1) — полоса стоит над .app в общем потоке, а
+   оболочка рассчитана на 100vh (admin.css: .app min-height, липкая .sidebar
+   height, .main min-height): экран во всю высоту съезжал на высоту полосы,
+   страница прокручивалась на 49 px, низ колонки меню уходил за край окна.
+   act-as-client.js ставит на body класс и --act-as-h (высота полосы, с
+   переносом строки на узком окне) — здесь она отнимается от 100vh. */
+body.has-act-as-banner .app { min-height: calc(100vh - var(--act-as-h, 0px)); }
+body.has-act-as-banner .sidebar { height: calc(100vh - var(--act-as-h, 0px)); }
+body.has-act-as-banner .main { min-height: calc(100vh - var(--act-as-h, 0px) - var(--shell-gap) * 2); }
 /* Окно аватара: кто работает на самом деле — над «Выйти». */
 .aab-pop { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--purple-50, #f5f3ff); border: 1px solid #ddd6fe; color: var(--purple-700, #6d28d9); }
 .aab-pop .aab-pop-t { display: flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 700; }
