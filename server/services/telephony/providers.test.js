@@ -215,3 +215,43 @@ test('poll: отказ «Моих Звонков» — last_error провайд
   await pollOnce(db, { hasModule: () => true, mzListImpl: async () => { called++; return { ok: true, data: [] }; } });
   assert.equal(called, 0);
 });
+
+// FIX_318_V1 (C6) — два подключения «Моих Звонков» к одному кабинету (руководитель
+// видит звонки всех): звонки подшивает первое, второе строк не получает (ON
+// CONFLICT), и его курсор по «своим строкам» навсегда оставался «сутки назад» —
+// каждый проход заново тянул весь день. Курсор теперь у каждого подключения свой:
+// следующий за последним УВИДЕННЫМ им db_call_id, чьей бы ни стала строка.
+test('FIX_318_V1: два подключения «Моих Звонков» к одному кабинету — у каждого свой курсор; второе не тянет сутки каждый проход', async () => {
+  const db = fresh();
+  const mk = (name) => saveProvider(db, { kind: 'moizvonki', name, enabled: true, poll_interval_sec: 30,
+    config: { domain: 'clinic.moizvonki.ru', user_name: name + '@clinic.uz' }, secret: { api_key: 'TESTONLY-' + name } });
+  const p1 = mk('boss');
+  const p2 = mk('operator');
+  const now = Math.floor(Date.now() / 1000);
+  const day = Array.from({ length: 5 }, (_, i) => MZ_CALL({ db_call_id: 1000 + i, event_pbx_call_id: '', start_time: now - 3600 + i, client_number: '+99890' + String(1000000 + i) }));
+  const seen = [];
+  const mzListImpl = async (domain, cursor, o) => {
+    seen.push([o.userName, cursor]);
+    const from = cursor.fromId != null ? cursor.fromId : 0;
+    return { ok: true, truncated: false, data: day.filter((c) => c.db_call_id >= from) };
+  };
+  await pollOnce(db, { hasModule: () => true, mzListImpl });
+  assert.deepEqual(db.prepare('SELECT provider_id, COUNT(*) AS n FROM calls GROUP BY provider_id').all().map((r) => ({ ...r })), [{ provider_id: p1.id, n: 5 }]);
+  seen.length = 0;
+  await pollOnce(db, { hasModule: () => true, mzListImpl });
+  assert.deepEqual(seen, [['boss@clinic.uz', { fromId: 1005 }], ['operator@clinic.uz', { fromId: 1005 }]],
+    'второе подключение снова тянет сутки по дате');
+  // Новый звонок — оба курсора идут дальше.
+  day.push(MZ_CALL({ db_call_id: 1005, event_pbx_call_id: '', start_time: now - 60, client_number: '+998901234500' }));
+  seen.length = 0;
+  await pollOnce(db, { hasModule: () => true, mzListImpl });
+  await pollOnce(db, { hasModule: () => true, mzListImpl });
+  assert.deepEqual(seen.slice(2), [['boss@clinic.uz', { fromId: 1006 }], ['operator@clinic.uz', { fromId: 1006 }]]);
+  // Сменили кабинет (другой адрес) — курсор прежнего кабинета не годится: снова сутки по дате.
+  saveProvider(db, { id: p2.id, config: { domain: 'other.moizvonki.ru' } });
+  seen.length = 0;
+  await pollOnce(db, { hasModule: () => true, mzListImpl });
+  assert.ok(seen[1][1].fromDate && !seen[1][1].fromId, 'курсор чужого кабинета: ' + JSON.stringify(seen[1][1]));
+  // Курсор не уходит в браузер: в публичном виде подключения его нет.
+  assert.ok(!JSON.stringify(listProviders(db)).includes('1006'));
+});

@@ -56,6 +56,11 @@ test('ключи с секретом отпирают приём; GET /pbx-event
   await syncCall(s.base, other, 'PUT', '/_sync/v1/keys', keys(other, 'cd'.repeat(16)), { time });
   assert.deepEqual((await syncCall(s.base, other, 'GET', '/_sync/v1/pbx-events?after=&wait=0', undefined, { time })).json, { items: [] }, 'чужая клиника увидела событие');
   assert.equal((await fetch(s.base + '/_pbx/v1/' + c.clinicId + '/' + 'cd'.repeat(16), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"event":"call_start"}' })).status, 404);
+  // FIX_318_V1 (C6) — курсор клиники из «будущего» (база сервера восстановлена из
+  // копии): свежие события и cursor_reset; сам общий номер сервер не называет.
+  const ahead = await call('GET', '/_sync/v1/pbx-events?after=' + (it.id + 1000) + '&wait=0');
+  assert.deepEqual([ahead.json.cursor_reset, ahead.json.items.map((x) => x.uuid)], [true, ['u-1']]);
+  assert.equal('last_id' in ahead.json, false);
 });
 
 test('длинный опрос: запрос висит, пока не ляжет событие, и отвечает им сразу; без события — пустой ответ по сроку', async (t) => {

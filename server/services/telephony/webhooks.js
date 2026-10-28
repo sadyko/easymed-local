@@ -21,7 +21,7 @@ import { readSettingsRow } from './settings.js';
 import { recordCall } from './poller.js';
 import { findPatientsByPhone } from '../telegram/documents.js';
 import { noteEvent } from './live.js';   // CALL_RING_V1 — «кто звонит» — это и «звонит сейчас» для панели «Телефон»
-import { ringFromBinotelSettings } from './pbx-event.js';
+import { ringFromBinotelSettings, endFromBinotelCompleted } from './pbx-event.js';   // FIX_318_V1 (C2) — и конец
 
 // The vendor's published webhook source addresses.
 //
@@ -178,6 +178,12 @@ function callCompleted(db, body, res) {
   // db error, caught by the route wrapper) refuses, because a retry CAN fix
   // that.
   if (details) recordCall(db, details, 'webhook');
+  // FIX_318_V1 (C2) — «звонок завершён» закрывает и живой звонок, открытый «кто
+  // звонит» (callSettings выше): иначе панель «Телефон» три минуты показывала
+  // «Входящий звонок» и пищала. Конец звонка, начала которого не видели
+  // (исходящий, или «кто звонит» не приходил), ничего не рисует (live.js).
+  // В try — как и начало: панель не стоит ответа станции.
+  try { noteEvent(db, endFromBinotelCompleted(details)); } catch (e) { console.warn('[ring] Binotel «звонок завершён»:', e && e.message); }
   // EXACTLY this string. The docs demand the literal {"status":"success"};
   // anything else — reordered keys, added whitespace — is treated as failure
   // and retried 7 times over 38 hours. res.json() would re-serialize; send()

@@ -44,10 +44,11 @@ export const PULL_BACKOFF_MS = 10_000;
 const calls = new Map();   // uuid → живой звонок
 let lastDemandAt = 0;
 let cursor = '';           // номер последнего забранного события публичного сервера
-let unknownLogged = 0;
+const unknownLogged = new Set();   // FIX_318_V1 (C6): имена непонятных событий, уже записанные в журнал
+const UNKNOWN_LOG_MAX = 50;
 
 /** Для стендов: забыть всё, как после перезапуска сервера. */
-export function resetLive() { calls.clear(); lastDemandAt = 0; cursor = ''; unknownLogged = 0; }
+export function resetLive() { calls.clear(); lastDemandAt = 0; cursor = ''; unknownLogged.clear(); }
 
 export function demandLive(now = Date.now()) { lastDemandAt = now; }
 export function liveDemanded(now = Date.now()) { return lastDemandAt > 0 && now - lastDemandAt < DEMAND_TTL_MS; }
@@ -83,7 +84,13 @@ export function noteEvent(db, ev, now = Date.now()) {
   if (!ev) return null;
   if (ev.unknown) {
     // Имена полей — без значений: по ним уточняется схема станции, номера пациентов в журнал не попадают.
-    if (unknownLogged < 3) { unknownLogged++; console.warn('[ring] непонятное событие станции; поля: ' + (ev.keys || []).join(', ')); }
+    // FIX_318_V1 (C6) — и имя события (pbx-event.js unknownName: без номеров), один раз на имя:
+    // по этим строкам имена событий сверяются на настоящей станции.
+    const name = String(ev.name || '');
+    if (!unknownLogged.has(name) && unknownLogged.size < UNKNOWN_LOG_MAX) {
+      unknownLogged.add(name);
+      console.warn('[ring] событие станции «' + name + '» не распознано — пропущено; поля: ' + (ev.keys || []).join(', '));
+    }
     return null;
   }
   prune(now);
@@ -98,7 +105,11 @@ export function noteEvent(db, ev, now = Date.now()) {
     calls.set(ev.uuid, c);
   }
   if (ev.event === ANSWER) { c.state = 'answered'; c.was_answered = true; c.answered_at = ev.at; }
-  else if (ev.event === END) { c.state = 'ended'; c.ended_at = ev.at; }
+  else if (ev.event === END) {
+    c.state = 'ended'; c.ended_at = ev.at;
+    // FIX_318_V1 (C2) — конец Binotel несёт «разговор был» сам: события «ответили» у него нет.
+    if (ev.answered && !c.was_answered) { c.was_answered = true; c.answered_at = ev.at; }
+  }
   else if (ev.event === RING && c.state === 'ended') { /* повтор начала после конца — не воскрешать */ }
   c.updated = now;
   return c;
@@ -113,10 +124,18 @@ export function liveCalls(now = Date.now()) {
 /**
  * Один длинный опрос публичного сервера: события после курсора, ждать до 20 с.
  * Бросает то же, что call() (SyncFail с причиной) — цикл решает, когда повторить.
+ *
+ * FIX_318_V1 (C6) — базу публичного сервера восстановили из копии: номера
+ * событий пошли заново с меньших, и «после нашего курсора» не пришло бы уже
+ * никогда. Сервер видит, что курсор больше его последнего выданного номера,
+ * отдаёт свежие (за полторы минуты) и говорит cursor_reset: курсор становится
+ * номером последнего пришедшего, а без событий — пустым. Сам номер сервер не
+ * называет: он общий на все клиники. Прежний сервер флага не шлёт — как раньше.
  */
 export async function pullOnce(ctx, { callImpl = syncCall, now = Date.now } = {}) {
   const res = await callImpl(ctx, 'GET', '/pbx-events?after=' + encodeURIComponent(cursor) + '&wait=' + PULL_WAIT_SEC);
   const items = Array.isArray(res && res.items) ? res.items : [];
+  if (res && res.cursor_reset === true) cursor = '';
   for (const it of items) {
     if (it && it.id !== undefined && it.id !== null) cursor = String(it.id);
     noteEvent(ctx.db, it, now());
@@ -132,7 +151,9 @@ export async function pullOnce(ctx, { callImpl = syncCall, now = Date.now } = {}
 export function liveSource(db, dataDir, { keyPath = path.join(dataDir, SYNC_KEY_FILE) } = {}) {
   let identity = null;
   try { identity = loadSyncIdentity({ keyPath, create: false }); } catch { identity = null; }
-  const reason = identity ? vendorBlocker(dataDir, identity) : 'not_enrolled';
+  // FIX_318_V1 (C3) — нет ключа обмена у зарегистрированной установки — не «не
+  // зарегистрирована», а «ключа ещё нет» (его заводит такт обмена ради адреса станции).
+  const reason = identity ? vendorBlocker(dataDir, identity) : (vendorBlocker(dataDir, null) === 'not_enrolled' ? 'not_enrolled' : 'no_sync_key');
   if (!reason) return { source: 'relay', reason: '' };
   const row = readSettingsRow(db) || {};
   if (row.ring_token && row.public_base_url) return { source: 'direct', reason };

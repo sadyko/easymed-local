@@ -172,6 +172,47 @@ test('poll first, webhook second: still one row — double delivery is idempoten
   } finally { server.close(); }
 });
 
+// FIX_318_V1 (C2) — «кто звонит» отмечает начало живого звонка, а «звонок
+// завершён» не отмечал конец: панель «Телефон» три минуты показывала «Входящий
+// звонок» и пищала 40 секунд после того, как трубку положили. Теперь
+// apiCallCompleted закрывает живой звонок binotel:<generalCallID>; отвеченный —
+// как отвеченный (панель его прячет), неотвеченный — «Пропущен» на 15 секунд.
+test('FIX_318_V1: apiCallCompleted закрывает живой звонок «кто звонит» — панель не звонит после конца', async () => {
+  const live = await import('./live.js');
+  const { pickRinging, beepDue } = await import('../../../public/js/admin/crm-ring-logic.js');
+  const db = fresh();
+  enableHooks(db);
+  live.resetLive();
+  const { server, base } = await startHook(db, { allowedIps: ['127.0.0.1'] });
+  const done = (id, fields) => postForm(base, { requestType: 'apiCallCompleted', 'callDetails[generalCallID]': id,
+    'callDetails[startTime]': String(Math.floor(Date.now() / 1000)), 'callDetails[callType]': '0',
+    'callDetails[externalNumber]': '998909610004', 'callDetails[internalNumber]': '901', ...fields });
+  try {
+    await postForm(base, { requestType: 'apiCallSettings', externalNumber: '998909610004', internalNumber: '901', generalCallID: 'GC-9' });
+    await postForm(base, { requestType: 'apiCallSettings', externalNumber: '998909610005', internalNumber: '902', generalCallID: 'GC-10' });
+    const ringing = live.liveCalls().filter((c) => c.state === 'ringing').map((c) => c.uuid).sort();
+    assert.deepEqual(ringing, ['binotel:GC-10', 'binotel:GC-9']);
+    // Не ответили.
+    assert.equal(await (await done('GC-9', { 'callDetails[billsec]': '0', 'callDetails[disposition]': 'NOANSWER' })).text(), '{"status":"success"}');
+    // Ответили и поговорили.
+    assert.equal(await (await done('GC-10', { 'callDetails[billsec]': '42', 'callDetails[disposition]': 'ANSWER' })).text(), '{"status":"success"}');
+    const byId = Object.fromEntries(live.liveCalls().map((c) => [c.uuid, c]));
+    assert.equal(byId['binotel:GC-9'].state, 'ended', 'неотвеченный звонок остался «звонит»');
+    assert.equal(byId['binotel:GC-9'].was_answered, false);
+    assert.equal(byId['binotel:GC-10'].state, 'ended', 'отвеченный звонок остался «звонит»');
+    assert.equal(byId['binotel:GC-10'].was_answered, true, 'отвеченный показан пропущенным');
+    const now = Date.now();
+    const shown = pickRinging(live.liveCalls(now));
+    assert.equal(shown.call.uuid, 'binotel:GC-9', 'сразу после конца — «Пропущен» у неотвеченного');
+    assert.equal(beepDue(shown.call, now, { firstSeenAt: now, lastBeepAt: 0 }), false, 'законченный звонок пищит');
+    // liveCalls(later) убирает отжившее — поэтому после проверки «сейчас».
+    assert.equal(pickRinging(live.liveCalls(now + 30_000)), null, 'через 30 секунд после конца панель всё ещё показывает звонок');
+    // Конец звонка, начала которого не видели, — ничего не рисует.
+    await done('GC-11', { 'callDetails[billsec]': '0', 'callDetails[disposition]': 'NOANSWER' });
+    assert.equal(live.liveCalls().some((c) => c.uuid === 'binotel:GC-11'), false);
+  } finally { server.close(); live.resetLive(); }
+});
+
 test('unknown requestType and non-POST both get the non-advertising 404', async () => {
   const db = fresh();
   enableHooks(db);

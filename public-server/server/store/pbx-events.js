@@ -41,8 +41,9 @@ export function clinicByRingToken(db, clinicId, token) {
   return a.length === b.length && crypto.timingSafeEqual(a, b) ? { clinic_id: row.clinic_id } : null;
 }
 
+/** Стереть события старше десяти минут; сколько стёрто. Зовут приём, выдача и — FIX_318_V1 (C6) — уборка раз в минуту (jobs.js). */
 export function prunePbxEvents(db, now) {
-  db.prepare('DELETE FROM pbx_events WHERE received_at < ?').run(isoOf(now - PBX_TTL_MS));
+  return db.prepare('DELETE FROM pbx_events WHERE received_at < ?').run(isoOf(now - PBX_TTL_MS)).changes;
 }
 
 /**
@@ -63,10 +64,33 @@ export function insertPbxEvent(db, clinicId, ev, now, keys = []) {
   return { id: Number(r.lastInsertRowid) };
 }
 
-/** События клиники после курсора (номера); пустой курсор — свежие (не старше 90 с). 'unknown' не выдаётся. */
+/**
+ * FIX_318_V1 (C6) — последний ВЫДАННЫЙ номер события (sqlite_sequence:
+ * AUTOINCREMENT помнит его и после уборки). Общий на все клиники — поэтому
+ * наружу не отдаётся, только сравнивается с курсором (pbxCursorAhead).
+ */
+export function pbxLastId(db) {
+  const r = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'pbx_events'").get();
+  return r ? Number(r.seq) || 0 : 0;
+}
+
+/**
+ * FIX_318_V1 (C6) — курсор клиники больше последнего выданного номера: такого
+ * номера сервер не выдавал — его база восстановлена из копии, и номера пошли
+ * заново с меньших. По такому курсору не пришло бы уже ничего; выдаются свежие,
+ * а клиника узнаёт, что курсор надо заменить (routes/sync.js cursor_reset).
+ */
+export function pbxCursorAhead(db, after) {
+  const a = String(after || '').trim();
+  if (!a) return false;
+  const n = Number(a);
+  return Number.isFinite(n) && n > pbxLastId(db);
+}
+
+/** События клиники после курсора (номера); пустой курсор или курсор «из будущего» (pbxCursorAhead) — свежие (не старше 90 с). 'unknown' не выдаётся. */
 export function pbxEventsSince(db, clinicId, after, now) {
   prunePbxEvents(db, now);
-  const a = String(after || '').trim();
+  const a = pbxCursorAhead(db, after) ? '' : String(after || '').trim();   // FIX_318_V1 (C6)
   if (a) {
     return db.prepare(`SELECT id, uuid, event, direction, caller, callee, at FROM pbx_events
                         WHERE clinic_id = ? AND id > ? AND event IN ${DELIVERED} ORDER BY id LIMIT ?`).all(clinicId, Number(a) || 0, PBX_PAGE);

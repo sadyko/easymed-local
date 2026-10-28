@@ -26,7 +26,8 @@ import { leadFromCall } from '../crm/lead-from-call.js';
 import { pbxHistory, normalizePbxCall } from './onlinepbx.js';
 import { mzListCalls, normalizeMzCall, normalizeMzDomain } from './moizvonki.js';   // MOIZVONKI_V2 — история «Моих Звонков»
 import { ensureMoizvonkiRouting } from './moizvonki-routing.js';   // MOIZVONKI_V2 — свои правила «звонок → заявка»
-import { pbxOptions, recordProviderPoll, noteProviderCall, providerKind, providerConfig, providerSecrets } from './providers.js';
+import { pbxOptions, recordProviderPoll, noteProviderCall, providerKind, providerConfig, providerSecrets,
+         providerCursor, saveProviderCursor } from './providers.js';   // FIX_318_V1 (C6) — свой курсор у подключения
 import { recordingUrlOf } from './recording.js';   // CALL_RECORDING_V1
 import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';   // UZ_PHONE_V1
 
@@ -305,6 +306,16 @@ async function pollProviders(db, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImp
 // ЭТОГО провайдера); первый запуск — сутки назад по дате, как у остальных.
 // Что бы ни ответил сервис, увиденные звонки подшиваются (recordCall
 // идемпотентен по general_call_id), а итог прохода — слово в last_error.
+//
+// FIX_318_V1 (C6) — КУРСОР У КАЖДОГО ПОДКЛЮЧЕНИЯ СВОЙ. Два подключения к одному
+// кабинету (руководитель видит звонки всех): строки подшивает первое, второе их
+// не получает (ON CONFLICT), и курсор «по своим строкам» навсегда оставался
+// «сутки назад» — каждый проход заново тянул весь день. Теперь подключение
+// помнит следующий за последним УВИДЕННЫМ им db_call_id (providers.js
+// saveProviderCursor), для своего кабинета и учётки; курсор по своим строкам
+// остаётся нижней границей (установки до этой правки). Курсор двигается только
+// после ПОЛНОГО прохода: в оборванном или усечённом порядок страниц не
+// обещает, что все id меньше увиденного уже пришли.
 async function pollMoizvonki(db, p, { fetchImpl, timeoutMs, maxBytes, mzListImpl = mzListCalls } = {}) {
   try {
     const cfg = providerConfig(p);
@@ -320,14 +331,21 @@ async function pollMoizvonki(db, p, { fetchImpl, timeoutMs, maxBytes, mzListImpl
       SELECT MAX(CAST(substr(general_call_id, 11) AS INTEGER)) AS m FROM calls
        WHERE provider_id = ? AND general_call_id GLOB 'moizvonki:[0-9]*'
          AND instr(substr(general_call_id, 11), '.') = 0`).get(p.id).m;
-    const cursor = last ? { fromId: Number(last) + 1 } : { fromDate: Math.floor(Date.now() / 1000) - FIRST_WINDOW_SEC };
+    const saved = providerCursor(p);   // FIX_318_V1 (C6)
+    const mine = saved && saved.domain === domain && saved.user_name === userName && Number.isInteger(saved.next_id) && saved.next_id > 0 ? saved.next_id : 0;
+    const next = Math.max(last ? Number(last) + 1 : 0, mine);
+    const cursor = next ? { fromId: next } : { fromDate: Math.floor(Date.now() / 1000) - FIRST_WINDOW_SEC };
     const r = await mzListImpl(domain, cursor, { userName, apiKey, fetchImpl, timeoutMs, maxBytes });
+    let top = 0;
     for (const c of (Array.isArray(r.data) ? r.data : [])) {
+      const id = Number(c && c.db_call_id);
+      if (Number.isInteger(id) && id >= top) top = id + 1;
       const norm = normalizeMzCall(c);
       if (!norm) continue;
       try { recordCall(db, norm, 'poll', { id: p.id, kind: 'moizvonki' }); }
       catch (e) { console.warn('[telephony] moizvonki call not recorded:', e && e.message); }
     }
+    if (r.ok && !r.truncated && top > next) saveProviderCursor(db, p.id, { domain, user_name: userName, next_id: top });
     if (!r.ok) { recordProviderPoll(db, p.id, { ok: false, error: r.reason }); return; }
     recordProviderPoll(db, p.id, { ok: !r.truncated, error: r.truncated ? 'too_many_calls' : '' });
   } catch (e) {

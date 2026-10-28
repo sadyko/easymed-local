@@ -11,6 +11,16 @@ import { telephonyLive, telephonyRingInfo, telephonyRingTokenRotate } from './ri
 import { RpcError } from './telephony.js';
 import { getRpc } from './index.js';
 import { noteEvent, resetLive, liveDemanded } from '../telephony/live.js';
+import { loadSyncIdentity, SYNC_KEY_FILE } from '../api/sync-identity.js';   // FIX_318_V1
+import { syncOnce, keyCodeOf } from '../api/public-sync.js';   // FIX_318_V1
+
+function setGrants(db, role, grants) {
+  const row = db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(role);
+  const perms = row && row.permissions ? JSON.parse(row.permissions) : { sections: [], levels: {} };
+  perms.grants = { ...(perms.grants || {}), ...grants };
+  if (row) db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify(perms), role);
+  else db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(role, JSON.stringify(perms));
+}
 
 const T0 = Date.parse('2026-10-17T07:00:00Z');
 function seed() {
@@ -78,4 +88,78 @@ test('telephony_ring_token_rotate: новый секрет, прежний не 
   assert.match(b.ring_token, /^[0-9a-f]{32}$/);
   assert.notEqual(b.ring_token, a.ring_token);
   assert.equal(db.prepare('SELECT ring_token FROM telephony_settings WHERE id = 1').get().ring_token, b.ring_token);
+});
+
+// FIX_318_V1 (C3) — «готово» смотрело только на лицензию: включённая клиника без
+// API партнёров меняла адрес, экран говорил «готово», а секрет на публичный
+// сервер не уходил (новый адрес — 404, прежний работал). Теперь «готово» — когда
+// сервер ПРИНЯЛ ключи с нынешним секретом; иначе — что мешает и что делать.
+test('FIX_318_V1 (C3): адрес через публичный сервер «готов», только когда секрет дошёл; без ключа обмена и без включения — своя причина и код ключа', async () => {
+  const db = seed();
+  const dir = dataDir(true);
+  const keyPath = path.join(dir, SYNC_KEY_FILE);
+  fs.writeFileSync(path.join(dir, 'licence.dat'), JSON.stringify({ payload: { clinic_id: 'c-000777' }, sig: 'AAAA' }));
+  let a = telephonyRingInfo(db, {}, ADM, { dataDir: dir, env });
+  assert.deepEqual([a.relay_ready, a.relay_reason], [false, 'no_sync_key'], 'нет ключа обмена — не «не зарегистрирована»');
+  const id = loadSyncIdentity({ keyPath, create: true });
+  a = telephonyRingInfo(db, {}, ADM, { dataDir: dir, env });
+  assert.deepEqual([a.relay_ready, a.relay_reason, a.key_code], [false, 'not_enabled', keyCodeOf(id.fingerprint)]);
+  fs.writeFileSync(path.join(dir, 'licence.dat'), JSON.stringify({ payload: { clinic_id: 'c-000777', api_sync_key: id.fingerprint }, sig: 'AAAA' }));
+  const rotated = telephonyRingTokenRotate(db, {}, ADM, { dataDir: dir, env });
+  assert.deepEqual([rotated.relay_ready, rotated.relay_reason], [false, 'pending'], 'секрет не ушёл на сервер, а экран говорит «готово»');
+  assert.equal(rotated.relay_url, 'https://api.example.test/_pbx/v1/c-000777/' + rotated.ring_token, 'адрес можно вписать в кабинет заранее');
+  const calls = [];
+  const fetchImpl = async (u, o) => { calls.push(o.method + ' ' + new URL(u).pathname); return new Response('{"ok":true}', { status: 200 }); };
+  const out = await syncOnce(db, dir, { fetchImpl, env, keyPath, now: () => T0 });
+  assert.deepEqual(out, { ok: false, reason: 'no_slug' });
+  assert.deepEqual(calls, ['PUT /_sync/v1/keys'], 'ключи с секретом не ушли без API партнёров');
+  const after = telephonyRingInfo(db, {}, ADM, { dataDir: dir, env });
+  assert.deepEqual([after.relay_ready, after.relay_reason, after.relay_error], [true, '', '']);
+});
+
+// FIX_318_V1 (C4) — секреты раздела «Телефония» — только администратору (правило
+// rpc/telephony.js): адрес событий станции и есть секрет — кто знает адрес, тот
+// пишет на панель «Телефон» любого «звонящего».
+test('FIX_318_V1 (C4): адрес событий станции — только администратору; просмотр раздела видит «адрес есть», но не сам адрес; сменить — только администратор', () => {
+  const db = seed();
+  setGrants(db, 'registrar', { 'settings.telephony': 'edit' });
+  const dir = dataDir(true);
+  db.prepare("UPDATE telephony_settings SET public_base_url = 'https://clinic.example.uz' WHERE id = 1").run();
+  const early = telephonyRingInfo(db, {}, REG, { dataDir: dir, env });
+  assert.deepEqual([early.ring_token_set, early.secrets_hidden], [false, true]);
+  assert.equal(db.prepare('SELECT ring_token FROM telephony_settings WHERE id = 1').get().ring_token, '', 'секрет родился от взгляда не-администратора');
+  const adm = telephonyRingInfo(db, {}, ADM, { dataDir: dir, env });
+  assert.equal(adm.secrets_hidden, false);
+  assert.match(adm.relay_url, new RegExp(adm.ring_token + '$'));
+  const reg = telephonyRingInfo(db, {}, REG, { dataDir: dir, env });
+  assert.deepEqual([reg.ring_token_set, reg.secrets_hidden, reg.ring_token, reg.relay_url, reg.direct_url, reg.key_code], [true, true, '', '', '', '']);
+  assert.ok(!JSON.stringify(reg).includes(adm.ring_token), 'секрет ушёл не-администратору');
+  assert.equal(reg.relay_reason, adm.relay_reason, 'состояние адреса не-администратор видит то же');
+  assert.throws(() => telephonyRingTokenRotate(db, {}, REG, { dataDir: dir, env }), (e) => e instanceof RpcError && e.status === 403);
+  assert.equal(db.prepare('SELECT ring_token FROM telephony_settings WHERE id = 1').get().ring_token, adm.ring_token);
+});
+
+// FIX_318_V1 (C5) — живые звонки несут имя и номер карты пациента: с одним
+// «Позвонить» (без «Журнала звонков») оператор, опрашивая раз в 2 секунды, видел
+// бы все звонки клиники — журнал без права на журнал. Теперь — только свои.
+test('FIX_318_V1 (C5): живые звонки всей клиники — с правом на журнал; у кого только «Позвонить» — свои, по своему внутреннему номеру', () => {
+  resetLive();
+  const db = seed();
+  const mk = db.prepare('INSERT INTO users (id, username, password_hash, full_name, role, pbx_extension) VALUES (?,?,?,?,?,?)');
+  mk.run(4, 'dialer', 'x', 'Только набор', 'nurse', '102');
+  mk.run(5, 'dialer2', 'x', 'Набор без трубки', 'nurse', null);
+  mk.run(6, 'watcher', 'x', 'Только журнал', 'lab', null);
+  setGrants(db, 'nurse', { 'crm.dial': 'edit', 'crm.calls': 'none' });
+  setGrants(db, 'lab', { 'crm.dial': 'none', 'crm.calls': 'view' });
+  const dir = dataDir(false);
+  const at = '2026-10-17T07:00:00Z';
+  noteEvent(db, { uuid: 'u1', event: 'ring', direction: 'in', caller: '998901112233', callee: '101', at }, T0);
+  noteEvent(db, { uuid: 'u2', event: 'ring', direction: 'in', caller: '998907778899', callee: '102', at }, T0);
+  noteEvent(db, { uuid: 'u3', event: 'ring', direction: 'out', caller: '102', callee: '998935550112', at }, T0);
+  const ids = (u) => telephonyLive(db, {}, u, { now: () => T0 + 1000, dataDir: dir }).calls.map((c) => c.uuid).sort();
+  assert.deepEqual(ids({ id: 4, role: 'nurse' }), ['u2', 'u3'], 'с одним «Позвонить» видны чужие звонки');
+  assert.deepEqual(ids({ id: 5, role: 'nurse' }), [], 'без своего внутреннего номера — своих звонков нет');
+  assert.deepEqual(ids({ id: 6, role: 'lab' }), ['u1', 'u2', 'u3']);
+  assert.deepEqual(ids(REG), ['u1', 'u2', 'u3'], 'регистратор по прежнему правилу ролей — и набор, и журнал');
+  resetLive();
 });
