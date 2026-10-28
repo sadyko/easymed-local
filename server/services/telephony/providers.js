@@ -216,6 +216,24 @@ export function noteProviderCall(db, id, startedAtIso) {
     WHERE id = @id`).run({ id: Number(id), t: String(startedAtIso) });
 }
 
+// FIX_318_V1 (C6) — СВОЙ КУРСОР ОПРОСА У КАЖДОГО ПОДКЛЮЧЕНИЯ (у «Моих Звонков» —
+// следующий db_call_id). Хранится в config подключения служебным ключом, без
+// миграции: браузеру config уходит только публичными полями (rowToPublic), а
+// сохранение формы меняет только публичные поля (saveProvider) — курсор не
+// виден и не стирается. updated_at не трогается: это не правка настроек.
+export const POLL_CURSOR_KEY = 'poll_cursor';
+export function providerCursor(row) {
+  const c = providerConfig(row)[POLL_CURSOR_KEY];
+  return c && typeof c === 'object' && !Array.isArray(c) ? c : null;
+}
+export function saveProviderCursor(db, id, cursor) {
+  const row = getProviderRow(db, id);
+  if (!row) return;
+  const cfg = parseJson(row.config, {});
+  cfg[POLL_CURSOR_KEY] = cursor;
+  db.prepare('UPDATE telephony_providers SET config = ? WHERE id = ?').run(JSON.stringify(cfg), row.id);
+}
+
 export const TEST_MESSAGES = {
   bad_credentials: 'Домен или ключ API не подходят. Проверьте данные в панели onlinePBX.',
   offline:         'Нет связи с onlinePBX. Проверьте интернет на этом компьютере.',
