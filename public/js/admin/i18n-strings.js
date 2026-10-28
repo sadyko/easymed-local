@@ -12485,6 +12485,9 @@ export const STRINGS = {
   "Непонятный идентификатор раздела: ": {"en":"Unknown section identifier: ","ru":"Непонятный идентификатор раздела: ","uz":"Noma’lum bo‘lim identifikatori: "},
   "На главную": {"en":"Home","ru":"На главную","uz":"Bosh sahifaga"},
   // /NAV_VISIBILITY_V1
+  // FIX_318_V1 — меню, видимость разделов, плитки «Настроек» (группа B ревью 3.18.0)
+  "Скрыть можно только раздел бокового меню; «Настройки» и их страницы скрыть нельзя.": {"en":"Only a side-menu section can be hidden; “Settings” and its pages cannot be hidden.","ru":"Скрыть можно только раздел бокового меню; «Настройки» и их страницы скрыть нельзя.","uz":"Faqat yon menyu bo‘limini yashirish mumkin; «Sozlamalar» va uning sahifalarini yashirib bo‘lmaydi."},
+  // /FIX_318_V1
   // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в документе кабинета врача (views/service-workspace.js _blankWireTables)
   "Размер таблицы": {"en":"Table size","ru":"Размер таблицы","uz":"Jadval o‘lchami"},   // DOC_RICH_FORMAT_V1
   "Строки": {"en":"Rows","ru":"Строки","uz":"Qatorlar"},   // DOC_RICH_FORMAT_V1

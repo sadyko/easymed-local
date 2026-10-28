@@ -45,3 +45,19 @@ test('«Настройки» скрыть нельзя; мусор в списк
   assert.throws(() => navVisibilitySave(db, {}, admin), (e) => e.status === 400);
   assert.deepEqual(navVisibilityGet(db, {}, admin), { hidden: ['crm'] });
 });
+
+// FIX_318_V1 (B3) — прямой вызов RPC мимо экрана: годный на вид id, которого нет
+// в меню, — подэкран «Настроек» («Видимость разделов», «Сотрудники», «Система»)
+// или выдумка. Раньше сервер принимал любой такой id, и isHiddenView прятал
+// экран по прямому совпадению — так можно было спрятать сам экран видимости.
+test('FIX_318_V1: скрыть можно только пункт меню; подэкраны «Настроек» и чужие id — отказ 400, ничего не меняется', () => {
+  const db = fresh();
+  navVisibilitySave(db, { hidden: ['crm'] }, admin);
+  for (const id of ['visibility-settings', 'employees', 'updates', 'settings:patients', 'no-such-section']) {
+    assert.throws(() => navVisibilitySave(db, { hidden: [id] }, admin), (e) => e instanceof RpcError && e.status === 400, id + ' принят');
+  }
+  assert.deepEqual(navVisibilityGet(db, {}, admin), { hidden: ['crm'] }, 'отказ ничего не поменял');
+  // Строка, попавшая в таблицу до исправления, при чтении не прячет ничего.
+  db.prepare('INSERT INTO nav_visibility (nav_id, hidden_by) VALUES (?, ?)').run('visibility-settings', 1);
+  assert.deepEqual(navVisibilityGet(db, {}, admin), { hidden: ['crm'] }, 'старая строка с подэкраном «Настроек» отдаётся экрану');
+});
