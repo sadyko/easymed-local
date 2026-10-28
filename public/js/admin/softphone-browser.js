@@ -329,65 +329,108 @@ let testing = false;   // проверка гарнитуры — одна за 
  * Проверка гарнитуры: записать ms миллисекунд с выбранного микрофона и сразу
  * проиграть в выбранный динамик. onPhase('recording', секунд осталось) — каждую
  * секунду; ('playing'); ('done'); ('error', код) — mic_denied / no_mic /
- * mic_error / insecure, а 'busy' — идёт звонок: микрофон звонка не трогаем.
- * Вторая проверка, пока идёт первая, — false без фаз.
+ * mic_error / insecure, а 'busy' — идёт звонок: микрофон звонка не трогаем;
+ * ('cancelled') — прервали. Вторая проверка, пока идёт первая, — false без фаз.
+ *
+ * ПРЕРВАТЬ (ревью задачи 7): over.signal (AbortSignal) — ушли с «Моя трубка»;
+ * и сама проверка следит за телефоном (phone.subscribe): зазвонило, набрали,
+ * разговор — микрофон закрывается, запись останавливается, проигрывание
+ * замолкает и не начинается: проверка не держит микрофон и не играет поверх
+ * звонка.
  */
 export async function micTest(ms = 5000, onPhase = () => {}, over) {
   const env = deviceEnv(over);
   const say = (...a) => { try { onPhase(...a); } catch (e) { console.warn('[softphone] micTest', e); } };
-  if (env.phone && typeof env.phone.busy === 'function' && env.phone.busy()) { say('error', 'busy'); return false; }
+  const phone = env.phone;
+  const phoneBusy = () => !!(phone && typeof phone.busy === 'function' && phone.busy());
+  if (phoneBusy()) { say('error', 'busy'); return false; }
   if (testing) return false;
   testing = true;
   let stream = null;
   let url = '';
+  let rec = null;
+  let el = null;
+  let tickHandle = null;
+  let wake = null;          // разбудить текущее ожидание (секунды записи, проигрывание)
+  let cancelled = false;
   const stopTracks = () => { try { if (stream) for (const t of stream.getTracks()) t.stop(); } catch { /* уже остановлены */ } stream = null; };
+  const stopRec = () => { try { if (rec && rec.state !== 'inactive') rec.stop(); } catch { /* уже остановлена */ } };
+  const cancel = () => {
+    if (cancelled) return;
+    cancelled = true;
+    stopTracks();
+    stopRec();
+    if (tickHandle !== null) { try { env.clearInterval(tickHandle); } catch { /* пусть */ } tickHandle = null; }
+    if (el) { try { el.pause(); } catch { /* пусть */ } }
+    if (wake) wake();
+  };
+  const signal = env.signal;
+  if (signal && typeof signal.addEventListener === 'function') signal.addEventListener('abort', cancel);
+  let unsub = null;
+  try { if (phone && typeof phone.subscribe === 'function') unsub = phone.subscribe(() => { if (phoneBusy()) cancel(); }); } catch { unsub = null; }
+  if (signal && signal.aborted) cancel();
   try {
+    if (cancelled) { say('cancelled'); return false; }
     const md = mediaDevicesOf(env);
     if (!md || typeof md.getUserMedia !== 'function') { say('error', 'insecure'); return false; }
     const id = savedDevice('in');
     try {
       stream = await md.getUserMedia({ audio: id ? { deviceId: { ideal: id } } : true, video: false });
-    } catch (e) { say('error', micReason(e)); return false; }
+    } catch (e) { if (cancelled) { say('cancelled'); return false; } say('error', micReason(e)); return false; }
+    if (cancelled) { stopTracks(); say('cancelled'); return false; }   // микрофон пришёл, когда уже прервали
     if (typeof env.MediaRecorder !== 'function') { say('error', 'mic_error'); return false; }
     const parts = [];
-    const rec = new env.MediaRecorder(stream);
-    rec.ondataavailable = (e) => { if (e && e.data) parts.push(e.data); };
+    rec = new env.MediaRecorder(stream);
+    rec.ondataavailable = (e) => { if (e && e.data && e.data.size !== 0) parts.push(e.data); };
     const stopped = new Promise((resolve) => { rec.onstop = resolve; });
     rec.start();
     let left = Math.max(1, Math.ceil(ms / 1000));
     say('recording', left);
     await new Promise((resolve) => {
-      const t = env.setInterval(() => {
+      wake = resolve;
+      tickHandle = env.setInterval(() => {
+        if (cancelled) return;   // прервали — опоздавшая «секунда» ничего не говорит
         left -= 1;
         if (left > 0) { say('recording', left); return; }
-        env.clearInterval(t);
+        env.clearInterval(tickHandle);
+        tickHandle = null;
         resolve();
       }, env.tickMs);
     });
-    rec.stop();
-    await stopped;
+    wake = null;
+    if (cancelled) { say('cancelled'); return false; }
+    if (rec.state !== 'inactive') { rec.stop(); await stopped; }   // неактивную не останавливаем и не ждём
     stopTracks();   // микрофон закрыт до того, как зазвучит запись
+    if (cancelled) { say('cancelled'); return false; }
     const blob = new env.Blob(parts, { type: rec.mimeType || 'audio/webm' });
+    if (!parts.length || blob.size === 0) { say('error', 'mic_error'); return false; }   // ничего не записалось — это не «готово»
     url = env.URL.createObjectURL(blob);
-    const el = new env.Audio(url);
+    el = new env.Audio(url);
     const out = savedDevice('out');
     if (out && typeof el.setSinkId === 'function') { try { await el.setSinkId(out); } catch { /* динамик пропал — играет в обычный */ } }
+    if (cancelled) { say('cancelled'); return false; }
     say('playing');
     await new Promise((resolve) => {
-      const safety = env.setTimeout(resolve, ms + 3000);   // 'ended' не пришёл — не висим
+      wake = resolve;
+      // 'ended' не пришёл — не висим: звук останавливаем по сроку.
+      const safety = env.setTimeout(() => { try { el.pause(); } catch { /* пусть */ } resolve(); }, ms + 3000);
       const end = () => { env.clearTimeout(safety); resolve(); };
       el.onended = end;
       el.onerror = end;
       try { Promise.resolve(el.play()).catch(end); } catch { end(); }
     });
+    wake = null;
+    if (cancelled) { say('cancelled'); return false; }
     say('done');
     return true;
   } catch {
-    say('error', 'mic_error');
+    if (cancelled) say('cancelled'); else say('error', 'mic_error');
     return false;
   } finally {
     stopTracks();
     if (url) { try { env.URL.revokeObjectURL(url); } catch { /* пусть */ } }
+    if (signal && typeof signal.removeEventListener === 'function') signal.removeEventListener('abort', cancel);
+    if (unsub) { try { unsub(); } catch { /* пусть */ } }
     testing = false;
   }
 }

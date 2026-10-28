@@ -883,7 +883,7 @@ test('кнопки звонка различимы: «Принять» и «От
 /** Подставной браузер гарнитуры (ctx.devEnv панели): устройства, devicechange, запись, ручные «секунды». */
 function headsetEnv({ out = true } = {}) {
   const hs = {
-    listeners: new Set(), ticks: [], audios: [], gum: [], gumError: null,
+    listeners: new Set(), ticks: [], audios: [], gum: [], gumError: null, trackStops: 0, enumerations: 0,
     devices: [
       { kind: 'audioinput', deviceId: 'mic-1', label: 'Headset Mic', groupId: 'g1' },
       { kind: 'audioinput', deviceId: 'mic-2', label: 'Webcam Mic', groupId: 'g2' },
@@ -895,19 +895,24 @@ function headsetEnv({ out = true } = {}) {
   if (out) Media.prototype.setSinkId = function () {};
   hs.env = {
     nav: { mediaDevices: {
-      enumerateDevices: async () => hs.devices.slice(),
-      getUserMedia: async (c) => { hs.gum.push(c); if (hs.gumError) throw hs.gumError; return { getTracks: () => [{ stop() {} }] }; },
+      enumerateDevices: async () => { hs.enumerations++; return hs.devices.slice(); },
+      getUserMedia: async (c) => { hs.gum.push(c); if (hs.gumError) throw hs.gumError; return { getTracks: () => [{ stop() { hs.trackStops++; } }] }; },
       addEventListener: (t, f) => { if (t === 'devicechange') hs.listeners.add(f); },
       removeEventListener: (t, f) => { hs.listeners.delete(f); },
     } },
     win: { HTMLMediaElement: Media },
-    MediaRecorder: class { start() {} stop() { this.ondataavailable({ data: 'x' }); setImmediate(() => this.onstop()); } },
-    Blob: class { constructor(p) { this.p = p; } },
+    MediaRecorder: class {
+      constructor() { this.state = 'inactive'; }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; this.ondataavailable({ data: 'x' }); setImmediate(() => this.onstop()); }
+    },
+    Blob: class { constructor(p) { this.p = p; this.size = p.length; } },
     URL: { createObjectURL: () => 'blob:t', revokeObjectURL() {} },
     Audio: class {
-      constructor(src) { this.src = src; this.sinks = []; hs.audios.push(this); }
+      constructor(src) { this.src = src; this.sinks = []; this.paused = true; hs.audios.push(this); }
       setSinkId(id) { this.sinks.push(id); return Promise.resolve(); }
-      play() { return Promise.resolve(); }
+      play() { this.paused = false; return Promise.resolve(); }
+      pause() { this.paused = true; }
     },
     setInterval: (fn) => { hs.ticks.push(fn); return hs.ticks.length; }, clearInterval() {},
     setTimeout: () => 0, clearTimeout() {},
@@ -920,7 +925,7 @@ const pick = (sel, value) => { sel.value = value; sel.dispatchEvent({ type: 'cha
 const values = (sel) => sel.children.map((o) => o.getAttribute('value'));
 async function headsetShell({ hs = headsetEnv(), state = 'ready' } = {}) {
   const fake = fakePhone();
-  const { btn } = await shell({ fake, ctx: { devEnv: hs.env, micTestMs: 3000 } });
+  const { btn } = await shell({ fake, ctx: { devEnv: hs.env, micTestMs: 3000, devDebounceMs: 5 } });
   const d = await open(btn);
   if (state) fake.push({ state, extension: '108' });
   one(d, 'data-cph-ext').click();
@@ -949,7 +954,21 @@ test('гарнитура в «Моя трубка» — только когда 
   const labels = byAttr(box, 'for');
   assert.deepEqual(labels.map((l) => [l.getAttribute('for'), textOf(l)]), [[mic.getAttribute('id'), 'Микрофон'], [out.getAttribute('id'), 'Динамик']]);
   assert.match(textOf(box), /Новый микрофон будет в следующем звонке\./);
+  assert.match(textOf(box), /Выбор гарнитуры сохраняется сразу\./, '«Запомнить» рядом — неясно, что гарнитура сохраняется без неё');
   assert.equal(byAttr(box, 'data-cph-sp-dev-note').filter((n) => !n.hidden).length, 0, 'заметка «не найден» без причины');
+});
+
+test('сохранён «default» / «communications» браузера — это не «не найден»', async () => {
+  for (const id of ['default', 'communications']) {
+    localStorage.setItem('easymed.softphone.in', id);
+    localStorage.setItem('easymed.softphone.out', id);
+    try {
+      const { d } = await headsetShell();
+      assert.equal(byAttr(d, 'data-cph-sp-dev-note').filter((n) => !n.hidden).length, 0, id + ': ложное «не найден»');
+    } finally {
+      forgetDevices();
+    }
+  }
 });
 
 test('браузер не умеет выбирать динамик (Firefox) — поля «Динамик» нет', async () => {
@@ -998,6 +1017,13 @@ test('гарнитуру подключили — списки обновляю�
   forgetDevices();
   const { d, hs } = await headsetShell();
   assert.equal(hs.listeners.size, 1, 'нет подписки на devicechange');
+  // Событие без перемен (Chrome шлёт их пачкой) — список не перерисовывается: открытый выпадающий список не закрылся бы.
+  const opt = one(d, 'data-cph-sp-mic').children[1];
+  const asked = hs.enumerations;
+  hs.change(); hs.change(); hs.change();
+  await tick(30);
+  assert.equal(hs.enumerations, asked + 1, 'пачка событий — не один запрос списка');
+  assert.equal(one(d, 'data-cph-sp-mic').children[1], opt, 'список перерисован без перемен');
   hs.devices.push({ kind: 'audioinput', deviceId: 'mic-3', label: 'USB Headset', groupId: 'g4' });
   hs.change();
   await tick(30);
@@ -1039,15 +1065,93 @@ test('«Проверить гарнитуру»: «Говорите… 3 с» �
   }
 });
 
-test('«Проверить гарнитуру»: браузер не дал микрофон — причина словами, кнопку можно нажать снова', async () => {
+test('«Проверить гарнитуру»: ошибки — своими словами проверки, кнопку можно нажать снова', async () => {
   forgetDevices();
+  const cases = [
+    ['NotAllowedError', 'Браузер не дал доступ к микрофону. Разрешите его значком слева от адреса страницы и нажмите «Проверить гарнитуру» ещё раз.'],
+    ['NotFoundError', 'Микрофон не найден. Подключите гарнитуру или выберите другой микрофон и повторите проверку.'],
+    ['NotReadableError', 'Не удалось записать с микрофона. Выберите другой микрофон и повторите проверку.'],
+  ];
+  for (const [name, text] of cases) {
+    const hs = headsetEnv();
+    hs.gumError = Object.assign(new Error('x'), { name });
+    const { d } = await headsetShell({ hs });
+    one(d, 'data-cph-sp-test').click();
+    await tick(20);
+    assert.equal(textOf(one(d, 'data-cph-sp-test-status')), text, name);
+    assert.equal(one(d, 'data-cph-sp-test').hasAttribute('disabled'), false);
+  }
+  // Адрес без защиты — та же причина, что у включения (файл настройки компьютера).
   const hs = headsetEnv();
-  hs.gumError = Object.assign(new Error('denied'), { name: 'NotAllowedError' });
+  hs.env.nav = { mediaDevices: { enumerateDevices: hs.env.nav.mediaDevices.enumerateDevices } };
   const { d } = await headsetShell({ hs });
   one(d, 'data-cph-sp-test').click();
   await tick(20);
-  assert.equal(textOf(one(d, 'data-cph-sp-test-status')), reasonText('mic_denied'));
+  assert.equal(textOf(one(d, 'data-cph-sp-test-status')), reasonText('insecure'));
+});
+
+test('вступление под «Проверить гарнитуру» — только до первой проверки; потом — её итог, и после повторного открытия «Моя трубка»', async () => {
+  forgetDevices();
+  const { d, hs } = await headsetShell();
+  const status = () => textOf(one(d, 'data-cph-sp-test-status'));
+  assert.match(status(), /Запишем 5 секунд/);
+  one(d, 'data-cph-sp-test').click();
+  await tick(10);
+  hs.second(); hs.second(); hs.second();
+  await tick(20);
+  hs.audios[0].onended();
+  await tick(10);
+  one(d, 'data-cph-ext-back').click();
+  one(d, 'data-cph-ext').click();
+  await tick(30);
+  assert.equal(status(), 'Готово. Если себя не слышно — выберите другой микрофон или динамик.');
+});
+
+test('звонок во время проверки: проверка прервана — микрофон закрыт, запись не играет поверх звонка; после звонка — «Проверка прервана.»', async () => {
+  forgetDevices();
+  const { fake, d, hs } = await headsetShell();
+  one(d, 'data-cph-sp-test').click();
+  await tick(10);
+  assert.equal(textOf(one(d, 'data-cph-sp-test-status')), 'Говорите… 3 с');
+  fake.push({ state: 'ringing', call: call() });
+  await tick(10);
+  assert.equal(hs.trackStops, 1, 'проверка держит микрофон во время звонка');
+  hs.second(); hs.second(); hs.second();
+  await tick(20);
+  assert.equal(hs.audios.length, 0, 'запись заиграла поверх звонка');
+  fake.push({ state: 'ready', call: null, lastEnd: { direction: 'in', cause: 'Canceled', media: null } });
+  await tick(10);
+  assert.equal(textOf(one(d, 'data-cph-sp-test-status')), 'Проверка прервана.');
   assert.equal(one(d, 'data-cph-sp-test').hasAttribute('disabled'), false);
+});
+
+test('звонок во время проигрывания записи — звук остановлен', async () => {
+  forgetDevices();
+  const { fake, d, hs } = await headsetShell();
+  one(d, 'data-cph-sp-test').click();
+  await tick(10);
+  hs.second(); hs.second(); hs.second();
+  await tick(20);
+  assert.equal(textOf(one(d, 'data-cph-sp-test-status')), 'Слушайте запись…');
+  assert.equal(hs.audios[0].paused, false);
+  fake.push({ state: 'ringing', call: call() });
+  await tick(10);
+  assert.equal(hs.audios[0].paused, true, 'запись играет поверх звонка');
+});
+
+test('ушли из «Моя трубка» или сняли панель во время проверки — проверка прервана, микрофон закрыт', async () => {
+  forgetDevices();
+  for (const leave of ['back', 'teardown']) {
+    const { d, hs } = await headsetShell();
+    one(d, 'data-cph-sp-test').click();
+    await tick(10);
+    if (leave === 'back') one(d, 'data-cph-ext-back').click(); else resetCrmPhone();
+    await tick(10);
+    assert.equal(hs.trackStops, 1, leave + ': микрофон остался открытым');
+    hs.second(); hs.second(); hs.second();
+    await tick(20);
+    assert.equal(hs.audios.length, 0, leave + ': запись заиграла');
+  }
 });
 
 test('гарнитура на узбекском и английском экране — без кириллицы', { timeout: 10000 }, async () => {
@@ -1066,6 +1170,7 @@ test('гарнитура на узбекском и английском экр�
       one(d, 'data-cph-sp-test').click();
       await tick(10);
       look('recording');
+      if (lang === 'en') assert.equal(textOf(one(d, 'data-cph-sp-test-status')), 'Speak… 3 s left');
       hs.second(); hs.second(); hs.second();
       await tick(20);
       look('playing');

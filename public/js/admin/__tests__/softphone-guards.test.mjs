@@ -147,6 +147,32 @@ test('выход во время разговора: вопрос; «Отмен�
   }
 });
 
+test('выход: то, что оболочка чистит перед выходом (beforeLeave), — только после «ОК»; «Отмена» ничего не теряет', async () => {
+  const fake = fakePhone(true);
+  B.setSoftphoneForTests(fake);
+  const beforeLeave = () => { LOG.push('beforeLeave'); };
+  try {
+    LOG.length = 0;
+    CONFIRM = false;
+    assert.equal(await signOutAndReload({ beforeLeave }), false);
+    assert.deepEqual(LOG, [], '«Отмена», а выбор просмотра роли уже стёрт');
+    CONFIRM = true;
+    assert.equal(await signOutAndReload({ beforeLeave }), true);
+    assert.deepEqual(LOG, ['disable {"keepWanted":true}', 'beforeLeave', 'POST /api/auth/logout', 'reload']);
+  } finally {
+    B.setSoftphoneForTests(null);
+    CONFIRM = true;
+  }
+  // Оболочка отдаёт свою чистку (выбор просмотра роли) сюда, а не делает её до вопроса.
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const admin = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'admin.js'), 'utf8');
+  const logout = /function logout\(\) \{([\s\S]*?)\n\}/.exec(admin);
+  assert.ok(logout, 'logout() в admin.js не найден');
+  assert.match(logout[1], /signOutAndReload\(\{\s*beforeLeave/, 'выбор просмотра роли стирается до вопроса о звонке');
+});
+
 test('выход без звонка: без вопроса, телефон выключен с выбором сотрудника, выход', async () => {
   const fake = fakePhone(false);
   B.setSoftphoneForTests(fake);

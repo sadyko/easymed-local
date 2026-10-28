@@ -144,30 +144,33 @@ test('onDeviceChange: подписка на devicechange и отписка; бе
 
 // ── Проверка гарнитуры ───────────────────────────────────────────────────────
 /** Подставной браузер для проверки: микрофон, запись, проигрывание, ручные «секунды». */
-function testEnv({ gumError = null, busy = false, recorder = true } = {}) {
-  const e = { gum: [], stopped: 0, revoked: [], audios: [], ticks: [], phases: [] };
+function testEnv({ gumError = null, busy = false, recorder = true, data = 'chunk', startsInactive = false } = {}) {
+  const e = { gum: [], stopped: 0, recStops: 0, revoked: [], audios: [], ticks: [], cleared: [], timeouts: [], phases: [], subs: new Set(), busy };
   const track = { stop: () => { e.stopped++; } };
   e.env = {
     nav: { mediaDevices: { getUserMedia: async (c) => { e.gum.push(c); if (gumError) throw gumError; return { getTracks: () => [track] }; } } },
     MediaRecorder: recorder ? class {
-      constructor(stream) { this.stream = stream; this.mimeType = 'audio/webm'; }
-      start() { this.started = true; }
-      stop() { this.ondataavailable({ data: 'chunk' }); setImmediate(() => this.onstop()); }
+      constructor(stream) { this.stream = stream; this.mimeType = 'audio/webm'; this.state = 'inactive'; }
+      start() { if (!startsInactive) this.state = 'recording'; }
+      stop() { e.recStops++; this.state = 'inactive'; this.ondataavailable({ data }); setImmediate(() => this.onstop()); }
     } : null,
-    Blob: class { constructor(parts, o) { this.parts = parts; this.type = o.type; } },
+    Blob: class { constructor(parts, o) { this.parts = parts; this.type = o.type; this.size = parts.length; } },
     URL: { createObjectURL: (b) => { e.blob = b; return 'blob:test'; }, revokeObjectURL: (u) => { e.revoked.push(u); } },
     Audio: class {
-      constructor(src) { this.src = src; this.sinks = []; e.audios.push(this); }
+      constructor(src) { this.src = src; this.sinks = []; this.paused = true; e.audios.push(this); }
       setSinkId(id) { this.sinks.push(id); return Promise.resolve(); }
-      play() { return Promise.resolve(); }
+      play() { this.paused = false; return Promise.resolve(); }
+      pause() { this.paused = true; }
     },
     setInterval: (fn) => { e.ticks.push(fn); return e.ticks.length; },
-    clearInterval: () => {},
-    setTimeout: () => 0, clearTimeout: () => {},
-    phone: { busy: () => busy },
+    clearInterval: (t) => { e.cleared.push(t); },
+    setTimeout: (fn) => { e.timeouts.push(fn); return e.timeouts.length; }, clearTimeout: () => {},
+    // Телефон страницы: busy() по заказу, подписчики — как у настоящего.
+    phone: { busy: () => e.busy, subscribe: (fn) => { e.subs.add(fn); return () => e.subs.delete(fn); } },
   };
   e.onPhase = (...a) => e.phases.push(a);
   e.second = () => { for (const f of [...e.ticks]) f(); };
+  e.ring = () => { e.busy = true; for (const f of [...e.subs]) f({ state: 'ringing' }); };
   return e;
 }
 const flush = () => new Promise((r) => setImmediate(r));
@@ -240,4 +243,75 @@ test('проверка гарнитуры — одна за раз; после �
   const t3 = testEnv({ gumError: Object.assign(new Error('x'), { name: 'NotAllowedError' }) });
   await B.micTest(1000, t3.onPhase, t3.env);
   assert.equal(t3.gum.length, 1, 'после первой проверки вторая не началась');
+});
+
+// ── Проверку прерывают (ревью задачи 7) ──────────────────────────────────────
+// Звонок пришёл или ушли с экрана — микрофон закрыт, запись не играет поверх
+// звонка, ссылка освобождена, фаза 'cancelled'.
+test('звонок во время записи: микрофон закрыт, запись остановлена, проигрывания нет — «cancelled»; подписка на телефон снята', { timeout: 5000 }, async () => {
+  const t = testEnv();
+  const run = B.micTest(3000, t.onPhase, t.env);
+  await flush();
+  assert.deepEqual(t.phases, [['recording', 3]]);
+  assert.equal(t.subs.size, 1, 'проверка не следит за телефоном');
+  t.ring();
+  assert.equal(await run, false);
+  assert.deepEqual(t.phases.at(-1), ['cancelled']);
+  assert.equal(t.stopped, 1, 'микрофон остался открытым');
+  assert.equal(t.recStops, 1, 'запись не остановлена');
+  assert.ok(t.cleared.length >= 1, 'секунды идут дальше');
+  t.second(); await flush(); await flush();
+  assert.equal(t.audios.length, 0, 'запись заиграла поверх звонка');
+  assert.equal(t.subs.size, 0);
+});
+
+test('прервали через AbortSignal (ушли с экрана) во время проигрывания: звук остановлен, ссылка освобождена', { timeout: 5000 }, async () => {
+  const t = testEnv();
+  const ac = new AbortController();
+  const run = B.micTest(1000, t.onPhase, { ...t.env, signal: ac.signal });
+  await flush();
+  t.second();
+  await flush(); await flush();
+  assert.deepEqual(t.phases.at(-1), ['playing']);
+  assert.equal(t.audios[0].paused, false);
+  ac.abort();
+  assert.equal(await run, false);
+  assert.equal(t.audios[0].paused, true, 'запись играет дальше');
+  assert.deepEqual(t.phases.at(-1), ['cancelled']);
+  assert.deepEqual(t.revoked, ['blob:test']);
+});
+
+test('прервали ещё до микрофона (сигнал уже снят) — микрофон не держим', { timeout: 5000 }, async () => {
+  const t = testEnv();
+  const ac = new AbortController();
+  ac.abort();
+  assert.equal(await B.micTest(1000, t.onPhase, { ...t.env, signal: ac.signal }), false);
+  assert.deepEqual(t.phases, [['cancelled']]);
+  assert.equal(t.stopped, t.gum.length, 'микрофон открыт и не закрыт');
+});
+
+test('ничего не записалось — «mic_error», а не «готово»; запись, которая уже не идёт, повторно не останавливаем', { timeout: 5000 }, async () => {
+  const empty = testEnv({ data: null });
+  const run = B.micTest(1000, empty.onPhase, empty.env);
+  await flush(); empty.second(); await flush(); await flush();
+  assert.equal(await run, false);
+  assert.deepEqual(empty.phases.at(-1), ['error', 'mic_error']);
+  assert.equal(empty.audios.length, 0);
+  const idle = testEnv({ startsInactive: true });
+  const run2 = B.micTest(1000, idle.onPhase, idle.env);
+  await flush(); idle.second(); await flush(); await flush();
+  assert.equal(await run2, false);
+  assert.equal(idle.recStops, 0, 'stop() у неактивной записи');
+  assert.deepEqual(idle.phases.at(-1), ['error', 'mic_error']);
+});
+
+test('запись не сообщила о конце — по сроку звук остановлен, ссылка освобождена', { timeout: 5000 }, async () => {
+  const t = testEnv();
+  const run = B.micTest(1000, t.onPhase, t.env);
+  await flush(); t.second(); await flush(); await flush();
+  assert.deepEqual(t.phases.at(-1), ['playing']);
+  t.timeouts.at(-1)();   // срок ms + 3 с
+  assert.equal(await run, true);
+  assert.equal(t.audios[0].paused, true, 'по сроку звук не остановлен');
+  assert.deepEqual(t.revoked, ['blob:test']);
 });

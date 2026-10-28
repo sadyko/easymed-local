@@ -68,7 +68,9 @@ export async function rehydrateUserFromSession() {
 // Logout — single source of truth. Calls Supabase Auth and lets its own
 // listener clear the app state (see supabase.js onAuthStateChange).
 // ---------------------------------------------------------------------------
-export async function signOutAndReload() {
+// beforeLeave — то, что вызывающий чистит перед выходом (admin.js: выбор
+// просмотра роли): только когда выход точно будет, после вопроса о звонке.
+export async function signOutAndReload({ beforeLeave = null } = {}) {
     // SOFTPHONE_V1 (задача 8) — телефон Easy-Med: идёт звонок — спросить
     // («Отмена» — выхода нет); затем выключить чисто (номер выходит из АТС), а
     // выбор сотрудника «принимать звонки» оставить до его следующего входа.
@@ -79,6 +81,7 @@ export async function signOutAndReload() {
         if (!phone.confirmEndCall('Идёт разговор. Завершить звонок и выйти?')) return false;
         phone.releasePhone();
     } catch (e) { console.warn('[auth] softphone:', e); }
+    if (typeof beforeLeave === 'function') { try { beforeLeave(); } catch (e) { console.warn('[auth] beforeLeave:', e); } }
     try { await supabase.auth.signOut(); } catch (e) { console.warn('[auth] signOut failed:', e); }
     // Reload so all module state (state.user, permission caches, view stack)
     // resets from a clean slate. Equivalent to clearing localStorage in the

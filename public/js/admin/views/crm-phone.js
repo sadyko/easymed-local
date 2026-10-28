@@ -105,8 +105,9 @@ const P = {
     // спрашивали «кто я» ради включения.
     spNum: '', spHush: null, spSaid: false, spSay: null, spMeTry: 0,
     // Задача 7 — гарнитура: отписка от «подключили/вынули» и проверка за 5 секунд
-    // ({running, phase, n, reason}; переживает перерисовку «Моя трубка»).
-    spDevUnsub: null, spTest: null,
+    // ({running, phase, n, reason}; переживает перерисовку «Моя трубка»), её
+    // прерывание (AbortController) и пауза перед перечитыванием списка устройств.
+    spDevUnsub: null, spTest: null, spTestAbort: null, spDevTimer: null,
 };
 const ME_RETRY_MS = 30000;   // SOFTPHONE_V1 — «кто я» не ответил при загрузке: спросить снова не чаще
 const HUSH_MS = 15000;       // SOFTPHONE_V1 — станция догоняет звонок с задержкой: столько молчим о нём после конца
@@ -212,7 +213,7 @@ export function resetCrmPhone() {
         sp: null, spUnsub: null, spAutoTried: false, spRowSig: '',
         spWho: new Map(), spRing: null, spTick: null, spRefresh: null, spLast: 'off',
         spNum: '', spHush: null, spSaid: false, spSay: null, spMeTry: 0,
-        spDevUnsub: null, spTest: null });
+        spDevUnsub: null, spTest: null, spTestAbort: null, spDevTimer: null });
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +247,6 @@ function mount() {
         onclick: () => {
             if (!P.mayDial) return;
             P.pick = !P.pick;
-            if (P.pick && !(P.spTest && P.spTest.running)) P.spTest = null;   // SOFTPHONE_V1 — итог прошлой проверки гарнитуры не показываем
             paintPhone();
         } });
     els.body = h('div', { class: 'cph-body', 'data-cph-body': '' });
@@ -334,6 +334,7 @@ function teardown() {
     if (P.spSay) clearTimeout(P.spSay);
     P.spSay = null;
     stopDeviceWatch();
+    cancelMicTest();   // проверка гарнитуры не держит микрофон без панели
 }
 
 // Раз в семь секунд: карточка звонка без ответа журнала пережила свой срок —
@@ -538,6 +539,7 @@ function paintPhone() {
         // SOFTPHONE_V1 — а звонок телефона Easy-Med важнее и блока «Звонит» станции:
         // это тот же звонок, только с кнопками, которые здесь действительно работают.
         const picking = !sc && !ring && P.pick && P.mayDial;
+        if (!picking) cancelMicTest();   // ушли из «Моя трубка» (или её закрыл звонок) — проверку прервать
         if (sc) paintSoftCall(sc);
         else if (ring) paintRing(ring);
         else if (picking) paintPicker();
@@ -1039,6 +1041,7 @@ function onSoftChange() {
     P.spLast = s.state;
     const sc = softCall();
     if (sc) {
+        cancelMicTest();   // звонок — проверка гарнитуры отдаёт микрофон и не играет поверх
         const digits = digitsOf(sc.call.number);
         lookupCaller(digits);
         P.spNum = tail9(digits);
@@ -1332,8 +1335,16 @@ const DEV_MISSING = {
     in: 'Выбранный микрофон не найден — звонок пойдёт через микрофон по умолчанию.',
     out: 'Выбранный динамик не найден — звук пойдёт в динамик по умолчанию.',
 };
+// Записи браузера «по умолчанию»: выбранная раньше, она не «пропала», даже если
+// в списке её нет (повторяет настоящее устройство и потому скрыта).
+const DEV_PSEUDO = new Set(['default', 'communications']);
 const devEnv = () => (P.ctx && P.ctx.devEnv) || undefined;
-function stopDeviceWatch() { if (P.spDevUnsub) P.spDevUnsub(); P.spDevUnsub = null; }
+function stopDeviceWatch() {
+    if (P.spDevUnsub) P.spDevUnsub();
+    P.spDevUnsub = null;
+    if (P.spDevTimer) clearTimeout(P.spDevTimer);
+    P.spDevTimer = null;
+}
 
 function paintHeadset() {
     const env = devEnv();
@@ -1349,16 +1360,28 @@ function paintHeadset() {
         Icon('Mic', { size: 13 }), 'Проверить гарнитуру');
     P.els.spTestStatus = h('div', { class: 'cph-sp-test-st', role: 'status', 'data-cph-sp-test-status': '' });
     paintMicTest();
+    // Список без перемен (Chrome шлёт devicechange пачкой) не перерисовываем:
+    // открытый выпадающий список иначе закрылся бы под рукой.
+    let shown = null;
     const fill = async () => {
         const { inputs, outputs } = await listDevices(env);
+        const sig = JSON.stringify([inputs, out ? outputs : []]);
+        if (sig === shown) return;
+        shown = sig;
         fillDevices(mic, inputs, 'in', micNote);
         if (out) fillDevices(out, outputs, 'out', outNote);
     };
     fill().catch(() => {});
     stopDeviceWatch();
-    P.spDevUnsub = onDeviceChange(() => { fill().catch(() => {}); }, env);
+    P.spDevUnsub = onDeviceChange(() => {
+        if (P.spDevTimer) clearTimeout(P.spDevTimer);
+        P.spDevTimer = setTimeout(() => { P.spDevTimer = null; fill().catch(() => {}); }, (P.ctx && P.ctx.devDebounceMs) || 300);
+        if (P.spDevTimer && typeof P.spDevTimer.unref === 'function') P.spDevTimer.unref();
+    }, env);
     return h('div', { class: 'cph-sp-dev', 'data-cph-sp-devices': '' },
         h('h4', { class: 'cph-sp-dev-h' }, Icon('Headset', { size: 15 }), 'Гарнитура'),
+        // «Запомнить» выше — для внутреннего номера; гарнитура сохраняется без неё.
+        h('p', { class: 'cph-hint' }, 'Выбор гарнитуры сохраняется сразу.'),
         h('label', { class: 'cph-label', for: 'cph-sp-mic' }, 'Микрофон'), mic, micNote,
         h('p', { class: 'cph-hint' }, 'Новый микрофон будет в следующем звонке.'),
         out ? [h('label', { class: 'cph-label', for: 'cph-sp-out' }, 'Динамик'), out, outNote] : null,
@@ -1374,7 +1397,7 @@ function fillDevices(sel, list, kind, note) {
     clear(sel);
     if (!hasDefault) sel.appendChild(h('option', { value: '' }, 'По умолчанию'));
     for (const d of list) sel.appendChild(h('option', { value: d.id }, d.label));
-    const found = !saved || list.some((d) => d.id === saved);
+    const found = !saved || DEV_PSEUDO.has(saved) || list.some((d) => d.id === saved);
     const value = found && saved ? saved : (hasDefault ? 'default' : '');
     for (const o of [...sel.children]) if (o.getAttribute('value') === value) o.setAttribute('selected', '');
     sel.value = value;
@@ -1382,15 +1405,25 @@ function fillDevices(sel, list, kind, note) {
     note.hidden = found;
 }
 
-/** Строка под «Проверить гарнитуру»: что делать сейчас. */
+// Ошибки проверки — свои слова: причины включения телефона («…и включите
+// телефон снова») здесь звали бы не туда.
+const MIC_TEST_ERRORS = {
+    mic_denied: 'Браузер не дал доступ к микрофону. Разрешите его значком слева от адреса страницы и нажмите «Проверить гарнитуру» ещё раз.',
+    no_mic: 'Микрофон не найден. Подключите гарнитуру или выберите другой микрофон и повторите проверку.',
+    mic_error: 'Не удалось записать с микрофона. Выберите другой микрофон и повторите проверку.',
+    busy: 'Проверить гарнитуру можно после разговора.',
+};
+
+/** Строка под «Проверить гарнитуру»: вступление — только до первой проверки, потом — её итог. */
 function micTestLine() {
     const t = P.spTest;
     if (!t) return tr('Запишем 5 секунд вашего голоса и сразу проиграем — так проверяются и микрофон, и динамик.');
     if (t.phase === 'recording') return trf('Говорите… {n} с', { n: t.n });
     if (t.phase === 'playing') return tr('Слушайте запись…');
     if (t.phase === 'done') return tr('Готово. Если себя не слышно — выберите другой микрофон или динамик.');
-    if (t.reason === 'busy') return tr('Проверить гарнитуру можно после разговора.');
-    return reasonText(t.reason) || reasonText('mic_error');
+    if (t.phase === 'cancelled') return tr('Проверка прервана.');
+    if (t.reason === 'insecure') return reasonText('insecure');   // файл настройки компьютера — те же слова, что у включения
+    return tr(MIC_TEST_ERRORS[t.reason] || MIC_TEST_ERRORS.mic_error);
 }
 function paintMicTest() {
     if (!P.els) return;
@@ -1404,13 +1437,26 @@ function paintMicTest() {
 function runMicTest() {
     if ((P.spTest && P.spTest.running) || softCall()) return;
     const ms = (P.ctx && P.ctx.micTestMs) || 5000;
+    const before = P.spTest;
+    const ac = typeof AbortController === 'function' ? new AbortController() : null;
+    P.spTestAbort = ac;
     P.spTest = { running: true, phase: 'recording', n: Math.max(1, Math.ceil(ms / 1000)), reason: '' };
     paintMicTest();
     Promise.resolve(micTest(ms, (phase, x) => {
         P.spTest = { running: phase === 'recording' || phase === 'playing', phase, n: phase === 'recording' ? x : 0, reason: phase === 'error' ? x : '' };
         paintMicTest();
-    }, devEnv())).catch(() => {}).finally(() => {
-        if (P.spTest && P.spTest.running) P.spTest = null;   // проверка не началась (уже идёт другая) — строка как до неё
+    }, { ...(devEnv() || {}), ...(ac ? { signal: ac.signal } : {}) })).catch(() => {}).finally(() => {
+        if (P.spTestAbort === ac) P.spTestAbort = null;
+        if (P.spTest && P.spTest.running) P.spTest = before;   // проверка не началась (уже идёт другая) — строка как до неё
         paintMicTest();
     });
+}
+/**
+ * Прервать проверку гарнитуры (ревью задачи 7): пришёл звонок, ушли из «Моя
+ * трубка», сняли панель. Микрофон закрывается, запись не играет поверх звонка.
+ */
+function cancelMicTest() {
+    const ac = P.spTestAbort;
+    P.spTestAbort = null;
+    if (ac) { try { ac.abort(); } catch { /* уже прервана */ } }
 }

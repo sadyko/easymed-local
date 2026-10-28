@@ -2484,8 +2484,9 @@ function renderAccountControls() {
 function logout() {
     // Clear role-preview pick (Supabase Auth's session is wiped by signOut
     // inside signOutAndReload — see js/admin/auth.js).
-    try { localStorage.removeItem(PREVIEW_KEY); } catch {}
-    signOutAndReload();
+    // SOFTPHONE_V1 — only once the logout is certain: signOutAndReload may stop
+    // at «Идёт разговор…» (Cancel keeps the operator logged in, preview intact).
+    signOutAndReload({ beforeLeave: () => { try { localStorage.removeItem(PREVIEW_KEY); } catch {} } });
 }
 
 // Resolve which section permissions are in force for the signed-in actor.
