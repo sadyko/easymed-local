@@ -36,14 +36,63 @@ export function activeSectionOf(nav, owns) {
  * выделенного пункта не говорит, где ты. `opened` остался от прежнего правила
  * «свёрнуто по умолчанию» (NAV_GROUPS_V1) и лишь перебивает `closed`.
  *
+ * FIX_318_V1 (B2) — `compact`: раскрытое меню НЕ входит в окно (ноутбук
+ * 1366×768, 1280×720, 1440×900 с панелями браузера — ступень max-height:760px в
+ * admin.css считалась под свёрнутые группы). Тогда умолчание обратное: группа
+ * без открытого экрана свёрнута. Щелчок человека — `opened` или `closed`, его
+ * оболочка теперь пишет в обе стороны — сильнее умолчания в обоих режимах.
+ *
  * @param {{section: string, fold?: boolean}} item — запись-заголовок из NAV
- * @param {{closed?: Set<string>, opened?: Set<string>, activeSection?: string|null}} ctx
+ * @param {{closed?: Set<string>, opened?: Set<string>, activeSection?: string|null, compact?: boolean}} ctx
  */
-export function isNavSectionOpen(item, { closed, opened, activeSection } = {}) {
+export function isNavSectionOpen(item, { closed, opened, activeSection, compact = false } = {}) {
     if (!item.fold) return true;
     if (activeSection != null && activeSection === item.section) return true;
     if (opened && opened.has(item.section)) return true;
-    return !(closed && closed.has(item.section));
+    if (closed && closed.has(item.section)) return false;
+    return !compact;
+}
+
+/**
+ * FIX_318_V1 (B2) — входит ли меню в окно, если раскрыть ВСЕ сворачиваемые
+ * группы. Раскрывает их на время замера и возвращает классы как были: чтение
+ * scrollHeight раскладывает страницу сразу, а кадр рисуется позже, поэтому
+ * человек промежуточного состояния не видит.
+ *
+ * null — раскладки нет (вкладка скрыта, колонка не показана, тест без DOM):
+ * решать не по чему, оболочка оставляет прежний режим.
+ *
+ * @param {{clientHeight:number, scrollHeight:number}|null} bodyEl — #sidebar-body
+ * @param {Array<{navEl: Element}>} groups — списки сворачиваемых групп
+ * @returns {boolean|null}
+ */
+export function navFitsOpen(bodyEl, groups) {
+    if (!bodyEl || !(bodyEl.clientHeight > 0)) return null;
+    const was = groups.map((g) => g.navEl.classList.contains('nav--folded'));
+    for (const g of groups) g.navEl.classList.toggle('nav--folded', false);
+    const fits = bodyEl.scrollHeight <= bodyEl.clientHeight + 1;   // +1 — дробные пиксели масштаба
+    groups.forEach((g, i) => g.navEl.classList.toggle('nav--folded', was[i]));
+    return fits;
+}
+
+/**
+ * FIX_318_V1 (B6) — бейдж заголовка свёрнутой группы: сумма счётчиков её
+ * пунктов. Красный, если красен хоть один ненулевой (просроченные задачи CRM,
+ * неоплаченные счета, непрочитанный чат, обновление в «Настройках»). Нечего
+ * показать — null.
+ *
+ * @param {Array<{count: number|null, alert?: boolean}>} items
+ * @returns {{total: number, alert: boolean}|null}
+ */
+export function groupBadge(items) {
+    let total = 0, alert = false;
+    for (const it of items || []) {
+        const n = Number(it && it.count) || 0;
+        if (n <= 0) continue;
+        total += n;
+        if (it.alert) alert = true;
+    }
+    return total > 0 ? { total, alert } : null;
 }
 
 /**

@@ -542,6 +542,31 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .nav-section-chev { display: inline-flex; }
 /* Заголовок без кнопки («Клиника») — не приглашение щёлкнуть. */
 .nav-section:not(.nav-section--toggle) { cursor: default; }
+/* FIX_318_V1 (B6) — сумма счётчиков на заголовке СВЁРНУТОЙ группы (admin.js
+   renderSidebar, nav-fold.js groupBadge). У раскрытой группы бейдж заголовка
+   повторял бы счётчики пунктов под ним, поэтому показан только со
+   .nav-section--folded; на рейке заголовков нет вовсе. Таблетка — как
+   .sidebar-body .nav-item .nav-badge (NAV_BADGE_FIX_V1, admin-views.css), но
+   без прописных букв и разрядки заголовка, и ниже строкой: заголовок не
+   должен вырасти по высоте, когда в группе появился счётчик. */
+.nav-section-badge {
+    display: none;
+    flex: 0 0 auto;
+    justify-content: center;
+    margin-left: 8px;
+    min-width: 20px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--ink-200, #d3d9de);
+    color: var(--ink-600, #475569);
+    font-size: 12.5px;
+    font-weight: 700;
+    line-height: 1.25;
+    letter-spacing: 0;
+    text-transform: none;
+}
+.nav-section--folded .nav-section-badge { display: inline-flex; }
+.nav-section-badge.alert { background: var(--crit-700, #b91c1c); color: #fff; }
 
 .nav-list { padding: 2px 10px 6px; display: flex; flex-direction: column; gap: 1px; }
 
@@ -663,13 +688,25 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 
 /* NAV_GROUPS_V1 — ноутбук 768p: окно ~650px. «Клиника» (9 пунктов), три
    свёрнутых заголовка и часы должны входить и туда: строка 28px, заголовок
-   23px. Правила стоят ПОСЛЕ базовых той же тяжести, поэтому побеждают. */
-@media (max-height: 760px) {
+   23px. Правила стоят ПОСЛЕ базовых той же тяжести, поэтому побеждают.
+   FIX_318_V1 (B2) — ступень была max-height:760px и считалась под СВЁРНУТЫЕ
+   группы, а NAV_UNFOLDED_V1 их раскрыл. Теперь группы на коротком окне
+   сворачивает admin.js (fitSidebar), а ступень поднята до 800px: окно 1440×900
+   с панелями браузера (~790px) и 1366×768 во весь экран (768px) получают ту же
+   плотную строку — на первом раскрытое меню целиком входит в окно без
+   сворачивания. Замеры — в сообщении коммита FIX_318_V1 (B2). */
+@media (max-height: 800px) {
     .sidebar-brand { padding-bottom: 4px; }   /* верх не трогаем — он пришит к верхней строке, см. .sidebar-brand */
     .sidebar-body { padding-top: 2px; padding-bottom: 4px; }
     .sidebar-body .nav { gap: 1px; }
     .sidebar .nav-item { padding-top: 5px; padding-bottom: 5px; }
     .nav-section { padding-top: 6px; padding-bottom: 2px; }
+}
+/* FIX_318_V1 (B2) — окно ноутбука 1366×768 в браузере (~657px): «Клиника» и
+   раскрытые «Операции» с открытым экраном кассы — 16 строк. Строка 27px
+   вместо 29px возвращает 32px, и меню входит без прокрутки. */
+@media (max-height: 680px) {
+    .sidebar .nav-item { padding-top: 4px; padding-bottom: 4px; }
 }
 /* Подсветка наведения БЫЛА var(--ink-50) — ровно цвет нового грунта колонки,
    то есть наведение перестало бы быть видно вовсе. Инвертируем как во всём

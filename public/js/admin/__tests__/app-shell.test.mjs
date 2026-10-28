@@ -1137,6 +1137,87 @@ test('FIX_318_V1: скрыли «Закупки» — плитка «Товар�
     assert.equal(tile(), undefined, 'вернули «Закупки» — плитка осталась неактивной');
 });
 
+// ===========================================================================
+// 15. FIX_318_V1 (B2, B6) — МЕНЮ НА КОРОТКОМ ОКНЕ И СЧЁТЧИКИ СВЁРНУТЫХ ГРУПП.
+//
+// B2: все группы раскрыты (NAV_UNFOLDED_V1), а на ноутбуке 1366×768 меню
+// прокручивалось. Теперь, если раскрытое меню не входит в окно, группы без
+// открытого экрана свёрнуты; щелчок человека сильнее умолчания.
+// B6: свёрнутая «Операции» прятала красные счётчики (просроченные задачи CRM,
+// неоплаченные счета, чат), а бейдж обновления на «Настройках» уходил в
+// свёрнутую группу. Теперь заголовок свёрнутой группы несёт их сумму.
+// Раскладки в fake-DOM нет — высоту колонки считаем сами: заголовок 23px,
+// строка 29px, часы 50px; окно — clientHeight.
+// ===========================================================================
+test('FIX_318_V1: короткое окно — группы без открытого экрана свёрнуты, щелчок сильнее умолчания, у свёрнутой группы — сумма счётчиков', async () => {
+    await perms_setFull();
+    const head = (title) => descendants(SIDEBAR).find((n) => hasCls(n, 'nav-section--toggle') && labelOf(n).startsWith(title));
+    const folded = (title) => hasCls(head(title), 'nav-section--folded');
+    const badgeOf = (title) => descendants(head(title)).find((n) => hasCls(n, 'nav-section-badge')) || null;
+    const height = () => SIDEBAR.children.reduce((n, c) => n + (hasCls(c, 'nav-section') ? 23
+        : hasCls(c, 'nav') ? (hasCls(c, 'nav--folded') ? 0 : c.children.length * 29) : 50), 0);
+    let client = 500;
+    Object.defineProperty(SIDEBAR, 'clientHeight', { get: () => client, configurable: true });
+    Object.defineProperty(SIDEBAR, 'scrollHeight', { get: height, configurable: true });
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => {
+        const u = String(url);
+        const ok = (body) => ({ ok: true, status: 200, json: async () => body });
+        if (u.startsWith('/api/rpc/update_status')) return ok({ data: { current_version: '3.18.0', offer: { version: '3.18.1' }, approved: false } });
+        if (u.startsWith('/api/rpc/telegram_chat_unread')) return ok({ data: { unread: 3 } });
+        if (u.startsWith('/api/db')) {
+            let b = {}; try { b = JSON.parse(opts.body || '{}'); } catch (_) {}
+            if (b.table === 'invoices') return ok({ data: [], count: 2 });
+        }
+        return prevFetch(url, opts);
+    };
+    try {
+        assert.equal(typeof shell().refreshNav, 'function', 'экраны зовут window.easymed.refreshNav после действий — оболочка его потеряла');
+        await go('labs'); await settle(80);
+        await go('patients'); await settle(80);
+        assert.equal(folded('Операции'), true, 'меню не входит в окно — «Операции» без открытого экрана должны быть свёрнуты');
+        assert.equal(folded('Настройки'), true);
+        assert.equal(folded('Аналитика'), true);
+        assert.ok(height() <= client, 'свернули, а меню всё равно не входит: ' + height() + ' > ' + client);
+
+        // B6 — сумма счётчиков на заголовке свёрнутой группы.
+        const ops = badgeOf('Операции');
+        assert.ok(ops, 'у свёрнутых «Операций» нет бейджа — красные счётчики спрятаны');
+        assert.equal(labelOf(ops), '5', 'чат 3 + касса 2');
+        assert.ok(hasCls(ops, 'alert'), 'сумма красных счётчиков — красная');
+        const upd = badgeOf('Настройки');
+        assert.ok(upd && hasCls(upd, 'alert'), 'бейдж обновления ушёл в свёрнутые «Настройки»');
+        assert.equal(badgeOf('Аналитика'), null, 'у группы без счётчиков бейджа нет');
+
+        // Группа открытого экрана раскрыта.
+        await go('cashier-shifts');
+        assert.equal(folded('Операции'), false, 'экран кассы открыт, а его группа свёрнута');
+        assert.equal(folded('Аналитика'), true);
+
+        // Щелчок человека сильнее умолчания — и переживает переходы.
+        head('Аналитика').click();
+        assert.equal(folded('Аналитика'), false);
+        await go('patients');
+        assert.equal(folded('Аналитика'), false, 'раскрытая щелчком группа свернулась сама при переходе');
+        assert.equal(folded('Операции'), true);
+
+        // Окно выросло — всё раскрыто, кроме свёрнутого щелчком.
+        head('Аналитика').click();
+        client = 2000;
+        await go('labs');
+        assert.equal(folded('Операции'), false, 'меню входит в окно — группы раскрыты (NAV_UNFOLDED_V1)');
+        assert.equal(folded('Настройки'), false);
+        assert.equal(folded('Аналитика'), true, 'свёрнутая щелчком группа раскрылась сама');
+        head('Аналитика').click();
+        assert.equal(folded('Аналитика'), false);
+    } finally {
+        globalThis.fetch = prevFetch;
+        delete SIDEBAR.clientHeight;
+        delete SIDEBAR.scrollHeight;
+        await go('patients');
+    }
+});
+
 test('глушим таймеры экранов, чтобы прогон завершался', () => {
     for (const id of appIntervals) clearInterval(id);
     appIntervals.clear();
