@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { S, RPC, mk, walk, textOf, byAttr, hasClass, tick, TOASTS } from './crm-harness.mjs';
 
 const { resetCrmPhone, mountPhoneButton } = await import('../views/crm-phone.js');
-const { setSoftphoneForTests, reasonText, endText } = await import('../softphone-browser.js');
+const { setSoftphoneForTests, reasonText, endText, outputSink } = await import('../softphone-browser.js');
 const { setLang } = await import('../i18n.js');
 const { ICON_BODIES } = await import('../icon-paths.js');
 const { ICON_MAP } = await import('../icon-map.js');
@@ -875,4 +875,209 @@ test('снятие панели отписывается от телефона �
 test('кнопки звонка различимы: «Принять» и «Отклонить»/«Завершить» на тёмных заливках (контраст значка ≥ 3:1)', () => {
   assert.match(CSS, /\.cph-sp-btn\.ok i \{[^}]*background: var\(--ok-700\)/);
   assert.match(CSS, /\.cph-sp-btn\.crit i \{[^}]*background: var\(--crit-700\)/);
+});
+
+// ---------------------------------------------------------------------------
+// Задача 7 — гарнитура в «Моя трубка»: микрофон, динамик, проверка за 5 секунд
+// ---------------------------------------------------------------------------
+/** Подставной браузер гарнитуры (ctx.devEnv панели): устройства, devicechange, запись, ручные «секунды». */
+function headsetEnv({ out = true } = {}) {
+  const hs = {
+    listeners: new Set(), ticks: [], audios: [], gum: [], gumError: null,
+    devices: [
+      { kind: 'audioinput', deviceId: 'mic-1', label: 'Headset Mic', groupId: 'g1' },
+      { kind: 'audioinput', deviceId: 'mic-2', label: 'Webcam Mic', groupId: 'g2' },
+      { kind: 'audiooutput', deviceId: 'spk-1', label: 'Headset', groupId: 'g1' },
+      { kind: 'audiooutput', deviceId: 'spk-2', label: 'Speakers', groupId: 'g3' },
+    ],
+  };
+  const Media = function () {};
+  if (out) Media.prototype.setSinkId = function () {};
+  hs.env = {
+    nav: { mediaDevices: {
+      enumerateDevices: async () => hs.devices.slice(),
+      getUserMedia: async (c) => { hs.gum.push(c); if (hs.gumError) throw hs.gumError; return { getTracks: () => [{ stop() {} }] }; },
+      addEventListener: (t, f) => { if (t === 'devicechange') hs.listeners.add(f); },
+      removeEventListener: (t, f) => { hs.listeners.delete(f); },
+    } },
+    win: { HTMLMediaElement: Media },
+    MediaRecorder: class { start() {} stop() { this.ondataavailable({ data: 'x' }); setImmediate(() => this.onstop()); } },
+    Blob: class { constructor(p) { this.p = p; } },
+    URL: { createObjectURL: () => 'blob:t', revokeObjectURL() {} },
+    Audio: class {
+      constructor(src) { this.src = src; this.sinks = []; hs.audios.push(this); }
+      setSinkId(id) { this.sinks.push(id); return Promise.resolve(); }
+      play() { return Promise.resolve(); }
+    },
+    setInterval: (fn) => { hs.ticks.push(fn); return hs.ticks.length; }, clearInterval() {},
+    setTimeout: () => 0, clearTimeout() {},
+  };
+  hs.second = () => { for (const f of [...hs.ticks]) f(); };
+  hs.change = () => { for (const f of [...hs.listeners]) f(); };
+  return hs;
+}
+const pick = (sel, value) => { sel.value = value; sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel }); };
+const values = (sel) => sel.children.map((o) => o.getAttribute('value'));
+async function headsetShell({ hs = headsetEnv(), state = 'ready' } = {}) {
+  const fake = fakePhone();
+  const { btn } = await shell({ fake, ctx: { devEnv: hs.env, micTestMs: 3000 } });
+  const d = await open(btn);
+  if (state) fake.push({ state, extension: '108' });
+  one(d, 'data-cph-ext').click();
+  await tick(40);
+  return { fake, d, hs };
+}
+const forgetDevices = () => { localStorage.removeItem('easymed.softphone.in'); localStorage.removeItem('easymed.softphone.out'); };
+
+test('гарнитура в «Моя трубка» — только когда телефон Easy-Med включён: «Микрофон» и «Динамик» из списка компьютера, подсказка про следующий звонок', async () => {
+  forgetDevices();
+  const { fake, d } = await headsetShell({ state: null });
+  assert.ok(one(d, 'data-cph-ext-select'), 'выбор трубки не открылся');
+  assert.equal(byAttr(d, 'data-cph-sp-devices').length, 0, 'телефон выключен — гарнитуру выбирать незачем (и подписей устройств ещё нет)');
+  fake.push({ state: 'ready', extension: '108' });
+  await tick(40);
+  const box = one(d, 'data-cph-sp-devices');
+  assert.ok(box, 'раздела «Гарнитура» нет');
+  assert.match(textOf(box), /Гарнитура/);
+  const mic = one(d, 'data-cph-sp-mic');
+  const out = one(d, 'data-cph-sp-out');
+  assert.deepEqual(values(mic), ['', 'mic-1', 'mic-2']);
+  assert.deepEqual(mic.children.map(textOf), ['По умолчанию', 'Headset Mic', 'Webcam Mic']);
+  assert.deepEqual(values(out), ['', 'spk-1', 'spk-2']);
+  assert.equal(mic.value, '');
+  // Подписи связаны с полями.
+  const labels = byAttr(box, 'for');
+  assert.deepEqual(labels.map((l) => [l.getAttribute('for'), textOf(l)]), [[mic.getAttribute('id'), 'Микрофон'], [out.getAttribute('id'), 'Динамик']]);
+  assert.match(textOf(box), /Новый микрофон будет в следующем звонке\./);
+  assert.equal(byAttr(box, 'data-cph-sp-dev-note').filter((n) => !n.hidden).length, 0, 'заметка «не найден» без причины');
+});
+
+test('браузер не умеет выбирать динамик (Firefox) — поля «Динамик» нет', async () => {
+  forgetDevices();
+  const { d } = await headsetShell({ hs: headsetEnv({ out: false }) });
+  assert.ok(one(d, 'data-cph-sp-mic'));
+  assert.equal(byAttr(d, 'data-cph-sp-out').length, 0);
+});
+
+test('выбор микрофона и динамика помнит компьютер; динамик сразу уходит в звук собеседника', async () => {
+  forgetDevices();
+  try {
+    const { d } = await headsetShell();
+    pick(one(d, 'data-cph-sp-mic'), 'mic-2');
+    assert.equal(localStorage.getItem('easymed.softphone.in'), 'mic-2');
+    pick(one(d, 'data-cph-sp-out'), 'spk-2');
+    assert.equal(localStorage.getItem('easymed.softphone.out'), 'spk-2');
+    assert.equal(outputSink(), 'spk-2', 'динамик не применён к звуку собеседника');
+    // Снова открыли «Моя трубка» — выбор на месте.
+    one(d, 'data-cph-ext-back').click();
+    one(d, 'data-cph-ext').click();
+    await tick(40);
+    assert.equal(one(d, 'data-cph-sp-mic').value, 'mic-2');
+    assert.equal(one(d, 'data-cph-sp-out').value, 'spk-2');
+    pick(one(d, 'data-cph-sp-out'), '');
+    assert.equal(localStorage.getItem('easymed.softphone.out'), null, '«По умолчанию» не сбросило выбор');
+  } finally {
+    forgetDevices();
+  }
+});
+
+test('выбранной гарнитуры больше нет — заметка: звонок пойдёт через устройство по умолчанию', async () => {
+  localStorage.setItem('easymed.softphone.in', 'gone-mic');
+  localStorage.setItem('easymed.softphone.out', 'gone-spk');
+  try {
+    const { d } = await headsetShell();
+    const notes = byAttr(d, 'data-cph-sp-dev-note').filter((n) => !n.hidden).map(textOf);
+    assert.deepEqual(notes, ['Выбранный микрофон не найден — звонок пойдёт через микрофон по умолчанию.', 'Выбранный динамик не найден — звук пойдёт в динамик по умолчанию.']);
+    assert.equal(one(d, 'data-cph-sp-mic').value, '');
+  } finally {
+    forgetDevices();
+  }
+});
+
+test('гарнитуру подключили — списки обновляются сами; ушли из «Моя трубка» — подписка снята', async () => {
+  forgetDevices();
+  const { d, hs } = await headsetShell();
+  assert.equal(hs.listeners.size, 1, 'нет подписки на devicechange');
+  hs.devices.push({ kind: 'audioinput', deviceId: 'mic-3', label: 'USB Headset', groupId: 'g4' });
+  hs.change();
+  await tick(30);
+  assert.deepEqual(values(one(d, 'data-cph-sp-mic')), ['', 'mic-1', 'mic-2', 'mic-3']);
+  assert.ok(hasClass(d, 'cph-picking'), '«Моя трубка» длинная — журнал должен уступить ей место');
+  one(d, 'data-cph-ext-back').click();
+  assert.equal(hs.listeners.size, 0, 'подписка пережила выход из «Моя трубка»');
+  assert.ok(!hasClass(d, 'cph-picking'));
+  one(d, 'data-cph-ext').click();
+  await tick(30);
+  assert.equal(hs.listeners.size, 1);
+  resetCrmPhone();
+  assert.equal(hs.listeners.size, 0, 'подписка пережила снятие панели');
+});
+
+test('«Проверить гарнитуру»: «Говорите… 3 с» → «Слушайте запись…» → «Готово…»; запись играет в выбранный динамик; кнопка занята, пока идёт проверка', async () => {
+  forgetDevices();
+  localStorage.setItem('easymed.softphone.out', 'spk-2');
+  try {
+    const { d, hs } = await headsetShell();
+    const status = () => textOf(one(d, 'data-cph-sp-test-status'));
+    assert.match(status(), /Запишем 5 секунд/);
+    one(d, 'data-cph-sp-test').click();
+    await tick(10);
+    assert.equal(status(), 'Говорите… 3 с');
+    assert.ok(one(d, 'data-cph-sp-test').hasAttribute('disabled'), 'вторую проверку можно начать поверх первой');
+    hs.second();
+    assert.equal(status(), 'Говорите… 2 с');
+    hs.second(); hs.second();
+    await tick(20);
+    assert.equal(status(), 'Слушайте запись…');
+    assert.deepEqual(hs.audios[0].sinks, ['spk-2']);
+    hs.audios[0].onended();
+    await tick(10);
+    assert.equal(status(), 'Готово. Если себя не слышно — выберите другой микрофон или динамик.');
+    assert.equal(one(d, 'data-cph-sp-test').hasAttribute('disabled'), false);
+  } finally {
+    forgetDevices();
+  }
+});
+
+test('«Проверить гарнитуру»: браузер не дал микрофон — причина словами, кнопку можно нажать снова', async () => {
+  forgetDevices();
+  const hs = headsetEnv();
+  hs.gumError = Object.assign(new Error('denied'), { name: 'NotAllowedError' });
+  const { d } = await headsetShell({ hs });
+  one(d, 'data-cph-sp-test').click();
+  await tick(20);
+  assert.equal(textOf(one(d, 'data-cph-sp-test-status')), reasonText('mic_denied'));
+  assert.equal(one(d, 'data-cph-sp-test').hasAttribute('disabled'), false);
+});
+
+test('гарнитура на узбекском и английском экране — без кириллицы', { timeout: 10000 }, async () => {
+  const CYR = /[А-Яа-яЁёҚқҒғЎўҲҳ]/;
+  const keep = { dispatch: window.dispatchEvent, CE: globalThis.CustomEvent };
+  window.dispatchEvent = () => true;
+  if (!globalThis.CustomEvent) globalThis.CustomEvent = class { constructor(t, o) { this.type = t; Object.assign(this, o || {}); } };
+  localStorage.setItem('easymed.softphone.in', 'gone-mic');
+  try {
+    for (const lang of ['uz', 'en']) {
+      setLang(lang);
+      const { d, hs } = await headsetShell();
+      const found = [];
+      const look = (where) => { for (const n of walk(one(d, 'data-cph-sp-devices'))) if (n.tagName !== 'SVG' && CYR.test(n._t || '')) found.push(where + ': ' + n._t); };
+      look('start');
+      one(d, 'data-cph-sp-test').click();
+      await tick(10);
+      look('recording');
+      hs.second(); hs.second(); hs.second();
+      await tick(20);
+      look('playing');
+      hs.audios[0].onended();
+      await tick(10);
+      look('done');
+      assert.deepEqual(found, [], lang);
+    }
+  } finally {
+    setLang('ru');
+    window.dispatchEvent = keep.dispatch;
+    globalThis.CustomEvent = keep.CE;
+    forgetDevices();
+  }
 });

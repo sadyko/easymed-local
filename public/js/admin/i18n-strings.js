@@ -12386,6 +12386,19 @@ export const STRINGS = {
   "Внутренний звонок": {"en":"Internal call","ru":"Внутренний звонок","uz":"Ichki qo‘ng‘iroq"},
   "Выключить телефон можно после разговора.": {"en":"You can turn the phone off after the call.","ru":"Выключить телефон можно после разговора.","uz":"Telefonni suhbatdan keyin o‘chirish mumkin."},
   "Входящий звонок: {who}": {"en":"Incoming call: {who}","ru":"Входящий звонок: {who}","uz":"Kiruvchi qo‘ng‘iroq: {who}"},
+  // SOFTPHONE_V1 (задача 7) — гарнитура: выбор микрофона и динамика, проверка за 5 секунд (softphone-browser.js, views/crm-phone.js paintHeadset)
+  "Гарнитура": {"en":"Headset","ru":"Гарнитура","uz":"Garnitura"},
+  "Микрофон": {"en":"Microphone","ru":"Микрофон","uz":"Mikrofon"},
+  "Динамик": {"en":"Speaker","ru":"Динамик","uz":"Dinamik"},
+  "Новый микрофон будет в следующем звонке.": {"en":"The new microphone will be used from the next call.","ru":"Новый микрофон будет в следующем звонке.","uz":"Yangi mikrofon keyingi qo‘ng‘iroqdan ishlaydi."},
+  "Выбранный микрофон не найден — звонок пойдёт через микрофон по умолчанию.": {"en":"The selected microphone was not found — calls will use the default microphone.","ru":"Выбранный микрофон не найден — звонок пойдёт через микрофон по умолчанию.","uz":"Tanlangan mikrofon topilmadi — qo‘ng‘iroq standart mikrofon orqali o‘tadi."},
+  "Выбранный динамик не найден — звук пойдёт в динамик по умолчанию.": {"en":"The selected speaker was not found — sound will go to the default speaker.","ru":"Выбранный динамик не найден — звук пойдёт в динамик по умолчанию.","uz":"Tanlangan dinamik topilmadi — ovoz standart dinamikka chiqadi."},
+  "Проверить гарнитуру": {"en":"Test the headset","ru":"Проверить гарнитуру","uz":"Garniturani tekshirish"},
+  "Запишем 5 секунд вашего голоса и сразу проиграем — так проверяются и микрофон, и динамик.": {"en":"We record 5 seconds of your voice and play it back right away — this checks both the microphone and the speaker.","ru":"Запишем 5 секунд вашего голоса и сразу проиграем — так проверяются и микрофон, и динамик.","uz":"Ovozingizni 5 soniya yozib olamiz va darhol eshittiramiz — shunda mikrofon ham, dinamik ham tekshiriladi."},
+  "Говорите… {n} с": {"en":"Speak… {n} s","ru":"Говорите… {n} с","uz":"Gapiring… {n} s"},
+  "Слушайте запись…": {"en":"Listen to the recording…","ru":"Слушайте запись…","uz":"Yozuvni tinglang…"},
+  "Готово. Если себя не слышно — выберите другой микрофон или динамик.": {"en":"Done. If you could not hear yourself, choose another microphone or speaker.","ru":"Готово. Если себя не слышно — выберите другой микрофон или динамик.","uz":"Tayyor. O‘zingizni eshitmagan bo‘lsangiz, boshqa mikrofon yoki dinamikni tanlang."},
+  "Проверить гарнитуру можно после разговора.": {"en":"You can test the headset after the call.","ru":"Проверить гарнитуру можно после разговора.","uz":"Garniturani suhbatdan keyin tekshirish mumkin."},
   // /SOFTPHONE_V1
   // /CRM_PHONE_V1
   // TG_BROADCAST_FILTERS_V1 — подробные фильтры окна рассылки

@@ -8311,6 +8311,15 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
 .cph-drawer.cph-on-call .cph-hist { flex: 1 1 0; min-height: 0; overflow: hidden; }
 /* Объявления для читалки экрана — не видны глазу. */
 .cph-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+/* SOFTPHONE_V1 (задача 7) — «Гарнитура» в «Моя трубка»: те же поля (.cph-select,
+   .cph-label), что у выбора трубки; заметка «не найден» — янтарная. */
+.cph-sp-dev { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--ink-100); }
+.cph-sp-dev-h { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13.5px; font-weight: 700; color: var(--ink-900); }
+.cph-sp-note { padding: 6px 10px; border-radius: 8px; background: var(--warn-50); color: var(--warn-800); font-size: 12.5px; line-height: 1.4; }
+.cph-sp-note[hidden] { display: none; }
+.cph-sp-test-st { font-size: 12.5px; color: var(--ink-600); line-height: 1.4; min-height: 18px; }
+/* «Моя трубка» с гарнитурой длинная — журнал уступает ей место, как звонку. */
+.cph-drawer.cph-picking .cph-hist { flex: 1 1 0; min-height: 0; overflow: hidden; }
 /* /CRM_PHONE_V1 */
 
 /* ============================ CRM_LEAD_WIDE_V1 — окно заявки в две колонки ============================

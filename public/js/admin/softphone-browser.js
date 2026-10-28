@@ -23,6 +23,11 @@
 //
 // СЛОВА. softphone.js отдаёт коды; reasonText() и endText() — их слова на
 // языке экрана (tr), для панели crm-phone.js.
+//
+// ГАРНИТУРА (задача 7). Список микрофонов и динамиков, выбор (localStorage),
+// динамик для собеседника (setSinkId — где браузер умеет), проверка «запишем
+// 5 секунд и проиграем». Всё браузерное приходит через env — по умолчанию
+// настоящий браузер, в стендах подставной (как у browserMedia).
 import { supabase } from '../supabase.js';
 import { tr } from './i18n.js';
 import { createSoftphone } from './softphone.js';
@@ -47,6 +52,13 @@ const hasBrowser = () => typeof window !== 'undefined' && typeof navigator !== '
 /** Выбранная в панели гарнитура: 'in' — микрофон, 'out' — динамик. '' — по умолчанию. */
 export function savedDevice(kind) {
   try { return localStorage.getItem(DEVICE_KEY + kind) || ''; } catch { return ''; }
+}
+/** Запомнить выбор гарнитуры на этом компьютере; '' — снова «по умолчанию». */
+export function saveDevice(kind, id) {
+  try {
+    if (id) localStorage.setItem(DEVICE_KEY + kind, String(id));
+    else localStorage.removeItem(DEVICE_KEY + kind);
+  } catch { /* приватный режим */ }
 }
 
 const storage = {
@@ -138,6 +150,8 @@ export function browserMedia(doc, nav, win) {
       sinkId = id || '';
       return applySink();
     },
+    /** Какой динамик сейчас выбран для собеседника ('' — по умолчанию). */
+    get sinkId() { return sinkId; },
   };
 }
 
@@ -159,6 +173,9 @@ export function getSoftphone() {
     storage,
     inputId: () => savedDevice('in'),
   });
+  // Динамик, выбранный в прошлый раз, — сразу: первый же звонок звучит в нём.
+  const out = savedDevice('out');
+  if (out) media().setSink(out);
   return instance;
 }
 
@@ -176,6 +193,148 @@ export function setSoftphoneForTests(fake) {
 export function setOutputDevice(id) {
   if (!hasBrowser()) return Promise.resolve();
   return media().setSink(id);
+}
+/** Динамик, выбранный для собеседника на этой странице ('' — по умолчанию или страницы ещё нет). */
+export function outputSink() {
+  return pageMedia ? pageMedia.sinkId : '';
+}
+
+// ── Гарнитура ───────────────────────────────────────────────────────────────
+/** Браузер для гарнитуры: настоящий, а поверх — подмены стенда (over). */
+function deviceEnv(over) {
+  const win = typeof window !== 'undefined' ? window : null;
+  const pick = (k) => globalThis[k] || (win && win[k]) || null;
+  return {
+    nav: typeof navigator !== 'undefined' ? navigator : null,
+    win,
+    MediaRecorder: pick('MediaRecorder'), Audio: pick('Audio'), URL: pick('URL'), Blob: pick('Blob'),
+    setInterval: (fn, ms) => setInterval(fn, ms), clearInterval: (t) => clearInterval(t),
+    setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (t) => clearTimeout(t),
+    tickMs: 1000,
+    phone: peekSoftphone(),
+    ...(over || {}),
+  };
+}
+const mediaDevicesOf = (env) => (env.nav && env.nav.mediaDevices) || null;
+// 'default' и 'communications' — записи Chrome «по умолчанию — <устройство>»:
+// повторяют настоящее устройство (тот же groupId). Повтор не показываем; если
+// это не повтор (подписей ещё нет, groupId пуст) — 'default' первым, «По умолчанию».
+const PSEUDO = new Set(['default', 'communications']);
+
+function devicesOf(all, kind, word) {
+  const list = (all || []).filter((d) => d && d.kind === kind && d.deviceId);
+  const real = list.filter((d) => !PSEUDO.has(d.deviceId));
+  const dup = (d) => !!d.groupId && real.some((r) => r.groupId === d.groupId);
+  const out = [];
+  const def = list.find((d) => d.deviceId === 'default');
+  if (def && !dup(def)) out.push({ id: 'default', label: tr('По умолчанию') });
+  const comm = list.find((d) => d.deviceId === 'communications');
+  real.forEach((d, i) => out.push({ id: d.deviceId, label: d.label || tr(word) + ' ' + (i + 1) }));
+  if (comm && !dup(comm)) out.push({ id: 'communications', label: comm.label || tr(word) + ' ' + (real.length + 1) });
+  return out;
+}
+
+/** Микрофоны и динамики этого компьютера: {inputs:[{id,label}], outputs:[{id,label}]}. */
+export async function listDevices(over) {
+  const md = mediaDevicesOf(deviceEnv(over));
+  let all = [];
+  try { if (md && typeof md.enumerateDevices === 'function') all = await md.enumerateDevices(); } catch { all = []; }
+  return { inputs: devicesOf(all, 'audioinput', 'Микрофон'), outputs: devicesOf(all, 'audiooutput', 'Динамик') };
+}
+
+/** Умеет ли браузер выбрать динамик (setSinkId). Firefox — нет: выбора динамика не показываем. */
+export function canChooseOutput(over) {
+  const { win } = deviceEnv(over);
+  try {
+    const M = win && win.HTMLMediaElement;
+    return !!(M && M.prototype && typeof M.prototype.setSinkId === 'function');
+  } catch { return false; }
+}
+
+/** Подключили или вынули гарнитуру — fn(); вернуть функцию отписки. */
+export function onDeviceChange(fn, over) {
+  const md = mediaDevicesOf(deviceEnv(over));
+  if (!md || typeof md.addEventListener !== 'function') return () => {};
+  const handler = () => { try { fn(); } catch (e) { console.warn('[softphone] devicechange', e); } };
+  try { md.addEventListener('devicechange', handler); } catch { return () => {}; }
+  return () => { try { md.removeEventListener('devicechange', handler); } catch { /* уже нет */ } };
+}
+
+// Ошибка getUserMedia → код причины — те же коды, что у включения телефона (softphone.js micCode).
+function micReason(e) {
+  const name = (e && e.name) || '';
+  if (name === 'NotAllowedError') return 'mic_denied';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'no_mic';
+  return 'mic_error';
+}
+
+let testing = false;   // проверка гарнитуры — одна за раз
+
+/**
+ * Проверка гарнитуры: записать ms миллисекунд с выбранного микрофона и сразу
+ * проиграть в выбранный динамик. onPhase('recording', секунд осталось) — каждую
+ * секунду; ('playing'); ('done'); ('error', код) — mic_denied / no_mic /
+ * mic_error / insecure, а 'busy' — идёт звонок: микрофон звонка не трогаем.
+ * Вторая проверка, пока идёт первая, — false без фаз.
+ */
+export async function micTest(ms = 5000, onPhase = () => {}, over) {
+  const env = deviceEnv(over);
+  const say = (...a) => { try { onPhase(...a); } catch (e) { console.warn('[softphone] micTest', e); } };
+  if (env.phone && typeof env.phone.busy === 'function' && env.phone.busy()) { say('error', 'busy'); return false; }
+  if (testing) return false;
+  testing = true;
+  let stream = null;
+  let url = '';
+  const stopTracks = () => { try { if (stream) for (const t of stream.getTracks()) t.stop(); } catch { /* уже остановлены */ } stream = null; };
+  try {
+    const md = mediaDevicesOf(env);
+    if (!md || typeof md.getUserMedia !== 'function') { say('error', 'insecure'); return false; }
+    const id = savedDevice('in');
+    try {
+      stream = await md.getUserMedia({ audio: id ? { deviceId: { ideal: id } } : true, video: false });
+    } catch (e) { say('error', micReason(e)); return false; }
+    if (typeof env.MediaRecorder !== 'function') { say('error', 'mic_error'); return false; }
+    const parts = [];
+    const rec = new env.MediaRecorder(stream);
+    rec.ondataavailable = (e) => { if (e && e.data) parts.push(e.data); };
+    const stopped = new Promise((resolve) => { rec.onstop = resolve; });
+    rec.start();
+    let left = Math.max(1, Math.ceil(ms / 1000));
+    say('recording', left);
+    await new Promise((resolve) => {
+      const t = env.setInterval(() => {
+        left -= 1;
+        if (left > 0) { say('recording', left); return; }
+        env.clearInterval(t);
+        resolve();
+      }, env.tickMs);
+    });
+    rec.stop();
+    await stopped;
+    stopTracks();   // микрофон закрыт до того, как зазвучит запись
+    const blob = new env.Blob(parts, { type: rec.mimeType || 'audio/webm' });
+    url = env.URL.createObjectURL(blob);
+    const el = new env.Audio(url);
+    const out = savedDevice('out');
+    if (out && typeof el.setSinkId === 'function') { try { await el.setSinkId(out); } catch { /* динамик пропал — играет в обычный */ } }
+    say('playing');
+    await new Promise((resolve) => {
+      const safety = env.setTimeout(resolve, ms + 3000);   // 'ended' не пришёл — не висим
+      const end = () => { env.clearTimeout(safety); resolve(); };
+      el.onended = end;
+      el.onerror = end;
+      try { Promise.resolve(el.play()).catch(end); } catch { end(); }
+    });
+    say('done');
+    return true;
+  } catch {
+    say('error', 'mic_error');
+    return false;
+  } finally {
+    stopTracks();
+    if (url) { try { env.URL.revokeObjectURL(url); } catch { /* пусть */ } }
+    testing = false;
+  }
 }
 
 // ── Слова ───────────────────────────────────────────────────────────────────
