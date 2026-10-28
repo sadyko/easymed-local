@@ -179,3 +179,38 @@ test('выключатель «Забирать заявки» сохраняе�
   await tick(80);
   assert.ok(calls.some((x) => x.name === 'meta_poll_now'), 'meta_poll_now вызван');
 });
+
+// META_FORMS_PAGE_V1 — у страницы с 25 формами видны первые десять, остальные
+// раскрываются кнопкой «Показать ещё N из M» порциями по десять; у страницы с
+// двумя формами кнопки нет. Галочка скрытой формы не трогается: её просто не
+// рисуют, пока не раскрыли.
+test('форм много: первые 10, затем «Показать ещё 10 из 15», «ещё 5 из 5», и кнопка исчезает', async () => {
+  const many = Array.from({ length: 25 }, (_, i) => ({ id: 'm' + (i + 1), name: 'Форма ' + (i + 1), status: 'ACTIVE', leads_count: i, selected: i % 2 === 0 }));
+  settings = { ...CONNECTED, forms: many };
+  const root = await mount();
+  let rows = byAttr(root, 'data-form-id');
+  assert.strictEqual(rows.length, 10, 'показаны первые десять');
+  assert.deepStrictEqual(rows.slice(0, 3).map((r) => r.attrs['data-form-id']), ['m1', 'm2', 'm3'], 'порядок — как у Meta');
+  let more = byAttr(root, 'data-meta-forms-more')[0];
+  assert.ok(more, 'кнопка «Показать ещё» есть');
+  assert.ok(textOf(more).includes('Показать ещё 10 из 15'), textOf(more));
+  more.click();
+  rows = byAttr(root, 'data-form-id');
+  assert.strictEqual(rows.length, 20, 'после первого щелчка — двадцать');
+  assert.deepStrictEqual(byTag(rows[10], 'input')[0].checked, true, 'галочка одиннадцатой формы — как сохранено (m11 selected)');
+  assert.deepStrictEqual(byTag(rows[11], 'input')[0].checked, false, 'галочка двенадцатой — снята, как сохранено');
+  more = byAttr(root, 'data-meta-forms-more')[0];
+  assert.ok(more && textOf(more).includes('Показать ещё 5 из 5'), more && textOf(more));
+  more.click();
+  rows = byAttr(root, 'data-form-id');
+  assert.strictEqual(rows.length, 25, 'все формы раскрыты');
+  assert.strictEqual(byAttr(root, 'data-meta-forms-more').length, 0, 'кнопки больше нет');
+  // Новое открытие экрана начинает снова с десяти.
+  const again = await mount();
+  assert.strictEqual(byAttr(again, 'data-form-id').length, 10, 'счётчик сброшен при открытии экрана');
+  // Две формы — кнопки нет и быть не должно.
+  settings = { ...CONNECTED };
+  const root2 = await mount();
+  assert.strictEqual(byAttr(root2, 'data-form-id').length, 2);
+  assert.strictEqual(byAttr(root2, 'data-meta-forms-more').length, 0, 'при двух формах кнопки нет');
+});

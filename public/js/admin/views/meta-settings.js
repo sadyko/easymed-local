@@ -23,7 +23,13 @@ import { tr, trf } from '../i18n.js';
 import { isLicensed } from '../licence.js';
 import { metaReasonText, META_REASONS_NEED_ACTION } from '../../shared/meta-reasons.js';
 
-const state = { s: null, leads: null, leadsError: null, busy: false, pages: null };
+// META_FORMS_PAGE_V1 — у страницы бывает 30–40 форм (по форме на каждого врача
+// и каждый месяц рекламы), и таблица форм уезжала за экран. Показываем первые
+// FORMS_PAGE, остальные — по кнопке «Показать ещё N из M», как список услуг в
+// карточке пациента (patient-card.js). formsShown сбрасывается при каждом
+// открытии экрана и при новом подключении (другая страница — другие формы).
+const FORMS_PAGE = 10;
+const state = { s: null, leads: null, leadsError: null, busy: false, pages: null, formsShown: FORMS_PAGE };
 const refs = { root: null, body: null, leadsBody: null, onNavigate: null };
 
 async function rpc(name, args = {}) {
@@ -36,6 +42,7 @@ export async function renderMetaSettings(container, { onNavigate } = {}) {
     clear(container);
     refs.onNavigate = onNavigate || null;
     state.pages = null;
+    state.formsShown = FORMS_PAGE;   // META_FORMS_PAGE_V1
     refs.root = h('div', { class: 'fade-in' });
     container.appendChild(refs.root);
 
@@ -200,6 +207,7 @@ async function connectWith(args) {
         return;
     }
     state.pages = Array.isArray(res.pages) ? res.pages : null;
+    state.formsShown = FORMS_PAGE;   // META_FORMS_PAGE_V1 — новый список форм начинается с первой страницы
     toast(trf('Подключено: страница «{page}», форм: {n}', { page: res.page ? res.page.name : '', n: (res.forms || []).length }), 'success');
     paint();
 }
@@ -228,8 +236,23 @@ function formsBlock() {
     box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 10px 26px' } },
         'Без этой галочки берутся все формы страницы, включая новые. Сохраняется сразу.'));
 
+    const list = h('div');
+    box.appendChild(list);
+    paintFormsList(list);
+    return box;
+}
+
+// META_FORMS_PAGE_V1 — таблица форм и кнопка «Показать ещё» перерисовываются
+// внутри своего контейнера, без paint() всего экрана: иначе щелчок по кнопке
+// сбрасывал бы фокус и прокрутку администратору, который только что листал
+// список. Режим «только отмеченные» действует на все формы страницы, а не
+// только на нарисованные, — скрытая галочка остаётся как сохранена.
+function paintFormsList(list) {
+    const s = state.s;
+    clear(list);
+    const shown = Math.min(state.formsShown, s.forms.length);
     const tb = h('tbody');
-    for (const f of s.forms) {
+    for (const f of s.forms.slice(0, shown)) {
         const cb = h('input', { type: 'checkbox', checked: f.selected !== false,
             onchange: async () => {
                 cb.disabled = true;
@@ -243,10 +266,16 @@ function formsBlock() {
             h('td', { class: 'muted', style: { fontSize: '12.5px' } }, formStatus(f.status)),
             h('td', { class: 'cell-mono', style: { fontSize: '12.5px', textAlign: 'right' } }, String(f.leads_count || 0))));
     }
-    box.appendChild(h('table', { class: 'tbl meta-forms', style: { width: '100%' } },
+    list.appendChild(h('table', { class: 'tbl meta-forms', style: { width: '100%' } },
         h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Форма'), h('th', null, 'Состояние'), h('th', { style: { textAlign: 'right' } }, 'Заявок у Meta'))),
         tb));
-    return box;
+    const left = s.forms.length - shown;
+    if (left > 0) {
+        const moreBtn = h('button', { class: 'btn btn-sm', type: 'button', 'data-meta-forms-more': '1',
+            onclick: () => { state.formsShown += FORMS_PAGE; paintFormsList(list); } },
+            trf('Показать ещё {n} из {left}', { n: Math.min(FORMS_PAGE, left), left }));
+        list.appendChild(h('div', { style: { marginTop: '8px' } }, moreBtn));
+    }
 }
 
 function formStatus(st) {
