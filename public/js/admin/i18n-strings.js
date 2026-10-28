@@ -12327,6 +12327,18 @@ export const STRINGS = {
   "Адрес через публичный сервер Easy-Med работает.": {"en":"The address via the Easy-Med public server is working.","ru":"Адрес через публичный сервер Easy-Med работает.","uz":"Easy-Med ochiq serveri orqali manzil ishlamoqda."},
   "В адресе событий станции — секрет: увидеть и сменить его может только администратор.": {"en":"The station events address contains a secret: only an administrator can see or change it.","ru":"В адресе событий станции — секрет: увидеть и сменить его может только администратор.","uz":"Stansiya hodisalari manzilida maxfiy kalit bor: uni faqat administrator ko‘ra va o‘zgartira oladi."},
   // /FIX_318_V1
+  // SOFTPHONE_V1 — телефон Easy-Med в браузере: отказы входа своего номера в АТС
+  "Сначала выберите свой внутренний номер в «Моя трубка» — телефон Easy-Med входит в АТС под ним.": {"en":"First choose your extension in «My handset» — the Easy-Med phone signs in to the PBX with it.","ru":"Сначала выберите свой внутренний номер в «Моя трубка» — телефон Easy-Med входит в АТС под ним.","uz":"Avval «Mening trubkam» da o‘z ichki raqamingizni tanlang — Easy-Med telefoni ATS ga shu raqam bilan kiradi."},
+  "Принимать звонки от чужого имени нельзя — вернитесь к своей учётной записи.": {"en":"Calls cannot be taken on someone else’s behalf — return to your own account.","ru":"Принимать звонки от чужого имени нельзя — вернитесь к своей учётной записи.","uz":"Boshqa xodim nomidan qo‘ng‘iroqlarni qabul qilib bo‘lmaydi — o‘z hisobingizga qayting."},
+  "АТС не дала этому внутреннему номеру вход из браузера — включите его в кабинете onlinePBX или выберите другой номер.": {"en":"The PBX has not given this extension browser sign-in — enable it in the onlinePBX cabinet or choose another number.","ru":"АТС не дала этому внутреннему номеру вход из браузера — включите его в кабинете onlinePBX или выберите другой номер.","uz":"ATS bu ichki raqamga brauzerdan kirishga ruxsat bermagan — uni onlinePBX kabinetida yoqing yoki boshqa raqamni tanlang."},
+  "Линия onlinePBX не подключена («Настройки → Телефония»).": {"en":"The onlinePBX line is not connected («Settings → Telephony»).","ru":"Линия onlinePBX не подключена («Настройки → Телефония»).","uz":"onlinePBX liniyasi ulanmagan («Sozlamalar → Telefoniya»)."},
+  // SOFTPHONE_V1 — отказы станции словами клиники (telephony/dial.js DIAL_MESSAGES):
+  // их отдают и «Позвонить», и вход телефона Easy-Med в АТС
+  "Телефония не приняла ключ доступа. Проверьте настройки подключения.": {"en":"The phone system did not accept the access key. Check the connection settings.","ru":"Телефония не приняла ключ доступа. Проверьте настройки подключения.","uz":"Telefoniya kirish kalitini qabul qilmadi. Ulanish sozlamalarini tekshiring."},
+  "Нет связи с телефонией. Проверьте интернет на этом компьютере.": {"en":"No connection to the phone system. Check the internet on this computer.","ru":"Нет связи с телефонией. Проверьте интернет на этом компьютере.","uz":"Telefoniya bilan aloqa yo‘q. Ushbu kompyuterda internetni tekshiring."},
+  "Ответ телефонии не удалось разобрать. Попробуйте ещё раз.": {"en":"The phone system’s reply could not be read. Try again.","ru":"Ответ телефонии не удалось разобрать. Попробуйте ещё раз.","uz":"Telefoniya javobini tushunib bo‘lmadi. Qayta urinib ko‘ring."},
+  "Телефония просит звонить реже: подождите несколько секунд.": {"en":"The phone system asks for fewer requests: wait a few seconds.","ru":"Телефония просит звонить реже: подождите несколько секунд.","uz":"Telefoniya kamroq murojaat qilishni so‘ramoqda: bir necha soniya kuting."},
+  // /SOFTPHONE_V1
   // /CRM_PHONE_V1
   // TG_BROADCAST_FILTERS_V1 — подробные фильтры окна рассылки
   "Женщины": {"en":"Women","ru":"Женщины","uz":"Ayollar"},

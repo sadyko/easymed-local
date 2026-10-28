@@ -238,6 +238,7 @@ const READ_ONLY_RPCS = new Set([
   // вопрос лишь продлевает спрос на опрос). Панель спрашивает telephony_live
   // раз в 2 секунды — с 402 она краснела ошибкой у каждого оператора.
   'telephony_phone_me', 'telephony_call_log', 'telephony_extensions', 'telephony_live',
+  'telephony_caller',   // SOFTPHONE_V1 — «кто звонит»: чтение
 ]);
 
 // FIX_318_V1 (ADMIN_ACT_AS_V1) — ЧИТАЮТ, НО ВОРОТА ИХ НАМЕРЕННО НЕ ПУСКАЮТ.
@@ -247,8 +248,11 @@ const READ_ONLY_RPCS = new Set([
 // спрашивает другое — «изменил ли человек что-нибудь», — и для него это
 // чтения. telephony_recent_calls и telephony_dispositions изменены в 3.18.0
 // (MOIZVONKI_V2: провайдер и предел) и по-прежнему только читают.
+// SOFTPHONE_V1 — telephony_webrtc_me (вход своего номера в АТС из браузера)
+// базу не меняет, но телефон при блокировке закрыт, как экран «Телефония».
 const LOCKED_READS = new Set([
   'telephony_settings_get', 'telephony_providers_list', 'telephony_recent_calls', 'telephony_dispositions',
+  'telephony_webrtc_me',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

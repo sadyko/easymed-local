@@ -69,6 +69,9 @@ function enrich(db, number) {
   return { patient, lead };
 }
 
+/** SOFTPHONE_V1 — тот же «кто звонит», что у «Звонит»: пациент по номеру и открытая заявка. */
+export const callerInfo = (db, number) => enrich(db, number);
+
 function prune(now) {
   for (const [k, c] of calls) {
     const age = now - c.updated;

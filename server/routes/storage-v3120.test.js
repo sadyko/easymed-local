@@ -118,6 +118,9 @@ test('CSP и X-Frame-Options у приложения', async (t) => {
   assert.match(csp, /default-src 'self'/);
   assert.match(csp, /frame-ancestors 'self'/);
   assert.match(csp, /connect-src 'self'/);
+  // SOFTPHONE_V1 — телефон Easy-Med: только wss к onlinePBX, ни http, ни чужие домены.
+  const connect = csp.split(';').map((s) => s.trim()).find((s) => s.startsWith('connect-src'));
+  assert.equal(connect, "connect-src 'self' wss://*.onpbx.ru:*");
   assert.equal(res.headers.get('x-frame-options'), 'SAMEORIGIN');
   const api = await fetch(s.base + '/api/health');
   assert.equal(api.headers.get('x-frame-options'), 'SAMEORIGIN');

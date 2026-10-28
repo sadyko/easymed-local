@@ -77,7 +77,8 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
          telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording,
          telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
-import { telephonyPhoneMe, telephonyMyExtension, telephonyExtensions, telephonyCallLog } from './phone.js';   // CRM_PHONE_V1 — панель «Телефон» в CRM (бывший EasyPhone)
+import { telephonyPhoneMe, telephonyMyExtension, telephonyExtensions, telephonyCallLog,
+  telephonyWebrtcMe, telephonyCaller } from './phone.js';   // CRM_PHONE_V1 — панель «Телефон» в CRM (бывший EasyPhone); SOFTPHONE_V1 — телефон в браузере
 import { telephonyLive, telephonyRingInfo, telephonyRingTokenRotate } from './ring.js';   // CALL_RING_V1 — «Звонит»: что звонит сейчас, адрес событий станции
 import { metaSettingsGet, metaSettingsSave, metaConnect, metaTokenClear, metaPollNow, metaLeadsRecent } from './meta.js';   // META_LEADS_V1
 import { telegramDeeplinksList, telegramDeeplinkSave, telegramDeeplinkDelete } from './deeplinks.js';   // TG_DEEPLINK_V1 — ссылки для рекламы в Telegram
@@ -726,6 +727,11 @@ export const RPC = {
   telephony_my_extension:    (db, args, user) => telephonyMyExtension(db, args, user),
   telephony_extensions:      (db, args, user) => telephonyExtensions(db, args, user),
   telephony_call_log:        (db, args, user) => telephonyCallLog(db, args, user),
+  // SOFTPHONE_V1 — телефон Easy-Med: вход своего номера в АТС и «кто звонит».
+  // «Кто звонит» — в READ_ONLY_RPCS; вход в АТС при блокировке закрыт, как экран
+  // «Телефония» (LOCKED_READS в control/gate.js).
+  telephony_webrtc_me:       (db, args, user) => telephonyWebrtcMe(db, args, user),
+  telephony_caller:          (db, args, user) => telephonyCaller(db, args, user),
   // CALL_RING_V1 — «Звонит»: что звонит сейчас (сам вопрос — спрос на опрос
   // станции), адрес для кабинета станции и смена его секрета (rpc/ring.js).
   telephony_live:            (db, args, user) => telephonyLive(db, args, user),

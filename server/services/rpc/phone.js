@@ -19,10 +19,15 @@
 //                        а журнал лишь говорит флагом may_hear, рисовать ли кнопку.
 // Набор и запись — telephony_dial и telephony_call_recording (rpc/telephony.js),
 // как и прежде: второго разъёма не заводится.
+//
+// SOFTPHONE_V1 (2026-10-28) — ещё два вызова для телефона в самом браузере:
+// вход своего внутреннего номера в АТС (telephony_webrtc_me) и «кто звонит»
+// (telephony_caller). Двери — те же права: набор и журнал.
 import { grantAllows } from '../grants.js';
-import { candidateExtensions, dialProvider } from '../telephony/dial.js';
+import { candidateExtensions, dialProvider, dialMessage } from '../telephony/dial.js';
 import { pbxCall } from '../telephony/onlinepbx.js';
 import { getProviderRow, pbxOptions, providerConfig, listProviders } from '../telephony/providers.js';
+import { callerInfo } from '../telephony/live.js';   // SOFTPHONE_V1 — «кто звонит», как у «Звонит»
 import { RpcError } from './telephony.js';
 
 // Зеркало DIAL_ROLES / CALL_LOG_ROLES из rpc/telephony.js — ПРЕЖНЕЕ ПОВЕДЕНИЕ для
@@ -76,6 +81,53 @@ export function telephonyMyExtension(db, args, user) {
   if (ext && !/^[0-9*#]{1,12}$/.test(ext)) throw new RpcError('Внутренний номер — это цифры, не длиннее двенадцати.', 400);
   db.prepare('UPDATE users SET pbx_extension = ? WHERE id = ?').run(ext || null, user.id);
   return { ok: true, extension: ext };
+}
+
+// SOFTPHONE_V1 — тексты отказов (ru — ключ словаря; uz/en — в i18n-strings.js).
+const SP_NO_EXT = 'Сначала выберите свой внутренний номер в «Моя трубка» — телефон Easy-Med входит в АТС под ним.';
+const SP_ACTING = 'Принимать звонки от чужого имени нельзя — вернитесь к своей учётной записи.';
+const SP_NO_WEBRTC = 'АТС не дала этому внутреннему номеру вход из браузера — включите его в кабинете onlinePBX или выберите другой номер.';
+const SP_NO_LINE = 'Линия onlinePBX не подключена («Настройки → Телефония»).';
+
+/**
+ * SOFTPHONE_V1 — вход телефона Easy-Med в АТС под СВОИМ внутренним номером.
+ * Номер — из users.pbx_extension (не из запроса): чужой номер — чужие звонки.
+ * Пароль не пишется ни в журнал, ни в базу: он только уходит владельцу номера.
+ *
+ * Отказ станции — 400 словами клиники (dialMessage), как у «Позвонить»
+ * (telephonyDial): маршрут RPC прячет всё, что 500 и выше, за «Ошибка сервера»,
+ * и оператор не узнал бы, что дело в станции. Текст станции (comment) не
+ * пересказывается: перевести его нечем, а причина и так названа.
+ */
+export async function telephonyWebrtcMe(db, _args, user, { pbxCallImpl = pbxCall } = {}) {
+  if (user && user.acting_admin) throw new RpcError(SP_ACTING, 403);
+  if (!mayDial(db, user)) throw new RpcError(DENY_DIAL, 403);
+  const me = db.prepare('SELECT pbx_extension FROM users WHERE id = ?').get(user.id) || {};
+  const ext = String(me.pbx_extension || '').trim();
+  if (!ext) throw new RpcError(SP_NO_EXT, 400);
+  const line = (listProviders(db) || []).find((p) => p.enabled && p.kind === 'onlinepbx');
+  if (!line) throw new RpcError(SP_NO_LINE, 400);
+  const row = getProviderRow(db, line.id);
+  // Поля — СТРОКОЙ через запятую: массивом onlinePBX webrtc не отдаёт (проверено 2026-10-28).
+  const r = await pbxCallImpl(providerConfig(row).domain, 'user/get.json', { num: ext, fields: 'num,name,enabled,webrtc' }, pbxOptions(db, row));
+  if (!r || !r.ok) throw new RpcError(dialMessage(r && r.reason), 400);
+  // Только запись СВОЕГО номера: станция может прислать и чужие — их пароли не наши.
+  const u = (Array.isArray(r.data) ? r.data : []).find((x) => x && String(x.num) === ext);
+  const w = u && u.enabled !== false ? u.webrtc : null;
+  if (!w || !w.host || !w.user || !w.password) throw new RpcError(SP_NO_WEBRTC, 409);
+  const host = String(w.host);
+  return { extension: ext, user: String(w.user), password: String(w.password), ws_url: 'wss://' + host, sip_domain: host.replace(/:\d+$/, '') };
+}
+
+/**
+ * SOFTPHONE_V1 — кто звонит на мой телефон Easy-Med: пациент и открытая заявка
+ * по номеру, тем же поиском, что у «Звонит». Дверь — как у telephony_live.
+ */
+export function telephonyCaller(db, args, user) {
+  if (!mayDial(db, user) && !mayLog(db, user)) throw new RpcError(DENY_WORKPLACE, 403);
+  const number = String((args && args.number) || '').replace(/[^\d+]/g, '');
+  if (!number) return { patient: null, lead: null };
+  return callerInfo(db, number);
 }
 
 /**

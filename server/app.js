@@ -40,6 +40,8 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   //     свою рамку и не «прокликает» её за сотрудника;
   //   • connect-src 'self': страница ходит только на свой сервер — украденное
   //     скриптом некуда отправить;
+  //   • SOFTPHONE_V1 — плюс wss к onlinePBX (*.onpbx.ru): телефон Easy-Med входит
+  //     в АТС из браузера; другие внешние адреса закрыты по-прежнему;
   //   • скрипты — только свои. 'unsafe-inline' остаётся ради печатных окон:
   //     они пишутся в about:blank с коротким window.onload=print, а такое окно
   //     наследует эту политику; внешних скриптов и eval нет;
@@ -55,7 +57,7 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
     "media-src 'self' data: blob: https:",
-    "connect-src 'self'",
+    "connect-src 'self' wss://*.onpbx.ru:*",
     "frame-src 'self' blob: data: https:",
     "worker-src 'self' blob:",
     "object-src 'self'",
