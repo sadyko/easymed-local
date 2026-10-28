@@ -10,8 +10,12 @@
 //     PUBLIC_UNCOLLECTED_MAX_HOURS (config.js uncollectedMaxMs);
 //   • статусы старше 90 дней, журналы старше 30 дней, законченные доставки,
 //     прежние имена в адресе после 30 дней, файлы без снимка;
+//   • FIX_318_V1 (C6) — номера живых звонков (pbx_events) старше десяти минут:
+//     раньше их стирали только приём и выдача, и замолчавшие станция и клиника
+//     оставляли номера лежать сколько угодно;
 //   • wal_checkpoint(TRUNCATE) — стёртые страницы не задерживаются в журнале WAL.
 import { closeOverdue, purgeRequests, UNCOLLECTED_MAX_MS } from './store/requests.js';
+import { prunePbxEvents } from './store/pbx-events.js';
 import { purgeLogs } from './store/logs.js';
 import { purgeDeliveries, deliverDue } from './store/deliveries.js';
 import { gcMedia } from './store/media.js';
@@ -26,9 +30,10 @@ export function runMaintenance(db, dataDir, now, limiter = null, { uncollectedMa
   const deliveries = purgeDeliveries(db, now);
   const aliases = db.prepare('DELETE FROM slug_aliases WHERE until_at <= ?').run(isoOf(now)).changes;
   const media = gcMedia(db, dataDir, now);
+  const pbxEvents = prunePbxEvents(db, now);   // FIX_318_V1 (C6)
   if (limiter) limiter.sweep(now);
   db.pragma('wal_checkpoint(TRUNCATE)');
-  return { ...closed, ...purged, logs, deliveries, aliases, media };
+  return { ...closed, ...purged, logs, deliveries, aliases, media, pbx_events: pbxEvents };
 }
 
 /**

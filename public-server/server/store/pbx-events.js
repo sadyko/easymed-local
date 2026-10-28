@@ -41,8 +41,9 @@ export function clinicByRingToken(db, clinicId, token) {
   return a.length === b.length && crypto.timingSafeEqual(a, b) ? { clinic_id: row.clinic_id } : null;
 }
 
+/** Стереть события старше десяти минут; сколько стёрто. Зовут приём, выдача и — FIX_318_V1 (C6) — уборка раз в минуту (jobs.js). */
 export function prunePbxEvents(db, now) {
-  db.prepare('DELETE FROM pbx_events WHERE received_at < ?').run(isoOf(now - PBX_TTL_MS));
+  return db.prepare('DELETE FROM pbx_events WHERE received_at < ?').run(isoOf(now - PBX_TTL_MS)).changes;
 }
 
 /**

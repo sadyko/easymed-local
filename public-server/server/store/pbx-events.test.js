@@ -8,6 +8,7 @@ import { testDb, NOW } from '../test-helpers/fixture.js';
 import { ringHashOf, clinicByRingToken, insertPbxEvent, pbxEventsSince, waitForPbxEvent, PBX_TTL_MS, PBX_FRESH_MS } from './pbx-events.js';
 import { saveKeys } from './clinics.js';
 import { isoOf } from '../lib/time.js';
+import { runMaintenance } from '../jobs.js';   // FIX_318_V1 (C6)
 
 const TOKEN = 'ab'.repeat(16);
 function clinic(db, id = 'c-000777', token = TOKEN) {
@@ -71,4 +72,19 @@ test('saveKeys кладёт хеш секрета; без секрета — п�
   assert.equal(db.prepare("SELECT ring_hash FROM clinics WHERE clinic_id = 'c-000777'").get().ring_hash, ringHashOf(TOKEN));
   assert.deepEqual(saveKeys(db, 'c-000777', { ...body, generated_at: isoOf(NOW + 1000) }, NOW + 1000), { ok: true, connections: 0 });
   assert.equal(db.prepare("SELECT ring_hash FROM clinics WHERE clinic_id = 'c-000777'").get().ring_hash, '', 'снятый секрет остался на сервере');
+});
+
+// FIX_318_V1 (C6) — десять минут хранения номеров были обещанием, которое
+// исполнялось только при следующем приёме или выдаче: замолчала станция и
+// клиника — номера лежали сколько угодно. Теперь их стирает и уборка (раз в минуту).
+test('FIX_318_V1: номера живых звонков стирает уборка раз в минуту, даже когда никто не пишет и не забирает', () => {
+  const { db, dir } = testDb();
+  clinic(db);
+  insertPbxEvent(db, 'c-000777', ev('u1'), NOW);
+  insertPbxEvent(db, 'c-000777', ev('u2'), NOW + 5 * 60_000);
+  const r = runMaintenance(db, dir, NOW + PBX_TTL_MS + 1000);
+  assert.equal(r.pbx_events, 1);
+  assert.deepEqual(db.prepare('SELECT uuid FROM pbx_events').all().map((x) => x.uuid), ['u2']);
+  assert.equal(runMaintenance(db, dir, NOW + 5 * 60_000 + PBX_TTL_MS + 1000).pbx_events, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM pbx_events').get().n, 0, 'номера пережили десять минут');
 });
