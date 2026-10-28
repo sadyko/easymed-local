@@ -1498,14 +1498,28 @@ function setNavHidden(list) {
     for (const id of normalizeHidden(list)) navHidden.add(id);
     renderSidebar();
     // Администратор только что спрятал раздел, в котором стоит сам, — уводим домой.
-    if (navHiddenFor(state.view)) navigate(firstAllowedView());
-    // FIX_318_V1 (B1) — кэш панелей. Панель, смонтированная до смены списка,
-    // показывалась бы при возврате как была: скрытый дашборд открывался бы
-    // по прямому адресу целиком, а возвращённый раздел — заглушкой «Раздел
-    // скрыт». Панели, чья скрытость поменялась, снимаются и отрисуются заново.
+    const leaving = navHiddenFor(state.view);
+    if (leaving) navigate(firstAllowedView());
+    // FIX_318_V1 (B1, B5) — кэш панелей. Панель, смонтированная до смены
+    // списка, показывалась бы при возврате как была: скрытый дашборд открывался
+    // бы по прямому адресу целиком, возвращённый раздел — заглушкой «Раздел
+    // скрыт», а хаб «Настроек» держал бы плитку «Товары и препараты» ссылкой в
+    // скрытые «Закупки». Список поменялся — все панели, кроме открытой,
+    // снимаются и при следующем заходе отрисуются заново (меняет его
+    // администратор, редко, так что потерянные фильтры здесь дешевле вранья).
+    const changed = before.size !== navHidden.size || [...navHidden].some((id) => !before.has(id));
+    if (!changed) return;
     for (const pane of [...state.panes]) {
-        if (pane.key === state.activeKey) continue;
-        if (isHiddenView(pane.view, before, parentViewOf) === navHiddenFor(pane.view)) continue;
+        if (pane.key === state.activeKey) {
+            // Открытая панель перерисовывается на месте; экран «Видимость
+            // разделов» (он и зовёт setNavHidden) перерисовывает себя сам, а
+            // панель, в которую только что увели, только что и нарисована.
+            if (!leaving && pane.view !== 'visibility-settings') {
+                const r = renderViewInto(pane);
+                if (r && typeof r.catch === 'function') r.catch((e) => console.warn('[nav] visibility re-render', e));
+            }
+            continue;
+        }
         state.panes.splice(state.panes.indexOf(pane), 1);
         try { pane.root.remove(); } catch (_) {}
     }

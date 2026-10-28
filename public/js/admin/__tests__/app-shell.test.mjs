@@ -1114,6 +1114,29 @@ test('FIX_318_V1: «Пациенты» скрыты — «Очередь» ос�
     assert.equal(navItemFor('Очередь'), undefined, 'вернули «Пациентов» — дубль «Очереди» в меню');
 });
 
+// FIX_318_V1 (B5) — хаб «Настроек» из кэша панелей тоже узнаёт о новом списке:
+// иначе плитка «Товары и препараты» после скрытия «Закупок» оставалась ссылкой
+// в «Раздел скрыт», пока страницу не перезагрузят.
+test('FIX_318_V1: скрыли «Закупки» — плитка «Товары и препараты» в «Настройках» неактивна и без перезагрузки', async () => {
+    await perms_setFull();
+    const tile = () => descendants(shownPane()).find((n) => n.attrs && n.attrs['data-tile-hidden'] === 'inventory');
+    try {
+        await go('settings');
+        assert.equal(tile(), undefined, 'подготовка: «Закупки» не скрыты');
+        await go('labs');
+        shell().setNavHidden(['inventory']);
+        await settle(60);
+        await go('settings');
+        assert.ok(tile(), 'хаб из кэша показывает плитку скрытых «Закупок» ссылкой');
+    } finally {
+        shell().setNavHidden([]);
+        await settle(40);
+    }
+    await go('labs');
+    await go('settings');
+    assert.equal(tile(), undefined, 'вернули «Закупки» — плитка осталась неактивной');
+});
+
 test('глушим таймеры экранов, чтобы прогон завершался', () => {
     for (const id of appIntervals) clearInterval(id);
     appIntervals.clear();

@@ -563,14 +563,27 @@ function buildGroupCard(group, items, { open, id, onToggle }) {
     return card;
 }
 
+// FIX_318_V1 (B5) — скрыт ли для клиники раздел, куда ведёт плитка («Видимость
+// разделов»). Правило — оболочки (window.easymed.isNavHidden), то же, что прячет
+// пункт меню. Нет оболочки — не скрыт.
+function tileRouteHidden(route) {
+    const fn = typeof window !== 'undefined' && window.easymed && window.easymed.isNavHidden;
+    return typeof fn === 'function' ? !!fn(route) : false;
+}
+
 function buildItemRow(item) {
     const chip = h('span', { class: 'set-row-ico' }, Icon(item.icon, { size: 15 }));
     const name = item.live
         ? item.label
         : h('span', null, item.label, h('span', { class: 'set-soon-tag' }, ' · Скоро'));
+    // FIX_318_V1 (B5) — плитка в скрытый раздел («Товары и препараты» →
+    // «Закупки») открывала «Раздел скрыт». Она остаётся на месте — пропавшая
+    // плитка читалась бы как поломка, — но неактивна и говорит, где раздел вернуть.
+    const hiddenTarget = !!(item.live && item.route && tileRouteHidden(item.route));
     // Both lines ellipsize, and at three columns there is less room to do it in —
     // so each carries its full text as a tooltip rather than being unreadable.
-    const desc = item.live ? item.desc : 'Раздел скоро будет доступен';
+    const desc = hiddenTarget ? 'Раздел скрыт в «Настройки → Видимость разделов».'
+        : (item.live ? item.desc : 'Раздел скоро будет доступен');
     // UPDATE_STATUS_ROW_V1 — строка «Система» несёт живой статус обновления,
     // чтобы не нужно было открывать экран ради ответа «а мы обновлены?».
     const descEl = h('div', { class: 'set-row-desc', title: desc }, desc);
@@ -581,6 +594,7 @@ function buildItemRow(item) {
     );
 
     if (!item.live) return h('div', { class: 'set-row set-row-soon' }, chip, text);
+    if (hiddenTarget) return h('div', { class: 'set-row set-row-soon', 'aria-disabled': 'true', 'data-tile-hidden': item.route }, chip, text);
 
     const row = h('div', {
         class: 'set-row set-row-link',
