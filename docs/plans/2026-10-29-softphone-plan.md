@@ -11,6 +11,17 @@
 
 `views/crm-phone.js` draws the states.
 
+**Changes made during the build (2026-10-28). These override the task text below:**
+- **CSP.** `connect-src 'self' wss://*.onpbx.ru:*` (Task 2, Step 3b); otherwise the browser blocks the WebSocket to the PBX.
+- **Station errors.** A station error returns **400** with the fixed `dialMessage(reason)` sentence, not 502. `routes/rpc.js` hides every ≥500 behind «Ошибка сервера», and `telephonyDial` already uses 400.
+- **Licence gate.** `telephony_webrtc_me` is in no gate list: closed when the licence is locked, and it counts as an action in the act-as journal. The station host must match `*.onpbx.ru[:port]`, otherwise 409.
+- **Number ownership.** Task 2b was added (owner decision: the softphone works only on the number the admin assigned).
+- **`createSoftphone` loads JsSIP itself.** It takes `loadJsSIP: async () => JsSIP` (called in `enable()`) instead of `JsSIP`; a getter would be captured once at creation. A failed load gives reason `load_failed`. Task 4 passes `loadJsSIP: () => import('../vendor/jssip-3.13.9.mjs').then((m) => m.default || m)` and does NOT wrap `enable`.
+- **Remote audio.** `media.attachRemote(pc)` receives the RTCPeerConnection, and the browser layer builds the stream from `pc.getReceivers()`; `media.detachRemote()` runs at call end. For outgoing calls JsSIP emits `peerconnection` inside `ua.call()` before listeners attach, so the session's `connection` is hooked directly.
+- **ICE.** `call()` and `answer()` pass `pcConfig: { iceServers: [] }`: no public STUN, since clinics may have no route to it.
+- **One tab.** It works through Web Locks. A tab that finds the lock taken shows `other_tab`, then queues a waiting request (abortable) and takes over by itself when the other tab lets go.
+- **Retries.** `enable()` is idempotent while in flight, `disable()` during `enable()` wins, and `registrationFailed` with 'Connection Error' or 'Request Timeout' means `network`, not `register_failed`.
+
 **Tech Stack:** Node 24 ESM, express 5, better-sqlite3, node:test; vanilla-JS SPA with `h()`/`Icon()`/`tr()`; JsSIP 3.13.9 (MIT) bundled with esbuild into `public/js/vendor/jssip-3.13.9.mjs`.
 
 **Spec:** `docs/specs/2026-10-29-softphone-design.md`. Branch `feat/softphone` in `easymed.api5`, base `8c96b9a9`. That base is the merged 3.18.0 plus fixes; `act_as` is migration 255 and the highest migration is 258.
@@ -317,6 +328,22 @@ Expected: all PASS.
 Commit the files above with the message «Телефон в Easy-Med: вход своего номера в АТС (telephony_webrtc_me) и «кто звонит» (SOFTPHONE_V1)».
 
 ---
+
+### Task 2b: Number for the phone — assigned by the administrator only (owner decision 2026-10-28)
+
+The review of Task 2 found that any user with the dial right could pick another person's number in «Моя трубка» and then receive that number's SIP password. Owner: «Only admin assigns».
+
+- Migration `259_softphone_assigned_extension.sql` adds `users.pbx_extension_assigned TEXT` (NULL by default, **no backfill**: existing numbers may have been self-picked).
+- The employee card (`server/routes/users.js`, the `body.pbx_extension` branch, reached only by people allowed to edit employees) writes the same value to both `pbx_extension` and `pbx_extension_assigned`. Clearing the field clears both. «Моя трубка» (`telephony_my_extension`) still changes only `pbx_extension`.
+- `telephony_webrtc_me` also requires `pbx_extension === pbx_extension_assigned`. Otherwise it returns 403 «Телефон Easy-Med включается только на внутреннем номере, который администратор назначил вам в карточке сотрудника.», and the PBX is not asked.
+- `telephony_phone_me` adds `softphone_extension` (the assigned number, or ''), so the panel can explain why the switch is off.
+- Employee card: a hint under the number field: «На этом номере сотрудник сможет принимать звонки прямо в Easy-Med».
+- Tests:
+  - the migration leaves existing numbers unassigned;
+  - the card sets both columns, and clearing clears both;
+  - a self-pick of another number makes the phone refuse, and the reviewer's steal scenario (set 107, ask for webrtc) is refused;
+  - picking the assigned number again restores the phone;
+  - a non-admin can't set `pbx_extension_assigned` through any users route.
 
 ### Task 3: The softphone state machine (DOM-free)
 
