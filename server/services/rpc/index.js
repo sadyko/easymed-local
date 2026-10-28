@@ -714,7 +714,9 @@ export const RPC = {
   telephony_dial:            (db, args, user) => telephonyDial(db, args, user),
   // CRM_PHONE_V1 — панель «Телефон» в CRM (бывший EasyPhone): кто я и чем звоню,
   // своя трубка, трубки станции, общий журнал. Каждый вызов — за своим правом
-  // (rpc/phone.js). В READ_ONLY_RPCS не входят — как остальная телефония.
+  // (rpc/phone.js). FIX_318_V1 — чтения (phone_me, extensions, call_log) и
+  // telephony_live — в READ_ONLY_RPCS (control/gate.js): журнал звонков — прошлое
+  // клиники; запись (my_extension) и адрес станции (ring_info, ring_token_rotate) — нет.
   telephony_phone_me:        (db, args, user) => telephonyPhoneMe(db, args, user),
   telephony_my_extension:    (db, args, user) => telephonyMyExtension(db, args, user),
   telephony_extensions:      (db, args, user) => telephonyExtensions(db, args, user),

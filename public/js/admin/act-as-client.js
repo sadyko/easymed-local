@@ -191,12 +191,45 @@ function backButton(cls) {
     }, Icon('ChevronLeft', { size: 14 }), ' ', 'Вернуться к своей учётной записи');
 }
 
+// FIX_318_V1 (ADMIN_ACT_AS_V1) — ВЫСОТА ПОЛОСЫ ДЛЯ ОБОЛОЧКИ. Полоса стоит над
+// .app в общем потоке, а .app, колонка меню и область содержимого рассчитаны на
+// 100vh: экран во всю высоту съезжал на 49 px, страница прокручивалась, низ меню
+// обрезался. Класс has-act-as-banner и --act-as-h на body — CSS
+// (admin-views.css, рядом с #act-as-banner) отнимает высоту полосы от 100vh. Тот
+// же приём, что у полосы пробного периода (clinic-context.js, --tb-h). На узком
+// окне полоса переносится на вторую строку — высота пересчитывается при её
+// изменении (ResizeObserver).
+const BANNER_CLASS = 'has-act-as-banner';
+const BANNER_VAR = '--act-as-h';
+let bannerObserver = null;
+function setBannerSpace(banner) {
+    if (bannerObserver) { try { bannerObserver.disconnect(); } catch (_) { /* уже отключён */ } bannerObserver = null; }
+    const b = typeof document !== 'undefined' ? document.body : null;
+    if (!b) return;
+    const st = b.style;
+    const cl = b.classList;   // стенды оболочки с упрощённым DOM — без classList/style: тогда только полоса
+    if (!banner) {
+        if (cl && typeof cl.remove === 'function') cl.remove(BANNER_CLASS);
+        if (st && typeof st.removeProperty === 'function') st.removeProperty(BANNER_VAR);
+        return;
+    }
+    const sync = () => {
+        const px = Math.round(Number(banner.offsetHeight) || 0);
+        if (st && typeof st.setProperty === 'function') st.setProperty(BANNER_VAR, px + 'px');
+    };
+    if (cl && typeof cl.add === 'function') cl.add(BANNER_CLASS);
+    sync();
+    if (typeof ResizeObserver === 'function') {
+        try { bannerObserver = new ResizeObserver(sync); bannerObserver.observe(banner); } catch (_) { bannerObserver = null; }
+    }
+}
+
 /** Полоса «Вы работаете от имени …». Без входа от имени — снимается и не ставится. */
 export function renderActAsBanner(user = shellUser()) {
     if (typeof document === 'undefined') return null;
     const old = document.getElementById('act-as-banner');
     if (old) old.remove();
-    if (!isActingNow(user)) return null;
+    if (!isActingNow(user)) { setBannerSpace(null); return null; }
     const name = user.full_name || user.username || '';
     const role = actAsRoleText(user);
     const who = role
@@ -209,6 +242,7 @@ export function renderActAsBanner(user = shellUser()) {
             h('span', { class: 'aab-rec' }, 'все действия записываются')),
         backButton('aab-back'));
     document.body.insertBefore(banner, document.querySelector('.app') || document.body.firstChild);
+    setBannerSpace(banner);   // FIX_318_V1 — экран во всю высоту не съезжает под полосу
     return banner;
 }
 

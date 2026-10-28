@@ -6791,15 +6791,11 @@ function _wireBlankEditing(ctx, frame) {
         });
         let _fbHideT = null;
         const showFbar = (fld) => {
-            const r = fld.getBoundingClientRect();
-            const sx = doc.documentElement.scrollLeft || doc.body.scrollLeft || 0;
-            const sy = doc.documentElement.scrollTop || doc.body.scrollTop || 0;
             fbar.style.display = 'block';
-            fbar.style.left = Math.max(6, r.left + sx) + 'px';
-            fbar.style.top = Math.max(6, r.top + sy - 38) + 'px';
             // DOC_RICH_FORMAT_V1 (T3) — в строке простого текста («Диагноз», телефон) таблицы нет
             const tb = fbar.querySelector('[data-cmd="table"]');
             if (tb) tb.style.display = _TBL_OFF.has(fld.getAttribute('data-field') || fld.getAttribute('data-cont-of')) ? 'none' : '';
+            placeFormatBar(doc, fbar, fld);   // FIX_318_V1 — над полем при любом масштабе листа
         };
         // DOC_RICH_FORMAT_V1 (T3) — панель и для продолжения раздела на следующей странице ([data-cont-of])
         doc.addEventListener('focusin', (e) => {
@@ -7315,6 +7311,44 @@ function _blankCaretCell(doc, env) {
     return { cell, host, key: env.keyOf(host) };
 }
 
+// FIX_318_V1 (DOC_RICH_FORMAT_V1) — ПЛАВАЮЩИЕ ПАНЕЛИ НА УВЕЛИЧЕННОМ ЛИСТЕ.
+// Лист увеличен (DOC_ZOOM_V1: body.style.zoom, по умолчанию 130%).
+// getBoundingClientRect отдаёт координаты на экране — уже умноженные на
+// масштаб, — а left/top панели внутри увеличенного body браузер умножает на
+// масштаб ещё раз. При 130% панель оформления вставала на 30% ниже, поверх
+// поля, которое врач правит; окно размера таблицы и панель таблицы уезжали от
+// таблицы так же. Экранная точка переводится в координаты панели делением на
+// её СОБСТВЕННЫЙ масштаб, измеренный на ней же (ширина на экране / ширина в
+// разметке): так верно при любом масштабе, на странице без увеличения (окно
+// шаблонов, position:fixed) и в браузере, где getBoundingClientRect масштаб
+// ещё не учитывает (там отношение — 1).
+/** Во сколько раз плавающий элемент увеличен на экране; скрытый или без размеров — 1. */
+export function floatScale(el) {
+    const w = el ? Number(el.offsetWidth) : 0;
+    const r = w > 0 && typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null;
+    const k = r && r.width ? r.width / w : 1;
+    return Number.isFinite(k) && k > 0.05 ? k : 1;
+}
+/**
+ * Поставить показанный плавающий элемент (absolute — от начала документа, fixed —
+ * от окна) левым верхним углом в экранную точку (x, y) — координаты
+ * getBoundingClientRect его документа; sx/sy — прокрутка документа (для fixed — 0).
+ * Ближе min px к краю не ставится.
+ */
+export function floatAt(el, x, y, { sx = 0, sy = 0, min = 6 } = {}) {
+    const k = floatScale(el);
+    el.style.left = Math.max(min, (x + sx) / k) + 'px';
+    el.style.top = Math.max(min, (y + sy) / k) + 'px';
+}
+/** Панель оформления — над полем, у его левого края, с зазором 6 px на экране (панель уже показана). */
+export function placeFormatBar(doc, fbar, fld) {
+    const r = fld.getBoundingClientRect();
+    const bh = fbar.getBoundingClientRect().height;   // на экране — с масштабом
+    const sx = doc.documentElement.scrollLeft || doc.body.scrollLeft || 0;
+    const sy = doc.documentElement.scrollTop || doc.body.scrollTop || 0;
+    floatAt(fbar, r.left, r.top - bh - 6, { sx, sy });
+}
+
 function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
     // окно шаблонов — position:fixed (координаты окна), бланк — absolute (с прокруткой документа)
     const sx = () => (env.fixed ? 0 : doc.documentElement.scrollLeft || doc.body.scrollLeft || 0);
@@ -7418,11 +7452,15 @@ function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
         setSize(3, 4);
         const b = btn.getBoundingClientRect();
         const docH = env.fixed ? (doc.defaultView ? doc.defaultView.innerHeight : 800) : doc.documentElement.scrollHeight;   // до показа: окно не должно удлинять лист
-        pick.style.left = Math.max(6, b.left + sx() - 120) + 'px';
-        pick.style.top = (b.bottom + sy() + 6) + 'px';
+        // FIX_318_V1 — размеры окна на экране (с масштабом листа), место — через floatAt;
+        // сначала в начало документа: прежнее место у края не должно сужать окно при замере
+        pick.style.left = '0px'; pick.style.top = '0px';
         pick.style.display = 'block';
+        const k = floatScale(pick);
+        const ph = pick.getBoundingClientRect().height;
         // у конца листа места снизу нет — окно открывается вверх от кнопки
-        if (b.bottom + sy() + 6 + pick.offsetHeight > docH) pick.style.top = Math.max(6, b.top + sy() - pick.offsetHeight - 6) + 'px';
+        const y = b.bottom + sy() + 6 + ph > docH ? b.top - ph - 6 : b.bottom + 6;
+        floatAt(pick, b.left - 120 * k, y, { sx: sx(), sy: sy() });
     };
 
     // ─── панель таблицы ────────────────────────────────────────────────────────
@@ -7458,8 +7496,10 @@ function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
         const clip = env.clipOf ? env.clipOf(cc.host) : null;
         if (clip && (r.bottom < clip.top || r.top > clip.bottom)) { panel.style.display = 'none'; return; }
         panel.style.display = 'block';
-        panel.style.left = Math.max(6, r.right + sx() - panel.offsetWidth) + 'px';
-        panel.style.top = (clip ? Math.max(clip.top, Math.min(r.bottom + 6, clip.bottom - panel.offsetHeight - 4)) : r.bottom + sy() + 6) + 'px';
+        // FIX_318_V1 — размеры панели на экране (с масштабом листа), место — через floatAt
+        const pr = panel.getBoundingClientRect();
+        const y = clip ? Math.max(clip.top, Math.min(r.bottom + 6, clip.bottom - pr.height - 4)) : r.bottom + 6;
+        floatAt(panel, r.right - pr.width, y, { sx: sx(), sy: sy() });
         const rb = panel.querySelector('[data-tbl="row-"]');
         const can = canRemoveRow(cc.cell, env.partsOf(cc.key));
         rb.disabled = !can;

@@ -9,7 +9,7 @@
 // R1/R2/R4 — services/act-as-rules.js; маршруты — routes/auth.js.
 import { SESSION_USER_COLUMNS, closeActAs, sessionUser } from './auth.js';
 import { actAsStartRefusal, actAsTargetRefusal, ACT_AS_MAX_MS } from './act-as-rules.js';
-import { isReadOnlyRpc } from './control/gate.js';
+import { isReadRpc } from './control/gate.js';   // FIX_318_V1 — и чтения из ALWAYS_ALLOWED (licence_status)
 import { ACT_AS_END, ACT_AS_MESSAGES } from '../../public/js/shared/act-as.js';
 
 const nowIso = () => new Date().toISOString().slice(0, 19) + 'Z';
@@ -100,7 +100,7 @@ export function recordActAsAction(db, actAsId, kind, name, status) {
     .run(actAsId, kind, name, Number.isInteger(status) ? status : null);
 }
 
-const readOnly = (a) => a.kind === 'rpc' && isReadOnlyRpc(a.name);
+const readOnly = (a) => a.kind === 'rpc' && isReadRpc(a.name);   // FIX_318_V1 (ADMIN_ACT_AS_V1)
 const SESSION_COLS = 'id, admin_id, admin_name, target_id, target_name, started_at, ended_at, end_reason';
 export const ACT_AS_LOG_SESSIONS = 100;
 export const ACT_AS_LOG_ACTIONS = 5000;

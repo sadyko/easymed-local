@@ -306,6 +306,44 @@ test('журнал: записи /api/db, все RPC и записи /api/users 
   } finally { server.close(); }
 });
 
+// FIX_318_V1 (ADMIN_ACT_AS_V1) — чтения выпуска 3.18.0 (меню, лицензия, панель
+// «Телефон», «Реферирование») журнал помечает «только чтение» и не считает
+// записями. До исправления оболочка, открытая от имени, давала «Действий: 37 ·
+// записей: 9» при одной настоящей записи: эти RPC не были в списке чтений
+// ворот лицензии (control/gate.js), который читает журнал.
+test('FIX_318_V1: журнал — чтения 3.18.0 и licence_status помечены «только чтение» и не считаются записями', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    await actAs(base, boss, REG);
+    const id = actingSession(db, BOSS).act_as_id;
+    const reads = ['nav_visibility_get', 'licence_status', 'get_clinic_by_slug', 'telephony_phone_me', 'telephony_live',
+      'telephony_call_log', 'referrals_activity'];
+    for (const n of reads) await rpc(base, boss, n, {});
+    assert.equal((await rpc(base, boss, 'nav_visibility_get', {})).status, 200);
+    assert.equal((await rpc(base, boss, 'licence_status', {})).status, 200);
+    // Одна настоящая запись и одна попытка записи 3.18.0 (отказ — тоже запись журнала).
+    const ext = await rpc(base, boss, 'telephony_my_extension', { extension: '101' });
+    assert.equal(ext.status, 200, JSON.stringify(ext.json));
+    const save = await rpc(base, boss, 'nav_visibility_save', { hidden: [] });
+    assert.equal(save.status, 403, 'видимость разделов меняет администратор');
+    await back(base, boss);
+
+    const r = await call(base, boss, 'GET', `/api/auth/act-as/log?user_id=${REG}&act_as_id=${id}`);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const flags = r.json.actions.map((a) => [a.name, a.read_only]);
+    assert.deepEqual(flags, [
+      ...reads.map((n) => [n, true]),
+      ['nav_visibility_get', true], ['licence_status', true],
+      ['telephony_my_extension', false], ['nav_visibility_save', false],
+    ]);
+    assert.equal(r.json.session.action_count, reads.length + 4);
+    assert.equal(r.json.session.write_count, 2, 'записи — только telephony_my_extension и попытка nav_visibility_save');
+    const list = await call(base, boss, 'GET', '/api/auth/act-as/log?user_id=' + REG);
+    assert.equal(list.json.sessions[0].write_count, 2, 'список сеансов считает так же');
+  } finally { server.close(); }
+});
+
 // ─── R3: подпись документов врача от чужого имени ───────────────────────────
 
 test('R3: заключение приёма — новая или изменённая подпись от имени — 403; черновик — можно; сам врач — подписывает', async () => {
