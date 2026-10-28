@@ -124,7 +124,7 @@ test('M1: токен пациентского бота (getMe().id = telegram_se
 test('M1: тот же бот узнаётся по токену ещё до Telegram (номер бота — начало токена), даже если у пациентского бота нет bot_id', withDataDir(async () => {
   const db = fresh();
   assert.equal(botIdOfToken(TOKEN), '1234567890');
-  db.prepare('UPDATE telegram_settings SET bot_token_enc = ?, bot_id = \'\' WHERE id = 1').run(encryptToken('1234567890:AAEpatientpatientpatientpatient0000', loadOrCreateKey()));
+  db.prepare('UPDATE telegram_settings SET bot_token_enc = ?, bot_id = \'\' WHERE id = 1').run(encryptToken('1234567890:TESTONLY-patient-bot-token', loadOrCreateKey()));
   await assert.rejects(() => doctorBotSettingsSave(db, { bot_token: TOKEN }, admin, neverFetch), (e) => e.status === 400 && e.message === SAME_BOT_MESSAGE);
   assert.equal(doctorBotSettingsGet(db, {}, admin).has_token, false);
 }));
