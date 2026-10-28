@@ -14,7 +14,7 @@
 import nodeTest from 'node:test';
 const test = (name, fn) => nodeTest(name, { timeout: 20000 }, fn);
 import assert from 'node:assert/strict';
-import { installFakeDom, El } from './cabinet-harness.mjs';
+import { installFakeDom, El, CONFIRMS, answerConfirm } from './cabinet-harness.mjs';
 import { miniDocument, el, HIDE_ATTRS } from './mini-dom.mjs';
 import { sanitizeStoredHtml, richHasContent } from '../../shared/rich-text.js';
 import { NOTES_BASE_KEY, notesWriteRefusal } from '../../shared/cabinet-notes.js';
@@ -68,13 +68,31 @@ globalThis.fetch = async (url, opts) => {
 const all = (root, pred, out = []) => { for (const c of root.children || []) { if (pred(c)) out.push(c); all(c, pred, out); } return out; };
 const byText = (root, text) => all(root, (e) => e.tagName === 'BUTTON' && String(e.textContent).includes(text))[0];
 const byAttr = (root, a, v) => all(root, (e) => e.getAttribute && e.getAttribute(a) !== null && (v === undefined || e.getAttribute(a) === v));
+// Ревью T4 — клавиши идут, как в браузере: от элемента вверх к документу; слушатели
+// документа — по порядку подписки, stopPropagation останавливает. Селектор «td,th»
+// (ячейка под курсором) стенд понимает списком через запятую.
+const DOC_L = {};
+document.addEventListener = (t, fn) => { (DOC_L[t] || (DOC_L[t] = [])).push(fn); };
+document.removeEventListener = (t, fn) => { const a = DOC_L[t] || []; const i = a.indexOf(fn); if (i > -1) a.splice(i, 1); };
+const _matches = El.prototype.matches;
+El.prototype.matches = function (sel) { return String(sel).split(',').some((s) => _matches.call(this, s.trim())); };
+function fire(target, type, init = {}) {
+    let stop = false;
+    const ev = { type, target, isTrusted: true, defaultPrevented: false, ...init, preventDefault() { this.defaultPrevented = true; }, stopPropagation() { stop = true; } };
+    for (let n = target; n && !stop; n = n.parentElement) for (const fn of [...((n._l && n._l[type]) || [])]) { ev.currentTarget = n; fn(ev); }
+    if (!stop) for (const fn of [...(DOC_L[type] || [])]) { ev.currentTarget = document; fn(ev); }
+    return ev;
+}
 async function openModal(rows) {
     TEMPLATES = rows;
     for (const c of [...document.body.children]) c.remove();
+    for (const k of Object.keys(DOC_L)) delete DOC_L[k];
+    delete document.getSelection;
     WS.openTemplateLibraryModal(null, { manage: true });
     await tick(5);
     return document.body;
 }
+const modalOpen = () => all(document.body, (e) => e.className === 'modal').length === 1;
 
 const TABLE3 = (cells) => '<table class="a4-tbl"><thead><tr>' + cells.slice(0, 3).map((c) => '<th>' + c + '</th>').join('') + '</tr></thead><tbody>'
     + [3, 6].map((i) => '<tr>' + cells.slice(i, i + 3).map((c) => '<td>' + c + '</td>').join('') + '</tr>').join('') + '</tbody></table>';
@@ -236,4 +254,118 @@ test('T4: стили — списки и таблица в разделе шаб
     assert.match(css, /\.tplm-textarea:empty::before, \.tplm-textarea\.is-empty::before \{[^}]*content: attr\(data-ph\)/);
     assert.match(css, /\.tplm-fmt \{[^}]*position: sticky/);
     assert.match(css, /\.tplm-sec-b \{[^}]*white-space: normal/);
+    // ревью T4 (LOW) — «Заключение» диагностики: панель погашена, подсказка видна
+    assert.match(css, /\.tplm-fmt\.is-plain button \{[^}]*opacity/);
+    assert.match(css, /\.tplm-fmt\.is-plain \.tplm-fmt-hint \{[^}]*display: inline/);
+});
+
+// ─── ревью T4 (MEDIUM): Escape набора таблицы не закрывает окно с черновиком ──
+async function draftWithText() {
+    const root = await openModal([]);
+    byText(root, 'Новый шаблон').dispatch('click');
+    const name = all(root, (e) => e.className === 'tplm-input')[0];
+    name.value = 'Черновик'; name.dispatch('input');
+    const box = byAttr(root, 'data-tpl-sec', 'physical_exam')[0];
+    box.innerHTML = 'Важный текст черновика'; box.dispatch('input');
+    return { root, name, box };
+}
+test('ревью T4: Escape на «Вставить таблицу» и в полях окна размера закрывает только окно размера — окно шаблонов и черновик на месте', async () => {
+    const { root, name } = await draftWithText();
+    const pick = byAttr(root, 'data-bk-tblpick')[0];
+    const ins = byAttr(pick, 'data-bk-tblins')[0];
+    pick.style.display = 'block';   // окно размера открыто (openPicker)
+    CONFIRMS.length = 0;
+    const ev = fire(ins, 'keydown', { key: 'Escape' });
+    assert.ok(modalOpen(), 'Escape в окне размера закрыл окно шаблонов');
+    assert.equal(pick.style.display, 'none', 'окно размера не закрылось');
+    assert.ok(ev.defaultPrevented, 'Escape окна размера не помечен обработанным');
+    assert.equal(name.value, 'Черновик');
+    assert.equal(CONFIRMS.length, 0, 'вопрос о несохранённом — без закрытия окна');
+    pick.style.display = 'block';
+    const num = all(pick, (e) => e.tagName === 'INPUT')[0];
+    fire(num, 'keydown', { key: 'Escape' });
+    assert.ok(modalOpen(), 'Escape в поле числа закрыл окно шаблонов');
+    assert.equal(pick.style.display, 'none');
+});
+
+test('ревью T4: Escape с курсором в ячейке таблицы раздела (панель таблицы видна) — только панель; окно шаблонов на месте', async () => {
+    const { root, box } = await draftWithText();
+    box.setAttribute('contenteditable', 'true');   // браузер пишет атрибут строчными, стенд — как задано
+    const table = new El('table'); const tr0 = new El('tr'); const td = new El('td'); const txt = new El('span');
+    td.appendChild(txt); tr0.appendChild(td); table.appendChild(tr0); box.appendChild(table);
+    document.getSelection = () => ({ rangeCount: 1, anchorNode: txt, anchorOffset: 0 });   // курсор — в тексте ячейки
+    const panel = byAttr(root, 'data-bk-tbl')[0];
+    panel.style.display = 'block';
+    CONFIRMS.length = 0;
+    fire(td, 'keydown', { key: 'Escape' });
+    assert.ok(modalOpen(), 'Escape в ячейке закрыл окно шаблонов');
+    assert.equal(panel.style.display, 'none', 'панель таблицы не скрылась');
+    // панель уже скрыта, курсор всё ещё в ячейке — Escape по-прежнему не закрывает окно
+    fire(td, 'keydown', { key: 'Escape' });
+    assert.ok(modalOpen(), 'второй Escape в ячейке закрыл окно шаблонов');
+    // Escape на панели таблицы — её, дальше не идёт
+    panel.style.display = 'block';
+    const ev = fire(all(panel, (e) => e.tagName === 'BUTTON')[0], 'keydown', { key: 'Escape' });
+    assert.ok(ev.defaultPrevented && modalOpen() && panel.style.display === 'none');
+    assert.equal(CONFIRMS.length, 0);
+});
+
+test('ревью T4: окно с несохранённым черновиком закрывается только после «Закрыть без сохранения?» (Escape, щелчок мимо окна, «×»); без правок — сразу', async () => {
+    // без правок — без вопроса
+    let root = await openModal([]);
+    byText(root, 'Новый шаблон').dispatch('click');
+    CONFIRMS.length = 0;
+    fire(document.body, 'keydown', { key: 'Escape' });
+    assert.ok(!modalOpen(), 'чистый черновик: Escape не закрыл окно');
+    assert.equal(CONFIRMS.length, 0, 'чистый черновик: лишний вопрос');
+    // правки — вопрос; «Отмена» вопроса — окно и черновик на месте
+    const closers = [
+        ['Escape', (r) => fire(document.body, 'keydown', { key: 'Escape' })],
+        ['щелчок мимо окна', (r) => all(r, (e) => e.className === 'modal-backdrop')[0].dispatch('click')],
+        ['«×»', (r) => all(r, (e) => e.className === 'modal-close')[0].dispatch('click')],
+    ];
+    try {
+        for (const [how, act] of closers) {
+            ({ root } = await draftWithText());
+            CONFIRMS.length = 0;
+            answerConfirm(false);
+            act(root);
+            assert.equal(CONFIRMS.length, 1, how + ': нет вопроса');
+            assert.equal(CONFIRMS[0], 'Шаблон не сохранён. Закрыть без сохранения?');
+            assert.ok(modalOpen(), how + ': окно закрылось после «Отмена»');
+            assert.equal(byAttr(root, 'data-tpl-sec', 'physical_exam')[0].innerHTML, 'Важный текст черновика');
+            answerConfirm(true);
+            act(root);
+            assert.ok(!modalOpen(), how + ': окно не закрылось после «ОК»');
+        }
+    } finally { answerConfirm(true); }
+    // «Отмена» формы — осознанный отказ от черновика, без вопроса
+    ({ root } = await draftWithText());
+    CONFIRMS.length = 0;
+    byText(all(root, (e) => e.tagName === 'FOOTER')[0], 'Отмена').dispatch('click');
+    assert.equal(CONFIRMS.length, 0);
+    assert.equal(byAttr(root, 'data-tpl-sec').length, 0);
+});
+
+// ─── ревью T4 (LOW): «Заключение» диагностики — только текст ─────────────────
+test('ревью T4: «Заключение» шаблона диагностики (primary_diagnosis) — без таблицы и оформления: панель погашена с подсказкой', async () => {
+    const root = await openModal([]);
+    byText(root, 'Новый шаблон').dispatch('click');
+    byAttr(root, 'data-dt', '1')[0].dispatch('click');
+    const bar = byAttr(root, 'data-tpl-fmt')[0];
+    assert.ok(bar.innerHTML.includes('В заключении — только текст'), 'подсказки нет');
+    const dx = byAttr(root, 'data-tpl-sec', 'primary_diagnosis')[0];
+    const instr = byAttr(root, 'data-tpl-sec', 'instrumental_text')[0];
+    assert.ok(!bar.classList.contains('is-plain'), 'панель погашена до фокуса');
+    dx.dispatch('focus');
+    assert.ok(bar.classList.contains('is-plain'), 'в «Заключении» панель не погашена');
+    instr.dispatch('focus');
+    assert.ok(!bar.classList.contains('is-plain'), 'в разделе с оформлением панель погашена');
+    // таблица: в «Заключение» — нет, в прочие разделы — да
+    const doc = miniDocument();
+    const env = WS.templateTableEnv(doc);
+    const dxBox = el(doc, '<div data-tpl-sec="primary_diagnosis" contenteditable="true">Заключение</div>');
+    const exBox = el(doc, '<div data-tpl-sec="instrumental_text" contenteditable="true">УЗИ</div>');
+    assert.equal(env.tablesOn(dxBox), false);
+    assert.equal(env.tablesOn(exBox), true);
 });

@@ -4691,13 +4691,29 @@ export function openTemplateLibraryModal(ctx, profile = null) {
         backdrop.remove(); modal.remove(); document.removeEventListener('keydown', onKey);
         if (tblApi) { tblApi.dispose(); tblApi = null; }
     };
-    // Escape при открытом окне размера таблицы закрывает только его — не окно шаблонов с черновиком
-    const onKey = (e) => {
-        if (e.key !== 'Escape') return;
-        if (tblApi && tblApi.picking()) { tblApi.hideUi(); return; }
+    // DOC_RICH_FORMAT_V1 (ревью T4) — черновик с правками не пропадает молча: Escape, щелчок
+    // мимо окна и «×» спрашивают «Закрыть без сохранения?». Правки — отличие от снимка
+    // черновика при открытии формы (то, что ушло бы в шаблон); «Отмена» формы — осознанный
+    // отказ, без вопроса.
+    const draftSnaps = new WeakMap();
+    const draftSnap = (d) => JSON.stringify([String(d.name || '').trim(), d.scope, Number(d.doc_type), tplSaveBody(d)]);
+    const draftDirty = () => {
+        const d = tplState.draft;
+        if (!d || (tplState.mode !== 'new' && tplState.mode !== 'edit') || !draftSnaps.has(d)) return false;
+        return draftSnaps.get(d) !== draftSnap(d);
+    };
+    const requestClose = () => {
+        if (draftDirty() && !confirm(tr('Шаблон не сохранён. Закрыть без сохранения?'))) return;
         close();
     };
-    backdrop.addEventListener('click', close);
+    // ревью T4 (MEDIUM) — Escape набора таблицы (из окна размера или панели, при открытом одном
+    // из них, с курсором в ячейке таблицы раздела) скрывает их, а не окно шаблонов с черновиком
+    const onKey = (e) => {
+        if (e.key !== 'Escape' || e.defaultPrevented) return;
+        if (tblApi && tblApi.escapeOwned(e)) { tblApi.hideUi(); return; }
+        requestClose();
+    };
+    backdrop.addEventListener('click', requestClose);
 
     const listEl   = h('div', { class: 'tplm-list' });
     const detailEl = h('div', { class: 'tplm-detail' });
@@ -4741,7 +4757,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
     const card = h('div', { class: 'modal-card tplm-card' },
         h('header', { class: 'modal-head' },
             h('h2', { style: { margin: 0 } }, Icon('Doc', { size: 16 }), ' ', manage ? 'Шаблоны документов' : 'Шаблоны заключений'),
-            h('button', { class: 'modal-close', type: 'button', onclick: close }, '×'),
+            h('button', { class: 'modal-close', type: 'button', onclick: requestClose }, '×'),   // DOC_RICH_FORMAT_V1 (ревью T4)
         ),
         h('div', { class: 'tplm-bar' },
             h('div', { class: 'tplm-search' }, Icon('Search', { size: 14 }), searchIn),
@@ -4850,6 +4866,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
     // ---- paint: form (new | edit) ----------------------------------------
     function paintForm() {
         const d = tplState.draft;
+        if (!draftSnaps.has(d)) draftSnaps.set(d, draftSnap(d));   // DOC_RICH_FORMAT_V1 (ревью T4) — черновик, каким открыт
         const nameIn = h('input', { class: 'tplm-input', value: d.name,
             placeholder: 'Например: Контрольный осмотр после операции',
             oninput: () => { d.name = nameIn.value; } });
@@ -4864,6 +4881,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
         function paintSecFields() {
             clear(secFields);
             lastBox = null;
+            fmtPlain(null);
             if (tblApi) tblApi.hideUi();
             const _T = tplTypeOf(d.doc_type);
             for (const k of _T.keys) {
@@ -4877,7 +4895,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
                 const ed = h('div', { class: 'tplm-textarea', 'data-tpl-sec': k, contentEditable: 'true',
                     'data-ph': tr('Текст секции…'),
                     style: { whiteSpace: 'normal', overflowWrap: 'anywhere' },
-                    onfocus: (e) => { lastBox = e.currentTarget; },
+                    onfocus: (e) => { lastBox = e.currentTarget; fmtPlain(lastBox); },
                     oninput: (e) => { tplSecSync(e.currentTarget, k); } });
                 ed.innerHTML = textBreaks(sanitizeStoredHtml(d.body[k] || ''));   // DOC_RICH_FORMAT_V1
                 if (!richHasContent(ed.innerHTML)) ed.classList.add('is-empty');
@@ -4892,7 +4910,6 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             d.body[key] = tplSecValue(box);
             box.classList.toggle('is-empty', !d.body[key]);
         }
-        paintSecFields();
 
         // DOC_RICH_FORMAT_V1 (T4) — ПАНЕЛЬ ОФОРМЛЕНИЯ РАЗДЕЛОВ. Одна, над разделами,
         // прилипает к верху окна при прокрутке. Не плавающая, как на листе: врач
@@ -4900,21 +4917,29 @@ export function openTemplateLibraryModal(ctx, profile = null) {
         // где таблица), и она не закрывает соседний раздел. Кнопки — те же, что у
         // документа (_fmtButtonsHtml). Действует на раздел с курсором; курсора в
         // разделе нет — на последний, где врач был (или первый), курсор — в конец.
+        // Ревью T4 (LOW) — «Заключение» диагностики (primary_diagnosis) лист рисует
+        // простым текстом: в нём панель погашена, с подсказкой, и таблицы нет.
         const fmtBar = h('div', { class: 'tplm-fmt', 'data-tpl-fmt': '', role: 'toolbar', 'aria-label': 'Оформление текста' });
-        fmtBar.innerHTML = _fmtButtonsHtml();
+        fmtBar.innerHTML = _fmtButtonsHtml() + '<span class="tplm-fmt-hint">' + escapeHtml(tr('В заключении — только текст')) + '</span>';
+        const plainBox = (box) => !!box && _TBL_OFF.has(box.getAttribute('data-tpl-sec'));
+        function fmtPlain(box) {
+            const plain = plainBox(box);
+            fmtBar.classList.toggle('is-plain', plain);
+            for (const b of fmtBar.querySelectorAll('[data-cmd]')) { if (plain) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled'); }
+        }
         const fmtBox = () => {
             const s = typeof document.getSelection === 'function' ? document.getSelection() : null;
             const n = s && s.rangeCount ? s.anchorNode : null;
             const el = n && (n.nodeType === 1 ? n : n.parentElement);
             const inBox = el && el.closest ? el.closest('[data-tpl-sec]') : null;
-            if (inBox && secFields.contains(inBox)) {
+            if (inBox && _within(secFields, inBox)) {
                 if (document.activeElement !== inBox) {   // клавиатура: фокус на кнопке — вернуть его, не теряя выделения
                     const r = s.getRangeAt(0).cloneRange();
                     try { inBox.focus({ preventScroll: true }); s.removeAllRanges(); s.addRange(r); } catch (e) { /* по возможности */ }
                 }
                 return inBox;
             }
-            const box = (lastBox && lastBox.isConnected && secFields.contains(lastBox)) ? lastBox : secFields.querySelector('[data-tpl-sec]');
+            const box = (lastBox && lastBox.isConnected && _within(secFields, lastBox)) ? lastBox : secFields.querySelector('[data-tpl-sec]');
             if (!box) return null;
             try {
                 box.focus({ preventScroll: true });
@@ -4929,6 +4954,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             e.preventDefault();   // выделение остаётся в разделе
             const box = fmtBox();
             if (!box) return;
+            if (plainBox(box)) { fmtPlain(box); return; }   // ревью T4 — «Заключение»: только текст
             const raw = b.getAttribute('data-cmd');
             if (raw === 'table') { if (tblApi) tblApi.openPicker(b); return; }
             _fmtRun(document, raw, b.getAttribute('data-val'));
@@ -4936,6 +4962,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
         };
         fmtBar.addEventListener('mousedown', fmtPress);
         fmtBar.addEventListener('click', (e) => { if (e.detail === 0) fmtPress(e); });   // Enter / пробел на кнопке
+        paintSecFields();
 
         const fromDoc = canReadDoc ? h('button', { class: 'btn btn-outline btn-sm', type: 'button',
             onclick: () => { d.body = { ...tplBlankBody(d.doc_type), ...tplCollectDocBody(ctx, d.doc_type, profile) }; paintSecFields(); toast('Заполнено из текущего документа', 'ok'); } },
@@ -7241,7 +7268,8 @@ function _tblEnvTemplate(doc) {
         hostOf,
         keyOf: (host) => host.getAttribute('data-tpl-sec'),
         partsOf: (key) => [...doc.querySelectorAll('[data-tpl-sec="' + key + '"]')],
-        tablesOn: (host) => !!host && host.getAttribute('contenteditable') === 'true',
+        // ревью T4 (LOW) — «Заключение» диагностики (primary_diagnosis) — строка простого текста, как на листе
+        tablesOn: (host) => !!host && host.getAttribute('contenteditable') === 'true' && !_TBL_OFF.has(host.getAttribute('data-tpl-sec')),
         fixed: true,
         // видимая часть окна шаблонов (правая половина прокручивается): панель таблицы — в её пределах
         clipOf: (host) => { const v = host && host.closest ? host.closest('.tplm-detail') : null; return v ? v.getBoundingClientRect() : null; },
@@ -7270,9 +7298,14 @@ function _blankFireInput(host) {
         host.dispatchEvent(new E('input', { bubbles: true }));
     } catch (e) { /* без события форма догонит на следующем вводе */ }
 }
+// n — внутри box (или сам box)
+function _within(box, n) {
+    for (let x = n; x; x = x.parentNode || x.parentElement) if (x === box) return true;
+    return false;
+}
 // Ячейка под курсором — в правимой части поля с таблицами; повтор заголовка — не ячейка.
 function _blankCaretCell(doc, env) {
-    const s = doc.getSelection();
+    const s = typeof doc.getSelection === 'function' ? doc.getSelection() : null;
     const n = s && s.rangeCount ? s.anchorNode : null;
     const el = n && (n.nodeType === 1 ? n : n.parentElement);
     const cell = el && el.closest ? el.closest('td,th') : null;
@@ -7361,13 +7394,20 @@ function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
     };
     grid.addEventListener('mouseover', (e) => { const c = e.target.closest && e.target.closest('[data-r]'); if (c) setSize(c.getAttribute('data-r'), c.getAttribute('data-c')); });
     grid.addEventListener('mousedown', (e) => { const c = e.target.closest && e.target.closest('[data-r]'); if (!c) return; e.preventDefault(); setSize(c.getAttribute('data-r'), c.getAttribute('data-c')); insertNow(); });
+    // ревью T4 (MEDIUM) — Escape окна размера — его: закрыть окно, курсор — туда, где был; дальше
+    // событие не идёт (в окне шаблонов Escape документа закрыл бы окно вместе с черновиком)
+    const escPicker = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        closePicker();
+        if (saved) _blankPutCaret(doc, env, saved);
+    };
     for (const i of [rowsI, colsI]) {
         i.addEventListener('input', () => setSize(rowsI.value, colsI.value, true));
         // Enter поля числа — вставка; дальше по документу событие не идёт (курсор уже в новой ячейке)
-        i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); insertNow(); } else if (e.key === 'Escape') { e.stopPropagation(); closePicker(); } });
+        i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); insertNow(); } else if (e.key === 'Escape') escPicker(e); });
     }
     ins.addEventListener('click', (e) => { e.preventDefault(); insertNow(); });
-    pick.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePicker(); });
+    pick.addEventListener('keydown', (e) => { if (e.key === 'Escape') escPicker(e); });
     on(doc, 'mousedown', (e) => { if (pick.style.display !== 'none' && !pick.contains(e.target) && !(e.target.closest && e.target.closest('[data-cmd="table"]'))) closePicker(); }, true);
     const openPicker = (btn) => {
         const s = doc.getSelection();
@@ -7406,6 +7446,7 @@ function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
         panel.appendChild(b);
     }
     doc.body.appendChild(panel);
+    const shown = () => pick.style.display === 'block' || panel.style.display === 'block';   // окно размера или панель на экране
     const refresh = () => {
         const cc = _blankCaretCell(doc, env);
         if (!cc) { panel.style.display = 'none'; return; }
@@ -7505,6 +7546,8 @@ function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
         e.preventDefault();   // выделение остаётся в ячейке
         if (!b.disabled) run(b.getAttribute('data-tbl'));
     });
+    // ревью T4 (MEDIUM) — Escape на кнопке панели — скрыть панель, дальше не идёт
+    panel.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideUi(); } });
     // набранное врачом после операции — отмена уже не про неё (наши события input — не isTrusted)
     on(doc, 'input', (e) => { if (e.isTrusted) forgetUndo(); });
 
@@ -7529,7 +7572,8 @@ function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
     // ─── скрыть панели ─────────────────────────────────────────────────────────
     const hideUi = () => { panel.style.display = 'none'; closePicker(); };
     on(doc.defaultView, 'blur', hideUi);
-    on(doc, 'keydown', (e) => { if (e.key === 'Escape') hideUi(); });
+    // ревью T4 — Escape, который что-то скрыл, помечен обработанным: окно шаблонов его не берёт
+    on(doc, 'keydown', (e) => { if (e.key !== 'Escape') return; if (shown()) e.preventDefault(); hideUi(); });
 
     // ─── клавиши в ячейке ──────────────────────────────────────────────────────
     on(doc, 'keydown', (e) => {
@@ -7574,10 +7618,16 @@ function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
         clearTimeout(undoT);
         pick.remove(); panel.remove();
     };
-    const picking = () => pick.style.display !== 'none';
-    return { openPicker, dispose, hideUi, picking };
+    // ревью T4 (MEDIUM) — Escape — дело набора таблицы, если он из окна размера или панели, если
+    // одно из них открыто или курсор в ячейке таблицы: окно шаблонов тогда не закрывается
+    const escapeOwned = (e) => {
+        const t = e && e.target;
+        return _within(pick, t) || _within(panel, t) || shown() || !!_blankCaretCell(doc, env);
+    };
+    return { openPicker, dispose, hideUi, escapeOwned };
 }
 export const wireTables = (doc) => _blankWireTables(doc);   // DOC_RICH_FORMAT_V1 (T3) — экспорт для проверки (headless Chrome)
+export const templateTableEnv = (doc) => _tblEnvTemplate(doc);   // DOC_RICH_FORMAT_V1 (ревью T4) — экспорт для проверки
 
 // Продолжение поля на следующей странице: обёртка с видом блока (.sec) и поле
 // [data-cont-of] с видом раздела (.sec-b), которое правит то же поле формы.

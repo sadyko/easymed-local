@@ -12112,5 +12112,8 @@ export const STRINGS = {
   "Удалить столбец вместе с текстом в нём?": {"en":"Delete the column together with its text?","ru":"Удалить столбец вместе с текстом в нём?","uz":"Ustun ichidagi matn bilan birga o‘chirilsinmi?"},   // DOC_RICH_FORMAT_V1
   "Отменить действие": {"en":"Undo","ru":"Отменить действие","uz":"Amalni bekor qilish"},   // DOC_RICH_FORMAT_V1
   "Вернуть таблицу, как была до последней операции": {"en":"Restore the table as it was before the last change","ru":"Вернуть таблицу, как была до последней операции","uz":"Jadvalni oxirgi amaldan oldingi holatiga qaytarish"},   // DOC_RICH_FORMAT_V1
+  // DOC_RICH_FORMAT_V1 (ревью T4) — окно шаблонов: несохранённый черновик, «Заключение» диагностики — только текст
+  "Шаблон не сохранён. Закрыть без сохранения?": {"en":"The template is not saved. Close without saving?","ru":"Шаблон не сохранён. Закрыть без сохранения?","uz":"Shablon saqlanmagan. Saqlamasdan yopilsinmi?"},   // DOC_RICH_FORMAT_V1
+  "В заключении — только текст": {"en":"Conclusion: plain text only","ru":"В заключении — только текст","uz":"Xulosada — faqat matn"},   // DOC_RICH_FORMAT_V1
   // /DOC_RICH_FORMAT_V1
 };

@@ -2427,6 +2427,11 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     gap: 1px; background: #111827; border-radius: 8px; padding: 3px; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
 .tplm-fmt button:hover { background: rgba(255,255,255,.12) !important; }
 .tplm-fmt button:focus-visible { outline: 2px solid #99f6e4; outline-offset: -2px; }
+/* ревью T4 — в «Заключении» диагностики (только текст) панель погашена, с подсказкой */
+.tplm-fmt-hint { display: none; color: #cbd5e1; font-size: 12.5px; padding: 0 8px; }
+.tplm-fmt.is-plain button { opacity: .4; cursor: default; }
+.tplm-fmt.is-plain button:hover { background: transparent !important; }
+.tplm-fmt.is-plain .tplm-fmt-hint { display: inline; }
 .tplm-scopepick { display: flex; gap: 8px; }
 .tplm-scopepick .tplm-scopebtn { flex: 1; display: inline-flex; align-items: center; justify-content: center;
     gap: 7px; padding: 9px; border: 1px solid var(--ink-200); border-radius: var(--r-sm);
