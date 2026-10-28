@@ -335,12 +335,24 @@ export function docActionsBar(ed, { onDone = null } = {}) {
         },
     }, icon, ' ', tr(label)));
 
+    // ADMIN_ACT_AS_V1 (R3) — ed.signLock: текст отказа, пока администратор
+    // работает от имени сотрудника (admission-modal.js buildReviewEditor).
+    // Запись стационара — и черновик тоже — от чужого имени не пишется:
+    // кнопки неактивны, подсказка — тот же текст, что у отказа сервера.
+    const lock = (btn) => {
+        if (ed.signLock && btn) {
+            btn.disabled = true;
+            btn.setAttribute('title', tr(ed.signLock));
+            btn.setAttribute('data-act-as-lock', '');
+        }
+        return btn;
+    };
     // Слева — то, что документу помогает; справа — то, чем документ кончается.
     if (ed.applyTemplate) add('Заготовка', Icon('Copy', { size: 14 }), 'btn-ghost', () => { ed.applyTemplate(); return false; });
     if (ed.print) add('Печать', Icon('Print', { size: 14 }), 'btn-ghost', () => { ed.print(); return false; });
     bar.appendChild(h('span', { class: 'grow' }));
-    if (ed.secondaryLabel) add(ed.secondaryLabel, Icon('Edit', { size: 14 }), 'btn-outline', () => { ed.secondary(); return false; });
-    if (ed.submitLabel) add(ed.submitLabel, Icon('Check', { size: 14 }), 'btn-primary', () => ed.submit());
+    if (ed.secondaryLabel) lock(add(ed.secondaryLabel, Icon('Edit', { size: 14 }), 'btn-outline', () => { ed.secondary(); return false; }));
+    if (ed.submitLabel) lock(add(ed.submitLabel, Icon('Check', { size: 14 }), 'btn-primary', () => ed.submit()));
     return bar.children.length ? bar : null;
 }
 

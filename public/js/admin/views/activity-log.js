@@ -7,7 +7,10 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon } from '../ui.js';
+// ADMIN_ACT_AS_V1 — currentActor().name уже «сотрудник (от имени: адм. …)»,
+// пока администратор работает от имени сотрудника (invoice-actions.js).
 import { currentActor } from './invoice-actions.js';
+import { actorShownName } from '../act-as-client.js';   // ADMIN_ACT_AS_V1
 
 // Insert one row. Non-fatal — logging hiccups must never roll back the
 // underlying action that already succeeded.
@@ -66,7 +69,8 @@ export async function loadPatientActivity(patientId, limit = 100) {
     }
     return (data || []).map(r => ({
         ...r,
-        __actor_name: r.users?.full_name || r.actor_name || 'Unknown',
+        // ADMIN_ACT_AS_V1 — снимок «… (от имени: адм. …)» важнее текущего имени.
+        __actor_name: actorShownName(r),
         __actor_role: r.users?.role      || r.actor_role || '',
     }));
 }

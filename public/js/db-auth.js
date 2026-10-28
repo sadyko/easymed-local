@@ -48,7 +48,13 @@ export function makeAuthBridge({ fetch, base }) {
   async function getUser() {
     const { ok, json } = await request('GET', '/me');
     if (!ok) return { data: { user: null }, error: null };
-    return { data: { user: json.user }, error: null };
+    // ADMIN_ACT_AS_V1 — вход от имени кончился сам, а экран ещё не сказал
+    // «Вернуться»: /me кладёт причину рядом с пользователем (он уже
+    // администратор). Без неё — null.
+    // Ревью-2 — act_as_id: номер входа от имени, под который собирается экран
+    // (номер вкладки, X-Em-Act-As; 0 — без входа от имени).
+    const actAsId = Number.isInteger(json.act_as_id) && json.act_as_id > 0 ? json.act_as_id : 0;
+    return { data: { user: json.user, act_as_ended: json.act_as_ended || null, act_as_id: actAsId }, error: null };
   }
 
   async function getSession() {

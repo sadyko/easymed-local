@@ -22,7 +22,16 @@ import { tr } from '../i18n.js';
 // назначение», подтверждение «5 прав», «Не введено» — и это те же окна того же
 // раздела. Второй shell рядом означал бы два вида окна госпитализации: одна
 // рамка у заявки, другая у дозы, которую по этой заявке вводят.
-export function inpatientModal(title, icon, bodyEls, submitLabel, onSubmit, { width = 520, secondaryLabel = null, onSecondary = null } = {}) {
+// ADMIN_ACT_AS_V1 (R3) — `lockHint`: текст отказа, пока администратор работает
+// от имени сотрудника, а окно пишет запись стационара (admission_review_save,
+// черновик тоже). Обе кнопки действия неактивны, подсказка — этот текст.
+export function inpatientModal(title, icon, bodyEls, submitLabel, onSubmit, { width = 520, secondaryLabel = null, onSecondary = null, lockHint = null } = {}) {
+    const lockBtn = (btn) => {
+        if (!lockHint) return;
+        btn.disabled = true;
+        btn.setAttribute('title', tr(lockHint));
+        btn.setAttribute('data-act-as-lock', '');
+    };
     const overlay = h('div', { class: 'modal' });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
     const onKey = (ev) => { if (ev.key === 'Escape') close(); };
@@ -40,6 +49,7 @@ export function inpatientModal(title, icon, bodyEls, submitLabel, onSubmit, { wi
             secBtn.disabled = false;
             secBtn.textContent = prev;
         });
+        lockBtn(secBtn);   // ADMIN_ACT_AS_V1 (R3)
         foot.push(secBtn);
     }
     if (submitLabel) {
@@ -54,6 +64,7 @@ export function inpatientModal(title, icon, bodyEls, submitLabel, onSubmit, { wi
             submitBtn.disabled = false;
             submitBtn.textContent = prev;
         });
+        lockBtn(submitBtn);   // ADMIN_ACT_AS_V1 (R3)
         foot.push(submitBtn);
     }
 

@@ -20,6 +20,7 @@ import { openItemPickerModal, isOwnShelfShort } from './item-picker-modal.js?v=b
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction, canMoveInvoiceMoney, invoiceMoneyErrorText } from './invoice-actions.js?v=ia3';
 import { logPatientActivity } from './activity-log.js';
+import { actorShownName } from '../act-as-client.js';   // ADMIN_ACT_AS_V1 — имя «от имени» в журнале счёта
 import { printableSheet } from './doc-settings.js?v=noqr1';   // must match every other importer (one module instance)
 import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX — счёт визита той же сборкой, что у кассы
 // VISITS_ONE_DOOR_V1 — окно визита правило двойной записи не знало вовсе:
@@ -1878,7 +1879,8 @@ async function loadInvoiceLogs(state) {
     }
     state.invoiceLogs = (data || []).map(r => ({
         ...r,
-        __actor_name: r.users?.full_name || r.actor_name || 'Unknown',
+        // ADMIN_ACT_AS_V1 — снимок «… (от имени: адм. …)» важнее текущего имени.
+        __actor_name: actorShownName(r),
         __actor_role: r.users?.role      || r.actor_role || '',
     }));
 }

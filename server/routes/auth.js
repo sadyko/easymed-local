@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import { login, logout, changeOwnPassword, SESSION_TTL_HOURS } from '../services/auth.js';
 import { SESSION_COOKIE } from '../middleware/auth.js';
+import { startActAs, stopActAs, actAsLog, positiveId, requestActAsId } from '../services/act-as.js';   // ADMIN_ACT_AS_V1
+import { actAsLogRefusal } from '../services/act-as-rules.js';   // ADMIN_ACT_AS_V1 (ревью, MEDIUM 4)
+import { ACT_AS_MESSAGES } from '../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1
+
+const unauthorized = (res) => res.status(401).json({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } });   // ADMIN_ACT_AS_V1
 
 // Per-IP login throttle: bcrypt costs ~60ms of the single JS thread per
 // attempt, so without this one rogue LAN device could freeze the app for
@@ -72,6 +77,11 @@ export function authRoutes(db) {
   r.post('/change-password', (req, res) => {
     res.set('Cache-Control', 'no-store');
     if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } });
+    // ADMIN_ACT_AS_V1 (R6) — пароль сотрудника от его имени не меняется: вход
+    // от имени держится на сессии администратора, а не на пароле сотрудника.
+    if (req.user.acting_admin) {
+      return res.status(403).json({ error: { code: 'forbidden', message: ACT_AS_MESSAGES.passwordWhileActing } });
+    }
     if (ipBlocked(req.ip)) {
       return res.status(429).json({ error: { code: 'locked', message: 'Слишком много попыток. Попробуйте через несколько минут.' } });
     }
@@ -109,7 +119,56 @@ export function authRoutes(db) {
   r.get('/me', (req, res) => {
     res.set('Cache-Control', 'no-store');
     if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } });
-    res.json({ user: req.user });
+    // ADMIN_ACT_AS_V1 — вход от имени кончился сам (R4), а экран ещё не сказал
+    // «Вернуться»: причина — рядом с пользователем (он уже администратор), чтобы
+    // экран сразу вернулся, не дожидаясь 409 act_as_ended от первого запроса.
+    // Ревью безопасности (вкладки) — act_as_id: номер входа от имени, под который
+    // собирается вкладка (0 — без него); она шлёт его в X-Em-Act-As.
+    const ended = req.actAs && req.actAs.ended;
+    const actAsId = requestActAsId(req);
+    res.json(ended ? { user: req.user, act_as_id: actAsId, act_as_ended: { reason: ended } } : { user: req.user, act_as_id: actAsId });
+  });
+
+  // ADMIN_ACT_AS_V1 — АДМИНИСТРАТОР РАБОТАЕТ ОТ ИМЕНИ СОТРУДНИКА
+  // (docs/specs/2026-10-28-admin-act-as-design.md; services/act-as.js).
+  // Здесь, в /api/auth, — до requirePasswordChanged и без проверки лицензии
+  // (R7): вернуться к своей учётной записи можно всегда.
+  //
+  // POST { user_id } — начать (R1, R2) → { ok, user, acting_admin, act_as_id }.
+  r.post('/act-as', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!req.user) return unauthorized(res);
+    const out = startActAs(db, req.sessionId, req.user, req.body && req.body.user_id);
+    if (out.error) return res.status(out.error.status).json({ error: { code: out.error.code, message: out.error.message } });
+    res.json({ ok: true, user: out.user, acting_admin: out.acting_admin, act_as_id: out.act_as_id });
+  });
+
+  // DELETE — «Вернуться к своей учётной записи» → { ok, user (администратор), acting_admin: null, act_as_id: 0 }.
+  // Без входа от имени — то же (повтор, вторая вкладка): не ошибка.
+  r.delete('/act-as', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!req.user) return unauthorized(res);
+    const user = stopActAs(db, req.sessionId);
+    if (!user) return unauthorized(res);
+    res.json({ ok: true, user, acting_admin: null, act_as_id: 0 });
+  });
+
+  // GET ?user_id=[&act_as_id=] — «Входы от имени» в карточке сотрудника. Только
+  // администратор из своей учётной записи с правом «Сотрудники: Изменение» (тот
+  // же, кто может войти от имени): работая от имени, журнал не открыть.
+  r.get('/act-as/log', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!req.user) return unauthorized(res);
+    const refusal = actAsLogRefusal(db, req.user);   // ревью безопасности (MEDIUM 4)
+    if (refusal) return res.status(refusal.status).json({ error: { code: refusal.code, message: refusal.message } });
+    const userId = positiveId(req.query.user_id);
+    if (userId == null) return res.status(400).json({ error: { code: 'bad_request', message: ACT_AS_MESSAGES.noTarget } });
+    const hasOne = req.query.act_as_id !== undefined;
+    const actAsId = positiveId(req.query.act_as_id);
+    if (hasOne && actAsId == null) return res.status(400).json({ error: { code: 'bad_request', message: ACT_AS_MESSAGES.logBadId } });
+    const out = actAsLog(db, userId, hasOne ? actAsId : null);
+    if (!out) return res.status(404).json({ error: { code: 'not_found', message: ACT_AS_MESSAGES.logNotFound } });
+    res.json(out);
   });
 
   return r;

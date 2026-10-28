@@ -7,16 +7,22 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { actingActorName } from '../../shared/act-as.js';   // ADMIN_ACT_AS_V1
 
 // Identifies the user performing the action. With auth disabled we fall
 // back to whatever's rendered in the user card on the sidebar — every
 // audit row still records *which seat* did it, even when no real DB id
 // exists yet.
+// ADMIN_ACT_AS_V1 — одна дверь для обоих журналов, которые пишет экран
+// (invoice_audit_log здесь и patient_activity_log в activity-log.js): пока
+// администратор работает от имени сотрудника, имя — «Иванова А. (от имени:
+// адм. Петров П.)» (shared/act-as.js actingActorName, то же, что пишет сервер),
+// а номер остаётся номером сотрудника — права и принадлежность записей его.
 export function currentActor() {
     const u = (typeof window !== 'undefined' && window.easymed?.state?.user) || {};
     return {
         id:   u.id || null,
-        name: u.full_name || u.username || 'Неизвестно',
+        name: actingActorName(u, u.full_name || u.username || 'Неизвестно'),
         role: u.role || null,
     };
 }

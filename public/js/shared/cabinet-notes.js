@@ -67,7 +67,28 @@ export function signedVersionsDropped(storedRaw, nextRaw) {
     return signedOf(prev).some((s) => !kept.has(s));
 }
 
-export const NOTES_CONFLICT_MESSAGE = 'Документ изменился в другом окне или раньше этого сохранения — обновите его и сохраните ещё раз.';
+// ADMIN_ACT_AS_V1 (R3) — запись по содержанию, без зависимости от порядка ключей.
+function stableJson(v) {
+    if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']';
+    if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
+    return JSON.stringify(v === undefined ? null : v);
+}
+/**
+ * ADMIN_ACT_AS_V1 (R3) — true: в новой записи notes есть подписанная версия,
+ * которой у строки не было, — новая (подпись, переподпись) или изменённая (та же
+ * дата, другое содержание). Подписанные версии, перенесённые как были, и
+ * черновики — false: черновик от имени сохранять можно (сервер — routes/db.js).
+ */
+export function signedEntryAdded(storedRaw, nextRaw) {
+    const next = parse(typeof nextRaw === 'string' ? nextRaw : null);
+    const added = (next && Array.isArray(next.history) ? next.history : []).filter((e) => e && e.kind === 'signed');
+    if (!added.length) return false;
+    const prev = parse(storedRaw);
+    const had = new Set((prev && Array.isArray(prev.history) ? prev.history : []).filter((e) => e && e.kind === 'signed').map(stableJson));
+    return added.some((e) => !had.has(stableJson(e)));
+}
+
+export const NOTES_CONFLICT_MESSAGE ='Документ изменился в другом окне или раньше этого сохранения — обновите его и сохраните ещё раз.';
 export const NOTES_NOT_CABINET_MESSAGE = 'В строке — документ кабинета врача; эта правка стёрла бы его.';
 /**
  * Отказ записи notes по правилу «сравнить и заменить» — null или
