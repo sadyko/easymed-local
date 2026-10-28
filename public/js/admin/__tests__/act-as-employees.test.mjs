@@ -318,3 +318,50 @@ test('словарь: строки «Входов от имени» — ru/uz/en
   }
   assert.deepEqual(bad, []);
 });
+
+// FIX_318_V1 (ADMIN_ACT_AS_V1) — журнал словами и для выпуска 3.18.0. Смоук-тест
+// показал «get_clinic_by_slug», «nav_visibility_get», «telephony_live» именами:
+// оболочка спрашивает их на каждом экране, и журнал читался как лог сервера.
+const RPCS_318 = [
+  // оболочка — на каждом экране
+  'get_clinic_by_slug', 'licence_status', 'update_status', 'nav_visibility_get', 'nav_visibility_save',
+  'telegram_chat_unread', 'stock_pending_count', 'lan_address_status', 'crm_config_get', 'inpatient_capabilities',
+  'deposit_balance', 'patient_base_aggregates',
+  // панель «Телефон», «Звонит», экран «Телефония»
+  'telephony_phone_me', 'telephony_live', 'telephony_call_log', 'telephony_extensions', 'telephony_my_extension',
+  'telephony_dial', 'telephony_ring_info', 'telephony_ring_token_rotate', 'telephony_recent_calls',
+  'telephony_dispositions', 'telephony_settings_get', 'telephony_providers_list',
+  // «Реферирование» и бот для врачей-источников
+  'referrals_representatives', 'referrals_internal', 'referrals_activity', 'referrals_source_detail',
+  'referrals_doctor_detail', 'referrals_assign_representative',
+  'doctor_bot_settings_get', 'doctor_bot_settings_save', 'doctor_bot_token_clear', 'doctor_bot_test_connection',
+  'doctor_bot_stats', 'doctor_bot_links_list', 'doctor_bot_link_revoke',
+  // Meta и Telegram
+  'meta_settings_get', 'meta_settings_save', 'meta_connect', 'meta_token_clear', 'meta_poll_now', 'meta_leads_recent',
+  'telegram_deeplinks_list', 'telegram_deeplink_save', 'telegram_deeplink_delete', 'telegram_broadcast_options',
+];
+const TABLES_318 = ['referral_sources', 'referral_source_categories', 'visit_documents', 'recommended_services', 'crm_request_tags'];
+
+test('FIX_318_V1: частые RPC оболочки и 3.18.0 и их таблицы — подписью, не именем; uz/en — без кириллицы', async () => {
+  const { actAsActionLabel } = await import('../views/act-as-history.js');
+  const bad = [];
+  for (const lang of ['ru', 'uz', 'en']) {
+    setLang(lang);
+    for (const name of RPCS_318) {
+      const l = actAsActionLabel({ kind: 'rpc', name });
+      if (l === name || /[a-z]+_[a-z]+/.test(l)) bad.push(lang + ': ' + name + ' => ' + l);
+      if (lang !== 'ru' && /[Ѐ-ӿ]/.test(l)) bad.push(lang + ': ' + name + ' => ' + l);
+    }
+    for (const t of TABLES_318) {
+      const l = actAsActionLabel({ kind: 'db', name: t + '.update' });
+      if (l.includes(t)) bad.push(lang + ': ' + t + ' => ' + l);
+      if (lang !== 'ru' && /[Ѐ-ӿ]/.test(l)) bad.push(lang + ': ' + t + ' => ' + l);
+    }
+  }
+  setLang('ru');
+  assert.deepEqual(bad, []);
+  assert.equal(actAsActionLabel({ kind: 'rpc', name: 'get_clinic_by_slug' }), 'Данные клиники');
+  assert.equal(actAsActionLabel({ kind: 'rpc', name: 'nav_visibility_get' }), 'Видимость разделов');
+  assert.equal(actAsActionLabel({ kind: 'db', name: 'referral_sources.update' }), 'Врачи-источники: изменение');
+  assert.equal(actAsActionLabel({ kind: 'rpc', name: 'some_future_rpc' }), 'some_future_rpc', 'незнакомое — именем как есть');
+});

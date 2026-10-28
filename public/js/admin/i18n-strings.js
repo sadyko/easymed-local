@@ -105,6 +105,49 @@ export const STRINGS = {
   "Фото врачей": {"en":"Doctor photos","ru":"Фото врачей","uz":"Shifokorlar fotosuratlari"},   // ADMIN_ACT_AS_V1
   "Файлы Telegram": {"en":"Telegram files","ru":"Файлы Telegram","uz":"Telegram fayllari"},   // ADMIN_ACT_AS_V1
   "Логотип клиники": {"en":"Clinic logo","ru":"Логотип клиники","uz":"Klinika logotipi"},   // ADMIN_ACT_AS_V1
+  // FIX_318_V1 (ADMIN_ACT_AS_V1) — журнал входа от имени: подписи частых RPC оболочки и выпуска 3.18.0 (views/act-as-history.js)
+  "Состояние лицензии": {"en":"Licence status","ru":"Состояние лицензии","uz":"Litsenziya holati"},   // FIX_318_V1
+  "Проверка обновлений": {"en":"Update check","ru":"Проверка обновлений","uz":"Yangilanishlarni tekshirish"},   // FIX_318_V1
+  "Изменение видимости разделов": {"en":"Section visibility change","ru":"Изменение видимости разделов","uz":"Bo‘limlar ko‘rinishini o‘zgartirish"},   // FIX_318_V1
+  "Непрочитанные сообщения Telegram": {"en":"Unread Telegram messages","ru":"Непрочитанные сообщения Telegram","uz":"O‘qilmagan Telegram xabarlari"},   // FIX_318_V1
+  "Настройки CRM": {"en":"CRM settings","ru":"Настройки CRM","uz":"CRM sozlamalari"},   // FIX_318_V1
+  "Права в стационаре": {"en":"Inpatient permissions","ru":"Права в стационаре","uz":"Statsionardagi huquqlar"},   // FIX_318_V1
+  "Баланс аванса": {"en":"Advance balance","ru":"Баланс аванса","uz":"Avans balansi"},   // FIX_318_V1
+  "Сводка по пациентам": {"en":"Patient summary","ru":"Сводка по пациентам","uz":"Bemorlar bo‘yicha xulosa"},   // FIX_318_V1
+  "Панель «Телефон»": {"en":"“Phone” panel","ru":"Панель «Телефон»","uz":"«Telefon» paneli"},   // FIX_318_V1
+  "Звонки сейчас": {"en":"Live calls","ru":"Звонки сейчас","uz":"Hozirgi qo‘ng‘iroqlar"},   // FIX_318_V1
+  "Внутренние номера станции": {"en":"PBX extensions","ru":"Внутренние номера станции","uz":"Stansiyaning ichki raqamlari"},   // FIX_318_V1
+  "Свой внутренний номер": {"en":"Own extension","ru":"Свой внутренний номер","uz":"O‘z ichki raqami"},   // FIX_318_V1
+  "Звонок из программы": {"en":"Call from the program","ru":"Звонок из программы","uz":"Dasturdan qo‘ng‘iroq"},   // FIX_318_V1
+  "Адрес событий станции": {"en":"PBX event address","ru":"Адрес событий станции","uz":"Stansiya hodisalari manzili"},   // FIX_318_V1
+  "Новый адрес событий станции": {"en":"New PBX event address","ru":"Новый адрес событий станции","uz":"Stansiya hodisalarining yangi manzili"},   // FIX_318_V1
+  "Исходы звонков": {"en":"Call outcomes","ru":"Исходы звонков","uz":"Qo‘ng‘iroq natijalari"},   // FIX_318_V1
+  "Провайдеры телефонии": {"en":"Telephony providers","ru":"Провайдеры телефонии","uz":"Telefoniya provayderlari"},   // FIX_318_V1
+  "Реферирование: представители": {"en":"Referrals: representatives","ru":"Реферирование: представители","uz":"Yo‘naltirish: vakillar"},   // FIX_318_V1
+  "Реферирование: врачи клиники": {"en":"Referrals: clinic doctors","ru":"Реферирование: врачи клиники","uz":"Yo‘naltirish: klinika shifokorlari"},   // FIX_318_V1
+  "Реферирование: активность": {"en":"Referrals: activity","ru":"Реферирование: активность","uz":"Yo‘naltirish: faollik"},   // FIX_318_V1
+  "Реферирование: внешний врач": {"en":"Referrals: external doctor","ru":"Реферирование: внешний врач","uz":"Yo‘naltirish: tashqi shifokor"},   // FIX_318_V1
+  "Реферирование: врач клиники": {"en":"Referrals: clinic doctor","ru":"Реферирование: врач клиники","uz":"Yo‘naltirish: klinika shifokori"},   // FIX_318_V1
+  "Закрепление врача за представителем": {"en":"Doctor assigned to a representative","ru":"Закрепление врача за представителем","uz":"Shifokorni vakilga biriktirish"},   // FIX_318_V1
+  "Бот для врачей: настройки": {"en":"Doctor bot: settings","ru":"Бот для врачей: настройки","uz":"Shifokorlar uchun bot: sozlamalar"},   // FIX_318_V1
+  "Бот для врачей: сохранение настроек": {"en":"Doctor bot: settings saved","ru":"Бот для врачей: сохранение настроек","uz":"Shifokorlar uchun bot: sozlamalarni saqlash"},   // FIX_318_V1
+  "Бот для врачей: удаление токена": {"en":"Doctor bot: token removed","ru":"Бот для врачей: удаление токена","uz":"Shifokorlar uchun bot: tokenni o‘chirish"},   // FIX_318_V1
+  "Бот для врачей: проверка связи": {"en":"Doctor bot: connection check","ru":"Бот для врачей: проверка связи","uz":"Shifokorlar uchun bot: aloqani tekshirish"},   // FIX_318_V1
+  "Бот для врачей: охват": {"en":"Doctor bot: reach","ru":"Бот для врачей: охват","uz":"Shifokorlar uchun bot: qamrov"},   // FIX_318_V1
+  "Бот для врачей: подключённые врачи": {"en":"Doctor bot: connected doctors","ru":"Бот для врачей: подключённые врачи","uz":"Shifokorlar uchun bot: ulangan shifokorlar"},   // FIX_318_V1
+  "Бот для врачей: отключение врача": {"en":"Doctor bot: doctor disconnected","ru":"Бот для врачей: отключение врача","uz":"Shifokorlar uchun bot: shifokorni uzish"},   // FIX_318_V1
+  "Meta: настройки": {"en":"Meta: settings","ru":"Meta: настройки","uz":"Meta: sozlamalar"},   // FIX_318_V1
+  "Meta: сохранение настроек": {"en":"Meta: settings saved","ru":"Meta: сохранение настроек","uz":"Meta: sozlamalarni saqlash"},   // FIX_318_V1
+  "Meta: подключение страницы": {"en":"Meta: page connection","ru":"Meta: подключение страницы","uz":"Meta: sahifani ulash"},   // FIX_318_V1
+  "Meta: удаление токена": {"en":"Meta: token removed","ru":"Meta: удаление токена","uz":"Meta: tokenni o‘chirish"},   // FIX_318_V1
+  "Meta: получение заявок": {"en":"Meta: fetching leads","ru":"Meta: получение заявок","uz":"Meta: so‘rovlarni olish"},   // FIX_318_V1
+  "Meta: последние заявки": {"en":"Meta: recent leads","ru":"Meta: последние заявки","uz":"Meta: oxirgi so‘rovlar"},   // FIX_318_V1
+  "Сохранение ссылки для рекламы": {"en":"Ad link saved","ru":"Сохранение ссылки для рекламы","uz":"Reklama havolasini saqlash"},   // FIX_318_V1
+  "Удаление ссылки для рекламы": {"en":"Ad link deleted","ru":"Удаление ссылки для рекламы","uz":"Reklama havolasini o‘chirish"},   // FIX_318_V1
+  "Фильтры рассылки": {"en":"Broadcast filters","ru":"Фильтры рассылки","uz":"Xabar tarqatish filtrlari"},   // FIX_318_V1
+  "Документы визита": {"en":"Visit documents","ru":"Документы визита","uz":"Tashrif hujjatlari"},   // FIX_318_V1
+  "Направления врача": {"en":"Doctor referrals","ru":"Направления врача","uz":"Shifokor yo‘llanmalari"},   // FIX_318_V1
+  "Метки заявок CRM": {"en":"CRM request tags","ru":"Метки заявок CRM","uz":"CRM arizalari teglari"},   // FIX_318_V1
   // CRM_ONE_WAY_V1 — услуги записи живут только в визите: строку записи из карточки не переносят (отказ двери
   // /api/db, crm/one-way.js), отпущенная отменой строка ждёт новой даты (views/crm.js)
   "Услуга уже записана: перенос, смену врача и услуги делают в календаре, а убрать услугу из записи можно крестиком в карточке.": {"en":"The service is already booked: rescheduling, changing the doctor or the service is done in the calendar; to remove the service from the booking, use the cross on the card.","ru":"Услуга уже записана: перенос, смену врача и услуги делают в календаре, а убрать услугу из записи можно крестиком в карточке.","uz":"Xizmat allaqachon yozilgan: ko‘chirish, shifokor yoki xizmatni almashtirish kalendarda bajariladi, xizmatni yozuvdan olib tashlash uchun kartochkadagi xochchani bosing."},   // CRM_ONE_WAY_V1

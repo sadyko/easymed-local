@@ -30,8 +30,13 @@ async function getJson(url) {
 
 // --- что сделано — словами -------------------------------------------------
 
-// RPC, которые что-то меняют, — короткой подписью. Остальные (чтения и
-// редкие) показываются своим именем: честнее имени, чем выдуманная подпись.
+// RPC, которые что-то меняют, — короткой подписью. Остальные (редкие)
+// показываются своим именем: честнее имени, чем выдуманная подпись.
+// FIX_318_V1 (ADMIN_ACT_AS_V1) — и частые чтения: оболочка спрашивает их на
+// каждом экране, и журнал без подписей читался как лог сервера
+// («get_clinic_by_slug», «nav_visibility_get»). Подписаны чтения оболочки и
+// RPC выпуска 3.18.0 (меню, «Телефон», «Реферирование», бот врачей, Meta,
+// ссылки Telegram).
 const RPC_LABELS = {
     record_payment: 'Приём оплаты',
     record_payment_split: 'Приём оплаты частями',
@@ -70,6 +75,57 @@ const RPC_LABELS = {
     treatment_order_create: 'Назначение лечения',
     treatment_admin_mark: 'Отметка о выполнении назначения',
     admin_reset_user_password: 'Сброс пароля сотрудника',
+    // FIX_318_V1 — оболочка (каждый экран)
+    get_clinic_by_slug: 'Данные клиники',
+    licence_status: 'Состояние лицензии',
+    update_status: 'Проверка обновлений',
+    nav_visibility_get: 'Видимость разделов',
+    nav_visibility_save: 'Изменение видимости разделов',
+    telegram_chat_unread: 'Непрочитанные сообщения Telegram',
+    stock_pending_count: 'Не списано со склада',
+    lan_address_status: 'Адрес в сети',
+    crm_config_get: 'Настройки CRM',
+    inpatient_capabilities: 'Права в стационаре',
+    deposit_balance: 'Баланс аванса',
+    patient_base_aggregates: 'Сводка по пациентам',
+    // FIX_318_V1 — панель «Телефон», «Звонит», экран «Телефония»
+    telephony_phone_me: 'Панель «Телефон»',
+    telephony_live: 'Звонки сейчас',
+    telephony_call_log: 'Журнал звонков',
+    telephony_extensions: 'Внутренние номера станции',
+    telephony_my_extension: 'Свой внутренний номер',
+    telephony_dial: 'Звонок из программы',
+    telephony_ring_info: 'Адрес событий станции',
+    telephony_ring_token_rotate: 'Новый адрес событий станции',
+    telephony_recent_calls: 'Последние звонки',
+    telephony_dispositions: 'Исходы звонков',
+    telephony_settings_get: 'Настройки телефонии',
+    telephony_providers_list: 'Провайдеры телефонии',
+    // FIX_318_V1 — «Реферирование» и бот для врачей-источников
+    referrals_representatives: 'Реферирование: представители',
+    referrals_internal: 'Реферирование: врачи клиники',
+    referrals_activity: 'Реферирование: активность',
+    referrals_source_detail: 'Реферирование: внешний врач',
+    referrals_doctor_detail: 'Реферирование: врач клиники',
+    referrals_assign_representative: 'Закрепление врача за представителем',
+    doctor_bot_settings_get: 'Бот для врачей: настройки',
+    doctor_bot_settings_save: 'Бот для врачей: сохранение настроек',
+    doctor_bot_token_clear: 'Бот для врачей: удаление токена',
+    doctor_bot_test_connection: 'Бот для врачей: проверка связи',
+    doctor_bot_stats: 'Бот для врачей: охват',
+    doctor_bot_links_list: 'Бот для врачей: подключённые врачи',
+    doctor_bot_link_revoke: 'Бот для врачей: отключение врача',
+    // FIX_318_V1 — Meta и Telegram
+    meta_settings_get: 'Meta: настройки',
+    meta_settings_save: 'Meta: сохранение настроек',
+    meta_connect: 'Meta: подключение страницы',
+    meta_token_clear: 'Meta: удаление токена',
+    meta_poll_now: 'Meta: получение заявок',
+    meta_leads_recent: 'Meta: последние заявки',
+    telegram_deeplinks_list: 'Ссылки для рекламы в Telegram',
+    telegram_deeplink_save: 'Сохранение ссылки для рекламы',
+    telegram_deeplink_delete: 'Удаление ссылки для рекламы',
+    telegram_broadcast_options: 'Фильтры рассылки',
 };
 
 // Таблицы /api/db — чаще всего записываемые экраном.
@@ -94,6 +150,12 @@ const TABLE_LABELS = {
     service_templates: 'Шаблоны услуг',
     doc_settings: 'Настройки документов',
     role_permissions: 'Права ролей',
+    // FIX_318_V1 — «Реферирование» (3.18.0), документы кабинета, направления, метки CRM
+    referral_sources: 'Врачи-источники',
+    referral_source_categories: 'Категории источников',
+    visit_documents: 'Документы визита',
+    recommended_services: 'Направления врача',
+    crm_request_tags: 'Метки заявок CRM',
 };
 
 // Корзины /api/storage.
