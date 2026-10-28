@@ -22,6 +22,9 @@ import { weekHoursGrid } from './week-hours.js';   // BRANCH_PROFILE_V1 — се
 import { doctorPublicPane, publicPaneProblems, PROFILE_LINK_KEYS } from './doctor-public-pane.js';   // DOCTOR_PROFILE_V1 — «Публичный профиль» по макету
 import { doctorPublicState, shownPracticeSince } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1
 import { isRouteAllowed } from '../permissions.js';   // DOCTOR_PROFILE_V1 — «Изменить в «Консультации врачей»» только тому, кому она открыта
+// ADMIN_ACT_AS_V1 — «Войти как сотрудник» (строка и карточка), «Входы от имени» в карточке
+import { canStartActAs, actAsTargetOk, startActAs, isActingNow } from '../act-as-client.js';
+import { actAsHistoryPane } from './act-as-history.js';
 
 const SPEC_TAKEN = 'Эта специальность уже выбрана.';   // DOCTOR_PROFILE_V1 — макет «Публичный профиль»
 
@@ -58,6 +61,25 @@ const roleTitle = (u) => {
     const r = ALL_ASSIGNABLE_ROLES.find((x) => x[0] === (u && u.role));
     return r ? r[1] : ((u && u.role) || '—');
 };
+// ADMIN_ACT_AS_V1 — «Войти как сотрудник» есть, только когда экран открыт
+// администратором из своей учётной записи (R1) и сотрудник разрешён R2:
+// активный, уже входивший, не сам открывший и не администратор (своя роль на
+// основе администратора — тоже). Сервер проверяет всё это второй раз.
+const actAsAllowed = (u) => canStartActAs() && actAsTargetOk(u, { selfId: selfUserId(), customRoles: CUSTOM_ROLES });
+function actAsButton(u, { compact = false, beforeStart = null } = {}) {
+    if (!actAsAllowed(u)) return null;
+    return h('button', {
+        class: compact ? 'btn btn-outline btn-sm' : 'btn btn-outline', type: 'button', 'data-act-as-start': '',
+        style: compact ? { marginRight: '6px' } : null,
+        onclick: (e) => {
+            // stopPropagation: строка целиком открывает карточку, а тут нажали
+            // именно «Войти как сотрудник».
+            if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+            if (beforeStart && !beforeStart()) return;
+            startActAs(u);
+        },
+    }, Icon('Key', { size: compact ? 13 : 14 }), ' Войти как сотрудник');
+}
 const STAFF_TYPES = [['doctor', 'Врачи'], ['admin_staff', 'Административный персонал'], ['mid_low', 'Средний и младший персонал']];
 const DOCTOR_CATEGORIES = [['', '—'], ['highest', 'Высшая'], ['first', 'Первая'], ['second', 'Вторая'], ['none', 'Без категории']];
 const EMPLOYMENT_TYPES = [['', '—'], ['official', 'Официально'], ['civil_law', 'ГПХ (договор)'], ['unofficial', 'Неофициально']];
@@ -317,7 +339,7 @@ async function paint(root) {
                 h('td', null, roleTitle(u)),   // CUSTOM_ROLES_V1 — своя роль зовётся своим именем
                 h('td', null, u.phone || '—'),
                 h('td', null, u.is_active ? h('span', { style: { color: 'var(--ok-700, #1a7a44)', fontWeight: 600, fontSize: '12.5px' } }, '● Активен') : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '○ Неактивен')),
-                h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, backBtn, openBtn),
+                h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, backBtn, actAsButton(u, { compact: true }), openBtn),   // ADMIN_ACT_AS_V1
             ));
         }
     }
@@ -375,7 +397,13 @@ const SECTIONS = [
         { key: 'inpatient', label: 'Стационар',            icon: 'Bed',      required: [], doctorOnly: true },
         { key: 'referral', label: 'Вознаграждение за направления', icon: 'Coins', required: [], doctorOnly: true },
     ] },
-    { group: 'ДОСТУП', items: [ { key: 'access', label: 'Вход и доступ', icon: 'Settings', required: ['username', 'role'] } ] },
+    { group: 'ДОСТУП', items: [
+        { key: 'access', label: 'Вход и доступ', icon: 'Settings', required: ['username', 'role'] },
+        // ADMIN_ACT_AS_V1 — журнал входов от имени: только администратору из
+        // своей учётной записи (сервер отдаёт журнал только ему), только у
+        // существующего сотрудника.
+        { key: 'actas', label: 'Входы от имени', icon: 'Shield', required: [], actAsLog: true },
+    ] },
 ];
 const ALL_SECTIONS = SECTIONS.flatMap(g => g.items);
 
@@ -562,7 +590,9 @@ function openEditor(user, root) {
     const headWrap = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 } });
     const dirtyEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
 
-    const railSections = () => ALL_SECTIONS.filter(s => (!s.doctorOnly || emp.is_doctor) && (acc.money || !MONEY_SECTIONS.includes(s.key)));
+    // ADMIN_ACT_AS_V1 — «Входы от имени» видит администратор из своей учётной записи.
+    const showActAsLog = isEdit && canStartActAs();
+    const railSections = () => ALL_SECTIONS.filter(s => (!s.doctorOnly || emp.is_doctor) && (acc.money || !MONEY_SECTIONS.includes(s.key)) && (!s.actAsLog || showActAsLog));
     function reqFilled(f) { if (f === 'password') return isEdit || !!String(emp.password).trim(); return String(emp[f] != null ? emp[f] : '').trim() !== ''; }
     function sectionComplete(sec) { const req = sec.key === 'access' ? (isEdit ? sec.required : sec.required.concat('password')) : sec.required; return req.every(reqFilled); }
     function completionPct() { const all = railSections().flatMap(s => (s.key === 'access' && !isEdit) ? s.required.concat('password') : s.required); if (!all.length) return 100; return Math.round(all.filter(reqFilled).length / all.length * 100); }
@@ -655,7 +685,7 @@ function openEditor(user, root) {
     function renderRail() {
         clear(rail);
         for (const g of SECTIONS) {
-            const items = g.items.filter(s => !s.doctorOnly || emp.is_doctor);
+            const items = g.items.filter(s => (!s.doctorOnly || emp.is_doctor) && (!s.actAsLog || showActAsLog));   // ADMIN_ACT_AS_V1
             if (!items.length) continue;
             rail.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', letterSpacing: '.06em', padding: '10px 10px 4px' } }, g.group));
             for (const sec of items) {
@@ -943,6 +973,11 @@ function openEditor(user, root) {
             if (!isEdit) {
                 body.append(hint('Логин 3–30 символов (латиница, цифры, . _ -). Пароль — любой, длину выбирает клиника.'));
             }
+        } else if (active === 'actas' && showActAsLog) {
+            // ADMIN_ACT_AS_V1 — кто работал от имени этого сотрудника (и, у
+            // администратора, — его входы от имени других) и что делал.
+            body.append(head('Входы от имени', 'Когда администратор работал от имени этого сотрудника и что делал. У администратора — и его входы от имени других.'),
+                actAsHistoryPane(user.id));
         }
         if (!readOnly) paintStatus();   // EMPLOYEE_CARD_SAVE_V1 — у карточки «только просмотр» нечего сохранять
         if (readOnly) disableAll(body);
@@ -972,11 +1007,20 @@ function openEditor(user, root) {
     // администратора на чужую учётную запись; на своей он обходил бы проверку
     // «докажи, что это ты».
     const isSelf = isEdit && selfUserId() != null && String(selfUserId()) === String(user.id);
-    const passwordBtn = isEdit
+    // ADMIN_ACT_AS_V1 (R6) — работая от имени сотрудника, его пароль не меняют:
+    // своя карточка (это карточка сотрудника) кнопки не показывает, сервер
+    // отказал бы passwordWhileActing.
+    const passwordBtn = isEdit && !(isSelf && isActingNow())
         ? h('button', { class: 'btn btn-outline', type: 'button',
             onclick: () => (isSelf ? openChangeOwnPasswordModal() : openEmployeePasswordModal(user)) },
             Icon('Lock', { size: 14 }), ' Сменить пароль')
         : null;
+
+    // ADMIN_ACT_AS_V1 — «Войти как сотрудник» и в карточке. Вход перезагружает
+    // программу: несохранённая правка карточки пропала бы молча — сначала вопрос.
+    const actAsBtn = isEdit ? actAsButton(user, {
+        beforeStart: () => !dirty || window.confirm(tr('Несохранённые изменения карточки пропадут. Войти от имени сотрудника?')),
+    }) : null;
 
     async function confirmDelete() {
         deleteBtn.disabled = true;
@@ -1135,7 +1179,7 @@ function openEditor(user, root) {
         // не отключённых, а отсутствующих: отключённая кнопка предлагает
         // действие и молчит о том, почему оно недоступно, а причина уже сказана
         // строкой над полями.
-        h('footer', { class: 'modal-foot' }, readOnly ? null : deleteBtn, readOnly ? null : passwordBtn, dirtyEl, h('span', { class: 'grow' }), h('button', { class: 'btn', type: 'button', onclick: close }, readOnly ? 'Закрыть' : 'Отмена'), readOnly ? null : saveBtn),
+        h('footer', { class: 'modal-foot' }, readOnly ? null : deleteBtn, readOnly ? null : passwordBtn, actAsBtn, dirtyEl, h('span', { class: 'grow' }), h('button', { class: 'btn', type: 'button', onclick: close }, readOnly ? 'Закрыть' : 'Отмена'), readOnly ? null : saveBtn),
     ));
     document.body.appendChild(overlay);
     renderHead(); renderRail(); renderBody();

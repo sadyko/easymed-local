@@ -48,7 +48,10 @@ export function makeAuthBridge({ fetch, base }) {
   async function getUser() {
     const { ok, json } = await request('GET', '/me');
     if (!ok) return { data: { user: null }, error: null };
-    return { data: { user: json.user }, error: null };
+    // ADMIN_ACT_AS_V1 — вход от имени кончился сам, а экран ещё не сказал
+    // «Вернуться»: /me кладёт причину рядом с пользователем (он уже
+    // администратор). Без неё — null.
+    return { data: { user: json.user, act_as_ended: json.act_as_ended || null }, error: null };
   }
 
   async function getSession() {

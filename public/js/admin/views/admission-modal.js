@@ -60,6 +60,8 @@ import { openAdmissionTitleSheetModal } from './title-sheet.js';   // TITLE_SHEE
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isRouteAllowed } from '../permissions.js';   // V3120_CLEANUP — переходы только в открытые экраны
 import { moneyDisplay } from '../../shared/money-input.js';   // CASE_OVERVIEW_V1 — сумма счёта в подтверждении выписки
+// ADMIN_ACT_AS_V1 (R3) — записи стационара от чужого имени не пишутся (и черновик тоже).
+import { signLockHint, refuseSignWhileActing } from '../act-as-client.js';
 // BED_BOARD_SHARED_V1 — окно выбора койки рисует ДОСКУ КОЕК, а не свой список.
 // Адрес модуля с тем же '?v=', что у admin.js и views/admissions.js: разошедшийся
 // суффикс — это ВТОРОЙ экземпляр ward-beds.js со своим `state`, то есть доска в
@@ -1244,6 +1246,9 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     ];
 
     const submit = async () => {
+        // ADMIN_ACT_AS_V1 (R3) — от чужого имени запись не пишется (кнопка и так
+        // неактивна; это вторая дверь — отказ словами до запроса).
+        if (refuseSignWhileActing()) return false;
         // CASE_DX_LIST_V1 — сперва забираем написанное в поле диагноза, и только
         // потом спрашиваем, есть ли диагноз: иначе осмотр отклонялся бы у врача,
         // который диагноз написал, но не нажал «Добавить свой».
@@ -1266,6 +1271,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // Черновика у исправления нет: пока прежняя редакция действует, а новая ещё
     // не опубликована, у документа было бы два «настоящих» вида.
     const secondary = (isView || isCorrection) ? null : async () => {
+        if (refuseSignWhileActing()) return;   // ADMIN_ACT_AS_V1 (R3) — и черновик от чужого имени не пишется
         const { data, error } = await supabase.rpc('admission_review_save', payload(false));
         if (error) { toast((error.message) || tr('Не удалось сохранить черновик.'), 'fail'); return; }
         if (data && data.review) draftId = data.review.id;
@@ -1381,6 +1387,10 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         submit,
         secondaryLabel: secondary ? tr('Сохранить черновик') : null,
         secondary,
+        // ADMIN_ACT_AS_V1 (R3) — текст отказа, пока работают от имени сотрудника:
+        // «Опубликовать» и «Сохранить черновик» неактивны с этой подсказкой
+        // (case-doc-a4.js docActionsBar, inpatient-modal.js lockHint).
+        signLock: signLockHint(),
     };
 }
 
@@ -1402,6 +1412,7 @@ export function openAdmissionReviewModal(opts = {}) {
         width: 720,
         secondaryLabel: ed.secondaryLabel,
         onSecondary: ed.secondary,
+        lockHint: ed.signLock,   // ADMIN_ACT_AS_V1 (R3)
     });
 }
 

@@ -30,6 +30,9 @@ import { canDelete as canDeleteRole, patientTabCanEdit } from '../permissions.js
 import { insertRow, currentUser } from '../data.js';   // AURORA_CONSULT_TOOLBAR_V1 + AURORA_CONSULT_TEMPLATES_V1
 import { currentClinicId } from '../tenant-tables.js';   // AURORA_CONSULT_TOOLBAR_V1
 import { isAdminActor } from '../admin-actor.js';   // CABINET_FIX_V1_TPL — администратор правит любой шаблон
+// ADMIN_ACT_AS_V1 (R3) — подпись заключения от чужого имени: «Завершить приём»
+// неактивна с подсказкой; «Сохранить» и «Черновик» работают (черновик не подписан).
+import { lockSignButton, refuseSignWhileActing, isActingNow } from '../act-as-client.js';
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
 import { renderDesignedVariant } from './doc-variants.js?v=cabr3';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3
@@ -963,9 +966,10 @@ export function soapForm(ctx) {
     } }, Icon('Check', { size: 14 }), ' Сохранить');
 
     // WS_FULLWIDTH_V1 — «Завершить приём» (close consultation) moved to the doc bar, right after «Сохранить».
-    const finishBtn = h('button', { class: 'btn btn-primary', type: 'button', 'data-ws-finish': '',
+    // ADMIN_ACT_AS_V1 (R3) — это подпись (и переподпись): от чужого имени неактивна.
+    const finishBtn = lockSignButton(h('button', { class: 'btn btn-primary', type: 'button', 'data-ws-finish': '',
         style: { background: 'var(--ok-600, #16a34a)', borderColor: 'var(--ok-600, #16a34a)' },
-        onclick: () => tryFinish(ctx) }, Icon('Check', { size: 14 }), ' Завершить приём');
+        onclick: () => tryFinish(ctx) }, Icon('Check', { size: 14 }), ' Завершить приём'));
 
     // DOC_ZOOM_V1 — document zoom control (− 100% +).
     const _zoomBtn = (sym, tip, delta) => h('button', { class: 'btn btn-outline btn-sm', type: 'button', title: tip,
@@ -1233,9 +1237,9 @@ function rightColumn(ctx) {
             h('button', { class: 'btn btn-outline', type: 'button', 'data-ws-pause': '',
                 style: { minHeight: '34px', fontSize: '13.5px' }, onclick: () => pauseAndLeave(ctx) },
                 Icon('Pause', { size: 13 }), ' Пауза'),
-            h('button', { class: 'ws-bigaction is-finish', type: 'button', 'data-ws-finish': '',
+            lockSignButton(h('button', { class: 'ws-bigaction is-finish', type: 'button', 'data-ws-finish': '',   // ADMIN_ACT_AS_V1 (R3)
                 style: { flex: '1', minHeight: '34px', fontSize: '13.5px' }, onclick: () => tryFinish(ctx) },
-                Icon('Check', { size: 14 }), ' Завершить приём'),
+                Icon('Check', { size: 14 }), ' Завершить приём')),
         ),
 
         // WS_PATIENTCARD_PANEL_V1 — patient info card right after the main actions (no vitals).
@@ -4166,6 +4170,9 @@ async function handleSave(ctx, btnEl) {
 // поля (и сам показывает, чего не хватает); если сохранение не прошло —
 // финализация не запускается.
 async function tryFinish(ctx) {
+    // ADMIN_ACT_AS_V1 (R3) — «Завершить приём» — это подпись: от чужого имени —
+    // отказ словами до любой записи (кнопка и так неактивна; это вторая дверь).
+    if (refuseSignWhileActing()) return;
     // CABINET_FIX_V1_R3 (F11) — двойной щелчок: второй, пока первый сохраняет и подписывает, — ничего.
     if (ctx.__finishing || LINE_SIGNING.has(Number(ctx.visitServiceId))) return;   // CABINET_FIX_V1_R4 — замок строки
     ctx.__finishing = true;
@@ -5180,10 +5187,12 @@ export function lostOnResign(prev, next, { diagnoses = [] } = {}) {
     return RESIGN_FIELDS.filter(([k]) => textOf(prev[k]) && !has(k)).map(([, label]) => tr(label));
 }
 // CABINET_FIX_V1_R3 (F11) — пока подпись «в пути», «Завершить приём» не нажать второй раз.
+// ADMIN_ACT_AS_V1 (R3) — от чужого имени кнопка остаётся неактивной и после «в пути».
 function setSignBusy(ctx, on) {
     const root = ctx && ctx.container;
     if (!root || typeof root.querySelectorAll !== 'function') return;
-    for (const b of root.querySelectorAll('[data-ws-finish]')) b.disabled = !!on;
+    const locked = isActingNow();
+    for (const b of root.querySelectorAll('[data-ws-finish]')) b.disabled = !!on || locked;
 }
 /**
  * CABINET_FIX_V1_R2 (ревью 2, п. 3) — ПОДПИСЬ СОБИРАЕТ ВСЁ ДО ПЕРВОГО ОЖИДАНИЯ.
@@ -5200,6 +5209,9 @@ function setSignBusy(ctx, on) {
  * отказывает словами — и ничего не пишет. Экспорт signDocument — для проверки.
  */
 async function handleSignFinalize(ctx) {
+    // ADMIN_ACT_AS_V1 (R3) — подпись и переподпись от чужого имени — отказ до
+    // любой записи (сервер отказал бы sign_while_acting сам).
+    if (refuseSignWhileActing()) return;
     if (!ctx.visitServiceId) { toast('Услуга не привязана — откройте из «Мои услуги».', 'fail'); return; }
     const vsKey = Number(ctx.visitServiceId);
     // CABINET_FIX_V1_R3 (F11) · CABINET_FIX_V1_R4 — второй щелчок, пока подпись строки «в пути» (в любом её экране), — ничего.

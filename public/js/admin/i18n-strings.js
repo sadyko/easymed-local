@@ -24,6 +24,84 @@ export const STRINGS = {
   "Истекло": {"en":"Expired","ru":"Истекло","uz":"Muddati tugadi"},   // ADMIN_ACT_AS_V1
   "Сессия завершена": {"en":"Session ended","ru":"Сессия завершена","uz":"Seans tugadi"},   // ADMIN_ACT_AS_V1
   "Сотрудник недоступен": {"en":"Staff member unavailable","ru":"Сотрудник недоступен","uz":"Xodim mavjud emas"},   // ADMIN_ACT_AS_V1
+  // ADMIN_ACT_AS_V1 — экран (задача 2): вход, полоса «Вы работаете от имени», возврат, авто-конец (act-as-client.js)
+  "Войти как сотрудник": {"en":"Act as staff member","ru":"Войти как сотрудник","uz":"Xodim nomidan kirish"},   // ADMIN_ACT_AS_V1
+  "Вы будете работать от имени {name}. Каждое действие запишется как «Администратор {admin} от имени {name}». Подписывать документы врача от его имени нельзя. Вернуться — кнопкой вверху экрана.": {"en":"You will work as {name}. Every action will be recorded as “Administrator {admin} on behalf of {name}”. A doctor’s documents cannot be signed on their behalf. To return, use the button at the top of the screen.","ru":"Вы будете работать от имени {name}. Каждое действие запишется как «Администратор {admin} от имени {name}». Подписывать документы врача от его имени нельзя. Вернуться — кнопкой вверху экрана.","uz":"Siz {name} nomidan ishlaysiz. Har bir amal «Administrator {admin} — {name} nomidan» deb yoziladi. Shifokor hujjatlarini uning nomidan imzolab bo‘lmaydi. Qaytish — ekran yuqorisidagi tugma orqali."},   // ADMIN_ACT_AS_V1
+  "Не удалось войти от имени сотрудника.": {"en":"Could not act as the staff member.","ru":"Не удалось войти от имени сотрудника.","uz":"Xodim nomidan kirib bo‘lmadi."},   // ADMIN_ACT_AS_V1
+  "Нет связи с сервером — попробуйте ещё раз.": {"en":"No connection to the server — please try again.","ru":"Нет связи с сервером — попробуйте ещё раз.","uz":"Server bilan aloqa yo‘q — qayta urinib ko‘ring."},   // ADMIN_ACT_AS_V1
+  "Не удалось вернуться к своей учётной записи — попробуйте ещё раз.": {"en":"Could not return to your own account — please try again.","ru":"Не удалось вернуться к своей учётной записи — попробуйте ещё раз.","uz":"O‘z hisobingizga qaytib bo‘lmadi — qayta urinib ko‘ring."},   // ADMIN_ACT_AS_V1
+  "Вы работаете от имени: {name} ({role})": {"en":"You are acting as: {name} ({role})","ru":"Вы работаете от имени: {name} ({role})","uz":"Siz {name} ({role}) nomidan ishlayapsiz"},   // ADMIN_ACT_AS_V1
+  "Вы работаете от имени: {name}": {"en":"You are acting as: {name}","ru":"Вы работаете от имени: {name}","uz":"Siz {name} nomidan ishlayapsiz"},   // ADMIN_ACT_AS_V1
+  "все действия записываются": {"en":"all actions are recorded","ru":"все действия записываются","uz":"barcha amallar yozib boriladi"},   // ADMIN_ACT_AS_V1
+  "Вернуться к своей учётной записи": {"en":"Return to my own account","ru":"Вернуться к своей учётной записи","uz":"O‘z hisobimga qaytish"},   // ADMIN_ACT_AS_V1
+  "Работа от имени сотрудника": {"en":"Acting as a staff member","ru":"Работа от имени сотрудника","uz":"Xodim nomidan ishlash"},   // ADMIN_ACT_AS_V1
+  "Администратор: {name}": {"en":"Administrator: {name}","ru":"Администратор: {name}","uz":"Administrator: {name}"},   // ADMIN_ACT_AS_V1
+  // ADMIN_ACT_AS_V1 — экран (задача 2): «Войти как сотрудник» в «Сотрудниках», «Входы от имени» в карточке (views/act-as-history.js)
+  "Входы от имени": {"en":"Act-as sessions","ru":"Входы от имени","uz":"Xodim nomidan kirishlar"},   // ADMIN_ACT_AS_V1
+  "Когда администратор работал от имени этого сотрудника и что делал. У администратора — и его входы от имени других.": {"en":"When an administrator worked as this staff member and what they did. For an administrator, also their own sessions acting as others.","ru":"Когда администратор работал от имени этого сотрудника и что делал. У администратора — и его входы от имени других.","uz":"Administrator ushbu xodim nomidan qachon ishlagani va nima qilgani. Administrator uchun — uning boshqalar nomidan kirishlari ham."},   // ADMIN_ACT_AS_V1
+  "Несохранённые изменения карточки пропадут. Войти от имени сотрудника?": {"en":"Unsaved changes to the card will be lost. Act as the staff member?","ru":"Несохранённые изменения карточки пропадут. Войти от имени сотрудника?","uz":"Kartochkadagi saqlanmagan o‘zgarishlar yo‘qoladi. Xodim nomidan kirilsinmi?"},   // ADMIN_ACT_AS_V1
+  "Входов от имени не было.": {"en":"No act-as sessions.","ru":"Входов от имени не было.","uz":"Xodim nomidan kirishlar bo‘lmagan."},   // ADMIN_ACT_AS_V1
+  "{admin} от имени {target}": {"en":"{admin} as {target}","ru":"{admin} от имени {target}","uz":"{admin} — {target} nomidan"},   // ADMIN_ACT_AS_V1
+  "Идёт сейчас": {"en":"In progress","ru":"Идёт сейчас","uz":"Hozir davom etmoqda"},   // ADMIN_ACT_AS_V1
+  "Действий: {n} · записей: {w}": {"en":"Actions: {n} · writes: {w}","ru":"Действий: {n} · записей: {w}","uz":"Amallar: {n} · yozuvlar: {w}"},   // ADMIN_ACT_AS_V1
+  "Показать действия": {"en":"Show actions","ru":"Показать действия","uz":"Amallarni ko‘rsatish"},   // ADMIN_ACT_AS_V1
+  "Скрыть действия": {"en":"Hide actions","ru":"Скрыть действия","uz":"Amallarni yashirish"},   // ADMIN_ACT_AS_V1
+  "Действий не было.": {"en":"No actions.","ru":"Действий не было.","uz":"Amallar bo‘lmagan."},   // ADMIN_ACT_AS_V1
+  "Показаны первые {n} действий.": {"en":"Showing the first {n} actions.","ru":"Показаны первые {n} действий.","uz":"Dastlabki {n} ta amal ko‘rsatilgan."},   // ADMIN_ACT_AS_V1
+  "только чтение": {"en":"read only","ru":"только чтение","uz":"faqat o‘qish"},   // ADMIN_ACT_AS_V1
+  "Отказ · {code}": {"en":"Refused · {code}","ru":"Отказ · {code}","uz":"Rad etildi · {code}"},   // ADMIN_ACT_AS_V1
+  "меньше минуты": {"en":"less than a minute","ru":"меньше минуты","uz":"bir daqiqadan kam"},   // ADMIN_ACT_AS_V1
+  "{h} ч {m} мин": {"en":"{h} h {m} min","ru":"{h} ч {m} мин","uz":"{h} soat {m} daq"},   // ADMIN_ACT_AS_V1
+  "{what}: добавление": {"en":"{what}: added","ru":"{what}: добавление","uz":"{what}: qo‘shildi"},   // ADMIN_ACT_AS_V1
+  "{what}: изменение": {"en":"{what}: changed","ru":"{what}: изменение","uz":"{what}: o‘zgartirildi"},   // ADMIN_ACT_AS_V1
+  "{what}: запись": {"en":"{what}: saved","ru":"{what}: запись","uz":"{what}: saqlandi"},   // ADMIN_ACT_AS_V1
+  "{what}: удаление": {"en":"{what}: deleted","ru":"{what}: удаление","uz":"{what}: o‘chirildi"},   // ADMIN_ACT_AS_V1
+  "{what}: загрузка файла": {"en":"{what}: file uploaded","ru":"{what}: загрузка файла","uz":"{what}: fayl yuklandi"},   // ADMIN_ACT_AS_V1
+  "{what}: удаление файла": {"en":"{what}: file deleted","ru":"{what}: удаление файла","uz":"{what}: fayl o‘chirildi"},   // ADMIN_ACT_AS_V1
+  "Приём оплаты частями": {"en":"Split payment received","ru":"Приём оплаты частями","uz":"To‘lov qismlarga bo‘lib qabul qilindi"},   // ADMIN_ACT_AS_V1
+  "Счёт за визит": {"en":"Invoice for the visit","ru":"Счёт за визит","uz":"Tashrif uchun hisob"},   // ADMIN_ACT_AS_V1
+  "Отмена счёта": {"en":"Invoice cancelled","ru":"Отмена счёта","uz":"Hisob bekor qilindi"},   // ADMIN_ACT_AS_V1
+  "Возврат по строке счёта": {"en":"Invoice line refunded","ru":"Возврат по строке счёта","uz":"Hisob qatori bo‘yicha qaytarish"},   // ADMIN_ACT_AS_V1
+  "Счёт — в долг": {"en":"Invoice moved to debt","ru":"Счёт — в долг","uz":"Hisob — qarzga"},   // ADMIN_ACT_AS_V1
+  "Удаление счёта": {"en":"Invoice deleted","ru":"Удаление счёта","uz":"Hisob o‘chirildi"},   // ADMIN_ACT_AS_V1
+  "Открытие смены кассы": {"en":"Cash shift opened","ru":"Открытие смены кассы","uz":"Kassa smenasi ochildi"},   // ADMIN_ACT_AS_V1
+  "Закрытие смены кассы": {"en":"Cash shift closed","ru":"Закрытие смены кассы","uz":"Kassa smenasi yopildi"},   // ADMIN_ACT_AS_V1
+  "Движение денег в кассе": {"en":"Cash movement","ru":"Движение денег в кассе","uz":"Kassadagi pul harakati"},   // ADMIN_ACT_AS_V1
+  "Приём аванса": {"en":"Advance payment received","ru":"Приём аванса","uz":"Avans qabul qilindi"},   // ADMIN_ACT_AS_V1
+  "Возврат аванса": {"en":"Advance payment refunded","ru":"Возврат аванса","uz":"Avans qaytarildi"},   // ADMIN_ACT_AS_V1
+  "Открытие визита": {"en":"Visit opened","ru":"Открытие визита","uz":"Tashrif ochildi"},   // ADMIN_ACT_AS_V1
+  "Услуги в записи": {"en":"Services added to the booking","ru":"Услуги в записи","uz":"Yozuvga xizmatlar qo‘shildi"},   // ADMIN_ACT_AS_V1
+  "Услуга убрана из записи": {"en":"Service removed from the booking","ru":"Услуга убрана из записи","uz":"Xizmat yozuvdan olib tashlandi"},   // ADMIN_ACT_AS_V1
+  "Документ в карте пациента": {"en":"Document added to the patient card","ru":"Документ в карте пациента","uz":"Bemor kartasiga hujjat qo‘shildi"},   // ADMIN_ACT_AS_V1
+  "Отзыв документа пациента": {"en":"Patient document withdrawn","ru":"Отзыв документа пациента","uz":"Bemor hujjati qaytarib olindi"},   // ADMIN_ACT_AS_V1
+  "Объединение пациентов": {"en":"Patients merged","ru":"Объединение пациентов","uz":"Bemorlar birlashtirildi"},   // ADMIN_ACT_AS_V1
+  "Процедура взята": {"en":"Procedure taken","ru":"Процедура взята","uz":"Muolaja olindi"},   // ADMIN_ACT_AS_V1
+  "Подписанный документ в архив": {"en":"Signed document archived","ru":"Подписанный документ в архив","uz":"Imzolangan hujjat arxivga"},   // ADMIN_ACT_AS_V1
+  "Выдача товара пациенту": {"en":"Item dispensed to the patient","ru":"Выдача товара пациенту","uz":"Bemorga mahsulot berildi"},   // ADMIN_ACT_AS_V1
+  "Выдача товара": {"en":"Item dispensed","ru":"Выдача товара","uz":"Mahsulot berildi"},   // ADMIN_ACT_AS_V1
+  "Удаление неоплаченной услуги": {"en":"Unpaid service removed","ru":"Удаление неоплаченной услуги","uz":"To‘lanmagan xizmat o‘chirildi"},   // ADMIN_ACT_AS_V1
+  "Замена неоплаченной услуги": {"en":"Unpaid service replaced","ru":"Замена неоплаченной услуги","uz":"To‘lanmagan xizmat almashtirildi"},   // ADMIN_ACT_AS_V1
+  "Размещение в стационаре": {"en":"Admitted to the inpatient ward","ru":"Размещение в стационаре","uz":"Statsionarga joylashtirildi"},   // ADMIN_ACT_AS_V1
+  "Запись истории болезни": {"en":"Case history entry","ru":"Запись истории болезни","uz":"Kasallik tarixi yozuvi"},   // ADMIN_ACT_AS_V1
+  "Назначение лечения": {"en":"Treatment order","ru":"Назначение лечения","uz":"Davolash tayinlovi"},   // ADMIN_ACT_AS_V1
+  "Отметка о выполнении назначения": {"en":"Treatment order marked as done","ru":"Отметка о выполнении назначения","uz":"Tayinlov bajarilgani belgilandi"},   // ADMIN_ACT_AS_V1
+  "Сброс пароля сотрудника": {"en":"Staff password reset","ru":"Сброс пароля сотрудника","uz":"Xodim paroli tiklandi"},   // ADMIN_ACT_AS_V1
+  "Строки счёта": {"en":"Invoice lines","ru":"Строки счёта","uz":"Hisob qatorlari"},   // ADMIN_ACT_AS_V1
+  "Движение товара": {"en":"Stock movements","ru":"Движение товара","uz":"Mahsulot harakati"},   // ADMIN_ACT_AS_V1
+  "Заявки CRM": {"en":"CRM requests","ru":"Заявки CRM","uz":"CRM arizalari"},   // ADMIN_ACT_AS_V1
+  "Задачи CRM": {"en":"CRM tasks","ru":"Задачи CRM","uz":"CRM vazifalari"},   // ADMIN_ACT_AS_V1
+  "Журнал пациента": {"en":"Patient log","ru":"Журнал пациента","uz":"Bemor jurnali"},   // ADMIN_ACT_AS_V1
+  "Журнал счёта": {"en":"Invoice log","ru":"Журнал счёта","uz":"Hisob jurnali"},   // ADMIN_ACT_AS_V1
+  "Услуги стационара": {"en":"Inpatient services","ru":"Услуги стационара","uz":"Statsionar xizmatlari"},   // ADMIN_ACT_AS_V1
+  "Родственники пациента": {"en":"Patient’s relatives","ru":"Родственники пациента","uz":"Bemorning qarindoshlari"},   // ADMIN_ACT_AS_V1
+  "Шаблоны услуг": {"en":"Service templates","ru":"Шаблоны услуг","uz":"Xizmat shablonlari"},   // ADMIN_ACT_AS_V1
+  "Настройки документов": {"en":"Document settings","ru":"Настройки документов","uz":"Hujjat sozlamalari"},   // ADMIN_ACT_AS_V1
+  "Права ролей": {"en":"Role permissions","ru":"Права ролей","uz":"Rol huquqlari"},   // ADMIN_ACT_AS_V1
+  "Документы клиники": {"en":"Clinic documents","ru":"Документы клиники","uz":"Klinika hujjatlari"},   // ADMIN_ACT_AS_V1
+  "Фото пациентов": {"en":"Patient photos","ru":"Фото пациентов","uz":"Bemorlar fotosuratlari"},   // ADMIN_ACT_AS_V1
+  "Фото врачей": {"en":"Doctor photos","ru":"Фото врачей","uz":"Shifokorlar fotosuratlari"},   // ADMIN_ACT_AS_V1
+  "Файлы Telegram": {"en":"Telegram files","ru":"Файлы Telegram","uz":"Telegram fayllari"},   // ADMIN_ACT_AS_V1
+  "Логотип клиники": {"en":"Clinic logo","ru":"Логотип клиники","uz":"Klinika logotipi"},   // ADMIN_ACT_AS_V1
   // CRM_ONE_WAY_V1 — услуги записи живут только в визите: строку записи из карточки не переносят (отказ двери
   // /api/db, crm/one-way.js), отпущенная отменой строка ждёт новой даты (views/crm.js)
   "Услуга уже записана: перенос, смену врача и услуги делают в календаре, а убрать услугу из записи можно крестиком в карточке.": {"en":"The service is already booked: rescheduling, changing the doctor or the service is done in the calendar; to remove the service from the booking, use the cross on the card.","ru":"Услуга уже записана: перенос, смену врача и услуги делают в календаре, а убрать услугу из записи можно крестиком в карточке.","uz":"Xizmat allaqachon yozilgan: ko‘chirish, shifokor yoki xizmatni almashtirish kalendarda bajariladi, xizmatni yozuvdan olib tashlash uchun kartochkadagi xochchani bosing."},   // CRM_ONE_WAY_V1

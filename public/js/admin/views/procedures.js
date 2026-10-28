@@ -33,6 +33,9 @@ import { currentUser } from '../data.js';
 import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor бывает 1, а не true
 import { openItemPickerModal, isOwnShelfShort } from './item-picker-modal.js?v=billoptin2';   // PROC_PRODUCTS_V1 — reuse the dispense picker; ревью F4
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
+// ADMIN_ACT_AS_V1 (R3) — отметка о выполнении процедуры (procedure_complete,
+// verified_by) — подпись исполнителя: от чужого имени неактивна с подсказкой.
+import { lockSignButton, refuseSignWhileActing } from '../act-as-client.js';
 
 const STATUS_RU = { added: 'Назначено', queued: 'В очереди', in_progress: 'Выполняется', completed: 'Выполнено' };
 const OPEN = ['added', 'queued', 'in_progress'];
@@ -174,8 +177,8 @@ function rowEl(r, body) {
                         [r.done_by || '', r.done_at ? fmtDateTime(r.done_at) : '', r.notes].filter(Boolean).join(' · '))
                     // PROC_TOUCH_V1 — отметка крупная: процедурная сестра нажимает
                     // её планшетом в руке, а не мышью за столом.
-                    : h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => openDone(r, body) },
-                        Icon('Check', { size: 14 }), ' ' + tr('Выполнить'))));
+                    : lockSignButton(h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => openDone(r, body) },   // ADMIN_ACT_AS_V1 (R3)
+                        Icon('Check', { size: 14 }), ' ' + tr('Выполнить')))));
 }
 
 // PROC_PRODUCTS_V1 — compact «Выполнить процедуру» modal, styled like the inpatient
@@ -295,11 +298,11 @@ function openDone(r, body) {
         ),
         h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', padding: '12px 14px', borderTop: '1px solid var(--ink-100, #eee)' } },
             h('button', { class: 'btn btn-outline', type: 'button', onclick: close }, tr('Отмена')),
-            h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+            lockSignButton(h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {   // ADMIN_ACT_AS_V1 (R3)
                 const ok = await complete(r, note.value.trim());
                 if (!ok) return;
                 close(); await load(); paint(body);
-            } }, tr('Отметить выполненной')))));
+            } }, tr('Отметить выполненной'))))));
     document.body.appendChild(overlay);
     if (!inpatient) refreshItems();
 }
@@ -395,6 +398,7 @@ async function takeProcedure(r, body) {
 // Отметка о выполнении. Проверку «касса ещё не провела» (#15) держит сервер —
 // здесь она была бы украшением: тот же вызов доступен из консоли браузера.
 async function complete(r, noteText) {
+    if (refuseSignWhileActing()) return false;   // ADMIN_ACT_AS_V1 (R3) — от чужого имени не отмечается
     const { error } = await supabase.rpc('procedure_complete', { kind: r.kind, id: r.id, notes: noteText || '' });
     if (error) { toast(trf('Ошибка: {msg}', { msg: error.message }), 'fail'); return false; }
     toast(tr('Процедура выполнена'));

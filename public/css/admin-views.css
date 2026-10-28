@@ -4687,6 +4687,25 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 #update-banner .ub-link { background: transparent; border: none; padding: 0; font: inherit; font-weight: 600; color: var(--primary-700, #0a6e61); cursor: pointer; }
 #update-banner .ub-link:hover { text-decoration: underline; }
 
+/* ADMIN_ACT_AS_V1 — «Вы работаете от имени …» (admin/act-as-client.js
+   renderActAsBanner), та же точка крепления, что у #licence-banner. Свой цвет —
+   фиолетовый: это не беда (янтарь лицензии) и не новость (серое обновление), а
+   другой человек за этим компьютером, и спутать полосы нельзя. Кнопка
+   «Вернуться» — всегда видна, на узком экране уходит на свою строку. */
+#act-as-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 9px 18px; font-size: 13.5px; background: var(--purple-50, #f5f3ff); color: var(--purple-700, #6d28d9); border-bottom: 1px solid #ddd6fe; }
+#act-as-banner .aab-msg { flex: 1; min-width: 220px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; line-height: 1.4; }
+#act-as-banner .aab-who { font-weight: 600; }
+#act-as-banner .aab-sep { opacity: .6; }
+#act-as-banner .aab-back { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--purple-500, #8b5cf6); background: var(--white, #fff); color: var(--purple-700, #6d28d9); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+#act-as-banner .aab-back:hover { background: #ede9fe; }
+#act-as-banner .aab-back:focus-visible { outline: 2px solid var(--purple-500, #8b5cf6); outline-offset: 2px; }
+#act-as-banner .aab-back:disabled { opacity: .6; cursor: default; }
+/* Окно аватара: кто работает на самом деле — над «Выйти». */
+.aab-pop { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--purple-50, #f5f3ff); border: 1px solid #ddd6fe; color: var(--purple-700, #6d28d9); }
+.aab-pop .aab-pop-t { display: flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 700; }
+.aab-pop .aab-pop-who { font-size: 12.5px; color: var(--ink-700); }
+.aab-pop .aab-pop-back { width: 100%; justify-content: center; font-size: 12.5px; }
+
 /* UPDATE_DELIVERY_V1 (Task 6) — the approval screen itself (views/updates.js).
    Calm throughout: an offer is good news, "up to date" is unremarkable, and
    even the failed-attempt notice stops at the --warn (amber) register, never

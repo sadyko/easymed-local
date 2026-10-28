@@ -400,6 +400,9 @@ export function resolveCustomRole(db, body, sentRole) {
 export function employeeView(u) {
   return {
     id: u.id, username: u.username, full_name: u.full_name, role: u.role, is_active: !!u.is_active,
+    // ADMIN_ACT_AS_V1 (R2) — временный пароль: сотрудник ещё не входил, и
+    // «Войти как сотрудник» экран ему не предлагает (сервер отказал бы targetNew).
+    must_change_password: !!u.must_change_password,
     extra_roles: parseJsonArray(u.extra_roles),
     custom_role_code: u.custom_role_code || null,   // CUSTOM_ROLES_V1
     first_name: u.first_name, last_name: u.last_name, middle_name: u.middle_name,
