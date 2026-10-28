@@ -15,7 +15,8 @@ import nodeTest from 'node:test';
 const test = (name, fn) => nodeTest(name, { timeout: 20000 }, fn);
 import assert from 'node:assert/strict';
 import { installFakeDom, El } from './cabinet-harness.mjs';
-import { miniDocument, el } from './mini-dom.mjs';
+import { miniDocument, el, HIDE_ATTRS } from './mini-dom.mjs';
+HIDE_ATTRS.add('data-split-id');   // ревью T3 — метка пары живёт только между раскладками
 import { htmlToText, sanitizeStoredHtml } from '../../shared/rich-text.js';
 
 installFakeDom();
@@ -29,9 +30,9 @@ const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const count = (html, re) => (html.match(re) || []).length;
 const BR3 = '<th><br></th><th><br></th><th><br></th>';
 
-function setup(html, key = 'physical_exam') {
+function setup(html, key = 'physical_exam', cls = 'sec-b rich') {
     const doc = miniDocument();
-    const f = el(doc, '<div class="sec-b rich" data-field="' + key + '" contenteditable="true">' + html + '</div>');
+    const f = el(doc, '<div class="' + cls + '" data-field="' + key + '" contenteditable="true">' + html + '</div>');
     doc.body.appendChild(f);
     return { doc, f };
 }
@@ -281,6 +282,11 @@ test('F6: шаблон «Из текущего документа» → «Исп
     assert.ok(form(dst, 'hpi').innerHTML.includes('<table class="a4-tbl">'), 'пустая таблица шаблона не вставилась');
     const snap = WS.docSnapshot(dst, 'conclusion');
     assert.ok(snap.exam.includes('<table class="a4-tbl">') && snap.hpi.includes('<table class="a4-tbl">'));
+    // ревью T3 (LOW) — «Использовать» в раздел, где только пустая таблица: шаблон дописывается, таблица остаётся
+    const dst2 = await open(303, { chief_complaint: 'Кашель' });
+    form(dst2, 'therapy_text').innerHTML = EMPTY;
+    WS.tplApply(dst2, { doc_type: '0', body: { therapy_text: 'Диета' } });
+    assert.ok(form(dst2, 'therapy_text').innerHTML.startsWith('<table class="a4-tbl">') && form(dst2, 'therapy_text').innerHTML.endsWith('Диета'), 'пустую таблицу заменил шаблон: ' + form(dst2, 'therapy_text').innerHTML);
     // бланк кабинета: в панели оформления — «Таблица»; окно размера и панель таблицы — в документе; на бумагу не идут
     const fdoc = dst.container.querySelector('iframe').contentDocument;
     const fbar = fdoc.body.querySelector('[data-bk-fmt]');
@@ -316,4 +322,153 @@ test('F6: печать — тонкие рамки ячеек и фон заго
         assert.match(css, /table\.a4-tbl th,[^{]*table\.a4-restbl th[^{]*\{[^}]*background:\s*#[0-9a-f]{6}/i, type + '/' + v + ': фон заголовка');
         assert.match(css, /@media print\{[^]*print-color-adjust:\s*exact/, type + '/' + v + ': фон заголовка не печатается');
     }
+});
+
+// ═══ ревью T3 ═══════════════════════════════════════════════════════════════
+const widths = (root) => root.querySelectorAll('table').map((t) => t.querySelectorAll('tr').map((r) => r.children.length).join(','));
+const mergedDiv = (parts) => SPLIT.mergedFieldClone(parts);
+
+// HIGH 1 — новая таблица из курсора в половине разрезанной таблицы вставала
+// между половинами, и слияние отдавало ей хвост старой (3×18 + 2×2,3×73).
+test('ревью T3 (HIGH 1): «Таблица» из половины разрезанной таблицы — после ПОСЛЕДНЕЙ половины; старая таблица строк не теряет', () => {
+    for (const where of ['page1', 'page2']) {
+        const { f, cont, parts } = splitTable(8, 5);
+        const cell = where === 'page1' ? td(f, 2, 1) : td(cont, 6, 1);
+        const r = TB.insertTable(where === 'page1' ? f : cont, cell.firstChild, 1, 2, 2, parts);
+        assert.equal(r.host, cont, where + ': вставка — в часть с последней половиной');
+        assert.equal(cont.querySelector('table').nextSibling, r.table, where + ': сразу после половины на странице 2');
+        const m = mergedDiv(parts);
+        assert.deepEqual(widths(m), ['3,3,3,3,3,3,3,3,3', '2,2'], where + ': ' + widths(m).join(' | '));
+        assert.ok(!/data-split-id/.test(m.outerHTML), 'метка пары попала в поле целиком');
+    }
+});
+
+test('ревью T3 (HIGH 1): пара половин — по метке пары: чужая таблица между половинами хвост старой не получает', () => {
+    const { doc, f, cont, parts } = splitTable(8, 5);
+    const copy = cont.querySelector('table');
+    assert.ok(copy.getAttribute('data-split-id') && copy.getAttribute('data-split-id') === f.querySelector('table').getAttribute('data-split-id'), 'у оригинала и копии одна метка пары');
+    f.appendChild(TB.buildTable(doc, 2, 2));   // как вставлялось раньше — между половинами
+    const m = mergedDiv(parts);
+    assert.deepEqual(widths(m), ['3,3,3,3', '2,2', '3,3,3,3,3,3'], 'строки старой таблицы ушли в новую: ' + widths(m).join(' | '));
+});
+
+test('ревью T3 (HIGH 1): «Таблица» из пункта списка на странице 2 — после всего списка: один ol, нумерация цела', () => {
+    const { doc, f } = setup('<ol>' + range(1, 30).map((i) => '<li>Назначение ' + i + '</li>').join('') + '</ol>');
+    const cont = doc.createElement('div');
+    assert.ok(SPLIT.splitRichField(f, cont, { fits: capFits(f, 10) }));
+    placeCont(doc, cont);
+    const cont2 = doc.createElement('div');
+    assert.ok(SPLIT.splitRichField(cont, cont2, { fits: capFits(cont, 10) }));
+    placeCont(doc, cont2);
+    const parts = [f, cont, cont2];
+    const li = cont.querySelectorAll('li')[3];
+    const r = TB.insertTable(cont, li.firstChild, 2, 2, 2, parts);
+    assert.equal(r.host, cont2);
+    const m = mergedDiv(parts).innerHTML;
+    assert.equal(count(m, /<ol/g), 1);
+    assert.ok(/Назначение 30<\/li><\/ol><table class="a4-tbl">/.test(m), m.slice(-200));
+});
+
+test('ревью T3 (MEDIUM 1): таблица во вложенном абзаце (Word), разрезанная по страницам, — одна цепочка по метке пары', () => {
+    const { doc, f } = setup('<div>ОАК</div><div>' + TBL(9) + '</div>');
+    const cont = doc.createElement('div');
+    assert.ok(SPLIT.splitRichField(f, cont, { fits: capFits(f, 6) }));
+    placeCont(doc, cont);
+    const parts = [f, cont];
+    assert.ok(cont.firstChild.tagName === 'DIV' && cont.querySelector('table[data-cont-split]'), 'таблица разрезана внутри абзаца');
+    assert.equal(TB.tableChain(cont.querySelector('td'), parts).length, 2);
+    TB.addColumn(td(cont, 7, 0), parts);
+    for (const tr of [...f.querySelectorAll('tr'), ...cont.querySelectorAll('tr')]) assert.equal(tr.children.length, 4);
+    const lastP1 = [...f.querySelectorAll('td')].pop();
+    assert.equal(TB.cellStep(lastP1, parts, false), cont.querySelector('tbody[data-cont-split]').firstChild.children[0], 'Tab — в первую строку страницы 2, а не новая строка');
+    TB.deleteTable(td(cont, 8, 1), parts);
+    assert.equal(f.querySelectorAll('table').length + cont.querySelectorAll('table').length, 0, '«Удалить таблицу» со страницы 2 — обе половины');
+});
+
+// MEDIUM 1 — вставка из Excel и Word: обёртки, объединения, класс.
+const NL = String.fromCharCode(10);
+const EXCEL = '<table border=0 cellpadding=0 cellspacing=0 width=300 style="border-collapse:collapse;width:225pt">' + NL
+    + ' <colgroup><col width=100 span=3></colgroup>' + NL
+    + ' <tr height=20>' + NL + '  <td colspan=2 class=xl65 style="font-weight:700">Показатель</td>' + NL + '  <td>Норма</td>' + NL + ' </tr>' + NL
+    + range(1, 3).map((i) => ' <tr height=20>' + NL + '  <td>Hb ' + i + '</td>' + NL + '  <td>' + i + '</td>' + NL + '  <td>120-160</td>' + NL + ' </tr>' + NL).join('')
+    + '</table>';
+const WORD = '<div class="WordSection1"><p class="MsoNormal">Таблица:</p>' + NL
+    + '<table class="MsoTableGrid" border="1"><tbody><tr><td rowspan="2">Hb</td><td>140</td></tr><tr><td>138</td></tr><tr><td colspan="2">итог</td></tr></tbody></table>' + NL
+    + '<p class="MsoNormal">&nbsp;</p></div>';
+
+test('ревью T3 (MEDIUM 1): вставка из Excel и Word — таблица на уровне поля, сетка без объединений, класс a4-tbl; повторно — без изменений', () => {
+    let { f } = setup('<div>Анализы <b>ниже</b></div>' + EXCEL);
+    TB.normalizePasted(f);
+    let t = f.querySelector('table');
+    assert.equal(t.parentNode, f);
+    assert.ok(/\ba4-tbl\b/.test(t.getAttribute('class')), t.getAttribute('class'));
+    assert.deepEqual(widths(f), ['3,3,3,3']);
+    assert.ok(!/colspan|rowspan/.test(f.innerHTML));
+    assert.equal(t.querySelector('tr').children[1].innerHTML, '<br>', 'развёрнутое объединение — пустая ячейка');
+    const once = f.innerHTML;
+    TB.normalizePasted(f);
+    assert.equal(f.innerHTML, once, 'повторное приведение что-то поменяло');
+    ({ f } = setup('<div>до</div>' + WORD + '<div>после</div>'));
+    TB.normalizePasted(f);
+    t = f.querySelector('table');
+    assert.equal(t.parentNode, f, 'таблица Word осталась в обёртке WordSection1');
+    assert.deepEqual(widths(f), ['2,2,2']);
+    assert.equal(t.querySelectorAll('tr')[1].children[0].innerHTML, '<br>', 'rowspan — пустая ячейка ниже');
+    assert.ok(f.innerHTML.indexOf('Таблица:') < f.innerHTML.indexOf('<table'), 'подпись над таблицей переехала');
+    assert.ok(f.innerHTML.indexOf('<table') < f.innerHTML.indexOf('после'));
+    // таблица в ячейке или в пункте не поднимается
+    ({ f } = setup('<ul><li>пункт<table><tbody><tr><td>x</td></tr></tbody></table></li></ul>'));
+    TB.normalizePasted(f);
+    assert.equal(f.querySelector('table').parentNode.tagName, 'LI');
+});
+
+// HIGH 2 — вставка таблицы с переводами строк между тегами в простое (pre-wrap) поле.
+test('ревью T3 (HIGH 2): переводы строк между тегами таблицы (Excel, Word) — не <br>: ни в форме, ни перед разрезом', () => {
+    for (const [name, html] of [['excel', EXCEL], ['word', WORD]]) {
+        const { f } = setup('Анализы ниже' + html, 'physical_exam', 'sec-b');   // простое поле: pre-wrap
+        const stored = WS._blankFieldHtml([f]);
+        assert.ok(!/<(?:table|tbody|tr|colgroup)[^>]*>(?:\s*<br>)/.test(stored) && !/<\/t[dhr]>\s*<br>/.test(stored), name + ': <br> внутри таблицы: ' + stored.slice(0, 160));
+        assert.equal(SPLIT.breakLines(f), 0, name + ': breakLines поставил <br> между тегами');
+    }
+    // а перевод строки в тексте — по-прежнему строка
+    const { f } = setup('Строка 1' + NL + 'Строка 2', 'physical_exam', 'sec-b');
+    assert.equal(WS._blankFieldHtml([f]), 'Строка 1<br>Строка 2');
+});
+
+test('ревью T3 (MEDIUM 2): очистка хранит start только у ol и только число', () => {
+    assert.equal(sanitizeStoredHtml('<ol start="25" onclick="x()"><li>a</li></ol>'), '<ol start="25"><li>a</li></ol>');
+    assert.equal(sanitizeStoredHtml('<ul start="3"><li>b</li></ul>'), '<ul><li>b</li></ul>');
+    assert.equal(sanitizeStoredHtml('<ol start="x1"><li>c</li></ol><ol start="-2"><li>d</li></ol>'), '<ol><li>c</li></ol><ol><li>d</li></ol>');
+    assert.equal(sanitizeStoredHtml('<ol start="007"><li>e</li></ol>'), '<ol start="7"><li>e</li></ol>');
+});
+
+// MEDIUM 2 — первый пункт страницы 2 стал абзацем: абзац на месте, нумерация продолжается.
+test('ревью T3 (MEDIUM 2): пункт на шве ol стал абзацем — абзац на своём месте, второй список продолжает нумерацию (start в хранении)', () => {
+    const { doc, f } = setup('<ol>' + range(1, 8).map((i) => '<li>Назначение ' + i + '</li>').join('') + '</ol>');
+    const cont = doc.createElement('div');
+    assert.ok(SPLIT.splitRichField(f, cont, { fits: capFits(f, 4) }));
+    placeCont(doc, cont);
+    // «− отступ» первого пункта страницы 2: он выходит из списка перед ним
+    const ol2 = cont.querySelector('ol');
+    const li5 = ol2.firstChild;
+    const p = doc.createElement('div'); p.appendChild(doc.createTextNode(li5.textContent));
+    ol2.removeChild(li5);
+    cont.insertBefore(p, ol2);
+    const stored = WS._blankFieldHtml([f, cont]);
+    assert.ok(/Назначение 4<\/li><\/ol><div>Назначение 5<\/div><ol start="5"><li>Назначение 6</, stored);
+});
+
+// MEDIUM 3 — удаление строки или столбца с текстом спрашивает.
+test('ревью T3 (MEDIUM 3, LOW): текст в строке и столбце (по всем половинам); Shift+Tab в первой ячейке — курсор перед таблицей', () => {
+    const { f, cont, parts } = splitTable(8, 5);
+    assert.equal(TB.rowHasText(td(f, 1, 0)), true);
+    assert.equal(TB.columnHasText(td(cont, 6, 2), parts), true);
+    const { f: g } = setup('<div>над таблицей</div>' + TB.buildTable(miniDocument(), 3, 2).outerHTML);
+    assert.equal(TB.rowHasText(g.querySelector('td')), false);
+    assert.equal(TB.columnHasText(g.querySelector('td'), [g]), false);
+    let at = TB.beforeTable(g.querySelector('th'), [g]);
+    assert.deepEqual([at.node.nodeType, at.node.data, at.offset], [3, 'над таблицей', 12], 'в конец строки над таблицей');
+    const { f: h } = setup(TB.buildTable(miniDocument(), 2, 2).outerHTML);
+    at = TB.beforeTable(h.querySelector('th'), [h]);
+    assert.deepEqual([at.node, at.offset], [h, 0], 'над таблицей ничего — место перед ней');
 });

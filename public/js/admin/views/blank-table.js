@@ -97,15 +97,25 @@ function splitToHost(host, node, offset) {
  * Вставить таблицу в курсор (node, offset) части поля host. Курсор в ячейке
  * другой таблицы или в списке — новая таблица встаёт после них (вложенных
  * таблиц нет). Под таблицей — абзац, если дальше нет текста.
- * @returns {{table: Element, caret: {node: Node, offset: number}}}
+ * Ревью T3 (HIGH 1) — таблица или список, разрезанные по страницам, — одно
+ * целое: новая таблица встаёт после ПОСЛЕДНЕЙ половины (parts — части поля), а
+ * не между половинами, где слияние отдавало ей хвост старой таблицы.
+ * @returns {{table: Element, caret: {node: Node, offset: number}, host: Element}}
  */
-export function insertTable(host, node, offset, rows, cols) {
+export function insertTable(host, node, offset, rows, cols, parts = null) {
     const doc = host.ownerDocument;
     const table = buildTable(doc, rows, cols);
-    const inside = node && node !== host && host.contains(node) ? closestUpTo(node, NO_INSIDE, host) : null;
+    let inside = null;
+    if (node && node !== host && host.contains(node)) {
+        for (let n = isEl(node) ? node : node.parentNode; n && n !== host; n = n.parentNode) if (NO_INSIDE.has(tagOf(n))) inside = n;   // самое внешнее
+    }
     let ref;
     if (inside) {
-        let top = inside;
+        const halves = parts ? splitChain(inside, parts) : [inside];
+        const last = halves[halves.length - 1] || inside;
+        const list = (parts || [host]).filter(Boolean);
+        host = list.find((p) => p === last || (p.contains && p.contains(last))) || host;
+        let top = last;
         while (top.parentNode && top.parentNode !== host) top = top.parentNode;
         ref = top.nextSibling;
     } else {
@@ -119,7 +129,125 @@ export function insertTable(host, node, offset, rows, cols) {
         p.appendChild(doc.createElement('br'));
         host.insertBefore(p, next);
     }
-    return { table, caret: { node: table.querySelector('th'), offset: 0 } };
+    return { table, caret: { node: table.querySelector('th'), offset: 0 }, host };
+}
+
+/**
+ * DOC_RICH_FORMAT_V1 (ревью T3, MEDIUM 1) — ВСТАВКА ИЗ EXCEL И WORD. Таблицы,
+ * вставленные в часть поля, приводятся к «простой таблице» документа:
+ *   - таблица поднимается на уровень части поля из обёрток (Word: <div
+ *     class=WordSection1>, Excel и браузер — div/span/font); обёртка делится
+ *     вокруг неё, опустевшая — убирается (таблица внутри пункта списка или
+ *     ячейки не трогается);
+ *   - colspan / rowspan разворачиваются в простые ячейки — сетка
+ *     прямоугольная, короткие строки дополняются (объединения ячеек нет —
+ *     решение владельца);
+ *   - класс a4-tbl — тонкие рамки на экране и в печати.
+ * Повторный вызов ничего не меняет; уже приведённая таблица проверяется
+ * дёшево (зовётся на каждый ввод: вставка браузером через execCommand не
+ * отличима от набора по inputType).
+ * @returns {number} сколько таблиц изменено
+ */
+export function normalizePasted(host) {
+    if (!host || !host.querySelectorAll) return 0;
+    let n = 0;
+    for (const t of [...host.querySelectorAll('table')]) {
+        if (!host.contains(t) || closestUpTo(t.parentNode, LIFT_STOP, host)) continue;   // вложенная (в ячейке, в пункте) — как есть
+        const classed = /\ba4-(tbl|restbl)\b/.test(t.getAttribute('class') || '');
+        if (t.parentNode === host && classed && !needsGrid(t)) continue;
+        liftToHost(host, t);
+        squareGrid(t);
+        if (!classed) t.setAttribute('class', ((t.getAttribute('class') || '') + ' ' + TBL_CLASS).trim());
+        n += 1;
+    }
+    return n;
+}
+// Объединения ячеек или строки разной длины — сетку надо выровнять.
+function needsGrid(t) {
+    if (t.querySelector('[colspan],[rowspan]')) return true;
+    let w = -1;
+    for (const r of t.querySelectorAll('tr')) { const k = cellsOf(r).length; if (w < 0) w = k; else if (k !== w) return true; }
+    return false;
+}
+const LIFT_STOP = new Set(['TD', 'TH', 'LI', 'TABLE']);
+function liftToHost(host, t) {
+    if (t.parentNode === host) return;
+    const was = t.parentNode;
+    const ref = (() => { const p = t.parentNode; const i = indexIn(p, t); p.removeChild(t); return splitToHost(host, p, i); })();
+    host.insertBefore(t, ref);
+    // обёртки, опустевшие после подъёма, — убрать (до части поля)
+    for (let w = was; w && w !== host;) {
+        const up = w.parentNode;
+        if (isEl(w) && !String(w.textContent || '').trim() && !w.querySelector('table,ul,ol,img,br')) w.remove();
+        w = up;
+    }
+}
+// Сетка без объединений: каждая строка — столько ячеек, сколько столбцов у таблицы.
+function squareGrid(t) {
+    const rows = [];
+    for (const k of kids(t)) {
+        if (tagOf(k) === 'TR') rows.push(k);
+        else if (tagOf(k) === 'THEAD' || tagOf(k) === 'TBODY' || tagOf(k) === 'TFOOT') for (const r of kids(k)) if (tagOf(r) === 'TR') rows.push(r);
+    }
+    if (!rows.length) return;
+    const doc = t.ownerDocument;
+    const span = (c, a) => Math.max(1, Math.min(a === 'colspan' ? TBL_MAX_COLS * 4 : 200, parseInt(c.getAttribute(a), 10) || 1));
+    const slots = rows.map(() => []);
+    rows.forEach((tr, r) => {
+        let c = 0;
+        for (const cell of cellsOf(tr)) {
+            while (slots[r][c]) c += 1;
+            const cs = span(cell, 'colspan');
+            const rs = Math.min(span(cell, 'rowspan'), rows.length - r);
+            for (let dr = 0; dr < rs; dr += 1) for (let dc = 0; dc < cs; dc += 1) slots[r + dr][c + dc] = dr === 0 && dc === 0 ? { cell } : { tag: tagOf(cell).toLowerCase() };
+            cell.removeAttribute('colspan');
+            cell.removeAttribute('rowspan');
+            c += cs;
+        }
+    });
+    const width = Math.max(...slots.map((s) => s.length));
+    rows.forEach((tr, r) => {
+        const own = cellsOf(tr);
+        if (own.length === width && slots[r].every((s, i) => s && s.cell === own[i])) return;
+        for (const c of own) tr.removeChild(c);
+        for (let c = 0; c < width; c += 1) {
+            const s = slots[r][c];
+            tr.appendChild(s && s.cell ? s.cell : newCell(doc, s && s.tag === 'th' ? 'th' : 'td'));
+        }
+    });
+}
+
+/**
+ * Shift+Tab в первой ячейке — курсор перед таблицей: в конец строки над ней,
+ * а если над таблицей ничего нет — на место перед ней.
+ */
+export function beforeTable(cell, parts) {
+    const chain = tableChain(cell, parts);
+    if (!chain.length) return null;
+    let top = chain[0];
+    const list = (parts || []).filter(Boolean);
+    const host = list.find((p) => p === top || (p.contains && p.contains(top))) || top.parentNode;
+    while (top.parentNode && top.parentNode !== host) top = top.parentNode;
+    let prev = top.previousSibling;
+    while (isText(prev) && !/\S/.test(prev.data)) prev = prev.previousSibling;
+    if (isText(prev)) return { node: prev, offset: prev.data.length };
+    if (isEl(prev) && !NO_INSIDE.has(tagOf(prev))) return cellCaret(prev, true);
+    return { node: host, offset: indexIn(host, top) };
+}
+
+/** Есть ли текст в ячейках строки (спросить перед «− строка»). */
+export function rowHasText(cell) {
+    const tr = cell && cell.parentNode;
+    return tagOf(tr) === 'TR' && cellsOf(tr).some((c) => String(c.textContent || '').trim());
+}
+/** Есть ли текст в ячейках столбца во всех половинах таблицы (спросить перед «− столбец»). */
+export function columnHasText(cell, parts) {
+    const chain = tableChain(cell, parts);
+    const tr = cell && cell.parentNode;
+    if (!chain.length || tagOf(tr) !== 'TR') return false;
+    const col = cellsOf(tr).indexOf(cell);
+    const { head, body } = layout(chain);
+    return head.concat(body).some((r) => { const c = cellsOf(r)[col]; return !!c && !!String(c.textContent || '').trim(); });
 }
 
 /** Все половины таблицы ячейки (или самой таблицы) по порядку страниц. */

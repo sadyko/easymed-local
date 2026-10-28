@@ -15,7 +15,8 @@ import nodeTest from 'node:test';
 const test = (name, fn) => nodeTest(name, { timeout: 20000 }, fn);
 import assert from 'node:assert/strict';
 import { installFakeDom } from './cabinet-harness.mjs';
-import { miniDocument, el } from './mini-dom.mjs';
+import { miniDocument, el, HIDE_ATTRS } from './mini-dom.mjs';
+HIDE_ATTRS.add('data-split-id');   // ревью T3 — метка пары живёт только между раскладками
 import { htmlToText, sanitizeStoredHtml } from '../../shared/rich-text.js';
 
 installFakeDom();
@@ -457,29 +458,42 @@ test('ревью T2 (HIGH): метка между блоками — не бло
     assert.equal(fieldIsRich(el(miniDocument(), '<div>текст<span data-caret-mark="1"></span></div>')), false, 'метка — не оформление');
 });
 
-// MEDIUM 1 — между половинами набрали текст или нажали Enter: слияние всё равно
-// узнаёт пару; пустое выбрасывается, написанное — после целой таблицы/списка.
-test('ревью T2 (MEDIUM 1): текст, пустая строка, абзац между половинами — одна таблица и один список; написанное — после них', () => {
+// MEDIUM 1 (ревью T2) — между половинами нажали Enter: слияние пару узнаёт,
+// пустое выбрасывается. Ревью T3 (MEDIUM 2): НАПИСАННОЕ между половинами
+// остаётся на месте — половины до и после него раздельные (так их и видно на
+// страницах); раньше слияние уносило написанное за конец всей таблицы/списка.
+test('ревью T2/T3: пустое между половинами — одна таблица; написанное — на своём месте, таблицы и списки до и после него раздельные', () => {
     let { doc, f, cont } = setup('<div><b>ОАК:</b></div>' + RESTBL(1, 10));
     assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
-    f.appendChild(doc.createTextNode('ПОСЛЕ'));        // набрано за половиной на странице 1
-    f.appendChild(el(doc, '<div><br></div>'));          // Enter
-    cont.insertBefore(doc.createTextNode('ДО'), cont.firstChild);   // набрано перед продолжением на странице 2
+    f.appendChild(el(doc, '<div><br></div>'));          // Enter за половиной на странице 1
+    f.appendChild(doc.createTextNode(' '));
+    cont.insertBefore(el(doc, '<div><br></div>'), cont.firstChild);   // и перед продолжением на странице 2
     placeCont(doc, cont);
-    const stored = WS._blankFieldHtml([f, cont]);
+    let stored = WS._blankFieldHtml([f, cont]);
     assert.equal(count(stored, /<table/g), 1, stored.slice(0, 200));
     assert.equal(count(stored, /<thead/g), 1);
-    assert.ok(stored.endsWith('</table>ПОСЛЕ<br>ДО'), stored.slice(-60));
+    assert.ok(stored.endsWith('</tbody></table>'), stored.slice(-60));
     joinCont(f, cont, 'rich');
     assert.equal(f.querySelectorAll('table').length, 1);
     assert.ok(!/<div><br><\/div>/.test(f.innerHTML), 'пустая строка между половинами осталась');
-    assert.ok(f.innerHTML.endsWith('</table>ПОСЛЕ<br>ДО'), f.innerHTML.slice(-60));
-    // список и абзац между половинами
-    ({ doc, f, cont } = setup('<ul>' + items(1, 8) + '</ul>'));
+    // набрано за половиной на странице 1 и перед продолжением на странице 2
+    ({ doc, f, cont } = setup('<div><b>ОАК:</b></div>' + RESTBL(1, 10)));
+    assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
+    f.appendChild(doc.createTextNode('ПОСЛЕ'));
+    cont.insertBefore(doc.createTextNode('ДО'), cont.firstChild);
+    placeCont(doc, cont);
+    stored = WS._blankFieldHtml([f, cont]);
+    assert.equal(count(stored, /<table/g), 2, 'половины по разные стороны текста — две таблицы');
+    assert.equal(count(stored, /<thead/g), 2, 'у второй — свой заголовок (бывший повтор)');
+    assert.ok(/<\/table>ПОСЛЕ<br>ДО<table class="a4-restbl"><thead>/.test(stored), stored.slice(stored.indexOf('</table>'), stored.indexOf('</table>') + 80));
+    assert.ok(!/data-|contenteditable/.test(stored));
+    // пункт списка на шве превращён в абзац — абзац на месте, второй ol продолжает нумерацию
+    ({ doc, f, cont } = setup('<ol>' + items(1, 8) + '</ol>'));
     assert.ok(splitRichField(f, cont, { fits: capFits(f, 4) }));
     f.appendChild(el(doc, '<div>Абзац</div>'));
     joinCont(f, cont, 'rich');
-    assert.equal(f.innerHTML, '<ul>' + items(1, 8) + '</ul><div>Абзац</div>');
+    assert.equal(f.innerHTML, '<ol>' + items(1, 4) + '</ol><div>Абзац</div><ol start="5">' + items(5, 8) + '</ol>');
+    assert.equal(sanitizeStoredHtml(f.innerHTML), f.innerHTML, 'очистка теряет start второго списка');
     // оригинала нет — продолжение своё, порядок как был
     ({ doc, f, cont } = setup('<p>x</p>' + RESTBL(1, 10)));
     assert.ok(splitRichField(f, cont, { fits: capFits(f, 6) }));
@@ -561,7 +575,7 @@ test('ревью T2 (MEDIUM 2): перевод строки поля pre-wrap �
     const doc = miniDocument();
     const g = el(doc, '<div>' + NL + 'а<b>x' + NL + 'y</b>' + NL + '</div>');
     breakLines(g);
-    assert.equal(g.innerHTML, '<br>а<b>x<br>y</b><br>');
+    assert.equal(g.innerHTML, '<br>а<b>x<br>y</b>' + NL, 'пробел/перевод строки в конце поля — не строка (правило textBreaks)');
     assert.equal(breakLines(g), 0, 'второй раз — нечего');
 });
 

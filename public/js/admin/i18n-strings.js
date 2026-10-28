@@ -12005,5 +12005,10 @@ export const STRINGS = {
   "Удалить столбец": {"en":"Delete the column","ru":"Удалить столбец","uz":"Ustunni o‘chirish"},   // DOC_RICH_FORMAT_V1
   "Строку заголовка не удалить, пока в таблице есть строки": {"en":"The header row cannot be deleted while the table has rows","ru":"Строку заголовка не удалить, пока в таблице есть строки","uz":"Jadvalda qatorlar bor ekan, sarlavha qatorini o‘chirib bo‘lmaydi"},   // DOC_RICH_FORMAT_V1
   "Удалить таблицу вместе с текстом в ней?": {"en":"Delete the table together with its text?","ru":"Удалить таблицу вместе с текстом в ней?","uz":"Jadval ichidagi matn bilan birga o‘chirilsinmi?"},   // DOC_RICH_FORMAT_V1
+  // DOC_RICH_FORMAT_V1 (ревью T3) — вопрос перед удалением строки или столбца с текстом, отмена операции таблицы
+  "Удалить строку вместе с текстом в ней?": {"en":"Delete the row together with its text?","ru":"Удалить строку вместе с текстом в ней?","uz":"Qator ichidagi matn bilan birga o‘chirilsinmi?"},   // DOC_RICH_FORMAT_V1
+  "Удалить столбец вместе с текстом в нём?": {"en":"Delete the column together with its text?","ru":"Удалить столбец вместе с текстом в нём?","uz":"Ustun ichidagi matn bilan birga o‘chirilsinmi?"},   // DOC_RICH_FORMAT_V1
+  "Отменить действие": {"en":"Undo","ru":"Отменить действие","uz":"Amalni bekor qilish"},   // DOC_RICH_FORMAT_V1
+  "Вернуть таблицу, как была до последней операции": {"en":"Restore the table as it was before the last change","ru":"Вернуть таблицу, как была до последней операции","uz":"Jadvalni oxirgi amaldan oldingi holatiga qaytarish"},   // DOC_RICH_FORMAT_V1
   // /DOC_RICH_FORMAT_V1
 };

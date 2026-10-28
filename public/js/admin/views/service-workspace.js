@@ -41,8 +41,8 @@ import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — фла�
 import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 import { sanitizeStoredHtml, richHasContent, textBreaks } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком
 import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
-import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark, gapCaret, edgeHop, breakLines, keepMarks } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
-import { TBL_MAX_ROWS, TBL_MAX_COLS, insertTable, tableChain, tableHasText, cellStep, cellCaret, addRow, canRemoveRow, removeRow, addColumn, removeColumn, deleteTable, insertCellBreak } from './blank-table.js';   // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в бланке
+import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark, gapCaret, edgeHop, breakLines, keepMarks, clearSplitIds } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
+import { TBL_MAX_ROWS, TBL_MAX_COLS, insertTable, tableChain, tableHasText, cellStep, cellCaret, addRow, canRemoveRow, removeRow, addColumn, removeColumn, deleteTable, insertCellBreak, normalizePasted, beforeTable, rowHasText, columnHasText } from './blank-table.js';   // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в бланке
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -4628,7 +4628,8 @@ export function tplApply(ctx, t, profile = null) {
     for (const k of Object.keys(fields)) {
         const el = ctx.container && ctx.container.querySelector('.a4-input[data-field="' + k + '"]');
         const cur = el ? String(el.innerHTML || '').trim() : '';
-        if (textOf(cur)) fields[k] = cur + '<br><br>' + fields[k];
+        // DOC_RICH_FORMAT_V1 (ревью T3) — пустая таблица — тоже содержание раздела: шаблон дописывается, а не заменяет её
+        if (textOf(cur) || richHasContent(sanitizeStoredHtml(cur))) fields[k] = cur + '<br><br>' + fields[k];
     }
     applyFields(ctx, fields, { template: true, sanitized: true });
     wsState.saved = false;
@@ -6822,10 +6823,14 @@ export function _blankFieldHtml(parts) {
 // <br>; в поле .rich (white-space:normal) «\n» — пробел и остаётся как есть.
 // DOC_RICH_FORMAT_V1 (T2) — разметку можно взять у слитой копии (src), а
 // pre-wrap — только у живого поля p: у копии вне документа стиля нет.
+// DOC_RICH_FORMAT_V1 (ревью T3, HIGH 2) — правило textBreaks (rich-text.js):
+// пробелы и переводы строк МЕЖДУ тегами блоков и таблицы — не строки (вставка из
+// Excel и Word: «<tr>\n  <td>»); раньше каждый становился <br>, и перед
+// таблицей вырастало пустое место на страницу.
 function _blankPartHtml(p, src = p) {
     const html = sanitizeStoredHtml(src.innerHTML || '');
     if (!_blankPreWrap(p)) return html;
-    return html.split(/(<[^<>]*>)/).map((s, i) => (i % 2 ? s : s.replace(/\r?\n/g, '<br>'))).join('');
+    return textBreaks(html);
 }
 function _blankPreWrap(p) {
     try {
@@ -6940,6 +6945,9 @@ function _blankFlowBlocks(sheet) {
 function _paginateBlank(doc, ctx) {
     const sheet = doc.querySelector('.sheet');
     if (!sheet) return;
+    // DOC_RICH_FORMAT_V1 (ревью T3) — окно размера и панель таблицы при раскладке закрываются:
+    // таблица уезжает, панель вернётся по курсору (selectionchange)
+    for (const ui of doc.querySelectorAll('[data-bk-tblpick],[data-bk-tbl]')) ui.style.display = 'none';
     const caret = _blankSaveCaret(doc);
     try {
         // 1) merge continuations back into their primary field, drop separators
@@ -6952,6 +6960,8 @@ function _paginateBlank(doc, ctx) {
             cont.remove();
         }
         for (const g of [...doc.querySelectorAll('.bk-pagesep')]) g.remove();
+        // DOC_RICH_FORMAT_V1 (ревью T3) — метки пары нужны только для слияния; новые поставит разрез
+        clearSplitIds(doc.body || doc.documentElement);
 
         // 2) multi-pass split/transfer until stable (long docs need page 3, 4, …)
         // DOC_RICH_FORMAT_V1 (ревью T2, LOW) — продолжение с оформлением делится
@@ -7160,9 +7170,10 @@ function _blankWireTables(doc) {
         if (!s) return;
         const host = _blankHostOf(s.node);
         if (!host || !host.isConnected || !_blankTablesOn(host)) return;
-        const res = insertTable(host, s.node, s.offset, size[0], size[1]);
+        // ревью T3 (HIGH 1) — части поля: из половины разрезанной таблицы или списка — после всего целого
+        const res = insertTable(host, s.node, s.offset, size[0], size[1], _blankPartsOf(doc, _blankKeyOf(host)));
         _blankPutCaret(doc, res.caret);
-        _blankFireInput(host);
+        _blankFireInput(res.host || host);
     };
     grid.addEventListener('mouseover', (e) => { const c = e.target.closest && e.target.closest('[data-r]'); if (c) setSize(c.getAttribute('data-r'), c.getAttribute('data-c')); });
     grid.addEventListener('mousedown', (e) => { const c = e.target.closest && e.target.closest('[data-r]'); if (!c) return; e.preventDefault(); setSize(c.getAttribute('data-r'), c.getAttribute('data-c')); insertNow(); });
@@ -7227,28 +7238,64 @@ function _blankWireTables(doc) {
         rb.title = can ? tr('Удалить строку') : tr('Строку заголовка не удалить, пока в таблице есть строки');
     };
     doc.addEventListener('selectionchange', refresh);
+
+    // ─── отмена последней операции ─────────────────────────────────────────────
+    // Ревью T3 (MEDIUM 3) — операции таблицы меняют узлы мимо истории правки
+    // браузера, и Ctrl+Z их не возвращал. Перед операцией запоминается поле
+    // целиком; «Отменить действие» в панели (несколько секунд) и Ctrl+Z (пока
+    // врач ничего не набрал) возвращают его.
+    let undo = null;
+    let undoT = null;
+    const undoBtn = doc.createElement('button');
+    undoBtn.type = 'button';
+    undoBtn.setAttribute('data-tbl', 'undo');
+    undoBtn.textContent = tr('Отменить действие');
+    undoBtn.title = tr('Вернуть таблицу, как была до последней операции');
+    undoBtn.style.cssText = 'display:none;border:0;border-left:1px solid #374151;background:transparent;color:#99f6e4;cursor:pointer;padding:6px 9px;border-radius:0 5px 5px 0;' + font;
+    panel.appendChild(undoBtn);
+    const forgetUndo = () => { undo = null; clearTimeout(undoT); undoBtn.style.display = 'none'; };
+    const restoreUndo = () => {
+        const u = undo;
+        forgetUndo();
+        const primary = u && doc.querySelector('[data-field="' + u.key + '"]');
+        if (!primary) return;
+        for (const w of [...doc.querySelectorAll('[data-cont-wrap="' + u.key + '"]')]) w.remove();
+        primary.innerHTML = u.html;
+        _paginateBlank(doc, null);
+        const t = primary.querySelector('table') || primary;
+        _blankPutCaret(doc, cellCaret(t.querySelector('td,th') || primary));
+        _blankFireInput(primary);
+    };
     const run = (op) => {
+        if (op === 'undo') { restoreUndo(); return; }
         const cc = _blankCaretCell(doc);
         if (!cc) return;
         const parts = _blankPartsOf(doc, cc.key);
         const ask = () => !tableHasText(tableChain(cc.cell, parts)) || confirm(tr('Удалить таблицу вместе с текстом в ней?'));
+        const before = (() => { try { return mergedFieldClone(parts).innerHTML; } catch (e) { return null; } })();
         let at = null;
         if (op === 'row+') at = addRow(cc.cell, parts);
         else if (op === 'col+') at = addColumn(cc.cell, parts);
         else if (op === 'row-') {
-            // последняя строка таблицы — вместе с ней уходит и таблица
+            // последняя строка таблицы — вместе с ней уходит и таблица; строка с текстом — с вопросом (ревью T3)
             const left = tableChain(cc.cell, parts).reduce((n, t) => n + [...t.querySelectorAll('tr')].filter((r) => !r.closest('[data-cont-head]')).length, 0);
-            if (left <= 1 && !ask()) return;
+            if (left <= 1 ? !ask() : (rowHasText(cc.cell) && !confirm(tr('Удалить строку вместе с текстом в ней?')))) return;
             at = removeRow(cc.cell, parts);
         }
         else if (op === 'col-') {
             const one = tableChain(cc.cell, parts).every((t) => [...t.querySelectorAll('tr')].every((tr0) => tr0.children.length <= 1));
-            if (one && !ask()) return;
+            if (one ? !ask() : (columnHasText(cc.cell, parts) && !confirm(tr('Удалить столбец вместе с текстом в нём?')))) return;
             at = removeColumn(cc.cell, parts);
         } else if (op === 'del') { if (!ask()) return; at = deleteTable(cc.cell, parts); }
         if (!at) return;
         _blankPutCaret(doc, at);
         _blankFireInput(_blankHostOf(at.node) || cc.host);
+        if (before != null) {
+            undo = { key: cc.key, html: before };
+            undoBtn.style.display = '';
+            clearTimeout(undoT);
+            undoT = setTimeout(() => { undoBtn.style.display = 'none'; }, 8000);
+        }
         refresh();
     };
     panel.addEventListener('mousedown', (e) => {
@@ -7257,9 +7304,32 @@ function _blankWireTables(doc) {
         e.preventDefault();   // выделение остаётся в ячейке
         if (!b.disabled) run(b.getAttribute('data-tbl'));
     });
+    // набранное врачом после операции — отмена уже не про неё (наши события input — не isTrusted)
+    doc.addEventListener('input', (e) => { if (e.isTrusted) forgetUndo(); });
+
+    // ─── вставка из Excel и Word ───────────────────────────────────────────────
+    // Ревью T3 (MEDIUM 1) — вставленная таблица приводится к простой: на уровне
+    // поля (без обёрток Word), без объединений ячеек, с классом a4-tbl. Вставку
+    // через execCommand браузер помечает пустым inputType — проверяется любой
+    // настоящий ввод в поле с таблицей (приведённая таблица — проверка дешёвая).
+    doc.addEventListener('input', (e) => {
+        if (!e.isTrusted) return;
+        const host = _blankHostOf(e.target);
+        if (!host || !_blankTablesOn(host) || !host.querySelector('table')) return;
+        let changed = 0;
+        try { changed = normalizePasted(host); } catch (err) { return; }
+        if (changed) _blankFireInput(host);
+    });
+
+    // ─── скрыть панели ─────────────────────────────────────────────────────────
+    const hideUi = () => { panel.style.display = 'none'; closePicker(); };
+    try { doc.defaultView.addEventListener('blur', hideUi); } catch (e) { /* без окна — нечего */ }
+    doc.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideUi(); });
 
     // ─── клавиши в ячейке ──────────────────────────────────────────────────────
     doc.addEventListener('keydown', (e) => {
+        // Ctrl+Z сразу после операции таблицы — вернуть её (история браузера её не знает)
+        if (undo && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && String(e.key).toLowerCase() === 'z') { e.preventDefault(); restoreUndo(); return; }
         if ((e.key !== 'Tab' && e.key !== 'Enter') || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
         if (e.target && e.target.closest && e.target.closest('[data-bk-tblpick],[data-bk-tbl]')) return;   // клавиши окна размера и панели — их
         const cc = _blankCaretCell(doc);
@@ -7280,7 +7350,7 @@ function _blankWireTables(doc) {
         const parts = _blankPartsOf(doc, cc.key);
         const next = cellStep(cc.cell, parts, e.shiftKey);
         if (next) { _blankPutCaret(doc, cellCaret(next, true)); return; }
-        if (e.shiftKey) return;   // первая ячейка — дальше некуда
+        if (e.shiftKey) { _blankPutCaret(doc, beforeTable(cc.cell, parts)); return; }   // ревью T3 — первая ячейка: курсор перед таблицей
         const at = addRow(cc.cell, parts);   // Tab в последней ячейке — новая строка
         if (!at) return;
         const first = at.node.parentNode && at.node.parentNode.firstElementChild;

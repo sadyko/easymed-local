@@ -138,12 +138,20 @@ function matchOne(el, sel) {
     return true;
 }
 
+/**
+ * Атрибуты, которых проверка «не видит» в innerHTML/outerHTML: служебные метки,
+ * живущие только между раскладками (метка пары data-split-id — ревью T3).
+ * getAttribute их по-прежнему читает; что в хранение они не идут, проверяется
+ * отдельно (очистка, mergedFieldClone).
+ */
+export const HIDE_ATTRS = new Set();
+
 function serialize(n) {
     if (n.nodeType === 3) return escText(n.data);
     if (n.nodeType === 8) return '<!--' + n.data + '-->';
     const tag = n.tagName.toLowerCase();
     let attrs = '';
-    for (const [k, v] of n._attrs) attrs += ' ' + k + '="' + escAttr(v) + '"';
+    for (const [k, v] of n._attrs) if (!HIDE_ATTRS.has(k)) attrs += ' ' + k + '="' + escAttr(v) + '"';
     if (VOID.has(n.tagName)) return '<' + tag + attrs + '>';
     return '<' + tag + attrs + '>' + n._kids.map(serialize).join('') + '</' + tag + '>';
 }

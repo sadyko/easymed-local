@@ -33,6 +33,15 @@
 export const CONT_SPLIT = 'data-cont-split';
 export const CONT_HEAD = 'data-cont-head';
 export const CARET_MARK = 'data-caret-mark';
+// DOC_RICH_FORMAT_V1 (ревью T3, HIGH 1) — МЕТКА ПАРЫ. Оригинал и все его копии
+// на следующих страницах несут один data-split-id: слияние и операции таблицы
+// узнают половины по нему, а не «ближайшая таблица того же тега» (новая
+// таблица между половинами забирала себе хвост старой). Метка живёт только
+// между раскладками: после слияния она снимается (clearSplitIds), в хранение не
+// идёт (очистка пропускает лишь style/class/start).
+export const SPLIT_ID = 'data-split-id';
+let splitSeq = 0;
+const newSplitId = () => 's' + (splitSeq += 1).toString(36) + Math.random().toString(36).slice(2, 6);
 
 // Блочные элементы: они сами начинают строку и сами её заканчивают.
 const BLOCK = new Set(['DIV', 'P', 'UL', 'OL', 'TABLE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
@@ -178,7 +187,7 @@ export function firstAtom(n) {
  * таблица — с повтором заголовка).
  * @returns {boolean} разрезано ли
  */
-export function splitAt(field, cut, cont) {
+export function splitAt(field, cut, cont, fresh = null) {
     if (!field || !cut || !cont || cut === field) return false;
     let up = cut.parentNode;
     while (up && up !== field) up = up.parentNode;
@@ -188,6 +197,8 @@ export function splitAt(field, cut, cont) {
     let level = cut.parentNode;
     for (;;) {
         const top = level === field;
+        // ревью T3 (HIGH 1) — метка пары: оригинал и копия узнают друг друга по ней, не по тегу
+        if (!top && !level.getAttribute(SPLIT_ID)) { level.setAttribute(SPLIT_ID, newSplitId()); if (fresh) fresh.push(level); }
         const box = top ? cont : level.cloneNode(false);
         if (!top) box.setAttribute(CONT_SPLIT, '1');
         if (lead) box.appendChild(lead);
@@ -227,6 +238,7 @@ function headCopy(table) {
     for (const h of out) {
         h.setAttribute(CONT_HEAD, '1');
         h.setAttribute('contenteditable', 'false');
+        h.removeAttribute(SPLIT_ID);
         for (const m of findMarks(h)) m.remove();
     }
     return out;
@@ -241,13 +253,17 @@ function headCopy(table) {
  * текста — строки, как «\n» раньше) — всегда; в режиме 'rich' — только если
  * <br> в конце первой части стёрт правкой.
  *
- * DOC_RICH_FORMAT_V1 (ревью T2, MEDIUM 1) — между половинами таблицы или
- * списка могли набрать текст или нажать Enter (за половиной на странице 1,
- * перед продолжением на странице 2). Пару это не прячет: слияние смотрит сквозь
- * такое (текст, строчное, абзацы без списков и таблиц); пустое выбрасывается,
- * написанное встаёт после целой таблицы или списка. Метка курсора оттуда — в
- * шов: в конец последней ячейки (пункта) страницы 1 или в начало первой
+ * DOC_RICH_FORMAT_V1 (ревью T2, MEDIUM 1) — между половинами могли нажать
+ * Enter или поставить курсор (за половиной на странице 1, перед продолжением
+ * на странице 2). Пустое пару не прячет и выбрасывается; метка курсора оттуда —
+ * в шов: в конец последней ячейки (пункта) страницы 1 или в начало первой
  * ячейки (пункта) страницы 2 — курсор остаётся на той же странице.
+ *
+ * DOC_RICH_FORMAT_V1 (ревью T3, MEDIUM 2) — НАПИСАННОЕ между половинами
+ * (пункт списка, превращённый в абзац; текст, набранный в промежутке) остаётся
+ * на своём месте: половины до и после него — раздельные таблицы и списки, у
+ * второго ol нумерация продолжает первый (start). Раньше слияние уносило такой
+ * абзац за конец всего списка. Пара — по метке пары (SPLIT_ID), не по тегу.
  */
 export function joinCont(target, src, mode = 'rich') {
     if (!target || !src) return;
@@ -263,13 +279,8 @@ export function joinCont(target, src, mode = 'rich') {
         for (const m of lead) if (isMark(m)) putMark(m, copy, false);
         joinCont(partner, copy, 'rich');
         copy.remove();
-        for (const n of tail) if (!isMark(n) && !isEmptyStray(n)) target.appendChild(n);
-        // набранное на странице 1 и на странице 2 — разные строки
-        const kept = lead.filter((n) => !isMark(n) && !isEmptyStray(n));
-        const tl = lastReal(target);
-        if (kept.length && isInline(kept[0]) && isInline(tl) && !isBr(tl)) target.appendChild(target.ownerDocument.createElement('br'));
-        for (const n of kept) target.appendChild(n);
-    } else if (copy) unmark(copy);
+        // между половинами было только пустое (leadCopy/tailPartner) — оно выброшено
+    } else if (copy) unmark(copy, target);
     const first = firstReal(src);
     const last = lastReal(target);
     if (first && last && isInline(first) && isInline(last) && (mode === 'text' || !isBr(last))) {
@@ -277,46 +288,56 @@ export function joinCont(target, src, mode = 'rich') {
     }
     while (src.firstChild) {
         const n = src.firstChild;
-        if (isEl(n) && n.hasAttribute(CONT_SPLIT)) unmark(n);   // копия не в начале — своё целое, без меток
+        if (isEl(n) && n.hasAttribute(CONT_SPLIT)) unmark(n, target);   // копия не в начале — своё целое, без меток
         target.appendChild(n);
     }
-}
-// Набранное между половинами: текст, строчное, <br>, абзац без списков и таблиц.
-// Копия половины (CONT_SPLIT) — никогда не «между».
-function isStray(n) {
-    if (isNothing(n) || isText(n)) return true;
-    if (!isEl(n) || n.hasAttribute(CONT_SPLIT)) return false;
-    if (!isBlock(n)) return true;
-    return PARA.has(tagOf(n)) && !hasStruct(n);
 }
 function hasStruct(el) {
     for (const k of elementKids(el)) if (STRUCT.has(tagOf(k)) || hasStruct(k)) return true;
     return false;
 }
+// Пустое между половинами: пробелы, <br>, пустой абзац. Таблица и список (и
+// пустые) — содержание; метка курсора — не «пустое», её переносят в шов.
 function isEmptyStray(n) {
     if (isMark(n)) return false;
     if (isNothing(n) || isBr(n) || isWs(n)) return true;
-    if (!isEl(n)) return false;
+    if (!isEl(n) || STRUCT.has(tagOf(n)) || n.hasAttribute(CONT_SPLIT)) return false;
     return !String(n.textContent || '').trim() && !hasStruct(n) && !findMarks(n).length;
 }
-// Копия-половина в начале продолжения (перед ней может стоять набранное).
+const isGap = (n) => isMark(n) || isEmptyStray(n);
+// Пара: тот же тег и та же метка пары; у копии без метки (лист до ревью T3) — тег.
+function samePair(n, copy) {
+    if (!isEl(n) || !isEl(copy) || tagOf(n) !== tagOf(copy)) return false;
+    const id = copy.getAttribute(SPLIT_ID);
+    return id ? n.getAttribute(SPLIT_ID) === id : true;
+}
+// Копия-половина в начале продолжения (перед ней — только пустое).
 function leadCopy(src) {
     for (let n = src.firstChild; n; n = n.nextSibling) {
         if (isEl(n) && n.hasAttribute(CONT_SPLIT)) return n;
-        if (!isStray(n)) return null;
+        if (!isGap(n)) return null;
     }
     return null;
 }
-// Её оригинал в конце части: у таблицы и списка — сквозь набранное после них;
-// у div/p/tbody — только последний блок (их строки — сами «набранное»).
+// Её оригинал в конце части (после него — только пустое).
 function tailPartner(target, copy) {
-    const tag = tagOf(copy);
-    if (!STRUCT.has(tag)) { const l = lastReal(target); return isEl(l) && tagOf(l) === tag ? l : null; }
     for (let n = target.lastChild; n; n = n.previousSibling) {
-        if (isEl(n) && tagOf(n) === tag) return n;
-        if (!isStray(n)) return null;
+        if (isGap(n)) continue;
+        return samePair(n, copy) ? n : null;
     }
     return null;
+}
+// Оригинал копии по метке пары где угодно в части (для нумерации разошедшихся списков).
+function pairById(target, copy) {
+    const id = copy.getAttribute(SPLIT_ID);
+    if (!id || !target.querySelectorAll) return null;
+    const all = [...target.querySelectorAll('[' + SPLIT_ID + '="' + id + '"]')].filter((e) => e !== copy && tagOf(e) === tagOf(copy));
+    return all.length ? all[all.length - 1] : null;
+}
+/** Снять метки пары во всём поле — после слияния они не нужны (живут только между раскладками). */
+export function clearSplitIds(root) {
+    if (!root || !root.querySelectorAll) return;
+    for (const e of root.querySelectorAll('[' + SPLIT_ID + ']')) e.removeAttribute(SPLIT_ID);
 }
 // Ячейка (пункт) на краю таблицы или списка: последняя строка/пункт или первая
 // строка данных/пункт; col — колонка (−1 — крайняя по направлению).
@@ -388,7 +409,7 @@ export function gapCaret(parts, node, offset, dir = 'stay', col = -1) {
     const tailS = lastReal(host);
     const next = list[i + 1];
     const nextC = next && firstReal(next);
-    if (isEl(tailS) && STRUCT.has(tagOf(tailS)) && isEl(nextC) && nextC.hasAttribute(CONT_SPLIT) && tagOf(nextC) === tagOf(tailS)
+    if (isEl(tailS) && STRUCT.has(tagOf(tailS)) && isEl(nextC) && nextC.hasAttribute(CONT_SPLIT) && samePair(tailS, nextC)
         && !tailS.contains(node) && pos > indexIn(host, tailS)) {
         return dir === 'fwd' ? { ...caretIn(edgeBox(nextC, false, col), false), host: next } : { ...caretIn(edgeBox(tailS, true, col), true), host };
     }
@@ -396,7 +417,7 @@ export function gapCaret(parts, node, offset, dir = 'stay', col = -1) {
     const headC = firstReal(host);
     const prev = list[i - 1];
     const prevS = prev && lastReal(prev);
-    if (i > 0 && isEl(headC) && headC.hasAttribute(CONT_SPLIT) && STRUCT.has(tagOf(headC)) && isEl(prevS) && tagOf(prevS) === tagOf(headC)
+    if (i > 0 && isEl(headC) && headC.hasAttribute(CONT_SPLIT) && STRUCT.has(tagOf(headC)) && samePair(prevS, headC)
         && !headC.contains(node) && (node === host ? pos <= indexIn(host, headC) : pos < indexIn(host, headC))) {
         return dir === 'back' ? { ...caretIn(edgeBox(prevS, true, col), true), host: prev } : { ...caretIn(edgeBox(headC, false, col), false), host };
     }
@@ -422,7 +443,7 @@ export function edgeHop(parts, node, dir, col = -1) {
         const c = firstReal(host);
         const prev = list[i - 1];
         const p = lastReal(prev);
-        if (isEl(c) && c.hasAttribute(CONT_SPLIT) && STRUCT.has(tagOf(c)) && isEl(p) && tagOf(p) === tagOf(c)) {
+        if (isEl(c) && c.hasAttribute(CONT_SPLIT) && STRUCT.has(tagOf(c)) && samePair(p, c)) {
             const edge = edgeItem(c, false);
             if (edge && edge.contains(node)) return { ...caretIn(edgeBox(p, true, col), true), host: prev };
         }
@@ -431,7 +452,7 @@ export function edgeHop(parts, node, dir, col = -1) {
         const s = lastReal(host);
         const next = list[i + 1];
         const n = firstReal(next);
-        if (isEl(s) && STRUCT.has(tagOf(s)) && isEl(n) && n.hasAttribute(CONT_SPLIT) && tagOf(n) === tagOf(s)) {
+        if (isEl(s) && STRUCT.has(tagOf(s)) && isEl(n) && n.hasAttribute(CONT_SPLIT) && samePair(s, n)) {
             const edge = edgeItem(s, true);
             if (edge && edge.contains(node)) return { ...caretIn(edgeBox(n, false, col), false), host: next };
         }
@@ -455,6 +476,9 @@ function edgeItem(struct, atEnd) {
  * следующих частях поля. Те же правила пары, что у слияния (leadCopy /
  * tailPartner), — значит, ровно то, что слияние соберёт в одно целое.
  * Неразрезанное — [struct].
+ * Ревью T3 (HIGH 1, MEDIUM 1) — половины узнаются по метке пары: так находится
+ * и таблица, вложенная в разрезанный абзац (вставка из Word), и цепочка через
+ * несколько страниц. Лист без меток (до ревью T3) — по правилам слияния.
  */
 export function splitChain(struct, parts) {
     const list = (parts || []).filter(Boolean);
@@ -462,6 +486,12 @@ export function splitChain(struct, parts) {
     let cur = struct;
     let i = partOf(cur);
     if (i < 0 || !isEl(cur)) return [struct];
+    const id = cur.getAttribute(SPLIT_ID);
+    if (id) {
+        const all = [];
+        for (const p of list) for (const e of p.querySelectorAll('[' + SPLIT_ID + '="' + id + '"]')) if (tagOf(e) === tagOf(cur)) all.push(e);
+        if (all.indexOf(cur) > -1) return all;
+    }
     for (let guard = 0; guard < 500 && i > 0 && cur.hasAttribute(CONT_SPLIT) && leadCopy(list[i]) === cur; guard += 1) {
         const p = tailPartner(list[i - 1], cur);
         if (!p) break;
@@ -491,6 +521,11 @@ export function keepMarks(from, to) {
  * стоит врачу выделить слово жирным, поле — разметка, и разрезу не за что
  * зацепиться: «строк» в нём одна. На экране «\n» и <br> в pre-wrap — одно и то
  * же, и форма пишет «\n» таких полей <br> (то же правило) — поле не меняется.
+ * Ревью T3 (HIGH 2) — правило textBreaks (rich-text.js): пробелы и переводы
+ * строк МЕЖДУ тегами блоков и таблицы (вставка из Excel и Word: «<tr>\n  <td>»)
+ * — не строки документа, их «\n» не трогается; «\n» сразу после <br> —
+ * оформление исходника. Иначе таблица из Excel получала по <br> на строку и
+ * пустое место на страницу перед собой.
  * @returns {number} сколько <br> поставлено
  */
 export function breakLines(el) {
@@ -503,6 +538,8 @@ export function breakLines(el) {
     for (const t of texts) {
         const p = t.parentNode;
         const ref = t.nextSibling;
+        if (!/\S/.test(t.data) && (edgeAt(t, el, 'prev') || edgeAt(t, el, 'next'))) continue;
+        if (isBr(t.previousSibling)) t.data = t.data.replace(/^\r?\n/, '');
         const pieces = t.data.split(/\r?\n/);
         t.data = pieces[0];
         for (let k = 1; k < pieces.length; k += 1) {
@@ -514,12 +551,33 @@ export function breakLines(el) {
     }
     return made;
 }
+// Тег рядом с текстовым узлом — край блока или таблицы (как BLOCK_EDGE_RE в
+// textBreaks): сосед-блок, начало/конец блока-родителя, начало/конец поля.
+const EDGE = new Set(['P', 'DIV', 'UL', 'OL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD', 'H3', 'H4']);
+function edgeAt(t, root, side) {
+    const sib = side === 'prev' ? t.previousSibling : t.nextSibling;
+    if (sib) return isEl(sib) && EDGE.has(tagOf(sib));
+    const p = t.parentNode;
+    return p === root || EDGE.has(tagOf(p));
+}
 // Копия, которой не с чем слиться, становится обычным блоком: метки сняты у неё
 // и у вложенных копий; заголовок таблицы остаётся (он теперь её собственный).
-function unmark(el) {
+// Ревью T3 (MEDIUM 2) — ol, отделённый от своей пары абзацем, продолжает её
+// нумерацию (start = начало пары + её пункты); пары нет вовсе — нумерация своя.
+// Метка пары остаётся до конца слияния: по ней к этой копии присоединится
+// копия со следующей страницы.
+function unmark(el, target = null) {
     if (el.hasAttribute(CONT_SPLIT)) {
         el.removeAttribute(CONT_SPLIT);
-        if (tagOf(el) === 'OL') el.removeAttribute('start');
+        if (tagOf(el) === 'OL') {
+            const p = target ? pairById(target, el) : null;
+            if (p) {
+                const base = parseInt(p.getAttribute('start'), 10);
+                let n = 0;
+                for (const k of elementKids(p)) if (tagOf(k) === 'LI') n += 1;
+                el.setAttribute('start', String((Number.isFinite(base) ? base : 1) + n));
+            } else el.removeAttribute('start');
+        }
     }
     if (el.hasAttribute(CONT_HEAD)) { el.removeAttribute(CONT_HEAD); el.removeAttribute('contenteditable'); }
     for (const k of elementKids(el)) unmark(k);
@@ -550,9 +608,11 @@ export function splitRichField(field, cont, { fits, tooTall } = {}) {
     let best = -1;
     while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        splitAt(field, cuts[mid], cont);
+        const fresh = [];
+        splitAt(field, cuts[mid], cont, fresh);
         let ok = false;
-        try { ok = !!fits(); } finally { joinCont(field, cont, 'rich'); }
+        // проба не оставляет следа: и копии, и метки пары, поставленные ею
+        try { ok = !!fits(); } finally { joinCont(field, cont, 'rich'); for (const e of fresh) e.removeAttribute(SPLIT_ID); }
         if (ok) { best = mid; lo = mid + 1; } else hi = mid - 1;
     }
     if (best < 0) return false;
@@ -583,6 +643,7 @@ export function mergedFieldClone(parts) {
         if (!contIsBlank(c)) joinCont(root, c, contMode(p));
     }
     for (const m of findMarks(root)) m.remove();
+    clearSplitIds(root);
     return root;
 }
 

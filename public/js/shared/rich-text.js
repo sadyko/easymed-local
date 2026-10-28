@@ -117,7 +117,7 @@ function escText(text) {
   return text.replace(/&(?!(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);)/gi, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function cleanAttrs(raw) {
+function cleanAttrs(raw, tag = '') {
   const out = [];
   const re = /([a-zA-Z-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
   let m;
@@ -130,6 +130,10 @@ function cleanAttrs(raw) {
     } else if (name === 'class') {
       const keep = String(value).split(/\s+/).filter((c) => CLASS_OK.has(c));
       if (keep.length) out.push('class="' + keep.join(' ') + '"');
+    } else if (name === 'start' && tag === 'ol' && /^\s*\d{1,5}\s*$/.test(value)) {
+      // DOC_RICH_FORMAT_V1 (ревью T3, MEDIUM 2) — нумерация списка, который продолжает
+      // предыдущий (между ними абзац): только число.
+      out.push('start="' + Number(value) + '"');
     }
     // Всё прочее — включая on*, href, src, id — не проходит.
   }
@@ -189,7 +193,7 @@ export function sanitizeStoredHtml(input) {
     if (t === 'li' && top() === 'li') closeTo('li');
     if ((t === 'td' || t === 'th' || t === 'tr') && (top() === 'td' || top() === 'th')) closeTo(top());
     if (t === 'tr' && top() === 'tr') closeTo('tr');
-    out += isFont ? '<span' + fontToSpanAttrs(m[2] || '') + '>' : '<' + t + cleanAttrs(m[2] || '') + '>';
+    out += isFont ? '<span' + fontToSpanAttrs(m[2] || '') + '>' : '<' + t + cleanAttrs(m[2] || '', t) + '>';
     if (!VOID.has(t)) open.push(t);
   }
   if (!dropDepth) out += escText(raw.slice(i));
