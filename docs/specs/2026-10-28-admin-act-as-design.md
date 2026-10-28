@@ -16,7 +16,7 @@
 - **Журнал — источник правды о том, кто действовал на самом деле.**
   - `act_as_sessions(id, admin_id, target_id, started_at, ended_at, end_reason)`, где `end_reason` ∈ «Вернулся», «Вышел», «Истекло», «Сессия завершена», «Сотрудник недоступен».
   - `act_as_actions(id, act_as_id, at, kind, name, status)`:
-    - `kind` = `db` (запись через `/api/db`: таблица и операция) или `rpc` (имя RPC) или `users` (запись через `/api/users`);
+    - `kind` = `db` (запись через `/api/db`: таблица и операция) или `rpc` (имя RPC) или `users` (запись через `/api/users`) или `storage` (загрузка и удаление файла через `/api/storage`: только корзина, без пути объекта);
     - `status` — HTTP-код ответа.
   - Чтения не пишутся. Пишется каждый RPC и каждая запись. Данных пациента в журнале нет: только имена таблиц и RPC.
 - **Где видно «от имени».**
@@ -70,7 +70,8 @@
 - **Промежуточный слой журнала** после `attachUser`: для запросов с `req.user.acting_admin` пишет `act_as_actions` по завершении ответа (`res.on('finish')`):
   - записи `/api/db` (не select);
   - все `/api/rpc`;
-  - записи `/api/users`.
+  - записи `/api/users`;
+  - загрузку и удаление файла `/api/storage` (вид `storage`, «МЕТОД /storage/корзина»).
 - **Подпись (R3):**
   - Проверка в обработчике записи `visit_services.notes` (`cabinet-notes.js`: новая или изменённая запись `kind:'signed'` при `acting_admin` → 403).
   - `verified_by` у лабораторных результатов и процедур, и строки `inpatient_reviews`, при `acting_admin` → 403. Общая функция `refuseSignWhileActing(user)`.

@@ -42,8 +42,9 @@ test('мигр. 249: причины конца и виды действий — 
   assert.throws(() => ins.run(null, 'Вернулся'), /CHECK/, 'причина без конца');
   assert.throws(() => ins.run('2026-10-28T10:00:00Z', null), /CHECK/, 'конец без причины');
   const act = db.prepare('INSERT INTO act_as_actions (act_as_id, kind, name, status) VALUES (1, ?, ?, 200)');
-  for (const k of ['db', 'rpc', 'users']) act.run(k, 'x');
-  assert.throws(() => act.run('storage', 'x'), /CHECK/);
+  // ADMIN_ACT_AS_V1 (задача 2) — storage: загрузка и удаление файла (/api/storage).
+  for (const k of ['db', 'rpc', 'users', 'storage']) act.run(k, 'x');
+  assert.throws(() => act.run('files', 'x'), /CHECK/);
 });
 
 test('мигр. 249: удаление сессии закрывает открытую запись журнала — «Сессия завершена», после 2 часов — «Истекло» ровно в +2 ч', () => {

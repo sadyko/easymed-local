@@ -8,7 +8,9 @@
 //      — тоже действие, попытка):
 //        • /api/db — запись (не select): «таблица.операция»;
 //        • /api/rpc — каждый вызов: имя RPC;
-//        • /api/users — запись (не GET): «МЕТОД /users/…».
+//        • /api/users — запись (не GET): «МЕТОД /users/…»;
+//        • /api/storage — загрузка и удаление файла: «МЕТОД /storage/корзина»
+//          (без пути объекта).
 //      Чтения не пишутся. Данных пациента нет: ни тела запроса, ни ответа —
 //      только имена таблиц и RPC.
 //   2. ВХОД ОТ ИМЕНИ КОНЧИЛСЯ САМ (2 часа, сотрудник отключён, …), а экран ещё
@@ -37,6 +39,13 @@ export function actAsEntry(req) {
   }
   if ((path === '/api/users' || path.startsWith('/api/users/')) && !READS.has(req.method)) {
     return { kind: 'users', name: req.method + ' ' + clean(path.slice('/api'.length)) };
+  }
+  // ADMIN_ACT_AS_V1 (задача 2) — второй путь записи: файлы (/api/storage —
+  // загрузка и удаление). Пишется только корзина: в пути объекта бывает номер
+  // пациента и имя файла, а журнал хранит одни имена таблиц, RPC и корзин.
+  if (path.startsWith('/api/storage/') && !READS.has(req.method)) {
+    const bucket = path.slice('/api/storage/'.length).split('/')[0];
+    return { kind: 'storage', name: req.method + ' /storage/' + clean(bucket) };
   }
   return null;
 }

@@ -34,13 +34,15 @@ CREATE INDEX idx_act_as_sessions_admin   ON act_as_sessions (admin_id, started_a
 CREATE INDEX idx_act_as_sessions_started ON act_as_sessions (started_at);
 
 -- Действия от имени: kind — db (запись /api/db: «таблица.операция»), rpc (имя
--- RPC), users (запись /api/users: «МЕТОД /users/…»); status — HTTP-код ответа.
--- Данных пациента здесь нет и быть не должно: только имена таблиц и RPC.
+-- RPC), users (запись /api/users: «МЕТОД /users/…»), storage (загрузка и
+-- удаление файла /api/storage: «МЕТОД /storage/корзина», без пути объекта);
+-- status — HTTP-код ответа.
+-- Данных пациента здесь нет и быть не должно: только имена таблиц, RPC и корзин.
 CREATE TABLE act_as_actions (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   act_as_id INTEGER NOT NULL REFERENCES act_as_sessions(id),
   at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  kind      TEXT NOT NULL CHECK (kind IN ('db', 'rpc', 'users')),
+  kind      TEXT NOT NULL CHECK (kind IN ('db', 'rpc', 'users', 'storage')),
   name      TEXT NOT NULL,
   status    INTEGER
 );
