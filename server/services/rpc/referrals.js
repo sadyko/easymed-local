@@ -22,6 +22,7 @@ import { tableWriteAllowed } from '../../db/write-grant.js';   // закрепл
 import { canViewSection } from '../roles.js';
 import { canSeeReportKey } from '../report-access.js';   // деньги — по группе отчётов reports.referrals (REPORT_GROUP), как у дашборда
 import { referralReportLines, resolveRange } from './reports.js';
+import { buildingContext } from '../domain/buildings.js';   // FIX_318_V1 (L5) — строкам отчёта — контекст зданий, как у run_report
 import { today, localDate, localRangeWhere } from '../domain/day.js';
 import { activityCounters, normalizeWindow } from '../../../public/js/shared/referral-activity.js';
 
@@ -30,6 +31,19 @@ export class RpcError extends Error {
 }
 
 export const REPRESENTATIVE_ROLE = 'medrep';   // custom_roles.code, заведён миграцией 252
+// FIX_318_V1 (L4) — у клиники, заведшей свою роль «Медпредставитель» до 252,
+// роль живёт под своим кодом (мигр. 258 убирает дубль medrep, который никто не
+// носит): её сотрудники — тоже представители. Имя роли — как его пишет клиника.
+const REPRESENTATIVE_ROLE_NAMES = ['Медпредставитель', 'медпредставитель', 'МЕДПРЕДСТАВИТЕЛЬ'];
+export function representativeCodes(db) {
+  const codes = new Set([REPRESENTATIVE_ROLE]);
+  try {
+    for (const r of db.prepare(`SELECT code FROM custom_roles WHERE trim(name) IN (${REPRESENTATIVE_ROLE_NAMES.map(() => '?').join(',')})`)
+      .all(...REPRESENTATIVE_ROLE_NAMES)) codes.add(String(r.code));
+  } catch { /* база без custom_roles — только medrep */ }
+  return [...codes];
+}
+const holes = (list) => list.map(() => '?').join(',');
 
 function requireCrm(db, user) {   // имя историческое: раздел был подэкраном CRM полдня
   if (isAdminUser(user) || canViewSection(db, user, 'referrals')) return;
@@ -50,8 +64,9 @@ const SOURCE_OF_VISIT = 'COALESCE(v.referral_source_id, pt.referral_source_id)';
 const VISIT_LIVE = "v.status NOT IN ('cancelled', 'no_show')";
 
 function listRepresentatives(db) {
+  const codes = representativeCodes(db);   // FIX_318_V1 (L4)
   return db.prepare(`SELECT id, full_name FROM users
-                      WHERE custom_role_code = ? AND is_active = 1 ORDER BY full_name`).all(REPRESENTATIVE_ROLE);
+                      WHERE custom_role_code IN (${holes(codes)}) AND is_active = 1 ORDER BY full_name`).all(...codes);
 }
 
 function externalSources(db, { activeOnly = true } = {}) {
@@ -82,7 +97,10 @@ function visitAggregates(db, from, to) {
  */
 function moneyBy(db, { from, to }, user, scope) {
   const out = new Map();
-  for (const r of referralReportLines(db, { from, to, referrer: scope }, user)) {
+  // FIX_318_V1 (L5) — третий аргумент — контекст зданий отчёта (как у
+  // run_report), а не пользователь: строки «Рефералов» и их корректировки
+  // закрытых месяцев читают у него options/keyOf.
+  for (const r of referralReportLines(db, { from, to, referrer: scope }, buildingContext(db))) {
     const key = scope === 'internal' ? r.beneficiary_doctor_id : r.referral_source_id;
     if (key == null) continue;
     const acc = out.get(key) || { received: 0, reward: 0, visits: new Map() };
@@ -165,7 +183,8 @@ export function referralsAssignRepresentative(db, args, user) {
   if (raw !== undefined && raw !== null && raw !== '') {
     repId = Number(raw);
     const rep = Number.isInteger(repId) && repId > 0
-      ? db.prepare('SELECT id FROM users WHERE id = ? AND is_active = 1 AND custom_role_code = ?').get(repId, REPRESENTATIVE_ROLE)
+      ? db.prepare(`SELECT id FROM users WHERE id = ? AND is_active = 1 AND custom_role_code IN (${holes(representativeCodes(db))})`)
+        .get(repId, ...representativeCodes(db))   // FIX_318_V1 (L4)
       : null;
     if (!rep) throw new RpcError('Этот сотрудник не медпредставитель: роль «Медпредставитель» выдаётся в «Настройки → Сотрудники».', 400);
   }
@@ -180,8 +199,6 @@ export function referralsInternal(db, args, user) {
   requireCrm(db, user);
   const { from, to } = resolveRange(db, args);
   const money = canSeeReferralMoney(db, user);
-  const doctors = db.prepare(`SELECT id, full_name, specialty FROM users
-                               WHERE role = 'doctor' AND is_active = 1 ORDER BY full_name`).all();
   const w = localRangeWhere('r.created_at', from, to);
   const counts = new Map(db.prepare(`
     SELECT r.recommended_by AS doctor_id,
@@ -194,6 +211,17 @@ export function referralsInternal(db, args, user) {
      WHERE r.recommended_by IS NOT NULL AND ${w.sql}
      GROUP BY r.recommended_by`).all(...w.params).map((r) => [r.doctor_id, r]));
   const cash = money ? moneyBy(db, { from, to }, user, 'internal') : null;
+  // FIX_318_V1 (M3, ревью 3.18.0) — КТО В СПИСКЕ. Был role = 'doctor': врачи-
+  // администраторы (ADMIN_DOCTOR_V1, is_doctor = 1) пропадали, и итоги вкладки
+  // расходились с отчётом «Рефералы». Теперь — действующие врачи по is_doctor
+  // (и по роли «Врач», как booking-lines.js), а также ВСЕ, у кого за период есть
+  // направления или деньги отчёта «Рефералы» (уволенный врач, медсестра,
+  // записанная направившей): итоги — сумма строк, и она обязана сходиться с отчётом.
+  const active = new Set([...counts.keys(), ...(cash ? cash.keys() : [])].filter((id) => id != null).map(Number));
+  const doctors = db.prepare(`SELECT id, full_name, specialty FROM users
+                               WHERE ((is_doctor = 1 OR role = 'doctor') AND is_active = 1)
+                                  OR id IN (SELECT value FROM json_each(?))
+                               ORDER BY full_name`).all(JSON.stringify([...active]));
 
   const rows = doctors.map((d) => {
     const c = counts.get(d.id);
@@ -319,7 +347,7 @@ export function referralsDoctorDetail(db, args, user) {
      ORDER BY r.created_at DESC`).all(doctorId, ...w.params);
   const out = { doctor, from, to, money, referrals };
   if (money) {
-    const lines = referralReportLines(db, { from, to, referrer: 'internal' }, user)
+    const lines = referralReportLines(db, { from, to, referrer: 'internal' }, buildingContext(db))   // FIX_318_V1 (L5)
       .filter((r) => r.beneficiary_doctor_id === doctorId)
       .map((r) => ({ date: r.date, patient: r.patient || '', service: r.service || '',
         amount: round2(r.after_discount), received: round2(r.paid ? num(r.after_discount) * num(r.pay_factor) : 0), reward: round2(r.reward) }));

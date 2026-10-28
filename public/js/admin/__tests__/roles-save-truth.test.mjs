@@ -121,6 +121,8 @@ const SCREEN_ROLES = [
   ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['cashier', 'Кассир'], ['lab', 'Лаборант'],
   ['nurse', 'Медсестра'], ['inventory', 'Склад'], ['callcenter', 'Оператор колл-центра'],
   ['head_doctor', 'Главный врач'], ['senior_nurse', 'Старшая медсестра'], ['head_cashier', 'Старший кассир'],
+  // FIX_318_V1 (L4) — роль клиники «Медпредставитель» (мигр. 252) с минимальными правами (мигр. 258).
+  ['medrep', 'Медпредставитель'],
 ];
 // Синтетические роли спецификации.
 //   legacy-only — только старые поля, и в них всё, что вывод теряет: «Кабинет
@@ -249,10 +251,14 @@ function touchable(root, explicit, gated) {
   return null;
 }
 
+// FIX_318_V1 (L4) — у «Медпредставителя» по умолчанию один раздел без окон
+// («Реферирование», просмотр): трогать нечего, его проверяет «пустое сохранение» выше.
+const NOTHING_TO_TOUCH = new Set(['medrep']);
+
 test('тронул одно окно или действие — в grants добавилось ровно оно, старые поля не тронуты', async (t) => {
   const { db } = await world(t);
   const root = await render();
-  for (const [role, label] of [...SCREEN_ROLES, ...SYNTHETIC]) {
+  for (const [role, label] of [...SCREEN_ROLES, ...SYNTHETIC].filter(([r]) => !NOTHING_TO_TOUCH.has(r))) {
     const before = permsOf(db, role);
     await openRole(root, role, label);
     const touch = touchable(root, before.grants || {}, new Set(Object.keys(effectiveGrantsOf(db, role))));
