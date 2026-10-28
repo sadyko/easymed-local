@@ -174,6 +174,14 @@ body {
 .info .kv .v { flex:1; color:${cfg.ink}; font-weight:600; }
 .info .kv:last-child { border-bottom: 0; }
 .body { font-size:16.5px; color:#1f2d34; line-height:1.65; text-align:justify; }
+/* DOC_RICH_FORMAT_V1 (F3) — списки и таблицы разделов истории болезни на бумаге:
+   отступ и маркер внутри раздела, рамки ячеек бордюром (печатается и без фона). */
+.body ul, .body ol { margin:4px 0 8px; padding-left:24px; text-align:left; }
+.body ul { list-style:disc outside; } .body ol { list-style:decimal outside; }
+.body li { margin:2px 0; }
+.body table.a4-tbl, .body table.a4-restbl { width:100%; border-collapse:collapse; margin:6px 0; text-align:left; }
+.body table.a4-tbl th, .body table.a4-tbl td, .body table.a4-restbl th, .body table.a4-restbl td { border:1px solid #b9c1cc; padding:4px 8px; vertical-align:top; }
+.body table.a4-tbl th, .body table.a4-restbl th { background:#f1f4f7; font-weight:700; }
 .vitals { display:grid; grid-template-columns:repeat(var(--cols,5),1fr); gap:8px; }
 .vital { padding:10px 12px; border-radius:8px; background:#fafbfc; border:1px solid #e7ebee; }
 .vital .lbl { font-size:9.5px; }

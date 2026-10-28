@@ -24,9 +24,41 @@
 import { shortName, placeLine } from '../../shared/person-name.js';
 import { dateNumeric } from '../../shared/date-words.js';
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';
+// DOC_RICH_FORMAT_V1 — очистка разметки разделов врача: без DOM, одна для
+// браузера и сервера (Telegram рисует бланк через buildSheetHtml в Node).
+import { sanitizeStoredHtml, hasMarkup } from '../../shared/rich-text.js';
 
 function esc(x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function lines(t) { return String(t || '').split(/\n+/).map(x => x.trim()).filter(Boolean); }
+
+// DOC_RICH_FORMAT_V1 (F1) — ТЕЛО РАЗДЕЛА. Разметка врача (список, жирный, цвет,
+// таблица результата) — очищенной разметкой в блоке .rich (white-space:normal);
+// прежний простой текст — как раньше: экранирован, в pre-wrap.
+function richBody(v) {
+    const s = String(v == null ? '' : v);
+    return hasMarkup(s) ? { rich: true, html: sanitizeStoredHtml(s) } : { rich: false, html: esc(s) };
+}
+// DOC_RICH_FORMAT_V1 (F3) — списки и таблицы в разделах. Каждый вариант начинает
+// стили с *{margin:0;padding:0}, и у списка не было отступа: маркеры «•» и «1.»
+// висели левее текста, за рамкой раздела. Правила — с [data-field] (у «*»
+// специфичность нулевая, так что сброс перебит при любом порядке) и с
+// [data-cont-of] — продолжение раздела на следующей странице бланка. Списки
+// рекомендаций ul.recs — вне [data-field] и не задеты. Рамки — бордюром: он
+// печатается и без «фоновой графики», и на ч/б принтере.
+const RICH_CSS = `
+/* --- DOC_RICH_FORMAT_V1 : оформление врача в разделах ---------------------- */
+.sec-b.rich, [data-field].rich{ white-space:normal; }
+[data-field] ul, [data-field] ol, [data-cont-of] ul, [data-cont-of] ol{ margin:3px 0 5px; padding-left:22px; }
+[data-field] ul, [data-cont-of] ul{ list-style:disc outside; }
+[data-field] ol, [data-cont-of] ol{ list-style:decimal outside; }
+[data-field] li ul, [data-cont-of] li ul{ list-style-type:circle; }
+[data-field] li, [data-cont-of] li{ margin:1px 0; padding-left:2px; }
+[data-field] table.a4-tbl, [data-field] table.a4-restbl, [data-cont-of] table.a4-tbl, [data-cont-of] table.a4-restbl{ width:100%; border-collapse:collapse; margin:5px 0; }
+[data-field] table.a4-tbl th, [data-field] table.a4-tbl td, [data-field] table.a4-restbl th, [data-field] table.a4-restbl td,
+[data-cont-of] table.a4-tbl th, [data-cont-of] table.a4-tbl td, [data-cont-of] table.a4-restbl th, [data-cont-of] table.a4-restbl td{ border:1px solid #b9c1cc; padding:3px 7px; text-align:left; vertical-align:top; }
+[data-field] table.a4-tbl th, [data-field] table.a4-restbl th, [data-cont-of] table.a4-tbl th, [data-cont-of] table.a4-restbl th{ background:#f1f4f7; font-weight:700; }
+[data-field] tr, [data-cont-of] tr{ break-inside:avoid; page-break-inside:avoid; }
+`;
 function logoTag(s, px) {
     const url = s.logoUrl || s.logoDataUrl;
     if (url) return `<img src="${esc(url)}" alt="" style="width:${px}px;height:auto;display:block;object-fit:contain;">`;
@@ -465,6 +497,13 @@ function diagConclusion(d) {
     return (d.conclusionAuto ? `<p class="dx-auto" data-dx-auto="1" contenteditable="false" style="font-weight:700;">${esc(d.conclusionAuto)}</p>` : '')
         + `<p data-field="primary_diagnosis">${esc(body)}</p>`;
 }
+// DOC_RICH_FORMAT_V1 (F1) — «Описание» исследования: разметка врача — как
+// написана (.rich); прежний текст — абзацами <p>, как раньше.
+function diagDescription(d) {
+    const rb = richBody(d.description);
+    if (rb.rich) return `<div class="sec-b rich" data-field="instrumental_text">${rb.html}</div>`;
+    return `<div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('') || (d.__editor ? '' : '<p>—</p>')}</div>`;
+}
 // CABINET_FIX_V1_R2 (ревью 2, п. 5) — рецепт и остальные диагнозы приёма на
 // бланке исследования: снимок диагностики их не нёс, и при подписи из
 // «Диагностики» назначенное и сопутствующие пропадали с бумаги и из архива.
@@ -488,10 +527,13 @@ function conclusionClassic(s, d) {
     const _secOn = (field) => !field || !d.activeFields || d.activeFields.indexOf(field) > -1;
     const sec = (ru, uz, txt, field) => {
         if (d.__editor && field && d.activeFields && !_secOn(field)) return `<button type="button" class="bk-add" data-add="${field}">+ Добавить: ${esc(ru)}</button>`;
-        return (txt || (d.__editor && field)) ? `<div class="sec"><div class="sec-h"><span class="ru">${esc(ru)}</span>${uz ? `<span class="uz">· ${esc(uz)}</span>` : ''}${d.__editor && field ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="${field}" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="${field}" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="${field}" title="Убрать раздел">×</button></span>` : ''}</div><div class="sec-b"${field ? ` data-field="${field}"` : ''}>${esc(txt)}</div></div>` : '';
+        const rb = richBody(txt);   // DOC_RICH_FORMAT_V1 (F1)
+        return (txt || (d.__editor && field)) ? `<div class="sec"><div class="sec-h"><span class="ru">${esc(ru)}</span>${uz ? `<span class="uz">· ${esc(uz)}</span>` : ''}${d.__editor && field ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="${field}" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="${field}" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="${field}" title="Убрать раздел">×</button></span>` : ''}</div><div class="sec-b${rb.rich ? ' rich' : ''}"${field ? ` data-field="${field}"` : ''}>${rb.html}</div></div>` : '';
     };
     const recList = lines(d.recsText);
-    const recsHtml = recList.length ? `<div class="sec"><div class="sec-h"><span class="ru">Рекомендации</span><span class="uz">· Tavsiyalar</span></div><ul class="recs">${recList.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
+    // DOC_RICH_FORMAT_V1 (F1) — рекомендации с оформлением печатаются как написаны; простой текст — прежний список.
+    const recsHtml = hasMarkup(d.recsText) ? sec('Рекомендации', 'Tavsiyalar', d.recsText, 'recommendations_text')
+        : recList.length ? `<div class="sec"><div class="sec-h"><span class="ru">Рекомендации</span><span class="uz">· Tavsiyalar</span></div><ul class="recs">${recList.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
     const rx = (d.prescriptions || []).filter(r => r && r.name);
     const rxHtml = rx.length ? `<div class="sec"><div class="sec-h"><span class="ru">Рецепт</span><span class="uz">· Retsept</span></div><div class="rx-wrap"><table class="rx"><thead><tr><th class="num"></th><th>Препарат<span class="uz">Preparat</span></th><th>Доза<span class="uz">Doza</span></th><th>Режим приёма<span class="uz">Qabul rejimi</span></th><th>Длительность<span class="uz">Davomiyligi</span></th></tr></thead><tbody>${rx.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="drug">${esc(r.name)}${r.notes ? `<small>${esc(r.notes)}</small>` : ''}${r.nurse ? `<small style="display:block;font-weight:400;color:#7a8290;font-size:.88em;margin-top:2px;">Медсестре: ${esc(r.nurse)}</small>` : ''}</td><td>${esc(r.dose || '—')}</td><td>${esc(r.freq || '—')}</td><td>${esc(r.dur || '—')}</td></tr>`).join('')}</tbody></table></div></div>` : '';
     const refs = (d.referrals || []).filter(r => r && r.name);
@@ -561,6 +603,7 @@ ul.recs{ list-style:none; padding-left:11px; display:flex; flex-direction:column
 .legal{ font-size:11px; color:var(--faint); text-align:center; margin-top:10px; padding:0 8mm; line-height:1.5; }
 .foot{ margin-top:auto; padding-top:10px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; } .foot .fl{ font-size:13px; color:var(--ink); } .foot .fl b{ font-weight:700; } .foot .fr{ font-size:13px; font-weight:700; color:var(--ink); }
 @media print{ @page{ size:A4; margin:13mm 14mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
+${RICH_CSS}
 </style></head><body>
 <section class="sheet ${toggleCls(s)}">
   <div class="head">
@@ -610,10 +653,13 @@ function conclusionCompact(s, d) {
     const _secOn = (field) => !field || !d.activeFields || d.activeFields.indexOf(field) > -1;
     const sec = (ru, uz, txt, field) => {
         if (d.__editor && field && d.activeFields && !_secOn(field)) return `<button type="button" class="bk-add" data-add="${field}">+ Добавить: ${esc(ru)}</button>`;
-        return (txt || (d.__editor && field)) ? `<div class="secbar"><span class="ru">${esc(ru)}</span>${uz ? `<span class="uz">· ${esc(uz)}</span>` : ''}${d.__editor && field ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="${field}" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="${field}" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="${field}" title="Убрать раздел">×</button></span>` : ''}</div><div class="sec"><div class="sec-b"${field ? ` data-field="${field}"` : ''}>${esc(txt)}</div></div>` : '';
+        const rb = richBody(txt);   // DOC_RICH_FORMAT_V1 (F1)
+        return (txt || (d.__editor && field)) ? `<div class="secbar"><span class="ru">${esc(ru)}</span>${uz ? `<span class="uz">· ${esc(uz)}</span>` : ''}${d.__editor && field ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="${field}" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="${field}" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="${field}" title="Убрать раздел">×</button></span>` : ''}</div><div class="sec"><div class="sec-b${rb.rich ? ' rich' : ''}"${field ? ` data-field="${field}"` : ''}>${rb.html}</div></div>` : '';
     };
     const recList = lines(d.recsText);
-    const recsHtml = recList.length ? `<div class="secbar"><span class="ru">Рекомендации</span><span class="uz">· Tavsiyalar</span></div><ul class="recs">${recList.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+    // DOC_RICH_FORMAT_V1 (F1) — рекомендации с оформлением печатаются как написаны; простой текст — прежний список.
+    const recsHtml = hasMarkup(d.recsText) ? sec('Рекомендации', 'Tavsiyalar', d.recsText, 'recommendations_text')
+        : recList.length ? `<div class="secbar"><span class="ru">Рекомендации</span><span class="uz">· Tavsiyalar</span></div><ul class="recs">${recList.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
     const rx = (d.prescriptions || []).filter(r => r && r.name);
     const rxHtml = rx.length ? `<div class="secbar"><span class="ru">Рецепт</span><span class="uz">· Retsept</span></div><table class="rx"><thead><tr><th class="num"></th><th>Препарат</th><th>Доза</th><th>Режим</th><th>Длит.</th></tr></thead><tbody>${rx.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="drug">${esc(r.name)}${r.notes ? `<small style="display:block;font-weight:400;font-style:italic;color:#7a8290;font-size:.88em;margin-top:2px;">${esc(r.notes)}</small>` : ''}${r.nurse ? `<small style="display:block;font-weight:400;color:#7a8290;font-size:.88em;margin-top:2px;">Медсестре: ${esc(r.nurse)}</small>` : ''}</td><td>${esc(r.dose || '—')}</td><td>${esc(r.freq || '—')}</td><td>${esc(r.dur || '—')}</td></tr>`).join('')}</tbody></table>` : '';
     const refs = (d.referrals || []).filter(r => r && r.name);
@@ -676,6 +722,7 @@ table.rx{ width:100%; border-collapse:collapse; font-size:12px; } table.rx thead
 .foot{ margin-top:auto; padding-top:7px; border-top:1px solid var(--ink); display:flex; align-items:center; justify-content:space-between; font-size:11.5px; color:var(--ink); } .foot b{ font-weight:700; }
 @media print{ @page{ size:A4; margin:12mm 13mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 ${ECONOMY_BW_CSS}
+${RICH_CSS}
 </style></head><body>
 <section class="sheet ${toggleCls(s)}">
   ${vHead(s, {
@@ -896,6 +943,7 @@ ${PRINT_FONT_FACE_CSS}
 .sheet:not(.show-stamp) .stamp, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
 .legal{ font-size:11px; color:var(--faint); text-align:center; margin-top:13px; padding:0 8mm; line-height:1.5; } .foot{ margin-top:auto; padding-top:10px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; } .foot .fl{ font-size:13px; color:var(--ink); } .foot .fl b{ font-weight:700; } .foot .fr{ font-size:13px; font-weight:700; color:var(--ink); }
 @media print{ @page{ size:A4; margin:13mm 14mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
+${RICH_CSS}
 </style></head><body><section class="sheet ${toggleCls(s)}">
   ${vHead(s, {
     title: 'Результат диагностического исследования', uz: 'Diagnostika tekshiruvi natijasi',
@@ -913,7 +961,7 @@ ${PRINT_FONT_FACE_CSS}
     <div class="card"><div class="ct">Исследование <span class="uz">· Tekshiruv</span></div><div class="fgrid">${f('Аппарат', 'Apparat', st.device)}${f('Протокол', 'Protokol', st.protocol)}</div></div>
   </div>` : ''}
   ${films.length ? `<div class="films">${films.map(fl => `<div class="film"><div class="lab">${FILM_SVG}<div class="t">Место для снимка</div></div><div class="cap">${esc(fl.caption || '')}</div><div class="cap2">${esc(fl.sub || '')}</div></div>`).join('')}</div>` : ''}
-  <div class="sec"><div class="sec-h"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div><div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('') || (d.__editor ? '' : '<p>—</p>')}</div></div>
+  <div class="sec"><div class="sec-h"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div>${diagDescription(d)}</div>
   ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div>${diagConclusion(d)}</div>` : ''}
   ${diagRxDx(d, false)}
   ${imagingImages(d)}
@@ -947,6 +995,7 @@ ${PRINT_FONT_FACE_CSS}
 .legal{ font-size:10px; color:var(--faint); text-align:center; margin-top:9px; line-height:1.45; } .foot{ margin-top:auto; padding-top:7px; border-top:1px solid var(--ink); display:flex; justify-content:space-between; font-size:11.5px; color:var(--ink); } .foot b{ font-weight:700; }
 @media print{ @page{ size:A4; margin:12mm 13mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 ${ECONOMY_BW_CSS}
+${RICH_CSS}
 </style></head><body><section class="sheet ${toggleCls(s)}">
   <div class="head"><div class="brand">${logoTag(s, 32)}<div><div class="wm">${esc(s.clinicName || 'Клиника')}</div>${s.tagline ? `<div class="tg">${esc(s.tagline)}</div>` : ''}</div></div>
     <div class="clinic">${s.address ? `<div class="cl">${esc(s.address)}</div>` : ''}<div class="cl">${esc(s.phone || '')}${s.web ? ` · ${esc(s.web)}` : ''}</div></div></div>
@@ -958,7 +1007,7 @@ ${ECONOMY_BW_CSS}
     <div class="ent"><div class="cap">Исследование</div>${fld('Вид', st.kind)}${fld('Область', st.area)}${fld('Аппарат', st.device)}${fld('Протокол', st.protocol)}</div>
   </div>
   <div class="secbar"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div>
-  <div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('') || (d.__editor ? '' : '<p>—</p>')}</div>
+  ${diagDescription(d)}
   ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение · Xulosa</div>${diagConclusion(d)}</div>` : ''}
   ${diagRxDx(d, true)}
   ${imagingImages(d)}

@@ -315,12 +315,26 @@ test('«×» у «Диагноза» с выбранным кодом: вопр�
     assert.equal(WS.docSnapshot(ctx, 'conclusion').dx, '');
 });
 
-test('санитайзеры не пропускают <noscript> и другие «сырые» элементы (mXSS)', () => {
+test('санитайзеры не пропускают <noscript> и другие «сырые» элементы (mXSS)', async () => {
     const SAN = fs.readFileSync(path.join(HERE, '..', 'sanitize.js'), 'utf8');
-    for (const [name, src, n] of [['service-workspace.js', WS_SRC, 2], ['sanitize.js', SAN, 1]]) {
+    // DOC_RICH_FORMAT_V1 — разметка разделов врача чистится общей sanitizeStoredHtml
+    // (rich-text.js, список разрешённого): DOMParser-санитайзер разделов (sanitizeRichHtml)
+    // убран, в кабинете остался один BAD_TAGS — у sanitizeHtml.
+    for (const [name, src, n] of [['service-workspace.js', WS_SRC, 1], ['sanitize.js', SAN, 1]]) {
         const sets = src.match(/BAD_TAGS = new Set\(\[[^\]]*\]/g) || [];
         assert.equal(sets.length, n, name);
         for (const s of sets) for (const t of ['NOSCRIPT', 'NOEMBED', 'NOFRAMES', 'TEMPLATE', 'XMP', 'PLAINTEXT']) assert.ok(s.includes("'" + t + "'"), name + ': нет ' + t);
+    }
+    // список разрешённого не выпускает ни «сырых» элементов, ни того, что в них спрятано
+    const { sanitizeStoredHtml } = await import('../../shared/rich-text.js');
+    for (const raw of [
+        '<noscript><p title="</noscript><img src=x onerror=alert(1)>"></noscript>',
+        '<xmp><img src=x onerror=alert(1)></xmp>', '<noembed><img src=x onerror=alert(1)></noembed>',
+        '<noframes><img src=x onerror=alert(1)></noframes>', '<template><img src=x onerror=alert(1)></template>',
+        '<plaintext><img src=x onerror=alert(1)>',
+    ]) {
+        const out = sanitizeStoredHtml(raw);
+        assert.ok(!/<(img|noscript|xmp|noembed|noframes|template|plaintext)\b/i.test(out) && !/<[^>]*onerror/i.test(out), raw + ' → ' + out);
     }
 });
 

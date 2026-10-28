@@ -997,6 +997,8 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
         // на бумагу они идут РАЗМЕТКОЙ: экранированный HTML печатался бы
         // тегами вместо жирного и списков. Диагноз — простой текст, он и
         // экранируется. Санитария та же, что на сервере при сохранении.
+        // DOC_RICH_FORMAT_V1 (F3) — у списков и таблиц раздела на бумаге свои
+        // правила (стили листа ниже): отступ и маркер внутри раздела, рамки ячеек.
         // CASE_DOC_FREE_SEC_V1 — подпись раздела берётся ИЗ ДОКУМЕНТА, если он
         // её переименовал: бумага обязана читаться так, как её писали, а не так,
         // как разделы называются сегодня.
@@ -1052,6 +1054,11 @@ h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
 .part .pl { min-width: 150px; color: #55636d; }
 .part .pv { flex: 1; white-space: pre-wrap; }
 .part .pv.empty { color: #7a8892; font-style: italic; }
+/* DOC_RICH_FORMAT_V1 (F3): lists and tables of the sections on paper */
+.part .pv ul, .part .pv ol { margin: 2px 0 4px; padding-left: 22px; white-space: normal; }
+.part .pv table.a4-tbl, .part .pv table.a4-restbl { width: 100%; border-collapse: collapse; margin: 4px 0; white-space: normal; }
+.part .pv table.a4-tbl th, .part .pv table.a4-tbl td, .part .pv table.a4-restbl th, .part .pv table.a4-restbl td { border: 1px solid #b9c1cc; padding: 3px 7px; text-align: left; vertical-align: top; }
+.part .pv table.a4-tbl th, .part .pv table.a4-restbl th { background: #f1f4f7; font-weight: 700; }
 .sign { margin-top: 6px; font-size: 12px; color: #55636d; text-align: right; }
 ${titleSheetPrintCss()}
 </style></head><body>

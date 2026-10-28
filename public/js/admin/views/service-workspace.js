@@ -39,6 +39,7 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
+import { sanitizeStoredHtml, htmlToText, richIsEmpty, hasMarkup } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -2136,10 +2137,11 @@ export async function fillServiceConclusion(body, row) {   // CABINET_FIX_V1_R4 
     }
     const f = latest.fields || {};
     const _dxF = entryDx(f, payload && payload.diagnoses);   // CABINET_FIX_V1_R2 — код больше не в поле врача · CABINET_FIX_V1_R3 (F8) — код подписанной записи, а не нынешний
+    // DOC_RICH_FORMAT_V1 (F2) — поля записи — разметка врача: сводка показывает текст без тегов.
     body.append(
-        snapshotKv('Жалобы',            f.chief_complaint   || '—', true),
-        snapshotKv('Анамнез',           f.hpi               || '—', true),
-        snapshotKv('Осмотр',            f.physical_exam     || '—', true),
+        snapshotKv('Жалобы',            _blankStrip(f.chief_complaint) || '—', true),
+        snapshotKv('Анамнез',           _blankStrip(f.hpi)             || '—', true),
+        snapshotKv('Осмотр',            _blankStrip(f.physical_exam)   || '—', true),
         h('div', { class: 'row', style: { gap: '12px', marginTop: '6px' } },
             h('div', { style: { flex: 2 } }, snapshotKv('Основной диагноз', _dxF || '—')),
             h('div', { style: { flex: 1 } }, snapshotKv('МКБ-10',           f.icd10             || '—')),
@@ -2151,9 +2153,12 @@ export async function fillServiceConclusion(body, row) {   // CABINET_FIX_V1_R4 
     );
     const _parts = [];
     /* i18n-exempt-start: HTML сводки уходит В ДОКУМЕНТ, не в интерфейс */
-    if (f.physical_exam)        _parts.push('Осмотр: ' + esc(f.physical_exam));
+    // DOC_RICH_FORMAT_V1 (F2) — текст поля, а не разметка: esc(разметки) давал «&lt;br&gt;» в документе.
+    // Строки (пункты списка, строки таблицы) — через «; », как у диагноза: сводка — одна строка.
+    const _exT = _blankStrip(f.physical_exam), _recT = _blankStrip(f.recommendations_text);
+    if (_exT)                   _parts.push('Осмотр: ' + esc(_exT).replace(/\s*\n+\s*/g, '; '));
     if (_dxF)                   _parts.push('Диагноз: ' + esc(_dxF).replace(/\n/g, '; '));
-    if (f.recommendations_text) _parts.push('Рекомендации: ' + esc(f.recommendations_text));
+    if (_recT)                  _parts.push('Рекомендации: ' + esc(_recT).replace(/\s*\n+\s*/g, '; '));
     /* i18n-exempt-end */
     return { html: _parts.length ? '<div>' + _parts.join('. ') + '</div>' : null };
 }
@@ -2431,7 +2436,9 @@ export function collectFields(ctx, opts = {}) {
         const keepDx = k === 'primary_diagnosis' && el.classList.contains('a4-input') && textOf(el.innerHTML);
         if (el.closest('.a4-sec-off') && !always.has(k) && !keepDx) continue;   // WS_FLEX_DOC_V1 — removed sections don't save/print
         if (el.classList.contains('a4-input')) {
-            out[k] = (el.innerHTML || '').trim();
+            // DOC_RICH_FORMAT_V1 (F1) — в запись уходит очищенная разметка (те же правила,
+            // что у бланка и сервера) — и из бланка, и из формы, где врач пишет прямо в поле.
+            out[k] = sanitizeStoredHtml(el.innerHTML || '');
         } else {
             out[k] = (el.value ?? '').trim();
         }
@@ -2462,8 +2469,12 @@ export function applyFields(ctx, fields, opts = {}) {
             // different clinician on the same tenant, so any markup MUST be sanitized
             // before it re-enters the live DOM — otherwise a stored SOAP field is a
             // stored-XSS sink. (STORED_XSS_HARDEN_V1)
-            // CABINET_FIX_V1_R2 — opts.sanitized: значение уже очищено (шаблон: и текст поля, и шаблон прошли sanitizeRichHtml).
-            if (/<[a-z!\/]/i.test(v)) el.innerHTML = opts.sanitized ? v : sanitizeRichHtml(v); else el.textContent = v;
+            // CABINET_FIX_V1_R2 — opts.sanitized: значение уже очищено (шаблон: и текст поля, и шаблон прошли очистку).
+            // DOC_RICH_FORMAT_V1 (F1) — очистка — общая sanitizeStoredHtml (rich-text.js): те же правила,
+            // что у бланка, печати, архива и сервера. Очищенное — всегда разметка: «SpO2 &lt;95%»
+            // шаблона ложится разметкой, иначе врач видел бы «&lt;».
+            if (opts.sanitized) el.innerHTML = v;
+            else if (/<[a-z!\/]/i.test(v)) el.innerHTML = sanitizeStoredHtml(v); else el.textContent = v;
         } else {
             el.value = fields[k];
         }
@@ -4599,7 +4610,7 @@ export function tplApply(ctx, t, profile = null) {
     if (!profile && refuseWhileLoading(ctx)) return false;   // CABINET_FIX_V1_R4 (п. 3) — незагруженный лист вставок не принимает
     // Sanitize cross-authored (esp. shared) template HTML before it enters the live editor.
     const _src = (t && t.body) || {}, _clean = {};
-    for (const _k of Object.keys(_src)) _clean[_k] = sanitizeRichHtml(_src[_k]);
+    for (const _k of Object.keys(_src)) _clean[_k] = sanitizeStoredHtml(_src[_k]);   // DOC_RICH_FORMAT_V1 — правила хранения (rich-text.js): список и таблица шаблона доходят до бланка
     // CASE_DOC_TEMPLATES_V1 — вставляет тот, кто открыл: у документа истории
     // болезни свои разделы, и applyFields кабинета их не знает.
     if (profile && typeof profile.apply === 'function') { profile.apply(_clean); return null; }
@@ -4793,9 +4804,10 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             any = true;
             const body = h('div', { class: 'tplm-sec-b' });
             // CABINET_FIX_V1_TPL — форматирование шаблона видно, как в документе:
-            // тело очищено тем же sanitizeRichHtml, что и при вставке. Раньше
+            // тело очищено тем же, что и при вставке. Раньше
             // HTML показывался текстом — «Почки<br>норма».
-            body.innerHTML = sanitizeRichHtml(v);
+            // DOC_RICH_FORMAT_V1 — очистка хранения (rich-text.js): видно ровно то, что вставится.
+            body.innerHTML = sanitizeStoredHtml(v);
             secWrap.appendChild(h('div', { class: 'tplm-sec' },
                 h('div', { class: 'tplm-sec-l' }, tr(_labels[k] || k)),
                 body,
@@ -4827,7 +4839,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
                     'data-ph': tr('Текст секции…'),
                     style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '260px', overflowY: 'auto' },
                     oninput: (e) => { d.body[k] = e.currentTarget.innerHTML; } });
-                ed.innerHTML = sanitizeRichHtml(d.body[k] || '');
+                ed.innerHTML = sanitizeStoredHtml(d.body[k] || '');   // DOC_RICH_FORMAT_V1
                 secFields.appendChild(h('div', { class: 'tplm-field' },
                     h('label', null, _T.labels[k] || k), ed));
             }
@@ -5236,7 +5248,9 @@ async function handleSignFinalize(ctx) {
     const diagImages = (wsState.diagImages || []).slice();
     const _base = buildBlankData(ctx);
     const _docData = docType === 'diag' ? diagDocData(_base, { editor: false, images: diagImages }) : Object.assign(_base, { __editor: false });   // = docSnapshot
-    const _conclText = String(_base.conclusionText || '').trim();
+    // DOC_RICH_FORMAT_V1 (F2) — visits.conclusion — текст (панель вставки истории болезни,
+    // «Заключение» в «Документах»): из поля, а не из снимка, где оно может быть разметкой.
+    const _conclText = _blankStrip(fields.conclusion_text);
     const visitId = ctx.visitId;
     const serviceName = ctx.serviceName;
     // DOC_AMEND_AUDIT_V1 — re-signing an already-signed document creates a NEW version (the
@@ -5465,10 +5479,10 @@ function openSnapshotModal(ctx, item) {
         ].filter(Boolean));
     } else {
         const f = item.fields || {};
-        body.append(
-            snapshotKv('Жалобы',            f.chief_complaint  || '—', true),
-            snapshotKv('Анамнез',           f.hpi              || '—', true),
-            snapshotKv('Осмотр',            f.physical_exam    || '—', true),
+        body.append(   // DOC_RICH_FORMAT_V1 (F2) — поля записи — разметка врача: в окне — текст без тегов
+            snapshotKv('Жалобы',            _blankStrip(f.chief_complaint) || '—', true),
+            snapshotKv('Анамнез',           _blankStrip(f.hpi)             || '—', true),
+            snapshotKv('Осмотр',            _blankStrip(f.physical_exam)   || '—', true),
             h('div', { class: 'row', style: { gap: '12px', marginTop: '6px' } },
                 h('div', { style: { flex: '2' } }, snapshotKv('Основной диагноз', entryDx(f) || '—')),   // CABINET_FIX_V1_R2
                 h('div', { style: { flex: '1' } }, snapshotKv('МКБ-10',           f.icd10             || '—')),
@@ -6161,42 +6175,11 @@ function escapeHtml(s) {
     ));
 }
 
-// Sanitize doctor-authored rich text (the A4 contentEditable SOAP fields are
-// stored/printed as raw innerHTML). The print document is written into a
-// same-origin window.open(''), so any <script>/on*=/javascript: a doctor
-// pastes would execute with the app's origin. We parse in an inert document,
-// drop dangerous nodes/attrs, and serialize the cleaned HTML. (PRINT_XSS_SANITIZE_V1)
-function sanitizeRichHtml(input) {
-    // Like sanitizeHtml but KEEPS inline style (preserves doctor formatting: colour/highlight/bold).
-    // Strips script/dangerous elements, on* handlers, dangerous style values, and js:/data:/vbscript: URLs.
-    // Used when a (possibly cross-authored, esp. shared) template body enters the live editor.
-    const raw = String(input ?? '');
-    if (!raw) return '';
-    let doc;
-    try { doc = new DOMParser().parseFromString('<div id="__sx_rsani">' + raw + '</div>', 'text/html'); }
-    catch (e) { return escapeHtml(raw); }
-    const root = doc.getElementById('__sx_rsani');
-    if (!root) return escapeHtml(raw);
-    const BAD_TAGS = new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','LINK','META','BASE','FORM','INPUT','BUTTON','TEXTAREA','SVG','MATH','NOSCRIPT','NOEMBED','NOFRAMES','TEMPLATE','XMP','PLAINTEXT']);   // CABINET_FIX_V1_R3 — + NOSCRIPT и прочие «сырые» элементы: разобранные без скриптов, они меняют смысл при вставке (mXSS)
-    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
-    const kill = [];
-    let node = walker.nextNode();
-    while (node) {
-        if (BAD_TAGS.has(node.tagName)) { kill.push(node); }
-        else {
-            for (const attr of Array.from(node.attributes)) {
-                const name = attr.name.toLowerCase();
-                const val = (attr.value || '').replace(/\s/g, '').toLowerCase();
-                if (name.startsWith('on')) { node.removeAttribute(attr.name); continue; }
-                if (name === 'style') { if (/(javascript|vbscript|expression|url\()/i.test(val)) node.removeAttribute(attr.name); continue; }
-                if ((name === 'href' || name === 'src' || name === 'xlink:href' || name === 'formaction') && /^(javascript|data|vbscript):/.test(val)) node.removeAttribute(attr.name);
-            }
-        }
-        node = walker.nextNode();
-    }
-    kill.forEach(n => n.remove());
-    return root.innerHTML;
-}
+// PRINT_XSS_SANITIZE_V1 — разметка разделов врача (открытие записи, шаблоны,
+// бланк, печать, архив) чистится общей sanitizeStoredHtml (shared/rich-text.js,
+// список разрешённого, без DOM). DOC_RICH_FORMAT_V1 — прежний sanitizeRichHtml
+// (DOMParser, «всё, кроме опасного») убран: у формы, бланка и сервера правила
+// должны быть одни, иначе оформление, прошедшее одну очистку, теряется в другой.
 
 function sanitizeHtml(input) {
     const raw = String(input ?? '');
@@ -6254,15 +6237,28 @@ const _BLANK_FIELD_MAP = [
 // «кодтекст». Теперь начало блока после текста — тоже новая строка, конец
 // блока перед следующим блоком — одна (а не две), пустой блок (<div><br></div>)
 // — одна пустая строка. Экспорт — для проверки.
+// DOC_RICH_FORMAT_V1 (F2, F8) — ТЕКСТ ПОЛЯ для текстовых мест (диагноз, dxParts,
+// entryDx, visits.conclusion, сводки). Правило строк переехало в общую htmlToText
+// (rich-text.js) — у сервера (журнал) и кабинета оно одно; там же списки и
+// таблицы (ячейки — табуляцией). Сначала очистка: «<» прежнего простого текста
+// («SpO2 <95%, ЧСС > 90») не принимается за тег и не съедается.
 export function _blankStrip(x) {
-    return String(x || '')
-        .replace(/<(div|p|li)\b[^<>]*>\s*<br\s*\/?>\s*<\/\1>/gi, '\u0002\u0001')
-        .replace(/<br\s*\/?>\s*(?=<(?:div|p|li)\b|\u0002)/gi, '')   // CABINET_FIX_V1_R4 (п. 9) — <br> перед блоком — не лишняя пустая строка
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<(div|p|li)\b[^<>]*>/gi, '\u0002').replace(/<\/(div|p|li)>/gi, '\u0001')
-        .replace(/\u0001\u0002/g, '\n').replace(/[\u0001\u0002]/g, '\n')
-        .replace(/<[^<>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')   // CABINET_FIX_V1_R2 — «"» в названии МКБ
-        .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\n{3,}/g, '\n\n').trim();
+    return htmlToText(sanitizeStoredHtml(x));
+}
+/**
+ * DOC_RICH_FORMAT_V1 (F1) — РАЗДЕЛ ДЛЯ ЛИСТА: оформление врача — очищенной
+ * разметкой; набранное без оформления (только строки: <br>, <div>, <p>) —
+ * текстом, как раньше (лист рисует его pre-wrap, архив и журнал читают его как
+ * прежде). Пустые теги — пусто (F8). Экспорт — для проверки.
+ */
+export function _blankRich(x) {
+    const html = sanitizeStoredHtml(x);
+    if (!/<(?!\/?(?:br|div|p)\s*\/?>)[a-z\/]/i.test(html)) {
+        const text = htmlToText(html);
+        // Набранное буквально «<b>» лист прочёл бы тегом: такой текст остаётся разметкой (экранированной).
+        return hasMarkup(text) ? '<div>' + html + '</div>' : text;
+    }
+    return richIsEmpty(html) ? '' : html;
 }
 function _mainDxText(diagnoses = wsState.payload && wsState.payload.diagnoses) {
     const m = (diagnoses || []).find(d => d && d.type === 'main');
@@ -6322,9 +6318,12 @@ function buildBlankData(ctx) {
         diagnoses: (wsState.payload && wsState.payload.diagnoses || []).map(x => ({ code: x.code, name: x.name, type: x.type, typeLabel: DX_TYPE_RU[x.type] || '' })),
         referrals: (wsState.recommendations || []).map(rec => ({ id: rec.id, name: rec.__service_name, note: rec.__doctor_name || '' })),   // REC_RM_INLINE_V1 — id lets the editor delete a line
     };
-    data.complaint = _blankStrip(f.chief_complaint); data.hpi = _blankStrip(f.hpi);
-    data.labs = _blankStrip(f.labs_text); data.instrumental = _blankStrip(f.instrumental_text);
-    data.exam = _blankStrip(f.physical_exam);
+    // DOC_RICH_FORMAT_V1 (F1) — разделы, которые врач пишет текстом, идут на лист
+    // (экран, печать, архив, Telegram) очищенной разметкой, если в них есть
+    // оформление; «Диагноз», МКБ-10 и телефон — текстом, как раньше.
+    data.complaint = _blankRich(f.chief_complaint); data.hpi = _blankRich(f.hpi);
+    data.labs = _blankRich(f.labs_text); data.instrumental = _blankRich(f.instrumental_text);
+    data.exam = _blankRich(f.physical_exam);
     // CABINET_FIX_V1_R2 (ревью 2, п. 2) — «Диагноз» = основной диагноз своей
     // строкой (dxAuto, рисуется отдельным узлом) + текст врача (dxText). В поле
     // врача кода нет; запись до ревью 2 с кодом первой строкой не печатает его дважды.
@@ -6332,9 +6331,9 @@ function buildBlankData(ctx) {
     data.dxAuto = _dx.auto;
     data.dxText = _dx.text;
     data.dx = _dx.full;   // DX_SAVE_FIX_V1
-    data.icd10 = _blankStrip(f.icd10); data.therapy = _blankStrip(f.therapy_text);
-    data.recsText = _blankStrip(f.recommendations_text);
-    data.conclusionText = _blankStrip(f.conclusion_text);
+    data.icd10 = _blankStrip(f.icd10); data.therapy = _blankRich(f.therapy_text);
+    data.recsText = _blankRich(f.recommendations_text);
+    data.conclusionText = _blankRich(f.conclusion_text);   // DOC_RICH_FORMAT_V1 — в visits.conclusion уходит текст (handleSignFinalize)
     // WS_DOCPHONE_V1 — doctor phone shows on the sheet only when «Тел. врача» is toggled on.
     data.doctorPhone = wsState.docPhone ? (_blankStrip(f.doctor_phone) || (wsState.wsDoctorKnown ? wsState.wsDoctorPhone : (me().phone || ''))) : '';   // DOC_PHONE_SOURCE_V1 — consultation doctor's own phone
     data.showDoctor = wsState.docDoctorInfo !== false;   // DOC_DOCTOR_TOGGLE_V1
@@ -6562,6 +6561,12 @@ function _wireBlankEditing(ctx, frame) {
         el.setAttribute('contenteditable', _loading ? 'false' : 'true');
         el.addEventListener('input', () => _syncBlankField(ctx, el));
     }
+    // DOC_RICH_FORMAT_V1 (F4) — цвет, подсветка и A+/A− ложатся <span style>, а не
+    // <font>: так их пропускает очистка хранения. Флаг документа — ставится при
+    // каждом начале правки (и перед командой панели): перерисовка пишет новый документ.
+    const _styleWithCss = () => { try { doc.execCommand('styleWithCSS', false, true); } catch (e) { /* <font> переведёт очистка */ } };
+    _styleWithCss();
+    doc.addEventListener('focusin', _styleWithCss);
     if (_loading && doc.body) {
         const note = doc.createElement('div');
         note.className = 'bk-loading';
@@ -6654,6 +6659,7 @@ function _wireBlankEditing(ctx, frame) {
             const b = e.target.closest('[data-cmd]'); if (!b) return;
             e.preventDefault();
             const raw = b.getAttribute('data-cmd');
+            _styleWithCss();   // DOC_RICH_FORMAT_V1 (F4)
             try {
                 if (raw.indexOf('fontSize:') === 0) doc.execCommand('fontSize', false, raw.split(':')[1]);
                 else doc.execCommand(raw, false, b.getAttribute('data-val') || null);
@@ -6767,18 +6773,48 @@ function _syncBlankField(ctx, el) {
     const key = el.getAttribute('data-field') || el.getAttribute('data-cont-of');
     if (!key) return;
     // A4_TEXT_SPLIT_V1 — the field may be split across pages: join every part in order.
+    // DOC_RICH_FORMAT_V1 — основная часть и её продолжения двумя запросами: продолжения
+    // всегда стоят после основной части, порядок тот же.
     const doc = el.ownerDocument;
-    const parts = [...doc.querySelectorAll('[data-field="' + key + '"], [data-cont-of="' + key + '"]')];
+    const parts = [...doc.querySelectorAll('[data-field="' + key + '"]'), ...doc.querySelectorAll('[data-cont-of="' + key + '"]')];
     const txt = parts.map(p => String(p.innerText || '')).join('\n').replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n');
     const root = (ctx && ctx.container) || document;   // continuations created by the paginator pass ctx=null
     const host = root.querySelector(`.a4-input[data-field="${key}"]`) || root.querySelector(`[data-field="${key}"]`);
     if (host) {
-        if (host.classList && host.classList.contains('a4-input')) host.innerHTML = escapeHtml(txt.trim()).replace(/\n/g, '<br>');
+        // DOC_RICH_FORMAT_V1 (F1) — в форму уходит очищенная РАЗМЕТКА (списки, жирный,
+        // цвет, таблица результата), а не innerText. «Диагноз» — строка простого текста, как раньше.
+        if (host.classList && host.classList.contains('a4-input')) host.innerHTML = key === 'primary_diagnosis' ? escapeHtml(txt.trim()).replace(/\n/g, '<br>') : _blankFieldHtml(parts);
         else host.value = txt.trim();
     }
     wsState.saved = false;
     if (ctx) resetSaveBtn(ctx);
     else { const b = document.querySelector('[data-save-btn]'); if (b) { wsState.saved = false; } }
+}
+// DOC_RICH_FORMAT_V1 (F1) — разметка поля бланка для формы: части по порядку,
+// каждая очищена (sanitizeStoredHtml). Продолжение на следующей странице
+// (A4_TEXT_SPLIT_V1; до T2 разбивка держит в нём строки текста) дописывается
+// своим блоком <div>. Пустые теги — пусто (F8).
+function _blankFieldHtml(parts) {
+    const html = parts.map((p, i) => {
+        const part = _blankPartHtml(p);
+        return i === 0 || !part ? part : '<div>' + part + '</div>';
+    }).join('');
+    return richIsEmpty(html) ? '' : html;
+}
+// В поле с pre-wrap (простой текст бланка) «\n» — видимая строка: Chrome пишет
+// его там на Shift+Enter, и innerText видел его строкой. В разметку он уходит
+// <br>; в поле .rich (white-space:normal) «\n» — пробел и остаётся как есть.
+function _blankPartHtml(p) {
+    const html = sanitizeStoredHtml(p.innerHTML || '');
+    if (!_blankPreWrap(p)) return html;
+    return html.split(/(<[^<>]*>)/).map((s, i) => (i % 2 ? s : s.replace(/\r?\n/g, '<br>'))).join('');
+}
+function _blankPreWrap(p) {
+    try {
+        const view = p.ownerDocument && p.ownerDocument.defaultView;
+        if (view && view.getComputedStyle) return /^(pre|pre-wrap|pre-line|break-spaces)$/.test(view.getComputedStyle(p).whiteSpace);
+    } catch (e) { /* без окна — по классу варианта */ }
+    return !(p.classList && p.classList.contains('rich'));
 }
 
 

@@ -29,10 +29,18 @@ const DROP_WHOLE = new Set([
 ]);
 
 /** Свойства style, которые врач действительно ставит форматированием. */
-const STYLE_PROPS = new Set(['color', 'background-color', 'font-weight', 'font-style', 'text-decoration', 'text-align']);
+// DOC_RICH_FORMAT_V1 (F4) — и размер (A+/A−), и text-decoration-line: так Chrome
+// со styleWithCSS пишет подчёркивание и зачёркивание.
+const STYLE_PROPS = new Set(['color', 'background-color', 'font-weight', 'font-style', 'text-decoration', 'text-decoration-line', 'text-align', 'font-size']);
 
-/** Единственный разрешённый класс — таблица вставленных результатов. */
-const CLASS_OK = new Set(['a4-restbl']);
+// DOC_RICH_FORMAT_V1 (F4) — размер шрифта только ключевым словом: пиксели и
+// проценты ломали бы бланк, а -webkit-xxx-large — не размер документа.
+const FONT_SIZE_OK = new Set(['x-small', 'small', 'medium', 'large', 'x-large', 'xx-large']);
+// <font size="1…7"> — те же ключевые слова; 7 у документа — самый крупный, xx-large.
+const FONT_SIZE_BY_NUM = ['', 'x-small', 'small', 'medium', 'large', 'x-large', 'xx-large', 'xx-large'];
+
+/** Разрешённые классы — таблица вставленных результатов и таблица документа (DOC_RICH_FORMAT_V1, F6). */
+const CLASS_OK = new Set(['a4-restbl', 'a4-tbl']);
 
 const VOID = new Set(['br']);
 
@@ -47,9 +55,37 @@ function cleanStyle(value) {
     // url(), выражения и схемы-скрипты в значении не нужны ни одному из свойств.
     if (/(url\(|javascript:|vbscript:|expression\()/i.test(val)) continue;
     if (/[<>"']/.test(val)) continue;
+    if (prop === 'font-size' && !FONT_SIZE_OK.has(val.toLowerCase())) continue;   // DOC_RICH_FORMAT_V1
     out.push(prop + ': ' + val);
   }
   return out.join('; ');
+}
+
+/**
+ * DOC_RICH_FORMAT_V1 (F4) — прежний <font color size> (execCommand без
+ * styleWithCSS) → атрибуты <span style>. Цвет — только #hex, rgb()/rgba() или
+ * имя цвета; размер — по таблице 1–7. Всё прочее (face, on*, выражения) уходит.
+ */
+function fontToSpanAttrs(raw) {
+  let color = '';
+  let size = '';
+  const re = /([a-zA-Z-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    const name = m[1].toLowerCase();
+    const value = String(m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : (m[5] || ''))).trim();
+    if (name === 'color' && /^(#[0-9a-f]{3,8}|rgba?\(\s*[\d.\s,%]+\)|[a-z]{3,20})$/i.test(value)) color = value;
+    else if (name === 'size' && /^[1-7]$/.test(value)) size = FONT_SIZE_BY_NUM[Number(value)];
+  }
+  const style = [color ? 'color: ' + color : '', size ? 'font-size: ' + size : ''].filter(Boolean).join('; ');
+  return style ? ' style="' + style + '"' : '';
+}
+
+// DOC_RICH_FORMAT_V1 — «<» и «>» текста, не ставшие тегом, экранируются.
+// Раньше «<img src=x onerror=…» без закрывающей «>» уходил сырым текстом, а
+// в листе за ним стоит «</div>» — и браузер дочитывал тег до него.
+function escText(text) {
+  return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function cleanAttrs(raw) {
@@ -89,7 +125,7 @@ export function sanitizeStoredHtml(input) {
   while ((m = re.exec(raw)) !== null) {
     const text = raw.slice(i, m.index);
     i = re.lastIndex;
-    if (!dropDepth) out += text;
+    if (!dropDepth) out += escText(text);
     const tag = (m[1] || '').toLowerCase();
     if (!tag) continue;   // комментарий или директива — просто выброшены
     const closing = m[0][1] === '/';
@@ -102,12 +138,24 @@ export function sanitizeStoredHtml(input) {
       if (!closing && !/\/\s*>$/.test(m[0])) { dropDepth = 1; dropTag = tag; }
       continue;
     }
+    // DOC_RICH_FORMAT_V1 (F4) — <font> становится <span style>, пара сохраняется.
+    if (tag === 'font') { out += closing ? '</span>' : '<span' + fontToSpanAttrs(m[2] || '') + '>'; continue; }
     if (!ALLOWED.has(tag)) continue;   // тег вырезан, содержимое остаётся
     if (closing) { if (!VOID.has(tag)) out += '</' + tag + '>'; continue; }
     out += '<' + tag + cleanAttrs(m[2] || '') + (VOID.has(tag) ? '>' : '>');
   }
-  if (!dropDepth) out += raw.slice(i);
+  if (!dropDepth) out += escText(raw.slice(i));
   return out.trim();
+}
+
+/**
+ * DOC_RICH_FORMAT_V1 — разметка ли это документа: есть хоть один тег
+ * оформления целиком, с «>». Прежний простой текст с «<» («SpO2 <95%», «a < b»)
+ * разметкой не считается и показывается, как раньше, текстом.
+ */
+const MARKUP_RE = /<\/?(?:p|div|br|b|strong|i|em|u|s|sub|sup|ul|ol|li|span|h3|h4|table|thead|tbody|tr|th|td|font)(?:\s[^<>]*)?\/?>/i;
+export function hasMarkup(input) {
+  return MARKUP_RE.test(String(input == null ? '' : input));
 }
 
 /** Есть ли в значении хоть какой-то текст (пустые <p><br></p> не считаются). */
@@ -118,21 +166,34 @@ export function richIsEmpty(html) {
 /**
  * Читаемый текст из разметки — для списков, поиска и мест, где разметки быть
  * не должно (диагноз, подписи, короткие сводки).
+ *
+ * DOC_RICH_FORMAT_V1 — одно правило строк на всё приложение (то, что кабинет
+ * держал в _blankStrip, CABINET_FIX_V1_R3 F10 и R4 п. 9): граница блока —
+ * один перевод строки, и начало блока после текста тоже («код<div>текст</div>»
+ * — две строки, а не «кодтекст»); пустой блок (<div><br></div>) — пустая
+ * строка; <br> перед блоком — не лишняя пустая строка. Списки и таблицы
+ * прозрачны: пункт и строка таблицы — строка, ячейки — через табуляцию (F8).
+ * «&amp;» расшифровывается последним: набранное «&lt;» остаётся «&lt;».
  */
 export function htmlToText(input) {
   const raw = String(input == null ? '' : input);
   if (!raw) return '';
   return raw
-    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<\s*br\s*\/?>/gi, '\n')
-    .replace(/<\/\s*(p|div|li|tr|h3|h4)\s*>/gi, '\n')
-    .replace(/<[^>]*>/g, '')
+    .replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<\/?(?:ul|ol|table|thead|tbody|tfoot)\b[^<>]*>/gi, '')
+    .replace(/<\/(?:td|th)\s*>/gi, '\t')
+    .replace(/<(div|p|li|tr|h3|h4)\b[^<>]*>\s*<br\s*\/?>\s*<\/\1\s*>/gi, '\u0002\u0001')
+    .replace(/<br\s*\/?>\s*(?=<(?:div|p|li|tr|h3|h4)\b|\u0002)/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<(?:div|p|li|tr|h3|h4)\b[^<>]*>/gi, '\u0002').replace(/<\/(?:div|p|li|tr|h3|h4)\s*>/gi, '\u0001')
+    .replace(/\u0001\u0002/g, '\n').replace(/[\u0001\u0002]/g, '\n')
+    .replace(/<[^<>]*>/g, '')
     .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&amp;/gi, '&')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
