@@ -851,7 +851,9 @@ function openEditor(user, root) {
                     // а не в «Должности»: это способ дозвониться до человека, как
                     // телефон и почта. Пустое поле — обычное дело: не все сидят на
                     // телефоне, и кнопка «Позвонить» тогда честно скажет, чего нет.
-                    field('Внутренний номер (АТС), если он есть', txt('pbx_extension', '101'))),
+                    // SOFTPHONE_V1 — поле — назначенный номер; назначает только
+                    // администратор (routes/users.js assignExtension), у остальных — только просмотр.
+                    field('Внутренний номер (АТС), если он есть', (() => { const i = txt('pbx_extension', '101'); if (!acc.admin) i.disabled = true; return i; })())),
                 // CALL_FROM_CRM_V1 — владелец: «why we need to setup a telephony
                 // if we are making call from same number from pbx?». Поле
                 // НЕОБЯЗАТЕЛЬНОЕ, и подсказка обязана это говорить первой
@@ -861,8 +863,10 @@ function openEditor(user, root) {
                 // телефон Easy-Med входит в АТС (routes/users.js assignExtension).
                 hint('На этом номере сотрудник сможет принимать звонки прямо в Easy-Med.'),
                 // SOFTPHONE_V1 — выбор «Моя трубка» не назначенный: сохранение карточки
-                // его не назначит. Пустой ветки нет — append() написал бы «null» (NULL_IN_APPEND_V1).
-                ...(selfPickedOther ? [hint(trf('Сотрудник сам выбрал в «Моя трубка» номер {n} — телефон Easy-Med на нём не включится. Чтобы назначить его, впишите его здесь и сохраните.', { n: ownExtension }))] : []),
+                // его не назначит (это пишется администратору — назначает он). Пустой
+                // ветки нет — append() написал бы «null» (NULL_IN_APPEND_V1).
+                ...(!acc.admin ? [hint('Номер для телефона в Easy-Med назначает администратор.')]
+                    : selfPickedOther ? [hint(trf('Сотрудник сам выбрал в «Моя трубка» номер {n} — телефон Easy-Med на нём не включится. Если это его трубка — впишите номер здесь и сохраните.', { n: ownExtension }))] : []),
                 hint('Пациент в любом случае видит номер клиники: что он увидит, решает сама АТС, а не это поле.'));
         } else if (active === 'job') {
             body.append(head('Должность', 'Роль, отдел и должность в клинике.'), statusBox,   // EMPLOYEE_CARD_SAVE_V1
@@ -1115,6 +1119,10 @@ function openEditor(user, root) {
             // сотрудника можно снять с телефона, не заводя для этого отдельного
             // действия.
             pbx_extension: String(emp.pbx_extension || '').trim(),
+            // SOFTPHONE_V1 — номер в поле — назначенный: отметка говорит серверу, что это
+            // новая карточка (старая во вкладке до обновления слала выбор «Моя трубка»).
+            // Назначит он, только если номер поменял администратор (routes/users.js).
+            assign_extension: true,
             // `position` is deliberately NOT sent: the field is gone from the UI,
             // and PATCH only writes keys it receives, so any value an existing
             // record already carries is left untouched rather than blanked.

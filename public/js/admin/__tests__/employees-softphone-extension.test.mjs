@@ -74,6 +74,10 @@ const USERS = [
   op(82, 'not.set', 'Алиева', 'Нигора', '107', ''),         // выбрала 107, ничего не назначено
   op(83, 'no.phone', 'Расулов', 'Тимур', '', ''),           // не на телефоне
 ];
+// Сервер до миграции 259: назначенного номера в ответе нет вовсе.
+const OLD = op(84, 'old.server', 'Сафарова', 'Лола', '107', undefined);
+delete OLD.pbx_extension_assigned;
+USERS.push(OLD);
 
 const writes = [];
 globalThis.fetch = async (url, opts = {}) => {
@@ -115,7 +119,8 @@ async function save(card) {
   buttonWith(card, 'Сохранить сотрудника').click();
   await flush();
 }
-const NOTE = (n) => `Сотрудник сам выбрал в «Моя трубка» номер ${n} — телефон Easy-Med на нём не включится. Чтобы назначить его, впишите его здесь и сохраните.`;
+const NOTE = (n) => `Сотрудник сам выбрал в «Моя трубка» номер ${n} — телефон Easy-Med на нём не включится. Если это его трубка — впишите номер здесь и сохраните.`;
+const ADMIN_ONLY = 'Номер для телефона в Easy-Med назначает администратор.';
 const SOFT_HINT = 'На этом номере сотрудник сможет принимать звонки прямо в Easy-Med.';
 
 test('поле номера — назначенный номер; сотрудник выбрал себе другой — пометка с его номером', async () => {
@@ -131,14 +136,44 @@ test('сохранение без правки поля уходит с назн
   await save(card);
   assert.equal(writes.length, 1, 'карточка не ушла на сервер');
   assert.equal(writes[0].body.pbx_extension, '108', 'ушёл самовыбранный номер — сохранение назначило бы его');
+  assert.equal(writes[0].body.assign_extension, true, 'нет отметки новой карточки — сервер не назначит и вписанный номер');
 });
 
-test('администратор вписал номер сотрудника — уходит он (назначение)', async () => {
+test('администратор вписал номер сотрудника — уходит он с отметкой (назначение)', async () => {
   const card = await openCard('self.pick');
+  assert.equal(extField(card).disabled, undefined, 'администратору поле закрыто');
+  assert.ok(!textOf(card).includes(ADMIN_ONLY));
   type(extField(card), '107');
   await save(card);
   assert.equal(writes.length, 1);
   assert.equal(writes[0].body.pbx_extension, '107');
+  assert.equal(writes[0].body.assign_extension, true);
+});
+
+test('сервер до миграции 259 (нет pbx_extension_assigned) — поле показывает номер, пометки нет', async () => {
+  const card = await openCard('old.server');
+  assert.equal(extField(card).value, '107', 'поле пустое — сохранение карточки стёрло бы номер');
+  assert.ok(!textOf(card).includes('сам выбрал в «Моя трубка»'), 'лишняя пометка');
+});
+
+// Назначает только администратор (routes/users.js): у того, кому выдано
+// «Сотрудники → Изменение», поле только для просмотра, и сказано почему.
+test('не-администратор с «Сотрудниками»: поле только для просмотра, «назначает администратор», без пометки о выборе', async () => {
+  const P = await import('../permissions.js');
+  const was = window.easymed.state.user;
+  window.easymed.state.user = { id: 5, role: 'nurse', extra_roles: [] };
+  P.setEffectiveFromRole({ name: 'nurse', permissions: { sections: ['settings'], levels: {}, grants: { settings: 'view', 'settings.employees': 'edit' } } });
+  try {
+    const card = await openCard('self.pick');
+    assert.equal(extField(card).value, '108');
+    assert.equal(extField(card).disabled, true, 'не-администратору поле номера открыто');
+    assert.ok(textOf(card).includes(ADMIN_ONLY), 'не сказано, кто назначает номер');
+    assert.ok(!textOf(card).includes('сам выбрал в «Моя трубка»'), 'пометка с действием, которого у него нет');
+    assert.ok(textOf(card).includes(SOFT_HINT));
+  } finally {
+    P.setFullAccess();
+    window.easymed.state.user = was;
+  }
 });
 
 test('пометки нет, когда выбор совпадает с назначенным или не сделан', async () => {
@@ -163,7 +198,8 @@ test('пометка переводится шаблоном: номер под�
     setLang('en');
     let text = textOf(await openCard('self.pick'));
     assert.ok(text.includes('The employee chose number 107 in «My handset» themselves'), 'пометка не переведена на английский');
-    assert.ok(text.includes('On this number the employee can take calls right in Easy-Med.'));
+    assert.ok(text.includes('If it is their handset, enter the number here and save.'));
+    assert.ok(text.includes('The employee can take calls on this number directly in Easy-Med.'));
     setLang('uz');
     text = textOf(await openCard('self.pick'));
     assert.ok(text.includes('Xodim «Mening trubkam»da 107 raqamini o‘zi tanlagan'), 'пометка не переведена на узбекский');

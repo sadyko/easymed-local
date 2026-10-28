@@ -595,28 +595,33 @@ function stripMoney(view) {
   return view;
 }
 
-// SOFTPHONE_V1 (миграция 259, решение владельца «Only admin assigns») — номер
-// из карточки сотрудника становится НАЗНАЧЕННЫМ: на нём телефон Easy-Med входит
-// в АТС, а браузер получает пароль SIP номера. Назначает тот, кто правит карточку
-// («Сотрудники → Изменение»), но не в своей карточке — иначе это тот же
-// самовыбор, что «Моя трубка». Администратор в своей — назначает: решение и
-// есть его. От имени сотрудника req.user — сотрудник, и правило то же, что у
-// него самого. Само поле pbx_extension_assigned из запроса не читается никогда
-// (parseEmployeeFields его не знает); пустой номер стирает и назначение.
-//
-// ПОЛЕ КАРТОЧКИ — НАЗНАЧЕННЫЙ НОМЕР, и карточка шлёт его при каждом сохранении.
-// Поэтому при правке (row — строка до правки) номер, равный назначенному, — это
-// «поле не трогали»: ни назначения, ни выбора сотрудника в «Моя трубка» такое
-// сохранение не меняет (иначе правка телефона или ставок молча назначила бы
-// самовыбранный номер или сбросила бы выбор). Другой номер — назначение (обе
-// колонки); у того, кто назначать не вправе, — только pbx_extension, как раньше.
-function assignExtension(ef, mayAssign, row = null) {
+// SOFTPHONE_V1 (миграция 259, решение владельца «Only admin assigns») — НОМЕР ДЛЯ
+// ТЕЛЕФОНА EASY-MED НАЗНАЧАЕТ ТОЛЬКО АДМИНИСТРАТОР. На назначенном номере
+// (pbx_extension_assigned) телефон Easy-Med входит в АТС, и браузер получает
+// пароль SIP номера — а он работает в любой SIP-программе и после увольнения.
+// Поле карточки — назначенный номер; карточка шлёт его при каждом сохранении
+// (pbx_extension) вместе с отметкой assign_extension: true. Правило, по порядку:
+//   1. pbx_extension в запросе нет — ни одна колонка не меняется;
+//   2. правка (row — строка до неё) и номер равен назначенному (NULL — пусто) —
+//      «поле не трогали»: не меняется ни назначение, ни выбор сотрудника в
+//      «Моя трубка» (иначе правка телефона или ставок сбросила бы этот выбор);
+//   3. администратор (isAdminUser — как у входа от имени) И отметка ровно
+//      true — назначение: обе колонки; пустой номер стирает обе;
+//   4. иначе — только pbx_extension, трубка для «Позвонить», как до телефона.
+// Почему не любой с «Сотрудники → Изменение» (ревью): заведя подставную
+// учётную запись с чужим номером или вписав его коллеге и сбросив ей пароль,
+// он получил бы пароль SIP этого номера. Почему отметка (ревью A1b): вкладка,
+// открытая до обновления, работает старой карточкой — та шлёт в pbx_extension
+// выбор сотрудника и отметки не знает. От имени сотрудника req.user — сотрудник,
+// не администратор: назначения нет. Поле pbx_extension_assigned из запроса не
+// читается никогда (parseEmployeeFields его не знает).
+function assignExtension(ef, { admin, marked }, row = null) {
   if (ef.pbx_extension === undefined) return ef;
   if (row && (ef.pbx_extension || '') === String(row.pbx_extension_assigned || '').trim()) {
     delete ef.pbx_extension;
     return ef;
   }
-  if (mayAssign) ef.pbx_extension_assigned = ef.pbx_extension;
+  if (admin && marked) ef.pbx_extension_assigned = ef.pbx_extension;
   return ef;
 }
 
@@ -703,7 +708,8 @@ export function userRoutes(db) {
 
     const parsed = parseEmployeeFields(req.body, db, undefined, 0);   // CLINIC_API_FIX_V1 — новому сотруднику фото не ставится
     if (!parsed.ok) return bad(res, parsed.message, parsed.field);   // DOCTOR_PROFILE_V1 — с полем отказа
-    const ef = assignExtension(parsed.fields, true);   // SOFTPHONE_V1 — заводят всегда другого человека
+    // SOFTPHONE_V1 — номер для телефона назначает только администратор, и только новой карточкой.
+    const ef = assignExtension(parsed.fields, { admin: isAdminUser(req.user), marked: !!req.body && req.body.assign_extension === true });
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
     if (specs.list) ef.specialty = primarySpecialtyName(specs.list);   // CLINIC_API_FIX_V1 — как основная строка
@@ -815,8 +821,8 @@ export function userRoutes(db) {
 
     const parsed = parseEmployeeFields(req.body, db, user.role, user.id);   // CLINIC_API_FIX_V1 — фото только из папки этого сотрудника
     if (!parsed.ok) return bad(res, parsed.message, parsed.field);   // DOCTOR_PROFILE_V1 — с полем отказа
-    // SOFTPHONE_V1 — своя карточка не-администратора номер для телефона не назначает.
-    const ef = assignExtension(parsed.fields, isAdminUser(req.user) || user.id !== req.user.id, user);
+    // SOFTPHONE_V1 — номер для телефона назначает только администратор, и только новой карточкой.
+    const ef = assignExtension(parsed.fields, { admin: isAdminUser(req.user), marked: !!req.body && req.body.assign_extension === true }, user);
     const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
     if (!specs.ok) return bad(res, specs.message);
     if (specs.list) ef.specialty = primarySpecialtyName(specs.list);   // CLINIC_API_FIX_V1 — как основная строка
