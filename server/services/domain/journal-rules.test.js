@@ -235,8 +235,10 @@ test('заключение исследования: старый снимок (
 // разметкой врача (список, жирный, таблица результата): журнал — текст, теги
 // в ячейку не попадают; прежний текст (и «<» в нём) — как был.
 test('DOC_RICH_FORMAT_V1: «Заключение» с оформлением врача — в журнале текстом', () => {
-  assert.equal(conclusionOfDoc({ doc_type: 'protocol', conclusionText: '<ol><li>Здоров</li><li>Контроль через <b>месяц</b></li></ol>' }), 'Здоров\nКонтроль через месяц');
-  assert.equal(conclusionOfDoc({ doc_type: 'protocol', conclusionText: 'ОАК:<table class="a4-restbl"><tr><td>HGB</td><td>140</td></tr></table>' }), 'ОАК:\nHGB\t140');
-  assert.equal(conclusionOfDoc({ doc_type: 'protocol', conclusionText: '<ul><li><br></li></ul>', dx: 'I49' }), 'I49', 'пустая разметка — не заключение');
+  assert.equal(conclusionOfDoc({ doc_type: 'protocol', rich: 1, conclusionText: '<ol><li>Здоров</li><li>Контроль через <b>месяц</b></li></ol>' }), 'Здоров\nКонтроль через месяц');
+  assert.equal(conclusionOfDoc({ doc_type: 'protocol', rich: 1, conclusionText: 'ОАК:<table class="a4-restbl"><tr><td>HGB</td><td>140</td></tr></table>' }), 'ОАК:\nHGB\t140');
+  assert.equal(conclusionOfDoc({ doc_type: 'protocol', rich: 1, conclusionText: '<ul><li><br></li></ul>', dx: 'I49' }), 'I49', 'пустая разметка — не заключение');
   assert.equal(conclusionOfDoc({ doc_type: 'protocol', conclusionText: 'SpO2 <95%, ЧСС > 90' }), 'SpO2 <95%, ЧСС > 90', 'прежний текст изменился');
+  // ревью T1 (LOW 5) — снимок до T1 (без метки rich): разделы — текст, набранное «<b>» — не тег
+  assert.equal(conclusionOfDoc({ doc_type: 'protocol', conclusionText: 'Hb <b>ниже</b> нормы' }), 'Hb <b>ниже</b> нормы');
 });

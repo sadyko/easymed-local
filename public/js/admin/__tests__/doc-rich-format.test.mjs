@@ -134,7 +134,7 @@ test('F1: поле с оформлением идёт на лист очищен
     assert.equal(WS._blankRich('Кашель'), 'Кашель');
     // буквально набранное «<b>» (в форме — «&lt;b&gt;») — текст, а не тег листа
     assert.equal(WS._blankRich('пишут &lt;b&gt; руками'), '<div>пишут &lt;b&gt; руками</div>');
-    assert.ok(renderDesignedVariant('conclusion', 'classic', S, { exam: WS._blankRich('пишут &lt;b&gt; руками'), activeFields: ['physical_exam'] }).includes('<div>пишут &lt;b&gt; руками</div>'));
+    assert.ok(renderDesignedVariant('conclusion', 'classic', S, { rich: 1, exam: WS._blankRich('пишут &lt;b&gt; руками'), activeFields: ['physical_exam'] }).includes('<div>пишут &lt;b&gt; руками</div>'));
     // пустые теги — пусто (F8); опасное — вырезано
     assert.equal(WS._blankRich('<ul><li><br></li></ul>'), '');
     assert.equal(WS._blankRich('<div><br></div>'), '');
@@ -239,8 +239,8 @@ test('F2: открытие записи с опасной разметкой —
     const ctx = await opened(6, notesOf({ physical_exam: XSS, hpi: 'SpO2 <95%' }));
     assertClean(field(ctx, 'physical_exam').innerHTML, 'открытие');
     assert.ok(field(ctx, 'physical_exam').innerHTML.startsWith('<b>ok</b>'));
-    // прежний текст без разметки — текстом, «<» не теряется
-    assert.equal(field(ctx, 'hpi').textContent, 'SpO2 <95%');
+    // прежний простой текст — разметкой с экранированным «<» (показ — «SpO2 <95%»: doc-rich-roundtrip)
+    assert.equal(field(ctx, 'hpi')._html, 'SpO2 &lt;95%');
     assertClean(JSON.stringify(WS.docSnapshot(ctx, 'conclusion')), 'снимок');
 });
 
@@ -312,10 +312,10 @@ test('F3: у каждого варианта — отступ списка и р
 test('F1/F3: разметка раздела — в .rich на каждом варианте и на экране, и в печати', () => {
     for (const editor of [true, false]) {
         for (const v of ['classic', 'compact']) {
-            const c = renderDesignedVariant('conclusion', v, S, { __editor: editor, exam: LIST, complaint: '<b>Кашель</b>', activeFields: ['chief_complaint', 'physical_exam'] });
+            const c = renderDesignedVariant('conclusion', v, S, { rich: 1, __editor: editor, exam: LIST, complaint: '<b>Кашель</b>', activeFields: ['chief_complaint', 'physical_exam'] });
             assert.ok(c.includes('class="sec-b rich" data-field="physical_exam">' + LIST), v + (editor ? ' экран' : ' печать') + ': осмотр');
             assert.ok(c.includes('class="sec-b rich" data-field="chief_complaint"><b>Кашель</b>'), v + ': жалобы');
-            const d = renderDesignedVariant('diag', v, S, { __editor: editor, patientName: 'Азизов', service: 'УЗИ', description: LIST + RESTBL, conclusion: 'Без патологии' });
+            const d = renderDesignedVariant('diag', v, S, { rich: 1, __editor: editor, patientName: 'Азизов', service: 'УЗИ', description: LIST + RESTBL, conclusion: 'Без патологии' });
             assert.ok(d.includes('data-field="instrumental_text">' + LIST + RESTBL), v + ': описание диагностики');
             assert.match(d, /class="sec-b rich" data-field="instrumental_text"/, v + ': описание диагностики не .rich');
         }
@@ -330,12 +330,28 @@ test('F1: прежний простой текст — как раньше: pre-
         assert.match(styleOf(html), /\.sec-b\{[^}]*white-space:pre-wrap/, v + ': pre-wrap пропал');
         const d = renderDesignedVariant('diag', v, S, { patientName: 'Азизов', service: 'УЗИ', description: 'Почки <в норме>\nКонтуры ровные', conclusion: 'Без патологии' });
         assert.ok(d.includes('<div class="sec-b" data-field="instrumental_text"><p>Почки &lt;в норме&gt;</p><p>Контуры ровные</p></div>'), v + ': описание абзацами, как было');
+        // и в снимке T1 (rich: 1) раздел без разметки — тот же простой текст
+        assert.ok(renderDesignedVariant('conclusion', v, S, { rich: 1, exam: plain, activeFields: ['physical_exam'] })
+            .includes('<div class="sec-b" data-field="physical_exam">Живот &lt;мягкий&gt;\nПечень у края</div>'), v + ': простой текст снимка T1');
     }
+});
+
+test('ревью T1 (LOW 5): архив до T1 (без метки rich) — разделы текстом, набранное буквально «<b>» — не жирный', () => {
+    const old = { patientName: 'Азизов', exam: 'Hb <b>ниже</b> нормы', recsText: '<i>Диета</i>', activeFields: ['physical_exam'] };
+    for (const v of ['classic', 'compact']) {
+        const html = renderDesignedVariant('conclusion', v, S, old);
+        assert.ok(html.includes('<div class="sec-b" data-field="physical_exam">Hb &lt;b&gt;ниже&lt;/b&gt; нормы</div>'), v + ': старый текст стал разметкой');
+        assert.ok(html.includes('<li>&lt;i&gt;Диета&lt;/i&gt;</li>'), v + ': старые рекомендации стали разметкой');
+        const d = renderDesignedVariant('diag', v, S, { patientName: 'Азизов', service: 'УЗИ', description: 'Hb <b>ниже</b>', conclusion: 'Норма' });
+        assert.ok(d.includes('<p>Hb &lt;b&gt;ниже&lt;/b&gt;</p>'), v + ': старое описание стало разметкой');
+    }
+    // тот же путь, что карта пациента, «Документы» и Telegram: тело архива → buildSheetHtml
+    assert.ok(buildSheetHtml({ type: 'conclusion', s: S, data: old }).includes('Hb &lt;b&gt;ниже&lt;/b&gt; нормы'));
 });
 
 test('F1: рекомендации в печати — разметка как есть; простой текст — прежний список ul.recs', () => {
     for (const v of ['classic', 'compact']) {
-        const rich = renderDesignedVariant('conclusion', v, S, { recsText: OLIST });
+        const rich = renderDesignedVariant('conclusion', v, S, { rich: 1, recsText: OLIST });
         assert.ok(rich.includes('data-field="recommendations_text">' + OLIST), v + ': рекомендации-разметка');
         assert.ok(!/<ul class="recs"><li>(<ol>|Диета)/.test(rich), v + ': разметка рекомендаций ушла в ul.recs');
         const plain = renderDesignedVariant('conclusion', v, S, { recsText: 'Диета\nКонтроль' });
@@ -353,17 +369,17 @@ test('«Диагноз» в бланке — простой текст: разм
 test('XSS: опасная разметка вырезана на каждом пути показа — варианты (экран и печать), печать, архив, история болезни', () => {
     for (const editor of [true, false]) {
         for (const v of ['classic', 'compact']) {
-            const c = renderDesignedVariant('conclusion', v, S, { __editor: editor, exam: XSS, complaint: XSS, recsText: XSS, conclusionText: XSS, labs: XSS, instrumental: XSS, therapy: XSS, hpi: XSS });
+            const c = renderDesignedVariant('conclusion', v, S, { rich: 1, __editor: editor, exam: XSS, complaint: XSS, recsText: XSS, conclusionText: XSS, labs: XSS, instrumental: XSS, therapy: XSS, hpi: XSS });
             assertClean(c, 'conclusion/' + v + (editor ? '/экран' : '/печать'));
             assert.ok(c.includes('<b>ok</b>'), 'оформление вырезано вместе с опасным');
-            const d = renderDesignedVariant('diag', v, S, { __editor: editor, patientName: 'А', service: 'УЗИ', description: XSS, conclusion: 'Без патологии' });
+            const d = renderDesignedVariant('diag', v, S, { rich: 1, __editor: editor, patientName: 'А', service: 'УЗИ', description: XSS, conclusion: 'Без патологии' });
             assertClean(d, 'diag/' + v + (editor ? '/экран' : '/печать'));
             // «Заключение» исследования — строка простого текста: опасное в нём — экранированный текст
-            const dc = renderDesignedVariant('diag', v, S, { __editor: editor, patientName: 'А', service: 'УЗИ', description: 'Почки', conclusion: XSS, conclusionBody: XSS, conclusionAuto: '' });
+            const dc = renderDesignedVariant('diag', v, S, { rich: 1, __editor: editor, patientName: 'А', service: 'УЗИ', description: 'Почки', conclusion: XSS, conclusionBody: XSS, conclusionAuto: '' });
             assertClean(dc, 'diag-заключение/' + v + (editor ? '/экран' : '/печать'), { strict: false });
         }
     }
-    assertClean(buildSheetHtml({ type: 'conclusion', s: S, data: { exam: XSS, recsText: XSS } }), 'buildSheetHtml');
+    assertClean(buildSheetHtml({ type: 'conclusion', s: S, data: { rich: 1, exam: XSS, recsText: XSS } }), 'buildSheetHtml');
     assertClean(caseDocPrintBody([{ title: 'Осмотр', html: XSS }]), 'история болезни');
 });
 
@@ -405,4 +421,73 @@ test('F2: «Вставить результаты» и снимок истори
     assert.ok(mt.includes('Кашель 3 дня') && mt.includes('SpO2 <95%'), mt);
     assert.ok(!/<\/?(i|b|ul|li)>|&lt;/.test(mt), 'снимок показывает разметку: ' + mt);
     modal.remove();
+    // ревью T1 (LOW 4) — подпись черновика в истории — текст, а не разметка
+    assert.equal(WS.historyRowMeta({ kind: 'draft', fields: { chief_complaint: '<b>Кашель</b><div>3 дня</div>' } }).subtitle, 'Кашель 3 дня');
+    assert.equal(WS.historyRowMeta({ kind: 'draft', fields: { chief_complaint: '<br>' } }).subtitle, null);
+});
+
+// ─── ревью T1 ──────────────────────────────────────────────────────────────────
+test('ревью T1 (MEDIUM 3): перевод строки шаблона с оформлением (редактор шаблона — pre-wrap) — строка на листе', async () => {
+    const TPL = '<b>Почки</b>: норма\nПечень: норма';
+    assert.equal(WS._blankRich(TPL), '<b>Почки</b>: норма<br>Печень: норма');
+    // структура списка не получает <br> между пунктами
+    assert.equal(WS._blankRich('<ul>\n<li>a</li>\n<li>b</li>\n</ul>'), '<ul>\n<li>a</li>\n<li>b</li>\n</ul>');
+    const ctx = await opened(40, notesOf({ chief_complaint: 'Кашель' }));
+    WS.tplApply(ctx, { doc_type: '0', body: { physical_exam: TPL, hpi: 'Строка 1\nСтрока 2' } });
+    assert.equal(field(ctx, 'physical_exam').innerHTML, '<b>Почки</b>: норма<br>Печень: норма', 'в форме — одной строкой');
+    const snap = WS.docSnapshot(ctx, 'conclusion');
+    assert.equal(snap.exam, '<b>Почки</b>: норма<br>Печень: норма');
+    assert.equal(snap.hpi, 'Строка 1\nСтрока 2', 'шаблон без оформления — прежний текст');
+    assert.ok(renderDesignedVariant('conclusion', 'classic', S, snap).includes('data-field="physical_exam"><b>Почки</b>: норма<br>Печень: норма</div>'));
+});
+
+test('ревью T1 (T3): пустая таблица — содержание раздела: бланк, форма и шаблон её не стирают; «текст» раздела — по тексту', async () => {
+    const EMPTY = '<table class="a4-tbl"><tbody><tr><th></th><th></th></tr><tr><td></td><td></td></tr></tbody></table>';
+    assert.equal(WS._blankRich(EMPTY), EMPTY, 'лист стёр пустую таблицу');
+    assert.equal(WS._blankRich('<ul><li><br></li></ul>'), '', 'пустой список — пусто, как прежде');
+    // бланк → форма (одна часть поля)
+    const ctx = await opened(41, notesOf({ physical_exam: 'черновик' }));
+    typeInBlank(ctx, 'physical_exam', EMPTY);
+    assert.equal(field(ctx, 'physical_exam').innerHTML, EMPTY, 'форма стёрла пустую таблицу');
+    assert.ok(await WS.saveDraft(ctx, { silent: true }));
+    assert.equal(JSON.parse(NOTES.get(41)).current.physical_exam, EMPTY);
+    // шаблон «бланк для заполнения» сохраняется и вставляется
+    assert.equal(WS.tplSaveBody({ doc_type: '0', body: { physical_exam: EMPTY } }).physical_exam, EMPTY, 'шаблон с пустой таблицей не сохранился');
+    // «есть ли текст»: пустая таблица — не текст — переподпись называет раздел пропавшим
+    assert.deepEqual(WS.lostOnResign({ physical_exam: 'Живот мягкий' }, { physical_exam: EMPTY }), ['Осмотр']);
+});
+
+test('ревью T1: образец — только предпросмотру; документ с данными (и пустой) — всегда свой', () => {
+    const SAMPLE = /Рахимов|Алиев Бобур|Юлдашева|Юсупова Н|О\. Юсупов/;
+    for (const v of ['classic', 'compact']) {
+        assert.ok(!SAMPLE.test(renderDesignedVariant('lab', v, S, { patientName: 'Эргашев Жахонгир', groups: [] })), v + ': анализ без групп напечатан образцом');
+        assert.ok(!SAMPLE.test(renderDesignedVariant('invoice', v, S, { patientName: 'Эргашев Жахонгир', items: [] })), v + ': счёт без позиций напечатан образцом');
+        assert.match(renderDesignedVariant('lab', v, S, null), /Рахимов/, v + ': предпросмотр анализа без образца');
+        assert.match(renderDesignedVariant('invoice', v, S, null), /Рахимов/, v + ': предпросмотр счёта без образца');
+    }
+    assert.ok(!SAMPLE.test(renderDesignedVariant('fiscal', 'classic', S, { patientName: 'Эргашев Жахонгир', items: [] })), 'фискальный чек образцом');
+    assert.ok(!SAMPLE.test(renderDesignedVariant('check', 'classic', S, { patientName: 'Эргашев Жахонгир', items: [] })), 'квитанция образцом');
+    // тело без данных — документ вызывающего, а не образец заключения
+    const body = buildSheetHtml({ type: 'conclusion', s: S, bodyHtml: '<p>Эргашев Жахонгир — тело</p>' });
+    assert.ok(body.includes('Эргашев Жахонгир — тело') && !SAMPLE.test(body), 'bodyHtml заменён образцом');
+    assert.match(buildSheetHtml({ type: 'conclusion', s: S }), /Алиев Бобур/, 'предпросмотр «Документов» потерял образец');
+});
+
+test('ревью T1: лист приёма из подписанной записи (карта пациента) — этот пациент, разделы записи, без образца', async () => {
+    const { notesDocData } = await import('../../shared/cabinet-doc.js');
+    const fields = { chief_complaint: '<b>Кашель</b>', physical_exam: LIST, primary_diagnosis: 'Средней тяжести', icd10: 'J20.9', conclusion_text: 'SpO2 &lt;95%' };
+    const data = notesDocData(fields, {
+        head: { patientName: 'Эргашев Жахонгир', mrn: 'MRN-1', doctorName: 'Каримов Алишер', service: 'Приём терапевта', issueDate: '01.10.2026' },
+        diagnoses: [{ code: 'J20.9', name: 'Острый бронхит', type: 'main' }],
+        prescriptions: [{ name: 'Амброксол', dose: '30 мг' }],
+    });
+    for (const v of ['classic', 'compact']) {
+        const html = buildSheetHtml({ type: 'conclusion', s: { ...S, variant: { conclusion: v } }, data });
+        const t = html.replace(/<style[\s\S]*?<\/style>/g, '');
+        assert.ok(t.includes('Эргашев'), v + ': на листе не этот пациент');
+        assert.ok(!/Алиев Бобур|О\. Юсупов|Периодические головные боли/.test(t), v + ': на листе образец');
+        assert.ok(t.includes(LIST) && t.includes('<b>Кашель</b>'), v + ': разделы записи потеряли оформление');
+        assert.ok(t.includes('J20.9 — Острый бронхит') && t.includes('Средней тяжести'), v + ': диагноз записи');
+        assert.ok(t.includes('SpO2 &lt;95%') && t.includes('Амброксол'), v + ': заключение и рецепт записи');
+    }
 });

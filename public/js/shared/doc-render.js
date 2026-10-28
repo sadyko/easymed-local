@@ -95,7 +95,11 @@ export function buildSheetHtml({ type = 'invoice', s = null, data = null, idLine
     // DESIGNED_VARIANTS_V1 — full standalone design (Medion handout) for this type+variant, if any.
     // INVOICE_58MM_V1 — designed variants only receive `data`; surface the invoice/idLine number as docNo.
     if (data && typeof data === 'object' && !data.docNo && idLine) data = Object.assign({}, data, { docNo: idLine });
-    const _designed = renderDesignedVariant(type, (cfg.variant && cfg.variant[type]) || 'classic', cfg, data || (type === 'conclusion' ? sampleConclusion() : null));
+    // DOC_RICH_FORMAT_V1 (ревью T1) — образец заключения — только предпросмотру (ни данных, ни
+    // тела). Тело без данных (bodyHtml) — документ вызывающего: оформленный бланк его не
+    // читает, и карта пациента печатала «Заключение приёма» ОБРАЗЦОМ — чужим пациентом.
+    const _designed = (bodyHtml != null && data == null) ? null
+        : renderDesignedVariant(type, (cfg.variant && cfg.variant[type]) || 'classic', cfg, data || (type === 'conclusion' ? sampleConclusion() : null));
     if (_designed) return _designed;
     const fontStack = fontFor(cfg.fontPair);
 

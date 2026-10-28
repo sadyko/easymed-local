@@ -36,7 +36,7 @@ function pdfHtml(db, ref, pid) {
 test('протокол с оформлением: список, таблица и цвет — в листе для PDF; опасное вырезано', () => {
   assert.equal(typeof globalThis.document, 'undefined', 'тест должен идти без DOM');
   const { db, pid, id } = seed({
-    __editor: true, patientName: 'Азизов Бахтиёр', service: 'Приём терапевта',
+    __editor: true, rich: 1, patientName: 'Азизов Бахтиёр', service: 'Приём терапевта',
     exam: LIST + TABLE + XSS, conclusionText: '<span style="color: #b91c1c">Требуется контроль</span>',
     recsText: '<ol><li>Диета</li><li>Контроль через месяц</li></ol>', activeFields: ['physical_exam', 'recommendations_text', 'conclusion_text'],
   });
@@ -49,7 +49,7 @@ test('протокол с оформлением: список, таблица �
 });
 
 test('заключение диагностики с оформленным описанием; прежний текстовый протокол — как был', () => {
-  const diag = seed({ patientName: 'Азизов Бахтиёр', service: 'УЗИ почек', description: LIST, conclusion: 'Без патологии' }, 'diag');
+  const diag = seed({ rich: 1, patientName: 'Азизов Бахтиёр', service: 'УЗИ почек', description: LIST, conclusion: 'Без патологии' }, 'diag');
   assert.ok(pdfHtml(diag.db, 'doc:' + diag.id, diag.pid).includes('data-field="instrumental_text">' + LIST), 'описание без списка');
   const old = seed({ patientName: 'Азизов Бахтиёр', exam: 'Живот <мягкий>\nПечень у края', activeFields: ['physical_exam'] });
   const html = pdfHtml(old.db, 'doc:' + old.id, old.pid);

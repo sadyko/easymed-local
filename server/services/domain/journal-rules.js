@@ -227,7 +227,7 @@ export function conclusionOfDoc(doc) {
     const v = doc ? doc[k] : null;
     // DOC_RICH_FORMAT_V1 (F2) — «Заключение» протокола в архиве бывает разметкой врача
     // (список, жирный, таблица результата): журнал — текст. Прежний текст — как был.
-    const s = hasMarkup(v) ? htmlToText(v) : String(v == null ? '' : v).trim();
+    const s = (doc && doc.rich && hasMarkup(v)) ? htmlToText(v) : String(v == null ? '' : v).trim();   // ревью T1 — разметка только у снимка с меткой rich
     if (s) return s;
   }
   return doc ? diagnosisOfBody(doc) : '';

@@ -44,6 +44,32 @@ const CLASS_OK = new Set(['a4-restbl', 'a4-tbl']);
 
 const VOID = new Set(['br']);
 
+// DOC_RICH_FORMAT_V1 (ревью T1, HIGH 1) — ЗНАЧЕНИЕ STYLE, КОТОРОЕ БРАУЗЕР
+// ПРОЧТЁТ ИНАЧЕ, ЧЕМ ЕГО ПРОВЕРИЛИ, выбрасывается, а не чинится. Атрибут
+// браузер сначала расшифровывает: «&#59» без «;» — это «;» (ещё одно свойство:
+// position:fixed поверх листа), «&#117rl(» — «url(» (запрос из Chrome Telegram
+// к сети клиники или file://). CSS сам понимает «\75rl(» и комментарии «/**/»
+// посреди слова. Поэтому в значении нет места ни «&», ни «\», ни «/», ни
+// кавычкам; из функций — только цвета rgb()/hsl(). Проверка — и до, и после
+// расшифровки сущностей.
+const STYLE_VALUE_OK = /^[a-z0-9#.,%()\s-]*$/i;
+const STYLE_VALUE_BAD = /url\s*\(|expression\s*\(|image-set|@import|javascript:|vbscript:|behavior|-moz-binding|[\u0000-\u001f]/i;
+const STYLE_FN_OK = /^(?:rgba?|hsla?)$/i;
+const NAMED_REF = { semi: ';', colon: ':', lpar: '(', rpar: ')', sol: '/', bsol: '\\', comma: ',', period: '.', quot: '"', apos: "'", amp: '&', lt: '<', gt: '>', num: '#', excl: '!', tab: '\t', newline: '\n' };
+function decodeRefs(s) {
+  return String(s)
+    .replace(/&#x([0-9a-f]+);?/gi, (_, h) => String.fromCodePoint(Math.min(parseInt(h, 16) || 0, 0x10ffff)))
+    .replace(/&#(\d+);?/g, (_, d) => String.fromCodePoint(Math.min(parseInt(d, 10) || 0, 0x10ffff)))
+    .replace(/&([a-z]+);?/gi, (m, n) => (Object.prototype.hasOwnProperty.call(NAMED_REF, n.toLowerCase()) ? NAMED_REF[n.toLowerCase()] : m));
+}
+function styleValueSafe(val) {
+  for (const v of [val, decodeRefs(val)]) {
+    if (!STYLE_VALUE_OK.test(v) || STYLE_VALUE_BAD.test(v)) return false;
+    for (const fn of v.matchAll(/([a-z-]*)\s*\(/gi)) if (!STYLE_FN_OK.test(fn[1])) return false;
+  }
+  return true;
+}
+
 function cleanStyle(value) {
   const out = [];
   for (const part of String(value).split(';')) {
@@ -53,8 +79,8 @@ function cleanStyle(value) {
     const val = part.slice(i + 1).trim();
     if (!STYLE_PROPS.has(prop)) continue;
     // url(), выражения и схемы-скрипты в значении не нужны ни одному из свойств.
-    if (/(url\(|javascript:|vbscript:|expression\()/i.test(val)) continue;
-    if (/[<>"']/.test(val)) continue;
+    // DOC_RICH_FORMAT_V1 (ревью T1) — и сущности, экранирование, комментарии (styleValueSafe).
+    if (!val || !styleValueSafe(val)) continue;
     if (prop === 'font-size' && !FONT_SIZE_OK.has(val.toLowerCase())) continue;   // DOC_RICH_FORMAT_V1
     out.push(prop + ': ' + val);
   }
@@ -84,8 +110,11 @@ function fontToSpanAttrs(raw) {
 // DOC_RICH_FORMAT_V1 — «<» и «>» текста, не ставшие тегом, экранируются.
 // Раньше «<img src=x onerror=…» без закрывающей «>» уходил сырым текстом, а
 // в листе за ним стоит «</div>» — и браузер дочитывал тег до него.
+// DOC_RICH_FORMAT_V1 (ревью T1, HIGH 2) — и «&», не начинающий сущность: прежний
+// простой текст («AT&T», «a &copy b») в разметке значит ровно то, что набрано, а
+// очищенное — стабильно: второй проход его не меняет.
 function escText(text) {
-  return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return text.replace(/&(?!(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);)/gi, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function cleanAttrs(raw) {
@@ -120,6 +149,19 @@ export function sanitizeStoredHtml(input) {
   let i = 0;
   let dropDepth = 0;
   let dropTag = '';
+  // DOC_RICH_FORMAT_V1 (ревью T1, LOW 6) — РАЗМЕТКА ВЫХОДИТ ЗАКРЫТОЙ. Закрывающий
+  // тег без открытого (лишний «</font>» стал бы «</span>» и закрыл чужой span
+  // раньше времени) выбрасывается; незакрытое закрывается в конце — иначе
+  // жирный раздела «протекал» бы на следующие разделы листа.
+  // В стеке — исходные имена: «font» закрывается своим «</font>» (а пишется </span>),
+  // «</span>» закрывает только настоящий span.
+  const open = [];
+  const closeTo = (t) => {
+    const k = open.lastIndexOf(t);
+    if (k < 0) return;
+    while (open.length > k) { const o = open.pop(); out += '</' + (o === 'font' ? 'span' : o) + '>'; }
+  };
+  const top = () => open[open.length - 1];
   const re = /<\/?([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>|<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>/g;
   let m;
   while ((m = re.exec(raw)) !== null) {
@@ -139,13 +181,50 @@ export function sanitizeStoredHtml(input) {
       continue;
     }
     // DOC_RICH_FORMAT_V1 (F4) — <font> становится <span style>, пара сохраняется.
-    if (tag === 'font') { out += closing ? '</span>' : '<span' + fontToSpanAttrs(m[2] || '') + '>'; continue; }
-    if (!ALLOWED.has(tag)) continue;   // тег вырезан, содержимое остаётся
-    if (closing) { if (!VOID.has(tag)) out += '</' + tag + '>'; continue; }
-    out += '<' + tag + cleanAttrs(m[2] || '') + (VOID.has(tag) ? '>' : '>');
+    const isFont = tag === 'font';
+    if (!isFont && !ALLOWED.has(tag)) continue;   // тег вырезан, содержимое остаётся
+    const t = tag;
+    if (closing) { if (!VOID.has(t)) closeTo(t); continue; }
+    // Пункт, ячейка и строка без закрывающего тега закрываются следующими, как в HTML.
+    if (t === 'li' && top() === 'li') closeTo('li');
+    if ((t === 'td' || t === 'th' || t === 'tr') && (top() === 'td' || top() === 'th')) closeTo(top());
+    if (t === 'tr' && top() === 'tr') closeTo('tr');
+    out += isFont ? '<span' + fontToSpanAttrs(m[2] || '') + '>' : '<' + t + cleanAttrs(m[2] || '') + '>';
+    if (!VOID.has(t)) open.push(t);
   }
   if (!dropDepth) out += escText(raw.slice(i));
+  while (open.length) { const o = open.pop(); out += '</' + (o === 'font' ? 'span' : o) + '>'; }
   return out.trim();
+}
+
+/**
+ * DOC_RICH_FORMAT_V1 (ревью T1, MEDIUM 3) — «\n» текста разметки — строка (<br>).
+ * Редактор шаблона — pre-wrap, и Shift+Enter пишет там «\n»; лист рисует
+ * разметку white-space:normal, где «\n» — пробел, и «Почки: норма\nПечень: норма»
+ * печаталось одной строкой. Пробелы между блоками (ul, li, таблица) — не строка
+ * документа, их «\n» не трогается; «\n» сразу после <br> — оформление исходника.
+ */
+const BLOCK_EDGE_RE = /^<\/?(?:p|div|ul|ol|li|table|thead|tbody|tfoot|tr|th|td|h3|h4)\b/i;
+export function textBreaks(html) {
+  const parts = String(html == null ? '' : html).split(/(<[^<>]*>)/);
+  return parts.map((s, k) => {
+    if (k % 2 || s.indexOf('\n') < 0) return s;
+    const prev = parts[k - 1] || '';
+    const next = parts[k + 1] || '';
+    if (!/\S/.test(s) && (k === 0 || k === parts.length - 1 || BLOCK_EDGE_RE.test(prev) || BLOCK_EDGE_RE.test(next))) return s;
+    const body = /^<br\b/i.test(prev) ? s.replace(/^\r?\n/, '') : s;
+    return body.replace(/\r?\n/g, '<br>');
+  }).join('');
+}
+
+/**
+ * DOC_RICH_FORMAT_V1 (T3) — есть ли что хранить: текст или таблица. Пустая
+ * таблица (только что вставленная, ячейки ещё не заполнены) — содержание
+ * раздела, её не стирают. Для вопроса «есть ли в разделе ТЕКСТ» (пустой
+ * документ, переподпись) — richIsEmpty: таблица без текста — не текст.
+ */
+export function richHasContent(html) {
+  return !richIsEmpty(html) || /<table\b/i.test(String(html == null ? '' : html));
 }
 
 /**

@@ -39,7 +39,8 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
-import { sanitizeStoredHtml, htmlToText, richIsEmpty, hasMarkup } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком
+import { sanitizeStoredHtml, richHasContent, textBreaks } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком
+import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
 import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
@@ -2472,10 +2473,12 @@ export function applyFields(ctx, fields, opts = {}) {
             // stored-XSS sink. (STORED_XSS_HARDEN_V1)
             // CABINET_FIX_V1_R2 — opts.sanitized: значение уже очищено (шаблон: и текст поля, и шаблон прошли очистку).
             // DOC_RICH_FORMAT_V1 (F1) — очистка — общая sanitizeStoredHtml (rich-text.js): те же правила,
-            // что у бланка, печати, архива и сервера. Очищенное — всегда разметка: «SpO2 &lt;95%»
-            // шаблона ложится разметкой, иначе врач видел бы «&lt;».
-            if (opts.sanitized) el.innerHTML = v;
-            else if (/<[a-z!\/]/i.test(v)) el.innerHTML = sanitizeStoredHtml(v); else el.textContent = v;
+            // что у бланка, печати, архива и сервера.
+            // DOC_RICH_FORMAT_V1 (ревью T1, HIGH 2) — значение записи ВСЕГДА разметка: collectFields
+            // пишет innerHTML. Прежняя ветка textContent для значения без тегов клала «SpO2 &lt;95%»
+            // текстом — врач видел «&lt;», и каждое сохранение экранировало ещё раз (&amp;lt;…).
+            // Прежний простой текст («SpO2 <95%», «AT&T») очистка экранирует сама — показ тот же.
+            el.innerHTML = opts.sanitized ? v : sanitizeStoredHtml(v);
         } else {
             el.value = fields[k];
         }
@@ -3880,22 +3883,11 @@ function historyRow(item, isFirst, ctx, originalIdx) {
 // CABINET_FIX_V1_R3 (F8) — диагнозы строки передаются явно («Вставить
 // результаты» — из записей чужой строки); код — всегда тот, что в записи.
 // Экспорт — для проверки.
+// CABINET_FIX_V1_R4 (п. 6) — диагноз записи с её кодом — основной этой записи, каким бы он ни был в строке сейчас;
+// кода записи нет среди диагнозов строки (его сняли) — строка кода как есть, затем текст.
+// DOC_RICH_FORMAT_V1 (ревью T1) — правило в shared/cabinet-doc.js (entryDxText): его зовёт и карта пациента.
 export function entryDx(f, diagnoses = wsState.payload && wsState.payload.diagnoses) {
-    const ff = f || {};
-    const code = String(ff.icd10 || '').trim();
-    // CABINET_FIX_V1_R4 (п. 6) — диагноз записи с её кодом — основной этой записи, каким бы он ни был в строке сейчас.
-    const list = (diagnoses || []).filter((d) => code && d && d.code === code).map((d) => ({ ...d, type: 'main' }));
-    const parts = dxParts(ff.primary_diagnosis, list);
-    if (code && !list.length) {
-        // CABINET_FIX_V1_R4 (п. 6) — кода записи нет среди диагнозов строки (его сняли):
-        // строка кода как есть, затем текст; у записи до ревью 2 код уже стоит первой строкой текста.
-        const t = parts.text;
-        const first = t ? t.split('\n')[0].trim() : '';
-        // CABINET_FIX_V1_R5 (E) — код — до границы: «J20» не «съедает» строку «J20.9 — …».
-        if (first.startsWith(code) && !/[0-9A-Za-zА-Яа-яЁё.]/.test(first.charAt(code.length))) return t;
-        return [code, t].filter(Boolean).join('\n');
-    }
-    return parts.full || (code || '');
+    return entryDxText(f, diagnoses);
 }
 function historyMeta(item) {
     if (item.kind === 'signed') {
@@ -3925,7 +3917,7 @@ function historyMeta(item) {
     return {
         icon: 'Doc', bg: 'var(--primary-50)', fg: 'var(--primary-700)',
         title: 'Draft saved',
-        subtitle: (item.fields?.chief_complaint || '').trim() || null,
+        subtitle: _blankStrip(item.fields?.chief_complaint).replace(/\s*\n+\s*/g, ' ') || null,   // DOC_RICH_FORMAT_V1 (ревью T1) — текст, а не разметка
     };
 }
 
@@ -4539,7 +4531,8 @@ const canManage = (t) => isMine(t) || isAdminActor();
 // CABINET_FIX_V1_TPL (E) — причина отказа сервера, а не голое «Не удалось сохранить».
 const errText = (e) => String((e && (e.message || e.error)) || e || '').trim() || tr('нет ответа сервера');
 // Пустая редактируемая область — это <br> или пробелы: не текст шаблона.
-const tplHasText = (v) => /\S/.test(String(v || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '));
+// DOC_RICH_FORMAT_V1 (T3) — таблица (и пустая — бланк для заполнения) — содержание раздела шаблона.
+const tplHasText = (v) => /\S/.test(String(v || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ')) || /<table\b/i.test(String(v || ''));
 
 function tplDate(ts) { try { return new Date(ts).toLocaleDateString('ru-RU'); } catch (e) { return ''; } }
 
@@ -4611,7 +4604,9 @@ export function tplApply(ctx, t, profile = null) {
     if (!profile && refuseWhileLoading(ctx)) return false;   // CABINET_FIX_V1_R4 (п. 3) — незагруженный лист вставок не принимает
     // Sanitize cross-authored (esp. shared) template HTML before it enters the live editor.
     const _src = (t && t.body) || {}, _clean = {};
-    for (const _k of Object.keys(_src)) _clean[_k] = sanitizeStoredHtml(_src[_k]);   // DOC_RICH_FORMAT_V1 — правила хранения (rich-text.js): список и таблица шаблона доходят до бланка
+    // DOC_RICH_FORMAT_V1 — правила хранения (rich-text.js): список и таблица шаблона доходят до бланка.
+    // Ревью T1 (MEDIUM 3): редактор шаблона — pre-wrap, «\n» в нём — строка; в документе — <br>.
+    for (const _k of Object.keys(_src)) _clean[_k] = textBreaks(sanitizeStoredHtml(_src[_k]));
     // CASE_DOC_TEMPLATES_V1 — вставляет тот, кто открыл: у документа истории
     // болезни свои разделы, и applyFields кабинета их не знает.
     if (profile && typeof profile.apply === 'function') { profile.apply(_clean); return null; }
@@ -5388,6 +5383,7 @@ export const deleteHistoryEntry = (ctx, item) => handleDeleteEntry(ctx, item);  
 export const diagAddImages = (ctx, files) => _diagAddImages(ctx, files);          // CABINET_FIX_V1_R5 — экспорт для проверки
 export const addDiagnosisEntry = (ctx, d) => addDiagnosis(ctx, d);                // CABINET_FIX_V1_R6 — экспорт для проверки
 export const removeDiagnosisEntry = (ctx, idx) => removeDiagnosis(ctx, idx);      // CABINET_FIX_V1_R6 — экспорт для проверки
+export const historyRowMeta = (item) => historyMeta(item);                        // DOC_RICH_FORMAT_V1 (ревью T1) — экспорт для проверки
 export const removePrescriptionEntry = (ctx, idx) => removePrescription(ctx, idx); // CABINET_FIX_V1_R6 — экспорт для проверки
 export const removeOwnServiceEntry = (ctx, idx) => removeOwnService(ctx, idx);    // CABINET_FIX_V1_R6 — экспорт для проверки
 export const openSnapshot = (ctx, item) => openSnapshotModal(ctx, item);           // CABINET_FIX_V1_R7 — экспорт для проверки
@@ -6243,40 +6239,34 @@ const _BLANK_FIELD_MAP = [
 // (rich-text.js) — у сервера (журнал) и кабинета оно одно; там же списки и
 // таблицы (ячейки — табуляцией). Сначала очистка: «<» прежнего простого текста
 // («SpO2 <95%, ЧСС > 90») не принимается за тег и не съедается.
+// DOC_RICH_FORMAT_V1 (ревью T1) — правило живёт в shared/cabinet-doc.js (fieldText):
+// его зовёт и карта пациента.
 export function _blankStrip(x) {
-    return htmlToText(sanitizeStoredHtml(x));
+    return fieldText(x);
 }
 /**
  * DOC_RICH_FORMAT_V1 (F1) — РАЗДЕЛ ДЛЯ ЛИСТА: оформление врача — очищенной
  * разметкой; набранное без оформления (только строки: <br>, <div>, <p>) —
  * текстом, как раньше (лист рисует его pre-wrap, архив и журнал читают его как
  * прежде). Пустые теги — пусто (F8). Экспорт — для проверки.
+ * Ревью T1: «\n» разметки — <br> (шаблон из pre-wrap редактора); таблица — даже
+ * пустая — содержание (T3). Правило — shared/cabinet-doc.js (richForSheet).
  */
 export function _blankRich(x) {
-    const html = sanitizeStoredHtml(x);
-    if (!/<(?!\/?(?:br|div|p)\s*\/?>)[a-z\/]/i.test(html)) {
-        const text = htmlToText(html);
-        // Набранное буквально «<b>» лист прочёл бы тегом: такой текст остаётся разметкой (экранированной).
-        return hasMarkup(text) ? '<div>' + html + '</div>' : text;
-    }
-    return richIsEmpty(html) ? '' : html;
+    return richForSheet(x);
 }
 function _mainDxText(diagnoses = wsState.payload && wsState.payload.diagnoses) {
-    const m = (diagnoses || []).find(d => d && d.type === 'main');
-    return m ? ((m.code ? m.code + ' — ' : '') + (m.name || '')).trim() : '';
+    return mainDxText(diagnoses);
 }
 /**
  * CABINET_FIX_V1_R2 (ревью 2, п. 2) — «Диагноз» строки целиком: основной
  * диагноз (код — название) своей строкой и текст врача. Запись до ревью 2,
  * где код стоял первой строкой поля врача, не даёт его дважды.
  * → { auto, text, full }. Экспорт — для проверки.
+ * DOC_RICH_FORMAT_V1 (ревью T1) — правило в shared/cabinet-doc.js: и для карты пациента.
  */
 export function dxParts(primaryDiagnosis, diagnoses) {
-    const auto = _mainDxText(diagnoses || []);
-    let text = _blankStrip(primaryDiagnosis);
-    const lines = text.split('\n');
-    if (auto && lines[0].replace(/\s+/g, ' ').trim() === auto.replace(/\s+/g, ' ').trim()) text = lines.slice(1).join('\n').trim();
-    return { auto, text, full: [auto, text].filter(Boolean).join('\n') };
+    return dxPartsCore(primaryDiagnosis, diagnoses);
 }
 /**
  * CABINET_FIX_V1_R1 (ревью п. 7) — кто подписывает документ: имя и специальность
@@ -6306,6 +6296,10 @@ function buildBlankData(ctx) {
     const svc = p.__service || {};
     const data = {
         __editor: true,
+        // DOC_RICH_FORMAT_V1 (ревью T1, LOW 5) — разделы снимка могут быть разметкой. Лист читает
+        // разметку только у снимка с этой меткой: в архиве до T1 разделы — текст, и набранное
+        // буквально «Hb <b>ниже</b>» в нём — текст, а не жирный.
+        rich: 1,
         title: 'Заключение приёма',
         patientName: `${p.lastName || ''} ${p.firstName || ''} ${p.middle || ''}`.trim() || p.fullName || '',
         mrn: p.mrn || '', phone: p.phone || '',
@@ -6378,6 +6372,7 @@ export function diagDocData(base, { editor = false, images = [] } = {}) {
         // бумаге и в архиве исследования (раньше терялись при подписи).
         prescriptions: (b.prescriptions || []).slice(),
         diagnoses: (b.diagnoses || []).slice(),
+        ...(b.rich ? { rich: 1 } : {}),   // DOC_RICH_FORMAT_V1 (ревью T1) — «Описание» может быть разметкой
     };
 }
 function setBlankMode(ctx, on) {
@@ -6808,7 +6803,7 @@ export function _blankFieldHtml(parts) {
         const part = _blankPartHtml(p);
         return i === 0 || !part ? part : '<div>' + part + '</div>';
     }).join('');
-    return richIsEmpty(html) ? '' : html;
+    return richHasContent(html) ? html : '';   // DOC_RICH_FORMAT_V1 (T3) — пустая таблица — содержание, не стирается
 }
 // В поле с pre-wrap (простой текст бланка) «\n» — видимая строка: Chrome пишет
 // его там на Shift+Enter, и innerText видел его строкой. В разметку он уходит

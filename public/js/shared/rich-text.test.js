@@ -1,7 +1,7 @@
 // CASE_DOC_A4_V1 — санитария разметки документа: что остаётся и что уходит.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeStoredHtml, htmlToText, richIsEmpty, hasMarkup } from './rich-text.js';
+import { sanitizeStoredHtml, htmlToText, richIsEmpty, hasMarkup, textBreaks, richHasContent } from './rich-text.js';
 
 test('оформление врача остаётся: жирный, курсив, списки, абзацы, таблица результатов', () => {
   const html = '<p>Жалобы на <b>боль</b> и <i>слабость</i></p><ul><li>первое</li><li>второе</li></ul>'
@@ -129,4 +129,89 @@ test('DOC_RICH_FORMAT_V1: hasMarkup — разметка документа, а 
   assert.equal(hasMarkup('мелкий <b шрифт'), false, 'тег без «>» — не разметка');
   assert.equal(hasMarkup(''), false);
   assert.equal(hasMarkup(null), false);
+});
+
+// ─── DOC_RICH_FORMAT_V1 — ревью T1 ───────────────────────────────────────────
+
+// Значение style атрибута в выходе: ни «&», ни «\», ни «/», ни url( — браузеру
+// нечего расшифровывать или дочитывать.
+const styleValues = (html) => [...html.matchAll(/style="([^"]*)"/g)].map((m) => m[1]);
+const assertStyleClean = (html, where) => {
+  for (const v of styleValues(html)) {
+    assert.ok(!/[&\\/]|url|expression|import|position|inset|background-image|content/i.test(v), where + ': ' + v);
+  }
+};
+
+test('ревью T1 (HIGH 1): style не обходится сущностями, экранированием CSS и комментариями', () => {
+  const bypass = [
+    // сущность без «;» — это «;» и «u» для браузера (так был обход)
+    '<span style="color: red&#59 position: fixed&#59 inset: 0&#59 background-image: &#117rl(http://127.0.0.1:9/x)">x</span>',
+    '<span style="color: red&#x3b background-image: &#x75rl(file:///C:/Windows/win.ini)">x</span>',
+    '<span style="color: red&semi; background-image: url(http://e)">x</span>',
+    '<span style="color: rgb&#40;1,2,3&#41;">x</span>',                                     // «(» и «)» сущностями
+    '<span style="background-color: \\75 rl(http://127.0.0.1/x)">x</span>',                 // экранирование CSS
+    '<span style="color: \\72 ed">x</span>',
+    '<span style="color: re/**/d; background-color: y/**/ellow">x</span>',                 // комментарии
+    '<span style="color: expression(alert(1))">x</span>',
+    '<span style="color: red; @import url(http://e/x.css)">x</span>',
+    '<span style="font-weight: 700&#59 content: &#34hi&#34">x</span>',
+    '<span style="color: var(--x)">x</span>',                                               // функции, кроме цвета
+    '<span style="background-color: image-set(x 1x)">x</span>',
+    '<span style="color: red&#0;">x</span>',
+  ];
+  for (const raw of bypass) {
+    const out = sanitizeStoredHtml(raw);
+    assertStyleClean(out, raw);
+    assert.ok(/^<span( style="[^"]*")?>x<\/span>$/.test(out), raw + ' → ' + out);
+  }
+  // то, что пишет Chrome со styleWithCSS, проходит как прежде
+  assert.equal(sanitizeStoredHtml('<span style="color: rgb(25, 113, 194); font-weight: bold; text-decoration-line: underline line-through; text-align: center; background-color: hsla(50, 100%, 87%, 0.5);">x</span>'),
+    '<span style="color: rgb(25, 113, 194); font-weight: bold; text-decoration-line: underline line-through; text-align: center; background-color: hsla(50, 100%, 87%, 0.5)">x</span>');
+  assert.equal(sanitizeStoredHtml('<span style="color: #1971c2">x</span>'), '<span style="color: #1971c2">x</span>');
+});
+
+test('ревью T1 (HIGH 2): «&», не начинающий сущность, экранируется; сущности остаются; очистка стабильна', () => {
+  assert.equal(sanitizeStoredHtml('AT&T, ЧСС > 90'), 'AT&amp;T, ЧСС &gt; 90');
+  assert.equal(sanitizeStoredHtml('a &copy b'), 'a &amp;copy b');
+  assert.equal(sanitizeStoredHtml('a &amp; b &lt;c&gt; &nbsp; &#39;'), 'a &amp; b &lt;c&gt; &nbsp; &#39;');
+  for (const s of ['SpO2 <95%', 'AT&T', '&amp;amp;', 'a<b', '<b>x</b> & y', 'x &lt; y && z']) {
+    const once = sanitizeStoredHtml(s);
+    assert.equal(sanitizeStoredHtml(once), once, 'второй проход изменил: ' + s);
+  }
+  assert.equal(htmlToText(sanitizeStoredHtml('AT&T, ЧСС > 90')), 'AT&T, ЧСС > 90');
+  assert.equal(htmlToText(sanitizeStoredHtml('&amp;amp;')), '&amp;');
+});
+
+test('ревью T1 (LOW 6): закрывающий тег без открытого выброшен, незакрытое закрыто, разметка стабильна', () => {
+  assert.equal(sanitizeStoredHtml('<span style="color: red">a</font>b</span>'), '<span style="color: red">ab</span>');
+  assert.equal(sanitizeStoredHtml('<b>a</font>b</b>'), '<b>ab</b>');
+  assert.equal(sanitizeStoredHtml('<span>a<font color="red">b</span>c'), '<span>a<span style="color: red">b</span></span>c');
+  assert.equal(sanitizeStoredHtml('</b></ul>текст'), 'текст');
+  assert.equal(sanitizeStoredHtml('<b>жирный без конца'), '<b>жирный без конца</b>');
+  assert.equal(sanitizeStoredHtml('<ul><li>a<li>b</ul>'), '<ul><li>a</li><li>b</li></ul>');
+  assert.equal(sanitizeStoredHtml('<table><tr><td>1<td>2<tr><td>3</table>'), '<table><tr><td>1</td><td>2</td></tr><tr><td>3</td></tr></table>');
+  for (const s of ['<b>a</font>b</b>', '<b>x', '<ul><li>a<li>b</ul>', '<i><b>x</i>y</b>', '<font color="red"><font size="5">x</font>']) {
+    const once = sanitizeStoredHtml(s);
+    assert.equal(sanitizeStoredHtml(once), once, 'второй проход изменил: ' + s);
+  }
+});
+
+test('ревью T1 (MEDIUM 3): textBreaks — перевод строки текста — <br>, пробелы между блоками не трогаются', () => {
+  assert.equal(textBreaks('<b>Почки</b>: норма\nПечень: норма'), '<b>Почки</b>: норма<br>Печень: норма');
+  assert.equal(textBreaks('строка1\nстрока2'), 'строка1<br>строка2');
+  assert.equal(textBreaks('<ul>\n<li>a</li>\n<li>b</li>\n</ul>'), '<ul>\n<li>a</li>\n<li>b</li>\n</ul>');
+  assert.equal(textBreaks('<table>\n<tr>\n<td>1</td>\n</tr>\n</table>'), '<table>\n<tr>\n<td>1</td>\n</tr>\n</table>');
+  assert.equal(textBreaks('a<br>\nb'), 'a<br>b', 'перевод строки после <br> — оформление исходника');
+  assert.equal(textBreaks('<b>a</b>\n<i>b</i>'), '<b>a</b><br><i>b</i>');
+  assert.equal(textBreaks(''), '');
+});
+
+test('ревью T1 (T3): richHasContent — текст или таблица (и пустая); richIsEmpty — по тексту', () => {
+  const empty = '<table class="a4-tbl"><tbody><tr><th></th><th></th></tr><tr><td></td><td></td></tr></tbody></table>';
+  assert.equal(richHasContent(empty), true);
+  assert.equal(richIsEmpty(empty), true, 'F8: в тексте таблица без текста — пусто');
+  assert.equal(richHasContent('<ul><li><br></li></ul>'), false);
+  assert.equal(richHasContent('<div><br></div>'), false);
+  assert.equal(richHasContent('текст'), true);
+  assert.equal(richHasContent(''), false);
 });

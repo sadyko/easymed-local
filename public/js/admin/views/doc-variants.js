@@ -34,9 +34,12 @@ function lines(t) { return String(t || '').split(/\n+/).map(x => x.trim()).filte
 // DOC_RICH_FORMAT_V1 (F1) — ТЕЛО РАЗДЕЛА. Разметка врача (список, жирный, цвет,
 // таблица результата) — очищенной разметкой в блоке .rich (white-space:normal);
 // прежний простой текст — как раньше: экранирован, в pre-wrap.
-function richBody(v) {
+// Ревью T1 (LOW 5) — разметкой читается только снимок с меткой d.rich (кабинет
+// ставит её с T1). В архиве до T1 разделы — текст: набранное буквально
+// «Hb <b>ниже</b>» печатается текстом, как печаталось.
+function richBody(v, d) {
     const s = String(v == null ? '' : v);
-    return hasMarkup(s) ? { rich: true, html: sanitizeStoredHtml(s) } : { rich: false, html: esc(s) };
+    return (d && d.rich && hasMarkup(s)) ? { rich: true, html: sanitizeStoredHtml(s) } : { rich: false, html: esc(s) };
 }
 // DOC_RICH_FORMAT_V1 (F3) — списки и таблицы в разделах. Каждый вариант начинает
 // стили с *{margin:0;padding:0}, и у списка не было отступа: маркеры «•» и «1.»
@@ -309,13 +312,19 @@ export function vHead(s, { title, uz, date, ids, fields } = {}) {
 }
 
 export function renderDesignedVariant(type, variant, s, d) {
+    // DOC_RICH_FORMAT_V1 (ревью T1) — ОБРАЗЕЦ ТОЛЬКО ДЛЯ ПРЕДПРОСМОТРА БЕЗ ДАННЫХ.
+    // Анализы, счёт, фискальный чек и квитанция брали образец («Рахимов Ж. Б.»,
+    // чужие суммы), если в ДАННЫХ ДОКУМЕНТА не было строк: архивный анализ без
+    // групп, счёт без позиций печатались чужими. Документ с данными — всегда
+    // свой, даже пустой (как бланк исследования, CABINET_FIX_V1_DIAG).
+    const preview = d == null;
     d = d || {};
     if (type === 'conclusion') return (variant === 'compact') ? conclusionCompact(s, d) : conclusionClassic(s, d);
-    if (type === 'lab') { const ld = (d && d.groups && d.groups.length) ? d : sampleLab(); return (variant === 'compact') ? labCompact(s, ld) : labClassic(s, ld); }
+    if (type === 'lab') { const ld = (!preview || (d.groups && d.groups.length)) ? d : sampleLab(); return (variant === 'compact') ? labCompact(s, ld) : labClassic(s, ld); }
     if (type === 'diag') { const id = isPatientDiag(d) ? d : sampleImaging(); return (variant === 'compact') ? imagingCompact(s, id) : imagingClassic(s, id); }   // CABINET_FIX_V1_DIAG
-    if (type === 'invoice') { const vd = (d && d.items && d.items.length) ? d : sampleInvoice(); return (variant === 'thermal') ? invoiceThermal(s, vd) : (variant === 'compact') ? invoiceCompact(s, vd) : invoiceClassic(s, vd); }
-    if (type === 'fiscal') return fiscalClassic(s, (d && d.items && d.items.length) ? d : sampleFiscal());
-    if (type === 'check') return receiptClassic(s, (d && d.items && d.items.length) ? d : sampleReceipt());
+    if (type === 'invoice') { const vd = (!preview || (d.items && d.items.length)) ? d : sampleInvoice(); return (variant === 'thermal') ? invoiceThermal(s, vd) : (variant === 'compact') ? invoiceCompact(s, vd) : invoiceClassic(s, vd); }
+    if (type === 'fiscal') return fiscalClassic(s, (!preview || (d.items && d.items.length)) ? d : sampleFiscal());
+    if (type === 'check') return receiptClassic(s, (!preview || (d.items && d.items.length)) ? d : sampleReceipt());
     if (type === 'slip') return slipThermal(s, d);   // V3120_FIX — квитанция: продажа карты, депозит
     return null;
 }
@@ -500,7 +509,7 @@ function diagConclusion(d) {
 // DOC_RICH_FORMAT_V1 (F1) — «Описание» исследования: разметка врача — как
 // написана (.rich); прежний текст — абзацами <p>, как раньше.
 function diagDescription(d) {
-    const rb = richBody(d.description);
+    const rb = richBody(d.description, d);
     if (rb.rich) return `<div class="sec-b rich" data-field="instrumental_text">${rb.html}</div>`;
     return `<div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('') || (d.__editor ? '' : '<p>—</p>')}</div>`;
 }
@@ -527,12 +536,12 @@ function conclusionClassic(s, d) {
     const _secOn = (field) => !field || !d.activeFields || d.activeFields.indexOf(field) > -1;
     const sec = (ru, uz, txt, field) => {
         if (d.__editor && field && d.activeFields && !_secOn(field)) return `<button type="button" class="bk-add" data-add="${field}">+ Добавить: ${esc(ru)}</button>`;
-        const rb = richBody(txt);   // DOC_RICH_FORMAT_V1 (F1)
+        const rb = richBody(txt, d);   // DOC_RICH_FORMAT_V1 (F1)
         return (txt || (d.__editor && field)) ? `<div class="sec"><div class="sec-h"><span class="ru">${esc(ru)}</span>${uz ? `<span class="uz">· ${esc(uz)}</span>` : ''}${d.__editor && field ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="${field}" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="${field}" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="${field}" title="Убрать раздел">×</button></span>` : ''}</div><div class="sec-b${rb.rich ? ' rich' : ''}"${field ? ` data-field="${field}"` : ''}>${rb.html}</div></div>` : '';
     };
     const recList = lines(d.recsText);
     // DOC_RICH_FORMAT_V1 (F1) — рекомендации с оформлением печатаются как написаны; простой текст — прежний список.
-    const recsHtml = hasMarkup(d.recsText) ? sec('Рекомендации', 'Tavsiyalar', d.recsText, 'recommendations_text')
+    const recsHtml = (d.rich && hasMarkup(d.recsText)) ? sec('Рекомендации', 'Tavsiyalar', d.recsText, 'recommendations_text')
         : recList.length ? `<div class="sec"><div class="sec-h"><span class="ru">Рекомендации</span><span class="uz">· Tavsiyalar</span></div><ul class="recs">${recList.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
     const rx = (d.prescriptions || []).filter(r => r && r.name);
     const rxHtml = rx.length ? `<div class="sec"><div class="sec-h"><span class="ru">Рецепт</span><span class="uz">· Retsept</span></div><div class="rx-wrap"><table class="rx"><thead><tr><th class="num"></th><th>Препарат<span class="uz">Preparat</span></th><th>Доза<span class="uz">Doza</span></th><th>Режим приёма<span class="uz">Qabul rejimi</span></th><th>Длительность<span class="uz">Davomiyligi</span></th></tr></thead><tbody>${rx.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="drug">${esc(r.name)}${r.notes ? `<small>${esc(r.notes)}</small>` : ''}${r.nurse ? `<small style="display:block;font-weight:400;color:#7a8290;font-size:.88em;margin-top:2px;">Медсестре: ${esc(r.nurse)}</small>` : ''}</td><td>${esc(r.dose || '—')}</td><td>${esc(r.freq || '—')}</td><td>${esc(r.dur || '—')}</td></tr>`).join('')}</tbody></table></div></div>` : '';
@@ -653,12 +662,12 @@ function conclusionCompact(s, d) {
     const _secOn = (field) => !field || !d.activeFields || d.activeFields.indexOf(field) > -1;
     const sec = (ru, uz, txt, field) => {
         if (d.__editor && field && d.activeFields && !_secOn(field)) return `<button type="button" class="bk-add" data-add="${field}">+ Добавить: ${esc(ru)}</button>`;
-        const rb = richBody(txt);   // DOC_RICH_FORMAT_V1 (F1)
+        const rb = richBody(txt, d);   // DOC_RICH_FORMAT_V1 (F1)
         return (txt || (d.__editor && field)) ? `<div class="secbar"><span class="ru">${esc(ru)}</span>${uz ? `<span class="uz">· ${esc(uz)}</span>` : ''}${d.__editor && field ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="${field}" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="${field}" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="${field}" title="Убрать раздел">×</button></span>` : ''}</div><div class="sec"><div class="sec-b${rb.rich ? ' rich' : ''}"${field ? ` data-field="${field}"` : ''}>${rb.html}</div></div>` : '';
     };
     const recList = lines(d.recsText);
     // DOC_RICH_FORMAT_V1 (F1) — рекомендации с оформлением печатаются как написаны; простой текст — прежний список.
-    const recsHtml = hasMarkup(d.recsText) ? sec('Рекомендации', 'Tavsiyalar', d.recsText, 'recommendations_text')
+    const recsHtml = (d.rich && hasMarkup(d.recsText)) ? sec('Рекомендации', 'Tavsiyalar', d.recsText, 'recommendations_text')
         : recList.length ? `<div class="secbar"><span class="ru">Рекомендации</span><span class="uz">· Tavsiyalar</span></div><ul class="recs">${recList.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
     const rx = (d.prescriptions || []).filter(r => r && r.name);
     const rxHtml = rx.length ? `<div class="secbar"><span class="ru">Рецепт</span><span class="uz">· Retsept</span></div><table class="rx"><thead><tr><th class="num"></th><th>Препарат</th><th>Доза</th><th>Режим</th><th>Длит.</th></tr></thead><tbody>${rx.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="drug">${esc(r.name)}${r.notes ? `<small style="display:block;font-weight:400;font-style:italic;color:#7a8290;font-size:.88em;margin-top:2px;">${esc(r.notes)}</small>` : ''}${r.nurse ? `<small style="display:block;font-weight:400;color:#7a8290;font-size:.88em;margin-top:2px;">Медсестре: ${esc(r.nurse)}</small>` : ''}</td><td>${esc(r.dose || '—')}</td><td>${esc(r.freq || '—')}</td><td>${esc(r.dur || '—')}</td></tr>`).join('')}</tbody></table>` : '';
