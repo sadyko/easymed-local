@@ -17,7 +17,8 @@ import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
 import { notesWriteRefusal, storedIsCabinet, NOTES_BASE_KEY, NOTES_CONFLICT_MESSAGE, notesCompatValue, signedEntryAdded } from '../services/domain/cabinet-notes.js';   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6 · ADMIN_ACT_AS_V1 (signedEntryAdded)
-import { ACT_AS_SIGN_REFUSAL } from '../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 (R3)
+import { ACT_AS_SIGN_REFUSAL, isDoctorDocType, actingActorName } from '../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документы врача, имя в журналах)
+import { actAsRecheck } from '../services/act-as.js';   // ADMIN_ACT_AS_V1 (ревью, LOW 7)
 // CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
@@ -287,6 +288,11 @@ export function refuseNotesWrite(db, meta, body, user, base, out = null) {   // 
 //     lab_results и visit_services (и одна отметка времени — это выдача).
 // Строки правки — та же выборка, что у refuseNotesWrite; не прочитаны —
 // любая подпись в записи считается новой.
+// Ревью безопасности (HIGH 2) — и третья дверь: документ врача прямо в
+// visit_documents (протокол, заключение, заключение диагностики, история
+// болезни, лабораторный бланк — ACT_AS_DOCTOR_DOC_TYPES). Его отдают пациенту
+// (Telegram) с автором-врачом. От имени — ни создать такой, ни перевести в него
+// свою заметку, ни править уже существующий; не прочитаны строки правки — отказ.
 const VERIFY_TABLES = new Set(['lab_results', 'visit_services']);   // ADMIN_ACT_AS_V1
 export function signWhileActingRefusal(db, meta, body, user) {   // ADMIN_ACT_AS_V1 — экспорт для проверки
   if (!user || !user.acting_admin || !meta) return false;
@@ -294,6 +300,18 @@ export function signWhileActingRefusal(db, meta, body, user) {   // ADMIN_ACT_AS
   const v = body && body.values;
   const rows = (Array.isArray(v) ? v : [v]).filter((r) => r && typeof r === 'object');
   if (VERIFY_TABLES.has(meta.table) && rows.some((r) => r.verified_by != null || r.verified_at != null)) return true;
+  if (meta.table === 'visit_documents') {   // ревью безопасности (HIGH 2)
+    if (rows.some((r) => isDoctorDocType(r.doc_type))) return true;
+    if (meta.op === 'insert') return false;
+    try {
+      const filters = meta.op === 'upsert'
+        ? [{ col: 'id', op: 'in', val: rows.map((r) => r.id).filter((x) => x != null) }]
+        : body.filters;
+      if (meta.op === 'upsert' && !filters[0].val.length) return false;
+      const sel = compile({ table: body.table, op: 'select', columns: 'id,doc_type', filters }, user, { db });
+      return db.prepare(sel.sql).all(...sel.params).some((r) => isDoctorDocType(r.doc_type));
+    } catch { return true; }
+  }
   if (meta.table !== 'visit_services') return false;
   const withNotes = rows.filter((r) => Object.prototype.hasOwnProperty.call(r, 'notes'));
   if (!withNotes.length) return false;
@@ -309,6 +327,23 @@ export function signWhileActingRefusal(db, meta, body, user) {   // ADMIN_ACT_AS
   const got = notesTargetRows(db, meta, body, user, values);
   if (!got) return signedEntryAdded(null, values.notes);
   return got.rows.some((s) => signedEntryAdded(s.notes, values.notes));
+}
+
+// Ревью безопасности (LOW 5) — журналы пациента и счёта, которые пишет экран
+// (patient_activity_log, invoice_audit_log): от имени имя действующего ставит
+// СЕРВЕР — «сотрудник (от имени: адм. …)» (shared/act-as.js actingActorName), то
+// же, что у журнала счёта из RPC кассы. Экран не может его ни опустить, ни
+// подменить. Номер (actor_user_id) — как прислан: сотрудника. true — тело
+// изменено, запрос собирается заново.
+const ACTOR_NAME_TABLES = new Set(['patient_activity_log', 'invoice_audit_log']);
+function stampActingActorName(meta, body, user) {
+  if (!user || !user.acting_admin || !meta || !ACTOR_NAME_TABLES.has(meta.table)) return false;
+  if (meta.op !== 'insert' && meta.op !== 'upsert') return false;
+  const name = actingActorName(user, user.full_name || user.username || '');
+  const v = body && body.values;
+  const rows = (Array.isArray(v) ? v : [v]).filter((r) => r && typeof r === 'object');
+  for (const r of rows) r.actor_name = name;
+  return rows.length > 0;
 }
 
 /**
@@ -377,6 +412,8 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     if (signWhileActingRefusal(db, compiled.meta, req.body, req.user)) {
       return res.status(403).json({ error: { code: 'sign_while_acting', message: ACT_AS_SIGN_REFUSAL } });
     }
+    // Ревью безопасности (LOW 5) — имя «от имени» в журналах ставит сервер.
+    if (stampActingActorName(compiled.meta, req.body, req.user)) compiled = compile(req.body, req.user, { db });
 
     // STAFF_SYNC_V1 (ревью Фазы 3, I3) — ТАБЛИЦЫ ГЛАВНОЙ КЛИНИКИ В ФИЛИАЛЕ
     // ТОЛЬКО ДЛЯ ЧТЕНИЯ.
@@ -580,6 +617,15 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     // не тронута.
     const mirror = mirrorBefore(db, compiled.meta, req.body, req.user);
     if (mirror.refusal) return res.status(409).json({ error: { code: 'conflict', message: mirror.refusal } });
+
+    // ADMIN_ACT_AS_V1 (ревью безопасности, LOW 7) — сессию эта дверь прочла ДО
+    // тела (до 8 МБ), и пока тело шло, вход от имени мог смениться: «Вернуться»,
+    // вход в другой вкладке, 2 часа. Запись, начатая под одним человеком, под
+    // другим не выполняется — сессия читается ещё раз прямо перед ней.
+    if (compiled.meta.op !== 'select') {
+      const drift = actAsRecheck(db, req);
+      if (drift) return res.status(drift.status).json({ error: drift.error });
+    }
 
     try {
       const { sql, params, meta } = compiled;

@@ -1423,6 +1423,10 @@ export function admissionCaseDocs(db, args, user) {
  * здесь означал бы, что до последней подписи история недоступна никому.
  */
 export function admissionCaseFileSave(db, args, user) {
+  // ADMIN_ACT_AS_V1 (ревью безопасности, HIGH 2) — собранная история болезни
+  // ложится в карту документом врача (visit_documents.doc_type 'case_file'): от
+  // чужого имени её не подшивают.
+  refuseSignWhileActing(user);
   const file = admissionCaseFile(db, args, user);
   const adm = loadAdmission(db, args && args.admission_id);
   if (!adm.patient_id) {

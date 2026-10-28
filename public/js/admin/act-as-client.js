@@ -22,8 +22,8 @@
 // actorFromUser несёт acting_admin), до оболочки — window.CURRENT_USER.
 import { h, Icon, toast } from './ui.js';
 import { tr, trf } from './i18n.js';
-import { currentRoleLabel } from './permissions.js';
-import { ACT_AS_MESSAGES, ACT_AS_SIGN_REFUSAL } from '../shared/act-as.js';
+import { currentRoleLabel, settingsTileLevel } from './permissions.js';
+import { ACT_AS_MESSAGES, ACT_AS_SIGN_REFUSAL, ACT_AS_TAB_HEADER } from '../shared/act-as.js';
 
 const API = '/api/auth/act-as';
 
@@ -58,12 +58,16 @@ export function hasAdminRole(u) {
 }
 
 /**
- * R1 на экране — видит ли человек «Войти как сотрудник»: администратор из
- * СВОЕЙ учётной записи (не уже от имени другого) и не с временным паролем.
- * Сервер проверяет то же самое ещё раз.
+ * R1 на экране — видит ли человек «Войти как сотрудник» (и «Входы от имени» в
+ * карточке): администратор из СВОЕЙ учётной записи (не уже от имени другого),
+ * не с временным паролем и с «Сотрудники: Изменение» — своя роль клиники на
+ * основе администратора, закрывшая этот раздел, чужими правами его не вернёт
+ * (ревью безопасности, MEDIUM 4). Сервер проверяет то же самое ещё раз.
  */
 export function canStartActAs(user = shellUser()) {
-    return !!user && hasAdminRole(user) && !isActingNow(user) && !user.must_change_password;
+    if (!user || !hasAdminRole(user) || isActingNow(user) || user.must_change_password) return false;
+    const level = settingsTileLevel('settings.employees');
+    return level === 'edit' || level === 'delete';
 }
 
 /**
@@ -89,8 +93,12 @@ export function actAsTargetOk(target, { selfId = null, customRoles = [] } = {}) 
 
 /** Текст подтверждения входа — слова спецификации («Интерфейс»). */
 export function actAsConfirmText(name, admin) {
-    return trf('Вы будете работать от имени {name}. Каждое действие запишется как «Администратор {admin} от имени {name}». Подписывать документы врача от его имени нельзя. Вернуться — кнопкой вверху экрана.',
-        { name: String(name || ''), admin: String(admin || '') });
+    const n = String(name || '');
+    const text = trf('Вы будете работать от имени {name}. Каждое действие запишется как «Администратор {admin} от имени {name}». Подписывать документы врача от его имени нельзя. Вернуться — кнопкой вверху экрана.',
+        { name: n, admin: String(admin || '') });
+    // Ревью — имя с точкой на конце («Иванова А.»): своя точка шаблона после
+    // имени не ставится второй («Иванова А.. Каждое…»), на любом языке.
+    return /\.$/.test(n) ? text.split(n + '.').join(n) : text;
 }
 
 function reloadPage() {
@@ -224,9 +232,10 @@ export function actAsAccountBlock(user = shellUser()) {
 // ---------------------------------------------------------------------------
 let ending = false;
 let rawFetch = null;
+let changing = false;   // ревью (вкладки) — перезагрузка после act_as_changed уже начата
 
-/** Начат ли уже возврат после авто-конца (для проверок и для boot). */
-export function actAsEnding() { return ending; }
+/** Начат ли уже возврат после авто-конца или перезагрузка вкладки (для проверок и для boot). */
+export function actAsEnding() { return ending || changing; }
 
 /**
  * Вход от имени кончился сам: назвать причину (на языке экрана), сказать
@@ -234,7 +243,7 @@ export function actAsEnding() { return ending; }
  * ничего. → true, если этот вызов и начал возврат.
  */
 export async function endActAs(reason) {
-    if (ending) return false;
+    if (ending || changing) return false;
     ending = true;
     let text = tr(ACT_AS_MESSAGES.ended);
     if (reason) text += '\n\n' + trf('Причина: {reason}', { reason: tr(String(reason)) });
@@ -251,23 +260,131 @@ function urlOf(input) {
     return String(input || '');
 }
 
+// ---------------------------------------------------------------------------
+// ВКЛАДКИ (ревью безопасности, MEDIUM 3). Сессия (cookie) одна на весь
+// браузер, а экран собран в каждой вкладке под своего человека: вкладка A
+// вернулась к администратору — вкладка B ещё показывает кабинет врача; вкладка A
+// вошла от имени — админская вкладка B пишет уже от имени сотрудника. Поэтому
+// каждый запрос API этой страницы несёт номер входа от имени, под который она
+// собрана (X-Em-Act-As; 0 — без входа от имени). Номер — из ПЕРВОГО
+// /api/auth/me страницы (его и так спрашивает загрузка; запрос, ушедший раньше,
+// ждёт его) или из своего входа и возврата; позднейшие /me его не меняют —
+// меняет перезагрузка. Сервер, у которого номер другой, записи не выполняет:
+// 409 act_as_changed — вкладка один раз говорит об этом и перезагружается
+// (вход от имени другой вкладки не заканчивается: «Вернуться» не уходит).
+// ---------------------------------------------------------------------------
+let tabActAs = null;       // номер вкладки; null — ещё не знаем
+let tabActAsWait = null;   // первый /me в пути
+
+/** Путь адреса API этой страницы в нижнем регистре ('/api/…') или null — чужой адрес, не API. */
+function apiPathOf(input) {
+    const raw = urlOf(input);
+    let p = null;
+    if (raw.startsWith('/') && !raw.startsWith('//')) p = raw;
+    else {
+        const m = /^https?:\/\/([^/?#]+)(\/[^?#]*)?/i.exec(raw);
+        const host = typeof window !== 'undefined' && window && window.location ? window.location.host : null;
+        if (m && host && m[1].toLowerCase() === String(host).toLowerCase()) p = m[2] || '/';
+    }
+    if (p == null) return null;
+    p = p.split(/[?#]/)[0].toLowerCase();
+    return p.startsWith('/api/') ? p : null;
+}
+
+const asTabNumber = (json) => {
+    const n = Number(json && json.act_as_id);
+    return Number.isInteger(n) && n > 0 ? n : 0;
+};
+
+/** Номер вкладки (ждёт первый /me, если его ещё нет); null — сервер недоступен, без номера. */
+function waitTabActAs(orig, target) {
+    if (tabActAs != null) return Promise.resolve(tabActAs);
+    if (!tabActAsWait) {
+        tabActAsWait = Promise.resolve()
+            .then(() => orig.call(target, '/api/auth/me', { credentials: 'same-origin', headers: { 'x-em-background': '1' } }))
+            .then((r) => (r && r.ok ? r.json().then((j) => { if (tabActAs == null) tabActAs = asTabNumber(j); })
+                : (() => { if (tabActAs == null) tabActAs = 0; })()))   // 401: сессии нет — и входа от имени нет
+            .catch(() => { /* нет связи — номер узнаем следующим запросом */ })
+            .finally(() => { tabActAsWait = null; });
+    }
+    return tabActAsWait.then(() => tabActAs);
+}
+
+/** Тот же запрос с номером вкладки — в заголовках любой формы (объект, Headers, пары). */
+function withTabHeader(input, init, value) {
+    const v = String(value);
+    const base = init && init.headers !== undefined ? init.headers
+        : (input && typeof input === 'object' && input.headers) || undefined;
+    const name = ACT_AS_TAB_HEADER.toLowerCase();
+    let headers;
+    if (typeof Headers !== 'undefined' && base instanceof Headers) { headers = new Headers(base); headers.set(ACT_AS_TAB_HEADER, v); }
+    else if (Array.isArray(base)) headers = base.filter((p) => String(p && p[0]).toLowerCase() !== name).concat([[ACT_AS_TAB_HEADER, v]]);
+    else {
+        headers = {};
+        for (const [k, val] of Object.entries(base || {})) if (String(k).toLowerCase() !== name) headers[k] = val;
+        headers[ACT_AS_TAB_HEADER] = v;
+    }
+    return { ...(init || {}), headers };
+}
+
 /**
- * Обёртка над fetch всей страницы: каждый ответ API с 409 act_as_ended
- * (запросы /api/db, /api/rpc, /api/storage, прямые fetch экранов — фоновые
- * тоже) запускает endActAs. Ответ возвращается вызывающему нетронутым (тело
- * читается из копии). Ставится один раз; повторная установка — ничего.
+ * Вкладка собрана не под того, кто сейчас у сессии (другая вкладка вошла от
+ * имени или вернулась): сказать один раз и перезагрузиться. → true, если этот
+ * вызов и начал перезагрузку.
+ */
+export function tabChanged() {
+    if (ending || changing) return false;
+    changing = true;
+    const text = tr(ACT_AS_MESSAGES.changed);
+    try { window.alert(text); } catch (_) { toast(text, 'warn'); }
+    reloadPage();
+    return true;
+}
+
+/**
+ * Обёртка над fetch всей страницы:
+ *   • каждый запрос API этой страницы (кроме /api/auth) несёт номер вкладки
+ *     (X-Em-Act-As, см. выше); /me и свой вход и возврат его называют;
+ *   • ответ 409 act_as_ended (запросы /api/db, /api/rpc, /api/storage, прямые
+ *     fetch экранов — фоновые тоже) запускает endActAs, 409 act_as_changed —
+ *     tabChanged.
+ * Ответ возвращается вызывающему нетронутым (тело читается из копии).
+ * Ставится один раз; повторная установка — ничего.
  */
 export function installActAsEndedGuard(target = globalThis) {
     const orig = target && target.fetch;
     if (typeof orig !== 'function' || orig.__actAsGuard) return false;
     rawFetch = (...a) => orig.apply(target, a);
     const guarded = async function guardedFetch(input, init) {
-        const res = await orig.call(target, input, init);
+        const path = apiPathOf(input);
+        const auth = path != null && path.startsWith('/api/auth/');
+        if (path != null && !auth) {
+            const n = await waitTabActAs(orig, target);
+            if (n != null) init = withTabHeader(input, init, n);
+        }
+        const resP = orig.call(target, input, init);
+        if (auth) {
+            const method = String((init && init.method) || (input && typeof input === 'object' && input.method) || 'GET').toUpperCase();
+            if (path === '/api/auth/me' && tabActAs == null && !tabActAsWait) {
+                // Первый /me страницы (загрузка) — номер вкладки; копия тела — до того, как его прочтёт вызывающий.
+                tabActAsWait = resP.then((r) => (r && r.ok && typeof r.clone === 'function'
+                    ? r.clone().json().then((j) => { if (tabActAs == null) tabActAs = asTabNumber(j); })
+                    : (() => { if (r && r.status === 401 && tabActAs == null) tabActAs = 0; })()))
+                    .catch(() => {})
+                    .finally(() => { tabActAsWait = null; });
+            } else if (path === '/api/auth/act-as' && (method === 'POST' || method === 'DELETE')) {
+                // Свой вход от имени или возврат — новый номер (следом — перезагрузка).
+                resP.then((r) => (r && r.ok && typeof r.clone === 'function'
+                    ? r.clone().json().then((j) => { tabActAs = asTabNumber(j); }) : null)).catch(() => {});
+            }
+        }
+        const res = await resP;
         try {
-            if (res && res.status === 409 && typeof res.clone === 'function' && /\/api\//.test(urlOf(input))) {
+            if (res && res.status === 409 && typeof res.clone === 'function' && path != null) {
                 res.clone().json().then((j) => {
                     const e = j && j.error;
                     if (e && e.code === 'act_as_ended') endActAs(e.reason);
+                    else if (e && e.code === 'act_as_changed') tabChanged();
                 }, () => {});
             }
         } catch (_) { /* проверка ответа не важнее самого ответа */ }
@@ -278,10 +395,13 @@ export function installActAsEndedGuard(target = globalThis) {
     return true;
 }
 
-/** Только для проверок: забыть начатый возврат и снять обёртку. */
+/** Только для проверок: забыть начатый возврат, перезагрузку и номер вкладки. */
 export function __resetActAsForTests() {
     ending = false;
+    changing = false;
     rawFetch = null;
+    tabActAs = null;
+    tabActAsWait = null;
 }
 
 // ---------------------------------------------------------------------------

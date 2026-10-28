@@ -38,7 +38,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDataDir } from '../control/config.js';
 import { patientFileRefusal, refusalText } from '../../../public/js/shared/patient-file-limits.js';
-import { refuseSignWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3)
+import { refuseSignWhileActing, refuseDoctorDocWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документ врача в карте)
 
 const SECTION = 'patients';
 
@@ -477,6 +477,9 @@ export function patientCardSavePatient(db, args, user) {
  *      которым отказывает браузер и маршрут хранилища.
  */
 export function patientCardAddDocument(db, args, user) {
+  // ADMIN_ACT_AS_V1 (ревью безопасности, HIGH 2) — документ врача (заключение,
+  // протокол …) от чужого имени в карту не кладут: его отдают пациенту с автором-врачом.
+  refuseDoctorDocWhileActing(user, args && args.row && typeof args.row === 'object' ? args.row.doc_type : null);
   const roles = requireCard(db, user);
   requireEdit(db, user, 'docs');
   const id = patientId(args);

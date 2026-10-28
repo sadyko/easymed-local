@@ -18,6 +18,9 @@ export const STRINGS = {
   "Журнал входов от имени открывает только администратор из своей учётной записи.": {"en":"Only an administrator signed in to their own account can open the act-as log.","ru":"Журнал входов от имени открывает только администратор из своей учётной записи.","uz":"Xodim nomidan kirishlar jurnalini faqat o‘z hisobidagi administrator ochadi."},   // ADMIN_ACT_AS_V1
   "Неверный номер входа от имени.": {"en":"Invalid act-as session number.","ru":"Неверный номер входа от имени.","uz":"Xodim nomidan kirish raqami noto‘g‘ri."},   // ADMIN_ACT_AS_V1
   "Вход от имени не найден.": {"en":"Act-as session not found.","ru":"Вход от имени не найден.","uz":"Xodim nomidan kirish topilmadi."},   // ADMIN_ACT_AS_V1
+  // ADMIN_ACT_AS_V1 (ревью безопасности) — вкладки (409 act_as_changed) и право «Сотрудники: Изменение»
+  "Учётная запись в этой вкладке сменилась — страница будет перезагружена.": {"en":"The account in this tab has changed — the page will reload.","ru":"Учётная запись в этой вкладке сменилась — страница будет перезагружена.","uz":"Bu varaqdagi hisob o‘zgardi — sahifa qayta yuklanadi."},   // ADMIN_ACT_AS_V1
+  "Входить от имени сотрудника может администратор с правом «Сотрудники: Изменение».": {"en":"Only an administrator with the “Employees: Edit” right can act as a staff member.","ru":"Входить от имени сотрудника может администратор с правом «Сотрудники: Изменение».","uz":"Xodim nomidan faqat «Xodimlar: O‘zgartirish» huquqi bor administrator kira oladi."},   // ADMIN_ACT_AS_V1
   // ADMIN_ACT_AS_V1 — причины конца работы от имени (act_as_sessions.end_reason)
   "Вернулся": {"en":"Returned","ru":"Вернулся","uz":"Qaytdi"},   // ADMIN_ACT_AS_V1
   "Вышел": {"en":"Signed out","ru":"Вышел","uz":"Chiqdi"},   // ADMIN_ACT_AS_V1

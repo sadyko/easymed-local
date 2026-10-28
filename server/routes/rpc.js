@@ -4,6 +4,7 @@ import { isReadOnlyRpc, isAlwaysAllowedRpc, lockedResponse } from '../services/c
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody, fillTemplate } from '../services/server-message.js';   // V3120_I18N
 import { dispatchRpc } from '../services/report-pool.js';   // V3120_PERF — тяжёлые отчёты в пуле потоков
+import { actAsRecheck } from '../services/act-as.js';   // ADMIN_ACT_AS_V1 (ревью, LOW 7)
 
 export function rpcRoutes(db) {
   const r = Router();
@@ -36,6 +37,13 @@ export function rpcRoutes(db) {
       const template = 'Сервер не знает операцию {name} — обновите программу.';
       const params = { name: req.params.name };
       return res.status(501).json({ error: { code: 'rpc_not_implemented', message: fillTemplate(template, params), template, params } });
+    }
+    // ADMIN_ACT_AS_V1 (ревью безопасности, LOW 7) — дверь с большим телом
+    // (visit_document_archive, app.js authBeforeBigBody) прочла сессию ДО тела:
+    // перед самой записью — ещё раз (services/act-as.js actAsRecheck).
+    if (req.__userAttached) {
+      const drift = actAsRecheck(db, req);
+      if (drift) return res.status(drift.status).json({ error: drift.error });
     }
     try {
       // V3120_PERF — отчёт (POOLED_RPCS) считается в потоке отчётов, если пул

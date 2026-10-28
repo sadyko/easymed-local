@@ -37,6 +37,13 @@ test('actAsEntry: загрузка и удаление файла — вид sto
   assert.deepEqual(actAsEntry(req('POST', '/api/rpc/procedures_list')), { kind: 'rpc', name: 'procedures_list' });
   assert.deepEqual(actAsEntry(req('PATCH', '/api/users/4')), { kind: 'users', name: 'PATCH /users/4' });
   assert.equal(actAsEntry(req('GET', '/api/users')), null);
+  // Ревью безопасности (HIGH 1) — путь в любом регистре: express пускает /API/DB так же.
+  assert.deepEqual(actAsEntry(req('POST', '/API/DB', { table: 'visits', op: 'update' })), { kind: 'db', name: 'visits.update' });
+  assert.deepEqual(actAsEntry(req('POST', '/Api/Rpc/procedures_list?x=1')), { kind: 'rpc', name: 'procedures_list' });
+  assert.deepEqual(actAsEntry(req('PATCH', '/API/Users/4')), { kind: 'users', name: 'PATCH /users/4' });
+  assert.deepEqual(actAsEntry(req('POST', '/API/USERS/')), { kind: 'users', name: 'POST /users' });
+  assert.deepEqual(actAsEntry(req('DELETE', '/Api/Storage/telegram-media/a.jpg')), { kind: 'storage', name: 'DELETE /storage/telegram-media' });
+  assert.equal(actAsEntry(req('POST', '/api/dbx')), null);
 });
 
 async function startServer() {
@@ -69,14 +76,18 @@ test('журнал: загрузка и удаление файла от име�
     });
     assert.equal(start.status, 200);
     const actAsId = db.prepare('SELECT act_as_id FROM sessions WHERE user_id = 1 AND act_as_id IS NOT NULL').get().act_as_id;
+    // Ревью безопасности (вкладки) — вкладка шлёт номер входа от имени, под который собрана.
+    assert.equal((await start.json()).act_as_id, actAsId);
+    const tab = { 'X-Em-Act-As': String(actAsId) };
 
     const up = await fetch(base + '/api/storage/clinic-docs/misc/act-as-probe.pdf', {
-      method: 'POST', headers: { 'Content-Type': 'application/pdf', Cookie: boss }, body: Buffer.from('%PDF-1.4 probe'),
+      method: 'POST', headers: { 'Content-Type': 'application/pdf', Cookie: boss, ...tab }, body: Buffer.from('%PDF-1.4 probe'),
     });
     await up.arrayBuffer();
     const read = await fetch(base + '/api/storage/clinic-docs/misc/act-as-probe.pdf', { headers: { Cookie: boss } });
     await read.arrayBuffer();
-    const del = await fetch(base + '/api/storage/clinic-docs/misc/act-as-probe.pdf', { method: 'DELETE', headers: { Cookie: boss } });
+    assert.notEqual(read.status, 409, 'чтение файла — без заголовка вкладки (картинки, скачивание): проверки вкладки нет');
+    const del = await fetch(base + '/api/storage/clinic-docs/misc/act-as-probe.pdf', { method: 'DELETE', headers: { Cookie: boss, ...tab } });
     await del.arrayBuffer();
 
     const rows = db.prepare('SELECT kind, name, status FROM act_as_actions WHERE act_as_id = ? ORDER BY id').all(actAsId);

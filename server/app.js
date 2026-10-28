@@ -15,7 +15,7 @@ import { recordEvent } from './services/ops-log.js';   // OPS_EVENTS_V1
 import { telephonyWebhooks } from './services/telephony/webhooks.js';   // TELEPHONY_V1
 import { branchSyncRoutes } from './routes/branch-sync.js';   // BRANCH_SYNC_V1
 import { lisProxyRoutes } from './routes/lisproxy.js';   // LIS_PROXY_V1
-import { actAsGuard } from './middleware/act-as.js';   // ADMIN_ACT_AS_V1
+import { actAsEndedGuard, actAsRouterGuard } from './middleware/act-as.js';   // ADMIN_ACT_AS_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -118,10 +118,11 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
     res.json({ ok: true });
   });
   app.use((req, res, next) => (req.__userAttached ? next() : attachUserOnce(req, res, next)));   // CABINET_FIX_V1_R6 — уже положен (двери кабинета выше) — не перечитывать
-  // ADMIN_ACT_AS_V1 — сразу после пользователя: журнал действий администратора,
-  // работающего от имени сотрудника, и 409 act_as_ended после авто-конца
-  // (middleware/act-as.js). Тела /api/db, /api/rpc, /api/users уже разобраны выше.
-  app.use(actAsGuard(db));
+  // ADMIN_ACT_AS_V1 — сразу после пользователя: 409 act_as_ended после авто-конца
+  // на всём /api, кроме /api/auth (middleware/act-as.js). Монтирование на /api,
+  // а не сравнение строк: express сопоставляет пути без учёта регистра, и /API/DB
+  // проходит здесь так же, как /api/db (ревью безопасности, HIGH 1).
+  app.use('/api', actAsEndedGuard());
   app.use(attachControl(db, dataDir));   // LICENCE_CORE_V1
   app.use('/api/auth', authRoutes(db));
   // TELEPHONY_V1 — Binotel's webhook receivers, in /api/auth's slot: BEFORE
@@ -145,14 +146,18 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // and BEFORE every other router, so anything mounted later is gated by
   // default instead of by someone remembering to add it.
   app.use('/api', requirePasswordChanged);
-  app.use('/api/users', userRoutes(db));
-  app.use('/api/db', requireAuth, dbRoutes(db, { storageDir: path.join(dataDir, 'storage') }));   // CLINIC_PROFILE_V1 (ревью M3) — копия прежнего логотипа перед заменой
-  app.use('/api/rpc', requireAuth, rpcRoutes(db));
+  // ADMIN_ACT_AS_V1 — actAsRouterGuard у каждого из четырёх путей записи: номер
+  // вкладки (X-Em-Act-As, 409 act_as_changed) и журнал действий от имени. Стоит
+  // В МОНТИРОВАНИИ маршрута — что дошло до маршрута, то прошло и проверку,
+  // каким бы ни был регистр пути (ревью безопасности, HIGH 1, MEDIUM 3).
+  app.use('/api/users', actAsRouterGuard(db, 'users'), userRoutes(db));
+  app.use('/api/db', requireAuth, actAsRouterGuard(db, 'db'), dbRoutes(db, { storageDir: path.join(dataDir, 'storage') }));   // CLINIC_PROFILE_V1 (ревью M3) — копия прежнего логотипа перед заменой
+  app.use('/api/rpc', requireAuth, actAsRouterGuard(db, 'rpc'), rpcRoutes(db));
   // PATIENT_FILE_ATTACH_V1 — хранилище получает базу: файлы документов
   // пациента (clinic-docs/patients/<id>/docs/...) отдаются и принимаются по
   // тому же праву вкладки «Документы», которым закрыта сама карта. Без базы
   // ссылка на файл обходила бы закрытую вкладку.
-  app.use('/api/storage', requireAuth, storageRoutes(path.join(dataDir, 'storage'), db));
+  app.use('/api/storage', requireAuth, actAsRouterGuard(db, 'storage'), storageRoutes(path.join(dataDir, 'storage'), db));
 
   // Unknown /api paths answer JSON, not an HTML 404 page.
   app.use('/api', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Неизвестный адрес API.' } }));

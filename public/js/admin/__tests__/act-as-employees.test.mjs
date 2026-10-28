@@ -170,7 +170,7 @@ test('строка: нажатие — подтверждение словами
   buttonWith(rowFor(c, 'doc'), ACT).click();
   await flush();
   assert.equal(CONFIRMS.length, 1);
-  assert.equal(CONFIRMS[0], 'Вы будете работать от имени Иванова А.. Каждое действие запишется как «Администратор Петров П. от имени Иванова А.». Подписывать документы врача от его имени нельзя. Вернуться — кнопкой вверху экрана.');
+  assert.equal(CONFIRMS[0], 'Вы будете работать от имени Иванова А. Каждое действие запишется как «Администратор Петров П. от имени Иванова А.». Подписывать документы врача от его имени нельзя. Вернуться — кнопкой вверху экрана.');
   assert.ok(!CALLS.some((x) => x.url === '/api/auth/act-as'), '«Отмена» — запроса нет');
   assert.equal(RELOADS, 0);
 
@@ -255,6 +255,18 @@ test('карточка: без сеансов — «Входов от имени
   c = await paintList({ id: 3, full_name: 'Иванова А.', role: 'doctor', extra_roles: [], acting_admin: { id: 1, full_name: 'Петров П.' } });
   card = await openCard(c, 'nurse');
   assert.equal(railItem(card, 'Входы от имени'), undefined, 'журнал открывает только администратор из своей учётной записи');
+});
+
+test('ревью MEDIUM 4: своя роль администратора с «Сотрудники: Просмотр» — ни кнопки в строке и карточке, ни «Входов от имени»', async () => {
+  const P = await import('../permissions.js');
+  P.setOwnCustomGrants({ 'settings.employees': 'view' });
+  try {
+    const c = await paintList();
+    assert.equal(buttonWith(c, ACT), undefined, 'в строках кнопки нет');
+    const card = await openCard(c, 'nurse');
+    assert.equal(buttonWith(card, ACT), undefined, 'в карточке кнопки нет');
+    assert.equal(railItem(card, 'Входы от имени'), undefined, 'журнала входов нет');
+  } finally { P.setOwnCustomGrants(null); }
 });
 
 test('R6: работая от имени, своя карточка (сотрудника) не предлагает «Сменить пароль»; без входа от имени — предлагает', async () => {

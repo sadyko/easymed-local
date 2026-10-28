@@ -13,6 +13,9 @@
 // R7 (лицензия) — в licence-gate.test.js.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
@@ -71,7 +74,7 @@ async function startServer({ dataDir = licensedDataDir() } = {}) {
 
   const server = await listen(createApp(db, { dataDir }));
   const base = `http://127.0.0.1:${server.address().port}`;
-  return { db, server, base };
+  return { db, server, base, dataDir };
 }
 
 async function login(base, username, password = 'password1') {
@@ -82,10 +85,16 @@ async function login(base, username, password = 'password1') {
   return res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
 }
 
-async function call(base, cookie, method, path, body, headers = {}) {
+// Ревью безопасности (вкладки) — вкладка экрана шлёт X-Em-Act-As: номер входа
+// от имени, под который она собрана (0 — без него). Здесь cookie — вкладка:
+// TAB помнит, что ей ответили вход и возврат. { tab: false } — запрос без
+// заголовка (старая вкладка, чужая страница).
+const TAB = new Map();
+async function call(base, cookie, method, path, body, headers = {}, { tab = true } = {}) {
+  const tabHeader = tab && cookie && TAB.has(cookie) ? { 'X-Em-Act-As': String(TAB.get(cookie)) } : {};
   const res = await fetch(base + path, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...headers },
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...tabHeader, ...headers },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const json = await res.json().catch(() => ({}));
@@ -93,8 +102,16 @@ async function call(base, cookie, method, path, body, headers = {}) {
 }
 
 const me = async (base, cookie) => (await call(base, cookie, 'GET', '/api/auth/me')).json.user;
-const actAs = (base, cookie, userId) => call(base, cookie, 'POST', '/api/auth/act-as', { user_id: userId });
-const back = (base, cookie) => call(base, cookie, 'DELETE', '/api/auth/act-as');
+const actAs = async (base, cookie, userId) => {
+  const r = await call(base, cookie, 'POST', '/api/auth/act-as', { user_id: userId });
+  if (r.status === 200) TAB.set(cookie, r.json.act_as_id);
+  return r;
+};
+const back = async (base, cookie) => {
+  const r = await call(base, cookie, 'DELETE', '/api/auth/act-as');
+  if (r.status === 200) TAB.set(cookie, r.json.act_as_id);
+  return r;
+};
 const db_ = (base, cookie, body) => call(base, cookie, 'POST', '/api/db', body);
 const rpc = (base, cookie, name, args = {}) => call(base, cookie, 'POST', '/api/rpc/' + name, args);
 const update = (base, cookie, table, id, values) => db_(base, cookie, { table, op: 'update', values, filters: [{ col: 'id', op: 'eq', val: id }] });
@@ -645,5 +662,288 @@ test('журнал входов: администратор видит сеан�
     const doc = await login(base, 'doc');
     assert.equal((await call(base, doc, 'GET', '/api/auth/act-as/log?user_id=' + DOC)).status, 403);
     assert.equal((await call(base, null, 'GET', '/api/auth/act-as/log?user_id=' + DOC)).status, 401);
+  } finally { server.close(); }
+});
+
+// ═══ Ревью безопасности (2026-10-28) ════════════════════════════════════════
+
+/**
+ * Запрос, тело которого приходит частями: сервер уже прочитал сессию, а тело
+ * ещё нет. between() выполняется между частями (возврат, вход в другой вкладке).
+ */
+function slowRequest(base, cookie, method, urlPath, headers, payload, between) {
+  const u = new URL(base + urlPath);
+  const buf = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+  const half = Math.max(1, Math.floor(buf.length / 2));
+  return new Promise((resolve, reject) => {
+    const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method,
+      headers: { Cookie: cookie, 'Content-Length': buf.length, ...headers } }, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => { let json = {}; try { json = JSON.parse(data); } catch { /* не JSON */ } resolve({ status: res.statusCode, json }); });
+    });
+    req.on('error', reject);
+    req.write(buf.subarray(0, half));
+    setTimeout(async () => {
+      try { await between(); } catch (e) { reject(e); return; }
+      req.end(buf.subarray(half));
+    }, 50);
+  });
+}
+
+test('ревью HIGH 1: путь в любом регистре — журнал пишется и /API/DB, и /Api/Rpc, и /API/USERS, и /Api/Storage; после авто-конца — 409', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    await actAs(base, boss, DOC);
+    const id = actingSession(db, BOSS).act_as_id;
+    const w = { table: 'visit_services', op: 'update', values: { status: 'completed' }, filters: [{ col: 'id', op: 'eq', val: 7 }] };
+    assert.equal((await call(base, boss, 'POST', '/API/DB', w)).status, 200);
+    assert.equal((await call(base, boss, 'POST', '/Api/Db/', w)).status, 200);
+    const list = await call(base, boss, 'POST', '/Api/Rpc/procedures_list', {});
+    const users = await call(base, boss, 'PATCH', '/API/USERS/' + DOC, { full_name: 'Иванова А. Б.' });
+    const up = await fetch(base + '/Api/Storage/clinic-docs/misc/act-as-case.pdf', {
+      method: 'POST', headers: { 'Content-Type': 'application/pdf', Cookie: boss, 'X-Em-Act-As': String(id) }, body: Buffer.from('%PDF-1.4 x') });
+    await up.arrayBuffer();
+    assert.deepEqual(actions(db, id).map((r) => ({ ...r })), [
+      { kind: 'db', name: 'visit_services.update', status: 200 },
+      { kind: 'db', name: 'visit_services.update', status: 200 },
+      { kind: 'rpc', name: 'procedures_list', status: list.status },
+      { kind: 'users', name: 'PATCH /users/' + DOC, status: users.status },
+      { kind: 'storage', name: 'POST /storage/clinic-docs', status: up.status },
+    ]);
+    // Заголовок вкладки проверяется и на пути в другом регистре.
+    assert.equal((await call(base, boss, 'POST', '/API/DB', w, {}, { tab: false })).json.error.code, 'act_as_changed');
+
+    startedAgo(db, BOSS, 3 * 3600 * 1000);
+    for (const [method, p, body] of [['POST', '/API/db', w], ['POST', '/api/DB', w], ['POST', '/API/RPC/procedures_list', {}], ['GET', '/API/USERS'], ['GET', '/Api/Storage/clinic-docs/misc/act-as-case.pdf']]) {
+      const r = await call(base, boss, method, p, body);
+      assert.equal(r.status, 409, method + ' ' + p);
+      assert.equal(r.json.error.code, 'act_as_ended', method + ' ' + p);
+    }
+    assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 7').get().status, 'completed');
+    assert.equal((await call(base, boss, 'GET', '/API/AUTH/me')).status, 200, '/api/auth — в любом регистре — открыт');
+  } finally { server.close(); }
+});
+
+test('ревью HIGH 2: документ врача в visit_documents от имени — 403 R3 (создать, перевести в документ врача, править его; patient_card_doc_add; история болезни); прочее — можно', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const doc = await login(base, 'doc');
+    // Сам врач пишет заключение — как прежде.
+    const own = await db_(base, doc, { table: 'visit_documents', op: 'insert', returning: true, single: 'single',
+      values: { doc_type: 'conclusion', title: 'Заключение', patient_id: 1, visit_id: 1, visit_service_id: 7, body: { a: 1 } } });
+    assert.equal(own.status, 200, JSON.stringify(own.json));
+    const ownId = own.json.data.id;
+
+    const boss = await login(base, 'boss');
+    await actAs(base, boss, DOC);
+    const ins = (doc_type) => db_(base, boss, { table: 'visit_documents', op: 'insert', returning: true, single: 'single',
+      values: { doc_type, title: 'Документ', patient_id: 1, visit_id: 1, visit_service_id: 7, body: { a: 1 } } });
+    for (const t of ['protocol', 'conclusion', 'diag', 'case_file', 'lab', 'Protocol', ' CONCLUSION ']) {
+      const r = await ins(t);
+      assert.equal(r.status, 403, t);
+      assert.equal(r.json.error.code, 'sign_while_acting', t);
+      assert.equal(r.json.error.message, ACT_AS_SIGN_REFUSAL, t);
+    }
+    const before = db.prepare('SELECT COUNT(*) n FROM visit_documents').get().n;
+    const note = await ins('note');
+    assert.equal(note.status, 200, 'заметка — не документ врача: ' + JSON.stringify(note.json));
+    const noteId = note.json.data.id;
+    const toProtocol = await db_(base, boss, { table: 'visit_documents', op: 'update', values: { doc_type: 'protocol' }, filters: [{ col: 'id', op: 'eq', val: noteId }] });
+    assert.equal(toProtocol.status, 403, 'черновик в протокол — от имени нельзя');
+    assert.equal(toProtocol.json.error.code, 'sign_while_acting');
+    const editOwnConclusion = await db_(base, boss, { table: 'visit_documents', op: 'update', values: { body: { a: 2 } }, filters: [{ col: 'id', op: 'eq', val: ownId }] });
+    assert.equal(editOwnConclusion.status, 403, 'править заключение врача от имени нельзя');
+    assert.equal(editOwnConclusion.json.error.code, 'sign_while_acting');
+    assert.equal((await db_(base, boss, { table: 'visit_documents', op: 'update', values: { title: 'Заметка 2' }, filters: [{ col: 'id', op: 'eq', val: noteId }] })).status, 200, 'свою заметку — можно');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_documents').get().n, before + 1);
+    assert.equal(db.prepare('SELECT doc_type FROM visit_documents WHERE id = ?').get(noteId).doc_type, 'note');
+
+    for (const t of ['conclusion', 'protocol', 'diag']) {
+      const r = await rpc(base, boss, 'patient_card_doc_add', { patient_id: 1, row: { doc_type: t, title: 'Заключение', body: { a: 1 }, visit_service_id: 7, visit_id: 1 } });
+      assert.equal(r.status, 403, 'patient_card_doc_add ' + t);
+      assert.equal(r.json.error.code, 'sign_while_acting');
+    }
+    const plain = await rpc(base, boss, 'patient_card_doc_add', { patient_id: 1, row: { doc_type: 'note', title: 'Заметка', body: { a: 1 } } });
+    assert.notEqual(plain.json.error && plain.json.error.code, 'sign_while_acting', 'заметка через карту — не R3');
+    const cf = await rpc(base, boss, 'admission_case_file_save', { admission_id: 1 });
+    assert.equal(cf.status, 403, 'история болезни (case_file) от имени');
+    assert.equal(cf.json.error.code, 'sign_while_acting');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM visit_documents WHERE doc_type IN ('protocol','conclusion','diag','case_file','lab') AND created_by = ? AND id <> ?").get(DOC, ownId).n, 0);
+  } finally { server.close(); }
+});
+
+test('ревью MEDIUM 3: вкладки — /me и вход отдают act_as_id; запись с чужим, пустым или прежним номером — 409 act_as_changed; чтения файлов — как прежде', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    assert.equal((await call(base, boss, 'GET', '/api/auth/me')).json.act_as_id, 0);
+    // Файл кладёт сам администратор (без входа от имени и без заголовка — как прежде).
+    const up = await fetch(base + '/api/storage/clinic-docs/misc/tab-read.pdf', {
+      method: 'POST', headers: { 'Content-Type': 'application/pdf', Cookie: boss }, body: Buffer.from('%PDF-1.4 x') });
+    assert.equal(up.status, 200, await up.text());
+    const start = await actAs(base, boss, DOC);
+    const id = start.json.act_as_id;
+    assert.ok(Number.isInteger(id) && id > 0);
+    assert.equal(id, actingSession(db, BOSS).act_as_id);
+    assert.equal((await call(base, boss, 'GET', '/api/auth/me')).json.act_as_id, id);
+
+    const w = { table: 'visit_services', op: 'update', values: { status: 'completed' }, filters: [{ col: 'id', op: 'eq', val: 7 }] };
+    const changed = ACT_AS_MESSAGES.changed;
+    for (const [label, headers, opts] of [['без заголовка', {}, { tab: false }], ['0', { 'X-Em-Act-As': '0' }, {}], ['чужой', { 'X-Em-Act-As': String(id + 5) }, {}], ['мусор', { 'X-Em-Act-As': 'abc' }, {}]]) {
+      for (const [m, p, b] of [['POST', '/api/db', w], ['POST', '/api/rpc/procedures_list', {}], ['PATCH', '/api/users/' + DOC, { full_name: 'X' }], ['DELETE', '/api/storage/clinic-docs/misc/none.pdf']]) {
+        const r = await call(base, boss, m, p, b, headers, opts);
+        assert.equal(r.status, 409, `${label}: ${m} ${p}`);
+        assert.equal(r.json.error.code, 'act_as_changed', `${label}: ${m} ${p}`);
+        assert.equal(r.json.error.message, changed);
+      }
+    }
+    assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 7').get().status, 'in_progress');
+    assert.deepEqual(actions(db, id), [], 'отказанная вкладкой запись — не действие');
+    assert.equal((await update(base, boss, 'visit_services', 7, { status: 'completed' })).status, 200, 'свой номер — можно');
+
+    // Чтения (GET) — без заголовка: картинки и скачивание файлов.
+    const img = await fetch(base + '/api/storage/clinic-docs/misc/tab-read.pdf', { headers: { Cookie: boss } });
+    assert.equal(img.status, 200);
+    await img.arrayBuffer();
+    assert.notEqual((await call(base, boss, 'GET', '/api/users', undefined, {}, { tab: false })).status, 409);
+
+    // Вкладка A вернулась — вкладка B (кабинет врача) подписывает: 409, ничего не записано.
+    const tabB = TAB.get(boss);
+    await back(base, boss);
+    const signed = NOTES([SIGNED, SIGNED_NEW]);
+    const notesBefore = db.prepare('SELECT notes FROM visit_services WHERE id = 1').get().notes;
+    const sign = await call(base, boss, 'POST', '/api/db', { table: 'visit_services', op: 'update',
+      values: { notes: signed, [NOTES_BASE_KEY]: notesBaseOf(notesBefore) }, filters: [{ col: 'id', op: 'eq', val: 1 }] }, { 'X-Em-Act-As': String(tabB) });
+    assert.equal(sign.status, 409);
+    assert.equal(sign.json.error.code, 'act_as_changed');
+    assert.equal(db.prepare('SELECT notes FROM visit_services WHERE id = 1').get().notes, notesBefore);
+    const arch = await call(base, boss, 'POST', '/api/rpc/visit_document_archive', { visit_service_id: 7, doc_type: 'protocol', body: { a: 1 } }, { 'X-Em-Act-As': String(tabB) });
+    assert.equal(arch.json.error.code, 'act_as_changed');
+    // Без заголовка и без входа от имени — как прежде (старые вкладки, другие страницы).
+    assert.equal((await call(base, boss, 'POST', '/api/db', w, {}, { tab: false })).status, 200);
+    assert.equal((await call(base, boss, 'POST', '/api/db', w, { 'X-Em-Act-As': '0' })).status, 200);
+
+    // Наоборот: вкладка A начала вход от имени — админская вкладка C с номером 0 пишет: 409.
+    await actAs(base, boss, NURSE);
+    const c = await call(base, boss, 'POST', '/api/db', w, { 'X-Em-Act-As': '0' });
+    assert.equal(c.status, 409);
+    assert.equal(c.json.error.code, 'act_as_changed');
+  } finally { server.close(); }
+});
+
+test('ревью MEDIUM 4: администратор со своей ролью, где «Сотрудники» не на «Изменении», не входит от имени и не читает журнал; отнятое право кончает вход', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const grants = (code, level) => db.prepare('INSERT OR REPLACE INTO role_permissions (role, permissions) VALUES (?, ?)')
+      .run(code, JSON.stringify({ grants: { settings: 'view', 'settings.employees': level } }));
+    db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('adm_none', 'Админ без сотрудников', 'admin'), ('adm_view', 'Админ: просмотр', 'admin'), ('adm_edit', 'Админ: изменение', 'admin')").run();
+    grants('adm_none', 'none');
+    grants('adm_view', 'view');
+    grants('adm_edit', 'edit');
+    const pw = hashPassword('password1');
+    const ins = db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, custom_role_code) VALUES (?, ?, ?, ?, 'admin', ?)");
+    ins.run(30, 'anone', pw, 'Админ Н.', 'adm_none');
+    ins.run(31, 'aview', pw, 'Админ П.', 'adm_view');
+    ins.run(32, 'aedit', pw, 'Админ И.', 'adm_edit');
+    for (const name of ['anone', 'aview']) {
+      const c = await login(base, name);
+      const r = await actAs(base, c, REG);
+      assert.equal(r.status, 403, name);
+      assert.equal(r.json.error.message, ACT_AS_MESSAGES.noEmployeesRight, name);
+      const log = await call(base, c, 'GET', '/api/auth/act-as/log?user_id=' + BOSS);
+      assert.equal(log.status, 403, name + ' — журнал');
+      assert.equal(log.json.error.message, ACT_AS_MESSAGES.logForbidden);
+    }
+    const edit = await login(base, 'aedit');
+    assert.equal((await actAs(base, edit, REG)).status, 200, '«Сотрудники: Изменение» — можно');
+    await back(base, edit);
+    assert.equal((await call(base, edit, 'GET', '/api/auth/act-as/log?user_id=' + REG)).status, 200);
+
+    // Право отняли посреди входа от имени — вход кончается: «Сессия завершена».
+    await actAs(base, edit, REG);
+    grants('adm_edit', 'view');
+    const m = await call(base, edit, 'GET', '/api/auth/me');
+    assert.equal(m.json.user.id, 32);
+    assert.deepEqual(m.json.act_as_ended, { reason: 'Сессия завершена' });
+  } finally { server.close(); }
+});
+
+test('ревью LOW 5: журналы пациента и счёта через /api/db от имени — имя ставит сервер, «сотрудник (от имени: адм. …)», что бы ни прислал экран', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    await actAs(base, boss, DOC);
+    const want = 'Иванова А. (от имени: адм. Петров П.)';
+    let r = await db_(base, boss, { table: 'patient_activity_log', op: 'insert',
+      values: { patient_id: 1, entity_type: 'patient', action: 'updated', summary: 'x', actor_user_id: DOC, actor_name: 'Самозванец' } });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    r = await db_(base, boss, { table: 'patient_activity_log', op: 'insert',
+      values: [{ patient_id: 1, entity_type: 'patient', action: 'updated', summary: 'y', actor_user_id: DOC }] });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    r = await db_(base, boss, { table: 'invoice_audit_log', op: 'insert',
+      values: { visit_id: 1, action: 'note', actor_user_id: DOC, notes: 'z' } });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.deepEqual(db.prepare('SELECT actor_name FROM patient_activity_log ORDER BY id').all().map((x) => x.actor_name), [want, want]);
+    assert.equal(db.prepare('SELECT actor_name FROM invoice_audit_log').get().actor_name, want);
+
+    await back(base, boss);
+    r = await db_(base, boss, { table: 'patient_activity_log', op: 'insert',
+      values: { patient_id: 1, entity_type: 'patient', action: 'updated', summary: 'w', actor_user_id: BOSS, actor_name: 'Петров П.' } });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(db.prepare('SELECT actor_name FROM patient_activity_log ORDER BY id DESC LIMIT 1').get().actor_name, 'Петров П.', 'без входа от имени — как прислал экран');
+  } finally { server.close(); }
+});
+
+test('ревью LOW 6: брошенный вход (без конца, старше 2 часов) журнал показывает «Истекло» с концом в начало + 2 часа', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const a = await login(base, 'boss');
+    await actAs(base, a, DOC);
+    const startedAt = startedAgo(db, BOSS, 5 * 3600 * 1000);
+    const b = await login(base, 'boss2');
+    const r = await call(base, b, 'GET', '/api/auth/act-as/log?user_id=' + DOC);
+    assert.equal(r.status, 200);
+    assert.equal(r.json.sessions[0].end_reason, 'Истекло');
+    assert.equal(r.json.sessions[0].ended_at, iso(Date.parse(startedAt) + 2 * 3600 * 1000));
+    const one = await call(base, b, 'GET', `/api/auth/act-as/log?user_id=${DOC}&act_as_id=${r.json.sessions[0].id}`);
+    assert.equal(one.json.session.end_reason, 'Истекло');
+    // Идущий вход (меньше 2 часов) — без конца.
+    const a2 = await login(base, 'boss');
+    await actAs(base, a2, NURSE);
+    const live = await call(base, b, 'GET', '/api/auth/act-as/log?user_id=' + NURSE);
+    assert.equal(live.json.sessions[0].ended_at, null);
+    assert.equal(live.json.sessions[0].end_reason, null);
+  } finally { server.close(); }
+});
+
+test('ревью LOW 7: долгая запись (/api/db, файл) — вход от имени сменился, пока шло тело, — 409, ничего не записано', async () => {
+  const { db, server, base, dataDir } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    await actAs(base, boss, DOC);
+    const id = TAB.get(boss);
+    const body = JSON.stringify({ table: 'visit_services', op: 'update', values: { status: 'completed' }, filters: [{ col: 'id', op: 'eq', val: 7 }] });
+    let r = await slowRequest(base, boss, 'POST', '/api/db', { 'Content-Type': 'application/json', 'X-Em-Act-As': String(id) }, body,
+      () => back(base, boss));
+    assert.equal(r.status, 409, JSON.stringify(r.json));
+    assert.equal(r.json.error.code, 'act_as_changed');
+    assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 7').get().status, 'in_progress');
+
+    // Наоборот: начали от имени, пока шло тело записи администратора.
+    r = await slowRequest(base, boss, 'POST', '/api/db', { 'Content-Type': 'application/json', 'X-Em-Act-As': '0' }, body,
+      () => actAs(base, boss, NURSE));
+    assert.equal(r.status, 409);
+    assert.equal(r.json.error.code, 'act_as_changed');
+    assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 7').get().status, 'in_progress');
+
+    // 2 часа истекли, пока шёл файл, — 409 act_as_ended, файла нет.
+    const id2 = TAB.get(boss);
+    r = await slowRequest(base, boss, 'POST', '/api/storage/clinic-docs/misc/slow.pdf', { 'Content-Type': 'application/pdf', 'X-Em-Act-As': String(id2) },
+      Buffer.from('%PDF-1.4 ' + 'x'.repeat(2000)), async () => { startedAgo(db, BOSS, 3 * 3600 * 1000); });
+    assert.equal(r.status, 409, JSON.stringify(r.json));
+    assert.equal(r.json.error.code, 'act_as_ended');
+    assert.equal(fs.existsSync(path.join(dataDir, 'storage', 'clinic-docs', 'misc', 'slow.pdf')), false, 'файл не записан');
   } finally { server.close(); }
 });

@@ -95,8 +95,16 @@ const reply = (status, payload) => {
     const make = () => ({ ok: status >= 200 && status < 300, status, json: async () => JSON.parse(JSON.stringify(payload)), clone: () => make() });
     return make();
 };
+// Ревью безопасности (вкладки) — заголовки запроса любой формы (объект, Headers, пары).
+const headersOf = (hs) => {
+    const out = {};
+    if (!hs) return out;
+    if (typeof hs.forEach === 'function' && !Array.isArray(hs)) hs.forEach((v, k) => { out[String(k).toLowerCase()] = String(v); });
+    else for (const [k, v] of (Array.isArray(hs) ? hs : Object.entries(hs))) out[String(k).toLowerCase()] = String(v);
+    return out;
+};
 globalThis.fetch = async (url, opts = {}) => {
-    const call = { url: String(url), method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : null };
+    const call = { url: String(url), method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : null, headers: headersOf(opts.headers) };
     CALLS.push(call);
     const r = await SERVER(call);
     return reply(r.status, r.body);
@@ -126,6 +134,21 @@ test('R1: «Войти как сотрудник» — администрато�
     assert.equal(AA.canStartActAs(null), false);
 });
 
+test('ревью MEDIUM 4: своя роль администратора без «Сотрудники: Изменение» — ни кнопки, ни журнала входов', async () => {
+    const P = await import('../permissions.js');
+    try {
+        for (const level of ['none', 'view']) {
+            P.setOwnCustomGrants({ 'settings.employees': level });
+            assert.equal(AA.canStartActAs(ADMIN), false, '«Сотрудники»: ' + level);
+        }
+        P.setOwnCustomGrants({ settings: 'none' });
+        assert.equal(AA.canStartActAs(ADMIN), false, 'закрыт весь раздел «Настройки»');
+        P.setOwnCustomGrants({ 'settings.employees': 'edit' });
+        assert.equal(AA.canStartActAs(ADMIN), true, '«Сотрудники: Изменение»');
+    } finally { P.setOwnCustomGrants(null); }
+    assert.equal(AA.canStartActAs(ADMIN), true, 'штатный администратор — как прежде');
+});
+
 test('R2: войти можно только как активного, уже входившего сотрудника — не себя и не администратора', () => {
     const custom = [{ code: 'reg_to_admin', base_role: 'admin' }, { code: 'senior_reg', base_role: 'registrar' }];
     const ok = (t) => AA.actAsTargetOk(t, { selfId: 1, customRoles: custom });
@@ -144,8 +167,14 @@ test('R2: войти можно только как активного, уже �
 
 test('подтверждение — слова спецификации; на uz/en — без кириллицы, кроме имён', () => {
     reset();
+    // Ревью — имя с точкой на конце не получает вторую («Иванова А.. Каждое…»).
     assert.equal(AA.actAsConfirmText('Иванова А.', 'Петров П.'),
-        'Вы будете работать от имени Иванова А.. Каждое действие запишется как «Администратор Петров П. от имени Иванова А.». Подписывать документы врача от его имени нельзя. Вернуться — кнопкой вверху экрана.');
+        'Вы будете работать от имени Иванова А. Каждое действие запишется как «Администратор Петров П. от имени Иванова А.». Подписывать документы врача от его имени нельзя. Вернуться — кнопкой вверху экрана.');
+    assert.equal(AA.actAsConfirmText('Иванова Анна', 'Петров П.'),
+        'Вы будете работать от имени Иванова Анна. Каждое действие запишется как «Администратор Петров П. от имени Иванова Анна». Подписывать документы врача от его имени нельзя. Вернуться — кнопкой вверху экрана.');
+    setLang('en');
+    assert.doesNotMatch(AA.actAsConfirmText('Ivanova A.', 'Petrov P.'), /\.\./, 'en: без двух точек');
+    setLang('ru');
     for (const lang of ['uz', 'en']) {
         setLang(lang);
         const text = AA.actAsConfirmText('NAME', 'ADMIN');
@@ -430,4 +459,89 @@ test('словарь: каждая новая строка — ru/uz/en, uz/en �
         }
     }
     assert.deepEqual(bad, []);
+});
+
+// ─── Ревью безопасности (MEDIUM 3): вкладки одной сессии ────────────────────
+// Сессия одна на браузер. Вкладка шлёт в каждом запросе API номер входа от
+// имени, под который собрана (X-Em-Act-As; 0 — без него), — узнаёт его из
+// ПЕРВОГО /api/auth/me страницы (или своего входа и возврата). Сервер, у
+// которого номер другой (другая вкладка вошла или вернулась), отвечает 409
+// act_as_changed: вкладка один раз говорит об этом и перезагружается.
+
+test('ревью MEDIUM 3: каждый запрос API несёт номер вкладки из первого /me; /me — один на всех; /api/auth и чужие адреса — без номера', async () => {
+    reset();
+    AA.__resetActAsForTests();
+    AA.installActAsEndedGuard(globalThis);   // уже стоит — ничего
+    SERVER = async (c) => (c.url === '/api/auth/me' ? { status: 200, body: { user: ACTING, act_as_id: 7 } } : { status: 200, body: { data: null } });
+    const { supabase } = await import('../../supabase.js');
+    await Promise.all([
+        supabase.from('visits').update({ status: 'x' }).eq('id', 1),
+        supabase.rpc('procedures_list', {}),
+        fetch('/api/storage/clinic-docs/x.pdf', { method: 'POST', headers: new Headers({ 'Content-Type': 'application/pdf' }), body: '{}' }),
+        fetch('/api/users/3', { method: 'PATCH', headers: [['Content-Type', 'application/json']], body: '{}' }),
+    ]);
+    const me = CALLS.filter((c) => c.url === '/api/auth/me');
+    assert.equal(me.length, 1, 'номер узнаётся один раз: ' + JSON.stringify(CALLS.map((c) => c.url)));
+    assert.equal(me[0].headers['x-em-act-as'], undefined, '/api/auth — без номера');
+    const api = CALLS.filter((c) => !c.url.startsWith('/api/auth/'));
+    assert.equal(api.length, 4);
+    for (const c of api) assert.equal(c.headers['x-em-act-as'], '7', c.url);
+    assert.equal(api.find((c) => c.url.startsWith('/api/storage')).headers['content-type'], 'application/pdf', 'свои заголовки запроса целы (Headers)');
+    assert.equal(api.find((c) => c.url.startsWith('/api/users')).headers['content-type'], 'application/json', 'свои заголовки запроса целы (пары)');
+
+    await fetch('/api/db', { method: 'POST', body: '{}' });
+    assert.equal(CALLS.filter((c) => c.url === '/api/auth/me').length, 1, 'дальше — без нового /me');
+    assert.equal(CALLS[CALLS.length - 1].headers['x-em-act-as'], '7');
+    // Поздний /me (другая вкладка вернулась) номер вкладки не меняет — его меняет только перезагрузка.
+    SERVER = async (c) => (c.url === '/api/auth/me' ? { status: 200, body: { user: ADMIN, act_as_id: 0 } } : { status: 200, body: { data: null } });
+    await (await fetch('/api/auth/me')).json();
+    await fetch('/api/db', { method: 'POST', body: '{}' });
+    assert.equal(CALLS[CALLS.length - 1].headers['x-em-act-as'], '7');
+    await fetch('https://example.org/api/db', { method: 'POST', body: '{}' });
+    assert.equal(CALLS[CALLS.length - 1].headers['x-em-act-as'], undefined, 'чужой адрес — без номера');
+});
+
+test('ревью MEDIUM 3: номер — из /me самой страницы (boot), второго /me нет; без сессии (401) — 0; свой вход от имени меняет номер', async () => {
+    reset();
+    AA.__resetActAsForTests();
+    AA.installActAsEndedGuard(globalThis);   // стоит с прошлых проверок — ничего; одна эта проверка — ставит
+    SERVER = async (c) => (c.url === '/api/auth/me' ? { status: 200, body: { user: ADMIN, act_as_id: 0 } }
+        : c.url === '/api/auth/act-as' ? { status: 200, body: { ok: true, act_as_id: 9 } } : { status: 200, body: {} });
+    const r = await fetch('/api/auth/me');   // как db-auth.js getUser при загрузке
+    assert.equal((await r.json()).act_as_id, 0, 'ответ /me — вызывающему как есть');
+    await fetch('/api/rpc/x', { method: 'POST', body: '{}' });
+    assert.equal(CALLS.filter((c) => c.url === '/api/auth/me').length, 1);
+    assert.equal(CALLS[CALLS.length - 1].headers['x-em-act-as'], '0');
+    await fetch('/api/auth/act-as', { method: 'POST', body: '{"user_id":3}' });
+    await fetch('/api/rpc/x', { method: 'POST', body: '{}' });
+    assert.equal(CALLS[CALLS.length - 1].headers['x-em-act-as'], '9', 'после своего входа от имени — его номер');
+
+    reset();
+    AA.__resetActAsForTests();
+    SERVER = async (c) => (c.url === '/api/auth/me' ? { status: 401, body: {} } : { status: 200, body: {} });
+    await fetch('/api/rpc/x', { method: 'POST', body: '{}' });
+    assert.equal(CALLS[CALLS.length - 1].headers['x-em-act-as'], '0', 'без сессии — без входа от имени');
+});
+
+test('ревью MEDIUM 3: 409 act_as_changed — одно предупреждение (на языке экрана), одна перезагрузка, без «Вернуться»', async () => {
+    for (const lang of ['ru', 'en']) {
+        reset();
+        AA.__resetActAsForTests();
+        AA.installActAsEndedGuard(globalThis);
+        setLang(lang);
+        SERVER = async (c) => (c.url === '/api/auth/me' ? { status: 200, body: { user: ACTING, act_as_id: 7 } }
+            : { status: 409, body: { error: { code: 'act_as_changed', message: ACT_AS_MESSAGES.changed } } });
+        const { supabase } = await import('../../supabase.js');
+        const [a, b] = await Promise.all([supabase.rpc('procedures_list', {}), fetch('/api/db', { method: 'POST', body: '{}' })]);
+        await tick(10);
+        assert.equal(a.error.code, 'act_as_changed', 'RPC получил свой ответ');
+        assert.equal(b.status, 409);
+        assert.equal(ALERTS.length, 1, lang + ': ' + JSON.stringify(ALERTS));
+        if (lang === 'ru') assert.match(ALERTS[0], /Учётная запись в этой вкладке сменилась/);
+        else assert.doesNotMatch(ALERTS[0], /[Ѐ-ӿ]/, ALERTS[0]);
+        assert.equal(RELOADS, 1);
+        assert.equal(CALLS.filter((c) => c.url === '/api/auth/act-as').length, 0, 'вход от имени другой вкладки не заканчивается');
+    }
+    setLang('ru');
+    AA.__resetActAsForTests();
 });

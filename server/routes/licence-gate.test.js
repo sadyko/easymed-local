@@ -270,8 +270,13 @@ test('ADMIN_ACT_AS_V1: a lapsed clinic can still act as an employee and return',
   assert.equal(start.status, 200, 'acting as an employee is not a licence-gated write');
   const me = await (await request(server, cookie, 'GET', '/api/auth/me')).json();
   assert.equal(me.user.id, Number(info.lastInsertRowid));
-  const write = await post(server, cookie, '/api/db', { table: 'visit_services', op: 'update', values: { status: 'completed' },
-    filters: [{ col: 'id', op: 'eq', val: 1 }] });   // правка, которую медсестре пускает реестр
+  // The tab sends the act-as number it was built for (X-Em-Act-As, security review).
+  const write = await fetch(`http://127.0.0.1:${server.address().port}/api/db`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie, 'X-Em-Act-As': String(me.act_as_id) },
+    body: JSON.stringify({ table: 'visit_services', op: 'update', values: { status: 'completed' },
+      filters: [{ col: 'id', op: 'eq', val: 1 }] }),   // правка, которую медсестре пускает реестр
+  });
   assert.equal(write.status, 402, 'acting does not lift the licence gate');
   const back = await request(server, cookie, 'DELETE', '/api/auth/act-as');
   assert.equal(back.status, 200, 'returning to your own account must work on a locked clinic');
