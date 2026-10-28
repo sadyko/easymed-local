@@ -997,6 +997,62 @@ test('кэшированная панель «API и подключения»: �
     }
 });
 
+// ===========================================================================
+// 12. FIX_318_V1 (B7) — ЯЗЫК МЕНЯЕТСЯ ЦЕЛИКОМ, А НЕ ПОЛОВИНОЙ ЭКРАНА.
+//
+// admin.js импортировал './admin/i18n.js?v=pathway1'. Со строкой запроса это
+// ОТДЕЛЬНЫЙ модуль ESM — второй словарь со своим текущим языком, — а экраны
+// импортируют '../i18n.js' без неё. Кнопка EN вверху переключала только копию
+// оболочки: меню выходило смешанным (h() пропускает подпись через tr() второй
+// копии, и «Patients» превращалось обратно в «Пациенты»), а плитки «Настроек»
+// оставались русскими до перезагрузки страницы.
+// ===========================================================================
+const hasCls = (n, c) => String((n && n.className) || '').split(/\s+/).includes(c);
+const shownPane = () => panes().find((p) => p.style.display !== 'none');
+
+test('FIX_318_V1: ни один модуль приложения не берёт i18n.js со строкой запроса', () => {
+    const bad = [];
+    (function walk(dir) {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            const p = path.join(dir, e.name);
+            if (e.isDirectory()) { if (e.name !== '__tests__' && e.name !== 'vendor') walk(p); continue; }
+            if (!/\.m?js$/.test(e.name) || /\.test\.m?js$/.test(e.name)) continue;
+            const src = fs.readFileSync(p, 'utf8');
+            for (const m of src.matchAll(/(?:from\s*|import\s*\(\s*)['"]([^'"]*\/i18n\.js\?[^'"]*)['"]/g)) bad.push(path.relative(PUB, p) + ': ' + m[1]);
+        }
+    })(path.join(PUB, 'js'));
+    assert.deepEqual(bad, [], 'второй экземпляр словаря — второй текущий язык:\n  ' + bad.join('\n  '));
+});
+
+test('FIX_318_V1: кнопка языка вверху переводит и меню, и открытый экран — без перезагрузки', async () => {
+    await perms_setFull();
+    await go('settings');
+    const btn = (code) => LANG_EL.children.find((b) => b.dataset.lang === code);
+    const press = async (code) => { LANG_EL.dispatchEvent({ type: 'click', target: { closest: () => btn(code) } }); await settle(120); };
+    const CYR = /[А-Яа-яЁё]/;
+    const menuLabels = () => descendants(SIDEBAR)
+        .filter((n) => hasCls(n, 'nav-item') || hasCls(n, 'nav-section-title') || (hasCls(n, 'nav-section') && !hasCls(n, 'nav-section--toggle')))
+        .map(labelOf);
+    const paneText = () => labelOf(shownPane());
+    try {
+        await press('en');
+        const mixed = menuLabels().filter((l) => CYR.test(l));
+        assert.deepEqual(mixed, [], 'меню после EN осталось смешанным');
+        assert.ok(menuLabels().includes('Patients'), 'пункт «Пациенты» не перевёлся: ' + menuLabels().join(' | '));
+        assert.equal(TITLE_EL.textContent, 'Settings', 'заголовок раздела не перевёлся');
+        assert.ok(paneText().includes('Employees'), 'плитки «Настроек» остались на прежнем языке');
+        assert.ok(!paneText().includes('Сотрудники'), 'на экране «Настроек» осталась русская плитка');
+        assert.ok(String(btn('en').className).includes('on'), 'переключатель не отметил EN');
+
+        await press('ru');
+        assert.ok(menuLabels().includes('Пациенты'), 'обратно на русский меню не вернулось');
+        assert.ok(paneText().includes('Сотрудники'), 'обратно на русский экран не вернулся');
+        assert.equal(TITLE_EL.textContent, 'Настройки');
+    } finally {
+        if (!String(btn('ru').className).includes('on')) await press('ru');
+    }
+});
+
 test('глушим таймеры экранов, чтобы прогон завершался', () => {
     for (const id of appIntervals) clearInterval(id);
     appIntervals.clear();

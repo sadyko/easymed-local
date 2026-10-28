@@ -33,7 +33,13 @@ import { openChangeOwnPasswordModal } from './admin/password-change.js';
 // ADMIN_ACT_AS_V1 — администратор работает от имени сотрудника: полоса вверху,
 // «Вернуться» в окне аватара, возврат после авто-конца (409 act_as_ended).
 import { renderActAsBanner, actAsAccountBlock, isActingNow, installActAsEndedGuard, endActAs, actAsEnding, setTabActAs } from './admin/act-as-client.js';
-import { t, tr, trf, getLang, setLang, onLangChange } from './admin/i18n.js?v=pathway1';   // TS_TAB_I18N_V1 — tr() for tab labels; trf() — I18N_COVERAGE_V1 (перевод СНАЧАЛА, подстановка ПОТОМ)
+// FIX_318_V1 (B7) — словарь без строки запроса, ровно тем адресом, каким его берут
+// экраны ('../i18n.js'). С '?v=pathway1' это был ВТОРОЙ модуль со своим текущим
+// языком: кнопка языка вверху переключала только копию оболочки, меню выходило
+// смешанным, а экраны оставались на прежнем языке до перезагрузки. JS отдаётся
+// с no-cache, так что строка запроса ради свежести здесь не нужна.
+// Страж — __tests__/app-shell.test.mjs («ни один модуль … со строкой запроса»).
+import { t, tr, trf, getLang, setLang, onLangChange } from './admin/i18n.js';   // TS_TAB_I18N_V1 — tr() for tab labels; trf() — I18N_COVERAGE_V1 (перевод СНАЧАЛА, подстановка ПОТОМ)
 // ACCESS_DENIED_ONE_PLACE_V1 — отказ рисуется одним помощником на всё приложение
 // (его же зовёт окно заведения пациента, у которого своего маршрута нет).
 import { accessDeniedPanel } from './admin/access-denied.js';
