@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- SOFTPHONE_V1 (задача 9) — «пациент» для проверки в настоящем браузере: JsSIP из
+     public/js/vendor, вход в подставной SIP-сервер (fake-sip.mjs) под номером из ?user=.
+     Отдаёт его только run.mjs (/e2e-patient.html); в поставку не едет.
+     Для Playwright: window.state, window.call, callOperator(), answer(), hangup(), stats(). -->
+<html lang="ru">
+<head><meta charset="utf-8"><title>Пациент (проверка)</title></head>
+<body>
+<pre id="log"></pre>
+<script type="module">
+import JsSIP from '/js/vendor/jssip-3.13.9.mjs';
+
+const user = new URLSearchParams(location.search).get('user') || '998901112233';
+const opts = { mediaConstraints: { audio: true, video: false }, pcConfig: { iceServers: [] } };
+const out = document.getElementById('log');
+const note = (s) => { out.textContent += s + '\n'; };
+let session = null;
+window.state = 'starting';
+window.call = null;
+window.autoAnswer = false;
+
+const ua = new JsSIP.UA({
+  sockets: [new JsSIP.WebSocketInterface('ws://' + location.host + '/fake-sip')],
+  uri: 'sip:' + user + '@127.0.0.1',
+  password: 'test-only',
+  register: true,
+  session_timers: false,
+});
+ua.on('registered', () => { window.state = 'registered'; note('registered ' + user); });
+ua.on('registrationFailed', (e) => { window.state = 'registration_failed'; note('registrationFailed ' + e.cause); });
+ua.on('disconnected', () => { if (window.state !== 'registered') window.state = 'disconnected'; });
+ua.on('newRTCSession', (e) => {
+  const s = e.session;
+  session = s;
+  const c = { direction: e.originator === 'remote' ? 'in' : 'out', state: 'new', cause: '', status: 0, originator: '' };
+  window.call = c;
+  s.on('progress', () => { c.state = 'progress'; });
+  // Звук собеседника — в <audio>, как у оператора: без вывода Chrome не считает уровень звука.
+  const play = () => {
+    const tracks = s.connection ? s.connection.getReceivers().map((r) => r.track).filter((t) => t && t.kind === 'audio') : [];
+    if (!tracks.length) return;
+    let a = document.querySelector('audio');
+    if (!a) { a = document.createElement('audio'); a.autoplay = true; document.body.appendChild(a); }
+    a.srcObject = new MediaStream(tracks);
+    a.play().catch(() => {});
+  };
+  s.on('accepted', () => { c.state = 'accepted'; play(); });
+  s.on('confirmed', () => { c.state = 'confirmed'; play(); note('confirmed'); });
+  s.on('ended', (ev) => { c.state = 'ended'; c.cause = ev.cause; c.originator = ev.originator; note('ended ' + ev.cause); });
+  s.on('failed', (ev) => {
+    c.state = 'failed'; c.cause = ev.cause; c.originator = ev.originator;
+    c.status = (ev.message && ev.message.status_code) || 0;
+    note('failed ' + ev.cause + ' ' + c.status);
+  });
+  if (c.direction === 'in' && window.autoAnswer) s.answer(opts);
+});
+
+window.callOperator = (to = '108') => { ua.call('sip:' + to + '@127.0.0.1', opts); };
+window.answer = () => { if (session) session.answer(opts); };
+window.hangup = () => { if (session && !session.isEnded()) session.terminate(); };
+// Входящий звук этой стороны: байты, пакеты и энергия звука (getStats, inbound-rtp).
+window.stats = async () => {
+  const pc = session && session.connection;
+  if (!pc) return null;
+  let o = null;
+  (await pc.getStats()).forEach((x) => {
+    if (x.type === 'inbound-rtp' && x.kind === 'audio') {
+      o = { bytesReceived: x.bytesReceived || 0, packetsReceived: x.packetsReceived || 0, totalAudioEnergy: x.totalAudioEnergy || 0 };
+    }
+  });
+  return o;
+};
+ua.start();
+</script>
+</body>
+</html>
