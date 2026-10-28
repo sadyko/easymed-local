@@ -534,6 +534,10 @@ export function openBroadcastModal({ onDone } = {}) {
 
     // Живой счётчик: любое изменение фильтра пересчитывает получателей через
     // полсекунды; ответ на устаревший набор фильтров отбрасывается по номеру.
+    // FIX_318_V1 (H2) — только по требованию: после изменения фильтра или по
+    // кнопке «Показать получателей», а не сам при открытии окна (тот расчёт
+    // морозил сервер клиники на каждом открытии). Сервер держит число
+    // несколько секунд в кэше; перед отправкой просим свежее (fresh).
     let previewSeq = 0, previewTimer = null;
     const schedulePreview = () => { clearTimeout(previewTimer); previewTimer = setTimeout(refreshPreview, 500); };
     async function refreshPreview() {
@@ -751,8 +755,9 @@ export function openBroadcastModal({ onDone } = {}) {
         if (!ru.value.trim()) return toast('Введите текст сообщения.', 'warn');
         // Считаем получателей заново прямо перед отправкой: между
         // предпросмотром и нажатием кто-то мог подключиться или отвязаться.
+        // FIX_318_V1 (H2) — fresh: мимо кэша живого счётчика.
         let p;
-        try { p = await rpc('telegram_broadcast_preview', { filters: filters() }); }
+        try { p = await rpc('telegram_broadcast_preview', { filters: filters(), fresh: true }); }
         catch (e) { return toast(e.message, 'error'); }
         if (!p.count) return toast('Под эти условия не подходит ни один подключённый пациент.', 'warn');
 
@@ -778,8 +783,9 @@ export function openBroadcastModal({ onDone } = {}) {
     } }, Icon('Send', { size: 13 }), ' Отправить');
 
     // TG_BROADCAST_FILTERS_V1 — получатели живут под фильтрами, в правой колонке.
+    // FIX_318_V1 (H2) — при открытии не считаем: подсказка, как получить число.
     side.appendChild(section('Получатели', result));
-    result.appendChild(h('div', { class: 'muted' }, 'Считаем получателей…'));
+    result.appendChild(h('div', { class: 'muted' }, 'Число получателей появится, когда вы измените фильтр или нажмёте «Показать получателей».'));
 
     function paintPreview() {
         clear(result);
@@ -839,7 +845,8 @@ export function openBroadcastModal({ onDone } = {}) {
 
     document.body.appendChild(overlay);
     syncCounter();
-    schedulePreview();   // TG_BROADCAST_FILTERS_V1 — число получателей видно сразу, до любого фильтра
+    // FIX_318_V1 (H2) — число получателей НЕ считается при открытии (было
+    // schedulePreview() здесь): только после фильтра или по кнопке.
     ru.focus();
     return overlay;
 }

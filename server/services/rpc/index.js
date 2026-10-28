@@ -17,7 +17,8 @@ import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCrea
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary, reportChoices, payPeriodClose, payPeriodReopen, payPeriodStatus } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { referralsRepresentatives, referralsAssignRepresentative, referralsInternal, referralsActivity, referralsSourceDetail, referralsDoctorDetail } from './referrals.js';   // REFERRALS_CRM_V1 — «Реферирование» под CRM
-import { doctorBotSettingsGet, doctorBotSettingsSave, doctorBotTokenClear, doctorBotTestConnection, doctorBotStats, doctorBotLinksList, doctorBotLinkRevoke } from './doctor-bot.js';   // REFERRALS_CRM_V1 — бот для врачей-источников
+import { doctorBotSettingsGet, doctorBotSettingsSave, doctorBotTokenClear, doctorBotTestConnection, doctorBotStats, doctorBotLinksList, doctorBotLinkRevoke,
+         doctorBotLinkConfirm, doctorBotLinkReject } from './doctor-bot.js';   // REFERRALS_CRM_V1 — бот для врачей-источников; FIX_318_V1 (M2) — подтверждение подключения
 import { navVisibilityGet, navVisibilitySave } from './nav-visibility.js';   // NAV_VISIBILITY_V1 — видимость разделов меню для всей клиники
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice, cashierRefunds } from './cashier.js';   // cashierRefunds: CASHIER_PAID_SWAP_V1
 import { cashierUnbilled } from './cashier.js';   // REFERRAL_BILL_V1 — «Ждут счёта» кассы
@@ -255,6 +256,10 @@ export const RPC = {
   doctor_bot_stats:                 (db, args, user) => doctorBotStats(db, args, user),
   doctor_bot_links_list:            (db, args, user) => doctorBotLinksList(db, args, user),
   doctor_bot_link_revoke:           (db, args, user) => doctorBotLinkRevoke(db, args, user),
+  // FIX_318_V1 (M2) — «Подтвердить» / «Отклонить» подключение врача. Записи:
+  // в READ_ONLY_RPCS (control/gate.js) их нет.
+  doctor_bot_link_confirm:          (db, args, user) => doctorBotLinkConfirm(db, args, user),
+  doctor_bot_link_reject:           (db, args, user) => doctorBotLinkReject(db, args, user),
   // NAV_VISIBILITY_V1 — какие разделы меню есть в клинике: читают все, меняет администратор.
   nav_visibility_get:               (db, args, user) => navVisibilityGet(db, args, user),
   nav_visibility_save:              (db, args, user) => navVisibilitySave(db, args, user),

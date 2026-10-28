@@ -5,7 +5,7 @@
 // getUpdates). Два бота — два поллера с разными токенами; общий у них только
 // клиент Bot API. Запускается из server/index.js рядом с пациентским.
 import { getUpdates, TelegramError } from '../telegram/api.js';
-import { getDecryptedToken } from './settings.js';
+import { getDecryptedToken, isPatientBot, botIdOfToken } from './settings.js';
 import { handleUpdate } from './flow.js';
 import { runNotifyScan } from './notify.js';
 
@@ -17,6 +17,7 @@ const NOTIFY_INTERVAL_MS = 30000;  // как часто искать прише�
 let running = false;
 let stopping = false;
 let wakeIdle = null;
+let samebotWarned = false;   // FIX_318_V1 (M1) — предупреждение в журнал один раз
 
 function readState(db, key, dflt = '') {
   const r = db.prepare('SELECT value FROM doctor_bot_state WHERE key = ?').get(key);
@@ -39,7 +40,16 @@ export function botConfig(db) {
     console.warn('[doctor-bot] token unreadable:', e.message);
     return null;
   }
-  return token ? { token } : null;
+  if (!token) return null;
+  // FIX_318_V1 (M1) — токен пациентского бота (сохранён до проверки или
+  // пациентский бот сменили на этот же): второй поллер того же токена отнимал
+  // бы сообщения у пациентского — Telegram отвечает обоим 409. Не опрашиваем.
+  if (isPatientBot(db, botIdOfToken(token))) {
+    if (!samebotWarned) { samebotWarned = true; console.warn('[doctor-bot] token is the patient bot token — doctor bot not polling'); }
+    return null;
+  }
+  samebotWarned = false;
+  return { token };
 }
 
 const sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); if (t.unref) t.unref(); });

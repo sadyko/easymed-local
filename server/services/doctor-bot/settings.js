@@ -9,6 +9,40 @@ export class SettingsError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
 }
 
+// ---------------------------------------------------------------------------
+// FIX_318_V1 (M1, ревью 3.18.0) — БОТ ДЛЯ ВРАЧЕЙ НЕ МОЖЕТ БЫТЬ ПАЦИЕНТСКИМ.
+// Экран просит «ДРУГОЙ бот», но токен пациентского бота принимался: два
+// поллера getUpdates на одном токене получают от Telegram 409 и отнимают друг
+// у друга сообщения — пациенты и врачи теряют ответы через раз. Номер бота —
+// начало его токена («1234567890:AA…»), и getMe().id отвечает тем же числом;
+// пациентский бот — telegram_settings.bot_id (записывает проверка связи), а
+// если его там нет — начало его токена.
+// ---------------------------------------------------------------------------
+export const SAME_BOT_MESSAGE = 'Это токен пациентского бота. Для врачей нужен ДРУГОЙ бот: создайте его в @BotFather (команда /newbot) и вставьте его токен.';
+
+/** Номер бота из его токена («1234567890:AA…» → «1234567890»); '' — не токен. */
+export function botIdOfToken(token) {
+  const m = /^(\d+):/.exec(String(token || '').trim());
+  return m ? m[1] : '';
+}
+
+/** Номер пациентского бота: bot_id проверки связи, иначе — начало его токена; '' — бота нет. */
+export function patientBotId(db, { keyPath } = {}) {
+  let row;
+  try { row = db.prepare('SELECT bot_id, bot_token_enc FROM telegram_settings WHERE id = 1').get(); } catch { return ''; }
+  if (!row) return '';
+  if (row.bot_id) return String(row.bot_id);
+  if (!row.bot_token_enc) return '';
+  try { return botIdOfToken(decryptToken(row.bot_token_enc, loadOrCreateKey(keyPath))); } catch { return ''; }
+}
+
+/** Тот же бот, что пациентский? id — getMe().id или номер из токена. */
+export function isPatientBot(db, id, opts = {}) {
+  const mine = String(id == null ? '' : id).trim();
+  if (!mine) return false;
+  return mine === patientBotId(db, opts);
+}
+
 export function readSettingsRow(db) {
   return db.prepare('SELECT * FROM doctor_bot_settings WHERE id = 1').get();
 }
@@ -47,6 +81,8 @@ export function saveSettings(db, args = {}, userId = null, { keyPath } = {}) {
     if (!looksLikeBotToken(token)) {
       throw new SettingsError('Это не похоже на токен бота. Он выглядит как 1234567890:AA… — скопируйте его целиком из @BotFather.');
     }
+    // FIX_318_V1 (M1) — тот же бот, что пациентский, узнаётся ещё до Telegram.
+    if (isPatientBot(db, botIdOfToken(token), { keyPath })) throw new SettingsError(SAME_BOT_MESSAGE);
     patch.bot_token_enc = encryptToken(token, loadOrCreateKey(keyPath));
     patch.bot_token_hint = tokenHint(token);
     patch.bot_username = ''; patch.bot_id = '';

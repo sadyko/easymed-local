@@ -8,14 +8,24 @@
 //
 // Один проход:
 //   1. выключено / нет модуля / нет токена — тихо выходим;
-//   2. для каждой формы к опросу — /{form}/leads новее курсора since_ts
-//      (filtering time_created GREATER_THAN), по всем страницам ответа;
-//   3. каждая заявка — parseLead → fileLead (журнал + CRM); сломанная заявка
+//   2. FIX_318_V1 (H1) — какие формы: режим «выбранные» — отмеченные в
+//      настройках; режим «все» — формы страницы, ПЕРЕЧИТАННЫЕ сейчас
+//      (/{page}/leadgen_forms по всем страницам ответа), а не список с
+//      последней «Проверить связь»: экран обещает «все формы страницы, включая
+//      новые». Свежий список ложится и в настройки (экран его видит). Список не
+//      прочитался — опрашиваем известные формы, причина — в last_error;
+//   3. для каждой формы — /{form}/leads новее ЕЁ отметки минус 10 минут
+//      (meta_form_cursors, мигр. 256; перекрытие ловит заявку, которую Meta
+//      показала с опозданием, а повтор бесплатен — leadgen_id уникален). Форма
+//      без отметки — от since_ts («забирать с»: включение или «за N дней»);
+//   4. каждая заявка — parseLead → fileLead (журнал + CRM); сломанная заявка
 //      попадает в журнал со статусом error и не роняет проход;
-//   4. курсор двигается на самую свежую заявку ТОЛЬКО если удались все формы:
-//      иначе заявки отказавшей формы были бы пропущены навсегда. Отказ сети —
-//      слово в last_error, следующий проход по расписанию. Недействительный
-//      токен выключает опрос (recordPoll): долбить Meta им бессмысленно.
+//   5. отметка формы двигается на её самую свежую заявку, только если ЭТА
+//      форма прочиталась целиком. Прежде курсор был один на все формы: форма с
+//      заявками старше чужой свежей отметки теряла их навсегда (ревью R1).
+//      Отказ сети — слово в last_error, следующий проход по расписанию.
+//      Недействительный токен выключает опрос (recordPoll): долбить Meta им
+//      бессмысленно.
 //
 // Заявки читаются токеном СТРАНИЦЫ, если Meta выдала его при подключении, иначе
 // основным (токен страницы, вставленный напрямую): право leads_retrieval
@@ -24,8 +34,12 @@
 import { controlState } from '../control/state.js';
 import { getDataDir } from '../control/config.js';
 import { graphGetAll } from './graph.js';
-import { readSettingsRow, getTokens, recordPoll, formsToPoll } from './settings.js';
+import { readSettingsRow, getTokens, recordPoll, formsToPoll, refreshForms, readFormCursors, advanceFormCursor } from './settings.js';
 import { parseLead, fileLead as fileLeadDefault, recordLeadError } from './leads.js';
+import { fetchPageForms } from './connect.js';
+
+// FIX_318_V1 (H1) — перекрытие окна опроса формы: 10 минут до её отметки.
+export const CURSOR_OVERLAP_S = 600;
 
 const INITIAL_DELAY_MS = 20_000;
 const MIN_DELAY_MS = 60_000;
@@ -74,17 +88,37 @@ async function performPoll(db, opts = {}) {
   const token = tokens.pageToken || tokens.token;
   if (!token) return;
 
-  const since = Number(row.since_ts) || 0;
+  // since_ts — нижняя граница для форм без своей отметки; опрос её не двигает.
+  const floor = Number(row.since_ts) || 0;
   let failure = '';
   let truncated = false;
-  let maxTs = since;
-  for (const f of formsToPoll(db)) {
+
+  let forms;
+  if (row.forms_mode !== 'selected' && row.page_id) {
+    const fr = await fetchPageForms(row.page_id, { token, fetchImpl, timeoutMs });
+    if (fr.ok) {
+      forms = refreshForms(db, fr.forms);
+    } else {
+      // Недействительный токен и нет сети — формы ответят тем же: проход окончен.
+      if (fr.reason === 'bad_token' || fr.reason === 'offline') { recordPoll(db, { ok: false, error: fr.reason }); return; }
+      failure = fr.reason || 'server_error';   // список не обновился — опрашиваем известные формы
+      forms = formsToPoll(db);
+    }
+  } else {
+    forms = formsToPoll(db);
+  }
+
+  const cursors = readFormCursors(db);
+  for (const f of forms) {
+    const own = cursors.has(f.id) ? cursors.get(f.id) : null;
+    const since = own != null ? Math.max(0, own - CURSOR_OVERLAP_S) : floor;
     const r = await graphGetAll(`${f.id}/leads`, {
       fields: LEAD_FIELDS, limit: 100,
       filtering: [{ field: 'time_created', operator: 'GREATER_THAN', value: since }],
     }, { token, fetchImpl, timeoutMs, maxPages: MAX_PAGES });
     // Увиденные заявки подшиваем даже при отказе на поздней странице: они
-    // идемпотентны по leadgen_id, а курсор при отказе всё равно не двинется.
+    // идемпотентны по leadgen_id, а отметка формы при отказе всё равно не двинется.
+    let maxTs = own;
     for (const raw of (Array.isArray(r.data) ? r.data : [])) {
       const lead = parseLead(raw, { formName: f.name });
       if (!lead.form_id) lead.form_id = f.id;
@@ -96,7 +130,7 @@ async function performPoll(db, opts = {}) {
         recordLeadError(db, lead, e && e.message ? e.message : String(e));
       }
       const ts = Math.floor(Date.parse(lead.created_time) / 1000);
-      if (Number.isFinite(ts) && ts > maxTs) maxTs = ts;
+      if (Number.isFinite(ts) && (maxTs == null || ts > maxTs)) maxTs = ts;
     }
     if (!r.ok) {
       failure = r.reason || 'server_error';
@@ -104,9 +138,10 @@ async function performPoll(db, opts = {}) {
       continue;
     }
     if (r.truncated) truncated = true;
+    if (maxTs != null && maxTs !== own) advanceFormCursor(db, f.id, maxTs);
   }
   if (failure) recordPoll(db, { ok: false, error: failure });
-  else recordPoll(db, { ok: true, sinceTs: maxTs, error: truncated ? 'truncated' : '' });
+  else recordPoll(db, { ok: true, error: truncated ? 'truncated' : '' });
 }
 
 // --------------------------------------------------------------------------

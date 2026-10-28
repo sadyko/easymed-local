@@ -194,7 +194,10 @@ test('бот: «Оставить заявку» без номера — прос
   db.close();
 });
 
-test('бот: «Оставить заявку» у привязанного номера — карточка сразу; повтор в окне CRM — та же карточка, но заявка посчитана', async () => {
+// FIX_318_V1 (L1) — повтор нажатия той же ссылки тем же чатом в течение суток —
+// та же заявка: ни второй строки статистики рекламы, ни второго абзаца в
+// комментарии. Через сутки — новая заявка (в окне CRM — в ту же карточку).
+test('бот: «Оставить заявку» у привязанного номера — карточка сразу; повтор в течение суток — та же заявка; через сутки — новая заявка в ту же карточку', async () => {
   const db = seed();
   saveDeeplink(db, PRICE, 1);
   const { deps, texts } = harness();
@@ -204,9 +207,103 @@ test('бот: «Оставить заявку» у привязанного но
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM crm_requests').get().n, 1);
   assert.match(texts().at(-1), /Rahmat|Спасибо/);
   await handleUpdate(db, TOKEN, cb(900, 'dl:l:price'), deps);
+  assert.match(texts().at(-1), /Rahmat|Спасибо/, 'человеку — то же спасибо');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM crm_requests').get().n, 1, 'вторая карточка не плодится');
-  assert.equal(listDeeplinks(db)[0].leads, 2, 'а заявок по ссылке — две');
-  const card = db.prepare('SELECT note FROM crm_requests').get();
-  assert.equal(card.note.split('Заявка из Telegram').length - 1, 2, 'вторая заявка дописана в комментарий');
+  assert.equal(listDeeplinks(db)[0].leads, 1, 'повторное нажатие в течение суток — та же заявка');
+  let card = db.prepare('SELECT note FROM crm_requests').get();
+  assert.equal(card.note.split('Заявка из Telegram').length - 1, 1, 'комментарий не повторяется');
+  db.prepare("UPDATE telegram_deeplink_leads SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-25 hours')").run();
+  await handleUpdate(db, TOKEN, cb(900, 'dl:l:price'), deps);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM crm_requests').get().n, 1, 'в окне CRM — та же карточка');
+  assert.equal(listDeeplinks(db)[0].leads, 2, 'через сутки — новая заявка по ссылке');
+  card = db.prepare('SELECT note FROM crm_requests').get();
+  assert.equal(card.note.split('Заявка из Telegram').length - 1, 2);
+  db.close();
+});
+
+// ---------------------------------------------------------------------------
+// FIX_318_V1 — ревью 3.18.0 (TG_DEEPLINK_V1)
+// ---------------------------------------------------------------------------
+import { createDeeplinkLead, findActiveByKey, setPendingLead, takePendingLead, PENDING_LEAD_MINUTES, LEAD_DEDUP_HOURS } from './deeplinks.js';
+import { setDataDir } from '../control/config.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
+
+test('L1 (повтор R6): пять нажатий «Оставить заявку» — одна заявка, одна строка статистики, комментарий один раз', () => {
+  const db = seed();
+  const link = saveDeeplink(db, { key: 'promo', name: 'Promo', answer_ru: 'hi' }, 1);
+  const first = createDeeplinkLead(db, findActiveByKey(db, 'promo'), { chatId: '1', phone: '998901112299', name: 'N', lang: 'ru' });
+  for (let i = 0; i < 4; i++) {
+    const again = createDeeplinkLead(db, findActiveByKey(db, 'promo'), { chatId: '1', phone: '998901112299', name: 'N', lang: 'ru' });
+    assert.equal(again.crm_request_id, first.crm_request_id);
+    assert.equal(again.duplicate, true);
+  }
+  assert.equal(LEAD_DEDUP_HOURS, 24);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM telegram_deeplink_leads WHERE deeplink_id = ?').get(link.id).n, 1);
+  assert.equal(db.prepare('SELECT note FROM crm_requests').get().note.split('Заявка из Telegram').length - 1, 1);
+  // Другой чат той же ссылки — своя заявка (статистика рекламы честная).
+  createDeeplinkLead(db, findActiveByKey(db, 'promo'), { chatId: '2', phone: '998901112288', name: 'M', lang: 'ru' });
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM telegram_deeplink_leads').get().n, 2);
+  db.close();
+});
+
+test('L1: ожидание номера для заявки истекает через 30 минут — номер, присланный позже, — обычное подключение пациента со списком документов, не заявка', async () => {
+  const db = seed();
+  saveDeeplink(db, PRICE, 1);
+  assert.equal(PENDING_LEAD_MINUTES, 30);
+  setPendingLead(db, '42', 7);
+  assert.equal(takePendingLead(db, '42'), 7, 'в пределах 30 минут — заявка ждёт');
+  assert.equal(takePendingLead(db, '42'), 0, 'ожидание забирается один раз');
+  const { deps, texts } = harness();
+  await handleUpdate(db, TOKEN, start(950, 'price'), deps);
+  await handleUpdate(db, TOKEN, cb(950, 'dl:l:price'), deps);
+  db.prepare("UPDATE telegram_state SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-31 minutes') WHERE key LIKE 'dl:lead:%'").run();
+  await handleUpdate(db, TOKEN, contactMsg(950, '+998 90 111 22 33'), deps);   // номер пациента «Алиев Алишер»
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM crm_requests').get().n, 0, 'просроченное ожидание — не заявка из рекламы');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM telegram_deeplink_leads').get().n, 0);
+  assert.ok(!texts().some((t) => /Rahmat|Спасибо! Заявка/.test(t)), 'не «спасибо за заявку»');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM telegram_state WHERE key LIKE 'dl:lead:%'").get().n, 0, 'ожидание убрано');
+  db.close();
+});
+
+test('L2: файл к ответу — только из папки deeplinks/ хранилища бота; файл переписки сотрудников (chat/…) не сохраняется и не отправляется', async () => {
+  const db = seed();
+  for (const bad of ['chat/12/passport.pdf', 'broadcast/banner.jpg', 'x.pdf', 'deeplinks', 'deeplinks/../chat/1/a.pdf']) {
+    assert.throws(() => saveDeeplink(db, { ...PRICE, key: 'k' + Math.random().toString(36).slice(2, 6), file_path: bad }, 1),
+      (e) => e instanceof DeeplinkError && e.status === 400, bad);
+  }
+  const ok = saveDeeplink(db, { ...PRICE, key: 'okfile', file_path: 'deeplinks/1/price.pdf' }, 1);
+  assert.equal(ok.file_path, 'deeplinks/1/price.pdf');
+  // Строка, записанная до исправления, с путём в чужую папку — бот файл не шлёт.
+  // Хранилище — во временной папке данных (data/ клиники тест не трогает).
+  const dataDir = tmpDir('em-dl-l2-');
+  const media = path.join(dataDir, 'storage', 'telegram-media');
+  fs.mkdirSync(path.join(media, 'chat', '12'), { recursive: true });
+  fs.mkdirSync(path.join(media, 'deeplinks', '1'), { recursive: true });
+  fs.writeFileSync(path.join(media, 'chat', '12', 'secret.pdf'), '%PDF-1.4');
+  fs.writeFileSync(path.join(media, 'deeplinks', '1', 'price.pdf'), '%PDF-1.4');
+  setDataDir(dataDir);
+  try {
+    const { sent, deps } = harness();
+    await handleUpdate(db, TOKEN, start(960, 'okfile'), deps);
+    assert.deepEqual(sent.map((s) => s.method), ['sendDocument', 'sendMessage'], 'файл из deeplinks/ уходит');
+    db.prepare("UPDATE telegram_deeplinks SET file_path = 'chat/12/secret.pdf', file_kind = 'document' WHERE key = 'okfile'").run();
+    sent.length = 0;
+    await handleUpdate(db, TOKEN, start(961, 'okfile'), deps);
+    assert.deepEqual(sent.map((s) => s.method), ['sendMessage'], 'файл переписки не уходит — только текст ответа');
+  } finally {
+    setDataDir(null);
+    db.close();
+  }
+});
+
+test('L3: новая карточка заявки из ссылки — пациент по номеру правилом звонка', () => {
+  const db = seed();
+  saveDeeplink(db, PRICE, 1);
+  const pid = db.prepare("SELECT id FROM patients WHERE full_name = 'Алиев Алишер'").get().id;
+  const r = createDeeplinkLead(db, findActiveByKey(db, 'price'), { chatId: '70', phone: '998901112233', name: 'Алишер', lang: 'ru' });
+  assert.equal(db.prepare('SELECT patient_id FROM crm_requests WHERE id = ?').get(r.crm_request_id).patient_id, pid);
+  const s = createDeeplinkLead(db, findActiveByKey(db, 'price'), { chatId: '71', phone: '998977770000', name: 'Новый', lang: 'ru' });
+  assert.equal(db.prepare('SELECT patient_id FROM crm_requests WHERE id = ?').get(s.crm_request_id).patient_id, null);
   db.close();
 });

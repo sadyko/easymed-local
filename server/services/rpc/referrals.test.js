@@ -143,6 +143,12 @@ test('активность: статусы по окнам 30 / 90, окно N �
   assert.equal(referralsActivity(db, { days: 14 }, admin).days, 30, 'незнакомое окно — 30');
   assert.deepEqual(referralsActivity(db, { representative_id: 4 }, admin).sources.map((s) => s.id), [A]);
   assert.deepEqual(referralsActivity(db, { representative_id: 'none' }, admin).sources.map((s) => s.id), [B]);
+
+  // FIX_318_V1 (M2) — «Telegram» у врача — только подтверждённое подключение.
+  const l = Number(db.prepare("INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone) VALUES (?, '800', '998912098887')").run(A).lastInsertRowid);
+  assert.equal(referralsActivity(db, {}, admin).sources.find((s) => s.id === A).telegram, false, 'ждёт подтверждения — ещё не подключён');
+  db.prepare("UPDATE doctor_bot_links SET status = 'confirmed' WHERE id = ?").run(l);
+  assert.equal(referralsActivity(db, {}, admin).sources.find((s) => s.id === A).telegram, true);
 });
 
 test('подробнее: визиты источника за период с услугами и пациентом; направления врача', () => {
@@ -161,4 +167,84 @@ test('подробнее: визиты источника за период с �
   assert.ok(Array.isArray(doc.lines));
   const reg = referralsDoctorDetail(db, { doctor_id: 3, ...period }, withKey);
   assert.ok(!('lines' in reg) && !('reward' in reg));
+});
+
+// ---------------------------------------------------------------------------
+// FIX_318_V1 — ревью 3.18.0 («Реферирование»)
+// ---------------------------------------------------------------------------
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { referralReportLines } from './reports.js';
+import { buildingContext } from '../domain/buildings.js';
+
+test('M3 (повтор R4): «Внутренние врачи» — по is_doctor: администратор-врач (ADMIN_DOCTOR_V1) в списке и в итогах', () => {
+  const { db } = fresh();
+  db.prepare("INSERT INTO users (id, username, password_hash, role, full_name, is_doctor) VALUES (8, 'admdoc', 'x', 'admin', 'Админ Врач', 1)").run();
+  db.prepare("INSERT INTO recommended_services (patient_id, service_name, recommended_by, status, created_at) VALUES (11, 'КТ', 8, 'pending', ?)").run(atNoon(1));
+  const out = referralsInternal(db, period, admin);
+  const ad = out.doctors.find((d) => d.id === 8);
+  assert.ok(ad, 'администратор-врач в списке');
+  assert.deepEqual([ad.referrals, ad.waiting], [1, 1]);
+  assert.equal(out.totals.referrals, 4, 'его направление в итогах (3 у врача + 1)');
+  assert.ok(!out.doctors.some((d) => d.id === 1), 'администратор без is_doctor — не врач');
+});
+
+function moneyWorld() {
+  const { db } = fresh();
+  const u = db.prepare('INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, is_active) VALUES (?,?,?,?,?,?,?)');
+  u.run(8, 'admdoc', 'x', 'admin', 'Админ Врач', 1, 1);       // ADMIN_DOCTOR_V1
+  u.run(9, 'gone', 'x', 'doctor', 'Уволенный Врач', 1, 0);     // уволен, но деньги за период есть
+  const cat = db.prepare('SELECT id FROM referral_source_categories WHERE is_internal = 1').get().id;
+  db.prepare('UPDATE referral_source_categories SET standard_percent = 5 WHERE id = ?').run(cat);
+  const own = (doctorId, name) => db.prepare('SELECT id FROM referral_sources WHERE doctor_id = ?').get(doctorId)?.id
+    ?? Number(db.prepare('INSERT INTO referral_sources (name, first_name, doctor_id, category_id) VALUES (?,?,?,?)').run(name, name, doctorId, cat).lastInsertRowid);
+  const src8 = own(8, 'Админ Врач');
+  const src9 = own(9, 'Уволенный Врач');
+  db.prepare("INSERT INTO services (id, name, price, type) VALUES (701, 'УЗИ почек', 200000, 'imaging')").run();
+  const v = db.prepare('INSERT INTO visits (id, patient_id, visit_date, status, referral_source_id) VALUES (?,?,?,?,?)');
+  const inv = db.prepare(`INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
+                          VALUES (?,?,?,?,?,0,?,?,'paid',?)`);
+  const item = db.prepare("INSERT INTO invoice_items (id, invoice_id, service_id, description, quantity, unit_price, total) VALUES (?,?,701,'УЗИ почек',1,?,?)");
+  const vs = db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, invoice_item_id) VALUES (?,701,3,1,?,?,'completed',?)");
+  [[901, 10, src8, 200000], [902, 12, src9, 100000]].forEach(([id, pid, src, sum], i) => {
+    v.run(id, pid, atNoon(1), 'arrived', src);
+    inv.run(id, 'INV-' + id, id, pid, sum, sum, sum, atNoon(1));
+    item.run(id, id, sum, sum);
+    vs.run(id, sum, sum, id);
+    void i;
+  });
+  return db;
+}
+
+test('M3: итоги «Внутренних врачей» сходятся с отчётом «Рефералы» (внутренние): деньги администратора-врача и уволенного врача не теряются', () => {
+  const db = moneyWorld();
+  const out = referralsInternal(db, period, admin);
+  const lines = referralReportLines(db, { ...period, referrer: 'internal' }, buildingContext(db));
+  const num = (x) => Number(x) || 0;
+  const reward = Math.round(lines.reduce((a, r) => a + num(r.reward), 0) * 100) / 100;
+  const received = Math.round(lines.reduce((a, r) => a + (r.paid ? num(r.after_discount) * num(r.pay_factor) : 0), 0) * 100) / 100;
+  assert.ok(reward > 0, 'в отчёте есть вознаграждение: ' + reward);
+  assert.equal(out.totals.reward, reward, 'вознаграждение — как в «Рефералах»');
+  assert.equal(out.totals.amount, received, 'получено — как в «Рефералах»');
+  const ids = out.doctors.map((d) => d.id);
+  assert.ok(ids.includes(8), 'администратор-врач');
+  assert.ok(ids.includes(9), 'уволенный врач с деньгами за период — в списке, иначе итог не сходится');
+  assert.equal(out.doctors.find((d) => d.id === 9).reward, 5000, '5 % от 100 000');
+});
+
+test('L5: строки отчёта «Рефералы» получают контекст зданий отчёта, а не пользователя', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('./referrals.js', import.meta.url)), 'utf8');
+  const calls = [...src.matchAll(/referralReportLines\(([^;]*?)\)\s*(?:\.|\)|;|\n)/g)].map((m) => m[1]);
+  assert.ok(calls.length >= 2, 'вызовы найдены: ' + calls.length);
+  for (const c of calls) assert.ok(!/,\s*user\s*$/.test(c.trim()), 'третьим аргументом — user: ' + c);
+});
+
+test('L4: сотрудник своей роли клиники «Медпредставитель» (другой код) — представитель на экране и его можно закрепить', () => {
+  const { db, B } = fresh();
+  db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('med_rep', 'Медпредставитель', 'callcenter')").run();
+  db.prepare("INSERT INTO users (id, username, password_hash, role, full_name, custom_role_code) VALUES (12, 'rep3', 'x', 'callcenter', 'Представитель Клиники', 'med_rep')").run();
+  const out = referralsRepresentatives(db, period, admin);
+  assert.deepEqual(out.representatives.map((r) => r.full_name).sort(), ['Представитель Клиники', 'Представитель Один']);
+  assert.deepEqual(referralsAssignRepresentative(db, { source_id: B, user_id: 12 }, admin), { source_id: B, representative_id: 12 });
+  assert.throws(() => referralsAssignRepresentative(db, { source_id: B, user_id: 2 }, admin), (e) => e.status === 400, 'регистратор — не представитель');
 });

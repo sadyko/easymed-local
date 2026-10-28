@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { handleUpdate, findSourceByPhone, activeLink, T } from './flow.js';
+import { handleUpdate, findSourceByPhone, findSourcesByPhone, activeLink, T } from './flow.js';
 
 function fresh() {
   const db = openDb(':memory:');
@@ -39,7 +39,7 @@ test('findSourceByPhone: ключ номера — те же 9 цифр, что 
   assert.equal(findSourceByPhone(db, ''), null);
 });
 
-test('/start без связки — приветствие с кнопкой контакта; свой контакт известного номера — связка и ответ «Вы подключены»', async () => {
+test('/start без связки — приветствие с кнопкой контакта; свой контакт известного номера — связка ЖДЁТ подтверждения клиники; после подтверждения — «Вы подключены»', async () => {
   const { db, A } = fresh();
   const { sent, deps } = fakeApi();
   await handleUpdate(db, 'tok', { message: { chat: { id: 500 }, from: { id: 500 }, text: '/start' } }, deps);
@@ -54,13 +54,35 @@ test('/start без связки — приветствие с кнопкой к
   assert.equal(link.phone, '998903106570');
   assert.equal(link.tg_username, 'oybek');
   assert.equal(link.tg_name, 'Ойбек Набиев');
-  assert.equal(sent[1].params.text, T.linked('Набиев Ойбек'));
+  // FIX_318_V1 (M2) — подключение без согласия клиники больше не открывает имена пациентов.
+  assert.equal(link.status, 'pending', 'ждёт администратора');
+  assert.equal(sent[1].params.text, T.pending('Набиев Ойбек'));
   assert.deepEqual(sent[1].params.reply_markup, { remove_keyboard: true });
 
-  await handleUpdate(db, 'tok', { message: { chat: { id: 500 }, from: { id: 500 }, text: 'спасибо' } }, deps);
-  assert.equal(sent[2].params.text, T.gotMessage, 'подключённому — что сообщения не читаются');
   await handleUpdate(db, 'tok', { message: { chat: { id: 500 }, from: { id: 500 }, text: '/start' } }, deps);
-  assert.equal(sent[3].params.text, T.linked('Набиев Ойбек'), '/start подключённого — напоминание, кто он');
+  assert.equal(sent[2].params.text, T.pending('Набиев Ойбек'), 'пока ждёт — напоминание, что ждёт');
+  db.prepare("UPDATE doctor_bot_links SET status = 'confirmed', confirmed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(link.id);
+
+  await handleUpdate(db, 'tok', { message: { chat: { id: 500 }, from: { id: 500 }, text: 'спасибо' } }, deps);
+  assert.equal(sent[3].params.text, T.gotMessage, 'подключённому — что сообщения не читаются');
+  await handleUpdate(db, 'tok', { message: { chat: { id: 500 }, from: { id: 500 }, text: '/start' } }, deps);
+  assert.equal(sent[4].params.text, T.linked('Набиев Ойбек'), '/start подключённого — напоминание, кто он');
+  await handleUpdate(db, 'tok', contactMsg(500, 500, '+998903106570'), deps);
+  assert.equal(sent[5].params.text, T.linked('Набиев Ойбек'), 'тот же номер ещё раз — подтверждение не сбрасывается');
+  assert.equal(activeLink(db, 500).status, 'confirmed');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM doctor_bot_links').get().n, 1);
+});
+
+test('M2 (повтор R3): номер указан у двух врачей — связки нет, просьба позвонить в клинику', async () => {
+  const { db } = fresh();
+  db.prepare("INSERT INTO referral_sources (name, first_name, phone, active) VALUES ('Регистратура поликлиники', 'Рег', '998903106570', 1)").run();
+  assert.equal(findSourceByPhone(db, '+998903106570'), null, 'неоднозначный номер — никто');
+  assert.equal(findSourcesByPhone(db, '+998903106570').length, 2);
+  const { sent, deps } = fakeApi();
+  await handleUpdate(db, 'tok', contactMsg(510, 510, '+998903106570'), deps);
+  assert.equal(sent[0].params.text, T.ambiguous);
+  assert.equal(activeLink(db, 510), null);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM doctor_bot_links').get().n, 0);
 });
 
 test('чужой контакт и незнакомый номер — отказ с кнопкой, связки нет', async () => {

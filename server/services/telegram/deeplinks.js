@@ -28,6 +28,7 @@ import { resolveMedia, readMedia } from './media.js';
 import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';
 import { contactDecision, firstStageKey, reopenLead } from '../crm/contact-window.js';
 import { leadsForPhone } from '../crm/lead-from-call.js';
+import { patientIdForPhone } from '../crm/patient-by-phone.js';   // FIX_318_V1 (L3) — пациент по номеру, правилом звонка
 
 export class DeeplinkError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -56,6 +57,15 @@ const SOURCE_KEY = 'telegram';
 const SOURCE_LABEL = 'Telegram-бот';
 const PENDING_PREFIX = 'dl:lead:';
 const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
+// FIX_318_V1 (L2) — файлы ответов живут ТОЛЬКО в папке deeplinks/ корзины
+// telegram-media (туда их кладёт экран, telegram-deeplinks.js). В той же
+// корзине лежат вложения переписки (chat/<id>/…) и баннеры рассылки: путь,
+// пришедший из браузера, не должен отдать их любому, кто откроет ссылку.
+export const FILE_DIR = 'deeplinks';
+// FIX_318_V1 (L1) — повтор «Оставить заявку» тем же чатом по той же ссылке в
+// течение суток — та же заявка; ожидание номера живёт полчаса.
+export const LEAD_DEDUP_HOURS = 24;
+export const PENDING_LEAD_MINUTES = 30;
 
 export function normalizeKey(raw) {
   const k = String(raw == null ? '' : raw).trim().toLowerCase();
@@ -184,10 +194,17 @@ function normalizeButtons(db, raw, ownKey) {
   });
 }
 
+// FIX_318_V1 (L2) — абсолютный путь файла ответа, если он в deeplinks/<…>; иначе null.
+export function deeplinkFilePath(relPath) {
+  const segments = String(relPath || '').split('/').filter(Boolean);
+  if (segments.length < 2 || segments[0] !== FILE_DIR) return null;
+  return resolveMedia(relPath);
+}
+
 function normalizeFile(input) {
   const relPath = String(input.file_path || '').trim();
   if (!relPath) return { file_path: '', file_kind: '', file_name: '' };
-  const abs = resolveMedia(relPath);
+  const abs = deeplinkFilePath(relPath);
   if (!abs) throw new DeeplinkError('Файл к ответу должен лежать в хранилище Telegram-бота.');
   const kind = fileKindOf(relPath);
   if (!kind) throw new DeeplinkError('Файл к ответу — PDF или картинка (JPG, PNG, GIF, WEBP).');
@@ -302,7 +319,8 @@ function escapeHtml(s) {
 // сообщением, иначе человек их не видит за картинкой. Пропавший с диска файл
 // ответ не ломает: администратор мог удалить его из хранилища.
 async function sendAnswer(db, token, chatId, link, lang, deps, bot) {
-  if (link.file_path) {
+  // FIX_318_V1 (L2) — и строка, записанная до проверки папки, чужой файл не шлёт.
+  if (link.file_path && deeplinkFilePath(link.file_path)) {
     const media = readMedia(link.file_path);
     if (media) {
       try {
@@ -379,11 +397,17 @@ export function setPendingLead(db, chatId, deeplinkId) {
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
     .run(PENDING_PREFIX + String(chatId), String(deeplinkId));
 }
+// FIX_318_V1 (L1) — ожидание живёт PENDING_LEAD_MINUTES. Прежде оно не
+// истекало: номер, присланный через месяцы (человек пришёл за анализами),
+// становился заявкой из рекламы и прятал список документов. Просроченное
+// ожидание убирается и не возвращается — контакт обрабатывается как обычно.
 export function takePendingLead(db, chatId) {
   const key = PENDING_PREFIX + String(chatId);
-  const r = db.prepare('SELECT value FROM telegram_state WHERE key = ?').get(key);
+  const r = db.prepare(`SELECT value, (julianday('now') - julianday(updated_at)) * 1440 AS age_min
+                          FROM telegram_state WHERE key = ?`).get(key);
   if (!r) return 0;
   db.prepare('DELETE FROM telegram_state WHERE key = ?').run(key);
+  if (!(Number(r.age_min) <= PENDING_LEAD_MINUTES)) return 0;
   return Number(r.value) || 0;
 }
 
@@ -418,9 +442,19 @@ function appendToCard(db, id, note) {
 
 // Правило CRM то же, что у звонков и у Meta: повторное обращение того же
 // телефона в окне контакта — в открытую карточку, не вторая. Заявка при этом
-// считается по ссылке в любом случае: реклама сработала дважды.
+// считается по ссылке: реклама сработала дважды.
+//
+// FIX_318_V1 (L1, ревью 3.18.0, повтор R6) — НО не каждое нажатие кнопки:
+// пять нажатий «Оставить заявку» подряд давали пять заявок в статистике
+// рекламы и пять одинаковых абзацев в комментарии карточки. Тот же чат по той
+// же ссылке в течение LEAD_DEDUP_HOURS — та же заявка (duplicate: true), ничего
+// не пишется; через сутки — новая.
 export function createDeeplinkLead(db, link, { chatId, phone, name, lang }) {
   return db.transaction(() => {
+    const recent = db.prepare(`SELECT crm_request_id FROM telegram_deeplink_leads
+                                WHERE deeplink_id = ? AND chat_id = ? AND julianday(created_at) > julianday('now', ?)
+                                ORDER BY id DESC LIMIT 1`).get(link.id, String(chatId), `-${LEAD_DEDUP_HOURS} hours`);
+    if (recent) return { crm_request_id: recent.crm_request_id, merged: true, duplicate: true };
     ensureSource(db);
     const phoneNorm = phone ? (uzE164(phone) || String(phone)) : '';
     const note = noteFor(link, lang);
@@ -434,10 +468,12 @@ export function createDeeplinkLead(db, link, { chatId, phone, name, lang }) {
       crmId = decision.lead.id;
       merged = true;
     } else {
-      crmId = Number(db.prepare(`INSERT INTO crm_requests (full_name, phone, source, sources, status, note)
-                                 VALUES (?, ?, ?, ?, ?, ?)`)
+      // FIX_318_V1 (L3) — новая карточка находит пациента по номеру тем же
+      // правилом, что карточка звонка (crm/patient-by-phone.js).
+      crmId = Number(db.prepare(`INSERT INTO crm_requests (full_name, phone, source, sources, status, note, patient_id)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run((name || '').slice(0, 200) || 'Заявка из Telegram', phoneNorm.slice(0, 40), SOURCE_KEY, JSON.stringify([SOURCE_KEY]),
-          firstStageKey(db) || 'in_process', note).lastInsertRowid);
+          firstStageKey(db) || 'in_process', note, patientIdForPhone(db, phoneNorm)).lastInsertRowid);
     }
     db.prepare('INSERT INTO telegram_deeplink_leads (deeplink_id, crm_request_id, chat_id) VALUES (?,?,?)')
       .run(link.id, crmId, String(chatId));

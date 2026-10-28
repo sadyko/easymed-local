@@ -152,3 +152,17 @@ test('fileLead: без телефона — новая карточка без �
   assert.equal(r.status, 'created');
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM crm_requests WHERE phone = '+998909999999'").get().n, 2);
 });
+
+// FIX_318_V1 (L3) — новая карточка из Meta находит пациента по номеру тем же
+// правилом, что звонок (telephony/poller.js: findPatientsByPhone, активная
+// карта первой): карточка открывается с картой пациента, как карточка звонка.
+test('fileLead: новая карточка — пациент по номеру, правилом звонка; незнакомый номер — без пациента', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (id, full_name, phone, active) VALUES (40, 'Архивная Карта', '+998 90 123 45 67', 0)").run();
+  db.prepare("INSERT INTO patients (id, full_name, phone, active) VALUES (41, 'Каримов Азиз', '+998 90 123 45 67', 1)").run();
+  const r = fileLead(db, parseLead(RAW, { formName: 'Консультация' }));
+  assert.equal(r.status, 'created');
+  assert.equal(db.prepare('SELECT patient_id FROM crm_requests WHERE id = ?').get(r.crm_request_id).patient_id, 41, 'активная карта первой');
+  const stranger = fileLead(db, parseLead({ ...RAW, id: '9', field_data: [{ name: 'phone_number', values: ['+998 99 000 00 01'] }] }));
+  assert.equal(db.prepare('SELECT patient_id FROM crm_requests WHERE id = ?').get(stranger.crm_request_id).patient_id, null);
+});

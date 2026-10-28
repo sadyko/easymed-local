@@ -6,8 +6,11 @@
 // telegram_links, а фильтры лишь сужают их.
 
 import { sendMessage, sendPhoto, photoFileId, TelegramError } from './api.js';
-import { findPatientsByPhone } from './documents.js';
 import { logMessage } from './flow.js';
+// FIX_318_V1 (H2) — то же правило «тот же номер», что findPatientsByPhone
+// (documents.js): местные цифры номера связки подряд в цифрах номера карты.
+import { digitsOf, uzLocalDigits, MIN_PHONE_DIGITS } from '../../../public/js/admin/views/crm-phone-match.js';
+import { localDate } from '../domain/day.js';   // FIX_318_V1 (M4) — дата визита — местный день
 import { readMedia } from './media.js';   // TELEGRAM_MEDIA_V1
 // TELEGRAM_CHAT_FILE_V1 — лимит подписи к файлу общий с перепиской, а не
 // вторая его копия здесь.
@@ -43,8 +46,9 @@ export function botStats(db) {
   // Сколько КАРТ открывают активные связки. Число больше количества чатов:
   // один номер — это часто вся семья, и администратор должен видеть именно
   // столько карт, сколько реально доступно через бота.
+  // FIX_318_V1 (H2) — один проход картотеки на все связки (patientsByLinkPhone).
   const cards = new Set();
-  for (const l of active) for (const p of findPatientsByPhone(db, l.phone)) cards.add(p.id);
+  for (const list of patientsByLinkPhone(db, active)) for (const p of list) cards.add(p.id);
 
   // Охват считаем от пациентов, которые ЛЕЧАТСЯ, а не от всего архива: в базе
   // почти 70 000 карт, и охват «от всех» навсегда остался бы околонулевым и
@@ -99,16 +103,78 @@ export function botStats(db) {
 //
 // Возвращает [{link, patients}] — связки, у которых ХОТЯ БЫ ОДИН пациент
 // проходит фильтр. Заблокировавшие бота и отвязанные исключены всегда.
+//
+// FIX_318_V1 (H2, ревью 3.18.0) — ЖИВОЙ СЧЁТЧИК МОРОЗИЛ СЕРВЕР. Здесь на
+// каждую связку звался findPatientsByPhone — полный проход картотеки по
+// LIKE '%9%9%…' (индекс не помогает), а на каждую карту — до десятка запросов
+// фильтров. 20 000 карт и 1 000 чатов — 8 с, 50 000 и 2 000 — 24–30 с, и всё это
+// синхронно: сервер клиники стоял на каждом открытии окна, каждом фильтре и
+// дважды на отправке. Теперь:
+//   * номер → карты — ОДНИМ проходом картотеки на все связки
+//     (patientsByLinkPhone), по тому же правилу, что findPatientsByPhone;
+//   * фильтры — одним запросом с параметрами по множеству найденных карт
+//     (passingPatientIds), а не запросами на каждую карту;
+//   * отправка берёт уже посчитанную аудиторию (startBroadcast { audience }),
+//     а живой счётчик экрана — короткий кэш (previewAudience { cache }).
 export function resolveAudience(db, filters = {}) {
   const f = normalizeFilters(filters);
   const links = db.prepare(
     'SELECT * FROM telegram_links WHERE revoked_at IS NULL AND blocked_at IS NULL ORDER BY id').all();
 
+  const perLink = patientsByLinkPhone(db, links);
+  const ids = new Set();
+  for (const list of perLink) for (const p of list) ids.add(Number(p.id));
+  const pass = Object.keys(f).length ? passingPatientIds(db, [...ids], f) : null;
+
   const out = [];
-  for (const link of links) {
-    const patients = findPatientsByPhone(db, link.phone);
-    const matching = patients.filter((p) => matchesFilters(db, p.id, f));
+  links.forEach((link, i) => {
+    const matching = pass ? perLink[i].filter((p) => pass.has(Number(p.id))) : perLink[i];
     if (matching.length) out.push({ link, patients: matching });
+  });
+  return out;
+}
+
+// FIX_318_V1 (H2) — НОМЕР СВЯЗКИ → КАРТЫ, одним проходом картотеки.
+//
+// Правило — ровно findPatientsByPhone (documents.js), которым бот выдаёт
+// документы: номер связки короче MIN_PHONE_DIGITS цифр не ищет никого; иначе
+// карта подходит, если её цифры СОДЕРЖАТ ПОДРЯД местные цифры номера
+// (uzLocalDigits: без 998 и ведущего 0 — полный номер их тоже содержит);
+// порядок — активные карты первыми, затем новые; не больше `limit` на номер.
+// Вместо LIKE на каждую связку — один SELECT карт с телефоном и поиск каждой
+// подстроки нужной длины в словаре номеров связок.
+const CARDS_PER_NUMBER = 20;
+export function patientsByLinkPhone(db, links, limit = CARDS_PER_NUMBER) {
+  const out = links.map(() => []);
+  const byKey = new Map();   // местные цифры → номера связок в links
+  links.forEach((l, i) => {
+    const d = digitsOf(l && l.phone);
+    if (d.length < MIN_PHONE_DIGITS) return;
+    const key = uzLocalDigits(d);
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(i);
+  });
+  if (!byKey.size) return out;
+  const lengths = [...new Set([...byKey.keys()].map((k) => k.length))];
+  const rows = db.prepare(
+    `SELECT id, full_name, mrn, phone, date_of_birth, gender, active
+       FROM patients WHERE phone <> ''`).all();
+  for (const p of rows) {
+    const sf = digitsOf(p.phone);
+    let hits = null;
+    for (const len of lengths) {
+      for (let i = 0; i + len <= sf.length; i++) {
+        const key = sf.substr(i, len);
+        if (byKey.has(key)) (hits || (hits = new Set())).add(key);
+      }
+    }
+    if (!hits) continue;
+    for (const key of hits) for (const li of byKey.get(key)) out[li].push(p);
+  }
+  const rank = (p) => (p.active === 1 ? 1 : 0);
+  for (const list of out) {
+    list.sort((a, b) => rank(b) - rank(a) || Number(b.id) - Number(a.id));
+    if (list.length > limit) list.length = limit;
   }
   return out;
 }
@@ -157,66 +223,72 @@ function ageYears(dob) {
 
 // Каждый фильтр — своё условие, все вместе — пересечение. Пациент без даты
 // рождения в выборку по возрасту не попадает: «не знаем» — не «подходит».
-function matchesFilters(db, patientId, f) {
-  if (!f || !Object.keys(f).length) return true;
-  const any = (sql, params) => db.prepare(sql).get(params).c > 0;
+//
+// FIX_318_V1 (H2) — одним запросом по множеству карт (json_each), все значения —
+// параметрами; прежде — до десятка запросов на КАЖДУЮ карту.
+// FIX_318_V1 (M4, ревью 3.18.0) — приход — это визит, который не отменили и на
+// который пришли или ещё придут: отменённый и «не пришёл» (LIVE_VISIT) не
+// считаются ни для «Приходил с», врача, услуги, типа и филиала, ни против «Не
+// приходил с». Даты фильтров — местные дни, и визит сравнивается своим местным
+// днём (localDate): строка UTC «2026-08-31T06:00:00Z» больше «2026-08-31», и
+// визит в день «по» выпадал. Услуга — строкой визита, если её не убрали.
+const LIVE_VISIT = "COALESCE(v.status, '') NOT IN ('cancelled', 'no_show')";
+const LIVE_LINE = "COALESCE(vs.status, '') NOT IN ('cancelled', 'removed')";
+function passingPatientIds(db, ids, f) {
+  const out = new Set();
+  if (!ids.length) return out;
+  const where = [];
+  const params = { ids: JSON.stringify(ids) };
+  const visitDay = localDate('v.visit_date');
+  const liveVisit = (cond) => `EXISTS (SELECT 1 FROM visits v WHERE v.patient_id = p.id AND ${LIVE_VISIT} AND ${cond})`;
 
   if (f.visited_from || f.visited_to) {
-    const from = f.visited_from || '0000-01-01';
-    const to = f.visited_to || '9999-12-31';
-    if (!any('SELECT COUNT(*) c FROM visits WHERE patient_id = @p AND visit_date BETWEEN @from AND @to', { p: patientId, from, to })) return false;
+    params.vfrom = f.visited_from || '0000-01-01';
+    params.vto = f.visited_to || '9999-12-31';
+    where.push(liveVisit(`${visitDay} BETWEEN @vfrom AND @vto`));
   }
   // «Не приходил с даты»: ни одного визита начиная с неё — и те, кто не был никогда, тоже подходят.
   if (f.not_visited_since) {
-    if (any('SELECT COUNT(*) c FROM visits WHERE patient_id = @p AND visit_date >= @d', { p: patientId, d: f.not_visited_since })) return false;
+    params.nvs = f.not_visited_since;
+    where.push('NOT ' + liveVisit(`${visitDay} >= @nvs`));
   }
-  if (f.doctor_id) {
-    if (!any('SELECT COUNT(*) c FROM visits WHERE patient_id = @p AND doctor_id = @d', { p: patientId, d: f.doctor_id })) return false;
-  }
-  if (f.gender) {
-    if (!any('SELECT COUNT(*) c FROM patients WHERE id = @p AND gender = @g', { p: patientId, g: f.gender })) return false;
-  }
-  if (f.category_id) {
-    if (!any('SELECT COUNT(*) c FROM patients WHERE id = @p AND category_id = @c', { p: patientId, c: f.category_id })) return false;
-  }
+  if (f.doctor_id) { params.doctor = f.doctor_id; where.push(liveVisit('v.doctor_id = @doctor')); }
+  if (f.gender) { params.gender = f.gender; where.push('p.gender = @gender'); }
+  if (f.category_id) { params.category = f.category_id; where.push('p.category_id = @category'); }
   // Филиал — где пациент заведён или где он хоть раз был.
-  if (f.branch_id) {
-    if (!any(`SELECT COUNT(*) c FROM (
-                SELECT 1 FROM patients WHERE id = @p AND branch_id = @b
-                UNION ALL SELECT 1 FROM visits WHERE patient_id = @p AND branch_id = @b)`, { p: patientId, b: f.branch_id })) return false;
-  }
-  if (f.age_from != null || f.age_to != null) {
-    const row = db.prepare('SELECT date_of_birth FROM patients WHERE id = ?').get(patientId);
-    const age = ageYears(row && row.date_of_birth);
-    if (age == null) return false;
-    if (f.age_from != null && age < f.age_from) return false;
-    if (f.age_to != null && age > f.age_to) return false;
-  }
+  if (f.branch_id) { params.branch = f.branch_id; where.push(`(p.branch_id = @branch OR ${liveVisit('v.branch_id = @branch')})`); }
   // Услуга — строкой визита (visit_services) или услугой самого визита.
   if (f.service_id) {
-    if (!any(`SELECT COUNT(*) c FROM visits v
-               WHERE v.patient_id = @p AND (v.service_id = @s
-                  OR EXISTS (SELECT 1 FROM visit_services vs WHERE vs.visit_id = v.id AND vs.service_id = @s))`, { p: patientId, s: f.service_id })) return false;
+    params.service = f.service_id;
+    where.push(liveVisit(`(v.service_id = @service
+      OR EXISTS (SELECT 1 FROM visit_services vs WHERE vs.visit_id = v.id AND vs.service_id = @service AND ${LIVE_LINE}))`));
   }
   if (f.service_type_id) {
-    if (!any(`SELECT COUNT(*) c FROM visits v
-               WHERE v.patient_id = @p AND (
-                  EXISTS (SELECT 1 FROM services s0 WHERE s0.id = v.service_id AND s0.type_id = @t)
-                  OR EXISTS (SELECT 1 FROM visit_services vs JOIN services s ON s.id = vs.service_id
-                              WHERE vs.visit_id = v.id AND s.type_id = @t))`, { p: patientId, t: f.service_type_id })) return false;
+    params.stype = f.service_type_id;
+    where.push(liveVisit(`(EXISTS (SELECT 1 FROM services s0 WHERE s0.id = v.service_id AND s0.type_id = @stype)
+      OR EXISTS (SELECT 1 FROM visit_services vs JOIN services s ON s.id = vs.service_id
+                  WHERE vs.visit_id = v.id AND s.type_id = @stype AND ${LIVE_LINE}))`));
   }
-
   if (f.unpaid) {
     // Долг — это невыкупленный счёт: статус unpaid/debt либо оплачено меньше
     // суммы. Аннулированные (void) в долг не считаются.
-    const n = db.prepare(
-      `SELECT COUNT(*) c FROM invoices
-        WHERE patient_id = ? AND status <> 'void'
-          AND (status IN ('unpaid','debt') OR COALESCE(paid_amount,0) < COALESCE(total_amount,0))`)
-      .get(patientId).c;
-    if (!n) return false;
+    where.push(`EXISTS (SELECT 1 FROM invoices i WHERE i.patient_id = p.id AND i.status <> 'void'
+      AND (i.status IN ('unpaid','debt') OR COALESCE(i.paid_amount,0) < COALESCE(i.total_amount,0)))`);
   }
-  return true;
+  const rows = db.prepare(`SELECT p.id, p.date_of_birth FROM patients p
+                            WHERE p.id IN (SELECT value FROM json_each(@ids))
+                              ${where.map((w) => 'AND ' + w).join('\n')}`).all(params);
+  const byAge = f.age_from != null || f.age_to != null;
+  for (const r of rows) {
+    if (byAge) {
+      const age = ageYears(r.date_of_birth);
+      if (age == null) continue;
+      if (f.age_from != null && age < f.age_from) continue;
+      if (f.age_to != null && age > f.age_to) continue;
+    }
+    out.add(Number(r.id));
+  }
+  return out;
 }
 
 // TG_BROADCAST_FILTERS_V1 — справочники для выпадающих списков окна рассылки,
@@ -234,10 +306,32 @@ export function broadcastOptions(db) {
   };
 }
 
+// FIX_318_V1 (H2) — КОРОТКИЙ КЭШ ЖИВОГО СЧЁТЧИКА. Окно рассылки пересчитывает
+// получателей на каждый фильтр (с задержкой), а «Отправить» спрашивает число
+// ещё раз; одинаковый набор фильтров за несколько секунд — один расчёт. Кэш —
+// только для предпросмотра с { cache: true } (RPC живого счётчика): отбор для
+// отправки (resolveAudience) и число, которое подтверждает администратор
+// (fresh), считаются всегда заново. Ключ — нормализованные фильтры, у каждой
+// базы свой кэш.
+export const AUDIENCE_CACHE_MS = 10_000;
+const audienceCache = new WeakMap();
+export function clearAudienceCache(db) { audienceCache.delete(db); }
+function cachedAudience(db, filters, now = Date.now()) {
+  const key = JSON.stringify(normalizeFilters(filters));
+  let byKey = audienceCache.get(db);
+  if (!byKey) { byKey = new Map(); audienceCache.set(db, byKey); }
+  const hit = byKey.get(key);
+  if (hit && now - hit.at < AUDIENCE_CACHE_MS) return hit.audience;
+  for (const [k, v] of byKey) if (now - v.at >= AUDIENCE_CACHE_MS) byKey.delete(k);
+  const audience = resolveAudience(db, filters);
+  byKey.set(key, { at: now, audience });
+  return audience;
+}
+
 // Предпросмотр: точное число получателей и несколько имён — чтобы человек
 // увидел, кому это уйдёт, ДО отправки, а не после.
-export function previewAudience(db, filters = {}, sampleSize = 8) {
-  const audience = resolveAudience(db, filters);
+export function previewAudience(db, filters = {}, sampleSize = 8, { cache = false } = {}) {
+  const audience = cache ? cachedAudience(db, filters) : resolveAudience(db, filters);
   return {
     count: audience.length,
     cards: audience.reduce((n, a) => n + a.patients.length, 0),
@@ -260,7 +354,9 @@ export function composeText(textRu, textUz) {
 // Запускает рассылку и возвращает её id СРАЗУ: сотня получателей — это
 // несколько секунд, и держать всё это время открытым HTTP-запрос незачем.
 // Ход выполнения читается из строки telegram_broadcasts.
-export function startBroadcast(db, token, { textRu, textUz = '', filters = {}, userId = null, imagePath = null }, deps = {}) {
+// FIX_318_V1 (H2) — audience: отбор, уже посчитанный вызывающим (RPC отправки
+// сверяет по нему подтверждённое число) — второй раз его не считаем.
+export function startBroadcast(db, token, { textRu, textUz = '', filters = {}, userId = null, imagePath = null, audience: given = null }, deps = {}) {
   const text = composeText(textRu, textUz);
   if (!text) throw new Error('Пустое сообщение не рассылается.');
 
@@ -270,7 +366,7 @@ export function startBroadcast(db, token, { textRu, textUz = '', filters = {}, u
   const image = imagePath ? readBroadcastImage(imagePath) : null;
   if (imagePath && !image) throw new Error('Картинка не найдена на диске — загрузите её заново.');
 
-  const audience = resolveAudience(db, filters);
+  const audience = Array.isArray(given) ? given : resolveAudience(db, filters);
   const bc = db.prepare(
     `INSERT INTO telegram_broadcasts (text_ru, text_uz, filters, audience_count, created_by, image_path)
      VALUES (?,?,?,?,?,?) RETURNING id`)
