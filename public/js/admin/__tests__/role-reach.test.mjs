@@ -254,3 +254,43 @@ test('правило «куда попадёт» не разошлось с об
     assert.match(body, /PERSONAL_VIEWS\.has\(item\.id\)/,
         'оболочка снова предлагает личный экран как домашний');
 });
+
+// FIX_318_V1 (B1) — СКРЫТЫЙ РАЗДЕЛ ДОМОМ НЕ БЫВАЕТ.
+//
+// «Видимость разделов» прячет раздел у всей клиники. Оболочка проверяла скрытые
+// только для «первого доступного пункта», а «Дашборд» администратору отдавала
+// раньше этой проверки: администратор входил в «Раздел скрыт», и «На главную»
+// возвращала его туда же. Сводка прав (landingScreen) скрытых не знала вовсе.
+test('FIX_318_V1: landingScreen пропускает скрытые разделы — и дашборд администратора тоже', () => {
+    const was = globalThis.window.easymed;
+    try {
+        perms.setFullAccess('Admin');
+        globalThis.window.easymed = { state: { user: { id: 1, role: 'admin' } } };
+        assert.equal(landingScreen(SHELL_NAV_IDS).id, 'dashboard', 'подготовка: администратор входит в дашборд');
+        const hidden = new Set(['dashboard']);
+        assert.equal(landingScreen(SHELL_NAV_IDS, { isHidden: (id) => hidden.has(id) }).id, 'patients',
+            'скрытый дашборд остался домом администратора');
+        // По умолчанию — то, что оболочка открыла наружу (window.easymed.isNavHidden).
+        globalThis.window.easymed.isNavHidden = (id) => hidden.has(id);
+        assert.equal(landingScreen(SHELL_NAV_IDS).id, 'patients', 'без явного аргумента скрытые не учтены');
+        hidden.add('patients');
+        assert.notEqual(landingScreen(SHELL_NAV_IDS).id, 'patients', 'скрытая картотека стала домом');
+
+        // И сводка роли в «Ролях» обещает тот же экран.
+        hidden.clear(); hidden.add('labs');
+        const reach = roleReach(role(['labs', 'reports-hub']), SHELL_NAV_IDS, LABEL);
+        assert.equal(reach.landing.id, 'reports-hub', 'сводка обещает вход в скрытую лабораторию');
+    } finally { globalThis.window.easymed = was; perms.setFullAccess('Admin'); }
+});
+
+test('FIX_318_V1: оболочка не отдаёт администратору скрытый дашборд (правило то же, что в сводке)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const url = await import('node:url');
+    const here = path.dirname(url.fileURLToPath(import.meta.url));
+    const src = fs.readFileSync(path.join(here, '..', '..', 'admin.js'), 'utf8');
+    const at = src.indexOf('function firstAllowedView()');
+    const body = src.slice(at, src.indexOf('\n}', at)).split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    assert.match(body, /isModuleAllowed\('dashboard'\) && !navHidden\.has\('dashboard'\)/,
+        'дашборд администратору отдаётся раньше проверки скрытых');
+});

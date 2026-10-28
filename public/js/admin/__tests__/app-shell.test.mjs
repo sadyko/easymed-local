@@ -1053,6 +1053,36 @@ test('FIX_318_V1: кнопка языка вверху переводит и м�
     }
 });
 
+// ===========================================================================
+// 13. FIX_318_V1 (B1) — СКРЫТЫЙ «ДАШБОРД» НЕ БЫВАЕТ ДОМОМ АДМИНИСТРАТОРА.
+//
+// firstAllowedView() отдавал администратору 'dashboard' раньше проверки
+// скрытых: администратор входил в «Раздел скрыт», а «На главную» и «назад»
+// возвращали его туда же — по кругу.
+// ===========================================================================
+test('FIX_318_V1: скрыли «Дашборд», стоя на нём, — администратор уходит в первый открытый раздел, «На главную» не водит по кругу', async () => {
+    await perms_setFull();
+    try {
+        await go('dashboard');
+        shell().setNavHidden(['dashboard']);
+        await settle(80);
+        assert.equal(shell().state.view, 'patients', 'администратора оставили на скрытом дашборде: ' + shell().state.view);
+        assert.equal(navItemFor('Дашборд'), undefined, 'скрытый пункт остался в меню');
+
+        // Прямой адрес — заглушка, и её «На главную» ведёт в открытый раздел.
+        await go('dashboard');
+        assert.ok(labelOf(shownPane()).includes('Раздел скрыт'), 'по прямому адресу скрытый раздел открылся');
+        const home = descendants(shownPane()).find((n) => n.tagName === 'BUTTON' && labelOf(n).includes('На главную'));
+        assert.ok(home, 'на заглушке нет «На главную»');
+        home.click();
+        await settle(80);
+        assert.equal(shell().state.view, 'patients', '«На главную» вернула на скрытый дашборд');
+    } finally {
+        shell().setNavHidden([]);
+        await settle(40);
+    }
+});
+
 test('глушим таймеры экранов, чтобы прогон завершался', () => {
     for (const id of appIntervals) clearInterval(id);
     appIntervals.clear();

@@ -440,8 +440,12 @@ const searchEl  = document.getElementById('topbar-search');
 // «кому выдан дашборд»: главный врач с открытым дашбордом всё равно начинает с
 // первого пункта меню — так сказал владелец, и это же правило повторяет сводка
 // прав (role-reach.js landingScreen, прикрыто тестом, читающим этот файл).
+// FIX_318_V1 (B1) — скрытый в «Видимости разделов» дашборд домом администратора
+// не бывает: раньше он отдавался ДО проверки скрытых, и администратор входил в
+// «Раздел скрыт», а «На главную» возвращала его туда же. Та же проверка — в
+// role-reach.js landingScreen (сводка прав обещает тот же экран).
 function firstAllowedView() {
-    if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard')) return 'dashboard';
+    if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard') && !navHidden.has('dashboard')) return 'dashboard';
     for (const item of NAV) {
         if (item.section) continue;
         // MY_STOCK_V1 — личный экран домашним не бывает ни у кого: сюда
@@ -851,9 +855,11 @@ function settingsMenuOwns(view) {
 // органу управления, который ведёт в отказ, лучше не существовать.
 export function backTargetOf(parent) {
     if (!parent) return null;
-    if (isRouteAllowed(parent)) return parent;
+    // FIX_318_V1 (B1) — скрытый раздел — такой же тупик, как закрытый: «назад»
+    // в «Раздел скрыт» не ведёт.
+    if (isRouteAllowed(parent) && !navHiddenFor(parent)) return parent;
     const home = firstAllowedView();
-    return home && isRouteAllowed(home) ? home : null;
+    return home && isRouteAllowed(home) && !navHiddenFor(home) ? home : null;
 }
 
 function renderBackControl() {
@@ -1238,11 +1244,15 @@ async function renderViewInner(viewRoot, viewName, ctx) {
     // где раздела в клинике просто нет.
     if (navHiddenFor(viewName)) {
         // Своя заглушка, не renderPlaceholder: тот дописывает к имени слово «module» (экран «скоро»).
+        // FIX_318_V1 (B1) — «На главную» только туда, где можно работать: кнопка,
+        // ведущая на этот же скрытый экран, водила бы по кругу.
+        const home = firstAllowedView();
+        const canGoHome = home !== viewName && !navHiddenFor(home);
         viewRoot.appendChild(h('div', { class: 'fade-in' },
             h('div', { class: 'empty', style: { padding: '40px 20px' } },
                 h('p', { style: { fontWeight: '600' } }, 'Раздел скрыт'),
                 h('p', { class: 'muted', style: { fontSize: '13.5px', marginTop: '6px' } }, 'Этот раздел скрыт в «Настройки → Видимость разделов». Администратор может вернуть его там.'),
-                h('button', { class: 'btn btn-outline', type: 'button', style: { marginTop: '14px' }, onclick: () => navigate(firstAllowedView()) }, 'На главную'))));
+                canGoHome ? h('button', { class: 'btn btn-outline', type: 'button', style: { marginTop: '14px' }, onclick: () => navigate(home) }, 'На главную') : null)));
         return;
     }
     if (!isRouteAllowed(viewName)) {
@@ -1472,11 +1482,22 @@ async function loadNavVisibility() {
     }
 }
 function setNavHidden(list) {
+    const before = new Set(navHidden);
     navHidden.clear();
     for (const id of normalizeHidden(list)) navHidden.add(id);
     renderSidebar();
     // Администратор только что спрятал раздел, в котором стоит сам, — уводим домой.
     if (navHiddenFor(state.view)) navigate(firstAllowedView());
+    // FIX_318_V1 (B1) — кэш панелей. Панель, смонтированная до смены списка,
+    // показывалась бы при возврате как была: скрытый дашборд открывался бы
+    // по прямому адресу целиком, а возвращённый раздел — заглушкой «Раздел
+    // скрыт». Панели, чья скрытость поменялась, снимаются и отрисуются заново.
+    for (const pane of [...state.panes]) {
+        if (pane.key === state.activeKey) continue;
+        if (isHiddenView(pane.view, before, parentViewOf) === navHiddenFor(pane.view)) continue;
+        state.panes.splice(state.panes.indexOf(pane), 1);
+        try { pane.root.remove(); } catch (_) {}
+    }
 }
 
 function renderSidebar() {
@@ -3181,7 +3202,9 @@ function startApp({ fresh = false } = {}) {
     // НАСТОЯЩИМ таблицам, а не по своей копии: копия разошлась бы с ними в
     // тот день, когда добавят новый экран, — то есть ровно тогда, когда тест
     // и нужен.
-    window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading, setNavHidden };   // setNavHidden — NAV_VISIBILITY_V1
+    // isNavHidden — FIX_318_V1: «скрыт ли экран» для сводки прав (role-reach.js
+    // landingScreen) и плиток «Настроек», тем же правилом, что у меню.
+    window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading, setNavHidden, isNavHidden: navHiddenFor };   // setNavHidden — NAV_VISIBILITY_V1
     watchSectionHeadings();   // ONE_NAME_PER_SCREEN_V1
     startUiEnhance();         // UI_ENHANCE_V1 — списки и календари в виде программы
     paintUserCard();
