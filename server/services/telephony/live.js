@@ -98,7 +98,11 @@ export function noteEvent(db, ev, now = Date.now()) {
     calls.set(ev.uuid, c);
   }
   if (ev.event === ANSWER) { c.state = 'answered'; c.was_answered = true; c.answered_at = ev.at; }
-  else if (ev.event === END) { c.state = 'ended'; c.ended_at = ev.at; }
+  else if (ev.event === END) {
+    c.state = 'ended'; c.ended_at = ev.at;
+    // FIX_318_V1 (C2) — конец Binotel несёт «разговор был» сам: события «ответили» у него нет.
+    if (ev.answered && !c.was_answered) { c.was_answered = true; c.answered_at = ev.at; }
+  }
   else if (ev.event === RING && c.state === 'ended') { /* повтор начала после конца — не воскрешать */ }
   c.updated = now;
   return c;

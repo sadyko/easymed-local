@@ -8,7 +8,7 @@
 // полей — и здесь закреплено, ЧТО именно он терпит и где отказывает.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizePbxEvent, ringFromBinotelSettings, RING, ANSWER, END } from './pbx-event.js';
+import { normalizePbxEvent, ringFromBinotelSettings, endFromBinotelCompleted, RING, ANSWER, END } from './pbx-event.js';
 
 const NOW = Date.parse('2026-10-17T07:00:00Z');
 const SEC = Math.floor(NOW / 1000);   // unix-секунды того же мига
@@ -60,4 +60,14 @@ test('Binotel «кто звонит» (apiCallSettings) → ring/in с его ж
   assert.deepEqual(ringFromBinotelSettings({ requestType: 'apiCallSettings', externalNumber: '0501112233', internalNumber: '101', generalCallID: 'g-1' }, { now: NOW }),
     { uuid: 'binotel:g-1', event: RING, direction: 'in', caller: '0501112233', callee: '101', at: '2026-10-17T07:00:00Z' });
   assert.equal(ringFromBinotelSettings({ requestType: 'apiCallSettings' }, { now: NOW }), null, 'без номера звонящего показывать нечего');
+});
+
+test('FIX_318_V1: Binotel «звонок завершён» → end того же binotel:<id>; разговор был — answered; без id — null', () => {
+  assert.deepEqual(endFromBinotelCompleted({ generalCallID: 'g-1', callType: '0', externalNumber: '0501112233', internalNumber: '101', billsec: '0', disposition: 'NOANSWER' }, { now: NOW }),
+    { uuid: 'binotel:g-1', event: END, direction: 'in', caller: '0501112233', callee: '101', at: '2026-10-17T07:00:00Z', answered: false });
+  assert.equal(endFromBinotelCompleted({ generalCallID: 'g-2', billsec: '42' }, { now: NOW }).answered, true);
+  assert.equal(endFromBinotelCompleted({ generalCallID: 'g-3', billsec: '0', disposition: 'ANSWER' }, { now: NOW }).answered, true);
+  assert.equal(endFromBinotelCompleted({ generalCallID: 'g-4', callType: '1' }, { now: NOW }).direction, 'out');
+  assert.equal(endFromBinotelCompleted({ startTime: '1' }, { now: NOW }), null);
+  assert.equal(endFromBinotelCompleted(null, { now: NOW }), null);
 });

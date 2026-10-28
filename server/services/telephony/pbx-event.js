@@ -107,3 +107,28 @@ export function ringFromBinotelSettings(body, { now = Date.now() } = {}) {
     at: isoOf(now),
   };
 }
+
+/**
+ * FIX_318_V1 (C2) — Binotel «звонок завершён» (apiCallCompleted, callDetails) —
+ * конец живого звонка, который открыл «кто звонит»: тот же ключ
+ * binotel:<generalCallID>. Без него «Входящий звонок» висел на панели три
+ * минуты (RINGING_MAX_MS) и пищал 40 секунд после того, как трубку положили.
+ * answered — разговор был (billsec > 0 или disposition ANSWER): отдельного
+ * события «ответили» Binotel вебхуком не шлёт, а без этой пометки отвеченный
+ * звонок показался бы «Пропущен». Без номера звонка — null (закрывать нечего).
+ */
+export function endFromBinotelCompleted(details, { now = Date.now() } = {}) {
+  if (!details || typeof details !== 'object') return null;
+  const id = String(details.generalCallID || '').trim();
+  if (!id) return null;
+  const answered = Number(details.billsec) > 0 || /^answer/i.test(String(details.disposition || '').trim());
+  return {
+    uuid: 'binotel:' + id,
+    event: END,
+    direction: Number(details.callType) === 1 ? 'out' : 'in',
+    caller: dialableNumber(details.externalNumber),
+    callee: dialableNumber(details.internalNumber),
+    at: isoOf(now),
+    answered,
+  };
+}
