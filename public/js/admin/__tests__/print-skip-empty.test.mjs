@@ -114,6 +114,36 @@ test('заключение врача: раздел из пустоты (&nbsp;,
     }
 });
 
+// Ревью B2 — простой текст в угловых скобках («<норма>», «< 5 мм >», «<N>») —
+// текст врача: лист печатает его экранированным, а проверка пустоты срезала его
+// как тег и выбрасывала раздел вместе с заголовком.
+test('текст в угловых скобках — содержание раздела: печатается с заголовком; пробел и &#160; — по-прежнему пусто', () => {
+    for (const v of VARIANTS) for (const rich of [false, true]) {
+        const where = `${v}, rich=${rich}`;
+        // диагностика: «Описание» и «Заключение»
+        const dg = renderDesignedVariant('diag', v, S, diag({ description: '<норма>', conclusionBody: '<N>', conclusion: '<N>', ...withRich(rich) }));
+        assert.match(text(dg), /Описание.*&lt;норма&gt;/, where + ': «Описание» «<норма>» не напечатано');
+        assert.match(text(dg), /Заключение.*&lt;N&gt;/, where + ': «Заключение» «<N>» не напечатано');
+        for (const blank of [' ', '&#160;']) {
+            const t = text(renderDesignedVariant('diag', v, S, diag({ description: blank, ...withRich(rich) })));
+            assert.ok(!/Описание|Tavsif/.test(t), `${where}, ${JSON.stringify(blank)}: пустое «Описание» напечатано`);
+        }
+        // заключение врача: раздел, «Диагноз», строка рекомендаций
+        const base = { patientName: 'Азизов Бахтиёр', mrn: 'P-1', doctorName: 'Каримов Алишер', complaint: 'Кашель', ...withRich(rich) };
+        const cn = renderDesignedVariant('conclusion', v, S, { ...base, exam: '< 5 мм >', dx: '<N>', recsText: '<норма>' });
+        assert.ok(cn.includes('<span class="ru">Осмотр</span>'), where + ': раздел «< 5 мм >» не напечатан');
+        assert.match(text(cn), /&lt; 5 мм &gt;/, where + ': текст «< 5 мм >» не напечатан');
+        assert.match(text(cn), /Диагноз.*&lt;N&gt;/, where + ': «Диагноз» «<N>» не напечатан');
+        assert.match(text(cn), /Рекомендации.*&lt;норма&gt;/, where + ': рекомендация «<норма>» не напечатана');
+        for (const blank of [' ', '&#160;']) {
+            const html = renderDesignedVariant('conclusion', v, S, { ...base, exam: blank, dx: blank, recsText: blank });
+            assert.ok(!html.includes('<span class="ru">Осмотр</span>'), `${where}, ${JSON.stringify(blank)}: пустой «Осмотр» напечатан`);
+            assert.ok(!/Диагноз|Tashxis/.test(text(html)), `${where}, ${JSON.stringify(blank)}: пустой «Диагноз» напечатан`);
+            assert.ok(!/Рекомендации|Tavsiyalar/.test(text(html)), `${where}, ${JSON.stringify(blank)}: пустые «Рекомендации» напечатаны`);
+        }
+    }
+});
+
 // ── шапка и карточки ────────────────────────────────────────────────────────
 const BARE = { patientName: 'Азизов Бахтиёр', mrn: 'P-1', doctorName: 'Каримов Алишер', radiologist: 'Каримов Алишер',
     dob: '', sex: '', phone: '', doctorSpec: '', service: '', doctorPhone: '',

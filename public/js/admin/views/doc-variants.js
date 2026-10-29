@@ -46,9 +46,14 @@ function richBody(v, d) {
 // пробел U+200B — пусто: раньше раздел проверялся истинностью строки, и «&nbsp;»
 // печатался заголовком над пустотой. Разметка (снимок с меткой d.rich) — по
 // очищенной, то есть по тому, что ляжет на лист.
+// Ревью B2 — теги срезаются только у настоящей разметки (hasMarkup). Простой
+// текст лист печатает экранированным, и «<норма>», «< 5 мм >», «<N>» — текст
+// врача, а не тег: «<» экранируется, иначе htmlToText срезал бы его и раздел
+// пропал бы с заголовком. &#160; и невидимые знаки и здесь — пусто.
 function hasBody(v, d) {
     const s = String(v == null ? '' : v);
-    return richHasContent((d && d.rich && hasMarkup(s)) ? sanitizeStoredHtml(s) : s);
+    if (!hasMarkup(s)) return richHasContent(s.replace(/</g, '&lt;'));
+    return richHasContent((d && d.rich) ? sanitizeStoredHtml(s) : s);
 }
 // PRINT_SKIP_EMPTY_V1 — заполнено ли поле шапки или карточки (простой текст).
 function filled(v) { return !textIsBlank(v); }
