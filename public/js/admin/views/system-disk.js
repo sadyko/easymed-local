@@ -19,7 +19,11 @@ export async function renderDiskCard(root, { admin }) {
         h('div', { class: 'sys-card-head' }, Icon('Database', { size: 16 }),
             h('span', null, 'Место на диске')));
     root.appendChild(card);
-    const body = h('div', { class: 'sys-disk', style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
+    // Полный подсчёт обходит папки (на большом хранилище — секунды): пока он
+    // идёт, карточка говорит, что считает, а копии ниже уже на экране
+    // (views/clinic-data.js грузит их параллельно).
+    const body = h('div', { class: 'sys-disk', style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+        h('p', { class: 'muted sys-note', role: 'status' }, 'Считаем место на диске…'));
     card.appendChild(body);
 
     let view = null;

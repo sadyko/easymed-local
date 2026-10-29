@@ -48,19 +48,23 @@ export async function renderClinicData(root, ctx = {}) {
 
     // DISK_GUARD_V1 — «Место на диске» над копиями: красное («мало места»,
     // «копия не сделана») должно быть видно первым, а копии — главное, что это
-    // место занимает. Только администратору, как и сами копии.
+    // место занимает. Только администратору, как и сами копии. Все три
+    // карточки встают на место сразу, а место на диске и список копий грузятся
+    // параллельно: подсчёт места обходит папки и может идти секунды — копии и
+    // опасная зона его не ждут (карточка места пока пишет «Считаем…»).
     const diskRoot = h('div');
-    wrap.appendChild(diskRoot);
-    await renderDiskCard(diskRoot, { admin });
-
-    // Backups is awaited so this function resolves only once the whole page is
-    // real — the fake-DOM tests (and the human eye) rely on that, the same way
-    // views/updates.js did when it owned this card.
     const bakRoot = h('div');
-    wrap.appendChild(bakRoot);
-    await renderBackupsCard(bakRoot, { admin });
-
     const dzRoot = h('div');
+    wrap.appendChild(diskRoot);
+    wrap.appendChild(bakRoot);
     wrap.appendChild(dzRoot);
     renderDangerCard(dzRoot, { admin });
+
+    // Both are awaited so this function resolves only once the whole page is
+    // real — the fake-DOM tests (and the human eye) rely on that, the same way
+    // views/updates.js did when it owned the backups card.
+    await Promise.all([
+        renderDiskCard(diskRoot, { admin }),
+        renderBackupsCard(bakRoot, { admin }),
+    ]);
 }

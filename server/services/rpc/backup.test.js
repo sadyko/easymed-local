@@ -284,14 +284,59 @@ test('DISK_GUARD_V1: disk_usage — только администратору; �
   assert.equal(r.backups_bytes, made.size, 'снимок файлов — жёсткие ссылки, места он не занимает и не считается');
   assert.equal(r.versions_bytes, null, 'из исходников папки versions/ нет');
   assert.deepEqual(r.partial, [], 'всё сосчитано полностью');
-  assert.deepEqual(r.copy_refused, { at: '2026-10-29T03:05:00.000Z', kind: 'daily', need_bytes: 2 * GB, free_bytes: GB });
+  assert.equal(r.copy_refused, null, 'места на копию уже хватает — старый отказ не показывается');
+  assert.equal(readGuard(dir).copy_refused.kind, 'daily', 'а в disk-guard.json он остаётся — для журнала');
   assert.equal(r.update_refused, null);
   assert.equal(r.kept_over_cap, null);
 
   const q = await diskUsage(db, { quick: true }, ADMIN);
   assert.equal('storage_bytes' in q, false, 'колокол спрашивает каждую минуту — без обхода папок');
   assert.equal('backups_bytes' in q, false);
-  assert.deepEqual(q.copy_refused, r.copy_refused);
+  assert.equal(q.copy_refused, null);
+});
+
+// Ежедневная копия делается раз в день: освободили место днём — следующей
+// копии не будет до завтра, и красное «Копия не сделана» висело бы весь день.
+// Пока места на копию не хватает (база × 1,2 + 1 ГБ) — отказ виден.
+test('DISK_GUARD_V1: отказ в копии виден, пока места на копию не хватает; хватает — не показывается', async () => {
+  const { db, dir } = fresh();
+  fs.writeFileSync(path.join(dir, 'easymed.db'), Buffer.alloc(5000));
+  const refusal = { at: '2026-10-29T03:05:00.000Z', kind: 'daily', need_bytes: 2 * GB, free_bytes: GB };
+  noteGuard(dir, { copy_refused: refusal });
+  try {
+    __setDiskSpaceForTests(() => ({ free: GB / 2, total: 100 * GB }));   // нужно ~1 ГБ
+    assert.deepEqual((await diskUsage(db, { quick: true }, ADMIN)).copy_refused, refusal);
+    assert.deepEqual((await diskUsage(db, {}, ADMIN)).copy_refused, refusal);
+    __setDiskSpaceForTests(() => ({ free: 2 * GB, total: 100 * GB }));
+    assert.equal((await diskUsage(db, { quick: true }, ADMIN)).copy_refused, null, 'место освободили — красного больше нет');
+    __setDiskSpaceForTests(() => null);
+    assert.deepEqual((await diskUsage(db, { quick: true }, ADMIN)).copy_refused, refusal, 'платформа не сказала — отказ не прячем');
+  } finally {
+    __setDiskSpaceForTests(ROOMY);
+  }
+  assert.deepEqual(readGuard(dir).copy_refused, refusal);
+});
+
+test('DISK_GUARD_V1: размер базы — вместе с журналом -wal', async () => {
+  const { db, dir } = fresh();
+  fs.writeFileSync(path.join(dir, 'easymed.db'), Buffer.alloc(5000));
+  fs.writeFileSync(path.join(dir, 'easymed.db-wal'), Buffer.alloc(700));
+  assert.equal((await diskUsage(db, {}, ADMIN)).db_bytes, 5700);
+});
+
+test('DISK_GUARD_V1: обход не идёт по ссылкам (junction, symlink) — чужая папка не считается', async () => {
+  const dir = tmpDir('em-diskusage-link-');
+  const outside = tmpDir('em-diskusage-outside-');
+  fs.writeFileSync(path.join(outside, 'big.bin'), Buffer.alloc(9000));
+  fs.mkdirSync(path.join(dir, 'storage'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'storage', 'a.pdf'), Buffer.alloc(100));
+  fs.symlinkSync(outside, path.join(dir, 'storage', 'j'), 'junction');
+  try {
+    fs.symlinkSync(path.join(outside, 'big.bin'), path.join(dir, 'storage', 'f.bin'), 'file');
+  } catch (e) {
+    if (e.code !== 'EPERM') throw e;   // без прав на symlink файла — проверяем только junction
+  }
+  assert.equal((await diskUsageReport(dir, { cacheMs: 0 })).storage_bytes, 100);
 });
 
 test('DISK_GUARD_V1: «мало места» — свободно меньше 10 % диска или меньше 5 ГБ', async () => {
@@ -300,6 +345,7 @@ test('DISK_GUARD_V1: «мало места» — свободно меньше 1
     for (const [free, total, low] of [
       [4 * GB, 1000 * GB, true], [50 * GB, 1000 * GB, true], [101 * GB, 1000 * GB, false],
       [6 * GB, 50 * GB, false], [4 * GB, 50 * GB, true],
+      [4 * GB, 30 * GB, true],   // 13 % свободно, но меньше 5 ГБ — правило «меньше 5 ГБ» само по себе
     ]) {
       __setDiskSpaceForTests(() => ({ free, total }));
       assert.equal((await diskUsage(db, { quick: true }, ADMIN)).low, low, `${free / GB} ГБ из ${total / GB}`);
@@ -322,17 +368,26 @@ test('DISK_GUARD_V1: платформа не сказала, сколько св
   }
 });
 
-test('DISK_GUARD_V1: «Резервные копии» — вся папка копий: отложенные с журналом и обрывки считаются, снимки файлов — нет', async () => {
+// Снимок файлов .files — жёсткие ссылки на те же файлы storage: места они не
+// занимают. Но файл снимка, у которого ссылка одна (storage удалили «Удалить
+// все данные» без копий или ссылку сделать не удалось и файл скопирован), —
+// настоящее место, и оно — в папке копий.
+test('DISK_GUARD_V1: «Резервные копии» — вся папка копий: отложенные с журналом, обрывки и единственные копии файлов считаются, жёсткие ссылки — нет', async () => {
   const { db, dir } = fresh();
   const b = path.join(dir, 'backups');
-  fs.mkdirSync(path.join(b, 'replaced-20261001-090000.files', 'x'), { recursive: true });
+  const snap = path.join(b, 'replaced-20261001-090000.files', 'x');
+  fs.mkdirSync(snap, { recursive: true });
+  fs.mkdirSync(path.join(dir, 'storage', 'x'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'storage', 'x', 'scan.pdf'), Buffer.alloc(9000));
+  fs.linkSync(path.join(dir, 'storage', 'x', 'scan.pdf'), path.join(snap, 'scan.pdf'));   // nlink 2
+  fs.writeFileSync(path.join(snap, 'gone.pdf'), Buffer.alloc(600));                        // nlink 1
   fs.writeFileSync(path.join(b, 'replaced-20261001-090000.db'), Buffer.alloc(700));
   fs.writeFileSync(path.join(b, 'replaced-20261001-090000.db-wal'), Buffer.alloc(300));
-  fs.writeFileSync(path.join(b, 'replaced-20261001-090000.files', 'x', 'scan.pdf'), Buffer.alloc(9000));
   fs.writeFileSync(path.join(b, 'daily-20261002-030000.db'), Buffer.alloc(40));   // обрывок
   fs.writeFileSync(path.join(b, 'daily-20261002-030000.db.broken'), 'partial');
   const r = await diskUsage(db, {}, ADMIN);
-  assert.equal(r.backups_bytes, 700 + 300 + 40 + 'partial'.length);
+  assert.equal(r.backups_bytes, 700 + 300 + 40 + 'partial'.length + 600);
+  assert.equal(r.storage_bytes, 9000, 'файл со ссылкой — один раз, в хранилище');
 });
 
 // Отказ обновления «нет места» (control/updater.js) правдив, только пока клиника
@@ -385,4 +440,20 @@ test('DISK_GUARD_V1: размеры папок держатся минуту —
   assert.equal((await diskUsageReport(dir, { now })).storage_bytes, 100, 'через 30 с — тот же подсчёт');
   t += 31_000;
   assert.equal((await diskUsageReport(dir, { now })).storage_bytes, 150, 'через минуту — заново');
+});
+
+test('DISK_GUARD_V1: минута считается от конца обхода — долгий обход не запускает второй рядом', async () => {
+  const dir = tmpDir('em-diskusage-cache-end-');
+  fs.mkdirSync(path.join(dir, 'storage'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'storage', 'a.pdf'), Buffer.alloc(100));
+  let t = 0;
+  const now = () => t;
+  const first = diskUsageReport(dir, { now });   // обход начался на 0-й секунде…
+  t = 100_000;                                     // …и закончился на 100-й
+  assert.equal((await first).storage_bytes, 100);
+  fs.writeFileSync(path.join(dir, 'storage', 'b.pdf'), Buffer.alloc(50));
+  t = 130_000;
+  assert.equal((await diskUsageReport(dir, { now })).storage_bytes, 100, '30 с после конца обхода — тот же подсчёт');
+  t = 161_000;
+  assert.equal((await diskUsageReport(dir, { now })).storage_bytes, 150);
 });

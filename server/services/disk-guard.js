@@ -181,11 +181,14 @@ export const TREE_MAX_ENTRIES = 100_000;
 export const TREE_CACHE_MS = 60_000;
 const STAT_BATCH = 64;
 
-async function sumSizes(files) {
+// soleOnly — считать только файлы с одной ссылкой (nlink 1): файл с жёсткой
+// ссылкой занимает место один раз, и это место уже сосчитано там, где лежит
+// вторая ссылка (storage).
+async function sumSizes(files, soleOnly = false) {
   let n = 0;
   for (let i = 0; i < files.length; i += STAT_BATCH) {
     const sizes = await Promise.all(files.slice(i, i + STAT_BATCH)
-      .map((p) => fs.promises.stat(p).then((s) => s.size, () => 0)));   // исчез между чтением и замером — 0
+      .map((p) => fs.promises.stat(p).then((s) => (soleOnly && s.nlink > 1 ? 0 : s.size), () => 0)));   // исчез между чтением и замером — 0
     for (const s of sizes) n += s;
   }
   return n;
@@ -193,45 +196,53 @@ async function sumSizes(files) {
 
 /**
  * Сумма размеров файлов в папке со всеми вложенными; нет папки — 0. Ссылки
- * (junction, symlink) не обходятся: Dirent ссылки — не папка. skipDirs(имя)
- * — какие вложенные папки не считать. Больше maxEntries записей — счёт
- * останавливается: complete false, bytes — «не меньше».
+ * (junction, symlink) не обходятся: Dirent ссылки — не папка и не файл.
+ * soleOnlyDirs(имя) — вложенные папки, где считаются только файлы с одной
+ * ссылкой (снимки файлов .files: жёсткие ссылки на storage места не
+ * занимают, а единственная копия файла — занимает). Больше maxEntries
+ * записей — счёт останавливается: complete false, bytes — «не меньше».
  * @returns {Promise<{bytes:number, complete:boolean}>}
  */
-export async function treeBytes(dir, { skipDirs = null, maxEntries = TREE_MAX_ENTRIES } = {}) {
+export async function treeBytes(dir, { soleOnlyDirs = null, maxEntries = TREE_MAX_ENTRIES } = {}) {
   let bytes = 0;
   let left = maxEntries;
-  const stack = [dir];
+  const stack = [{ d: dir, soleOnly: false }];
   while (stack.length) {
-    const d = stack.pop();
+    const { d, soleOnly } = stack.pop();
     let entries;
     try { entries = await fs.promises.readdir(d, { withFileTypes: true }); } catch { continue; }
     const files = [];
     for (const e of entries) {
-      if (left <= 0) return { bytes: bytes + await sumSizes(files), complete: false };
+      if (left <= 0) return { bytes: bytes + await sumSizes(files, soleOnly), complete: false };
       left--;
       const p = path.join(d, e.name);
       if (e.isDirectory()) {
-        if (!(skipDirs && skipDirs(e.name))) stack.push(p);
+        stack.push({ d: p, soleOnly: soleOnly || !!(soleOnlyDirs && soleOnlyDirs(e.name)) });
       } else if (e.isFile()) {
         files.push(p);
       }
     }
-    bytes += await sumSizes(files);
+    bytes += await sumSizes(files, soleOnly);
   }
   return { bytes, complete: true };
 }
 
 // Подсчёты папок: ключ (папка данных, папка версий, предел) → {at, promise}.
+// at — когда обход ЗАКОНЧИЛСЯ (null — ещё идёт): минута считается от готового
+// числа, а идущий обход делят все, сколько бы он ни шёл, — второй полный
+// обход рядом с первым не запускается.
 const sizeCache = new Map();
 
 function folderSizes(dataDir, versionsDir, { maxEntries, cacheMs, now }) {
   const t = now();
-  for (const [k, v] of sizeCache) if (t - v.at >= Math.max(cacheMs, TREE_CACHE_MS)) sizeCache.delete(k);
+  for (const [k, v] of sizeCache) {
+    if (v.at !== null && t - v.at >= Math.max(cacheMs, TREE_CACHE_MS)) sizeCache.delete(k);
+  }
   const key = JSON.stringify([path.resolve(dataDir), versionsDir ? path.resolve(versionsDir) : null, maxEntries]);
   const hit = sizeCache.get(key);
-  if (hit && t - hit.at < cacheMs) return hit.promise;
-  const promise = (async () => {
+  if (hit && (hit.at === null || t - hit.at < cacheMs)) return hit.promise;
+  const entry = { at: null, promise: null };
+  entry.promise = (async () => {
     const partial = [];
     const measure = async (field, dir, opts = {}) => {
       const r = await treeBytes(dir, { ...opts, maxEntries });
@@ -239,16 +250,19 @@ function folderSizes(dataDir, versionsDir, { maxEntries, cacheMs, now }) {
       return r.bytes;
     };
     // Копии — вся папка backups/: и отложенные восстановлением и откатом с их
-    // журналами, и неубранные обрывки (.broken) — это настоящее место. Снимки
-    // файлов .files не считаются: это жёсткие ссылки на те же файлы storage.
-    const backups_bytes = await measure('backups_bytes', path.join(dataDir, 'backups'), { skipDirs: (n) => n.endsWith('.files') });
+    // журналами, и неубранные обрывки (.broken) — это настоящее место. В
+    // снимках файлов .files — только файлы с одной ссылкой: жёсткая ссылка на
+    // файл storage места не занимает, а файл, которого в storage уже нет
+    // («Удалить все данные» без копий) или который скопирован (ссылку сделать
+    // не удалось), — занимает.
+    const backups_bytes = await measure('backups_bytes', path.join(dataDir, 'backups'), { soleOnlyDirs: (n) => n.endsWith('.files') });
     const storage_bytes = await measure('storage_bytes', path.join(dataDir, 'storage'));
     const versions_bytes = versionsDir ? await measure('versions_bytes', versionsDir) : null;
     return { backups_bytes, storage_bytes, versions_bytes, partial };
   })();
-  sizeCache.set(key, { at: t, promise });
-  promise.catch(() => sizeCache.delete(key));
-  return promise;
+  sizeCache.set(key, entry);
+  entry.promise.then(() => { entry.at = now(); }, () => { if (sizeCache.get(key) === entry) sizeCache.delete(key); });
+  return entry.promise;
 }
 
 /**
@@ -265,15 +279,20 @@ export async function diskUsageReport(dataDir, {
 } = {}) {
   const space = diskSpaceImpl(dataDir);
   const guard = readGuard(dataDir);
+  const db = dbBytes(path.join(dataDir, 'easymed.db'));
   const out = {
     free_bytes: space ? space.free : null,
     total_bytes: space ? space.total : null,
     low: !!space && (space.free < FREE_SHARE_MIN * space.total || space.free < LOW_FREE_BYTES),
-    copy_refused: guard.copy_refused || null,
+    // Ежедневная копия делается раз в день: место освободили днём — до завтра
+    // её не будет, и «Копия не сделана» висела бы на экране, хотя место есть.
+    // Пока места на копию хватает, отказ не показывается; в disk-guard.json он
+    // остаётся (журнал) и снимается первой же сделанной копией.
+    copy_refused: (guard.copy_refused && !(space && space.free >= copyNeedBytes(db))) ? guard.copy_refused : null,
     update_refused: guard.update_refused || null,
     kept_over_cap: guard.kept_over_cap || null,
   };
   if (quick) return out;
   const sizes = await folderSizes(dataDir, versionsDir, { maxEntries, cacheMs, now });
-  return { ...out, db_bytes: dbBytes(path.join(dataDir, 'easymed.db')), ...sizes, partial: [...sizes.partial] };
+  return { ...out, db_bytes: db, ...sizes, partial: [...sizes.partial] };
 }

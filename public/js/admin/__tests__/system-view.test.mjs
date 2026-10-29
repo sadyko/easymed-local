@@ -101,6 +101,7 @@ let lastRestoreBody, lastResetBody, lastRequestBody, lastEnrollBody;
 let backupRows, restoreRespond, resetRespond;
 let createRespond = null;   // DISK_GUARD_V1 — null: обычный успешный ответ
 let diskUsageCalls = 0, diskUsageData = {}, lastDiskUsageBody = null;   // DISK_GUARD_V1
+let diskUsageGate = null;   // DISK_GUARD_V1 — обещание: ответ disk_usage ждёт его (долгий подсчёт)
 
 function resetServer() {
   backupListCalls = 0; backupCreateCalls = 0; restoreCalls = 0; resetCalls = 0; requestCalls = 0; enrollCalls = 0;
@@ -112,7 +113,7 @@ function resetServer() {
   restoreRespond = () => jsonOk({ ok: true, restarting: true });
   resetRespond = () => jsonOk({ ok: true, restarting: true });
   createRespond = null;
-  diskUsageCalls = 0; diskUsageData = {}; lastDiskUsageBody = null;
+  diskUsageCalls = 0; diskUsageData = {}; lastDiskUsageBody = null; diskUsageGate = null;
 }
 
 globalThis.fetch = async (url, opts) => {
@@ -120,7 +121,11 @@ globalThis.fetch = async (url, opts) => {
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/rpc/update_status')) return jsonOk({ current_version: '2.3.0', offer: null, approved: false, hour: null, scheduled_at: null, last_result: null });
   if (u.startsWith('/api/rpc/backup_list')) { backupListCalls++; return jsonOk({ backups: backupRows }); }
-  if (u.startsWith('/api/rpc/disk_usage')) { diskUsageCalls++; lastDiskUsageBody = body; return jsonOk(diskUsageData); }   // DISK_GUARD_V1
+  if (u.startsWith('/api/rpc/disk_usage')) {   // DISK_GUARD_V1
+    diskUsageCalls++; lastDiskUsageBody = body;
+    if (diskUsageGate) await diskUsageGate;
+    return jsonOk(diskUsageData);
+  }
   if (u.startsWith('/api/rpc/backup_create')) {
     backupCreateCalls++;
     if (createRespond) return createRespond();
@@ -474,6 +479,27 @@ test('DISK_GUARD_V1: администратор видит «Место на д�
   assert.match(text, /вся папка копий/, 'подсказка: в «Резервных копиях» — и копии до восстановления и до отката');
   assert.ok(findByClass(root, 'sys-modal-warn'), 'предупреждение — красной плашкой');
   assert.ok(text.indexOf('Место на диске') < text.indexOf('Создать копию сейчас'), 'карточка места — над копиями');
+});
+
+test('DISK_GUARD_V1: копии и опасная зона рисуются, пока место на диске ещё считается; в карточке места — «Считаем…»', async () => {
+  let release;
+  diskUsageGate = new Promise((r) => { release = r; });
+  diskUsageData = DISK_LOW();
+  const root = mk('div');
+  const done = renderClinicData(root);
+  await new Promise((r) => setTimeout(r, 20));
+  const pending = textOf(root);
+  assert.equal(diskUsageCalls, 1);
+  assert.match(pending, /Место на диске/);
+  assert.match(pending, /Считаем место на диске…/);
+  assert.match(pending, /ежедневная/, 'список копий пришёл, не дожидаясь подсчёта места');
+  assert.match(pending, /Опасная зона/);
+  release();
+  await done;
+  const text = textOf(root);
+  assert.doesNotMatch(text, /Считаем место на диске…/);
+  assert.match(text, /База данных2 ГБ/);
+  assert.ok(text.indexOf('Место на диске') < text.indexOf('Создать копию сейчас'), 'карточка места — по-прежнему над копиями');
 });
 
 test('DISK_GUARD_V1: английский экран — гигабайты с точкой, без кириллицы в карточке места', async () => {
