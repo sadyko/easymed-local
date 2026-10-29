@@ -188,9 +188,36 @@ const p2 = (n) => String(n).padStart(2, '0');
 const dayStamp = (d) => `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`;
 const timeStamp = (d) => `${dayStamp(d)}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
 
+// DISK_GUARD_V1 (ревью C3) — отложенные копии узнаются только по имени, которое
+// ставят сами восстановление (applyRestore) и откат (install/rollback.mjs):
+// вид-ГГГГММДД-ччммсс.db, время местное. Файл, названный руками
+// (rollback-before-fix.db), — чужой: его не удаляют, не считают, не показывают.
+const SET_ASIDE_RE = /^(replaced|rollback)-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.db$/;
+
 function kindOf(name) {
-  const m = /^(pre|daily|manual|safety|final|replaced|rollback)-/.exec(name);
-  return m ? m[1] : null;
+  const m = /^(pre|daily|manual|safety|final)-/.exec(name);
+  if (m) return m[1];
+  const s = SET_ASIDE_RE.exec(name);
+  return s ? s[1] : null;
+}
+
+// DISK_GUARD_V1 (ревью C3) — момент, когда базу отложили, из имени; не
+// отложенная копия — NaN.
+function setAsideTimeMs(name) {
+  const s = SET_ASIDE_RE.exec(name);
+  if (!s) return NaN;
+  const [y, mo, d, h, mi, se] = s.slice(2).map(Number);
+  return new Date(y, mo - 1, d, h, mi, se).getTime();
+}
+
+// DISK_GUARD_V1 (ревью C3) — время копии для «самых новых» и для списка.
+// Отложенная база хранит дату файла ЖИВОЙ базы, а не момента, когда её
+// отложили (а восстановленная на Windows база — дату копии, из которой
+// пришла): по дате файла свежая отложенная копия ушла бы первой, а в списке
+// стояла бы чужая дата. Поэтому у отложенных время — из имени.
+function entryTimeMs(name, st) {
+  const t = setAsideTimeMs(name);
+  return Number.isFinite(t) ? t : st.mtimeMs;
 }
 
 // DISK_GUARD_V1 — копии, которые удаляются по объёму (п. 5). Ручные и
@@ -199,8 +226,10 @@ function kindOf(name) {
 // п. 5 называет автоматическими только эти три вида, а у отложенных своё
 // правило — две последние (п. 6); «до отката» к тому же единственная копия
 // базы на момент отката (из неё поддержка переносит внесённое после
-// обновления). В объём копий (30 %) они входят — место на диске они занимают
-// по-настоящему, и панель «Место на диске» считает их копиями.
+// обновления). В долю копий (30 %) они тоже не входят (ревью C3): иначе
+// большие отложенные копии при каждой новой копии стирали бы ежедневные до
+// одной, и на экране об этом не было бы ни слова. Свободное место они
+// уменьшают сами собой, а панель «Место на диске» показывает всю папку копий.
 const AUTO_KINDS = new Set(['daily', 'pre', 'safety']);
 
 // DISK_GUARD_V1 — место копии со всеми её частями: .db и (у отложенных
@@ -227,7 +256,7 @@ function backupEntries(dir) {
     let st;
     try { st = fs.statSync(path.join(dir, f)); } catch { continue; }
     if (!st.isFile()) continue;
-    out.push({ name: f, kind, mtimeMs: st.mtimeMs, bytes: entryBytes(dir, f) });
+    out.push({ name: f, kind, mtimeMs: entryTimeMs(f, st), bytes: entryBytes(dir, f) });
   }
   return out;
 }
@@ -235,13 +264,51 @@ function backupEntries(dir) {
 // DISK_GUARD_V1 — удалить копию целиком: .db, -wal/-shm и снимок файлов.
 // true — копии больше нет (занятый файл на Windows — обычное дело, тогда false).
 function removeEntry(dir, name) {
-  for (const suffix of ['', '-wal', '-shm']) {
-    try { fs.rmSync(path.join(dir, name + suffix), { force: true }); } catch { /* занятый файл — не повод падать */ }
+  try { fs.rmSync(path.join(dir, name), { force: true }); } catch { /* занятый файл — не повод падать */ }
+  // DISK_GUARD_V1 (ревью C3) — .db не удалился (антивирус, его открыла
+  // поддержка): копия остаётся, а с ней её -wal/-shm и снимок файлов. Без
+  // журнала оставшийся .db потерял бы последние записи. Следующая чистка
+  // попробует снова.
+  if (fs.existsSync(path.join(dir, name))) return false;
+  for (const suffix of ['-wal', '-shm']) {
+    try { fs.rmSync(path.join(dir, name + suffix), { force: true }); } catch { /* у отложенных копий его уберёт sweepSetAsideOrphans */ }
   }
   // PATIENT_FILE_ATTACH_V1 — снимок файлов уходит ВМЕСТЕ со своей копией базы:
   // оставшийся сайдкар держал бы жёсткие ссылки на файлы, удалённые из storage.
   try { fs.rmSync(path.join(dir, sidecarFor(name)), { recursive: true, force: true }); } catch { /* то же */ }
-  return !fs.existsSync(path.join(dir, name));
+  return true;
+}
+
+/**
+ * DISK_GUARD_V1 (ревью C3) — журналы -wal/-shm отложенной копии, чей .db уже
+ * удалён (журнал не удалился вместе с ним, или .db убрали руками). Журнал без
+ * базы ничего не восстанавливает и только занимает место. Убирается, когда у
+ * его вида есть KEEP_BY_KIND копий новее, — то есть вышел за «две последние».
+ * Журнал новее них остаётся: это может быть половина отложенной базы, перенос
+ * которой оборвался (applyRestore при повторе переносит оставшийся -wal под
+ * новым временем), и тогда он нужен поддержке вместе с той базой.
+ */
+function sweepSetAsideOrphans(dir, keep) {
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return; }
+  const present = new Set(names);
+  const times = new Map();   // вид → время каждой его копии (.db) на диске
+  for (const f of names) {
+    const s = SET_ASIDE_RE.exec(f);
+    if (!s) continue;
+    if (!times.has(s[1])) times.set(s[1], []);
+    times.get(s[1]).push(setAsideTimeMs(f));
+  }
+  for (const f of names) {
+    const m = /^(.+\.db)-(?:wal|shm)$/.exec(f);
+    if (!m || present.has(m[1]) || keep.has(m[1])) continue;
+    const s = SET_ASIDE_RE.exec(m[1]);
+    if (!s) continue;
+    const t = setAsideTimeMs(m[1]);
+    const newer = (times.get(s[1]) || []).filter((x) => x > t).length;
+    if (newer < KEEP_BY_KIND[s[1]]) continue;
+    try { fs.rmSync(path.join(dir, f), { force: true }); } catch { /* повторим при следующей чистке */ }
+  }
 }
 
 const newestOf = (entries, kind) => entries
@@ -345,8 +412,8 @@ export function ensureCopySpace(dataDir, {
  * восстанавливают), САМАЯ НОВАЯ копия каждого автоматического вида (поправка
  * 1 плана 3.18.1: диск, занятый другими файлами, не должен оставлять клинику
  * совсем без ежедневной копии, точки отката и страховочной), ручные,
- * финальные, отложенные восстановлением и откатом (их место считается, но
- * держит их своё правило — см. AUTO_KINDS). Не уложились и так — строка
+ * финальные, отложенные восстановлением и откатом (их и в доле копий нет: их
+ * держит своё правило — см. AUTO_KINDS). Не уложились и так — строка
  * «Мало места на диске» в журнал программы (на «Данных клиники» то же видно
  * по самому месту). Если ручные и финальные одни больше 30 % — отметка
  * kept_over_cap (только о них: так и говорит её текст): предупреждение на
@@ -356,7 +423,8 @@ export function ensureCopySpace(dataDir, {
 function pruneBySize(dir, { protect, diskSpaceImpl, dbBytesImpl = dbBytes, now }) {
   const space = diskSpaceImpl(dir);
   if (!space || !(space.total > 0)) return [];
-  const entries = backupEntries(dir);
+  // DISK_GUARD_V1 (ревью C3) — отложенные копии в долю копий не входят (AUTO_KINDS).
+  const entries = backupEntries(dir).filter((e) => !SET_ASIDE_KINDS.has(e.kind));
   let copies = entries.reduce((s, e) => s + e.bytes, 0);
   let free = space.free;
   // Место на следующую копию — по базе данных клиники рядом с backups/;
@@ -405,7 +473,7 @@ function pruneBySize(dir, { protect, diskSpaceImpl, dbBytesImpl = dbBytes, now }
  * отдельным файлом, и вернуть один .db значило бы потерять записи журнала.
  * Восстанавливаемая копия того же момента — страховочная (requestRestore
  * снимает её первой); вернуть «до отката» — работа поддержки Easy-Med.
- * Размер — вместе с -wal/-shm рядом.
+ * Размер — вместе с -wal/-shm рядом; время — из имени (entryTimeMs).
  *
  * @returns {{name:string, kind:string, size:number, mtimeMs:number, restorable:boolean}[]}
  */
@@ -423,7 +491,7 @@ export function listBackups(dataDir) {
         const st = fs.statSync(path.join(dir, f));
         if (!st.isFile()) return null;
         const kind = kindOf(f);
-        return { name: f, kind, size: entryBytes(dir, f), mtimeMs: st.mtimeMs, restorable: !SET_ASIDE_KINDS.has(kind) };
+        return { name: f, kind, size: entryBytes(dir, f), mtimeMs: entryTimeMs(f, st), restorable: !SET_ASIDE_KINDS.has(kind) };
       } catch { return null; }
     })
     .filter((e) => e !== null)
@@ -540,7 +608,8 @@ export function pruneBackupsByKind(dir, {
     let t;
     // Same per-file stat guard as pruneBackups, same hazard: a vanished file
     // must not abort pruning of the ones still there.
-    try { t = fs.statSync(path.join(dir, f)).mtimeMs; } catch { continue; }
+    // DISK_GUARD_V1 (ревью C3) — у отложенных копий время из имени (entryTimeMs).
+    try { t = entryTimeMs(f, fs.statSync(path.join(dir, f))); } catch { continue; }
     if (!byKind.has(kind)) byKind.set(kind, []);
     byKind.get(kind).push({ f, t });
   }
@@ -552,6 +621,7 @@ export function pruneBackupsByKind(dir, {
       removeEntry(dir, f);
     }
   }
+  sweepSetAsideOrphans(dir, keep);   // DISK_GUARD_V1 (ревью C3)
   try {
     pruneBySize(dir, { protect: keep, diskSpaceImpl, dbBytesImpl, now });
   } catch (e) {

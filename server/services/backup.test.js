@@ -879,14 +879,17 @@ test('DISK_GUARD_V1: до восстановления и до отката по
     'ушли только вторые по старости; защищённые остались вместе с журналами');
 });
 
-// Решение DISK_GUARD_V1 (C3): для предела по объёму эти копии НЕ автоматические
-// (п. 5 называет автоматическими только ежедневные, перед обновлением и
-// страховочные) — по объёму они не удаляются, их держит своё правило: две
-// последние. Но место на диске они занимают по-настоящему, и в объём копий
-// (30 %) входят, как и на панели «Место на диске». Предупреждение kept_over_cap
-// — о ручных и финальных, его текст называет только их.
-test('DISK_GUARD_V1: предел по объёму — до восстановления и до отката входят в объём копий, но по объёму не удаляются', (tc) => {
-  tc.mock.method(console, 'warn', () => {});
+// Решение DISK_GUARD_V1 (C3, ревью): предел по объёму эти копии не трогает и не
+// считает. Они не автоматические (п. 5 называет автоматическими только
+// ежедневные, перед обновлением и страховочные), их держит своё правило — две
+// последние. В долю копий (30 %) они не входят: иначе большие отложенные копии
+// при каждой новой копии стирали бы ежедневные до одной, и на экране об этом не
+// было бы ни слова. Свободное место они уменьшают сами собой, а панель «Место
+// на диске» показывает всю папку копий. kept_over_cap — только о ручных и
+// финальных, его текст называет только их.
+test('DISK_GUARD_V1: предел по объёму — большие до восстановления и до отката не стирают ежедневные по доле копий', (tc) => {
+  const warns = [];
+  tc.mock.method(console, 'warn', (...a) => { warns.push(a.join(' ')); });
   const dir = tmpDir('em-sysbk-aside-cap-');
   const bd = path.join(dir, 'backups');
   fs.mkdirSync(bd);
@@ -897,11 +900,97 @@ test('DISK_GUARD_V1: предел по объёму — до восстанов�
   putSized(bd, 'replaced-20260803-090000.db-wal', 100, t); t += 1000;
   putSized(bd, 'rollback-20260804-090000.db', 300, t); t += 1000;
   putSized(bd, 'manual-20260805-100000.db', 100, t);
-  // 1000 КБ копий на «диске» 2000 КБ, свободна половина; предел 30 % — 600 КБ.
-  // Без отложенных копий было бы 300 КБ — в пределе, и ничего бы не ушло.
+  // «Диск» 2000 КБ, свободна половина; предел 30 % — 600 КБ. Отложенные одни —
+  // 700 КБ, остальные копии — 300 КБ: в пределе.
   pruneBackupsByKind(bd, { diskSpaceImpl: () => ({ free: 1000 * 1024, total: 2000 * 1024 }) });
-  assert.deepEqual(fs.readdirSync(bd).sort(), ['daily-20260802-030000.db', 'manual-20260805-100000.db',
-    'replaced-20260803-090000.db', 'replaced-20260803-090000.db-wal', 'rollback-20260804-090000.db'].sort(),
-  'ушла старшая ежедневная; самая новая ежедневная, ручная и отложенные остались, хоть копии всё ещё больше 30 %');
+  assert.deepEqual(fs.readdirSync(bd).sort(), ['daily-20260801-030000.db', 'daily-20260802-030000.db',
+    'manual-20260805-100000.db', 'replaced-20260803-090000.db', 'replaced-20260803-090000.db-wal',
+    'rollback-20260804-090000.db'].sort(),
+  'ничего не ушло: доля копий без отложенных — 15 %');
+  assert.ok(!warns.some((w) => /Мало места на диске|удалены старые/.test(w)), `ни удалений, ни тревоги: ${JSON.stringify(warns)}`);
   assert.equal(readGuard(dir).kept_over_cap, undefined, 'ручные и финальные одни в пределе — их предупреждения нет');
+});
+
+// --- DISK_GUARD_V1 (ревью C3): время отложенной копии, обрывки журналов, чужие имена ----
+
+const DAY = 86_400_000;
+
+// Отложенная база сохраняет дату файла ЖИВОЙ базы, а не момента, когда её
+// отложили (а восстановленная на Windows база — дату копии, из которой пришла).
+// Поэтому «две последние» и дата в списке — по времени в имени (местное, как у
+// остальных копий), иначе свежая отложенная копия ушла бы первой.
+test('DISK_GUARD_V1 (ревью C3): «две последние» и дата в списке — по времени в имени, а не по дате файла', () => {
+  const dir = tmpDir('em-sysbk-aside-ts-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  const now = Date.now();
+  putTrio(bd, 'replaced-20261001-090000', now - 10 * DAY);
+  putTrio(bd, 'replaced-20261010-090000', now - 5 * DAY);
+  putTrio(bd, 'replaced-20261020-090000', now - 30 * DAY);   // самая новая — а файл старше всех
+  putTrio(bd, 'rollback-20261002-120000', now - 2 * DAY);
+  putTrio(bd, 'rollback-20261011-120000', now - 40 * DAY);
+  putTrio(bd, 'rollback-20261021-120000', now - 50 * DAY);
+  pruneBackupsByKind(bd);
+  assert.deepEqual(fs.readdirSync(bd).sort(),
+    trioNames(['replaced-20261010-090000', 'replaced-20261020-090000', 'rollback-20261011-120000', 'rollback-20261021-120000']).sort(),
+    'ушли самые старые по имени: 1 и 2 октября');
+  assert.deepEqual(listBackups(dir).map((b) => [b.name, b.mtimeMs]), [
+    ['rollback-20261021-120000.db', new Date(2026, 9, 21, 12, 0, 0).getTime()],
+    ['replaced-20261020-090000.db', new Date(2026, 9, 20, 9, 0, 0).getTime()],
+    ['rollback-20261011-120000.db', new Date(2026, 9, 11, 12, 0, 0).getTime()],
+    ['replaced-20261010-090000.db', new Date(2026, 9, 10, 9, 0, 0).getTime()],
+  ], 'в списке — момент, когда базу отложили, и порядок по нему');
+});
+
+// Антивирус держит .db: копия остаётся — значит, остаются и её журналы. Без
+// -wal оставшийся .db потерял бы последние записи.
+test('DISK_GUARD_V1 (ревью C3): .db не удалился — его -wal и -shm остаются', (tc) => {
+  const dir = tmpDir('em-sysbk-aside-busy-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  let t = Date.now() - 1e6;
+  for (const day of ['01', '02', '03']) { putTrio(bd, `replaced-202608${day}-090000`, t); t += 1000; }
+  const busy = path.join(bd, 'replaced-20260801-090000.db');
+  const realRm = fs.rmSync;
+  tc.mock.method(fs, 'rmSync', (p, o) => {
+    if (path.resolve(String(p)) === busy) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    return realRm.call(fs, p, o);
+  });
+  pruneBackupsByKind(bd);
+  tc.mock.restoreAll();
+  assert.deepEqual(fs.readdirSync(bd).sort(),
+    trioNames(['replaced-20260801-090000', 'replaced-20260802-090000', 'replaced-20260803-090000']).sort(),
+    'занятая копия цела вместе с журналами');
+});
+
+// Журнал без своего .db (тот не удалился раньше, его убрали руками) убирается,
+// когда у его вида есть две копии новее. Журнал НОВЕЕ двух последних остаётся:
+// это может быть половина отложенной базы, перенос которой оборвался.
+test('DISK_GUARD_V1 (ревью C3): журналы без своего .db убираются, когда вышли за две последние', () => {
+  const dir = tmpDir('em-sysbk-aside-orphan-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  const t = Date.now() - 1e6;
+  for (const s of ['-wal', '-shm']) putSized(bd, `replaced-20260101-090000.db${s}`, 1, t);
+  for (const day of ['02', '03', '04']) putSized(bd, `replaced-202601${day}-090000.db`, 1, t);
+  for (const day of ['02', '03']) putSized(bd, `rollback-202601${day}-090000.db`, 1, t);
+  putSized(bd, 'rollback-20260104-090000.db-wal', 1, t);
+  pruneBackupsByKind(bd);
+  assert.deepEqual(fs.readdirSync(bd).sort(), ['replaced-20260103-090000.db', 'replaced-20260104-090000.db',
+    'rollback-20260102-090000.db', 'rollback-20260103-090000.db', 'rollback-20260104-090000.db-wal'].sort());
+});
+
+// Только имена, которые ставят сами восстановление и откат (вид-ГГГГММДД-ччммсс.db).
+// Файл, названный руками, — чужой: его не удаляют, не считают и не показывают.
+test('DISK_GUARD_V1 (ревью C3): названные руками rollback-*/replaced-* не трогаются и не показываются', () => {
+  const dir = tmpDir('em-sysbk-aside-hand-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  const t = Date.now() - 1e6;
+  const hand = ['rollback-before-support-fix.db', 'replaced-old.db', 'rollback-20260801-090000.1.db'];
+  for (const n of hand) putSized(bd, n, 1, t - 90 * DAY);
+  for (const day of ['02', '03', '04']) putSized(bd, `rollback-202608${day}-090000.db`, 1, t);
+  pruneBackupsByKind(bd);
+  assert.deepEqual(fs.readdirSync(bd).sort(), [...hand, 'rollback-20260803-090000.db', 'rollback-20260804-090000.db'].sort());
+  assert.deepEqual(listBackups(dir).map((b) => b.name).sort(), ['rollback-20260803-090000.db', 'rollback-20260804-090000.db']);
 });

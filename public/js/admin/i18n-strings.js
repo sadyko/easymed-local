@@ -4014,7 +4014,6 @@ export const STRINGS = {
   "ручная": {"en":"manual","ru":"ручная","uz":"qo'lda"},
   "страховочная (перед восстановлением)": {"en":"safety (before a restore)","ru":"страховочная (перед восстановлением)","uz":"ehtiyot (tiklashdan oldin)"},
   "перед удалением данных": {"en":"before data deletion","ru":"перед удалением данных","uz":"ma'lumotlarni o'chirishdan oldin"},
-  "заменённая при восстановлении": {"en":"replaced during a restore","ru":"заменённая при восстановлении","uz":"tiklashda almashtirilgan"},
   "Резервные копии": {"en":"Backups","ru":"Резервные копии","uz":"Zaxira nusxalar"},
   "Создать копию сейчас": {"en":"Create a backup now","ru":"Создать копию сейчас","uz":"Hozir nusxa yaratish"},
   "Создание копии…": {"en":"Creating a backup…","ru":"Создание копии…","uz":"Nusxa yaratilmoqda…"},
