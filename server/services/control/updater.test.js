@@ -1070,3 +1070,27 @@ test('DISK_GUARD_V1: установка не удалась (не из-за ме
   assert.match(outcome.detail, /pre-update database snapshot/);
   assert.equal(readGuard(dataDir).update_refused, undefined, 'это не отказ по месту');
 });
+
+test('DISK_GUARD_V1: версионная установка убирает data/update-staging, оставшийся от когда-то неправильной раскладки — до перезапуска', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { root, appRoot } = makeVersionedRoot('2.3.0');
+  // Остаток тех дней, когда клиника была разложена без versions/current:
+  // каждая предложенная версия ложилась сюда по ~55 МБ и не убиралась никогда.
+  const leftover = path.join(dataDir, 'update-staging', '2.2.0', 'server');
+  fs.mkdirSync(leftover, { recursive: true });
+  fs.writeFileSync(path.join(leftover, 'index.js'), '// old\n');
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  // Успешная установка кончается exit(75), после которого ничего не
+  // выполняется: папка должна исчезнуть ДО него.
+  const exits = [];
+  const exitImpl = (code) => exits.push({ code, staging: fs.existsSync(path.join(dataDir, 'update-staging')) });
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl });
+  } finally {
+    server.close();
+  }
+  assert.deepEqual(exits, [{ code: 75, staging: false }], 'установлено, и остаток убран до перезапуска');
+  assert.equal(path.resolve(fs.realpathSync(path.join(root, 'current'))), path.resolve(path.join(root, 'versions', '2.4.0')));
+});

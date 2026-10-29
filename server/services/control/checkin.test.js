@@ -1100,3 +1100,22 @@ test('DISK_GUARD_V1: нет отметки об отказе — поля disk_g
   await runCheckin(db, dir, { endpoint });
   assert.equal(received.disk_guard, undefined);
 });
+
+// Диск заполнился во время копии (ENOSPC / SQLITE_FULL): чисел нет, но отказ
+// по месту всё равно был — сообщается без чисел, а не пропадает.
+test('DISK_GUARD_V1: отказ по месту без чисел — disk_guard с null вместо чисел', async (t) => {
+  const { dir, db } = workspace();
+  fs.writeFileSync(path.join(dir, 'disk-guard.json'), JSON.stringify({
+    update_refused: { at: '2026-10-29T03:05:00.000Z', version: '3.18.1', need_bytes: null, free_bytes: null },
+  }));
+  let received;
+  const { server, endpoint } = await fakeServer((req, res, body) => {
+    received = JSON.parse(body);
+    jsonHandler(200, { licence: null, subscription: 'active', collect: [] })(req, res);
+  });
+  t.after(() => server.close());
+  await runCheckin(db, dir, { endpoint });
+  assert.deepEqual(received.disk_guard, {
+    update_refused: { version: '3.18.1', need_bytes: null, free_bytes: null, at: '2026-10-29T03:05:00.000Z' },
+  });
+});

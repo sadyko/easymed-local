@@ -302,7 +302,9 @@ test('a database snapshot that cannot be taken CANCELS the update', async () => 
     root: inst.root,
     version: inst.newVersion,
     exitImpl: exit.impl,
-    backupImpl: async () => { throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }); },
+    // DISK_GUARD_V1 — не ошибка места: полный диск клиники ok:false не пишет
+    // (тесты в конце файла), а прочий сбой копии — по-прежнему отказ установки.
+    backupImpl: async () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); },
   });
 
   assert.equal(result.ok, false);
@@ -311,7 +313,8 @@ test('a database snapshot that cannot be taken CANCELS the update', async () => 
   const outcome = readJsonFile(path.join(inst.dataDir, 'update-result.json'));
   assert.equal(outcome.ok, false);
   assert.equal(outcome.db, 'untouched');
-  assert.match(outcome.detail, /ENOSPC/);
+  assert.match(outcome.detail, /EACCES/);
+  assert.equal(result.no_space, undefined);
   assert.deepEqual(exit.calls, []);
 });
 
@@ -385,3 +388,28 @@ test('DISK_GUARD_V1: копии не хватило места — обновл�
   assert.equal(g.free_bytes, GB / 2);
   assert.deepEqual(exit.calls, []);
 });
+
+// Диск заполнился уже ВО ВРЕМЯ копии (между проверкой и записью, или
+// платформа не сказала, сколько свободно, и проверки не было): SQLite отвечает
+// SQLITE_FULL, файловая система — ENOSPC. Это тоже полный диск клиники, а не
+// дефект выпуска: ни ok:false, ни автостопа; чисел нет — их и не выдумываем.
+for (const code of ['SQLITE_FULL', 'ENOSPC']) {
+  test(`DISK_GUARD_V1: ${code} во время копии — обновление отменено, update_result ok:false НЕ пишется`, async () => {
+    const inst = install();
+    const exit = exitSpy();
+    const result = await applyUpdate(inst.db, inst.dataDir, {
+      root: inst.root, version: inst.newVersion, exitImpl: exit.impl,
+      backupImpl: async () => { throw Object.assign(new Error('database or disk is full'), { code }); },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.no_space, 'экран обновлений получает причину «нет места»');
+    assert.equal(path.resolve(fs.realpathSync(inst.currentLink)), path.resolve(inst.oldDir), 'без копии — без переключения');
+    assert.equal(fs.existsSync(path.join(inst.dataDir, 'update-result.json')), false, 'не ok:false — не автостоп выпуска');
+    assert.equal(readPending(inst.dataDir), null);
+    const g = readGuard(inst.dataDir).update_refused;
+    assert.equal(g.version, '0.1.4');
+    assert.equal(g.need_bytes, null, 'чисел нет — не выдумываем');
+    assert.equal(g.free_bytes, null);
+    assert.deepEqual(exit.calls, []);
+  });
+}

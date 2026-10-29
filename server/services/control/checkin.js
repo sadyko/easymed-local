@@ -426,13 +426,16 @@ async function performCheckin(db, dataDir, {
     // узнаёт при этой же связи (раздел 3, п. 3). Отдельным полем, а НЕ
     // update_result ok:false: тот сервер считает в автостоп выпуска (два
     // отказа — выпуск остановлен для всех клиник кольца), а полный диск одной
-    // клиники — не дефект выпуска. Испорченная отметка — поля нет. Сервер
-    // управления пока поле не сохраняет (поправка 2 плана 3.18.1).
+    // клиники — не дефект выпуска. Испорченная отметка (без версии) — поля
+    // нет; без чисел (диск заполнился во время копии: ENOSPC, SQLITE_FULL) —
+    // null вместо чисел. Сервер управления пока поле не сохраняет (поправка 2
+    // плана 3.18.1).
     let diskGuard = null;
     try {
       const r = readGuard(dataDir).update_refused;
-      if (r && typeof r.version === 'string' && Number.isFinite(r.need_bytes) && Number.isFinite(r.free_bytes)) {
-        diskGuard = { update_refused: { version: r.version, need_bytes: r.need_bytes, free_bytes: r.free_bytes, at: typeof r.at === 'string' ? r.at : null } };
+      if (r && typeof r.version === 'string') {
+        const num = (v) => (Number.isFinite(v) ? v : null);
+        diskGuard = { update_refused: { version: r.version, need_bytes: num(r.need_bytes), free_bytes: num(r.free_bytes), at: typeof r.at === 'string' ? r.at : null } };
       }
     } catch { diskGuard = null; }
 

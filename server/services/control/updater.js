@@ -507,6 +507,11 @@ async function performTick(db, dataDir, {
 // exercised on a Windows desktop, so nothing caught that it never ran.
 const CURRENT_LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir';
 
+// DISK_GUARD_V1 — сбои копии перед обновлением, которые значат «на диске
+// клиники нет места», а не «выпуск сломан» (performApply): отказ проверки
+// места (disk-guard.js noSpaceError), полный диск у файловой системы и у SQLite.
+const SPACE_ERROR_CODES = new Set(['no_space', 'ENOSPC', 'SQLITE_FULL']);
+
 // writeOutcome() — the outcome file writer — lives in boot-confirm.js now
 // (V3120_FIX), because the NEW version's boot confirmation writes the
 // success line and the updater writes the failures; one writer, two callers.
@@ -518,8 +523,8 @@ const CURRENT_LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir';
  * Never throws. Every failure leaves the clinic running the OLD version and
  * writes ok:false with the reason — "nothing here may harm the RUNNING
  * clinic" is this file's header rule and it applies hardest right here.
- * DISK_GUARD_V1 — the one exception: a snapshot refused for lack of disk space
- * (code 'no_space') is not a release defect, so it is reported as
+ * DISK_GUARD_V1 — the one exception: a snapshot that failed for lack of disk
+ * space (code 'no_space', ENOSPC or SQLITE_FULL) is not a release defect, so it is reported as
  * disk-guard.json update_refused and returned as `no_space: {need_bytes,
  * free_bytes}`, never as ok:false in the outcome file (the vendor's auto-halt).
  *
@@ -627,17 +632,22 @@ async function performApply(db, dataDir, {
   try {
     backupPath = await backupImpl(db, path.join(dataDir, 'easymed.db'), version);
   } catch (e) {
-    // DISK_GUARD_V1 (ревью C2) — копию отказала проверка места
-    // (services/backup.js ensureCopySpace, code 'no_space'). Обновление
+    // DISK_GUARD_V1 (ревью C2, C4) — копии не хватило места: её отказала
+    // проверка места (services/backup.js ensureCopySpace, code 'no_space'),
+    // или диск заполнился уже во время записи (ENOSPC от файловой системы,
+    // SQLITE_FULL от SQLite: место кончилось между проверкой и копией, или
+    // платформа не сказала, сколько свободно, и проверки не было). Обновление
     // отменено так же, но НЕ через fail(): update_result ok:false сервер
     // управления считает в автостоп выпуска (два отказа — выпуск остановлен
     // для всех клиник кольца), а полный диск одной клиники — не дефект
     // выпуска. Отказ уходит отметкой update_refused (disk-guard.json →
-    // checkin.js, поле disk_guard) и на экран обновлений — с числами.
-    if (e && e.code === 'no_space' && Number.isFinite(e.need_bytes) && Number.isFinite(e.free_bytes)) {
-      const noSpace = { need_bytes: e.need_bytes, free_bytes: e.free_bytes };
+    // checkin.js, поле disk_guard) и на экран обновлений — с числами, если
+    // они есть (у ENOSPC и SQLITE_FULL их нет — не выдумываем).
+    if (e && SPACE_ERROR_CODES.has(e.code)) {
+      const num = (v) => (Number.isFinite(v) ? v : null);
+      const noSpace = { need_bytes: num(e.need_bytes), free_bytes: num(e.free_bytes) };
       noteGuard(dataDir, { update_refused: { at: now().toISOString(), version, ...noSpace } });
-      console.warn(`[updater] ${version} не поставлено — нет места на копию базы перед обновлением: ${e.message}`);
+      console.warn(`[updater] ${version} не поставлено — нет места на копию базы перед обновлением (${e.code}): ${e.message}`);
       return { ok: false, from, detail: e.message, restart: false, noSpace };
     }
     return fail('untouched', `Could not take the pre-update database snapshot (${e && e.message}) — the update was cancelled and the clinic is still running ${from || 'the version it was already on'}.`);
@@ -895,6 +905,12 @@ async function runPipeline(db, dataDir, offer, {
     // between "installed" and "never started". applyUpdate never throws, and
     // ends a successful install by asking the launcher for a restart.
     cleanupTempFiles();
+    // DISK_GUARD_V1 (раздел 3, п. 9) — data/update-staging на версионной
+    // установке не нужен никогда: это остаток тех дней, когда клиника была
+    // разложена без versions/current, и каждая предложенная версия ложилась
+    // туда по ~55 МБ. Убирается ЗДЕСЬ, до установки: удачная кончается
+    // exit(75), после которого не выполняется ничего.
+    try { rmSync(path.join(dataDir, 'update-staging'), { recursive: true, force: true }); } catch { /* занято — уберёт следующее обновление */ }
     const applied = await applyUpdate(db, dataDir, {
       root: layout.root,
       version: offer.version,
