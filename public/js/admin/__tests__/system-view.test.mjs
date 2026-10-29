@@ -519,6 +519,15 @@ test('DISK_GUARD_V1: английский экран — гигабайты с �
   }
 });
 
+test('DISK_GUARD_V1: 1 ТБ, свободно 60 ГБ (меньше 10 %) — красная плашка на «Данных клиники» по правилу экрана', async () => {
+  const GB = 1024 ** 3;
+  diskUsageData = { free_bytes: 60 * GB, total_bytes: 1000 * GB, low: true, copy_need_bytes: 3 * GB, db_bytes: GB, backups_bytes: 5 * GB, storage_bytes: GB, versions_bytes: null };
+  const root = mk('div');
+  await renderClinicData(root);
+  assert.ok(findByClass(root, 'sys-modal-warn'));
+  assert.match(textOf(root), /Мало места на диске: свободно 60 ГБ\./);
+});
+
 test('DISK_GUARD_V1: места хватает — ни одной красной плашки', async () => {
   const GB = 1024 ** 3;
   diskUsageData = { free_bytes: 300 * GB, total_bytes: 1000 * GB, low: false, db_bytes: GB, backups_bytes: 5 * GB, storage_bytes: GB, versions_bytes: null };

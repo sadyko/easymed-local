@@ -293,15 +293,22 @@ export async function diskUsageReport(dataDir, {
   const space = diskSpaceImpl(dataDir);
   const guard = readGuard(dataDir);
   const db = dbBytes(path.join(dataDir, 'easymed.db'));
+  const need = copyNeedBytes(db);
   const out = {
     free_bytes: space ? space.free : null,
     total_bytes: space ? space.total : null,
     low: !!space && (space.free < FREE_SHARE_MIN * space.total || space.free < LOW_FREE_BYTES),
+    // Место на следующую копию (база с журналом × 1,2 + 1 ГБ). По нему колокол
+    // администратора решает, звонить ли «Мало места»: свободно меньше
+    // max(5 ГБ, этого) — копии и правда скоро перестанут делаться (то же
+    // правило, что у чистки копий, backup.js pruneBySize). Красная строка на
+    // «Данных клиники» — по low.
+    copy_need_bytes: need,
     // Ежедневная копия делается раз в день: место освободили днём — до завтра
     // её не будет, и «Копия не сделана» висела бы на экране, хотя место есть.
     // Пока места на копию хватает, отказ не показывается; в disk-guard.json он
     // остаётся (журнал) и снимается первой же сделанной копией.
-    copy_refused: (guard.copy_refused && !(space && space.free >= copyNeedBytes(db))) ? guard.copy_refused : null,
+    copy_refused: (guard.copy_refused && !(space && space.free >= need)) ? guard.copy_refused : null,
     update_refused: guard.update_refused || null,
     kept_over_cap: guard.kept_over_cap || null,
   };

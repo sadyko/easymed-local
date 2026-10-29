@@ -12,7 +12,7 @@ import { backupList, backupCreate, backupRestore, factoryReset, diskUsage, __set
 import { getRpc } from './index.js';
 import { isAlwaysAllowedRpc } from '../control/gate.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
-import { __setDiskSpaceForTests, noteGuard, readGuard, diskUsageReport, GB } from '../disk-guard.js';   // DISK_GUARD_V1
+import { __setDiskSpaceForTests, noteGuard, readGuard, diskUsageReport, copyNeedBytes, GB } from '../disk-guard.js';   // DISK_GUARD_V1
 
 // DISK_GUARD_V1 — диск машины разработчика не данные теста.
 const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
@@ -293,6 +293,17 @@ test('DISK_GUARD_V1: disk_usage — только администратору; �
   assert.equal('storage_bytes' in q, false, 'колокол спрашивает каждую минуту — без обхода папок');
   assert.equal('backups_bytes' in q, false);
   assert.equal(q.copy_refused, null);
+});
+
+// Колокол звонит «Мало места», только когда свободно меньше max(5 ГБ, место на
+// следующую копию) (public/js/admin/system-logic.js diskNotices): сколько
+// нужно на копию, знает сервер — и говорит это и в быстром ответе.
+test('DISK_GUARD_V1: быстрый ответ — с местом на следующую копию (база с журналом × 1,2 + 1 ГБ)', async () => {
+  const { db, dir } = fresh();
+  fs.writeFileSync(path.join(dir, 'easymed.db'), Buffer.alloc(5000));
+  fs.writeFileSync(path.join(dir, 'easymed.db-wal'), Buffer.alloc(1000));
+  assert.equal((await diskUsage(db, { quick: true }, ADMIN)).copy_need_bytes, copyNeedBytes(6000));
+  assert.equal((await diskUsage(db, {}, ADMIN)).copy_need_bytes, copyNeedBytes(6000));
 });
 
 // Ежедневная копия делается раз в день: освободили место днём — следующей

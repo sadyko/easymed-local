@@ -46,7 +46,7 @@ test('diskUsageView: мало места, отказ в копии, ручные
   assert.deepEqual(v.warnings, [
     'Мало места на диске: свободно 3 ГБ. Освободите место, иначе копии базы и обновления перестанут делаться.',
     'Недостаточно места на диске: нужно 3,3 ГБ, свободно 3,0 ГБ. Копия не сделана.',
-    'Ручные копии и копии перед удалением данных занимают 40 ГБ — больше 30 % диска. Сами они не удаляются.',
+    'Ручные копии и копии перед удалением данных занимают 40 ГБ — больше 30 % диска. Предел по объёму их не удаляет: хранятся 10 последних ручных и 5 последних перед удалением данных. Ненужные удалите вручную.',
   ]);
   assert.equal(v.low, true);
 });
@@ -102,12 +102,36 @@ test('diskNotices: отказ в копии — красное уведомле�
   }]);
 });
 
-test('diskNotices: только мало места — жёлтое уведомление', () => {
-  assert.deepEqual(diskNotices({ low: true, free_bytes: 4 * GB, total_bytes: 100 * GB, copy_refused: null }), [{
-    id: 'disk-low', sev: 'warn', icon: 'Warning',
+test('diskNotices: только мало места — жёлтое уведомление, только в колоколе', () => {
+  assert.deepEqual(diskNotices({ low: true, free_bytes: 4 * GB, total_bytes: 100 * GB, copy_need_bytes: GB, copy_refused: null }), [{
+    id: 'disk-low', sev: 'warn', icon: 'Warning', bellOnly: true,
     title: 'Мало места на диске',
     message: 'Свободно 4 ГБ из 100 ГБ. Освободите место, иначе копии базы и обновления перестанут делаться.',
   }]);
+});
+
+// Красная строка на «Данных клиники» — по правилу экрана (меньше 10 % или
+// меньше 5 ГБ); колокол — только когда копии и правда скоро перестанут
+// делаться: свободно меньше max(5 ГБ, место на следующую копию). Диск 1 ТБ с
+// 60 ГБ свободных — это 6 %, но копиям ничего не грозит.
+test('1 ТБ, свободно 60 ГБ: красная строка на «Данных клиники», а колокол молчит', () => {
+  const data = { low: true, free_bytes: 60 * GB, total_bytes: 1000 * GB, copy_need_bytes: 3 * GB };
+  assert.match(diskUsageView(data).warnings[0] || '', /^Мало места на диске: свободно 60 ГБ\./);
+  assert.deepEqual(diskNotices(data), []);
+});
+
+test('1 ТБ, свободно 4 ГБ: и красная строка, и колокол', () => {
+  const data = { low: true, free_bytes: 4 * GB, total_bytes: 1000 * GB, copy_need_bytes: 3 * GB };
+  assert.match(diskUsageView(data).warnings[0] || '', /^Мало места на диске: свободно 4 ГБ\./);
+  assert.deepEqual(diskNotices(data).map((n) => [n.id, n.bellOnly]), [['disk-low', true]]);
+});
+
+test('колокол — по месту на следующую копию: база большая, свободно больше 5 ГБ, но меньше нужного', () => {
+  const data = { low: false, free_bytes: 20 * GB, total_bytes: 100 * GB, copy_need_bytes: 25 * GB };
+  assert.deepEqual(diskNotices(data).map((n) => n.id), ['disk-low']);
+  assert.deepEqual(diskNotices({ ...data, copy_need_bytes: 19 * GB }), [], 'места на копию хватает — тишина');
+  assert.deepEqual(diskNotices({ low: true, free_bytes: 6 * GB, total_bytes: 1000 * GB }), [], 'старый сервер без copy_need_bytes — порог 5 ГБ');
+  assert.deepEqual(diskNotices({ low: true, free_bytes: 4 * GB, total_bytes: 1000 * GB }).map((n) => n.id), ['disk-low']);
 });
 
 test('diskNotices: обновление не поставилось — своё уведомление, id с версией (новая версия — новое уведомление)', () => {
@@ -128,7 +152,7 @@ test('diskNotices: ручные копии одни больше 30 % — тол
   }), [{
     id: 'disk-kept', sev: 'warn', icon: 'Database', bellOnly: true,
     title: 'Копии занимают много места',
-    message: 'Ручные копии и копии перед удалением данных занимают 400 ГБ — больше 30 % диска. Сами они не удаляются.',
+    message: 'Ручные копии и копии перед удалением данных занимают 400 ГБ — больше 30 % диска. Предел по объёму их не удаляет: хранятся 10 последних ручных и 5 последних перед удалением данных. Ненужные удалите вручную.',
   }]);
 });
 

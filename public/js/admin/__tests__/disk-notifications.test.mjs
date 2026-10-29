@@ -170,6 +170,25 @@ test('английский экран — точка в гигабайтах, б
     }
 });
 
+test('1 ТБ, свободно 60 ГБ (меньше 10 %, но копиям хватает) — ни полосы, ни строки колокола', async () => {
+    reset(ADMIN);
+    DISK = { low: true, free_bytes: 60 * GB, total_bytes: 1000 * GB, copy_need_bytes: 3 * GB };
+    await render();
+    assert.equal(banners().length, 0);
+    assert.deepEqual(bellItems(), []);
+});
+
+test('1 ТБ, свободно 4 ГБ — «Мало места на диске» в колоколе, но не полосой на каждом экране', async () => {
+    reset(ADMIN);
+    DISK = { low: true, free_bytes: 4 * GB, total_bytes: 1000 * GB, copy_need_bytes: 3 * GB };
+    await render();
+    assert.equal(banners().length, 0);
+    const items = bellItems();
+    assert.equal(items.length, 1);
+    assert.match(items[0], /Мало места на диске/);
+    assert.match(items[0], /Свободно 4 ГБ из 1000 ГБ\./);
+});
+
 test('не администратор: место даже не спрашивается', async () => {
     reset(REGISTRAR);
     DISK = COPY_REFUSED;
