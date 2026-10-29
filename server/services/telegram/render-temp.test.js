@@ -15,28 +15,43 @@ function renderDir(base, name) {
   return dir;
 }
 
-test('DISK_GUARD_V1: папка, занятая Chrome, удаляется повторной попыткой, а не остаётся в %TEMP%', () => {
+test('DISK_GUARD_V1: папка, занятая Chrome, удаляется повторной попыткой, а не остаётся в %TEMP%', async () => {
   const dir = renderDir(tmpDir('em-pdftmp-'), 'busy');
   const calls = [];
   let busy = true;
-  const rmImpl = (p, o) => {
+  const rmImpl = async (p, o) => {
     calls.push(o);
     if (busy) { busy = false; throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }); }
-    fs.rmSync(p, o);
+    await fs.promises.rm(p, o);
   };
   const later = [];
-  const schedule = (fn, ms) => { later.push(ms); fn(); };
-  assert.equal(removePdfTempDir(dir, { rmImpl, schedule }), false, 'сразу не вышло');
+  let pending = null;
+  const schedule = (fn, ms) => { later.push(ms); pending = fn(); };
+  assert.equal(await removePdfTempDir(dir, { rmImpl, schedule }), false, 'сразу не вышло');
   assert.deepEqual(later, [30_000], 'вторая попытка — через полминуты, когда Chrome отпустит профиль');
+  await pending;
   assert.equal(fs.existsSync(dir), false, 'и она убрала папку');
-  assert.equal(calls[0].maxRetries, 5, 'и первая попытка — с повторами (rmSync maxRetries)');
+  assert.equal(calls[0].maxRetries, 5, 'и первая попытка — с повторами (rm maxRetries)');
   assert.equal(calls[0].recursive, true);
 });
 
-test('DISK_GUARD_V1: свободная папка удаляется сразу, без отложенной попытки', () => {
+test('DISK_GUARD_V1: удаление не блокирует поток: вызов возвращает промис, а не ждёт повторов синхронно', async () => {
+  const dir = renderDir(tmpDir('em-pdftmp-'), 'async');
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const rmImpl = async (p, o) => { await gate; await fs.promises.rm(p, o); };
+  const res = removePdfTempDir(dir, { rmImpl, schedule: () => {} });
+  assert.ok(res instanceof Promise);
+  assert.equal(fs.existsSync(dir), true, 'пока rm ждёт, вызов уже вернулся');
+  release();
+  assert.equal(await res, true);
+  assert.equal(fs.existsSync(dir), false);
+});
+
+test('DISK_GUARD_V1: свободная папка удаляется сразу, без отложенной попытки', async () => {
   const dir = renderDir(tmpDir('em-pdftmp-'), 'free');
   const later = [];
-  assert.equal(removePdfTempDir(dir, { schedule: (fn, ms) => later.push(ms) }), true);
+  assert.equal(await removePdfTempDir(dir, { schedule: (fn, ms) => later.push(ms) }), true);
   assert.equal(fs.existsSync(dir), false);
   assert.deepEqual(later, []);
 });

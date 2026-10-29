@@ -113,21 +113,22 @@ function laterUnref(fn, ms) {
 }
 
 /**
- * Удалить временную папку рендера С ПОВТОРАМИ: сначала сам rmSync повторяет
+ * Удалить временную папку рендера С ПОВТОРАМИ, НЕ БЛОКИРУЯ поток (async, в
+ * запросе не ждётся): сначала сам rm повторяет
  * (maxRetries — EBUSY/EPERM/ENOTEMPTY на Windows), не вышло — ещё одна
  * попытка через полминуты на таймере, который не держит программу. Не вышло и
  * тогда — папку подберёт уборка при следующем запуске (sweepStalePdfDirs).
  * Никогда не бросает. true — удалена сразу.
  */
-export function removePdfTempDir(dir, { rmImpl = fs.rmSync, laterMs = PDF_TMP_RETRY_LATER_MS, schedule = laterUnref } = {}) {
-  const attempt = () => {
-    try { rmImpl(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); return true; }
+export async function removePdfTempDir(dir, { rmImpl = fs.promises.rm, laterMs = PDF_TMP_RETRY_LATER_MS, schedule = laterUnref } = {}) {
+  const attempt = async () => {
+    try { await rmImpl(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); return true; }
     catch { return false; }
   };
-  if (attempt()) return true;
-  schedule(() => {
-    if (!attempt()) console.warn('[telegram] временная папка PDF не удалилась — её уберёт следующий запуск:', dir);
-  }, laterMs);
+  if (await attempt()) return true;
+  schedule(() => attempt().then((ok) => {
+    if (!ok) console.warn('[telegram] временная папка PDF не удалилась — её уберёт следующий запуск:', dir);
+  }), laterMs);
   return false;
 }
 
@@ -137,7 +138,7 @@ export function removePdfTempDir(dir, { rmImpl = fs.rmSync, laterMs = PDF_TMP_RE
  * секунды). Только папки и только с нашим началом имени. Возвращает число
  * удалённых; никогда не бросает.
  */
-export function sweepStalePdfDirs({ base = os.tmpdir(), maxAgeMs = PDF_TMP_STALE_MS, now = Date.now(), rmImpl = fs.rmSync } = {}) {
+export function sweepStalePdfDirs({ base = os.tmpdir(), maxAgeMs = PDF_TMP_STALE_MS, now = Date.now(), rmImpl = fs.rmSync } = {}) { // один раз при старте — синхронно, с малыми повторами
   let names;
   try { names = fs.readdirSync(base); } catch { return 0; }
   let removed = 0;
