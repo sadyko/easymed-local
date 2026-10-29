@@ -385,7 +385,9 @@ function doctorDashboardView() {
         onOpenPay: () => setTab('pay'),   // CABINET_REDESIGN_V1 — быстрое действие с графика
         // Карточка приёма ведёт туда, где с ним работают, — в рабочий список.
         // Своего второго окна приёма дашборд не заводит.
-        onOpenWork: () => setTab('appointments'),
+        // CABINET_ACTIVE_FIRST_V1 — завершённая карточка ведёт на «Завершённые»:
+        // на «Активных» этого пациента не видно.
+        onOpenWork: (row) => { if (row && row.done) state.statusFilter = 'completed'; setTab('appointments'); },
         // HEAD_DOCTOR_WARD_VIEW_V1 — полоса главного врача ведёт на СВОЮ вкладку
         // кабинета, а не в раздел «Стационар»: работа делается там же, где он
         // уже стоит.
@@ -809,7 +811,7 @@ function rangeFilter() {
 function kpiSummary() {
     // CABINET_ACTIVE_FIRST_V1 — плитка считает ровно то, что покажет щелчок по
     // ней: тот же состав, что у фильтра «Активные» (STATUS_FILTER.active).
-    const toReview = state.rows.filter(r => STATUS_FILTER.active.includes(r.status)).length;
+    const toReview = state.rows.filter(r => STATUS_FILTER.active.includes(r.status) && inDateRange(r.visitDate)).length;   // и тот же период, что у списка (поиск не считаем)
     const seenToday = state.rows.filter(r => r.status === 'completed' && isTodayDate(r.visitDate)).length;
     const refs = state.todayReferrals.rows;
     const recsToday = refs.length;
@@ -924,6 +926,7 @@ function paintBody() {
         // нет»: осмотренные есть, они в соседнем фильтре, и экран говорит где.
         body.appendChild(h('div', { class: 'empty', style: { padding: '40px 20px' } },
             state.statusFilter === 'active' && !(state.search || '').trim()
+                && state.rows.some(r => r.status === 'completed' && inDateRange(r.visitDate))
                 ? 'Активных приёмов нет. Осмотренные — в фильтре «Завершённые».'
                 : 'Нет записей на приём за выбранный период.'));
         return;
@@ -968,7 +971,10 @@ export function queueRank(r) {
 // порядок, как пришёл с сервера (новые записи сверху): сортировка устойчива.
 // Загрузка (loadServices) не меняется — порядок ставится при показе.
 export function sortQueue(rows) {
-    return (rows || []).slice().sort((a, b) => queueRank(a) - queueRank(b));
+    // Внутри группы сегодняшние визиты идут первыми (запись на следующую неделю
+    // не стоит выше сегодняшнего пациента); остальное — порядок сервера.
+    const key = (r) => queueRank(r) * 2 + (isTodayDate(r && r.visitDate) ? 0 : 1);
+    return (rows || []).slice().sort((a, b) => key(a) - key(b));
 }
 
 function filterRows() {

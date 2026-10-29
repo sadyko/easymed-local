@@ -144,8 +144,9 @@ function matches(row, f) {
     default:    return true;
   }
 }
+let VISITS = [];      // «Мой день» дашборда; пуст, пока тест не посеет свой визит
 let ROWS = VS_ROWS;   // тест «пустые Активные» подменяет посев на время своего прогона
-const TABLES = () => ({ users: [DOC], visit_services: ROWS, invoice_items: ITEM_ROWS, visits: [], recommended_services: [], admissions: [], patients: [] });
+const TABLES = () => ({ users: [DOC], visit_services: ROWS, invoice_items: ITEM_ROWS, visits: VISITS, recommended_services: [], admissions: [], patients: [] });
 globalThis.fetch = async (url, opts) => {
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (String(url).startsWith('/api/db')) {
@@ -298,4 +299,68 @@ test('приём открывается по тому же правилу: жд�
   nameBtn('Давлатова Мохира').click();
   await tick(60);
   assert.deepStrictEqual(NAV.map(([v, p]) => [v, p.serviceId]), [['service-workspace', 'a2']], 'оплаченный «Запланирован» не открылся');
+});
+
+// --- ревизия A1 --------------------------------------------------------------
+const dayOffset = (n) => { const d = new Date(); d.setDate(d.getDate() + n); d.setHours(9, 0, 0, 0); return d.toISOString(); };
+const rangeBtn = (root, label) => walk(root).find((n) => n.attrs && n.attrs.id === 'svc-range').children.find((b) => textOf(b).trim() === label);
+
+test('плитка считает в том же периоде, что и список: будущая запись + «Сегодня» → число = строк', async (t) => {
+  const future = vs('f1', 'queued', 'Яхъяев', 'Карим'); future.visits.visit_date = dayOffset(7);
+  ROWS = [...VS_ROWS, future];
+  t.after(() => { ROWS = VS_ROWS; });
+  const root = await openWork();
+  assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '8');
+  rangeBtn(root, 'Сегодня').click();
+  await tick();
+  assert.strictEqual(visibleNames(root).length, 7);
+  assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '7', 'число на плитке разошлось со строками под ней');
+});
+
+test('пустая подсказка про «Завершённые» — только если завершённые есть в выбранном периоде', async (t) => {
+  const done = vs('f2', 'completed', 'Яхъяев', 'Карим'); done.visits.visit_date = dayOffset(-30);
+  ROWS = [done];
+  t.after(() => { ROWS = VS_ROWS; });
+  const root = await openWork();
+  rangeBtn(root, 'Сегодня').click();
+  await tick();
+  const body = walk(root).find((n) => n.attrs && n.attrs.id === 'svc-body');
+  const text = textOf(byClass(body, 'empty')[0]);
+  assert.ok(text.includes('Нет записей на приём за выбранный период.'), text);
+  assert.ok(!text.includes('Завершённые'), 'подсказка ведёт к завершённым, которых в периоде нет');
+});
+
+test('внутри группы сегодняшние визиты первыми, остальные — порядок сервера; группы по-прежнему главнее', () => {
+  const today = dayOffset(0), next = dayOffset(7);
+  const rows = [
+    { id: 'n1', status: 'queued', visitDate: next },
+    { id: 'n2', status: 'queued', visitDate: next },
+    { id: 't1', status: 'queued', visitDate: today },
+    { id: 'tp', status: 'in_progress', visitDate: next },
+    { id: 't2', status: 'queued', visitDate: today },
+    { id: 'wk', status: 'added', invoiceStatus: 'unpaid', visitDate: today },
+  ];
+  assert.deepStrictEqual(cabinet.sortQueue(rows).map((r) => r.id), ['tp', 't1', 't2', 'n1', 'n2', 'wk']);
+});
+
+test('карточка «Мой день» с «Приём завершён» ведёт на «Завершённые»; незавершённая — фильтр не трогает', async (t) => {
+  VISITS = [{ id: 'v-c1', visit_date: VISIT_DAY, status: 'arrived', patient_id: 'p-c1', service_id: 's-1', doctor_id: 'u-doc', sync_origin: null,
+              duration_minutes: 30, patients: { id: 'p-c1', mrn: 'MRN-c1', full_name: 'Бакиев Санжар', last_name: 'Бакиев', first_name: 'Санжар' }, services: { id: 's-1', name: 'Приём терапевта' }, rooms: null },
+            { id: 'v-q1', visit_date: VISIT_DAY, status: 'arrived', patient_id: 'p-q1', service_id: 's-1', doctor_id: 'u-doc', sync_origin: null,
+              duration_minutes: 30, patients: { id: 'p-q1', mrn: 'MRN-q1', full_name: 'Аминов Олим', last_name: 'Аминов', first_name: 'Олим' }, services: { id: 's-1', name: 'Приём терапевта' }, rooms: null }];
+  t.after(() => { VISITS = []; });
+  const root = await openWork();
+  buttonByText(root, /Дашборд/).click();
+  await tick(80);
+  const card = (name) => byClass(root, 'dd-appt').find((c) => textOf(c).includes(name));
+  assert.ok(card('Аминов') && card('Бакиев'), 'карточек «Мой день» нет: стенд не посеял визиты');
+  card('Аминов').click();
+  await tick(60);
+  assert.strictEqual(selectedStatus(root), 'active', 'незавершённая карточка сменила фильтр');
+  buttonByText(root, /Дашборд/).click();
+  await tick(80);
+  card('Бакиев').click();
+  await tick(60);
+  assert.strictEqual(selectedStatus(root), 'completed', 'завершённая карточка ведёт не на «Завершённые»');
+  assert.deepStrictEqual(visibleNames(root), DONE_ORDER);
 });
