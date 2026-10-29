@@ -791,3 +791,29 @@ test('DISK_GUARD_V1: диск 1 ТБ, свободно 60 ГБ (6 %) — ист�
   assert.deepEqual(fs.readdirSync(bd).sort(), [...names].sort(),
     '60 ГБ хватит на много копий: удалять историю ради «10 %» незачем');
 });
+
+// Порог «мало места» — max(5 ГБ, место на следующую копию). База 10 ГБ: копии
+// нужно 10 × 1,2 + 1 = 13 ГБ — больше 5 ГБ, порог задаёт она. Базы такого
+// размера на диске теста нет: её размер подставляет dbBytesImpl.
+for (const [freeGb, keepsHistory] of [[8, false], [20, true]]) {
+  test(`DISK_GUARD_V1: база 10 ГБ на диске 1 ТБ, свободно ${freeGb} ГБ — ${keepsHistory ? 'история остаётся' : 'старые автоматические уходят, самые новые каждого вида остаются'}`, () => {
+    const dir = tmpDir('em-sysbk-bigdb-');
+    const bd = path.join(dir, 'backups');
+    fs.mkdirSync(bd);
+    let t = Date.now() - 1e6;
+    const names = ['daily-20260801-030000.db', 'daily-20260802-030000.db', 'pre-2.3.0.db', 'pre-2.4.0.db',
+      'safety-20260803-110000.db', 'safety-20260804-110000.db', 'manual-20260805-100000.db'];
+    for (const n of names) { putSized(bd, n, 10, t); t += 1000; }
+    const sizes = [];
+    pruneBackupsByKind(bd, {
+      diskSpaceImpl: () => ({ free: freeGb * GB, total: 1000 * GB }),
+      dbBytesImpl: (file) => { sizes.push(file); return 10 * GB; },
+    });
+    assert.deepEqual(sizes, [path.join(dir, 'easymed.db')], 'спрашивается размер базы клиники рядом с backups/');
+    const expected = keepsHistory
+      ? names
+      : ['daily-20260802-030000.db', 'pre-2.4.0.db', 'safety-20260804-110000.db', 'manual-20260805-100000.db'];
+    assert.deepEqual(fs.readdirSync(bd).sort(), [...expected].sort(),
+      keepsHistory ? '20 ГБ хватит на следующую копию (13 ГБ)' : '8 ГБ не хватит даже на одну копию в 13 ГБ');
+  });
+}

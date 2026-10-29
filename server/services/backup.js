@@ -339,16 +339,17 @@ export function ensureCopySpace(dataDir, {
  * «Данных клиники». Отметка пишется только рядом с настоящей папкой backups/
  * данных клиники — вызов на произвольной папке не пишет в её родителя.
  */
-function pruneBySize(dir, { protect, diskSpaceImpl, now }) {
+function pruneBySize(dir, { protect, diskSpaceImpl, dbBytesImpl = dbBytes, now }) {
   const space = diskSpaceImpl(dir);
   if (!space || !(space.total > 0)) return [];
   const entries = backupEntries(dir);
   let copies = entries.reduce((s, e) => s + e.bytes, 0);
   let free = space.free;
   // Место на следующую копию — по базе данных клиники рядом с backups/;
-  // у произвольной папки базы нет: только запас.
+  // у произвольной папки базы нет: только запас. dbBytesImpl — только для
+  // тестов: базы в 10 ГБ на диске теста нет.
   const nextNeed = path.basename(dir) === 'backups'
-    ? copyNeedBytes(dbBytes(path.join(path.dirname(dir), 'easymed.db')))
+    ? copyNeedBytes(dbBytesImpl(path.join(path.dirname(dir), 'easymed.db')))
     : RESERVE_BYTES;
   const freeFloor = Math.max(LOW_FREE_BYTES, nextNeed);
   const over = () => copies > COPIES_SHARE_MAX * space.total
@@ -502,8 +503,11 @@ async function createBackupNow(db, dataDir, kind, now, { protect = [], diskSpace
  * имена, которые не удаляются ни счётом, ни объёмом: только что сделанная
  * копия и копия, которую сейчас восстанавливают. Сбой предела — строка в
  * журнал, не исключение: чистка не бывает причиной несделанной копии.
+ * diskSpaceImpl и dbBytesImpl — ответы диска и размер базы для тестов.
  */
-export function pruneBackupsByKind(dir, { protect = [], diskSpaceImpl = currentDiskSpace, now = new Date() } = {}) {
+export function pruneBackupsByKind(dir, {
+  protect = [], diskSpaceImpl = currentDiskSpace, dbBytesImpl = dbBytes, now = new Date(),
+} = {}) {
   // DISK_GUARD_V1 (ревью C2) — и цели восстановления: идущего и записанного.
   const keep = new Set([...protect, ...restoreTargets(dir)]);
   sweepBroken(dir);   // DISK_GUARD_V1
@@ -529,7 +533,7 @@ export function pruneBackupsByKind(dir, { protect = [], diskSpaceImpl = currentD
     }
   }
   try {
-    pruneBySize(dir, { protect: keep, diskSpaceImpl, now });
+    pruneBySize(dir, { protect: keep, diskSpaceImpl, dbBytesImpl, now });
   } catch (e) {
     console.warn('[backup] предел копий по объёму не проверен:', e && e.message);
   }
