@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // DISK_GUARD_V1 — копия базы без места на диске (server/services/disk-guard.js присылает шаблон)
+  "Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.": {"en":"Not enough disk space: {need} GB needed, {free} GB free. The backup was not made.","ru":"Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.","uz":"Diskda joy yetarli emas: {need} GB kerak, {free} GB bo‘sh. Nusxa olinmadi."},   // DISK_GUARD_V1
   // ADMIN_ACT_AS_V1 — администратор работает от имени сотрудника: отказы и ответы сервера
   // (public/js/shared/act-as.js ACT_AS_MESSAGES, ACT_AS_SIGN_REFUSAL, ACT_AS_END)
   "Подписать документ врача от чужого имени нельзя — вернитесь к своей учётной записи; подписывает сам врач.": {"en":"A doctor’s document cannot be signed on someone else’s behalf — return to your own account; the doctor signs it personally.","ru":"Подписать документ врача от чужого имени нельзя — вернитесь к своей учётной записи; подписывает сам врач.","uz":"Shifokor hujjatini boshqa xodim nomidan imzolab bo‘lmaydi — o‘z hisobingizga qayting; hujjatni shifokorning o‘zi imzolaydi."},   // ADMIN_ACT_AS_V1

@@ -13,6 +13,13 @@ import {
   confirmBoot, reconcileUpdateAtBoot, armBootConfirmation, syncRecoverCmd, writePending, readPending,
   PENDING_NAME, ROLLED_BACK_NAME, RESULT_NAME,
 } from './boot-confirm.js';
+import { __setDiskSpaceForTests, GB } from '../disk-guard.js';   // DISK_GUARD_V1
+
+// DISK_GUARD_V1 — копия перед обновлением спрашивает место; диск машины
+// разработчика — не данные теста.
+const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
+__setDiskSpaceForTests(ROOMY);
+test.after(() => __setDiskSpaceForTests(null));
 
 const LINK = process.platform === 'win32' ? 'junction' : 'dir';
 const ok200 = async () => ({ status: 200 });

@@ -10,6 +10,13 @@ import { applyUpdate } from './updater.js';
 import { confirmBoot, readPending } from './boot-confirm.js';   // V3120_FIX
 import { readJsonFile } from './checkin.js';
 import { tmpDir as makeTmpDir, closeOnExit, closeRegistered } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
+import { __setDiskSpaceForTests, GB } from '../disk-guard.js';   // DISK_GUARD_V1
+
+// DISK_GUARD_V1 — копия перед обновлением спрашивает место; диск машины
+// разработчика — не данные теста.
+const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
+__setDiskSpaceForTests(ROOMY);
+test.after(() => __setDiskSpaceForTests(null));
 
 // NODE_NATIVE_UPDATES_V1 — THE TEST THE OLD DESIGN COULD NOT HAVE.
 //

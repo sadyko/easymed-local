@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { discardPartial } from '../services/backup.js';   // DISK_GUARD_V1
+import { discardPartial, ensureCopySpace } from '../services/backup.js';   // DISK_GUARD_V1
+import { noteGuard } from '../services/disk-guard.js';   // DISK_GUARD_V1
 
 // SUPERVISED_INSTALL_V1 — the rollback for an update.
 //
@@ -19,11 +20,19 @@ import { discardPartial } from '../services/backup.js';   // DISK_GUARD_V1
  * @param {Database} db      the open connection
  * @param {string} dbPath    where that database lives on disk
  * @param {string} version   the version about to be installed, for the filename
+ * @param {{diskSpaceImpl?: Function}} [opts]  DISK_GUARD_V1 — ответ диска (тесты)
  * @returns {Promise<string>} the path written
  */
-export async function backupBeforeMigrate(db, dbPath, version) {
+export async function backupBeforeMigrate(db, dbPath, version, { diskSpaceImpl } = {}) {
   const dir = path.join(path.dirname(dbPath), 'backups');
   fs.mkdirSync(dir, { recursive: true });
+
+  // DISK_GUARD_V1 — и копия перед обновлением делается, только если на неё
+  // есть место (раздел 3, п. 2): иначе она оборвалась бы на полпути и заняла
+  // остаток диска. Не хватает — ошибка 'no_space': программа обновления
+  // отменяет обновление (updater.js applyUpdate), запуск пишет громкое
+  // предупреждение (server/index.js).
+  ensureCopySpace(path.dirname(dbPath), { kind: 'pre', dbFile: dbPath, ...(diskSpaceImpl ? { diskSpaceImpl } : {}) });
 
   // A retried update must not destroy the state the first attempt captured, so
   // the name carries a counter rather than being overwritten.
@@ -63,6 +72,7 @@ export async function backupBeforeMigrate(db, dbPath, version) {
     discardPartial(out);
     throw e;
   }
+  noteGuard(path.dirname(dbPath), { copy_refused: null });   // DISK_GUARD_V1 — копия есть, отказ снят
   return out;
 }
 

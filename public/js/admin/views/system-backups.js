@@ -67,7 +67,12 @@ export async function renderBackupsCard(root, { admin }) {
                 toast(tr('Копия создана'), 'ok');
                 await load();
             } catch (e) {
-                statusEl.textContent = tr('Не удалось создать копию. Попробуйте ещё раз.');
+                // DISK_GUARD_V1 — «нет места» говорится словами сервера, с числами
+                // (tr() переводит её по шаблону, shared/server-messages.js), а не
+                // общей фразой «попробуйте ещё раз»: повтор тут не поможет.
+                statusEl.textContent = (e && e.code === 'no_space' && e.message)
+                    ? tr(e.message)
+                    : tr('Не удалось создать копию. Попробуйте ещё раз.');
             }
             createBtn.disabled = false;
         },
@@ -154,7 +159,7 @@ function openRestoreModal(row) {
             // activation.js's unlock/enroll errors.
             confirmBtn.disabled = false;
             statusEl.textContent = (e && e.message && e.message !== 'restore refused')
-                ? e.message
+                ? tr(e.message)   // DISK_GUARD_V1 — «нет места на страховочную копию» переводится по шаблону сервера
                 : tr('Не удалось восстановить копию. Попробуйте ещё раз.');
         }
     });

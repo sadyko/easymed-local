@@ -7,9 +7,16 @@ import { openDb } from './connection.js';
 import { migrate } from './migrate.js';
 import { backupBeforeMigrate, pruneBackups } from './backup.js';
 import { tmpDir, closeOnExit, closeRegistered } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
+import { __setDiskSpaceForTests, readGuard, GB } from '../services/disk-guard.js';   // DISK_GUARD_V1
 
 // V3120_FIX — базы закрываются по окончании файла, чтобы папки удалялись.
 test.after(closeRegistered);
+
+// DISK_GUARD_V1 — копия перед обновлением теперь спрашивает место; диск
+// машины разработчика — не данные теста.
+const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
+__setDiskSpaceForTests(ROOMY);
+test.after(() => __setDiskSpaceForTests(null));
 
 function workspace() {
   const dir = tmpDir('em-bk-');
@@ -125,4 +132,14 @@ test('DISK_GUARD_V1: копия перед обновлением, оборва�
   await assert.rejects(() => backupBeforeMigrate(aborting, dbPath, '2.4.0'), { code: 'SQLITE_FULL' });
   assert.deepEqual(fs.readdirSync(path.join(dir, 'backups')), [],
     'обрывок pre-2.4.0.db выдавал бы себя за точку отката — recover.cmd ищет копию по имени');
+});
+
+test('DISK_GUARD_V1: на копию перед обновлением нет места — она не начинается, ошибка «нет места»', async () => {
+  const { dir, db, dbPath } = workspace();
+  await assert.rejects(
+    () => backupBeforeMigrate(db, dbPath, '2.4.0', { diskSpaceImpl: () => ({ free: GB / 2, total: 100 * GB }) }),
+    (e) => e.code === 'no_space' && /^Недостаточно места на диске: нужно/.test(e.message),
+  );
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'backups')), [], 'файл даже не заведён');
+  assert.equal(readGuard(dir).copy_refused.kind, 'pre');
 });

@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { writeAtomic } from './control/checkin.js';
+import {
+  currentDiskSpace, dbBytes, copyNeedBytes, noSpaceError, noteGuard, COPIES_SHARE_MAX, FREE_SHARE_MIN,
+} from './disk-guard.js';   // DISK_GUARD_V1
 
 // SYSTEM_SETTINGS_V1 (docs/plans/2026-08-23-system-settings.md) — the clinic's
 // own backup system: the daily/manual copies, the restore path and the factory
@@ -183,6 +186,151 @@ function kindOf(name) {
   return m ? m[1] : null;
 }
 
+// DISK_GUARD_V1 — копии, которые удаляются по объёму (п. 5). Ручные и
+// финальные — решение человека, автоматически они не удаляются никогда.
+const AUTO_KINDS = new Set(['daily', 'pre', 'safety']);
+
+// DISK_GUARD_V1 — место копии со всеми её частями: .db и (у отложенных
+// восстановлением и откатом) -wal/-shm рядом. Снимок файлов .files не
+// считается: это жёсткие ссылки, места они не занимают.
+function entryBytes(dir, name) {
+  let n = 0;
+  for (const suffix of ['', '-wal', '-shm']) {
+    try { n += fs.statSync(path.join(dir, name + suffix)).size; } catch { /* нет части — нет и байт */ }
+  }
+  return n;
+}
+
+// DISK_GUARD_V1 — все копии известных видов с размером и временем. Обрывок с
+// меткой .broken — не копия (как и в listBackups): его убирает sweepBroken.
+function backupEntries(dir) {
+  let all;
+  try { all = new Set(fs.readdirSync(dir)); } catch { return []; }
+  const out = [];
+  for (const f of all) {
+    if (!NAME_RE.test(f) || all.has(f + '.broken')) continue;
+    const kind = kindOf(f);
+    if (!kind) continue;
+    let st;
+    try { st = fs.statSync(path.join(dir, f)); } catch { continue; }
+    if (!st.isFile()) continue;
+    out.push({ name: f, kind, mtimeMs: st.mtimeMs, bytes: entryBytes(dir, f) });
+  }
+  return out;
+}
+
+// DISK_GUARD_V1 — удалить копию целиком: .db, -wal/-shm и снимок файлов.
+// true — копии больше нет (занятый файл на Windows — обычное дело, тогда false).
+function removeEntry(dir, name) {
+  for (const suffix of ['', '-wal', '-shm']) {
+    try { fs.rmSync(path.join(dir, name + suffix), { force: true }); } catch { /* занятый файл — не повод падать */ }
+  }
+  // PATIENT_FILE_ATTACH_V1 — снимок файлов уходит ВМЕСТЕ со своей копией базы:
+  // оставшийся сайдкар держал бы жёсткие ссылки на файлы, удалённые из storage.
+  try { fs.rmSync(path.join(dir, sidecarFor(name)), { recursive: true, force: true }); } catch { /* то же */ }
+  return !fs.existsSync(path.join(dir, name));
+}
+
+const newestOf = (entries, kind) => entries
+  .filter((e) => e.kind === kind)
+  .sort((a, b) => b.mtimeMs - a.mtimeMs)[0] || null;
+
+/**
+ * DISK_GUARD_V1 — хватит ли места на новую копию (раздел 3, п. 2): размер базы
+ * (с журналом) × 1,2 + 1 ГБ. Не хватает — уступают старые автоматические
+ * копии: сначала самые старые ежедневные, потом лишние «перед обновлением»
+ * (последняя — точка отката текущей версии — остаётся), потом страховочные.
+ * Удаляются они, ТОЛЬКО если этого хватает: стереть копии и всё равно не
+ * сделать новую — худший из исходов. Не хватит и так — бросает 'no_space'
+ * (ничего не удалив), пишет строку в журнал программы и отметку copy_refused
+ * для «Данных клиники» и колокола администратора.
+ *
+ * protect — имена, которые не уступают никогда (копия, которую сейчас
+ * восстанавливают). Платформа не сказала, сколько свободно, — копия делается,
+ * как раньше.
+ */
+export function ensureCopySpace(dataDir, {
+  kind = 'manual', protect = [], dbFile = path.join(dataDir, 'easymed.db'),
+  diskSpaceImpl = currentDiskSpace, now = new Date(),
+} = {}) {
+  const dir = path.join(dataDir, 'backups');
+  const space = diskSpaceImpl(dir);
+  if (!space) return { freed: [] };
+  const need = copyNeedBytes(dbBytes(dbFile));
+  if (space.free >= need) return { freed: [] };
+
+  const keep = new Set(protect);
+  const entries = backupEntries(dir);
+  const newestPre = newestOf(entries, 'pre');
+  const byAge = (k) => entries
+    .filter((e) => e.kind === k && !keep.has(e.name) && !(k === 'pre' && newestPre && e.name === newestPre.name))
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+  const plan = [];
+  let free = space.free;
+  for (const e of [...byAge('daily'), ...byAge('pre'), ...byAge('safety')]) {
+    if (free >= need) break;
+    plan.push(e);
+    free += e.bytes;
+  }
+  if (free < need) {
+    console.warn(`[backup] копия «${kind}» не сделана: нужно ${need} Б, свободно ${space.free} Б, а старых автоматических копий, которые можно удалить, не хватает`);
+    noteGuard(dataDir, { copy_refused: { at: now.toISOString(), kind, need_bytes: need, free_bytes: space.free } });
+    throw noSpaceError(need, space.free);
+  }
+  const freed = plan.filter((e) => removeEntry(dir, e.name)).map((e) => e.name);
+  console.warn(`[backup] мало места на диске — для новой копии удалены старые: ${freed.join(', ')}`);
+  return { freed };
+}
+
+/**
+ * DISK_GUARD_V1 — предел по объёму (раздел 3, п. 5): автоматические копии
+ * (ежедневные, перед обновлением, страховочные) удаляются от старых к новым,
+ * пока копии занимают больше 30 % диска или свободно меньше 10 %. Не
+ * трогаются: protect (только что сделанная копия, копия, которую сейчас
+ * восстанавливают), САМАЯ НОВАЯ копия каждого автоматического вида (поправка
+ * 1 плана 3.18.1: диск, занятый другими файлами, не должен оставлять клинику
+ * совсем без ежедневной копии, точки отката и страховочной), ручные,
+ * финальные. Не уложились и так — строка «Мало места на диске» в журнал
+ * программы (на «Данных клиники» то же видно по самому месту). Если ручные и
+ * финальные одни больше 30 % — отметка kept_over_cap: предупреждение на
+ * «Данных клиники». Отметка пишется только рядом с настоящей папкой backups/
+ * данных клиники — вызов на произвольной папке не пишет в её родителя.
+ */
+function pruneBySize(dir, { protect, diskSpaceImpl, now }) {
+  const space = diskSpaceImpl(dir);
+  if (!space || !(space.total > 0)) return [];
+  const entries = backupEntries(dir);
+  let copies = entries.reduce((s, e) => s + e.bytes, 0);
+  let free = space.free;
+  const over = () => copies > COPIES_SHARE_MAX * space.total || free < FREE_SHARE_MIN * space.total;
+  const newest = new Set([...AUTO_KINDS].map((k) => newestOf(entries, k)).filter(Boolean).map((e) => e.name));
+  const auto = entries
+    .filter((e) => AUTO_KINDS.has(e.kind) && !protect.has(e.name) && !newest.has(e.name))
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
+  const removed = [];
+  for (const e of auto) {
+    if (!over()) break;
+    if (!removeEntry(dir, e.name)) continue;
+    removed.push(e.name);
+    copies -= e.bytes;
+    free += e.bytes;
+  }
+  if (removed.length) console.warn(`[backup] копии заняли больше, чем положено, — удалены старые: ${removed.join(', ')}`);
+  if (over()) {
+    console.warn(`[backup] Мало места на диске: свободно ${free} Б из ${space.total} Б, копии занимают ${copies} Б. `
+      + 'Самые новые копии каждого вида, ручные и финальные оставлены — освободите место на диске.');
+  }
+  if (path.basename(dir) === 'backups') {
+    const kept = entries.filter((e) => e.kind === 'manual' || e.kind === 'final').reduce((s, e) => s + e.bytes, 0);
+    const cap = Math.floor(COPIES_SHARE_MAX * space.total);
+    noteGuard(path.dirname(dir), {
+      kept_over_cap: kept > cap ? { at: now.toISOString(), bytes: kept, cap_bytes: cap } : null,
+    });
+  }
+  return removed;
+}
+
 /**
  * Every restorable backup in <dataDir>/backups, newest first.
  *
@@ -220,15 +368,22 @@ export function listBackups(dataDir) {
  * @param {string} dataDir
  * @param {'daily'|'manual'|'safety'|'final'} kind
  * @param {Date} [now]  injectable so tests can pin the local date
+ * @param {{protect?: string[], diskSpaceImpl?: Function}} [opts]  DISK_GUARD_V1 —
+ *   имена, которые не удаляются ни уступкой места, ни чисткой; ответ диска (тесты)
  * @returns {Promise<{name:string, kind:string, size:number, mtimeMs:number}>}
  */
-export async function createBackup(db, dataDir, kind, now = new Date()) {
+export async function createBackup(db, dataDir, kind, now = new Date(), { protect = [], diskSpaceImpl = currentDiskSpace } = {}) {
   // The kind becomes part of a filename, so it is a fixed vocabulary, never
   // caller-shaped text — same reasoning as NAME_RE above.
   if (!CREATABLE_KINDS.has(kind)) throw new Error(`Unknown backup kind: ${kind}`);
   const dir = path.join(dataDir, 'backups');
   fs.mkdirSync(dir, { recursive: true });
   sweepBroken(dir);   // DISK_GUARD_V1
+
+  // DISK_GUARD_V1 — место проверяется ДО того, как занято имя: копия, на
+  // которую места нет, не начинается вовсе (раздел 3, п. 2). Не хватает и
+  // после уступок старых — ошибка 'no_space' уходит вызвавшему.
+  ensureCopySpace(dataDir, { kind, protect, diskSpaceImpl, now });
 
   // Same exclusive-create claim as backupBeforeMigrate, same race: two
   // requests landing in the same second (a double-clicked button, or the
@@ -269,6 +424,17 @@ export async function createBackup(db, dataDir, kind, now = new Date()) {
   // лишние байты на диске. Из двух неполных копий правильно иметь вторую.
   const files = snapshotStorage(dataDir, path.basename(out));
   const st = fs.statSync(out);
+  // DISK_GUARD_V1 — копия есть: прежний отказ «Копия не сделана» больше не правда.
+  noteGuard(dataDir, { copy_refused: null });
+  // DISK_GUARD_V1 — чистка сразу после КАЖДОЙ копии (п. 7), а не только после
+  // ежедневной: «Создать копию сейчас» раньше ждала ночи. Новая копия и та,
+  // которую сейчас восстанавливают, не удаляются. Сбой чистки — не сбой копии:
+  // она уже на диске.
+  try {
+    pruneBackupsByKind(dir, { protect: [path.basename(out), ...protect], diskSpaceImpl, now });
+  } catch (e) {
+    console.warn('[backup] старые копии не почищены (новая копия цела):', e && e.message);
+  }
   return { name: path.basename(out), kind, size: st.size, mtimeMs: st.mtimeMs, files };
 }
 
@@ -277,8 +443,14 @@ export async function createBackup(db, dataDir, kind, now = new Date()) {
  * see KEEP_BY_KIND for why one shared counter was wrong. Unknown prefixes
  * (replaced-*, hand-copied files) are never touched: this function deletes
  * only what this module or db/backup.js provably created.
+ *
+ * DISK_GUARD_V1 — после счёта — предел по объёму (pruneBySize). protect —
+ * имена, которые не удаляются ни счётом, ни объёмом: только что сделанная
+ * копия и копия, которую сейчас восстанавливают. Сбой предела — строка в
+ * журнал, не исключение: чистка не бывает причиной несделанной копии.
  */
-export function pruneBackupsByKind(dir) {
+export function pruneBackupsByKind(dir, { protect = [], diskSpaceImpl = currentDiskSpace, now = new Date() } = {}) {
+  const keep = new Set(protect);
   sweepBroken(dir);   // DISK_GUARD_V1
   let files;
   try { files = fs.readdirSync(dir).filter((f) => NAME_RE.test(f)); } catch { return; }
@@ -296,13 +468,15 @@ export function pruneBackupsByKind(dir) {
   for (const [kind, entries] of byKind) {
     entries.sort((a, b) => b.t - a.t);
     for (const { f } of entries.slice(KEEP_BY_KIND[kind])) {
-      try { fs.unlinkSync(path.join(dir, f)); } catch { /* a locked file is not worth failing over */ }
-      // PATIENT_FILE_ATTACH_V1 — снимок файлов уходит ВМЕСТЕ со своей копией
-      // базы. Оставшийся сайдкар держал бы жёсткие ссылки на файлы, удалённые
-      // из storage (сброс к заводским), то есть занимал бы место, о котором
-      // никто не знает и которое ничем не освободить.
-      try { fs.rmSync(path.join(dir, sidecarFor(f)), { recursive: true, force: true }); } catch { /* same */ }
+      if (keep.has(f)) continue;
+      // removeEntry уносит и снимок файлов (PATIENT_FILE_ATTACH_V1), и -wal/-shm.
+      removeEntry(dir, f);
     }
+  }
+  try {
+    pruneBySize(dir, { protect: keep, diskSpaceImpl, now });
+  } catch (e) {
+    console.warn('[backup] предел копий по объёму не проверен:', e && e.message);
   }
 }
 
@@ -313,13 +487,14 @@ export function pruneBackupsByKind(dir) {
  *
  * @returns {Promise<object|null>} the new entry, or null if today was covered
  */
-export async function runDailyBackup(db, dataDir, now = new Date()) {
+export async function runDailyBackup(db, dataDir, now = new Date(), opts = {}) {
   const today = dayStamp(now);
   const covered = listBackups(dataDir).some((b) => b.kind === 'daily' && b.name.startsWith(`daily-${today}-`));
   if (covered) return null;
-  const entry = await createBackup(db, dataDir, 'daily', now);
-  pruneBackupsByKind(path.join(dataDir, 'backups'));
-  return entry;
+  // DISK_GUARD_V1 — чистка теперь внутри createBackup (после каждой копии).
+  // Нет места — 'no_space' уходит в scheduleDailyBackups: строка в журнал и
+  // повтор через час; день не отмечен, потому что копии дня на диске нет.
+  return createBackup(db, dataDir, 'daily', now, opts);
 }
 
 // First tick ~5 minutes after boot, so a clinic PC powered on in the morning
@@ -369,7 +544,10 @@ export async function requestRestore(db, dataDir, name) {
       || !listBackups(dataDir).some((b) => b.name === name)) {
     return { ok: false, reason: 'unknown_backup' };
   }
-  await createBackup(db, dataDir, 'safety');
+  // DISK_GUARD_V1 — копия, которую сейчас восстанавливают, не уступает место
+  // страховочной и не уходит при чистке после неё: иначе восстанавливать было
+  // бы нечего.
+  await createBackup(db, dataDir, 'safety', new Date(), { protect: [name] });
   writeAtomic(path.join(dataDir, MARKER_NAME), JSON.stringify({ action: 'restore', backup: name }));
   return { ok: true };
 }

@@ -10,6 +10,15 @@ import {
   listBackups, createBackup, runDailyBackup, scheduleDailyBackups,
   pruneBackupsByKind, requestRestore, requestFactoryReset, processPendingAction,
 } from './backup.js';
+import { __setDiskSpaceForTests, readGuard, dbBytes, copyNeedBytes, GB } from './disk-guard.js';   // DISK_GUARD_V1
+
+// DISK_GUARD_V1 — диск машины разработчика не данные теста (на 2026-10-29 там
+// 0,9 % свободно — меньше порога 10 %, и чистка по объёму стирала бы копии
+// посреди чужих тестов). Весь файл видит просторный диск; тесты места
+// подставляют свой ответ сами.
+const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
+__setDiskSpaceForTests(ROOMY);
+test.after(() => __setDiskSpaceForTests(null));
 
 // SYSTEM_SETTINGS_V1 — everything here runs against a throwaway temp dir,
 // mirroring db/backup.test.js: this suite must never look at the real data/
@@ -393,4 +402,174 @@ test('DISK_GUARD_V1: помеченный обрывок удаляется вм
   fs.writeFileSync(path.join(b, 'daily-20260822-080500.db.broken'), 'partial');
   await createBackup(db, dir, 'manual');
   assert.deepEqual(fs.readdirSync(b).filter((f) => f.startsWith('daily-')), []);
+});
+
+// --- DISK_GUARD_V1: место перед копией ---------------------------------------
+
+test('DISK_GUARD_V1: места нет и уступать нечего — копия не делается, ничего не стёрто, причина записана', async () => {
+  const { dir, db } = workspace();
+  const keepMe = await createBackup(db, dir, 'manual');
+  const tight = () => ({ free: GB / 2, total: 100 * GB });
+  await assert.rejects(() => createBackup(db, dir, 'manual', new Date(), { diskSpaceImpl: tight }), (e) => {
+    assert.equal(e.code, 'no_space');
+    assert.match(e.message, /^Недостаточно места на диске: нужно \d+,\d ГБ, свободно 0,5 ГБ\. Копия не сделана\.$/);
+    assert.equal(e.template, 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.');
+    return true;
+  });
+  assert.deepEqual(listBackups(dir).map((b) => b.name), [keepMe.name], 'ручная копия на месте, новой нет');
+  const g = readGuard(dir).copy_refused;
+  assert.equal(g.kind, 'manual');
+  assert.equal(g.free_bytes, GB / 2);
+  assert.ok(g.need_bytes > GB, 'нужно — база × 1,2 + 1 ГБ');
+
+  await createBackup(db, dir, 'manual');
+  assert.equal(readGuard(dir).copy_refused, undefined, 'копия получилась — отказ больше не правда');
+});
+
+// Порядок уступок (п. 2): ежедневные → лишние «перед обновлением» (последняя
+// остаётся) → страховочные. Ручные не трогаются никогда. Каждая копия — 100 КБ,
+// а «свободно» на shortKb меньше нужного: уходит ровно столько, сколько нужно.
+const SEEDED = ['pre-2.4.0.db', 'daily-20260801-030000.db', 'safety-20260802-110000.db',
+  'daily-20260803-030000.db', 'pre-2.4.1.db', 'manual-20260804-100000.db'];
+function seedForSpace(bd) {
+  fs.mkdirSync(bd, { recursive: true });
+  let t = Date.now() - 1e6;
+  for (const name of SEEDED) {
+    fs.writeFileSync(path.join(bd, name), Buffer.alloc(100 * 1024));
+    fs.utimesSync(path.join(bd, name), new Date(t), new Date(t));
+    t += 1000;
+  }
+}
+for (const [shortKb, gone] of [
+  [150, ['daily-20260801-030000.db', 'daily-20260803-030000.db']],
+  [250, ['daily-20260801-030000.db', 'daily-20260803-030000.db', 'pre-2.4.0.db']],
+  [350, ['daily-20260801-030000.db', 'daily-20260803-030000.db', 'pre-2.4.0.db', 'safety-20260802-110000.db']],
+]) {
+  test(`DISK_GUARD_V1: не хватает ${shortKb} КБ — уступают ${gone.join(', ')}`, async () => {
+    const { dir, db } = workspace();
+    const bd = backupsDir(dir);
+    seedForSpace(bd);
+    const need = copyNeedBytes(dbBytes(path.join(dir, 'easymed.db')));
+    // total 5 ГБ: свободно ≈ 1 ГБ — больше 10 % диска, а копий — меньше 30 %,
+    // так что чистка по объёму после копии ничего не добавит к уступкам.
+    const made = await createBackup(db, dir, 'manual', new Date(), {
+      diskSpaceImpl: () => ({ free: need - shortKb * 1024, total: 5 * GB }),
+    });
+    const left = fs.readdirSync(bd).filter((f) => f.endsWith('.db')).sort();
+    assert.deepEqual(left, [...SEEDED.filter((n) => !gone.includes(n)), made.name].sort(),
+      'последняя «перед обновлением» и ручные не трогаются');
+  });
+}
+
+test('DISK_GUARD_V1: копия, которую восстанавливают, не уступает место страховочной', async () => {
+  const { dir, db } = workspace();
+  const bd = backupsDir(dir);
+  fs.mkdirSync(bd, { recursive: true });
+  const target = 'daily-20260801-030000.db';
+  fs.writeFileSync(path.join(bd, target), Buffer.alloc(100 * 1024));
+  const need = copyNeedBytes(dbBytes(path.join(dir, 'easymed.db')));
+  __setDiskSpaceForTests(() => ({ free: need - 50 * 1024, total: 5 * GB }));
+  try {
+    await assert.rejects(() => requestRestore(db, dir, target), (e) => e.code === 'no_space');
+  } finally {
+    __setDiskSpaceForTests(ROOMY);
+  }
+  assert.ok(fs.existsSync(path.join(bd, target)), 'иначе восстанавливать было бы нечего');
+  assert.ok(!fs.existsSync(marker(dir)), 'без страховочной копии намерение не пишется');
+});
+
+// --- DISK_GUARD_V1: предел по объёму и чистка сразу ---------------------------
+
+function putSized(bd, name, kb, t) {
+  fs.writeFileSync(path.join(bd, name), Buffer.alloc(kb * 1024));
+  fs.utimesSync(path.join(bd, name), new Date(t), new Date(t));
+}
+
+test('DISK_GUARD_V1: копии больше 30 % диска — автоматические уходят от старых к новым, пока не уложатся', () => {
+  const dir = tmpDir('em-sysbk-cap-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  let t = Date.now() - 1e6;
+  for (const n of ['daily-20260801-030000.db', 'safety-20260802-110000.db', 'pre-2.4.0.db',
+    'manual-20260803-100000.db', 'daily-20260804-030000.db']) { putSized(bd, n, 300, t); t += 1000; }
+  // 1500 КБ копий на «диске» 4000 КБ — 37,5 %; предел 30 % — 1200 КБ.
+  pruneBackupsByKind(bd, { diskSpaceImpl: () => ({ free: 2000 * 1024, total: 4000 * 1024 }) });
+  assert.deepEqual(fs.readdirSync(bd).sort(),
+    ['daily-20260804-030000.db', 'manual-20260803-100000.db', 'pre-2.4.0.db', 'safety-20260802-110000.db'],
+    'ушла одна, самая старая автоматическая — и копии уложились в 30 %');
+});
+
+// Поправка 1 плана: предел по объёму не трогает самую новую копию каждого
+// автоматического вида — поэтому здесь две ежедневные, и уходит старшая.
+test('DISK_GUARD_V1: свободно меньше 10 % — уходят и лишние «перед обновлением», последняя остаётся', () => {
+  const dir = tmpDir('em-sysbk-free-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  let t = Date.now() - 1e6;
+  for (const n of ['pre-2.3.0.db', 'daily-20260801-030000.db', 'pre-2.4.0.db', 'daily-20260802-030000.db',
+    'manual-20260803-100000.db']) {
+    putSized(bd, n, 100, t); t += 1000;
+  }
+  // Диск 10000 КБ, свободно 800 КБ (8 %): нужно освободить 200 КБ.
+  pruneBackupsByKind(bd, { diskSpaceImpl: () => ({ free: 800 * 1024, total: 10000 * 1024 }) });
+  assert.deepEqual(fs.readdirSync(bd).sort(), ['daily-20260802-030000.db', 'manual-20260803-100000.db', 'pre-2.4.0.db'],
+    'pre-2.4.0 — точка отката текущей версии, daily-0802 — самая новая ежедневная, ручная — не автоматическая');
+});
+
+// Поправка 1 плана: диск занят ДРУГИМИ файлами — свободно меньше 10 %, сколько
+// копий ни удаляй. Чистка по объёму не опустошает копии: самая новая каждого
+// автоматического вида остаётся, а в журнал программы уходит предупреждение.
+test('DISK_GUARD_V1: диск занят другими файлами — самые новые ежедневная, «перед обновлением» и страховочная остаются, предупреждение о месте', async (t) => {
+  const { dir, db } = workspace();
+  const bd = backupsDir(dir);
+  fs.mkdirSync(bd, { recursive: true });
+  let ts = Date.now() - 1e6;
+  for (const n of ['daily-20260801-030000.db', 'pre-2.3.0.db', 'safety-20260802-110000.db',
+    'daily-20260803-030000.db', 'pre-2.4.0.db', 'safety-20260804-110000.db', 'manual-20260805-100000.db']) {
+    putSized(bd, n, 100, ts); ts += 1000;
+  }
+  const warns = [];
+  t.mock.method(console, 'warn', (...a) => { warns.push(a.join(' ')); });
+  // Диск 100 ГБ, свободно 2 ГБ (2 %): на копию места хватает, а «меньше 10 %»
+  // не исправить никакой чисткой копий.
+  const made = await createBackup(db, dir, 'manual', new Date(), { diskSpaceImpl: () => ({ free: 2 * GB, total: 100 * GB }) });
+  assert.deepEqual(fs.readdirSync(bd).filter((f) => f.endsWith('.db')).sort(),
+    ['daily-20260803-030000.db', made.name, 'manual-20260805-100000.db', 'pre-2.4.0.db', 'safety-20260804-110000.db'].sort(),
+    'ушли только старшие копии каждого автоматического вида');
+  assert.ok(warns.some((w) => /Мало места на диске/.test(w)), `предупреждение о нехватке места: ${JSON.stringify(warns)}`);
+});
+
+test('DISK_GUARD_V1: ручные и финальные одни больше 30 % — не удаляются, на экране предупреждение', () => {
+  const dir = tmpDir('em-sysbk-kept-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  const t = Date.now() - 1e6;
+  putSized(bd, 'manual-20260801-100000.db', 200, t);
+  putSized(bd, 'final-20260802-120000.db', 200, t + 1000);
+  const disk = () => ({ free: 500 * 1024, total: 1000 * 1024 });
+  pruneBackupsByKind(bd, { diskSpaceImpl: disk });
+  assert.equal(fs.readdirSync(bd).length, 2, 'ручные и финальные сами не удаляются');
+  const g = readGuard(dir).kept_over_cap;
+  assert.equal(g.bytes, 400 * 1024);
+  assert.equal(g.cap_bytes, Math.floor(0.3 * 1000 * 1024));
+
+  fs.rmSync(path.join(bd, 'final-20260802-120000.db'));
+  pruneBackupsByKind(bd, { diskSpaceImpl: disk });
+  assert.equal(readGuard(dir).kept_over_cap, undefined, 'уложились — предупреждение снято');
+});
+
+test('DISK_GUARD_V1: «Создать копию сейчас» чистит старые копии сразу, а не ночью', async () => {
+  const { dir, db } = workspace();
+  const bd = backupsDir(dir);
+  fs.mkdirSync(bd, { recursive: true });
+  let t = Date.now() - 1e6;
+  for (let i = 0; i < 10; i++) {
+    putSized(bd, `manual-202608${String(i + 1).padStart(2, '0')}-100000.db`, 1, t);
+    t += 1000;
+  }
+  const made = await createBackup(db, dir, 'manual');
+  const manuals = listBackups(dir).filter((b) => b.kind === 'manual').map((b) => b.name);
+  assert.equal(manuals.length, 10, 'KEEP_BY_KIND.manual — 10');
+  assert.ok(manuals.includes(made.name));
+  assert.ok(!manuals.includes('manual-20260801-100000.db'), 'самая старая ушла сразу');
 });

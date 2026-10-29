@@ -12,6 +12,12 @@ import { backupList, backupCreate, backupRestore, factoryReset, __setExitForTest
 import { getRpc } from './index.js';
 import { isAlwaysAllowedRpc } from '../control/gate.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
+import { __setDiskSpaceForTests, GB } from '../disk-guard.js';   // DISK_GUARD_V1
+
+// DISK_GUARD_V1 — диск машины разработчика не данные теста.
+const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
+__setDiskSpaceForTests(ROOMY);
+test.after(() => __setDiskSpaceForTests(null));
 
 // SYSTEM_SETTINGS_V1 — what belongs HERE is the RPC adapter: the admin gate,
 // the password re-check, the confirm word, and the exit-75 seam. The backup
@@ -173,4 +179,23 @@ test('factory_reset with wipe_backups omitted defaults to KEEPING the backups', 
   await factoryReset(db, { password: PASSWORD, confirm: 'УДАЛИТЬ' }, ADMIN);
   assert.equal(JSON.parse(fs.readFileSync(marker(dir), 'utf8')).wipe_backups, false,
     'recovery-from-mistake beats clean-disk by default');
+});
+
+test('DISK_GUARD_V1: backup_create без места — 409 понятной фразой с шаблоном, не «Ошибка сервера»', async () => {
+  const { db, dir } = fresh();
+  __setDiskSpaceForTests(() => ({ free: GB / 2, total: 100 * GB }));
+  try {
+    await assert.rejects(() => backupCreate(db, {}, ADMIN), (e) => {
+      assert.equal(e.status, 409, 'routes/rpc.js прячет всё, что ≥ 500, за «Ошибка сервера»');
+      assert.equal(e.code, 'no_space');
+      // :memory: — файла базы нет, копия 0 Б: нужно ровно 1 ГБ запаса.
+      assert.equal(e.message, 'Недостаточно места на диске: нужно 1,0 ГБ, свободно 0,5 ГБ. Копия не сделана.');
+      assert.equal(e.template, 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.');
+      assert.deepEqual(e.params, { need: '1,0', free: '0,5' });
+      return true;
+    });
+  } finally {
+    __setDiskSpaceForTests(ROOMY);
+  }
+  assert.deepEqual(listBackups(dir), []);
 });

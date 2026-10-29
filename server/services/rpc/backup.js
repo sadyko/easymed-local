@@ -73,10 +73,27 @@ export function backupList(db, args, user) {
   return { backups: listBackups(dataDir), data_dir: dataDir, free_bytes: free };
 }
 
+// DISK_GUARD_V1 — «нет места» (services/backup.js ensureCopySpace) — отказ по
+// делу: 409 словами сервера, с шаблоном и числами (server-message.js), чтобы
+// экран перевёл фразу целиком. Без этого routes/rpc.js показал бы «Ошибка
+// сервера»: у этой ошибки нет статуса, а всё, что ≥ 500, маршрут прячет.
+function asRpcError(e) {
+  if (!e || e.code !== 'no_space') return e;
+  const err = new RpcError(e.message, 409);
+  err.code = 'no_space';
+  err.template = e.template;
+  err.params = e.params;
+  return err;
+}
+
 /** «Создать копию сейчас». */
 export async function backupCreate(db, args, user) {
   requireAdmin(user);
-  return { ok: true, backup: await createBackup(db, getDataDir(), 'manual') };
+  try {
+    return { ok: true, backup: await createBackup(db, getDataDir(), 'manual') };
+  } catch (e) {
+    throw asRpcError(e);
+  }
 }
 
 /** Restore a listed backup: password re-check, marker, then restart via exit 75. */
@@ -85,7 +102,12 @@ export async function backupRestore(db, args, user) {
   // Password BEFORE any disk work: a caller who cannot re-prove themselves
   // must not even cause a safety copy — no observable side effect at all.
   requirePassword(db, user, args.password);
-  const r = await requestRestore(db, getDataDir(), typeof args.name === 'string' ? args.name : '');
+  let r;
+  try {
+    r = await requestRestore(db, getDataDir(), typeof args.name === 'string' ? args.name : '');
+  } catch (e) {
+    throw asRpcError(e);   // DISK_GUARD_V1 — без места на страховочную копию восстановления нет
+  }
   if (!r.ok) throw new RpcError('Такой резервной копии нет. Обновите список и попробуйте ещё раз.', 400);
   scheduleRestart();
   return { ok: true, restarting: true };
@@ -101,7 +123,11 @@ export async function factoryReset(db, args, user) {
     throw new RpcError('Подтверждение не совпадает: введите слово УДАЛИТЬ.', 400);
   }
   requirePassword(db, user, args.password);
-  await requestFactoryReset(db, getDataDir(), { wipeBackups: !!args.wipe_backups });
+  try {
+    await requestFactoryReset(db, getDataDir(), { wipeBackups: !!args.wipe_backups });
+  } catch (e) {
+    throw asRpcError(e);   // DISK_GUARD_V1 — без места на финальную копию удаления нет
+  }
   scheduleRestart();
   return { ok: true, restarting: true };
 }

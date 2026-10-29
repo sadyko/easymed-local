@@ -24,6 +24,13 @@ import { runCheckin, readJsonFile } from './checkin.js';
 import { setAppVersion } from './config.js';
 import { updateApprove } from '../rpc/updates.js';
 import { listen } from '../../../control-plane/server/test-helpers/listen.js';
+import { __setDiskSpaceForTests, GB } from '../disk-guard.js';   // DISK_GUARD_V1
+
+// DISK_GUARD_V1 — копия перед обновлением спрашивает место; диск машины
+// разработчика — не данные теста.
+const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
+__setDiskSpaceForTests(ROOMY);
+test.after(() => __setDiskSpaceForTests(null));
 
 // --- test harness -------------------------------------------------------------
 

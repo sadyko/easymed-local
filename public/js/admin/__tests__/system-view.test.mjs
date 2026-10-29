@@ -97,6 +97,7 @@ const jsonErr = (error, status = 400) => ({ ok: false, status, json: async () =>
 let backupListCalls, backupCreateCalls, restoreCalls, resetCalls, requestCalls, enrollCalls;
 let lastRestoreBody, lastResetBody, lastRequestBody, lastEnrollBody;
 let backupRows, restoreRespond, resetRespond;
+let createRespond = null;   // DISK_GUARD_V1 — null: обычный успешный ответ
 
 function resetServer() {
   backupListCalls = 0; backupCreateCalls = 0; restoreCalls = 0; resetCalls = 0; requestCalls = 0; enrollCalls = 0;
@@ -107,6 +108,7 @@ function resetServer() {
   ];
   restoreRespond = () => jsonOk({ ok: true, restarting: true });
   resetRespond = () => jsonOk({ ok: true, restarting: true });
+  createRespond = null;
 }
 
 globalThis.fetch = async (url, opts) => {
@@ -116,6 +118,7 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/backup_list')) { backupListCalls++; return jsonOk({ backups: backupRows }); }
   if (u.startsWith('/api/rpc/backup_create')) {
     backupCreateCalls++;
+    if (createRespond) return createRespond();
     backupRows = [{ name: 'manual-20260823-110000.db', kind: 'manual', size: 2048, mtimeMs: new Date(2026, 7, 23, 11, 0).getTime() }, ...backupRows];
     return jsonOk(backupRows[0]);
   }
@@ -362,4 +365,21 @@ test('галочка «также удалить все резервные ко�
   findButtonByText(modal, /Удалить всё/).click();
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(lastResetBody.wipe_backups, true);
+});
+
+// --- DISK_GUARD_V1 -------------------------------------------------------------
+
+test('DISK_GUARD_V1: «Создать копию сейчас» без места на диске — фраза сервера с числами, а не «попробуйте ещё раз»', async () => {
+  const msg = 'Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ. Копия не сделана.';
+  createRespond = () => jsonErr({
+    code: 'no_space', message: msg,
+    template: 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.',
+    params: { need: '2,1', free: '0,4' },
+  }, 409);
+  const root = mk('div');
+  await renderClinicData(root);
+  findButtonByText(root, /Создать копию сейчас/).click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.match(textOf(root), /Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ\. Копия не сделана\./);
+  assert.doesNotMatch(textOf(root), /Не удалось создать копию/, 'повтор не поможет — нужно освободить место');
 });
