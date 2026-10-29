@@ -189,13 +189,56 @@ test('DISK_GUARD_V1: backup_create без места — 409 понятной ф
       assert.equal(e.status, 409, 'routes/rpc.js прячет всё, что ≥ 500, за «Ошибка сервера»');
       assert.equal(e.code, 'no_space');
       // :memory: — файла базы нет, копия 0 Б: нужно ровно 1 ГБ запаса.
-      assert.equal(e.message, 'Недостаточно места на диске: нужно 1,0 ГБ, свободно 0,5 ГБ. Копия не сделана.');
-      assert.equal(e.template, 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.');
-      assert.deepEqual(e.params, { need: '1,0', free: '0,5' });
+      assert.equal(e.message, NO_SPACE_RU, 'русская фраза — для журнала и русского экрана');
+      assert.equal(e.template, NO_SPACE_TEMPLATE);
+      assert.deepStrictEqual(e.params, { need: 1, free: 0.5 }, 'числа — числами: десятичный знак ставит экран по своему языку');
       return true;
     });
   } finally {
     __setDiskSpaceForTests(ROOMY);
   }
   assert.deepEqual(listBackups(dir), []);
+});
+
+// :memory: — файла базы нет, копия 0 Б: нужно ровно 1 ГБ запаса.
+const NO_SPACE_RU = 'Недостаточно места на диске: нужно 1,0 ГБ, свободно 0,5 ГБ. Копия не сделана.';
+const NO_SPACE_TEMPLATE = 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.';
+const isNoSpace409 = (e) => {
+  assert.equal(e.status, 409, 'не «Ошибка сервера»: routes/rpc.js прячет всё, что ≥ 500');
+  assert.equal(e.code, 'no_space');
+  assert.equal(e.message, NO_SPACE_RU);
+  assert.equal(e.template, NO_SPACE_TEMPLATE);
+  assert.deepStrictEqual(e.params, { need: 1, free: 0.5 });
+  return true;
+};
+
+test('DISK_GUARD_V1: backup_restore без места на страховочную копию — 409 с шаблоном, восстановление не запрошено, перезапуска нет', async () => {
+  const { db, dir } = fresh();
+  const snap = await createBackup(db, dir, 'manual');
+  exitCalls = [];
+  __setDiskSpaceForTests(() => ({ free: GB / 2, total: 100 * GB }));
+  try {
+    await assert.rejects(() => backupRestore(db, { name: snap.name, password: PASSWORD }, ADMIN), isNoSpace409);
+  } finally {
+    __setDiskSpaceForTests(ROOMY);
+  }
+  await exitFired();
+  assert.ok(!fs.existsSync(marker(dir)));
+  assert.ok(!listBackups(dir).some((b) => b.kind === 'safety'));
+  assert.deepEqual(exitCalls, []);
+});
+
+test('DISK_GUARD_V1: factory_reset без места на финальную копию — 409 с шаблоном, удаление не запрошено, перезапуска нет', async () => {
+  const { db, dir } = fresh();
+  exitCalls = [];
+  __setDiskSpaceForTests(() => ({ free: GB / 2, total: 100 * GB }));
+  try {
+    await assert.rejects(() => factoryReset(db, { password: PASSWORD, confirm: 'УДАЛИТЬ', wipe_backups: true }, ADMIN), isNoSpace409);
+  } finally {
+    __setDiskSpaceForTests(ROOMY);
+  }
+  await exitFired();
+  assert.ok(!fs.existsSync(marker(dir)));
+  assert.ok(!listBackups(dir).some((b) => b.kind === 'final'));
+  assert.deepEqual(exitCalls, []);
 });

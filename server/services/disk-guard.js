@@ -74,21 +74,31 @@ export function dbBytes(dbFile) {
 export const copyNeedBytes = (db) => Math.ceil(db * COPY_FACTOR) + RESERVE_BYTES;
 
 /**
- * Гигабайты для фразы человеку, один знак после запятой. «Нужно» округляется
+ * Гигабайты с одним знаком после запятой — числом. «Нужно» округляется
  * вверх, «свободно» — вниз: фраза «нужно 1,0 ГБ, свободно 1,0 ГБ» о
  * несделанной копии читалась бы как ошибка программы. Та же формула — у
  * экрана (public/js/admin/updates-logic.js formatGb).
  */
-export function gbText(bytes, { up = false } = {}) {
+export function gbValue(bytes, { up = false } = {}) {
   const v = Math.max(0, Number(bytes) || 0) / GB;
-  const t = (up ? Math.ceil(v * 10) : Math.floor(v * 10)) / 10;
-  return t.toFixed(1).replace('.', ',');
+  return (up ? Math.ceil(v * 10) : Math.floor(v * 10)) / 10;
 }
 
-/** Ошибка «нет места» — с шаблоном и значениями (server-message.js), чтобы экран перевёл фразу целиком. */
+/** То же — для русской фразы (журнал, русский экран): «2,1». */
+export function gbText(bytes, opts) {
+  return gbValue(bytes, opts).toFixed(1).replace('.', ',');
+}
+
+/**
+ * Ошибка «нет места» — с шаблоном и значениями (server-message.js), чтобы экран
+ * перевёл фразу целиком. message — готовая русская фраза (журнал, русский
+ * экран); в params числа — ЧИСЛАМИ: десятичный знак ставит экран по своему
+ * языку (public/js/admin/i18n.js — ru и uz запятая, en точка). Строка «2,1»
+ * осталась бы с запятой и на английском экране.
+ */
 export function noSpaceError(need, free) {
-  const params = { need: gbText(need, { up: true }), free: gbText(free) };
-  const e = new Error(COPY_REFUSED_TEMPLATE.replace('{need}', params.need).replace('{free}', params.free));
+  const params = { need: gbValue(need, { up: true }), free: gbValue(free) };
+  const e = new Error(COPY_REFUSED_TEMPLATE.replace('{need}', gbText(need, { up: true })).replace('{free}', gbText(free)));
   e.code = 'no_space';
   e.need_bytes = need;
   e.free_bytes = free;

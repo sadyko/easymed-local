@@ -79,7 +79,7 @@ function openResetModal() {
             busy = false;
             refreshEnabled();
             statusEl.textContent = (e && e.message && e.message !== 'reset refused')
-                ? e.message
+                ? tr(e.message)   // DISK_GUARD_V1 — «нет места на финальную копию» переводится по шаблону сервера
                 : tr('Не удалось удалить данные. Попробуйте ещё раз.');
         }
     });

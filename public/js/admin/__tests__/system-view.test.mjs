@@ -75,7 +75,9 @@ globalThis.localStorage = fakeLocalStorage;
 // Russian-string assertions hold on GitHub's English-locale runner exactly
 // as they do on a Russian-locale dev machine.
 fakeLocalStorage.setItem('admin.lang', 'ru');
-globalThis.window = { location: { hostname: 'localhost' }, localStorage: fakeLocalStorage, addEventListener(){}, easymed: { state: { user: null } } };
+// DISK_GUARD_V1 — dispatchEvent: setLang() шлёт окну «langchange», а тесты
+// «нет места» переключают язык экрана перед нажатием.
+globalThis.window = { location: { hostname: 'localhost' }, localStorage: fakeLocalStorage, addEventListener(){}, dispatchEvent(){ return true; }, easymed: { state: { user: null } } };
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
 globalThis.requestAnimationFrame=(fn)=>fn();
 
@@ -138,6 +140,7 @@ const { renderUpdates } = await import('../views/updates.js');
 const { renderSubscription } = await import('../views/subscription.js');
 const { renderClinicData } = await import('../views/clinic-data.js');
 const { setLicence } = await import('../licence.js');
+const { setLang } = await import('../i18n.js');   // DISK_GUARD_V1
 
 function setUser(u) { globalThis.window.easymed.state.user = u; }
 const ADMIN = { id: 1, role: 'admin', is_admin: true, is_super_admin: false };
@@ -369,17 +372,58 @@ test('галочка «также удалить все резервные ко�
 
 // --- DISK_GUARD_V1 -------------------------------------------------------------
 
-test('DISK_GUARD_V1: «Создать копию сейчас» без места на диске — фраза сервера с числами, а не «попробуйте ещё раз»', async () => {
-  const msg = 'Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ. Копия не сделана.';
-  createRespond = () => jsonErr({
-    code: 'no_space', message: msg,
-    template: 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.',
-    params: { need: '2,1', free: '0,4' },
-  }, 409);
-  const root = mk('div');
-  await renderClinicData(root);
-  findButtonByText(root, /Создать копию сейчас/).click();
-  await new Promise((r) => setTimeout(r, 20));
-  assert.match(textOf(root), /Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ\. Копия не сделана\./);
-  assert.doesNotMatch(textOf(root), /Не удалось создать копию/, 'повтор не поможет — нужно освободить место');
-});
+// Ответ сервера «нет места» (server/services/rpc/backup.js asRpcError): русская
+// фраза — для журнала и русского экрана; числа — числами, десятичный знак ставит
+// экран по своему языку.
+const NO_SPACE = () => jsonErr({
+  code: 'no_space',
+  message: 'Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ. Копия не сделана.',
+  template: 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.',
+  params: { need: 2.1, free: 0.4 },
+}, 409);
+const NO_SPACE_TEXT = {
+  ru: /Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ\. Копия не сделана\./,
+  en: /Not enough disk space: 2\.1 GB needed, 0\.4 GB free\. The backup was not made\./,
+  uz: /Diskda joy yetarli emas: 2,1 GB kerak, 0,4 GB bo‘sh\. Nusxa olinmadi\./,
+};
+
+for (const lang of ['ru', 'en', 'uz']) {
+  test(`DISK_GUARD_V1: «Создать копию сейчас» без места на диске (${lang}) — фраза сервера с числами, а не «попробуйте ещё раз»`, async () => {
+    createRespond = NO_SPACE;
+    const root = mk('div');
+    await renderClinicData(root);
+    const btn = findButtonByText(root, /Создать копию сейчас/);
+    setLang(lang);   // язык меняется после отрисовки: кнопки ищутся по-русски
+    try {
+      btn.click();
+      await new Promise((r) => setTimeout(r, 20));
+      assert.match(textOf(root), NO_SPACE_TEXT[lang]);
+      assert.doesNotMatch(textOf(root), /Не удалось создать копию|could not|Nusxa yaratib/i, 'повтор не поможет — нужно освободить место');
+    } finally {
+      setLang('ru');
+    }
+  });
+
+  test(`DISK_GUARD_V1: удаление данных без места на финальную копию (${lang}) — фраза сервера на языке экрана, удаления нет`, async () => {
+    resetRespond = NO_SPACE;
+    const root = mk('div');
+    await renderClinicData(root);
+    findButtonByText(root, /Удалить все данные клиники/).click();
+    const modal = findByClass(document.body, 'modal');
+    const word = findInputByType(modal, 'text');
+    const pass = findInputByType(modal, 'password');
+    word.value = 'УДАЛИТЬ'; word.dispatchEvent({ type: 'input' });
+    pass.value = 'admin-pw'; pass.dispatchEvent({ type: 'input' });
+    const confirm = findButtonByText(modal, /Удалить всё/);
+    setLang(lang);
+    try {
+      confirm.click();
+      await new Promise((r) => setTimeout(r, 20));
+      assert.equal(resetCalls, 1);
+      assert.match(textOf(modal), NO_SPACE_TEXT[lang]);
+      assert.equal(findByClass(document.body, 'sys-restart-overlay'), undefined, 'отказ — без оверлея перезапуска');
+    } finally {
+      setLang('ru');
+    }
+  });
+}

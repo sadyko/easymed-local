@@ -354,16 +354,30 @@ export function tr(str) {
     // шаблон и значения (shared/server-messages.js). Переводим шаблон,
     // подставляем значения (слово из словаря — тоже переводом).
     const sm = lookupServerMessage(str);
-    if (sm) return fillServerMessage(sm);
+    // DISK_GUARD_V1 — русский экран показывает фразу сервера как есть: числа в
+    // ней сервер уже написал по-русски («свободно 3,0 ГБ»), а из числа 3 в
+    // params вышло бы «3». Для всех прежних фраз это то же самое: сервер
+    // собирает message из того же шаблона и тех же значений (server-message.js).
+    if (sm) return currentLang === 'ru' ? str : fillServerMessage(sm);
     return str;
+}
+
+// DISK_GUARD_V1 — число в params приходит числом: десятичный знак — по языку
+// экрана (ru и uz — запятая, en — точка). Целые числа не меняются.
+const DECIMAL_COMMA = new Set(['ru', 'uz']);
+function paramText(v) {
+    if (typeof v === 'number' && Number.isFinite(v)) {
+        const s = String(v);
+        return DECIMAL_COMMA.has(currentLang) ? s.replace('.', ',') : s;
+    }
+    return typeof v === 'string' && STRINGS[v] ? (STRINGS[v][currentLang] || v) : String(v);
 }
 
 function fillServerMessage({ template, params }) {
     const e = STRINGS[template];
     let out = e ? (e[currentLang] || e.en || template) : template;
     for (const [k, v] of Object.entries(params || {})) {
-        const w = typeof v === 'string' && STRINGS[v] ? (STRINGS[v][currentLang] || v) : String(v);
-        out = out.split('{' + k + '}').join(w);
+        out = out.split('{' + k + '}').join(paramText(v));
     }
     return out;
 }

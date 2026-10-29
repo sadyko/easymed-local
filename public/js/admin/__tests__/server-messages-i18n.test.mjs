@@ -58,6 +58,27 @@ test('статическая фраза сервера переводится с
   assert.equal(tr('not allowed'), 'Нет доступа.', 'машинное слово компилятора запросов на русском экране — по-русски');
 });
 
+// DISK_GUARD_V1 — числа в params приходят числами: десятичный знак ставит экран
+// (ru и uz — запятая, en — точка). Русский экран показывает фразу сервера как
+// есть: «0,0 ГБ» сервер уже написал сам, а из числа 0 вышло бы «0 ГБ».
+const NO_SPACE = {
+  code: 'no_space',
+  message: 'Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,0 ГБ. Копия не сделана.',
+  template: 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.',
+  params: { need: 2.1, free: 0 },
+};
+
+test('DISK_GUARD_V1: числа из params — с десятичным знаком языка экрана; русский экран — ровно фраза сервера', () => {
+  _resetServerMessages();
+  rememberServerMessage(NO_SPACE);
+  setLang('en');
+  assert.equal(tr(NO_SPACE.message), 'Not enough disk space: 2.1 GB needed, 0 GB free. The backup was not made.');
+  setLang('uz');
+  assert.equal(tr(NO_SPACE.message), 'Diskda joy yetarli emas: 2,1 GB kerak, 0 GB bo‘sh. Nusxa olinmadi.');
+  setLang('ru');
+  assert.equal(tr(NO_SPACE.message), NO_SPACE.message);
+});
+
 test('db-client запоминает шаблон отказа базы: нарушение уникальности — на языке экрана, код SQLite не спрятан', async () => {
   _resetServerMessages();
   const body = { error: {
