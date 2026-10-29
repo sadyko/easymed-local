@@ -46,17 +46,23 @@ async function board(view = 'kanban', leads = LEADS) {
   await renderCrm(root, { onNavigate() {} });
   await tick();
   // Фильтр — состояние модуля: возвращаем «Все», чтобы тесты не зависели от порядка.
-  const all = allChip(root);
-  if (all) { all.click(); await tick(); }
+  if (srcSel(root)) await pickSrc(root, '');
   button(root, view === 'list' ? /Список/ : /Канбан/).click();
   await tick();
   return root;
 }
-const srcChips = (root) => byAttr(root, 'data-src-chip');
-const chipOf = (root, key) => srcChips(root).find((n) => n.getAttribute('data-src-chip') === key);
-function allChip(root) {
-  const row = byAttr(root, 'data-crm-src-filter')[0];
-  return row ? walk(row).find((n) => n.tagName === 'BUTTON' && /^Все · /.test(textOf(n))) : null;
+// CRM_FILTERS_DROPDOWN_V1 (2026-10-29) — фильтр «Источник» над доской стал
+// выпадающим списком (data-src-select) с ОДНИМ значением: «Все · N» — пустое,
+// затем источники выборки со счётчиком. Чипов data-src-chip больше нет; окно
+// заявки по-прежнему отмечает источники по несколько.
+const srcSel = (root) => byAttr(root, 'data-src-select')[0];
+const srcOpts = (root) => (srcSel(root) ? walk(srcSel(root)).filter((n) => n.tagName === 'OPTION') : []);
+const optOf = (root, key) => srcOpts(root).find((o) => o.value === key);
+async function pickSrc(root, key) {
+  const s = srcSel(root);
+  s.value = key;
+  s.dispatchEvent({ type: 'change', target: s, currentTarget: s });
+  await tick();
 }
 const cards = (root) => byClass(root, 'crm-card');
 const cardOf = (root, name) => cards(root).find((c) => textOf(c).includes(name));
@@ -72,37 +78,31 @@ const pick = (modal, key) => picks(modal).find((n) => n.getAttribute('data-src-p
 const pressed = (modal) => picks(modal).filter((n) => n.getAttribute('aria-pressed') === 'true').map((n) => n.getAttribute('data-src-pick'));
 const mainPick = (modal) => picks(modal).filter((n) => n.hasAttribute('data-src-main')).map((n) => n.getAttribute('data-src-pick'));
 
-test('чипы фильтра: заявка считается в каждом своём источнике, «Все» — по заявкам; скрытый источник заявки тоже в ряду', async () => {
+test('список фильтра: заявка считается в каждом своём источнике, «Все» — по заявкам; скрытый источник заявки тоже в списке', async () => {
   const root = await board();
-  assert.equal(textOf(allChip(root)), 'Все · 4');
-  const counts = Object.fromEntries(srcChips(root).map((n) => [n.getAttribute('data-src-chip'), textOf(n)]));
+  assert.equal(textOf(optOf(root, '')), 'Все · 4');
+  const counts = Object.fromEntries(srcOpts(root).filter((o) => o.value).map((o) => [o.value, textOf(o)]));
   assert.deepEqual(counts, {
     call: 'Звонок · 2', instagram: 'Instagram · 2', referral: 'Рекомендация · 1', telegram: 'Telegram · 1',
   });
   window.easymed.state.user = null;
 });
 
-test('фильтр по нескольким: видна заявка, у которой отмечен хотя бы один источник; «Все» снимает отметки', async () => {
+// CRM_FILTERS_DROPDOWN_V1 — выбирается ОДИН источник (чипы отмечались по
+// несколько): заявка видна, если выбранный есть среди её источников; «Все»
+// снимает выбор.
+test('фильтр по одному источнику: видна заявка, у которой он есть среди источников; «Все» снимает выбор', async () => {
   const root = await board();
-  chipOf(root, 'referral').click();
-  await tick();
+  await pickSrc(root, 'referral');
   assert.deepEqual(cards(root).map(textOf).map((t) => t.includes('Каримова')), [true], 'по «Рекомендации» — только Каримова');
-  chipOf(root, 'call').click();
-  await tick();
+  await pickSrc(root, 'call');
   const shown = cards(root).map((c) => textOf(c));
-  assert.equal(shown.length, 3, 'Рекомендация + Звонок: Каримова, Бахтиёрова, Азимов');
-  assert.ok(!shown.some((t) => t.includes('Юсупов')));
-  assert.equal(chipOf(root, 'referral').getAttribute('aria-pressed'), 'true');
-  assert.equal(chipOf(root, 'call').getAttribute('aria-pressed'), 'true');
-  assert.equal(chipOf(root, 'instagram').getAttribute('aria-pressed'), 'false');
-  // Повторное нажатие снимает отметку.
-  chipOf(root, 'call').click();
-  await tick();
-  assert.equal(cards(root).length, 1);
-  allChip(root).click();
-  await tick();
+  assert.equal(shown.length, 2, 'Звонок: Бахтиёрова и Азимов (у него звонок — второй источник)');
+  assert.ok(!shown.some((t) => t.includes('Юсупов')) && !shown.some((t) => t.includes('Каримова')), 'при одном выбранном источнике видны чужие заявки');
+  assert.equal(srcSel(root).value, 'call');
+  await pickSrc(root, '');
   assert.equal(cards(root).length, 4);
-  assert.ok(srcChips(root).every((n) => n.getAttribute('aria-pressed') === 'false'), '«Все» не снял отметки');
+  assert.equal(srcSel(root).value, '', '«Все» не снял выбор');
   window.easymed.state.user = null;
 });
 
@@ -252,20 +252,18 @@ test('ревью M1: отмеченный источник остаётся в �
   const root = await board('kanban', leads);
   const period = (re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
   try {
-    chipOf(root, 'telegram').click();
-    await tick();
+    await pickSrc(root, 'telegram');
     assert.equal(cards(root).length, 1);
     period(/^30 дней$/).click();
     await tick(80);
-    const tg = chipOf(root, 'telegram');
-    assert.ok(tg, 'отмеченный «Telegram» пропал из ряда — снять отметку нечем');
+    const tg = optOf(root, 'telegram');
+    assert.ok(tg, 'выбранный «Telegram» пропал из списка — снять выбор нечем');
     assert.equal(textOf(tg), 'Telegram · 0');
-    assert.equal(tg.getAttribute('aria-pressed'), 'true');
+    assert.equal(srcSel(root).value, 'telegram');
     assert.equal(cards(root).length, 0);
-    tg.click();
-    await tick();
-    assert.equal(cards(root).length, 1, 'после снятия отметки доска не вернулась');
-    assert.ok(!chipOf(root, 'telegram'), 'неотмеченный источник без заявок в периоде нарисован');
+    await pickSrc(root, '');
+    assert.equal(cards(root).length, 1, 'после снятия выбора доска не вернулась');
+    assert.ok(!optOf(root, 'telegram'), 'невыбранный источник без заявок в периоде предложен');
   } finally {
     period(/^Всё время$/).click();
     await tick(80);

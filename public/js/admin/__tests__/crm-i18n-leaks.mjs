@@ -47,10 +47,12 @@ export async function crmLeaks(lang) {
   await renderCrm(root, { onNavigate() {} });
   await tick();
   const found = {};
+  // CRM_FILTERS_DROPDOWN_V1 — «Оператор» — выпадающий список, не чипы.
+  const setOp = async (k) => { const s = byAttr(root, 'data-op-select')[0]; s.value = k; s.dispatchEvent({ type: 'change', target: s, currentTarget: s }); await tick(60); };
   found.kanban = leaks(root);
-  byAttr(root, 'data-op-chip').find((n) => n.getAttribute('data-op-chip') === 'me').click(); await tick(60);
+  await setOp('me');
   found.kanbanMine = leaks(root);
-  byAttr(root, 'data-op-chip').find((n) => n.getAttribute('data-op-chip') === 'all').click(); await tick(60);
+  await setOp('all');
   const inp = walk(root).find((n) => n.tagName === 'INPUT' && String(n.className).includes('crm-search'));
   inp.value = '909092638'; inp.dispatchEvent({ type: 'input', target: inp, currentTarget: inp });
   await tick(560); await tick(40);
@@ -66,13 +68,13 @@ export async function crmLeaks(lang) {
   await renderTasksView(tv, { who: 'all', me: 7, canPick: true, staff: [{ id: 24, full_name: 'Operator B' }] });
   found.tasksAll = leaks(tv);
   byAttr(root, 'data-crm-view').find((n) => n.getAttribute('data-crm-view') === 'kanban').click(); await tick(60);
-  byAttr(root, 'data-op-chip').find((n) => n.getAttribute('data-op-chip') === 'none').click(); await tick(60);
+  await setOp('none');
   const reportBtn = walk(root).find((n) => n.tagName === 'BUTTON' && walk(n).some((c) => c._t && /Report|Hisobot|Отчёт/.test(c._t)));
   reportBtn.click(); await tick(80);
   const modal = document.body.children.find((n) => String(n.className).includes('modal'));
   found.report = leaks(modal);
   modal.remove();
-  byAttr(root, 'data-op-chip').find((n) => n.getAttribute('data-op-chip') === 'all').click(); await tick(60);
+  await setOp('all');
   const set = mk('div');
   await renderCrmSettings(set); await tick();
   found.settings = leaks(set);

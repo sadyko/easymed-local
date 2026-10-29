@@ -33,8 +33,8 @@ async function board(view = 'kanban') {
   await tick();
   // Состояние доски (вид, выбранная метка) — общее для модуля: возвращаем
   // исходное, чтобы тесты не зависели от порядка.
-  const all = byAttr(root, 'data-crm-tag-filter')[0];
-  if (all) { walk(all).find((n) => n.tagName === 'BUTTON' && textOf(n) === 'Все').click(); await tick(); }
+  const ts = byAttr(root, 'data-tag-select')[0];   // CRM_FILTERS_DROPDOWN_V1 — «Метки» — выпадающий список
+  if (ts) { ts.value = ''; ts.dispatchEvent({ type: 'change', target: ts, currentTarget: ts }); await tick(); }
   button(root, view === 'list' ? /Список/ : /Канбан/).click();
   await tick();
   return root;
@@ -62,14 +62,17 @@ test('карточка доски показывает свои метки, вк
   window.easymed.state.user = null;
 });
 
-test('фильтр «Метки»: чипы по меткам выборки со счётчиком; выбор сужает доску', async () => {
+test('фильтр «Метки»: список по меткам выборки со счётчиком; выбор сужает доску', async () => {
   const root = await board();
   const row = byAttr(root, 'data-crm-tag-filter')[0];
   assert.ok(row, 'над доской нет фильтра «Метки»');
-  const chips = byAttr(row, 'data-tag-chip');
-  assert.deepEqual(chips.map((n) => n.getAttribute('data-tag-chip')), ['vip', 'repeat', 'old']);
-  assert.ok(textOf(chips[0]).includes('VIP · 1'));
-  chips[1].click();
+  // CRM_FILTERS_DROPDOWN_V1 — выпадающий список: «Все» (пустое значение), затем метки выборки.
+  const sel = byAttr(row, 'data-tag-select')[0];
+  const opts = walk(sel).filter((n) => n.tagName === 'OPTION').filter((o) => o.value);
+  assert.deepEqual(opts.map((o) => o.value), ['vip', 'repeat', 'old']);
+  assert.ok(textOf(opts[0]).includes('VIP · 1'));
+  sel.value = 'repeat';
+  sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
   await tick();
   const cards = byClass(root, 'crm-card');
   assert.equal(cards.length, 1);

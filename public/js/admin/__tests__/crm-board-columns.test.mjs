@@ -175,8 +175,9 @@ test('C6: гонка загрузок — медленный старый отв
   const leads = [...Array.from({ length: 300 }, (_, i) => lead(1000 - i, 'came', { assigned_to: 24 })),
     ...Array.from({ length: 5 }, (_, i) => lead(500 - i, 'came', { assigned_to: 7 }))];
   const root = await board(leads);
-  const opChip = (k) => byAttr(root, 'data-op-chip').find((n) => n.getAttribute('data-op-chip') === k);
-  opChip('me').click(); await tick(80);
+  // CRM_FILTERS_DROPDOWN_V1 — «Оператор» — выпадающий список; смена без await, чтобы устроить гонку.
+  const setOp = (k) => { const s = byAttr(root, 'data-op-select')[0]; s.value = k; s.dispatchEvent({ type: 'change', target: s, currentTarget: s }); };
+  setOp('me'); await tick(80);
   assert.equal(countOf(root, 'came'), '5');
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, o) => {
@@ -186,15 +187,15 @@ test('C6: гонка загрузок — медленный старый отв
     return realFetch(url, o);
   };
   try {
-    opChip('all').click(); await tick(10);   // A — медленный
-    opChip('me').click();                     // B — быстрый
+    setOp('all'); await tick(10);   // A — медленный
+    setOp('me');                     // B — быстрый
     await tick(600);
-    assert.equal(byAttr(root, 'data-op-chip').find((n) => n.getAttribute('aria-pressed') === 'true').getAttribute('data-op-chip'), 'me');
+    assert.equal(byAttr(root, 'data-op-select')[0].value, 'me');
     assert.equal(countOf(root, 'came'), '5', 'старый ответ «Все» перезаписал число');
     assert.equal(byClass(colOf(root, 'came'), 'crm-card').length, 5, 'старый ответ «Все» перезаписал карточки');
   } finally {
     globalThis.fetch = realFetch;
-    opChip('all').click(); await tick(120);
+    setOp('all'); await tick(120);
     window.easymed.state.user = null;
   }
 });
@@ -208,11 +209,11 @@ test('Excel при «Всё время» выгружает ВСЕ строки 
   const all = await crmExportRows();
   assert.equal(all.rows.length, 451, 'выгрузка обрезана как доска');
   assert.ok(!CALLS.some((c) => c.table === 'crm_requests' && c.op === 'select' && c.limit !== undefined), 'выгрузка спросила базу с пределом');
-  const mine = byAttr(root, 'data-op-chip').find((n) => n.getAttribute('data-op-chip') === 'me');
-  mine.click(); await tick(80);
+  const setOp = (k) => { const s = byAttr(root, 'data-op-select')[0]; s.value = k; s.dispatchEvent({ type: 'change', target: s, currentTarget: s }); };   // CRM_FILTERS_DROPDOWN_V1
+  setOp('me'); await tick(80);
   const onlyMine = await crmExportRows();
   assert.equal(onlyMine.rows.length, 226, 'выгрузка не взяла фильтр «Оператор»');
-  byAttr(root, 'data-op-chip').find((n) => n.getAttribute('data-op-chip') === 'all').click(); await tick(80);
+  setOp('all'); await tick(80);
   window.easymed.state.user = null;
 });
 

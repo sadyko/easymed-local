@@ -4,6 +4,10 @@
 // (crm_search { assigned }), в filtered(), в «Списке», в Excel и в «Отчёте».
 // Номер у чужой карточки — подсказка «есть у другого оператора», без самой
 // карточки. Вид «Задачи» живёт своим отбором «Чьи задачи».
+//
+// CRM_FILTERS_DROPDOWN_V1 (2026-10-29) — фильтр стал ОДНИМ выпадающим списком
+// (data-op-select): Все / Мои / Ничьи, а руководителю следом — имена тех, кто
+// ведёт доску. Прежних чипов data-op-chip и отдельного списка «По имени…» нет.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { S, CALLS, RPC, mk, walk, textOf, byAttr, byClass, tick } from './crm-harness.mjs';
@@ -33,7 +37,14 @@ async function boardAs(user, view) {
   if (view) { walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === view).click(); await tick(60); }
   return root;
 }
-const chip = (root, key) => byAttr(root, 'data-op-chip').find((n) => n.getAttribute('data-op-chip') === key);
+const opSel = (root) => byAttr(root, 'data-op-select')[0];
+const opValues = (root) => walk(opSel(root)).filter((n) => n.tagName === 'OPTION').map((o) => o.value);
+async function pickOp(root, key) {
+  const s = opSel(root);
+  s.value = key;
+  s.dispatchEvent({ type: 'change', target: s, currentTarget: s });
+  await tick(60);
+}
 const boardReads = () => CALLS.filter((c) => c.table === 'crm_requests' && c.op === 'select' && !c.single && c.columns !== 'id, status, source, sources, created_at, assigned_to');
 // набор в поиске — как в crm-search.test.mjs (SEARCH_DEBOUNCE_V1: 500 мс паузы)
 async function type(root, q) {
@@ -46,41 +57,35 @@ async function type(root, q) {
 async function reset(root) {
   const inp = walk(root).find((n) => n.tagName === 'INPUT' && String(n.className).includes('crm-search'));
   if (inp && inp.value) await type(root, '');
-  const all = chip(root, 'all');
-  if (all && all.getAttribute('aria-pressed') !== 'true') { all.click(); await tick(60); }
+  const s = opSel(root);
+  if (s && s.value !== 'all') await pickOp(root, 'all');
   window.easymed.state.user = null;
 }
 
-test('оператору — Все / Мои / Ничьи, без выбора по имени; «Мои» уходит во ВСЕ запросы доски', async () => {
+test('оператору — Все / Мои / Ничьи одним списком, без имён; «Мои» уходит во ВСЕ запросы доски', async () => {
   const root = await boardAs(OPA);
-  assert.deepEqual(byAttr(root, 'data-op-chip').map((n) => n.getAttribute('data-op-chip')), ['all', 'me', 'none']);
-  assert.equal(byAttr(root, 'data-op-select').length, 0, 'оператору предложен выбор чужого оператора');
+  assert.deepEqual(opValues(root), ['all', 'me', 'none'], 'оператору предложен выбор чужого оператора');
   CALLS.length = 0;
-  chip(root, 'me').click(); await tick(60);
+  await pickOp(root, 'me');
   const reads = boardReads();
   assert.ok(reads.length >= 2, 'доска не перезагрузилась');
   assert.ok(reads.every((q) => q.filters.some((f) => f.col === 'assigned_to' && f.op === 'eq' && f.val === 21)), 'фильтр ушёл не во все запросы доски');
-  assert.equal(chip(root, 'me').getAttribute('aria-pressed'), 'true');
+  assert.equal(opSel(root).value, 'me');
   // карточки доски — только мои (стенд применяет отбор)
   assert.deepEqual(byClass(root, 'crm-card').map((c) => textOf(c).includes('Мой Лид')), [true]);
   await reset(root);
 });
 
-test('руководителю — ещё и по имени (только те, кто ведёт доску); «Ничьи» — is null; по имени — eq', async () => {
+test('руководителю — в том же списке ещё и по имени (только те, кто ведёт доску); «Ничьи» — is null; по имени — eq', async () => {
   const root = await boardAs(BOSS);
-  const sel = byAttr(root, 'data-op-select')[0];
-  assert.ok(sel, 'администратору нет выбора по имени');
-  assert.deepEqual(walk(sel).filter((n) => n.tagName === 'OPTION').map((o) => o.value), ['', '21', '22'], 'в выборе кассир или нет операторов');
+  assert.deepEqual(opValues(root), ['all', 'me', 'none', '21', '22'], 'в списке кассир или нет операторов');
   CALLS.length = 0;
-  chip(root, 'none').click(); await tick(60);
+  await pickOp(root, 'none');
   assert.ok(boardReads().every((q) => q.filters.some((f) => f.col === 'assigned_to' && f.op === 'is' && f.val === null)));
   CALLS.length = 0;
-  const sel2 = byAttr(root, 'data-op-select')[0];
-  sel2.value = '22';
-  sel2.dispatchEvent({ type: 'change', target: sel2, currentTarget: sel2 });
-  await tick(60);
+  await pickOp(root, '22');
   assert.ok(boardReads().every((q) => q.filters.some((f) => f.col === 'assigned_to' && f.op === 'eq' && f.val === 22)));
-  assert.equal(byAttr(root, 'data-op-select')[0].value, '22');
+  assert.equal(opSel(root).value, '22');
   await reset(root);
 });
 
@@ -88,7 +93,7 @@ test('поиск: фильтр оператора едет в crm_search; при
   const root = await boardAs(OPA);
   await type(root, 'лид');
   assert.deepEqual(RPC.filter((r) => r.name === 'crm_search').pop().body, { q: 'лид' }, 'при «Все» в поиск ушёл фильтр');
-  chip(root, 'me').click(); await tick(60);
+  await pickOp(root, 'me');
   RPC.length = 0;
   // сервер (старый) вернул и ничью карточку — экран её всё равно не показывает при «Мои»
   S.search = () => [{ id: 50, full_name: 'Лид из поиска ничей', phone: '+998905550000', status: 'in_process', source: 'call', assigned_to: null, users: null, created_at: '2025-01-01T10:00:00Z' }];
@@ -133,7 +138,7 @@ test('«Список»: колонка «Оператор» прямо пере�
 
 test('«Отчёт» считает с фильтром оператора и называет его', async () => {
   const root = await boardAs(OPA);
-  chip(root, 'none').click(); await tick(60);
+  await pickOp(root, 'none');
   document.body.children.length = 0;
   CALLS.length = 0;
   walk(root).find((n) => n.tagName === 'BUTTON' && /Отчёт/.test(textOf(n))).click();
@@ -148,11 +153,11 @@ test('«Отчёт» считает с фильтром оператора и н
 
 test('вид «Задачи» — свой отбор «Чьи задачи»: фильтр «Оператор» его не меняет и в виде не рисуется', async () => {
   const root = await boardAs(BOSS);
-  chip(root, 'none').click(); await tick(60);
+  await pickOp(root, 'none');
   CALLS.length = 0;
   walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'tasks').click();
   await tick(80);
-  assert.equal(byAttr(root, 'data-op-chip').length, 0, 'фильтр «Оператор» в виде «Задачи»');
+  assert.equal(byAttr(root, 'data-op-select').length, 0, 'фильтр «Оператор» в виде «Задачи»');
   const q = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'select' && c.columns === TASK_LIST_SELECT);
   assert.ok(q && q.filters.some((f) => f.col === 'assignee_id' && f.op === 'eq' && f.val === 23), 'вид «Задачи» взял фильтр доски');
   walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'kanban').click();

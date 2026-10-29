@@ -796,52 +796,55 @@ async function paint() {
         // ОСТАЛЬНЫМ фильтрам, как и раньше.
         const byPeriod = byPeriodAll.filter(inTag);
 
+        // CRM_FILTERS_DROPDOWN_V1 (2026-10-29) — «Оператор», «Источник» и «Метки» —
+        // выпадающие списки; чипами остался только «Период». Владелец: «Make each
+        // filter as a drop down except time». Три ряда чипов (оператор, пять
+        // источников, пять периодов) не помещались в одну строку с поиском даже
+        // на широком экране, и доска снова начиналась ниже сгиба — ровно то, с
+        // чем боролся CRM_FILTERS_V2. Один список — одно значение: «Источник»
+        // теперь выбирается по одному (в CRM_MULTI_SOURCE_V1 отмечали по
+        // несколько); state.sources остался массивом — пустым или из одного
+        // ключа, — чтобы inSource, «Отчёт» и Excel не трогать.
+        const dropdown = (attrs, options, value, onChange) => {
+            const sel = h('select', { class: 'crm-op-sel crm-filter-sel', ...attrs },
+                ...options.map(([v, label]) => h('option', { value: v }, label)));
+            sel.value = value;
+            sel.addEventListener('change', () => onChange(sel.value));
+            return sel;
+        };
+
         // CRM_UNIFY_V1 — «Оператор»: Все / Мои / Ничьи; руководителю и
-        // администратору — ещё и по имени (Р15). Первым рядом. Смена — новая
-        // загрузка: фильтр стоит в запросе доски до любого предела.
-        const opRow = h('div', { class: 'row', 'data-crm-op-filter': '', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Оператор'));
-        const setOperator = (key) => { state.operator = key; paint(); };
-        for (const [key, label] of [['all', 'Все'], ['me', 'Мои'], ['none', 'Ничьи']]) {
-            const b = chip(state.operator === key, label, () => setOperator(key));
-            b.setAttribute('data-op-chip', key);
-            b.setAttribute('aria-pressed', state.operator === key ? 'true' : 'false');
-            opRow.appendChild(b);
-        }
+        // администратору — ещё и по имени (Р15), тем же списком. Первым. Смена —
+        // новая загрузка: фильтр стоит в запросе доски до любого предела.
+        const opRow = h('div', { class: 'row', 'data-crm-op-filter': '', style: { gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, lbl('Оператор'));
+        const setOperator = (key) => { state.operator = key || 'all'; paint(); };
+        const opOptions = [['all', 'Все'], ['me', 'Мои'], ['none', 'Ничьи']];
         if (canSeeAllLeads() && state.staff.length) {
-            const sel = h('select', { class: 'crm-op-sel', 'aria-label': 'Оператор по имени', 'data-op-select': '' },
-                h('option', { value: '' }, 'По имени…'),
-                ...state.staff.map((p) => h('option', { value: String(p.id) }, p.full_name || trf('Сотрудник №{id}', { id: p.id }))));
-            sel.value = /^\d+$/.test(String(state.operator)) ? String(state.operator) : '';
-            sel.addEventListener('change', () => { if (sel.value) setOperator(sel.value); });
-            opRow.appendChild(sel);
+            for (const p of state.staff) opOptions.push([String(p.id), p.full_name || trf('Сотрудник №{id}', { id: p.id })]);
         }
+        opRow.appendChild(dropdown({ 'aria-label': 'Оператор', 'data-op-select': '' }, opOptions, String(state.operator || 'all'), setOperator));
         filtersEl.appendChild(opRow);
-        // CRM_MULTI_SOURCE_V1 — число на чипе: сколько заявок выборки имеют этот
-        // источник. Заявка с двумя источниками считается в обоих, поэтому сумма
-        // чипов бывает больше «Все · N» — а «Все» считает заявки.
+        // CRM_MULTI_SOURCE_V1 — число у источника: сколько заявок выборки имеют
+        // этот источник. Заявка с двумя источниками считается в обоих, поэтому
+        // сумма строк бывает больше «Все · N» — а «Все» считает заявки.
         const tally = sourceTally(byPeriod);
 
-        const srcRow = h('div', { class: 'row', 'data-crm-src-filter': '', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Источник'),
-            chip(!state.sources.length, trf('Все · {n}', { n: byPeriod.length }), () => { state.sources = []; paintFilters(); paintBody(); }));
         // Видимые источники по порядку справочника, затем скрытые, которые стоят
         // у заявок выборки (заявку со скрытым источником тоже надо уметь найти).
-        // Источник без заявок не рисуется — кроме отмеченного: иначе отметку
-        // нечем было бы снять. Ревью M1 — отмеченный добавляется в ряд и сам:
+        // Источник без заявок не предлагается — кроме выбранного: иначе выбор
+        // нечем было бы снять. Ревью M1 — выбранный добавляется в список и сам:
         // скрытый источник, у которого в новом периоде нет заявок, иначе
-        // пропадал — доска пустая, и ни один чип не отмечен.
+        // пропадал — доска пустая, и в списке не видно, что выбрано.
         const srcOrder = [...new Set([...SOURCES.map(([k]) => k), ...tally.keys(), ...state.sources])];
+        const srcOptions = [['', trf('Все · {n}', { n: byPeriod.length })]];
         for (const key of srcOrder) {
             const n = tally.has(key) ? tally.get(key).total : 0;
-            const on = state.sources.includes(key);
-            if (!n && !on) continue;
-            const btn = chip(on, tr(sourceLabel(key)) + ' · ' + n, () => {   // CRM_UNIFY_V1 — подпись переводится до числа
-                state.sources = on ? state.sources.filter((k) => k !== key) : [...state.sources, key];
-                paintFilters(); paintBody();
-            });
-            btn.setAttribute('data-src-chip', key);
-            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-            srcRow.appendChild(btn);
+            if (!n && !state.sources.includes(key)) continue;
+            srcOptions.push([key, tr(sourceLabel(key)) + ' · ' + n]);   // CRM_UNIFY_V1 — подпись переводится до числа
         }
+        const srcRow = h('div', { class: 'row', 'data-crm-src-filter': '', style: { gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, lbl('Источник'),
+            dropdown({ 'aria-label': 'Источник', 'data-src-select': '' }, srcOptions, state.sources[0] || '',
+                (v) => { state.sources = v ? [v] : []; paintFilters(); paintBody(); }));
 
         const perRow = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Период'));
         for (const [key, label] of PERIODS) {
@@ -875,14 +878,11 @@ async function paint() {
         const order = [...TAGS.map(([k]) => k), ...Object.keys(TAG_RU).filter((k) => !TAGS.some(([t]) => t === k))];
         const shownTags = order.filter((k) => tagCounts[k] || state.tag === k);
         if (shownTags.length) {
-            const tagRow = h('div', { class: 'row', 'data-crm-tag-filter': '', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Метки'),
-                chip(!state.tag, 'Все', () => { state.tag = ''; paintFilters(); paintBody(); }));
-            for (const key of shownTags) {
-                const btn = chip(state.tag === key, (TAG_RU[key] || [key])[0] + ' · ' + (tagCounts[key] || 0),
-                    () => { state.tag = state.tag === key ? '' : key; paintFilters(); paintBody(); });
-                btn.setAttribute('data-tag-chip', key);
-                tagRow.appendChild(btn);
-            }
+            // CRM_FILTERS_DROPDOWN_V1 — тоже список: «Все», затем метки выборки со счётчиком.
+            const tagOptions = [['', 'Все'], ...shownTags.map((key) => [key, (TAG_RU[key] || [key])[0] + ' · ' + (tagCounts[key] || 0)])];
+            const tagRow = h('div', { class: 'row', 'data-crm-tag-filter': '', style: { gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, lbl('Метки'),
+                dropdown({ 'aria-label': 'Метки', 'data-tag-select': '' }, tagOptions, state.tag || '',
+                    (v) => { state.tag = v; paintFilters(); paintBody(); }));
             filtersEl.appendChild(tagRow);
         }
     }
