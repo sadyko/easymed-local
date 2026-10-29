@@ -181,14 +181,22 @@ export const TREE_MAX_ENTRIES = 100_000;
 export const TREE_CACHE_MS = 60_000;
 const STAT_BATCH = 64;
 
-// soleOnly — считать только файлы с одной ссылкой (nlink 1): файл с жёсткой
-// ссылкой занимает место один раз, и это место уже сосчитано там, где лежит
-// вторая ссылка (storage).
-async function sumSizes(files, soleOnly = false) {
+// inodes — общий для одного подсчёта набор уже сосчитанных файлов
+// («том:номер файла»): файл с несколькими жёсткими ссылками занимает место
+// один раз и считается там, где его встретили первым. Номера — bigint: на
+// NTFS они 64-битные и в обычное число без потерь не помещаются.
+async function sumSizes(files, inodes = null) {
   let n = 0;
+  const sizeOf = (s) => {
+    if (!inodes) return Number(s.size);
+    const key = `${s.dev}:${s.ino}`;
+    if (inodes.has(key)) return 0;
+    inodes.add(key);
+    return Number(s.size);
+  };
   for (let i = 0; i < files.length; i += STAT_BATCH) {
     const sizes = await Promise.all(files.slice(i, i + STAT_BATCH)
-      .map((p) => fs.promises.stat(p).then((s) => (soleOnly && s.nlink > 1 ? 0 : s.size), () => 0)));   // исчез между чтением и замером — 0
+      .map((p) => fs.promises.stat(p, { bigint: !!inodes }).then(sizeOf, () => 0)));   // исчез между чтением и замером — 0
     for (const s of sizes) n += s;
   }
   return n;
@@ -197,32 +205,32 @@ async function sumSizes(files, soleOnly = false) {
 /**
  * Сумма размеров файлов в папке со всеми вложенными; нет папки — 0. Ссылки
  * (junction, symlink) не обходятся: Dirent ссылки — не папка и не файл.
- * soleOnlyDirs(имя) — вложенные папки, где считаются только файлы с одной
- * ссылкой (снимки файлов .files: жёсткие ссылки на storage места не
- * занимают, а единственная копия файла — занимает). Больше maxEntries
- * записей — счёт останавливается: complete false, bytes — «не меньше».
+ * inodes (Set) — каждый файл считается один раз на весь подсчёт, даже если на
+ * него несколько жёстких ссылок (снимки файлов .files, см. folderSizes).
+ * Больше maxEntries записей — счёт останавливается: complete false, bytes —
+ * «не меньше».
  * @returns {Promise<{bytes:number, complete:boolean}>}
  */
-export async function treeBytes(dir, { soleOnlyDirs = null, maxEntries = TREE_MAX_ENTRIES } = {}) {
+export async function treeBytes(dir, { inodes = null, maxEntries = TREE_MAX_ENTRIES } = {}) {
   let bytes = 0;
   let left = maxEntries;
-  const stack = [{ d: dir, soleOnly: false }];
+  const stack = [dir];
   while (stack.length) {
-    const { d, soleOnly } = stack.pop();
+    const d = stack.pop();
     let entries;
     try { entries = await fs.promises.readdir(d, { withFileTypes: true }); } catch { continue; }
     const files = [];
     for (const e of entries) {
-      if (left <= 0) return { bytes: bytes + await sumSizes(files, soleOnly), complete: false };
+      if (left <= 0) return { bytes: bytes + await sumSizes(files, inodes), complete: false };
       left--;
       const p = path.join(d, e.name);
       if (e.isDirectory()) {
-        stack.push({ d: p, soleOnly: soleOnly || !!(soleOnlyDirs && soleOnlyDirs(e.name)) });
+        stack.push(p);
       } else if (e.isFile()) {
         files.push(p);
       }
     }
-    bytes += await sumSizes(files, soleOnly);
+    bytes += await sumSizes(files, inodes);
   }
   return { bytes, complete: true };
 }
@@ -249,14 +257,19 @@ function folderSizes(dataDir, versionsDir, { maxEntries, cacheMs, now }) {
       if (!r.complete) partial.push(field);
       return r.bytes;
     };
+    // Снимки файлов .files в копиях — жёсткие ссылки. Каждый файл считается
+    // один раз (общий набор inodes на этот подсчёт), и storage обходится
+    // ПЕРВЫМ: ссылка на живой файл storage в копиях не считается, а файл, на
+    // который ссылаются только снимки («Удалить все данные» без удаления
+    // копий: финальная и ежедневная ссылаются на одно и то же) или который
+    // скопирован (ссылку сделать не удалось), считается в копиях — один раз.
     // Копии — вся папка backups/: и отложенные восстановлением и откатом с их
-    // журналами, и неубранные обрывки (.broken) — это настоящее место. В
-    // снимках файлов .files — только файлы с одной ссылкой: жёсткая ссылка на
-    // файл storage места не занимает, а файл, которого в storage уже нет
-    // («Удалить все данные» без копий) или который скопирован (ссылку сделать
-    // не удалось), — занимает.
-    const backups_bytes = await measure('backups_bytes', path.join(dataDir, 'backups'), { soleOnlyDirs: (n) => n.endsWith('.files') });
-    const storage_bytes = await measure('storage_bytes', path.join(dataDir, 'storage'));
+    // журналами, и неубранные обрывки (.broken) — это настоящее место. Если
+    // storage оборван пределом обхода, часть ссылок может попасть и в копии —
+    // число тогда приблизительное, как и сам storage (partial).
+    const inodes = new Set();
+    const storage_bytes = await measure('storage_bytes', path.join(dataDir, 'storage'), { inodes });
+    const backups_bytes = await measure('backups_bytes', path.join(dataDir, 'backups'), { inodes });
     const versions_bytes = versionsDir ? await measure('versions_bytes', versionsDir) : null;
     return { backups_bytes, storage_bytes, versions_bytes, partial };
   })();

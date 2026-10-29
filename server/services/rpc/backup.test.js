@@ -390,6 +390,23 @@ test('DISK_GUARD_V1: «Резервные копии» — вся папка к�
   assert.equal(r.storage_bytes, 9000, 'файл со ссылкой — один раз, в хранилище');
 });
 
+// «Удалить все данные» без удаления копий: storage пуст, а финальная и
+// ежедневная копии ссылаются на одни и те же файлы — у файла две ссылки, и обе
+// в копиях. Место он занимает, и считается один раз — в папке копий.
+test('DISK_GUARD_V1: файл, общий для двух снимков .files без оригинала в storage, — в копиях, один раз', async () => {
+  const { db, dir } = fresh();
+  const b = path.join(dir, 'backups');
+  const s1 = path.join(b, 'final-20261001-090000.files', 'x');
+  const s2 = path.join(b, 'daily-20261002-030000.files', 'x');
+  fs.mkdirSync(s1, { recursive: true });
+  fs.mkdirSync(s2, { recursive: true });
+  fs.writeFileSync(path.join(s1, 'scan.pdf'), Buffer.alloc(800));
+  fs.linkSync(path.join(s1, 'scan.pdf'), path.join(s2, 'scan.pdf'));   // nlink 2, оригинала нет
+  const r = await diskUsage(db, {}, ADMIN);
+  assert.equal(r.backups_bytes, 800);
+  assert.equal(r.storage_bytes, 0);
+});
+
 // Отказ обновления «нет места» (control/updater.js) правдив, только пока клиника
 // ждёт ЭТУ версию: предложение одобрено и версия ещё не запущена. Устаревший —
 // не показывается и снимается (clearStaleUpdateRefusal — то же правило, что у
