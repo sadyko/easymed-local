@@ -341,3 +341,35 @@ test('no marker at all is the common case and does nothing', () => {
   const dir = tmpDir('em-sysbk-none-');
   assert.equal(processPendingAction(dir).action, null);
 });
+
+// --- DISK_GUARD_V1: оборвавшаяся копия ---------------------------------------
+
+// НАСТОЯЩАЯ копия better-sqlite3, оборванная посередине. db.backup — единственное,
+// чем createBackup трогает базу, поэтому подставлена обёртка над настоящим
+// db.backup с обработчиком хода, который на первом шаге бросает SQLITE_FULL —
+// так копия обрывается на полном диске. Имя занято заранее через 'wx', и
+// better-sqlite3 такой файл за собой не удаляет (backup.cpp: unlink только для
+// файла, которого до копии не было) — ровно та беда, которую лечит DISK_GUARD_V1.
+function abortingMidCopy(db) {
+  return {
+    backup: (out) => db.backup(out, {
+      progress() { throw Object.assign(new Error('database or disk is full'), { code: 'SQLITE_FULL' }); },
+    }),
+  };
+}
+
+test('DISK_GUARD_V1: оборвавшаяся копия удаляется вместе со всеми частями, в списке её нет', async () => {
+  const { dir, db } = workspace();
+  await assert.rejects(() => createBackup(abortingMidCopy(db), dir, 'manual'), /disk is full/);
+  assert.deepEqual(fs.readdirSync(backupsDir(dir)), [], 'ни обрывка .db, ни -journal, ни папки .files');
+  assert.deepEqual(listBackups(dir), [], 'обрывок не выдаёт себя за годную копию');
+});
+
+test('DISK_GUARD_V1: оборвавшаяся ежедневная копия не закрывает день — следующий такт делает её снова', async () => {
+  const { dir, db } = workspace();
+  await assert.rejects(() => runDailyBackup(abortingMidCopy(db), dir, new Date('2026-08-23T08:05:00')), /disk is full/);
+  const again = await runDailyBackup(db, dir, new Date('2026-08-23T09:05:00'));
+  assert.ok(again, 'день не был отмечен сделанным: обрывок 08:05 не считается копией дня');
+  assert.equal(listBackups(dir).filter((b) => b.kind === 'daily').length, 1);
+  assert.equal(userCount(path.join(backupsDir(dir), again.name)), 1, 'а новая — настоящая база');
+});

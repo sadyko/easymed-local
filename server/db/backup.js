@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { discardPartial } from '../services/backup.js';   // DISK_GUARD_V1
 
 // SUPERVISED_INSTALL_V1 — the rollback for an update.
 //
@@ -52,7 +53,16 @@ export async function backupBeforeMigrate(db, dbPath, version) {
   // ASYNC — db.backup() returns a Promise. Not awaiting it would start migrations
   // while the copy was still being written, producing a backup of a half-migrated
   // database: the one thing this function exists to prevent.
-  await db.backup(out);
+  //
+  // DISK_GUARD_V1 — оборвавшаяся копия удаляется (services/backup.js
+  // discardPartial): обрывок pre-<версия>.db выдавал бы себя за точку отката —
+  // recover.cmd ищет копию перед обновлением по имени.
+  try {
+    await db.backup(out);
+  } catch (e) {
+    discardPartial(out);
+    throw e;
+  }
   return out;
 }
 

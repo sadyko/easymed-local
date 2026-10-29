@@ -111,3 +111,18 @@ test('a failure to back up is reported, not swallowed', async () => {
   fs.writeFileSync(blocker, 'x');
   await assert.rejects(() => backupBeforeMigrate(db, path.join(blocker, 'nested', 'easymed.db'), '2.4.0'));
 });
+
+// DISK_GUARD_V1 — настоящая копия better-sqlite3, оборванная на первом шаге (как
+// на полном диске). Имя pre-2.4.0.db занято заранее через 'wx', поэтому
+// better-sqlite3 сам его не удаляет — уборка обязана быть нашей.
+test('DISK_GUARD_V1: копия перед обновлением, оборвавшаяся посередине, не остаётся на диске', async () => {
+  const { dir, dbPath, db } = workspace();
+  const aborting = {
+    backup: (out) => db.backup(out, {
+      progress() { throw Object.assign(new Error('database or disk is full'), { code: 'SQLITE_FULL' }); },
+    }),
+  };
+  await assert.rejects(() => backupBeforeMigrate(aborting, dbPath, '2.4.0'), /disk is full/);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'backups')), [],
+    'обрывок pre-2.4.0.db выдавал бы себя за точку отката — recover.cmd ищет копию по имени');
+});

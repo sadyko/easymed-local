@@ -127,6 +127,22 @@ export function restoreStorage(dataDir, dbFileName) {
   catch (e) { console.warn('[backup] файлы не восстановились:', e && e.message); return 0; }
 }
 
+/**
+ * DISK_GUARD_V1 — убрать копию, оборвавшуюся посередине: сам файл, -journal /
+ * -wal / -shm, если SQLite успел их завести, и папку снимка файлов (.files).
+ * Никогда не бросает: ошибка уборки не должна заслонить настоящую причину
+ * сбоя, ради которой копия и оборвалась. Зовут оба места записи копий — эта
+ * функция и db/backup.js backupBeforeMigrate.
+ */
+export function discardPartial(file) {
+  for (const suffix of ['', '-journal', '-wal', '-shm']) {
+    try { fs.rmSync(file + suffix, { force: true }); } catch { /* занят — уберёт следующая чистка */ }
+  }
+  try {
+    fs.rmSync(path.join(path.dirname(file), sidecarFor(path.basename(file))), { recursive: true, force: true });
+  } catch { /* то же */ }
+}
+
 const p2 = (n) => String(n).padStart(2, '0');
 // LOCAL time on purpose, matching what the clinic's own clock says: "the
 // backup from the 23rd" must mean the 23rd as the receptionist lived it, and
@@ -206,7 +222,19 @@ export async function createBackup(db, dataDir, kind, now = new Date()) {
   // before the copy is complete would let the caller act on a half-written
   // backup — for requestRestore below, that would mean writing a restore
   // marker whose safety copy does not actually exist yet.
-  await db.backup(out);
+  //
+  // DISK_GUARD_V1 — копия, оборвавшаяся посередине (полный диск, сбой записи),
+  // удаляется здесь же, вместе со снимком файлов. Имя занято заранее через
+  // 'wx', поэтому better-sqlite3 считает файл чужим и сам его НЕ удаляет
+  // (backup.cpp: unlink только для файла, которого до копии не было). Без этой
+  // уборки обрывок занимал остаток диска, закрывал день как «сделанный»
+  // (runDailyBackup ищет копию дня по имени) и стоял в списке как годная копия.
+  try {
+    await db.backup(out);
+  } catch (e) {
+    discardPartial(out);
+    throw e;
+  }
   // PATIENT_FILE_ATTACH_V1 — файлы снимаются ПОСЛЕ базы. Порядок важен: строка
   // документа без файла — «файл не открывается», файл без строки — просто
   // лишние байты на диске. Из двух неполных копий правильно иметь вторую.
