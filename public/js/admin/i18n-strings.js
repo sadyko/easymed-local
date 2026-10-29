@@ -5146,6 +5146,8 @@ export const STRINGS = {
   "Неделя": {"en":"Week","ru":"Неделя","uz":"Hafta"},
   "Нет активных стационарных пациентов.": {"en":"No active inpatients.","ru":"Нет активных стационарных пациентов.","uz":"Faol statsionar bemorlar yo'q."},
   "Нет записей на приём за выбранный период.": {"en":"No appointments for the chosen period.","ru":"Нет записей на приём за выбранный период.","uz":"Tanlangan davr uchun qabulga yozuvlar yo'q."},
+  // CABINET_ACTIVE_FIRST_V1 (2026-10-29) — «Мои приёмы» открываются на «Активных»: пустой список в конце дня
+  "Активных приёмов нет. Осмотренные — в фильтре «Завершённые».": {"en":"No active appointments. Examined patients are under the “Completed” filter.","ru":"Активных приёмов нет. Осмотренные — в фильтре «Завершённые».","uz":"Faol qabullar yo'q. Ko'rikdan o'tganlar — «Yakunlangan» filtrida."},
   "Нет рекомендаций за сегодня.": {"en":"No recommendations for today.","ru":"Нет рекомендаций за сегодня.","uz":"Bugun uchun tavsiyalar yo'q."},
   "Ожидает кассу": {"en":"Awaiting the cashier","ru":"Ожидает кассу","uz":"Kassani kutmoqda"},
   "Осмотрен": {"en":"Examined","ru":"Осмотрен","uz":"Ko'rikdan o'tgan"},

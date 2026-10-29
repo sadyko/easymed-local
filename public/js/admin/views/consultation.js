@@ -54,7 +54,9 @@ const RU_MONTHS = ['января', 'февраля', 'марта', 'апреля
 
 const state = {
     rows:         [],
-    statusFilter: 'all',     // 'all' | 'queued' | 'in_progress' | 'completed'
+    // CABINET_ACTIVE_FIRST_V1 — кабинет открывается на «Активных» (сброс в
+    // renderConsultation при каждом открытии); внутри открытого кабинета выбор держится.
+    statusFilter: 'active',  // 'active' | 'all' | 'queued' | 'in_progress' | 'completed'
     view:         'list',    // 'list' | 'calendar'
     dateRange:    'all',     // CABINET_DEFAULT_ALL_V1 — was 'today', which hid future-dated bookings; show all, doctor can filter
     search:       '',
@@ -132,6 +134,11 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // пересылку ссылки, а голый '#consultation' открывает дашборд.
     const sub = payload && typeof payload.sub === 'string' ? payload.sub : null;
     state.tab = SUB_TO_TAB[sub] || 'dashboard';
+    // CABINET_ACTIVE_FIRST_V1 — владелец: «осмотренных при открытии кабинета не
+    // видно». Каждое открытие кабинета начинает рабочий список с «Активных».
+    // Вкладки внутри открытого кабинета переключает setTab, сюда он не заходит,
+    // поэтому выбранный фильтр живёт, пока кабинет открыт.
+    state.statusFilter = 'active';
     clear(container);
     container.appendChild(h('div', { class: 'empty', style: { padding: '40px' } }, 'Загружаем кабинет…'));
     // DOCTOR_DASHBOARD_V1 — дашборд перечитывается при каждом входе в раздел:
@@ -800,8 +807,9 @@ function rangeFilter() {
 
 // ---- KPI summary cards (4) — real counts from loaded rows + referrals ----
 function kpiSummary() {
-    const counts = countByStatus(state.rows);
-    const toReview = (counts.added || 0) + counts.queued + counts.in_progress;
+    // CABINET_ACTIVE_FIRST_V1 — плитка считает ровно то, что покажет щелчок по
+    // ней: тот же состав, что у фильтра «Активные» (STATUS_FILTER.active).
+    const toReview = state.rows.filter(r => STATUS_FILTER.active.includes(r.status)).length;
     const seenToday = state.rows.filter(r => r.status === 'completed' && isTodayDate(r.visitDate)).length;
     const refs = state.todayReferrals.rows;
     const recsToday = refs.length;
@@ -813,11 +821,11 @@ function kpiSummary() {
             value: String(state.rows.length), label: 'Все',
             onClick: () => setStatusFilter('all'),
         }),
-        kpiCard({
-            active: state.statusFilter === 'queued' || state.statusFilter === 'in_progress',
+        kpiCard({   // CABINET_ACTIVE_FIRST_V1 — ведёт на «Активные»: число и список совпадают
+            active: state.statusFilter === 'active',
             icon: 'Patients', accent: 'var(--info-700)', accentBg: 'var(--info-50)',
             value: String(toReview), label: 'В очереди / готовы к осмотру',
-            onClick: () => setStatusFilter('queued'),
+            onClick: () => setStatusFilter('active'),
         }),
         kpiCard({
             active: false,
@@ -866,10 +874,13 @@ function statusFilterSelect() {
         onchange: (e) => setStatusFilter(e.target.value),
         style: { height: '34px', borderRadius: '8px', border: '1px solid var(--ink-200)', padding: '0 10px', fontSize: '13.5px' },
     },
+        // CABINET_ACTIVE_FIRST_V1 — «Активные» первыми; «Осмотрен» здесь называется
+        // «Завершённые» (подпись строки остаётся «Осмотрен», statusBadge).
+        h('option', { value: 'active',      selected: state.statusFilter === 'active' },      'Активные'),
         h('option', { value: 'all',         selected: state.statusFilter === 'all' },         'Все статусы'),
         h('option', { value: 'queued',      selected: state.statusFilter === 'queued' },      STATUS_RU.queued),
         h('option', { value: 'in_progress', selected: state.statusFilter === 'in_progress' }, STATUS_RU.in_progress),
-        h('option', { value: 'completed',   selected: state.statusFilter === 'completed' },   STATUS_RU.completed),
+        h('option', { value: 'completed',   selected: state.statusFilter === 'completed' },   'Завершённые'),
     );
 }
 
@@ -909,18 +920,62 @@ function paintBody() {
     if (state.view === 'calendar') { body.appendChild(calendarView(filtered)); return; }
 
     if (filtered.length === 0) {
+        // CABINET_ACTIVE_FIRST_V1 — пустые «Активные» в конце дня — не «записей
+        // нет»: осмотренные есть, они в соседнем фильтре, и экран говорит где.
         body.appendChild(h('div', { class: 'empty', style: { padding: '40px 20px' } },
-            'Нет записей на приём за выбранный период.'));
+            state.statusFilter === 'active' && !(state.search || '').trim()
+                ? 'Активных приёмов нет. Осмотренные — в фильтре «Завершённые».'
+                : 'Нет записей на приём за выбранный период.'));
         return;
     }
     body.appendChild(listView(filtered));
 }
 
+// CABINET_ACTIVE_FIRST_V1 (2026-10-29) — СПИСОК ВРАЧА: СНАЧАЛА ТО, С ЧЕМ РАБОТАТЬ.
+//
+// Владелец: «Идёт приём» сверху, потом «готов к осмотру», потом «ожидает
+// кассу»; осмотренных при открытии кабинета не видно. Состав фильтров — одна
+// таблица: её читают и список (filterRows), и плитка «В очереди / готовы к
+// осмотру» (kpiSummary), поэтому число на плитке и строки под ней не
+// разъедутся (прежде плитка считала и «Идёт приём», а щелчок его прятал).
+const STATUS_FILTER = {
+    active:      ['added', 'queued', 'in_progress'],
+    queued:      ['added', 'queued'],
+    in_progress: ['in_progress'],
+    completed:   ['completed'],
+};
+
+// Касса закончила: «Запланированную» услугу отпускает оплаченный или частично
+// оплаченный счёт (RT2_FIX_V1), остальные статусы кассу уже прошли. Одно
+// правило на всех, кто о нём спрашивает: открыть приём (openWorkspace), кнопка
+// строки (actionButton) и порядок списка (sortQueue).
+export function cashierReleased(r) {
+    return !!r && (r.status !== 'added' || ['paid', 'partial'].includes(r.invoiceStatus));
+}
+
+// Место строки: 0 — идёт приём, 1 — готов к осмотру, 2 — ждёт кассу,
+// 3 — осмотрен. Неизвестный статус — в самый конец, а не потерян.
+export function queueRank(r) {
+    const s = r && r.status;
+    if (s === 'in_progress') return 0;
+    if (s === 'queued' || (s === 'added' && cashierReleased(r))) return 1;
+    if (s === 'added') return 2;
+    if (s === 'completed') return 3;
+    return 4;
+}
+
+// ПОРЯДОК СПИСКА — ЭТО РАБОТА, А НЕ ДАТА (как sortInpatients). Внутри группы —
+// порядок, как пришёл с сервера (новые записи сверху): сортировка устойчива.
+// Загрузка (loadServices) не меняется — порядок ставится при показе.
+export function sortQueue(rows) {
+    return (rows || []).slice().sort((a, b) => queueRank(a) - queueRank(b));
+}
+
 function filterRows() {
     const t = (state.search || '').trim().toLowerCase();
-    return state.rows.filter(r => {
+    return sortQueue(state.rows.filter(r => {
         if (state.statusFilter !== 'all') {
-            const want = state.statusFilter === 'queued' ? ['added', 'queued'] : [state.statusFilter];
+            const want = STATUS_FILTER[state.statusFilter] || [state.statusFilter];
             if (!want.includes(r.status)) return false;
         }
         if (!inDateRange(r.visitDate)) return false;
@@ -930,7 +985,7 @@ function filterRows() {
             if (!hay.includes(t)) return false;
         }
         return true;
-    });
+    }));
 }
 
 // ---- Date-range helpers (AURORA_QUEUE_V1) ----
@@ -1107,7 +1162,7 @@ async function openWorkspace(r) {
     // #15 — pay-first gate (single chokepoint: row click, calendar, and the action button all land here).
     // An 'added' service is un-released; the cashier must confirm payment OR debt first
     // (releaseServicesForInvoice then promotes added→queued). Refuse to open it until then.
-    if (r.status === 'added' && !['paid', 'partial'].includes(r.invoiceStatus)) { toast('Услуга ещё не проведена кассой — проведите оплату или долг, затем начните приём.', 'fail'); return; }   // RT2_FIX_V1
+    if (!cashierReleased(r)) { toast('Услуга ещё не проведена кассой — проведите оплату или долг, затем начните приём.', 'fail'); return; }   // RT2_FIX_V1 / CABINET_ACTIVE_FIRST_V1 — правило одно с порядком списка
     // WS_FULL_PATIENT_V1 — load the COMPLETE patient record (dob, gender, blood,
     // allergies, address…) so the workspace panels and the document blank show
     // real data; the minimal queue-row payload remains the fail-soft fallback.
@@ -1174,7 +1229,7 @@ function tagEl(label, kind, iconName) {
 //   in_progress  → «Продолжить» → openWorkspace
 //   completed    → «Открыть»    → openWorkspace
 function actionButton(r) {
-    const _rtReleased = r.status !== 'added' || ['paid', 'partial'].includes(r.invoiceStatus);   // RT2_FIX_V1
+    const _rtReleased = cashierReleased(r);   // RT2_FIX_V1 / CABINET_ACTIVE_FIRST_V1 — правило одно с порядком списка
     if (r.status === 'added' && !_rtReleased) {
         // #15 — un-released (pay-first): visible but not actionable until the cashier confirms (payment/debt).
         return h('span', { class: 'tag', style: { gap: '4px', display: 'inline-flex', alignItems: 'center', opacity: '.75' } },
@@ -1230,12 +1285,6 @@ async function transition(r, newStatus, btn) {
 }
 
 // ---------------------------------------------------------------------------
-function countByStatus(rows) {
-    const c = { queued: 0, in_progress: 0, completed: 0, total: rows.length };
-    for (const r of rows) c[r.status] = (c[r.status] || 0) + 1;
-    return c;
-}
-
 function formatDateTime(d) { return fmtDateTime(d); }   // DATE_FMT_V1
 
 // "Запись" column: date (+ time when the visit_date carries one).
