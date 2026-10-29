@@ -155,6 +155,22 @@ export function discardPartial(file) {
   }
 }
 
+/**
+ * DISK_GUARD_V1 — повторить удаление обрывков с меткой .broken (их не видят ни
+ * список, ни чистка по числу копий). Метка уходит, когда копия убрана.
+ */
+export function sweepBroken(dir) {
+  let names;
+  try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.broken')); } catch { return; }
+  for (const marker of names) {
+    const file = path.join(dir, marker.slice(0, -'.broken'.length));
+    discardPartial(file);
+    if (!fs.existsSync(file)) {
+      try { fs.rmSync(path.join(dir, marker), { force: true }); } catch { /* повторим в следующий раз */ }
+    }
+  }
+}
+
 const p2 = (n) => String(n).padStart(2, '0');
 // LOCAL time on purpose, matching what the clinic's own clock says: "the
 // backup from the 23rd" must mean the 23rd as the receptionist lived it, and
@@ -212,6 +228,7 @@ export async function createBackup(db, dataDir, kind, now = new Date()) {
   if (!CREATABLE_KINDS.has(kind)) throw new Error(`Unknown backup kind: ${kind}`);
   const dir = path.join(dataDir, 'backups');
   fs.mkdirSync(dir, { recursive: true });
+  sweepBroken(dir);   // DISK_GUARD_V1
 
   // Same exclusive-create claim as backupBeforeMigrate, same race: two
   // requests landing in the same second (a double-clicked button, or the
@@ -262,6 +279,7 @@ export async function createBackup(db, dataDir, kind, now = new Date()) {
  * only what this module or db/backup.js provably created.
  */
 export function pruneBackupsByKind(dir) {
+  sweepBroken(dir);   // DISK_GUARD_V1
   let files;
   try { files = fs.readdirSync(dir).filter((f) => NAME_RE.test(f)); } catch { return; }
   const byKind = new Map();

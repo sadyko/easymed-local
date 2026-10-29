@@ -382,3 +382,15 @@ test('DISK_GUARD_V1: обрывок с меткой .broken не в списке
   assert.deepEqual(listBackups(dir), []);
   assert.ok(await runDailyBackup(db, dir, new Date('2026-08-23T09:05:00')));
 });
+
+test('DISK_GUARD_V1: помеченный обрывок удаляется вместе с меткой и папкой файлов при следующем запуске', async () => {
+  const { dir, db } = workspace();
+  const b = backupsDir(dir);
+  fs.mkdirSync(path.join(b, 'daily-20260822-080500.files'), { recursive: true });
+  fs.writeFileSync(path.join(b, 'daily-20260822-080500.files', 'a'), 'x');
+  fs.writeFileSync(path.join(b, 'daily-20260822-080500.db'), 'x');
+  fs.writeFileSync(path.join(b, 'daily-20260822-080500.db-journal'), 'x');
+  fs.writeFileSync(path.join(b, 'daily-20260822-080500.db.broken'), 'partial');
+  await createBackup(db, dir, 'manual');
+  assert.deepEqual(fs.readdirSync(b).filter((f) => f.startsWith('daily-')), []);
+});
