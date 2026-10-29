@@ -283,3 +283,19 @@ test('рецепт: разметка в названии, дозе, кратно
     assert.match(code, /<span>\$\{escapeHtml\(r\.label\)\}<\/span>/);
     for (const v of bad) for (const r of WS.recipeHeadRows({ age: v, dob: v })) assert.ok(r.value.includes(v.trim()), 'значение искажено до экранирования');
 });
+
+test('подписанный раньше документ с sex:«other» — пол не печатается; Мужской/Женский/Муж./Жен. — печатаются', () => {
+    for (const type of ['conclusion', 'diag']) for (const v of VARIANTS) {
+        const where = type + '/' + v;
+        for (const bad of ['other', 'Other', 'unknown']) {
+            const html = renderDesignedVariant(type, v, S, { ...BARE, sex: bad });
+            const t = text(html);
+            assert.ok(!/other|unknown/i.test(t), `${where}, ${bad}: напечатано «${bad}»`);
+            assert.ok(!word('Пол').test(t) && !/Jinsi/.test(t), `${where}, ${bad}: строка пола осталась`);
+        }
+        if (!SHOWN[where].includes('Мужской')) continue;   // этот вариант пол не рисует
+        for (const ok of ['Мужской', 'Женский', 'Муж.', 'Жен.']) {
+            assert.ok(text(renderDesignedVariant(type, v, S, { ...BARE, sex: ok })).includes(ok), `${where}: «${ok}» не напечатано`);
+        }
+    }
+});

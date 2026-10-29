@@ -50,6 +50,13 @@ function richBody(v, d) {
 // текст лист печатает экранированным, и «<норма>», «< 5 мм >», «<N>» — текст
 // врача, а не тег: «<» экранируется, иначе htmlToText срезал бы его и раздел
 // пропал бы с заголовком. &#160; и невидимые знаки и здесь — пусто.
+// PRINT_SKIP_EMPTY_V1 — пол печатается, только если это настоящее значение (мужской/женский,
+// M/F, male/female). Не выбранный пол хранится как 'other'; документы, подписанные до правки
+// рецепта, держат его в снимке — на листе он считается пустым (поле скрывается).
+function sexShown(v) {
+  const s = String(v ?? '').trim();
+  return /^(муж|жен|male|female|erkak|ayol|[mf]$)/i.test(s) ? s : '';
+}
 function hasBody(v, d) {
     const s = String(v == null ? '' : v);
     if (!hasMarkup(s)) return richHasContent(s.replace(/</g, '&lt;'));
@@ -665,7 +672,7 @@ ${RICH_CSS}
     <div class="card"><div class="ct">Пациент <span class="uz">· Bemor</span></div><div class="fgrid">
       ${fg('ФИО', 'F.I.Sh.', d.patientName, true)}
       ${fg('Дата рождения', 'Tug‘ilgan sana', d.dob)}
-      ${fg('Пол', 'Jinsi', d.sex)}
+      ${fg('Пол', 'Jinsi', sexShown(d.sex))}
       ${fg('ID пациента', 'Bemor ID', d.mrn, true)}
       ${fg('Телефон', 'Telefon', d.phone)}</div></div>
     ${d.showDoctor === false ? '' : `<div class="card"><div class="ct">Лечащий врач <span class="uz">· Davolovchi shifokor</span></div><div class="fgrid">
@@ -860,7 +867,7 @@ table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:1
     fields: [
       { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
       { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
-      { label: 'Пол', uz: 'Jinsi', value: d.sex },
+      { label: 'Пол', uz: 'Jinsi', value: sexShown(d.sex) },
       { label: 'Забор', uz: 'Namuna olindi', value: d.dateIn },
     ],
   })}
@@ -921,7 +928,7 @@ ${ECONOMY_BW_CSS}
     fields: [
       { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
       { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
-      { label: 'Пол', uz: 'Jinsi', value: d.sex },
+      { label: 'Пол', uz: 'Jinsi', value: sexShown(d.sex) },
       { label: 'Выдан', uz: 'Berildi', value: d.dateOut || dateNumeric(new Date()) },
     ],
   })}
@@ -1051,7 +1058,7 @@ ${RICH_CSS}
   <div class="title"><h1>Результат диагностики</h1><div class="uz">Diagnostika natijasi</div>
     <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || dateNumeric(new Date()))}</b></span></div></div>
   <div class="entwo">
-    <div class="ent"><div class="cap">Пациент</div>${fld('ФИО', d.patientName, true)}${fld('Дата рожд.', d.dob)}${fld('Пол', d.sex)}${fld('ID', d.mrn, true)}</div>
+    <div class="ent"><div class="cap">Пациент</div>${fld('ФИО', d.patientName, true)}${fld('Дата рожд.', d.dob)}${fld('Пол', sexShown(d.sex))}${fld('ID', d.mrn, true)}</div>
     <div class="ent"><div class="cap">Исследование</div>${fld('Вид', st.kind)}${fld('Область', st.area)}${fld('Аппарат', st.device)}${fld('Протокол', st.protocol)}</div>
   </div>
   ${(hasBody(d.description, d) || d.__editor) ? `<div class="secbar"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div>
