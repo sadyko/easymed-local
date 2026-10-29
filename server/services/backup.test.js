@@ -94,15 +94,14 @@ test('listBackups ignores non-backups: bad names, sidecars, directories, unknown
   const bd = backupsDir(dir);
   fs.writeFileSync(path.join(bd, 'notes.txt'), 'x');
   fs.writeFileSync(path.join(bd, 'daily-20260801-120000.db-wal'), 'x');
-  // replaced-* is a raw move-aside whose -wal sits NEXT to it, not inside it —
-  // offering it for restore would silently lose that WAL's writes, so it is
-  // kept on disk but never listed (the safety- copy of the same moment is the
-  // restorable one).
+  // DISK_GUARD_V1 — replaced-* теперь в списке (restorable:false — его -wal
+  // лежит РЯДОМ, и вернуть один .db значило бы потерять записи журнала); это
+  // проверяет отдельный тест ниже. Чужие имена, сайдкары и папки — по-прежнему нет.
   fs.writeFileSync(path.join(bd, 'replaced-20260801-120000.db'), 'x');
   fs.mkdirSync(path.join(bd, 'dir.db'));
   fs.writeFileSync(path.join(bd, 'pre-2.4.0.db'), 'x');
   const list = listBackups(dir);
-  assert.deepEqual(list.map((e) => e.kind).sort(), ['manual', 'pre']);
+  assert.deepEqual(list.map((e) => e.kind).sort(), ['manual', 'pre', 'replaced']);
 });
 
 test('listBackups on a data dir with no backups folder is empty, not a crash', () => {
@@ -137,7 +136,7 @@ test('pruning is per kind: daily backups can never evict update-rollback points'
   assert.equal(count('safety-'), 5);
   assert.equal(count('final-'), 5);
   assert.equal(count('pre-'), 3);
-  assert.equal(count('replaced-'), 1, 'moved-aside databases are never auto-deleted');
+  assert.equal(count('replaced-'), 1, 'DISK_GUARD_V1 — отложенные восстановлением хранятся по две: одна остаётся');
   assert.ok(left.includes('daily-20260816-030000.db'), 'the newest of each kind survives');
   assert.ok(!left.includes('daily-20260801-030000.db'), 'the oldest goes');
 });
@@ -817,3 +816,92 @@ for (const [freeGb, keepsHistory] of [[8, false], [20, true]]) {
       keepsHistory ? '20 ГБ хватит на следующую копию (13 ГБ)' : '8 ГБ не хватит даже на одну копию в 13 ГБ');
   });
 }
+
+// --- DISK_GUARD_V1: копии до восстановления и отката ---------------------------
+
+// Копия до восстановления или отката — это .db и рядом её -wal и -shm.
+function putTrio(bd, base, t) {
+  for (const s of ['', '-wal', '-shm']) {
+    fs.writeFileSync(path.join(bd, base + '.db' + s), 'x');
+    fs.utimesSync(path.join(bd, base + '.db' + s), new Date(t), new Date(t));
+  }
+}
+const trioNames = (bases) => bases.flatMap((b) => ['', '-wal', '-shm'].map((s) => `${b}.db${s}`));
+
+test('DISK_GUARD_V1: до восстановления и до отката — по две последние каждого вида, вместе с -wal и -shm', () => {
+  const dir = tmpDir('em-sysbk-aside-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  let t = Date.now() - 1e6;
+  for (const kind of ['replaced', 'rollback']) {
+    for (const day of ['01', '02', '03']) { putTrio(bd, `${kind}-202608${day}-090000`, t); t += 1000; }
+  }
+  pruneBackupsByKind(bd);
+  const expected = trioNames(['replaced', 'rollback'].flatMap((kind) => ['02', '03'].map((day) => `${kind}-202608${day}-090000`)));
+  assert.deepEqual(fs.readdirSync(bd).sort(), expected.sort(), 'самые старые ушли целиком, журналы не осиротели');
+});
+
+test('DISK_GUARD_V1: в списке — «до восстановления» и «до отката», размер с журналом, восстановить их отсюда нельзя', async () => {
+  const { dir, db } = workspace();
+  const made = await createBackup(db, dir, 'manual');
+  const bd = backupsDir(dir);
+  fs.writeFileSync(path.join(bd, 'replaced-20260801-090000.db'), Buffer.alloc(1000));
+  fs.writeFileSync(path.join(bd, 'replaced-20260801-090000.db-wal'), Buffer.alloc(500));
+  fs.writeFileSync(path.join(bd, 'rollback-20260802-090000.db'), Buffer.alloc(700));
+  const byName = Object.fromEntries(listBackups(dir).map((b) => [b.name, b]));
+  assert.equal(byName['replaced-20260801-090000.db'].kind, 'replaced');
+  assert.equal(byName['replaced-20260801-090000.db'].size, 1500, 'журнал рядом — тоже место на диске');
+  assert.equal(byName['replaced-20260801-090000.db'].restorable, false);
+  assert.equal(byName['rollback-20260802-090000.db'].kind, 'rollback');
+  assert.equal(byName['rollback-20260802-090000.db'].restorable, false);
+  assert.equal(byName[made.name].restorable, true);
+  assert.equal(Object.keys(byName).some((n) => n.endsWith('-wal')), false, 'журнал — часть копии, не строка списка');
+
+  assert.deepEqual(await requestRestore(db, dir, 'replaced-20260801-090000.db'), { ok: false, reason: 'unknown_backup' },
+    'база без своего журнала потеряла бы последние записи');
+  assert.ok(!fs.existsSync(marker(dir)));
+});
+
+// Защита восстановления (цель записанного намерения, protect) действует и на
+// эти виды: чистка по счёту их не удаляет, даже если они старше двух последних.
+test('DISK_GUARD_V1: до восстановления и до отката под защитой восстановления не уходят при чистке по счёту', () => {
+  const dir = tmpDir('em-sysbk-aside-keep-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  let t = Date.now() - 1e6;
+  for (const kind of ['replaced', 'rollback']) {
+    for (const day of ['01', '02', '03', '04']) { putTrio(bd, `${kind}-202608${day}-090000`, t); t += 1000; }
+  }
+  fs.writeFileSync(marker(dir), JSON.stringify({ action: 'restore', backup: 'replaced-20260801-090000.db' }));
+  pruneBackupsByKind(bd, { protect: ['rollback-20260801-090000.db'] });
+  const expected = trioNames(['replaced', 'rollback'].flatMap((kind) => ['01', '03', '04'].map((day) => `${kind}-202608${day}-090000`)));
+  assert.deepEqual(fs.readdirSync(bd).sort(), expected.sort(),
+    'ушли только вторые по старости; защищённые остались вместе с журналами');
+});
+
+// Решение DISK_GUARD_V1 (C3): для предела по объёму эти копии НЕ автоматические
+// (п. 5 называет автоматическими только ежедневные, перед обновлением и
+// страховочные) — по объёму они не удаляются, их держит своё правило: две
+// последние. Но место на диске они занимают по-настоящему, и в объём копий
+// (30 %) входят, как и на панели «Место на диске». Предупреждение kept_over_cap
+// — о ручных и финальных, его текст называет только их.
+test('DISK_GUARD_V1: предел по объёму — до восстановления и до отката входят в объём копий, но по объёму не удаляются', (tc) => {
+  tc.mock.method(console, 'warn', () => {});
+  const dir = tmpDir('em-sysbk-aside-cap-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  let t = Date.now() - 1e6;
+  putSized(bd, 'daily-20260801-030000.db', 100, t); t += 1000;
+  putSized(bd, 'daily-20260802-030000.db', 100, t); t += 1000;
+  putSized(bd, 'replaced-20260803-090000.db', 300, t);
+  putSized(bd, 'replaced-20260803-090000.db-wal', 100, t); t += 1000;
+  putSized(bd, 'rollback-20260804-090000.db', 300, t); t += 1000;
+  putSized(bd, 'manual-20260805-100000.db', 100, t);
+  // 1000 КБ копий на «диске» 2000 КБ, свободна половина; предел 30 % — 600 КБ.
+  // Без отложенных копий было бы 300 КБ — в пределе, и ничего бы не ушло.
+  pruneBackupsByKind(bd, { diskSpaceImpl: () => ({ free: 1000 * 1024, total: 2000 * 1024 }) });
+  assert.deepEqual(fs.readdirSync(bd).sort(), ['daily-20260802-030000.db', 'manual-20260805-100000.db',
+    'replaced-20260803-090000.db', 'replaced-20260803-090000.db-wal', 'rollback-20260804-090000.db'].sort(),
+  'ушла старшая ежедневная; самая новая ежедневная, ручная и отложенные остались, хоть копии всё ещё больше 30 %');
+  assert.equal(readGuard(dir).kept_over_cap, undefined, 'ручные и финальные одни в пределе — их предупреждения нет');
+});

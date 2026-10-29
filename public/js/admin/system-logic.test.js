@@ -93,13 +93,14 @@ test('backupKind: prefers the server kind field, falls back to the filename pref
   assert.equal(backupKind(null), null);
 });
 
-test('backupKindLabel: the five plan kinds plus replaced- get human words', () => {
+test('backupKindLabel: the five plan kinds plus replaced-/rollback- get human words', () => {
   assert.equal(backupKindLabel('pre'), 'перед обновлением');
   assert.equal(backupKindLabel('daily'), 'ежедневная');
   assert.equal(backupKindLabel('manual'), 'ручная');
   assert.equal(backupKindLabel('safety'), 'страховочная (перед восстановлением)');
   assert.equal(backupKindLabel('final'), 'перед удалением данных');
-  assert.equal(backupKindLabel('replaced'), 'заменённая при восстановлении');
+  assert.equal(backupKindLabel('replaced'), 'До восстановления');   // DISK_GUARD_V1
+  assert.equal(backupKindLabel('rollback'), 'До отката');           // DISK_GUARD_V1
 });
 
 test('backupKindLabel: an unknown kind shows its raw word (identifiable), only a missing kind shows the dash', () => {

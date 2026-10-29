@@ -72,8 +72,9 @@ export function backupKind(row) {
 }
 
 // Human words for the plan's five filename-prefix kinds, plus `replaced-`
-// (what processPendingAction moves the live DB aside as during a restore —
-// it lands in the same backups/ directory, so the listing will show it).
+// (what processPendingAction moves the live DB aside as during a restore) and
+// `rollback-` (the same, left by recover.cmd's rollback). DISK_GUARD_V1 — the
+// owner's wording, «До восстановления» / «До отката» (spec 3.18.1, п. 6).
 // Static Russian literals: they render through h(), whose text-child path
 // runs tr(), so the ru/uz/en entries live in i18n-strings.js.
 const KIND_LABELS = {
@@ -82,7 +83,8 @@ const KIND_LABELS = {
   manual:   'ручная',
   safety:   'страховочная (перед восстановлением)',
   final:    'перед удалением данных',
-  replaced: 'заменённая при восстановлении',
+  replaced: 'До восстановления',
+  rollback: 'До отката',
 };
 
 /**

@@ -3,6 +3,10 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // DISK_GUARD_V1 — копии, отложенные восстановлением и откатом (system-logic.js KIND_LABELS, views/system-backups.js)
+  "До восстановления": {"en":"Before restore","ru":"До восстановления","uz":"Tiklashdan oldin"},   // DISK_GUARD_V1
+  "До отката": {"en":"Before rollback","ru":"До отката","uz":"Orqaga qaytarishdan oldin"},   // DISK_GUARD_V1
+  "Хранится для поддержки": {"en":"Kept for support","ru":"Хранится для поддержки","uz":"Yordam xizmati uchun saqlanadi"},   // DISK_GUARD_V1
   // DISK_GUARD_V1 — копия базы без места на диске (server/services/disk-guard.js присылает шаблон)
   "Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.": {"en":"Not enough disk space: {need} GB needed, {free} GB free. The backup was not made.","ru":"Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.","uz":"Diskda joy yetarli emas: {need} GB kerak, {free} GB bo‘sh. Nusxa olinmadi."},   // DISK_GUARD_V1
   // ADMIN_ACT_AS_V1 — администратор работает от имени сотрудника: отказы и ответы сервера

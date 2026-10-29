@@ -111,10 +111,17 @@ export async function renderBackupsCard(root, { admin }) {
                 h('td', null, backupKindLabel(backupKind(row))),
                 h('td', null, formatBytes(row.size, tr)),
                 h('td', { class: 'sys-backups-restore' },
-                    h('button', {
-                        type: 'button', class: 'btn btn-outline btn-sm',
-                        onclick: () => openRestoreModal(row),
-                    }, 'Восстановить'))));
+                    row.restorable === false
+                        // DISK_GUARD_V1 — «До восстановления» / «До отката»: журнал
+                        // такой базы лежит рядом отдельным файлом, и вернуть её
+                        // одним файлом значило бы потерять последние записи.
+                        // Видна — чтобы было понятно, что занимает диск;
+                        // возвращает её поддержка Easy-Med.
+                        ? h('span', { class: 'muted sys-note' }, 'Хранится для поддержки')
+                        : h('button', {
+                            type: 'button', class: 'btn btn-outline btn-sm',
+                            onclick: () => openRestoreModal(row),
+                        }, 'Восстановить'))));
         }
         tableWrap.appendChild(h('table', { class: 'tbl sys-backups-tbl' },
             h('thead', null, h('tr', null,

@@ -427,3 +427,18 @@ for (const lang of ['ru', 'en', 'uz']) {
     }
   });
 }
+
+test('DISK_GUARD_V1: «До восстановления» и «До отката» видны в списке, но кнопки «Восстановить» у них нет', async () => {
+  backupRows = [
+    { name: 'replaced-20261001-090000.db', kind: 'replaced', size: 2048, mtimeMs: new Date(2026, 9, 1, 9, 0).getTime(), restorable: false },
+    { name: 'rollback-20261002-090000.db', kind: 'rollback', size: 2048, mtimeMs: new Date(2026, 9, 2, 9, 0).getTime(), restorable: false },
+    { name: 'manual-20261003-100000.db', kind: 'manual', size: 1229, mtimeMs: new Date(2026, 9, 3, 10, 0).getTime(), restorable: true },
+  ];
+  const root = mk('div');
+  await renderClinicData(root);
+  const text = textOf(root);
+  assert.match(text, /До восстановления/);
+  assert.match(text, /До отката/);
+  assert.match(text, /Хранится для поддержки/);
+  assert.equal(findAllButtons(root).filter((b) => textOf(b).trim() === 'Восстановить').length, 1, 'кнопка — только у ручной копии');
+});

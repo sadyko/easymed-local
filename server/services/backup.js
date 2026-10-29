@@ -18,7 +18,8 @@ import {
 //   1. Copies are taken with db.backup(), never fs.copyFileSync — the database
 //      runs in WAL mode, so the .db file alone is NOT the whole database.
 //   2. The live database is MOVED aside on restore, never deleted. Disk space
-//      is recoverable; a clinic's patient records are not.
+//      is recoverable; a clinic's patient records are not. (DISK_GUARD_V1 —
+//      the move-asides are kept two per kind, see KEEP_BY_KIND.)
 
 // The only filename shape a backup may have. Anything else in backups/ —
 // a sidecar, a subdirectory, a name with a separator smuggled in — is invisible
@@ -33,7 +34,12 @@ const CREATABLE_KINDS = new Set(['daily', 'manual', 'safety', 'final']);
 // Per-kind retention. One shared counter (the old pruneBackups(dir, 3) at
 // boot) let fourteen daily copies silently evict the update rollback point —
 // and one update evict every daily copy. Each kind ages against itself only.
-const KEEP_BY_KIND = { daily: 14, manual: 10, safety: 5, final: 5, pre: 3 };
+// DISK_GUARD_V1 — и копии, отложенные восстановлением (replaced-*, applyRestore)
+// и откатом (rollback-*, install/rollback.mjs): по две последние каждого вида.
+// Раньше они не удалялись никогда и на экране не были видны.
+const KEEP_BY_KIND = { daily: 14, manual: 10, safety: 5, final: 5, pre: 3, replaced: 2, rollback: 2 };
+// DISK_GUARD_V1 — видны в списке, но с экрана не восстанавливаются (см. listBackups).
+const SET_ASIDE_KINDS = new Set(['replaced', 'rollback']);
 
 const MARKER_NAME = 'pending-action.json';
 
@@ -183,12 +189,18 @@ const dayStamp = (d) => `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate
 const timeStamp = (d) => `${dayStamp(d)}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
 
 function kindOf(name) {
-  const m = /^(pre|daily|manual|safety|final)-/.exec(name);
+  const m = /^(pre|daily|manual|safety|final|replaced|rollback)-/.exec(name);
   return m ? m[1] : null;
 }
 
 // DISK_GUARD_V1 — копии, которые удаляются по объёму (п. 5). Ручные и
 // финальные — решение человека, автоматически они не удаляются никогда.
+// Отложенные восстановлением и откатом (SET_ASIDE_KINDS) сюда тоже не входят:
+// п. 5 называет автоматическими только эти три вида, а у отложенных своё
+// правило — две последние (п. 6); «до отката» к тому же единственная копия
+// базы на момент отката (из неё поддержка переносит внесённое после
+// обновления). В объём копий (30 %) они входят — место на диске они занимают
+// по-настоящему, и панель «Место на диске» считает их копиями.
 const AUTO_KINDS = new Set(['daily', 'pre', 'safety']);
 
 // DISK_GUARD_V1 — место копии со всеми её частями: .db и (у отложенных
@@ -333,9 +345,11 @@ export function ensureCopySpace(dataDir, {
  * восстанавливают), САМАЯ НОВАЯ копия каждого автоматического вида (поправка
  * 1 плана 3.18.1: диск, занятый другими файлами, не должен оставлять клинику
  * совсем без ежедневной копии, точки отката и страховочной), ручные,
- * финальные. Не уложились и так — строка «Мало места на диске» в журнал
- * программы (на «Данных клиники» то же видно по самому месту). Если ручные и
- * финальные одни больше 30 % — отметка kept_over_cap: предупреждение на
+ * финальные, отложенные восстановлением и откатом (их место считается, но
+ * держит их своё правило — см. AUTO_KINDS). Не уложились и так — строка
+ * «Мало места на диске» в журнал программы (на «Данных клиники» то же видно
+ * по самому месту). Если ручные и финальные одни больше 30 % — отметка
+ * kept_over_cap (только о них: так и говорит её текст): предупреждение на
  * «Данных клиники». Отметка пишется только рядом с настоящей папкой backups/
  * данных клиники — вызов на произвольной папке не пишет в её родителя.
  */
@@ -382,15 +396,18 @@ function pruneBySize(dir, { protect, diskSpaceImpl, dbBytesImpl = dbBytes, now }
 }
 
 /**
- * Every restorable backup in <dataDir>/backups, newest first.
+ * Every backup in <dataDir>/backups, newest first.
  *
- * Only the five known kinds are listed. replaced-* files (the raw move-asides
- * a restore leaves behind) are real data but NOT offered back: a raw .db whose
- * -wal sits BESIDE it as a separate file would lose that WAL's writes if
- * copied back alone — the safety- copy of the same moment is the restorable
- * version, and it always exists because requestRestore creates it first.
+ * DISK_GUARD_V1 — в списке и копии, отложенные восстановлением (replaced-*) и
+ * откатом (rollback-*, recover.cmd): это настоящие данные и настоящее место
+ * на диске, и клиника должна видеть, что занимает её диск. Но restorable у них
+ * false и с экрана их не вернуть: у такого .db журнал -wal лежит РЯДОМ
+ * отдельным файлом, и вернуть один .db значило бы потерять записи журнала.
+ * Восстанавливаемая копия того же момента — страховочная (requestRestore
+ * снимает её первой); вернуть «до отката» — работа поддержки Easy-Med.
+ * Размер — вместе с -wal/-shm рядом.
  *
- * @returns {{name:string, kind:string, size:number, mtimeMs:number}[]}
+ * @returns {{name:string, kind:string, size:number, mtimeMs:number, restorable:boolean}[]}
  */
 export function listBackups(dataDir) {
   const dir = path.join(dataDir, 'backups');
@@ -404,7 +421,9 @@ export function listBackups(dataDir) {
       // delete) is normal life, not an error.
       try {
         const st = fs.statSync(path.join(dir, f));
-        return st.isFile() ? { name: f, kind: kindOf(f), size: st.size, mtimeMs: st.mtimeMs } : null;
+        if (!st.isFile()) return null;
+        const kind = kindOf(f);
+        return { name: f, kind, size: entryBytes(dir, f), mtimeMs: st.mtimeMs, restorable: !SET_ASIDE_KINDS.has(kind) };
       } catch { return null; }
     })
     .filter((e) => e !== null)
@@ -496,8 +515,9 @@ async function createBackupNow(db, dataDir, kind, now, { protect = [], diskSpace
 /**
  * Kind-aware retention. Replaces the boot-time pruneBackups(dir, 3) call —
  * see KEEP_BY_KIND for why one shared counter was wrong. Unknown prefixes
- * (replaced-*, hand-copied files) are never touched: this function deletes
- * only what this module or db/backup.js provably created.
+ * (hand-copied files) are never touched: this function deletes only what this
+ * module, db/backup.js or install/rollback.mjs provably created (DISK_GUARD_V1 —
+ * replaced-* and rollback-* are known kinds now, two of each are kept).
  *
  * DISK_GUARD_V1 — после счёта — предел по объёму (pruneBySize). protect —
  * имена, которые не удаляются ни счётом, ни объёмом: только что сделанная
@@ -600,7 +620,7 @@ export async function requestRestore(db, dataDir, name) {
   // passes caller-shaped text, and "a name we did not list" and "a path" get
   // the same refusal — there is nothing a traversal probe can learn here.
   if (typeof name !== 'string' || !NAME_RE.test(name)
-      || !listBackups(dataDir).some((b) => b.name === name)) {
+      || !listBackups(dataDir).some((b) => b.name === name && b.restorable)) {   // DISK_GUARD_V1 — replaced-*/rollback-* не возвращаются
     return { ok: false, reason: 'unknown_backup' };
   }
   // DISK_GUARD_V1 — копия, которую сейчас восстанавливают, не уступает место
