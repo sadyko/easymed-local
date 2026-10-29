@@ -42,7 +42,7 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
-import { sanitizeStoredHtml, richHasContent, textBreaks } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком
+import { sanitizeStoredHtml, richHasContent, textBreaks, textIsBlank } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком · PRINT_SKIP_EMPTY_V1 — пустота поля рецепта
 import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
 import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark, gapCaret, edgeHop, breakLines, keepMarks, clearSplitIds } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
 import { TBL_MAX_ROWS, TBL_MAX_COLS, insertTable, tableChain, tableHasText, cellStep, cellCaret, addRow, canRemoveRow, removeRow, addColumn, removeColumn, deleteTable, insertCellBreak, normalizePasted, beforeTable, rowHasText, columnHasText, stripPastedSplit } from './blank-table.js';   // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в бланке
@@ -6111,9 +6111,9 @@ async function openRecipeModal(ctx) {
     const patientName = `${p.lastName || ''} ${p.firstName || ''} ${p.middle || ''}`.trim() || p.fullName || 'Пациент';
     /* i18n-exempt-start: «Рецепт» — печатный бланк (Rp., ru+uz), содержимое документа */
     /* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
-    const ageStr = (p.age != null && p.age !== '') ? (String(p.age) + ' лет') : '—';
-    const sexStr = (p.gender === 'M' ? 'Муж.' : p.gender === 'F' ? 'Жен.' : (p.gender || '—'));
-    const dob = p.dob || p.birthDate || '—';
+    // PRINT_SKIP_EMPTY_V1 — возраст, пол и дата рождения — только заполненные (recipeHeadRows):
+    // раньше пустые печатались «—». ФИО и номер карты — всегда.
+    const headRowsHtml = recipeHeadRows(p).map((r) => `<div><span>${escapeHtml(r.label)}</span><b>${escapeHtml(r.value)}</b></div>`).join('');
     const recId = String(p.mrn || p.id || '—');
     const doctorName = svc.doctorName || '—';
     const _clinic = (typeof window !== 'undefined' && window.CLINIC) || {};
@@ -6125,21 +6125,9 @@ async function openRecipeModal(ctx) {
 
     // Build one Latin Rp. block per prescription (escaped). Reused for both
     // the on-screen modal and the print window via buildRxLinesHtml().
+    // PRINT_SKIP_EMPTY_V1 — назначение — общей recipeRxItemHtml (та же разметка у печати).
     function buildRxLinesHtml() {
-        return items.map((rx, i) => {
-            const name = escapeHtml(rx.name || '(без названия)');
-            const dose = rx.dose ? (' ' + escapeHtml(rx.dose)) : '';
-            const sLine = rx.freq ? escapeHtml(rx.freq) : '—';
-            const durLine = rx.dur ? `<div class="rx-recipe-sub">Курс: ${escapeHtml(rx.dur)}</div>` : '';
-            const noteLine = rx.notes ? `<div class="rx-recipe-sub">Примечание: ${escapeHtml(rx.notes)}</div>` : '';
-            return `
-              <div class="rx-recipe-item">
-                <div class="rx-recipe-rp"><b>Rp.:</b> <span class="rx-recipe-drug">${name}${dose}</span></div>
-                <div class="rx-recipe-s"><b>S.:</b> ${sLine}</div>
-                ${durLine}
-                ${noteLine}
-              </div>`;
-        }).join('');
+        return items.map((rx) => recipeRxItemHtml(rx, 'rx-recipe-')).join('');
     }
 
     const rxLinesHtml = buildRxLinesHtml();
@@ -6161,8 +6149,7 @@ async function openRecipeModal(ctx) {
       </div>
       <div class="rx-recipe-pat">
         <div><span>Пациент / Bemor</span><b>${escapeHtml(patientName)}</b></div>
-        <div><span>Возраст / Yosh</span><b>${escapeHtml(ageStr)} · ${escapeHtml(sexStr)}</b></div>
-        <div><span>Дата рождения / Tug'ilgan sana</span><b>${escapeHtml(dob)}</b></div>
+        ${headRowsHtml}
         <div><span>Дата / Sana</span><b>${escapeHtml(today)}</b></div>
       </div>
       <div class="rx-recipe-body">
@@ -6232,23 +6219,11 @@ ${PRINT_FONT_FACE_CSS}
   </div>
   <div class="rp">
     <div><span>Пациент / Bemor</span><b>${escapeHtml(patientName)}</b></div>
-    <div><span>Возраст / Yosh</span><b>${escapeHtml(ageStr)} · ${escapeHtml(sexStr)}</b></div>
-    <div><span>Дата рождения / Tug'ilgan sana</span><b>${escapeHtml(dob)}</b></div>
+    ${headRowsHtml}
     <div><span>ID</span><b>${escapeHtml(recId)}</b></div>
   </div>
   <div class="rx-body">
-    ${items.map((rx) => {
-        const name = escapeHtml(rx.name || '(без названия)');
-        const dose = rx.dose ? (' ' + escapeHtml(rx.dose)) : '';
-        const sLine = rx.freq ? escapeHtml(rx.freq) : '—';
-        const durLine = rx.dur ? `<div class="rx-sub">Курс: ${escapeHtml(rx.dur)}</div>` : '';
-        const noteLine = rx.notes ? `<div class="rx-sub">Примечание: ${escapeHtml(rx.notes)}</div>` : '';
-        return `<div class="rx-item">
-          <div class="rx-rp"><b>Rp.:</b> <span class="rx-drug">${name}${dose}</span></div>
-          <div class="rx-s"><b>S.:</b> ${sLine}</div>
-          ${durLine}${noteLine}
-        </div>`;
-    }).join('')}
+    ${items.map((rx) => recipeRxItemHtml(rx, 'rx-')).join('')}
   </div>
   <div class="rf">
     <div class="rf-sign">
@@ -6293,6 +6268,38 @@ ${PRINT_FONT_FACE_CSS}
     });
 }
 
+
+/* i18n-exempt-start: «Рецепт» — печатный бланк (Rp., ru+uz), содержимое документа */
+// PRINT_SKIP_EMPTY_V1 — ОДНО НАЗНАЧЕНИЕ РЕЦЕПТА для окна (prefix 'rx-recipe-')
+// и для печати ('rx-'): разметка у них одна, различаются только классы. Пустая
+// кратность — строки «S.:» нет: «S.: —» на бумаге читалось как назначение без
+// указаний. Пустые курс и примечание — тоже без строки. Всё — через escapeHtml.
+// Экспорт — для поведенческой проверки (print-skip-empty.test.mjs).
+export function recipeRxItemHtml(rx, prefix) {
+    const r = rx || {};
+    const name = escapeHtml(r.name || '(без названия)');
+    const dose = r.dose ? (' ' + escapeHtml(r.dose)) : '';
+    const sLine = textIsBlank(r.freq) ? '' : `<div class="${prefix}s"><b>S.:</b> ${escapeHtml(r.freq)}</div>`;
+    const durLine = textIsBlank(r.dur) ? '' : `<div class="${prefix}sub">Курс: ${escapeHtml(r.dur)}</div>`;
+    const noteLine = textIsBlank(r.notes) ? '' : `<div class="${prefix}sub">Примечание: ${escapeHtml(r.notes)}</div>`;
+    return `<div class="${prefix}item"><div class="${prefix}rp"><b>Rp.:</b> <span class="${prefix}drug">${name}${dose}</span></div>${sLine}${durLine}${noteLine}</div>`;
+}
+// PRINT_SKIP_EMPTY_V1 — СТРОКИ ПАЦИЕНТА НА РЕЦЕПТЕ: возраст, пол и дата рождения —
+// только заполненные (раньше пустые печатались «—»). Возраст с полом — одна
+// ячейка, как была; только пол — подпись «Пол». ФИО и номер карты рецепт
+// печатает сам и всегда. Возраст 0 — значение, а не пустота.
+export function recipeHeadRows(p) {
+    const q = p || {};
+    const val = (v) => (textIsBlank(v) ? '' : String(v).trim());
+    const age = val(q.age) ? val(q.age) + ' лет' : '';
+    const sex = q.gender === 'M' ? 'Муж.' : q.gender === 'F' ? 'Жен.' : val(q.gender);
+    const dob = val(q.dob) || val(q.birthDate);
+    const rows = [];
+    if (age || sex) rows.push({ label: age ? 'Возраст / Yosh' : 'Пол / Jinsi', value: [age, sex].filter(Boolean).join(' · ') });
+    if (dob) rows.push({ label: "Дата рождения / Tug'ilgan sana", value: dob });
+    return rows;
+}
+/* i18n-exempt-end */
 
 function escapeHtml(s) {
     return String(s ?? '').replace(/[&<>"']/g, ch => (

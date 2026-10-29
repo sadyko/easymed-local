@@ -194,3 +194,63 @@ test('ФИО и номер карты — всегда: пустые печат�
         assert.match(text(renderDesignedVariant(type, v, S, none)), /Пациент — Bemor/, type + '/' + v + ': шапка потеряла «Пациент»');
     }
 });
+
+// ── рецепт (service-workspace.js, openRecipeModal) ──────────────────────────
+// Модуль кабинета при загрузке читает window/document — заглушки, как в cabinet-diag-blank.
+globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {}, clear() {} };
+globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, innerWidth: 1440, addEventListener() {} };
+globalThis.document = { createElement: () => ({ style: {}, appendChild() {}, setAttribute() {} }), head: { appendChild() {} }, body: { appendChild() {} }, addEventListener() {}, getElementById: () => null, querySelector: () => null, documentElement: { style: {} } };
+const WS = await import('../views/service-workspace.js');
+const { readFileSync } = await import('node:fs');
+const WS_SRC = readFileSync(new URL('../views/service-workspace.js', import.meta.url), 'utf8');
+
+test('рецепт: пустая кратность — строки «S.:» нет; заполненная — есть; прочерков нет', () => {
+    for (const prefix of ['rx-', 'rx-recipe-']) {
+        for (const freq of [undefined, '', ' ', '​']) {
+            const html = WS.recipeRxItemHtml({ name: 'Амброксол', dose: '30 мг', freq }, prefix);
+            assert.ok(!/S\.:/.test(html), `${prefix}, ${JSON.stringify(freq)}: пустая кратность напечатана строкой «S.:»`);
+            assert.ok(!/—/.test(html), `${prefix}, ${JSON.stringify(freq)}: прочерк на рецепте`);
+            assert.match(html, /<b>Rp\.:<\/b> <span class="[\w-]*drug">Амброксол 30 мг<\/span>/, prefix + ': строка «Rp.:» пропала');
+        }
+        const full = WS.recipeRxItemHtml({ name: 'Амброксол', dose: '30 мг', freq: 'по 1 таб. 3 раза в день', dur: '5 дней', notes: 'после еды' }, prefix);
+        assert.match(full, new RegExp(`<div class="${prefix}item">`), prefix + ': класс назначения');
+        assert.match(full, new RegExp(`<div class="${prefix}s"><b>S\\.:</b> по 1 таб\\. 3 раза в день</div>`), prefix + ': кратность не напечатана');
+        assert.match(full, /Курс: 5 дней/);
+        assert.match(full, /Примечание: после еды/);
+        assert.ok(!/Курс|Примечание/.test(WS.recipeRxItemHtml({ name: 'Амброксол', dur: ' ', notes: '​' }, prefix)), prefix + ': пустые курс и примечание напечатаны');
+    }
+    // экранирование — как было
+    const xss = WS.recipeRxItemHtml({ name: '<img src=x onerror=alert(1)>', freq: '<b>x</b>' }, 'rx-');
+    assert.ok(!/<img|<b>x/.test(xss), xss);
+});
+
+test('рецепт: пустые возраст, пол и дата рождения не печатаются', () => {
+    const DOB = "Дата рождения / Tug'ilgan sana";
+    assert.deepEqual(WS.recipeHeadRows({}), []);
+    assert.deepEqual(WS.recipeHeadRows(null), []);
+    assert.deepEqual(WS.recipeHeadRows({ age: '', gender: '', dob: '​', birthDate: ' ' }), []);
+    assert.deepEqual(WS.recipeHeadRows({ age: 34, gender: 'M', dob: '14.03.1989' }), [
+        { label: 'Возраст / Yosh', value: '34 лет · Муж.' },
+        { label: DOB, value: '14.03.1989' },
+    ]);
+    assert.deepEqual(WS.recipeHeadRows({ age: 34 }), [{ label: 'Возраст / Yosh', value: '34 лет' }]);
+    assert.deepEqual(WS.recipeHeadRows({ age: 0 }), [{ label: 'Возраст / Yosh', value: '0 лет' }], 'возраст 0 — значение, а не пустота');
+    assert.deepEqual(WS.recipeHeadRows({ gender: 'F' }), [{ label: 'Пол / Jinsi', value: 'Жен.' }]);
+    assert.deepEqual(WS.recipeHeadRows({ birthDate: '01.01.2000' }), [{ label: DOB, value: '01.01.2000' }]);
+});
+
+test('рецепт: окно и печать берут одни строки; ФИО и номер карты — всегда', () => {
+    const code = WS_SRC.replace(/\/\/[^\n]*/g, '');
+    const fn = code.slice(code.indexOf('async function openRecipeModal('), code.indexOf('export function recipeRxItemHtml('));
+    assert.ok(fn.length > 1000, 'openRecipeModal не найден');
+    assert.equal((fn.match(/recipeRxItemHtml\(rx, 'rx-recipe-'\)/g) || []).length, 1, 'окно рецепта рисует назначения не общей функцией');
+    assert.equal((fn.match(/recipeRxItemHtml\(rx, 'rx-'\)/g) || []).length, 1, 'печать рецепта рисует назначения не общей функцией');
+    assert.match(fn, /recipeHeadRows\(p\)/, 'строки пациента — не общей функцией');
+    assert.ok(!/ageStr|sexStr/.test(fn), 'прежние строки возраста и пола с прочерком остались');
+    assert.ok(!/p\.birthDate \|\| '—'/.test(fn), 'дата рождения печатается прочерком');
+    assert.ok(!/rx\.freq \? escapeHtml\(rx\.freq\) : '—'/.test(fn), 'кратность печатается прочерком');
+    // ФИО и номер карты — в окне и в печати всегда
+    assert.match(fn, /<span>Пациент \/ Bemor<\/span><b>\$\{escapeHtml\(patientName\)\}<\/b>[\s\S]*<span>Пациент \/ Bemor<\/span><b>\$\{escapeHtml\(patientName\)\}<\/b>/);
+    assert.match(fn, /<span>ID<\/span><b>\$\{escapeHtml\(recId\)\}<\/b>/);
+    assert.match(fn, /№ \$\{escapeHtml\(recId\)\}/);
+});
