@@ -264,6 +264,7 @@ export function confirmEndCall(question) {
 }
 /** Перед перезагрузкой (выход, вход от имени и возврат): выключить телефон, выбор сотрудника оставить. */
 export function releasePhone() {
+  stopReleaseWait();   // выключаем сейчас — ждать конца разговора больше нечего
   const sp = peekSoftphone();
   if (!sp || typeof sp.disable !== 'function') return;
   try { sp.disable({ keepWanted: true }); } catch { /* перезагрузка всё равно его снимет */ }
@@ -286,13 +287,44 @@ function listenLogout() {
   try {
     if (typeof BroadcastChannel === 'function') {
       pageChannel = new BroadcastChannel(CHANNEL);
-      pageChannel.onmessage = (e) => { if (e && e.data && e.data.type === 'logout') releasePhone(); };
+      pageChannel.onmessage = (e) => { if (e && e.data && e.data.type === 'logout') releaseWhenIdle(); };
       // Под Node (стенды) открытый канал держал бы процесс; в браузере unref нет.
       if (typeof pageChannel.unref === 'function') pageChannel.unref();
     }
   } catch { pageChannel = null; }
-  try { window.addEventListener('storage', (e) => { if (e && e.key === LOGOUT_KEY && e.newValue) releasePhone(); }); } catch { /* без окна */ }
-  try { window.addEventListener(SESSION_GONE_EVENT, releasePhone); } catch { /* без окна */ }
+  try { window.addEventListener('storage', (e) => { if (e && e.key === LOGOUT_KEY && e.newValue) releaseWhenIdle(); }); } catch { /* без окна */ }
+  try { window.addEventListener(SESSION_GONE_EVENT, releaseWhenIdle); } catch { /* без окна */ }
+}
+
+// SOFTPHONE_V1 (ревью 09094415, A) — выход в другой вкладке или конец сессии
+// во время разговора его не обрывают: звонок идёт напрямую с АТС, человек его
+// договорит. Идёт вызов или разговор — ждём его конца и тогда выключаем телефон
+// (один раз, сколько бы сигналов ни пришло); звонит (ещё не ответили) или
+// звонка нет — выключаем сразу. Свой выход — по-прежнему вопрос и выключение.
+const IN_CALL = new Set(['calling', 'in_call']);
+let releaseWait = null;   // { sp, off } — ждём конца разговора этого телефона
+function stopReleaseWait() {
+  const w = releaseWait;
+  releaseWait = null;
+  if (w) { try { w.off(); } catch { /* пусть */ } }
+}
+function releaseWhenIdle() {
+  const sp = peekSoftphone();
+  if (!sp) return;
+  let st = '';
+  try { st = typeof sp.get === 'function' ? String((sp.get() || {}).state || '') : ''; } catch { st = ''; }
+  if (!IN_CALL.has(st) || typeof sp.subscribe !== 'function') { releasePhone(); return; }
+  if (releaseWait && releaseWait.sp === sp) return;   // уже ждём
+  stopReleaseWait();
+  const wait = { sp, off: () => {} };
+  releaseWait = wait;
+  const off = sp.subscribe((s) => {
+    if (!s || IN_CALL.has(s.state) || releaseWait !== wait) return;
+    stopReleaseWait();
+    if (s.state !== 'off') releasePhone();   // уже выключен (закрыли вкладку, выключили сами) — выходить не из чего
+  });
+  wait.off = typeof off === 'function' ? off : () => {};
+  if (releaseWait !== wait) { try { wait.off(); } catch { /* пусть */ } }   // кончился прямо при подписке
 }
 
 /** Выход объявлен (auth.js signOutAndReload, после вопроса о звонке): другим вкладкам — выключить телефон. */
@@ -301,7 +333,9 @@ export function announceLogout() {
     const ch = pageChannel || (typeof BroadcastChannel === 'function' ? new BroadcastChannel(CHANNEL) : null);
     if (ch) { ch.postMessage({ type: 'logout' }); if (ch !== pageChannel) ch.close(); }
   } catch { /* без каналов — остаётся storage */ }
-  try { localStorage.setItem(LOGOUT_KEY, String(Date.now()) + '.' + Math.random().toString(36).slice(2)); } catch { /* приватный режим */ }
+  // Событие storage уходит другим вкладкам при записи; ключ сразу стираем, чтобы
+  // он не копился (стирание — тоже событие, но с пустым newValue: его не слушаем).
+  try { localStorage.setItem(LOGOUT_KEY, String(Date.now()) + '.' + Math.random().toString(36).slice(2)); localStorage.removeItem(LOGOUT_KEY); } catch { /* приватный режим */ }
 }
 
 /** Подмена для стендов: getSoftphone()/peekSoftphone() отдают её; null — снять. */
@@ -512,9 +546,13 @@ const REASONS = {
   load_failed: 'Не удалось загрузить телефон. Обновите страницу.',
 };
 const SERVER_ERROR = 'Телефония ответила ошибкой. Попробуйте ещё раз через минуту.';
+// Ревью 09094415 (C): до сервера не дошли — в message текст ошибки браузера
+// («TypeError: Failed to fetch»), его не показываем. Панель повторяет сама.
+const UNREACHABLE = 'Нет связи с сервером Easy-Med. Повторим автоматически.';
 
-/** Причина из состояния телефона словами; server — слова самого сервера, если он их прислал. */
-export function reasonText(reason, message = '') {
+/** Причина из состояния телефона словами; server — слова самого сервера, если он их прислал; code unreachable — наша фраза. */
+export function reasonText(reason, message = '', code = '') {
+  if (reason === 'server' && code === 'unreachable') return tr(UNREACHABLE);
   if (reason === 'server') return tr(message || SERVER_ERROR);
   return Object.prototype.hasOwnProperty.call(REASONS, reason) ? tr(REASONS[reason]) : '';
 }

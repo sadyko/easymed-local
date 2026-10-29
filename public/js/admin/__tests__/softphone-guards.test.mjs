@@ -288,41 +288,163 @@ test('выход в другой вкладке (BroadcastChannel или storage
   }
 });
 
-test('выход объявляется другим вкладкам — после вопроса о звонке; «Отмена» — не объявляется', async () => {
+test('выход объявляется другим вкладкам — после вопроса о звонке; «Отмена» — не объявляется; ключ storage не остаётся', async () => {
   const fake = fakePhone(true);
   B.setSoftphoneForTests(fake);
+  // Ревью 09094415 (D): запасной путь — записать ключ и сразу стереть: событие
+  // storage в других вкладках уже ушло, а в хранилище ключ не копится.
+  const KEY = 'easymed.softphone.logout';
+  const OPS = [];
+  const keepLS = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: keepLS.getItem,
+    setItem: (k, v) => { if (k === KEY) OPS.push('set'); keepLS.setItem(k, v); },
+    removeItem: (k) => { if (k === KEY) OPS.push('remove'); keepLS.removeItem(k); },
+  };
   try {
     POSTED.length = 0;
-    store.delete('easymed.softphone.logout');
+    store.delete(KEY);
     CONFIRM = false;
     await signOutAndReload();
     assert.deepEqual(POSTED, [], '«Отмена», а другие вкладки уже выключили телефон');
-    assert.equal(store.has('easymed.softphone.logout'), false);
+    assert.deepEqual(OPS, []);
     CONFIRM = true;
     await signOutAndReload();
     assert.deepEqual(POSTED.map((p) => [p.name, p.data]), [['easymed-softphone', { type: 'logout' }]]);
-    assert.ok(store.has('easymed.softphone.logout'), 'запасной путь (storage) не записан');
+    assert.deepEqual(OPS, ['set', 'remove'], 'запасной путь (storage) не записан или ключ не стёрт');
+    assert.equal(store.has(KEY), false, 'ключ выхода остался в хранилище');
   } finally {
+    globalThis.localStorage = keepLS;
     B.setSoftphoneForTests(null);
     CONFIRM = true;
   }
 });
 
-test('сессии больше нет (сервер ответил 401) — телефон этой вкладки выключается с выбором сотрудника', async () => {
+// Ревью 09094415 (A): выход в другой вкладке или конец сессии (401) во время
+// разговора его не обрывают — звонок идёт напрямую с АТС, и человек его
+// договорит. Телефон выключится один раз, когда разговор кончится. Пока звонит
+// (не ответили) или звонка нет — выключается сразу. Своя вкладка — по-прежнему
+// вопрос и выключение (тесты выхода выше).
+function livePhone(state) {
+  const f = fakePhone(false);
+  const subs = new Set();
+  let cur = { state };
+  f.subs = subs;
+  f.busy = () => cur.state === 'calling' || cur.state === 'in_call';
+  f.get = () => cur;
+  f.subscribe = (fn) => { subs.add(fn); return () => { subs.delete(fn); }; };
+  f.push = (st) => { cur = { state: st }; for (const fn of [...subs]) fn(cur); };
+  return f;
+}
+const otherTabLogout = () => { const o = new BroadcastChannel('easymed-softphone'); o.postMessage({ type: 'logout' }); o.close(); };
+const otherTabStorage = () => { for (const [t, fn] of listeners) if (t === 'storage') fn({ type: 'storage', key: 'easymed.softphone.logout', newValue: '1' }); };
+const sessionGone = () => window.dispatchEvent(new CustomEvent('easymed:session-gone'));
+
+test('выход в другой вкладке и конец сессии во время разговора: разговор не обрывается, телефон выключается один раз — когда разговор кончился', () => {
+  B.getSoftphone();
+  for (const [st, path] of [['in_call', ['in_call', 'ready']], ['calling', ['in_call', 'ready']], ['calling', ['ready']], ['in_call', ['error']]]) {
+    for (const fire of [otherTabLogout, otherTabStorage, sessionGone, () => { otherTabLogout(); otherTabStorage(); sessionGone(); }]) {
+      const fake = livePhone(st);
+      B.setSoftphoneForTests(fake);
+      try {
+        fire();
+        assert.deepEqual(fake.disables, [], st + ': разговор оборван');
+        for (const next of path.slice(0, -1)) { fake.push(next); assert.deepEqual(fake.disables, [], st + ' → ' + next); }
+        fake.push(path[path.length - 1]);
+        assert.deepEqual(fake.disables, [{ keepWanted: true }], st + ': разговор кончился, а телефон не выключился');
+        fake.push('ready'); fake.push('ringing');
+        assert.equal(fake.disables.length, 1, st + ': выключился больше одного раза');
+        assert.equal(fake.subs.size, 0, st + ': подписка на телефон осталась');
+      } finally {
+        B.setSoftphoneForTests(null);
+      }
+    }
+  }
+});
+
+test('ждём конца разговора, а телефон выключили иначе (свой выход, закрыли вкладку) — второго выключения нет', () => {
+  B.getSoftphone();
+  // Свой выход (releasePhone) во время ожидания — одно выключение, ожидание снято.
+  const a = livePhone('in_call');
+  B.setSoftphoneForTests(a);
+  try {
+    otherTabLogout();
+    assert.deepEqual(a.disables, []);
+    B.releasePhone();
+    assert.deepEqual(a.disables, [{ keepWanted: true }]);
+    assert.equal(a.subs.size, 0, 'ожидание конца разговора осталось');
+    a.push('ready');
+    assert.equal(a.disables.length, 1, 'выключился второй раз');
+  } finally {
+    B.setSoftphoneForTests(null);
+  }
+  // Разговор кончился выключением (pagehide, переключатель) — выходить уже не из чего.
+  const b = livePhone('in_call');
+  B.setSoftphoneForTests(b);
+  try {
+    sessionGone();
+    b.push('off');
+    assert.deepEqual(b.disables, [], 'выключенный телефон выключают ещё раз');
+    assert.equal(b.subs.size, 0);
+  } finally {
+    B.setSoftphoneForTests(null);
+  }
+});
+
+test('выход в другой вкладке и конец сессии, пока звонит или без звонка — телефон выключается сразу', () => {
+  B.getSoftphone();
+  for (const st of ['ringing', 'ready', 'connecting', 'error', 'other_tab']) {
+    for (const fire of [otherTabLogout, otherTabStorage, sessionGone]) {
+      const fake = livePhone(st);
+      B.setSoftphoneForTests(fake);
+      try {
+        fire();
+        assert.deepEqual(fake.disables, [{ keepWanted: true }], st);
+        assert.equal(fake.subs.size, 0, st + ': подписка не нужна');
+      } finally {
+        B.setSoftphoneForTests(null);
+      }
+    }
+  }
+});
+
+test('сессии больше нет (сервер ответил 401 «unauthorized») — телефон этой вкладки выключается с выбором сотрудника', async () => {
   B.getSoftphone();
   const fake = fakePhone(false);
   B.setSoftphoneForTests(fake);
   const keepFetch = globalThis.fetch;
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  // Ответ 401 с кодом; clone() — как у настоящего Response: тело читают дважды.
+  const resp401 = (code) => {
+    const body = code ? { error: { code, message: 'Нужно войти в систему.' } } : null;
+    return { ok: false, status: 401, json: async () => { if (!body) throw new SyntaxError('пустое тело'); return body; }, clone: () => resp401(code) };
+  };
   try {
     window.dispatchEvent(new CustomEvent('easymed:session-gone'));
     assert.deepEqual(fake.disables, [{ keepWanted: true }]);
-    // Ответ 401 на любой запрос программы (опрос, RPC) — то самое событие.
-    globalThis.fetch = async () => ({ ok: false, status: 401, json: async () => ({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } }) });
+    // Ответ 401 «unauthorized» на любой запрос программы (опрос, RPC) — то самое событие.
+    globalThis.fetch = async () => resp401('unauthorized');
     const { supabase } = await import('../../supabase.js');
     await supabase.rpc('telephony_live', {});
     assert.equal(fake.disables.length, 2, '401 от RPC не выключил телефон');
     await supabase.from('patients').select('id');
+    await flush();
     assert.equal(fake.disables.length, 3, '401 от /api/db не выключил телефон');
+    // Ревью 09094415 (B): 401 не о сессии — неверный пароль при входе, при
+    // смене пароля, — или без кода: сессия жива, телефон не трогаем.
+    for (const code of ['invalid_credentials', '']) {
+      globalThis.fetch = async () => resp401(code);
+      await supabase.rpc('telephony_live', {});
+      await supabase.from('patients').select('id');
+      await supabase.auth.signInWithPassword({ username: 'u', password: 'p' });
+      await flush();
+      assert.equal(fake.disables.length, 3, '401 «' + code + '» выключил телефон');
+    }
+    // Ответ без clone() (старые стенды) — без падения и без события.
+    globalThis.fetch = async () => ({ ok: false, status: 401, json: async () => ({ error: { code: 'unauthorized' } }) });
+    const r = await supabase.from('patients').select('id');
+    assert.ok(r && r.error, 'запрос упал вместо ошибки');
+    await flush();
   } finally {
     globalThis.fetch = keepFetch;
     B.setSoftphoneForTests(null);

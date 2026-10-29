@@ -11,17 +11,26 @@ import { withActivityHeaders } from './shared/user-activity.js';
 // SOFTPHONE_V1 (финальное ревью, I3) — сервер ответил 401: сессии больше нет.
 // Окну — событие, по нему телефон Easy-Med этой вкладки выходит из АТС
 // (admin/softphone-browser.js). Сам модуль телефона отсюда не грузится.
-function noteSessionGone(res) {
-    if (!res || res.status !== 401) return;
+// Ревью 09094415 (B): только 401 с кодом «unauthorized» — конец сессии; 401
+// «неверный пароль» (вход, смена пароля) сессию не кончает.
+function noteSessionGone(res, code) {
+    if (!res || res.status !== 401 || code !== 'unauthorized') return;
     try {
         if (typeof window !== 'undefined' && window && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
             window.dispatchEvent(new CustomEvent('easymed:session-gone'));
         }
     } catch { /* без окна — некому сообщать */ }
 }
+const errorCode = (json) => (json && json.error && json.error.code) || '';
 
+// Тело ответа читает вызывающий — код смотрим в копии (clone), не задерживая ответ.
 const httpFetch = (url, init = {}) => Promise.resolve(fetch(url, { ...init, headers: withActivityHeaders(init.headers) }))   // browser global; bound at call time
-    .then((res) => { noteSessionGone(res); return res; });
+    .then((res) => {
+        if (res && res.status === 401 && typeof res.clone === 'function') {
+            try { Promise.resolve(res.clone().json()).then((j) => noteSessionGone(res, errorCode(j)), () => {}); } catch { /* без тела — не о сессии */ }
+        }
+        return res;
+    });
 
 const dbClient = makeDbClient({ fetch: httpFetch, base: '/api/db' });
 const auth     = makeAuthBridge({ fetch: httpFetch, base: '/api/auth' });
@@ -34,8 +43,8 @@ async function rpc(name, args = {}) {
             credentials: 'same-origin',
             body: JSON.stringify(args || {}),
         });
-        noteSessionGone(res);
         const json = await res.json().catch(() => ({}));
+        noteSessionGone(res, errorCode(json));
         // V3120_I18N — собранная фраза с шаблоном запоминается, и tr() переведёт её.
         if (!res.ok) { rememberServerMessage(json.error); return { data: null, error: json.error || { message: 'RPC failed (' + res.status + ')' } }; }
         return { data: json.data ?? null, error: null };

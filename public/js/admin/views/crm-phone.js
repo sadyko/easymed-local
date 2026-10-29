@@ -1077,7 +1077,7 @@ function watchSlow(state) {
 function softFailed(s) {
     if (P.spAuto && !P.spToasted) {
         P.spToasted = true;
-        toast(trf('Телефон Easy-Med не включился: {reason}', { reason: reasonText(s.reason, s.message) || tr(SP_WORDS.error) }), 'warn');
+        toast(trf('Телефон Easy-Med не включился: {reason}', { reason: reasonText(s.reason, s.message, s.code) || tr(SP_WORDS.error) }), 'warn');
     }
     P.spAuto = false;
     if (softTransient(s) && P.spTries < softRetryDelays().length) scheduleSoftRetry();
@@ -1107,7 +1107,7 @@ function softNotReady() {
 }
 function softNotReadyText() {
     const s = softState();
-    return trf(SP_NOT_READY, { why: reasonText(s.reason, s.message) || tr(SP_WORDS[s.state] || '') });
+    return trf(SP_NOT_READY, { why: reasonText(s.reason, s.message, s.code) || tr(SP_WORDS[s.state] || '') });
 }
 
 /** «Кто я» не ответил при загрузке, а флаг стоит: спросить снова (не чаще ME_RETRY_MS) — телефон включится сам. */
@@ -1180,7 +1180,7 @@ function paintSoftRow() {
     const on = s.state !== SP.OFF;
     const busy = SP_CALL.has(s.state);
     const otherTab = s.state === SP.OTHER_TAB;
-    const reason = show && on ? reasonText(s.reason, s.message) : '';
+    const reason = show && on ? reasonText(s.reason, s.message, s.code) : '';
     const hint = !show ? '' : busy ? tr(SP_BUSY) : otherTab ? tr(SP_OTHER_TAB_HINT) : !on ? allow.hint : '';
     const end = show && !busy ? endText(s.lastEnd) : '';
     const word = on ? SP_WORDS[s.state] || '' : '';

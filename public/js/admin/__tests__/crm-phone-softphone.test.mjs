@@ -1266,6 +1266,21 @@ test('телефон не включился сам после загрузки 
   assert.equal(mine().length, 0, 'уведомление после щелчка по переключателю');
 });
 
+// Ревью 09094415 (C): до сервера Easy-Med не дошли — в уведомлении и в строке
+// переключателя наша фраза, а не текст ошибки браузера.
+test('до сервера Easy-Med не дошли (unreachable): в уведомлении и в строке телефона — «Нет связи с сервером Easy-Med…», а не текст браузера', async () => {
+  const UNREACHABLE = 'Нет связи с сервером Easy-Med. Повторим автоматически.';
+  const fake = fakePhone({ wanted: true });
+  const { btn } = await shell({ fake, ctx: { spRetryMs: [100000] } });
+  fake.push({ state: 'connecting' });
+  fake.push({ state: 'error', reason: 'server', message: 'TypeError: Failed to fetch', code: 'unreachable' });
+  const mine = TOASTS.filter((t) => t.startsWith('Телефон Easy-Med не включился'));
+  assert.deepEqual(mine, ['Телефон Easy-Med не включился: ' + UNREACHABLE]);
+  const d = await open(btn);
+  assert.equal(textOf(one(d, 'data-cph-sp-reason')), UNREACHABLE);
+  assert.doesNotMatch(textOf(d), /Failed to fetch/);
+});
+
 test('временный сбой включения — повтор сам с паузами, не больше 4 раз за страницу; щелчок по переключателю обнуляет счёт', async () => {
   const fake = fakePhone({ wanted: true });
   const { btn } = await shell({ fake, ctx: { spRetryMs: [20, 20, 20, 20] } });

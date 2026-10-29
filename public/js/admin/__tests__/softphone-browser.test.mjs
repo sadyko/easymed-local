@@ -297,6 +297,29 @@ test('причины словами — каждый код', () => {
   assert.match(B.reasonText('insecure'), /EasyMed-ustanovka\.cmd/);
 });
 
+// Ревью 09094415 (C): до сервера Easy-Med не дошли (код unreachable) — в
+// сообщении был бы текст ошибки браузера («TypeError: Failed to fetch»); вместо
+// него — наша фраза. Прочие коды сервера — по-прежнему его слова.
+test('до сервера Easy-Med не дошли (unreachable) — наша фраза на трёх языках, а не текст ошибки браузера', () => {
+  const UNREACHABLE = 'Нет связи с сервером Easy-Med. Повторим автоматически.';
+  try {
+    setLang('ru');
+    assert.equal(B.reasonText('server', 'TypeError: Failed to fetch', 'unreachable'), UNREACHABLE);
+    assert.equal(B.reasonText('server', '', 'unreachable'), UNREACHABLE);
+    assert.equal(B.reasonText('server', 'Слова сервера', 'station_unavailable'), 'Слова сервера', 'прочие коды — слова сервера');
+    assert.equal(B.reasonText('server', 'Слова сервера'), 'Слова сервера');
+    for (const lang of ['uz', 'en']) {
+      setLang(lang);
+      const s = B.reasonText('server', 'TypeError: Failed to fetch', 'unreachable');
+      assert.ok(s && !CYR.test(s) && !/Failed to fetch/.test(s), lang + ': ' + s);
+    }
+    setLang('en');
+    assert.equal(B.reasonText('server', 'TypeError: Failed to fetch', 'unreachable'), 'No connection to the Easy-Med server. We will retry automatically.');
+  } finally {
+    setLang('ru');
+  }
+});
+
 const end = (direction, cause, media = null) => ({ direction, cause, media });
 
 test('итог звонка: обычный конец и свой отбой — без строки', () => {

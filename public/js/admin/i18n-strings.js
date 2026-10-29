@@ -12414,6 +12414,8 @@ export const STRINGS = {
   "Телефон Easy-Med не включился: {reason}": {"en":"The Easy-Med phone did not turn on: {reason}","ru":"Телефон Easy-Med не включился: {reason}","uz":"Easy-Med telefoni yoqilmadi: {reason}"},
   "Вход телефона Easy-Med в АТС": {"en":"Easy-Med phone sign-in to the PBX","ru":"Вход телефона Easy-Med в АТС","uz":"Easy-Med telefonining ATSga kirishi"},
   "Кто звонит": {"en":"Who is calling","ru":"Кто звонит","uz":"Kim qo‘ng‘iroq qilmoqda"},
+  // SOFTPHONE_V1 (ревью 09094415, C) — до сервера Easy-Med не дошли (код unreachable)
+  "Нет связи с сервером Easy-Med. Повторим автоматически.": {"en":"No connection to the Easy-Med server. We will retry automatically.","ru":"Нет связи с сервером Easy-Med. Повторим автоматически.","uz":"Easy-Med serveri bilan aloqa yo‘q. Avtomatik ravishda qayta urinib ko‘ramiz."},
   // SOFTPHONE_V1 (задача 8) — выход и вход от имени во время звонка (auth.js signOutAndReload, act-as-client.js)
   "Идёт разговор. Завершить звонок и выйти?": {"en":"A call is in progress. End the call and log out?","ru":"Идёт разговор. Завершить звонок и выйти?","uz":"Suhbat davom etmoqda. Qo‘ng‘iroqni yakunlab, chiqasizmi?"},
   "Идёт разговор. Завершить звонок и продолжить?": {"en":"A call is in progress. End the call and continue?","ru":"Идёт разговор. Завершить звонок и продолжить?","uz":"Suhbat davom etmoqda. Qo‘ng‘iroqni yakunlab, davom etasizmi?"},
