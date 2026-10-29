@@ -228,12 +228,12 @@ test('DISK_GUARD_V1: backup_restore без места на страховочн�
   assert.deepEqual(exitCalls, []);
 });
 
-test('DISK_GUARD_V1: factory_reset без места на финальную копию — 409 с шаблоном, удаление не запрошено, перезапуска нет', async () => {
+test('DISK_GUARD_V1: factory_reset (копии оставить) без места на финальную копию — 409 с шаблоном, удаление не запрошено, перезапуска нет', async () => {
   const { db, dir } = fresh();
   exitCalls = [];
   __setDiskSpaceForTests(() => ({ free: GB / 2, total: 100 * GB }));
   try {
-    await assert.rejects(() => factoryReset(db, { password: PASSWORD, confirm: 'УДАЛИТЬ', wipe_backups: true }, ADMIN), isNoSpace409);
+    await assert.rejects(() => factoryReset(db, { password: PASSWORD, confirm: 'УДАЛИТЬ', wipe_backups: false }, ADMIN), isNoSpace409);
   } finally {
     __setDiskSpaceForTests(ROOMY);
   }
@@ -241,4 +241,20 @@ test('DISK_GUARD_V1: factory_reset без места на финальную к�
   assert.ok(!fs.existsSync(marker(dir)));
   assert.ok(!listBackups(dir).some((b) => b.kind === 'final'));
   assert.deepEqual(exitCalls, []);
+});
+
+test('DISK_GUARD_V1: factory_reset вместе с копиями на полном диске — проходит: так администратор и освобождает место', async () => {
+  const { db, dir } = fresh();
+  exitCalls = [];
+  __setDiskSpaceForTests(() => ({ free: GB / 2, total: 100 * GB }));
+  let r;
+  try {
+    r = await factoryReset(db, { password: PASSWORD, confirm: 'УДАЛИТЬ', wipe_backups: true }, ADMIN);
+  } finally {
+    __setDiskSpaceForTests(ROOMY);
+  }
+  assert.deepEqual(r, { ok: true, restarting: true });
+  assert.deepEqual(JSON.parse(fs.readFileSync(marker(dir), 'utf8')), { action: 'factory_reset', wipe_backups: true });
+  await exitFired();
+  assert.deepEqual(exitCalls, [75]);
 });

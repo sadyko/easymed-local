@@ -14,9 +14,9 @@
 // BEFORE the scary click).
 
 import { h, Icon, field, checkField } from '../ui.js';
-import { tr } from '../i18n.js';
+import { tr, getLang } from '../i18n.js';
 import { supabase } from '../../supabase.js';
-import { confirmWordOk } from '../system-logic.js';
+import { confirmWordOk, noSpaceText } from '../system-logic.js';
 import { showRestartOverlay } from './system-restart.js';
 
 export function renderDangerCard(root, { admin }) {
@@ -79,7 +79,8 @@ function openResetModal() {
             busy = false;
             refreshEnabled();
             statusEl.textContent = (e && e.message && e.message !== 'reset refused')
-                ? tr(e.message)   // DISK_GUARD_V1 — «нет места на финальную копию» переводится по шаблону сервера
+                // DISK_GUARD_V1 — «нет места на финальную копию» — на языке экрана с его десятичным знаком
+                ? (noSpaceText(e, getLang(), tr) || tr(e.message))
                 : tr('Не удалось удалить данные. Попробуйте ещё раз.');
         }
     });

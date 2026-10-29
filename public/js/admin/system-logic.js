@@ -286,3 +286,21 @@ export function requestDateLabel(iso) {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('ru-RU');
 }
+
+/**
+ * DISK_GUARD_V1 (ревью C2) — отказ сервера «нет места на копию» на языке
+ * экрана. Сервер (server/services/disk-guard.js noSpaceError) шлёт шаблон и
+ * гигабайты ЧИСЛАМИ; десятичный знак ставится только здесь, для этой фразы:
+ * ru и uz — запятая, en — точка, всегда один знак («0,0»), как в русской
+ * фразе сервера. Общий tr() числа не трогает — там и суммы денег других
+ * сообщений. t — перевод шаблона (tr экрана). null — это не отказ по месту
+ * или ответ не того вида: экран покажет фразу сервера, как раньше.
+ */
+export function noSpaceText(err, lang, t = (s) => s) {
+  if (!err || typeof err !== 'object' || err.code !== 'no_space' || typeof err.template !== 'string') return null;
+  const p = err.params && typeof err.params === 'object' ? err.params : null;
+  if (!p || !Number.isFinite(p.need) || !Number.isFinite(p.free)) return null;
+  const sep = lang === 'en' ? '.' : ',';
+  const gb = (v) => v.toFixed(1).replace('.', sep);
+  return fill(t(err.template), { need: gb(p.need), free: gb(p.free) });
+}

@@ -601,11 +601,11 @@ test('DISK_GUARD_V1: ежедневной копии не хватило мес�
   assert.equal(readGuard(dir).copy_refused, undefined, 'копия получилась — отказ снят');
 });
 
-test('DISK_GUARD_V1: финальной копии не хватило места — удаление данных не запрошено, причина «final»', async () => {
+test('DISK_GUARD_V1: финальной копии не хватило места (копии оставить) — удаление данных не запрошено, причина «final»', async () => {
   const { dir, db } = workspace();
   __setDiskSpaceForTests(() => ({ free: GB / 2, total: 100 * GB }));
   try {
-    await assert.rejects(() => requestFactoryReset(db, dir, { wipeBackups: true }), (e) => {
+    await assert.rejects(() => requestFactoryReset(db, dir, { wipeBackups: false }), (e) => {
       assert.equal(e.code, 'no_space');
       assert.equal(e.template, 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.');
       return true;
@@ -673,4 +673,121 @@ test('DISK_GUARD_V1: финальная копия перед удалением
   const finals = listBackups(dir).filter((b) => b.kind === 'final').map((b) => b.name);
   assert.equal(finals.length, 5, 'KEEP_BY_KIND.final — 5');
   assert.ok(!finals.includes(seeded[0]), 'самая старая ушла сразу');
+});
+
+// --- DISK_GUARD_V1 (ревью C2): удаление «вместе с копиями» на полном диске ----
+
+test('DISK_GUARD_V1: удаление данных вместе со всеми копиями проходит и на полном диске — финальная копия всё равно ушла бы при запуске', async () => {
+  const { dir, db } = workspace();
+  __setDiskSpaceForTests(() => ({ free: GB / 2, total: 100 * GB }));
+  let r;
+  try {
+    r = await requestFactoryReset(db, dir, { wipeBackups: true });
+  } finally {
+    __setDiskSpaceForTests(ROOMY);
+  }
+  assert.deepEqual(r, { ok: true });
+  assert.deepEqual(JSON.parse(fs.readFileSync(marker(dir), 'utf8')), { action: 'factory_reset', wipe_backups: true },
+    'администратор может освободить диск этим путём');
+  assert.ok(!listBackups(dir).some((b) => b.kind === 'final'), 'места на неё нет — и не надо');
+  assert.equal(readGuard(dir).copy_refused, undefined, 'несделанная финальная копия здесь не отказ: копии удаляются по выбору');
+});
+
+// --- DISK_GUARD_V1 (ревью C2): цель восстановления не удаляется ЧУЖОЙ копией ----
+
+test('DISK_GUARD_V1: восстановление самой старой страховочной одновременно с другой страховочной копией — цель цела, намерение честное', async () => {
+  const { dir, db } = workspace();
+  const seeded = seedKind(backupsDir(dir), 'safety', 5, '110000');
+  const [r] = await Promise.all([
+    requestRestore(db, dir, seeded[0]),
+    createBackup(db, dir, 'safety'),   // например, страховочная копия синхронизации филиалов (relay.js)
+  ]);
+  assert.equal(r.ok, true);
+  assert.ok(fs.existsSync(path.join(backupsDir(dir), seeded[0])),
+    'чужая чистка не удаляет копию, которую сейчас восстанавливают: иначе при запуске восстанавливать нечего');
+  assert.equal(JSON.parse(fs.readFileSync(marker(dir), 'utf8')).backup, seeded[0]);
+});
+
+test('DISK_GUARD_V1: чужая копия, начатая раньше восстановления, своей чисткой не трогает его цель', async () => {
+  const { dir, db } = workspace();
+  const seeded = seedKind(backupsDir(dir), 'safety', 5, '110000');
+  // Чужая копия встаёт в очередь первой и чистит, пока восстановление ждёт
+  // своей страховочной копии: намерения ещё нет — цель бережёт только метка.
+  const [, r] = await Promise.all([
+    createBackup(db, dir, 'safety'),
+    requestRestore(db, dir, seeded[0]),
+  ]);
+  assert.equal(r.ok, true, 'восстановление не сорвалось из-за чужой чистки');
+  assert.ok(fs.existsSync(path.join(backupsDir(dir), seeded[0])));
+});
+
+test('DISK_GUARD_V1: цель записанного намерения восстановить не уходит при чистке до перезапуска', async () => {
+  const { dir, db } = workspace();
+  const seeded = seedKind(backupsDir(dir), 'safety', 5, '110000');
+  fs.writeFileSync(marker(dir), JSON.stringify({ action: 'restore', backup: seeded[0] }));
+  await createBackup(db, dir, 'safety');
+  assert.ok(fs.existsSync(path.join(backupsDir(dir), seeded[0])), 'pending-action.json называет её — она нужна при запуске');
+});
+
+test('DISK_GUARD_V1: цель пропала, пока делалась страховочная копия — восстановление не запрашивается', async () => {
+  const { dir, db } = workspace();
+  const target = await createBackup(db, dir, 'manual');
+  // Копию удалили руками (Проводник) прямо во время страховочной копии.
+  const vanishing = {
+    backup: async (out) => {
+      fs.rmSync(path.join(backupsDir(dir), target.name), { force: true });
+      return db.backup(out);
+    },
+  };
+  const r = await requestRestore(vanishing, dir, target.name);
+  assert.equal(r.ok, false, 'отказ, а не намерение, которое при запуске молча пропустится');
+  assert.ok(!fs.existsSync(marker(dir)));
+});
+
+// --- DISK_GUARD_V1 (ревью C2): копии по одной ----------------------------------
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('DISK_GUARD_V1: две копии сразу делаются по очереди, а не вперемешку', async () => {
+  const { dir, db } = workspace();
+  const log = [];
+  const slow = (tag) => ({
+    backup: async (out) => { log.push(`начало ${tag}`); await sleep(30); await db.backup(out); log.push(`конец ${tag}`); },
+  });
+  await Promise.all([createBackup(slow('a'), dir, 'manual'), createBackup(slow('b'), dir, 'manual')]);
+  assert.deepEqual(log, ['начало a', 'конец a', 'начало b', 'конец b']);
+});
+
+test('DISK_GUARD_V1: вторая из двух одновременных копий заново спрашивает место — запас в 1 ГБ не съедают обе', async () => {
+  const { dir, db } = workspace();
+  const need = copyNeedBytes(dbBytes(path.join(dir, 'easymed.db')));
+  let free = need + GB / 2;   // хватает на одну: копия «съедает» 1 ГБ
+  const disk = () => ({ free, total: 100 * GB });
+  const log = [];
+  const eating = (tag) => ({
+    backup: async (out) => { log.push(`начало ${tag}`); await sleep(30); await db.backup(out); free -= GB; log.push(`конец ${tag}`); },
+  });
+  const [a, b] = await Promise.allSettled([
+    createBackup(eating('a'), dir, 'manual', new Date(), { diskSpaceImpl: disk }),
+    createBackup(eating('b'), dir, 'manual', new Date(), { diskSpaceImpl: disk }),
+  ]);
+  assert.equal(a.status, 'fulfilled');
+  assert.equal(b.status, 'rejected');
+  assert.equal(b.reason.code, 'no_space');
+  assert.deepEqual(log, ['начало a', 'конец a'], 'вторая не начиналась: место кончилось на первой');
+});
+
+// --- DISK_GUARD_V1 (ревью C2): «свободно меньше 10 %» — только когда места и правда мало ----
+
+test('DISK_GUARD_V1: диск 1 ТБ, свободно 60 ГБ (6 %) — история копий остаётся', () => {
+  const dir = tmpDir('em-sysbk-big-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  let t = Date.now() - 1e6;
+  const names = ['daily-20260801-030000.db', 'daily-20260802-030000.db', 'daily-20260803-030000.db',
+    'pre-2.3.0.db', 'pre-2.4.0.db', 'safety-20260804-110000.db', 'safety-20260805-110000.db'];
+  for (const n of names) { putSized(bd, n, 10, t); t += 1000; }
+  pruneBackupsByKind(bd, { diskSpaceImpl: () => ({ free: 60 * GB, total: 1000 * GB }) });
+  assert.deepEqual(fs.readdirSync(bd).sort(), [...names].sort(),
+    '60 ГБ хватит на много копий: удалять историю ради «10 %» незачем');
 });

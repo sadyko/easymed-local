@@ -8,6 +8,7 @@ import { migrate } from './migrate.js';
 import { backupBeforeMigrate, pruneBackups } from './backup.js';
 import { tmpDir, closeOnExit, closeRegistered } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 import { __setDiskSpaceForTests, readGuard, GB } from '../services/disk-guard.js';   // DISK_GUARD_V1
+import { createBackup } from '../services/backup.js';   // DISK_GUARD_V1 — общая очередь копий
 
 // V3120_FIX — базы закрываются по окончании файла, чтобы папки удалялись.
 test.after(closeRegistered);
@@ -142,4 +143,20 @@ test('DISK_GUARD_V1: на копию перед обновлением нет м
   );
   assert.deepEqual(fs.readdirSync(path.join(dir, 'backups')), [], 'файл даже не заведён');
   assert.equal(readGuard(dir).copy_refused.kind, 'pre');
+});
+
+test('DISK_GUARD_V1: копия перед обновлением и обычная копия делаются по очереди — одна очередь на оба места записи', async () => {
+  const { dir, db, dbPath } = workspace();
+  const log = [];
+  const slow = (tag) => ({
+    backup: async (out) => {
+      log.push(`начало ${tag}`);
+      await new Promise((r) => setTimeout(r, 30));
+      await db.backup(out);
+      log.push(`конец ${tag}`);
+    },
+  });
+  await Promise.all([createBackup(slow('daily'), dir, 'daily'), backupBeforeMigrate(slow('pre'), dbPath, '2.4.0')]);
+  assert.deepEqual(log, ['начало daily', 'конец daily', 'начало pre', 'конец pre'],
+    'две полные копии сразу съели бы запас места, проверенный каждой по отдельности');
 });

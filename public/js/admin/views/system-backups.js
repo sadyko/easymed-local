@@ -22,10 +22,11 @@
 // only, as always: every RPC re-checks admin + password server-side.
 
 import { h, Icon, clear, toast, field } from '../ui.js';
-import { tr, trf } from '../i18n.js';
+import { tr, trf, getLang } from '../i18n.js';
 import { supabase } from '../../supabase.js';
 import {
     normalizeBackupList, backupKind, backupKindLabel, backupDateLabel, formatBytes, freeSpaceNote,
+    noSpaceText,
 } from '../system-logic.js';
 import { showRestartOverlay } from './system-restart.js';
 
@@ -68,10 +69,10 @@ export async function renderBackupsCard(root, { admin }) {
                 await load();
             } catch (e) {
                 // DISK_GUARD_V1 — «нет места» говорится словами сервера, с числами
-                // (tr() переводит её по шаблону, shared/server-messages.js), а не
-                // общей фразой «попробуйте ещё раз»: повтор тут не поможет.
+                // на языке экрана (system-logic.js noSpaceText), а не общей
+                // фразой «попробуйте ещё раз»: повтор тут не поможет.
                 statusEl.textContent = (e && e.code === 'no_space' && e.message)
-                    ? tr(e.message)
+                    ? (noSpaceText(e, getLang(), tr) || tr(e.message))
                     : tr('Не удалось создать копию. Попробуйте ещё раз.');
             }
             createBtn.disabled = false;
@@ -159,7 +160,8 @@ function openRestoreModal(row) {
             // activation.js's unlock/enroll errors.
             confirmBtn.disabled = false;
             statusEl.textContent = (e && e.message && e.message !== 'restore refused')
-                ? tr(e.message)   // DISK_GUARD_V1 — «нет места на страховочную копию» переводится по шаблону сервера
+                // DISK_GUARD_V1 — «нет места на страховочную копию» — на языке экрана с его десятичным знаком
+                ? (noSpaceText(e, getLang(), tr) || tr(e.message))
                 : tr('Не удалось восстановить копию. Попробуйте ещё раз.');
         }
     });

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { discardPartial, ensureCopySpace } from '../services/backup.js';   // DISK_GUARD_V1
+import { discardPartial, ensureCopySpace, withCopyLock } from '../services/backup.js';   // DISK_GUARD_V1
 import { noteGuard } from '../services/disk-guard.js';   // DISK_GUARD_V1
 
 // SUPERVISED_INSTALL_V1 — the rollback for an update.
@@ -23,7 +23,14 @@ import { noteGuard } from '../services/disk-guard.js';   // DISK_GUARD_V1
  * @param {{diskSpaceImpl?: Function}} [opts]  DISK_GUARD_V1 — ответ диска (тесты)
  * @returns {Promise<string>} the path written
  */
-export async function backupBeforeMigrate(db, dbPath, version, { diskSpaceImpl } = {}) {
+export async function backupBeforeMigrate(db, dbPath, version, opts = {}) {
+  // DISK_GUARD_V1 (ревью C2) — в общей очереди с копиями services/backup.js:
+  // две полные копии разом съели бы запас места, проверенный каждой по
+  // отдельности.
+  return withCopyLock(() => takePreCopy(db, dbPath, version, opts));
+}
+
+async function takePreCopy(db, dbPath, version, { diskSpaceImpl } = {}) {
   const dir = path.join(path.dirname(dbPath), 'backups');
   fs.mkdirSync(dir, { recursive: true });
 

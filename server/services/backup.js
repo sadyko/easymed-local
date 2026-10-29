@@ -3,6 +3,7 @@ import path from 'node:path';
 import { writeAtomic } from './control/checkin.js';
 import {
   currentDiskSpace, dbBytes, copyNeedBytes, noSpaceError, noteGuard, COPIES_SHARE_MAX, FREE_SHARE_MIN,
+  LOW_FREE_BYTES, RESERVE_BYTES,
 } from './disk-guard.js';   // DISK_GUARD_V1
 
 // SYSTEM_SETTINGS_V1 (docs/plans/2026-08-23-system-settings.md) — the clinic's
@@ -235,6 +236,44 @@ const newestOf = (entries, kind) => entries
   .filter((e) => e.kind === kind)
   .sort((a, b) => b.mtimeMs - a.mtimeMs)[0] || null;
 
+// DISK_GUARD_V1 (ревью C2) — копии, которые сейчас восстанавливают (полный
+// путь → сколько запросов держат). Беречь их обязана ЛЮБАЯ копия этого
+// процесса, а не только страховочная самого восстановления: страховочная
+// синхронизации филиалов (branch-sync/relay.js), ежедневная или ручная,
+// сделанная в ту же минуту, иначе удалила бы цель своей чисткой — намерение
+// записалось бы, а при запуске восстанавливать было бы нечего.
+const RESTORING = new Map();
+
+/**
+ * Имена в папке копий dir, которые не удаляются ни уступкой места, ни
+ * чисткой: цели идущих сейчас восстановлений и цель уже записанного намерения
+ * (pending-action.json) — до перезапуска она тоже нужна.
+ */
+function restoreTargets(dir) {
+  const out = new Set();
+  const here = path.resolve(dir);
+  for (const p of RESTORING.keys()) if (path.dirname(p) === here) out.add(path.basename(p));
+  if (path.basename(here) === 'backups') {
+    try {
+      const m = JSON.parse(fs.readFileSync(path.join(path.dirname(here), MARKER_NAME), 'utf8'));
+      if (m && m.action === 'restore' && typeof m.backup === 'string') out.add(m.backup);
+    } catch { /* намерения нет или оно испорчено — беречь нечего */ }
+  }
+  return out;
+}
+
+// DISK_GUARD_V1 (ревью C2) — копии делаются по одной на процесс. Место
+// проверяется перед каждой копией, но копия идёт долго: две копии, начатые
+// разом, обе прошли бы проверку и вместе съели бы запас в 1 ГБ. Очередь общая
+// для createBackup и db/backup.js backupBeforeMigrate. Сбой одной копии
+// очередь не держит.
+let copyQueue = Promise.resolve();
+export function withCopyLock(fn) {
+  const run = copyQueue.then(fn, fn);
+  copyQueue = run.then(() => {}, () => {});
+  return run;
+}
+
 /**
  * DISK_GUARD_V1 — хватит ли места на новую копию (раздел 3, п. 2): размер базы
  * (с журналом) × 1,2 + 1 ГБ. Не хватает — уступают старые автоматические
@@ -245,9 +284,9 @@ const newestOf = (entries, kind) => entries
  * (ничего не удалив), пишет строку в журнал программы и отметку copy_refused
  * для «Данных клиники» и колокола администратора.
  *
- * protect — имена, которые не уступают никогда (копия, которую сейчас
- * восстанавливают). Платформа не сказала, сколько свободно, — копия делается,
- * как раньше.
+ * protect — имена, которые не уступают никогда; к ним всегда добавляются цели
+ * восстановления (restoreTargets). Платформа не сказала, сколько свободно, —
+ * копия делается, как раньше.
  */
 export function ensureCopySpace(dataDir, {
   kind = 'manual', protect = [], dbFile = path.join(dataDir, 'easymed.db'),
@@ -259,7 +298,7 @@ export function ensureCopySpace(dataDir, {
   const need = copyNeedBytes(dbBytes(dbFile));
   if (space.free >= need) return { freed: [] };
 
-  const keep = new Set(protect);
+  const keep = new Set([...protect, ...restoreTargets(dir)]);
   const entries = backupEntries(dir);
   const newestPre = newestOf(entries, 'pre');
   const byAge = (k) => entries
@@ -286,7 +325,10 @@ export function ensureCopySpace(dataDir, {
 /**
  * DISK_GUARD_V1 — предел по объёму (раздел 3, п. 5): автоматические копии
  * (ежедневные, перед обновлением, страховочные) удаляются от старых к новым,
- * пока копии занимают больше 30 % диска или свободно меньше 10 %. Не
+ * пока копии занимают больше 30 % диска или свободно меньше 10 %. Правило
+ * «меньше 10 %» действует, только пока свободно ещё и меньше max(5 ГБ, место
+ * на следующую копию) (ревью C2): диск 1 ТБ с 60 ГБ свободных — это 6 %, но
+ * стирать ради этого историю копий незачем. Не
  * трогаются: protect (только что сделанная копия, копия, которую сейчас
  * восстанавливают), САМАЯ НОВАЯ копия каждого автоматического вида (поправка
  * 1 плана 3.18.1: диск, занятый другими файлами, не должен оставлять клинику
@@ -303,7 +345,14 @@ function pruneBySize(dir, { protect, diskSpaceImpl, now }) {
   const entries = backupEntries(dir);
   let copies = entries.reduce((s, e) => s + e.bytes, 0);
   let free = space.free;
-  const over = () => copies > COPIES_SHARE_MAX * space.total || free < FREE_SHARE_MIN * space.total;
+  // Место на следующую копию — по базе данных клиники рядом с backups/;
+  // у произвольной папки базы нет: только запас.
+  const nextNeed = path.basename(dir) === 'backups'
+    ? copyNeedBytes(dbBytes(path.join(path.dirname(dir), 'easymed.db')))
+    : RESERVE_BYTES;
+  const freeFloor = Math.max(LOW_FREE_BYTES, nextNeed);
+  const over = () => copies > COPIES_SHARE_MAX * space.total
+    || (free < FREE_SHARE_MIN * space.total && free < freeFloor);
   const newest = new Set([...AUTO_KINDS].map((k) => newestOf(entries, k)).filter(Boolean).map((e) => e.name));
   const auto = entries
     .filter((e) => AUTO_KINDS.has(e.kind) && !protect.has(e.name) && !newest.has(e.name))
@@ -372,10 +421,15 @@ export function listBackups(dataDir) {
  *   имена, которые не удаляются ни уступкой места, ни чисткой; ответ диска (тесты)
  * @returns {Promise<{name:string, kind:string, size:number, mtimeMs:number}>}
  */
-export async function createBackup(db, dataDir, kind, now = new Date(), { protect = [], diskSpaceImpl = currentDiskSpace } = {}) {
+export async function createBackup(db, dataDir, kind, now = new Date(), opts = {}) {
   // The kind becomes part of a filename, so it is a fixed vocabulary, never
   // caller-shaped text — same reasoning as NAME_RE above.
   if (!CREATABLE_KINDS.has(kind)) throw new Error(`Unknown backup kind: ${kind}`);
+  // DISK_GUARD_V1 (ревью C2) — по одной копии за раз (withCopyLock).
+  return withCopyLock(() => createBackupNow(db, dataDir, kind, now, opts));
+}
+
+async function createBackupNow(db, dataDir, kind, now, { protect = [], diskSpaceImpl = currentDiskSpace } = {}) {
   const dir = path.join(dataDir, 'backups');
   fs.mkdirSync(dir, { recursive: true });
   sweepBroken(dir);   // DISK_GUARD_V1
@@ -450,7 +504,8 @@ export async function createBackup(db, dataDir, kind, now = new Date(), { protec
  * журнал, не исключение: чистка не бывает причиной несделанной копии.
  */
 export function pruneBackupsByKind(dir, { protect = [], diskSpaceImpl = currentDiskSpace, now = new Date() } = {}) {
-  const keep = new Set(protect);
+  // DISK_GUARD_V1 (ревью C2) — и цели восстановления: идущего и записанного.
+  const keep = new Set([...protect, ...restoreTargets(dir)]);
   sweepBroken(dir);   // DISK_GUARD_V1
   let files;
   try { files = fs.readdirSync(dir).filter((f) => NAME_RE.test(f)); } catch { return; }
@@ -534,7 +589,7 @@ export function scheduleDailyBackups(db, dataDir, {
  * is about to discard must already be captured by then — the other order has
  * a window where newer data is gone and no copy of it exists.
  *
- * @returns {Promise<{ok:true}|{ok:false, reason:'unknown_backup'}>}
+ * @returns {Promise<{ok:true}|{ok:false, reason:'unknown_backup'|'backup_gone'}>}
  */
 export async function requestRestore(db, dataDir, name) {
   // Validated against the real listing, not just the regex: the RPC layer
@@ -545,11 +600,27 @@ export async function requestRestore(db, dataDir, name) {
     return { ok: false, reason: 'unknown_backup' };
   }
   // DISK_GUARD_V1 — копия, которую сейчас восстанавливают, не уступает место
-  // страховочной и не уходит при чистке после неё: иначе восстанавливать было
-  // бы нечего.
-  await createBackup(db, dataDir, 'safety', new Date(), { protect: [name] });
-  writeAtomic(path.join(dataDir, MARKER_NAME), JSON.stringify({ action: 'restore', backup: name }));
-  return { ok: true };
+  // страховочной и не уходит ни при её чистке, ни при чистке ЛЮБОЙ другой
+  // копии этого процесса (RESTORING, ревью C2): иначе восстанавливать было бы
+  // нечего. Метка держится до записи намерения — дальше цель бережёт сам
+  // pending-action.json (restoreTargets).
+  const target = path.resolve(dataDir, 'backups', name);
+  RESTORING.set(target, (RESTORING.get(target) || 0) + 1);
+  try {
+    await createBackup(db, dataDir, 'safety', new Date(), { protect: [name] });
+    // Пока делалась страховочная копия, цель могли удалить мимо программы
+    // (Проводник, антивирус). Намерение без цели при запуске молча
+    // пропускается, а администратор ждал восстановления — значит, отказ сейчас.
+    if (!listBackups(dataDir).some((b) => b.name === name)) {
+      console.warn(`[backup] восстановление не запрошено: копия ${name} исчезла, пока делалась страховочная копия`);
+      return { ok: false, reason: 'backup_gone' };
+    }
+    writeAtomic(path.join(dataDir, MARKER_NAME), JSON.stringify({ action: 'restore', backup: name }));
+    return { ok: true };
+  } finally {
+    const n = (RESTORING.get(target) || 1) - 1;
+    if (n > 0) RESTORING.set(target, n); else RESTORING.delete(target);
+  }
 }
 
 /**
@@ -557,9 +628,21 @@ export async function requestRestore(db, dataDir, name) {
  * taken even though the admin is deleting on purpose — fat fingers exist, and
  * keeping it is the recoverable half of the danger zone (wipe_backups is the
  * explicit clean-disk choice that removes even this).
+ *
+ * DISK_GUARD_V1 (ревью C2) — с wipe_backups финальная копия всё равно
+ * удаляется при запуске вместе со всеми копиями, поэтому её отказ по месту
+ * удаление не останавливает: на полном диске это и есть способ его освободить.
+ * Копия делается, если место есть, — до перезапуска она ещё страхует.
  */
 export async function requestFactoryReset(db, dataDir, { wipeBackups = false } = {}) {
-  await createBackup(db, dataDir, 'final');
+  try {
+    await createBackup(db, dataDir, 'final');
+  } catch (e) {
+    if (!(wipeBackups && e && e.code === 'no_space')) throw e;
+    console.warn('[backup] финальная копия не сделана — нет места; удаление продолжается: все копии удаляются по выбору администратора');
+    // Отказ здесь не новость для «Данных клиники»: копии удаляются по выбору.
+    noteGuard(dataDir, { copy_refused: null });
+  }
   writeAtomic(path.join(dataDir, MARKER_NAME), JSON.stringify({ action: 'factory_reset', wipe_backups: !!wipeBackups }));
   return { ok: true };
 }
