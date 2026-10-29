@@ -387,7 +387,7 @@ function doctorDashboardView() {
         // Своего второго окна приёма дашборд не заводит.
         // CABINET_ACTIVE_FIRST_V1 — завершённая карточка ведёт на «Завершённые»:
         // на «Активных» этого пациента не видно.
-        onOpenWork: (row) => { if (row && row.done) state.statusFilter = 'completed'; setTab('appointments'); },
+        onOpenWork: (row) => { if (row) state.statusFilter = row.done ? 'completed' : 'active'; setTab('appointments'); },
         // HEAD_DOCTOR_WARD_VIEW_V1 — полоса главного врача ведёт на СВОЮ вкладку
         // кабинета, а не в раздел «Стационар»: работа делается там же, где он
         // уже стоит.

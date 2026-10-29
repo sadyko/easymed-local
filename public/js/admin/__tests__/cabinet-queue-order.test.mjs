@@ -363,4 +363,11 @@ test('карточка «Мой день» с «Приём завершён» в
   await tick(60);
   assert.strictEqual(selectedStatus(root), 'completed', 'завершённая карточка ведёт не на «Завершённые»');
   assert.deepStrictEqual(visibleNames(root), DONE_ORDER);
+  // Потом ждущая карточка: фильтр не залипает на «Завершённых», пациент виден.
+  buttonByText(root, /Дашборд/).click();
+  await tick(80);
+  card('Аминов').click();
+  await tick(60);
+  assert.strictEqual(selectedStatus(root), 'active', 'после завершённой карточки ждущая осталась на «Завершённых»');
+  assert.ok(visibleNames(root).includes('Аминов Олим'), 'ждущий пациент скрыт');
 });
