@@ -26,7 +26,7 @@ import { dateNumeric } from '../../shared/date-words.js';
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';
 // DOC_RICH_FORMAT_V1 — очистка разметки разделов врача: без DOM, одна для
 // браузера и сервера (Telegram рисует бланк через buildSheetHtml в Node).
-import { sanitizeStoredHtml, hasMarkup } from '../../shared/rich-text.js';
+import { sanitizeStoredHtml, hasMarkup, richHasContent, textIsBlank } from '../../shared/rich-text.js';
 
 function esc(x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function lines(t) { return String(t || '').split(/\n+/).map(x => x.trim()).filter(Boolean); }
@@ -41,6 +41,22 @@ function richBody(v, d) {
     const s = String(v == null ? '' : v);
     return (d && d.rich && hasMarkup(s)) ? { rich: true, html: sanitizeStoredHtml(s) } : { rich: false, html: esc(s) };
 }
+// PRINT_SKIP_EMPTY_V1 — ЕСТЬ ЛИ В РАЗДЕЛЕ ВРАЧА ЧТО ПЕЧАТАТЬ: текст или таблица
+// (общий richHasContent). Пустые <p><br></p>, &nbsp;, &#160;, &#xa0; и невидимый
+// пробел U+200B — пусто: раньше раздел проверялся истинностью строки, и «&nbsp;»
+// печатался заголовком над пустотой. Разметка (снимок с меткой d.rich) — по
+// очищенной, то есть по тому, что ляжет на лист.
+function hasBody(v, d) {
+    const s = String(v == null ? '' : v);
+    return richHasContent((d && d.rich && hasMarkup(s)) ? sanitizeStoredHtml(s) : s);
+}
+// PRINT_SKIP_EMPTY_V1 — заполнено ли поле шапки или карточки (простой текст).
+function filled(v) { return !textIsBlank(v); }
+// PRINT_SKIP_EMPTY_V1 — НЕОБЯЗАТЕЛЬНОЕ ПОЛЕ ШАПКИ ДОКУМЕНТА ВРАЧА БЕЗ ЗНАЧЕНИЯ НЕ
+// ПЕЧАТАЕТСЯ (opt: true — дата рождения, услуга, область). Общий vHead рисует
+// пустое прочерком, и он же — шапка анализов и счетов, поэтому фильтр — здесь,
+// у заключения и бланка исследования. ФИО и номер карты — без opt: всегда.
+function optFields(fields) { return fields.filter((f) => !f.opt || filled(f.value)); }
 // DOC_RICH_FORMAT_V1 (F3) — списки и таблицы в разделах. Каждый вариант начинает
 // стили с *{margin:0;padding:0}, и у списка не было отступа: маркеры «•» и «1.»
 // висели левее текста, за рамкой раздела. Правила — с [data-field] (у «*»
@@ -511,7 +527,16 @@ function diagConclusion(d) {
 function diagDescription(d) {
     const rb = richBody(d.description, d);
     if (rb.rich) return `<div class="sec-b rich" data-field="instrumental_text">${rb.html}</div>`;
-    return `<div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('') || (d.__editor ? '' : '<p>—</p>')}</div>`;
+    // PRINT_SKIP_EMPTY_V1 — прочерка «<p>—</p>» нет: пустое «Описание» вне редактора не рисуется вовсе (imagingClassic/imagingCompact).
+    return `<div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('')}</div>`;
+}
+// PRINT_SKIP_EMPTY_V1 — есть ли что печатать в «Заключении» исследования: строка
+// МКБ-10 (conclusionAuto) или текст врача — те же поля, что рисует diagConclusion;
+// архив до ревью 2 — одно поле conclusion.
+function diagHasConclusion(d) {
+    const body = d.conclusionBody != null ? d.conclusionBody : (d.conclusionAuto != null ? d.conclusionText : null);
+    if (body == null) return hasBody(d.conclusion);
+    return hasBody(d.conclusionAuto) || hasBody(body);
 }
 // CABINET_FIX_V1_R2 (ревью 2, п. 5) — рецепт и остальные диагнозы приёма на
 // бланке исследования: снимок диагностики их не нёс, и при подписи из
@@ -537,9 +562,10 @@ function conclusionClassic(s, d) {
     const sec = (ru, uz, txt, field) => {
         if (d.__editor && field && d.activeFields && !_secOn(field)) return `<button type="button" class="bk-add" data-add="${field}">+ Добавить: ${esc(ru)}</button>`;
         const rb = richBody(txt, d);   // DOC_RICH_FORMAT_V1 (F1)
-        return (txt || (d.__editor && field)) ? `<div class="sec"><div class="sec-h"><span class="ru">${esc(ru)}</span>${uz ? `<span class="uz">· ${esc(uz)}</span>` : ''}${d.__editor && field ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="${field}" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="${field}" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="${field}" title="Убрать раздел">×</button></span>` : ''}</div><div class="sec-b${rb.rich ? ' rich' : ''}"${field ? ` data-field="${field}"` : ''}>${rb.html}</div></div>` : '';
+        // PRINT_SKIP_EMPTY_V1 — содержание по hasBody (richHasContent), а не истинностью строки.
+        return (hasBody(txt, d) || (d.__editor && field)) ? `<div class="sec"><div class="sec-h"><span class="ru">${esc(ru)}</span>${uz ? `<span class="uz">· ${esc(uz)}</span>` : ''}${d.__editor && field ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="${field}" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="${field}" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="${field}" title="Убрать раздел">×</button></span>` : ''}</div><div class="sec-b${rb.rich ? ' rich' : ''}"${field ? ` data-field="${field}"` : ''}>${rb.html}</div></div>` : '';
     };
-    const recList = lines(d.recsText);
+    const recList = lines(d.recsText).filter((x) => hasBody(x));   // PRINT_SKIP_EMPTY_V1 — строка из &#160; или U+200B — не пункт
     // DOC_RICH_FORMAT_V1 (F1) — рекомендации с оформлением печатаются как написаны; простой текст — прежний список.
     const recsHtml = (d.rich && hasMarkup(d.recsText)) ? sec('Рекомендации', 'Tavsiyalar', d.recsText, 'recommendations_text')
         : recList.length ? `<div class="sec"><div class="sec-h"><span class="ru">Рекомендации</span><span class="uz">· Tavsiyalar</span></div><ul class="recs">${recList.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
@@ -553,7 +579,7 @@ function conclusionClassic(s, d) {
         `<div style="display:flex;gap:7px;align-items:baseline;margin-top:4px;font-size:13.5px;line-height:1.4;">${x.code ? `<span class="icd">${esc(x.code)}</span>` : ''}<span>${esc(x.name)}</span><span style="margin-left:auto;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;opacity:.55;">${esc(x.typeLabel || '')}</span></div>`).join('');
     const dxHtml = (d.__editor && d.activeFields && d.activeFields.indexOf('primary_diagnosis') < 0)
         ? `<button type="button" class="bk-add" data-add="primary_diagnosis">+ Добавить: Диагноз</button>`
-        : ((d.dx || d.__editor || dxExtras) ? `<div class="dx"><div class="dh"><span class="ru">Диагноз</span><span class="uz">· Tashxis</span>${d.__editor ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="primary_diagnosis" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="primary_diagnosis" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="primary_diagnosis" title="Убрать раздел">×</button></span>` : ''}</div>${dxRows(d, 'dx-tx')}${dxExtras}</div>` : '');
+        : ((hasBody(d.dx) || d.__editor || dxExtras) ? `<div class="dx"><div class="dh"><span class="ru">Диагноз</span><span class="uz">· Tashxis</span>${d.__editor ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="primary_diagnosis" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="primary_diagnosis" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="primary_diagnosis" title="Убрать раздел">×</button></span>` : ''}</div>${dxRows(d, 'dx-tx')}${dxExtras}</div>` : '');
     const _secByField = {
         chief_complaint: sec('Жалобы', 'Shikoyatlar', d.complaint, 'chief_complaint'),
         hpi: sec('Анамнез', 'Anamnez', d.hpi, 'hpi'),
@@ -582,6 +608,10 @@ function conclusionClassic(s, d) {
     // CABINET_FIX_V1_R1 — «Лабораторные» и «Инструментальные» с текстом печатаются всегда.
     for (const [k, v] of [['labs_text', d.labs], ['instrumental_text', d.instrumental]]) if (String(v || '').trim() && _order.indexOf(k) < 0) _order.push(k);
     const _bodyHtml = _order.map(k => _secByField[k] || '').join('\n');
+    // PRINT_SKIP_EMPTY_V1 — строка карточки «Пациент» / «Лечащий врач»: необязательная
+    // (дата рождения, пол, телефон, специальность, услуга) без значения не печатается;
+    // always — ФИО, номер карты, врач: всегда, пустые — прочерком.
+    const fg = (l, uz, v, always) => (always || filled(v)) ? `<div class="fl">${esc(l)} <i>· ${esc(uz)}</i></div><div class="fv">${esc(filled(v) ? v : '—')}</div>` : '';
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Заключение · ${esc(d.patientName || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --accent-2:${esc(accent2)}; --accent-soft:${esc(s.accentSoft || '#eef6f5')}; --ink:${esc(s.ink || '#16213f')};
@@ -628,16 +658,16 @@ ${RICH_CSS}
   </div>
   <div class="cards">
     <div class="card"><div class="ct">Пациент <span class="uz">· Bemor</span></div><div class="fgrid">
-      <div class="fl">ФИО <i>· F.I.Sh.</i></div><div class="fv">${esc(d.patientName || '—')}</div>
-      <div class="fl">Дата рождения <i>· Tug‘ilgan sana</i></div><div class="fv">${esc(d.dob || '—')}</div>
-      <div class="fl">Пол <i>· Jinsi</i></div><div class="fv">${esc(d.sex || '—')}</div>
-      <div class="fl">ID пациента <i>· Bemor ID</i></div><div class="fv">${esc(d.mrn || '—')}</div>
-      <div class="fl">Телефон <i>· Telefon</i></div><div class="fv">${esc(d.phone || '—')}</div></div></div>
+      ${fg('ФИО', 'F.I.Sh.', d.patientName, true)}
+      ${fg('Дата рождения', 'Tug‘ilgan sana', d.dob)}
+      ${fg('Пол', 'Jinsi', d.sex)}
+      ${fg('ID пациента', 'Bemor ID', d.mrn, true)}
+      ${fg('Телефон', 'Telefon', d.phone)}</div></div>
     ${d.showDoctor === false ? '' : `<div class="card"><div class="ct">Лечащий врач <span class="uz">· Davolovchi shifokor</span></div><div class="fgrid">
-      <div class="fl">Врач <i>· Shifokor</i></div><div class="fv">${esc(d.doctorName || '—')}</div>
-      <div class="fl">Специальность <i>· Mutaxassislik</i></div><div class="fv">${esc(d.doctorSpec || '—')}</div>
-      <div class="fl">Услуга <i>· Xizmat</i></div><div class="fv">${esc(d.service || '—')}</div>
-      <div class="fl">Телефон <i>· Telefon</i></div><div class="fv">${esc(d.doctorPhone || '—')}</div></div></div>`}
+      ${fg('Врач', 'Shifokor', d.doctorName, true)}
+      ${fg('Специальность', 'Mutaxassislik', d.doctorSpec)}
+      ${fg('Услуга', 'Xizmat', d.service)}
+      ${fg('Телефон', 'Telefon', d.doctorPhone)}</div></div>`}
   </div>
   <div class="body">
     ${_bodyHtml}
@@ -663,9 +693,10 @@ function conclusionCompact(s, d) {
     const sec = (ru, uz, txt, field) => {
         if (d.__editor && field && d.activeFields && !_secOn(field)) return `<button type="button" class="bk-add" data-add="${field}">+ Добавить: ${esc(ru)}</button>`;
         const rb = richBody(txt, d);   // DOC_RICH_FORMAT_V1 (F1)
-        return (txt || (d.__editor && field)) ? `<div class="secbar"><span class="ru">${esc(ru)}</span>${uz ? `<span class="uz">· ${esc(uz)}</span>` : ''}${d.__editor && field ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="${field}" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="${field}" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="${field}" title="Убрать раздел">×</button></span>` : ''}</div><div class="sec"><div class="sec-b${rb.rich ? ' rich' : ''}"${field ? ` data-field="${field}"` : ''}>${rb.html}</div></div>` : '';
+        // PRINT_SKIP_EMPTY_V1 — содержание по hasBody (richHasContent), а не истинностью строки.
+        return (hasBody(txt, d) || (d.__editor && field)) ? `<div class="secbar"><span class="ru">${esc(ru)}</span>${uz ? `<span class="uz">· ${esc(uz)}</span>` : ''}${d.__editor && field ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="${field}" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="${field}" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="${field}" title="Убрать раздел">×</button></span>` : ''}</div><div class="sec"><div class="sec-b${rb.rich ? ' rich' : ''}"${field ? ` data-field="${field}"` : ''}>${rb.html}</div></div>` : '';
     };
-    const recList = lines(d.recsText);
+    const recList = lines(d.recsText).filter((x) => hasBody(x));   // PRINT_SKIP_EMPTY_V1 — строка из &#160; или U+200B — не пункт
     // DOC_RICH_FORMAT_V1 (F1) — рекомендации с оформлением печатаются как написаны; простой текст — прежний список.
     const recsHtml = (d.rich && hasMarkup(d.recsText)) ? sec('Рекомендации', 'Tavsiyalar', d.recsText, 'recommendations_text')
         : recList.length ? `<div class="secbar"><span class="ru">Рекомендации</span><span class="uz">· Tavsiyalar</span></div><ul class="recs">${recList.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
@@ -677,7 +708,7 @@ function conclusionCompact(s, d) {
         `<div style="display:flex;gap:6px;align-items:baseline;margin-top:3px;font-size:11.5px;line-height:1.35;">${x.code ? `<span class="icd">${esc(x.code)}</span>` : ''}<span>${esc(x.name)}</span><span style="margin-left:auto;font-size:10px;letter-spacing:.06em;text-transform:uppercase;opacity:.55;">${esc(x.typeLabel || '')}</span></div>`).join('');
     const dxHtml = (d.__editor && d.activeFields && d.activeFields.indexOf('primary_diagnosis') < 0)
         ? `<button type="button" class="bk-add" data-add="primary_diagnosis">+ Добавить: Диагноз</button>`
-        : ((d.dx || d.__editor || dxExtras) ? `<div class="dx"><div class="dh">Диагноз <span class="uz">· Tashxis</span>${d.__editor ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="primary_diagnosis" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="primary_diagnosis" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="primary_diagnosis" title="Убрать раздел">×</button></span>` : ''}</div>${dxRows(d, '')}${dxExtras}</div>` : '');
+        : ((hasBody(d.dx) || d.__editor || dxExtras) ? `<div class="dx"><div class="dh">Диагноз <span class="uz">· Tashxis</span>${d.__editor ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="primary_diagnosis" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="primary_diagnosis" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="primary_diagnosis" title="Убрать раздел">×</button></span>` : ''}</div>${dxRows(d, '')}${dxExtras}</div>` : '');
     const fld = (l, uz, v) => `<div class="fld"><span class="l">${esc(l)}${uz ? ` <i>· ${esc(uz)}</i>` : ''}</span><span class="d"></span><span class="v">${esc(v || '—')}</span></div>`;
     const _secByField = {
         chief_complaint: sec('Жалобы', 'Shikoyatlar', d.complaint, 'chief_complaint'),
@@ -738,12 +769,13 @@ ${RICH_CSS}
     title: 'Заключение врача', uz: 'Shifokor xulosasi',
     date: d.issueDate || dateNumeric(new Date()),
     ids: [{ label: 'ID', value: d.mrn }, { label: 'Документ', value: d.docNo }],
-    fields: [
+    // PRINT_SKIP_EMPTY_V1 — пустые дата рождения и услуга не печатаются прочерком.
+    fields: optFields([
       { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
-      { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
-      { label: 'Услуга', uz: 'Xizmat', value: d.service },
+      { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob, opt: true },
+      { label: 'Услуга', uz: 'Xizmat', value: d.service, opt: true },
       { label: 'Врач', uz: 'Shifokor', value: shortName(d.doctorName) },
-    ],
+    ]),
   })}
   ${_bodyHtml}
   ${rxHtml}
@@ -958,20 +990,21 @@ ${RICH_CSS}
     title: 'Результат диагностического исследования', uz: 'Diagnostika tekshiruvi natijasi',
     date: d.dateOut || dateNumeric(new Date()),
     ids: [{ label: 'ID', value: d.mrn }, { label: 'Документ', value: d.docNo }],
-    fields: [
+    // CABINET_FIX_V1_DIAG — пустая «Область» не печатается прочерком.
+    // PRINT_SKIP_EMPTY_V1 — и пустые дата рождения и «Исследование» (услуга).
+    fields: optFields([
       { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
-      { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
-      { label: 'Исследование', uz: 'Tekshiruv', value: st.kind },
-      // CABINET_FIX_V1_DIAG — пустая «Область» не печатается прочерком.
-      ...(st.area ? [{ label: 'Область', uz: 'Soha', value: st.area }] : []),
-    ],
+      { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob, opt: true },
+      { label: 'Исследование', uz: 'Tekshiruv', value: st.kind, opt: true },
+      { label: 'Область', uz: 'Soha', value: st.area, opt: true },
+    ]),
   })}
   ${(st.device || st.protocol) ? `<div class="cards">
     <div class="card"><div class="ct">Исследование <span class="uz">· Tekshiruv</span></div><div class="fgrid">${f('Аппарат', 'Apparat', st.device)}${f('Протокол', 'Protokol', st.protocol)}</div></div>
   </div>` : ''}
   ${films.length ? `<div class="films">${films.map(fl => `<div class="film"><div class="lab">${FILM_SVG}<div class="t">Место для снимка</div></div><div class="cap">${esc(fl.caption || '')}</div><div class="cap2">${esc(fl.sub || '')}</div></div>`).join('')}</div>` : ''}
-  <div class="sec"><div class="sec-h"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div>${diagDescription(d)}</div>
-  ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div>${diagConclusion(d)}</div>` : ''}
+  ${(hasBody(d.description, d) || d.__editor) ? `<div class="sec"><div class="sec-h"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div>${diagDescription(d)}</div>` : ''}
+  ${(diagHasConclusion(d) || d.__editor) ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div>${diagConclusion(d)}</div>` : ''}
   ${diagRxDx(d, false)}
   ${imagingImages(d)}
   <div class="signoff"><div class="sig"><div class="role">${esc(diagSignerRole(d))} <i>· Shifokor</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">подпись</div></div>
@@ -986,7 +1019,8 @@ ${RICH_CSS}
 // ---------------------------------------------------------------------------
 function imagingCompact(s, d) {
     const st = Object.assign({ kind: d.service || '' }, d.study || {});   // CABINET_FIX_V1_DIAG — см. imagingClassic
-    const fld = (l, v) => v ? `<div class="fld"><span class="l">${esc(l)}</span><span class="d"></span><span class="v">${esc(v)}</span></div>` : '';
+    // PRINT_SKIP_EMPTY_V1 — пустое поле не печатается; always — ФИО и номер карты: всегда, пустые — прочерком.
+    const fld = (l, v, always) => (always || filled(v)) ? `<div class="fld"><span class="l">${esc(l)}</span><span class="d"></span><span class="v">${esc(filled(v) ? v : '—')}</span></div>` : '';
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Диагностика · ${esc(d.patientName || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#39414f; --muted:#474f5e; --faint:#727a88; --line:#e2e4e9; --line-2:#eef0f3; --bar:#f2f3f5; --paper:#fff; --page-bg:#e9eaee; }
@@ -1012,12 +1046,12 @@ ${RICH_CSS}
   <div class="title"><h1>Результат диагностики</h1><div class="uz">Diagnostika natijasi</div>
     <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || dateNumeric(new Date()))}</b></span></div></div>
   <div class="entwo">
-    <div class="ent"><div class="cap">Пациент</div>${fld('ФИО', d.patientName)}${fld('Дата рожд.', d.dob)}${fld('Пол', d.sex)}${fld('ID', d.mrn)}</div>
+    <div class="ent"><div class="cap">Пациент</div>${fld('ФИО', d.patientName, true)}${fld('Дата рожд.', d.dob)}${fld('Пол', d.sex)}${fld('ID', d.mrn, true)}</div>
     <div class="ent"><div class="cap">Исследование</div>${fld('Вид', st.kind)}${fld('Область', st.area)}${fld('Аппарат', st.device)}${fld('Протокол', st.protocol)}</div>
   </div>
-  <div class="secbar"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div>
-  ${diagDescription(d)}
-  ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение · Xulosa</div>${diagConclusion(d)}</div>` : ''}
+  ${(hasBody(d.description, d) || d.__editor) ? `<div class="secbar"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div>
+  ${diagDescription(d)}` : ''}
+  ${(diagHasConclusion(d) || d.__editor) ? `<div class="concl"><div class="ch">Заключение · Xulosa</div>${diagConclusion(d)}</div>` : ''}
   ${diagRxDx(d, true)}
   ${imagingImages(d)}
   <div class="signoff"><div class="sig"><div class="role">${esc(diagSignerRole(d))}</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">подпись</div></div>
