@@ -254,3 +254,32 @@ test('рецепт: окно и печать берут одни строки; �
     assert.match(fn, /<span>ID<\/span><b>\$\{escapeHtml\(recId\)\}<\/b>/);
     assert.match(fn, /№ \$\{escapeHtml\(recId\)\}/);
 });
+
+test('рецепт: неуказанный пол («other» и любое иное значение) не печатается; M/F/male/female — печатаются', () => {
+    assert.deepEqual(WS.recipeHeadRows({ gender: 'other' }), []);
+    assert.deepEqual(WS.recipeHeadRows({ gender: 'unknown' }), []);
+    assert.deepEqual(WS.recipeHeadRows({ age: 34, gender: 'other' }), [{ label: 'Возраст / Yosh', value: '34 лет' }]);
+    assert.deepEqual(WS.recipeHeadRows({ gender: 'male' }), [{ label: 'Пол / Jinsi', value: 'Муж.' }]);
+    assert.deepEqual(WS.recipeHeadRows({ gender: 'female' }), [{ label: 'Пол / Jinsi', value: 'Жен.' }]);
+    assert.deepEqual(WS.recipeHeadRows({ gender: 'M' }), [{ label: 'Пол / Jinsi', value: 'Муж.' }]);
+    assert.equal(WS.recipeSexLabel('other'), '');
+    assert.equal(WS.recipeSexLabel('F'), 'Жен.');
+    // заключение врача берёт пол из той же функции
+    const code = WS_SRC.replace(/\/\/[^\n]*/g, '');
+    assert.match(code, /sex: recipeSexLabel\(p\.gender\) \|\| recipeSexLabel\(p\.sex\)/, 'пол заключения — не общей функцией');
+});
+
+test('рецепт: разметка в названии, дозе, кратности, курсе, примечании и строке пациента печатается экранированной', () => {
+    const bad = ['"><script>x</script>', '<i>b</i>&'];
+    for (const v of bad) for (const prefix of ['rx-', 'rx-recipe-']) {
+        const html = WS.recipeRxItemHtml({ name: v, dose: v, freq: v, dur: v, notes: v }, prefix);
+        const bare = html.replace(/<\/?(div|b|span)\b[^>]*>/g, '');
+        assert.ok(!/<script|<i>|<\/i>/.test(bare), prefix + ': сырой тег: ' + html);
+        assert.ok(/&lt;/.test(html), prefix + ': не экранировано');
+    }
+    // строка пациента: значение экранируется на выводе (headRowsHtml) — проверяем исходник
+    const code = WS_SRC.replace(/\/\/[^\n]*/g, '');
+    assert.match(code, /<b>\$\{escapeHtml\(r\.value\)\}<\/b>/);
+    assert.match(code, /<span>\$\{escapeHtml\(r\.label\)\}<\/span>/);
+    for (const v of bad) for (const r of WS.recipeHeadRows({ age: v, dob: v })) assert.ok(r.value.includes(v.trim()), 'значение искажено до экранирования');
+});

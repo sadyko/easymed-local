@@ -6288,11 +6288,17 @@ export function recipeRxItemHtml(rx, prefix) {
 // только заполненные (раньше пустые печатались «—»). Возраст с полом — одна
 // ячейка, как была; только пол — подпись «Пол». ФИО и номер карты рецепт
 // печатает сам и всегда. Возраст 0 — значение, а не пустота.
+// Пол печатается только для настоящих значений (M/F/male/female). Не выбранный пол
+// хранится как 'other' (умолчание базы) — это «не указан», а не пол: не печатается.
+export function recipeSexLabel(g) {
+    const s = String(g ?? '').trim().toLowerCase();
+    return (s === 'm' || s === 'male') ? 'Муж.' : (s === 'f' || s === 'female') ? 'Жен.' : '';
+}
 export function recipeHeadRows(p) {
     const q = p || {};
     const val = (v) => (textIsBlank(v) ? '' : String(v).trim());
     const age = val(q.age) ? val(q.age) + ' лет' : '';
-    const sex = q.gender === 'M' ? 'Муж.' : q.gender === 'F' ? 'Жен.' : val(q.gender);
+    const sex = recipeSexLabel(q.gender);
     const dob = val(q.dob) || val(q.birthDate);
     const rows = [];
     if (age || sex) rows.push({ label: age ? 'Возраст / Yosh' : 'Пол / Jinsi', value: [age, sex].filter(Boolean).join(' · ') });
@@ -6439,7 +6445,7 @@ function buildBlankData(ctx) {
         patientName: `${p.lastName || ''} ${p.firstName || ''} ${p.middle || ''}`.trim() || p.fullName || '',
         mrn: p.mrn || '', phone: p.phone || '',
         dob: p.dob || p.birth_date || '',
-        sex: (p.gender === 'M' ? 'Муж.' : p.gender === 'F' ? 'Жен.' : (p.gender || p.sex || '')),
+        sex: recipeSexLabel(p.gender) || recipeSexLabel(p.sex),
         ...docSigner(svc, me()),   // DOC_DOCTOR_FALLBACK_V1 — no assigned doctor → the signed-in clinician · CABINET_FIX_V1_R1 — имя и специальность одного человека
         service: svc.name || '',
         issueDate: new Date().toLocaleDateString('ru-RU'),
