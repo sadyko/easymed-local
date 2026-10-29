@@ -432,6 +432,23 @@ export function buildDayColumn({ visits, services, now }) {
     return { rows, nowAt };
 }
 
+/**
+ * CABINET_ACTIVE_FIRST_V1 (2026-10-29) — владелец: «осмотренных при открытии
+ * кабинета не видно». Колонка дня делится на ленту (`open` — всё, что не
+ * «Приём завершён», по времени, как было) и группу завершённых (`done`),
+ * которая рисуется внизу свёрнутой. Черта «сейчас» (`nowAt`) считается по
+ * ленте: завершённый приём больше не делит день. buildDayColumn не меняется —
+ * число приёмов дня в шапке остаётся полным.
+ */
+export function foldDayColumn(day) {
+    const rows = (day && day.rows) || [];
+    const open = rows.filter((r) => !r.done);
+    const done = rows.filter((r) => r.done);
+    let nowAt = open.findIndex((r) => !r.past);
+    if (nowAt < 0) nowAt = open.length;
+    return { open, done, nowAt };
+}
+
 /** Подпись состояния приёма. Осмотр важнее записи: он её отменяет. */
 export function dayStateLabel(row) {
     if (row.done) return tr('Приём завершён');
@@ -462,6 +479,10 @@ const state = {
     payLines: [],
     metric: 'services',   // что рисует график: 'services' | 'earned'
     now: null,
+    // CABINET_ACTIVE_FIRST_V1 — группа «Завершённые · N» в «Моём дне» раскрыта?
+    // Каждое открытие кабинета её сворачивает (resetDoctorDashboard), внутри
+    // открытого кабинета выбор держится.
+    doneOpen: false,
 };
 let hostRef = null;
 let openWorkRef = null;
@@ -662,6 +683,19 @@ const DASH_CSS = `
 .dd-nowline { display: flex; align-items: center; gap: 8px; padding: 2px;
     font-size: 12.5px; font-weight: 600; color: var(--crit-700); }
 .dd-nowline i { display: block; flex: 1; height: 1px; background: var(--crit-500); }
+/* CABINET_ACTIVE_FIRST_V1 — finished visits fold into one row at the bottom of
+   the day list. Same chevron idiom as .cd-gone-h: right when folded, down when
+   open. No new colours. */
+.dd-done { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--ink-100); }
+.dd-done-list { display: flex; flex-direction: column; gap: 8px; }
+.dd-done-h { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 0 4px;
+    border: 0; background: none; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600;
+    color: var(--ink-500); text-align: left; border-radius: 8px; }
+.dd-done-h:hover, .dd-done-h.on { color: var(--ink-700); }
+.dd-done-h:focus-visible { outline: 2px solid var(--primary-600); outline-offset: 2px; }
+.dd-done-ic { display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--ink-400);
+    transition: transform var(--dur-1, .15s) var(--ease-out, ease); }
+.dd-done-h.on .dd-done-ic { transform: rotate(90deg); }
 
 /* HEAD_DOCTOR_WARD_VIEW_V1 — head-doctor ward strip. No new colours. */
 .dd-ward { padding: 14px 18px; margin-bottom: 14px; display: flex; align-items: center;
@@ -724,6 +758,7 @@ export function resetDoctorDashboard() {
     state.loaded = false; state.loading = false; state.failed = false;
     state.doctor = null; state.visits = []; state.services = []; state.payLines = [];
     state.metric = 'services'; state.now = null;
+    state.doneOpen = false;   // CABINET_ACTIVE_FIRST_V1 — новое открытие кабинета: завершённые свёрнуты
     ward.wide = false; ward.loaded = false; ward.exam = 0; ward.attending = 0; ward.inBed = 0;
     hostRef = null; openWorkRef = null; openInpatientsRef = null; openPayRef = null;
 }
@@ -963,11 +998,15 @@ function dayCard(day, now) {
                 tr('Как только регистратура запишет пациента, он появится здесь по времени приёма.')),
         ));
     } else {
-        day.rows.forEach((r, i) => {
-            if (i === day.nowAt) list.appendChild(nowLine(now));
+        // CABINET_ACTIVE_FIRST_V1 — лента: всё, кроме «Приём завершён», по
+        // времени; завершённые — свёрнутой группой в самом низу.
+        const fold = foldDayColumn(day);
+        fold.open.forEach((r, i) => {
+            if (i === fold.nowAt) list.appendChild(nowLine(now));
             list.appendChild(apptCard(r));
         });
-        if (day.nowAt >= day.rows.length) list.appendChild(nowLine(now));
+        if (fold.nowAt >= fold.open.length) list.appendChild(nowLine(now));
+        if (fold.done.length) list.appendChild(doneGroup(fold.done));
     }
     return h('aside', { class: 'card dd-day' },
         h('div', { class: 'card-header' },
@@ -985,6 +1024,27 @@ function dayCard(day, now) {
 }
 function nowLine(now) {
     return h('div', { class: 'dd-nowline' }, hhmm(now), h('i', null));
+}
+// CABINET_ACTIVE_FIRST_V1 — «Завершённые · N»: строка-кнопка с шевроном
+// системы (как «Убраны из набора» в case-docs.js — свёрнуто вправо, раскрыто
+// вниз). Щелчок перекладывает только карточки группы, а не весь дашборд:
+// график и плитки не перерисовываются ради списка.
+function doneGroup(done) {
+    const box = h('div', { class: 'dd-done-list' });
+    const head = h('button', {
+        type: 'button', class: 'dd-done-h', 'aria-expanded': 'false',
+        onclick: () => { state.doneOpen = !state.doneOpen; draw(); },
+    },
+        h('span', { class: 'dd-done-ic' }, Icon('ChevronRight', { size: 14 })),
+        trf('Завершённые · {n}', { n: done.length }));
+    function draw() {
+        head.setAttribute('aria-expanded', state.doneOpen ? 'true' : 'false');
+        head.className = 'dd-done-h' + (state.doneOpen ? ' on' : '');
+        clear(box);
+        if (state.doneOpen) for (const r of done) box.appendChild(apptCard(r));
+    }
+    draw();
+    return h('div', { class: 'dd-done' }, head, box);
 }
 function apptCard(r) {
     const meta = [

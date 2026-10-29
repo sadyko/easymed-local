@@ -8299,6 +8299,8 @@ export const STRINGS = {
   "Мой день": {"en": "My day", "ru": "Мой день", "uz": "Mening kunim"},
   "приёмов: {n}": {"en": "appointments: {n}", "ru": "приёмов: {n}", "uz": "qabullar: {n}"},
   "{n} г.": {"en": "{n} y.o.", "ru": "{n} г.", "uz": "{n} yosh"},
+  // CABINET_ACTIVE_FIRST_V1 (2026-10-29) — «Мой день»: завершённые приёмы свёрнутой группой внизу
+  "Завершённые · {n}": {"en": "Completed · {n}", "ru": "Завершённые · {n}", "uz": "Yakunlangan · {n}"},
 
   // HEAD_DOCTOR_WARD_VIEW_V1 — главный врач видит стационар в своём кабинете — added 2026-09-05
   "Стационар: все пациенты": {"en": "Inpatient ward: all patients", "ru": "Стационар: все пациенты", "uz": "Statsionar: barcha bemorlar"},

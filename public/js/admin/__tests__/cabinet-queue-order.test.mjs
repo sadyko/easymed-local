@@ -352,7 +352,13 @@ test('карточка «Мой день» с «Приём завершён» в
   const root = await openWork();
   buttonByText(root, /Дашборд/).click();
   await tick(80);
-  const card = (name) => byClass(root, 'dd-appt').find((c) => textOf(c).includes(name));
+  // CABINET_ACTIVE_FIRST_V1 (A2): завершённый приём свёрнут в группу «Завершённые · N» —
+  // перед щелчком по нему группу раскрываем (если она свёрнута).
+  const card = (name) => {
+    const head = byClass(root, 'dd-done-h')[0];
+    if (head && head.attrs['aria-expanded'] === 'false' && !byClass(root, 'dd-appt').find((c) => textOf(c).includes(name))) head.click();
+    return byClass(root, 'dd-appt').find((c) => textOf(c).includes(name));
+  };
   assert.ok(card('Аминов') && card('Бакиев'), 'карточек «Мой день» нет: стенд не посеял визиты');
   card('Аминов').click();
   await tick(60);
