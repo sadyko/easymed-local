@@ -384,7 +384,8 @@ export function whatsNewState(currentVersion, lastSeenVersion, offerNotesByVersi
 // answer; views/updates.js only builds DOM from it.
 //
 // The record's shape is written by server/services/control/update-progress.js:
-// {version, phase, bytes, total, started_at, at, age_ms, reason}. `total` is
+// {version, phase, bytes, total, started_at, at, age_ms, reason} (+ need_bytes,
+// free_bytes for reason 'no_space' — DISK_GUARD_V1). `total` is
 // null whenever the server sent no Content-Length — that case is not an error
 // and must never become a made-up percentage.
 // ---------------------------------------------------------------------------
@@ -406,6 +407,21 @@ export function formatMb(bytes) {
   const n = Number(bytes);
   if (!Number.isFinite(n) || n < 0) return '0.0';
   return (n / MB).toFixed(1);
+}
+
+const GB = 1024 * MB;
+
+/**
+ * DISK_GUARD_V1 — гигабайты одним знаком — ЧИСЛОМ, ровно как в отказе сервера
+ * (server/services/disk-guard.js gbValue): один и тот же отказ читается
+ * одинаково на экране обновлений, на «Данных клиники» и в колоколе.
+ * «Нужно» — вверх, «свободно» — вниз: «нужно 1,0, свободно 1,0» читалось бы
+ * ошибкой программы. Мусор и отрицательное — 0. Десятичный знак ставит экран
+ * по своему языку (system-logic.js noSpaceText: ru и uz — запятая, en — точка).
+ */
+export function gbValue(bytes, { up = false } = {}) {
+  const v = Math.max(0, Number(bytes) || 0) / GB;
+  return (up ? Math.ceil(v * 10) : Math.floor(v * 10)) / 10;
 }
 
 // The five phases runPipeline reports, in order, each as ONE complete
@@ -476,6 +492,9 @@ const FAIL_NOTE = {
   version_mismatch: 'Обновление не совпало с обещанной версией и не было установлено. Сообщите в Easy-Med.',
   unpack:           'Не удалось распаковать обновление — проверьте место на диске. Мы попробуем снова.',
   not_installed:    'Эта установка не может обновляться: она разложена неправильно. Обратитесь в Easy-Med — систему нужно переустановить официальным пакетом, данные при этом сохраняются.',
+  // DISK_GUARD_V1 — проверка места ДО скачивания (updater.js). Числа — в failNoteFor;
+  // эта фраза — только для ответа без чисел.
+  no_space:         'На диске не хватило места для обновления. Освободите место, и мы попробуем снова.',
 };
 
 function failNote(reason) {
@@ -483,11 +502,30 @@ function failNote(reason) {
   return FAIL_NOTE[key] || 'Не удалось установить обновление. Мы попробуем снова.';
 }
 
+// DISK_GUARD_V1 — «нет места» с числами (раздел 3, п. 3): сколько нужно и
+// сколько свободно. Гигабайты — ЧИСЛАМИ, с code: 'no_space' — в том же виде,
+// что отказ копии с сервера, чтобы экран (views/updates.js say) отдал его
+// system-logic.js noSpaceText: десятичный знак по языку экрана, а не «2,1» на
+// английском. Без чисел (старый сервер, испорченная запись) — общая фраза про
+// диск: выдумывать числа хуже, чем их не назвать.
+function failNoteFor(progress) {
+  const need = typeof progress.need_bytes === 'number' ? progress.need_bytes : NaN;
+  const free = typeof progress.free_bytes === 'number' ? progress.free_bytes : NaN;
+  if (progress.reason === 'no_space' && Number.isFinite(need) && need > 0 && Number.isFinite(free) && free >= 0) {
+    return {
+      code: 'no_space',
+      template: 'Недостаточно места: нужно {need} ГБ, свободно {free} ГБ',
+      params: { need: gbValue(need, { up: true }), free: gbValue(free) },
+    };
+  }
+  return { template: failNote(progress.reason), params: {} };
+}
+
   if (phase === 'failed') {
     return {
       ...none, show: true, phase, tone: 'warn',
       title: { template: 'Обновление {version} не установилось', params: { version } },
-      note: { template: failNote(progress.reason), params: {} },
+      note: failNoteFor(progress),
     };
   }
   if (!LIVE.has(phase)) return none;   // an unknown phase from a newer server: say nothing rather than something wrong

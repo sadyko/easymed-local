@@ -494,6 +494,20 @@ test('идёт установка: экран сам перезагружает�
   assert.strictEqual(reloads, 1, 'таймер остановлен после перезагрузки');
 });
 
+// --- DISK_GUARD_V1 -------------------------------------------------------------
+
+test('нет места на обновление: экран говорит, сколько нужно и сколько свободно, с запятой на русском', async () => {
+  const GB = 1024 ** 3;
+  resetServer({ current_version: '2.3.0', offer: OFFER, approved: false, hour: null, scheduled_at: null, last_result: null,
+    progress: { version: '2.4.0', phase: 'failed', reason: 'no_space', need_bytes: 2 * GB + 1, free_bytes: GB, bytes: 0, total: null, age_ms: 1000 } });
+  fakeLocalStorage.setItem('em.updates.lastSeenVersion', '2.3.0');
+  const root = mk('div');
+  await renderUpdates(root);
+  const card = findByClass(root, 'upd-progress');
+  assert.ok(card, 'карточка отказа показана');
+  assert.match(textOf(card), /Недостаточно места: нужно 2,1 ГБ, свободно 1,0 ГБ/, textOf(card));
+});
+
 test('ничего не устанавливается: никакого фонового опроса и никаких перезагрузок', async () => {
   resetServer({ current_version: '0.3.4', offer: null, approved: false, hour: null,
     scheduled_at: null, last_result: null });

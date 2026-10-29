@@ -50,7 +50,7 @@
 // tell a big download from a hung one.
 
 import { h, Icon, clear, toast } from '../ui.js';
-import { tr } from '../i18n.js';
+import { tr, getLang } from '../i18n.js';
 import { supabase } from '../../supabase.js';
 import { licenceState } from '../licence.js';
 import { isAdminActor } from '../admin-actor.js';
@@ -59,6 +59,9 @@ import {
     formatScheduled, updateOutcomeMessage, whatsNewState, pendingRestartMessage,
     fill, upToDateMessage, progressView,
 } from '../updates-logic.js';
+// DISK_GUARD_V1 — «нет места на обновление»: гигабайты с десятичным знаком по
+// языку экрана, та же функция, что у отказа копии на «Данных клиники».
+import { noSpaceText } from '../system-logic.js';
 // SETTINGS_SPLIT_V1 — imported ONLY to keep the old '#updates/subscription'
 // deep link landing on the subscription screen (see renderUpdates below).
 // The ?v= tag MUST match admin.js's import of the same file: a browser keys
@@ -96,6 +99,10 @@ const NOTES_CACHE_KEY = 'em.updates.notesCache';   // { [version]: notes_ru } �
 // equals translating once for every string this screen uses.
 function say(msg) {
     if (!msg) return null;
+    // DISK_GUARD_V1 — нота «нет места» (updates-logic.js failNoteFor) несёт
+    // гигабайты числами: запятую или точку ставит noSpaceText по языку экрана.
+    const noSpace = noSpaceText(msg, getLang(), tr);
+    if (noSpace) return noSpace;
     let out = fill(tr(msg.template), msg.params);
     if (msg.extra) out += ' ' + tr(msg.extra);
     return out;

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { execFileSync } from 'node:child_process';   // DISK_GUARD_V1 — настоящая распаковка под наблюдением
 import { generateKeyPairSync } from 'node:crypto';
 
 import { openDb } from '../../db/connection.js';
@@ -24,7 +25,7 @@ import { runCheckin, readJsonFile } from './checkin.js';
 import { setAppVersion } from './config.js';
 import { updateApprove } from '../rpc/updates.js';
 import { listen } from '../../../control-plane/server/test-helpers/listen.js';
-import { __setDiskSpaceForTests, GB } from '../disk-guard.js';   // DISK_GUARD_V1
+import { __setDiskSpaceForTests, readGuard, GB, MB } from '../disk-guard.js';   // DISK_GUARD_V1
 
 // DISK_GUARD_V1 — копия перед обновлением спрашивает место; диск машины
 // разработчика — не данные теста.
@@ -413,17 +414,28 @@ test('dev layout: stages into a scratch folder, apply is never invoked', async (
 
   const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
   const exit = exitSpy();
+  // DISK_GUARD_V1 — распаковка настоящая, но после неё папка убирается: смотрим
+  // на неё в момент распаковки, через обёртку над настоящим tar.
+  const extracted = [];
+  const execSpy = (exe, args, opts) => {
+    const out = execFileSync(exe, args, opts);
+    const target = args[args.indexOf('-C') + 1];
+    extracted.push({ target, entry: fs.existsSync(path.join(target, 'server', 'index.js')) });
+    return out;
+  };
   try {
     await tickUpdater(db, dataDir, {
-      endpoint, now: IN_WINDOW_NOW, appRoot: devRoot, exitImpl: exit.impl,
+      endpoint, now: IN_WINDOW_NOW, appRoot: devRoot, exitImpl: exit.impl, execFileSyncImpl: execSpy,
     });
   } finally {
     server.close();
   }
   assert.deepEqual(exit.calls, [], 'a dev machine must never have its `current` switched, or be restarted');
   assert.equal(fs.existsSync(path.join(dataDir, 'update-result.json')), false, 'and nothing is reported as installed');
-  const staged = path.join(dataDir, 'update-staging', '2.4.0', 'server', 'index.js');
-  assert.ok(fs.existsSync(staged), 'the bundle IS still staged, just not applied');
+  assert.deepEqual(extracted, [{ target: path.join(dataDir, 'update-staging', '2.4.0'), entry: true }],
+    'the bundle IS still unpacked for real — the download/verify/unpack pipeline is exercised');
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-staging')), false,
+    'DISK_GUARD_V1 — and the scratch folder is removed: otherwise ~55 MB per offered version, forever');
 });
 
 test('versioned layout: stages under <root>\\versions\\<version>, repoints `current`, and restarts', async () => {
@@ -959,4 +971,102 @@ test('progress: the record left by a SUCCESSFUL update is deleted at the next bo
   clearInterval(interval);
 
   assert.equal(readProgress(db), null, 'nothing is shown after an update that simply worked');
+});
+
+// --- DISK_GUARD_V1 -------------------------------------------------------------
+
+test('DISK_GUARD_V1: места на обновление нет — ничего не скачано, экран говорит сколько нужно и сколько есть', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { appRoot } = makeVersionedRoot('2.3.0');
+  const { server, state, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  try {
+    await tickUpdater(db, dataDir, {
+      endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: () => {},
+      diskSpaceImpl: () => ({ free: GB / 2, total: 100 * GB }),
+    });
+  } finally {
+    server.close();
+  }
+  assert.equal(state.count, 0, 'пакет даже не скачивался');
+  // :memory: — файла базы нет, копия 0 Б: 100 МБ + 60 МБ + 0 + 1 ГБ.
+  const need = 160 * MB + GB;
+  const rec = readProgress(db);
+  assert.equal(rec.phase, 'failed');
+  assert.equal(rec.reason, 'no_space');
+  assert.equal(rec.need_bytes, need);
+  assert.equal(rec.free_bytes, GB / 2);
+  const g = readGuard(dataDir).update_refused;
+  assert.equal(g.version, '2.4.0');
+  assert.equal(g.need_bytes, need);
+  assert.equal(g.free_bytes, GB / 2);
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-result.json')), false,
+    'не update_result ok:false — полный диск одной клиники не должен останавливать выпуск для всех');
+  assert.equal(controlStateGet(db, 'update_offer'), JSON.stringify(offer), 'попробуем в следующее окно');
+});
+
+test('DISK_GUARD_V1: копии перед обновлением не хватило места — не ok:false, а disk_guard; распакованная версия убрана, прежняя цела', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { root, appRoot } = makeVersionedRoot('2.3.0');
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  const exit = exitSpy();
+  // Проверка перед скачиванием видит просторный диск (diskSpaceImpl), а копия
+  // перед обновлением — тесный (общая подмена): место кончилось между ними.
+  __setDiskSpaceForTests(() => ({ free: GB / 2, total: 100 * GB }));
+  try {
+    await tickUpdater(db, dataDir, {
+      endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl,
+      diskSpaceImpl: () => ({ free: 500 * GB, total: 1000 * GB }),
+    });
+  } finally {
+    server.close();
+    __setDiskSpaceForTests(ROOMY);
+  }
+  assert.deepEqual(exit.calls, []);
+  assert.equal(path.resolve(fs.realpathSync(path.join(root, 'current'))), path.resolve(appRoot), 'клиника на прежней версии');
+  assert.equal(fs.existsSync(path.join(root, 'versions', '2.4.0')), false, 'распакованная 2.4.0 убрана (~55 МБ)');
+  assert.ok(fs.existsSync(appRoot), 'прежняя версия на месте');
+  // Ревью C2: отказ копии по месту — не дефект выпуска. update_result ok:false
+  // сервер считает в автостоп выпуска для всех клиник.
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-result.json')), false,
+    'отказ по месту не пишется как update_result ok:false');
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-pending.json')), false);
+  // :memory: — копия 0 Б: нужно 0 × 1,2 + 1 ГБ.
+  const rec = readProgress(db);
+  assert.equal(rec.phase, 'failed');
+  assert.equal(rec.reason, 'no_space');
+  assert.equal(rec.need_bytes, GB);
+  assert.equal(rec.free_bytes, GB / 2);
+  const g = readGuard(dataDir).update_refused;
+  assert.equal(g.version, '2.4.0');
+  assert.equal(g.need_bytes, GB);
+  assert.equal(g.free_bytes, GB / 2);
+  assert.equal(controlStateGet(db, 'update_offer'), JSON.stringify(offer), 'попробуем в следующее окно');
+});
+
+test('DISK_GUARD_V1: установка не удалась (не из-за места) — ok:false как раньше, распакованная версия не остаётся', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { root, appRoot } = makeVersionedRoot('2.3.0');
+  // backups/ — файл, а не папка: копия перед обновлением падает обычной ошибкой.
+  fs.writeFileSync(path.join(dataDir, 'backups'), 'not a folder');
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  const exit = exitSpy();
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl });
+  } finally {
+    server.close();
+  }
+  assert.deepEqual(exit.calls, []);
+  assert.equal(path.resolve(fs.realpathSync(path.join(root, 'current'))), path.resolve(appRoot), 'клиника на прежней версии');
+  assert.equal(fs.existsSync(path.join(root, 'versions', '2.4.0')), false, 'распакованная 2.4.0 убрана (~55 МБ)');
+  assert.ok(fs.existsSync(appRoot), 'прежняя версия на месте');
+  const outcome = readJsonFile(path.join(dataDir, 'update-result.json'));
+  assert.equal(outcome.ok, false, 'настоящий сбой установки поставщик по-прежнему видит');
+  assert.match(outcome.detail, /pre-update database snapshot/);
+  assert.equal(readGuard(dataDir).update_refused, undefined, 'это не отказ по месту');
 });

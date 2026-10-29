@@ -20,6 +20,7 @@ import { setDataDir, setAppVersion } from './services/control/config.js';   // S
 import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
 import { scheduleUpdater } from './services/control/updater.js';   // UPDATE_DELIVERY_V1
 import { pruneVersionsAtBoot } from './services/control/prune-versions.js';   // PRUNE_VERSIONS_V1
+import { updaterSnapshotFor } from './services/control/boot-confirm.js';   // DISK_GUARD_V1
 import { scheduleRelayPublish } from './services/branch-sync/relay.js';   // BRANCH_SYNC_RELAY_V1
 import { scheduleBranchPull } from './services/branch-sync/schedule-pull.js';   // BRANCH_SYNC_HOURLY_V1
 import { readPairing } from './services/branch-sync/pairing.js';
@@ -157,8 +158,18 @@ if (isMain) {
   // passed to .then or setTimeout); nothing here does that.
   try {
     if (pendingMigrations(db).length) {
-      const out = await backupBeforeMigrate(db, path.join(DATA_DIR, 'easymed.db'), APP_VERSION);
-      console.log(`  Database backed up before update: ${out}`);
+      // DISK_GUARD_V1 — одна полная копия на обновление (раздел 3, п. 4).
+      // Программа обновления уже сняла pre-<эта версия>.db перед переключением
+      // (updater.js applyUpdate → update-pending.json), и с тех пор база не
+      // менялась. Обновление руками или из исходников (pending нет) — копия,
+      // как раньше.
+      const prior = updaterSnapshotFor(DATA_DIR, APP_VERSION);
+      if (prior) {
+        console.log(`  Database already backed up by the updater before this update: ${prior}`);
+      } else {
+        const out = await backupBeforeMigrate(db, path.join(DATA_DIR, 'easymed.db'), APP_VERSION);
+        console.log(`  Database backed up before update: ${out}`);
+      }
       // Its OWN try/catch, deliberately separate from the one below. Pruning
       // old backups is disk hygiene, not correctness, and it runs AFTER the
       // line above already told the operator the backup succeeded — a
@@ -218,8 +229,9 @@ if (isMain) {
   // того, как миграции прошли. Это первый момент, когда известно, что
   // запущенная версия работает. Чистить раньше — во время обновления — нельзя:
   // 07.09.2026 версия 1.1.0 встала на миграции, и спасла клинику ровно
-  // предыдущая папка, которую тогда никто не удалил. Хранятся запущенная и две
-  // предыдущие; из исходников (нет versions/) вызов тихо ничего не делает.
+  // предыдущая папка, которую тогда никто не удалил. Хранятся запущенная и одна
+  // предыдущая (DISK_GUARD_V1, было две); из исходников (нет versions/) вызов
+  // тихо ничего не делает.
   // Ошибка уборки — предупреждение в журнал и только: запуску она не помеха.
   pruneVersionsAtBoot(ROOT);
 

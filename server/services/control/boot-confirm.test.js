@@ -11,7 +11,7 @@ import { readJsonFile } from './checkin.js';
 import { applyUpdate, scheduleUpdater } from './updater.js';
 import {
   confirmBoot, reconcileUpdateAtBoot, armBootConfirmation, syncRecoverCmd, writePending, readPending,
-  PENDING_NAME, ROLLED_BACK_NAME, RESULT_NAME,
+  updaterSnapshotFor, PENDING_NAME, ROLLED_BACK_NAME, RESULT_NAME,
 } from './boot-confirm.js';
 import { __setDiskSpaceForTests, GB } from '../disk-guard.js';   // DISK_GUARD_V1
 
@@ -192,4 +192,28 @@ test('armBootConfirmation с server: не слушает или база мер�
   const deadDb = { prepare: () => { throw new Error('SQLITE_IOERR'); } };
   const r2 = armBootConfirmation(w2.db, w2.dataDir, { runningVersion: '2.4.0', delayMs: 1, intervalMs: 1, maxTries: 2, server: { listening: true }, probeDb: deadDb });
   assert.equal(await r2.done, false);
+});
+
+test('DISK_GUARD_V1: updaterSnapshotFor — копия программы обновления для ЭТОЙ версии найдена, иначе null', () => {
+  const { dataDir } = workspace();
+  const bd = path.join(dataDir, 'backups');
+  fs.mkdirSync(bd);
+  fs.writeFileSync(path.join(bd, 'pre-2.4.0.db'), 'snapshot');
+  writePending(dataDir, { version: '2.4.0', from: '2.3.0', backup: path.join(bd, 'pre-2.4.0.db') });
+  assert.equal(updaterSnapshotFor(dataDir, '2.4.0'), path.join(bd, 'pre-2.4.0.db'));
+  assert.equal(updaterSnapshotFor(dataDir, '2.5.0'), null, 'pending на другую версию — копию снимает запуск');
+
+  writePending(dataDir, { version: '2.4.0', from: '2.3.0', backup: path.join(bd, 'pre-2.4.0.1.db') });
+  assert.equal(updaterSnapshotFor(dataDir, '2.4.0'), null, 'файла нет — без копии миграции не идут');
+
+  fs.writeFileSync(path.join(bd, 'daily-20260801-030000.db'), 'x');
+  writePending(dataDir, { version: '2.4.0', from: '2.3.0', backup: path.join(bd, 'daily-20260801-030000.db') });
+  assert.equal(updaterSnapshotFor(dataDir, '2.4.0'), null, 'не копия «перед обновлением» этой версии');
+
+  fs.writeFileSync(path.join(bd, 'pre-2.4.0.2.db'), '');
+  writePending(dataDir, { version: '2.4.0', from: '2.3.0', backup: path.join(bd, 'pre-2.4.0.2.db') });
+  assert.equal(updaterSnapshotFor(dataDir, '2.4.0'), null, 'пустой файл — не копия');
+
+  fs.unlinkSync(path.join(dataDir, PENDING_NAME));
+  assert.equal(updaterSnapshotFor(dataDir, '2.4.0'), null, 'обычный перезапуск или обновление руками');
 });

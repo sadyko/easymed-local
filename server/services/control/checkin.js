@@ -8,6 +8,7 @@ import { buildStatsPayload as defaultBuildStatsPayload } from './metrics.js';
 import { assertControlUrlIsTestSafe } from './prod-guard.js';   // PROD_GUARD_V1
 // PUBLIC_API_V1 — открытая половина ключа подписи клиники для публичного сервера.
 import { loadSyncIdentity, SYNC_KEY_FILE } from '../api/sync-identity.js';
+import { readGuard } from '../disk-guard.js';   // DISK_GUARD_V1
 
 // LICENCE_CORE_V1 — the clinic's half of the hourly call.
 //
@@ -421,6 +422,20 @@ async function performCheckin(db, dataDir, {
       apiSyncPublicKey = sync ? sync.signPublic : null;
     } catch { apiSyncPublicKey = null; }
 
+    // DISK_GUARD_V1 — обновление, которое не поставилось из-за места, Easy-Med
+    // узнаёт при этой же связи (раздел 3, п. 3). Отдельным полем, а НЕ
+    // update_result ok:false: тот сервер считает в автостоп выпуска (два
+    // отказа — выпуск остановлен для всех клиник кольца), а полный диск одной
+    // клиники — не дефект выпуска. Испорченная отметка — поля нет. Сервер
+    // управления пока поле не сохраняет (поправка 2 плана 3.18.1).
+    let diskGuard = null;
+    try {
+      const r = readGuard(dataDir).update_refused;
+      if (r && typeof r.version === 'string' && Number.isFinite(r.need_bytes) && Number.isFinite(r.free_bytes)) {
+        diskGuard = { update_refused: { version: r.version, need_bytes: r.need_bytes, free_bytes: r.free_bytes, at: typeof r.at === 'string' ? r.at : null } };
+      }
+    } catch { diskGuard = null; }
+
     if (!endpoint) assertControlUrlIsTestSafe(process.env, fetchImpl);   // PROD_GUARD_V1
     const url = endpoint ? String(endpoint).replace(/\/+$/, '') + CHECKIN_PATH : checkinUrl();
 
@@ -437,6 +452,7 @@ async function performCheckin(db, dataDir, {
           stats,
           ...(updateResult ? { update_result: updateResult } : {}),
           ...(apiSyncPublicKey ? { api_sync_public_key: apiSyncPublicKey } : {}),   // PUBLIC_API_V1
+          ...(diskGuard ? { disk_guard: diskGuard } : {}),   // DISK_GUARD_V1
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });

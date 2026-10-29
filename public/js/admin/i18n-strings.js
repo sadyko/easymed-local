@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // DISK_GUARD_V1 — экран обновлений: места на обновление нет (updates-logic.js failNoteFor)
+  "Недостаточно места: нужно {need} ГБ, свободно {free} ГБ": {"en":"Not enough space: {need} GB needed, {free} GB free","ru":"Недостаточно места: нужно {need} ГБ, свободно {free} ГБ","uz":"Joy yetarli emas: {need} GB kerak, {free} GB bo‘sh"},   // DISK_GUARD_V1
   // DISK_GUARD_V1 — копии, отложенные восстановлением и откатом (system-logic.js KIND_LABELS, views/system-backups.js)
   "До восстановления": {"en":"Before restore","ru":"До восстановления","uz":"Tiklashdan oldin"},   // DISK_GUARD_V1
   "До отката": {"en":"Before rollback","ru":"До отката","uz":"Orqaga qaytarishdan oldin"},   // DISK_GUARD_V1

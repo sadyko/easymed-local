@@ -77,7 +77,7 @@ export const copyNeedBytes = (db) => Math.ceil(db * COPY_FACTOR) + RESERVE_BYTES
  * Гигабайты с одним знаком после запятой — числом. «Нужно» округляется
  * вверх, «свободно» — вниз: фраза «нужно 1,0 ГБ, свободно 1,0 ГБ» о
  * несделанной копии читалась бы как ошибка программы. Та же формула — у
- * экрана (public/js/admin/updates-logic.js formatGb).
+ * экрана (public/js/admin/updates-logic.js gbValue).
  */
 export function gbValue(bytes, { up = false } = {}) {
   const v = Math.max(0, Number(bytes) || 0) / GB;
@@ -144,4 +144,23 @@ export function noteGuard(dataDir, patch) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* временного файла могло и не быть */ }
     console.warn('[disk-guard] отметка о месте не записалась:', e && e.message);
   }
+}
+
+// Обновление (п. 3): скачанный пакет не больше 100 МБ (updater.js
+// MAX_BUNDLE_BYTES), распакованная версия ~55 МБ, плюс копия базы перед
+// обновлением и тот же запас 1 ГБ.
+export const UPDATE_DOWNLOAD_BYTES = 100 * MB;
+export const UPDATE_UNPACK_BYTES = 60 * MB;
+export const updateNeedBytes = (db) => UPDATE_DOWNLOAD_BYTES + UPDATE_UNPACK_BYTES + copyNeedBytes(db);
+
+/**
+ * Хватит ли места на обновление: 100 МБ + 60 МБ + база × 1,2 + 1 ГБ.
+ * Платформа не сказала, сколько свободно, — обновление идёт, как раньше.
+ * @returns {{ok:boolean, need:number|null, free:number|null}}
+ */
+export function checkUpdateSpace(dataDir, { diskSpaceImpl = currentDiskSpace, dbFile = path.join(dataDir, 'easymed.db') } = {}) {
+  const space = diskSpaceImpl(dataDir);
+  if (!space) return { ok: true, need: null, free: null };
+  const need = updateNeedBytes(dbBytes(dbFile));
+  return { ok: space.free >= need, need, free: space.free };
 }

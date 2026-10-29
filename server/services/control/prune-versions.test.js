@@ -2,14 +2,14 @@
 //
 // Владелец: «can we add autodeletion of the backups and updates, in 1 month
 // or something?». Версии не удалялись никогда: 39 папок, 1,8 ГБ за месяц.
-// Правило — запущенная плюс две предыдущие, а не «старше месяца»: календарь
+// Правило — запущенная плюс одна предыдущая (DISK_GUARD_V1; было две), а не «старше месяца»: календарь
 // лишил бы редко обновляющуюся клинику единственной точки отката, а именно
 // откат на предыдущую версию спас клинику 07.09.2026.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { planPrune, pruneVersions, pruneVersionsAtBoot, compareVersions } from './prune-versions.js';
+import { planPrune, pruneVersions, pruneVersionsAtBoot, compareVersions, KEEP_PREVIOUS } from './prune-versions.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
 
 const quiet = { log() {}, warn() {} };
@@ -20,11 +20,15 @@ test('сравнение версий — числовое: 1.10.0 новее 1.
     assert.equal(compareVersions('1.1.2', '1.1.2'), 0);
 });
 
-test('план: запущенная + две предыдущие остаются, всё старше — удаляется', () => {
+test('DISK_GUARD_V1: хранится текущая и ОДНА предыдущая версия', () => {
+    assert.equal(KEEP_PREVIOUS, 1, 'раздел 3, п. 9 выпуска 3.18.1');
+});
+
+test('план: запущенная + одна предыдущая остаются, всё старше — удаляется', () => {
     const names = ['0.9.4', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.1.1', '1.1.2'];
     const plan = planPrune(names, '1.1.2');
-    assert.deepEqual(plan.keep.sort(), ['1.1.0', '1.1.1', '1.1.2'].sort());
-    assert.deepEqual(plan.remove.sort(), ['0.9.4', '1.0.0', '1.0.1', '1.0.2'].sort());
+    assert.deepEqual(plan.keep.sort(), ['1.1.1', '1.1.2'].sort());
+    assert.deepEqual(plan.remove.sort(), ['0.9.4', '1.0.0', '1.0.1', '1.0.2', '1.1.0'].sort());
 });
 
 test('версия НОВЕЕ запущенной не трогается — это пакет на следующий перезапуск', () => {
@@ -54,10 +58,10 @@ test('на диске: удаляются именно лишние папки, 
         fs.writeFileSync(path.join(dir, v, 'package.json'), '{}');
     }
     const r = pruneVersions(dir, '1.1.2', { log: quiet });
-    assert.deepEqual(r.removed.sort(), ['0.9.4', '1.0.2'].sort());
+    assert.deepEqual(r.removed.sort(), ['0.9.4', '1.0.2', '1.1.0'].sort());
     assert.deepEqual(r.failed, []);
     const left = fs.readdirSync(dir).sort();
-    assert.deepEqual(left, ['1.1.0', '1.1.1', '1.1.2', '_broken-1.1.0'].sort());
+    assert.deepEqual(left, ['1.1.1', '1.1.2', '_broken-1.1.0'].sort());
 });
 
 test('сбой удаления одной папки не останавливает остальные и не бросает', () => {
@@ -67,7 +71,7 @@ test('сбой удаления одной папки не останавлив�
     const rmImpl = (p, o) => { if (p.endsWith('1.0.0')) throw new Error('EBUSY'); fs.rmSync(p, o); };
     const r = pruneVersions(dir, '1.1.3', { rmImpl, log: quiet });
     assert.deepEqual(r.failed, ['1.0.0']);
-    assert.deepEqual(r.removed, ['1.0.1']);
+    assert.deepEqual(r.removed, ['1.1.1', '1.0.1']);
 });
 
 test('из исходников (нет versions/) — тихо ничего не делает', () => {
@@ -87,6 +91,6 @@ test('в версионной раскладке уборка находит ver
     fs.symlinkSync(path.join(versions, '1.1.2'), path.join(root, 'current'), 'junction');
     const r = pruneVersionsAtBoot(path.join(versions, '1.1.2'), { log: quiet });
     assert.ok(r, 'версионная раскладка не распознана');
-    assert.deepEqual(r.removed, ['1.0.0']);
-    assert.deepEqual(fs.readdirSync(versions).sort(), ['1.0.1', '1.1.1', '1.1.2']);
+    assert.deepEqual(r.removed, ['1.0.1', '1.0.0']);
+    assert.deepEqual(fs.readdirSync(versions).sort(), ['1.1.1', '1.1.2']);
 });

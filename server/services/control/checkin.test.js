@@ -1065,3 +1065,38 @@ test('readJsonFile: missing, corrupt, or non-object content is null — never a 
   assert.equal(readJsonFile(arr), null, 'an array is not an outcome object');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// DISK_GUARD_V1 — обновление, не поставленное из-за места, Easy-Med узнаёт при
+// связи — отдельным полем. update_result ok:false сервер считает в автостоп
+// выпуска (два отказа — выпуск остановлен для всех клиник кольца), а полный
+// диск одной клиники — не дефект выпуска.
+test('DISK_GUARD_V1: отказ обновления из-за места уходит полем disk_guard, а не update_result', async (t) => {
+  const { dir, db } = workspace();
+  fs.writeFileSync(path.join(dir, 'disk-guard.json'), JSON.stringify({
+    update_refused: { at: '2026-10-29T03:05:00.000Z', version: '3.18.1', need_bytes: 3 * 1024 ** 3, free_bytes: 1024 ** 3 },
+    copy_refused: { at: '2026-10-29T03:00:00.000Z', kind: 'daily', need_bytes: 2, free_bytes: 1 },
+  }));
+  let received;
+  const { server, endpoint } = await fakeServer((req, res, body) => {
+    received = JSON.parse(body);
+    jsonHandler(200, { licence: null, subscription: 'active', collect: [] })(req, res);
+  });
+  t.after(() => server.close());
+  await runCheckin(db, dir, { endpoint });
+  assert.deepEqual(received.disk_guard, {
+    update_refused: { version: '3.18.1', need_bytes: 3 * 1024 ** 3, free_bytes: 1024 ** 3, at: '2026-10-29T03:05:00.000Z' },
+  });
+  assert.equal(received.update_result, undefined);
+});
+
+test('DISK_GUARD_V1: нет отметки об отказе — поля disk_guard нет', async (t) => {
+  const { dir, db } = workspace();
+  let received;
+  const { server, endpoint } = await fakeServer((req, res, body) => {
+    received = JSON.parse(body);
+    jsonHandler(200, { licence: null, subscription: 'active', collect: [] })(req, res);
+  });
+  t.after(() => server.close());
+  await runCheckin(db, dir, { endpoint });
+  assert.equal(received.disk_guard, undefined);
+});

@@ -157,6 +157,8 @@ function everyMessageTemplate() {
   for (const phase of ['verifying', 'unpacking', 'snapshot', 'switching', 'interrupted', 'failed']) {
     take(progressView({ ...base, phase }));
   }
+  take(progressView({ ...base, phase: 'failed', reason: 'no_space', need_bytes: 2 * 1024 ** 3, free_bytes: 1024 ** 3 }));   // DISK_GUARD_V1
+  take(progressView({ ...base, phase: 'failed', reason: 'no_space' }));   // DISK_GUARD_V1 — без чисел
   return [...out];
 }
 
