@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openDb } from './db/connection.js';
+import { openDb, checkpointWal, scheduleWalCheckpoint } from './db/connection.js';   // DISK_GUARD_V1 — журнал базы
 import { configureReportPool } from './services/report-pool.js';   // V3120_PERF
 import { migrate, pendingMigrations } from './db/migrate.js';
 import { backupBeforeMigrate } from './db/backup.js';   // SUPERVISED_INSTALL_V1
@@ -198,6 +198,11 @@ if (isMain) {
   }
 
   migrate(db);
+  // DISK_GUARD_V1 — журнал базы не держит пиковый размер (раздел 3, п. 10):
+  // сжимается сразу после миграций (они пишут больше всего) и потом раз в час;
+  // между этими разами его обрезает journal_size_limit (db/connection.js).
+  checkpointWal(db);
+  scheduleWalCheckpoint(db);
   // Третья проверка денег, M3 — разрешения серверных дверей баланса живут
   // только внутри транзакции; после падения их не должно остаться.
   try { db.exec('DELETE FROM ledger_write_token; DELETE FROM merge_money_moves;'); }
