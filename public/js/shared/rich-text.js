@@ -243,7 +243,22 @@ export function hasMarkup(input) {
 
 /** Есть ли в значении хоть какой-то текст (пустые <p><br></p> не считаются). */
 export function richIsEmpty(html) {
-  return htmlToText(html).trim() === '';
+  return textIsBlank(htmlToText(html));   // PRINT_SKIP_EMPTY_V1 — и невидимые знаки — не текст
+}
+
+// PRINT_SKIP_EMPTY_V1 — НЕВИДИМЫЕ ЗНАКИ — НЕ ТЕКСТ. Пробел нулевой ширины
+// (U+200B), несоединитель и соединитель (U+200C, U+200D), word joiner (U+2060),
+// BOM (U+FEFF): Chrome оставляет их в contenteditable после стирания, вставка
+// из Word и мессенджеров приносит их в начале строки. trim() их (кроме BOM) не
+// снимает, и раздел из одного U+200B печатался заголовком над пустотой.
+const INVISIBLE_RE = /[​-‍⁠﻿]/g;
+
+/**
+ * PRINT_SKIP_EMPTY_V1 — пуст ли простой текст: пробелы, неразрывный пробел и
+ * невидимые знаки — пусто. Для полей шапки и строк, где разметки нет.
+ */
+export function textIsBlank(s) {
+  return String(s == null ? '' : s).replace(INVISIBLE_RE, '').trim() === '';
 }
 
 /**
@@ -271,7 +286,9 @@ export function htmlToText(input) {
     .replace(/<(?:div|p|li|tr|h3|h4)\b[^<>]*>/gi, '\u0002').replace(/<\/(?:div|p|li|tr|h3|h4)\s*>/gi, '\u0001')
     .replace(/\u0001\u0002/g, '\n').replace(/[\u0001\u0002]/g, '\n')
     .replace(/<[^<>]*>/g, '')
-    .replace(/&nbsp;/gi, ' ')
+    // PRINT_SKIP_EMPTY_V1 — неразрывный пробел и числовой записью (&#160;, &#xa0;):
+    // так его пишут вставка из Word и старые записи; раньше он оставался «текстом».
+    .replace(/&nbsp;|&#0*160;|&#x0*a0;/gi, ' ')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')

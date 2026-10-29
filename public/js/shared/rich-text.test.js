@@ -1,7 +1,7 @@
 // CASE_DOC_A4_V1 — санитария разметки документа: что остаётся и что уходит.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeStoredHtml, htmlToText, richIsEmpty, hasMarkup, textBreaks, richHasContent } from './rich-text.js';
+import { sanitizeStoredHtml, htmlToText, richIsEmpty, hasMarkup, textBreaks, richHasContent, textIsBlank } from './rich-text.js';
 
 test('оформление врача остаётся: жирный, курсив, списки, абзацы, таблица результатов', () => {
   const html = '<p>Жалобы на <b>боль</b> и <i>слабость</i></p><ul><li>первое</li><li>второе</li></ul>'
@@ -214,4 +214,35 @@ test('ревью T1 (T3): richHasContent — текст или таблица (�
   assert.equal(richHasContent('<div><br></div>'), false);
   assert.equal(richHasContent('текст'), true);
   assert.equal(richHasContent(''), false);
+});
+
+// ─── PRINT_SKIP_EMPTY_V1 — пустое не печатается ──────────────────────────────
+
+test('PRINT_SKIP_EMPTY_V1: неразрывный пробел числовой записью (&#160;, &#xa0;) — пробел, а не текст', () => {
+  assert.equal(htmlToText('a&#160;b'), 'a b');
+  assert.equal(htmlToText('a&#xa0;b&#xA0;c&#0160;d'), 'a b c d');
+  assert.equal(htmlToText('&#160;'), '');
+  assert.equal(htmlToText('<p>&#xa0;</p>'), '');
+  assert.equal(htmlToText('&amp;#160;'), '&#160;', 'набранное «&#160;» остаётся набранным');
+  assert.equal(htmlToText('&#1601;'), '&#1601;', 'другая сущность не задета');
+});
+
+test('PRINT_SKIP_EMPTY_V1: richIsEmpty / richHasContent — &#160;, &#xa0; и невидимый пробел U+200B — пусто', () => {
+  const EMPTY = ['&#160;', '&#xa0;', '<p>&#160;</p>', '<div>&#xa0;<br></div>', '​', '<p>​</p>',
+    '<div>​&nbsp;​</div>', '﻿‌‍⁠', '<p><br></p>&nbsp;', '<ul><li>​</li></ul>'];
+  for (const v of EMPTY) {
+    assert.equal(richIsEmpty(v), true, JSON.stringify(v));
+    assert.equal(richHasContent(v), false, JSON.stringify(v));
+  }
+  // текст рядом с невидимым знаком — текст; пустая таблица — по-прежнему содержание раздела
+  assert.equal(richIsEmpty('​Почки в норме'), false);
+  assert.equal(richHasContent('<p>​</p><table class="a4-tbl"><tr><td></td></tr></table>'), true);
+  assert.equal(richIsEmpty('<p>​</p><table class="a4-tbl"><tr><td></td></tr></table>'), true, 'F8: таблица без текста — не текст');
+});
+
+test('PRINT_SKIP_EMPTY_V1: textIsBlank — простой текст из пробелов, NBSP и невидимых знаков пуст', () => {
+  for (const v of ['', null, undefined, '   ', ' ', '​', ' ​ \t\n', '﻿', '⁠']) {
+    assert.equal(textIsBlank(v), true, JSON.stringify(v));
+  }
+  for (const v of ['0', 0, 'Муж.', '​14.03.1989', '—']) assert.equal(textIsBlank(v), false, JSON.stringify(v));
 });
