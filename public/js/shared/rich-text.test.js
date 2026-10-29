@@ -228,21 +228,32 @@ test('PRINT_SKIP_EMPTY_V1: неразрывный пробел числовой 
 });
 
 test('PRINT_SKIP_EMPTY_V1: richIsEmpty / richHasContent — &#160;, &#xa0; и невидимый пробел U+200B — пусто', () => {
-  const EMPTY = ['&#160;', '&#xa0;', '<p>&#160;</p>', '<div>&#xa0;<br></div>', '​', '<p>​</p>',
-    '<div>​&nbsp;​</div>', '﻿‌‍⁠', '<p><br></p>&nbsp;', '<ul><li>​</li></ul>'];
+  const EMPTY = ['&#160;', '&#xa0;', '<p>&#160;</p>', '<div>&#xa0;<br></div>', '\u200b', '<p>\u200b</p>',
+    '<div>\u200b&nbsp;\u200b</div>', '\ufeff\u200c\u200d\u2060', '<p><br></p>&nbsp;', '<ul><li>\u200b</li></ul>'];
   for (const v of EMPTY) {
     assert.equal(richIsEmpty(v), true, JSON.stringify(v));
     assert.equal(richHasContent(v), false, JSON.stringify(v));
   }
   // текст рядом с невидимым знаком — текст; пустая таблица — по-прежнему содержание раздела
-  assert.equal(richIsEmpty('​Почки в норме'), false);
-  assert.equal(richHasContent('<p>​</p><table class="a4-tbl"><tr><td></td></tr></table>'), true);
-  assert.equal(richIsEmpty('<p>​</p><table class="a4-tbl"><tr><td></td></tr></table>'), true, 'F8: таблица без текста — не текст');
+  assert.equal(richIsEmpty('\u200bПочки в норме'), false);
+  assert.equal(richHasContent('<p>\u200b</p><table class="a4-tbl"><tr><td></td></tr></table>'), true);
+  assert.equal(richIsEmpty('<p>\u200b</p><table class="a4-tbl"><tr><td></td></tr></table>'), true, 'F8: таблица без текста — не текст');
 });
 
 test('PRINT_SKIP_EMPTY_V1: textIsBlank — простой текст из пробелов, NBSP и невидимых знаков пуст', () => {
-  for (const v of ['', null, undefined, '   ', ' ', '​', ' ​ \t\n', '﻿', '⁠']) {
+  for (const v of ['', null, undefined, '   ', '\u00a0', '\u200b', ' \u200b\u00a0\t\n', '\ufeff', '\u2060']) {
     assert.equal(textIsBlank(v), true, JSON.stringify(v));
   }
-  for (const v of ['0', 0, 'Муж.', '​14.03.1989', '—']) assert.equal(textIsBlank(v), false, JSON.stringify(v));
+  for (const v of ['\u00ad', '\u200e', '\u200f', '\u180e', '\u2064']) {
+    assert.equal(textIsBlank(v), true, JSON.stringify(v));
+  }
+  for (const v of ['0', 0, 'Муж.', '\u200b14.03.1989', '—']) assert.equal(textIsBlank(v), false, JSON.stringify(v));
+});
+
+test('PRINT_SKIP_EMPTY_V1: &#8203;, &#x200b; и &ZeroWidthSpace; — пусто', () => {
+  for (const v of ['&#8203;', '&#X200B;', '&#x200b;', '&ZeroWidthSpace;', '<p>&#8203;</p>']) {
+    assert.equal(richIsEmpty(v), true, v);
+  }
+  assert.equal(htmlToText('a&#8203;b'), 'ab');
+  assert.equal(richIsEmpty('&amp;#8203;'), false, 'набранное остаётся набранным');
 });

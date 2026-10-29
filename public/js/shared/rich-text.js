@@ -251,7 +251,7 @@ export function richIsEmpty(html) {
 // BOM (U+FEFF): Chrome оставляет их в contenteditable после стирания, вставка
 // из Word и мессенджеров приносит их в начале строки. trim() их (кроме BOM) не
 // снимает, и раздел из одного U+200B печатался заголовком над пустотой.
-const INVISIBLE_RE = /[​-‍⁠﻿]/g;
+const INVISIBLE_RE = /[\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]/g;
 
 /**
  * PRINT_SKIP_EMPTY_V1 — пуст ли простой текст: пробелы, неразрывный пробел и
@@ -289,6 +289,7 @@ export function htmlToText(input) {
     // PRINT_SKIP_EMPTY_V1 — неразрывный пробел и числовой записью (&#160;, &#xa0;):
     // так его пишут вставка из Word и старые записи; раньше он оставался «текстом».
     .replace(/&nbsp;|&#0*160;|&#x0*a0;/gi, ' ')
+    .replace(/&#0*8203;|&#x0*200b;|&ZeroWidthSpace;/gi, '')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
