@@ -243,8 +243,54 @@ function entryBytes(dir, name) {
   return n;
 }
 
+// DISK_GUARD_V1 (финальное ревью) — копии, которые этот процесс пишет прямо
+// сейчас (полный путь). Имя копии занимается заранее ('wx', файл в 0 байт), и
+// копия, вставшая в очередь (withCopyLock) за копией перед обновлением,
+// начинается ровно тогда, когда программа переключает версию и выходит (так же
+// после восстановления — exit 75): на диске остаётся пустой файл. Пустой файл —
+// не копия: его не показывают, он не закрывает день и не считается самой
+// новой копией своего вида, а чистка его убирает (sweepEmptyCopies). Кроме
+// того, который пишется сейчас: о нём знает только этот процесс — отсюда
+// WRITING. В новом процессе (после запуска) WRITING пуст, и любой пустой файл
+// — остаток.
+const WRITING = new Set();
+
+/** Отметить файл копии как пишущийся; возвращает «готово». Зовут оба места записи копий. */
+export function beginCopyWrite(file) {
+  const p = path.resolve(file);
+  WRITING.add(p);
+  return () => { WRITING.delete(p); };
+}
+const isWriting = (dir, name) => WRITING.has(path.resolve(dir, name));
+
+// Пустые копии создают только эти виды (имя занимается заранее через 'wx').
+const RESERVED_KINDS = new Set([...CREATABLE_KINDS, 'pre']);
+
+/**
+ * DISK_GUARD_V1 (финальное ревью) — убрать пустые (0 байт) копии вместе с их
+ * папкой файлов: остатки копий, которые заняли имя и не успели начаться.
+ * Пишущуюся сейчас этим процессом (WRITING) не трогает. Никогда не бросает.
+ */
+function sweepEmptyCopies(dir) {
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return; }
+  for (const f of names) {
+    if (!NAME_RE.test(f) || !RESERVED_KINDS.has(kindOf(f)) || isWriting(dir, f)) continue;
+    let st;
+    try { st = fs.statSync(path.join(dir, f)); } catch { continue; }
+    if (!st.isFile() || st.size !== 0) continue;
+    console.warn(`[backup] пустая копия ${f} — остаток копии, которая не успела начаться; убрана`);
+    discardPartial(path.join(dir, f));
+  }
+}
+
+// Копия, которой ещё нет: пустой файл или тот, что этот процесс сейчас пишет.
+const notACopyYet = (dir, name, st) => st.size === 0 || isWriting(dir, name);
+
 // DISK_GUARD_V1 — все копии известных видов с размером и временем. Обрывок с
 // меткой .broken — не копия (как и в listBackups): его убирает sweepBroken.
+// Пустая или пишущаяся сейчас — тоже не копия (notACopyYet): иначе пустой файл
+// стал бы «самой новой ежедневной», которую предел по объёму бережёт.
 function backupEntries(dir) {
   let all;
   try { all = new Set(fs.readdirSync(dir)); } catch { return []; }
@@ -255,7 +301,7 @@ function backupEntries(dir) {
     if (!kind) continue;
     let st;
     try { st = fs.statSync(path.join(dir, f)); } catch { continue; }
-    if (!st.isFile()) continue;
+    if (!st.isFile() || notACopyYet(dir, f, st)) continue;
     out.push({ name: f, kind, mtimeMs: entryTimeMs(f, st), bytes: entryBytes(dir, f) });
   }
   return out;
@@ -489,7 +535,9 @@ export function listBackups(dataDir) {
       // delete) is normal life, not an error.
       try {
         const st = fs.statSync(path.join(dir, f));
-        if (!st.isFile()) return null;
+        // DISK_GUARD_V1 (финальное ревью) — пустая или пишущаяся сейчас — ещё
+        // не копия: не в списке, не копия дня (runDailyBackup), не восстановить.
+        if (!st.isFile() || notACopyYet(dir, f, st)) return null;
         const kind = kindOf(f);
         return { name: f, kind, size: entryBytes(dir, f), mtimeMs: entryTimeMs(f, st), restorable: !SET_ASIDE_KINDS.has(kind) };
       } catch { return null; }
@@ -521,6 +569,7 @@ async function createBackupNow(db, dataDir, kind, now, { protect = [], diskSpace
   const dir = path.join(dataDir, 'backups');
   fs.mkdirSync(dir, { recursive: true });
   sweepBroken(dir);   // DISK_GUARD_V1
+  sweepEmptyCopies(dir);   // DISK_GUARD_V1 (финальное ревью)
 
   // DISK_GUARD_V1 — место проверяется ДО того, как занято имя: копия, на
   // которую места нет, не начинается вовсе (раздел 3, п. 2). Не хватает и
@@ -555,11 +604,16 @@ async function createBackupNow(db, dataDir, kind, now, { protect = [], diskSpace
   // (backup.cpp: unlink только для файла, которого до копии не было). Без этой
   // уборки обрывок занимал остаток диска, закрывал день как «сделанный»
   // (runDailyBackup ищет копию дня по имени) и стоял в списке как годная копия.
+  // DISK_GUARD_V1 (финальное ревью) — пока база пишется, файл не убирает ничья
+  // чистка (WRITING): в начале он пустой.
+  const written = beginCopyWrite(out);
   try {
     await db.backup(out);
   } catch (e) {
     discardPartial(out);
     throw e;
+  } finally {
+    written();
   }
   // PATIENT_FILE_ATTACH_V1 — файлы снимаются ПОСЛЕ базы. Порядок важен: строка
   // документа без файла — «файл не открывается», файл без строки — просто
@@ -599,6 +653,7 @@ export function pruneBackupsByKind(dir, {
   // DISK_GUARD_V1 (ревью C2) — и цели восстановления: идущего и записанного.
   const keep = new Set([...protect, ...restoreTargets(dir)]);
   sweepBroken(dir);   // DISK_GUARD_V1
+  sweepEmptyCopies(dir);   // DISK_GUARD_V1 (финальное ревью)
   let files;
   try { files = fs.readdirSync(dir).filter((f) => NAME_RE.test(f)); } catch { return; }
   const byKind = new Map();
@@ -616,7 +671,7 @@ export function pruneBackupsByKind(dir, {
   for (const [kind, entries] of byKind) {
     entries.sort((a, b) => b.t - a.t);
     for (const { f } of entries.slice(KEEP_BY_KIND[kind])) {
-      if (keep.has(f)) continue;
+      if (keep.has(f) || isWriting(dir, f)) continue;   // DISK_GUARD_V1 (финальное ревью) — пишется сейчас
       // removeEntry уносит и снимок файлов (PATIENT_FILE_ATTACH_V1), и -wal/-shm.
       removeEntry(dir, f);
     }

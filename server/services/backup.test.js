@@ -994,3 +994,65 @@ test('DISK_GUARD_V1 (ревью C3): названные руками rollback-*/
   assert.deepEqual(fs.readdirSync(bd).sort(), [...hand, 'rollback-20260803-090000.db', 'rollback-20260804-090000.db'].sort());
   assert.deepEqual(listBackups(dir).map((b) => b.name).sort(), ['rollback-20260803-090000.db', 'rollback-20260804-090000.db']);
 });
+
+// --- DISK_GUARD_V1 (финальное ревью): пустые копии -------------------------------
+
+// Копия занимает имя заранее ('wx', 0 байт). Встала в очередь за копией перед
+// обновлением — началась ровно тогда, когда программа переключала версию и
+// выходила (или после восстановления — exit 75): на диске остался пустой файл.
+
+test('DISK_GUARD_V1: пустая ежедневная копия — не в списке, не копия дня и убирается вместе с папкой файлов', async () => {
+  const { dir, db } = workspace();
+  const bd = backupsDir(dir);
+  fs.mkdirSync(path.join(bd, 'daily-20260823-080500.files'), { recursive: true });
+  fs.writeFileSync(path.join(bd, 'daily-20260823-080500.db'), '');
+  assert.deepEqual(listBackups(dir), [], 'пустой файл не восстановить — и показывать его нельзя');
+  const made = await runDailyBackup(db, dir, new Date('2026-08-23T09:05:00'));
+  assert.ok(made, 'пустой файл не закрывает день');
+  const left = fs.readdirSync(bd);
+  assert.ok(!left.includes('daily-20260823-080500.db'), 'пустой файл убран');
+  assert.ok(!left.includes('daily-20260823-080500.files'), 'и его папка файлов');
+  assert.deepEqual(listBackups(dir).map((b) => b.name), [made.name]);
+});
+
+test('DISK_GUARD_V1: пустая копия перед обновлением убирается чисткой — она не точка отката', () => {
+  const dir = tmpDir('em-sysbk-empty-pre-');
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd);
+  putSized(bd, 'pre-2.3.0.db', 1, Date.now() - 1e6);
+  fs.writeFileSync(path.join(bd, 'pre-2.4.0.db'), '');
+  pruneBackupsByKind(bd);
+  assert.deepEqual(fs.readdirSync(bd), ['pre-2.3.0.db']);
+});
+
+test('DISK_GUARD_V1: копия, которую процесс пишет сейчас (имя занято, 0 байт), не убирается чужой чисткой и не считается самой новой', async () => {
+  const { dir, db } = workspace();
+  const bd = backupsDir(dir);
+  fs.mkdirSync(bd, { recursive: true });
+  const t0 = Date.now() - 1e6;
+  putSized(bd, 'daily-20260821-030000.db', 10, t0);
+  putSized(bd, 'daily-20260822-030000.db', 10, t0 + 1000);
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let reserved = null;
+  const held = { backup: async (out) => { reserved = out; await gate; return db.backup(out); } };
+  const copy = createBackup(held, dir, 'daily', new Date('2026-08-23T08:05:00'));
+  while (!reserved) await sleep(5);
+  try {
+    assert.equal(fs.statSync(reserved).size, 0, 'имя занято, база ещё не пишется');
+    assert.ok(!listBackups(dir).some((b) => b.name === path.basename(reserved)), 'недописанная копия — ещё не копия');
+    // Чужая чистка в ту же минуту (страховочная синхронизации, запуск): диск
+    // почти полон — уходят все автоматические, кроме самой новой каждого вида.
+    pruneBackupsByKind(bd, { diskSpaceImpl: () => ({ free: 2 * GB, total: 100 * GB }) });
+    assert.ok(fs.existsSync(reserved), 'файл, который сейчас пишется, не стёрт');
+    assert.ok(fs.existsSync(path.join(bd, 'daily-20260822-030000.db')),
+      'самая новая НАСТОЯЩАЯ ежедневная осталась: пустая пишущаяся её не заменяет');
+    assert.ok(!fs.existsSync(path.join(bd, 'daily-20260821-030000.db')));
+  } finally {
+    release();
+  }
+  const made = await copy;
+  assert.equal(made.name, path.basename(reserved));
+  assert.ok(made.size > 0);
+  assert.equal(userCount(path.join(bd, made.name)), 1, 'дописанная копия — настоящая база');
+});

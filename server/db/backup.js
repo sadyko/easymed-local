@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { discardPartial, ensureCopySpace, withCopyLock } from '../services/backup.js';   // DISK_GUARD_V1
+import { discardPartial, ensureCopySpace, withCopyLock, beginCopyWrite } from '../services/backup.js';   // DISK_GUARD_V1
 import { noteGuard } from '../services/disk-guard.js';   // DISK_GUARD_V1
 
 // SUPERVISED_INSTALL_V1 — the rollback for an update.
@@ -73,11 +73,17 @@ async function takePreCopy(db, dbPath, version, { diskSpaceImpl } = {}) {
   // DISK_GUARD_V1 — оборвавшаяся копия удаляется (services/backup.js
   // discardPartial): обрывок pre-<версия>.db выдавал бы себя за точку отката —
   // recover.cmd ищет копию перед обновлением по имени.
+  //
+  // DISK_GUARD_V1 (финальное ревью) — пока база пишется, пустой поначалу файл
+  // не убирает ничья чистка (services/backup.js WRITING).
+  const written = beginCopyWrite(out);
   try {
     await db.backup(out);
   } catch (e) {
     discardPartial(out);
     throw e;
+  } finally {
+    written();
   }
   noteGuard(path.dirname(dbPath), { copy_refused: null });   // DISK_GUARD_V1 — копия есть, отказ снят
   return out;
