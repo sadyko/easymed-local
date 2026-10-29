@@ -72,6 +72,27 @@ export function updaterSnapshotFor(dataDir, version) {
   try { return fs.statSync(file).size > 0 ? file : null; } catch { return null; }
 }
 
+/**
+ * DISK_GUARD_V1 (ревью C4) — решение запуска (server/index.js): снимать ли
+ * свою копию базы перед миграциями. Возвращает копию программы обновления,
+ * которой довольно, или null — тогда запуск снимает свою, как раньше.
+ *
+ * Довольно её, только если база с тех пор не менялась. Восстановление из
+ * копии или «удалить все данные», применённые ЭТИМ запуском до открытия базы
+ * (services/backup.js processPendingAction — actionApplied), заменили базу:
+ * копия программы обновления — копия ДРУГОЙ базы, и точкой отката для
+ * миграций этого запуска она быть не может.
+ *
+ * @param {string} dataDir
+ * @param {string} version — версия, которая сейчас запускается
+ * @param {{actionApplied?: string|null}} [opts]
+ * @returns {string|null}
+ */
+export function bootCopyCovered(dataDir, version, { actionApplied = null } = {}) {
+  if (actionApplied) return null;
+  return updaterSnapshotFor(dataDir, version);
+}
+
 /** Record «switched, not yet proven». Throws on a write failure — the caller decides. */
 export function writePending(dataDir, record) {
   writeAtomic(path.join(dataDir, PENDING_NAME), JSON.stringify(record, null, 2) + '\n');

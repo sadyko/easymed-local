@@ -20,7 +20,7 @@ import { makeProgressReporter, reconcileProgressAtBoot } from './update-progress
 // V3120_FIX — «ok:true» only after the NEW version answers /api/health; see
 // boot-confirm.js. writeOutcome moved there unchanged (both files write it).
 import { writeOutcome, writePending, armBootConfirmation, syncRecoverCmd, PENDING_NAME } from './boot-confirm.js';
-import { checkUpdateSpace, currentDiskSpace, noteGuard, gbText } from '../disk-guard.js';   // DISK_GUARD_V1
+import { checkUpdateSpace, currentDiskSpace, noteGuard, readGuard, gbText } from '../disk-guard.js';   // DISK_GUARD_V1
 
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 4) — the
 // clinic's own machine: check the stored offer, confirm it is still
@@ -378,6 +378,11 @@ async function performTick(db, dataDir, {
   diskSpaceImpl = currentDiskSpace,
 } = {}) {
   try {
+    // DISK_GUARD_V1 (ревью C4) — устаревшая отметка «не поставилось из-за
+    // места» снимается раньше всех ранних выходов ниже: нет предложения, нет
+    // согласия, версия уже запущена.
+    clearStaleUpdateRefusal(db, dataDir, runningVersion);
+
     const offer = readJsonState(db, 'update_offer');
     if (!offer) return; // nothing offered — nothing to do, ever
 
@@ -511,6 +516,50 @@ const CURRENT_LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir';
 // клиники нет места», а не «выпуск сломан» (performApply): отказ проверки
 // места (disk-guard.js noSpaceError), полный диск у файловой системы и у SQLite.
 const SPACE_ERROR_CODES = new Set(['no_space', 'ENOSPC', 'SQLITE_FULL']);
+
+/**
+ * DISK_GUARD_V1 (раздел 3, п. 9) — неудачная установка не оставляет
+ * распакованную версию (~55 МБ): следующая попытка распакует её заново из
+ * проверенного пакета. Только если `current` на неё НЕ указывает: «уже
+ * текущая» — не наша уборка. Нет ссылки вовсе — тем более удалить: тогда
+ * EasyMed.exe соберёт `current` из самой новой версии на диске, и это должна
+ * быть прежняя, а не сломанная новая.
+ * @returns {boolean} удалена ли папка
+ */
+export function discardFailedStage(root, versionDir, { realpathSync = fs.realpathSync, rmSync = fs.rmSync } = {}) {
+  let currentReal = null;
+  try { currentReal = realpathSync(path.join(root, 'current')); } catch { /* ссылки нет */ }
+  if (currentReal && path.resolve(currentReal) === path.resolve(versionDir)) return false;
+  try { rmSync(versionDir, { recursive: true, force: true }); return true; } catch { return false; /* занято — уберёт следующая попытка */ }
+}
+
+/**
+ * DISK_GUARD_V1 (ревью C4) — отметка «обновление X не поставилось из-за
+ * места» (disk-guard.json update_refused) уходит в Easy-Med при каждой связи
+ * (checkin.js disk_guard), поэтому живёт, только пока она правда: клиника всё
+ * ещё ждёт ЭТУ версию. Снимается, когда X уже запущена или старше запущенной
+ * (поставили иначе), когда предлагают уже не X (предложение заменили или
+ * сняли) и когда на X больше нет согласия администратора. Сама она снимается
+ * и проверкой места, которая прошла (runPipeline). Никогда не бросает.
+ * @returns {boolean} снята ли отметка
+ */
+export function clearStaleUpdateRefusal(db, dataDir, runningVersion) {
+  try {
+    const r = readGuard(dataDir).update_refused;
+    if (!r) return false;
+    const v = typeof r.version === 'string' ? r.version : '';
+    const offer = readJsonState(db, 'update_offer');
+    const stale = !v
+      || (runningVersion && compareVersions(v, runningVersion) <= 0)
+      || !offer || offer.version !== v
+      || !consentAppliesTo(offer, readJsonState(db, 'update_consent'));
+    if (stale) noteGuard(dataDir, { update_refused: null });
+    return !!stale;
+  } catch (e) {
+    console.warn('[updater] could not settle the disk-space refusal note (continuing):', e && e.message);
+    return false;
+  }
+}
 
 // writeOutcome() — the outcome file writer — lives in boot-confirm.js now
 // (V3120_FIX), because the NEW version's boot confirmation writes the
@@ -930,17 +979,9 @@ async function runPipeline(db, dataDir, offer, {
       // говорит эта запись — с числами, как проверка до скачивания.
       if (applied && applied.no_space) progress.fail('no_space', applied.no_space);
       else progress.clear();
-      // DISK_GUARD_V1 — неудачная установка не оставляет распакованную версию
-      // (~55 МБ): следующая попытка распакует её заново из проверенного пакета
-      // (раздел 3, п. 9). Только если `current` на неё НЕ указывает: «уже
-      // текущая» — не наша уборка. Нет ссылки вовсе — тем более удалить: тогда
-      // EasyMed.exe соберёт `current` из самой новой версии на диске, и это
-      // должна быть прежняя, а не сломанная новая.
-      let currentReal = null;
-      try { currentReal = realpathSync(path.join(layout.root, 'current')); } catch { /* ссылки нет */ }
-      if (!currentReal || path.resolve(currentReal) !== path.resolve(versionDir)) {
-        try { rmSync(versionDir, { recursive: true, force: true }); } catch { /* занято — уберёт следующая попытка */ }
-      }
+      // DISK_GUARD_V1 — распакованная версия не остаётся (кроме той, на
+      // которую указывает `current`) — discardFailedStage.
+      discardFailedStage(layout.root, versionDir, { realpathSync, rmSync });
     }
   } finally {
     // Unconditional backstop — reached whether the pipeline above succeeded,
@@ -1025,6 +1066,10 @@ export function scheduleUpdater(db, dataDir, opts = {}) {
     // Bookkeeping may never be the reason a clinic fails to start.
     console.warn('[updater] could not reconcile the update progress record (continuing):', e && e.message);
   }
+
+  // DISK_GUARD_V1 (ревью C4) — и при запуске: обновление, отказанное из-за
+  // места, могло поставиться иначе (руками, новым пакетом). Никогда не бросает.
+  clearStaleUpdateRefusal(db, dataDir, rest.runningVersion || readAppVersion());
 
   // V3120_FIX — settle the previous update: confirm THIS version (the
   // /api/health check runs a few seconds from now, after listen()), or record

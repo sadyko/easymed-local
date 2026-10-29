@@ -2,14 +2,16 @@
 //
 // Владелец: «can we add autodeletion of the backups and updates, in 1 month
 // or something?». Версии не удалялись никогда: 39 папок, 1,8 ГБ за месяц.
-// Правило — запущенная плюс одна предыдущая (DISK_GUARD_V1; было две), а не «старше месяца»: календарь
+// Правило — запущенная плюс две предыдущие, а не «старше месяца»: календарь
 // лишил бы редко обновляющуюся клинику единственной точки отката, а именно
-// откат на предыдущую версию спас клинику 07.09.2026.
+// откат на предыдущую версию спас клинику 07.09.2026. DISK_GUARD_V1 (ревью
+// C4): и версия, с которой пришло обновление, не удаляется никогда — на неё
+// откатывает EasyMed.exe.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { planPrune, pruneVersions, pruneVersionsAtBoot, compareVersions, KEEP_PREVIOUS } from './prune-versions.js';
+import { planPrune, pruneVersions, pruneVersionsAtBoot, compareVersions, rollbackGuards, KEEP_PREVIOUS } from './prune-versions.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
 
 const quiet = { log() {}, warn() {} };
@@ -20,15 +22,17 @@ test('сравнение версий — числовое: 1.10.0 новее 1.
     assert.equal(compareVersions('1.1.2', '1.1.2'), 0);
 });
 
-test('DISK_GUARD_V1: хранится текущая и ОДНА предыдущая версия', () => {
-    assert.equal(KEEP_PREVIOUS, 1, 'раздел 3, п. 9 выпуска 3.18.1');
+test('DISK_GUARD_V1 (ревью C4): хранятся текущая и ДВЕ предыдущие — одна могла бы оставить откат без версии', () => {
+    // Выигрыш одной папки — ~55 МБ; риск — клиника без программы, когда
+    // EasyMed.exe не найдёт, на что откатить упавшую версию.
+    assert.equal(KEEP_PREVIOUS, 2);
 });
 
-test('план: запущенная + одна предыдущая остаются, всё старше — удаляется', () => {
+test('план: запущенная + две предыдущие остаются, всё старше — удаляется', () => {
     const names = ['0.9.4', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.1.1', '1.1.2'];
     const plan = planPrune(names, '1.1.2');
-    assert.deepEqual(plan.keep.sort(), ['1.1.1', '1.1.2'].sort());
-    assert.deepEqual(plan.remove.sort(), ['0.9.4', '1.0.0', '1.0.1', '1.0.2', '1.1.0'].sort());
+    assert.deepEqual(plan.keep.sort(), ['1.1.0', '1.1.1', '1.1.2'].sort());
+    assert.deepEqual(plan.remove.sort(), ['0.9.4', '1.0.0', '1.0.1', '1.0.2'].sort());
 });
 
 test('версия НОВЕЕ запущенной не трогается — это пакет на следующий перезапуск', () => {
@@ -58,10 +62,10 @@ test('на диске: удаляются именно лишние папки, 
         fs.writeFileSync(path.join(dir, v, 'package.json'), '{}');
     }
     const r = pruneVersions(dir, '1.1.2', { log: quiet });
-    assert.deepEqual(r.removed.sort(), ['0.9.4', '1.0.2', '1.1.0'].sort());
+    assert.deepEqual(r.removed.sort(), ['0.9.4', '1.0.2'].sort());
     assert.deepEqual(r.failed, []);
     const left = fs.readdirSync(dir).sort();
-    assert.deepEqual(left, ['1.1.1', '1.1.2', '_broken-1.1.0'].sort());
+    assert.deepEqual(left, ['1.1.0', '1.1.1', '1.1.2', '_broken-1.1.0'].sort());
 });
 
 test('сбой удаления одной папки не останавливает остальные и не бросает', () => {
@@ -71,7 +75,7 @@ test('сбой удаления одной папки не останавлив�
     const rmImpl = (p, o) => { if (p.endsWith('1.0.0')) throw new Error('EBUSY'); fs.rmSync(p, o); };
     const r = pruneVersions(dir, '1.1.3', { rmImpl, log: quiet });
     assert.deepEqual(r.failed, ['1.0.0']);
-    assert.deepEqual(r.removed, ['1.1.1', '1.0.1']);
+    assert.deepEqual(r.removed, ['1.0.1']);
 });
 
 test('из исходников (нет versions/) — тихо ничего не делает', () => {
@@ -91,6 +95,80 @@ test('в версионной раскладке уборка находит ver
     fs.symlinkSync(path.join(versions, '1.1.2'), path.join(root, 'current'), 'junction');
     const r = pruneVersionsAtBoot(path.join(versions, '1.1.2'), { log: quiet });
     assert.ok(r, 'версионная раскладка не распознана');
-    assert.deepEqual(r.removed, ['1.0.1', '1.0.0']);
-    assert.deepEqual(fs.readdirSync(versions).sort(), ['1.1.1', '1.1.2']);
+    assert.deepEqual(r.removed, ['1.0.0']);
+    assert.deepEqual(fs.readdirSync(versions).sort(), ['1.0.1', '1.1.1', '1.1.2']);
+});
+
+// --- DISK_GUARD_V1 (ревью C4): точка отката EasyMed.exe не удаляется -----------
+
+// Версионная установка с data/ рядом, как у клиники: <root>/versions/<v>,
+// <root>/current -> versions/<running>, <root>/data.
+function clinic(versions, running) {
+    const root = tmpDir('em-prune-guard-');
+    for (const v of versions) fs.mkdirSync(path.join(root, 'versions', v), { recursive: true });
+    fs.symlinkSync(path.join(root, 'versions', running), path.join(root, 'current'), 'junction');
+    const dataDir = path.join(root, 'data');
+    fs.mkdirSync(dataDir);
+    const put = (name, obj) => fs.writeFileSync(path.join(dataDir, name), JSON.stringify(obj));
+    return { root, dataDir, put, appRoot: path.join(root, 'versions', running), left: () => fs.readdirSync(path.join(root, 'versions')).sort() };
+}
+
+test('DISK_GUARD_V1: 3.18.1 откатили, поставили 3.18.2 — версия, с которой пришли (pending.from 3.18.0), остаётся; откаченная места не занимает', () => {
+    // Случай ревью: 3.18.1 упала и откачена (на диске осталась), 3.18.2 только
+    // что запустилась и ещё не подтверждена. Если 3.18.2 упадёт, EasyMed.exe
+    // (install/rollback.mjs runAuto) вернёт pending.from — 3.18.0. Удалить её
+    // значит оставить клинику без программы.
+    const c = clinic(['3.17.1', '3.18.0', '3.18.1', '3.18.2'], '3.18.2');
+    c.put('update-pending.json', { version: '3.18.2', from: '3.18.0', backup: 'pre-3.18.2.db' });
+    c.put('update-result.json.sent', { version: '3.18.1', from: '3.18.0', ok: false, db: 'restored' });
+    const r = pruneVersionsAtBoot(c.appRoot, { dataDir: c.dataDir, log: quiet });
+    assert.ok(r);
+    assert.ok(!r.removed.includes('3.18.0'), 'точка отката EasyMed.exe');
+    assert.deepEqual(r.removed, ['3.18.1'], 'откаченная версия — не точка отката и слот не занимает');
+    assert.deepEqual(c.left(), ['3.17.1', '3.18.0', '3.18.2']);
+});
+
+test('DISK_GUARD_V1: версия, с которой пришли, остаётся, даже если в слоты не попадает', () => {
+    const plan = planPrune(['3.17.1', '3.18.0', '3.18.1', '3.18.2'], '3.18.2', { keep: 1, protect: ['3.18.0'] });
+    assert.ok(plan.keep.includes('3.18.0'));
+    assert.ok(plan.keep.includes('3.18.1'), 'слот по счёту');
+    assert.deepEqual(plan.remove, ['3.17.1']);
+});
+
+test('DISK_GUARD_V1: from последней удачной установки тоже под защитой (на неё возвращает recover.cmd)', () => {
+    const c = clinic(['3.16.0', '3.17.0', '3.17.1', '3.18.0'], '3.18.0');
+    c.put('update-result.json', { version: '3.18.0', from: '3.16.0', ok: true, db: 'current' });
+    const r = pruneVersionsAtBoot(c.appRoot, { dataDir: c.dataDir, keep: 1, log: quiet });
+    assert.deepEqual(r.removed, ['3.17.0']);
+    assert.deepEqual(c.left(), ['3.16.0', '3.17.1', '3.18.0']);
+});
+
+test('DISK_GUARD_V1: rollbackGuards — что защищено и что откачено, по файлам обновления', () => {
+    const c = clinic(['3.18.0'], '3.18.0');
+    assert.deepEqual(rollbackGuards(c.dataDir, '3.18.2'), { protect: [], skip: [] }, 'ничего нет — обычная чистка');
+    c.put('update-pending.json', { version: '3.18.2', from: '3.18.0' });
+    c.put('update-result.json', { version: '3.18.0', from: '3.17.1', ok: true });
+    c.put('update-result.json.sent', { version: '3.17.5', from: '3.17.1', ok: false });
+    c.put('update-rolled-back.json', { version: '3.17.4', to: '3.17.1' });
+    const g = rollbackGuards(c.dataDir, '3.18.2');
+    assert.deepEqual(g.protect.sort(), ['3.17.1', '3.18.0']);
+    assert.deepEqual(g.skip.sort(), ['3.17.4', '3.17.5']);
+    // pending на версию, которая НЕ запущена, — так и не подтвердилась.
+    assert.deepEqual(rollbackGuards(c.dataDir, '3.18.0').skip.sort(), ['3.17.4', '3.17.5', '3.18.2']);
+    // Мусор вместо версий — не в счёт.
+    c.put('update-pending.json', { version: '../x', from: 'C:\\evil' });
+    assert.ok(!rollbackGuards(c.dataDir, '3.18.2').protect.includes('C:\\evil'));
+});
+
+test('DISK_GUARD_V1: защищённая версия остаётся, даже если она же числится откаченной', () => {
+    const plan = planPrune(['1.0.0', '1.1.0', '1.2.0', '1.3.0'], '1.3.0', { protect: ['1.0.0'], skip: ['1.0.0', '1.2.0'] });
+    assert.ok(plan.keep.includes('1.0.0'));
+    assert.deepEqual(plan.remove, ['1.2.0']);
+});
+
+test('DISK_GUARD_V1: без файлов обновления — обычная чистка старых версий', () => {
+    const c = clinic(['1.0.0', '1.0.1', '1.1.1', '1.1.2'], '1.1.2');
+    const r = pruneVersionsAtBoot(c.appRoot, { dataDir: c.dataDir, log: quiet });
+    assert.deepEqual(r.removed, ['1.0.0']);
+    assert.deepEqual(c.left(), ['1.0.1', '1.1.1', '1.1.2']);
 });
