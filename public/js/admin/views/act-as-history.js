@@ -94,6 +94,8 @@ const RPC_LABELS = {
     telephony_call_log: 'Журнал звонков',
     telephony_extensions: 'Внутренние номера станции',
     telephony_my_extension: 'Свой внутренний номер',
+    telephony_webrtc_me: 'Вход телефона Easy-Med в АТС',   // SOFTPHONE_V1
+    telephony_caller: 'Кто звонит',                        // SOFTPHONE_V1
     telephony_dial: 'Звонок из программы',
     telephony_ring_info: 'Адрес событий станции',
     telephony_ring_token_rotate: 'Новый адрес событий станции',

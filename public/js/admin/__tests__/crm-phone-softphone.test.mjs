@@ -34,7 +34,7 @@ const PUB = path.resolve(HERE, '..', '..', '..');   // …/public
 // Тестовые люди и номера — выдуманные.
 const ADMIN = { id: 7, full_name: 'Админ', role: 'admin', is_admin: true };
 const ME = { id: 7, full_name: 'Админ', extension: '108', softphone_extension: '108', line: 'onlinepbx',
-  seen_extensions: ['107', '108'], may_dial: true, may_log: true, may_hear: true };
+  seen_extensions: ['107', '108'], may_dial: true, may_log: true, may_hear: true, softphone_available: true };
 
 // ── Подставной телефон: состояние, подписчики, журнал вызовов ────────────────
 const IDLE = Object.freeze({ state: 'off', reason: '', message: '', extension: '', call: null, lastEnd: null });
@@ -166,7 +166,8 @@ test('пилюля состояния в шапке: телефон включё
   const cases = [
     [{ state: 'connecting', reason: '' }, 'Подключение…', 'wait'],
     [{ state: 'connecting', reason: 'network' }, 'Подключение…', 'wait'],
-    [{ state: 'error', reason: 'mic_denied' }, 'Телефон не включился', 'end'],
+    // Финальное ревью — в пилюле коротко «Не включился»: длинное слово сжимало «вн. 108».
+    [{ state: 'error', reason: 'mic_denied' }, 'Не включился', 'end'],
     [{ state: 'other_tab', reason: 'other_tab' }, 'В другой вкладке', 'off'],
     [{ state: 'ready', reason: '' }, 'Готов', 'ok'],
   ];
@@ -177,6 +178,9 @@ test('пилюля состояния в шапке: телефон включё
   }
   fake.push({ ...IDLE });
   assert.equal(textOf(pill()), 'Готов', 'телефон выключен — пилюля по-старому');
+  // В строке переключателя слово состояния — по-прежнему полное.
+  fake.push({ state: 'error', reason: 'mic_denied' });
+  assert.equal(textOf(one(d, 'data-cph-sp-state')), 'Телефон не включился');
 });
 
 test('телефон включён в другой вкладке — так и сказано, с объяснением, как пользоваться им здесь', async () => {
@@ -1212,5 +1216,172 @@ test('гарнитура на узбекском и английском экр�
     window.dispatchEvent = keep.dispatch;
     globalThis.CustomEvent = keep.CE;
     forgetDevices();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Финальное ревью: усиление перед выпуском
+// ---------------------------------------------------------------------------
+// I1 — телефон мог не включиться так, что никто не заметит: беда видна на
+// верхней кнопке (и при закрытой панели), о сбое включения после загрузки —
+// одно уведомление, временный сбой повторяется сам с паузами.
+const topDot = (btn) => btn.children.find((c) => hasClass(c, 'cph-dot'));
+
+test('верхняя кнопка «Телефон» показывает беду телефона и при закрытой панели: ошибка — красная точка, другая вкладка — серая, долгое подключение — жёлтая', async () => {
+  const fake = fakePhone({ wanted: true });
+  const { btn } = await shell({ fake, ctx: { spSlowMs: 30 } });
+  assert.equal(drawer(), undefined, 'панель открывать не нужно');
+  fake.push({ state: 'error', reason: 'mic_denied' });
+  assert.ok(hasClass(topDot(btn), 'end'), 'ошибка не видна на кнопке: ' + topDot(btn).className);
+  assert.match(btn.title, /Телефон не включился/);
+  fake.push({ state: 'other_tab', reason: 'other_tab' });
+  assert.ok(hasClass(topDot(btn), 'off'));
+  fake.push({ state: 'connecting', reason: '' });
+  assert.ok(!hasClass(topDot(btn), 'wait'), 'подключение только началось — тревожить рано');
+  await tick(70);
+  assert.ok(hasClass(topDot(btn), 'wait'), 'подключение затянулось, а кнопка молчит');
+  fake.push({ state: 'ready' });
+  for (const c of ['wait', 'end', 'off']) assert.ok(!hasClass(topDot(btn), c), c);
+  assert.doesNotMatch(btn.title, /не включился/);
+});
+
+test('телефон не включился сам после загрузки — одно уведомление на страницу; включили щелчком — уведомления нет', async () => {
+  const fake = fakePhone({ wanted: true });
+  await shell({ fake, ctx: { spRetryMs: [100000] } });
+  assert.equal(fake.count('enable'), 1);
+  fake.push({ state: 'connecting' });
+  fake.push({ state: 'error', reason: 'mic_denied' });
+  const mine = () => TOASTS.filter((t) => t.startsWith('Телефон Easy-Med не включился'));
+  assert.deepEqual(mine(), ['Телефон Easy-Med не включился: ' + reasonText('mic_denied')]);
+  fake.push({ state: 'connecting' });
+  fake.push({ state: 'error', reason: 'insecure' });
+  assert.equal(mine().length, 1, 'уведомление второй раз');
+  // Щелчок по переключателю — человек и так видит панель.
+  const f2 = fakePhone();
+  const { btn } = await shell({ fake: f2 });
+  const d = await open(btn);
+  toggle(d).click();
+  f2.push({ state: 'connecting' });
+  f2.push({ state: 'error', reason: 'mic_denied' });
+  assert.equal(mine().length, 0, 'уведомление после щелчка по переключателю');
+});
+
+test('временный сбой включения — повтор сам с паузами, не больше 4 раз за страницу; щелчок по переключателю обнуляет счёт', async () => {
+  const fake = fakePhone({ wanted: true });
+  const { btn } = await shell({ fake, ctx: { spRetryMs: [20, 20, 20, 20] } });
+  const fail = () => { fake.push({ state: 'connecting', reason: '', code: '' }); fake.push({ state: 'error', reason: 'server', code: 'station_unavailable' }); };
+  fail();
+  for (let i = 0; i < 4; i++) {
+    await tick(50);
+    assert.equal(fake.count('enable'), 2 + i, 'повтор ' + (i + 1));
+    fail();
+  }
+  await tick(80);
+  assert.equal(fake.count('enable'), 5, 'больше 4 повторов за страницу');
+  const d = await open(btn);
+  toggle(d).click();   // выключить
+  toggle(d).click();   // включить снова — счёт с нуля
+  assert.equal(fake.count('enable'), 6);
+  fail();
+  await tick(50);
+  assert.equal(fake.count('enable'), 7, 'после щелчка повтора нет');
+});
+
+test('паузы повтора по умолчанию — 30 с, 60 с, 120 с, 300 с', async () => {
+  const delays = [];
+  const keep = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...rest) => { if (ms >= 30000) delays.push(ms); return keep(fn, ms >= 30000 ? 1 : ms, ...rest); };
+  try {
+    const fake = fakePhone({ wanted: true });
+    await shell({ fake });
+    for (let i = 0; i < 5; i++) {
+      fake.push({ state: 'connecting', code: '' });
+      fake.push({ state: 'error', reason: 'server', code: 'unreachable' });
+      await tick(20);
+    }
+  } finally {
+    globalThis.setTimeout = keep;
+  }
+  assert.deepEqual(delays.filter((ms) => [30000, 60000, 120000, 300000].includes(ms)), [30000, 60000, 120000, 300000]);
+});
+
+test('постоянный отказ (не назначен, микрофон, адрес без защиты, АТС не приняла пароль) — без повтора; временный (сеть, загрузка) — с повтором', async () => {
+  const cases = [
+    [{ reason: 'server', code: 'forbidden' }, false],
+    [{ reason: 'mic_denied', code: '' }, false],
+    [{ reason: 'insecure', code: '' }, false],
+    [{ reason: 'register_failed', code: '' }, false],
+    [{ reason: 'server', code: 'unreachable' }, true],
+    [{ reason: 'server', code: 'station_unavailable' }, true],
+    [{ reason: 'load_failed', code: '' }, true],
+  ];
+  for (const [err, retried] of cases) {
+    const fake = fakePhone({ wanted: true });
+    await shell({ fake, ctx: { spRetryMs: [20] } });
+    fake.push({ state: 'connecting' });
+    fake.push({ state: 'error', ...err });
+    await tick(60);
+    assert.equal(fake.count('enable'), retried ? 2 : 1, JSON.stringify(err));
+  }
+});
+
+// I2 — две вкладки: в «другой вкладке» переключатель не снимает общий выбор сотрудника.
+test('телефон работает в другой вкладке — здесь переключатель неактивен: выключать там, где он работает', async () => {
+  const fake = fakePhone({ wanted: true });
+  const { btn } = await shell({ fake });
+  const d = await open(btn);
+  fake.push({ state: 'other_tab', reason: 'other_tab' });
+  const sw = toggle(d);
+  assert.ok(sw.hasAttribute('disabled'), 'переключатель снял бы общий выбор, а та вкладка работает дальше');
+  assert.ok(sw.hasAttribute('checked'));
+  assert.equal(textOf(one(d, 'data-cph-sp-hint')), 'Выключить телефон можно в той вкладке, где он работает.');
+  sw.click();
+  assert.equal(fake.count('disable'), 0);
+});
+
+// M1 — без линии onlinePBX телефона Easy-Med нет.
+test('нет линии onlinePBX (softphone_available: false) — ни переключателя, ни «Гарнитуры», и сам не включается', async () => {
+  const fake = fakePhone({ wanted: true });
+  const { btn } = await shell({ fake, me: { ...ME, softphone_available: false }, ctx: { devEnv: headsetEnv().env } });
+  const d = await open(btn);
+  assert.equal(byAttr(d, 'data-cph-sp-toggle').length, 0, 'переключатель без линии onlinePBX');
+  assert.equal(fake.count('enable'), 0, 'включился без линии onlinePBX');
+  fake.push({ state: 'ready' });   // включён раньше, линию убрали — «Гарнитуры» всё равно нет
+  one(d, 'data-cph-ext').click();
+  await tick(30);
+  assert.ok(one(d, 'data-cph-ext-select'));
+  assert.equal(byAttr(d, 'data-cph-sp-devices').length, 0, '«Гарнитура» без линии onlinePBX');
+});
+
+test('«кто звонит» спрашиваем только с правом набора', async () => {
+  const fake = fakePhone();
+  const { btn } = await shell({ fake, me: { ...ME, may_dial: false } });
+  await open(btn);
+  fake.push({ state: 'ringing', call: call() });
+  await tick(40);
+  assert.equal(callerAsks().length, 0, 'telephony_caller без права набора (сервер ответит 403)');
+});
+
+// M3 — страница вернулась из кэша браузера (назад/вперёд): pagehide выключил
+// телефон с выбором сотрудника — включить снова, если выбран и можно.
+test('страница вернулась из кэша браузера (pageshow persisted) — телефон включается снова; обычный pageshow — нет', async () => {
+  const rec = [];
+  const keepAdd = window.addEventListener;
+  window.addEventListener = (t, f) => { rec.push([t, f]); };
+  try {
+    const fake = fakePhone({ wanted: true });
+    await shell({ fake });
+    assert.equal(fake.count('enable'), 1);
+    fake.push({ state: 'off' });   // pagehide выключил с выбором сотрудника
+    const show = rec.filter(([t]) => t === 'pageshow');
+    assert.equal(show.length, 1, 'pageshow не слушается');
+    show[0][1]({ type: 'pageshow', persisted: false });
+    await tick(10);
+    assert.equal(fake.count('enable'), 1, 'обычная загрузка — включение уже было');
+    show[0][1]({ type: 'pageshow', persisted: true });
+    await tick(10);
+    assert.equal(fake.count('enable'), 2, 'вернулись из кэша — телефон не включился');
+  } finally {
+    window.addEventListener = keepAdd;
   }
 });

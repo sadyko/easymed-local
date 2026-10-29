@@ -119,7 +119,7 @@ async function save(card) {
   buttonWith(card, 'Сохранить сотрудника').click();
   await flush();
 }
-const NOTE = (n) => `Сотрудник сам выбрал в «Моя трубка» номер ${n} — телефон Easy-Med на нём не включится. Если это его трубка — впишите номер здесь и сохраните.`;
+const NOTE = (n) => `Сейчас у сотрудника выбран номер ${n} — телефон Easy-Med на нём не включится, пока номер не назначен здесь. Если это его трубка — впишите номер здесь и сохраните.`;
 const ADMIN_ONLY = 'Номер для телефона в Easy-Med назначает администратор.';
 const SOFT_HINT = 'На этом номере сотрудник сможет принимать звонки прямо в Easy-Med.';
 
@@ -197,11 +197,11 @@ test('пометка переводится шаблоном: номер под�
   try {
     setLang('en');
     let text = textOf(await openCard('self.pick'));
-    assert.ok(text.includes('The employee chose number 107 in «My handset» themselves'), 'пометка не переведена на английский');
+    assert.ok(text.includes('The employee currently has number 107 selected — the Easy-Med phone will not turn on for it until the number is assigned here.'), 'пометка не переведена на английский');
     assert.ok(text.includes('If it is their handset, enter the number here and save.'));
     assert.ok(text.includes('The employee can take calls on this number directly in Easy-Med.'));
     setLang('uz');
     text = textOf(await openCard('self.pick'));
-    assert.ok(text.includes('Xodim «Mening trubkam»da 107 raqamini o‘zi tanlagan'), 'пометка не переведена на узбекский');
+    assert.ok(text.includes('Hozir xodimda 107 raqami tanlangan — raqam shu yerda biriktirilmaguncha'), 'пометка не переведена на узбекский');
   } finally { setLang('ru'); }
 });

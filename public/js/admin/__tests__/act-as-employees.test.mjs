@@ -331,6 +331,8 @@ const RPCS_318 = [
   'telephony_phone_me', 'telephony_live', 'telephony_call_log', 'telephony_extensions', 'telephony_my_extension',
   'telephony_dial', 'telephony_ring_info', 'telephony_ring_token_rotate', 'telephony_recent_calls',
   'telephony_dispositions', 'telephony_settings_get', 'telephony_providers_list',
+  // SOFTPHONE_V1 (финальное ревью, M9) — телефон Easy-Med: вход в АТС и «кто звонит»
+  'telephony_webrtc_me', 'telephony_caller',
   // «Реферирование» и бот для врачей-источников
   'referrals_representatives', 'referrals_internal', 'referrals_activity', 'referrals_source_detail',
   'referrals_doctor_detail', 'referrals_assign_representative',
@@ -362,6 +364,8 @@ test('FIX_318_V1: частые RPC оболочки и 3.18.0 и их табли
   assert.deepEqual(bad, []);
   assert.equal(actAsActionLabel({ kind: 'rpc', name: 'get_clinic_by_slug' }), 'Данные клиники');
   assert.equal(actAsActionLabel({ kind: 'rpc', name: 'nav_visibility_get' }), 'Видимость разделов');
+  assert.equal(actAsActionLabel({ kind: 'rpc', name: 'telephony_webrtc_me' }), 'Вход телефона Easy-Med в АТС');
+  assert.equal(actAsActionLabel({ kind: 'rpc', name: 'telephony_caller' }), 'Кто звонит');
   assert.equal(actAsActionLabel({ kind: 'db', name: 'referral_sources.update' }), 'Врачи-источники: изменение');
   assert.equal(actAsActionLabel({ kind: 'rpc', name: 'some_future_rpc' }), 'some_future_rpc', 'незнакомое — именем как есть');
 });

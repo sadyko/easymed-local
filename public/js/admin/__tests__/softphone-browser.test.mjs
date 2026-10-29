@@ -81,7 +81,7 @@ test('без браузера (нет window/navigator/document) — пусто�
   try {
     const sp = B.getSoftphone();
     assert.ok(Object.isFrozen(sp));
-    assert.deepEqual(sp.get(), { state: 'off', reason: '', message: '', extension: '', call: null, lastEnd: null });
+    assert.deepEqual(sp.get(), { state: 'off', reason: '', message: '', code: '', extension: '', call: null, lastEnd: null });
     assert.equal(sp.wanted(), false);
     assert.equal(sp.busy(), false);
     await sp.enable();
@@ -274,7 +274,7 @@ test('getSoftphone() в браузере: настоящий телефон, о�
 
 // ── Слова ────────────────────────────────────────────────────────────────────
 const RU_REASONS = {
-  insecure: 'Микрофон на этом компьютере закрыт браузером: один раз запустите файл настройки компьютера EasyMed-ustanovka.cmd от имени администратора, затем закройте все окна браузера и откройте Easy-Med заново.',
+  insecure: 'Микрофон на этом компьютере закрыт браузером: один раз запустите файл настройки компьютера EasyMed-ustanovka.cmd от имени администратора, затем закройте все окна браузера и откройте Easy-Med заново. Этот же файл включает и звук звонка.',
   mic_denied: 'Браузер не дал микрофон: разрешите его значком слева от адреса страницы и включите телефон снова.',
   no_mic: 'Микрофон не найден: подключите гарнитуру и включите телефон снова.',
   mic_error: 'Микрофон не открылся. Проверьте гарнитуру и включите телефон снова.',

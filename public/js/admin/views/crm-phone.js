@@ -108,6 +108,11 @@ const P = {
     // ({running, phase, n, reason}; переживает перерисовку «Моя трубка»), её
     // прерывание (AbortController) и пауза перед перечитыванием списка устройств.
     spDevUnsub: null, spTest: null, spTestAbort: null, spDevTimer: null,
+    // Финальное ревью (I1, M3): включение идёт само (после загрузки, повтором,
+    // после возврата из кэша), а не щелчком; уведомление о сбое уже было;
+    // сколько раз повторяли и таймер повтора; с какого мига подключается и
+    // таймер «подключается долго»; слушается ли pageshow.
+    spAuto: false, spToasted: false, spTries: 0, spRetryTimer: null, spConnSince: 0, spSlowTimer: null, spShowArmed: false,
 };
 const ME_RETRY_MS = 30000;   // SOFTPHONE_V1 — «кто я» не ответил при загрузке: спросить снова не чаще
 const HUSH_MS = 15000;       // SOFTPHONE_V1 — станция догоняет звонок с задержкой: столько молчим о нём после конца
@@ -187,12 +192,19 @@ export function mountPhoneButton(ctx = {}) {
     // Не ответил — спросим снова после удачного опроса станции (softRetryMe).
     softWire();
     if (!P.me && P.sp.wanted()) { P.spMeTry = Date.now(); loadMe().then(() => { if (P.els) paintAll(); }).catch(() => {}); }
-    P.btnDot = h('span', { class: 'cph-dot' + (P.me && P.me.line ? ' on' : ''), 'aria-hidden': 'true' });
+    // Финальное ревью (M3) — страница вернулась из кэша браузера (назад/вперёд):
+    // pagehide выключил телефон с выбором сотрудника — включить снова. Один раз.
+    if (!P.spShowArmed && typeof window !== 'undefined' && window && typeof window.addEventListener === 'function') {
+        P.spShowArmed = true;
+        window.addEventListener('pageshow', onPageShow);
+    }
+    P.btnDot = h('span', { class: topDotClass(), 'aria-hidden': 'true' });
     P.btn = h('button', {
         id: BTN_ID, class: 'cph-topbtn' + (P.open ? ' on' : ''), type: 'button', 'data-crm-phone': '',
         'aria-pressed': P.open ? 'true' : 'false', title: 'Телефон: набор номера и журнал звонков',
         onclick: () => { if (P.open) closeDrawer(); else openDrawer(); },
     }, P.btnDot, Icon('Phone', { size: 15 }), h('span', { class: 'cph-topbtn-t' }, 'Телефон'));
+    paintTopBtn();
     // Место — слева от «Обновить». В стенде верхней панели нет: кнопку ставит вызвавший.
     const reload = typeof document.getElementById === 'function' ? document.getElementById('topbar-reload') : null;
     if (reload && reload.parentNode) reload.parentNode.insertBefore(P.btn, reload);
@@ -213,7 +225,8 @@ export function resetCrmPhone() {
         sp: null, spUnsub: null, spAutoTried: false, spRowSig: '',
         spWho: new Map(), spRing: null, spTick: null, spRefresh: null, spLast: 'off',
         spNum: '', spHush: null, spSaid: false, spSay: null, spMeTry: 0,
-        spDevUnsub: null, spTest: null, spTestAbort: null, spDevTimer: null });
+        spDevUnsub: null, spTest: null, spTestAbort: null, spDevTimer: null,
+        spAuto: false, spToasted: false, spTries: 0, spRetryTimer: null, spConnSince: 0, spSlowTimer: null, spShowArmed: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +348,8 @@ function teardown() {
     P.spSay = null;
     stopDeviceWatch();
     cancelMicTest();   // проверка гарнитуры не держит микрофон без панели
+    stopSoftRetry();
+    stopSlowWatch();
 }
 
 // Раз в семь секунд: карточка звонка без ответа журнала пережила свой срок —
@@ -512,7 +527,7 @@ function paintStatus() {
     } else {
         P.els.ext.textContent = '…';
     }
-    if (P.btnDot) P.btnDot.className = 'cph-dot' + (P.me && P.me.line ? ' on' : '');
+    paintTopBtn();   // SOFTPHONE_V1 (финальное ревью, I1) — точка кнопки знает и о телефоне Easy-Med
     paintSoftRow();   // SOFTPHONE_V1
 }
 
@@ -653,7 +668,7 @@ function paintPicker() {
         h('p', { class: 'cph-hint' }, 'Звонок сначала поднимает эту трубку, потом набирает пациента. Выберите тот номер, на котором у вас включён телефон или приложение АТС.'),
         h('div', { class: 'cph-sum' }, save, back),
         // SOFTPHONE_V1 (задача 7) — гарнитура: только при включённом телефоне Easy-Med.
-        softState().state !== SP.OFF ? paintHeadset() : null));
+        softState().state !== SP.OFF && P.me && P.me.softphone_available ? paintHeadset() : null));
     (async () => {
         let list = [];
         try { const { data } = await supabase.rpc('telephony_extensions', {}); list = (data && data.extensions) || []; }
@@ -956,7 +971,7 @@ function paintRing({ call: c, others, foreign }) {
 // ПАМЯТЬ. Переключатель помнит этот компьютер (флаг телефона в localStorage):
 // был включён — после перезагрузки страницы телефон включается сам, один раз,
 // если всё ещё можно. Снятие панели телефон не останавливает.
-const SP_OFF = Object.freeze({ state: 'off', reason: '', message: '', extension: '', call: null, lastEnd: null });
+const SP_OFF = Object.freeze({ state: 'off', reason: '', message: '', code: '', extension: '', call: null, lastEnd: null });
 const SP_CALL = new Set([SP.RINGING, SP.CALLING, SP.IN_CALL]);
 const SP_WORDS = {
     ready: 'Телефон Easy-Med включён', connecting: 'Подключение к АТС…', other_tab: 'Телефон включён в другой вкладке',
@@ -965,7 +980,15 @@ const SP_WORDS = {
 const SP_TONE = { ready: 'ready', ringing: 'ready', calling: 'ready', in_call: 'ready', connecting: 'wait', other_tab: 'wait', error: 'error' };
 const SP_STATUS = { ringing: 'Звонит', calling: 'Вызов…', in_call: 'Разговор идёт' };   // пилюля состояния во время звонка
 // Пилюля, когда телефон включён, но не готов: [стиль пилюли, слово]. Стили — те же, что у звонков станции.
-const SP_PILL = { connecting: ['wait', 'Подключение…'], error: ['end', 'Телефон не включился'], other_tab: ['off', 'В другой вкладке'] };
+// «Не включился» — коротко: длинное слово сжимало «вн. 108» рядом (финальное ревью).
+const SP_PILL = { connecting: ['wait', 'Подключение…'], error: ['end', 'Не включился'], other_tab: ['off', 'В другой вкладке'] };
+// Телефон работает в другой вкладке — здесь переключатель неактивен: он снял бы общий
+// выбор сотрудника, а та вкладка работала бы дальше (финальное ревью, I2).
+const SP_OTHER_TAB_HINT = 'Выключить телефон можно в той вкладке, где он работает.';
+// Повтор включения после временного сбоя (финальное ревью, I1): паузы, не больше
+// стольких раз за страницу; «подключается долго» — с этого срока.
+const SP_RETRY_MS = [30000, 60000, 120000, 300000];
+const SP_SLOW_MS = 20000;
 const SP_ACTING = 'Принимать звонки от чужого имени нельзя — вернитесь к своей учётной записи.';
 const SP_NO_NUMBER = 'Номер для телефона в Easy-Med назначает администратор в карточке сотрудника.';
 const SP_PICK = 'Администратор назначил вам номер {n} — выберите его в «Моя трубка», чтобы принимать звонки в Easy-Med.';
@@ -986,7 +1009,8 @@ const softState = () => (P.sp ? P.sp.get() : SP_OFF);
 
 /** Можно ли включить телефон Easy-Med; hint — почему нельзя (строкой на экране). */
 function softAllowed() {
-    if (!P.me || !P.mayDial) return { ok: false, hint: '' };
+    // Без линии onlinePBX (softphone_available) телефона Easy-Med нет вовсе — ни строки, ни «Гарнитуры».
+    if (!P.me || !P.mayDial || !P.me.softphone_available) return { ok: false, hint: '' };
     if (isActingNow()) return { ok: false, hint: tr(SP_ACTING) };
     const n = String(P.me.softphone_extension || '');
     if (!n) return { ok: false, hint: tr(SP_NO_NUMBER) };
@@ -1001,8 +1025,79 @@ function softAfterMe() {
     if (!softAllowed().ok) { if (on) P.sp.disable(); return; }
     if (!on && !P.spAutoTried && P.sp.wanted()) {
         P.spAutoTried = true;
+        P.spAuto = true;   // включение — само: сбой скажем уведомлением (softFailed)
         Promise.resolve(P.sp.enable()).catch(() => {});
     }
+}
+
+// Финальное ревью (M3) — страница вернулась из кэша браузера: включение «один
+// раз за страницу» уже было, а pagehide телефон выключил — пробуем снова.
+function onPageShow(e) {
+    if (!e || e.persisted !== true) return;
+    P.spAutoTried = false;
+    softAfterMe();
+}
+
+// ── Финальное ревью (I1): телефон не должен быть выключен так, что никто не заметит ──
+// Верхняя кнопка «Телефон» видна на любом экране: её точка говорит о телефоне
+// Easy-Med, когда переключатель включён (ошибка — красная, другая вкладка —
+// серая, подключается дольше SP_SLOW_MS — жёлтая; стили — как у пилюли).
+function topTone() {
+    const s = softState().state;
+    if (s === SP.ERROR) return 'end';
+    if (s === SP.OTHER_TAB) return 'off';
+    if (s === SP.CONNECTING && P.spConnSince && Date.now() - P.spConnSince >= ((P.ctx && P.ctx.spSlowMs) || SP_SLOW_MS)) return 'wait';
+    return '';
+}
+function topDotClass() {
+    const tone = topTone();
+    return 'cph-dot' + (P.me && P.me.line ? ' on' : '') + (tone ? ' ' + tone : '');
+}
+function paintTopBtn() {
+    if (P.btnDot) P.btnDot.className = topDotClass();
+    if (!P.btn) return;
+    const word = topTone() ? SP_WORDS[softState().state] : '';
+    P.btn.title = tr('Телефон: набор номера и журнал звонков') + (word ? ' — ' + tr(word) : '');
+}
+function stopSlowWatch() { if (P.spSlowTimer) clearTimeout(P.spSlowTimer); P.spSlowTimer = null; }
+function watchSlow(state) {
+    if (state !== SP.CONNECTING) { P.spConnSince = 0; stopSlowWatch(); return; }
+    if (P.spConnSince) return;
+    P.spConnSince = Date.now();
+    stopSlowWatch();
+    P.spSlowTimer = setTimeout(() => { P.spSlowTimer = null; paintTopBtn(); }, (P.ctx && P.ctx.spSlowMs) || SP_SLOW_MS);
+    if (P.spSlowTimer && typeof P.spSlowTimer.unref === 'function') P.spSlowTimer.unref();
+}
+
+// Включение кончилось ошибкой. Включалось само (после загрузки, повтором) —
+// одно уведомление на страницу: панель закрыта, иначе никто не узнает. Сбой
+// временный (сеть, загрузка, АТС не ответила, до сервера не дошли) — повтор с
+// паузой SP_RETRY_MS, не больше их числа за страницу; постоянный отказ (номер не
+// назначен, микрофон, пароль) повтором не лечится.
+function softFailed(s) {
+    if (P.spAuto && !P.spToasted) {
+        P.spToasted = true;
+        toast(trf('Телефон Easy-Med не включился: {reason}', { reason: reasonText(s.reason, s.message) || tr(SP_WORDS.error) }), 'warn');
+    }
+    P.spAuto = false;
+    if (softTransient(s) && P.spTries < softRetryDelays().length) scheduleSoftRetry();
+}
+function softTransient(s) {
+    if (s.reason === 'network' || s.reason === 'load_failed') return true;
+    return s.reason === 'server' && (s.code === 'station_unavailable' || s.code === 'unreachable');
+}
+const softRetryDelays = () => (P.ctx && P.ctx.spRetryMs) || SP_RETRY_MS;
+function stopSoftRetry() { if (P.spRetryTimer) clearTimeout(P.spRetryTimer); P.spRetryTimer = null; }
+function scheduleSoftRetry() {
+    stopSoftRetry();
+    P.spRetryTimer = setTimeout(() => {
+        P.spRetryTimer = null;
+        if (!P.sp || softState().state !== SP.ERROR || !P.sp.wanted() || !softAllowed().ok) return;
+        P.spTries++;
+        P.spAuto = true;
+        Promise.resolve(P.sp.enable()).catch(() => {});
+    }, softRetryDelays()[P.spTries]);
+    if (P.spRetryTimer && typeof P.spRetryTimer.unref === 'function') P.spRetryTimer.unref();
 }
 
 /** Включён, но звонить ещё нельзя: подключается, ошибка, телефон в другой вкладке. */
@@ -1027,7 +1122,12 @@ function softRetryMe() {
 function softToggle() {
     if (!P.sp) return;
     const st = P.sp.get().state;
+    // Щелчок — решение человека: повтор и его счёт — с нуля, уведомление не нужно.
+    stopSoftRetry();
+    P.spTries = 0;
+    P.spAuto = false;
     if (SP_CALL.has(st)) { /* идёт звонок — выключать нельзя (переключатель неактивен) */ }
+    else if (st === SP.OTHER_TAB) { /* телефон работает в другой вкладке — выключать там */ }
     else if (st !== SP.OFF) P.sp.disable();
     else if (softAllowed().ok) Promise.resolve(P.sp.enable()).catch(() => {});
     // Браузер уже перевернул флажок сам — рисуем правду, что бы ни ответил телефон.
@@ -1060,6 +1160,12 @@ function onSoftChange() {
     }
     if (s.state === SP.IN_CALL) startSoftTick(); else stopSoftTick();
     if (SP_CALL.has(was) && !sc) softCallEnded();
+    // Финальное ревью (I1): долгое подключение, сбой включения, выключили — повтора нет.
+    watchSlow(s.state);
+    if (s.state === SP.ERROR && was !== SP.ERROR) softFailed(s);
+    if (s.state === SP.READY) P.spAuto = false;
+    if (s.state === SP.OFF) stopSoftRetry();
+    paintTopBtn();
     if (P.els) { paintPhone(); paintChrome(); }
 }
 
@@ -1069,12 +1175,13 @@ function paintSoftRow() {
     const row = P.els && P.els.spRow;
     if (!row) return;
     const s = softState();
-    const show = !!(P.me && P.mayDial);
+    const show = !!(P.me && P.mayDial && P.me.softphone_available);   // без линии onlinePBX строки нет
     const allow = softAllowed();
     const on = s.state !== SP.OFF;
     const busy = SP_CALL.has(s.state);
+    const otherTab = s.state === SP.OTHER_TAB;
     const reason = show && on ? reasonText(s.reason, s.message) : '';
-    const hint = !show ? '' : busy ? tr(SP_BUSY) : !on ? allow.hint : '';
+    const hint = !show ? '' : busy ? tr(SP_BUSY) : otherTab ? tr(SP_OTHER_TAB_HINT) : !on ? allow.hint : '';
     const end = show && !busy ? endText(s.lastEnd) : '';
     const word = on ? SP_WORDS[s.state] || '' : '';
     // Та же картина — не перерисовываем: переключатель не теряет фокус клавиатуры.
@@ -1091,7 +1198,7 @@ function paintSoftRow() {
         const described = [reason ? 'cph-sp-reason' : '', hint ? 'cph-sp-hint' : ''].filter(Boolean).join(' ');
         const sw = h('input', {
             type: 'checkbox', role: 'switch', class: 'cph-sp-sw', 'data-cph-sp-toggle': '',
-            checked: on, disabled: busy || (!allow.ok && !on), 'aria-describedby': described || null, onclick: softToggle,
+            checked: on, disabled: busy || otherTab || (!allow.ok && !on), 'aria-describedby': described || null, onclick: softToggle,
         });
         sw.checked = on;
         put(row,
@@ -1161,7 +1268,8 @@ function softLine(s) {
 // Внутренние номера (короче MIN_DIGITS) — коллеги: их у сервера не спрашиваем.
 // Сервер не ответил — это не «номер не знаком»: помечаем отдельно (failed).
 function lookupCaller(digits) {
-    if (!digits || digits.length < MIN_DIGITS || P.spWho.has(digits)) return;
+    // Без права набора сервер не скажет, чей номер (403): не спрашиваем — карточка покажет номер.
+    if (!P.mayDial || !digits || digits.length < MIN_DIGITS || P.spWho.has(digits)) return;
     const seen = { done: false, failed: false, data: null };
     const map = P.spWho;
     map.set(digits, seen);

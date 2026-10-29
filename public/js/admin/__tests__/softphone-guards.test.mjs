@@ -25,9 +25,20 @@ globalThis.location = location;   // auth.js зовёт location.reload() без
 globalThis.window = {
   isSecureContext: false, location,
   addEventListener: (type, fn) => { listeners.push([type, fn]); },
-  dispatchEvent() { return true; },
+  dispatchEvent(e) { for (const [t, fn] of [...listeners]) if (t === e.type) fn(e); return true; },
   confirm: (m) => { CONFIRMS.push(String(m)); return CONFIRM; },
   easymed: { state: { user: null } },
+};
+// BroadcastChannel вкладок: все каналы одного имени в этом процессе — «вкладки».
+const CHANNELS = [];
+const POSTED = [];
+globalThis.BroadcastChannel = class {
+  constructor(name) { this.name = name; this.onmessage = null; this.closed = false; CHANNELS.push(this); }
+  postMessage(data) {
+    POSTED.push({ name: this.name, data });
+    for (const c of CHANNELS) if (c !== this && !c.closed && c.name === this.name && c.onmessage) c.onmessage({ data });
+  }
+  close() { this.closed = true; }
 };
 globalThis.document = { documentElement: { lang: 'ru' }, body: { appendChild: (el) => el }, createElement: () => ({ style: {}, setAttribute() {} }) };
 Object.defineProperty(globalThis, 'navigator', { value: { languages: ['ru'], language: 'ru', mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) } }, configurable: true, writable: true });
@@ -246,5 +257,112 @@ test('вопросы — на трёх языках, в uz/en без кирил�
     setLang('ru');
     CONFIRM = true;
     B.setSoftphoneForTests(null);
+  }
+});
+
+// ── Финальное ревью ──────────────────────────────────────────────────────────
+// I3: выход в одной вкладке гасит телефон во всех вкладках этого браузера
+// (BroadcastChannel «easymed-softphone», запасной путь — событие storage), а
+// сессия, которой больше нет (ответ 401), гасит телефон своей вкладки.
+// M6: хранилище недоступно — флаг «не прочитан» (undefined), а не «нет флага».
+// I1: «до сервера не дошли» — код unreachable, временный сбой АТС — его код.
+test('выход в другой вкладке (BroadcastChannel или storage): телефон этой вкладки выключается, выбор сотрудника остаётся', () => {
+  B.getSoftphone();
+  const fake = fakePhone(false);
+  B.setSoftphoneForTests(fake);
+  try {
+    const other = new BroadcastChannel('easymed-softphone');   // «другая вкладка»
+    other.postMessage({ type: 'logout' });
+    assert.deepEqual(fake.disables, [{ keepWanted: true }], 'сообщение о выходе не выключило телефон');
+    other.postMessage({ type: 'что-то другое' });
+    assert.equal(fake.disables.length, 1);
+    const storageL = listeners.filter(([t]) => t === 'storage');
+    assert.equal(storageL.length, 1, 'запасного пути через storage нет');
+    storageL[0][1]({ type: 'storage', key: 'easymed.softphone.logout', newValue: '123' });
+    assert.equal(fake.disables.length, 2, 'storage-событие о выходе не выключило телефон');
+    storageL[0][1]({ type: 'storage', key: 'другой.ключ', newValue: '1' });
+    assert.equal(fake.disables.length, 2);
+    other.close();
+  } finally {
+    B.setSoftphoneForTests(null);
+  }
+});
+
+test('выход объявляется другим вкладкам — после вопроса о звонке; «Отмена» — не объявляется', async () => {
+  const fake = fakePhone(true);
+  B.setSoftphoneForTests(fake);
+  try {
+    POSTED.length = 0;
+    store.delete('easymed.softphone.logout');
+    CONFIRM = false;
+    await signOutAndReload();
+    assert.deepEqual(POSTED, [], '«Отмена», а другие вкладки уже выключили телефон');
+    assert.equal(store.has('easymed.softphone.logout'), false);
+    CONFIRM = true;
+    await signOutAndReload();
+    assert.deepEqual(POSTED.map((p) => [p.name, p.data]), [['easymed-softphone', { type: 'logout' }]]);
+    assert.ok(store.has('easymed.softphone.logout'), 'запасной путь (storage) не записан');
+  } finally {
+    B.setSoftphoneForTests(null);
+    CONFIRM = true;
+  }
+});
+
+test('сессии больше нет (сервер ответил 401) — телефон этой вкладки выключается с выбором сотрудника', async () => {
+  B.getSoftphone();
+  const fake = fakePhone(false);
+  B.setSoftphoneForTests(fake);
+  const keepFetch = globalThis.fetch;
+  try {
+    window.dispatchEvent(new CustomEvent('easymed:session-gone'));
+    assert.deepEqual(fake.disables, [{ keepWanted: true }]);
+    // Ответ 401 на любой запрос программы (опрос, RPC) — то самое событие.
+    globalThis.fetch = async () => ({ ok: false, status: 401, json: async () => ({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } }) });
+    const { supabase } = await import('../../supabase.js');
+    await supabase.rpc('telephony_live', {});
+    assert.equal(fake.disables.length, 2, '401 от RPC не выключил телефон');
+    await supabase.from('patients').select('id');
+    assert.equal(fake.disables.length, 3, '401 от /api/db не выключил телефон');
+  } finally {
+    globalThis.fetch = keepFetch;
+    B.setSoftphoneForTests(null);
+  }
+});
+
+test('хранилище телефона: localStorage бросает — флаг «не прочитан» (undefined), а не «нет флага» (null)', () => {
+  user(5);
+  const keep = globalThis.localStorage;
+  globalThis.localStorage = { getItem() { throw new Error('SecurityError'); }, setItem() { throw new Error('x'); }, removeItem() { throw new Error('x'); } };
+  try {
+    assert.equal(B.softphoneStorage.getItem(SP_FLAG), undefined);
+  } finally {
+    globalThis.localStorage = keep;
+  }
+  store.delete(SP_FLAG + '.5');
+  assert.equal(B.softphoneStorage.getItem(SP_FLAG), null, 'флага нет');
+  user(null);
+  assert.equal(B.softphoneStorage.getItem(SP_FLAG), null, 'сотрудник неизвестен — флага нет');
+});
+
+test('вход телефона: сервер не ответил (сеть) — код unreachable; временный сбой АТС — station_unavailable', async () => {
+  const sp = B.getSoftphone();
+  const keepFetch = globalThis.fetch;
+  user(9);
+  window.isSecureContext = true;
+  try {
+    globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
+    await sp.enable();
+    assert.deepEqual([sp.get().state, sp.get().reason, sp.get().code], ['error', 'server', 'unreachable']);
+    globalThis.fetch = async () => ({ ok: false, status: 400, json: async () => ({ error: { code: 'station_unavailable', message: 'Нет связи с телефонией. Проверьте интернет на этом компьютере.' } }) });
+    await sp.enable();
+    assert.deepEqual([sp.get().state, sp.get().code], ['error', 'station_unavailable']);
+    globalThis.fetch = async () => ({ ok: false, status: 403, json: async () => ({ error: { code: 'forbidden', message: 'Номер не назначен.' } }) });
+    await sp.enable();
+    assert.deepEqual([sp.get().state, sp.get().code], ['error', 'forbidden']);
+  } finally {
+    globalThis.fetch = keepFetch;
+    window.isSecureContext = false;
+    sp.disable();
+    user(null);
   }
 });

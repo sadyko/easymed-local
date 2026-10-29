@@ -34,7 +34,7 @@ import { tr } from './i18n.js';
 import { createSoftphone, SP_FLAG } from './softphone.js';
 
 const DEVICE_KEY = 'easymed.softphone.';
-const OFF = Object.freeze({ state: 'off', reason: '', message: '', extension: '', call: null, lastEnd: null });
+const OFF = Object.freeze({ state: 'off', reason: '', message: '', code: '', extension: '', call: null, lastEnd: null });
 const INERT = Object.freeze({
   get: () => OFF,
   subscribe: () => () => {},
@@ -85,9 +85,14 @@ function keyOf(k) {
   return uid ? SP_FLAG + '.' + uid : '';
 }
 
-/** Хранилище телефона (createSoftphone({ storage })): ошибки хранилища глотаются, флаг — свой у сотрудника. */
+/**
+ * Хранилище телефона (createSoftphone({ storage })): ошибки хранилища глотаются,
+ * флаг — свой у сотрудника. Прочитать нельзя (хранилище бросает) — undefined,
+ * «флаг не прочитан»: ждущая вкладка тогда не гаснет (softphone.js waitLock);
+ * флага нет или сотрудник неизвестен — null.
+ */
 export const softphoneStorage = Object.freeze({
-  getItem(k) { const key = keyOf(k); if (!key) return null; try { return localStorage.getItem(key); } catch { return null; } },
+  getItem(k) { const key = keyOf(k); if (!key) return null; try { return localStorage.getItem(key); } catch { return undefined; } },
   setItem(k, v) { const key = keyOf(k); if (!key) return; try { localStorage.setItem(key, v); } catch { /* приватный режим */ } },
   removeItem(k) { const key = keyOf(k); if (!key) return; try { localStorage.removeItem(key); } catch { /* приватный режим */ } },
 });
@@ -192,7 +197,7 @@ export function getSoftphone() {
   if (!hasBrowser()) return INERT;
   instance = createSoftphone({
     loadJsSIP,
-    rpc: (name, args) => supabase.rpc(name, args),
+    rpc: phoneRpc,
     media: media(),
     locks: browserLocks(navigator),
     storage: softphoneStorage,
@@ -211,7 +216,18 @@ export function getSoftphone() {
   // остаётся: после перезагрузки телефон включится сам, а вторая вкладка этого
   // сотрудника подхватит его, когда первую закрыли.
   try { window.addEventListener('pagehide', onHide); } catch { /* без окна — нечего снимать */ }
+  // Финальное ревью (I3): вышли в другой вкладке или сессии больше нет — телефон
+  // этой вкладки выключается (выбор сотрудника остаётся).
+  listenLogout();
   return instance;
+}
+// supabase.rpc сеть не бросает: «сервер не ответил» приходит ошибкой без кода.
+// Телефону это «не дошли» — повтор поможет, — поэтому бросаем: softphone.js
+// ставит код unreachable. Ответ сервера (с кодом) — как есть.
+async function phoneRpc(name, args) {
+  const r = await supabase.rpc(name, args);
+  if (r && r.error && !r.error.code) throw r.error;
+  return r;
 }
 function onLeave(e) {
   const sp = peekSoftphone();
@@ -251,6 +267,41 @@ export function releasePhone() {
   const sp = peekSoftphone();
   if (!sp || typeof sp.disable !== 'function') return;
   try { sp.disable({ keepWanted: true }); } catch { /* перезагрузка всё равно его снимет */ }
+}
+
+// ── Выход во всех вкладках (финальное ревью, I3) ────────────────────────────
+// Сессия одна на весь браузер: вышли в одной вкладке — в остальных телефон
+// остался бы в АТС до их перезагрузки, и звонки шли бы на компьютер, где уже
+// никто не вошёл. Поэтому выход объявляется всем вкладкам: BroadcastChannel
+// «easymed-softphone», а где его нет — событием storage (ключ ниже). Каждая
+// вкладка с телефоном выключает его с выбором сотрудника. И своя вкладка гасит
+// телефон, когда сервер ответил 401 (сессии нет) — supabase.js шлёт окну
+// событие SESSION_GONE_EVENT.
+const CHANNEL = 'easymed-softphone';
+const LOGOUT_KEY = 'easymed.softphone.logout';
+export const SESSION_GONE_EVENT = 'easymed:session-gone';
+let pageChannel = null;   // канал этой вкладки: слушает и через него же объявляет (себе не приходит)
+
+function listenLogout() {
+  try {
+    if (typeof BroadcastChannel === 'function') {
+      pageChannel = new BroadcastChannel(CHANNEL);
+      pageChannel.onmessage = (e) => { if (e && e.data && e.data.type === 'logout') releasePhone(); };
+      // Под Node (стенды) открытый канал держал бы процесс; в браузере unref нет.
+      if (typeof pageChannel.unref === 'function') pageChannel.unref();
+    }
+  } catch { pageChannel = null; }
+  try { window.addEventListener('storage', (e) => { if (e && e.key === LOGOUT_KEY && e.newValue) releasePhone(); }); } catch { /* без окна */ }
+  try { window.addEventListener(SESSION_GONE_EVENT, releasePhone); } catch { /* без окна */ }
+}
+
+/** Выход объявлен (auth.js signOutAndReload, после вопроса о звонке): другим вкладкам — выключить телефон. */
+export function announceLogout() {
+  try {
+    const ch = pageChannel || (typeof BroadcastChannel === 'function' ? new BroadcastChannel(CHANNEL) : null);
+    if (ch) { ch.postMessage({ type: 'logout' }); if (ch !== pageChannel) ch.close(); }
+  } catch { /* без каналов — остаётся storage */ }
+  try { localStorage.setItem(LOGOUT_KEY, String(Date.now()) + '.' + Math.random().toString(36).slice(2)); } catch { /* приватный режим */ }
 }
 
 /** Подмена для стендов: getSoftphone()/peekSoftphone() отдают её; null — снять. */
@@ -451,7 +502,7 @@ export async function micTest(ms = 5000, onPhase = () => {}, over) {
 
 // ── Слова ───────────────────────────────────────────────────────────────────
 const REASONS = {
-  insecure: 'Микрофон на этом компьютере закрыт браузером: один раз запустите файл настройки компьютера EasyMed-ustanovka.cmd от имени администратора, затем закройте все окна браузера и откройте Easy-Med заново.',
+  insecure: 'Микрофон на этом компьютере закрыт браузером: один раз запустите файл настройки компьютера EasyMed-ustanovka.cmd от имени администратора, затем закройте все окна браузера и откройте Easy-Med заново. Этот же файл включает и звук звонка.',
   mic_denied: 'Браузер не дал микрофон: разрешите его значком слева от адреса страницы и включите телефон снова.',
   no_mic: 'Микрофон не найден: подключите гарнитуру и включите телефон снова.',
   mic_error: 'Микрофон не открылся. Проверьте гарнитуру и включите телефон снова.',

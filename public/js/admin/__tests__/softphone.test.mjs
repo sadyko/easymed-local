@@ -216,6 +216,34 @@ test('RPC бросил (нет сети до сервера) — ошибка se
   assert.equal(d.locks.held, false);
 });
 
+// Финальное ревью (I1): панель повторяет вход сама, если сбой временный. Для этого
+// состояние несёт код отказа сервера (code): station_unavailable — АТС не
+// ответила; unreachable — до сервера не дошли (rpc бросил); прочее — как есть.
+test('код отказа сервера — в состоянии (code): временный сбой АТС, «не дошли», постоянный отказ; удачный вход код сбрасывает', async () => {
+  const cases = [
+    [async () => ({ data: null, error: { message: 'Нет связи с телефонией.', code: 'station_unavailable' } }), 'station_unavailable'],
+    [async () => ({ data: null, error: { message: 'Номер не назначен', code: 'forbidden' } }), 'forbidden'],
+    [async () => { throw new Error('Failed to fetch'); }, 'unreachable'],
+    [async () => ({ data: { ...CREDS, ws_url: '' }, error: null }), ''],
+  ];
+  for (const [rpc, code] of cases) {
+    const { d } = deps({ rpc });
+    const sp = createSoftphone(d);
+    await sp.enable();
+    assert.deepEqual([sp.get().state, sp.get().reason, sp.get().code], [SP.ERROR, 'server', code]);
+  }
+  // Ошибка с кодом, потом удачный вход — кода больше нет.
+  let fail = true;
+  const x = deps({ rpc: async () => (fail ? { data: null, error: { message: 'x', code: 'station_unavailable' } } : { data: { ...CREDS }, error: null }) });
+  const sp = createSoftphone(x.d);
+  await sp.enable();
+  assert.equal(sp.get().code, 'station_unavailable');
+  fail = false;
+  await sp.enable();
+  x.made[0].emit('registered');
+  assert.deepEqual([sp.get().state, sp.get().code], [SP.READY, '']);
+});
+
 test('сервер вернул неполные данные входа — ошибка server, в АТС не входим', async () => {
   for (const missing of ['ws_url', 'user', 'sip_domain']) {
     const creds = { ...CREDS };
@@ -836,7 +864,7 @@ test('disable — разговор завершён, UA остановлен, ф
   assert.equal(store.has(SP_FLAG), false);
   assert.equal(sp.wanted(), false);
   assert.deepEqual(media.log.at(-1), ['detach']);
-  assert.deepEqual(sp.get(), { state: SP.OFF, reason: '', message: '', extension: '', call: null, lastEnd: null });
+  assert.deepEqual(sp.get(), { state: SP.OFF, reason: '', message: '', code: '', extension: '', call: null, lastEnd: null });
   s.emit('ended');
   ua.emit('unregistered', {});
   ua.emit('disconnected', {});
@@ -856,7 +884,7 @@ test('disable({ keepWanted: true }) — всё как у disable(), только
   assert.equal(s.done.at(-1)[0], 'terminate', 'разговор не завершён');
   assert.equal(ua.stopped, true, 'UA не остановлен');
   assert.deepEqual(media.log.at(-1), ['detach']);
-  assert.deepEqual(sp.get(), { state: SP.OFF, reason: '', message: '', extension: '', call: null, lastEnd: null });
+  assert.deepEqual(sp.get(), { state: SP.OFF, reason: '', message: '', code: '', extension: '', call: null, lastEnd: null });
   assert.equal(store.get(SP_FLAG), '1', 'флаг снят');
   assert.equal(sp.wanted(), true);
   await tick();
@@ -865,6 +893,25 @@ test('disable({ keepWanted: true }) — всё как у disable(), только
   assert.equal(sp.get().state, SP.OFF, 'события после выключения не будят телефон');
   sp.disable();
   assert.equal(store.has(SP_FLAG), false, 'обычный disable() флаг снимает');
+});
+
+// Финальное ревью (M6): «хранилище недоступно — не мешаем» — ждущая вкладка не
+// гаснет из-за того, что флаг прочитать нельзя.
+test('одна вкладка: хранилище недоступно (бросает) — ждущая вкладка не гаснет, а входит, когда первую закрыли', async () => {
+  const locks = makeLocks();
+  const store = new Map();
+  const broken = { getItem: () => { throw new Error('SecurityError'); }, setItem: (k, v) => store.set(k, v), removeItem: (k) => store.delete(k) };
+  const A = deps({ locks, storage: broken });
+  const B = deps({ locks, storage: broken });
+  const a = createSoftphone(A.d);
+  const b = createSoftphone(B.d);
+  await a.enable(); A.made[0].emit('registered');
+  await b.enable();
+  assert.equal(b.get().state, SP.OTHER_TAB);
+  locks.closeHolder();
+  await settle();
+  assert.equal(B.made.length, 1, 'вкладка погасла из-за недоступного хранилища');
+  assert.equal(b.get().state, SP.CONNECTING);
 });
 
 test('одна вкладка: B ждёт, пока A не выключит, и сама входит', async () => {

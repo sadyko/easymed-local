@@ -8,7 +8,20 @@ import { rememberServerMessage } from './shared/server-messages.js';   // V3120_
 // (опросы экранов), помечается фоновым и не продлевает сессию.
 import { withActivityHeaders } from './shared/user-activity.js';
 
-const httpFetch = (url, init = {}) => fetch(url, { ...init, headers: withActivityHeaders(init.headers) });   // browser global; bound at call time
+// SOFTPHONE_V1 (финальное ревью, I3) — сервер ответил 401: сессии больше нет.
+// Окну — событие, по нему телефон Easy-Med этой вкладки выходит из АТС
+// (admin/softphone-browser.js). Сам модуль телефона отсюда не грузится.
+function noteSessionGone(res) {
+    if (!res || res.status !== 401) return;
+    try {
+        if (typeof window !== 'undefined' && window && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+            window.dispatchEvent(new CustomEvent('easymed:session-gone'));
+        }
+    } catch { /* без окна — некому сообщать */ }
+}
+
+const httpFetch = (url, init = {}) => Promise.resolve(fetch(url, { ...init, headers: withActivityHeaders(init.headers) }))   // browser global; bound at call time
+    .then((res) => { noteSessionGone(res); return res; });
 
 const dbClient = makeDbClient({ fetch: httpFetch, base: '/api/db' });
 const auth     = makeAuthBridge({ fetch: httpFetch, base: '/api/auth' });
@@ -21,6 +34,7 @@ async function rpc(name, args = {}) {
             credentials: 'same-origin',
             body: JSON.stringify(args || {}),
         });
+        noteSessionGone(res);
         const json = await res.json().catch(() => ({}));
         // V3120_I18N — собранная фраза с шаблоном запоминается, и tr() переведёт её.
         if (!res.ok) { rememberServerMessage(json.error); return { data: null, error: json.error || { message: 'RPC failed (' + res.status + ')' } }; }

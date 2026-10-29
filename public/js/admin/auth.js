@@ -80,6 +80,7 @@ export async function signOutAndReload({ beforeLeave = null } = {}) {
         const phone = await import('./softphone-browser.js');
         if (!phone.confirmEndCall('Идёт разговор. Завершить звонок и выйти?')) return false;
         phone.releasePhone();
+        phone.announceLogout();   // финальное ревью (I3): и в остальных вкладках этого браузера
     } catch (e) { console.warn('[auth] softphone:', e); }
     if (typeof beforeLeave === 'function') { try { beforeLeave(); } catch (e) { console.warn('[auth] beforeLeave:', e); } }
     try { await supabase.auth.signOut(); } catch (e) { console.warn('[auth] signOut failed:', e); }

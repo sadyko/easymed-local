@@ -37,7 +37,10 @@ const NETWORK_CAUSES = new Set(['Connection Error', 'Request Timeout', 'Unavaila
 // входящие перестанут приходить. Поэтому повторяем сами.
 const RETRY_CAUSES = new Set(['Request Timeout', 'Unavailable']);
 const RETRY_MS = 30000;
-const IDLE = Object.freeze({ state: SP.OFF, reason: '', message: '', extension: '', call: null, lastEnd: null });
+// code — код отказа сервера при входе (финальное ревью, I1): station_unavailable —
+// АТС временно не ответила, unreachable — до сервера не дошли; по нему панель
+// решает, повторять ли вход самой.
+const IDLE = Object.freeze({ state: SP.OFF, reason: '', message: '', code: '', extension: '', call: null, lastEnd: null });
 const KEYS = Object.keys(IDLE);
 
 /** Ошибка getUserMedia → код (те же коды, что у причин включения). */
@@ -146,10 +149,10 @@ export function createSoftphone({
     p.then(clear, clear);
     return p;
   }
-  function quit(g, reason, message = '') {
+  function quit(g, reason, message = '', code = '') {
     if (g !== gen) return false;
     releaseLock();
-    set({ state: SP.ERROR, reason, message, call: null });
+    set({ state: SP.ERROR, reason, message, code, call: null });
     return false;
   }
   function stopRetry() {
@@ -196,11 +199,13 @@ export function createSoftphone({
     set({ ...IDLE, state: SP.CONNECTING });
     if (!(await micOk(g))) return;
     let res;
-    try { res = await rpc('telephony_webrtc_me', {}); } catch (e) { res = { data: null, error: e }; }
+    let threw = false;
+    try { res = await rpc('telephony_webrtc_me', {}); } catch (e) { res = { data: null, error: e }; threw = true; }
     if (g !== gen) return;
     const creds = res && !res.error ? res.data : null;
     if (!creds || !creds.ws_url || !creds.user || !creds.sip_domain) {
-      quit(g, 'server', String((res && res.error && res.error.message) || ''));
+      const err = (res && res.error) || {};
+      quit(g, 'server', String(err.message || ''), threw ? 'unreachable' : String(err.code || ''));
       return;
     }
     let JsSIP;
