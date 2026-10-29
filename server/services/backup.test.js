@@ -360,16 +360,25 @@ function abortingMidCopy(db) {
 
 test('DISK_GUARD_V1: оборвавшаяся копия удаляется вместе со всеми частями, в списке её нет', async () => {
   const { dir, db } = workspace();
-  await assert.rejects(() => createBackup(abortingMidCopy(db), dir, 'manual'), /disk is full/);
+  await assert.rejects(() => createBackup(abortingMidCopy(db), dir, 'manual'), { code: 'SQLITE_FULL' });
   assert.deepEqual(fs.readdirSync(backupsDir(dir)), [], 'ни обрывка .db, ни -journal, ни папки .files');
   assert.deepEqual(listBackups(dir), [], 'обрывок не выдаёт себя за годную копию');
 });
 
 test('DISK_GUARD_V1: оборвавшаяся ежедневная копия не закрывает день — следующий такт делает её снова', async () => {
   const { dir, db } = workspace();
-  await assert.rejects(() => runDailyBackup(abortingMidCopy(db), dir, new Date('2026-08-23T08:05:00')), /disk is full/);
+  await assert.rejects(() => runDailyBackup(abortingMidCopy(db), dir, new Date('2026-08-23T08:05:00')), { code: 'SQLITE_FULL' });
   const again = await runDailyBackup(db, dir, new Date('2026-08-23T09:05:00'));
   assert.ok(again, 'день не был отмечен сделанным: обрывок 08:05 не считается копией дня');
   assert.equal(listBackups(dir).filter((b) => b.kind === 'daily').length, 1);
   assert.equal(userCount(path.join(backupsDir(dir), again.name)), 1, 'а новая — настоящая база');
+});
+
+test('DISK_GUARD_V1: обрывок с меткой .broken не в списке и не закрывает день', async () => {
+  const { dir, db } = workspace();
+  fs.mkdirSync(backupsDir(dir), { recursive: true });
+  fs.writeFileSync(path.join(backupsDir(dir), 'daily-20260823-080500.db'), 'x');
+  fs.writeFileSync(path.join(backupsDir(dir), 'daily-20260823-080500.db.broken'), 'partial');
+  assert.deepEqual(listBackups(dir), []);
+  assert.ok(await runDailyBackup(db, dir, new Date('2026-08-23T09:05:00')));
 });

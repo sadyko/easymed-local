@@ -135,12 +135,24 @@ export function restoreStorage(dataDir, dbFileName) {
  * функция и db/backup.js backupBeforeMigrate.
  */
 export function discardPartial(file) {
+  // Windows: антивирус может держать файл (EBUSY/EPERM) — maxRetries работает
+  // только вместе с recursive, поэтому он указан и для одиночных файлов.
+  const rm = (p) => {
+    try { fs.rmSync(p, { force: true, recursive: true, maxRetries: 3, retryDelay: 100 }); return true; }
+    catch (e) { console.warn('[backup] обрывок копии не удалён:', p, e && e.code); return false; }
+  };
+  let mainGone = true;
   for (const suffix of ['', '-journal', '-wal', '-shm']) {
-    try { fs.rmSync(file + suffix, { force: true }); } catch { /* занят — уберёт следующая чистка */ }
+    const ok = rm(file + suffix);
+    if (suffix === '' && !ok) mainGone = false;
   }
-  try {
-    fs.rmSync(path.join(path.dirname(file), sidecarFor(path.basename(file))), { recursive: true, force: true });
-  } catch { /* то же */ }
+  rm(path.join(path.dirname(file), sidecarFor(path.basename(file))));
+  // Не удалось убрать сам файл: чистка по числу копий его не тронет, поэтому
+  // ставим метку <файл>.broken — listBackups такие копии не показывает, а
+  // runDailyBackup не считает их копией дня.
+  if (!mainGone) {
+    try { fs.writeFileSync(file + '.broken', 'partial'); } catch { /* метку не поставить — ничего больше не сделать */ }
+  }
 }
 
 const p2 = (n) => String(n).padStart(2, '0');
@@ -171,7 +183,7 @@ export function listBackups(dataDir) {
   let files;
   try { files = fs.readdirSync(dir); } catch { return []; }
   return files
-    .filter((f) => NAME_RE.test(f) && kindOf(f))
+    .filter((f) => NAME_RE.test(f) && kindOf(f) && !files.includes(f + '.broken'))   // DISK_GUARD_V1 — неудалённый обрывок
     .map((f) => {
       // Guarded per-file for the same reason pruneBackups documents: a file
       // vanishing between readdir and stat (a concurrent prune, a manual

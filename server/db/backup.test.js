@@ -122,7 +122,7 @@ test('DISK_GUARD_V1: копия перед обновлением, оборва�
       progress() { throw Object.assign(new Error('database or disk is full'), { code: 'SQLITE_FULL' }); },
     }),
   };
-  await assert.rejects(() => backupBeforeMigrate(aborting, dbPath, '2.4.0'), /disk is full/);
+  await assert.rejects(() => backupBeforeMigrate(aborting, dbPath, '2.4.0'), { code: 'SQLITE_FULL' });
   assert.deepEqual(fs.readdirSync(path.join(dir, 'backups')), [],
     'обрывок pre-2.4.0.db выдавал бы себя за точку отката — recover.cmd ищет копию по имени');
 });
