@@ -139,12 +139,42 @@ const PBX_PERMANENT = new Set(['bad_credentials', 'not_auth']);
 // тем же ключом ждут один ответ станции. Только память: в базу и журнал кэш не
 // пишется никогда (в нём пароль трубки); любой отказ оператору очищает его кэш;
 // неудача станции не кэшируется. WeakMap по базе — у каждой базы (и стенда) свой.
+//
+// «Минуту» — буквально (ревью): пароль трубки не остаётся в памяти до следующего
+// вопроса или перезапуска. Запись удаляет свой таймер (unref — работу процесса он
+// не продлевает), а каждый вопрос заодно выметает просроченные (таймер мог не
+// успеть: сон компьютера, занятый процесс). Удалённая или заменённая запись свой
+// таймер снимает — висящих таймеров не остаётся.
 export const WEBRTC_CACHE_MS = 60_000;
-const webrtcCache = new WeakMap();   // db → { done: Map(userId → {key, at, value}), flight: Map(key → Promise) }
+const webrtcCache = new WeakMap();   // db → { done: Map(userId → {key, at, value, cancel}), flight: Map(key → Promise) }
 function webrtcCacheOf(db) {
   let c = webrtcCache.get(db);
   if (!c) { c = { done: new Map(), flight: new Map() }; webrtcCache.set(db, c); }
   return c;
+}
+function dropWebrtc(cache, uid) {
+  const entry = cache.done.get(uid);
+  if (!entry) return;
+  cache.done.delete(uid);
+  entry.cancel();
+}
+function sweepWebrtc(cache, at) {
+  for (const [uid, entry] of [...cache.done]) if (at - entry.at >= WEBRTC_CACHE_MS) dropWebrtc(cache, uid);
+}
+function keepWebrtc(cache, uid, key, at, value, timers) {
+  dropWebrtc(cache, uid);
+  const entry = { key, at, value, cancel: () => {} };
+  const handle = timers.set(() => { if (cache.done.get(uid) === entry) cache.done.delete(uid); }, WEBRTC_CACHE_MS);
+  if (handle && typeof handle.unref === 'function') handle.unref();
+  entry.cancel = () => timers.clear(handle);
+  cache.done.set(uid, entry);
+}
+const REAL_TIMERS = { set: (fn, ms) => setTimeout(fn, ms), clear: (h) => clearTimeout(h) };
+
+/** Для стендов: сколько входов в АТС сейчас в памяти этой базы. */
+export function webrtcCacheSize(db) {
+  const c = webrtcCache.get(db);
+  return c ? c.done.size : 0;
 }
 
 // Один вопрос станции о своём номере → { extension, user, password, ws_url, sip_domain }.
@@ -182,7 +212,7 @@ async function askStationWebrtc(db, line, ext, pbxCallImpl) {
  * и оператор не узнал бы, что дело в станции. Текст станции (comment) не
  * пересказывается: перевести его нечем, а причина и так названа.
  */
-export async function telephonyWebrtcMe(db, _args, user, { pbxCallImpl = pbxCall, now = Date.now } = {}) {
+export async function telephonyWebrtcMe(db, _args, user, { pbxCallImpl = pbxCall, now = Date.now, timers = REAL_TIMERS } = {}) {
   const uid = user && user.id;
   try {
     if (user && user.acting_admin) throw new RpcError(SP_ACTING, 403);
@@ -197,19 +227,20 @@ export async function telephonyWebrtcMe(db, _args, user, { pbxCallImpl = pbxCall
     // M5 — проверки выше идут на КАЖДЫЙ вопрос; из кэша — только ответ станции.
     const key = [uid, ext, assigned, line.id].join('|');
     const cache = webrtcCacheOf(db);
+    sweepWebrtc(cache, now());
     const hit = cache.done.get(uid);
-    if (hit && hit.key === key && now() - hit.at < WEBRTC_CACHE_MS) return { ...hit.value };
+    if (hit && hit.key === key) return { ...hit.value };
     let flight = cache.flight.get(key);
     if (!flight) {
       flight = askStationWebrtc(db, line, ext, pbxCallImpl).finally(() => cache.flight.delete(key));
       cache.flight.set(key, flight);
     }
     const value = await flight;
-    cache.done.set(uid, { key, at: now(), value });
+    keepWebrtc(cache, uid, key, now(), value, timers);
     return { ...value };
   } catch (e) {
     const cache = webrtcCache.get(db);
-    if (cache) cache.done.delete(uid);   // любой отказ — кэш этого оператора пуст
+    if (cache) dropWebrtc(cache, uid);   // любой отказ — кэш этого оператора пуст, таймер снят
     throw e;
   }
 }

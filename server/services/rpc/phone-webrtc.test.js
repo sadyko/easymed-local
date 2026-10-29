@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { telephonyWebrtcMe, telephonyCaller, telephonyMyExtension, telephonyPhoneMe } from './phone.js';
+import { telephonyWebrtcMe, telephonyCaller, telephonyMyExtension, telephonyPhoneMe, webrtcCacheSize, WEBRTC_CACHE_MS } from './phone.js';
 import { RpcError } from './telephony.js';
 import { getRpc } from './index.js';
 import { isReadOnlyRpc, isReadRpc, isAlwaysAllowedRpc } from '../control/gate.js';
@@ -283,6 +283,70 @@ test('кэш входа: другой назначенный номер — не
   const up = fakePbx(OK_108);
   assert.equal((await telephonyWebrtcMe(db2, {}, OP, { pbxCallImpl: up.impl, now })).password, PASSWORD);
   assert.equal(up.calls.length, 1, 'неудача станции осталась в кэше');
+});
+
+// SOFTPHONE_V1 (M5, ревью) — пароль трубки не лежит в памяти сервера дольше минуты:
+// запись удаляет таймер (unref — процесс он не держит), а каждый вопрос выметает
+// просроченные. Удалённая или заменённая запись свой таймер снимает.
+function fakeTimers() {
+  const pending = new Map();
+  let n = 0;
+  const set = (fn, ms) => {
+    const h = { id: ++n, ms, unrefed: false, unref() { this.unrefed = true; return this; } };
+    pending.set(h.id, { fn, h });
+    return h;
+  };
+  const clear = (h) => { if (h) pending.delete(h.id); };
+  const fire = () => { for (const [id, p] of [...pending]) { pending.delete(id); p.fn(); } };
+  return { timers: { set, clear }, pending, fire };
+}
+const OP2 = { id: 4, role: 'registrar', full_name: 'Оператор 2', acting_admin: null };
+function seedTwo() {
+  const db = seed();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, pbx_extension, pbx_extension_assigned) VALUES (4,'op2','x','Оператор 2','registrar','107','107')").run();
+  return db;
+}
+
+test('кэш входа: запись живёт минуту — таймер (unref) удаляет её, и таймеров не остаётся', async () => {
+  const db = seed();
+  const t = 1_000_000;
+  const ft = fakeTimers();
+  await telephonyWebrtcMe(db, {}, OP, { pbxCallImpl: fakePbx(OK_108).impl, now: () => t, timers: ft.timers });
+  assert.equal(webrtcCacheSize(db), 1);
+  assert.equal(ft.pending.size, 1, 'у записи нет таймера удаления');
+  const [{ h }] = [...ft.pending.values()];
+  assert.equal(h.ms, WEBRTC_CACHE_MS);
+  assert.equal(h.unrefed, true, 'таймер держит процесс сервера');
+  ft.fire();
+  assert.equal(webrtcCacheSize(db), 0, 'по таймеру пароль трубки не ушёл из памяти');
+  assert.equal(ft.pending.size, 0);
+});
+
+test('кэш входа: просроченные записи выметаются при каждом вопросе; удалённая и заменённая снимают таймер', async () => {
+  const db = seedTwo();
+  let t = 2_000_000;
+  const now = () => t;
+  const ft = fakeTimers();
+  const opts = (reply) => ({ pbxCallImpl: fakePbx(reply).impl, now, timers: ft.timers });
+  await telephonyWebrtcMe(db, {}, OP, opts(OK_108));
+  t += WEBRTC_CACHE_MS + 1;   // таймер не сработал (сон, занятый процесс) — запись просрочена
+  await telephonyWebrtcMe(db, {}, OP2, opts(webrtcFor('107')));
+  assert.equal(webrtcCacheSize(db), 1, 'просроченная запись первого оператора осталась в памяти');
+  assert.equal(ft.pending.size, 1, 'таймер выметенной записи остался висеть');
+  // Замена: тот же оператор после минуты — новый ответ, старый таймер снят.
+  t += WEBRTC_CACHE_MS + 1;
+  await telephonyWebrtcMe(db, {}, OP2, opts(webrtcFor('107')));
+  assert.equal(webrtcCacheSize(db), 1);
+  assert.equal(ft.pending.size, 1, 'заменённая запись оставила свой таймер');
+  // Отказ: запись удалена — и её таймер тоже.
+  await assert.rejects(telephonyWebrtcMe(db, {}, { ...OP2, acting_admin: { id: 9 } }, opts(webrtcFor('107'))), refused(403));
+  assert.equal(webrtcCacheSize(db), 0);
+  assert.equal(ft.pending.size, 0, 'после удаления записи остался таймер');
+  // Свежая запись выметанием не трогается.
+  await telephonyWebrtcMe(db, {}, OP, opts(OK_108));
+  t += 30_000;
+  await telephonyWebrtcMe(db, {}, OP2, opts(webrtcFor('107')));
+  assert.equal(webrtcCacheSize(db), 2, 'выметание удалило свежую запись');
 });
 
 test('пароль не пишется ни в базу, ни в журнал сервера', async () => {
