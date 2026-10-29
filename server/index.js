@@ -11,6 +11,7 @@ import { processPendingAction, pruneBackupsByKind, scheduleDailyBackups } from '
 import { bootstrapAdmin } from './services/auth.js';
 import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
+import { sweepStalePdfDirs } from './services/telegram/render.js';   // DISK_GUARD_V1
 import { startDoctorBot } from './services/doctor-bot/index.js';   // REFERRALS_CRM_V1 — второй бот: для врачей-источников
 import { schedulePolling } from './services/telephony/poller.js';   // TELEPHONY_V1
 import { schedulePolling as scheduleMetaPolling } from './services/meta/poller.js';   // META_LEADS_V1 — опрос заявок из рекламы Meta
@@ -275,6 +276,10 @@ if (isMain) {
   // клиники был один `npm start`. Он сам проверяет, включён ли бот в настройках,
   // и молчит, пока администратор его не включил. Все ошибки цикл ловит внутри:
   // недоступный Telegram не должен мешать регистратуре работать.
+  // DISK_GUARD_V1 — временные папки PDF для Telegram (easymed-pdf-*), которые
+  // не удалились сразу (Chrome держал профиль), убираются при запуске, если им
+  // больше суток (раздел 3, п. 11). Не бросает.
+  sweepStalePdfDirs();
   startTelegramBot(db);
   startDoctorBot(db);   // REFERRALS_CRM_V1 — свой поллер, свой токен; молчит, пока бот не включён
 

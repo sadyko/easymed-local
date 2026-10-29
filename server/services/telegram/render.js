@@ -97,6 +97,64 @@ export function loadServerDocSettings(db) {
   return s;
 }
 
+// DISK_GUARD_V1 (docs/specs/2026-10-29-3181-cabinet-print-disk-design.md,
+// раздел 3, п. 11) — временные папки рендера не копятся в %TEMP%. Chrome на
+// Windows отпускает свой профиль не сразу (crashpad и GPU-процесс доживают
+// сотни миллисекунд), и одна попытка rmSync падала EBUSY молча: в %TEMP%
+// копились папки easymed-pdf-* с профилем Chrome на несколько мегабайт.
+export const PDF_TMP_PREFIX = 'easymed-pdf-';
+const PDF_TMP_STALE_MS = 24 * 60 * 60 * 1000;
+const PDF_TMP_RETRY_LATER_MS = 30_000;
+
+function laterUnref(fn, ms) {
+  const t = setTimeout(fn, ms);
+  if (t && typeof t.unref === 'function') t.unref();
+  return t;
+}
+
+/**
+ * Удалить временную папку рендера С ПОВТОРАМИ: сначала сам rmSync повторяет
+ * (maxRetries — EBUSY/EPERM/ENOTEMPTY на Windows), не вышло — ещё одна
+ * попытка через полминуты на таймере, который не держит программу. Не вышло и
+ * тогда — папку подберёт уборка при следующем запуске (sweepStalePdfDirs).
+ * Никогда не бросает. true — удалена сразу.
+ */
+export function removePdfTempDir(dir, { rmImpl = fs.rmSync, laterMs = PDF_TMP_RETRY_LATER_MS, schedule = laterUnref } = {}) {
+  const attempt = () => {
+    try { rmImpl(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); return true; }
+    catch { return false; }
+  };
+  if (attempt()) return true;
+  schedule(() => {
+    if (!attempt()) console.warn('[telegram] временная папка PDF не удалилась — её уберёт следующий запуск:', dir);
+  }, laterMs);
+  return false;
+}
+
+/**
+ * При запуске: папки easymed-pdf-* старше суток в %TEMP% удаляются. Сутки —
+ * чтобы не тронуть папку рендера, который идёт прямо сейчас (рендер длится
+ * секунды). Только папки и только с нашим началом имени. Возвращает число
+ * удалённых; никогда не бросает.
+ */
+export function sweepStalePdfDirs({ base = os.tmpdir(), maxAgeMs = PDF_TMP_STALE_MS, now = Date.now(), rmImpl = fs.rmSync } = {}) {
+  let names;
+  try { names = fs.readdirSync(base); } catch { return 0; }
+  let removed = 0;
+  for (const name of names) {
+    if (!name.startsWith(PDF_TMP_PREFIX)) continue;
+    const full = path.join(base, name);
+    try {
+      const st = fs.lstatSync(full);
+      if (!st.isDirectory() || now - st.mtimeMs < maxAgeMs) continue;
+      rmImpl(full, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+      removed++;
+    } catch { /* занята — уберётся в следующий раз */ }
+  }
+  if (removed) console.log('[telegram] убраны старые временные папки PDF:', removed);
+  return removed;
+}
+
 // Собрать PDF. Возвращает Buffer.
 //
 // Каждый рендер идёт в собственном временном каталоге вместе с
@@ -111,7 +169,7 @@ export async function renderPdf(db, { type, data, title = null, idLine = null, s
   const s = settings || loadServerDocSettings(db);
   const html = stripAutoPrint(buildSheetHtml({ type, s, data, title, idLine }));
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'easymed-pdf-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), PDF_TMP_PREFIX));
   const htmlPath = path.join(dir, 'doc.html');
   const pdfPath = path.join(dir, 'doc.pdf');
   fs.writeFileSync(htmlPath, html, 'utf8');
@@ -140,6 +198,6 @@ export async function renderPdf(db, { type, data, title = null, idLine = null, s
     });
     return fs.readFileSync(pdfPath);
   } finally {
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* временный каталог */ }
+    removePdfTempDir(dir);
   }
 }
