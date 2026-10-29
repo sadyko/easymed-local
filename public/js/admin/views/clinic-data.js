@@ -32,6 +32,7 @@
 import { h } from '../ui.js';
 import { isAdminActor } from '../admin-actor.js';
 import { renderBackupsCard } from './system-backups.js';
+import { renderDiskCard } from './system-disk.js';   // DISK_GUARD_V1
 import { renderDangerCard } from './system-danger.js';
 
 export async function renderClinicData(root, ctx = {}) {
@@ -44,6 +45,13 @@ export async function renderClinicData(root, ctx = {}) {
             h('p', { class: 'page-subtitle' }, 'Резервные копии и полное удаление данных клиники.'))));
 
     const admin = isAdminActor();
+
+    // DISK_GUARD_V1 — «Место на диске» над копиями: красное («мало места»,
+    // «копия не сделана») должно быть видно первым, а копии — главное, что это
+    // место занимает. Только администратору, как и сами копии.
+    const diskRoot = h('div');
+    wrap.appendChild(diskRoot);
+    await renderDiskCard(diskRoot, { admin });
 
     // Backups is awaited so this function resolves only once the whole page is
     // real — the fake-DOM tests (and the human eye) rely on that, the same way

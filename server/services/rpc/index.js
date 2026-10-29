@@ -99,7 +99,7 @@ import { crmDuplicateGroups, crmMergeLeads } from './crm-merge.js';   // CRM_HEA
 import { crmLinkNewPatient } from '../crm/new-patient-link.js';   // CRM_UNIFY_V1 — новая карта находит заявку колл-центра
 import { crmTaskAssignees } from '../crm/tasks-follow.js';   // CRM_UNIFY_V1 — кого можно назначить ответственным
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
-import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
+import { backupList, backupCreate, backupRestore, factoryReset, diskUsage } from './backup.js';   // SYSTEM_SETTINGS_V1, DISK_GUARD_V1
 import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
 import {
   branchSyncStatus, branchSyncMakeKey, branchSyncPairAdopt, branchSyncUnpair, branchSyncNow,
@@ -817,6 +817,8 @@ export const RPC = {
   backup_create:    (db, args, user) => backupCreate(db, args, user),
   backup_restore:   (db, args, user) => backupRestore(db, args, user),
   factory_reset:    (db, args, user) => factoryReset(db, args, user),
+  // DISK_GUARD_V1 — «Место на диске»: тоже сквозь блокировку, только администратору.
+  disk_usage:       (db, args, user) => diskUsage(db, args, user),
 
   // BRANCH_SYNC_V1 — Настройки → Филиалы: связывание отдельных установок
   // Easy-Med и перенос справочника из главного филиала. В READ_ONLY_RPCS

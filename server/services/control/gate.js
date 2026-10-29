@@ -290,6 +290,11 @@ const ALWAYS_ALLOWED_RPCS = new Set([
   // it travels with its three siblings so the feature is one findable block
   // with one reasoning.
   'backup_list', 'backup_create', 'backup_restore', 'factory_reset',
+  // DISK_GUARD_V1 — «Место на диске» на «Данных клиники» и колокол
+  // администратора: клиника с просроченной лицензией тоже должна видеть, что
+  // диск кончается (копии и обновления от этого перестают делаться). Только
+  // читает; только администратор (rpc/backup.js diskUsage).
+  'disk_usage',
   // LAN_ADDRESS_V1 — «Скрыть до следующей смены» и выключатель имени в сети пишут
   // data/lan-address.json ЭТОГО ПК, а не данные клиники: клиника с просроченной
   // лицензией всё равно должна находить свой сервер. Оба — только администратор
@@ -303,7 +308,7 @@ const ALWAYS_ALLOWED_RPCS = new Set([
 // каждом экране, и он не должен считаться записью. (licence_status при
 // блокировке заводит код для звонка в control_state — служебная отметка
 // лицензии, а не действие человека.)
-const ALWAYS_ALLOWED_READS = new Set(['licence_status', 'backup_list']);
+const ALWAYS_ALLOWED_READS = new Set(['licence_status', 'backup_list', 'disk_usage']);   // DISK_GUARD_V1 — disk_usage
 
 export function isReadOnlyRpc(name) { return READ_ONLY_RPCS.has(name); }
 export function isAlwaysAllowedRpc(name) { return ALWAYS_ALLOWED_RPCS.has(name); }

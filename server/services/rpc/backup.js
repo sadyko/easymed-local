@@ -1,8 +1,20 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { hasAnyRole } from '../roles.js';
 import { getDataDir } from '../control/config.js';
 import { listBackups, createBackup, requestRestore, requestFactoryReset } from '../backup.js';
+import { diskUsageReport } from '../disk-guard.js';   // DISK_GUARD_V1
+// DISK_GUARD_V1 — где лежат versions/ (detectLayout) и правило «отказ
+// обновления ещё правда» (clearStaleUpdateRefusal) — те же, что у обновления.
+import { detectLayout, clearStaleUpdateRefusal } from '../control/updater.js';
+import { readAppVersion } from '../control/checkin.js';
+
+// DISK_GUARD_V1 — корень запущенной программы, тем же способом, что ROOT в
+// server/index.js (этот файл на три папки глубже): по нему detectLayout
+// находит versions/ установки — сколько места занимают версии программы.
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 // SYSTEM_SETTINGS_V1 — the settings screen's backup/restore/reset RPCs.
 //
@@ -71,6 +83,33 @@ export function backupList(db, args, user) {
     free = Number(s.bavail) * Number(s.bsize);
   } catch { free = null; }
   return { backups: listBackups(dataDir), data_dir: dataDir, free_bytes: free };
+}
+
+/**
+ * DISK_GUARD_V1 — «Место на диске» на «Данных клиники» и колокол
+ * администратора ({quick:true} — без обхода папок). Только администратор:
+ * освободить место или позвать Easy-Med — его работа. Сквозь блокировку
+ * лицензии — как соседи (control/gate.js): клиника с просроченной лицензией
+ * тоже должна видеть, что диск кончается и копии перестали делаться.
+ *
+ * Отказ обновления «нет места» показывается, только пока он правда: сначала
+ * его проверяет то же правило, что у обновления (updater.js
+ * clearStaleUpdateRefusal — версия уже запущена, предложение заменили,
+ * согласие сняли), иначе экран минуту-другую повторял бы устаревшее.
+ */
+export async function diskUsage(db, args, user) {
+  requireAdmin(user);
+  const dataDir = getDataDir();
+  const quick = !!(args && args.quick === true);
+  clearStaleUpdateRefusal(db, dataDir, readAppVersion());
+  let versionsDir = null;
+  if (!quick) {
+    try {
+      const layout = detectLayout(APP_ROOT);
+      if (layout.versioned) versionsDir = path.join(layout.root, 'versions');
+    } catch { versionsDir = null; }
+  }
+  return diskUsageReport(dataDir, { quick, versionsDir });
 }
 
 // DISK_GUARD_V1 — «нет места» (services/backup.js ensureCopySpace) — отказ по

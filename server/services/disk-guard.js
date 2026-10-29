@@ -164,3 +164,116 @@ export function checkUpdateSpace(dataDir, { diskSpaceImpl = currentDiskSpace, db
   const need = updateNeedBytes(dbBytes(dbFile));
   return { ok: space.free >= need, need, free: space.free };
 }
+
+// ---------------------------------------------------------------------------
+// «Место на диске» (раздел 3, п. 8) — карточка на «Данных клиники» и колокол
+// администратора (server/services/rpc/backup.js diskUsage).
+//
+// Обход папок ограничен (ревью C5): хранилище сканов за годы — десятки тысяч
+// файлов, а сервер клиники один на всех. Поэтому обход асинхронный и пачками
+// (сервер не замирает), не больше TREE_MAX_ENTRIES записей на папку (дальше
+// счёт останавливается, и число уходит как «не меньше» — поле в partial), а
+// итог держится TREE_CACHE_MS: повторные открытия экрана и два администратора
+// разом делят один обход. Колокол ({quick:true}) папки не обходит вовсе.
+// ---------------------------------------------------------------------------
+
+export const TREE_MAX_ENTRIES = 100_000;
+export const TREE_CACHE_MS = 60_000;
+const STAT_BATCH = 64;
+
+async function sumSizes(files) {
+  let n = 0;
+  for (let i = 0; i < files.length; i += STAT_BATCH) {
+    const sizes = await Promise.all(files.slice(i, i + STAT_BATCH)
+      .map((p) => fs.promises.stat(p).then((s) => s.size, () => 0)));   // исчез между чтением и замером — 0
+    for (const s of sizes) n += s;
+  }
+  return n;
+}
+
+/**
+ * Сумма размеров файлов в папке со всеми вложенными; нет папки — 0. Ссылки
+ * (junction, symlink) не обходятся: Dirent ссылки — не папка. skipDirs(имя)
+ * — какие вложенные папки не считать. Больше maxEntries записей — счёт
+ * останавливается: complete false, bytes — «не меньше».
+ * @returns {Promise<{bytes:number, complete:boolean}>}
+ */
+export async function treeBytes(dir, { skipDirs = null, maxEntries = TREE_MAX_ENTRIES } = {}) {
+  let bytes = 0;
+  let left = maxEntries;
+  const stack = [dir];
+  while (stack.length) {
+    const d = stack.pop();
+    let entries;
+    try { entries = await fs.promises.readdir(d, { withFileTypes: true }); } catch { continue; }
+    const files = [];
+    for (const e of entries) {
+      if (left <= 0) return { bytes: bytes + await sumSizes(files), complete: false };
+      left--;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) {
+        if (!(skipDirs && skipDirs(e.name))) stack.push(p);
+      } else if (e.isFile()) {
+        files.push(p);
+      }
+    }
+    bytes += await sumSizes(files);
+  }
+  return { bytes, complete: true };
+}
+
+// Подсчёты папок: ключ (папка данных, папка версий, предел) → {at, promise}.
+const sizeCache = new Map();
+
+function folderSizes(dataDir, versionsDir, { maxEntries, cacheMs, now }) {
+  const t = now();
+  for (const [k, v] of sizeCache) if (t - v.at >= Math.max(cacheMs, TREE_CACHE_MS)) sizeCache.delete(k);
+  const key = JSON.stringify([path.resolve(dataDir), versionsDir ? path.resolve(versionsDir) : null, maxEntries]);
+  const hit = sizeCache.get(key);
+  if (hit && t - hit.at < cacheMs) return hit.promise;
+  const promise = (async () => {
+    const partial = [];
+    const measure = async (field, dir, opts = {}) => {
+      const r = await treeBytes(dir, { ...opts, maxEntries });
+      if (!r.complete) partial.push(field);
+      return r.bytes;
+    };
+    // Копии — вся папка backups/: и отложенные восстановлением и откатом с их
+    // журналами, и неубранные обрывки (.broken) — это настоящее место. Снимки
+    // файлов .files не считаются: это жёсткие ссылки на те же файлы storage.
+    const backups_bytes = await measure('backups_bytes', path.join(dataDir, 'backups'), { skipDirs: (n) => n.endsWith('.files') });
+    const storage_bytes = await measure('storage_bytes', path.join(dataDir, 'storage'));
+    const versions_bytes = versionsDir ? await measure('versions_bytes', versionsDir) : null;
+    return { backups_bytes, storage_bytes, versions_bytes, partial };
+  })();
+  sizeCache.set(key, { at: t, promise });
+  promise.catch(() => sizeCache.delete(key));
+  return promise;
+}
+
+/**
+ * «Место на диске» (раздел 3, п. 8): что сколько занимает, сколько свободно,
+ * «мало места» (свободно меньше 10 % диска или меньше 5 ГБ) и отметки об
+ * отказах (disk-guard.json). quick — без обхода папок: колокол администратора
+ * спрашивает каждую минуту. versionsDir — папка versions/ установки (null из
+ * исходников). Числа — числами: десятичный знак ставит экран по своему языку.
+ * Платформа не сказала, сколько свободно, — free/total null, low false.
+ */
+export async function diskUsageReport(dataDir, {
+  quick = false, versionsDir = null, diskSpaceImpl = currentDiskSpace,
+  maxEntries = TREE_MAX_ENTRIES, cacheMs = TREE_CACHE_MS, now = Date.now,
+} = {}) {
+  const space = diskSpaceImpl(dataDir);
+  const guard = readGuard(dataDir);
+  const out = {
+    free_bytes: space ? space.free : null,
+    total_bytes: space ? space.total : null,
+    low: !!space && (space.free < FREE_SHARE_MIN * space.total || space.free < LOW_FREE_BYTES),
+    copy_refused: guard.copy_refused || null,
+    update_refused: guard.update_refused || null,
+    kept_over_cap: guard.kept_over_cap || null,
+  };
+  if (quick) return out;
+  const sizes = await folderSizes(dataDir, versionsDir, { maxEntries, cacheMs, now });
+  return { ...out, db_bytes: dbBytes(path.join(dataDir, 'easymed.db')), ...sizes, partial: [...sizes.partial] };
+}

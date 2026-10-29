@@ -100,6 +100,7 @@ let backupListCalls, backupCreateCalls, restoreCalls, resetCalls, requestCalls, 
 let lastRestoreBody, lastResetBody, lastRequestBody, lastEnrollBody;
 let backupRows, restoreRespond, resetRespond;
 let createRespond = null;   // DISK_GUARD_V1 — null: обычный успешный ответ
+let diskUsageCalls = 0, diskUsageData = {}, lastDiskUsageBody = null;   // DISK_GUARD_V1
 
 function resetServer() {
   backupListCalls = 0; backupCreateCalls = 0; restoreCalls = 0; resetCalls = 0; requestCalls = 0; enrollCalls = 0;
@@ -111,6 +112,7 @@ function resetServer() {
   restoreRespond = () => jsonOk({ ok: true, restarting: true });
   resetRespond = () => jsonOk({ ok: true, restarting: true });
   createRespond = null;
+  diskUsageCalls = 0; diskUsageData = {}; lastDiskUsageBody = null;
 }
 
 globalThis.fetch = async (url, opts) => {
@@ -118,6 +120,7 @@ globalThis.fetch = async (url, opts) => {
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/rpc/update_status')) return jsonOk({ current_version: '2.3.0', offer: null, approved: false, hour: null, scheduled_at: null, last_result: null });
   if (u.startsWith('/api/rpc/backup_list')) { backupListCalls++; return jsonOk({ backups: backupRows }); }
+  if (u.startsWith('/api/rpc/disk_usage')) { diskUsageCalls++; lastDiskUsageBody = body; return jsonOk(diskUsageData); }   // DISK_GUARD_V1
   if (u.startsWith('/api/rpc/backup_create')) {
     backupCreateCalls++;
     if (createRespond) return createRespond();
@@ -441,4 +444,76 @@ test('DISK_GUARD_V1: «До восстановления» и «До откат�
   assert.match(text, /До отката/);
   assert.match(text, /Хранится для поддержки/);
   assert.equal(findAllButtons(root).filter((b) => textOf(b).trim() === 'Восстановить').length, 1, 'кнопка — только у ручной копии');
+});
+
+const DISK_LOW = () => {
+  const GB = 1024 ** 3;
+  return {
+    free_bytes: 3 * GB, total_bytes: 100 * GB, low: true,
+    db_bytes: 2 * GB, backups_bytes: 30 * GB, storage_bytes: 5 * GB, versions_bytes: 110 * 1024 * 1024, partial: [],
+    copy_refused: { at: '2026-10-29T03:05:00.000Z', kind: 'daily', need_bytes: 3 * GB + 300 * 1024 * 1024, free_bytes: 3 * GB },
+    update_refused: null, kept_over_cap: null,
+  };
+};
+
+test('DISK_GUARD_V1: администратор видит «Место на диске» — что сколько занимает и красное предупреждение', async () => {
+  diskUsageData = DISK_LOW();
+  const root = mk('div');
+  await renderClinicData(root);
+  const text = textOf(root);
+  assert.equal(diskUsageCalls, 1);
+  assert.deepEqual(lastDiskUsageBody, {}, 'полный отчёт — с размерами папок');
+  assert.match(text, /Место на диске/);
+  assert.match(text, /База данных2 ГБ/);
+  assert.match(text, /Резервные копии30 ГБ/);
+  assert.match(text, /Файлы \(сканы и документы\)5 ГБ/);
+  assert.match(text, /Версии программы110 МБ/);
+  assert.match(text, /Свободно3 ГБ из 100 ГБ/);
+  assert.match(text, /Мало места на диске: свободно 3 ГБ\./);
+  assert.match(text, /Недостаточно места на диске: нужно 3,3 ГБ, свободно 3,0 ГБ\. Копия не сделана\./);
+  assert.match(text, /вся папка копий/, 'подсказка: в «Резервных копиях» — и копии до восстановления и до отката');
+  assert.ok(findByClass(root, 'sys-modal-warn'), 'предупреждение — красной плашкой');
+  assert.ok(text.indexOf('Место на диске') < text.indexOf('Создать копию сейчас'), 'карточка места — над копиями');
+});
+
+test('DISK_GUARD_V1: английский экран — гигабайты с точкой, без кириллицы в карточке места', async () => {
+  diskUsageData = DISK_LOW();
+  setLang('en');
+  try {
+    const root = mk('div');
+    await renderClinicData(root);
+    const text = textOf(root);
+    assert.match(text, /Disk space/);
+    assert.match(text, /Free3 GB of 100 GB/);
+    assert.match(text, /Not enough disk space: 3\.3 GB needed, 3\.0 GB free\. The backup was not made\./);
+    const card = text.slice(text.indexOf('Disk space'), text.indexOf('Create a backup now'));
+    assert.equal(/[А-Яа-яЁё]/.test(card), false, card);
+  } finally {
+    setLang('ru');
+  }
+});
+
+test('DISK_GUARD_V1: места хватает — ни одной красной плашки', async () => {
+  const GB = 1024 ** 3;
+  diskUsageData = { free_bytes: 300 * GB, total_bytes: 1000 * GB, low: false, db_bytes: GB, backups_bytes: 5 * GB, storage_bytes: GB, versions_bytes: null };
+  const root = mk('div');
+  await renderClinicData(root);
+  assert.equal(findByClass(root, 'sys-modal-warn'), undefined);
+  assert.match(textOf(root), /Свободно300 ГБ из 1000 ГБ/);
+});
+
+test('DISK_GUARD_V1: сервер не ответил — спокойная строка, а не пустая карточка', async () => {
+  diskUsageData = {};
+  const root = mk('div');
+  await renderClinicData(root);
+  assert.match(textOf(root), /Не удалось узнать место на диске\./);
+  assert.match(textOf(root), /Создать копию сейчас/, 'копии рисуются и без ответа о месте');
+});
+
+test('DISK_GUARD_V1: неадмин — ни карточки места, ни запроса disk_usage', async () => {
+  setUser(REGISTRAR);
+  const root = mk('div');
+  await renderClinicData(root);
+  assert.equal(diskUsageCalls, 0);
+  assert.doesNotMatch(textOf(root), /Место на диске/);
 });

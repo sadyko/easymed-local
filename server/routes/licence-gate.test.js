@@ -614,7 +614,7 @@ test('FIX_318_V1: при заблокированной лицензии скр�
 // экране) и backup_list. Ворота лицензии от этого не меняются.
 test('FIX_318_V1: isReadRpc — READ_ONLY_RPCS и чтения из ALWAYS_ALLOWED_RPCS; ворота прежние', () => {
   assert.equal(typeof GATE.isReadRpc, 'function', 'gate.js должен отдавать isReadRpc');
-  for (const n of ['licence_status', 'backup_list']) {
+  for (const n of ['licence_status', 'backup_list', 'disk_usage']) {   // DISK_GUARD_V1 — disk_usage только читает
     assert.equal(GATE.isAlwaysAllowedRpc(n), true, n + ' — в ALWAYS_ALLOWED_RPCS');
     assert.equal(GATE.isReadOnlyRpc(n), false, n + ' — ворота прежние: место в ALWAYS_ALLOWED_RPCS');
     assert.equal(GATE.isReadRpc(n), true, n + ' — чтение для журнала');

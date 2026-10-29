@@ -8,11 +8,11 @@ import { migrate } from '../../db/migrate.js';
 import { hashPassword } from '../auth.js';
 import { setDataDir } from '../control/config.js';
 import { createBackup, listBackups } from '../backup.js';
-import { backupList, backupCreate, backupRestore, factoryReset, __setExitForTests } from './backup.js';
+import { backupList, backupCreate, backupRestore, factoryReset, diskUsage, __setExitForTests } from './backup.js';
 import { getRpc } from './index.js';
 import { isAlwaysAllowedRpc } from '../control/gate.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
-import { __setDiskSpaceForTests, GB } from '../disk-guard.js';   // DISK_GUARD_V1
+import { __setDiskSpaceForTests, noteGuard, readGuard, diskUsageReport, GB } from '../disk-guard.js';   // DISK_GUARD_V1
 
 // DISK_GUARD_V1 — диск машины разработчика не данные теста.
 const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
@@ -257,4 +257,132 @@ test('DISK_GUARD_V1: factory_reset вместе с копиями на полн�
   assert.deepEqual(JSON.parse(fs.readFileSync(marker(dir), 'utf8')), { action: 'factory_reset', wipe_backups: true });
   await exitFired();
   assert.deepEqual(exitCalls, [75]);
+});
+
+// --- DISK_GUARD_V1: «Место на диске» -------------------------------------------
+
+test('DISK_GUARD_V1: disk_usage зарегистрирован и проходит сквозь блокировку, как его соседи', () => {
+  assert.ok(getRpc('disk_usage'));
+  assert.equal(isAlwaysAllowedRpc('disk_usage'), true, 'клиника с просроченной лицензией тоже должна видеть, что диск кончается');
+});
+
+test('DISK_GUARD_V1: disk_usage — только администратору; что сколько занимает и отметки об отказах', async () => {
+  const { db, dir } = fresh();
+  await assert.rejects(() => diskUsage(db, {}, { id: 2, role: 'doctor' }), (e) => e.status === 403);
+  fs.mkdirSync(path.join(dir, 'storage', 'clinic-docs'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'storage', 'clinic-docs', 'scan.pdf'), Buffer.alloc(3000));
+  fs.writeFileSync(path.join(dir, 'easymed.db'), Buffer.alloc(5000));
+  const made = await createBackup(db, dir, 'manual');
+  noteGuard(dir, { copy_refused: { at: '2026-10-29T03:05:00.000Z', kind: 'daily', need_bytes: 2 * GB, free_bytes: GB } });
+
+  const r = await diskUsage(db, {}, ADMIN);
+  assert.equal(r.free_bytes, 500 * GB);
+  assert.equal(r.total_bytes, 1000 * GB);
+  assert.equal(r.low, false);
+  assert.equal(r.db_bytes, 5000);
+  assert.equal(r.storage_bytes, 3000);
+  assert.equal(r.backups_bytes, made.size, 'снимок файлов — жёсткие ссылки, места он не занимает и не считается');
+  assert.equal(r.versions_bytes, null, 'из исходников папки versions/ нет');
+  assert.deepEqual(r.partial, [], 'всё сосчитано полностью');
+  assert.deepEqual(r.copy_refused, { at: '2026-10-29T03:05:00.000Z', kind: 'daily', need_bytes: 2 * GB, free_bytes: GB });
+  assert.equal(r.update_refused, null);
+  assert.equal(r.kept_over_cap, null);
+
+  const q = await diskUsage(db, { quick: true }, ADMIN);
+  assert.equal('storage_bytes' in q, false, 'колокол спрашивает каждую минуту — без обхода папок');
+  assert.equal('backups_bytes' in q, false);
+  assert.deepEqual(q.copy_refused, r.copy_refused);
+});
+
+test('DISK_GUARD_V1: «мало места» — свободно меньше 10 % диска или меньше 5 ГБ', async () => {
+  const { db } = fresh();
+  try {
+    for (const [free, total, low] of [
+      [4 * GB, 1000 * GB, true], [50 * GB, 1000 * GB, true], [101 * GB, 1000 * GB, false],
+      [6 * GB, 50 * GB, false], [4 * GB, 50 * GB, true],
+    ]) {
+      __setDiskSpaceForTests(() => ({ free, total }));
+      assert.equal((await diskUsage(db, { quick: true }, ADMIN)).low, low, `${free / GB} ГБ из ${total / GB}`);
+    }
+  } finally {
+    __setDiskSpaceForTests(ROOMY);
+  }
+});
+
+test('DISK_GUARD_V1: платформа не сказала, сколько свободно, — числа null, «мало места» не выдумывается', async () => {
+  const { db } = fresh();
+  __setDiskSpaceForTests(() => null);
+  try {
+    const q = await diskUsage(db, { quick: true }, ADMIN);
+    assert.equal(q.free_bytes, null);
+    assert.equal(q.total_bytes, null);
+    assert.equal(q.low, false);
+  } finally {
+    __setDiskSpaceForTests(ROOMY);
+  }
+});
+
+test('DISK_GUARD_V1: «Резервные копии» — вся папка копий: отложенные с журналом и обрывки считаются, снимки файлов — нет', async () => {
+  const { db, dir } = fresh();
+  const b = path.join(dir, 'backups');
+  fs.mkdirSync(path.join(b, 'replaced-20261001-090000.files', 'x'), { recursive: true });
+  fs.writeFileSync(path.join(b, 'replaced-20261001-090000.db'), Buffer.alloc(700));
+  fs.writeFileSync(path.join(b, 'replaced-20261001-090000.db-wal'), Buffer.alloc(300));
+  fs.writeFileSync(path.join(b, 'replaced-20261001-090000.files', 'x', 'scan.pdf'), Buffer.alloc(9000));
+  fs.writeFileSync(path.join(b, 'daily-20261002-030000.db'), Buffer.alloc(40));   // обрывок
+  fs.writeFileSync(path.join(b, 'daily-20261002-030000.db.broken'), 'partial');
+  const r = await diskUsage(db, {}, ADMIN);
+  assert.equal(r.backups_bytes, 700 + 300 + 40 + 'partial'.length);
+});
+
+// Отказ обновления «нет места» (control/updater.js) правдив, только пока клиника
+// ждёт ЭТУ версию: предложение одобрено и версия ещё не запущена. Устаревший —
+// не показывается и снимается (clearStaleUpdateRefusal — то же правило, что у
+// обновления).
+function putState(db, key, value) {
+  db.prepare(`INSERT INTO control_state (key, value, updated_at)
+              VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .run(key, JSON.stringify(value));
+}
+
+test('DISK_GUARD_V1: отказ обновления виден, пока клиника ждёт эту версию; устаревший не показывается', async () => {
+  const { db, dir } = fresh();
+  const refusal = { at: '2026-10-29T03:05:00.000Z', version: '99.0.0', need_bytes: null, free_bytes: null };
+
+  noteGuard(dir, { update_refused: refusal });
+  assert.equal((await diskUsage(db, { quick: true }, ADMIN)).update_refused, null, 'предложения нет — отказ устарел');
+  assert.equal(readGuard(dir).update_refused, undefined, 'и снят в файле: при связи с Easy-Med он тоже больше не уходит');
+
+  putState(db, 'update_offer', { version: '99.0.0', url: '/x.tar.gz', sha256: 'a', manifest: {} });
+  putState(db, 'update_consent', { version: '99.0.0', hour: 3 });
+  noteGuard(dir, { update_refused: refusal });
+  assert.deepEqual((await diskUsage(db, { quick: true }, ADMIN)).update_refused, refusal, 'одобрено и ждёт — отказ правдив');
+  assert.deepEqual((await diskUsage(db, {}, ADMIN)).update_refused, refusal);
+});
+
+test('DISK_GUARD_V1: обход папок ограничен — сверх предела число «не меньше» и отмечено в partial', async () => {
+  const dir = tmpDir('em-diskusage-cap-');
+  fs.mkdirSync(path.join(dir, 'storage', 'a'), { recursive: true });
+  for (let i = 0; i < 5; i++) fs.writeFileSync(path.join(dir, 'storage', 'a', `f${i}.pdf`), Buffer.alloc(100));
+  const capped = await diskUsageReport(dir, { maxEntries: 3, cacheMs: 0 });
+  assert.deepEqual(capped.partial, ['storage_bytes']);
+  assert.ok(capped.storage_bytes < 500, 'остановился на пределе');
+  const full = await diskUsageReport(dir, { cacheMs: 0 });
+  assert.deepEqual(full.partial, []);
+  assert.equal(full.storage_bytes, 500);
+});
+
+test('DISK_GUARD_V1: размеры папок держатся минуту — частые открытия «Данных клиники» не обходят хранилище заново', async () => {
+  const dir = tmpDir('em-diskusage-cache-');
+  fs.mkdirSync(path.join(dir, 'storage'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'storage', 'a.pdf'), Buffer.alloc(100));
+  let t = 1_000_000;
+  const now = () => t;
+  assert.equal((await diskUsageReport(dir, { now })).storage_bytes, 100);
+  fs.writeFileSync(path.join(dir, 'storage', 'b.pdf'), Buffer.alloc(50));
+  t += 30_000;
+  assert.equal((await diskUsageReport(dir, { now })).storage_bytes, 100, 'через 30 с — тот же подсчёт');
+  t += 31_000;
+  assert.equal((await diskUsageReport(dir, { now })).storage_bytes, 150, 'через минуту — заново');
 });

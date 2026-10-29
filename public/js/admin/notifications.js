@@ -6,9 +6,10 @@
 // bell until resolved. Replaces renderTrialBanner / renderVerificationBanner / renderSetupChecklist.
 import { supabase } from '../supabase.js';
 import { h, Icon } from './ui.js';
-import { tr, trf } from './i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf, getLang } from './i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ; DISK_GUARD_V1 — getLang
 import { openUploadModal } from './verify-banner.js?v=vb2';
 import { isAdminActor } from './admin-actor.js';   // LAN_ADDRESS_V1 — смена адреса сервера — только администратору
+import { diskNotices } from './system-logic.js';   // DISK_GUARD_V1
 
 let _styled = false;
 function injectStyles() {
@@ -65,7 +66,20 @@ async function loadState(clinic) {
             .select('id,name,phone,address').eq('id', clinic.id).limit(1);
         co = data && data[0];
     } catch (e) { /* нет строки — нет и напоминания */ }
-    return { co, inpatient: await loadInpatient(), lan: await loadLanChange() };
+    return { co, inpatient: await loadInpatient(), lan: await loadLanChange(), disk: await loadDisk() };
+}
+
+// DISK_GUARD_V1 — «Резервная копия не сделана» / «Нет места для обновления» /
+// «Мало места на диске» (раздел 3, п. 2, 3 и 8). Только администратору:
+// освободить место или позвать Easy-Med — его работа. quick — без обхода
+// папок: колокол спрашивает каждую минуту. Ошибка — тишина: подсказка, не операция.
+async function loadDisk() {
+    if (!isAdminActor()) return null;
+    try {
+        const { data, error } = await supabase.rpc('disk_usage', { quick: true });
+        if (error || !data || typeof data !== 'object') return null;
+        return data;
+    } catch (e) { return null; }
 }
 
 // LAN_ADDRESS_V1 — «Адрес сервера изменился». Роутер клиники после перезапуска
@@ -193,8 +207,13 @@ function filedBy(row, me) {
 }
 
 function buildNotifs(clinic, st) {
-    const { co, inpatient, lan } = st;
+    const { co, inpatient, lan, disk } = st;
     const list = [];
+    // DISK_GUARD_V1 — копия или обновление не сделаны из-за места / места мало
+    // (system-logic.js diskNotices). Числа — с десятичным знаком языка экрана.
+    for (const dn of diskNotices(disk, tr, getLang())) {
+        list.push({ ...dn, ctaLabel: tr('Открыть «Данные клиники»'), onCta: () => nav('clinic-data') });
+    }
     // LAN_ADDRESS_V1 — id с моментом смены: следующая смена — новое уведомление.
     if (lan) list.push({ id: 'lan-address:' + lan.at, sev: 'warn', icon: 'Warning',
         title: tr('Адрес сервера изменился'),

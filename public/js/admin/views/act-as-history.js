@@ -88,6 +88,7 @@ const RPC_LABELS = {
     inpatient_capabilities: 'Права в стационаре',
     deposit_balance: 'Баланс аванса',
     patient_base_aggregates: 'Сводка по пациентам',
+    disk_usage: 'Место на диске',   // DISK_GUARD_V1 — колокол администратора спрашивает каждую минуту
     // FIX_318_V1 — панель «Телефон», «Звонит», экран «Телефония»
     telephony_phone_me: 'Панель «Телефон»',
     telephony_live: 'Звонки сейчас',
