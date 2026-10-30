@@ -1308,7 +1308,15 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // номер не привязывает. Оплатили — «Привязать» её к тому же заказу. Серия
   // такого заказа тоже ничего не переводит: до неё приём не доходит.
   const gate = gateRefusal(db, order);   // REFUND_ANY_V1 — db: отметка возврата
-  if (gate) {
+  // REFUND_ANY_V1 (ревью B4) — заказ этикетки возвращён, но пробирка может
+  // кормить и другие (оплаченные) заказы визита (D3): тогда — как с выданным
+  // заказом этикетки (D7 ниже): оплаченные заполняются, значения возвращённого
+  // — в лоток «по заказу возврат». Только когда пробирку есть кому делить:
+  // прибор известен и добавлен, заказ этикетки он кормит (orderSide), выбор
+  // пробирки однозначен. Иначе — отказ ворот, как прежде (те же слова).
+  const refundedTube = gate === GATE_DETAIL.refunded && !!deviceId && x.ok
+    && !(device && Number(device.added) === 0) && !(anchor && anchor.ambiguous);
+  if (gate && !refundedTube) {
     record({ ...base, visitServiceId: linkId, status: 'unmatched', detail: gate });
     return 'AA';
   }
@@ -1346,7 +1354,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // строка прибора — match.js planTube: заказ пробирки первым; код у двух
   // других заказов — «неоднозначно» (не угадываем). Прибор неизвестен — других
   // заказов не ищем: чей это прибор, не знает никто.
-  const sides = [{ order, ...x, closed: isReleased(db, order.id) ? 'released' : '' }];
+  const sides = [{ order, ...x, closed: refundedTube ? 'refunded' : isReleased(db, order.id) ? 'released' : '' }];   // REFUND_ANY_V1 (ревью B4)
   if (deviceId) sides.push(...siblingSides(db, order, ctx));
   const tube = planTube(observations, sides.map((s, i) => ({ analytes: s.analytes, tier: i === 0 ? 0 : (s.closed ? 2 : 1) })));
   const fanned = tube.ambiguous.length > 0 || tube.involved.some((v, i) => i > 0 && v);
@@ -1360,6 +1368,13 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // LIS_VENDOR_EXACT_V1 (D3) — выдан заказ пробирки, а проба заполняет и другие
   // заказы визита: выданный не трогается (его часть — «уже выдан»), остальные
   // пишутся; сообщение — superseded (новое значение к выданному смотрит человек).
+  // REFUND_ANY_V1 (ревью B4) — возвращённый заказ этикетки, а другим заказам
+  // пробирки нечего взять: отказ ворот, как прежде (строка лотка — у заказа,
+  // только если номер — этикетка LAB- или его назвал человек).
+  if (sides[0].closed === 'refunded' && !fanned) {
+    record({ ...base, visitServiceId: linkId, status: 'unmatched', detail: GATE_DETAIL.refunded });
+    return 'AA';
+  }
   if (sides[0].closed && !fanned) {
     record({ ...base, visitServiceId: order.id, status: 'superseded', detail: SUPERSEDED_DETAIL });
     return 'AA';

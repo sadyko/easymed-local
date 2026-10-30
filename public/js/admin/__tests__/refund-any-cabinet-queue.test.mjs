@@ -16,10 +16,16 @@
 //   3. Сервер спрашивается ОДИН раз на загрузку списка — номерами всех строк,
 //      не по строке. Не ответил — список как был (подпись откажет сервер).
 //   4. loadServices не меняется (его исходник закреплён dead-visit-lines).
+//   5. (ревью B4) Возвращённая 'queued' (со следом работы) открывается
+//      «Открыть»; «—» — только у возвращённой 'added'; щелчок по имени такой —
+//      отказ словами «Услуга возвращена: …», а не «не проведена кассой».
+//   6. (ревью B4) Номера — партиями по 500; пока отметки новой загрузки не
+//      пришли, на экране прежний (размеченный) список, а не новые строки без
+//      отметок.
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';
+import { REFUNDED_LINE_MARK, REFUNDED_START_REFUSAL } from '../../shared/refunded-line.js';
 
 // --- fake DOM (тот же харнесс, что у cabinet-queue-order.test.mjs) ----------
 class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={setProperty(k,v){this[k]=v;},getPropertyValue(k){return this[k];}};this.children=[];this.attrs={};this.className='';this._t='';this._l={};this.dataset={};this.value='';}
@@ -50,8 +56,9 @@ function mk(t){
 }
 globalThis.Node = F;
 globalThis.Event = class { constructor(t, o) { this.type = t; Object.assign(this, o || {}); } };
+const TOASTS = [];
 const toastEl = mk('div');
-Object.defineProperty(toastEl, 'textContent', { get() { return ''; }, set() {}, configurable: true });
+Object.defineProperty(toastEl, 'textContent', { get() { return ''; }, set(v) { TOASTS.push(String(v)); }, configurable: true });
 globalThis.document = {
   createElement: mk, createElementNS: (_n, t) => mk(t), createTextNode: (t) => new TX(t),
   head: mk('head'), body: mk('body'), documentElement: mk('html'),
@@ -113,7 +120,7 @@ const VS_ROWS = [
   vs(17, 'in_progress', 'Давлатова',  'Мохира',  1017),
 ];
 const ITEM_ROWS = [{ id: 1012, invoices: { status: 'paid' } }, { id: 1016, invoices: { status: 'paid' } }, { id: 1017, invoices: { status: 'paid' } }];
-const NAMES = VS_ROWS.map((r) => r.visits.patients.full_name);
+const NAMES = [...VS_ROWS.map((r) => r.visits.patients.full_name), 'Юсупов Акмал'];   // последний — строка второй загрузки (тест мерцания)
 const REFUNDED_NAMES = ['Гаипов Тимур', 'Зокиров Бобур', 'Валиева Дилноза', 'Бакиев Санжар'];
 
 function matches(row, f) {
@@ -130,8 +137,10 @@ function matches(row, f) {
 }
 let REFUNDED = new Set([11, 13, 14, 15]);
 let RPC_FAILS = false;
+let HOLD = null;    // обещание: пока не разрешено, refunded_lines не отвечает
+let ROWS = VS_ROWS;
 const ASKED = [];   // тела вызовов refunded_lines
-const TABLES = () => ({ users: [DOC], visit_services: VS_ROWS, invoice_items: ITEM_ROWS, visits: [], recommended_services: [], admissions: [], patients: [] });
+const TABLES = () => ({ users: [DOC], visit_services: ROWS, invoice_items: ITEM_ROWS, visits: [], recommended_services: [], admissions: [], patients: [] });
 globalThis.fetch = async (url, opts) => {
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   const u = String(url);
@@ -146,6 +155,7 @@ globalThis.fetch = async (url, opts) => {
   }
   if (u === '/api/rpc/refunded_lines') {
     ASKED.push(body);
+    if (HOLD) await HOLD;
     if (RPC_FAILS) return { ok: false, status: 500, json: async () => ({ error: { message: 'boom' } }) };
     return { ok: true, json: async () => ({ data: { line_ids: (body.line_ids || []).filter((id) => REFUNDED.has(Number(id))) } }) };
   }
@@ -157,9 +167,10 @@ const perms = await import('../permissions.js');
 perms.setFullAccess('test');
 window.easymed.state.user = { ...DOC, is_admin: false, is_super_admin: false };
 
-async function openWork() {
-  const root = mk('div');
-  await cabinet.renderConsultation(root, { onNavigate: () => {}, tabId: 'consultation', payload: { sub: 'work' } });
+const NAV = [];
+async function openWork(root = mk('div')) {
+  NAV.length = 0;
+  await cabinet.renderConsultation(root, { onNavigate: (v, p) => NAV.push([v, p]), tabId: 'consultation', payload: { sub: 'work' } });
   await tick(60);
   return root;
 }
@@ -212,7 +223,7 @@ test('ожидающие («В очереди») и «Идёт приём» — 
   assert.deepStrictEqual(visibleNames(root), ['Давлатова Мохира']);
 });
 
-test('«Все статусы»: возвращённые видны с пометкой «Услуга возвращена», после рабочих; неначатую не начинают', async () => {
+test('«Все статусы»: возвращённые видны с пометкой «Услуга возвращена», после рабочих; не начинают ни одну', async () => {
   const root = await openWork();
   pickStatus(root, 'all');
   assert.deepStrictEqual(visibleNames(root),
@@ -226,6 +237,11 @@ test('«Все статусы»: возвращённые видны с поме
     const t = textOf(rowOf(root, name));
     assert.ok(!t.includes('Начать') && !t.includes('Ожидает кассу'), name + ': у возвращённой неначатой строки есть действие: ' + t);
   }
+  // Ревью B4: возвращённая 'queued' осталась в визите со следом работы — её
+  // открывают («Открыть»); «—» — только у 'added' (оставлена в визите без работы).
+  assert.ok(textOf(rowOf(root, 'Зокиров Бобур')).includes('Открыть'), 'возвращённую строку «В очереди» не открыть');
+  assert.ok(!textOf(rowOf(root, 'Валиева Дилноза')).includes('Открыть'), 'у возвращённой «Запланирован» появилось «Открыть»');
+  assert.ok(textOf(rowOf(root, 'Валиева Дилноза')).includes('—'));
   assert.ok(textOf(rowOf(root, 'Гаипов Тимур')).includes('Продолжить'), 'начатую возвращённую строку не открыть — документы приёма не видны');
   assert.ok(textOf(rowOf(root, 'Аминов Олим')).includes('Начать'), 'обычная строка потеряла «Начать»');
   pickStatus(root, 'completed');
@@ -253,4 +269,50 @@ test('возвратов нет — список, плитка и кнопки �
   assert.strictEqual(visibleNames(root).length, 5);
   assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '5');
   assert.ok(textOf(rowOf(root, 'Валиева Дилноза')).includes('Ожидает кассу'));
+});
+
+// --- ревью B4 ----------------------------------------------------------------
+test('возвращённая «Запланирован»: щелчок по имени — отказ «Услуга возвращена: …»; возвращённая «В очереди» открывается', async () => {
+  const root = await openWork();
+  pickStatus(root, 'all');
+  const nameBtn = (name) => walk(root).find((n) => n.tagName === 'BUTTON' && textOf(n).trim() === name);
+  TOASTS.length = 0;
+  nameBtn('Валиева Дилноза').click();
+  await tick();
+  assert.ok(TOASTS.includes(REFUNDED_START_REFUSAL), 'нет отказа словами возврата: ' + TOASTS.join(' | '));
+  assert.ok(!TOASTS.some((m) => m.includes('не проведена кассой')), 'возвращённой строке сказано «не проведена кассой»');
+  assert.strictEqual(NAV.length, 0, 'возвращённая «Запланирован» открылась');
+  const open = walk(rowOf(root, 'Зокиров Бобур')).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Открыть'));
+  open.click();
+  await tick(60);
+  assert.deepStrictEqual(NAV.map(([v, p]) => [v, p.serviceId]), [['service-workspace', 13]], 'возвращённая «В очереди» не открылась');
+});
+
+test('номера спрашиваются партиями по 500 (сервер принимает до 1000)', async () => {
+  ASKED.length = 0;
+  const rows = Array.from({ length: 1200 }, (_, i) => ({ id: i + 1, status: 'queued' }));
+  await cabinet.markRefundedRows(rows);
+  assert.deepStrictEqual(ASKED.map((b) => b.line_ids.length), [500, 500, 200]);
+  assert.deepStrictEqual(rows.filter((r) => r.refunded).map((r) => r.id), [11, 13, 14, 15]);
+});
+
+test('без мерцания: пока отметки новой загрузки не пришли, перерисовка показывает прежний размеченный список', async (t) => {
+  const first = await openWork();
+  ROWS = [...VS_ROWS, vs(18, 'queued', 'Юсупов', 'Акмал', 1018)];
+  REFUNDED = new Set([11, 13, 14, 15, 18]);
+  let release;
+  HOLD = new Promise((r) => { release = r; });
+  t.after(() => { HOLD = null; ROWS = VS_ROWS; REFUNDED = new Set([11, 13, 14, 15]); });
+  const second = mk('div');
+  const pending = openWork(second);
+  await tick(60);   // строки второй загрузки пришли, отметки — ещё нет
+  // Любая перерисовка в это время (здесь — смена фильтра в прежнем окне: кабинет
+  // рисует в своё текущее гнездо) не показывает новых строк без отметок.
+  pickStatus(first, 'queued');
+  assert.deepStrictEqual(visibleNames(second), ['Аминов Олим'], 'на экране строки без отметок: ' + visibleNames(second).join(', '));
+  release();
+  await pending;
+  assert.deepStrictEqual(visibleNames(second), ['Аминов Олим'], 'возвращённая строка второй загрузки среди ожидающих');
+  pickStatus(second, 'all');
+  assert.ok(marked(rowOf(second, 'Юсупов Акмал')), 'строка второй загрузки без пометки');
 });

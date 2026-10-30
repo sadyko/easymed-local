@@ -38,7 +38,7 @@ import { openAdmissionCard, openAdmissionReviewModal, openAdmissionAttendingModa
 import { loadPatientById } from '../data.js';   // NO_GREETING_V1 — currentUser() went with the greeting band
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
 import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor из базы — 1, а не true
-import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (поправка 3) — «Услуга возвращена»
+import { REFUNDED_LINE_MARK, REFUNDED_START_REFUSAL } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (поправка 3) — «Услуга возвращена»; отказ начать — ревью B4
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -174,8 +174,18 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
 // тянуть 300 строк очереди ради вкладки, на которую ещё не нажали, незачем.
 async function loadQueueOnce() {
     if (queueLoaded) return;
+    // REFUND_ANY_V1 (ревью B4) — без мерцания: строки новой загрузки попадают на
+    // экран только вместе со своими отметками «возвращена». Пока отметки едут,
+    // любая перерисовка (счётчики, рекомендации, смена фильтра) рисует прежний,
+    // уже размеченный список — а не новые строки, где возвращённая стоит в
+    // «Активных». loadServices не меняется: подмена — здесь, без ожиданий между
+    // её записью state.rows и возвратом прежнего списка.
+    const shown = state.rows;
     await loadServices();
-    await markRefundedRows(state.rows);   // REFUND_ANY_V1 (поправка 3) — один вопрос на загрузку списка
+    const fresh = state.rows;
+    state.rows = shown;
+    await markRefundedRows(fresh);   // REFUND_ANY_V1 (поправка 3) — один вопрос на загрузку списка
+    state.rows = fresh;
     queueLoaded = true;
 }
 
@@ -184,21 +194,29 @@ async function loadQueueOnce() {
 // (refunded_lines: отметка pay_refund_releases 'out', строка без счёта), а
 // статус у неё прежний: 'added' («Оставить услугу в визите»), 'queued',
 // 'in_progress'. По одному статусу список ставил её в «Активные», а плитка
-// «В очереди / готовы к осмотру» её считала. Теперь сервер спрашивается ОДИН
-// раз на загрузку списка — номерами всех строк (список не длиннее 300,
-// loadServices .limit(300); сервер принимает до 1000), не по строке. Отметка
+// «В очереди / готовы к осмотру» её считала. Теперь сервер спрашивается на
+// загрузку списка номерами всех строк, а не по строке: партиями по
+// REFUNDED_CHUNK (сервер принимает до 1000; список кабинета и так не длиннее
+// 300 — loadServices .limit(300), то есть это один вопрос). Отметка
 // r.refunded ставится строкам после загрузки: loadServices не меняется.
-// Сбой чтения — отметок нет, список как был (подпись на возвращённую строку
-// сервер не примет сам: routes/db.js refundedSignRefusal). Экспорт — для проверки.
+// Сбой чтения любой партии — отметок нет, список как был (подпись на
+// возвращённую строку сервер не примет сам: routes/db.js refundedSignRefusal).
+// Экспорт — для проверки.
+const REFUNDED_CHUNK = 500;
 export async function markRefundedRows(rows) {
     const list = rows || [];
     for (const r of list) r.refunded = false;
     const ids = [...new Set(list.map((r) => Number(r.id)).filter((n) => Number.isInteger(n) && n > 0))];
     if (!ids.length) return list;
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += REFUNDED_CHUNK) chunks.push(ids.slice(i, i + REFUNDED_CHUNK));
     try {
-        const { data, error } = await supabase.rpc('refunded_lines', { line_ids: ids });
-        if (error || !data || !Array.isArray(data.line_ids)) return list;
-        const got = new Set(data.line_ids.map(Number));
+        const parts = await Promise.all(chunks.map((c) => supabase.rpc('refunded_lines', { line_ids: c })));
+        const got = new Set();
+        for (const p of parts) {
+            if (!p || p.error || !p.data || !Array.isArray(p.data.line_ids)) return list;
+            for (const id of p.data.line_ids) got.add(Number(id));
+        }
         for (const r of list) r.refunded = got.has(Number(r.id));
     } catch (e) { console.warn('[my-services] refunded lines:', e && e.message); }
     return list;
@@ -1208,6 +1226,9 @@ async function openWorkspace(r) {
     // #15 — pay-first gate (single chokepoint: row click, calendar, and the action button all land here).
     // An 'added' service is un-released; the cashier must confirm payment OR debt first
     // (releaseServicesForInvoice then promotes added→queued). Refuse to open it until then.
+    // REFUND_ANY_V1 (ревью B4) — у возвращённой строки касса не «впереди», а
+    // позади: деньги она уже вернула. Отказ — её словами, не «не проведена кассой».
+    if (r.refunded && !cashierReleased(r)) { toast(REFUNDED_START_REFUSAL, 'fail'); return; }
     if (!cashierReleased(r)) { toast('Услуга ещё не проведена кассой — проведите оплату или долг, затем начните приём.', 'fail'); return; }   // RT2_FIX_V1 / CABINET_ACTIVE_FIRST_V1 — правило одно с порядком списка
     // WS_FULL_PATIENT_V1 — load the COMPLETE patient record (dob, gender, blood,
     // allergies, address…) so the workspace panels and the document blank show
@@ -1284,11 +1305,19 @@ function tagEl(label, kind, iconName) {
 //   in_progress  → «Продолжить» → openWorkspace
 //   completed    → «Открыть»    → openWorkspace
 function actionButton(r) {
-    // REFUND_ANY_V1 (поправка 3) — неначатая возвращённая строка: ни «Начать»,
-    // ни «Ожидает кассу» (касса её уже вернула) — работы по ней нет, пометка
-    // стоит у статуса. Начатую и завершённую открывают, как прежде: документы
-    // приёма остаются в карте, новый на неё не подписывается.
-    if (r.refunded && (r.status === 'added' || r.status === 'queued')) return h('span', { class: 'muted' }, '—');
+    // REFUND_ANY_V1 (поправка 3) — возвращённую строку не начинают: ни
+    // «Начать», ни «Ожидает кассу» (касса её уже вернула), пометка стоит у
+    // статуса. Ревью B4: «—» — только у 'added' (оставлена в визите без
+    // работы); возвращённая 'queued' осталась в визите, потому что по ней есть
+    // след работы (документ, проба), — её открывают («Открыть»), как начатую и
+    // завершённую: документы приёма остаются в карте, новый не подписывается.
+    if (r.refunded && r.status === 'added') return h('span', { class: 'muted' }, '—');
+    if (r.refunded && r.status === 'queued') {
+        return h('button', {
+            class: 'btn btn-outline btn-sm',
+            onclick: (ev) => { ev.stopPropagation(); openWorkspace(r); },
+        }, Icon('Doc', { size: 13 }), ' Открыть');
+    }
     const _rtReleased = cashierReleased(r);   // RT2_FIX_V1 / CABINET_ACTIVE_FIRST_V1 — правило одно с порядком списка
     if (r.status === 'added' && !_rtReleased) {
         // #15 — un-released (pay-first): visible but not actionable until the cashier confirms (payment/debt).

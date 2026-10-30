@@ -33,6 +33,9 @@
 
 import { refundedOpenLineIds } from './domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
 import { REFUNDED_LAB_REFUSAL } from '../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1
+// REFUND_ANY_V1 (ревью B4) — «это анализ?» — одно правило с листом лаборатории
+// (LAB_SERVICE_ROUTING_V1); сервер берёт его так же, как журналы (rpc/reports.js).
+import { isLabService, deptKindMap, typeNameMap } from '../../public/js/admin/views/lab-service.js';
 
 /** Статусы, означающие «над пациентом уже работают». */
 export const WORK_STATUSES = Object.freeze(['collected', 'in_progress', 'resulted', 'completed']);
@@ -59,6 +62,24 @@ const holes = (a) => a.map(() => '?').join(',');
 /** Куда из сметы можно без кассы: остаться в ней или отмениться. */
 export const FREE_MOVES = Object.freeze(['added', 'cancelled']);
 
+// REFUND_ANY_V1 (ревью B4) — какие из возвращённых строк — анализы. Правило то
+// же, что у листа лаборатории (lab-service.js isLabService): type 'lab' /
+// is_lab, отдел «лаборатория», вид услуги с «лабораторным» именем, привязанная
+// активная панель. Справочники читаются, только когда возвращённые строки
+// есть (обычный перевод статуса их не трогает). rows — строки запроса ниже.
+function refundedLabIds(db, rows) {
+  const svcIds = [...new Set(rows.map((r) => r.service_id).filter((x) => x != null))];
+  if (!svcIds.length) return new Set();
+  const svcs = new Map(db.prepare(`SELECT id, type, is_lab, department_id, type_id FROM services WHERE id IN (${holes(svcIds)})`)
+    .all(...svcIds).map((s) => [s.id, s]));
+  const deptKindById = deptKindMap(db.prepare('SELECT id, kind FROM departments').all());
+  const typeNameById = typeNameMap(db.prepare('SELECT id, name FROM service_types').all());
+  const panels = new Set(db.prepare(`SELECT service_id FROM lab_panels WHERE active = 1 AND service_id IN (${holes(svcIds)})`)
+    .all(...svcIds).map((p) => p.service_id));
+  return new Set(rows.filter((r) => isLabService(svcs.get(r.service_id), { deptKindById, typeNameById, hasPanel: (id) => panels.has(id) }))
+    .map((r) => r.id));
+}
+
 export function unpaidWorkRefusal(db, ids, nextStatus) {
   if (nextStatus === undefined || nextStatus === null || FREE_MOVES.includes(String(nextStatus))) return null;
   const list = (ids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
@@ -78,8 +99,9 @@ export function unpaidWorkRefusal(db, ids, nextStatus) {
   // поэтому правило «смета → работа» ниже его не видит. Внесённый результат
   // выдают и правят, как прежде.
   const refunded = new Set(refundedOpenLineIds(db, list, { withoutResult: true }));
+  const labIds = refunded.size ? refundedLabIds(db, rows.filter((r) => refunded.has(r.id))) : new Set();   // ревью B4
   for (const r of rows) {
-    if (refunded.has(r.id) && (Number(r.is_lab) === 1 || r.svc_type === 'lab')) return REFUNDED_LAB_REFUSAL;
+    if (labIds.has(r.id)) return REFUNDED_LAB_REFUSAL;
     if (r.status !== 'added') continue;
     if (!(Number(r.total) > 0)) continue;
     if (r.inv_payer != null) continue;

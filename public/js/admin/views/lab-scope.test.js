@@ -172,5 +172,6 @@ test('возвращённая строка без результата уход
 test('laboratory.js спрашивает refunded_lines и отсеивает строки после чтения результатов', () => {
   const code = labSrc.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
   assert.ok(/supabase\.rpc\('refunded_lines', \{ line_ids: /.test(code), 'лист не спрашивает сервер, какие строки возвращены');
-  assert.ok(/state\.rows = withoutRefundedIdle\(rows, refunded, resultsByVs\);/.test(code), 'лист не отсеивает возвращённые строки без результата');
+  // Ревью B4: результаты не прочитались — не прятать (hideIdle = null).
+  assert.ok(/const hideIdle = resultsFailed \? null : refunded;\s*state\.rows = withoutRefundedIdle\(rows, hideIdle, resultsByVs\);/.test(code), 'лист не отсеивает возвращённые строки без результата');
 });

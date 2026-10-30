@@ -112,3 +112,32 @@ test('кабинет врача: новый документ на возвращ
   assert.equal(docs.length, 1, 'прежний документ на месте');
   assert.equal(docs[0].voided_at, null, 'и не отозван');
 });
+
+// ── ревью B4 ──────────────────────────────────────────────────────────────
+// Анализ — то же правило, что у листа лаборатории (lab-service.js
+// isLabService): не только is_lab / type 'lab', но и отдел «лаборатория», вид
+// услуги с «лабораторным» именем, привязанная панель. Иначе анализ, который
+// клиника завела в отдел лаборатории, после возврата шёл в работу.
+test('анализ отдела «Лаборатория» (type «other», is_lab 0): после возврата в работу не идёт', () => {
+  const f = seed();
+  const dept = f.db.prepare("SELECT id FROM departments WHERE kind = 'laboratory' LIMIT 1").get();
+  assert.ok(dept, 'нет отдела лаборатории (мигр. 049)');
+  const svc = f.db.prepare("INSERT INTO services (name, price, type, is_lab, department_id) VALUES ('Ферритин', 50000, 'other', 0, ?)").run(dept.id).lastInsertRowid;
+  const line = f.db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?, ?, 1, 0, 0)').run(f.vid, svc).lastInsertRowid;
+  const inv = createInvoiceForVisit(f.db, { visit_id: f.vid, visit_service_ids: [line] }, registrar).invoice;
+  recordPayment(f.db, { invoice_id: inv.id, amount: inv.total_amount, method: 'cash' }, cashier);
+  f.db.prepare("UPDATE visit_services SET status = 'collected' WHERE id = ?").run(line);
+  refundInvoiceLine(f.db, { invoice_item_id: itemOf(f.db, line) }, cashier);
+  assert.equal(statusOf(f.db, line), 'collected');
+  assert.equal(unpaidWorkRefusal(f.db, [line], 'in_progress'), REFUNDED_LAB_REFUSAL);
+});
+
+// «Оставить услугу в визите»: неначатый анализ остаётся строкой 'added' без
+// счёта — результат ему отказывается словами возврата, а не «ещё не оплачен».
+test('оставленный в визите возвращённый анализ (\'added\'): результат — отказ словами возврата', () => {
+  const f = seed();
+  refundInvoiceLine(f.db, { invoice_item_id: itemOf(f.db, f.b), keep_services: true }, cashier);
+  assert.equal(statusOf(f.db, f.b), 'added');
+  assert.deepEqual(refundedOpenLineIds(f.db, [f.b]), [f.b]);
+  assert.throws(() => saveLabResults(f.db, { visit_service_id: f.b, rows: one }, lab), (e) => e.status === 400 && e.message === REFUNDED_LAB_REFUSAL);
+});

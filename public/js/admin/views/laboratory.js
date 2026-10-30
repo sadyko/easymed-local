@@ -46,6 +46,7 @@ import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
 // LAB_ONE_CLINIC_V1 — «лаборатория обслуживает всю клинику / только своё здание».
 import { scopeQuery, normalizeLabScope, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT } from './lab-scope.js';
 import { withoutRefundedIdle } from './lab-scope.js';   // REFUND_ANY_V1 — возвращённые строки без результата
+import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B4) — метка строки
 import { isAdminActor } from '../admin-actor.js';   // настройку клиники меняет администратор (сервер требует того же)
 // ADMIN_ACT_AS_V1 (R3) — «Проверить и выдать» (verified_by) — подпись лаборанта:
 // от чужого имени кнопки неактивны с подсказкой, сервер отказывает сам.
@@ -140,6 +141,7 @@ const state = {
     patientMap: {},    // visit_id -> { visit_date, patient }
     inBed: new Set(),  // LAB_PATIENT_ORIGIN_V1 — patient_id тех, кто сейчас в койке
     resultsByVs: {},   // visit_service_id -> lab_results rows (all analytes)
+    refundedIds: new Set(),   // REFUND_ANY_V1 (ревью B4) — номера строк «услуга возвращена» (метка lqItem)
     panelByService: {},// service_id -> lab_panels row
     deptKindById: {},  // department_id -> kind   (LAB_SERVICE_ROUTING_V1)
     typeNameById: {},  // service_type_id -> name (LAB_SERVICE_ROUTING_V1)
@@ -744,6 +746,10 @@ async function fetchAndPaint() {
             typeNameById: state.typeNameById,
             hasPanel: () => !!state.panelByService[r.service_id],
         }));
+        // REFUND_ANY_V1 (ревью B4) — какие строки «услуга возвращена»: вопрос
+        // уходит сразу, вместе с чтениями ниже (пациенты, результаты, стационар),
+        // а ответ ждётся только там, где он нужен, — загрузку он не удлиняет.
+        const refundedP = loadRefundedLineIds(rows.map((r) => r.id));
 
         // Patient info per visit (2-hop embeds are not supported → second read).
         const visitIds = [...new Set(rows.map(r => r.visit_id))];
@@ -759,6 +765,7 @@ async function fetchAndPaint() {
         // ALL result rows per order (multi-analyte panels → many rows per vs).
         const vsIds = rows.map(r => r.id);
         const resultsByVs = {};
+        let resultsFailed = false;   // REFUND_ANY_V1 (ревью B4) — партия результатов не прочиталась
         if (vsIds.length) {
             // LAB_LIST_COLUMNS_V1 — только те колонки, которые экран реально
             // читает (см. историю: select('*') тянул 565 КБ на перезагрузку).
@@ -781,7 +788,8 @@ async function fetchAndPaint() {
                     .in('visit_service_id', ids).limit(100000)));
             if (token !== lastFetchToken) return;
             for (const part of parts) {
-                for (const r of (part.data || [])) {
+                if (!part || part.error) resultsFailed = true;
+                for (const r of ((part && part.data) || [])) {
                     (resultsByVs[r.visit_service_id] = resultsByVs[r.visit_service_id] || []).push(r);
                 }
             }
@@ -808,10 +816,14 @@ async function fetchAndPaint() {
         } catch (e) { console.warn('[labs] origin:', e && e.message); }
 
         // REFUND_ANY_V1 — возвращённая строка без результата в работу не идёт:
-        // лист её не показывает (с результатом — остаётся, lab-scope.js).
-        const refunded = await loadRefundedLineIds(rows.map((r) => r.id));
+        // лист её не показывает (с результатом — остаётся, lab-scope.js) и
+        // помечает «Услуга возвращена» (lqItem). Ревью B4: результаты не
+        // прочитались — прятать нечем судить: строка остаётся, с меткой.
+        const refunded = await refundedP;
         if (token !== lastFetchToken) return;
-        state.rows = withoutRefundedIdle(rows, refunded, resultsByVs);
+        state.refundedIds = refunded || new Set();
+        const hideIdle = resultsFailed ? null : refunded;
+        state.rows = withoutRefundedIdle(rows, hideIdle, resultsByVs);
         state.patientMap = patientMap;
         state.resultsByVs = resultsByVs;
         paintFilters();
@@ -991,6 +1003,15 @@ function resultsCell(r) {
         worstFlagPill(results));
 }
 
+// REFUND_ANY_V1 (ревью B4) — метка «Услуга возвращена» у строки, за которую
+// касса вернула пациенту деньги: лаборант видит её до «Проверить и выдать».
+// Слова — общие с кабинетом врача и печатью (shared/refunded-line.js).
+function refundedTag(r) {
+    if (!(state.refundedIds instanceof Set) || !state.refundedIds.has(Number(r.id))) return null;
+    return h('span', { class: 'tag tag-crit lq-refunded', 'data-refunded-mark': '' },
+        Icon('Warning', { size: 12 }), REFUNDED_LINE_MARK);
+}
+
 // Одна строка — один анализ. Действия те же, что были (LAB_QUEUE_V2): забор,
 // в работу, результаты, изменить, проверить и выдать, отчёт, этикетка — но ни
 // одно из них здесь больше не главное (см. actionButtons).
@@ -1000,7 +1021,7 @@ function lqItem(r, patient) {
     return h('div', { class: 'lq-item', 'data-status': r.status || '' },
         tubePill(svc.tube_color),
         h('div', { class: 'lq-item-main' },
-            h('div', { class: 'lq-name' }, svc.name || '—', externalLabTag(svc)),   // EXTERNAL_LAB_V1
+            h('div', { class: 'lq-name' }, svc.name || '—', externalLabTag(svc), refundedTag(r)),   // EXTERNAL_LAB_V1 · REFUND_ANY_V1 (ревью B4)
             h('div', { class: 'lq-type' },
                 svc.specimen ? h('span', null, svc.specimen) : null,
                 results.length ? h('span', null, trf('{n} показателей', { n: results.length })) : null,

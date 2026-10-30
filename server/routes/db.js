@@ -353,9 +353,27 @@ export function refundedSignRefusal(db, meta, body, user) {   // REFUND_ANY_V1 �
   const v = body && body.values;
   const rows = (Array.isArray(v) ? v : [v]).filter((r) => r && typeof r === 'object');
   if (meta.table === 'visit_documents') {
-    if (meta.op !== 'insert') return false;
-    const ids = rows.filter((r) => isDoctorDocType(r.doc_type) && r.visit_service_id != null).map((r) => Number(r.visit_service_id));
-    return refundedOpenLineIds(db, ids).length > 0;
+    if (meta.op === 'insert') {
+      const ids = rows.filter((r) => isDoctorDocType(r.doc_type) && r.visit_service_id != null).map((r) => Number(r.visit_service_id));
+      return refundedOpenLineIds(db, ids).length > 0;
+    }
+    // Ревью B4 — правка документа врача на возвращённой строке — тоже новая
+    // подпись: текст (body) или вид (doc_type) документа врача, в том числе
+    // заметки, которая им становится. Название — можно. Строки правки — по
+    // фильтру запроса (та же выборка, что у R3); не прочитались — не отказ
+    // здесь (решат права таблицы). Реестр разрешает только update.
+    const touching = rows.filter((r) => ['body', 'doc_type'].some((k) => Object.prototype.hasOwnProperty.call(r, k)));
+    if (!touching.length || meta.op !== 'update') return false;
+    let targets;
+    try {
+      const sel = compile({ table: body.table, op: 'select', columns: 'id,doc_type,visit_service_id', filters: body.filters }, user, { db });
+      targets = db.prepare(sel.sql).all(...sel.params);
+    } catch { return false; }
+    const next = touching[0];
+    const hit = targets.filter((d) => d.visit_service_id != null
+      && (isDoctorDocType(d.doc_type) || (Object.prototype.hasOwnProperty.call(next, 'doc_type') && isDoctorDocType(next.doc_type))))
+      .map((d) => Number(d.visit_service_id));
+    return refundedOpenLineIds(db, hit).length > 0;
   }
   if (meta.table !== 'visit_services' || meta.op === 'insert') return false;
   const withNotes = rows.filter((r) => Object.prototype.hasOwnProperty.call(r, 'notes'));

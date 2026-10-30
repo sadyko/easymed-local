@@ -24,6 +24,7 @@ const NOTES = new Map();
 const WRITES = [];
 const RPCS = [];
 let REFUNDED = new Set();
+let REFUSE_SIGNED = false;   // ревью B4: сервер отвечает 409 refunded_line на запись строки
 globalThis.fetch = async (url, opts) => {
     const u = String(url);
     const body = JSON.parse((opts && opts.body) || '{}');
@@ -41,6 +42,9 @@ globalThis.fetch = async (url, opts) => {
             if (/^services\(type/.test(String(body.columns))) return ok({ services: { type: 'consultation', service_types: { name: 'Консультации' }, departments: null } });
             if (/notes/.test(String(body.columns))) return ok(NOTES.has(id) ? { notes: NOTES.get(id) } : null);
             return ok([]);
+        }
+        if (body.op === 'update' && REFUSE_SIGNED) {
+            return { ok: false, status: 409, json: async () => ({ error: { code: 'refunded_line', message: REFUNDED_SIGN_REFUSAL } }), headers: { getSetCookie: () => [] } };
         }
         if (body.op === 'update') { WRITES.push({ id, values: body.values }); if (body.values.notes) NOTES.set(id, body.values.notes); return ok(null); }
     }
@@ -104,11 +108,34 @@ test('обычная строка: пометки нет, подпись — к�
     assert.ok(!TOASTS.includes(REFUNDED_SIGN_REFUSAL));
 });
 
+// Ревью B4: касса вернула деньги, когда кабинет уже был открыт (пометки нет), —
+// сервер отказал записи 409 refunded_line; кабинет спрашивает пометку снова, и
+// «Услуга возвращена» встаёт над документом.
+test('сервер отказал записи 409 refunded_line — кабинет ставит пометку «Услуга возвращена»', async () => {
+    REFUNDED = new Set();
+    const ctx = cabinet(63);
+    await WS.hydrateLine(ctx);
+    assert.equal(await WS.loadRefundedMark(ctx), false);
+    assert.equal(ctx.container.querySelector('[data-refunded-note]'), null);
+    REFUNDED = new Set([63]);
+    REFUSE_SIGNED = true;
+    try {
+        WRITES.length = 0; TOASTS.length = 0;
+        await WS.signDocument(ctx);
+        assert.deepEqual(WRITES, [], 'запись прошла, хотя сервер отказал');
+        assert.equal(ctx.refunded, true, 'после отказа 409 refunded_line пометка не спрошена');
+        const note = ctx.container.querySelector('[data-refunded-note]');
+        assert.ok(note && note.textContent.includes(REFUNDED_LINE_MARK), 'пометки нет над документом');
+    } finally { REFUSE_SIGNED = false; REFUNDED = new Set(); }
+});
+
 test('источник: кабинет спрашивает пометку при открытии строки, печать ставит её над листом', () => {
     const HERE = path.dirname(fileURLToPath(import.meta.url));
     const src = fs.readFileSync(path.join(HERE, '..', 'views', 'service-workspace.js'), 'utf8');
     assert.match(src, /if \(ctx\.visitServiceId\) loadRefundedMark\(ctx\);/, 'renderServiceWorkspace не спрашивает refunded_lines');
     assert.match(src, /notice: ctx\.refunded \? REFUNDED_LINE_MARK : null/, 'печать без пометки «Услуга возвращена»');
+    // Ревью B4: описание подписи (CABINET_FIX_V1_R2) — снова над своей функцией.
+    assert.match(src, /Экспорт signDocument — для проверки\.\n \*\/\nasync function handleSignFinalize\(ctx\) \{/, 'описание handleSignFinalize оторвано от функции');
 });
 
 test('слова пометки — в словаре на трёх языках, uz/en без кириллицы', async () => {

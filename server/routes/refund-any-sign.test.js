@@ -90,3 +90,36 @@ test('возвращённая строка: новый документ вра�
     assert.equal(r.status, 200, 'обычная строка — копия пишется. ' + JSON.stringify(r.json));
   } finally { server.close(); }
 });
+
+// Ревью B4: правка документа врача на возвращённой строке — тоже новая подпись.
+// visit_documents правится через /api/db (своя запись автора: title, doc_type,
+// body). Текст или вид документа врача (или заметки, которая им становится) на
+// возвращённой строке — 409 refunded_line; название — можно; заметка — можно;
+// у обычной строки — как прежде.
+test('возвращённая строка: правка текста или вида документа врача в visit_documents — 409; название, заметка, обычная строка — пишутся', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const add = db.prepare(`INSERT INTO visit_documents (title, doc_type, visit_id, visit_service_id, patient_id, body, created_by)
+                            VALUES (?, ?, 1, ?, 1, ?, ?)`);
+    const concl1 = add.run('Заключение', 'conclusion', 1, JSON.stringify({ text: 'Здоров' }), DOC).lastInsertRowid;
+    const note1 = add.run('Заметка', 'note', 1, JSON.stringify({ text: 'Позвонить' }), DOC).lastInsertRowid;
+    const concl2 = add.run('Заключение', 'conclusion', 2, JSON.stringify({ text: 'Здоров' }), DOC).lastInsertRowid;
+    const doc = await login(base);
+    const upd = (id, values) => call(base, doc, '/api/db', { table: 'visit_documents', op: 'update', values, filters: [{ col: 'id', op: 'eq', val: id }] });
+    const bodyOf = (id) => db.prepare('SELECT body, doc_type FROM visit_documents WHERE id = ?').get(id);
+    const before = bodyOf(concl1);
+    let r = await upd(concl1, { body: { text: 'Здоров, итог' } });
+    assert.equal(r.status, 409, JSON.stringify(r.json));
+    assert.deepEqual([r.json.error.code, r.json.error.message], ['refunded_line', REFUNDED_SIGN_REFUSAL]);
+    assert.deepEqual(bodyOf(concl1), before, 'документ не тронут');
+    r = await upd(note1, { doc_type: 'conclusion' });
+    assert.equal(r.status, 409, 'заметка, которая становится документом врача, — тоже. ' + JSON.stringify(r.json));
+    assert.equal(bodyOf(note1).doc_type, 'note');
+    r = await upd(concl1, { title: 'Заключение (копия)' });
+    assert.equal(r.status, 200, 'название — не подпись. ' + JSON.stringify(r.json));
+    r = await upd(note1, { body: { text: 'Позвонить завтра' } });
+    assert.equal(r.status, 200, 'заметка — не документ врача. ' + JSON.stringify(r.json));
+    r = await upd(concl2, { body: { text: 'Здоров, итог' } });
+    assert.equal(r.status, 200, 'обычная строка — правится. ' + JSON.stringify(r.json));
+  } finally { server.close(); }
+});
