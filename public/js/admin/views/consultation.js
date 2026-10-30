@@ -38,6 +38,7 @@ import { openAdmissionCard, openAdmissionReviewModal, openAdmissionAttendingModa
 import { loadPatientById } from '../data.js';   // NO_GREETING_V1 — currentUser() went with the greeting band
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
 import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor из базы — 1, а не true
+import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (поправка 3) — «Услуга возвращена»
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -174,7 +175,33 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
 async function loadQueueOnce() {
     if (queueLoaded) return;
     await loadServices();
+    await markRefundedRows(state.rows);   // REFUND_ANY_V1 (поправка 3) — один вопрос на загрузку списка
     queueLoaded = true;
+}
+
+// REFUND_ANY_V1 (2026-10-30, поправка 3) — СТРОКА, ЗА КОТОРУЮ КАССА ВЕРНУЛА
+// ДЕНЬГИ, — НЕ РАБОТА ВРАЧА. Касса отпустила строку со счёта с возвратом
+// (refunded_lines: отметка pay_refund_releases 'out', строка без счёта), а
+// статус у неё прежний: 'added' («Оставить услугу в визите»), 'queued',
+// 'in_progress'. По одному статусу список ставил её в «Активные», а плитка
+// «В очереди / готовы к осмотру» её считала. Теперь сервер спрашивается ОДИН
+// раз на загрузку списка — номерами всех строк (список не длиннее 300,
+// loadServices .limit(300); сервер принимает до 1000), не по строке. Отметка
+// r.refunded ставится строкам после загрузки: loadServices не меняется.
+// Сбой чтения — отметок нет, список как был (подпись на возвращённую строку
+// сервер не примет сам: routes/db.js refundedSignRefusal). Экспорт — для проверки.
+export async function markRefundedRows(rows) {
+    const list = rows || [];
+    for (const r of list) r.refunded = false;
+    const ids = [...new Set(list.map((r) => Number(r.id)).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!ids.length) return list;
+    try {
+        const { data, error } = await supabase.rpc('refunded_lines', { line_ids: ids });
+        if (error || !data || !Array.isArray(data.line_ids)) return list;
+        const got = new Set(data.line_ids.map(Number));
+        for (const r of list) r.refunded = got.has(Number(r.id));
+    } catch (e) { console.warn('[my-services] refunded lines:', e && e.message); }
+    return list;
 }
 
 // ---------------------------------------------------------------------------
@@ -811,7 +838,7 @@ function rangeFilter() {
 function kpiSummary() {
     // CABINET_ACTIVE_FIRST_V1 — плитка считает ровно то, что покажет щелчок по
     // ней: тот же состав, что у фильтра «Активные» (STATUS_FILTER.active).
-    const toReview = state.rows.filter(r => STATUS_FILTER.active.includes(r.status) && inDateRange(r.visitDate)).length;   // и тот же период, что у списка (поиск не считаем)
+    const toReview = state.rows.filter(r => inStatusFilter(r, 'active') && inDateRange(r.visitDate)).length;   // и тот же период, что у списка (поиск не считаем) · REFUND_ANY_V1 (поправка 3) — без возвращённых
     const seenToday = state.rows.filter(r => r.status === 'completed' && isTodayDate(r.visitDate)).length;
     const refs = state.todayReferrals.rows;
     const recsToday = refs.length;
@@ -948,6 +975,21 @@ const STATUS_FILTER = {
     completed:   ['completed'],
 };
 
+// REFUND_ANY_V1 (2026-10-30, поправка 3) — возвращённая строка (r.refunded,
+// markRefundedRows) не входит ни в один рабочий фильтр — «Активные», «В
+// очереди», «Идёт приём» — и не считается плиткой «В очереди / готовы к
+// осмотру»: работы по ней нет. Её видно в «Все статусы» и в «Завершённых»
+// (сделанное остаётся) — с пометкой «Услуга возвращена». Одно правило на
+// список (filterRows) и плитку (kpiSummary). Экспорт — для проверки.
+const WORK_FILTERS = ['active', 'queued', 'in_progress'];
+export function inStatusFilter(r, filter) {
+    if (!r) return false;
+    if (filter === 'all') return true;
+    const want = STATUS_FILTER[filter] || [filter];
+    if (!want.includes(r.status)) return false;
+    return !(r.refunded && WORK_FILTERS.includes(filter));
+}
+
 // Касса закончила: «Запланированную» услугу отпускает оплаченный или частично
 // оплаченный счёт (RT2_FIX_V1), остальные статусы кассу уже прошли. Одно
 // правило на всех, кто о нём спрашивает: открыть приём (openWorkspace), кнопка
@@ -960,6 +1002,7 @@ export function cashierReleased(r) {
 // 3 — осмотрен. Неизвестный статус — в самый конец, а не потерян.
 export function queueRank(r) {
     const s = r && r.status;
+    if (r && r.refunded) return 3;   // REFUND_ANY_V1 (поправка 3) — возвращённая — не работа: к осмотренным, а не над ними
     if (s === 'in_progress') return 0;
     if (s === 'queued' || (s === 'added' && cashierReleased(r))) return 1;
     if (s === 'added') return 2;
@@ -980,10 +1023,7 @@ export function sortQueue(rows) {
 function filterRows() {
     const t = (state.search || '').trim().toLowerCase();
     return sortQueue(state.rows.filter(r => {
-        if (state.statusFilter !== 'all') {
-            const want = STATUS_FILTER[state.statusFilter] || [state.statusFilter];
-            if (!want.includes(r.status)) return false;
-        }
+        if (!inStatusFilter(r, state.statusFilter)) return false;   // REFUND_ANY_V1 (поправка 3) — и без возвращённых в рабочих фильтрах
         if (!inDateRange(r.visitDate)) return false;
         if (t) {
             const hay = [r.patientName, r.patientMrn, r.patientPhone, r.serviceName, r.doctorName]
@@ -1084,7 +1124,7 @@ function listRow(r, i) {
             r.doctorRoom && h('div', { class: 'docroom-line' },
                 trf('Кабинет {room}', { room: r.doctorRoom }) + (r.doctorFloor ? ' · ' + trf('Этаж {n}', { n: r.doctorFloor }) : '')),
         ),
-        h('td', null, statusBadge(r.status)),
+        h('td', null, statusBadge(r.status), r.refunded ? refundedMark() : null),   // REFUND_ANY_V1 (поправка 3)
         h('td', { class: 'num muted' }, formatVisitDate(r.visitDate)),
         h('td', { class: 'num muted' }, formatDateTime(r.createdAt)),
         h('td', { style: { textAlign: 'right' } }, actionButton(r)),
@@ -1220,6 +1260,15 @@ function statusBadge(status) {
     return tagEl(status || '—', '', null);
 }
 
+// REFUND_ANY_V1 (поправка 3) — пометка строки, за которую касса вернула деньги
+// (те же слова, что в кабинете над документом и на печати — shared/refunded-line.js).
+function refundedMark() {
+    const el = tagEl(REFUNDED_LINE_MARK, 'crit', 'Warning');
+    el.setAttribute('data-refunded-mark', '');
+    el.style.marginLeft = '6px';
+    return el;
+}
+
 function tagEl(label, kind, iconName) {
     return h('span', {
         class: 'tag' + (kind ? ' tag-' + kind : ''),
@@ -1235,6 +1284,11 @@ function tagEl(label, kind, iconName) {
 //   in_progress  → «Продолжить» → openWorkspace
 //   completed    → «Открыть»    → openWorkspace
 function actionButton(r) {
+    // REFUND_ANY_V1 (поправка 3) — неначатая возвращённая строка: ни «Начать»,
+    // ни «Ожидает кассу» (касса её уже вернула) — работы по ней нет, пометка
+    // стоит у статуса. Начатую и завершённую открывают, как прежде: документы
+    // приёма остаются в карте, новый на неё не подписывается.
+    if (r.refunded && (r.status === 'added' || r.status === 'queued')) return h('span', { class: 'muted' }, '—');
     const _rtReleased = cashierReleased(r);   // RT2_FIX_V1 / CABINET_ACTIVE_FIRST_V1 — правило одно с порядком списка
     if (r.status === 'added' && !_rtReleased) {
         // #15 — un-released (pay-first): visible but not actionable until the cashier confirms (payment/debt).
@@ -1471,6 +1525,7 @@ function showCalTip(r, ev) {
         h('div', { class: 'ct-row' }, h('span', null, 'Услуга'), h('b', null, r.serviceName)),
         h('div', { class: 'ct-row' }, h('span', null, 'Время'),  h('b', { class: 'num' }, timeStr)),
         h('div', { class: 'ct-row' }, h('span', null, 'Статус'), h('b', null, STATUS_RU[r.status] || r.status || '—')),
+        r.refunded ? h('div', { class: 'ct-row' }, refundedMark()) : null,   // REFUND_ANY_V1 (поправка 3)
     );
     const vw = window.innerWidth, vh = window.innerHeight;
     const W = 264, H = 130;
