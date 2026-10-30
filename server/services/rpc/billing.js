@@ -1777,8 +1777,11 @@ export function cashierLinePerformers(db, args, user) {
 //      коэффициент возврата счёта — чистые деньги / min(получено, сумма) — 1);
 //   4. кэшбэк: откат в доле возвращённого (adjustCashbackAfterRefund); счёт,
 //      ставший оплаченным, оценивается по обычному правилу — один раз за жизнь;
-//   5. номер очереди прежней услуги/врача снимается и выдаётся заново; заявка
-//      CRM узнаёт новую услугу и врача; журнал счёта — line_swap_paid.
+//   5. номер очереди прежней услуги/врача снимается и выдаётся заново, строка
+//      талона прежней очереди (service_queue_tickets) удаляется (REFUND_SWAP_V1;
+//      у «Вернуть эту услугу и выставить новую» — rebill — прежняя строка
+//      держит свой талон, номер получает новая); заявка CRM узнаёт новую
+//      услугу и врача; журнал счёта — line_swap_paid.
 //
 // КТО. Право «Исправляет услуги в счёте» (как у неоплаченных правок) И
 // денежная роль — кассир или администратор: здесь двигаются деньги, поэтому
@@ -1823,13 +1826,19 @@ function methodsWords(plan) {
 // Замена целиком, внутри транзакции вызывающего. `dryRun` — предпросмотр: всё
 // то же самое, но без ключа повтора и без номера очереди (транзакция всё равно
 // откатывается).
-function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
+// REFUND_SWAP_V1 — `rebill`: «Вернуть эту услугу и выставить новую» (только
+// для начатой работы). Прежняя строка остаётся в визите невыставленной и
+// отпущенной с возвратом, позиция счёта переходит к НОВОЙ строке визита; цена,
+// пересчёт счёта, расчёт с заплаченным, кэшбэк, журнал и очередь — те же.
+function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false }) {
   const vsId = args && args.visit_service_id;
   if (!isPositiveInt(vsId)) throw new RpcError('Строка услуги указана неверно.', 400);
   const newServiceId = args && args.new_service_id != null && args.new_service_id !== '' ? args.new_service_id : null;
   const newDoctorId = args && args.doctor_id != null && args.doctor_id !== '' ? args.doctor_id : null;
   if (newServiceId !== null && !isPositiveInt(newServiceId)) throw new RpcError('Новая услуга указана неверно.', 400);
   if (newDoctorId !== null && !isPositiveInt(newDoctorId)) throw new RpcError('Исполнитель указан неверно.', 400);
+  // REFUND_SWAP_V1 — у возврата с новой услугой новая услуга обязательна.
+  if (rebill && newServiceId === null) throw new RpcError('Выберите новую услугу.', 400);
   if (newServiceId === null && newDoctorId === null) throw new RpcError('Выберите новую услугу или нового врача.', 400);
   // REFUND_SWAP_V1 — «Без врача» — явный выбор окна замены: новой услуге
   // исполнитель не нужен. Пустой doctor_id по-прежнему значит «врач тот же».
@@ -1843,10 +1852,17 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
   if (!vs) throw new RpcError('Строка услуги не найдена.', 400);
   assertOwnBuilding(db, vs, 'Услуга');
   if (vs.clinic_item_id != null) throw new RpcError('Это списанный товар, а не услуга — его возвращают через «Вернуть услугу».', 400);
-  // REFUND_SWAP_V1 — начатую работу на другую услугу не переносят. Код
-  // line_performed говорит окну замены (cashier-line-fix.js openRefundSwap)
-  // предложить «Вернуть эту услугу и выставить новую»; текст отказа прежний.
-  assertNotPerformed(db, vs, 'заменить', 'line_performed');
+  if (rebill) {
+    // REFUND_SWAP_V1 — возврат с новой услугой — только для начатой работы
+    // (то же правило lineHasWork): неначатую меняют обычной заменой (строка
+    // та же, ничего не теряется).
+    if (!lineHasWork(db, vs)) throw new RpcError('Работа по этой услуге ещё не начата — её меняют обычной заменой.', 400);
+  } else {
+    // REFUND_SWAP_V1 — начатую работу на другую услугу не переносят. Код
+    // line_performed говорит окну замены (cashier-line-fix.js openRefundSwap)
+    // предложить «Вернуть эту услугу и выставить новую»; текст отказа прежний.
+    assertNotPerformed(db, vs, 'заменить', 'line_performed');
+  }
   assertLineMonthOpen(db, vs);
   const item = vs.invoice_item_id != null ? db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(vs.invoice_item_id) : null;
   const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
@@ -1854,7 +1870,9 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
   if (inv) assertOwnBuilding(db, inv, 'Счёт');
   { const r = paidSwapRefusal(db, inv, item); if (r) throw new RpcError(r, 400); }
 
-  const serviceChanges = newServiceId !== null && Number(newServiceId) !== Number(vs.service_id);
+  // REFUND_SWAP_V1 — у возврата с новой услугой строка всегда новая: цена и
+  // тариф — как при смене услуги (та же услуга у другого врача — тоже).
+  const serviceChanges = rebill || (newServiceId !== null && Number(newServiceId) !== Number(vs.service_id));
   if (noDoctor && !serviceChanges && vs.doctor_id != null) throw new RpcError('Убрать исполнителя можно только вместе с заменой услуги.', 400);
   const targetDoctor = noDoctor ? null : (newDoctorId !== null ? newDoctorId : vs.doctor_id);
   let svc = null;
@@ -1873,6 +1891,9 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
   } else if (newDoctorId !== null) {
     assertPerformer(db, newDoctorId, vs.service_id, vs.consultation_type_id);
   }
+  if (rebill && Number(newServiceId) === Number(vs.service_id) && Number(targetDoctor) === Number(vs.doctor_id)) {
+    throw new RpcError('Новая услуга и исполнитель совпадают с прежними — выберите другую услугу или другого исполнителя.', 400);
+  }
   if (!serviceChanges && Number(targetDoctor) === Number(vs.doctor_id)) {
     return { changed: false, refunded: 0, due: 0, refund_plan: [], invoice: inv, line: vs };
   }
@@ -1889,18 +1910,38 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
   const before = lineLabel(db, vs, item) + ' · ' + moneyWords(item.total);
   const oldOwn = invoiceOwnDiscount(db, inv.id);
   const oldBase = invoiceRestBase(db, inv.id);
-  if (serviceChanges) {
-    db.prepare('UPDATE visit_services SET service_id = ?, doctor_id = ?, unit_price = ?, total = ?, package_id = NULL, package_full = NULL, package_price = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')   // SERVICES_PACKAGES_V1
-      .run(newServiceId, targetDoctor, unit, lineTotal, tier, vsId);
+  let lineId = vsId;   // REFUND_SWAP_V1 — строка визита, которая теперь стоит в счёте
+  if (rebill) {
+    // REFUND_SWAP_V1 — «ВЕРНУТЬ ЭТУ УСЛУГУ И ВЫСТАВИТЬ НОВУЮ». Прежняя строка
+    // с начатой работой остаётся в визите НЕВЫСТАВЛЕННОЙ со своим статусом,
+    // результатами, документами и талоном — как у refund_invoice_line; она
+    // отпущена со счёта с возвратом и врачу не оплачивается (PAY_REFUND_V1),
+    // даже когда денег не вернули (та же цена или дороже — решение
+    // владельца), пока её не выставят снова (rebill_refunded). Лаборатория,
+    // прибор и кабинет врача видят её «Услуга возвращена» (REFUND_ANY_V1,
+    // refundedOpenLineIds). Позиция счёта переходит к НОВОЙ строке визита, и
+    // дальше всё — как у обычной замены.
+    db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = ?').run(vsId);
+    markRefundRelease(db, { invoiceId: inv.id, kind: 'out', lineIds: [vsId], always: true });
+    lineId = Number(db.prepare(`
+      INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, invoice_item_id, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, 'added', ?, ?, ?)`)
+      .run(vs.visit_id, newServiceId, targetDoctor, vs.quantity || 1, unit, lineTotal, tier, item.id, user.id).lastInsertRowid);
   } else {
-    db.prepare('UPDATE visit_services SET doctor_id = ?, unit_price = ?, total = ?, queue_key = NULL, queue_no = NULL WHERE id = ?')
-      .run(targetDoctor, unit, lineTotal, vsId);
+    if (serviceChanges) {
+      db.prepare('UPDATE visit_services SET service_id = ?, doctor_id = ?, unit_price = ?, total = ?, package_id = NULL, package_full = NULL, package_price = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')   // SERVICES_PACKAGES_V1
+        .run(newServiceId, targetDoctor, unit, lineTotal, tier, vsId);
+    } else {
+      db.prepare('UPDATE visit_services SET doctor_id = ?, unit_price = ?, total = ?, queue_key = NULL, queue_no = NULL WHERE id = ?')
+        .run(targetDoctor, unit, lineTotal, vsId);
+    }
+    // REFUND_SWAP_V1 — талон прежней очереди уходит вместе с номером, как у
+    // refund_invoice_line: строка талона держала услугу, кабинет и номер,
+    // которых у строки больше нет, — доска очереди и перепечатка чека звали
+    // пациента туда, куда он уже не идёт. Новый номер выдаётся ниже. Только
+    // у обычной замены: у возврата с новой прежняя строка держит свой талон.
+    db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(vsId);
   }
-  // REFUND_SWAP_V1 — талон прежней очереди уходит вместе с номером, как у
-  // refund_invoice_line: строка талона держала услугу, кабинет и номер,
-  // которых у строки больше нет, — доска очереди и перепечатка чека звали
-  // пациента туда, куда он уже не идёт. Новый номер выдаётся ниже.
-  db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(vsId);
   const consult = !serviceChanges && vs.service_id == null && vs.consultation_type_id != null
     ? consultationFor(db, vs.consultation_type_id, targetDoctor) : null;
   const description = serviceChanges ? (svc.name || '') : ((consult && consult.name) || item.description);
@@ -1975,19 +2016,21 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
                    AND status NOT IN ('queued', 'cancelled', 'in_progress', 'completed', 'collected', 'resulted')`).run(inv.id);
   }
   // Номер очереди — новый: прежний был у прежнего врача / услуги.
-  const lineNow = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
+  const lineNow = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(lineId);
   if (!dryRun && lineNow.status === 'queued') {
-    try { issueQueueNumbers(db, { p_ids: [vsId] }, user); } catch (e) { if (!(e && e.status)) throw e; }
+    try { issueQueueNumbers(db, { p_ids: [lineId] }, user); } catch (e) { if (!(e && e.status)) throw e; }
   }
 
   // 4. Журнал.
-  const after = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
+  const after = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(lineId);
   const final = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
   const afterLabel = lineLabel(db, after, { description }) + ' · ' + moneyWords(lineTotal);
   lineAudit(db, {
     inv: final, number: inv.invoice_number, visitId: vs.visit_id, action: 'line_swap_paid',
     fromStatus: inv.status, toStatus: final.status, amount: final.total_amount, refundAmount: refunded,
-    notes: 'Замена в оплаченном счёте: ' + before + ' → ' + afterLabel
+    notes: (rebill
+      ? 'Возврат услуги с начатой работой и новая услуга: ' + before + ' (работа осталась в визите невыставленной, врачу не оплачивается) → ' + afterLabel
+      : 'Замена в оплаченном счёте: ' + before + ' → ' + afterLabel)
       + (refunded > 0 ? ' · возвращено ' + moneyWords(refunded) + ' (' + methodsWords(plan) + ')'
         : due > 0 ? ' · к доплате ' + moneyWords(due) : ' · сумма счёта не изменилась'),
     reason: extraReason || null,
@@ -1995,6 +2038,7 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
 
   const result = {
     changed: true, line: after, invoice: final,
+    rebill, old_line_id: rebill ? vsId : null,   // REFUND_SWAP_V1
     total_before: oldTotal, total_after: T, paid_before: P,
     refunded, due, refund_plan: plan, to_balance: anyBalance,
     line_before: before, line_after: afterLabel,
@@ -2003,10 +2047,12 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
 }
 
 /**
- * cashier_line_swap_paid({ visit_service_id, new_service_id?, doctor_id?,
- *   to_balance?, card_fallback?, reason?, idempotency_key? }) — заменить
- * услугу и/или врача строки в счёте, по которому деньги уже были, с расчётом
- * разницы (см. шапку блока).
+ * cashier_line_swap_paid({ visit_service_id, new_service_id?, doctor_id? |
+ *   no_doctor?, to_balance?, card_fallback?, reason?, idempotency_key? }) —
+ * заменить услугу и/или врача строки в счёте, по которому деньги уже были, с
+ * расчётом разницы (см. шапку блока). doctor_id не указан — врач тот же;
+ * no_doctor: true (REFUND_SWAP_V1) — новая услуга без исполнителя (только
+ * вместе с заменой услуги и только если ей не нужен врач).
  */
 export function swapPaidLine(db, args, user) {
   const rpc = 'cashier_line_swap_paid';
@@ -2030,6 +2076,50 @@ export function swapPaidLineQuote(db, args, user) {
   requireSwapRight(db, user);
   try {
     db.transaction(() => { throw new SwapPreview(swapPaidLineTx(db, args, user, { rpc: 'cashier_line_swap_quote', dryRun: true })); })();
+  } catch (e) {
+    if (e instanceof SwapPreview) return { ...e.result, preview: true };
+    throw e;
+  }
+  return null;
+}
+
+/**
+ * REFUND_SWAP_V1 (2026-10-29) — cashier_line_rebill_paid({ visit_service_id,
+ *   new_service_id, doctor_id? | no_doctor?, to_balance?, card_fallback?,
+ *   reason?, idempotency_key? }) — «ВЕРНУТЬ ЭТУ УСЛУГУ И ВЫСТАВИТЬ НОВУЮ».
+ *
+ * Владелец: по услуге уже начата работа (взята проба, есть результат,
+ * документ, идёт приём) — перенести работу на другую услугу нельзя. Одна
+ * операция: прежняя строка уходит из счёта (работа остаётся в карте, врачу не
+ * оплачивается — markRefundRelease), в тот же визит и в ту же позицию счёта
+ * встаёт новая услуга с исполнителем, разница — как у обычной замены
+ * (swapPaidLineTx): дешевле — возврат сразу, каждым способом или на баланс;
+ * дороже — счёт «частично» с разницей к доплате. Право — то же, что у замены
+ * (requireSwapRight): «Исправляет услуги в счёте» и денежная роль.
+ */
+export function rebillPaidLine(db, args, user) {
+  const rpc = 'cashier_line_rebill_paid';
+  requireSwapRight(db, user);
+  { const seen = idemReplay(db, rpc, args); if (seen) return seen; }
+  const run = db.transaction(() => swapPaidLineTx(db, args, user, { rpc, rebill: true }));
+  const out = run.immediate();   // IMMEDIATE — как у всех возвратов: баланс и карта под одной блокировкой
+  if (out && out.changed && !out.repeated && out.line) {
+    // CRM_ONE_WAY_V1 — новая строка кассы доходит до живой заявки этой записи,
+    // как у cashier_line_add. Деньги уже проведены — сбой карточки их не отменяет.
+    try { onVisitLinesAdded(db, out.line.visit_id, [out.line.id]); }
+    catch (e) { console.error('[crm] новая строка возврата с заменой', out.line.id, 'не отражена в карточке:', e && e.message); }
+  }
+  return out;
+}
+
+/**
+ * REFUND_SWAP_V1 — cashier_line_rebill_quote(те же аргументы) — предпросмотр
+ * для окна замены: та же операция в транзакции, которая откатывается.
+ */
+export function rebillPaidLineQuote(db, args, user) {
+  requireSwapRight(db, user);
+  try {
+    db.transaction(() => { throw new SwapPreview(swapPaidLineTx(db, args, user, { rpc: 'cashier_line_rebill_quote', dryRun: true, rebill: true })); })();
   } catch (e) {
     if (e instanceof SwapPreview) return { ...e.result, preview: true };
     throw e;

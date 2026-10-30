@@ -20,6 +20,7 @@ import { createDeposit, acceptDeposit } from './deposits.js';
 import { walletBalance } from '../domain/wallet.js';
 import { catalogByKey } from '../../../public/js/shared/permission-catalog.js';
 
+const admin = { id: 1, role: 'admin', full_name: 'Админ' };
 const registrar = { id: 7, role: 'registrar', full_name: 'Регистратор' };
 const cashier = { id: 9, role: 'cashier', full_name: 'Кассир' };
 const DOC = 20, DOC2 = 21, NURSE = 22;
@@ -108,6 +109,23 @@ test('смена услуги: исполнитель должен подход�
   assert.equal(vsRow(db, a.vs).doctor_id, DOC);
   const i = inv(db, a.invoiceId);
   assert.deepEqual([i.total_amount, i.paid_amount, i.status], [150000, 80000, 'partial']);
+  assertBalanced(db, a.invoiceId);
+});
+
+test('смена одной услуги: прежний врач уволен — отказ «уволен», деньги и строка не тронуты', () => {
+  const { db, pid, CONS, USG } = clinic();
+  const a = paid(db, pid, CONS, DOC);   // приём у DOC, 150 000 наличными
+  db.prepare('UPDATE users SET is_active = 0 WHERE id = ?').run(DOC);
+  const snap = () => JSON.stringify([inv(db, a.invoiceId), vsRow(db, a.vs), pays(db, a.invoiceId)]);
+  const before = snap();
+  // Врач не выбран — остаётся прежний, а он уволен: новой услуге не подходит.
+  refused(() => call('cashier_line_swap_quote', db, { visit_service_id: a.vs, new_service_id: USG }, cashier), /уволен/, 400);
+  refused(() => call('cashier_line_swap_paid', db, { visit_service_id: a.vs, new_service_id: USG }, cashier), /уволен/, 400);
+  assert.equal(snap(), before, 'отказ ничего не тронул');
+  assertBalanced(db, a.invoiceId);
+  // Работающий исполнитель — замена проходит.
+  const r = call('cashier_line_swap_paid', db, { visit_service_id: a.vs, new_service_id: USG, doctor_id: DOC2 }, cashier);
+  assert.equal(r.refunded, 70000);
   assertBalanced(db, a.invoiceId);
 });
 
@@ -239,8 +257,22 @@ test('работа начата — отказ замены с кодом line_p
   db.prepare("UPDATE visit_services SET status = 'in_progress' WHERE id = ?").run(c.vs);
   assert.throws(() => call('cashier_line_change_service', db, { visit_service_id: c.vs, new_service_id: USG }, cashier),
     (e) => e.status === 400 && /оказывается/.test(e.message) && e.code === undefined);
+  // И остальные двери — смена врача, «убрать» у кассы и обе двери карты
+  // пациента: прежний отказ, без кода (код только у замены в оплаченном).
+  const doors = [
+    ['cashier_line_set_doctor', { visit_service_id: c.vs, doctor_id: DOC2 }, cashier],
+    ['cashier_line_remove', { visit_service_id: c.vs }, cashier],
+    ['change_unpaid_service', { visit_service_id: c.vs, new_service_id: USG }, admin],
+    ['remove_unpaid_service', { visit_service_id: c.vs }, admin],
+  ];
+  for (const [name, args, who] of doors) {
+    assert.throws(() => call(name, db, args, who), (e) => e.status === 400 && /оказывается/.test(e.message) && e.code === undefined, name);
+  }
+  const lc = vsRow(db, c.vs);
+  assert.deepEqual([lc.service_id, lc.doctor_id, lc.status], [CONS, DOC, 'in_progress'], 'строка на месте');
   assertBalanced(db, a.invoiceId);
   assertBalanced(db, b.invoiceId);
+  assertBalanced(db, c.invoiceId);
 });
 
 test('описание права «Исправляет услуги в счёте» говорит про замену в окне «Платежи»; по умолчанию — только администратор', () => {

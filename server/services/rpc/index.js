@@ -4,6 +4,7 @@
 import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDebt, changeUnpaidService, removeUnpaidService, refundPayment, refundInvoiceLine, createInvoiceForAdmission, removeAdmissionLineFromInvoice, visitRefundedLines,
   setUnpaidLineDoctor, addServiceToVisitInvoice, cashierLinePerformers,   // CASHIER_HEAD_V1
   swapPaidLine, swapPaidLineQuote,   // CASHIER_PAID_SWAP_V1
+  rebillPaidLine, rebillPaidLineQuote,   // REFUND_SWAP_V1 — «Вернуть эту услугу и выставить новую»
   invoiceLineWork } from './billing.js';   // REFUND_ANY_V1 — что уже сделано по строкам счёта
 import { refundedLines } from './billing.js';   // REFUND_ANY_V1 — «услуга возвращена»
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
@@ -175,6 +176,12 @@ export const RPC = {
   // подтверждения; «Возвраты и отмены» кассы — только чтение.
   cashier_line_swap_paid:      (db, args, user) => swapPaidLine(db, args, user),
   cashier_line_swap_quote:     (db, args, user) => swapPaidLineQuote(db, args, user),
+  // REFUND_SWAP_V1 — по услуге начата работа: «Вернуть эту услугу и выставить
+  // новую» одной операцией (прежняя строка остаётся в визите, врачу не
+  // оплачивается; новая — в тот же счёт с тем же расчётом разницы) и её
+  // предпросмотр для окна замены в «Платежах».
+  cashier_line_rebill_paid:    (db, args, user) => rebillPaidLine(db, args, user),
+  cashier_line_rebill_quote:   (db, args, user) => rebillPaidLineQuote(db, args, user),
   cashier_refunds:             (db, args, user) => cashierRefunds(db, args, user),
   cashier_unbilled:            (db, args, user) => cashierUnbilled(db, args, user),   // REFERRAL_BILL_V1 — «Ждут счёта» кассы; только чтение
   cashier_invoice_search:      (db, args, user) => cashierInvoiceSearch(db, args, user),   // REFUND_ANY_V1 — поиск счёта за любой день; только чтение
