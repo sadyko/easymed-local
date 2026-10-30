@@ -14,7 +14,7 @@ import path from 'node:path';
 import { TABLE_PLAN, WIPE_ORDER, GUARD_TRIGGERS, tablesBy } from './test-data-wipe-plan.js';
 import { SHIPPED } from './branch-sync/journal.js';
 import { checkpointWal } from '../db/connection.js';
-import { currentDiskSpace, dbBytes, RESERVE_BYTES } from './disk-guard.js';
+import { currentDiskSpace, dbBytes, RESERVE_BYTES, gbText, gbValue } from './disk-guard.js';
 
 const TABLES_SQL = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'";
 
@@ -203,6 +203,26 @@ export function wipeTestData(db) {
 
 // ── место под журнал удаления ──────────────────────────────────────────────
 
+// Ключ словаря public/js/admin/i18n-strings.js (как COPY_REFUSED_TEMPLATE в
+// disk-guard.js): экран переводит фразу целиком по шаблону.
+export const WIPE_NO_SPACE_TEMPLATE = 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Тестовые данные не удалены.';
+
+/**
+ * Отказ «нет места» — с шаблоном и значениями, как disk-guard.js noSpaceError
+ * (DISK_GUARD_V1): message — готовая русская фраза (журнал, русский экран),
+ * в params числа — ЧИСЛАМИ, десятичный знак ставит экран по своему языку.
+ * «Нужно» округляется вверх, «свободно» — вниз.
+ */
+export function wipeNoSpaceError(need, free) {
+  const e = new Error(WIPE_NO_SPACE_TEMPLATE.replace('{need}', gbText(need, { up: true })).replace('{free}', gbText(free)));
+  e.code = 'no_space';
+  e.need_bytes = need;
+  e.free_bytes = free;
+  e.template = WIPE_NO_SPACE_TEMPLATE;
+  e.params = { need: gbValue(need, { up: true }), free: gbValue(free) };
+  return e;
+}
+
 // Строка следа связи зданий — запись журнала и надгробие с ключами, — которую
 // триггеры *_journal_del пишут на каждую удаляемую строку, пока wipeSyncTraces
 // её не убрал. С запасом: uid — 36 символов.
@@ -276,14 +296,21 @@ const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 // Один файл: unlink не идёт по ссылке никогда — даже если на месте файла
 // успела появиться ссылка, уходит сама ссылка. Файл, занятый антивирусом
 // (Windows: EBUSY/EPERM), — ещё три попытки через 100 мс, как у копий
-// (backup.js discardPartial). 'ok' — удалён, 'gone' — исчез сам, иначе — код
-// ошибки: файл остался.
+// (backup.js discardPartial). На EPERM один раз снимается «только для чтения»
+// (Windows) — и только у самого файла: chmod по ссылке прошёл бы к цели,
+// поэтому перед ним путь проверяется ещё раз. 'ok' — удалён, 'gone' — исчез
+// сам, иначе — код ошибки: файл остался.
 function unlinkFile(p) {
+  let madeWritable = false;
   for (let attempt = 0; ; attempt++) {
     try { fs.unlinkSync(p); return 'ok'; } catch (err) {
       const code = (err && err.code) || 'error';
       if (code === 'ENOENT') return 'gone';
       if (attempt >= 3 || !['EBUSY', 'EPERM', 'EACCES'].includes(code)) return code;
+      if (code === 'EPERM' && !madeWritable && entryKind(p) === 'file') {
+        madeWritable = true;
+        try { fs.chmodSync(p, 0o666); continue; } catch { /* не вышло — обычная попытка через паузу */ }
+      }
       pause(100);
     }
   }
@@ -320,7 +347,9 @@ function clearDocsDir(dataDir, docs, dir, tally) {
     } else {
       tally.failed++;
       left++;
-      warnDocs(dataDir, docs, 'в папке документов ссылка — не открывается и не удаляется', kind);
+      warnDocs(dataDir, docs, kind === 'link'
+        ? 'в папке документов ссылка — не открывается и не удаляется'
+        : 'в папке документов не файл и не папка — не удаляется', kind);
     }
   }
   if (left) return;
@@ -412,6 +441,8 @@ export function vacuumAfterWipe(db, dataDir, { diskSpaceImpl = currentDiskSpace 
     db.exec('VACUUM');
   } catch (e) {
     console.warn('[test-data-wipe] VACUUM не удался (удаление цело):', e && e.message);
+    // Оборванный VACUUM мог оставить кадры в журнале — он сжимается и здесь.
+    checkpointWal(db);
     return { done: false, reason: 'failed', before_bytes: before, after_bytes: dbBytes(dbFile) };
   }
   checkpointWal(db);
@@ -419,12 +450,25 @@ export function vacuumAfterWipe(db, dataDir, { diskSpaceImpl = currentDiskSpace 
 }
 
 /**
- * Всё удаление: транзакция (wipeTestData), потом файлы документов, потом
- * VACUUM. Бросает только из транзакции — тогда база цела и файлы не тронуты.
- * Итог — тот же, что у wipeTestData (с числом карточек CRM без учебной
- * записи), плюс files и vacuum.
+ * Всё удаление: проверка места, транзакция (wipeTestData), потом файлы
+ * документов, потом VACUUM. Бросает только до транзакции и из неё — тогда
+ * база цела и файлы не тронуты. Итог — тот же, что у wipeTestData (с числом
+ * карточек CRM без учебной записи), плюс files и vacuum.
+ *
+ * Поправка 9(б): одна большая транзакция раздувает журнал базы (-wal)
+ * примерно на объём удаляемого. Свободного места меньше этого и запаса 1 ГБ
+ * (RESERVE_BYTES) — отказ 'no_space' ДО транзакции (wipeNoSpaceError).
+ * Платформа не сказала, сколько места, — удаление идёт, как копии.
  */
 export function runTestDataWipe(db, dataDir, { diskSpaceImpl = currentDiskSpace } = {}) {
+  const space = diskSpaceImpl(dataDir);
+  if (space) {
+    const need = estimateWipeBytes(db) + RESERVE_BYTES;
+    if (space.free < need) {
+      console.warn(`[test-data-wipe] удаление не начато: нужно ${need} Б, свободно ${space.free} Б`);
+      throw wipeNoSpaceError(need, space.free);
+    }
+  }
   const result = wipeTestData(db);
   const files = removeVisitDocFiles(dataDir);
   const vacuum = vacuumAfterWipe(db, dataDir, { diskSpaceImpl });
@@ -444,14 +488,17 @@ export const SUMMARY_KEYS = Object.freeze([
  * удаление не меняло (поправка 8), и это надо прочесть, а не вычислить.
  */
 export function summaryLine(result) {
+  // Итог мог быть прочитан с диска (test-data-wipe-result.json): каждое
+  // значение — числом, пустое или испорченное — ноль.
+  const num = (x) => Number(x) || 0;
   const d = (result && result.deleted) || {};
   const c = (result && result.cleared) || {};
-  const parts = SUMMARY_KEYS.map((k) => `${k} ${d[k] || 0}`);
-  parts.push(`products_reset ${c.products || 0}`, `crm_lines_unlinked ${c.crm_request_services || 0}`);
-  parts.push(`карточек CRM без учебной записи: ${Number(result && result.crm_cards_unbooked) || 0} (стадии не менялись)`);
+  const parts = SUMMARY_KEYS.map((k) => `${k} ${num(d[k])}`);
+  parts.push(`products_reset ${num(c.products)}`, `crm_lines_unlinked ${num(c.crm_request_services)}`);
+  parts.push(`карточек CRM без учебной записи: ${num(result && result.crm_cards_unbooked)} (стадии не менялись)`);
   const f = result && result.files;
-  if (f) parts.push(`files ${f.removed}` + (f.failed ? ` (не удалено ${f.failed})` : ''));
+  if (f) parts.push(`files ${num(f.removed)}` + (num(f.failed) ? ` (не удалено ${num(f.failed)})` : ''));
   const v = result && result.vacuum;
-  if (v) parts.push(v.done ? `vacuum ${v.before_bytes}→${v.after_bytes} Б` : `vacuum нет (${v.reason})`);
+  if (v) parts.push(v.done ? `vacuum ${num(v.before_bytes)}→${num(v.after_bytes)} Б` : `vacuum нет (${v.reason})`);
   return 'Тестовые данные удалены: ' + parts.join(', ');
 }

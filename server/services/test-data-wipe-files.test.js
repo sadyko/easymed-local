@@ -1,5 +1,6 @@
-// TEST_DATA_WIPE_V1 — после транзакции: файлы документов визитов, VACUUM
-// (удалённое действительно уходит из файла базы) и строка итога для журнала.
+// TEST_DATA_WIPE_V1 — место до удаления, после транзакции: файлы документов
+// визитов, VACUUM (удалённое действительно уходит из файла базы) и строка
+// итога для журнала.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,16 +8,21 @@ import path from 'node:path';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { tmpDir, closeOnExit, closeRegistered } from '../test-helpers/tmpdir.js';
-import { GB } from './disk-guard.js';
+import { GB, RESERVE_BYTES } from './disk-guard.js';
 import {
   removeVisitDocFiles, vacuumAfterWipe, runTestDataWipe, summaryLine, estimateWipeBytes, wipeTestData,
+  WIPE_NO_SPACE_TEMPLATE,
 } from './test-data-wipe.js';
+import { STRINGS } from '../../public/js/admin/i18n-strings.js';
 
 test.after(closeRegistered);
 
 // Диск машины разработчика — не данные теста (на этом ПК ~5 ГБ свободно).
 const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
 const FULL = () => ({ free: 10 * 1024 * 1024, total: 1000 * GB });
+// Место было до удаления и кончилось к VACUUM: первый вопрос диску — проверка
+// до транзакции, второй — перед VACUUM.
+const roomyThenFull = () => { let calls = 0; return () => (calls++ === 0 ? ROOMY() : FULL()); };
 const MARK = 'WIPE-MARKER-7f3a9c';
 
 function put(file, text = 'x') {
@@ -108,6 +114,10 @@ test('папка хранилища — ссылка: по ней не идём,
 test('VACUUM: файл базы меньше, удалённых строк в нём больше нет (и в журнале -wal)', () => {
   const { dir, db, card } = clinic();
   const file = path.join(dir, 'easymed.db');
+  const lastVisit = db.prepare('SELECT MAX(id) AS m FROM visits').get().m;
+  const insVs = db.prepare("INSERT INTO visit_services (visit_id, quantity, unit_price, total, status) VALUES (?, 1, 100, 100, 'added')");
+  for (let i = 0; i < 3; i++) insVs.run(lastVisit);
+  const vsMax = db.prepare('SELECT MAX(id) AS m FROM visit_services').get().m;
   db.pragma('wal_checkpoint(TRUNCATE)');
   assert.ok(fs.readFileSync(file).includes(MARK), 'метка учебных визитов лежит в файле до удаления');
   const r = runTestDataWipe(db, dir, { diskSpaceImpl: ROOMY });
@@ -122,11 +132,44 @@ test('VACUUM: файл базы меньше, удалённых строк в �
   assert.equal(r.crm_cards_unbooked, 1);
   assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(card).status, 'scheduled');
   assert.match(summaryLine(r), /карточек CRM без учебной записи: 1 \(стадии не менялись\)/);
+  // Номера строк визита идут дальше учебных и после VACUUM (sqlite_sequence
+  // цел): штрихкод пробы, выданный однажды, не достанется новой пробе.
+  const v = db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date) VALUES (1, 1, '2026-10-31T09:00:00Z')").run().lastInsertRowid;
+  const vs = insVs.run(v).lastInsertRowid;
+  assert.ok(vs > vsMax, `новая строка визита ${vs} > учебных ${vsMax}`);
 });
 
-test('мало места — VACUUM не делается, удаление при этом состоялось', () => {
+test('мало места ещё до удаления — отказ no_space: база, файлы и запрет на удаление денег не тронуты', () => {
   const { dir, db } = clinic();
-  const r = runTestDataWipe(db, dir, { diskSpaceImpl: FULL });
+  const doc = path.join(dir, 'storage', 'clinic-docs', 'patients', '1', 'docs', '1-a-scan.pdf');
+  put(doc);
+  assert.throws(() => runTestDataWipe(db, dir, { diskSpaceImpl: FULL }), (e) => {
+    assert.equal(e.code, 'no_space');
+    assert.ok(e.need_bytes >= estimateWipeBytes(db) + RESERVE_BYTES, 'нужно — рост журнала и запас');
+    assert.equal(e.free_bytes, 10 * 1024 * 1024);
+    assert.equal(e.template, WIPE_NO_SPACE_TEMPLATE);
+    assert.equal(e.params.free, 0);
+    assert.ok(e.params.need >= 1);
+    assert.match(e.message, /^Недостаточно места на диске: нужно \d+,\d ГБ, свободно 0,0 ГБ\. Тестовые данные не удалены\.$/);
+    return true;
+  });
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM visits').get().n, 1000, 'визиты на месте');
+  assert.ok(fs.existsSync(doc), 'файл документа на месте');
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'patient_deposits_no_delete'").get(), 'запрет на удаление денег на месте');
+  assert.equal(db.inTransaction, false);
+});
+
+test('фраза отказа «нет места» — в словаре на трёх языках', () => {
+  const e = STRINGS[WIPE_NO_SPACE_TEMPLATE];
+  assert.ok(e && e.ru === WIPE_NO_SPACE_TEMPLATE && e.uz && e.en, 'статья словаря');
+  for (const lang of ['uz', 'en']) {
+    assert.ok(e[lang].includes('{need}') && e[lang].includes('{free}'), lang);
+  }
+});
+
+test('мало места к VACUUM — VACUUM не делается, удаление при этом состоялось', () => {
+  const { dir, db } = clinic();
+  const r = runTestDataWipe(db, dir, { diskSpaceImpl: roomyThenFull() });
   assert.equal(r.deleted.visits, 1000);
   assert.equal(r.vacuum.done, false);
   assert.equal(r.vacuum.reason, 'no_space');
@@ -137,6 +180,29 @@ test('мало места — VACUUM не делается, удаление п�
 test('платформа не сказала, сколько места, — VACUUM делается, как копии (disk-guard: null — не мешать)', () => {
   const { dir, db } = clinic();
   assert.equal(vacuumAfterWipe(db, dir, { diskSpaceImpl: () => null }).done, true);
+  // И проверка до удаления тоже не мешает.
+  assert.equal(runTestDataWipe(db, dir, { diskSpaceImpl: () => null }).deleted.visits, 1000);
+});
+
+test('VACUUM не удался — не бросает, причина в итоге, журнал сжат', () => {
+  const { dir, db } = clinic();
+  db.pragma('query_only = ON');   // VACUUM — запись: SQLite откажет
+  let r;
+  try { r = vacuumAfterWipe(db, dir, { diskSpaceImpl: ROOMY }); } finally { db.pragma('query_only = OFF'); }
+  assert.equal(r.done, false);
+  assert.equal(r.reason, 'failed');
+  assert.equal(r.after_bytes, fs.statSync(path.join(dir, 'easymed.db')).size);
+  const wal = path.join(dir, 'easymed.db-wal');
+  assert.equal(fs.existsSync(wal) ? fs.statSync(wal).size : 0, 0);
+});
+
+test('файл документа «только для чтения» удаляется', () => {
+  const dir = tmpDir('em-wipe-ro-');
+  const file = path.join(dir, 'storage', 'clinic-docs', 'patients', '5', 'docs', '1-a-scan.pdf');
+  put(file);
+  fs.chmodSync(file, 0o444);
+  assert.deepEqual(removeVisitDocFiles(dir), { removed: 1, failed: 0 });
+  assert.equal(fs.existsSync(file), false);
 });
 
 // Поправка 9(б): место проверяется ДО удаления (просьба и запуск, C4) — одна
@@ -169,4 +235,7 @@ test('строка итога для журнала: только числа и 
   assert.match(line, /products_reset 3, crm_lines_unlinked 2, карточек CRM без учебной записи: 5 \(стадии не менялись\), files 4 \(не удалено 1\), vacuum 2000→500 Б$/);
   // Нет поля (итог без карточек) — ноль, а не «undefined».
   assert.match(summaryLine({ deleted: {}, cleared: {} }), /карточек CRM без учебной записи: 0 \(стадии не менялись\)$/);
+  // Итог, прочитанный с диска (test-data-wipe-result.json), — числа только числами.
+  assert.match(summaryLine({ files: { removed: '4' }, vacuum: { done: true } }), /, files 4, vacuum 0→0 Б$/);
+  assert.match(summaryLine({ files: { removed: 2, failed: '1' } }), /, files 2 \(не удалено 1\)$/);
 });
