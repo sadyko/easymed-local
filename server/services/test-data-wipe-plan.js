@@ -137,8 +137,15 @@ export const TABLE_PLAN = Object.freeze({
   crm_booking_undo: del('crm_links'),
   crm_card_visit_views: del('crm_links'),
   // Строки карточек остаются со своим статусом и днём; снимаются только ссылки
-  // на визит и строку визита (у двух последних нет внешнего ключа — мигр.
-  // 187, 246). В отличие от discardEmptyVisit (rpc/visits.js), удаление НЕ
+  // на визит и строку визита (у visit_service_id нет внешнего ключа).
+  // Отметка «запись отменена» (released_from_visit_id, released_vs_id,
+  // released_held — мигр. 246, 248) ОСТАЁТСЯ: по правилу O4 (crm/visit-link.js,
+  // шаг A) желание без дня садится в визит на стойке, только если отметки нет, —
+  // снятая отметка посадила бы консультацию отменённой учебной записи с ценой в
+  // следующий настоящий визит пациента. Номер визита в отметке новому визиту не
+  // достанется (sqlite_sequence не трогается), а список записей карточки
+  // (rpc/crm-card-bookings.js) берёт только существующие визиты.
+  // В отличие от discardEmptyVisit (rpc/visits.js), удаление НЕ
   // возвращает карточки CRM на прежние стадии: не проигрывает crm_booking_undo,
   // не переводит строки 'done' обратно в 'pending' и не удаляет карточки,
   // заведённые самой записью. Решение владельца 2026-10-30: CRM остаётся ровно
@@ -146,10 +153,8 @@ export const TABLE_PLAN = Object.freeze({
   // проход может потом перевести в «Не пришёл».
   crm_request_services: Object.freeze({
     how: 'clear', group: 'crm_links',
-    set: 'visit_id = NULL, visit_service_id = NULL, visit_service_auto = 0, '
-      + 'released_from_visit_id = NULL, released_vs_id = NULL, released_held = 0',
-    where: 'visit_id IS NOT NULL OR visit_service_id IS NOT NULL OR visit_service_auto <> 0 '
-      + 'OR released_from_visit_id IS NOT NULL OR released_vs_id IS NOT NULL OR released_held <> 0',
+    set: 'visit_id = NULL, visit_service_id = NULL, visit_service_auto = 0',
+    where: 'visit_id IS NOT NULL OR visit_service_id IS NOT NULL OR visit_service_auto <> 0',
   }),
 
   // ── связь зданий: только следы самого удаления ─────────────────────────

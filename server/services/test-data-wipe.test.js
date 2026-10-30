@@ -9,6 +9,8 @@ import { createDeposit, acceptDeposit, nextDepositNumber } from './rpc/deposits.
 import { createInvoiceForVisit, recordPayment } from './rpc/billing.js';
 import { openCashShift, cashMove } from './rpc/cashier.js';
 import { sellCard, nextCardSaleNumber } from './rpc/card-sales.js';
+import { buildBatch, SHIPPED } from './branch-sync/journal.js';
+import { crmLinkVisit } from './crm/visit-link.js';
 import { wipeTestData } from './test-data-wipe.js';
 import { tablesBy } from './test-data-wipe-plan.js';
 
@@ -198,7 +200,7 @@ test('частичные и очищаемые таблицы: остаётся 
   assert.deepEqual(cards, [{ id: p.giftCard, remaining: 30000, sale_invoice_id: null }], 'проданная карта ушла; заведённая — с полным остатком');
   const line = db.prepare('SELECT * FROM crm_request_services WHERE id = ?').get(p.line);
   assert.deepEqual([line.visit_id, line.visit_service_id, line.visit_service_auto, line.released_from_visit_id, line.released_vs_id, line.released_held],
-    [null, null, 0, null, null, 0], 'строка карточки без ссылок на визит');
+    [null, null, 0, p.visit, p.vs, 1], 'строка карточки без ссылок на визит; отметка «запись отменена» (released_*) остаётся — правило O4');
   assert.equal(line.status, lineStatus, 'статус строки карточки не трогается');
   assert.equal(line.scheduled_date, '2026-10-01');
   assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(p.card).status, stage, 'ступень карточки не трогается');
@@ -274,6 +276,62 @@ test('следы удаления в связи зданий убраны, пр�
   db.close();
 });
 
+test('связь, заведённая заново после «Отвязать» (соседа помнят 30 дней), не везёт «удалено» по прежнему журналу', () => {
+  const { db } = seeded();
+  // Сосед A был тёплым и не подтвердил ничего: хвост для него — весь журнал,
+  // в том числе старые 'put' удаляемых строк. Строки больше нет — buildBatch
+  // сделал бы из такой записи 'del' и стёр бы её у соседа.
+  const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  db.prepare('INSERT INTO sync_peers (node, sent_seq, last_ok, last_ack) VALUES (?, 0, ?, ?)').run('A', now, now);
+  const wiped = Object.keys(SHIPPED).filter((t) => tablesBy('delete').includes(t));
+  assert.ok(wiped.includes('visits') && wiped.includes('payments'));
+  const inList = wiped.map(() => '?').join(', ');
+  assert.ok(db.prepare(`SELECT COUNT(*) AS n FROM sync_journal WHERE tbl IN (${inList})`).get(...wiped).n > 0, 'журнал помнит учебные строки');
+  const keptJournal = () => db.prepare(`SELECT seq, tbl, uid, op, cols FROM sync_journal WHERE tbl NOT IN (${inList}) ORDER BY seq`).all(...wiped);
+  const keptBefore = keptJournal();
+  assert.ok(keptBefore.length > 0, 'и карты пациентов');
+
+  wipeTestData(db);
+
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM sync_journal WHERE tbl IN (${inList})`).get(...wiped).n, 0,
+    'записей журнала об удалённых таблицах нет — ни до отметки, ни после');
+  assert.deepEqual(keptJournal(), keptBefore, 'журнал оставляемых таблиц не тронут');
+  const records = buildBatch(db, { self: 'B', peer: 'A' }).records;
+  assert.deepEqual(records.filter((x) => wiped.includes(x.tbl)), [], 'соседу не едет ничего из удалённых таблиц');
+  assert.ok(records.some((x) => x.tbl === 'patients' && x.op === 'put'), 'карты пациентов едут как прежде');
+  assert.deepEqual(records.filter((x) => x.op === 'del'), [], 'ни одного «удалено»');
+  db.close();
+});
+
+test('отметка «запись отменена» остаётся: отменённая учебная запись не сажает услугу в следующий настоящий визит (O4); такая карточка не в счёте', () => {
+  const { db, p } = seeded();
+  const pt = ins(db, "INSERT INTO patients (full_name, branch_id) VALUES ('Учебный Второй', 1)");
+  const consult = ins(db, "INSERT INTO services (name, price) VALUES ('Консультация', 150000)");
+  const ecg = ins(db, "INSERT INTO services (name, price) VALUES ('ЭКГ', 50000)");
+  const card = ins(db, "INSERT INTO crm_requests (full_name, phone, patient_id, status) VALUES ('Учебный Второй', '+998901230000', ?, 'in_process')", pt);
+  // Учебная запись отменена: строка карточки отпущена без дня с отметкой
+  // (crm/one-way.js), привязка записи к карточке осталась на отменённом визите.
+  const cancelled = ins(db, "INSERT INTO visits (patient_id, branch_id, doctor_id, visit_date, status) VALUES (?, 1, 5, strftime('%Y-%m-%dT%H:%M:%SZ','now','-2 days'), 'cancelled')", pt);
+  const released = ins(db, "INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status, released_from_visit_id) VALUES (?, ?, NULL, 'pending', ?)", card, consult, cancelled);
+  ins(db, 'INSERT INTO crm_booking_links (visit_id, request_id) VALUES (?, ?)', cancelled, card);
+  // Желание без дня, которое никогда не записывали, — для сравнения: оно сесть в визит обязано.
+  const wish = ins(db, "INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status) VALUES (?, ?, NULL, 'pending')", card, ecg);
+
+  const r = wipeTestData(db);
+
+  assert.equal(r.crm_cards_unbooked, 2, 'карточка с отменённой учебной записью не в счёте — запись потеряна раньше удаления');
+  assert.equal(db.prepare('SELECT released_from_visit_id FROM crm_request_services WHERE id = ?').get(released).released_from_visit_id, cancelled);
+  // Настоящий визит после удаления — путь стойки (ensure_visit: undated).
+  const real = ins(db, "INSERT INTO visits (patient_id, branch_id, doctor_id, visit_date, status) VALUES (?, 1, 5, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'scheduled')", pt);
+  crmLinkVisit(db, real, REG, { undated: true });
+  assert.deepEqual(db.prepare('SELECT service_id FROM visit_services WHERE visit_id = ? ORDER BY id').all(real).map((x) => x.service_id), [ecg],
+    'в визит село только никогда не записанное желание; консультация отменённой записи — нет');
+  assert.equal(db.prepare('SELECT visit_id FROM crm_request_services WHERE id = ?').get(released).visit_id, null);
+  assert.equal(db.prepare('SELECT visit_id FROM crm_request_services WHERE id = ?').get(wish).visit_id, real);
+  assert.ok(p.card);
+  db.close();
+});
+
 test('сбой посередине откатывает всё: ни одна строка не удалена, запрет на месте', () => {
   const { db } = seeded();
   const before = Object.fromEntries(tablesBy('delete').map((t) => [t, count(db, t)]));
@@ -300,6 +358,58 @@ test('висячая ссылка, которую оставило бы удал
   const visits = count(db, 'visits');
   assert.throws(() => wipeTestData(db), /висячие ссылки в таблицах: wipe_probe/);
   assert.equal(db.inTransaction, false);
+  assert.equal(count(db, 'visits'), visits, 'ничего не удалено');
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'patient_deposits_no_delete'").get());
+  db.close();
+});
+
+// Висячая ссылка, которая была в базе ДО удаления (старая сборка, ручная правка):
+// visit_id = 999999 — такого визита нет и не было.
+function probeWithOldViolation(db, { cascadeFrom = null } = {}) {
+  db.exec(`CREATE TABLE wipe_probe (id INTEGER PRIMARY KEY, visit_id INTEGER REFERENCES visits(id),
+             doc_id INTEGER REFERENCES visit_documents(id) ON DELETE CASCADE)`);
+  db.pragma('foreign_keys = OFF');
+  db.prepare('INSERT INTO wipe_probe (id, visit_id, doc_id) VALUES (1, 999999, ?)').run(cascadeFrom);
+  db.pragma('foreign_keys = ON');
+}
+
+test('прежняя висячая ссылка удалению не мешает; новая — откат, даже если прежняя при этом ушла (сравниваются строки, а не число)', () => {
+  {
+    const { db } = seeded();
+    probeWithOldViolation(db);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM pragma_foreign_key_check('wipe_probe')").get().n, 1);
+    const r = wipeTestData(db);
+    assert.equal(r.deleted.visits, 1, 'удаление прошло');
+    assert.equal(db.prepare('SELECT visit_id FROM wipe_probe WHERE id = 1').get().visit_id, 999999, 'прежняя строка не тронута');
+    db.close();
+  }
+  {
+    const { db, p } = seeded();
+    // Прежняя висячая строка уйдёт каскадом вместе с документом визита, а новая
+    // появится на месте удалённого визита: число нарушений то же (1 → 1),
+    // строки — разные.
+    const doc = db.prepare('SELECT id FROM visit_documents WHERE visit_id IS NOT NULL').get().id;
+    probeWithOldViolation(db, { cascadeFrom: doc });
+    db.prepare('INSERT INTO wipe_probe (id, visit_id) VALUES (2, ?)').run(p.visit);
+    const visits = count(db, 'visits');
+    assert.throws(() => wipeTestData(db), /висячие ссылки в таблицах: wipe_probe/);
+    assert.equal(count(db, 'visits'), visits, 'ничего не удалено');
+    assert.equal(count(db, 'wipe_probe'), 2);
+    db.close();
+  }
+});
+
+test('удаление не начинается внутри чужой транзакции и с выключенной проверкой внешних ключей', () => {
+  const { db } = seeded();
+  const visits = count(db, 'visits');
+  assert.throws(() => db.transaction(() => wipeTestData(db))(), /внутри другой транзакции/);
+  assert.equal(db.inTransaction, false);
+  db.pragma('foreign_keys = OFF');
+  try {
+    assert.throws(() => wipeTestData(db), /foreign_keys/);
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
   assert.equal(count(db, 'visits'), visits, 'ничего не удалено');
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'patient_deposits_no_delete'").get());
   db.close();
