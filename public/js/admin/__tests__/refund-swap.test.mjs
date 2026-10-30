@@ -532,9 +532,18 @@ test('ревью: пока замена в пути — второй щелчо�
     const quotes = rpcCalls('cashier_line_swap_quote').length;
     const performers = rpcCalls('cashier_line_performers').length;
     const before = modals().length;   // окно визита, «Платежи», окно замены
+    // Кнопки выбора и переключатели «куда вернуть» — заблокированы, пока идёт
+    // запись: поддельный DOM шлёт события и выключенным элементам, поэтому
+    // молчание обработчиков само по себе блокировку не проверяет.
+    const lockable = (w) => [
+        byAttr(w, 'data-pick', 'service'), byAttr(w, 'data-pick', 'performer'),
+        ...['original', 'balance'].map((v) => walk(byAttr(w, 'data-swap-dest', v)).find((e) => e.tagName === 'INPUT')),
+    ];
+    for (const el of lockable(win)) assert.ok(el, 'нет кнопки выбора или переключателя');
     const ok = buttonByText(win, 'Заменить и вернуть 70 000 сум');
     ok.click();
     await tick(20);
+    for (const el of lockable(win)) assert.equal(el.disabled, true, 'кнопка выбора или переключатель не заблокированы, пока идёт запись');
     ok.click();   // второй щелчок, пока первая замена в пути
     walk(byAttr(win, 'data-swap-dest', 'balance')).find((e) => e.tagName === 'INPUT').fire('change');
     byAttr(win, 'data-pick', 'performer').click();
@@ -566,11 +575,13 @@ test('ревью: пока замена в пути — второй щелчо�
     const win2 = await openAndPick(2, 21);
     buttonByText(win2, 'Заменить и вернуть 70 000 сум').click();
     await tick(20);
+    for (const el of lockable(win2)) assert.equal(el.disabled, true, 'кнопка выбора или переключатель не заблокированы, пока идёт запись');
     walk(byAttr(win2, 'data-swap-dest', 'balance')).find((e) => e.tagName === 'INPUT').fire('change');
     releaseErr();
     await tick(80);
     assert.equal(TOASTS.at(-1), 'Смена закрыта.');
     assert.ok(modals().includes(win2), 'окно замены осталось после отказа');
+    for (const el of lockable(win2)) assert.equal(el.disabled, false, 'после отказа кнопки выбора и переключатели не разблокированы');
     buttonByText(win2, 'Заменить и вернуть 70 000 сум').click();
     await tick(150);
     assert.equal(rpcCalls('cashier_line_swap_paid').length, 2);
