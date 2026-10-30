@@ -478,6 +478,21 @@ test('доска очереди и «Сейчас ждут приёма»: во�
   for (const x of [a, b, c, d]) assertBalanced(db, x.invoiceId);
 });
 
+test('доска очереди: выставленная строка (есть позиция счёта) со старой отметкой «out» стоит в очереди и считается в «Сейчас ждут приёма»', () => {
+  const { db, pid, CONS } = clinic();
+  const D = DAY.slice(0, 10);
+  const b = billed(db, pid, CONS, DOC);
+  recordPayment(db, { invoice_id: b.invoiceId, amount: b.invoice.total_amount, method: 'cash' }, cashier);
+  issueQueueNumbers(db, { p_ids: [b.vs] }, cashier);
+  db.prepare("UPDATE visit_services SET status = 'queued' WHERE id = ?").run(b.vs);
+  // Отметка прежнего возврата, которую новый счёт не снял: строка снова в счёте.
+  db.prepare("INSERT INTO pay_refund_releases (kind, line_id, invoice_id) VALUES ('out', ?, ?)").run(b.vs, b.invoiceId);
+  assert.ok(released(db, b.vs) && vsRow(db, b.vs).invoice_item_id != null, 'стенд: отметка есть, строка выставлена');
+  const g = boardGroups(db, D).find((x) => x.key === vsRow(db, b.vs).queue_key);
+  assert.deepEqual(g.tickets.map((t) => [t.patient_name, t.state]), [['Пациент', 'waiting']]);
+  assert.equal(doctorQueueWaiting(db, DOC, D), 1);
+});
+
 test('журнал услуг: после возврата с новой — новая строка, когда оказана; прежней нет', () => {
   const { db, pid, CONS, USG } = clinic();
   const journal = () => {
