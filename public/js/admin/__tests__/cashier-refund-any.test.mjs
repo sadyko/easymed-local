@@ -446,6 +446,7 @@ test('счёт стационара: в окне «Платежи» — его �
     const dlg = lastModal();
     assert.match(textOf(dlg), /Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается\./);
     assert.ok(!textOf(dlg).includes('Оставить услугу в визите'), 'у строки стационара «оставить в визите» нет — она и так остаётся в госпитализации');
+    assert.equal(allByAttr(dlg, 'data-keep-line').length, 0, 'у строки стационара — галочка «Оставить услугу в визите»');   // B3: у строки визита она есть (тест ниже)
     // Ревью B2: у строки стационара — её фраза ВМЕСТО фразы визита; галочки
     // «отменить счёт» у лежащего пациента нет — сервер её здесь не читает.
     assert.ok(textOf(dlg).includes('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта.'));
@@ -475,10 +476,12 @@ test('ревью B2: окно возврата строки — визит: фр
     assert.ok(visit.includes('Сделанная работа останется в визите без счёта и врачу не оплачивается.'));
     assert.ok(!visit.includes('Строка стационара освободится'));
     assert.ok(visit.includes('Если по счёту больше не осталось денег — отменить счёт'));
+    assert.ok(visit.includes('Оставить услугу в визите'), 'B3: у неначатой строки визита — «Оставить услугу в визите»');
     const gone = await dialogFor({ ...ADM_ROW, admission_status: 'discharged' }, ADM_ITEMS);
     assert.ok(gone.includes('Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается.'));
     assert.ok(!gone.includes('Сделанная работа останется в визите'));
     assert.ok(gone.includes('Если по счёту больше не осталось денег — отменить счёт'), 'после выписки счёт закрывается, как обычный, — галочка есть');
+    assert.ok(!gone.includes('Оставить услугу в визите'), 'B3: у строки стационара и после выписки «оставить в визите» нет');
 });
 
 test('ревью B2: новые строки окна возврата — в словаре на трёх языках, uz/en без кириллицы', async () => {
@@ -497,4 +500,87 @@ test('ревью B2: новые строки окна возврата — в с
     assert.match(STRINGS['Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается.'].uz, /chiqarish hisobiga/);
     // Отказ «Это строка стационара…» больше не говорит сервер — ключа нет.
     assert.equal(STRINGS['Это строка стационара — её убирают из счёта госпитализации (до оплаты) или возвращают оплатой по платежу.'], undefined);
+});
+
+// ─── B3: «Оставить услугу в визите» и сделанная работа ───────────────────────
+const inputBy = (root, k) => walk(root).find((e) => e.tagName === 'INPUT' && e.attrs && e.attrs[k] !== undefined);
+
+test('сделана работа (проба, результат): окно называет её и не возвращает без галочки; «оставить в визите» не предлагается', async () => {
+    asCashier();
+    closeAll();
+    tables = { payments: PAYMENTS, invoice_items: ITEMS };
+    calls.length = 0;
+    TOASTS.length = 0;
+    rpcAnswers = {
+        cashier_invoice_search: { rows: [OLD_ROW], has_more: false },
+        invoice_line_work: { invoice_id: 7, lines: [{ invoice_item_id: 701, kind: 'visit', status: 'resulted', sample: true, result: true, document: false, performed: true }] },
+        refund_invoice_line: { refunded: 100000, invoice: { id: 7 }, line_kept: true },
+    };
+    let done = 0;
+    await desk.openInvoiceRefundById(7, { onDone: () => { done++; } });
+    assert.deepEqual(rpcCalls('invoice_line_work').map(([, b]) => b), [{ invoice_id: 7 }]);
+    buttonByText(lastModal(), 'Вернуть услугу').click();
+    const dlg = lastModal();
+    assert.ok(textOf(dlg).includes('По услуге уже сделана работа: взята проба, есть результат анализа.'), textOf(dlg));
+    assert.ok(textOf(dlg).includes('Всё это остаётся в карте пациента. Врачу эта работа не оплачивается, пока услугу не выставят и не оплатят снова.'));
+    assert.equal(inputBy(dlg, 'data-keep-line'), undefined, 'сделанная работа и так остаётся в визите');
+    const submit = buttonByText(dlg, 'Вернуть услугу');   // кнопка окна: подпись меняется на «Выполняем…» и обратно
+    submit.click();
+    await tick(40);
+    assert.equal(rpcCalls('refund_invoice_line').length, 0, 'без галочки возврат не уходит');
+    assert.ok(TOASTS.includes('Подтвердите галочкой, что работа остаётся в карте.'), TOASTS.join(' | '));
+    inputBy(dlg, 'data-work-ack').checked = true;
+    submit.click();
+    await tick(60);
+    assert.equal(rpcCalls('refund_invoice_line').length, 1);
+    assert.equal(rpcCalls('refund_invoice_line')[0][1].keep_services, false);
+    assert.equal(done, 1, 'после возврата перечитан вызвавший экран (onDone), а не касса');
+    closeAll();
+});
+
+test('неначатая услуга: «Оставить услугу в визите» уходит на сервер keep_services', async () => {
+    asCashier();
+    closeAll();
+    // Поправка 7 плана — «Платежи» открыты поверх окна визита: возврат с
+    // «Оставить услугу в визите» закрывает только свои окна
+    // (closeRefundModals + afterMoney), окно визита остаётся.
+    const visitWin = mkEl('div');
+    visitWin.className = 'modal';
+    document.body.appendChild(visitWin);
+    let done = 0;
+    tables = { payments: PAYMENTS, invoice_items: ITEMS };
+    calls.length = 0;
+    rpcAnswers = {
+        cashier_invoice_search: { rows: [OLD_ROW], has_more: false },
+        invoice_line_work: { invoice_id: 7, lines: [{ invoice_item_id: 701, kind: 'visit', status: 'queued', sample: false, result: false, document: false, performed: false }] },
+        refund_invoice_line: { refunded: 100000, invoice: { id: 7 }, line_kept: true },
+    };
+    await desk.openInvoiceRefundById(7, { onDone: () => { done++; } });
+    buttonByText(lastModal(), 'Вернуть услугу').click();
+    const dlg = lastModal();
+    assert.ok(textOf(dlg).includes('Оставить услугу в визите'));
+    assert.ok(textOf(dlg).includes('Услуга останется в визите без счёта — её можно выставить заново.'));
+    assert.ok(!textOf(dlg).includes('По услуге уже сделана работа'), 'работы нет — предупреждения нет');
+    inputBy(dlg, 'data-keep-line').checked = true;
+    buttonByText(dlg, 'Вернуть услугу').click();
+    await tick(60);
+    assert.equal(rpcCalls('refund_invoice_line')[0][1].keep_services, true);
+    assert.deepEqual(modals(), [visitWin], 'окно визита закрылось вместе с окнами возврата');
+    assert.equal(done, 1, 'после возврата перечитывается вызвавший экран');
+    closeAll();
+});
+
+test('B3: строки окна возврата — в словаре на трёх языках, uz/en без кириллицы', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const key of ['Оставить услугу в визите', 'Услуга останется в визите без счёта — её можно выставить заново.', 'По услуге уже сделана работа:',
+        'взята проба', 'есть результат анализа', 'подписан документ', 'услуга оказывается или оказана',
+        'Всё это остаётся в карте пациента. Врачу эта работа не оплачивается, пока услугу не выставят и не оплатят снова.',
+        'Понимаю: работа остаётся в карте, врачу не оплачивается', 'Подтвердите галочкой, что работа остаётся в карте.']) {
+        const e = STRINGS[key];
+        assert.ok(e, 'нет ключа словаря: ' + key);
+        for (const lang of ['uz', 'en']) {
+            assert.ok(e[lang], key + ': нет перевода ' + lang);
+            assert.doesNotMatch(e[lang], /[Ѐ-ӿ]/, key + ': кириллица в ' + lang);
+        }
+    }
 });

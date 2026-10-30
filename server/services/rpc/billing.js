@@ -2351,7 +2351,15 @@ export function refundInvoiceLine(db, args, user) {
     const oldBase = invoiceRestBase(db, inv.id);
 
     // 3. Строка визита — до удаления позиции (внешний ключ).
+    // REFUND_ANY_V1 — keep_services («Оставить услугу в визите»): неначатая
+    // строка не уходит с визита, а остаётся невыставленной ('added', номер
+    // очереди и талон сняты — номер без оплаченной услуги на доске лишний), с
+    // отметкой «возвращено» ниже: выставляют её снова только явным выбором
+    // (rebill_refunded). Товар остаётся у пациента — как у отмены счёта с той же
+    // галочкой (voidInvoice). Без галочки — как прежде.
+    const keepServices = !!(args && (args.keep_services === true || args.keep_services === 1));
     let performed = false;
+    let kept = false;
     let lineName = item.description || '';
     let sources = [];
     if (vs) {
@@ -2362,6 +2370,10 @@ export function refundInvoiceLine(db, args, user) {
       performed = PERFORMED_LINE_STATUSES.includes(vs.status) || !!(trace && trace.t);
       if (performed) {
         db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = ?').run(vs.id);
+      } else if (keepServices) {
+        db.prepare("UPDATE visit_services SET invoice_item_id = NULL, status = 'added', queue_key = NULL, queue_no = NULL WHERE id = ?").run(vs.id);
+        db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(vs.id);
+        kept = true;
       } else {
         sources = vs.clinic_item_id != null ? restoreSources(db, 'visit', vs.id, vs.clinic_item_id, vs.quantity, user) : [];
         db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(vs.id);
@@ -2436,7 +2448,7 @@ export function refundInvoiceLine(db, args, user) {
     // платится, пока её не выставят и не оплатят снова. Отметка ставится ВСЕГДА
     // (не только когда пациенту вернули деньги): строка ушла со счёта как
     // возвращённая, а не как «убрать до оплаты».
-    if (vs && performed) markRefundRelease(db, { invoiceId: inv.id, kind: 'out', lineIds: [vs.id], always: true });
+    if (vs && (performed || kept)) markRefundRelease(db, { invoiceId: inv.id, kind: 'out', lineIds: [vs.id], always: true });   // REFUND_ANY_V1 — и оставленная галочкой
 
     // Статус по новым деньгам.
     let closed = { voided: false };
@@ -2483,7 +2495,7 @@ export function refundInvoiceLine(db, args, user) {
       VALUES (?, ?, ?, 'refund_line', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(inv.id, inv.invoice_number || null, inv.visit_id || null, inv.status, final.status, lineValue, refundAmt,
         user.id, actingActorName(user, actor.full_name || null), actor.role || null, reason || null,   // ADMIN_ACT_AS_V1 — имя «от имени»
-        'Возвращена услуга: ' + (lineName || '—') + (vs ? (performed ? ' (работа сделана — осталась в визите невыставленной)' : ' (снята с визита)') : '')
+        'Возвращена услуга: ' + (lineName || '—') + (vs ? (performed ? ' (работа сделана — осталась в визите невыставленной)' : kept ? ' (оставлена в визите невыставленной)' : ' (снята с визита)') : '')
         + (admLine ? ' (строка стационара — освобождена, в счёт выписки не попадёт)' : ''));   // REFUND_ANY_V1
 
     return {
@@ -2491,7 +2503,7 @@ export function refundInvoiceLine(db, args, user) {
       refunded: refundAmt,
       line_value: lineValue,
       to_balance: toBalanceAny,
-      line_kept: !!(vs && performed),
+      line_kept: !!(vs && (performed || kept)),   // REFUND_ANY_V1 — и «Оставить услугу в визите»
       admission_line_released: !!admLine,   // REFUND_ANY_V1
       voided: !!closed.voided,
       sources,
@@ -2655,4 +2667,45 @@ export function visitRefundedLines(db, args, user) {
   if (!isPositiveInt(visitId)) throw new RpcError('Визит указан неверно.', 400);
   const ids = db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND invoice_item_id IS NULL').all(visitId).map((r) => r.id);
   return { line_ids: refundedLineIds(db, 'out', ids) };
+}
+
+// REFUND_ANY_V1 (2026-10-29) — invoice_line_work: ЧТО УЖЕ СДЕЛАНО ПО СТРОКАМ
+// СЧЁТА. Окно «Вернуть услугу» предупреждает кассира: взята проба, есть
+// результат анализа, подписан документ, работа идёт или окончена — всё это
+// остаётся в карте пациента (медицинская запись), а врачу не платится, пока
+// услугу не выставят и не оплатят снова (pay_refund_releases). Кассир
+// подтверждает это галочкой. Строка стационара — kind 'admission' (выполнена —
+// по отметке выполнения). Документ — только не отозванный. Только чтение.
+export function invoiceLineWork(db, args, user) {
+  requireRole(user, PAYMENT_ROLES);
+  const invoiceId = args && args.invoice_id;
+  if (!isPositiveInt(invoiceId)) throw new RpcError('Счёт указан неверно.', 400);
+  if (!db.prepare('SELECT 1 FROM invoices WHERE id = ?').get(invoiceId)) throw new RpcError('Счёт не найден.', 400);
+  const rows = db.prepare(`
+    SELECT ii.id AS invoice_item_id,
+           vs.id AS vs_id, vs.status AS vs_status, vs.sample_collected_at AS sample_at,
+           a.id AS adm_id, a.performed_at AS adm_done,
+           CASE WHEN vs.id IS NULL THEN 0 ELSE EXISTS(SELECT 1 FROM lab_results lr WHERE lr.visit_service_id = vs.id) END AS has_result,
+           CASE WHEN vs.id IS NULL THEN 0 ELSE EXISTS(SELECT 1 FROM visit_documents d WHERE d.visit_service_id = vs.id AND d.voided_at IS NULL) END AS has_document
+      FROM invoice_items ii
+      LEFT JOIN visit_services vs ON vs.invoice_item_id = ii.id
+      LEFT JOIN admission_services a ON a.invoice_item_id = ii.id
+     WHERE ii.invoice_id = ?
+     ORDER BY ii.id`).all(invoiceId);
+  return {
+    invoice_id: invoiceId,
+    lines: rows.map((r) => {
+      const visit = r.vs_id != null;
+      const status = visit ? (r.vs_status || 'added') : null;
+      return {
+        invoice_item_id: r.invoice_item_id,
+        kind: visit ? 'visit' : r.adm_id != null ? 'admission' : 'none',
+        status,
+        sample: visit && (!!r.sample_at || status === 'collected'),
+        result: !!r.has_result,
+        document: !!r.has_document,
+        performed: visit ? PERFORMED_LINE_STATUSES.includes(status) : !!r.adm_done,
+      };
+    }),
+  };
 }

@@ -2295,13 +2295,23 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
             .eq('invoice_id', inv.id).order('id', { ascending: true }).limit(200);
         items = data || [];
     } catch (e) { /* без строк остаётся возврат по платежу */ }
+    // REFUND_ANY_V1 — что уже сделано по строкам (invoice_line_work): окно
+    // «Вернуть услугу» называет это и просит галочку. Сбой чтения — окно без
+    // предупреждения (сервер возврат не запрещает и так).
+    const workById = new Map();
+    if (items.length) {
+        try {
+            const { data, error } = await supabase.rpc('invoice_line_work', { invoice_id: inv.id });
+            if (!error) for (const l of ((data && data.lines) || [])) workById.set(l.invoice_item_id, l);
+        } catch (e) { /* без предупреждения */ }
+    }
     const itemRows = items.map(it => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center' } },
         h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: it.description || '' }, it.description || '—'),
         h('span', { class: 'num', style: { fontWeight: 700 } }, fmtPrice(Math.max(0, Number(it.total || 0) - Number(it.discount_amount || 0)))),
         h('button', {
             class: 'btn btn-outline btn-sm', type: 'button',
             style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
-            onclick: () => openLineRefundConfirm(it, info, root, opts),
+            onclick: () => openLineRefundConfirm({ ...it, work: workById.get(it.id) || null }, info, root, opts),   // REFUND_ANY_V1 — с тем, что сделано
         }, 'Вернуть услугу'),
     ));
 
@@ -2355,6 +2365,33 @@ function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1
     // непустой ждёт выписки — closeFullyRefunded).
     const admLine = !!(info && info.admission_id);
     const inBed = admLine && IN_BED_STATUSES.includes(info.admission_status);
+    // REFUND_ANY_V1 — СДЕЛАННАЯ РАБОТА: взята проба, есть результат, подписан
+    // документ, услуга оказывается или оказана (invoice_line_work). Окно
+    // называет её: всё это остаётся в карте, врачу не оплачивается, — и без
+    // галочки возврат не уходит.
+    const work = item.work || null;
+    const done = work ? [
+        work.sample && 'взята проба',
+        work.result && 'есть результат анализа',
+        work.document && 'подписан документ',
+        work.performed && !work.sample && !work.result && !work.document && 'услуга оказывается или оказана',
+    ].filter(Boolean) : [];
+    const ackBox = h('input', { type: 'checkbox', 'data-work-ack': '1' });
+    const workBlock = done.length ? h('div', { 'data-work-done': '1', role: 'alert', style: { padding: '10px 12px', margin: '0 0 10px', borderRadius: '10px', background: 'var(--warn-50, #fffbeb)', color: 'var(--warn-700, #b45309)', fontSize: '12.5px', lineHeight: 1.5 } },
+        h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontWeight: 700 } },
+            Icon('Warning', { size: 14 }), h('span', null, tr('По услуге уже сделана работа:') + ' ' + done.map((d) => tr(d)).join(', ') + '.')),
+        h('div', { style: { margin: '4px 0 8px' } }, tr('Всё это остаётся в карте пациента. Врачу эта работа не оплачивается, пока услугу не выставят и не оплатят снова.')),
+        h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer', fontWeight: 600 } },
+            ackBox, tr('Понимаю: работа остаётся в карте, врачу не оплачивается'))) : null;
+    // REFUND_ANY_V1 — «Оставить услугу в визите»: неначатая услуга не уходит с
+    // визита, её выставят заново (keep_services). Сделанная работа и строка
+    // стационара остаются и без галочки — у них её нет.
+    const keepBox = h('input', { type: 'checkbox', 'data-keep-line': '1' });
+    const keepLabel = admLine || done.length ? null
+        : h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', cursor: 'pointer', marginTop: '6px' } },
+            keepBox, h('span', null,
+                h('span', { style: { fontWeight: 600 } }, tr('Оставить услугу в визите')),
+                h('div', { class: 'muted' }, tr('Услуга останется в визите без счёта — её можно выставить заново.'))));
     modal(trf('Вернуть услугу · {name}', { name: item.description || '—' }), 'Repeat',
         [
             admLine
@@ -2364,17 +2401,21 @@ function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1
                     tr('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта. Сделанная работа останется в визите без счёта и врачу не оплачивается.')),
             admLine ? h('div', { 'data-adm-line-note': '1', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5, fontWeight: 600 } },
                 tr('Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается.')) : null,
+            workBlock,   // REFUND_ANY_V1
             field('Причина', reasonInp),
             field('Куда вернуть', destBox),
             inBed ? null : h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer' } },
                 voidBox, tr('Если по счёту больше не осталось денег — отменить счёт')),
+            keepLabel,   // REFUND_ANY_V1
         ],
         'Вернуть услугу',
         async () => {
+            if (workBlock && !ackBox.checked) { toast(tr('Подтвердите галочкой, что работа остаётся в карте.'), 'fail'); return false; }   // REFUND_ANY_V1
             const { data: r, error } = await supabase.rpc('refund_invoice_line', {
                 invoice_item_id: item.id, reason: reasonInp.value || '', to_balance: toBalance,
                 card_fallback: toBalance ? 'balance' : 'cash',   // FINAL_MONEY_FIX_V1 (I2) — только для закрытой карты
-                void_when_zero: !!voidBox.checked, keep_services: false,
+                void_when_zero: !!voidBox.checked,
+                keep_services: !!(keepLabel && keepBox.checked),   // REFUND_ANY_V1 — «Оставить услугу в визите»
             });
             if (error) { toast(error.message || 'Не удалось вернуть услугу.', 'fail'); return false; }
             const sum = Number((r && r.refunded) || 0);
