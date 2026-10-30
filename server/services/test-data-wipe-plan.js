@@ -32,8 +32,11 @@ const del = (group) => Object.freeze({ how: 'delete', group });
 const keep = (why) => Object.freeze({ how: 'keep', why });
 
 // Записи журнала действий пациента, которые относятся к визитам и деньгам.
-// Пишет их только экран (views/activity-log.js logPatientActivity): других
-// видов сегодня нет; запись о самой карте (если появится) остаётся.
+// Их пишет экран (views/activity-log.js logPatientActivity). Сервер пишет ещё
+// записи о самой карте — entity_type 'patient' без visit_id (объединение карт,
+// rpc/patient-merge.js logMerged; встречное объединение в связи зданий,
+// branch-sync/records.js logMergeConflict): условие их не задевает, они
+// остаются вместе с картой.
 const VISIT_ACTIVITY_TYPES = "('visit','service','item','invoice','recommendation')";
 
 export const TABLE_PLAN = Object.freeze({
@@ -133,9 +136,14 @@ export const TABLE_PLAN = Object.freeze({
   crm_booking_links: del('crm_links'),
   crm_booking_undo: del('crm_links'),
   crm_card_visit_views: del('crm_links'),
-  // Строки карточек остаются со своим статусом и днём; ссылки на визит и
-  // строку визита (у двух последних нет внешнего ключа — мигр. 187, 246)
-  // снимаются, как у discardEmptyVisit (rpc/visits.js).
+  // Строки карточек остаются со своим статусом и днём; снимаются только ссылки
+  // на визит и строку визита (у двух последних нет внешнего ключа — мигр.
+  // 187, 246). В отличие от discardEmptyVisit (rpc/visits.js), удаление НЕ
+  // возвращает карточки CRM на прежние стадии: не проигрывает crm_booking_undo,
+  // не переводит строки 'done' обратно в 'pending' и не удаляет карточки,
+  // заведённые самой записью. Решение владельца 2026-10-30: CRM остаётся ровно
+  // такой, какая есть; карточку с удалённой учебной записью обычный ежечасный
+  // проход может потом перевести в «Не пришёл».
   crm_request_services: Object.freeze({
     how: 'clear', group: 'crm_links',
     set: 'visit_id = NULL, visit_service_id = NULL, visit_service_auto = 0, '
@@ -320,6 +328,30 @@ export const WIPE_ORDER = Object.freeze([
 // деньгами удалить нельзя — «её можно только вернуть»). Откат транзакции
 // возвращает и триггер.
 export const GUARD_TRIGGERS = Object.freeze({
+  patient_deposits: Object.freeze(['patient_deposits_no_delete']),
+});
+
+// ВСЕ триггеры, которые срабатывают от самого удаления (событие DELETE на
+// удаляемых и частично удаляемых таблицах). Каждый просмотрен: что он пишет и
+// куда. Новый триггер роняет тест, пока его не просмотрят и не впишут сюда, —
+// иначе удаление могло бы молча писать в оставляемую таблицу.
+//   *_journal_del (мигр. 084, 087) — пишут удаление в sync_journal и
+//     sync_tombstones (следы самого удаления, их убирает wipeSyncTraces) и
+//     стирают авторство удалённой строки в sync_authored;
+//   invoices_minted_del (мигр. 090) — стирает отчеканенный номер счёта в
+//     sync_minted;
+//   admission_services_pending_cancel (мигр. 226) — отменяет ждущие списания
+//     в stock_pending_writeoffs; их удаление уносит раньше (WIPE_ORDER),
+//     менять уже нечего;
+//   patient_deposits_no_delete (мигр. 160) — запрет, GUARD_TRIGGERS выше.
+export const DELETE_TRIGGERS = Object.freeze({
+  visits: Object.freeze(['visits_journal_del']),
+  visit_services: Object.freeze(['visit_services_journal_del']),
+  lab_results: Object.freeze(['lab_results_journal_del']),
+  invoices: Object.freeze(['invoices_journal_del', 'invoices_minted_del']),
+  invoice_items: Object.freeze(['invoice_items_journal_del']),
+  payments: Object.freeze(['payments_journal_del']),
+  admission_services: Object.freeze(['admission_services_pending_cancel']),
   patient_deposits: Object.freeze(['patient_deposits_no_delete']),
 });
 
