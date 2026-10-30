@@ -1161,12 +1161,26 @@ function editableInvoiceRefusal(inv, db = null) {
 // Замена услуги перенесла бы результаты анализа на другую услугу. След работы
 // (результат, документ, сообщение прибора) держит строку так же, как статус.
 export const PERFORMED_LINE_STATUSES = ['collected', 'in_progress', 'resulted', 'completed'];
-function assertNotPerformed(db, vs, verb) {
+
+// REFUND_ANY_V1 (ревью B3) — ОДНО ПРАВИЛО «ПО СТРОКЕ ВИЗИТА ЕСТЬ РАБОТА»:
+// статус работы (PERFORMED_LINE_STATUSES) ИЛИ след — результат анализа,
+// документ (в том числе отозванный), сообщение анализатора. Эти ссылки —
+// простые внешние ключи без каскада: строку с ними удалить нельзя, и снимать
+// её как «неначатую» нельзя. Спрашивают его правка неоплаченного
+// (assertNotPerformed), возврат строки (refundInvoiceLine), отмена счёта
+// (cashier.js voidInvoice) и окно «Вернуть услугу» (invoiceLineWork) — экран и
+// сервер решают одинаково. `vs` — { id, status } строки визита.
+export function lineHasWork(db, vs) {
+  if (PERFORMED_LINE_STATUSES.includes(vs.status)) return true;
   const trace = db.prepare(`
     SELECT (EXISTS(SELECT 1 FROM lab_results WHERE visit_service_id = ?)
          OR EXISTS(SELECT 1 FROM visit_documents WHERE visit_service_id = ?)
          OR EXISTS(SELECT 1 FROM lab_device_messages WHERE visit_service_id = ?)) AS t`).get(vs.id, vs.id, vs.id);
-  if (PERFORMED_LINE_STATUSES.includes(vs.status) || (trace && trace.t)) {
+  return !!(trace && trace.t);
+}
+
+function assertNotPerformed(db, vs, verb) {
+  if (lineHasWork(db, vs)) {   // REFUND_ANY_V1 (ревью B3) — одно правило
     throw new RpcError('услуга уже оказывается/оказана (взята проба, есть результат или документ) — ' + verb + ' нельзя.', 400);
   }
 }
@@ -2363,11 +2377,7 @@ export function refundInvoiceLine(db, args, user) {
     let lineName = item.description || '';
     let sources = [];
     if (vs) {
-      const trace = db.prepare(`
-        SELECT (EXISTS(SELECT 1 FROM lab_results WHERE visit_service_id = ?)
-             OR EXISTS(SELECT 1 FROM visit_documents WHERE visit_service_id = ?)
-             OR EXISTS(SELECT 1 FROM lab_device_messages WHERE visit_service_id = ?)) AS t`).get(vs.id, vs.id, vs.id);
-      performed = PERFORMED_LINE_STATUSES.includes(vs.status) || !!(trace && trace.t);
+      performed = lineHasWork(db, vs);   // REFUND_ANY_V1 (ревью B3) — одно правило с окном «Вернуть услугу»
       if (performed) {
         db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = ?').run(vs.id);
       } else if (keepServices) {
@@ -2675,21 +2685,29 @@ export function visitRefundedLines(db, args, user) {
 // остаётся в карте пациента (медицинская запись), а врачу не платится, пока
 // услугу не выставят и не оплатят снова (pay_refund_releases). Кассир
 // подтверждает это галочкой. Строка стационара — kind 'admission' (выполнена —
-// по отметке выполнения). Документ — только не отозванный. Только чтение.
+// по отметке выполнения). Только чтение.
+// Ревью B3: `performed` строки визита — то же правило, что у возврата
+// (lineHasWork: статус или след, и отозванный документ, и сообщение
+// анализатора); sample / result / document лишь выбирают слова (document —
+// только не отозванный). `product` — товарная строка: «Оставить услугу в
+// визите» окно ей не предлагает. На позицию счёта — одна строка ответа
+// (строка визита и строка стационара берутся по одной, как в возврате).
 export function invoiceLineWork(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
   const invoiceId = args && args.invoice_id;
   if (!isPositiveInt(invoiceId)) throw new RpcError('Счёт указан неверно.', 400);
-  if (!db.prepare('SELECT 1 FROM invoices WHERE id = ?').get(invoiceId)) throw new RpcError('Счёт не найден.', 400);
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
+  if (!inv) throw new RpcError('Счёт не найден.', 400);
+  assertOwnBuilding(db, inv, 'Счёт');   // ревью B3 — как у возврата: чужое здание не читается
   const rows = db.prepare(`
     SELECT ii.id AS invoice_item_id,
-           vs.id AS vs_id, vs.status AS vs_status, vs.sample_collected_at AS sample_at,
+           vs.id AS vs_id, vs.status AS vs_status, vs.sample_collected_at AS sample_at, vs.clinic_item_id AS vs_product,
            a.id AS adm_id, a.performed_at AS adm_done,
            CASE WHEN vs.id IS NULL THEN 0 ELSE EXISTS(SELECT 1 FROM lab_results lr WHERE lr.visit_service_id = vs.id) END AS has_result,
            CASE WHEN vs.id IS NULL THEN 0 ELSE EXISTS(SELECT 1 FROM visit_documents d WHERE d.visit_service_id = vs.id AND d.voided_at IS NULL) END AS has_document
       FROM invoice_items ii
-      LEFT JOIN visit_services vs ON vs.invoice_item_id = ii.id
-      LEFT JOIN admission_services a ON a.invoice_item_id = ii.id
+      LEFT JOIN visit_services vs ON vs.id = (SELECT v2.id FROM visit_services v2 WHERE v2.invoice_item_id = ii.id ORDER BY v2.id LIMIT 1)
+      LEFT JOIN admission_services a ON a.id = (SELECT a2.id FROM admission_services a2 WHERE a2.invoice_item_id = ii.id ORDER BY a2.id LIMIT 1)
      WHERE ii.invoice_id = ?
      ORDER BY ii.id`).all(invoiceId);
   return {
@@ -2701,10 +2719,11 @@ export function invoiceLineWork(db, args, user) {
         invoice_item_id: r.invoice_item_id,
         kind: visit ? 'visit' : r.adm_id != null ? 'admission' : 'none',
         status,
+        product: visit && r.vs_product != null,
         sample: visit && (!!r.sample_at || status === 'collected'),
         result: !!r.has_result,
         document: !!r.has_document,
-        performed: visit ? PERFORMED_LINE_STATUSES.includes(status) : !!r.adm_done,
+        performed: visit ? lineHasWork(db, { id: r.vs_id, status: r.vs_status }) : !!r.adm_done,
       };
     }),
   };

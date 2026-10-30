@@ -15,7 +15,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // правило одно, и звучать оно обязано одинаково, с какого бы экрана в счёт ни
 // пришли. Касса — последний экран, у которого счёт открыт целиком, и первый, с
 // которого его можно стереть.
-import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
+import { assertOwnBuilding, PERFORMED_LINE_STATUSES, lineHasWork } from './billing.js';   // REFUND_ANY_V1 (ревью B3) — lineHasWork
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
 import { lineUnitPrice, consultationFor, doctorPriceLookup, legacyPackageOnlyOff, packageLineDiscount } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
 import { searchArg, pageInt } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере; REFUND_ANY_V1 — pageInt: страницы поиска счёта
@@ -805,25 +805,22 @@ export function voidInvoice(db, args, user) {
     // сохраняет статус. В 'added' возвращается только неначатая строка без
     // следа, оставленная галочкой keep_services, — как прежде.
     const keepServices = args.keep_services === true || args.keep_services === 1;
-    const PERFORMED = PERFORMED_LINE_STATUSES;   // INPATIENT_MONEY_FIX_V1 — один список с remove/change_unpaid_service
+    // INPATIENT_MONEY_FIX_V1 — один список с remove/change_unpaid_service;
+    // REFUND_ANY_V1 (ревью B3) — одно правило «есть работа» (lineHasWork):
+    // статус работы или след, как у возврата строки и окна «Вернуть услугу».
     const lines = db.prepare(`
       SELECT vs.id, vs.status, vs.clinic_item_id, vs.quantity, COALESCE(s.name, p.name, '') AS name
         FROM visit_services vs
         LEFT JOIN services s ON s.id = vs.service_id
         LEFT JOIN products p ON p.id = vs.clinic_item_id
        WHERE vs.invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)`).all(invoiceId);
-    const hasTrace = db.prepare(`
-      SELECT (EXISTS(SELECT 1 FROM lab_results WHERE visit_service_id = ?)
-           OR EXISTS(SELECT 1 FROM visit_documents WHERE visit_service_id = ?)
-           OR EXISTS(SELECT 1 FROM lab_device_messages WHERE visit_service_id = ?)) AS t`);
     const release = db.prepare("UPDATE visit_services SET invoice_item_id = NULL, status = 'added' WHERE id = ?");
     const releaseKeepStatus = db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = ?');
     const removed = [];
     const released = [];
     const releasedIds = [];
     for (const l of lines) {
-      const trace = !!hasTrace.get(l.id, l.id, l.id).t;
-      if (PERFORMED.includes(l.status) || trace) {
+      if (lineHasWork(db, l)) {
         releaseKeepStatus.run(l.id);
         released.push(l.name);
         releasedIds.push(l.id);

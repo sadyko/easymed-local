@@ -2369,15 +2369,20 @@ function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1
     // документ, услуга оказывается или оказана (invoice_line_work). Окно
     // называет её: всё это остаётся в карте, врачу не оплачивается, — и без
     // галочки возврат не уходит.
+    // Ревью B3: «работа есть» решает work.performed — то же правило, что у
+    // сервера (lineHasWork: статус или след — и отозванный документ, и
+    // сообщение анализатора); флаги лишь выбирают слова. След без пробы,
+    // результата и подписанного документа — общая фраза.
     const work = item.work || null;
-    const done = work ? [
+    const hasWork = !!(work && work.performed);
+    const done = hasWork ? [
         work.sample && 'взята проба',
         work.result && 'есть результат анализа',
         work.document && 'подписан документ',
-        work.performed && !work.sample && !work.result && !work.document && 'услуга оказывается или оказана',
     ].filter(Boolean) : [];
+    if (hasWork && !done.length) done.push('услуга оказывается или оказана');
     const ackBox = h('input', { type: 'checkbox', 'data-work-ack': '1' });
-    const workBlock = done.length ? h('div', { 'data-work-done': '1', role: 'alert', style: { padding: '10px 12px', margin: '0 0 10px', borderRadius: '10px', background: 'var(--warn-50, #fffbeb)', color: 'var(--warn-700, #b45309)', fontSize: '12.5px', lineHeight: 1.5 } },
+    const workBlock = hasWork ? h('div', { 'data-work-done': '1', role: 'alert', style: { padding: '10px 12px', margin: '0 0 10px', borderRadius: '10px', background: 'var(--warn-50, #fffbeb)', color: 'var(--warn-700, #b45309)', fontSize: '12.5px', lineHeight: 1.5 } },
         h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontWeight: 700 } },
             Icon('Warning', { size: 14 }), h('span', null, tr('По услуге уже сделана работа:') + ' ' + done.map((d) => tr(d)).join(', ') + '.')),
         h('div', { style: { margin: '4px 0 8px' } }, tr('Всё это остаётся в карте пациента. Врачу эта работа не оплачивается, пока услугу не выставят и не оплатят снова.')),
@@ -2386,12 +2391,16 @@ function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1
     // REFUND_ANY_V1 — «Оставить услугу в визите»: неначатая услуга не уходит с
     // визита, её выставят заново (keep_services). Сделанная работа и строка
     // стационара остаются и без галочки — у них её нет.
+    // Ревью B3: только у услуги визита (work.kind 'visit'), не у товара; не
+    // знаем, что со строкой (сбой invoice_line_work), — не предлагаем.
+    // Подсказка называет, где выставить заново, — словами экрана.
+    const keepOffer = !admLine && !!work && work.kind === 'visit' && !work.product && !hasWork;
     const keepBox = h('input', { type: 'checkbox', 'data-keep-line': '1' });
-    const keepLabel = admLine || done.length ? null
+    const keepLabel = !keepOffer ? null
         : h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', cursor: 'pointer', marginTop: '6px' } },
             keepBox, h('span', null,
                 h('span', { style: { fontWeight: 600 } }, tr('Оставить услугу в визите')),
-                h('div', { class: 'muted' }, tr('Услуга останется в визите без счёта — её можно выставить заново.'))));
+                h('div', { class: 'muted' }, tr('Услуга останется в визите без счёта. Выставить её заново: окно визита — отметить услугу и «Сформировать счёт», или касса — «Возвраты и отмены» → «Выставить заново».'))));
     modal(trf('Вернуть услугу · {name}', { name: item.description || '—' }), 'Repeat',
         [
             admLine
@@ -2411,17 +2420,22 @@ function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1
         'Вернуть услугу',
         async () => {
             if (workBlock && !ackBox.checked) { toast(tr('Подтвердите галочкой, что работа остаётся в карте.'), 'fail'); return false; }   // REFUND_ANY_V1
+            const keepAsked = !!(keepLabel && keepBox.checked);
             const { data: r, error } = await supabase.rpc('refund_invoice_line', {
                 invoice_item_id: item.id, reason: reasonInp.value || '', to_balance: toBalance,
                 card_fallback: toBalance ? 'balance' : 'cash',   // FINAL_MONEY_FIX_V1 (I2) — только для закрытой карты
                 void_when_zero: !!voidBox.checked,
-                keep_services: !!(keepLabel && keepBox.checked),   // REFUND_ANY_V1 — «Оставить услугу в визите»
+                keep_services: keepAsked,   // REFUND_ANY_V1 — «Оставить услугу в визите»
             });
             if (error) { toast(error.message || 'Не удалось вернуть услугу.', 'fail'); return false; }
             const sum = Number((r && r.refunded) || 0);
-            toast(sum > 0
+            // Ревью B3 — сервер оставил строку в визите, хотя галочки не было
+            // (работа началась, пока окно было открыто): касса это слышит. Одна
+            // строка уведомления — вместе с суммой, чтобы сумма не пропала.
+            const keptNote = r && r.line_kept && !keepAsked ? ' · ' + tr('Сделанная работа осталась в визите') : '';
+            toast((sum > 0
                 ? trf('Возвращено {sum} сум', { sum: fmtPrice(sum) })
-                : tr('Счёт уменьшен — переплаты нет, деньги не выдаются.'), 'ok');
+                : tr('Счёт уменьшен — переплаты нет, деньги не выдаются.')) + keptNote, 'ok');
             if (r && r.voided) toast(tr('Счёт отменён'), 'ok');
             if (r && r.void_note) toast(r.void_note, 'info');
             closeRefundModals(opts);   // REFUND_ANY_V1 (ревью I-4) — окно визита остаётся

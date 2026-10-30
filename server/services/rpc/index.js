@@ -3,8 +3,8 @@
 // slices (dispensing, discounts, queue numbers, …).
 import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDebt, changeUnpaidService, removeUnpaidService, refundPayment, refundInvoiceLine, createInvoiceForAdmission, removeAdmissionLineFromInvoice, visitRefundedLines,
   setUnpaidLineDoctor, addServiceToVisitInvoice, cashierLinePerformers,   // CASHIER_HEAD_V1
-  swapPaidLine, swapPaidLineQuote } from './billing.js';   // CASHIER_PAID_SWAP_V1
-import { invoiceLineWork } from './billing.js';   // REFUND_ANY_V1 — что уже сделано по строкам счёта
+  swapPaidLine, swapPaidLineQuote,   // CASHIER_PAID_SWAP_V1
+  invoiceLineWork } from './billing.js';   // REFUND_ANY_V1 — что уже сделано по строкам счёта
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';

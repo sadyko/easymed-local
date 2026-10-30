@@ -437,7 +437,9 @@ test('счёт стационара: в окне «Платежи» — его �
     let done = 0;
     tables = { payments: [{ id: 81, invoice_id: 8, amount: 170000, method: 'cash', paid_at: '2026-10-28T06:05:00Z', notes: '' }], invoice_items: ADM_ITEMS };
     calls.length = 0;
-    rpcAnswers = { cashier_invoice_search: { rows: [ADM_ROW], has_more: false }, refund_invoice_line: { refunded: 50000, invoice: { id: 8 }, admission_line_released: true } };
+    rpcAnswers = { cashier_invoice_search: { rows: [ADM_ROW], has_more: false }, refund_invoice_line: { refunded: 50000, invoice: { id: 8 }, admission_line_released: true },
+        // Ревью B3: сведения о работе есть — галочку прячет именно правило стационара.
+        invoice_line_work: { invoice_id: 8, lines: ADM_ITEMS.map((it) => ({ invoice_item_id: it.id, kind: 'admission', status: null, product: false, sample: false, result: false, document: false, performed: false })) } };
     await desk.openInvoiceRefundById(8, { onDone: () => { done++; } });
     const m = lastModal();
     assert.match(textOf(m), /Услуги счёта/, 'строки стационара в окне скрыты');
@@ -463,21 +465,23 @@ test('счёт стационара: в окне «Платежи» — его �
 test('ревью B2: окно возврата строки — визит: фраза визита и «отменить счёт»; стационар после выписки: фраза стационара и «отменить счёт»', async () => {
     asCashier();
     closeAll();
-    const dialogFor = async (row, items) => {
+    const dialogFor = async (row, items, kind) => {
         tables = { payments: [{ id: 91, invoice_id: row.id, amount: 100000, method: 'cash', paid_at: '2026-10-28T06:05:00Z', notes: '' }], invoice_items: items };
-        rpcAnswers = { cashier_invoice_search: { rows: [row], has_more: false } };
+        rpcAnswers = { cashier_invoice_search: { rows: [row], has_more: false },
+            // Ревью B3: неначатая строка (визита или стационара) — что сделано, известно.
+            invoice_line_work: { invoice_id: row.id, lines: items.map((it) => ({ invoice_item_id: it.id, kind, status: kind === 'visit' ? 'queued' : null, product: false, sample: false, result: false, document: false, performed: false })) } };
         await desk.openInvoiceRefundById(row.id, { onDone: () => {} });
         buttons(lastModal()).filter((b) => textOf(b).trim() === 'Вернуть услугу')[0].click();
         const text = textOf(lastModal());
         closeAll();
         return text;
     };
-    const visit = await dialogFor(OLD_ROW, ITEMS);
+    const visit = await dialogFor(OLD_ROW, ITEMS, 'visit');
     assert.ok(visit.includes('Сделанная работа останется в визите без счёта и врачу не оплачивается.'));
     assert.ok(!visit.includes('Строка стационара освободится'));
     assert.ok(visit.includes('Если по счёту больше не осталось денег — отменить счёт'));
     assert.ok(visit.includes('Оставить услугу в визите'), 'B3: у неначатой строки визита — «Оставить услугу в визите»');
-    const gone = await dialogFor({ ...ADM_ROW, admission_status: 'discharged' }, ADM_ITEMS);
+    const gone = await dialogFor({ ...ADM_ROW, admission_status: 'discharged' }, ADM_ITEMS, 'admission');
     assert.ok(gone.includes('Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается.'));
     assert.ok(!gone.includes('Сделанная работа останется в визите'));
     assert.ok(gone.includes('Если по счёту больше не осталось денег — отменить счёт'), 'после выписки счёт закрывается, как обычный, — галочка есть');
@@ -504,6 +508,9 @@ test('ревью B2: новые строки окна возврата — в с
 
 // ─── B3: «Оставить услугу в визите» и сделанная работа ───────────────────────
 const inputBy = (root, k) => walk(root).find((e) => e.tagName === 'INPUT' && e.attrs && e.attrs[k] !== undefined);
+// Ревью B3 (п. 8): подсказка называет, где строку выставляют заново, — словами экрана.
+const KEEP_HINT = 'Услуга останется в визите без счёта. Выставить её заново: окно визита — отметить услугу и «Сформировать счёт», или касса — «Возвраты и отмены» → «Выставить заново».';
+const KEPT_TOAST = 'Сделанная работа осталась в визите';
 
 test('сделана работа (проба, результат): окно называет её и не возвращает без галочки; «оставить в визите» не предлагается', async () => {
     asCashier();
@@ -550,29 +557,103 @@ test('неначатая услуга: «Оставить услугу в виз
     let done = 0;
     tables = { payments: PAYMENTS, invoice_items: ITEMS };
     calls.length = 0;
+    TOASTS.length = 0;
     rpcAnswers = {
         cashier_invoice_search: { rows: [OLD_ROW], has_more: false },
-        invoice_line_work: { invoice_id: 7, lines: [{ invoice_item_id: 701, kind: 'visit', status: 'queued', sample: false, result: false, document: false, performed: false }] },
+        invoice_line_work: { invoice_id: 7, lines: [{ invoice_item_id: 701, kind: 'visit', status: 'queued', product: false, sample: false, result: false, document: false, performed: false }] },
         refund_invoice_line: { refunded: 100000, invoice: { id: 7 }, line_kept: true },
     };
     await desk.openInvoiceRefundById(7, { onDone: () => { done++; } });
     buttonByText(lastModal(), 'Вернуть услугу').click();
     const dlg = lastModal();
     assert.ok(textOf(dlg).includes('Оставить услугу в визите'));
-    assert.ok(textOf(dlg).includes('Услуга останется в визите без счёта — её можно выставить заново.'));
+    assert.ok(textOf(dlg).includes(KEEP_HINT), textOf(dlg));
     assert.ok(!textOf(dlg).includes('По услуге уже сделана работа'), 'работы нет — предупреждения нет');
     inputBy(dlg, 'data-keep-line').checked = true;
     buttonByText(dlg, 'Вернуть услугу').click();
     await tick(60);
     assert.equal(rpcCalls('refund_invoice_line')[0][1].keep_services, true);
+    assert.ok(!TOASTS.some((t) => t.includes(KEPT_TOAST)), 'строку оставили галочкой — неожиданности нет: ' + TOASTS.join(' | '));
     assert.deepEqual(modals(), [visitWin], 'окно визита закрылось вместе с окнами возврата');
     assert.equal(done, 1, 'после возврата перечитывается вызвавший экран');
     closeAll();
 });
 
+// Ревью B3: окно решает «есть работа» по work.performed — то же правило, что у
+// сервера (lineHasWork); флаги пробы, результата, документа лишь выбирают слова.
+async function openLineDialog(work, refundAnswer) {
+    asCashier();
+    closeAll();
+    tables = { payments: PAYMENTS, invoice_items: ITEMS };
+    calls.length = 0;
+    TOASTS.length = 0;
+    rpcAnswers = {
+        cashier_invoice_search: { rows: [OLD_ROW], has_more: false },
+        invoice_line_work: work === undefined ? { __error: 'нет связи' } : { invoice_id: 7, lines: [{ invoice_item_id: 701, ...work }] },
+        refund_invoice_line: refundAnswer || { refunded: 100000, invoice: { id: 7 }, line_kept: false },
+    };
+    await desk.openInvoiceRefundById(7, { onDone: () => {} });
+    buttonByText(lastModal(), 'Вернуть услугу').click();
+    return lastModal();
+}
+const NO_FLAGS = { kind: 'visit', status: 'queued', product: false, sample: false, result: false, document: false };
+
+test('ревью B3: работа без пробы, результата и документа (след: сообщение прибора, отозванный документ) — общая фраза, «оставить» нет, без галочки не уходит', async () => {
+    const dlg = await openLineDialog({ ...NO_FLAGS, performed: true }, { refunded: 100000, invoice: { id: 7 }, line_kept: true });
+    assert.ok(textOf(dlg).includes('По услуге уже сделана работа: услуга оказывается или оказана.'), textOf(dlg));
+    assert.equal(inputBy(dlg, 'data-keep-line'), undefined);
+    const submit = buttonByText(dlg, 'Вернуть услугу');
+    submit.click();
+    await tick(40);
+    assert.equal(rpcCalls('refund_invoice_line').length, 0, 'без галочки возврат не уходит');
+    assert.ok(TOASTS.includes('Подтвердите галочкой, что работа остаётся в карте.'), TOASTS.join(' | '));
+    inputBy(dlg, 'data-work-ack').checked = true;
+    submit.click();
+    await tick(60);
+    assert.equal(rpcCalls('refund_invoice_line').length, 1);
+    assert.equal(rpcCalls('refund_invoice_line')[0][1].keep_services, false);
+    closeAll();
+});
+
+test('ревью B3: время пробы без работы (performed: false) — как решил сервер: окно молчит, «оставить в визите» есть, галочка «Понимаю» не нужна', async () => {
+    const dlg = await openLineDialog({ ...NO_FLAGS, sample: true, performed: false });
+    assert.ok(!textOf(dlg).includes('По услуге уже сделана работа'), textOf(dlg));
+    assert.equal(inputBy(dlg, 'data-work-ack'), undefined);
+    assert.ok(inputBy(dlg, 'data-keep-line'), 'неначатой строке визита — «Оставить услугу в визите»');
+    buttonByText(dlg, 'Вернуть услугу').click();
+    await tick(60);
+    assert.equal(rpcCalls('refund_invoice_line').length, 1);
+    assert.equal(rpcCalls('refund_invoice_line')[0][1].keep_services, false);
+    closeAll();
+});
+
+test('ревью B3: «оставить в визите» — только у услуги визита: у товара и без сведений о работе её нет', async () => {
+    const goods = await openLineDialog({ ...NO_FLAGS, product: true, performed: false });
+    assert.equal(inputBy(goods, 'data-keep-line'), undefined, 'товарной строке — «оставить в визите»');
+    assert.ok(!textOf(goods).includes('Оставить услугу в визите'));
+    closeAll();
+    const unknown = await openLineDialog(undefined);
+    assert.equal(inputBy(unknown, 'data-keep-line'), undefined, 'что сделано, неизвестно — «оставить в визите» не предлагается');
+    buttonByText(unknown, 'Вернуть услугу').click();
+    await tick(60);
+    assert.equal(rpcCalls('refund_invoice_line').length, 1, 'сбой чтения работы возврат не держит');
+    assert.equal(rpcCalls('refund_invoice_line')[0][1].keep_services, false);
+    closeAll();
+});
+
+test('ревью B3: сервер оставил строку без галочки (работа началась, пока окно было открыто) — касса слышит «Сделанная работа осталась в визите»', async () => {
+    const dlg = await openLineDialog({ ...NO_FLAGS, performed: false }, { refunded: 100000, invoice: { id: 7 }, line_kept: true });
+    buttonByText(dlg, 'Вернуть услугу').click();
+    await tick(60);
+    assert.equal(rpcCalls('refund_invoice_line')[0][1].keep_services, false);
+    // Одно уведомление (элемент toast один — следующее затёрло бы сумму): сумма и пометка вместе.
+    assert.ok(TOASTS.includes('Возвращено 100 000 сум · ' + KEPT_TOAST), TOASTS.join(' | '));
+    closeAll();
+});
+
 test('B3: строки окна возврата — в словаре на трёх языках, uz/en без кириллицы', async () => {
     const { STRINGS } = await import('../i18n-strings.js');
-    for (const key of ['Оставить услугу в визите', 'Услуга останется в визите без счёта — её можно выставить заново.', 'По услуге уже сделана работа:',
+    for (const key of ['Оставить услугу в визите', KEEP_HINT, KEPT_TOAST, 'По услуге уже сделана работа:',
         'взята проба', 'есть результат анализа', 'подписан документ', 'услуга оказывается или оказана',
         'Всё это остаётся в карте пациента. Врачу эта работа не оплачивается, пока услугу не выставят и не оплатят снова.',
         'Понимаю: работа остаётся в карте, врачу не оплачивается', 'Подтвердите галочкой, что работа остаётся в карте.']) {
