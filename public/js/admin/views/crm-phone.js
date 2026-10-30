@@ -112,7 +112,7 @@ const P = {
     // после возврата из кэша), а не щелчком; уведомление о сбое уже было;
     // сколько раз повторяли и таймер повтора; с какого мига подключается и
     // таймер «подключается долго»; слушается ли pageshow.
-    spAuto: false, spToasted: false, spTries: 0, spRetryTimer: null, spConnSince: 0, spSlowTimer: null, spShowArmed: false,
+    spAuto: false, spToasted: false, spTries: 0, spRetryTimer: null, spConnSince: 0, spSlowTimer: null, spSlow: false, spShowArmed: false,
 };
 const ME_RETRY_MS = 30000;   // SOFTPHONE_V1 — «кто я» не ответил при загрузке: спросить снова не чаще
 const HUSH_MS = 15000;       // SOFTPHONE_V1 — станция догоняет звонок с задержкой: столько молчим о нём после конца
@@ -226,7 +226,7 @@ export function resetCrmPhone() {
         spWho: new Map(), spRing: null, spTick: null, spRefresh: null, spLast: 'off',
         spNum: '', spHush: null, spSaid: false, spSay: null, spMeTry: 0,
         spDevUnsub: null, spTest: null, spTestAbort: null, spDevTimer: null,
-        spAuto: false, spToasted: false, spTries: 0, spRetryTimer: null, spConnSince: 0, spSlowTimer: null, spShowArmed: false });
+        spAuto: false, spToasted: false, spTries: 0, spRetryTimer: null, spConnSince: 0, spSlowTimer: null, spSlow: false, spShowArmed: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -1046,7 +1046,7 @@ function topTone() {
     const s = softState().state;
     if (s === SP.ERROR) return 'end';
     if (s === SP.OTHER_TAB) return 'off';
-    if (s === SP.CONNECTING && P.spConnSince && Date.now() - P.spConnSince >= ((P.ctx && P.ctx.spSlowMs) || SP_SLOW_MS)) return 'wait';
+    if (s === SP.CONNECTING && P.spSlow) return 'wait';
     return '';
 }
 function topDotClass() {
@@ -1061,11 +1061,15 @@ function paintTopBtn() {
 }
 function stopSlowWatch() { if (P.spSlowTimer) clearTimeout(P.spSlowTimer); P.spSlowTimer = null; }
 function watchSlow(state) {
-    if (state !== SP.CONNECTING) { P.spConnSince = 0; stopSlowWatch(); return; }
+    if (state !== SP.CONNECTING) { P.spConnSince = 0; P.spSlow = false; stopSlowWatch(); return; }
     if (P.spConnSince) return;
     P.spConnSince = Date.now();
+    P.spSlow = false;
     stopSlowWatch();
-    P.spSlowTimer = setTimeout(() => { P.spSlowTimer = null; paintTopBtn(); }, (P.ctx && P.ctx.spSlowMs) || SP_SLOW_MS);
+    // Сработал таймер — срок вышел. Сверять с Date.now() нельзя: таймер может
+    // прийти на миллисекунды раньше часов (сборка 3.18.1 на GitHub), и точка
+    // так и не желтела бы.
+    P.spSlowTimer = setTimeout(() => { P.spSlowTimer = null; P.spSlow = true; paintTopBtn(); }, (P.ctx && P.ctx.spSlowMs) || SP_SLOW_MS);
     if (P.spSlowTimer && typeof P.spSlowTimer.unref === 'function') P.spSlowTimer.unref();
 }
 

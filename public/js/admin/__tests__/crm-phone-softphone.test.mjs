@@ -1245,6 +1245,30 @@ test('верхняя кнопка «Телефон» показывает бед
   assert.doesNotMatch(btn.title, /не включился/);
 });
 
+// Сборка 3.18.1 на GitHub: таймер «подключается долго» пришёл на миллисекунды
+// раньше, чем Date.now() отсчитал срок (libuv считает срок от начала витка
+// цикла, а на загруженном компьютере виток начался раньше), — точка так и не
+// пожелтела. Сработал таймер — значит, срок вышел, без сверки с часами.
+test('долгое подключение: таймер пришёл раньше, чем часы отсчитали срок (загруженный компьютер), — точка всё равно жёлтая', async () => {
+  const fake = fakePhone({ wanted: true });
+  const { btn } = await shell({ fake, ctx: { spSlowMs: 30 } });
+  const realNow = Date.now;
+  try {
+    fake.push({ state: 'connecting', reason: '' });
+    const base = realNow();
+    Date.now = () => base + Math.min(realNow() - base, 20);   // часы отстают от таймера
+    await tick(70);
+    assert.ok(hasClass(topDot(btn), 'wait'), 'таймер сработал, а точка не жёлтая');
+    assert.match(btn.title, /—/, 'подсказка кнопки молчит о долгом подключении');
+  } finally {
+    Date.now = realNow;
+  }
+  fake.push({ state: 'ready' });
+  assert.ok(!hasClass(topDot(btn), 'wait'), 'подключились — жёлтой точки нет');
+  fake.push({ state: 'connecting', reason: '' });
+  assert.ok(!hasClass(topDot(btn), 'wait'), 'новое подключение — снова рано тревожить');
+});
+
 test('телефон не включился сам после загрузки — одно уведомление на страницу; включили щелчком — уведомления нет', async () => {
   const fake = fakePhone({ wanted: true });
   await shell({ fake, ctx: { spRetryMs: [100000] } });
