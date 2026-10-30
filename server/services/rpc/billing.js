@@ -2136,17 +2136,29 @@ function issueRefund(db, { invoice, p, amt, refundable, toBalanceRaw, cardFallba
 //     полного возврата, и он назван словами, а не получается сам;
 //   • пациент ещё на койке — счёт не отменяется (отмена его не выписывает):
 //     он остаётся «Не оплачен», кассиру это сказано в void_note.
-function closeFullyRefunded(db, invoiceId, args, reason, user) {
+// REFUND_ANY_V1 (ревью B2) — `empty`: у счёта не осталось ни одной строки (их
+// вернули по одной, refund_invoice_line). Такой счёт закрывается и у лежащего
+// пациента: отпускать нечего, а открытый счёт 0/0 обещал бы «закроется при
+// выписке» и при выписке с долгом стал бы долгом на 0 (markAdmissionDebt).
+// Галочку «отменить счёт» окно лежащему пациенту не показывает — здесь она не
+// читается.
+function closeFullyRefunded(db, invoiceId, args, reason, user, { empty = false } = {}) {
   const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
   if (!inv || inv.paid_amount > 0 || inv.status === 'void' || inv.status === 'refunded') return { voided: false };
   const adm = inv.admission_id ? db.prepare('SELECT status FROM admissions WHERE id = ?').get(inv.admission_id) : null;
-  if (adm && IN_BED_STATUSES.includes(adm.status)) {
+  const inBed = !!(adm && IN_BED_STATUSES.includes(adm.status));
+  if (inBed && !empty) {
     return { voided: false, void_note: 'Пациент ещё в стационаре — счёт не отменён. Возврат проведён; счёт закроется при выписке или его отменяют в окне отмены с подтверждением.' };
   }
-  const raw = args && args.void_when_zero;
-  const voidWhenZero = raw === undefined || raw === null ? true : (raw === true || raw === 1);
-  if (!voidWhenZero) return { voided: false };
-  voidInvoice(db, { invoice_id: invoiceId, keep_services: args && (args.keep_services === true || args.keep_services === 1), reason: reason || null }, user);
+  if (!inBed) {
+    const raw = args && args.void_when_zero;
+    const voidWhenZero = raw === undefined || raw === null ? true : (raw === true || raw === 1);
+    if (!voidWhenZero) return { voided: false };
+  }
+  voidInvoice(db, {
+    invoice_id: invoiceId, keep_services: args && (args.keep_services === true || args.keep_services === 1), reason: reason || null,
+    ...(inBed ? { in_bed_ack: true } : {}),   // REFUND_ANY_V1 — пустой счёт: строк, которые вернулись бы в невыставленные, нет
+  }, user);
   return { voided: true };
 }
 
@@ -2306,7 +2318,8 @@ export function refundPayment(db, args, user) {
 // REFUND_ANY_V1 (2026-10-29) — строка стационара возвращается так же: строка
 // госпитализации освобождается со счёта (отметка 'in' — счёт выписки её не
 // берёт), счёт пересчитывается без пола скидки группы (repriceUnpaidInvoice);
-// пациент на койке — счёт без денег не отменяется (closeFullyRefunded).
+// вернули последнюю строку — пустой счёт закрывается сразу и у лежащего
+// пациента (closeFullyRefunded, ревью B2).
 export function refundInvoiceLine(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
   const itemId = args && args.invoice_item_id;
@@ -2443,7 +2456,7 @@ export function refundInvoiceLine(db, args, user) {
       // закрывается отменой (жизненный цикл), как у полного возврата платежа.
       db.prepare("UPDATE invoices SET paid_amount = ?, paid_at = NULL, status = 'unpaid' WHERE id = ?").run(newPaid, inv.id);
       adjustCashbackAfterRefund(db, inv);
-      closed = closeFullyRefunded(db, inv.id, args, reason, user);
+      closed = closeFullyRefunded(db, inv.id, args, reason, user, { empty: leftN === 0 });   // REFUND_ANY_V1 (ревью B2)
     } else {
       const status = invoiceStatusFor(newTotal, newPaid, inv.status);
       if (status === 'paid') {

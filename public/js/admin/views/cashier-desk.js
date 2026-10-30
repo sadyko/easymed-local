@@ -2278,7 +2278,8 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
             .eq('invoice_id', inv.id).order('id', { ascending: false }).limit(100);
         pays = data || [];
     } catch (e) { /* empty list explains below */ }
-    const info = { id: inv.id, invoice_number: inv.invoice_number || ('#' + inv.id), patient_name: inv.patient_name || '', admission_id: inv.admission_id || null };
+    const info = { id: inv.id, invoice_number: inv.invoice_number || ('#' + inv.id), patient_name: inv.patient_name || '', admission_id: inv.admission_id || null,
+        admission_status: inv.admission_status || null };   // REFUND_ANY_V1 (ревью B2) — лежит ли пациент
 
     // BILLING_AUDIT_FIX_V1 (B1) — ВЕРНУТЬ ОДНУ УСЛУГУ. Возврат «по платежу»
     // уменьшал оплату, но не счёт: частичный возврат делал пациента должником за
@@ -2348,16 +2349,24 @@ function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1
             tr('Оплата картой-сертификатом возвращается на ту же карту. Если остаток карты уже возвращён покупателю — выбранным здесь способом.')));
     };
     paintDest();
+    // REFUND_ANY_V1 (ревью B2) — строка стационара: вместо фразы о визите —
+    // что станет со строкой госпитализации. Пациент лежит — галочки «отменить
+    // счёт» нет: сервер её здесь не читает (пустой счёт закрывается сам,
+    // непустой ждёт выписки — closeFullyRefunded).
+    const admLine = !!(info && info.admission_id);
+    const inBed = admLine && IN_BED_STATUSES.includes(info.admission_status);
     modal(trf('Вернуть услугу · {name}', { name: item.description || '—' }), 'Repeat',
         [
-            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5 } },
-                tr('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта. Сделанная работа останется в визите без счёта и врачу не оплачивается.')),
-            // REFUND_ANY_V1 — строка стационара: что станет со строкой госпитализации.
-            info && info.admission_id ? h('div', { 'data-adm-line-note': '1', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5, fontWeight: 600 } },
+            admLine
+                ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5 } },
+                    tr('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта.'))
+                : h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5 } },
+                    tr('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта. Сделанная работа останется в визите без счёта и врачу не оплачивается.')),
+            admLine ? h('div', { 'data-adm-line-note': '1', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5, fontWeight: 600 } },
                 tr('Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается.')) : null,
             field('Причина', reasonInp),
             field('Куда вернуть', destBox),
-            h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer' } },
+            inBed ? null : h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer' } },
                 voidBox, tr('Если по счёту больше не осталось денег — отменить счёт')),
         ],
         'Вернуть услугу',

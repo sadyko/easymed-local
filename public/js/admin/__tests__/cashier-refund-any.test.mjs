@@ -446,10 +446,55 @@ test('счёт стационара: в окне «Платежи» — его �
     const dlg = lastModal();
     assert.match(textOf(dlg), /Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается\./);
     assert.ok(!textOf(dlg).includes('Оставить услугу в визите'), 'у строки стационара «оставить в визите» нет — она и так остаётся в госпитализации');
+    // Ревью B2: у строки стационара — её фраза ВМЕСТО фразы визита; галочки
+    // «отменить счёт» у лежащего пациента нет — сервер её здесь не читает.
+    assert.ok(textOf(dlg).includes('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта.'));
+    assert.ok(!textOf(dlg).includes('Сделанная работа останется в визите'), 'у строки стационара — фраза визита');
+    assert.ok(!textOf(dlg).includes('отменить счёт'), 'лежащему пациенту — галочка «отменить счёт»');
     buttonByText(dlg, 'Вернуть услугу').click();
     await tick(60);
     assert.equal(rpcCalls('refund_invoice_line')[0][1].invoice_item_id, 801);
     assert.deepEqual(modals(), [visitWin], 'окно визита закрылось вместе с окнами возврата');
     assert.equal(done, 1, 'после возврата перечитывается вызвавший экран');
     closeAll();
+});
+
+test('ревью B2: окно возврата строки — визит: фраза визита и «отменить счёт»; стационар после выписки: фраза стационара и «отменить счёт»', async () => {
+    asCashier();
+    closeAll();
+    const dialogFor = async (row, items) => {
+        tables = { payments: [{ id: 91, invoice_id: row.id, amount: 100000, method: 'cash', paid_at: '2026-10-28T06:05:00Z', notes: '' }], invoice_items: items };
+        rpcAnswers = { cashier_invoice_search: { rows: [row], has_more: false } };
+        await desk.openInvoiceRefundById(row.id, { onDone: () => {} });
+        buttons(lastModal()).filter((b) => textOf(b).trim() === 'Вернуть услугу')[0].click();
+        const text = textOf(lastModal());
+        closeAll();
+        return text;
+    };
+    const visit = await dialogFor(OLD_ROW, ITEMS);
+    assert.ok(visit.includes('Сделанная работа останется в визите без счёта и врачу не оплачивается.'));
+    assert.ok(!visit.includes('Строка стационара освободится'));
+    assert.ok(visit.includes('Если по счёту больше не осталось денег — отменить счёт'));
+    const gone = await dialogFor({ ...ADM_ROW, admission_status: 'discharged' }, ADM_ITEMS);
+    assert.ok(gone.includes('Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается.'));
+    assert.ok(!gone.includes('Сделанная работа останется в визите'));
+    assert.ok(gone.includes('Если по счёту больше не осталось денег — отменить счёт'), 'после выписки счёт закрывается, как обычный, — галочка есть');
+});
+
+test('ревью B2: новые строки окна возврата — в словаре на трёх языках, uz/en без кириллицы', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const key of ['Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается.',
+        'Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта.']) {
+        const e = STRINGS[key];
+        assert.ok(e, 'нет ключа словаря: ' + key);
+        assert.equal(e.ru, key);
+        for (const lang of ['uz', 'en']) {
+            assert.ok(e[lang], key + ': нет перевода ' + lang);
+            assert.doesNotMatch(e[lang], /[Ѐ-ӿ]/, key + ': кириллица в ' + lang);
+        }
+    }
+    // Слово выписки в словаре — «chiqarish» (не «chiqish»).
+    assert.match(STRINGS['Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается.'].uz, /chiqarish hisobiga/);
+    // Отказ «Это строка стационара…» больше не говорит сервер — ключа нет.
+    assert.equal(STRINGS['Это строка стационара — её убирают из счёта госпитализации (до оплаты) или возвращают оплатой по платежу.'], undefined);
 });
