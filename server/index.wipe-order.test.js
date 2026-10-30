@@ -9,6 +9,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Тест только читает текст server/index.js и приём анализаторов не запускает,
+// но называет startLisListeners среди проверяемых строк — правило
+// lis-port-hygiene.test.js требует явно выключить приём.
+const LIS_BEFORE = process.env.LIS_ENABLED;
+process.env.LIS_ENABLED = '0';
+test.after(() => {
+  if (LIS_BEFORE === undefined) delete process.env.LIS_ENABLED;
+  else process.env.LIS_ENABLED = LIS_BEFORE;
+});
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const src = fs.readFileSync(path.join(HERE, 'index.js'), 'utf8');
 const at = (needle) => {
