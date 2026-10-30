@@ -13,8 +13,26 @@
 // Права: «Возврат» и «Платежи» видит только тот, кому сервер их даст
 // (cashier_invoice_search и возвраты — касса и администратор, с учётом
 // дополнительных ролей). Регистратору кнопок нет — и сервер ему отказывает.
+//
+// Ревью B5: после возврата перечитывается и вкладка «Услуги» (строка снова с
+// галочкой и пометкой «возвращено»), журнал счёта называет возврат строки
+// словами («Услуга возвращена»), возврат оплаты пишет журнал сервер;
+// «Возврат» — у любого счёта с деньгами, и у старого отменённого; двойной
+// щелчок открывает одно окно «Платежи»; касса не подгрузилась или счёт
+// чужого здания — сообщение, окно визита на месте.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
+
+// Касса «не подгрузилась» (обрыв сети в браузере): подгрузка модуля кассы
+// падает, пока поднят флаг. Хук — в том же потоке (registerHooks), флаг виден.
+let failCashImport = false;
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (failCashImport && /cashier-desk\.js\?v=/.test(specifier)) throw new Error('Failed to fetch dynamically imported module');
+    return nextResolve(specifier, context);
+  },
+});
 
 // ─── крошечный DOM ──────────────────────────────────────────────────────────
 class F {
@@ -171,6 +189,17 @@ globalThis.fetch = async (url, opts) => {
 const perms = await import('../permissions.js');
 const VM = await import('../views/visit-modal.js');
 const { tr } = await import('../i18n.js');
+const { REFUNDED_LINE_MARK } = await import('../../shared/refunded-line.js');
+
+/** Свежий визит с одним оплаченным счётом (приём терапевта). */
+function paidVisit() {
+  const vid = DB.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'arrived')").run(SEED.pid).lastInsertRowid;
+  const svc = DB.prepare("SELECT id FROM services WHERE name = 'Приём терапевта'").get().id;
+  const l = DB.prepare('INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total) VALUES (?, ?, 20, 1, 0, 0)').run(vid, svc).lastInsertRowid;
+  const inv = createInvoiceForVisit(DB, { visit_id: vid, visit_service_ids: [l] }, REGISTRAR).invoice;
+  recordPayment(DB, { invoice_id: inv.id, amount: inv.total_amount, method: 'cash' }, CASHIER);
+  return { vid, inv: DB.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id) };
+}
 
 const textOf = (e) => (e ? e.textContent : '');
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
@@ -187,6 +216,7 @@ const buttonByText = (root, t) => buttons(root).find((b) => textOf(b).trim() ===
 const refundDoors = (root) => buttons(root).filter((b) => b.attrs['data-visit-refund'] !== undefined);
 const invoiceReads = (vid) => CALLS.filter(([n, b]) => n === 'db:invoices' && (b.filters || []).some((f) => f.col === 'visit_id' && String(f.val) === String(vid))).length;
 const rpcCalls = (name) => CALLS.filter(([n]) => n === 'rpc:' + name);
+const isTab = (b) => String(b.className).split(/\s+/).includes('tab');
 
 function signIn(user, roleRow) {
   USER = user;
@@ -205,12 +235,34 @@ async function openVisitOnInvoice(vid) {
   await flush();
   const win = lastModal();
   assert.ok(win, 'окно визита не открылось');
-  const tabs = buttons(win).filter((b) => String(b.className).split(/\s+/).includes('tab'));
+  const tabs = buttons(win).filter(isTab);
   assert.equal(tabs.length, 3, 'вкладки окна визита');
   tabs[1].click();   // services · invoice · details
   await flush();
   return win;
 }
+
+// Первым: касса в этом процессе ещё не подгружалась ни разу.
+test('касса не подгрузилась: сообщение, окно визита на месте, окна «Платежи» нет', async () => {
+  asCashier();
+  CALLS.length = 0; TOASTS.length = 0;
+  const win = await openVisitOnInvoice(SEED.vid);
+  const main = refundDoors(win).find((b) => b.attrs['data-visit-refund'] === String(SEED.newest.id));
+  assert.ok(main, 'нет «Возврат» у оплаченного счёта');
+  failCashImport = true;
+  try {
+    main.click();
+    await until(() => TOASTS.length > 0, 'сообщение о сбое');
+  } finally {
+    failCashImport = false;
+  }
+  await flush();
+  assert.equal(TOASTS.length, 1, TOASTS.join(' | '));
+  assert.ok(TOASTS[0].startsWith('Не удалось открыть платежи: '), TOASTS[0]);
+  assert.deepEqual(modals(), [win], 'окно визита пропало или открылось лишнее окно');
+  assert.equal(rpcCalls('cashier_invoice_search').length, 0);
+  document.body.children.length = 0;
+});
 
 test('касса: «Возврат» в окне визита → «Платежи» → «Оставить услугу в визите»: окно визита остаётся и перечитывается один раз, «Платежи» закрыты', async () => {
   asCashier();
@@ -223,11 +275,15 @@ test('касса: «Возврат» в окне визита → «Платеж
   assert.equal(textOf(main).trim(), 'Возврат');
   assert.ok(walk(win).some((n) => n.attrs && n.attrs['data-visit-other-invoices'] !== undefined), 'нет блока «Другие счета визита»');
   assert.ok(textOf(win).includes('Другие счета визита'));
-  assert.ok(!textOf(win).includes('Cancel & refund') && !textOf(win).includes(tr('Cancel & refund')), 'у оплаченного счёта — отмена целиком');
+  assert.ok(!textOf(win).includes('Cancel & refund') && !textOf(win).includes('Отменить и вернуть'), 'у оплаченного счёта — отмена целиком');
 
   const readsBefore = invoiceReads(SEED.vid);
+  // Ревью B5, п. 7 — двойной щелчок: одно окно «Платежи», один запрос счёта.
   main.click();
-  await until(() => modals().length === 2, 'окно «Платежи»');
+  main.click();
+  await until(() => modals().length >= 2, 'окно «Платежи»');
+  await flush();
+  assert.equal(modals().length, 2, 'двойной щелчок открыл два окна «Платежи»');
   const pay = lastModal();
   assert.notEqual(pay, win);
   assert.ok(textOf(pay).includes('Платежи · ' + SEED.newest.invoice_number), textOf(pay).slice(0, 200));
@@ -257,6 +313,23 @@ test('касса: «Возврат» в окне визита → «Платеж
   const vs = DB.prepare('SELECT invoice_item_id FROM visit_services WHERE id = ?').get(SEED.l2);
   assert.equal(vs.invoice_item_id, null);
   assert.ok(TOASTS.some((t) => t.startsWith('Возвращено')), TOASTS.join(' | '));
+  // Ревью B5, п. 2 — «Invoice activity» называет возврат строки словами, а не кодом.
+  assert.ok(textOf(win).includes(tr(REFUNDED_LINE_MARK)), 'журнал счёта не назвал возврат строки');
+  assert.ok(!textOf(win).includes('refund_line'), 'журнал счёта показал код действия');
+
+  // Ревью B5, п. 1 — перечитана и вкладка «Услуги»: оставленная строка снова
+  // без счёта — с галочкой и пометкой «возвращено»; счётчик вкладки верный.
+  buttons(win).filter(isTab)[0].click();
+  await flush();
+  const lines = DB.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(SEED.vid).n;
+  const svcTab = buttons(win).filter(isTab)[0];
+  assert.equal(textOf(walk(svcTab).find((n) => n.className === 'tab-count')), String(lines), 'счётчик вкладки «Услуги»');
+  const row = walk(win).find((n) => n.tagName === 'TR' && textOf(n).includes('Приём терапевта'));
+  assert.ok(row, 'строки приёма нет на вкладке «Услуги»');
+  assert.ok(walk(row.children[0]).some((n) => n.tagName === 'INPUT' && n.attrs.type === 'checkbox'), 'у оставленной строки нет галочки — вкладка не перечитана');
+  assert.ok(textOf(row).includes(tr('возвращено')), 'нет пометки «возвращено»');
+  assert.equal(invoiceReads(SEED.vid) - readsBefore, 1, 'вкладка «Услуги» перечитывала счета');
+  document.body.children.length = 0;
 });
 
 test('касса: «Платежи» другого счёта визита → возврат оплаты: окно визита остаётся и перечитывается один раз', async () => {
@@ -285,15 +358,17 @@ test('касса: «Платежи» другого счёта визита → 
   assert.equal(DB.prepare('SELECT paid_amount FROM invoices WHERE id = ?').get(SEED.older.id).paid_amount, 0);
   assert.equal(refundDoors(win).length, 0, 'денег по счетам визита не осталось — кнопок возврата тоже');
   assert.ok(!walk(win).some((n) => n.attrs && n.attrs['data-visit-other-invoices'] !== undefined), 'пустой блок «Другие счета визита»');
+  // Ревью B5, п. 3 — возврат оплаты журналирует сервер: строка 'refunded', и
+  // «Invoice activity» визита её показывает своей пометкой.
+  const logged = DB.prepare("SELECT refund_amount, visit_id FROM invoice_audit_log WHERE invoice_id = ? AND action = 'refunded'").all(SEED.older.id);
+  assert.deepEqual(logged, [{ refund_amount: SEED.older.total_amount, visit_id: SEED.vid }]);
+  assert.ok(textOf(win).includes(tr('Refunded')), 'журнал визита не показал возврат оплаты');
+  document.body.children.length = 0;
 });
 
 test('права: регистратору «Возврат» и «Платежи» не показаны — и сервер ему их не даёт; врачу с ролью кассы — показаны и сервер даёт', async () => {
   // Свежий визит с оплаченным счётом: прошлые тесты деньги уже вернули.
-  const vid = DB.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'arrived')").run(SEED.pid).lastInsertRowid;
-  const svc = DB.prepare("SELECT id FROM services WHERE name = 'Приём терапевта'").get().id;
-  const l = DB.prepare('INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total) VALUES (?, ?, 20, 1, 0, 0)').run(vid, svc).lastInsertRowid;
-  const inv = createInvoiceForVisit(DB, { visit_id: vid, visit_service_ids: [l] }, REGISTRAR).invoice;
-  recordPayment(DB, { invoice_id: inv.id, amount: inv.total_amount, method: 'cash' }, CASHIER);
+  const { vid, inv } = paidVisit();
 
   asRegistrar();
   let win = await openVisitOnInvoice(vid);
@@ -325,5 +400,43 @@ test('неоплаченный счёт: «Возврата» нет — отм�
   const win = await openVisitOnInvoice(SEED.vid2);
   assert.equal(refundDoors(win).length, 0);
   assert.ok(buttons(win).some((b) => textOf(b).trim() === tr('Cancel invoice')), 'нет «Cancel invoice» у неоплаченного счёта');
+  document.body.children.length = 0;
+});
+
+test('ревью B5, п. 5: старый отменённый счёт, на котором остались деньги, — «Возврат» есть, «Cancel invoice» нет; «Платежи» открываются', async () => {
+  asCashier();
+  const f = paidVisit();
+  // Отмена до BILLING_AUDIT_FIX_V1 денег не трогала: счёт «отменён», а оплата на нём.
+  DB.prepare("UPDATE invoices SET status = 'void' WHERE id = ?").run(f.inv.id);
+  CALLS.length = 0; TOASTS.length = 0;
+  const win = await openVisitOnInvoice(f.vid);
+  const doors = refundDoors(win);
+  assert.deepEqual(doors.map((b) => b.attrs['data-visit-refund']), [String(f.inv.id)], 'у отменённого счёта с деньгами нет «Возврат»');
+  assert.equal(textOf(doors[0]).trim(), 'Возврат');
+  assert.ok(!buttons(win).some((b) => textOf(b).trim() === tr('Cancel invoice')), 'отменённый счёт снова предлагают отменить');
+  doors[0].click();
+  await until(() => modals().length === 2, 'окно «Платежи»');
+  assert.ok(buttonByText(lastModal(), 'Возврат'), 'у платежа отменённого счёта нет возврата: ' + textOf(lastModal()).slice(0, 300));
+  assert.deepEqual(TOASTS, []);
+  document.body.children.length = 0;
+});
+
+test('ревью B5, п. 8: счёт чужого здания — касса называет причину, окно визита на месте; щелчок снова работает', async () => {
+  asCashier();
+  const f = paidVisit();
+  DB.prepare("UPDATE invoices SET sync_origin = 'B' WHERE id = ?").run(f.inv.id);
+  CALLS.length = 0; TOASTS.length = 0;
+  const win = await openVisitOnInvoice(f.vid);
+  const door = refundDoors(win)[0];
+  assert.ok(door, 'нет «Возврат» у оплаченного счёта');
+  door.click();
+  await until(() => TOASTS.length > 0, 'сообщение об отказе');
+  await flush();
+  assert.deepEqual(TOASTS, ['Это счёт другого здания — его деньги возвращает касса того здания.']);
+  assert.deepEqual(modals(), [win], 'окно визита пропало или открылось лишнее окно');
+  // Защита от двойного щелчка отпущена и после отказа.
+  door.click();
+  await until(() => TOASTS.length === 2, 'второй щелчок');
+  assert.equal(rpcCalls('cashier_invoice_search').length, 2);
   document.body.children.length = 0;
 });

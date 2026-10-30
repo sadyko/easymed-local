@@ -1,5 +1,8 @@
 // Shared invoice cancel / refund + audit-log helpers. Used by:
-//   * visit-modal.js  → Invoice tab "Cancel & refund" button
+//   * visit-modal.js  → Invoice tab "Cancel invoice" button (unpaid invoice);
+//     payment/debt rows of the invoice log (logInvoiceAction)
+// REFUND_ANY_V1 — a paid invoice is refunded from the visit window through the
+// cashier's «Платежи» window (cashier-desk.js openInvoiceRefundById), not here.
 //
 // RPC_PORT_V1 — the money moves on the server (void_invoice / refund_payment,
 // the same doors as the cashier desk); this module is the dialog + the logs.
@@ -69,6 +72,10 @@ export function invoiceMoneyErrorText(error) {
 // Open the reason+amount modal. `onDone` fires after the invoice changed —
 // a full success, or a refund that stopped half-way (the money that did go
 // back is real, so the calling view must reload either way).
+// REFUND_ANY_V1 — the visit window opens this dialog only for an invoice with
+// no money on it (willRefund = false). The willRefund branch (refund by
+// payments, then cancel) stays for any caller with a paid invoice; no screen
+// calls it that way now — it is covered by picker-invoice.test.mjs.
 export function openCancelInvoiceDialog(inv, { onDone } = {}) {
     const paid  = Number(inv.paid_amount  || 0);
     const total = Number(inv.total_amount || 0);
@@ -274,18 +281,11 @@ export async function cancelInvoice(inv0, { reason, refundAmount = 0, notes = nu
     }
     const toStatus = voided ? 'void' : 'refunded';
 
-    // 4. Audit row. RPC_PORT_V1 — отмену журналирует void_invoice сам; возврат
-    // (refund_payment) журнала счёта не пишет — пишем здесь, и частичный тоже.
-    if (refunded > 0) await logInvoiceAction(inv, {
-        visitId:      inv.visit_id || null,
-        action:       'refunded',
-        fromStatus:   inv.status,
-        toStatus:     voided ? 'void' : null,
-        amount:       0,
-        refundAmount: refunded,
-        reason,
-        notes,
-    });
+    // 4. Audit row. RPC_PORT_V1 — отмену журналирует void_invoice сам.
+    // REFUND_ANY_V1 (ревью B5) — возврат журналирует refund_payment сам (строка
+    // 'refunded' на каждый платёж, частичный тоже), в той же транзакции, что
+    // деньги: своя строка отсюда была бы второй. Заметки окна («№ чека…»)
+    // остаются в журнале пациента ниже (detail.notes).
 
     // 5. Mirror into the patient-wide activity feed so the patient card's
     //    log shows cancelled invoices alongside referrals / service edits.

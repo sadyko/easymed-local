@@ -29,6 +29,7 @@ import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX
 // мимо проверки. Расписание визита меняет теперь только calendar_book.
 import { bookVisit, setVisitStatus as bookStatus } from './visit-booking.js';
 import { lineIdentity, linePerformer, sameLine, isConsultPick } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога, исполнитель
+import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B5) — «Услуга возвращена» в журнале счёта
 
 // BILLING_AUDIT_FIX_V1 (A1) — 'YYYY-MM-DD' местного дня для visit_date.
 // Полное мгновение (с временем) переводится в день клиники браузера; голая
@@ -184,7 +185,10 @@ export function openVisitModal({ visit, patient, doctor, service, onChange, onSt
         clear(body);
         if (state.tab === 'details')  body.appendChild(detailsForm(state));
         if (state.tab === 'services') body.appendChild(servicesPane(state, () => { Promise.all([loadServices(state), loadRecommendations(state)]).then(() => { renderTabs(); renderBody(); }); }));
-        if (state.tab === 'invoice')  body.appendChild(invoicePane(state, () => { Promise.all([loadInvoice(state), loadInvoiceLogs(state)]).then(() => renderBody()); }));
+        // REFUND_ANY_V1 (ревью B5) — после денег (в том числе возврата из окна
+        // «Платежи» кассы) перечитываются и строки визита: возвращённая строка
+        // снова без счёта — с галочкой и пометкой «возвращено» на «Услугах».
+        if (state.tab === 'invoice')  body.appendChild(invoicePane(state, () => { Promise.all([loadInvoice(state), loadInvoiceLogs(state), loadServices(state)]).then(() => { renderTabs(); renderBody(); }); }));
     }
 
     function close() {
@@ -1384,7 +1388,9 @@ function invoicePane(state, onReload) {
             // REFUND_ANY_V1 — по счёту есть деньги: возврат — то же окно «Платежи»,
             // что у кассы (вернуть услугу, вернуть оплату, «Оставить услугу в
             // визите»). Отмены целиком с возвратом всех денег отсюда больше нет.
-            cancellable && paid > 0 && h('button', {
+            // Ревью B5 — при любом статусе: на старом отменённом счёте (отмена
+            // до BILLING_AUDIT_FIX_V1 деньги не трогала) деньги тоже возвращают.
+            moneyHands && paid > 0 && h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button', 'data-visit-refund': String(inv.id),
                 style: { color: 'var(--crit-700)', borderColor: 'var(--crit-200, #fecaca)' },
                 onclick: () => openCashierPayments(inv.id, onReload),
@@ -1411,12 +1417,20 @@ function invoicePane(state, onReload) {
 // визите»), вернуть оплату; после — перечитывается окно визита (onDone). Касса
 // подгружается в момент действия — кольца импортов нет (no-import-cycles);
 // штамп — тот же, что у admin.js: один экземпляр модуля (visit-refund-door.test.mjs).
+// Ревью B5 — одно окно «Платежи» за раз: пока касса подгружается и читает
+// счёт, повторный щелчок («Возврат» или «Платежи») ничего не открывает.
+// Открытое окно «Платежи» само накрывает окно визита затемнением.
+let cashierPaymentsOpening = false;
 async function openCashierPayments(invoiceId, onReload) {
+    if (cashierPaymentsOpening) return;
+    cashierPaymentsOpening = true;
     try {
         const mod = await import('./cashier-desk.js?v=cash12');
         await mod.openInvoiceRefundById(invoiceId, { onDone: onReload });
     } catch (e) {
         toast(trf('Не удалось открыть платежи: {msg}', { msg: (e && e.message) || e }), 'fail');
+    } finally {
+        cashierPaymentsOpening = false;
     }
 }
 
@@ -1894,8 +1908,9 @@ async function loadInvoice(state) {
     // newest instead of erroring (deleteVisit already treats multiple-invoices-per-visit as possible).
     // REFUND_ANY_V1 — и прочие счета визита: вкладка показывает новейший, а
     // возврат доступен по каждому, по которому есть деньги (otherInvoicesBlock).
+    // Ревью B5 — счета одной секунды (created_at до секунды) — по номеру: новейший первым.
     const { data, error } = await supabase.from('invoices').select('*').eq('visit_id', state.visit.id)
-        .order('created_at', { ascending: false }).limit(20);
+        .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(20);
     if (error) { console.warn('[invoices]', error.message); return; }
     state.invoices = data || [];
     state.invoice = state.invoices[0] || null;
@@ -2005,6 +2020,9 @@ function logActionTag(action) {
         debt:     { kind: 'warn',  text: 'Debt'     },
         void:     { kind: 'crit',  text: 'Cancelled'},
         refunded: { kind: 'crit',  text: 'Refunded' },
+        // REFUND_ANY_V1 (ревью B5) — возврат одной услуги (refund_invoice_line):
+        // словами экрана («Услуга возвращена»), а не кодом действия.
+        refund_line: { kind: 'crit', text: REFUNDED_LINE_MARK },
     };
     const m = map[action] || { kind: 'muted', text: action };
     return h('span', { class: 'tag tag-' + m.kind }, m.text);

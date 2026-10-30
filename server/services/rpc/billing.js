@@ -2271,6 +2271,23 @@ export function refundPayment(db, args, user) {
     // транзакции, что возврат.
     const closed = newPaid <= 0 ? closeFullyRefunded(db, invoice.id, args, reason, user) : { voided: false };
 
+    // REFUND_ANY_V1 (ревью B5) — ЖУРНАЛ СЧЁТА ПИШЕТ СЕРВЕР, как у
+    // refund_invoice_line, в той же транзакции: сколько вернули, по какому
+    // платежу, частичный или полный (по этому платежу), куда, кто. Прежде
+    // строку 'refunded' дописывал браузер, и только окно отмены счёта визита:
+    // возврат из окна «Платежи» кассы (и из окна визита) в «Invoice activity»
+    // не попадал. Повтор той же формы (idemReplay) сюда не доходит — второй
+    // строки нет. Деньги этот блок не трогает.
+    const wholePayment = round2(refunded + amt) >= round2(p.amount);
+    lineAudit(db, {
+      inv: invoice, visitId: invoice.visit_id, action: 'refunded',
+      fromStatus: invoice.status, toStatus: db.prepare('SELECT status FROM invoices WHERE id = ?').get(invoice.id).status,
+      amount: p.amount, refundAmount: amt, reason,
+      notes: 'Возврат по платежу #' + p.id + ': ' + moneyWords(amt) + ' из ' + moneyWords(p.amount) + ' сум — '
+        + (wholePayment ? 'полный' : 'частичный')
+        + (card ? ' · на подарочную карту' : toBalance ? ' · на баланс пациента' : ''),
+    }, user);
+
     return idemRemember(db, 'refund_payment', args, user, { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance, voided: !!closed.voided,
       ...(postSaleDiscount > 0 ? { post_sale_discount: postSaleDiscount } : {}),
       ...(closed.void_note ? { void_note: closed.void_note } : {}), ...(card ? { to_card: card } : {}) });
