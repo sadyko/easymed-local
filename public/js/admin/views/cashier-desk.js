@@ -29,9 +29,9 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
-import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js?v=refbill4';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп) · REFBILL_REVIEW_V1 — плательщик карты перечитывается, отказ перечитывает строки
+import { canOfferLineFix, openLineFix, openRebill, openRefundSwap, invoiceSwappable } from './cashier-line-fix.js?v=refbill4';   // REFUND_SWAP_V1 — «Заменить услугу» в окне «Платежи»; CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп) · REFBILL_REVIEW_V1 — плательщик карты перечитывается, отказ перечитывает строки
 import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт по счёту плательщику, та же сборка, что у мастера визита
-import { canCloseOtherShifts } from '../permissions.js';   // CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
+import { canCloseOtherShifts, canSwapPaidLines } from '../permissions.js';   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
 // CARD_BALANCE_V1 — «Подарочная карта»: оплата остатком карты / сертификата.
@@ -1794,6 +1794,11 @@ function invoiceRow(inv, root) {
 }
 
 function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 — opts.checkSubtitle
+    // REFUND_SWAP_V1 — opts.after: что сделать после оплаты или долга вместо
+    // перерисовки кассы (доплата после замены из окна визита: кассы под рукой
+    // нет, root пуст — перечитывается окно визита); opts.onClose — окно
+    // закрылось любым путём. Без них — как прежде.
+    const after = typeof opts.after === 'function' ? opts.after : () => paint(root);
     // SPLIT_PAY_V1 — счёт можно оплатить одним или НЕСКОЛЬКИМИ способами сразу
     // (например: часть наличными, часть картой или эквайрингом). Каждая строка —
     // способ + сумма; все строки проводятся одной транзакцией (record_payment_split),
@@ -2122,7 +2127,7 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
             idem.next();
             toast('Оплата принята', 'ok');
             printFiscalCheck(inv, parts, undefined, { subtitle: opts.checkSubtitle });   // CASH_CHECK_PRINT_V1 + V3120_FIX — строка на каждый способ (не блокирует)
-            await paint(root);
+            await after();   // REFUND_SWAP_V1 — по умолчанию paint(root)
             return true;
         },
         460,
@@ -2171,13 +2176,14 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
                     toast(parts.length ? tr('Счёт оставлен как долг (частичная оплата записана) — услуги переданы в работу.') : tr('Счёт оставлен как долг — услуги переданы в работу.'), 'ok');
                     if (sum > 0) printFiscalCheck(inv, parts, undefined, { subtitle: opts.checkSubtitle });   // V3120_FIX — все способы, «Остаток» — долг
                     close();
-                    await paint(root);
+                    await after();   // REFUND_SWAP_V1 — по умолчанию paint(root)
                 } catch (err) {
                     toast((err && err.message) || 'Не удалось оформить долг.', 'fail');
                     btn.disabled = false;
                 }
             },
-        }, 'Оставить как долг'));
+        }, 'Оставить как долг'),
+        opts.onClose || null);   // REFUND_SWAP_V1
 }
 
 function voidModal(root, inv) {
@@ -2305,9 +2311,38 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
             if (!error) for (const l of ((data && data.lines) || [])) workById.set(l.invoice_item_id, l);
         } catch (e) { /* без предупреждения */ }
     }
+    // REFUND_SWAP_V1 — «Заменить услугу» рядом с «Вернуть услугу»: у того, кому
+    // выдано «Исправляет услуги в счёте», и только с денежной ролью
+    // (canSwapPaidLines — зеркало сервера requireSwapRight + PAYMENT_ROLES), у
+    // счёта визита с деньгами (не плательщику, не депозит и не карта, не
+    // отменённый — canOfferLineFix / invoiceSwappable; не стационара — сервер
+    // их не меняет), у строки-услуги, не товара и не строки стационара. Строки
+    // визита читаются по позициям счёта; начата ли работа — из
+    // invoice_line_work выше (performed), экран её сам не выводит.
+    const swapOk = items.length > 0 && !inv.admission_id && canOfferLineFix(inv) && invoiceSwappable(inv) && canSwapPaidLines();
+    let lineByItem = new Map();
+    if (swapOk) {
+        try {
+            const { data } = await supabase.from('visit_services')
+                .select('id, service_id, status, total, invoice_item_id, clinic_item_id, consultation_type_id, services(name, is_lab, type), doctor_id(id, full_name)')
+                .in('invoice_item_id', items.map((it) => it.id));
+            lineByItem = new Map((data || []).map((l) => [l.invoice_item_id, l]));
+        } catch (e) { /* без строк визита остаётся «Вернуть услугу» */ }
+    }
+    const swapBtn = (it) => {
+        const line = lineByItem.get(it.id);
+        const work = workById.get(it.id) || null;
+        if (!line || line.clinic_item_id != null) return null;   // товар не меняют — его возвращают
+        if (work && (work.kind === 'admission' || work.product)) return null;
+        return h('button', {
+            class: 'btn btn-outline btn-sm', type: 'button', 'data-refund-swap': String(it.id),
+            onclick: () => openRefundSwap(inv, it, line, { work, onDone: (r) => afterRefundSwap(r, inv, root, opts) }),
+        }, Icon('Repeat', { size: 13 }), ' ', 'Заменить услугу');
+    };
     const itemRows = items.map(it => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center' } },
         h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: it.description || '' }, it.description || '—'),
         h('span', { class: 'num', style: { fontWeight: 700 } }, fmtPrice(Math.max(0, Number(it.total || 0) - Number(it.discount_amount || 0)))),
+        swapBtn(it),   // REFUND_SWAP_V1
         h('button', {
             class: 'btn btn-outline btn-sm', type: 'button',
             style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
@@ -2335,7 +2370,44 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
             : h('div', { class: 'empty' }, 'По счёту нет платежей.'),
          itemRows.length ? h('div', { style: { padding: '14px 0 4px', fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } }, 'Услуги счёта') : null,
          itemRows.length ? h('div', { style: { maxHeight: '40vh', overflow: 'auto' } }, ...itemRows) : null],
-        'Закрыть', async () => true, 560);
+        'Закрыть', async () => true, 640);   // REFUND_SWAP_V1 — шире: у строки две кнопки
+}
+
+// REFUND_SWAP_V1 — после замены из окна «Платежи»: что стало с деньгами.
+// Дешевле — квитанция «Возврат разницы»; дороже — сразу окно оплаты с чеком
+// «Доплата» (закрыли без оплаты — разница остаётся долгом счёта); возврат с
+// новой услугой — сказано, что прежняя осталась в карте и врачу не платится.
+// Поправка 7: окна закрываются, как у остальных денег этого окна
+// (closeRefundModals — окно визита, из которого открыли «Платежи», остаётся),
+// и в конце — afterMoney ровно один раз: без доплаты — сразу; с доплатой —
+// когда окно оплаты закрылось (оплатили, оставили долгом или закрыли).
+async function afterRefundSwap(r, inv, root, opts = {}) {
+    closeRefundModals(opts);   // окно «Платежи» устарело
+    const sum = Number(r.refunded) || 0;
+    const due = Number(r.due) || 0;
+    if (sum > 0) {
+        toast(r.to_balance
+            ? trf('Разница {sum} сум зачислена на баланс пациента.', { sum: fmtPrice(sum) })
+            : trf('Пациенту возвращено {sum} сум.', { sum: fmtPrice(sum) }), 'ok');
+        const u = (window.easymed && window.easymed.state && window.easymed.state.user) || {};
+        printSlip(printableSheet, {
+            kind: 'swap', invoice: r.invoice || inv, patient: { full_name: inv.patient_name, mrn: inv.mrn },
+            before: r.line_before, after: r.line_after, refunded: sum, plan: r.refund_plan || [], cashier: u.full_name || u.username || '',
+        });
+    } else if (due > 0) {
+        toast(trf('Услуга заменена — к доплате {sum} сум.', { sum: fmtPrice(due) }), 'info');
+    } else {
+        toast(tr('Услуга заменена — сумма счёта не изменилась.'), 'ok');
+    }
+    if (r.rebill) toast(tr('Прежняя услуга возвращена: работа осталась в карте пациента и врачу не оплачивается.'), 'info');
+    let finished = false;
+    const finish = async () => {
+        if (finished) return;
+        finished = true;
+        try { await afterMoney(root, opts); } catch (e) { /* окно перечитается при следующем заходе */ }
+    };
+    if (!(due > 0)) { await finish(); return; }
+    payModal(root, { ...inv, ...(r.invoice || {}) }, due, { checkSubtitle: 'Доплата', after: finish, onClose: finish });
 }
 
 // BILLING_AUDIT_FIX_V1 (B1) — подтверждение возврата одной услуги. Сумму
@@ -2710,9 +2782,17 @@ async function loadUnassignedCash(wrap) {
 // Shared minimal modal (mirrors settings-hub.js chrome).
 // onSubmit returns true to close, false to keep open.
 // =============================================================================
-function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFooter = null) {
+// REFUND_SWAP_V1 — onClose: окно закрылось (кнопкой, крестиком, фоном или
+// после удачного действия) — зовётся один раз.
+function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFooter = null, onClose = null) {
     const overlay = h('div', { class: 'modal' });
-    const close = () => overlay.remove();
+    let closed = false;
+    const close = () => {
+        overlay.remove();
+        if (closed || typeof onClose !== 'function') return;
+        closed = true;
+        Promise.resolve().then(onClose).catch(() => {});
+    };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
     const submitBtn = h('button', { class: 'btn btn-primary', type: 'button' }, submitLabel);
@@ -2846,6 +2926,7 @@ export const __test_paintDeposits = paintDeposits;
 export const __test_moveModal = moveModal;
 export const __test_payModal = payModal;
 export const __test_openRefundConfirm = openRefundConfirm;
+export const __test_openInvoiceRefund = openInvoiceRefund;   // REFUND_SWAP_V1 — окно «Платежи» с «Заменить услугу»
 export const __test_historyModal = historyModal;
 export const __test_invoiceRow = invoiceRow;
 export const __test_shiftBanner = shiftBanner;

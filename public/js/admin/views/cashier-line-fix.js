@@ -112,7 +112,7 @@ let servicesCache = null;
 async function loadServices() {
     if (servicesCache) return servicesCache;
     const { data, error } = await supabase.from('services')
-        .select('id, name, price, requires_doctor').eq('active', 1).order('name', { ascending: true }).limit(5000);
+        .select('id, name, price, requires_doctor, is_lab, type').eq('active', 1).order('name', { ascending: true }).limit(5000);   // REFUND_SWAP_V1 — is_lab, type: окно замены называет, что новый анализ уйдёт в лабораторию
     if (error) throw error;
     servicesCache = data || [];
     return servicesCache;
@@ -154,6 +154,8 @@ export function pickService(title) {
 /**
  * Выбор исполнителя. `args` — для cashier_line_performers. Промис: { id } |
  * { id: null } («без врача», если услуге врач не нужен) | null (закрыли окно).
+ * REFUND_SWAP_V1 — вместе с id приходят имя и цена строки у этого
+ * исполнителя (full_name, unit_price): окно замены показывает выбранного.
  */
 export function pickPerformer(title, args, { allowNone = false } = {}) {
     return new Promise((resolve) => {
@@ -170,7 +172,7 @@ export function pickPerformer(title, args, { allowNone = false } = {}) {
             if (error) { list.appendChild(h('div', { style: { color: 'var(--crit-600)' } }, error.message || tr('Не удалось загрузить.'))); return; }
             const people = (data && data.performers) || [];
             if (allowNone && !(data && data.requires_doctor)) {
-                list.appendChild(h('button', { type: 'button', class: 'btn btn-ghost', 'data-performer': 'none', style: { justifyContent: 'space-between', display: 'flex', width: '100%' }, onclick: () => pick({ id: null }) },
+                list.appendChild(h('button', { type: 'button', class: 'btn btn-ghost', 'data-performer': 'none', style: { justifyContent: 'space-between', display: 'flex', width: '100%' }, onclick: () => pick({ id: null, full_name: null, unit_price: data && data.catalog_price }) },
                     h('span', null, 'Без врача'), h('span', { class: 'num muted' }, fmtSum(data && data.catalog_price), ' ', tr('сум'))));
             }
             if (!people.length) list.appendChild(h('div', { class: 'muted', style: { padding: '8px' } }, 'Нет сотрудников, которые оказывают эту услугу.'));
@@ -178,7 +180,7 @@ export function pickPerformer(title, args, { allowNone = false } = {}) {
                 list.appendChild(h('button', {
                     type: 'button', class: 'btn btn-ghost', 'data-performer': String(p.id),
                     style: { justifyContent: 'space-between', display: 'flex', width: '100%', textAlign: 'left' },
-                    onclick: () => pick({ id: p.id }),
+                    onclick: () => pick({ id: p.id, full_name: p.full_name || null, unit_price: p.unit_price }),
                 },
                 h('span', null, p.full_name || ('#' + p.id), p.specialty ? h('span', { class: 'muted' }, ' · ', p.specialty) : null),
                 h('span', { class: 'num' }, fmtSum(p.unit_price), ' ', tr('сум'))));
@@ -287,6 +289,226 @@ export async function openSwapConfirm(args, { onDone = null } = {}) {
         if (onDone) await onDone(data || {});
     });
     await load();
+    return s;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REFUND_SWAP_V1 (2026-10-29) — «ЗАМЕНИТЬ УСЛУГУ» В ОКНЕ «ПЛАТЕЖИ».
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Владелец (3.19.0): обычный путь кассира был 6–7 шагов — вернуть услугу,
+// регистратура добавляет новую, новый счёт, оплата, чек. Теперь у каждой
+// услуги оплаченного счёта рядом с «Вернуть услугу» стоит «Заменить услугу»
+// (кнопку рисует касса, cashier-desk.js openInvoiceRefund, по
+// canSwapPaidLines: право «Исправляет услуги в счёте» и денежная роль).
+// Одно окно: новая услуга и исполнитель выбираются вместе, цену и разницу
+// считает сервер (cashier_line_swap_quote — та же замена в откатываемой
+// транзакции: тариф визита, своя цена врача, скидка группы пациента).
+// Разница — крупно:
+//   • дешевле — «Вернуть деньгами» (каждый платёж тем же способом, что
+//     платили; наличные — из кассы текущей смены) или «На баланс пациента»;
+//   • дороже — после замены касса открывает окно оплаты «Доплата» (`onDone`);
+//     закрыли его без оплаты — разница остаётся долгом счёта.
+// По услуге уже начата работа — это решает сервер: `work.performed` из
+// invoice_line_work (то же правило lineHasWork, что у замены и возврата) или
+// отказ замены с кодом line_performed (работа началась, пока окно открыто).
+// Перенести её нельзя, и окно предлагает «Вернуть эту услугу и выставить
+// новую» — одну операцию сервера (cashier_line_rebill_quote /
+// cashier_line_rebill_paid): прежняя строка остаётся в карте невыставленной и
+// врачу не оплачивается, новая встаёт в тот же визит и счёт, разница — по тем
+// же правилам. Предпросмотр возврата с новой отдаёт `line: null` (его строка
+// откатана) — окно читает только подписи и суммы. Анализ меняют на анализ —
+// окно говорит, что новый уйдёт в лабораторию новым заказом и пробу отметят
+// заново. `onDone(r)` получает ответ сервера (`rebill: true` — второй путь).
+const isLabService = (s) => !!s && (Number(s.is_lab) === 1 || s.type === 'lab');
+
+export async function openRefundSwap(inv, item, line, { work = null, onDone = null } = {}) {
+    let svc = null;            // новая услуга { id, name, price, is_lab, type }
+    let who = null;            // исполнитель { id, full_name } или { id: null } — «Без врача»
+    let dest = 'original';     // разница: тем же способом или на баланс пациента
+    let rebill = !!(work && work.performed);   // работа начата — по слову сервера, не по статусу на экране
+    let quote = null;
+    let seq = 0;               // ответ устаревшего предпросмотра не рисуется
+    let idemKey = newIdemKey();   // ключ окна: двойное нажатие не проведёт деньги дважды
+    const oldLab = isLabService(line && line.services);
+    const s = sheet(trf('Заменить услугу · {name}', { name: item.description || '—' }), 'Repeat', 560);
+    const intro = h('div', { class: 'muted', 'data-refund-swap-intro': '', style: { fontSize: '12.5px', lineHeight: 1.5 } });
+    const picks = h('div', { style: { display: 'grid', gap: '8px', marginTop: '10px' } });
+    const labNote = h('div');
+    const body = h('div', { style: { display: 'grid', gap: '8px', marginTop: '10px' } });
+    s.body.appendChild(intro);
+    s.body.appendChild(picks);
+    s.body.appendChild(labNote);
+    s.body.appendChild(body);
+    const okBtn = h('button', { class: 'btn btn-primary', type: 'button', disabled: true }, tr('Заменить'));
+    s.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => s.close() }, 'Отмена'));
+    s.foot.appendChild(h('span', { class: 'grow' }));
+    s.foot.appendChild(okBtn);
+    const kv = (k, v) => h('div', { class: 'row', style: { gap: '10px', fontSize: '13.5px', fontWeight: 500, alignItems: 'baseline' } },
+        h('span', { style: { flex: 1, color: 'var(--ink-600)' } }, k), h('span', { class: 'num' }, v));
+    const big = (label, sum, attr) => h('div', { [attr]: String(sum), style: { display: 'flex', gap: '10px', alignItems: 'baseline', marginTop: '6px' } },
+        h('span', { style: { flex: 1, fontSize: '15px', fontWeight: 800 } }, label),
+        h('span', { class: 'num', style: { fontSize: '24px', fontWeight: 800 } }, fmtSum(sum) + ' ' + tr('сум')));
+    const doc = line && line.doctor_id && typeof line.doctor_id === 'object' ? line.doctor_id : null;
+    const was = (item.description || '—') + (doc && doc.full_name ? ', ' + doc.full_name : '')
+        + ' · ' + fmtSum(Math.max(0, Number(item.total || 0) - Number(item.discount_amount || 0))) + ' ' + tr('сум');
+
+    const paintIntro = () => {
+        clear(intro);
+        intro.appendChild(h('span', null, rebill
+            ? tr('По этой услуге уже начата работа (взята проба, есть результат, документ или идёт приём) — перенести её на другую услугу нельзя. Эта услуга вернётся: работа останется в карте пациента, врачу она не оплачивается. Новая услуга будет выставлена в тот же визит и счёт.')
+            : tr('Выберите новую услугу и исполнителя. Цену и разницу считает программа.')));
+    };
+    const paintPicks = () => {
+        clear(picks);
+        picks.appendChild(kv(tr('Было'), was));
+        picks.appendChild(h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', fontSize: '13.5px' } },
+            h('span', { style: { flex: 1, color: 'var(--ink-600)' } }, tr('Новая услуга')),
+            h('span', { class: 'cell-strong', 'data-picked-service': svc ? String(svc.id) : '' }, svc ? (svc.name || '—') : '—'),
+            h('button', { class: 'btn btn-sm', type: 'button', 'data-pick': 'service', onclick: () => chooseService() }, svc ? tr('Изменить') : tr('Выбрать услугу'))));
+        picks.appendChild(h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', fontSize: '13.5px' } },
+            h('span', { style: { flex: 1, color: 'var(--ink-600)' } }, tr('Исполнитель')),
+            h('span', { class: 'cell-strong', 'data-picked-performer': who ? (who.id == null ? 'none' : String(who.id)) : '' },
+                who ? (who.id == null ? tr('Без врача') : (who.full_name || ('#' + who.id))) : '—'),
+            h('button', { class: 'btn btn-sm', type: 'button', 'data-pick': 'performer', disabled: svc ? null : true, onclick: () => { if (svc) choosePerformer(); } }, tr('Выбрать'))));
+        // Анализ меняют на анализ: лаборатория получит новый заказ и отметит
+        // пробу заново — без этой фразы лаборант ищет пробу у прежнего анализа.
+        clear(labNote);
+        if (oldLab && svc && isLabService(svc)) {
+            labNote.appendChild(h('div', { 'data-swap-lab': '1', role: 'note', style: { marginTop: '8px', padding: '9px 12px', borderRadius: '10px', background: 'var(--warn-50, #fffbeb)', color: 'var(--warn-700, #b45309)', fontSize: '12.5px', lineHeight: 1.5 } },
+                tr('Новый анализ уйдёт в лабораторию новым заказом, и лаборатория заново отметит взятие пробы — можно из той же пробирки.')));
+        }
+    };
+    // Работа по строке начата, а окно было на обычной замене: денег сервер не
+    // двигал (отказ line_performed) — окно переходит к «Вернуть эту услугу и
+    // выставить новую». Ключ повтора — новый: это другая операция сервера.
+    const toRebill = () => {
+        rebill = true;
+        idemKey = newIdemKey();
+        paintIntro();
+    };
+
+    // «Вернуть деньгами» — без to_balance: каждый платёж возвращается своим
+    // способом (с баланса — на баланс, картой-сертификатом — на ту же карту).
+    // «На баланс пациента» — to_balance; закрытая карта — тем же выбором.
+    const callArgs = () => ({
+        visit_service_id: line.id,
+        new_service_id: svc.id,
+        ...(who.id == null ? { no_doctor: true } : { doctor_id: who.id }),
+        ...(dest === 'balance' ? { to_balance: true, card_fallback: 'balance' } : { card_fallback: 'cash' }),
+    });
+    const quoteRpc = (args) => (rebill
+        ? supabase.rpc('cashier_line_rebill_quote', args)
+        : supabase.rpc('cashier_line_swap_quote', args));
+    const commitRpc = (args) => (rebill
+        ? supabase.rpc('cashier_line_rebill_paid', args)
+        : supabase.rpc('cashier_line_swap_paid', args));
+
+    const render = () => {
+        clear(body);
+        const q = quote;
+        if (q.changed === false) {
+            body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Это та же услуга у того же исполнителя — менять нечего.'));
+            okBtn.textContent = tr('Заменить');
+            return false;
+        }
+        body.appendChild(kv(tr('Стало'), q.line_after || '—'));
+        body.appendChild(kv(tr('Сумма счёта'), fmtSum(q.total_before) + ' → ' + fmtSum(q.total_after) + ' ' + tr('сум')));
+        body.appendChild(kv(tr('Уже оплачено'), fmtSum(q.paid_before) + ' ' + tr('сум')));
+        const commitLabel = (plain) => (rebill ? tr('Вернуть эту услугу и выставить новую') : plain);
+        if (Number(q.refunded) > 0) {
+            body.appendChild(big(tr('Вернуть пациенту'), q.refunded, 'data-swap-refund'));
+            const destBox = h('div', { style: { display: 'grid', gap: '6px' } });
+            for (const [v, label] of [['original', 'Вернуть деньгами'], ['balance', 'На баланс пациента']]) {
+                const radio = h('input', { type: 'radio', name: 'refund-swap-dest', value: v, checked: dest === v ? true : null });
+                radio.addEventListener('change', () => { if (dest === v) return; dest = v; load(); });
+                destBox.appendChild(h('label', { 'data-swap-dest': v, style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } }, radio, tr(label)));
+            }
+            body.appendChild(destBox);
+            body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, dest === 'balance'
+                ? tr('Наличные из кассы не выдаются: сумма ляжет на баланс пациента и пойдёт в оплату следующей услуги.')
+                : tr('Тем же способом, каким платили; наличные выдаются из кассы текущей смены.')));
+            const plan = h('div', { class: 'muted', style: { fontSize: '12.5px', display: 'grid', gap: '2px' } });
+            for (const x of (q.refund_plan || [])) {
+                plan.appendChild(h('div', { 'data-swap-plan': x.refund_method || '' }, refundWhere(x) + ' — ' + fmtSum(x.amount) + ' ' + tr('сум')));
+            }
+            body.appendChild(plan);
+            okBtn.textContent = commitLabel(trf('Заменить и вернуть {sum} сум', { sum: fmtSum(q.refunded) }));
+        } else if (Number(q.due) > 0) {
+            body.appendChild(big(tr('К доплате'), q.due, 'data-swap-due'));
+            body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'После замены откроется окно оплаты разницы.'));
+            okBtn.textContent = commitLabel(tr('Заменить и принять доплату'));
+        } else {
+            body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Сумма счёта не меняется — деньги не двигаются.'));
+            okBtn.textContent = commitLabel(tr('Заменить'));
+        }
+        return true;
+    };
+
+    const load = async () => {
+        if (!svc || !who) return;
+        const my = ++seq;
+        okBtn.disabled = true;
+        clear(body);
+        body.appendChild(h('div', { class: 'muted' }, 'Считаем…'));
+        let { data, error } = await quoteRpc(callArgs());
+        if (my !== seq) return;
+        // Работа по строке начата, а экран этого не видел (проба, результат,
+        // документ): обычная замена отказала кодом line_performed — окно
+        // переходит к «Вернуть эту услугу и выставить новую» и считает заново.
+        if (error && error.code === 'line_performed' && !rebill) {
+            toRebill();
+            ({ data, error } = await quoteRpc(callArgs()));
+            if (my !== seq) return;
+        }
+        if (error || !data) {
+            clear(body);
+            body.appendChild(h('div', { role: 'alert', style: { color: 'var(--crit-600, #dc2626)' } }, (error && error.message) || tr('Не удалось.')));
+            return;
+        }
+        quote = data;
+        okBtn.disabled = !render();
+    };
+
+    async function chooseService() {
+        const picked = await pickService(tr('Новая услуга'));
+        if (!picked) return;
+        svc = picked;
+        who = null;
+        quote = null;
+        seq++;
+        clear(body);
+        okBtn.disabled = true;
+        paintPicks();
+        await choosePerformer();   // исполнитель — сразу за услугой
+    }
+    async function choosePerformer() {
+        const picked = await pickPerformer(tr('Кто оказывает услугу'), { service_id: svc.id, visit_id: inv.visit_id }, { allowNone: true });
+        if (!picked) return;
+        who = picked;
+        paintPicks();
+        await load();
+    }
+
+    okBtn.addEventListener('click', async () => {
+        if (!quote || !svc || !who || quote.changed === false) return;
+        okBtn.disabled = true;
+        const { data, error } = await commitRpc({ ...callArgs(), idempotency_key: idemKey });
+        if (error && error.code === 'line_performed' && !rebill) {
+            // Работа началась, пока окно было открыто: замена не прошла, деньги
+            // не двигались. Окно называет причину и считает возврат с новой.
+            toast(error.message || tr('Не удалось.'), 'info');
+            toRebill();
+            await load();
+            return;
+        }
+        if (error) { toast(error.message || tr('Не удалось.'), 'fail'); okBtn.disabled = false; return; }
+        s.overlay.remove();
+        if (onDone) await onDone({ ...(data || {}), rebill: rebill || !!(data && data.rebill) });
+    });
+
+    paintIntro();
+    paintPicks();
     return s;
 }
 
