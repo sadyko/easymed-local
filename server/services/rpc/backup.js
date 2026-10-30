@@ -10,6 +10,7 @@ import { diskUsageReport } from '../disk-guard.js';   // DISK_GUARD_V1
 // обновления ещё правда» (clearStaleUpdateRefusal) — те же, что у обновления.
 import { detectLayout, clearStaleUpdateRefusal } from '../control/updater.js';
 import { readAppVersion } from '../control/checkin.js';
+import { isPaired, requestTestDataWipe, wipeStatus } from '../test-data-wipe.js';   // TEST_DATA_WIPE_V1
 
 // DISK_GUARD_V1 — корень запущенной программы, тем же способом, что ROOT в
 // server/index.js (этот файл на три папки глубже): по нему detectLayout
@@ -169,4 +170,47 @@ export async function factoryReset(db, args, user) {
   }
   scheduleRestart();
   return { ok: true, restarting: true };
+}
+
+// TEST_DATA_WIPE_V1 — «Удалить тестовые данные» на «Данных клиники»
+// (services/test-data-wipe.js). Те же замки, что у «Удалить все данные»:
+// только администратор, слово УДАЛИТЬ сверяет сервер, пароль — свой, заново.
+// Клиника, связанная с другими зданиями, получает отказ ДО копии и намерения.
+// Поправка 9(г): отказ называет выход — «Отвязать», и удалить ДО новой связи:
+// загрузка с того здания при новой связи может вернуть учебные строки.
+export const PAIRED_REFUSAL = 'Клиника связана с другими зданиями. Удаление ушло бы в другое здание и стёрло бы там '
+  + 'настоящие данные, поэтому удалить тестовые данные здесь нельзя. Если связь не нужна, нажмите «Отвязать» '
+  + 'на экране «Филиалы» и удалите тестовые данные до того, как связывать клинику снова.';
+
+function pairedError() {
+  const err = new RpcError(PAIRED_REFUSAL, 409);
+  err.code = 'paired';
+  return err;
+}
+
+export async function testDataWipe(db, args, user) {
+  requireAdmin(user);
+  if (String((args && args.confirm) ?? '') !== 'УДАЛИТЬ') {
+    throw new RpcError('Подтверждение не совпадает: введите слово УДАЛИТЬ.', 400);
+  }
+  requirePassword(db, user, args && args.password);
+  const dataDir = getDataDir();
+  if (isPaired(dataDir)) throw pairedError();
+  let r;
+  try {
+    r = await requestTestDataWipe(db, dataDir, { userId: user.id });
+  } catch (e) {
+    // DISK_GUARD_V1 — нет места на копию перед удалением или на журнал самого
+    // удаления (ревью C3) — удаления нет; 409 с шаблоном и числами.
+    throw asRpcError(e);
+  }
+  if (!r.ok) throw pairedError();
+  scheduleRestart();
+  return { ok: true, restarting: true, backup: r.backup };
+}
+
+/** Состояние карточки: связана ли клиника, ждёт ли удаление запуска, итог прошлого удаления. */
+export function testDataWipeStatus(db, args, user) {
+  requireAdmin(user);
+  return wipeStatus(getDataDir());
 }

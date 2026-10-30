@@ -129,6 +129,9 @@ const RPC_LABELS = {
     telegram_deeplink_save: 'Сохранение ссылки для рекламы',
     telegram_deeplink_delete: 'Удаление ссылки для рекламы',
     telegram_broadcast_options: 'Фильтры рассылки',
+    // TEST_DATA_WIPE_V1 — от имени сотрудника не проходит (только администратор), но попытка видна в журнале
+    test_data_wipe: 'Удаление тестовых данных',
+    test_data_wipe_status: 'Удаление тестовых данных: состояние',
 };
 
 // Таблицы /api/db — чаще всего записываемые экраном.

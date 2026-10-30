@@ -35,6 +35,7 @@ import { preserveLegacyLogo } from './services/clinic-logo-legacy.js';   // CLIN
 import { schedulePublicSync } from './services/api/public-sync.js';   // PUBLIC_API_V1
 import { startLanAddress } from './services/lan/index.js';   // LAN_ADDRESS_V1
 import { scheduleLivePull } from './services/telephony/live.js';   // CALL_RING_V1 — длинный опрос живых событий станции, пока панели «Телефон» спрашивают
+import { applyPendingTestDataWipe } from './services/test-data-wipe.js';   // TEST_DATA_WIPE_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -136,6 +137,7 @@ if (isMain) {
   const pending = processPendingAction(DATA_DIR);
   if (pending.action === 'restore') console.log(`  Restored database from backup: ${pending.backup}`);
   if (pending.action === 'factory_reset') console.log('  Factory reset applied — this is now a fresh install.');
+  if (pending.deferred === 'test_data_wipe') console.log('  Test data wipe requested — it runs right after migrations.');   // TEST_DATA_WIPE_V1
 
   const db = openDb(path.join(DATA_DIR, 'easymed.db'));
   // SHIFT_AUTOCLOSE_V1 — кассовые смены живут до конца дня (00:00): закрываем
@@ -208,6 +210,18 @@ if (isMain) {
   // только внутри транзакции; после падения их не должно остаться.
   try { db.exec('DELETE FROM ledger_write_token; DELETE FROM merge_money_moves;'); }
   catch (e) { console.warn('[ledger-token] cleanup:', e.message); }
+
+  // TEST_DATA_WIPE_V1 — «Удалить тестовые данные» (rpc/backup.js testDataWipe).
+  // processPendingAction выше оставил намерение лежать: удалению нужна открытая
+  // база с текущей схемой, поэтому оно здесь — после migrate и ДО всего, что
+  // пишет или читает визиты и деньги: разового исправления CRM, прохода «Не
+  // пришёл», ботов Telegram, опросов телефонии и Meta, анализаторов и listen.
+  // Только здесь и только до listen: намерение, уже разобранное прошлым
+  // запуском, второй раз не выполняется (index.wipe-order.test.js).
+  // Не бросает; итог — строкой в журнал программы и в
+  // test-data-wipe-result.json («Данные клиники» после перезапуска).
+  const testDataWipe = applyPendingTestDataWipe(db, DATA_DIR);
+  if (testDataWipe.action) console.log('  ' + testDataWipe.line);
 
   // CRM_UNIFY_V1 — разовое исправление застрявших карточек и потерянных задач
   // (миграция 238 ставит отметку «не сделано»; crm/unify-repair.js). Сразу после

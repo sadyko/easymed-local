@@ -29,7 +29,9 @@ const NAME_RE = /^[A-Za-z0-9._-]+\.db$/;
 
 // The kinds this module may CREATE. 'pre' is deliberately absent: update
 // rollback points are db/backup.js's job, created only by the update path.
-const CREATABLE_KINDS = new Set(['daily', 'manual', 'safety', 'final']);
+// TEST_DATA_WIPE_V1 — 'wipe': копия «Перед удалением тестовых данных»
+// (test-data-wipe.js requestTestDataWipe) — путь назад для того удаления.
+const CREATABLE_KINDS = new Set(['daily', 'manual', 'safety', 'final', 'wipe']);
 
 // Per-kind retention. One shared counter (the old pruneBackups(dir, 3) at
 // boot) let fourteen daily copies silently evict the update rollback point —
@@ -37,11 +39,15 @@ const CREATABLE_KINDS = new Set(['daily', 'manual', 'safety', 'final']);
 // DISK_GUARD_V1 — и копии, отложенные восстановлением (replaced-*, applyRestore)
 // и откатом (rollback-*, install/rollback.mjs): по две последние каждого вида.
 // Раньше они не удалялись никогда и на экране не были видны.
-const KEEP_BY_KIND = { daily: 14, manual: 10, safety: 5, final: 5, pre: 3, replaced: 2, rollback: 2 };
+// TEST_DATA_WIPE_V1 — копии перед удалением тестовых данных: пять последних, как
+// финальные; решение человека — по объёму не удаляются (их нет в AUTO_KINDS).
+const KEEP_BY_KIND = { daily: 14, manual: 10, safety: 5, final: 5, wipe: 5, pre: 3, replaced: 2, rollback: 2 };
 // DISK_GUARD_V1 — видны в списке, но с экрана не восстанавливаются (см. listBackups).
 const SET_ASIDE_KINDS = new Set(['replaced', 'rollback']);
 
-const MARKER_NAME = 'pending-action.json';
+// TEST_DATA_WIPE_V1 — экспорт: намерение удалить тестовые данные пишется в тот
+// же файл (test-data-wipe.js), одно отложенное действие на запуск.
+export const MARKER_NAME = 'pending-action.json';
 
 // PATIENT_FILE_ATTACH_V1 — ФАЙЛЫ ТОЖЕ ЕСТЬ ДАННЫЕ КЛИНИКИ.
 //
@@ -195,7 +201,7 @@ const timeStamp = (d) => `${dayStamp(d)}-${p2(d.getHours())}${p2(d.getMinutes())
 const SET_ASIDE_RE = /^(replaced|rollback)-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.db$/;
 
 function kindOf(name) {
-  const m = /^(pre|daily|manual|safety|final)-/.exec(name);
+  const m = /^(pre|daily|manual|safety|final|wipe)-/.exec(name);   // TEST_DATA_WIPE_V1 — wipe
   if (m) return m[1];
   const s = SET_ASIDE_RE.exec(name);
   return s ? s[1] : null;
@@ -551,7 +557,7 @@ export function listBackups(dataDir) {
  *
  * @param {Database} db
  * @param {string} dataDir
- * @param {'daily'|'manual'|'safety'|'final'} kind
+ * @param {'daily'|'manual'|'safety'|'final'|'wipe'} kind
  * @param {Date} [now]  injectable so tests can pin the local date
  * @param {{protect?: string[], diskSpaceImpl?: Function}} [opts]  DISK_GUARD_V1 —
  *   имена, которые не удаляются ни уступкой места, ни чисткой; ответ диска (тесты)
@@ -831,6 +837,11 @@ export function processPendingAction(dataDir) {
   if (!m || typeof m !== 'object' || Array.isArray(m)) return quarantine(markerPath, 'not a JSON object');
 
   try {
+    // TEST_DATA_WIPE_V1 — удалению тестовых данных нужна ОТКРЫТАЯ база с
+    // текущей схемой: его делает test-data-wipe.js applyPendingTestDataWipe
+    // после migrate (server/index.js). Здесь, до openDb, намерение остаётся
+    // лежать как есть; база этим запуском ещё не менялась (bootCopyCovered).
+    if (m.action === 'test_data_wipe') return { action: null, deferred: 'test_data_wipe' };
     if (m.action === 'restore') return applyRestore(dataDir, markerPath, m);
     if (m.action === 'factory_reset') return applyFactoryReset(dataDir, markerPath, m);
     return quarantine(markerPath, `unknown action "${m.action}"`);

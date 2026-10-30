@@ -14,7 +14,10 @@ import path from 'node:path';
 import { TABLE_PLAN, WIPE_ORDER, GUARD_TRIGGERS, tablesBy } from './test-data-wipe-plan.js';
 import { SHIPPED } from './branch-sync/journal.js';
 import { checkpointWal } from '../db/connection.js';
-import { currentDiskSpace, dbBytes, RESERVE_BYTES, gbText, gbValue } from './disk-guard.js';
+import { currentDiskSpace, dbBytes, copyNeedBytes, RESERVE_BYTES, gbText, gbValue } from './disk-guard.js';
+import { createBackup, listBackups, MARKER_NAME } from './backup.js';
+import { readPairing } from './branch-sync/pairing.js';
+import { readJsonFile, writeAtomic } from './control/checkin.js';
 
 const TABLES_SQL = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'";
 
@@ -501,4 +504,200 @@ export function summaryLine(result) {
   const v = result && result.vacuum;
   if (v) parts.push(v.done ? `vacuum ${num(v.before_bytes)}→${num(v.after_bytes)} Б` : `vacuum нет (${v.reason})`);
   return 'Тестовые данные удалены: ' + parts.join(', ');
+}
+
+// ── просьба администратора и запуск ────────────────────────────────────────
+
+export const WIPE_ACTION = 'test_data_wipe';
+// Итог последнего удаления — для «Данных клиники» после перезапуска. Только
+// числа, имена таблиц, время и имя копии: данных пациентов в нём нет.
+export const RESULT_NAME = 'test-data-wipe-result.json';
+
+/**
+ * Связана ли клиника с другими зданиями — та же запись о паре, по которой
+ * экран «Филиалы» показывает связь (branch-sync/pairing.js readPairing; в
+ * обмене строками без неё не участвует ничто). Связанной клинике удаление не
+ * положено: «удалено» ушло бы в другое здание и стёрло бы там настоящие данные.
+ */
+export function isPaired(dataDir) {
+  return readPairing(dataDir) !== null;
+}
+
+export function readWipeResult(dataDir) {
+  return readJsonFile(path.join(dataDir, RESULT_NAME));
+}
+
+function writeWipeResult(dataDir, result) {
+  try { writeAtomic(path.join(dataDir, RESULT_NAME), JSON.stringify(result, null, 2) + '\n'); }
+  catch (e) { console.warn('[test-data-wipe] итог не записан (он есть в журнале программы):', e && e.message); }
+}
+
+// Намерение, которое нельзя выполнить, откладывается в .bad (как у
+// processPendingAction, services/backup.js): не удаляется молча и не
+// повторяется при каждом запуске.
+function setAside(markerPath) {
+  try { fs.renameSync(markerPath, markerPath + '.bad'); }
+  catch { try { fs.unlinkSync(markerPath); } catch { /* не убрать — следующий запуск найдёт отметку DONE_KEY и не повторит */ } }
+}
+
+// Ревью C3 — «исполнено» в самой базе (control_state, остаётся при удалении):
+// по какой копии намерение уже разобрано и чем кончилось. Если итог на диск не
+// записался И намерение не убралось (диск, антивирус, права), запуск всё равно
+// дошёл бы до listen — и следующий запуск, через день работы клиники, удалил бы
+// уже НАСТОЯЩИЕ визиты и документы. Отметка пишется, когда удаление (или отказ)
+// закончено, — повтор после сбоя посередине (до listen) она не останавливает.
+const DONE_KEY = 'test_data_wipe_done';
+
+function markDone(db, backup, outcome) {
+  if (!backup) return;
+  try {
+    db.prepare(`INSERT INTO control_state (key, value, updated_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+      .run(DONE_KEY, JSON.stringify({ backup, ok: outcome.ok === true, reason: outcome.reason || null, at: outcome.at || null }));
+  } catch (e) {
+    console.warn('[test-data-wipe] отметка «исполнено» не записана:', e && e.message);
+  }
+}
+
+function doneFor(db, backup) {
+  if (!backup) return null;
+  try {
+    const row = db.prepare('SELECT value FROM control_state WHERE key = ?').get(DONE_KEY);
+    const v = row ? JSON.parse(row.value) : null;
+    return v && typeof v === 'object' && v.backup === backup ? v : null;
+  } catch { return null; }
+}
+
+/** Что показать на «Данных клиники»: связана ли клиника, ждёт ли удаление запуска, итог прошлого. */
+export function wipeStatus(dataDir) {
+  const m = readJsonFile(path.join(dataDir, MARKER_NAME));
+  return { paired: isPaired(dataDir), pending: !!(m && m.action === WIPE_ACTION), last: readWipeResult(dataDir) };
+}
+
+/**
+ * Ревью C3 — место при просьбе: на копию «Перед удалением тестовых данных»
+ * (база × 1,2 + 1 ГБ, copyNeedBytes) и сверху — на журнал самого удаления
+ * (estimateWipeBytes). Запас 1 ГБ, который удаление при запуске требует сверх
+ * журнала (runTestDataWipe), уже внутри места на копию: после копии свободно
+ * останется не меньше журнала и запаса — запуск не откажет по месту. Не
+ * хватает — отказ 'no_space' словами удаления ДО копии и ДО намерения.
+ * Платформа не сказала, сколько места, — дальше решает охрана копии.
+ * Оценка читает страницы затронутых таблиц — на учебной базе доли секунды.
+ */
+function ensureRequestSpace(db, dataDir, diskSpaceImpl) {
+  const space = diskSpaceImpl(dataDir);
+  if (!space) return;
+  const need = copyNeedBytes(dbBytes(path.join(dataDir, 'easymed.db'))) + estimateWipeBytes(db);
+  if (space.free < need) {
+    console.warn(`[test-data-wipe] удаление не запрошено: нужно ${need} Б (копия и журнал удаления), свободно ${space.free} Б`);
+    throw wipeNoSpaceError(need, space.free);
+  }
+}
+
+/**
+ * Просьба администратора (rpc/backup.js testDataWipe): сначала копия «Перед
+ * удалением тестовых данных» — это и есть путь назад, — потом намерение в
+ * pending-action.json. Копия ДО намерения: как только намерение лежит,
+ * перезапуск удалит, и состояние, которое уходит, к этому моменту уже должно
+ * быть в копии. Перед копией — место на копию И на удаление
+ * (ensureRequestSpace); сама копия идёт через охрану места (createBackup →
+ * ensureCopySpace). Места нет — бросает 'no_space', намерение не пишется,
+ * ничего не удаляется.
+ * @returns {Promise<{ok:true, backup:string}|{ok:false, reason:'paired'}>}
+ */
+export async function requestTestDataWipe(db, dataDir, { now = new Date(), userId = null, diskSpaceImpl = currentDiskSpace } = {}) {
+  if (isPaired(dataDir)) return { ok: false, reason: 'paired' };
+  ensureRequestSpace(db, dataDir, diskSpaceImpl);
+  const copy = await createBackup(db, dataDir, 'wipe', now, { diskSpaceImpl });
+  // Пока делалась копия, клинику могли связать с другим зданием.
+  if (isPaired(dataDir)) return { ok: false, reason: 'paired' };
+  writeAtomic(path.join(dataDir, MARKER_NAME), JSON.stringify({
+    action: WIPE_ACTION, backup: copy.name, requested_at: now.toISOString(), requested_by: userId,
+  }));
+  return { ok: true, backup: copy.name };
+}
+
+/**
+ * Выполнить отложенное удаление при запуске (server/index.js: после migrate,
+ * до первого прохода CRM, опросов и listen). Никогда не бросает: клиника,
+ * которая не может запуститься, хуже клиники, где учебные данные остались.
+ *
+ * Намерение удаляется ПОСЛЕДНИМ. Сбой посередине (процесс упал до listen) —
+ * следующий запуск повторит: удалять уже нечего. Намерение, уже разобранное
+ * по той же копии (итог в файле или отметка DONE_KEY в базе), не
+ * выполняется второй раз никогда: между запусками клиника могла работать, и
+ * повтор снёс бы настоящие визиты и документы (removeVisitDocFiles). Итог
+ * того разбора не перезаписывается нулями.
+ *
+ * Отказы — база цела, намерение в .bad, итог с причиной: 'paired' (связали
+ * после просьбы), 'no_space' (журналу удаления не хватает места — в итоге
+ * шаблон и числа, экран переведёт фразу целиком), 'failed' (сбой
+ * транзакции; нет копии «Перед удалением» — нет пути назад).
+ *
+ * @returns {{action:null}|{action:'test_data_wipe', ok:boolean, reason?:string, line:string}}
+ */
+export function applyPendingTestDataWipe(db, dataDir, { diskSpaceImpl = currentDiskSpace, now = () => new Date() } = {}) {
+  const markerPath = path.join(dataDir, MARKER_NAME);
+  const m = readJsonFile(markerPath);
+  if (!m || m.action !== WIPE_ACTION) return { action: null };
+  const backup = typeof m.backup === 'string' && m.backup ? m.backup : null;
+  try {
+    const prev = readWipeResult(dataDir);
+    const last = backup && prev && prev.backup === backup ? prev : null;
+    const done = last || doneFor(db, backup);
+    if (done) {
+      if (done.ok === true) {
+        try { fs.unlinkSync(markerPath); } catch { /* повторим; отметка DONE_KEY не даст удалить второй раз */ }
+        return {
+          action: WIPE_ACTION, ok: true,
+          line: last ? summaryLine(last) : 'Тестовые данные уже удалены прошлым запуском (итог того удаления не сохранился).',
+        };
+      }
+      setAside(markerPath);
+      return { action: WIPE_ACTION, ok: false, reason: done.reason || 'failed', line: 'Тестовые данные НЕ удалены (намерение уже разобрано прошлым запуском).' };
+    }
+    const at = now().toISOString();
+    const refuse = (reason, line, extra = {}) => {
+      const outcome = { ok: false, reason, at, backup, ...extra };
+      markDone(db, backup, outcome);
+      writeWipeResult(dataDir, outcome);
+      setAside(markerPath);
+      return { action: WIPE_ACTION, ok: false, reason, line };
+    };
+    if (isPaired(dataDir)) {
+      const line = 'Тестовые данные НЕ удалены: клиника связана с другими зданиями.';
+      console.warn('[test-data-wipe] ' + line);
+      return refuse('paired', line);
+    }
+    // Ревью C3 — копию, названную в намерении, могли удалить мимо программы
+    // между просьбой и запуском (или намерение написано не программой): без
+    // пути назад удаления нет.
+    if (!backup || !listBackups(dataDir).some((b) => b.name === backup && b.restorable)) {
+      const line = 'Тестовые данные НЕ удалены: нет копии «Перед удалением тестовых данных» — без пути назад удаления нет.';
+      console.warn('[test-data-wipe] ' + line);
+      return refuse('failed', line);
+    }
+    let result;
+    try {
+      result = runTestDataWipe(db, dataDir, { diskSpaceImpl });
+    } catch (e) {
+      if (e && e.code === 'no_space') {
+        // Ревью C3 — причина словами: экран (C5) переводит фразу по шаблону.
+        return refuse('no_space', e.message, {
+          template: e.template, params: e.params, need_bytes: e.need_bytes, free_bytes: e.free_bytes,
+        });
+      }
+      console.error('[test-data-wipe] удаление не прошло, база не тронута:', e && e.message);
+      return refuse('failed', 'Тестовые данные НЕ удалены — база не тронута (причина — строкой выше).');
+    }
+    const out = { ok: true, at, backup, ...result };
+    markDone(db, backup, out);
+    writeWipeResult(dataDir, out);
+    try { fs.unlinkSync(markerPath); } catch { /* следующий запуск увидит итог этой копии (или отметку) и только уберёт намерение */ }
+    return { action: WIPE_ACTION, ok: true, line: summaryLine(out) };
+  } catch (e) {
+    console.error('[test-data-wipe] сбой:', e && e.message);
+    setAside(markerPath);
+    return { action: WIPE_ACTION, ok: false, reason: 'failed', line: 'Тестовые данные НЕ удалены.' };
+  }
 }

@@ -299,6 +299,11 @@ const ALWAYS_ALLOWED_RPCS = new Set([
   // диск кончается (копии и обновления от этого перестают делаться). Только
   // читает; только администратор (rpc/backup.js diskUsage).
   'disk_usage',
+  // TEST_DATA_WIPE_V1 — «Удалить тестовые данные» и состояние его карточки:
+  // по той же причине, что factory_reset, — удалить свои данные клиника может и
+  // с просроченной лицензией. Только администратор, пароль и слово УДАЛИТЬ
+  // проверяет сам вызов (rpc/backup.js testDataWipe).
+  'test_data_wipe', 'test_data_wipe_status',
   // LAN_ADDRESS_V1 — «Скрыть до следующей смены» и выключатель имени в сети пишут
   // data/lan-address.json ЭТОГО ПК, а не данные клиники: клиника с просроченной
   // лицензией всё равно должна находить свой сервер. Оба — только администратор
@@ -312,7 +317,7 @@ const ALWAYS_ALLOWED_RPCS = new Set([
 // каждом экране, и он не должен считаться записью. (licence_status при
 // блокировке заводит код для звонка в control_state — служебная отметка
 // лицензии, а не действие человека.)
-const ALWAYS_ALLOWED_READS = new Set(['licence_status', 'backup_list', 'disk_usage']);   // DISK_GUARD_V1 — disk_usage
+const ALWAYS_ALLOWED_READS = new Set(['licence_status', 'backup_list', 'disk_usage', 'test_data_wipe_status']);   // DISK_GUARD_V1 — disk_usage; TEST_DATA_WIPE_V1 — состояние
 
 export function isReadOnlyRpc(name) { return READ_ONLY_RPCS.has(name); }
 export function isAlwaysAllowedRpc(name) { return ALWAYS_ALLOWED_RPCS.has(name); }
