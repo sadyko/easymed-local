@@ -418,3 +418,38 @@ test('новые строки экрана — в словаре на трёх �
         }
     }
 });
+
+// ─── B2: счёт стационара — строки видны и возвращаются по одной ───────────────
+const ADM_ROW = { ...OLD_ROW, id: 8, invoice_number: 'INV-A-26-00008', admission_id: 4, admission_status: 'active', visit_id: null, first_item: 'Перевязка' };
+const ADM_ITEMS = [
+    { id: 801, invoice_id: 8, description: 'Перевязка', quantity: 1, unit_price: 50000, total: 50000, discount_amount: 0 },
+    { id: 802, invoice_id: 8, description: 'Капельница', quantity: 1, unit_price: 120000, total: 120000, discount_amount: 0 },
+];
+
+test('счёт стационара: в окне «Платежи» — его строки; «Вернуть услугу» говорит, что строка выйдет из счёта выписки', async () => {
+    asCashier();
+    closeAll();
+    // Поправка 7 плана — «Платежи» открыты поверх окна визита: возврат строки
+    // стационара закрывает только свои окна (closeRefundModals + afterMoney).
+    const visitWin = mkEl('div');
+    visitWin.className = 'modal';
+    document.body.appendChild(visitWin);
+    let done = 0;
+    tables = { payments: [{ id: 81, invoice_id: 8, amount: 170000, method: 'cash', paid_at: '2026-10-28T06:05:00Z', notes: '' }], invoice_items: ADM_ITEMS };
+    calls.length = 0;
+    rpcAnswers = { cashier_invoice_search: { rows: [ADM_ROW], has_more: false }, refund_invoice_line: { refunded: 50000, invoice: { id: 8 }, admission_line_released: true } };
+    await desk.openInvoiceRefundById(8, { onDone: () => { done++; } });
+    const m = lastModal();
+    assert.match(textOf(m), /Услуги счёта/, 'строки стационара в окне скрыты');
+    assert.ok(textOf(m).includes('Перевязка') && textOf(m).includes('Капельница'));
+    buttons(m).filter((b) => textOf(b).trim() === 'Вернуть услугу')[0].click();
+    const dlg = lastModal();
+    assert.match(textOf(dlg), /Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается\./);
+    assert.ok(!textOf(dlg).includes('Оставить услугу в визите'), 'у строки стационара «оставить в визите» нет — она и так остаётся в госпитализации');
+    buttonByText(dlg, 'Вернуть услугу').click();
+    await tick(60);
+    assert.equal(rpcCalls('refund_invoice_line')[0][1].invoice_item_id, 801);
+    assert.deepEqual(modals(), [visitWin], 'окно визита закрылось вместе с окнами возврата');
+    assert.equal(done, 1, 'после возврата перечитывается вызвавший экран');
+    closeAll();
+});

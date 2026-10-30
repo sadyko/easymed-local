@@ -1057,7 +1057,10 @@ function repriceUnpaidInvoice(db, inv, oldOwn, { oldBase = null, absolute = fals
   const subtotal = round2(left.s);
   const own = round2(left.own);
   const base = round2(left.base);
-  const catPct = inv.payer_id ? 0 : patientCategoryDiscount(db, inv.patient_id);
+  // REFUND_ANY_V1 — и у счёта стационара пола группы нет: его собирает
+  // buildAdmissionInvoice без скидки группы, и возврат одной строки иначе дарил
+  // бы скидку оставшимся.
+  const catPct = (inv.payer_id || inv.admission_id) ? 0 : patientCategoryDiscount(db, inv.patient_id);
   const floor = round2(base * catPct / 100);
   let oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - oldOwn), 0);
   let given = null; let givenBase = null;
@@ -2300,8 +2303,10 @@ export function refundPayment(db, args, user) {
 //      кэшбэк по обычному правилу (один раз за жизнь счёта);
 //   5. последняя строка счёта и денег не осталось — счёт закрывается, как при
 //      полном возврате (B2, closeFullyRefunded).
-// Строка стационара так не возвращается: её счёт собирается при выписке —
-// отказ называет путь.
+// REFUND_ANY_V1 (2026-10-29) — строка стационара возвращается так же: строка
+// госпитализации освобождается со счёта (отметка 'in' — счёт выписки её не
+// берёт), счёт пересчитывается без пола скидки группы (repriceUnpaidInvoice);
+// пациент на койке — счёт без денег не отменяется (closeFullyRefunded).
 export function refundInvoiceLine(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
   const itemId = args && args.invoice_item_id;
@@ -2320,9 +2325,10 @@ export function refundInvoiceLine(db, args, user) {
     // Денег по счёту нет — это не возврат, а правка счёта: строку убирают из
     // визита (корзина в карте пациента, remove_unpaid_service).
     if (!(Number(inv.paid_amount) > 0)) throw new RpcError('По счёту ещё не принято денег — уберите услугу из визита, возвращать нечего.', 400);
-    if (db.prepare('SELECT 1 FROM admission_services WHERE invoice_item_id = ? LIMIT 1').get(itemId)) {
-      throw new RpcError('Это строка стационара — её убирают из счёта госпитализации (до оплаты) или возвращают оплатой по платежу.', 400);
-    }
+    // REFUND_ANY_V1 — строка стационара возвращается так же, строкой (раньше —
+    // отказ «возвращают оплатой по платежу»: строка оставалась в счёте, и
+    // счёт выписки о возврате не знал). Что с ней — ниже, у «3.».
+    const admLine = db.prepare('SELECT * FROM admission_services WHERE invoice_item_id = ? LIMIT 1').get(itemId) || null;
     const vs = db.prepare('SELECT * FROM visit_services WHERE invoice_item_id = ?').get(itemId) || null;
     if (vs) assertOwnBuilding(db, vs, 'Услуга');
 
@@ -2348,6 +2354,17 @@ export function refundInvoiceLine(db, args, user) {
         db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(vs.id);
         db.prepare('DELETE FROM visit_services WHERE id = ?').run(vs.id);
       }
+    }
+    // REFUND_ANY_V1 — СТРОКА СТАЦИОНАРА ОСВОБОЖДАЕТСЯ СО СЧЁТА: ссылка снята,
+    // работа сохраняет свою отметку (выполнена — 'done', иначе 'added'), а
+    // pay_refund_releases 'in' говорит счёту выписки (generateAdmissionBill),
+    // остатку и акту стационара: «возвращено — само не выставляется», и врачу
+    // она не платится. Выставят её снова (buildAdmissionInvoice) — отметка
+    // снимается. Доза отменённого введения уходит совсем (как при отмене счёта).
+    if (admLine) {
+      db.prepare("UPDATE admission_services SET invoice_item_id = NULL, status = CASE WHEN performed_at IS NOT NULL THEN 'done' ELSE 'added' END WHERE id = ?").run(admLine.id);
+      markRefundRelease(db, { invoiceId: inv.id, kind: 'in', lineIds: [admLine.id], always: true });
+      voidReleasedDoseLines(db, [admLine.id], user);
     }
     db.prepare('DELETE FROM invoice_items WHERE id = ?').run(itemId);
 
@@ -2453,7 +2470,8 @@ export function refundInvoiceLine(db, args, user) {
       VALUES (?, ?, ?, 'refund_line', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(inv.id, inv.invoice_number || null, inv.visit_id || null, inv.status, final.status, lineValue, refundAmt,
         user.id, actingActorName(user, actor.full_name || null), actor.role || null, reason || null,   // ADMIN_ACT_AS_V1 — имя «от имени»
-        'Возвращена услуга: ' + (lineName || '—') + (vs ? (performed ? ' (работа сделана — осталась в визите невыставленной)' : ' (снята с визита)') : ''));
+        'Возвращена услуга: ' + (lineName || '—') + (vs ? (performed ? ' (работа сделана — осталась в визите невыставленной)' : ' (снята с визита)') : '')
+        + (admLine ? ' (строка стационара — освобождена, в счёт выписки не попадёт)' : ''));   // REFUND_ANY_V1
 
     return {
       invoice: final,
@@ -2461,6 +2479,7 @@ export function refundInvoiceLine(db, args, user) {
       line_value: lineValue,
       to_balance: toBalanceAny,
       line_kept: !!(vs && performed),
+      admission_line_released: !!admLine,   // REFUND_ANY_V1
       voided: !!closed.voided,
       sources,
       ...(closed.void_note ? { void_note: closed.void_note } : {}),

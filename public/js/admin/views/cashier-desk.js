@@ -2284,16 +2284,16 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
     // уменьшал оплату, но не счёт: частичный возврат делал пациента должником за
     // услугу, от которой он отказался. Строка счёта возвращается целиком
     // (refund_invoice_line): счёт пересчитывается, пациенту уходит переплата.
-    // Счёт стационара так не возвращается — его строки живут в счёте выписки.
+    // REFUND_ANY_V1 — и строки счёта стационара: строка возвращается по одной,
+    // строка госпитализации освобождается и в счёт выписки не попадает
+    // (refund_invoice_line). Прежде строки такого счёта здесь были скрыты.
     let items = [];
-    if (!inv.admission_id) {
-        try {
-            const { data } = await supabase.from('invoice_items')
-                .select('id, invoice_id, description, quantity, unit_price, total, discount_amount')
-                .eq('invoice_id', inv.id).order('id', { ascending: true }).limit(200);
-            items = data || [];
-        } catch (e) { /* без строк остаётся возврат по платежу */ }
-    }
+    try {
+        const { data } = await supabase.from('invoice_items')
+            .select('id, invoice_id, description, quantity, unit_price, total, discount_amount')
+            .eq('invoice_id', inv.id).order('id', { ascending: true }).limit(200);
+        items = data || [];
+    } catch (e) { /* без строк остаётся возврат по платежу */ }
     const itemRows = items.map(it => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center' } },
         h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: it.description || '' }, it.description || '—'),
         h('span', { class: 'num', style: { fontWeight: 700 } }, fmtPrice(Math.max(0, Number(it.total || 0) - Number(it.discount_amount || 0)))),
@@ -2352,6 +2352,9 @@ function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1
         [
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5 } },
                 tr('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта. Сделанная работа останется в визите без счёта и врачу не оплачивается.')),
+            // REFUND_ANY_V1 — строка стационара: что станет со строкой госпитализации.
+            info && info.admission_id ? h('div', { 'data-adm-line-note': '1', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5, fontWeight: 600 } },
+                tr('Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается.')) : null,
             field('Причина', reasonInp),
             field('Куда вернуть', destBox),
             h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer' } },
