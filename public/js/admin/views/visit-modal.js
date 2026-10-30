@@ -1350,7 +1350,9 @@ function invoicePane(state, onReload) {
 
     const total = Number(inv.total_amount || 0);
     const paid  = Number(inv.paid_amount  || 0);
-    const owed  = Math.max(total - paid, 0);
+    // REFUND_ANY_V1 (ревью B5) — отменённый счёт пациенту ничего не должен,
+    // даже когда с него вернули деньги (сумма счёта при отмене не меняется).
+    const owed  = ['void', 'refunded'].includes(inv.status) ? 0 : Math.max(total - paid, 0);
     // RPC_PORT_V1 (ревью M3) — оплату, долг, отмену и возврат сервер
     // принимает только от кассы и администратора; другим ролям этих кнопок нет.
     const moneyHands = canMoveInvoiceMoney(actorRoleCodes());

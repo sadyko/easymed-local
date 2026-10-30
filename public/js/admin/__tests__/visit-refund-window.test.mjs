@@ -416,8 +416,27 @@ test('ревью B5, п. 5: старый отменённый счёт, на к�
   assert.ok(!buttons(win).some((b) => textOf(b).trim() === tr('Cancel invoice')), 'отменённый счёт снова предлагают отменить');
   doors[0].click();
   await until(() => modals().length === 2, 'окно «Платежи»');
-  assert.ok(buttonByText(lastModal(), 'Возврат'), 'у платежа отменённого счёта нет возврата: ' + textOf(lastModal()).slice(0, 300));
+  const pay = lastModal();
+  assert.ok(buttonByText(pay, 'Возврат'), 'у платежа отменённого счёта нет возврата: ' + textOf(pay).slice(0, 300));
   assert.deepEqual(TOASTS, []);
+  // Ревью B5 (повторное) — вернуть все деньги: счёт остаётся отменённым, а не
+  // становится долгом; окно визита долга не показывает.
+  buttonByText(pay, 'Возврат').click();
+  const dlg = lastModal();
+  walk(dlg).find((n) => n.tagName === 'INPUT').value = String(f.inv.paid_amount);
+  buttonByText(dlg, 'Оформить возврат').click();
+  await until(() => modals().length === 1, 'окна возврата закрылись');
+  await flush();
+  assert.deepEqual(modals(), [win]);
+  const row = DB.prepare('SELECT status, paid_amount FROM invoices WHERE id = ?').get(f.inv.id);
+  assert.deepEqual({ ...row }, { status: 'void', paid_amount: 0 }, 'отменённый счёт после возврата');
+  assert.equal(DB.prepare("SELECT COUNT(*) n FROM invoice_audit_log WHERE invoice_id = ? AND action = 'void'").get(f.inv.id).n, 0,
+    'отменённый счёт отменён второй раз');
+  const debtCell = walk(win).find((n) => n.tagName === 'DIV' && n.children.length === 2 && textOf(n.children[0]) === tr('Debt'));
+  assert.ok(debtCell, 'нет поля «Долг» в окне визита');
+  assert.equal(textOf(debtCell.children[1]).trim(), '0 UZS', 'окно визита показывает долг по отменённому счёту');
+  assert.ok(!textOf(win).includes(tr('Outstanding: ').trim()), 'окно визита просит оплатить отменённый счёт');
+  assert.equal(refundDoors(win).length, 0, 'денег не осталось — «Возврата» нет');
   document.body.children.length = 0;
 });
 

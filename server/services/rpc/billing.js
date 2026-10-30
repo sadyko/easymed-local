@@ -2241,8 +2241,22 @@ export function refundPayment(db, args, user) {
     // у него прежнее правило (ждёт доплаты), скидку ставят при выписке.
     const admRow = invoice.admission_id ? db.prepare('SELECT status FROM admissions WHERE id = ?').get(invoice.admission_id) : null;
     const reopen = (args && (args.reopen_balance === true || args.reopen_balance === 1)) || !!(admRow && IN_BED_STATUSES.includes(admRow.status));
+    // REFUND_ANY_V1 (ревью B5, повторное) — ОТМЕНЁННЫЙ СЧЁТ С ДЕНЬГАМИ. Отмена
+    // до BILLING_AUDIT_FIX_V1 денег не трогала: бывают 'void' / 'refunded' с
+    // оплатой на них, и окно визита даёт по ним «Возврат». Пересчёт статуса по
+    // деньгам (invoiceStatusFor отмены не знает) делал такой счёт долгом:
+    // частичный возврат — «оплачен частично», полный без «отменить счёт» — «не
+    // оплачен» (OUTSTANDING_STATUSES); полный по умолчанию — отменял его
+    // второй раз (closeFullyRefunded снова снимал строки с визита). Отменённый
+    // счёт пациенту ничего не должен: меняется только «оплачено»; статус,
+    // сумма, скидка, строки визита — как были. Сами деньги — как у любого
+    // возврата: платёж возврата в смену, баланс или карта (issueRefund выше),
+    // откат кэшбэка (он считает по платежам, не по статусу).
+    const cancelled = invoice.status === 'void' || invoice.status === 'refunded';
     let postSaleDiscount = 0;
-    if (invoice.status === 'paid' && newPaid > 0 && newPaid < invoice.total_amount && !reopen) {
+    if (cancelled) {
+      db.prepare('UPDATE invoices SET paid_amount = ? WHERE id = ?').run(newPaid, invoice.id);
+    } else if (invoice.status === 'paid' && newPaid > 0 && newPaid < invoice.total_amount && !reopen) {
       postSaleDiscount = round2(invoice.total_amount - newPaid);
       // V3120_FINAL (C1, мигр. 212) — эта часть скидки записывается ОТДЕЛЬНО
       // (post_sale_discount): отчёты делят её на все строки пропорционально
@@ -2268,8 +2282,9 @@ export function refundPayment(db, args, user) {
 
     // BILLING_AUDIT_FIX_V1 (B2) — денег на счёте не осталось: счёт закрыт
     // (отменён по умолчанию, см. closeFullyRefunded). Ре-ревью п.9 — в той же
-    // транзакции, что возврат.
-    const closed = newPaid <= 0 ? closeFullyRefunded(db, invoice.id, args, reason, user) : { voided: false };
+    // транзакции, что возврат. REFUND_ANY_V1 (ревью B5) — уже отменённый счёт
+    // второй раз не закрывается.
+    const closed = !cancelled && newPaid <= 0 ? closeFullyRefunded(db, invoice.id, args, reason, user) : { voided: false };
 
     // REFUND_ANY_V1 (ревью B5) — ЖУРНАЛ СЧЁТА ПИШЕТ СЕРВЕР, как у
     // refund_invoice_line, в той же транзакции: сколько вернули, по какому
