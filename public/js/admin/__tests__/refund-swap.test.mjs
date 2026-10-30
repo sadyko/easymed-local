@@ -105,7 +105,8 @@ globalThis.fetch = async (url, opts = {}) => {
         const name = decodeURIComponent(rpc);
         calls.push([name, body]);
         const a = rpcAnswers[name];
-        const v = typeof a === 'function' ? a(body) : (a !== undefined ? a : []);
+        // Ответ может быть обещанием — так тест держит запрос «в пути».
+        const v = await (typeof a === 'function' ? a(body) : (a !== undefined ? a : []));
         if (v && v.__error) return reply(v.__error.status || 400, { error: { code: v.__error.code, message: v.__error.message } });
         return reply(200, { data: v });
     }
@@ -157,7 +158,8 @@ const DEARER = {
 };
 // `performed` — слово сервера (invoice_line_work, правило lineHasWork); экран
 // сам по статусу его не выводит. `lab` — строка счёта — анализ.
-function world({ lineStatus = 'queued', performed = false, lab = false } = {}) {
+// `kind` — что за строка по слову сервера ('admission' — строка стационара).
+function world({ lineStatus = 'queued', performed = false, lab = false, kind = 'visit' } = {}) {
     tables = {
         invoices: [PAID], invoice_items: ITEMS, payments: PAYS, payment_providers: [], patient_discounts: [],
         visit_services: [
@@ -178,7 +180,7 @@ function world({ lineStatus = 'queued', performed = false, lab = false } = {}) {
     TOASTS.length = 0;
     rpcAnswers = {
         invoice_line_work: { invoice_id: 5, lines: [
-            { invoice_item_id: 71, kind: 'visit', status: lineStatus, product: false, sample: lab && performed, result: false, document: false, performed },
+            { invoice_item_id: 71, kind, status: lineStatus, product: false, sample: lab && performed, result: false, document: false, performed },
             { invoice_item_id: 72, kind: 'visit', status: 'completed', product: true, sample: false, result: false, document: false, performed: true },
         ] },
         cashier_invoice_search: (b) => ({ q: null, rows: Number(b.invoice_id) === 5 ? [PAID] : [], offset: 0, has_more: false }),
@@ -259,6 +261,12 @@ test('«Заменить услугу» в окне «Платежи»: прав
     assert.equal(await offered({ ...PAID, status: 'void' }), false, 'отменённый счёт');
     assert.equal(await offered({ ...PAID, status: 'refunded' }), false, 'возвращённый счёт');
     assert.equal(await offered({ ...PAID, admission_id: 3 }), false, 'счёт стационара');
+    // Строка стационара в счёте визита (invoice_line_work kind 'admission'):
+    // сервер её не меняет — кнопки нет, хотя строка визита по позиции нашлась.
+    world({ kind: 'admission' });
+    assert.equal(await offered(), false, 'строка стационара в счёте визита');
+    world();
+    assert.equal(await offered(), true, 'стенд: та же строка как строка визита — кнопка есть');
     assert.equal(rpcCalls('cashier_line_swap_quote').length, 0);
     closeAll();
 });
@@ -291,7 +299,7 @@ test('дешевле: одно окно — услуга и исполнител
     assert.equal(rpcCalls('cashier_line_rebill_paid').length, 0);
     assert.ok(printed.some((html) => /Возврат разницы/.test(html)), 'квитанция «Возврат разницы»');
     assert.deepEqual(modals(), [], 'окно «Платежи» и окно замены закрыты');
-    assert.ok(TOASTS.includes('Разница 70 000 сум зачислена на баланс пациента.'), TOASTS.join(' | '));
+    assert.equal(TOASTS.at(-1), 'Разница 70 000 сум зачислена на баланс пациента.', TOASTS.join(' | '));
 });
 
 test('дороже: «К доплате» крупно, после замены — окно оплаты, чек «Доплата»', async () => {
@@ -333,7 +341,9 @@ test('работа начата — по слову сервера (invoice_line
     assert.equal(sent.no_doctor, true);
     assert.ok(typeof sent.idempotency_key === 'string' && sent.idempotency_key.length >= 8);
     assert.equal(rpcCalls('cashier_line_swap_paid').length, 0);
-    assert.ok(TOASTS.includes('Прежняя услуга возвращена: работа осталась в карте пациента и врачу не оплачивается.'), TOASTS.join(' | '));
+    // Ревью: одно уведомление — сумма и слова о прежней услуге вместе; второе
+    // уведомление стёрло бы первое (сумма пропадала).
+    assert.equal(TOASTS.at(-1), 'Пациенту возвращено 70 000 сум. · Прежняя услуга возвращена: работа осталась в карте пациента и врачу не оплачивается.', TOASTS.join(' | '));
 
     // Статус на экране экран не судит: сервер сказал «работы нет» — обычная замена.
     world({ lineStatus: 'completed', performed: false });
@@ -390,7 +400,10 @@ test('другой отказ сервера показывается его с�
     closeAll();
 });
 
-test('анализ на анализ: окно говорит, что новый уйдёт в лабораторию новым заказом и пробу отметят заново', async () => {
+const LAB_NOTE_PLAIN = 'Новый анализ уйдёт в лабораторию новым заказом.';
+const LAB_NOTE_REBILL = 'Новый анализ уйдёт в лабораторию новым заказом, и лаборатория заново отметит взятие пробы — можно из той же пробирки.';
+
+test('анализ на анализ: новый уйдёт в лабораторию новым заказом; «пробу отметят заново» — только у возврата с новой', async () => {
     asRole('cashier');
     // Проба взята — возврат с новой; новая услуга — тоже анализ.
     world({ lab: true, lineStatus: 'collected', performed: true });
@@ -399,17 +412,24 @@ test('анализ на анализ: окно говорит, что новый
     assert.match(textOf(win), /уже начата работа/);
     const note = byAttr(win, 'data-swap-lab', '1');
     assert.ok(note, 'нет слов о лаборатории');
-    assert.match(textOf(note), /новым заказом/);
-    assert.match(textOf(note), /той же пробирки/);
+    assert.equal(textOf(note).trim(), LAB_NOTE_REBILL);
     // Новая услуга — не анализ: слов о лаборатории нет.
     await pickIn(win, 2, 21);
     assert.equal(byAttr(win, 'data-swap-lab', '1'), undefined);
-    // Неначатый анализ — обычная замена, слова те же.
+    // Неначатый анализ — обычная замена: пробы ещё нет, отмечать её «заново» нечего.
     world({ lab: true });
     closeAll();
     const win2 = await openAndPick(5, 21);
     assert.equal(rpcCalls('cashier_line_swap_quote').length, 1);
-    assert.ok(byAttr(win2, 'data-swap-lab', '1'));
+    assert.equal(textOf(byAttr(win2, 'data-swap-lab', '1')).trim(), LAB_NOTE_PLAIN);
+    // Сервер отказал line_performed (проба уже взята) — окно перешло к возврату
+    // с новой, и слова о лаборатории — тоже.
+    world({ lab: true });
+    rpcAnswers.cashier_line_swap_quote = { __error: { status: 400, code: 'line_performed', message: 'услуга уже оказывается/оказана (взята проба, есть результат или документ) — заменить нельзя.' } };
+    closeAll();
+    const win4 = await openAndPick(5, 21);
+    assert.equal(rpcCalls('cashier_line_rebill_quote').length, 1);
+    assert.equal(textOf(byAttr(win4, 'data-swap-lab', '1')).trim(), LAB_NOTE_REBILL);
     // Не анализ меняют на анализ — фраза не про эту строку.
     world();
     closeAll();
@@ -494,4 +514,133 @@ test('поправка 7: дороже из окна визита — окно �
     assert.equal(done, 1);
     assert.equal(rpcCalls('record_payment').length, 0);
     closeAll();
+});
+
+test('ревью: пока замена в пути — второй щелчок, «куда вернуть» и выбор услуги/исполнителя ничего не делают; одна замена, один onDone', async () => {
+    asRole('cashier');
+    world();
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const plain = rpcAnswers.cashier_line_swap_paid;
+    rpcAnswers.cashier_line_swap_paid = async (b) => { await gate; return plain(b); };
+    let done = 0;
+    const visitWin = await fromVisitWindow(() => { done++; });
+    byAttr(lastModal(), 'data-refund-swap', '71').click();
+    await tick();
+    const win = lastModal();
+    await pickIn(win, 2, 21);
+    const quotes = rpcCalls('cashier_line_swap_quote').length;
+    const performers = rpcCalls('cashier_line_performers').length;
+    const before = modals().length;   // окно визита, «Платежи», окно замены
+    const ok = buttonByText(win, 'Заменить и вернуть 70 000 сум');
+    ok.click();
+    await tick(20);
+    ok.click();   // второй щелчок, пока первая замена в пути
+    walk(byAttr(win, 'data-swap-dest', 'balance')).find((e) => e.tagName === 'INPUT').fire('change');
+    byAttr(win, 'data-pick', 'performer').click();
+    byAttr(win, 'data-pick', 'service').click();
+    await tick(60);
+    assert.equal(rpcCalls('cashier_line_swap_paid').length, 1, 'вторая замена ушла на сервер');
+    assert.equal(rpcCalls('cashier_line_swap_quote').length, quotes, 'пересчёт во время замены');
+    assert.equal(rpcCalls('cashier_line_performers').length, performers, 'выбор исполнителя во время замены');
+    assert.equal(modals().length, before, 'во время замены открылось окно выбора');
+    release();
+    await tick(150);
+    assert.equal(rpcCalls('cashier_line_swap_paid').length, 1);
+    assert.equal(rpcCalls('cashier_line_swap_paid')[0][1].to_balance, undefined, 'ушло тем выбором, что был до нажатия');
+    assert.equal(done, 1, 'onDone — один раз');
+    assert.deepEqual(modals(), [visitWin]);
+
+    // Отказ сервера отпускает окно: повторное нажатие снова проводит замену.
+    // Повтор уходит тем выбором, что на экране: смена «куда вернуть» во время
+    // первой замены не прошла.
+    world();
+    let first = true;
+    let releaseErr;
+    const gateErr = new Promise((r) => { releaseErr = r; });
+    rpcAnswers.cashier_line_swap_paid = async (b) => {
+        if (first) { first = false; await gateErr; return { __error: { status: 409, code: 'bad_request', message: 'Смена закрыта.' } }; }
+        return { ...CHEAPER(b), preview: undefined, invoice: { ...PAID, total_amount: 85000, paid_amount: 85000 } };
+    };
+    closeAll();
+    const win2 = await openAndPick(2, 21);
+    buttonByText(win2, 'Заменить и вернуть 70 000 сум').click();
+    await tick(20);
+    walk(byAttr(win2, 'data-swap-dest', 'balance')).find((e) => e.tagName === 'INPUT').fire('change');
+    releaseErr();
+    await tick(80);
+    assert.equal(TOASTS.at(-1), 'Смена закрыта.');
+    assert.ok(modals().includes(win2), 'окно замены осталось после отказа');
+    buttonByText(win2, 'Заменить и вернуть 70 000 сум').click();
+    await tick(150);
+    assert.equal(rpcCalls('cashier_line_swap_paid').length, 2);
+    assert.equal(rpcCalls('cashier_line_swap_paid')[1][1].to_balance, undefined, 'повтор ушёл не тем выбором, что на экране');
+    assert.deepEqual(modals(), []);
+});
+
+test('ревью: устаревший предпросмотр не рисуется — окно показывает и проводит выбор последнего исполнителя', async () => {
+    asRole('cashier');
+    world();
+    let releaseA;
+    const gateA = new Promise((r) => { releaseA = r; });
+    const QUOTE_B = { ...CHEAPER(), total_after: 95000, refunded: 60000, refund_plan: [{ payment_id: 1, method: 'cash', refund_method: 'cash', amount: 60000 }] };
+    rpcAnswers.cashier_line_swap_quote = async (b) => {
+        if (b.doctor_id === 20) { await gateA; return CHEAPER(b); }   // предпросмотр A — медленный
+        return QUOTE_B;
+    };
+    rpcAnswers.cashier_line_swap_paid = () => ({ ...QUOTE_B, preview: undefined, invoice: { ...PAID, total_amount: 95000, paid_amount: 95000 } });
+    closeAll();
+    await desk.__test_openInvoiceRefund(PAID, mkEl('div'));
+    byAttr(lastModal(), 'data-refund-swap', '71').click();
+    await tick();
+    const win = lastModal();
+    await pickIn(win, 2, 20);   // A ещё в пути
+    byAttr(win, 'data-pick', 'performer').click();
+    await tick(60);
+    byAttr(lastModal(), 'data-performer', '21').click();
+    await tick(80);             // B пришёл
+    releaseA();
+    await tick(80);             // A пришёл последним
+    assert.ok(byAttr(win, 'data-swap-refund', '60000'), 'окно показывает не последний выбор');
+    assert.equal(byAttr(win, 'data-swap-refund', '70000'), undefined, 'нарисован устаревший предпросмотр');
+    buttonByText(win, 'Заменить и вернуть 60 000 сум').click();
+    await tick(150);
+    assert.equal(rpcCalls('cashier_line_swap_paid').length, 1);
+    assert.equal(rpcCalls('cashier_line_swap_paid')[0][1].doctor_id, 21);
+    closeAll();
+});
+
+test('ревью: closeRefundModals закрывает окно его же закрытием — onClose окна оплаты один раз; окно визита (keep) остаётся', async () => {
+    asRole('cashier');
+    world();
+    closeAll();
+    const visitWin = mkEl('div');
+    visitWin.className = 'modal';
+    document.body.appendChild(visitWin);
+    let closed = 0;
+    desk.__test_payModal(null, { ...PAID, total_amount: 205000, paid_amount: 155000, status: 'partial' }, 50000, { onClose: () => { closed++; } });
+    await tick();
+    assert.equal(modals().length, 2);
+    const keep = new Set([visitWin]);
+    desk.__test_closeRefundModals({ keep });
+    await tick();
+    assert.deepEqual(modals(), [visitWin]);
+    assert.equal(closed, 1, 'onClose окна оплаты не сработал');
+    desk.__test_closeRefundModals({ keep });
+    await tick();
+    assert.equal(closed, 1, 'onClose — один раз');
+    // Без keep (касса) — все окна, и без своего закрытия — просто вынимаются.
+    desk.__test_closeRefundModals({});
+    assert.deepEqual(modals(), []);
+});
+
+test('ревью: узбекский апостроф в блоке словаря REFUND_SWAP_V1 — «‘» (U+2018), не ASCII', async () => {
+    const fs = await import('node:fs');
+    const src = fs.readFileSync(new URL('../i18n-strings.js', import.meta.url), 'utf8');
+    const from = src.indexOf('// REFUND_SWAP_V1 (2026-10-29)');
+    const to = src.indexOf('// /REFUND_SWAP_V1', from);
+    assert.ok(from > 0 && to > from, 'блок REFUND_SWAP_V1 не найден');
+    const uz = [...src.slice(from, to).matchAll(/"uz":"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
+    assert.ok(uz.length >= 10, 'строк блока: ' + uz.length);
+    assert.deepEqual(uz.filter((s) => s.includes("'")), []);
 });

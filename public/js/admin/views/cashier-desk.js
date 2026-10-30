@@ -2235,9 +2235,16 @@ async function afterMoney(root, opts) {
 // возврата («Платежи» и подтверждение), но не окна, открытые до него: окно
 // визита, из которого открыли «Платежи», остаётся (opts.keep —
 // openInvoiceRefundById). Без keep (касса) — как прежде, все окна.
+// REFUND_SWAP_V1 (ревью A3) — окно, у которого есть своё закрытие
+// (overlay._close — modal()), закрывается им: его onClose срабатывает и
+// здесь (окно оплаты «Доплата» сообщает, что закрыто). Без него — вынимается.
 function closeRefundModals(opts) {
     const keep = opts && opts.keep;
-    document.querySelectorAll('.modal').forEach((m) => { if (!keep || !keep.has(m)) m.remove(); });
+    document.querySelectorAll('.modal').forEach((m) => {
+        if (keep && keep.has(m)) return;
+        if (typeof m._close === 'function') m._close();
+        else m.remove();
+    });
 }
 
 // REFUND_ANY_V1 (ревью M-1) — почему счёта по номеру нет в кассе: сервер
@@ -2339,15 +2346,18 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
             onclick: () => openRefundSwap(inv, it, line, { work, onDone: (r) => afterRefundSwap(r, inv, root, opts) }),
         }, Icon('Repeat', { size: 13 }), ' ', 'Заменить услугу');
     };
-    const itemRows = items.map(it => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center' } },
-        h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: it.description || '' }, it.description || '—'),
+    // REFUND_SWAP_V1 (ревью A3) — на узком экране кнопки строки переносятся
+    // под название одной группой, а не сжимаются.
+    const itemRows = items.map(it => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center', flexWrap: 'wrap' } },
+        h('span', { style: { flex: '1 1 160px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: it.description || '' }, it.description || '—'),
         h('span', { class: 'num', style: { fontWeight: 700 } }, fmtPrice(Math.max(0, Number(it.total || 0) - Number(it.discount_amount || 0)))),
-        swapBtn(it),   // REFUND_SWAP_V1
-        h('button', {
-            class: 'btn btn-outline btn-sm', type: 'button',
-            style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
-            onclick: () => openLineRefundConfirm({ ...it, work: workById.get(it.id) || null }, info, root, opts),   // REFUND_ANY_V1 — с тем, что сделано
-        }, 'Вернуть услугу'),
+        h('div', { style: { display: 'flex', gap: '6px', flexShrink: 0, marginLeft: 'auto' } },
+            swapBtn(it),   // REFUND_SWAP_V1
+            h('button', {
+                class: 'btn btn-outline btn-sm', type: 'button',
+                style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
+                onclick: () => openLineRefundConfirm({ ...it, work: workById.get(it.id) || null }, info, root, opts),   // REFUND_ANY_V1 — с тем, что сделано
+            }, 'Вернуть услугу')),
     ));
 
     const rows = pays.map(p => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center' } },
@@ -2385,21 +2395,27 @@ async function afterRefundSwap(r, inv, root, opts = {}) {
     closeRefundModals(opts);   // окно «Платежи» устарело
     const sum = Number(r.refunded) || 0;
     const due = Number(r.due) || 0;
+    // Ревью A3 — одно уведомление: второе стирает первое, и сумма пропадала.
+    // Сначала деньги, потом (у возврата с новой) — что стало с прежней услугой.
+    let note;
+    let kind = 'ok';
     if (sum > 0) {
-        toast(r.to_balance
+        note = r.to_balance
             ? trf('Разница {sum} сум зачислена на баланс пациента.', { sum: fmtPrice(sum) })
-            : trf('Пациенту возвращено {sum} сум.', { sum: fmtPrice(sum) }), 'ok');
+            : trf('Пациенту возвращено {sum} сум.', { sum: fmtPrice(sum) });
         const u = (window.easymed && window.easymed.state && window.easymed.state.user) || {};
         printSlip(printableSheet, {
             kind: 'swap', invoice: r.invoice || inv, patient: { full_name: inv.patient_name, mrn: inv.mrn },
             before: r.line_before, after: r.line_after, refunded: sum, plan: r.refund_plan || [], cashier: u.full_name || u.username || '',
         });
     } else if (due > 0) {
-        toast(trf('Услуга заменена — к доплате {sum} сум.', { sum: fmtPrice(due) }), 'info');
+        note = trf('Услуга заменена — к доплате {sum} сум.', { sum: fmtPrice(due) });
+        kind = 'info';
     } else {
-        toast(tr('Услуга заменена — сумма счёта не изменилась.'), 'ok');
+        note = tr('Услуга заменена — сумма счёта не изменилась.');
     }
-    if (r.rebill) toast(tr('Прежняя услуга возвращена: работа осталась в карте пациента и врачу не оплачивается.'), 'info');
+    if (r.rebill) note += ' · ' + tr('Прежняя услуга возвращена: работа осталась в карте пациента и врачу не оплачивается.');
+    toast(note, kind);
     let finished = false;
     const finish = async () => {
         if (finished) return;
@@ -2793,6 +2809,7 @@ function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFo
         closed = true;
         Promise.resolve().then(onClose).catch(() => {});
     };
+    overlay._close = close;   // ревью A3 — closeRefundModals закрывает окно им же
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
     const submitBtn = h('button', { class: 'btn btn-primary', type: 'button' }, submitLabel);
@@ -2927,6 +2944,7 @@ export const __test_moveModal = moveModal;
 export const __test_payModal = payModal;
 export const __test_openRefundConfirm = openRefundConfirm;
 export const __test_openInvoiceRefund = openInvoiceRefund;   // REFUND_SWAP_V1 — окно «Платежи» с «Заменить услугу»
+export const __test_closeRefundModals = closeRefundModals;   // REFUND_SWAP_V1 (ревью A3)
 export const __test_historyModal = historyModal;
 export const __test_invoiceRow = invoiceRow;
 export const __test_shiftBanner = shiftBanner;

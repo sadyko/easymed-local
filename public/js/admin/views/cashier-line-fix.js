@@ -318,8 +318,9 @@ export async function openSwapConfirm(args, { onDone = null } = {}) {
 // врачу не оплачивается, новая встаёт в тот же визит и счёт, разница — по тем
 // же правилам. Предпросмотр возврата с новой отдаёт `line: null` (его строка
 // откатана) — окно читает только подписи и суммы. Анализ меняют на анализ —
-// окно говорит, что новый уйдёт в лабораторию новым заказом и пробу отметят
-// заново. `onDone(r)` получает ответ сервера (`rebill: true` — второй путь).
+// окно говорит, что новый уйдёт в лабораторию новым заказом, а у возврата с
+// новой — что пробу отметят заново. Пока замена в пути, окно ничего не
+// меняет (busy). `onDone(r)` получает ответ сервера (`rebill: true` — второй путь).
 const isLabService = (s) => !!s && (Number(s.is_lab) === 1 || s.type === 'lab');
 
 export async function openRefundSwap(inv, item, line, { work = null, onDone = null } = {}) {
@@ -330,6 +331,15 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
     let quote = null;
     let seq = 0;               // ответ устаревшего предпросмотра не рисуется
     let idemKey = newIdemKey();   // ключ окна: двойное нажатие не проведёт деньги дважды
+    // Ревью A3 — пока замена в пути, окно ничего не меняет и не пересчитывает:
+    // второй щелчок, «куда вернуть», выбор услуги и исполнителя молчат.
+    let busy = false;
+    let pickBtns = [];
+    let radios = [];
+    const setBusy = (on) => {
+        busy = on;
+        for (const el of [...pickBtns, ...radios]) el.disabled = on;
+    };
     const oldLab = isLabService(line && line.services);
     const s = sheet(trf('Заменить услугу · {name}', { name: item.description || '—' }), 'Repeat', 560);
     const intro = h('div', { class: 'muted', 'data-refund-swap-intro': '', style: { fontSize: '12.5px', lineHeight: 1.5 } });
@@ -359,25 +369,33 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
             ? tr('По этой услуге уже начата работа (взята проба, есть результат, документ или идёт приём) — перенести её на другую услугу нельзя. Эта услуга вернётся: работа останется в карте пациента, врачу она не оплачивается. Новая услуга будет выставлена в тот же визит и счёт.')
             : tr('Выберите новую услугу и исполнителя. Цену и разницу считает программа.')));
     };
+    // Анализ меняют на анализ: лаборатория получит новый заказ. У возврата с
+    // новой проба прежнего анализа уже взята — лаборатория отметит её для
+    // нового заново (можно из той же пробирки); у обычной замены пробы ещё нет.
+    const paintLab = () => {
+        clear(labNote);
+        if (!(oldLab && svc && isLabService(svc))) return;
+        labNote.appendChild(h('div', { 'data-swap-lab': '1', role: 'note', style: { marginTop: '8px', padding: '9px 12px', borderRadius: '10px', background: 'var(--warn-50, #fffbeb)', color: 'var(--warn-700, #b45309)', fontSize: '12.5px', lineHeight: 1.5 } },
+            rebill
+                ? tr('Новый анализ уйдёт в лабораторию новым заказом, и лаборатория заново отметит взятие пробы — можно из той же пробирки.')
+                : tr('Новый анализ уйдёт в лабораторию новым заказом.')));
+    };
     const paintPicks = () => {
         clear(picks);
         picks.appendChild(kv(tr('Было'), was));
+        const svcBtn = h('button', { class: 'btn btn-sm', type: 'button', 'data-pick': 'service', onclick: () => chooseService() }, svc ? tr('Изменить') : tr('Выбрать услугу'));
+        const whoBtn = h('button', { class: 'btn btn-sm', type: 'button', 'data-pick': 'performer', disabled: svc ? null : true, onclick: () => { if (svc) choosePerformer(); } }, tr('Выбрать'));
+        pickBtns = svc ? [svcBtn, whoBtn] : [svcBtn];
         picks.appendChild(h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', fontSize: '13.5px' } },
             h('span', { style: { flex: 1, color: 'var(--ink-600)' } }, tr('Новая услуга')),
             h('span', { class: 'cell-strong', 'data-picked-service': svc ? String(svc.id) : '' }, svc ? (svc.name || '—') : '—'),
-            h('button', { class: 'btn btn-sm', type: 'button', 'data-pick': 'service', onclick: () => chooseService() }, svc ? tr('Изменить') : tr('Выбрать услугу'))));
+            svcBtn));
         picks.appendChild(h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', fontSize: '13.5px' } },
             h('span', { style: { flex: 1, color: 'var(--ink-600)' } }, tr('Исполнитель')),
             h('span', { class: 'cell-strong', 'data-picked-performer': who ? (who.id == null ? 'none' : String(who.id)) : '' },
                 who ? (who.id == null ? tr('Без врача') : (who.full_name || ('#' + who.id))) : '—'),
-            h('button', { class: 'btn btn-sm', type: 'button', 'data-pick': 'performer', disabled: svc ? null : true, onclick: () => { if (svc) choosePerformer(); } }, tr('Выбрать'))));
-        // Анализ меняют на анализ: лаборатория получит новый заказ и отметит
-        // пробу заново — без этой фразы лаборант ищет пробу у прежнего анализа.
-        clear(labNote);
-        if (oldLab && svc && isLabService(svc)) {
-            labNote.appendChild(h('div', { 'data-swap-lab': '1', role: 'note', style: { marginTop: '8px', padding: '9px 12px', borderRadius: '10px', background: 'var(--warn-50, #fffbeb)', color: 'var(--warn-700, #b45309)', fontSize: '12.5px', lineHeight: 1.5 } },
-                tr('Новый анализ уйдёт в лабораторию новым заказом, и лаборатория заново отметит взятие пробы — можно из той же пробирки.')));
-        }
+            whoBtn));
+        paintLab();
     };
     // Работа по строке начата, а окно было на обычной замене: денег сервер не
     // двигал (отказ line_performed) — окно переходит к «Вернуть эту услугу и
@@ -386,6 +404,7 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
         rebill = true;
         idemKey = newIdemKey();
         paintIntro();
+        paintLab();
     };
 
     // «Вернуть деньгами» — без to_balance: каждый платёж возвращается своим
@@ -406,6 +425,7 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
 
     const render = () => {
         clear(body);
+        radios = [];
         const q = quote;
         if (q.changed === false) {
             body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Это та же услуга у того же исполнителя — менять нечего.'));
@@ -421,7 +441,8 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
             const destBox = h('div', { style: { display: 'grid', gap: '6px' } });
             for (const [v, label] of [['original', 'Вернуть деньгами'], ['balance', 'На баланс пациента']]) {
                 const radio = h('input', { type: 'radio', name: 'refund-swap-dest', value: v, checked: dest === v ? true : null });
-                radio.addEventListener('change', () => { if (dest === v) return; dest = v; load(); });
+                radio.addEventListener('change', () => { if (busy || dest === v) return; dest = v; load(); });
+                radios.push(radio);
                 destBox.appendChild(h('label', { 'data-swap-dest': v, style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } }, radio, tr(label)));
             }
             body.appendChild(destBox);
@@ -446,7 +467,7 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
     };
 
     const load = async () => {
-        if (!svc || !who) return;
+        if (busy || !svc || !who) return;
         const my = ++seq;
         okBtn.disabled = true;
         clear(body);
@@ -471,8 +492,9 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
     };
 
     async function chooseService() {
+        if (busy) return;
         const picked = await pickService(tr('Новая услуга'));
-        if (!picked) return;
+        if (!picked || busy) return;
         svc = picked;
         who = null;
         quote = null;
@@ -483,26 +505,29 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
         await choosePerformer();   // исполнитель — сразу за услугой
     }
     async function choosePerformer() {
+        if (busy) return;
         const picked = await pickPerformer(tr('Кто оказывает услугу'), { service_id: svc.id, visit_id: inv.visit_id }, { allowNone: true });
-        if (!picked) return;
+        if (!picked || busy) return;
         who = picked;
         paintPicks();
         await load();
     }
 
     okBtn.addEventListener('click', async () => {
-        if (!quote || !svc || !who || quote.changed === false) return;
+        if (busy || !quote || !svc || !who || quote.changed === false) return;
+        setBusy(true);
         okBtn.disabled = true;
         const { data, error } = await commitRpc({ ...callArgs(), idempotency_key: idemKey });
         if (error && error.code === 'line_performed' && !rebill) {
             // Работа началась, пока окно было открыто: замена не прошла, деньги
             // не двигались. Окно называет причину и считает возврат с новой.
             toast(error.message || tr('Не удалось.'), 'info');
+            setBusy(false);
             toRebill();
             await load();
             return;
         }
-        if (error) { toast(error.message || tr('Не удалось.'), 'fail'); okBtn.disabled = false; return; }
+        if (error) { toast(error.message || tr('Не удалось.'), 'fail'); setBusy(false); okBtn.disabled = false; return; }
         s.overlay.remove();
         if (onDone) await onDone({ ...(data || {}), rebill: rebill || !!(data && data.rebill) });
     });
