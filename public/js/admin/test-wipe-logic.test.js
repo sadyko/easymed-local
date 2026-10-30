@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   WIPE_DELETES, WIPE_KEEPS, WIPE_CALENDAR_WARNING, PAIRED_TEXT, WIPE_NO_SPACE_TEMPLATE,
-  wipeSummaryRows, wipeLastNotes, wipeRequestInfo,
+  wipeSummaryRows, wipeLastNotes, wipeRequestInfo, wipeHadData, isWrongPassword,
 } from './test-wipe-logic.js';
 import { backupKindLabel } from './system-logic.js';
 import { STRINGS } from './i18n-strings.js';
@@ -47,6 +47,10 @@ test('заметки к отказу: связана со зданиями; не
   assert.deepEqual(wipeLastNotes(null), []);
   assert.match(wipeLastNotes({ ok: false, reason: 'paired' })[0].template, /связана с другими зданиями/);
   assert.match(wipeLastNotes({ ok: false, reason: 'failed' })[0].template, /база не тронута/);
+  // Ревью C5: нет копии «Перед удалением» — своя причина, а не «сбой».
+  assert.deepEqual(wipeLastNotes({ ok: false, reason: 'no_copy' }), [{
+    template: 'Тестовые данные не удалены: копия «Перед удалением тестовых данных» не найдена. База не тронута.', params: {},
+  }]);
   const noSpace = { ok: false, reason: 'no_space', template: SERVER_NO_SPACE, params: { need: 2.1, free: 0.4 } };
   assert.deepEqual(wipeLastNotes(noSpace, 'ru'), [{ template: WIPE_NO_SPACE_TEMPLATE, params: { need: '2,1', free: '0,4' } }]);
   assert.deepEqual(wipeLastNotes(noSpace, 'en')[0].params, { need: '2.1', free: '0.4' });
@@ -72,9 +76,31 @@ test('кто попросил: номер — целое больше нуля, 
   assert.deepEqual(wipeRequestInfo(null), { by: null, at: null });
 });
 
+test('было ли что удалять: любое число больше нуля в deleted, cleared или удалённых файлах', () => {
+  assert.equal(wipeHadData(LAST), true);
+  assert.equal(wipeHadData({ ok: true, deleted: { patient_activity_log: 3 } }), true, 'не только строки таблицы итога');
+  assert.equal(wipeHadData({ ok: true, deleted: { visits: 0 }, cleared: { beds: 1 } }), true);
+  assert.equal(wipeHadData({ ok: true, deleted: {}, cleared: {}, files: { removed: 2, failed: 0 } }), true);
+  assert.equal(wipeHadData({ ok: true, deleted: { visits: 0, x: 'abc', y: -2 }, cleared: { beds: 0 }, files: { removed: 0, failed: 3 } }), false);
+  assert.equal(wipeHadData(null), false);
+});
+
+test('неверный пароль узнаётся по фразе сервера (rpc/backup.js requirePassword)', () => {
+  assert.equal(isWrongPassword({ code: 'forbidden', message: 'Неверный пароль.' }), true);
+  assert.equal(isWrongPassword({ code: 'forbidden', message: 'Только администратор может управлять резервными копиями.' }), false);
+  assert.equal(isWrongPassword(null), false);
+});
+
 test('списки «удалятся» и «останутся» говорят о картах пациентов, CRM и календаре прямо', () => {
   assert.ok(WIPE_DELETES.some((s) => /визиты/.test(s)) && WIPE_DELETES.some((s) => /деньги/.test(s)) && WIPE_DELETES.some((s) => /склад/.test(s)));
   assert.ok(WIPE_DELETES.some((s) => /сканы в карте пациента/.test(s)), 'поправка 6: и сканы в карте пациента');
+  // Ревью C5: и то, что легко не заметить (test-data-wipe-plan.js): рекомендованные
+  // услуги, отправки документов в Telegram, карточки обзвона Cust Dev.
+  for (const re of [/рекомендованные услуги/, /отправки документов в Telegram/, /карточки обзвона после визита \(Cust Dev\)/]) {
+    assert.ok(WIPE_DELETES.some((s) => re.test(s)), String(re));
+  }
+  // …и что остаётся, но сбрасывается: подарочные карты из настроек, койки.
+  assert.ok(WIPE_KEEPS.some((s) => /подарочные карты, заведённые в настройках, — снова с полным номиналом; занятые койки освобождаются/.test(s)));
   assert.ok(WIPE_KEEPS.some((s) => /карты пациентов/.test(s)) && WIPE_KEEPS.some((s) => /^CRM.*стадии карточек не меняются/.test(s)), 'поправка 8');
   assert.match(WIPE_CALENDAR_WARNING, /ВСЕ записи в календаре.*будущие/);
 });

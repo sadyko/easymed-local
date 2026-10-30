@@ -18,8 +18,12 @@ import { supabase } from '../../supabase.js';
 import { confirmWordOk, noSpaceText, formatRuDateTime, DASH } from '../system-logic.js';
 import {
     WIPE_DELETES, WIPE_KEEPS, WIPE_CALENDAR_WARNING, PAIRED_TEXT,
-    wipeSummaryRows, wipeLastNotes, wipeRequestInfo,
+    wipeSummaryRows, wipeLastNotes, wipeRequestInfo, wipeHadData, isWrongPassword,
 } from '../test-wipe-logic.js';
+
+// Ревью C5 (M1) — удаление уже ждёт перезапуска: та же фраза и строкой в
+// карточке, и подсказкой на мёртвой кнопке.
+const PENDING_NOTE = 'Удаление уже ждёт перезапуска программы.';
 import { showRestartOverlay } from './system-restart.js';
 
 export async function renderTestWipeCard(root, { admin }) {
@@ -31,7 +35,7 @@ export async function renderTestWipeCard(root, { admin }) {
         h('div', { class: 'sys-card-head' }, Icon('Trash', { size: 16 }),
             h('span', null, 'Удалить тестовые данные')),
         h('p', { class: 'sys-note sys-danger-text' },
-            'Для клиники, которая училась на выдуманных пациентах: удаляются визиты, деньги и движения склада, а карты пациентов, CRM и все настройки остаются.'),
+            'Для клиники, которая училась на выдуманных пациентах: удаляются визиты, деньги и движения склада, а пациенты (ФИО, телефоны, номера карт), CRM и все настройки остаются.'),
         body));
 
     // Состояние не пришло (старый сервер, сбой сети) — кнопка всё равно есть:
@@ -45,19 +49,22 @@ export async function renderTestWipeCard(root, { admin }) {
     const who = await requesterName(wipeRequestInfo(last).by);
 
     clear(body);
-    if (status.pending === true) {
-        body.appendChild(h('p', { class: 'sys-note' }, Icon('Clock', { size: 14 }), ' ',
-            'Удаление ждёт перезапуска программы.'));
+    const pending = status.pending === true;
+    if (pending) {
+        body.appendChild(h('p', { class: 'sys-note' }, Icon('Clock', { size: 14 }), ' ', PENDING_NOTE));
     }
     if (status.paired === true) {
         body.appendChild(h('p', { class: 'sys-modal-warn' }, Icon('Warning', { size: 14 }), ' ', PAIRED_TEXT));
     }
     paintLast(body, last, who);
+    // Мертва для связанной клиники и пока удаление ждёт перезапуска: второй
+    // просьбе сервер всё равно откажет (pending-action.json уже занят).
     const openBtn = h('button', {
         type: 'button', class: 'btn btn-danger',
+        title: pending ? PENDING_NOTE : null,
         onclick: () => { if (!openBtn.disabled) openWipeModal(); },
     }, Icon('Trash', { size: 14 }), ' ', 'Удалить тестовые данные…');
-    openBtn.disabled = status.paired === true;
+    openBtn.disabled = status.paired === true || pending;
     body.appendChild(h('div', null, openBtn));
 }
 
@@ -103,7 +110,8 @@ function paintLast(body, last, whoName) {
         for (const r of rows) tb.appendChild(h('tr', null, h('td', null, r.label), h('td', null, String(r.n))));
         body.appendChild(h('table', { class: 'tbl sys-backups-tbl' },
             h('thead', null, h('tr', null, h('th', null, 'Что'), h('th', null, 'Количество'))), tb));
-    } else if (last.ok === true) {
+    } else if (last.ok === true && !wipeHadData(last)) {
+        // Ревью C5 — решают все числа итога, а не строки таблицы.
         body.appendChild(h('p', { class: 'sys-note' }, 'Удалять было нечего: учебных данных не нашлось.'));
     }
     for (const n of wipeLastNotes(last, getLang())) {
@@ -151,9 +159,15 @@ function openWipeModal() {
             showRestartOverlay();
         } catch (e) {
             busy = false;
+            // Ревью C5 (M3): неверный пароль стирается — следующий набирается
+            // заново, кнопка мертва до него. Другие отказы пароль не трогают.
+            if (isWrongPassword(e)) {
+                pass.value = '';
+                try { pass.focus(); } catch (err) { /* без фокуса — не беда */ }
+            }
             refreshEnabled();
             // Отказ сервера — его словами на языке экрана: «связана со зданиями»,
-            // «неверный пароль», «нет места» (с числами — noSpaceText).
+            // «уже ждёт перезапуска», «неверный пароль», «нет места» (с числами — noSpaceText).
             say((e && e.message && e.message !== 'wipe refused')
                 ? (noSpaceText(e, getLang(), tr) || tr(e.message))
                 : tr('Не удалось запросить удаление. Попробуйте ещё раз.'), true);
@@ -179,7 +193,7 @@ function openWipeModal() {
             field('Введите УДАЛИТЬ, чтобы подтвердить', wordInput),
             field('Пароль администратора', pass),
             h('p', { class: 'sys-modal-note' },
-                'Программа перезапустится сама — около минуты. Удаление пройдёт при запуске, итог появится на этой странице.'),
+                'Программа перезапустится сама — около минуты, на большой базе дольше. Не перезапускайте её вручную: удаление пройдёт при запуске, итог появится на этой странице.'),
             statusEl),
         h('footer', { class: 'modal-foot' },
             h('button', { class: 'btn', type: 'button', onclick: close }, 'Отмена'),

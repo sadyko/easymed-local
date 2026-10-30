@@ -85,6 +85,7 @@ globalThis.fetch = async (url, opts) => {
 const { renderClinicData } = await import('../views/clinic-data.js');
 const { renderTestWipeCard } = await import('../views/system-test-wipe.js');
 const { setLang } = await import('../i18n.js');
+const { rememberServerMessage } = await import('../../shared/server-messages.js');
 
 const ADMIN = { id: 1, role: 'admin', is_admin: true, is_super_admin: false };
 const REGISTRAR = { id: 2, role: 'registrar', is_admin: false, is_super_admin: false };
@@ -116,7 +117,7 @@ test('администратор видит карточку между копи
   await renderClinicData(root);
   const text = textOf(root);
   assert.match(text, /Удалить тестовые данные/);
-  assert.match(text, /карты пациентов, CRM и все настройки остаются/);
+  assert.match(text, /а пациенты \(ФИО, телефоны, номера карт\), CRM и все настройки остаются\./, 'не «карты пациентов остаются» без оговорки: сканы и показатели удаляются');
   assert.equal(statusCalls, 1);
   assert.ok(text.indexOf('Создать копию сейчас') < text.indexOf('Удалить тестовые данные'), 'после копий — путь назад виден первым');
   assert.ok(text.indexOf('Удалить тестовые данные') < text.indexOf('Опасная зона'), 'до полного удаления');
@@ -133,12 +134,15 @@ test('администратор видит карточку между копи
 test('окно перечисляет, что удалится и что останется, и предупреждает о календаре, копии, номерах, перезапуске и связанной клинике', async () => {
   const { modal } = await openModal();
   const text = textOf(modal);
-  for (const re of [/Будут удалены:/, /визиты и их услуги/, /сканы в карте пациента/, /стационар: госпитализации/,
+  for (const re of [/Будут удалены:/, /визиты и их услуги/, /рекомендованные услуги/, /карточки обзвона после визита/,
+    /сканы в карте пациента/, /отправки документов в Telegram/, /стационар: госпитализации/,
     /деньги: счета, платежи/, /движения по балансу пациентов/, /остатки товаров начнутся с нуля/,
     /Удаляются ВСЕ записи в календаре — и прошедшие, и будущие, в том числе записи настоящих пациентов/,
     /Останутся:/, /карты пациентов: ФИО, телефоны, номера карт/, /CRM: карточки, задачи/, /стадии карточек не меняются/,
-    /роли, права, сотрудники, услуги, цены/, /снова начнутся с 1/, /Перед удалением тестовых данных/,
-    /Клинике, связанной с другими зданиями/, /Удаление пройдёт при запуске/]) {
+    /роли, права, сотрудники, услуги, цены/,
+    /подарочные карты, заведённые в настройках, — снова с полным номиналом; занятые койки освобождаются/,
+    /снова начнутся с 1/, /Перед удалением тестовых данных/,
+    /Клинике, связанной с другими зданиями/, /на большой базе дольше\. Не перезапускайте её вручную: удаление пройдёт при запуске/]) {
     assert.match(text, re);
   }
   assert.ok(text.indexOf('Будут удалены:') < text.indexOf('Удаляются ВСЕ записи в календаре'), 'календарь — сразу под списком удаляемого');
@@ -172,6 +176,55 @@ test('клиника связана с другими зданиями — об�
   assert.equal(btn.disabled, true);
   btn.click();
   assert.equal(findByClass(document.body, 'modal'), undefined);
+});
+
+// Ревью C5 (M1): удаление уже ждёт перезапуска — второй раз просить нельзя:
+// кнопка мертва и говорит почему, окно не открывается.
+test('удаление уже ждёт перезапуска — кнопка мертва с объяснением, окно не открывается', async () => {
+  statusData = { paired: false, pending: true, last: null };
+  const root = mk('div');
+  await renderTestWipeCard(root, { admin: true });
+  assert.match(textOf(root), /Удаление уже ждёт перезапуска программы\./);
+  const btn = findButtonByText(root, /Удалить тестовые данные…/);
+  assert.equal(btn.disabled, true);
+  assert.equal(btn.getAttribute('title'), 'Удаление уже ждёт перезапуска программы.');
+  btn.click();
+  assert.equal(findByClass(document.body, 'modal'), undefined);
+});
+
+// Ревью C5 (M3): неверный пароль — поле пароля очищается, кнопка снова мертва
+// до нового пароля; другой отказ пароль не трогает.
+test('неверный пароль — поле пароля очищено, кнопка мертва; отказ «связана» пароль не стирает', async () => {
+  wipeRespond = () => jsonErr({ code: 'forbidden', message: 'Неверный пароль.' }, 403);
+  const { modal } = await openModal();
+  const confirm = fillAndGetConfirm(modal);
+  confirm.click();
+  await tick();
+  assert.match(textOf(modal), /Неверный пароль\./);
+  assert.equal(findInputByType(modal, 'password').value, '');
+  assert.equal(confirm.disabled, true, 'без пароля кнопка мертва');
+
+  document.body.children.length = 0;
+  wipeRespond = PAIRED_ERR;
+  const second = await openModal();
+  const confirm2 = fillAndGetConfirm(second.modal);
+  confirm2.click();
+  await tick();
+  assert.equal(findInputByType(second.modal, 'password').value, 'pw');
+});
+
+// Ревью C5 (M1): сервер отказывает, пока pending-action.json держит любое
+// отложенное действие, — его словами на языке экрана.
+test('отказ сервера «уже ждёт перезапуска» — его словами на языке экрана (en)', async () => {
+  wipeRespond = () => jsonErr({ code: 'pending', message: 'Удаление тестовых данных уже запрошено и ждёт перезапуска программы. Просить второй раз не нужно.' }, 409);
+  const { modal } = await openModal();
+  const confirm = fillAndGetConfirm(modal);
+  setLang('en');
+  try {
+    confirm.click();
+    await tick();
+    assert.match(textOf(modal), /Test data deletion has already been requested and is waiting for the program to restart\./);
+  } finally { setLang('ru'); }
 });
 
 // Фраза сервера — rpc/backup.js PAIRED_REFUSAL (test-wipe-logic.test.js
@@ -252,8 +305,35 @@ test('итог прошлого удаления — дата, кто попро
   assert.doesNotMatch(text, /Госпитализации0/, 'нули не показываются');
   assert.match(text, /Карточек CRM без учебной записи: 2 — их стадии не менялись\./);
   assert.match(text, /Файлов документов оставлено на диске: 3 — их нет в копии «Перед удалением тестовых данных»/);
-  assert.match(text, /Удаление ждёт перезапуска программы\./);
+  assert.match(text, /Удаление уже ждёт перезапуска программы\./);
   assert.equal(findByClass(root, 'sys-modal-warn'), undefined, 'удачный итог — без красных плашек');
+});
+
+// Ревью C5: «удалять было нечего» решают ВСЕ числа итога (deleted, cleared),
+// а не только строки таблицы: удалённый журнал действий или освобождённая
+// койка — тоже удаление.
+test('«Удалять было нечего» — только когда в итоге нет ни одного числа больше нуля', async () => {
+  for (const last of [
+    { ok: true, at: '2026-10-30T05:00:00.000Z', deleted: { patient_activity_log: 3, visits: 0 }, cleared: {} },
+    { ok: true, at: '2026-10-30T05:00:00.000Z', deleted: { visits: 0 }, cleared: { beds: 1 } },
+  ]) {
+    statusData = { paired: false, pending: false, last };
+    const root = mk('div');
+    await renderTestWipeCard(root, { admin: true });
+    assert.doesNotMatch(textOf(root), /Удалять было нечего/, JSON.stringify(last));
+  }
+  statusData = { paired: false, pending: false, last: { ok: true, at: '2026-10-30T05:00:00.000Z', deleted: { visits: 0 }, cleared: { beds: 0 } } };
+  const root = mk('div');
+  await renderTestWipeCard(root, { admin: true });
+  assert.match(textOf(root), /Удалять было нечего: учебных данных не нашлось\./);
+});
+
+test('итог: копии «Перед удалением» не нашлось — своя причина словами, база не тронута', async () => {
+  statusData = { paired: false, pending: false, last: { ok: false, reason: 'no_copy', at: '2026-10-30T05:00:00.000Z' } };
+  const root = mk('div');
+  await renderTestWipeCard(root, { admin: true });
+  assert.match(textOf(root), /Тестовые данные не удалены: копия «Перед удалением тестовых данных» не найдена\. База не тронута\./);
+  assert.doesNotMatch(textOf(root), /произошёл сбой/);
 });
 
 test('кто попросил: сотрудника не нашлось — номер; номера нет — имя не спрашивается', async () => {
@@ -276,6 +356,16 @@ for (const [lang, re] of [
   ['en', /Last attempt to delete test data: 30\.10\.2026.*Not enough disk space: 2\.1 GB needed, 0\.4 GB free\. Test data was not deleted\./],
 ]) {
   test(`итог: при запуске не хватило места — причина словами сервера с числами на языке экрана (${lang})`, async () => {
+    // Ревью C5 (M5): та же фраза уже пришла отказом сервера в этой вкладке —
+    // слой запросов запомнил её числа (shared/server-messages.js). Итог обязан
+    // остаться с десятичным знаком экрана, а не сервера, — независимо от
+    // порядка тестов.
+    rememberServerMessage({
+      code: 'no_space',
+      message: 'Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ. Тестовые данные не удалены.',
+      template: 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Тестовые данные не удалены.',
+      params: { need: 2.1, free: 0.4 },
+    });
     statusData = {
       paired: false, pending: false,
       last: {

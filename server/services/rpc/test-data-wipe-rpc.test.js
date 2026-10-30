@@ -11,7 +11,9 @@ import { hashPassword } from '../auth.js';
 import { setDataDir } from '../control/config.js';
 import { listBackups } from '../backup.js';
 import { writePairing } from '../branch-sync/pairing.js';
-import { testDataWipe, testDataWipeStatus, PAIRED_REFUSAL, __setExitForTests } from './backup.js';
+import {
+  testDataWipe, testDataWipeStatus, PAIRED_REFUSAL, PENDING_SAME_REFUSAL, PENDING_OTHER_REFUSAL, __setExitForTests,
+} from './backup.js';
 import { getRpc } from './index.js';
 import { isAlwaysAllowedRpc, isReadRpc } from '../control/gate.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
@@ -111,6 +113,36 @@ test('нет места на копию — 409 no_space с числами, на
   await exitFired();
   assert.equal(fs.existsSync(marker(dir)), false);
   assert.deepEqual(exitCalls, []);
+});
+
+// Ревью C5 (M1): второй раз, пока перезапуска ждёт удаление (или другое
+// действие), — 409 словами, ни копии, ни перезапуска; фразы — в словаре.
+test('перезапуска уже ждёт действие — 409 pending словами, без новой копии и без перезапуска', async () => {
+  const { db, dir } = fresh();
+  exitCalls = [];
+  await testDataWipe(db, { confirm: 'УДАЛИТЬ', password: PASSWORD }, ADMIN);
+  await exitFired();
+  exitCalls = [];
+  const copies = listBackups(dir).length;
+  await assert.rejects(() => testDataWipe(db, { confirm: 'УДАЛИТЬ', password: PASSWORD }, ADMIN), (e) => {
+    assert.equal(e.status, 409);
+    assert.equal(e.code, 'pending');
+    assert.equal(e.message, PENDING_SAME_REFUSAL);
+    return true;
+  });
+  fs.writeFileSync(marker(dir), JSON.stringify({ action: 'restore', backup: 'manual-20261030-100000.db' }));
+  await assert.rejects(() => testDataWipe(db, { confirm: 'УДАЛИТЬ', password: PASSWORD }, ADMIN),
+    (e) => e.status === 409 && e.code === 'pending' && e.message === PENDING_OTHER_REFUSAL);
+  await exitFired();
+  assert.equal(listBackups(dir).length, copies);
+  assert.equal(JSON.parse(fs.readFileSync(marker(dir), 'utf8')).action, 'restore');
+  assert.deepEqual(exitCalls, []);
+  const { STRINGS } = await import('../../../public/js/admin/i18n-strings.js');
+  for (const k of [PENDING_SAME_REFUSAL, PENDING_OTHER_REFUSAL]) {
+    const s = STRINGS[k];
+    assert.ok(s && s.ru === k, 'статья словаря: ' + k);
+    for (const l of ['uz', 'en']) assert.doesNotMatch(s[l], /[Ѐ-ӿ]/, l);
+  }
 });
 
 // Поправка 9(г): после «Отвязать» удалять тестовые данные нужно ДО новой связи —

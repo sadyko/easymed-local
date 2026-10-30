@@ -349,14 +349,17 @@ test('запуск: стадии карточек CRM те же, что до у�
   assert.match(out.line, /карточек CRM без учебной записи: 2 \(стадии не менялись\)/);
 });
 
-test('намерение без копии «перед удалением» — пути назад нет: не удаляет, намерение в .bad', async () => {
+// Ревью C5: своя причина 'no_copy', а не 'failed' — экран говорит «копия не
+// найдена», а не «сбой, обратитесь в поддержку».
+test('намерение без копии «перед удалением» — пути назад нет: не удаляет, намерение в .bad, причина no_copy', async () => {
   const { dir, db } = clinic();
   fs.writeFileSync(marker(dir), JSON.stringify({ action: 'test_data_wipe' }));
   let out = applyPendingTestDataWipe(db, dir, { diskSpaceImpl: ROOMY });
   assert.equal(out.ok, false);
-  assert.equal(out.reason, 'failed');
+  assert.equal(out.reason, 'no_copy');
   assert.equal(visits(db), 1);
   assert.ok(fs.existsSync(marker(dir) + '.bad'));
+  assert.equal(readWipeResult(dir).reason, 'no_copy');
 
   // Копию удалили мимо программы между просьбой и запуском.
   fs.rmSync(marker(dir) + '.bad');
@@ -364,8 +367,29 @@ test('намерение без копии «перед удалением» —
   fs.rmSync(path.join(dir, 'backups', backup));
   out = applyPendingTestDataWipe(db, dir, { diskSpaceImpl: ROOMY });
   assert.equal(out.ok, false);
-  assert.equal(out.reason, 'failed');
+  assert.equal(out.reason, 'no_copy');
   assert.equal(visits(db), 1);
   assert.equal(fs.existsSync(marker(dir)), false);
   assert.equal(readWipeResult(dir).backup, backup);
+  assert.equal(readWipeResult(dir).reason, 'no_copy');
+});
+
+// Ревью C5 (M1): pending-action.json уже держит отложенное действие — своё или
+// чужое (восстановление, «Удалить все данные»). Вторая просьба его не
+// перезаписывает: ни копии, ни нового намерения.
+test('просьба, пока перезапуска ждёт любое действие: отказ pending, копии нет, намерение то же', async () => {
+  const { dir, db } = clinic();
+  const first = await requestTestDataWipe(db, dir);
+  const saved = fs.readFileSync(marker(dir), 'utf8');
+  assert.deepEqual(await requestTestDataWipe(db, dir), { ok: false, reason: 'pending', action: 'test_data_wipe' });
+  assert.equal(fs.readFileSync(marker(dir), 'utf8'), saved, 'намерение не перезаписано');
+  assert.deepEqual(listBackups(dir).map((b) => b.name), [first.backup], 'второй копии нет');
+
+  for (const other of [{ action: 'restore', backup: 'manual-20261030-100000.db' }, { action: 'factory_reset', wipe_backups: false }]) {
+    const c = clinic();
+    fs.writeFileSync(marker(c.dir), JSON.stringify(other));
+    assert.deepEqual(await requestTestDataWipe(c.db, c.dir), { ok: false, reason: 'pending', action: other.action });
+    assert.deepEqual(readMarker(c.dir), other, 'чужое намерение не тронуто');
+    assert.equal(listBackups(c.dir).length, 0);
+  }
 });

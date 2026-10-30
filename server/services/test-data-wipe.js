@@ -636,6 +636,20 @@ function requestOf(m) {
 const requestNote = (r) => (r.requested_by === null && r.requested_at === null
   ? '' : `; просил пользователь ${r.requested_by ?? '?'}, ${r.requested_at ?? '?'}`);
 
+/**
+ * Ревью C5 (M1): лежит ли уже намерение в pending-action.json — любое, своё
+ * или чужое. Файл есть, но не читается — тоже «ждёт»: его разберёт запуск
+ * (processPendingAction отложит испорченное в .bad), а перезаписывать его
+ * вслепую нельзя. null — ничего не ждёт.
+ */
+function pendingActionOf(dataDir) {
+  const p = path.join(dataDir, MARKER_NAME);
+  if (!fs.existsSync(p)) return null;
+  const m = readJsonFile(p);
+  const action = m && typeof m.action === 'string' && m.action ? m.action : null;
+  return { ok: false, reason: 'pending', action };
+}
+
 /** Что показать на «Данных клиники»: связана ли клиника, ждёт ли удаление запуска, итог прошлого. */
 export function wipeStatus(dataDir) {
   const m = readJsonFile(path.join(dataDir, MARKER_NAME));
@@ -657,10 +671,18 @@ export function wipeStatus(dataDir) {
  * запуске требует сверх журнала (runTestDataWipe), уже внутри места на копию.
  * Не хватает и после уступок — отказ 'no_space' словами удаления
  * (wipeNoSpaceError: «Тестовые данные не удалены»): ни копии, ни намерения.
- * @returns {Promise<{ok:true, backup:string}|{ok:false, reason:'paired'}>}
+ *
+ * Ревью C5 (M1): pending-action.json уже лежит — перезапуска ждёт удаление
+ * тестовых данных, восстановление или «Удалить все данные». Просьба его не
+ * перезаписывает (второе удаление заменило бы копию-путь назад, а чужое
+ * намерение пропало бы молча): отказ 'pending' с названием действия — до
+ * копии; и ещё раз после копии, если намерение появилось, пока она делалась.
+ * @returns {Promise<{ok:true, backup:string}|{ok:false, reason:'paired'}|{ok:false, reason:'pending', action:string|null}>}
  */
 export async function requestTestDataWipe(db, dataDir, { now = new Date(), userId = null, diskSpaceImpl = currentDiskSpace } = {}) {
   if (isPaired(dataDir)) return { ok: false, reason: 'paired' };
+  let waiting = pendingActionOf(dataDir);
+  if (waiting) return waiting;
   const extraNeedBytes = estimateWipeBytes(db);
   let copy;
   try {
@@ -669,8 +691,11 @@ export async function requestTestDataWipe(db, dataDir, { now = new Date(), userI
     if (e && e.code === 'no_space') throw wipeNoSpaceError(e.need_bytes, e.free_bytes);
     throw e;
   }
-  // Пока делалась копия, клинику могли связать с другим зданием.
+  // Пока делалась копия, клинику могли связать с другим зданием — или
+  // попросить другое действие с перезапуском.
   if (isPaired(dataDir)) return { ok: false, reason: 'paired' };
+  waiting = pendingActionOf(dataDir);
+  if (waiting) return waiting;
   writeAtomic(path.join(dataDir, MARKER_NAME), JSON.stringify({
     action: WIPE_ACTION, backup: copy.name, requested_at: now.toISOString(), requested_by: userId,
   }));
@@ -691,8 +716,8 @@ export async function requestTestDataWipe(db, dataDir, { now = new Date(), userI
  *
  * Отказы — база цела, намерение в .bad, итог с причиной: 'paired' (связали
  * после просьбы), 'no_space' (журналу удаления не хватает места — в итоге
- * шаблон и числа, экран переведёт фразу целиком), 'failed' (сбой
- * транзакции; нет копии «Перед удалением» — нет пути назад).
+ * шаблон и числа, экран переведёт фразу целиком), 'no_copy' (нет копии
+ * «Перед удалением» — нет пути назад), 'failed' (сбой транзакции).
  *
  * Итог и строка журнала называют, кто и когда просил (requested_by — номер
  * пользователя, requested_at — время просьбы; данных пациентов нет).
@@ -736,11 +761,12 @@ export function applyPendingTestDataWipe(db, dataDir, { diskSpaceImpl = currentD
     }
     // Ревью C3 — копию, названную в намерении, могли удалить мимо программы
     // между просьбой и запуском (или намерение написано не программой): без
-    // пути назад удаления нет.
+    // пути назад удаления нет. Ревью C5 — своя причина 'no_copy': экран
+    // говорит «копия не найдена», а не «сбой, обратитесь в поддержку».
     if (!backup || !listBackups(dataDir).some((b) => b.name === backup && b.restorable)) {
       const line = 'Тестовые данные НЕ удалены: нет копии «Перед удалением тестовых данных» — без пути назад удаления нет.';
       console.warn('[test-data-wipe] ' + line);
-      return refuse('failed', line);
+      return refuse('no_copy', line);
     }
     let result;
     try {

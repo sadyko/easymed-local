@@ -188,6 +188,19 @@ function pairedError() {
   return err;
 }
 
+// Ревью C5 (M1): перезапуска уже ждёт действие (pending-action.json) — второе
+// удаление или чужое восстановление / «Удалить все данные». Просьба его не
+// перезаписывает (services/test-data-wipe.js requestTestDataWipe).
+export const PENDING_SAME_REFUSAL = 'Удаление тестовых данных уже запрошено и ждёт перезапуска программы. Просить второй раз не нужно.';
+export const PENDING_OTHER_REFUSAL = 'Программа уже ждёт перезапуска, чтобы выполнить другое действие — восстановление из копии или удаление всех данных. '
+  + 'Удалить тестовые данные можно будет после перезапуска.';
+
+function pendingError(action) {
+  const err = new RpcError(action === 'test_data_wipe' ? PENDING_SAME_REFUSAL : PENDING_OTHER_REFUSAL, 409);
+  err.code = 'pending';
+  return err;
+}
+
 export async function testDataWipe(db, args, user) {
   requireAdmin(user);
   if (String((args && args.confirm) ?? '') !== 'УДАЛИТЬ') {
@@ -204,7 +217,7 @@ export async function testDataWipe(db, args, user) {
     // удаления (ревью C3) — удаления нет; 409 с шаблоном и числами.
     throw asRpcError(e);
   }
-  if (!r.ok) throw pairedError();
+  if (!r.ok) throw r.reason === 'pending' ? pendingError(r.action) : pairedError();
   scheduleRestart();
   return { ok: true, restarting: true, backup: r.backup };
 }
