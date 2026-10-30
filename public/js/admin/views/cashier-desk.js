@@ -2553,20 +2553,30 @@ function openRefundConfirm(p, info, root, opts = {}) {   // REFUND_ANY_V1 — op
         });
 }
 
+// Строки выгрузки «Счета» (шапка + по строке на счёт) — отдельной функцией,
+// чтобы тест проверял столбцы без файла.
+function invoicesExportAoa(rows) {
+    const columns = ['№ счёта', 'Пациент', 'МРН', 'Телефон', 'Услуга', 'Врач', 'Создан', 'Сумма', 'Оплачено', 'Долг', 'Оплата', 'Статус'];
+    return [columns, ...rows.map(r => [
+        r.invoice_number || '', r.patient_name || '', r.mrn || '', r.phone || '',
+        (r.first_item || '') + (r.items_count > 1 ? ` +${r.items_count - 1}` : ''),
+        r.doctor_name || '', (r.created_at || '').replace('T', ' ').slice(0, 16),
+        r.total_amount, r.paid_amount,
+        // REFUND_ANY_V1 (2026-10-30) — отменённый счёт ('void' / 'refunded') не
+        // долг, даже когда по нему ничего не оплачено (как в окне визита).
+        (r.status === 'void' || r.status === 'refunded') ? 0 : Math.max(r.total_amount - r.paid_amount, 0),
+        r.methods ? r.methods.split(',').map(m => METHOD_RU[m] || m).join(', ') : '',
+        (INV_STATUS_RU[r.status] || {}).text || r.status,   // V3120_FIX — статус словом
+    ])];
+}
+
 async function exportInvoicesXlsx() {
     const rows = filteredRows();
     if (!rows.length) { toast('Нет счетов для выгрузки.', 'fail'); return; }
     try {
         const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
-        const columns = ['№ счёта', 'Пациент', 'МРН', 'Телефон', 'Услуга', 'Врач', 'Создан', 'Сумма', 'Оплачено', 'Долг', 'Оплата', 'Статус'];
-        const aoa = [columns, ...rows.map(r => [
-            r.invoice_number || '', r.patient_name || '', r.mrn || '', r.phone || '',
-            (r.first_item || '') + (r.items_count > 1 ? ` +${r.items_count - 1}` : ''),
-            r.doctor_name || '', (r.created_at || '').replace('T', ' ').slice(0, 16),
-            r.total_amount, r.paid_amount, Math.max(r.total_amount - r.paid_amount, 0),
-            r.methods ? r.methods.split(',').map(m => METHOD_RU[m] || m).join(', ') : '',
-            (INV_STATUS_RU[r.status] || {}).text || r.status,   // V3120_FIX — статус словом
-        ])];
+        const aoa = invoicesExportAoa(rows);
+        const columns = aoa[0];
         const ws = XLSX.utils.aoa_to_sheet(aoa);
         ws['!cols'] = columns.map(c => ({ wch: c.length > 8 ? 20 : 13 }));
         const wb = XLSX.utils.book_new();
@@ -2847,3 +2857,4 @@ export const __test_loadInvoices = loadInvoices;   // REFERRAL_BILL_V1 — сч�
 export const __test_paintTable = paintTable;       // REFERRAL_BILL_V1
 export const __test_paintSearch = paintSearch;     // REFERRAL_BILL_V1
 export const __test_paymentsCard = paymentsCard;   // REFUND_ANY_V1 (ревью I-3) — поле поиска и ответ сервера вместе
+export const __test_invoicesExportAoa = invoicesExportAoa;   // REFUND_ANY_V1 — «Долг» отменённого счёта в выгрузке
