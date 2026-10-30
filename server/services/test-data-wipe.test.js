@@ -267,7 +267,7 @@ test('следы удаления в связи зданий убраны, пр�
   const journalMax = db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM sync_journal').get().m;
   const r = wipeTestData(db);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM sync_journal WHERE seq > ?').get(journalMax).n, 0, 'в журнале нет «удалено» для другого здания');
-  assert.ok(db.prepare('SELECT COUNT(*) AS n FROM sync_journal').get().n > 0, 'прежний журнал остался');
+  assert.ok(db.prepare('SELECT COUNT(*) AS n FROM sync_journal').get().n > 0, 'журнал оставляемых таблиц (карты пациентов) остался');
   assert.deepEqual(db.prepare('SELECT tbl, uid FROM sync_tombstones').all(), [{ tbl: 'patients', uid: 'old-patient-uid' }], 'новых надгробий нет, прежнее осталось');
   assert.deepEqual(db.prepare('SELECT tbl FROM sync_seen').all(), [{ tbl: 'patients' }]);
   assert.equal(count(db, 'sync_pending'), 0);
