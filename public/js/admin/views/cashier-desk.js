@@ -10,6 +10,8 @@
 //   shift_report     — X-отчёт / внутренний отчёт / история смены
 //   cashier_invoices — the invoice list + chip aggregates, joined server-side
 //   cashier_unbilled — REFERRAL_BILL_V1: «Ждут счёта», визиты со строками без счёта
+//   cashier_invoice_search — REFUND_ANY_V1: счета за все дни по строке поиска и
+//                      один счёт по номеру (окно «Платежи» из истории и окна визита)
 //   record_payment   — stamps payments.shift_id from the cashier's open shift
 //   void_invoice     — отмена счёта (только без принятых денег; возвраты — follow-up)
 // DEPOSIT_V1 — депозиты ПОРТИРОВАНЫ: чип «ДЕПОЗИТЫ» показывает предоплаты,
@@ -573,7 +575,8 @@ async function historyModal(root) {
                 h('span', { class: 'num', style: { fontWeight: 700, color: isRefund ? 'var(--crit-600)' : 'var(--ok-700)' } },
                     (isRefund ? '−' : '+') + fmtPrice(Math.abs(p.amount))),
                 h('span', { class: 'row', style: { gap: '6px' } },   // REFUND_ANY_V1 — «Платежи» счёта рядом с возвратом платежа
-                    openBtn(p.invoice_id, inv && inv.invoice_number), isRefund ? null : refundBtnSmall(p))));
+                    inv ? openBtn(p.invoice_id, inv.invoice_number) : null,   // ревью M-1 — счёт неизвестен: открывать нечего
+                    isRefund ? null : refundBtnSmall(p))));
         } else if (ev.kind === 'invoice') {
             const inv = ev.inv;
             const cancelled = inv.status === 'void' || inv.status === 'refunded';
@@ -728,8 +731,16 @@ async function paymentsCard(root, summary) {
     await loadInvoices();
     function repaintTable() {
         paintChips(chipsEl, repaintTable);
-        paintSearch(searchEl, repaintTable);
-        paintTable(tableEl, root, repaintTable);   // REFUND_ANY_V1 — «Показать ещё» перерисовывает список
+        paintSearch(searchEl, repaintTable, repaintResults);
+        paintTable(tableEl, root, repaintResults);   // REFUND_ANY_V1 — «Показать ещё» перерисовывает список
+    }
+    // REFUND_ANY_V1 (ревью кода B1, I-3) — ответ поиска сервера («Ждут счёта»,
+    // «Счета за все дни», «Показать ещё») перерисовывает только список и
+    // «Показано … из …». Поле поиска он не трогает: человек печатает дальше,
+    // пока сервер думает, и пересобранное поле съедало бы эти буквы.
+    function repaintResults() {
+        paintSearchCount(searchEl);
+        paintTable(tableEl, root, repaintResults);
     }
     repaintTable();
     return card;
@@ -868,7 +879,10 @@ async function moreFound(onChange) {
         const { data, error } = await supabase.rpc('cashier_invoice_search', { q: r.q, offset: r.rows.length });
         if (error) throw error;
         if (seq === _foundSeq) {
-            r.rows = r.rows.concat((data && data.rows) || []);
+            // Ревью M-5 — между страницами касса могла принять новый счёт этого
+            // пациента: сдвиг offset повторил бы уже показанный — без повторов.
+            const have = new Set(r.rows.map((x) => x.id));
+            r.rows = r.rows.concat(((data && data.rows) || []).filter((x) => !have.has(x.id)));
             r.has_more = !!(data && data.has_more);
         }
     } catch (e) {
@@ -1492,38 +1506,69 @@ function filteredRows() {
     return rows;
 }
 
-function paintSearch(el, onChange) {
-    clear(el);
-    const inp = h('input', {
-        type: 'text', value: state.search,
-        placeholder: 'Поиск: счёт, пациент, MRN, телефон…',
-        style: {
-            height: '36px', padding: '0 12px', width: '340px', maxWidth: '100%',
-            border: '1px solid var(--ink-200)', borderRadius: '9px',
-            fontSize: '12.5px', fontFamily: 'inherit',
-        },
-    });
-    let tmr = null;
-    inp.addEventListener('input', () => {
-        clearTimeout(tmr);
-        tmr = setTimeout(() => { state.search = inp.value; onChange(); }, 200);
-    });
+// REFUND_ANY_V1 (ревью кода B1, I-3) — ПОЛЕ ПОИСКА ОДНО НА ЭКРАН. Поле
+// строится один раз на контейнер и дальше не пересобирается: ни ответом
+// сервера (onResults перерисовывает только список и счётчик), ни щелчком по
+// чипу, ни самим поиском — пересобранное поле теряло буквы, набранные, пока
+// шёл запрос или ждал отложенный набор. Отложенный набор — один таймер на
+// модуль (_searchTimer), и слушается только живое поле (_searchInput): поле
+// прежнего экрана (касса перерисована целиком) своим поздним таймером не
+// перепишет state.search поверх нового.
+let _searchTimer = null;
+let _searchInput = null;
+function paintSearch(el, onChange, onResults) {
+    let ui = el.__cashierSearch;
+    if (!ui) {
+        const inp = h('input', {
+            type: 'text', value: state.search,
+            placeholder: 'Поиск: счёт, пациент, MRN, телефон…',
+            style: {
+                height: '36px', padding: '0 12px', width: '340px', maxWidth: '100%',
+                border: '1px solid var(--ink-200)', borderRadius: '9px',
+                fontSize: '12.5px', fontFamily: 'inherit',
+            },
+        });
+        const count = h('span', { class: 'muted', 'data-search-count': '1', style: { fontSize: '12.5px' } });
+        ui = { inp, count, onChange };
+        inp.addEventListener('input', () => {
+            if (inp !== _searchInput) return;
+            clearTimeout(_searchTimer);
+            _searchTimer = setTimeout(() => {
+                _searchTimer = null;
+                if (inp !== _searchInput) return;
+                state.search = inp.value;
+                ui.onChange();
+            }, 200);
+        });
+        clear(el);
+        el.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', margin: '2px 0 12px' } },
+            inp, h('span', { class: 'grow' }), count));
+        el.__cashierSearch = ui;
+        // Касса перерисована с непустым поиском — фокус и курсор в конец поля.
+        if (state.search) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    }
+    ui.onChange = onChange;
+    _searchInput = ui.inp;
     // REFERRAL_BILL_V1 — у «Ждут счёта» счёт идёт по карточкам, а не по счетам.
     // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» спрашивается у сервера
     // (ensureUnbilledSearch); «из» — всех найденных (или всех ждущих окна).
+    const results = typeof onResults === 'function' ? onResults : onChange;
+    if (state.filter === 'unbilled') ensureUnbilledSearch(results);
+    else ensureInvoiceSearch(results);   // REFUND_ANY_V1 — счета за все дни
+    paintSearchCount(el);
+}
+
+// «Показано … из …» под полем поиска (paintSearch); ответ сервера обновляет
+// только его, не поле.
+function paintSearchCount(el) {
+    const ui = el && el.__cashierSearch;
+    if (!ui) return;
     const unbilled = state.filter === 'unbilled';
-    if (unbilled) ensureUnbilledSearch(onChange);
-    else ensureInvoiceSearch(onChange);   // REFUND_ANY_V1 — счета за все дни
     const view = unbilled ? unbilledView() : null;
     const shown = unbilled ? view.rows.length : filteredRows().length;
     const total = unbilled ? view.total : (state.counts ? state.counts.all.n : state.rows.length);
-    el.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', margin: '2px 0 12px' } },
-        inp,
-        h('span', { class: 'grow' }),
-        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Показано ', h('strong', null, String(shown)), ' из ', String(total)),
-    ));
-    // keep focus while typing (repaint replaces the node)
-    if (state.search) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    clear(ui.count);
+    ui.count.appendChild(h('span', null, 'Показано ', h('strong', null, String(shown)), ' из ', String(total)));
 }
 
 function paintTable(el, root, onChange) {   // REFUND_ANY_V1 — onChange: «Показать ещё» у счетов за все дни
@@ -1566,7 +1611,9 @@ function paintFound(el, root, onChange) {
     el.appendChild(box);
     if (!r || r.q !== q) { box.appendChild(h('div', { class: 'empty' }, 'Ищем…')); return; }
     if (r.error) { box.appendChild(h('div', { class: 'empty' }, trf('Не удалось загрузить: {msg}', { msg: r.error }))); return; }
-    const listed = new Set(filteredRows().map((x) => x.id));
+    // Ревью M-6 — «за все дни» значит «не из сегодняшнего списка»: без всех
+    // счетов, которые касса загрузила, а не только без видимых под чипом.
+    const listed = new Set((state.rows || []).map((x) => x.id));
     const rows = r.rows.filter((x) => !listed.has(x.id));
     if (!rows.length) box.appendChild(h('div', { class: 'empty' }, 'За другие дни счетов по этому поиску нет.'));
     else box.appendChild(h('div', { style: { display: 'grid', gap: '8px' } }, ...rows.map((x) => foundCard(x, root))));
@@ -2178,25 +2225,48 @@ async function afterMoney(root, opts) {
     if (root) await paint(root);
 }
 
+// REFUND_ANY_V1 (ревью кода B1, I-4) — после денег закрываются окна этого
+// возврата («Платежи» и подтверждение), но не окна, открытые до него: окно
+// визита, из которого открыли «Платежи», остаётся (opts.keep —
+// openInvoiceRefundById). Без keep (касса) — как прежде, все окна.
+function closeRefundModals(opts) {
+    const keep = opts && opts.keep;
+    document.querySelectorAll('.modal').forEach((m) => { if (!keep || !keep.has(m)) m.remove(); });
+}
+
+// REFUND_ANY_V1 (ревью M-1) — почему счёта по номеру нет в кассе: сервер
+// называет причину (cashier_invoice_search reason), экран — словами.
+const HIDDEN_INVOICE_TEXT = {
+    branch: 'Это счёт другого здания — его деньги возвращает касса того здания.',
+    payer: 'Счёт выставлен плательщику — касса по нему денег не принимает и не возвращает.',
+    money_doc: 'Это счёт депозита или продажи карты — его возвращают во вкладке «Депозиты» или «Карты» кассы.',
+    free: 'Счёт на 0 сум, оплат по нему не было — возвращать нечего.',
+    missing: 'Счёт не найден в кассе этого здания.',
+};
+
 // REFUND_ANY_V1 — окно «Платежи» по номеру счёта: строка счёта — с сервера
 // (cashier_invoice_search { invoice_id }, своё здание), как у списка кассы.
 async function openInvoiceById(invoiceId, root, opts = {}) {
     let row = null;
+    let reason = null;
     try {
         const { data, error } = await supabase.rpc('cashier_invoice_search', { invoice_id: Number(invoiceId) });
         if (error) throw error;
         row = (data && Array.isArray(data.rows) && data.rows[0]) || null;
+        reason = (data && data.reason) || null;
     } catch (e) {
         toast(trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }), 'fail');
         return;
     }
-    if (!row) { toast(tr('Счёт не найден в кассе этого здания.'), 'fail'); return; }
+    if (!row) { toast(tr(HIDDEN_INVOICE_TEXT[reason] || HIDDEN_INVOICE_TEXT.missing), 'fail'); return; }
     await openInvoiceRefund(row, root, opts);
 }
 
 /** REFUND_ANY_V1 — окно «Платежи» для других экранов (окно визита): opts.onDone — после возврата. */
 export async function openInvoiceRefundById(invoiceId, opts = {}) {
-    return openInvoiceById(invoiceId, null, opts);
+    // Ревью I-4 — окна, открытые до «Платежей» (окно визита), возврат не закрывает.
+    const keep = new Set(document.querySelectorAll('.modal'));
+    return openInvoiceById(invoiceId, null, { ...opts, keep });
 }
 
 // CASHIER_REFUND_V1 — an invoice's payment list, each with a «Возврат» action.
@@ -2301,7 +2371,7 @@ function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1
                 : tr('Счёт уменьшен — переплаты нет, деньги не выдаются.'), 'ok');
             if (r && r.voided) toast(tr('Счёт отменён'), 'ok');
             if (r && r.void_note) toast(r.void_note, 'info');
-            document.querySelectorAll('.modal').forEach(m => m.remove());
+            closeRefundModals(opts);   // REFUND_ANY_V1 (ревью I-4) — окно визита остаётся
             await afterMoney(root, opts);   // REFUND_ANY_V1
             return true;
         });
@@ -2410,7 +2480,7 @@ function openRefundConfirm(p, info, root, opts = {}) {   // REFUND_ANY_V1 — op
             }
             if (rRes && rRes.voided) toast(tr('Счёт отменён'), 'ok');
             if (rRes && rRes.void_note) toast(rRes.void_note, 'info');
-            document.querySelectorAll('.modal').forEach(m => m.remove());   // close the stacked dialogs
+            closeRefundModals(opts);   // close the stacked dialogs; REFUND_ANY_V1 (ревью I-4) — окно визита остаётся
             await afterMoney(root, opts);   // REFUND_ANY_V1
             return true;
         });
@@ -2709,3 +2779,4 @@ export const __test_paintChips = paintChips;
 export const __test_loadInvoices = loadInvoices;   // REFERRAL_BILL_V1 — счета и «Ждут счёта» одним заходом
 export const __test_paintTable = paintTable;       // REFERRAL_BILL_V1
 export const __test_paintSearch = paintSearch;     // REFERRAL_BILL_V1
+export const __test_paymentsCard = paymentsCard;   // REFUND_ANY_V1 (ревью I-3) — поле поиска и ответ сервера вместе

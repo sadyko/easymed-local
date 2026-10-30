@@ -4,15 +4,24 @@
 // клиники. Самая большая касса в истории проекта — 354 тыс. счетов
 // (V3120_FIX PERF, cashier.js). Здесь — 300 тыс. счетов на 30 тыс. пациентов
 // за 400 дней, и поиск каждым видом строки: номер целиком и хвостом, ФИО,
-// номер карты, телефон как записан и одними цифрами, редкое имя (страница не
-// набирается — проход до конца). Граница щедрая, в стиле
-// cashier-unbilled.perf.test.js: на разработческой машине — десятки
-// миллисекунд.
+// номер карты (и строчными), телефон как записан и одними цифрами, редкое имя
+// (страница не набирается — проход до конца), строка, которой нет.
+//
+// Замер на разработческой машине (Windows, 300 тыс. счетов, 30 тыс. пациентов,
+// медиана из пяти; ревью кода B1, I-1). Было: любой поиск 60–180 мс — страница
+// шла по idx_invoices_created через все счета (BLOOM FILTER ON sel), и номер,
+// редкое имя или строка, которой нет, стоили дороже всего (160–180 мс). Стало:
+// номер счёта, номер карты, телефон, редкое имя, строка, которой нет, — 4–45
+// мс; частая фамилия (четверть пациентов) — 55–75 мс; две буквы, под которые
+// подходит почти вся база («ов», «90» — 225–300 тыс. счетов на сортировку), —
+// 145–180 мс: их сортировка и проверка документов денег — честная цена такой
+// строки. Граница теста щедрая (1500 мс), в стиле cashier-unbilled.perf.test.js;
+// главное правило — план страницы ниже.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { cashierInvoiceSearch } from './cashier.js';
+import { cashierInvoiceSearch, invoiceSearchPageQuery } from './cashier.js';
 
 const PATIENTS = 30000;
 const INVOICES = 300000;
@@ -34,16 +43,29 @@ function seedLarge() {
   return db;
 }
 
+const FOUND = ['INV-A-26-123456', '123456', 'Пациент 1234', 'пациент 29999', 'P-001234', 'p-001234', '90 001 23', '900012345', 'Пациент 12345'];
+const NOT_FOUND = ['zzzz', 'Петров'];
+
 test('поиск счёта на ' + INVOICES + ' счетах: каждым видом строки — быстро', () => {
   const db = seedLarge();
   try {
-    for (const q of ['INV-A-26-123456', '123456', 'Пациент 1234', 'пациент 29999', 'P-001234', '90 001 23', '900012345', 'Пациент 12345']) {
+    for (const q of [...FOUND, ...NOT_FOUND]) {
       const t = Date.now();
       const out = cashierInvoiceSearch(db, { q }, cashier);
       const ms = Date.now() - t;
-      assert.ok(out.rows.length > 0, 'по «' + q + '» ничего не нашлось');
+      if (FOUND.includes(q)) assert.ok(out.rows.length > 0, 'по «' + q + '» ничего не нашлось');
+      else assert.equal(out.rows.length, 0, 'по «' + q + '» найдено лишнее');
       assert.ok(out.rows.length <= 50, 'страница — не больше 50');
       assert.ok(ms < 1500, 'поиск «' + q + '» шёл ' + ms + ' мс');
+    }
+    // Ревью кода B1 (I-1) — страницу ведёт найденное, а не лента всех счетов
+    // по дате: SQLite не должен идти по idx_invoices_created через все 300 тыс.
+    // счетов, сверяя каждый с найденным (BLOOM FILTER ON sel).
+    for (const q of [...FOUND, ...NOT_FOUND]) {
+      const { sql, params } = invoiceSearchPageQuery(q, 0);
+      const plan = db.prepare('EXPLAIN QUERY PLAN ' + sql).all(...params).map((r) => r.detail).join('\n');
+      assert.doesNotMatch(plan, /BLOOM FILTER ON sel/, 'план «' + q + '»:\n' + plan);
+      assert.doesNotMatch(plan, /SCAN i USING INDEX idx_invoices_created/, 'план «' + q + '»:\n' + plan);
     }
   } finally { db.close(); }
 });

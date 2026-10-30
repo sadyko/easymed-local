@@ -19,6 +19,7 @@ import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
 import { lineUnitPrice, consultationFor, doctorPriceLookup, legacyPackageOnlyOff, packageLineDiscount } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
 import { searchArg, pageInt } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере; REFUND_ANY_V1 — pageInt: страницы поиска счёта
+import { moneyDocRefusal } from '../domain/wallet.js';   // REFUND_ANY_V1 (ревью M-1) — «это документ денег» тем же правилом, что оплата и возврат
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
 // откуда его взяли (одно правило на сервер, rpc/inventory.js).
 import { restoreSources } from './inventory.js';
@@ -530,36 +531,68 @@ export function cashierInvoices(db, args, user) {
 //   • своё здание (sync_origin IS NULL — чужие деньги только для чтения,
 //     BRANCH_MONEY_GUARD_V1), без счетов плательщику (их нет в кассе,
 //     COVERAGE_SPLIT_V1), без депозитов и продажи карт (у них свои вкладки и
-//     свои возвраты, moneyDocRefusal);
+//     свои возвраты, moneyDocRefusal) — и по номеру DEP-/CARD-, и по связи
+//     (patient_deposits kind 'deposit', patient_discounts.sale_invoice_id:
+//     старые счета документов денег носят обычный номер, domain/wallet.js);
+//     без счетов на 0, по которым денег не было вовсе (вернуть нечего). Счёт,
+//     у которого вернули все услуги, тоже стоит 0, но деньги по нему были —
+//     он находится (поэтому не «total_amount > 0»);
+//   • по номеру, когда счёта нет, — reason: 'missing' | 'branch' | 'payer' |
+//     'money_doc' | 'free'; экран называет причину словами;
 //   • новые первыми, страницами по INVOICE_SEARCH_PAGE (offset), has_more.
-// План: номер — проход по столбцу invoice_number; люди — patients один раз,
-// счета их — по idx_invoices_patient; страница — сначала номера (ORDER BY по
-// idx_invoices_created), потом строки только этой страницы (подзапросы строки
-// не считаются для всех найденных). На 300 тыс. счетов — десятки миллисекунд
-// (cashier-invoice-search.perf.test.js). Только чтение (READ_ONLY_RPCS).
+// План (ревью кода B1, I-1): найденное ведёт запрос, а не лента всех счетов по
+// дате. Номер счёта ищется, только если в строке есть цифра (иначе — проход по
+// всем номерам впустую); люди — patients один раз (patientMatchSql: латиница —
+// встроенным LIKE, кириллица — lower_uni), их счета — по idx_invoices_patient;
+// CROSS JOIN держит порядок «сначала найденное, потом его счета» — без него
+// SQLite шёл по idx_invoices_created через ВСЕ счета, сверяя каждый с
+// найденным (BLOOM FILTER ON sel), и любой поиск стоил 60–180 мс на 300 тыс.
+// счетов. Потом строки только этой страницы (подзапросы строки не считаются
+// для всех найденных). Замеры — в cashier-invoice-search.perf.test.js.
+// Только чтение (READ_ONLY_RPCS).
 const INVOICE_SEARCH_PAGE = 50;
 const INVOICE_SEARCH_MIN = 2;
 const SEARCH_VISIBLE = `i.payer_id IS NULL AND i.sync_origin IS NULL
-       AND COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%' AND COALESCE(i.invoice_number, '') NOT LIKE 'CARD-%'`;
+       AND COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%' AND COALESCE(i.invoice_number, '') NOT LIKE 'CARD-%'
+       AND NOT EXISTS (SELECT 1 FROM patient_deposits dep WHERE dep.invoice_id = i.id AND dep.kind = 'deposit')
+       AND NOT EXISTS (SELECT 1 FROM patient_discounts crd WHERE crd.sale_invoice_id = i.id)
+       AND NOT (i.total_amount = 0 AND NOT EXISTS (SELECT 1 FROM payments pay WHERE pay.invoice_id = i.id))`;
 
 function invoiceSearchIds(q) {
-  const like = likeContains(q);
-  const who = [
-    "lower_uni(pt.full_name) LIKE lower_uni(?) ESCAPE '\\'",
-    "lower_uni(COALESCE(pt.mrn, '')) LIKE lower_uni(?) ESCAPE '\\'",
-    "COALESCE(pt.phone, '') LIKE ? ESCAPE '\\'",
-  ];
-  const whoParams = [like, like, like];
-  const digits = q.replace(/\D/g, '');
-  if (/^[\d\s+\-()]+$/.test(q) && digits.length >= 3) {
-    who.push("replace(replace(replace(replace(replace(COALESCE(pt.phone, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '+', '') LIKE ?");
-    whoParams.push('%' + digits + '%');
+  const who = patientMatchSql(q);
+  const arms = [];
+  const params = [];
+  if (/\d/.test(q)) {
+    arms.push("SELECT id FROM invoices WHERE invoice_number LIKE ? ESCAPE '\\'");
+    params.push(likeContains(q));
   }
+  arms.push(`SELECT i.id FROM invoices i WHERE i.patient_id IN (SELECT pt.id FROM patients pt WHERE ${who.sql})`);
+  params.push(...who.params);
+  return { sql: arms.join(' UNION '), params };
+}
+
+// Запрос страницы поиска (номера счетов) — отдельно, чтобы тест скорости
+// проверял план того же текста, что выполняет касса.
+export function invoiceSearchPageQuery(q, offset) {
+  const s = invoiceSearchIds(q);
   return {
-    sql: `SELECT id FROM invoices WHERE COALESCE(invoice_number, '') LIKE ? ESCAPE '\\'
-          UNION SELECT i.id FROM invoices i WHERE i.patient_id IN (SELECT pt.id FROM patients pt WHERE ${who.join(' OR ')})`,
-    params: [like, ...whoParams],
+    sql: `SELECT i.id FROM (${s.sql}) sel CROSS JOIN invoices i ON i.id = sel.id
+     WHERE ${SEARCH_VISIBLE}
+     ORDER BY i.created_at DESC, i.id DESC LIMIT ? OFFSET ?`,
+    params: [...s.params, INVOICE_SEARCH_PAGE + 1, offset],
   };
+}
+
+// Ревью кода B1 (M-1) — почему счёта по номеру нет в поиске. Порядок — как у
+// правил SEARCH_VISIBLE; документ денег — тем же правилом, что оплата и возврат.
+function invoiceHiddenReason(db, id) {
+  const inv = db.prepare('SELECT id, invoice_number, payer_id, sync_origin, total_amount FROM invoices WHERE id = ?').get(id);
+  if (!inv) return 'missing';
+  if (inv.sync_origin != null) return 'branch';
+  if (inv.payer_id != null) return 'payer';
+  if (moneyDocRefusal(db, inv)) return 'money_doc';
+  if (Number(inv.total_amount) === 0 && !db.prepare('SELECT 1 FROM payments WHERE invoice_id = ? LIMIT 1').get(inv.id)) return 'free';
+  return 'missing';
 }
 
 export function cashierInvoiceSearch(db, args, user) {
@@ -568,15 +601,14 @@ export function cashierInvoiceSearch(db, args, user) {
   if (one !== undefined && one !== null) {
     if (!isPositiveInt(one)) throw new RpcError('Счёт указан неверно.', 400);
     const rows = db.prepare(`${cashierRowSelect('SELECT ? AS id')} WHERE ${SEARCH_VISIBLE}`).all(one);
-    return { q: null, rows, offset: 0, has_more: false };
+    if (rows.length) return { q: null, rows, offset: 0, has_more: false };
+    return { q: null, rows: [], offset: 0, has_more: false, reason: invoiceHiddenReason(db, one) };
   }
   const q = searchArg(args && args.q);
   const offset = pageInt(args && args.offset, { def: 0, min: 0, max: 100000 });
   if (q.length < INVOICE_SEARCH_MIN) return { q, rows: [], offset, has_more: false, too_short: true };
-  const s = invoiceSearchIds(q);
-  const page = db.prepare(`SELECT i.id FROM (${s.sql}) sel JOIN invoices i ON i.id = sel.id
-     WHERE ${SEARCH_VISIBLE}
-     ORDER BY i.created_at DESC, i.id DESC LIMIT ? OFFSET ?`).all(...s.params, INVOICE_SEARCH_PAGE + 1, offset).map((r) => r.id);
+  const pq = invoiceSearchPageQuery(q, offset);
+  const page = db.prepare(pq.sql).all(...pq.params).map((r) => r.id);
   const hasMore = page.length > INVOICE_SEARCH_PAGE;
   const ids = page.slice(0, INVOICE_SEARCH_PAGE);
   if (!ids.length) return { q, rows: [], offset, has_more: false };
@@ -999,24 +1031,35 @@ function likeContains(s) {
   return '%' + String(s).replace(/[\\%_]/g, (c) => '\\' + c) + '%';
 }
 
-// REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта»: ФИО, номер карты, телефон.
-// lower_uni — регистр кириллицы (CYRILLIC_ILIKE_V1, db/connection.js). Строка
-// из одних цифр телефона («90 111 22 33», «+998-90…») ищется ещё и по цифрам
-// телефона: в карте он записан как угодно.
-function unbilledSearch(q) {
+// REFBILL_REVIEW_V1 (ревью M1) — поиск пациента по строке: ФИО, номер карты,
+// телефон. Строка из одних цифр телефона («90 111 22 33», «+998-90…») ищется
+// ещё и по цифрам телефона: в карте он записан как угодно.
+// REFUND_ANY_V1 (ревью кода B1, M-4) — одно правило на «Ждут счёта»
+// (unbilledSearch) и поиск счёта (invoiceSearchIds). Регистр: строка из одних
+// знаков ASCII (латиница, цифры) сравнивается встроенным LIKE — SQLite сам не
+// различает регистр латинских букв (PRAGMA case_sensitive_like выключен,
+// connection.js его не трогает) и находит те же строки, что lower_uni, без
+// вызова JS на каждую запись (30 тыс. пациентов: ~4 мс против ~29). Кириллица
+// — lower_uni (CYRILLIC_ILIKE_V1, db/connection.js): встроенный LIKE её
+// регистр не сворачивает.
+function patientMatchSql(q) {
   const like = likeContains(q);
-  const parts = [
-    "lower_uni(pt.full_name) LIKE lower_uni(?) ESCAPE '\\'",
-    "lower_uni(COALESCE(pt.mrn, '')) LIKE lower_uni(?) ESCAPE '\\'",
-    "COALESCE(pt.phone, '') LIKE ? ESCAPE '\\'",
-  ];
+  const parts = /^[\x00-\x7f]*$/.test(q)
+    ? ["pt.full_name LIKE ? ESCAPE '\\'", "COALESCE(pt.mrn, '') LIKE ? ESCAPE '\\'"]
+    : ["lower_uni(pt.full_name) LIKE lower_uni(?) ESCAPE '\\'", "lower_uni(COALESCE(pt.mrn, '')) LIKE lower_uni(?) ESCAPE '\\'"];
+  parts.push("COALESCE(pt.phone, '') LIKE ? ESCAPE '\\'");
   const params = [like, like, like];
   const digits = q.replace(/\D/g, '');
   if (/^[\d\s+\-()]+$/.test(q) && digits.length >= 3) {
     parts.push("replace(replace(replace(replace(replace(COALESCE(pt.phone, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '+', '') LIKE ?");
     params.push('%' + digits + '%');
   }
-  return { sql: ' AND (' + parts.join(' OR ') + ')', params };
+  return { sql: '(' + parts.join(' OR ') + ')', params };
+}
+
+function unbilledSearch(q) {
+  const m = patientMatchSql(q);
+  return { sql: ' AND ' + m.sql, params: m.params };
 }
 
 export function cashierUnbilled(db, args, user) {

@@ -92,7 +92,7 @@ globalThis.fetch = async (url, opts = {}) => {
         calls.push([name, body]);
         const a = rpcAnswers[name];
         if (a && a.__error) return { ok: false, status: 500, json: async () => ({ error: { message: a.__error } }), headers: { getSetCookie: () => [] } };
-        data = typeof a === 'function' ? a(body) : (a !== undefined ? a : []);
+        data = typeof a === 'function' ? await a(body) : (a !== undefined ? a : []);   // ответ-обещание — сервер «думает», пока тест не ответит
     } else {
         calls.push(['db:' + body.table, body]);
         const rows = (tables[body.table] || []).filter((r) => (body.filters || []).every((f) => matches(r, f)));
@@ -212,12 +212,17 @@ test('строка «Истории операций» открывает окн
     closeAll();
     const st = desk.__test_cardState;
     st.rows = [];
-    tables = { payments: PAYMENTS, invoice_items: ITEMS, invoices: [{ id: 7, invoice_number: 'INV-A-26-00007', patients: { full_name: 'Рахимов Жасур' } }], cash_movements: [] };
+    // Платёж 72 — по счёту, которого касса не знает (удалён, другое здание):
+    // «Платежи» у него нет — открывать нечего (ревью M-1).
+    const LOST = { id: 72, invoice_id: 8, amount: 5000, method: 'cash', paid_at: '2026-10-18T06:05:00Z', notes: '' };
+    tables = { payments: [...PAYMENTS, LOST], invoice_items: ITEMS, invoices: [{ id: 7, invoice_number: 'INV-A-26-00007', patients: { full_name: 'Рахимов Жасур' } }], cash_movements: [] };
     calls.length = 0;
     rpcAnswers = { cashier_invoice_search: (b) => (b.invoice_id === 7 ? { q: null, rows: [OLD_ROW], offset: 0, has_more: false } : { rows: [] }) };
     await desk.__test_historyModal(mkEl('div'));
     const hist = lastModal();
     assert.match(textOf(hist), /История операций/);
+    assert.match(textOf(hist), /счёт удалён из списка/, 'строка платежа без счёта нарисована');
+    assert.equal(byAttr(hist, 'data-history-open', '8'), undefined, 'у платежа по неизвестному счёту — «Платежи»');
     const open = byAttr(hist, 'data-history-open', '7');
     assert.ok(open, 'у строки платежа нет «Платежи»');
     open.click();
@@ -233,9 +238,177 @@ test('строка «Истории операций» открывает окн
     assert.ok(TOASTS.includes('Счёт не найден в кассе этого здания.'), TOASTS.join(' | '));
 });
 
+// ---------------------------------------------------------------------------
+// Ревью кода B1.
+// ---------------------------------------------------------------------------
+const REASON_TEXT = {
+    branch: 'Это счёт другого здания — его деньги возвращает касса того здания.',
+    payer: 'Счёт выставлен плательщику — касса по нему денег не принимает и не возвращает.',
+    money_doc: 'Это счёт депозита или продажи карты — его возвращают во вкладке «Депозиты» или «Карты» кассы.',
+    free: 'Счёт на 0 сум, оплат по нему не было — возвращать нечего.',
+    missing: 'Счёт не найден в кассе этого здания.',
+};
+
+test('ревью M-1: по номеру сервер говорит, почему счёта нет, — экран называет причину своими словами', async () => {
+    asCashier();
+    closeAll();
+    for (const [reason, text] of Object.entries(REASON_TEXT)) {
+        rpcAnswers = { cashier_invoice_search: { q: null, rows: [], offset: 0, has_more: false, reason } };
+        TOASTS.length = 0;
+        await desk.openInvoiceRefundById(5, { onDone: () => {} });
+        assert.equal(modals().length, 0, reason + ': окна быть не должно');
+        assert.ok(TOASTS.includes(text), reason + ': ' + TOASTS.join(' | '));
+    }
+});
+
+test('ревью M-5/M-6: «Показать ещё» без повторов; «за все дни» не повторяет счёт сегодняшнего списка при любом чипе', async () => {
+    asCashier();
+    closeAll();
+    const st = desk.__test_cardState;
+    st.filter = 'unpaid';   // TODAY_ROW оплачен: чип его прячет, но касса его загрузила
+    st.rows = [TODAY_ROW];
+    st.counts = null;
+    st.search = 'рахимов';
+    st.found = { result: { q: 'рахимов', rows: [TODAY_ROW, OLD_ROW], has_more: true, error: null }, pendingQ: null };
+    calls.length = 0;
+    rpcAnswers = { cashier_invoice_search: (b) => ({ q: 'рахимов', rows: [OLD_ROW, OLDER_ROW], offset: b.offset, has_more: false }) };
+    let repaints = 0;
+    const el = mkEl('div');
+    desk.__test_paintTable(el, mkEl('div'), () => { repaints++; });
+    assert.deepEqual(allByAttr(el, 'data-found-row').map((x) => x.attrs['data-found-row']), ['7'], 'сегодняшний счёт из загруженного списка — не «другой день»');
+    byAttr(el, 'data-found-more', '1').click();
+    await tick(60);
+    assert.equal(repaints, 1);
+    assert.deepEqual(st.found.result.rows.map((r) => r.id), [30, 7, 5], 'вторая страница повторила уже показанный счёт');
+    const el2 = mkEl('div');
+    desk.__test_paintTable(el2, mkEl('div'));
+    assert.deepEqual(allByAttr(el2, 'data-found-row').map((x) => x.attrs['data-found-row']), ['7', '5']);
+    st.search = '';
+    st.found = { result: null, pendingQ: null };
+});
+
+test('ревью I-3: ответ поиска не пересобирает поле — набранное во время запроса остаётся; старый ответ отбрасывается', async () => {
+    asCashier();
+    closeAll();
+    const st = desk.__test_cardState;
+    st.filter = 'paid';
+    st.search = '';
+    const pending = new Map();   // q → ответить
+    calls.length = 0;
+    rpcAnswers = {
+        cashier_invoices: { rows: [TODAY_ROW], counts: null },
+        cashier_invoice_search: (b) => new Promise((resolve) => { pending.set(b.q, resolve); }),
+    };
+    const card = await desk.__test_paymentsCard(mkEl('div'), {});
+    const inputOf = (c) => walk(c).find((e) => e.tagName === 'INPUT');
+    const searched = () => rpcCalls('cashier_invoice_search').map(([, b]) => b.q);
+    const answer = (q, rows) => { pending.get(q)({ q, rows, offset: 0, has_more: false }); pending.delete(q); };
+    const typeIn = (inp, text) => { inp.value = text; inp.fire('input'); };
+    // Поле поиска ждёт паузу в наборе: 500 мс общего дебаунса h()
+    // (SEARCH_DEBOUNCE_V1, ui.js) и 200 мс своего.
+    const PAUSE = 760;
+
+    typeIn(inputOf(card), 'рах');
+    await tick(PAUSE);
+    assert.deepEqual(searched(), ['рах']);
+    const inp = inputOf(card);
+    typeIn(inp, 'рахим');   // человек печатает дальше, пока сервер думает
+    answer('рах', [OLD_ROW]);
+    await tick(20);
+    assert.equal(inputOf(card), inp, 'ответ поиска пересобрал поле ввода');
+    assert.equal(inputOf(card).value, 'рахим', 'набранное во время запроса пропало');
+    assert.ok(byAttr(card, 'data-found-row', '7'), 'ответ нарисован');
+    await tick(PAUSE);
+    assert.equal(st.search, 'рахим');
+    assert.deepEqual(searched(), ['рах', 'рахим'], 'последний поиск — по новому тексту');
+
+    // Старый ответ отбрасывается: на «рахим» сервер отвечает после «рахимова».
+    typeIn(inputOf(card), 'рахимова');
+    await tick(PAUSE);
+    assert.deepEqual(searched(), ['рах', 'рахим', 'рахимова']);
+    answer('рахимова', [OLDER_ROW]);
+    await tick(20);
+    answer('рахим', [OLD_ROW]);
+    await tick(20);
+    assert.equal(st.found.result.q, 'рахимова');
+    assert.deepEqual(allByAttr(card, 'data-found-row').map((x) => x.attrs['data-found-row']), ['5'], 'нарисован устаревший ответ');
+
+    // Щелчок по чипу посреди набора: поле то же, набранное не стёрто.
+    const before = inputOf(card);
+    typeIn(before, 'рахимов');
+    buttons(card).find((b) => /ВСЕ СЧЕТА/.test(textOf(b))).click();
+    assert.equal(inputOf(card), before, 'щелчок по чипу пересобрал поле');
+    assert.equal(inputOf(card).value, 'рахимов', 'щелчок по чипу стёр набранное');
+    await tick(PAUSE);
+    assert.equal(st.search, 'рахимов', 'набранное до щелчка дошло до поиска');
+    answer('рахимов', []);
+    await tick(20);
+
+    // Касса перерисована целиком (после оплаты, «Обновить»), а в прежнем поле
+    // ещё ждал отложенный набор: он не ложится поверх нового поля (один таймер
+    // на экран, поле прежнего экрана не слушается).
+    typeIn(inputOf(card), 'рахимо');
+    const card2 = await desk.__test_paymentsCard(mkEl('div'), {});
+    typeIn(inputOf(card2), 'каримова');
+    await tick(PAUSE);
+    assert.equal(st.search, 'каримова');
+    assert.ok(!searched().includes('рахимо'), 'отложенный набор прежнего поля перезаписал поиск: ' + searched().join(', '));
+    for (const q of [...pending.keys()]) answer(q, []);
+    await tick(20);
+    st.search = '';
+    st.filter = 'unpaid';
+    st.found = { result: null, pendingQ: null };
+});
+
+test('ревью I-4: возврат из «Платежи», открытого поверх окна визита, закрывает только свои окна', async () => {
+    asCashier();
+    closeAll();
+    const visitWin = mkEl('div');
+    visitWin.className = 'modal';
+    document.body.appendChild(visitWin);
+    tables = { payments: PAYMENTS, invoice_items: ITEMS };
+    let done = 0;
+    calls.length = 0;
+    rpcAnswers = {
+        cashier_invoice_search: (b) => (b.invoice_id === 7 ? { q: null, rows: [OLD_ROW], offset: 0, has_more: false } : { rows: [] }),
+        refund_invoice_line: { refunded: 100000 },
+        refund_payment: { to_balance: false },
+    };
+    // Вернуть услугу.
+    await desk.openInvoiceRefundById(7, { onDone: () => { done++; } });
+    let pay = lastModal();
+    assert.match(textOf(pay), /Платежи · INV-A-26-00007/);
+    buttonByText(pay, 'Вернуть услугу').click();
+    const lineWin = lastModal();
+    assert.notEqual(lineWin, pay);
+    buttonByText(lineWin, 'Вернуть услугу').click();
+    await tick(60);
+    assert.equal(rpcCalls('refund_invoice_line').length, 1);
+    assert.deepEqual(modals(), [visitWin], 'окно визита закрылось вместе с окнами возврата');
+    assert.equal(done, 1, 'после возврата перечитывается вызвавший экран');
+    // Возврат оплаты — то же.
+    await desk.openInvoiceRefundById(7, { onDone: () => { done++; } });
+    pay = lastModal();
+    buttonByText(pay, 'Возврат').click();
+    walk(lastModal()).find((e) => e.tagName === 'INPUT').value = '100 000';   // сумма возврата (заглушка не переносит атрибут value в поле)
+    buttonByText(lastModal(), 'Оформить возврат').click();
+    await tick(60);
+    assert.equal(rpcCalls('refund_payment').length, 1);
+    assert.deepEqual(modals(), [visitWin], 'окно визита закрылось после возврата оплаты');
+    assert.equal(done, 2);
+    // Касса (без keep) — как прежде: возврат закрывает все окна.
+    rpcAnswers = { refund_payment: { to_balance: false }, cash_shift_summary: null };
+    desk.__test_openRefundConfirm(PAYMENTS[0], { id: 7, invoice_number: 'INV-A-26-00007' }, mkEl('div'));
+    walk(lastModal()).find((e) => e.tagName === 'INPUT').value = '100 000';
+    buttonByText(lastModal(), 'Оформить возврат').click();
+    await tick(60);
+    assert.equal(modals().length, 0, 'из кассы возврат закрывает все окна, как раньше');
+    closeAll();
+});
+
 test('новые строки экрана — в словаре на трёх языках, uz/en без кириллицы', async () => {
     const { STRINGS } = await import('../i18n-strings.js');
-    for (const key of ['Счета за все дни', 'За другие дни счетов по этому поиску нет.', 'Платежи', '{paid} из {total} сум', 'Счёт не найден в кассе этого здания.']) {
+    for (const key of ['Счета за все дни', 'За другие дни счетов по этому поиску нет.', 'Платежи', '{paid} из {total} сум', 'Счёт не найден в кассе этого здания.', ...Object.values(REASON_TEXT)]) {
         const e = STRINGS[key];
         assert.ok(e, 'нет ключа словаря: ' + key);
         assert.equal(e.ru, key);
