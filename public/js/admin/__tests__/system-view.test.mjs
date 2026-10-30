@@ -552,3 +552,27 @@ test('DISK_GUARD_V1: неадмин — ни карточки места, ни �
   assert.equal(diskUsageCalls, 0);
   assert.doesNotMatch(textOf(root), /Место на диске/);
 });
+
+// DISK_GUARD_V1 (ревью C5, выпущенная ошибка 3.18.1): «Создать копию сейчас»
+// получила отказ «нет места» в этой же вкладке — слой запросов запомнил его
+// фразу с числами сервера (shared/server-messages.js). Предупреждение карточки
+// места — та же русская фраза, уже собранная экраном; пройди она через h()
+// (tr() ребёнка) ещё раз, вернулась бы с числами сервера: «2.1 ГБ» на русском
+// экране. Предупреждение кладётся текстом, а не ребёнком h().
+test('DISK_GUARD_V1: после запомненного отказа «нет места» карточка места на русском — с запятой', async () => {
+  const { noSpaceError, GB } = await import('../../../../server/services/disk-guard.js');
+  const { rememberServerMessage, _resetServerMessages } = await import('../../shared/server-messages.js');
+  const need = Math.round(2.05 * GB);
+  const free = Math.round(0.45 * GB);
+  const err = noSpaceError(need, free);
+  try {
+    rememberServerMessage({ code: err.code, message: err.message, template: err.template, params: err.params });
+    diskUsageData = { free_bytes: free, total_bytes: 100 * GB, low: true, db_bytes: GB, backups_bytes: 2 * GB, storage_bytes: GB, versions_bytes: null,
+      copy_refused: { at: '2026-10-30T05:00:00.000Z', kind: 'manual', need_bytes: need, free_bytes: free } };
+    const root = mk('div');
+    await renderClinicData(root);
+    const text = textOf(root);
+    assert.match(text, /Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ\. Копия не сделана\./);
+    assert.doesNotMatch(text, /нужно 2\.1 ГБ/);
+  } finally { _resetServerMessages(); }
+});

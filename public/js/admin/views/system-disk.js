@@ -37,8 +37,14 @@ export async function renderDiskCard(root, { admin }) {
         return;
     }
     // Красное — первым: «копия не сделана» важнее любой цифры ниже.
+    // Предупреждение уже переведено и собрано с числами (diskUsageView) —
+    // поэтому текстовым узлом, а не ребёнком h(): h() прогнал бы его через
+    // tr() ещё раз, и фраза, совпавшая с запомненным отказом сервера «нет
+    // места» (shared/server-messages.js — «Создать копию сейчас» в этой же
+    // вкладке), вернулась бы с числами сервера: «2.1 ГБ» на русском экране
+    // (ревью C5).
     for (const w of view.warnings) {
-        body.appendChild(h('p', { class: 'sys-modal-warn', role: 'alert' }, Icon('Warning', { size: 14 }), ' ', w));
+        body.appendChild(h('p', { class: 'sys-modal-warn', role: 'alert' }, Icon('Warning', { size: 14 }), ' ', document.createTextNode(w)));
     }
     const grid = h('div', { class: 'sys-info' });
     for (const r of view.rows) {

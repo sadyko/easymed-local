@@ -211,8 +211,12 @@ function buildNotifs(clinic, st) {
     const list = [];
     // DISK_GUARD_V1 — копия или обновление не сделаны из-за места / места мало
     // (system-logic.js diskNotices). Числа — с десятичным знаком языка экрана.
+    // pre — текст уже переведён и собран с числами: рисуется текстовым узлом,
+    // а не ребёнком h(). Второй tr() узнал бы в нём запомненный отказ сервера
+    // «нет места» (shared/server-messages.js) и вернул бы числа сервера —
+    // «2.1 ГБ» на русском экране (ревью C5).
     for (const dn of diskNotices(disk, tr, getLang())) {
-        list.push({ ...dn, ctaLabel: tr('Открыть «Данные клиники»'), onCta: () => nav('clinic-data') });
+        list.push({ ...dn, pre: true, ctaLabel: tr('Открыть «Данные клиники»'), onCta: () => nav('clinic-data') });
     }
     // LAN_ADDRESS_V1 — id с моментом смены: следующая смена — новое уведомление.
     if (lan) list.push({ id: 'lan-address:' + lan.at, sev: 'warn', icon: 'Warning',
@@ -357,6 +361,13 @@ function paintBell(notifs, clinic) {
     mount.appendChild(btn);
 }
 
+// Текст уведомления: уже собранный (pre) — свежим текстовым узлом на каждую
+// отрисовку (узел нельзя вставить в два места: колокол и полосу); остальные —
+// строкой, которую h() переводит, как раньше.
+function msgNode(n) {
+    return n.pre ? document.createTextNode(n.message) : n.message;
+}
+
 function openDropdown(notifs, clinic, mount) {
     closeDropdown();
     const dd = h('div', { id: 'em-notif-dropdown' },
@@ -367,7 +378,7 @@ function openDropdown(notifs, clinic, mount) {
                 h('div', { class: 'nd-icon' }, Icon(n.icon || 'Info', { size: 15 })),
                 h('div', { class: 'nd-body' },
                     h('div', { class: 'nd-title' }, n.title),
-                    h('div', { class: 'nd-msg' }, n.message),
+                    h('div', { class: 'nd-msg' }, msgNode(n)),
                     h('button', { class: 'nd-cta', type: 'button', onclick: n.onCta }, n.ctaLabel))))));
     mount.appendChild(dd);
 }
@@ -383,7 +394,7 @@ function paintBanners(notifs, clinic, dism) {
     if (!visible.length) return;
     const wrap = h('div', { id: 'em-notif-banners' }, ...visible.map((n) => {
         const row = h('div', { class: 'em-nbn ' + (n.sev || 'info') },
-            h('span', { class: 'nbn-msg' }, Icon(n.icon || 'Info', { size: 15 }), n.message),
+            h('span', { class: 'nbn-msg' }, Icon(n.icon || 'Info', { size: 15 }), msgNode(n)),
             h('button', { class: 'nbn-cta', type: 'button', onclick: n.onCta }, n.ctaLabel),
             h('button', { class: 'nbn-x', type: 'button', title: 'Скрыть', onclick: () => {
                 const d = getDismissed(clinic); if (!d.includes(n.id)) d.push(n.id); setDismissed(clinic, d); row.remove();

@@ -197,6 +197,37 @@ test('не администратор: место даже не спрашива
     assert.equal(banners().length, 0);
 });
 
+// Ревью C5 (выпущенная ошибка 3.18.1): отказ «нет места» уже пришёл в этой
+// вкладке (например, «Создать копию сейчас»), и слой запросов запомнил его
+// фразу с числами сервера (shared/server-messages.js). Полоса и колокол
+// собирают ту же русскую фразу сами; через h() (tr() ребёнка) она прошла бы
+// второй раз и вернулась бы с числами сервера — «2.1 ГБ» на русском экране.
+test('после запомненного отказа «нет места» полоса и колокол на русском — с запятой', async () => {
+    const { noSpaceError } = await import('../../../../server/services/disk-guard.js');
+    const { rememberServerMessage, _resetServerMessages } = await import('../../shared/server-messages.js');
+    const need = Math.round(2.05 * GB);
+    const free = Math.round(0.45 * GB);
+    const err = noSpaceError(need, free);
+    reset(ADMIN);
+    try {
+        rememberServerMessage({ code: err.code, message: err.message, template: err.template, params: err.params });
+        DISK = { low: true, free_bytes: free, total_bytes: 100 * GB,
+            copy_refused: { at: '2026-10-30T05:00:00.000Z', kind: 'manual', need_bytes: need, free_bytes: free } };
+        await render();
+        const RU = /Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ\. Копия не сделана\./;
+        const b = banners();
+        assert.equal(b.length, 1);
+        assert.match(textOf(b[0]), RU);
+        const items = bellItems();
+        assert.equal(items.length, 1);
+        assert.match(items[0], RU);
+        // Перерисовка (тик колокола) — снова свежий текст, а не пропавший узел.
+        await render();
+        assert.match(textOf(banners()[0]), RU);
+        assert.match(bellItems()[0], RU);
+    } finally { _resetServerMessages(); }
+});
+
 test('места хватает или сервер ответил пусто — тишина', async () => {
     reset(ADMIN);
     DISK = { low: false, free_bytes: 300 * GB, total_bytes: 1000 * GB };
