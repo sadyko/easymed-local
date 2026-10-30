@@ -1923,10 +1923,12 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
     // дальше всё — как у обычной замены.
     db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = ?').run(vsId);
     markRefundRelease(db, { invoiceId: inv.id, kind: 'out', lineIds: [vsId], always: true });
+    // Время строки (scheduled_at) — прежнее: у многодневного визита по нему
+    // считаются день очереди (issueQueueNumbers) и слот календаря.
     lineId = Number(db.prepare(`
-      INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, invoice_item_id, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, 'added', ?, ?, ?)`)
-      .run(vs.visit_id, newServiceId, targetDoctor, vs.quantity || 1, unit, lineTotal, tier, item.id, user.id).lastInsertRowid);
+      INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, invoice_item_id, scheduled_at, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, 'added', ?, ?, ?, ?)`)
+      .run(vs.visit_id, newServiceId, targetDoctor, vs.quantity || 1, unit, lineTotal, tier, item.id, vs.scheduled_at || null, user.id).lastInsertRowid);
   } else {
     if (serviceChanges) {
       db.prepare('UPDATE visit_services SET service_id = ?, doctor_id = ?, unit_price = ?, total = ?, package_id = NULL, package_full = NULL, package_price = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')   // SERVICES_PACKAGES_V1
@@ -2115,13 +2117,16 @@ export function rebillPaidLine(db, args, user) {
 /**
  * REFUND_SWAP_V1 — cashier_line_rebill_quote(те же аргументы) — предпросмотр
  * для окна замены: та же операция в транзакции, которая откатывается.
+ * `line: null` — новая строка откатана вместе с транзакцией, её номера в базе
+ * нет (ревью A2); окну хватает подписей line_before / line_after и сумм,
+ * прежняя строка — old_line_id.
  */
 export function rebillPaidLineQuote(db, args, user) {
   requireSwapRight(db, user);
   try {
     db.transaction(() => { throw new SwapPreview(swapPaidLineTx(db, args, user, { rpc: 'cashier_line_rebill_quote', dryRun: true, rebill: true })); })();
   } catch (e) {
-    if (e instanceof SwapPreview) return { ...e.result, preview: true };
+    if (e instanceof SwapPreview) return { ...e.result, line: null, preview: true };
     throw e;
   }
   return null;

@@ -20,7 +20,8 @@ import { RPC } from './index.js';
 import { createInvoiceForVisit, recordPayment } from './billing.js';
 import { openCashShift, shiftReport } from './cashier.js';
 import { createDeposit, acceptDeposit } from './deposits.js';
-import { doctorPaySummary } from './reports.js';
+import { doctorPaySummary, runReport } from './reports.js';
+import { boardGroups, doctorQueueWaiting, issueQueueNumbers } from './queue.js';
 import { walletBalance } from '../domain/wallet.js';
 import { hashPassword } from '../auth.js';
 import { createApp } from '../../app.js';
@@ -263,6 +264,11 @@ test('предпросмотр считает то же самое и ничег
   assert.equal(q.preview, true);
   assert.equal(q.rebill, true);
   assert.deepEqual([q.refunded, q.total_before, q.total_after], [70000, 150000, 80000]);
+  // Новая строка предпросмотра откатана — её номера в базе нет; окну хватает подписей.
+  assert.equal(q.line, null, 'строки предпросмотра в базе нет — и номера её нет');
+  assert.equal(q.old_line_id, a.vs);
+  assert.match(q.line_before, /Приём терапевта.*Врач Первый.*150 000/);
+  assert.match(q.line_after, /УЗИ.*Врач Второй.*80 000/);
   assert.equal(snap(), before);
   refused(() => call('cashier_line_rebill_quote', db, { visit_service_id: a.vs, new_service_id: USG }, registrar), /касса/);
 });
@@ -332,11 +338,16 @@ test('талон: возврат с новой оставляет прежней
     .run(b.vs, b.vid, CONS, 'doc:' + DOC + ':2026-09-10');
   const tickets = (vsId) => db.prepare('SELECT COUNT(*) n FROM service_queue_tickets WHERE visit_service_id = ?').get(vsId).n;
   const a = started(db, pid, CONS, DOC);
+  issueQueueNumbers(db, { p_ids: [a.vs] }, cashier);
   ticket(a);
   const had = tickets(a.vs);
   assert.ok(had >= 1);
+  const q0 = vsRow(db, a.vs);
+  assert.ok(q0.queue_no != null && q0.queue_key != null, 'стенд: у прежней строки есть номер');
   const r = call('cashier_line_rebill_paid', db, { visit_service_id: a.vs, new_service_id: USG, doctor_id: DOC2 }, cashier);
   assert.equal(tickets(a.vs), had, 'начатая работа держит свой талон');
+  const q1 = vsRow(db, a.vs);
+  assert.deepEqual([q1.queue_key, q1.queue_no], [q0.queue_key, q0.queue_no], 'и свой номер в строке визита — данные не тронуты');
   assert.ok(vsRow(db, r.line.id).queue_no != null, 'у новой строки — свой номер');
   assertBalanced(db, a.invoiceId);
   // Неначатая строка, обычная замена — талон прежней очереди снят.
@@ -406,4 +417,78 @@ test('отменённый счёт — возврат с новой услуг�
     assert.equal(released(db, a.vs), false);
     assertBalanced(db, a.invoiceId);
   }
+});
+
+// ─── Ревью A2: время строки, доска очереди, журнал услуг. ───────────────────
+
+test('время строки: новая строка берёт scheduled_at прежней — день очереди и слот те же (многодневный визит)', () => {
+  const { db, pid, CONS, USG } = clinic();
+  const a = started(db, pid, CONS, DOC);   // визит 10.09
+  const AT = '2026-09-12T06:00:00Z';         // приём по строке назначен на 12.09
+  db.prepare('UPDATE visit_services SET scheduled_at = ? WHERE id = ?').run(AT, a.vs);
+  const r = call('cashier_line_rebill_paid', db, { visit_service_id: a.vs, new_service_id: USG, doctor_id: DOC2 }, cashier);
+  const nl = vsRow(db, r.line.id);
+  assert.equal(nl.scheduled_at, AT);
+  assert.match(String(nl.queue_key), /:2026-09-12$/, 'номер — в очереди дня строки, а не дня визита');
+  assert.equal(vsRow(db, a.vs).scheduled_at, AT, 'прежняя строка — как была');
+  assertBalanced(db, a.invoiceId);
+});
+
+test('доска очереди и «Сейчас ждут приёма»: возвращённая строка не стоит и не считается (возврат с новой и refund_invoice_line); обычная — стоит', () => {
+  const { db, CONS, USG } = clinic();
+  const D = DAY.slice(0, 10);
+  const patient = (name) => Number(db.prepare('INSERT INTO patients (full_name) VALUES (?)').run(name).lastInsertRowid);
+  // Оплачено, номер в очереди врача выдан, потом статус работы.
+  const inQueue = (name, status) => {
+    const b = billed(db, patient(name), CONS, DOC);
+    recordPayment(db, { invoice_id: b.invoiceId, amount: b.invoice.total_amount, method: 'cash' }, cashier);
+    issueQueueNumbers(db, { p_ids: [b.vs] }, cashier);
+    db.prepare('UPDATE visit_services SET status = ? WHERE id = ?').run(status, b.vs);
+    return b;
+  };
+  const withDoc = (b) => db.prepare("INSERT INTO visit_documents (patient_id, visit_id, visit_service_id, doc_type, title, body, created_by) VALUES ((SELECT patient_id FROM visits WHERE id = ?),?,?,'protocol','Протокол','{}',?)")
+    .run(b.vid, b.vid, b.vs, DOC);
+  const a = inQueue('Пациент А', 'in_progress');   // идёт приём
+  const b = inQueue('Пациент Б', 'queued'); withDoc(b);   // в очереди, но документ уже есть
+  const c = inQueue('Пациент В', 'queued'); withDoc(c);   // то же — вернут строкой
+  const d = inQueue('Пациент Г', 'queued');   // обычная оплаченная строка
+  const docKey = vsRow(db, d.vs).queue_key;
+  const nums = [a, b, c].map((x) => vsRow(db, x.vs).queue_no);
+  assert.ok(nums.every((n) => n != null) && [a, b, c].every((x) => vsRow(db, x.vs).queue_key === docKey), 'стенд: все в одной очереди врача');
+  assert.equal(doctorQueueWaiting(db, DOC, D), 3, 'стенд: до возврата ждут трое (Б, В, Г)');
+
+  const ra = call('cashier_line_rebill_paid', db, { visit_service_id: a.vs, new_service_id: USG, doctor_id: DOC2 }, cashier);
+  const rb = call('cashier_line_rebill_paid', db, { visit_service_id: b.vs, new_service_id: USG, doctor_id: DOC2 }, cashier);
+  const rc = call('refund_invoice_line', db, { invoice_item_id: itemsOf(db, c.invoiceId)[0].id }, cashier);
+  assert.equal(rc.line_kept, true, 'стенд: строка с работой осталась в визите');
+  // Данные не тронуты: у прежних строк их номер и ключ.
+  assert.deepEqual([a, b, c].map((x) => vsRow(db, x.vs).queue_no), nums);
+  assert.deepEqual([a, b, c].map((x) => vsRow(db, x.vs).queue_key), [docKey, docKey, docKey]);
+
+  const board = boardGroups(db, D);
+  const docG = board.find((g) => g.key === docKey);
+  assert.deepEqual(docG.tickets.map((t) => [t.patient_name, t.state]), [['Пациент Г', 'waiting']], 'в очереди врача — только обычная строка');
+  assert.deepEqual(docG.now, [], 'возвращённая работа не «у врача сейчас»');
+  assert.equal(doctorQueueWaiting(db, DOC, D), 1);
+  // Новые строки — в своей очереди, как обычные.
+  const newKey = vsRow(db, ra.line.id).queue_key;
+  assert.equal(vsRow(db, rb.line.id).queue_key, newKey);
+  const newG = board.find((g) => g.key === newKey);
+  assert.deepEqual(newG.tickets.map((t) => [t.patient_name, t.state]), [['Пациент А', 'waiting'], ['Пациент Б', 'waiting']]);
+  for (const x of [a, b, c, d]) assertBalanced(db, x.invoiceId);
+});
+
+test('журнал услуг: после возврата с новой — новая строка, когда оказана; прежней нет', () => {
+  const { db, pid, CONS, USG } = clinic();
+  const journal = () => {
+    const r = runReport(db, { kind: 'service_journal', from: FROM, to: TO, service_ids: [CONS, USG] }, admin);
+    const s = r.columns.indexOf('Услуга'), w = r.columns.indexOf('Врач');
+    return r.rows.map((row) => [row[s], row[w]]);
+  };
+  const a = started(db, pid, CONS, DOC);   // приём завершён
+  assert.deepEqual(journal(), [['Приём терапевта', 'Врач Первый']], 'стенд: до возврата — прежняя строка');
+  const r = call('cashier_line_rebill_paid', db, { visit_service_id: a.vs, new_service_id: USG, doctor_id: DOC2 }, cashier);
+  db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(r.line.id);
+  assert.deepEqual(journal(), [['УЗИ', 'Врач Второй']], 'новая — оказана, прежняя возвращена');
+  assertBalanced(db, a.invoiceId);
 });
