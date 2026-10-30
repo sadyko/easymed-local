@@ -552,10 +552,17 @@ export function cashierInvoices(db, args, user) {
 // Только чтение (READ_ONLY_RPCS).
 const INVOICE_SEARCH_PAGE = 50;
 const INVOICE_SEARCH_MIN = 2;
+// REFUND_ANY_V1 (ревью B1) — связь с документом денег проверяется только у
+// счёта без визита: счёт депозита (rpc/deposits.js, приём депозита — INSERT
+// INTO invoices … visit_id NULL, стр. 163-168) и счёт продажи карты
+// (rpc/card-sales.js, «Продать карту» — стр. 105-109) создаются только без
+// визита, так что обычный счёт визита эти два подзапроса не проходит вовсе.
+// invoiceHiddenReason проверяет полностью.
 const SEARCH_VISIBLE = `i.payer_id IS NULL AND i.sync_origin IS NULL
        AND COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%' AND COALESCE(i.invoice_number, '') NOT LIKE 'CARD-%'
-       AND NOT EXISTS (SELECT 1 FROM patient_deposits dep WHERE dep.invoice_id = i.id AND dep.kind = 'deposit')
-       AND NOT EXISTS (SELECT 1 FROM patient_discounts crd WHERE crd.sale_invoice_id = i.id)
+       AND (i.visit_id IS NOT NULL OR (
+             NOT EXISTS (SELECT 1 FROM patient_deposits dep WHERE dep.invoice_id = i.id AND dep.kind = 'deposit')
+         AND NOT EXISTS (SELECT 1 FROM patient_discounts crd WHERE crd.sale_invoice_id = i.id)))
        AND NOT (i.total_amount = 0 AND NOT EXISTS (SELECT 1 FROM payments pay WHERE pay.invoice_id = i.id))`;
 
 function invoiceSearchIds(q) {
