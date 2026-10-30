@@ -20,6 +20,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1
 // Здесь остаётся то, что без браузера не живёт: загрузка/сохранение настроек
 // и открытие окна печати. Реэкспорт ниже сохраняет прежний публичный API.
 import { buildSheetHtml, esc, INPATIENT_DOC_DEFAULT_TEXT } from '../../shared/doc-render.js';   // INPATIENT_DOCS_V1
+import { withNotice } from '../../shared/doc-render.js';   // REFUND_ANY_V1 — пометка над листом
 // PRINT_AUTO_V1 — «Печать» сразу открывает окно принтера: скрипт печати — одним помощником.
 import { ensureAutoPrint, viewOnlySheet } from '../../shared/print-auto.js';
 // CLINIC_API_FIX_V1 — одно правило с PDF для Telegram (server/services/telegram/render.js).
@@ -172,9 +173,9 @@ export { buildSheetHtml, esc };
 // печать сама не открывается (свой скрипт обёртки тоже убран), в углу окна
 // кнопка «Печать» — одно нажатие. «Печать» по умолчанию печатает сразу.
 // ---------------------------------------------------------------------------
-export function printableSheet({ type = 'invoice', title = null, idLine = null, data = null, bodyHtml = null, settings = null, head = null, autoPrint = true } = {}) {
+export function printableSheet({ type = 'invoice', title = null, idLine = null, data = null, bodyHtml = null, settings = null, head = null, autoPrint = true, notice = null } = {}) {   // REFUND_ANY_V1 — notice: пометка над листом
     const s = settings || loadDocSettings();
-    const sheet = buildSheetHtml({ type, s, data, idLine, title, bodyHtml, head });
+    const sheet = withNotice(buildSheetHtml({ type, s, data, idLine, title, bodyHtml, head }), notice);   // REFUND_ANY_V1
     const html = autoPrint ? ensureAutoPrint(sheet)   // PRINT_AUTO_V1
         : viewOnlySheet(sheet, { printLabel: tr('Печать'), accent: s.accent });
     const w = window.open('', '_blank', 'width=900,height=1100');

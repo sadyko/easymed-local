@@ -33,6 +33,7 @@ import { isAdminActor } from '../admin-actor.js';   // CABINET_FIX_V1_TPL — а
 // ADMIN_ACT_AS_V1 (R3) — подпись заключения от чужого имени: «Завершить приём»
 // неактивна с подсказкой; «Сохранить» и «Черновик» работают (черновик не подписан).
 import { lockSignButton, refuseSignWhileActing, isActingNow } from '../act-as-client.js';
+import { REFUNDED_LINE_MARK, REFUNDED_SIGN_REFUSAL } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 — «Услуга возвращена»
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
 import { renderDesignedVariant } from './doc-variants.js?v=cabr3';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3
@@ -200,6 +201,8 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
 
     // Pull previously-saved fields + history from visit_services.notes.
     if (ctx.visitServiceId) hydrateWorkspace(ctx);
+    // REFUND_ANY_V1 — касса вернула деньги за эту строку? Пометка и запрет новой подписи.
+    if (ctx.visitServiceId) loadRefundedMark(ctx);
     // DOC_PHONE_SOURCE_V1 — load the CONSULTATION doctor's own phone (not the signed-in
     // user's — an admin may be viewing a doctor's document) and reflect it in the sheet.
     Promise.resolve(resolveWsDoctorId(ctx)).then((did) => {
@@ -4178,6 +4181,7 @@ async function tryFinish(ctx) {
     // ADMIN_ACT_AS_V1 (R3) — «Завершить приём» — это подпись: от чужого имени —
     // отказ словами до любой записи (кнопка и так неактивна; это вторая дверь).
     if (refuseSignWhileActing()) return;
+    if (refuseSignRefunded(ctx)) return;   // REFUND_ANY_V1 — «Завершить приём» — это подпись: до сохранения
     // CABINET_FIX_V1_R3 (F11) — двойной щелчок: второй, пока первый сохраняет и подписывает, — ничего.
     if (ctx.__finishing || LINE_SIGNING.has(Number(ctx.visitServiceId))) return;   // CABINET_FIX_V1_R4 — замок строки
     ctx.__finishing = true;
@@ -5332,10 +5336,48 @@ function setSignBusy(ctx, on) {
  * запись собранного. Подпись не из открытой строки или до загрузки её записей
  * отказывает словами — и ничего не пишет. Экспорт signDocument — для проверки.
  */
+/**
+ * REFUND_ANY_V1 (2026-10-29) — «УСЛУГА ВОЗВРАЩЕНА». Касса вернула пациенту
+ * деньги за эту строку (refunded_lines): документы приёма остаются в карте
+ * (медицинская запись), а новый документ на неё не подписывается — кабинет
+ * говорит это сразу, над документом; сервер откажет и сам (routes/db.js
+ * refundedSignRefusal, visit_document_archive). Ответ — ctx.refunded.
+ * Сбой чтения — пометки нет (сервер всё равно не примет подпись). Экспорт — для проверки.
+ */
+export async function loadRefundedMark(ctx) {
+    if (!ctx || !ctx.visitServiceId) return false;
+    const vsId = Number(ctx.visitServiceId);
+    let refunded = false;
+    try {
+        const { data, error } = await supabase.rpc('refunded_lines', { line_ids: [vsId] });
+        refunded = !error && !!(data && Array.isArray(data.line_ids) && data.line_ids.map(Number).includes(vsId));
+    } catch (e) { refunded = false; }
+    ctx.refunded = refunded;
+    const host = ctx.container;
+    const old = host && host.querySelector ? host.querySelector('[data-refunded-note]') : null;
+    if (old) old.remove();
+    if (refunded && host) {
+        const note = h('div', { 'data-refunded-note': '', role: 'status', style: { display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '10px 14px', marginBottom: '12px', borderRadius: '10px', background: 'var(--crit-50, #fef2f2)', color: 'var(--crit-700, #b91c1c)', fontSize: '13.5px', lineHeight: 1.5 } },
+            Icon('Warning', { size: 16 }),
+            h('div', null,
+                h('strong', null, REFUNDED_LINE_MARK),
+                h('div', null, 'Пациенту вернули деньги за эту услугу. Документы приёма остаются в карте; новый документ на неё не подписывается.')));
+        host.insertBefore(note, host.firstChild);
+    }
+    return refunded;
+}
+/** REFUND_ANY_V1 — подпись возвращённой строки: отказ словами до любой записи. */
+function refuseSignRefunded(ctx) {
+    if (!ctx || !ctx.refunded) return false;
+    toast(REFUNDED_SIGN_REFUSAL, 'fail');
+    return true;
+}
+
 async function handleSignFinalize(ctx) {
     // ADMIN_ACT_AS_V1 (R3) — подпись и переподпись от чужого имени — отказ до
     // любой записи (сервер отказал бы sign_while_acting сам).
     if (refuseSignWhileActing()) return;
+    if (refuseSignRefunded(ctx)) return;   // REFUND_ANY_V1 — услуга возвращена
     if (!ctx.visitServiceId) { toast('Услуга не привязана — откройте из «Мои услуги».', 'fail'); return; }
     const vsKey = Number(ctx.visitServiceId);
     // CABINET_FIX_V1_R3 (F11) · CABINET_FIX_V1_R4 — второй щелчок, пока подпись строки «в пути» (в любом её экране), — ничего.
@@ -6085,7 +6127,8 @@ async function handlePrint(ctx) {
         if (_hidden.length && !confirm(trf('На бумагу не попадёт текст, которого нет в бланке «{type}»: {list}. Печатать всё равно?', { type: typeWord(_dt), list: _hidden.join(', ') }))) return;
         const _data = docSnapshot(ctx, _dt);
         // i18n-exempt: печатное заключение — печатный документ
-        printableSheet({ type: _dt, data: _data, title: 'Заключение · ' + patientName, idLine: p.mrn || '', settings: loadDocSettings() });
+        printableSheet({ type: _dt, data: _data, title: 'Заключение · ' + patientName, idLine: p.mrn || '', settings: loadDocSettings(),
+            notice: ctx.refunded ? REFUNDED_LINE_MARK : null });   // REFUND_ANY_V1 — «Услуга возвращена» над листом
     } catch (e) {
         console.error('[ws print]', e);
         toast('Не удалось открыть печать.', 'fail');

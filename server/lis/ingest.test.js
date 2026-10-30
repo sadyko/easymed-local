@@ -2012,3 +2012,49 @@ test('п. 5: A1000 (серия) — проба до настройки закр�
   assert.deepEqual(tray(db), []);
   db.close();
 });
+
+// ── REFUND_ANY_V1 (2026-10-29) — по заказу вернули деньги ─────────────────
+// Касса отпустила строку со счёта с возвратом (refund_invoice_line, отмена
+// после возврата): строка осталась в визите СО СВОИМ статусом ('in_progress',
+// 'collected'), отметка — pay_refund_releases 'out'. Ворота проверяли только
+// статус, и прибор заполнял возвращённую пробу. Теперь заказ без результата с
+// такой отметкой не заполняется: лоток, «по заказу возврат»; выставили заново
+// (отметка снята) — обычный заказ. Внесённый до возврата результат — как прежде.
+const refundMark = (db, id) => db.prepare("INSERT INTO pay_refund_releases (kind, line_id, invoice_id) VALUES ('out', ?, 1)").run(id);
+
+test('REFUND_ANY_V1: возвращённый заказ — прибор ничего не пишет; лоток «по заказу возврат»; статус прежний; выставили заново — принимается', () => {
+  const db = fresh();
+  refundMark(db, 123);
+  assert.equal(ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142')]), '127.0.0.1', 1), 'AA');
+  assert.deepEqual([message(db).status, message(db).detail, message(db).visit_service_id], ['unmatched', 'по заказу возврат', 123]);
+  assert.equal(results(db).length, 0);
+  assert.equal(order(db).status, 'in_progress', 'статус строки не тронут');
+  db.prepare("DELETE FROM pay_refund_releases WHERE kind = 'out' AND line_id = 123").run();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142')]), '127.0.0.1', 1);
+  assert.equal(message(db).status, 'applied', message(db).detail);
+  assert.equal(results(db).length, 2);
+  db.close();
+});
+
+test('REFUND_ANY_V1: результат внесён до возврата — он сохранён, прибор дописывает бланк, как прежде', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (123, 'Гемоглобин', '140')").run();
+  db.prepare("UPDATE visit_services SET status = 'resulted' WHERE id = 123").run();
+  refundMark(db, 123);
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1', 1);
+  assert.notEqual(message(db).detail, 'по заказу возврат');
+  assert.ok(results(db).some((r) => r.parameter === 'Гемоглобин' && r.value === '140'), 'внесённое не тронуто');
+  db.close();
+});
+
+test('REFUND_ANY_V1 / D3: другой заказ визита возвращён — его значение не пишется, в лотке «по заказу возврат»', () => {
+  const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный', 'collected']] });
+  refundMark(db, 302);
+  ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']]), '10.0.0.43', 1);
+  const m = message(db);
+  assert.equal(m.status, 'unmapped');
+  assert.equal(m.detail, 'заказ № 301 «ТТГ»: принято; заказ № 302 «Т4 свободный»: по заказу возврат');
+  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.35' }, {}]);
+  assert.equal(statusOf(db, 302), 'collected');
+  db.close();
+});

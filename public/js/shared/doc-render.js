@@ -82,6 +82,19 @@ export function esc(s) {
         { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
     ));
 }
+
+// REFUND_ANY_V1 (2026-10-29) — пометка над листом («Услуга возвращена»):
+// документ врача по строке, за которую пациенту вернули деньги, не удаляется
+// (медицинская запись), а на бумаге сказано, что услуга возвращена. Вставка —
+// сразу после <body> любого бланка (макетного и обычного), текст экранирован;
+// пустая пометка — бланк как был.
+export function withNotice(html, notice) {
+    const t = String(notice ?? '').trim();
+    if (!t) return html;
+    const box = '<div data-print-notice="1" style="margin:0 0 10px;padding:8px 12px;border:2px solid #b91c1c;border-radius:6px;'
+        + 'color:#b91c1c;font:700 15px/1.4 sans-serif;text-align:center;">' + esc(t) + '</div>';
+    return /<body[^>]*>/i.test(html) ? html.replace(/<body[^>]*>/i, (m) => m + box) : box + html;
+}
 // ---------------------------------------------------------------------------
 // Build the final HTML for the print/preview window. Wraps the per-type
 // renderer in branded paper chrome + auto-print script.

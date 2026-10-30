@@ -31,6 +31,9 @@
 // по-русски или null. Зовёт её дверь /api/db (crm/booking-mirror-db.js,
 // mirrorBefore) до записи.
 
+import { refundedOpenLineIds } from './domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
+import { REFUNDED_LAB_REFUSAL } from '../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1
+
 /** Статусы, означающие «над пациентом уже работают». */
 export const WORK_STATUSES = Object.freeze(['collected', 'in_progress', 'resulted', 'completed']);
 
@@ -69,7 +72,14 @@ export function unpaidWorkRefusal(db, ids, nextStatus) {
       LEFT JOIN invoice_items ii ON ii.id = vs.invoice_item_id
       LEFT JOIN invoices i       ON i.id = ii.invoice_id
      WHERE vs.id IN (${holes(list)})`).all(...list);
+  // REFUND_ANY_V1 — анализ, за который пациенту вернули деньги (касса
+  // отпустила строку со счёта с возвратом) и по которому результата ещё нет, в
+  // работу не идёт. Статус у такой строки прежний ('queued', 'collected'…),
+  // поэтому правило «смета → работа» ниже его не видит. Внесённый результат
+  // выдают и правят, как прежде.
+  const refunded = new Set(refundedOpenLineIds(db, list, { withoutResult: true }));
   for (const r of rows) {
+    if (refunded.has(r.id) && (Number(r.is_lab) === 1 || r.svc_type === 'lab')) return REFUNDED_LAB_REFUSAL;
     if (r.status !== 'added') continue;
     if (!(Number(r.total) > 0)) continue;
     if (r.inv_payer != null) continue;

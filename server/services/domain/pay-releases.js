@@ -45,6 +45,30 @@ export function refundedLineIds(db, kind, lineIds) {
     .all(kind, ...ids).map((r) => r.id);
 }
 
+// REFUND_ANY_V1 (2026-10-29) — «УСЛУГА ВОЗВРАЩЕНА»: строка визита отпущена со
+// счёта с возвратом (отметка 'out') и не выставлена заново (ссылки на счёт
+// нет; новый счёт и так снимает отметку — clearRefundRelease). Статус строки
+// при этом прежний ('queued', 'collected', 'in_progress'…), поэтому ворота
+// лаборатории, прибора и подписи спрашивают отметку, а не статус.
+// Своя таблица, а не новая колонка visit_services (мигр. 162: строки визита
+// ездят между зданиями, а возврат — местный учёт кассы этого здания).
+// withoutResult — только строки, по которым результата анализа ещё нет.
+export function refundedOpenLineIds(db, lineIds, { withoutResult = false } = {}) {
+  const ids = [...new Set((lineIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  if (!ids.length) return [];
+  const holes = ids.map(() => '?').join(',');
+  return db.prepare(`SELECT vs.id FROM visit_services vs
+                      WHERE vs.id IN (${holes}) AND vs.invoice_item_id IS NULL
+                        AND EXISTS (SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = 'out' AND prr.line_id = vs.id)
+                        ${withoutResult ? 'AND NOT EXISTS (SELECT 1 FROM lab_results lr WHERE lr.visit_service_id = vs.id)' : ''}
+                      ORDER BY vs.id`).all(...ids).map((r) => r.id);
+}
+
+/** REFUND_ANY_V1 — возвращённая строка, по которой результата ещё нет: в работу не идёт. */
+export function refundedWithoutResult(db, lineId) {
+  return refundedOpenLineIds(db, [lineId], { withoutResult: true }).length > 0;
+}
+
 // FINAL_MONEY_FIX_V1 (M1) — строку выставили заново: прежняя отметка больше
 // не про неё. Иначе обычная отмена НОВОГО неоплаченного счёта (возвратов по
 // нему не было) читала старую отметку, и сделанная работа не платилась.

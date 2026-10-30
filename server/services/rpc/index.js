@@ -5,6 +5,7 @@ import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDe
   setUnpaidLineDoctor, addServiceToVisitInvoice, cashierLinePerformers,   // CASHIER_HEAD_V1
   swapPaidLine, swapPaidLineQuote,   // CASHIER_PAID_SWAP_V1
   invoiceLineWork } from './billing.js';   // REFUND_ANY_V1 — что уже сделано по строкам счёта
+import { refundedLines } from './billing.js';   // REFUND_ANY_V1 — «услуга возвращена»
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
@@ -181,6 +182,7 @@ export const RPC = {
   refund_invoice_line:      (db, args, user) => refundInvoiceLine(db, args, user),   // BILLING_AUDIT_FIX_V1 (B1) — вернуть одну услугу счёта
   visit_refunded_lines:     (db, args, user) => visitRefundedLines(db, args, user),   // FINAL_MONEY_FIX_V1 (I1) — возвращённые строки визита; чтение
   invoice_line_work:        (db, args, user) => invoiceLineWork(db, args, user),   // REFUND_ANY_V1 — проба, результат, документ по строкам счёта; чтение
+  refunded_lines:           (db, args, user) => refundedLines(db, args, user),   // REFUND_ANY_V1 — какие строки «услуга возвращена»; чтение
   receive_stock:            (db, args, user) => receiveStock(db, args, user),
   dispense_item:            (db, args, user) => dispenseItem(db, args, user),
   void_dispense:            (db, args, user) => voidDispense(db, args, user),

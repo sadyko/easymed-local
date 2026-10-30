@@ -44,6 +44,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // CARD_BALANCE_V1 — подарочная карта / сертификат платит своим остатком.
 import { spendCard, returnToCard, CardError, cardClosedByRefund } from '../domain/cards.js';
 import { markRefundRelease, refundedLineIds, clearRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1, FINAL_MONEY_FIX_V1
+import { refundedOpenLineIds } from '../domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
 // INPATIENT_MONEY_FIX_V1 — строку проживания счёт узнаёт по той же метке, что
 // акт и проживание (одна копия на сервер и браузер).
 import { ACCOMMODATION_NOTE_PREFIX, ACCOMMODATION_LABEL } from '../../../public/js/shared/accommodation-line.js';
@@ -2677,6 +2678,21 @@ export function visitRefundedLines(db, args, user) {
   if (!isPositiveInt(visitId)) throw new RpcError('Визит указан неверно.', 400);
   const ids = db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND invoice_item_id IS NULL').all(visitId).map((r) => r.id);
   return { line_ids: refundedLineIds(db, 'out', ids) };
+}
+
+// REFUND_ANY_V1 (2026-10-29) — refunded_lines: какие из этих строк визита
+// «услуга возвращена» (отпущены со счёта с возвратом и не выставлены заново —
+// domain/pay-releases.js refundedOpenLineIds). Лист лаборатории прячет такие
+// строки без результата, кабинет врача пишет «Услуга возвращена». Только
+// номера строк, не больше REFUNDED_LINES_MAX за вызов. Чтение.
+const REFUNDED_LINES_MAX = 1000;
+export function refundedLines(db, args, user) {
+  if (!user) throw new RpcError('Нужно войти в систему.', 401);
+  const raw = args && args.line_ids;
+  if (!Array.isArray(raw) || raw.length > REFUNDED_LINES_MAX || !raw.every(isPositiveInt)) {
+    throw new RpcError('Строки указаны неверно: нужен список номеров (не больше 1000).', 400);
+  }
+  return { line_ids: refundedOpenLineIds(db, raw) };
 }
 
 // REFUND_ANY_V1 (2026-10-29) — invoice_line_work: ЧТО УЖЕ СДЕЛАНО ПО СТРОКАМ

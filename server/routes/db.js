@@ -20,6 +20,8 @@ import { notesWriteRefusal, storedIsCabinet, NOTES_BASE_KEY, NOTES_CONFLICT_MESS
 import { ACT_AS_SIGN_REFUSAL, isDoctorDocType, actingActorName } from '../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документы врача, имя в журналах)
 import { actAsRecheck } from '../services/act-as.js';   // ADMIN_ACT_AS_V1 (ревью, LOW 7)
 import { docBodyGiven } from '../services/act-as-sign.js';   // ADMIN_ACT_AS_V1 (ревью-2, LOW 1)
+import { refundedOpenLineIds } from '../services/domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
+import { REFUNDED_SIGN_REFUSAL } from '../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1
 // CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
@@ -337,6 +339,38 @@ export function signWhileActingRefusal(db, meta, body, user) {   // ADMIN_ACT_AS
   return got.rows.some((s) => signedEntryAdded(s.notes, values.notes));
 }
 
+// REFUND_ANY_V1 (2026-10-29) — ВОЗВРАЩЁННАЯ УСЛУГА: НОВЫЙ ДОКУМЕНТ ВРАЧА НЕ
+// ПОДПИСЫВАЕТСЯ. За строку пациенту вернули деньги (pay_refund_releases 'out',
+// строка без счёта — domain/pay-releases.js refundedOpenLineIds): прежние
+// документы остаются в карте (медицинская запись), а новая или изменённая
+// подписанная версия заключения (visit_services.notes, kind 'signed' —
+// signedEntryAdded, та же выборка строк, что у R3) и новый документ врача в
+// visit_documents — отказ. Черновик — можно. Выставили строку заново —
+// отметки нет, подпись как обычно. true — отказ. Строки правки не прочитаны —
+// решит refuseNotesWrite («не прочитаны»), здесь — не отказ.
+export function refundedSignRefusal(db, meta, body, user) {   // REFUND_ANY_V1 — экспорт для проверки
+  if (!meta || (meta.op !== 'insert' && meta.op !== 'update' && meta.op !== 'upsert')) return false;
+  const v = body && body.values;
+  const rows = (Array.isArray(v) ? v : [v]).filter((r) => r && typeof r === 'object');
+  if (meta.table === 'visit_documents') {
+    if (meta.op !== 'insert') return false;
+    const ids = rows.filter((r) => isDoctorDocType(r.doc_type) && r.visit_service_id != null).map((r) => Number(r.visit_service_id));
+    return refundedOpenLineIds(db, ids).length > 0;
+  }
+  if (meta.table !== 'visit_services' || meta.op === 'insert') return false;
+  const withNotes = rows.filter((r) => Object.prototype.hasOwnProperty.call(r, 'notes'));
+  if (!withNotes.length) return false;
+  if (meta.op === 'upsert') {
+    const byId = db.prepare('SELECT notes FROM visit_services WHERE id = ?');
+    const hit = withNotes.filter((r) => r.id != null && signedEntryAdded((byId.get(r.id) || {}).notes ?? null, r.notes)).map((r) => Number(r.id));
+    return refundedOpenLineIds(db, hit).length > 0;
+  }
+  const got = notesTargetRows(db, meta, body, user, withNotes[0]);
+  if (!got) return false;
+  const hit = got.rows.filter((s) => signedEntryAdded(s.notes, withNotes[0].notes)).map((s) => s.id);
+  return refundedOpenLineIds(db, hit).length > 0;
+}
+
 // Ревью безопасности (LOW 5) — журналы пациента и счёта, которые пишет экран
 // (patient_activity_log, invoice_audit_log): от имени имя действующего ставит
 // СЕРВЕР — «сотрудник (от имени: адм. …)» (shared/act-as.js actingActorName), то
@@ -419,6 +453,11 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     // остальных проверок — отказ называет именно эту причину.
     if (signWhileActingRefusal(db, compiled.meta, req.body, req.user)) {
       return res.status(403).json({ error: { code: 'sign_while_acting', message: ACT_AS_SIGN_REFUSAL } });
+    }
+    // REFUND_ANY_V1 — новая подпись на строке, за которую вернули деньги, — 409
+    // (refundedSignRefusal): прежние документы остаются, новый не подписывается.
+    if (refundedSignRefusal(db, compiled.meta, req.body, req.user)) {
+      return res.status(409).json({ error: { code: 'refunded_line', message: REFUNDED_SIGN_REFUSAL } });
     }
     // Ревью безопасности (LOW 5) — имя «от имени» в журналах ставит сервер.
     if (stampActingActorName(compiled.meta, req.body, req.user)) compiled = compile(req.body, req.user, { db });

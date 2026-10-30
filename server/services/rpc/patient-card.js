@@ -38,6 +38,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDataDir } from '../control/config.js';
 import { patientFileRefusal, refusalText } from '../../../public/js/shared/patient-file-limits.js';
+import { refundedOpenLineIds } from '../domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
+import { REFUNDED_SIGN_REFUSAL } from '../../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1
 import { refuseSignWhileActing, refuseDoctorDocWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документ врача в карте)
 
 const SECTION = 'patients';
@@ -706,6 +708,12 @@ export function visitDocumentArchive(db, args, user) {
   const performer = line.doctor_id != null && Number(line.doctor_id) === me;
   if (!roles.includes('admin') && !performer && !roles.some((r) => DOC_VOID_ROLES.includes(r) || SIGN_FREE_LINE_ROLES.includes(r))) {
     throw new RpcError('Подписать документ приёма может врач, который оказывает услугу.', 403);
+  }
+  // REFUND_ANY_V1 — за строку пациенту вернули деньги: новый документ на неё не
+  // подписывается (прежние остаются в карте — медицинская запись, и не
+  // отзываются). Та же граница — у записи подписи в notes (routes/db.js).
+  if (refundedOpenLineIds(db, [vsId]).length) {
+    throw Object.assign(new RpcError(REFUNDED_SIGN_REFUSAL, 409), { code: 'refunded_line' });
   }
   const run = db.transaction(() => {
     // CABINET_FIX_V1_R1 — только тот же вид; пустая подпись не заменяет документ с содержанием.

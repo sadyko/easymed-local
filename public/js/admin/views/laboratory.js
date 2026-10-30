@@ -45,6 +45,7 @@ import { pluralRu, groupLabRows, selectOptionsFor,
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
 // LAB_ONE_CLINIC_V1 — «лаборатория обслуживает всю клинику / только своё здание».
 import { scopeQuery, normalizeLabScope, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT } from './lab-scope.js';
+import { withoutRefundedIdle } from './lab-scope.js';   // REFUND_ANY_V1 — возвращённые строки без результата
 import { isAdminActor } from '../admin-actor.js';   // настройку клиники меняет администратор (сервер требует того же)
 // ADMIN_ACT_AS_V1 (R3) — «Проверить и выдать» (verified_by) — подпись лаборанта:
 // от чужого имени кнопки неактивны с подсказкой, сервер отказывает сам.
@@ -643,6 +644,25 @@ async function paintStats() {
 // -----------------------------------------------------------------------------
 let lastFetchToken = 0;
 
+// REFUND_ANY_V1 — какие строки листа «услуга возвращена» (refunded_lines, по
+// 500 номеров за вызов — сервер принимает до 1000). Set номеров; сбой — null
+// (лист как был: ворота сервера откажут и пробе, и результату сами).
+async function loadRefundedLineIds(ids) {
+    if (!ids.length) return null;
+    const CHUNK = 500;
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
+    try {
+        const parts = await Promise.all(chunks.map((c) => supabase.rpc('refunded_lines', { line_ids: c })));
+        const out = new Set();
+        for (const p of parts) {
+            if (!p || p.error) return null;
+            for (const id of ((p.data && p.data.line_ids) || [])) out.add(Number(id));
+        }
+        return out;
+    } catch (e) { return null; }
+}
+
 async function fetchAndPaint() {
     const token = ++lastFetchToken;
     clear(refs.list);
@@ -787,7 +807,11 @@ async function fetchAndPaint() {
             }
         } catch (e) { console.warn('[labs] origin:', e && e.message); }
 
-        state.rows = rows;
+        // REFUND_ANY_V1 — возвращённая строка без результата в работу не идёт:
+        // лист её не показывает (с результатом — остаётся, lab-scope.js).
+        const refunded = await loadRefundedLineIds(rows.map((r) => r.id));
+        if (token !== lastFetchToken) return;
+        state.rows = withoutRefundedIdle(rows, refunded, resultsByVs);
         state.patientMap = patientMap;
         state.resultsByVs = resultsByVs;
         paintFilters();
