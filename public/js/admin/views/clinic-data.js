@@ -34,6 +34,7 @@ import { isAdminActor } from '../admin-actor.js';
 import { renderBackupsCard } from './system-backups.js';
 import { renderDiskCard } from './system-disk.js';   // DISK_GUARD_V1
 import { renderDangerCard } from './system-danger.js';
+import { renderTestWipeCard } from './system-test-wipe.js';   // TEST_DATA_WIPE_V1
 
 export async function renderClinicData(root, ctx = {}) {
     const wrap = h('div', { class: 'fade-in upd-wrap' });
@@ -54,17 +55,22 @@ export async function renderClinicData(root, ctx = {}) {
     // опасная зона его не ждут (карточка места пока пишет «Считаем…»).
     const diskRoot = h('div');
     const bakRoot = h('div');
+    const wipeRoot = h('div');   // TEST_DATA_WIPE_V1 — между копиями (путь назад) и полным удалением
     const dzRoot = h('div');
     wrap.appendChild(diskRoot);
     wrap.appendChild(bakRoot);
+    wrap.appendChild(wipeRoot);
     wrap.appendChild(dzRoot);
     renderDangerCard(dzRoot, { admin });
 
-    // Both are awaited so this function resolves only once the whole page is
+    // All are awaited so this function resolves only once the whole page is
     // real — the fake-DOM tests (and the human eye) rely on that, the same way
-    // views/updates.js did when it owned the backups card.
+    // views/updates.js did when it owned the backups card. TEST_DATA_WIPE_V1 —
+    // the test-data card waits for its own state (test_data_wipe_status), in
+    // parallel with the others.
     await Promise.all([
         renderDiskCard(diskRoot, { admin }),
         renderBackupsCard(bakRoot, { admin }),
+        renderTestWipeCard(wipeRoot, { admin }),
     ]);
 }
