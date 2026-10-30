@@ -1381,18 +1381,60 @@ function invoicePane(state, onReload) {
                 class: 'btn btn-outline btn-sm',
                 onclick: () => openInvoicePrintWindow(state, inv, null),
             }, Icon('Print', { size: 13 }), ' Print receipt'),
-            cancellable && h('button', {
+            // REFUND_ANY_V1 — по счёту есть деньги: возврат — то же окно «Платежи»,
+            // что у кассы (вернуть услугу, вернуть оплату, «Оставить услугу в
+            // визите»). Отмены целиком с возвратом всех денег отсюда больше нет.
+            cancellable && paid > 0 && h('button', {
+                class: 'btn btn-outline btn-sm', type: 'button', 'data-visit-refund': String(inv.id),
+                style: { color: 'var(--crit-700)', borderColor: 'var(--crit-200, #fecaca)' },
+                onclick: () => openCashierPayments(inv.id, onReload),
+            }, Icon('Repeat', { size: 13 }), ' ', 'Возврат'),
+            cancellable && !(paid > 0) && h('button', {
                 class: 'btn btn-outline btn-sm',
                 style: { color: 'var(--crit-700)', borderColor: 'var(--crit-200, #fecaca)' },
-                title: paid > 0 ? 'Cancel invoice and refund the paid amount' : 'Cancel this unpaid invoice',
+                title: 'Cancel this unpaid invoice',
                 onclick: () => openCancelInvoiceDialog(inv, { onDone: onReload }),
-            }, Icon('X', { size: 13 }), ' ', paid > 0 ? 'Cancel & refund' : 'Cancel invoice'),
+            }, Icon('X', { size: 13 }), ' ', 'Cancel invoice'),
         ),
+
+        // REFUND_ANY_V1 — другие счета визита с деньгами.
+        moneyHands ? otherInvoicesBlock(state, inv, onReload) : null,
 
         // Per-visit invoice activity log — always rendered, even when empty
         // so the user knows the section exists for future actions.
         invoiceLogCard(state),
     );
+}
+
+// REFUND_ANY_V1 — возврат из окна визита — то же окно «Платежи», что у кассы
+// (cashier-desk.js openInvoiceRefundById): вернуть услугу (с «Оставить услугу в
+// визите»), вернуть оплату; после — перечитывается окно визита (onDone). Касса
+// подгружается в момент действия — кольца импортов нет (no-import-cycles);
+// штамп — тот же, что у admin.js: один экземпляр модуля (visit-refund-door.test.mjs).
+async function openCashierPayments(invoiceId, onReload) {
+    try {
+        const mod = await import('./cashier-desk.js?v=cash12');
+        await mod.openInvoiceRefundById(invoiceId, { onDone: onReload });
+    } catch (e) {
+        toast(trf('Не удалось открыть платежи: {msg}', { msg: (e && e.message) || e }), 'fail');
+    }
+}
+
+// REFUND_ANY_V1 — у визита бывает несколько счетов (доплата отдельным счётом,
+// выставили заново). Вкладка показывает новейший; возврат — по каждому, по
+// которому есть деньги.
+function otherInvoicesBlock(state, inv, onReload) {
+    const others = (state.invoices || []).filter((x) => x.id !== inv.id && Number(x.paid_amount || 0) > 0);
+    if (!others.length) return null;
+    return h('div', { class: 'card', 'data-visit-other-invoices': '', style: { padding: '12px 14px', marginTop: '14px', display: 'grid', gap: '8px' } },
+        h('div', { style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } }, 'Другие счета визита'),
+        ...others.map((x) => h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', fontSize: '12.5px' } },
+            h('span', { class: 'cell-mono cell-strong' }, x.invoice_number || String(x.id)),
+            StatusTag(x.status || 'unpaid'),
+            h('span', { class: 'grow' }),
+            h('span', { class: 'num' }, Number(x.paid_amount || 0).toLocaleString('ru-RU') + ' UZS'),
+            h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-visit-refund': String(x.id), onclick: () => openCashierPayments(x.id, onReload) },
+                Icon('Receipt', { size: 13 }), ' ', 'Платежи'))));
 }
 
 // Pulls the most recent void/refund row from the log so a cancelled invoice
@@ -1850,10 +1892,13 @@ async function loadInvoice(state) {
     // #5 — a visit can legitimately have >1 invoice (the cashier split creates a sibling), and there is no
     // unique constraint. .maybeSingle() 406'd on >1 row → the Invoice tab silently went empty. Take the
     // newest instead of erroring (deleteVisit already treats multiple-invoices-per-visit as possible).
+    // REFUND_ANY_V1 — и прочие счета визита: вкладка показывает новейший, а
+    // возврат доступен по каждому, по которому есть деньги (otherInvoicesBlock).
     const { data, error } = await supabase.from('invoices').select('*').eq('visit_id', state.visit.id)
-        .order('created_at', { ascending: false }).limit(1).maybeSingle();
+        .order('created_at', { ascending: false }).limit(20);
     if (error) { console.warn('[invoices]', error.message); return; }
-    state.invoice = data || null;
+    state.invoices = data || [];
+    state.invoice = state.invoices[0] || null;
 }
 
 // All invoice activity for this visit (created / payments / debt / void /
