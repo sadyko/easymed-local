@@ -761,6 +761,14 @@ export const STRINGS = {
   "Возвращено {sum} сум": {"en":"Refunded {sum} sum","ru":"Возвращено {sum} сум","uz":"{sum} so'm qaytarildi"},
   "Счёт уменьшен — переплаты нет, деньги не выдаются.": {"en":"Invoice reduced — no overpayment, no money is paid out.","ru":"Счёт уменьшен — переплаты нет, деньги не выдаются.","uz":"Hisob kamaytirildi — ortiqcha to'lov yo'q, pul berilmaydi."},
   "Оставить услуги в визите": {"en":"Keep the services in the visit","ru":"Оставить услуги в визите","uz":"Xizmatlarni tashrifda qoldirish"},
+  // REFUND_ANY_V1 (2026-10-29) — возврат любой услуги: поиск счёта за все дни, «Платежи» из истории и окна визита (views/cashier-desk.js, visit-modal.js),
+  // строки стационара, «Оставить услугу в визите», сделанная работа, «Услуга возвращена» (лаборатория, кабинет врача; сервер — rpc/billing.js, lab.js)
+  "Счета за все дни": {"en":"Invoices for all days","ru":"Счета за все дни","uz":"Barcha kunlar hisob-fakturalari"},   // REFUND_ANY_V1
+  "За другие дни счетов по этому поиску нет.": {"en":"No invoices from other days match this search.","ru":"За другие дни счетов по этому поиску нет.","uz":"Bu qidiruv bo‘yicha boshqa kunlarda hisob-faktura yo‘q."},   // REFUND_ANY_V1
+  "Платежи": {"en":"Payments","ru":"Платежи","uz":"To‘lovlar"},   // REFUND_ANY_V1
+  "{paid} из {total} сум": {"en":"{paid} of {total} UZS","ru":"{paid} из {total} сум","uz":"{total} so‘mdan {paid}"},   // REFUND_ANY_V1
+  "Счёт не найден в кассе этого здания.": {"en":"The invoice was not found at this building's cash desk.","ru":"Счёт не найден в кассе этого здания.","uz":"Hisob-faktura bu binoning kassasida topilmadi."},   // REFUND_ANY_V1
+  // /REFUND_ANY_V1
   // LIVE_AUDIT_FIX_V1 (2026-09-27) — строки исправлений живого аудита
   "Визит меняют регистратура, врач или администратор.": {"en":"A visit is changed by the front desk, a doctor or an administrator.","ru":"Визит меняют регистратура, врач или администратор.","uz":"Tashrifni ro'yxatxona, shifokor yoki administrator o'zgartiradi."},
   "Sample collected": {"en":"Sample collected","ru":"Проба взята","uz":"Namuna olindi"},

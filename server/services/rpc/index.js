@@ -22,6 +22,7 @@ import { doctorBotSettingsGet, doctorBotSettingsSave, doctorBotTokenClear, docto
 import { navVisibilityGet, navVisibilitySave } from './nav-visibility.js';   // NAV_VISIBILITY_V1 — видимость разделов меню для всей клиники
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice, cashierRefunds } from './cashier.js';   // cashierRefunds: CASHIER_PAID_SWAP_V1
 import { cashierUnbilled } from './cashier.js';   // REFERRAL_BILL_V1 — «Ждут счёта» кассы
+import { cashierInvoiceSearch } from './cashier.js';   // REFUND_ANY_V1 — поиск счёта за любой день
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit, admissionReferralDefault,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue,
   admissionPrepareWalletPayment } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
@@ -174,6 +175,7 @@ export const RPC = {
   cashier_line_swap_quote:     (db, args, user) => swapPaidLineQuote(db, args, user),
   cashier_refunds:             (db, args, user) => cashierRefunds(db, args, user),
   cashier_unbilled:            (db, args, user) => cashierUnbilled(db, args, user),   // REFERRAL_BILL_V1 — «Ждут счёта» кассы; только чтение
+  cashier_invoice_search:      (db, args, user) => cashierInvoiceSearch(db, args, user),   // REFUND_ANY_V1 — поиск счёта за любой день; только чтение
   refund_payment:           (db, args, user) => refundPayment(db, args, user),   // CASHIER_REFUND_V1 — возврат оплаты (отрицательный платёж)
   refund_invoice_line:      (db, args, user) => refundInvoiceLine(db, args, user),   // BILLING_AUDIT_FIX_V1 (B1) — вернуть одну услугу счёта
   visit_refunded_lines:     (db, args, user) => visitRefundedLines(db, args, user),   // FINAL_MONEY_FIX_V1 (I1) — возвращённые строки визита; чтение

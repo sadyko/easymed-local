@@ -18,7 +18,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
 import { lineUnitPrice, consultationFor, doctorPriceLookup, legacyPackageOnlyOff, packageLineDiscount } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
-import { searchArg } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере
+import { searchArg, pageInt } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере; REFUND_ANY_V1 — pageInt: страницы поиска счёта
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
 // откуда его взяли (одно правило на сервер, rpc/inventory.js).
 import { restoreSources } from './inventory.js';
@@ -436,14 +436,12 @@ function cashierInvoiceIds(db) {
   };
 }
 
-// CASHIER_DESIGN_V2 — the «Приём оплат» invoice list, joined server-side:
-// patient (name/MRN/phone), doctor (via the visit), first service + item
-// count, distinct payment methods, plus per-status aggregates for the chips.
-export function cashierInvoices(db, args, user) {
-  requireRole(user, SHIFT_ROLES);
-
-  const ids = cashierInvoiceIds(db);
-  const rows = db.prepare(`
+// REFUND_ANY_V1 — строка «Приёма оплат» одна на список и на поиск
+// (cashierInvoiceSearch ниже): пациент, врач визита, первая услуга, способы
+// оплаты, стационар, плательщик. Иначе найденный счёт открывал бы окно
+// «Платежи» без того, что о нём знает список. idsSql — подзапрос с колонкой id.
+function cashierRowSelect(idsSql) {
+  return `
     SELECT i.id, i.invoice_number, i.status, i.subtotal, i.discount_amount,
            i.total_amount, i.paid_amount, i.created_at, i.paid_at,
            pt.full_name AS patient_name, pt.mrn AS mrn, pt.phone AS phone,
@@ -467,12 +465,22 @@ export function cashierInvoices(db, args, user) {
            (SELECT COUNT(*) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS items_count,
            (SELECT ii.description FROM invoice_items ii WHERE ii.invoice_id = i.id ORDER BY ii.id LIMIT 1) AS first_item,
            (SELECT GROUP_CONCAT(DISTINCT p.method) FROM payments p WHERE p.invoice_id = i.id) AS methods
-      FROM (${ids.sql}) sel
+      FROM (${idsSql}) sel
       JOIN invoices i  ON i.id = sel.id
       JOIN patients pt ON pt.id = i.patient_id
       LEFT JOIN visits v ON v.id = i.visit_id
       LEFT JOIN users doc ON doc.id = v.doctor_id
-      LEFT JOIN payers py ON py.id = i.payer_id
+      LEFT JOIN payers py ON py.id = i.payer_id`;
+}
+
+// CASHIER_DESIGN_V2 — the «Приём оплат» invoice list, joined server-side:
+// patient (name/MRN/phone), doctor (via the visit), first service + item
+// count, distinct payment methods, plus per-status aggregates for the chips.
+export function cashierInvoices(db, args, user) {
+  requireRole(user, SHIFT_ROLES);
+
+  const ids = cashierInvoiceIds(db);
+  const rows = db.prepare(`${cashierRowSelect(ids.sql)}
      -- COVERAGE_SPLIT_V1 — счета, выставленные страховой/организации, в кассу НЕ
      -- попадают: наличных по ним не берут, расчёт идёт по акту и договору.
      -- Иначе кассир видел бы «долг», который пациент не должен и оплатить не может.
@@ -505,6 +513,77 @@ export function cashierInvoices(db, args, user) {
   }
 
   return { rows, counts };
+}
+
+// REFUND_ANY_V1 (2026-10-29) — ПОИСК СЧЁТА ЗА ЛЮБОЙ ДЕНЬ.
+//
+// Владелец: «возврат любой услуги». Сервер возврат сделанной работы не
+// запрещает (refund_invoice_line, void_invoice), но до него было не дойти:
+// «Приём оплат» держит оплаченные и отменённые счета только за сегодня
+// (cashierInvoiceIds), и вчерашний счёт касса не находила вовсе. Здесь — поиск
+// на сервере по ВСЕМ дням:
+//   • q — номер счёта (целиком или хвостом), ФИО, номер карты (MRN), телефон
+//     (как записан и одними цифрами — правило unbilledSearch); не короче двух
+//     знаков; % и _ — буквы (likeContains);
+//   • invoice_id — один счёт строкой списка: «История операций» и окно визита
+//     открывают по нему полное окно «Платежи»;
+//   • своё здание (sync_origin IS NULL — чужие деньги только для чтения,
+//     BRANCH_MONEY_GUARD_V1), без счетов плательщику (их нет в кассе,
+//     COVERAGE_SPLIT_V1), без депозитов и продажи карт (у них свои вкладки и
+//     свои возвраты, moneyDocRefusal);
+//   • новые первыми, страницами по INVOICE_SEARCH_PAGE (offset), has_more.
+// План: номер — проход по столбцу invoice_number; люди — patients один раз,
+// счета их — по idx_invoices_patient; страница — сначала номера (ORDER BY по
+// idx_invoices_created), потом строки только этой страницы (подзапросы строки
+// не считаются для всех найденных). На 300 тыс. счетов — десятки миллисекунд
+// (cashier-invoice-search.perf.test.js). Только чтение (READ_ONLY_RPCS).
+const INVOICE_SEARCH_PAGE = 50;
+const INVOICE_SEARCH_MIN = 2;
+const SEARCH_VISIBLE = `i.payer_id IS NULL AND i.sync_origin IS NULL
+       AND COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%' AND COALESCE(i.invoice_number, '') NOT LIKE 'CARD-%'`;
+
+function invoiceSearchIds(q) {
+  const like = likeContains(q);
+  const who = [
+    "lower_uni(pt.full_name) LIKE lower_uni(?) ESCAPE '\\'",
+    "lower_uni(COALESCE(pt.mrn, '')) LIKE lower_uni(?) ESCAPE '\\'",
+    "COALESCE(pt.phone, '') LIKE ? ESCAPE '\\'",
+  ];
+  const whoParams = [like, like, like];
+  const digits = q.replace(/\D/g, '');
+  if (/^[\d\s+\-()]+$/.test(q) && digits.length >= 3) {
+    who.push("replace(replace(replace(replace(replace(COALESCE(pt.phone, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '+', '') LIKE ?");
+    whoParams.push('%' + digits + '%');
+  }
+  return {
+    sql: `SELECT id FROM invoices WHERE COALESCE(invoice_number, '') LIKE ? ESCAPE '\\'
+          UNION SELECT i.id FROM invoices i WHERE i.patient_id IN (SELECT pt.id FROM patients pt WHERE ${who.join(' OR ')})`,
+    params: [like, ...whoParams],
+  };
+}
+
+export function cashierInvoiceSearch(db, args, user) {
+  requireRole(user, SHIFT_ROLES);
+  const one = args ? args.invoice_id : undefined;
+  if (one !== undefined && one !== null) {
+    if (!isPositiveInt(one)) throw new RpcError('Счёт указан неверно.', 400);
+    const rows = db.prepare(`${cashierRowSelect('SELECT ? AS id')} WHERE ${SEARCH_VISIBLE}`).all(one);
+    return { q: null, rows, offset: 0, has_more: false };
+  }
+  const q = searchArg(args && args.q);
+  const offset = pageInt(args && args.offset, { def: 0, min: 0, max: 100000 });
+  if (q.length < INVOICE_SEARCH_MIN) return { q, rows: [], offset, has_more: false, too_short: true };
+  const s = invoiceSearchIds(q);
+  const page = db.prepare(`SELECT i.id FROM (${s.sql}) sel JOIN invoices i ON i.id = sel.id
+     WHERE ${SEARCH_VISIBLE}
+     ORDER BY i.created_at DESC, i.id DESC LIMIT ? OFFSET ?`).all(...s.params, INVOICE_SEARCH_PAGE + 1, offset).map((r) => r.id);
+  const hasMore = page.length > INVOICE_SEARCH_PAGE;
+  const ids = page.slice(0, INVOICE_SEARCH_PAGE);
+  if (!ids.length) return { q, rows: [], offset, has_more: false };
+  const holes = ids.map(() => '?').join(',');
+  const rows = db.prepare(`${cashierRowSelect(`SELECT id FROM invoices WHERE id IN (${holes})`)}
+     ORDER BY i.created_at DESC, i.id DESC`).all(...ids);
+  return { q, rows, offset, has_more: hasMore };
 }
 
 // CASHIER_DESIGN_V2 — cancel an invoice. Refund-less v1: only an invoice with

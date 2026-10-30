@@ -246,6 +246,7 @@ const state = {
     cards: [],      // CARD_SALE_V1 — подарочные карты и сертификаты (проданные и выданные без оплаты)
     refunds: { from: null, to: null, rows: [], totals: null },   // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период
     unbilled: { rows: [], totals: null, found: null, pendingQ: null },   // REFERRAL_BILL_V1 — «Ждут счёта»: визиты со строками без счёта (filter 'unbilled'); REFBILL_REVIEW_V1 — found: ответ поиска сервера { q, rows, totals, error }
+    found: { result: null, pendingQ: null },   // REFUND_ANY_V1 — счета за все дни по строке поиска (cashier_invoice_search): result { q, rows, has_more, error }
 };
 
 export async function renderCashier(container) {
@@ -535,6 +536,14 @@ async function historyModal(root) {
         style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
         onclick: () => openRefundConfirm(p, invInfo(p.invoice_id), root),
     }, 'Возврат');
+    // REFUND_ANY_V1 — строка истории открывает полное окно «Платежи» своего
+    // счёта (вернуть услугу, вернуть оплату), а не только возврат одного
+    // платежа. Счёт читается с сервера по номеру: в истории — и вчерашние.
+    // Депозиты и продажи карт возвращаются в своих вкладках — здесь кнопки нет.
+    const openBtn = (invoiceId, number) => (invoiceId == null || /^(DEP|CARD)-/.test(String(number || ''))) ? null : h('button', {
+        class: 'btn btn-outline btn-sm', type: 'button', 'data-history-open': String(invoiceId),
+        onclick: () => openInvoiceById(invoiceId, root),
+    }, 'Платежи');
 
     const rows = [];
     let lastDay = null;
@@ -563,7 +572,8 @@ async function historyModal(root) {
                 sub,
                 h('span', { class: 'num', style: { fontWeight: 700, color: isRefund ? 'var(--crit-600)' : 'var(--ok-700)' } },
                     (isRefund ? '−' : '+') + fmtPrice(Math.abs(p.amount))),
-                isRefund ? null : refundBtnSmall(p)));
+                h('span', { class: 'row', style: { gap: '6px' } },   // REFUND_ANY_V1 — «Платежи» счёта рядом с возвратом платежа
+                    openBtn(p.invoice_id, inv && inv.invoice_number), isRefund ? null : refundBtnSmall(p))));
         } else if (ev.kind === 'invoice') {
             const inv = ev.inv;
             const cancelled = inv.status === 'void' || inv.status === 'refunded';
@@ -582,7 +592,8 @@ async function historyModal(root) {
                 cancelled ? 'var(--ink-400)' : 'var(--ink-900)',
                 sub,
                 h('span', { class: 'num', style: { fontWeight: 600, color: cancelled ? 'var(--ink-400)' : 'var(--ink-900)', textDecoration: cancelled ? 'line-through' : 'none' } },
-                    fmtPrice(inv.total_amount))));
+                    fmtPrice(inv.total_amount)),
+                openBtn(inv.id, inv.invoice_number)));   // REFUND_ANY_V1
         } else {
             const m = ev.m;
             rows.push(line(hhmm(d),
@@ -718,7 +729,7 @@ async function paymentsCard(root, summary) {
     function repaintTable() {
         paintChips(chipsEl, repaintTable);
         paintSearch(searchEl, repaintTable);
-        paintTable(tableEl, root);
+        paintTable(tableEl, root, repaintTable);   // REFUND_ANY_V1 — «Показать ещё» перерисовывает список
     }
     repaintTable();
     return card;
@@ -727,6 +738,10 @@ async function paymentsCard(root, summary) {
 async function loadInvoices() {
     state.rows = [];
     state.counts = null;
+    // REFUND_ANY_V1 — касса перечитана (после возврата, «Обновить»): найденное
+    // по всем дням устарело — следующая перерисовка спросит его заново.
+    _foundSeq++;
+    state.found = { result: null, pendingQ: null };
     const { data, error } = await supabase.rpc('cashier_invoices', {});
     if (error) { toast(trf('Не удалось загрузить счета: {msg}', { msg: error.message || error }), 'fail'); return; }
     state.rows = (data && data.rows) || [];
@@ -805,6 +820,63 @@ function unbilledView() {
     if (!q) return { q: '', rows: u.rows || [], total: (u.totals && u.totals.n) || (u.rows || []).length, searching: false, error: null };
     if (!u.found || u.found.q !== q) return { q, rows: [], total: 0, searching: true, error: null };
     return { q, rows: u.found.rows, total: (u.found.totals && u.found.totals.n) || u.found.rows.length, searching: false, error: u.found.error || null };
+}
+
+// REFUND_ANY_V1 (2026-10-29) — ПОИСК СЧЁТА ЗА ЛЮБОЙ ДЕНЬ. Список «Приёма оплат»
+// держит оплаченные и отменённые счета только за сегодня (cashier_invoices), и
+// вчерашний счёт касса не находила вовсе — вернуть по нему услугу было неоткуда.
+// Строка поиска (от двух знаков) уходит серверу — cashier_invoice_search:
+// номер счёта, ФИО, телефон, номер карты; все дни; своё здание. Найденное
+// рисуется блоком «Счета за все дни» под списком (paintFound), «Платежи»
+// открывает полное окно счёта. Спрашивается один раз на строку; устаревший
+// ответ отбрасывается — как у «Ждут счёта» (ensureUnbilledSearch).
+let _foundSeq = 0;
+const FOUND_MIN = 2;
+const FOUND_OFF = ['unbilled', 'deposits', 'cards', 'refunds'];
+function foundWanted() {
+    return state.search.trim().length >= FOUND_MIN && !FOUND_OFF.includes(state.filter);
+}
+function ensureInvoiceSearch(onChange) {
+    if (!foundWanted()) return;
+    const q = state.search.trim();
+    const f = state.found;
+    if ((f.result && f.result.q === q) || f.pendingQ === q) return;
+    f.pendingQ = q;
+    const seq = ++_foundSeq;
+    Promise.resolve(supabase.rpc('cashier_invoice_search', { q })).then((res) => {
+        if (seq !== _foundSeq) return;
+        const { data, error } = res || {};
+        f.result = error ? { q, rows: [], has_more: false, error: error.message || String(error) }
+            : { q, rows: (data && data.rows) || [], has_more: !!(data && data.has_more), error: null };
+    }, (e) => {
+        if (seq !== _foundSeq) return;
+        f.result = { q, rows: [], has_more: false, error: (e && e.message) || String(e) };
+    }).then(() => {
+        if (seq !== _foundSeq) return;
+        f.pendingQ = null;
+        if (typeof onChange === 'function') onChange();
+    });
+}
+// «Показать ещё» — следующая страница того же поиска (offset — сколько уже есть).
+async function moreFound(onChange) {
+    const f = state.found;
+    const r = f.result;
+    if (!r || !r.has_more || f.pendingQ) return;
+    const seq = _foundSeq;
+    f.pendingQ = r.q;
+    try {
+        const { data, error } = await supabase.rpc('cashier_invoice_search', { q: r.q, offset: r.rows.length });
+        if (error) throw error;
+        if (seq === _foundSeq) {
+            r.rows = r.rows.concat((data && data.rows) || []);
+            r.has_more = !!(data && data.has_more);
+        }
+    } catch (e) {
+        if (seq === _foundSeq) toast(trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }), 'fail');
+    }
+    if (seq !== _foundSeq) return;
+    f.pendingQ = null;
+    if (typeof onChange === 'function') onChange();
 }
 
 // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период (по умолчанию сегодня).
@@ -1441,6 +1513,7 @@ function paintSearch(el, onChange) {
     // (ensureUnbilledSearch); «из» — всех найденных (или всех ждущих окна).
     const unbilled = state.filter === 'unbilled';
     if (unbilled) ensureUnbilledSearch(onChange);
+    else ensureInvoiceSearch(onChange);   // REFUND_ANY_V1 — счета за все дни
     const view = unbilled ? unbilledView() : null;
     const shown = unbilled ? view.rows.length : filteredRows().length;
     const total = unbilled ? view.total : (state.counts ? state.counts.all.n : state.rows.length);
@@ -1453,7 +1526,7 @@ function paintSearch(el, onChange) {
     if (state.search) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
 }
 
-function paintTable(el, root) {
+function paintTable(el, root, onChange) {   // REFUND_ANY_V1 — onChange: «Показать ещё» у счетов за все дни
     clear(el);
     if (state.filter === 'deposits') { paintDeposits(el, root); return; }
     if (state.filter === 'cards') { paintCards(el, root); return; }
@@ -1462,21 +1535,59 @@ function paintTable(el, root) {
     const rows = filteredRows();
     if (!rows.length) {
         el.appendChild(h('div', { class: 'empty' }, 'Нет счетов по выбранному фильтру.'));
-        return;
+    } else {
+        const th = (t, right) => h('th', { style: right ? { textAlign: 'right' } : null }, t);
+        const tbody = h('tbody');
+        for (const inv of rows) tbody.appendChild(invoiceRow(inv, root));
+        el.appendChild(h('div', { style: { overflowX: 'auto' } },
+            h('table', { class: 'tbl' },
+                h('thead', null, h('tr', null,
+                    th('Пациент'), th('Услуга'), th('Врач'), th('Создан'),
+                    th('Сумма', true), th('Оплачено', true), th('Долг', true),
+                    th('Оплата'), th('Статус'), th('Действие'),
+                )),
+                tbody,
+            ),
+        ));
     }
-    const th = (t, right) => h('th', { style: right ? { textAlign: 'right' } : null }, t);
-    const tbody = h('tbody');
-    for (const inv of rows) tbody.appendChild(invoiceRow(inv, root));
-    el.appendChild(h('div', { style: { overflowX: 'auto' } },
-        h('table', { class: 'tbl' },
-            h('thead', null, h('tr', null,
-                th('Пациент'), th('Услуга'), th('Врач'), th('Создан'),
-                th('Сумма', true), th('Оплачено', true), th('Долг', true),
-                th('Оплата'), th('Статус'), th('Действие'),
-            )),
-            tbody,
-        ),
-    ));
+    paintFound(el, root, onChange);   // REFUND_ANY_V1
+}
+
+// REFUND_ANY_V1 — «Счета за все дни»: ответ сервера на строку поиска, кроме
+// счетов, которые уже стоят в списке выше. У каждого — «Платежи»: полное окно
+// счёта (возврат оплаты, «Вернуть услугу»).
+function paintFound(el, root, onChange) {
+    if (!foundWanted()) return;
+    const q = state.search.trim();
+    const r = state.found.result;
+    const box = h('div', { 'data-found': '1', style: { marginTop: '16px' } },
+        h('div', { style: { padding: '0 0 8px', fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } },
+            'Счета за все дни'));
+    el.appendChild(box);
+    if (!r || r.q !== q) { box.appendChild(h('div', { class: 'empty' }, 'Ищем…')); return; }
+    if (r.error) { box.appendChild(h('div', { class: 'empty' }, trf('Не удалось загрузить: {msg}', { msg: r.error }))); return; }
+    const listed = new Set(filteredRows().map((x) => x.id));
+    const rows = r.rows.filter((x) => !listed.has(x.id));
+    if (!rows.length) box.appendChild(h('div', { class: 'empty' }, 'За другие дни счетов по этому поиску нет.'));
+    else box.appendChild(h('div', { style: { display: 'grid', gap: '8px' } }, ...rows.map((x) => foundCard(x, root))));
+    if (r.has_more) {
+        box.appendChild(h('button', { class: 'btn btn-sm', type: 'button', 'data-found-more': '1', style: { marginTop: '8px' },
+            onclick: () => moreFound(onChange) }, 'Показать ещё'));
+    }
+}
+
+function foundCard(r, root) {
+    return h('div', { class: 'card', 'data-found-row': String(r.id), style: { padding: '10px 14px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+        h('strong', null, r.invoice_number || ('#' + r.id)),
+        h('span', { class: 'muted num', style: { fontSize: '12.5px' } }, fmtRuNumeric(r.created_at)),
+        h('span', null, r.patient_name || '—'),
+        r.mrn ? h('span', { class: 'muted' }, r.mrn) : null,
+        invStatusTag(r.status),
+        h('span', { class: 'grow' }),
+        h('span', { class: 'num', style: { fontWeight: 700 } },
+            trf('{paid} из {total} сум', { paid: fmtPrice(r.paid_amount), total: fmtPrice(r.total_amount) })),
+        h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-found-pay': String(r.id), onclick: () => openInvoiceRefund(r, root) },
+            Icon('Receipt', { size: 13 }), ' ', 'Платежи'));
 }
 
 // INVOICE_DELETE_V1 — удаление отменённого счёта видит только главный админ.
@@ -2059,8 +2170,37 @@ function voidModal(root, inv) {
         });
 }
 
+// REFUND_ANY_V1 — после денег окна «Платежи»: окно визита (opts.onDone)
+// перечитывает себя, касса — себя (paint). Без кассы под рукой (root нет) и
+// без onDone — ничего.
+async function afterMoney(root, opts) {
+    if (opts && typeof opts.onDone === 'function') { await opts.onDone(); return; }
+    if (root) await paint(root);
+}
+
+// REFUND_ANY_V1 — окно «Платежи» по номеру счёта: строка счёта — с сервера
+// (cashier_invoice_search { invoice_id }, своё здание), как у списка кассы.
+async function openInvoiceById(invoiceId, root, opts = {}) {
+    let row = null;
+    try {
+        const { data, error } = await supabase.rpc('cashier_invoice_search', { invoice_id: Number(invoiceId) });
+        if (error) throw error;
+        row = (data && Array.isArray(data.rows) && data.rows[0]) || null;
+    } catch (e) {
+        toast(trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }), 'fail');
+        return;
+    }
+    if (!row) { toast(tr('Счёт не найден в кассе этого здания.'), 'fail'); return; }
+    await openInvoiceRefund(row, root, opts);
+}
+
+/** REFUND_ANY_V1 — окно «Платежи» для других экранов (окно визита): opts.onDone — после возврата. */
+export async function openInvoiceRefundById(invoiceId, opts = {}) {
+    return openInvoiceById(invoiceId, null, opts);
+}
+
 // CASHIER_REFUND_V1 — an invoice's payment list, each with a «Возврат» action.
-async function openInvoiceRefund(inv, root) {
+async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — opts.onDone
     let pays = [];
     try {
         const { data } = await supabase.from('payments')
@@ -2090,7 +2230,7 @@ async function openInvoiceRefund(inv, root) {
         h('button', {
             class: 'btn btn-outline btn-sm', type: 'button',
             style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
-            onclick: () => openLineRefundConfirm(it, info, root),
+            onclick: () => openLineRefundConfirm(it, info, root, opts),
         }, 'Вернуть услугу'),
     ));
 
@@ -2104,7 +2244,7 @@ async function openInvoiceRefund(inv, root) {
         p.amount > 0 ? h('button', {
             class: 'btn btn-outline btn-sm', type: 'button',
             style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
-            onclick: () => openRefundConfirm(p, info, root),
+            onclick: () => openRefundConfirm(p, info, root, opts),
         }, 'Возврат') : h('span', { style: { width: '72px' } }),
     ));
 
@@ -2120,7 +2260,7 @@ async function openInvoiceRefund(inv, root) {
 // BILLING_AUDIT_FIX_V1 (B1) — подтверждение возврата одной услуги. Сумму
 // возврата считает сервер (переплата сверх новой суммы счёта); окно говорит,
 // куда вернуть и что будет со счётом.
-function openLineRefundConfirm(item, info, root) {
+function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1 — opts.onDone
     const reasonInp = h('input', { type: 'text', placeholder: 'Причина (необязательно)' });
     let toBalance = false;
     const voidBox = h('input', { type: 'checkbox', checked: true });
@@ -2162,14 +2302,14 @@ function openLineRefundConfirm(item, info, root) {
             if (r && r.voided) toast(tr('Счёт отменён'), 'ok');
             if (r && r.void_note) toast(r.void_note, 'info');
             document.querySelectorAll('.modal').forEach(m => m.remove());
-            await paint(root);
+            await afterMoney(root, opts);   // REFUND_ANY_V1
             return true;
         });
 }
 
 // CASHIER_REFUND_V1 — confirm dialog; the server caps the amount by what is
 // actually still refundable on this payment and rolls the invoice back.
-function openRefundConfirm(p, info, root) {
+function openRefundConfirm(p, info, root, opts = {}) {   // REFUND_ANY_V1 — opts.onDone
     const amtInp = moneyfy(h('input', { type: 'number', min: '1', max: String(p.amount), step: '1', value: String(p.amount) }));
     const reasonInp = h('input', { type: 'text', placeholder: 'Причина (необязательно)' });
     const idem = idemKeeper();   // V3120_FIX + V3120_FINAL (I1)
@@ -2271,7 +2411,7 @@ function openRefundConfirm(p, info, root) {
             if (rRes && rRes.voided) toast(tr('Счёт отменён'), 'ok');
             if (rRes && rRes.void_note) toast(rRes.void_note, 'info');
             document.querySelectorAll('.modal').forEach(m => m.remove());   // close the stacked dialogs
-            await paint(root);
+            await afterMoney(root, opts);   // REFUND_ANY_V1
             return true;
         });
 }
