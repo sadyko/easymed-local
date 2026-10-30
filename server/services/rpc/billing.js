@@ -45,6 +45,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 import { spendCard, returnToCard, CardError, cardClosedByRefund } from '../domain/cards.js';
 import { markRefundRelease, refundedLineIds, clearRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1, FINAL_MONEY_FIX_V1
 import { refundedOpenLineIds } from '../domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
+import { PERFORMED_LINE_STATUSES, lineHasWork } from '../domain/line-work.js';   // REFUND_ANY_V1 (ревью B4) — правило «есть работа», отдаётся дальше ниже
 // INPATIENT_MONEY_FIX_V1 — строку проживания счёт узнаёт по той же метке, что
 // акт и проживание (одна копия на сервер и браузер).
 import { ACCOMMODATION_NOTE_PREFIX, ACCOMMODATION_LABEL } from '../../../public/js/shared/accommodation-line.js';
@@ -1153,32 +1154,15 @@ function editableInvoiceRefusal(inv, db = null) {
     + ' — сначала оформите возврат или отмените его в кассе.';
 }
 
-// INPATIENT_MONEY_FIX_V1 — ВЫПОЛНЕННАЯ РАБОТА НЕ СНИМАЕТСЯ И НЕ ПОДМЕНЯЕТСЯ.
-//
-// Один список «работа начата или сделана» на сервер — его же спрашивает отмена
-// счёта (cashier.js voidInvoice). Прежде здесь стояли только in_progress и
-// completed: взятый анализ ('collected') снимался вместе с пробой, а на
-// готовом ('resulted') удаление падало 500 на внешнем ключе lab_results.
-// Замена услуги перенесла бы результаты анализа на другую услугу. След работы
-// (результат, документ, сообщение прибора) держит строку так же, как статус.
-export const PERFORMED_LINE_STATUSES = ['collected', 'in_progress', 'resulted', 'completed'];
-
-// REFUND_ANY_V1 (ревью B3) — ОДНО ПРАВИЛО «ПО СТРОКЕ ВИЗИТА ЕСТЬ РАБОТА»:
-// статус работы (PERFORMED_LINE_STATUSES) ИЛИ след — результат анализа,
-// документ (в том числе отозванный), сообщение анализатора. Эти ссылки —
-// простые внешние ключи без каскада: строку с ними удалить нельзя, и снимать
-// её как «неначатую» нельзя. Спрашивают его правка неоплаченного
-// (assertNotPerformed), возврат строки (refundInvoiceLine), отмена счёта
-// (cashier.js voidInvoice) и окно «Вернуть услугу» (invoiceLineWork) — экран и
-// сервер решают одинаково. `vs` — { id, status } строки визита.
-export function lineHasWork(db, vs) {
-  if (PERFORMED_LINE_STATUSES.includes(vs.status)) return true;
-  const trace = db.prepare(`
-    SELECT (EXISTS(SELECT 1 FROM lab_results WHERE visit_service_id = ?)
-         OR EXISTS(SELECT 1 FROM visit_documents WHERE visit_service_id = ?)
-         OR EXISTS(SELECT 1 FROM lab_device_messages WHERE visit_service_id = ?)) AS t`).get(vs.id, vs.id, vs.id);
-  return !!(trace && trace.t);
-}
+// INPATIENT_MONEY_FIX_V1 — ВЫПОЛНЕННАЯ РАБОТА НЕ СНИМАЕТСЯ И НЕ ПОДМЕНЯЕТСЯ
+// (PERFORMED_LINE_STATUSES) и REFUND_ANY_V1 (ревью B3) — ОДНО ПРАВИЛО «ПО
+// СТРОКЕ ВИЗИТА ЕСТЬ РАБОТА» (lineHasWork): статус работы ИЛИ след —
+// результат анализа, документ, сообщение анализатора. Ревью B4 (п. 9) —
+// правило переехало без изменений в domain/line-work.js: им же судит перевод
+// статуса (visit-status-guard.js) и отметка процедуры (rpc/procedures.js).
+// Здесь оба имени отдаются дальше, как прежде (cashier.js, тесты); импорт — в
+// шапке файла.
+export { PERFORMED_LINE_STATUSES, lineHasWork };
 
 function assertNotPerformed(db, vs, verb) {
   if (lineHasWork(db, vs)) {   // REFUND_ANY_V1 (ревью B3) — одно правило

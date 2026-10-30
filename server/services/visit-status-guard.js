@@ -32,7 +32,8 @@
 // mirrorBefore) до записи.
 
 import { refundedOpenLineIds } from './domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
-import { REFUNDED_LAB_REFUSAL } from '../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1
+import { REFUNDED_LAB_REFUSAL, REFUNDED_WORK_REFUSAL } from '../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1; WORK — ревью B4 (п. 9b)
+import { lineHasWork } from './domain/line-work.js';   // REFUND_ANY_V1 (ревью B4, п. 9b) — «есть работа»: одно правило с кассой
 // REFUND_ANY_V1 (ревью B4) — «это анализ?» — одно правило с листом лаборатории
 // (LAB_SERVICE_ROUTING_V1); сервер берёт его так же, как журналы (rpc/reports.js).
 import { isLabService, deptKindMap, typeNameMap } from '../../public/js/admin/views/lab-service.js';
@@ -98,10 +99,18 @@ export function unpaidWorkRefusal(db, ids, nextStatus) {
   // работу не идёт. Статус у такой строки прежний ('queued', 'collected'…),
   // поэтому правило «смета → работа» ниже его не видит. Внесённый результат
   // выдают и правят, как прежде.
-  const refunded = new Set(refundedOpenLineIds(db, list, { withoutResult: true }));
+  // Ревью B4 (п. 9b) — и любая другая возвращённая строка, по которой работы
+  // не было (lineHasWork: ни статуса работы, ни документа, ни результата, ни
+  // сообщения прибора — так её оставляет «Оставить услугу в визите»), в работу
+  // не идёт: отказ словами возврата, а не «ещё не оплачена». Со следом работы
+  // — дописывают, как прежде; отменить — можно (FREE_MOVES выше).
+  const refundedAll = refundedOpenLineIds(db, list);
+  const anyRefunded = new Set(refundedAll);
+  const refunded = new Set(refundedAll.length ? refundedOpenLineIds(db, refundedAll, { withoutResult: true }) : []);
   const labIds = refunded.size ? refundedLabIds(db, rows.filter((r) => refunded.has(r.id))) : new Set();   // ревью B4
   for (const r of rows) {
     if (labIds.has(r.id)) return REFUNDED_LAB_REFUSAL;
+    if (anyRefunded.has(r.id) && !lineHasWork(db, r)) return REFUNDED_WORK_REFUSAL;   // ревью B4 (п. 9b)
     if (r.status !== 'added') continue;
     if (!(Number(r.total) > 0)) continue;
     if (r.inv_payer != null) continue;

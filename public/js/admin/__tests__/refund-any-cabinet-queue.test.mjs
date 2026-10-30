@@ -139,12 +139,16 @@ let REFUNDED = new Set([11, 13, 14, 15]);
 let RPC_FAILS = false;
 let HOLD = null;    // обещание: пока не разрешено, refunded_lines не отвечает
 let ROWS = VS_ROWS;
+let VISITS = [];    // «Мой день» дашборда (ревью B4, п. 9c); пуст, пока тест не посеет
+let DASH_SVC_LOADS = 0;
 const ASKED = [];   // тела вызовов refunded_lines
-const TABLES = () => ({ users: [DOC], visit_services: ROWS, invoice_items: ITEM_ROWS, visits: [], recommended_services: [], admissions: [], patients: [] });
+const TABLES = () => ({ users: [DOC], visit_services: ROWS, invoice_items: ITEM_ROWS, visits: VISITS, recommended_services: [], admissions: [], patients: [] });
 globalThis.fetch = async (url, opts) => {
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   const u = String(url);
   if (u.startsWith('/api/db')) {
+    // Дашборд читает услуги своих приёмов фильтром по visit_id — считаем такие загрузки.
+    if (body.table === 'visit_services' && (body.filters || []).some((f) => f.col === 'visit_id' && f.op === 'in')) DASH_SVC_LOADS++;
     let rows = TABLES()[body.table] || [];
     for (const f of (body.filters || [])) rows = rows.filter((r) => matches(r, f));
     for (const o of (body.order || []).slice().reverse()) {
@@ -315,4 +319,51 @@ test('без мерцания: пока отметки новой загрузк
   assert.deepStrictEqual(visibleNames(second), ['Аминов Олим'], 'возвращённая строка второй загрузки среди ожидающих');
   pickStatus(second, 'all');
   assert.ok(marked(rowOf(second, 'Юсупов Акмал')), 'строка второй загрузки без пометки');
+});
+
+// --- ревью B4, п. 9c: дашборд кабинета ---------------------------------------
+// «Услуг завершено · всего за день: N» и «Пришли, ждут» не считают возвращённые
+// строки: работы по ним нет. Чистая функция computeDoctorStats судит по
+// отметке refunded, загрузчик дашборда ставит её одним вопросом refunded_lines.
+test('дашборд: computeDoctorStats не считает возвращённые строки ни во «всего», ни в «завершено», ни в «ждут»', async () => {
+  const dash = await import('../views/doctor-dashboard.js');
+  const NOW = new Date(); NOW.setHours(12, 0, 0, 0);
+  const at = new Date(NOW); at.setHours(9, 0, 0, 0);
+  const visits = [
+    { id: 1, at: at.toISOString(), status: 'arrived', patientId: 1 },   // ждёт: обычная строка не завершена
+    { id: 2, at: at.toISOString(), status: 'arrived', patientId: 2 },   // все незавершённые — возвращены: не ждёт
+  ];
+  const services = [
+    { id: 11, visitId: 1, status: 'queued' },
+    { id: 12, visitId: 1, status: 'completed' },
+    { id: 13, visitId: 1, status: 'completed', refunded: true },
+    { id: 21, visitId: 2, status: 'completed' },
+    { id: 22, visitId: 2, status: 'added', refunded: true },
+  ];
+  const s = dash.computeDoctorStats({ visits, services, payLines: [], now: NOW, perService: true });
+  assert.strictEqual(s.todayServices, 3, '«всего за день» считает возвращённые');
+  assert.strictEqual(s.todayCompleted, 2, '«завершено» считает возвращённые');
+  assert.strictEqual(s.todayArrived, 1, 'приём, где ждать нечего, кроме возвращённой строки, — «ждёт»');
+  const plain = dash.computeDoctorStats({ visits, services: services.map(({ refunded, ...r }) => r), payLines: [], now: NOW, perService: true });
+  assert.deepStrictEqual([plain.todayServices, plain.todayCompleted, plain.todayArrived], [5, 3, 2], 'без отметок — как прежде');
+});
+
+test('дашборд: загрузчик спрашивает refunded_lines один раз на загрузку номерами услуг дня; плитка «всего за день» — без возвращённых', async (t) => {
+  VISITS = VS_ROWS.map((r) => ({ id: r.visit_id, visit_date: VISIT_DAY, status: 'arrived', patient_id: r.visits.patient_id,
+    service_id: 1, doctor_id: 'u-doc', sync_origin: null, duration_minutes: 30, room_id: null,
+    patients: { id: r.visits.patient_id, mrn: 'MRN', full_name: r.visits.patients.full_name, last_name: r.visits.patients.last_name, first_name: r.visits.patients.first_name },
+    services: { id: 1, name: 'Приём терапевта' }, rooms: null }));
+  t.after(() => { VISITS = []; });
+  ASKED.length = 0;
+  DASH_SVC_LOADS = 0;
+  const root = mk('div');
+  await cabinet.renderConsultation(root, { onNavigate: () => {}, tabId: 'consultation', payload: {} });
+  await tick(120);
+  // Один вопрос на каждую загрузку услуг дашборда (сколько раз дашборд себя
+  // перечитывает при открытии кабинета — его дело, не этого теста), не по строке.
+  assert.ok(DASH_SVC_LOADS >= 1, 'дашборд не читал услуги приёмов');
+  assert.strictEqual(ASKED.length, DASH_SVC_LOADS, 'вопросов refunded_lines: ' + ASKED.length + ' на загрузок: ' + DASH_SVC_LOADS);
+  for (const body of ASKED) assert.deepStrictEqual([...body.line_ids].sort((a, b) => a - b), [11, 12, 13, 14, 15, 16, 17]);
+  // 7 услуг дня, возвращены 11, 13, 14, 15 → всего 3; завершены 15 (возвращена) и 16 → 1.
+  assert.ok(textOf(root).includes('всего за день: 3'), 'плитка: ' + (textOf(root).match(/всего за день: \d+/) || ['нет'])[0]);
 });

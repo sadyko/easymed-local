@@ -85,6 +85,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, initials, fmtDate } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { selfDoctorId } from '../permissions.js';   // ADMIN_DOCTOR_V2
+import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4, п. 9c) — возвращённые строки не считаются
 import { pastelFor, pastelForDashTile } from '../pastel.js';   // PASTEL_IDENTITY_V1 — оттенок = личность, не тяжесть
 // HEAD_DOCTOR_WARD_VIEW_V1 — «в койке» одним списком на сервер и браузер.
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';
@@ -316,7 +317,13 @@ export function computeDoctorStats({ visits, services, payLines = [], now, perSe
     const fee = (l) => Number(l.fee) || 0;
 
     const todayVisits = (visits || []).filter((v) => localDayKey(v.at) === today);
-    const todaySvc = (services || []).filter((s) => dayOf.get(String(s.visitId)) === today);
+    // REFUND_ANY_V1 (ревью B4, п. 9c) — строка, за которую касса вернула деньги
+    // (s.refunded, refunded_lines), — не работа врача: её нет ни во «всего за
+    // день», ни в «завершено», ни в ряду по дням; приём, где ждать нечего,
+    // кроме возвращённой строки, не «ждёт» (stillWaiting ниже).
+    const allTodaySvc = (services || []).filter((s) => dayOf.get(String(s.visitId)) === today);
+    const work = (services || []).filter((s) => !s.refunded);
+    const todaySvc = allTodaySvc.filter((s) => !s.refunded);
     const todayDone = todaySvc.filter((s) => s.status === 'completed');
 
     // Ряд по дням: DASH_WINDOW_DAYS корзин, старая слева. Пустой день — 0, и
@@ -335,7 +342,7 @@ export function computeDoctorStats({ visits, services, payLines = [], now, perSe
         });
     }
     const byService = new Map();
-    for (const s of (services || [])) {
+    for (const s of work) {   // REFUND_ANY_V1 (ревью B4, п. 9c) — без возвращённых
         if (s.status !== 'completed') continue;
         const i = idx.get(dayOf.get(String(s.visitId)));
         if (i == null) continue;
@@ -364,10 +371,10 @@ export function computeDoctorStats({ visits, services, payLines = [], now, perSe
     // не завершена (или услуг ещё нет вовсе). Приём, все услуги которого
     // закрыты, из очереди ожидания выходит, даже если статус визита не трогали
     // — визит перестаёт быть «ждёт» в тот момент, когда врач его закончил.
-    const svcOfVisit = (id) => todaySvc.filter((s) => String(s.visitId) === String(id));
+    const svcOfVisit = (id) => allTodaySvc.filter((s) => String(s.visitId) === String(id));
     const stillWaiting = (v) => {
         const own = svcOfVisit(v.id);
-        return own.length === 0 || own.some((s) => s.status !== 'completed');
+        return own.length === 0 || own.some((s) => s.status !== 'completed' && !s.refunded);   // REFUND_ANY_V1 (ревью B4, п. 9c)
     };
 
     return {
@@ -553,6 +560,9 @@ export async function loadDoctorDashboard() {
         if (error) { console.warn('[doctor-dash] services:', error.message); state.failed = true; }
         svcRows = data || [];
     }
+    // REFUND_ANY_V1 (ревью B4, п. 9c) — какие из услуг дня касса вернула: один
+    // вопрос на загрузку (refunded-lines.js). Сбой — отметок нет, числа как прежде.
+    const refundedIds = await loadRefundedLineIds(svcRows.map((r) => r.id));
 
     // 4. PAY_BASIS_PERFORMED_V1 — деньги окна: строки выплаты с долей, как их
     // посчитал сервер (те же, что в «Зарплатах врачей»). Прежде здесь читались
@@ -573,6 +583,7 @@ export async function loadDoctorDashboard() {
         serviceName: (r.services && r.services.name) || '',
         status: r.status || '',
         createdAt: r.created_at || null,
+        refunded: !!(refundedIds && refundedIds.has(Number(r.id))),   // REFUND_ANY_V1 (ревью B4, п. 9c)
     }));
 
     state.loaded = true;

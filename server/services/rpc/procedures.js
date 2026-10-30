@@ -44,6 +44,9 @@ import { hasColumn } from '../domain/buildings.js';
 import { crmServiceEvidence } from '../crm/visit-status.js';
 import { mergeNurseNote, nurseNoteOf } from '../domain/cabinet-notes.js';   // CABINET_FIX_V1_R5 (B) — заметка медсестры не стирает документ кабинета
 import { refuseSignWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3)
+import { refundedOpenLineIds } from '../domain/pay-releases.js';   // REFUND_ANY_V1 (ревью B4, п. 9b)
+import { lineHasWork } from '../domain/line-work.js';   // REFUND_ANY_V1 (ревью B4, п. 9b)
+import { REFUNDED_WORK_REFUSAL } from '../../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B4, п. 9b)
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -346,6 +349,13 @@ export function procedureComplete(db, args, user) {
   const line = loadLine(db, kind, id);
 
   if (kind === 'outpatient') {
+    // REFUND_ANY_V1 (ревью B4, п. 9b) — касса вернула деньги за процедуру, по
+    // которой работы не было (строка оставлена в визите), — её не выполняют:
+    // отказ словами возврата, а не «не проведена кассой». Правило «есть работа»
+    // и слова — те же, что у перевода статуса (visit-status-guard.js).
+    if (refundedOpenLineIds(db, [id]).length && !lineHasWork(db, line)) {
+      throw Object.assign(new RpcError(REFUNDED_WORK_REFUSAL, 409), { code: 'refunded_line' });
+    }
     // #15 — pay-first: касса ещё не провела услугу, делать её нельзя.
     if (line.status === 'added') {
       throw new RpcError('Услуга не проведена кассой — сначала оплата или долг.', 400);

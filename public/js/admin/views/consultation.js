@@ -39,6 +39,7 @@ import { loadPatientById } from '../data.js';   // NO_GREETING_V1 — currentUse
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
 import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor из базы — 1, а не true
 import { REFUNDED_LINE_MARK, REFUNDED_START_REFUSAL } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (поправка 3) — «Услуга возвращена»; отказ начать — ревью B4
+import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4) — один вопрос refunded_lines на список
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -195,30 +196,18 @@ async function loadQueueOnce() {
 // статус у неё прежний: 'added' («Оставить услугу в визите»), 'queued',
 // 'in_progress'. По одному статусу список ставил её в «Активные», а плитка
 // «В очереди / готовы к осмотру» её считала. Теперь сервер спрашивается на
-// загрузку списка номерами всех строк, а не по строке: партиями по
-// REFUNDED_CHUNK (сервер принимает до 1000; список кабинета и так не длиннее
+// загрузку списка номерами всех строк, а не по строке (refunded-lines.js:
+// партиями по 500, сервер принимает до 1000; список кабинета и так не длиннее
 // 300 — loadServices .limit(300), то есть это один вопрос). Отметка
 // r.refunded ставится строкам после загрузки: loadServices не меняется.
 // Сбой чтения любой партии — отметок нет, список как был (подпись на
 // возвращённую строку сервер не примет сам: routes/db.js refundedSignRefusal).
 // Экспорт — для проверки.
-const REFUNDED_CHUNK = 500;
 export async function markRefundedRows(rows) {
     const list = rows || [];
     for (const r of list) r.refunded = false;
-    const ids = [...new Set(list.map((r) => Number(r.id)).filter((n) => Number.isInteger(n) && n > 0))];
-    if (!ids.length) return list;
-    const chunks = [];
-    for (let i = 0; i < ids.length; i += REFUNDED_CHUNK) chunks.push(ids.slice(i, i + REFUNDED_CHUNK));
-    try {
-        const parts = await Promise.all(chunks.map((c) => supabase.rpc('refunded_lines', { line_ids: c })));
-        const got = new Set();
-        for (const p of parts) {
-            if (!p || p.error || !p.data || !Array.isArray(p.data.line_ids)) return list;
-            for (const id of p.data.line_ids) got.add(Number(id));
-        }
-        for (const r of list) r.refunded = got.has(Number(r.id));
-    } catch (e) { console.warn('[my-services] refunded lines:', e && e.message); }
+    const got = await loadRefundedLineIds(list.map((r) => r.id));
+    if (got) for (const r of list) r.refunded = got.has(Number(r.id));
     return list;
 }
 

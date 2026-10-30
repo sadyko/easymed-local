@@ -171,7 +171,11 @@ test('возвращённая строка без результата уход
 
 test('laboratory.js спрашивает refunded_lines и отсеивает строки после чтения результатов', () => {
   const code = labSrc.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
-  assert.ok(/supabase\.rpc\('refunded_lines', \{ line_ids: /.test(code), 'лист не спрашивает сервер, какие строки возвращены');
+  // Ревью B4 — вопрос один на все экраны (refunded-lines.js), лист его зовёт.
+  const shared = fs.readFileSync(path.join(HERE, '..', 'refunded-lines.js'), 'utf8');
+  assert.ok(/supabase\.rpc\('refunded_lines', \{ line_ids: /.test(shared), 'refunded-lines.js не спрашивает сервер');
+  assert.ok(/import \{ loadRefundedLineIds \} from '\.\.\/refunded-lines\.js';/.test(code) && /loadRefundedLineIds\(rows\.map\(/.test(code),
+    'лист не спрашивает сервер, какие строки возвращены');
   // Ревью B4: результаты не прочитались — не прятать (hideIdle = null).
   assert.ok(/const hideIdle = resultsFailed \? null : refunded;\s*state\.rows = withoutRefundedIdle\(rows, hideIdle, resultsByVs\);/.test(code), 'лист не отсеивает возвращённые строки без результата');
 });

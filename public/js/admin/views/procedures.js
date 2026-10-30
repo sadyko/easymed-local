@@ -36,9 +36,15 @@ import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1
 // ADMIN_ACT_AS_V1 (R3) — отметка о выполнении процедуры (procedure_complete,
 // verified_by) — подпись исполнителя: от чужого имени неактивна с подсказкой.
 import { lockSignButton, refuseSignWhileActing } from '../act-as-client.js';
+import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B4, п. 9a) — «Услуга возвращена»
+import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4, п. 9a) — один вопрос на загрузку
 
 const STATUS_RU = { added: 'Назначено', queued: 'В очереди', in_progress: 'Выполняется', completed: 'Выполнено' };
 const OPEN = ['added', 'queued', 'in_progress'];
+// REFUND_ANY_V1 (ревью B4, п. 9a) — «В работе» — открытая и не возвращённая:
+// процедура, за которую касса вернула деньги (r.refunded), — не работа; её
+// видно во «Все» (и в «Выполнено», если её успели сделать) с меткой.
+const isOpenWork = (r) => OPEN.includes(r.status) && !r.refunded;
 const state = { rows: [], filter: 'open', showAll: true, search: '', place: 'all' };   // PROC_SEARCH_V1 / PROC_PERFORMER_V1
 
 export async function renderProcedures(container) {
@@ -61,7 +67,16 @@ async function load() {
         toast(trf('Не удалось загрузить процедуры: {msg}', { msg: error.message }), 'fail');
         state.rows = []; return;
     }
-    state.rows = (data && data.rows) || [];
+    // REFUND_ANY_V1 (ревью B4, п. 9a) — какие кабинетные процедуры касса
+    // вернула: один вопрос на загрузку (refunded-lines.js), номерами только
+    // кабинетных строк — у палатной номер из другой таблицы (admission_services)
+    // и совпал бы с чужой строкой визита. Строки встают на экран уже с
+    // отметками. Сбой — отметок нет, очередь как была (сервер откажет отметке
+    // «Выполнено» сам).
+    const rows = (data && data.rows) || [];
+    const refunded = await loadRefundedLineIds(rows.filter((r) => r.kind === 'outpatient').map((r) => r.id));
+    for (const r of rows) r.refunded = !!(refunded && r.kind === 'outpatient' && refunded.has(Number(r.id)));
+    state.rows = rows;
     state.showAll = (data && data.scope) === 'all';
 }
 
@@ -70,7 +85,7 @@ function placeOf(r) { return r.kind === 'inpatient' ? 'inpatient' : 'outpatient'
 function paint(body) {
     clear(body);
     const counts = {
-        open: state.rows.filter(r => OPEN.includes(r.status)).length,
+        open: state.rows.filter(isOpenWork).length,   // REFUND_ANY_V1 (ревью B4, п. 9a) — без возвращённых
         done: state.rows.filter(r => r.status === 'completed').length,
         all:  state.rows.length,
     };
@@ -110,7 +125,7 @@ function paint(body) {
         clear(rowsWrap);
         const q = (state.search || '').trim().toLowerCase();
         const shown = state.rows
-            .filter(r => state.filter === 'all' ? true : state.filter === 'done' ? r.status === 'completed' : OPEN.includes(r.status))
+            .filter(r => state.filter === 'all' ? true : state.filter === 'done' ? r.status === 'completed' : isOpenWork(r))   // REFUND_ANY_V1 (ревью B4, п. 9a)
             .filter(r => state.place === 'all' || placeOf(r) === state.place)
             .filter(r => !q || [r.service, r.patient, r.phone, r.performer, r.ward, r.bed].some(v => (v || '').toLowerCase().includes(q)));
         if (!shown.length) {
@@ -152,7 +167,10 @@ function rowEl(r, body) {
         h('div', { style: { minWidth: '0' } },
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
                 h('span', { style: { fontWeight: '600', fontSize: '13.5px' } }, r.service),
-                placeChip(r)),
+                placeChip(r),
+                // REFUND_ANY_V1 (ревью B4, п. 9a) — касса вернула деньги за процедуру.
+                r.refunded ? h('span', { class: 'tag tag-crit', 'data-refunded-mark': '', style: { fontSize: '12.5px' } },
+                    Icon('Warning', { size: 11 }), ' ', REFUNDED_LINE_MARK) : null),
             h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 [r.patient, r.phone, whoLine, fmtDateTime(r.when)].filter(Boolean).join(' · '))),
         h('div', { class: 'row', style: { gap: '8px', flex: 'none', alignItems: 'center' } },
@@ -162,13 +180,16 @@ function rowEl(r, body) {
             // V3120_FIX — и только тому, кого сервер примет исполнителем
             // (canPerformProcedures): администратор без флага врача получал
             // «Исполнителем процедуры может быть врач или медсестра».
-            r.unassigned && !done && canTakeProcedure()
+            r.unassigned && !done && canTakeProcedure() && !r.refunded   // REFUND_ANY_V1 (ревью B4, п. 9a) — возвращённую не берут
                 ? h('button', { class: 'btn btn-outline btn-lg', type: 'button', title: tr('Назначить процедуру на себя'),
                     onclick: () => takeProcedure(r, body) }, Icon('User', { size: 14 }), ' ' + tr('Взять'))
                 : null,
             h('span', { class: 'tag' + (done ? ' tag-ok' : r.unassigned ? ' tag-warn' : ''), style: { fontSize: '12.5px' } },
                 tr(STATUS_RU[r.status] || r.status)),
-            r.status === 'added'
+            // REFUND_ANY_V1 (ревью B4, п. 9a) — возвращённую не выполняют: метка
+            // стоит у названия, действия нет (сервер откажет отметке и сам).
+            r.refunded && !done ? null
+            : r.status === 'added'
                 // #15 — un-released (pay-first): the nurse can't perform it until the cashier confirms (payment/debt).
                 ? h('span', { class: 'tag', style: { fontSize: '12.5px', opacity: '.75' } }, Icon('Wallet', { size: 11 }), ' ' + tr('Ожидает кассу'))
                 : done
