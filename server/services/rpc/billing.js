@@ -1164,10 +1164,16 @@ function editableInvoiceRefusal(inv, db = null) {
 // шапке файла.
 export { PERFORMED_LINE_STATUSES, lineHasWork };
 
-function assertNotPerformed(db, vs, verb) {
-  if (lineHasWork(db, vs)) {   // REFUND_ANY_V1 (ревью B3) — одно правило
-    throw new RpcError('услуга уже оказывается/оказана (взята проба, есть результат или документ) — ' + verb + ' нельзя.', 400);
-  }
+// REFUND_SWAP_V1 — `code`: замена в оплаченном счёте отвечает кодом
+// line_performed, и окно замены (cashier-line-fix.js openRefundSwap)
+// предлагает «Вернуть эту услугу и выставить новую». Текст отказа прежний;
+// остальные двери зовут без кода и отвечают, как раньше. «Работа начата» —
+// то же правило lineHasWork, что у возврата строки и окна «Вернуть услугу».
+function assertNotPerformed(db, vs, verb, code = null) {
+  if (!lineHasWork(db, vs)) return;   // REFUND_ANY_V1 (ревью B3) — одно правило
+  const e = new RpcError('услуга уже оказывается/оказана (взята проба, есть результат или документ) — ' + verb + ' нельзя.', 400);
+  if (code) e.code = code;
+  throw e;
 }
 
 export function removeUnpaidService(db, args, user, { rpc = 'remove_unpaid_service', cashier = false } = {}) {
@@ -1825,6 +1831,10 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
   if (newServiceId !== null && !isPositiveInt(newServiceId)) throw new RpcError('Новая услуга указана неверно.', 400);
   if (newDoctorId !== null && !isPositiveInt(newDoctorId)) throw new RpcError('Исполнитель указан неверно.', 400);
   if (newServiceId === null && newDoctorId === null) throw new RpcError('Выберите новую услугу или нового врача.', 400);
+  // REFUND_SWAP_V1 — «Без врача» — явный выбор окна замены: новой услуге
+  // исполнитель не нужен. Пустой doctor_id по-прежнему значит «врач тот же».
+  const noDoctor = !!(args && (args.no_doctor === true || args.no_doctor === 1));
+  if (noDoctor && newDoctorId !== null) throw new RpcError('Укажите исполнителя или «Без врача» — не то и другое сразу.', 400);
   const toBalance = !!(args && (args.to_balance === true || args.to_balance === 1));
   const cardFallback = args && (args.card_fallback === 'cash' || args.card_fallback === 'balance') ? args.card_fallback : (toBalance ? 'balance' : undefined);
   const extraReason = String((args && args.reason) || '').trim().slice(0, 200);
@@ -1833,7 +1843,10 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
   if (!vs) throw new RpcError('Строка услуги не найдена.', 400);
   assertOwnBuilding(db, vs, 'Услуга');
   if (vs.clinic_item_id != null) throw new RpcError('Это списанный товар, а не услуга — его возвращают через «Вернуть услугу».', 400);
-  assertNotPerformed(db, vs, 'заменить');
+  // REFUND_SWAP_V1 — начатую работу на другую услугу не переносят. Код
+  // line_performed говорит окну замены (cashier-line-fix.js openRefundSwap)
+  // предложить «Вернуть эту услугу и выставить новую»; текст отказа прежний.
+  assertNotPerformed(db, vs, 'заменить', 'line_performed');
   assertLineMonthOpen(db, vs);
   const item = vs.invoice_item_id != null ? db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(vs.invoice_item_id) : null;
   const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
@@ -1842,15 +1855,23 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
   { const r = paidSwapRefusal(db, inv, item); if (r) throw new RpcError(r, 400); }
 
   const serviceChanges = newServiceId !== null && Number(newServiceId) !== Number(vs.service_id);
-  const targetDoctor = newDoctorId !== null ? newDoctorId : vs.doctor_id;
+  if (noDoctor && !serviceChanges && vs.doctor_id != null) throw new RpcError('Убрать исполнителя можно только вместе с заменой услуги.', 400);
+  const targetDoctor = noDoctor ? null : (newDoctorId !== null ? newDoctorId : vs.doctor_id);
   let svc = null;
   if (serviceChanges) {
     svc = db.prepare('SELECT * FROM services WHERE id = ? AND active = 1').get(newServiceId);
     if (!svc) throw new RpcError('Услуга не найдена или неактивна.', 400);
     { const r = surgeryWithoutBedRefusal(db, newServiceId, vs.visit_id); if (r) throw new RpcError(r, 400); }
-  }
-  if (newDoctorId !== null) {
-    assertPerformer(db, newDoctorId, serviceChanges ? newServiceId : vs.service_id, serviceChanges ? null : vs.consultation_type_id);
+    // REFUND_SWAP_V1 — ИСПОЛНИТЕЛЬ НОВОЙ УСЛУГИ. Прежде замена услуги без
+    // смены врача его не проверяла: УЗИ медсестры менялось на консультацию, и
+    // консультацию «проводила» медсестра. Теперь исполнитель — выбранный или
+    // оставшийся прежний — должен подходить НОВОЙ услуге (assertPerformer), а
+    // услуге, которой нужен врач, без врача не быть (то же правило, что у
+    // cashier_line_add).
+    if (targetDoctor != null) assertPerformer(db, targetDoctor, newServiceId);
+    else if (Number(svc.requires_doctor) === 1) throw new RpcError('Для этой услуги нужен врач — выберите исполнителя.', 400);
+  } else if (newDoctorId !== null) {
+    assertPerformer(db, newDoctorId, vs.service_id, vs.consultation_type_id);
   }
   if (!serviceChanges && Number(targetDoctor) === Number(vs.doctor_id)) {
     return { changed: false, refunded: 0, due: 0, refund_plan: [], invoice: inv, line: vs };
@@ -1875,6 +1896,11 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false }) {
     db.prepare('UPDATE visit_services SET doctor_id = ?, unit_price = ?, total = ?, queue_key = NULL, queue_no = NULL WHERE id = ?')
       .run(targetDoctor, unit, lineTotal, vsId);
   }
+  // REFUND_SWAP_V1 — талон прежней очереди уходит вместе с номером, как у
+  // refund_invoice_line: строка талона держала услугу, кабинет и номер,
+  // которых у строки больше нет, — доска очереди и перепечатка чека звали
+  // пациента туда, куда он уже не идёт. Новый номер выдаётся ниже.
+  db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(vsId);
   const consult = !serviceChanges && vs.service_id == null && vs.consultation_type_id != null
     ? consultationFor(db, vs.consultation_type_id, targetDoctor) : null;
   const description = serviceChanges ? (svc.name || '') : ((consult && consult.name) || item.description);
