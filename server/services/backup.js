@@ -69,6 +69,15 @@ export const MARKER_NAME = 'pending-action.json';
 const STORAGE_DIR = 'storage';
 const sidecarFor = (dbFileName) => dbFileName.replace(/\.db$/, '') + '.files';
 
+/**
+ * TEST_DATA_WIPE_V1 (ревью C4) — где лежит снимок хранилища копии `dbFileName`:
+ * backups/<имя без .db>.files/ повторяет <dataDir>/storage/. По нему удаление
+ * тестовых данных сверяет, что файл документа есть в копии, прежде чем удалить.
+ */
+export function storageSnapshotDir(dataDir, dbFileName) {
+  return path.join(dataDir, 'backups', sidecarFor(dbFileName));
+}
+
 function copyTreeLinked(from, to) {
   let entries;
   try { entries = fs.readdirSync(from, { withFileTypes: true }); } catch { return 0; }
@@ -128,7 +137,7 @@ export function snapshotStorage(dataDir, dbFileName) {
   const from = path.join(dataDir, STORAGE_DIR);
   if (!fs.existsSync(from)) return 0;
   try {
-    return copyTreeLinked(from, path.join(dataDir, 'backups', sidecarFor(dbFileName)));
+    return copyTreeLinked(from, storageSnapshotDir(dataDir, dbFileName));
   } catch (e) {
     console.warn('[backup] снимок файлов не удался:', e && e.message);
     return 0;
@@ -137,7 +146,7 @@ export function snapshotStorage(dataDir, dbFileName) {
 
 /** Вернуть файлы из снимка копии `dbFileName` в <dataDir>/storage. */
 export function restoreStorage(dataDir, dbFileName) {
-  const from = path.join(dataDir, 'backups', sidecarFor(dbFileName));
+  const from = storageSnapshotDir(dataDir, dbFileName);
   if (!fs.existsSync(from)) return 0;
   try { return mergeTree(from, path.join(dataDir, STORAGE_DIR)); }
   catch (e) { console.warn('[backup] файлы не восстановились:', e && e.message); return 0; }
@@ -418,15 +427,23 @@ export function withCopyLock(fn) {
  * protect — имена, которые не уступают никогда; к ним всегда добавляются цели
  * восстановления (restoreTargets). Платформа не сказала, сколько свободно, —
  * копия делается, как раньше.
+ *
+ * TEST_DATA_WIPE_V1 (ревью C4) — extraNeedBytes: место, которое нужно сверх
+ * копии тому, кто её просит (удалению тестовых данных — на журнал самого
+ * удаления, test-data-wipe.js). Уступки идут по тем же правилам против СУММЫ.
+ * Отказ с добавкой — отказ того действия, а не «копия не сделана»: отметку
+ * copy_refused он не пишет (свой отказ вызвавший показывает сам). Все прочие
+ * вызовы добавки не передают — 0, как раньше.
  */
 export function ensureCopySpace(dataDir, {
   kind = 'manual', protect = [], dbFile = path.join(dataDir, 'easymed.db'),
-  diskSpaceImpl = currentDiskSpace, now = new Date(),
+  diskSpaceImpl = currentDiskSpace, now = new Date(), extraNeedBytes = 0,
 } = {}) {
   const dir = path.join(dataDir, 'backups');
   const space = diskSpaceImpl(dir);
   if (!space) return { freed: [] };
-  const need = copyNeedBytes(dbBytes(dbFile));
+  const extra = Math.max(0, Math.ceil(Number(extraNeedBytes) || 0));
+  const need = copyNeedBytes(dbBytes(dbFile)) + extra;
   if (space.free >= need) return { freed: [] };
 
   const keep = new Set([...protect, ...restoreTargets(dir)]);
@@ -444,8 +461,8 @@ export function ensureCopySpace(dataDir, {
     free += e.bytes;
   }
   if (free < need) {
-    console.warn(`[backup] копия «${kind}» не сделана: нужно ${need} Б, свободно ${space.free} Б, а старых автоматических копий, которые можно удалить, не хватает`);
-    noteGuard(dataDir, { copy_refused: { at: now.toISOString(), kind, need_bytes: need, free_bytes: space.free } });
+    console.warn(`[backup] копия «${kind}» не сделана: нужно ${need} Б${extra ? ` (из них ${extra} Б — сверх копии)` : ''}, свободно ${space.free} Б, а старых автоматических копий, которые можно удалить, не хватает`);
+    if (!extra) noteGuard(dataDir, { copy_refused: { at: now.toISOString(), kind, need_bytes: need, free_bytes: space.free } });
     throw noSpaceError(need, space.free);
   }
   const freed = plan.filter((e) => removeEntry(dir, e.name)).map((e) => e.name);
@@ -559,8 +576,9 @@ export function listBackups(dataDir) {
  * @param {string} dataDir
  * @param {'daily'|'manual'|'safety'|'final'|'wipe'} kind
  * @param {Date} [now]  injectable so tests can pin the local date
- * @param {{protect?: string[], diskSpaceImpl?: Function}} [opts]  DISK_GUARD_V1 —
- *   имена, которые не удаляются ни уступкой места, ни чисткой; ответ диска (тесты)
+ * @param {{protect?: string[], diskSpaceImpl?: Function, extraNeedBytes?: number}} [opts]  DISK_GUARD_V1 —
+ *   имена, которые не удаляются ни уступкой места, ни чисткой; ответ диска (тесты);
+ *   TEST_DATA_WIPE_V1 — место сверх копии (ensureCopySpace extraNeedBytes)
  * @returns {Promise<{name:string, kind:string, size:number, mtimeMs:number}>}
  */
 export async function createBackup(db, dataDir, kind, now = new Date(), opts = {}) {
@@ -571,7 +589,7 @@ export async function createBackup(db, dataDir, kind, now = new Date(), opts = {
   return withCopyLock(() => createBackupNow(db, dataDir, kind, now, opts));
 }
 
-async function createBackupNow(db, dataDir, kind, now, { protect = [], diskSpaceImpl = currentDiskSpace } = {}) {
+async function createBackupNow(db, dataDir, kind, now, { protect = [], diskSpaceImpl = currentDiskSpace, extraNeedBytes = 0 } = {}) {
   const dir = path.join(dataDir, 'backups');
   fs.mkdirSync(dir, { recursive: true });
   sweepBroken(dir);   // DISK_GUARD_V1
@@ -580,7 +598,7 @@ async function createBackupNow(db, dataDir, kind, now, { protect = [], diskSpace
   // DISK_GUARD_V1 — место проверяется ДО того, как занято имя: копия, на
   // которую места нет, не начинается вовсе (раздел 3, п. 2). Не хватает и
   // после уступок старых — ошибка 'no_space' уходит вызвавшему.
-  ensureCopySpace(dataDir, { kind, protect, diskSpaceImpl, now });
+  ensureCopySpace(dataDir, { kind, protect, diskSpaceImpl, now, extraNeedBytes });
 
   // Same exclusive-create claim as backupBeforeMigrate, same race: two
   // requests landing in the same second (a double-clicked button, or the

@@ -14,8 +14,19 @@ import {
   WIPE_NO_SPACE_TEMPLATE,
 } from './test-data-wipe.js';
 import { STRINGS } from '../../public/js/admin/i18n-strings.js';
+import { snapshotStorage, storageSnapshotDir } from './backup.js';
 
 test.after(closeRegistered);
+
+// Ревью C4: файл документа удаляется, только если он есть в копии «Перед
+// удалением тестовых данных» (снимок хранилища рядом с копией базы). Здесь —
+// тот же снимок, что делает createBackup (snapshotStorage), без самой базы.
+let copySeq = 0;
+function copyNow(dir) {
+  const name = `wipe-20261030-1000${String(copySeq++ % 60).padStart(2, '0')}.db`;
+  snapshotStorage(dir, name);
+  return name;
+}
 
 // Диск машины разработчика — не данные теста (на этом ПК ~5 ГБ свободно).
 const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
@@ -58,7 +69,7 @@ test('файлы документов уходят только из patients/<i
   put(path.join(root, '5', 'other', 'keep.txt'));
   put(path.join(dir, 'storage', 'patient-photos', '5.jpg'));
   put(path.join(dir, 'storage', 'clinic-docs', 'branch', 'licence.pdf'));
-  assert.deepEqual(removeVisitDocFiles(dir), { removed: 3, failed: 0 });
+  assert.deepEqual(removeVisitDocFiles(dir, { backup: copyNow(dir) }), { removed: 3, failed: 0 });
   assert.equal(fs.existsSync(path.join(root, '5', 'docs')), false);
   assert.equal(fs.existsSync(path.join(root, '6', 'docs')), false);
   for (const kept of [path.join(root, 'legacy-photo-key.jpg'), path.join(root, '5', 'other', 'keep.txt'),
@@ -90,7 +101,7 @@ test('ссылки (junction, symlink) не открываются и не уд�
 
   // Удалены два настоящих файла; три ссылки остались на месте и посчитаны
   // как «не удалено» — за ними могли лежать документы.
-  assert.deepEqual(removeVisitDocFiles(dir), { removed: 2, failed: 3 });
+  assert.deepEqual(removeVisitDocFiles(dir, { backup: copyNow(dir) }), { removed: 2, failed: 3 });
   for (const kept of [path.join(outside('a'), 'secret-a.pdf'), path.join(outside('b'), 'docs', 'secret-b.pdf'), path.join(outside('c'), 'secret-c.pdf')]) {
     assert.ok(fs.existsSync(kept), `чужой файл цел: ${kept}`);
   }
@@ -107,7 +118,7 @@ test('папка хранилища — ссылка: по ней не идём,
   put(path.join(elsewhere, '5', 'docs', 'x.pdf'));
   fs.mkdirSync(path.join(dir, 'storage', 'clinic-docs'), { recursive: true });
   fs.symlinkSync(elsewhere, path.join(dir, 'storage', 'clinic-docs', 'patients'), 'junction');
-  assert.deepEqual(removeVisitDocFiles(dir), { removed: 0, failed: 1 });
+  assert.deepEqual(removeVisitDocFiles(dir, { backup: copyNow(dir) }), { removed: 0, failed: 1 });
   assert.ok(fs.existsSync(path.join(elsewhere, '5', 'docs', 'x.pdf')));
 });
 
@@ -201,8 +212,92 @@ test('файл документа «только для чтения» удал�
   const file = path.join(dir, 'storage', 'clinic-docs', 'patients', '5', 'docs', '1-a-scan.pdf');
   put(file);
   fs.chmodSync(file, 0o444);
-  assert.deepEqual(removeVisitDocFiles(dir), { removed: 1, failed: 0 });
+  assert.deepEqual(removeVisitDocFiles(dir, { backup: copyNow(dir) }), { removed: 1, failed: 0 });
   assert.equal(fs.existsSync(file), false);
+});
+
+// ── ревью C4: файл документа уходит, только если он есть в копии ────────────
+
+function docsClinic(prefix) {
+  const dir = tmpDir(prefix);
+  const docs = path.join(dir, 'storage', 'clinic-docs', 'patients', '5', 'docs');
+  return { dir, docs, inCopy: (backup, name) => path.join(storageSnapshotDir(dir, backup), 'clinic-docs', 'patients', '5', 'docs', name) };
+}
+
+test('снимок копии лежит там, где его ищет удаление: backups/<имя копии без .db>.files/<как в storage>', () => {
+  const { dir, docs, inCopy } = docsClinic('em-wipe-snap-');
+  put(path.join(docs, '1-a.pdf'), 'abc');
+  const backup = copyNow(dir);
+  assert.equal(storageSnapshotDir(dir, backup), path.join(dir, 'backups', backup.replace(/\.db$/, '') + '.files'));
+  assert.equal(fs.readFileSync(inCopy(backup, '1-a.pdf'), 'utf8'), 'abc');
+});
+
+test('файл есть в копии — удаляется; в копии его нет (ссылка не сделалась) — остаётся и считается «не удалено»', () => {
+  const { dir, docs, inCopy } = docsClinic('em-wipe-copied-');
+  put(path.join(docs, '1-a.pdf'), 'aaa');
+  put(path.join(docs, '2-b.pdf'), 'bbb');
+  const backup = copyNow(dir);
+  fs.rmSync(inCopy(backup, '2-b.pdf'));   // антивирус не дал сделать ссылку, копирование тоже не прошло
+  assert.deepEqual(removeVisitDocFiles(dir, { backup }), { removed: 1, failed: 1 });
+  assert.equal(fs.existsSync(path.join(docs, '1-a.pdf')), false);
+  assert.equal(fs.readFileSync(path.join(docs, '2-b.pdf'), 'utf8'), 'bbb', 'без пути назад файл не удаляется');
+});
+
+test('файл загружен после копии — остаётся и считается «не удалено»', () => {
+  const { dir, docs } = docsClinic('em-wipe-after-');
+  put(path.join(docs, '1-a.pdf'), 'aaa');
+  const backup = copyNow(dir);
+  put(path.join(docs, '3-c.pdf'), 'загружен между копией и перезапуском');
+  assert.deepEqual(removeVisitDocFiles(dir, { backup }), { removed: 1, failed: 1 });
+  assert.ok(fs.existsSync(path.join(docs, '3-c.pdf')));
+});
+
+test('в копии файл другого размера — не тот файл: остаётся', () => {
+  const { dir, docs, inCopy } = docsClinic('em-wipe-size-');
+  put(path.join(docs, '1-a.pdf'), 'aaa');
+  const backup = copyNow(dir);
+  fs.rmSync(inCopy(backup, '1-a.pdf'));            // ссылка на тот же файл — новый файл на его месте
+  put(inCopy(backup, '1-a.pdf'), 'другой размер');
+  assert.deepEqual(removeVisitDocFiles(dir, { backup }), { removed: 0, failed: 1 });
+  assert.equal(fs.readFileSync(path.join(docs, '1-a.pdf'), 'utf8'), 'aaa');
+});
+
+test('копия не названа или её снимка нет — не удаляется ничего', () => {
+  const { dir, docs } = docsClinic('em-wipe-nocopy-');
+  put(path.join(docs, '1-a.pdf'), 'aaa');
+  assert.deepEqual(removeVisitDocFiles(dir), { removed: 0, failed: 1 });
+  assert.deepEqual(removeVisitDocFiles(dir, { backup: 'wipe-20261030-235959.db' }), { removed: 0, failed: 1 });
+  assert.ok(fs.existsSync(path.join(docs, '1-a.pdf')));
+});
+
+test('снимок копии или папка в нём — ссылка: такой «копии» не верим, файлы остаются', () => {
+  const { dir, docs } = docsClinic('em-wipe-snaplink-');
+  put(path.join(docs, '1-a.pdf'), 'aaa');
+  // Где-то вне копии лежит файл того же размера по тому же пути.
+  const elsewhere = path.join(dir, 'elsewhere');
+  put(path.join(elsewhere, 'clinic-docs', 'patients', '5', 'docs', '1-a.pdf'), 'aaa');
+  const whole = 'wipe-20261030-110000.db';
+  fs.mkdirSync(path.join(dir, 'backups'), { recursive: true });
+  fs.symlinkSync(elsewhere, storageSnapshotDir(dir, whole), 'junction');
+  assert.deepEqual(removeVisitDocFiles(dir, { backup: whole }), { removed: 0, failed: 1 });
+
+  const part = 'wipe-20261030-110001.db';
+  fs.mkdirSync(path.join(storageSnapshotDir(dir, part), 'clinic-docs', 'patients'), { recursive: true });
+  fs.symlinkSync(path.join(elsewhere, 'clinic-docs', 'patients', '5'), path.join(storageSnapshotDir(dir, part), 'clinic-docs', 'patients', '5'), 'junction');
+  assert.deepEqual(removeVisitDocFiles(dir, { backup: part }), { removed: 0, failed: 1 });
+  assert.ok(fs.existsSync(path.join(docs, '1-a.pdf')));
+});
+
+test('полное удаление передаёт имя копии файлам: файл из копии ушёл, загруженный после — нет', () => {
+  const { dir, db } = clinic();
+  const docs = path.join(dir, 'storage', 'clinic-docs', 'patients', '1', 'docs');
+  put(path.join(docs, '1-a.pdf'), 'aaa');
+  const backup = copyNow(dir);
+  put(path.join(docs, '2-b.pdf'), 'bbb');
+  const r = runTestDataWipe(db, dir, { diskSpaceImpl: ROOMY, backup });
+  assert.deepEqual(r.files, { removed: 1, failed: 1 });
+  assert.ok(fs.existsSync(path.join(docs, '2-b.pdf')));
+  assert.match(summaryLine(r), /files 1 \(не удалено 1\)/);
 });
 
 // Поправка 9(б): место проверяется ДО удаления (просьба и запуск, C4) — одна

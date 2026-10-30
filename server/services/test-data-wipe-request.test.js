@@ -8,8 +8,8 @@ import path from 'node:path';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { tmpDir, closeOnExit, closeRegistered } from '../test-helpers/tmpdir.js';
-import { __setDiskSpaceForTests, GB, copyNeedBytes, dbBytes } from './disk-guard.js';
-import { listBackups, processPendingAction, MARKER_NAME } from './backup.js';
+import { __setDiskSpaceForTests, GB, copyNeedBytes, dbBytes, readGuard } from './disk-guard.js';
+import { listBackups, processPendingAction, ensureCopySpace, MARKER_NAME } from './backup.js';
 import { writePairing } from './branch-sync/pairing.js';
 import {
   requestTestDataWipe, applyPendingTestDataWipe, wipeStatus, readWipeResult, RESULT_NAME,
@@ -141,12 +141,16 @@ test('нет намерения или оно чужое — запуск нич
 
 const FULL = () => ({ free: 10 * 1024 * 1024, total: 1000 * GB });
 
-test('просьба: на копию места хватает, на копию и журнал удаления — нет: отказ словами удаления ДО копии', async () => {
+// Копии нужно база × 1,2 + 1 ГБ (там же запас, который удаление при запуске
+// требует сверх журнала), удалению — ещё оценка журнала (estimateWipeBytes).
+// Ревью C4: проверяет охрана копии 3.18.1 (ensureCopySpace) — по СУММЕ, внутри
+// очереди копий, со своими уступками старых автоматических копий.
+const wipeNeed = (dir, db) => copyNeedBytes(dbBytes(path.join(dir, 'easymed.db'))) + estimateWipeBytes(db);
+
+test('просьба: на копию места хватает, на копию и журнал удаления — нет, уступать нечего: отказ словами удаления ДО копии', async () => {
   const { dir, db } = clinic();
-  // Копии нужно base × 1,2 + 1 ГБ (там же запас, который удаление при запуске
-  // требует сверх журнала), удалению — ещё оценка журнала (estimateWipeBytes).
-  const need = copyNeedBytes(dbBytes(path.join(dir, 'easymed.db'))) + estimateWipeBytes(db);
-  __setDiskSpaceForTests(() => ({ free: need - 1, total: 1000 * GB }));
+  const need = wipeNeed(dir, db);
+  __setDiskSpaceForTests(() => ({ free: need - 1, total: 5 * GB }));
   try {
     await assert.rejects(() => requestTestDataWipe(db, dir), (e) => {
       assert.equal(e.code, 'no_space');
@@ -159,11 +163,83 @@ test('просьба: на копию места хватает, на копию
     });
     assert.equal(listBackups(dir).length, 0, 'копия не начата');
     assert.equal(fs.existsSync(marker(dir)), false, 'намерения нет');
-    __setDiskSpaceForTests(() => ({ free: need, total: 1000 * GB }));
+    assert.equal(readGuard(dir).copy_refused, undefined, 'это отказ удаления, а не «копия не сделана» на экране копий');
+    __setDiskSpaceForTests(() => ({ free: need, total: 5 * GB }));
     const r = await requestTestDataWipe(db, dir);
     assert.equal(r.ok, true, 'ровно столько, сколько нужно, — хватает');
   } finally { __setDiskSpaceForTests(ROOMY); }
   assert.equal(visits(db), 1);
+});
+
+test('просьба: места мало, но есть старые ежедневные копии — уступает самая старая (как для любой копии), удаление запрошено', async () => {
+  const { dir, db } = clinic();
+  const bd = path.join(dir, 'backups');
+  fs.mkdirSync(bd, { recursive: true });
+  const t = Date.now() - 1e6;
+  for (const [name, at] of [['daily-20261028-030000.db', t], ['daily-20261029-030000.db', t + 1000]]) {
+    fs.writeFileSync(path.join(bd, name), Buffer.alloc(100 * 1024));
+    fs.utimesSync(path.join(bd, name), new Date(at), new Date(at));
+  }
+  const need = wipeNeed(dir, db);
+  __setDiskSpaceForTests(() => ({ free: need - 50 * 1024, total: 5 * GB }));
+  let r;
+  try { r = await requestTestDataWipe(db, dir); } finally { __setDiskSpaceForTests(ROOMY); }
+  assert.equal(r.ok, true);
+  const names = listBackups(dir).map((b) => b.name);
+  assert.equal(names.includes('daily-20261028-030000.db'), false, 'самая старая ежедневная уступила место');
+  assert.ok(names.includes('daily-20261029-030000.db'), 'уступает ровно столько, сколько нужно');
+  assert.ok(names.includes(r.backup));
+  assert.equal(readMarker(dir).backup, r.backup);
+});
+
+test('охрана копии: без добавки нужно столько же, сколько раньше; добавка — к той же сумме, отметка «копия не сделана» не пишется', () => {
+  const { dir } = clinic();
+  const copyNeed = copyNeedBytes(dbBytes(path.join(dir, 'easymed.db')));
+  const disk = () => ({ free: copyNeed, total: 5 * GB });
+  assert.deepEqual(ensureCopySpace(dir, { kind: 'manual', diskSpaceImpl: disk }), { freed: [] });
+  assert.throws(() => ensureCopySpace(dir, { kind: 'wipe', diskSpaceImpl: disk, extraNeedBytes: 4096 }), (e) => {
+    assert.equal(e.code, 'no_space');
+    assert.equal(e.need_bytes, copyNeed + 4096);
+    return true;
+  });
+  assert.equal(readGuard(dir).copy_refused, undefined);
+  assert.throws(() => ensureCopySpace(dir, { kind: 'manual', diskSpaceImpl: () => ({ free: copyNeed - 1, total: 5 * GB }) }),
+    (e) => e.code === 'no_space' && e.need_bytes === copyNeed);
+  assert.equal(readGuard(dir).copy_refused.kind, 'manual', 'обычная копия пишет отметку, как раньше');
+});
+
+test('запуск: файл документа уходит, только если он есть в копии; загруженный после просьбы — остаётся', async () => {
+  const { dir, db } = clinic();
+  const pid = db.prepare('SELECT id FROM patients').get().id;
+  const docs = path.join(dir, 'storage', 'clinic-docs', 'patients', String(pid), 'docs');
+  fs.mkdirSync(docs, { recursive: true });
+  fs.writeFileSync(path.join(docs, '1-training.pdf'), 'учебный');
+  await requestTestDataWipe(db, dir);
+  fs.writeFileSync(path.join(docs, '2-after.pdf'), 'загружен между просьбой и перезапуском');
+  const out = applyPendingTestDataWipe(db, dir, { diskSpaceImpl: ROOMY });
+  assert.equal(out.ok, true);
+  assert.equal(fs.existsSync(path.join(docs, '1-training.pdf')), false);
+  assert.ok(fs.existsSync(path.join(docs, '2-after.pdf')), 'его нет в копии — без пути назад не удаляется');
+  assert.deepEqual(readWipeResult(dir).files, { removed: 1, failed: 1 });
+  assert.match(out.line, /files 1 \(не удалено 1\)/);
+});
+
+test('итог и строка журнала называют, кто и когда просил удалить (без данных пациентов)', async () => {
+  const { dir, db } = clinic();
+  const asked = new Date(2026, 9, 30, 10, 0, 0);
+  await requestTestDataWipe(db, dir, { now: asked, userId: 7 });
+  const out = applyPendingTestDataWipe(db, dir, { diskSpaceImpl: ROOMY });
+  const res = readWipeResult(dir);
+  assert.equal(res.requested_by, 7);
+  assert.equal(res.requested_at, asked.toISOString());
+  assert.ok(out.line.endsWith(`; просил пользователь 7, ${asked.toISOString()}`), out.line);
+  // Отказ — тоже.
+  const other = clinic();
+  await requestTestDataWipe(other.db, other.dir, { now: asked, userId: 7 });
+  pair(other.dir);
+  const refused = applyPendingTestDataWipe(other.db, other.dir, { diskSpaceImpl: ROOMY });
+  assert.equal(readWipeResult(other.dir).requested_by, 7);
+  assert.match(refused.line, /; просил пользователь 7, /);
 });
 
 test('запуск: места на журнал удаления нет — итог no_space с шаблоном и числами для экрана, база цела, намерение в .bad', async () => {
@@ -173,7 +249,7 @@ test('запуск: места на журнал удаления нет — и�
   assert.equal(out.action, 'test_data_wipe');
   assert.equal(out.ok, false);
   assert.equal(out.reason, 'no_space', 'не «не удалось»: причина — место, и её надо назвать');
-  assert.match(out.line, /^Недостаточно места на диске: нужно \d+,\d ГБ, свободно 0,0 ГБ\. Тестовые данные не удалены\.$/);
+  assert.match(out.line, /^Недостаточно места на диске: нужно \d+,\d ГБ, свободно 0,0 ГБ\. Тестовые данные не удалены\.; просил пользователь \?, \d{4}-/);
   assert.equal(visits(db), 1, 'база цела');
   assert.equal(fs.existsSync(marker(dir)), false);
   assert.ok(fs.existsSync(marker(dir) + '.bad'));

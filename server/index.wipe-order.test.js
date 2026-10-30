@@ -46,6 +46,29 @@ test('вызов один, прямо в теле запуска — не в о�
     'отступ два пробела — прямо в блоке if (isMain), а не во вложенной функции');
 });
 
+// Ревью C4: между migrate и удалением — только то, что там стоит сейчас и не
+// трогает визиты и деньги: сжатие журнала базы, таймер сжатия (первый такт —
+// через час, удаление к тому времени давно закончено) и уборка разрешений
+// серверных дверей баланса. Новый планировщик или проход, вставленный сюда,
+// обогнал бы удаление — тест упадёт и заставит решить, где ему место.
+// Сравнивается код без комментариев и пробелов.
+const ALLOWED_BETWEEN = [
+  'checkpointWal(db);',
+  'scheduleWalCheckpoint(db);',
+  "try { db.exec('DELETE FROM ledger_write_token; DELETE FROM merge_money_moves;'); }",
+  "catch (e) { console.warn('[ledger-token] cleanup:', e.message); }",
+];
+// Комментарий — «//» в начале строки или после пробела (хвост строки кода).
+const bare = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1').replace(/\s+/g, '');
+
+test('между migrate(db) и удалением — только разрешённое: сжатие журнала и уборка разрешений баланса', () => {
+  const from = at('migrate(db);') + 'migrate(db);'.length;
+  const to = at('const testDataWipe = applyPendingTestDataWipe(db, DATA_DIR)');
+  assert.equal(src.indexOf('migrate(db);', from), -1, 'migrate(db); — один раз');
+  assert.equal(bare(src.slice(from, to)), bare(ALLOWED_BETWEEN.join('\n')),
+    'между migrate(db) и удалением тестовых данных появилось что-то новое:\n' + src.slice(from, to));
+});
+
 function* walk(dir) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);

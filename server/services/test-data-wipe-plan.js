@@ -292,7 +292,11 @@ export const TABLE_PLAN = Object.freeze({
 
   // ── служебные ──────────────────────────────────────────────────────────
   schema_migrations: keep('service'),
-  control_state: keep('service'),          // лицензия, часы связи зданий
+  // лицензия, часы связи зданий; и отметка test_data_wipe_done — по какой копии
+  // намерение удалить тестовые данные уже исполнено (test-data-wipe.js DONE_KEY).
+  // Строка пишется после удаления и должна его пережить: без неё застрявшее
+  // намерение повторило бы удаление уже на настоящих данных.
+  control_state: keep('service'),
   ops_events: keep('service'),             // статистика без данных пациентов
   telegram_state: keep('service'),
   doctor_bot_state: keep('service'),

@@ -14,8 +14,8 @@ import path from 'node:path';
 import { TABLE_PLAN, WIPE_ORDER, GUARD_TRIGGERS, tablesBy } from './test-data-wipe-plan.js';
 import { SHIPPED } from './branch-sync/journal.js';
 import { checkpointWal } from '../db/connection.js';
-import { currentDiskSpace, dbBytes, copyNeedBytes, RESERVE_BYTES, gbText, gbValue } from './disk-guard.js';
-import { createBackup, listBackups, MARKER_NAME } from './backup.js';
+import { currentDiskSpace, dbBytes, RESERVE_BYTES, gbText, gbValue } from './disk-guard.js';
+import { createBackup, listBackups, storageSnapshotDir, MARKER_NAME } from './backup.js';
 import { readPairing } from './branch-sync/pairing.js';
 import { readJsonFile, writeAtomic } from './control/checkin.js';
 
@@ -325,10 +325,49 @@ function warnDocs(dataDir, dir, what, code) {
   console.warn(`[test-data-wipe] ${what}:`, path.relative(dataDir, dir), code || '');
 }
 
+// Имя копии — только то, что могла дать программа (как NAME_RE в backup.js):
+// без разделителей пути и без «..».
+const COPY_NAME_RE = /^[A-Za-z0-9._-]+\.db$/;
+
+/**
+ * Ревью C4 — есть ли файл документа в копии «Перед удалением тестовых
+ * данных»: тот же путь от storage/ в снимке хранилища копии
+ * (backup.js storageSnapshotDir: backups/<имя без .db>.files/), там —
+ * настоящий файл (не ссылка) того же размера, и ни сам снимок, ни одна папка
+ * на пути к файлу в нём не ссылка. Снимок делается жёсткими ссылками, и
+ * файл, который не удалось ни связать, ни скопировать (антивирус, место),
+ * копия только отмечает строкой в журнале; файл, загруженный между копией и
+ * перезапуском, в неё не попал вовсе. Такой файл без пути назад не удаляется.
+ * Копия не названа или её снимка нет — «нет в копии» для всех.
+ * @returns {(file: string, size: number) => boolean}
+ */
+function copyCheck(dataDir, backup) {
+  const none = () => false;
+  if (typeof backup !== 'string' || !COPY_NAME_RE.test(backup)) return none;
+  if (entryKind(path.join(dataDir, 'backups')) !== 'dir') return none;
+  const snap = storageSnapshotDir(dataDir, backup);
+  if (entryKind(snap) !== 'dir') return none;
+  const storage = path.join(dataDir, 'storage');
+  return (file, size) => {
+    const rel = path.relative(storage, file);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
+    const segs = rel.split(path.sep);
+    let cur = snap;
+    for (const seg of segs.slice(0, -1)) {
+      cur = path.join(cur, seg);
+      if (entryKind(cur) !== 'dir') return false;
+    }
+    let st;
+    try { st = fs.lstatSync(path.join(cur, segs[segs.length - 1])); } catch { return false; }
+    return st.isFile() && st.size === size;
+  };
+}
+
 // Очистить настоящую папку документов со всеми вложенными настоящими папками.
 // Ссылка и всё, что не файл и не папка, не открывается и не удаляется — и
-// считается «не удалено»: за ней могли лежать документы.
-function clearDocsDir(dataDir, docs, dir, tally) {
+// считается «не удалено»: за ней могли лежать документы. Файл, которого нет в
+// копии (inCopy), тоже остаётся и считается «не удалено».
+function clearDocsDir(dataDir, docs, dir, tally, inCopy) {
   let names;
   try { names = fs.readdirSync(dir); } catch (err) {
     warnDocs(dataDir, docs, 'папка документов не прочитана', err && err.code);
@@ -341,9 +380,17 @@ function clearDocsDir(dataDir, docs, dir, tally) {
     const kind = entryKind(p);
     if (kind === null) continue;                  // исчез сам
     if (kind === 'dir') {
-      clearDocsDir(dataDir, docs, p, tally);
+      clearDocsDir(dataDir, docs, p, tally, inCopy);
       if (fs.existsSync(p)) left++;
     } else if (kind === 'file') {
+      let size = -1;
+      try { size = fs.lstatSync(p).size; } catch { /* исчез — проверка копии ниже его не пропустит */ }
+      if (!inCopy(p, size)) {
+        tally.failed++;
+        left++;
+        warnDocs(dataDir, docs, 'файла нет в копии «Перед удалением тестовых данных» — не удалён');
+        continue;
+      }
       const r = unlinkFile(p);
       if (r === 'ok') tally.removed++;
       else if (r !== 'gone') { tally.failed++; left++; warnDocs(dataDir, docs, 'файл документа не удалён', r); }
@@ -373,6 +420,11 @@ function clearDocsDir(dataDir, docs, dir, tally) {
  * трогаются. Копия «Перед удалением тестовых данных» держит файлы жёсткими
  * ссылками (snapshotStorage) — путь назад цел.
  *
+ * Ревью C4 — удаляется только файл, который есть в этой копии (copyCheck):
+ * имя копии приходит из намерения (backup). Файла в копии нет — не удалось
+ * связать или загружен после копии — он остаётся и считается в failed («не
+ * удалено N» в итоге). Копия не названа — не удаляется ничего.
+ *
  * Только внутри папки данных: имена берутся из чтения папок, а не из базы или
  * запроса, и ни одна ссылка (symlink, junction) — ни на пути к папкам
  * документов, ни внутри них — не открывается и не удаляется: снимок копии по
@@ -380,8 +432,9 @@ function clearDocsDir(dataDir, docs, dir, tally) {
  * ссылка считается в failed. Никогда не бросает.
  * @returns {{removed:number, failed:number}}
  */
-export function removeVisitDocFiles(dataDir) {
+export function removeVisitDocFiles(dataDir, { backup = null } = {}) {
   const tally = { removed: 0, failed: 0 };
+  const inCopy = copyCheck(dataDir, backup);
   let root = dataDir;
   for (const seg of ['storage', 'clinic-docs', 'patients']) {
     root = path.join(root, seg);
@@ -410,7 +463,7 @@ export function removeVisitDocFiles(dataDir) {
     if (cardKind !== 'dir') continue;             // прежнее фото пациента — не документ
     const docs = path.join(card, 'docs');
     const docsKind = entryKind(docs);
-    if (docsKind === 'dir') clearDocsDir(dataDir, docs, docs, tally);
+    if (docsKind === 'dir') clearDocsDir(dataDir, docs, docs, tally, inCopy);
     else if (docsKind === 'link') {
       warnDocs(dataDir, docs, 'папка документов — ссылка, не открывается и не удаляется', docsKind);
       tally.failed++;
@@ -462,8 +515,11 @@ export function vacuumAfterWipe(db, dataDir, { diskSpaceImpl = currentDiskSpace 
  * примерно на объём удаляемого. Свободного места меньше этого и запаса 1 ГБ
  * (RESERVE_BYTES) — отказ 'no_space' ДО транзакции (wipeNoSpaceError).
  * Платформа не сказала, сколько места, — удаление идёт, как копии.
+ *
+ * backup — имя копии «Перед удалением тестовых данных» из намерения: файлы
+ * документов удаляются, только если они есть в ней (ревью C4).
  */
-export function runTestDataWipe(db, dataDir, { diskSpaceImpl = currentDiskSpace } = {}) {
+export function runTestDataWipe(db, dataDir, { diskSpaceImpl = currentDiskSpace, backup = null } = {}) {
   const space = diskSpaceImpl(dataDir);
   if (space) {
     const need = estimateWipeBytes(db) + RESERVE_BYTES;
@@ -473,7 +529,7 @@ export function runTestDataWipe(db, dataDir, { diskSpaceImpl = currentDiskSpace 
     }
   }
   const result = wipeTestData(db);
-  const files = removeVisitDocFiles(dataDir);
+  const files = removeVisitDocFiles(dataDir, { backup });
   const vacuum = vacuumAfterWipe(db, dataDir, { diskSpaceImpl });
   return { ...result, files, vacuum };
 }
@@ -568,6 +624,18 @@ function doneFor(db, backup) {
   } catch { return null; }
 }
 
+// Ревью C4 — кто и когда просил: из намерения, только номер пользователя и
+// время (то, что пишет requestTestDataWipe); всё прочее — null.
+function requestOf(m) {
+  const by = Number.isSafeInteger(m.requested_by) ? m.requested_by : null;
+  const at = typeof m.requested_at === 'string' && m.requested_at.length <= 40 && Number.isFinite(Date.parse(m.requested_at))
+    ? m.requested_at : null;
+  return { requested_at: at, requested_by: by };
+}
+
+const requestNote = (r) => (r.requested_by === null && r.requested_at === null
+  ? '' : `; просил пользователь ${r.requested_by ?? '?'}, ${r.requested_at ?? '?'}`);
+
 /** Что показать на «Данных клиники»: связана ли клиника, ждёт ли удаление запуска, итог прошлого. */
 export function wipeStatus(dataDir) {
   const m = readJsonFile(path.join(dataDir, MARKER_NAME));
@@ -575,40 +643,32 @@ export function wipeStatus(dataDir) {
 }
 
 /**
- * Ревью C3 — место при просьбе: на копию «Перед удалением тестовых данных»
- * (база × 1,2 + 1 ГБ, copyNeedBytes) и сверху — на журнал самого удаления
- * (estimateWipeBytes). Запас 1 ГБ, который удаление при запуске требует сверх
- * журнала (runTestDataWipe), уже внутри места на копию: после копии свободно
- * останется не меньше журнала и запаса — запуск не откажет по месту. Не
- * хватает — отказ 'no_space' словами удаления ДО копии и ДО намерения.
- * Платформа не сказала, сколько места, — дальше решает охрана копии.
- * Оценка читает страницы затронутых таблиц — на учебной базе доли секунды.
- */
-function ensureRequestSpace(db, dataDir, diskSpaceImpl) {
-  const space = diskSpaceImpl(dataDir);
-  if (!space) return;
-  const need = copyNeedBytes(dbBytes(path.join(dataDir, 'easymed.db'))) + estimateWipeBytes(db);
-  if (space.free < need) {
-    console.warn(`[test-data-wipe] удаление не запрошено: нужно ${need} Б (копия и журнал удаления), свободно ${space.free} Б`);
-    throw wipeNoSpaceError(need, space.free);
-  }
-}
-
-/**
  * Просьба администратора (rpc/backup.js testDataWipe): сначала копия «Перед
  * удалением тестовых данных» — это и есть путь назад, — потом намерение в
  * pending-action.json. Копия ДО намерения: как только намерение лежит,
  * перезапуск удалит, и состояние, которое уходит, к этому моменту уже должно
- * быть в копии. Перед копией — место на копию И на удаление
- * (ensureRequestSpace); сама копия идёт через охрану места (createBackup →
- * ensureCopySpace). Места нет — бросает 'no_space', намерение не пишется,
- * ничего не удаляется.
+ * быть в копии.
+ *
+ * Место (ревью C3/C4): копию охраняет правило 3.18.1 (createBackup →
+ * ensureCopySpace, в очереди копий), и ему передаётся добавка — оценка
+ * журнала самого удаления (estimateWipeBytes, один раз). Охрана сверяет
+ * СУММУ: база × 1,2 + 1 ГБ + журнал удаления — и, как для любой копии,
+ * уступает старые автоматические копии. Запас 1 ГБ, который удаление при
+ * запуске требует сверх журнала (runTestDataWipe), уже внутри места на копию.
+ * Не хватает и после уступок — отказ 'no_space' словами удаления
+ * (wipeNoSpaceError: «Тестовые данные не удалены»): ни копии, ни намерения.
  * @returns {Promise<{ok:true, backup:string}|{ok:false, reason:'paired'}>}
  */
 export async function requestTestDataWipe(db, dataDir, { now = new Date(), userId = null, diskSpaceImpl = currentDiskSpace } = {}) {
   if (isPaired(dataDir)) return { ok: false, reason: 'paired' };
-  ensureRequestSpace(db, dataDir, diskSpaceImpl);
-  const copy = await createBackup(db, dataDir, 'wipe', now, { diskSpaceImpl });
+  const extraNeedBytes = estimateWipeBytes(db);
+  let copy;
+  try {
+    copy = await createBackup(db, dataDir, 'wipe', now, { diskSpaceImpl, extraNeedBytes });
+  } catch (e) {
+    if (e && e.code === 'no_space') throw wipeNoSpaceError(e.need_bytes, e.free_bytes);
+    throw e;
+  }
   // Пока делалась копия, клинику могли связать с другим зданием.
   if (isPaired(dataDir)) return { ok: false, reason: 'paired' };
   writeAtomic(path.join(dataDir, MARKER_NAME), JSON.stringify({
@@ -634,6 +694,9 @@ export async function requestTestDataWipe(db, dataDir, { now = new Date(), userI
  * шаблон и числа, экран переведёт фразу целиком), 'failed' (сбой
  * транзакции; нет копии «Перед удалением» — нет пути назад).
  *
+ * Итог и строка журнала называют, кто и когда просил (requested_by — номер
+ * пользователя, requested_at — время просьбы; данных пациентов нет).
+ *
  * @returns {{action:null}|{action:'test_data_wipe', ok:boolean, reason?:string, line:string}}
  */
 export function applyPendingTestDataWipe(db, dataDir, { diskSpaceImpl = currentDiskSpace, now = () => new Date() } = {}) {
@@ -641,6 +704,8 @@ export function applyPendingTestDataWipe(db, dataDir, { diskSpaceImpl = currentD
   const m = readJsonFile(markerPath);
   if (!m || m.action !== WIPE_ACTION) return { action: null };
   const backup = typeof m.backup === 'string' && m.backup ? m.backup : null;
+  const asked = requestOf(m);
+  const note = requestNote(asked);
   try {
     const prev = readWipeResult(dataDir);
     const last = backup && prev && prev.backup === backup ? prev : null;
@@ -650,19 +715,19 @@ export function applyPendingTestDataWipe(db, dataDir, { diskSpaceImpl = currentD
         try { fs.unlinkSync(markerPath); } catch { /* повторим; отметка DONE_KEY не даст удалить второй раз */ }
         return {
           action: WIPE_ACTION, ok: true,
-          line: last ? summaryLine(last) : 'Тестовые данные уже удалены прошлым запуском (итог того удаления не сохранился).',
+          line: (last ? summaryLine(last) : 'Тестовые данные уже удалены прошлым запуском (итог того удаления не сохранился).') + note,
         };
       }
       setAside(markerPath);
-      return { action: WIPE_ACTION, ok: false, reason: done.reason || 'failed', line: 'Тестовые данные НЕ удалены (намерение уже разобрано прошлым запуском).' };
+      return { action: WIPE_ACTION, ok: false, reason: done.reason || 'failed', line: 'Тестовые данные НЕ удалены (намерение уже разобрано прошлым запуском).' + note };
     }
     const at = now().toISOString();
     const refuse = (reason, line, extra = {}) => {
-      const outcome = { ok: false, reason, at, backup, ...extra };
+      const outcome = { ok: false, reason, at, backup, ...asked, ...extra };
       markDone(db, backup, outcome);
       writeWipeResult(dataDir, outcome);
       setAside(markerPath);
-      return { action: WIPE_ACTION, ok: false, reason, line };
+      return { action: WIPE_ACTION, ok: false, reason, line: line + note };
     };
     if (isPaired(dataDir)) {
       const line = 'Тестовые данные НЕ удалены: клиника связана с другими зданиями.';
@@ -679,7 +744,7 @@ export function applyPendingTestDataWipe(db, dataDir, { diskSpaceImpl = currentD
     }
     let result;
     try {
-      result = runTestDataWipe(db, dataDir, { diskSpaceImpl });
+      result = runTestDataWipe(db, dataDir, { diskSpaceImpl, backup });
     } catch (e) {
       if (e && e.code === 'no_space') {
         // Ревью C3 — причина словами: экран (C5) переводит фразу по шаблону.
@@ -690,14 +755,14 @@ export function applyPendingTestDataWipe(db, dataDir, { diskSpaceImpl = currentD
       console.error('[test-data-wipe] удаление не прошло, база не тронута:', e && e.message);
       return refuse('failed', 'Тестовые данные НЕ удалены — база не тронута (причина — строкой выше).');
     }
-    const out = { ok: true, at, backup, ...result };
+    const out = { ok: true, at, backup, ...asked, ...result };
     markDone(db, backup, out);
     writeWipeResult(dataDir, out);
     try { fs.unlinkSync(markerPath); } catch { /* следующий запуск увидит итог этой копии (или отметку) и только уберёт намерение */ }
-    return { action: WIPE_ACTION, ok: true, line: summaryLine(out) };
+    return { action: WIPE_ACTION, ok: true, line: summaryLine(out) + note };
   } catch (e) {
     console.error('[test-data-wipe] сбой:', e && e.message);
     setAside(markerPath);
-    return { action: WIPE_ACTION, ok: false, reason: 'failed', line: 'Тестовые данные НЕ удалены.' };
+    return { action: WIPE_ACTION, ok: false, reason: 'failed', line: 'Тестовые данные НЕ удалены.' + note };
   }
 }
