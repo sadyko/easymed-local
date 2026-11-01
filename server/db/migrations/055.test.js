@@ -60,6 +60,14 @@ const NON_NAV_GATES = {
   // live in admin.js: the workplace is not a sidebar section, it is a button
   // next to «Канбан».
   custdev: /canView\('custdev'\)/,
+  // CHATS_TO_COMMERCE_V1 / REFERRALS_TO_COMMERCE_V1 (3.20.0) — «Чат с
+  // пациентами», «Чат Facebook и Instagram» и «Реферирование» ушли из бокового
+  // меню на витрину «Коммерческие инструменты». Ключи не мёртвые: каждый
+  // открывает свою карточку витрины, а с ней — сам пункт (permissions.js,
+  // правило navId === 'commerce'), и свой экран по адресу (isRouteAllowed).
+  'telegram-chat': /isRouteAllowed\('telegram-chat'\) \|\| isRouteAllowed\('meta-chat'\)/,
+  'meta-chat': /isRouteAllowed\('telegram-chat'\) \|\| isRouteAllowed\('meta-chat'\)/,
+  referrals: /if \(view === 'referrals'\) return isModuleAllowed\('referrals'\)/,
 };
 
 // Files a non-NAV gate may live in. crm.js joined the list with CUSTDEV_V1 — a
@@ -122,6 +130,11 @@ test('every sidebar module can be granted to a role', () => {
     // migration 144); belonging to a department is a FACT about the person on
     // top of that key, not a second right.
     if (id === 'my-department') return !grantable.has('my-stock');
+    // COMMERCE_NAV_V1 / CHATS_TO_COMMERCE_V1 — «Коммерческие инструменты» —
+    // витрина без своего ключа: пункт виден тому, кому открыт хоть один её
+    // инструмент (permissions.js, navId === 'commerce'). Выдаётся он ключами
+    // этих инструментов — чатов и «Реферирования».
+    if (id === 'commerce') return !['telegram-chat', 'meta-chat', 'referrals'].some((k) => grantable.has(k));
     return true;
   });
   assert.deepEqual(ungrantable, [], 'sidebar modules with no way to grant them:\n' + ungrantable.join('\n'));

@@ -4,7 +4,10 @@ import assert from 'node:assert/strict';
 import { normalizeHidden, isHiddenView, navGroups, canHide, withHidden, NEVER_HIDDEN } from './nav-visibility-logic.js';
 
 test('normalizeHidden: годные id, без «Настроек», без повторов, по алфавиту', () => {
-    assert.deepEqual(normalizeHidden(['crm', 'settings', 'crm', 'telegram-chat', 'DROP TABLE', '', 42, null, 'my-stock']), ['crm', 'my-stock', 'telegram-chat']);
+    // CHATS_TO_COMMERCE_V1 (3.20.0) — 'telegram-chat' больше не пункт меню (он на
+    // витрине «Коммерческие инструменты») и отбрасывается, как любой чужой id;
+    // скрываемый пример — «Старший кассир».
+    assert.deepEqual(normalizeHidden(['crm', 'settings', 'crm', 'cashier-head', 'telegram-chat', 'DROP TABLE', '', 42, null, 'my-stock']), ['cashier-head', 'crm', 'my-stock']);
     assert.deepEqual(normalizeHidden(undefined), []);
     assert.deepEqual(normalizeHidden('crm'), [], 'строка вместо списка — пусто, не падение');
     assert.deepEqual([...NEVER_HIDDEN], ['settings']);

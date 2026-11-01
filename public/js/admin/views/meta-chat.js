@@ -175,9 +175,13 @@ function paintHead() {
         refs.headRight.appendChild(h('button', {
             class: 'btn ' + (st.enabled ? 'btn-ghost' : 'btn-primary'), type: 'button', 'data-meta-toggle': '',
             onclick: async (e) => {
-                e.currentTarget.disabled = true;
+                // currentTarget обнуляется после первого await: кнопку берём
+                // заранее, иначе после ошибки она осталась бы выключенной
+                // (current-target-after-await.test.mjs).
+                const btn = e.currentTarget;
+                btn.disabled = true;
                 try { state.info = await rpc('meta_inbox_toggle', { enabled: !st.enabled }); paintHead(); }
-                catch (err) { toast(err.message, 'error'); e.currentTarget.disabled = false; }
+                catch (err) { toast(err.message, 'error'); btn.disabled = false; }
             },
         }, st.enabled ? 'Выключить' : 'Включить'));
     }

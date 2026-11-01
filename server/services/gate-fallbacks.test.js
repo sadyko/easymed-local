@@ -52,6 +52,8 @@ const ALLOW = {
   "db/pay-visibility.js|canSeeReportKey|'reports.doctor_pay'": { n: 1, why: 'ставки врачей — по группе отчётов reports.doctor_pay (REPORT_GROUP)' },
   // V3120_FIX — деньги сводки видит тот, кто видит группу «Выручка и счета»: то же правило, что у отчётов.
   "services/rpc/dashboard.js|canSeeReportKey|'reports.revenue'": { n: 1, why: 'деньги сводки — по группе отчётов reports.revenue (REPORT_GROUP)' },
+  // DASHBOARD_OVERVIEW_V1 (3.20.0) — «Обзор клиники» на дашборде: деньги — по тому же правилу, что сводка строкой выше.
+  "services/rpc/dashboard-overview.js|canSeeReportKey|'reports.revenue'": { n: 1, why: 'деньги «Обзора клиники» — по группе отчётов reports.revenue (REPORT_GROUP), как у сводки' },
   "services/rpc/referrals.js|canSeeReportKey|'reports.referrals'": { n: 1, why: 'REFERRALS_NAV_V1 — деньги «Реферирования» по группе отчётов reports.referrals (REPORT_GROUP), как у отчёта «Рефералы»' },
   // V3120_CLEANUP — «CRM: просмотр» закрывает запись заявок. Эти ворота только СУЖАЮТ:
   // кто пишет в crm_* — решают роли реестра; явный «просмотр» ключа crm или раздел

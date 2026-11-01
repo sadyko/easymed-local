@@ -75,7 +75,6 @@ async function openCard(root, name) {
 const picks = (modal) => byAttr(modal, 'data-src-pick');
 const pick = (modal, key) => picks(modal).find((n) => n.getAttribute('data-src-pick') === key);
 // Отмеченные — в порядке чипов (порядок справочника); главный — со звёздочкой.
-const pressed = (modal) => picks(modal).filter((n) => n.getAttribute('aria-pressed') === 'true').map((n) => n.getAttribute('data-src-pick'));
 const mainPick = (modal) => picks(modal).filter((n) => n.hasAttribute('data-src-main')).map((n) => n.getAttribute('data-src-pick'));
 
 test('список фильтра: заявка считается в каждом своём источнике, «Все» — по заявкам; скрытый источник заявки тоже в списке', async () => {
@@ -128,60 +127,61 @@ test('карточка доски — тег на каждый источник;
   window.easymed.state.user = null;
 });
 
-test('окно заявки: выбор по несколько в порядке нажатий, последний не снимается, уходит массив и главный = первый', async () => {
+// CRM_SOURCE_SINGLE_V1 (2026-10-30, владелец: «Remove multiselect from istochnik»)
+// — в окне заявки источник ОДИН: клик выбирает пункт (aria-selected) и заменяет
+// список. Заявка, у которой источников уже несколько (CRM_MULTI_SOURCE_V1),
+// сохраняет их, пока оператор не выберет другой. Фильтр, карточки, Excel и отчёт
+// по-прежнему читают все источники заявки (тесты выше и ниже).
+const selected = (modal) => picks(modal).filter((n) => n.getAttribute('aria-selected') === 'true').map((n) => n.getAttribute('data-src-pick'));
+const saveCard = async (modal) => {
+  CALLS.length = 0;
+  walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Сохранить')).click();
+  await tick(120);
+  return CALLS.find((c) => c.table === 'crm_requests' && c.op === 'update' && 'sources' in (c.values || {}));
+};
+
+test('окно заявки: источники прежней заявки (несколько) не теряются, пока оператор не выберет другой', async () => {
   const root = await board();
   const modal = await openCard(root, 'Каримова');
   assert.ok(modal, 'окно заявки не открылось');
   assert.deepEqual(picks(modal).map((n) => n.getAttribute('data-src-pick')), ['call', 'instagram', 'referral', 'other'],
     'предлагаются видимые источники');
-  assert.deepEqual(pressed(modal), ['instagram', 'referral']);
-  assert.deepEqual(mainPick(modal), ['instagram'], 'главный не отмечен звёздочкой');
-
-  pick(modal, 'instagram').click();      // снять главный — главным становится «Рекомендация»
-  assert.deepEqual(pressed(modal), ['referral']);
-  assert.deepEqual(mainPick(modal), ['referral']);
-  TOASTS.length = 0;
-  pick(modal, 'referral').click();       // последний — не снимается
-  assert.deepEqual(pressed(modal), ['referral']);
-  assert.ok(TOASTS.some((t) => t.includes('Нужен хотя бы один источник')), 'нет подсказки про последний источник: ' + JSON.stringify(TOASTS));
-  pick(modal, 'call').click();           // добавить — в конец
-  assert.deepEqual(mainPick(modal), ['referral'], 'добавленный источник стал главным');
-
-  CALLS.length = 0;
-  walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Сохранить')).click();
-  await tick(120);
-  const upd = CALLS.find((c) => c.table === 'crm_requests' && c.op === 'update' && 'sources' in (c.values || {}));
+  assert.deepEqual(selected(modal), [], 'у заявки два источника — ни один пункт не отмечен единственным');
+  assert.deepEqual(mainPick(modal), [], 'звёздочки «главный» больше нет');
+  const upd = await saveCard(modal);
   assert.ok(upd, 'правка заявки не ушла');
-  assert.deepEqual(upd.values.sources, ['referral', 'call']);
-  assert.equal(upd.values.source, 'referral', 'главный источник — первый выбранный');
+  assert.deepEqual(upd.values.sources, ['instagram', 'referral'], 'открыть и сохранить — источники молча потерялись');
+  assert.equal(upd.values.source, 'instagram');
   window.easymed.state.user = null;
 });
 
-test('окно заявки: скрытый источник, стоящий у заявки, виден и снимается; соседская заявка (только source) читается [source]', async () => {
+test('окно заявки: выбор заменяет список одним источником; скрытый источник заявки предлагается; только source читается [source]', async () => {
   let root = await board();
   let modal = await openCard(root, 'Азимов');
-  assert.ok(pick(modal, 'telegram'), 'скрытый источник заявки нечем снять');
-  assert.deepEqual(pressed(modal), ['call', 'telegram']);
-  assert.deepEqual(mainPick(modal), ['telegram'], 'главный — первый источник заявки, а не первый чип');
+  assert.ok(pick(modal, 'telegram'), 'скрытый источник заявки не предложен — выбрать его снова нечем');
+  pick(modal, 'call').click();
+  assert.deepEqual(selected(modal), ['call'], 'выбор не отмечен');
   pick(modal, 'telegram').click();
-  assert.deepEqual(pressed(modal), ['call']);
-  assert.deepEqual(mainPick(modal), ['call']);
-  assert.ok(pick(modal, 'telegram'), 'снятый скрытый источник пропал из выбора — вернуть его нечем');
+  assert.deepEqual(selected(modal), ['telegram'], 'второй выбор не заменил первый');
+  const upd = await saveCard(modal);
+  assert.deepEqual(upd.values.sources, ['telegram']);
+  assert.equal(upd.values.source, 'telegram');
 
   root = await board();
   modal = await openCard(root, 'Юсупов');
-  assert.deepEqual(pressed(modal), ['instagram']);
+  assert.deepEqual(selected(modal), ['instagram']);
   window.easymed.state.user = null;
 });
 
-test('новая заявка начинает с источника по умолчанию; вставка несёт sources', async () => {
+test('новая заявка начинает с источника по умолчанию; выбор — один источник', async () => {
   const root = await board();
   CALLS.length = 0;
   button(root, /Новая заявка/).click();
   await tick();
   const modal = document.body.children.find((n) => String(n.className).includes('modal'));
-  assert.deepEqual(pressed(modal), ['call'], 'по умолчанию — первый видимый источник');
+  assert.deepEqual(selected(modal), ['call'], 'по умолчанию — первый видимый источник');
   pick(modal, 'instagram').click();
+  assert.deepEqual(selected(modal), ['instagram']);
   const inputs = walk(modal).filter((n) => n.tagName === 'INPUT');
   inputs.find((n) => /Фамилия Имя/.test(n.getAttribute('placeholder') || '')).value = 'Буронова Феруза';
   inputs.find((n) => n.getAttribute('type') === 'tel').value = '+998 91 566 22 78';
@@ -189,8 +189,8 @@ test('новая заявка начинает с источника по умо
   await tick(80);
   const ins = CALLS.find((c) => c.table === 'crm_requests' && c.op === 'insert');
   assert.ok(ins, 'заявка не создана');
-  assert.deepEqual(ins.values.sources, ['call', 'instagram']);
-  assert.equal(ins.values.source, 'call');
+  assert.deepEqual(ins.values.sources, ['instagram']);
+  assert.equal(ins.values.source, 'instagram');
   window.easymed.state.user = null;
 });
 

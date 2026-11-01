@@ -80,6 +80,10 @@ export const MERGE_TABLES = Object.freeze([
   // PUBLIC_API_V1 (мигр. 245) — карта, выбранная регистратором для заявки из API.
   { table: 'api_requests', cols: ['patient_id'], how: 'move' },
   { table: 'custdev_cards', cols: ['patient_id'], how: 'move' },
+  // 3.20.0 — журналы отправок пациенту переезжают с картой: «кому уже
+  // отправляли» (защита от повтора ссылки на бота, история рассылок).
+  { table: 'patient_bot_invites', cols: ['patient_id'], how: 'move' },   // PATIENT_BOT_INVITE_V1 (мигр. 268)
+  { table: 'sms_broadcast_targets', cols: ['patient_id'], how: 'move' }, // SMS_PUSH_V1 (мигр. 262)
   { table: 'patient_deposits', cols: ['patient_id'], how: 'money' },
   { table: 'patient_guardians', cols: ['patient_id', 'guardian_patient_id'], how: 'guardians' },
   { table: 'patient_relationships', cols: ['patient_id_a', 'patient_id_b'], how: 'relationships' },

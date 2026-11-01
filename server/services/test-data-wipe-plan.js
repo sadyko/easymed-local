@@ -208,6 +208,19 @@ export const TABLE_PLAN = Object.freeze({
   telegram_deeplink_hits: keep('crm'),
   telegram_deeplink_leads: keep('crm'),
   doctor_bot_links: keep('crm'),
+  // 3.20.0 — переписка и связки остаются, как Telegram выше: это контакты
+  // клиники, а не учебные визиты и деньги.
+  rep_bot_links: keep('crm'),              // REP_BOT_V1 — подключённые медпредставители
+  rep_bot_drafts: keep('crm'),             // REP_BOT_V1 — недописанная анкета врача
+  rep_bot_additions: keep('crm'),          // REP_BOT_V1 — кто завёл врача через бота
+  patient_bot_invites: keep('crm'),        // PATIENT_BOT_INVITE_V1 — «Ссылка на бот» из списка пациентов
+  lead_bot_invites: keep('crm'),           // PATIENT_BOT_INVITE_V1 — то же из карточки заявки
+  sms_messages: keep('crm'),               // SMS_INFORM_V1 — журнал SMS
+  sms_broadcasts: keep('crm'),             // SMS_PUSH_V1 — рассылки
+  sms_broadcast_targets: keep('crm'),
+  meta_conversations: keep('crm'),         // META_INBOX_V1 — переписка Facebook / Instagram
+  meta_messages: keep('crm'),
+  meta_comments: keep('crm'),
 
   // ── сотрудники, роли, права ────────────────────────────────────────────
   users: keep('staff'),
@@ -284,6 +297,9 @@ export const TABLE_PLAN = Object.freeze({
   meta_settings: keep('settings'),
   telegram_settings: keep('settings'),
   doctor_bot_settings: keep('settings'),
+  rep_bot_settings: keep('settings'),      // REP_BOT_V1
+  sms_settings: keep('settings'),          // SMS_INFORM_V1 — подключение Play Mobile
+  clinic_news: keep('settings'),           // CLINIC_NEWS_V1 — объявления клиники для сотрудников
   telephony_settings: keep('settings'),
   telephony_providers: keep('settings'),
   nav_visibility: keep('settings'),
@@ -300,6 +316,8 @@ export const TABLE_PLAN = Object.freeze({
   ops_events: keep('service'),             // статистика без данных пациентов
   telegram_state: keep('service'),
   doctor_bot_state: keep('service'),
+  rep_bot_state: keep('service'),          // REP_BOT_V1 — смещение getUpdates
+  meta_inbox_state: keep('service'),       // META_INBOX_V1 — курсоры опроса
   referral_source_counter: keep('service'),
   referral_rate_migration_log: keep('service'),
   // Отметки разовых исправлений CRM: без них исправление прошло бы снова.

@@ -351,6 +351,13 @@ export function crmMergeLeads(db, args, user) {
     // только при удалении, но перенос — явный, чтобы ссылка вела на живую карточку).
     try { db.prepare(`UPDATE telegram_deeplink_leads SET crm_request_id = ? WHERE crm_request_id IN (${lh})`).run(keepId, ...mergeIds); }
     catch { /* база до мигр. 251 */ }
+    // META_INBOX_V1 (мигр. 263/264) — переписка и комментарии Facebook /
+    // Instagram, привязанные к карточке, идут за ней: иначе слияние отвязало бы
+    // диалог (ON DELETE SET NULL), и кнопка «Открыть заявку» в чате вела бы в никуда.
+    try { db.prepare(`UPDATE meta_conversations SET crm_request_id = ? WHERE crm_request_id IN (${lh})`).run(keepId, ...mergeIds); }
+    catch { /* база до мигр. 263 */ }
+    try { db.prepare(`UPDATE meta_comments SET crm_request_id = ? WHERE crm_request_id IN (${lh})`).run(keepId, ...mergeIds); }
+    catch { /* база до мигр. 263 */ }
     // 2. Метки — объединение: у карточки метка либо есть, либо нет.
     if (hasTags) {
       db.prepare(`INSERT OR IGNORE INTO crm_request_tags (request_id, tag_key)
