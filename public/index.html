@@ -5,38 +5,55 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#24426f">
   <title>Easy-Med — Вход</title>
   <link rel="icon" href="favicon.svg">
   <link rel="stylesheet" href="css/local.css">
+  <!-- LOGIN_STAGE_V1 — та же сцена входа, что внутри admin.html: витрину с
+       кардиограммой слева дорисовывает js/login.js (js/shared/login-stage.js),
+       вид — css/login-stage.css. Без скрипта остаётся карточка — вход работает. -->
+  <link rel="stylesheet" href="css/login-stage.css">
 </head>
 <body>
-  <div class="center-screen">
-    <form class="card" id="login-form">
-      <h1 class="brand">Easy-<span>Med</span></h1>
-      <p class="sub">Система управления клиникой</p>
-      <label for="username">Логин</label>
-      <input id="username" name="username" autocomplete="username" required autofocus>
-      <label for="password">Пароль</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required>
-      <p class="error" id="login-error"></p>
-      <button class="full" type="submit">Войти</button>
-    </form>
-    <!-- PASSWORD_CHANGE_V2: no minlength — any non-empty password is the clinic's
-         rule (server/services/auth.js validPassword); "required" keeps it non-empty. -->
-    <!-- FIRST_RUN_PASSWORD_V1: shown instead of the login card when the signed-in
-         user still carries the first-run default password. The server refuses
-         every other API call until this succeeds, so there is no way around it
-         by just navigating away. -->
-    <form class="card" id="newpass-form" hidden>
-      <h1 class="brand">Easy-<span>Med</span></h1>
-      <p class="sub">Перед началом работы задайте новый пароль</p>
-      <label for="new-password">Новый пароль</label>
-      <input id="new-password" name="new_password" type="password" autocomplete="new-password" required>
-      <label for="new-password2">Повторите новый пароль</label>
-      <input id="new-password2" name="new_password2" type="password" autocomplete="new-password" required>
-      <p class="error" id="newpass-error"></p>
-      <button class="full" type="submit">Сохранить и продолжить</button>
-    </form>
+  <div class="lg-stage" id="login-stage">
+    <main class="lg-side">
+      <form class="lg-card" id="login-form">
+        <div class="lg-mark"><svg viewBox="2 2 28 28" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 17 L10 17 L12 10 L14.5 24 L17 13 L19 17 L27 17"/></svg></div>
+        <div class="lg-head">
+          <h1 class="lg-head-title">Easy-Med</h1>
+          <p class="lg-head-sub">Система управления клиникой</p>
+        </div>
+        <div class="lg-form">
+          <label class="lg-sr" for="username">Логин</label>
+          <input class="lg-input" id="username" name="username" placeholder="Логин" autocomplete="username" required autofocus>
+          <label class="lg-sr" for="password">Пароль</label>
+          <input class="lg-input" id="password" name="password" type="password" placeholder="Пароль" autocomplete="current-password" required>
+          <button class="lg-btn" type="submit">Войти</button>
+          <p class="lg-error" id="login-error" role="alert"></p>
+        </div>
+      </form>
+      <!-- PASSWORD_CHANGE_V2: no minlength — any non-empty password is the clinic's
+           rule (server/services/auth.js validPassword); "required" keeps it non-empty. -->
+      <!-- FIRST_RUN_PASSWORD_V1: shown instead of the login card when the signed-in
+           user still carries the first-run default password. The server refuses
+           every other API call until this succeeds, so there is no way around it
+           by just navigating away. -->
+      <form class="lg-card" id="newpass-form" hidden>
+        <div class="lg-mark"><svg viewBox="2 2 28 28" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 17 L10 17 L12 10 L14.5 24 L17 13 L19 17 L27 17"/></svg></div>
+        <div class="lg-head">
+          <h1 class="lg-head-title">Easy-Med</h1>
+          <p class="lg-head-sub">Перед началом работы задайте новый пароль</p>
+        </div>
+        <div class="lg-form">
+          <label class="lg-sr" for="new-password">Новый пароль</label>
+          <input class="lg-input" id="new-password" name="new_password" type="password" placeholder="Новый пароль" autocomplete="new-password" required>
+          <label class="lg-sr" for="new-password2">Повторите новый пароль</label>
+          <input class="lg-input" id="new-password2" name="new_password2" type="password" placeholder="Повторите новый пароль" autocomplete="new-password" required>
+          <button class="lg-btn" type="submit">Сохранить и продолжить</button>
+          <p class="lg-error" id="newpass-error" role="alert"></p>
+        </div>
+      </form>
+    </main>
   </div>
   <script type="module" src="js/login.js"></script>
 </body>

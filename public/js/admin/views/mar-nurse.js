@@ -67,6 +67,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, clear, toast, field, PageHead, initials } from '../ui.js';
+import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 // SYSTEM_LANGUAGE_V1 — тот же оттенок пациента, что в стационаре, в колонке дня
 // врача и на карточке приёма: один человек — один цвет во всей программе.
 import { pastelFor } from '../pastel.js';
@@ -597,15 +598,25 @@ export async function renderMarNurse(root, ctx = {}) {
     wrap.appendChild(headBox);
     wrap.appendChild(body);
 
-    const wardField = field('Отделение', wardSel);
+    // SECTION_HERO_ACTIONS_V1 (2026-11-01, владелец со снимком шапки: «put this
+    // buttons in the blue place») — «Отделение» и «Обновить» стояли строкой
+    // ниже баннера, справа в PageHead; теперь они в самом баннере, под датой и
+    // часами (слот actions у sectionHero). Подписи «Отделение» над списком в
+    // баннере нет — «Все отделения» / имя отделения само говорит, что это;
+    // для читалки экрана имя остаётся в aria-label.
+    wardSel.setAttribute('aria-label', tr('Отделение'));
+    wardSel.setAttribute('title', tr('Отделение'));
+    const wardField = h('span', { class: 'shero-select' }, Icon('Bed', { size: 14 }), wardSel);
+    // SECTION_HERO_V1 — баннер раздела; вкладки встают в него слева (ниже).
+    const hero = sectionHero({ section: 'mar-nurse', title: 'Задачи медсестры',
+        actions: h('div', { class: 'shero-actions-row' },
+            wardField,
+            h('button', { class: 'btn btn-sm', type: 'button', onclick: () => load() },
+                Icon('Refresh', { size: 13 }), ' ', tr('Обновить'))) });
+    headBox.appendChild(hero.el);
     headBox.appendChild(PageHead({
         title: 'Задачи медсестры',
         subtitle: 'Кому и что вводить сейчас: пациент, доза, время — и что делать, если доза не введена',
-        right: [
-            wardField,
-            h('button', { class: 'btn btn-sm', type: 'button', onclick: () => load() },
-                Icon('Refresh', { size: 13 }), ' ', tr('Обновить')),
-        ],
     }));
     // MAR_OUTPATIENTS_V1 — две вкладки над сменой: стационар (лист назначений)
     // и амбулаторные (сегодняшние визиты, выдача с рук). Системные .tabs.
@@ -623,7 +634,7 @@ export async function renderMarNurse(root, ctx = {}) {
         wardField.style.display = state.mode === 'ward' ? '' : 'none';
     }
     paintTabs();
-    headBox.appendChild(tabsEl);
+    hero.setTabs(tabsEl);   // SECTION_HERO_V1
 
     async function loadWards() {
         const { data } = await supabase.from('wards').select('id, name').order('name');

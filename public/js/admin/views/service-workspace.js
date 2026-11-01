@@ -971,8 +971,7 @@ export function soapForm(ctx) {
 
     // WS_FULLWIDTH_V1 — «Завершить приём» (close consultation) moved to the doc bar, right after «Сохранить».
     // ADMIN_ACT_AS_V1 (R3) — это подпись (и переподпись): от чужого имени неактивна.
-    const finishBtn = lockSignButton(h('button', { class: 'btn btn-primary', type: 'button', 'data-ws-finish': '',
-        style: { background: 'var(--ok-600, #16a34a)', borderColor: 'var(--ok-600, #16a34a)' },
+    const finishBtn = lockSignButton(h('button', { class: 'btn btn-success', type: 'button', 'data-ws-finish': '',
         onclick: () => tryFinish(ctx) }, Icon('Check', { size: 14 }), ' Завершить приём'));
 
     // DOC_ZOOM_V1 — document zoom control (− 100% +).
@@ -3175,7 +3174,7 @@ function paintRxDoc(ctx) {
                 h('th', { style: th }, 'Режим приёма'),
                 h('th', { style: th }, 'Длительность'))),
             h('tbody', null, list.map((r, i) => h('tr', null,
-                h('td', { style: Object.assign({}, td, { color: 'var(--primary-600,#167873)', fontWeight: '700' }) }, String(i + 1)),
+                h('td', { style: Object.assign({}, td, { color: 'var(--primary-600,#355c7d)', fontWeight: '700' }) }, String(i + 1)),
                 h('td', { style: Object.assign({}, td, { fontWeight: '600' }) }, r.name, r.notes ? h('div', { style: { fontWeight: '400', fontStyle: 'italic', color: '#7a8290', fontSize: '12.5px', marginTop: '2px' } }, r.notes) : null, r.nurse ? h('div', { style: { fontWeight: '400', color: '#7a8290', fontSize: '12.5px', marginTop: '2px' } }, trf('Медсестре: {name}', { name: r.nurse })) : null),
                 h('td', { style: td }, r.dose || '—'),
                 h('td', { style: td }, r.freq || '—'),
@@ -6634,7 +6633,7 @@ function _wireBlankEditing(ctx, frame) {
     // editor affordances injected by the parent (templates ship without scripts)
     const st = doc.createElement('style');
     st.textContent = '.sec{border:1px solid #e2e8f0;border-radius:8px;padding:9px 12px 10px;background:#fff;transition:border-color .12s,box-shadow .12s;}' +   // LINKED_SECTION_V1 — header + writing area = one block
-        '.sec:focus-within{border-color:var(--accent,#1a7f77);box-shadow:0 0 0 2px rgba(22,120,115,.14);}' +
+        '.sec:focus-within{border-color:var(--accent,#355c7d);box-shadow:0 0 0 2px rgba(53,92,125,.14);}' +
         '.sec-h{margin-bottom:6px;}' +
         '[data-field]{min-height:3.2em;padding:2px 0;transition:background .12s;outline:none;}' +
         '[data-field]:empty::before{content:"' + tr('Нажмите, чтобы заполнить…') + '";color:#9fb3b0;font-style:italic;}' +
@@ -6645,10 +6644,10 @@ function _wireBlankEditing(ctx, frame) {
         '.bk-rm{margin-left:auto;border:0;background:transparent;color:#c3ccd6;font-size:13.5px;line-height:1;cursor:pointer;padding:0 2px 0 8px;}' +
         '.bk-rm:hover{color:#dc2626;}' +
         '.bk-add{display:block;width:100%;text-align:left;margin:7px 0;padding:8px 12px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;color:#64748b;font:600 12.5px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
-        '.bk-add:hover{border-color:var(--accent,#1a7f77);color:var(--accent,#1a7f77);}' +
+        '.bk-add:hover{border-color:var(--accent,#355c7d);color:var(--accent,#355c7d);}' +
         '.bk-ctl{margin-left:auto;display:inline-flex;align-items:center;gap:1px;}' +
         '.bk-up,.bk-dn{border:0;background:transparent;color:#9aa4b0;cursor:pointer;padding:2px 3px;border-radius:5px;display:inline-flex;align-items:center;}' +
-        '.bk-up:hover,.bk-dn:hover{color:var(--accent,#1a7f77);background:#eef2f7;}' +
+        '.bk-up:hover,.bk-dn:hover{color:var(--accent,#355c7d);background:#eef2f7;}' +
         'body{padding-top:8px !important;}' +
         // PAPER_A4_KEEP_V1 — keep the full A4 page (no min-height override); buttons stack vertically.
         // DOCTOR_ACTIONS_V2 — three labelled groups; one filled button; switches look like switches.
@@ -6657,23 +6656,23 @@ function _wireBlankEditing(ctx, frame) {
         '[data-ws-actions] .ws-grp-l{flex:0 0 104px;font:700 12.5px/1 "Onest","Helvetica Neue",Arial,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:#7a8892;}' +
         '[data-ws-actions] button{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid #d3d9de;border-radius:8px;background:#fff;color:#1f2d34;font:600 12.5px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
         '[data-ws-actions] button svg{width:15px;height:15px;flex:0 0 auto;color:#55636d;}' +
-        '[data-ws-actions] button:hover{border-color:#4eb0aa;background:#effaf8;}' +
-        '[data-ws-actions] button.ws-primary{background:#167873;border-color:#167873;color:#fff;}' +
+        '[data-ws-actions] button:hover{border-color:#6087a9;background:#f0f4f8;}' +
+        '[data-ws-actions] button.ws-primary{background:#355c7d;border-color:#355c7d;color:#fff;}' +
         '[data-ws-actions] button.ws-primary svg{color:#fff;}' +
-        '[data-ws-actions] button.ws-primary:hover{background:#115d5a;border-color:#115d5a;}' +
+        '[data-ws-actions] button.ws-primary:hover{background:#2a4a65;border-color:#2a4a65;}' +
         '[data-ws-actions] button.ws-toggle::before{content:"";width:12px;height:12px;border-radius:4px;border:1.5px solid #aab4bc;background:#fff;flex:0 0 auto;}' +
-        '[data-ws-actions] button.ws-toggle[aria-pressed="true"]{background:#effaf8;border-color:#4eb0aa;color:#115d5a;}' +
-        '[data-ws-actions] button.ws-toggle[aria-pressed="true"]::before{background:#167873;border-color:#167873;box-shadow:inset 0 0 0 2px #fff;}' +
+        '[data-ws-actions] button.ws-toggle[aria-pressed="true"]{background:#f0f4f8;border-color:#6087a9;color:#2a4a65;}' +
+        '[data-ws-actions] button.ws-toggle[aria-pressed="true"]::before{background:#355c7d;border-color:#355c7d;box-shadow:inset 0 0 0 2px #fff;}' +
         // DX_PLAIN_SECTION_V1 — in the editor the Диагноз block looks like every
         // other section: same white box, neutral header (no red), same focus ring.
         '.dx{background:#fff !important;border:1px solid #e2e8f0 !important;border-left:1px solid #e2e8f0 !important;border-radius:8px !important;padding:9px 12px 10px !important;margin:8px 0 !important;}' +
-        '.dx:focus-within{border-color:var(--accent,#1a7f77) !important;box-shadow:0 0 0 2px rgba(22,120,115,.14);}' +
+        '.dx:focus-within{border-color:var(--accent,#355c7d) !important;box-shadow:0 0 0 2px rgba(53,92,125,.14);}' +
         '.dx .dh .ru,.dx .dh{color:#334155 !important;}' +
         '.bk-icd{display:inline-flex;align-items:center;gap:6px;margin-top:7px;padding:7px 12px;border:1px dashed #e6c74c;border-radius:8px;background:#fef9c3;color:#854d0e;font:600 12.5px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' + /* ICD_BTN_YELLOW_V1 */
         '.bk-icd:hover{border-color:#ca8a04;background:#fef08a;color:#713f12;}' +
         '.bk-recrm{margin-left:auto;border:0;background:transparent;color:#dc2626;font:600 12.5px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;padding:2px 6px;border-radius:6px;opacity:.75;white-space:nowrap;}' +
         '.svc .si,.recs li{display:flex;align-items:baseline;gap:6px;}' +   // REC_RM_INLINE_V1 — «Удалить» stays on the SAME line, pinned right
-        '.recs li::before{content:"•";color:var(--accent,#1a7f77);}' +
+        '.recs li::before{content:"•";color:var(--accent,#355c7d);}' +
         '.bk-recrm:hover{background:#fee2e2;opacity:1;}' +
         // DOC_RICH_FORMAT_V1 (T3) — панель оформления, панель таблицы и выбор размера на бумагу не идут
         '@media print{[data-bk-fmt],[data-bk-tbl],[data-bk-tblpick]{display:none !important;}}' +
@@ -7395,7 +7394,7 @@ function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
     ins.type = 'button';
     ins.setAttribute('data-bk-tblins', '');
     ins.textContent = tr('Вставить таблицу');
-    ins.style.cssText = 'display:block;width:100%;margin-top:8px;padding:6px 10px;border:1px solid #167873;border-radius:8px;background:#167873;color:#fff;cursor:pointer;' + font;
+    ins.style.cssText = 'display:block;width:100%;margin-top:8px;padding:6px 10px;border:1px solid #355c7d;border-radius:8px;background:#355c7d;color:#fff;cursor:pointer;' + font;
     const row2 = doc.createElement('div');
     row2.appendChild(rowsL); row2.appendChild(colsL);
     pick.appendChild(grid); pick.appendChild(lbl); pick.appendChild(row2); pick.appendChild(ins);
@@ -7408,7 +7407,7 @@ function _blankWireTables(doc, env = _tblEnvBlank(doc)) {
         for (const cell of grid.children) {
             const on = Number(cell.getAttribute('data-r')) <= size[0] && Number(cell.getAttribute('data-c')) <= size[1];
             cell.style.background = on ? '#d7efed' : '#fff';
-            cell.style.borderColor = on ? '#4eb0aa' : '#cbd5e1';
+            cell.style.borderColor = on ? '#6087a9' : '#cbd5e1';
         }
         lbl.textContent = size[0] + ' × ' + size[1];
         if (!fromInputs) { rowsI.value = String(size[0]); colsI.value = String(size[1]); }

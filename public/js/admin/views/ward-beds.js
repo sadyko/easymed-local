@@ -537,7 +537,7 @@ function bedDetailModal(bed, ward, adm, root) {
         clear(leftEl);
         leftEl.appendChild(h('div', { class: 'card', style: { padding: '16px' } },
             h('div', { class: 'row', style: { gap: '10px' } },
-                h('span', { style: { width: '40px', height: '40px', borderRadius: '999px', background: 'var(--primary-600)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700 } }, initials(p.full_name || '?')),
+                h('span', { style: { width: '40px', height: '40px', borderRadius: '8px', background: 'var(--primary-600)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700 } }, initials(p.full_name || '?')),
                 h('div', { style: { minWidth: 0 } },
                     h('div', { style: { fontWeight: 700, fontSize: '15px' } }, p.full_name || '—'),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, adm.chief_complaint].filter(Boolean).join(' · ')))),
@@ -605,7 +605,7 @@ function bedDetailModal(bed, ward, adm, root) {
         const selCount = [...st.selected].length;
         // -- панель действий --
         rightEl.appendChild(h('div', { class: 'card', style: { padding: '12px 16px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
-            h('button', { class: 'btn', style: { background: 'var(--warn-500, #e8a23d)', borderColor: 'var(--warn-500, #e8a23d)', color: '#fff', fontWeight: 700 },
+            h('button', { class: 'btn btn-warning',
                 onclick: () => transferDialog() }, '→ Перевести'),
             h('button', { class: 'btn btn-primary', disabled: !selCount,
                 onclick: () => generateInvoice() }, Icon('Plus', { size: 14 }), ' Сформировать счёт', selCount ? ' (' + selCount + ')' : ''),

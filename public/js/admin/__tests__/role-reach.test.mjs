@@ -191,7 +191,12 @@ const SHELL_NAV_IDS = await (async () => {
     const src = fs.readFileSync(path.join(here, '..', '..', 'admin.js'), 'utf8');
     const at = src.indexOf('const NAV = [');
     const block = src.slice(at, src.indexOf('\nconst CRUMBS', at));
-    return [...block.matchAll(/id:\s*'([^']+)'/g)].map((m) => m[1]);
+    const ids = [...block.matchAll(/id:\s*'([^']+)'/g)].map((m) => m[1]);
+    // NAV_DASHBOARD_TOP_V1 — «Дашборд» поднят в меню, но дом ищется в прежнем
+    // порядке (admin.js NAV_HOME_ORDER): дашборд — перед «Отчётами».
+    const rest = ids.filter((id) => id !== 'dashboard');
+    rest.splice(rest.indexOf('reports-hub'), 0, 'dashboard');
+    return rest;
 })();
 
 test('MY_STOCK_V1: личный экран не бывает домашним — ни у кассира с отделом, ни у главного врача, ни у кладовщика', () => {

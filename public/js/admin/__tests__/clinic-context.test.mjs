@@ -146,24 +146,16 @@ test('название под меню — на языке интерфейса:
   assert.strictEqual(clinicNameFor(null, 'uz'), '');
 });
 
-test('квадратный логотип в знаке меню: есть — картинка и has-logo; нет — «+» как был', async () => {
+// BRAND_TILE_BLUE_V1 — был тест CLINIC_PROFILE_V1 «логотип клиники в знаке
+// меню». Владелец решил наоборот: знак всегда Easy-Med, от клиники — только имя.
+test('знак меню всегда Easy-Med: логотип клиники его не подменяет, имя клиники — да', async () => {
   const { paintClinicBrand } = await import('../clinic-context.js');
-  const { mark } = shellDom('ru');
+  const { mark, sub } = shellDom('ru');
   const LOGO = 'data:image/png;base64,iVBORw0KGgo=';
   globalThis.window = { CLINIC: { id: 1, name: 'Шифо', logo_mark_url: LOGO }, location: { hostname: 'localhost' } };
   paintClinicBrand();
-  assert.ok(mark.classList.contains('has-logo'));
-  const img = mark.querySelector('img.brand-logo');
-  assert.ok(img, 'нет картинки логотипа в знаке меню');
-  assert.strictEqual(img.attrs.src, LOGO);
-  assert.strictEqual(img.attrs.alt, '', 'знак — украшение: название стоит рядом');
-  assert.ok(mark.children.some((c) => c.tagName === 'SVG'), '«+» не удаляется — его прячет CSS');
-
-  paintClinicBrand();   // повтор — та же одна картинка
-  assert.strictEqual(mark.children.filter((c) => c.tagName === 'IMG').length, 1);
-
-  globalThis.window.CLINIC = { id: 1, name: 'Шифо', logo_mark_url: null };
-  paintClinicBrand();
-  assert.strictEqual(mark.querySelector('img.brand-logo'), null);
-  assert.ok(!mark.classList.contains('has-logo'));
+  assert.strictEqual(sub.textContent, 'Шифо');
+  assert.ok(!mark.classList.contains('has-logo'), 'знак снова отдан логотипу клиники');
+  assert.strictEqual(mark.children.filter((c) => c.tagName === 'IMG').length, 0);
+  assert.ok(mark.children.some((c) => c.tagName === 'SVG'), 'знак Easy-Med пропал');
 });

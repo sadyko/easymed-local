@@ -173,6 +173,7 @@ const TG_CHATS = [
 let dbCalls = [];
 let rpcCalls = [];
 let tgAllowed = true;
+let botConnected = true;   // PATIENT_BOT_INVITE_V1
 
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
@@ -185,6 +186,10 @@ globalThis.fetch = async (url, opts = {}) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push(name);
     if (name === 'telegram_chats_list') return tgAllowed ? ok({ data: TG_CHATS }) : denied();
+    // PATIENT_BOT_INVITE_V1 — кто подключён к боту: id первой карты (Каримова,
+    // её номер в TG_CHATS). botConnected = false — у клиники бота нет.
+    if (name === 'patient_bot_status') return ok({ data: { bot: botConnected, sms_ready: false, linked: botConnected ? [1] : [] } });
+    if (name === 'patient_bot_invite') return ok({ data: { ok: false, sms: false, link: 'https://t.me/clinic_bot' } });
     // patient_base_aggregates НЕ существует в этой сборке — сервер отвечает
     // отказом, как и живой. Строка обязана оставаться правдивой без него.
     if (name === 'patient_base_aggregates') return { ok: false, status: 404, json: async () => ({ error: { message: 'Unknown RPC' } }) };
@@ -242,9 +247,10 @@ function cssRule(selector) {
 }
 const labelOf = (n) => walk(n).map((x) => x._t || '').join('').trim();
 
-async function paint({ lang = 'ru', allowTelegram = true } = {}) {
+async function paint({ lang = 'ru', allowTelegram = true, bot = true } = {}) {
   dbCalls = []; rpcCalls = [];
   tgAllowed = allowTelegram;
+  botConnected = bot;
   document.body.children.length = 0;
   if (allowTelegram) setFullAccess('Admin');
   else setEffectiveFromRole({ name: 'registrar', permissions: {
@@ -306,26 +312,48 @@ test('регистратор — настоящее имя, а когда его
     'проверка бессмысленна: data.js больше не зовёт отсутствующую RPC');
 });
 
-test('значок Telegram стоит у того, с кем есть живая связка чата, и только у него', async () => {
+// PATIENT_BOT_INVITE_V1 (2026-11-01) — значок Telegram у имени (PATIENT_ROW_V2)
+// переехал в ПОСЛЕДНЮЮ колонку: подключён к боту — логотип, нет — «Ссылка на бот».
+// Источник — patient_bot_status (а не telegram_chats_list, закрытый правом чата).
+const lastCell = (row) => row.children[row.children.length - 1];
+
+test('конец строки: у подключённого к боту — логотип Telegram, у остальных — «Ссылка на бот»', async () => {
   const { box } = await paint();
+  await tick();
   const rows = rowsOf(box);
-  assert.equal(byClass(rows[0], 'pt-tg').length, 1, 'у связанного пациента нет значка Telegram');
-  assert.equal(byClass(rows[0], 'pt-tg')[0].attrs.title, 'Есть Telegram', 'значок без подписи');
+  assert.equal(byClass(lastCell(rows[0]), 'pt-tg').length, 1, 'у подключённого пациента нет логотипа Telegram');
+  assert.equal(byClass(lastCell(rows[0]), 'pt-bot-invite').length, 0, 'подключённому предлагают ссылку');
   for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
-    assert.equal(byClass(rows[i], 'pt-tg').length, 0,
-      'значок Telegram появился у пациента без связки (строка ' + (i + 1) + ')');
+    assert.equal(byClass(rows[i], 'pt-tg').length, 0, 'логотип у пациента без бота (строка ' + (i + 1) + ')');
+    assert.equal(byClass(lastCell(rows[i]), 'pt-bot-invite').length, 1, 'нет «Ссылки на бот» в конце строки ' + (i + 1));
   }
-  assert.ok(rpcCalls.includes('telegram_chats_list'), 'связки чата не спрошены');
+  assert.ok(rpcCalls.includes('patient_bot_status'), 'статус бота не спрошен');
+  assert.ok(!rpcCalls.includes('telegram_chats_list'), 'список чатов больше не нужен строке');
+  // Значка у имени больше нет — он один, в конце строки.
+  assert.equal(byClass(rows[0], 'pt-tg').length, 1, 'значок Telegram задвоился (у имени и в конце)');
+
+  const btn = byClass(lastCell(rows[1]), 'pt-bot-invite')[0];
+  btn.click();
+  await tick();
+  assert.ok(rpcCalls.includes('patient_bot_invite'), '«Ссылка на бот» не зовёт отправку');
 });
 
-test('без права на раздел чата отметок нет — и процедура не спрашивается', async () => {
+test('регистратор без права на чат тоже видит, кто в боте; без бота у клиники колонка пуста', async () => {
   const { box } = await paint({ allowTelegram: false });
-  assert.equal(byClass(box, 'pt-tg').length, 0,
-    'строка притворилась, будто знает про Telegram, не имея права его спросить');
-  assert.ok(!rpcCalls.includes('telegram_chats_list'),
-    'заведомо отказной запрос всё равно ушёл на сервер');
-  // Реестр при этом цел: строки на месте.
-  assert.equal(rowsOf(box).length, PATIENTS.length, 'без Telegram список поредел');
+  await tick();
+  assert.equal(byClass(box, 'pt-tg').length, 1, 'регистратору не видно, кто подключён к боту');
+  assert.ok(!rpcCalls.includes('telegram_chats_list'), 'заведомо отказной запрос чатов ушёл на сервер');
+  assert.equal(rowsOf(box).length, PATIENTS.length, 'список поредел');
+
+  const { box: box2 } = await paint({ bot: false });
+  await tick();
+  // Бот не подключён: логотипов нет, а кнопка видна, но неактивна и объясняет
+  // почему (пустая колонка читалась как поломка — владелец её не нашёл).
+  assert.equal(byClass(box2, 'pt-tg').length, 0, 'логотип Telegram без бота у клиники');
+  const idle = byClass(box2, 'pt-bot-invite');
+  assert.equal(idle.length, PATIENTS.length, 'без бота кнопки «Ссылка на бот» не видно');
+  assert.ok(idle.every((b) => 'disabled' in b.attrs || b.disabled), 'без бота кнопка нажимается');
+  assert.match(String(idle[0].attrs.title || ''), /не подключён/, 'кнопка не говорит, почему неактивна');
 });
 
 test('телефон выглядит как везде в продукте и не переносится', async () => {
@@ -350,10 +378,11 @@ test('крайние случаи не ломают строку: длинное
   const rows = rowsOf(box);
   assert.equal(rows.length, PATIENTS.length, 'нарисованы не все строки');
 
-  // Восемь ячеек в КАЖДОЙ строке и ровно столько же заголовков.
-  assert.equal(headCells(box).length, 8, 'в шапке не восемь колонок');
+  // Десять ячеек в КАЖДОЙ строке и ровно столько же заголовков
+  // (REG_LIST_AGE_COL_V1 — возраст; PATIENT_BOT_INVITE_V1 — бот пациента в конце).
+  assert.equal(headCells(box).length, 10, 'в шапке не десять колонок');
   for (const [i, r] of rows.entries()) {
-    assert.equal(cellsOf(r).length, 8, 'строка ' + (i + 1) + ' не из восьми ячеек');
+    assert.equal(cellsOf(r).length, 10, 'строка ' + (i + 1) + ' не из десяти ячеек');
   }
 
   // ② длинное ФИО: обрезается многоточием, но полностью читается в подсказке.
@@ -367,6 +396,10 @@ test('крайние случаи не ломают строку: длинное
   const dobCell = cellsOf(rows[2])[2];
   assert.equal(byClass(dobCell, 'pt-none').length, 1, 'пустая дата рождения не показала прочерк');
   assert.ok(!/лет/.test(textOf(dobCell)), 'у карты без даты рождения откуда-то взялся возраст');
+  assert.ok(!/лет/.test(textOf(cellsOf(rows[2])[3])), 'в колонке «Возраст» возраст без даты рождения');
+  // REG_LIST_AGE_COL_V1 — возраст стоит в своей колонке, а не под датой.
+  assert.ok(/лет/.test(textOf(cellsOf(rows[0])[3])), 'колонка «Возраст» пуста у карты с датой рождения');
+  assert.ok(!/лет/.test(textOf(cellsOf(rows[0])[2])), 'возраст остался под датой рождения');
 
   // ⑤ без визитов — так и сказано, а не «0».
   assert.ok(textOf(rows[4]).includes('визитов не было'),
@@ -389,8 +422,10 @@ test('всё, что умел экран, цело: поиск, сортиров
   // сказал «we dont need that», и место занято быстрой регистрацией. Тёзок
   // по-прежнему различают в самой строке реестра — дата рождения стоит в ней
   // отдельной колонкой.
-  assert.ok(!inputs.some((i) => i.attrs.type === 'date'),
-    'поиск по дате рождения вернулся в шапку списка');
+  // PATIENT_SEARCH_DOB_V2 (2026-10-31) — владелец вернул поиск по дате
+  // рождения: «search and search by date of birth».
+  assert.ok(inputs.some((i) => i.attrs.type === 'date' && 'data-dob-search' in i.attrs),
+    'поиска по дате рождения нет в шапке списка');
 
   const labels = buttons(box).map(labelOf);
   // «MRN» — ключ словаря, и по-русски кнопка подписана «МРН» (i18n-strings).
@@ -440,16 +475,16 @@ test('FAST_REGISTRATION_V1: на месте поиска по дате рожд�
   assert.ok(hasClass(btn, 'btn-pulse'), 'кнопка не пульсирует: ' + btn.className);
   assert.equal(btn.attrs['data-onb'], 'fast-registration', 'кнопка потеряла свою метку');
 
-  // Стоит она ИМЕННО там, где стояло поле даты рождения: в левой группе шапки,
-  // между строкой поиска и переключателем сортировки. Место — часть просьбы:
-  // владелец показал на фильтр и сказал «вот здесь».
+  // REG_LIST_HEAD_V3 (2026-10-31, владелец: «put the button on one line and
+  // search place belove them separately») — кнопка в ряду кнопок, ПЕРЕД
+  // сортировкой; поиск и поиск по дате рождения — ниже, отдельным рядом.
   const order = walk(box);
   const iSearch = order.findIndex((n) => n.tagName === 'INPUT' && n.attrs.type === 'search');
   const iSort   = order.findIndex((n) => hasClass(n, 'segmented'));
   const iBtn    = order.indexOf(btn);
   assert.ok(iSearch > -1 && iSort > -1, 'шапка списка потеряла поиск или сортировку — сравнивать не с чем');
-  assert.ok(iSearch < iBtn && iBtn < iSort,
-    'кнопка встала не на место фильтра по дате рождения (поиск ' + iSearch + ', кнопка ' + iBtn + ', сортировка ' + iSort + ')');
+  assert.ok(iBtn < iSort && iSort < iSearch,
+    'ряды шапки не в том порядке (кнопка ' + iBtn + ', сортировка ' + iSort + ', поиск ' + iSearch + ')');
 
   // Пульс — НАСТОЯЩЕЕ правило файла стилей, а не класс без объявления.
   const rule = cssRule('.btn-pulse');
@@ -515,4 +550,22 @@ test('DEBT_FLOW_V1: у должника красная метка «Долг» �
   } finally {
     globalThis.fetch = prevFetch;
   }
+});
+
+// PATIENT_SEARCH_DOB_V2 — поле даты рождения НАСТОЯЩЕЕ: выбранная дата уходит
+// в запрос списка фильтром date_of_birth, очистка снимает фильтр.
+test('поиск по дате рождения фильтрует список точной датой', async () => {
+  const { box } = await paint();
+  const dobInp = walk(box).find((n) => n.tagName === 'INPUT' && 'data-dob-search' in n.attrs);
+  assert.ok(dobInp, 'поля даты рождения нет');
+  const patientsCalls = () => dbCalls.filter((b) => b && b.table === 'patients' && JSON.stringify(b).includes('registration_date'));
+  dobInp.value = '1990-04-11';
+  dobInp.dispatchEvent({ type: 'change', currentTarget: dobInp, target: dobInp });
+  await tick();
+  const last = JSON.stringify(patientsCalls().at(-1) || {});
+  assert.ok(last.includes('date_of_birth') && last.includes('1990-04-11'), 'дата рождения не ушла в запрос: ' + last);
+  dobInp.value = '';
+  dobInp.dispatchEvent({ type: 'change', currentTarget: dobInp, target: dobInp });
+  await tick();
+  assert.ok(!JSON.stringify(patientsCalls().at(-1) || {}).includes('1990-04-11'), 'очистка не сняла фильтр');
 });

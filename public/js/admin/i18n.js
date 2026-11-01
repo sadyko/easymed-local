@@ -61,8 +61,10 @@ const I18N = {
                 // находит (та же ошибка, что INPATIENT_NAV_KEYS_V1 выше).
                 crm:                 'CRM · Requests',
                 referrals:           'Referrals',   // REFERRALS_NAV_V1
+                commerce:            'Commercial tools',   // COMMERCE_NAV_V1
                 queue:               'Queue',
                 'telegram-chat':     'Patient chat',
+                'meta-chat':         'Facebook & Instagram chat',   // META_INBOX_V1
                 'patient-documents': 'Documents',
                 'cashier-head':      'Head cashier',
                 inventory:           'Procurement',
@@ -157,8 +159,10 @@ const I18N = {
                 discharge:    'Выписки',   // TWO_STEP_DISCHARGE_V1
                 crm:                 'CRM · Заявки',   // SIDEBAR_NAV_KEYS_V1
                 referrals:           'Реферирование',   // REFERRALS_NAV_V1
+                commerce:            'Коммерческие инструменты',   // COMMERCE_NAV_V1
                 queue:               'Очередь',
                 'telegram-chat':     'Чат с пациентами',
+                'meta-chat':         'Чат Facebook и Instagram',   // META_INBOX_V1
                 'patient-documents': 'Документы',
                 'cashier-head':      'Старший кассир',
                 inventory:           'Закупки',
@@ -253,8 +257,10 @@ const I18N = {
                 discharge:    'Chiqarishlar',   // TWO_STEP_DISCHARGE_V1
                 crm:                 'CRM · Arizalar',   // SIDEBAR_NAV_KEYS_V1
                 referrals:           'Yo‘naltirish',   // REFERRALS_NAV_V1
+                commerce:            'Tijorat vositalari',   // COMMERCE_NAV_V1
                 queue:               'Navbat',
                 'telegram-chat':     'Bemorlar bilan chat',
+                'meta-chat':         'Facebook va Instagram chat',   // META_INBOX_V1
                 'patient-documents': 'Hujjatlar',
                 'cashier-head':      'Bosh kassir',
                 inventory:           'Xaridlar',

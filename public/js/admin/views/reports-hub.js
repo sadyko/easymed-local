@@ -1624,8 +1624,7 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
                 oninput: (e) => { flt[i] = e.target.value.trim().toLowerCase(); shown = CCR_PAGE; paint(); },
             }))));
 
-    const xlsBtn = h('button', { class: 'btn btn-sm', type: 'button',
-        style: { background: 'var(--ok-600,#16a34a)', borderColor: 'var(--ok-600,#16a34a)', color: '#fff' },
+    const xlsBtn = h('button', { class: 'btn btn-success btn-sm', type: 'button',
         onclick: async (ev) => {
             const btn = ev.currentTarget;   // JOURNALS_V1 — после await у события currentTarget уже null
             btn.disabled = true;

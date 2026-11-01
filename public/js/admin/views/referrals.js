@@ -23,6 +23,7 @@ import { renderReferralsSources, renderReferralsCategories } from './referrals-s
 import { renderReferralsInternal } from './referrals-internal.js';
 import { renderReferralsActivity } from './referrals-activity.js';
 import { renderReferralsBot } from './referrals-bot.js';
+import { renderReferralsRepBot } from './referrals-rep-bot.js';   // REP_BOT_V1
 
 export const TABS = [
     { id: 'reps',       sub: null,         label: 'Представители',        icon: 'User',        render: renderReferralsRepresentatives },
@@ -33,6 +34,8 @@ export const TABS = [
     // Токен бота открывает переписку с врачами — вкладка только администратору,
     // как и настройки пациентского бота (TELEGRAM_BOT_V1).
     { id: 'bot',        sub: 'bot',        label: 'Telegram-бот',         icon: 'Bot',         render: renderReferralsBot, adminOnly: true },
+    // REP_BOT_V1 — третий бот: медпредставители заводят врачей из Telegram. Тоже только администратору.
+    { id: 'repbot',     sub: 'repbot',     label: 'Бот представителей',   icon: 'Bot',         render: renderReferralsRepBot, adminOnly: true },
 ];
 const SUB_TO_TAB = Object.fromEntries(TABS.filter((t) => t.sub).map((t) => [t.sub, t.id]));
 

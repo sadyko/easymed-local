@@ -89,6 +89,7 @@ const FULL_ACCESS_ONLY = {
     'telegram-settings':  'TELEGRAM_BOT_V1 — раздел админский целиком, включая чтение',
     // Явное `return false`: ключи Binotel/onlinePBX открывают журнал звонков всей клиники.
     'telephony-settings': 'TELEPHONY_V1 — раздел админский целиком, включая чтение',
+    'sms-settings': 'SMS_INFORM_V1 — логин и пароль Play Mobile: право слать SMS за деньги клиники; только администратор',
     // Явное `return false`: экран задаёт саму воронку CRM; ошибка ломает CRM всей клиники.
     'crm-settings':       'CRM_CONFIG_V1 — раздел админский целиком, включая чтение',
     // Весь /api/users стоит за requireRole(\'admin\') (server/routes/users.js):
@@ -117,6 +118,20 @@ const FULL_ACCESS_ONLY = {
 };
 
 const GRANTABLE = perms.allPermissionKeys();
+
+// COMMERCE_TOOLS_V1 — родители без ключа раздела: пункт меню открывает уровень
+// окна настроек в «Ролях» (permissions.grants), а не `sections`, поэтому
+// перебор грантовых ключей их не находит. Здесь — каким уровнем открыт пункт;
+// тест проверяет, что тем же уровнем открыт и подэкран.
+const TILE_OPENED = {
+    commerce: { 'settings.telegram': 'edit' },   // витрина «Коммерческие инструменты» — Push по Telegram
+};
+function tileRole(overrides) {
+    return { name: 'Своя роль', permissions: {
+        sections: ['patients', 'settings'], levels: { patients: 'editor', settings: 'viewer' },
+        grants: { patients: 'edit', settings: 'view', ...overrides },
+    } };
+}
 const isGrantable = (key) => GRANTABLE.includes(key) || key.startsWith('settings:');
 
 /** Грантовые ключи, каждый из которых в одиночку открывает пункт меню `parent`
@@ -148,6 +163,12 @@ test('ROUTE_GATE_COVERS_PARENT_OF_V1: у каждого подэкрана из 
     try {
         for (const [child, parent] of Object.entries(parents)) {
             if (isGrantable(child)) continue;   // сам себе ключ (beds, registration) — редактор ролей его предлагает
+            if (parent in TILE_OPENED) {
+                perms.setEffectiveFromRole(tileRole(TILE_OPENED[parent]));
+                assert.ok(perms.isModuleAllowed(parent), 'TILE_OPENED протух: «' + parent + '» больше не открывается уровнем ' + JSON.stringify(TILE_OPENED[parent]));
+                if (!perms.isRouteAllowed(child)) fallen.push('#' + child + ' (родитель «' + parent + '», уровень ' + JSON.stringify(TILE_OPENED[parent]) + ')');
+                continue;
+            }
             const openers = openersOf(parent);
             assert.ok(openers.length,
                 'родитель «' + parent + '» подэкрана «' + child + '» не открывается ни одним грантовым ключом — это отдельная ошибка isModuleAllowed');

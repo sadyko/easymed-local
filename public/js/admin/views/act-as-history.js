@@ -110,6 +110,7 @@ const RPC_LABELS = {
     referrals_source_detail: 'Реферирование: внешний врач',
     referrals_doctor_detail: 'Реферирование: врач клиники',
     referrals_assign_representative: 'Закрепление врача за представителем',
+    referrals_representative_options: 'Реферирование: список медпредставителей',   // REFERRAL_REP_ON_CREATE_V1
     doctor_bot_settings_get: 'Бот для врачей: настройки',
     doctor_bot_settings_save: 'Бот для врачей: сохранение настроек',
     doctor_bot_token_clear: 'Бот для врачей: удаление токена',

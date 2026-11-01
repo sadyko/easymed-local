@@ -796,7 +796,7 @@ export function openServicePickerModal({
         refs.columns[i] = { listEl, footEl };
         return h('div', { class: 'sched-col' },
             h('div', { class: 'sched-col-head', style: { display: 'flex', alignItems: 'center', gap: '7px' } },
-                step ? h('span', { style: { flex: '0 0 auto', width: '18px', height: '18px', borderRadius: '50%', background: 'var(--primary-600, #167873)', color: 'white', font: '700 10.5px/18px inherit', textAlign: 'center' } }, String(step)) : null,
+                step ? h('span', { style: { flex: '0 0 auto', width: '18px', height: '18px', borderRadius: '50%', background: 'var(--primary-600, #355c7d)', color: 'white', font: '700 10.5px/18px inherit', textAlign: 'center' } }, String(step)) : null,
                 title),
             h('div', { class: 'sched-col-search' },
                 h('input', {
@@ -2317,7 +2317,7 @@ export function openServicePickerModal({
                         note && note.struck != null ? h('s', { class: 'num muted', style: { fontSize: '12.5px' } }, formatMoney(note.struck)) : null,
                         h('span', { class: 'num', style: { fontWeight: 700 } }, formatMoney(itemPrice(a))),
                         itemComplete(a) ? h('button', { type: 'button', title: 'Изменить врача и время',
-                            style: { border: '0', background: 'none', cursor: 'pointer', font: 'inherit', fontSize: '12.5px', color: 'var(--primary-700, #115d5a)', textDecoration: 'underline', padding: '0', flex: 'none' },
+                            style: { border: '0', background: 'none', cursor: 'pointer', font: 'inherit', fontSize: '12.5px', color: 'var(--primary-700, #2a4a65)', textDecoration: 'underline', padding: '0', flex: 'none' },
                             onclick: () => { a.__editSlot = true; cat2.q = a.service.name; cat2.group = ''; cat2.win = CAT_PAGE; if (catSearchEl) catSearchEl.value = a.service.name; paintCatalog(); } }, 'изменить') : null,
                         h('button', { type: 'button', title: 'Убрать услугу', 'aria-label': 'Убрать услугу',
                             style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '17px', lineHeight: '1', padding: '2px 4px', flex: 'none' },
@@ -2874,7 +2874,7 @@ export function openServicePickerModal({
             wizPatientChip(),
             h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 payerName + ': ', h('b', null, formatMoney(s.payer)), ' · Пациент (в кассу): ',
-                h('b', { style: { color: 'var(--primary-700, #115d5a)' } }, formatMoney(s.patient)))));
+                h('b', { style: { color: 'var(--primary-700, #2a4a65)' } }, formatMoney(s.patient)))));
         if (selfPay) root.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
             'Самооплата: все услуги оплачивает пациент. Чтобы распределить на плательщика, выберите ДМС / контракт на шаге «Оплата».'));
         const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
@@ -2886,7 +2886,7 @@ export function openServicePickerModal({
                 return h('button', { type: 'button', disabled: disabled ? true : null, title: label,
                     style: { padding: '6px 12px', border: '0', cursor: disabled ? 'not-allowed' : 'pointer', font: 'inherit', fontSize: '12.5px', fontWeight: 600,
                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '240px',
-                             background: on ? 'var(--primary-600, #167873)' : 'transparent',
+                             background: on ? 'var(--primary-600, #355c7d)' : 'transparent',
                              color: on ? '#fff' : (disabled ? 'var(--ink-300, #aab4bc)' : 'var(--ink-700, #1f2d34)') },
                     onclick: () => { if (disabled) return; wiz.coverage[i] = val; wizGoto(3); } }, label);   // WIZ_4STEPS_V1 — repaint (Кто платит = step 3)
             };

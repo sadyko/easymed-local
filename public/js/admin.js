@@ -9,6 +9,7 @@ import { SECTIONS } from './admin/sections.js?v=rolecmp1';
 import { h, Icon, clear, initials } from './admin/ui.js';
 import { activeSectionOf, isNavSectionOpen, setNavSectionOpen, navFitsOpen, groupBadge } from './admin/nav-fold.js?v=navfold1';   // NAV_GROUPS_V1 — свёрнутые группы меню; navFitsOpen, groupBadge — FIX_318_V1
 import { dateWords } from './shared/date-words.js';   // SIDEBAR_CLOCK_V1 — дата словами под часами
+import { loginStage, PULSE_SVG } from './shared/login-stage.js';   // LOGIN_STAGE_V1 — одна сцена входа с «/»
 import { phoneInput } from './admin/phone-input.js?v=ph1';
 // UI_ENHANCE_V1 — родные <select> и поля даты становятся полями программы.
 // Один наблюдатель на весь документ: списки живут и в видах, и в диалоговых
@@ -23,7 +24,11 @@ import {
     setActorRoleGrants,   // JOURNALS_V1_RJ3 — права каждой роли в силе (и дополнительных у администратора)
     scopedProviderId, ownDepartmentId, PERSONAL_VIEWS,   // ownDepartmentId / PERSONAL_VIEWS — MY_STOCK_V1
     canSeeAllLeads,   // CRM_HEAD_MERGE_TAGS_V1 — счётчик задач всей команды руководителю колл-центра
+    canCreatePatient,   // SIDEBAR_NEW_PATIENT_V1 — кнопка «Новый пациент» в шапке меню
 } from './admin/permissions.js';
+// SIDEBAR_NEW_PATIENT_V1 — то же окно и ТОТ ЖЕ адрес модуля, что у «Пациентов»
+// (views/patients.js): разошедшийся ?v= завёл бы второй экземпляр окна.
+import { openPatientCreateModal } from './admin/views/patient-create-modal.js?v=onewin1';
 import {
     verifyLogin, actorFromUser,
     rehydrateUserFromSession, signOutAndReload,
@@ -108,8 +113,14 @@ import { renderNavVisibility } from './admin/views/nav-visibility.js?v=navvis1';
 import { isHiddenView, normalizeHidden } from './admin/nav-visibility-logic.js?v=navvis1';   // NAV_VISIBILITY_V1
 import { renderMetaSettings }      from './admin/views/meta-settings.js?v=meta1';   // META_LEADS_V1 — Meta Lead Ads -> CRM
 import { renderTelegramDeeplinks } from './admin/views/telegram-deeplinks.js?v=tgdl1';   // TG_DEEPLINK_V1 — ссылки для рекламы в Telegram
+import { renderSmsSettings }      from './admin/views/sms-settings.js?v=sms1';   // SMS_INFORM_V1 — SMS через Play Mobile
+import { renderCommercePush }     from './admin/views/commerce-push.js?v=push2';   // SMS_PUSH_V1 — Push-уведомление: Telegram и SMS
+import { renderCommerceHub }      from './admin/views/commerce-hub.js?v=tools1';   // COMMERCE_TOOLS_V1 — витрина инструментов
+import { renderClinicNews }       from './admin/views/clinic-news.js';   // CLINIC_NEWS_V1 — «Информационная доска»
+import { renderNewsStrip }        from './admin/clinic-news-strip.js';   // CLINIC_NEWS_STRIP_V1 — полоса новостей стойке и call-центру
 import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing
 import { renderTelegramChat } from './admin/views/telegram-chat.js?v=tgc4';   // TELEGRAM_CHAT_V1
+import { renderMetaChat } from './admin/views/meta-chat.js?v=mc4';   // META_INBOX_V1 — Facebook и Instagram
 import { renderConsultationTypes } from './admin/views/consultation-types.js?v=ct5';   // CONSULTATION_TYPES_RESTORE
 import { renderPharmacy }    from './admin/views/pharmacy.js?v=ph2';   // PHARMACY_V1
 import { renderRequestsInbox } from './admin/views/requests-inbox.js?v=btnright1';
@@ -158,6 +169,12 @@ import { renderCaseOverview } from './admin/views/case-overview.js?v=co1';   // 
 // которой открыты только дашборд и настройки (и это не администратор),
 // начинает теперь с «Настроек», потому что их группа стоит раньше «Аналитики».
 const NAV = [
+    // NAV_DASHBOARD_TOP_V1 (2026-10-31, владелец со снимком меню: «put dashboard
+    // button to the top place, separate from other»). «Дашборд» стоит НАД всеми
+    // группами, без заголовка, и отделён чертой (.nav-top в admin.css). Домашний
+    // экран от этого не меняется: firstAllowedView() перебирает пункты в
+    // прежнем порядке (NAV_HOME_ORDER), где дашборд — в «Аналитике».
+    { id: 'dashboard', label: 'Dashboard', icon: 'Dashboard', top: true },
     { section: 'Clinical' },
     { id: 'patients', label: 'Patients', icon: 'Patients' },
     { id: 'consultation', label: 'My services', icon: 'Stethoscope' },   // DOCTOR_WORKSPACE_V1 — easymed's provider queue (was the simplified doctor-room stand-in; that route still works, just unlisted)
@@ -222,12 +239,17 @@ const NAV = [
     // «referirovanie should not be inside of CRM it should be separate section in
     // operation block». Свой пункт меню и свой ключ прав `referrals` (NAV_MODULES,
     // permission-catalog), сразу за CRM — рядом с заявками, но не внутри них.
-    { id: 'referrals', label: 'Referrals', icon: 'Target' },
-    // TELEGRAM_CHAT_V1 — переписка с пациентами это работа стойки, а не приём:
-    // её ведут регистратура и call-центр, поэтому раздел живёт в «Операциях».
-    // TELEGRAM_CHAT_BADGE_V1 — непрочитанные пациентские сообщения — это работа,
-    // которая ждёт: значок красный, как у остальных «требует действия».
-    { id: 'telegram-chat', label: 'Чат с пациентами', icon: 'Msg', badgeKind: 'alert' },
+    // REFERRALS_TO_COMMERCE_V1 (2026-10-31, владелец: «put refirrirovania to
+    // commercial instruments too») — пункт снят: «Реферирование» — карточка
+    // витрины «Коммерческие инструменты» (commerce-hub.js), как чаты ниже.
+    // Ключ прав `referrals`, адрес #referrals/<вкладка> и экран не тронуты.
+    // TELEGRAM_CHAT_V1 / META_INBOX_V1 — «Чат с пациентами» и «Чат Facebook и
+    // Instagram» стояли здесь. CHATS_TO_COMMERCE_V1 (2026-10-31, владелец: «put
+    // these two chat place to commercial instruments and messages should appear
+    // on top of commercial block») — оба переехали первым блоком на витрину
+    // «Коммерческие инструменты» (commerce-hub.js), а их непрочитанные — в
+    // красный значок того пункта. Адреса #telegram-chat / #meta-chat, ключи
+    // прав и сами экраны не тронуты.
     // NAV_GROUPS_V1 — касса и старший кассир сначала получили свою группу
     // «Деньги» (список владельца утром 17.10); посмотрев на dev, владелец тем
     // же днём сказал «put the cashier and head cashier to operations» — группы
@@ -263,6 +285,11 @@ const NAV = [
     // одинаково; бейдж обновления остаётся на пункте.
     { section: 'Settings', fold: true },
     { id: 'settings', label: 'Settings', icon: 'Settings', badgeKind: 'alert' },   // SETTINGS_HUB_V1 + UPDATE_BADGE_V1
+    // COMMERCE_NAV_V1 (2026-10-30, владелец: «under the setting block on the left
+    // side bar in main block build commercial instrument section»). SMS_PUSH_V1 —
+    // плитки настроек остались в «Настройках»; здесь — Push-уведомление по Telegram и SMS.
+    // CHATS_TO_COMMERCE_V1 — значок — непрочитанные обоих чатов (loadNavCounts), красный.
+    { id: 'commerce', label: 'Коммерческие инструменты', icon: 'Megaphone', badgeKind: 'alert' },
     // NAV_SECTION_KEY_V1 — раздел зовут 'Insights', а не 'Analytics': заголовок
     // переводится через t('sidebar.sections.' + section), и словарь (i18n.js)
     // знает Insights. С именем 'Analytics' третий заголовок меню выводил
@@ -270,7 +297,6 @@ const NAV = [
     // NAV_GROUPS_V1 — владелец назвал группу «Reports», но заголовок «Отчёты»
     // над пунктом «Отчёты» дублирует, а «Аналитика» уже переведена на три языка.
     { section: 'Insights', fold: true },
-    { id: 'dashboard', label: 'Dashboard', icon: 'Dashboard' },
     { id: 'reports-hub', label: 'Reports', icon: 'Chart' },   // REPORTS_HUB_V1
 ];
 
@@ -288,6 +314,7 @@ const navCounts = {
     // механизм рядом означал бы два места, где рисуется одна и та же точка.
     settings:     null,
     'telegram-chat': null,   // TELEGRAM_CHAT_BADGE_V1 — входящие без read_at
+    'meta-chat':     null,   // META_INBOX_V1 — непрочитанные сообщения и комментарии
     // CRM_DEDUP_SEARCH_TASKS_V1 — открытые задачи CRM со сроком до «сейчас»:
     // оператору — назначенные ему, администратору — все.
     crm:          null,
@@ -340,13 +367,18 @@ const CRUMBS = {
     'api-settings': ['Insights', 'Settings', 'API'],   // CLINIC_API_V1
     'telegram-settings': ['Insights', 'Settings', 'Telegram-бот'],   // TELEGRAM_BOT_V1
     'telephony-settings': ['Insights', 'Settings', 'Телефония'],   // TELEPHONY_V1
+    commerce:      ['Insights', 'Settings', 'Коммерческие инструменты'],   // COMMERCE_NAV_V1
+    'commerce-push': ['Insights', 'Settings', 'Push-уведомления'],   // COMMERCE_TOOLS_V1
+    'clinic-news':   ['Insights', 'Settings', 'Информационная доска'],   // CLINIC_NEWS_V1
     'meta-settings': ['Insights', 'Settings', 'Meta: заявки из рекламы'],   // META_LEADS_V1
     'telegram-deeplinks': ['Insights', 'Settings', 'Ссылки для рекламы в Telegram'],   // TG_DEEPLINK_V1
+    'sms-settings': ['Insights', 'Settings', 'SMS-информирование'],   // SMS_INFORM_V1
     'departments': ['Insights', 'Settings', 'Отделы'],   // DEPARTMENTS_V1
     'crm-settings': ['Insights', 'Settings', 'CRM-канбан'],   // CRM_CONFIG_V1
-    referrals:      ['Operations', 'Реферирование'],   // REFERRALS_NAV_V1 — пункт меню, не подэкран CRM
+    referrals:      ['Insights', 'Settings', 'Реферирование'],   // REFERRALS_NAV_V1; REFERRALS_TO_COMMERCE_V1 — инструмент витрины
     'visibility-settings': ['Insights', 'Settings', 'Видимость разделов'],   // NAV_VISIBILITY_V1
-    'telegram-chat': ['Insights', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1
+    'telegram-chat': ['Insights', 'Settings', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1; CHATS_TO_COMMERCE_V1 — как прочие инструменты витрины
+    'meta-chat':     ['Insights', 'Settings', 'Чат Facebook и Instagram'],   // META_INBOX_V1; CHATS_TO_COMMERCE_V1
     'consultation-types': ['Insights', 'Settings', 'Консультации врачей'],   // CONSULTATION_TYPES_RESTORE
     'doctor-pay': ['Insights', 'Settings', 'Зарплата врачей'],   // DOCTOR_PAY_BULK_V1
     // SUBSCRIPTION_SUBROUTE_V1 — 'updates' had no CRUMBS entry, and CRUMBS is
@@ -446,9 +478,19 @@ const searchEl  = document.getElementById('topbar-search');
 // не бывает: раньше он отдавался ДО проверки скрытых, и администратор входил в
 // «Раздел скрыт», а «На главную» возвращала его туда же. Та же проверка — в
 // role-reach.js landingScreen (сводка прав обещает тот же экран).
+// NAV_DASHBOARD_TOP_V1 — порядок поиска домашнего экрана прежний: «Дашборд»
+// поднялся в меню, но роль, у которой открыты и клиника, и дашборд, по-прежнему
+// начинает с клиники. Дашборд ищется там, где стоял, — перед «Отчётами».
+const NAV_HOME_ORDER = (() => {
+    const rest = NAV.filter((i) => !i.top);
+    const at = rest.findIndex((i) => i.id === 'reports-hub');
+    const tops = NAV.filter((i) => i.top);
+    return at < 0 ? [...rest, ...tops] : [...rest.slice(0, at), ...tops, ...rest.slice(at)];
+})();
+
 function firstAllowedView() {
     if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard') && !navHidden.has('dashboard')) return 'dashboard';
-    for (const item of NAV) {
+    for (const item of NAV_HOME_ORDER) {
         if (item.section) continue;
         // MY_STOCK_V1 — личный экран домашним не бывает ни у кого: сюда
         // приходят посмотреть на себя, а не начать смену. См. PERSONAL_VIEWS.
@@ -788,6 +830,14 @@ const PARENT_OF = {
     'services': 'settings', 'consultation-types': 'settings', 'discounts-settings': 'settings',
     'api-settings': 'settings', 'telegram-settings': 'settings', 'telephony-settings': 'settings', 'meta-settings': 'settings',
     'telegram-deeplinks': 'settings',   // TG_DEEPLINK_V1
+    'sms-settings': 'settings',   // SMS_INFORM_V1
+    // COMMERCE_TOOLS_V1 — каждый инструмент витрины «Коммерческие инструменты»
+    'commerce-push': 'commerce',
+    // CHATS_TO_COMMERCE_V1 — чаты стали частью витрины: «Назад» ведёт на неё, она
+    // же подсвечена в меню, и «Видимость разделов» прячет их вместе с ней.
+    'telegram-chat': 'commerce', 'meta-chat': 'commerce',
+    'referrals': 'commerce',   // REFERRALS_TO_COMMERCE_V1
+    'clinic-news': 'commerce',   // CLINIC_NEWS_V1
     'crm-settings': 'settings', 'doctor-pay': 'settings',
     'visibility-settings': 'settings',   // NAV_VISIBILITY_V1 — плитка «Основного»
     'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
@@ -894,6 +944,11 @@ function renderBackControl() {
     backEl.onclick = () => navigate(target);
 }
 
+// Экраны, чей баннер сам называет раздел — имя в верхней панели им не нужно.
+// SECTION_HERO_V1 — баннер получили все клинические разделы (views/section-hero.js).
+const OWN_BANNER_VIEWS = new Set(['patients', 'consultation', 'labs', 'procedures', 'admissions',
+    'mar-nurse', 'kitchen-sheet', 'discharge', 'patient-documents']);
+
 function renderSectionTitle() {
     if (!titleEl) return;
     const pane = state.panes.find(p => p.key === state.activeKey);
@@ -906,6 +961,14 @@ function renderSectionTitle() {
         ? (pane.titleOverride ? pane.title : sectionTitleFor(pane.view, pane.payload))
         : sectionTitleFor(state.view, state.payload);
     titleEl.textContent = tr(raw);
+    // PATIENTS_HERO_TITLE_V1 (2026-10-31, владелец со снимком «Пациентов»: «on
+    // top there is patients word separately staying, it is better to be
+    // removed»). Тёмный баннер раздела (patients-hub.js PATIENTS_HERO_V1) сам
+    // крупно пишет «Пациенты», и имя в панели стало дублем. Прячем именно
+    // видимость, а не элемент: у заголовка flex: 1, он держит кнопки панели
+    // справа, а текст остаётся для проверок и для возврата на другой экран.
+    const viewNow = pane ? pane.view : state.view;
+    titleEl.style.visibility = OWN_BANNER_VIEWS.has(viewNow) ? 'hidden' : '';
     renderBackControl();   // APPBAR_BACK_V1 — путь назад пересчитывается вместе с именем
 }
 
@@ -1382,14 +1445,19 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'telegram-settings': return void await renderWithViewOnly(viewRoot, 'settings.telegram', (root) => renderTelegramSettings(root, ctx));   // TELEGRAM_BOT_V1
             case 'telephony-settings': return void await renderWithViewOnly(viewRoot, 'settings.telephony', (root) => renderTelephonySettings(root, ctx));   // TELEPHONY_V1
             case 'meta-settings': return void await renderWithViewOnly(viewRoot, 'settings.meta', (root) => renderMetaSettings(root, ctx));   // META_LEADS_V1
+            case 'sms-settings': return void await renderSmsSettings(viewRoot);   // SMS_INFORM_V1 — только администратор (permissions.js)
             case 'telegram-deeplinks': return void await renderWithViewOnly(viewRoot, 'settings.telegram', (root) => renderTelegramDeeplinks(root, ctx));   // TG_DEEPLINK_V1 — окно «Telegram-бот» в «Ролях»
             case 'crm-settings': return void await renderWithViewOnly(viewRoot, 'settings.crm', (root) => renderCrmSettings(root, ctx));   // CRM_CONFIG_V1
             case 'telegram-chat': return void await renderTelegramChat(viewRoot, ctx);   // TELEGRAM_CHAT_V1
+            case 'meta-chat':     return void await renderMetaChat(viewRoot, ctx);   // META_INBOX_V1
             case 'doctor-pay': return void await renderDoctorPay(viewRoot, ctx);   // DOCTOR_PAY_BULK_V1
             case 'cashier-settings':  return void await renderCashierSettings(viewRoot);    // CASHIER_SHIFT_MODE_V1
             case 'rooms-setup':       return void await renderRoomsSetup(viewRoot);       // ROOMS_SETUP_V1
             case 'departments':       return void await renderDepartments(viewRoot, ctx);   // DEPARTMENTS_V1
             case 'settings':      return void await renderSettingsHub(viewRoot, ctx);   // SETTINGS_HUB_V1
+            case 'commerce':      return void renderCommerceHub(viewRoot, ctx);   // COMMERCE_TOOLS_V1 — витрина инструментов
+            case 'clinic-news':   return void await renderClinicNews(viewRoot, ctx);   // CLINIC_NEWS_V1
+            case 'commerce-push': return void renderCommercePush(viewRoot);   // SMS_PUSH_V1 — инструмент «Push-уведомления»
             case 'employees':     return void await renderEmployees(viewRoot, ctx);   // EMPLOYEE_EDITOR_V1 — Сотрудники
             case 'documents-settings': return void await renderDocumentsSettings(viewRoot, ctx);   // DOCUMENTS_SETTINGS_V1
             // SETTINGS_SPLIT_V1 — ctx passed on purpose: it still carries
@@ -1560,15 +1628,31 @@ function setNavHidden(list) {
     }
 }
 
+function renderSidebarNewPatient() {
+    document.getElementById('sidebar-new')?.remove();
+    if (!sidebarEl || !sidebarEl.parentNode || !canCreatePatient()) return;
+    const label = tr('Новый пациент');
+    const btn = h('button', {
+        id: 'sidebar-new', class: 'sidebar-new', type: 'button', title: label, 'aria-label': label,
+        onclick: () => openPatientCreateModal({ onNavigate: navigate }),
+    }, Icon('Plus', { size: 16 }), h('span', { class: 'sidebar-new-label' }, label));
+    sidebarEl.parentNode.insertBefore(btn, sidebarEl);
+}
+
 function renderSidebar() {
     clear(sidebarEl);
 
-    // NO_TABS_APPBAR_V1 — the «+ Новый пациент» CTA is gone (owner, 2026-09-05:
-    // "and create patient button"). Registering a patient is not a thing the
-    // sidebar has to shout on every screen; it is one click inside «Пациенты»,
-    // whose own header carries «Создать пациента» (views/patients.js), and the
-    // 'registration' route itself is untouched — bookmarks, deep links and
-    // every onNavigate('registration') caller still open it.
+    // NO_TABS_APPBAR_V1 — the «+ Новый пациент» CTA went away on 2026-09-05
+    // (owner: "and create patient button").
+    // SIDEBAR_NEW_PATIENT_V1 (2026-10-31) — и вернулся: владелец прислал снимок
+    // шапки меню — знак, имя клиники, под ними во всю ширину «+ New patient» —
+    // и попросил «new patient button there too». Новый класс (.sidebar-new), не
+    // прежний призывной, и иначе устроен: кнопка живёт МЕЖДУ шапкой и
+    // списком пунктов, а не внутри #sidebar-body — замер окна (fitSidebar)
+    // считает только пункты. Открывает то же окно, что «Создать пациента» в
+    // «Пациентах» (openPatientCreateModal), и видна только тому, кому его
+    // можно открыть (canCreatePatient — тот же гейт, что спрашивает само окно).
+    renderSidebarNewPatient();
 
     // NAV_GROUPS_V1 — группа, в которой лежит открытый экран, рисуется
     // раскрытой, что бы ни было свёрнуто. Считается ДО цикла: заголовок группы
@@ -1637,7 +1721,8 @@ function renderSidebar() {
         }
         if (currentGroup) currentGroup.counts.push({ count: navCounts[item.id], alert: item.badgeKind === 'alert' });   // FIX_318_V1 (B6)
         if (!currentNav) {
-            currentNav = h('div', { class: 'nav' });
+            // NAV_DASHBOARD_TOP_V1 — пункт над группами: свой блок с чертой снизу.
+            currentNav = h('div', { class: item.top ? 'nav nav-top' : 'nav' });
             sidebarEl.appendChild(currentNav);
             currentNavHasItems = true;
         }
@@ -1834,6 +1919,21 @@ async function loadNavCounts() {
         } catch (e) {
             console.warn('[nav counts] telegram:', e.message);
         }
+    }
+    // META_INBOX_V1 — то же для Facebook и Instagram: сообщения и комментарии.
+    if (isModuleAllowed('meta-chat')) {
+        try {
+            const { data, error } = await supabase.rpc('meta_inbox_unread');
+            if (!error && data) navCounts['meta-chat'] = data.total ?? 0;
+        } catch (e) {
+            console.warn('[nav counts] meta:', e.message);
+        }
+    }
+    // CHATS_TO_COMMERCE_V1 — пунктов чатов в меню больше нет: их непрочитанные
+    // показывает значок «Коммерческих инструментов». null, пока ни один чат
+    // роли не открыт, — значка нет, а не «0».
+    if (isModuleAllowed('telegram-chat') || isModuleAllowed('meta-chat')) {
+        navCounts.commerce = (Number(navCounts['telegram-chat']) || 0) + (Number(navCounts['meta-chat']) || 0);
     }
     // CASHIER_UNPAID_BADGE_V1 — сколько счетов ещё ждут оплаты. Статусы — те же
     // три, что server/services/domain/money.js::OUTSTANDING_STATUSES ('unpaid',
@@ -2635,18 +2735,18 @@ function showLogin() {
     const existing = document.getElementById('login-overlay');
     if (existing) existing.remove();
 
-    const errEl = h('div', { style: { color: 'var(--crit-700)', fontSize: '12.5px', minHeight: '16px', textAlign: 'center' } });
+    const errEl = h('div', { class: 'lg-error', role: 'alert' });
     const userInp = h('input', {
         type: 'text', placeholder: 'Username or email', autocomplete: 'username',
-        style: loginInputStyle(),
+        class: 'lg-input', 'aria-label': 'Username or email',
     });
     const passInp = h('input', {
         type: 'password', placeholder: 'Password', autocomplete: 'current-password',
-        style: loginInputStyle(),
+        class: 'lg-input', 'aria-label': 'Password',
     });
     const btn = h('button', {
         type: 'submit', class: 'btn btn-primary',
-        style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px' },
+        style: { width: '100%', justifyContent: 'center', fontSize: '13.5px' },
     }, 'Sign in');
 
     const submit = async () => {
@@ -2667,74 +2767,36 @@ function showLogin() {
     };
 
     const form = h('form', {
+        class: 'lg-form',
         onsubmit: (e) => { e.preventDefault(); submit(); },
-        style: { display: 'flex', flexDirection: 'column', gap: '12px', width: '100%' },
     },
         userInp, passInp, btn, errEl,
     );
 
-    // Secondary action — opens the self-signup screen. Type=button keeps it
-    // from accidentally submitting the login form.
-    const createAcctBtn = h('button', {
-        type: 'button',
-        class: 'btn btn-outline',
-        style: { width: '100%', justifyContent: 'center', height: '38px', fontSize: '13.5px' },
-        onclick: () => showSignup(),
-    }, 'Create an account');
-
-    const signupRow = h('div', { style: { width: '100%', display: 'flex', flexDirection: 'column', gap: '8px' } },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--ink-400)', fontSize: '12.5px' } },
-            h('div', { style: { flex: '1', height: '1px', background: 'var(--ink-100)' } }),
-            h('span', null, "Don't have an account?"),
-            h('div', { style: { flex: '1', height: '1px', background: 'var(--ink-100)' } }),
-        ),
-        createAcctBtn,
-    );
-
-    const card = h('div', {
-        style: {
-            width: '360px', maxWidth: 'calc(100vw - 32px)',
-            background: 'white', borderRadius: '16px', padding: '28px 26px',
-            boxShadow: '0 24px 60px rgba(11,20,24,0.22)', display: 'flex',
-            flexDirection: 'column', alignItems: 'center', gap: '16px',
-        },
-    },
-        h('div', {
-            style: {
-                width: '52px', height: '52px', borderRadius: '14px',
-                background: 'linear-gradient(135deg, var(--primary-600, #167873), var(--primary-800, #0f4f4b))',
-                display: 'grid', placeItems: 'center', color: 'white',
-            },
-            html: '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="26" height="26"><path d="M4 12 L8 12 L10 6 L12 18 L14 9 L16 12 L20 12"/></svg>',
-        }),
-        h('div', { style: { textAlign: 'center' } },
-            h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Easy-Med'),
-            h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '2px' } }, 'Sign in to continue'),
-        ),
+    // LOGIN_NO_SIGNUP_V1 (2026-10-31, владелец: «remove create clinic from log
+    // in») — здесь была строка «Нет аккаунта? / Создать аккаунт», открывавшая
+    // showSignup(). Учётные записи заводит администратор клиники в
+    // «Сотрудниках»; с экрана входа регистрации больше нет. showSignup() и
+    // showCreateClinicOnly() остались в файле, но с экрана входа не зовутся.
+    const card = h('div', { class: 'lg-card' },
+        lgMark(),
+        lgHead('Easy-Med', 'Sign in to continue'),
         form,
-        signupRow,
     );
 
-    const overlay = h('div', {
-        id: 'login-overlay',
-        style: {
-            position: 'fixed', inset: '0', zIndex: '9999',
-            display: 'grid', placeItems: 'center',
-            background: 'linear-gradient(160deg, #e7ebee, #f3f5f7)',
-        },
-    }, card);
-
-    document.body.appendChild(overlay);
+    document.body.appendChild(loginStage(card, { t: tr }));
     setTimeout(() => userInp.focus(), 0);
 }
 
-function loginInputStyle() {
-    return {
-        width: '100%', height: '40px', padding: '0 12px',
-        border: '1px solid var(--ink-200)', borderRadius: '9px',
-        fontSize: '13.5px', fontFamily: 'inherit', outline: 'none',
-        boxSizing: 'border-box',
-    };
+// LOGIN_STAGE_V1 — все окна до входа (вход, заявка, своя клиника, проверка)
+// стоят на одной сцене js/shared/login-stage.js, той же, что у страницы «/»:
+// слева витрина с кардиограммой, справа карточка. Внешний вид — в
+// css/login-stage.css; здесь только содержимое карточки.
+function lgMark() { return h('div', { class: 'lg-mark', html: PULSE_SVG }); }
+function lgHead(title, ...sub) {
+    return h('div', { class: 'lg-head' },
+        h('h2', { class: 'lg-head-title' }, title),
+        sub.length ? h('p', { class: 'lg-head-sub' }, ...sub) : null);
 }
 
 // ---------------------------------------------------------------------------
@@ -2755,30 +2817,30 @@ function showSignup() {
         return;
     }
 
-    const errEl = h('div', { style: { color: 'var(--crit-700)', fontSize: '12.5px', minHeight: '16px', textAlign: 'center' } });
-    const okEl  = h('div', { style: { color: 'var(--ok-700)',   fontSize: '12.5px', minHeight: '16px', textAlign: 'center' } });
+    const errEl = h('div', { class: 'lg-error', role: 'alert' });
+    const okEl  = h('div', { class: 'lg-error', role: 'status', style: { color: 'var(--ok-700)' } });
 
-    const nameInp  = h('input',    { type: 'text', placeholder: 'Full name',             autocomplete: 'name',  style: loginInputStyle() });
+    const nameInp  = h('input',    { type: 'text', placeholder: 'Full name',             autocomplete: 'name',  class: 'lg-input', 'aria-label': 'Full name' });
     // PHONE_INPUT_V1 — country control; its inner field carries the login-form
     // styling, minus the left corners the country button occupies.
     const phoneInp = phoneInput('phone', 'Phone (+998 …)');
-    Object.assign(phoneInp.input.style, loginInputStyle(), { borderRadius: '0 9px 9px 0', borderLeft: '0' });
-    const emailInp = h('input',    { type: 'email',placeholder: 'Email (optional)',      autocomplete: 'email', style: loginInputStyle() });
-    const userInp  = h('input',    { type: 'text', placeholder: 'Desired username (optional)', autocomplete: 'off', style: loginInputStyle() });
+    phoneInp.input.classList.add('lg-input');
+    Object.assign(phoneInp.input.style, { borderRadius: '0 10px 10px 0', borderLeft: '0' });
+    const emailInp = h('input',    { type: 'email',placeholder: 'Email (optional)',      autocomplete: 'email', class: 'lg-input', 'aria-label': 'Email (optional)' });
+    const userInp  = h('input',    { type: 'text', placeholder: 'Desired username (optional)', autocomplete: 'off', class: 'lg-input', 'aria-label': 'Desired username (optional)' });
     const msgInp   = h('textarea', {
-        placeholder: 'Why you need access (optional)',
-        rows: '3',
-        style: { ...loginInputStyle(), height: 'auto', padding: '8px 12px', resize: 'vertical', minHeight: '64px' },
+        placeholder: 'Why you need access (optional)', 'aria-label': 'Why you need access (optional)',
+        rows: '3', class: 'lg-input',
     });
 
     const btn = h('button', {
         type: 'submit', class: 'btn btn-primary',
-        style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px' },
+        style: { width: '100%', justifyContent: 'center', fontSize: '13.5px' },
     }, 'Request access');
 
     const backBtn = h('button', {
         type: 'button', class: 'btn btn-outline',
-        style: { width: '100%', justifyContent: 'center', height: '38px', fontSize: '13.5px' },
+        style: { width: '100%', justifyContent: 'center', fontSize: '13.5px' },
         onclick: () => showLogin(),
     }, 'Back to sign in');
 
@@ -2829,30 +2891,12 @@ function showSignup() {
         nameInp, phoneInp, emailInp, userInp, msgInp, btn, errEl, okEl,
     );
 
-    const card = h('div', {
-        style: {
-            width: '360px', maxWidth: 'calc(100vw - 32px)',
-            background: 'white', borderRadius: '16px', padding: '28px 26px',
-            boxShadow: '0 24px 60px rgba(11,20,24,0.22)', display: 'flex',
-            flexDirection: 'column', alignItems: 'center', gap: '14px',
-        },
-    },
-        h('div', {
-            style: {
-                width: '52px', height: '52px', borderRadius: '14px',
-                background: 'linear-gradient(135deg, var(--primary-600, #167873), var(--primary-800, #0f4f4b))',
-                display: 'grid', placeItems: 'center', color: 'white',
-            },
-            html: '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="26" height="26"><path d="M4 12 L8 12 L10 6 L12 18 L14 9 L16 12 L20 12"/></svg>',
-        }),
-        h('div', { style: { textAlign: 'center' } },
-            h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } },
-                window.CLINIC?.name || 'Easy-Med'),
-            h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '2px', lineHeight: '1.45' } },
-                'For staff joining ',
-                h('strong', null, window.CLINIC?.name || 'an existing clinic'),
-                ' — an admin will review your request.'),
-        ),
+    const card = h('div', { class: 'lg-card' },
+        lgMark(),
+        lgHead(window.CLINIC?.name || 'Easy-Med',
+            'For staff joining ',
+            h('strong', null, window.CLINIC?.name || 'an existing clinic'),
+            ' — an admin will review your request.'),
         form,
         backBtn,
         h('div', {
@@ -2864,9 +2908,9 @@ function showSignup() {
         h('button', {
             type: 'button', class: 'btn btn-outline',
             style: {
-                width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px',
-                fontWeight: '700', color: 'var(--primary-700, #0d8a8a)',
-                borderColor: 'var(--primary-700, #0d8a8a)', marginTop: '2px',
+                width: '100%', justifyContent: 'center', fontSize: '13.5px',
+                fontWeight: '700', color: 'var(--primary-700)',
+                borderColor: 'var(--primary-700)', marginTop: '2px',
             },
             onclick: (e) => {
                 e.preventDefault();
@@ -2879,16 +2923,7 @@ function showSignup() {
         }, 'Create a new clinic →'),
     );
 
-    const overlay = h('div', {
-        id: 'login-overlay',
-        style: {
-            position: 'fixed', inset: '0', zIndex: '9999',
-            display: 'grid', placeItems: 'center',
-            background: 'linear-gradient(160deg, #e7ebee, #f3f5f7)',
-        },
-    }, card);
-
-    document.body.appendChild(overlay);
+    document.body.appendChild(loginStage(card, { t: tr }));
     setTimeout(() => nameInp.focus(), 0);
 }
 
@@ -2901,32 +2936,15 @@ function showCreateClinicOnly() {
     const existing = document.getElementById('login-overlay');
     if (existing) existing.remove();
 
-    const card = h('div', {
-        style: {
-            width: '420px', maxWidth: 'calc(100vw - 32px)',
-            background: 'white', borderRadius: '16px', padding: '36px 30px',
-            boxShadow: '0 24px 60px rgba(11,20,24,0.22)', display: 'flex',
-            flexDirection: 'column', alignItems: 'center', gap: '18px', textAlign: 'center',
-        },
-    },
-        h('div', {
-            style: {
-                width: '56px', height: '56px', borderRadius: '14px',
-                background: 'linear-gradient(135deg, var(--primary-600, #167873), var(--primary-800, #0f4f4b))',
-                display: 'grid', placeItems: 'center', color: 'white',
-            },
-            html: '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="28" height="28"><path d="M4 12 L8 12 L10 6 L12 18 L14 9 L16 12 L20 12"/></svg>',
-        }),
-        h('div', null,
-            h('div', { style: { fontSize: '24px', fontWeight: 800, color: 'var(--ink-900)', letterSpacing: '-0.01em' } }, 'Open your clinic'),
-            h('div', { style: { fontSize: '13.5px', color: 'var(--ink-500)', marginTop: '8px', lineHeight: '1.5' } },
-                'Pick a name, get your own subdomain at ',
-                h('strong', null, '<your-clinic>.easymed.uz'),
-                ', and start a 7-day free trial. No card required.'),
-        ),
+    const card = h('div', { class: 'lg-card lg-card--wide' },
+        lgMark(),
+        lgHead('Open your clinic',
+            'Pick a name, get your own subdomain at ',
+            h('strong', null, '<your-clinic>.easymed.uz'),
+            ', and start a 7-day free trial. No card required.'),
         h('button', {
             type: 'button', class: 'btn btn-primary',
-            style: { width: '100%', justifyContent: 'center', height: '46px', fontSize: '15px', fontWeight: '700' },
+            style: { width: '100%', justifyContent: 'center', fontSize: '15px', fontWeight: '700' },
             onclick: () => {
                 if (typeof window.openClinicSignup === 'function') {
                     window.openClinicSignup();
@@ -2937,7 +2955,7 @@ function showCreateClinicOnly() {
         }, 'Create my clinic →'),
         h('button', {
             type: 'button', class: 'btn btn-outline',
-            style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px' },
+            style: { width: '100%', justifyContent: 'center', fontSize: '13.5px' },
             onclick: () => showLogin(),
         }, 'Back to sign in'),
         h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '4px', lineHeight: '1.45' } },
@@ -2946,16 +2964,7 @@ function showCreateClinicOnly() {
             ' instead.'),
     );
 
-    const overlay = h('div', {
-        id: 'login-overlay',
-        style: {
-            position: 'fixed', inset: '0', zIndex: '9999',
-            display: 'grid', placeItems: 'center',
-            background: 'linear-gradient(160deg, #e7ebee, #f3f5f7)',
-        },
-    }, card);
-
-    document.body.appendChild(overlay);
+    document.body.appendChild(loginStage(card, { t: tr }));
 }
 
 // ---------------------------------------------------------------------------
@@ -2978,26 +2987,12 @@ function showPendingReview(clinic) {
         rejected:          'Unfortunately we could not verify the documents you submitted. Please contact us so we can sort this out together.',
     };
 
-    const card = h('div', {
-        style: {
-            width: '460px', maxWidth: 'calc(100vw - 32px)',
-            background: 'white', borderRadius: '16px', padding: '36px 32px',
-            boxShadow: '0 24px 60px rgba(11,20,24,0.22)', display: 'flex',
-            flexDirection: 'column', alignItems: 'center', gap: '14px', textAlign: 'center',
-        },
-    },
-        h('div', {
-            style: {
-                width: '64px', height: '64px', borderRadius: '16px',
-                background: status === 'rejected' ? '#fff0f0' : '#fffbe6',
-                color: status === 'rejected' ? '#c83434' : '#a07810',
-                display: 'grid', placeItems: 'center', fontSize: '30px', fontWeight: '700',
-            },
-        }, status === 'rejected' ? '!' : '⏱'),
-        h('div', null,
-            h('div', { style: { fontSize: '24px', fontWeight: 800, color: 'var(--ink-900)', letterSpacing: '-0.01em' } }, titleMap[status] || 'Account pending'),
-            h('div', { style: { fontSize: '13.5px', color: 'var(--ink-500)', marginTop: '10px', lineHeight: '1.6' } }, bodyMap[status] || ''),
-        ),
+    // LOGIN_STAGE_V1 — знак здесь не сердце, а состояние; прежние «⏱» и «!»
+    // были эмодзи/символом в интерфейсе — теперь иконки набора.
+    const card = h('div', { class: 'lg-card lg-card--wide' },
+        h('div', { class: 'lg-mark ' + (status === 'rejected' ? 'lg-mark--crit' : 'lg-mark--warn') },
+            Icon(status === 'rejected' ? 'Warning' : 'Clock', { size: 28 })),
+        lgHead(titleMap[status] || 'Account pending', bodyMap[status] || ''),
         clinic.rejection_reason
             ? h('div', { style: { background: '#fff0f0', color: '#7a1a1a', padding: '12px 14px', borderRadius: '10px', fontSize: '13.5px', width: '100%', lineHeight: '1.45', textAlign: 'left' } },
                 h('strong', null, 'Reason: '),
@@ -3011,20 +3006,12 @@ function showPendingReview(clinic) {
         }, 'Contact support'),
         h('button', {
             type: 'button', class: 'btn btn-outline',
-            style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px' },
+            style: { width: '100%', justifyContent: 'center', fontSize: '13.5px' },
             onclick: () => { window.location.href = 'https://easymed.uz/'; },
         }, 'Back to easymed.uz'),
     );
 
-    const overlay = h('div', {
-        id: 'login-overlay',
-        style: {
-            position: 'fixed', inset: '0', zIndex: '9999',
-            display: 'grid', placeItems: 'center',
-            background: 'linear-gradient(160deg, #e7ebee, #f3f5f7)',
-        },
-    }, card);
-    document.body.appendChild(overlay);
+    document.body.appendChild(loginStage(card, { t: tr }));
 }
 
 // PASSWORD_CHANGE_V2 — здесь был облачный экран принудительной смены пароля
@@ -3146,6 +3133,9 @@ async function onAuthed(userRow, { fresh = false } = {}) {
     // renderNotifications() call: a check that cannot run (offline, RPC
     // error) must never block login or surface as an error to the clinic.
     renderUpdateBanner().catch((e) => console.warn('[updates]', e && e.message));
+    // CLINIC_NEWS_STRIP_V1 — «Новости клиники» тонкой полосой, только стойке и
+    // call-центру (решает сама полоса); так же «выстрелил и забыл».
+    renderNewsStrip({ navigate, user: state.user }).catch((e) => console.warn('[news-strip]', e && e.message));
 }
 
 // LICENCE_CORE_V1 — the countdown banner. A lapsed subscription gets the full
@@ -3208,6 +3198,14 @@ onLangChange(() => renderActAsBanner(state.user));
 // not a moment worth repeating that round trip for, and this screen's own
 // visible strings still render through tr() at whichever language is active
 // whenever it next repaints.
+// UPDATE_BANNER_DISMISS_V1 (2026-10-31, владелец: «add X on the right side and
+// make it removable, but when client is reloads it should appear again»).
+// Крестик прячет полосу ДО ПЕРЕЗАГРУЗКИ — поэтому отметка живёт в памяти
+// модуля, а не в localStorage: F5 честно возвращает напоминание. Отметка — по
+// тому, ЧТО говорила полоса (версия + «доступно»/«запланировано»): если за тот
+// же сеанс обновление одобрили и полоса заговорила о другом, это новость, и
+// она снова видна.
+let updateBannerDismissed = '';
 async function renderUpdateBanner() {
     document.getElementById('update-banner')?.remove();
     let status;
@@ -3224,6 +3222,11 @@ async function renderUpdateBanner() {
     // comment. Treated as "nothing waiting" here too.
     const offer = offerIsCurrent(status.offer, status.current_version) ? null : status.offer;
     if (!offer) return;
+    const dismissKey = String(offer.version || '') + '|' + (status.approved ? (status.immediate === true ? 'now' : 'planned') : 'offer');
+    if (updateBannerDismissed === dismissKey) return;   // UPDATE_BANNER_DISMISS_V1
+    // Пока шёл запрос, полосу могли уже нарисовать (вход + обновление из
+    // экрана «Обновления» почти одновременно) — вторая не нужна.
+    document.getElementById('update-banner')?.remove();
 
     const banner = h('div', { id: 'update-banner' });
     if (status.approved) {
@@ -3246,6 +3249,11 @@ async function renderUpdateBanner() {
             `Доступно обновление ${offer.version} — `,
             h('button', { class: 'ub-link', type: 'button', onclick: () => navigate('updates') }, 'Подробнее')));
     }
+    // UPDATE_BANNER_DISMISS_V1 — крестик справа: до перезагрузки страницы.
+    banner.appendChild(h('button', {
+        class: 'ub-close', type: 'button', title: tr('Скрыть до перезагрузки страницы'), 'aria-label': tr('Скрыть'),
+        onclick: () => { updateBannerDismissed = dismissKey; banner.remove(); },
+    }, Icon('X', { size: 15 })));
     document.body.insertBefore(banner, document.querySelector('.app') || document.body.firstChild);
 }
 
@@ -3254,6 +3262,11 @@ async function renderUpdateBanner() {
 // form a cycle) — same established pattern as window.easymedSetTabLabel
 // above for tab titles.
 window.easymedRefreshUpdateBanner = renderUpdateBanner;
+// CLINIC_NEWS_STRIP_V1 — тот же мост для доски (views/clinic-news.js): после
+// «Опубликовать» и «Снять» полоса перечитывается сразу, а не через пять минут.
+// И на смене языка — подписи полосы на новом языке.
+window.easymedRefreshNewsStrip = () => renderNewsStrip({ navigate, user: state.user }).catch(() => {});
+onLangChange(() => { if (state.user) window.easymedRefreshNewsStrip(); });
 
 // SIDEBAR_COLLAPSE_V1 — chevron collapses the global left nav; the floating
 // re-open button restores it. Wired once; state persisted to localStorage.
@@ -3299,7 +3312,7 @@ function startApp({ fresh = false } = {}) {
     // refreshNav — FIX_318_V1 (B6): его ставит модуль при загрузке (SERVICE_SCOPE_V1),
     // а эта строка затирала объект целиком, и CRM, чат, склад, отделы звали
     // refreshNav впустую — счётчики ждали двадцатисекундного опроса.
-    window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading, setNavHidden, isNavHidden: navHiddenFor, subViewsOf, refreshNav: loadNavCounts };   // setNavHidden — NAV_VISIBILITY_V1
+    window.easymed = { state, supabase, navigate, NAV, NAV_HOME_ORDER, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading, setNavHidden, isNavHidden: navHiddenFor, subViewsOf, refreshNav: loadNavCounts };   // setNavHidden — NAV_VISIBILITY_V1
     watchSectionHeadings();   // ONE_NAME_PER_SCREEN_V1
     startUiEnhance();         // UI_ENHANCE_V1 — списки и календари в виде программы
     paintUserCard();

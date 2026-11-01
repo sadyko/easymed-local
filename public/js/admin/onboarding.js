@@ -117,7 +117,7 @@ function injectStyles() {
     s.textContent = `
 .em-onb-overlay { position: fixed; inset: 0; z-index: 99000; pointer-events: none; }
 .em-onb-dim { position: fixed; background: rgba(11,20,24,0.55); pointer-events: auto; transition: all .15s ease; }
-.em-onb-ring { position: fixed; border-radius: 10px; box-shadow: 0 0 0 3px #167873, 0 0 0 9999px rgba(0,0,0,0); pointer-events: none; transition: all .15s ease; }
+.em-onb-ring { position: fixed; border-radius: 10px; box-shadow: 0 0 0 3px #355c7d, 0 0 0 9999px rgba(0,0,0,0); pointer-events: none; transition: all .15s ease; }
 .em-onb-pop { position: fixed; z-index: 99002; max-width: 320px; background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(11,20,24,.28); padding: 16px 18px; font: 13.5px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; color: #1f2d34; pointer-events: auto; }
 .em-onb-pop h4 { margin: 0 0 6px; font-size: 15px; font-weight: 700; color: #0b1418; }
 .em-onb-pop p { margin: 0; color: #324049; }
@@ -125,8 +125,8 @@ function injectStyles() {
 .em-onb-grow { flex: 1; }
 .em-onb-btn { border: 1px solid #d3d9de; background: #fff; color: #1f2d34; border-radius: 8px; padding: 7px 13px; font: 600 12.5px inherit; cursor: pointer; }
 .em-onb-btn:hover { background: #f3f5f7; }
-.em-onb-btn.primary { background: #167873; border-color: #167873; color: #fff; }
-.em-onb-btn.primary:hover { background: #115d5a; }
+.em-onb-btn.primary { background: #355c7d; border-color: #355c7d; color: #fff; }
+.em-onb-btn.primary:hover { background: #2a4a65; }
 .em-onb-btn.ghost { border-color: transparent; color: #55636d; }
 .em-onb-step { font-size: 12.5px; color: #7a8892; font-weight: 600; }
 .em-onb-arrow { position: fixed; z-index: 99002; width: 0; height: 0; pointer-events: none; }
@@ -134,10 +134,10 @@ function injectStyles() {
 .em-onb-pop.em-onb-center h4 { font-size: 20px; margin-bottom: 8px; }
 .em-onb-pop.em-onb-center p { color: #324049; }
 .em-onb-pop.em-onb-center .em-onb-foot { flex-wrap: wrap; }
-.em-onb-helpbtn { position: fixed; left: 18px; bottom: 18px; z-index: 98000; width: 44px; height: 44px; border-radius: 50%; background: #167873; color: #fff; border: 0; cursor: pointer; box-shadow: 0 6px 18px rgba(13,138,114,.4); font-size: 20px; font-weight: 700; display: grid; place-items: center; }
+.em-onb-helpbtn { position: fixed; left: 18px; bottom: 18px; z-index: 98000; width: 44px; height: 44px; border-radius: 50%; background: #355c7d; color: #fff; border: 0; cursor: pointer; box-shadow: 0 6px 18px rgba(13,138,114,.4); font-size: 20px; font-weight: 700; display: grid; place-items: center; }
 .em-onb-helpbtn.on { background: #b45309; }
-.em-onb-marker { position: fixed; z-index: 98500; width: 20px; height: 20px; border-radius: 50%; background: #167873; color: #fff; border: 2px solid #fff; box-shadow: 0 2px 8px rgba(11,20,24,.3); cursor: pointer; font: 700 12.5px/16px sans-serif; text-align: center; pointer-events: auto; }
-@keyframes em-onb-pulse { 0%{box-shadow:0 0 0 3px #167873,0 0 0 0 rgba(22,120,115,.5)} 70%{box-shadow:0 0 0 3px #167873,0 0 0 10px rgba(22,120,115,0)} 100%{box-shadow:0 0 0 3px #167873,0 0 0 0 rgba(22,120,115,0)} }
+.em-onb-marker { position: fixed; z-index: 98500; width: 20px; height: 20px; border-radius: 50%; background: #355c7d; color: #fff; border: 2px solid #fff; box-shadow: 0 2px 8px rgba(11,20,24,.3); cursor: pointer; font: 700 12.5px/16px sans-serif; text-align: center; pointer-events: auto; }
+@keyframes em-onb-pulse { 0%{box-shadow:0 0 0 3px #355c7d,0 0 0 0 rgba(53,92,125,.5)} 70%{box-shadow:0 0 0 3px #355c7d,0 0 0 10px rgba(53,92,125,0)} 100%{box-shadow:0 0 0 3px #355c7d,0 0 0 0 rgba(53,92,125,0)} }
 .em-onb-ring.pulse { animation: em-onb-pulse 1.8s infinite; }
 `;
     document.head.appendChild(s);

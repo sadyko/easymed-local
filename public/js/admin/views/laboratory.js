@@ -32,6 +32,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, fmtDate, fmtDateTime, field, avColor, initials } from '../ui.js';
+import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printBarcodeLabel } from './lab-barcode.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
@@ -412,9 +413,11 @@ function mount() {
     // поиском, фильтрами и переключателем всегда на месте. Панели и статистика
     // живут своей высотой — там редактируют и читают, а не дежурят.
     const root = h('div', { class: 'fade-in' + (mode === 'queue' ? ' lab-fit' : '') },
+        // SECTION_HERO_V1 — баннер раздела; вкладки режимов — в нём, слева под
+        // названием (владелец: «button … inside of it but in the left side»).
+        // Шапка ниже держит подзаголовок режима и его действия.
+        sectionHero({ section: 'labs', title: 'Лаборатория', tabs: modeSwitch() }).el,
         pageHead(SUBTITLES[mode], ACTIONS[mode]),
-        // Вкладки раздела — под шапкой, отдельной строкой (как в кабинете).
-        modeSwitch(),
         // LIS_INGEST_V1 — «Анализаторы» рисуются в тот же контейнер, что и
         // «Панели» (paintMode монтирует их в refs.panelsHost): без этой ветки
         // вкладка открывалась бы пустой очередью.

@@ -62,7 +62,7 @@ import { renderTasksView } from './crm-tasks-view.js';
 import { loadBoard, periodBounds, periodStart, dayStart, dayEnd, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT, loadReportRows } from './crm-board-load.js';
 // CRM_MULTI_SOURCE_V1 — несколько источников у заявки (миграция 231). Правило
 // чтения одно на экран и сервер: sources, иначе [source], иначе ['other'].
-import { leadSources, toggleLeadSource, leadHasAnySource, sourceTally, MAX_LEAD_SOURCES } from '../crm-sources.js';
+import { leadSources, leadHasAnySource, sourceTally } from '../crm-sources.js';   // CRM_SOURCE_SINGLE_V1 — toggleLeadSource/MAX_LEAD_SOURCES форме больше не нужны
 // PUBLIC_API_V1 — заявки и онлайн-запись из API: окно в карточке и строка на доске.
 import { apiBookingBox, apiBoardLine, loadApiMarks } from './crm-api-booking.js';
 import { cardBookingsBox } from './crm-card-bookings.js';   // CRM_LINK_ALL_V1 (ред. 2) — «Записи пациента»
@@ -384,6 +384,104 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
     window.addEventListener('resize', () => { clearTimeout(sizeTimer); sizeTimer = setTimeout(sizeBoardColumns, 120); });
 }
 
+// PATIENT_BOT_INVITE_V1 (2026-11-01, владелец: «put to the lead card too,
+// telegram bot button link») — строка под полем «Телефон» карточки заявки:
+// номер уже в Telegram-боте клиники — логотип и «В Telegram-боте»; нет —
+// кнопка «Ссылка на бот» (phone_bot_invite: SMS, а без SMS — ссылка в буфер
+// обмена). Та же пара, что в конце строки списка пациентов (patients.js), но
+// по НОМЕРУ: у заявки пациента может ещё не быть. Статус переспрашивается,
+// когда номер дописали (с задержкой, как поиск пациента по номеру); бот у
+// клиники не подключён — кнопка неактивна и объясняет почему.
+function leadBotLine(phoneInp, lead) {
+    const line = h('div', { class: 'crm-bot-line', 'data-crm-bot': '' });
+    let token = 0;
+    let timer = 0;
+    const phoneNow = () => String((phoneInp && phoneInp.value) || '');
+    async function refresh() {
+        const my = ++token;
+        const phone = phoneNow();
+        if (digitsOf(phone).length < 9) { line.replaceChildren(); return; }
+        let st = null;
+        try {
+            const { data, error } = await supabase.rpc('phone_bot_status', { phone });
+            if (error) return;
+            st = data;
+        } catch (_) { return; }
+        if (my !== token || !st || !st.valid) { if (my === token) line.replaceChildren(); return; }
+        paint(st, phone);
+    }
+    function paint(st, phone) {
+        line.replaceChildren();
+        if (st.linked) {
+            line.append(h('span', { class: 'pt-tg', title: tr('Подключён к Telegram-боту клиники') }, Icon('Send', { size: 12 })),
+                h('span', { class: 'crm-bot-on' }, tr('В Telegram-боте клиники')));
+            return;
+        }
+        const btn = h('button', {
+            class: 'pt-bot-invite', type: 'button', disabled: !st.bot, 'data-crm-bot-invite': '',
+            title: st.bot ? tr('Отправить на этот номер ссылку на Telegram-бот клиники') : tr('Telegram-бот клиники не подключён — его включают в «Настройки → Telegram-бот».'),
+            onclick: async () => {
+                btn.disabled = true;
+                try {
+                    const { data, error } = await supabase.rpc('phone_bot_invite', { phone, lead_id: lead && lead.id ? lead.id : null });
+                    if (error) throw new Error(error.message);
+                    const res = data || {};
+                    if (res.ok) {
+                        toast(tr('Ссылка на Telegram-бот отправлена пациенту по SMS.'), 'ok');
+                        btn.classList.add('is-sent'); btn.title = tr('Ссылка отправлена');
+                        return;
+                    }
+                    let copied = false;
+                    try { if (navigator.clipboard && res.link) { await navigator.clipboard.writeText(res.link); copied = true; } } catch (_) { /* буфер закрыт */ }
+                    toast(res.message ? tr(res.message)
+                        : copied ? tr('SMS не настроено — ссылка на бот скопирована, отправьте её пациенту.')
+                        : trf('SMS не настроено. Ссылка на бот: {link}', { link: res.link || '' }), res.message ? 'fail' : 'info');
+                    btn.disabled = false;
+                } catch (e) {
+                    toast((e && e.message) || tr('Не удалось отправить ссылку.'), 'fail');
+                    btn.disabled = false;
+                }
+            },
+        }, Icon('Send', { size: 13 }), ' ', tr('Ссылка на бот'));
+        line.append(btn);
+    }
+    const listenEl = phoneInp && phoneInp.querySelector ? (phoneInp.querySelector('input') || phoneInp) : phoneInp;
+    if (listenEl && listenEl.addEventListener) {
+        listenEl.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(refresh, 400); });
+    }
+    refresh();
+    return line;
+}
+
+// CLINIC_NEWS_V1 — кнопка «Информация» в шапке CRM: ведёт на «Информационную
+// доску». Счётчик объявлений дозаполняется, когда ответит сервер; сбой — просто
+// кнопка без счётчика, доска заявок от этого не страдает.
+//
+// CRM_HEAD_NEWS_V1 (2026-10-31, владелец: «remove the text and put information
+// button on left side visible and with animation if there is an information»).
+// Кнопка стоит слева под заголовком, на месте прежней подписи, и крупнее
+// остальных. Есть объявления — .has-news: синяя, с пульсирующим кольцом и
+// покачиванием значка; есть хоть одно «Важно» (CLINIC_NEWS_IMPORTANT_V1) —
+// .has-important: светло-красная (CLINIC_NEWS_IMPORTANT_RED_V1). Пусто — тихая
+// обводка, без анимации: мигать нечем.
+function newsBoardButton() {
+    const count = h('span', { class: 'crm-news-count', hidden: true });
+    const btn = h('button', { class: 'btn crm-news-btn', type: 'button', 'data-crm-news': '',
+        title: 'Информационная доска: новости клиники для сотрудников',
+        onclick: () => { if (refs.onNavigate) refs.onNavigate('clinic-news'); } },
+        h('span', { class: 'crm-news-ic' }, Icon('Info', { size: 15 })), h('span', null, 'Информация'), count);
+    supabase.rpc('clinic_news_list', {}).then(({ data, error }) => {
+        const items = !error && data && Array.isArray(data.items) ? data.items : [];
+        const n = items.length;
+        if (n > 0) {
+            count.textContent = n > 99 ? '99+' : String(n); count.hidden = false;
+            btn.classList.add('has-news');
+            if (items.some((it) => it && it.important)) btn.classList.add('has-important');
+        }
+    }).catch(() => {});
+    return btn;
+}
+
 export async function renderCrm(container, { onNavigate } = {}) {
     clear(container);
     refs.onNavigate = onNavigate;
@@ -653,7 +751,7 @@ async function paint() {
     }, Icon('X', { size: 14 }));
     const syncClear = () => { searchClear.style.display = searchInp.value ? 'block' : 'none'; };
     searchInp.addEventListener('focus', () => {
-        searchInp.style.borderColor = 'var(--primary-500, #2d958f)';
+        searchInp.style.borderColor = 'var(--primary-500, #456f93)';
         searchInp.style.boxShadow = '0 0 0 4px var(--primary-50, #e8f3f2)';
     });
     searchInp.addEventListener('blur', () => {
@@ -670,7 +768,7 @@ async function paint() {
     const searchBox = h('div', { style: { position: 'relative', flex: '0 1 300px', minWidth: '0', maxWidth: '100%' } },
         h('span', { style: {
             position: 'absolute', left: '13px', top: '50%', transform: 'translateY(-50%)',
-            color: 'var(--primary-600, #167873)', pointerEvents: 'none', display: 'flex',
+            color: 'var(--primary-600, #355c7d)', pointerEvents: 'none', display: 'flex',
         } }, Icon('Search', { size: 16 })),
         searchInp, searchClear);
     syncClear();
@@ -687,8 +785,10 @@ async function paint() {
     root.appendChild(h('div', { class: 'page-head' },
         h('div', null,
             h('h1', { class: 'page-title' }, 'CRM · Заявки'),
-            h('p', { class: 'page-subtitle' }, 'Обращения в клинику: фиксируйте каждый запрос и превращайте его в пациента. ',
-                h('span', { class: 'muted', style: { fontSize: '12.5px', opacity: '0.6' } }, 'v11'))),
+            // CRM_HEAD_NEWS_V1 — здесь была подпись «Обращения в клинику: …» и
+            // метка «v11»; владелец попросил убрать текст и поставить сюда
+            // кнопку «Информация» (раньше она стояла справа среди остальных).
+            h('div', { class: 'crm-head-news' }, newsBoardButton())),
         h('div', { class: 'page-head-actions', style: { flexWrap: 'wrap' } },
             viewBtn('kanban', 'Канбан', 'Grid'),
             viewBtn('list', 'Список', 'Layers'),
@@ -703,6 +803,8 @@ async function paint() {
             canSeeAllLeads() ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-crm-duplicates-open': '',
                 onclick: () => openCrmDuplicates({ onMerged: () => paint() }) }, Icon('Copy', { size: 13 }), ' ', 'Дубликаты') : null,
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => reportModal() }, Icon('Chart', { size: 13 }), ' Отчёт'),
+            // CLINIC_NEWS_V1 — здесь стояла кнопка «Информация»; с
+            // CRM_HEAD_NEWS_V1 она слева под заголовком (см. выше).
             // REFERRALS_NAV_V1 — «Реферирование» было кнопкой здесь полдня; владелец:
             // «should not be inside of CRM» — теперь это свой пункт в «Операциях».
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => exportExcel() }, Icon('Download', { size: 13 }), ' Excel'),
@@ -1742,32 +1844,49 @@ async function paint() {
         // что уже стоят у заявки (иначе снять скрытый было бы нечем).
         let srcChosen = r ? leadSources(r) : [defaultSource()];
         const srcChoices = [...SOURCES.map(([k]) => k), ...srcChosen.filter((k) => !SOURCES.some(([s]) => s === k))];
-        const srcRow = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } });
-        const srcBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } }, srcRow,
-            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Можно выбрать несколько. Первый выбранный — главный, он отмечен звёздочкой.'));
+        // CRM_SOURCE_DROPDOWN_V1 (2026-10-30, владелец: «Make istochnik drop
+        // down») — два ряда чипов занимали пол-окна; теперь выпадающий список.
+        // CRM_SOURCE_SINGLE_V1 (2026-10-30, владелец: «Remove multiselect from
+        // istochnik») — ОДИН источник: клик выбирает пункт и закрывает список,
+        // без галочек и «главного». Заявка, у которой источников уже несколько
+        // (CRM_MULTI_SOURCE_V1), сохраняет их, пока оператор не выберет другой:
+        // открыть и сохранить старую заявку не должно молча терять источники.
+        const srcLabelEl = h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' } });
+        const srcRow = h('div', { role: 'listbox', style: { display: 'none', position: 'absolute', left: 0, right: 0, top: 'calc(100% + 4px)', zIndex: 41, maxHeight: '260px', overflow: 'auto', padding: '4px', background: 'var(--white, #fff)', border: '1px solid var(--ink-200)', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' } });
+        const srcToggle = h('button', {
+            type: 'button', 'data-src-toggle': '', 'aria-haspopup': 'listbox', 'aria-expanded': 'false',
+            style: { width: '100%', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 11px', border: '1px solid var(--ink-200)', borderRadius: '10px', background: 'var(--white, #fff)', fontFamily: 'inherit', fontSize: '13.5px', color: 'var(--ink-800, #1f2a30)', cursor: 'pointer' },
+            onclick: () => setSrcOpen(srcRow.style.display === 'none'),
+        }, srcLabelEl, h('span', { style: { display: 'flex', color: 'var(--ink-400)' } }, Icon('ChevronDown', { size: 14 })));
+        function setSrcOpen(open) {
+            srcRow.style.display = open ? '' : 'none';
+            srcToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        }
+        const srcWrap = h('div', {
+            style: { position: 'relative' },
+            // Закрыть, когда фокус ушёл за пределы списка (клик мимо, Tab).
+            onfocusout: (e) => { if (!e.relatedTarget || !srcWrap.contains(e.relatedTarget)) setSrcOpen(false); },
+            onkeydown: (e) => { if (e.key === 'Escape' && srcRow.style.display !== 'none') { e.stopPropagation(); setSrcOpen(false); srcToggle.focus(); } },
+        }, srcToggle, srcRow);
+        const srcBox = srcWrap;
         function paintSrc() {
+            srcLabelEl.textContent = srcChosen.map((v) => sourceLabel(v)).join(', ');
             clear(srcRow);
             for (const v of srcChoices) {
-                const on = srcChosen.includes(v);
-                // Главный (первый выбранный) — со звёздочкой: чипы стоят в
-                // порядке справочника, и порядок выбора иначе не был бы виден.
-                const main = on && srcChosen[0] === v;
+                const on = srcChosen.length === 1 && srcChosen[0] === v;
                 srcRow.appendChild(h('button', {
-                    type: 'button', 'data-src-pick': v, 'aria-pressed': on ? 'true' : 'false',
-                    ...(main ? { 'data-src-main': '', title: 'Главный источник' } : {}),
-                    style: { padding: '6px 13px', borderRadius: '999px', fontSize: '12.5px', fontFamily: 'inherit', cursor: 'pointer', fontWeight: on ? '700' : '500',
-                        display: 'inline-flex', alignItems: 'center', gap: '5px',
-                        border: '1px solid ' + (on ? 'var(--teal-600, #00897b)' : 'var(--ink-200)'),
-                        background: on ? 'var(--teal-600, #00897b)' : 'var(--white, #fff)',
-                        color: on ? '#fff' : 'var(--ink-600, #3f4b52)' },
+                    type: 'button', role: 'option', 'data-src-pick': v, 'aria-selected': on ? 'true' : 'false',
+                    style: { width: '100%', display: 'flex', alignItems: 'center', gap: '9px', padding: '8px 10px', border: 0, borderRadius: '7px', fontFamily: 'inherit', fontSize: '13.5px', cursor: 'pointer', textAlign: 'left',
+                        fontWeight: on ? '700' : '500', background: on ? 'var(--teal-50, #e0f2f1)' : 'transparent', color: 'var(--ink-800, #1f2a30)' },
                     onclick: () => {
-                        const t = toggleLeadSource(srcChosen, v);
-                        if (t.refused === 'last') toast(tr('Нужен хотя бы один источник.'), 'fail');
-                        else if (t.refused === 'max') toast(trf('У заявки может быть не больше {max} источников.', { max: MAX_LEAD_SOURCES }), 'fail');
-                        srcChosen = t.list;
+                        srcChosen = [v];
                         paintSrc();
+                        setSrcOpen(false);
+                        srcToggle.focus();
                     },
-                }, main ? Icon('Sparkles', { size: 12 }) : (on ? Icon('Check', { size: 12 }) : null), sourceLabel(v)));   // Sparkles — звезда (icon-map.js)
+                },
+                    h('span', { style: { flex: 1 } }, sourceLabel(v)),
+                    on ? h('span', { style: { display: 'flex', color: 'var(--teal-600, #00897b)' } }, Icon('Check', { size: 13 })) : null));
             }
         }
         paintSrc();
@@ -2237,7 +2356,7 @@ async function paint() {
                 if (sv) { picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: '' }); paintPicked(); }
             }
         });
-        const noteInp  = h('textarea', { rows: '3', placeholder: 'Что нужно пациенту, когда перезвонить…' });
+        const noteInp  = h('textarea', { rows: '5', placeholder: 'Что нужно пациенту, когда перезвонить…' });
         if (r) noteInp.value = r.note || '';
 
         // CRM_HEAD_MERGE_TAGS_V1 — «МЕТКИ» ЗАЯВКИ: несколько, переключателями.
@@ -2650,8 +2769,7 @@ async function paint() {
         //
         // Поэтому кнопка требует ровно два поля и ничего больше не открывает.
         const scheduleBtn = h('button', {
-            class: 'btn', type: 'button',
-            style: { background: 'var(--ok-600, #16a34a)', borderColor: 'var(--ok-600, #16a34a)', color: '#fff', fontWeight: 700 },
+            class: 'btn btn-success', type: 'button',
             title: 'Назначить дату каждой услуге — регистратура подхватит их в эти дни',
         }, Icon('Check', { size: 14 }), ' Записать на дату');
         scheduleBtn.addEventListener('click', () => {
@@ -3237,7 +3355,11 @@ async function paint() {
         // шире и в две колонки: слева — сама заявка (кто, откуда, что нужно),
         // справа — что по ней делать (задачи) и что уже было (звонки с
         // записями). Новая заявка задач и звонков не имеет — остаётся узкой.
-        overlay.appendChild(h('div', { class: 'modal-card modal-compact crm-lead-card' + (isEdit ? ' is-wide' : ''), style: { width: isEdit ? '1120px' : '720px', maxWidth: 'calc(100vw - 32px)' } },
+        // CRM_LEAD_BIGGER_V1 (2026-10-30, владелец: «make pop up bigger to make
+        // more accurate job») — сохранённая заявка берёт почти весь экран (до
+        // 1480px) и почти всю высоту: работа с ней долгая, а 1120px на
+        // широком мониторе оставляли поля и список звонков тесными.
+        overlay.appendChild(h('div', { class: 'modal-card modal-compact crm-lead-card' + (isEdit ? ' is-wide' : ''), style: { width: isEdit ? 'min(1480px, calc(100vw - 32px))' : '760px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 32px)', ...(isEdit ? { height: 'calc(100vh - 32px)' } : {}) } },
             h('header', { class: 'modal-head' },
                 h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
                     h('span', { style: { width: '34px', height: '34px', borderRadius: '10px', background: 'var(--teal-50, #e0f2f1)', color: 'var(--teal-700, #00796b)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 } },
@@ -3252,9 +3374,9 @@ async function paint() {
               h('div', { class: 'crm-lead-col crm-lead-main' },
                 field('ФИО', nameWrap, { required: true }),
                 (contactRow = h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-start' } },
-                    h('div', { style: { flex: 1 } }, field('Телефон', phoneWrap, { required: true })),
+                    h('div', { style: { flex: 1 } }, field('Телефон', h('div', null, phoneWrap, leadBotLine(phoneInp, r)), { required: true })),   // PATIENT_BOT_INVITE_V1
                     h('div', { style: { flex: 1 } }, field('Дата рождения', dobWrap)))),
-                field('Источник', srcBox),   // CRM_MULTI_SOURCE_V1 — чипы и подсказка «первый — главный»
+                field('Источник', srcBox),   // CRM_SOURCE_SINGLE_V1 — один источник, выпадающим списком
                 // PUBLIC_API_V1 — «Онлайн-запись через API» (макет screen-crm.js): у карточек
                 // без заявок из API блок пустой и скрыт. После подтверждения окно закрывается:
                 // карту пациента карточке поставил сервер, а «Сохранить» этого окна записало бы

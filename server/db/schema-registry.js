@@ -178,7 +178,7 @@ export const REGISTRY = {
               'registration_date','created_by','created_at','updated_at',
               'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date',
               'sync_origin',
-              'phone_secondary','language','passport_number','behavior_note','country','region','district','mahalla','citizenship'] },   // sync_origin: BRANCH_ORIGIN_V1 — см. комментарий у filters; phone_secondary…citizenship: PATIENT_FORM_ONE_V1 (mig 129) — the registration window's fields finally have columns
+              'phone_secondary','language','passport_number','behavior_note','country','region','district','mahalla','citizenship','lead_source'] },   // sync_origin: BRANCH_ORIGIN_V1 — см. комментарий у filters; phone_secondary…citizenship: PATIENT_FORM_ONE_V1 (mig 129) — the registration window's fields finally have columns
     write:  {
       // CALLCENTER_ROLE_V1 — «Зарегистрировать» on a CRM card creates the patient
       // card from the call. INSERT only: the call centre opens a card for the
@@ -189,14 +189,14 @@ export const REGISTRY = {
                 'branch_id','primary_doctor_id','payer_id','referral_source_id','notes','photo_url','created_by',
                 'active','registration_date',
                 'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date',
-                'phone_secondary','language','passport_number','behavior_note','country','region','district','mahalla','citizenship'] },
+                'phone_secondary','language','passport_number','behavior_note','country','region','district','mahalla','citizenship','lead_source'] },
       update: { roles: ['admin','registrar'], columns: ['mrn','full_name','first_name','last_name','middle_name',
                 'date_of_birth','gender','blood_type','phone','email','national_id','address','nationality',
                 'occupation','emergency_contact_name','emergency_contact_phone','allergies','chronic_conditions','category_id',
                 'branch_id','primary_doctor_id','payer_id','referral_source_id','notes','photo_url','created_by',
                 'active','registration_date',
                 'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date',
-                'phone_secondary','language','passport_number','behavior_note','country','region','district','mahalla','citizenship'] },
+                'phone_secondary','language','passport_number','behavior_note','country','region','district','mahalla','citizenship','lead_source'] },
       // Settings → Пациенты exposes per-row + bulk delete (admin only). A
       // patient with clinical history is still protected by FK constraints —
       // the delete errors cleanly and the row survives.

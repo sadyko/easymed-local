@@ -980,6 +980,8 @@ export const STRINGS = {
   "Прибор, подключённый к компьютеру только кабелем COM (BC-2800, BC-3000 Plus)": {"en":"A device connected to a computer only by a COM cable (BC-2800, BC-3000 Plus)","ru":"Прибор, подключённый к компьютеру только кабелем COM (BC-2800, BC-3000 Plus)","uz":"Kompyuterga faqat COM kabeli bilan ulangan qurilma (BC-2800, BC-3000 Plus)"},
   "Пока не поддерживается: такой прибор не умеет отправлять по сети, и для него нужна отдельная программа на том компьютере. Она в планах. Результаты с него вносятся руками, как сейчас.": {"en":"Not supported yet: such a device cannot send over the network and needs a separate program on that computer. It is planned. Its results are entered by hand, as now.","ru":"Пока не поддерживается: такой прибор не умеет отправлять по сети, и для него нужна отдельная программа на том компьютере. Она в планах. Результаты с него вносятся руками, как сейчас.","uz":"Hozircha qo‘llab-quvvatlanmaydi: bunday qurilma tarmoq orqali yubora olmaydi va o‘sha kompyuterda alohida dastur kerak. U rejada. Uning natijalari hozirgidek qo‘lda kiritiladi."},
   "Важно": {"en":"Important","ru":"Важно","uz":"Muhim"},
+  "Опубликовать новость": {"en":"Publish news","ru":"Опубликовать новость","uz":"Yangilik eʼlon qilish"},
+  "Выделить объявление красным: его заметят первым": {"en":"Highlight the announcement in red so it is noticed first","ru":"Выделить объявление красным: его заметят первым","uz":"Eʼlonni qizil rangda ajratish: uni birinchi boʻlib payqashadi"},
   "Прибор отправляет результаты только по ОДНОМУ адресу. Если он сейчас направлен на другую программу, после переключения та программа результаты получать перестанет.": {"en":"A device sends results to ONE address only. If it currently points at another program, that program will stop receiving results once it is switched.","ru":"Прибор отправляет результаты только по ОДНОМУ адресу. Если он сейчас направлен на другую программу, после переключения та программа результаты получать перестанет.","uz":"Qurilma natijalarni faqat BITTA manzilga yuboradi. Agar u hozir boshqa dasturga yo‘naltirilgan bo‘lsa, o‘tkazilgandan keyin o‘sha dastur natija olmay qo‘yadi."},
   "Результат никогда не выдаётся сам: прибор заполняет бланк, а проверяет и выдаёт лаборант.": {"en":"A result is never released by itself: the device fills the form, the technician checks and releases it.","ru":"Результат никогда не выдаётся сам: прибор заполняет бланк, а проверяет и выдаёт лаборант.","uz":"Natija hech qachon o‘zi berilmaydi: qurilma blankani to‘ldiradi, laborant tekshiradi va beradi."},
   "Если прибор появился в списке, но значения не ложатся — смотрите «Необработанные»: там написано, чего именно не хватает.": {"en":"If the device is in the list but values do not land, see «Unprocessed»: it says exactly what is missing.","ru":"Если прибор появился в списке, но значения не ложатся — смотрите «Необработанные»: там написано, чего именно не хватает.","uz":"Agar qurilma ro‘yxatda bo‘lsa-yu, qiymatlar tushmasa — «Qayta ishlanmagan»ga qarang: u yerda aynan nima yetishmasligi yozilgan."},
@@ -3135,6 +3137,11 @@ export const STRINGS = {
   "Sign & lock": {"en":"Sign & lock","ru":"Подписать и заблокировать","uz":"Imzolash va qulflash"},
   "Sign in": {"en":"Sign in","ru":"Войти","uz":"Kirish"},
   "Sign in to continue": {"en":"Sign in to continue","ru":"Войдите, чтобы продолжить","uz":"Davom etish uchun kiring"},
+  "Вся клиника в одном окне": {"en":"Your whole clinic in one window","ru":"Вся клиника в одном окне","uz":"Butun klinika bitta oynada"},
+  "Пациенты, запись, касса, лаборатория и стационар. Данные остаются в клинике и работают даже без интернета.": {"en":"Patients, appointments, cashier, laboratory and inpatient care. Data stays in the clinic and works even without internet.","ru":"Пациенты, запись, касса, лаборатория и стационар. Данные остаются в клинике и работают даже без интернета.","uz":"Bemorlar, qabulga yozilish, kassa, laboratoriya va statsionar. Maʼlumotlar klinikada qoladi va internetsiz ham ishlaydi."},
+  "Электронная карта пациента": {"en":"Electronic patient record","ru":"Электронная карта пациента","uz":"Bemorning elektron kartasi"},
+  "Лаборатория и готовые результаты": {"en":"Laboratory and ready results","ru":"Лаборатория и готовые результаты","uz":"Laboratoriya va tayyor natijalar"},
+  "Касса и отчёты в реальном времени": {"en":"Cashier and real-time reports","ru":"Касса и отчёты в реальном времени","uz":"Kassa va real vaqtdagi hisobotlar"},
   "Sign in with a platform team account.": {"en":"Sign in with a platform team account.","ru":"Войдите с учётной записью команды платформы.","uz":"Platforma jamoasi hisobi bilan kiring."},
   "Sign out": {"en":"Sign out","ru":"Выйти","uz":"Chiqish"},
   "Sign-up request": {"en":"Sign-up request","ru":"Запрос на регистрацию","uz":"Ro'yxatdan o'tish so'rovi"},
@@ -9739,6 +9746,122 @@ export const STRINGS = {
   "Принято сегодня": {"en":"Collected today","ru":"Принято сегодня","uz":"Bugun qabul qilindi"},
   "Начислено стационару": {"en":"Accrued by the ward","ru":"Начислено стационару","uz":"Statsionarga hisoblangan"},
   "Анализы в работе": {"en":"Lab tests in progress","ru":"Анализы в работе","uz":"Ishlanayotgan tahlillar"},
+  // PATIENT_LEAD_SOURCE_V1 — «Откуда узнали о нас» в окне пациента
+  "Откуда узнали о нас": {"en":"How did they hear about us","ru":"Откуда узнали о нас","uz":"Biz haqimizda qayerdan bilishdi"},
+  "Список — «Источники» в настройках CRM. Пациент без рекламы и рекомендации — «Пришёл сам».": {"en":"The list is «Sources» in the CRM settings. A patient with no ad or recommendation is «Walk-in».","ru":"Список — «Источники» в настройках CRM. Пациент без рекламы и рекомендации — «Пришёл сам».","uz":"Ro'yxat — CRM sozlamalaridagi «Manbalar». Reklama va tavsiyasiz kelgan bemor — «O'zi keldi»."},
+  "Укажите, откуда пациент узнал о клинике.":{"en":"Specify how the patient heard about the clinic.","ru":"Укажите, откуда пациент узнал о клинике.","uz":"Bemor klinika haqida qayerdan bilganini ko'rsating."},
+  // META_INBOX_LEAD_FORM_V1 — форма «Лид в CRM» в чате Facebook и Instagram
+  "Лид в CRM": {"en":"Lead to CRM","ru":"Лид в CRM","uz":"CRM ga lid"},
+  "Создать лид": {"en":"Create lead","ru":"Создать лид","uz":"Lid yaratish"},
+  "Телефон (если знаете)": {"en":"Phone (if known)","ru":"Телефон (если знаете)","uz":"Telefon (agar ma'lum bo'lsa)"},
+  "Ответственный — я": {"en":"I am responsible","ru":"Ответственный — я","uz":"Mas'ul — men"},
+  "Что хочет человек, когда удобно связаться…": {"en":"What the person wants, when to contact them…","ru":"Что хочет человек, когда удобно связаться…","uz":"Inson nima istaydi, qachon bog'lanish qulay…"},
+  "В карточку попадут источник Meta и последние сообщения человека. Если по этому номеру уже есть открытая карточка, запись допишется в неё.": {"en":"The card gets the Meta source and the person's latest messages. If an open card already exists for this number, the entry is added to it.","ru":"В карточку попадут источник Meta и последние сообщения человека. Если по этому номеру уже есть открытая карточка, запись допишется в неё.","uz":"Kartaga Meta manbasi va insonning so'nggi xabarlari tushadi. Agar bu raqam bo'yicha ochiq karta bo'lsa, yozuv unga qo'shiladi."},
+  "Лид №{id}": {"en":"Lead #{id}","ru":"Лид №{id}","uz":"Lid №{id}"},
+  // REFERRAL_REP_ON_CREATE_V1 — медпредставитель в карточке нового врача-источника
+  "Реферирование: список медпредставителей": {"en":"Referrals: list of medical representatives","ru":"Реферирование: список медпредставителей","uz":"Yoʻllanmalar: tibbiy vakillar roʻyxati"},   // REFERRAL_REP_ON_CREATE_V1
+  "Нет сотрудников с ролью «Медпредставитель» — назначьте её в «Настройки → Сотрудники»": {"en":"No staff with the «Medical representative» role — assign it in «Settings → Employees»","ru":"Нет сотрудников с ролью «Медпредставитель» — назначьте её в «Настройки → Сотрудники»","uz":"«Tibbiy vakil» roli bor xodim yoʻq — uni «Sozlamalar → Xodimlar»da bering"},   // REFERRAL_REP_ON_CREATE_V1
+  "Выберите: {field}": {"en":"Choose: {field}","ru":"Выберите: {field}","uz":"Tanlang: {field}"},   // REFERRAL_REP_ON_CREATE_V1
+  "Запись сохранена, но поле «{field}» — нет: {msg}": {"en":"The record is saved, but the «{field}» field is not: {msg}","ru":"Запись сохранена, но поле «{field}» — нет: {msg}","uz":"Yozuv saqlandi, lekin «{field}» maydoni saqlanmadi: {msg}"},   // REFERRAL_REP_ON_CREATE_V1
+  "Список медпредставителей открыт тому, кто заводит врачей-источников.": {"en":"The list of medical representatives is available to those who add referring doctors.","ru":"Список медпредставителей открыт тому, кто заводит врачей-источников.","uz":"Tibbiy vakillar roʻyxati yoʻllovchi shifokorlarni qoʻshadigan xodimlarga ochiq."},   // REFERRAL_REP_ON_CREATE_V1
+  // DASHBOARD_OVERVIEW_V1 — вкладка «Обзор клиники» на сводке (views/dash-overview.js)
+  "за прошлый период данных нет": {"en":"no data for the previous period","ru":"за прошлый период данных нет","uz":"oldingi davr uchun maʼlumot yoʻq"},   // DASHBOARD_OVERVIEW_V1
+  "{d} к прошлому периоду": {"en":"{d} vs previous period","ru":"{d} к прошлому периоду","uz":"oldingi davrga nisbatan {d}"},   // DASHBOARD_OVERVIEW_V1
+  "Пропущенные звонки без ответа: {n} номеров": {"en":"Missed calls never returned: {n} numbers","ru":"Пропущенные звонки без ответа: {n} номеров","uz":"Javob berilmagan oʻtkazib yuborilgan qoʻngʻiroqlar: {n} ta raqam"},   // DASHBOARD_OVERVIEW_V1
+  "Непрочитанные сообщения в Telegram: {n} в {c} чатах": {"en":"Unread Telegram messages: {n} in {c} chats","ru":"Непрочитанные сообщения в Telegram: {n} в {c} чатах","uz":"Telegramdagi oʻqilmagan xabarlar: {c} ta chatda {n} ta"},   // DASHBOARD_OVERVIEW_V1
+  "Просроченные задачи CRM: {n}": {"en":"Overdue CRM tasks: {n}","ru":"Просроченные задачи CRM: {n}","uz":"Muddati oʻtgan CRM vazifalari: {n}"},   // DASHBOARD_OVERVIEW_V1
+  "Открытые заявки без ответственного: {n}": {"en":"Open leads with no one assigned: {n}","ru":"Открытые заявки без ответственного: {n}","uz":"Masʼul tayinlanmagan ochiq arizalar: {n}"},   // DASHBOARD_OVERVIEW_V1
+  "Долг старше 30 дней: {amount} ({n} счетов)": {"en":"Debt older than 30 days: {amount} ({n} invoices)","ru":"Долг старше 30 дней: {amount} ({n} счетов)","uz":"30 kundan eski qarz: {amount} ({n} ta hisob)"},   // DASHBOARD_OVERVIEW_V1
+  "Открытые кассовые смены: {n}": {"en":"Open cash shifts: {n}","ru":"Открытые кассовые смены: {n}","uz":"Ochiq kassa smenalari: {n}"},   // DASHBOARD_OVERVIEW_V1
+  "Недостача в кассе за период: {amount}": {"en":"Cash shortage for the period: {amount}","ru":"Недостача в кассе за период: {amount}","uz":"Davr uchun kassadagi kamomad: {amount}"},   // DASHBOARD_OVERVIEW_V1
+  "Документы, не доставленные в Telegram: {n}": {"en":"Documents not delivered to Telegram: {n}","ru":"Документы, не доставленные в Telegram: {n}","uz":"Telegramga yetkazilmagan hujjatlar: {n}"},   // DASHBOARD_OVERVIEW_V1
+  "Нет данных за период": {"en":"No data for the period","ru":"Нет данных за период","uz":"Davr uchun maʼlumot yoʻq"},   // DASHBOARD_OVERVIEW_V1
+  "Период: {from} — {to}. Сравнение — с {pfrom} — {pto}.": {"en":"Period: {from} — {to}. Compared with {pfrom} — {pto}.","ru":"Период: {from} — {to}. Сравнение — с {pfrom} — {pto}.","uz":"Davr: {from} — {to}. Taqqoslash: {pfrom} — {pto} bilan."},   // DASHBOARD_OVERVIEW_V1
+  "возвраты {amount}": {"en":"refunds {amount}","ru":"возвраты {amount}","uz":"qaytarishlar {amount}"},   // DASHBOARD_OVERVIEW_V1
+  "скидки {amount}": {"en":"discounts {amount}","ru":"скидки {amount}","uz":"chegirmalar {amount}"},   // DASHBOARD_OVERVIEW_V1
+  "Новые пациенты": {"en":"New patients","ru":"Новые пациенты","uz":"Yangi bemorlar"},   // DASHBOARD_OVERVIEW_V1
+  "уникальных пациентов: {n}": {"en":"unique patients: {n}","ru":"уникальных пациентов: {n}","uz":"noyob bemorlar: {n}"},   // DASHBOARD_OVERVIEW_V1
+  "пришли {won} · конверсия {pct}": {"en":"came {won} · conversion {pct}","ru":"пришли {won} · конверсия {pct}","uz":"keldi {won} · konversiya {pct}"},   // DASHBOARD_OVERVIEW_V1
+  "Пропущенные звонки": {"en":"Missed calls","ru":"Пропущенные звонки","uz":"Oʻtkazib yuborilgan qoʻngʻiroqlar"},   // DASHBOARD_OVERVIEW_V1
+  "не перезвонили: {n} номеров": {"en":"not called back: {n} numbers","ru":"не перезвонили: {n} номеров","uz":"qayta qoʻngʻiroq qilinmagan: {n} ta raqam"},   // DASHBOARD_OVERVIEW_V1
+  "отвечено {pct} входящих": {"en":"{pct} of incoming answered","ru":"отвечено {pct} входящих","uz":"kiruvchilarning {pct} qismiga javob berildi"},   // DASHBOARD_OVERVIEW_V1
+  "подписчиков · новых за период {n}": {"en":"subscribers · new this period {n}","ru":"подписчиков · новых за период {n}","uz":"obunachi · davrda yangi {n}"},   // DASHBOARD_OVERVIEW_V1
+  "сообщений {a} · непрочитано {b}": {"en":"messages {a} · unread {b}","ru":"сообщений {a} · непрочитано {b}","uz":"xabarlar {a} · oʻqilmagan {b}"},   // DASHBOARD_OVERVIEW_V1
+  "Поступило в стационар": {"en":"Admitted to inpatient","ru":"Поступило в стационар","uz":"Statsionarga yotqizildi"},   // DASHBOARD_OVERVIEW_V1
+  "выписано {n} · средний срок {d} дн.": {"en":"discharged {n} · average stay {d} d","ru":"выписано {n} · средний срок {d} дн.","uz":"chiqarildi {n} · oʻrtacha muddat {d} kun"},   // DASHBOARD_OVERVIEW_V1
+  "выписано {n}": {"en":"discharged {n}","ru":"выписано {n}","uz":"chiqarildi {n}"},   // DASHBOARD_OVERVIEW_V1
+  "Анализы готовы": {"en":"Lab results ready","ru":"Анализы готовы","uz":"Tayyor tahlillar"},   // DASHBOARD_OVERVIEW_V1
+  "в среднем за {h} ч": {"en":"{h} h on average","ru":"в среднем за {h} ч","uz":"oʻrtacha {h} soatda"},   // DASHBOARD_OVERVIEW_V1
+  "отклонения от нормы: {pct}": {"en":"out of normal range: {pct}","ru":"отклонения от нормы: {pct}","uz":"meʼyordan chetlanish: {pct}"},   // DASHBOARD_OVERVIEW_V1
+  "Требует внимания": {"en":"Needs attention","ru":"Требует внимания","uz":"Eʼtibor talab qiladi"},   // DASHBOARD_OVERVIEW_V1
+  "Всё спокойно — срочного нет": {"en":"All calm — nothing urgent","ru":"Всё спокойно — срочного нет","uz":"Hammasi joyida — shoshilinch narsa yoʻq"},   // DASHBOARD_OVERVIEW_V1
+  "Скидки": {"en":"Discounts","ru":"Скидки","uz":"Chegirmalar"},   // DASHBOARD_OVERVIEW_V1
+  "Счетов": {"en":"Invoices","ru":"Счетов","uz":"Hisoblar"},   // DASHBOARD_OVERVIEW_V1
+  "Долг по давности": {"en":"Debt by age","ru":"Долг по давности","uz":"Qarz muddati boʻyicha"},   // DASHBOARD_OVERVIEW_V1
+  "до 7 дней": {"en":"up to 7 days","ru":"до 7 дней","uz":"7 kungacha"},   // DASHBOARD_OVERVIEW_V1
+  "8–30 дней": {"en":"8–30 days","ru":"8–30 дней","uz":"8–30 kun"},   // DASHBOARD_OVERVIEW_V1
+  "старше 30 дней": {"en":"older than 30 days","ru":"старше 30 дней","uz":"30 kundan eski"},   // DASHBOARD_OVERVIEW_V1
+  "Смен закрыто": {"en":"Shifts closed","ru":"Смен закрыто","uz":"Yopilgan smenalar"},   // DASHBOARD_OVERVIEW_V1
+  "С расхождением": {"en":"With discrepancy","ru":"С расхождением","uz":"Farq bilan"},   // DASHBOARD_OVERVIEW_V1
+  "Недостача": {"en":"Shortage","ru":"Недостача","uz":"Kamomad"},   // DASHBOARD_OVERVIEW_V1
+  "Излишек": {"en":"Surplus","ru":"Излишек","uz":"Ortiqcha"},   // DASHBOARD_OVERVIEW_V1
+  "Финансы": {"en":"Finance","ru":"Финансы","uz":"Moliya"},   // DASHBOARD_OVERVIEW_V1
+  "услуг {n} · выполнено {d}": {"en":"services {n} · done {d}","ru":"услуг {n} · выполнено {d}","uz":"xizmatlar {n} · bajarildi {d}"},   // DASHBOARD_OVERVIEW_V1
+  "сумма назначенных услуг": {"en":"value of ordered services","ru":"сумма назначенных услуг","uz":"tayinlangan xizmatlar summasi"},   // DASHBOARD_OVERVIEW_V1
+  "пациентов {p} · услуг {n}": {"en":"patients {p} · services {n}","ru":"пациентов {p} · услуг {n}","uz":"bemorlar {p} · xizmatlar {n}"},   // DASHBOARD_OVERVIEW_V1
+  "первые 10 по сумме": {"en":"top 10 by amount","ru":"первые 10 по сумме","uz":"summa boʻyicha birinchi 10 ta"},   // DASHBOARD_OVERVIEW_V1
+  "первые 10 по числу услуг": {"en":"top 10 by number of services","ru":"первые 10 по числу услуг","uz":"xizmatlar soni boʻyicha birinchi 10 ta"},   // DASHBOARD_OVERVIEW_V1
+  "раз: {n}": {"en":"times: {n}","ru":"раз: {n}","uz":"marta: {n}"},   // DASHBOARD_OVERVIEW_V1
+  "Популярные услуги": {"en":"Popular services","ru":"Популярные услуги","uz":"Ommabop xizmatlar"},   // DASHBOARD_OVERVIEW_V1
+  "В работе сейчас": {"en":"In progress now","ru":"В работе сейчас","uz":"Hozir ishda"},   // DASHBOARD_OVERVIEW_V1
+  "Просрочено задач": {"en":"Overdue tasks","ru":"Просрочено задач","uz":"Muddati oʻtgan vazifalar"},   // DASHBOARD_OVERVIEW_V1
+  "Заявок из Meta": {"en":"Leads from Meta","ru":"Заявок из Meta","uz":"Meta orqali arizalar"},   // DASHBOARD_OVERVIEW_V1
+  "Воронка периода": {"en":"Funnel for the period","ru":"Воронка периода","uz":"Davr voronkasi"},   // DASHBOARD_OVERVIEW_V1
+  "пришли {won} ({pct})": {"en":"came {won} ({pct})","ru":"пришли {won} ({pct})","uz":"keldi {won} ({pct})"},   // DASHBOARD_OVERVIEW_V1
+  "пришли {won}": {"en":"came {won}","ru":"пришли {won}","uz":"keldi {won}"},   // DASHBOARD_OVERVIEW_V1
+  "CRM — заявки": {"en":"CRM — leads","ru":"CRM — заявки","uz":"CRM — arizalar"},   // DASHBOARD_OVERVIEW_V1
+  "Входящих": {"en":"Incoming","ru":"Входящих","uz":"Kiruvchi"},   // DASHBOARD_OVERVIEW_V1
+  "Отвечено": {"en":"Answered","ru":"Отвечено","uz":"Javob berildi"},   // DASHBOARD_OVERVIEW_V1
+  "Не перезвонили": {"en":"Not called back","ru":"Не перезвонили","uz":"Qayta qoʻngʻiroq qilinmagan"},   // DASHBOARD_OVERVIEW_V1
+  "Доля ответа": {"en":"Answer rate","ru":"Доля ответа","uz":"Javob ulushi"},   // DASHBOARD_OVERVIEW_V1
+  "Ожидание, сек": {"en":"Wait, sec","ru":"Ожидание, сек","uz":"Kutish, soniya"},   // DASHBOARD_OVERVIEW_V1
+  "Разговоров, мин": {"en":"Talk time, min","ru":"Разговоров, мин","uz":"Suhbat, daqiqa"},   // DASHBOARD_OVERVIEW_V1
+  "Звонки": {"en":"Calls","ru":"Звонки","uz":"Qoʻngʻiroqlar"},   // DASHBOARD_OVERVIEW_V1
+  "Подписчики": {"en":"Subscribers","ru":"Подписчики","uz":"Obunachilar"},   // DASHBOARD_OVERVIEW_V1
+  "Подписаны на бота": {"en":"Subscribed to the bot","ru":"Подписаны на бота","uz":"Botga obuna"},   // DASHBOARD_OVERVIEW_V1
+  "Новых за период": {"en":"New this period","ru":"Новых за период","uz":"Davrda yangi"},   // DASHBOARD_OVERVIEW_V1
+  "Заявок по ссылкам": {"en":"Leads from links","ru":"Заявок по ссылкам","uz":"Havolalar orqali arizalar"},   // DASHBOARD_OVERVIEW_V1
+  "Переписка": {"en":"Conversations","ru":"Переписка","uz":"Yozishmalar"},   // DASHBOARD_OVERVIEW_V1
+  "Сообщений от пациентов": {"en":"Messages from patients","ru":"Сообщений от пациентов","uz":"Bemorlardan xabarlar"},   // DASHBOARD_OVERVIEW_V1
+  "Диалогов": {"en":"Chats","ru":"Диалогов","uz":"Suhbatlar"},   // DASHBOARD_OVERVIEW_V1
+  "Ответов клиники": {"en":"Clinic replies","ru":"Ответов клиники","uz":"Klinika javoblari"},   // DASHBOARD_OVERVIEW_V1
+  "Непрочитано": {"en":"Unread","ru":"Непрочитано","uz":"Oʻqilmagan"},   // DASHBOARD_OVERVIEW_V1
+  "Рассылки и документы": {"en":"Broadcasts and documents","ru":"Рассылки и документы","uz":"Tarqatmalar va hujjatlar"},   // DASHBOARD_OVERVIEW_V1
+  "Документов отправлено": {"en":"Documents sent","ru":"Документов отправлено","uz":"Yuborilgan hujjatlar"},   // DASHBOARD_OVERVIEW_V1
+  "Не доставлено": {"en":"Not delivered","ru":"Не доставлено","uz":"Yetkazilmadi"},   // DASHBOARD_OVERVIEW_V1
+  "Рассылок": {"en":"Broadcasts","ru":"Рассылок","uz":"Tarqatmalar"},   // DASHBOARD_OVERVIEW_V1
+  "Получили рассылку": {"en":"Received the broadcast","ru":"Получили рассылку","uz":"Tarqatmani olganlar"},   // DASHBOARD_OVERVIEW_V1
+  "Новых пациентов": {"en":"New patients","ru":"Новых пациентов","uz":"Yangi bemorlar soni"},   // DASHBOARD_OVERVIEW_V1
+  "Уникальных": {"en":"Unique","ru":"Уникальных","uz":"Noyob"},   // DASHBOARD_OVERVIEW_V1
+  "Первичных": {"en":"First visits","ru":"Первичных","uz":"Birlamchi"},   // DASHBOARD_OVERVIEW_V1
+  "Повторных": {"en":"Repeat visits","ru":"Повторных","uz":"Takroriy"},   // DASHBOARD_OVERVIEW_V1
+  "Отменено и не пришли": {"en":"Cancelled and no-shows","ru":"Отменено и не пришли","uz":"Bekor qilingan va kelmaganlar"},   // DASHBOARD_OVERVIEW_V1
+  "Возраст пришедших": {"en":"Age of visitors","ru":"Возраст пришедших","uz":"Kelganlarning yoshi"},   // DASHBOARD_OVERVIEW_V1
+  "До 18": {"en":"Under 18","ru":"До 18","uz":"18 yoshgacha"},   // DASHBOARD_OVERVIEW_V1
+  "60 и старше": {"en":"60 and over","ru":"60 и старше","uz":"60 va undan katta"},   // DASHBOARD_OVERVIEW_V1
+  "Возраст не указан": {"en":"Age not specified","ru":"Возраст не указан","uz":"Yoshi koʻrsatilmagan"},   // DASHBOARD_OVERVIEW_V1
+  "Направлений за период нет": {"en":"No referrals for the period","ru":"Направлений за период нет","uz":"Davr uchun yoʻllanmalar yoʻq"},   // DASHBOARD_OVERVIEW_V1
+  "Направители": {"en":"Referrers","ru":"Направители","uz":"Yoʻllovchilar"},   // DASHBOARD_OVERVIEW_V1
+  "Назначено анализов": {"en":"Lab tests ordered","ru":"Назначено анализов","uz":"Tayinlangan tahlillar"},   // DASHBOARD_OVERVIEW_V1
+  "Средний срок, ч": {"en":"Average turnaround, h","ru":"Средний срок, ч","uz":"Oʻrtacha muddat, soat"},   // DASHBOARD_OVERVIEW_V1
+  "Отклонения от нормы": {"en":"Out of normal range","ru":"Отклонения от нормы","uz":"Meʼyordan chetlanishlar"},   // DASHBOARD_OVERVIEW_V1
+  "Поступило": {"en":"Admitted","ru":"Поступило","uz":"Yotqizildi"},   // DASHBOARD_OVERVIEW_V1
+  "Выписано": {"en":"Discharged","ru":"Выписано","uz":"Chiqarildi"},   // DASHBOARD_OVERVIEW_V1
+  "Средний срок, дн.": {"en":"Average stay, days","ru":"Средний срок, дн.","uz":"Oʻrtacha muddat, kun"},   // DASHBOARD_OVERVIEW_V1
+  "Лаборатория и стационар": {"en":"Laboratory and inpatient","ru":"Лаборатория и стационар","uz":"Laboratoriya va statsionar"},   // DASHBOARD_OVERVIEW_V1
+  "Обзор клиники": {"en":"Clinic overview","ru":"Обзор клиники","uz":"Klinika sharhi"},   // DASHBOARD_OVERVIEW_V1
+  "Вид сводки": {"en":"Dashboard view","ru":"Вид сводки","uz":"Xulosa koʻrinishi"},   // DASHBOARD_OVERVIEW_V1
+  "Не удалось загрузить обзор: {msg}": {"en":"Could not load the overview: {msg}","ru":"Не удалось загрузить обзор: {msg}","uz":"Sharhni yuklab boʻlmadi: {msg}"},   // DASHBOARD_OVERVIEW_V1
   "ещё не выставлено в счёт": {"en":"not yet invoiced","ru":"ещё не выставлено в счёт","uz":"hali hisobga qoʻyilmagan"},
   "поступило {a} · выписано {b}": {"en":"admitted {a} · discharged {b}","ru":"поступило {a} · выписано {b}","uz":"yotqizildi {a} · chiqarildi {b}"},
   "{busy} из {total}": {"en":"{busy} of {total}","ru":"{busy} из {total}","uz":"{total} dan {busy}"},
@@ -10601,6 +10724,12 @@ export const STRINGS = {
   "Неоплаченные счета пациента (без страховой)": {"en":"Patient's unpaid invoices (excluding insurer)","ru":"Неоплаченные счета пациента (без страховой)","uz":"Bemorning to'lanmagan hisoblari (sug'urtasiz)"},
   // V3120_FIX (экраны и навигация) — END
   // V3120_I18N — сообщения сервера — BEGIN (2026-09-28)
+  "Раздел «Чат Facebook и Instagram» вам не выдан.": {"en":"The “Facebook & Instagram chat” section has not been granted to you.","ru":"Раздел «Чат Facebook и Instagram» вам не выдан.","uz":"«Facebook va Instagram chat» bo‘limi sizga berilmagan."},   // META_INBOX_V1
+  "У вас доступ «только чтение»: отвечать от имени клиники нельзя.": {"en":"You have read-only access: you cannot reply on behalf of the clinic.","ru":"У вас доступ «только чтение»: отвечать от имени клиники нельзя.","uz":"Sizda faqat o‘qish huquqi bor: klinika nomidan javob berib bo‘lmaydi."},   // META_INBOX_V1
+  "Не указана переписка или комментарий.": {"en":"No conversation or comment specified.","ru":"Не указана переписка или комментарий.","uz":"Yozishma yoki izoh ko‘rsatilmagan."},   // META_INBOX_V1
+  "Включать опрос может администратор или роль с правом «Meta: заявки из рекламы — Изменение».": {"en":"Checking can be turned on by an administrator or a role with “Meta: ad leads — Edit”.","ru":"Включать опрос может администратор или роль с правом «Meta: заявки из рекламы — Изменение».","uz":"Tekshirishni administrator yoki «Meta: reklamadan so‘rovlar — Tahrirlash» huquqli rol yoqa oladi."},   // META_INBOX_V1
+  "Переписка не найдена.": {"en":"Conversation not found.","ru":"Переписка не найдена.","uz":"Yozishma topilmadi."},   // META_INBOX_V1
+  "Комментарий не найден.": {"en":"Comment not found.","ru":"Комментарий не найден.","uz":"Izoh topilmadi."},   // META_INBOX_V1
   // Тексты отказов и ошибок, которые сервер (server/**) присылает экрану: tr()
   // переводит их целиком. Шаблоны с {дырками} — ключи для собранных фраз: сервер
   // присылает template + params (server/services/server-message.js), экран
@@ -11236,6 +11365,7 @@ export const STRINGS = {
   "Источник «{label}» скрыт в настройках — его оставляют только у заявок, где он уже стоит.": {"en":"Source «{label}» is hidden in the settings — it only stays on requests that already have it.","ru":"Источник «{label}» скрыт в настройках — его оставляют только у заявок, где он уже стоит.","uz":"«{label}» manbasi sozlamalarda yashirilgan — u faqat allaqachon shu manba turgan so'rovlarda qoladi."},   // CRM_MULTI_SOURCE_V1
   "Можно выбрать несколько. Первый выбранный — главный, он отмечен звёздочкой.": {"en":"You can pick several. The first one picked is the main source; it is marked with a star.","ru":"Можно выбрать несколько. Первый выбранный — главный, он отмечен звёздочкой.","uz":"Bir nechtasini tanlash mumkin. Birinchi tanlangani — asosiy manba, u yulduzcha bilan belgilangan."},   // CRM_MULTI_SOURCE_V1
   "Главный источник": {"en":"Main source","ru":"Главный источник","uz":"Asosiy manba"},   // CRM_MULTI_SOURCE_V1
+  "главный": {"en":"main","ru":"главный","uz":"asosiy"},   // CRM_SOURCE_DROPDOWN_V1
   "Главный источник меняют у одной заявки за раз.": {"en":"The main source is changed on one request at a time.","ru":"Главный источник меняют у одной заявки за раз.","uz":"Asosiy manba bir vaqtda faqat bitta so'rovda o'zgartiriladi."},   // CRM_MULTI_SOURCE_V1 (ревью M2)
   // SUPPLIERS_VAT_V1 — поставщики ↔ товары, типы товаров, НДС, срок годности импорта — BEGIN
   "Цена продажи и НДС": {"en":"Sale price and VAT","ru":"Цена продажи и НДС","uz":"Sotish narxi va QQS"},
@@ -12139,6 +12269,318 @@ export const STRINGS = {
   "Facebook и Instagram: заявки из рекламных форм сами попадают в CRM. Токен доступа хранится на сервере в зашифрованном виде.": {"en":"Facebook and Instagram: leads from ad forms land in the CRM by themselves. The access token is stored encrypted on the server.","ru":"Facebook и Instagram: заявки из рекламных форм сами попадают в CRM. Токен доступа хранится на сервере в зашифрованном виде.","uz":"Facebook va Instagram: reklama formalaridan kelgan so‘rovlar CRM ga o‘zi tushadi. Kirish tokeni serverda shifrlangan holda saqlanadi."},
   "Facebook и Instagram: заявки из рекламных форм сами попадают в CRM": {"en":"Facebook and Instagram: leads from ad forms land in the CRM by themselves","ru":"Facebook и Instagram: заявки из рекламных форм сами попадают в CRM","uz":"Facebook va Instagram: reklama formalaridan kelgan so‘rovlar CRM ga o‘zi tushadi"},
   "Коммерческие инструменты": {"en":"Commercial tools","ru":"Коммерческие инструменты","uz":"Tijorat vositalari"},
+  "SMS-информирование": {"en":"SMS notifications","ru":"SMS-информирование","uz":"SMS-xabarnoma"},   // SMS_INFORM_V1
+  "SMS пациентам через Play Mobile. Логин и пароль выдаёт Play Mobile по договору; пароль хранится на сервере в зашифрованном виде.": {"en":"SMS to patients via Play Mobile. Play Mobile issues the login and password under contract; the password is stored encrypted on the server.","ru":"SMS пациентам через Play Mobile. Логин и пароль выдаёт Play Mobile по договору; пароль хранится на сервере в зашифрованном виде.","uz":"Play Mobile orqali bemorlarga SMS. Login va parolni Play Mobile shartnoma bo‘yicha beradi; parol serverda shifrlangan holda saqlanadi."},   // SMS_INFORM_V1
+  "Подключение не заполнено": {"en":"Connection not filled in","ru":"Подключение не заполнено","uz":"Ulanish to‘ldirilmagan"},   // SMS_INFORM_V1
+  "Введите адрес, логин, пароль и имя отправителя, которые выдал Play Mobile.": {"en":"Enter the address, login, password and sender name issued by Play Mobile.","ru":"Введите адрес, логин, пароль и имя отправителя, которые выдал Play Mobile.","uz":"Play Mobile bergan manzil, login, parol va jo‘natuvchi nomini kiriting."},   // SMS_INFORM_V1
+  "Подключение заполнено, отправка выключена": {"en":"Connection filled in, sending is off","ru":"Подключение заполнено, отправка выключена","uz":"Ulanish to‘ldirilgan, yuborish o‘chirilgan"},   // SMS_INFORM_V1
+  "Отправьте проверочное SMS на свой номер, затем включите отправку.": {"en":"Send a test SMS to your own number, then turn sending on.","ru":"Отправьте проверочное SMS на свой номер, затем включите отправку.","uz":"O‘z raqamingizga sinov SMS yuboring, so‘ng yuborishni yoqing."},   // SMS_INFORM_V1
+  "Отправка включена · отправитель «{name}»": {"en":"Sending is on · sender “{name}”","ru":"Отправка включена · отправитель «{name}»","uz":"Yuborish yoqilgan · jo‘natuvchi «{name}»"},   // SMS_INFORM_V1
+  "Введите новый пароль, чтобы заменить": {"en":"Enter a new password to replace it","ru":"Введите новый пароль, чтобы заменить","uz":"Almashtirish uchun yangi parolni kiriting"},   // SMS_INFORM_V1
+  "Адрес сервера Play Mobile": {"en":"Play Mobile server address","ru":"Адрес сервера Play Mobile","uz":"Play Mobile server manzili"},   // SMS_INFORM_V1
+  "Адрес из письма Play Mobile. Окончание /broker-api/send программа допишет сама.": {"en":"The address from Play Mobile’s letter. The program adds /broker-api/send itself.","ru":"Адрес из письма Play Mobile. Окончание /broker-api/send программа допишет сама.","uz":"Play Mobile xatidagi manzil. /broker-api/send qo‘shimchasini dastur o‘zi qo‘shadi."},   // SMS_INFORM_V1
+  "Сохранённый пароль: …{hint} (заменить)": {"en":"Saved password: …{hint} (replace)","ru":"Сохранённый пароль: …{hint} (заменить)","uz":"Saqlangan parol: …{hint} (almashtirish)"},   // SMS_INFORM_V1
+  "Пароль сохранён (заменить)": {"en":"Password saved (replace)","ru":"Пароль сохранён (заменить)","uz":"Parol saqlangan (almashtirish)"},   // SMS_INFORM_V1
+  "Имя отправителя (originator)": {"en":"Sender name (originator)","ru":"Имя отправителя (originator)","uz":"Jo‘natuvchi nomi (originator)"},   // SMS_INFORM_V1
+  "Имя или короткий номер, согласованный с Play Mobile, — его пациент видит вместо номера.": {"en":"A name or short number agreed with Play Mobile — the patient sees it instead of a phone number.","ru":"Имя или короткий номер, согласованный с Play Mobile, — его пациент видит вместо номера.","uz":"Play Mobile bilan kelishilgan nom yoki qisqa raqam — bemor uni raqam o‘rnida ko‘radi."},   // SMS_INFORM_V1
+  "Подключение сохранено.": {"en":"Connection saved.","ru":"Подключение сохранено.","uz":"Ulanish saqlandi."},   // SMS_INFORM_V1
+  "Удалить пароль? Отправка SMS будет выключена.": {"en":"Delete the password? SMS sending will be turned off.","ru":"Удалить пароль? Отправка SMS будет выключена.","uz":"Parol o‘chirilsinmi? SMS yuborish o‘chiriladi."},   // SMS_INFORM_V1
+  "Пароль удалён, отправка выключена.": {"en":"Password deleted, sending turned off.","ru":"Пароль удалён, отправка выключена.","uz":"Parol o‘chirildi, yuborish o‘chirildi."},   // SMS_INFORM_V1
+  "Удалить пароль": {"en":"Delete password","ru":"Удалить пароль","uz":"Parolni o‘chirish"},   // SMS_INFORM_V1
+  "Отправка SMS включена.": {"en":"SMS sending turned on.","ru":"Отправка SMS включена.","uz":"SMS yuborish yoqildi."},   // SMS_INFORM_V1
+  "Отправка SMS выключена.": {"en":"SMS sending turned off.","ru":"Отправка SMS выключена.","uz":"SMS yuborish o‘chirildi."},   // SMS_INFORM_V1
+  "Отправка SMS включена": {"en":"SMS sending is on","ru":"Отправка SMS включена","uz":"SMS yuborish yoqilgan"},   // SMS_INFORM_V1
+  "Подключение Play Mobile": {"en":"Play Mobile connection","ru":"Подключение Play Mobile","uz":"Play Mobile ulanishi"},   // SMS_INFORM_V1
+  "Проверка SMS из Easy-Med.": {"en":"Test SMS from Easy-Med.","ru":"Проверка SMS из Easy-Med.","uz":"Easy-Med tizimidan sinov SMS."},   // SMS_INFORM_V1
+  "SMS принято Play Mobile. Проверьте телефон.": {"en":"Play Mobile accepted the SMS. Check the phone.","ru":"SMS принято Play Mobile. Проверьте телефон.","uz":"Play Mobile SMSni qabul qildi. Telefonni tekshiring."},   // SMS_INFORM_V1
+  "Отправить проверочное SMS": {"en":"Send a test SMS","ru":"Отправить проверочное SMS","uz":"Sinov SMS yuborish"},   // SMS_INFORM_V1
+  "Проверочное SMS": {"en":"Test SMS","ru":"Проверочное SMS","uz":"Sinov SMS"},   // SMS_INFORM_V1
+  "Отправьте SMS на свой номер — так видно, что логин, пароль и отправитель верны. Работает и при выключенной отправке.": {"en":"Send an SMS to your own number — that shows the login, password and sender are right. Works even while sending is off.","ru":"Отправьте SMS на свой номер — так видно, что логин, пароль и отправитель верны. Работает и при выключенной отправке.","uz":"O‘z raqamingizga SMS yuboring — shunda login, parol va jo‘natuvchi to‘g‘riligi ko‘rinadi. Yuborish o‘chiq bo‘lsa ham ishlaydi."},   // SMS_INFORM_V1
+  "Сначала сохраните подключение.": {"en":"Save the connection first.","ru":"Сначала сохраните подключение.","uz":"Avval ulanishni saqlang."},   // SMS_INFORM_V1
+  "Журнал SMS": {"en":"SMS log","ru":"Журнал SMS","uz":"SMS jurnali"},   // SMS_INFORM_V1
+  "SMS ещё не отправлялись.": {"en":"No SMS sent yet.","ru":"SMS ещё не отправлялись.","uz":"Hali SMS yuborilmagan."},   // SMS_INFORM_V1
+  "Принято Play Mobile": {"en":"Accepted by Play Mobile","ru":"Принято Play Mobile","uz":"Play Mobile qabul qildi"},   // SMS_INFORM_V1
+  "Кто отправил": {"en":"Sent by","ru":"Кто отправил","uz":"Kim yubordi"},   // SMS_INFORM_V1
+  "Настройки SMS доступны только администратору.": {"en":"SMS settings are available to the administrator only.","ru":"Настройки SMS доступны только администратору.","uz":"SMS sozlamalari faqat administrator uchun."},   // SMS_INFORM_V1
+  "Сервер клиники не достучался до Play Mobile: нет интернета или неверный адрес.": {"en":"The clinic server could not reach Play Mobile: no internet or a wrong address.","ru":"Сервер клиники не достучался до Play Mobile: нет интернета или неверный адрес.","uz":"Klinika serveri Play Mobile bilan bog‘lana olmadi: internet yo‘q yoki manzil noto‘g‘ri."},   // SMS_INFORM_V1
+  "Play Mobile не ответил за 15 секунд.": {"en":"Play Mobile did not answer within 15 seconds.","ru":"Play Mobile не ответил за 15 секунд.","uz":"Play Mobile 15 soniya ichida javob bermadi."},   // SMS_INFORM_V1
+  "Play Mobile не принял логин или пароль.": {"en":"Play Mobile did not accept the login or password.","ru":"Play Mobile не принял логин или пароль.","uz":"Play Mobile login yoki parolni qabul qilmadi."},   // SMS_INFORM_V1
+  "Play Mobile отказал в отправке.": {"en":"Play Mobile refused to send.","ru":"Play Mobile отказал в отправке.","uz":"Play Mobile yuborishni rad etdi."},   // SMS_INFORM_V1
+  "Введите номер Узбекистана: +998 и девять цифр.": {"en":"Enter an Uzbekistan number: +998 and nine digits.","ru":"Введите номер Узбекистана: +998 и девять цифр.","uz":"O‘zbekiston raqamini kiriting: +998 va to‘qqiz raqam."},   // SMS_INFORM_V1
+  "Текст сообщения — не длиннее 1000 символов.": {"en":"Message text must be at most 1000 characters.","ru":"Текст сообщения — не длиннее 1000 символов.","uz":"Xabar matni 1000 belgidan oshmasin."},   // SMS_INFORM_V1
+  "Сначала заполните адрес, логин, пароль и имя отправителя.": {"en":"First fill in the address, login, password and sender name.","ru":"Сначала заполните адрес, логин, пароль и имя отправителя.","uz":"Avval manzil, login, parol va jo‘natuvchi nomini to‘ldiring."},   // SMS_INFORM_V1
+  "Адрес Play Mobile должен начинаться с http:// или https://.": {"en":"The Play Mobile address must start with http:// or https://.","ru":"Адрес Play Mobile должен начинаться с http:// или https://.","uz":"Play Mobile manzili http:// yoki https:// bilan boshlanishi kerak."},   // SMS_INFORM_V1
+  "Имя отправителя — не длиннее 20 символов.": {"en":"Sender name must be at most 20 characters.","ru":"Имя отправителя — не длиннее 20 символов.","uz":"Jo‘natuvchi nomi 20 belgidan oshmasin."},   // SMS_INFORM_V1
+  "Чтобы включить SMS, заполните адрес, логин, пароль и имя отправителя.": {"en":"To turn SMS on, fill in the address, login, password and sender name.","ru":"Чтобы включить SMS, заполните адрес, логин, пароль и имя отправителя.","uz":"SMSni yoqish uchun manzil, login, parol va jo‘natuvchi nomini to‘ldiring."},   // SMS_INFORM_V1
+  "Play Mobile: подключение, проверочное SMS и журнал отправленного": {"en":"Play Mobile: connection, test SMS and log of sent messages","ru":"Play Mobile: подключение, проверочное SMS и журнал отправленного","uz":"Play Mobile: ulanish, sinov SMS va yuborilganlar jurnali"},   // SMS_INFORM_V1
+  "Лид": {"en":"Lead","ru":"Лид","uz":"Lid"},   // META_INBOX_LAYOUT_V2
+  "Ответ на рекламу": {"en":"Reply to an ad","ru":"Ответ на рекламу","uz":"Reklamaga javob"},   // META_INBOX_LAYOUT_V2
+  "Все сообщения": {"en":"All messages","ru":"Все сообщения","uz":"Barcha xabarlar"},   // META_INBOX_LAYOUT_V2
+  "Сегодня, {date}. Сравнение — со вчерашним днём.": {"en":"Today, {date}. Compared with yesterday.","ru":"Сегодня, {date}. Сравнение — со вчерашним днём.","uz":"Bugun, {date}. Kechagi kun bilan solishtirilgan."},   // DASHBOARD_ONE_VIEW_V1
+  "Каждый пациент приходит с надеждой. Выслушайте, объясните понятными словами и дайте ясный план — доверие к клинике рождается в вашем кабинете. Спасибо за вашу заботу.": {"en":"Every patient comes with hope. Listen, explain in plain words and give a clear plan — trust in the clinic is born in your office. Thank you for your care.","ru":"Каждый пациент приходит с надеждой. Выслушайте, объясните понятными словами и дайте ясный план — доверие к клинике рождается в вашем кабинете. Спасибо за вашу заботу.","uz":"Har bir bemor umid bilan keladi. Tinglang, tushunarli so‘zlar bilan tushuntiring va aniq reja bering — klinikaga ishonch sizning xonangizda tug‘iladi. G‘amxo‘rligingiz uchun rahmat."},   // SECTION_HERO_V1
+  "За каждой пробиркой — человек, который ждёт ответа. Точность и скорость здесь — забота о пациенте и опора для врача. Спасибо за вашу внимательность.": {"en":"Behind every tube is a person waiting for an answer. Accuracy and speed here are care for the patient and support for the doctor. Thank you for your attentiveness.","ru":"За каждой пробиркой — человек, который ждёт ответа. Точность и скорость здесь — забота о пациенте и опора для врача. Спасибо за вашу внимательность.","uz":"Har bir probirka ortida javob kutayotgan inson bor. Bu yerda aniqlik va tezlik — bemorga g‘amxo‘rlik va shifokorga tayanch. E’tiboringiz uchun rahmat."},   // SECTION_HERO_V1
+  "Бережные руки и спокойное слово делают процедуру легче. Объясните, что будет, и проследите, чтобы пациенту было удобно. Спасибо за ваше тепло.": {"en":"Gentle hands and a calm word make a procedure easier. Explain what will happen and make sure the patient is comfortable. Thank you for your warmth.","ru":"Бережные руки и спокойное слово делают процедуру легче. Объясните, что будет, и проследите, чтобы пациенту было удобно. Спасибо за ваше тепло.","uz":"Ehtiyotkor qo‘llar va xotirjam so‘z muolajani yengillashtiradi. Nima bo‘lishini tushuntiring va bemorga qulay bo‘lishini kuzating. Iliqligingiz uchun rahmat."},   // SECTION_HERO_V1
+  "Пациенты стационара проводят с нами дни и ночи. Порядок в палатах, внимание к жалобам и вовремя выполненные назначения — это и есть выздоровление. Спасибо за вашу смену.": {"en":"Inpatients spend days and nights with us. Order in the wards, attention to complaints and treatments given on time — that is what recovery is made of. Thank you for your shift.","ru":"Пациенты стационара проводят с нами дни и ночи. Порядок в палатах, внимание к жалобам и вовремя выполненные назначения — это и есть выздоровление. Спасибо за вашу смену.","uz":"Statsionar bemorlari biz bilan kunu tun o‘tkazadi. Palatalardagi tartib, shikoyatlarga e’tibor va o‘z vaqtida bajarilgan tayinlovlar — tuzalishning o‘zi shu. Smenangiz uchun rahmat."},   // SECTION_HERO_V1
+  "Каждое назначение вовремя — шаг к выздоровлению. Отмечайте выполненное сразу: так врач видит правду, а пациент — заботу. Спасибо за вашу работу.": {"en":"Every treatment on time is a step towards recovery. Mark what is done right away: that way the doctor sees the truth and the patient sees care. Thank you for your work.","ru":"Каждое назначение вовремя — шаг к выздоровлению. Отмечайте выполненное сразу: так врач видит правду, а пациент — заботу. Спасибо за вашу работу.","uz":"Har bir tayinlov o‘z vaqtida — tuzalish sari qadam. Bajarilganini darhol belgilang: shunda shifokor haqiqatni, bemor esa g‘amxo‘rlikni ko‘radi. Mehnatingiz uchun rahmat."},   // SECTION_HERO_V1
+  "Правильное питание — часть лечения. Точный порционник помогает кухне накормить каждого пациента вовремя и по его диете. Спасибо за внимательность.": {"en":"Proper nutrition is part of treatment. An accurate kitchen sheet helps the kitchen feed every patient on time and according to their diet. Thank you for your attentiveness.","ru":"Правильное питание — часть лечения. Точный порционник помогает кухне накормить каждого пациента вовремя и по его диете. Спасибо за внимательность.","uz":"To‘g‘ri ovqatlanish — davolashning bir qismi. Aniq porsiya varaqasi oshxonaga har bir bemorni o‘z vaqtida va parhezi bo‘yicha ovqatlantirishga yordam beradi. E’tiboringiz uchun rahmat."},   // SECTION_HERO_V1
+  "Выписка — последнее впечатление пациента о клинике. Понятные рекомендации и аккуратные документы помогут ему продолжить лечение дома. Спасибо за вашу работу.": {"en":"Discharge is the patient’s last impression of the clinic. Clear recommendations and neat documents will help them continue treatment at home. Thank you for your work.","ru":"Выписка — последнее впечатление пациента о клинике. Понятные рекомендации и аккуратные документы помогут ему продолжить лечение дома. Спасибо за вашу работу.","uz":"Chiqarish — bemorning klinika haqidagi so‘nggi taassuroti. Tushunarli tavsiyalar va puxta hujjatlar unga davolanishni uyda davom ettirishga yordam beradi. Mehnatingiz uchun rahmat."},   // SECTION_HERO_V1
+  "Аккуратные документы берегут и пациента, и клинику. Проверьте данные перед печатью — ошибка в бумаге стоит доверия. Спасибо за вашу точность.": {"en":"Neat documents protect both the patient and the clinic. Check the details before printing — a mistake on paper costs trust. Thank you for your accuracy.","ru":"Аккуратные документы берегут и пациента, и клинику. Проверьте данные перед печатью — ошибка в бумаге стоит доверия. Спасибо за вашу точность.","uz":"Puxta hujjatlar bemorni ham, klinikani ham asraydi. Chop etishdan oldin ma’lumotlarni tekshiring — qog‘ozdagi xato ishonchga tushadi. Aniqligingiz uchun rahmat."},   // SECTION_HERO_V1
+  "Личных сообщений": {"en":"Direct messages","ru":"Личных сообщений","uz":"Shaxsiy xabarlar"},   // DASHBOARD_CEO_V1
+  "Написали людей": {"en":"People who wrote","ru":"Написали людей","uz":"Yozgan odamlar"},   // DASHBOARD_CEO_V1
+  "{a} из {b}": {"en":"{a} of {b}","ru":"{a} из {b}","uz":"{b} tadan {a}"},   // DASHBOARD_CEO_V1
+  "Лидов из чата": {"en":"Leads from chat","ru":"Лидов из чата","uz":"Chatdan lidlar"},   // DASHBOARD_CEO_V1
+  "лидов {n}": {"en":"leads {n}","ru":"лидов {n}","uz":"lidlar {n}"},   // DASHBOARD_CEO_V1
+  "Откуда приходят заявки": {"en":"Where requests come from","ru":"Откуда приходят заявки","uz":"So‘rovlar qayerdan keladi"},   // DASHBOARD_CEO_V1
+  "пришли {won} ({pct}) · оплатили {amount}": {"en":"came {won} ({pct}) · paid {amount}","ru":"пришли {won} ({pct}) · оплатили {amount}","uz":"keldi {won} ({pct}) · to‘ladi {amount}"},   // DASHBOARD_CEO_V1
+  "пришли {won} · оплатили {amount}": {"en":"came {won} · paid {amount}","ru":"пришли {won} · оплатили {amount}","uz":"keldi {won} · to‘ladi {amount}"},   // DASHBOARD_CEO_V1
+  "SMS рассылки": {"en":"SMS campaigns","ru":"SMS рассылки","uz":"SMS tarqatmalar"},   // DASHBOARD_CEO_V1
+  "Доставлено": {"en":"Delivered","ru":"Доставлено","uz":"Yetkazildi"},   // DASHBOARD_CEO_V1
+  "«Оплатили» — сколько эти пациенты заплатили в кассу за период. Расход на рекламу в программу не приходит: цену заявки смотрите в рекламном кабинете Meta.": {"en":"“Paid” is how much these patients paid at the cashier during the period. Ad spend does not reach the program: see the cost per lead in the Meta ads manager.","ru":"«Оплатили» — сколько эти пациенты заплатили в кассу за период. Расход на рекламу в программу не приходит: цену заявки смотрите в рекламном кабинете Meta.","uz":"«To‘ladi» — bu bemorlar davr mobaynida kassaga qancha to‘lagani. Reklama xarajati dasturga kelmaydi: so‘rov narxini Meta reklama kabinetida ko‘ring."},   // DASHBOARD_CEO_V1
+  "Расход на рекламу в программу не приходит: цену заявки смотрите в рекламном кабинете Meta.": {"en":"Ad spend does not reach the program: see the cost per lead in the Meta ads manager.","ru":"Расход на рекламу в программу не приходит: цену заявки смотрите в рекламном кабинете Meta.","uz":"Reklama xarajati dasturga kelmaydi: so‘rov narxini Meta reklama kabinetida ko‘ring."},   // DASHBOARD_CEO_V1
+  "Маркетинг и реклама": {"en":"Marketing and ads","ru":"Маркетинг и реклама","uz":"Marketing va reklama"},   // DASHBOARD_CEO_V1
+  "Чат Facebook": {"en":"Facebook chat","ru":"Чат Facebook","uz":"Facebook chati"},   // DASHBOARD_CEO_V1
+  "Заявок из звонков": {"en":"Requests from calls","ru":"Заявок из звонков","uz":"Qo‘ng‘iroqlardan so‘rovlar"},   // DASHBOARD_CEO_V1
+  "Из них пришли": {"en":"Of them came in","ru":"Из них пришли","uz":"Ulardan kelganlar"},   // DASHBOARD_CEO_V1
+  "Без внутреннего номера": {"en":"No extension","ru":"Без внутреннего номера","uz":"Ichki raqamsiz"},   // DASHBOARD_CEO_V1
+  "Внутренний {ext}": {"en":"Extension {ext}","ru":"Внутренний {ext}","uz":"Ichki raqam {ext}"},   // DASHBOARD_CEO_V1
+  "входящих {i}, отвечено {r}% · исходящих {o} · {t} мин · ожидание {w} с": {"en":"incoming {i}, answered {r}% · outgoing {o} · {t} min · wait {w} s","ru":"входящих {i}, отвечено {r}% · исходящих {o} · {t} мин · ожидание {w} с","uz":"kiruvchi {i}, javob berilgan {r}% · chiquvchi {o} · {t} daq · kutish {w} s"},   // DASHBOARD_CEO_V1
+  "Когда теряем звонки — пропущенные по часам": {"en":"When calls are lost — missed calls by hour","ru":"Когда теряем звонки — пропущенные по часам","uz":"Qo‘ng‘iroqlar qachon yo‘qoladi — soatlar bo‘yicha o‘tkazib yuborilganlar"},   // DASHBOARD_CEO_V1
+  "из {n} входящих ({p}%)": {"en":"of {n} incoming ({p}%)","ru":"из {n} входящих ({p}%)","uz":"{n} ta kiruvchidan ({p}%)"},   // DASHBOARD_CEO_V1
+  "Услуг на визит": {"en":"Services per visit","ru":"Услуг на визит","uz":"Bir tashrifga xizmatlar"},   // DASHBOARD_CEO_V1
+  "Сумма на визит": {"en":"Amount per visit","ru":"Сумма на визит","uz":"Bir tashrifga summa"},   // DASHBOARD_CEO_V1
+  "Доля неявок": {"en":"No-show rate","ru":"Доля неявок","uz":"Kelmaganlar ulushi"},   // DASHBOARD_CEO_V1
+  "пациентов {p} · не пришли {n}": {"en":"patients {p} · no-shows {n}","ru":"пациентов {p} · не пришли {n}","uz":"bemorlar {p} · kelmadi {n}"},   // DASHBOARD_CEO_V1
+  "Загрузка по дням недели": {"en":"Load by day of week","ru":"Загрузка по дням недели","uz":"Hafta kunlari bo‘yicha yuklama"},   // DASHBOARD_CEO_V1
+  "Время ожидания в очереди не считается: программа не записывает, когда пациента вызвали и когда начался приём.": {"en":"Queue waiting time is not calculated: the program does not record when the patient was called in and when the appointment began.","ru":"Время ожидания в очереди не считается: программа не записывает, когда пациента вызвали и когда начался приём.","uz":"Navbatda kutish vaqti hisoblanmaydi: dastur bemor qachon chaqirilgani va qabul qachon boshlanganini yozmaydi."},   // DASHBOARD_CEO_V1
+  "Пациентов в койках": {"en":"Patients in beds","ru":"Пациентов в койках","uz":"Koykalardagi bemorlar"},   // DASHBOARD_CEO_V1
+  "Загрузка": {"en":"Occupancy","ru":"Загрузка","uz":"Bandlik"},   // DASHBOARD_CEO_V1
+  "За период": {"en":"For the period","ru":"За период","uz":"Davr uchun"},   // DASHBOARD_CEO_V1
+  "Плановых": {"en":"Planned","ru":"Плановых","uz":"Rejali"},   // DASHBOARD_CEO_V1
+  "Экстренных": {"en":"Emergency","ru":"Экстренных","uz":"Shoshilinch"},   // DASHBOARD_CEO_V1
+  "Из них за койки": {"en":"Of which for beds","ru":"Из них за койки","uz":"Shundan koykalar uchun"},   // DASHBOARD_CEO_V1
+  "Выписаны с долгом": {"en":"Discharged with debt","ru":"Выписаны с долгом","uz":"Qarz bilan chiqarilganlar"},   // DASHBOARD_CEO_V1
+  "Исходы выписки": {"en":"Discharge outcomes","ru":"Исходы выписки","uz":"Chiqarish natijalari"},   // DASHBOARD_CEO_V1
+  "Свободных палат целиком: {n}": {"en":"Fully free wards: {n}","ru":"Свободных палат целиком: {n}","uz":"To‘liq bo‘sh palatalar: {n}"},   // DASHBOARD_CEO_V1
+  "Амбулаторно назначено": {"en":"Ordered for outpatients","ru":"Амбулаторно назначено","uz":"Ambulator tayinlangan"},   // DASHBOARD_CEO_V1
+  "Отмечено выполненными": {"en":"Marked as done","ru":"Отмечено выполненными","uz":"Bajarilgan deb belgilangan"},   // DASHBOARD_CEO_V1
+  "В стационаре назначено": {"en":"Ordered in the inpatient ward","ru":"В стационаре назначено","uz":"Statsionarda tayinlangan"},   // DASHBOARD_CEO_V1
+  "Выполнено в стационаре": {"en":"Done in the inpatient ward","ru":"Выполнено в стационаре","uz":"Statsionarda bajarilgan"},   // DASHBOARD_CEO_V1
+  "Сумма процедур": {"en":"Procedures total","ru":"Сумма процедур","uz":"Muolajalar summasi"},   // DASHBOARD_CEO_V1
+  "Чаще всего": {"en":"Most frequent","ru":"Чаще всего","uz":"Eng ko‘p"},   // DASHBOARD_CEO_V1
+  "Процедуры не отмечаются выполненными в очереди процедур — поэтому «выполнено» равно нулю.": {"en":"Procedures are not being marked as done in the procedures queue, so “done” is zero.","ru":"Процедуры не отмечаются выполненными в очереди процедур — поэтому «выполнено» равно нулю.","uz":"Muolajalar navbatida muolajalar bajarilgan deb belgilanmayapti — shuning uchun «bajarilgan» nolga teng."},   // DASHBOARD_CEO_V1
+  "Низкий остаток": {"en":"Low stock","ru":"Низкий остаток","uz":"Kam qoldiq"},   // DASHBOARD_CEO_V1
+  "Закончились": {"en":"Out of stock","ru":"Закончились","uz":"Tugagan"},   // DASHBOARD_CEO_V1
+  "Заказы в пути": {"en":"Orders on the way","ru":"Заказы в пути","uz":"Yo‘ldagi buyurtmalar"},   // DASHBOARD_CEO_V1
+  "Получено заказов": {"en":"Orders received","ru":"Получено заказов","uz":"Qabul qilingan buyurtmalar"},   // DASHBOARD_CEO_V1
+  "На сумму": {"en":"Worth","ru":"На сумму","uz":"Summasi"},   // DASHBOARD_CEO_V1
+  "Израсходовано": {"en":"Used","ru":"Израсходовано","uz":"Sarflangan"},   // DASHBOARD_CEO_V1
+  "Всё в достатке": {"en":"Everything is in stock","ru":"Всё в достатке","uz":"Hammasi yetarli"},   // DASHBOARD_CEO_V1
+  "{a} из {b} {unit}": {"en":"{a} of {b} {unit}","ru":"{a} из {b} {unit}","uz":"{b} {unit} dan {a}"},   // DASHBOARD_CEO_V1
+  "Визитов по направлению": {"en":"Referred visits","ru":"Визитов по направлению","uz":"Yo‘llanma bo‘yicha tashriflar"},   // DASHBOARD_CEO_V1
+  "Госпитализаций по направлению": {"en":"Referred admissions","ru":"Госпитализаций по направлению","uz":"Yo‘llanma bo‘yicha yotqizishlar"},   // DASHBOARD_CEO_V1
+  "Новых направителей от представителей": {"en":"New referrers from reps","ru":"Новых направителей от представителей","uz":"Vakillardan yangi yo‘llovchilar"},   // DASHBOARD_CEO_V1
+  "Кто приводит больше всего — по сумме услуг": {"en":"Who brings the most — by services total","ru":"Кто приводит больше всего — по сумме услуг","uz":"Kim eng ko‘p olib keladi — xizmatlar summasi bo‘yicha"},   // DASHBOARD_CEO_V1
+  "Кто приводит больше всего": {"en":"Who brings the most","ru":"Кто приводит больше всего","uz":"Kim eng ko‘p olib keladi"},   // DASHBOARD_CEO_V1
+  "визитов {v} · представитель {rep}": {"en":"visits {v} · rep {rep}","ru":"визитов {v} · представитель {rep}","uz":"tashriflar {v} · vakil {rep}"},   // DASHBOARD_CEO_V1
+  "визитов {v}": {"en":"visits {v}","ru":"визитов {v}","uz":"tashriflar {v}"},   // DASHBOARD_CEO_V1
+  "Медпредставители": {"en":"Medical reps","ru":"Медпредставители","uz":"Tibbiy vakillar"},   // DASHBOARD_CEO_V1
+  "направителей {n}": {"en":"referrers {n}","ru":"направителей {n}","uz":"yo‘llovchilar {n}"},   // DASHBOARD_CEO_V1
+  "Facebook и Instagram: переписок ждут ответа — {n}": {"en":"Facebook and Instagram: conversations awaiting a reply — {n}","ru":"Facebook и Instagram: переписок ждут ответа — {n}","uz":"Facebook va Instagram: javob kutayotgan yozishmalar — {n}"},   // DASHBOARD_CEO_V1
+  "Сообщения Facebook и Instagram без ответа за 24 часа: {n}": {"en":"Facebook and Instagram messages not answered within 24 hours: {n}","ru":"Сообщения Facebook и Instagram без ответа за 24 часа: {n}","uz":"24 soat ichida javob berilmagan Facebook va Instagram xabarlari: {n}"},   // DASHBOARD_CEO_V1
+  "Комментарии без ответа: {n}": {"en":"Unanswered comments: {n}","ru":"Комментарии без ответа: {n}","uz":"Javobsiz izohlar: {n}"},   // DASHBOARD_CEO_V1
+  "Заявки Meta, не попавшие в CRM: {n}": {"en":"Meta leads that did not reach CRM: {n}","ru":"Заявки Meta, не попавшие в CRM: {n}","uz":"CRMga tushmagan Meta so‘rovlari: {n}"},   // DASHBOARD_CEO_V1
+  "SMS рассылки не доставлены: {n}": {"en":"SMS campaign messages not delivered: {n}","ru":"SMS рассылки не доставлены: {n}","uz":"Yetkazilmagan SMS tarqatmalar: {n}"},   // DASHBOARD_CEO_V1
+  "Закончились на складе позиций: {n}": {"en":"Items out of stock: {n}","ru":"Закончились на складе позиций: {n}","uz":"Omborda tugagan pozitsiyalar: {n}"},   // DASHBOARD_CEO_V1
+  "Выписаны с долгом: {n}": {"en":"Discharged with debt: {n}","ru":"Выписаны с долгом: {n}","uz":"Qarz bilan chiqarilganlar: {n}"},   // DASHBOARD_CEO_V1
+  "Реклама Meta — заявки из форм": {"en":"Meta ads — form leads","ru":"Реклама Meta — заявки из форм","uz":"Meta reklamasi — formalardan so‘rovlar"},   // DASHBOARD_CEO_V1
+  "Заявок из рекламы": {"en":"Leads from ads","ru":"Заявок из рекламы","uz":"Reklamadan so‘rovlar"},   // DASHBOARD_CEO_V1
+  "Пришли в клинику": {"en":"Came to the clinic","ru":"Пришли в клинику","uz":"Klinikaga kelganlar"},   // DASHBOARD_CEO_V1
+  "Повторные обращения": {"en":"Repeat requests","ru":"Повторные обращения","uz":"Takroriy murojaatlar"},   // DASHBOARD_CEO_V1
+  "Не попали в CRM": {"en":"Did not reach CRM","ru":"Не попали в CRM","uz":"CRMga tushmagan"},   // DASHBOARD_CEO_V1
+  "Без кампании": {"en":"No campaign","ru":"Без кампании","uz":"Kampaniyasiz"},   // DASHBOARD_CEO_V1
+  "Домой": {"en":"Home","ru":"Домой","uz":"Uyga"},   // DASHBOARD_CEO_V1
+  "Переведены": {"en":"Transferred","ru":"Переведены","uz":"O‘tkazilgan"},   // DASHBOARD_CEO_V1
+  "койко-дней за период: {n}": {"en":"bed-days in the period: {n}","ru":"койко-дней за период: {n}","uz":"davr uchun koyka-kunlar: {n}"},   // DASHBOARD_CEO_V1
+  "Комментарии": {"en":"Comments","ru":"Комментарии","uz":"Izohlar"},   // META_INBOX_STATS_V1
+  "Ответы клиники": {"en":"Clinic replies","ru":"Ответы клиники","uz":"Klinika javoblari"},   // META_INBOX_STATS_V1
+  "Из {n} обращений · пропущено: {m}": {"en":"Out of {n} requests · missed: {m}","ru":"Из {n} обращений · пропущено: {m}","uz":"{n} ta murojaatdan · o‘tkazib yuborilgan: {m}"},   // META_INBOX_STATS_V1
+  "Людей: {n}": {"en":"People: {n}","ru":"Людей: {n}","uz":"Odamlar: {n}"},   // META_INBOX_STATS_V1
+  "Людей: {n} · под рекламой: {a}": {"en":"People: {n} · under ads: {a}","ru":"Людей: {n} · под рекламой: {a}","uz":"Odamlar: {n} · reklama ostida: {a}"},   // META_INBOX_STATS_V1
+  "Сейчас ждут ответа: переписок — {m}, комментариев — {c}": {"en":"Awaiting a reply right now: {m} conversations, {c} comments","ru":"Сейчас ждут ответа: переписок — {m}, комментариев — {c}","uz":"Hozir javob kutmoqda: yozishmalar — {m}, izohlar — {c}"},   // META_INBOX_STATS_V1
+  "Новых карточек: {a} · дописано в существующие: {b} · стали пациентами: {c}": {"en":"New cards: {a} · added to existing: {b} · became patients: {c}","ru":"Новых карточек: {a} · дописано в существующие: {b} · стали пациентами: {c}","uz":"Yangi kartalar: {a} · mavjudlariga qo‘shilgan: {b} · bemorga aylangan: {c}"},   // META_INBOX_STATS_V1
+  "Вне Easy-Med (Meta Business Suite, телефон)": {"en":"Outside Easy-Med (Meta Business Suite, phone)","ru":"Вне Easy-Med (Meta Business Suite, телефон)","uz":"Easy-Med’dan tashqarida (Meta Business Suite, telefon)"},   // META_INBOX_STATS_V1
+  "Обращение — вопросы человека подряд до ответа клиники; у комментариев — нитка под постом. Пропущено бывает только у сообщений: на комментарий можно ответить и позже.": {"en":"A request is a person’s questions in a row until the clinic replies; for comments it is a thread under a post. Only messages can be missed: a comment can still be answered later.","ru":"Обращение — вопросы человека подряд до ответа клиники; у комментариев — нитка под постом. Пропущено бывает только у сообщений: на комментарий можно ответить и позже.","uz":"Murojaat — klinika javob berguncha odamning ketma-ket savollari; izohlarda — post ostidagi zanjir. Faqat xabarlar o‘tkazib yuboriladi: izohga keyinroq ham javob berish mumkin."},   // META_INBOX_STATS_V1
+  "К переписке": {"en":"Back to chats","ru":"К переписке","uz":"Yozishmalarga"},   // META_INBOX_STATS_V1
+  "Входящие сообщения в Messenger и Instagram Direct.": {"en":"Incoming messages in Messenger and Instagram Direct.","ru":"Входящие сообщения в Messenger и Instagram Direct.","uz":"Messenger va Instagram Direct’dagi kiruvchi xabarlar."},   // META_INBOX_STATS_V1
+  "Все ответы клиники, включая отправленные из Meta Business Suite или с телефона.": {"en":"All clinic replies, including those sent from Meta Business Suite or a phone.","ru":"Все ответы клиники, включая отправленные из Meta Business Suite или с телефона.","uz":"Klinikaning barcha javoblari, Meta Business Suite yoki telefondan yuborilganlari ham."},   // META_INBOX_STATS_V1
+  "90 дней": {"en":"90 days","ru":"90 дней","uz":"90 kun"},   // META_INBOX_STATS_V1
+  "{d} дн {h} ч": {"en":"{d} d {h} h","ru":"{d} дн {h} ч","uz":"{d} kun {h} soat"},   // META_INBOX_STATS_V1
+  "Не удалось посчитать статистику.": {"en":"Could not calculate the statistics.","ru":"Не удалось посчитать статистику.","uz":"Statistikani hisoblab bo‘lmadi."},   // META_INBOX_STATS_V1
+  "Сейчас не приходят: {list}. Пока подключение не исправлено, эти цифры будут нулями.": {"en":"Not arriving right now: {list}. Until the connection is fixed, these numbers will stay at zero.","ru":"Сейчас не приходят: {list}. Пока подключение не исправлено, эти цифры будут нулями.","uz":"Hozir kelmayapti: {list}. Ulanish tuzatilmaguncha bu raqamlar nol bo‘lib turadi."},   // META_INBOX_STATS_V1
+  "Личные сообщения": {"en":"Direct messages","ru":"Личные сообщения","uz":"Shaxsiy xabarlar"},   // META_INBOX_STATS_V1
+  "Комментарии людей под постами и рекламой. Ответы клиники сюда не входят.": {"en":"Comments from people under posts and ads. The clinic’s replies are not counted here.","ru":"Комментарии людей под постами и рекламой. Ответы клиники сюда не входят.","uz":"Odamlarning post va reklama ostidagi izohlari. Klinika javoblari bu yerga kirmaydi."},   // META_INBOX_STATS_V1
+  "В переписке: {m} · под комментариями: {c} · в личку: {p}": {"en":"In chats: {m} · under comments: {c} · privately: {p}","ru":"В переписке: {m} · под комментариями: {c} · в личку: {p}","uz":"Yozishmada: {m} · izohlar ostida: {c} · shaxsiyga: {p}"},   // META_INBOX_STATS_V1
+  "За час ответили: {p}%": {"en":"Answered within an hour: {p}%","ru":"За час ответили: {p}%","uz":"Bir soat ichida javob berildi: {p}%"},   // META_INBOX_STATS_V1
+  "Медиана: половина обращений получила ответ быстрее. Считается от первого вопроса до первого ответа.": {"en":"Median: half of the requests were answered faster than this. Measured from the first question to the first reply.","ru":"Медиана: половина обращений получила ответ быстрее. Считается от первого вопроса до первого ответа.","uz":"Mediana: murojaatlarning yarmiga bundan tezroq javob berilgan. Birinchi savoldan birinchi javobgacha hisoblanadi."},   // META_INBOX_STATS_V1
+  "Пропущено — на сообщение не ответили за 24 часа, и Meta больше не даёт ответить.": {"en":"Missed means the message was not answered within 24 hours, and Meta no longer allows a reply.","ru":"Пропущено — на сообщение не ответили за 24 часа, и Meta больше не даёт ответить.","uz":"O‘tkazib yuborilgan — xabarga 24 soat ichida javob berilmagan va Meta endi javob berishga ruxsat bermaydi."},   // META_INBOX_STATS_V1
+  "Лиды из чата": {"en":"Leads from chat","ru":"Лиды из чата","uz":"Chatdan lidlar"},   // META_INBOX_STATS_V1
+  "Конверсия: {p}% · пришли: {w}": {"en":"Conversion: {p}% · came in: {w}","ru":"Конверсия: {p}% · пришли: {w}","uz":"Konversiya: {p}% · kelganlar: {w}"},   // META_INBOX_STATS_V1
+  "Карточки CRM, заведённые кнопкой «Отметить как лид». Конверсия — от числа людей, которые написали.": {"en":"CRM cards created with the “Mark as lead” button. Conversion is out of the number of people who wrote.","ru":"Карточки CRM, заведённые кнопкой «Отметить как лид». Конверсия — от числа людей, которые написали.","uz":"«Lid deb belgilash» tugmasi bilan ochilgan CRM kartalari. Konversiya yozgan odamlar soniga nisbatan."},   // META_INBOX_STATS_V1
+  "Обращения по часам": {"en":"Requests by hour","ru":"Обращения по часам","uz":"Murojaatlar soatlar bo‘yicha"},   // META_INBOX_STATS_V1
+  "Обращения по дням": {"en":"Requests by day","ru":"Обращения по дням","uz":"Murojaatlar kunlar bo‘yicha"},   // META_INBOX_STATS_V1
+  "Обращения по месяцам": {"en":"Requests by month","ru":"Обращения по месяцам","uz":"Murojaatlar oylar bo‘yicha"},   // META_INBOX_STATS_V1
+  "По каналам": {"en":"By channel","ru":"По каналам","uz":"Kanallar bo‘yicha"},   // META_INBOX_STATS_V1
+  "Когда пишут": {"en":"When people write","ru":"Когда пишут","uz":"Qachon yozishadi"},   // META_INBOX_STATS_V1
+  "Входящие сообщения и комментарии по часу суток — когда нужен человек на ответах.": {"en":"Incoming messages and comments by hour of day — when someone is needed to answer.","ru":"Входящие сообщения и комментарии по часу суток — когда нужен человек на ответах.","uz":"Kiruvchi xabarlar va izohlar kun soatlari bo‘yicha — javob berish uchun qachon odam kerak."},   // META_INBOX_STATS_V1
+  "Лиды по этапам CRM": {"en":"Leads by CRM stage","ru":"Лиды по этапам CRM","uz":"Lidlar CRM bosqichlari bo‘yicha"},   // META_INBOX_STATS_V1
+  "Посты и реклама с наибольшим числом комментариев": {"en":"Posts and ads with the most comments","ru":"Посты и реклама с наибольшим числом комментариев","uz":"Eng ko‘p izoh olgan postlar va reklamalar"},   // META_INBOX_STATS_V1
+  "Кто отвечал": {"en":"Who replied","ru":"Кто отвечал","uz":"Kim javob berdi"},   // META_INBOX_STATS_V1
+  "За этот период ничего не пришло.": {"en":"Nothing arrived in this period.","ru":"За этот период ничего не пришло.","uz":"Bu davrda hech narsa kelmadi."},   // META_INBOX_STATS_V1
+  "Людей": {"en":"People","ru":"Людей","uz":"Odamlar"},   // META_INBOX_STATS_V1
+  "Обращений": {"en":"Requests","ru":"Обращений","uz":"Murojaatlar"},   // META_INBOX_STATS_V1
+  "Ждут ответа": {"en":"Awaiting reply","ru":"Ждут ответа","uz":"Javob kutmoqda"},   // META_INBOX_STATS_V1
+  "Время ответа": {"en":"Response time","ru":"Время ответа","uz":"Javob vaqti"},   // META_INBOX_STATS_V1
+  "Лидов": {"en":"Leads","ru":"Лидов","uz":"Lidlar"},   // META_INBOX_STATS_V1
+  "Лидов из чата за этот период нет. Лид появляется, когда сотрудник нажимает «Отметить как лид» в переписке или комментарии.": {"en":"No leads from chat in this period. A lead appears when a staff member presses “Mark as lead” in a conversation or comment.","ru":"Лидов из чата за этот период нет. Лид появляется, когда сотрудник нажимает «Отметить как лид» в переписке или комментарии.","uz":"Bu davrda chatdan lidlar yo‘q. Xodim yozishma yoki izohda «Lid deb belgilash»ni bosganda lid paydo bo‘ladi."},   // META_INBOX_STATS_V1
+  "За этот период комментариев нет.": {"en":"No comments in this period.","ru":"За этот период комментариев нет.","uz":"Bu davrda izohlar yo‘q."},   // META_INBOX_STATS_V1
+  "Публикация без текста": {"en":"Post without text","ru":"Публикация без текста","uz":"Matnsiz post"},   // META_INBOX_STATS_V1
+  "Комментариев": {"en":"Comments","ru":"Комментариев","uz":"Izohlar"},   // META_INBOX_STATS_V1
+  "За этот период клиника не отвечала.": {"en":"The clinic did not reply in this period.","ru":"За этот период клиника не отвечала.","uz":"Bu davrda klinika javob bermadi."},   // META_INBOX_STATS_V1
+  "В переписке": {"en":"In chats","ru":"В переписке","uz":"Yozishmada"},   // META_INBOX_STATS_V1
+  "Под комментариями": {"en":"Under comments","ru":"Под комментариями","uz":"Izohlar ostida"},   // META_INBOX_STATS_V1
+  "В личку на комментарий": {"en":"Private reply to a comment","ru":"В личку на комментарий","uz":"Izohga shaxsiy javob"},   // META_INBOX_STATS_V1
+  "Ответить в Instagram…": {"en":"Reply in Instagram…","ru":"Ответить в Instagram…","uz":"Instagramda javob berish…"},   // META_INBOX_LAYOUT_V2
+  "Ответить в Messenger…": {"en":"Reply in Messenger…","ru":"Ответить в Messenger…","uz":"Messengerda javob berish…"},   // META_INBOX_LAYOUT_V2
+  "Комментарии на Facebook": {"en":"Facebook comments","ru":"Комментарии на Facebook","uz":"Facebookdagi izohlar"},   // META_INBOX_LAYOUT_V2
+  "Комментарии в Instagram": {"en":"Instagram comments","ru":"Комментарии в Instagram","uz":"Instagramdagi izohlar"},   // META_INBOX_LAYOUT_V2
+  "Ответил(-а): {name}": {"en":"Replied: {name}","ru":"Ответил(-а): {name}","uz":"Javob berdi: {name}"},   // META_INBOX_LAYOUT_V2
+  "Комментарий в Instagram": {"en":"Instagram comment","ru":"Комментарий в Instagram","uz":"Instagramdagi izoh"},   // META_INBOX_LAYOUT_V2
+  "Комментарий на Facebook": {"en":"Facebook comment","ru":"Комментарий на Facebook","uz":"Facebookdagi izoh"},   // META_INBOX_LAYOUT_V2
+  "Откройте переписку — здесь появится карточка человека.": {"en":"Open a conversation — the person's card will appear here.","ru":"Откройте переписку — здесь появится карточка человека.","uz":"Yozishmani oching — bu yerda odamning kartasi paydo bo‘ladi."},   // META_INBOX_LAYOUT_V2
+  "Этап лида": {"en":"Lead stage","ru":"Этап лида","uz":"Lid bosqichi"},   // META_INBOX_LAYOUT_V2
+  "Ещё не в CRM.": {"en":"Not in CRM yet.","ru":"Ещё не в CRM.","uz":"Hali CRMda emas."},   // META_INBOX_LAYOUT_V2
+  "Отметить как лид": {"en":"Mark as lead","ru":"Отметить как лид","uz":"Lid deb belgilash"},   // META_INBOX_LAYOUT_V2
+  "Создаёт карточку в CRM с источником Meta и последними сообщениями человека.": {"en":"Creates a CRM card with source Meta and the person's latest messages.","ru":"Создаёт карточку в CRM с источником Meta и последними сообщениями человека.","uz":"Manbasi Meta bo‘lgan va odamning oxirgi xabarlari bilan CRM kartasini yaratadi."},   // META_INBOX_LAYOUT_V2
+  "Канал": {"en":"Channel","ru":"Канал","uz":"Kanal"},   // META_INBOX_LAYOUT_V2
+  "Первое сообщение": {"en":"First message","ru":"Первое сообщение","uz":"Birinchi xabar"},   // META_INBOX_LAYOUT_V2
+  "Сообщений": {"en":"Messages","ru":"Сообщений","uz":"Xabarlar"},   // META_INBOX_LAYOUT_V2
+  "Ответить можно": {"en":"Can reply","ru":"Ответить можно","uz":"Javob berish mumkin"},   // META_INBOX_LAYOUT_V2
+  "окно закрыто": {"en":"window closed","ru":"окно закрыто","uz":"oyna yopilgan"},   // META_INBOX_LAYOUT_V2
+  "Реклама": {"en":"Ad","ru":"Реклама","uz":"Reklama"},   // META_INBOX_LAYOUT_V2
+  "Комментариев в нитке": {"en":"Comments in thread","ru":"Комментариев в нитке","uz":"Zanjirdagi izohlar"},   // META_INBOX_LAYOUT_V2
+  "Ответ клиники": {"en":"Clinic reply","ru":"Ответ клиники","uz":"Klinika javobi"},   // META_INBOX_LAYOUT_V2
+  "есть": {"en":"yes","ru":"есть","uz":"bor"},   // META_INBOX_LAYOUT_V2
+  "Ответ в личку": {"en":"Private reply","ru":"Ответ в личку","uz":"Shaxsiy javob"},   // META_INBOX_LAYOUT_V2
+  "отправлен": {"en":"sent","ru":"отправлен","uz":"yuborilgan"},   // META_INBOX_LAYOUT_V2
+  "Сообщения и комментарии Facebook и Instagram — в одном окне": {"en":"Facebook and Instagram messages and comments in one window","ru":"Сообщения и комментарии Facebook и Instagram — в одном окне","uz":"Facebook va Instagram xabarlari hamda izohlari — bitta oynada"},   // META_INBOX_V1
+  "Вопросы из Messenger, Direct и комментариев под постами и рекламой приходят в программу. Отвечайте от имени клиники и превращайте вопрос в заявку CRM.": {"en":"Questions from Messenger, Direct and comments under posts and ads arrive in the program. Reply on behalf of the clinic and turn a question into a CRM request.","ru":"Вопросы из Messenger, Direct и комментариев под постами и рекламой приходят в программу. Отвечайте от имени клиники и превращайте вопрос в заявку CRM.","uz":"Messenger, Direct hamda post va reklama ostidagi izohlardagi savollar dasturga keladi. Klinika nomidan javob bering va savolni CRM so‘roviga aylantiring."},   // META_INBOX_V1
+  "Чат Facebook и Instagram": {"en":"Facebook & Instagram chat","ru":"Чат Facebook и Instagram","uz":"Facebook va Instagram chat"},   // META_INBOX_V1
+  "Сообщения и комментарии страницы клиники: читать (Просмотр), отвечать и скрывать комментарии (Редактирование)": {"en":"Messages and comments of the clinic page: read (View), reply and hide comments (Edit)","ru":"Сообщения и комментарии страницы клиники: читать (Просмотр), отвечать и скрывать комментарии (Редактирование)","uz":"Klinika sahifasining xabarlari va izohlari: o‘qish (Ko‘rish), javob berish va izohlarni yashirish (Tahrirlash)"},   // META_INBOX_V1
+  "Сообщения и комментарии страницы клиники в Facebook и Instagram.": {"en":"Messages and comments of the clinic page on Facebook and Instagram.","ru":"Сообщения и комментарии страницы клиники в Facebook и Instagram.","uz":"Klinikaning Facebook va Instagramdagi sahifasi xabarlari va izohlari."},   // META_INBOX_V1
+  "Читает сообщения и комментарии.": {"en":"Reads messages and comments.","ru":"Читает сообщения и комментарии.","uz":"Xabarlar va izohlarni o‘qiydi."},   // META_INBOX_V1
+  "Отвечает от имени клиники, скрывает комментарии, заводит карточку CRM.": {"en":"Replies on behalf of the clinic, hides comments, creates a CRM card.","ru":"Отвечает от имени клиники, скрывает комментарии, заводит карточку CRM.","uz":"Klinika nomidan javob beradi, izohlarni yashiradi, CRM kartasini ochadi."},   // META_INBOX_V1
+  "Читает сообщения и комментарии Facebook и Instagram": {"en":"Reads Facebook and Instagram messages and comments","ru":"Читает сообщения и комментарии Facebook и Instagram","uz":"Facebook va Instagram xabarlari va izohlarini o‘qiydi"},   // META_INBOX_V1
+  "Отвечает от имени клиники и скрывает комментарии": {"en":"Replies on behalf of the clinic and hides comments","ru":"Отвечает от имени клиники и скрывает комментарии","uz":"Klinika nomidan javob beradi va izohlarni yashiradi"},   // META_INBOX_V1
+  "Сообщения страницы клиники в Messenger и Instagram и комментарии под постами и рекламой. Ответ уходит от имени клиники.": {"en":"Messages to the clinic page in Messenger and Instagram, and comments under posts and ads. Replies go out on behalf of the clinic.","ru":"Сообщения страницы клиники в Messenger и Instagram и комментарии под постами и рекламой. Ответ уходит от имени клиники.","uz":"Klinika sahifasiga Messenger va Instagramdagi xabarlar hamda post va reklama ostidagi izohlar. Javob klinika nomidan yuboriladi."},   // META_INBOX_V1
+  "Meta не подключена": {"en":"Meta is not connected","ru":"Meta не подключена","uz":"Meta ulanmagan"},   // META_INBOX_V1
+  "Опрос выключен": {"en":"Checking is off","ru":"Опрос выключен","uz":"Tekshirish o‘chirilgan"},   // META_INBOX_V1
+  "Проверено {when}": {"en":"Checked at {when}","ru":"Проверено {when}","uz":"Tekshirildi: {when}"},   // META_INBOX_V1
+  "Ждём первую проверку…": {"en":"Waiting for the first check…","ru":"Ждём первую проверку…","uz":"Birinchi tekshiruv kutilmoqda…"},   // META_INBOX_V1
+  "Спросить Meta сейчас, не дожидаясь минуты": {"en":"Ask Meta now instead of waiting a minute","ru":"Спросить Meta сейчас, не дожидаясь минуты","uz":"Bir daqiqa kutmasdan Metadan hozir so‘rash"},   // META_INBOX_V1
+  "Сначала подключите Meta: токен и страница клиники задаются в «Настройки → Коммерческие инструменты → Meta: заявки из рекламы». Затем включите опрос здесь.": {"en":"Connect Meta first: the token and the clinic page are set in “Settings → Commercial tools → Meta: ad leads”. Then turn checking on here.","ru":"Сначала подключите Meta: токен и страница клиники задаются в «Настройки → Коммерческие инструменты → Meta: заявки из рекламы». Затем включите опрос здесь.","uz":"Avval Metani ulang: token va klinika sahifasi «Sozlamalar → Tijorat vositalari → Meta: reklamadan so‘rovlar»da beriladi. So‘ng tekshirishni shu yerda yoqing."},   // META_INBOX_V1
+  "Опрос выключен: новые сообщения и комментарии не приходят. Нажмите «Включить» — первые придут в течение минуты. История до включения придёт прочитанной.": {"en":"Checking is off: new messages and comments do not arrive. Press “Enable” — the first ones arrive within a minute. History from before enabling arrives already read.","ru":"Опрос выключен: новые сообщения и комментарии не приходят. Нажмите «Включить» — первые придут в течение минуты. История до включения придёт прочитанной.","uz":"Tekshirish o‘chirilgan: yangi xabar va izohlar kelmaydi. «Yoqish»ni bosing — birinchilari bir daqiqa ichida keladi. Yoqishdan oldingi tarix o‘qilgan holda keladi."},   // META_INBOX_V1
+  "Опрос выключен: новые сообщения и комментарии не приходят. Включает его администратор.": {"en":"Checking is off: new messages and comments do not arrive. An administrator turns it on.","ru":"Опрос выключен: новые сообщения и комментарии не приходят. Включает его администратор.","uz":"Tekshirish o‘chirilgan: yangi xabar va izohlar kelmaydi. Uni administrator yoqadi."},   // META_INBOX_V1
+  "Комментарии Facebook": {"en":"Facebook comments","ru":"Комментарии Facebook","uz":"Facebook izohlari"},   // META_INBOX_V1
+  "Комментарии Instagram": {"en":"Instagram comments","ru":"Комментарии Instagram","uz":"Instagram izohlari"},   // META_INBOX_V1
+  "Коммент.": {"en":"Comments","ru":"Коммент.","uz":"Izohlar"},   // META_INBOX_V1
+  "Пользователь": {"en":"User","ru":"Пользователь","uz":"Foydalanuvchi"},   // META_INBOX_V1
+  "Комментариев пока нет.": {"en":"No comments yet.","ru":"Комментариев пока нет.","uz":"Hozircha izohlar yo‘q."},   // META_INBOX_V1
+  "в CRM": {"en":"in CRM","ru":"в CRM","uz":"CRMda"},   // META_INBOX_V1
+  "окно 24 ч закрыто": {"en":"24 h window closed","ru":"окно 24 ч закрыто","uz":"24 soatlik oyna yopilgan"},   // META_INBOX_V1
+  "Реклама Facebook": {"en":"Facebook ad","ru":"Реклама Facebook","uz":"Facebook reklamasi"},   // META_INBOX_V1
+  "отвечено": {"en":"answered","ru":"отвечено","uz":"javob berilgan"},   // META_INBOX_V1
+  "под «{post}»": {"en":"under “{post}”","ru":"под «{post}»","uz":"«{post}» ostida"},   // META_INBOX_V1
+  "Выберите комментарий слева": {"en":"Pick a comment on the left","ru":"Выберите комментарий слева","uz":"Chapdan izohni tanlang"},   // META_INBOX_V1
+  "Выберите переписку слева": {"en":"Pick a conversation on the left","ru":"Выберите переписку слева","uz":"Chapdan yozishmani tanlang"},   // META_INBOX_V1
+  "Здесь появится пост, комментарий и ответы под ним. Ответить можно публично или автору в личку.": {"en":"The post, the comment and the replies under it will appear here. You can reply publicly or privately to the author.","ru":"Здесь появится пост, комментарий и ответы под ним. Ответить можно публично или автору в личку.","uz":"Bu yerda post, izoh va uning ostidagi javoblar paydo bo‘ladi. Ochiq yoki muallifga shaxsiy xabarda javob berish mumkin."},   // META_INBOX_V1
+  "Здесь появится переписка: вопросы человека и ответы клиники.": {"en":"The conversation will appear here: the person’s questions and the clinic’s replies.","ru":"Здесь появится переписка: вопросы человека и ответы клиники.","uz":"Bu yerda yozishma paydo bo‘ladi: odamning savollari va klinika javoblari."},   // META_INBOX_V1
+  "Карточка CRM №{id}": {"en":"CRM card #{id}","ru":"Карточка CRM №{id}","uz":"CRM kartasi №{id}"},   // META_INBOX_V1
+  "Телефон человека, если знаете (можно оставить пустым):": {"en":"The person’s phone, if you know it (may be left empty):","ru":"Телефон человека, если знаете (можно оставить пустым):","uz":"Odamning telefoni, agar bilsangiz (bo‘sh qoldirish mumkin):"},   // META_INBOX_V1
+  "Записано в открытую карточку CRM с этим номером.": {"en":"Added to the open CRM card with this number.","ru":"Записано в открытую карточку CRM с этим номером.","uz":"Shu raqamli ochiq CRM kartasiga yozildi."},   // META_INBOX_V1
+  "Карточка CRM создана.": {"en":"CRM card created.","ru":"Карточка CRM создана.","uz":"CRM kartasi yaratildi."},   // META_INBOX_V1
+  "В CRM": {"en":"To CRM","ru":"В CRM","uz":"CRMga"},   // META_INBOX_V1
+  "Прошло больше 24 часов после последнего сообщения человека — Meta не разрешает отвечать. Ответить можно, когда он напишет снова; или заведите карточку CRM и позвоните.": {"en":"More than 24 hours have passed since the person’s last message — Meta does not allow replying. You can reply when they write again, or create a CRM card and call.","ru":"Прошло больше 24 часов после последнего сообщения человека — Meta не разрешает отвечать. Ответить можно, когда он напишет снова; или заведите карточку CRM и позвоните.","uz":"Odamning oxirgi xabaridan 24 soatdan ko‘p vaqt o‘tdi — Meta javob berishga ruxsat bermaydi. U qayta yozganda javob bering yoki CRM kartasini ochib, qo‘ng‘iroq qiling."},   // META_INBOX_V1
+  "Ответить можно до {when}": {"en":"You can reply until {when}","ru":"Ответить можно до {when}","uz":"{when} gacha javob berish mumkin"},   // META_INBOX_V1
+  "картинка": {"en":"picture","ru":"картинка","uz":"rasm"},   // META_INBOX_V1
+  "видео": {"en":"video","ru":"видео","uz":"video"},   // META_INBOX_V1
+  "вложение": {"en":"attachment","ru":"вложение","uz":"ilova"},   // META_INBOX_V1
+  "не доставлено": {"en":"not delivered","ru":"не доставлено","uz":"yetkazilmadi"},   // META_INBOX_V1
+  "Рекламный пост": {"en":"Ad post","ru":"Рекламный пост","uz":"Reklama posti"},   // META_INBOX_V1
+  "Пост": {"en":"Post","ru":"Пост","uz":"Post"},   // META_INBOX_V1
+  "(без подписи)": {"en":"(no caption)","ru":"(без подписи)","uz":"(izohsiz)"},   // META_INBOX_V1
+  "Открыть в Meta": {"en":"Open in Meta","ru":"Открыть в Meta","uz":"Metada ochish"},   // META_INBOX_V1
+  "Ответ под комментарием": {"en":"Reply under the comment","ru":"Ответ под комментарием","uz":"Izoh ostida javob"},   // META_INBOX_V1
+  "В личку: {name}": {"en":"Privately: {name}","ru":"В личку: {name}","uz":"Shaxsiy xabarda: {name}"},   // META_INBOX_V1
+  "автору": {"en":"the author","ru":"автору","uz":"muallifga"},   // META_INBOX_V1
+  "Сообщение автору в Messenger / Direct…": {"en":"Message to the author in Messenger / Direct…","ru":"Сообщение автору в Messenger / Direct…","uz":"Muallifga Messenger / Direct orqali xabar…"},   // META_INBOX_V1
+  "Публичный ответ — его увидят все…": {"en":"Public reply — everyone will see it…","ru":"Публичный ответ — его увидят все…","uz":"Ochiq javob — uni hamma ko‘radi…"},   // META_INBOX_V1
+  "Meta разрешает один ответ в личку на комментарий, в течение 7 дней.": {"en":"Meta allows one private reply per comment, within 7 days.","ru":"Meta разрешает один ответ в личку на комментарий, в течение 7 дней.","uz":"Meta har bir izohga 7 kun ichida bitta shaxsiy javobga ruxsat beradi."},   // META_INBOX_V1
+  "ответ в личку отправлен": {"en":"private reply sent","ru":"ответ в личку отправлен","uz":"shaxsiy javob yuborildi"},   // META_INBOX_V1
+  "Доступ «только чтение» — отвечать от имени клиники нельзя.": {"en":"Read-only access — you cannot reply on behalf of the clinic.","ru":"Доступ «только чтение» — отвечать от имени клиники нельзя.","uz":"Faqat o‘qish huquqi — klinika nomidan javob berib bo‘lmaydi."},   // META_INBOX_V1
+  "Не отправлено.": {"en":"Not sent.","ru":"Не отправлено.","uz":"Yuborilmadi."},   // META_INBOX_V1
+  "Instagram Direct": {"en":"Instagram Direct","ru":"Instagram Direct","uz":"Instagram Direct"},   // META_INBOX_V1
+  "У токена нет права на сообщения или комментарии. Нужны pages_messaging, pages_read_engagement, pages_read_user_content, pages_manage_engagement, pages_manage_metadata, а для Instagram — instagram_basic, instagram_manage_messages, instagram_manage_comments.": {"en":"The token has no permission for messages or comments. Needed: pages_messaging, pages_read_engagement, pages_read_user_content, pages_manage_engagement, pages_manage_metadata, and for Instagram — instagram_basic, instagram_manage_messages, instagram_manage_comments.","ru":"У токена нет права на сообщения или комментарии. Нужны pages_messaging, pages_read_engagement, pages_read_user_content, pages_manage_engagement, pages_manage_metadata, а для Instagram — instagram_basic, instagram_manage_messages, instagram_manage_comments.","uz":"Tokenda xabarlar yoki izohlar uchun huquq yo‘q. Kerak: pages_messaging, pages_read_engagement, pages_read_user_content, pages_manage_engagement, pages_manage_metadata, Instagram uchun esa — instagram_basic, instagram_manage_messages, instagram_manage_comments."},   // META_INBOX_V1
+  "Комментарии под рекламой недоступны: у токена нет права на рекламу страницы (pages_manage_ads). Комментарии под обычными постами приходят.": {"en":"Comments under ads are unavailable: the token has no ads permission for the page (pages_manage_ads). Comments under regular posts arrive.","ru":"Комментарии под рекламой недоступны: у токена нет права на рекламу страницы (pages_manage_ads). Комментарии под обычными постами приходят.","uz":"Reklama ostidagi izohlar mavjud emas: tokenda sahifa reklamasiga huquq yo‘q (pages_manage_ads). Oddiy postlar ostidagi izohlar keladi."},   // META_INBOX_V1
+  "Meta не подключена: сначала сохраните токен и выберите страницу в «Настройки → Коммерческие инструменты → Meta: заявки из рекламы».": {"en":"Meta is not connected: first save the token and pick the page in “Settings → Commercial tools → Meta: ad leads”.","ru":"Meta не подключена: сначала сохраните токен и выберите страницу в «Настройки → Коммерческие инструменты → Meta: заявки из рекламы».","uz":"Meta ulanmagan: avval tokenni saqlang va «Sozlamalar → Tijorat vositalari → Meta: reklamadan so‘rovlar»da sahifani tanlang."},   // META_INBOX_V1
+  "Прошло больше 24 часов после последнего сообщения человека — Meta не разрешает отвечать. Ответьте, когда он напишет снова, или позвоните.": {"en":"More than 24 hours have passed since the person’s last message — Meta does not allow replying. Reply when they write again, or call.","ru":"Прошло больше 24 часов после последнего сообщения человека — Meta не разрешает отвечать. Ответьте, когда он напишет снова, или позвоните.","uz":"Odamning oxirgi xabaridan 24 soatdan ko‘p vaqt o‘tdi — Meta javob berishga ruxsat bermaydi. U qayta yozganda javob bering yoki qo‘ng‘iroq qiling."},   // META_INBOX_V1
+  "Человек недоступен: удалил переписку, заблокировал страницу или удалил аккаунт.": {"en":"The person is unavailable: they deleted the conversation, blocked the page or deleted the account.","ru":"Человек недоступен: удалил переписку, заблокировал страницу или удалил аккаунт.","uz":"Odam mavjud emas: yozishmani o‘chirgan, sahifani bloklagan yoki akkauntni o‘chirgan."},   // META_INBOX_V1
+  "На этот комментарий уже ответили в личку — Meta разрешает только один такой ответ.": {"en":"This comment already got a private reply — Meta allows only one.","ru":"На этот комментарий уже ответили в личку — Meta разрешает только один такой ответ.","uz":"Bu izohga allaqachon shaxsiy javob berilgan — Meta faqat bittasiga ruxsat beradi."},   // META_INBOX_V1
+  "Это комментарий самой клиники.": {"en":"This is the clinic’s own comment.","ru":"Это комментарий самой клиники.","uz":"Bu klinikaning o‘z izohi."},   // META_INBOX_V1
+  "Напишите текст ответа.": {"en":"Write the reply text.","ru":"Напишите текст ответа.","uz":"Javob matnini yozing."},   // META_INBOX_V1
+  "Слишком длинный ответ: не больше 2000 символов.": {"en":"The reply is too long: 2000 characters at most.","ru":"Слишком длинный ответ: не больше 2000 символов.","uz":"Javob juda uzun: ko‘pi bilan 2000 belgi."},   // META_INBOX_V1
+  "Номер телефона не распознан. Пример: +998 90 123 45 67.": {"en":"The phone number was not recognised. Example: +998 90 123 45 67.","ru":"Номер телефона не распознан. Пример: +998 90 123 45 67.","uz":"Telefon raqami aniqlanmadi. Misol: +998 90 123 45 67."},   // META_INBOX_V1
+  "Push-уведомления": {"en":"Push notifications","ru":"Push-уведомления","uz":"Push-xabarnomalar"},   // COMMERCE_TOOLS_V1
+  "Инструменты для работы с пациентами. Подключения (SMS, Telegram, Meta) настраиваются в «Настройки → Коммерческие инструменты».": {"en":"Tools for working with patients. Connections (SMS, Telegram, Meta) are set up in “Settings → Commercial tools”.","ru":"Инструменты для работы с пациентами. Подключения (SMS, Telegram, Meta) настраиваются в «Настройки → Коммерческие инструменты».","uz":"Bemorlar bilan ishlash vositalari. Ulanishlar (SMS, Telegram, Meta) «Sozlamalar → Tijorat vositalari»da sozlanadi."},   // COMMERCE_TOOLS_V1
+  "Рассылка пациентам в Telegram или по SMS: текст, предпросмотр, фильтры по визитам и услугам.": {"en":"Messages to patients in Telegram or by SMS: text, preview, filters by visits and services.","ru":"Рассылка пациентам в Telegram или по SMS: текст, предпросмотр, фильтры по визитам и услугам.","uz":"Bemorlarga Telegram yoki SMS orqali xabar: matn, ko‘rinish, tashrif va xizmatlar bo‘yicha filtrlar."},   // COMMERCE_TOOLS_V1
+  "Коммерческие инструменты вашей роли недоступны.": {"en":"Commercial tools are not available to your role.","ru":"Коммерческие инструменты вашей роли недоступны.","uz":"Tijorat vositalari sizning rolingiz uchun mavjud emas."},   // COMMERCE_TOOLS_V1
+  "Push-уведомление пациентам по Telegram или по SMS. Подключения настраиваются в «Настройки → Коммерческие инструменты».": {"en":"Push notifications to patients by Telegram or SMS. Connections are set up in “Settings → Commercial tools”.","ru":"Push-уведомление пациентам по Telegram или по SMS. Подключения настраиваются в «Настройки → Коммерческие инструменты».","uz":"Bemorlarga Telegram yoki SMS orqali push-xabarnoma. Ulanishlar «Sozlamalar → Tijorat vositalari»da sozlanadi."},   // SMS_PUSH_V1
+  "Отправка уведомлений вашей роли недоступна.": {"en":"Sending notifications is not available to your role.","ru":"Отправка уведомлений вашей роли недоступна.","uz":"Xabarnoma yuborish sizning rolingiz uchun mavjud emas."},   // SMS_PUSH_V1
+  "Например: Уважаемые пациенты! С понедельника клиника работает до 20:00.": {"en":"For example: Dear patients! From Monday the clinic is open until 20:00.","ru":"Например: Уважаемые пациенты! С понедельника клиника работает до 20:00.","uz":"Masalan: Hurmatli bemorlar! Dushanbadan klinika 20:00 gacha ishlaydi."},   // SMS_PUSH_V1
+  "Уходит тем же сообщением, следом за русским.": {"en":"Goes in the same message, after the Russian text.","ru":"Уходит тем же сообщением, следом за русским.","uz":"Xuddi shu xabarda, ruscha matndan keyin yuboriladi."},   // SMS_PUSH_V1
+  "SMS — только текст: фото и файлы по SMS не отправляются. Один номер получает одно SMS, даже если на нём несколько карт.": {"en":"SMS is text only: photos and files are not sent by SMS. Each number gets one SMS even if several cards share it.","ru":"SMS — только текст: фото и файлы по SMS не отправляются. Один номер получает одно SMS, даже если на нём несколько карт.","uz":"SMS — faqat matn: rasm va fayllar SMS orqali yuborilmaydi. Bitta raqamga bir nechta karta bog‘langan bo‘lsa ham, bitta SMS boradi."},   // SMS_PUSH_V1
+  "Канал, текст и картинка": {"en":"Channel, text and picture","ru":"Канал, текст и картинка","uz":"Kanal, matn va rasm"},   // SMS_PUSH_V1
+  "Текст уведомления": {"en":"Notification text","ru":"Текст уведомления","uz":"Xabarnoma matni"},   // SMS_PUSH_V1
+  "Как увидит пациент": {"en":"How the patient will see it","ru":"Как увидит пациент","uz":"Bemor qanday ko‘radi"},   // SMS_PUSH_V1
+  "Живой предпросмотр": {"en":"Live preview","ru":"Живой предпросмотр","uz":"Jonli ko‘rinish"},   // SMS_PUSH_V1
+  "Обновляется, пока вы печатаете; отправлено ещё не будет.": {"en":"Updates as you type; nothing is sent yet.","ru":"Обновляется, пока вы печатаете; отправлено ещё не будет.","uz":"Yozayotganingizda yangilanadi; hali hech narsa yuborilmaydi."},   // SMS_PUSH_V1
+  "Любой": {"en":"Any","ru":"Любой","uz":"Har qanday"},   // SMS_PUSH_V1
+  "Любая": {"en":"Any","ru":"Любая","uz":"Har qanday"},   // SMS_PUSH_V1
+  "Кому отправить": {"en":"Send to","ru":"Кому отправить","uz":"Kimga yuborish"},   // SMS_PUSH_V1
+  "Фильтры и отправка": {"en":"Filters and sending","ru":"Фильтры и отправка","uz":"Filtrlar va yuborish"},   // SMS_PUSH_V1
+  "Приходил в период": {"en":"Visited during","ru":"Приходил в период","uz":"Davr ichida kelgan"},   // SMS_PUSH_V1
+  "Был у врача": {"en":"Saw the doctor","ru":"Был у врача","uz":"Shifokor qabulida bo‘lgan"},   // SMS_PUSH_V1
+  "Получал услуги группы": {"en":"Received services of the group","ru":"Получал услуги группы","uz":"Guruh xizmatlarini olgan"},   // SMS_PUSH_V1
+  "Получал услугу": {"en":"Received the service","ru":"Получал услугу","uz":"Xizmatni olgan"},   // SMS_PUSH_V1
+  "Врач считается и как врач визита, и как исполнитель услуги. Все условия действуют вместе.": {"en":"A doctor counts both as the visit doctor and as the service performer. All conditions apply together.","ru":"Врач считается и как врач визита, и как исполнитель услуги. Все условия действуют вместе.","uz":"Shifokor ham tashrif shifokori, ham xizmat ijrochisi sifatida hisoblanadi. Barcha shartlar birga amal qiladi."},   // SMS_PUSH_V1
+  "Отменить рассылку нельзя: сообщение уходит людям сразу.": {"en":"A broadcast cannot be cancelled: the message goes to people at once.","ru":"Отменить рассылку нельзя: сообщение уходит людям сразу.","uz":"Yuborishni bekor qilib bo‘lmaydi: xabar odamlarga darhol boradi."},   // SMS_PUSH_V1
+  "{n} символов · {parts} SMS на получателя": {"en":"{n} characters · {parts} SMS per recipient","ru":"{n} символов · {parts} SMS на получателя","uz":"{n} belgi · har bir qabul qiluvchiga {parts} SMS"},   // SMS_PUSH_V1
+  "Пока пусто. Напишите текст — здесь появится сообщение.": {"en":"Empty for now. Write the text — the message will appear here.","ru":"Пока пусто. Напишите текст — здесь появится сообщение.","uz":"Hozircha bo‘sh. Matn yozing — xabar shu yerda paydo bo‘ladi."},   // SMS_PUSH_V1
+  "Пока пусто. Напишите текст или выберите картинку — здесь появится сообщение.": {"en":"Empty for now. Write the text or pick a picture — the message will appear here.","ru":"Пока пусто. Напишите текст или выберите картинку — здесь появится сообщение.","uz":"Hozircha bo‘sh. Matn yozing yoki rasm tanlang — xabar shu yerda paydo bo‘ladi."},   // SMS_PUSH_V1
+  "Отправитель": {"en":"Sender","ru":"Отправитель","uz":"Jo‘natuvchi"},   // SMS_PUSH_V1
+  "Получателей": {"en":"Recipients","ru":"Получателей","uz":"Qabul qiluvchilar"},   // SMS_PUSH_V1
+  "SMS к оплате: {n}": {"en":"SMS to be billed: {n}","ru":"SMS к оплате: {n}","uz":"To‘lanadigan SMS: {n}"},   // SMS_PUSH_V1
+  "Заменить картинку": {"en":"Replace picture","ru":"Заменить картинку","uz":"Rasmni almashtirish"},   // SMS_PUSH_V1
+  "Прикрепить картинку": {"en":"Attach picture","ru":"Прикрепить картинку","uz":"Rasm biriktirish"},   // SMS_PUSH_V1
+  "картинка прикреплена": {"en":"picture attached","ru":"картинка прикреплена","uz":"rasm biriktirilgan"},   // SMS_PUSH_V1
+  "картинка не выбрана": {"en":"no picture chosen","ru":"картинка не выбрана","uz":"rasm tanlanmagan"},   // SMS_PUSH_V1
+  "Картинка обрезается по центру до 16:9 и уходит с текстом в подписи. Если текст длиннее 1024 символов, он уйдёт отдельным сообщением следом.": {"en":"The picture is cropped to 16:9 around the centre and sent with the text as its caption. Text longer than 1024 characters follows as a separate message.","ru":"Картинка обрезается по центру до 16:9 и уходит с текстом в подписи. Если текст длиннее 1024 символов, он уйдёт отдельным сообщением следом.","uz":"Rasm markazdan 16:9 ga qirqiladi va matn bilan izoh sifatida yuboriladi. Matn 1024 belgidan uzun bo‘lsa, alohida xabar bo‘lib keyin boradi."},   // SMS_PUSH_V1
+  "Под эти условия не подходит ни один пациент с номером Узбекистана.": {"en":"No patient with an Uzbekistan number matches these conditions.","ru":"Под эти условия не подходит ни один пациент с номером Узбекистана.","uz":"Bu shartlarga O‘zbekiston raqamli birorta bemor mos kelmaydi."},   // SMS_PUSH_V1
+  "SMS получат {count} номеров (SMS к оплате: {parts}).\n\n": {"en":"{count} numbers will get the SMS (SMS to be billed: {parts}).\n\n","ru":"SMS получат {count} номеров (SMS к оплате: {parts}).\n\n","uz":"SMSni {count} ta raqam oladi (to‘lanadigan SMS: {parts}).\n\n"},   // SMS_PUSH_V1
+  "Сообщение получат {count} чел. в Telegram.\n\n": {"en":"{count} people will get the message in Telegram.\n\n","ru":"Сообщение получат {count} чел. в Telegram.\n\n","uz":"Xabarni Telegramda {count} kishi oladi.\n\n"},   // SMS_PUSH_V1
+  "Не удалось запустить рассылку.": {"en":"Could not start the broadcast.","ru":"Не удалось запустить рассылку.","uz":"Yuborishni boshlab bo‘lmadi."},   // SMS_PUSH_V1
+  "Готово · {when}": {"en":"Done · {when}","ru":"Готово · {when}","uz":"Tayyor · {when}"},   // SMS_PUSH_V1
+  "Отправка SMS выключена — включите её в «Настройки → Коммерческие инструменты → SMS-информирование».": {"en":"SMS sending is off — turn it on in “Settings → Commercial tools → SMS notifications”.","ru":"Отправка SMS выключена — включите её в «Настройки → Коммерческие инструменты → SMS-информирование».","uz":"SMS yuborish o‘chirilgan — uni «Sozlamalar → Tijorat vositalari → SMS-xabarnoma»da yoqing."},   // SMS_PUSH_V1
+  "Реклама, заявки и сообщения пациентам: подключения, которые приводят и возвращают пациентов.": {"en":"Ads, leads and patient messaging: the integrations that bring patients in and bring them back.","ru":"Реклама, заявки и сообщения пациентам: подключения, которые приводят и возвращают пациентов.","uz":"Reklama, arizalar va bemorlarga xabarlar: bemorlarni olib keladigan va qaytaradigan ulanishlar."},   // COMMERCE_NAV_V1
   "Модуль CRM не подключён": {"en":"CRM module is not enabled","ru":"Модуль CRM не подключён","uz":"CRM moduli ulanmagan"},
   "Заявкам из рекламы некуда идти: без доски CRM опрос не запускается. Подключите модуль в «Настройки → Подписка».": {"en":"Ad leads have nowhere to go: without the CRM board polling does not start. Enable the module in Settings → Subscription.","ru":"Заявкам из рекламы некуда идти: без доски CRM опрос не запускается. Подключите модуль в «Настройки → Подписка».","uz":"Reklama so‘rovlari uchun joy yo‘q: CRM doskasisiz so‘rov ishga tushmaydi. Modulni «Sozlamalar → Obuna» bo‘limida ulang."},
   "Заявки не забираются. Создайте токен по инструкции внизу страницы и вставьте его в поле ниже.": {"en":"Leads are not being collected. Create a token following the instructions at the bottom of the page and paste it into the field below.","ru":"Заявки не забираются. Создайте токен по инструкции внизу страницы и вставьте его в поле ниже.","uz":"So‘rovlar olinmayapti. Sahifa pastidagi yo‘riqnoma bo‘yicha token yarating va uni quyidagi maydonga qo‘ying."},
@@ -12683,4 +13125,112 @@ export const STRINGS = {
   "Шаблон не сохранён. Закрыть без сохранения?": {"en":"The template is not saved. Close without saving?","ru":"Шаблон не сохранён. Закрыть без сохранения?","uz":"Shablon saqlanmagan. Saqlamasdan yopilsinmi?"},   // DOC_RICH_FORMAT_V1
   "В заключении — только текст": {"en":"Conclusion: plain text only","ru":"В заключении — только текст","uz":"Xulosada — faqat matn"},   // DOC_RICH_FORMAT_V1
   // /DOC_RICH_FORMAT_V1
+  // REP_BOT_V1 — вкладка «Реферирование → Бот представителей»
+  "Бот представителей": {"en":"Reps bot","ru":"Бот представителей","uz":"Vakillar boti"},
+  "Бот для медпредставителей": {"en":"Bot for medical representatives","ru":"Бот для медпредставителей","uz":"Tibbiy vakillar uchun bot"},
+  "Медпредставителей": {"en":"Medical representatives","ru":"Медпредставителей","uz":"Tibbiy vakillar"},
+  "Врачей добавлено за 30 дней": {"en":"Doctors added in 30 days","ru":"Врачей добавлено за 30 дней","uz":"30 kunda qo‘shilgan shifokorlar"},
+  "Добавил врачей": {"en":"Doctors added","ru":"Добавил врачей","uz":"Qo‘shgan shifokorlar"},
+  "Добавил": {"en":"Added by","ru":"Добавил","uz":"Qo‘shgan"},
+  "Добавлены через бота": {"en":"Added via the bot","ru":"Добавлены через бота","uz":"Bot orqali qo‘shilgan"},
+  "Через бота пока никого не добавили.": {"en":"No one has been added via the bot yet.","ru":"Через бота пока никого не добавили.","uz":"Bot orqali hali hech kim qo‘shilmagan."},
+  "Последние 50. Врач сразу попадает во вкладку «Врачи-источники», закреплённым за представителем; категорию и вознаграждение задайте там.": {"en":"Last 50. The doctor goes straight to the «Source doctors» tab, assigned to the representative; set the category and reward there.","ru":"Последние 50. Врач сразу попадает во вкладку «Врачи-источники», закреплённым за представителем; категорию и вознаграждение задайте там.","uz":"Oxirgi 50 ta. Shifokor darhol «Manba shifokorlar» bo‘limiga vakilga biriktirilgan holda tushadi; toifa va mukofotni o‘sha yerda belgilang."},
+  "Представитель прислал номер из Telegram. Сверьте имя и последние цифры номера и подтвердите — до подтверждения бот не даёт ему добавлять врачей.": {"en":"The representative sent their number from Telegram. Check the name and the last digits and confirm — until then the bot will not let them add doctors.","ru":"Представитель прислал номер из Telegram. Сверьте имя и последние цифры номера и подтвердите — до подтверждения бот не даёт ему добавлять врачей.","uz":"Vakil Telegramdan raqamini yubordi. Ism va raqamning oxirgi raqamlarini tekshirib tasdiqlang — tasdiqlanmaguncha bot unga shifokor qo‘shishga ruxsat bermaydi."},
+  "Подключение подтверждено — представитель может добавлять врачей.": {"en":"Connection confirmed — the representative can add doctors.","ru":"Подключение подтверждено — представитель может добавлять врачей.","uz":"Ulanish tasdiqlandi — vakil shifokorlarni qo‘sha oladi."},
+  "Отклонить подключение? Представитель не сможет добавлять врачей, пока не отправит номер снова и вы не подтвердите.": {"en":"Reject the connection? The representative will not be able to add doctors until they send their number again and you confirm.","ru":"Отклонить подключение? Представитель не сможет добавлять врачей, пока не отправит номер снова и вы не подтвердите.","uz":"Ulanish rad etilsinmi? Vakil raqamini qayta yuborib, siz tasdiqlamaguningizcha shifokor qo‘sha olmaydi."},
+  "Отключить этого представителя от бота? Добавлять врачей он не сможет, пока не отправит номер снова и вы не подтвердите.": {"en":"Disconnect this representative from the bot? They will not be able to add doctors until they send their number again and you confirm.","ru":"Отключить этого представителя от бота? Добавлять врачей он не сможет, пока не отправит номер снова и вы не подтвердите.","uz":"Bu vakil botdan uzilsinmi? U raqamini qayta yuborib, siz tasdiqlamaguningizcha shifokor qo‘sha olmaydi."},
+  "Представитель отключён от бота.": {"en":"The representative is disconnected from the bot.","ru":"Представитель отключён от бота.","uz":"Vakil botdan uzildi."},
+  "Готово! Бот @{bot} включён и отвечает представителям.": {"en":"Done! Bot @{bot} is on and answers representatives.","ru":"Готово! Бот @{bot} включён и отвечает представителям.","uz":"Tayyor! @{bot} boti yoqildi va vakillarga javob beradi."},
+  "Бот включён — представители могут подключаться.": {"en":"The bot is on — representatives can connect.","ru":"Бот включён — представители могут подключаться.","uz":"Bot yoqildi — vakillar ulanishi mumkin."},
+  "Бот включён — представители добавляют врачей из Telegram": {"en":"Bot is on — representatives add doctors from Telegram","ru":"Бот включён — представители добавляют врачей из Telegram","uz":"Bot yoqilgan — vakillar Telegramdan shifokor qo‘shadi"},
+  "Создайте бота в @BotFather (команда /newbot), скопируйте токен и вставьте сюда — связь проверится и бот включится сам. Это должен быть ОТДЕЛЬНЫЙ бот: не пациентский и не бот для врачей.": {"en":"Create a bot in @BotFather (/newbot), copy the token and paste it here — the connection is checked and the bot turns on by itself. It must be a SEPARATE bot: not the patient bot and not the doctors bot.","ru":"Создайте бота в @BotFather (команда /newbot), скопируйте токен и вставьте сюда — связь проверится и бот включится сам. Это должен быть ОТДЕЛЬНЫЙ бот: не пациентский и не бот для врачей.","uz":"@BotFather’da bot yarating (/newbot), tokenni nusxalab shu yerga qo‘ying — aloqa tekshiriladi va bot o‘zi yoqiladi. Bu ALOHIDA bot bo‘lishi kerak: bemorlar boti ham, shifokorlar boti ham emas."},
+  "Как подключиться представителю.": {"en":"How a representative connects.","ru":"Как подключиться представителю.","uz":"Vakil qanday ulanadi."},
+  "У сотрудника должна быть роль «Медпредставитель» и его номер в карточке сотрудника. Он открывает бота, нажимает «Start» и отправляет свой номер кнопкой; вы подтверждаете подключение ниже.": {"en":"The employee needs the «Medical representative» role and their number in the employee card. They open the bot, press «Start» and send their number with the button; you confirm the connection below.","ru":"У сотрудника должна быть роль «Медпредставитель» и его номер в карточке сотрудника. Он открывает бота, нажимает «Start» и отправляет свой номер кнопкой; вы подтверждаете подключение ниже.","uz":"Xodimda «Tibbiy vakil» roli va xodim kartasida raqami bo‘lishi kerak. U botni ochadi, «Start»ni bosadi va raqamini tugma orqali yuboradi; siz ulanishni quyida tasdiqlaysiz."},
+  "Что умеет бот.": {"en":"What the bot does.","ru":"Что умеет бот.","uz":"Bot nima qila oladi."},
+  "«Добавить врача» — ФИО, телефон, специальность, место работы, район; врач появляется во «Врачах-источниках», закреплённым за этим представителем. Врача с уже существующим номером бот не заводит. «Мои врачи» — список врачей представителя.": {"en":"«Add doctor» — full name, phone, specialty, workplace, district; the doctor appears in «Source doctors», assigned to that representative. The bot does not add a doctor whose number already exists. «My doctors» — the representative’s list of doctors.","ru":"«Добавить врача» — ФИО, телефон, специальность, место работы, район; врач появляется во «Врачах-источниках», закреплённым за этим представителем. Врача с уже существующим номером бот не заводит. «Мои врачи» — список врачей представителя.","uz":"«Shifokor qo‘shish» — F.I.Sh., telefon, mutaxassislik, ish joyi, tuman; shifokor «Manba shifokorlar»da shu vakilga biriktirilgan holda paydo bo‘ladi. Mavjud raqamli shifokorni bot qo‘shmaydi. «Mening shifokorlarim» — vakilning shifokorlari ro‘yxati."},
+  "Ссылка для представителей: ": {"en":"Link for representatives: ","ru":"Ссылка для представителей: ","uz":"Vakillar uchun havola: "},
+  "Удалить токен? Бот будет выключен, и представители не смогут добавлять врачей.": {"en":"Delete the token? The bot will be turned off and representatives will not be able to add doctors.","ru":"Удалить токен? Бот будет выключен, и представители не смогут добавлять врачей.","uz":"Token o‘chirilsinmi? Bot o‘chiriladi va vakillar shifokor qo‘sha olmaydi."},
+  "Бот для медпредставителей настраивает администратор клиники.": {"en":"The bot for medical representatives is set up by the clinic administrator.","ru":"Бот для медпредставителей настраивает администратор клиники.","uz":"Tibbiy vakillar botini klinika administratori sozlaydi."},
+  "Настройки бота для медпредставителей не инициализированы.": {"en":"The medical representatives bot settings are not initialised.","ru":"Настройки бота для медпредставителей не инициализированы.","uz":"Tibbiy vakillar boti sozlamalari ishga tushirilmagan."},
+  "Сотрудник отключён, у него сменилась роль или номер — подтвердить нельзя. Попросите его отправить номер снова.": {"en":"The employee is deactivated or their role or number changed — cannot confirm. Ask them to send their number again.","ru":"Сотрудник отключён, у него сменилась роль или номер — подтвердить нельзя. Попросите его отправить номер снова.","uz":"Xodim o‘chirilgan yoki uning roli yoki raqami o‘zgargan — tasdiqlab bo‘lmaydi. Undan raqamini qayta yuborishni so‘rang."},
+  // /REP_BOT_V1
+  // PATIENTS_HERO_V1 — баннер раздела «Пациенты» (views/patients-hub.js)
+  "Доброе утро, {name}!": {"en":"Good morning, {name}!","ru":"Доброе утро, {name}!","uz":"Xayrli tong, {name}!"},
+  "Добрый день, {name}!": {"en":"Good afternoon, {name}!","ru":"Добрый день, {name}!","uz":"Xayrli kun, {name}!"},
+  "Добрый вечер, {name}!": {"en":"Good evening, {name}!","ru":"Добрый вечер, {name}!","uz":"Xayrli kech, {name}!"},
+  "Доброе утро!": {"en":"Good morning!","ru":"Доброе утро!","uz":"Xayrli tong!"},
+  "Добрый день!": {"en":"Good afternoon!","ru":"Добрый день!","uz":"Xayrli kun!"},
+  "Добрый вечер!": {"en":"Good evening!","ru":"Добрый вечер!","uz":"Xayrli kech!"},
+  "Пациент — в центре всего, что мы делаем. Тёплая встреча, внимание и улыбка важны не меньше, чем точность данных: помогите каждому почувствовать заботу с первой минуты. Спасибо за вашу работу — вы лицо клиники.": {"en":"The patient is at the centre of everything we do. A warm welcome, attention and a smile matter as much as accurate data: help everyone feel cared for from the very first minute. Thank you for your work — you are the face of the clinic.","ru":"Пациент — в центре всего, что мы делаем. Тёплая встреча, внимание и улыбка важны не меньше, чем точность данных: помогите каждому почувствовать заботу с первой минуты. Спасибо за вашу работу — вы лицо клиники.","uz":"Bemor — qiladigan barcha ishimizning markazida. Iliq kutib olish, e’tibor va tabassum ma’lumotlarning aniqligidan kam muhim emas: har kimga birinchi daqiqadanoq g‘amxo‘rlikni his qilishiga yordam bering. Mehnatingiz uchun rahmat — siz klinikaning yuzisiz."},
+  // /PATIENTS_HERO_V1
+  // UPDATE_BANNER_DISMISS_V1
+  "Скрыть до перезагрузки страницы": {"en":"Hide until the page is reloaded","ru":"Скрыть до перезагрузки страницы","uz":"Sahifa qayta yuklanguncha yashirish"},
+  // CHATS_TO_COMMERCE_V1 — витрина «Коммерческие инструменты»
+  "Сообщения": {"en":"Messages","ru":"Сообщения","uz":"Xabarlar"},
+  "Инструменты": {"en":"Tools","ru":"Инструменты","uz":"Vositalar"},
+  "Переписка с пациентами в Telegram-боте клиники.": {"en":"Conversations with patients in the clinic’s Telegram bot.","ru":"Переписка с пациентами в Telegram-боте клиники.","uz":"Klinika Telegram-botidagi bemorlar bilan yozishmalar."},
+  // REFERRALS_TO_COMMERCE_V1
+  "Представители и внешние врачи, внутренние направления, активность врачей и боты для врачей и представителей.": {"en":"Representatives and external doctors, internal referrals, doctor activity, and the bots for doctors and representatives.","ru":"Представители и внешние врачи, внутренние направления, активность врачей и боты для врачей и представителей.","uz":"Vakillar va tashqi shifokorlar, ichki yo‘llanmalar, shifokorlar faolligi hamda shifokorlar va vakillar uchun botlar."},
+  // CLINIC_NEWS_V1 — «Информационная доска»
+  "Информационная доска": {"en":"Information board","ru":"Информационная доска","uz":"Axborot taxtasi"},
+  "Новости клиники для сотрудников: приезжие врачи, неработающее оборудование, объявления дня.": {"en":"Clinic news for staff: visiting doctors, broken equipment, announcements of the day.","ru":"Новости клиники для сотрудников: приезжие врачи, неработающее оборудование, объявления дня.","uz":"Xodimlar uchun klinika yangiliklari: tashrif buyuruvchi shifokorlar, ishlamayotgan uskunalar, kun e’lonlari."},
+  "Для сотрудников": {"en":"For staff","ru":"Для сотрудников","uz":"Xodimlar uchun"},
+  "Новости": {"en":"News","ru":"Новости","uz":"Yangiliklar"},
+  "Приезжий врач": {"en":"Visiting doctor","ru":"Приезжий врач","uz":"Tashrif buyuruvchi shifokor"},
+  "Например: С 3 по 5 ноября принимает кардиолог из Турции": {"en":"For example: a cardiologist from Turkey sees patients from 3 to 5 November","ru":"Например: С 3 по 5 ноября принимает кардиолог из Турции","uz":"Masalan: 3–5 noyabr kunlari Turkiyalik kardiolog qabul qiladi"},
+  "Подробности: кто, когда, куда записывать, что делать вместо…": {"en":"Details: who, when, how to book, what to do instead…","ru":"Подробности: кто, когда, куда записывать, что делать вместо…","uz":"Tafsilotlar: kim, qachon, qayerga yozish, o‘rniga nima qilish…"},
+  "Напишите заголовок объявления.": {"en":"Write a title for the announcement.","ru":"Напишите заголовок объявления.","uz":"E’lon sarlavhasini yozing."},
+  "Объявление исправлено.": {"en":"Announcement updated.","ru":"Объявление исправлено.","uz":"E’lon tuzatildi."},
+  "Объявление опубликовано.": {"en":"Announcement published.","ru":"Объявление опубликовано.","uz":"E’lon chop etildi."},
+  "Опубликовать": {"en":"Publish","ru":"Опубликовать","uz":"Chop etish"},
+  "Изменить объявление": {"en":"Edit announcement","ru":"Изменить объявление","uz":"E’lonni tahrirlash"},
+  "Новое объявление": {"en":"New announcement","ru":"Новое объявление","uz":"Yangi e’lon"},
+  "Заголовок": {"en":"Title","ru":"Заголовок","uz":"Sarlavha"},
+  "Показывать до (необязательно)": {"en":"Show until (optional)","ru":"Показывать до (необязательно)","uz":"Qachongacha ko‘rsatish (ixtiyoriy)"},
+  "Закрепить сверху": {"en":"Pin to top","ru":"Закрепить сверху","uz":"Yuqoriga mahkamlash"},
+  "На доске": {"en":"On the board","ru":"На доске","uz":"Taxtada"},
+  "В архиве пусто.": {"en":"The archive is empty.","ru":"В архиве пусто.","uz":"Arxiv bo‘sh."},
+  "На доске пока нет объявлений.": {"en":"There are no announcements on the board yet.","ru":"На доске пока нет объявлений.","uz":"Taxtada hozircha e’lonlar yo‘q."},
+  "Напишите первое в форме выше — его увидят все сотрудники.": {"en":"Write the first one in the form above — all staff will see it.","ru":"Напишите первое в форме выше — его увидят все сотрудники.","uz":"Birinchisini yuqoridagi shaklda yozing — uni barcha xodimlar ko‘radi."},
+  "Снять объявление с доски? Оно останется в архиве.": {"en":"Remove the announcement from the board? It will stay in the archive.","ru":"Снять объявление с доски? Оно останется в архиве.","uz":"E’lon taxtadan olinsinmi? U arxivda qoladi."},
+  "Объявление снято с доски.": {"en":"Announcement removed from the board.","ru":"Объявление снято с доски.","uz":"E’lon taxtadan olindi."},
+  "Закреплено": {"en":"Pinned","ru":"Закреплено","uz":"Mahkamlangan"},
+  "Объявления на доске публикует администратор клиники.": {"en":"Announcements on the board are published by the clinic administrator.","ru":"Объявления на доске публикует администратор клиники.","uz":"Taxtadagi e’lonlarni klinika administratori chop etadi."},
+  "Неизвестный вид объявления.": {"en":"Unknown announcement type.","ru":"Неизвестный вид объявления.","uz":"Noma’lum e’lon turi."},
+  "Заголовок слишком длинный — до 200 символов.": {"en":"The title is too long — up to 200 characters.","ru":"Заголовок слишком длинный — до 200 символов.","uz":"Sarlavha juda uzun — 200 belgigacha."},
+  "Текст слишком длинный — до 4000 символов.": {"en":"The text is too long — up to 4000 characters.","ru":"Текст слишком длинный — до 4000 символов.","uz":"Matn juda uzun — 4000 belgigacha."},
+  "Дата «Показывать до» не разобрана.": {"en":"The «Show until» date could not be read.","ru":"Дата «Показывать до» не разобрана.","uz":"«Qachongacha ko‘rsatish» sanasi tushunilmadi."},
+  "Объявление не выбрано.": {"en":"No announcement selected.","ru":"Объявление не выбрано.","uz":"E’lon tanlanmagan."},
+  "Объявление уже снято с доски — исправить нельзя.": {"en":"The announcement has already been removed from the board — it cannot be edited.","ru":"Объявление уже снято с доски — исправить нельзя.","uz":"E’lon allaqachon taxtadan olingan — tahrirlab bo‘lmaydi."},
+  // CLINIC_NEWS_STRIP_V1
+  "Новости клиники": {"en":"Clinic news","ru":"Новости клиники","uz":"Klinika yangiliklari"},
+  "ещё {n}": {"en":"{n} more","ru":"ещё {n}","uz":"yana {n}"},
+  "Все объявления": {"en":"All announcements","ru":"Все объявления","uz":"Barcha e’lonlar"},
+  // CLINIC_NEWS_V1 — кнопка в шапке CRM
+  "Информация": {"en":"Information","ru":"Информация","uz":"Ma’lumot"},
+  "Информационная доска: новости клиники для сотрудников": {"en":"Information board: clinic news for staff","ru":"Информационная доска: новости клиники для сотрудников","uz":"Axborot taxtasi: xodimlar uchun klinika yangiliklari"},
+  // CABINET_DASH_PAY_ONE_V1
+  "Дашборд · Зарплата": {"en":"Dashboard · Salary","ru":"Дашборд · Зарплата","uz":"Boshqaruv paneli · Ish haqi"},
+  // PATIENT_BOT_INVITE_V1 — бот пациента в списке пациентов
+  "Подключён к Telegram-боту клиники": {"en":"Connected to the clinic’s Telegram bot","ru":"Подключён к Telegram-боту клиники","uz":"Klinikaning Telegram-botiga ulangan"},
+  "Отправить пациенту ссылку на Telegram-бот клиники": {"en":"Send the patient a link to the clinic’s Telegram bot","ru":"Отправить пациенту ссылку на Telegram-бот клиники","uz":"Bemorga klinika Telegram-botiga havola yuborish"},
+  "У пациента нет номера телефона": {"en":"The patient has no phone number","ru":"У пациента нет номера телефона","uz":"Bemorning telefon raqami yo‘q"},
+  "Ссылка на Telegram-бот отправлена пациенту по SMS.": {"en":"The Telegram bot link was sent to the patient by SMS.","ru":"Ссылка на Telegram-бот отправлена пациенту по SMS.","uz":"Telegram-bot havolasi bemorga SMS orqali yuborildi."},
+  "Ссылка отправлена": {"en":"Link sent","ru":"Ссылка отправлена","uz":"Havola yuborildi"},
+  "SMS не настроено — ссылка на бот скопирована, отправьте её пациенту.": {"en":"SMS is not set up — the bot link was copied; send it to the patient.","ru":"SMS не настроено — ссылка на бот скопирована, отправьте её пациенту.","uz":"SMS sozlanmagan — bot havolasi nusxalandi, uni bemorga yuboring."},
+  "SMS не настроено. Ссылка на бот: {link}": {"en":"SMS is not set up. Bot link: {link}","ru":"SMS не настроено. Ссылка на бот: {link}","uz":"SMS sozlanmagan. Bot havolasi: {link}"},
+  "Не удалось отправить ссылку.": {"en":"Could not send the link.","ru":"Не удалось отправить ссылку.","uz":"Havolani yuborib bo‘lmadi."},
+  "Ссылка на бот": {"en":"Bot link","ru":"Ссылка на бот","uz":"Bot havolasi"},
+  "SMS не ушло — Play Mobile отказал. Ссылка скопирована, отправьте её пациенту сами.": {"en":"The SMS was not sent — Play Mobile refused. The link was copied; send it to the patient yourself.","ru":"SMS не ушло — Play Mobile отказал. Ссылка скопирована, отправьте её пациенту сами.","uz":"SMS yuborilmadi — Play Mobile rad etdi. Havola nusxalandi, uni bemorga o‘zingiz yuboring."},
+  "Список пациентов недоступен вашей роли.": {"en":"The patient list is not available to your role.","ru":"Список пациентов недоступен вашей роли.","uz":"Bemorlar ro‘yxati sizning rolingiz uchun mavjud emas."},
+  "Telegram-бот клиники не подключён — его включают в «Настройки → Telegram-бот».": {"en":"The clinic’s Telegram bot is not connected — turn it on in «Settings → Telegram bot».","ru":"Telegram-бот клиники не подключён — его включают в «Настройки → Telegram-бот».","uz":"Klinika Telegram-boti ulanmagan — uni «Sozlamalar → Telegram-bot»da yoqing."},
+  "У пациента нет номера телефона Узбекистана — отправить ссылку некуда.": {"en":"The patient has no Uzbekistan phone number — there is nowhere to send the link.","ru":"У пациента нет номера телефона Узбекистана — отправить ссылку некуда.","uz":"Bemorda O‘zbekiston telefon raqami yo‘q — havolani yuborishga joy yo‘q."},
+  "Пациент уже подключён к боту.": {"en":"The patient is already connected to the bot.","ru":"Пациент уже подключён к боту.","uz":"Bemor allaqachon botga ulangan."},
+  "Ссылка этому пациенту уже отправлена в последние 10 минут.": {"en":"A link was already sent to this patient in the last 10 minutes.","ru":"Ссылка этому пациенту уже отправлена в последние 10 минут.","uz":"Bu bemorga havola so‘nggi 10 daqiqada allaqachon yuborilgan."},
+  // PATIENT_BOT_INVITE_V1 — карточка заявки CRM
+  "В Telegram-боте клиники": {"en":"In the clinic’s Telegram bot","ru":"В Telegram-боте клиники","uz":"Klinika Telegram-botida"},
+  "Отправить на этот номер ссылку на Telegram-бот клиники": {"en":"Send a link to the clinic’s Telegram bot to this number","ru":"Отправить на этот номер ссылку на Telegram-бот клиники","uz":"Bu raqamga klinika Telegram-botiga havola yuborish"},
+  "Карточка заявки недоступна вашей роли.": {"en":"The request card is not available to your role.","ru":"Карточка заявки недоступна вашей роли.","uz":"So‘rov kartasi sizning rolingiz uchun mavjud emas."},
+  "Этот номер уже подключён к боту.": {"en":"This number is already connected to the bot.","ru":"Этот номер уже подключён к боту.","uz":"Bu raqam allaqachon botga ulangan."},
+  "Ссылка на этот номер уже отправлена в последние 10 минут.": {"en":"A link was already sent to this number in the last 10 minutes.","ru":"Ссылка на этот номер уже отправлена в последние 10 минут.","uz":"Bu raqamga havola so‘nggi 10 daqiqada allaqachon yuborilgan."},
 };

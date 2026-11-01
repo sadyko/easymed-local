@@ -115,8 +115,10 @@ test('полоса вкладок: пять вкладок в порядке с�
   const buttons = tabButtons(root);
   assert.strictEqual(buttons.length, TABS.length);
   TABS.forEach((t, i) => assert.ok(textOf(buttons[i]).includes(t.label), 'вкладка ' + t.label));
-  assert.deepStrictEqual(TABS.map((t) => t.label), ['Представители', 'Врачи-источники', 'Внутренние врачи', 'Категории источников', 'Активность врачей', 'Telegram-бот']);
+  assert.deepStrictEqual(TABS.map((t) => t.label), ['Представители', 'Врачи-источники', 'Внутренние врачи', 'Категории источников', 'Активность врачей', 'Telegram-бот',
+    'Бот представителей']);   // REP_BOT_V1 — третий бот, последней вкладкой
   assert.strictEqual(TABS.find((t) => t.id === 'bot').adminOnly, true, 'токен бота — только администратору');
+  assert.strictEqual(TABS.find((t) => t.id === 'repbot').adminOnly, true, 'REP_BOT_V1 — токен бота представителей — тоже');
   assert.strictEqual(tabButtons(root)[0].attrs['aria-selected'], 'true');
   assert.strictEqual(panel(root, 'reps').style.display, '');
   assert.strictEqual(panel(root, 'activity').style.display, 'none');

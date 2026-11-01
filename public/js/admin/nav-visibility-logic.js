@@ -22,11 +22,15 @@ const ID_RE = /^[a-z][a-z0-9-]{0,40}$/;
 // монтирует оболочку при загрузке), поэтому список повторён здесь, и тест
 // nav-visibility-shell.test.mjs требует, чтобы он совпадал с NAV оболочки.
 export const NAV_IDS = Object.freeze([
+    'dashboard',   // NAV_DASHBOARD_TOP_V1 — над всеми группами меню
     'patients', 'consultation', 'queue', 'labs', 'procedures', 'admissions',
     'mar-nurse', 'kitchen-sheet', 'discharge', 'patient-documents',
-    'crm', 'referrals', 'telegram-chat', 'cashier-shifts', 'cashier-head', 'inventory', 'my-stock', 'my-department',
-    'settings',
-    'dashboard', 'reports-hub',
+    // CHATS_TO_COMMERCE_V1 — 'telegram-chat' и 'meta-chat' больше не пункты меню:
+    // они прячутся вместе с 'commerce' (PARENT_OF оболочки).
+    // REFERRALS_TO_COMMERCE_V1 — 'referrals' тоже ушёл на витрину.
+    'crm', 'cashier-shifts', 'cashier-head', 'inventory', 'my-stock', 'my-department',
+    'settings', 'commerce',
+    'reports-hub',
 ]);
 /** Что можно скрыть: пункты меню, кроме «Настроек». */
 export const HIDEABLE_IDS = Object.freeze(NAV_IDS.filter((id) => !NEVER_HIDDEN.includes(id)));

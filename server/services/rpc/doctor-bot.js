@@ -5,7 +5,7 @@
 import { isAdminUser } from '../grants.js';
 import { getMe, TelegramError } from '../telegram/api.js';
 import { publicSettings, saveSettings, clearToken, getDecryptedToken, recordCheck, SettingsError,
-         isPatientBot, SAME_BOT_MESSAGE } from '../doctor-bot/settings.js';   // FIX_318_V1 (M1)
+         clashMessage } from '../doctor-bot/settings.js';   // FIX_318_V1 (M1); REP_BOT_V1 — и бот представителей
 import { wakeDoctorBot } from '../doctor-bot/index.js';
 import { linkMatchesSource } from '../doctor-bot/notify.js';   // FIX_318_V1 (M2) — номер связки — номер врача
 
@@ -48,10 +48,11 @@ export async function doctorBotSettingsSave(db, args, user, deps = {}) {
     const me = await getMe(token, deps);
     // FIX_318_V1 (M1) — Telegram ответил тем же ботом, что пациентский:
     // токен не оставляем (иначе второй поллер того же бота), бот выключен.
-    if (isPatientBot(db, me && me.id)) {
+    const clash = clashMessage(db, me && me.id);
+    if (clash) {
       clearToken(db, uid);
       wakeDoctorBot();
-      throw new RpcError(SAME_BOT_MESSAGE, 400);
+      throw new RpcError(clash, 400);
     }
     let out = recordCheck(db, { ok: true, username: me.username, id: me.id });
     let autoEnabled = false;
@@ -81,11 +82,12 @@ export async function doctorBotTestConnection(db, _args, user, deps = {}) {
     const me = await getMe(token, deps);
     // FIX_318_V1 (M1) — пациентский бот стал этим же ботом: проверка не
     // проходит, бот для врачей выключается до замены токена.
-    if (isPatientBot(db, me && me.id)) {
-      recordCheck(db, { ok: false, error: SAME_BOT_MESSAGE });
+    const clash = clashMessage(db, me && me.id);
+    if (clash) {
+      recordCheck(db, { ok: false, error: clash });
       const off = saveSettings(db, { enabled: false }, user && user.id ? user.id : null);
       wakeDoctorBot();
-      return { ok: false, error: SAME_BOT_MESSAGE, settings: off };
+      return { ok: false, error: clash, settings: off };
     }
     return { ok: true, bot: me, settings: recordCheck(db, { ok: true, username: me.username, id: me.id }) };
   } catch (e) {

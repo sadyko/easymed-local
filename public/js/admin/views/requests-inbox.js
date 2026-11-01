@@ -33,8 +33,8 @@ const ACTIVE_SEL = 'id, patient_id, doctor_id, service_id, branch_id, room_id, v
 const HIST_SEL = ACTIVE_SEL;
 
 const OUTCOME = {
-    scheduled:   ['Записан',   'var(--primary-700, #115d5a)', 'var(--primary-50, #effaf8)'],
-    confirmed:   ['Подтверждён', 'var(--primary-700, #115d5a)', 'var(--primary-50, #effaf8)'],
+    scheduled:   ['Записан',   'var(--primary-700, #2a4a65)', 'var(--primary-50, #f0f4f8)'],
+    confirmed:   ['Подтверждён', 'var(--primary-700, #2a4a65)', 'var(--primary-50, #f0f4f8)'],
     arrived:     ['Пришёл',    'var(--ok-700, #047857)',      'var(--ok-50, #ecfdf5)'],
     in_progress: ['На приёме',  'var(--ok-700, #047857)',     'var(--ok-50, #ecfdf5)'],
     registered:  ['Принят',    'var(--ok-700, #047857)',      'var(--ok-50, #ecfdf5)'],
@@ -53,7 +53,7 @@ function toLocalInput(iso) { const d = iso && new Date(iso); return (d && !isNaN
 // Source / kind badge from the visit note (the gateway stamps the kind in RU).
 function kindOf(note) {
     const n = String(note || '');
-    if (/Лаборатор/i.test(n)) return { label: 'Лаборатория', color: 'var(--teal-2, #0e8c77)', bg: 'var(--primary-50, #effaf8)' };
+    if (/Лаборатор/i.test(n)) return { label: 'Лаборатория', color: 'var(--teal-2, #0e8c77)', bg: 'var(--primary-50, #f0f4f8)' };
     if (/Процедур/i.test(n))  return { label: 'Процедура',   color: '#6d28d9', bg: '#f5f3ff' };
     if (/Symptex/i.test(n))   return { label: 'Запись',      color: 'var(--info-700, #1d4ed8)', bg: 'var(--info-50, #eff6ff)' };
     return { label: 'Заявка', color: 'var(--ink-500, #55636d)', bg: 'var(--ink-50, #f3f5f7)' };
@@ -162,7 +162,7 @@ export async function renderRequestsInbox(container) {
     // ── Teal hero (matches the dashboard) ──────────────────────────────────────
     function hero() {
         return h('div', { style: {
-            background: 'linear-gradient(120deg, #0c3a39 0%, #115d5a 50%, #167873 100%)',
+            background: 'linear-gradient(120deg, #1a2e40 0%, #2a4a65 50%, #355c7d 100%)',
             borderRadius: '14px', padding: '20px 24px', color: 'white', position: 'relative', overflow: 'hidden',
         } },
             h('div', { style: { position: 'absolute', right: '-40px', top: '-40px', width: '220px', height: '220px', background: 'radial-gradient(circle, rgba(255,255,255,0.10) 0%, transparent 65%)' } }),
@@ -230,10 +230,10 @@ export async function renderRequestsInbox(container) {
         const patient = lk.pm[v.patient_id] || 'Пациент';
         const phone = lk.ph[v.patient_id] || '';
         return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' } },
-            h('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '36px', height: '36px', borderRadius: '10px', background: 'var(--primary-50, #effaf8)', fontWeight: 700, fontSize: '12.5px', color: 'var(--primary-700, #115d5a)', flex: 'none' } }, initials(patient)),
+            h('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '36px', height: '36px', borderRadius: '10px', background: 'var(--primary-50, #f0f4f8)', fontWeight: 700, fontSize: '12.5px', color: 'var(--primary-700, #2a4a65)', flex: 'none' } }, initials(patient)),
             h('div', { style: { minWidth: 0 } },
                 h('div', { style: { fontWeight: 700, fontSize: '15px', color: 'var(--ink-900, #0b1418)' } }, patient),
-                phone ? h('a', { href: 'tel:' + phone, style: { fontSize: '12.5px', color: 'var(--primary-600, #167873)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' } }, Icon('Phone', { size: 11 }), phone) : null),
+                phone ? h('a', { href: 'tel:' + phone, style: { fontSize: '12.5px', color: 'var(--primary-600, #355c7d)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' } }, Icon('Phone', { size: 11 }), phone) : null),
             h('span', { class: 'grow' }), rightBadges);
     }
     const pill = (label, fg, bg) => h('span', { style: { fontSize: '12.5px', fontWeight: 600, color: fg, background: bg, padding: '3px 10px', borderRadius: '999px', whiteSpace: 'nowrap' } }, label);

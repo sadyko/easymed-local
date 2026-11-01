@@ -26,14 +26,25 @@ export function botIdOfToken(token) {
   return m ? m[1] : '';
 }
 
-/** Номер пациентского бота: bot_id проверки связи, иначе — начало его токена; '' — бота нет. */
-export function patientBotId(db, { keyPath } = {}) {
+// REP_BOT_V1 — ботов у клиники три (пациентский, врачей, представителей), и
+// каждый должен быть отдельным: номер любого из них читается одинаково, из
+// своей строки настроек. Имя таблицы — только из этого списка, не из запроса.
+const BOT_TABLES = new Set(['telegram_settings', 'doctor_bot_settings', 'rep_bot_settings']);
+
+/** Номер бота из строки настроек table: bot_id проверки связи, иначе — начало его токена; '' — бота нет. */
+export function storedBotId(db, table, { keyPath } = {}) {
+  if (!BOT_TABLES.has(table)) throw new Error('unknown bot settings table: ' + table);
   let row;
-  try { row = db.prepare('SELECT bot_id, bot_token_enc FROM telegram_settings WHERE id = 1').get(); } catch { return ''; }
+  try { row = db.prepare(`SELECT bot_id, bot_token_enc FROM ${table} WHERE id = 1`).get(); } catch { return ''; }   // сборка без миграции — бота нет
   if (!row) return '';
   if (row.bot_id) return String(row.bot_id);
   if (!row.bot_token_enc) return '';
   try { return botIdOfToken(decryptToken(row.bot_token_enc, loadOrCreateKey(keyPath))); } catch { return ''; }
+}
+
+/** Номер пациентского бота: bot_id проверки связи, иначе — начало его токена; '' — бота нет. */
+export function patientBotId(db, opts = {}) {
+  return storedBotId(db, 'telegram_settings', opts);
 }
 
 /** Тот же бот, что пациентский? id — getMe().id или номер из токена. */
@@ -41,6 +52,24 @@ export function isPatientBot(db, id, opts = {}) {
   const mine = String(id == null ? '' : id).trim();
   if (!mine) return false;
   return mine === patientBotId(db, opts);
+}
+
+// REP_BOT_V1 — и не бот представителей: два поллера одного токена отнимают
+// друг у друга сообщения (409), как с пациентским (M1 выше).
+export const SAME_AS_REP_BOT_MESSAGE = 'Это токен бота для медпредставителей. Для врачей нужен ДРУГОЙ бот: создайте его в @BotFather (команда /newbot) и вставьте его токен.';
+
+/** Тот же бот, что бот представителей? */
+export function isRepBot(db, id, opts = {}) {
+  const mine = String(id == null ? '' : id).trim();
+  if (!mine) return false;
+  return mine === storedBotId(db, 'rep_bot_settings', opts);
+}
+
+/** Сообщение отказа, если id — номер другого бота клиники; '' — бот свой. */
+export function clashMessage(db, id, opts = {}) {
+  if (isPatientBot(db, id, opts)) return SAME_BOT_MESSAGE;
+  if (isRepBot(db, id, opts)) return SAME_AS_REP_BOT_MESSAGE;
+  return '';
 }
 
 export function readSettingsRow(db) {
@@ -82,7 +111,9 @@ export function saveSettings(db, args = {}, userId = null, { keyPath } = {}) {
       throw new SettingsError('Это не похоже на токен бота. Он выглядит как 1234567890:AA… — скопируйте его целиком из @BotFather.');
     }
     // FIX_318_V1 (M1) — тот же бот, что пациентский, узнаётся ещё до Telegram.
-    if (isPatientBot(db, botIdOfToken(token), { keyPath })) throw new SettingsError(SAME_BOT_MESSAGE);
+    // REP_BOT_V1 — и тот же, что бот представителей.
+    const clash = clashMessage(db, botIdOfToken(token), { keyPath });
+    if (clash) throw new SettingsError(clash);
     patch.bot_token_enc = encryptToken(token, loadOrCreateKey(keyPath));
     patch.bot_token_hint = tokenHint(token);
     patch.bot_username = ''; patch.bot_id = '';

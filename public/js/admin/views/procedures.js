@@ -27,7 +27,8 @@
 // ничьё, полный администратор — всё. Здание — своё (BRANCH_ORIGIN_V1), и у
 // палатных строк иначе не бывает: госпитализации между зданиями не ездят.
 import { supabase } from '../../supabase.js';
-import { h, Icon, PageHead, toast, clear, fmtDateTime } from '../ui.js';
+import { h, Icon, toast, clear, fmtDateTime } from '../ui.js';
+import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentUser } from '../data.js';
 import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor бывает 1, а не true
@@ -43,7 +44,8 @@ const state = { rows: [], filter: 'open', showAll: true, search: '', place: 'all
 
 export async function renderProcedures(container) {
     clear(container);
-    container.appendChild(PageHead({ title: tr('Процедуры'), subtitle: tr('Очередь процедур — процедурный кабинет и палаты') }));
+    // SECTION_HERO_V1 — шапка раздела — тёмный баннер (своих вкладок у раздела нет).
+    container.appendChild(sectionHero({ section: 'procedures', title: 'Процедуры', sub: 'Очередь процедур — процедурный кабинет и палаты' }).el);
     const body = h('div', { class: 'card', style: { padding: '0', overflow: 'hidden' } });
     container.appendChild(body);
     body.appendChild(h('div', { class: 'muted', style: { padding: '28px', textAlign: 'center' } }, tr('Загрузка…')));
@@ -359,21 +361,21 @@ function injectProcStyles() {
     s.textContent = `
 .modal-card.proc-done-card { width: 560px !important; max-width: calc(100vw - 32px) !important; height: auto !important; max-height: calc(100vh - 48px) !important; }
 .modal-card.proc-done-card > .modal-body { flex: 0 1 auto !important; }
-.proc-title-block { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--primary-50, #effaf8); border: 1px solid var(--primary-200, #b3e3dd); border-radius: 12px; }
-.proc-title-ic { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 11px; background: var(--primary-100, #d8f1ee); color: var(--primary-700, #115d5a); display: flex; align-items: center; justify-content: center; }
-.proc-title-label { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; color: var(--primary-600, #167873); }
+.proc-title-block { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--primary-50, #f0f4f8); border: 1px solid var(--primary-200, #b8cbdc); border-radius: 12px; }
+.proc-title-ic { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 11px; background: var(--primary-100, #dbe5ee); color: var(--primary-700, #2a4a65); display: flex; align-items: center; justify-content: center; }
+.proc-title-label { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; color: var(--primary-600, #355c7d); }
 .proc-title-name { font-size: 20px; font-weight: 700; color: var(--ink-900); line-height: 1.2; overflow-wrap: anywhere; }
 .proc-title-block.proc-title-in { background: var(--warn-50, #fffbeb); border-color: #fde9b6; }
 .proc-title-block.proc-title-in .proc-title-ic { background: #fdf0cd; color: var(--warn-800, #8a4309); }
 .proc-title-block.proc-title-in .proc-title-label { color: var(--warn-800, #8a4309); }
 .proc-pcard { display: flex; gap: 12px; align-items: center; padding: 12px 14px; background: var(--ink-25); border: 1px solid var(--ink-100); border-radius: 12px; }
-.proc-av { width: 42px; height: 42px; flex: 0 0 42px; border-radius: 50%; background: var(--primary-100, #d8f1ee); color: var(--primary-700, #115d5a); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; }
+.proc-av { width: 42px; height: 42px; flex: 0 0 42px; border-radius: 50%; background: var(--primary-100, #dbe5ee); color: var(--primary-700, #2a4a65); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; }
 .proc-sec { border: 1px solid var(--ink-100); border-radius: 12px; overflow: hidden; }
 .proc-sec-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--ink-100); background: var(--ink-25); }
 .proc-sec-head h4 { margin: 0; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-700); }
 .proc-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--primary-50); border: 1px solid var(--primary-200); border-radius: 9px; }
 .proc-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
-.proc-chip-out { background: var(--primary-50, #effaf8); color: var(--primary-700, #115d5a); border: 1px solid var(--primary-200, #b3e3dd); }
+.proc-chip-out { background: var(--primary-50, #f0f4f8); color: var(--primary-700, #2a4a65); border: 1px solid var(--primary-200, #b8cbdc); }
 .proc-chip-in  { background: var(--warn-50, #fffbeb); color: var(--warn-800, #8a4309); border: 1px solid #fde9b6; }
 .proc-row-in { box-shadow: inset 3px 0 0 var(--warn-500, #f59e0b); }
 `;

@@ -110,6 +110,7 @@ function trendFor(days) {
     };
 }
 let summary = SUMMARY;
+let overview = null;   // DASHBOARD_OVERVIEW_V1 — задаёт сам тест вкладки
 let trendFail = false;
 const rpcCalls = [];
 globalThis.fetch = async (url, opts) => {
@@ -119,6 +120,7 @@ globalThis.fetch = async (url, opts) => {
         const name = decodeURIComponent(u.slice('/api/rpc/'.length));
         rpcCalls.push({ name, args: body });
         if (name === 'dashboard_summary') return { ok: true, json: async () => ({ data: summary }) };
+        if (name === 'dashboard_overview') return { ok: true, json: async () => ({ data: overview }) };
         if (name === 'dashboard_trend') {
             if (trendFail) return { ok: false, status: 500, json: async () => ({ error: { message: 'boom' } }) };
             return { ok: true, json: async () => ({ data: trendFor(Number(body.days) || 14) }) };
@@ -142,186 +144,6 @@ async function screen() {
 }
 
 // ─── 1. Стационар на сводке ─────────────────────────────────────────────────
-test('плитки называют стационар: кто лежит, занятость коек, начислено', async () => {
-    const { root } = await screen();
-    const tiles = byClass(root, 'dash-kpi');
-    assert.strictEqual(tiles.length, 8, 'плиток: ' + tiles.length);
-    const tile = (label) => tiles.find((t) => textOf(t).includes(label));
-    const inBed = tile('В стационаре');
-    assert.ok(inBed, 'нет плитки «В стационаре»');
-    assert.ok(textOf(inBed).includes('7'), 'число лежащих не с сервера: ' + textOf(inBed));
-    assert.ok(textOf(inBed).includes('поступило 2') && textOf(inBed).includes('выписано 1'), textOf(inBed));
-    const beds = tile('Занято коек');
-    assert.ok(beds && textOf(beds).includes('58%') && textOf(beds).includes('7 из 12'), textOf(beds));
-    const accrued = tile('Начислено стационару');
-    assert.ok(accrued && textOf(accrued).includes('860 000'), textOf(accrued));
-    // Прежние плитки никуда не делись.
-    assert.ok(tile('Пациентов сегодня') && tile('Визитов сегодня') && tile('Принято сегодня') && tile('Долг') && tile('Анализы в работе'));
-    // И ни одного английского слова — сводка говорит на языке продукта.
-    assert.ok(!/Patients today|Visits today|Collected today|Outstanding/.test(textOf(root)), 'сводка снова по-английски');
-});
-
-test('плитка стационара ведёт в стационар, плитка коек — к койкам', async () => {
-    const { root, nav } = await screen();
-    byClass(root, 'dash-kpi').find((t) => textOf(t).includes('В стационаре')).click();
-    byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Занято коек')).click();
-    assert.deepStrictEqual(nav, ['admissions', 'beds']);
-});
-
-// ─── 2. Деньги по дням — площадь из двух рядов ──────────────────────────────
-test('деньги по дням — площадь из двух рядов с градиентом, легенда называет оба', async () => {
-    const { root } = await screen();
-    const card = byClass(root, 'card').find((c) => textOf(c).includes('Деньги по дням'));
-    assert.ok(card, 'нет карточки «Деньги по дням»');
-    const svg = svgs(card)[0];
-    assert.ok(svg, 'в карточке нет графика');
-    const grads = (svg._text.match(/<linearGradient/g) || []).length;
-    assert.strictEqual(grads, 2, 'градиентов: ' + grads + ' — ожидалось по одному на ряд');
-    assert.strictEqual((svg._text.match(/class="dc-line"/g) || []).length, 2, 'линий не две');
-    assert.ok(/<clipPath/.test(svg._text), 'нет маски раскрытия');
-    const legend = byClass(card, 'dash-legend')[0];
-    assert.ok(legend && textOf(legend).includes('Амбулаторно') && textOf(legend).includes('Стационар'), textOf(legend));
-    // Итог за период — в шапке карточки.
-    assert.ok(textOf(card).includes('1 234 567'), 'итога за период нет: ' + textOf(card));
-});
-
-test('подсказка под курсором называет день, оба ряда и итог', async () => {
-    const { root } = await screen();
-    const card = byClass(root, 'card').find((c) => textOf(c).includes('Деньги по дням'));
-    const chart = byClass(card, 'dash-chart')[0];
-    chart.getBoundingClientRect = () => ({ left: 0, width: 640, height: 220 });
-    const baseBefore = svgs(chart)[0];
-    assert.ok(/class="dc-reveal"/.test(baseBefore._text), 'основа не раскрывается на первом кадре');
-    chart.dispatch('mousemove', { clientX: 700 });   // за правым краем — прижимается к последнему дню
-    const tip = byClass(chart, 'dash-chart-tip')[0];
-    assert.ok(tip && !tip.hidden, 'подсказка не показалась');
-    const t = textOf(tip);
-    assert.ok(t.includes(shortDay(day(0))), 'подсказка не называет день: ' + t);
-    assert.ok(t.includes('Амбулаторно') && t.includes('Стационар') && t.includes('Всего'), t);
-    // DASH_HOVER_STILL_V1 — основа под курсором НЕ перерисовывается (тот же
-    // узел), а перекрестие и точки живут на своём слое сверху.
-    assert.strictEqual(svgs(chart)[0], baseBefore, 'наведение перерисовало основу — раскрытие запустилось заново');
-    const over = overlays(chart);
-    assert.strictEqual(over.length, 1, 'слоёв наведения: ' + over.length);
-    assert.ok(/<circle class="dc-dot"/.test(over[0]._text) && /<line class="dc-cross"/.test(over[0]._text), 'на слое наведения нет точек и перекрестия');
-    chart.dispatch('mousemove', { clientX: 300 });
-    assert.strictEqual(svgs(chart)[0], baseBefore, 'второе движение перерисовало основу');
-    chart.dispatch('mouseleave', {});
-    assert.ok(tip.hidden, 'подсказка не спряталась');
-    assert.strictEqual(overlays(chart).length, 0, 'слой наведения остался после ухода курсора');
-});
-
-// ─── 3. Период один на всё ──────────────────────────────────────────────────
-test('период по умолчанию — 14 дней; «30 дней» перечитывает ряды и запоминается', async () => {
-    const { root } = await screen();
-    const trend = rpcCalls.filter((c) => c.name === 'dashboard_trend');
-    assert.strictEqual(trend.length, 1);
-    assert.strictEqual(trend[0].args.days, 14);
-    findBtn(root, '30 дней').click();
-    await settle();
-    const after = rpcCalls.filter((c) => c.name === 'dashboard_trend');
-    assert.strictEqual(after[after.length - 1].args.days, 30, 'ряды не перечитаны на 30 дней');
-    assert.strictEqual(STORE['dash.days'], '30', 'период не запомнился');
-    const on = byClass(root, 'segmented')[0].children.find((b) => b.className === 'on');
-    assert.ok(on && textOf(on).includes('30'), 'подсвечен не тот период');
-});
-
-// ─── 4. Отделения под кольцом ───────────────────────────────────────────────
-test('карточка коек: кольцо занятости и строка на отделение', async () => {
-    const { root } = await screen();
-    const card = byClass(root, 'card').find((c) => textOf(c).includes('Койки'));
-    assert.ok(card, 'нет карточки «Койки»');
-    assert.ok(byClass(card, 'dash-ring').length === 1, 'кольца нет');
-    assert.ok(textOf(card).includes('58%'), textOf(card));
-    const wards = byClass(card, 'dash-ward');
-    assert.strictEqual(wards.length, 2);
-    assert.ok(textOf(wards[0]).includes('Терапия') && textOf(wards[0]).includes('5 / 8'), textOf(wards[0]));
-    assert.ok(textOf(wards[1]).includes('Хирургия') && textOf(wards[1]).includes('2 / 4'), textOf(wards[1]));
-});
-
-test('визиты и госпитализации — столбики, по группе на день', async () => {
-    const { root } = await screen();
-    const card = byClass(root, 'card').find((c) => textOf(c).includes('Визиты и госпитализации'));
-    assert.ok(card, 'нет карточки движения людей');
-    const svg = svgs(card)[0];
-    const bars = (svg._text.match(/<rect class="dc-bar"/g) || []).length;
-    assert.strictEqual(bars, 14 * 2, 'столбиков: ' + bars);
-    // Под курсором — полоса над группой на своём слое, столбики на месте.
-    const chart = byClass(card, 'dash-chart')[0];
-    chart.getBoundingClientRect = () => ({ left: 0, width: 640, height: 200 });
-    chart.dispatch('mousemove', { clientX: 60 });
-    assert.strictEqual(svgs(card)[0], svg, 'наведение перерисовало столбики');
-    assert.ok(/<rect class="dc-band"/.test(overlays(card)[0]._text), 'полосы над группой нет');
-});
-
-// ─── 5. Тревога о складе ────────────────────────────────────────────────────
-test('низкий остаток — полоса, и только когда он есть', async () => {
-    let { root } = await screen();
-    assert.strictEqual(byClass(root, 'dash-alert').length, 0, 'полоса тревоги при нулевом остатке');
-    summary = { ...SUMMARY, low_stock_count: 3 };
-    try {
-        ({ root } = await screen());
-        const alert = byClass(root, 'dash-alert')[0];
-        assert.ok(alert && textOf(alert).includes('3'), 'полосы тревоги нет');
-        assert.ok(findBtn(alert, 'Открыть склад'), 'нет пути на склад');
-    } finally { summary = SUMMARY; }
-});
-
-// ─── 6. Кегль графика ───────────────────────────────────────────────────────
-test('единственный кегль графиков — 12.5 px', async () => {
-    const { root } = await screen();
-    const all = svgs(root);
-    assert.ok(all.length >= 2, 'графиков меньше двух');
-    for (const s of all) {
-        for (const m of s._text.matchAll(/font-size="([\d.]+)"/g)) {
-            assert.strictEqual(m[1], '12.5', 'кегль ' + m[1] + ' на графике — не ступень шкалы');
-        }
-    }
-});
-
-// ─── 7. Графики отказали — плитки на месте ──────────────────────────────────
-test('ряды не загрузились — плитки сводки всё равно на экране', async () => {
-    trendFail = true;
-    try {
-        const { root } = await screen();
-        assert.strictEqual(byClass(root, 'dash-kpi').length, 8);
-        assert.ok(textOf(root).includes('Пациентов сегодня'));
-        assert.ok(textOf(root).includes('Нет данных'), 'пустой график не говорит словами');
-    } finally { trendFail = false; }
-});
-
-// ─── 8. Быстрые действия в карточках ────────────────────────────────────────
-test('у каждой карточки свои быстрые действия, и они ведут в разделы', async () => {
-    const { root, nav } = await screen();
-    const acts = byClass(root, 'dash-act');
-    assert.strictEqual(acts.length, 6, 'быстрых действий: ' + acts.length);
-    for (const a of acts) a.click();
-    assert.deepStrictEqual(nav, ['cashier-shifts', 'reports-hub', 'admissions', 'beds', 'queue', 'patients']);
-    // Действие стоит в шапке ТОЙ карточки, к которой относится.
-    const money = byClass(root, 'card').find((c) => textOf(c).includes('Деньги по дням'));
-    assert.ok(findBtn(money, 'Касса') && findBtn(money, 'Отчёты'), 'у денег нет кассы и отчётов');
-    const beds = byClass(root, 'card').find((c) => textOf(c).includes('Койки'));
-    assert.ok(findBtn(beds, 'Стационар'), 'у коек нет стационара');
-});
-
-// ─── 9. В один экран ────────────────────────────────────────────────────────
-test('сводка берёт высоту окна по месту, а графики — остаток карточки', async () => {
-    globalThis.window.innerHeight = 768;
-    const { root } = await screen();
-    const fit = byClass(root, 'dash-fit')[0];
-    assert.ok(fit, 'корень сводки не помечен под один экран');
-    fit.getBoundingClientRect = () => ({ top: 88 });
-    globalThis.window.dispatchResize && globalThis.window.dispatchResize();
-    // Высота ставится числом от окна; до измерения (поддельный DOM) — не ставится вовсе.
-    const charts = byClass(root, 'dash-chart');
-    assert.ok(charts.length >= 2);
-    for (const c of charts) {
-        assert.ok(String(c.className).includes('dash-chart-fill'), 'график с фиксированной высотой не займёт карточку');
-        assert.ok(!c.style.height, 'у графика прибита высота: ' + c.style.height);
-    }
-});
-
-// ─── чистая математика графика ──────────────────────────────────────────────
 test('верх шкалы — «красивое» число не ниже максимума', () => {
     assert.strictEqual(niceMax(0), 1);
     assert.strictEqual(niceMax(7), 10);
@@ -343,39 +165,124 @@ test('монотонная кривая проходит через точки �
 // Осмотр 2026-09-27: плитка «Долг» у медсестры вела в «Нет доступа», а деньги
 // сводки отдавались каждой роли. Теперь закрытый раздел — плитка без перехода,
 // а без права на выручку сервер денег не присылает и экран говорит почему.
-test('V3120_FIX: плитка закрытого роли раздела не нажимается; деньги без права — «нет доступа к выручке»', async () => {
-    const perms = await import('../permissions.js');
-    perms.setEffectiveFromRole({ name: 'Медсестра', permissions: { sections: ['dashboard', 'admissions'] } });
-    const prevSummary = summary;
-    summary = Object.assign({}, SUMMARY, { money_visible: false, collected_today: null, outstanding_amount: null,
-        outstanding_patient_amount: null, outstanding_patient_count: 3, outstanding_payer_amount: null });
+// DASHBOARD_OVERVIEW_V1 — ответ dashboard_overview для тестов вкладки обзора.
+function overviewData() {
+    return {
+        period: { days: 14, from: '2026-10-17', to: '2026-10-30', prev_from: '2026-10-03', prev_to: '2026-10-16' },
+        money_visible: true,
+        patients: { new: 40, new_prev: 20, visits: 120, visits_prev: 100, unique: 90, first: 80, repeat: 40, cancelled: 3,
+            ages: { child: 10, young: 50, middle: 20, senior: 10, unknown: 0 }, referrals: [{ name: 'Д-р Каримов', n: 7 }] },
+        directions: [{ name: 'Консультации', inpatient: false, n: 60, done: 50, sum: 6000000 },
+            { name: null, inpatient: true, n: 5, done: 5, sum: 3000000 }],
+        doctors: [{ id: 1, name: 'Врач Один', specialty: '', patients: 30, n: 45, done: 40, sum: 4500000 }],
+        services: [{ id: 1, name: 'Консультация', n: 60, sum: 6000000 }],
+        finance: { collected: 9000000, collected_prev: 7500000, refunds: 0, invoices: 100, avg_check: 90000, discounts: 0,
+            methods: [{ method: 'cash', sum: 6000000 }, { method: 'card', sum: 3000000 }],
+            debt_aging: { d7: { n: 1, sum: 100000 }, d30: { n: 0, sum: 0 }, older: { n: 2, sum: 500000 } },
+            shifts_closed: 10, shifts_off: 0, shortage: 0, surplus: 0, shifts_open: 0 },
+        crm: { leads: 50, leads_prev: 40, won: 10, won_prev: 8, lost: 5, open: 35, conversion: 20, conversion_prev: 20,
+            stages: [{ key: 'came', label: 'Пришёл', kind: 'won', color: 'ok', n: 10 }],
+            sources: [{ key: 'call', label: 'Звонок', n: 50, won: 10 }], operators: [{ id: 1, name: 'Оператор', n: 50, won: 10 }],
+            open_now: 35, unassigned_now: 0, tasks_overdue: 2, meta_leads: 0 },
+        calls: { incoming: 200, outgoing: 100, answered: 180, missed: 20, incoming_prev: 150, missed_prev: 10,
+            answer_rate: 90, answer_rate_prev: 93, avg_wait_sec: 12, talk_min: 600, not_called_back: 4 },
+        series: [{ date: '2026-10-30', leads: 3, calls_in: 15, missed: 2 }],
+        telegram: { subscribers: 300, blocked: 2, new_subscribers: 12, new_subscribers_prev: 10, messages_in: 40, replies: 30,
+            chats: 20, unread: 0, unread_chats: 0, docs_sent: 25, docs_failed: 0, broadcasts: 1, broadcast_sent: 290,
+            broadcast_failed: 0, deeplink_leads: 3 },
+        lab: { ordered: 80, verified: 70, avg_tat_hours: 5.5, results: 300, abnormal: 30, abnormal_pct: 10 },
+        inpatient: { admissions: 6, admissions_prev: 4, discharges: 5, avg_los_days: 4.2 },
+    };
+}
+test('DASHBOARD_OVERVIEW_V1: сводка — это обзор клиники: читает обзор за период', async () => {
+    overview = overviewData();
     try {
         const { root, nav } = await screen();
-        const tiles = byClass(root, 'dash-kpi');
-        const tile = (label) => tiles.find((t) => textOf(t).includes(label));
-        const debt = tile('Долг');
-        assert.ok(debt && debt.attrs.role !== 'button', 'плитка долга ведёт в закрытый раздел');
-        debt.click();
-        tile('Анализы в работе').click();
-        tile('В стационаре').click();
-        assert.deepStrictEqual(nav, ['admissions'], 'переходы только в открытые разделы: ' + nav.join(','));
-        assert.ok(textOf(tile('Принято сегодня')).includes('нет доступа к выручке'));
-        assert.ok(!textOf(root).includes('1 450 000'), 'деньги на экране без права');
-    } finally {
-        summary = prevSummary;
-        perms.setFullAccess();
-    }
+        await settle();
+        const calls = rpcCalls.filter((c) => c.name === 'dashboard_overview');
+        assert.strictEqual(calls.length, 1);
+        assert.strictEqual(calls[0].args.days, 1, 'сводка открывается на «Сегодня»');
+        const text = textOf(root);
+        for (const title of ['Финансы', 'Направления', 'Врачи', 'Популярные услуги', 'CRM — заявки', 'Телефония', 'Telegram-бот', 'Пациенты', 'Лаборатория и стационар']) {
+            assert.ok(text.includes(title), 'нет карточки «' + title + '»');
+        }
+        assert.ok(text.includes('+20% к прошлому периоду'), 'выручка без сравнения с прошлым периодом');
+        // Требует внимания: 4 номера без ответа, 2 просроченные задачи, долг старше 30 дней.
+        const attn = byClass(root, 'dho-attn-i');
+        assert.strictEqual(attn.length, 3, textOf(byClass(root, 'dho-attn')[0]));
+        attn[0].click();
+        assert.strictEqual(nav[nav.length - 1], 'crm', 'пропущенные звонки ведут не в CRM');
+    } finally { overview = null; }
 });
 
-test('V3120_FIX: долг пациентов отдельно от долга организаций', async () => {
-    const prevSummary = summary;
-    summary = Object.assign({}, SUMMARY, { money_visible: true, outstanding_amount: 1320000,
-        outstanding_patient_amount: 420000, outstanding_patient_count: 3, outstanding_payer_amount: 900000, outstanding_payer_count: 1 });
+test('DASHBOARD_OVERVIEW_V1: раздел без доступа (null) не рисуется, пустое внимание — «всё спокойно»', async () => {
+    const o = overviewData();
+    o.finance = null; o.crm = null; o.calls = null; o.telegram = null; o.money_visible = false;
+    overview = o;
     try {
         const { root } = await screen();
-        const debt = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Долг пациентов'));
-        assert.ok(debt, 'нет плитки «Долг пациентов»');
-        assert.ok(textOf(debt).includes('420 000'), textOf(debt));
-        assert.ok(textOf(debt).includes('организации должны 900 000'), textOf(debt));
-    } finally { summary = prevSummary; }
+        await settle();
+        const text = textOf(root);
+        for (const title of ['Финансы', 'CRM — заявки', 'Телефония', 'Telegram-бот']) {
+            assert.ok(!text.includes(title), 'карточка «' + title + '» нарисована без доступа');
+        }
+        assert.ok(text.includes('Всё спокойно — срочного нет'));
+    } finally { overview = null; }
+});
+
+// DASHBOARD_CEO_V1 — отделы для руководителя (dash-overview-depts.js).
+test('DASHBOARD_CEO_V1: маркетинг, колл-центр, амбулатория, стационар, процедуры, склад, направители — карточками; срочное — во «внимании»', async () => {
+    const o = overviewData();
+    o.marketing = {
+        meta: { leads: 12, leads_prev: 8, errors: 1, merged: 2, won: 4, patients: 4, campaigns: [{ name: 'Осень', n: 10, won: 4, patients: 4, revenue: 900000 }] },
+        sources: [{ key: 'instagram', label: 'Instagram', n: 15, won: 5, patients: 5, revenue: 1200000 }],
+        chat: { messages_in: 30, comments_in: 50, people: 60, answered: 40, requests: 55, missed: 2, median_ms: 1500000, leads: 3,
+            waiting_now: { messages: 1, comments: 4 }, channels: [{ key: 'messenger', incoming: 10, leads: 1 }, { key: 'instagram', incoming: 20, leads: 2 }] },
+        sms: { broadcasts: 1, sent: 100, failed: 0 },
+    };
+    o.callcenter = { operators: [{ name: '', ext: '103', incoming: 40, answered: 30, outgoing: 20, talk_min: 90, avg_wait_sec: 11 }],
+        missed_hours: Array.from({ length: 24 }, (_, hour) => ({ hour, missed: hour === 9 ? 5 : 0, incoming: hour === 9 ? 12 : 0 })),
+        leads_from_calls: 25, won_from_calls: 6 };
+    o.outpatient = { departments: [{ name: 'Терапия', visits: 30, patients: 25, no_show: 2, cancelled: 1 }],
+        weekdays: Array.from({ length: 7 }, (_, wd) => ({ wd, visits: wd })), services_per_visit: 1.8, revenue_per_visit: 250000, no_show: 2, cancelled: 1, no_show_rate: 6.3 };
+    o.inpatient_ext = { in_bed_now: 5, beds_total: 20, beds_busy: 5, occupancy: 25, wards: [{ name: '201', beds: 4, busy: 3 }, { name: '202', beds: 2, busy: 0 }],
+        emergency: 1, planned: 5, day_stay: 0, outcomes: { home: 4 }, bed_days: 30, revenue: 5000000, bed_revenue: 3000000,
+        discharge_debt: 200000, discharge_debt_n: 1, departments: [] };
+    o.procedures = { outpatient: 20, outpatient_done: 0, inpatient: 3, inpatient_done: 3, revenue: 800000, top: [{ name: 'Массаж', n: 12, sum: 600000 }] };
+    o.stock = { low_count: 2, zero_count: 1, low: [{ name: 'Перчатки', unit: 'пар', on_hand: 0, reorder_level: 20 }], received_orders: 1, received_sum: 400000, open_orders: 2, used_sum: 150000 };
+    o.referrers = { visits: 9, admissions: 1, new_sources_by_reps: 2, top: [{ name: 'Доктор Каримов', rep: 'Бобур', visits: 5, patients: 5, sum: 700000 }], reps: [{ name: 'Бобур', visits: 5, sources: 3 }] };
+    overview = o;
+    try {
+        const { root } = await screen();
+        await settle();
+        const text = textOf(root);
+        for (const title of ['Маркетинг и реклама', 'Колл-центр', 'Амбулатория', 'Стационар', 'Процедуры', 'Склад', 'Направители', 'Занято коек']) {
+            assert.ok(text.includes(title), 'нет «' + title + '»');
+        }
+        for (const s of ['Осень', 'Внутренний 103', 'Терапия', 'Перчатки', 'Доктор Каримов', '25 мин']) assert.ok(text.includes(s), s);
+        // Внимание: прежние три + переписка ждёт, 2 без ответа за сутки, 4 комментария, 1 ошибка Meta, 1 закончилось, 1 выписан с долгом.
+        assert.strictEqual(byClass(root, 'dho-attn-i').length, 9, textOf(byClass(root, 'dho-attn')[0]));
+    } finally { overview = null; }
+});
+
+// DASHBOARD_ONE_VIEW_V1 — владелец: «put today to date place and no need today
+// page, just obzor kliniki should show todays date».
+test('DASHBOARD_ONE_VIEW_V1: вкладок нет; «Сегодня» — первый период и по умолчанию; период перечитывает и запоминается', async () => {
+    overview = overviewData();
+    try {
+        const { root } = await screen();
+        assert.ok(!findBtn(root, 'Обзор клиники'), 'вкладка «Обзор клиники» осталась');
+        const periods = walk(root).filter((e) => e.attrs && e.attrs['data-dash-days']);
+        assert.deepStrictEqual(periods.map((e) => e.attrs['data-dash-days']), ['1', '7', '14', '30', '90']);
+        assert.ok(textOf(periods[0]).includes('Сегодня'));
+        assert.ok(String(periods[0].className).includes('on'), '«Сегодня» не выбран по умолчанию');
+        rpcCalls.length = 0;
+        findBtn(root, '30 дней').click();
+        await settle();
+        const calls = rpcCalls.filter((c) => c.name === 'dashboard_overview');
+        assert.strictEqual(calls.length, 1);
+        assert.strictEqual(calls[0].args.days, 30);
+        assert.strictEqual(STORE['dash.days'], '30', 'период не запомнился');
+        assert.ok(!rpcCalls.some((c) => c.name === 'dashboard_trend'), 'ряды вкладки «Сегодня» больше не читаются');
+    } finally { overview = null; }
 });

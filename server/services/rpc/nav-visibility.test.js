@@ -28,8 +28,11 @@ test('регистрация RPC; чтение — любому вошедшем
 test('сохранение — администратор (и дополнительной ролью тоже); список заменяется целиком и нормализуется', () => {
   const db = fresh();
   assert.throws(() => navVisibilitySave(db, { hidden: ['crm'] }, registrar), (e) => e.status === 403);
-  assert.deepEqual(navVisibilitySave(db, { hidden: ['telegram-chat', 'crm', 'crm'] }, doctorAdmin), { hidden: ['crm', 'telegram-chat'] });
-  assert.deepEqual(navVisibilityGet(db, {}, registrar), { hidden: ['crm', 'telegram-chat'] }, 'регистратор видит, что скрыто, — его меню от этого зависит');
+  // CHATS_TO_COMMERCE_V1 / REFERRALS_TO_COMMERCE_V1 — чаты и «Реферирование»
+  // больше не пункты меню (прячутся вместе с «Коммерческими инструментами»),
+  // поэтому второй пункт — «Старший кассир».
+  assert.deepEqual(navVisibilitySave(db, { hidden: ['crm', 'cashier-head', 'crm'] }, doctorAdmin), { hidden: ['cashier-head', 'crm'] });
+  assert.deepEqual(navVisibilityGet(db, {}, registrar), { hidden: ['cashier-head', 'crm'] }, 'регистратор видит, что скрыто, — его меню от этого зависит');
   assert.equal(db.prepare("SELECT hidden_by FROM nav_visibility WHERE nav_id = 'crm'").get().hidden_by, 3);
   assert.deepEqual(navVisibilitySave(db, { hidden: ['admissions'] }, admin), { hidden: ['admissions'] });
   assert.deepEqual(navVisibilityGet(db, {}, admin), { hidden: ['admissions'] }, 'прежние строки ушли — список заменён');

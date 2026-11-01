@@ -550,6 +550,9 @@ const READS_318 = [
   'referrals_representatives', 'referrals_internal', 'referrals_activity',
   'referrals_source_detail', 'referrals_doctor_detail',            // REFERRALS_CRM_V1 — только SELECT
   'doctor_bot_settings_get', 'doctor_bot_stats', 'doctor_bot_links_list',   // REFERRALS_CRM_V1 — бот врачей: чтения
+  'rep_bot_settings_get', 'rep_bot_stats', 'rep_bot_links_list', 'rep_bot_additions_list',   // REP_BOT_V1 — бот представителей: чтения
+  'clinic_news_list',                                              // CLINIC_NEWS_V1 — доска объявлений
+  'patient_bot_status', 'phone_bot_status',                        // PATIENT_BOT_INVITE_V1 — кто подключён к боту
   'meta_settings_get', 'meta_leads_recent',                        // META_LEADS_V1 — настройки без токена, журнал заявок
   'telephony_phone_me', 'telephony_call_log', 'telephony_extensions',       // CRM_PHONE_V1 — кто я, журнал, трубки станции
   'telephony_live',                                                // CALL_RING_V1 — живые звонки из памяти процесса
@@ -562,6 +565,10 @@ const LOCKED_READS_318 = ['telephony_recent_calls', 'telephony_dispositions'];
 const WRITES_318 = [
   'nav_visibility_save', 'referrals_assign_representative',
   'doctor_bot_settings_save', 'doctor_bot_token_clear', 'doctor_bot_test_connection', 'doctor_bot_link_revoke',
+  'rep_bot_settings_save', 'rep_bot_token_clear', 'rep_bot_test_connection',   // REP_BOT_V1
+  'clinic_news_save', 'clinic_news_archive',   // CLINIC_NEWS_V1
+  'patient_bot_invite', 'phone_bot_invite',   // PATIENT_BOT_INVITE_V1 — тратит SMS клиники
+  'rep_bot_link_confirm', 'rep_bot_link_reject', 'rep_bot_link_revoke',
   'meta_settings_save', 'meta_connect', 'meta_token_clear', 'meta_poll_now',
   'telegram_deeplink_save', 'telegram_deeplink_delete',
   'telephony_my_extension',

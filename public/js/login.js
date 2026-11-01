@@ -1,4 +1,10 @@
 import { api } from './api.js';
+import { mountLoginHero } from './shared/login-stage.js';
+
+// LOGIN_STAGE_V1 — витрина с кардиограммой слева: та же, что у входа внутри
+// admin.html. Страница по-русски, поэтому без перевода. Проверка на
+// querySelector — тест login-page-ru подставляет document только с getElementById.
+if (typeof document.querySelector === 'function') mountLoginHero(document.querySelector('.lg-stage'));
 
 const form = document.getElementById('login-form');
 const err = document.getElementById('login-error');

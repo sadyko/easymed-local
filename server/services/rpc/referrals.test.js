@@ -6,7 +6,7 @@ import { migrate } from '../../db/migrate.js';
 import { today } from '../domain/day.js';
 import {
   referralsRepresentatives, referralsAssignRepresentative, referralsInternal, referralsActivity,
-  referralsSourceDetail, referralsDoctorDetail, RpcError,
+  referralsSourceDetail, referralsDoctorDetail, referralsRepresentativeOptions, RpcError,
 } from './referrals.js';
 import { getRpc } from './index.js';
 
@@ -99,8 +99,10 @@ test('представители: только действующие medrep; а
 });
 
 test('закрепление: только право «Список источников: Изменение»; только действующий medrep; внутреннего врача не закрепить', () => {
-  const { db, B, internal } = fresh();
-  assert.throws(() => referralsAssignRepresentative(db, { source_id: B, user_id: 4 }, registrar), (e) => e.status === 403);
+  const { db, A, B, internal } = fresh();
+  // REFERRAL_REP_ON_CREATE_V1 — регистратор (право только СОЗДАВАТЬ источник) уже
+  // закреплённого врача не перезакрепляет; первое закрепление — см. тест ниже.
+  assert.throws(() => referralsAssignRepresentative(db, { source_id: A, user_id: 4 }, registrar), (e) => e.status === 403);
   assert.deepEqual(referralsAssignRepresentative(db, { source_id: B, user_id: 4 }, admin), { source_id: B, representative_id: 4 });
   assert.equal(db.prepare('SELECT representative_id FROM referral_sources WHERE id = ?').get(B).representative_id, 4);
   assert.throws(() => referralsAssignRepresentative(db, { source_id: B, user_id: 5 }, admin), (e) => e.status === 400, 'уволенный');
@@ -247,4 +249,29 @@ test('L4: сотрудник своей роли клиники «Медпред
   assert.deepEqual(out.representatives.map((r) => r.full_name).sort(), ['Представитель Клиники', 'Представитель Один']);
   assert.deepEqual(referralsAssignRepresentative(db, { source_id: B, user_id: 12 }, admin), { source_id: B, representative_id: 12 });
   assert.throws(() => referralsAssignRepresentative(db, { source_id: B, user_id: 2 }, admin), (e) => e.status === 400, 'регистратор — не представитель');
+});
+
+// REFERRAL_REP_ON_CREATE_V1 (2026-10-31) — владелец: «when referral doctor creates
+// it should be linked to medical representative … only medical rep can be chosen».
+test('REFERRAL_REP_ON_CREATE_V1: список для карточки — только действующие медпредставители, по праву заводить источник', () => {
+  const { db } = fresh();
+  assert.deepEqual(referralsRepresentativeOptions(db, {}, admin).representatives.map((r) => r.full_name), ['Представитель Один']);
+  assert.deepEqual(referralsRepresentativeOptions(db, {}, registrar).representatives.map((r) => r.id), [4], 'регистратор заводит источники — список ему открыт');
+  assert.throws(() => referralsRepresentativeOptions(db, {}, noCrm), (e) => e instanceof RpcError && e.status === 403);
+  assert.equal(typeof getRpc('referrals_representative_options'), 'function');
+});
+
+test('REFERRAL_REP_ON_CREATE_V1: кто создаёт источник, даёт ему ПЕРВОГО представителя; сменить и снять — только с правом изменения', () => {
+  const { db, B } = fresh();
+  assert.throws(() => referralsAssignRepresentative(db, { source_id: B, user_id: 2 }, registrar), (e) => e.status === 400, 'не медпредставитель — и регистратору нельзя');
+  assert.throws(() => referralsAssignRepresentative(db, { source_id: B, user_id: null }, registrar), (e) => e.status === 403, 'снять — не первое закрепление');
+  assert.deepEqual(referralsAssignRepresentative(db, { source_id: B, user_id: 4 }, registrar), { source_id: B, representative_id: 4 });
+  assert.throws(() => referralsAssignRepresentative(db, { source_id: B, user_id: 4 }, registrar), (e) => e.status === 403, 'второй раз — уже смена');
+  assert.throws(() => referralsAssignRepresentative(db, { source_id: B, user_id: 4 }, noCrm), (e) => e.status === 403, 'без права создавать источник');
+});
+
+test('REFERRAL_REP_ON_CREATE_V1: список медпредставителей читается и при просроченной лицензии', async () => {
+  const { isReadOnlyRpc } = await import('../control/gate.js');
+  assert.equal(isReadOnlyRpc('referrals_representative_options'), true);
+  assert.equal(isReadOnlyRpc('referrals_assign_representative'), false, 'закрепление — запись');
 });

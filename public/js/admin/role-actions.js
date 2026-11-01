@@ -51,6 +51,11 @@ export const MODULE_ACTIONS = {
         // laboratory.js: крестик у строки показателя в бланке результата.
         admin:  'Удаляет отдельный показатель из бланка результата',
     },
+    // META_INBOX_V1 — meta-chat.js canReply(): без уровня поле ответа не рисуется.
+    'meta-chat': {
+        open:   'Читает сообщения и комментарии Facebook и Instagram',
+        editor: 'Отвечает от имени клиники и скрывает комментарии',
+    },
     'telegram-chat': {
         open:   'Читает переписку с пациентами',
         // telegram-chat.js canReply(): без уровня поле ответа не рисуется вовсе.

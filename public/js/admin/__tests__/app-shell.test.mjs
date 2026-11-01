@@ -454,8 +454,15 @@ test('верхняя панель: заголовок раздела + пять 
 test('заголовок раздела называет экран и переводится', async () => {
     await go('patients');
     assert.equal(TITLE_EL.textContent, 'Пациенты', 'заголовок берётся из CRUMBS и переводится: ' + TITLE_EL.textContent);
+    // PATIENTS_HERO_TITLE_V1 — у «Пациентов» имя пишет баннер; в панели оно спрятано.
+    assert.equal(TITLE_EL.style.visibility, 'hidden', '«Пациенты» дважды: в панели и в баннере');
+    // SECTION_HERO_V1 — баннер получили все клинические разделы: и у них имя
+    // в панели спрятано, а на остальных экранах — видно.
     await go('labs');
     assert.equal(TITLE_EL.textContent, 'Лаборатория');
+    assert.equal(TITLE_EL.style.visibility, 'hidden', '«Лаборатория» дважды: в панели и в баннере');
+    await go('crm');
+    assert.equal(TITLE_EL.style.visibility, '', 'на других экранах имя в панели видно');
 
     // CRUMBS остаются несущими: isKnownView() читает их при загрузке.
     const js = read('public/js/admin.js');
@@ -466,15 +473,26 @@ test('заголовок раздела называет экран и пере�
 // ===========================================================================
 // 4. АКТИВНЫЙ ПУНКТ МЕНЮ — ЗАЛИТАЯ КНОПКА
 // ===========================================================================
-test('кнопки «+ Новый пациент» в меню нет, а создать пациента по-прежнему можно', async () => {
+// SIDEBAR_NEW_PATIENT_V1 (2026-10-31) — кнопка вернулась по снимку владельца
+// («new patient button there too»): новым классом .sidebar-new, МЕЖДУ шапкой и
+// пунктами (не внутри #sidebar-body), только тому, кому можно заводить карту,
+// и тем же окном, что «Создать пациента» в «Пациентах». Прежний .sidebar-cta
+// по-прежнему мёртв.
+test('«+ Новый пациент» в шапке меню — то же окно, тот же гейт; прежний .sidebar-cta мёртв', async () => {
     const js = read('public/js/admin.js');
-    assert.ok(!js.includes('sidebar-cta'), 'класс призывной кнопки остался в меню');
-    assert.ok(!js.includes("t('sidebar.newPatient'"), '«+ Новый пациент» всё ещё рисуется');
+    assert.ok(!js.includes('sidebar-cta'), 'вернулся прежний класс призывной кнопки');
     assert.ok(!read('public/css/admin.css').replace(/\/\*[\s\S]*?\*\//g, '').includes('.sidebar-cta'),
         'правила .sidebar-cta остались в admin.css');
-    assert.equal(descendants(SIDEBAR).find((n) => String(n.className).includes('sidebar-cta')), undefined);
+    assert.ok(/function renderSidebarNewPatient\(\)[\s\S]{0,400}canCreatePatient\(\)/.test(js),
+        'кнопка рисуется мимо гейта canCreatePatient — роль без права увидит дверь в отказ');
+    assert.ok(/onclick: \(\) => openPatientCreateModal\(/.test(js), 'кнопка открывает не окно заведения пациента');
+    assert.ok(js.includes("patient-create-modal.js?v=onewin1'") && read('public/js/admin/views/patients.js').includes("patient-create-modal.js?v=onewin1'"),
+        'адрес окна разошёлся с «Пациентами» — два экземпляра модуля');
+    assert.ok(/sidebarEl\.parentNode\.insertBefore\(btn, sidebarEl\)/.test(js),
+        'кнопка не между шапкой и пунктами — замер окна (fitSidebar) посчитает её пунктом');
+    assert.ok(read('public/css/admin.css').includes('.sidebar-new {'), 'у кнопки нет правил');
 
-    // ПУТЬ СОЗДАНИЯ ПАЦИЕНТА ЖИВ. Он не в меню — он в самом разделе.
+    // ПУТЬ СОЗДАНИЯ ПАЦИЕНТА В САМОМ РАЗДЕЛЕ ТОЖЕ ЖИВ.
     assert.ok(read('public/js/admin/views/patients.js').includes('Создать пациента'),
         'в «Пациентах» нет кнопки создания — продукт остался без способа завести пациента');
     // И сам маршрут никуда не делся: закладка и любой onNavigate его откроют.
@@ -602,7 +620,18 @@ test('движение описано токенами и полностью в�
 // ===========================================================================
 // 6. ПРИВЕТСТВИЙ БОЛЬШЕ НЕТ — А ИХ ОРГАНЫ УПРАВЛЕНИЯ ОСТАЛИСЬ
 // ===========================================================================
-test('ни одной приветственной строки в исходниках', () => {
+// PATIENTS_HERO_V1 (2026-10-31) — ОДНО ИСКЛЮЧЕНИЕ. Владелец вернул тёмный
+// баннер с приветствием разделу «Пациенты» («Make the registration block more
+// in this design», снимок прежней полосы). Решение NO_GREETING_V1 для всех
+// остальных экранов в силе, поэтому исключены ровно два файла: сам баннер и
+// словарь, где лежат его переводы. Приветствие в любом другом экране — всё
+// так же падение.
+// SECTION_HERO_V1 (2026-10-31) — владелец распространил баннер на все
+// клинические разделы («in clinical section put such thing in each»). Баннер
+// стал общим модулем, и приветствия с тёплыми строками живут ТОЛЬКО в нём:
+// экраны разделов зовут его, но сами не здороваются — правило для них то же.
+const GREETING_ALLOWED = new Set(['public/js/admin/views/section-hero.js', 'public/js/admin/i18n-strings.js']);
+test('ни одной приветственной строки в исходниках (кроме баннера «Пациентов»)', () => {
     const GREETINGS = ['Доброе утро', 'Добрый день', 'Добрый вечер',
         'Пациент — в центре всего', 'Каждый пациент — это история'];
     const files = [];
@@ -614,6 +643,7 @@ test('ни одной приветственной строки в исходн�
         }
     })(PUB);
     for (const f of files) {
+        if (GREETING_ALLOWED.has(path.relative(REPO, f).split(path.sep).join('/'))) continue;
         // Комментарии снимаем: решение «баннер убран, вот что в нём было»
         // ЦЕННО и должно остаться в коде. Ищем то, что попадёт на экран.
         const src = fs.readFileSync(f, 'utf8')
@@ -635,6 +665,15 @@ test('ни одной приветственной строки в исходн�
             assert.ok(!css.includes(dead), f + ': осталось правило ' + dead);
         }
     }
+    // PATIENTS_HERO_V1 — часы баннера «Пациентов» не повторяют старую мину:
+    // таймер свой, гаснет без баннера, снимается в destroy() и не держит процесс.
+    // SECTION_HERO_V1 — часы переехали в общий баннер клинических разделов.
+    const hub = read('public/js/admin/views/patients-hub.js');
+    const heroSrc = read('public/js/admin/views/section-hero.js');
+    assert.ok(!/let\s+_\w*[Tt]imer\s*=\s*null;\s*$/m.test(heroSrc.split('export function sectionHero')[0]), 'таймер часов снова модульный');
+    assert.ok(heroSrc.includes('if (!el.isConnected) { stop(); return; }'), 'часы не гаснут без баннера');
+    assert.ok(heroSrc.includes('timer.unref()'), 'часы держат процесс');
+    assert.ok(/destroy\(\)\s*\{\s*hero\.stop\(\)/.test(hub), 'destroy() не снимает часы');
 });
 
 test('три вкладки регистратуры пережили баннер — их наследует раздел «Пациенты»', async () => {
@@ -1183,10 +1222,13 @@ test('FIX_318_V1: короткое окно — группы без открыт
         // B6 — сумма счётчиков на заголовке свёрнутой группы.
         const ops = badgeOf('Операции');
         assert.ok(ops, 'у свёрнутых «Операций» нет бейджа — красные счётчики спрятаны');
-        assert.equal(labelOf(ops), '5', 'чат 3 + касса 2');
+        // CHATS_TO_COMMERCE_V1 — чат ушёл из «Операций» на «Коммерческие
+        // инструменты» (группа «Настройки»): здесь остаётся касса.
+        assert.equal(labelOf(ops), '2', 'касса 2');
         assert.ok(hasCls(ops, 'alert'), 'сумма красных счётчиков — красная');
         const upd = badgeOf('Настройки');
         assert.ok(upd && hasCls(upd, 'alert'), 'бейдж обновления ушёл в свёрнутые «Настройки»');
+        assert.equal(labelOf(upd), '4', 'обновление 1 + непрочитанные чаты 3 на «Коммерческих инструментах»');
         assert.equal(badgeOf('Аналитика'), null, 'у группы без счётчиков бейджа нет');
 
         // Группа открытого экрана раскрыта.

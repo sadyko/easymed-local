@@ -81,6 +81,8 @@ export const NAV_MODULES = [
         // открывает чтение переписки, «Редактирование» — ответ пациенту от
         // имени клиники.
         { key: 'telegram-chat', label: 'Чат с пациентами', desc: 'Переписка в Telegram-боте: читать (Просмотр) и отвечать (Редактирование)' },
+        // META_INBOX_V1 — Facebook и Instagram страницы клиники, те же два уровня.
+        { key: 'meta-chat', label: 'Чат Facebook и Instagram', desc: 'Сообщения и комментарии страницы клиники: читать (Просмотр), отвечать и скрывать комментарии (Редактирование)' },
         { key: 'referrals',    label: 'Реферирование', desc: 'Представители и внешние врачи, внутренние врачи-направители, активность; деньги — с правом «Отчёты → Рефералы», бот для врачей — администратору' },   // REFERRALS_NAV_V1
     ] },
     { group: 'Администрирование', items: [
@@ -1002,6 +1004,20 @@ export function isModuleAllowed(navId) {
     // ROLE_REPORTS_SETTINGS_V1 — хаб отчётов открыт, если видна хоть одна
     // группа отчётов; у ненастроенной роли это прежний ключ `reports-hub`.
     if (navId === 'reports-hub') return REPORT_GROUP_KEYS.some(reportGroupAllowed);
+    // COMMERCE_NAV_V1 + SMS_PUSH_V1 + COMMERCE_TOOLS_V1 — своего ключа у пункта
+    // нет: пункт — витрина инструментов, и он виден тому, кому открыт хоть один
+    // инструмент (commerce-hub.js TOOLS): Push-уведомление (commerce-push ниже)
+    // или ссылки для рекламы в Telegram (telegram-deeplinks ниже).
+    // CHATS_TO_COMMERCE_V1 — и чаты: они стоят на витрине первым блоком, и
+    // регистратор с одним лишь чатом не должен потерять к нему дорогу из меню.
+    if (navId === 'commerce') return isRouteAllowed('commerce-push') || isRouteAllowed('telegram-deeplinks')
+        || isRouteAllowed('telegram-chat') || isRouteAllowed('meta-chat')
+        || isRouteAllowed('referrals');   // REFERRALS_TO_COMMERCE_V1 — медпредставитель с одним «Реферированием»
+    // CLINIC_NEWS_V1 — доску («Информационная доска», #clinic-news) сюда НЕ
+    // добавлять: она открыта всем сотрудникам, и пункт стал бы виден каждой
+    // роли — а с ним и домашним экраном тем, у кого он первый доступный в
+    // меню (landingScreen), вместо дашборда. Карточка доски видна тем, кому
+    // виден пункт; адрес открывается всем.
     if (navId === 'settings') {
         // ROLE_REPORTS_SETTINGS_V1 — хаб открывает и выданная плитка настроек.
         if (grantLevel('settings') !== 'none' && SETTINGS_TILE_KEYS.some((k) => { const l = grantLevel(k); return l !== null && l !== 'none'; })) return true;
@@ -1159,6 +1175,12 @@ export function isRouteAllowed(view) {
     // ещё в ROLE_KEYS_V2 — на него маршрут и падал.
     if (view === 'doctor-room')       return isModuleAllowed('consultation');
     if (view === 'settings')          return isModuleAllowed('settings');
+    if (view === 'commerce')          return isModuleAllowed('commerce');   // COMMERCE_NAV_V1
+    // COMMERCE_TOOLS_V1 — Push-уведомление открыт тому, кто может отправить хоть
+    // по одному каналу: Telegram — «Telegram-бот: Изменение» (как
+    // telegram_broadcast_send), SMS — администратор (sms-settings ниже, rpc/sms.js).
+    // Следующий инструмент — своя строка здесь и своё «||» в правиле пункта.
+    if (view === 'commerce-push')     return settingsTileAllows('settings.telegram', 'edit') || isRouteAllowed('sms-settings');
     // REFERENCE_LISTS_V1 — «Справочники» (города, районы, специальности с
     // кодами) — только просмотр общих списков, встроенных в программу. Данных
     // клиники в них нет, а сервер отдаёт эти таблицы на чтение всем сотрудникам,
@@ -1198,6 +1220,10 @@ export function isRouteAllowed(view) {
     // (SETTINGS_ROUTE_TILE выше) или администратор; ненастроенной роли — нет.
     // Сервер (rpc/deeplinks.js) отказывает второй раз, независимо от этой строки.
     if (view === 'telegram-deeplinks') return false;
+    // SMS_INFORM_V1 — логин и пароль Play Mobile — право слать SMS от имени
+    // клиники за её деньги: только полный доступ, как у Телефонии. Сервер
+    // (rpc/sms.js) отказывает второй раз, независимо от этой строки.
+    if (view === 'sms-settings') return false;
     // TELEPHONY_V1 — то же правило, что у Telegram-бота строкой выше: ключ и
     // secret Binotel открывают журнал звонков всей клиники, настроенным ролям
     // тут делать нечего. Полный доступ (_effective === null) уже пропущен выше;
@@ -1300,6 +1326,10 @@ export function isRouteAllowed(view) {
     // решает, показывать ли ПУНКТ МЕНЮ (isModuleAllowed выше); адрес,
     // набранный руками, откроет пустой экран, а не чужой.
     if (view === 'my-stock') return true;
+    // CLINIC_NEWS_V1 — «Информационная доска» для всех сотрудников: объявление
+    // «аппарат не работает» нужно и регистратору, и врачу. Публикует только
+    // администратор — это проверяет сервер (rpc/clinic-news.js).
+    if (view === 'clinic-news') return true;
     // MY_STOCK_V1 — «Мой отдел» это карточка отдела под своим адресом: право
     // то же, что у «Отделов» (сервер отдаёт сотруднику только его отдел —
     // rpc/departments.js isOwn), а меню сверх того требует, чтобы отдел был.

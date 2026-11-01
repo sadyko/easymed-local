@@ -1,0 +1,12 @@
+-- CLINIC_NEWS_IMPORTANT_V1 (2026-10-31) — отметка «Важно» у объявления доски.
+--
+-- Владелец: «add important button where that will be yellow with important
+-- text». Это НЕ вид объявления (kind) и не «закрепить»: новость, приезжий врач
+-- или поломка аппарата одинаково бывают важными, а закреплённое — не обязательно
+-- важное. Поэтому отдельный флаг: экран красит такое объявление в жёлтый и
+-- пишет на нём «Важно», полоса у стойки — тоже (rpc/clinic-news.js,
+-- views/clinic-news.js, admin/clinic-news-strip.js).
+--
+-- Отдельной миграцией, а не правкой 266: та уже применена на сервере
+-- разработки, а migrate() выполняет файл один раз по имени.
+ALTER TABLE clinic_news ADD COLUMN important INTEGER NOT NULL DEFAULT 0;

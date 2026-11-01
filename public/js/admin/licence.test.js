@@ -123,7 +123,9 @@ test('exactly the gated routes are listed, named to match the real nav/route ids
   // TELEPHONY_V1 — 'telephony-settings' is a Settings route (no sidebar entry,
   // so no lock icon either), gated by the `callcenter` licence key: a real
   // screen exists behind it, unlike marketing's placeholder.
-  assert.deepEqual([...LICENSED_NAV_IDS].sort(), ['crm', 'telegram-chat', 'telephony-settings']);
+  // META_INBOX_V1 — 'meta-chat' (sidebar entry) is sold under the same `crm` key
+  // as the Meta lead poller: messages and comments, like leads, end up on the board.
+  assert.deepEqual([...LICENSED_NAV_IDS].sort(), ['crm', 'meta-chat', 'telegram-chat', 'telephony-settings']);
   // marketing is deliberately NOT here: it has no NAV entry and its route renders
   // a "coming soon" overlay, so offering to sell it would sell a placeholder.
   // Re-add it in the same commit that ships the real screen.

@@ -1,66 +1,52 @@
-// Dashboard — DASHBOARD_TREND_V1 (2026-09-11) — сводка клиники с графиками.
+// Dashboard — сводка клиники.
 //
-// Владелец: «create an appealing dashboard with graphs. add stationary
-// patients too into an account. use for design reference bklit.com …
-// area-chart and other components that fit».
+// DASHBOARD_ONE_VIEW_V1 (2026-10-31) — владелец, со снимком переключателей
+// «Сегодня | Обзор клиники» и «7 / 14 / 30 / 90 дней»: «put today to date
+// place and no need today page, just obzor kliniki should show todays date».
 //
-// ЧТО БЫЛО. Шесть плиток «сегодня» по-английски посреди русского продукта, без
-// единого «вчера» и без единого слова о стационаре: люди в койках и деньги,
-// которые они уже заработали клинике, на сводке не существовали.
+// Было две вкладки: «Сегодня» — взгляд в один экран (DASHBOARD_TREND_V1,
+// DASH_ONE_SCREEN_V1: плитки дня, деньги по дням, кольцо коек, движение
+// людей) и «Обзор клиники» — чтение для руководителя за период
+// (DASHBOARD_OVERVIEW_V1, DASHBOARD_CEO_V1: все отделы, сравнение с прошлым
+// периодом, «Требует внимания»). Две вкладки отвечали на один вопрос с разной
+// глубиной, и обзор уже умеет всё, что умела «Сегодня», и больше. Теперь
+// сводка — ОДИН экран, обзор, а «сегодня» стал периодом: первая кнопка ряда
+// «Сегодня · 7 дней · 14 дней · 30 дней · 90 дней», с неё сводка и
+// открывается. Сравнение у «Сегодня» — со вчерашним днём (сервер считает
+// прошлый период той же длины).
 //
-// ЧТО СТАЛО. Три слоя, сверху вниз — как их читают:
-//   1. ПЛИТКИ — восемь чисел на сегодня, стационар среди них равный:
-//      «В стационаре», «Занято коек», «Начислено стационару»;
-//   2. ДЕНЬГИ ПО ДНЯМ — площадь за период, стопкой: амбулатория снизу,
-//      стационар сверху, итог — верхняя кривая. Рядом — кольцо занятости коек
-//      и отделения;
-//   3. ДВИЖЕНИЕ ЛЮДЕЙ — визиты и поступления столбиками по дням.
-// Период (7 / 14 / 30 дней) один на все графики и помнится между заходами.
+// Чего не стало вместе со вкладкой «Сегодня»: площадь «деньги по дням» и
+// столбики визитов — их место заняли карточки обзора (финансы, амбулатория,
+// стационар с палатами). Серверный dashboard_trend больше ни один экран не
+// читает; он оставлен на сервере — удалять RPC отдельное решение.
 //
-// DASH_ONE_SCREEN_V1 (2026-09-11) — владелец: «make fit everything in to one
-// viewport so user won't scroll». Сводка — это ВЗГЛЯД, а не чтение: её
-// открывают, чтобы за секунду увидеть, как идёт день, и прокрутка эту секунду
-// съедает. Поэтому экран берёт ровно ту высоту, что осталась под шапкой
-// (меряется по месту при открытии и при изменении окна), плитки ужаты до
-// одного взгляда, а графики растягиваются на то, что осталось: на большом
-// мониторе они выше, на ноутбуке — ниже, но всё видно сразу.
-//
-// БЫСТРЫЕ ДЕЙСТВИЯ — в шапке каждой карточки, а не отдельным блоком: рядом с
-// деньгами — касса и отчёты, рядом с койками — стационар, рядом с движением
-// людей — очередь и пациенты. Действие стоит там, где на него смотрят.
-//
-// Числа считает СЕРВЕР (rpc/dashboard.js): здесь только раскладка. Каждый из
-// двух запросов отказывает отдельно: сводка без графиков лучше, чем ничего.
+// Числа считает СЕРВЕР (rpc/dashboard-overview.js и dashboard-overview-depts.js);
+// здесь шапка с периодом и загрузка. Раскладка обзора — dash-overview.js.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 // MOTION_REVEAL_V1 — тот же помощник появления, что у списка пациентов и
 // доски очереди (public/js/admin/motion.js): один словарь движения на всё.
 import { revealOn } from '../motion.js?v=mo1';
-import { areaChart, barChart, ringGauge, legend } from './dash-charts.js';
-// DASH_SHARED_V1 — плитка-число и «в один экран» общие с кабинетом врача.
-import { kpiTile, fitViewport } from './dash-kpi.js';
-// V3120_FIX — плитка ведёт только туда, куда роли можно: иначе щелчок по
-// «Долгу» у медсестры кончался панелью «Нет доступа».
+// V3120_FIX — карточка ведёт только туда, куда роли можно: иначе щелчок
+// кончался панелью «Нет доступа».
 import { isRouteAllowed } from '../permissions.js';
+import { renderOverview } from './dash-overview.js';
 
-const PERIODS = [7, 14, 30];
+/** 1 — «Сегодня»; первым и по умолчанию. */
+export const PERIODS = [1, 7, 14, 30, 90];
+const DEFAULT_DAYS = 1;
 const PERIOD_KEY = 'dash.days';
-/** Ниже этого сводка перестаёт ужиматься и начинает прокручиваться. */
-const MIN_FIT_H = 540;
-
-/** Цвета рядов — те же, что у слов «Амбулаторно» и «Стационар» в списках. */
-const CLINIC_COLOR = 'var(--primary-600)';
-const WARD_COLOR = 'var(--purple-500)';
 
 const refs = { container: null, onNavigate: null, wrap: null, body: null, periodWrap: null };
-const state = { days: readPeriod(), summary: null, trend: null };
+const state = { days: readPeriod(), summary: null, overview: null };
 
 function readPeriod() {
     try {
-        const v = Number(window.localStorage && window.localStorage.getItem(PERIOD_KEY));
-        return PERIODS.includes(v) ? v : 14;
-    } catch (e) { return 14; }
+        const raw = window.localStorage && window.localStorage.getItem(PERIOD_KEY);
+        const v = Number(raw);
+        return raw != null && PERIODS.includes(v) ? v : DEFAULT_DAYS;
+    } catch (e) { return DEFAULT_DAYS; }
 }
 function savePeriod(days) {
     try { window.localStorage && window.localStorage.setItem(PERIOD_KEY, String(days)); } catch (e) { /* без памяти — просто не запомним */ }
@@ -77,13 +63,9 @@ export async function renderDashboard(container, { onNavigate } = {}) {
 }
 
 const go = (view) => () => refs.onNavigate && refs.onNavigate(view);
-/** Переход в раздел — или null, если раздел этой роли закрыт (плитка не нажимается). */
-const goIf = (view) => (routeOpen(view) ? go(view) : null);
 function routeOpen(view) {
     try { return isRouteAllowed(view); } catch (e) { return true; }
 }
-/** V3120_FIX — деньги пришли? Сервер не присылает их без права на выручку. */
-const moneyShown = (d) => !d || d.money_visible !== false;
 
 // -----------------------------------------------------------------------------
 // MOUNT — шапка с периодом; fetchAndPaint() перерисовывает только тело.
@@ -92,7 +74,9 @@ function mount() {
     clear(refs.container);
     refs.periodWrap = h('div', { class: 'segmented', role: 'group', 'aria-label': tr('Период') });
     refs.body = h('div', { class: 'dash-body' });
-    refs.wrap = h('div', { class: 'fade-in dash-fit' },
+    // Обзор длиннее экрана: подгонка высоты снята (.dash-scroll), тело —
+    // обычная колонка.
+    refs.wrap = h('div', { class: 'fade-in dash-fit dash-scroll' },
         PageHead({
             title: 'Сводка',
             subtitle: todaySubtitle(),
@@ -106,9 +90,7 @@ function mount() {
     );
     refs.container.appendChild(refs.wrap);
     paintPeriod();
-    fitViewport(refs.wrap, { min: MIN_FIT_H });
 }
-
 
 function paintPeriod() {
     clear(refs.periodWrap);
@@ -117,6 +99,7 @@ function paintPeriod() {
             type: 'button',
             class: state.days === d ? 'on' : null,
             'aria-pressed': state.days === d ? 'true' : 'false',
+            'data-dash-days': String(d),
             onclick: () => {
                 if (state.days === d) return;
                 state.days = d;
@@ -124,7 +107,7 @@ function paintPeriod() {
                 paintPeriod();
                 fetchAndPaint();
             },
-        }, trf('{n} дней', { n: d })));
+        }, d === 1 ? tr('Сегодня') : trf('{n} дней', { n: d })));
     }
 }
 
@@ -141,28 +124,31 @@ function todaySubtitle() {
 // -----------------------------------------------------------------------------
 let lastFetchToken = 0;
 
+/** Обзор за период; сводка (dashboard_summary) нужна ради низкого остатка склада. */
 async function fetchAndPaint() {
     const token = ++lastFetchToken;
     setLoading();
     try {
-        const [sum, trend] = await Promise.all([
+        const [ov, sum] = await Promise.all([
+            supabase.rpc('dashboard_overview', { days: state.days }),
             supabase.rpc('dashboard_summary', {}),
-            supabase.rpc('dashboard_trend', { days: state.days }),
         ]);
         if (token !== lastFetchToken) return;   // a newer fetch already landed
-        if (sum.error) {
-            toast(trf('Не удалось загрузить сводку: {msg}', { msg: sum.error.message || sum.error }), 'fail');
+        if (ov.error) {
+            toast(trf('Не удалось загрузить обзор: {msg}', { msg: ov.error.message || ov.error }), 'fail');
             paintError();
             return;
         }
-        // Графики — отдельный запрос и отдельный отказ: плитки живут без них.
-        if (trend.error) toast(trf('Графики не загрузились: {msg}', { msg: trend.error.message || trend.error }), 'fail');
-        state.summary = sum.data || {};
-        state.trend = trend.error ? null : (trend.data || null);
-        paint();
+        state.overview = ov.data || null;
+        state.summary = sum.error ? state.summary : (sum.data || null);
+        if (!refs.body || !state.overview) return paintError();
+        clear(refs.body);
+        const view = renderOverview(state.overview, state.summary, { go, open: routeOpen });
+        refs.body.appendChild(view);
+        revealOn(view, '[data-reveal]');
     } catch (e) {
         if (token !== lastFetchToken) return;
-        toast(trf('Не удалось загрузить сводку: {msg}', { msg: (e && e.message) || e }), 'fail');
+        toast(trf('Не удалось загрузить обзор: {msg}', { msg: (e && e.message) || e }), 'fail');
         paintError();
     }
 }
@@ -178,212 +164,4 @@ function paintError() {
     clear(refs.body);
     refs.body.appendChild(h('div', { class: 'card', style: { padding: '22px' } },
         h('div', { class: 'empty' }, tr('Сводка не загрузилась.'))));
-}
-
-// -----------------------------------------------------------------------------
-// ЧИСЛА
-// -----------------------------------------------------------------------------
-// Thousands-separated price display, no currency symbol (e.g. 50000 -> "50 000").
-function fmtPrice(n) {
-    const v = Math.round(Number(n) || 0);
-    const sign = v < 0 ? '-' : '';
-    return sign + String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-}
-/** Подпись оси: 350 000 → «350 тыс.», 1 200 000 → «1,2 млн». */
-function fmtCompact(n) {
-    const v = Number(n) || 0;
-    const a = Math.abs(v);
-    const trim = (x) => String(Math.round(x * 10) / 10).replace('.', ',');
-    if (a >= 1e6) return trf('{n} млн', { n: trim(v / 1e6) });
-    if (a >= 1e3) return trf('{n} тыс.', { n: trim(v / 1e3) });
-    return String(Math.round(v));
-}
-const num = (v) => String(Number(v) || 0);
-
-
-// BUILDING_REPORTS_V1 — вторая строка плитки: из чего сложено число.
-//
-// Клиника из нескольких ЗДАНИЙ (отдельных установок, соединённых branch-sync'ом)
-// видела на плитках ОДНО число на два дома и читала его как число своего дома.
-// Разрез приходит вместе со сводкой (dashboard_summary.buildings) и печатается
-// под значением; клиника в одном здании его не видит вовсе — строка «Main
-// Branch: 100%» не сообщает ничего.
-function splitLine(d, key, fmt) {
-    const list = (d && d.buildings) || [];
-    if (list.length < 2) return null;
-    return list.map(b => b.label + ': ' + fmt(b[key])).join(' · ');
-}
-
-// -----------------------------------------------------------------------------
-// РАСКЛАДКА
-// -----------------------------------------------------------------------------
-function paint() {
-    if (!refs.body) return;
-    clear(refs.body);
-    const d = state.summary || {};
-    const t = state.trend;
-    const ip = (t && t.inpatient) || {};
-    const last = t && t.series && t.series.length ? t.series[t.series.length - 1] : null;
-
-    // 1. Плитки — восемь, стационар среди них.
-    const grid = h('div', { class: 'dash-kpi-row' });
-    grid.appendChild(kpiTile({ icon: 'Patients', accent: 'primary', label: 'Пациентов сегодня',
-        value: num(d.patients_today), split: splitLine(d, 'patients_today', num),
-        onClick: goIf('patients') }));
-    grid.appendChild(kpiTile({ icon: 'Calendar', accent: 'info', label: 'Визитов сегодня',
-        value: num(d.visits_today), split: splitLine(d, 'visits_today', num),
-        onClick: goIf('queue') }));
-    grid.appendChild(kpiTile({ icon: 'Bed', accent: 'ward', label: 'В стационаре',
-        value: num(ip.in_bed),
-        meta: t ? trf('поступило {a} · выписано {b}', { a: num(ip.admitted_today), b: num(ip.discharged_today) }) : null,
-        onClick: goIf('admissions') }));
-    grid.appendChild(kpiTile({ icon: 'Building', accent: 'ward', label: 'Занято коек',
-        value: t ? num(ip.occupancy) + '%' : '—',
-        meta: t ? trf('{busy} из {total}', { busy: num(ip.beds_busy), total: num(ip.beds_total) }) : null,
-        onClick: goIf('beds') }));
-    // V3120_FIX — деньги только тем, кому открыта выручка: сервер их не
-    // присылает, а плитка говорит почему, а не показывает «0».
-    const money = moneyShown(d);
-    const hidden = tr('нет доступа к выручке');
-    grid.appendChild(kpiTile({ icon: 'Coins', accent: 'ok', label: 'Принято сегодня',
-        value: money ? fmtPrice(d.collected_today) : '—',
-        meta: !money ? hidden : (last ? collectedMeta(last) : null),
-        split: money ? splitLine(d, 'collected_today', fmtPrice) : null,
-        onClick: money ? goIf('cashier-shifts') : null }));
-    // V3120_FIX — долг ПАЦИЕНТОВ (касса) отдельно от долга организаций
-    // (страховые, договоры): это разные разговоры и разные люди.
-    const patientDebt = d.outstanding_patient_amount != null ? d.outstanding_patient_amount : d.outstanding_amount;
-    const patientCount = d.outstanding_patient_count != null ? d.outstanding_patient_count : d.outstanding_count;
-    const payerDebt = Number(d.outstanding_payer_amount) || 0;
-    grid.appendChild(kpiTile({ icon: 'Receipt', accent: 'crit', label: 'Долг пациентов',
-        value: money ? fmtPrice(patientDebt) : '—',
-        meta: !money ? trf('счетов: {n}', { n: num(patientCount) })
-            : (payerDebt > 0
-                ? trf('счетов: {n} · организации должны {amount}', { n: num(patientCount), amount: fmtPrice(payerDebt) })
-                : trf('счетов: {n}', { n: num(patientCount) })),
-        split: money ? splitLine(d, 'outstanding_patient_amount', fmtPrice) : null,
-        onClick: money ? goIf('cashier-head') : null }));
-    grid.appendChild(kpiTile({ icon: 'Wallet', accent: 'ward', label: 'Начислено стационару',
-        value: t && moneyShown(t) ? fmtPrice(ip.accrued_unbilled) : '—',
-        meta: t && !moneyShown(t) ? hidden : tr('ещё не выставлено в счёт'),
-        onClick: goIf('admissions') }));
-    grid.appendChild(kpiTile({ icon: 'Flask', accent: 'info', label: 'Анализы в работе',
-        value: num(d.lab_pending_count),
-        split: splitLine(d, 'lab_pending_count', num),
-        onClick: goIf('labs') }));
-
-    const top = h('div', { class: 'dash-top' }, grid);
-    // Низкий остаток — тревога, а не число: плитка «0» не сообщает ничего, а
-    // ненулевая полоса — сообщает всё.
-    const low = Number(d.low_stock_count) || 0;
-    if (low > 0) {
-        top.appendChild(h('div', { class: 'dash-alert', role: 'status' },
-            Icon('Warning', { size: 16 }),
-            h('span', null, trf('Низкий остаток: {n}', { n: low })),
-            routeOpen('inventory') ? h('button', { class: 'btn btn-sm', type: 'button', onclick: go('inventory') },
-                tr('Открыть склад')) : null));
-    }
-    refs.body.appendChild(top);
-
-    // 2. Деньги по дням + койки.
-    refs.body.appendChild(h('div', { class: 'dash-grid' }, moneyCard(t), bedsCard(t)));
-    // 3. Движение людей.
-    refs.body.appendChild(flowCard(t));
-
-    // Плитки приподнимаются при входе в экран — наблюдатель один.
-    revealOn(grid, '[data-reveal]');
-    fitViewport(refs.wrap, { min: MIN_FIT_H });
-}
-
-
-const MONEY_KEYS = () => [
-    { key: 'clinic', label: tr('Амбулаторно'), color: CLINIC_COLOR },
-    { key: 'inpatient', label: tr('Стационар'), color: WARD_COLOR },
-];
-const FLOW_KEYS = () => [
-    { key: 'visits', label: tr('Визиты'), color: CLINIC_COLOR },
-    { key: 'admissions', label: tr('Госпитализации'), color: WARD_COLOR },
-];
-
-/**
- * «Принято сегодня» по частям. V3120_FIX — оплата с депозита относится к тому,
- * чем заплатили (стационар / амбулатория), а сам приход на депозит — «не
- * распределено», пока его не потратили.
- */
-function collectedMeta(last) {
-    const base = trf('амбулаторно {a} · стационар {b}', { a: fmtPrice(last.clinic), b: fmtPrice(last.inpatient) });
-    const un = Number(last.unassigned) || 0;
-    return un ? base + ' · ' + trf('не распределено {c}', { c: fmtPrice(un) }) : base;
-}
-
-/** Быстрое действие в шапке карточки: значок + слово, ведёт в раздел (если он открыт роли). */
-function action(label, icon, view) {
-    if (!routeOpen(view)) return null;
-    return h('button', { class: 'btn btn-ghost btn-sm dash-act', type: 'button', onclick: go(view) },
-        Icon(icon, { size: 13 }), ' ', tr(label));
-}
-
-function card(title, icon, right, actions, body) {
-    return h('div', { class: 'card dash-card', 'data-reveal': '' },
-        h('div', { class: 'card-header' },
-            h('h3', null, Icon(icon, { size: 16 }), ' ', tr(title)),
-            h('div', { class: 'dash-card-right' },
-                ...(right || []).filter(Boolean),
-                actions && actions.filter(Boolean).length ? h('div', { class: 'dash-card-acts' }, ...actions.filter(Boolean)) : null)),
-        h('div', { class: 'dash-card-body' }, body));
-}
-
-/** Деньги по дням: площадь стопкой, итог за период в шапке. */
-function moneyCard(t) {
-    const keys = MONEY_KEYS();
-    // V3120_FIX — без права на выручку карточка денег говорит, почему пуста.
-    if (t && !moneyShown(t)) {
-        return card('Деньги по дням', 'Coins', [], [],
-            h('div', { class: 'dash-chart-empty' }, tr('нет доступа к выручке')));
-    }
-    const total = t && t.totals ? t.totals.total : null;
-    const unassigned = t && t.totals ? Number(t.totals.unassigned) || 0 : 0;
-    return card('Деньги по дням', 'Coins', [
-        legend(keys),
-        total != null ? h('span', { class: 'dash-card-total', title: unassigned
-            ? trf('Всего за период (не распределено по депозитам: {c})', { c: fmtPrice(unassigned) })
-            : tr('Всего за период') }, fmtPrice(total)) : null,
-    ], [action('Касса', 'Coins', 'cashier-shifts'), action('Отчёты', 'Chart', 'reports-hub')],
-    areaChart({ series: (t && t.series) || [], keys, fmt: fmtPrice, fmtY: fmtCompact }));
-}
-
-/** Койки: кольцо занятости и отделения. */
-function bedsCard(t) {
-    const ip = (t && t.inpatient) || null;
-    const body = h('div', { class: 'dash-beds-body' });
-    if (!ip || !ip.beds_total) {
-        body.appendChild(h('div', { class: 'dash-chart-empty' }, tr('Коек нет')));
-    } else {
-        body.appendChild(h('div', { class: 'dash-beds' },
-            ringGauge({ value: ip.beds_busy, max: ip.beds_total, color: WARD_COLOR, label: tr('занято') }),
-            h('div', null,
-                h('div', { class: 'dash-beds-n' }, trf('{busy} из {total}', { busy: num(ip.beds_busy), total: num(ip.beds_total) })),
-                h('div', { class: 'dash-beds-s' }, trf('свободно {n}', { n: num(ip.beds_total - ip.beds_busy) })),
-                h('div', { class: 'dash-beds-s' }, trf('в койках {n}', { n: num(ip.in_bed) })))));
-        const wards = h('div', { class: 'dash-wards' });
-        for (const w of ip.wards || []) {
-            const pct = w.beds ? Math.round((w.busy / w.beds) * 100) : 0;
-            wards.appendChild(h('div', { class: 'dash-ward' },
-                h('span', { class: 'dash-ward-name' }, w.name || ''),
-                h('span', { class: 'dash-ward-bar', title: pct + '%' }, h('i', { style: { width: pct + '%' } })),
-                h('span', { class: 'dash-ward-n' }, num(w.busy) + ' / ' + num(w.beds))));
-        }
-        body.appendChild(wards);
-    }
-    return card('Койки', 'Bed', [
-        ip && ip.beds_total ? h('span', { class: 'dash-card-total' }, num(ip.occupancy) + '%') : null,
-    ], [action('Стационар', 'Bed', 'admissions'), action('Койки', 'Building', 'beds')], body);
-}
-
-/** Визиты и госпитализации по дням. */
-function flowCard(t) {
-    const keys = FLOW_KEYS();
-    return card('Визиты и госпитализации', 'Activity', [legend(keys)],
-        [action('Очередь', 'Clock', 'queue'), action('Пациенты', 'Patients', 'patients')],
-        barChart({ series: (t && t.series) || [], keys, fmt: num }));
 }

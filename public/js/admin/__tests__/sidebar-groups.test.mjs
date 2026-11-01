@@ -28,10 +28,13 @@ const MAIN_CSS = read('public/css/admin.css');
 function parseNav(src) {
     const groups = [];
     const re = /\{\s*section:\s*'([^']+)'([^}]*)\}|\{\s*id:\s*'([^']+)',\s*label:/g;
+    const top = [];   // NAV_DASHBOARD_TOP_V1 — пункты над всеми группами
     for (const m of src.matchAll(re)) {
         if (m[1]) groups.push({ section: m[1], fold: /\bfold:\s*true\b/.test(m[2]), ids: [] });
+        else if (!groups.length) top.push(m[3]);
         else groups[groups.length - 1].ids.push(m[3]);
     }
+    groups.top = top;
     return groups;
 }
 const GROUPS = parseNav(NAV_SRC);
@@ -45,10 +48,18 @@ const OWNER_ORDER = [
                            'mar-nurse', 'kitchen-sheet', 'discharge', 'patient-documents']],
     // REFERRALS_NAV_V1 (2026-10-26) — «Реферирование» своим пунктом сразу за CRM (владелец:
     // «it should be separate section in operation block»).
-    ['Operations', true,  ['crm', 'referrals', 'telegram-chat', 'cashier-shifts', 'cashier-head', 'inventory', 'my-stock', 'my-department']],
-    ['Settings',   true,  ['settings']],
-    ['Insights',   true,  ['dashboard', 'reports-hub']],
+    // CHATS_TO_COMMERCE_V1 (2026-10-31) — оба чата ушли на витрину «Коммерческие инструменты».
+    // REFERRALS_TO_COMMERCE_V1 — и «Реферирование» туда же.
+    ['Operations', true,  ['crm', 'cashier-shifts', 'cashier-head', 'inventory', 'my-stock', 'my-department']],
+    ['Settings',   true,  ['settings', 'commerce']],   // COMMERCE_NAV_V1
+    // NAV_DASHBOARD_TOP_V1 (2026-10-31) — «Дашборд» поднят над группами.
+    ['Insights',   true,  ['reports-hub']],
 ];
+
+test('«Дашборд» — первым пунктом меню, над всеми группами и отдельно от них', () => {
+    assert.deepEqual(GROUPS.top, ['dashboard']);
+    assert.ok(/\.nav-top\s*\{[^}]*border-bottom/.test(MAIN_CSS), 'блок над группами не отделён чертой');
+});
 
 test('разбор NAV не пустой (сломанный разбор не должен пройти за чистый)', () => {
     assert.ok(GROUPS.length >= 4, 'групп разобрано: ' + GROUPS.length);

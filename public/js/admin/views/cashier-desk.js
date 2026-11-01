@@ -855,10 +855,10 @@ const CHIPS = [
     { key: 'all',       label: 'ВСЕ СЧЕТА',  icon: 'Doc',      color: 'var(--ink-700)' },
     // DEPOSIT_V1 — предоплаты стоят рядом со счетами: касса принимает и то и
     // другое, и разводить их по разным экранам значит прятать половину работы.
-    { key: 'deposits',  label: 'ДЕПОЗИТЫ',   icon: 'Wallet',   color: 'var(--primary-700, #167873)' },
+    { key: 'deposits',  label: 'ДЕПОЗИТЫ',   icon: 'Wallet',   color: 'var(--primary-700, #355c7d)' },
     // CARD_SALE_V1 — продажа подарочных карт и сертификатов: касса продаёт их
     // за деньги (приход дня) и возвращает неизрасходованный остаток.
-    { key: 'cards',     label: 'КАРТЫ',      icon: 'Coins',    color: 'var(--primary-700, #167873)' },
+    { key: 'cards',     label: 'КАРТЫ',      icon: 'Coins',    color: 'var(--primary-700, #355c7d)' },
 ];
 
 function paintChips(el, onChange) {

@@ -5,7 +5,7 @@
 // getUpdates). Два бота — два поллера с разными токенами; общий у них только
 // клиент Bot API. Запускается из server/index.js рядом с пациентским.
 import { getUpdates, TelegramError } from '../telegram/api.js';
-import { getDecryptedToken, isPatientBot, botIdOfToken } from './settings.js';
+import { getDecryptedToken, clashMessage, botIdOfToken } from './settings.js';
 import { handleUpdate } from './flow.js';
 import { runNotifyScan } from './notify.js';
 
@@ -44,8 +44,9 @@ export function botConfig(db) {
   // FIX_318_V1 (M1) — токен пациентского бота (сохранён до проверки или
   // пациентский бот сменили на этот же): второй поллер того же токена отнимал
   // бы сообщения у пациентского — Telegram отвечает обоим 409. Не опрашиваем.
-  if (isPatientBot(db, botIdOfToken(token))) {
-    if (!samebotWarned) { samebotWarned = true; console.warn('[doctor-bot] token is the patient bot token — doctor bot not polling'); }
+  // REP_BOT_V1 — то же для токена бота представителей.
+  if (clashMessage(db, botIdOfToken(token))) {
+    if (!samebotWarned) { samebotWarned = true; console.warn('[doctor-bot] token belongs to another clinic bot — doctor bot not polling'); }
     return null;
   }
   samebotWarned = false;

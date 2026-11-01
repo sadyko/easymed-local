@@ -263,7 +263,10 @@ test('«Как считается зарплата», «Разбор напра�
 // PAY_ONE_SCREEN_V1 — владелец: «make everything fit into a one page».
 test('три списка живут в одной карточке «Последние» и переключаются, экран — один', async () => {
   const host = await openPay();
-  const recent = () => byClass(host, 'card').find((c) => textOf(c).includes('Последние'));
+  // CABINET_DASH_PAY_ONE_V1 — зарплата теперь под дашбордом на одной странице, а у
+  // дашборда своя карточка «Последние 14 дней»: ищем внутри зарплаты.
+  // Переключение перерисовывает страницу — корень зарплаты ищется заново.
+  const recent = () => byClass(byClass(host, 'pay-page')[0], 'card').find((c) => textOf(c).includes('Последние'));
   // По умолчанию — последние услуги: видна услуга «Приём».
   assert.ok(textOf(recent()).includes('Приём'), 'последние услуги не показаны: ' + textOf(recent()));
   buttonByText(recent(), /Последние направления/).click();
@@ -531,7 +534,8 @@ test('V3120_CLEANUP: корректировка и закрытый месяц �
     root = await openPay();
     buttonByText(root, /7 days|7 дней/).click();   // новый период — свежий ответ сервера
     await tick(80);
-    const card = byClass(root, 'card').find((c) => byClass(c, 'dash-act').length === 2);
+    // CABINET_DASH_PAY_ONE_V1 — внутри зарплаты: у дашборда над ней тоже есть карточка с двумя действиями.
+    const card = byClass(byClass(root, 'pay-page')[0], 'card').find((c) => byClass(c, 'dash-act').length === 2);
     assert.ok(card, 'нет карточки с разборами');
     byClass(card, 'dash-act')[0].click();
     await tick(40);

@@ -169,13 +169,25 @@ export function referralsAssignRepresentative(db, args, user) {
   // описан там правилом «пишет по праву», а новая строка карты разошлась бы с таблицей
   // стандартов миграции 230 (230.test.js сверяет их ключ в ключ) — так и вышло в полном
   // прогоне 2026-10-27, поэтому строка снята.
-  if (!tableWriteAllowed('referral_sources', 'update', user, db)) {
+  //
+  // REFERRAL_REP_ON_CREATE_V1 (2026-10-31) — владелец: «when referral doctor
+  // creates it should be linked to medical representative». Источник заводит и
+  // регистратура (реестр: insert — admin, registrar), а закреплять умел только
+  // тот, кому открыто ИЗМЕНЕНИЕ, — новый врач регистратуры оставался бы без
+  // представителя. Поэтому: кто вправе СОЗДАТЬ источник, вправе дать ему ПЕРВОГО
+  // представителя (у источника его ещё нет). Сменить или снять уже стоящего —
+  // по-прежнему только с правом изменения.
+  const canUpdate = tableWriteAllowed('referral_sources', 'update', user, db);
+  if (!canUpdate && !tableWriteAllowed('referral_sources', 'insert', user, db)) {
     throw new RpcError('Закреплять врача за представителем может роль с правом «Список источников: Изменение».', 403);
   }
   const sourceId = Number(args && args.source_id);
   if (!Number.isInteger(sourceId) || sourceId <= 0) throw new RpcError('Врач не выбран.', 400);
-  const src = db.prepare('SELECT id, doctor_id FROM referral_sources WHERE id = ?').get(sourceId);
+  const src = db.prepare('SELECT id, doctor_id, representative_id FROM referral_sources WHERE id = ?').get(sourceId);
   if (!src) throw new RpcError('Врач-источник не найден.', 404);
+  if (!canUpdate && src.representative_id != null) {
+    throw new RpcError('Закреплять врача за представителем может роль с правом «Список источников: Изменение».', 403);
+  }
   if (src.doctor_id != null) throw new RpcError('Врача клиники за представителем не закрепляют: представители ведут внешних врачей.', 400);
 
   let repId = null;
@@ -188,8 +200,27 @@ export function referralsAssignRepresentative(db, args, user) {
       : null;
     if (!rep) throw new RpcError('Этот сотрудник не медпредставитель: роль «Медпредставитель» выдаётся в «Настройки → Сотрудники».', 400);
   }
+  if (!canUpdate && repId == null) {
+    throw new RpcError('Закреплять врача за представителем может роль с правом «Список источников: Изменение».', 403);
+  }
   db.prepare("UPDATE referral_sources SET representative_id = ? WHERE id = ?").run(repId, sourceId);
   return { source_id: sourceId, representative_id: repId };
+}
+
+/**
+ * REFERRAL_REP_ON_CREATE_V1 — кого можно выбрать представителем в карточке
+ * источника: только действующие сотрудники с ролью «Медпредставитель» — тот же
+ * список, по которому referralsAssignRepresentative проверяет выбор. Отдельный
+ * лёгкий вызов, а не referrals_representatives: карточка открывается и из
+ * «Настроек», где раздела «Реферирование» у роли может не быть, и ей не нужны
+ * ни деньги, ни счётчики экрана. Дверь — та же, что у самой карточки: право
+ * создавать или изменять источник.
+ */
+export function referralsRepresentativeOptions(db, _args, user) {
+  if (!tableWriteAllowed('referral_sources', 'insert', user, db) && !tableWriteAllowed('referral_sources', 'update', user, db)) {
+    throw new RpcError('Список медпредставителей открыт тому, кто заводит врачей-источников.', 403);
+  }
+  return { representatives: listRepresentatives(db) };
 }
 
 // ---------------------------------------------------------------------------

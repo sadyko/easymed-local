@@ -383,11 +383,15 @@ test('одна шапка на все режимы: заголовок, рядо
     // where the panels mode used to drift it to).
     // LAB_TABS_SYSTEM_V1 — вкладки стоят ПОД шапкой отдельной строкой, как в
     // кабинете врача, в ОБОИХ режимах — не в правом блоке действий шапки.
+    // SECTION_HERO_V1 (2026-10-31) — владелец: кнопки раздела — в тёмном
+    // баннере клинических разделов, слева («inside of it but in the left
+    // side»). Вкладки стоят в баннере, а шапка с подзаголовком и действиями —
+    // под ним.
+    const hero = walk(root).find((n) => n.attrs && n.attrs['data-section-hero'] === 'labs');
+    assert.ok(hero, name + ': баннер раздела есть');
+    assert.ok(walk(hero).includes(sw), name + ': вкладки — в баннере');
     const head = walk(root).find((n) => hasClass(n, 'page-head'));
-    const swParent = parentOf(root, sw);
-    assert.ok(swParent && swParent.children.includes(head)
-      && swParent.children.indexOf(sw) === swParent.children.indexOf(head) + 1,
-      name + ': вкладки сразу под шапкой');
+    assert.ok(!walk(hero).includes(head), name + ': шапка с действиями — под баннером, не в нём');
     const actions = walk(root).find((n) => hasClass(n, 'page-head-actions'));
     assert.ok(!actions || !walk(actions).includes(sw), name + ': и НЕ в блоке действий справа');
 
@@ -567,7 +571,11 @@ test('статистика по-узбекски: экран целиком бе
     const root = mk('div');
     await renderLaboratory(root, { payload: { sub: 'stats' } });
     await tick();
-    const text = textOf(root);
+    // SECTION_HERO_V1 — приветствие баннера называет сотрудника по имени, а имя —
+    // данные, не надпись: тестовый сотрудник записан кириллицей. Из проверки
+    // вынимается только имя («…, Лаборант!» → «…!»), сам привет — проверяется.
+    const hello = walk(root).find((n) => hasClass(n, 'phub-hero-hello'));
+    const text = hello ? textOf(root).replace(textOf(hello), textOf(hello).replace(/,\s*[^!]*!/, '!')) : textOf(root);
     assert.ok(text.includes('Buyurtma qilingan'), 'подпись колонки переведена целиком: ' + text.slice(0, 300));
     assert.ok(text.includes('Bajarildi'), 'вторая подпись переведена');
     const wrap = walk(root).find((n) => n.attrs['aria-label'] === 'Davr');

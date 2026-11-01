@@ -182,7 +182,7 @@ function consultationModal(visit, root) {
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' } },
-                h('span', { style: { width: '34px', height: '34px', borderRadius: '50%', background: 'var(--primary-600, #1f7a72)', color: '#fff', fontSize: '12.5px', fontWeight: 700, display: 'grid', placeItems: 'center' } }, initials(p.full_name || '?')),
+                h('span', { style: { width: '34px', height: '34px', borderRadius: '7px', background: 'var(--primary-600)', color: '#fff', fontSize: '12.5px', fontWeight: 700, display: 'grid', placeItems: 'center' } }, initials(p.full_name || '?')),
                 h('div', null, h('div', { style: { fontWeight: 700 } }, p.full_name || '—'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, (p.mrn ? p.mrn + ' · ' : '') + fmtDateTime(visit.visit_date))),
             ),
             statusWrap,

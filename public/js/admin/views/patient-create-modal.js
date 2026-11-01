@@ -102,7 +102,8 @@ export const LAYOUT = Object.freeze({
     // Колонок больше нет, поэтому высоты складываются, а не берутся по
     // максимуму. Фото стоит СБОКУ от рядов первого раздела и его высоты не
     // добавляет — плитка растянута ровно по ним (.pc-id-photo в admin.css).
-    s1: Object.freeze(['last/first/middle', 'dob/age/sex', 'phone/phone2/email']),
+    // PATIENT_LEAD_SOURCE_V1 — четвёртый ряд: «Откуда узнали о нас».
+    s1: Object.freeze(['last/first/middle', 'dob/age/sex', 'phone/phone2/email', 'source']),
     s2: Object.freeze(['residency/lang', 'pinfl/document/citizenship', 'category/behaviour']),
     s3: Object.freeze(['country/region/district', 'mahalla/street']),
     // PATIENT_FORM_ONE_V1 (2026-09-14) — четвёртый раздел: то, что раньше было
@@ -124,8 +125,19 @@ function sectionH(rows, { titled = true, extraRows = [] } = {}) {
 export function headHeight() { return METRICS.headPadV * 2 + METRICS.headRowH + METRICS.border; }
 export function footHeight() { return METRICS.footPadV * 2 + METRICS.footRowH + METRICS.border; }
 
-/** Высота всего содержимого окна: прятать в нём больше нечего. */
+// PATIENT_SECTIONS_FOLDED_V1 — свёрнутый раздел: одна строка заголовка.
+export function foldedSectionH() { return METRICS.sectionPadV * 2 + METRICS.sectionTitleH + METRICS.border; }
+
+/** Высота окна, каким его видят при открытии: разделы 2–4 свёрнуты. */
 export function firstScreenHeight() {
+    const search = sectionH(LAYOUT.search.rows, { titled: false });
+    return headHeight() + search
+        + sectionH(LAYOUT.s1.length) + foldedSectionH() * 3
+        + footHeight();
+}
+
+/** Высота окна со ВСЕМИ развёрнутыми разделами — тело прокручивается. */
+export function fullHeight() {
     const search = sectionH(LAYOUT.search.rows, { titled: false });
     return headHeight() + search
         + sectionH(LAYOUT.s1.length) + sectionH(LAYOUT.s2.length) + sectionH(LAYOUT.s3.length)
@@ -311,6 +323,7 @@ export function buildPatientFields(container, {
     // запросом, и экрану, показывающему одни личные данные, этот запрос не
     // нужен вовсе — как и скрытое поле, которого на нём нет.
     const categorySel = needs('documents') ? categorySelect(editing ? patient.category_id : null) : null;
+    const leadSourceSel = has('personal') ? leadSourceSelect(pv('lead_source')) : null;   // PATIENT_LEAD_SOURCE_V1
     if (editing) { const age = computeAge(dobInput.value); ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age); }
     dobInput.addEventListener('input', () => {
         const age = computeAge(dobInput.value);
@@ -459,6 +472,15 @@ export function buildPatientFields(container, {
                     field('Доп. номер телефона', regPhone('phone_secondary', phoneInput('phone_secondary', '+998 90 000 00 00', { value: pv('phone_secondary') }))),
                     field('Email', reg('email', h('input', { name: 'email', placeholder: 'name@example.com', value: pv('email') }))),
                 ),
+                // PATIENT_LEAD_SOURCE_V1 — откуда узнали о клинике. Обязательно
+                // при заведении (владелец: «as a important»), необязательно при
+                // правке: у прежних карт его нет, и правка телефона не должна
+                // упираться в вопрос, ответа на который уже никто не помнит.
+                mgGrid(3,
+                    field(editing ? 'Откуда узнали о нас' : ['Откуда узнали о нас ', req()], reg('lead_source', leadSourceSel)),
+                    h('div', { class: 'muted pc-source-hint', style: { gridColumn: 'span 2', alignSelf: 'end', fontSize: '12.5px', paddingBottom: '8px' } },
+                        tr('Список — «Источники» в настройках CRM. Пациент без рекламы и рекомендации — «Пришёл сам».')),
+                ),
             ),
         ),
     ], { step: 1 }));
@@ -491,7 +513,7 @@ export function buildPatientFields(container, {
                     placeholder: 'напр. Грубил регистратуре; приходил в нетрезвом виде.',
                 }, pv('behavior_note'))), 2),
         ),
-    ], { step: 2 }));
+    ], { step: 2, folded: true }));
 
     // ── Раздел 3: контакты и адрес ─────────────────────────────────────────
     if (has('contacts')) {
@@ -508,7 +530,7 @@ export function buildPatientFields(container, {
                 field('Махалля', reg('mahalla', h('input', { name: 'mahalla', placeholder: 'Юнусабад-3', value: pv('mahalla') }))),
                 field('Улица, дом, квартира', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47', value: pv('address') })), 2),
             ),
-        ], { step: 3 }));
+        ], { step: 3, folded: true }));
         if (editing) geo.preset({ country: patient.country, region: patient.region, district: patient.district });
     }
 
@@ -530,7 +552,7 @@ export function buildPatientFields(container, {
                 field('Экстренный контакт — имя', reg('emergency_contact_name', h('input', { name: 'emergency_contact_name', placeholder: 'напр. Каримов Рустам, супруг', value: pv('emergency_contact_name') }))),
                 field('Экстренный контакт — телефон', regPhone('emergency_contact_phone', phoneInput('emergency_contact_phone', '+998 90 000 00 00', { value: pv('emergency_contact_phone') }))),
             ),
-        ], { step: 4 }));
+        ], { step: 4, folded: true }));
     }
 
     // ---- Сбор и сохранение ---------------------------------------------------
@@ -573,6 +595,17 @@ export function buildPatientFields(container, {
         if (!payload.gender) {
             toast('Укажите пол — от него зависят нормы анализов и печатные бланки.', 'fail');
             return null;
+        }
+        // PATIENT_LEAD_SOURCE_V1 — пусто уходит NULL, а не '': «не спросили» ≠
+        // источник с пустым ключом. Обязательно только при заведении и только
+        // когда список приехал: без справочника выбрать нечего, и отказ
+        // остановил бы регистратуру из-за сбоя, в котором она не виновата.
+        if ('lead_source' in payload) {
+            if (!payload.lead_source) payload.lead_source = null;
+            if (!editing && !payload.lead_source && leadSourceSel && leadSourceSel.loadedOptions > 0) {
+                toast('Укажите, откуда пациент узнал о клинике.', 'fail');
+                return null;
+            }
         }
         return payload;
     }
@@ -835,19 +868,43 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null }
 // ===========================================================================
 // Строительные блоки окна
 // ===========================================================================
-function mgSection(title, children, { spanFull = false, icon = null, step = null } = {}) {
+function mgSection(title, children, { spanFull = false, icon = null, step = null, folded = null } = {}) {
     // PATIENT_FORM_REWRITE_V1 — у раздела НОМЕР. Заведение пациента — это
     // последовательность («сначала кто, потом документы, потом где живёт»), и
     // номер говорит об этом прямо, а значок только украшал. Кружок нарисован
     // в 22 px внутри строки заголовка и высоты ей не добавляет: на этой высоте
     // держится модель окна.
-    return h('div', { class: 'mg-section' + (spanFull ? ' span-full' : '') },
-        title ? h('h3', { class: step != null ? 'has-step' : (icon ? 'has-ic' : null) },
-            step != null ? h('span', { class: 'mg-step' }, String(step))
-                         : (icon ? Icon(icon, { size: 13 }) : null),
-            tr(title)) : null,
-        ...children,
-    );
+    //
+    // PATIENT_SECTIONS_FOLDED_V1 (2026-10-31, владелец со снимком разделов 2–4:
+    // «make these 3 folded»). `folded` — раздел сворачивается по щелчку на
+    // заголовке и открывается свёрнутым. Поля свёрнутого раздела остаются в
+    // реестре и сохраняются как есть — свёрнуто лишь видимое (CSS .is-folded),
+    // поэтому набранное и значения карты при правке не теряются.
+    const foldable = folded != null;
+    const baseCls = 'mg-section' + (spanFull ? ' span-full' : '') + (foldable ? ' mg-foldable' : '');
+    const sec = h('div', { class: baseCls + (folded ? ' is-folded' : '') });
+    let open = !folded;
+    const head = title ? h('h3', { class: step != null ? 'has-step' : (icon ? 'has-ic' : null) },
+        step != null ? h('span', { class: 'mg-step' }, String(step))
+                     : (icon ? Icon(icon, { size: 13 }) : null),
+        tr(title),
+        foldable ? h('span', { class: 'mg-fold-ic' }, Icon('ChevronDown', { size: 14 })) : null) : null;
+    if (head && foldable) {
+        const toggle = () => {
+            open = !open;
+            sec.className = baseCls + (open ? '' : ' is-folded');
+            head.setAttribute('aria-expanded', String(open));
+        };
+        head.setAttribute('role', 'button');
+        head.setAttribute('tabindex', '0');
+        head.setAttribute('aria-expanded', String(open));
+        head.setAttribute('data-fold-toggle', String(step != null ? step : ''));
+        head.addEventListener('click', toggle);
+        head.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    }
+    if (head) sec.appendChild(head);
+    for (const c of children) if (c) sec.appendChild(c);
+    return sec;
 }
 function mgGrid(cols, ...children) {
     return h('div', { class: 'mg-grid cols-' + cols }, ...children);
@@ -962,6 +1019,32 @@ export function computeAge(iso) {
 // Теперь поле называет `category_id` (миграция 107 завела и колонку, и ссылку),
 // а варианты приезжают из справочника «Категории пациентов» — того самого, где
 // администратор задаёт скидку группы.
+// PATIENT_LEAD_SOURCE_V1 — «Откуда узнали о нас»: тот же справочник источников,
+// что у заявок CRM («Настройки → CRM → Источники»: Instagram, «Пришёл сам»,
+// «Рекомендация»…), чтобы каналы клиника считала одним списком. Читается
+// crm_config_get — он открыт любому сотруднику и разрешён даже клинике с
+// истёкшей лицензией (gate.js READ_ONLY_RPCS). Архивный источник в списке не
+// предлагается, но у карты, где он уже стоит, остаётся видимым.
+// `loadedOptions` — сколько вариантов приехало: обязательность проверяется
+// только при непустом списке (collect()).
+function leadSourceSelect(want = '') {
+    const sel = h('select', { name: 'lead_source', 'data-lead-source': '' });
+    sel.loadedOptions = 0;
+    sel.appendChild(h('option', { value: '' }, '—'));
+    const keepWanted = (rows) => {
+        if (want && !rows.some((s) => s.key === want)) sel.appendChild(h('option', { value: want }, want));
+        if (want) sel.value = want;
+    };
+    Promise.resolve(supabase.rpc('crm_config_get', {})).then(({ data, error }) => {
+        if (error) throw new Error(error.message || String(error));
+        const rows = ((data && data.sources) || []).filter((s) => s && s.key && (s.is_active || s.key === want));
+        for (const s of rows) sel.appendChild(h('option', { value: s.key }, s.label || s.key));
+        sel.loadedOptions = rows.length;
+        keepWanted(rows);
+    }).catch(() => keepWanted([]));
+    return sel;
+}
+
 function categorySelect(want = null) {
     const sel = h('select', { name: 'category_id' });
     sel.appendChild(h('option', { value: '' }, '—'));

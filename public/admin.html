@@ -15,13 +15,14 @@
     <title>Easy-Med · Admin</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#167873">
+    <meta name="theme-color" content="#24426f">
     <link rel="apple-touch-icon" href="/icon-192.png">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="EasyMed">
     <link rel="stylesheet" href="css/admin.css?v=notabs1">
     <link rel="stylesheet" href="css/admin-views.css?v=rh4">
+    <link rel="stylesheet" href="css/login-stage.css">
 </head>
 <body class="admin">
     <!-- SHELL_REGIONS_V1 (2026-09-05, владелец: «can we make top section and
@@ -43,8 +44,12 @@
         <aside class="sidebar" data-region="rail">
             <div class="sidebar-brand">
                 <div class="brand-mark" id="sidebar-logo" role="button" tabindex="0" title="Свернуть / открыть меню" aria-label="Свернуть / открыть меню">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 3v18M3 12h18"/>
+                    <!-- BRAND_TILE_BLUE_V1 (2026-10-31) — знак Easy-Med (тот же пульс,
+                         что в favicon.svg) вместо прежнего «+». Знак всегда Easy-Med:
+                         логотип клиники сюда больше не ставится, от клиники в шапке
+                         остаётся только название (.brand-sub). -->
+                    <svg viewBox="2 2 28 28" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 17 L10 17 L12 10 L14.5 24 L17 13 L19 17 L27 17"/>
                     </svg>
                 </div>
                 <!-- BRAND_PLATE_V1 (2026-09-05) — порядок строк перевёрнут: имя

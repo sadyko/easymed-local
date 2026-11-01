@@ -32,6 +32,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, clear, toast, Icon, Tag, checkField, field, fmtDateTime } from '../ui.js';
+import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — переводим ПЕРВЫМ, подставляем ВТОРЫМ
 // INPATIENT_ROLE_GATE_V1 — список ролей теперь ЧИТАЕТ и меню (permissions.js
 // isModuleAllowed): он лежит там, где стоит гейт, и сюда возвращается тем же
@@ -286,11 +287,9 @@ export async function renderDischarge(root, ctx = {}) {
 
   // Заголовок раздела снимает оболочка (ONE_NAME_PER_SCREEN_V1); подзаголовок
   // остаётся — он объясняет, что оформление делает с койкой.
-  wrap.appendChild(h('div', { class: 'page-head' },
-    h('div', null,
-      h('h1', { class: 'page-title' }, 'Выписки к оформлению'),
-      h('p', { class: 'page-subtitle' },
-        'Пациенты, по которым лечащий врач подал заявку на выписку. Оформление закрывает госпитализацию и отправляет койку на уборку.'))));
+  // SECTION_HERO_V1 — шапка раздела — тёмный баннер клинических разделов.
+  wrap.appendChild(sectionHero({ section: 'discharge', title: 'Выписки к оформлению',
+    sub: 'Пациенты, по которым лечащий врач подал заявку на выписку. Оформление закрывает госпитализацию и отправляет койку на уборку.' }).el);
 
   const wardSelect = h('select', null, h('option', { value: '' }, 'Все отделения'));
   const reloadBtn = h('button', { class: 'btn' }, Icon('Refresh'), tr('Обновить'));

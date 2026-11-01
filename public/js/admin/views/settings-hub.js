@@ -428,6 +428,10 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
             // sample is provided in the photo — go on now») — ссылка на бота для
             // каждого объявления; право — окно «Telegram-бот» в «Ролях».
             { label: 'Ссылки для рекламы в Telegram', desc: 'Своя ссылка на бота для каждого объявления: ответ, файл, кнопка «Оставить заявку», счётчики переходов и заявок', icon: 'Link', live: true, action: nav('telegram-deeplinks'), route: 'telegram-deeplinks' },
+            // SMS_INFORM_V1 (2026-10-30, владелец: «in commerce build SMS informing
+            // tool integration», провайдер — «Play Mobile») — подключение, проверочное
+            // SMS и журнал. Только администратор (permissions.js, rpc/sms.js).
+            { label: 'SMS-информирование', desc: 'Play Mobile: подключение, проверочное SMS и журнал отправленного', icon: 'Msg', live: true, action: nav('sms-settings'), route: 'sms-settings' },
             // MOIZVONKI_V2 ставил здесь вторую плитку — «Мои Звонки: звонки с телефонов».
             // MOIZVONKI_IN_TELEPHONY_V1 (2026-10-17): владелец, увидев «Телефонию»
             // с плитками Binotel и onlinePBX, — «all telephony stuff should be done in
@@ -922,6 +926,20 @@ const LOOKUP_CONFIG = {
             { key: 'payment_type', label: 'Тип оплаты', type: 'select',
               options: [['cash', 'Наличные'], ['card', 'На карту'], ['transfer', 'Перечислением']] },
             { key: 'card_number', label: 'Номер карты', type: 'text' },
+            // REFERRAL_REP_ON_CREATE_V1 (2026-10-31) — владелец: «when referral
+            // doctor creates it should be linked to medical representative … only
+            // medical rep can be chosen». Новый врач-источник заводится сразу за
+            // медпредставителем; в списке — только действующие сотрудники с ролью
+            // «Медпредставитель» (rpc/referrals.js referralsRepresentativeOptions),
+            // и сервер ещё раз проверяет роль при закреплении. Колонку пишет не
+            // общая запись таблицы (в реестре она только читается), а тот же RPC,
+            // что закрепляет врача на вкладке «Представители»: одно правило в
+            // одном месте. Обязателен при СОЗДАНИИ; у старых источников без
+            // представителя правка остальных полей его не требует.
+            { key: 'representative_id', label: 'Медпредставитель', type: 'fk', requiredOnCreate: true,
+              optionsRpc: { name: 'referrals_representative_options', list: 'representatives', label: 'full_name' },
+              emptyHint: 'Нет сотрудников с ролью «Медпредставитель» — назначьте её в «Настройки → Сотрудники»',
+              saveVia: (sourceId, userId) => supabase.rpc('referrals_assign_representative', { source_id: sourceId, user_id: userId }) },
             // REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — НАСТОЯЩАЯ ссылка вместо
             // свободного текста. Текст выбирали потому, что визит-мастер
             // группирует источники по категории, и список подсказок казался
@@ -1454,7 +1472,7 @@ async function renderEditor(container, key) {
             // Поля во всю ширину модалки: таблица ставок в одну колонку сетки —
             // это горизонтальная прокрутка внутри окна.
             const wrapped = f.type === 'checkbox' ? checkField(f.label, control)
-                                                  : field(f.label, control, { required: !!f.required });
+                                                  : field(f.label, control, { required: !!(f.required || (f.requiredOnCreate && !isEdit)) });   // REFERRAL_REP_ON_CREATE_V1
             if (f.full || f.type === 'group_rates') wrapped.style.gridColumn = '1 / -1';
             if (f.visibleWhen) conditional.push({ f, el: wrapped });
             return wrapped;
@@ -1491,6 +1509,25 @@ async function renderEditor(container, key) {
         async function loadFkOptions(f) {
             const select = controls[f.key];
             if (f.__services) { await select.load(); return; }   // DISCOUNT_RULES_V1
+            // REFERRAL_REP_ON_CREATE_V1 — варианты от сервера, а не из таблицы:
+            // кто годится, решает правило сервера (сотрудники с ролью), а не
+            // фильтр по колонке. Пустой список говорит, что делать.
+            if (f.optionsRpc) {
+                try {
+                    const { data, error } = await supabase.rpc(f.optionsRpc.name, {});
+                    if (error) throw error;
+                    const list = (data && data[f.optionsRpc.list]) || [];
+                    const current = row && row[f.key] != null ? Number(row[f.key]) : null;
+                    clear(select);
+                    select.appendChild(h('option', { value: '' }, list.length || !f.emptyHint ? '— none —' : f.emptyHint));
+                    for (const opt of list) {
+                        select.appendChild(h('option', { value: String(opt.id), selected: current !== null && current === Number(opt.id) }, opt[f.optionsRpc.label]));
+                    }
+                } catch (e) {
+                    toast(trf('Не удалось загрузить список: {msg}', { msg: (e && e.message) || e }), 'fail');
+                }
+                return;
+            }
             try {
                 let q = supabase.from(f.fkTable).select('id,' + f.fkLabel).eq(f.fkActiveCol || 'active', 1);
                 if (f.fkFilter) for (const [col, val] of Object.entries(f.fkFilter)) q = q.eq(col, val);
@@ -1523,7 +1560,16 @@ async function renderEditor(container, key) {
 
         async function save() {
             const payload = {};
+            const viaRpc = [];   // REFERRAL_REP_ON_CREATE_V1 — поля, которые пишет свой RPC после записи строки
             for (const f of fields) {
+                if (f.saveVia) {
+                    const raw = controls[f.key].value;
+                    if ((f.required || (f.requiredOnCreate && !isEdit)) && !raw) { toast(trf('Выберите: {field}', { field: tr(f.label) }), 'fail'); return; }
+                    const next = raw ? Number(raw) : null;
+                    const prev = row && row[f.key] != null ? Number(row[f.key]) : null;
+                    if (next !== prev) viaRpc.push({ f, value: next });
+                    continue;
+                }
                 if (f.type === 'readonly') continue;   // REFERRAL_SOURCE_CODE_V1 — присваивает база, не форма
                 if (f.type === 'checkbox') { payload[f.key] = readControl(f); continue; }
                 // Массив ставок уходит как есть: колонка объявлена JSON в
@@ -1558,10 +1604,23 @@ async function renderEditor(container, key) {
             const prevLabel = saveBtn.textContent;
             saveBtn.textContent = isEdit ? 'Saving…' : 'Adding…';
             try {
-                const { error } = isEdit
+                const { data: saved, error } = isEdit
                     ? await supabase.from(cfg.table).update(payload).eq('id', row.id).select().single()
                     : await supabase.from(cfg.table).insert(payload).select().single();
                 if (error) throw error;
+                // REFERRAL_REP_ON_CREATE_V1 — строка записана; теперь поля со
+                // своим RPC. Отказ здесь не отменяет запись: строка уже есть, и
+                // человек должен знать, что именно не сохранилось.
+                const savedId = (saved && saved.id) || (row && row.id);
+                for (const { f, value } of viaRpc) {
+                    const { error: viaErr } = await f.saveVia(savedId, value);
+                    if (viaErr) {
+                        toast(trf('Запись сохранена, но поле «{field}» — нет: {msg}', { field: tr(f.label), msg: viaErr.message || viaErr }), 'fail');
+                        close();
+                        await load();
+                        return;
+                    }
+                }
                 toast('Saved', 'ok');
                 close();
                 await load();

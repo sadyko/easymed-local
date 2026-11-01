@@ -54,16 +54,23 @@
 
 /* ---- Design tokens (mirrored from Design sample/index.html) ---- */
 :root {
-    --primary-50:  #effaf8;
-    --primary-100: #d8f1ee;
-    --primary-200: #b3e3dd;
-    --primary-300: #82cdc6;
-    --primary-400: #4eb0aa;
-    --primary-500: #2d958f;
-    --primary-600: #167873;
-    --primary-700: #115d5a;
-    --primary-800: #0e4847;
-    --primary-900: #0c3a39;
+    /* BLUE_MATTE_V1 (2026-10-31). Сизо-синяя шкала (600 = #355c7d) сначала
+       стала «сочной» (BLUE_JUICY_V1, владелец: «little bit dark and modern blue
+       (Сочный)», 600 = #1e4cc9), но, увидев её: «not such blue, it should be
+       dark blue and (Матовый)». Теперь — тёмный приглушённый синий: 600 =
+       #24426f, 700 = #1c355b, светлые ступени — сероватые, без яркости.
+       Жёстко прописанные копии синего (тени rgba(36,66,111,…), градиент баннера
+       «Пациентов», theme-color, login-stage.css) переведены туда же. */
+    --primary-50:  #eef2f8;
+    --primary-100: #d9e1ee;
+    --primary-200: #b5c4dc;
+    --primary-300: #8aa1c4;
+    --primary-400: #5d7aa6;
+    --primary-500: #3d5c8c;
+    --primary-600: #24426f;
+    --primary-700: #1c355b;
+    --primary-800: #172b4a;
+    --primary-900: #12223a;
 
     --accent-500: #0ea5e9;
     --accent-600: #0284c7;
@@ -206,16 +213,16 @@
        СИЛА МЕНЯЕТСЯ В ОДНОМ МЕСТЕ — двумя строками ниже. Проценты подобраны
        парой: рамка держит край, ореол добавляет мягкости, и по отдельности их
        крутить не нужно.
-         тихое    rgba(45,149,143,.30) / .05 / .09   ← выбрано
-         среднее  rgba(45,149,143,.42) / .07 / .14
-         заметное rgba(22,120,115,.55) / .10 / .20 */
+         тихое    rgba(69,111,147,.30) / .05 / .09   ← выбрано
+         среднее  rgba(69,111,147,.42) / .07 / .14
+         заметное rgba(36,66,111,.55) / .10 / .20 */
     --page-ground: #ffffff;
     /* Рамка — ПЛОСКИМ цветом, а не rgba: это ровно тот же тон (бирюза 30% на
        белом), но он не зависит от того, что окажется под окном, и его умеют
        считать проверки контраста. Ореол ниже остаётся полупрозрачным — он
        тень, и лежать ему всегда на грунте. */
     --window-line: #c0dfdd;
-    --shadow-window: 0 0 0 3px rgba(45, 149, 143, 0.05), 0 2px 10px rgba(45, 149, 143, 0.09);
+    --shadow-window: 0 0 0 3px rgba(69, 111, 147, 0.05), 0 2px 10px rgba(69, 111, 147, 0.09);
 
     --sidebar-w: 248px;
     --topbar-h: 56px;
@@ -387,7 +394,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 
    1. ЗНАК БЫЛ ГРОМЧЕ ВЫБРАННОГО ПУНКТА. Он нёс единственный в продукте
       градиент (primary-500 → primary-700) и единственную ЦВЕТНУЮ тень
-      (rgba(22,120,115,.30) на 10px) — всё остальное давно переехало на плоские
+      (rgba(36,66,111,.30) на 10px) — всё остальное давно переехало на плоские
       токены и пастель. Тень цветом бренда под знаком бренда читается как
       подсветка: глаз шёл к логотипу, а не к разделу, в котором работают.
       Теперь заливка ПЛОСКАЯ и ровно та же, что у выбранного пункта меню
@@ -435,9 +442,14 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
        «на одной высоте»); первая версия срезала их до 14px и уехала на 8px. */
     padding: 22px 20px 10px;
 }
+/* BRAND_TILE_BLUE_V1 (2026-10-31, владелец: «make the logo place also blue
+   background with rounded corners, make pretty»). Было 30px; 36px всё ещё
+   ниже двух строк имени (38px), так что центр шапки не сдвинулся
+   (shell-regions.test.mjs), и на 68px рейке остаётся по 16px с боков.
+   Плоско и на токене — без градиента и тени (contrast-badge-hatch.test.mjs). */
 .brand-mark {
-    width: 30px; height: 30px;
-    border-radius: 9px;
+    width: 36px; height: 36px;
+    border-radius: 11px;
     background: var(--primary-600);
     display: grid; place-items: center;
     color: var(--white); font-weight: 700;
@@ -445,12 +457,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     transition: background var(--dur-1) var(--ease-out);
 }
 .brand-mark:hover { background: var(--primary-700); }
-.brand-mark svg { width: 18px; height: 18px; }
-/* CLINIC_PROFILE_V1 — квадратный логотип клиники в знаке меню (тот же элемент сворачивает меню; «+» прячется, не удаляется). */
-.brand-mark.has-logo { background: var(--white); border: 1px solid var(--ink-100); overflow: hidden; }
-.brand-mark.has-logo:hover { background: var(--white); border-color: var(--primary-300); }
-.brand-mark.has-logo svg { display: none; }
-.brand-mark.has-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.brand-mark svg { width: 20px; height: 20px; }
+/* CLINIC_PROFILE_V1 ставил сюда квадратный логотип клиники (.has-logo).
+   BRAND_TILE_BLUE_V1 — владелец: «only name should stay but logo should be
+   easymed». Знак всегда Easy-Med, правила .has-logo сняты вместе с кодом
+   (clinic-context.js). */
 /* Обёртка двух строк: min-width: 0 обязателен — без него флекс-элемент не
    сжимается ниже своего содержимого, и длинное имя клиники распирало бы
    шапку, унося стрелку сворачивания за край колонки. */
@@ -476,6 +487,43 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .brand-name .dot { color: var(--primary-700); }
 
+/* BRAND_CARD_BLUE_V1 (2026-10-31, владелец: «not only logo background, but
+   texts together») — знак, имя клиники, поставщик и стрелка сворачивания
+   лежат на ОДНОЙ синей карточке.
+
+   Карточка нарисована ::before, а не фоном самой .sidebar-brand: её отступы
+   пришиты к верхней строке (padding-top 22px ставит знак на высоту имени
+   раздела, shell-regions.test.mjs). Подложка выходит на 10px за содержимое со
+   всех сторон (12 сверху = 22 − 10, низ = нижний отступ шапки), поэтому её
+   центр совпадает с центром знака и ничего не сдвигается. */
+/* SIDEBAR_HEAD_LIGHT_V1 (2026-10-31) — синяя карточка снята. Владелец прислал
+   снимок шапки — тёмный знак, жирное имя, под ним мелкой разрядкой подпись,
+   стрелка справа, ниже во всю ширину «+ New patient» — со словами «logo is
+   easymed, text is clinic name, and new patient button there too». Знак —
+   Easy-Med, жирная строка — имя клиники (.brand-sub, порядок BRAND_PLATE_V1 не
+   меняется), подпись «EASY·MED» — прописными вразрядку, как «NOVO MEDICS» на
+   снимке: это подпись поставщика, ей рубрика к лицу (имени клиники — нет,
+   contrast-badge-hatch.test.mjs). Знак — прежняя плоская заливка .brand-mark. */
+.sidebar-brand .brand-name { text-transform: uppercase; letter-spacing: 0.08em; }
+
+/* SIDEBAR_NEW_PATIENT_V1 — «+ Новый пациент» между шапкой и пунктами меню
+   (admin.js renderSidebarNewPatient). Залита тем же акцентом, что знак и
+   выбранный пункт: в колонке один акцент, просто его стало видно и здесь. На
+   свёрнутой рейке — квадрат с «+» под знаком, подпись прячется. */
+.sidebar-new {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    margin: 6px 20px 14px; height: 40px; padding: 0 14px;
+    border: 1px solid var(--primary-600); border-radius: 11px;
+    background: var(--primary-600); color: var(--white);
+    font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 1px 2px rgba(11, 20, 24, 0.10);
+    transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+.sidebar-new:hover { background: var(--primary-700); border-color: var(--primary-700); }
+.sidebar-new:focus-visible { outline: 2px solid var(--primary-300); outline-offset: 2px; }
+.sidebar-collapsed .sidebar-new { margin: 6px auto 14px; width: 40px; padding: 0; }
+.sidebar-collapsed .sidebar-new-label { display: none; }
+
 .sidebar-body {
     flex: 1;
     overflow-y: auto;   /* NAV_GROUPS_V1 — страховка на окнах ниже ~600px; в норме не прокручивается */
@@ -494,6 +542,14 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
  * PROMOTED: `.nav-item.active` below is that treatment, so the selected menu
  * entry is the one filled button in the sidebar instead of competing with two
  * permanent ones. */
+
+/* NAV_DASHBOARD_TOP_V1 — «Дашборд» над всеми группами меню, отделён чертой
+   (admin.js NAV, пункт с top: true). Черта — того же цвета, что делители
+   остального интерфейса. */
+.nav-top {
+    padding-bottom: 8px; margin-bottom: 4px;
+    border-bottom: 1px solid var(--ink-100);
+}
 
 /* Collapsible nav group */
 .nav-group { display: flex; flex-direction: column; }
@@ -1164,20 +1220,33 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     flex: 0 0 auto;
 }
 /* APP_RELOAD_BTN_V1 — was 38px of inline style carrying three raw hexes
-   (#fbcf4a / #fde68a / #7c5a00). Same amber intent, on the warn tokens. */
+   (#fbcf4a / #fde68a / #7c5a00), then amber on the warn tokens.
+   RELOAD_BTN_BLUE_V1 (2026-10-31, владелец: «make reload button also blue and
+   attractive») — синяя, как главные кнопки (--primary-*): заливка с лёгким
+   градиентом и тенью, белая стрелка. На наведении кнопка темнеет и стрелка
+   делает полоборота — видно, что именно она сделает; при «меньше движения»
+   поворот гасит общее правило в конце этого файла. */
 .appbar-reload {
     width: 32px; height: 32px;
     flex: 0 0 auto;
     display: grid; place-items: center;
     border-radius: 9px;
-    border: 1px solid var(--warn-500);
-    background: var(--warn-50);
-    color: var(--warn-700);
+    border: 1px solid var(--primary-600);
+    background: linear-gradient(180deg, var(--primary-500) 0%, var(--primary-600) 100%);
+    color: #fff;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.18) inset, 0 2px 6px rgba(36, 66, 111, 0.28);
     cursor: pointer;
     font-family: inherit;
-    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+    transition: background var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
 }
-.appbar-reload:hover { background: var(--warn-500); color: #fff; }
+.appbar-reload svg { transition: transform var(--dur-3) var(--ease-out); }
+.appbar-reload:hover {
+    background: linear-gradient(180deg, var(--primary-600) 0%, var(--primary-700) 100%);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.18) inset, 0 4px 12px rgba(36, 66, 111, 0.36);
+}
+.appbar-reload:hover svg { transform: rotate(180deg); }
+.appbar-reload:active { transform: translateY(1px); box-shadow: 0 1px 3px rgba(36, 66, 111, 0.30); }
+.appbar-reload:focus-visible { outline: 2px solid var(--primary-300, #9bb3c9); outline-offset: 2px; }
 .topbar-bell { position: relative; display: inline-flex; align-items: center; }
 
 /* SHELL_REGIONS_V1 — ТА ЖЕ верхняя строка, но правилом, которое нельзя
@@ -1648,6 +1717,18 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
     border-radius: 50%; background: var(--primary-50); color: var(--primary-700);
     font-size: 12.5px; font-weight: 700; line-height: 1;
 }
+
+/* PATIENT_SECTIONS_FOLDED_V1 — разделы 2–4 окна пациента сворачиваются щелчком
+   по заголовку. Свёрнутый раздел — одна строка заголовка: поля скрыты, но живут
+   в документе (их значения сохраняются). Высота свёрнутого раздела — в
+   foldedSectionH() модели окна. */
+.mg-section.mg-foldable > h3 { cursor: pointer; user-select: none; border-radius: 6px; }
+.mg-section.mg-foldable > h3:hover { color: var(--primary-700); }
+.mg-section.mg-foldable > h3:focus-visible { outline: 2px solid var(--primary-400); outline-offset: 3px; }
+.mg-fold-ic { display: inline-flex; margin-left: auto; color: var(--ink-500); transition: transform var(--dur-1) var(--ease-out); }
+.mg-section.is-folded .mg-fold-ic { transform: rotate(-90deg); }
+.mg-section.is-folded > :not(h3) { display: none; }
+.modal-card.modal-grouped.mg-dense .mg-section.is-folded > h3 { margin-bottom: 0; }
 
 /* Разделы окна разделены линией, а не рамкой: карточка внутри карточки на
    образце не рисуется. */
@@ -2213,7 +2294,7 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
     border-bottom: 1px solid var(--ink-100);
 }
 .cal-vert-slot:hover {
-    background: rgba(22, 120, 115, 0.06);
+    background: rgba(36, 66, 111, 0.06);
 }
 
 /* Appointment block (absolutely positioned inside .cal-vert-day-col) */
@@ -2747,7 +2828,7 @@ table.list .clickable-row:hover td { background: var(--primary-50); }
     overflow: hidden;
     box-shadow:
         0 1px 2px rgba(11, 20, 24, 0.08),
-        0 10px 30px rgba(22, 120, 115, 0.18);
+        0 10px 30px rgba(36, 66, 111, 0.18);
 }
 .dash-hero-bg {
     position: absolute; inset: 0;
@@ -2948,7 +3029,7 @@ textarea:focus-visible,
     padding: 24px;
     background:
         radial-gradient(circle at 20% 10%, rgba(45, 212, 191, 0.10) 0%, transparent 45%),
-        radial-gradient(circle at 80% 90%, rgba(22, 120, 115, 0.10) 0%, transparent 50%),
+        radial-gradient(circle at 80% 90%, rgba(36, 66, 111, 0.10) 0%, transparent 50%),
         var(--ink-50);
     z-index: 1000;
 }
@@ -2996,6 +3077,7 @@ textarea:focus-visible,
     border-radius: 8px;
     font-size: 13.5px;
 }
+
 
 /* ============================================================
    Section picker (Roles → Allowed sections)

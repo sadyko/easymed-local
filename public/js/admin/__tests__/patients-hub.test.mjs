@@ -154,6 +154,8 @@ globalThis.fetch = async (url, opts = {}) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push(name);
     if (name === 'queue_board') return ok({ data: JSON.parse(JSON.stringify(BOARD)) });
+    // PATIENT_BOT_INVITE_V1 — кто из страницы подключён к боту пациента.
+    if (name === 'patient_bot_status') return ok({ data: { bot: true, sms_ready: false, linked: ['p-1'] } });
     // V3120_FIX — сводка реестра: депозит и долг раздельно (rpc/patient-aggregates.js).
     if (name === 'patient_base_aggregates') return ok({ data: AGGS });
     // V3120_FIX — настоящая форма ответа сервера (rpc/telegram.js telegramChatsList).
@@ -701,7 +703,9 @@ test('V3120_FIX: вкладки «Записи» и «Очередь» — то�
   }
 });
 
-test('V3120_FIX: отметка Telegram появляется — ответ сервера { chats }, а не массив', async () => {
+// PATIENT_BOT_INVITE_V1 — отметка Telegram переехала в конец строки и читается
+// из patient_bot_status; разбор ответа telegram_chats_list строке больше не нужен.
+test('V3120_FIX / PATIENT_BOT_INVITE_V1: отметка Telegram в конце строки — по ответу patient_bot_status', async () => {
   reset();
   setFullAccess('Admin');
   const warns = [];
@@ -712,8 +716,7 @@ test('V3120_FIX: отметка Telegram появляется — ответ с�
     const box = mk('div');
     await renderPatients(box, { onNavigate() {}, embedded: true });
     await tick(60);
-    assert.ok(rpcCalls.includes('telegram_chats_list'), 'реестр не спросил связки Telegram');
-    assert.equal(warns.filter((w) => w.includes('patients/telegram')).length, 0, 'разбор ответа упал: ' + warns.join(' | '));
+    assert.ok(rpcCalls.includes('patient_bot_status'), 'реестр не спросил, кто подключён к боту');
     const marks = walk(box).filter((n) => hasClass(n, 'pt-tg'));
     assert.equal(marks.length, 1, 'у пациента со связкой Telegram нет отметки');
     // и подпись листания — по-русски

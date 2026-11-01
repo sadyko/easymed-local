@@ -47,6 +47,7 @@
 import { supabase } from '../../supabase.js';
 import { IN_BED_STATUSES, OPEN_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, clear, PageHead, fmtDateTime, initials } from '../ui.js';
+import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { dateNumeric } from '../../shared/date-words.js';   // WARD_TABLE_V1 — «с 06.09»
 import { isModuleAllowed, hasActorRole } from '../permissions.js';
@@ -614,7 +615,10 @@ export async function renderInpatient(container, ctx = {}) {
         }, Icon(t.icon, { size: 14 }), h('span', null, tr(t.label)));
         strip.appendChild(buttons[t.id]);
     }
-    root.appendChild(strip);
+    // SECTION_HERO_V1 — полоса вкладок живёт в тёмном баннере раздела, слева
+    // под названием (владелец: «button … inside of it but in the left side»).
+    // Подзаголовок и кнопки каждой вкладки остаются в её шапке ниже.
+    root.appendChild(sectionHero({ section: 'admissions', title: 'Стационар', tabs: strip }).el);
     for (const t of tabs) root.appendChild(hosts[t.id]);
 
     let active = tabs.some((t) => t.id === sub) ? sub : DEFAULT_TAB;

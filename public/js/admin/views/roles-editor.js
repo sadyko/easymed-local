@@ -562,7 +562,11 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
             // оболочки — сводки нет: соврать про доступ хуже, чем промолчать.
             const nav = (typeof window !== 'undefined' && window.easymed && window.easymed.NAV) || null;
             if (!nav) return;
-            const ids = nav.filter((it) => !it.section).map((it) => it.id);
+            // NAV_DASHBOARD_TOP_V1 — домашний экран ищется в ПРЕЖНЕМ порядке
+            // (дашборд поднят в меню, но не в очереди «где начать»): та же
+            // последовательность, что у firstAllowedView() оболочки.
+            const order = (window.easymed && window.easymed.NAV_HOME_ORDER) || nav;
+            const ids = order.filter((it) => !it.section).map((it) => it.id);
             const reach = roleReach(
                 // MY_STOCK_V1 — сюда едет КОД роли, а не её подпись. Сводка
                 // спрашивает настоящие ворота, а часть из них смотрит на роль

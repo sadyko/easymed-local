@@ -120,13 +120,13 @@ test('плитки «Meta: заявки из рекламы» и «Ссылки 
   // (владелец, 2026-10-17: «all telephony stuff should be done in here») вернул
   // провайдера в «Телефонию». TG_DEEPLINK_V1 (2026-10-26) добавил вторую плитку —
   // «Ссылки для рекламы в Telegram» (маршрут telegram-deeplinks, окно «Telegram-бот»).
-  assert.deepStrictEqual(rows.map((r) => r.name), ['Meta: заявки из рекламы', 'Ссылки для рекламы в Telegram']);
+  // SMS_INFORM_V1 (2026-10-30) — третья плитка «SMS-информирование» (Play Mobile).
+  assert.deepStrictEqual(rows.map((r) => r.name), ['Meta: заявки из рекламы', 'Ссылки для рекламы в Telegram', 'SMS-информирование']);
   assert.ok(rows.every((r) => r.live), 'плитки живые, не «Скоро»');
-  rows[0].node.click();
-  rows[1].node.click();
-  assert.deepStrictEqual(nav, [['meta-settings'], ['telegram-deeplinks']]);
+  for (const r of rows) r.node.click();
+  assert.deepStrictEqual(nav, [['meta-settings'], ['telegram-deeplinks'], ['sms-settings']]);
   const items = GROUPS[GROUPS.length - 1].items;
-  assert.deepStrictEqual(items.map((i) => i.route), ['meta-settings', 'telegram-deeplinks'], 'видимость плиток — по маршруту (права роли)');
+  assert.deepStrictEqual(items.map((i) => i.route), ['meta-settings', 'telegram-deeplinks', 'sms-settings'], 'видимость плиток — по маршруту (права роли)');
 });
 
 test('роли без настроенного ключа settings.meta плитка не показывается — группа исчезает целиком', async () => {
@@ -151,6 +151,117 @@ test('роли без настроенного ключа settings.meta плит
     assert.ok(!titles.includes('Коммерческие инструменты'), 'группы нет для роли без ключа: ' + titles.join(' | '));
   } finally {
     Object.assign(user, { role: was.role, is_super_admin: was.super, full_name: was.name });
+    setActorRoles(['admin']);
+    setFullAccess('Администратор');
+  }
+});
+
+// COMMERCE_NAV_V1 + SMS_PUSH_V1 (2026-10-30) — пункт меню «Коммерческие
+// инструменты» — не плитки настроек (они остались в хабе выше), а
+// Push-уведомление по Telegram и SMS. Владелец: «In sms photo should not possible».
+const { renderCommercePush, smsParts } = await import('../views/commerce-push.js');
+const perms = await import('../permissions.js');
+const byAttr = (root, a) => walk(root).filter((n) => n.attrs && a in n.attrs);
+
+test('SMS_PUSH_V1: три колонки; администратору — оба канала; у SMS нет картинки', async () => {
+  setFullAccess('Администратор');
+  const root = mk('div');
+  renderCommercePush(root);
+  await tick();
+  assert.equal(byClass(root, 'cp-col').length, 3, 'сообщение · предпросмотр · кому');
+  const tabs = byAttr(root, 'data-push-channel');
+  assert.deepStrictEqual(tabs.map((t) => t.getAttribute('data-push-channel')), ['telegram', 'sms']);
+  const image = byAttr(root, 'data-push-image')[0];
+  assert.equal(image.style.display, '', 'у Telegram картинка есть');
+  tabs[1].click();
+  const tabsAfter = byAttr(root, 'data-push-channel');
+  assert.equal(tabsAfter.find((t) => t.getAttribute('data-push-channel') === 'sms').getAttribute('aria-selected'), 'true');
+  assert.equal(image.style.display, 'none', 'у SMS картинки нет');
+  assert.equal(byAttr(root, 'data-push-sms-note')[0].style.display, '', 'подсказка «только текст» видна');
+  assert.ok(!textOf(root).includes('Meta: заявки из рекламы'), 'плиток настроек на странице больше нет');
+});
+
+test('SMS_PUSH_V1: части SMS — кириллица 70/67, латиница 160/153 (как на сервере)', () => {
+  assert.equal(smsParts('а'.repeat(70)), 1);
+  assert.equal(smsParts('а'.repeat(71)), 2);
+  assert.equal(smsParts('a'.repeat(160)), 1);
+  assert.equal(smsParts('a'.repeat(307)), 3);
+});
+
+test('COMMERCE_NAV_V1: пункт виден администратору; роли без «Telegram-бот: Изменение» и не администратору — нет', async () => {
+  setFullAccess('Администратор');
+  assert.equal(perms.isModuleAllowed('commerce'), true);
+  assert.equal(perms.isRouteAllowed('commerce'), true);
+  setEffectiveFromRole({ name: 'Регистратор', permissions: {
+    sections: ['patients', 'crm', 'settings'], levels: { patients: 'editor', crm: 'editor', settings: 'viewer' }, grants: {},
+  } });
+  const user = globalThis.window.easymed.state.user;
+  const was = { role: user.role, super: user.is_super_admin };
+  Object.assign(user, { role: 'registrar', is_super_admin: false });
+  setActorRoles(['registrar']);
+  try {
+    assert.equal(perms.isModuleAllowed('commerce'), false);
+    assert.equal(perms.isRouteAllowed('commerce'), false);
+  } finally {
+    Object.assign(user, { role: was.role, is_super_admin: was.super });
+    setActorRoles(['admin']);
+    setFullAccess('Администратор');
+  }
+});
+
+// COMMERCE_TOOLS_V1 (2026-10-30) — пункт меню — витрина инструментов, Push —
+// один из них, на своём адресе. Владелец: «make them separate, as there will be
+// more instrument».
+const { renderCommerceHub, TOOLS } = await import('../views/commerce-hub.js');
+
+test('COMMERCE_TOOLS_V1: витрина — карточка на инструмент; карточка ведёт на его адрес', async () => {
+  setFullAccess('Администратор');
+  const root = mk('div');
+  const went = [];
+  renderCommerceHub(root, { onNavigate: (r) => went.push(r) });
+  const cards = byAttr(root, 'data-commerce-tool');
+  assert.deepStrictEqual(cards.map((c) => c.getAttribute('data-commerce-tool')), TOOLS.map((t) => t.route));
+  assert.ok(cards.map((c) => c.getAttribute('data-commerce-tool')).includes('commerce-push'));
+  assert.equal(byClass(root, 'cp-col').length, 0, 'сама рассылка на витрине не рисуется');
+  cards[0].click();
+  assert.deepStrictEqual(went, ['commerce-push']);
+});
+
+test('COMMERCE_TOOLS_V1: экран Push закрыт тому, кому закрыт пункт', () => {
+  setEffectiveFromRole({ name: 'Регистратор', permissions: {
+    sections: ['patients', 'settings'], levels: { patients: 'editor', settings: 'viewer' }, grants: {},
+  } });
+  const user = globalThis.window.easymed.state.user;
+  const was = { role: user.role, super: user.is_super_admin };
+  Object.assign(user, { role: 'registrar', is_super_admin: false });
+  setActorRoles(['registrar']);
+  try {
+    assert.equal(perms.isRouteAllowed('commerce-push'), false);
+  } finally {
+    Object.assign(user, { role: was.role, is_super_admin: was.super });
+    setActorRoles(['admin']);
+    setFullAccess('Администратор');
+  }
+  assert.equal(perms.isRouteAllowed('commerce-push'), true);
+});
+
+test('COMMERCE_TOOLS_V1: «Telegram-бот: Просмотр» — пункт и карточка ссылок для рекламы, но не Push', () => {
+  setEffectiveFromRole({ name: 'Маркетолог', permissions: {
+    sections: ['patients', 'settings'], levels: { patients: 'editor', settings: 'viewer' },
+    grants: { patients: 'edit', settings: 'view', 'settings.telegram': 'view' },
+  } });
+  const user = globalThis.window.easymed.state.user;
+  const was = { role: user.role, super: user.is_super_admin };
+  Object.assign(user, { role: 'registrar', is_super_admin: false });
+  setActorRoles(['registrar']);
+  try {
+    assert.equal(perms.isModuleAllowed('commerce'), true, 'пункт виден');
+    assert.equal(perms.isRouteAllowed('commerce-push'), false, 'отправлять нельзя');
+    const root = mk('div');
+    renderCommerceHub(root, {});
+    assert.deepStrictEqual(byAttr(root, 'data-commerce-tool').map((c) => c.getAttribute('data-commerce-tool')), ['telegram-deeplinks']);
+  } finally {
+    Object.assign(user, { role: was.role, is_super_admin: was.super });
     setActorRoles(['admin']);
     setFullAccess('Администратор');
   }

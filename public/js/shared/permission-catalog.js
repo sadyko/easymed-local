@@ -240,6 +240,9 @@ export const CATALOG = [
   { key: 'discharges',  label: 'Выписки',             legacy: 'beds', desc: 'Очередь выписки и выписные документы.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит очередь выписки.', edit: 'Готовит и завершает выписку.' }, windows: [], actions: [], enforced: 'route:discharge' },
   { key: 'documents',   label: 'Документы',           legacy: 'patient-documents', desc: 'Печатные документы по пациентам.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Печатает документы.', edit: 'Заполняет и правит документы.' }, windows: [], actions: [] },
   { key: 'chat',        label: 'Чат с пациентами',    legacy: 'telegram-chat', desc: 'Переписка в Telegram-боте.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Читает переписку.', edit: 'Отвечает пациенту от имени клиники.' }, windows: [], actions: [] },
+  // META_INBOX_V1 (2026-10-31) — «Чат Facebook и Instagram»: сервер проверяет
+  // тот же ключ раздела (rpc/meta-inbox.js, canViewSection / canEditSection).
+  { key: 'meta_chat',   label: 'Чат Facebook и Instagram', legacy: 'meta-chat', desc: 'Сообщения и комментарии страницы клиники в Facebook и Instagram.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Читает сообщения и комментарии.', edit: 'Отвечает от имени клиники, скрывает комментарии, заводит карточку CRM.' }, windows: [], actions: [] },
   // REFERRALS_NAV_V1 (2026-10-26) — «Реферирование»: свой пункт в «Операциях» и свой
   // ключ. Деньги на вкладках открывает отдельно reports.referrals, правку источников —
   // settings.referral_sources; вкладка «Telegram-бот» — только администратору.

@@ -6,6 +6,7 @@ import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDe
   swapPaidLine, swapPaidLineQuote } from './billing.js';   // CASHIER_PAID_SWAP_V1
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
+import { dashboardOverview } from './dashboard-overview.js';   // DASHBOARD_OVERVIEW_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
 import { ownShelfSettings, ownShelfSet } from './stock-policy.js';   // OWN_SHELF_ONLY_V1 (ревью F5) — переключатель «только со своих полок»
 import { stockPendingList, stockPendingCount, stockPendingSettle } from './stock-pending.js';   // OWN_SHELF_ONLY_V1 (ревью F6) — «не списано со склада»
@@ -16,9 +17,13 @@ import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary, reportChoices, payPeriodClose, payPeriodReopen, payPeriodStatus } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
-import { referralsRepresentatives, referralsAssignRepresentative, referralsInternal, referralsActivity, referralsSourceDetail, referralsDoctorDetail } from './referrals.js';   // REFERRALS_CRM_V1 — «Реферирование» под CRM
+import { referralsRepresentatives, referralsAssignRepresentative, referralsRepresentativeOptions, referralsInternal, referralsActivity, referralsSourceDetail, referralsDoctorDetail } from './referrals.js';   // REFERRALS_CRM_V1 — «Реферирование» под CRM
 import { doctorBotSettingsGet, doctorBotSettingsSave, doctorBotTokenClear, doctorBotTestConnection, doctorBotStats, doctorBotLinksList, doctorBotLinkRevoke,
          doctorBotLinkConfirm, doctorBotLinkReject } from './doctor-bot.js';   // REFERRALS_CRM_V1 — бот для врачей-источников; FIX_318_V1 (M2) — подтверждение подключения
+import { repBotSettingsGet, repBotSettingsSave, repBotTokenClear, repBotTestConnection, repBotStats, repBotLinksList, repBotAdditionsList,
+         repBotLinkConfirm, repBotLinkReject, repBotLinkRevoke } from './rep-bot.js';   // REP_BOT_V1 — бот для медпредставителей
+import { clinicNewsList, clinicNewsSave, clinicNewsArchive } from './clinic-news.js';   // CLINIC_NEWS_V1 — «Информационная доска»
+import { patientBotStatus, patientBotInvite, phoneBotStatus, phoneBotInvite } from './patient-bot.js';   // PATIENT_BOT_INVITE_V1 — бот пациента в списке пациентов
 import { navVisibilityGet, navVisibilitySave } from './nav-visibility.js';   // NAV_VISIBILITY_V1 — видимость разделов меню для всей клиники
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice, cashierRefunds } from './cashier.js';   // cashierRefunds: CASHIER_PAID_SWAP_V1
 import { cashierUnbilled } from './cashier.js';   // REFERRAL_BILL_V1 — «Ждут счёта» кассы
@@ -81,6 +86,13 @@ import { telephonyPhoneMe, telephonyMyExtension, telephonyExtensions, telephonyC
   telephonyWebrtcMe, telephonyCaller } from './phone.js';   // CRM_PHONE_V1 — панель «Телефон» в CRM (бывший EasyPhone); SOFTPHONE_V1 — телефон в браузере
 import { telephonyLive, telephonyRingInfo, telephonyRingTokenRotate } from './ring.js';   // CALL_RING_V1 — «Звонит»: что звонит сейчас, адрес событий станции
 import { metaSettingsGet, metaSettingsSave, metaConnect, metaTokenClear, metaPollNow, metaLeadsRecent } from './meta.js';   // META_LEADS_V1
+import {
+  metaInboxState, metaInboxToggle, metaInboxPollNow, metaInboxConversations, metaInboxMessages, metaInboxSend,
+  metaInboxComments, metaInboxCommentThread, metaInboxCommentReply, metaInboxCommentPrivate, metaInboxCommentHide,
+  metaInboxToCrm, metaInboxUnread, metaInboxStats,
+} from './meta-inbox.js';   // META_INBOX_V1
+import { smsSettingsGet, smsSettingsSave, smsPasswordClear, smsSendTest, smsLogRecent,
+         smsBroadcastPreview, smsBroadcastSend, smsBroadcastStatusRpc } from './sms.js';   // SMS_INFORM_V1; SMS_PUSH_V1 — рассылка
 import { telegramDeeplinksList, telegramDeeplinkSave, telegramDeeplinkDelete } from './deeplinks.js';   // TG_DEEPLINK_V1 — ссылки для рекламы в Telegram
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners, lisDeviceDelete } from './lis.js';   // LIS_INGEST_V1, LIS_MINDRAY_CODES_V1, LIS_ANALYZER_LIST_V1
 import { lisServiceCounts } from './lis.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — контроль, калибровка, запросы у прибора за сегодня
@@ -245,6 +257,7 @@ export const RPC = {
   // представители и внешние врачи, внутренние врачи, активность, «Подробнее».
   referrals_representatives:        (db, args, user) => referralsRepresentatives(db, args, user),
   referrals_assign_representative:  (db, args, user) => referralsAssignRepresentative(db, args, user),
+  referrals_representative_options: (db, args, user) => referralsRepresentativeOptions(db, args, user),   // REFERRAL_REP_ON_CREATE_V1
   referrals_internal:               (db, args, user) => referralsInternal(db, args, user),
   referrals_activity:               (db, args, user) => referralsActivity(db, args, user),
   referrals_source_detail:          (db, args, user) => referralsSourceDetail(db, args, user),
@@ -261,6 +274,30 @@ export const RPC = {
   // в READ_ONLY_RPCS (control/gate.js) их нет.
   doctor_bot_link_confirm:          (db, args, user) => doctorBotLinkConfirm(db, args, user),
   doctor_bot_link_reject:           (db, args, user) => doctorBotLinkReject(db, args, user),
+  // CLINIC_NEWS_V1 — «Информационная доска»: читают все вошедшие (список — в
+  // READ_ONLY_RPCS), публикует и снимает администратор.
+  // PATIENT_BOT_INVITE_V1 — кто из пациентов подключён к боту (чтение) и
+  // «отправить ссылку на бота» SMS (запись: тратит SMS клиники).
+  patient_bot_status:               (db, args, user) => patientBotStatus(db, args, user),
+  patient_bot_invite:               (db, args, user) => patientBotInvite(db, args, user),
+  // PATIENT_BOT_INVITE_V1 — то же по номеру: карточка заявки CRM (заявка может быть ещё без пациента).
+  phone_bot_status:                 (db, args, user) => phoneBotStatus(db, args, user),
+  phone_bot_invite:                 (db, args, user) => phoneBotInvite(db, args, user),
+  clinic_news_list:                 (db, args, user) => clinicNewsList(db, args, user),
+  clinic_news_save:                 (db, args, user) => clinicNewsSave(db, args, user),
+  clinic_news_archive:              (db, args, user) => clinicNewsArchive(db, args, user),
+  // REP_BOT_V1 — Telegram-бот для медпредставителей (вкладка «Реферирование → Бот представителей»), администратору.
+  // Чтения — *_get, *_stats, *_list — в READ_ONLY_RPCS (control/gate.js); остальное — записи.
+  rep_bot_settings_get:             (db, args, user) => repBotSettingsGet(db, args, user),
+  rep_bot_settings_save:            (db, args, user) => repBotSettingsSave(db, args, user),
+  rep_bot_token_clear:              (db, args, user) => repBotTokenClear(db, args, user),
+  rep_bot_test_connection:          (db, args, user) => repBotTestConnection(db, args, user),
+  rep_bot_stats:                    (db, args, user) => repBotStats(db, args, user),
+  rep_bot_links_list:               (db, args, user) => repBotLinksList(db, args, user),
+  rep_bot_additions_list:           (db, args, user) => repBotAdditionsList(db, args, user),
+  rep_bot_link_confirm:             (db, args, user) => repBotLinkConfirm(db, args, user),
+  rep_bot_link_reject:              (db, args, user) => repBotLinkReject(db, args, user),
+  rep_bot_link_revoke:              (db, args, user) => repBotLinkRevoke(db, args, user),
   // NAV_VISIBILITY_V1 — какие разделы меню есть в клинике: читают все, меняет администратор.
   nav_visibility_get:               (db, args, user) => navVisibilityGet(db, args, user),
   nav_visibility_save:              (db, args, user) => navVisibilitySave(db, args, user),
@@ -501,6 +538,7 @@ export const RPC = {
   admission_service_add:          (db, args, user) => admissionServiceAdd(db, args, user),
   admission_service_done:         (db, args, user) => admissionServiceDone(db, args, user),   // SERVICE_TASKS_V1
   dashboard_trend:                (db, args, user) => dashboardTrend(db, args, user),   // DASHBOARD_TREND_V1
+  dashboard_overview:             (db, args, user) => dashboardOverview(db, args, user),   // DASHBOARD_OVERVIEW_V1
   case_doc_types_list:            (db, args, user) => caseDocTypesList(db, args, user),
   case_doc_type_save:             (db, args, user) => caseDocTypeSave(db, args, user),
   case_doc_type_set_active:       (db, args, user) => caseDocTypeSetActive(db, args, user),
@@ -698,6 +736,33 @@ export const RPC = {
   meta_token_clear:         (db, args, user) => metaTokenClear(db, args, user),
   meta_poll_now:            (db, args, user) => metaPollNow(db, args, user),
   meta_leads_recent:        (db, args, user) => metaLeadsRecent(db, args, user),
+  // META_INBOX_V1 — «Чат Facebook и Instagram»: переписка и комментарии
+  // страницы. Ответы и скрытие — async (запрос в Meta), обычный 402-гейт.
+  meta_inbox_state:           (db, args, user) => metaInboxState(db, args, user),
+  meta_inbox_toggle:          (db, args, user) => metaInboxToggle(db, args, user),
+  meta_inbox_poll_now:        (db, args, user) => metaInboxPollNow(db, args, user),
+  meta_inbox_conversations:   (db, args, user) => metaInboxConversations(db, args, user),
+  meta_inbox_messages:        (db, args, user) => metaInboxMessages(db, args, user),
+  meta_inbox_send:            (db, args, user) => metaInboxSend(db, args, user),
+  meta_inbox_comments:        (db, args, user) => metaInboxComments(db, args, user),
+  meta_inbox_comment_thread:  (db, args, user) => metaInboxCommentThread(db, args, user),
+  meta_inbox_comment_reply:   (db, args, user) => metaInboxCommentReply(db, args, user),
+  meta_inbox_comment_private: (db, args, user) => metaInboxCommentPrivate(db, args, user),
+  meta_inbox_comment_hide:    (db, args, user) => metaInboxCommentHide(db, args, user),
+  meta_inbox_to_crm:          (db, args, user) => metaInboxToCrm(db, args, user),
+  meta_inbox_unread:          (db, args, user) => metaInboxUnread(db, args, user),
+  meta_inbox_stats:           (db, args, user) => metaInboxStats(db, args, user),   // META_INBOX_STATS_V1
+  // SMS_INFORM_V1 — «Коммерческие инструменты» → «SMS-информирование» (Play
+  // Mobile). Пароль границу RPC не пересекает; sms_send_test — async, 402-гейт.
+  sms_settings_get:         (db, args, user) => smsSettingsGet(db, args, user),
+  sms_settings_save:        (db, args, user) => smsSettingsSave(db, args, user),
+  sms_password_clear:       (db, args, user) => smsPasswordClear(db, args, user),
+  sms_send_test:            (db, args, user) => smsSendTest(db, args, user),
+  sms_log_recent:           (db, args, user) => smsLogRecent(db, args, user),
+  // SMS_PUSH_V1 — «Коммерческие инструменты» → Push-уведомление, канал SMS.
+  sms_broadcast_preview:    (db, args, user) => smsBroadcastPreview(db, args, user),
+  sms_broadcast_send:       (db, args, user) => smsBroadcastSend(db, args, user),
+  sms_broadcast_status:     (db, args, user) => smsBroadcastStatusRpc(db, args, user),
   telephony_settings_get:   (db, args, user) => telephonySettingsGet(db, args, user),
   telephony_settings_save:  (db, args, user) => telephonySettingsSave(db, args, user),
   telephony_test:           (db, args, user) => telephonyTest(db, args, user),

@@ -118,11 +118,16 @@ let categoryRows = [];
 // CATEGORY_LIST_RESILIENT_V1 — установка, где миграция 107 ещё не применилась:
 // колонки `discount_percent` в базе нет, и запрос с ней отвергается ЦЕЛИКОМ.
 let categoryDiscountMissing = false;
+// PATIENT_LEAD_SOURCE_V1 — справочник источников CRM (crm_config_get). null —
+// список не приехал: тогда «Откуда узнали» не останавливает регистратуру.
+const LEAD_SOURCES = [{ key: 'instagram', label: 'Instagram', is_active: 1 }, { key: 'walk_in', label: 'Пришёл сам', is_active: 1 }, { key: 'old', label: 'Старый', is_active: 0 }];
+let leadSources = LEAD_SOURCES;
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   const ok = (payload) => ({ ok: true, status: 200, json: async () => payload });
   if (u.startsWith('/api/auth/me')) return ok({ user: globalThis.window.easymed.state.user });
+  if (u.startsWith('/api/rpc/crm_config_get')) return ok({ data: leadSources ? { sources: leadSources } : null });
   if (u.startsWith('/api/rpc/'))    return ok({ data: null });
   if (u.startsWith('/api/db')) {
     const table = body && body.table;
@@ -159,7 +164,7 @@ const overlays = () => (document.body.children || []).filter((n) => hasClass(n, 
 const dialogs = (name) => walk(document.body).filter((n) => n.attrs['data-dialog'] === name);
 
 function reset() {
-  patientRows = []; inserted = []; toasts.length = 0; categoryDiscountMissing = false;
+  patientRows = []; inserted = []; toasts.length = 0; categoryDiscountMissing = false; leadSources = LEAD_SOURCES;
   document.body.children.length = 0;
   setFullAccess('Admin');
 }
@@ -170,6 +175,7 @@ function fillMinimum(dlg, over = {}) {
   dlg.fields.first_name.value = over.first_name ?? 'Азиза';
   dlg.fields.date_of_birth.value = over.date_of_birth ?? '1990-04-01';
   dlg.setGender(over.gender ?? 'F');
+  if (dlg.fields.lead_source) dlg.fields.lead_source.value = over.lead_source ?? 'walk_in';   // PATIENT_LEAD_SOURCE_V1
 }
 
 // ===========================================================================
@@ -318,7 +324,8 @@ test('звёздочки не врут: помечены и проверяютс
   const starred = walk(dlg.card)
     .filter((n) => n.tagName === 'LABEL' && walk(n).some((x) => hasClass(x, 'req')))
     .map((n) => textOf(n).replace(/\s+/g, ' ').trim());
-  assert.deepEqual(starred.sort(), ['Дата рождения *', 'Имя *', 'Пол *', 'Фамилия *'].sort(),
+  // PATIENT_LEAD_SOURCE_V1 — пятая звезда: «Откуда узнали о нас» (владелец: «as a important»).
+  assert.deepEqual(starred.sort(), ['Дата рождения *', 'Имя *', 'Откуда узнали о нас *', 'Пол *', 'Фамилия *'].sort(),
     'помечены не те поля: ' + starred.join(' | '));
 
   // 2. Каждая звезда — настоящая проверка.
@@ -966,7 +973,7 @@ test('PATIENT_FIELDS_V1: набор полей рисуется в обычны�
   assert.ok(got, 'набор полей не собрался: ' + toasts.join(' | '));
 
   const dlg = modal.buildPatientCreateDialog({});
-  fillMinimum(dlg, { last_name: 'Иванов', first_name: 'Иван', date_of_birth: '1990-01-01', gender: 'M' });
+  fillMinimum(dlg, { last_name: 'Иванов', first_name: 'Иван', date_of_birth: '1990-01-01', gender: 'M', lead_source: '' });   // источник не выбран и в наборе полей
   const want = dlg.collect();
   assert.ok(want, 'окно не собралось: ' + toasts.join(' | '));
 
@@ -1154,4 +1161,59 @@ test('PATIENT_FIELDS_V1: save() сохраняет пациента и отда�
   assert.equal(inserted[0].values.gender, 'male', 'пол не перевёлся в колонку');
   assert.ok(saved && saved.id, 'сохранение не вернуло пациента');
   assert.ok(String(saved.fullName || '').includes('Иванов'), 'у сохранённого нет имени: ' + JSON.stringify(saved));
+});
+
+// PATIENT_LEAD_SOURCE_V1 + PATIENT_SECTIONS_FOLDED_V1 (2026-10-31, владелец со
+// снимком разделов 2–4: «make these 3 folded, and add istochnik here too»).
+test('«Откуда узнали о нас»: список из источников CRM, обязателен при заведении, уходит в lead_source', async () => {
+  reset();
+  const dlg = modal.buildPatientCreateDialog({});
+  await tick();
+  const sel = dlg.fields.lead_source;
+  assert.ok(sel, 'поля «Откуда узнали» нет');
+  const opts = sel.children.map((o) => o.attrs.value);
+  assert.deepEqual(opts, ['', 'instagram', 'walk_in'], 'архивный источник не предлагается: ' + opts.join(','));
+
+  fillMinimum(dlg, { lead_source: '' });
+  assert.equal(dlg.collect(), null, 'без источника карта прошла');
+  assert.ok(toasts.some((t) => t.includes('откуда пациент узнал')), toasts.join(' | '));
+
+  sel.value = 'instagram';
+  assert.equal(dlg.collect().lead_source, 'instagram');
+  dlg.close();
+});
+
+test('«Откуда узнали»: список не приехал — регистратура не останавливается, пусто уходит NULL', async () => {
+  reset();
+  leadSources = null;
+  const dlg = modal.buildPatientCreateDialog({});
+  await tick();
+  fillMinimum(dlg, { lead_source: '' });
+  const p = dlg.collect();
+  assert.ok(p, 'сбой справочника остановил заведение: ' + toasts.join(' | '));
+  assert.equal(p.lead_source, null);
+  dlg.close();
+});
+
+test('разделы 2–4 открываются свёрнутыми и разворачиваются щелчком по заголовку', () => {
+  reset();
+  const dlg = modal.buildPatientCreateDialog({});
+  const secs = walk(dlg.card).filter((n) => hasClass(n, 'mg-section') && hasClass(n, 'mg-foldable'));
+  assert.equal(secs.length, 3, 'сворачиваемых разделов не три');
+  for (const s of secs) assert.ok(hasClass(s, 'is-folded'), 'раздел открыт: ' + textOf(s.children[0]));
+  const head = secs[0].children[0];
+  assert.equal(head.attrs['aria-expanded'], 'false');
+  head.click();
+  assert.ok(!hasClass(secs[0], 'is-folded'), 'щелчок не развернул раздел');
+  assert.equal(head.attrs['aria-expanded'], 'true');
+  head.click();
+  assert.ok(hasClass(secs[0], 'is-folded'), 'второй щелчок не свернул');
+  // Поля свёрнутого раздела по-прежнему собираются.
+  dlg.fields.national_id.value = '12345678901234';
+  fillMinimum(dlg);
+  assert.equal(dlg.collect().national_id, '12345678901234');
+  // Первый экран стал ниже: свёрнутые разделы — по строке заголовка.
+  assert.ok(modal.firstScreenHeight() < modal.fullHeight());
+  assert.ok(modal.fitsViewport(768), 'свёрнутое окно не влезает в 768: ' + modal.firstScreenHeight());
+  dlg.close();
 });

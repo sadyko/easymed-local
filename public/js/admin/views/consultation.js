@@ -15,6 +15,7 @@
 import { supabase } from '../../supabase.js';
 // INTERNAL_REFERRAL_V1 — правило «какая ставка применяется» общее с отчётом.
 import { h, Icon, Tag, PageHead, toast, clear, avColor, initials, fmtDateTime, field } from '../ui.js';
+import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 // CABINET_REDESIGN_V1 — плитка и график те же, что на сводке клиники.
 import { kpiTile, fitViewport } from './dash-kpi.js';
 import { areaChart, legend } from './dash-charts.js';
@@ -121,8 +122,13 @@ let queueLoaded = false;      // рабочий список грузится, �
 
 // HASH_SUBROUTE_V1 — адрес ↔ вкладка. Пустой sub — дашборд: кабинет ОТКРЫВАЕТСЯ
 // им, поэтому у него бесхвостый '#consultation', а не '#consultation/dashboard'.
-const SUB_TO_TAB = { work: 'appointments', inpatients: 'inpatients', pay: 'pay', profile: 'profile' };
-const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', pay: 'pay', profile: 'profile' };
+// CABINET_DASH_PAY_ONE_V1 (2026-10-31, владелец: «merge dashboard to the
+// salary of doctor, it should be one page») — вкладки «Зарплата» больше нет:
+// зарплата — нижняя часть той же страницы, что дашборд. Адрес
+// '#consultation/pay' из закладок и ссылок продолжает работать: он открывает
+// эту страницу и прокручивает к зарплате (state.scrollToPay).
+const SUB_TO_TAB = { work: 'appointments', inpatients: 'inpatients', pay: 'dashboard', profile: 'profile' };
+const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', profile: 'profile' };
 
 export async function renderConsultation(container, { onNavigate, payload, tabId } = {}) {
     containerRef = container;
@@ -132,6 +138,9 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // пересылку ссылки, а голый '#consultation' открывает дашборд.
     const sub = payload && typeof payload.sub === 'string' ? payload.sub : null;
     state.tab = SUB_TO_TAB[sub] || 'dashboard';
+    state.scrollToPay = sub === 'pay';   // CABINET_DASH_PAY_ONE_V1 — старый адрес зарплаты
+    if (cabinetHero) cabinetHero.stop();
+    cabinetHero = null;   // SECTION_HERO_V1 — новый вход в раздел — новый баннер
     clear(container);
     container.appendChild(h('div', { class: 'empty', style: { padding: '40px' } }, 'Загружаем кабинет…'));
     // DOCTOR_DASHBOARD_V1 — дашборд перечитывается при каждом входе в раздел:
@@ -334,39 +343,74 @@ function referralIsDone(status) {
 // ---------------------------------------------------------------------------
 // Top-level render — page tabs + chosen view
 // ---------------------------------------------------------------------------
+// SECTION_HERO_V1 — баннер кабинета создаётся ОДИН раз на вход в раздел
+// (renderConsultation) и переставляется при каждой перерисовке: paint() чистит
+// экран на любое переключение вкладки и любую догрузку, и баннер, собранный
+// заново, перезапускал бы часы и мигал.
+let cabinetHero = null;
+
 function paint() {
     clear(containerRef);
+    if (!cabinetHero) cabinetHero = sectionHero({ section: 'consultation', title: 'Кабинет врача' });
     containerRef.appendChild(h('div', { class: 'fade-in' },
+        cabinetHero.el,
         // CABINET_TABS_SYSTEM_V1 (2026-09-09) — владелец: «this buttons dont
         // look like aligned with system design». Вкладки кабинета были нарисованы
         // отдельно — таблетки со своим радиусом, своими отступами и своей рамкой,
         // каких в системе нет больше нигде. Теперь это .tabs/.tab — тот же
         // подчёркнутый ряд, каким разделы переключаются во всём остальном
         // приложении.
-        h('div', { class: 'tabs', role: 'tablist', style: { marginBottom: '16px', flexWrap: 'wrap' } },
+        cabinetTabs(h('div', { class: 'tabs', role: 'tablist', style: { marginBottom: '16px', flexWrap: 'wrap' } },
             // DOCTOR_DASHBOARD_V1 — дашборд ПЕРВЫМ и открыт ПО УМОЛЧАНИЮ.
-            topTab('dashboard',    'Дашборд',      'Dashboard'),
+            // CABINET_DASH_PAY_ONE_V1 — и зарплата на нём же, ниже: одна вкладка.
+            topTab('dashboard',    'Дашборд · Зарплата', 'Dashboard'),
             topTab('appointments', 'Мои приёмы',  'Activity'),
             topTab('inpatients',   'Стационар',    'Bed', inpatientWaiting()),   // INPATIENT_TAB_V1 / ADMITTING_DOCTOR_CABINET_V1
-            // Старый «Дашборд» никуда не делся — он переехал сюда и назван тем,
-            // чем всегда был: глубокие периоды, ставки, вознаграждения за
-            // направления и разбор начислений.
-            topTab('pay',          'Зарплата',     'Wallet'),
             topTab('profile',      'Мой профиль',  'User'),
-        ),
+        )),
         state.tab === 'profile' ? profileView()
-            : state.tab === 'pay' ? dashboardView()
             : state.tab === 'inpatients' ? inpatientsView()
             : state.tab === 'appointments' ? appointmentsView()
-            : doctorDashboardView(),
+            : dashboardAndPayView(),
     ));
     // The appointments table body is painted into a slot by id — only meaningful
     // when the appointments tab is the one being shown.
     if (state.tab === 'appointments') paintBody();
     if (state.tab === 'appointments' && state.workRootEl) fitViewport(state.workRootEl, { min: 520 });   // WORK_ONE_SCREEN_V1
-    // PAY_ONE_SCREEN_V1 — владелец: «make everything fit into a one page».
-    // Вкладка берёт остаток окна по месту, как сводка клиники.
-    if (state.tab === 'pay' && state.dash.rootEl) fitViewport(state.dash.rootEl, { min: 560 });
+    // PAY_ONE_SCREEN_V1 подгонял зарплату под остаток окна, когда она была
+    // своей вкладкой. CABINET_DASH_PAY_ONE_V1 — теперь она под дашбордом,
+    // который сам занимает экран, и идёт по высоте содержимого (.pay-inline).
+    // Пришли по старому адресу или кнопкой «Зарплата» с дашборда — к ней.
+    if (state.tab === 'dashboard' && state.scrollToPay && state.dash.loaded) {
+        const anchor = containerRef && containerRef.querySelector && containerRef.querySelector('[data-cabinet-pay]');
+        if (anchor && typeof anchor.scrollIntoView === 'function') {
+            state.scrollToPay = false;
+            anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }
+}
+
+// CABINET_DASH_PAY_ONE_V1 — одна страница: сверху дашборд врача (мой день,
+// плитки, график), под ним зарплата (периоды, ставки, вознаграждения за
+// направления, разбор начислений). Каждая часть — по своему праву
+// (doctor.dashboard / doctor.pay, «Настройки → Роли»), как были вкладки.
+function dashboardAndPayView() {
+    const showDash = grantAllows(TAB_GRANT.dashboard, 'view');
+    const showPay = grantAllows(TAB_GRANT.pay, 'view');
+    const box = h('div', { class: 'cab-dash-pay' });
+    if (showDash) box.appendChild(doctorDashboardView());
+    if (showPay) {
+        const pay = dashboardView();
+        if (pay && pay.classList) pay.classList.add('pay-inline');
+        box.appendChild(h('section', { class: 'cab-pay-section', 'data-cabinet-pay': '' }, pay));
+    }
+    return box;
+}
+
+/** SECTION_HERO_V1 — вкладки кабинета встают в баннер (слева); на место в потоке — ничего. */
+function cabinetTabs(tabsEl) {
+    cabinetHero.setTabs(tabsEl);
+    return null;
 }
 
 // DOCTOR_DASHBOARD_V1 — дашборд рисует себя сам в своё гнездо: у него своё
@@ -375,7 +419,12 @@ function paint() {
 function doctorDashboardView() {
     const host = h('div');
     renderDoctorDashboard(host, {
-        onOpenPay: () => setTab('pay'),   // CABINET_REDESIGN_V1 — быстрое действие с графика
+        // CABINET_REDESIGN_V1 — быстрое действие с графика; CABINET_DASH_PAY_ONE_V1 —
+        // зарплата теперь ниже на этой же странице: прокрутить к ней.
+        onOpenPay: () => {
+            const anchor = containerRef && containerRef.querySelector && containerRef.querySelector('[data-cabinet-pay]');
+            if (anchor && typeof anchor.scrollIntoView === 'function') anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        },
         // Карточка приёма ведёт туда, где с ним работают, — в рабочий список.
         // Своего второго окна приёма дашборд не заводит.
         onOpenWork: () => setTab('appointments'),
@@ -550,7 +599,7 @@ function inpatientRow(r, onChange) {
     return h('div', { style: { display: 'flex', gap: '14px', alignItems: 'center', width: '100%',
                                padding: '14px 16px', background: 'var(--white)', border: '1px solid var(--ink-100)',
                                borderRadius: '12px', flexWrap: 'wrap' } },
-        h('span', { class: 'av ' + avColor(r.patient_id || nm), style: { width: '38px', height: '38px', borderRadius: '50%', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '13.5px', flex: 'none', background: 'var(--primary-50)', color: 'var(--primary-700)' } }, initials(nm)),
+        h('span', { class: 'av ' + avColor(r.patient_id || nm), style: { width: '38px', height: '38px', borderRadius: '8px', background: 'var(--primary-600)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '13.5px', flex: 'none' } }, initials(nm)),
         h('button', {
             type: 'button',
             title: tr('Открыть карточку госпитализации'),
@@ -682,7 +731,9 @@ function setTab(id) {
 // работает по кнопке и пуста по ссылке.
 function ensureTabData(id) {
     if (id === 'appointments') return loadQueueOnce();
-    if (id === 'pay' && !state.dash.loaded) {
+    // CABINET_DASH_PAY_ONE_V1 — зарплата грузится вместе со страницей дашборда
+    // (и только тому, кому её можно видеть: лишний запрос денег — не пустяк).
+    if (id === 'dashboard' && !state.dash.loaded && grantAllows(TAB_GRANT.pay, 'view')) {
         state.dash.loading = true;
         return (state.dash.doctors.length ? Promise.resolve() : loadDoctorsForDash())
             .then(() => loadDashboardData())
@@ -721,7 +772,11 @@ function syncSubUrl() {
 const TAB_GRANT = { dashboard: 'doctor.dashboard', appointments: 'doctor.visits', inpatients: 'doctor.inpatients', pay: 'doctor.pay', profile: 'doctor.profile' };
 
 function topTab(id, label, icon, badge) {
-    if (TAB_GRANT[id] && !grantAllows(TAB_GRANT[id], 'view')) return null;
+    // CABINET_DASH_PAY_ONE_V1 — вкладка «Дашборд · Зарплата» видна, если открыта
+    // хоть одна из двух её частей.
+    if (id === 'dashboard') {
+        if (!grantAllows(TAB_GRANT.dashboard, 'view') && !grantAllows(TAB_GRANT.pay, 'view')) return null;
+    } else if (TAB_GRANT[id] && !grantAllows(TAB_GRANT[id], 'view')) return null;
     const on = state.tab === id;
     // CABINET_TABS_SYSTEM_V1 — системная вкладка: подчёркивание, а не таблетка.
     // Свои размеры и цвета здесь не задаются вовсе — их задаёт .tab, и вкладка
@@ -1513,10 +1568,17 @@ function localMonthKey(value) {
 const sameId = (a, b) => a != null && b != null && String(a) === String(b);
 
 async function loadDoctorsForDash() {
-    const { data, error } = await supabase.from('users')
+    // CABINET_DASH_PAY_ONE_V1 — зарплата теперь грузится на КАЖДОМ входе в
+    // кабинет (она на странице дашборда), и врачу, закреплённому за собой, сервер
+    // отдаёт только его строку: раньше он тянул ставки всех врачей и отбрасывал
+    // их у себя (head-doctor-cabinet.test.mjs: «не расширяет ни одного
+    // денежного запроса»). Администратору — по-прежнему все, для выбора врача.
+    const scoped = scopedDoctorId();
+    let q = supabase.from('users')
         .select('id, full_name, is_doctor, specialty, role, salary_type, salary_fixed, salary_percent, doctor_category, kpi_links, service_rates, referral_rates, license_expiry_date')
-        .eq('active', true)
-        .order('full_name');
+        .eq('active', true);
+    if (scoped) q = q.eq('id', scoped);
+    const { data, error } = await q.order('full_name');
     if (error) { console.warn('[dash] doctors load:', error.message); return; }
     const all = data || [];
     // Prefer rows that look like doctors (role/specialty/license), fall back

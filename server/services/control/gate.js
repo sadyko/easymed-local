@@ -22,6 +22,10 @@ const READ_ONLY_RPCS = new Set([
   // V3120_FIX — графики сводки и статистика операторов телефонии — чистое
   // чтение: без них клиника с просроченной лицензией видела пустую сводку.
   'dashboard_trend', 'telephony_operator_stats',
+  // DASHBOARD_OVERVIEW_V1 — обзор клиники для руководителя. Чистое чтение.
+  'dashboard_overview',
+  // REFERRAL_REP_ON_CREATE_V1 — список медпредставителей для карточки источника. Чистое чтение.
+  'referrals_representative_options',
   // CASHIER_HEAD_V1 — кого касса может поставить исполнителем и почём. Чистое чтение.
   'cashier_line_performers',
   // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» кассы. Чистое чтение.
@@ -231,7 +235,16 @@ const READ_ONLY_RPCS = new Set([
   'referrals_representatives', 'referrals_internal', 'referrals_activity',   // REFERRALS_CRM_V1 — «Реферирование»
   'referrals_source_detail', 'referrals_doctor_detail',
   'doctor_bot_settings_get', 'doctor_bot_stats', 'doctor_bot_links_list',   // REFERRALS_CRM_V1 — бот для врачей-источников
+  'rep_bot_settings_get', 'rep_bot_stats', 'rep_bot_links_list', 'rep_bot_additions_list',   // REP_BOT_V1 — бот медпредставителей: только SELECT
+  'clinic_news_list',   // CLINIC_NEWS_V1 — доска объявлений: только SELECT
+  'patient_bot_status', 'phone_bot_status',   // PATIENT_BOT_INVITE_V1 — кто подключён к боту: только SELECT
   'meta_settings_get', 'meta_leads_recent',   // META_LEADS_V1 — настройки (без токена) и журнал заявок
+  // META_INBOX_V1 — чтение переписки и комментариев. Открытие помечает
+  // прочитанным — то же, что telegram_chat_messages выше.
+  'meta_inbox_state', 'meta_inbox_conversations', 'meta_inbox_messages', 'meta_inbox_comments',
+  'meta_inbox_comment_thread', 'meta_inbox_unread', 'meta_inbox_stats',   // META_INBOX_STATS_V1 — только SELECT
+  'sms_settings_get', 'sms_log_recent',   // SMS_INFORM_V1 — настройки (без пароля) и журнал SMS: только SELECT
+  'sms_broadcast_preview', 'sms_broadcast_status',   // SMS_PUSH_V1 — число получателей и ход рассылки: только SELECT
   // CRM_PHONE_V1 / CALL_RING_V1 — панель «Телефон» в CRM: кто я, журнал
   // звонков (прошлое клиники — его читают и при блокировке), трубки станции
   // (запрос к станции, база не меняется), что звонит сейчас (память процесса;

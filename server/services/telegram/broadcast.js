@@ -234,7 +234,8 @@ function ageYears(dob) {
 // визит в день «по» выпадал. Услуга — строкой визита, если её не убрали.
 const LIVE_VISIT = "COALESCE(v.status, '') NOT IN ('cancelled', 'no_show')";
 const LIVE_LINE = "COALESCE(vs.status, '') NOT IN ('cancelled', 'removed')";
-function passingPatientIds(db, ids, f) {
+// SMS_PUSH_V1 — экспорт: SMS-рассылка (sms/broadcast.js) отбирает карты теми же фильтрами.
+export function passingPatientIds(db, ids, f) {
   const out = new Set();
   if (!ids.length) return out;
   const where = [];

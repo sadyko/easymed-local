@@ -12,8 +12,10 @@ import { bootstrapAdmin } from './services/auth.js';
 import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
 import { startDoctorBot } from './services/doctor-bot/index.js';   // REFERRALS_CRM_V1 — второй бот: для врачей-источников
+import { startRepBot } from './services/rep-bot/index.js';   // REP_BOT_V1 — третий бот: медпредставители заводят врачей
 import { schedulePolling } from './services/telephony/poller.js';   // TELEPHONY_V1
 import { schedulePolling as scheduleMetaPolling } from './services/meta/poller.js';   // META_LEADS_V1 — опрос заявок из рекламы Meta
+import { scheduleInboxPolling } from './services/meta/inbox-poller.js';   // META_INBOX_V1 — переписка и комментарии Facebook / Instagram
 import { startLisListeners } from './lis/index.js';   // LIS_INGEST_V1
 import { createApp } from './app.js';
 import { setDataDir, setAppVersion } from './services/control/config.js';   // SUPERVISED_INSTALL_V1 / UPDATE_DELIVERY_V1
@@ -256,6 +258,7 @@ if (isMain) {
   // недоступный Telegram не должен мешать регистратуре работать.
   startTelegramBot(db);
   startDoctorBot(db);   // REFERRALS_CRM_V1 — свой поллер, свой токен; молчит, пока бот не включён
+  startRepBot(db);      // REP_BOT_V1 — так же: свой поллер, свой токен, молчит, пока не включён
 
   // TELEPHONY_V1 — the Binotel call poller, in this same process for the same
   // one-`npm start` reason as the bot above. Its tick decides for itself
@@ -270,6 +273,9 @@ if (isMain) {
   // (включено + модуль crm + сохранённый токен): выключенная интеграция стоит
   // одного чтения настроек в две минуты. Таймеры unref — остановку не держат.
   scheduleMetaPolling(db);
+  // META_INBOX_V1 — переписка и комментарии страницы, раз в минуту. Выключенный
+  // опрос стоит одного чтения состояния.
+  scheduleInboxPolling(db);
 
   // LIS_INGEST_V1 — слушатели анализаторов, в этом же процессе по той же
   // причине «один npm start», что бот и опрос телефонии выше. Клиника без

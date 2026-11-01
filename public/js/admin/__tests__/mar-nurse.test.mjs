@@ -971,7 +971,10 @@ test('вкладка «Амбулаторные»: сегодняшние виз
     assert.ok(txt.includes('Пенициллин'), 'аллергия выбранного пациента — на экране');
     assert.ok(txt.includes('Пока ничего не выдано.'), 'у первого визита выдач нет');
     // Отделение — фильтр стационара, на амбулаторной вкладке его нет.
-    const wardBox = walk(root).find((e) => e.className === 'field' && textOf(e).includes('Отделение'));
+    // SECTION_HERO_ACTIONS_V1 — фильтр переехал в синий баннер (.shero-select),
+    // подписи «Отделение» у него нет — только aria-label у списка.
+    const wardBox = walk(root).find((e) => e.className === 'shero-select');
+    assert.ok(wardBox, 'фильтра «Отделение» нет в баннере');
     assert.equal(wardBox.style.display, 'none');
 });
 

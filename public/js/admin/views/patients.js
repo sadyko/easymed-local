@@ -12,7 +12,7 @@ import { scopedDoctorId, canView, actorIsAdmin, canCreatePatient, canOrderAdmiss
 import { formatPhone } from '../phone-format.js';
 import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW_V1 — сумма долга у имени
 // PATIENT_ROW_V2 — регистратор и отметка Telegram читаются напрямую:
-// см. resolveRegistrars() и ensureTelegramLinked() ниже.
+// см. resolveRegistrars() ниже; Telegram — loadBotStatus() (PATIENT_BOT_INVITE_V1).
 import { supabase } from '../../supabase.js';
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
 import { branchSyncButton } from './branch-sync-button.js';   // BRANCH_SYNC_HOURLY_V1
@@ -46,6 +46,7 @@ const PAGE_SIZE = 30;
 const state = {
     filter: 'all',
     search: '',
+    dob:    '',   // PATIENT_SEARCH_DOB_V2
     sort:   'recent',
     page:   1,
     total:  0,
@@ -58,6 +59,7 @@ const refs = {
     tbody:     null,
     listCard:  null,   // MOTION_SCROLL_V1 — якорь прокрутки при листании
     searchInp: null,
+    dobInp:    null,   // PATIENT_SEARCH_DOB_V2
     emptyEl:   null,
     pagerLabel:null,
     prevBtn:   null,
@@ -72,6 +74,7 @@ const refs = {
 export async function renderPatients(container, { onNavigate, embedded = false }) {
     state.filter = 'all';
     state.search = '';
+    state.dob    = '';   // PATIENT_SEARCH_DOB_V2
     state.sort   = 'recent';
     state.page   = 1;
     state.total  = 0;
@@ -88,10 +91,9 @@ export async function renderPatients(container, { onNavigate, embedded = false }
     refs.sortButtons   = {};
 
     mount();
-    // PATIENT_ROW_V2 — отметки Telegram спрашиваются РАНЬШЕ первой отрисовки и
-    // ровно один раз за сессию (ensureTelegramLinked запоминает ответ): иначе
-    // значки проявлялись бы вторым кадром поверх уже прочитанной строки.
-    await ensureTelegramLinked();
+    // PATIENT_ROW_V2 спрашивал отметки Telegram здесь, до первой отрисовки.
+    // PATIENT_BOT_INVITE_V1 — теперь их приносит patient_bot_status для каждой
+    // страницы (loadBotStatus в paintRows), в последней колонке строки.
     await fetchAndPaint();
 
     // Async: scan the whole register for shared phone / PINFL so the
@@ -175,6 +177,20 @@ function mount() {
         autocomplete: 'off',
         style: { width: '100%', height: '34px', padding: '0 12px 0 34px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontSize: '13.5px' },
         placeholder: 'Поиск пациента по ФИО, ID или номеру телефона…',
+    });
+    // PATIENT_SEARCH_DOB_V2 (2026-10-31, владелец: «search and search by date
+    // of birth») — отдельное поле даты рождения рядом с поиском, как было до
+    // FAST_REGISTRATION_V1. Искать дату внутри той же строки нельзя — «1990»
+    // это ещё и кусок номера телефона. Пустое поле снимает фильтр.
+    refs.dobInp = h('input', {
+        type: 'date', title: 'Поиск по дате рождения', 'aria-label': 'Поиск по дате рождения', 'data-dob-search': '',
+        max: new Date().toISOString().slice(0, 10),
+        style: { height: '34px', padding: '0 10px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontSize: '13.5px', fontFamily: 'inherit', color: 'var(--ink-700)' },
+    });
+    refs.dobInp.addEventListener('change', () => {
+        state.dob = refs.dobInp.value;
+        state.page = 1;
+        fetchAndPaint();
     });
     let searchTimer = null;
     refs.searchInp.addEventListener('input', () => {
@@ -286,26 +302,53 @@ function mount() {
         refs.embedded ? null : registrarHeader({ active: 'patients', onNavigate: refs.onNavigate }),
         // List card. Ссылка на карточку сохраняется: к её началу возвращает
         // прокрутка при листании страниц (goPage).
-        refs.listCard = h('div', { class: 'card' },
-            h('div', { class: 'card-header' },
-                h('div', { class: 'row', style: { gap: '10px', flex: '1' } },
-                    h('div', { style: { position: 'relative', maxWidth: '380px', flex: '1' } },
-                        h('span', { style: { position: 'absolute', left: '12px', top: '11px', color: 'var(--ink-400)' } },
-                            Icon('Search', { size: 14 })),
-                        refs.searchInp,
-                    ),
-                    fastRegBtn,   // FAST_REGISTRATION_V1 — ровно там, где стоял фильтр по дате рождения
+        // REG_LIST_ADAPT_V1 (2026-10-31, владелец: «Make it possible to adopt
+        // based on screen size») — классы шапки и карточки ведут раскладку по
+        // ШИРИНЕ КАРТОЧКИ (@container в admin-views.css), а не окна: открытое
+        // меню отнимает у списка ~250px, и правило по окну врало бы.
+        refs.listCard = h('div', { class: 'card reg-base-card' },
+            // REG_LIST_ADAPT_V2 — шапка ДВУМЯ РЯДАМИ при любой ширине. Первая
+            // попытка (V1) оставила один ряд с переносами — и левая группа
+            // ломалась сама в себе («Сначала новые» уезжала под поиск), а
+            // действия стояли справа как ни в чём не бывало. Теперь порядок
+            // задан смыслом, а не случаем переноса:
+            //   ряд 1 — работа: поиск (тянется), «Быстрая регистрация» (там,
+            //           где стоял фильтр даты рождения — место выбрал
+            //           владелец, FAST_REGISTRATION_V1), сортировка, а справа —
+            //           «Создать пациента»;
+            //   ряд 2 — справка и вспомогательное: «Всего», дубликаты,
+            //           калькулятор, госпитализация, синхронизация.
+            // На узкой карточке первый ряд складывается: поиск во всю ширину,
+            // под ним сортировка и кнопки (admin-views.css, @container).
+            //
+            // REG_LIST_HEAD_V3 (2026-10-31, владелец со снимком шапки: «put the
+            // button on one line and search place belove them separately,
+            // search and search by date of birth») — порядок рядов ПЕРЕВЁРНУТ:
+            //   ряд 1 — все кнопки одной строкой: «Всего», «Быстрая регистрация»,
+            //           сортировка, дубликаты, калькулятор, госпитализация,
+            //           синхронизация, справа — «Создать пациента»;
+            //   ряд 2 — поиск по ФИО / ID / телефону и рядом поиск по дате
+            //           рождения (PATIENT_SEARCH_DOB_V2), под тонкой чертой.
+            h('div', { class: 'card-header reg-base-head' },
+                h('div', { class: 'reg-base-tools' },
+                    h('span', { class: 'muted reg-base-total' }, 'Всего ', refs.totalEl),
+                    fastRegBtn,
                     sortSegmented,
-                ),
-                h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Всего ', refs.totalEl),
                     dupChip, calcBtn, admitBtn,
                     // BRANCH_SYNC_HOURLY_V1 — сама покажется, только если это
                     // подключённый филиал. onDone перечитывает список: карта,
                     // заведённая в соседнем здании, уже в базе, но на экране
                     // её ещё нет.
                     branchSyncButton({ onDone: () => fetchAndPaint() }),
-                    createBtn,
+                    h('div', { class: 'reg-base-main' }, createBtn),
+                ),
+                h('div', { class: 'reg-base-acts reg-base-find' },
+                    h('div', { class: 'reg-base-search', style: { position: 'relative' } },
+                        h('span', { style: { position: 'absolute', left: '12px', top: '11px', color: 'var(--ink-400)' } },
+                            Icon('Search', { size: 14 })),
+                        refs.searchInp,
+                    ),
+                    refs.dobInp,
                 ),
             ),
             mergeBar,
@@ -320,7 +363,8 @@ function mount() {
             // распирала страницу, и вбок ехало ВСЁ окно вместе с шапкой и
             // поиском. Прокрутка внутри обёртки оставляет страницу на месте.
             h('div', { style: { overflowX: 'auto' } },
-            h('table', { class: 'tbl reg-base-tbl' },
+            // REG_LIST_COMPACT_V1 — ref: колонка флажков видна только в режиме «Дубликаты».
+            refs.baseTbl = h('table', { class: 'tbl reg-base-tbl' + (state.filter === 'duplicates' ? ' is-dup' : '') },
                 h('thead', null, h('tr', null,
                     h('th', { style: { width: '34px', textAlign: 'center' }, 'data-dupcol': '' }, dupHeadCb),   // DUP_MERGE_V1
                     // PATIENT_ROW_V2 — восемь колонок вместо десяти, и это НЕ
@@ -332,6 +376,8 @@ function mount() {
                     // человека опознают, стоит одним блоком рядом с ним.
                     h('th', null, 'Пациент'),
                     h('th', null, 'Дата рождения'),
+                    // REG_LIST_AGE_COL_V1 — возраст своей колонкой, а не строкой под датой.
+                    h('th', null, 'Возраст'),
                     h('th', null, 'Телефон'),
                     // REG_TBL_FIT_V2 — «Телеграм» и «Есть ДМС?» убраны: обе
                     // колонки занимали ширину, но ничего не сообщали. Телеграм
@@ -340,11 +386,13 @@ function mount() {
                     // потому что страховая в постраничный список не джойнится.
                     // Полис виден в карточке пациента. Отметка Telegram
                     // вернулась НЕ колонкой, а значком у имени, и берётся из
-                    // настоящей связки чата (см. ensureTelegramLinked).
+                    // настоящей связки чата; теперь — последней колонкой (loadBotStatus).
                     h('th', null, 'Последний визит'),
                     h('th', { style: { textAlign: 'right' } }, 'Баланс'),
                     h('th', null, 'Регистратор'),
                     h('th', { style: { width: '104px' } }),
+                    // PATIENT_BOT_INVITE_V1 — Telegram-бот пациента: значок или «Ссылка на бот».
+                    h('th', { class: 'pt-bot-col' }),
                 )),
                 refs.tbody,
             )),
@@ -516,48 +564,104 @@ function debtOf(p) {
     return (p && debtByPatient.get(String(p.id))) || 0;
 }
 
-// TELEGRAM — «активный телеграм» в этой сборке это НЕ поле в карте пациента.
-// Колонки patients.telegram_opt_in нет в схеме вовсе (её же и отбрасывает
-// query-compiler на записи), поэтому data.js со своим row.telegram_opt_in
-// всегда получает false — из-за этого прошлая колонка «Телеграм» показывала
-// «Не подключён» у всех и была удалена (REG_TBL_FIT_V2).
+// PATIENT_BOT_INVITE_V1 (2026-11-01) — TELEGRAM-БОТ ПАЦИЕНТА В КОНЦЕ СТРОКИ.
 //
-// Настоящая связь живёт в telegram_links: чат ↔ НОМЕР ТЕЛЕФОНА, и активна
-// она, пока revoked_at пуст. Сервер уже отдаёт готовый ответ — telegram_chats_list
-// перечисляет живые связки вместе с картами пациентов на том же номере. Спрашиваем
-// его ОДИН раз на монтирование и складываем id в множество.
+// Владелец: «at the end of patientline add button to send bot link to patient
+// if patient has no bot, if patinet has bot, small telegram logo should be
+// there». Подключён к боту — маленький логотип Telegram; нет — кнопка
+// «Ссылка на бот»: patient_bot_invite шлёт ссылку SMS (Play Mobile), а если
+// SMS не настроено — ссылка ложится в буфер обмена, и регистратор отправляет
+// её сам (rpc/patient-bot.js).
 //
-// СПРАШИВАЕМ, ТОЛЬКО ЕСЛИ РАЗДЕЛ ЧАТА ВЫДАН: процедура закрыта правом
-// «telegram-chat» (server/services/rpc/telegram.js), и регистратору по
-// умолчанию его не выдают. Заведомо отказной запрос на каждый вход в реестр —
-// это трата, а не отметка; без права отметок просто нет, и ни одна строка не
-// притворяется, будто знает про Telegram.
-let telegramLinked = null;   // Set<patient id> | null, пока не спрошено
+// Прежде (PATIENT_ROW_V2) отметка стояла у имени и читалась из
+// telegram_chats_list: только роли с правом чата и только по последним 300
+// чатам — регистратор по умолчанию не видел её вовсе. patient_bot_status
+// отвечает за id ЭТОЙ страницы всем, кто видит список, и номеров не отдаёт.
+// Бот у клиники не подключён — колонка пустая: звать в несуществующий бот нельзя.
+const botCells = new Map();   // String(patient id) → <td> последней колонки
+let botStatusToken = 0;
 
-async function ensureTelegramLinked() {
-    if (telegramLinked) return telegramLinked;
-    telegramLinked = new Set();
-    if (!canView('telegram-chat')) return telegramLinked;
-    try {
-        const { data, error } = await supabase.rpc('telegram_chats_list', { limit: 300 });
-        if (error) throw new Error(error.message);
-        // V3120_FIX — сервер отвечает { chats, unread, folders }, а не массивом:
-        // цикл по самому ответу падал («not iterable»), и отметка Telegram не
-        // появлялась ни у кого.
-        const chats = Array.isArray(data) ? data : ((data && data.chats) || []);
-        for (const chat of chats) {
-            for (const pt of (chat && chat.patients) || []) {
-                if (pt && pt.id != null) telegramLinked.add(String(pt.id));
-            }
-        }
-    } catch (e) {
-        console.warn('[patients/telegram]', e.message);
-    }
-    return telegramLinked;
+function botCell(p) {
+    const td = h('td', { class: 'pt-bot-cell', onclick: (e) => e.stopPropagation() });
+    if (p && p.id != null) botCells.set(String(p.id), td);
+    return td;
 }
 
-function hasTelegram(p) {
-    return !!(telegramLinked && p && p.id != null && telegramLinked.has(String(p.id)));
+async function loadBotStatus(rows) {
+    const token = ++botStatusToken;
+    const ids = (rows || []).map((p) => p.id).filter((id) => id != null);   // проверку id делает сервер
+    if (!ids.length) return;
+    let st = null;
+    try {
+        const { data, error } = await supabase.rpc('patient_bot_status', { ids });
+        if (error) return;   // нет права или сбой — колонка остаётся пустой, тревоги нет
+        st = data;
+    } catch (_) { return; }
+    // Пока шёл запрос, список перерисовали (поиск, страница) — ответ устарел.
+    if (token !== botStatusToken || !st) return;
+    const linked = new Set((st.linked || []).map(String));
+    for (const p of rows) {
+        const td = botCells.get(String(p.id));
+        if (td) fillBotCell(td, p, linked.has(String(p.id)), !!st.bot);
+    }
+}
+
+function fillBotCell(td, p, linked, botReady = true) {
+    clear(td);
+    // Бот клиники не подключён — кнопка видна, но неактивна и говорит почему.
+    // Сначала колонка в этом случае оставалась пустой, и владелец её не нашёл
+    // («I don't see the button»): пустая колонка читается как поломка.
+    if (!botReady) {
+        td.appendChild(h('button', { class: 'pt-bot-invite', type: 'button', disabled: true,
+            title: tr('Telegram-бот клиники не подключён — его включают в «Настройки → Telegram-бот».') },
+            Icon('Send', { size: 13 }), h('span', { class: 'pt-act-lbl' }, tr('Ссылка на бот'))));
+        return;
+    }
+    if (linked) {
+        td.appendChild(h('span', { class: 'pt-tg', title: tr('Подключён к Telegram-боту клиники'), 'aria-label': tr('Подключён к Telegram-боту клиники') },
+            Icon('Send', { size: 12 })));
+        return;
+    }
+    const hasPhone = String(p.phone || '').replace(/\D/g, '').length >= 9;
+    const btn = h('button', {
+        class: 'pt-bot-invite', type: 'button', disabled: !hasPhone,
+        title: hasPhone ? tr('Отправить пациенту ссылку на Telegram-бот клиники') : tr('У пациента нет номера телефона'),
+        onclick: async () => {
+            btn.disabled = true;
+            try {
+                const { data, error } = await supabase.rpc('patient_bot_invite', { patient_id: p.id });
+                if (error) throw new Error(error.message);
+                const res = data || {};
+                if (res.ok) {
+                    toast(tr('Ссылка на Telegram-бот отправлена пациенту по SMS.'), 'ok');
+                    btn.title = tr('Ссылка отправлена');
+                    btn.classList.add('is-sent');
+                    return;
+                }
+                // SMS не настроено или не ушло — ссылку в буфер, отправит регистратор.
+                const copied = await copyText(res.link || '');
+                toast(res.message ? tr(res.message)
+                    : copied ? tr('SMS не настроено — ссылка на бот скопирована, отправьте её пациенту.')
+                    : trf('SMS не настроено. Ссылка на бот: {link}', { link: res.link || '' }), res.message ? 'fail' : 'info');
+                btn.disabled = false;
+            } catch (e) {
+                toast((e && e.message) || tr('Не удалось отправить ссылку.'), 'fail');
+                btn.disabled = false;
+            }
+        },
+    }, Icon('Send', { size: 13 }), h('span', { class: 'pt-act-lbl' }, tr('Ссылка на бот')));
+    td.appendChild(btn);
+}
+
+async function copyText(text) {
+    if (!text) return false;
+    try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch (_) { /* буфер закрыт — покажем ссылку в сообщении */ }
+    return false;
 }
 
 // -----------------------------------------------------------------------------
@@ -575,6 +679,7 @@ async function fetchAndPaint() {
         limit:    PAGE_SIZE,
         offset:   (state.page - 1) * PAGE_SIZE,
         search:   state.search,
+        dob:      state.dob,   // PATIENT_SEARCH_DOB_V2
         filter:   state.filter,
         sort:     state.sort,
         doctorId: refs.doctorId,
@@ -608,15 +713,16 @@ function setLoadingRow() {
     if (!refs.tbody) return;
     clear(refs.tbody);
     refs.tbody.appendChild(h('tr', null,
-        // PATIENT_ROW_V2 — 8 колонок: число обязано совпадать с шапкой, иначе
-        // строка загрузки не растянется на таблицу.
-        h('td', { colspan: '8', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка…'),
+        // PATIENT_ROW_V2 — 10 колонок (REG_LIST_AGE_COL_V1 + PATIENT_BOT_INVITE_V1): число обязано
+        // совпадать с шапкой, иначе строка загрузки не растянется на таблицу.
+        h('td', { colspan: '10', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка…'),
     ));
     refs.emptyEl.style.display = 'none';
 }
 
 function paintRows(rows) {
     clear(refs.tbody);
+    botCells.clear();   // PATIENT_BOT_INVITE_V1
     if (rows.length === 0) {
         refs.emptyEl.style.display = '';
         return;
@@ -640,6 +746,7 @@ function paintRows(rows) {
     }
     syncHeadCb();
     paintMergeBar();
+    loadBotStatus(rows);   // PATIENT_BOT_INVITE_V1 — дозаполняет последнюю колонку
 }
 
 // DUP_MERGE_V1 — reflect selection count in the bar; toggle the whole strip.
@@ -651,6 +758,8 @@ function paintMergeBar() {
     // merge_patients откажет остальным): кнопки у других ролей нет.
     if (refs.mergeBar) refs.mergeBar.style.display = selectedDup.size >= 2 && actorIsAdmin() ? 'flex' : 'none';
     if (refs.dupHeadCb) refs.dupHeadCb.style.display = state.filter === 'duplicates' ? '' : 'none';
+    // REG_LIST_COMPACT_V1 — пустая колонка флажков сдвигала всю строку вправо.
+    if (refs.baseTbl) refs.baseTbl.className = 'tbl reg-base-tbl' + (state.filter === 'duplicates' ? ' is-dup' : '');
 }
 function syncHeadCb() {
     if (!refs.dupHeadCb) return;
@@ -816,24 +925,19 @@ function patientRow(p) {
     // только когда уже может показать (см. MOTION_REVEAL_V1). Атрибут в
     // разметке безвреден сам по себе: без JS он ничего не значит.
     return h('tr', { class: 'row-click', 'data-reveal': '', onclick: () => refs.onNavigate('patient-card', p), style: { cursor: 'pointer' } },
-        h('td', { style: { textAlign: 'center' }, onclick: (e) => e.stopPropagation() }, cb || ''),
+        h('td', { class: 'pt-dupcell', style: { textAlign: 'center' }, onclick: (e) => e.stopPropagation() }, cb || ''),
         // 1 — ЛИЧНОСТЬ одним блоком: аватар, имя со своими метками, а под ним
         // всё, чем человека опознают у стойки, — номер карты, пол, город.
         h('td', null,
             h('div', { class: 'pt-ident' },
-                Avatar({ initials: p.initials, color: p.avColor }),
+                Avatar({ initials: p.initials, color: p.avColor, size: 'sm' }),   // REG_LIST_COMPACT_V1
                 h('div', { class: 'pt-ident-txt' },
                     h('div', { class: 'pt-name' },
                         // title — полное ФИО: длинная фамилия обрезается
                         // многоточием, и обрезанное обязано быть прочитываемым.
                         h('span', { class: 'pt-nm', title: fullName || undefined }, fullName || '—'),
-                        // TELEGRAM — маленький значок у имени, а не колонка: это
-                        // свойство ЧЕЛОВЕКА (с ним можно списаться), и стоять оно
-                        // должно при имени. Бумажный самолётик — тот же значок,
-                        // которым Telegram подписан в разделе чата с пациентами.
-                        hasTelegram(p)
-                            ? h('span', { class: 'pt-tg', title: 'Есть Telegram' }, Icon('Send', { size: 11 }))
-                            : null,
+                        // TELEGRAM — значок у имени (PATIENT_ROW_V2) переехал в
+                        // последнюю колонку строки: PATIENT_BOT_INVITE_V1.
                         duplicateIdSet.has(p.id) ? h('span', { class: 'tag tag-warn', style: { fontSize: '12.5px' }, title: 'Возможный дубликат — то же имя на том же телефоне (или общий ПИНФЛ). Откройте карточку для объединения.' }, 'Дубликат') : null,
                         // DEBT_FLOW_V1 — долг у имени, с суммой: у стойки это
                         // видят ДО того, как человек дойдёт до кассы.
@@ -857,11 +961,12 @@ function patientRow(p) {
                 ),
             ),
         ),
-        // 2 — Дата рождения «2 мая 2019», под ней возраст.
-        h('td', null,
-            dob ? h('div', { class: 'pt-when-main' }, dob) : noneCell('—'),
-            p.age != null ? h('div', { class: 'pt-when-sub' }, trf('{n} лет', { n: p.age })) : null,
-        ),
+        // 2 — Дата рождения «2 мая 2019».
+        // REG_LIST_AGE_COL_V1 (2026-10-31, владелец: «put age separte from year
+        // of birth») — возраст ушёл из-под даты в соседнюю колонку: у стойки
+        // его ищут глазами отдельно от даты, по которой сверяют паспорт.
+        h('td', null, dob ? h('div', { class: 'pt-when-main' }, dob) : noneCell('—')),
+        h('td', null, p.age != null ? h('div', { class: 'pt-when-main' }, trf('{n} лет', { n: p.age })) : noneCell('—')),
         // 3 — Телефон: тот же вид, что на карточке CRM (formatPhone), и его
         // можно ВЫДЕЛИТЬ мышью — номер из реестра диктуют и копируют. Клик по
         // номеру поэтому не открывает карту: выделение заканчивается кликом, и
@@ -888,9 +993,15 @@ function patientRow(p) {
         ),
         // 7 — action «Карточка»
         h('td', { onclick: (e) => e.stopPropagation() },
-            h('button', { class: 'start-btn done', type: 'button', onclick: () => refs.onNavigate('patient-card', p) },
-                Icon('ID', { size: 14 }), 'Карточка'),
+            // REG_LIST_ADAPT_V1 — подпись в своём span: на узкой карточке
+            // остаётся одна иконка (admin-views.css), а имя кнопки — в title.
+            h('button', { class: 'start-btn done', type: 'button', title: 'Карточка', 'aria-label': 'Карточка', onclick: () => refs.onNavigate('patient-card', p) },
+                Icon('ID', { size: 14 }), h('span', { class: 'pt-act-lbl' }, 'Карточка')),
         ),
+        // 8 — PATIENT_BOT_INVITE_V1: Telegram-бот пациента. Ячейка пустая, пока
+        // не ответил patient_bot_status (loadBotStatus) — чтобы строка не
+        // мигала «Ссылкой» у уже подключённого пациента.
+        botCell(p),
     );
 }
 

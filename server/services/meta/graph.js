@@ -47,10 +47,13 @@ function buildUrl(path, params, token) {
   return u.toString();
 }
 
-async function fetchJson(url, { token = '', fetchImpl = globalThis.fetch, timeoutMs = 15000, maxBytes = 2_000_000 } = {}) {
+async function fetchJson(url, { token = '', fetchImpl = globalThis.fetch, timeoutMs = 15000, maxBytes = 2_000_000, method = 'GET', form = null } = {}) {
   let res;
   try {
-    res = await fetchImpl(url, { method: 'GET', headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
+    const init = { method, headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) };
+    // META_INBOX_V1 — запись (ответ, скрытие): поля формой, как их ждёт Graph API.
+    if (form != null) { init.headers['content-type'] = 'application/x-www-form-urlencoded'; init.body = form; }
+    res = await fetchImpl(url, init);
   } catch (e) {
     // Сеть, DNS, таймаут — всё «нет связи»: обычное состояние клиники без интернета.
     return { ok: false, reason: 'offline', message: scrubToken(e && e.message, token) };
@@ -80,6 +83,22 @@ async function fetchJson(url, { token = '', fetchImpl = globalThis.fetch, timeou
 /** Один GET: graphGet('me', { fields: 'id,name' }, { token, fetchImpl, timeoutMs }). */
 export function graphGet(path, params = {}, opts = {}) {
   return fetchJson(buildUrl(path, params, opts.token), opts);
+}
+
+/**
+ * META_INBOX_V1 — один POST: graphPost('{page}/messages', { recipient: {id}, message: {text} }, { token }).
+ * Поля — телом формы (объекты JSON-ом, как в buildUrl), токен — тоже в теле, а
+ * не в адресе: адрес POST чаще попадает в журналы прокси. Ответ — тот же
+ * { ok, data } / { ok: false, reason, code, subcode, message }.
+ */
+export function graphPost(path, params = {}, opts = {}) {
+  const form = new URLSearchParams();
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v == null) continue;
+    form.set(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
+  }
+  if (opts.token) form.set('access_token', String(opts.token));
+  return fetchJson(buildUrl(path, {}, ''), { ...opts, method: 'POST', form: form.toString() });
 }
 
 /**

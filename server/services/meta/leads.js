@@ -122,7 +122,8 @@ export function ensureMetaSource(db) {
   return META_SOURCE_KEY;
 }
 
-function appendToCard(db, id, note) {
+// META_INBOX_V1 — экспорт: «В CRM» из чата Facebook и Instagram дописывает в открытую карточку тем же правилом.
+export function appendToCard(db, id, note) {
   const row = db.prepare('SELECT note, sources, source FROM crm_requests WHERE id = ?').get(id);
   if (!row) return false;
   let sources = [];

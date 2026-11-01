@@ -28,6 +28,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, StatusTag, fmtDateTime, field } from '../ui.js';
+import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 // DOCS_HISTORY_SECTION_V1 — подшитые истории болезни печатаются тем же бланком,
 // что карта пациента (PATIENT_HISTORY_TAB_V1) и документы госпитализации.
@@ -67,12 +68,8 @@ function mount() {
     clear(refs.container);
     refs.bodyEl = h('div');
     refs.container.appendChild(h('div', { class: 'fade-in' },
-        h('div', { class: 'page-head' },
-            h('div', null,
-                h('h1', { class: 'page-title' }, 'Documents'),
-                h('p', { class: 'page-subtitle' }, 'Печатные документы пациента: анализы, диагностика, консультации'),
-            ),
-        ),
+        // SECTION_HERO_V1 — шапка раздела — тёмный баннер клинических разделов.
+        sectionHero({ section: 'patient-documents', title: 'Документы', sub: 'Печатные документы пациента: анализы, диагностика, консультации' }).el,
         refs.bodyEl,
     ));
     repaintBody();

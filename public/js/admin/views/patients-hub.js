@@ -41,7 +41,8 @@
 import { h, Icon, clear } from '../ui.js';
 // I18N_COVERAGE_V1 — причина сбоя подставляется В ПЕРЕВЕДЁННЫЙ шаблон, а не
 // склеивается из кусков: склейка непереводима целиком ни на один язык.
-import { trf } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
+import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — общий баннер клинических разделов
 import { grantAllows, isRouteAllowed } from '../permissions.js';   // GRANTS_V1 — окна раздела по матрице прав; V3120_FIX — isRouteAllowed
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
 // модуля. Разошедшийся ?v= развёл бы состояние экрана на две копии.
@@ -57,6 +58,42 @@ const TABS = [
     { id: 'calendar', sub: 'calendar', label: 'Записи',  icon: 'Calendar' },
 ];
 const SUB_TO_TAB = { queue: 'queue', calendar: 'calendar' };
+
+// ---------------------------------------------------------------------------
+// PATIENTS_HERO_V1 (2026-10-31) — ТЁМНЫЙ БАННЕР НАД ВКЛАДКАМИ.
+//
+// Владелец прислал снимок прежней «Aurora»-полосы регистратуры (название
+// раздела, приветствие, тёплый абзац, дата с живыми часами и вкладки-пилюли
+// на тёмном фоне) и попросил: «Make the registration block more in this
+// design». Это ОТМЕНА решения NO_GREETING_V1 (2026-09-05, «убрать
+// приветственные баннеры») — но только для раздела «Пациенты»: остальные
+// экраны по-прежнему без приветствий, и app-shell.test.mjs стережёт это
+// для всех файлов, кроме этого.
+//
+// Чем этот баннер отличается от прежнего (registrar-header.js до 09-05):
+//   * часы — СВОИ у каждого баннера, а не модульный таймер на всех: прежний
+//     _regClockTimer делили два экземпляра модуля под разными ?v=, и это была
+//     живая мина. Таймер сам гаснет, когда баннер ушёл из документа, и
+//     снимается в destroy() хоста; unref — чтобы прогон тестов не висел;
+//   * приветствие пересчитывается вместе с часами — «доброе утро» не
+//     доживает до вечера у окна, открытого с утра;
+//   * вкладки баннера — ТЕ ЖЕ кнопки tablist хоста (роли, id, стрелки), а не
+//     вторая полоса: у раздела одна навигация;
+//   * всё через tr()/trf() и monthName() — на узбекском и английском баннер
+//     говорит на своём языке, а не по-русски.
+// ---------------------------------------------------------------------------
+const HERO_SUB = { list: 'База пациентов', queue: 'Очередь', calendar: 'Календарь записи' };
+
+// SECTION_HERO_V1 — баннер стал общим для клинических разделов
+// (views/section-hero.js); здесь только то, что знает «Пациенты»: подзаголовок
+// по вкладке. Помощники даты и приветствия — оттуда же, отсюда — для тех,
+// кто импортировал их у «Пациентов».
+export { heroDateLabel, heroTimeLabel, heroGreeting } from './section-hero.js';
+
+function patientsHero(strip) {
+    const hero = sectionHero({ section: 'patients', title: 'Пациенты', sub: HERO_SUB.list, tabs: strip });
+    return { el: hero.el, stop: hero.stop, setTab: (id) => hero.setSub(HERO_SUB[id] || HERO_SUB.list) };
+}
 
 // Календарь приезжает ДИНАМИЧЕСКИМ импортом, и это тоже решение. Статический
 // импорт связал бы жизнь всего раздела с одним файлом: пока календарь
@@ -170,7 +207,9 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         }, Icon(t.icon, { size: 14 }), h('span', null, t.label));
         strip.appendChild(buttons[t.id]);
     }
-    root.appendChild(strip);
+    // PATIENTS_HERO_V1 — полоса вкладок живёт внутри тёмного баннера.
+    const hero = patientsHero(strip);
+    root.appendChild(hero.el);
     for (const t of visibleTabs) root.appendChild(hosts[t.id]);
 
     // Вкладка монтируется при первом показе и дальше ЖИВЁТ: прокрутка списка,
@@ -216,6 +255,7 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             // со своей .fade-in.
             if (on && animate) animateIn(hosts[t.id]);
         }
+        hero.setTab(active);   // PATIENTS_HERO_V1 — подзаголовок баннера называет вкладку
     }
 
     // URL отражает состояние: вкладка лежит в адресе, поэтому F5 её сохраняет,
@@ -299,6 +339,6 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         select,
         // Оболочка панель не размонтирует, пока та в кэше; когда размонтирует —
         // доска снимет свой таймер сама (views/queue.js следит за isConnected).
-        destroy() { if (queue) queue.destroy(); },
+        destroy() { hero.stop(); if (queue) queue.destroy(); },   // PATIENTS_HERO_V1 — и часы баннера
     };
 }
