@@ -22,10 +22,11 @@
 // only, as always: every RPC re-checks admin + password server-side.
 
 import { h, Icon, clear, toast, field } from '../ui.js';
-import { tr, trf } from '../i18n.js';
+import { tr, trf, getLang } from '../i18n.js';
 import { supabase } from '../../supabase.js';
 import {
     normalizeBackupList, backupKind, backupKindLabel, backupDateLabel, formatBytes, freeSpaceNote,
+    noSpaceText,
 } from '../system-logic.js';
 import { showRestartOverlay } from './system-restart.js';
 
@@ -67,7 +68,12 @@ export async function renderBackupsCard(root, { admin }) {
                 toast(tr('Копия создана'), 'ok');
                 await load();
             } catch (e) {
-                statusEl.textContent = tr('Не удалось создать копию. Попробуйте ещё раз.');
+                // DISK_GUARD_V1 — «нет места» говорится словами сервера, с числами
+                // на языке экрана (system-logic.js noSpaceText), а не общей
+                // фразой «попробуйте ещё раз»: повтор тут не поможет.
+                statusEl.textContent = (e && e.code === 'no_space' && e.message)
+                    ? (noSpaceText(e, getLang(), tr) || tr(e.message))
+                    : tr('Не удалось создать копию. Попробуйте ещё раз.');
             }
             createBtn.disabled = false;
         },
@@ -105,10 +111,17 @@ export async function renderBackupsCard(root, { admin }) {
                 h('td', null, backupKindLabel(backupKind(row))),
                 h('td', null, formatBytes(row.size, tr)),
                 h('td', { class: 'sys-backups-restore' },
-                    h('button', {
-                        type: 'button', class: 'btn btn-outline btn-sm',
-                        onclick: () => openRestoreModal(row),
-                    }, 'Восстановить'))));
+                    row.restorable === false
+                        // DISK_GUARD_V1 — «До восстановления» / «До отката»: журнал
+                        // такой базы лежит рядом отдельным файлом, и вернуть её
+                        // одним файлом значило бы потерять последние записи.
+                        // Видна — чтобы было понятно, что занимает диск;
+                        // возвращает её поддержка Easy-Med.
+                        ? h('span', { class: 'muted sys-note' }, 'Хранится для поддержки')
+                        : h('button', {
+                            type: 'button', class: 'btn btn-outline btn-sm',
+                            onclick: () => openRestoreModal(row),
+                        }, 'Восстановить'))));
         }
         tableWrap.appendChild(h('table', { class: 'tbl sys-backups-tbl' },
             h('thead', null, h('tr', null,
@@ -154,7 +167,8 @@ function openRestoreModal(row) {
             // activation.js's unlock/enroll errors.
             confirmBtn.disabled = false;
             statusEl.textContent = (e && e.message && e.message !== 'restore refused')
-                ? e.message
+                // DISK_GUARD_V1 — «нет места на страховочную копию» — на языке экрана с его десятичным знаком
+                ? (noSpaceText(e, getLang(), tr) || tr(e.message))
                 : tr('Не удалось восстановить копию. Попробуйте ещё раз.');
         }
     });

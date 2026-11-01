@@ -238,7 +238,9 @@ function putBackProbe(probe, db, renameSync, pauseMs, tries) {
 
 /**
  * Вернуть базу из копии. Текущая база (с -wal/-shm, одним временем в имени)
- * ПЕРЕНОСИТСЯ в backups\rollback-<время>.db — не удаляется никогда. Любая
+ * ПЕРЕНОСИТСЯ в backups\rollback-<время>.db — этот файл её не удаляет; Easy-Med
+ * хранит две последние такие копии (services/backup.js KEEP_BY_KIND,
+ * DISK_GUARD_V1) и показывает их в списке копий «До отката». Любая
  * ошибка — всё возвращается как было.
  */
 export function restoreDb({ dataDir, backupFile, now = new Date(), renameSync = fs.renameSync, copyFileSync = fs.copyFileSync }) {

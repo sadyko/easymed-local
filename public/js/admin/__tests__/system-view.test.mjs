@@ -75,7 +75,9 @@ globalThis.localStorage = fakeLocalStorage;
 // Russian-string assertions hold on GitHub's English-locale runner exactly
 // as they do on a Russian-locale dev machine.
 fakeLocalStorage.setItem('admin.lang', 'ru');
-globalThis.window = { location: { hostname: 'localhost' }, localStorage: fakeLocalStorage, addEventListener(){}, easymed: { state: { user: null } } };
+// DISK_GUARD_V1 — dispatchEvent: setLang() шлёт окну «langchange», а тесты
+// «нет места» переключают язык экрана перед нажатием.
+globalThis.window = { location: { hostname: 'localhost' }, localStorage: fakeLocalStorage, addEventListener(){}, dispatchEvent(){ return true; }, easymed: { state: { user: null } } };
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
 globalThis.requestAnimationFrame=(fn)=>fn();
 
@@ -97,6 +99,9 @@ const jsonErr = (error, status = 400) => ({ ok: false, status, json: async () =>
 let backupListCalls, backupCreateCalls, restoreCalls, resetCalls, requestCalls, enrollCalls;
 let lastRestoreBody, lastResetBody, lastRequestBody, lastEnrollBody;
 let backupRows, restoreRespond, resetRespond;
+let createRespond = null;   // DISK_GUARD_V1 — null: обычный успешный ответ
+let diskUsageCalls = 0, diskUsageData = {}, lastDiskUsageBody = null;   // DISK_GUARD_V1
+let diskUsageGate = null;   // DISK_GUARD_V1 — обещание: ответ disk_usage ждёт его (долгий подсчёт)
 
 function resetServer() {
   backupListCalls = 0; backupCreateCalls = 0; restoreCalls = 0; resetCalls = 0; requestCalls = 0; enrollCalls = 0;
@@ -107,6 +112,8 @@ function resetServer() {
   ];
   restoreRespond = () => jsonOk({ ok: true, restarting: true });
   resetRespond = () => jsonOk({ ok: true, restarting: true });
+  createRespond = null;
+  diskUsageCalls = 0; diskUsageData = {}; lastDiskUsageBody = null; diskUsageGate = null;
 }
 
 globalThis.fetch = async (url, opts) => {
@@ -114,8 +121,14 @@ globalThis.fetch = async (url, opts) => {
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/rpc/update_status')) return jsonOk({ current_version: '2.3.0', offer: null, approved: false, hour: null, scheduled_at: null, last_result: null });
   if (u.startsWith('/api/rpc/backup_list')) { backupListCalls++; return jsonOk({ backups: backupRows }); }
+  if (u.startsWith('/api/rpc/disk_usage')) {   // DISK_GUARD_V1
+    diskUsageCalls++; lastDiskUsageBody = body;
+    if (diskUsageGate) await diskUsageGate;
+    return jsonOk(diskUsageData);
+  }
   if (u.startsWith('/api/rpc/backup_create')) {
     backupCreateCalls++;
+    if (createRespond) return createRespond();
     backupRows = [{ name: 'manual-20260823-110000.db', kind: 'manual', size: 2048, mtimeMs: new Date(2026, 7, 23, 11, 0).getTime() }, ...backupRows];
     return jsonOk(backupRows[0]);
   }
@@ -135,6 +148,7 @@ const { renderUpdates } = await import('../views/updates.js');
 const { renderSubscription } = await import('../views/subscription.js');
 const { renderClinicData } = await import('../views/clinic-data.js');
 const { setLicence } = await import('../licence.js');
+const { setLang } = await import('../i18n.js');   // DISK_GUARD_V1
 
 function setUser(u) { globalThis.window.easymed.state.user = u; }
 const ADMIN = { id: 1, role: 'admin', is_admin: true, is_super_admin: false };
@@ -362,4 +376,203 @@ test('галочка «также удалить все резервные ко�
   findButtonByText(modal, /Удалить всё/).click();
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(lastResetBody.wipe_backups, true);
+});
+
+// --- DISK_GUARD_V1 -------------------------------------------------------------
+
+// Ответ сервера «нет места» (server/services/rpc/backup.js asRpcError): русская
+// фраза — для журнала и русского экрана; числа — числами, десятичный знак ставит
+// экран по своему языку.
+const NO_SPACE = () => jsonErr({
+  code: 'no_space',
+  message: 'Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ. Копия не сделана.',
+  template: 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.',
+  params: { need: 2.1, free: 0.4 },
+}, 409);
+const NO_SPACE_TEXT = {
+  ru: /Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ\. Копия не сделана\./,
+  en: /Not enough disk space: 2\.1 GB needed, 0\.4 GB free\. The backup was not made\./,
+  uz: /Diskda joy yetarli emas: 2,1 GB kerak, 0,4 GB bo‘sh\. Nusxa olinmadi\./,
+};
+
+for (const lang of ['ru', 'en', 'uz']) {
+  test(`DISK_GUARD_V1: «Создать копию сейчас» без места на диске (${lang}) — фраза сервера с числами, а не «попробуйте ещё раз»`, async () => {
+    createRespond = NO_SPACE;
+    const root = mk('div');
+    await renderClinicData(root);
+    const btn = findButtonByText(root, /Создать копию сейчас/);
+    setLang(lang);   // язык меняется после отрисовки: кнопки ищутся по-русски
+    try {
+      btn.click();
+      await new Promise((r) => setTimeout(r, 20));
+      assert.match(textOf(root), NO_SPACE_TEXT[lang]);
+      assert.doesNotMatch(textOf(root), /Не удалось создать копию|could not|Nusxa yaratib/i, 'повтор не поможет — нужно освободить место');
+    } finally {
+      setLang('ru');
+    }
+  });
+
+  test(`DISK_GUARD_V1: удаление данных без места на финальную копию (${lang}) — фраза сервера на языке экрана, удаления нет`, async () => {
+    resetRespond = NO_SPACE;
+    const root = mk('div');
+    await renderClinicData(root);
+    findButtonByText(root, /Удалить все данные клиники/).click();
+    const modal = findByClass(document.body, 'modal');
+    const word = findInputByType(modal, 'text');
+    const pass = findInputByType(modal, 'password');
+    word.value = 'УДАЛИТЬ'; word.dispatchEvent({ type: 'input' });
+    pass.value = 'admin-pw'; pass.dispatchEvent({ type: 'input' });
+    const confirm = findButtonByText(modal, /Удалить всё/);
+    setLang(lang);
+    try {
+      confirm.click();
+      await new Promise((r) => setTimeout(r, 20));
+      assert.equal(resetCalls, 1);
+      assert.match(textOf(modal), NO_SPACE_TEXT[lang]);
+      assert.equal(findByClass(document.body, 'sys-restart-overlay'), undefined, 'отказ — без оверлея перезапуска');
+    } finally {
+      setLang('ru');
+    }
+  });
+}
+
+test('DISK_GUARD_V1: «До восстановления» и «До отката» видны в списке, но кнопки «Восстановить» у них нет', async () => {
+  backupRows = [
+    { name: 'replaced-20261001-090000.db', kind: 'replaced', size: 2048, mtimeMs: new Date(2026, 9, 1, 9, 0).getTime(), restorable: false },
+    { name: 'rollback-20261002-090000.db', kind: 'rollback', size: 2048, mtimeMs: new Date(2026, 9, 2, 9, 0).getTime(), restorable: false },
+    { name: 'manual-20261003-100000.db', kind: 'manual', size: 1229, mtimeMs: new Date(2026, 9, 3, 10, 0).getTime(), restorable: true },
+  ];
+  const root = mk('div');
+  await renderClinicData(root);
+  const text = textOf(root);
+  assert.match(text, /До восстановления/);
+  assert.match(text, /До отката/);
+  assert.match(text, /Хранится для поддержки/);
+  assert.equal(findAllButtons(root).filter((b) => textOf(b).trim() === 'Восстановить').length, 1, 'кнопка — только у ручной копии');
+});
+
+const DISK_LOW = () => {
+  const GB = 1024 ** 3;
+  return {
+    free_bytes: 3 * GB, total_bytes: 100 * GB, low: true,
+    db_bytes: 2 * GB, backups_bytes: 30 * GB, storage_bytes: 5 * GB, versions_bytes: 110 * 1024 * 1024, partial: [],
+    copy_refused: { at: '2026-10-29T03:05:00.000Z', kind: 'daily', need_bytes: 3 * GB + 300 * 1024 * 1024, free_bytes: 3 * GB },
+    update_refused: null, kept_over_cap: null,
+  };
+};
+
+test('DISK_GUARD_V1: администратор видит «Место на диске» — что сколько занимает и красное предупреждение', async () => {
+  diskUsageData = DISK_LOW();
+  const root = mk('div');
+  await renderClinicData(root);
+  const text = textOf(root);
+  assert.equal(diskUsageCalls, 1);
+  assert.deepEqual(lastDiskUsageBody, {}, 'полный отчёт — с размерами папок');
+  assert.match(text, /Место на диске/);
+  assert.match(text, /База данных2 ГБ/);
+  assert.match(text, /Резервные копии30 ГБ/);
+  assert.match(text, /Файлы \(сканы и документы\)5 ГБ/);
+  assert.match(text, /Версии программы110 МБ/);
+  assert.match(text, /Свободно3 ГБ из 100 ГБ/);
+  assert.match(text, /Мало места на диске: свободно 3 ГБ\./);
+  assert.match(text, /Недостаточно места на диске: нужно 3,3 ГБ, свободно 3,0 ГБ\. Копия не сделана\./);
+  assert.match(text, /вся папка копий/, 'подсказка: в «Резервных копиях» — и копии до восстановления и до отката');
+  assert.ok(findByClass(root, 'sys-modal-warn'), 'предупреждение — красной плашкой');
+  assert.ok(text.indexOf('Место на диске') < text.indexOf('Создать копию сейчас'), 'карточка места — над копиями');
+});
+
+test('DISK_GUARD_V1: копии и опасная зона рисуются, пока место на диске ещё считается; в карточке места — «Считаем…»', async () => {
+  let release;
+  diskUsageGate = new Promise((r) => { release = r; });
+  diskUsageData = DISK_LOW();
+  const root = mk('div');
+  const done = renderClinicData(root);
+  await new Promise((r) => setTimeout(r, 20));
+  const pending = textOf(root);
+  assert.equal(diskUsageCalls, 1);
+  assert.match(pending, /Место на диске/);
+  assert.match(pending, /Считаем место на диске…/);
+  assert.match(pending, /ежедневная/, 'список копий пришёл, не дожидаясь подсчёта места');
+  assert.match(pending, /Опасная зона/);
+  release();
+  await done;
+  const text = textOf(root);
+  assert.doesNotMatch(text, /Считаем место на диске…/);
+  assert.match(text, /База данных2 ГБ/);
+  assert.ok(text.indexOf('Место на диске') < text.indexOf('Создать копию сейчас'), 'карточка места — по-прежнему над копиями');
+});
+
+test('DISK_GUARD_V1: английский экран — гигабайты с точкой, без кириллицы в карточке места', async () => {
+  diskUsageData = DISK_LOW();
+  setLang('en');
+  try {
+    const root = mk('div');
+    await renderClinicData(root);
+    const text = textOf(root);
+    assert.match(text, /Disk space/);
+    assert.match(text, /Free3 GB of 100 GB/);
+    assert.match(text, /Not enough disk space: 3\.3 GB needed, 3\.0 GB free\. The backup was not made\./);
+    const card = text.slice(text.indexOf('Disk space'), text.indexOf('Create a backup now'));
+    assert.equal(/[А-Яа-яЁё]/.test(card), false, card);
+  } finally {
+    setLang('ru');
+  }
+});
+
+test('DISK_GUARD_V1: 1 ТБ, свободно 60 ГБ (меньше 10 %) — красная плашка на «Данных клиники» по правилу экрана', async () => {
+  const GB = 1024 ** 3;
+  diskUsageData = { free_bytes: 60 * GB, total_bytes: 1000 * GB, low: true, copy_need_bytes: 3 * GB, db_bytes: GB, backups_bytes: 5 * GB, storage_bytes: GB, versions_bytes: null };
+  const root = mk('div');
+  await renderClinicData(root);
+  assert.ok(findByClass(root, 'sys-modal-warn'));
+  assert.match(textOf(root), /Мало места на диске: свободно 60 ГБ\./);
+});
+
+test('DISK_GUARD_V1: места хватает — ни одной красной плашки', async () => {
+  const GB = 1024 ** 3;
+  diskUsageData = { free_bytes: 300 * GB, total_bytes: 1000 * GB, low: false, db_bytes: GB, backups_bytes: 5 * GB, storage_bytes: GB, versions_bytes: null };
+  const root = mk('div');
+  await renderClinicData(root);
+  assert.equal(findByClass(root, 'sys-modal-warn'), undefined);
+  assert.match(textOf(root), /Свободно300 ГБ из 1000 ГБ/);
+});
+
+test('DISK_GUARD_V1: сервер не ответил — спокойная строка, а не пустая карточка', async () => {
+  diskUsageData = {};
+  const root = mk('div');
+  await renderClinicData(root);
+  assert.match(textOf(root), /Не удалось узнать место на диске\./);
+  assert.match(textOf(root), /Создать копию сейчас/, 'копии рисуются и без ответа о месте');
+});
+
+test('DISK_GUARD_V1: неадмин — ни карточки места, ни запроса disk_usage', async () => {
+  setUser(REGISTRAR);
+  const root = mk('div');
+  await renderClinicData(root);
+  assert.equal(diskUsageCalls, 0);
+  assert.doesNotMatch(textOf(root), /Место на диске/);
+});
+
+// DISK_GUARD_V1 (ревью C5, выпущенная ошибка 3.18.1): «Создать копию сейчас»
+// получила отказ «нет места» в этой же вкладке — слой запросов запомнил его
+// фразу с числами сервера (shared/server-messages.js). Предупреждение карточки
+// места — та же русская фраза, уже собранная экраном; пройди она через h()
+// (tr() ребёнка) ещё раз, вернулась бы с числами сервера: «2.1 ГБ» на русском
+// экране. Предупреждение кладётся текстом, а не ребёнком h().
+test('DISK_GUARD_V1: после запомненного отказа «нет места» карточка места на русском — с запятой', async () => {
+  const { noSpaceError, GB } = await import('../../../../server/services/disk-guard.js');
+  const { rememberServerMessage, _resetServerMessages } = await import('../../shared/server-messages.js');
+  const need = Math.round(2.05 * GB);
+  const free = Math.round(0.45 * GB);
+  const err = noSpaceError(need, free);
+  try {
+    rememberServerMessage({ code: err.code, message: err.message, template: err.template, params: err.params });
+    diskUsageData = { free_bytes: free, total_bytes: 100 * GB, low: true, db_bytes: GB, backups_bytes: 2 * GB, storage_bytes: GB, versions_bytes: null,
+      copy_refused: { at: '2026-10-30T05:00:00.000Z', kind: 'manual', need_bytes: need, free_bytes: free } };
+    const root = mk('div');
+    await renderClinicData(root);
+    const text = textOf(root);
+    assert.match(text, /Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,4 ГБ\. Копия не сделана\./);
+    assert.doesNotMatch(text, /нужно 2\.1 ГБ/);
+  } finally { _resetServerMessages(); }
 });

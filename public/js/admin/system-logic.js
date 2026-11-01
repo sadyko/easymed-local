@@ -17,7 +17,7 @@ import { formatRuDate } from './updates-logic.js';
 // I18N_COVERAGE_V1 — fill() from updates-logic (same dir, pure): the
 // translate-then-substitute pattern without importing i18n.js, which this
 // module must never do (tests import it statically, i18n.js needs a DOM).
-import { fill } from './updates-logic.js';
+import { fill, gbValue } from './updates-logic.js';   // DISK_GUARD_V1 — gbValue
 
 export const DASH = '—';
 
@@ -42,8 +42,10 @@ export function formatRuDateTime(v) {
  * of a unit (where it carries real information: "1,2 МБ" vs "1 МБ"), whole
  * numbers above. Garbage/negative/missing → em-dash, never "NaN Б" — the
  * parallel-built server may omit `size` entirely.
+ * DISK_GUARD_V1 — lang: десятичный знак по языку экрана (en — точка, ru и uz —
+ * запятая, как и прежде по умолчанию).
  */
-export function formatBytes(n, t = (s) => s) {
+export function formatBytes(n, t = (s) => s, lang = 'ru') {
   const v = typeof n === 'number' ? n : (typeof n === 'string' && n.trim() !== '' ? Number(n) : NaN);
   if (!Number.isFinite(v) || v < 0) return DASH;
   if (v < 1024) return fill(t('{n} Б'), { n: Math.round(v) });
@@ -51,7 +53,7 @@ export function formatBytes(n, t = (s) => s) {
   let val = v;
   let i = -1;
   do { val /= 1024; i++; } while (val >= 1024 && i < units.length - 1);
-  const s = val < 10 ? val.toFixed(1).replace('.', ',').replace(/,0$/, '') : String(Math.round(val));
+  const s = val < 10 ? val.toFixed(1).replace(/\.0$/, '').replace('.', lang === 'en' ? '.' : ',') : String(Math.round(val));
   return s + ' ' + t(units[i]);
 }
 
@@ -72,8 +74,9 @@ export function backupKind(row) {
 }
 
 // Human words for the plan's five filename-prefix kinds, plus `replaced-`
-// (what processPendingAction moves the live DB aside as during a restore —
-// it lands in the same backups/ directory, so the listing will show it).
+// (what processPendingAction moves the live DB aside as during a restore) and
+// `rollback-` (the same, left by recover.cmd's rollback). DISK_GUARD_V1 — the
+// owner's wording, «До восстановления» / «До отката» (spec 3.18.1, п. 6).
 // Static Russian literals: they render through h(), whose text-child path
 // runs tr(), so the ru/uz/en entries live in i18n-strings.js.
 const KIND_LABELS = {
@@ -82,7 +85,9 @@ const KIND_LABELS = {
   manual:   'ручная',
   safety:   'страховочная (перед восстановлением)',
   final:    'перед удалением данных',
-  replaced: 'заменённая при восстановлении',
+  wipe:     'перед удалением тестовых данных',   // TEST_DATA_WIPE_V1
+  replaced: 'До восстановления',
+  rollback: 'До отката',
 };
 
 /**
@@ -285,4 +290,166 @@ export function requestDateLabel(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('ru-RU');
+}
+
+/**
+ * DISK_GUARD_V1 (ревью C2) — отказ сервера «нет места на копию» на языке
+ * экрана. Сервер (server/services/disk-guard.js noSpaceError) шлёт шаблон и
+ * гигабайты ЧИСЛАМИ; десятичный знак ставится только здесь, для этой фразы:
+ * ru и uz — запятая, en — точка, всегда один знак («0,0»), как в русской
+ * фразе сервера. Общий tr() числа не трогает — там и суммы денег других
+ * сообщений. t — перевод шаблона (tr экрана). null — это не отказ по месту
+ * или ответ не того вида: экран покажет фразу сервера, как раньше.
+ */
+export function noSpaceText(err, lang, t = (s) => s) {
+  if (!err || typeof err !== 'object' || err.code !== 'no_space' || typeof err.template !== 'string') return null;
+  const p = err.params && typeof err.params === 'object' ? err.params : null;
+  if (!p || !Number.isFinite(p.need) || !Number.isFinite(p.free)) return null;
+  const sep = lang === 'en' ? '.' : ',';
+  const gb = (v) => v.toFixed(1).replace('.', sep);
+  return fill(t(err.template), { need: gb(p.need), free: gb(p.free) });
+}
+
+// ---------------------------------------------------------------------------
+// DISK_GUARD_V1 (docs/specs/2026-10-29-3181-cabinet-print-disk-design.md,
+// раздел 3, п. 2, 3, 5 и 8) — «Место на диске»: карточка на «Данных клиники»
+// (views/system-disk.js) и колокол администратора (notifications.js). Ответ
+// disk_usage — как есть; число, которого нет или которое не число, не
+// выдумывается: нет строки и нет предупреждения. Десятичный знак — по языку
+// экрана (lang): ru и uz — запятая, en — точка, как в noSpaceText.
+// ---------------------------------------------------------------------------
+
+const finiteBytes = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+const objOrNull = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : null);
+
+/** Гигабайты одним знаком для фраз «нужно / свободно» — «нужно» вверх, «свободно» вниз (updates-logic.js gbValue). */
+function gbText(bytes, lang, up = false) {
+  return gbValue(bytes, { up }).toFixed(1).replace('.', lang === 'en' ? '.' : ',');
+}
+
+// Ключ словаря — та же фраза, что присылает сервер (disk-guard.js COPY_REFUSED_TEMPLATE).
+const COPY_REFUSED_TEMPLATE = 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.';
+
+/** «Копия не сделана» (п. 2) с числами; без чисел — null (их пишет каждый отказ). */
+function copyRefusedText(d, t, lang) {
+  const c = objOrNull(d.copy_refused);
+  if (!c) return null;
+  const need = finiteBytes(c.need_bytes);
+  const free = finiteBytes(c.free_bytes);
+  if (need === null || free === null) return null;
+  return fill(t(COPY_REFUSED_TEMPLATE), { need: gbText(need, lang, true), free: gbText(free, lang) });
+}
+
+/**
+ * «Обновление не установлено» (п. 3). Числа есть — с числами; нет (диск
+ * заполнился посреди копии перед обновлением — updater.js) — общей фразой.
+ * Без версии отметка не правда (сервер такую снимает) — null.
+ */
+function updateRefusedText(d, t, lang) {
+  const u = objOrNull(d.update_refused);
+  const version = u && typeof u.version === 'string' && u.version ? u.version : null;
+  if (!version) return null;
+  const need = finiteBytes(u.need_bytes);
+  const free = finiteBytes(u.free_bytes);
+  if (need !== null && need > 0 && free !== null) {
+    return fill(t('Обновление {version} не установлено — недостаточно места: нужно {need} ГБ, свободно {free} ГБ. Освободите место, и мы попробуем снова.'),
+      { version, need: gbText(need, lang, true), free: gbText(free, lang) });
+  }
+  return fill(t('Обновление {version} не установлено — на диске не хватило места. Освободите место, и мы попробуем снова.'), { version });
+}
+
+/**
+ * Ручные и финальные копии одни больше 30 % диска (п. 5). Предел по объёму их
+ * не удаляет; по счёту хранятся 10 последних ручных и 5 последних перед
+ * удалением данных (services/backup.js KEEP_BY_KIND) — лишнее администратор
+ * удаляет сам.
+ */
+function keptOverCapText(d, t, lang) {
+  const k = objOrNull(d.kept_over_cap);
+  const bytes = k ? finiteBytes(k.bytes) : null;
+  if (bytes === null) return null;
+  return fill(t('Ручные копии и копии перед удалением данных занимают {size} — больше 30 % диска. Предел по объёму их не удаляет: хранятся 10 последних ручных и 5 последних перед удалением данных. Ненужные удалите вручную.'),
+    { size: formatBytes(bytes, t, lang) });
+}
+
+// «Мало места» в колоколе — только когда копии и правда скоро перестанут
+// делаться: свободно меньше max(5 ГБ, место на следующую копию), то же правило,
+// что у чистки копий (server/services/backup.js pruneBySize). Диск 1 ТБ с 60 ГБ
+// свободных — 6 %, красная строка на «Данных клиники» есть, а звонить на каждом
+// экране не о чем. Старый сервер без copy_need_bytes — порог 5 ГБ.
+const LOW_FREE_BYTES = 5 * 1024 ** 3;
+
+/**
+ * Строки «что сколько занимает», красные предупреждения и признак «мало
+ * места». Подписи строк — русским исходником (переводит h()); значения и
+ * предупреждения — уже на языке экрана. Папку, сосчитанную не до конца
+ * (partial — предел обхода на сервере), показывает «не меньше»: «≥ 120 ГБ».
+ */
+export function diskUsageView(data, t = (s) => s, lang = 'ru') {
+  const d = objOrNull(data) || {};
+  const partial = Array.isArray(d.partial) ? d.partial : [];
+  const rows = [];
+  const add = (label, key) => {
+    const n = finiteBytes(d[key]);
+    if (n === null) return;
+    const v = formatBytes(n, t, lang);
+    rows.push({ label, value: partial.includes(key) ? '≥ ' + v : v });
+  };
+  add('База данных', 'db_bytes');
+  add('Резервные копии', 'backups_bytes');
+  add('Файлы (сканы и документы)', 'storage_bytes');
+  add('Версии программы', 'versions_bytes');
+  const free = finiteBytes(d.free_bytes);
+  const total = finiteBytes(d.total_bytes);
+  if (free !== null && total !== null) {
+    rows.push({ label: 'Свободно', value: fill(t('{free} из {total}'), { free: formatBytes(free, t, lang), total: formatBytes(total, t, lang) }) });
+  }
+
+  const warnings = [];
+  if (d.low === true && free !== null) {
+    warnings.push(fill(t('Мало места на диске: свободно {free}. Освободите место, иначе копии базы и обновления перестанут делаться.'),
+      { free: formatBytes(free, t, lang) }));
+  }
+  for (const w of [copyRefusedText(d, t, lang), updateRefusedText(d, t, lang), keptOverCapText(d, t, lang)]) {
+    if (w) warnings.push(w);
+  }
+  return { rows, warnings, low: d.low === true };
+}
+
+/**
+ * Что сказать колоколу администратора по ответу disk_usage {quick:true}.
+ * Отказ в копии и отказ обновления — каждый своей строкой; при отказе
+ * «мало места» не повторяется (числа и «освободите место» уже в отказе).
+ * «Мало места» — только когда свободно меньше max(5 ГБ, место на следующую
+ * копию) (LOW_FREE_BYTES выше). «Мало места» и ручные копии сверх предела —
+ * только в колоколе (bellOnly): полоса поперёк каждого экрана была бы шумом,
+ * а красное на «Данных клиники» и так видно. id постоянный
+ * (у обновления — с версией): скрытое не возвращается каждую минуту, пока
+ * место не освободят, и гаснет само, когда отметку снял сервер. [] — сказать
+ * нечего.
+ */
+export function diskNotices(data, t = (s) => s, lang = 'ru') {
+  const d = objOrNull(data);
+  if (!d) return [];
+  const list = [];
+  const copy = copyRefusedText(d, t, lang);
+  if (copy) list.push({ id: 'disk-copy', sev: 'danger', icon: 'Database', title: t('Резервная копия не сделана'), message: copy });
+  const upd = updateRefusedText(d, t, lang);
+  if (upd) {
+    list.push({ id: 'disk-update:' + d.update_refused.version, sev: 'warn', icon: 'Download', title: t('Нет места для обновления'), message: upd });
+  }
+  const free = finiteBytes(d.free_bytes);
+  const total = finiteBytes(d.total_bytes);
+  const floor = Math.max(LOW_FREE_BYTES, finiteBytes(d.copy_need_bytes) || 0);
+  if (!list.length && free !== null && total !== null && free < floor) {
+    list.push({
+      id: 'disk-low', sev: 'warn', icon: 'Warning', bellOnly: true,
+      title: t('Мало места на диске'),
+      message: fill(t('Свободно {free} из {total}. Освободите место, иначе копии базы и обновления перестанут делаться.'),
+        { free: formatBytes(free, t, lang), total: formatBytes(total, t, lang) }),
+    });
+  }
+  const kept = keptOverCapText(d, t, lang);
+  if (kept) list.push({ id: 'disk-kept', sev: 'warn', icon: 'Database', bellOnly: true, title: t('Копии занимают много места'), message: kept });
+  return list;
 }

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { STRINGS } from '../i18n-strings.js';
 import {
-  scopeQuery, normalizeLabScope, ownBuildingOnly,
+  scopeQuery, normalizeLabScope, ownBuildingOnly, withoutRefundedIdle,   // REFUND_ANY_V1 — withoutRefundedIdle
   LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT,
 } from './lab-scope.js';
 
@@ -149,4 +149,33 @@ test('каждая строка переключателя есть в слов�
       assert.notEqual(entry[lang].trim(), '', p + ': пустой перевод ' + lang);
     }
   }
+});
+
+// -----------------------------------------------------------------------------
+// REFUND_ANY_V1 (2026-10-29) — возвращённая строка без результата в работу не идёт
+// -----------------------------------------------------------------------------
+// Касса вернула пациенту деньги за анализ (строка без счёта, отметка
+// pay_refund_releases 'out'), а статус у строки прежний — 'queued',
+// 'collected': по статусу лист показывал её дальше, и пробу брали и вносили.
+// Теперь лист спрашивает сервер (refunded_lines) и прячет возвращённые строки
+// без результата; внесённое не прячется.
+
+test('возвращённая строка без результата уходит из листа; с результатом — остаётся', () => {
+  const rows = [{ id: 1 }, { id: 2 }, { id: 3 }];
+  const refunded = new Set([1, 2]);
+  const results = { 2: [{ id: 9, parameter: 'Hb' }] };
+  assert.deepEqual(withoutRefundedIdle(rows, refunded, results).map((r) => r.id), [2, 3]);
+  assert.equal(withoutRefundedIdle(rows, new Set(), results), rows, 'возвратов нет — тот же список');
+  assert.deepEqual(withoutRefundedIdle(rows, null, results).map((r) => r.id), [1, 2, 3], 'ответа сервера нет — лист как был');
+});
+
+test('laboratory.js спрашивает refunded_lines и отсеивает строки после чтения результатов', () => {
+  const code = labSrc.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  // Ревью B4 — вопрос один на все экраны (refunded-lines.js), лист его зовёт.
+  const shared = fs.readFileSync(path.join(HERE, '..', 'refunded-lines.js'), 'utf8');
+  assert.ok(/supabase\.rpc\('refunded_lines', \{ line_ids: /.test(shared), 'refunded-lines.js не спрашивает сервер');
+  assert.ok(/import \{ loadRefundedLineIds \} from '\.\.\/refunded-lines\.js';/.test(code) && /loadRefundedLineIds\(rows\.map\(/.test(code),
+    'лист не спрашивает сервер, какие строки возвращены');
+  // Ревью B4: результаты не прочитались — не прятать (hideIdle = null).
+  assert.ok(/const hideIdle = resultsFailed \? null : refunded;\s*state\.rows = withoutRefundedIdle\(rows, hideIdle, resultsByVs\);/.test(code), 'лист не отсеивает возвращённые строки без результата');
 });

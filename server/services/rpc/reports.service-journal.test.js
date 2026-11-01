@@ -378,6 +378,31 @@ test('возвраты: полный возврат с открытым счёт
   } finally { db.close(); }
 });
 
+// REFUND_ANY_V1 (ревью B2) — возврат строки стационара СТРОКОЙ (refund_invoice_line),
+// пока пациент лежит: деньги за сделанную работу вернули — строки акта нет, как у
+// строки визита, возвращённой строкой (тест «возвраты настоящей кассой» выше);
+// выплата врачу и счёт выписки её тоже не берут. Отмена счёта лежащего пациента
+// после полного возврата (F6 выше) строку по-прежнему оставляет.
+test('возврат строки стационара строкой, пока пациент лежит, — строки акта нет; соседняя строка того же счёта — есть', () => {
+  const db = clinic();
+  try {
+    // Валиев лежит (ИБ-8): ЭКГ 22.03 и УЗИ почек 23.03 — в одном оплаченном счёте.
+    db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, performer_id, quantity, unit_price, total, billable, performed_at, created_at)
+                VALUES (7, 2, ?, 3, 1, 1, 0, 0, 1, ?, ?)`).run(SVC.usgKid, at('2026-03-23'), at('2026-03-23'));
+    const stay = () => objectsOf(journal(db, { from: '2026-03-22', to: '2026-03-23' }))
+      .filter((o) => o['ИБ №'] === 'ИБ-8').map((o) => o['Услуга'] + ' ' + o['Дата']);
+    assert.deepEqual(stay(), ['ЭКГ 2026-03-22', 'УЗИ почек 2026-03-23']);
+    const admInv = createInvoiceForAdmission(db, { admission_id: 2, admission_service_ids: [5, 7] }, registrar).invoice;
+    recordPayment(db, { invoice_id: admInv.id, amount: admInv.total_amount, method: 'cash' }, cashier);
+    refundInvoiceLine(db, { invoice_item_id: db.prepare('SELECT invoice_item_id i FROM admission_services WHERE id = 5').get().i }, cashier);
+    assert.equal(db.prepare('SELECT status FROM admissions WHERE id = 2').get().status, 'active', 'стенд не тот: пациент выписан');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM pay_refund_releases WHERE kind = 'in' AND line_id = 5").get().n, 1, 'стенд не тот: отметки нет');
+    assert.deepEqual(stay(), ['УЗИ почек 2026-03-23'], 'возвращённая строкой ЭКГ — не в журнале; соседняя строка счёта — в журнале');
+    __setReportsPushDown(false);
+    try { assert.deepEqual(stay(), ['УЗИ почек 2026-03-23'], 'без выборки по периоду — то же'); } finally { __setReportsPushDown(true); }
+  } finally { db.close(); }
+});
+
 // ── Цепочки: рекомендации из кабинета, консультации направивших, заключения ──
 function chains(db) {
   const rec = db.prepare(`INSERT INTO recommended_services (patient_id, service_id, recommended_by, recommended_by_name, status, created_at)

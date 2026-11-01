@@ -82,6 +82,24 @@ export function esc(s) {
         { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
     ));
 }
+
+// REFUND_ANY_V1 (2026-10-29) — пометка над листом («Услуга возвращена»):
+// документ врача по строке, за которую пациенту вернули деньги, не удаляется
+// (медицинская запись), а на бумаге сказано, что услуга возвращена. Вставка —
+// ПЕРВОЙ внутри первого листа (.sheet: <div class="sheet"> обычного бланка,
+// <section class="sheet …"> макетного). Ревью B4: сразу после <body> пометка
+// стояла ВНЕ листа, а лист держит min-height страницы и в печати — её высота
+// уводила печать на лишнюю пустую страницу. Листа нет — после <body>; нет и
+// его — в начале. Текст экранирован; пустая пометка — бланк как был.
+const SHEET_OPEN_RE = /<(?:div|section)\b[^>]*\bclass="sheet(?:\s[^"]*)?"[^>]*>/i;
+export function withNotice(html, notice) {
+    const t = String(notice ?? '').trim();
+    if (!t) return html;
+    const box = '<div data-print-notice="1" style="margin:0 0 10px;padding:8px 12px;border:2px solid #b91c1c;border-radius:6px;'
+        + 'color:#b91c1c;font:700 15px/1.4 sans-serif;text-align:center;">' + esc(t) + '</div>';
+    if (SHEET_OPEN_RE.test(html)) return html.replace(SHEET_OPEN_RE, (m) => m + box);
+    return /<body[^>]*>/i.test(html) ? html.replace(/<body[^>]*>/i, (m) => m + box) : box + html;
+}
 // ---------------------------------------------------------------------------
 // Build the final HTML for the print/preview window. Wraps the per-type
 // renderer in branded paper chrome + auto-print script.

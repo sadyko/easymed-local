@@ -4406,9 +4406,18 @@ const NOT_REFUNDED_LINE_SQL = (line, kind) => `${NOT_REFUNDED_INVOICE_SQL(line)}
 // сделана и будет выставлена заново, строка остаётся. Отметка возврата,
 // поставленная после выписки (или в её минуту), — деньги за эту работу пациенту
 // вернули: строки нет. Время отметки — pay_refund_releases.created_at.
+// REFUND_ANY_V1 (ревью B2) — ВОЗВРАТ СТРОКИ СТАЦИОНАРА СТРОКОЙ, пока пациент
+// лежит (refund_invoice_line), — это не поправка счёта, а возврат денег за
+// сделанную работу: строки нет, как у строки визита (NOT_RELEASED_SQL 'out'),
+// и так же, как у выплаты врачу и счёта выписки. Отличить его от отмены счёта
+// после полного возврата (выше: строка остаётся) позволяет сама строка: отмена
+// счёта и «убрать из счёта» возвращают её в 'added', а возврат строкой
+// сохраняет выполненной работе 'done'. Отметка — не раньше выполнения: строку,
+// отпущенную до выполнения и выполненную потом, это правило не трогает.
 const NOT_RELEASED_AFTER_STAY_SQL = (ias, a) => `NOT (${ias}.invoice_item_id IS NULL AND EXISTS (
      SELECT 1 FROM pay_refund_releases prs WHERE prs.kind = 'in' AND prs.line_id = ${ias}.id
-        AND ${a}.discharged_at IS NOT NULL AND julianday(prs.created_at) >= julianday(${a}.discharged_at)))`;
+        AND ((${a}.discharged_at IS NOT NULL AND julianday(prs.created_at) >= julianday(${a}.discharged_at))
+          OR (${ias}.status = 'done' AND julianday(prs.created_at) >= julianday(${ias}.performed_at)))))`;
 // JOURNALS_V1_RJ1 (ревью, п. 10b) — поле тела документа — только ТЕКСТ (или
 // число): объект или список json_extract отдал бы сырым JSON, и он печатался
 // бы в журнале. Иначе поле пустое — правило «Заключения» идёт дальше.
@@ -4497,7 +4506,7 @@ function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
        AND COALESCE(ias.billable, 1) = 1
        AND COALESCE(a.status, '') <> 'cancelled'
        AND ${NOT_REFUNDED_INVOICE_SQL('ias')}
-       AND ${NOT_RELEASED_AFTER_STAY_SQL('ias', 'a')}   -- JOURNALS_V1_RJ2 (F6) — возврат, пока лежит, строку не убирает
+       AND ${NOT_RELEASED_AFTER_STAY_SQL('ias', 'a')}   -- JOURNALS_V1_RJ2 (F6) — отмена счёта, пока лежит, строку не убирает; REFUND_ANY_V1 — возврат строкой убирает
        AND ${range.sql}${bf.clause}${gf.clause}`).all(...svc.params, ...range.params, ...bf.params, ...gf.params);   // JOURNALS_V1_ALL
 }
 

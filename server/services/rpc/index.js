@@ -3,7 +3,10 @@
 // slices (dispensing, discounts, queue numbers, …).
 import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDebt, changeUnpaidService, removeUnpaidService, refundPayment, refundInvoiceLine, createInvoiceForAdmission, removeAdmissionLineFromInvoice, visitRefundedLines,
   setUnpaidLineDoctor, addServiceToVisitInvoice, cashierLinePerformers,   // CASHIER_HEAD_V1
-  swapPaidLine, swapPaidLineQuote } from './billing.js';   // CASHIER_PAID_SWAP_V1
+  swapPaidLine, swapPaidLineQuote,   // CASHIER_PAID_SWAP_V1
+  rebillPaidLine, rebillPaidLineQuote,   // REFUND_SWAP_V1 — «Вернуть эту услугу и выставить новую»
+  invoiceLineWork } from './billing.js';   // REFUND_ANY_V1 — что уже сделано по строкам счёта
+import { refundedLines } from './billing.js';   // REFUND_ANY_V1 — «услуга возвращена»
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { dashboardOverview } from './dashboard-overview.js';   // DASHBOARD_OVERVIEW_V1
@@ -27,6 +30,7 @@ import { patientBotStatus, patientBotInvite, phoneBotStatus, phoneBotInvite } fr
 import { navVisibilityGet, navVisibilitySave } from './nav-visibility.js';   // NAV_VISIBILITY_V1 — видимость разделов меню для всей клиники
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice, cashierRefunds } from './cashier.js';   // cashierRefunds: CASHIER_PAID_SWAP_V1
 import { cashierUnbilled } from './cashier.js';   // REFERRAL_BILL_V1 — «Ждут счёта» кассы
+import { cashierInvoiceSearch } from './cashier.js';   // REFUND_ANY_V1 — поиск счёта за любой день
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit, admissionReferralDefault,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue,
   admissionPrepareWalletPayment } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
@@ -111,7 +115,7 @@ import { crmDuplicateGroups, crmMergeLeads } from './crm-merge.js';   // CRM_HEA
 import { crmLinkNewPatient } from '../crm/new-patient-link.js';   // CRM_UNIFY_V1 — новая карта находит заявку колл-центра
 import { crmTaskAssignees } from '../crm/tasks-follow.js';   // CRM_UNIFY_V1 — кого можно назначить ответственным
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
-import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
+import { backupList, backupCreate, backupRestore, factoryReset, diskUsage, testDataWipe, testDataWipeStatus } from './backup.js';   // SYSTEM_SETTINGS_V1, DISK_GUARD_V1, TEST_DATA_WIPE_V1
 import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
 import {
   branchSyncStatus, branchSyncMakeKey, branchSyncPairAdopt, branchSyncUnpair, branchSyncNow,
@@ -184,11 +188,20 @@ export const RPC = {
   // подтверждения; «Возвраты и отмены» кассы — только чтение.
   cashier_line_swap_paid:      (db, args, user) => swapPaidLine(db, args, user),
   cashier_line_swap_quote:     (db, args, user) => swapPaidLineQuote(db, args, user),
+  // REFUND_SWAP_V1 — по услуге начата работа: «Вернуть эту услугу и выставить
+  // новую» одной операцией (прежняя строка остаётся в визите, врачу не
+  // оплачивается; новая — в тот же счёт с тем же расчётом разницы) и её
+  // предпросмотр для окна замены в «Платежах».
+  cashier_line_rebill_paid:    (db, args, user) => rebillPaidLine(db, args, user),
+  cashier_line_rebill_quote:   (db, args, user) => rebillPaidLineQuote(db, args, user),
   cashier_refunds:             (db, args, user) => cashierRefunds(db, args, user),
   cashier_unbilled:            (db, args, user) => cashierUnbilled(db, args, user),   // REFERRAL_BILL_V1 — «Ждут счёта» кассы; только чтение
+  cashier_invoice_search:      (db, args, user) => cashierInvoiceSearch(db, args, user),   // REFUND_ANY_V1 — поиск счёта за любой день; только чтение
   refund_payment:           (db, args, user) => refundPayment(db, args, user),   // CASHIER_REFUND_V1 — возврат оплаты (отрицательный платёж)
   refund_invoice_line:      (db, args, user) => refundInvoiceLine(db, args, user),   // BILLING_AUDIT_FIX_V1 (B1) — вернуть одну услугу счёта
   visit_refunded_lines:     (db, args, user) => visitRefundedLines(db, args, user),   // FINAL_MONEY_FIX_V1 (I1) — возвращённые строки визита; чтение
+  invoice_line_work:        (db, args, user) => invoiceLineWork(db, args, user),   // REFUND_ANY_V1 — проба, результат, документ по строкам счёта; чтение
+  refunded_lines:           (db, args, user) => refundedLines(db, args, user),   // REFUND_ANY_V1 — какие строки «услуга возвращена»; чтение
   receive_stock:            (db, args, user) => receiveStock(db, args, user),
   dispense_item:            (db, args, user) => dispenseItem(db, args, user),
   void_dispense:            (db, args, user) => voidDispense(db, args, user),
@@ -882,6 +895,11 @@ export const RPC = {
   backup_create:    (db, args, user) => backupCreate(db, args, user),
   backup_restore:   (db, args, user) => backupRestore(db, args, user),
   factory_reset:    (db, args, user) => factoryReset(db, args, user),
+  // DISK_GUARD_V1 — «Место на диске»: тоже сквозь блокировку, только администратору.
+  disk_usage:       (db, args, user) => diskUsage(db, args, user),
+  // TEST_DATA_WIPE_V1 — «Удалить тестовые данные»: тоже сквозь блокировку, только администратору.
+  test_data_wipe:        (db, args, user) => testDataWipe(db, args, user),
+  test_data_wipe_status: (db, args, user) => testDataWipeStatus(db, args, user),
 
   // BRANCH_SYNC_V1 — Настройки → Филиалы: связывание отдельных установок
   // Easy-Med и перенос справочника из главного филиала. В READ_ONLY_RPCS

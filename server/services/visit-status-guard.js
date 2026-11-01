@@ -31,6 +31,13 @@
 // по-русски или null. Зовёт её дверь /api/db (crm/booking-mirror-db.js,
 // mirrorBefore) до записи.
 
+import { refundedOpenLineIds } from './domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
+import { REFUNDED_LAB_REFUSAL, REFUNDED_WORK_REFUSAL } from '../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1; WORK — ревью B4 (п. 9b)
+import { lineHasWork } from './domain/line-work.js';   // REFUND_ANY_V1 (ревью B4, п. 9b) — «есть работа»: одно правило с кассой
+// REFUND_ANY_V1 (ревью B4) — «это анализ?» — одно правило с листом лаборатории
+// (LAB_SERVICE_ROUTING_V1); сервер берёт его так же, как журналы (rpc/reports.js).
+import { isLabService, deptKindMap, typeNameMap } from '../../public/js/admin/views/lab-service.js';
+
 /** Статусы, означающие «над пациентом уже работают». */
 export const WORK_STATUSES = Object.freeze(['collected', 'in_progress', 'resulted', 'completed']);
 
@@ -56,6 +63,24 @@ const holes = (a) => a.map(() => '?').join(',');
 /** Куда из сметы можно без кассы: остаться в ней или отмениться. */
 export const FREE_MOVES = Object.freeze(['added', 'cancelled']);
 
+// REFUND_ANY_V1 (ревью B4) — какие из возвращённых строк — анализы. Правило то
+// же, что у листа лаборатории (lab-service.js isLabService): type 'lab' /
+// is_lab, отдел «лаборатория», вид услуги с «лабораторным» именем, привязанная
+// активная панель. Справочники читаются, только когда возвращённые строки
+// есть (обычный перевод статуса их не трогает). rows — строки запроса ниже.
+function refundedLabIds(db, rows) {
+  const svcIds = [...new Set(rows.map((r) => r.service_id).filter((x) => x != null))];
+  if (!svcIds.length) return new Set();
+  const svcs = new Map(db.prepare(`SELECT id, type, is_lab, department_id, type_id FROM services WHERE id IN (${holes(svcIds)})`)
+    .all(...svcIds).map((s) => [s.id, s]));
+  const deptKindById = deptKindMap(db.prepare('SELECT id, kind FROM departments').all());
+  const typeNameById = typeNameMap(db.prepare('SELECT id, name FROM service_types').all());
+  const panels = new Set(db.prepare(`SELECT service_id FROM lab_panels WHERE active = 1 AND service_id IN (${holes(svcIds)})`)
+    .all(...svcIds).map((p) => p.service_id));
+  return new Set(rows.filter((r) => isLabService(svcs.get(r.service_id), { deptKindById, typeNameById, hasPanel: (id) => panels.has(id) }))
+    .map((r) => r.id));
+}
+
 export function unpaidWorkRefusal(db, ids, nextStatus) {
   if (nextStatus === undefined || nextStatus === null || FREE_MOVES.includes(String(nextStatus))) return null;
   const list = (ids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
@@ -69,7 +94,23 @@ export function unpaidWorkRefusal(db, ids, nextStatus) {
       LEFT JOIN invoice_items ii ON ii.id = vs.invoice_item_id
       LEFT JOIN invoices i       ON i.id = ii.invoice_id
      WHERE vs.id IN (${holes(list)})`).all(...list);
+  // REFUND_ANY_V1 — анализ, за который пациенту вернули деньги (касса
+  // отпустила строку со счёта с возвратом) и по которому результата ещё нет, в
+  // работу не идёт. Статус у такой строки прежний ('queued', 'collected'…),
+  // поэтому правило «смета → работа» ниже его не видит. Внесённый результат
+  // выдают и правят, как прежде.
+  // Ревью B4 (п. 9b) — и любая другая возвращённая строка, по которой работы
+  // не было (lineHasWork: ни статуса работы, ни документа, ни результата, ни
+  // сообщения прибора — так её оставляет «Оставить услугу в визите»), в работу
+  // не идёт: отказ словами возврата, а не «ещё не оплачена». Со следом работы
+  // — дописывают, как прежде; отменить — можно (FREE_MOVES выше).
+  const refundedAll = refundedOpenLineIds(db, list);
+  const anyRefunded = new Set(refundedAll);
+  const refunded = new Set(refundedAll.length ? refundedOpenLineIds(db, refundedAll, { withoutResult: true }) : []);
+  const labIds = refunded.size ? refundedLabIds(db, rows.filter((r) => refunded.has(r.id))) : new Set();   // ревью B4
   for (const r of rows) {
+    if (labIds.has(r.id)) return REFUNDED_LAB_REFUSAL;
+    if (anyRefunded.has(r.id) && !lineHasWork(db, r)) return REFUNDED_WORK_REFUSAL;   // ревью B4 (п. 9b)
     if (r.status !== 'added') continue;
     if (!(Number(r.total) > 0)) continue;
     if (r.inv_payer != null) continue;

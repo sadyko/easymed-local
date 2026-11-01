@@ -10,6 +10,8 @@
 //   shift_report     — X-отчёт / внутренний отчёт / история смены
 //   cashier_invoices — the invoice list + chip aggregates, joined server-side
 //   cashier_unbilled — REFERRAL_BILL_V1: «Ждут счёта», визиты со строками без счёта
+//   cashier_invoice_search — REFUND_ANY_V1: счета за все дни по строке поиска и
+//                      один счёт по номеру (окно «Платежи» из истории и окна визита)
 //   record_payment   — stamps payments.shift_id from the cashier's open shift
 //   void_invoice     — отмена счёта (только без принятых денег; возвраты — follow-up)
 // DEPOSIT_V1 — депозиты ПОРТИРОВАНЫ: чип «ДЕПОЗИТЫ» показывает предоплаты,
@@ -27,9 +29,9 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
-import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js?v=refbill4';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп) · REFBILL_REVIEW_V1 — плательщик карты перечитывается, отказ перечитывает строки
+import { canOfferLineFix, openLineFix, openRebill, openRefundSwap, invoiceSwappable } from './cashier-line-fix.js?v=refbill4';   // REFUND_SWAP_V1 — «Заменить услугу» в окне «Платежи»; CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп) · REFBILL_REVIEW_V1 — плательщик карты перечитывается, отказ перечитывает строки
 import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт по счёту плательщику, та же сборка, что у мастера визита
-import { canCloseOtherShifts } from '../permissions.js';   // CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
+import { canCloseOtherShifts, canSwapPaidLines } from '../permissions.js';   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
 // CARD_BALANCE_V1 — «Подарочная карта»: оплата остатком карты / сертификата.
@@ -246,6 +248,7 @@ const state = {
     cards: [],      // CARD_SALE_V1 — подарочные карты и сертификаты (проданные и выданные без оплаты)
     refunds: { from: null, to: null, rows: [], totals: null },   // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период
     unbilled: { rows: [], totals: null, found: null, pendingQ: null },   // REFERRAL_BILL_V1 — «Ждут счёта»: визиты со строками без счёта (filter 'unbilled'); REFBILL_REVIEW_V1 — found: ответ поиска сервера { q, rows, totals, error }
+    found: { result: null, pendingQ: null },   // REFUND_ANY_V1 — счета за все дни по строке поиска (cashier_invoice_search): result { q, rows, has_more, error }
 };
 
 export async function renderCashier(container) {
@@ -535,6 +538,14 @@ async function historyModal(root) {
         style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
         onclick: () => openRefundConfirm(p, invInfo(p.invoice_id), root),
     }, 'Возврат');
+    // REFUND_ANY_V1 — строка истории открывает полное окно «Платежи» своего
+    // счёта (вернуть услугу, вернуть оплату), а не только возврат одного
+    // платежа. Счёт читается с сервера по номеру: в истории — и вчерашние.
+    // Депозиты и продажи карт возвращаются в своих вкладках — здесь кнопки нет.
+    const openBtn = (invoiceId, number) => (invoiceId == null || /^(DEP|CARD)-/.test(String(number || ''))) ? null : h('button', {
+        class: 'btn btn-outline btn-sm', type: 'button', 'data-history-open': String(invoiceId),
+        onclick: () => openInvoiceById(invoiceId, root),
+    }, 'Платежи');
 
     const rows = [];
     let lastDay = null;
@@ -563,7 +574,9 @@ async function historyModal(root) {
                 sub,
                 h('span', { class: 'num', style: { fontWeight: 700, color: isRefund ? 'var(--crit-600)' : 'var(--ok-700)' } },
                     (isRefund ? '−' : '+') + fmtPrice(Math.abs(p.amount))),
-                isRefund ? null : refundBtnSmall(p)));
+                h('span', { class: 'row', style: { gap: '6px' } },   // REFUND_ANY_V1 — «Платежи» счёта рядом с возвратом платежа
+                    inv ? openBtn(p.invoice_id, inv.invoice_number) : null,   // ревью M-1 — счёт неизвестен: открывать нечего
+                    isRefund ? null : refundBtnSmall(p))));
         } else if (ev.kind === 'invoice') {
             const inv = ev.inv;
             const cancelled = inv.status === 'void' || inv.status === 'refunded';
@@ -582,7 +595,8 @@ async function historyModal(root) {
                 cancelled ? 'var(--ink-400)' : 'var(--ink-900)',
                 sub,
                 h('span', { class: 'num', style: { fontWeight: 600, color: cancelled ? 'var(--ink-400)' : 'var(--ink-900)', textDecoration: cancelled ? 'line-through' : 'none' } },
-                    fmtPrice(inv.total_amount))));
+                    fmtPrice(inv.total_amount)),
+                openBtn(inv.id, inv.invoice_number)));   // REFUND_ANY_V1
         } else {
             const m = ev.m;
             rows.push(line(hhmm(d),
@@ -717,8 +731,16 @@ async function paymentsCard(root, summary) {
     await loadInvoices();
     function repaintTable() {
         paintChips(chipsEl, repaintTable);
-        paintSearch(searchEl, repaintTable);
-        paintTable(tableEl, root);
+        paintSearch(searchEl, repaintTable, repaintResults);
+        paintTable(tableEl, root, repaintResults);   // REFUND_ANY_V1 — «Показать ещё» перерисовывает список
+    }
+    // REFUND_ANY_V1 (ревью кода B1, I-3) — ответ поиска сервера («Ждут счёта»,
+    // «Счета за все дни», «Показать ещё») перерисовывает только список и
+    // «Показано … из …». Поле поиска он не трогает: человек печатает дальше,
+    // пока сервер думает, и пересобранное поле съедало бы эти буквы.
+    function repaintResults() {
+        paintSearchCount(searchEl);
+        paintTable(tableEl, root, repaintResults);
     }
     repaintTable();
     return card;
@@ -727,6 +749,10 @@ async function paymentsCard(root, summary) {
 async function loadInvoices() {
     state.rows = [];
     state.counts = null;
+    // REFUND_ANY_V1 — касса перечитана (после возврата, «Обновить»): найденное
+    // по всем дням устарело — следующая перерисовка спросит его заново.
+    _foundSeq++;
+    state.found = { result: null, pendingQ: null };
     const { data, error } = await supabase.rpc('cashier_invoices', {});
     if (error) { toast(trf('Не удалось загрузить счета: {msg}', { msg: error.message || error }), 'fail'); return; }
     state.rows = (data && data.rows) || [];
@@ -805,6 +831,66 @@ function unbilledView() {
     if (!q) return { q: '', rows: u.rows || [], total: (u.totals && u.totals.n) || (u.rows || []).length, searching: false, error: null };
     if (!u.found || u.found.q !== q) return { q, rows: [], total: 0, searching: true, error: null };
     return { q, rows: u.found.rows, total: (u.found.totals && u.found.totals.n) || u.found.rows.length, searching: false, error: u.found.error || null };
+}
+
+// REFUND_ANY_V1 (2026-10-29) — ПОИСК СЧЁТА ЗА ЛЮБОЙ ДЕНЬ. Список «Приёма оплат»
+// держит оплаченные и отменённые счета только за сегодня (cashier_invoices), и
+// вчерашний счёт касса не находила вовсе — вернуть по нему услугу было неоткуда.
+// Строка поиска (от двух знаков) уходит серверу — cashier_invoice_search:
+// номер счёта, ФИО, телефон, номер карты; все дни; своё здание. Найденное
+// рисуется блоком «Счета за все дни» под списком (paintFound), «Платежи»
+// открывает полное окно счёта. Спрашивается один раз на строку; устаревший
+// ответ отбрасывается — как у «Ждут счёта» (ensureUnbilledSearch).
+let _foundSeq = 0;
+const FOUND_MIN = 2;
+const FOUND_OFF = ['unbilled', 'deposits', 'cards', 'refunds'];
+function foundWanted() {
+    return state.search.trim().length >= FOUND_MIN && !FOUND_OFF.includes(state.filter);
+}
+function ensureInvoiceSearch(onChange) {
+    if (!foundWanted()) return;
+    const q = state.search.trim();
+    const f = state.found;
+    if ((f.result && f.result.q === q) || f.pendingQ === q) return;
+    f.pendingQ = q;
+    const seq = ++_foundSeq;
+    Promise.resolve(supabase.rpc('cashier_invoice_search', { q })).then((res) => {
+        if (seq !== _foundSeq) return;
+        const { data, error } = res || {};
+        f.result = error ? { q, rows: [], has_more: false, error: error.message || String(error) }
+            : { q, rows: (data && data.rows) || [], has_more: !!(data && data.has_more), error: null };
+    }, (e) => {
+        if (seq !== _foundSeq) return;
+        f.result = { q, rows: [], has_more: false, error: (e && e.message) || String(e) };
+    }).then(() => {
+        if (seq !== _foundSeq) return;
+        f.pendingQ = null;
+        if (typeof onChange === 'function') onChange();
+    });
+}
+// «Показать ещё» — следующая страница того же поиска (offset — сколько уже есть).
+async function moreFound(onChange) {
+    const f = state.found;
+    const r = f.result;
+    if (!r || !r.has_more || f.pendingQ) return;
+    const seq = _foundSeq;
+    f.pendingQ = r.q;
+    try {
+        const { data, error } = await supabase.rpc('cashier_invoice_search', { q: r.q, offset: r.rows.length });
+        if (error) throw error;
+        if (seq === _foundSeq) {
+            // Ревью M-5 — между страницами касса могла принять новый счёт этого
+            // пациента: сдвиг offset повторил бы уже показанный — без повторов.
+            const have = new Set(r.rows.map((x) => x.id));
+            r.rows = r.rows.concat(((data && data.rows) || []).filter((x) => !have.has(x.id)));
+            r.has_more = !!(data && data.has_more);
+        }
+    } catch (e) {
+        if (seq === _foundSeq) toast(trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }), 'fail');
+    }
+    if (seq !== _foundSeq) return;
+    f.pendingQ = null;
+    if (typeof onChange === 'function') onChange();
 }
 
 // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период (по умолчанию сегодня).
@@ -1420,40 +1506,72 @@ function filteredRows() {
     return rows;
 }
 
-function paintSearch(el, onChange) {
-    clear(el);
-    const inp = h('input', {
-        type: 'text', value: state.search,
-        placeholder: 'Поиск: счёт, пациент, MRN, телефон…',
-        style: {
-            height: '36px', padding: '0 12px', width: '340px', maxWidth: '100%',
-            border: '1px solid var(--ink-200)', borderRadius: '9px',
-            fontSize: '12.5px', fontFamily: 'inherit',
-        },
-    });
-    let tmr = null;
-    inp.addEventListener('input', () => {
-        clearTimeout(tmr);
-        tmr = setTimeout(() => { state.search = inp.value; onChange(); }, 200);
-    });
+// REFUND_ANY_V1 (ревью кода B1, I-3) — ПОЛЕ ПОИСКА ОДНО НА ЭКРАН. Поле
+// строится один раз на контейнер и дальше не пересобирается: ни ответом
+// сервера (onResults перерисовывает только список и счётчик), ни щелчком по
+// чипу, ни самим поиском — пересобранное поле теряло буквы, набранные, пока
+// шёл запрос или ждал отложенный набор. Отложенный набор — один таймер на
+// модуль (_searchTimer), и слушается только живое поле (_searchInput): поле
+// прежнего экрана (касса перерисована целиком) своим поздним таймером не
+// перепишет state.search поверх нового.
+let _searchTimer = null;
+let _searchInput = null;
+function paintSearch(el, onChange, onResults) {
+    let ui = el.__cashierSearch;
+    if (!ui) {
+        const inp = h('input', {
+            type: 'text', value: state.search,
+            placeholder: 'Поиск: счёт, пациент, MRN, телефон…',
+            style: {
+                height: '36px', padding: '0 12px', width: '340px', maxWidth: '100%',
+                border: '1px solid var(--ink-200)', borderRadius: '9px',
+                fontSize: '12.5px', fontFamily: 'inherit',
+            },
+        });
+        const count = h('span', { class: 'muted', 'data-search-count': '1', style: { fontSize: '12.5px' } });
+        ui = { inp, count, onChange };
+        inp.addEventListener('input', () => {
+            if (inp !== _searchInput) return;
+            clearTimeout(_searchTimer);
+            _searchTimer = setTimeout(() => {
+                _searchTimer = null;
+                if (inp !== _searchInput) return;
+                state.search = inp.value;
+                ui.onChange();
+            }, 200);
+        });
+        clear(el);
+        el.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', margin: '2px 0 12px' } },
+            inp, h('span', { class: 'grow' }), count));
+        el.__cashierSearch = ui;
+        // Касса перерисована с непустым поиском — фокус и курсор в конец поля.
+        if (state.search) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    }
+    ui.onChange = onChange;
+    _searchInput = ui.inp;
     // REFERRAL_BILL_V1 — у «Ждут счёта» счёт идёт по карточкам, а не по счетам.
     // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» спрашивается у сервера
     // (ensureUnbilledSearch); «из» — всех найденных (или всех ждущих окна).
+    const results = typeof onResults === 'function' ? onResults : onChange;
+    if (state.filter === 'unbilled') ensureUnbilledSearch(results);
+    else ensureInvoiceSearch(results);   // REFUND_ANY_V1 — счета за все дни
+    paintSearchCount(el);
+}
+
+// «Показано … из …» под полем поиска (paintSearch); ответ сервера обновляет
+// только его, не поле.
+function paintSearchCount(el) {
+    const ui = el && el.__cashierSearch;
+    if (!ui) return;
     const unbilled = state.filter === 'unbilled';
-    if (unbilled) ensureUnbilledSearch(onChange);
     const view = unbilled ? unbilledView() : null;
     const shown = unbilled ? view.rows.length : filteredRows().length;
     const total = unbilled ? view.total : (state.counts ? state.counts.all.n : state.rows.length);
-    el.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', margin: '2px 0 12px' } },
-        inp,
-        h('span', { class: 'grow' }),
-        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Показано ', h('strong', null, String(shown)), ' из ', String(total)),
-    ));
-    // keep focus while typing (repaint replaces the node)
-    if (state.search) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    clear(ui.count);
+    ui.count.appendChild(h('span', null, 'Показано ', h('strong', null, String(shown)), ' из ', String(total)));
 }
 
-function paintTable(el, root) {
+function paintTable(el, root, onChange) {   // REFUND_ANY_V1 — onChange: «Показать ещё» у счетов за все дни
     clear(el);
     if (state.filter === 'deposits') { paintDeposits(el, root); return; }
     if (state.filter === 'cards') { paintCards(el, root); return; }
@@ -1462,21 +1580,61 @@ function paintTable(el, root) {
     const rows = filteredRows();
     if (!rows.length) {
         el.appendChild(h('div', { class: 'empty' }, 'Нет счетов по выбранному фильтру.'));
-        return;
+    } else {
+        const th = (t, right) => h('th', { style: right ? { textAlign: 'right' } : null }, t);
+        const tbody = h('tbody');
+        for (const inv of rows) tbody.appendChild(invoiceRow(inv, root));
+        el.appendChild(h('div', { style: { overflowX: 'auto' } },
+            h('table', { class: 'tbl' },
+                h('thead', null, h('tr', null,
+                    th('Пациент'), th('Услуга'), th('Врач'), th('Создан'),
+                    th('Сумма', true), th('Оплачено', true), th('Долг', true),
+                    th('Оплата'), th('Статус'), th('Действие'),
+                )),
+                tbody,
+            ),
+        ));
     }
-    const th = (t, right) => h('th', { style: right ? { textAlign: 'right' } : null }, t);
-    const tbody = h('tbody');
-    for (const inv of rows) tbody.appendChild(invoiceRow(inv, root));
-    el.appendChild(h('div', { style: { overflowX: 'auto' } },
-        h('table', { class: 'tbl' },
-            h('thead', null, h('tr', null,
-                th('Пациент'), th('Услуга'), th('Врач'), th('Создан'),
-                th('Сумма', true), th('Оплачено', true), th('Долг', true),
-                th('Оплата'), th('Статус'), th('Действие'),
-            )),
-            tbody,
-        ),
-    ));
+    paintFound(el, root, onChange);   // REFUND_ANY_V1
+}
+
+// REFUND_ANY_V1 — «Счета за все дни»: ответ сервера на строку поиска, кроме
+// счетов, которые уже стоят в списке выше. У каждого — «Платежи»: полное окно
+// счёта (возврат оплаты, «Вернуть услугу»).
+function paintFound(el, root, onChange) {
+    if (!foundWanted()) return;
+    const q = state.search.trim();
+    const r = state.found.result;
+    const box = h('div', { 'data-found': '1', style: { marginTop: '16px' } },
+        h('div', { style: { padding: '0 0 8px', fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } },
+            'Счета за все дни'));
+    el.appendChild(box);
+    if (!r || r.q !== q) { box.appendChild(h('div', { class: 'empty' }, 'Ищем…')); return; }
+    if (r.error) { box.appendChild(h('div', { class: 'empty' }, trf('Не удалось загрузить: {msg}', { msg: r.error }))); return; }
+    // Ревью M-6 — «за все дни» значит «не из сегодняшнего списка»: без всех
+    // счетов, которые касса загрузила, а не только без видимых под чипом.
+    const listed = new Set((state.rows || []).map((x) => x.id));
+    const rows = r.rows.filter((x) => !listed.has(x.id));
+    if (!rows.length) box.appendChild(h('div', { class: 'empty' }, 'За другие дни счетов по этому поиску нет.'));
+    else box.appendChild(h('div', { style: { display: 'grid', gap: '8px' } }, ...rows.map((x) => foundCard(x, root))));
+    if (r.has_more) {
+        box.appendChild(h('button', { class: 'btn btn-sm', type: 'button', 'data-found-more': '1', style: { marginTop: '8px' },
+            onclick: () => moreFound(onChange) }, 'Показать ещё'));
+    }
+}
+
+function foundCard(r, root) {
+    return h('div', { class: 'card', 'data-found-row': String(r.id), style: { padding: '10px 14px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+        h('strong', null, r.invoice_number || ('#' + r.id)),
+        h('span', { class: 'muted num', style: { fontSize: '12.5px' } }, fmtRuNumeric(r.created_at)),
+        h('span', null, r.patient_name || '—'),
+        r.mrn ? h('span', { class: 'muted' }, r.mrn) : null,
+        invStatusTag(r.status),
+        h('span', { class: 'grow' }),
+        h('span', { class: 'num', style: { fontWeight: 700 } },
+            trf('{paid} из {total} сум', { paid: fmtPrice(r.paid_amount), total: fmtPrice(r.total_amount) })),
+        h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-found-pay': String(r.id), onclick: () => openInvoiceRefund(r, root) },
+            Icon('Receipt', { size: 13 }), ' ', 'Платежи'));
 }
 
 // INVOICE_DELETE_V1 — удаление отменённого счёта видит только главный админ.
@@ -1636,6 +1794,11 @@ function invoiceRow(inv, root) {
 }
 
 function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 — opts.checkSubtitle
+    // REFUND_SWAP_V1 — opts.after: что сделать после оплаты или долга вместо
+    // перерисовки кассы (доплата после замены из окна визита: кассы под рукой
+    // нет, root пуст — перечитывается окно визита); opts.onClose — окно
+    // закрылось любым путём. Без них — как прежде.
+    const after = typeof opts.after === 'function' ? opts.after : () => paint(root);
     // SPLIT_PAY_V1 — счёт можно оплатить одним или НЕСКОЛЬКИМИ способами сразу
     // (например: часть наличными, часть картой или эквайрингом). Каждая строка —
     // способ + сумма; все строки проводятся одной транзакцией (record_payment_split),
@@ -1964,7 +2127,7 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
             idem.next();
             toast('Оплата принята', 'ok');
             printFiscalCheck(inv, parts, undefined, { subtitle: opts.checkSubtitle });   // CASH_CHECK_PRINT_V1 + V3120_FIX — строка на каждый способ (не блокирует)
-            await paint(root);
+            await after();   // REFUND_SWAP_V1 — по умолчанию paint(root)
             return true;
         },
         460,
@@ -2013,13 +2176,14 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
                     toast(parts.length ? tr('Счёт оставлен как долг (частичная оплата записана) — услуги переданы в работу.') : tr('Счёт оставлен как долг — услуги переданы в работу.'), 'ok');
                     if (sum > 0) printFiscalCheck(inv, parts, undefined, { subtitle: opts.checkSubtitle });   // V3120_FIX — все способы, «Остаток» — долг
                     close();
-                    await paint(root);
+                    await after();   // REFUND_SWAP_V1 — по умолчанию paint(root)
                 } catch (err) {
                     toast((err && err.message) || 'Не удалось оформить долг.', 'fail');
                     btn.disabled = false;
                 }
             },
-        }, 'Оставить как долг'));
+        }, 'Оставить как долг'),
+        opts.onClose || null);   // REFUND_SWAP_V1
 }
 
 function voidModal(root, inv) {
@@ -2059,8 +2223,67 @@ function voidModal(root, inv) {
         });
 }
 
+// REFUND_ANY_V1 — после денег окна «Платежи»: окно визита (opts.onDone)
+// перечитывает себя, касса — себя (paint). Без кассы под рукой (root нет) и
+// без onDone — ничего.
+async function afterMoney(root, opts) {
+    if (opts && typeof opts.onDone === 'function') { await opts.onDone(); return; }
+    if (root) await paint(root);
+}
+
+// REFUND_ANY_V1 (ревью кода B1, I-4) — после денег закрываются окна этого
+// возврата («Платежи» и подтверждение), но не окна, открытые до него: окно
+// визита, из которого открыли «Платежи», остаётся (opts.keep —
+// openInvoiceRefundById). Без keep (касса) — как прежде, все окна.
+// REFUND_SWAP_V1 (ревью A3) — окно, у которого есть своё закрытие
+// (overlay._close — modal()), закрывается им: его onClose срабатывает и
+// здесь (окно оплаты «Доплата» сообщает, что закрыто). Без него — вынимается.
+function closeRefundModals(opts) {
+    const keep = opts && opts.keep;
+    document.querySelectorAll('.modal').forEach((m) => {
+        if (keep && keep.has(m)) return;
+        if (typeof m._close === 'function') m._close();
+        else m.remove();
+    });
+}
+
+// REFUND_ANY_V1 (ревью M-1) — почему счёта по номеру нет в кассе: сервер
+// называет причину (cashier_invoice_search reason), экран — словами.
+const HIDDEN_INVOICE_TEXT = {
+    branch: 'Это счёт другого здания — его деньги возвращает касса того здания.',
+    payer: 'Счёт выставлен плательщику — касса по нему денег не принимает и не возвращает.',
+    money_doc: 'Это счёт депозита или продажи карты — его возвращают во вкладке «Депозиты» или «Карты» кассы.',
+    free: 'Счёт на 0 сум, оплат по нему не было — возвращать нечего.',
+    missing: 'Счёт не найден в кассе этого здания.',
+};
+
+// REFUND_ANY_V1 — окно «Платежи» по номеру счёта: строка счёта — с сервера
+// (cashier_invoice_search { invoice_id }, своё здание), как у списка кассы.
+async function openInvoiceById(invoiceId, root, opts = {}) {
+    let row = null;
+    let reason = null;
+    try {
+        const { data, error } = await supabase.rpc('cashier_invoice_search', { invoice_id: Number(invoiceId) });
+        if (error) throw error;
+        row = (data && Array.isArray(data.rows) && data.rows[0]) || null;
+        reason = (data && data.reason) || null;
+    } catch (e) {
+        toast(trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }), 'fail');
+        return;
+    }
+    if (!row) { toast(tr(HIDDEN_INVOICE_TEXT[reason] || HIDDEN_INVOICE_TEXT.missing), 'fail'); return; }
+    await openInvoiceRefund(row, root, opts);
+}
+
+/** REFUND_ANY_V1 — окно «Платежи» для других экранов (окно визита): opts.onDone — после возврата. */
+export async function openInvoiceRefundById(invoiceId, opts = {}) {
+    // Ревью I-4 — окна, открытые до «Платежей» (окно визита), возврат не закрывает.
+    const keep = new Set(document.querySelectorAll('.modal'));
+    return openInvoiceById(invoiceId, null, { ...opts, keep });
+}
+
 // CASHIER_REFUND_V1 — an invoice's payment list, each with a «Возврат» action.
-async function openInvoiceRefund(inv, root) {
+async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — opts.onDone
     let pays = [];
     try {
         const { data } = await supabase.from('payments')
@@ -2068,30 +2291,73 @@ async function openInvoiceRefund(inv, root) {
             .eq('invoice_id', inv.id).order('id', { ascending: false }).limit(100);
         pays = data || [];
     } catch (e) { /* empty list explains below */ }
-    const info = { id: inv.id, invoice_number: inv.invoice_number || ('#' + inv.id), patient_name: inv.patient_name || '', admission_id: inv.admission_id || null };
+    const info = { id: inv.id, invoice_number: inv.invoice_number || ('#' + inv.id), patient_name: inv.patient_name || '', admission_id: inv.admission_id || null,
+        admission_status: inv.admission_status || null };   // REFUND_ANY_V1 (ревью B2) — лежит ли пациент
 
     // BILLING_AUDIT_FIX_V1 (B1) — ВЕРНУТЬ ОДНУ УСЛУГУ. Возврат «по платежу»
     // уменьшал оплату, но не счёт: частичный возврат делал пациента должником за
     // услугу, от которой он отказался. Строка счёта возвращается целиком
     // (refund_invoice_line): счёт пересчитывается, пациенту уходит переплата.
-    // Счёт стационара так не возвращается — его строки живут в счёте выписки.
+    // REFUND_ANY_V1 — и строки счёта стационара: строка возвращается по одной,
+    // строка госпитализации освобождается и в счёт выписки не попадает
+    // (refund_invoice_line). Прежде строки такого счёта здесь были скрыты.
     let items = [];
-    if (!inv.admission_id) {
+    try {
+        const { data } = await supabase.from('invoice_items')
+            .select('id, invoice_id, description, quantity, unit_price, total, discount_amount')
+            .eq('invoice_id', inv.id).order('id', { ascending: true }).limit(200);
+        items = data || [];
+    } catch (e) { /* без строк остаётся возврат по платежу */ }
+    // REFUND_ANY_V1 — что уже сделано по строкам (invoice_line_work): окно
+    // «Вернуть услугу» называет это и просит галочку. Сбой чтения — окно без
+    // предупреждения (сервер возврат не запрещает и так).
+    const workById = new Map();
+    if (items.length) {
         try {
-            const { data } = await supabase.from('invoice_items')
-                .select('id, invoice_id, description, quantity, unit_price, total, discount_amount')
-                .eq('invoice_id', inv.id).order('id', { ascending: true }).limit(200);
-            items = data || [];
-        } catch (e) { /* без строк остаётся возврат по платежу */ }
+            const { data, error } = await supabase.rpc('invoice_line_work', { invoice_id: inv.id });
+            if (!error) for (const l of ((data && data.lines) || [])) workById.set(l.invoice_item_id, l);
+        } catch (e) { /* без предупреждения */ }
     }
-    const itemRows = items.map(it => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center' } },
-        h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: it.description || '' }, it.description || '—'),
+    // REFUND_SWAP_V1 — «Заменить услугу» рядом с «Вернуть услугу»: у того, кому
+    // выдано «Исправляет услуги в счёте», и только с денежной ролью
+    // (canSwapPaidLines — зеркало сервера requireSwapRight + PAYMENT_ROLES), у
+    // счёта визита с деньгами (не плательщику, не депозит и не карта, не
+    // отменённый — canOfferLineFix / invoiceSwappable; не стационара — сервер
+    // их не меняет), у строки-услуги, не товара и не строки стационара. Строки
+    // визита читаются по позициям счёта; начата ли работа — из
+    // invoice_line_work выше (performed), экран её сам не выводит.
+    const swapOk = items.length > 0 && !inv.admission_id && canOfferLineFix(inv) && invoiceSwappable(inv) && canSwapPaidLines();
+    let lineByItem = new Map();
+    if (swapOk) {
+        try {
+            const { data } = await supabase.from('visit_services')
+                .select('id, service_id, status, total, invoice_item_id, clinic_item_id, consultation_type_id, services(name, is_lab, type), doctor_id(id, full_name)')
+                .in('invoice_item_id', items.map((it) => it.id));
+            lineByItem = new Map((data || []).map((l) => [l.invoice_item_id, l]));
+        } catch (e) { /* без строк визита остаётся «Вернуть услугу» */ }
+    }
+    const swapBtn = (it) => {
+        const line = lineByItem.get(it.id);
+        const work = workById.get(it.id) || null;
+        if (!line || line.clinic_item_id != null) return null;   // товар не меняют — его возвращают
+        if (work && (work.kind === 'admission' || work.product)) return null;
+        return h('button', {
+            class: 'btn btn-outline btn-sm', type: 'button', 'data-refund-swap': String(it.id),
+            onclick: () => openRefundSwap(inv, it, line, { work, onDone: (r) => afterRefundSwap(r, inv, root, opts) }),
+        }, Icon('Repeat', { size: 13 }), ' ', 'Заменить услугу');
+    };
+    // REFUND_SWAP_V1 (ревью A3) — на узком экране кнопки строки переносятся
+    // под название одной группой, а не сжимаются.
+    const itemRows = items.map(it => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center', flexWrap: 'wrap' } },
+        h('span', { style: { flex: '1 1 160px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: it.description || '' }, it.description || '—'),
         h('span', { class: 'num', style: { fontWeight: 700 } }, fmtPrice(Math.max(0, Number(it.total || 0) - Number(it.discount_amount || 0)))),
-        h('button', {
-            class: 'btn btn-outline btn-sm', type: 'button',
-            style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
-            onclick: () => openLineRefundConfirm(it, info, root),
-        }, 'Вернуть услугу'),
+        h('div', { style: { display: 'flex', gap: '6px', flexShrink: 0, marginLeft: 'auto' } },
+            swapBtn(it),   // REFUND_SWAP_V1
+            h('button', {
+                class: 'btn btn-outline btn-sm', type: 'button',
+                style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
+                onclick: () => openLineRefundConfirm({ ...it, work: workById.get(it.id) || null }, info, root, opts),   // REFUND_ANY_V1 — с тем, что сделано
+            }, 'Вернуть услугу')),
     ));
 
     const rows = pays.map(p => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center' } },
@@ -2104,7 +2370,7 @@ async function openInvoiceRefund(inv, root) {
         p.amount > 0 ? h('button', {
             class: 'btn btn-outline btn-sm', type: 'button',
             style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
-            onclick: () => openRefundConfirm(p, info, root),
+            onclick: () => openRefundConfirm(p, info, root, opts),
         }, 'Возврат') : h('span', { style: { width: '72px' } }),
     ));
 
@@ -2114,13 +2380,56 @@ async function openInvoiceRefund(inv, root) {
             : h('div', { class: 'empty' }, 'По счёту нет платежей.'),
          itemRows.length ? h('div', { style: { padding: '14px 0 4px', fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } }, 'Услуги счёта') : null,
          itemRows.length ? h('div', { style: { maxHeight: '40vh', overflow: 'auto' } }, ...itemRows) : null],
-        'Закрыть', async () => true, 560);
+        'Закрыть', async () => true, 640);   // REFUND_SWAP_V1 — шире: у строки две кнопки
+}
+
+// REFUND_SWAP_V1 — после замены из окна «Платежи»: что стало с деньгами.
+// Дешевле — квитанция «Возврат разницы»; дороже — сразу окно оплаты с чеком
+// «Доплата» (закрыли без оплаты — разница остаётся долгом счёта); возврат с
+// новой услугой — сказано, что прежняя осталась в карте и врачу не платится.
+// Поправка 7: окна закрываются, как у остальных денег этого окна
+// (closeRefundModals — окно визита, из которого открыли «Платежи», остаётся),
+// и в конце — afterMoney ровно один раз: без доплаты — сразу; с доплатой —
+// когда окно оплаты закрылось (оплатили, оставили долгом или закрыли).
+async function afterRefundSwap(r, inv, root, opts = {}) {
+    closeRefundModals(opts);   // окно «Платежи» устарело
+    const sum = Number(r.refunded) || 0;
+    const due = Number(r.due) || 0;
+    // Ревью A3 — одно уведомление: второе стирает первое, и сумма пропадала.
+    // Сначала деньги, потом (у возврата с новой) — что стало с прежней услугой.
+    let note;
+    let kind = 'ok';
+    if (sum > 0) {
+        note = r.to_balance
+            ? trf('Разница {sum} сум зачислена на баланс пациента.', { sum: fmtPrice(sum) })
+            : trf('Пациенту возвращено {sum} сум.', { sum: fmtPrice(sum) });
+        const u = (window.easymed && window.easymed.state && window.easymed.state.user) || {};
+        printSlip(printableSheet, {
+            kind: 'swap', invoice: r.invoice || inv, patient: { full_name: inv.patient_name, mrn: inv.mrn },
+            before: r.line_before, after: r.line_after, refunded: sum, plan: r.refund_plan || [], cashier: u.full_name || u.username || '',
+        });
+    } else if (due > 0) {
+        note = trf('Услуга заменена — к доплате {sum} сум.', { sum: fmtPrice(due) });
+        kind = 'info';
+    } else {
+        note = tr('Услуга заменена — сумма счёта не изменилась.');
+    }
+    if (r.rebill) note += ' · ' + tr('Прежняя услуга возвращена: работа осталась в карте пациента и врачу не оплачивается.');
+    toast(note, kind);
+    let finished = false;
+    const finish = async () => {
+        if (finished) return;
+        finished = true;
+        try { await afterMoney(root, opts); } catch (e) { /* окно перечитается при следующем заходе */ }
+    };
+    if (!(due > 0)) { await finish(); return; }
+    payModal(root, { ...inv, ...(r.invoice || {}) }, due, { checkSubtitle: 'Доплата', after: finish, onClose: finish });
 }
 
 // BILLING_AUDIT_FIX_V1 (B1) — подтверждение возврата одной услуги. Сумму
 // возврата считает сервер (переплата сверх новой суммы счёта); окно говорит,
 // куда вернуть и что будет со счётом.
-function openLineRefundConfirm(item, info, root) {
+function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1 — opts.onDone
     const reasonInp = h('input', { type: 'text', placeholder: 'Причина (необязательно)' });
     let toBalance = false;
     const voidBox = h('input', { type: 'checkbox', checked: true });
@@ -2138,38 +2447,94 @@ function openLineRefundConfirm(item, info, root) {
             tr('Оплата картой-сертификатом возвращается на ту же карту. Если остаток карты уже возвращён покупателю — выбранным здесь способом.')));
     };
     paintDest();
+    // REFUND_ANY_V1 (ревью B2) — строка стационара: вместо фразы о визите —
+    // что станет со строкой госпитализации. Пациент лежит — галочки «отменить
+    // счёт» нет: сервер её здесь не читает (пустой счёт закрывается сам,
+    // непустой ждёт выписки — closeFullyRefunded).
+    const admLine = !!(info && info.admission_id);
+    const inBed = admLine && IN_BED_STATUSES.includes(info.admission_status);
+    // REFUND_ANY_V1 — СДЕЛАННАЯ РАБОТА: взята проба, есть результат, подписан
+    // документ, услуга оказывается или оказана (invoice_line_work). Окно
+    // называет её: всё это остаётся в карте, врачу не оплачивается, — и без
+    // галочки возврат не уходит.
+    // Ревью B3: «работа есть» решает work.performed — то же правило, что у
+    // сервера (lineHasWork: статус или след — и отозванный документ, и
+    // сообщение анализатора); флаги лишь выбирают слова. След без пробы,
+    // результата и подписанного документа — общая фраза.
+    const work = item.work || null;
+    const hasWork = !!(work && work.performed);
+    const done = hasWork ? [
+        work.sample && 'взята проба',
+        work.result && 'есть результат анализа',
+        work.document && 'подписан документ',
+    ].filter(Boolean) : [];
+    if (hasWork && !done.length) done.push('услуга оказывается или оказана');
+    const ackBox = h('input', { type: 'checkbox', 'data-work-ack': '1' });
+    const workBlock = hasWork ? h('div', { 'data-work-done': '1', role: 'alert', style: { padding: '10px 12px', margin: '0 0 10px', borderRadius: '10px', background: 'var(--warn-50, #fffbeb)', color: 'var(--warn-700, #b45309)', fontSize: '12.5px', lineHeight: 1.5 } },
+        h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontWeight: 700 } },
+            Icon('Warning', { size: 14 }), h('span', null, tr('По услуге уже сделана работа:') + ' ' + done.map((d) => tr(d)).join(', ') + '.')),
+        h('div', { style: { margin: '4px 0 8px' } }, tr('Всё это остаётся в карте пациента. Врачу эта работа не оплачивается, пока услугу не выставят и не оплатят снова.')),
+        h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer', fontWeight: 600 } },
+            ackBox, tr('Понимаю: работа остаётся в карте, врачу не оплачивается'))) : null;
+    // REFUND_ANY_V1 — «Оставить услугу в визите»: неначатая услуга не уходит с
+    // визита, её выставят заново (keep_services). Сделанная работа и строка
+    // стационара остаются и без галочки — у них её нет.
+    // Ревью B3: только у услуги визита (work.kind 'visit'), не у товара; не
+    // знаем, что со строкой (сбой invoice_line_work), — не предлагаем.
+    // Подсказка называет, где выставить заново, — словами экрана.
+    const keepOffer = !admLine && !!work && work.kind === 'visit' && !work.product && !hasWork;
+    const keepBox = h('input', { type: 'checkbox', 'data-keep-line': '1' });
+    const keepLabel = !keepOffer ? null
+        : h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', cursor: 'pointer', marginTop: '6px' } },
+            keepBox, h('span', null,
+                h('span', { style: { fontWeight: 600 } }, tr('Оставить услугу в визите')),
+                h('div', { class: 'muted' }, tr('Услуга останется в визите без счёта. Выставить её заново: окно визита — отметить услугу и «Сформировать счёт», или касса — «Возвраты и отмены» → «Выставить заново».'))));
     modal(trf('Вернуть услугу · {name}', { name: item.description || '—' }), 'Repeat',
         [
-            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5 } },
-                tr('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта. Сделанная работа останется в визите без счёта и врачу не оплачивается.')),
+            admLine
+                ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5 } },
+                    tr('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта.'))
+                : h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5 } },
+                    tr('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта. Сделанная работа останется в визите без счёта и врачу не оплачивается.')),
+            admLine ? h('div', { 'data-adm-line-note': '1', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5, fontWeight: 600 } },
+                tr('Строка стационара освободится: в счёт выписки она не попадёт, врачу не оплачивается.')) : null,
+            workBlock,   // REFUND_ANY_V1
             field('Причина', reasonInp),
             field('Куда вернуть', destBox),
-            h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer' } },
+            inBed ? null : h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer' } },
                 voidBox, tr('Если по счёту больше не осталось денег — отменить счёт')),
+            keepLabel,   // REFUND_ANY_V1
         ],
         'Вернуть услугу',
         async () => {
+            if (workBlock && !ackBox.checked) { toast(tr('Подтвердите галочкой, что работа остаётся в карте.'), 'fail'); return false; }   // REFUND_ANY_V1
+            const keepAsked = !!(keepLabel && keepBox.checked);
             const { data: r, error } = await supabase.rpc('refund_invoice_line', {
                 invoice_item_id: item.id, reason: reasonInp.value || '', to_balance: toBalance,
                 card_fallback: toBalance ? 'balance' : 'cash',   // FINAL_MONEY_FIX_V1 (I2) — только для закрытой карты
-                void_when_zero: !!voidBox.checked, keep_services: false,
+                void_when_zero: !!voidBox.checked,
+                keep_services: keepAsked,   // REFUND_ANY_V1 — «Оставить услугу в визите»
             });
             if (error) { toast(error.message || 'Не удалось вернуть услугу.', 'fail'); return false; }
             const sum = Number((r && r.refunded) || 0);
-            toast(sum > 0
+            // Ревью B3 — сервер оставил строку в визите, хотя галочки не было
+            // (работа началась, пока окно было открыто): касса это слышит. Одна
+            // строка уведомления — вместе с суммой, чтобы сумма не пропала.
+            const keptNote = r && r.line_kept && !keepAsked ? ' · ' + tr('Сделанная работа осталась в визите') : '';
+            toast((sum > 0
                 ? trf('Возвращено {sum} сум', { sum: fmtPrice(sum) })
-                : tr('Счёт уменьшен — переплаты нет, деньги не выдаются.'), 'ok');
+                : tr('Счёт уменьшен — переплаты нет, деньги не выдаются.')) + keptNote, 'ok');
             if (r && r.voided) toast(tr('Счёт отменён'), 'ok');
             if (r && r.void_note) toast(r.void_note, 'info');
-            document.querySelectorAll('.modal').forEach(m => m.remove());
-            await paint(root);
+            closeRefundModals(opts);   // REFUND_ANY_V1 (ревью I-4) — окно визита остаётся
+            await afterMoney(root, opts);   // REFUND_ANY_V1
             return true;
         });
 }
 
 // CASHIER_REFUND_V1 — confirm dialog; the server caps the amount by what is
 // actually still refundable on this payment and rolls the invoice back.
-function openRefundConfirm(p, info, root) {
+function openRefundConfirm(p, info, root, opts = {}) {   // REFUND_ANY_V1 — opts.onDone
     const amtInp = moneyfy(h('input', { type: 'number', min: '1', max: String(p.amount), step: '1', value: String(p.amount) }));
     const reasonInp = h('input', { type: 'text', placeholder: 'Причина (необязательно)' });
     const idem = idemKeeper();   // V3120_FIX + V3120_FINAL (I1)
@@ -2270,10 +2635,27 @@ function openRefundConfirm(p, info, root) {
             }
             if (rRes && rRes.voided) toast(tr('Счёт отменён'), 'ok');
             if (rRes && rRes.void_note) toast(rRes.void_note, 'info');
-            document.querySelectorAll('.modal').forEach(m => m.remove());   // close the stacked dialogs
-            await paint(root);
+            closeRefundModals(opts);   // close the stacked dialogs; REFUND_ANY_V1 (ревью I-4) — окно визита остаётся
+            await afterMoney(root, opts);   // REFUND_ANY_V1
             return true;
         });
+}
+
+// Строки выгрузки «Счета» (шапка + по строке на счёт) — отдельной функцией,
+// чтобы тест проверял столбцы без файла.
+function invoicesExportAoa(rows) {
+    const columns = ['№ счёта', 'Пациент', 'МРН', 'Телефон', 'Услуга', 'Врач', 'Создан', 'Сумма', 'Оплачено', 'Долг', 'Оплата', 'Статус'];
+    return [columns, ...rows.map(r => [
+        r.invoice_number || '', r.patient_name || '', r.mrn || '', r.phone || '',
+        (r.first_item || '') + (r.items_count > 1 ? ` +${r.items_count - 1}` : ''),
+        r.doctor_name || '', (r.created_at || '').replace('T', ' ').slice(0, 16),
+        r.total_amount, r.paid_amount,
+        // REFUND_ANY_V1 (2026-10-30) — отменённый счёт ('void' / 'refunded') не
+        // долг, даже когда по нему ничего не оплачено (как в окне визита).
+        (r.status === 'void' || r.status === 'refunded') ? 0 : Math.max(r.total_amount - r.paid_amount, 0),
+        r.methods ? r.methods.split(',').map(m => METHOD_RU[m] || m).join(', ') : '',
+        (INV_STATUS_RU[r.status] || {}).text || r.status,   // V3120_FIX — статус словом
+    ])];
 }
 
 async function exportInvoicesXlsx() {
@@ -2281,15 +2663,8 @@ async function exportInvoicesXlsx() {
     if (!rows.length) { toast('Нет счетов для выгрузки.', 'fail'); return; }
     try {
         const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
-        const columns = ['№ счёта', 'Пациент', 'МРН', 'Телефон', 'Услуга', 'Врач', 'Создан', 'Сумма', 'Оплачено', 'Долг', 'Оплата', 'Статус'];
-        const aoa = [columns, ...rows.map(r => [
-            r.invoice_number || '', r.patient_name || '', r.mrn || '', r.phone || '',
-            (r.first_item || '') + (r.items_count > 1 ? ` +${r.items_count - 1}` : ''),
-            r.doctor_name || '', (r.created_at || '').replace('T', ' ').slice(0, 16),
-            r.total_amount, r.paid_amount, Math.max(r.total_amount - r.paid_amount, 0),
-            r.methods ? r.methods.split(',').map(m => METHOD_RU[m] || m).join(', ') : '',
-            (INV_STATUS_RU[r.status] || {}).text || r.status,   // V3120_FIX — статус словом
-        ])];
+        const aoa = invoicesExportAoa(rows);
+        const columns = aoa[0];
         const ws = XLSX.utils.aoa_to_sheet(aoa);
         ws['!cols'] = columns.map(c => ({ wch: c.length > 8 ? 20 : 13 }));
         const wb = XLSX.utils.book_new();
@@ -2423,9 +2798,18 @@ async function loadUnassignedCash(wrap) {
 // Shared minimal modal (mirrors settings-hub.js chrome).
 // onSubmit returns true to close, false to keep open.
 // =============================================================================
-function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFooter = null) {
+// REFUND_SWAP_V1 — onClose: окно закрылось (кнопкой, крестиком, фоном или
+// после удачного действия) — зовётся один раз.
+function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFooter = null, onClose = null) {
     const overlay = h('div', { class: 'modal' });
-    const close = () => overlay.remove();
+    let closed = false;
+    const close = () => {
+        overlay.remove();
+        if (closed || typeof onClose !== 'function') return;
+        closed = true;
+        Promise.resolve().then(onClose).catch(() => {});
+    };
+    overlay._close = close;   // ревью A3 — closeRefundModals закрывает окно им же
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
     const submitBtn = h('button', { class: 'btn btn-primary', type: 'button' }, submitLabel);
@@ -2559,6 +2943,8 @@ export const __test_paintDeposits = paintDeposits;
 export const __test_moveModal = moveModal;
 export const __test_payModal = payModal;
 export const __test_openRefundConfirm = openRefundConfirm;
+export const __test_openInvoiceRefund = openInvoiceRefund;   // REFUND_SWAP_V1 — окно «Платежи» с «Заменить услугу»
+export const __test_closeRefundModals = closeRefundModals;   // REFUND_SWAP_V1 (ревью A3)
 export const __test_historyModal = historyModal;
 export const __test_invoiceRow = invoiceRow;
 export const __test_shiftBanner = shiftBanner;
@@ -2569,3 +2955,5 @@ export const __test_paintChips = paintChips;
 export const __test_loadInvoices = loadInvoices;   // REFERRAL_BILL_V1 — счета и «Ждут счёта» одним заходом
 export const __test_paintTable = paintTable;       // REFERRAL_BILL_V1
 export const __test_paintSearch = paintSearch;     // REFERRAL_BILL_V1
+export const __test_paymentsCard = paymentsCard;   // REFUND_ANY_V1 (ревью I-3) — поле поиска и ответ сервера вместе
+export const __test_invoicesExportAoa = invoicesExportAoa;   // REFUND_ANY_V1 — «Долг» отменённого счёта в выгрузке

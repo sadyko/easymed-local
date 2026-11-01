@@ -39,6 +39,8 @@ import { openAdmissionCard, openAdmissionReviewModal, openAdmissionAttendingModa
 import { loadPatientById } from '../data.js';   // NO_GREETING_V1 — currentUser() went with the greeting band
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
 import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor из базы — 1, а не true
+import { REFUNDED_LINE_MARK, REFUNDED_START_REFUSAL } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (поправка 3) — «Услуга возвращена»; отказ начать — ревью B4
+import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4) — один вопрос refunded_lines на список
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -55,7 +57,9 @@ const RU_MONTHS = ['января', 'февраля', 'марта', 'апреля
 
 const state = {
     rows:         [],
-    statusFilter: 'all',     // 'all' | 'queued' | 'in_progress' | 'completed'
+    // CABINET_ACTIVE_FIRST_V1 — кабинет открывается на «Активных» (сброс в
+    // renderConsultation при каждом открытии); внутри открытого кабинета выбор держится.
+    statusFilter: 'active',  // 'active' | 'all' | 'queued' | 'in_progress' | 'completed'
     view:         'list',    // 'list' | 'calendar'
     dateRange:    'all',     // CABINET_DEFAULT_ALL_V1 — was 'today', which hid future-dated bookings; show all, doctor can filter
     search:       '',
@@ -141,6 +145,11 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     state.scrollToPay = sub === 'pay';   // CABINET_DASH_PAY_ONE_V1 — старый адрес зарплаты
     if (cabinetHero) cabinetHero.stop();
     cabinetHero = null;   // SECTION_HERO_V1 — новый вход в раздел — новый баннер
+    // CABINET_ACTIVE_FIRST_V1 — владелец: «осмотренных при открытии кабинета не
+    // видно». Каждое открытие кабинета начинает рабочий список с «Активных».
+    // Вкладки внутри открытого кабинета переключает setTab, сюда он не заходит,
+    // поэтому выбранный фильтр живёт, пока кабинет открыт.
+    state.statusFilter = 'active';
     clear(container);
     container.appendChild(h('div', { class: 'empty', style: { padding: '40px' } }, 'Загружаем кабинет…'));
     // DOCTOR_DASHBOARD_V1 — дашборд перечитывается при каждом входе в раздел:
@@ -175,8 +184,40 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
 // тянуть 300 строк очереди ради вкладки, на которую ещё не нажали, незачем.
 async function loadQueueOnce() {
     if (queueLoaded) return;
+    // REFUND_ANY_V1 (ревью B4) — без мерцания: строки новой загрузки попадают на
+    // экран только вместе со своими отметками «возвращена». Пока отметки едут,
+    // любая перерисовка (счётчики, рекомендации, смена фильтра) рисует прежний,
+    // уже размеченный список — а не новые строки, где возвращённая стоит в
+    // «Активных». loadServices не меняется: подмена — здесь, без ожиданий между
+    // её записью state.rows и возвратом прежнего списка.
+    const shown = state.rows;
     await loadServices();
+    const fresh = state.rows;
+    state.rows = shown;
+    await markRefundedRows(fresh);   // REFUND_ANY_V1 (поправка 3) — один вопрос на загрузку списка
+    state.rows = fresh;
     queueLoaded = true;
+}
+
+// REFUND_ANY_V1 (2026-10-30, поправка 3) — СТРОКА, ЗА КОТОРУЮ КАССА ВЕРНУЛА
+// ДЕНЬГИ, — НЕ РАБОТА ВРАЧА. Касса отпустила строку со счёта с возвратом
+// (refunded_lines: отметка pay_refund_releases 'out', строка без счёта), а
+// статус у неё прежний: 'added' («Оставить услугу в визите»), 'queued',
+// 'in_progress'. По одному статусу список ставил её в «Активные», а плитка
+// «В очереди / готовы к осмотру» её считала. Теперь сервер спрашивается на
+// загрузку списка номерами всех строк, а не по строке (refunded-lines.js:
+// партиями по 500, сервер принимает до 1000; список кабинета и так не длиннее
+// 300 — loadServices .limit(300), то есть это один вопрос). Отметка
+// r.refunded ставится строкам после загрузки: loadServices не меняется.
+// Сбой чтения любой партии — отметок нет, список как был (подпись на
+// возвращённую строку сервер не примет сам: routes/db.js refundedSignRefusal).
+// Экспорт — для проверки.
+export async function markRefundedRows(rows) {
+    const list = rows || [];
+    for (const r of list) r.refunded = false;
+    const got = await loadRefundedLineIds(list.map((r) => r.id));
+    if (got) for (const r of list) r.refunded = got.has(Number(r.id));
+    return list;
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +468,9 @@ function doctorDashboardView() {
         },
         // Карточка приёма ведёт туда, где с ним работают, — в рабочий список.
         // Своего второго окна приёма дашборд не заводит.
-        onOpenWork: () => setTab('appointments'),
+        // CABINET_ACTIVE_FIRST_V1 — завершённая карточка ведёт на «Завершённые»:
+        // на «Активных» этого пациента не видно.
+        onOpenWork: (row) => { if (row) state.statusFilter = row.done ? 'completed' : 'active'; setTab('appointments'); },
         // HEAD_DOCTOR_WARD_VIEW_V1 — полоса главного врача ведёт на СВОЮ вкладку
         // кабинета, а не в раздел «Стационар»: работа делается там же, где он
         // уже стоит.
@@ -855,8 +898,9 @@ function rangeFilter() {
 
 // ---- KPI summary cards (4) — real counts from loaded rows + referrals ----
 function kpiSummary() {
-    const counts = countByStatus(state.rows);
-    const toReview = (counts.added || 0) + counts.queued + counts.in_progress;
+    // CABINET_ACTIVE_FIRST_V1 — плитка считает ровно то, что покажет щелчок по
+    // ней: тот же состав, что у фильтра «Активные» (STATUS_FILTER.active).
+    const toReview = state.rows.filter(r => inStatusFilter(r, 'active') && inDateRange(r.visitDate)).length;   // и тот же период, что у списка (поиск не считаем) · REFUND_ANY_V1 (поправка 3) — без возвращённых
     const seenToday = state.rows.filter(r => r.status === 'completed' && isTodayDate(r.visitDate)).length;
     const refs = state.todayReferrals.rows;
     const recsToday = refs.length;
@@ -868,11 +912,11 @@ function kpiSummary() {
             value: String(state.rows.length), label: 'Все',
             onClick: () => setStatusFilter('all'),
         }),
-        kpiCard({
-            active: state.statusFilter === 'queued' || state.statusFilter === 'in_progress',
+        kpiCard({   // CABINET_ACTIVE_FIRST_V1 — ведёт на «Активные»: число и список совпадают
+            active: state.statusFilter === 'active',
             icon: 'Patients', accent: 'var(--info-700)', accentBg: 'var(--info-50)',
             value: String(toReview), label: 'В очереди / готовы к осмотру',
-            onClick: () => setStatusFilter('queued'),
+            onClick: () => setStatusFilter('active'),
         }),
         kpiCard({
             active: false,
@@ -921,10 +965,13 @@ function statusFilterSelect() {
         onchange: (e) => setStatusFilter(e.target.value),
         style: { height: '34px', borderRadius: '8px', border: '1px solid var(--ink-200)', padding: '0 10px', fontSize: '13.5px' },
     },
+        // CABINET_ACTIVE_FIRST_V1 — «Активные» первыми; «Осмотрен» здесь называется
+        // «Завершённые» (подпись строки остаётся «Осмотрен», statusBadge).
+        h('option', { value: 'active',      selected: state.statusFilter === 'active' },      'Активные'),
         h('option', { value: 'all',         selected: state.statusFilter === 'all' },         'Все статусы'),
         h('option', { value: 'queued',      selected: state.statusFilter === 'queued' },      STATUS_RU.queued),
         h('option', { value: 'in_progress', selected: state.statusFilter === 'in_progress' }, STATUS_RU.in_progress),
-        h('option', { value: 'completed',   selected: state.statusFilter === 'completed' },   STATUS_RU.completed),
+        h('option', { value: 'completed',   selected: state.statusFilter === 'completed' },   'Завершённые'),
     );
 }
 
@@ -964,20 +1011,81 @@ function paintBody() {
     if (state.view === 'calendar') { body.appendChild(calendarView(filtered)); return; }
 
     if (filtered.length === 0) {
+        // CABINET_ACTIVE_FIRST_V1 — пустые «Активные» в конце дня — не «записей
+        // нет»: осмотренные есть, они в соседнем фильтре, и экран говорит где.
         body.appendChild(h('div', { class: 'empty', style: { padding: '40px 20px' } },
-            'Нет записей на приём за выбранный период.'));
+            state.statusFilter === 'active' && !(state.search || '').trim()
+                && state.rows.some(r => r.status === 'completed' && inDateRange(r.visitDate))
+                ? 'Активных приёмов нет. Осмотренные — в фильтре «Завершённые».'
+                : 'Нет записей на приём за выбранный период.'));
         return;
     }
     body.appendChild(listView(filtered));
 }
 
+// CABINET_ACTIVE_FIRST_V1 (2026-10-29) — СПИСОК ВРАЧА: СНАЧАЛА ТО, С ЧЕМ РАБОТАТЬ.
+//
+// Владелец: «Идёт приём» сверху, потом «готов к осмотру», потом «ожидает
+// кассу»; осмотренных при открытии кабинета не видно. Состав фильтров — одна
+// таблица: её читают и список (filterRows), и плитка «В очереди / готовы к
+// осмотру» (kpiSummary), поэтому число на плитке и строки под ней не
+// разъедутся (прежде плитка считала и «Идёт приём», а щелчок его прятал).
+const STATUS_FILTER = {
+    active:      ['added', 'queued', 'in_progress'],
+    queued:      ['added', 'queued'],
+    in_progress: ['in_progress'],
+    completed:   ['completed'],
+};
+
+// REFUND_ANY_V1 (2026-10-30, поправка 3) — возвращённая строка (r.refunded,
+// markRefundedRows) не входит ни в один рабочий фильтр — «Активные», «В
+// очереди», «Идёт приём» — и не считается плиткой «В очереди / готовы к
+// осмотру»: работы по ней нет. Её видно в «Все статусы» и в «Завершённых»
+// (сделанное остаётся) — с пометкой «Услуга возвращена». Одно правило на
+// список (filterRows) и плитку (kpiSummary). Экспорт — для проверки.
+const WORK_FILTERS = ['active', 'queued', 'in_progress'];
+export function inStatusFilter(r, filter) {
+    if (!r) return false;
+    if (filter === 'all') return true;
+    const want = STATUS_FILTER[filter] || [filter];
+    if (!want.includes(r.status)) return false;
+    return !(r.refunded && WORK_FILTERS.includes(filter));
+}
+
+// Касса закончила: «Запланированную» услугу отпускает оплаченный или частично
+// оплаченный счёт (RT2_FIX_V1), остальные статусы кассу уже прошли. Одно
+// правило на всех, кто о нём спрашивает: открыть приём (openWorkspace), кнопка
+// строки (actionButton) и порядок списка (sortQueue).
+export function cashierReleased(r) {
+    return !!r && (r.status !== 'added' || ['paid', 'partial'].includes(r.invoiceStatus));
+}
+
+// Место строки: 0 — идёт приём, 1 — готов к осмотру, 2 — ждёт кассу,
+// 3 — осмотрен. Неизвестный статус — в самый конец, а не потерян.
+export function queueRank(r) {
+    const s = r && r.status;
+    if (r && r.refunded) return 3;   // REFUND_ANY_V1 (поправка 3) — возвращённая — не работа: к осмотренным, а не над ними
+    if (s === 'in_progress') return 0;
+    if (s === 'queued' || (s === 'added' && cashierReleased(r))) return 1;
+    if (s === 'added') return 2;
+    if (s === 'completed') return 3;
+    return 4;
+}
+
+// ПОРЯДОК СПИСКА — ЭТО РАБОТА, А НЕ ДАТА (как sortInpatients). Внутри группы —
+// порядок, как пришёл с сервера (новые записи сверху): сортировка устойчива.
+// Загрузка (loadServices) не меняется — порядок ставится при показе.
+export function sortQueue(rows) {
+    // Внутри группы сегодняшние визиты идут первыми (запись на следующую неделю
+    // не стоит выше сегодняшнего пациента); остальное — порядок сервера.
+    const key = (r) => queueRank(r) * 2 + (isTodayDate(r && r.visitDate) ? 0 : 1);
+    return (rows || []).slice().sort((a, b) => key(a) - key(b));
+}
+
 function filterRows() {
     const t = (state.search || '').trim().toLowerCase();
-    return state.rows.filter(r => {
-        if (state.statusFilter !== 'all') {
-            const want = state.statusFilter === 'queued' ? ['added', 'queued'] : [state.statusFilter];
-            if (!want.includes(r.status)) return false;
-        }
+    return sortQueue(state.rows.filter(r => {
+        if (!inStatusFilter(r, state.statusFilter)) return false;   // REFUND_ANY_V1 (поправка 3) — и без возвращённых в рабочих фильтрах
         if (!inDateRange(r.visitDate)) return false;
         if (t) {
             const hay = [r.patientName, r.patientMrn, r.patientPhone, r.serviceName, r.doctorName]
@@ -985,7 +1093,7 @@ function filterRows() {
             if (!hay.includes(t)) return false;
         }
         return true;
-    });
+    }));
 }
 
 // ---- Date-range helpers (AURORA_QUEUE_V1) ----
@@ -1078,7 +1186,7 @@ function listRow(r, i) {
             r.doctorRoom && h('div', { class: 'docroom-line' },
                 trf('Кабинет {room}', { room: r.doctorRoom }) + (r.doctorFloor ? ' · ' + trf('Этаж {n}', { n: r.doctorFloor }) : '')),
         ),
-        h('td', null, statusBadge(r.status)),
+        h('td', null, statusBadge(r.status), r.refunded ? refundedMark() : null),   // REFUND_ANY_V1 (поправка 3)
         h('td', { class: 'num muted' }, formatVisitDate(r.visitDate)),
         h('td', { class: 'num muted' }, formatDateTime(r.createdAt)),
         h('td', { style: { textAlign: 'right' } }, actionButton(r)),
@@ -1162,7 +1270,10 @@ async function openWorkspace(r) {
     // #15 — pay-first gate (single chokepoint: row click, calendar, and the action button all land here).
     // An 'added' service is un-released; the cashier must confirm payment OR debt first
     // (releaseServicesForInvoice then promotes added→queued). Refuse to open it until then.
-    if (r.status === 'added' && !['paid', 'partial'].includes(r.invoiceStatus)) { toast('Услуга ещё не проведена кассой — проведите оплату или долг, затем начните приём.', 'fail'); return; }   // RT2_FIX_V1
+    // REFUND_ANY_V1 (ревью B4) — у возвращённой строки касса не «впереди», а
+    // позади: деньги она уже вернула. Отказ — её словами, не «не проведена кассой».
+    if (r.refunded && !cashierReleased(r)) { toast(REFUNDED_START_REFUSAL, 'fail'); return; }
+    if (!cashierReleased(r)) { toast('Услуга ещё не проведена кассой — проведите оплату или долг, затем начните приём.', 'fail'); return; }   // RT2_FIX_V1 / CABINET_ACTIVE_FIRST_V1 — правило одно с порядком списка
     // WS_FULL_PATIENT_V1 — load the COMPLETE patient record (dob, gender, blood,
     // allergies, address…) so the workspace panels and the document blank show
     // real data; the minimal queue-row payload remains the fail-soft fallback.
@@ -1214,6 +1325,15 @@ function statusBadge(status) {
     return tagEl(status || '—', '', null);
 }
 
+// REFUND_ANY_V1 (поправка 3) — пометка строки, за которую касса вернула деньги
+// (те же слова, что в кабинете над документом и на печати — shared/refunded-line.js).
+function refundedMark() {
+    const el = tagEl(REFUNDED_LINE_MARK, 'crit', 'Warning');
+    el.setAttribute('data-refunded-mark', '');
+    el.style.marginLeft = '6px';
+    return el;
+}
+
 function tagEl(label, kind, iconName) {
     return h('span', {
         class: 'tag' + (kind ? ' tag-' + kind : ''),
@@ -1229,7 +1349,20 @@ function tagEl(label, kind, iconName) {
 //   in_progress  → «Продолжить» → openWorkspace
 //   completed    → «Открыть»    → openWorkspace
 function actionButton(r) {
-    const _rtReleased = r.status !== 'added' || ['paid', 'partial'].includes(r.invoiceStatus);   // RT2_FIX_V1
+    // REFUND_ANY_V1 (поправка 3) — возвращённую строку не начинают: ни
+    // «Начать», ни «Ожидает кассу» (касса её уже вернула), пометка стоит у
+    // статуса. Ревью B4: «—» — только у 'added' (оставлена в визите без
+    // работы); возвращённая 'queued' осталась в визите, потому что по ней есть
+    // след работы (документ, проба), — её открывают («Открыть»), как начатую и
+    // завершённую: документы приёма остаются в карте, новый не подписывается.
+    if (r.refunded && r.status === 'added') return h('span', { class: 'muted' }, '—');
+    if (r.refunded && r.status === 'queued') {
+        return h('button', {
+            class: 'btn btn-outline btn-sm',
+            onclick: (ev) => { ev.stopPropagation(); openWorkspace(r); },
+        }, Icon('Doc', { size: 13 }), ' Открыть');
+    }
+    const _rtReleased = cashierReleased(r);   // RT2_FIX_V1 / CABINET_ACTIVE_FIRST_V1 — правило одно с порядком списка
     if (r.status === 'added' && !_rtReleased) {
         // #15 — un-released (pay-first): visible but not actionable until the cashier confirms (payment/debt).
         return h('span', { class: 'tag', style: { gap: '4px', display: 'inline-flex', alignItems: 'center', opacity: '.75' } },
@@ -1285,12 +1418,6 @@ async function transition(r, newStatus, btn) {
 }
 
 // ---------------------------------------------------------------------------
-function countByStatus(rows) {
-    const c = { queued: 0, in_progress: 0, completed: 0, total: rows.length };
-    for (const r of rows) c[r.status] = (c[r.status] || 0) + 1;
-    return c;
-}
-
 function formatDateTime(d) { return fmtDateTime(d); }   // DATE_FMT_V1
 
 // "Запись" column: date (+ time when the visit_date carries one).
@@ -1471,6 +1598,7 @@ function showCalTip(r, ev) {
         h('div', { class: 'ct-row' }, h('span', null, 'Услуга'), h('b', null, r.serviceName)),
         h('div', { class: 'ct-row' }, h('span', null, 'Время'),  h('b', { class: 'num' }, timeStr)),
         h('div', { class: 'ct-row' }, h('span', null, 'Статус'), h('b', null, STATUS_RU[r.status] || r.status || '—')),
+        r.refunded ? h('div', { class: 'ct-row' }, refundedMark()) : null,   // REFUND_ANY_V1 (поправка 3)
     );
     const vw = window.innerWidth, vh = window.innerHeight;
     const W = 264, H = 130;

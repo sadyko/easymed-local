@@ -42,6 +42,7 @@ import { PROXY_NOT_TUBE, PROXY_QUIET_PREFIX } from './lisproxy-form.js';   // LI
 import { unusedText } from './match.js';   // LIS_PROXY_V1 — справка гематологии
 import { LAB_RESULT_STATUSES } from '../services/visit-status-guard.js';   // LIS_REAL_ANALYZERS_V1 — ревью R7, п. 1: ворота лаборатории, общие с ручным вводом
 import { today, localDate } from '../services/domain/day.js';
+import { refundedWithoutResult } from '../services/domain/pay-releases.js';   // REFUND_ANY_V1 — «по заказу возврат»
 
 /**
  * LIS_REAL_ANALYZERS_V1_SAMPLE — номер пробы БЕЗ «LAB-» (голые цифры)
@@ -153,7 +154,13 @@ const GATE_DETAIL = {
   canceled: 'заказ отменён',
   refunded: 'по заказу возврат',
 };
-function gateRefusal(order) {
+// REFUND_ANY_V1 (2026-10-29) — и заказ, за который пациенту вернули деньги
+// (касса отпустила строку со счёта с возвратом: pay_refund_releases 'out'), пока
+// результата по нему нет: статус у такой строки прежний ('collected',
+// 'in_progress'), и по одному статусу прибор её заполнял. Правило то же, что у
+// ручного ввода (rpc/lab.js saveLabResults).
+function gateRefusal(db, order) {
+  if (refundedWithoutResult(db, order.id)) return GATE_DETAIL.refunded;
   if (LAB_RESULT_STATUSES.includes(order.status)) return null;
   return GATE_DETAIL[order.status] || 'заказ не в работе лаборатории (статус «' + (STATUS_WORDS[order.status] || order.status) + '»)';
 }
@@ -835,6 +842,9 @@ function visitLabSides(db, order, ctx, { material = null, repick = false } = {})
     else if (o.status === 'completed') closed = 'released';
     else if (!OPEN_PAID_STATUSES.has(o.status)) continue;
     else if (isReleased(db, o.id)) closed = 'released';
+    // REFUND_ANY_V1 — по заказу визита вернули деньги, результата нет: значения
+    // не получает, человеку сказано почему («по заказу возврат»).
+    if (closed !== 'released' && refundedWithoutResult(db, o.id)) closed = 'refunded';
     if (repick && !orderAge(db, o.id).recent) continue;   // LAB_TUBE_ANCHOR_V1 (ревью 3.17.1, M1)
     const side = orderSide(db, o, ctx);
     if (!side.ok || !side.analytes.some(confirmedCode)) continue;
@@ -1297,8 +1307,16 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // этикетка LAB- (или номер назвал человек), как у прочих отказов; голый
   // номер не привязывает. Оплатили — «Привязать» её к тому же заказу. Серия
   // такого заказа тоже ничего не переводит: до неё приём не доходит.
-  const gate = gateRefusal(order);
-  if (gate) {
+  const gate = gateRefusal(db, order);   // REFUND_ANY_V1 — db: отметка возврата
+  // REFUND_ANY_V1 (ревью B4) — заказ этикетки возвращён, но пробирка может
+  // кормить и другие (оплаченные) заказы визита (D3): тогда — как с выданным
+  // заказом этикетки (D7 ниже): оплаченные заполняются, значения возвращённого
+  // — в лоток «по заказу возврат». Только когда пробирку есть кому делить:
+  // прибор известен и добавлен, заказ этикетки он кормит (orderSide), выбор
+  // пробирки однозначен. Иначе — отказ ворот, как прежде (те же слова).
+  const refundedTube = gate === GATE_DETAIL.refunded && !!deviceId && x.ok
+    && !(device && Number(device.added) === 0) && !(anchor && anchor.ambiguous);
+  if (gate && !refundedTube) {
     record({ ...base, visitServiceId: linkId, status: 'unmatched', detail: gate });
     return 'AA';
   }
@@ -1336,7 +1354,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // строка прибора — match.js planTube: заказ пробирки первым; код у двух
   // других заказов — «неоднозначно» (не угадываем). Прибор неизвестен — других
   // заказов не ищем: чей это прибор, не знает никто.
-  const sides = [{ order, ...x, closed: isReleased(db, order.id) ? 'released' : '' }];
+  const sides = [{ order, ...x, closed: refundedTube ? 'refunded' : isReleased(db, order.id) ? 'released' : '' }];   // REFUND_ANY_V1 (ревью B4)
   if (deviceId) sides.push(...siblingSides(db, order, ctx));
   const tube = planTube(observations, sides.map((s, i) => ({ analytes: s.analytes, tier: i === 0 ? 0 : (s.closed ? 2 : 1) })));
   const fanned = tube.ambiguous.length > 0 || tube.involved.some((v, i) => i > 0 && v);
@@ -1350,6 +1368,13 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // LIS_VENDOR_EXACT_V1 (D3) — выдан заказ пробирки, а проба заполняет и другие
   // заказы визита: выданный не трогается (его часть — «уже выдан»), остальные
   // пишутся; сообщение — superseded (новое значение к выданному смотрит человек).
+  // REFUND_ANY_V1 (ревью B4) — возвращённый заказ этикетки, а другим заказам
+  // пробирки нечего взять: отказ ворот, как прежде (строка лотка — у заказа,
+  // только если номер — этикетка LAB- или его назвал человек).
+  if (sides[0].closed === 'refunded' && !fanned) {
+    record({ ...base, visitServiceId: linkId, status: 'unmatched', detail: GATE_DETAIL.refunded });
+    return 'AA';
+  }
   if (sides[0].closed && !fanned) {
     record({ ...base, visitServiceId: order.id, status: 'superseded', detail: SUPERSEDED_DETAIL });
     return 'AA';
@@ -1383,7 +1408,8 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       if (s.closed) {
         // LIS_VENDOR_EXACT_V1 (D3) — заказ визита принять не может: значения не
         // пишутся, сказано почему (выдан — D7; не оплачен — ворота лаборатории).
-        Object.assign(report, s.closed === 'released' ? { status: 'superseded', detail: SUPERSEDED_DETAIL } : { detail: GATE_DETAIL.added });
+        Object.assign(report, s.closed === 'released' ? { status: 'superseded', detail: SUPERSEDED_DETAIL }
+          : { detail: s.closed === 'refunded' ? GATE_DETAIL.refunded : GATE_DETAIL.added });   // REFUND_ANY_V1
         return;
       }
       const plan = tube.plans[k];
@@ -1596,7 +1622,7 @@ export function worklistLines(db, { deviceId, orderId, bare = false, shown = '' 
     order = moved.order;
     own = moved.side;
   }
-  const gate = gateRefusal(order);
+  const gate = gateRefusal(db, order);   // REFUND_ANY_V1
   if (gate) return { ok: false, why: gate };
   if (order.status === 'completed' || isReleased(db, order.id)) return { ok: false, why: 'результат заказа уже выдан' };
   if (!sender) return { ok: false, why: 'прибор не найден' };

@@ -53,3 +53,21 @@ export function ownBuildingOnly(scope) {
 export function scopeQuery(qb, scope) {
   return ownBuildingOnly(scope) ? qb.is('sync_origin', null) : qb;
 }
+
+/**
+ * REFUND_ANY_V1 (2026-10-29) — лист лаборатории без возвращённых строк, по
+ * которым результата нет. Касса вернула пациенту деньги за анализ (строка без
+ * счёта, отметка pay_refund_releases 'out'), а статус у строки прежний
+ * ('queued', 'collected') — по статусу лист показывал её дальше. Работа по ней
+ * не идёт (сервер откажет и пробе, и результату — visit-status-guard.js,
+ * rpc/lab.js); строка с результатом остаётся: внесённое не прячется.
+ * refunded — Set номеров (ответ refunded_lines) или null (не прочитан — лист как
+ * был); resultsByVs — { [номер строки]: строки результата }.
+ * @param {Array<{id:number}>} rows
+ * @param {Set<number>|null} refunded
+ * @param {Object<string, Array>} resultsByVs
+ */
+export function withoutRefundedIdle(rows, refunded, resultsByVs = {}) {
+  if (!refunded || !refunded.size) return rows;
+  return rows.filter((r) => !(refunded.has(Number(r.id)) && !((resultsByVs[r.id] || []).length)));
+}

@@ -58,6 +58,20 @@ test('статическая фраза сервера переводится с
   assert.equal(tr('not allowed'), 'Нет доступа.', 'машинное слово компилятора запросов на русском экране — по-русски');
 });
 
+// DISK_GUARD_V1 (ревью C2) — общий tr() числа из params подставляет как есть:
+// суммы денег в чужих сообщениях сервера не получают запятую на узбекском
+// экране. Гигабайты отказа «нет места» оформляют сами экраны копий
+// (system-logic.js noSpaceText).
+test('DISK_GUARD_V1: общий tr() числа из params не переписывает — сумма остаётся как прислал сервер', () => {
+  _resetServerMessages();
+  const message = 'На балансе пациента только 1500.5 — списать 2000 нельзя.';
+  rememberServerMessage({ ...WALLET, message, params: { have: 1500.5, amount: 2000 } });
+  setLang('uz');
+  assert.equal(tr(message), "Bemor balansida faqat 1500.5 bor — 2000 yechib bo'lmaydi.");
+  setLang('ru');
+  assert.equal(tr(message), message);
+});
+
 test('db-client запоминает шаблон отказа базы: нарушение уникальности — на языке экрана, код SQLite не спрятан', async () => {
   _resetServerMessages();
   const body = { error: {

@@ -1,8 +1,21 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { hasAnyRole } from '../roles.js';
 import { getDataDir } from '../control/config.js';
 import { listBackups, createBackup, requestRestore, requestFactoryReset } from '../backup.js';
+import { diskUsageReport } from '../disk-guard.js';   // DISK_GUARD_V1
+// DISK_GUARD_V1 — где лежат versions/ (detectLayout) и правило «отказ
+// обновления ещё правда» (clearStaleUpdateRefusal) — те же, что у обновления.
+import { detectLayout, clearStaleUpdateRefusal } from '../control/updater.js';
+import { readAppVersion } from '../control/checkin.js';
+import { isPaired, requestTestDataWipe, wipeStatus } from '../test-data-wipe.js';   // TEST_DATA_WIPE_V1
+
+// DISK_GUARD_V1 — корень запущенной программы, тем же способом, что ROOT в
+// server/index.js (этот файл на три папки глубже): по нему detectLayout
+// находит versions/ установки — сколько места занимают версии программы.
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 // SYSTEM_SETTINGS_V1 — the settings screen's backup/restore/reset RPCs.
 //
@@ -73,10 +86,54 @@ export function backupList(db, args, user) {
   return { backups: listBackups(dataDir), data_dir: dataDir, free_bytes: free };
 }
 
+/**
+ * DISK_GUARD_V1 — «Место на диске» на «Данных клиники» и колокол
+ * администратора ({quick:true} — без обхода папок). Только администратор:
+ * освободить место или позвать Easy-Med — его работа. Сквозь блокировку
+ * лицензии — как соседи (control/gate.js): клиника с просроченной лицензией
+ * тоже должна видеть, что диск кончается и копии перестали делаться.
+ *
+ * Отказ обновления «нет места» показывается, только пока он правда: сначала
+ * его проверяет то же правило, что у обновления (updater.js
+ * clearStaleUpdateRefusal — версия уже запущена, предложение заменили,
+ * согласие сняли), иначе экран минуту-другую повторял бы устаревшее.
+ */
+export async function diskUsage(db, args, user) {
+  requireAdmin(user);
+  const dataDir = getDataDir();
+  const quick = !!(args && args.quick === true);
+  clearStaleUpdateRefusal(db, dataDir, readAppVersion());
+  let versionsDir = null;
+  if (!quick) {
+    try {
+      const layout = detectLayout(APP_ROOT);
+      if (layout.versioned) versionsDir = path.join(layout.root, 'versions');
+    } catch { versionsDir = null; }
+  }
+  return diskUsageReport(dataDir, { quick, versionsDir });
+}
+
+// DISK_GUARD_V1 — «нет места» (services/backup.js ensureCopySpace) — отказ по
+// делу: 409 словами сервера, с шаблоном и числами (server-message.js), чтобы
+// экран перевёл фразу целиком. Без этого routes/rpc.js показал бы «Ошибка
+// сервера»: у этой ошибки нет статуса, а всё, что ≥ 500, маршрут прячет.
+function asRpcError(e) {
+  if (!e || e.code !== 'no_space') return e;
+  const err = new RpcError(e.message, 409);
+  err.code = 'no_space';
+  err.template = e.template;
+  err.params = e.params;
+  return err;
+}
+
 /** «Создать копию сейчас». */
 export async function backupCreate(db, args, user) {
   requireAdmin(user);
-  return { ok: true, backup: await createBackup(db, getDataDir(), 'manual') };
+  try {
+    return { ok: true, backup: await createBackup(db, getDataDir(), 'manual') };
+  } catch (e) {
+    throw asRpcError(e);
+  }
 }
 
 /** Restore a listed backup: password re-check, marker, then restart via exit 75. */
@@ -85,7 +142,12 @@ export async function backupRestore(db, args, user) {
   // Password BEFORE any disk work: a caller who cannot re-prove themselves
   // must not even cause a safety copy — no observable side effect at all.
   requirePassword(db, user, args.password);
-  const r = await requestRestore(db, getDataDir(), typeof args.name === 'string' ? args.name : '');
+  let r;
+  try {
+    r = await requestRestore(db, getDataDir(), typeof args.name === 'string' ? args.name : '');
+  } catch (e) {
+    throw asRpcError(e);   // DISK_GUARD_V1 — без места на страховочную копию восстановления нет
+  }
   if (!r.ok) throw new RpcError('Такой резервной копии нет. Обновите список и попробуйте ещё раз.', 400);
   scheduleRestart();
   return { ok: true, restarting: true };
@@ -101,7 +163,67 @@ export async function factoryReset(db, args, user) {
     throw new RpcError('Подтверждение не совпадает: введите слово УДАЛИТЬ.', 400);
   }
   requirePassword(db, user, args.password);
-  await requestFactoryReset(db, getDataDir(), { wipeBackups: !!args.wipe_backups });
+  try {
+    await requestFactoryReset(db, getDataDir(), { wipeBackups: !!args.wipe_backups });
+  } catch (e) {
+    throw asRpcError(e);   // DISK_GUARD_V1 — без места на финальную копию удаления нет
+  }
   scheduleRestart();
   return { ok: true, restarting: true };
+}
+
+// TEST_DATA_WIPE_V1 — «Удалить тестовые данные» на «Данных клиники»
+// (services/test-data-wipe.js). Те же замки, что у «Удалить все данные»:
+// только администратор, слово УДАЛИТЬ сверяет сервер, пароль — свой, заново.
+// Клиника, связанная с другими зданиями, получает отказ ДО копии и намерения.
+// Поправка 9(г): отказ называет выход — «Отвязать», и удалить ДО новой связи:
+// загрузка с того здания при новой связи может вернуть учебные строки.
+export const PAIRED_REFUSAL = 'Клиника связана с другими зданиями. Удаление ушло бы в другое здание и стёрло бы там '
+  + 'настоящие данные, поэтому удалить тестовые данные здесь нельзя. Если связь не нужна, нажмите «Отвязать» '
+  + 'на экране «Филиалы» и удалите тестовые данные до того, как связывать клинику снова.';
+
+function pairedError() {
+  const err = new RpcError(PAIRED_REFUSAL, 409);
+  err.code = 'paired';
+  return err;
+}
+
+// Ревью C5 (M1): перезапуска уже ждёт действие (pending-action.json) — второе
+// удаление или чужое восстановление / «Удалить все данные». Просьба его не
+// перезаписывает (services/test-data-wipe.js requestTestDataWipe).
+export const PENDING_SAME_REFUSAL = 'Удаление тестовых данных уже запрошено и ждёт перезапуска программы. Просить второй раз не нужно.';
+export const PENDING_OTHER_REFUSAL = 'Программа уже ждёт перезапуска, чтобы выполнить другое действие — восстановление из копии или удаление всех данных. '
+  + 'Удалить тестовые данные можно будет после перезапуска.';
+
+function pendingError(action) {
+  const err = new RpcError(action === 'test_data_wipe' ? PENDING_SAME_REFUSAL : PENDING_OTHER_REFUSAL, 409);
+  err.code = 'pending';
+  return err;
+}
+
+export async function testDataWipe(db, args, user) {
+  requireAdmin(user);
+  if (String((args && args.confirm) ?? '') !== 'УДАЛИТЬ') {
+    throw new RpcError('Подтверждение не совпадает: введите слово УДАЛИТЬ.', 400);
+  }
+  requirePassword(db, user, args && args.password);
+  const dataDir = getDataDir();
+  if (isPaired(dataDir)) throw pairedError();
+  let r;
+  try {
+    r = await requestTestDataWipe(db, dataDir, { userId: user.id });
+  } catch (e) {
+    // DISK_GUARD_V1 — нет места на копию перед удалением или на журнал самого
+    // удаления (ревью C3) — удаления нет; 409 с шаблоном и числами.
+    throw asRpcError(e);
+  }
+  if (!r.ok) throw r.reason === 'pending' ? pendingError(r.action) : pairedError();
+  scheduleRestart();
+  return { ok: true, restarting: true, backup: r.backup };
+}
+
+/** Состояние карточки: связана ли клиника, ждёт ли удаление запуска, итог прошлого удаления. */
+export function testDataWipeStatus(db, args, user) {
+  requireAdmin(user);
+  return wipeStatus(getDataDir());
 }

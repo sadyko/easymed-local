@@ -51,6 +51,48 @@ export function readPending(dataDir) {
   return readJsonFile(path.join(dataDir, PENDING_NAME));
 }
 
+/**
+ * DISK_GUARD_V1 — копия «перед обновлением», которую программа обновления уже
+ * сняла для ЭТОЙ версии (applyUpdate → writePending.backup), или null
+ * (раздел 3, п. 4). pending живёт, пока новая версия не подтвердилась
+ * (confirmBoot), поэтому при её запуске он ещё здесь. Между той копией и этим
+ * запуском база не менялась: старый процесс снял копию, переключил `current`
+ * и вышел. Значит, вторая полная копия той же базы перед миграциями не нужна —
+ * она только удваивала место, которое съедает каждое обновление. Если первый
+ * запуск упал посреди миграций, второй тоже не снимает копию — и правильно:
+ * точка отката — копия до миграций, а не полупеределанная база.
+ */
+export function updaterSnapshotFor(dataDir, version) {
+  const pending = readPending(dataDir);
+  if (!pending || pending.version !== version || typeof pending.backup !== 'string') return null;
+  const name = path.basename(pending.backup);
+  const m = /^pre-(\d+\.\d+\.\d+)(?:\.\d+)?\.db$/.exec(name);
+  if (!m || m[1] !== version) return null;
+  const file = path.join(dataDir, 'backups', name);
+  try { return fs.statSync(file).size > 0 ? file : null; } catch { return null; }
+}
+
+/**
+ * DISK_GUARD_V1 (ревью C4) — решение запуска (server/index.js): снимать ли
+ * свою копию базы перед миграциями. Возвращает копию программы обновления,
+ * которой довольно, или null — тогда запуск снимает свою, как раньше.
+ *
+ * Довольно её, только если база с тех пор не менялась. Восстановление из
+ * копии или «удалить все данные», применённые ЭТИМ запуском до открытия базы
+ * (services/backup.js processPendingAction — actionApplied), заменили базу:
+ * копия программы обновления — копия ДРУГОЙ базы, и точкой отката для
+ * миграций этого запуска она быть не может.
+ *
+ * @param {string} dataDir
+ * @param {string} version — версия, которая сейчас запускается
+ * @param {{actionApplied?: string|null}} [opts]
+ * @returns {string|null}
+ */
+export function bootCopyCovered(dataDir, version, { actionApplied = null } = {}) {
+  if (actionApplied) return null;
+  return updaterSnapshotFor(dataDir, version);
+}
+
 /** Record «switched, not yet proven». Throws on a write failure — the caller decides. */
 export function writePending(dataDir, record) {
   writeAtomic(path.join(dataDir, PENDING_NAME), JSON.stringify(record, null, 2) + '\n');

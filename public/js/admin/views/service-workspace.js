@@ -33,6 +33,7 @@ import { isAdminActor } from '../admin-actor.js';   // CABINET_FIX_V1_TPL — а
 // ADMIN_ACT_AS_V1 (R3) — подпись заключения от чужого имени: «Завершить приём»
 // неактивна с подсказкой; «Сохранить» и «Черновик» работают (черновик не подписан).
 import { lockSignButton, refuseSignWhileActing, isActingNow } from '../act-as-client.js';
+import { REFUNDED_LINE_MARK, REFUNDED_SIGN_REFUSAL } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 — «Услуга возвращена»
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
 import { renderDesignedVariant } from './doc-variants.js?v=cabr3';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3
@@ -42,7 +43,7 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
-import { sanitizeStoredHtml, richHasContent, textBreaks } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком
+import { sanitizeStoredHtml, richHasContent, textBreaks, textIsBlank } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком · PRINT_SKIP_EMPTY_V1 — пустота поля рецепта
 import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
 import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark, gapCaret, edgeHop, breakLines, keepMarks, clearSplitIds } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
 import { TBL_MAX_ROWS, TBL_MAX_COLS, insertTable, tableChain, tableHasText, cellStep, cellCaret, addRow, canRemoveRow, removeRow, addColumn, removeColumn, deleteTable, insertCellBreak, normalizePasted, beforeTable, rowHasText, columnHasText, stripPastedSplit } from './blank-table.js';   // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в бланке
@@ -200,6 +201,8 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
 
     // Pull previously-saved fields + history from visit_services.notes.
     if (ctx.visitServiceId) hydrateWorkspace(ctx);
+    // REFUND_ANY_V1 — касса вернула деньги за эту строку? Пометка и запрет новой подписи.
+    if (ctx.visitServiceId) loadRefundedMark(ctx);
     // DOC_PHONE_SOURCE_V1 — load the CONSULTATION doctor's own phone (not the signed-in
     // user's — an admin may be viewing a doctor's document) and reflect it in the sheet.
     Promise.resolve(resolveWsDoctorId(ctx)).then((did) => {
@@ -2954,6 +2957,10 @@ async function settleWrite(ctx, payload, sent, res, opts, late, extraUpdate = {}
             toast(adopted.foreign ? msg + ' ' + tr('Версия из другого окна сохранена в истории.') : msg, 'fail');   // CABINET_FIX_V1_R6 (п. 2)
         } else {
             toast(serverSaveError(error), 'fail');   // CABINET_FIX_V1_R6 (п. 5)
+            // REFUND_ANY_V1 (ревью B4) — касса вернула деньги за строку, пока
+            // кабинет был открыт: сервер отказал подписи (409 refunded_line), а
+            // пометки над документом ещё нет — спросить её, чтобы врач видел почему.
+            if (error.code === 'refunded_line') await loadRefundedMark(ctx);
         }
         if (late && opts.onLate) { try { await opts.onLate(false); } catch (e) { console.warn('[workspace] late:', e); } }
         return false;
@@ -4177,6 +4184,7 @@ async function tryFinish(ctx) {
     // ADMIN_ACT_AS_V1 (R3) — «Завершить приём» — это подпись: от чужого имени —
     // отказ словами до любой записи (кнопка и так неактивна; это вторая дверь).
     if (refuseSignWhileActing()) return;
+    if (refuseSignRefunded(ctx)) return;   // REFUND_ANY_V1 — «Завершить приём» — это подпись: до сохранения
     // CABINET_FIX_V1_R3 (F11) — двойной щелчок: второй, пока первый сохраняет и подписывает, — ничего.
     if (ctx.__finishing || LINE_SIGNING.has(Number(ctx.visitServiceId))) return;   // CABINET_FIX_V1_R4 — замок строки
     ctx.__finishing = true;
@@ -5318,6 +5326,43 @@ function setSignBusy(ctx, on) {
     for (const b of root.querySelectorAll('[data-ws-finish]')) b.disabled = !!on || locked;
 }
 /**
+ * REFUND_ANY_V1 (2026-10-29) — «УСЛУГА ВОЗВРАЩЕНА». Касса вернула пациенту
+ * деньги за эту строку (refunded_lines): документы приёма остаются в карте
+ * (медицинская запись), а новый документ на неё не подписывается — кабинет
+ * говорит это сразу, над документом; сервер откажет и сам (routes/db.js
+ * refundedSignRefusal, visit_document_archive). Ответ — ctx.refunded.
+ * Сбой чтения — пометки нет (сервер всё равно не примет подпись). Экспорт — для проверки.
+ */
+export async function loadRefundedMark(ctx) {
+    if (!ctx || !ctx.visitServiceId) return false;
+    const vsId = Number(ctx.visitServiceId);
+    let refunded = false;
+    try {
+        const { data, error } = await supabase.rpc('refunded_lines', { line_ids: [vsId] });
+        refunded = !error && !!(data && Array.isArray(data.line_ids) && data.line_ids.map(Number).includes(vsId));
+    } catch (e) { refunded = false; }
+    ctx.refunded = refunded;
+    const host = ctx.container;
+    const old = host && host.querySelector ? host.querySelector('[data-refunded-note]') : null;
+    if (old) old.remove();
+    if (refunded && host) {
+        const note = h('div', { 'data-refunded-note': '', role: 'status', style: { display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '10px 14px', marginBottom: '12px', borderRadius: '10px', background: 'var(--crit-50, #fef2f2)', color: 'var(--crit-700, #b91c1c)', fontSize: '13.5px', lineHeight: 1.5 } },
+            Icon('Warning', { size: 16 }),
+            h('div', null,
+                h('strong', null, REFUNDED_LINE_MARK),
+                h('div', null, 'Пациенту вернули деньги за эту услугу. Документы приёма остаются в карте; новый документ на неё не подписывается.')));
+        host.insertBefore(note, host.firstChild);
+    }
+    return refunded;
+}
+/** REFUND_ANY_V1 — подпись возвращённой строки: отказ словами до любой записи. */
+function refuseSignRefunded(ctx) {
+    if (!ctx || !ctx.refunded) return false;
+    toast(REFUNDED_SIGN_REFUSAL, 'fail');
+    return true;
+}
+
+/**
  * CABINET_FIX_V1_R2 (ревью 2, п. 3) — ПОДПИСЬ СОБИРАЕТ ВСЁ ДО ПЕРВОГО ОЖИДАНИЯ.
  *
  * Было: поля — до ожидания, а снимок для архива, заключение визита, тип,
@@ -5335,6 +5380,7 @@ async function handleSignFinalize(ctx) {
     // ADMIN_ACT_AS_V1 (R3) — подпись и переподпись от чужого имени — отказ до
     // любой записи (сервер отказал бы sign_while_acting сам).
     if (refuseSignWhileActing()) return;
+    if (refuseSignRefunded(ctx)) return;   // REFUND_ANY_V1 — услуга возвращена
     if (!ctx.visitServiceId) { toast('Услуга не привязана — откройте из «Мои услуги».', 'fail'); return; }
     const vsKey = Number(ctx.visitServiceId);
     // CABINET_FIX_V1_R3 (F11) · CABINET_FIX_V1_R4 — второй щелчок, пока подпись строки «в пути» (в любом её экране), — ничего.
@@ -6084,7 +6130,8 @@ async function handlePrint(ctx) {
         if (_hidden.length && !confirm(trf('На бумагу не попадёт текст, которого нет в бланке «{type}»: {list}. Печатать всё равно?', { type: typeWord(_dt), list: _hidden.join(', ') }))) return;
         const _data = docSnapshot(ctx, _dt);
         // i18n-exempt: печатное заключение — печатный документ
-        printableSheet({ type: _dt, data: _data, title: 'Заключение · ' + patientName, idLine: p.mrn || '', settings: loadDocSettings() });
+        printableSheet({ type: _dt, data: _data, title: 'Заключение · ' + patientName, idLine: p.mrn || '', settings: loadDocSettings(),
+            notice: ctx.refunded ? REFUNDED_LINE_MARK : null });   // REFUND_ANY_V1 — «Услуга возвращена» над листом
     } catch (e) {
         console.error('[ws print]', e);
         toast('Не удалось открыть печать.', 'fail');
@@ -6110,9 +6157,9 @@ async function openRecipeModal(ctx) {
     const patientName = `${p.lastName || ''} ${p.firstName || ''} ${p.middle || ''}`.trim() || p.fullName || 'Пациент';
     /* i18n-exempt-start: «Рецепт» — печатный бланк (Rp., ru+uz), содержимое документа */
     /* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
-    const ageStr = (p.age != null && p.age !== '') ? (String(p.age) + ' лет') : '—';
-    const sexStr = (p.gender === 'M' ? 'Муж.' : p.gender === 'F' ? 'Жен.' : (p.gender || '—'));
-    const dob = p.dob || p.birthDate || '—';
+    // PRINT_SKIP_EMPTY_V1 — возраст, пол и дата рождения — только заполненные (recipeHeadRows):
+    // раньше пустые печатались «—». ФИО и номер карты — всегда.
+    const headRowsHtml = recipeHeadRows(p).map((r) => `<div><span>${escapeHtml(r.label)}</span><b>${escapeHtml(r.value)}</b></div>`).join('');
     const recId = String(p.mrn || p.id || '—');
     const doctorName = svc.doctorName || '—';
     const _clinic = (typeof window !== 'undefined' && window.CLINIC) || {};
@@ -6124,21 +6171,9 @@ async function openRecipeModal(ctx) {
 
     // Build one Latin Rp. block per prescription (escaped). Reused for both
     // the on-screen modal and the print window via buildRxLinesHtml().
+    // PRINT_SKIP_EMPTY_V1 — назначение — общей recipeRxItemHtml (та же разметка у печати).
     function buildRxLinesHtml() {
-        return items.map((rx, i) => {
-            const name = escapeHtml(rx.name || '(без названия)');
-            const dose = rx.dose ? (' ' + escapeHtml(rx.dose)) : '';
-            const sLine = rx.freq ? escapeHtml(rx.freq) : '—';
-            const durLine = rx.dur ? `<div class="rx-recipe-sub">Курс: ${escapeHtml(rx.dur)}</div>` : '';
-            const noteLine = rx.notes ? `<div class="rx-recipe-sub">Примечание: ${escapeHtml(rx.notes)}</div>` : '';
-            return `
-              <div class="rx-recipe-item">
-                <div class="rx-recipe-rp"><b>Rp.:</b> <span class="rx-recipe-drug">${name}${dose}</span></div>
-                <div class="rx-recipe-s"><b>S.:</b> ${sLine}</div>
-                ${durLine}
-                ${noteLine}
-              </div>`;
-        }).join('');
+        return items.map((rx) => recipeRxItemHtml(rx, 'rx-recipe-')).join('');
     }
 
     const rxLinesHtml = buildRxLinesHtml();
@@ -6160,8 +6195,7 @@ async function openRecipeModal(ctx) {
       </div>
       <div class="rx-recipe-pat">
         <div><span>Пациент / Bemor</span><b>${escapeHtml(patientName)}</b></div>
-        <div><span>Возраст / Yosh</span><b>${escapeHtml(ageStr)} · ${escapeHtml(sexStr)}</b></div>
-        <div><span>Дата рождения / Tug'ilgan sana</span><b>${escapeHtml(dob)}</b></div>
+        ${headRowsHtml}
         <div><span>Дата / Sana</span><b>${escapeHtml(today)}</b></div>
       </div>
       <div class="rx-recipe-body">
@@ -6231,23 +6265,11 @@ ${PRINT_FONT_FACE_CSS}
   </div>
   <div class="rp">
     <div><span>Пациент / Bemor</span><b>${escapeHtml(patientName)}</b></div>
-    <div><span>Возраст / Yosh</span><b>${escapeHtml(ageStr)} · ${escapeHtml(sexStr)}</b></div>
-    <div><span>Дата рождения / Tug'ilgan sana</span><b>${escapeHtml(dob)}</b></div>
+    ${headRowsHtml}
     <div><span>ID</span><b>${escapeHtml(recId)}</b></div>
   </div>
   <div class="rx-body">
-    ${items.map((rx) => {
-        const name = escapeHtml(rx.name || '(без названия)');
-        const dose = rx.dose ? (' ' + escapeHtml(rx.dose)) : '';
-        const sLine = rx.freq ? escapeHtml(rx.freq) : '—';
-        const durLine = rx.dur ? `<div class="rx-sub">Курс: ${escapeHtml(rx.dur)}</div>` : '';
-        const noteLine = rx.notes ? `<div class="rx-sub">Примечание: ${escapeHtml(rx.notes)}</div>` : '';
-        return `<div class="rx-item">
-          <div class="rx-rp"><b>Rp.:</b> <span class="rx-drug">${name}${dose}</span></div>
-          <div class="rx-s"><b>S.:</b> ${sLine}</div>
-          ${durLine}${noteLine}
-        </div>`;
-    }).join('')}
+    ${items.map((rx) => recipeRxItemHtml(rx, 'rx-')).join('')}
   </div>
   <div class="rf">
     <div class="rf-sign">
@@ -6292,6 +6314,44 @@ ${PRINT_FONT_FACE_CSS}
     });
 }
 
+
+/* i18n-exempt-start: «Рецепт» — печатный бланк (Rp., ru+uz), содержимое документа */
+// PRINT_SKIP_EMPTY_V1 — ОДНО НАЗНАЧЕНИЕ РЕЦЕПТА для окна (prefix 'rx-recipe-')
+// и для печати ('rx-'): разметка у них одна, различаются только классы. Пустая
+// кратность — строки «S.:» нет: «S.: —» на бумаге читалось как назначение без
+// указаний. Пустые курс и примечание — тоже без строки. Всё — через escapeHtml.
+// Экспорт — для поведенческой проверки (print-skip-empty.test.mjs).
+export function recipeRxItemHtml(rx, prefix) {
+    const r = rx || {};
+    const name = escapeHtml(r.name || '(без названия)');
+    const dose = r.dose ? (' ' + escapeHtml(r.dose)) : '';
+    const sLine = textIsBlank(r.freq) ? '' : `<div class="${prefix}s"><b>S.:</b> ${escapeHtml(r.freq)}</div>`;
+    const durLine = textIsBlank(r.dur) ? '' : `<div class="${prefix}sub">Курс: ${escapeHtml(r.dur)}</div>`;
+    const noteLine = textIsBlank(r.notes) ? '' : `<div class="${prefix}sub">Примечание: ${escapeHtml(r.notes)}</div>`;
+    return `<div class="${prefix}item"><div class="${prefix}rp"><b>Rp.:</b> <span class="${prefix}drug">${name}${dose}</span></div>${sLine}${durLine}${noteLine}</div>`;
+}
+// PRINT_SKIP_EMPTY_V1 — СТРОКИ ПАЦИЕНТА НА РЕЦЕПТЕ: возраст, пол и дата рождения —
+// только заполненные (раньше пустые печатались «—»). Возраст с полом — одна
+// ячейка, как была; только пол — подпись «Пол». ФИО и номер карты рецепт
+// печатает сам и всегда. Возраст 0 — значение, а не пустота.
+// Пол печатается только для настоящих значений (M/F/male/female). Не выбранный пол
+// хранится как 'other' (умолчание базы) — это «не указан», а не пол: не печатается.
+export function recipeSexLabel(g) {
+    const s = String(g ?? '').trim().toLowerCase();
+    return (s === 'm' || s === 'male') ? 'Муж.' : (s === 'f' || s === 'female') ? 'Жен.' : '';
+}
+export function recipeHeadRows(p) {
+    const q = p || {};
+    const val = (v) => (textIsBlank(v) ? '' : String(v).trim());
+    const age = val(q.age) ? val(q.age) + ' лет' : '';
+    const sex = recipeSexLabel(q.gender);
+    const dob = val(q.dob) || val(q.birthDate);
+    const rows = [];
+    if (age || sex) rows.push({ label: age ? 'Возраст / Yosh' : 'Пол / Jinsi', value: [age, sex].filter(Boolean).join(' · ') });
+    if (dob) rows.push({ label: "Дата рождения / Tug'ilgan sana", value: dob });
+    return rows;
+}
+/* i18n-exempt-end */
 
 function escapeHtml(s) {
     return String(s ?? '').replace(/[&<>"']/g, ch => (
@@ -6431,7 +6491,7 @@ function buildBlankData(ctx) {
         patientName: `${p.lastName || ''} ${p.firstName || ''} ${p.middle || ''}`.trim() || p.fullName || '',
         mrn: p.mrn || '', phone: p.phone || '',
         dob: p.dob || p.birth_date || '',
-        sex: (p.gender === 'M' ? 'Муж.' : p.gender === 'F' ? 'Жен.' : (p.gender || p.sex || '')),
+        sex: recipeSexLabel(p.gender) || recipeSexLabel(p.sex),
         ...docSigner(svc, me()),   // DOC_DOCTOR_FALLBACK_V1 — no assigned doctor → the signed-in clinician · CABINET_FIX_V1_R1 — имя и специальность одного человека
         service: svc.name || '',
         issueDate: new Date().toLocaleDateString('ru-RU'),

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { execFileSync } from 'node:child_process';   // DISK_GUARD_V1 — настоящая распаковка под наблюдением
 import { generateKeyPairSync } from 'node:crypto';
 
 import { openDb } from '../../db/connection.js';
@@ -17,6 +18,7 @@ import {
   __setReleasePublicKeyForTests,
   staleAfterSwitch,
   scheduleUpdater,
+  discardFailedStage,
 } from './updater.js';
 import { confirmBoot } from './boot-confirm.js';   // V3120_FIX
 import { readProgress, writeProgress } from './update-progress.js';
@@ -24,6 +26,13 @@ import { runCheckin, readJsonFile } from './checkin.js';
 import { setAppVersion } from './config.js';
 import { updateApprove } from '../rpc/updates.js';
 import { listen } from '../../../control-plane/server/test-helpers/listen.js';
+import { __setDiskSpaceForTests, readGuard, GB, MB } from '../disk-guard.js';   // DISK_GUARD_V1
+
+// DISK_GUARD_V1 — копия перед обновлением спрашивает место; диск машины
+// разработчика — не данные теста.
+const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
+__setDiskSpaceForTests(ROOMY);
+test.after(() => __setDiskSpaceForTests(null));
 
 // --- test harness -------------------------------------------------------------
 
@@ -406,17 +415,28 @@ test('dev layout: stages into a scratch folder, apply is never invoked', async (
 
   const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
   const exit = exitSpy();
+  // DISK_GUARD_V1 — распаковка настоящая, но после неё папка убирается: смотрим
+  // на неё в момент распаковки, через обёртку над настоящим tar.
+  const extracted = [];
+  const execSpy = (exe, args, opts) => {
+    const out = execFileSync(exe, args, opts);
+    const target = args[args.indexOf('-C') + 1];
+    extracted.push({ target, entry: fs.existsSync(path.join(target, 'server', 'index.js')) });
+    return out;
+  };
   try {
     await tickUpdater(db, dataDir, {
-      endpoint, now: IN_WINDOW_NOW, appRoot: devRoot, exitImpl: exit.impl,
+      endpoint, now: IN_WINDOW_NOW, appRoot: devRoot, exitImpl: exit.impl, execFileSyncImpl: execSpy,
     });
   } finally {
     server.close();
   }
   assert.deepEqual(exit.calls, [], 'a dev machine must never have its `current` switched, or be restarted');
   assert.equal(fs.existsSync(path.join(dataDir, 'update-result.json')), false, 'and nothing is reported as installed');
-  const staged = path.join(dataDir, 'update-staging', '2.4.0', 'server', 'index.js');
-  assert.ok(fs.existsSync(staged), 'the bundle IS still staged, just not applied');
+  assert.deepEqual(extracted, [{ target: path.join(dataDir, 'update-staging', '2.4.0'), entry: true }],
+    'the bundle IS still unpacked for real — the download/verify/unpack pipeline is exercised');
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-staging')), false,
+    'DISK_GUARD_V1 — and the scratch folder is removed: otherwise ~55 MB per offered version, forever');
 });
 
 test('versioned layout: stages under <root>\\versions\\<version>, repoints `current`, and restarts', async () => {
@@ -952,4 +972,241 @@ test('progress: the record left by a SUCCESSFUL update is deleted at the next bo
   clearInterval(interval);
 
   assert.equal(readProgress(db), null, 'nothing is shown after an update that simply worked');
+});
+
+// --- DISK_GUARD_V1 -------------------------------------------------------------
+
+test('DISK_GUARD_V1: места на обновление нет — ничего не скачано, экран говорит сколько нужно и сколько есть', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { appRoot } = makeVersionedRoot('2.3.0');
+  const { server, state, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  try {
+    await tickUpdater(db, dataDir, {
+      endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: () => {},
+      diskSpaceImpl: () => ({ free: GB / 2, total: 100 * GB }),
+    });
+  } finally {
+    server.close();
+  }
+  assert.equal(state.count, 0, 'пакет даже не скачивался');
+  // :memory: — файла базы нет, копия 0 Б: 100 МБ + 60 МБ + 0 + 1 ГБ.
+  const need = 160 * MB + GB;
+  const rec = readProgress(db);
+  assert.equal(rec.phase, 'failed');
+  assert.equal(rec.reason, 'no_space');
+  assert.equal(rec.need_bytes, need);
+  assert.equal(rec.free_bytes, GB / 2);
+  const g = readGuard(dataDir).update_refused;
+  assert.equal(g.version, '2.4.0');
+  assert.equal(g.need_bytes, need);
+  assert.equal(g.free_bytes, GB / 2);
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-result.json')), false,
+    'не update_result ok:false — полный диск одной клиники не должен останавливать выпуск для всех');
+  assert.equal(controlStateGet(db, 'update_offer'), JSON.stringify(offer), 'попробуем в следующее окно');
+});
+
+test('DISK_GUARD_V1: копии перед обновлением не хватило места — не ok:false, а disk_guard; распакованная версия убрана, прежняя цела', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { root, appRoot } = makeVersionedRoot('2.3.0');
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  const exit = exitSpy();
+  // Проверка перед скачиванием видит просторный диск (diskSpaceImpl), а копия
+  // перед обновлением — тесный (общая подмена): место кончилось между ними.
+  __setDiskSpaceForTests(() => ({ free: GB / 2, total: 100 * GB }));
+  try {
+    await tickUpdater(db, dataDir, {
+      endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl,
+      diskSpaceImpl: () => ({ free: 500 * GB, total: 1000 * GB }),
+    });
+  } finally {
+    server.close();
+    __setDiskSpaceForTests(ROOMY);
+  }
+  assert.deepEqual(exit.calls, []);
+  assert.equal(path.resolve(fs.realpathSync(path.join(root, 'current'))), path.resolve(appRoot), 'клиника на прежней версии');
+  assert.equal(fs.existsSync(path.join(root, 'versions', '2.4.0')), false, 'распакованная 2.4.0 убрана (~55 МБ)');
+  assert.ok(fs.existsSync(appRoot), 'прежняя версия на месте');
+  // Ревью C2: отказ копии по месту — не дефект выпуска. update_result ok:false
+  // сервер считает в автостоп выпуска для всех клиник.
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-result.json')), false,
+    'отказ по месту не пишется как update_result ok:false');
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-pending.json')), false);
+  // :memory: — копия 0 Б: нужно 0 × 1,2 + 1 ГБ.
+  const rec = readProgress(db);
+  assert.equal(rec.phase, 'failed');
+  assert.equal(rec.reason, 'no_space');
+  assert.equal(rec.need_bytes, GB);
+  assert.equal(rec.free_bytes, GB / 2);
+  const g = readGuard(dataDir).update_refused;
+  assert.equal(g.version, '2.4.0');
+  assert.equal(g.need_bytes, GB);
+  assert.equal(g.free_bytes, GB / 2);
+  assert.equal(controlStateGet(db, 'update_offer'), JSON.stringify(offer), 'попробуем в следующее окно');
+});
+
+test('DISK_GUARD_V1: установка не удалась (не из-за места) — ok:false как раньше, распакованная версия не остаётся', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { root, appRoot } = makeVersionedRoot('2.3.0');
+  // backups/ — файл, а не папка: копия перед обновлением падает обычной ошибкой.
+  fs.writeFileSync(path.join(dataDir, 'backups'), 'not a folder');
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  const exit = exitSpy();
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl });
+  } finally {
+    server.close();
+  }
+  assert.deepEqual(exit.calls, []);
+  assert.equal(path.resolve(fs.realpathSync(path.join(root, 'current'))), path.resolve(appRoot), 'клиника на прежней версии');
+  assert.equal(fs.existsSync(path.join(root, 'versions', '2.4.0')), false, 'распакованная 2.4.0 убрана (~55 МБ)');
+  assert.ok(fs.existsSync(appRoot), 'прежняя версия на месте');
+  const outcome = readJsonFile(path.join(dataDir, 'update-result.json'));
+  assert.equal(outcome.ok, false, 'настоящий сбой установки поставщик по-прежнему видит');
+  assert.match(outcome.detail, /pre-update database snapshot/);
+  assert.equal(readGuard(dataDir).update_refused, undefined, 'это не отказ по месту');
+});
+
+test('DISK_GUARD_V1: версионная установка убирает data/update-staging, оставшийся от когда-то неправильной раскладки — до перезапуска', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { root, appRoot } = makeVersionedRoot('2.3.0');
+  // Остаток тех дней, когда клиника была разложена без versions/current:
+  // каждая предложенная версия ложилась сюда по ~55 МБ и не убиралась никогда.
+  const leftover = path.join(dataDir, 'update-staging', '2.2.0', 'server');
+  fs.mkdirSync(leftover, { recursive: true });
+  fs.writeFileSync(path.join(leftover, 'index.js'), '// old\n');
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  // Успешная установка кончается exit(75), после которого ничего не
+  // выполняется: папка должна исчезнуть ДО него.
+  const exits = [];
+  const exitImpl = (code) => exits.push({ code, staging: fs.existsSync(path.join(dataDir, 'update-staging')) });
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl });
+  } finally {
+    server.close();
+  }
+  assert.deepEqual(exits, [{ code: 75, staging: false }], 'установлено, и остаток убран до перезапуска');
+  assert.equal(path.resolve(fs.realpathSync(path.join(root, 'current'))), path.resolve(path.join(root, 'versions', '2.4.0')));
+});
+
+// --- DISK_GUARD_V1 (ревью C4): отметка «не поставилось из-за места» не вечна ---
+//
+// update_refused уходит в Easy-Med при каждой связи (checkin.js disk_guard).
+// Она верна, только пока клиника всё ещё ждёт ЭТУ версию: предложение
+// заменили, согласие сняли, версию поставили иначе — отметка снимается.
+
+function putRefusal(dataDir, version) {
+  fs.writeFileSync(path.join(dataDir, 'disk-guard.json'), JSON.stringify({
+    update_refused: { at: '2026-01-01T03:05:00.000Z', version, need_bytes: 2 * GB, free_bytes: GB / 2 },
+  }));
+}
+
+test('DISK_GUARD_V1: нет места, потом место есть — отметка об отказе снята', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { appRoot } = makeVersionedRoot('2.3.0');
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  const exit = exitSpy();
+  try {
+    await tickUpdater(db, dataDir, {
+      endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl, runningVersion: '2.3.0',
+      diskSpaceImpl: () => ({ free: GB / 2, total: 100 * GB }),
+    });
+    assert.equal(readGuard(dataDir).update_refused.version, '2.4.0');
+    // Следующее окно: попытка этого окна уже отмечена.
+    db.prepare("DELETE FROM control_state WHERE key = 'update_attempted_for'").run();
+    await tickUpdater(db, dataDir, {
+      endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl, runningVersion: '2.3.0',
+      diskSpaceImpl: () => ({ free: 500 * GB, total: 1000 * GB }),
+    });
+  } finally {
+    server.close();
+  }
+  assert.deepEqual(exit.calls, [75], 'со второй попытки поставилось');
+  assert.equal(readGuard(dataDir).update_refused, undefined);
+});
+
+test('DISK_GUARD_V1: отказанная версия уже запущена (поставили иначе) — отметка снята', async () => {
+  const { db, dataDir } = workspace();
+  storeOffer(db, { version: '2.4.0', url: '/x.tar.gz', sha256: 'a', manifest: {} });
+  storeConsent(db, { version: '2.4.0', hour: 3 });
+  putRefusal(dataDir, '2.4.0');
+  await tickUpdater(db, dataDir, { runningVersion: '2.4.0', fetchImpl: () => { throw new Error('must not download'); } });
+  assert.equal(readGuard(dataDir).update_refused, undefined);
+});
+
+test('DISK_GUARD_V1: запущена версия новее отказанной — отметка снята', async () => {
+  const { db, dataDir } = workspace();
+  putRefusal(dataDir, '2.4.0');
+  await tickUpdater(db, dataDir, { runningVersion: '2.5.0', fetchImpl: () => { throw new Error('must not download'); } });
+  assert.equal(readGuard(dataDir).update_refused, undefined);
+});
+
+test('DISK_GUARD_V1: предложение заменено или согласие снято — отметка снята', async () => {
+  // Заменено: предлагают 2.5.0, отказ был про 2.4.0.
+  const a = workspace();
+  storeOffer(a.db, { version: '2.5.0', url: '/x.tar.gz', sha256: 'a', manifest: {} });
+  putRefusal(a.dataDir, '2.4.0');
+  await tickUpdater(a.db, a.dataDir, { runningVersion: '2.3.0', fetchImpl: () => { throw new Error('must not download'); } });
+  assert.equal(readGuard(a.dataDir).update_refused, undefined, 'отказ про версию, которую больше не предлагают');
+
+  // Согласие снято: предложение то же, одобрения нет.
+  const b = workspace();
+  storeOffer(b.db, { version: '2.4.0', url: '/x.tar.gz', sha256: 'a', manifest: {} });
+  putRefusal(b.dataDir, '2.4.0');
+  await tickUpdater(b.db, b.dataDir, { runningVersion: '2.3.0', fetchImpl: () => { throw new Error('must not download'); } });
+  assert.equal(readGuard(b.dataDir).update_refused, undefined, 'администратор снял одобрение');
+
+  // А пока клиника ждёт именно эту версию — отметка остаётся.
+  const c = workspace();
+  storeOffer(c.db, { version: '2.4.0', url: '/x.tar.gz', sha256: 'a', manifest: {} });
+  storeConsent(c.db, { version: '2.4.0', hour: 3 });
+  storeScheduledAt(c.db, new Date(2026, 0, 2, 3, 0, 0));
+  putRefusal(c.dataDir, '2.4.0');
+  await tickUpdater(c.db, c.dataDir, { runningVersion: '2.3.0', now: IN_WINDOW_NOW, fetchImpl: () => { throw new Error('must not download'); } });
+  assert.equal(readGuard(c.dataDir).update_refused.version, '2.4.0', 'одобрено и ждёт окна — отметка верна');
+});
+
+test('DISK_GUARD_V1: при запуске на отказанной (или более новой) версии отметка снимается', () => {
+  const { db, dataDir } = workspace();
+  putRefusal(dataDir, '2.4.0');
+  const { interval } = scheduleUpdater(db, dataDir, { intervalMs: 3_600_000, exitImpl: () => {}, runningVersion: '2.4.0', appRoot: tmpDir('em-updater-boot-') });
+  clearInterval(interval);
+  assert.equal(readGuard(dataDir).update_refused, undefined);
+});
+
+// --- DISK_GUARD_V1 (ревью C4): уборка после неудачной установки не трогает `current`
+
+test('DISK_GUARD_V1: discardFailedStage — убирает распакованную версию, но никогда ту, на которую указывает current', () => {
+  const root = tmpDir('em-updater-discard-');
+  const v1 = path.join(root, 'versions', '2.3.0');
+  const v2 = path.join(root, 'versions', '2.4.0');
+  for (const d of [v1, v2]) {
+    fs.mkdirSync(path.join(d, 'server'), { recursive: true });
+    fs.writeFileSync(path.join(d, 'server', 'index.js'), '//\n');
+  }
+  const link = path.join(root, 'current');
+
+  fs.symlinkSync(v2, link, 'junction');
+  assert.equal(discardFailedStage(root, v2), false, 'current указывает на неё — это уже не наша уборка');
+  assert.ok(fs.existsSync(path.join(v2, 'server', 'index.js')));
+
+  fs.rmSync(link, { recursive: true, force: true });
+  fs.symlinkSync(v1, link, 'junction');
+  assert.equal(discardFailedStage(root, v2), true);
+  assert.equal(fs.existsSync(v2), false, 'current на прежней — распакованная новая убрана');
+  assert.ok(fs.existsSync(path.join(v1, 'server', 'index.js')), 'прежняя цела');
+
+  fs.mkdirSync(v2, { recursive: true });
+  fs.rmSync(link, { recursive: true, force: true });
+  assert.equal(discardFailedStage(root, v2), true, 'ссылки нет — тем более убрать: EasyMed.exe соберёт current из самой новой версии');
+  assert.equal(fs.existsSync(v2), false);
 });

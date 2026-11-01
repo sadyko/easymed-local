@@ -141,9 +141,16 @@ export function makeProgressReporter(db, { version, now = () => new Date(), minI
       return true;
     },
     /** A terminal failure. Kept (not deleted) so the screen can say what happened. */
-    fail(reason) {
+    fail(reason, extra = null) {
       record.phase = 'failed';
       record.reason = String(reason || 'unknown');
+      // DISK_GUARD_V1 — «нет места» несёт числа (байты): экран говорит, сколько
+      // нужно и сколько свободно, в гигабайтах на своём языке (updates-logic.js
+      // progressView).
+      if (extra && Number.isFinite(extra.need_bytes) && Number.isFinite(extra.free_bytes)) {
+        record.need_bytes = extra.need_bytes;
+        record.free_bytes = extra.free_bytes;
+      }
       flush(now().getTime());
     },
     /** Terminal success / nothing more to say. */

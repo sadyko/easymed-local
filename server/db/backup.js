@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { discardPartial, ensureCopySpace, withCopyLock, beginCopyWrite } from '../services/backup.js';   // DISK_GUARD_V1
+import { noteGuard } from '../services/disk-guard.js';   // DISK_GUARD_V1
 
 // SUPERVISED_INSTALL_V1 — the rollback for an update.
 //
@@ -18,11 +20,26 @@ import path from 'node:path';
  * @param {Database} db      the open connection
  * @param {string} dbPath    where that database lives on disk
  * @param {string} version   the version about to be installed, for the filename
+ * @param {{diskSpaceImpl?: Function}} [opts]  DISK_GUARD_V1 — ответ диска (тесты)
  * @returns {Promise<string>} the path written
  */
-export async function backupBeforeMigrate(db, dbPath, version) {
+export async function backupBeforeMigrate(db, dbPath, version, opts = {}) {
+  // DISK_GUARD_V1 (ревью C2) — в общей очереди с копиями services/backup.js:
+  // две полные копии разом съели бы запас места, проверенный каждой по
+  // отдельности.
+  return withCopyLock(() => takePreCopy(db, dbPath, version, opts));
+}
+
+async function takePreCopy(db, dbPath, version, { diskSpaceImpl } = {}) {
   const dir = path.join(path.dirname(dbPath), 'backups');
   fs.mkdirSync(dir, { recursive: true });
+
+  // DISK_GUARD_V1 — и копия перед обновлением делается, только если на неё
+  // есть место (раздел 3, п. 2): иначе она оборвалась бы на полпути и заняла
+  // остаток диска. Не хватает — ошибка 'no_space': программа обновления
+  // отменяет обновление (updater.js applyUpdate), запуск пишет громкое
+  // предупреждение (server/index.js).
+  ensureCopySpace(path.dirname(dbPath), { kind: 'pre', dbFile: dbPath, ...(diskSpaceImpl ? { diskSpaceImpl } : {}) });
 
   // A retried update must not destroy the state the first attempt captured, so
   // the name carries a counter rather than being overwritten.
@@ -52,7 +69,23 @@ export async function backupBeforeMigrate(db, dbPath, version) {
   // ASYNC — db.backup() returns a Promise. Not awaiting it would start migrations
   // while the copy was still being written, producing a backup of a half-migrated
   // database: the one thing this function exists to prevent.
-  await db.backup(out);
+  //
+  // DISK_GUARD_V1 — оборвавшаяся копия удаляется (services/backup.js
+  // discardPartial): обрывок pre-<версия>.db выдавал бы себя за точку отката —
+  // recover.cmd ищет копию перед обновлением по имени.
+  //
+  // DISK_GUARD_V1 (финальное ревью) — пока база пишется, пустой поначалу файл
+  // не убирает ничья чистка (services/backup.js WRITING).
+  const written = beginCopyWrite(out);
+  try {
+    await db.backup(out);
+  } catch (e) {
+    discardPartial(out);
+    throw e;
+  } finally {
+    written();
+  }
+  noteGuard(path.dirname(dbPath), { copy_refused: null });   // DISK_GUARD_V1 — копия есть, отказ снят
   return out;
 }
 

@@ -85,6 +85,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, initials, fmtDate } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { selfDoctorId } from '../permissions.js';   // ADMIN_DOCTOR_V2
+import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4, п. 9c) — возвращённые строки не считаются
 import { pastelFor, pastelForDashTile } from '../pastel.js';   // PASTEL_IDENTITY_V1 — оттенок = личность, не тяжесть
 // HEAD_DOCTOR_WARD_VIEW_V1 — «в койке» одним списком на сервер и браузер.
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';
@@ -316,7 +317,13 @@ export function computeDoctorStats({ visits, services, payLines = [], now, perSe
     const fee = (l) => Number(l.fee) || 0;
 
     const todayVisits = (visits || []).filter((v) => localDayKey(v.at) === today);
-    const todaySvc = (services || []).filter((s) => dayOf.get(String(s.visitId)) === today);
+    // REFUND_ANY_V1 (ревью B4, п. 9c) — строка, за которую касса вернула деньги
+    // (s.refunded, refunded_lines), — не работа врача: её нет ни во «всего за
+    // день», ни в «завершено», ни в ряду по дням; приём, где ждать нечего,
+    // кроме возвращённой строки, не «ждёт» (stillWaiting ниже).
+    const allTodaySvc = (services || []).filter((s) => dayOf.get(String(s.visitId)) === today);
+    const work = (services || []).filter((s) => !s.refunded);
+    const todaySvc = allTodaySvc.filter((s) => !s.refunded);
     const todayDone = todaySvc.filter((s) => s.status === 'completed');
 
     // Ряд по дням: DASH_WINDOW_DAYS корзин, старая слева. Пустой день — 0, и
@@ -335,7 +342,7 @@ export function computeDoctorStats({ visits, services, payLines = [], now, perSe
         });
     }
     const byService = new Map();
-    for (const s of (services || [])) {
+    for (const s of work) {   // REFUND_ANY_V1 (ревью B4, п. 9c) — без возвращённых
         if (s.status !== 'completed') continue;
         const i = idx.get(dayOf.get(String(s.visitId)));
         if (i == null) continue;
@@ -364,10 +371,10 @@ export function computeDoctorStats({ visits, services, payLines = [], now, perSe
     // не завершена (или услуг ещё нет вовсе). Приём, все услуги которого
     // закрыты, из очереди ожидания выходит, даже если статус визита не трогали
     // — визит перестаёт быть «ждёт» в тот момент, когда врач его закончил.
-    const svcOfVisit = (id) => todaySvc.filter((s) => String(s.visitId) === String(id));
+    const svcOfVisit = (id) => allTodaySvc.filter((s) => String(s.visitId) === String(id));
     const stillWaiting = (v) => {
         const own = svcOfVisit(v.id);
-        return own.length === 0 || own.some((s) => s.status !== 'completed');
+        return own.length === 0 || own.some((s) => s.status !== 'completed' && !s.refunded);   // REFUND_ANY_V1 (ревью B4, п. 9c)
     };
 
     return {
@@ -432,6 +439,23 @@ export function buildDayColumn({ visits, services, now }) {
     return { rows, nowAt };
 }
 
+/**
+ * CABINET_ACTIVE_FIRST_V1 (2026-10-29) — владелец: «осмотренных при открытии
+ * кабинета не видно». Колонка дня делится на ленту (`open` — всё, что не
+ * «Приём завершён», по времени, как было) и группу завершённых (`done`),
+ * которая рисуется внизу свёрнутой. Черта «сейчас» (`nowAt`) считается по
+ * ленте: завершённый приём больше не делит день. buildDayColumn не меняется —
+ * число приёмов дня в шапке остаётся полным.
+ */
+export function foldDayColumn(day) {
+    const rows = (day && day.rows) || [];
+    const open = rows.filter((r) => !r.done);
+    const done = rows.filter((r) => r.done);
+    let nowAt = open.findIndex((r) => !r.past);
+    if (nowAt < 0) nowAt = open.length;
+    return { open, done, nowAt };
+}
+
 /** Подпись состояния приёма. Осмотр важнее записи: он её отменяет. */
 export function dayStateLabel(row) {
     if (row.done) return tr('Приём завершён');
@@ -462,6 +486,10 @@ const state = {
     payLines: [],
     metric: 'services',   // что рисует график: 'services' | 'earned'
     now: null,
+    // CABINET_ACTIVE_FIRST_V1 — группа «Завершённые · N» в «Моём дне» раскрыта?
+    // Каждое открытие кабинета её сворачивает (resetDoctorDashboard), внутри
+    // открытого кабинета выбор держится.
+    doneOpen: false,
 };
 let hostRef = null;
 let openWorkRef = null;
@@ -532,6 +560,9 @@ export async function loadDoctorDashboard() {
         if (error) { console.warn('[doctor-dash] services:', error.message); state.failed = true; }
         svcRows = data || [];
     }
+    // REFUND_ANY_V1 (ревью B4, п. 9c) — какие из услуг дня касса вернула: один
+    // вопрос на загрузку (refunded-lines.js). Сбой — отметок нет, числа как прежде.
+    const refundedIds = await loadRefundedLineIds(svcRows.map((r) => r.id));
 
     // 4. PAY_BASIS_PERFORMED_V1 — деньги окна: строки выплаты с долей, как их
     // посчитал сервер (те же, что в «Зарплатах врачей»). Прежде здесь читались
@@ -552,6 +583,7 @@ export async function loadDoctorDashboard() {
         serviceName: (r.services && r.services.name) || '',
         status: r.status || '',
         createdAt: r.created_at || null,
+        refunded: !!(refundedIds && refundedIds.has(Number(r.id))),   // REFUND_ANY_V1 (ревью B4, п. 9c)
     }));
 
     state.loaded = true;
@@ -662,6 +694,19 @@ const DASH_CSS = `
 .dd-nowline { display: flex; align-items: center; gap: 8px; padding: 2px;
     font-size: 12.5px; font-weight: 600; color: var(--crit-700); }
 .dd-nowline i { display: block; flex: 1; height: 1px; background: var(--crit-500); }
+/* CABINET_ACTIVE_FIRST_V1 — finished visits fold into one row at the bottom of
+   the day list. Same chevron idiom as .cd-gone-h: right when folded, down when
+   open. No new colours. */
+.dd-done { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--ink-100); }
+.dd-done-list { display: flex; flex-direction: column; gap: 8px; }
+.dd-done-h { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 0 4px;
+    border: 0; background: none; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600;
+    color: var(--ink-500); text-align: left; border-radius: 8px; }
+.dd-done-h:hover, .dd-done-h.on { color: var(--ink-700); }
+.dd-done-h:focus-visible { outline: 2px solid var(--primary-600); outline-offset: 2px; }
+.dd-done-ic { display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--ink-400);
+    transition: transform var(--dur-1, .15s) var(--ease-out, ease); }
+.dd-done-h.on .dd-done-ic { transform: rotate(90deg); }
 
 /* HEAD_DOCTOR_WARD_VIEW_V1 — head-doctor ward strip. No new colours. */
 .dd-ward { padding: 14px 18px; margin-bottom: 14px; display: flex; align-items: center;
@@ -724,6 +769,7 @@ export function resetDoctorDashboard() {
     state.loaded = false; state.loading = false; state.failed = false;
     state.doctor = null; state.visits = []; state.services = []; state.payLines = [];
     state.metric = 'services'; state.now = null;
+    state.doneOpen = false;   // CABINET_ACTIVE_FIRST_V1 — новое открытие кабинета: завершённые свёрнуты
     ward.wide = false; ward.loaded = false; ward.exam = 0; ward.attending = 0; ward.inBed = 0;
     hostRef = null; openWorkRef = null; openInpatientsRef = null; openPayRef = null;
 }
@@ -963,11 +1009,15 @@ function dayCard(day, now) {
                 tr('Как только регистратура запишет пациента, он появится здесь по времени приёма.')),
         ));
     } else {
-        day.rows.forEach((r, i) => {
-            if (i === day.nowAt) list.appendChild(nowLine(now));
+        // CABINET_ACTIVE_FIRST_V1 — лента: всё, кроме «Приём завершён», по
+        // времени; завершённые — свёрнутой группой в самом низу.
+        const fold = foldDayColumn(day);
+        fold.open.forEach((r, i) => {
+            if (i === fold.nowAt) list.appendChild(nowLine(now));
             list.appendChild(apptCard(r));
         });
-        if (day.nowAt >= day.rows.length) list.appendChild(nowLine(now));
+        if (fold.nowAt >= fold.open.length) list.appendChild(nowLine(now));
+        if (fold.done.length) list.appendChild(doneGroup(fold.done));
     }
     return h('aside', { class: 'card dd-day' },
         h('div', { class: 'card-header' },
@@ -985,6 +1035,27 @@ function dayCard(day, now) {
 }
 function nowLine(now) {
     return h('div', { class: 'dd-nowline' }, hhmm(now), h('i', null));
+}
+// CABINET_ACTIVE_FIRST_V1 — «Завершённые · N»: строка-кнопка с шевроном
+// системы (как «Убраны из набора» в case-docs.js — свёрнуто вправо, раскрыто
+// вниз). Щелчок перекладывает только карточки группы, а не весь дашборд:
+// график и плитки не перерисовываются ради списка.
+function doneGroup(done) {
+    const box = h('div', { class: 'dd-done-list' });
+    const head = h('button', {
+        type: 'button', class: 'dd-done-h', 'aria-expanded': 'false',
+        onclick: () => { state.doneOpen = !state.doneOpen; draw(); },
+    },
+        h('span', { class: 'dd-done-ic' }, Icon('ChevronRight', { size: 14 })),
+        trf('Завершённые · {n}', { n: done.length }));
+    function draw() {
+        head.setAttribute('aria-expanded', state.doneOpen ? 'true' : 'false');
+        head.className = 'dd-done-h' + (state.doneOpen ? ' on' : '');
+        clear(box);
+        if (state.doneOpen) for (const r of done) box.appendChild(apptCard(r));
+    }
+    draw();
+    return h('div', { class: 'dd-done' }, head, box);
 }
 function apptCard(r) {
     const meta = [

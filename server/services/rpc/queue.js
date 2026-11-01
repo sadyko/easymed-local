@@ -22,6 +22,7 @@
 
 import { hasAnyRole, canViewSection } from '../roles.js';
 import { today, localDate } from '../domain/day.js';
+import { notRefundReleasedSql } from '../domain/pay-releases.js';   // REFUND_SWAP_V1 (ревью A2) — «услуга возвращена» в очереди не стоит
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -320,6 +321,14 @@ export function boardGroups(db, day) {
        -- LIVE_AUDIT_FIX_V1 (C7) — отменённый / несостоявшийся визит в очереди
        -- не стоит: пациента не будет, а доска показывала его номер.
        AND v.status NOT IN ('cancelled', 'no_show')
+       -- REFUND_SWAP_V1 (ревью A2) — «УСЛУГА ВОЗВРАЩЕНА» В ОЧЕРЕДИ НЕ СТОИТ.
+       -- Строка, отпущенная со счёта с возвратом и не выставленная заново
+       -- (отметка pay_refund_releases 'out' без invoice_item_id — то же правило,
+       -- что refundedOpenLineIds), держит свой номер и талон (refund_invoice_line
+       -- начатой работы, «Вернуть эту услугу и выставить новую»), но к врачу по
+       -- ней не идут: ни «у врача сейчас», ни «ждут», ни счёт «Сейчас ждут
+       -- приёма» (doctorQueueWaiting). Данные строки не меняются.
+       AND (vs.invoice_item_id IS NOT NULL OR ${notRefundReleasedSql('vs', 'out')})
      ORDER BY vs.queue_no, vs.id
   `).all(lo, hi, lo, hi, '%:' + day);
 

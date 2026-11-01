@@ -528,6 +528,67 @@ test('колонка дня — сегодняшние приёмы по вре�
   assert.strictEqual(dash.dayStateLabel(done.rows[0]), 'Приём завершён');
 });
 
+// CABINET_ACTIVE_FIRST_V1 (2026-10-29) — владелец: «осмотренных при открытии
+// кабинета не видно». В «Моём дне» завершённые приёмы уходят вниз, в свёрнутую
+// группу «Завершённые · N»; остальные — по времени, как были, и черта «сейчас»
+// считается по ним. Сама колонка дня (buildDayColumn) не меняется: группу
+// раскладывает foldDayColumn.
+test('CABINET_ACTIVE_FIRST_V1: «Мой день» откладывает завершённые приёмы в группу, остальные — по времени', () => {
+  const day = dash.buildDayColumn({ visits: A_VISITS, services: A_SERVICES, now: NOW });
+  const fold = dash.foldDayColumn(day);
+  assert.deepStrictEqual(fold.open.map((r) => r.time), ['08:15', '09:00', '14:00'], 'незавершённые — по времени');
+  assert.deepStrictEqual(fold.done.map((r) => r.id), ['v-2'], 'завершённый приём 09:30 — в группе');
+  assert.strictEqual(fold.nowAt, 2, 'черта «сейчас» — перед 14:00 среди оставшихся');
+  assert.deepStrictEqual(day.rows.map((r) => r.id), ['v-4', 'v-1', 'v-2', 'v-3'], 'колонку дня foldDayColumn не трогает');
+
+  const allDone = dash.foldDayColumn({ rows: day.rows.map((r) => ({ ...r, done: true })), nowAt: day.nowAt });
+  assert.deepStrictEqual([allDone.open.length, allDone.done.length, allDone.nowAt], [0, 4, 0],
+    'всё завершено — лента пуста, группа держит все');
+  const noneDone = dash.foldDayColumn({ rows: day.rows.map((r) => ({ ...r, done: false })), nowAt: day.nowAt });
+  assert.deepStrictEqual([noneDone.open.length, noneDone.done.length, noneDone.nowAt], [4, 0, 3],
+    'сворачивать нечего — как было');
+});
+
+test('CABINET_ACTIVE_FIRST_V1: завершённые — свёрнутой группой «Завершённые · N» внизу; щелчок раскрывает, новое открытие — снова свёрнута', async () => {
+  reset();
+  loginAs(DOCTOR_A);
+  const host = mk('div');
+  await dash.renderDoctorDashboard(host, {});
+  const list = byClass(host, 'dd-day-list')[0];
+  const head = byClass(list, 'dd-done-h')[0];
+  assert.ok(head && head.tagName === 'BUTTON', 'группа завершённых раскрывается кнопкой');
+  assert.ok(textOf(head).includes('Завершённые · 1'), 'подпись группы: ' + textOf(head));
+  assert.strictEqual(head.attrs['aria-expanded'], 'false', 'при открытии кабинета группа свёрнута');
+  assert.ok(hasClass(list.children.at(-1), 'dd-done'), 'группа — не в самом низу колонки');
+  const times = () => byClass(list, 'dd-appt').map((a) => textOf(a).trim().split(/\s+/)[0]);
+  assert.deepStrictEqual(times(), ['08:15', '09:00', '14:00'], 'свёрнутая группа показывает завершённый приём');
+  assert.ok(!textOf(list).includes('Саидова Нилуфар'), 'завершённый приём виден в свёрнутой группе');
+  assert.ok(textOf(byClass(host, 'dd-day')[0]).includes('приёмов: 4'),
+    'в шапке «Моего дня» — все приёмы дня, а не только незавершённые');
+
+  head.click();
+  assert.strictEqual(head.attrs['aria-expanded'], 'true');
+  assert.deepStrictEqual(times(), ['08:15', '09:00', '14:00', '09:30'], 'раскрытая группа — внизу, после остальных');
+  const doneCard = byClass(list, 'dd-appt')[3];
+  assert.ok(textOf(doneCard).includes('Саидова Нилуфар') && textOf(doneCard).includes('Приём завершён'));
+  head.click();
+  assert.strictEqual(head.attrs['aria-expanded'], 'false', 'второй щелчок не свернул группу');
+  assert.deepStrictEqual(times(), ['08:15', '09:00', '14:00']);
+
+  // Внутри открытого кабинета (перерисовка без сброса) раскрытая группа
+  // остаётся раскрытой…
+  head.click();
+  const same = mk('div');
+  await dash.renderDoctorDashboard(same, {});
+  assert.strictEqual(byClass(same, 'dd-done-h')[0].attrs['aria-expanded'], 'true', 'перерисовка свернула раскрытую группу');
+  // …а новое открытие кабинета (renderConsultation зовёт resetDoctorDashboard) — снова свёрнута.
+  reset();
+  loginAs(DOCTOR_A);
+  const again = mk('div');
+  await dash.renderDoctorDashboard(again, {});
+  assert.strictEqual(byClass(again, 'dd-done-h')[0].attrs['aria-expanded'], 'false', 'новое открытие кабинета не свернуло группу');
+});
+
 test('врач не может прочитать чужой заработок: у загрузчика нет аргумента врача', async () => {
   reset();
   loginAs(DOCTOR_A);
@@ -621,9 +682,11 @@ test('дашборд рисует день, четыре плитки, граф�
   assert.ok(txt.includes('Частые услуги за 14 дней') && txt.includes('Приём терапевта'));
 
   const appts = byClass(host, 'dd-appt');
-  assert.strictEqual(appts.length, 4, 'в колонке дня — четыре сегодняшних приёма');
+  // CABINET_ACTIVE_FIRST_V1 — завершённый приём 09:30 свёрнут в группу внизу
+  // («Завершённые · 1»); видны три остальных, по времени.
+  assert.strictEqual(appts.length, 3, 'в колонке дня — три незавершённых приёма, завершённый свёрнут');
   assert.deepStrictEqual(appts.map((a) => textOf(a).trim().split(/\s+/)[0]),
-    ['08:15', '09:00', '09:30', '14:00'], 'по времени');
+    ['08:15', '09:00', '14:00'], 'по времени');
   assert.ok(textOf(appts[1]).includes('Иванов Пётр'));
   assert.ok(textOf(appts[1]).includes('36 г.'), 'возраст рядом с именем');
   assert.ok(textOf(appts[1]).includes('MRN-001'));

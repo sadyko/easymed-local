@@ -11,7 +11,31 @@ import {
   backupDateLabel, normalizeBackupList, freeSpaceNote, confirmWordOk,
   validUntilLabel, validityLabel, lastCheckinLabel, dashWhenEmpty,
   subscriptionBadge, moduleRows, enrollFormVisible, requestDateLabel,
+  noSpaceText,
 } from './system-logic.js';
+
+// --- noSpaceText (DISK_GUARD_V1, ревью C2) ----------------------------------
+
+const NO_SPACE_ERR = {
+  code: 'no_space',
+  message: 'Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,0 ГБ. Копия не сделана.',
+  template: 'Недостаточно места на диске: нужно {need} ГБ, свободно {free} ГБ. Копия не сделана.',
+  params: { need: 2.1, free: 0 },
+};
+
+test('noSpaceText: гигабайты одним знаком — запятая на ru и uz, точка на en; шаблон переводит t', () => {
+  assert.equal(noSpaceText(NO_SPACE_ERR, 'ru'), NO_SPACE_ERR.message, 'русский экран — ровно фраза сервера');
+  assert.equal(noSpaceText(NO_SPACE_ERR, 'uz'), 'Недостаточно места на диске: нужно 2,1 ГБ, свободно 0,0 ГБ. Копия не сделана.');
+  const en = (s) => (s === NO_SPACE_ERR.template ? 'Not enough disk space: {need} GB needed, {free} GB free. The backup was not made.' : s);
+  assert.equal(noSpaceText(NO_SPACE_ERR, 'en', en), 'Not enough disk space: 2.1 GB needed, 0.0 GB free. The backup was not made.');
+});
+
+test('noSpaceText: не отказ по месту или числа не числа — null, экран покажет фразу сервера как есть', () => {
+  for (const bad of [null, undefined, {}, { ...NO_SPACE_ERR, code: 'forbidden' }, { ...NO_SPACE_ERR, template: undefined },
+    { ...NO_SPACE_ERR, params: { need: '2,1', free: '0,4' } }, { ...NO_SPACE_ERR, params: null }]) {
+    assert.equal(noSpaceText(bad, 'en'), null, JSON.stringify(bad));
+  }
+});
 
 // --- formatRuDateTime / backupDateLabel -------------------------------------
 
@@ -69,13 +93,14 @@ test('backupKind: prefers the server kind field, falls back to the filename pref
   assert.equal(backupKind(null), null);
 });
 
-test('backupKindLabel: the five plan kinds plus replaced- get human words', () => {
+test('backupKindLabel: the five plan kinds plus replaced-/rollback- get human words', () => {
   assert.equal(backupKindLabel('pre'), 'перед обновлением');
   assert.equal(backupKindLabel('daily'), 'ежедневная');
   assert.equal(backupKindLabel('manual'), 'ручная');
   assert.equal(backupKindLabel('safety'), 'страховочная (перед восстановлением)');
   assert.equal(backupKindLabel('final'), 'перед удалением данных');
-  assert.equal(backupKindLabel('replaced'), 'заменённая при восстановлении');
+  assert.equal(backupKindLabel('replaced'), 'До восстановления');   // DISK_GUARD_V1
+  assert.equal(backupKindLabel('rollback'), 'До отката');           // DISK_GUARD_V1
 });
 
 test('backupKindLabel: an unknown kind shows its raw word (identifiable), only a missing kind shows the dash', () => {

@@ -19,6 +19,8 @@ import { hasAnyRole } from '../roles.js';
 import { crmServiceEvidence } from '../crm/visit-status.js';
 // LIS_REAL_ANALYZERS_V1 (ревью R7, п. 1) — список ворот один на ручной ввод и прибор.
 import { LAB_RESULT_STATUSES } from '../visit-status-guard.js';
+import { refundedWithoutResult } from '../domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
+import { REFUNDED_LAB_REFUSAL } from '../../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -52,6 +54,13 @@ export function saveLabResults(db, args, user) {
   // работа, за которую никто не заплатит, а на отменённый — выдача того, что
   // не заказано. 'queued' оставлен сознательно: лист лаборатории сохраняет
   // бланк и там, где отдельного шага «взять пробу» клиника не делает.
+  // REFUND_ANY_V1 — по анализу пациенту вернули деньги, а результата ещё нет:
+  // результат не принимается (статус у строки прежний, поэтому проверка
+  // статуса ниже его пропустила бы). Внесённый до возврата результат
+  // правится, как прежде. То же правило — у прибора (server/lis/ingest.js
+  // gateRefusal). Ревью B4: ДО проверки статуса — оставленный в визите
+  // возвращённый анализ ('added') получает слова возврата, а не «ещё не оплачен».
+  if (refundedWithoutResult(db, vsId)) throw new RpcError(REFUNDED_LAB_REFUSAL, 400);
   if (!RESULT_STATUSES.includes(order.status)) {
     throw new RpcError(order.status === 'added'
       ? 'Анализ ещё не оплачен — результат вносят после кассы.'

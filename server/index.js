@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openDb } from './db/connection.js';
+import { openDb, checkpointWal, scheduleWalCheckpoint } from './db/connection.js';   // DISK_GUARD_V1 — журнал базы
 import { configureReportPool } from './services/report-pool.js';   // V3120_PERF
 import { migrate, pendingMigrations } from './db/migrate.js';
 import { backupBeforeMigrate } from './db/backup.js';   // SUPERVISED_INSTALL_V1
@@ -11,6 +11,7 @@ import { processPendingAction, pruneBackupsByKind, scheduleDailyBackups } from '
 import { bootstrapAdmin } from './services/auth.js';
 import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
+import { sweepStalePdfDirs } from './services/telegram/render.js';   // DISK_GUARD_V1
 import { startDoctorBot } from './services/doctor-bot/index.js';   // REFERRALS_CRM_V1 — второй бот: для врачей-источников
 import { startRepBot } from './services/rep-bot/index.js';   // REP_BOT_V1 — третий бот: медпредставители заводят врачей
 import { schedulePolling } from './services/telephony/poller.js';   // TELEPHONY_V1
@@ -22,6 +23,7 @@ import { setDataDir, setAppVersion } from './services/control/config.js';   // S
 import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
 import { scheduleUpdater } from './services/control/updater.js';   // UPDATE_DELIVERY_V1
 import { pruneVersionsAtBoot } from './services/control/prune-versions.js';   // PRUNE_VERSIONS_V1
+import { bootCopyCovered } from './services/control/boot-confirm.js';   // DISK_GUARD_V1
 import { scheduleRelayPublish } from './services/branch-sync/relay.js';   // BRANCH_SYNC_RELAY_V1
 import { scheduleBranchPull } from './services/branch-sync/schedule-pull.js';   // BRANCH_SYNC_HOURLY_V1
 import { readPairing } from './services/branch-sync/pairing.js';
@@ -35,6 +37,7 @@ import { preserveLegacyLogo } from './services/clinic-logo-legacy.js';   // CLIN
 import { schedulePublicSync } from './services/api/public-sync.js';   // PUBLIC_API_V1
 import { startLanAddress } from './services/lan/index.js';   // LAN_ADDRESS_V1
 import { scheduleLivePull } from './services/telephony/live.js';   // CALL_RING_V1 — длинный опрос живых событий станции, пока панели «Телефон» спрашивают
+import { applyPendingTestDataWipe } from './services/test-data-wipe.js';   // TEST_DATA_WIPE_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -136,6 +139,7 @@ if (isMain) {
   const pending = processPendingAction(DATA_DIR);
   if (pending.action === 'restore') console.log(`  Restored database from backup: ${pending.backup}`);
   if (pending.action === 'factory_reset') console.log('  Factory reset applied — this is now a fresh install.');
+  if (pending.deferred === 'test_data_wipe') console.log('  Test data wipe requested — it runs right after migrations.');   // TEST_DATA_WIPE_V1
 
   const db = openDb(path.join(DATA_DIR, 'easymed.db'));
   // SHIFT_AUTOCLOSE_V1 — кассовые смены живут до конца дня (00:00): закрываем
@@ -159,8 +163,20 @@ if (isMain) {
   // passed to .then or setTimeout); nothing here does that.
   try {
     if (pendingMigrations(db).length) {
-      const out = await backupBeforeMigrate(db, path.join(DATA_DIR, 'easymed.db'), APP_VERSION);
-      console.log(`  Database backed up before update: ${out}`);
+      // DISK_GUARD_V1 — одна полная копия на обновление (раздел 3, п. 4).
+      // Программа обновления уже сняла pre-<эта версия>.db перед переключением
+      // (updater.js applyUpdate → update-pending.json), и с тех пор база не
+      // менялась. Обновление руками или из исходников (pending нет), а также
+      // восстановление или «удалить все данные», применённые выше этим же
+      // запуском (база уже другая), — копия, как раньше. Решение и его тесты —
+      // boot-confirm.js bootCopyCovered.
+      const prior = bootCopyCovered(DATA_DIR, APP_VERSION, { actionApplied: pending.action });
+      if (prior) {
+        console.log(`  Database already backed up by the updater before this update: ${prior}`);
+      } else {
+        const out = await backupBeforeMigrate(db, path.join(DATA_DIR, 'easymed.db'), APP_VERSION);
+        console.log(`  Database backed up before update: ${out}`);
+      }
       // Its OWN try/catch, deliberately separate from the one below. Pruning
       // old backups is disk hygiene, not correctness, and it runs AFTER the
       // line above already told the operator the backup succeeded — a
@@ -187,10 +203,27 @@ if (isMain) {
   }
 
   migrate(db);
+  // DISK_GUARD_V1 — журнал базы не держит пиковый размер (раздел 3, п. 10):
+  // сжимается сразу после миграций (они пишут больше всего) и потом раз в час;
+  // между этими разами его обрезает journal_size_limit (db/connection.js).
+  checkpointWal(db);
+  scheduleWalCheckpoint(db);
   // Третья проверка денег, M3 — разрешения серверных дверей баланса живут
   // только внутри транзакции; после падения их не должно остаться.
   try { db.exec('DELETE FROM ledger_write_token; DELETE FROM merge_money_moves;'); }
   catch (e) { console.warn('[ledger-token] cleanup:', e.message); }
+
+  // TEST_DATA_WIPE_V1 — «Удалить тестовые данные» (rpc/backup.js testDataWipe).
+  // processPendingAction выше оставил намерение лежать: удалению нужна открытая
+  // база с текущей схемой, поэтому оно здесь — после migrate и ДО всего, что
+  // пишет или читает визиты и деньги: разового исправления CRM, прохода «Не
+  // пришёл», ботов Telegram, опросов телефонии и Meta, анализаторов и listen.
+  // Только здесь и только до listen: намерение, уже разобранное прошлым
+  // запуском, второй раз не выполняется (index.wipe-order.test.js).
+  // Не бросает; итог — строкой в журнал программы и в
+  // test-data-wipe-result.json («Данные клиники» после перезапуска).
+  const testDataWipe = applyPendingTestDataWipe(db, DATA_DIR);
+  if (testDataWipe.action) console.log('  ' + testDataWipe.line);
 
   // CRM_UNIFY_V1 — разовое исправление застрявших карточек и потерянных задач
   // (миграция 238 ставит отметку «не сделано»; crm/unify-repair.js). Сразу после
@@ -221,9 +254,12 @@ if (isMain) {
   // запущенная версия работает. Чистить раньше — во время обновления — нельзя:
   // 07.09.2026 версия 1.1.0 встала на миграции, и спасла клинику ровно
   // предыдущая папка, которую тогда никто не удалил. Хранятся запущенная и две
-  // предыдущие; из исходников (нет versions/) вызов тихо ничего не делает.
+  // предыдущие, и всегда — версия, с которой пришло обновление, и from
+  // последней удачной установки (DISK_GUARD_V1, ревью C4: на них откатывают
+  // EasyMed.exe и recover.cmd — файлы обновления в DATA_DIR); из исходников
+  // (нет versions/) вызов тихо ничего не делает.
   // Ошибка уборки — предупреждение в журнал и только: запуску она не помеха.
-  pruneVersionsAtBoot(ROOT);
+  pruneVersionsAtBoot(ROOT, { dataDir: DATA_DIR });
 
   const firstRunPassword = bootstrapAdmin(db);
 
@@ -256,6 +292,10 @@ if (isMain) {
   // клиники был один `npm start`. Он сам проверяет, включён ли бот в настройках,
   // и молчит, пока администратор его не включил. Все ошибки цикл ловит внутри:
   // недоступный Telegram не должен мешать регистратуре работать.
+  // DISK_GUARD_V1 — временные папки PDF для Telegram (easymed-pdf-*), которые
+  // не удалились сразу (Chrome держал профиль), убираются при запуске, если им
+  // больше суток (раздел 3, п. 11). Не бросает.
+  sweepStalePdfDirs();
   startTelegramBot(db);
   startDoctorBot(db);   // REFERRALS_CRM_V1 — свой поллер, свой токен; молчит, пока бот не включён
   startRepBot(db);      // REP_BOT_V1 — так же: свой поллер, свой токен, молчит, пока не включён

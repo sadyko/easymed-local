@@ -4,8 +4,10 @@ import {
   formatRuDate, formatRuHour, isWorkingHour, isValidHour, nextRunAtLocal,
   resolveHour, scheduleChoices, offerIsCurrent, formatScheduled,
   updateOutcomeMessage, whatsNewState, pendingRestartMessage, compareVersions,
-  fill, upToDateMessage, progressView, formatMb, PROGRESS_STALL_MS,
+  fill, upToDateMessage, progressView, formatMb, gbValue, PROGRESS_STALL_MS,
 } from './updates-logic.js';
+import { noSpaceText } from './system-logic.js';   // DISK_GUARD_V1 — так экран рисует «нет места»
+import { STRINGS } from './i18n-strings.js';
 
 // UPDATES_I18N_V1 (2026-08-30) — the message functions no longer return a
 // finished Russian string; they return {template, params(, extra)} so tr()
@@ -437,4 +439,33 @@ test('progressView: an unrecognised reason falls back instead of inventing one',
 
 test('progressView: an unknown phase from a newer server says nothing rather than something wrong', () => {
   assert.equal(progressView({ version: '9.9.9', phase: 'teleporting', bytes: 0, age_ms: 0 }).show, false);
+});
+
+// --- DISK_GUARD_V1 ---------------------------------------------------------------
+
+test('gbValue: «нужно» вверх, «свободно» вниз, один знак — числом, как у сервера', () => {
+  const GB = 1024 ** 3;
+  assert.equal(gbValue(GB, { up: true }), 1);
+  assert.equal(gbValue(GB + 1, { up: true }), 1.1);
+  assert.equal(gbValue(1.99 * GB), 1.9);
+  assert.equal(gbValue(-5), 0);
+  assert.equal(gbValue('мусор'), 0);
+});
+
+test('progressView: нет места на обновление — сколько нужно и сколько свободно, в гигабайтах, знак по языку экрана', () => {
+  const GB = 1024 ** 3;
+  const v = progressView({ version: '3.18.1', phase: 'failed', reason: 'no_space', need_bytes: 2 * GB + 1, free_bytes: GB, bytes: 0, total: null, age_ms: 1000 });
+  assert.equal(v.tone, 'warn');
+  // Числа — числами: десятичный знак ставит экран (system-logic.js noSpaceText).
+  assert.deepEqual(v.note, { code: 'no_space', template: 'Недостаточно места: нужно {need} ГБ, свободно {free} ГБ', params: { need: 2.1, free: 1 } });
+  assert.equal(noSpaceText(v.note, 'ru'), 'Недостаточно места: нужно 2,1 ГБ, свободно 1,0 ГБ');
+  const to = (lang) => (s) => (STRINGS[s] ? STRINGS[s][lang] : s);
+  assert.equal(noSpaceText(v.note, 'uz', to('uz')), 'Joy yetarli emas: 2,1 GB kerak, 1,0 GB bo‘sh');
+  assert.equal(noSpaceText(v.note, 'en', to('en')), 'Not enough space: 2.1 GB needed, 1.0 GB free');
+});
+
+test('progressView: no_space без чисел (старый сервер) — общая фраза про место, не выдуманные числа', () => {
+  const v = progressView({ version: '3.18.1', phase: 'failed', reason: 'no_space', bytes: 0, total: null, age_ms: 1000 });
+  assert.match(render(v.note), /не хватило места/);
+  assert.equal(noSpaceText(v.note, 'ru'), null);
 });

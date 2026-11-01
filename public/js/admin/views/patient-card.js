@@ -1226,12 +1226,18 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             wrap.appendChild(h('div', { class: 'empty' }, 'Счетов пока нет.'));
             return wrap;
         }
-        let totalBilled = 0, totalPaid = 0;
+        // REFUND_ANY_V1 (2026-10-30) — долг считают только по неоплаченным,
+        // частичным и долговым счетам — то же правило, что у шапки карты.
+        // Раньше здесь было «выставлено минус оплачено» по ВСЕМ счетам, и
+        // отменённый счёт ('void' / 'refunded') на 100 000 давал «Долг: 100 000».
+        const owesOn = (inv) => inv.status === 'unpaid' || inv.status === 'partial' || inv.status === 'debt';
+        let totalBilled = 0, totalPaid = 0, owed = 0;
         for (const inv of invoices) {
             totalBilled += Number(inv.total_amount || 0);
             totalPaid   += Number(inv.paid_amount || 0);
+            if (owesOn(inv)) owed += Number(inv.total_amount || 0) - Number(inv.paid_amount || 0);
         }
-        const outstanding = Math.max(0, totalBilled - totalPaid);
+        const outstanding = Math.max(0, Math.round(owed));
         wrap.appendChild(h('div', { class: 'row', style: { gap: '18px', padding: '14px 20px 0', flexWrap: 'wrap', fontSize: '12.5px', color: 'var(--ink-600)' } },
             h('span', null, 'Выставлено: ', h('b', null, fmtPrice(totalBilled), ' сум')),
             h('span', null, 'Оплачено: ', h('b', null, fmtPrice(totalPaid), ' сум')),
@@ -1243,6 +1249,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         const tbody = h('tbody');
         for (const inv of invoices) {
             const balance = Number(inv.total_amount || 0) - Number(inv.paid_amount || 0);
+            // REFUND_ANY_V1 — остаток отменённого счёта не долг: «—».
+            const cancelled = inv.status === 'void' || inv.status === 'refunded';
             const svcTd = h('td', { style: { maxWidth: '340px' } },
                 h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка…'));
             const docTd = h('td', null, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '…'));
@@ -1257,7 +1265,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 docTd,
                 h('td', { class: 'num', style: { textAlign: 'right' } }, fmtPrice(inv.total_amount)),
                 h('td', { class: 'num', style: { textAlign: 'right', color: 'var(--ok-700)' } }, fmtPrice(inv.paid_amount)),
-                h('td', { class: 'num', style: { textAlign: 'right', fontWeight: 600, color: balance > 0 ? 'var(--crit-600)' : 'var(--ink-500)' } }, fmtPrice(balance)),
+                h('td', { class: 'num', style: { textAlign: 'right', fontWeight: 600, color: !cancelled && balance > 0 ? 'var(--crit-600)' : 'var(--ink-500)' } }, cancelled ? '—' : fmtPrice(balance)),
                 h('td', null, StatusTag(inv.status)),
             ));
         }

@@ -7,9 +7,17 @@ import path from 'node:path';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { applyUpdate } from './updater.js';
-import { confirmBoot, readPending } from './boot-confirm.js';   // V3120_FIX
+import { confirmBoot, readPending, updaterSnapshotFor } from './boot-confirm.js';   // V3120_FIX, DISK_GUARD_V1
 import { readJsonFile } from './checkin.js';
 import { tmpDir as makeTmpDir, closeOnExit, closeRegistered } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
+import { __setDiskSpaceForTests, readGuard, GB } from '../disk-guard.js';   // DISK_GUARD_V1
+import { backupBeforeMigrate } from '../../db/backup.js';   // DISK_GUARD_V1 — настоящий отказ копии по месту
+
+// DISK_GUARD_V1 — копия перед обновлением спрашивает место; диск машины
+// разработчика — не данные теста.
+const ROOMY = () => ({ free: 500 * GB, total: 1000 * GB });
+__setDiskSpaceForTests(ROOMY);
+test.after(() => __setDiskSpaceForTests(null));
 
 // NODE_NATIVE_UPDATES_V1 — THE TEST THE OLD DESIGN COULD NOT HAVE.
 //
@@ -294,7 +302,9 @@ test('a database snapshot that cannot be taken CANCELS the update', async () => 
     root: inst.root,
     version: inst.newVersion,
     exitImpl: exit.impl,
-    backupImpl: async () => { throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }); },
+    // DISK_GUARD_V1 — не ошибка места: полный диск клиники ok:false не пишет
+    // (тесты в конце файла), а прочий сбой копии — по-прежнему отказ установки.
+    backupImpl: async () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); },
   });
 
   assert.equal(result.ok, false);
@@ -303,7 +313,8 @@ test('a database snapshot that cannot be taken CANCELS the update', async () => 
   const outcome = readJsonFile(path.join(inst.dataDir, 'update-result.json'));
   assert.equal(outcome.ok, false);
   assert.equal(outcome.db, 'untouched');
-  assert.match(outcome.detail, /ENOSPC/);
+  assert.match(outcome.detail, /EACCES/);
+  assert.equal(result.no_space, undefined);
   assert.deepEqual(exit.calls, []);
 });
 
@@ -341,3 +352,64 @@ test('the backstop: even a throw nothing predicted produces a readable outcome',
   assert.equal(outcome.db, 'unknown');
   assert.deepEqual(exit.calls, [], 'and nothing may ask for a restart on the way out');
 });
+
+test('DISK_GUARD_V1: после переключения новая версия находит копию программы обновления — вторая не нужна', async () => {
+  const inst = install();
+  const exit = exitSpy();
+  const result = await applyUpdate(inst.db, inst.dataDir, { root: inst.root, version: inst.newVersion, exitImpl: exit.impl });
+  assert.equal(result.ok, true);
+  const snap = updaterSnapshotFor(inst.dataDir, inst.newVersion);
+  assert.ok(snap && fs.existsSync(snap), 'копия, снятая перед переключением, — та самая точка отката');
+  assert.equal(fs.readdirSync(path.join(inst.dataDir, 'backups')).filter((f) => f.startsWith('pre-')).length, 1,
+    'одна полная копия базы на обновление');
+});
+
+// Ревью C2 — копия перед обновлением, отказанная из-за места (ensureCopySpace,
+// code 'no_space'), не дефект выпуска: update_result ok:false сервер считает в
+// автостоп выпуска для всех клиник. Отказ уходит отметкой disk_guard.
+test('DISK_GUARD_V1: копии не хватило места — обновление отменено, но update_result ok:false НЕ пишется', async () => {
+  const inst = install();
+  const exit = exitSpy();
+  const tight = () => ({ free: GB / 2, total: 100 * GB });
+  const result = await applyUpdate(inst.db, inst.dataDir, {
+    root: inst.root, version: inst.newVersion, exitImpl: exit.impl,
+    backupImpl: (db, dbPath, version) => backupBeforeMigrate(db, dbPath, version, { diskSpaceImpl: tight }),
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.no_space && Number.isFinite(result.no_space.need_bytes) && result.no_space.need_bytes > GB,
+    'числа отказа уходят на экран обновлений');
+  assert.equal(result.no_space.free_bytes, GB / 2);
+  assert.equal(path.resolve(fs.realpathSync(inst.currentLink)), path.resolve(inst.oldDir), 'без копии — без переключения');
+  assert.equal(fs.existsSync(path.join(inst.dataDir, 'update-result.json')), false, 'не ok:false — не автостоп выпуска');
+  assert.equal(readPending(inst.dataDir), null);
+  const g = readGuard(inst.dataDir).update_refused;
+  assert.equal(g.version, '0.1.4');
+  assert.equal(g.need_bytes, result.no_space.need_bytes);
+  assert.equal(g.free_bytes, GB / 2);
+  assert.deepEqual(exit.calls, []);
+});
+
+// Диск заполнился уже ВО ВРЕМЯ копии (между проверкой и записью, или
+// платформа не сказала, сколько свободно, и проверки не было): SQLite отвечает
+// SQLITE_FULL, файловая система — ENOSPC. Это тоже полный диск клиники, а не
+// дефект выпуска: ни ok:false, ни автостопа; чисел нет — их и не выдумываем.
+for (const code of ['SQLITE_FULL', 'ENOSPC']) {
+  test(`DISK_GUARD_V1: ${code} во время копии — обновление отменено, update_result ok:false НЕ пишется`, async () => {
+    const inst = install();
+    const exit = exitSpy();
+    const result = await applyUpdate(inst.db, inst.dataDir, {
+      root: inst.root, version: inst.newVersion, exitImpl: exit.impl,
+      backupImpl: async () => { throw Object.assign(new Error('database or disk is full'), { code }); },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.no_space, 'экран обновлений получает причину «нет места»');
+    assert.equal(path.resolve(fs.realpathSync(inst.currentLink)), path.resolve(inst.oldDir), 'без копии — без переключения');
+    assert.equal(fs.existsSync(path.join(inst.dataDir, 'update-result.json')), false, 'не ok:false — не автостоп выпуска');
+    assert.equal(readPending(inst.dataDir), null);
+    const g = readGuard(inst.dataDir).update_refused;
+    assert.equal(g.version, '0.1.4');
+    assert.equal(g.need_bytes, null, 'чисел нет — не выдумываем');
+    assert.equal(g.free_bytes, null);
+    assert.deepEqual(exit.calls, []);
+  });
+}
