@@ -138,7 +138,8 @@ export function duplicateHits(db, lines, { excludeIds = [], spare = null } = {})
     if (!line) return;
     const visitId = pos(line.visit_id);
     if (visitId == null) return;
-    const svc = line.service_id != null && line.service_id !== '' ? typeOf.get(line.service_id) : null;
+    const sid = pos(line.service_id);   // строка запроса: значение браузера — только целое число идёт в SQL
+    const svc = sid != null ? typeOf.get(sid) : null;
     const serviceType = svc ? svc.type : null;
     if (repeatableLine({ clinicItemId: line.clinic_item_id ?? null, serviceType })) return;
     const key = keyOfRow(line, serviceType);

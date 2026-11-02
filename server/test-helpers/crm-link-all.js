@@ -12,12 +12,22 @@ export const cardLines = (t, rid) => t.db.prepare(`SELECT service_id, scheduled_
 const priceOf = (t, svc) => t.db.prepare('SELECT price FROM services WHERE id = ?').get(svc).price;
 
 /** Строка визита через /api/db, как её вставляют экраны регистратуры (мастер, быстрая регистрация, каталог). */
-export async function addVisitLine(t, who, vid, { svc = 30, doctor = 10, quantity = 1 } = {}) {
+export async function addVisitLine(t, who, vid, { svc = 30, doctor = 10, quantity = 1, repeatReason = null } = {}) {
   const p = priceOf(t, svc);
-  const r = await t.dbq(who, { table: 'visit_services', op: 'insert', returning: true, single: 'single',
-    values: { visit_id: vid, service_id: svc, doctor_id: doctor, quantity, unit_price: p, total: p * quantity, price_tier: 'primary', status: 'added' } });
+  const values = { visit_id: vid, service_id: svc, doctor_id: doctor, quantity, unit_price: p, total: p * quantity, price_tier: 'primary', status: 'added' };
+  if (repeatReason) values.__repeat_reason = repeatReason;   // DUP_STOP_V1 — повтор в визите: администратор с причиной
+  const r = await t.dbq(who, { table: 'visit_services', op: 'insert', returning: true, single: 'single', values });
   assert.equal(r.status, 200, r.text);
   return r.json.data.id;
+}
+
+/** DUP_STOP_V1 — та же услуга второй раз в том же визите: дверь /api/db отказывает 409 duplicate_order. */
+export async function assertRepeatRefused(t, who, vid, { svc = 30, doctor = 10, quantity = 1 } = {}) {
+  const p = priceOf(t, svc);
+  const r = await t.dbq(who, { table: 'visit_services', op: 'insert',
+    values: { visit_id: vid, service_id: svc, doctor_id: doctor, quantity, unit_price: p, total: p * quantity, price_tier: 'primary', status: 'added' } });
+  assert.equal(r.status, 409, r.text);
+  assert.equal(r.json.error.code, 'duplicate_order');
 }
 
 /** Календарь → каталог услуг (не колл-центр): calendar_book, затем строка /api/db. */

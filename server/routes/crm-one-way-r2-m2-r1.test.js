@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startCrmApp, localDay, at, daysAgoIso, addLead, addLine } from '../test-helpers/crm-unify-app.js';
-import { link, vsOf, calendarBook, callcenterBook, deskRegister, addVisitLine } from '../test-helpers/crm-link-all.js';
+import { link, vsOf, calendarBook, callcenterBook, deskRegister, addVisitLine, assertRepeatRefused } from '../test-helpers/crm-link-all.js';   // DUP_STOP_V1 — assertRepeatRefused
 import { arrivedByEvidence } from '../services/crm/booking-mirror.js';
 
 const TODAY = localDay(0);
@@ -201,7 +201,10 @@ test('CRM_ONE_WAY_V1 (повтор r2) — M2-B1: prepaid C′ booking — bille
     const before = snap();
     const r3 = await t.rpc('calendar_book', 'reg', { visit_id: vid, start: at(localDay(6), 10), doctor_id: 10 });
     console.log('B1 resched', r3.status);
-    await addVisitLine(t, 'reg', vid, { svc: 30, doctor: 10 });
+    // DUP_STOP_V1 — «позже та же услуга»: регистратуре — 409; администратор с причиной — строка встаёт,
+    // выставленное не меняется.
+    await assertRepeatRefused(t, 'reg', vid, { svc: 30, doctor: 10 });
+    await addVisitLine(t, 'boss', vid, { svc: 30, doctor: 10, repeatReason: 'повторный приём' });
     assert.equal(snap(), before);
     assert.equal(Number(t.db.prepare('SELECT total_amount FROM invoices WHERE visit_id = ?').get(vid).total_amount), tot0);
   } finally { t.close(); }

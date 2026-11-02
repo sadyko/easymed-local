@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startCrmApp, localDay, at, addLead, addLine } from '../test-helpers/crm-unify-app.js';
-import { vsOf, callcenterBook, addVisitLine } from '../test-helpers/crm-link-all.js';
+import { vsOf, callcenterBook, addVisitLine, assertRepeatRefused } from '../test-helpers/crm-link-all.js';   // DUP_STOP_V1 — assertRepeatRefused
 import { isBookedTwin } from '../../public/js/admin/views/booked-rows.js';
 import { retireBookedTwin } from '../services/crm/booked-twin.js';
 
@@ -77,7 +77,11 @@ for (const kind of ['billed', 'started', 'otherDoctor', 'qty2', 'registrarLine',
       if (kind === 'started') t.db.prepare("UPDATE visit_services SET status = 'in_progress' WHERE id = ?").run(x);
       if (kind === 'qty2') t.db.prepare('UPDATE visit_services SET quantity = 2, total = 200000 WHERE id = ?').run(x);
       const snap = JSON.stringify(rawVs(t, x));
-      const y = await addVisitLine(t, 'reg', vid, { svc: 30, doctor: kind === 'otherDoctor' ? 11 : 10, quantity: kind === 'yQty2' ? 2 : 1 });
+      // DUP_STOP_V1 — та же консультация у того же врача — повтор: регистратуре 409, администратор
+      // назначает с причиной; у другого врача — можно без причины.
+      const repeat = kind !== 'otherDoctor';
+      if (repeat) await assertRepeatRefused(t, 'reg', vid, { svc: 30, doctor: 10, quantity: kind === 'yQty2' ? 2 : 1 });
+      const y = await addVisitLine(t, repeat ? 'boss' : 'reg', vid, { svc: 30, doctor: kind === 'otherDoctor' ? 11 : 10, quantity: kind === 'yQty2' ? 2 : 1, repeatReason: repeat ? 'повтор по показаниям' : null });
       console.log(kind, 'x', snap === JSON.stringify(rawVs(t, x)) ? 'unchanged' : JSON.stringify(rawVs(t, x)), 'visit', JSON.stringify(vsOf(t, vid)));
       if (kind === 'registrarLine') assert.ok(rawVs(t, x), 'registrar line deleted');
       else assert.equal(JSON.stringify(rawVs(t, x)), snap, 'booked line touched');

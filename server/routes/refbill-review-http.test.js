@@ -87,6 +87,8 @@ test('C1 (probe-http): врач ставит строке «повторный �
     assert.equal(invoiceCount(t), 0);
     const line = t.db.prepare('SELECT status, invoice_item_id FROM visit_services WHERE id = ?').get(ins.json.data.id);
     assert.deepEqual({ ...line }, { status: 'added', invoice_item_id: null }, 'строка не ушла в очередь «оплаченной»');
+    // DUP_STOP_V1 — тот же приём у того же врача второй раз — повтор: «нечестную» строку снимаем.
+    t.db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = ?").run(ins.json.data.id);
 
     const honest = await t.insertLine('doc', { visit_id: visitId, service_id: 60, doctor_id: 10, quantity: 1, unit_price: 200000, total: 200000, status: 'added', price_tier: null });
     const ok = await t.rpc('create_invoice_for_visit', 'doc', { visit_id: visitId, visit_service_ids: [honest.json.data.id], discount_amount: 0 });

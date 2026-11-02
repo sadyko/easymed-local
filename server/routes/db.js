@@ -33,7 +33,9 @@ import { PROXY_MODEL_REQUIRED } from '../services/rpc/lis.js';   // LIS_PROXY_V1
 import { PROXY_MODELS } from '../../public/js/shared/lisproxy-models.js';   // LIS_PROXY_V1 (ревью, Р21)
 // CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
-import { retireBookedTwin } from '../services/crm/booked-twin.js';   // CRM_LINK_ALL_V1 (R7b)
+import { retireBookedTwin, bookedTwinFor } from '../services/crm/booked-twin.js';   // CRM_LINK_ALL_V1 (R7b) · DUP_STOP_V1 (bookedTwinFor)
+import { autoTwinFor } from '../services/crm/one-way.js';   // DUP_STOP_V1 — строка CRM, которая уступит новой
+import { checkOrders, logRepeatOrders, takeRepeatReason, DUP_CODE } from '../services/domain/dup-order.js';   // DUP_STOP_V1
 import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 import { geoCodeRefusal } from '../services/geo-codes-guard.js';   // REFERENCE_LISTS_V1 (полировка) — коды географии не меняются
 import { stampWriteBody, stampUpdateRefusal } from '../services/domain/package-lines.js';   // SERVICES_PACKAGES_V1 — цена пакета на строке при записи
@@ -225,6 +227,31 @@ function refuseVisitLineWrite(db, meta, body, user) {
     }
   }
   return null;
+}
+
+// DUP_STOP_V1 — ПОВТОРНОЕ НАЗНАЧЕНИЕ В ТОМ ЖЕ ВИЗИТЕ (domain/dup-order.js): вставка,
+// пачка и upsert строк визита. Не мешают строки, которые эта же дверь уберёт под новой:
+// строка CRM, уступающая строке человека (onVisitLinesAdded — все вставки), и строка
+// записи колл-центра (R7b — только одиночная вставка, retireBookedTwin ниже). upsert
+// строки с id — правка самой строки: она себе не повтор (excludeIds).
+// { error } — отказ 409; { repeats } — обход с причиной, журнал — после записи.
+function visitOrderCheck(db, meta, body, user, reason) {
+  if (!meta || meta.table !== 'visit_services' || (meta.op !== 'insert' && meta.op !== 'upsert')) return {};
+  const rows = Array.isArray(body && body.values) ? body.values : (body && body.values ? [body.values] : []);
+  const single = meta.op === 'insert' && !meta.multi;
+  const spare = (line) => {
+    const out = [];
+    try {   // поблажки — только чтение; сбой в них не открывает и не закрывает дверь
+      const auto = autoTwinFor(db, line);
+      if (auto) out.push(auto.id);
+      if (single) { const x = bookedTwinFor(db, line); if (x) out.push(x.id); }
+    } catch { /* нет поблажки — решает правило */ }
+    return out;
+  };
+  const excludeIds = meta.op === 'upsert'
+    ? rows.map((r) => (r ? Number(r.id) : NaN)).filter((n) => Number.isInteger(n) && n > 0)
+    : [];
+  return checkOrders(db, rows, { user, reason, spare, excludeIds });
 }
 
 // CABINET_FIX_V1_R4 (ревью 4, п. 2) · CABINET_FIX_V1_R5 (ревью 5, A) — ЗАПИСИ КАБИНЕТА   // CABINET_FIX_V1_R5
@@ -449,6 +476,7 @@ export function dbRoutes(db, { storageDir = null } = {}) {
   r.post('/', (req, res) => {
     // CABINET_FIX_V1_R5 — основа записи записей кабинета — не колонка: снимается до compile().
     const notesBase = takeNotesBase(req.body);   // CABINET_FIX_V1_R5
+    const repeatReason = takeRepeatReason(req.body);   // DUP_STOP_V1 — причина повтора — не колонка
     let compiled;
     try {
       compiled = compile(req.body || {}, req.user, { db });   // CRM_HEAD_MERGE_TAGS_V1 — база нужна праву «crm.all»
@@ -666,6 +694,9 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     if (visitLineRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: visitLineRefusal } });
     }
+    // DUP_STOP_V1 — та же услуга уже назначена в этом визите: см. visitOrderCheck.
+    const orders = visitOrderCheck(db, compiled.meta, req.body, req.user, repeatReason);
+    if (orders.error) return res.status(409).json({ error: errorBody(DUP_CODE, orders.error) });
     const notesOut = {};   // CABINET_FIX_V1_R6
     const notesRefusal = refuseNotesWrite(db, compiled.meta, req.body, req.user, notesBase, notesOut);   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6
     if (notesRefusal) return res.status(409).json({ error: { code: 'notes_conflict', reason: notesRefusal.reason, message: notesRefusal.message } });   // CABINET_FIX_V1_R5
@@ -721,6 +752,7 @@ export function dbRoutes(db, { storageDir = null } = {}) {
           if (refused) return res.status(403).json({ error: { code: 'forbidden', message: 'not allowed' } });
           mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
           rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
+          logRepeatOrders(db, orders, req.user);   // DUP_STOP_V1 — обход с причиной — в журнал
           return res.json({ data: null });
         }
         const info = db.prepare(sql).run(...params);
@@ -744,6 +776,7 @@ export function dbRoutes(db, { storageDir = null } = {}) {
         // До сверки зеркала: сверка видит уже одну строку.
         if (meta.table === 'visit_services') retireBookedTwin(db, Number(info.lastInsertRowid));
         mirrorAfter(db, mirror, meta, req.body, req.user, { insertedId: Number(info.lastInsertRowid) });   // CRM_CALENDAR_MIRROR_V1
+        logRepeatOrders(db, orders, req.user);   // DUP_STOP_V1
         rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
         if (!meta.returning) return res.json({ data: null });
         const row = db.prepare(
@@ -756,6 +789,7 @@ export function dbRoutes(db, { storageDir = null } = {}) {
         db.prepare(sql).run(...params);
         mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
         rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
+        logRepeatOrders(db, orders, req.user);   // DUP_STOP_V1
         // A bulk (array) upsert has no single row to hand back; callers that use
         // it don't request returning. Single-row upsert re-selects below.
         if (!meta.returning || meta.multi) return res.json({ data: null });

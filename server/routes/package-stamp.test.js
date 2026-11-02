@@ -105,16 +105,17 @@ test('строке из пакета дверь ставит цену без с�
   const { db, server, base } = await startServer();
   try {
     db.prepare("INSERT INTO services (id, name, price, type) VALUES (2,'Анализ',50000,'lab')").run();
+    db.prepare("INSERT INTO services (id, name, price, type) VALUES (3,'Анализ мочи',50000,'lab')").run();   // DUP_STOP_V1 — строка вне пакета — другая услуга
     db.prepare("UPDATE service_templates SET service_ids = '[1,2]', discount_mode = 'price', discount_value = 120000 WHERE id = 2").run();
     const cookie = await login(base);
     const res = await call(base, cookie, { table: 'visit_services', op: 'insert', values: [
       { visit_id: 500, service_id: 1, quantity: 1, unit_price: 1, total: 1, status: 'added', package_id: 2, package_full: 5, package_price: 1 },
       { visit_id: 500, service_id: 2, quantity: 1, unit_price: 1, total: 1, status: 'added', package_id: 2 },
-      { visit_id: 500, service_id: 2, quantity: 1, unit_price: 50000, total: 50000, status: 'added', package_price: 1 },
+      { visit_id: 500, service_id: 3, quantity: 1, unit_price: 50000, total: 50000, status: 'added', package_price: 1 },   // DUP_STOP_V1 — анализ 2 уже в пачке
     ] });
     assert.equal(res.status, 200, await res.text());
     // 150 000 → 120 000 (k = 0,8): УЗИ 80 000, анализ — остаток 40 000; строка без пакета — обычная.
-    assert.deepEqual(PKG_ROWS(db), [[1, 2, 100000, 80000, 100000, 100000], [2, 2, 50000, 40000, 50000, 50000], [2, null, null, null, 50000, 50000]]);
+    assert.deepEqual(PKG_ROWS(db), [[1, 2, 100000, 80000, 100000, 100000], [2, 2, 50000, 40000, 50000, 50000], [3, null, null, null, 50000, 50000]]);
     const ids = db.prepare('SELECT id FROM visit_services WHERE visit_id = 500 AND package_id IS NOT NULL ORDER BY id').all().map((r) => r.id);
     const out = createInvoiceForVisit(db, { visit_id: 500, visit_service_ids: ids }, { id: 1, role: 'registrar' });
     assert.equal(out.invoice.total_amount, 120000, 'счёт — ровно цена пакета');
@@ -131,6 +132,8 @@ test('шаблон сметы — обычные строки; снятый со
     db.prepare('UPDATE service_templates SET is_package = 0 WHERE id = 2').run();
     assert.equal((await addLine(base, cookie, 2)).status, 200);
     db.prepare('UPDATE service_templates SET is_package = 1 WHERE id = 2').run();
+    // DUP_STOP_V1 — то же УЗИ второй раз в визите — повтор: первая строка (шаблон) отменяется.
+    db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE visit_id = 500").run();
     assert.equal((await addLine(base, cookie, 2)).status, 200);
     assert.deepEqual(PKG_ROWS(db), [[1, 2, null, null, 100000, 100000], [1, 2, 100000, 80000, 100000, 100000]]);
     const id = db.prepare('SELECT MAX(id) id FROM visit_services').get().id;

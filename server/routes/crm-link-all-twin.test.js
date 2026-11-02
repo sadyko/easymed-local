@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startCrmApp, localDay, addLead } from '../test-helpers/crm-unify-app.js';
-import { vsOf, cardLines, addVisitLine, callcenterBook, deskRegister } from '../test-helpers/crm-link-all.js';
+import { vsOf, cardLines, addVisitLine, callcenterBook, deskRegister, assertRepeatRefused } from '../test-helpers/crm-link-all.js';   // DUP_STOP_V1 — assertRepeatRefused
 import { retireBookedTwin } from '../services/crm/booked-twin.js';
 
 const TODAY = localDay(0);
@@ -47,7 +47,9 @@ test('CRM_LINK_ALL_V1 R7b: настоящий повтор, другой вра�
     addLead(t.db, {});
     const bid = await callcenterBook(t, TODAY, { hour: 23 });
     const y1 = await addVisitLine(t, 'reg', bid);
-    const y2 = await addVisitLine(t, 'reg', bid);
+    // DUP_STOP_V1 — второй такой же приём регистратуре — 409; администратор назначает с причиной.
+    await assertRepeatRefused(t, 'reg', bid);
+    const y2 = await addVisitLine(t, 'boss', bid, { repeatReason: 'второй приём по показаниям' });
     assert.deepEqual(vsOf(t, bid).map((x) => x.id), [y1, y2], 'второй приём того же дня регистратуры поглощён');
     const other = await addVisitLine(t, 'reg', bid, { doctor: 11 });
     assert.ok(vsOf(t, bid).some((x) => x.id === other), 'консультация другого врача поглощена');
@@ -57,7 +59,8 @@ test('CRM_LINK_ALL_V1 R7b: настоящий повтор, другой вра�
     addLead(t2.db, {});
     const bid = await callcenterBook(t2, TODAY, { hour: 23 });
     const x = vsOf(t2, bid)[0].id;
-    const y = await addVisitLine(t2, 'reg', bid, { quantity: 2 });
+    await assertRepeatRefused(t2, 'reg', bid, { quantity: 2 });   // DUP_STOP_V1
+    const y = await addVisitLine(t2, 'boss', bid, { quantity: 2, repeatReason: 'два приёма подряд' });
     assert.deepEqual(vsOf(t2, bid).map((r) => r.id), [x, y], 'количество 2 заменило строку записи');
   } finally { t2.close(); }
 });
@@ -70,7 +73,9 @@ test('CRM_LINK_ALL_V1 R7b: строка записи в счёте — не тр
     const x = vsOf(t, bid)[0].id;
     const inv = await t.rpc('create_invoice_for_visit', 'kassa', { visit_id: bid, visit_service_ids: [x], discount_amount: 0, payer_id: null });
     assert.equal(inv.status, 200, inv.text);
-    const y = await addVisitLine(t, 'reg', bid);
+    // DUP_STOP_V1 — выставленная строка записи — назначение: та же консультация второй раз — 409.
+    await assertRepeatRefused(t, 'reg', bid);
+    const y = await addVisitLine(t, 'boss', bid, { repeatReason: 'повторный приём' });
     assert.deepEqual(vsOf(t, bid).map((r) => r.id), [x, y]);
     assert.ok(t.db.prepare('SELECT invoice_item_id FROM visit_services WHERE id = ?').get(x).invoice_item_id != null);
   } finally { t.close(); }
@@ -84,7 +89,8 @@ test('CRM_LINK_ALL_V1 R7b: строку регистратуры (не колл-
     assert.equal(ev.status, 200, ev.text);
     const vid = ev.json.data.visit.id;
     const x = await addVisitLine(t, 'reg', vid);
-    const y = await addVisitLine(t, 'reg', vid);
+    await assertRepeatRefused(t, 'reg', vid);   // DUP_STOP_V1
+    const y = await addVisitLine(t, 'boss', vid, { repeatReason: 'повторный приём' });
     assert.deepEqual(vsOf(t, vid).map((r) => r.id), [x, y]);
   } finally { t.close(); }
 });

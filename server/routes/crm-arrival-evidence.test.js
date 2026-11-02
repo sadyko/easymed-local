@@ -153,6 +153,9 @@ test('услуга, заведённая сразу выполненной, то
 test('услуга, заведённая в смету, заявку не трогает', async () => {
   const { db, server, base, rid, lid } = await startServer();
   try {
+    // DUP_STOP_V1 — в визите уже стоит строка 900 той же консультации: вставка была бы повтором (409).
+    // Проверка — про смету и заявку, поэтому строка 900 здесь отменена.
+    db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = 900").run();
     const cookie = await login(base);
     const res = await fetch(base + '/api/db', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie },

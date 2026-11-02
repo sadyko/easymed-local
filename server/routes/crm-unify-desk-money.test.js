@@ -174,8 +174,15 @@ test('C1d: строка зеркала, которая сама уже в счё
     const { vid } = await ccBookToday(t, [{ svc: 40 }]);
     const auto = liveOf(t.db, vid, 40)[0].id;
     await invoiceVs(t, vid, [auto]);
-    const ins = await t.dbq('reg', { table: 'visit_services', op: 'insert', returning: true, single: 'single',
+    // DUP_STOP_V1 — выставленная строка зеркала — назначение: тот же анализ регистратуре — 409,
+    // администратор назначает с причиной; выставленная строка цела в обоих случаях.
+    const refused = await t.dbq('reg', { table: 'visit_services', op: 'insert',
       values: { visit_id: vid, service_id: 40, quantity: 1, unit_price: 40000, total: 40000, status: 'added' } });
+    assert.equal(refused.status, 409, refused.text);
+    assert.equal(refused.json.error.code, 'duplicate_order');
+    assert.deepEqual(liveOf(t.db, vid, 40).map((x) => x.id), [auto]);
+    const ins = await t.dbq('boss', { table: 'visit_services', op: 'insert', returning: true, single: 'single',
+      values: { visit_id: vid, service_id: 40, quantity: 1, unit_price: 40000, total: 40000, status: 'added', __repeat_reason: 'контрольный анализ' } });
     assert.equal(ins.status, 200, ins.text);
     assert.deepEqual(liveOf(t.db, vid, 40).map((x) => x.id).sort((p, q) => p - q), [auto, ins.json.data.id].sort((p, q) => p - q),
       'выставленная строка зеркала исчезла');
