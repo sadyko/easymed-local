@@ -11,7 +11,10 @@
 //
 // args: { visit_id } | { patient_id, date ('YYYY-MM-DD' местный день или ISO) },
 //       lines?: [{ service_id?, consultation_type_id?, doctor_id? }] (до 50),
-//       exclude_ids?: [visit_service_id] — строки, которые экран сам снимет до записи.
+//       exclude_ids?: [visit_service_id] — строки, которые экран сам снимет до записи,
+//       door?: 'cashier' — DUP_STOP_V1 (ревью m3): окно кассы. Её двери (cashier_line_add,
+//       замены) сети R7b не зовут: строка записи колл-центра для них — назначение, и окно
+//       выбора кассы обязано гасить её так же (иначе экран «свободно» — дверь 409).
 // → { visit_id|null, ordered: [...], duplicates: [{ index, message, template, params, line_id }], can_override }
 //   ordered — назначенное (без строк, которые уступят новой строке той же услуги): по нему
 //   каталоги гасят услуги («уже назначено»).
@@ -60,7 +63,9 @@ export function visitDupCheck(db, args, user) {
 
   const exclude = (Array.isArray(a.exclude_ids) ? a.exclude_ids : []).map(pos).filter((x) => x != null);
   // Поблажки двери /api/db: строка записи колл-центра (R7b) и строка CRM уступят новой.
-  const spare = (line) => [bookedTwinFor(db, line), autoTwinFor(db, line)].filter(Boolean).map((x) => Number(x.id));
+  // DUP_STOP_V1 (ревью m3) — у двери кассы — только строка CRM (как в cashier_line_add).
+  const till = a.door === 'cashier';
+  const spare = (line) => [till ? null : bookedTwinFor(db, line), autoTwinFor(db, line)].filter(Boolean).map((x) => Number(x.id));
   const lines = raw.map((l) => ({
     visit_id: visitId,
     service_id: pos(l && l.service_id),

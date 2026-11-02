@@ -29,10 +29,15 @@ function target({ visitId = null, patientId = null, day = null } = {}) {
     return null;
 }
 
-/** Назначенное в визите (id визита или пациент + местный день 'YYYY-MM-DD'). Сбой — пусто. */
+/**
+ * Назначенное в визите (id визита или пациент + местный день 'YYYY-MM-DD'). Сбой — пусто.
+ * DUP_STOP_V1 (ревью m3) — door: 'cashier' — окно кассы: строка записи колл-центра для её
+ * дверей назначение (они сети R7b не зовут), и сервер её не прячет.
+ */
 export async function loadVisitOrders(where = {}) {
     const args = target(where);
     if (!args) return { ...EMPTY };
+    if (where.door === 'cashier') args.door = 'cashier';
     try {
         const { data, error } = await supabase.rpc('visit_dup_check', { ...args, lines: [] });
         if (error || !data) return { ...EMPTY };

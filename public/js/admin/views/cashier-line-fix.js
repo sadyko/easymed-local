@@ -156,7 +156,9 @@ export function pickService(title, { visitId = null, exceptLineId = null } = {})
             }
         };
         search.addEventListener('input', paint);
-        Promise.all([loadServices(), loadVisitOrders({ visitId })]).then(([rows, got]) => {
+        // DUP_STOP_V1 (ревью m3) — door: двери кассы сети R7b не зовут: строка записи колл-центра
+        // для них назначение, и окно гасит её так же, как откажет cashier_line_add.
+        Promise.all([loadServices(), loadVisitOrders({ visitId, door: 'cashier' })]).then(([rows, got]) => {
             all = rows;
             ordered = (got.ordered || []).filter((o) => Number(o.id) !== Number(exceptLineId));   // DUP_STOP_V1
             paint();

@@ -202,6 +202,25 @@ test('DUP_STOP_V1 (ревью M2): visit_dup_check — визит соседне
     { visit_id: null, ordered: [], duplicates: [], can_override: false }, 'визита нет — повторов нет');
 });
 
+test('DUP_STOP_V1 (ревью m3): visit_dup_check с door: cashier — строка записи колл-центра для кассы назначение, как у cashier_line_add', () => {
+  const { db, pid } = clinic();
+  // кассиру этого стенда — раздел кассы: строки визита ему отдаются (ревью M2)
+  db.prepare("UPDATE role_permissions SET permissions = ? WHERE role = 'cashier'").run(JSON.stringify({ sections: ['cashier'], levels: {}, grants: { 'cashier.lines': 'edit' } }));
+  const future = new Date(); future.setDate(future.getDate() + 1); future.setHours(10, 0, 0, 0);
+  const v = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, ?, 'scheduled')").run(pid, future.toISOString()).lastInsertRowid);
+  assert.equal(call('booking_lines_add', db, { visit_id: v, lines: [{ service_id: 40 }] }, callcenter).added.length, 1);
+  // окно регистратуры: строка регистратуры займёт место строки записи (R7b)
+  const desk = call('visit_dup_check', db, { visit_id: v, lines: [{ service_id: 40 }] }, cashier);
+  assert.deepEqual([desk.ordered.length, desk.duplicates.length], [0, 0]);
+  // окно кассы: cashier_line_add сети R7b не зовёт — строка записи для неё назначение
+  const till = call('visit_dup_check', db, { visit_id: v, door: 'cashier', lines: [{ service_id: 40 }] }, cashier);
+  assert.deepEqual(till.ordered.map((o) => o.key), ['s:40'], 'окно кассы показало услугу свободной');
+  assert.equal(till.duplicates.length, 1);
+  dup(() => call('cashier_line_add', db, { visit_id: v, service_id: 40 }, cashier));
+  // незнакомая дверь — как окно регистратуры
+  assert.equal(call('visit_dup_check', db, { visit_id: v, door: 'x', lines: [{ service_id: 40 }] }, cashier).duplicates.length, 0);
+});
+
 test('DUP_STOP_V1: visit_dup_check — строка записи колл-центра — не «уже назначено»: строка регистратуры займёт её место', () => {
   const { db, pid } = clinic();
   const future = new Date(); future.setDate(future.getDate() + 3); future.setHours(10, 0, 0, 0);

@@ -95,6 +95,19 @@ test('DUP_STOP_V1 (К1): окно выбора услуги кассы гаси�
   assert.equal((await pending).id, 60, 'погашенная услуга выбрана');
 });
 
+test('DUP_STOP_V1 (ревью m3): строка записи колл-центра в окне кассы — «уже назначено»: cashier_line_add откажет ей (сеть R7b касса не зовёт)', async () => {
+  seed();
+  DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (8, 'cc', 'x', 'Оператор', 'callcenter', 0)").run();
+  const future = new Date(); future.setDate(future.getDate() + 1); future.setHours(10, 0, 0, 0);
+  const v = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (77, ?, 'scheduled')").run(future.toISOString()).lastInsertRowid);
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, created_by) VALUES (?, 40, 1, 0, 0, 'added', 8)").run(v);
+  const { pending, btn } = await openPicker({ visitId: v });
+  assert.ok('disabled' in btn(40).attrs, 'окно кассы показало записанную услугу свободной — дверь кассы ответит 409');
+  assert.match(textOf(btn(40)), /уже назначено/);
+  btn(50).click();
+  assert.equal((await pending).id, 50);
+});
+
 test('DUP_STOP_V1 (К1): без визита окно выбора ничего не гасит (как прежде)', async () => {
   seed();
   const { pending, btn } = await openPicker({});
