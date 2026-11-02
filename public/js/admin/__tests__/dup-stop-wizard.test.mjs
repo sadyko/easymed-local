@@ -176,7 +176,20 @@ async function pressUntilCreate() {
   await wait(80); await flush(30);
 }
 
-test('DUP_STOP_V1: мастер — анализ, уже назначенный в визите дня, погашен «уже назначено», в смету не берётся', async () => {
+// DUP_STOP_V1 (ревью M1) — запрет — в пределах ВИЗИТА: назначенное сегодня мешает только
+// строке на сегодня. Каталог говорит «уже назначено», но «Добавить» доступно — день строки
+// выбирают после (контрольный анализ на завтра — другой визит); последнее слово —
+// проверка по дням сметы в createVisit.
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const orderedTags = (ov) => walk(ov).filter((n) => n.attrs && 'data-ordered-line' in n.attrs);
+function setLineDay(ov, svcId, day) {
+  const inp = walk(rowOf(ov, svcId)).find((n) => n.tagName === 'INPUT' && (n.type === 'date' || n.attrs.type === 'date'));
+  assert.ok(inp, 'у строки нет выбора дня');
+  inp.value = day;
+  inp.dispatchEvent({ type: 'change', currentTarget: inp, target: inp });
+}
+
+test('DUP_STOP_V1 (ревью M1): мастер — анализ, уже назначенный сегодня, помечен «уже назначено», но «Добавить» доступно; строка на сегодня помечена в смете', async () => {
   seed();
   USER = { id: 1, role: 'registrar', extra_roles: [] };
   orderedToday();
@@ -186,8 +199,49 @@ test('DUP_STOP_V1: мастер — анализ, уже назначенный 
   const row = rowOf(ov, 22);
   assert.ok(row, 'строки каталога «Анализ крови» нет');
   assert.match(textOf(row), /уже назначено/);
-  assert.ok('disabled' in addBtn(row).attrs, '«Добавить» у назначенной услуги нажимается');
-  assert.ok(!/уже назначено/.test(textOf(rowOf(ov, 23))), 'новая услуга погашена');
+  assert.ok(!('disabled' in addBtn(row).attrs), '«Добавить» погашено — на завтра анализ не назначить');
+  assert.ok(!/уже назначено/.test(textOf(rowOf(ov, 23))), 'новая услуга помечена');
+  addBtn(row).click();
+  await flush(20);
+  assert.ok(!TOASTS.some((t) => /уже назначена в этом визите/.test(t)), 'смета отказала до выбора дня: ' + JSON.stringify(TOASTS));
+  assert.equal(orderedTags(ov).length, 1, 'строка на сегодня не помечена «уже назначено»');
+  setLineDay(ov, 22, ymd(new Date(Date.now() + 86400000)));
+  await flush(20);
+  assert.equal(orderedTags(ov).length, 0, 'строка на завтра помечена «уже назначено»');
+});
+
+test('DUP_STOP_V1 (ревью M1): мастер — анализ уже назначен сегодня: на завтра назначается (второй визит), на сегодня — отказ до ensure_visit', async () => {
+  seed();
+  USER = { id: 1, role: 'registrar', extra_roles: [] };
+  const todayVisit = orderedToday();
+  let ov = await open();
+  addBtn(rowOf(ov, 22)).click();
+  await flush(20);
+  const tomorrow = ymd(new Date(Date.now() + 86400000));
+  setLineDay(ov, 22, tomorrow);
+  await flush(20);
+  await pressUntilCreate();
+  await wait(150); await flush(30);
+  assert.ok(!TOASTS.some((t) => /уже назначена в этом визите/.test(t)), 'контрольный анализ на завтра отказан: ' + JSON.stringify(TOASTS));
+  assert.ok(RPC.some((c) => c.name === 'ensure_visit'), 'визит завтрашнего дня не заведён');
+  assert.equal(lines(22), 2, 'анализ на завтра не записан');
+  const days = DB.prepare("SELECT v.id, date(v.visit_date, 'localtime') d FROM visit_services vs JOIN visits v ON v.id = vs.visit_id WHERE vs.service_id = 22 ORDER BY vs.id").all();
+  assert.equal(days[0].id, todayVisit);
+  assert.notEqual(days[1].id, todayVisit, 'завтрашний анализ лёг в сегодняшний визит');
+  assert.equal(days[1].d, tomorrow);
+
+  // тот же анализ — на сегодня: отказ словами сервера, ничего не записано
+  seed();
+  orderedToday();
+  ov = await open();
+  addBtn(rowOf(ov, 22)).click();
+  await flush(20);
+  const visitsBefore = DB.prepare('SELECT COUNT(*) n FROM visits').get().n;
+  await pressUntilCreate();
+  assert.ok(TOASTS.some((t) => /^Эта услуга уже назначена в этом визите: «Анализ крови» — Петров Пётр/.test(t)), 'нет отказа: ' + JSON.stringify(TOASTS));
+  assert.equal(RPC.some((c) => c.name === 'ensure_visit'), false, 'визит дня заведён до отказа');
+  assert.equal(DB.prepare('SELECT COUNT(*) n FROM visits').get().n, visitsBefore);
+  assert.equal(lines(22), 1, 'вторая строка анализа сегодня');
 });
 
 test('DUP_STOP_V1: мастер — услугу назначили, пока смета собиралась: отказ до ensure_visit, ничего не записано', async () => {

@@ -205,7 +205,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         cart: [],            // [{ svc, qty }]
         dropBooked: [],      // CRM_LINK_ALL_V1 (R7a) — visit_service_id строк «из записи», которые убрали
         bookedTodaySvc: null, // CRM_LINK_ALL_V1 (ред. 2) — услуги, уже стоящие в визите записи на сегодня
-        ordered: [],         // DUP_STOP_V1 — уже назначенное в визите дня (visit_dup_check): каталог гасит, смета не берёт
+        ordered: [],         // DUP_STOP_V1 — уже назначенное в визите дня (visit_dup_check): каталог и смета помечают
+        orderedDay: null,    // DUP_STOP_V1 (ревью M1) — день этого визита ('YYYY-MM-DD'): мешает только строкам на него
         canRepeat: false,    // DUP_STOP_V1 — администратор и главный врач назначают повтор с причиной
         search: '',
         cat: 'Все',
@@ -774,19 +775,33 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // же услуги не вставляет (createVisit). Только сегодня и только услуги
     // каталога; консультация по виду приёма остаётся в визите и ждёт кассу.
     // DUP_STOP_V1 — ЧТО УЖЕ НАЗНАЧЕНО В ВИЗИТЕ ДНЯ. Сервер отказывает повтору той же услуги
-    // в том же визите (409 duplicate_order). Мастер знает это заранее: каталог гасит такие
-    // услуги («уже назначено»), смета их не берёт. День — день мастера; строки других дней
-    // проверяет createVisit перед первой записью (precheckOrders).
+    // в том же визите (409 duplicate_order). Мастер знает это заранее: каталог помечает такие
+    // услуги («уже назначено»). День — день мастера (сегодня).
+    // DUP_STOP_V1 (ревью M1) — ЗАПРЕТ — В ПРЕДЕЛАХ ВИЗИТА: назначенное сегодня мешает только
+    // строке на сегодня. День строки выбирают ПОСЛЕ «Добавить» (врач направляет на контрольный
+    // анализ завтра — это другой визит), поэтому каталог и смета услугу не отвергают: смета
+    // помечает «уже назначено» строку, чей день — день этого визита (orderedFor), а решает
+    // проверка по каждому дню сметы в createVisit (precheckOrders) — до первой записи.
     async function loadOrdered() {
         const day = String(wiz.when || '').slice(0, 10);
         if (!patient || !patient.id || !day) return;
         const r = await loadVisitOrders({ patientId: patient.id, day });
         wiz.ordered = r.ordered;
+        wiz.orderedDay = day;   // DUP_STOP_V1 (ревью M1)
         wiz.canRepeat = r.canOverride;
-        if (wiz.ordered.length) paint();   // каталог уже нарисован — погасить назначенное
+        if (wiz.ordered.length) paint();   // каталог уже нарисован — пометить назначенное
     }
     /** DUP_STOP_V1 — назначенное, кроме строк «из записи», которые регистратор убрал (снимутся до записи). */
     function orderedNow() { return wiz.ordered.filter(o => !wiz.dropBooked.includes(o.id)); }
+    /**
+     * DUP_STOP_V1 (ревью M1) — строка сметы стоит на день визита, где та же услуга уже
+     * назначена (повтор запрещён): { blocked, row } | null. Строки других дней — другие визиты.
+     */
+    function orderedFor(c) {
+        if (!c || c.booked || !wiz.orderedDay || lineDay(c) !== wiz.orderedDay) return null;
+        const hit = orderedMatch(c.svc, orderedNow(), Number(c.doctorId || (c.svc.requires_doctor ? wiz.doctorId : null)) || null);
+        return hit && hit.blocked ? hit : null;
+    }
 
     async function prefillFromBooking() {
         const dayIso = String(wiz.when || '').slice(0, 10);
@@ -1086,9 +1101,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const shown = Math.min(wiz.limit, rows.length);
             for (const s of rows.slice(0, shown)) {
                 const inCart = wiz.cart.find(c => c.svc.id === s.id);
-                const onVisit = inCart ? null : orderedMatch(s, orderedNow());   // DUP_STOP_V1
-                const locked = !!(onVisit && onVisit.blocked && !wiz.canRepeat);   // DUP_STOP_V1
-                const headRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px', opacity: locked ? '0.55' : '1' } },
+                // DUP_STOP_V1 — услуга уже назначена в визите дня: пометка. DUP_STOP_V1 (ревью M1) —
+                // «Добавить» не гасится: день строки выбирают после, и на другой день это другой
+                // визит; строку на день этого визита пометит смета, отказ — до записи (createVisit).
+                const onVisit = inCart ? null : orderedMatch(s, orderedNow());
+                const headRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px' } },
                     h('div', { style: { minWidth: 0, flex: 1 } },
                         h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: inCart ? 'var(--primary-700)' : 'var(--ink-900)' } },
                             s.name, inCart ? (inCart.svc.requires_doctor && !inCart.doctorId ? ' — выберите врача' : ' — добавлено') : '',
@@ -1114,10 +1131,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         : h('button', {
                             class: 'btn btn-primary btn-sm', type: 'button',
                             style: { borderRadius: '999px', minWidth: '96px' },
-                            disabled: locked,   // DUP_STOP_V1 — уже назначено в этом визите
-                            title: locked ? tr('уже назначено') : undefined,
                             onclick: () => {
-                                if (locked) return;   // DUP_STOP_V1
                                 addToCart(s);
                                 repaintCatalog();
                                 // SCROLL_KEEP_V1 — планировщик разворачивается ПОД
@@ -1686,13 +1700,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             repaintRail();
             return;
         }
-        // DUP_STOP_V1 — услуга уже назначена в визите дня: остальным смета её не берёт;
-        // администратору и главному врачу — можно, причину спросит createVisit.
-        const already = orderedMatch(svc, orderedNow());
-        if (already && already.blocked && !wiz.canRepeat) {
-            toast(trf('«{name}» уже назначена в этом визите — повторно её не назначают.', { name: svc.name }), 'info');
-            return;
-        }
+        // DUP_STOP_V1 (ревью M1) — услугу, уже назначенную в визите дня, смета берёт: день
+        // строки ещё не выбран (на другой день — другой визит). Строку на день этого визита
+        // смета помечает «уже назначено» (orderedFor), отказ — до записи (createVisit).
         const d0 = new Date(); d0.setHours(0, 0, 0, 0);
         const line = { svc, qty: 1, doctorId: null, when: null, ui: { day: d0.getTime(), pickDoc: false } };
         // DATE_ONLY_V1 — услуге без врача слот не нужен: только день, по
@@ -2359,11 +2369,21 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 // ONE_LINE_CART_V1 — одна строка на услугу: название · [кол-во
                 // у процедур] · цена · ✕. Подпись «разово за визит» убрана
                 // (SINGLE_PER_VISIT_V1 по-прежнему действует: без счётчика = 1).
+                const dupHit = orderedFor(c);   // DUP_STOP_V1 (ревью M1) — строка на день визита, где услуга уже назначена
                 list.appendChild(h('div', { class: 'row', style: { gap: '8px', padding: '9px 0', borderBottom: '1px solid var(--ink-50)' } },
                     h('span', { style: { flex: 1, minWidth: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, c.svc.name),
                     // CRM_LINK_ALL_V1 (R7a) — строка уже в визите записи: подпись и статус записи.
                     c.booked ? h('span', { 'data-booked-line': String(c.booked.vsId), style: { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12.5px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-50, #e8f3f2)', borderRadius: '999px', padding: '1px 7px', whiteSpace: 'nowrap' } },
                         Icon('Calendar', { size: 12 }), tr('из записи') + ' · ' + tr(bookedStatusLabel(c.booked.status))) : null,
+                    // DUP_STOP_V1 (ревью M1) — повтор в визите этого дня: выберите другой день или уберите
+                    // строку (администратору и главному врачу запись спросит причину).
+                    dupHit ? h('span', {
+                        'data-ordered-line': String(c.svc.id),
+                        title: wiz.canRepeat
+                            ? tr('Повтор услуги в том же визите назначают только с причиной — она останется в журнале счёта.')
+                            : trf('«{name}» уже назначена в этом визите — повторно её не назначают.', { name: c.svc.name }),
+                        style: { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12.5px', fontWeight: 700, color: 'var(--warn-700, #a16207)', background: 'var(--warn-50, #fffbeb)', borderRadius: '999px', padding: '1px 7px', whiteSpace: 'nowrap' },
+                    }, Icon('Warning', { size: 12 }), orderedLabel(dupHit)) : null,
                     ...(isMultiQty(c.svc) && !c.booked ? [
                         stepBtn('−', () => { c.qty = Math.max(1, c.qty - 1); repaintRail(); }),
                         h('span', { class: 'num', style: { fontSize: '13.5px', minWidth: '20px', textAlign: 'center' } }, String(c.qty)),
