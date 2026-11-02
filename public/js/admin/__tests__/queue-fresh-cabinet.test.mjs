@@ -211,6 +211,21 @@ test('подписан приём: строка СРАЗУ уходит из «�
   assert.strictEqual(tileValue(tileByLabel(root, 'Осмотрено сегодня')), '2');
 });
 
+// Ревью m1 — возврат боковым меню или «Назад» onPayload не зовёт: строки уже верные
+// (applyLineStatus), а плитки над ними стояли прежними до следующей перерисовки.
+test('сообщение о статусе строки пересчитывает и плитки — без возврата (боковое меню, «Назад»)', async (t) => {
+  t.after(reseed);
+  const root = await openWork();
+  const review = () => tileValue(tileByLabel(root, 'В очереди / готовы к осмотру'));
+  const seen = () => tileValue(tileByLabel(root, 'Осмотрено сегодня'));
+  assert.deepStrictEqual([review(), seen()], ['3', '1'], 'стенд: плитки до подписи');
+  setServerStatus('p1', 'completed');
+  QF.noteLineStatus('p1', 'completed');   // HOOK не зовётся — так возвращает боковое меню
+  assert.deepStrictEqual(visibleNames(root), ['Аминов Олим', 'Зокиров Бобур']);
+  assert.deepStrictEqual([review(), seen()], ['2', '2'], 'плитки остались прежними после подписи');
+  assert.strictEqual(byClass(root, 'ws-kpi').length, 1, 'плитки нарисованы второй раз, а не заменены');
+});
+
 test('возврат без сообщения (черновик, «Пауза») — очередь не перечитывается, «Идёт приём» сверху с «Продолжить»', async (t) => {
   t.after(reseed);
   const root = await openWork();

@@ -249,17 +249,31 @@ async function reloadQueue() {
 
 // QUEUE_FRESH_V1 — окно приёма записало строке новый статус (queue-fresh.js).
 // Строка меняется СРАЗУ, до возврата и до перечитывания: «Активные» и
-// «Завершённые» не ждут сервера. Перерисовывается только список (без подгонки
-// высоты окна — панель сейчас скрыта); плитки — при возврате. Очередь
-// помечается устаревшей. Экспорт — для проверки.
+// «Завершённые» не ждут сервера. Перерисовываются список и плитки (без подгонки
+// высоты окна — панель сейчас скрыта). Очередь помечается устаревшей. Экспорт —
+// для проверки.
+//
+// Ревью m1 — плитки здесь, а не только при возврате: возврат боковым меню или
+// «Назад» onPayload не зовёт, и «В очереди / готовы к осмотру», «Осмотрено
+// сегодня» стояли прежними над уже верным списком.
 export function applyLineStatus(lineId, status) {
     const key = String(lineId);
     LINE_NOTES.set(key, { status: String(status), seq: ++lineNoteSeq });
     let hit = false;
     for (const r of state.rows) if (String(r.id) === key) { r.status = String(status); hit = true; }
     state.queueStale = true;
-    if (hit && containerRef && state.tab === 'appointments') paintBody();
+    if (hit && containerRef && state.tab === 'appointments') { paintBody(); paintKpi(); }
     return hit;
+}
+
+// Ревью m1 — плитки «Моих приёмов» заново из kpiSummary() — в тот же блок .ws-kpi,
+// без перерисовки экрана и без подгонки высоты (fitViewport): размер плиток не меняется.
+function paintKpi() {
+    const box = containerRef && containerRef.querySelector('.ws-kpi');
+    if (!box) return;
+    const fresh = kpiSummary();
+    clear(box);
+    for (const c of Array.from(fresh.childNodes || fresh.children || [])) box.appendChild(c);
 }
 onLineStatus(applyLineStatus);
 
