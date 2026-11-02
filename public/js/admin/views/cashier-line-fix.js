@@ -30,6 +30,7 @@
 // «Выставить заново» (openRebill) — невыставленные строки визита отменённого
 // счёта: поменять услугу или врача, выставить счёт и принять оплату.
 import { supabase } from '../../supabase.js';
+import { loadVisitOrders, orderedMatch, orderedLabel } from './dup-order-check.js';   // DUP_STOP_V1 — «уже назначено» в окне выбора услуги
 import { h, Icon, clear, toast, fmtDate } from '../ui.js';   // fmtDate: REFERRAL_BILL_V1 — день визита в пояснении «со дня визита»
 import { tr, trf } from '../i18n.js';
 import { canFixCashierLines, canSwapPaidLines } from '../permissions.js';
@@ -120,8 +121,11 @@ async function loadServices() {
 
 /**
  * Выбор услуги: поиск по названию. Промис: услуга или null (закрыли окно).
+ * DUP_STOP_V1 — `visitId`: услуги, уже назначенные в этом визите, погашены («уже
+ * назначено») — замена или добавление на них — повтор, сервер откажет (409). Строка,
+ * которую меняют (`exceptLineId`), не мешает: ту же услугу у другого врача выбрать можно.
  */
-export function pickService(title) {
+export function pickService(title, { visitId = null, exceptLineId = null } = {}) {
     return new Promise((resolve) => {
         let done = false;
         const finish = (v) => { if (done) return; done = true; resolve(v); };
@@ -132,21 +136,31 @@ export function pickService(title) {
         s.body.appendChild(list);
         s.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => s.close() }, 'Отмена'));
         let all = [];
+        let ordered = [];   // DUP_STOP_V1 — назначенное в визите
         const paint = () => {
             clear(list);
             const q = String(search.value || '').trim().toLowerCase();
             const rows = (q ? all.filter((x) => String(x.name || '').toLowerCase().includes(q)) : all).slice(0, 60);
             if (!rows.length) { list.appendChild(h('div', { class: 'muted', style: { padding: '8px' } }, 'Ничего не найдено.')); return; }
             for (const svc of rows) {
+                const onVisit = orderedMatch(svc, ordered);   // DUP_STOP_V1
+                const locked = !!(onVisit && onVisit.blocked);
                 list.appendChild(h('button', {
-                    type: 'button', class: 'btn btn-ghost', 'data-service-id': String(svc.id),
-                    style: { justifyContent: 'space-between', display: 'flex', width: '100%', textAlign: 'left' },
-                    onclick: () => { finish(svc); s.overlay.remove(); },
-                }, h('span', null, svc.name || '—'), h('span', { class: 'num muted' }, fmtSum(svc.price), ' ', tr('сум'))));
+                    type: 'button', class: 'btn btn-ghost', 'data-service-id': String(svc.id), disabled: locked,
+                    title: locked ? tr('уже назначено') : undefined,
+                    style: { justifyContent: 'space-between', display: 'flex', width: '100%', textAlign: 'left', opacity: locked ? '0.55' : '1' },
+                    onclick: () => { if (locked) return; finish(svc); s.overlay.remove(); },
+                }, h('span', null, svc.name || '—',
+                    onVisit ? h('span', { class: 'muted', 'data-ordered': '' }, ' — ', orderedLabel(onVisit)) : null),
+                h('span', { class: 'num muted' }, fmtSum(svc.price), ' ', tr('сум'))));
             }
         };
         search.addEventListener('input', paint);
-        loadServices().then((rows) => { all = rows; paint(); })
+        Promise.all([loadServices(), loadVisitOrders({ visitId })]).then(([rows, got]) => {
+            all = rows;
+            ordered = (got.ordered || []).filter((o) => Number(o.id) !== Number(exceptLineId));   // DUP_STOP_V1
+            paint();
+        })
             .catch((e) => { clear(list); list.appendChild(h('div', { style: { color: 'var(--crit-600)' } }, trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }))); });
     });
 }
@@ -493,7 +507,7 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
 
     async function chooseService() {
         if (busy) return;
-        const picked = await pickService(tr('Новая услуга'));
+        const picked = await pickService(tr('Новая услуга'), { visitId: inv && inv.visit_id, exceptLineId: line && line.id });   // DUP_STOP_V1
         if (!picked || busy) return;
         svc = picked;
         who = null;
@@ -585,7 +599,7 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
             const actions = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' } });
             if (editable && line && lineFixable(line)) {
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
-                    const svc = await pickService(tr('Заменить услугу'));
+                    const svc = await pickService(tr('Заменить услугу'), { visitId: st.invoice.visit_id, exceptLineId: line.id });   // DUP_STOP_V1
                     if (!svc) return;
                     if (await runRpc('cashier_line_change_service', { visit_service_id: line.id, new_service_id: svc.id }, tr('Услуга заменена.'))) { await paint(); await changed(); }
                 } }, 'Заменить услугу'));
@@ -602,7 +616,7 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
             } else if (swappable && line && lineFixable(line)) {
                 // CASHIER_PAID_SWAP_V1 — «Убрать» здесь нет: оплаченное снимает «Вернуть услугу».
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', 'data-swap': 'service', onclick: async () => {
-                    const svc = await pickService(tr('Заменить услугу'));
+                    const svc = await pickService(tr('Заменить услугу'), { visitId: st.invoice.visit_id, exceptLineId: line.id });   // DUP_STOP_V1
                     if (!svc) return;
                     await openSwapConfirm({ visit_service_id: line.id, new_service_id: svc.id }, { onDone: afterSwap });
                 } }, 'Заменить услугу'));
@@ -653,7 +667,7 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
     }
 
     addBtn.addEventListener('click', async () => {
-        const svc = await pickService(tr('Добавить услугу'));
+        const svc = await pickService(tr('Добавить услугу'), { visitId: current.visit_id });   // DUP_STOP_V1
         if (!svc) return;
         const who = await pickPerformer(tr('Кто оказывает услугу'), { service_id: svc.id, visit_id: current.visit_id }, { allowNone: true });
         if (!who) return;
@@ -810,7 +824,7 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
             const actions = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' } });
             if (canFix && lineFixable(l)) {
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
-                    const svc = await pickService(tr('Заменить услугу'));
+                    const svc = await pickService(tr('Заменить услугу'), { visitId: row.visit_id, exceptLineId: id });   // DUP_STOP_V1
                     if (!svc) return;
                     if (await runRpc('cashier_line_change_service', { visit_service_id: id, new_service_id: svc.id }, tr('Услуга заменена.'))) await paint();
                 } }, 'Заменить услугу'));
