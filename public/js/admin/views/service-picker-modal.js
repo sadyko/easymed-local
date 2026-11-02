@@ -3310,6 +3310,48 @@ export function openServicePickerModal({
                         for (const m of paidRes.errors) toast(trf('Баланс не списан: {msg}', { msg: m }), 'fail');
                     }
                     invTotal = Number(inv.total_amount || 0);
+                    // INVOICE_APPEND_V1 (ревью M2) — номера очереди строкам ЭТОЙ сметы выдаются
+                    // и тогда, когда строки легли в уже выставленный счёт: прежде их выдавала
+                    // только печать дописанного счёта (receipt-print.js loadInvoiceLines), и
+                    // сбой печати оставлял строки без номера. Бумага дописанного счёта берёт
+                    // эти же номера с сервера (issue_queue_numbers отдаёт выданный номер).
+                    // QUEUE_TICKET_V1 — allocate the queue number for every service
+                    // just registered, ordered by registration time. Numbering happens
+                    // on the server (issue_queue_numbers) so two registrars printing at
+                    // the same instant cannot be handed the same number. One ticket per
+                    // visit_service, so reprinting this invoice reuses the same numbers.
+                    // QUEUE_ONE_PER_VISIT_V1 — services heading to the same destination
+                    // come back sharing one number (all lab tests = one place in line);
+                    // queue_key is carried through so the slip groups them correctly.
+                    // Best-effort: a failure here must never block the invoice.
+                    let queueBlock = [];
+                    try {
+                        const qIds = patientRows.map(r => r.vs && r.vs.id).filter(Boolean);
+                        if (qIds.length) {
+                            const { data: tickets, error: qErr } = await supabase.rpc('issue_queue_numbers', { p_ids: qIds });
+                            if (qErr) {
+                                console.warn('[wizard] queue numbers:', qErr.message || qErr);
+                            } else {
+                                const byVs = new Map((tickets || []).map(t => [t.visit_service_id, t]));
+                                // QUEUE_TICKET_V3 — ONE entry per DESTINATION, not per service.
+                                const byQueue = new Map();
+                                for (const r of patientRows) {
+                                    const t = byVs.get(r.vs && r.vs.id);
+                                    if (!t) continue;
+                                    const key = t.queue_key || ('n' + t.number);
+                                    if (!byQueue.has(key)) {
+                                        byQueue.set(key, { label: t.label || '', number: String(t.number), names: [] });
+                                    }
+                                    byQueue.get(key).names.push(r.a.service?.name || 'Услуга');
+                                }
+                                queueBlock = [...byQueue.values()].map(q => ({
+                                    label:   q.label,
+                                    service: q.names.length === 1 ? q.names[0] : (q.names.length + ' услуг'),   // i18n-exempt: талон очереди — печатный документ
+                                    number:  q.number,
+                                }));
+                            }
+                        }
+                    } catch (e) { console.warn('[wizard] queue numbers:', e && e.message); }
                     // INVOICE_APPEND_V1 — дописанный счёт печатается ЦЕЛИКОМ, из строк
                     // сервера (receipt-print.js, как в мастере визита): бланк ниже
                     // собран из позиций ЭТОГО вызова и разошёлся бы с номером и суммой.
@@ -3327,43 +3369,6 @@ export function openServicePickerModal({
                         const invItems = (bill.data.items || []).map((it, i) => ({
                             name: it.description || 'Услуга', qty: Number(it.quantity || 1), price: Number(it.unit_price || 0), _alt: i % 2 === 1,
                         }));
-                        // QUEUE_TICKET_V1 — allocate the queue number for every service
-                        // just registered, ordered by registration time. Numbering happens
-                        // on the server (issue_queue_numbers) so two registrars printing at
-                        // the same instant cannot be handed the same number. One ticket per
-                        // visit_service, so reprinting this invoice reuses the same numbers.
-                        // QUEUE_ONE_PER_VISIT_V1 — services heading to the same destination
-                        // come back sharing one number (all lab tests = one place in line);
-                        // queue_key is carried through so the slip groups them correctly.
-                        // Best-effort: a failure here must never block the invoice.
-                        let queueBlock = [];
-                        try {
-                            const qIds = patientRows.map(r => r.vs && r.vs.id).filter(Boolean);
-                            if (qIds.length) {
-                                const { data: tickets, error: qErr } = await supabase.rpc('issue_queue_numbers', { p_ids: qIds });
-                                if (qErr) {
-                                    console.warn('[wizard] queue numbers:', qErr.message || qErr);
-                                } else {
-                                    const byVs = new Map((tickets || []).map(t => [t.visit_service_id, t]));
-                                    // QUEUE_TICKET_V3 — ONE entry per DESTINATION, not per service.
-                                    const byQueue = new Map();
-                                    for (const r of patientRows) {
-                                        const t = byVs.get(r.vs && r.vs.id);
-                                        if (!t) continue;
-                                        const key = t.queue_key || ('n' + t.number);
-                                        if (!byQueue.has(key)) {
-                                            byQueue.set(key, { label: t.label || '', number: String(t.number), names: [] });
-                                        }
-                                        byQueue.get(key).names.push(r.a.service?.name || 'Услуга');
-                                    }
-                                    queueBlock = [...byQueue.values()].map(q => ({
-                                        label:   q.label,
-                                        service: q.names.length === 1 ? q.names[0] : (q.names.length + ' услуг'),   // i18n-exempt: талон очереди — печатный документ
-                                        number:  q.number,
-                                    }));
-                                }
-                            }
-                        } catch (e) { console.warn('[wizard] queue numbers:', e && e.message); }
                         const patName = (p.fullName || [p.lastName, p.firstName].filter(Boolean).join(' ') || '—').trim();
                         const paidNow = Number(inv.paid_amount || 0);
                         const invStatus = invTotal === 0 || paidNow >= invTotal ? 'paid' : (paidNow > 0 ? 'partial' : 'unpaid');   // V3120_FIX — код, слово ставит бланк

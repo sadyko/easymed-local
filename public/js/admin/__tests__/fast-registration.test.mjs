@@ -138,6 +138,7 @@ let crmLines = [];
 // CRM_LINK_ALL_V1 (R7a) — запись пациента на сегодня: чем отвечают выборки visits и visit_services.
 let visitRows = [];
 let vsRows = [];
+let sheetTables = {};      // INVOICE_APPEND_V1 (ревью M2) — счёт с сервера для печати дописанного: invoices, invoice_items, patients, payments
 // { table, message, nth? } — отказ вставки. nth — номер вставки В ЭТУ таблицу
 // (1 — первая): цепочка вставляет строки услуг по одной, и «упала ВТОРАЯ» —
 // это отдельный случай, где часть строк уже лежит в базе.
@@ -231,6 +232,7 @@ globalThis.fetch = async (url, opts = {}) => {
       : table === 'referral_sources' ? SOURCES
       : table === 'branches' ? [{ id: 1 }]
       : table === 'service_templates' ? [{ id: 3, name: 'Первичный приём', service_ids: [1, 2] }]
+      : sheetTables[table] ? sheetTables[table]   // INVOICE_APPEND_V1 (ревью M2)
       : [];
     return ok({ data: body && body.single ? (rows[0] || null) : JSON.parse(JSON.stringify(rows)), count: rows.length });
   }
@@ -258,6 +260,7 @@ function reset() {
   visitRows = []; vsRows = [];
   quotes = null; invoiceTotal = 152000; queueTickets = null; holdRpc = null;
   invoiceAppended = false;   // INVOICE_APPEND_V1
+  sheetTables = {};          // INVOICE_APPEND_V1 (ревью M2)
   document.body.children.length = 0;
   // Окна прошлой проверки с экрана сняты — их слушатели Escape тоже.
   for (const k of Object.keys(docListeners)) delete docListeners[k];
@@ -955,6 +958,40 @@ test('INVOICE_APPEND_V1: строки легли в неоплаченный с�
   await tick(40);
   assert.ok(calls.some((c) => c.kind === 'select' && c.table === 'invoices'), 'дописанный счёт печатается не с сервера');
   assert.strictEqual(printed.length, 0, 'напечатан бланк, собранный из строк таблицы');
+  dlg.close();
+});
+
+// INVOICE_APPEND_V1 (ревью M2) — «Печать» дописанного счёта берёт счёт с
+// сервера (receipt-print.js printInvoiceSheetById): номера очереди строк — те
+// же, что выдала регистрация (issue_queue_numbers отдаёт выданный номер), и
+// блок очереди на бумаге есть.
+test('INVOICE_APPEND_V1 (ревью M2): печать дописанного счёта — весь счёт с сервера И блок очереди с номерами строк', async () => {
+  reset();
+  invoiceAppended = true;
+  invoiceTotal = 300000;
+  queueTickets = (ids) => ids.map((id) => ({ visit_service_id: id, queue_key: 'lab:1', label: 'Лаборатория', number: 4 }));
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  dlg.state.addLine(SERVICES[1], null);
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(80);
+  assert.ok(dlg.state.result && dlg.state.result.appended);
+  sheetTables = {
+    invoices: [{ id: 9, invoice_number: 'INV-9', subtotal: 300000, discount_amount: 0, total_amount: 300000, paid_amount: 0, status: 'unpaid', patient_id: 501, payer_id: null, created_at: new Date().toISOString() }],
+    invoice_items: [
+      { id: 61, invoice_id: 9, description: 'Приём терапевта', quantity: 1, unit_price: 260000, total: 260000, discount_amount: 0 },
+      { id: 62, invoice_id: 9, description: 'Общий анализ крови', quantity: 1, unit_price: 40000, total: 40000, discount_amount: 0 },
+    ],
+    patients: [{ id: 501, full_name: 'Иванов Иван', mrn: 'P-501', phone: '' }],
+  };
+  vsRows = [{ id: 901, invoice_item_id: 62, queue_key: 'lab:1', queue_no: 4, services: { name: 'Общий анализ крови' }, doctor_id: null, service_templates: null }];
+  btnByText(dlg.card, 'Печать').click();
+  await tick(60);
+  assert.strictEqual(printed.length, 1, 'дописанный счёт не напечатан');
+  assert.ok(printed[0].includes('INV-9'), 'напечатан не весь счёт с сервера');
+  assert.match(printed[0], /Номер очереди/, 'на бумаге дописанного счёта нет блока очереди');
+  assert.match(printed[0], /Лаборатория/);
   dlg.close();
 });
 

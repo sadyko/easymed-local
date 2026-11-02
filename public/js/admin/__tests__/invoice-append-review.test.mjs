@@ -239,4 +239,27 @@ test('M1: калькулятор платит балансом — счёт НО
     assert.equal(getRpc('deposit_balance')(DB, { patient_id: 3 }, USER).balance, 150000, 'с баланса списано не ровно за ЭКГ');
 });
 
+test('M2: дописанный счёт — номера очереди строкам этой сметы калькулятор выдаёт сам; на бумаге (весь счёт с сервера) — блок очереди', async () => {
+    seed();
+    const before = unpaidLabToday();
+    openCalc();
+    await until(() => addOf('ЭКГ'), 'строка ЭКГ в каталоге');
+    addOf('ЭКГ').click();
+    await saveCalc();
+    await until(() => PRINTED.length > 0, 'счёт напечатан');
+    const call = RPC.find((c) => c.name === 'create_invoice_for_visit');
+    assert.equal(call.body.append, undefined, 'без баланса и карты — обычное дописывание');
+    const inv = DB.prepare('SELECT * FROM invoices ORDER BY id').all();
+    assert.equal(inv.length, 1, 'ЭКГ не дописана в неоплаченный счёт');
+    assert.equal(inv[0].total_amount, 150000);
+    const ecg = DB.prepare('SELECT id, queue_no FROM visit_services WHERE service_id = 23').get();
+    assert.ok(RPC.some((c) => c.name === 'issue_queue_numbers' && JSON.stringify(c.body.p_ids) === JSON.stringify([ecg.id])),
+        'калькулятор не выдал номер строкам своей сметы: ' + JSON.stringify(RPC.filter((c) => c.name === 'issue_queue_numbers').map((c) => c.body)));
+    assert.ok(ecg.queue_no > 0, 'у ЭКГ нет номера очереди');
+    assert.equal(status(before.lab), 'added');
+    const html = PRINTED.join('\n');
+    assert.match(html, /Номера? очереди/, 'на бумаге дописанного счёта нет блока очереди');
+    assert.ok(html.includes(before.inv.invoice_number), 'напечатан не весь счёт с сервера');
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });
