@@ -173,8 +173,9 @@ test('правки вкладки уходят своими полями; амб
   assert.equal(body.inpatient_referral_pct, 0);
   assert.equal(body.inpatient_referral_fixed, 200000);
   // Сцепки нет: амбулаторный список тот же, без записи {pct: 0} ради стационара.
-  assert.deepEqual(body.service_rates.map((r) => r.service_id), [2]);
-  assert.ok(body.service_rates.every((r) => !('inpatient_pct' in r)));
+  // STAFF_EDIT_V1, ревью 1 — нетронутый список не уходит вовсе: запись {pct: 0}
+  // сделала бы его изменённым, и он бы ушёл.
+  assert.ok(!('service_rates' in body), 'амбулаторный список изменился: ' + JSON.stringify(body.service_rates));
 });
 
 test('«Ставка для всех» во вкладке пишет только стационарные ставки отмеченных услуг', async () => {
@@ -185,12 +186,21 @@ test('«Ставка для всех» во вкладке пишет тольк
   await flush();
   const body = await save(card);
   assert.deepEqual(body.inpatient_rates, [{ service_id: 1, pct: 12 }, { service_id: 3, pct: 12 }]);
-  assert.deepEqual(body.service_rates, [{ service_id: 2, pct: 40, branches: [1] }]);
+  // STAFF_EDIT_V1, ревью 1 — амбулаторный список не тронут и потому не уходит.
+  assert.ok(!('service_rates' in body), 'амбулаторный список изменился: ' + JSON.stringify(body.service_rates));
 });
 
+// STAFF_EDIT_V1, ревью 1 — без правок списки ставок не уходят вовсе (их могли
+// переписать окно услуги или «Зарплата врачей», пока карточка была открыта).
+// Правка одной строки отправляет список целиком — и остальные строки в нём
+// такие, какими пришли с сервера (сумма не потеряна при открытии).
 test('ставки переживают открытие и сохранение карточки без правок', async () => {
-  const card = await openTab('Стационар');
-  const body = await save(card);
-  assert.deepEqual(body.inpatient_rates, DOC.inpatient_rates);
+  let card = await openTab('Стационар');
+  let body = await save(card);
+  assert.ok(!('inpatient_rates' in body), 'ставки без правок ушли: ' + JSON.stringify(body.inpatient_rates));
   assert.ok(!('inpatient_referral_pct' in body), 'бонус без правок ушёл (STAFF_EDIT_V1: уходит только изменённое)');
+  card = await openTab('Стационар');
+  type(rateInput(rowOf(card, 'Аппендэктомия')), '21');
+  body = await save(card);
+  assert.deepEqual(body.inpatient_rates, [{ service_id: 1, pct: 21 }, DOC.inpatient_rates[1]]);
 });

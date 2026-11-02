@@ -153,8 +153,9 @@ test('своя ставка сохраняется в строку источн�
   buttonWith(card, 'Сохранить сотрудника').click();
   await flush();
   assert.equal(patches.length, 1, 'карточка сотрудника ушла своим PATCH');
-  // Мёртвая колонка не затирается и не правится: что было, то и уходит.
-  assert.deepStrictEqual(patches[0].body.referral_rates.map((r) => r.pct), [99]);
+  // Мёртвая колонка не затирается и не правится. STAFF_EDIT_V1, ревью 1 —
+  // нетронутый список не уходит вовсе (уходит только изменённое).
+  assert.ok(!('referral_rates' in patches[0].body), 'мёртвая колонка ушла: ' + JSON.stringify(patches[0].body.referral_rates));
   const upd = dbCalls.find((d) => d.table === 'referral_sources' && d.op === 'update');
   assert.ok(upd, 'ставка не записана в источник врача');
   assert.equal(upd.values.reward_mode, 'own');

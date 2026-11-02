@@ -130,16 +130,32 @@ const MONEY_SECTIONS = ['salary', 'services', 'inpatient', 'referral'];
 // процент 150), отказывало всему сохранению сообщением о поле, которого никто
 // не трогал, — хотя меняли телефон. Теперь уходит то, что стало не таким,
 // каким карточка открылась. Свои правила — у частей имени (employeeSaveGaps →
-// sendNames), специальностей (specsAtOpen) и отметки assign_extension; списки
-// ставок уходят целиком, как прежде: сервер переписывает список целиком, а
-// старого неверного значения в них не бывает (их чистил сам сервер, parseRates).
-const OWN_RULE_KEYS = new Set([...NAME_KEYS, 'specialties', 'specialty', 'assign_extension',
-    'service_rates', 'referral_rates', 'inpatient_rates']);
+// sendNames), специальностей (specsAtOpen) и отметки assign_extension.
+// Ревью 1 — списки ставок (service_rates, referral_rates, inpatient_rates)
+// тоже уходят, только если изменились, и тогда — целиком (сервер переписывает
+// список целиком). Прежде они уходили всегда, и это стоило двух ошибок:
+//   • не-администратор с «Цены и проценты», поменявший телефон в СВОЕЙ
+//     карточке, получал отказ всему сохранению «Свою зарплату и ставки меняет
+//     администратор.» (routes/users.js — свои деньги правит администратор);
+//   • списки пишут и окно услуги (rpc/service-save.js), и «Зарплата врачей»
+//     (views/doctor-pay.js): карточка, открытая раньше и сохранённая с одним
+//     телефоном, молча возвращала устаревший список.
+// Сравнение — stableJson: порядок ключей записи ставки зависит от того, как
+// её правили («% / сум» удаляет и добавляет ключи), а смысл — нет.
+const OWN_RULE_KEYS = new Set([...NAME_KEYS, 'specialties', 'specialty', 'assign_extension']);
+function stableJson(v) {
+    if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']';
+    if (v && typeof v === 'object') {
+        return '{' + Object.keys(v).sort().filter((k) => v[k] !== undefined)
+            .map((k) => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
+    }
+    return JSON.stringify(v === undefined ? null : v);
+}
 function sameSent(a, b) {
     if (a === b) return true;
     const blank = (v) => v == null || v === '';
     if (blank(a) || blank(b)) return blank(a) && blank(b);
-    if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b);
+    if (typeof a === 'object' || typeof b === 'object') return stableJson(a) === stableJson(b);
     return String(a) === String(b);
 }
 function changedOnly(payload, opened) {

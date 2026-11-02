@@ -87,9 +87,13 @@ const base = { is_active: true, is_local: true, extra_roles: [], middle_name: ''
   service_rates: [], referral_rates: [], inpatient_rates: [], scheduling_mode: 'schedulable' };
 // Врач со значениями, записанными до нынешних правил: каждое из них сервер
 // отверг бы, если бы карточка прислала его снова.
+// Ревью 1 — со ставками: нетронутые списки не уходят (их могли переписать
+// окно услуги или «Зарплата врачей», пока карточка была открыта).
 const OLD_DOC = { ...base, id: 80, username: 'old.doc', full_name: 'Каримов Анвар', last_name: 'Каримов', first_name: 'Анвар',
   phone: '+998901112233', role: 'doctor', staff_type: 'doctor', is_doctor: true, specialty: 'Терапевт',
-  hire_date: '15.01.2020', doctor_category: 'Высшая', employment_type: 'штат', salary_percent: 150 };
+  hire_date: '15.01.2020', doctor_category: 'Высшая', employment_type: 'штат', salary_percent: 150,
+  service_rates: [{ service_id: 2, pct: 30, branches: [] }], referral_rates: [{ service_id: 2, pct: 5, branches: [] }],
+  inpatient_rates: [{ service_id: 2, pct: 10 }] };
 const ME = { ...base, id: 2, username: 'boss', full_name: 'Петров Пётр', last_name: 'Петров', first_name: 'Пётр',
   phone: '+998901110000', role: 'admin', staff_type: 'admin_staff', is_doctor: false };
 const CHIEF = { ...base, id: 3, username: 'chief', full_name: 'Алиев Бобур', last_name: 'Алиев', first_name: 'Бобур',
@@ -200,11 +204,40 @@ test('уходят только изменённые поля: старая да
   for (const k of ['hire_date', 'doctor_category', 'employment_type', 'salary_percent', 'salary_fixed', 'salary_type', 'staff_type',
     'role', 'custom_role_code', 'is_active', 'extra_roles', 'working_hours', 'branch_id', 'department_id', 'email',
     'scheduling_mode', 'pbx_extension', 'license_number', 'license_expiry_date', 'specialties', 'specialty',
-    'inpatient_referral_pct', 'inpatient_referral_fixed']) {
+    'inpatient_referral_pct', 'inpatient_referral_fixed',
+    // Ревью 1 — списки ставок тоже: нетронутый, но устаревший список вернул бы
+    // ставку, которую тем временем поменяли окно услуги или «Зарплата врачей».
+    'service_rates', 'referral_rates', 'inpatient_rates']) {
     assert.ok(!(k in body), k + ' ушло, хотя его не трогали: ' + JSON.stringify(body[k]));
   }
   assert.equal(body.assign_extension, true, 'отметка новой карточки — всегда');
   assert.ok(!toasts.some((t) => /неверно|Неизвестн/.test(t)), 'посторонний отказ: ' + toasts.join(' | '));
+});
+
+// Ревью 1 — не-администратор с «Сотрудники: Изменение» и «Цены и проценты»
+// правил телефон в СВОЕЙ карточке: карточка слала три списка ставок, и сервер
+// отказывал всему сохранению «Свою зарплату и ставки меняет администратор.».
+test('ревью 1: своя карточка не-администратора с «Цены и проценты» — телефон уходит, ставки и зарплата нет', async () => {
+  const P = await import('../permissions.js');
+  window.easymed.state.user = { id: 4, role: 'nurse', extra_roles: [] };
+  P.setEffectiveFromRole({ name: 'nurse', permissions: { sections: ['settings'], levels: {},
+    grants: { settings: 'view', 'settings.employees': 'edit', 'settings.employees.money': 'edit' } } });
+  try {
+    const card = await openCard('nurse.k');
+    setPhone(card, '+998 90 111 00 09');
+    await save(card);
+    assert.equal(writes.length, 1, 'карточка не ушла на сервер');
+    const body = writes[0].body;
+    assert.equal(writes[0].u, '/api/users/4');
+    assert.ok(body.phone.replace(/\D/g, '').endsWith('901110009'), body.phone);
+    for (const k of ['service_rates', 'referral_rates', 'inpatient_rates', 'salary_type', 'salary_fixed', 'salary_percent',
+      'inpatient_referral_pct', 'inpatient_referral_fixed']) {
+      assert.ok(!(k in body), k + ' ушло — сервер откажет «Свою зарплату и ставки меняет администратор.»');
+    }
+  } finally {
+    P.setFullAccess();
+    window.easymed.state.user = ADMIN_ME;
+  }
 });
 
 // Охрана: роль и своя роль клиники уходят вместе (сервер выводит роль из своей роли).

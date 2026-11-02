@@ -141,12 +141,22 @@ test('запись без процента: поле пустое с подск�
   assert.equal(rateOf(rowOf(card, 'Перевязка')).value, '40');
 });
 
+// STAFF_EDIT_V1, ревью 1 — нетронутый список ставок не уходит вовсе (уходит
+// только изменённое): pct: 0, дописанный при отрисовке вкладки, сделал бы его
+// «изменённым», и он бы ушёл. Дописанный ещё при открытии карточки так не
+// виден (точка отсчёта — уже с ним) — его ловит вторая половина: правка
+// соседней строки отправляет список целиком, и запись «по умолчанию» в нём
+// должна остаться без pct.
 test('сохранение без правок не дописывает pct: 0', async () => {
-  const card = await openTab('Услуги и ставки');
-  const body = await save(card);
+  let card = await openTab('Услуги и ставки');
+  let body = await save(card);
+  assert.ok(!('service_rates' in body), 'ставки без правок ушли: ' + JSON.stringify(body.service_rates));
+  card = await openTab('Услуги и ставки');
+  type(rateOf(rowOf(card, 'Перевязка')), '45');
+  body = await save(card);
   assert.deepEqual(body.service_rates, [
     { service_id: 1, branches: [1] },
-    { service_id: 2, pct: 40, branches: [1] },
+    { service_id: 2, pct: 45, branches: [1] },
   ]);
 });
 

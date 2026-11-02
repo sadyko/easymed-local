@@ -213,7 +213,8 @@ test('«Ставка для всех» в % больше 100 не применя
   assert.ok(toasts.includes(PCT_TOAST), 'нет тоста про 100 %: ' + toasts.join(' | '));
   assert.equal(rateOf(rowOf(card, 'Аппендэктомия')).value, '40', '150 % применилось');
   const body = await savedBody(card);
-  assert.deepEqual(body.service_rates, DOC.service_rates, 'ставки изменились');
+  // STAFF_EDIT_V1, ревью 1 — неизменённый список не уходит вовсе.
+  assert.ok(!('service_rates' in body), 'ставки изменились: ' + JSON.stringify(body.service_rates));
 });
 
 // ---------------------------------------------------------------------------
@@ -262,7 +263,22 @@ test('M2: строка «по умолчанию» — 25 000 → «сум» →
   const inp = rateOf(rowOf(card, 'Перевязка'));
   assert.equal(inp.value, '', 'сумма стала процентом');
   assert.equal(String(inp.attrs.placeholder || ''), '0 % — не задано');   // RATES_HONEST_V1 — «по умолчанию» платит 0 %
+  // STAFF_EDIT_V1, ревью 1 — строка вернулась ровно к тому, с чем карточка
+  // открылась: список не изменился и не уходит (ключ pct сделал бы его другим).
   body = await savedBody(card);
+  assert.ok(!('service_rates' in body), 'список ушёл: ' + JSON.stringify(body.service_rates));
+
+  // Тот же круг плюс правка соседней строки: список уходит целиком, и строка
+  // «по умолчанию» в нём — без ключа pct.
+  card = await openTab('Услуги и ставки');
+  type(rateOf(rowOf(card, 'Перевязка')), '25000');
+  segButton(rowOf(card, 'Перевязка'), 'сум').click();
+  await flush();
+  segButton(rowOf(card, 'Перевязка'), '%').click();
+  await flush();
+  type(rateOf(rowOf(card, 'Аппендэктомия')), '41');
+  body = await savedBody(card);
+  assert.deepEqual(body.service_rates[0], { service_id: 1, pct: 41, branches: [1] });
   assert.deepEqual(body.service_rates[1], { service_id: 2, branches: [1] });
 });
 
@@ -322,8 +338,21 @@ test('«Стационар», строка: 25 000 в «%» → «сум» — �
   segButton(rowOf(card, 'Аппендэктомия'), '%').click();
   await flush();
   assert.equal(inpRateOf(rowOf(card, 'Аппендэктомия')).value, '20', 'сумма стала процентом (или 100 %, или 0)');
+  // STAFF_EDIT_V1, ревью 1 — строка вернулась к прежнему проценту: список не
+  // изменился и не уходит.
   body = await savedBody(card);
-  assert.deepEqual(body.inpatient_rates[0], { service_id: 1, pct: 20 });
+  assert.ok(!('inpatient_rates' in body), 'список ушёл: ' + JSON.stringify(body.inpatient_rates));
+
+  // Тот же круг плюс правка соседней строки: список уходит целиком, строка — с прежним процентом.
+  card = await openTab('Стационар');
+  type(inpRateOf(rowOf(card, 'Аппендэктомия')), '25000');
+  segButton(rowOf(card, 'Аппендэктомия'), 'сум').click();
+  await flush();
+  segButton(rowOf(card, 'Аппендэктомия'), '%').click();
+  await flush();
+  type(inpRateOf(rowOf(card, 'Холецистэктомия')), '71000');
+  body = await savedBody(card);
+  assert.deepEqual(body.inpatient_rates, [{ service_id: 1, pct: 20 }, { service_id: 3, fix: 71000 }]);
 });
 
 test('«Стационар», строка сум→%: до 100 переносится, больше 100 — нет', async () => {
@@ -367,7 +396,8 @@ test('«Стационар», «Ставка для всех»: «Примени
   await flush();
   assert.ok(toasts.includes(PCT_TOAST), 'нет тоста про 100 %: ' + toasts.join(' | '));
   const body = await savedBody(card);
-  assert.deepEqual(body.inpatient_rates, DOC.inpatient_rates);
+  // STAFF_EDIT_V1, ревью 1 — неизменённый список не уходит вовсе.
+  assert.ok(!('inpatient_rates' in body), 'ставки изменились: ' + JSON.stringify(body.inpatient_rates));
 });
 
 test('«Стационар»: процент больше 100 — отказ сохранения и открытая вкладка «Стационар»', async () => {
