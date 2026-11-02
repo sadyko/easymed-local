@@ -10,7 +10,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field, checkField, Ring, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { openEmployeePasswordModal, openChangeOwnPasswordModal } from '../password-change.js';   // PASSWORD_CHANGE_V2
+import { openEmployeePasswordModal, openChangeOwnPasswordModal, INACTIVE_PASSWORD_WARNING } from '../password-change.js';   // PASSWORD_CHANGE_V2 · STAFF_EDIT_V1 — предупреждение отключённому
 import { selfUserId, settingsTileLevel, settingsMoneyAllowed, actorIsAdmin, hasRestriction, actorRoleCodes } from '../permissions.js';   // PASSWORD_CHANGE_V2 — своя карточка меняет пароль через текущий · ADMIN_ROWS_GRANTABLE_V1
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
@@ -1263,7 +1263,8 @@ function openEditor(user, root) {
 
         saveBtn.disabled = true; const prev = saveBtn.textContent; saveBtn.textContent = tr('Сохранение…');
         try {
-            if (isEdit) await api('/' + user.id, { method: 'PATCH', body: JSON.stringify(payload) });
+            let saved = null;   // STAFF_EDIT_V1 — ответ PATCH: password_inactive
+            if (isEdit) saved = await api('/' + user.id, { method: 'PATCH', body: JSON.stringify(payload) });
             else await api('', { method: 'POST', body: JSON.stringify({ ...payload, username: emp.username.trim() }) });
             // REPORTS_V2 — ставка за направления лежит на источнике врача, а не в
             // карточке: пишется своей попыткой, и её отказ не выдаётся за неудачу
@@ -1272,7 +1273,10 @@ function openEditor(user, root) {
                 const err = await saveReferralReward(user.id, emp.referralReward);
                 if (err) toast(trf('Сотрудник сохранён, но ставка за направления — нет: {msg}', { msg: err }), 'fail');
             }
-            toast('Сотрудник сохранён', 'ok'); close(); await paint(root);
+            // STAFF_EDIT_V1 — пароль поставлен, а сотрудник отключён: сказать, что он не войдёт.
+            if (saved && saved.password_inactive) toast(INACTIVE_PASSWORD_WARNING, 'warn');
+            else toast('Сотрудник сохранён', 'ok');
+            close(); await paint(root);
         } catch (e) {
             saveBtn.disabled = false; saveBtn.textContent = prev;
             // STAFF_EDIT_V1 — отказ логину (занят, неверный, подключены филиалы) — под полем «Логин».

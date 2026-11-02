@@ -325,3 +325,41 @@ test('«Врачи» на карточке администратора: рол�
   assert.equal(body.staff_type, 'doctor');
   assert.ok(!('role' in body), 'роль ушла — администратор перестал бы быть администратором: ' + body.role);
 });
+
+test('окно «Сменить пароль»: отключённому — предупреждение «включите «Активен»», включённому — как прежде', async () => {
+  document.body.children.length = 0;
+  writes.length = 0;
+  toasts.length = 0;
+  nextAnswer = { status: 200, json: { user: {}, password_inactive: true } };
+  openEmployeePasswordModal({ id: 4 });
+  let modal = topModal();
+  for (const inp of tags(modal, 'input')) inp.value = '1';
+  buttonWith(modal, 'Сохранить').click();
+  await flush();
+  assert.equal(writes.at(-1).u, '/api/users/4');
+  assert.ok(toasts.includes(INACTIVE_MSG), 'нет предупреждения: ' + toasts.join(' | '));
+  assert.equal(toastEl.dataset.kind, 'warn');
+
+  openEmployeePasswordModal({ id: 4 });
+  modal = topModal();
+  for (const inp of tags(modal, 'input')) inp.value = '2';
+  buttonWith(modal, 'Сохранить').click();
+  await flush();
+  assert.equal(toasts.at(-1), 'Пароль сотрудника изменён.');
+  assert.equal(toastEl.dataset.kind, 'ok');
+});
+
+test('карточка: пароль и снятый «Активен» в одном сохранении — предупреждение вместо «сохранён»', async () => {
+  const card = await openCard('nurse.k');
+  await tab(card, 'Вход и доступ');
+  type(passwordInputs(card)[0], '1');
+  const active = activeCheckbox(card);
+  active.checked = false;
+  active.dispatchEvent({ type: 'change' });
+  nextAnswer = { status: 200, json: { user: {}, password_inactive: true } };
+  await save(card);
+  assert.equal(writes.length, 1);
+  assert.deepEqual([writes[0].body.password, writes[0].body.is_active], ['1', false]);
+  assert.ok(toasts.includes(INACTIVE_MSG), 'нет предупреждения: ' + toasts.join(' | '));
+  assert.ok(!toasts.includes('Сотрудник сохранён'), 'сказали «сохранён» вместо предупреждения');
+});

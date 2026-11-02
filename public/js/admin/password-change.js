@@ -30,6 +30,9 @@ import { tr, trf } from './i18n.js';
 /** Самый короткий допустимый пароль — решение владельца. */
 export const MIN_PASSWORD_LENGTH = 1;
 
+/** STAFF_EDIT_V1 — пароль поставлен отключённому сотруднику (ответ сервера password_inactive): войти он не сможет. */
+export const INACTIVE_PASSWORD_WARNING = 'Пароль изменён, но сотрудник отключён — включите «Активен», иначе он не войдёт.';
+
 /**
  * Что не так с введённым, ещё до запроса. null — можно отправлять.
  * Пробел — тоже символ: сервер принимает и его, и экран не строже сервера.
@@ -66,7 +69,7 @@ async function send(url, method, body) {
         return { error: 'Нет связи с сервером.' };
     }
     const json = await res.json().catch(() => ({}));
-    if (res.ok) return { ok: true };
+    if (res.ok) return { ok: true, inactive: !!(json && json.password_inactive) };   // STAFF_EDIT_V1
     const err = (json && json.error) || {};
     return { error: describePasswordError(res.status, err.code, err.message) };
 }
@@ -122,7 +125,9 @@ function openPasswordModal({ note, askCurrent, submit, done }) {
             const res = await submit(current, passInp.value);
             if (res.error) { errEl.textContent = tr(res.error); return; }
             close();
-            toast(done, 'ok');
+            // STAFF_EDIT_V1 — сотрудник отключён: «Пароль изменён» умолчало бы о главном.
+            if (res.inactive) toast(INACTIVE_PASSWORD_WARNING, 'warn');
+            else toast(done, 'ok');
         } finally {
             saveBtn.disabled = false;
         }
