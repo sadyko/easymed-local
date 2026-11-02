@@ -325,6 +325,43 @@ test('незавершённые прошлых дней — внизу «Акт
   assert.ok(!visibleNames(again).includes('Юсупов Акмал'));
 });
 
+// Ревью m3 — «Активные», где сегодняшняя работа сделана, а остались только незавершённые
+// прошлых дней: была одна свёрнутая группа без слов, а «Показано N» считало и спрятанные строки.
+const svcBody = (root) => walk(root).find((n) => n.attrs && n.attrs.id === 'svc-body');
+const shownCount = (root) => textOf(walk(root).find((n) => n.attrs && n.attrs.id === 'svc-count')).trim();
+const EMPTY_ACTIVE = 'Активных приёмов нет. Осмотренные — в фильтре «Завершённые».';
+
+test('«Активные» только с незавершёнными прошлых дней — подсказка над группой; «Показано» — без строк группы', async (t) => {
+  ROWS = [vs('c9', 'completed', 'Бакиев', 'Санжар'), vs('o9', 'queued', 'Юсупов', 'Акмал', dayAt(-1))];
+  t.after(reseed);
+  const root = await openWork();
+  assert.deepStrictEqual(visibleNames(root), [], 'вчерашняя строка — не в группе');
+  assert.ok(pastToggle(root), 'группы «Незавершённые с прошлых дней» нет');
+  const kids = svcBody(root).children;
+  const hintAt = kids.findIndex((n) => hasClass(n, 'empty') && textOf(n).includes(EMPTY_ACTIVE));
+  const tableAt = kids.findIndex((n) => n.tagName === 'TABLE');
+  assert.ok(hintAt > -1, 'нет подсказки «Активных приёмов нет…»: ' + textOf(svcBody(root)));
+  assert.ok(hintAt < tableAt, 'подсказка — не над группой');
+  assert.strictEqual(shownCount(root), '0', '«Показано» считает строки свёрнутой группы');
+  // Сегодня ничего не осмотрено — подсказка про «Завершённые» вела бы в пустой фильтр,
+  // а «Нет записей за период» — неправда: строки есть в группе. Остаётся одна группа.
+  ROWS = [vs('o9', 'queued', 'Юсупов', 'Акмал', dayAt(-1))];
+  const bare = await openWork();
+  assert.ok(pastToggle(bare));
+  assert.ok(!byClass(bare, 'empty').length, 'подсказка без осмотренных: ' + byClass(bare, 'empty').map(textOf).join(' | '));
+});
+
+test('«Показано N» в «Активных» — строки основной части, без группы прошлых дней (раскрыта она или нет)', async (t) => {
+  ROWS = [...BASE.map((r) => ({ ...r })), vs('o1', 'queued', 'Юсупов', 'Акмал', dayAt(-1)), vs('o2', 'in_progress', 'Хасанова', 'Лола', dayAt(-3))];
+  t.after(reseed);
+  const root = await openWork();
+  assert.strictEqual(shownCount(root), '3', '«Показано» считает и свёрнутую группу');
+  pastToggle(root).click();
+  assert.strictEqual(shownCount(root), '3', 'у группы своё число в заголовке');
+  pickStatus(root, 'all');
+  assert.strictEqual(shownCount(root), '6', '«Все статусы» — все строки');
+});
+
 test('isPastOpen / splitPastOpen: рабочая строка визита раньше сегодняшнего МЕСТНОГО дня; группа — только в «Активных»', () => {
   const now = new Date(2026, 10, 2, 10, 0);
   const at = (y, m, d, hh, mm = 0) => new Date(y, m, d, hh, mm).toISOString();

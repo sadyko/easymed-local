@@ -1093,8 +1093,14 @@ function paintBody() {
     const body = containerRef.querySelector('#svc-body');
     if (!body) return;
     const filtered = filterRows();
+    // QUEUE_FRESH_V1 — незавершённые прошлых дней — внизу «Активных» свёрнутой группой.
+    // Календарь показывает все отобранные строки — без группы.
+    const { main, past } = state.view === 'calendar' ? { main: filtered, past: [] } : splitPastOpen(filtered, state.statusFilter);
+    // QUEUE_FRESH_V1 (ревью m3) — «Показано N» считает строки ОСНОВНОЙ части списка. Строки
+    // группы «Незавершённые с прошлых дней · N» в него не входят — ни свёрнутой, ни
+    // раскрытой: у группы своё число в заголовке. Вне «Активных» группы нет — считается всё.
     const countEl = containerRef.querySelector('#svc-count');
-    if (countEl) countEl.textContent = String(filtered.length);
+    if (countEl) countEl.textContent = String(main.length);
 
     clear(body);
 
@@ -1110,18 +1116,24 @@ function paintBody() {
 
     if (state.view === 'calendar') { body.appendChild(calendarView(filtered)); return; }
 
+    // CABINET_ACTIVE_FIRST_V1 — пустые «Активные» в конце дня — не «записей
+    // нет»: осмотренные есть, они в соседнем фильтре, и экран говорит где.
+    const seenHint = state.statusFilter === 'active' && !(state.search || '').trim()
+        && state.rows.some(r => r.status === 'completed' && inDateRange(r.visitDate));
     if (filtered.length === 0) {
-        // CABINET_ACTIVE_FIRST_V1 — пустые «Активные» в конце дня — не «записей
-        // нет»: осмотренные есть, они в соседнем фильтре, и экран говорит где.
         body.appendChild(h('div', { class: 'empty', style: { padding: '40px 20px' } },
-            state.statusFilter === 'active' && !(state.search || '').trim()
-                && state.rows.some(r => r.status === 'completed' && inDateRange(r.visitDate))
-                ? 'Активных приёмов нет. Осмотренные — в фильтре «Завершённые».'
+            seenHint ? 'Активных приёмов нет. Осмотренные — в фильтре «Завершённые».'
                 : 'Нет записей на приём за выбранный период.'));
         return;
     }
-    // QUEUE_FRESH_V1 — незавершённые прошлых дней — внизу «Активных» свёрнутой группой.
-    const { main, past } = splitPastOpen(filtered, state.statusFilter);
+    // QUEUE_FRESH_V1 (ревью m3) — сегодняшняя работа сделана, остались только незавершённые
+    // прошлых дней: над группой — та же подсказка, что у пустых «Активных». Осмотренных нет —
+    // подсказки нет: она вела бы в пустой фильтр, а «Нет записей за период» — неправда (строки
+    // в группе); остаётся одна группа со своим заголовком.
+    if (!main.length && past.length && seenHint) {
+        body.appendChild(h('div', { class: 'empty', style: { padding: '24px 20px 12px' } },
+            'Активных приёмов нет. Осмотренные — в фильтре «Завершённые».'));
+    }
     body.appendChild(listView(main, past));
 }
 
