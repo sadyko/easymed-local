@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { hashPassword, validPassword } from '../services/auth.js';
+import { hashPassword, validPassword, clearLoginLocks } from '../services/auth.js';   // STAFF_EDIT_V1 — clearLoginLocks
 import { VALID_ROLES, PRIMARY_ROLES } from '../services/roles.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { isAdminUser, grantAllowsAdminOr } from '../services/grants.js';   // ADMIN_ROWS_GRANTABLE_V1
@@ -874,8 +874,15 @@ export function userRoutes(db) {
     if (active === false || password !== undefined) {
       db.prepare('DELETE FROM sessions WHERE user_id = ? AND id <> ?').run(user.id, req.sessionId ?? '');
     }
-    const outView = withSpecialties(db, employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)));
-    res.json({ user: employeeMoneyAllowed(db, req.user) ? outView : stripMoney(outView) });
+    // STAFF_EDIT_V1 — новый пароль снимает блокировку входа (5 ошибок → 5 минут,
+    // services/auth.js): сотрудник, забывший пароль, входит с новым сразу.
+    if (password !== undefined) clearLoginLocks(user.username);
+    const outRow = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+    const outView = withSpecialties(db, employeeView(outRow));
+    // STAFF_EDIT_V1 — пароль поставлен, а сотрудник отключён: войти он не сможет,
+    // и экран обязан сказать это, а не «Пароль изменён».
+    const inactive = password !== undefined && !outRow.is_active ? { password_inactive: true } : {};
+    res.json({ user: employeeMoneyAllowed(db, req.user) ? outView : stripMoney(outView), ...inactive });
   });
 
   // STAFF_DELETE_V1 — what removing this employee would do, without doing it.
