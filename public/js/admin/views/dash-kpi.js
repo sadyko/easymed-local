@@ -54,8 +54,27 @@ export function kpiTile({ icon, accent, label, value, meta, split, valueWarn, on
  * чем нечитаемые графики. Без измеримого окна (тесты) не делает ничего.
  */
 const bound = typeof WeakSet === 'function' ? new WeakSet() : null;
+// QUEUE_FRESH_V1 (ревью-2) — повешенные слушатели: [{ el, onResize }]. Слушатель снимал
+// себя только при resize, а кабинет врача зовёт fitViewport на КАЖДОЙ перерисовке «Мои
+// приёмы» (новый корень): 50 перерисовок без resize — 50 слушателей окна, 49 держали снятые
+// экраны. Теперь каждый вызов сначала снимает слушателей тех экранов, что уже не на странице.
+const resizeBound = [];
+function unbindResize(entry) {
+    const i = resizeBound.indexOf(entry);
+    if (i > -1) resizeBound.splice(i, 1);
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('resize', entry.onResize);
+    }
+    if (bound) bound.delete(entry.el);
+}
+function sweepDetached() {
+    for (const entry of resizeBound.slice()) {
+        if (entry.el.isConnected === false) unbindResize(entry);
+    }
+}
 export function fitViewport(el, { min = 540, gap = 24 } = {}) {
     if (!el || typeof window === 'undefined' || !el.getBoundingClientRect || !window.innerHeight) return;
+    sweepDetached();   // QUEUE_FRESH_V1 (ревью-2) — снятые экраны не копят слушателей окна
     const apply = () => {
         if (el.isConnected === false) return;
         const top = el.getBoundingClientRect().top || 0;
@@ -67,14 +86,12 @@ export function fitViewport(el, { min = 540, gap = 24 } = {}) {
         // QUEUE_FRESH_V1 (ревью m7) — экран, снятый со страницы (перерисовка clear(root),
         // вытеснение панели из кэша), не держится слушателем окна: слушатель снимает себя
         // сам. Вернётся элемент на страницу — следующий fitViewport повесит его заново.
-        const onResize = () => {
-            if (el.isConnected === false) {
-                if (typeof window.removeEventListener === 'function') window.removeEventListener('resize', onResize);
-                bound.delete(el);
-                return;
-            }
+        const entry = { el, onResize: null };
+        entry.onResize = () => {
+            if (el.isConnected === false) { unbindResize(entry); return; }
             apply();
         };
-        window.addEventListener('resize', onResize);
+        resizeBound.push(entry);
+        window.addEventListener('resize', entry.onResize);
     }
 }

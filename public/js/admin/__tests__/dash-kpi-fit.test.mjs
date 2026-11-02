@@ -62,3 +62,28 @@ test('страница, снова поставленная на место, п�
     assert.equal(p.style.height, '926px');
     window.innerHeight = 800;
 });
+
+// QUEUE_FRESH_V1 (ревью-2) — слушатель снимал себя ТОЛЬКО при resize. Кабинет врача зовёт
+// fitViewport на каждой перерисовке «Мои приёмы» (новый корень), и 50 перерисовок без
+// единого resize оставляли 50 слушателей окна — 49 из них держали снятые экраны.
+test('50 перерисовок без resize — у окна не больше двух слушателей, снятые экраны не держатся', () => {
+    LISTENERS.resize.clear();
+    const all = [];
+    for (let i = 0; i < 50; i++) {
+        if (all.length) all[all.length - 1].isConnected = false;   // clear(root): прежний корень снят до новой подгонки
+        const p = page();
+        all.push(p);
+        fitViewport(p, { min: 520 });
+    }
+    assert.ok(LISTENERS.resize.size <= 2, 'слушателей окна после 50 перерисовок: ' + LISTENERS.resize.size);
+    const live = all[all.length - 1];
+    window.innerHeight = 900;
+    resize();
+    assert.equal(live.style.height, '776px', 'живой экран не подогнался под новое окно');
+    // Снятый без resize экран, вернувшийся на место, снова получает слушателя.
+    all[10].isConnected = true;
+    const before = LISTENERS.resize.size;
+    fitViewport(all[10], { min: 520 });
+    assert.equal(LISTENERS.resize.size, before + 1, 'вернувшийся экран остался без слушателя');
+    window.innerHeight = 800;
+});
