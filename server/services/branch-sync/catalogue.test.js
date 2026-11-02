@@ -656,6 +656,41 @@ test('человек входит в системе второго здания 
   main.close(); branch.close();
 });
 
+// STAFF_EDIT_V1 (ревью 3) — пароль едет в филиал хешем, а блокировка входа
+// (5 ошибок → 5 минут, services/auth.js) у каждой установки своя. Сброс пароля
+// на главной снимал блокировку только там: в филиале сотрудник с новым
+// паролем ещё 5 минут получал «Слишком много попыток». Приехавший новый хеш —
+// та же установка пароля: блокировка этого логина в филиале снимается. Новый
+// сотрудник — тоже (ошибки под логином, которого ещё не было). Без смены
+// пароля и в холостом прогоне блокировка остаётся.
+// Карта блокировок — одна на процесс: у теста свои адреса.
+test('новый пароль из главной клиники снимает блокировку входа в филиале (STAFF_EDIT_V1, ревью 3)', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+  const ip = { ip: '10.3.3.3' };
+  const lockOut = (name) => { for (let i = 0; i < 5; i += 1) login(branch, name, 'nevernyi', ip); };
+  lockOut('ivanov');
+  lockOut('glavvrach');
+  lockOut('novyi.vrach');
+  assert.equal(login(branch, 'ivanov', 'sekret12345', ip).error, 'locked');
+
+  main.prepare("UPDATE users SET password_hash = ? WHERE username = 'ivanov'").run(hashPassword('novyi-parol1'));
+  main.prepare("UPDATE users SET phone = '+998907770000' WHERE username = 'glavvrach'").run();
+  main.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('novyi.vrach', ?, 'Новый Врач', 'doctor')")
+    .run(hashPassword('vrach-parol1'));
+  const cat = exportCatalogue(main);
+  applyCatalogue(branch, cat, { dryRun: true });
+  assert.equal(login(branch, 'ivanov', 'novyi-parol1', ip).error, 'locked', 'холостой прогон снял блокировку');
+  apply(branch, cat);
+
+  assert.ok(login(branch, 'ivanov', 'novyi-parol1', ip).session, 'новый пароль из главной не впустили — блокировка пережила его');
+  assert.ok(login(branch, 'novyi.vrach', 'vrach-parol1', ip).session, 'нового сотрудника заперли чужие ошибки');
+  assert.equal(branch.prepare("SELECT phone FROM users WHERE username = 'glavvrach'").get().phone, '+998907770000');
+  assert.equal(login(branch, 'glavvrach', 'adminpass1', ip).error, 'locked', 'блокировку сняла правка без нового пароля');
+  main.close(); branch.close();
+});
+
 test('смена фамилии и роли в главной клинике доезжает до филиала', () => {
   const main = seedStaff(seedMain(fresh()));
   const branch = staffReceiver();

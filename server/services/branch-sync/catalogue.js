@@ -23,6 +23,9 @@
 
 import { normName } from '../../../public/js/admin/service-editor-logic.js';
 import { BRANCH_SYNC_COLUMNS, syncableBranchValue, overlayOwnBuilding } from '../../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
+// STAFF_EDIT_V1 (ревью 3) — приехавший пароль снимает блокировку входа. Кольца
+// нет: services/auth.js и то, что он импортирует, этот файл не импортируют.
+import { clearLoginLocks } from '../auth.js';
 
 // Колонки doc_settings, которые описывают КЛИНИКУ, а не ЗДАНИЕ.
 //
@@ -785,6 +788,15 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
   // настоящим, если он куда-то просочится.
   let fakeId = -1;
 
+  // STAFF_EDIT_V1 (ревью 3) — ЛОГИНЫ, КОТОРЫМ ПРИЕХАЛ ПАРОЛЬ. Пароль едет хешем
+  // (password_hash ниже), а блокировка входа (5 ошибок → 5 минут,
+  // services/auth.js) у каждой установки своя, в памяти процесса. Сброс пароля
+  // на главной снимал её только там: в филиале сотрудник с новым паролем ещё
+  // 5 минут получал «Слишком много попыток». Приехавший новый хеш (и новый
+  // сотрудник) — та же установка пароля, что PATCH /api/users. Снимается в
+  // конце приёма: строка, упавшая на середине, откатит всё — и снимать нечего.
+  const passwordSetFor = [];
+
   const insertMap = db.prepare(
     'INSERT INTO branch_sync_map (table_name, remote_id, local_id) VALUES (?, ?, ?) '
     + 'ON CONFLICT(table_name, remote_id) DO UPDATE SET local_id = excluded.local_id, '
@@ -951,6 +963,7 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
           const info = db.prepare(`INSERT INTO "${spec.name}" (${cols}) VALUES (${qs})`)
             .run(...insVals);
           remember(spec.name, remote.id, Number(info.lastInsertRowid));
+          if (spec.name === 'users' && present.includes('password_hash')) passwordSetFor.push(values.username);   // ревью 3
         }
         continue;
       }
@@ -964,6 +977,10 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
           const sets = changedCols.map((c) => `"${c}" = ?`).join(', ');
           db.prepare(`UPDATE "${spec.name}" SET ${sets} WHERE id = ?`)
             .run(...changedCols.map((c) => values[c]), localId);
+          // ревью 3 — новый пароль: логин после этой правки (едет рядом или прежний).
+          if (spec.name === 'users' && changedCols.includes('password_hash')) {
+            passwordSetFor.push('username' in values ? values.username : localRow && localRow.username);
+          }
         }
       }
     }
@@ -1031,6 +1048,9 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
       }
     }
   }
+
+  // STAFF_EDIT_V1 (ревью 3) — приехавший пароль снимает блокировку входа (см. passwordSetFor).
+  for (const name of passwordSetFor) clearLoginLocks(name);
 
   return summary;
 }
