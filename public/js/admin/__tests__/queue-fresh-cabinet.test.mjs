@@ -331,7 +331,7 @@ const svcBody = (root) => walk(root).find((n) => n.attrs && n.attrs.id === 'svc-
 const shownCount = (root) => textOf(walk(root).find((n) => n.attrs && n.attrs.id === 'svc-count')).trim();
 const EMPTY_ACTIVE = 'Активных приёмов нет. Осмотренные — в фильтре «Завершённые».';
 
-test('«Активные» только с незавершёнными прошлых дней — подсказка над группой; «Показано» — без строк группы', async (t) => {
+test('«Активные» только с незавершёнными прошлых дней — подсказка над группой; «Показано» — без строк свёрнутой группы', async (t) => {
   ROWS = [vs('c9', 'completed', 'Бакиев', 'Санжар'), vs('o9', 'queued', 'Юсупов', 'Акмал', dayAt(-1))];
   t.after(reseed);
   const root = await openWork();
@@ -343,6 +343,8 @@ test('«Активные» только с незавершёнными прош
   assert.ok(hintAt > -1, 'нет подсказки «Активных приёмов нет…»: ' + textOf(svcBody(root)));
   assert.ok(hintAt < tableAt, 'подсказка — не над группой');
   assert.strictEqual(shownCount(root), '0', '«Показано» считает строки свёрнутой группы');
+  pastToggle(root).click();
+  assert.strictEqual(shownCount(root), '1', 'раскрытая группа — строки на экране, «Показано» их не считает');   // ревью-2
   // Сегодня ничего не осмотрено — подсказка про «Завершённые» вела бы в пустой фильтр,
   // а «Нет записей за период» — неправда: строки есть в группе. Остаётся одна группа.
   ROWS = [vs('o9', 'queued', 'Юсупов', 'Акмал', dayAt(-1))];
@@ -351,13 +353,17 @@ test('«Активные» только с незавершёнными прош
   assert.ok(!byClass(bare, 'empty').length, 'подсказка без осмотренных: ' + byClass(bare, 'empty').map(textOf).join(' | '));
 });
 
-test('«Показано N» в «Активных» — строки основной части, без группы прошлых дней (раскрыта она или нет)', async (t) => {
+// Ревью-2 — «Показано N» считает ВИДИМЫЕ строки: свёрнутая группа прошлых дней в число не
+// входит, раскрытая — входит (её строки на экране). Раньше раскрытая группа не считалась.
+test('«Показано N» в «Активных» — видимые строки: свёрнутая группа прошлых дней не считается, раскрытая — считается', async (t) => {
   ROWS = [...BASE.map((r) => ({ ...r })), vs('o1', 'queued', 'Юсупов', 'Акмал', dayAt(-1)), vs('o2', 'in_progress', 'Хасанова', 'Лола', dayAt(-3))];
   t.after(reseed);
   const root = await openWork();
   assert.strictEqual(shownCount(root), '3', '«Показано» считает и свёрнутую группу');
   pastToggle(root).click();
-  assert.strictEqual(shownCount(root), '3', 'у группы своё число в заголовке');
+  assert.strictEqual(shownCount(root), '5', 'раскрытая группа на экране, а «Показано» её не считает');
+  pastToggle(root).click();
+  assert.strictEqual(shownCount(root), '3', 'свёрнутая снова группа осталась в «Показано»');
   pickStatus(root, 'all');
   assert.strictEqual(shownCount(root), '6', '«Все статусы» — все строки');
 });

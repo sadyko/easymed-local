@@ -1096,11 +1096,12 @@ function paintBody() {
     // QUEUE_FRESH_V1 — незавершённые прошлых дней — внизу «Активных» свёрнутой группой.
     // Календарь показывает все отобранные строки — без группы.
     const { main, past } = state.view === 'calendar' ? { main: filtered, past: [] } : splitPastOpen(filtered, state.statusFilter);
-    // QUEUE_FRESH_V1 (ревью m3) — «Показано N» считает строки ОСНОВНОЙ части списка. Строки
-    // группы «Незавершённые с прошлых дней · N» в него не входят — ни свёрнутой, ни
-    // раскрытой: у группы своё число в заголовке. Вне «Активных» группы нет — считается всё.
+    // QUEUE_FRESH_V1 (ревью m3) — «Показано N» считает строки, ВИДНЫЕ в списке. Строки
+    // свёрнутой группы «Незавершённые с прошлых дней · N» в него не входят (у группы своё
+    // число в заголовке). Ревью-2: раскрытая группа — её строки на экране, и они входят в
+    // «Показано». Вне «Активных» группы нет — считается всё.
     const countEl = containerRef.querySelector('#svc-count');
-    if (countEl) countEl.textContent = String(main.length);
+    if (countEl) countEl.textContent = String(main.length + (state.pastOpen ? past.length : 0));
 
     clear(body);
 
