@@ -3678,6 +3678,8 @@ const BOOK_ERROR_TEMPLATES = {
     day_visit_busy: 'У пациента на этот день уже есть визит ({start}, врач {doctor}), и по нему уже идёт работа. Второй визит на день не заводится — добавьте услугу в этот визит.',
     // REPEAT_VISIT_V1 (поправка 2) — визит дня — пустая запись к другому врачу: работы нет.
     day_visit_other_doctor: 'У пациента в этот день уже есть запись к {doctor} в {start}. Перенесите её или выберите другой день.',
+    // REPEAT_VISIT_V1 — повторный визит кабинета: день занят — только отказ, без «добавить в этот визит».
+    revisit_day_taken: 'У пациента в этот день уже есть приём в {start} у {doctor} — выберите другой день или время.',
 };
 export function bookErrorText(error) {
     const tpl = error && error.code ? BOOK_ERROR_TEMPLATES[error.code] : null;

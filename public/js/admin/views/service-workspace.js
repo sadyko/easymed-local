@@ -44,7 +44,7 @@ import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug1
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
-import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
+import { consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1 · REPEAT_VISIT_V1 — цену строки повторного визита считает сервер
 import { sanitizeStoredHtml, richHasContent, textBreaks, textIsBlank } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком · PRINT_SKIP_EMPTY_V1 — пустота поля рецепта
 import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText, docDayText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
 import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark, gapCaret, edgeHop, breakLines, keepMarks, clearSplitIds } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
@@ -1467,7 +1467,17 @@ async function openRevisitModal(ctx) {
         consultTypes = (ctData || []).filter((ct) => consultOffered(ct, docConsult[ct.id] || null));
     }
     const consultLabel = (ct) => { const r = docConsult[ct.id]; return (r && (r.name_ru || r.name_uz)) || ct.name_ru || ct.name_uz || 'Консультация'; };
-    const consultPrice = (ct) => consultPriceRule(ct, docConsult[ct.id] || null).price;   // DOCTOR_PROFILE_V1 — правило кассы
+    // REPEAT_VISIT_V1 — у врача нет видов консультаций: строкой визита идёт
+    // услуга каталога типа «Консультация» (значение 's:<id>'); цену по дню
+    // визита считает сервер. Нет и таких — визит записывается без строки.
+    let rvServices = [];
+    if (!consultTypes.length) {
+        const { data: sData } = await supabase.from('services')
+            .select('id, name, duration_minutes').eq('type', 'consultation').eq('active', true)
+            .order('name', { ascending: true }).limit(50);
+        rvServices = sData || [];
+    }
+    const rvService = (v) => rvServices.find((s) => 's:' + s.id === String(v)) || null;
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '140' } });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
@@ -1479,10 +1489,17 @@ async function openRevisitModal(ctx) {
     const svcSel = h('select', null,
         ...(consultTypes.length
             ? consultTypes.map(ct => h('option', { value: ct.id }, consultLabel(ct)))
-            : [h('option', { value: '' }, 'Консультация')]));
+            : rvServices.length   // REPEAT_VISIT_V1
+                ? rvServices.map(s => h('option', { value: 's:' + s.id }, s.name))
+                : [h('option', { value: '' }, 'Консультация')]));
     const commentInput = h('textarea', { rows: '2', placeholder: 'Например: с результатами анализов' });
     // DOCTOR_PROFILE_V1 (ревью шага 5, №1) — сколько длится визит выбранного вида.
-    const rvMinutes = () => { const ct = consultTypes.find((c) => String(c.id) === String(svcSel.value)); return ct ? consultMinutes(ct) : RV_SLOT_MIN; };
+    const rvMinutes = () => {
+        const ct = consultTypes.find((c) => String(c.id) === String(svcSel.value));
+        if (ct) return consultMinutes(ct);
+        const s = rvService(svcSel.value);   // REPEAT_VISIT_V1 — длительность услуги каталога
+        return (s && Number(s.duration_minutes) > 0) ? Number(s.duration_minutes) : RV_SLOT_MIN;
+    };
 
     // --- calendar state ---
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -1491,6 +1508,10 @@ async function openRevisitModal(ctx) {
     const slotsWrap = h('div', { class: 'rv-slots-wrap' });
     const calWrap   = h('div', { class: 'rv-cal' });
     const footSel   = h('div', { class: 'rv-foot-sel muted' }, 'Слот не выбран');
+    // REPEAT_VISIT_V1 — отказ сервера («в этот день уже есть приём…») пишется в
+    // самом окне: окно остаётся открытым, врач выбирает другой день или время.
+    const errBox    = h('div', { class: 'rv-err', role: 'alert', style: { display: 'none', marginTop: '12px', fontSize: '13px', color: 'var(--crit-700)' } });
+    const showErr = (text) => { errBox.textContent = text || ''; errBox.style.display = text ? '' : 'none'; };
     const bookBtn   = h('button', { class: 'btn btn-primary', disabled: '', onclick: () => doBook() },
         Icon('Check', { size: 14 }), ' Записать');
 
@@ -1533,7 +1554,7 @@ async function openRevisitModal(ctx) {
             const cls = ['rv-cell', dow >= 5 ? 'we' : '', isToday ? 'today' : '',
                 (state.sel && state.sel.y === state.y && state.sel.m === state.m && state.sel.d === dd) ? 'on' : ''].filter(Boolean).join(' ');
             const cell = h('button', { class: cls, type: 'button', ...(isPast ? { disabled: '' } : {}),
-                onclick: () => { state.sel = { y: state.y, m: state.m, d: dd }; state.slot = null; renderCal(); renderSlots(); refreshFootBtn(); } }, String(dd));
+                onclick: () => { state.sel = { y: state.y, m: state.m, d: dd }; state.slot = null; showErr(''); renderCal(); renderSlots(); refreshFootBtn(); } }, String(dd));
             grid.appendChild(cell);
         }
         calWrap.append(nav, quick, grid);
@@ -1552,7 +1573,9 @@ async function openRevisitModal(ctx) {
         }
         slotsWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 0' } }, 'Загрузка…'));
         const dayIso = rvIso(state.sel.y, state.sel.m, state.sel.d);
-        const day = await loadSlotDay(doctorId, dayIso, rvMinutes(), { stepMinutes: RV_SLOT_MIN, patientId });   // DOCTOR_PROFILE_V1 — длительность вида, шаг 20
+        // REPEAT_VISIT_V1 — без patientId: свой приём пациента в этот день не
+        // прячется из занятого — повторный визит в такой день сервер не запишет.
+        const day = await loadSlotDay(doctorId, dayIso, rvMinutes(), { stepMinutes: RV_SLOT_MIN });   // DOCTOR_PROFILE_V1 — длительность вида, шаг 20
         clear(slotsWrap);
         if (!day || !day.window) {
             slotsWrap.appendChild(h('div', { class: 'rv-pickhint muted' }, Icon('Calendar', { size: 16 }), ' ',
@@ -1570,13 +1593,15 @@ async function openRevisitModal(ctx) {
             const cls = ['rv-slot', sl.busy ? 'busy' : '', state.slot === sl.label ? 'on' : ''].filter(Boolean).join(' ');
             grid.appendChild(h('button', { class: cls, type: 'button', title: sl.busy ? tr('Занято') : tr('Свободно'),
                 ...(sl.busy ? { disabled: '' } : {}),
-                onclick: () => { state.slot = sl.label; renderSlots(); refreshFootBtn(); } }, sl.label));
+                onclick: () => { state.slot = sl.label; showErr(''); renderSlots(); refreshFootBtn(); } }, sl.label));
         });
         slotsWrap.appendChild(grid);
     }
 
     async function doBook() {
+        if (!state.sel || !state.slot) return;   // REPEAT_VISIT_V1 — день и время обязательны
         bookBtn.setAttribute('disabled', '');
+        showErr('');
         try {
             const isoDate = rvIso(state.sel.y, state.sel.m, state.sel.d);
             const visitDate = new Date(`${isoDate}T${state.slot}:00`).toISOString();
@@ -1585,40 +1610,40 @@ async function openRevisitModal(ctx) {
             const notes = [reason, comment].filter(Boolean).join(' — ') || 'Повторный визит';
             const ctId = svcSel.value || null;
             const ct = consultTypes.find(c => String(c.id) === String(ctId)) || null;
-            const price = ct ? consultPrice(ct) : 0;
+            const svc = ct ? null : rvService(ctId);
 
-            // VISITS_ONE_DOOR_V1 — запись идёт тем же входом, что у календаря и
-            // мастеров: занятое время сервер называет словами, а поверх него
-            // можно записать только экстренно и только с причиной. null =
-            // врач передумал — не создано ни визита, ни строки услуги.
+            // REPEAT_VISIT_V1 — ОДИН ВЫЗОВ. Визит «повторный», его время и строка
+            // консультации (или услуги каталога) пишутся сервером в одной
+            // транзакции calendar_book: врач строки — врач записи, scheduled_at —
+            // начало приёма, цена — по дню визита. Прежде здесь было три запроса
+            // (запись 'first', правка visit_kind, строка без времени и без цены
+            // сервера), и обрыв между ними оставлял «первичный» визит без услуги.
+            //
+            // VISITS_ONE_DOOR_V1 — вход тот же, что у календаря и мастеров:
+            // занятое время сервер называет словами, поверх него — только
+            // экстренно с причиной; null = врач передумал, не создано ничего.
+            // «Добавить в этот визит» здесь нет: день, в который у пациента уже
+            // есть приём, сервер отказывает (revisit_day_taken), и окно остаётся
+            // открытым с этим отказом.
+            const line = ct ? { consultation_type_id: ct.id } : (svc ? { service_id: svc.id } : null);
             const booked = await bookVisit({
                 patient_id:       patientId,
                 doctor_id:        doctorId,
                 service_id:       null,            // consultation-primary → null (CONSULT_BOOKING_V1)
                 start:            visitDate,
-                duration_minutes: ct ? consultMinutes(ct) : RV_SLOT_MIN,   // DOCTOR_PROFILE_V1 — длительность вида (ревью №1)
+                duration_minutes: rvMinutes(),     // DOCTOR_PROFILE_V1 — длительность вида (ревью №1)
                 status:           'scheduled',
                 notes,
-            });
+                visit_kind:       'repeat',        // REPEAT_VISIT_V1
+                ...(line ? { line } : {}),         // REPEAT_VISIT_V1
+            }, { askAddToDayVisit: async () => false });
             if (!booked) { bookBtn.removeAttribute('disabled'); return; }
+            // REPEAT_VISIT_V1 — «записан» только за занятым временем: новый визит,
+            // а не чужой визит дня.
+            if (!booked.created || !booked.visit || booked.added_to_day_visit) {
+                throw new Error(tr('Время не занято — повторный визит не записан. Выберите другой день или время.'));
+            }
             const visit = booked.visit;
-            // Повторность — не расписание, и записью она не ставится: у
-            // calendar_book новый визит всегда 'first'. Пометка отдельная.
-            const { error: kindErr } = await supabase.from('visits')
-                .update({ visit_kind: 'repeat' }).eq('id', visit.id);
-            if (kindErr) console.warn('[revisit] visit_kind not saved:', kindErr.message);
-
-            // visit_services consultation line — MIRRORS createVisit __consult branch.
-            if (ctId) { const { error: vsErr } = await insertRow('visit_services', {
-                visit_id:             visit.id,
-                consultation_type_id: ctId,
-                service_id:           null,
-                doctor_id:            doctorId,
-                quantity:             1,
-                unit_price:           price,
-                total:                price,
-            });
-            if (vsErr) console.warn('[revisit] visit_services not attached:', vsErr.message); }
 
             // best-effort activity log
             try {
@@ -1626,7 +1651,9 @@ async function openRevisitModal(ctx) {
                     patientId, visitId: visit.id, entityType: 'visit', entityId: visit.id,
                     entityLabel: 'Повторный визит', action: 'scheduled',
                     summary: `Повторный визит: ${isoDate} ${state.slot}`,   // i18n-exempt: запись в журнал действий (БД) — хранимая запись
-                    detail: { reason, comment, consultation_type_id: ctId },
+                    // REPEAT_VISIT_V1 (поправка 2) — detail СТРОКОЙ JSON: объект /api/db
+                    // не принимает (400 «unsupported value type»), и запись журнала терялась.
+                    detail: JSON.stringify({ reason, comment, consultation_type_id: ct ? ct.id : null, service_id: svc ? svc.id : null }),
                 });
             } catch (_) {}
 
@@ -1640,6 +1667,7 @@ async function openRevisitModal(ctx) {
             noteInRecommendations(ctx, `<div><b>Повторный визит:</b> ${esc(dl)} · ${esc(state.slot)}${reason ? ' — ' + esc(reason) : ''}</div>`);
             toast('Пациент записан на повторный визит', 'ok');
         } catch (e) {
+            showErr(e?.message || String(e));   // REPEAT_VISIT_V1 — отказ остаётся в окне
             toast(trf('Не удалось записать: {msg}', { msg: e?.message || e }), 'fail');
             bookBtn.removeAttribute('disabled');
         }
@@ -1676,6 +1704,7 @@ async function openRevisitModal(ctx) {
             h('div', { class: 'rv-col-cal' }, calWrap),
             h('div', { class: 'rv-col-slots' }, slotsWrap),
         ),
+        errBox,   // REPEAT_VISIT_V1
     );
     const foot = h('footer', { class: 'modal-foot' }, footSel, h('button', { class: 'btn', onclick: close }, 'Отмена'), bookBtn);
 
@@ -1692,7 +1721,7 @@ async function openRevisitModal(ctx) {
     renderCal(); renderSlots();
     // DOCTOR_PROFILE_V1 (ревью шага 5, №1) — другой вид — другая длительность:
     // свободное время заново, выбранное время снимается (может не поместиться).
-    svcSel.addEventListener('change', () => { state.slot = null; renderSlots(); refreshFootBtn(); });
+    svcSel.addEventListener('change', () => { state.slot = null; showErr(''); renderSlots(); refreshFootBtn(); });
 }
 
 // ЧЕТВЁРТАЯ РЕАЛИЗАЦИЯ РАСПИСАНИЯ (loadBookedSlots) СТОЯЛА ЗДЕСЬ И УДАЛЕНА.
