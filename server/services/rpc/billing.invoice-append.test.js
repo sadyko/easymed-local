@@ -167,53 +167,68 @@ test('оплата дописанного счёта ставит в очере�
   assert.equal(db.prepare('SELECT status FROM invoices WHERE id = ?').get(inv.id).status, 'paid');
 });
 
-test('скидка: ручная скидка новой части прибавляется, скидка выставленной части не меняется (и пол группы тоже)', () => {
+// Ревью C1 (billing.invoice-append-review.test.js) — дописывается, только когда
+// у обеих частей лишь пол группы пациента: тогда скидки складываются.
+test('скидка: пол группы обеих частей складывается (прежняя часть — свои 10 000, новые — свои 4 000 и 5 000)', () => {
   const { db, CONS, LAB, ECG, pid, vid } = seed();
   const cat = db.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('VIP', 10, 1)").run().lastInsertRowid;
   db.prepare('UPDATE patients SET category_id = ? WHERE id = ?').run(cat, pid);
   // Первая часть — без ручной скидки: действует пол группы 10 % = 10 000.
   const first = bill(db, vid, [line(db, vid, CONS)]);
   assert.equal(first.invoice.discount_amount, 10000);
-  // Вторая — с ручной 20 000 на 40 000 (больше пола 4 000): +20 000.
-  const second = bill(db, vid, [line(db, vid, LAB)], registrar, { discount_amount: 20000 });
+  // Вторая — мастер присылает ровно пол группы (скидка «лояльности» = процент группы): 4 000.
+  const second = bill(db, vid, [line(db, vid, LAB)], registrar, { discount_amount: 4000 });
   assert.equal(second.appended, true);
-  assert.equal(second.rest_discount, 20000, 'rest_discount — скидка НОВОЙ части (перенос скидки мастера)');
-  assert.deepEqual([second.invoice.subtotal, second.invoice.discount_amount, second.invoice.total_amount], [140000, 30000, 110000],
-    'прежняя часть сохранила свои 10 000, новая дала 20 000');
+  assert.equal(second.rest_discount, 4000, 'rest_discount — скидка НОВОЙ части (перенос скидки мастера)');
+  assert.deepEqual([second.invoice.subtotal, second.invoice.discount_amount, second.invoice.total_amount], [140000, 14000, 126000]);
   // Третья — без ручной: пол группы новой части, 5 000.
   const third = bill(db, vid, [line(db, vid, ECG)]);
+  assert.equal(third.appended, true);
   assert.equal(third.rest_discount, 5000);
-  assert.deepEqual([third.invoice.subtotal, third.invoice.discount_amount, third.invoice.total_amount], [190000, 35000, 155000]);
+  assert.deepEqual([third.invoice.subtotal, third.invoice.discount_amount, third.invoice.total_amount], [190000, 19000, 171000]);
 });
 
-test('скидка: ручная скидка первой части остаётся, новая часть получает только свой пол группы', () => {
+test('скидка: ручная скидка у новой или у прежней части — новые услуги НОВЫМ счётом, как в 3.20.0', () => {
+  const s = seed();
+  const cat = s.db.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('VIP', 10, 1)").run().lastInsertRowid;
+  s.db.prepare('UPDATE patients SET category_id = ? WHERE id = ?').run(cat, s.pid);
+  const first = bill(s.db, s.vid, [line(s.db, s.vid, s.CONS)]);
+  const manualNew = bill(s.db, s.vid, [line(s.db, s.vid, s.LAB)], registrar, { discount_amount: 20000 });
+  assert.equal(manualNew.appended, undefined);
+  assert.notEqual(manualNew.invoice.id, first.invoice.id);
+  assert.equal(manualNew.rest_discount, 20000);
+  assert.deepEqual([manualNew.invoice.discount_amount, manualNew.invoice.total_amount], [20000, 20000]);
+  assert.deepEqual([first.invoice.discount_amount, s.db.prepare('SELECT total_amount t FROM invoices WHERE id = ?').get(first.invoice.id).t], [10000, 90000]);
+
   const { db, CONS, LAB, pid, vid } = seed();
-  const cat = db.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('VIP', 10, 1)").run().lastInsertRowid;
-  db.prepare('UPDATE patients SET category_id = ? WHERE id = ?').run(cat, pid);
-  const first = bill(db, vid, [line(db, vid, CONS)], registrar, { discount_amount: 30000 });
-  assert.equal(first.invoice.discount_amount, 30000);
+  const cat2 = db.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('VIP', 10, 1)").run().lastInsertRowid;
+  db.prepare('UPDATE patients SET category_id = ? WHERE id = ?').run(cat2, pid);
+  const manualOld = bill(db, vid, [line(db, vid, CONS)], registrar, { discount_amount: 30000 });
+  assert.equal(manualOld.invoice.discount_amount, 30000);
   const second = bill(db, vid, [line(db, vid, LAB)]);
+  assert.equal(second.appended, undefined);
+  assert.notEqual(second.invoice.id, manualOld.invoice.id);
   assert.equal(second.rest_discount, 4000);
-  assert.deepEqual([second.invoice.discount_amount, second.invoice.total_amount], [34000, 106000]);
+  assert.deepEqual([second.invoice.discount_amount, second.invoice.total_amount], [4000, 36000]);
 });
 
 test('врач без денежной роли дописывает СВОИ строки в счёт регистратуры; проверки врача — только по новым строкам', () => {
   const { db, CONS, LAB, ECG, vid } = seed();
   const regLine = line(db, vid, CONS, 7);
-  const first = bill(db, vid, [regLine], registrar, { discount_amount: 15000 });
+  const first = bill(db, vid, [regLine], registrar);
   const own = line(db, vid, LAB, DOC);
   const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [own] }, doctor);
   assert.equal(out.appended, true, 'строка регистратуры в счёте не мешает врачу дописать свою');
   assert.equal(out.invoice.id, first.invoice.id);
-  assert.equal(out.invoice.discount_amount, 15000, 'ручная скидка регистратуры осталась');
-  assert.equal(out.invoice.total_amount, 125000);
+  assert.equal(out.invoice.discount_amount, 0);
+  assert.equal(out.invoice.total_amount, 140000);
   // Чужую строку врач по-прежнему не выставляет — ни новым счётом, ни дописыванием.
   const foreign = line(db, vid, ECG, 7);
   assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [foreign] }, doctor),
     (e) => e.status === 403 && /только за услуги, которые добавил сам/.test(e.message));
   assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [line(db, vid, ECG, DOC)], discount_amount: 1000 }, doctor),
     (e) => e.status === 403 && /Скидку в счёт ставят/.test(e.message));
-  assert.equal(db.prepare('SELECT total_amount FROM invoices WHERE id = ?').get(first.invoice.id).total_amount, 125000, 'отказ не тронул счёт');
+  assert.equal(db.prepare('SELECT total_amount FROM invoices WHERE id = ?').get(first.invoice.id).total_amount, 140000, 'отказ не тронул счёт');
 });
 
 test('список кассы — одна строка на счёт: две регистрации одного визита — один счёт с двумя позициями', () => {

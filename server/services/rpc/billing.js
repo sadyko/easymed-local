@@ -19,7 +19,7 @@ import { invoiceStatusFor, idemReplay, idemRemember } from '../domain/money.js';
 import { lineUnitPrice, consultationFor, legacyPackageOnlyOff } from '../domain/pricing.js';   // SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
 import { packageLineMoney } from '../../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1 — цена в пакете, записанная на строке
 import { hasAnyRole, effectiveRoles } from '../roles.js';
-import { localDate, localMonth } from '../domain/day.js';
+import { localDate, localMonth, today } from '../domain/day.js';   // INVOICE_APPEND_V1 (ревью m2) — today
 // CASHIER_HEAD_V1 — право кассы «Исправляет услуги в счёте» (cashier.lines).
 import { grantAllowsAdminOr, isAdminUser } from '../grants.js';
 import { requireServicesEdit, requireServicesDelete } from './patient-card.js';   // CASHIER_HEAD_V1 (ревью I2) — вкладка «Услуги» у регистратуры/администратора
@@ -647,9 +647,22 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
     // (FREE_SERVICE_V1), а в чужом неоплаченном счёте ждали бы кассу.
     // append: false — «Добавить услугу» кассы (cashier_line_add): счёт она
     // выбирает своим правилом, и раз не выбрала — нужен новый, как прежде.
-    if (append && payerRaw === null && total > 0) {
-      const target = appendTargetInvoice(db, visitId);
-      if (target) return appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubtotal, restDiscount }, user);
+    // INVOICE_APPEND_V1 (ревью C1) — и только когда у новой части НЕТ скидки
+    // сверх пола группы пациента: запрошенная скидка не больше её пола группы.
+    // Остаток скидки счёта один на все его строки и делится по ним
+    // пропорционально (возврат строки, удаление до оплаты, доля врача и
+    // вознаграждение за направление — reports.js STAGE1_DISCOUNT_SQL): ручная
+    // скидка одной части, слитая в общий остаток, переезжала бы на чужие строки.
+    // Такая часть — своим счётом, как в 3.20.0. Прежнюю часть проверяет
+    // appendTargetInvoice тем же правилом.
+    if (append && payerRaw === null && total > 0 && discountRaw <= categoryDiscount + 0.005) {
+      const target = appendTargetInvoice(db, visitId, categoryPercent);
+      if (target) {
+        return appendToVisitInvoice(db, target, {
+          visitId, priced, subtotal, restSubtotal,
+          discount, given: round2(Math.min(discountRaw, restSubtotal)), restDiscount,
+        }, user);
+      }
     }
     const invoiceNumber = nextInvoiceNumber(db);   // INVOICE_APPEND_V1 — только у нового счёта
 
@@ -755,10 +768,21 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
 //     возврат оставляют post_sale_discount и возвраты по строкам);
 //   • своего здания (sync_origin IS NULL — BRANCH_MONEY_GUARD_V1);
 //   • не госпитализация и не DEP-/CARD- (у них visit_id и так NULL — страж на
-//     случай, если появится).
-// Самый новый — как у cashier_line_add.
-function appendTargetInvoice(db, visitId) {
-  return db.prepare(`
+//     случай, если появится);
+//   • (ревью m2) выставлен СЕГОДНЯ — местный день клиники (domain/day.js).
+//     Отчёты считают строку по дню её счёта (i.created_at), и новая услуга,
+//     дописанная во вчерашний счёт, ушла бы во вчерашний — может быть, уже
+//     закрытый в «Оплате врачей» — месяц;
+//   • (ревью C1, m1) остаток его скидки (ручная и пол группы на строки без
+//     своей скидки) — РОВНО пол группы пациента по СЕГОДНЯШНЕМУ проценту
+//     (`pct`, ±0,01): ни ручной скидки сверх пола, ни процента, который с тех
+//     пор подняли или сняли. Тогда у обеих частей одна доля, и пропорциональный
+//     раздел скидки по строкам даёт те же деньги, что два отдельных счёта; иначе
+//     дописывание переложило бы ручную скидку на чужие строки, а новый процент
+//     группы — на уже выставленную часть.
+// Самый новый — как у cashier_line_add; не годится он — новый счёт.
+function appendTargetInvoice(db, visitId, pct) {
+  const target = db.prepare(`
     SELECT i.* FROM invoices i
      WHERE i.visit_id = ?
        AND i.payer_id IS NULL
@@ -771,24 +795,35 @@ function appendTargetInvoice(db, visitId) {
        AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
      ORDER BY i.id DESC
      LIMIT 1`).get(visitId) || null;
+  if (!target) return null;
+  if (db.prepare(`SELECT ${localDate('?')} AS d`).get(target.created_at).d !== today(db)) return null;   // ревью m2
+  const rest = Math.max(round2((Number(target.discount_amount) || 0) - invoiceOwnDiscount(db, target.id)), 0);
+  const floor = round2(invoiceRestBase(db, target.id) * (Number(pct) || 0) / 100);
+  return Math.abs(rest - floor) <= 0.01 + 1e-9 ? target : null;   // ревью C1, m1
 }
 
 // INVOICE_APPEND_V1 — ДОПИСАТЬ ОЦЕНЁННЫЕ СТРОКИ В СЧЁТ. Строки оценены, как
-// для нового счёта (issueVisitInvoice: цена, своя скидка пакета, пол группы и
-// ручная скидка НОВОЙ части — restDiscount). Скидка уже выставленной части не
-// меняется: ручная часть счёта (manual_discount, мигр. 219) = прежний остаток
-// скидки счёта + остаток новой части, база (manual_base) = вся база строк без
-// своей скидки; repriceUnpaidInvoice(absolute) собирает итог тем же правилом,
-// что cashier_line_add и правки строк кассы, и закрывает ноль (settleZeroTotal).
+// для нового счёта (issueVisitInvoice: цена, своя скидка пакета, пол группы —
+// `discount` новой части, restDiscount — её остаток).
+// Ревью C1 — дописывается только часть без скидки сверх пола группы в счёт без
+// скидки сверх пола группы (issueVisitInvoice, appendTargetInvoice), поэтому
+// дописанный счёт — ровно два счёта, сложенные вместе: сумма строк, скидка и
+// итог — суммы частей, копейка в копейку (без пересчёта пола по общей базе).
+// Ручная часть скидки, «как её дали» (manual_discount / manual_base, мигр. 219,
+// repriceUnpaidInvoice), — тоже сумма: данное прежней части (на её нынешнюю
+// базу) + данное новой, на сумму их баз. Обе не больше своего пола группы и
+// сегодня итога не двигают; при правке строк кассой правило прежнее.
 // rest_discount — скидка НОВОЙ части: мастер переносит остаток своей скидки на
 // счёт следующего дня (DISCOUNT_CARRY_V1) и вычитает ровно её.
 // items — позиции НОВОЙ части в порядке строк вызова (BILLING_AUDIT_FIX_V1 A2:
 // быстрая регистрация сверяет их со своими строками по месту).
-function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubtotal, restDiscount }, user) {
+function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubtotal, discount, given, restDiscount }, user) {
   assertOwnBuilding(db, target, 'Счёт');
-  const oldOwn = invoiceOwnDiscount(db, target.id);
   const oldBase = invoiceRestBase(db, target.id);
-  const oldRest = Math.max(round2((Number(target.discount_amount) || 0) - oldOwn), 0);
+  const known = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+  const gb = known(target.manual_base) ? Math.max(round2(Number(target.manual_base)), 0) : 0;
+  const oldGiven = known(target.manual_discount) && gb > 0
+    ? round2(Math.max(round2(Number(target.manual_discount)), 0) * Math.min(oldBase, gb) / gb) : 0;
   const insertItem = db.prepare(`
     INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total, discount_amount)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -803,11 +838,12 @@ function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubto
     clearRefundRelease(db, 'out', [row.id]);   // FINAL_MONEY_FIX_V1 (M1) — как при новом счёте
     syncVisitService.run(unit, line, row.id);
   }
-  const base = round2(oldBase + restSubtotal);
-  db.prepare('UPDATE invoices SET manual_discount = ?, manual_base = ? WHERE id = ?')
-    .run(round2(oldRest + restDiscount), base, target.id);
-  const fresh = db.prepare('SELECT * FROM invoices WHERE id = ?').get(target.id);
-  const invoice = repriceUnpaidInvoice(db, fresh, oldOwn, { oldBase: base, absolute: true });
+  const sum = round2(db.prepare('SELECT COALESCE(SUM(total), 0) s FROM invoice_items WHERE invoice_id = ?').get(target.id).s);
+  const off = Math.min(round2((Number(target.discount_amount) || 0) + discount), sum);
+  db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ?, manual_discount = ?, manual_base = ? WHERE id = ?')
+    .run(sum, off, round2(sum - off), round2(oldGiven + given), round2(oldBase + restSubtotal), target.id);
+  settleZeroTotal(db, target.id);   // итог новой части > 0 — счёт остаётся «к оплате»; страж правила нуля
+  const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(target.id);
   lineAudit(db, {
     inv: invoice, number: target.invoice_number, visitId, action: 'line_add',
     fromStatus: target.status, toStatus: invoice.status, amount: invoice.total_amount,
