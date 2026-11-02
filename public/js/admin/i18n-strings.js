@@ -8383,6 +8383,8 @@ export const STRINGS = {
   "{n} г.": {"en": "{n} y.o.", "ru": "{n} г.", "uz": "{n} yosh"},
   // CABINET_ACTIVE_FIRST_V1 (2026-10-29) — «Мой день»: завершённые приёмы свёрнутой группой внизу
   "Завершённые · {n}": {"en": "Completed · {n}", "ru": "Завершённые · {n}", "uz": "Yakunlangan · {n}"},
+  // QUEUE_FRESH_V1 — «Мои приёмы» кабинета врача: «Обновить» очереди и группа незавершённых прошлых дней
+  "Перечитать список приёмов": {"en":"Reload the appointment list","ru":"Перечитать список приёмов","uz":"Qabullar ro‘yxatini qayta yuklash"},   // QUEUE_FRESH_V1
 
   // HEAD_DOCTOR_WARD_VIEW_V1 — главный врач видит стационар в своём кабинете — added 2026-09-05
   "Стационар: все пациенты": {"en": "Inpatient ward: all patients", "ru": "Стационар: все пациенты", "uz": "Statsionar: barcha bemorlar"},

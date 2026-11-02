@@ -240,3 +240,38 @@ test('сбой перечитывания: прежний список на ме
   pickStatus(root, 'completed');
   assert.deepStrictEqual(visibleNames(root), ['Аминов Олим', 'Бакиев Санжар']);
 });
+
+// --- «Обновить» у очереди ---------------------------------------------------
+const rangeBtn = (root, label) => walk(root).find((n) => n.attrs && n.attrs.id === 'svc-range').children.find((b) => textOf(b).trim() === label);
+
+test('«Обновить» перечитывает очередь, а фильтр, период и поиск врача остаются', async (t) => {
+  const root = await openWork();
+  // Поиск и период живут в модуле кабинета и между открытиями — вернуть их соседним проверкам.
+  t.after(async () => { reseed(); await typeSearch(root, ''); rangeBtn(root, 'Период').click(); await tick(); });
+  pickStatus(root, 'all');
+  rangeBtn(root, 'Неделя').click();
+  await tick();
+  await typeSearch(root, 'Аминов');
+  assert.deepStrictEqual(visibleNames(root), ['Аминов Олим']);
+  setServerStatus('q1', 'completed');   // другой экран (касса, второе окно) завершил строку
+  const btn = buttonByText(root, /Обновить/);
+  assert.ok(btn, 'у очереди нет кнопки «Обновить»');
+  assert.strictEqual(btn.attrs.title, 'Перечитать список приёмов');
+  const reads = QUEUE_READS;
+  btn.click();
+  await tick(80);
+  assert.strictEqual(QUEUE_READS, reads + 1, '«Обновить» не перечитал очередь');
+  assert.strictEqual(selectedStatus(root), 'all', '«Обновить» сбросил фильтр');
+  assert.ok(hasClass(rangeBtn(root, 'Неделя'), 'on'), '«Обновить» сбросил период');
+  assert.strictEqual(searchInput(root).value, 'Аминов', '«Обновить» сбросил поиск');
+  assert.ok(textOf(rowOf(root, 'Аминов Олим')).includes('Осмотрен'), 'перечитанный статус не показан');
+});
+
+test('подписи «Обновить» — в словаре на трёх языках, uz/en без кириллицы', async () => {
+  const { STRINGS } = await import('../i18n-strings.js');
+  for (const key of ['Обновить', 'Перечитать список приёмов']) {
+    const e = STRINGS[key];
+    assert.ok(e && e.ru && e.uz && e.en, 'нет ключа словаря: ' + key);
+    for (const lang of ['uz', 'en']) assert.doesNotMatch(e[lang], /[Ѐ-ӿ]/, key + ': ' + lang);
+  }
+});

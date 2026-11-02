@@ -935,6 +935,17 @@ function appointmentsView() {
                     }),
                     statusFilterSelect(),
                     rangeFilter(),   // NO_GREETING_V1 — relocated out of the band
+                    // QUEUE_FRESH_V1 — «Обновить»: очередь перечитывается с сервера, а фильтр,
+                    // период и поиск врача остаются как были (reloadQueue).
+                    h('button', {
+                        class: 'btn btn-outline btn-sm', type: 'button', 'data-queue-refresh': '',
+                        title: 'Перечитать список приёмов',
+                        onclick: (ev) => {
+                            if (ev && ev.currentTarget) ev.currentTarget.disabled = true;
+                            Promise.all([reloadQueue(), loadTodayReferrals()])
+                                .then(() => { if (state.tab === 'appointments') paint(); });
+                        },
+                    }, Icon('Refresh', { size: 13 }), ' Обновить'),
                 ),
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     'Показано ', h('b', { id: 'svc-count', style: { color: 'var(--ink-800)' } }, '0'),
