@@ -30,8 +30,7 @@ import { openVisitBillModal } from './visit-bill.js?v=ownrep3';   // REFBILL_REV
 import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» с карты пациента
 import { caseFilePrintHtml } from './case-docs.js?v=cw1';   // PATIENT_HISTORY_TAB_V1 — печать подшитой истории тем же бланком
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // PATIENT_HISTORY_TAB_V1
-import { notesDocData } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — лист приёма из подписанной записи
-import { dateNumeric } from '../../shared/date-words.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — день подписи местной датой
+import { notesDocData, docDayText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — лист приёма из подписанной записи · PRINT_VISIT_DATE_V1 (ревью m6) — день документа
 import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW_V1 — сумма долга у имени
 import { todayIso } from '../../shared/month-grid.js?v=mg1';   // DATE_LIMITS_V1 — местный день, а не UTC
 import { outcomeTitle } from './discharge.js';   // PATIENT_HISTORY_TAB_V1 — исход словами
@@ -1719,6 +1718,10 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // без очистки. Теперь — тот же лист, что у кабинета и архива: данные из
         // подписанной записи (shared/cabinet-doc.js, notesDocData), шапка — этот
         // пациент, врач записи, услуга и день подписи.
+        // PRINT_VISIT_DATE_V1 (ревью m6) — день листа — то же правило, что у кабинета и
+        // архивной копии (docDayText): день визита, но не позже ПЕРВОЙ подписи записи; дня
+        // визита нет (вкладка «Услуги» этой роли закрыта) — день первой подписи. Раньше —
+        // последняя подпись: переподписал через неделю, и протокол «уезжал» на неделю.
         function printWsDoc(d, view = null) {   // PRINT_AUTO_V1
             const data = notesDocData(d.fields, {
                 head: {
@@ -1726,7 +1729,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     patientName: patient.full_name || '', mrn: patient.mrn || '', phone: patient.phone || '',
                     dob: fmtDMY(patient.date_of_birth), sex: labSexRu(patient.gender),
                     doctorName: d.doctorName || '', service: d.service || '',
-                    issueDate: d.created_at ? dateNumeric(d.created_at) : '',
+                    issueDate: docDayText({ visitDate: d.visitDate, history: d.history }),
                 },
                 diagnoses: d.diagnoses || [], prescriptions: d.prescriptions || [],
             });
@@ -1745,6 +1748,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 {
                     const vsNotes = payloadDocNotes;
                     const archived = new Set((data || []).map(x => x.visit_service_id).filter(Boolean));
+                    // PRINT_VISIT_DATE_V1 (ревью m6) — день визита строки, если карта его знает (вкладка «Услуги»).
+                    const visitDayOf = new Map((payloadServices || []).map(s => [String(s.id), s.visit_date || null]));
                     for (const r of (vsNotes || [])) {
                         if (archived.has(r.id)) continue;
                         let p = null; try { p = JSON.parse(r.notes); } catch (e2) { continue; }
@@ -1761,6 +1766,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                             // DOC_RICH_FORMAT_V1 (ревью T1) — диагнозы и рецепт записи — на лист приёма
                             diagnoses: (p && Array.isArray(p.diagnoses)) ? p.diagnoses : [],
                             prescriptions: (p && Array.isArray(p.prescriptions)) ? p.prescriptions : [],
+                            // PRINT_VISIT_DATE_V1 (ревью m6) — история записи и день визита — дню листа (printWsDoc)
+                            history: (p && Array.isArray(p.history)) ? p.history : [],
+                            visitDate: visitDayOf.get(String(r.id)) || null,
                         });
                     }
                 }

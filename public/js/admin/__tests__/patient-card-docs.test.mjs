@@ -270,3 +270,56 @@ test('«Заключение приёма» из записи кабинета �
   assert.ok(html.includes('J20.9 — Острый бронхит') && html.includes('Амброксол') && html.includes('Каримов'), 'диагноз, рецепт, врач записи');
   assert.ok(!/<img|onerror/.test(html), 'поле записи вставлено без очистки');
 });
+
+// PRINT_VISIT_DATE_V1 (ревью m6) — перепечатка подписанной записи без архивной копии
+// датировалась ПОСЛЕДНЕЙ подписью: переподписал через неделю — и протокол «уехал» на
+// неделю. Теперь — то же правило, что у кабинета и архива (shared/cabinet-doc.js
+// docDayText): день визита, но не позже ПЕРВОЙ подписи; дня визита нет — день первой подписи.
+async function printDerivedConclusion(extra = {}) {
+  const notes = JSON.stringify({
+    __service_workspace_v1: 1, current: null,
+    history: [
+      { kind: 'draft',  savedAt: '2026-09-29T08:00:00.000Z', fields: { chief_complaint: 'Кашель' } },
+      { kind: 'signed', savedAt: '2026-10-01T08:00:00.000Z', byName: 'Каримов Алишер', fields: { chief_complaint: 'Кашель' } },
+      { kind: 'signed', savedAt: '2026-10-05T08:00:00.000Z', byName: 'Каримов Алишер', fields: { chief_complaint: 'Кашель, уточнено' } },
+    ],
+  });
+  calls = []; opened = [];
+  payload = { ...payloadWith([]), doc_notes: [{ id: 502, notes, services: { name: 'Приём терапевта' }, users: { full_name: 'Каримов Алишер' } }], ...extra };
+  setFullAccess('Администратор');
+  const printed = [];
+  const prevOpen = globalThis.window.open;
+  globalThis.window.open = () => ({ document: { open() {}, write(s) { printed.push(String(s)); }, close() {} } });
+  try {
+    const box = mk('div');
+    renderPatientCard(box, { onNavigate() {}, payload: { id: 1 } });
+    await tick();
+    openDocsTab(box);
+    await tick();
+    const link = walk(box).find((n) => n.tagName === 'A' && textOf(n).includes('Заключение приёма'));
+    assert.ok(link, 'нет строки «Заключение приёма» из записи кабинета');
+    link.click();
+    await tick();
+  } finally {
+    globalThis.window.open = prevOpen;
+  }
+  assert.equal(printed.length, 1, 'лист не открылся');
+  return printed[0].replace(/<style[\s\S]*?<\/style>/g, '').replace(/<script[\s\S]*?<\/script>/g, '');
+}
+
+test('перепечатка записи без архива: день — ПЕРВАЯ подпись, а не последняя переподпись', async () => {
+  const html = await printDerivedConclusion();
+  assert.ok(html.includes('01.10.2026'), 'на листе нет дня первой подписи');
+  assert.ok(!html.includes('05.10.2026'), 'лист датирован последней переподписью');
+  assert.ok(html.includes('Кашель, уточнено'), 'на лист пошла не последняя подписанная запись');
+});
+
+test('перепечатка записи без архива: известен день визита — он, но не позже первой подписи', async () => {
+  const svcRow = (visit_date) => ({ id: 502, visit_id: 9, service_id: 3, status: 'completed', quantity: 1, total: 100000,
+    visit_date, services: { name: 'Приём терапевта' }, users: { full_name: 'Каримов Алишер' }, products: null });
+  const tabs = { ...payloadWith([]).tabs, services: 'view' };
+  const past = await printDerivedConclusion({ tabs, services: [svcRow('2026-09-30T09:00:00.000Z')] });
+  assert.ok(past.includes('30.09.2026') && !past.includes('01.10.2026') && !past.includes('05.10.2026'), 'не день визита');
+  const ahead = await printDerivedConclusion({ tabs, services: [svcRow('2026-10-03T09:00:00.000Z')] });
+  assert.ok(ahead.includes('01.10.2026') && !ahead.includes('03.10.2026'), 'визит позже подписи — лист датирован будущим днём визита');
+});
