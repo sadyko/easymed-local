@@ -105,3 +105,30 @@ test('STAFF_EDIT_V1: пароль отключённому — признак pa
     assert.ok(!('password_inactive' in r.json), 'без пароля признака нет');
   } finally { server.close(); }
 });
+
+test('STAFF_EDIT_V1: значения, равные сохранённым, не проверяются — старое неверное не мешает сменить телефон', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    db.prepare(`INSERT INTO users (id, username, password_hash, full_name, last_name, first_name, role, staff_type, is_doctor,
+                  hire_date, doctor_category, employment_type, salary_percent, phone)
+                VALUES (30, 'old.doc', 'x', 'Каримов Анвар', 'Каримов', 'Анвар', 'doctor', 'Врач', 1,
+                  '15.01.2020', 'Высшая', 'штат', 150, '+998901112233')`).run();
+    const boss = await login(base, 'boss');
+    // Старая вкладка карточки (и импорт) шлёт всё, что хранится, — и неверное тоже.
+    const stale = { hire_date: '15.01.2020', doctor_category: 'Высшая', employment_type: 'штат', staff_type: 'Врач', salary_percent: 150 };
+    let r = await call(base, boss, 'PATCH', '/api/users/30', { ...stale, phone: '+998901112244' });
+    assert.equal(r.status, 200, 'посторонний отказ: ' + JSON.stringify(r.json));
+    const row = db.prepare('SELECT phone, hire_date, doctor_category, employment_type, staff_type, salary_percent, is_doctor FROM users WHERE id = 30').get();
+    assert.equal(row.phone, '+998901112244');
+    assert.deepEqual([row.hire_date, row.doctor_category, row.employment_type, row.staff_type, row.salary_percent, row.is_doctor],
+      ['15.01.2020', 'Высшая', 'штат', 'Врач', 150, 1], 'нетронутые значения переписаны или признак врача сброшен');
+    // Изменённое по-прежнему проверяется.
+    r = await call(base, boss, 'PATCH', '/api/users/30', { hire_date: '16.01.2020' });
+    assert.equal(r.status, 400);
+    assert.equal(r.json.error.message, 'Дата указана неверно.');
+    r = await call(base, boss, 'PATCH', '/api/users/30', { doctor_category: 'Первая' });
+    assert.equal(r.status, 400);
+    r = await call(base, boss, 'PATCH', '/api/users/30', { salary_percent: 151 });
+    assert.equal(r.status, 400);
+  } finally { server.close(); }
+});

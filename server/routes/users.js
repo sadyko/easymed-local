@@ -217,6 +217,38 @@ export function parseEmployeeFields(body, db, currentRole, ownerId) {
   return { ok: true, fields };
 }
 
+// STAFF_EDIT_V1 — ЗНАЧЕНИЯ, РАВНЫЕ СОХРАНЁННЫМ, НЕ ПРОВЕРЯЮТСЯ И НЕ ПЕРЕПИСЫВАЮТСЯ.
+//
+// Карточка сотрудника теперь шлёт только изменённое, но старая вкладка, импорт
+// из Excel и любой другой клиент шлют всё, что хранится. Значение, записанное
+// до нынешних правил (дата «15.01.2020», категория «Высшая», процент 150),
+// отказывало ВСЕМУ сохранению сообщением о поле, которого никто не трогал.
+// Поля ниже, равные хранимым, из разбора выпадают; изменённое проверяется как
+// прежде. pbx_extension здесь нет: его «не трогали» решает assignExtension
+// (назначение номера, совпавшего с самовыбранным, — это правка). staff_type не
+// выпадает, если рядом прислан is_doctor: категория остаётся источником признака.
+const UNCHANGED_SKIP_KEYS = ['doctor_category', 'employment_type', 'salary_type', 'hire_date', 'license_expiry_date',
+  'salary_fixed', 'salary_percent', 'staff_type', 'scheduling_mode', 'department_id', 'branch_id',
+  'service_rate_default', 'referral_rate_default', 'inpatient_referral_pct', 'inpatient_referral_fixed', 'booking_days'];
+const blankValue = (v) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+/** Равно ли присланное хранимому (пустое — пустому, число — числу, текст — без пробелов по краям). */
+export function sameAsStored(sent, stored) {
+  if (blankValue(sent) || blankValue(stored)) return blankValue(sent) && blankValue(stored);
+  if (typeof sent === 'number' || typeof stored === 'number') return Number(sent) === Number(stored);
+  return String(sent).trim() === String(stored).trim();
+}
+/** Копия тела без полей, равных хранимым в строке row (UNCHANGED_SKIP_KEYS). */
+export function withoutUnchanged(body, row) {
+  const out = { ...(body || {}) };
+  if (!row) return out;
+  for (const k of UNCHANGED_SKIP_KEYS) {
+    if (out[k] === undefined) continue;
+    if (k === 'staff_type' && out.is_doctor !== undefined) continue;
+    if (sameAsStored(out[k], row[k])) delete out[k];
+  }
+  return out;
+}
+
 const MAX_RATE_ENTRIES = 5000;
 // Same ceiling as salary_fixed: guards the money maths downstream from a
 // finite-but-absurd value overflowing to Infinity.
@@ -819,7 +851,9 @@ export function userRoutes(db) {
       return bad(res, 'В клинике должен остаться хотя бы один активный администратор.');
     }
 
-    const parsed = parseEmployeeFields(req.body, db, user.role, user.id);   // CLINIC_API_FIX_V1 — фото только из папки этого сотрудника
+    // STAFF_EDIT_V1 — поля, равные хранимым, не проверяются (withoutUnchanged).
+    // Проверки прав выше читают req.body как есть — они строже.
+    const parsed = parseEmployeeFields(withoutUnchanged(req.body, user), db, user.role, user.id);   // CLINIC_API_FIX_V1 — фото только из папки этого сотрудника
     if (!parsed.ok) return bad(res, parsed.message, parsed.field);   // DOCTOR_PROFILE_V1 — с полем отказа
     // SOFTPHONE_V1 — номер для телефона назначает только администратор, и только новой карточкой.
     const ef = assignExtension(parsed.fields, { admin: isAdminUser(req.user), marked: !!req.body && req.body.assign_extension === true }, user);
