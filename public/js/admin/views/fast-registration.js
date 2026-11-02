@@ -77,7 +77,8 @@ import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        /
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    // REFERRAL_SOURCE_CODE_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';                    // WIZ_INVOICE_PRINT_V1 — тот же бланк «Счёт»
-import { packageItemName, packageLabel } from './receipt-print.js?v=rp1';     // PACKAGES_V1 — пакет и скидка позиции на бланке; CLINIC_API_FIX_V1 — packageLabel
+import { packageItemName, packageLabel, printInvoiceSheetById } from './receipt-print.js?v=rp1';     // PACKAGES_V1 — пакет и скидка позиции на бланке; CLINIC_API_FIX_V1 — packageLabel; INVOICE_APPEND_V1 — дописанный счёт целиком
+import { invoiceAppendNote } from '../invoice-append.js';                      // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 
 /** Разряды тысяч пробелом — так цену читают во всех экранах продукта. */
 function fmtPrice(n) {
@@ -435,6 +436,12 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
 
     /** Итог — это итог СЧЁТА: процент категории пациента применяет сервер. */
     function totalDue() {
+        // INVOICE_APPEND_V1 — строки легли в уже выставленный счёт: его сумма
+        // включает и прежние услуги. Таблица показывает СВОИ строки — итог её
+        // строк минус скидка своей части (walk-in-booking.js appendedDiscount).
+        if (state.result && state.result.appended) {
+            return Math.max(0, totalGross() - (Number(state.result.appendedDiscount) || 0));
+        }
         const inv = state.result && state.result.invoice;
         const total = inv && Number(inv.total_amount);
         return Number.isFinite(total) ? total : totalGross() - packageOffBefore();   // SERVICES_PACKAGES_V1
@@ -987,7 +994,10 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         doneBtn.style.display = '';
         footHint.textContent = tr('Пациент, визит и счёт созданы. Печать счёта — кнопкой в шапке таблицы.');
         paintTable();
-        toast(tr('Пациент зарегистрирован, счёт выставлен.'));
+        // INVOICE_APPEND_V1 — тот же номер, новая сумма: так и сказано.
+        toast(state.result && state.result.appended
+            ? invoiceAppendNote({ appended: true, invoice: inv })
+            : tr('Пациент зарегистрирован, счёт выставлен.'));
     }
 
     /**
@@ -1051,6 +1061,15 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     function printInvoice() {
         const inv = state.result && state.result.invoice;
         if (!inv) return;
+        // INVOICE_APPEND_V1 — дописанный счёт печатается ЦЕЛИКОМ, из строк сервера
+        // (receipt-print.js, как в мастере визита): бланк ниже собран из строк
+        // этой таблицы и разошёлся бы с номером и суммой счёта.
+        if (state.result.appended) {
+            printInvoiceSheetById({ supabase, printableSheet, invoiceId: inv.id, title: 'Амбулаторные услуги', withPerformer: true })   // i18n-exempt: печатный счёт (бланк) — печатный документ
+                .then((r) => { if (r && !r.ok) toast(trf('Счёт не напечатан: {msg}', { msg: tr(r.reason) }), 'fail'); })
+                .catch((e) => toast(trf('Счёт не напечатан: {msg}', { msg: (e && e.message) || e }), 'fail'));
+            return;
+        }
         const p = state.patient || {};
         const queueRows = [];
         state.rows.forEach((row, i) => {

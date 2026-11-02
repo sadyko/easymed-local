@@ -31,10 +31,11 @@
  * поэтому повтор должен быть НЕВОЗМОЖЕН, а не «просто не рекомендован».
  *
  * ЭТА ФУНКЦИЯ НЕ ИДЕМПОТЕНТНА. Второй вызов в тот же день не «повторит»
- * регистрацию, а допишет строки в тот же визит дня и выставит ВТОРОЙ счёт на
- * них. Поэтому вызывающий обязан выключить свою кнопку на время вызова и
- * ОСТАВИТЬ её выключенной после успеха: пациент с двумя счетами за один приход
- * разбирается уже в кассе, а не на экране.
+ * регистрацию, а допишет строки в тот же визит дня — и, пока первый счёт не
+ * оплачен, в ТОТ ЖЕ счёт (INVOICE_APPEND_V1: тот же номер, сумма выросла на
+ * задвоенные услуги; оплачен — вторым счётом). Поэтому вызывающий обязан
+ * выключить свою кнопку на время вызова и ОСТАВИТЬ её выключенной после
+ * успеха: задвоенные услуги разбираются уже в кассе, а не на экране.
  *
  * quoteError — ЭТО ГРОМКОЕ СОБЫТИЕ, А НЕ ПОМЕТКА В ОТВЕТЕ. Когда он заполнен,
  * тариф визита спросить не удалось, и счёт выставлен по цене каталога и слову
@@ -51,7 +52,8 @@
  * bookedVisitId: визит записи, которому принадлежат bookedVsId.
  * → { visit, invoice, items, queue: Map(visit_service_id → row),
  *     lines: [{ visitServiceId, serviceId, doctorId, unitPrice, tier }],
- *     quoteError?: string, queueError?: string }
+ *     quoteError?: string, queueError?: string,
+ *     appended?: true, appendedDiscount?: number }   // INVOICE_APPEND_V1 — дописано в неоплаченный счёт визита
  * Бросает Error с читаемым message на первом провале ДО счёта (визит остаётся
  * без счёта — как в мастере).
  */
@@ -62,6 +64,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { readEnsureVisit } from '../ensure-visit-answer.js';
 import { lineIdentity, isConsultPick, consultDoctorId, surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога
 import { isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (ред. 2) — строка той же услуги, что строка записи
+import { isAppended, appendedPartDiscount } from '../invoice-append.js';   // INVOICE_APPEND_V1 — строки легли в неоплаченный счёт визита
 
 const isPosInt = (v) => {
     const n = Number(v);
@@ -370,6 +373,13 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
         queue,
         lines: saved,
     };
+    // INVOICE_APPEND_V1 — строки легли в уже выставленный неоплаченный счёт
+    // визита дня (тот же номер, новая сумма): items — только позиции ЭТОЙ
+    // регистрации, invoice — весь счёт; скидка своей части — appendedDiscount.
+    if (isAppended(inv)) {
+        out.appended = true;
+        out.appendedDiscount = appendedPartDiscount(inv);
+    }
     if (quoteError) out.quoteError = quoteError;
     if (queueError) out.queueError = queueError;
     if (answer.moved) out.movedNote = answer.text;

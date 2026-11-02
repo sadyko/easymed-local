@@ -151,6 +151,7 @@ let queueFail = null;        // текст отказа issue_queue_numbers
 // потому что расхождение каталога и счёта и есть их предмет.
 let quotes = null;           // { [serviceId]: { price, tier } } | null — цена каталога
 let invoiceTotal = 152000;   // total_amount ответа create_invoice_for_visit
+let invoiceAppended = false; // INVOICE_APPEND_V1 — сервер дописал строки в неоплаченный счёт визита
 let queueTickets = null;     // (ids) => [ticket] | null — талоны по умолчанию
 // Задержка одного rpc: { name, promise } — цепочка встаёт на нём, и в этот миг
 // проверяется поведение окна «пока идёт запись».
@@ -192,7 +193,8 @@ globalThis.fetch = async (url, opts = {}) => {
       return ok({ data: { quotes: quotes || { 1: { price: 112000, tier: 'primary' }, 2: { price: 40000, tier: 'primary' } } } });
     }
     if (name === 'create_invoice_for_visit') {
-      return ok({ data: { invoice: { id: 9, invoice_number: 'INV-9', total_amount: invoiceTotal }, items: [] } });
+      return ok({ data: { invoice: { id: 9, invoice_number: 'INV-9', total_amount: invoiceTotal }, items: [],
+        ...(invoiceAppended ? { appended: true, rest_discount: 0 } : {}) } });   // INVOICE_APPEND_V1
     }
     if (name === 'issue_queue_numbers') {
       if (queueFail) return { ok: false, status: 400, json: async () => ({ error: { message: queueFail } }) };
@@ -255,6 +257,7 @@ function reset() {
   crmRequests = []; crmLines = [];
   visitRows = []; vsRows = [];
   quotes = null; invoiceTotal = 152000; queueTickets = null; holdRpc = null;
+  invoiceAppended = false;   // INVOICE_APPEND_V1
   document.body.children.length = 0;
   // Окна прошлой проверки с экрана сняты — их слушатели Escape тоже.
   for (const k of Object.keys(docListeners)) delete docListeners[k];
@@ -919,6 +922,38 @@ test('после сохранения таблица и печать показ�
   // INVOICE_DOCTOR_V1 — кто выполняет, написано и на бумаге: пациент с этим
   // счётом идёт к конкретному человеку, а не «в клинику».
   assert.ok(printed[0].includes('Петров Пётр'), 'на печати нет исполнителя услуги');
+  dlg.close();
+});
+
+// ===========================================================================
+// INVOICE_APPEND_V1 — пациент уже стоит в неоплаченном счёте визита дня: сервер
+// дописал строки в него (тот же номер, новая сумма). Окно говорит об этом,
+// итог таблицы — её строки, а «Печать» берёт ВЕСЬ счёт с сервера, а не
+// собирает бланк из строк таблицы (номер и сумма разошлись бы с бумагой).
+// ===========================================================================
+test('INVOICE_APPEND_V1: строки легли в неоплаченный счёт визита — «Добавлено в счёт № …», итог — своих строк, печать — весь счёт с сервера', async () => {
+  reset();
+  invoiceAppended = true;
+  invoiceTotal = 300000;   // в счёте и прежние строки: 148 000 + эти 152 000
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+  dlg.state.addLine(SERVICES[1], null);
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(80);
+  assert.ok(dlg.state.result && dlg.state.result.appended, 'регистрация не дошла до дописанного счёта');
+  assert.ok(toasts.includes('Добавлено в счёт № INV-9 — новая сумма 300 000 сум'), 'нет фразы о дописанном счёте: ' + JSON.stringify(toasts));
+  const tbl = textOf(dlg.table).replace(/\s+/g, ' ');
+  assert.ok(tbl.includes('152 000'), '«Итого» таблицы — не её строки: ' + tbl.slice(-160));
+  assert.ok(!tbl.includes('300 000'), '«Итого» таблицы — сумма всего счёта');
+  calls.length = 0;
+  btnByText(dlg.card, 'Печать').click();
+  await tick(40);
+  assert.ok(calls.some((c) => c.kind === 'select' && c.table === 'invoices'), 'дописанный счёт печатается не с сервера');
+  assert.strictEqual(printed.length, 0, 'напечатан бланк, собранный из строк таблицы');
   dlg.close();
 });
 
