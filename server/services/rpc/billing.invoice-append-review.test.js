@@ -278,3 +278,63 @@ test('M1: append: false принимает и врач без денежной �
     assert.equal(r.invoice.id, f.invoice.id);
   }
 });
+
+// ───────────── ревью-2: ручная скидка прежней части «как её дали» ─────────────
+// Остаток скидки счёта сегодня может совпасть с полом группы и при ручной
+// скидке сверх пола: VIP 10 %, консультация 100 000 с ручными 20 000 (20 %);
+// касса добавила в тот же счёт строку 100 000 (или заменила консультацию на
+// услугу за 200 000) — остаток 20 000 = пол группы 20 000. ЭКГ 50 000,
+// дописанная в такой счёт, сливала прежние ручные 20 000 с полом новой части
+// (25 000 на 250 000), и когда касса убирала добавленное (или меняла услугу
+// обратно), пересчёт давал 135 000 к оплате вместо 125 000 у отдельных счетов
+// 3.20.0: пациент переплачивал 10 000. Правило: у прежней части и ручная
+// скидка, как её дали (manual_discount на manual_base), — не больше пола группы
+// по сегодняшнему проценту; иначе новый счёт.
+
+const totalsDue = (db) => r2(db.prepare("SELECT COALESCE(SUM(total_amount), 0) s FROM invoices WHERE status <> 'void'").get().s);
+for (const door of ['касса добавила строку и убрала её', 'касса заменила услугу и вернула прежнюю']) {
+  test(`ревью-2: ${door} — ручная 20 % на прежней части при остатке, равном полу группы: ЭКГ новым счётом, к оплате 125 000`, () => {
+    const res = {};
+    for (const mode of ['separate', 'appended']) {
+      const s = seed({ pct: 10 });
+      const { db, vid } = s;
+      const X = Number(db.prepare("INSERT INTO services (name, price, is_lab, tax_rate) VALUES ('Икс', 100000, 0, 0)").run().lastInsertRowid);
+      const BIG = Number(db.prepare("INSERT INTO services (name, price, is_lab, tax_rate) VALUES ('Большой приём', 200000, 0, 0)").run().lastInsertRowid);
+      const c = line(db, vid, s.CONS, { doctorId: D1 });
+      const first = bill(db, vid, [c], registrar, { discount_amount: 20000 });
+      assert.deepEqual(money(first.invoice), [100000, 20000, 80000]);
+      let xLine = null;
+      if (door.startsWith('касса добавила')) {
+        RPC.cashier_line_add(db, { visit_id: vid, service_id: X }, admin);
+        xLine = db.prepare('SELECT id FROM visit_services WHERE service_id = ?').get(X).id;
+      } else {
+        RPC.change_unpaid_service(db, { visit_service_id: c, new_service_id: BIG }, admin);
+      }
+      const before = inv(db, first.invoice.id);
+      assert.deepEqual(money(before), [200000, 20000, 180000], 'остаток скидки = пол группы по новой базе');
+      const e = line(db, vid, s.ECG, { doctorId: D2 });
+      const out = bill(db, vid, [e], registrar, mode === 'separate' ? { append: false } : {});
+      if (mode === 'appended') {
+        assert.equal(out.appended, undefined, 'дописано в счёт с ручной скидкой сверх пола группы');
+        assert.notEqual(out.invoice.id, first.invoice.id);
+        assert.deepEqual(money(inv(db, first.invoice.id)), money(before), 'прежний счёт изменился');
+      }
+      assert.deepEqual(money(out.invoice), [50000, 5000, 45000]);
+      if (xLine) RPC.remove_unpaid_service(db, { visit_service_id: xLine }, admin);
+      else RPC.change_unpaid_service(db, { visit_service_id: c, new_service_id: s.CONS }, admin);
+      res[mode] = totalsDue(db);
+    }
+    assert.equal(res.separate, 125000);
+    assert.equal(res.appended, res.separate, 'к оплате не как у отдельных счетов');
+  });
+}
+
+test('ревью-2: ручная скидка прежней части, как её дали, — ровно пол группы (VIP 10 %, 10 000 на 100 000) — дописывается, как прежде', () => {
+  const s = seed({ pct: 10 });
+  const { db, vid } = s;
+  const first = bill(db, vid, [line(db, vid, s.CONS)], registrar, { discount_amount: 10000 });
+  const out = bill(db, vid, [line(db, vid, s.ECG)]);
+  assert.equal(out.appended, true);
+  assert.equal(out.invoice.id, first.invoice.id);
+  assert.deepEqual(money(out.invoice), [150000, 15000, 135000]);
+});

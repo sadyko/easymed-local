@@ -786,7 +786,16 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
 //     пор подняли или сняли. Тогда у обеих частей одна доля, и пропорциональный
 //     раздел скидки по строкам даёт те же деньги, что два отдельных счёта; иначе
 //     дописывание переложило бы ручную скидку на чужие строки, а новый процент
-//     группы — на уже выставленную часть.
+//     группы — на уже выставленную часть;
+//   • (ревью-2) и ручная скидка, КАК ЕЁ ДАЛИ (manual_discount на manual_base,
+//     мигр. 219), — не больше пола группы этой базы по сегодняшнему проценту
+//     (±0,01). Нынешний остаток может совпасть с полом и при ручной скидке
+//     сверх него: VIP 10 %, консультация 100 000 с ручными 20 000, касса
+//     добавила строку 100 000 (или заменила услугу на 200 000) — остаток
+//     20 000 = пол 20 000. Дописанная ЭКГ 50 000 сливала эти 20 000 с полом
+//     новой части (appendToVisitInvoice: 25 000 на 250 000), и когда касса
+//     убирала добавленное, repriceUnpaidInvoice(absolute) давал 135 000 к
+//     оплате вместо 125 000 у двух счетов — пациент переплачивал 10 000.
 // Самый новый — как у cashier_line_add; не годится он — новый счёт.
 function appendTargetInvoice(db, visitId, pct) {
   const target = db.prepare(`
@@ -806,7 +815,13 @@ function appendTargetInvoice(db, visitId, pct) {
   if (db.prepare(`SELECT ${localDate('?')} AS d`).get(target.created_at).d !== today(db)) return null;   // ревью m2
   const rest = Math.max(round2((Number(target.discount_amount) || 0) - invoiceOwnDiscount(db, target.id)), 0);
   const floor = round2(invoiceRestBase(db, target.id) * (Number(pct) || 0) / 100);
-  return Math.abs(rest - floor) <= 0.01 + 1e-9 ? target : null;   // ревью C1, m1
+  if (Math.abs(rest - floor) > 0.01 + 1e-9) return null;   // ревью C1, m1
+  const known = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+  if (known(target.manual_discount) && known(target.manual_base)) {   // ревью-2 — ручная, как её дали
+    const gb = round2(Number(target.manual_base));
+    if (gb > 0 && round2(Number(target.manual_discount)) > round2(gb * (Number(pct) || 0) / 100) + 0.01 + 1e-9) return null;
+  }
+  return target;
 }
 
 // INVOICE_APPEND_V1 — ДОПИСАТЬ ОЦЕНЁННЫЕ СТРОКИ В СЧЁТ. Строки оценены, как
