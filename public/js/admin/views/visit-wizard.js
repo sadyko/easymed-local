@@ -2280,12 +2280,81 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     }
     // Скидка на строки без своей — это и только это уходит в счёт
     // (discount_amount): скидку пакета сервер считает сам.
+    // INVOICE_APPEND_V1 (ревью-2) — смета на несколько дней: сумма того, что
+    // дадут счета дней (dayDiscountPlan), а не скидка со всей сметы.
     function restDiscount() {
+        const plan = dayDiscountPlan();
+        if (plan) return plan.total;
         const sub = restTotal();
         let d = loyaltyDiscount();
         if (wiz.promo) d += discountValue(wiz.promo, promoLines());
         return Math.min(sub, Math.round(d));
     }
+    // INVOICE_APPEND_V1 (ревью-2) — СМЕТА НА НЕСКОЛЬКО ДНЕЙ — ЭТО НЕСКОЛЬКО
+    // СЧЕТОВ, И СКИДКА СЧИТАЕТСЯ ПО НИМ.
+    //
+    // Сервер даёт каждому счёту пациента пол группы его строк (billing.js:
+    // max(присланное, база × процент группы)). Мастер считал процент со всей
+    // сметы и отдавал его счёту первого дня, второму — остаток (0), а второй
+    // получал от сервера свой пол группы сверху: VIP 10 %, анализ сегодня
+    // 40 000 + консультация на выбранный день 100 000 — 14 000 + 10 000
+    // скидки вместо 14 000, пациент платил 116 000 вместо 126 000 сметы.
+    // PICK_DAY_V1 сделал такие сметы обычными. Теперь:
+    //   • процент (поле «%») — каждому дню свой: строки дня без своей скидки ×
+    //     процент, до сума; при проценте группы это и есть пол группы сервера;
+    //   • сумма (поле «сум») и промокод — одна сумма на смету и идёт по дням,
+    //     как прежде (DISCOUNT_CARRY_V1): сколько сервер применил
+    //     (rest_discount), столько вычитается, остаток — следующему дню. Только
+    //     пол группы следующих дней сервер даст и сам — столько придерживается
+    //     для них, а не отдаётся первому дню сверх (VIP 10 % и «−14 000 сум» на
+    //     те же два дня — 4 000 + 10 000, а не 14 000 + 10 000). Без группы
+    //     придерживать нечего — перенос ровно прежний;
+    //   • смета показывает сумму того, что дадут счета (тот же расчёт с полом
+    //     группы сервера), — показанное и выставленное не расходятся.
+    // Смета на один день — прежний расчёт (null).
+    function dayDiscountPlan() {
+        const days = cartDays();
+        if (days.length < 2) return null;
+        const r2 = (n) => Math.round(n * 100) / 100;   // как round2 в billing.js
+        const money = (list) => list.reduce((s, c) => s + cartLinePrice(c) * c.qty, 0);
+        const manual = !doctorBill;   // REFERRAL_BILL_V1 — врач присылает 0: только пол группы сервера
+        const pct = manual && wiz.discountMode !== 'abs' ? Math.min(100, Math.max(0, Number(wiz.discountPct) || 0)) : 0;
+        const cat = Math.min(100, Math.max(0, Number(wiz.categoryPct) || 0));
+        const rest = restCart();
+        const vis = visibleCart();
+        const rows = days.map((day) => {
+            const mine = rest.filter((c) => lineDay(c) === day);
+            const room = money(mine.filter((c) => !isCovered(c)));   // база сервера: строки счёта пациента без своей скидки
+            return {
+                day, room,
+                pct: Math.round(money(mine) * pct / 100),
+                floor: r2(room * cat / 100),
+                job: vis.some((c) => lineDay(c) === day && !isCovered(c)),   // счёт пациента этого дня будет
+            };
+        });
+        // Пол группы, который сервер сам даст следующим дням сверх их процента.
+        for (let i = rows.length - 1, after = 0; i >= 0; i--) {
+            rows[i].reserve = after;
+            after += Math.max(0, rows[i].floor - rows[i].pct);
+        }
+        let carry = 0;
+        if (manual) {
+            let d = wiz.discountMode === 'abs' ? loyaltyDiscount() : 0;
+            if (wiz.promo) d += discountValue(wiz.promo, promoLines());
+            carry = Math.max(0, Math.min(restTotal() - rows.reduce((s, r) => s + r.pct, 0), Math.round(d)));
+        }
+        let left = carry, total = 0;
+        for (const r of rows) {
+            const got = r.job ? r2(Math.min(Math.max(dayDiscountSend(r, left), r.floor), r.room)) : 0;
+            left = dayDiscountLeft(r, left, got);
+            total += got;
+        }
+        return { byDay: new Map(rows.map((r) => [r.day, r])), carry, total: r2(total) };
+    }
+    /** ревью-2 — в счёт дня: свой процент + перенос сверх придержанного для пола группы следующих дней. */
+    function dayDiscountSend(r, left) { return r.pct + Math.max(0, Math.round(left - r.reserve)); }
+    /** ревью-2 — перенос после дня: прежний + процент дня − применённое сервером (rest_discount; нет счёта — 0). */
+    function dayDiscountLeft(r, left, applied) { return Math.max(0, Math.round(left + r.pct - applied)); }
     // Вся скидка сметы — для показа и печати: пакет + остальное.
     function discountAmount() {
         return Math.min(cartTotal(), Math.round(packageDiscountTotal()) + restDiscount());
@@ -2949,6 +3018,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // REFERRAL_BILL_V1 — врач ручной скидки не даёт: в счёт уходит 0
             // (скидку группы пациента и пакета сервер даст сам).
             let discountLeft = doctorBill ? 0 : restDiscount();
+            // INVOICE_APPEND_V1 (ревью-2) — смета на несколько дней: процент —
+            // каждому дню свой, переносится только сумма (dayDiscountPlan).
+            const dayPlan = doctorBill ? null : dayDiscountPlan();
+            if (dayPlan) discountLeft = dayPlan.carry;
             // INVOICE_APPEND_V1 (ревью M1) — баланс или карта заплатят сразу после
             // выставления: счёт пациента — НОВЫЙ (append: false), как в 3.20.0.
             // В дописанном счёте оплата этой сметы была бы частичной, а оплата
@@ -2962,6 +3035,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const timed = lines.filter(c => !c.dateOnly);
                 const earliest = (timed.length ? timed : lines).map(lineIso).sort()[0];
                 const dayDoc = (lines.find(c => c.doctorId) || {}).doctorId || wiz.doctorId || null;
+                // INVOICE_APPEND_V1 (ревью-2) — доля дня в плане скидки и что применил его счёт пациента.
+                const dayRow = dayPlan ? (dayPlan.byDay.get(day) || { pct: 0, reserve: 0 }) : null;
+                let dayApplied = 0, dayFailed = false;
                 // VISITS_ONE_DOOR_V1 — ЗАВЕСТИ ВИЗИТ ДНЯ И ЗАНЯТЬ СЛОТ — ОДИН
                 // ВЫЗОВ. Раньше это были два: ensure_visit (вставка без единой
                 // проверки) и только потом calendar_book. Отказ второго
@@ -3155,7 +3231,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
                     for (const job of jobs) {
                         // WIZARD_DISCOUNT_V1 — сервер зажимает discount_amount в [0, subtotal].
-                        const disc = job.payer === null ? discountLeft : 0;
+                        // INVOICE_APPEND_V1 (ревью-2) — по плану дней: процент дня + перенос.
+                        const disc = job.payer === null ? (dayRow ? dayDiscountSend(dayRow, discountLeft) : discountLeft) : 0;
                         const { data: iRes, error: iErr } = await supabase.rpc('create_invoice_for_visit',
                             { visit_id: visit.id, visit_service_ids: job.ids, discount_amount: disc, payer_id: job.payer,
                                 ...(spendStored && job.payer === null ? { append: false } : {}) });   // INVOICE_APPEND_V1 (ревью M1)
@@ -3165,6 +3242,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                             invoiceFail = ' ' + (doctorBill
                                 ? trf('Счёт ({day}) не выставлен: {msg}.', { day, msg: String(iErr.message || iErr).replace(/[.\s]+$/, '') })
                                 : trf('Счёт ({day}, {label}) не выставлен: {msg} — можно выставить из визита.', { day, label: job.label, msg: iErr.message || iErr }));
+                            if (job.payer === null) dayFailed = true;   // ревью-2
                             continue;
                         }
                         invoicesOk++;
@@ -3191,7 +3269,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                                 ? Number(iRes.rest_discount)
                                 : Math.max(0, (Number(iRes && iRes.invoice && iRes.invoice.discount_amount) || 0)
                                     - ((iRes && iRes.items) || []).reduce((s, it) => s + (Number(it.discount_amount) || 0), 0));
-                            discountLeft = Math.max(0, Math.round(discountLeft - applied));
+                            if (dayRow) dayApplied += applied;   // ревью-2 — перенос считается после дня
+                            else discountLeft = Math.max(0, Math.round(discountLeft - applied));
                         }
                         // Печатаем счёт ПАЦИЕНТА: контрагенту чек на руки не нужен.
                         if (job.payer === null && !firstInvoice && iRes && iRes.invoice) firstInvoice = iRes.invoice;
@@ -3209,6 +3288,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         }
                     }
                 }
+                // INVOICE_APPEND_V1 (ревью-2) — остаток переноса на следующий день:
+                // процент дня, не применённый его счётом (счёта пациента у дня нет,
+                // сервер зажал суммой строк), идёт дальше, как прежде шла вся скидка;
+                // применённое сверх — вычитается. Счёт дня не выставился — его строки
+                // выставят из визита со своим полом группы, и процент дня следующему
+                // дню не переходит (иначе пол группы этих строк лёг бы дважды);
+                // перенос суммы остаётся целиком.
+                if (dayRow && !dayFailed) discountLeft = dayDiscountLeft(dayRow, discountLeft, dayApplied);
             }
 
             // QUEUE_TICKET_V1 — номера очереди для всех зарегистрированных услуг:

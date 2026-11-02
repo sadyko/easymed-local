@@ -82,6 +82,7 @@ const { compile } = await import('../../../../server/db/query-compiler.js');
 const { getRpc } = await import('../../../../server/services/rpc/index.js');
 const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');
 const { readableColumns } = await import('../../../../server/db/schema-registry.js');
+const { reshape } = await import('../../../../server/routes/db.js');   // ревью-2 — связи (patient_categories) вложенными, как настоящий маршрут
 
 let USER = { id: 1, role: 'registrar', extra_roles: [] };   // INVOICE_APPEND_V1 (ревью M1) — тест баланса идёт администратором
 let DB = null;
@@ -107,7 +108,7 @@ globalThis.fetch = async (url, opts) => {
     const { sql, params, meta } = compiled;
     try {
       if (meta.op === 'select') {
-        const rows = DB.prepare(sql).all(...params);
+        const rows = reshape(DB.prepare(sql).all(...params), meta);
         if (meta.single === 'single') return ok(rows[0]);
         if (meta.single === 'maybe') return ok(rows[0] ?? null);
         return ok(rows);
@@ -358,6 +359,101 @@ test('INVOICE_APPEND_V1 (ревью M1): мастер платит баланс�
     assert.equal(st(ecg), 'queued');
     assert.equal(getRpc('deposit_balance')(DB, { patient_id: 3 }, USER).balance, 150000, 'с баланса списано не ровно за ЭКГ');
   } finally { USER = was; }
+});
+
+// INVOICE_APPEND_V1 (ревью-2) — СМЕТА НА ДВА ДНЯ У ПАЦИЕНТА ГРУППЫ: СКИДКА
+// ГРУППЫ — КАЖДОМУ ДНЮ СВОЯ, А НЕ ДВАЖДЫ. VIP 10 %, анализ сегодня 40 000 +
+// консультация на выбранный день 100 000: смета — скидка 14 000, к оплате
+// 126 000. Мастер отдавал все 14 000 счёту первого дня, второму переносил
+// остаток (0) — а сервер давал второму счёту его собственный пол группы
+// (10 000): 14 000 + 10 000, пациент платил 116 000, клиника теряла 10 000.
+// PICK_DAY_V1 сделал такие сметы обычными. Теперь процент — каждому дню свой
+// (restTotal дня × процент = пол группы сервера), между днями переносится
+// только сумма (скидка суммой, промокод), и смета показывает ровно то, что
+// дадут счета.
+const vipPatient = (pct = 10) => {
+  const cat = DB.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('VIP', ?, 1)").run(pct).lastInsertRowid;
+  DB.prepare('UPDATE patients SET category_id = ? WHERE id = 3').run(cat);
+};
+/** Анализ (22) сегодня + консультация (21) на ближайший день врача — завтра. */
+async function twoDayCart() {
+  await openWizard([21, 22]);
+  byAttr(overlay(), 'data-pick-nearest', 21).click();
+  await flush(20);
+  assert.ok(byAttr(overlay(), 'data-many-days', 2), 'смета не на два дня');
+}
+/** Скидка суммой — как регистратор: переключатель «сум» и поле скидки. */
+async function amountDiscount(sum) {
+  const inp = walk(overlay()).find((n) => n.tagName === 'INPUT' && n.max === '100');
+  assert.ok(inp, 'нет поля скидки');
+  const btn = walk(overlay()).find((n) => n.tagName === 'BUTTON' && textOf(n).trim() === 'сум');
+  assert.ok(btn, 'нет переключателя «сум»');
+  btn.click();
+  await flush(5);
+  inp.value = String(sum);
+  inp.dispatchEvent({ type: 'input', target: inp, currentTarget: inp });
+  await flush(5);
+}
+const sentDiscounts = () => RPC.filter((c) => c.name === 'create_invoice_for_visit').map((c) => c.body.discount_amount);
+const invoiceMoney = () => DB.prepare('SELECT subtotal, discount_amount, total_amount FROM invoices ORDER BY id').all().map((r) => [r.subtotal, r.discount_amount, r.total_amount]);
+
+test('ревью-2: VIP 10 %, смета на два дня — скидка группы каждому дню своя: счета 36 000 + 90 000 = 126 000, как в смете', async () => {
+  seed();
+  vipPatient(10);
+  await twoDayCart();
+  const txt = textOf(overlay());
+  assert.ok(txt.includes('−14 000 сум'), 'смета показывает не 14 000 скидки: ' + txt.slice(txt.indexOf('Скидка'), txt.indexOf('Скидка') + 300));
+  assert.ok(txt.includes('126 000 сум'), 'смета — не 126 000 к оплате');
+  await pressUntilCreate();
+  assert.deepEqual(sentDiscounts(), [4000, 10000], 'в счета ушла не скидка своего дня');
+  assert.deepEqual(invoiceMoney(), [[40000, 4000, 36000], [100000, 10000, 90000]], 'скидка группы дана дважды');
+  assert.equal(invoiceMoney().reduce((s, m) => s + m[2], 0), 126000);
+});
+
+test('ревью-2: VIP 10 % на нецелые суммы — смета округляет скидку по дням, как уйдёт в счета (4 001 + 10 001), и равна сумме счетов', async () => {
+  seed();
+  vipPatient(10);
+  DB.prepare('UPDATE services SET price = 40005 WHERE id = 22').run();
+  DB.prepare('UPDATE services SET price = 100005 WHERE id = 21').run();
+  await twoDayCart();
+  const txt = textOf(overlay());
+  assert.ok(txt.includes('−14 002 сум'), 'смета: скидка не по дням: ' + txt.slice(txt.indexOf('Скидка'), txt.indexOf('Скидка') + 300));
+  assert.ok(txt.includes('126 008 сум'), 'смета — не 126 008 к оплате');
+  await pressUntilCreate();
+  assert.deepEqual(sentDiscounts(), [4001, 10001]);
+  assert.deepEqual(invoiceMoney(), [[40005, 4001, 36004], [100005, 10001, 90004]]);
+});
+
+test('ревью-2: скидка суммой на смету в два дня переносится, как прежде (50 000: 40 000 первому дню, 10 000 второму)', async () => {
+  seed();
+  await twoDayCart();
+  await amountDiscount(50000);
+  assert.ok(textOf(overlay()).includes('−50 000 сум'), 'смета показывает не 50 000 скидки');
+  await pressUntilCreate();
+  assert.deepEqual(sentDiscounts(), [50000, 10000], 'перенос скидки суммой изменился');
+  assert.deepEqual(invoiceMoney(), [[40000, 40000, 0], [100000, 10000, 90000]]);
+});
+
+test('ревью-2: VIP 10 % и скидка суммой 14 000 на два дня — 14 000 всего, пол группы второго дня не ложится сверху', async () => {
+  seed();
+  vipPatient(10);
+  await twoDayCart();
+  await amountDiscount(14000);
+  assert.ok(textOf(overlay()).includes('−14 000 сум'), 'смета показывает не 14 000 скидки');
+  await pressUntilCreate();
+  assert.deepEqual(sentDiscounts(), [4000, 10000]);
+  assert.deepEqual(invoiceMoney(), [[40000, 4000, 36000], [100000, 10000, 90000]], 'скидка вышла больше сметы');
+});
+
+test('ревью-2: смета на один день — как прежде (VIP 10 %, анализ + ЭКГ сегодня: одна скидка 9 000 со всей сметы)', async () => {
+  seed();
+  vipPatient(10);
+  await openWizard([22, 23]);
+  assert.ok(!byAttr(overlay(), 'data-many-days'), 'смета не на один день');
+  assert.ok(textOf(overlay()).includes('−9 000 сум'));
+  await pressUntilCreate();
+  assert.deepEqual(sentDiscounts(), [9000]);
+  assert.deepEqual(invoiceMoney(), [[90000, 9000, 81000]]);
 });
 
 test.after(() => { if (DB) DB.close(); DB = null; });

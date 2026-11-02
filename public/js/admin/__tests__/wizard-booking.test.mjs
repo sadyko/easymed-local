@@ -701,11 +701,18 @@ test('МАСТЕР: VIP + пакет — в счёт уходит скидка �
   // Сколько дней выйдет, зависит от часов: после полуночи первый свободный
   // слот приёма может оказаться в тот же день, что и УЗИ, — тогда счёт один.
   // Деньги от этого не зависят: сверяем присланную скидку и итог по базе.
+  // INVOICE_APPEND_V1 (ревью-2) — на два дня процент лояльности считается по
+  // дням: счёт приёма — его 10 000, счёт УЗИ (строк без пакета нет) — 0.
   const calls = RPC.filter((c) => c.name === 'create_invoice_for_visit').map((c) => c.body);
   assert.ok(calls.length === 1 || calls.length === 2, JSON.stringify(calls));
-  assert.equal(calls[0].discount_amount, 10000, 'в счёт ушла скидка со всей сметы, а не с приёма: ' + JSON.stringify(calls));
-  if (calls.length === 2) {
-    assert.equal(calls[1].discount_amount, 10000, 'скидка не перенесена на второй день: ' + JSON.stringify(calls));
+  const svcOf = (b) => b.visit_service_ids.map((id) => DB.prepare('SELECT service_id FROM visit_services WHERE id = ?').get(id).service_id);
+  if (calls.length === 1) {
+    assert.equal(calls[0].discount_amount, 10000, 'в счёт ушла скидка со всей сметы, а не с приёма: ' + JSON.stringify(calls));
+  } else {
+    for (const b of calls) {
+      const uzi = svcOf(b).includes(31);
+      assert.equal(b.discount_amount, uzi ? 0 : 10000, (uzi ? 'счёту УЗИ ушла скидка лояльности: ' : 'счёт приёма без своей скидки: ') + JSON.stringify(calls));
+    }
   }
   const tot = DB.prepare('SELECT SUM(subtotal) subtotal, SUM(discount_amount) discount_amount, SUM(total_amount) total_amount FROM invoices').get();
   assert.deepEqual({ ...tot }, { subtotal: 300000, discount_amount: 50000, total_amount: 250000 });
