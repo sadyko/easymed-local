@@ -31,7 +31,7 @@ import { actingActorName } from '../../../public/js/shared/act-as.js';
 import { fillTemplate } from '../server-message.js';
 import {
   orderKey, repeatableLine, repeatReasonOk, REPEAT_REASON_KEY, REPEAT_REASON_MAX, REPEAT_ROLES,
-  DUP_TEMPLATE_BILLED, DUP_TEMPLATE_UNBILLED, DUP_TEMPLATE_TWICE,
+  DUP_TEMPLATE_BILLED, DUP_TEMPLATE_UNBILLED, DUP_TEMPLATE_TWICE, DUP_TEMPLATE_PLAIN,
 } from '../../../public/js/shared/dup-order.js';
 
 export const DUP_CODE = 'duplicate_order';
@@ -106,12 +106,17 @@ function nameOf(db, row) {
   return '—';
 }
 
-/** Отказ по совпадению (для двери и для visit_dup_check). */
-export function refusalOf(db, hit) {
+/**
+ * Отказ по совпадению (для двери и для visit_dup_check). DUP_STOP_V1 (ревью M2) — plain:
+ * без «кем, когда, счёт № …» и без номера строки — тем, кому строки визита и счета не
+ * отдаются (patientDataRefusal): это данные пациента.
+ */
+export function refusalOf(db, hit, { plain = false } = {}) {
   if (hit.twice) {
     return new DuplicateOrderError({ template: DUP_TEMPLATE_TWICE, params: { service: nameOf(db, hit.line) }, index: hit.index });
   }
   const x = hit.existing;
+  if (plain) return new DuplicateOrderError({ template: DUP_TEMPLATE_PLAIN, params: { service: nameOf(db, x) }, index: hit.index });
   const params = {
     service: nameOf(db, x),
     who: x.creator_name || '—',

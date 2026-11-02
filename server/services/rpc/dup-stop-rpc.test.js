@@ -168,6 +168,40 @@ test('DUP_STOP_V1: visit_dup_check — визит дня пациента, на�
   assert.throws(() => call('visit_dup_check', db, { visit_id: vid }, { id: 99, role: 'lab', extra_roles: [] }), (e) => e.status === 403);
 });
 
+test('DUP_STOP_V1 (ревью M2): visit_dup_check — роли без строк визита (колл-центр) — ни назначенного, ни кем/когда/счёта: только «уже назначена»', () => {
+  const { db, pid, vid } = clinic();
+  const day = db.prepare("SELECT date(visit_date, 'localtime') d FROM visits WHERE id = ?").get(vid).d;
+  const lab = line(db, vid, { service_id: 40, created_by: DOC });
+  const inv = Number(db.prepare("INSERT INTO invoices (invoice_number, visit_id, patient_id, subtotal, total_amount, status) VALUES ('INV-A-26-00001', ?, ?, 40000, 40000, 'unpaid')").run(vid, pid).lastInsertRowid);
+  const item = Number(db.prepare("INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total) VALUES (?, 40, 'Анализ крови', 1, 40000, 40000)").run(inv).lastInsertRowid);
+  db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?').run(item, lab);
+  for (const args of [{ visit_id: vid }, { patient_id: pid, date: day }]) {
+    const out = call('visit_dup_check', db, { ...args, lines: [{ service_id: 40 }, { service_id: 50 }] }, callcenter);
+    assert.equal(out.visit_id, vid);
+    assert.deepEqual(out.ordered, [], 'колл-центру — строки визита, которые /api/db ему не отдаёт');
+    assert.equal(out.duplicates.length, 1);
+    const d = out.duplicates[0];
+    assert.equal(d.message, 'Эта услуга уже назначена в этом визите: «Анализ крови».');
+    assert.deepEqual(d.params, { service: 'Анализ крови' }, 'кем, когда и номер счёта — данные пациента');
+    assert.equal(d.line_id, null);
+    assert.ok(!/Врач Первый|INV-/.test(JSON.stringify(out)), JSON.stringify(out));
+  }
+  // регистратуре — как прежде, с подробностями
+  const reg = call('visit_dup_check', db, { visit_id: vid, lines: [{ service_id: 40 }] }, registrar);
+  assert.equal(reg.ordered.length, 1);
+  assert.match(reg.duplicates[0].message, /«Анализ крови» — Врач Первый, .+, счёт № INV-A-26-00001\.$/);
+});
+
+test('DUP_STOP_V1 (ревью M2): visit_dup_check — визит соседнего здания по номеру — отказ, как у дверей записи', () => {
+  const { db, pid } = clinic();
+  const far = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status, sync_origin) VALUES (?, ?, 'arrived', 'B')").run(pid, DAY).lastInsertRowid);
+  line(db, far, { service_id: 40 });
+  assert.throws(() => call('visit_dup_check', db, { visit_id: far, lines: [{ service_id: 40 }] }, registrar),
+    (e) => e.status === 403 && /Визит из филиала/.test(e.message));
+  assert.deepEqual(call('visit_dup_check', db, { visit_id: 999999, lines: [{ service_id: 40 }] }, registrar),
+    { visit_id: null, ordered: [], duplicates: [], can_override: false }, 'визита нет — повторов нет');
+});
+
 test('DUP_STOP_V1: visit_dup_check — строка записи колл-центра — не «уже назначено»: строка регистратуры займёт её место', () => {
   const { db, pid } = clinic();
   const future = new Date(); future.setDate(future.getDate() + 3); future.setHours(10, 0, 0, 0);

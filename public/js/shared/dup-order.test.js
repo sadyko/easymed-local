@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   orderKey, repeatableLine, repeatReasonOk, REPEAT_REASON_KEY, REPEAT_ROLES,
-  DUP_TEMPLATE_BILLED, DUP_TEMPLATE_UNBILLED, DUP_TEMPLATE_TWICE,
+  DUP_TEMPLATE_BILLED, DUP_TEMPLATE_UNBILLED, DUP_TEMPLATE_TWICE, DUP_TEMPLATE_PLAIN,
 } from './dup-order.js';
 import { STRINGS } from '../admin/i18n-strings.js';
 
@@ -51,7 +51,7 @@ test('DUP_STOP_V1: причина обхода — не короче 3 знак�
 
 test('DUP_STOP_V1: шаблоны отказа — в словаре на трёх языках, дырки сохранены, в uz/en нет кириллицы', () => {
   const holes = (s) => (String(s).match(/\{\w+\}/g) || []).sort().join(',');
-  for (const key of [DUP_TEMPLATE_BILLED, DUP_TEMPLATE_UNBILLED, DUP_TEMPLATE_TWICE]) {
+  for (const key of [DUP_TEMPLATE_BILLED, DUP_TEMPLATE_UNBILLED, DUP_TEMPLATE_TWICE, DUP_TEMPLATE_PLAIN]) {   // DUP_STOP_V1 (ревью M2) — PLAIN
     const e = STRINGS[key];
     assert.ok(e, 'нет в словаре: ' + key);
     for (const lang of ['uz', 'en']) {

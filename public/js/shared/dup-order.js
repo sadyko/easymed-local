@@ -33,6 +33,9 @@ export const REPEAT_ROLES = Object.freeze(['admin', 'head_doctor']);   // DUP_ST
 export const DUP_TEMPLATE_BILLED = 'Эта услуга уже назначена в этом визите: «{service}» — {who}, {when}, счёт № {invoice}.';
 export const DUP_TEMPLATE_UNBILLED = 'Эта услуга уже назначена в этом визите: «{service}» — {who}, {when}, счёта ещё нет.';
 export const DUP_TEMPLATE_TWICE = 'Услуга «{service}» выбрана дважды — в визит её назначают один раз.';
+// DUP_STOP_V1 (ревью M2) — тем, кому строки визита и счета не отдаются (колл-центр): без
+// «кем, когда, счёт № …» — это данные пациента; название — той услуги, которую выбрал сам.
+export const DUP_TEMPLATE_PLAIN = 'Эта услуга уже назначена в этом визите: «{service}».';
 
 const pos = (v) => (v != null && v !== '' && typeof v !== 'boolean' && Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
 

@@ -15,7 +15,14 @@
 // → { visit_id|null, ordered: [...], duplicates: [{ index, message, template, params, line_id }], can_override }
 //   ordered — назначенное (без строк, которые уступят новой строке той же услуги): по нему
 //   каталоги гасят услуги («уже назначено»).
+// DUP_STOP_V1 (ревью M2) — ЧЬИ ЭТО ДАННЫЕ. Строки визита и счета — данные пациента: тем, кому
+// /api/db их не отдаёт (patientDataRefusal('visit_services') — разделы и вкладки роли;
+// колл-центр), ordered пуст, а повтор назван без «кем, когда, счёт № …» и без номера строки
+// (DUP_TEMPLATE_PLAIN): название — той услуги, которую выбрал сам. Визит по номеру — только
+// своего здания (как у дверей записи); визит дня и так свой (dayVisitOf).
 import { hasAnyRole } from '../roles.js';
+import { patientDataRefusal } from '../../db/patient-data-gate.js';   // DUP_STOP_V1 (ревью M2)
+import { assertOwnBuilding } from './billing.js';   // DUP_STOP_V1 (ревью M2) — BRANCH_MONEY_GUARD_V1
 import { localDate } from '../domain/day.js';
 import { liveOrders, duplicateHits, refusalOf, canRepeatOrder, keyOfRow } from '../domain/dup-order.js';
 import { dayVisitOf } from './visits.js';
@@ -34,7 +41,11 @@ export function visitDupCheck(db, args, user) {
   if (!hasAnyRole(user, ROLES)) throw new RpcError('Вашей роли это действие недоступно.', 403);
   const a = args || {};
   let visitId = pos(a.visit_id);
-  if (visitId == null) {
+  if (visitId != null) {   // DUP_STOP_V1 (ревью M2) — визит соседнего здания отсюда не правят
+    const v = db.prepare('SELECT id, sync_origin FROM visits WHERE id = ?').get(visitId);
+    if (!v) visitId = null;
+    else assertOwnBuilding(db, v, 'Визит');
+  } else {
     const patientId = pos(a.patient_id);
     const raw = typeof a.date === 'string' ? a.date.trim() : '';
     if (patientId == null || !/^\d{4}-\d{2}-\d{2}/.test(raw)) throw new RpcError('Укажите визит или пациента и день.', 400);
@@ -57,7 +68,8 @@ export function visitDupCheck(db, args, user) {
     doctor_id: pos(l && l.doctor_id),
   }));
   const hits = duplicateHits(db, lines, { excludeIds: exclude, spare });
-  const ordered = liveOrders(db, visitId)
+  const hidden = patientDataRefusal('visit_services', user, db) != null;   // DUP_STOP_V1 (ревью M2)
+  const ordered = hidden ? [] : liveOrders(db, visitId)
     .filter((r) => !exclude.includes(Number(r.id)))
     .filter((r) => !spare({ visit_id: visitId, service_id: r.service_id, consultation_type_id: r.service_id == null ? r.consultation_type_id : null, doctor_id: r.doctor_id }).includes(Number(r.id)))
     .map((r) => ({
@@ -67,8 +79,8 @@ export function visitDupCheck(db, args, user) {
       who: r.creator_name || '', when: r.created_local || '', invoice_number: r.invoice_number || null,
     }));
   const duplicates = hits.map((h) => {
-    const e = refusalOf(db, h);
-    return { index: h.index, message: e.message, template: e.template, params: e.params, line_id: h.existing ? h.existing.id : null };
+    const e = refusalOf(db, h, { plain: hidden });   // DUP_STOP_V1 (ревью M2)
+    return { index: h.index, message: e.message, template: e.template, params: e.params, line_id: !hidden && h.existing ? h.existing.id : null };
   });
   return { visit_id: visitId, ordered, duplicates, can_override: canOverride };
 }
