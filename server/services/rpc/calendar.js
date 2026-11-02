@@ -155,8 +155,12 @@ import { crmVisitStatus } from '../crm/visit-status.js';
 // только в визите; перенос ведёт за собой строки записи карточки (crm/one-way.js followVisitMove, O6).
 import { dayVisitMovableFor, requestOfVisit } from '../crm/booking-mirror.js';
 import { dayVisitOtherDoctor } from '../crm/booking-mirror.js';   // REPEAT_VISIT_V1 (поправка 2) — честные слова отказа
+import { insertBookingLine, bookingLineRefusal } from '../crm/booking-mirror.js';   // REPEAT_VISIT_V1 — строка записи одной транзакцией с визитом
 import { followVisitMove } from '../crm/one-way.js';
+import { onVisitLinesAdded } from '../crm/one-way.js';   // REPEAT_VISIT_V1 — как у кассы и /api/db после новой строки
 import { rpcT } from '../server-message.js';   // REPEAT_VISIT_V1 — отказы визита дня шаблоном
+// REPEAT_VISIT_V1 (поправка 3) — новая строка записи проходит проверку повтора U9, как другие двери.
+import { assertOrders, logRepeatOrders, repeatReasonArg } from '../domain/dup-order.js';
 import { crmLinkVisit, crmBookingMoved } from '../crm/visit-link.js';   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 — crmBookingMoved (дата карточки при переносе)
 // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
 import { localDate } from '../domain/day.js';
@@ -995,6 +999,27 @@ function conflictError(doctorName, conflict) {
   return new RpcError(message, 409, 'slot_taken', params);
 }
 
+// REPEAT_VISIT_V1 (2026-11-02) — ВИДЫ ВИЗИТА, которые знает окно визита
+// (visit-modal.js «Visit type»). По умолчанию — 'first', как в миграции 003.
+export const VISIT_KINDS = Object.freeze(['first', 'repeat', 'follow_up', 'secondary']);
+
+// REPEAT_VISIT_V1 — у пациента в этот день уже есть визит. Запись с видом
+// визита или строкой (повторный визит из кабинета врача) — ТОЛЬКО новый
+// визит: ни перенос пустой записи под себя, ни «добавить в этот визит» —
+// окно обязано сказать «записан» лишь тогда, когда время действительно занято.
+function revisitDayTaken(db, dayVisit) {
+  const doc = dayVisit.doctor_id ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(dayVisit.doctor_id) : null;
+  const params = {
+    visit_id: dayVisit.id,
+    start: formatHhmm(minutesOfLocal(Date.parse(dayVisit.visit_date))),
+    doctor: (doc && doc.full_name) || '—',
+  };
+  const err = rpcT(RpcError,
+    'У пациента в этот день уже есть приём в {start} у {doctor} — выберите другой день или время.', params, 409);
+  err.code = 'revisit_day_taken';
+  return err;
+}
+
 /**
  * args:
  *   { visit_id?, patient_id?, doctor_id?, room_id?, service_id?, branch_id?,
@@ -1075,6 +1100,41 @@ export async function calendarBook(db, args, user, deps = {}) {
     throw new RpcError('Источник направления не найден.', 400);   // FINAL_ROLES_SYNC_FIX_V1 (M5) — по-русски
   }
 
+  // ─── REPEAT_VISIT_V1 — ВИД ВИЗИТА И СТРОКА ЗАПИСИ ОДНИМ ВЫЗОВОМ ─────────────
+  //
+  // «Повторный визит» кабинета врача писал визит тремя запросами браузера:
+  // calendar_book (всегда 'first'), правка visit_kind и вставка строки
+  // консультации без времени (и только если у врача есть виды приёма). Обрыв
+  // между ними оставлял «первичный» визит без услуги. Теперь calendar_book
+  // принимает visit_kind и line ({ consultation_type_id } | { service_id }) и
+  // пишет визит и строку в ОДНОЙ транзакции (insertBookingLine — та же дверь,
+  // что у записи колл-центра: цена — по дню ВИЗИТА, строка 'added' в смете,
+  // scheduled_at = начало приёма, врач строки — врач записи).
+  const kindArg = a.visit_kind == null || a.visit_kind === '' ? null : String(a.visit_kind);
+  const lineArg = a.line == null || a.line === '' ? null : a.line;
+  if (kindArg !== null && !VISIT_KINDS.includes(kindArg)) throw new RpcError('Вид визита указан неверно.', 400);
+  if ((kindArg !== null || lineArg !== null) && existing) {
+    throw new RpcError('Вид визита и услугу записи задают только новой записи.', 400);
+  }
+  let lineSpec = null;
+  if (lineArg !== null) {
+    if (typeof lineArg !== 'object' || Array.isArray(lineArg)) throw new RpcError('Услуга указана неверно.', 400);
+    const hasService = lineArg.service_id != null && lineArg.service_id !== '';
+    const sId = hasService ? Number(lineArg.service_id) : null;
+    const cId = !hasService && lineArg.consultation_type_id != null && lineArg.consultation_type_id !== ''
+      ? Number(lineArg.consultation_type_id) : null;
+    if (hasService ? !isPosInt(sId) : !isPosInt(cId)) throw new RpcError('Услуга указана неверно.', 400);
+    const refusal = bookingLineRefusal(db, { serviceId: sId, consultationTypeId: cId });
+    if (refusal) throw new RpcError(refusal, 400);
+    if (!doctorId) throw new RpcError('Для записи с услугой выберите врача.', 400);
+    if (!db.prepare("SELECT 1 FROM users WHERE id = ? AND (is_doctor = 1 OR role = 'doctor')").get(doctorId)) {
+      throw new RpcError('Врач строки не найден среди врачей клиники.', 400);
+    }
+    lineSpec = { serviceId: sId, consultationTypeId: cId };
+  }
+  const visitKind = kindArg || 'first';
+  const atomic = !existing && (kindArg !== null || lineSpec !== null);
+
   // ─── V3120_FIX — ОДИН ПАЦИЕНТ, ОДИН ДЕНЬ, ОДИН ВИЗИТ (DAY_VISIT_V1) ─────────
   //
   // Новая запись без visit_id заводила ВТОРОЙ живой визит пациенту, у которого
@@ -1095,6 +1155,7 @@ export async function calendarBook(db, args, user, deps = {}) {
          AND status NOT IN ('cancelled', 'no_show') AND sync_origin IS NULL
        ORDER BY id LIMIT 1`).get(patientId, dayIso);
     if (dayVisit) {
+      if (atomic) throw revisitDayTaken(db, dayVisit);   // REPEAT_VISIT_V1 — ни переноса, ни «добавить в этот визит»
       if (a.add_to_day_visit === true || a.add_to_day_visit === 'true') {
         return { visit: dayVisit, created: false, added_to_day_visit: true, emergency: false, day: dayIso };
       }
@@ -1191,6 +1252,7 @@ export async function calendarBook(db, args, user, deps = {}) {
 
   const run = db.transaction(() => {
     let id;
+    let lineId = null;   // REPEAT_VISIT_V1
     if (existing) {
       // branch_id ОБНОВЛЯЕТСЯ, но только когда его назвали явно. Иначе перенос
       // карточки мышью внутри дня молча переселял бы приём в другое здание.
@@ -1224,10 +1286,28 @@ export async function calendarBook(db, args, user, deps = {}) {
         INSERT INTO visits (patient_id, doctor_id, room_id, service_id, branch_id, visit_date,
                             duration_minutes, visit_kind, visit_type, status, notes, created_by, booked_at,
                             referral_source_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'first', 'outpatient', ?, ?, ?, ?, ?)
-      `).run(patientId, doctorId, roomId, serviceId, branchId, visitDate, durationMin, status, notes,
-        user && user.id, bookedAt, referralSourceId);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outpatient', ?, ?, ?, ?, ?)
+      `).run(patientId, doctorId, roomId, serviceId, branchId, visitDate, durationMin, visitKind, status, notes,
+        user && user.id, bookedAt, referralSourceId);   // REPEAT_VISIT_V1 — visitKind вместо зашитого 'first'
       id = Number(info.lastInsertRowid);
+      // REPEAT_VISIT_V1 — строка записи в ТОЙ ЖЕ транзакции: отказ строки
+      // откатывает и визит. День цены — местный день визита (SQLite
+      // 'localtime', как у котировки), не сегодняшний.
+      if (lineSpec) {
+        const day = db.prepare(`SELECT ${localDate('?')} AS d`).get(visitDate).d;
+        // REPEAT_VISIT_V1 (поправка 3) — проверка повтора U9 (DUP_STOP_V1), как у
+        // остальных дверей строки визита: до вставки — отказ или обход с причиной,
+        // после — журнал обхода. Визит новый, повтора здесь не бывает; дверь та же.
+        const orders = assertOrders(db, [{ visit_id: id, service_id: lineSpec.serviceId, consultation_type_id: lineSpec.consultationTypeId, doctor_id: doctorId }], { user, reason: repeatReasonArg(a) });
+        lineId = insertBookingLine(db, {
+          visit: { id, patient_id: patientId, day },
+          serviceId: lineSpec.serviceId, consultationTypeId: lineSpec.consultationTypeId,
+          doctorId, createdBy: user && user.id, scheduledAt: visitDate,
+        });
+        // REFERRAL_LINE_V1 (U10a) — штамп направления новой строки (lineReferralStamp) — здесь,
+        // после вставки и до журнала обхода, в той же транзакции.
+        logRepeatOrders(db, orders, user);
+      }
     }
 
     // ПОМЕТКА ОЖИДАНИЯ — ВТОРЫМ UPDATE, И ЭТО НАМЕРЕННО. cross_branch и
@@ -1240,12 +1320,15 @@ export async function calendarBook(db, args, user, deps = {}) {
     db.prepare('UPDATE visits SET cross_branch = ?, cross_branch_seq = ? WHERE id = ?')
       .run(target ? target.letter : '', seq, id);
 
-    return { visit: db.prepare('SELECT * FROM visits WHERE id = ?').get(id), created: !existing, seq };
+    return { visit: db.prepare('SELECT * FROM visits WHERE id = ?').get(id), created: !existing, seq, lineId };
   });
 
   const out = run();
   const seq = out.seq;
   delete out.seq;
+  const lineId = out.lineId;   // REPEAT_VISIT_V1
+  delete out.lineId;
+  if (lineId) out.line = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(lineId);
 
   // CRM_REAL_BOOKING_V1 (2026-09-21) — ОТМЕТКА ПРИХОДА ЗАКРЫВАЕТ ЗАЯВКУ.
   //
@@ -1281,6 +1364,7 @@ export async function calendarBook(db, args, user, deps = {}) {
   if (!existing) {
     crmLinkVisit(db, out.visit.id, user);   // CRM_UNIFY_V1
     crmVisitStatus(db, { visitId: out.visit.id, from: null, to: status });   // CRM_LINK_ALL_V1 (F-6) — после связи
+    if (lineId) onVisitLinesAdded(db, out.visit.id, [lineId]);   // REPEAT_VISIT_V1 — та же сверка карточки, что у новой строки /api/db
   } else if (BUSY_STATUSES.includes(status)
       && (existing.visit_date !== out.visit.visit_date || Number(existing.doctor_id || 0) !== Number(out.visit.doctor_id || 0))) {
     followVisitMove(db, out.visit.id, { oldDoctorId: existing.doctor_id });   // CRM_ONE_WAY_V1 (O6)

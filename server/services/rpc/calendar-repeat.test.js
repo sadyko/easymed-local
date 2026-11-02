@@ -21,6 +21,7 @@
 // ближайший будущий понедельник и дальше: «сегодня» здесь не участвует.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { calendarBook } from './calendar.js';
@@ -111,5 +112,130 @@ test('REPEAT_VISIT_V1 (поправка 2): пустая запись к дру�
     db.prepare("INSERT INTO invoices (invoice_number, visit_id, patient_id, subtotal, total_amount) VALUES ('INV-U8-1', ?, 77, 1000, 1000)").run(a.visit.id);
     await assert.rejects(() => calendarBook(db, { patient_id: 77, doctor_id: 10, start: at(7, 14), duration_minutes: 30 }, REG),
       (e) => e.code === 'day_visit_busy');
+  } finally { db.close(); }
+});
+
+const snapshot = (db) => ({
+  visits: db.prepare('SELECT id, patient_id, doctor_id, visit_date, visit_kind, status FROM visits ORDER BY id').all(),
+  lines: db.prepare('SELECT id, visit_id FROM visit_services ORDER BY id').all(),
+});
+const repeatArgs = (over = {}) => ({
+  patient_id: 77, doctor_id: 10, start: at(7, 14), duration_minutes: 30, status: 'scheduled',
+  notes: 'Контроль после лечения', visit_kind: 'repeat', line: { consultation_type_id: 6 }, ...over,
+});
+
+test('REPEAT_VISIT_V1: свободный день — визит «повторный» и консультация одним вызовом, время занято', async () => {
+  const db = freshDb();
+  try {
+    const out = await calendarBook(db, repeatArgs(), DOC);
+    assert.equal(out.created, true);
+    assert.equal(out.visit.visit_kind, 'repeat', 'визит записан «первичным»');
+    const lines = db.prepare('SELECT * FROM visit_services WHERE visit_id = ?').all(out.visit.id);
+    assert.equal(lines.length, 1, 'строка консультации не легла вместе с визитом');
+    const l = lines[0];
+    assert.deepEqual([l.consultation_type_id, l.service_id, l.doctor_id, l.status, l.unit_price, l.total],
+      [6, null, 10, 'added', 120000, 120000], 'строка: вид приёма, врач записи, цена врача');
+    assert.equal(Date.parse(l.scheduled_at), Date.parse(out.visit.visit_date), 'у строки нет времени приёма');
+    assert.equal(out.line && out.line.id, l.id, 'ответ не называет строку');
+    await assert.rejects(
+      () => calendarBook(db, { patient_id: 78, doctor_id: 10, start: at(7, 14), duration_minutes: 30 }, REG),
+      (e) => e.code === 'slot_taken', 'время повторного визита осталось свободным');
+  } finally { db.close(); }
+});
+
+test('REPEAT_VISIT_V1: у пациента в этот день уже есть визит — отказ словами, ничего не записано', async () => {
+  const db = freshDb();
+  try {
+    // Пустая запись к Петрову в 09:00 — без строк и без счёта.
+    await calendarBook(db, { patient_id: 77, doctor_id: 11, start: at(7, 9), duration_minutes: 30 }, REG);
+    const before = snapshot(db);
+    for (const extra of [{}, { add_to_day_visit: true }]) {
+      await assert.rejects(() => calendarBook(db, repeatArgs(extra), DOC), (e) => {
+        assert.equal(e.status, 409);
+        assert.equal(e.code, 'revisit_day_taken');
+        assert.deepEqual([e.params.start, e.params.doctor], ['09:00', 'Петров Пётр']);
+        assert.equal(e.message, 'У пациента в этот день уже есть приём в 09:00 у Петров Пётр — выберите другой день или время.');
+        assert.equal(e.template, 'У пациента в этот день уже есть приём в {start} у {doctor} — выберите другой день или время.');
+        return true;
+      });
+      assert.deepEqual(snapshot(db), before, 'отказ что-то записал или перенёс');
+    }
+    // Своя запись того же врача в этот день — тоже отказ, а не перенос на новое время.
+    const own = await calendarBook(db, repeatArgs({ patient_id: 78, start: at(8, 14) }), DOC);
+    await assert.rejects(() => calendarBook(db, repeatArgs({ patient_id: 78, start: at(8, 16) }), DOC),
+      (e) => e.code === 'revisit_day_taken' && e.params.start === '14:00');
+    assert.equal(Date.parse(db.prepare('SELECT visit_date FROM visits WHERE id = ?').get(own.visit.id).visit_date), Date.parse(at(8, 14)));
+  } finally { db.close(); }
+});
+
+test('REPEAT_VISIT_V1: отказ строки откатывает визит; неверный вид, услуга без врача и правка записи — отказ', async () => {
+  const db = freshDb();
+  try {
+    await assert.rejects(() => calendarBook(db, repeatArgs({ line: { service_id: 32 } }), DOC),
+      (e) => e.status === 400 && /хирургия/.test(e.message));
+    await assert.rejects(() => calendarBook(db, repeatArgs({ line: { consultation_type_id: 999 } }), DOC),
+      (e) => e.status === 400 && /Вид приёма не найден/.test(e.message));
+    await assert.rejects(() => calendarBook(db, repeatArgs({ visit_kind: 'weird' }), DOC), /Вид визита указан неверно/);
+    await assert.rejects(() => calendarBook(db, repeatArgs({ doctor_id: undefined }), REG), /выберите врача/);
+    await assert.rejects(() => calendarBook(db, repeatArgs({ doctor_id: 12 }), REG), /среди врачей клиники/);
+    assert.deepEqual(snapshot(db), { visits: [], lines: [] }, 'после отказа остался визит или строка');
+    const ok = await calendarBook(db, { patient_id: 77, doctor_id: 10, start: at(7, 9), duration_minutes: 30 }, REG);
+    await assert.rejects(() => calendarBook(db, { visit_id: ok.visit.id, start: at(7, 10), visit_kind: 'repeat' }, REG),
+      /только новой записи/);
+    assert.equal(db.prepare('SELECT visit_kind FROM visits WHERE id = ?').get(ok.visit.id).visit_kind, 'first');
+  } finally { db.close(); }
+});
+
+test('REPEAT_VISIT_V1: цена строки — по дню ВИЗИТА: через 10 дней после первого — ярус «второй визит»', async () => {
+  const db = freshDb();
+  try {
+    const first = await calendarBook(db, repeatArgs({ visit_kind: 'first', start: at(0, 10), line: { service_id: 31 } }), REG);
+    assert.deepEqual([first.line.price_tier, first.line.unit_price], ['primary', 100000]);
+    // Сегодня первого приёма ещё нет (он в будущем понедельнике) — котировка
+    // «на сегодня» дала бы первичную цену. День визита — через 10 дней после.
+    const rep = await calendarBook(db, repeatArgs({ start: at(10, 10), line: { service_id: 31 } }), DOC);
+    assert.deepEqual([rep.line.price_tier, rep.line.unit_price], ['secondary', 60000], 'цена посчитана не по дню визита');
+  } finally { db.close(); }
+});
+
+// REPEAT_VISIT_V1 (поправка 3) — строка записи calendar_book — такая же дверь
+// строки визита, как касса и /api/db: проверка повтора U9 (domain/dup-order.js)
+// ДО вставки и журнал обхода ПОСЛЕ, в той же транзакции. Визит здесь всегда
+// новый, повтору в нём взяться неоткуда, поэтому поведением проверку не
+// увидеть — проверяется сама дверь (исходник), чтобы следующая правка вставки
+// её не потеряла.
+test('REPEAT_VISIT_V1 (поправка 3): вставка строки calendar_book — между assertOrders и logRepeatOrders', () => {
+  const src = fs.readFileSync(new URL('./calendar.js', import.meta.url), 'utf8');
+  const at = src.indexOf('lineId = insertBookingLine(');
+  assert.ok(at > 0, 'вставки строки записи в calendar_book нет');
+  assert.match(src.slice(Math.max(0, at - 1500), at), /const orders = assertOrders\(db, \[\{ visit_id: id,[^\n]*\n?[^\n]*\], \{ user, reason: repeatReasonArg\(a\) \}\);/,
+    'перед вставкой нет проверки повтора');
+  assert.match(src.slice(at, at + 1500), /logRepeatOrders\(db, orders, user\);/, 'после вставки нет журнала обхода');
+});
+
+// REPEAT_VISIT_V1 · К6 (дизайн, касса «Платежи») — строка повторного визита —
+// обычная строка визита для обоих окон кассы: «Заменить услугу» в
+// неоплаченном счёте и «Вернуть услугу» после оплаты.
+test('REPEAT_VISIT_V1 (К6): строку повторного визита касса заменяет и возвращает, как любую', async () => {
+  const { createInvoiceForVisit, recordPayment, refundInvoiceLine, changeUnpaidService } = await import('./billing.js');
+  const { openCashShift } = await import('./cashier.js');
+  const db = freshDb();
+  try {
+    db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9, 'cash', 'x', 'Кассир', 'cashier')").run();
+    db.prepare("INSERT INTO services (id, name, price, type) VALUES (33, 'Осмотр кардиолога', 80000, 'consultation')").run();
+    const CASH = { id: 9, role: 'cashier', full_name: 'Кассир', extra_roles: [] };
+    openCashShift(db, { opening_float: 0 }, CASH);
+    const rep = await calendarBook(db, repeatArgs({ line: { service_id: 31 } }), DOC);
+    const bill = createInvoiceForVisit(db, { visit_id: rep.visit.id, visit_service_ids: [rep.line.id] }, REG);
+    assert.equal(bill.invoice.total_amount, 100000);
+    changeUnpaidService(db, { visit_service_id: rep.line.id, new_service_id: 33 }, REG);
+    const swapped = db.prepare('SELECT service_id, scheduled_at FROM visit_services WHERE id = ?').get(rep.line.id);
+    assert.equal(swapped.service_id, 33, 'замена не дошла до строки');
+    assert.equal(Date.parse(swapped.scheduled_at), Date.parse(rep.visit.visit_date), 'замена потеряла время приёма');
+    assert.equal(db.prepare('SELECT total_amount FROM invoices WHERE id = ?').get(bill.invoice.id).total_amount, 80000);
+    recordPayment(db, { invoice_id: bill.invoice.id, amount: 80000, method: 'cash' }, CASH);
+    const item = db.prepare('SELECT invoice_item_id AS i FROM visit_services WHERE id = ?').get(rep.line.id).i;
+    const back = refundInvoiceLine(db, { invoice_item_id: item }, CASH);
+    assert.equal(back.refunded, 80000, 'возврат строки повторного визита не вернул деньги');
   } finally { db.close(); }
 });
