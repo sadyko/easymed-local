@@ -359,6 +359,20 @@ test('«Врачи» на карточке администратора: рол�
   assert.ok(!('role' in body), 'роль ушла — администратор перестал бы быть администратором: ' + body.role);
 });
 
+// Ревью 7 — над подсказкой администратору стояла общая «Врачи получают роль
+// доступа «Врач»…» — две подсказки спорили: роль сменится или нет.
+test('ревью 7: «Должность» администратора — без подсказки «Врачи получают роль доступа «Врач»», у медсестры она есть', async () => {
+  const DOCTOR_ROLE_HINT = 'Врачи получают роль доступа «Врач»';
+  let card = await openCard('chief');
+  await tab(card, 'Должность');
+  assert.ok(textOf(card).includes(ADMIN_DOCTOR_HINT), 'администратору не сказано, что роль останется');
+  assert.ok(!textOf(card).includes(DOCTOR_ROLE_HINT), 'администратору обещана смена роли на «Врач»');
+  card = await openCard('nurse.k');
+  await tab(card, 'Должность');
+  assert.ok(textOf(card).includes(DOCTOR_ROLE_HINT), 'у медсестры пропала подсказка про роль «Врач»');
+  assert.ok(!textOf(card).includes(ADMIN_DOCTOR_HINT));
+});
+
 test('окно «Сменить пароль»: отключённому — предупреждение «включите «Активен»», включённому — как прежде', async () => {
   document.body.children.length = 0;
   writes.length = 0;
