@@ -67,6 +67,9 @@ const state = {
     // QUEUE_FRESH_V1 — очередь устарела: окно приёма завершило строку (queue-fresh.js).
     // Экран перечитывает её при возврате (ctx.onPayload) и при переходе на вкладку.
     queueStale:   false,
+    // QUEUE_FRESH_V1 — группа «Незавершённые с прошлых дней» раскрыта? Каждое
+    // открытие кабинета её сворачивает (renderConsultation), внутри — выбор держится.
+    pastOpen:     false,
     workRootEl:   null,      // WORK_ONE_SCREEN_V1 — корень вкладки «Мои приёмы», ему подгоняется высота окна
     // Today's referrals THIS doctor made (for the KPI cards / RecsModal). Lazy
     // and tolerant — see loadTodayReferrals(). { loaded, rows: [...] }
@@ -160,6 +163,7 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // Вкладки внутри открытого кабинета переключает setTab, сюда он не заходит,
     // поэтому выбранный фильтр живёт, пока кабинет открыт.
     state.statusFilter = 'active';
+    state.pastOpen = false;   // QUEUE_FRESH_V1 — группа прошлых дней при каждом открытии свёрнута
     clear(container);
     container.appendChild(h('div', { class: 'empty', style: { padding: '40px' } }, 'Загружаем кабинет…'));
     // DOCTOR_DASHBOARD_V1 — дашборд перечитывается при каждом входе в раздел:
@@ -1102,7 +1106,9 @@ function paintBody() {
                 : 'Нет записей на приём за выбранный период.'));
         return;
     }
-    body.appendChild(listView(filtered));
+    // QUEUE_FRESH_V1 — незавершённые прошлых дней — внизу «Активных» свёрнутой группой.
+    const { main, past } = splitPastOpen(filtered, state.statusFilter);
+    body.appendChild(listView(main, past));
 }
 
 // CABINET_ACTIVE_FIRST_V1 (2026-10-29) — СПИСОК ВРАЧА: СНАЧАЛА ТО, С ЧЕМ РАБОТАТЬ.
@@ -1162,6 +1168,28 @@ export function sortQueue(rows) {
     // не стоит выше сегодняшнего пациента); остальное — порядок сервера.
     const key = (r) => queueRank(r) * 2 + (isTodayDate(r && r.visitDate) ? 0 : 1);
     return (rows || []).slice().sort((a, b) => key(a) - key(b));
+}
+
+// QUEUE_FRESH_V1 (3.21.0) — НЕЗАВЕРШЁННЫЕ СТРОКИ ПРОШЛЫХ ДНЕЙ. Рабочая строка
+// (запланирована / в очереди / идёт приём), чей визит раньше сегодняшнего
+// МЕСТНОГО дня, — не работа сегодняшнего дня: в «Активных» она уходит вниз,
+// в свёрнутую группу «Незавершённые с прошлых дней · N» (решение владельца
+// 2026-11-02). Из списка она не пропадает: группу раскрывают, строку открывают
+// и завершают. В остальных фильтрах — как была. Экспорт — для проверки.
+const OPEN_STATUSES = ['added', 'queued', 'in_progress'];
+export function isPastOpen(r, now = new Date()) {
+    if (!r || !OPEN_STATUSES.includes(r.status)) return false;
+    const d = visitDay(r.visitDate);
+    if (!d) return false;
+    const today = new Date(now); today.setHours(0, 0, 0, 0);
+    return d.getTime() < today.getTime();
+}
+export function splitPastOpen(rows, filter, now = new Date()) {
+    const list = rows || [];
+    if (filter !== 'active') return { main: list, past: [] };
+    const main = [], past = [];
+    for (const r of list) (isPastOpen(r, now) ? past : main).push(r);
+    return { main, past };
 }
 
 function filterRows() {
@@ -1225,7 +1253,7 @@ function inDateRange(visitDate) {
 // List view — RU columns, only columns backed by real data. (AURORA_QUEUE_V1)
 // № · Пациент · Тип услуги · Услуга · Статус услуги · Запись · Принято · Действие
 // ---------------------------------------------------------------------------
-function listView(rows) {
+function listView(rows, past = []) {
     return h('table', { class: 'tbl' },
         h('thead', null, h('tr', null,
             h('th', { style: { width: '40px' } }, '№'),
@@ -1237,8 +1265,27 @@ function listView(rows) {
             h('th', null, 'Принято'),
             h('th', { style: { width: '170px', textAlign: 'right' } }, 'Действие'),
         )),
-        h('tbody', null, ...rows.map((r, i) => listRow(r, i))),
+        h('tbody', null, ...rows.map((r, i) => listRow(r, i)),
+            // QUEUE_FRESH_V1 — незавершённые прошлых дней: строка-кнопка внизу, свёрнуто.
+            past.length ? pastGroupRow(past.length) : null,
+            ...(past.length && state.pastOpen ? past.map((r, i) => listRow(r, rows.length + i)) : [])),
     );
+}
+
+// QUEUE_FRESH_V1 — заголовок группы «Незавершённые с прошлых дней · N»: шеврон
+// системы (свёрнуто — вправо, раскрыто — вниз), как «Завершённые · N» в «Моём
+// дне». Щелчок перерисовывает только список.
+function pastGroupRow(n) {
+    return h('tr', { 'data-past-group': '' },
+        h('td', { colspan: '8', style: { padding: '8px 12px', background: 'var(--ink-25)' } },
+            h('button', {
+                type: 'button', class: 'btn btn-ghost btn-sm', 'data-past-toggle': '',
+                'aria-expanded': state.pastOpen ? 'true' : 'false',
+                onclick: () => { state.pastOpen = !state.pastOpen; paintBody(); },
+            },
+                h('span', { style: { display: 'inline-flex', transition: 'transform .15s', transform: state.pastOpen ? 'rotate(90deg)' : 'none' } },
+                    Icon('ChevronRight', { size: 14 })),
+                ' ', trf('Незавершённые с прошлых дней · {n}', { n }))));
 }
 
 function listRow(r, i) {

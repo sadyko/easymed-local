@@ -275,3 +275,63 @@ test('подписи «Обновить» — в словаре на трёх я
     for (const lang of ['uz', 'en']) assert.doesNotMatch(e[lang], /[Ѐ-ӿ]/, key + ': ' + lang);
   }
 });
+
+// --- незавершённые прошлых дней ----------------------------------------------
+const pastToggle = (root) => walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && 'data-past-toggle' in n.attrs);
+
+test('незавершённые прошлых дней — внизу «Активных» свёрнутой группой; раскрывается; новое открытие кабинета её сворачивает', async (t) => {
+  ROWS = [...BASE.map((r) => ({ ...r })),
+    vs('o1', 'queued',      'Юсупов',   'Акмал', dayAt(-1)),
+    vs('o2', 'in_progress', 'Хасанова', 'Лола',  dayAt(-3)),
+    vs('o3', 'completed',   'Шарипов',  'Ильёс', dayAt(-1)),
+    vs(905,  'queued',      'Рахимов',  'Анвар', dayAt(-2))];   // касса вернула деньги («Платежи» → «Вернуть услугу»)
+  REFUNDED = new Set([905]);
+  t.after(() => { reseed(); REFUNDED = new Set(); });
+  const root = await openWork();
+  assert.deepStrictEqual(visibleNames(root), ['Гаипов Тимур', 'Аминов Олим', 'Зокиров Бобур'],
+    'вчерашние незавершённые стоят среди сегодняшней работы');
+  const head = pastToggle(root);
+  assert.ok(head, 'группы «Незавершённые с прошлых дней» нет');
+  assert.ok(textOf(head).includes('Незавершённые с прошлых дней · 2'), textOf(head));
+  assert.strictEqual(head.attrs['aria-expanded'], 'false', 'группа открылась раскрытой');
+  head.click();
+  assert.deepStrictEqual(visibleNames(root), ['Гаипов Тимур', 'Аминов Олим', 'Зокиров Бобур', 'Хасанова Лола', 'Юсупов Акмал'],
+    'раскрытая группа — не внизу или не те строки');
+  assert.strictEqual(pastToggle(root).attrs['aria-expanded'], 'true');
+  // «Все статусы» — без группы: строки на своих местах, как раньше.
+  pickStatus(root, 'all');
+  assert.strictEqual(pastToggle(root), undefined, 'группа видна вне «Активных»');
+  assert.ok(visibleNames(root).includes('Юсупов Акмал') && visibleNames(root).includes('Шарипов Ильёс'));
+  // Возвращённая строка — не работа (REFUND_ANY_V1): ни в «Активных», ни в группе; видна в «Все статусы».
+  assert.ok(visibleNames(root).includes('Рахимов Анвар'), 'возвращённая строка пропала из «Все статусы»');
+  // Новое открытие кабинета — группа снова свёрнута.
+  const again = await openWork();
+  assert.strictEqual(pastToggle(again).attrs['aria-expanded'], 'false');
+  assert.ok(!visibleNames(again).includes('Юсупов Акмал'));
+});
+
+test('isPastOpen / splitPastOpen: рабочая строка визита раньше сегодняшнего МЕСТНОГО дня; группа — только в «Активных»', () => {
+  const now = new Date(2026, 10, 2, 10, 0);
+  const at = (y, m, d, hh, mm = 0) => new Date(y, m, d, hh, mm).toISOString();
+  const rows = [
+    { id: 'a', status: 'queued',      visitDate: at(2026, 10, 1, 23, 50) },   // вчера поздно вечером
+    { id: 'b', status: 'in_progress', visitDate: at(2026, 10, 2, 0, 30) },    // сегодня 00:30 — не прошлый день
+    { id: 'c', status: 'completed',   visitDate: at(2026, 9, 30, 9) },        // завершён — не «незавершённый»
+    { id: 'd', status: 'added',       visitDate: at(2026, 9, 28, 9) },
+    { id: 'e', status: 'queued',      visitDate: null },
+  ];
+  assert.deepStrictEqual(rows.filter((r) => cabinet.isPastOpen(r, now)).map((r) => r.id), ['a', 'd']);
+  const s = cabinet.splitPastOpen(rows, 'active', now);
+  assert.deepStrictEqual([s.main.map((r) => r.id), s.past.map((r) => r.id)], [['b', 'c', 'e'], ['a', 'd']]);
+  assert.deepStrictEqual(cabinet.splitPastOpen(rows, 'all', now).past, []);
+});
+
+test('подпись группы — в словаре на трёх языках, с {n}, uz/en без кириллицы', async () => {
+  const { STRINGS } = await import('../i18n-strings.js');
+  const e = STRINGS['Незавершённые с прошлых дней · {n}'];
+  assert.ok(e && e.ru && e.uz && e.en, 'нет ключа словаря');
+  for (const lang of ['uz', 'en']) {
+    assert.doesNotMatch(e[lang], /[Ѐ-ӿ]/, lang);
+    assert.ok(e[lang].includes('{n}'), lang + ' без {n}');
+  }
+});
