@@ -18,6 +18,10 @@ import { orderKey, repeatableLine, REPEAT_REASON_KEY, REPEAT_REASON_MIN } from '
 
 const isPosInt = (v) => v != null && String(v).trim() !== '' && Number.isInteger(Number(v)) && Number(v) > 0;
 const EMPTY = Object.freeze({ visitId: null, ordered: [], canOverride: false });
+// DUP_STOP_V1 (ревью m4) — назначенная услуга сравнивается по врачу, только если врач в её
+// ключе (сервер: консультация, которой нужен врач, — 's:30|d:10'). Услуга без типа (по
+// умолчанию 'consultation') и без «нужен врач» — 's:70': погашена у любого врача.
+const perDoctor = (o) => String((o && o.key) || '').includes('|d:');
 
 function target({ visitId = null, patientId = null, day = null } = {}) {
     if (isPosInt(visitId)) return { visit_id: Number(visitId) };
@@ -52,7 +56,7 @@ export function orderedMatch(svc, ordered, doctorId = null) {
     if (repeatableLine({ serviceType: svc.type || null })) return null;
     const rows = ordered.filter((o) => o.service_id != null && Number(o.service_id) === Number(svc.id));
     if (!rows.length) return null;
-    if (svc.type !== 'consultation') return { blocked: true, row: rows[0] };
+    if (!rows.some(perDoctor)) return { blocked: true, row: rows[0] };   // DUP_STOP_V1 (ревью m4) — врач в ключе решает сервер
     const mine = isPosInt(doctorId) ? rows.find((o) => Number(o.doctor_id) === Number(doctorId)) : null;
     return mine ? { blocked: true, row: mine } : { blocked: false, row: rows[0] };
 }
@@ -69,7 +73,7 @@ export function blockedPickIds(ordered) {
     const out = [];
     for (const o of ordered || []) {
         if (o.service_id != null) {
-            if (o.service_type !== 'consultation' && o.service_type !== 'procedure') out.push(Number(o.service_id));
+            if (!perDoctor(o) && o.service_type !== 'procedure') out.push(Number(o.service_id));   // DUP_STOP_V1 (ревью m4)
         } else if (o.consultation_type_id != null && o.doctor_id != null) {
             out.push(`c|${o.doctor_id}|${o.consultation_type_id}`);
         }

@@ -226,9 +226,12 @@ test('ТОТ ЖЕ ДЕНЬ, ТА ЖЕ УСЛУГА: строка, уже леж�
   // спрашивать надо С НИМ.
   const todayIso = new Date().toISOString();
   DB.prepare("INSERT INTO visits (id, patient_id, visit_date, visit_type, status) VALUES (91, ?, ?, 'outpatient', 'arrived')").run(PATIENT, todayIso);
-  // DUP_STOP_V1 — первая строка — приём у врача 7: тот же приём без врача — другое назначение
-  // (у того же врача это был бы повтор в визите — 409, проверка тарифа здесь о другом).
-  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (91, ?, ?, 1, 200000, 200000, 'added')").run(TIERED, DOCTOR);
+  // DUP_STOP_V1 (ревью m4) — «Приём кардиолога» здесь без «нужен врач»: врач в ключ не входит,
+  // и живая строка той же услуги — повтор в визите (409). Первая строка отпущена со счёта с
+  // возвратом (отметка 'out'): назначением она не считается (К1), а в цене следующей строки
+  // по-прежнему лежит на сегодняшнем визите — проверка тарифа здесь о ней.
+  const first = Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (91, ?, ?, 1, 200000, 200000, 'added')").run(TIERED, DOCTOR).lastInsertRowid);
+  DB.prepare("INSERT INTO pay_refund_releases (kind, line_id, invoice_id) VALUES ('out', ?, 1)").run(first);
 
   const out = await registerWalkIn({ patientId: PATIENT, lines: [{ service: svc(TIERED), doctorId: null }] });
 

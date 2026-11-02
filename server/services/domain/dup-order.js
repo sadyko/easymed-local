@@ -57,7 +57,7 @@ export function liveOrders(db, visitId) {
   return db.prepare(`
     SELECT vs.id, vs.visit_id, vs.service_id, vs.consultation_type_id, vs.doctor_id, vs.status,
            vs.invoice_item_id, vs.created_by, vs.created_at,
-           s.type AS service_type, s.name AS service_name,
+           s.type AS service_type, s.name AS service_name, s.requires_doctor AS service_requires_doctor,
            COALESCE(ct.name_ru, ct.name) AS consultation_name,
            u.full_name AS creator_name, d.full_name AS doctor_name,
            strftime('%d.%m.%Y %H:%M', vs.created_at, 'localtime') AS created_local,
@@ -76,16 +76,21 @@ export function liveOrders(db, visitId) {
      ORDER BY vs.id`).all(id);
 }
 
-const serviceTypeStmt = (db) => db.prepare('SELECT type, name FROM services WHERE id = ?');
+const serviceTypeStmt = (db) => db.prepare('SELECT type, name, requires_doctor FROM services WHERE id = ?');
 
-/** Ключ строки базы (или строки запроса в форме базы). */
-export function keyOfRow(row, serviceType = row && row.service_type) {
+/**
+ * Ключ строки базы (или строки запроса в форме базы). DUP_STOP_V1 (ревью m4) —
+ * requiresDoctor (services.requires_doctor): врач в ключе — только у консультации,
+ * которой нужен врач; у строки liveOrders он уже в service_requires_doctor.
+ */
+export function keyOfRow(row, serviceType = row && row.service_type, requiresDoctor = row && row.service_requires_doctor) {
   if (!row) return null;
   return orderKey({
     serviceId: row.service_id ?? null,
     consultationTypeId: row.service_id == null ? (row.consultation_type_id ?? null) : null,
     doctorId: row.doctor_id ?? null,
     serviceType: serviceType ?? null,
+    requiresDoctor: requiresDoctor ?? null,
   });
 }
 
@@ -142,7 +147,7 @@ export function duplicateHits(db, lines, { excludeIds = [], spare = null } = {})
     const svc = sid != null ? typeOf.get(sid) : null;
     const serviceType = svc ? svc.type : null;
     if (repeatableLine({ clinicItemId: line.clinic_item_id ?? null, serviceType })) return;
-    const key = keyOfRow(line, serviceType);
+    const key = keyOfRow(line, serviceType, svc ? svc.requires_doctor : null);   // DUP_STOP_V1 (ревью m4)
     if (!key) return;
     const own = visitId + '#' + key;
     if (seen.has(own)) { hits.push({ index, line, twice: true }); return; }
@@ -223,9 +228,10 @@ export function repeatReasonArg(args) {
  */
 export function assertChangedOrder(db, before, after, { user = null, reason = null, excludeIds = [] } = {}) {
   const typeOf = serviceTypeStmt(db);
-  const t = (row) => (row && row.service_id != null ? (typeOf.get(row.service_id) || {}).type || null : null);
-  const was = keyOfRow(before, t(before));
-  const now = keyOfRow(after, t(after));
+  const svcOf = (row) => (row && row.service_id != null ? typeOf.get(row.service_id) || {} : {});
+  const keyOf = (row) => { const s = svcOf(row); return keyOfRow(row, s.type || null, s.requires_doctor ?? null); };   // DUP_STOP_V1 (ревью m4)
+  const was = keyOf(before);
+  const now = keyOf(after);
   if (!now || now === was) return {};
   return assertOrders(db, [after], { user, reason, excludeIds: [before.id, ...excludeIds].filter((x) => x != null) });
 }

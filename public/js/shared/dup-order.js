@@ -10,8 +10,13 @@
 // ПРАВИЛО «ТА ЖЕ УСЛУГА» (ключ orderKey):
 //   • услуга каталога — та же услуга ('s:12');
 //   • консультация — тот же вид И тот же врач: строка вида приёма ('c:5|d:10',
-//     service_id пуст) или услуга типа «консультация» ('s:30|d:10'); консультация у
-//     ДРУГОГО врача — другое назначение, её можно;
+//     service_id пуст) или услуга типа «консультация», которой нужен врач
+//     (services.requires_doctor = 1, 's:30|d:10'); консультация у ДРУГОГО врача —
+//     другое назначение, её можно;
+//   • DUP_STOP_V1 (ревью m4) — услуга типа «консультация» БЕЗ «нужен врач» — просто
+//     услуга ('s:70'): services.type по умолчанию 'consultation' (миграция 022), и
+//     анализ без проставленного типа с врачом в ключе проходил у каждого врача заново.
+//     Врач в ключе — как needsDoctor CRM (вид приёма или requires_doctor);
 //   • повтор разрешён товару (clinic_item_id) и процедуре (services.type = 'procedure'):
 //     у них количество, и капельница дважды за визит — обычное дело.
 // Отменённая строка и строка, отпущенная со счёта с возвратом, — не назначение
@@ -36,16 +41,21 @@ export function repeatableLine({ clinicItemId = null, serviceType = null } = {})
   return pos(clinicItemId) != null || serviceType === 'procedure';
 }
 
+/** DUP_STOP_V1 (ревью m4) — флаг «нужен врач» из базы (0/1, '0'/'1') или экрана (true/false). */
+const flagOn = (v) => v === true || Number(v) === 1;
+
 /**
  * DUP_STOP_V1 — ключ «та же услуга». null — сравнивать нечего (товар, пустая строка).
- * @param {{serviceId?:any, consultationTypeId?:any, doctorId?:any, serviceType?:string|null}} line
+ * requiresDoctor — services.requires_doctor (ревью m4): врач в ключе услуги — только у
+ * консультации, которой нужен врач.
+ * @param {{serviceId?:any, consultationTypeId?:any, doctorId?:any, serviceType?:string|null, requiresDoctor?:any}} line
  */
-export function orderKey({ serviceId = null, consultationTypeId = null, doctorId = null, serviceType = null } = {}) {
+export function orderKey({ serviceId = null, consultationTypeId = null, doctorId = null, serviceType = null, requiresDoctor = null } = {}) {
   const d = pos(doctorId);
   if (serviceId != null && serviceId !== '') {
     const s = pos(serviceId);
     if (s == null) return null;
-    return serviceType === 'consultation' ? `s:${s}|d:${d ?? ''}` : `s:${s}`;
+    return serviceType === 'consultation' && flagOn(requiresDoctor) ? `s:${s}|d:${d ?? ''}` : `s:${s}`;   // DUP_STOP_V1 (ревью m4)
   }
   const c = pos(consultationTypeId);
   return c != null ? `c:${c}|d:${d ?? ''}` : null;

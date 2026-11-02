@@ -11,13 +11,28 @@ import { STRINGS } from '../admin/i18n-strings.js';
 test('DUP_STOP_V1: ключ — услуга каталога без врача; консультация — вид (или услуга-консультация) и врач', () => {
   assert.equal(orderKey({ serviceId: 40, serviceType: 'lab', doctorId: 10 }), 's:40');
   assert.equal(orderKey({ serviceId: '40', serviceType: 'imaging' }), 's:40');
-  assert.equal(orderKey({ serviceId: 30, serviceType: 'consultation', doctorId: 10 }), 's:30|d:10');
-  assert.equal(orderKey({ serviceId: 30, serviceType: 'consultation' }), 's:30|d:');
+  assert.equal(orderKey({ serviceId: 30, serviceType: 'consultation', requiresDoctor: 1, doctorId: 10 }), 's:30|d:10');
+  assert.equal(orderKey({ serviceId: 30, serviceType: 'consultation', requiresDoctor: true }), 's:30|d:');
   assert.equal(orderKey({ consultationTypeId: 5, doctorId: 11 }), 'c:5|d:11');
   assert.notEqual(orderKey({ consultationTypeId: 5, doctorId: 11 }), orderKey({ consultationTypeId: 5, doctorId: 12 }));
   assert.equal(orderKey({ serviceId: 'c|7|3' }), null, 'id выбора консультации каталога — не услуга');
   assert.equal(orderKey({}), null);
   assert.equal(orderKey({ serviceId: 40, consultationTypeId: 5, serviceType: 'lab' }), 's:40', 'услуга сильнее вида приёма');
+});
+
+test('DUP_STOP_V1 (ревью m4): услуга без типа (по умолчанию «консультация») и без «нужен врач» — ключ без врача', () => {
+  // services.type по умолчанию 'consultation' (миграция 022): анализ, которому тип не
+  // проставили, с врачом в ключе проходил трижды — без врача, у врача 10 и у врача 11.
+  for (const doctorId of [null, 10, 11]) {
+    assert.equal(orderKey({ serviceId: 70, serviceType: 'consultation', doctorId }), 's:70', 'врач ' + doctorId);
+    assert.equal(orderKey({ serviceId: 70, serviceType: 'consultation', requiresDoctor: 0, doctorId }), 's:70');
+    assert.equal(orderKey({ serviceId: 70, serviceType: 'consultation', requiresDoctor: '0', doctorId }), 's:70', 'строка «0» из базы');
+  }
+  // врач в ключе — только консультации, которой нужен врач (как needsDoctor CRM)
+  assert.equal(orderKey({ serviceId: 50, serviceType: 'imaging', requiresDoctor: 1, doctorId: 10 }), 's:50', 'УЗИ с врачом — та же услуга у любого врача');
+  // вид приёма — всегда вид и врач
+  assert.equal(orderKey({ consultationTypeId: 5, doctorId: 10 }), 'c:5|d:10');
+  assert.equal(orderKey({ consultationTypeId: 5 }), 'c:5|d:');
 });
 
 test('DUP_STOP_V1: повтор разрешён товару и процедуре, остальным — нет', () => {

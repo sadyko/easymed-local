@@ -23,11 +23,12 @@ function clinic() {
   u.run(10, 'doc', 'x', 'Иванов', 'doctor', 1, '[]');
   u.run(11, 'doc2', 'x', 'Петров', 'doctor', 1, '[]');
   u.run(12, 'chief', 'x', 'Главный', 'doctor', 1, '["head_doctor"]');
-  const s = db.prepare('INSERT INTO services (id, name, price, type) VALUES (?,?,?,?)');
-  s.run(30, 'Консультация терапевта', 100000, 'consultation');
-  s.run(40, 'Анализ крови', 40000, 'lab');
-  s.run(50, 'УЗИ брюшной полости', 80000, 'imaging');
-  s.run(60, 'Капельница', 30000, 'procedure');
+  const s = db.prepare('INSERT INTO services (id, name, price, type, requires_doctor) VALUES (?,?,?,?,?)');
+  s.run(30, 'Консультация терапевта', 100000, 'consultation', 1);
+  s.run(40, 'Анализ крови', 40000, 'lab', 0);
+  s.run(50, 'УЗИ брюшной полости', 80000, 'imaging', 0);
+  s.run(60, 'Капельница', 30000, 'procedure', 0);
+  db.prepare("INSERT INTO services (id, name, price) VALUES (70, 'Без типа', 50000)").run();   // DUP_STOP_V1 (ревью m4) — тип по умолчанию, врач не нужен
   db.prepare("INSERT INTO consultation_types (id, name, name_ru, price, active) VALUES (5, 'Первичный', 'Первичный приём', 90000, 1)").run();
   db.prepare("INSERT INTO patients (id, full_name) VALUES (77, 'Пациент Тест')").run();
   const v1 = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (77, '2026-11-02T05:00:00Z', 'arrived')").run().lastInsertRowid);
@@ -87,6 +88,18 @@ test('DUP_STOP_V1: консультация — тот же вид и тот ж�
   assert.equal(duplicateHits(db, [{ visit_id: v1, consultation_type_id: 5, doctor_id: 11 }]).length, 0, 'вид приёма у другого врача');
   assert.equal(duplicateHits(db, [{ visit_id: v1, service_id: 30, doctor_id: 10 }]).length, 1, 'услуга-консультация у того же врача');
   assert.equal(duplicateHits(db, [{ visit_id: v1, service_id: 30, doctor_id: 11 }]).length, 0, 'услуга-консультация у другого врача');
+});
+
+test('DUP_STOP_V1 (ревью m4): услуга без типа и без «нужен врач» — та же услуга при любом враче; смена врача её ключ не меняет', () => {
+  const { db, v1 } = clinic();
+  const x = line(db, { visit_id: v1, service_id: 70, doctor_id: null });
+  for (const doctor_id of [null, 10, 11]) {
+    assert.equal(duplicateHits(db, [{ visit_id: v1, service_id: 70, doctor_id }]).length, 1, 'врач ' + doctor_id);
+  }
+  assert.equal(duplicateHits(db, [{ visit_id: v1, service_id: 70, doctor_id: 10 }, { visit_id: v1, service_id: 70, doctor_id: 11 }], { excludeIds: [x] })[0].twice, true, 'дважды в запросе у разных врачей');
+  assert.equal(liveOrders(db, v1)[0].service_requires_doctor, 0);
+  const rowOf = (id) => db.prepare('SELECT * FROM visit_services WHERE id = ?').get(id);
+  assert.deepEqual(assertChangedOrder(db, rowOf(x), { ...rowOf(x), doctor_id: 11 }, { user: REG }), {}, 'другой исполнитель — тот же ключ');
 });
 
 test('DUP_STOP_V1: внутри одного запроса одна услуга дважды — повтор; разные визиты — нет', () => {

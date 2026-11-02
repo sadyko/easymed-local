@@ -37,7 +37,9 @@ async function start() {
   user.run(12, 'clerk', hashPassword('password1'), 'Регистратор с ценой', 'registrar', 0, 1);
   user.run(13, 'gone', hashPassword('password1'), 'Уволенный', 'doctor', 1, 0);
   // Приём 200 000; второй визит 60 000; повторный — бесплатно (пример владельца).
-  db.prepare("INSERT INTO services (id, name, price, type, price_secondary, secondary_days_from, secondary_days_to, price_repeat) VALUES (60,'Приём кардиолога',200000,'consultation',60000,1,6,0)").run();
+  // DUP_STOP_V1 (ревью m4) — приёму нужен врач: консультация — та же только у того же врача
+  // (без «нужен врач» врач в ключ повтора не входит, и строки трёх врачей ниже были бы повтором).
+  db.prepare("INSERT INTO services (id, name, price, type, requires_doctor, price_secondary, secondary_days_from, secondary_days_to, price_repeat) VALUES (60,'Приём кардиолога',200000,'consultation',1,60000,1,6,0)").run();
   db.prepare("INSERT INTO services (id, name, price, type, is_lab) VALUES (40,'Анализ крови',40000,'lab',1)").run();
   for (const id of [11, 12, 13]) {
     db.prepare('UPDATE users SET service_rates = ? WHERE id = ?').run(JSON.stringify([{ service_id: 60, price: 0, pct: 0 }, { service_id: 40, price: 0, pct: 0 }]), id);

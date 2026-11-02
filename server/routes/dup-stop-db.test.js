@@ -34,6 +34,8 @@ async function start() {
   db.prepare("INSERT INTO services (id, name, price, type, is_lab) VALUES (40,'Анализ крови',40000,'lab',1)").run();
   db.prepare("INSERT INTO services (id, name, price, type) VALUES (50,'УЗИ брюшной полости',80000,'imaging')").run();
   db.prepare("INSERT INTO services (id, name, price, type) VALUES (60,'Капельница',30000,'procedure')").run();
+  db.prepare("INSERT INTO services (id, name, price) VALUES (70,'Без типа (по умолчанию)',50000)").run();   // DUP_STOP_V1 (ревью m4) — type по умолчанию 'consultation', врач не нужен
+  db.prepare("INSERT INTO services (id, name, price, type, requires_doctor) VALUES (80,'Приём терапевта',100000,'consultation',1)").run();
   db.prepare("INSERT INTO consultation_types (id, name, name_ru, price, active) VALUES (5, 'Первичный', 'Первичный приём', 90000, 1)").run();
   db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (77,'Пациент Тест','+998900000077')").run();
   const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
@@ -107,6 +109,23 @@ test('DUP_STOP_V1: консультация — у того же врача вт
     assert.equal(same.status, 409, JSON.stringify(same.json));
     assert.equal(same.json.error.code, 'duplicate_order');
     assert.equal((await ins(t, 'reg', ct(11))).status, 200, 'другой врач');
+  } finally { t.close(); }
+});
+
+test('DUP_STOP_V1 (ревью m4): услуга без типа и без «нужен врач» — второй раз нельзя ни без врача, ни у другого врача; консультация с врачом — по врачу', async () => {
+  const t = await start();
+  try {
+    const v = arrivedVisit(t);
+    assert.equal((await ins(t, 'reg', row(v, 70))).status, 200);
+    for (const doctor of [10, 11, null]) {
+      const again = await ins(t, 'reg', row(v, 70, doctor ? { doctor_id: doctor } : {}));
+      assert.equal(again.status, 409, 'врач ' + doctor + ': ' + JSON.stringify(again.json));
+      assert.equal(again.json.error.code, 'duplicate_order');
+    }
+    assert.equal(live(t, v, 70), 1);
+    assert.equal((await ins(t, 'reg', row(v, 80, { doctor_id: 10 }))).status, 200);
+    assert.equal((await ins(t, 'reg', row(v, 80, { doctor_id: 10 }))).status, 409, 'консультация у того же врача');
+    assert.equal((await ins(t, 'reg', row(v, 80, { doctor_id: 11 }))).status, 200, 'консультация у другого врача');
   } finally { t.close(); }
 });
 

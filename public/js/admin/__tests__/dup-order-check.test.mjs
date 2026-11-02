@@ -64,10 +64,11 @@ function seed() {
   u.run(2, 'reg', 'x', 'Регистратура', 'registrar', 0, '[]');
   u.run(10, 'doc', 'x', 'Иванов', 'doctor', 1, '[]');
   u.run(11, 'doc2', 'x', 'Петров', 'doctor', 1, '[]');
-  const s = db.prepare('INSERT INTO services (id, name, price, type) VALUES (?,?,?,?)');
-  s.run(30, 'Консультация терапевта', 100000, 'consultation');
-  s.run(40, 'Анализ крови', 40000, 'lab');
-  s.run(60, 'Капельница', 30000, 'procedure');
+  const s = db.prepare('INSERT INTO services (id, name, price, type, requires_doctor) VALUES (?,?,?,?,?)');
+  s.run(30, 'Консультация терапевта', 100000, 'consultation', 1);
+  s.run(40, 'Анализ крови', 40000, 'lab', 0);
+  s.run(60, 'Капельница', 30000, 'procedure', 0);
+  db.prepare("INSERT INTO services (id, name, price) VALUES (70, 'Без типа', 50000)").run();   // DUP_STOP_V1 (ревью m4) — тип по умолчанию, врач не нужен
   db.prepare("INSERT INTO consultation_types (id, name, name_ru, price, active) VALUES (5, 'Первичный', 'Первичный приём', 90000, 1)").run();
   db.prepare("INSERT INTO patients (id, full_name) VALUES (77, 'Пациент Тест')").run();
   const now = new Date(); now.setHours(9, 0, 0, 0);
@@ -98,6 +99,18 @@ test('DUP_STOP_V1: loadVisitOrders — назначенное визита дн�
   assert.equal(orderedMatch({ id: 'c|10|5', __consult: true, consultation_type_id: 5, __consultDoctorId: 10 }, got.ordered), null);
   assert.deepEqual(blockedPickIds(got.ordered).sort(), [40, 'c|11|5'].sort());
   assert.deepEqual(await loadVisitOrders({ patientId: 77 }), { visitId: null, ordered: [], canOverride: false }, 'нет дня — не спрашиваем');
+});
+
+test('DUP_STOP_V1 (ревью m4): услуга без типа и без «нужен врач», назначенная у врача, погашена для любого врача и в каталоге', async () => {
+  const { v, day } = seed();
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, 70, 10, 1, 0, 0, 'added', 10)").run(v);
+  const got = await loadVisitOrders({ patientId: 77, day });
+  const o = got.ordered.find((r) => r.service_id === 70);
+  assert.equal(o.key, 's:70', 'в ключе — врач строки');
+  const svc = { id: 70, type: 'consultation', requires_doctor: 0 };
+  for (const doc of [null, 10, 11]) assert.equal(orderedMatch(svc, got.ordered, doc).blocked, true, 'врач ' + doc);
+  assert.ok(blockedPickIds(got.ordered).includes(70), 'каталог не гасит услугу без типа');
+  assert.ok(!blockedPickIds(got.ordered).includes(30), 'консультация с врачом гасится только для своего врача');
 });
 
 test('DUP_STOP_V1: precheckOrders — повтор: отказ словами сервера, писать нельзя; новое — можно; сервер молчит — решит дверь', async () => {
