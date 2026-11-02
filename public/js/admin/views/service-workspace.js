@@ -36,7 +36,7 @@ import { lockSignButton, refuseSignWhileActing, isActingNow } from '../act-as-cl
 import { REFUNDED_LINE_MARK, REFUNDED_SIGN_REFUSAL } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 — «Услуга возвращена»
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
-import { renderDesignedVariant } from './doc-variants.js?v=cabr3';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3
+import { renderDesignedVariant, visitTypeLabel } from './doc-variants.js?v=cabr3';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3
 import { openVitalsDialog } from './patient-card.js?v=labshared1';   // CARD_SPEC_V1 — same URL as admin.js (one instance)
 import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — chips must survive a NULL type_id
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
@@ -44,7 +44,7 @@ import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   /
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
 import { consultPrice as consultPriceRule, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 import { sanitizeStoredHtml, richHasContent, textBreaks, textIsBlank } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком · PRINT_SKIP_EMPTY_V1 — пустота поля рецепта
-import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
+import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText, docDayText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
 import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark, gapCaret, edgeHop, breakLines, keepMarks, clearSplitIds } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
 import { TBL_MAX_ROWS, TBL_MAX_COLS, insertTable, tableChain, tableHasText, cellStep, cellCaret, addRow, canRemoveRow, removeRow, addColumn, removeColumn, deleteTable, insertCellBreak, normalizePasted, beforeTable, rowHasText, columnHasText, stripPastedSplit } from './blank-table.js';   // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в бланке
 
@@ -1040,6 +1040,7 @@ export function soapForm(ctx) {
                 // начинался с двух строк служебных данных.
                 a4Letterhead({
                     title: 'Приём (осмотр, консультация)',
+                    date: docDayText({ visitDate: svc.visitDate }),   // PRINT_VISIT_DATE_V1 — «от …» на экране — день приёма, а не сегодня
                     ids: [
                         { label: 'ID', value: String(p.mrn || p.id || '') },
                         { label: '№ приёма', value: String(ctx.visitServiceId || '') },
@@ -6494,7 +6495,11 @@ function buildBlankData(ctx) {
         sex: recipeSexLabel(p.gender) || recipeSexLabel(p.sex),
         ...docSigner(svc, me()),   // DOC_DOCTOR_FALLBACK_V1 — no assigned doctor → the signed-in clinician · CABINET_FIX_V1_R1 — имя и специальность одного человека
         service: svc.name || '',
-        issueDate: new Date().toLocaleDateString('ru-RU'),
+        // PRINT_VISIT_DATE_V1 — день документа — день ПРИЁМА (shared/cabinet-doc.js docDayText), а
+        // не день, когда лист открыли, напечатали или подписали: экран, «Печать» и архивная
+        // копия при подписи собираются здесь. «Тип визита» — ступень цены строки (visitTypeLabel).
+        issueDate: docDayText({ visitDate: svc.visitDate, history: wsState.payload && wsState.payload.history }),
+        visitType: visitTypeLabel(svc.priceTier),
         prescriptions: (wsState.payload && wsState.payload.prescriptions || []).map(rx => ({ name: rx.name, dose: rx.dose, freq: rx.freq, dur: rx.dur, notes: rx.notes, nurse: rx.nurse })),
         // DX_ALL_IN_DOC_V1 — every diagnosis (incl. сопутствующие/осложнения/фоновые)
         diagnoses: (wsState.payload && wsState.payload.diagnoses || []).map(x => ({ code: x.code, name: x.name, type: x.type, typeLabel: DX_TYPE_RU[x.type] || '' })),
@@ -6549,6 +6554,9 @@ export function diagDocData(base, { editor = false, images = [] } = {}) {
         patientName: b.patientName || '', mrn: b.mrn || '', dob: b.dob || '', sex: b.sex || '',
         doctorName: b.doctorName || '', doctorSpec: b.doctorSpec || '', service: b.service || '',
         radiologist: b.doctorName || '', radiologistSpec: b.doctorSpec || '', issueDate: b.issueDate || '',
+        // PRINT_VISIT_DATE_V1 — «Выдан» листа диагностики — день приёма: бланк читает dateOut,
+        // а его здесь не ставил никто, и любой лист (и перепечатка из архива) выходил сегодняшним.
+        dateOut: b.issueDate || '',
         description: b.instrumental || '', conclusion: b.dx || '',
         // CABINET_FIX_V1_R2 — код отдельным узлом бланка. CABINET_FIX_V1_R3 (F2) — текст врача
         // под СВОИМ ключом (conclusionBody): conclusionText — «Заключение» протокола приёма, и

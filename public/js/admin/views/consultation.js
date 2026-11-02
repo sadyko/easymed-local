@@ -228,7 +228,7 @@ async function loadServices() {
         .from('visit_services')
         .select(`
             id, status, quantity, unit_price, total, created_at, invoice_item_id,
-            visit_id, service_id, doctor_id, consultation_type_id,
+            visit_id, service_id, doctor_id, consultation_type_id, price_tier,
             services(name, type, duration_minutes, service_types(name), departments(kind)),
             consultation_types(name_ru, name_uz),
             users:doctor_id(full_name, specialty, rooms(name, floors(name))),
@@ -332,6 +332,7 @@ async function loadServices() {
             price:           Number(r.unit_price || 0) * Number(r.quantity || 1),
             createdAt:       r.created_at,
             visitDate:       r.visits?.visit_date,
+            priceTier:       r.price_tier || null,   // PRINT_VISIT_DATE_V1 — «Тип визита» на заключении
         };
     });
 }
@@ -1307,7 +1308,8 @@ async function openWorkspace(r) {
             doctorSpec: r.doctorSpecialty,
             price:      r.price,
             visitId:    r.visitId,
-            visitDate:  r.visitDate || null,   // SERVICES_PACKAGES_V1 — день визита: каталог кабинета считает по нему срок пакета
+            visitDate:  r.visitDate || null,   // SERVICES_PACKAGES_V1 — день визита: каталог кабинета считает по нему срок пакета · PRINT_VISIT_DATE_V1 — и день документа
+            priceTier:  r.priceTier || null,   // PRINT_VISIT_DATE_V1 — ступень цены строки → «Тип визита» на заключении
             status:     r.status,
         },
     };
