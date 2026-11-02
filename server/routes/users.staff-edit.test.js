@@ -254,6 +254,21 @@ test('STAFF_EDIT_V1: пока установка в группе филиало�
   } finally { server.close(); }
 });
 
+// Ревью 2 — заведение сотрудника (POST) — тоже установка пароля: пять ошибок
+// под логином, которого ещё не было, запирали нового сотрудника на 5 минут.
+test('STAFF_EDIT_V1 (ревью 2): новый сотрудник входит сразу, хотя под его логином ошибались до заведения', async () => {
+  const { server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    for (let i = 0; i < 4; i += 1) assert.equal((await tryLogin(base, 'fresh.one', 'wrong')).status, 401);
+    assert.equal((await tryLogin(base, 'fresh.one', 'wrong')).status, 429, 'пятая ошибка запирает вход');
+    const r = await call(base, boss, 'POST', '/api/users', { username: ' Fresh.One ', password: 'pw-fresh', role: 'nurse',
+      last_name: 'Фрешева', first_name: 'Ольга', phone: '+998901234500' });
+    assert.equal(r.status, 201, JSON.stringify(r.json));
+    assert.equal((await tryLogin(base, 'fresh.one', 'pw-fresh')).status, 200, 'нового сотрудника заперли чужие ошибки');
+  } finally { server.close(); }
+});
+
 test('STAFF_EDIT_V1: отказы смены логина — ключи словаря на трёх языках', () => {
   for (const m of [LOGIN_RULE_MESSAGE, LOGIN_TAKEN_MESSAGE, LOGIN_ADMIN_ONLY_MESSAGE, LOGIN_BRANCHES_MESSAGE]) {
     const e = STRINGS[m];

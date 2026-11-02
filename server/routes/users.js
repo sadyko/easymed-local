@@ -809,6 +809,9 @@ export function userRoutes(db, { dataDir } = {}) {
       if (specs.list) writeSpecialties(db, Number(ins.lastInsertRowid), specs.list);
       return ins;
     })();
+    // STAFF_EDIT_V1 (ревью 2) — заведение сотрудника — тоже установка пароля: ошибки
+    // под этим логином, пока его не было, не запирают нового сотрудника на 5 минут.
+    clearLoginLocks(name);
     const created = withSpecialties(db, employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid)));
     res.status(201).json({ user: employeeMoneyAllowed(db, req.user) ? created : stripMoney(created) });
   });
