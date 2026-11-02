@@ -1744,17 +1744,26 @@ export function openServicePickerModal({
     // начинались с сегодня, и услуге одного врача каталог сам ставил ближайшее
     // время — сегодня на визите завтра: строка ложилась (scheduled_at) и
     // получала талон очереди на другой день, чем её визит.
+    // PICK_DAY_V1 (ревью m4) — окно, открытое НА ДЕНЬ (календарь кабинетов:
+    // щелчок по дорожке кабинета, врача нет — initialDateIso), начинает дни с
+    // ЭТОГО дня (schedBaseIso: день окна, если он впереди, иначе сегодня).
+    // Прежде дни шли с сегодня: строка врача брала сегодняшнее время, и визит
+    // (cartVisitDateIso) записывался сегодня, а не на щёлкнутый день; занятый
+    // сегодня врач давал пометку «Сегодня…» записи на другой день.
     function catDays() {
         const out = [], t = new Date();
+        const todayIso = localYmd(t);
         const vday = attachMode ? localDayOf(packageDay) : '';
         if (/^\d{4}-\d{2}-\d{2}$/.test(vday)) {
             const d = new Date(Number(vday.slice(0, 4)), Number(vday.slice(5, 7)) - 1, Number(vday.slice(8, 10)));
-            return [{ iso: vday, wd: CAT_WD[d.getDay()], dd: d.getDate(), mo: CAT_MO[d.getMonth()], today: vday === localYmd(t) }];
+            return [{ iso: vday, wd: CAT_WD[d.getDay()], dd: d.getDate(), mo: CAT_MO[d.getMonth()], today: vday === todayIso }];
         }
+        const base = String(schedBaseIso() || '');
+        const b = /^\d{4}-\d{2}-\d{2}$/.test(base) ? new Date(Number(base.slice(0, 4)), Number(base.slice(5, 7)) - 1, Number(base.slice(8, 10))) : t;
         for (let i = 0; i < 7; i++) {
-            const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + i);
-            out.push({ iso: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
-                wd: CAT_WD[d.getDay()], dd: d.getDate(), mo: CAT_MO[d.getMonth()], today: i === 0 });
+            const d = new Date(b.getFullYear(), b.getMonth(), b.getDate() + i);
+            const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            out.push({ iso, wd: CAT_WD[d.getDay()], dd: d.getDate(), mo: CAT_MO[d.getMonth()], today: iso === todayIso });
         }
         return out;
     }

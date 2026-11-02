@@ -110,6 +110,7 @@ const ADMIN = { id: 1, role: 'admin', extra_roles: [] };
 let USER = ADMIN;
 let DB = null;
 let busyToday = false;
+let busyOn = null;   // 'ГГГГ-ММ-ДД' — в этот день врач УЗИ занят
 const RPC = [];
 globalThis.fetch = async (url, opts) => {
     const u = String(url);
@@ -118,7 +119,7 @@ globalThis.fetch = async (url, opts) => {
     const fail = (status, message, code = 'bad_request', params) => ({ ok: false, status, json: async () => ({ error: { code, message, params } }), headers: { getSetCookie: () => [] } });
     if (u === '/api/rpc/calendar_slots') {
         // Врач УЗИ свободен с 10:00 каждый день; busyToday — сегодня занят.
-        if (busyToday && body.date === ymd(new Date())) return ok({ date: body.date, slots: [], busy: [] });
+        if ((busyToday && body.date === ymd(new Date())) || body.date === busyOn) return ok({ date: body.date, slots: [], busy: [] });
         return ok({ date: body.date, slots: [{ start: '10:00', end: '10:30' }], busy: [] });
     }
     if (u.startsWith('/api/rpc/')) {
@@ -148,6 +149,7 @@ globalThis.fetch = async (url, opts) => {
 };
 
 const { openServicePickerModal, forgetSlots } = await import('../views/service-picker-modal.js');
+const { nearestButtonText } = await import('../views/pick-day.js');
 
 const PATIENT = { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' };
 
@@ -260,6 +262,50 @@ test('M2: дописанный счёт — номера очереди стро
     const html = PRINTED.join('\n');
     assert.match(html, /Номера? очереди/, 'на бумаге дописанного счёта нет блока очереди');
     assert.ok(html.includes(before.inv.invoice_number), 'напечатан не весь счёт с сервера');
+});
+
+// m4 — календарь кабинетов: дорожка кабинета (lockedDoctor нет), щелчок по дню
+// через три дня. Врачебная строка каталога берёт время В ЭТОТ день.
+for (const [what, busy] of [['врач свободен и сегодня', false], ['сегодня врач занят', true]]) {
+    test(`m4: запись из календаря кабинетов на ${ymd(dayAt(3))} (${what}) — время УЗИ в щёлкнутый день, не сегодня; пометки «Сегодня…» нет`, async () => {
+        seed();
+        busyToday = busy;
+        try {
+            const day = ymd(dayAt(3));
+            const at = new Date(dayAt(3)); at.setHours(14, 0, 0, 0);
+            openCalc({ roomId: null, lockedDoctor: null, scheduledISO: at.toISOString(), initialDateIso: day });
+            await until(() => addOf('УЗИ'), 'строка УЗИ в каталоге');
+            addOf('УЗИ').click();
+            await until(() => byClass(top(), 'wzc-cta')[0] && byClass(top(), 'wzc-cta')[0].disabled === false, 'смета готова');
+            assert.ok(!textOf(top()).includes('Сегодня у врача нет свободного времени'), 'пометка про сегодня на записи другого дня');
+            assert.ok(!byAttr(top(), 'data-no-today'), 'у строки нет времени в щёлкнутый день');
+            const note = byAttr(top(), 'data-visit-day');
+            assert.ok(note, 'смета не говорит, что визит не сегодня');
+            assert.equal(note.attrs['data-visit-day'], day);
+            await saveCalc();
+            const book = RPC.find((c) => c.name === 'calendar_book');
+            assert.ok(book, 'запись не дошла до calendar_book');
+            assert.equal(ymd(new Date(book.body.start)), day, 'визит записан не на щёлкнутый день');
+            const v = DB.prepare('SELECT visit_date FROM visits ORDER BY id DESC LIMIT 1').get();
+            assert.equal(ymd(new Date(v.visit_date)), day);
+        } finally { busyToday = false; }
+    });
+}
+
+test(`m4: запись из календаря кабинетов на ${ymd(dayAt(3))}, врач в этот день занят — пометка «В этот день…», а не «Сегодня…»; «Ближайшее» — следующий день`, async () => {
+    seed();
+    busyOn = ymd(dayAt(3));
+    try {
+        const at = new Date(dayAt(3)); at.setHours(14, 0, 0, 0);
+        openCalc({ roomId: null, lockedDoctor: null, scheduledISO: at.toISOString(), initialDateIso: ymd(dayAt(3)) });
+        await until(() => addOf('УЗИ'), 'строка УЗИ в каталоге');
+        addOf('УЗИ').click();
+        await until(() => byAttr(top(), 'data-pick-nearest', 22), 'кнопка «Ближайшее»');
+        assert.ok(textOf(top()).includes('В этот день у врача нет свободного времени'), 'нет пометки про щёлкнутый день');
+        assert.ok(!textOf(top()).includes('Сегодня у врача нет свободного времени'), 'пометка про сегодня на записи другого дня');
+        assert.equal(textOf(byAttr(top(), 'data-pick-nearest', 22)).trim(), nearestButtonText(ymd(dayAt(4)), 600));
+        assert.equal(byClass(top(), 'wzc-cta')[0].disabled, true, 'смета без времени ушла бы дальше');
+    } finally { busyOn = null; }
 });
 
 test.after(() => { if (DB) DB.close(); DB = null; });
