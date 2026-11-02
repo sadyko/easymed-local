@@ -352,7 +352,8 @@ test('DOCTOR_PROFILE_V1: «по записи» — окна и занятое, �
   days.dispatchEvent({ type: 'change' });
   await save(s.card);
   const body = onlyWrite();
-  assert.deepEqual([body.booking_days, body.scheduling_mode], [30, 'schedulable']);
+  assert.equal(body.booking_days, 30);
+  assert.ok(!('scheduling_mode' in body), 'режим приёма не трогали — не уходит (STAFF_EDIT_V1)');
 });
 
 test('DOCTOR_PROFILE_V1: «Живая очередь» — часы приёма, «сейчас ждут» по отметке; уходят scheduling_mode и show_queue_count', async () => {

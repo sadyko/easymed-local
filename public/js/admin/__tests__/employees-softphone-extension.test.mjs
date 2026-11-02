@@ -130,12 +130,12 @@ test('поле номера — назначенный номер; сотруд�
   assert.ok(textOf(card).includes(SOFT_HINT), 'нет подсказки о телефоне Easy-Med');
 });
 
-test('сохранение без правки поля уходит с назначенным номером (сервер ничего не назначит)', async () => {
+test('сохранение без правки поля: номер не уходит вовсе (сервер ничего не назначит)', async () => {
   const card = await openCard('self.pick');
   type(tags(card, 'input').find((i) => i.attrs.placeholder === 'name@example.uz'), 'k@example.uz');
   await save(card);
   assert.equal(writes.length, 1, 'карточка не ушла на сервер');
-  assert.equal(writes[0].body.pbx_extension, '108', 'ушёл самовыбранный номер — сохранение назначило бы его');
+  assert.ok(!('pbx_extension' in writes[0].body), 'номер не трогали — не уходит, и самовыбранный не назначится (STAFF_EDIT_V1)');
   assert.equal(writes[0].body.assign_extension, true, 'нет отметки новой карточки — сервер не назначит и вписанный номер');
 });
 

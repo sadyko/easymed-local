@@ -192,5 +192,5 @@ test('ставки переживают открытие и сохранение
   const card = await openTab('Стационар');
   const body = await save(card);
   assert.deepEqual(body.inpatient_rates, DOC.inpatient_rates);
-  assert.equal(body.inpatient_referral_pct, 5);
+  assert.ok(!('inpatient_referral_pct' in body), 'бонус без правок ушёл (STAFF_EDIT_V1: уходит только изменённое)');
 });

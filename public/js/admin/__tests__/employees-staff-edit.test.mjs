@@ -188,3 +188,55 @@ test('STAFF_EDIT_V1: новые фразы — на трёх языках, в uz
     }
   }
 });
+
+test('уходят только изменённые поля: старая дата, категория и процент 150 не уходят и не держат сохранение', async () => {
+  const card = await openCard('old.doc');
+  setPhone(card, '+998 90 111 22 44');
+  await save(card);
+  assert.equal(writes.length, 1, 'карточка не ушла на сервер');
+  const body = writes[0].body;
+  assert.equal(writes[0].method, 'PATCH');
+  assert.ok(body.phone.replace(/\D/g, '').endsWith('901112244'), body.phone);
+  for (const k of ['hire_date', 'doctor_category', 'employment_type', 'salary_percent', 'salary_fixed', 'salary_type', 'staff_type',
+    'role', 'custom_role_code', 'is_active', 'extra_roles', 'working_hours', 'branch_id', 'department_id', 'email',
+    'scheduling_mode', 'pbx_extension', 'license_number', 'license_expiry_date', 'specialties', 'specialty',
+    'inpatient_referral_pct', 'inpatient_referral_fixed']) {
+    assert.ok(!(k in body), k + ' ушло, хотя его не трогали: ' + JSON.stringify(body[k]));
+  }
+  assert.equal(body.assign_extension, true, 'отметка новой карточки — всегда');
+  assert.ok(!toasts.some((t) => /неверно|Неизвестн/.test(t)), 'посторонний отказ: ' + toasts.join(' | '));
+});
+
+// Охрана: роль и своя роль клиники уходят вместе (сервер выводит роль из своей роли).
+test('«Врачи» у медсестры: роль «Врач» уходит вместе со своей ролью клиники', async () => {
+  const card = await openCard('nurse.k');
+  await tab(card, 'Должность');
+  pick(categorySelect(card), 'doctor');
+  await flush();
+  await save(card);
+  assert.equal(writes.length, 1, 'карточка не ушла на сервер');
+  const body = writes[0].body;
+  assert.deepEqual([body.staff_type, body.role, body.custom_role_code], ['doctor', 'doctor', '']);
+});
+
+// Охрана: новому сотруднику уходит вся карточка (POST), как прежде.
+test('новый сотрудник: уходит вся карточка', async () => {
+  const card = await openNew();
+  type(byPh(card, 'Каюмов'), 'Каюмов');
+  type(byPh(card, 'Араббек'), 'Араббек');
+  setPhone(card, '+998 90 961 00 04');
+  await tab(card, 'Должность');
+  pick(categorySelect(card), 'mid_low');
+  await flush();
+  await tab(card, 'Вход и доступ');
+  type(loginInput(card), 'new.nurse');
+  type(passwordInputs(card)[0], '1');
+  await save(card);
+  assert.equal(writes.length, 1, 'новый сотрудник не ушёл');
+  assert.deepEqual([writes[0].u, writes[0].method], ['/api/users', 'POST']);
+  const body = writes[0].body;
+  assert.equal(body.username, 'new.nurse');
+  for (const k of ['staff_type', 'role', 'is_active', 'extra_roles', 'hire_date', 'doctor_category', 'working_hours', 'service_rates']) {
+    assert.ok(k in body, k + ' не ушло у нового сотрудника');
+  }
+});

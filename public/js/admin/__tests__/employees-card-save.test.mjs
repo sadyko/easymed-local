@@ -216,7 +216,7 @@ test('без телефона «Услуги и ставки» сохраняю�
   assert.equal(body.last_name, 'Абдуллаев');
   assert.equal(body.first_name, 'Шерзод');
   assert.equal(body.middle_name, '');
-  assert.equal(body.phone, '');
+  assert.ok(!('phone' in body), 'телефон не трогали — не уходит (STAFF_EDIT_V1)');
   assert.equal(body.staff_type, 'doctor');
   assert.deepEqual(body.service_rates, [{ service_id: 2, pct: 25, branches: [] }]);
   assert.ok(!textOf(document.body).includes('Заполните личные данные.'), 'старый отказ всей карточке');
@@ -274,7 +274,7 @@ test('`admin` первого запуска: без имени, телефона
   assert.equal(writes.length, 1, 'карточка не ушла на сервер');
   const body = writes[0].body;
   assert.equal(body.salary_fixed, 3000000);
-  assert.equal(body.staff_type, '');
+  assert.ok(!('staff_type' in body), 'категорию не трогали — не уходит (STAFF_EDIT_V1)');
   assert.ok(!('first_name' in body));
 });
 

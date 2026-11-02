@@ -122,6 +122,33 @@ function fmtPrice(n) { const v = Math.round(Number(n) || 0); return (v < 0 ? '-'
 const MONEY_KEYS = ['salary_type', 'salary_fixed', 'salary_percent', 'service_rates', 'referral_rates',
     'inpatient_rates', 'inpatient_referral_pct', 'inpatient_referral_fixed'];   // INPATIENT_BONUS_V1
 const MONEY_SECTIONS = ['salary', 'services', 'inpatient', 'referral'];
+
+// STAFF_EDIT_V1 (2026-11-02) — КАРТОЧКА СУЩЕСТВУЮЩЕГО СОТРУДНИКА ШЛЁТ ТОЛЬКО ИЗМЕНЁННОЕ.
+//
+// Прежде save() слал ВСЕ поля, и сервер заново проверял каждое: значение,
+// записанное до нынешних правил (дата «15.01.2020», категория «Высшая»,
+// процент 150), отказывало всему сохранению сообщением о поле, которого никто
+// не трогал, — хотя меняли телефон. Теперь уходит то, что стало не таким,
+// каким карточка открылась. Свои правила — у частей имени (employeeSaveGaps →
+// sendNames), специальностей (specsAtOpen) и отметки assign_extension; списки
+// ставок уходят целиком, как прежде: сервер переписывает список целиком, а
+// старого неверного значения в них не бывает (их чистил сам сервер, parseRates).
+const OWN_RULE_KEYS = new Set([...NAME_KEYS, 'specialties', 'specialty', 'assign_extension',
+    'service_rates', 'referral_rates', 'inpatient_rates']);
+function sameSent(a, b) {
+    if (a === b) return true;
+    const blank = (v) => v == null || v === '';
+    if (blank(a) || blank(b)) return blank(a) && blank(b);
+    if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b);
+    return String(a) === String(b);
+}
+function changedOnly(payload, opened) {
+    const out = {};
+    for (const [k, v] of Object.entries(payload)) {
+        if (OWN_RULE_KEYS.has(k) || !opened || !(k in opened) || !sameSent(v, opened[k])) out[k] = v;
+    }
+    return out;
+}
 function empAccess() {
     const admin = !hasRestriction() || actorIsAdmin();
     const lvl = settingsTileLevel('settings.employees');
@@ -564,6 +591,17 @@ function openEditor(user, root) {
     // должна трогать специальности.
     const specKey = (list) => JSON.stringify((list || []).map((v) => String(v || '').trim()).filter(Boolean));
     const specsAtOpen = specKey(emp.specialties);
+    // STAFF_EDIT_V1 — с чем карточка открылась, в том виде, в каком уходит на сервер
+    // (payloadOf ниже); save() шлёт только поля, ставшие не такими (changedOnly).
+    // Подставленное самой карточкой — не «как было»: SOLE_BRANCH_V1 вписывает
+    // единственный филиал давнему сотруднику без филиала, категорию «Врачи»
+    // карточка выводит из is_doctor. Точка отсчёта для них — хранимое, и они
+    // уходят, как уходили.
+    const openedPayload = isEdit ? JSON.parse(JSON.stringify(payloadOf())) : null;
+    if (openedPayload) {
+        openedPayload.branch_id = user.branch_id != null && user.branch_id !== '' ? Number(user.branch_id) : null;
+        openedPayload.staff_type = user.staff_type || '';
+    }
     let refusal = null;
     let statusBox = null;
     const ctrls = {};
@@ -1075,6 +1113,42 @@ function openEditor(user, root) {
         await paint(root);
     }
 
+    // STAFF_EDIT_V1 — поля карточки в том виде, в каком они уходят на сервер.
+    // Один источник для сохранения (save) и для точки отсчёта «что изменилось»
+    // (openedPayload): два списка полей разошлись бы в первый же выпуск.
+    function payloadOf() {
+        return {
+            last_name: emp.last_name.trim(), first_name: emp.first_name.trim(), middle_name: emp.middle_name.trim(),
+            phone: emp.phone.trim(), email: emp.email.trim(), staff_type: emp.staff_type, scheduling_mode: emp.scheduling_mode || 'schedulable',
+            // CALL_FROM_CRM_V1 — внутренний номер. Пустая строка здесь ОСМЫСЛЕННА:
+            // сервер понимает её как «стереть номер» (routes/users.js), поэтому
+            // сотрудника можно снять с телефона, не заводя для этого отдельного
+            // действия.
+            pbx_extension: String(emp.pbx_extension || '').trim(),
+            // SOFTPHONE_V1 — номер в поле — назначенный: отметка говорит серверу, что это
+            // новая карточка (старая во вкладке до обновления слала выбор «Моя трубка»).
+            // Назначит он, только если номер поменял администратор (routes/users.js).
+            assign_extension: true,
+            // `position` is deliberately NOT sent: the field is gone from the UI,
+            // and PATCH only writes keys it receives, so any value an existing
+            // record already carries is left untouched rather than blanked.
+            department_id: emp.department_id ? Number(emp.department_id) : null,
+            specialty: String(emp.specialty || '').trim(), doctor_category: emp.doctor_category || '', hire_date: emp.hire_date || '',
+            // MULTI_SPECIALTY_V1 — the whole list; the server takes the first as users.specialty
+            specialties: (emp.specialties || []).map((v) => String(v || '').trim()).filter(Boolean)
+                .map((name) => ({ name, slug: (SPECIALTY_ROWS.find((r) => r.ru === name) || {}).slug || null })),
+            license_number: emp.license_number.trim(), license_expiry_date: emp.license_expiry_date || '',
+            branch_id: emp.branch_id ? Number(emp.branch_id) : null, employment_type: emp.employment_type || '', salary_type: emp.salary_type || '',
+            salary_fixed: Number(emp.salary_fixed) || 0, salary_percent: Number(emp.salary_percent) || 0, working_hours: JSON.stringify(emp.working_hours || {}),
+            service_rates: asArr(emp.service_rates), referral_rates: asArr(emp.referral_rates),
+            // INPATIENT_BONUS_V1 — вкладка «Стационар»; пустое поле бонуса — 0.
+            inpatient_rates: asArr(emp.inpatient_rates),
+            inpatient_referral_pct: Number(emp.inpatient_referral_pct) || 0,
+            inpatient_referral_fixed: Number(emp.inpatient_referral_fixed) || 0,
+            role: emp.role, custom_role_code: emp.custom_role_code || '', extra_roles: (emp.extra_roles || []).filter(r => r !== emp.role), is_active: !!emp.is_active,
+        };
+    }
+
     async function save() {
         // EMPLOYEE_CARD_SAVE_V1 — прежде здесь стояла одна проверка на всю
         // карточку: без Фамилии, Имени И Телефона не уходило ничего, даже ставки
@@ -1111,36 +1185,16 @@ function openEditor(user, root) {
             if (firstKey) { active = 'profile'; renderRail(); renderBody(); toast(paneErrors[firstKey], 'fail'); return; }
         }
 
-        const payload = {
-            last_name: emp.last_name.trim(), first_name: emp.first_name.trim(), middle_name: emp.middle_name.trim(),
-            phone: emp.phone.trim(), email: emp.email.trim(), staff_type: emp.staff_type, scheduling_mode: emp.scheduling_mode || 'schedulable',
-            // CALL_FROM_CRM_V1 — внутренний номер. Пустая строка здесь ОСМЫСЛЕННА:
-            // сервер понимает её как «стереть номер» (routes/users.js), поэтому
-            // сотрудника можно снять с телефона, не заводя для этого отдельного
-            // действия.
-            pbx_extension: String(emp.pbx_extension || '').trim(),
-            // SOFTPHONE_V1 — номер в поле — назначенный: отметка говорит серверу, что это
-            // новая карточка (старая во вкладке до обновления слала выбор «Моя трубка»).
-            // Назначит он, только если номер поменял администратор (routes/users.js).
-            assign_extension: true,
-            // `position` is deliberately NOT sent: the field is gone from the UI,
-            // and PATCH only writes keys it receives, so any value an existing
-            // record already carries is left untouched rather than blanked.
-            department_id: emp.department_id ? Number(emp.department_id) : null,
-            specialty: String(emp.specialty || '').trim(), doctor_category: emp.doctor_category || '', hire_date: emp.hire_date || '',
-            // MULTI_SPECIALTY_V1 — the whole list; the server takes the first as users.specialty
-            specialties: (emp.specialties || []).map((v) => String(v || '').trim()).filter(Boolean)
-                .map((name) => ({ name, slug: (SPECIALTY_ROWS.find((r) => r.ru === name) || {}).slug || null })),
-            license_number: emp.license_number.trim(), license_expiry_date: emp.license_expiry_date || '',
-            branch_id: emp.branch_id ? Number(emp.branch_id) : null, employment_type: emp.employment_type || '', salary_type: emp.salary_type || '',
-            salary_fixed: Number(emp.salary_fixed) || 0, salary_percent: Number(emp.salary_percent) || 0, working_hours: JSON.stringify(emp.working_hours || {}),
-            service_rates: asArr(emp.service_rates), referral_rates: asArr(emp.referral_rates),
-            // INPATIENT_BONUS_V1 — вкладка «Стационар»; пустое поле бонуса — 0.
-            inpatient_rates: asArr(emp.inpatient_rates),
-            inpatient_referral_pct: Number(emp.inpatient_referral_pct) || 0,
-            inpatient_referral_fixed: Number(emp.inpatient_referral_fixed) || 0,
-            role: emp.role, custom_role_code: emp.custom_role_code || '', extra_roles: (emp.extra_roles || []).filter(r => r !== emp.role), is_active: !!emp.is_active,
-        };
+        // STAFF_EDIT_V1 — у существующего сотрудника уходит только изменённое
+        // (changedOnly): нетронутое старое значение больше не держит сохранение.
+        const full = payloadOf();
+        const payload = isEdit ? changedOnly(full, openedPayload) : full;
+        // Роль и своя роль клиники — вместе: сервер выводит роль из своей роли
+        // (routes/users.js resolveCustomRole), и одна без другой развела бы их.
+        if (isEdit && ('role' in payload || 'custom_role_code' in payload)) {
+            payload.role = full.role;
+            payload.custom_role_code = full.custom_role_code;
+        }
         if (String(emp.password).trim()) payload.password = emp.password;
         // EMPLOYEE_CARD_SAVE_V1 — Фамилии или Имени нет, а ФИО не правили (одно
         // слово в full_name): части не уходят вовсе. Сервер пересобирает
