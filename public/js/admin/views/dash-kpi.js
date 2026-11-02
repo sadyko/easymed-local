@@ -64,6 +64,17 @@ export function fitViewport(el, { min = 540, gap = 24 } = {}) {
     apply();
     if (bound && !bound.has(el) && typeof window.addEventListener === 'function') {
         bound.add(el);
-        window.addEventListener('resize', apply);
+        // QUEUE_FRESH_V1 (ревью m7) — экран, снятый со страницы (перерисовка clear(root),
+        // вытеснение панели из кэша), не держится слушателем окна: слушатель снимает себя
+        // сам. Вернётся элемент на страницу — следующий fitViewport повесит его заново.
+        const onResize = () => {
+            if (el.isConnected === false) {
+                if (typeof window.removeEventListener === 'function') window.removeEventListener('resize', onResize);
+                bound.delete(el);
+                return;
+            }
+            apply();
+        };
+        window.addEventListener('resize', onResize);
     }
 }
