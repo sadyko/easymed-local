@@ -3,6 +3,10 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // INVOICE_APPEND_V1 — новые услуги — в неоплаченный счёт (invoice-append.js, fast-registration.js)
+  "Добавлено в счёт № {no} — новая сумма {sum} сум": {"en":"Added to invoice no. {no} — new total {sum} UZS","ru":"Добавлено в счёт № {no} — новая сумма {sum} сум","uz":"{no}-son hisobga qo‘shildi — yangi summa {sum} so‘m"},   // INVOICE_APPEND_V1
+  "Счёт не напечатан: {msg}": {"en":"The invoice was not printed: {msg}","ru":"Счёт не напечатан: {msg}","uz":"Hisob chop etilmadi: {msg}"},   // INVOICE_APPEND_V1
+  "В счёте нет позиций.": {"en":"The invoice has no items.","ru":"В счёте нет позиций.","uz":"Hisobda pozitsiyalar yo‘q."},   // INVOICE_APPEND_V1
   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор (views/pick-day.js, visit-wizard.js, service-picker-modal.js)
   "Сегодня у врача нет свободного времени": {"en":"The doctor has no free time today","ru":"Сегодня у врача нет свободного времени","uz":"Bugun shifokorning bo‘sh vaqti yo‘q"},   // PICK_DAY_V1
   "В этот день у врача нет свободного времени": {"en":"The doctor has no free time on this day","ru":"В этот день у врача нет свободного времени","uz":"Bu kuni shifokorning bo‘sh vaqti yo‘q"},   // PICK_DAY_V1
