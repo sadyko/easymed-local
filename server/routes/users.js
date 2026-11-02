@@ -1,3 +1,4 @@
+import fs from 'node:fs';   // STAFF_EDIT_V1 (ревью 4) — есть ли файл связи филиалов
 import { Router } from 'express';
 import { hashPassword, validPassword, clearLoginLocks } from '../services/auth.js';   // STAFF_EDIT_V1 — clearLoginLocks
 import { VALID_ROLES, PRIMARY_ROLES } from '../services/roles.js';
@@ -5,7 +6,7 @@ import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_
 import { isAdminUser, grantAllowsAdminOr } from '../services/grants.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { roleExceedsActor, isAdminRoleCode, isAdminAccount } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1 · ADMIN_ACT_AS_V1 (isAdminAccount — общий со входом от имени)
 import { ACT_AS_MESSAGES } from '../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 (R6)
-import { readPairing } from '../services/branch-sync/pairing.js';   // STAFF_EDIT_V1 — в группе ли филиалов (смена логина)
+import { readPairing, pairingPath } from '../services/branch-sync/pairing.js';   // STAFF_EDIT_V1 — в группе ли филиалов (смена логина)
 import { getDataDir } from '../services/control/config.js';         // STAFF_EDIT_V1 — каталог данных, если app.js его не передал
 // DOCTOR_PUBLIC_PROFILE_V1 — публичный профиль врача: те же проверки, что у
 // «Моего профиля» врача (rpc/doctor-profile.js), и тот же вид для экранов.
@@ -723,6 +724,20 @@ export const LOGIN_ADMIN_ONLY_MESSAGE = 'Логин меняет только а
 export const LOGIN_BRANCHES_MESSAGE = 'Логин нельзя менять, пока подключены филиалы: филиалы узнают сотрудника по логину.';
 
 /**
+ * STAFF_EDIT_V1 (ревью 4) — в группе ли филиалов, с ошибкой в сторону «да».
+ *
+ * readPairing читает испорченный файл связи (оборванная запись, филиал без
+ * адреса главной) как «не спарено» — для синхронизации это верно: клиника
+ * работает одна. Для смены логина — нет: файл есть, значит связь была или
+ * будет, и логин, сменённый сейчас, развёл бы сотрудника с филиалами. Поэтому
+ * отказ — при любом файле связи, читается он или нет.
+ */
+function inBranchGroup(dataDir) {
+  if (readPairing(dataDir)) return true;
+  try { return fs.existsSync(pairingPath(dataDir)); } catch { return true; }
+}
+
+/**
  * STAFF_EDIT_V1 — что делать с присланным логином.
  * @returns {{ username?: string, status?: number, error?: { code: string, message: string, field?: string } }}
  *   {} — логин прежний; { username } — новый логин; { status, error } — отказ.
@@ -735,7 +750,7 @@ function loginChange(db, actor, row, sent, dataDir) {
     return { status: 403, error: { code: 'forbidden', message: LOGIN_ADMIN_ONLY_MESSAGE } };
   }
   if (!LOGIN_RE.test(name)) return { status: 400, error: { code: 'bad_request', message: LOGIN_RULE_MESSAGE, field: 'username' } };
-  if (readPairing(dataDir)) return { status: 409, error: { code: 'conflict', message: LOGIN_BRANCHES_MESSAGE, field: 'username' } };
+  if (inBranchGroup(dataDir)) return { status: 409, error: { code: 'conflict', message: LOGIN_BRANCHES_MESSAGE, field: 'username' } };   // ревью 4 — и испорченный файл
   if (db.prepare('SELECT 1 FROM users WHERE username = ? COLLATE NOCASE AND id <> ?').get(name, row.id)) {
     return { status: 400, error: { code: 'bad_request', message: LOGIN_TAKEN_MESSAGE, field: 'username' } };
   }

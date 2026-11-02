@@ -13,6 +13,8 @@
 // тестов файла — поэтому у каждого теста свои логины.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';       // ревью 4 — испорченный файл связи филиалов
+import path from 'node:path';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
@@ -251,6 +253,32 @@ test('STAFF_EDIT_V1: пока установка в группе филиало�
     r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: 'nurse.b' });
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(usernameOf(db, NURSE), 'nurse.b');
+  } finally { server.close(); }
+});
+
+// Ревью 4 — испорченный файл связи филиалов (оборванная запись, филиал без
+// адреса главной) readPairing читает как «не спарено», и логин менялся. Есть
+// файл, но не читается — отказ тот же 409: сеть, может быть, есть.
+test('STAFF_EDIT_V1 (ревью 4): файл связи филиалов есть, но испорчен — 409, логин прежний', async () => {
+  const { db, server, base, dataDir } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    const file = path.join(dataDir, 'branch-sync.json');
+    const damaged = {
+      'оборванный JSON': '{ "role": "main", "group_id": "BR-X", "secret": ',
+      'филиал без адреса главной': JSON.stringify({ role: 'secondary', group_id: 'BR-X', secret: 's3cret' }),
+      'пустой файл': '',
+    };
+    for (const [label, text] of Object.entries(damaged)) {
+      fs.writeFileSync(file, text);
+      const r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: 'nurse.b' });
+      assert.equal(r.status, 409, label + ': ' + JSON.stringify(r.json));
+      assert.deepEqual([r.json.error.message, r.json.error.field], [BRANCH_MSG, 'username'], label);
+      assert.equal(usernameOf(db, NURSE), 'nurse.a', label);
+    }
+    fs.unlinkSync(file);
+    const r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: 'nurse.b' });
+    assert.equal(r.status, 200, 'файла нет — логин меняется: ' + JSON.stringify(r.json));
   } finally { server.close(); }
 });
 
