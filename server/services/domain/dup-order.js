@@ -153,8 +153,13 @@ export function duplicateHits(db, lines, { excludeIds = [], spare = null } = {})
     if (seen.has(own)) { hits.push({ index, line, twice: true }); return; }
     seen.add(own);
     if (!live.has(visitId)) live.set(visitId, liveOrders(db, visitId));
+    // DUP_STOP_V1 (ревью m8) — поблажки дверей (R7b, строка CRM: по нескольку запросов
+    // каждая) спрашиваются, только когда в визите есть строка того же ключа: без неё
+    // повтора нет, что бы дверь ни убрала.
+    const same = live.get(visitId).filter((r) => !skip.has(Number(r.id)) && keyOfRow(r) === key);
+    if (!same.length) return;
     const spared = new Set((spare ? spare(line) || [] : []).map(Number));
-    const existing = live.get(visitId).find((r) => !skip.has(Number(r.id)) && !spared.has(Number(r.id)) && keyOfRow(r) === key);
+    const existing = same.find((r) => !spared.has(Number(r.id)));
     if (existing) hits.push({ index, line, existing });
   });
   return hits;

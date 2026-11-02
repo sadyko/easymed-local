@@ -8,6 +8,8 @@ import {
   liveOrders, duplicateHits, checkOrders, assertOrders, assertChangedOrder, logRepeatOrders,
   takeRepeatReason, repeatReasonArg, canRepeatOrder, DUP_CODE,
 } from './dup-order.js';
+import { bookedTwinFor } from '../crm/booked-twin.js';
+import { autoTwinFor } from '../crm/one-way.js';
 
 const REG = { id: 2, role: 'registrar', extra_roles: [] };
 const ADMIN = { id: 1, role: 'admin', extra_roles: [] };
@@ -166,6 +168,53 @@ test('DUP_STOP_V1: spare и excludeIds — строка, которую двер
   const x = line(db, { visit_id: v1, service_id: 40 });
   assert.equal(duplicateHits(db, [{ visit_id: v1, service_id: 40 }], { spare: () => [x] }).length, 0);
   assert.equal(duplicateHits(db, [{ visit_id: v1, service_id: 40 }], { excludeIds: [x] }).length, 0);
+});
+
+/** Счётчик запросов к базе: get/all/run/iterate подготовленных выражений. */
+function counting(db) {
+  let n = 0;
+  const proxy = new Proxy(db, {
+    get(target, prop) {
+      if (prop === 'prepare') {
+        return (sql) => {
+          const st = target.prepare(sql);
+          return new Proxy(st, {
+            get(s, p) {
+              const v = s[p];
+              if (['get', 'all', 'run', 'iterate'].includes(p)) return (...a) => { n++; return v.apply(s, a); };
+              return typeof v === 'function' ? v.bind(s) : v;
+            },
+          });
+        };
+      }
+      const v = target[prop];
+      return typeof v === 'function' ? v.bind(target) : v;
+    },
+  });
+  return { proxy, count: () => n, reset: () => { n = 0; } };
+}
+
+test('DUP_STOP_V1 (ревью m8): поблажки дверей (R7b, строка CRM) считаются, только когда в визите есть строка того же ключа', () => {
+  const { db, v1 } = clinic();
+  for (let i = 100; i < 160; i++) db.prepare("INSERT INTO services (id, name, price, type) VALUES (?, ?, 1000, 'lab')").run(i, 'S' + i);
+  for (let i = 100; i < 120; i++) line(db, { visit_id: v1, service_id: i });
+  const c = counting(db);
+  let spared = 0;
+  const spare = (ln) => { spared++; return [autoTwinFor(c.proxy, ln), bookedTwinFor(c.proxy, ln)].filter(Boolean).map((x) => x.id); };
+  c.reset();
+  assert.equal(duplicateHits(c.proxy, [{ visit_id: v1, service_id: 130 }], { spare }).length, 0);
+  assert.equal(spared, 0, 'поблажки считались для новой услуги');
+  assert.ok(c.count() <= 2, 'одиночная вставка без повтора — запросов: ' + c.count());
+  c.reset();
+  assert.equal(duplicateHits(c.proxy, Array.from({ length: 30 }, (_, k) => ({ visit_id: v1, service_id: 125 + k })), { spare }).length, 0);
+  assert.equal(spared, 0);
+  assert.ok(c.count() <= 31, 'пачка из 30 строк без повтора — запросов: ' + c.count());
+  // повтор есть — поблажки спрашиваются (и строка, которую дверь уберёт, не мешает)
+  c.reset();
+  assert.equal(duplicateHits(c.proxy, [{ visit_id: v1, service_id: 105 }], { spare }).length, 1);
+  assert.equal(spared, 1);
+  const x = db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND service_id = 105').get(v1).id;
+  assert.equal(duplicateHits(db, [{ visit_id: v1, service_id: 105 }], { spare: () => [x] }).length, 0);
 });
 
 test('DUP_STOP_V1: замена — проверка только если ключ меняется; задвоенные до 3.21.0 строки правке врача не мешают', () => {
