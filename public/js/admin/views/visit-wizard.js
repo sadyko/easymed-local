@@ -60,6 +60,7 @@ import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRI
 import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX — лист на каждый счёт, из серверных строк
 import { actSheet, isDmsPayer } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт плательщика одной сборкой с кассой
 import { nearestFree, noFreeText, nearestButtonText, manyDaysWarning } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
+import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 
 
 function fmtPrice(n) {
@@ -2853,6 +2854,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
             let invoicesOk = 0, invoiceFail = '';
             let billedLines = 0;                           // REFERRAL_BILL_V1 — сколько строк легло в счета
+            const appendNotes = [];                        // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
             // REFERRAL_BILL_V1 (дополнение 29.09) — плательщик в карте у врача:
             // счёт не выставляется вовсе, строки ждут кассу («Ждут счёта»).
             const billNow = wiz.raiseInvoice && !leaveForCashier();
@@ -3085,6 +3087,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         }
                         invoicesOk++;
                         billedLines += job.ids.length;   // REFERRAL_BILL_V1
+                        // INVOICE_APPEND_V1 — строки легли в уже выставленный
+                        // неоплаченный счёт визита: тот же номер, новая сумма.
+                        if (isAppended(iRes)) appendNotes.push(invoiceAppendNote(iRes));
                         // DISCOUNT_CARRY_V1 — остаток скидки переходит на счёт
                         // СЛЕДУЮЩЕГО дня, а не сгорает.
                         //
@@ -3147,8 +3152,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // порядку дней, каждому — не больше его суммы и остатка баланса.
             // CARD_BALANCE_V1 — выбранная карта платит первой, баланс — следом.
             let balanceMsg = '';
-            const wallet = wiz.useBalance ? Number(wiz.balance) || 0 : 0;
-            const card = wiz.card ? { id: wiz.card.id, remaining: cardRemaining(wiz.card) } : null;
+            // INVOICE_APPEND_V1 — счёт пациента мог оказаться ДОПИСАННЫМ: в нём и
+            // строки, выставленные раньше. Баланс и карта платят не больше этой
+            // сметы — прежде счета мастера были только её, и это было так само.
+            const wallet = wiz.useBalance ? Math.min(Number(wiz.balance) || 0, grandTotal()) : 0;
+            const card = wiz.card ? { id: wiz.card.id, remaining: Math.min(cardRemaining(wiz.card), grandTotal()) } : null;
             if (card && !canSpendStoredValue()) balanceMsg += ' ' + tr('Оплату картой проведёт касса.');
             if (canSpendStoredValue() && patientInvoices.length && (wallet > 0 || card)) {
                 const paidRes = await payFromStoredValue(patientInvoices, { wallet, card });
@@ -3235,7 +3243,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const leftUnbilled = doctorBill && billedLines < booked.length;
             const invMsg = (invoiceFail || [
                 !canInvoice ? ' ' + tr('Счёт выставит касса.') : '',
-                cashInvoices > 0 ? ' ' + tr('Счёт пациента выставлен — виден в кассе.') : '',
+                cashInvoices - appendNotes.length > 0 ? ' ' + tr('Счёт пациента выставлен — виден в кассе.') : '',
+                appendNotes.length ? ' ' + appendNotes.join('. ') + '.' : '',   // INVOICE_APPEND_V1
                 aktJobs.length ? ' ' + tr('Услуги плательщика — по акту, в кассу не идут.') : '',
             ].join('')) + (leftUnbilled ? ' ' + tr('Счёт выставит касса — пациент в «Приём оплат» → «Ждут счёта».') : '');   // REFERRAL_BILL_V1
             toast(tr('Услуги добавлены') + dayWord + '.' + invMsg + balanceMsg, invoiceFail ? 'info' : 'ok');

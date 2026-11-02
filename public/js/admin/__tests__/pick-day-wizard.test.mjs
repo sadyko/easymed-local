@@ -303,4 +303,23 @@ test('услуга без врача с единственным исполни�
   assert.equal(localDayOfIso(ev.body.date), isoOf(new Date()), 'ЭКГ уехала на день врача');
 });
 
+// INVOICE_APPEND_V1 — у пациента сегодня визит с неоплаченным счётом (анализ):
+// мастер добавляет ЭКГ в тот же визит, и сервер дописывает её в тот же счёт.
+test('INVOICE_APPEND_V1: мастер — визит дня с неоплаченным счётом: ЭКГ в тот же счёт, тост «Добавлено в счёт № …»', async () => {
+  seed();
+  const today = new Date(); today.setHours(9, 0, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, status, created_by) VALUES (3, ?, 'arrived', 1)").run(today.toISOString()).lastInsertRowid);
+  const lab = Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, created_by) VALUES (?, 22, 1, 40000, 40000, 'added', 1)").run(vid).lastInsertRowid);
+  const first = getRpc('create_invoice_for_visit')(DB, { visit_id: vid, visit_service_ids: [lab] }, USER).invoice;
+  await openWizard([23]);
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev, 'мастер не дошёл до записи: ' + JSON.stringify(TOASTS));
+  const inv = DB.prepare('SELECT * FROM invoices').all();
+  assert.equal(inv.length, 1, 'второй счёт за один визит: ' + JSON.stringify(inv.map((i) => [i.invoice_number, i.total_amount])));
+  assert.equal(inv[0].id, first.id);
+  assert.equal(inv[0].total_amount, 90000, 'анализ 40 000 + ЭКГ 50 000');
+  assert.ok(TOASTS.some((t) => t.includes('Добавлено в счёт № ' + first.invoice_number + ' — новая сумма 90 000 сум')), 'нет фразы: ' + JSON.stringify(TOASTS));
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });
