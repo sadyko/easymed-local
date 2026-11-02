@@ -306,13 +306,20 @@ export function packageStampRefusal(db, rows) {
 }
 
 export function createInvoiceForVisit(db, args, user) {
+  // INVOICE_APPEND_V1 (ревью M1) — append: false — НОВЫЙ счёт, как в 3.20.0, даже
+  // если у визита есть неоплаченный счёт, в который строки можно дописать.
+  // Его просят мастер и калькулятор, когда сразу после выставления платят
+  // балансом или подарочной картой: оплата «не больше сметы» в дописанном
+  // счёте была бы частичной, и record_payment отпустил бы в очередь и прежние,
+  // неоплаченные строки. Новый счёт ничего не открывает — можно любой роли.
+  const append = !(args && args.append === false);
   // REFERRAL_BILL_V1 — денежные роли как прежде; врач — со своими границами.
   if (!hasAnyRole(user, CREATE_INVOICE_ROLES)) {
     requireRole(user, DOCTOR_INVOICE_ROLES);
     doctorInvoiceRefusal(db, args);
-    return issueVisitInvoice(db, args, user, { doctorOnly: true });   // REFBILL_REVIEW_V1 — строки врача сверяются (doctorLinesRefusal)
+    return issueVisitInvoice(db, args, user, { doctorOnly: true, append });   // REFBILL_REVIEW_V1 — строки врача сверяются (doctorLinesRefusal)
   }
-  return issueVisitInvoice(db, args, user);
+  return issueVisitInvoice(db, args, user, { append });
 }
 
 // REFERRAL_BILL_V1 — ЧЕГО ВРАЧ В СЧЁТ НЕ СТАВИТ. Отказ до транзакции: ни

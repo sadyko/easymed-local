@@ -3274,7 +3274,13 @@ export function openServicePickerModal({
                         packageOff: stamped ? Math.max(0, Math.round((Number(r.vs.package_full) - Number(r.vs.package_price)) * 100) / 100) : 0,
                     };
                 };
-                const bill = await invoicePickerLines({ visitId: visit.id, lines: patientRows.map(billLineOf), pct: wizDiscountPct(), promo: promoRow, categoryPct: wiz.categoryPct || 0 });
+                // INVOICE_APPEND_V1 (ревью M1) — баланс или карта заплатят сразу после
+                // выставления: счёт — НОВЫЙ (append: false), как в 3.20.0. В
+                // дописанном счёте оплата этой сметы была бы частичной, а оплата
+                // отпускает в очередь ВСЕ строки счёта — и прежние, неоплаченные.
+                const spendStored = canSpendStoredValue()
+                    && ((wiz.useBalance && (Number(wiz.depositBalance) || 0) > 0) || !!cardRow);
+                const bill = await invoicePickerLines({ visitId: visit.id, lines: patientRows.map(billLineOf), pct: wizDiscountPct(), promo: promoRow, categoryPct: wiz.categoryPct || 0, append: !spendStored });
                 if (bill.error || !bill.data || !bill.data.invoice) {
                     const msg = (bill.error && (bill.error.message || bill.error)) || '—';
                     console.warn('[wizard] invoice:', msg);
@@ -3290,12 +3296,14 @@ export function openServicePickerModal({
                     // DEPOSIT_WALLET_V1 — «Баланс: использовать»: сервер списывает
                     // баланс и проводит платёж 'wallet' в одной транзакции.
                     // CARD_BALANCE_V1 — и картой (остатком), первой.
-                    const tNow = wizTotals();
-                    // INVOICE_APPEND_V1 — дописанный счёт держит и прежние строки: карта платит не больше этой сметы.
-                    const cardCap = cardRow && canSpendStoredValue() ? { id: cardRow.id, remaining: Math.min(cardRemaining(cardRow), tNow.payable) } : null;
+                    // INVOICE_APPEND_V1 (ревью M1) — платят балансом/картой — счёт новый
+                    // (append: false выше), в нём только эта смета: потолок — сумма
+                    // счёта по серверу.
+                    const walletCap = (wiz.useBalance && canSpendStoredValue()) ? Math.min(Number(wiz.depositBalance) || 0, invTotal) : 0;
+                    const cardCap = cardRow && canSpendStoredValue() ? { id: cardRow.id, remaining: Math.min(cardRemaining(cardRow), invTotal) } : null;
                     if (cardRow && !canSpendStoredValue()) note += ' · ' + tr('картой оплатит касса');
-                    if ((tNow.bal > 0 || cardCap) && invTotal > 0) {
-                        const paidRes = await payFromStoredValue([inv], { wallet: Math.min(tNow.bal, invTotal), card: cardCap });
+                    if ((walletCap > 0 || cardCap) && invTotal > 0) {
+                        const paidRes = await payFromStoredValue([inv], { wallet: walletCap, card: cardCap });
                         if (paidRes.invoices[inv.id]) Object.assign(inv, paidRes.invoices[inv.id]);
                         if (paidRes.card > 0) note += ' · ' + trf('картой −{sum}', { sum: formatMoney(paidRes.card) });
                         if (paidRes.wallet > 0) note += ' · ' + trf('с баланса −{sum}', { sum: formatMoney(paidRes.wallet) });
@@ -3906,14 +3914,16 @@ export function pickerTierNote(a, people = []) {
  * Шаг счёта калькулятора: create_invoice_for_visit по строкам пациента.
  * lines — как у pickerDiscount, плюс visit_service_id. Возвращает расчёт
  * сметы и ответ сервера ({ data: { invoice, items, rest_discount }, error }).
+ * INVOICE_APPEND_V1 (ревью M1) — append: false — новый счёт, а не дописывание
+ * в неоплаченный счёт визита (его просят, когда сразу платят балансом/картой).
  */
-export async function invoicePickerLines({ visitId, lines, pct = 0, promo = null, categoryPct = 0 }) {
+export async function invoicePickerLines({ visitId, lines, pct = 0, promo = null, categoryPct = 0, append = true }) {
     const d = pickerDiscount(lines, { pct, promo, categoryPct });
     const ids = (lines || []).map((l) => Number(l.visit_service_id)).filter((n) => Number.isInteger(n) && n > 0);
     let data = null, error = null;
     try {
         const res = await supabase.rpc('create_invoice_for_visit',
-            { visit_id: visitId, visit_service_ids: ids, discount_amount: d.discount });
+            { visit_id: visitId, visit_service_ids: ids, discount_amount: d.discount, ...(append === false ? { append: false } : {}) });
         data = res.data || null;
         error = res.error || null;
     } catch (e) { error = e; }

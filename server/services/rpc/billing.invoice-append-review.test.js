@@ -241,3 +241,40 @@ test('m2: счёт выставлен сегодня (местный день) �
   assert.equal(second.appended, true);
   assert.equal(second.invoice.id, first.invoice.id);
 });
+
+// ───────────── ревью M1: append: false — новый счёт, как в 3.20.0 ─────────────
+// Мастер и калькулятор платят балансом или картой сразу после выставления.
+// В дописанном счёте такая оплата частичная, а record_payment отпускает в
+// очередь ВСЕ строки счёта — и прежнюю, неоплаченную. Поэтому они просят новый
+// счёт: append: false. Новый счёт ничего не открывает — любой роли.
+
+test('M1: append: false — новый счёт даже при неоплаченном счёте дня; оплата его целиком ставит в очередь только его строки', () => {
+  const { db, CONS, LAB, vid } = seed();
+  const a = line(db, vid, CONS);
+  const first = bill(db, vid, [a]);
+  const b = line(db, vid, LAB);
+  const out = RPC.create_invoice_for_visit(db, { visit_id: vid, visit_service_ids: [b], discount_amount: 0, append: false }, registrar);
+  assert.equal(out.appended, undefined);
+  assert.notEqual(out.invoice.id, first.invoice.id);
+  assert.deepEqual(money(out.invoice), [40000, 0, 40000]);
+  assert.deepEqual(money(inv(db, first.invoice.id)), [100000, 0, 100000], 'прежний счёт изменился');
+  recordPayment(db, { invoice_id: out.invoice.id, amount: out.invoice.total_amount, method: 'cash' }, cashier);
+  const st = db.prepare('SELECT id, status FROM visit_services WHERE id IN (?, ?) ORDER BY id').all(a, b).map((r) => r.status);
+  assert.deepEqual(st, ['added', 'queued'], 'неоплаченная консультация ушла в очередь');
+});
+
+test('M1: append: false принимает и врач без денежной роли; другие значения append — дописывание по-прежнему', () => {
+  const { db, CONS, LAB, vid } = seed();
+  const first = bill(db, vid, [line(db, vid, CONS)]);
+  const own = line(db, vid, LAB, { by: D1 });
+  const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [own], append: false }, doctor);
+  assert.equal(out.appended, undefined);
+  assert.notEqual(out.invoice.id, first.invoice.id);
+  for (const v of [true, 0, null, 'false']) {
+    const s = seed();
+    const f = bill(s.db, s.vid, [line(s.db, s.vid, s.CONS)]);
+    const r = bill(s.db, s.vid, [line(s.db, s.vid, s.ECG)], registrar, { append: v });
+    assert.equal(r.appended, true, 'append: ' + JSON.stringify(v));
+    assert.equal(r.invoice.id, f.invoice.id);
+  }
+});

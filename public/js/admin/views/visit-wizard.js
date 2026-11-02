@@ -2929,6 +2929,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // REFERRAL_BILL_V1 — врач ручной скидки не даёт: в счёт уходит 0
             // (скидку группы пациента и пакета сервер даст сам).
             let discountLeft = doctorBill ? 0 : restDiscount();
+            // INVOICE_APPEND_V1 (ревью M1) — баланс или карта заплатят сразу после
+            // выставления: счёт пациента — НОВЫЙ (append: false), как в 3.20.0.
+            // В дописанном счёте оплата этой сметы была бы частичной, а оплата
+            // отпускает в очередь ВСЕ строки счёта — и прежние, неоплаченные.
+            const spendStored = canSpendStoredValue()
+                && ((wiz.useBalance && (Number(wiz.balance) || 0) > 0) || !!wiz.card);
             for (const [day, lines] of [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
                 // самый ранний слот дня — время визита; врач дня — первый врач строк.
                 // DATE_ONLY_V1 — полуночные услуги без времени не должны перебивать
@@ -3131,7 +3137,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         // WIZARD_DISCOUNT_V1 — сервер зажимает discount_amount в [0, subtotal].
                         const disc = job.payer === null ? discountLeft : 0;
                         const { data: iRes, error: iErr } = await supabase.rpc('create_invoice_for_visit',
-                            { visit_id: visit.id, visit_service_ids: job.ids, discount_amount: disc, payer_id: job.payer });
+                            { visit_id: visit.id, visit_service_ids: job.ids, discount_amount: disc, payer_id: job.payer,
+                                ...(spendStored && job.payer === null ? { append: false } : {}) });   // INVOICE_APPEND_V1 (ревью M1)
                         if (iErr) {
                             // REFERRAL_BILL_V1 — врачу «выставить из визита» не
                             // подсказываем: куда идти, скажет тост ниже («Ждут счёта»).
@@ -3207,11 +3214,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // порядку дней, каждому — не больше его суммы и остатка баланса.
             // CARD_BALANCE_V1 — выбранная карта платит первой, баланс — следом.
             let balanceMsg = '';
-            // INVOICE_APPEND_V1 — счёт пациента мог оказаться ДОПИСАННЫМ: в нём и
-            // строки, выставленные раньше. Баланс и карта платят не больше этой
-            // сметы — прежде счета мастера были только её, и это было так само.
-            const wallet = wiz.useBalance ? Math.min(Number(wiz.balance) || 0, grandTotal()) : 0;
-            const card = wiz.card ? { id: wiz.card.id, remaining: Math.min(cardRemaining(wiz.card), grandTotal()) } : null;
+            // INVOICE_APPEND_V1 (ревью M1) — когда платят балансом или картой, счета
+            // пациента этой записи — новые (append: false выше), в них только её
+            // строки. Потолок — сумма ЭТИХ счетов по серверу, а не итог сметы
+            // (grandTotal — все дни и строки плательщика).
+            const billedDue = patientInvoices.reduce((s, i) => s + Math.max(0, (Number(i.total_amount) || 0) - (Number(i.paid_amount) || 0)), 0);
+            const wallet = wiz.useBalance ? Math.min(Number(wiz.balance) || 0, billedDue) : 0;
+            const card = wiz.card ? { id: wiz.card.id, remaining: Math.min(cardRemaining(wiz.card), billedDue) } : null;
             if (card && !canSpendStoredValue()) balanceMsg += ' ' + tr('Оплату картой проведёт касса.');
             if (canSpendStoredValue() && patientInvoices.length && (wallet > 0 || card)) {
                 const paidRes = await payFromStoredValue(patientInvoices, { wallet, card });

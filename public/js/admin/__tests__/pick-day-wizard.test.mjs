@@ -83,7 +83,7 @@ const { getRpc } = await import('../../../../server/services/rpc/index.js');
 const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');
 const { readableColumns } = await import('../../../../server/db/schema-registry.js');
 
-const USER = { id: 1, role: 'registrar', extra_roles: [] };
+let USER = { id: 1, role: 'registrar', extra_roles: [] };   // INVOICE_APPEND_V1 (ревью M1) — тест баланса идёт администратором
 let DB = null;
 const RPC = [];
 
@@ -320,6 +320,44 @@ test('INVOICE_APPEND_V1: мастер — визит дня с неоплаче�
   assert.equal(inv[0].id, first.id);
   assert.equal(inv[0].total_amount, 90000, 'анализ 40 000 + ЭКГ 50 000');
   assert.ok(TOASTS.some((t) => t.includes('Добавлено в счёт № ' + first.invoice_number + ' — новая сумма 90 000 сум')), 'нет фразы: ' + JSON.stringify(TOASTS));
+});
+
+// INVOICE_APPEND_V1 (ревью M1) — у пациента сегодня неоплаченный счёт (анализ),
+// мастер добавляет ЭКГ и платит БАЛАНСОМ. В дописанный счёт «не больше сметы»
+// легло бы частичной оплатой, и оплата отпустила бы в очередь и неоплаченный
+// анализ. Теперь мастер просит новый счёт (append: false) и платит ровно его.
+test('INVOICE_APPEND_V1 (ревью M1): мастер платит балансом — счёт НОВЫЙ, прежний не тронут, в очередь — только оплаченная ЭКГ', async () => {
+  seed();
+  const tok = DB.prepare('INSERT INTO ledger_write_token DEFAULT VALUES').run().lastInsertRowid;   // строки с деньгами пишет только сервер (мигр. 160)
+  DB.prepare("INSERT INTO patient_deposits (patient_id, amount, status, kind) VALUES (3, 200000, 'received', 'credit')").run();
+  DB.prepare('DELETE FROM ledger_write_token WHERE id = ?').run(tok);
+  const today = new Date(); today.setHours(9, 0, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, status, created_by) VALUES (3, ?, 'arrived', 1)").run(today.toISOString()).lastInsertRowid);
+  const lab = Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, created_by) VALUES (?, 22, 1, 40000, 40000, 'added', 1)").run(vid).lastInsertRowid);
+  const first = getRpc('create_invoice_for_visit')(DB, { visit_id: vid, visit_service_ids: [lab] }, USER).invoice;
+  const was = USER;
+  USER = { id: 1, role: 'admin', extra_roles: [] };   // баланс списывают касса и администратор
+  try {
+    await openWizard([23]);
+    const label = walk(overlay()).find((n) => n.tagName === 'LABEL' && textOf(n).includes('Баланс: использовать'));
+    assert.ok(label, 'нет «Баланс: использовать»');
+    const chk = label.children.find((n) => n.tagName === 'INPUT');
+    chk.checked = true;
+    chk.dispatchEvent({ type: 'change', target: chk, currentTarget: chk });
+    await pressUntilCreate();
+    const call = RPC.find((c) => c.name === 'create_invoice_for_visit');
+    assert.ok(call, 'счёт не выставлялся: ' + JSON.stringify(TOASTS));
+    assert.equal(call.body.append, false, 'мастер не попросил новый счёт');
+    const inv = DB.prepare('SELECT * FROM invoices ORDER BY id').all();
+    assert.equal(inv.length, 2, 'ЭКГ дописана в неоплаченный счёт: ' + JSON.stringify(inv.map((i) => [i.invoice_number, i.total_amount, i.paid_amount])));
+    assert.deepEqual([inv[0].id, inv[0].total_amount, inv[0].paid_amount, inv[0].status], [first.id, 40000, 0, 'unpaid'], 'прежний счёт тронут');
+    assert.deepEqual([inv[1].total_amount, inv[1].paid_amount, inv[1].status], [50000, 50000, 'paid'], 'новый счёт оплачен не целиком');
+    const st = (id) => DB.prepare('SELECT status FROM visit_services WHERE id = ?').get(id).status;
+    assert.equal(st(lab), 'added', 'неоплаченный анализ ушёл в очередь');
+    const ecg = DB.prepare('SELECT id FROM visit_services WHERE service_id = 23').get().id;
+    assert.equal(st(ecg), 'queued');
+    assert.equal(getRpc('deposit_balance')(DB, { patient_id: 3 }, USER).balance, 150000, 'с баланса списано не ровно за ЭКГ');
+  } finally { USER = was; }
 });
 
 test.after(() => { if (DB) DB.close(); DB = null; });
