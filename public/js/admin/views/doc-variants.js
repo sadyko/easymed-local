@@ -31,6 +31,19 @@ import { sanitizeStoredHtml, hasMarkup, richHasContent, textIsBlank } from '../.
 function esc(x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function lines(t) { return String(t || '').split(/\n+/).map(x => x.trim()).filter(Boolean); }
 
+// PRINT_VISIT_DATE_V1 (3.21.0) — «ТИП ВИЗИТА» НА ЗАКЛЮЧЕНИИ — ТОЛЬКО НАСТОЯЩИЙ.
+// Было: «Первичный приём» стоял на КАЖДОМ заключении — visitType не задавал никто.
+// Теперь — ступень цены строки (visit_services.price_tier, VISIT_TIER_PRICING_V1):
+// 'secondary' — второй визит в окне, 'repeat' — повторный. 'primary' ставится и
+// услугам без ступеней цены (domain/visit-tier.js tierFor → 'no_tiers') и
+// первичного приёма не доказывает; у консультации ступени нет вовсе (null) —
+// тогда строки «Тип визита» на листе нет. Слова — те же, что у цены в мастере
+// (visit-tier-logic.js TIER_LABELS).
+const VISIT_TIER_RU = { secondary: 'Второй визит', repeat: 'Повторный визит' };
+export function visitTypeLabel(tier) {
+    return VISIT_TIER_RU[tier] || '';
+}
+
 // DOC_RICH_FORMAT_V1 (F1) — ТЕЛО РАЗДЕЛА. Разметка врача (список, жирный, цвет,
 // таблица результата) — очищенной разметкой в блоке .rich (white-space:normal);
 // прежний простой текст — как раньше: экранирован, в pre-wrap.
@@ -624,6 +637,8 @@ function conclusionClassic(s, d) {
     // (дата рождения, пол, телефон, специальность, услуга) без значения не печатается;
     // always — ФИО, номер карты, врач: всегда, пустые — прочерком.
     const fg = (l, uz, v, always) => (always || filled(v)) ? `<div class="fl">${esc(l)} <i>· ${esc(uz)}</i></div><div class="fv">${esc(filled(v) ? v : '—')}</div>` : '';
+    // PRINT_VISIT_DATE_V1 — «Тип визита» — только настоящий (visitTypeLabel): нет данных — нет строки.
+    const visitTypeChip = filled(d.visitType) ? `<span class="chip">Тип визита <b>${esc(d.visitType)}</b></span>` : '';
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Заключение · ${esc(d.patientName || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --accent-2:${esc(accent2)}; --accent-soft:${esc(s.accentSoft || '#eef6f5')}; --ink:${esc(s.ink || '#16213f')};
@@ -666,7 +681,7 @@ ${RICH_CSS}
   </div>
   <div class="rule"></div>
   <div class="title"><h1>Заключение врача</h1><div class="uz">Shifokor xulosasi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">Документ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата приёма <b>${esc(d.issueDate || dateNumeric(new Date()))}</b></span><span class="chip">Тип визита <b>${esc(d.visitType || 'Первичный приём')}</b></span></div>
+    <div class="meta">${d.docNo ? `<span class="chip">Документ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата приёма <b>${esc(d.issueDate || dateNumeric(new Date()))}</b></span>${visitTypeChip}</div>
   </div>
   <div class="cards">
     <div class="card"><div class="ct">Пациент <span class="uz">· Bemor</span></div><div class="fgrid">
@@ -1000,7 +1015,9 @@ ${RICH_CSS}
 </style></head><body><section class="sheet ${toggleCls(s)}">
   ${vHead(s, {
     title: 'Результат диагностического исследования', uz: 'Diagnostika tekshiruvi natijasi',
-    date: d.dateOut || dateNumeric(new Date()),
+    // PRINT_VISIT_DATE_V1 — день приёма (dateOut); старый архивный лист без dateOut —
+    // свой issueDate (день подписи), а не день перепечатки.
+    date: d.dateOut || d.issueDate || dateNumeric(new Date()),
     ids: [{ label: 'ID', value: d.mrn }, { label: 'Документ', value: d.docNo }],
     // CABINET_FIX_V1_DIAG — пустая «Область» не печатается прочерком.
     // PRINT_SKIP_EMPTY_V1 — и пустые дата рождения и «Исследование» (услуга).
@@ -1031,6 +1048,7 @@ ${RICH_CSS}
 // ---------------------------------------------------------------------------
 function imagingCompact(s, d) {
     const st = Object.assign({ kind: d.service || '' }, d.study || {});   // CABINET_FIX_V1_DIAG — см. imagingClassic
+    const issued = d.dateOut || d.issueDate || dateNumeric(new Date());   // PRINT_VISIT_DATE_V1 — «Выдан»: день приёма; старый лист — свой issueDate
     // PRINT_SKIP_EMPTY_V1 — пустое поле не печатается; always — ФИО и номер карты: всегда, пустые — прочерком.
     const fld = (l, v, always) => (always || filled(v)) ? `<div class="fld"><span class="l">${esc(l)}</span><span class="d"></span><span class="v">${esc(filled(v) ? v : '—')}</span></div>` : '';
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Диагностика · ${esc(d.patientName || '')}</title><style>
@@ -1056,7 +1074,7 @@ ${RICH_CSS}
     <div class="clinic">${s.address ? `<div class="cl">${esc(s.address)}</div>` : ''}<div class="cl">${esc(s.phone || '')}${s.web ? ` · ${esc(s.web)}` : ''}</div></div></div>
   <div class="hr"></div>
   <div class="title"><h1>Результат диагностики</h1><div class="uz">Diagnostika natijasi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || dateNumeric(new Date()))}</b></span></div></div>
+    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(issued)}</b></span></div></div>
   <div class="entwo">
     <div class="ent"><div class="cap">Пациент</div>${fld('ФИО', d.patientName, true)}${fld('Дата рожд.', d.dob)}${fld('Пол', sexShown(d.sex))}${fld('ID', d.mrn, true)}</div>
     <div class="ent"><div class="cap">Исследование</div>${fld('Вид', st.kind)}${fld('Область', st.area)}${fld('Аппарат', st.device)}${fld('Протокол', st.protocol)}</div>
