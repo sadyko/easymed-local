@@ -379,3 +379,28 @@ test('«Мой день»: подписанный приём сразу уход
   await tick(80);
   assert.ok(doneHead() && textOf(doneHead()).includes('Завершённые · 1'));
 });
+
+// Ревью m2 — строка, за которую касса вернула деньги (REFUND_ANY_V1, s.refunded), — не работа
+// врача: визит с подписанной строкой и возвращённой строкой «в очереди» — завершён.
+test('«Мой день»: подписанная строка + возвращённая строка «в очереди» — визит в «Завершённых»', async () => {
+  const D = await import('../views/doctor-dashboard.js');
+  const now = new Date(); now.setHours(12, 0, 0, 0);
+  const at = new Date(now); at.setHours(9, 0, 0, 0);
+  const visits = [{ id: 'v1', at: at.toISOString(), status: 'arrived', patientId: 'p1', patientName: 'Пациент Тест' }];
+  const day = (services) => D.foldDayColumn(D.buildDayColumn({ visits, services, now }));
+  const signedPlusRefunded = day([
+    { id: 1, visitId: 'v1', status: 'completed', refunded: false },
+    { id: 2, visitId: 'v1', status: 'queued', refunded: true },
+  ]);
+  assert.deepStrictEqual([signedPlusRefunded.done.length, signedPlusRefunded.open.length], [1, 0],
+    'визит с возвращённой строкой не ушёл в «Завершённые»');
+  // Только возвращённые строки — работы не было: не «завершён».
+  const onlyRefunded = day([{ id: 3, visitId: 'v1', status: 'queued', refunded: true }]);
+  assert.deepStrictEqual([onlyRefunded.done.length, onlyRefunded.open.length], [0, 1], 'визит без работы — «завершён»');
+  // Невозвращённая строка в очереди держит визит в ленте, как прежде.
+  const stillOpen = day([
+    { id: 4, visitId: 'v1', status: 'completed', refunded: false },
+    { id: 5, visitId: 'v1', status: 'queued', refunded: false },
+  ]);
+  assert.deepStrictEqual([stillOpen.done.length, stillOpen.open.length], [0, 1]);
+});

@@ -418,7 +418,11 @@ export function buildDayColumn({ visits, services, now }) {
         .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
         .map((v) => {
             const svc = svcByVisit.get(String(v.id)) || [];
-            const done = svc.length > 0 && svc.every((s) => s.status === 'completed');
+            // QUEUE_FRESH_V1 (ревью m2) — строка, за которую касса вернула деньги
+            // (REFUND_ANY_V1, s.refunded), — не работа врача: её статус («в очереди»)
+            // визит не держит. Только возвращённые строки — работы не было, не «завершён».
+            const work = svc.filter((s) => !s.refunded);
+            const done = work.length > 0 && work.every((s) => s.status === 'completed');
             return {
                 id: v.id,
                 at: v.at,
