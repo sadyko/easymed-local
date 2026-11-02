@@ -151,6 +151,29 @@ function noteFailure(name) {
   return locked ? 'locked' : 'invalid';
 }
 
+/**
+ * STAFF_EDIT_V1 — снять блокировку входа этого логина со ВСЕХ адресов.
+ *
+ * Зовётся при каждой установке пароля: сброс администратором (routes/users.js
+ * PATCH) и своя смена (changeOwnPassword ниже). Без этого сотрудник, забывший
+ * пароль, с новым паролем ещё 5 минут получал «Слишком много попыток».
+ * Логин приводится так же, как при входе (обрезка пробелов, нижний регистр).
+ * Предел попыток на адрес (routes/auth.js) не трогается: он про компьютер,
+ * а не про человека.
+ *
+ * @returns {number} сколько записей снято
+ */
+export function clearLoginLocks(username) {
+  const name = String(username ?? '').trim().toLowerCase();
+  if (!name) return 0;
+  const prefix = name + '|';
+  let n = 0;
+  for (const key of [...failedAttempts.keys()]) {
+    if (key.startsWith(prefix)) { failedAttempts.delete(key); n += 1; }
+  }
+  return n;
+}
+
 // ADMIN_ACT_AS_V1 — выход (и вход другого человека в этом браузере, который
 // заменяет сессию) закрывает открытую запись журнала входа от имени причиной
 // «Вышел»; истёкшая сессия — «Сессия завершена» (sessionUser ниже). Прочие
@@ -340,7 +363,7 @@ export function bootstrapAdmin(db) {
  */
 export function changeOwnPassword(db, userId, currentPassword, newPassword, keepSessionId = null) {
   if (!validPassword(newPassword)) return { error: 'weak_password' };
-  const row = db.prepare('SELECT password_hash FROM users WHERE id = ? AND is_active = 1').get(userId);
+  const row = db.prepare('SELECT username, password_hash FROM users WHERE id = ? AND is_active = 1').get(userId);   // STAFF_EDIT_V1 — username для clearLoginLocks
   if (!row || !bcrypt.compareSync(String(currentPassword ?? ''), row.password_hash)) {
     return { error: 'invalid_current' };
   }
@@ -348,5 +371,6 @@ export function changeOwnPassword(db, userId, currentPassword, newPassword, keep
               updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`)
     .run(hashPassword(newPassword), userId);
   db.prepare('DELETE FROM sessions WHERE user_id = ? AND id IS NOT ?').run(userId, keepSessionId);
+  clearLoginLocks(row.username);   // STAFF_EDIT_V1 — новый пароль снимает блокировку входа
   return { ok: true };
 }
