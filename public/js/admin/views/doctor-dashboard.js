@@ -126,6 +126,18 @@ const ward = { wide: false, loaded: false, exam: 0, attending: 0, inBed: 0 };
 /** Только для тестов и соседей: что полоса сейчас показывает. */
 export function wardHeadState() { return { ...ward }; }
 
+// REPEAT_VISIT_V1 — свои записи на 30 дней вперёд (doctor_upcoming_visits).
+// Аргумента «чей» нет и у сервера: записи — того, кто вошёл.
+export const UPCOMING_DAYS = 30;
+async function loadUpcoming() {
+    state.upcoming = [];
+    try {
+        const { data, error } = await supabase.rpc('doctor_upcoming_visits', { days: UPCOMING_DAYS });
+        if (error) { console.warn('[doctor-dash] upcoming:', error.message); return; }
+        state.upcoming = Array.isArray(data && data.rows) ? data.rows : [];
+    } catch (e) { console.warn('[doctor-dash] upcoming threw:', e && e.message); }
+}
+
 async function loadWardHead() {
     ward.wide = false; ward.loaded = false;
     ward.exam = 0; ward.attending = 0; ward.inBed = 0;
@@ -495,6 +507,10 @@ const state = {
     // Каждое открытие кабинета её сворачивает (resetDoctorDashboard), внутри
     // открытого кабинета выбор держится.
     doneOpen: false,
+    // REPEAT_VISIT_V1 — «Записи вперёд · N»: свои записи на 30 дней (сервер) и
+    // раскрыта ли группа. Новое открытие кабинета её сворачивает.
+    upcoming: [],
+    upcomingOpen: false,
 };
 let hostRef = null;
 let openWorkRef = null;
@@ -594,6 +610,10 @@ export async function loadDoctorDashboard() {
     // на одно число выше и не имеет права задержать «мой день», если стационар
     // ответит медленно.
     await loadWardHead();
+
+    // REPEAT_VISIT_V1 — «Записи вперёд» — тоже отдельным шагом и молча: сбой не
+    // делает день «неполным» (state.failed не трогается), группа просто пуста.
+    await loadUpcoming();
 
     state.services = svcRows.map((r) => ({
         id: r.id,
@@ -727,6 +747,13 @@ const DASH_CSS = `
     transition: transform var(--dur-1, .15s) var(--ease-out, ease); }
 .dd-done-h.on .dd-done-ic { transform: rotate(90deg); }
 
+/* REPEAT_VISIT_V1 — upcoming bookings under the day list: folded head, own
+   scroll, rows are not buttons. No new colours. */
+.dd-upcoming { flex: 0 1 auto; max-height: 45%; overflow-y: auto; margin: 0 10px 10px; }
+.dd-up-day { font-size: 12.5px; font-weight: 700; color: var(--ink-600); padding: 4px 4px 0; }
+.dd-up-row { cursor: default; }
+.dd-up-row:hover { border-color: var(--ink-100); }
+
 /* HEAD_DOCTOR_WARD_VIEW_V1 — head-doctor ward strip. No new colours. */
 .dd-ward { padding: 14px 18px; margin-bottom: 14px; display: flex; align-items: center;
     gap: 18px; flex-wrap: wrap; }
@@ -789,6 +816,7 @@ export function resetDoctorDashboard() {
     state.doctor = null; state.visits = []; state.services = []; state.payLines = [];
     state.metric = 'services'; state.now = null;
     state.doneOpen = false;   // CABINET_ACTIVE_FIRST_V1 — новое открытие кабинета: завершённые свёрнуты
+    state.upcoming = []; state.upcomingOpen = false;   // REPEAT_VISIT_V1
     ward.wide = false; ward.loaded = false; ward.exam = 0; ward.attending = 0; ward.inBed = 0;
     hostRef = null; openWorkRef = null; openInpatientsRef = null; openPayRef = null;
 }
@@ -1050,6 +1078,10 @@ function dayCard(day, now) {
                         Icon('Activity', { size: 13 }), ' ', tr('Мои приёмы')))),
         ),
         list,
+        // REPEAT_VISIT_V1 — «Записи вперёд» под лентой дня, своим блоком: лента
+        // по-прежнему кончается группой «Завершённые», а будущие записи не
+        // смешиваются с сегодняшними.
+        upcomingGroup(state.upcoming || []),
     );
 }
 function nowLine(now) {
@@ -1075,6 +1107,49 @@ function doneGroup(done) {
     }
     draw();
     return h('div', { class: 'dd-done' }, head, box);
+}
+// REPEAT_VISIT_V1 (2026-11-02) — «ЗАПИСИ ВПЕРЁД · N». «Мой день» кончается
+// сегодня, а «Мои записи» — строки после оплаты: пациент, которого врач сам
+// записал на повторный визит через неделю, нигде не был виден. Группа свёрнута
+// при открытии кабинета (как «Завершённые»), внутри — по дням, по времени.
+// Строки не кнопки: работы по будущей записи сегодня нет.
+function upcomingGroup(rows) {
+    const box = h('div', { class: 'dd-done-list' });
+    const head = h('button', {
+        type: 'button', class: 'dd-done-h', 'aria-expanded': 'false',
+        onclick: () => { state.upcomingOpen = !state.upcomingOpen; draw(); },
+    },
+        h('span', { class: 'dd-done-ic' }, Icon('ChevronRight', { size: 14 })),
+        trf('Записи вперёд · {n}', { n: rows.length }));
+    function draw() {
+        head.setAttribute('aria-expanded', state.upcomingOpen ? 'true' : 'false');
+        head.className = 'dd-done-h' + (state.upcomingOpen ? ' on' : '');
+        clear(box);
+        if (!state.upcomingOpen) return;
+        if (!rows.length) {
+            box.appendChild(h('div', { class: 'dd-up-day' }, tr('Записей на ближайшие 30 дней нет')));
+            return;
+        }
+        let day = null;
+        for (const r of rows) {
+            if (r.day !== day) { day = r.day; box.appendChild(h('div', { class: 'dd-up-day' }, fmtDate(r.day))); }
+            box.appendChild(upcomingRow(r));
+        }
+    }
+    draw();
+    return h('div', { class: 'dd-done dd-upcoming' }, head, box);
+}
+function upcomingRow(r) {
+    const meta = [r.mrn || null, (r.what || []).join(', ') || null].filter(Boolean).join(' · ');
+    return h('div', { class: 'dd-appt dd-up-row' },
+        h('span', { class: 'dd-appt-t' }, r.time || '—'),
+        h('span', { class: 'dd-appt-av ' + pastelFor(r.patient_id) }, initials(r.patient_name || '?')),
+        h('span', { class: 'dd-appt-b' },
+            h('span', { class: 'dd-appt-n' }, r.patient_name || tr('Без имени')),
+            h('span', { class: 'dd-appt-m' }, meta || '—'),
+        ),
+        r.visit_kind === 'repeat' ? h('span', { class: 'dd-chip now' }, tr('Повторный')) : null,
+    );
 }
 function apptCard(r) {
     const meta = [

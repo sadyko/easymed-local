@@ -261,6 +261,9 @@ const PAY_A = () => [
   payLineOf('sv6', -9, 37600, null),
 ];
 let PAY_BY_DOCTOR = { 'u-doc-a': PAY_A(), 'u-doc-b': [payLineOf('svb', 0, 37600, null)] };
+// REPEAT_VISIT_V1 — ответ doctor_upcoming_visits («Записи вперёд»); null — пусто.
+let UPCOMING = null;
+let upcomingCalls = [];
 let payCalls = [];
 function matches(row, f) {
   if (f.or) return true;
@@ -292,6 +295,10 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/doctor_tier_positions')) {
     tierCalls.push(body);
     return { ok: true, json: async () => ({ data: { from: '', to: '', rows: [] } }) };
+  }
+  if (u.startsWith('/api/rpc/doctor_upcoming_visits')) {
+    upcomingCalls.push(body);
+    return { ok: true, json: async () => ({ data: UPCOMING || { from: '', to: '', rows: [] } }) };
   }
   if (u.startsWith('/api/rpc/doctor_pay_summary')) {
     payCalls.push(body);
@@ -857,4 +864,40 @@ test('m9: «услуг задано» — число записей ставок
   const txt = textOf(root);
   assert.ok(txt.includes('Ставки по услугам'), 'нет строки «Ставки по услугам»: ' + txt.slice(0, 300));
   assert.ok(txt.includes('услуг задано: 3'), 'счёт ставок врача неверен: ' + (txt.match(/услуг задано: \d+/) || ['—'])[0]);
+});
+
+// REPEAT_VISIT_V1 (2026-11-02) — «Записи вперёд · N»: свои записи на 30 дней
+// (сервер, doctor_upcoming_visits) под лентой «Моего дня», свёрнуто при
+// открытии, внутри — по дням. Лента дня по-прежнему кончается «Завершёнными».
+test('REPEAT_VISIT_V1: «Записи вперёд · N» — свои записи по дням, свёрнуто при открытии кабинета', async () => {
+  reset();
+  upcomingCalls = [];
+  UPCOMING = { from: '2026-11-03', to: '2026-12-02', rows: [
+    { visit_id: 'f-1', day: '2026-11-03', time: '09:00', visit_kind: 'repeat', status: 'scheduled',
+      patient_id: 'p-1', patient_name: 'Иванов Пётр', mrn: 'MRN-001', what: ['Повторный приём'] },
+    { visit_id: 'f-2', day: '2026-11-10', time: '14:20', visit_kind: 'first', status: 'confirmed',
+      patient_id: 'p-3', patient_name: 'Тошев Жасур', mrn: 'MRN-003', what: [] },
+  ] };
+  try {
+    loginAs(DOCTOR_A);
+    const host = mk('div');
+    await dash.renderDoctorDashboard(host, {});
+    assert.deepStrictEqual(upcomingCalls, [{ days: 30 }], 'записи вперёд спрошены не на 30 дней');
+    const block = byClass(host, 'dd-upcoming')[0];
+    assert.ok(block, 'нет блока «Записи вперёд»');
+    const head = byClass(block, 'dd-done-h')[0];
+    assert.ok(textOf(head).includes('Записи вперёд · 2'), 'подпись группы: ' + textOf(head));
+    assert.strictEqual(head.attrs['aria-expanded'], 'false', 'при открытии кабинета группа свёрнута');
+    assert.ok(!textOf(block).includes('Тошев Жасур'), 'свёрнутая группа показывает записи');
+    head.click();
+    const t = textOf(block);
+    for (const s of ['3 ноября 2026', '10 ноября 2026', '09:00', 'Иванов Пётр', 'Повторный приём', 'Повторный', '14:20', 'Тошев Жасур']) {
+      assert.ok(t.includes(s), 'в «Записях вперёд» нет «' + s + '»: ' + t);
+    }
+    const list = byClass(host, 'dd-day-list')[0];
+    assert.ok(hasClass(list.children.at(-1), 'dd-done'), 'лента дня больше не кончается «Завершёнными»');
+    assert.ok(!byClass(list, 'dd-up-row').length, 'будущие записи попали в ленту сегодняшнего дня');
+  } finally {
+    UPCOMING = null;
+  }
 });

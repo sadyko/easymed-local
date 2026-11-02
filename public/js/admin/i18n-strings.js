@@ -13427,5 +13427,8 @@ export const STRINGS = {
   "У пациента в этот день уже есть приём в {start} у {doctor} — выберите другой день или время.": {"en":"The patient already has an appointment at {start} with {doctor} on this day — choose another day or time.","ru":"У пациента в этот день уже есть приём в {start} у {doctor} — выберите другой день или время.","uz":"Bemorning bu kunda {start} da {doctor} qabulida yozuvi bor — boshqa kun yoki vaqtni tanlang."},   // REPEAT_VISIT_V1 — отказ revisit_day_taken
   "Время не занято — повторный визит не записан. Выберите другой день или время.": {"en":"No time was reserved — the follow-up visit was not booked. Choose another day or time.","ru":"Время не занято — повторный визит не записан. Выберите другой день или время.","uz":"Vaqt band qilinmadi — takroriy tashrif yozilmadi. Boshqa kun yoki vaqtni tanlang."},   // REPEAT_VISIT_V1 — окно повторного визита
   "«Записи вперёд» открываются только врачу.": {"en":"Upcoming bookings are available to doctors only.","ru":"«Записи вперёд» открываются только врачу.","uz":"«Oldindagi yozuvlar» faqat shifokorga ochiladi."},   // REPEAT_VISIT_V1 — doctor_upcoming_visits
+  "Записи вперёд · {n}": {"en":"Upcoming bookings · {n}","ru":"Записи вперёд · {n}","uz":"Oldindagi yozuvlar · {n}"},   // REPEAT_VISIT_V1 — кабинет врача
+  "Записей на ближайшие 30 дней нет": {"en":"No bookings in the next 30 days","ru":"Записей на ближайшие 30 дней нет","uz":"Keyingi 30 kunda yozuvlar yo'q"},   // REPEAT_VISIT_V1
+  "Повторный": {"en":"Follow-up","ru":"Повторный","uz":"Takroriy"},   // REPEAT_VISIT_V1 — метка визита в «Записях вперёд»
   // /REPEAT_VISIT_V1
 };

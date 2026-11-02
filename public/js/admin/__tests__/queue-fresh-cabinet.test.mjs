@@ -405,7 +405,9 @@ test('«Мой день»: подписанный приём сразу уход
   t.after(() => { VISITS = []; reseed(); });
   const root = await openWork();
   const dayCards = () => byClass(root, 'dd-appt');
-  const doneHead = () => byClass(root, 'dd-done-h')[0];
+  // REPEAT_VISIT_V1 — под лентой дня есть ещё группа «Записи вперёд · N» с той же
+  // шапкой: «Завершённые» ищутся в самой ленте дня.
+  const doneHead = () => byClass(byClass(root, 'dd-day-list')[0] || root, 'dd-done-h')[0];
   buttonByText(root, /Дашборд/).click();
   await tick(80);
   assert.ok(dayCards().some((c) => textOf(c).includes('Гаипов')), 'стенд: в «Моём дне» нет идущего приёма');
