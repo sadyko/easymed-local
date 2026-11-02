@@ -73,6 +73,7 @@ import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 // со скидкой и сроком в строке; строка сметы помнит свой пакет.
 import { listTemplates, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // SERVICES_PACKAGES_V1 — cartPackage: цена услуги в пакете
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';
+import { nearestFree, noFreeText, nearestButtonText, visitDayNote } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
 // попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
@@ -1150,19 +1151,21 @@ export function openServicePickerModal({
         return freeStartMinutes(slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP }));
     }
 
-    // Walk forward day-by-day from today to the first day that has a free slot.
+    // PICK_DAY_V1 — время ставится само только в ПЕРВЫЙ день окна (сегодня или
+    // день визита, schedBaseIso). Прежде перебирались 14 дней вперёд и запись
+    // молча уезжала на первый свободный. Нет времени в этот день — время не
+    // выбрано: регистратор листает дни сам (‹ ›), «Готово» без времени не
+    // запишет приём на время.
     function autoPickSlot() {
         const doctor = currentDoctor();
         if (!doctor) return;
-        for (let i = 0; i < SCHED_WINDOW_DAYS; i++) {
-            const iso  = schedAddDays(schedBaseIso(), i);
-            const free = schedFreeStarts(iso);
-            if (free.length) {
-                state.schedViewIso  = iso;
-                state.schedDateIso  = iso;
-                state.schedStartMin = free[0];
-                return;
-            }
+        const iso  = schedBaseIso();
+        const free = schedFreeStarts(iso);
+        state.schedViewIso = iso;
+        if (free.length) {
+            state.schedDateIso  = iso;
+            state.schedStartMin = free[0];
+            return;
         }
         state.schedDateIso  = null;
         state.schedStartMin = null;
@@ -2006,12 +2009,41 @@ export function openServicePickerModal({
         if (!requireSlot) { paintCatalog(); return; }
         await ensureDocSlots(doc.id, item.durationMinutes);
         if (item.doctor !== doc || !state.added.includes(item)) return;   // CATALOG_WIZARD_V2 — stale: switched/removed mid-fetch
-        for (const d of catDays()) {
-            const f = freeStarts(doc.id, d.iso, item.durationMinutes, item);
-            if (f.length) { item.__dayIso = d.iso; catPickTime(item, d.iso, f[0], !!auto); return; }
-        }
-        item.__dayIso = catDays()[0].iso;
+        // PICK_DAY_V1 — время ставится само ТОЛЬКО в первый день окна (сегодня;
+        // у окна на визите — день визита). Прежде брался первый свободный из
+        // семи дней: вечером или в выходной врача строка молча уезжала на
+        // завтра, а с ней и весь визит (cartVisitDateIso — по самой ранней
+        // строке со временем). Нет времени — пометка и выбор дня (catNoToday).
+        const first = catDays()[0];
+        item.__dayIso = first.iso;
+        const f = freeStarts(doc.id, first.iso, item.durationMinutes, item);
+        if (f.length) { item.__noToday = false; catPickTime(item, first.iso, f[0], !!auto); return; }
+        item.__noToday = true;
         paintCatalog();
+    }
+    /** PICK_DAY_V1 — ближайший свободный слот строки после первого дня окна: { iso, min } или null. */
+    function catNearest(item) {
+        if (!item || !item.doctor) return null;
+        return nearestFree(catDays().slice(1).map((d) => d.iso), (iso) => freeStarts(item.doctor.id, iso, item.durationMinutes, item));
+    }
+    /** PICK_DAY_V1 — строка врача без времени в первый день окна, и день не выбран. */
+    function catNeedsDay(a) {
+        return !!(a && a.__noToday && a.doctor && !a.startISO && requireSlot
+            && (a.doctor.scheduling_mode || 'schedulable') !== 'live_queue');
+    }
+    /** PICK_DAY_V1 — красная пометка и «Ближайшее: …» / «Выбрать день» у строки каталога. */
+    function catNoToday(item) {
+        const near = catNearest(item);
+        return h('div', { class: 'wzc-noday', 'data-no-today': String(item.service.id),
+            style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '8px', padding: '8px 10px', borderRadius: '10px', background: 'var(--crit-50, #fef2f2)', border: '1px solid var(--crit-200, #fecaca)' } },
+            h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 700, color: 'var(--crit-700, #b91c1c)' } },
+                Icon('Warning', { size: 13 }), noFreeText(catDays()[0].today)),
+            near ? h('button', { class: 'btn btn-sm btn-primary', type: 'button', 'data-pick-nearest': String(item.service.id),
+                onclick: () => { item.__noToday = false; catPickTime(item, near.iso, near.min, false); } },
+                nearestButtonText(near.iso, near.min)) : null,
+            near ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-pick-day': String(item.service.id),
+                onclick: () => { item.__dayIso = near.iso; paintCatalog(); } },
+                Icon('Calendar', { size: 13 }), ' ', tr('Выбрать день')) : null);
     }
     function catPickTime(item, dayIso, m, auto) {
         item.__dayIso = dayIso;
@@ -2225,6 +2257,7 @@ export function openServicePickerModal({
                     h('span', { class: 'free' }, free === 0 ? tr('нет') : trf('{n} окн.', { n: free }))));
             }
             box.appendChild(strip);
+            if (catNeedsDay(item)) box.appendChild(catNoToday(item));   // PICK_DAY_V1
             const slots = freeStarts(item.doctor.id, item.__dayIso, item.durationMinutes, item);
             const selM = (item.time && item.dateIso === item.__dayIso)
                 ? Number(item.time.slice(0, 2)) * 60 + Number(item.time.slice(3, 5)) : null;
@@ -2290,7 +2323,8 @@ export function openServicePickerModal({
                     style: { background: 'none', border: '0', padding: '0', cursor: 'pointer', font: 'inherit', textDecoration: 'underline' },
                     onclick: () => { cat2.q = a.service.name; cat2.group = ''; cat2.win = CAT_PAGE;
                         if (catSearchEl) catSearchEl.value = cat2.q; paintCatalog(); } },
-                    'выберите врача и время');
+                    // PICK_DAY_V1 — причина словами: не «выберите время», а «сегодня времени нет».
+                    catNeedsDay(a) ? noFreeText(catDays()[0].today) : 'выберите врача и время');
                 else if (a.doctor) who = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     `${a.doctor.full_name || ''}${a.time ? ' · ' + (a.dateIso === localYmd() ? tr('сегодня') : (a.dateIso || '').slice(8) + '.' + (a.dateIso || '').slice(5, 7)) + ' ' + a.time : ''}`);
                 // PICKER_CATALOG_EVERYWHERE_V1 — «процедурный кабинет» это правда
@@ -2324,6 +2358,15 @@ export function openServicePickerModal({
                             onclick: () => catRemove(a) }, '×'))));
             }
             catRailEl.appendChild(rowsWrap);   // WIZ_RAIL_SCROLL_V1
+            // PICK_DAY_V1 — визит калькулятора один, и его день — самая ранняя
+            // строка со временем (cartVisitDateIso): услуги без врача идут в тот
+            // же день. Не сегодня — сказать вслух, а не переносить молча.
+            const vday = localDayOf(cartVisitDateIso());
+            if (!attachMode && vday && vday !== localYmd()) {
+                catRailEl.appendChild(h('div', { class: 'wzc-visit-day', 'data-visit-day': vday,
+                    style: { display: 'flex', alignItems: 'center', gap: '6px', margin: '6px 0', padding: '7px 9px', borderRadius: '9px', fontSize: '12.5px', fontWeight: 700, color: 'var(--warn-700, #a16207)', background: 'var(--warn-50, #fffbeb)', border: '1px solid var(--warn-200, #fde68a)' } },
+                    Icon('Calendar', { size: 13 }), visitDayNote(vday)));
+            }
         } else {
             catRailEl.appendChild(h('div', { class: 'wzc-empty' }, 'Услуги появятся здесь'));
         }
