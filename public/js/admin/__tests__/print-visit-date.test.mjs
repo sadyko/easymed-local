@@ -54,6 +54,19 @@ test('заключение (classic): «Тип визита» — только �
     assert.match(rep, /Тип визита Повторный визит/);
 });
 
+// Ревью m5 — компактное заключение «Тип визита» не печатало вовсе: ступень цены строки
+// терялась на листе, выбранном клиникой. Подпись и слова — как у классического.
+test('заключение (compact): «Тип визита» печатается, когда он задан; без данных — строки нет', () => {
+    const base = { patientName: 'Пациент Тест', mrn: 'P-1', doctorName: 'Врач Тест', service: 'Приём терапевта', issueDate: '28.10.2026', complaint: 'Кашель' };
+    const none = text(renderDesignedVariant('conclusion', 'compact', S, base));
+    assert.ok(!none.includes('Тип визита') && !none.includes('Первичный приём'), 'без данных строка «Тип визита» на листе');
+    for (const visitType of ['Повторный визит', 'Второй визит']) {
+        const t = text(renderDesignedVariant('conclusion', 'compact', S, { ...base, visitType }));
+        assert.match(t, new RegExp('Тип визита ' + visitType), 'compact не печатает «Тип визита»: ' + visitType);
+        assert.ok(t.includes('Приём терапевта') && t.includes('28.10.2026'), 'соседние поля шапки пропали');
+    }
+});
+
 test('лист диагностики: dateOut — его день; старый архивный лист без dateOut — свой issueDate, не день перепечатки', () => {
     const diag = { patientName: 'Пациент Тест', mrn: 'P-1', service: 'УЗИ почек', description: 'Почки обычных размеров', conclusion: 'Норма' };
     for (const v of ['classic', 'compact']) {

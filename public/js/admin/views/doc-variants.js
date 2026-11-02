@@ -801,6 +801,9 @@ ${RICH_CSS}
       { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
       { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob, opt: true },
       { label: 'Услуга', uz: 'Xizmat', value: d.service, opt: true },
+      // PRINT_VISIT_DATE_V1 (ревью m5) — «Тип визита», как у классического: только настоящий
+      // (visitTypeLabel — ступень цены строки); не задан — поля нет.
+      { label: 'Тип визита', uz: 'Tashrif turi', value: d.visitType, opt: true },
       { label: 'Врач', uz: 'Shifokor', value: shortName(d.doctorName) },
     ]),
   })}
