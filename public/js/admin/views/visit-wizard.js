@@ -59,6 +59,7 @@ import { readEnsureVisit } from '../ensure-visit-answer.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
 import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX — лист на каждый счёт, из серверных строк
 import { actSheet, isDmsPayer } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт плательщика одной сборкой с кассой
+import { nearestFree, noFreeText, nearestButtonText } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
 
 
 function fmtPrice(n) {
@@ -1359,8 +1360,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     summary = h('span', { style: { fontSize: '12.5px', color: 'var(--crit-600, #dc2626)', whiteSpace: 'nowrap' } }, 'выберите врача');
                 }
 
+                // PICK_DAY_V1 — сегодня у врача времени нет: пометка и выбор дня
+                // прямо под строкой; «Выбрать день» открывает тот же календарь.
+                const openCal = () => { if (calPop.style.display === 'none') dayBtn.click(); };
+                if (line.ui.openCal) { line.ui.openCal = false; setTimeout(openCal, 0); }
+                const noToday = !liveQ && needsDay(line) ? noTodayControls(line, openCal) : null;
+
                 return h('div', { style: { marginTop: '10px', borderTop: '1px dashed var(--ink-100)', paddingTop: '10px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-                    docWrap, ...(liveQ ? [] : [dayWrap, timeSel]), summary);
+                    docWrap, ...(liveQ ? [] : [dayWrap, timeSel]), summary, noToday);
             }
 
             if (rows.length > 200) {
@@ -1511,16 +1518,73 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         return wiz.cart.filter(c => !c.svc.requires_doctor || c.doctorId);
     }
 
+    // PICK_DAY_V1 (решение владельца 2026-11-02) — АВТОВЫБОР ТОЛЬКО НА СЕГОДНЯ.
+    // Прежде здесь брался первый свободный слот за 14 дней: вечером, в выходной
+    // врача или при занятом дне строка молча уезжала на завтра, услуги без врача
+    // оставались сегодня, и смета делилась на два визита и два счёта (шапка
+    // views/pick-day.js). Теперь: есть время сегодня — первое сегодняшнее; нет —
+    // у строки нет ни дня, ни времени и метка ui.noToday: «Ближайшее: …» и
+    // «Выбрать день» (noTodayControls), шаг не пройти (nextBlockReason).
+    // 14 дней по-прежнему прогреваются — из них считается «Ближайшее».
     async function autoPickSlot(line) {
-        await loadBusy(line);   // прогреть у сервера 14 дней автоподбора
+        await loadBusy(line);   // прогреть у сервера 14 дней: «Ближайшее» ищется в них
         if (line.booked) return;   // CRM_LINK_ALL_V1 (ред. 2) — у строки «из записи» время записи
         const d0 = new Date(); d0.setHours(0, 0, 0, 0);
-        for (let i = 0; i < 14; i++) {
-            const day = d0.getTime() + i * 86400000;
-            const slots = slotsForDay(line, day);
-            if (slots.length) { line.ui.day = day; line.when = slotToLocalIso(slots[0]); return; }
-        }
+        const today = slotsForDay(line, d0.getTime());
+        line.ui.day = d0.getTime();
+        if (today.length) { line.when = slotToLocalIso(today[0]); line.ui.noToday = false; return; }
         line.when = null;
+        line.ui.noToday = true;
+    }
+
+    /** PICK_DAY_V1 — ближайшее свободное время строки ПОСЛЕ сегодня (в прогретых 14 днях): { day, ms } или null. */
+    function nearestSlot(line) {
+        const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+        const days = Array.from({ length: 13 }, (_, i) => d0.getTime() + (i + 1) * 86400000);
+        const hit = nearestFree(days.map(isoDay), (iso) => slotsForDay(line, new Date(iso + 'T00:00:00').getTime())
+            .map((ms) => { const d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); }));
+        if (!hit) return null;
+        const day = new Date(hit.iso + 'T00:00:00').getTime();
+        return { day, iso: hit.iso, min: hit.min, ms: day + hit.min * 60000 };
+    }
+
+    /** PICK_DAY_V1 — «Ближайшее»: поставить строке ближайший слот. false — его нет. */
+    function pickNearest(line) {
+        const n = nearestSlot(line);
+        if (!n) return false;
+        line.ui.day = n.day;
+        line.when = slotToLocalIso(n.ms);
+        line.ui.noToday = false;
+        return true;
+    }
+
+    /** PICK_DAY_V1 — у врачебной строки нет времени сегодня, и день ещё не выбран. */
+    function needsDay(c) {
+        return !!(c && c.ui && c.ui.noToday && !c.when && c.doctorId && !c.booked && !isLiveQueueDoc(c.doctorId));
+    }
+
+    /**
+     * PICK_DAY_V1 — красная пометка строки и две кнопки: «Ближайшее: вт 3 ноября
+     * 09:00» ставит ближайший слот, «Выбрать день» открывает календарь врача
+     * (onPickDay — у каталога свой, у сметы свой).
+     */
+    function noTodayControls(line, onPickDay) {
+        const near = nearestSlot(line);
+        const after = () => { refreshTiers(); repaintRail(); if (wiz.step === 1) paint(); };
+        return h('div', {
+            'data-no-today': String(line.svc.id),
+            style: { flexBasis: '100%', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '6px', padding: '8px 10px', borderRadius: '10px', background: 'var(--crit-50, #fef2f2)', border: '1px solid var(--crit-200, #fecaca)' },
+        },
+            h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 700, color: 'var(--crit-700, #b91c1c)' } },
+                Icon('Warning', { size: 13 }), noFreeText(true)),
+            near ? h('button', {
+                class: 'btn btn-sm btn-primary', type: 'button', 'data-pick-nearest': String(line.svc.id),
+                onclick: () => { pickNearest(line); after(); },
+            }, nearestButtonText(near.iso, near.min)) : null,
+            h('button', {
+                class: 'btn btn-sm btn-outline', type: 'button', 'data-pick-day': String(line.svc.id),
+                onclick: onPickDay,
+            }, Icon('Calendar', { size: 13 }), ' ', tr('Выбрать день')));
     }
 
     function slotToLocalIso(ms) {
@@ -1576,7 +1640,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         if (pool.length === 1) {
             line.doctorId = pool[0].id;
             if (isLiveQueueDoc(line.doctorId)) { line.when = null; repaintRail(); }
-            else autoPickSlot(line).then(() => { repaintRail(); if (wiz.step === 1) paint(); });
+            // PICK_DAY_V1 — услуге без врача время врача не нужно: она «на дату»
+            // (сегодня). Подбор слота единственного исполнителя ставил ей ДЕНЬ
+            // этого слота — и анализ уезжал на завтра вторым визитом.
+            else if (!line.dateOnly) autoPickSlot(line).then(() => { repaintRail(); if (wiz.step === 1) paint(); });
         }
         repaintRail();
     }
@@ -2243,6 +2310,15 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         style: { border: 'none', background: 'none', cursor: 'pointer', color: 'var(--crit-500, #ef4444)', display: 'flex' },
                     }, Icon('X', { size: 13 })),
                 ));
+                // PICK_DAY_V1 — строка без времени сегодня видна и в смете: каталог
+                // мог уйти на другой поиск. «Выбрать день» возвращает к её строке
+                // каталога с открытым календарём врача.
+                if (needsDay(c)) {
+                    list.appendChild(noTodayControls(c, () => {
+                        wiz.search = c.svc.name; wiz.cat = 'Все'; wiz.limit = PAGE_SIZE;
+                        c.ui.openCal = true; wiz.step = 1; paint();
+                    }));
+                }
             }
             railEl.appendChild(list);
             // DOC_PICK_IN_RAIL_V1 — услуги, ждущие врача, показываем СТРОКАМИ с
@@ -2633,6 +2709,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     function nextBlockReason() {
         if (wiz.step === 1) {
             if (wiz.cart.length === 0) return 'добавьте хотя бы одну услугу';
+            // PICK_DAY_V1 — сегодня у врача времени нет, а день не выбран: дальше
+            // нельзя, пока регистратор не выберет день или не уберёт строку.
+            if (wiz.cart.some(needsDay)) return 'сегодня у врача нет свободного времени — выберите день или уберите услугу';
             // SCHED_V1 — врачебной услуге нужны врач и слот прямо в карточке услуги
             if (wiz.cart.some(c => c.svc.requires_doctor && !(c.doctorId && (c.when || isLiveQueueDoc(c.doctorId))))) return 'выберите врача и время для услуг, где нужен врач';
         }

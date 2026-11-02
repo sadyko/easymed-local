@@ -529,6 +529,11 @@ async function openWizardReadyWith(prep, opts = {}) {
   assert.ok(item, 'врач не предложен строке: ' + (docList ? textOf(docList) : '—'));
   item.dispatchEvent({ type: 'mousedown', preventDefault() {}, currentTarget: item });
   await wait(60); await flush(20);   // autoPickSlot → calendar_slots (настоящий) → время строки
+  // PICK_DAY_V1 — время ставится само только СЕГОДНЯ. Врач посева работает
+  // 10:00–16:00: вечером сегодня окон нет, и строка ждёт выбора дня — стенд
+  // жмёт «Ближайшее», как регистратор (иначе тест зависел бы от часа запуска).
+  const near = walk(document.body.children.find(isWizard)).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-pick-nearest'] !== undefined);
+  if (near) { near.click(); await flush(20); }
   return { overlay: () => document.body.children.find(isWizard), day: s.day, dayIso: s.dayIso, saved: () => saved };
 }
 
