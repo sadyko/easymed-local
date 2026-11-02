@@ -31,6 +31,8 @@ async function start() {
   user.run(3, 'cc', hashPassword('password1'), 'Оператор', 'callcenter', 0);
   user.run(10, 'doc', hashPassword('password1'), 'Иванов', 'doctor', 1);
   user.run(11, 'doc2', hashPassword('password1'), 'Петров', 'doctor', 1);
+  user.run(12, 'head', hashPassword('password1'), 'Главврач', 'doctor', 1);   // DUP_STOP_V1 (ревью, проба D) — главный врач — дополнительной ролью
+  db.prepare('UPDATE users SET extra_roles = ? WHERE id = 12').run(JSON.stringify(['head_doctor']));
   db.prepare("INSERT INTO services (id, name, price, type, is_lab) VALUES (40,'Анализ крови',40000,'lab',1)").run();
   db.prepare("INSERT INTO services (id, name, price, type) VALUES (50,'УЗИ брюшной полости',80000,'imaging')").run();
   db.prepare("INSERT INTO services (id, name, price, type) VALUES (60,'Капельница',30000,'procedure')").run();
@@ -42,7 +44,7 @@ async function start() {
   const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
   const base = `http://127.0.0.1:${server.address().port}`;
   const cookies = {};
-  for (const who of ['boss', 'reg', 'cc', 'doc']) {
+  for (const who of ['boss', 'reg', 'cc', 'doc', 'head']) {
     const res = await fetch(base + '/api/auth/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: who, password: 'password1' }),
@@ -212,6 +214,38 @@ test('DUP_STOP_V1 (ревью m2): правка /api/db — смена вида 
     assert.equal(both.status, 409, JSON.stringify(both.json));
     assert.match(both.json.error.message, /«УЗИ брюшной полости» выбрана дважды/);
     assert.equal(live(t, v, 50), 0);
+  } finally { t.close(); }
+});
+
+test('DUP_STOP_V1 (ревью, проба D): главный врач (врач с дополнительной ролью) назначает повтор с причиной; visit_dup_check даёт ему обход', async () => {
+  const t = await start();
+  try {
+    const v = arrivedVisit(t);
+    assert.equal((await ins(t, 'reg', row(v, 40))).status, 200);
+    assert.equal((await ins(t, 'head', row(v, 40))).status, 409, 'без причины');
+    const h = await ins(t, 'head', row(v, 40, { __repeat_reason: 'контроль после лечения' }));
+    assert.equal(h.status, 200, JSON.stringify(h.json));
+    assert.equal(live(t, v, 40), 2);
+    const chk = await t.rpc('visit_dup_check', 'head', { visit_id: v, lines: [{ service_id: 40 }] });
+    assert.equal(chk.status, 200, JSON.stringify(chk.json));
+    assert.equal(chk.json.data.can_override, true);
+    const doc = await t.rpc('visit_dup_check', 'doc', { visit_id: v, lines: [] });
+    assert.equal(doc.json.data.can_override, false, 'обычный врач');
+  } finally { t.close(); }
+});
+
+test('DUP_STOP_V1 (ревью, проба E): причина — строка не короче 3 знаков без пробелов по краям; число и пробелы — отказ; в строку причина не пишется, в журнал — обрезанной', async () => {
+  const t = await start();
+  try {
+    const v = arrivedVisit(t);
+    assert.equal((await ins(t, 'reg', row(v, 40))).status, 200);
+    assert.equal((await ins(t, 'boss', row(v, 40, { __repeat_reason: '   a   ' }))).status, 409, 'пробелы вокруг одной буквы');
+    assert.equal((await ins(t, 'boss', row(v, 40, { __repeat_reason: 12345 }))).status, 409, 'не строка');
+    const ok = await ins(t, 'boss', row(v, 40, { __repeat_reason: '  повтор по назначению  ' }), { returning: true, single: 'single' });
+    assert.equal(ok.status, 200, JSON.stringify(ok.json));
+    assert.ok(!('__repeat_reason' in ok.json.data), 'причина вернулась колонкой строки');
+    const log = t.db.prepare("SELECT reason, visit_id FROM invoice_audit_log WHERE action = 'line_repeat_order'").all();
+    assert.deepEqual(log, [{ reason: 'повтор по назначению', visit_id: v }]);
   } finally { t.close(); }
 });
 
