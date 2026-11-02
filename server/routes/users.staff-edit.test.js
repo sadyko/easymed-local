@@ -282,6 +282,31 @@ test('STAFF_EDIT_V1 (ревью 4): файл связи филиалов ест�
   } finally { server.close(); }
 });
 
+// Ревью 5 — логин только текстом: массив ["nurse.b"] через String() становился
+// «nurse.b», и PATCH отвечал 200 — сменой логина из чего угодно, что
+// String() превратит в годную строку. То же у POST.
+test('STAFF_EDIT_V1 (ревью 5): логин не текстом — 400 с правилом логина (PATCH и POST), ничего не записано', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    for (const bad of [['nurse.b'], 12345, null, true, { name: 'nurse.b' }]) {
+      const r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: bad, phone: '+998901234567' });
+      assert.equal(r.status, 400, JSON.stringify(bad) + ': ' + JSON.stringify(r.json));
+      assert.deepEqual([r.json.error.message, r.json.error.field], [RULE_MSG, 'username'], JSON.stringify(bad));
+    }
+    assert.equal(usernameOf(db, NURSE), 'nurse.a');
+    assert.notEqual(db.prepare('SELECT phone FROM users WHERE id = ?').get(NURSE).phone, '+998901234567', 'правка записалась при отказе');
+    const before = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+    for (const bad of [['fresh.two'], 1234567]) {
+      const r = await call(base, boss, 'POST', '/api/users', { username: bad, password: 'pw-x', role: 'nurse',
+        last_name: 'Новикова', first_name: 'Нина', phone: '+998901234501' });
+      assert.equal(r.status, 400, JSON.stringify(bad) + ': ' + JSON.stringify(r.json));
+      assert.equal(r.json.error.message, RULE_MSG, JSON.stringify(bad));
+    }
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM users').get().n, before, 'сотрудник заведён с логином не текстом');
+  } finally { server.close(); }
+});
+
 // Ревью 2 — заведение сотрудника (POST) — тоже установка пароля: пять ошибок
 // под логином, которого ещё не было, запирали нового сотрудника на 5 минут.
 test('STAFF_EDIT_V1 (ревью 2): новый сотрудник входит сразу, хотя под его логином ошибались до заведения', async () => {

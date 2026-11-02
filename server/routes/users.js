@@ -744,7 +744,10 @@ function inBranchGroup(dataDir) {
  */
 function loginChange(db, actor, row, sent, dataDir) {
   if (sent === undefined) return {};
-  const name = String(sent ?? '').trim().toLowerCase();
+  // Ревью 5 — логин только текстом: массив ["nurse.b"] через String() становился
+  // «nurse.b» и проходил правило. Не текст — не логин, кто бы его ни прислал.
+  if (typeof sent !== 'string') return { status: 400, error: { code: 'bad_request', message: LOGIN_RULE_MESSAGE, field: 'username' } };
+  const name = sent.trim().toLowerCase();
   if (name === String(row.username || '').trim().toLowerCase()) return {};
   if (!isAdminUser(actor) || (actor && actor.acting_admin)) {
     return { status: 403, error: { code: 'forbidden', message: LOGIN_ADMIN_ONLY_MESSAGE } };
@@ -775,7 +778,10 @@ export function userRoutes(db, { dataDir } = {}) {
     // every write role set empty, on purpose) and land straight here.
     if (req.control?.locked) return lockedResponse(res, req.control);
     const { username, password, full_name = '', role } = req.body || {};
-    const name = String(username || '').trim().toLowerCase();
+    // STAFF_EDIT_V1 (ревью 5) — логин только текстом, как у PATCH (loginChange):
+    // String(["a.b"]) дал бы годный логин из массива.
+    if (typeof username !== 'string') return bad(res, LOGIN_RULE_MESSAGE);
+    const name = username.trim().toLowerCase();
     if (!LOGIN_RE.test(name)) return bad(res, LOGIN_RULE_MESSAGE);   // STAFF_EDIT_V1 — правило одно с PATCH
     if (!validPassword(password)) return bad(res, 'Пароль не может быть пустым (не длиннее 72 байт).');
     if (typeof full_name !== 'string') return bad(res, 'ФИО должно быть текстом.');
