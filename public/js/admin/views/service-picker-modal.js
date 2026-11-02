@@ -3120,11 +3120,13 @@ export function openServicePickerModal({
             // DUP_STOP_V1 — та же услуга уже назначена в визите дня пациента: отказ ДО записи
             // (calendar_book найдёт или заведёт визит дня, и строки ниже легли бы в него).
             // Администратор и главный врач называют причину — она уходит в строки.
+            // DUP_STOP_V1 (ревью m6) — врач строки — тот, с которым она уйдёт в базу ниже
+            // (calcLineDoctorId): регистратура пишет строку сама, колл-центр — booking_lines_add.
             const pre = await precheckOrders({
                 patientId: p.id, day: localDayOf(visitDate),
                 lines: state.added.map((a) => (a.service.__consult
-                    ? { consultation_type_id: a.service.consultation_type_id || a.service.id, doctor_id: a.doctor?.id || a.service.__consultDoctorId || null }   // тот же вид, что уйдёт в строку ниже
-                    : { service_id: a.service.id, doctor_id: a.doctor?.id || null })),
+                    ? { consultation_type_id: a.service.consultation_type_id || a.service.id, doctor_id: calcLineDoctorId(a, { viaBooking: !canAddVisitLines() }) }   // тот же вид, что уйдёт в строку ниже
+                    : { service_id: a.service.id, doctor_id: calcLineDoctorId(a, { viaBooking: !canAddVisitLines() }) })),
             });
             if (!pre.ok) {
                 if (pre.text) toast(pre.text, 'fail');
@@ -3165,8 +3167,8 @@ export function openServicePickerModal({
                 // + consultation_type_id) — её цену по ценам врача считает сервер.
                 const want = state.added.filter((a) => a.service && (a.service.__consult || a.service.id));
                 const lineOf = (a) => a.service.__consult
-                    ? { consultation_type_id: a.service.consultation_type_id || a.service.id, doctor_id: a.doctor?.id || a.service.__consultDoctorId || null, scheduled_at: a.startISO || scheduledISO || null }
-                    : { service_id: a.service.id, doctor_id: a.doctor?.id || null, scheduled_at: a.startISO || scheduledISO || null };
+                    ? { consultation_type_id: a.service.consultation_type_id || a.service.id, doctor_id: calcLineDoctorId(a, { viaBooking: true }), scheduled_at: a.startISO || scheduledISO || null }   // DUP_STOP_V1 (ревью m6)
+                    : { service_id: a.service.id, doctor_id: calcLineDoctorId(a, { viaBooking: true }), scheduled_at: a.startISO || scheduledISO || null };
                 const res = want.length
                     ? await supabase.rpc('booking_lines_add', { visit_id: visit.id, patient_id: p.id, lines: want.map(lineOf) })
                     : { data: { added: [] } };
@@ -3191,6 +3193,7 @@ export function openServicePickerModal({
             }
 
             const vsRows = [];
+            const lineErrs = [];   // DUP_STOP_V1 (ревью m7) — отказы строк словами сервера
             for (const a of state.added) {
                 const unitPrice = itemPrice(a);   // RPC_PORT_V1 (ревью I2)
                 const isConsult = !!a.service.__consult;
@@ -3198,7 +3201,7 @@ export function openServicePickerModal({
                     visit_id:     visit.id,
                     service_id:   isConsult ? null : a.service.id,
                     consultation_type_id: isConsult ? (a.service.consultation_type_id || a.service.id) : null,
-                    doctor_id:    a.doctor?.id || null,
+                    doctor_id:    calcLineDoctorId(a),   // DUP_STOP_V1 (ревью m6) — тот же врач, что у проверки повтора
                     quantity:     1,
                     unit_price:   unitPrice,
                     total:        unitPrice,
@@ -3209,7 +3212,13 @@ export function openServicePickerModal({
                     // отказал бы строке (routes/db.js); строка идёт по обычной цене.
                     package_id:   (!isConsult && a.package && packageValidOn(a.package, localDayOf(visitDate))) ? a.package.id : null,
                 }, pre.reason));
-                if (vsErr) { console.warn('[wizard] visit_services:', vsErr.message || vsErr); continue; }
+                if (vsErr) {
+                    console.warn('[wizard] visit_services:', vsErr.message || vsErr);
+                    // DUP_STOP_V1 (ревью m7) — отказ строки (повтор в визите — 409, любой отказ
+                    // двери) не глотается: человек увидит его словами сервера.
+                    lineErrs.push(trf('Услуга «{name}»: {msg}', { name: a.service.name || '—', msg: vsErr.message || String(vsErr) }));
+                    continue;
+                }
                 vsRows.push({ vs, a, unitPrice });
                 try {
                     await logPatientActivity({ patientId: p.id, visitId: visit.id, entityType: 'service',
@@ -3225,16 +3234,23 @@ export function openServicePickerModal({
             // CATALOG_WIZARD_V2 — a partially-recorded visit must not proceed to
             // billing: the invoice/balance math would diverge from what landed.
             if (vsRows.length !== state.added.length) {
+                const why = lineErrs.length ? ' ' + lineErrs.join(' ') : '';   // DUP_STOP_V1 (ревью m7)
                 // LIVE_AUDIT_FIX_V1 — не легла НИ ОДНА строка: запись, только что
                 // заведённая calendar_book, пуста — убираем её, а не оставляем
-                // занятый слот без услуг.
+                // занятый слот без услуг. DUP_STOP_V1 (ревью m7) — только ЗАВЕДЁННУЮ
+                // этой записью (created): визит дня, в который запись добавляла
+                // (add_to_day_visit), — не её, он остаётся.
                 if (!vsRows.length) {
-                    try { await supabase.rpc('discard_empty_visit', { visit_id: visit.id }); } catch (_) {}
-                    toast(tr('Ни одна услуга не записалась — запись отменена.'), 'fail');
+                    if (booked.created !== false) {
+                        try { await supabase.rpc('discard_empty_visit', { visit_id: visit.id }); } catch (_) {}
+                        toast(tr('Ни одна услуга не записалась — запись отменена.') + why, 'fail');
+                    } else {
+                        toast(tr('Не удалось добавить услуги.') + why, 'fail');
+                    }
                     if (btn && btn.isConnected) btn.disabled = false;
                     return;
                 }
-                toast(trf('Записались не все услуги ({got} из {want}) — счёт НЕ выставлен. Откройте визит и добавьте услуги вручную.', { got: vsRows.length, want: state.added.length }), 'fail');
+                toast(trf('Записались не все услуги ({got} из {want}) — счёт НЕ выставлен. Откройте визит и добавьте услуги вручную.', { got: vsRows.length, want: state.added.length }) + why, 'fail');
                 closePicker();
                 if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, vsRows)); } catch (_) {} }
                 return;
@@ -3706,6 +3722,22 @@ export function askEmergencyReason(conflictText) {
         document.addEventListener('keydown', onEsc);
         reason.focus();
     });
+}
+
+/**
+ * DUP_STOP_V1 (ревью m6) — ВРАЧ СТРОКИ КАЛЬКУЛЯТОРА — ОДИН для проверки повтора
+ * (precheckOrders) и для записи. Регистратура пишет строку сама (insertRow) — с врачом
+ * сметы; колл-центр — booking_lines_add, где у консультации без врача сметы врач — тот,
+ * к чьей строке каталога она привязана (__consultDoctorId). Прежде проверка брала врача
+ * строки каталога всегда, а регистратура вставляла без него: сервер решал по другому
+ * ключу, чем спросил экран.
+ * @param {{doctor?:{id:any}|null, service?:object}} a — строка сметы
+ * @param {{viaBooking?:boolean}} [opts] — запись идёт через booking_lines_add
+ */
+export function calcLineDoctorId(a, { viaBooking = false } = {}) {
+    const own = (a && a.doctor && a.doctor.id) || null;
+    if (own || !viaBooking) return own;
+    return a && a.service && a.service.__consult ? (a.service.__consultDoctorId || null) : null;
 }
 
 /**
