@@ -59,7 +59,7 @@ import { readEnsureVisit } from '../ensure-visit-answer.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
 import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX — лист на каждый счёт, из серверных строк
 import { actSheet, isDmsPayer } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт плательщика одной сборкой с кассой
-import { nearestFree, noFreeText, nearestButtonText } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
+import { nearestFree, noFreeText, nearestButtonText, manyDaysWarning } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
 
 
 function fmtPrice(n) {
@@ -1587,6 +1587,37 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             }, Icon('Calendar', { size: 13 }), ' ', tr('Выбрать день')));
     }
 
+    /** PICK_DAY_V1 — дни сметы (местные), по которым её разложит createVisit. */
+    function cartDays() {
+        return [...new Set(visibleCart().map((c) => lineDay(c)).filter(Boolean))].sort();
+    }
+
+    /** PICK_DAY_V1 — день, к которому «Всё на один день» сводит строки без врача: день головной строки врача. */
+    function oneDayTarget() {
+        const head = headTimedLine(visibleCart());
+        return head ? String(head.when).slice(0, 10) : null;
+    }
+
+    /** PICK_DAY_V1 — есть ли что сводить: строка без врача (не «из записи») на другом дне, чем строка врача. */
+    function canMoveToOneDay() {
+        const day = oneDayTarget();
+        return !!day && visibleCart().some((c) => c.dateOnly && !c.booked && lineDay(c) !== day);
+    }
+
+    /** PICK_DAY_V1 — «Всё на один день»: строки без врача переходят на день строки врача. */
+    function moveAllToOneDay() {
+        const day = oneDayTarget();
+        if (!day) return;
+        for (const c of wiz.cart) {
+            if (!c.dateOnly || c.booked) continue;   // строку «из записи» переносит только календарь
+            c.when = day + 'T00:00';
+            c.ui.day = new Date(day + 'T00:00:00').getTime();
+        }
+        refreshTiers();
+        repaintRail();
+        if (wiz.step === 1) paint();
+    }
+
     function slotToLocalIso(ms) {
         const d = new Date(ms);
         const p = (x) => String(x).padStart(2, '0');
@@ -2356,6 +2387,22 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         sel));
                 }
                 railEl.appendChild(wait);
+            }
+            // PICK_DAY_V1 — смета на разные дни — это разные визиты и разные
+            // счета (визит = один день). Сказать об этом здесь, а не одним
+            // «(визитов: N)» на подтверждении, и дать собрать всё в один день.
+            const nDays = cartDays().length;
+            if (nDays > 1) {
+                railEl.appendChild(h('div', {
+                    'data-many-days': String(nDays),
+                    style: { display: 'flex', flexDirection: 'column', gap: '6px', padding: '9px 10px', background: 'var(--warn-50, #fffbeb)', border: '1px solid var(--warn-200, #fde68a)', borderRadius: '10px' },
+                },
+                    h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 700, color: 'var(--warn-700, #a16207)' } },
+                        Icon('Warning', { size: 13 }), manyDaysWarning(nDays)),
+                    canMoveToOneDay()
+                        ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-one-day': '', style: { alignSelf: 'flex-start' }, onclick: moveAllToOneDay },
+                            Icon('Calendar', { size: 13 }), ' ', tr('Всё на один день'))
+                        : null));
             }
         }
 

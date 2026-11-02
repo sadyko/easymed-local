@@ -224,6 +224,31 @@ test('«Ближайшее» ставит строке завтрашний сл
   assert.deepEqual([start.getHours(), start.getMinutes()], [10, 0]);
 });
 
+test('смета на два дня — «Услуги на 2 дня → 2 визита, 2 счёта»; «Всё на один день» сводит анализ к дню приёма: один визит, один счёт', async () => {
+  seed();
+  await openWizard([21, 22]);
+  byAttr(overlay(), 'data-pick-nearest', 21).click();
+  await flush(20);
+  const box = byAttr(overlay(), 'data-many-days', 2);
+  assert.ok(box, 'нет предупреждения о двух днях');
+  assert.ok(textOf(box).includes(manyDaysWarning(2)), textOf(box));
+  assert.equal(manyDaysWarning(2), 'Услуги на 2 дня → 2 визита, 2 счёта');
+  const one = byAttr(box, 'data-one-day');
+  assert.ok(one, 'нет кнопки «Всё на один день»');
+  one.click();
+  await flush(20);
+  assert.ok(!byAttr(overlay(), 'data-many-days'), 'предупреждение осталось — строки не сведены');
+  await pressUntilCreate();
+  const evs = RPC.filter((c) => c.name === 'ensure_visit');
+  assert.equal(evs.length, 1, 'визитов больше одного: ' + JSON.stringify(evs.map((e) => e.body.date)));
+  assert.equal(localDayOfIso(evs[0].body.date), isoOf(dayOffset(1)), 'визит не на день приёма');
+  const inv = RPC.filter((c) => c.name === 'create_invoice_for_visit');
+  assert.equal(inv.length, 1, 'счетов больше одного');
+  assert.equal(inv[0].body.visit_service_ids.length, 2);
+  assert.equal(DB.prepare('SELECT COUNT(*) n FROM visits WHERE patient_id = 3').get().n, 1);
+  assert.equal(DB.prepare('SELECT COUNT(*) n FROM invoices').get().n, 1);
+});
+
 test('«Выбрать день» открывает календарь врача: выбранный день ставит время, пометка уходит', async () => {
   seed();
   await openWizard([21]);
