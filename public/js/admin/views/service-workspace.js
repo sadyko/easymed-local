@@ -34,6 +34,7 @@ import { isAdminActor } from '../admin-actor.js';   // CABINET_FIX_V1_TPL — а
 // неактивна с подсказкой; «Сохранить» и «Черновик» работают (черновик не подписан).
 import { lockSignButton, refuseSignWhileActing, isActingNow } from '../act-as-client.js';
 import { REFUNDED_LINE_MARK, REFUNDED_SIGN_REFUSAL } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 — «Услуга возвращена»
+import { noteLineStatus } from '../queue-fresh.js';   // QUEUE_FRESH_V1 — подписанная строка сразу «завершена» в кабинете (один экземпляр: без ?v=)
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
 import { renderDesignedVariant, visitTypeLabel } from './doc-variants.js?v=cabr3';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3
@@ -5257,7 +5258,7 @@ async function removeOwnService(ctx, idx) {
 async function pauseAndLeave(ctx) {
     if (ctx.visitServiceId) { try { await handleSaveDraft(ctx, { silent: true }); } catch (e) {} }
     toast('Приём приостановлен — продолжите его из «Мои услуги».', 'info');
-    if (ctx.onNavigate) ctx.onNavigate('consultation');
+    if (ctx.onNavigate) ctx.onNavigate('consultation', { sub: 'work' });   // QUEUE_FRESH_V1 — в «Мои приёмы», как после подписи
 }
 
 // ---------------------------------------------------------------------------
@@ -5468,6 +5469,9 @@ async function handleSignFinalize(ctx) {
         ownPayload(payload, ctx.visitServiceId);
         LINE_SIGNING.delete(vsKey);
         clearUnsaved(ctx, tCollect);   // CABINET_FIX_V1_R4 ([U])
+        // QUEUE_FRESH_V1 — строка подписана и на сервере уже 'completed': кабинет («Мои
+        // приёмы», «Мой день») узнаёт это сразу, а не после F5 (queue-fresh.js).
+        noteLineStatus(ctx.visitServiceId, 'completed');
 
         // CLINICAL_DOCTYPE_V1 — archive the signed document as a self-contained, render-ready
         // SNAPSHOT (buildBlankData → the shape the print/preview templates consume) so it can be
@@ -5535,7 +5539,9 @@ async function handleSignFinalize(ctx) {
         // Bounce back to the My services list so the queue refreshes — только из этой строки.
         // CABINET_FIX_V1_R5 (D) — поздний ответ не уводит: врач после «не ответил вовремя»
         // мог продолжить работу в строке; ему — уведомление и отметка «Подписано».
-        if (ctx.onNavigate && !late) setTimeout(() => { if (wsState.ctx === ctx) ctx.onNavigate('consultation'); }, 600);
+        // QUEUE_FRESH_V1 — назад с адресом вкладки ({ sub: 'work' }): кэшированный кабинет
+        // получает его через ctx.onPayload и перечитывает устаревшую очередь.
+        if (ctx.onNavigate && !late) setTimeout(() => { if (wsState.ctx === ctx) ctx.onNavigate('consultation', { sub: 'work' }); }, 600);
     };
     try {
         // CABINET_FIX_V1_R4 (п. 10a) · CABINET_FIX_V1_R5 (D) — сервер не ответил за срок: врач
